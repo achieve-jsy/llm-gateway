@@ -645,4 +645,38 @@ onMounted(() => {
   height: auto;
   font-size: 12px;
 }
+
+.health-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.health-inner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: default;
+}
+
+.health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.health-ok { background: #27AE60; }
+.health-warn { background: #EAB308; }
+.health-error { background: #E74C3C; }
+.health-unknown { background: #CBD5E1; }
+
+.health-text {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.health-ok-text { color: #27AE60; }
+.health-warn-text { color: #EAB308; }
+.health-error-text { color: #E74C3C; }
 </style>

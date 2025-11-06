@@ -127,3 +127,20 @@ export interface BatchBindResult {
   /** 失败时 model_id → 错误原因；成功时为空对象 */
   failed_ids: Record<string, string>
 }
+
+/**
+ * GET /api/v1/model-catalog/binding-stats 返回的目录绑定状态。
+ *
+ * CatalogSyncPage 用这四个数字做"空 diff"语义判定：
+ *   - catalog_total  === 0  → 目录是空的（同步没生效或未触发），引导去同步
+ *   - model_total    === 0  → 还没注册本地模型，引导去模型管理
+ *   - unbound_count  > 0    → 有未绑定的本地模型，引导点「智能绑定」
+ *   - bound_count    > 0
+ *     且 diff 为空           → 已绑定模型与目录完全一致，正常的"无差异"
+ */
+export interface CatalogBindingStats {
+  catalog_total: number
+  model_total: number
+  bound_count: number
+  unbound_count: number
+}

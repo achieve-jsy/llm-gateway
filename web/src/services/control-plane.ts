@@ -13,7 +13,8 @@ import type {
   AutoBindResult,
   BindCatalogPayload,
   BatchBindItem,
-  BatchBindResult
+  BatchBindResult,
+  CatalogBindingStats
 } from '@/types/catalog'
 import type { ApiResponse, PaginatedResponse } from '@/types/api'
 
@@ -339,6 +340,21 @@ export async function getCatalogBySource(sourceModelId: string): Promise<ModelCa
 /** 触发后台 catalog 同步任务（202 异步） */
 export async function triggerCatalogSync(): Promise<SyncTriggerResponse> {
   const response = await http.post<ApiResponse<SyncTriggerResponse>>('/api/v1/model-catalog/sync')
+  return response.data.data
+}
+
+/**
+ * 获取目录绑定状态（catalog 总数 + 本地 model 绑定分布）。
+ *
+ * CatalogSyncPage 在 diff 为空时用它做语义判定，避免历史 bug —— 把
+ * "目录其实有 2719 条只是没绑定" 误显示为"目录是空的"。
+ *
+ * 后端：GET /api/v1/model-catalog/binding-stats
+ */
+export async function getCatalogBindingStats(): Promise<CatalogBindingStats> {
+  const response = await http.get<ApiResponse<CatalogBindingStats>>(
+    '/api/v1/model-catalog/binding-stats'
+  )
   return response.data.data
 }
 

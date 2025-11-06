@@ -111,6 +111,7 @@ func newCatalogRouter(svc CatalogServiceInterface) *gin.Engine {
 	g.GET("/diff", h.Diff)
 	g.POST("/apply-diff", h.ApplyDiff)
 	g.POST("/auto-bind", h.AutoBind)
+	g.GET("/binding-stats", h.BindingStats)
 	return r
 }
 
@@ -315,5 +316,37 @@ func TestCatalogHandler_AutoBind_ServiceError(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/v1/model-catalog/auto-bind", nil)
 	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// TestCatalogHandler_BindingStats_OK 验证 binding-stats endpoint 把 service 返回的
+// 四个计数字段如实透传给前端。前端依赖这些字段做空状态语义判定。
+func TestCatalogHandler_BindingStats_OK(t *testing.T) {
+	svc := &fakeCatalogService{bindingStatsFn: func(ctx context.Context) (*service.BindingStats, error) {
+		return &service.BindingStats{
+			CatalogTotal: 2719,
+			ModelTotal:   12,
+			BoundCount:   5,
+			UnboundCount: 7,
+		}, nil
+	}}
+	r := newCatalogRouter(svc)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/binding-stats", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.Contains(t, body, `"catalog_total":2719`)
+	assert.Contains(t, body, `"model_total":12`)
+	assert.Contains(t, body, `"bound_count":5`)
+	assert.Contains(t, body, `"unbound_count":7`)
+}
+
+func TestCatalogHandler_BindingStats_ServiceError(t *testing.T) {
+	svc := &fakeCatalogService{bindingStatsFn: func(ctx context.Context) (*service.BindingStats, error) {
+		return nil, errors.New("boom")
+	}}
+	r := newCatalogRouter(svc)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/binding-stats", nil))
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }

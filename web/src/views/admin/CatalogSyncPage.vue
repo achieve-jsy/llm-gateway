@@ -310,9 +310,10 @@ import {
   triggerCatalogSync,
   searchCatalog,
   autoBindCatalog,
-  batchBindModelCatalog
+  batchBindModelCatalog,
+  getCatalogBindingStats
 } from '@/services/control-plane'
-import type { PriceDiffEntry, AutoBindResult } from '@/types/catalog'
+import type { PriceDiffEntry, AutoBindResult, CatalogBindingStats } from '@/types/catalog'
 
 // ===================== 数据 / 状态 =====================
 const diffRows = ref<PriceDiffEntry[]>([])
@@ -324,6 +325,10 @@ const lastSyncedAt = ref<string>('')
 const autoBinding = ref(false)
 const autoBindDialogVisible = ref(false)
 const autoBindResult = ref<AutoBindResult | null>(null)
+
+// 目录绑定状态：catalog 总数 + 本地 model 已绑定 / 未绑定计数。
+// 空状态区域用它来精准判定"diff 为空到底意味着啥"。
+const bindingStats = ref<CatalogBindingStats | null>(null)
 // CAT-2: ambiguous 段每个 model_id → 选中的 catalog_id（admin 显式选定）
 const ambiguousSelections = ref<Record<string, string>>({})
 const ambiguousResetFields = ref(false)
@@ -496,12 +501,22 @@ function resetFilters() {
 
 // ===================== 数据加载 =====================
 async function loadCatalogMeta() {
+  // 1) 拿 catalog 总数 + 本地 model 绑定分布（binding-stats 是元信息真源）。
+  // 2) 顺便用 searchCatalog({limit:1}) 拿一条最新条目的 synced_at，展示"最近同步于"。
+  //    catalogTotal 不再依赖 search 接口的 total（历史 bug：曾把 len(results) 当 total）。
+  try {
+    const stats = await getCatalogBindingStats()
+    bindingStats.value = stats
+    catalogTotal.value = stats.catalog_total
+  } catch {
+    // stats 失败不阻塞主流程，但要把 stats 置空，避免空状态文案乱猜。
+    bindingStats.value = null
+  }
   try {
     const res = await searchCatalog({ limit: 1 })
-    catalogTotal.value = res.total
     if (res.data.length > 0) lastSyncedAt.value = res.data[0].synced_at
   } catch {
-    // 元信息失败不阻塞主流程。
+    // searched 失败时同步时间留空即可。
   }
 }
 

@@ -1,2 +1,4 @@
 # Sisyphus 运行时数据
 .sisyphus/
+
+node_modules/

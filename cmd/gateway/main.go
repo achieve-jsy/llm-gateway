@@ -1,0 +1,238 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"log"
+	"log/slog"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+
+	"github.com/example/llm-gateway/internal/gateway/config"
+	"github.com/example/llm-gateway/internal/gateway/infra"
+	"github.com/example/llm-gateway/internal/gateway/model"
+	"github.com/example/llm-gateway/internal/gateway/provider"
+	"github.com/example/llm-gateway/internal/gateway/provider/anthropic"
+	"github.com/example/llm-gateway/internal/gateway/provider/bailian"
+	"github.com/example/llm-gateway/internal/gateway/provider/bedrock"
+	"github.com/example/llm-gateway/internal/gateway/provider/deepseek"
+	"github.com/example/llm-gateway/internal/gateway/provider/litellm"
+	"github.com/example/llm-gateway/internal/gateway/server"
+)
+
+func main() {
+	// 配置 slog JSON 格式
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	// 加载配置
+	cfg := config.Load()
+
+	// 初始化 Redis
+	rdb, err := infra.InitRedis(cfg.Redis)
+	if err != nil {
+		log.Fatalf("failed to connect Redis: %v", err)
+	}
+
+	// 初始化缓存
+	cache := infra.NewCache(rdb)
+
+	// 初始化 OTLP Tracer
+	shutdown, err := infra.InitTracer(cfg.OTLP)
+	if err != nil {
+		log.Fatalf("failed to init tracer: %v", err)
+	}
+	defer shutdown()
+
+	// 初始化 Provider Registry
+	registry := provider.NewRegistry()
+
+	// 尝试从 control-plane 加载 Provider 配置
+	controlPlaneURL := cfg.Provider.ControlPlaneURL
+	internalToken := cfg.Provider.InternalToken
+
+	if controlPlaneURL != "" && internalToken != "" {
+		if err := loadAndRegisterProviders(registry, controlPlaneURL, internalToken); err != nil {
+			slog.Warn("failed to load from control-plane, falling back to env vars", "error", err)
+			registerProvidersFromEnv(registry)
+		} else {
+			slog.Info("providers loaded from control-plane successfully")
+		}
+	} else {
+		registerProvidersFromEnv(registry)
+	}
+
+	// 启动配置变更订阅（US-06）
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	subscriber := infra.NewSubscriber(rdb, func(ev infra.ChangeEvent) {
+		slog.Info("config change received, reloading registry", "type", ev.Type, "resource_type", ev.ResourceType)
+		if controlPlaneURL != "" && internalToken != "" {
+			if err := loadAndRegisterProviders(registry, controlPlaneURL, internalToken); err != nil {
+				slog.Error("failed to reload providers from control-plane", "error", err)
+			} else {
+				slog.Info("registry reloaded successfully")
+			}
+		}
+	})
+
+	go subscriber.Start(ctx)
+
+	// 处理优雅退出信号
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		slog.Info("received shutdown signal")
+		cancel()
+	}()
+
+	// 初始化路由（注入依赖）
+	r := server.Setup(registry, cache)
+
+	// 启动服务
+	slog.Info("gateway starting", "port", cfg.Server.Port)
+	if err := r.Run(":" + cfg.Server.Port); err != nil {
+		log.Fatalf("failed to start server: %v", err)
+	}
+}
+
+// loadAndRegisterProviders 从 control-plane 加载配置并使用 Reload 原子替换 registry
+func loadAndRegisterProviders(registry *provider.Registry, controlPlaneURL, token string) error {
+	entries, err := infra.LoadFromControlPlane(controlPlaneURL, token)
+	if err != nil {
+		return err
+	}
+
+	registry.Reload(entries, providerFactory)
+	slog.Info("registry reloaded from control-plane", "providers", len(entries))
+	return nil
+}
+
+// providerFactory 根据 ProviderEntry 创建对应的 Provider 实例
+func providerFactory(entry model.ProviderEntry) provider.Provider {
+	switch entry.Type {
+	case "anthropic":
+		return anthropic.New(anthropic.Config{
+			APIKey:  entry.Credentials,
+			BaseURL: entry.Endpoint,
+			Models:  entry.Models,
+		})
+	case "bedrock":
+		// bedrock 凭证格式: JSON {"access_key_id": "...", "secret_access_key": "...", "region": "..."}
+		var creds struct {
+			AccessKeyID    string `json:"access_key_id"`
+			SecretAccessKey string `json:"secret_access_key"`
+			Region         string `json:"region"`
+		}
+		if err := json.Unmarshal([]byte(entry.Credentials), &creds); err != nil {
+			slog.Error("failed to parse bedrock credentials", "provider", entry.Name, "error", err)
+			// fallback: 使用整个 credentials 字符串作为 access key
+			return bedrock.New(bedrock.Config{
+				AccessKeyID:    entry.Credentials,
+				SecretAccessKey: "",
+				Region:         "us-east-1",
+				Models:         entry.Models,
+			})
+		}
+		return bedrock.New(bedrock.Config{
+			AccessKeyID:    creds.AccessKeyID,
+			SecretAccessKey: creds.SecretAccessKey,
+			Region:         creds.Region,
+			Models:         entry.Models,
+		})
+	case "deepseek":
+		return deepseek.New(deepseek.Config{
+			APIKey:  entry.Credentials,
+			BaseURL: entry.Endpoint,
+			Models:  entry.Models,
+		})
+	case "litellm":
+		return litellm.New(litellm.Config{
+			Endpoint: entry.Endpoint,
+			APIKey:   entry.Credentials,
+			Models:   entry.Models,
+		})
+	default:
+		// dashscope, openai-compatible 等都走 bailian adapter（OpenAI 兼容模式）
+		return bailian.New(bailian.Config{
+			APIKey:  entry.Credentials,
+			BaseURL: entry.Endpoint,
+			Models:  entry.Models,
+		})
+	}
+}
+
+// registerProvidersFromEnv 从环境变量注册 Provider（向后兼容）
+func registerProvidersFromEnv(registry *provider.Registry) {
+	// 注册百炼 Provider
+	bailianAPIKey := os.Getenv("BAILIAN_API_KEY")
+	bailianModels := os.Getenv("BAILIAN_MODELS")
+	if bailianAPIKey != "" {
+		models := parseModelList(bailianModels)
+		bailianProvider := bailian.New(bailian.Config{
+			APIKey: bailianAPIKey,
+			Models: models,
+		})
+		registry.Register("bailian", bailianProvider)
+		for _, m := range models {
+			registry.RegisterModel(m, "bailian")
+		}
+		slog.Info("百炼 Provider 已注册", "models", models)
+	}
+
+	// 注册 DeepSeek Provider
+	deepseekAPIKey := os.Getenv("DEEPSEEK_API_KEY")
+	deepseekModels := os.Getenv("DEEPSEEK_MODELS")
+	if deepseekAPIKey != "" {
+		models := parseModelList(deepseekModels)
+		if len(models) == 0 {
+			models = []string{"deepseek-chat", "deepseek-reasoner"}
+		}
+		deepseekProvider := deepseek.New(deepseek.Config{
+			APIKey: deepseekAPIKey,
+			Models: models,
+		})
+		registry.Register("deepseek", deepseekProvider)
+		for _, m := range models {
+			registry.RegisterModel(m, "deepseek")
+		}
+		slog.Info("DeepSeek Provider 已注册", "models", models)
+	}
+
+	// 注册 litellm 兜底 Provider
+	litellmEndpoint := os.Getenv("LITELLM_ENDPOINT")
+	litellmAPIKey := os.Getenv("LITELLM_API_KEY")
+	litellmModels := os.Getenv("LITELLM_MODELS")
+	if litellmEndpoint != "" {
+		models := parseModelList(litellmModels)
+		litellmProvider := litellm.New(litellm.Config{
+			Endpoint: litellmEndpoint,
+			APIKey:   litellmAPIKey,
+			Models:   models,
+		})
+		registry.Register("litellm", litellmProvider)
+		for _, m := range models {
+			registry.RegisterModel(m, "litellm")
+		}
+		slog.Info("LiteLLM Provider 已注册", "models", models)
+	}
+}
+
+// parseModelList 解析逗号分隔的模型列表
+func parseModelList(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	models := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			models = append(models, p)
+		}
+	}
+	return models
+}

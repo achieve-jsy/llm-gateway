@@ -30,21 +30,119 @@
       </div>
     </div>
 
-    <!-- 空状态：完全没有 diff -->
+    <!-- 空状态：完全没有 diff（按 bindingStats 分四种语义） -->
     <el-empty
       v-if="!loading && !diffRows.length"
       description=""
       class="empty-state"
+      data-testid="empty-state"
     >
       <template #description>
         <div class="empty-desc">
-          <p class="empty-title">当前没有需要处理的差异</p>
-          <p class="empty-hint">
-            目录中已有 <strong>{{ catalogTotal }}</strong> 个上游模型条目。
-            如果还没有本地模型绑定到目录，可点上方「智能绑定」一键尝试匹配，
-            或到「<router-link to="/admin/models">模型管理</router-link>」
-            手工选择 catalog 条目。
-          </p>
+          <!-- 情形 1：目录为空（同步未触发或失败）。bindingStats 取不到时也走这里兜底。 -->
+          <template v-if="emptyKind === 'catalog_empty'">
+            <p class="empty-title" data-testid="empty-title">
+              ⚠️ 目录为空，同步尚未生效
+            </p>
+            <p class="empty-hint">
+              目录里还没有任何上游模型条目。点下方按钮触发后台同步，
+              系统会先尝试拉取远程 LiteLLM 清单，失败时自动回退到内置快照。
+            </p>
+            <div class="empty-actions">
+              <el-button
+                type="primary"
+                :loading="refreshing"
+                data-testid="empty-cta-sync"
+                @click="handleManualRefresh"
+              >
+                立即同步目录
+              </el-button>
+            </div>
+          </template>
+
+          <!-- 情形 2：本地一个 model 都没注册 → 让用户先去 ModelListPage。 -->
+          <template v-else-if="emptyKind === 'no_local_models'">
+            <p class="empty-title" data-testid="empty-title">
+              还没有注册任何本地模型
+            </p>
+            <p class="empty-hint">
+              目录已收录 <strong>{{ catalogTotal }}</strong> 个上游模型，
+              但本地一个 model 都还没有。请先到「模型管理」注册要使用的模型，
+              或直接从目录条目一键创建。
+            </p>
+            <div class="empty-actions">
+              <el-button
+                type="primary"
+                data-testid="empty-cta-models"
+                @click="$router.push('/admin/models')"
+              >
+                前往模型管理
+              </el-button>
+            </div>
+          </template>
+
+          <!-- 情形 3：本地有 model 但都没绑定到目录 → 引导点「智能绑定」。 -->
+          <template v-else-if="emptyKind === 'all_unbound'">
+            <p class="empty-title" data-testid="empty-title">
+              本地模型还没有绑定到目录
+            </p>
+            <p class="empty-hint">
+              目录已收录 <strong>{{ catalogTotal }}</strong> 个上游模型，
+              本地有 <strong>{{ bindingStats?.unbound_count }}</strong> 个 model 尚未绑定。
+              绑定之后才能看到价格与能力差异、自动跟随目录更新。
+            </p>
+            <div class="empty-actions">
+              <el-button
+                type="primary"
+                :loading="autoBinding"
+                data-testid="empty-cta-autobind"
+                @click="handleAutoBind"
+              >
+                立即智能绑定（{{ bindingStats?.unbound_count }} 条）
+              </el-button>
+              <el-button
+                data-testid="empty-cta-manual-bind"
+                @click="$router.push('/admin/models')"
+              >
+                到模型管理手动选择
+              </el-button>
+            </div>
+          </template>
+
+          <!-- 情形 4：部分绑定 + 部分未绑定，diff 没差异（已绑定的与目录一致）。 -->
+          <template v-else-if="emptyKind === 'mixed_no_diff'">
+            <p class="empty-title" data-testid="empty-title">
+              已绑定模型与目录完全一致
+            </p>
+            <p class="empty-hint">
+              <strong>{{ bindingStats?.bound_count }}</strong> 个已绑定 model
+              的价格 / 上下文 / 能力位与目录当前快照吻合，没有需要处理的差异。
+              另外还有 <strong>{{ bindingStats?.unbound_count }}</strong> 个未绑定 model，
+              如果想纳入目录管理可点下方按钮。
+            </p>
+            <div class="empty-actions">
+              <el-button
+                type="primary"
+                :loading="autoBinding"
+                data-testid="empty-cta-autobind"
+                @click="handleAutoBind"
+              >
+                继续智能绑定（{{ bindingStats?.unbound_count }} 条）
+              </el-button>
+            </div>
+          </template>
+
+          <!-- 情形 5：所有 model 都已绑定且无差异 —— 真正的"一切安好"。 -->
+          <template v-else>
+            <p class="empty-title" data-testid="empty-title">
+              一切就绪，无需处理
+            </p>
+            <p class="empty-hint">
+              目录已收录 <strong>{{ catalogTotal }}</strong> 个上游模型；
+              本地 <strong>{{ bindingStats?.bound_count || 0 }}</strong> 个 model 全部绑定到目录，
+              且与目录当前快照的价格 / 上下文 / 能力位完全一致。
+            </p>
+          </template>
         </div>
       </template>
     </el-empty>

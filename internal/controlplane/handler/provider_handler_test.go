@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
+	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -20,7 +21,7 @@ import (
 // MockProviderService 实现 ProviderServiceInterface
 type MockProviderService struct {
 	createProviderFn       func(input service.CreateProviderInput) (*model.Provider, error)
-	listProvidersFn        func(page, pageSize int) ([]service.ProviderResponse, int64, error)
+	listProvidersFn        func(filter repository.ProviderListFilter, page, pageSize int) ([]service.ProviderResponse, int64, error)
 	getProviderFn          func(id uuid.UUID) (*service.ProviderResponse, error)
 	updateProviderFn       func(id uuid.UUID, input service.UpdateProviderInput) (*service.ProviderResponse, error)
 	toggleProviderStatusFn func(id uuid.UUID, enabled bool) (*service.ProviderResponse, error)
@@ -33,9 +34,9 @@ func (m *MockProviderService) CreateProvider(input service.CreateProviderInput) 
 	}
 	return nil, nil
 }
-func (m *MockProviderService) ListProviders(page, pageSize int) ([]service.ProviderResponse, int64, error) {
+func (m *MockProviderService) ListProviders(filter repository.ProviderListFilter, page, pageSize int) ([]service.ProviderResponse, int64, error) {
 	if m.listProvidersFn != nil {
-		return m.listProvidersFn(page, pageSize)
+		return m.listProvidersFn(filter, page, pageSize)
 	}
 	return nil, 0, nil
 }
@@ -145,7 +146,7 @@ func TestCreateProvider_InvalidBody(t *testing.T) {
 
 func TestListProviders_Success(t *testing.T) {
 	svc := &MockProviderService{
-		listProvidersFn: func(page, pageSize int) ([]service.ProviderResponse, int64, error) {
+		listProvidersFn: func(_ repository.ProviderListFilter, page, pageSize int) ([]service.ProviderResponse, int64, error) {
 			return []service.ProviderResponse{{ID: uuid.New(), Name: "p1"}}, 1, nil
 		},
 	}
@@ -160,7 +161,7 @@ func TestListProviders_Success(t *testing.T) {
 
 func TestListProviders_Error(t *testing.T) {
 	svc := &MockProviderService{
-		listProvidersFn: func(int, int) ([]service.ProviderResponse, int64, error) {
+		listProvidersFn: func(_ repository.ProviderListFilter, _, _ int) ([]service.ProviderResponse, int64, error) {
 			return nil, 0, errors.New("db err")
 		},
 	}

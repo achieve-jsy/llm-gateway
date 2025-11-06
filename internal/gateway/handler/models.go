@@ -39,6 +39,15 @@ func NewModelsHandler(cache ModelsCacheInterface, registry ModelsRegistryInterfa
 
 // Handle 处理 GET /v1/models 请求
 // 优先从 Redis 缓存获取，miss 时从 Registry 构建模型列表
+//
+//	@Summary		List Models
+//	@Description	列出所有可用模型，兼容 OpenAI /v1/models 接口
+//	@Tags			Models
+//	@Produce		json
+//	@Success		200	{object}	model.ModelsResponse	"模型列表"
+//	@Failure		401	{object}	map[string]interface{}	"认证失败"
+//	@Security		BearerAuth
+//	@Router			/v1/models [get]
 func (h *ModelsHandler) Handle(c *gin.Context) {
 	ctx := c.Request.Context()
 

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
+	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -93,13 +94,13 @@ func TestModelService_CreateModel_DBError(t *testing.T) {
 func TestModelService_ListModels(t *testing.T) {
 	want := []model.Model{{ID: uuid.New(), Name: "x"}}
 	pid := uuid.New()
-	modelRepo := &MockModelRepo{listFn: func(p *uuid.UUID, offset, limit int) ([]model.Model, int64, error) {
-		assert.NotNil(t, p)
+	modelRepo := &MockModelRepo{listFn: func(filter repository.ModelListFilter, offset, limit int) ([]model.Model, int64, error) {
+		assert.NotNil(t, filter.ProviderID)
 		return want, 1, nil
 	}}
 	svc := NewModelService(modelRepo, &MockProviderRepo{}, nil)
 
-	got, total, err := svc.ListModels(&pid, 0, 0)
+	got, total, err := svc.ListModels(repository.ModelListFilter{ProviderID: &pid}, 0, 0)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), total)
 	assert.Equal(t, want, got)

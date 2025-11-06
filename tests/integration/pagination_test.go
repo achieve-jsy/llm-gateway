@@ -35,7 +35,7 @@ func TestPagination_Models_FirstPage(t *testing.T) {
 	}
 
 	// 第 1 页，每页 5 条
-	models, total, err := modelSvc.ListModels(nil, 1, 5)
+	models, total, err := modelSvc.ListModels(repository.ModelListFilter{}, 1, 5)
 	if err != nil {
 		t.Fatalf("list models page 1: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestPagination_Models_SecondPage(t *testing.T) {
 	}
 
 	// 第 2 页，每页 5 条
-	models, total, err := modelSvc.ListModels(nil, 2, 5)
+	models, total, err := modelSvc.ListModels(repository.ModelListFilter{}, 2, 5)
 	if err != nil {
 		t.Fatalf("list models page 2: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestPagination_Models_LastPage(t *testing.T) {
 	}
 
 	// 第 3 页，每页 5 条（应该只有 2 条）
-	models, total, err := modelSvc.ListModels(nil, 3, 5)
+	models, total, err := modelSvc.ListModels(repository.ModelListFilter{}, 3, 5)
 	if err != nil {
 		t.Fatalf("list models last page: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestPagination_Models_PageSizes(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		models, _, err := modelSvc.ListModels(nil, tc.page, tc.pageSize)
+		models, _, err := modelSvc.ListModels(repository.ModelListFilter{}, tc.page, tc.pageSize)
 		if err != nil {
 			t.Fatalf("pageSize=%d page=%d: %v", tc.pageSize, tc.page, err)
 		}
@@ -190,7 +190,7 @@ func TestPagination_Providers(t *testing.T) {
 	}
 
 	// 第 1 页，每页 3 条
-	providers, total, err := providerSvc.ListProviders(1, 3)
+	providers, total, err := providerSvc.ListProviders(repository.ProviderListFilter{}, 1, 3)
 	if err != nil {
 		t.Fatalf("list providers: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestPagination_Providers(t *testing.T) {
 	}
 
 	// 第 3 页，每页 3 条（应该只有 2 条）
-	providers, _, err = providerSvc.ListProviders(3, 3)
+	providers, _, err = providerSvc.ListProviders(repository.ProviderListFilter{}, 3, 3)
 	if err != nil {
 		t.Fatalf("list providers page 3: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestPagination_Models_FilterWithPagination(t *testing.T) {
 	}
 
 	// 按 p1 筛选，每页 3 条，第 1 页
-	models, total, err := modelRepo.List(&p1.ID, 0, 3)
+	models, total, err := modelRepo.List(repository.ModelListFilter{ProviderID: &p1.ID}, 0, 3)
 	if err != nil {
 		t.Fatalf("list with filter: %v", err)
 	}

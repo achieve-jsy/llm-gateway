@@ -32,6 +32,9 @@ export interface Model {
   input_price: number
   output_price: number
   weight: number
+  consecutive_failures: number
+  last_check_error: string
+  response_time: number
   created_at: string
   updated_at: string
   /** 关联的渠道信息 */
@@ -41,6 +44,14 @@ export interface Model {
     definition_id: string
     enabled: boolean
   }
+  /** 关联的 model_catalog.id；null 表示纯手工注册、不跟随目录 */
+  catalog_id?: string | null
+  /** context_length 是否已被人工覆盖（true → 不再随目录自动更新） */
+  ctx_overridden?: boolean
+  /** max_output_tokens 是否已被人工覆盖 */
+  max_output_overridden?: boolean
+  /** 嵌套展开的 catalog 快照（GET /models 时由后端 join 返回） */
+  catalog?: import('./catalog').ModelCatalog | null
 }
 
 /** 创建/编辑模型的请求体 */

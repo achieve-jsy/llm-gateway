@@ -453,53 +453,16 @@ func TestLoad_ServerPortEdgeCases(t *testing.T) {
 	}
 }
 
-// TestGetEnvOrDefault tests getEnvOrDefault helper function
-func TestGetEnvOrDefault(t *testing.T) {
-	tests := []struct {
-		name         string
-		key          string
-		defaultVal   string
-		setEnv       bool
-		envVal       string
-		expectResult string
-	}{
-		{
-			name:         "returns env value when set",
-			key:          "TEST_VAR",
-			defaultVal:   "default",
-			setEnv:       true,
-			envVal:       "custom",
-			expectResult: "custom",
-		},
-		{
-			name:         "returns default when env not set",
-			key:          "TEST_VAR_UNSET",
-			defaultVal:   "default",
-			setEnv:       false,
-			expectResult: "default",
-		},
-		{
-			name:         "returns default when env is empty string",
-			key:          "TEST_EMPTY",
-			defaultVal:   "default",
-			setEnv:       true,
-			envVal:       "",
-			expectResult: "default",
-		},
-	}
+// TestLoad_ViperYAML tests that Viper loads from YAML config file
+func TestLoad_ViperYAML(t *testing.T) {
+	// When APP_ENV is set to "dev", Viper should load config/dev.yaml
+	// This test verifies the mechanism works (file may not exist in test env)
+	os.Setenv("APP_ENV", "dev")
+	defer os.Unsetenv("APP_ENV")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			os.Unsetenv(tt.key)
-			if tt.setEnv {
-				os.Setenv(tt.key, tt.envVal)
-				defer os.Unsetenv(tt.key)
-			}
-
-			result := getEnvOrDefault(tt.key, tt.defaultVal)
-			assert.Equal(t, tt.expectResult, result)
-		})
-	}
+	// Should not panic even if config file not found
+	config := Load()
+	assert.NotNil(t, config)
 }
 
 // TestLoad_MultipleLoads tests loading config multiple times returns consistent results

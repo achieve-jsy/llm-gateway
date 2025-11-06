@@ -1,16 +1,52 @@
 package model
 
+import (
+	"encoding/json"
+	"strconv"
+)
+
+// JSONFloat64 自定义浮点数类型，序列化时始终输出带小数点的格式。
+// 解决部分厂商（如百炼）要求 temperature/top_p 必须为 Float 的问题。
+type JSONFloat64 float64
+
+func (f JSONFloat64) MarshalJSON() ([]byte, error) {
+	v := float64(f)
+	// 使用 strconv.FormatFloat 确保始终有小数点
+	s := strconv.FormatFloat(v, 'f', -1, 64)
+	// 如果没有小数点，追加 .0
+	hasDot := false
+	for _, c := range s {
+		if c == '.' {
+			hasDot = true
+			break
+		}
+	}
+	if !hasDot {
+		s += ".0"
+	}
+	return []byte(s), nil
+}
+
+func (f *JSONFloat64) UnmarshalJSON(data []byte) error {
+	var v float64
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*f = JSONFloat64(v)
+	return nil
+}
+
 // ChatCompletionRequest OpenAI 兼容请求结构
 type ChatCompletionRequest struct {
-	Model       string    `json:"model" binding:"required"`
-	Messages    []Message `json:"messages" binding:"required,min=1,dive"`
-	Stream      bool      `json:"stream"`
-	Temperature *float64  `json:"temperature,omitempty"`
-	MaxTokens   *int      `json:"max_tokens,omitempty"`
-	TopP        *float64  `json:"top_p,omitempty"`
-	N           int       `json:"n,omitempty"`
-	Stop        any       `json:"stop,omitempty"`
-	User        string    `json:"user,omitempty"`
+	Model       string       `json:"model" binding:"required"`
+	Messages    []Message    `json:"messages" binding:"required,min=1,dive"`
+	Stream      bool         `json:"stream"`
+	Temperature *JSONFloat64 `json:"temperature,omitempty"`
+	MaxTokens   *int         `json:"max_tokens,omitempty"`
+	TopP        *JSONFloat64 `json:"top_p,omitempty"`
+	N           int          `json:"n,omitempty"`
+	Stop        any          `json:"stop,omitempty"`
+	User        string       `json:"user,omitempty"`
 }
 
 // Message 消息结构

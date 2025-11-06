@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
+	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 )
@@ -45,7 +46,7 @@ func TestSyncModels_Success(t *testing.T) {
 	}
 
 	modelRepo := &MockModelRepo{
-		listFn: func(providerID *uuid.UUID, offset, limit int) ([]model.Model, int64, error) {
+		listFn: func(_ repository.ModelListFilter, offset, limit int) ([]model.Model, int64, error) {
 			return localModels, int64(len(localModels)), nil
 		},
 	}
@@ -179,7 +180,7 @@ func TestConfirmSync_Success_RegisterAndSkip(t *testing.T) {
 
 	// 生产代码现在通过 List 一次性查已存在模型再做 BatchCreate
 	modelRepo := &MockModelRepo{
-		listFn: func(pid *uuid.UUID, offset, limit int) ([]model.Model, int64, error) {
+		listFn: func(_ repository.ModelListFilter, offset, limit int) ([]model.Model, int64, error) {
 			return []model.Model{{Name: "existing-model", ProviderID: providerID}}, 1, nil
 		},
 		createFn: func(m *model.Model) error {
@@ -256,7 +257,7 @@ func TestConfirmSync_MixedResults(t *testing.T) {
 	// 生产现在用 List 一次拉取已存在；model-2 已经存在，
 	// model-1 / model-3 走 BatchCreate 一次性写入
 	modelRepo := &MockModelRepo{
-		listFn: func(pid *uuid.UUID, offset, limit int) ([]model.Model, int64, error) {
+		listFn: func(_ repository.ModelListFilter, offset, limit int) ([]model.Model, int64, error) {
 			return []model.Model{{Name: "model-2", ProviderID: providerID}}, 1, nil
 		},
 		createFn: func(m *model.Model) error {
@@ -426,7 +427,7 @@ func TestConfirmSync_AllSkipped(t *testing.T) {
 
 	modelRepo := &MockModelRepo{
 		// 生产用 List 拿已存在名字；三者全部已存在
-		listFn: func(pid *uuid.UUID, offset, limit int) ([]model.Model, int64, error) {
+		listFn: func(_ repository.ModelListFilter, offset, limit int) ([]model.Model, int64, error) {
 			return []model.Model{
 				{Name: "model-1", ProviderID: providerID},
 				{Name: "model-2", ProviderID: providerID},

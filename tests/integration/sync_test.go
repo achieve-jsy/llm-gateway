@@ -139,7 +139,7 @@ func TestConfirmSync_BatchRegister(t *testing.T) {
 	}
 
 	// 验证模型已创建且默认禁用
-	models, total, _ := modelRepo.List(&provider.ID, 0, 100)
+	models, total, _ := modelRepo.List(repository.ModelListFilter{ProviderID: &provider.ID}, 0, 100)
 	if total != 3 {
 		t.Errorf("expected 3 models in DB, got %d", total)
 	}

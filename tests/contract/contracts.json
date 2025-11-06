@@ -13,19 +13,23 @@
       "success_message": "{ message: string }",
       "error": "{ error: { type: string, message: string, code: string } }"
     },
-    "$comment_error_codes": "全量机器可读 code 表（FE 与 BE 同步源；FE 在 web/src/services/http.ts::ERROR_MESSAGES 维护对应文案）。",
+    "$comment_error_codes": "全量机器可读 code 表（FE 与 BE 同步源；FE 在 web/src/services/http.ts::ERROR_MESSAGES 维护对应文案）。所有 code 使用 snake_case 小写（与历史保持一致；spec 描述中出现的 CATALOG_NOT_FOUND/INVALID_PARAM 等大写形式在此规整为 catalog_not_found/bad_request 等）。",
     "error_codes_canonical": {
-      "bad_request":            { "http": 400, "type": "invalid_request", "scene": "通用参数校验失败" },
+      "bad_request":            { "http": 400, "type": "invalid_request", "scene": "通用参数校验失败（含 spec 中 INVALID_PARAM 场景）" },
       "invalid_tag_id":         { "http": 400, "type": "invalid_request", "scene": "tag_ids 中存在非 UUID" },
       "invalid_model_id":       { "http": 400, "type": "invalid_request", "scene": "批量接口 model_ids 中存在非 UUID" },
       "model_provider_invalid": { "http": 400, "type": "invalid_request", "scene": "创建/更新 Model 时 provider 不存在或已禁用" },
       "sync_not_supported":     { "http": 400, "type": "invalid_request", "scene": "Provider 适配器不支持模型同步" },
       "provider_disabled":      { "http": 400, "type": "invalid_request", "scene": "在已禁用的 Provider 上触发同步" },
+      "catalog_not_bound":      { "http": 400, "type": "invalid_request", "scene": "Model 未绑定 catalog，无法 reset-override / unbind-catalog" },
+      "already_bound_to_same":  { "http": 400, "type": "invalid_request", "scene": "bind-catalog 时 model 已绑定到同一个 catalog 且未要求 reset_fields（幂等保护）" },
       "provider_not_found":     { "http": 404, "type": "not_found",       "scene": "Provider 不存在" },
       "model_not_found":        { "http": 404, "type": "not_found",       "scene": "Model 不存在" },
+      "catalog_not_found":      { "http": 404, "type": "not_found",       "scene": "Model Catalog 中未找到指定 source_model_id / catalog_id" },
       "provider_name_conflict": { "http": 409, "type": "conflict",        "scene": "Provider 名称重复" },
-      "model_name_conflict":    { "http": 409, "type": "conflict",        "scene": "Model 名称重复" },
+      "model_name_conflict":    { "http": 409, "type": "conflict",        "scene": "Model 名称重复（含 spec 中 NAME_DUPLICATE 场景）" },
       "provider_has_models":    { "http": 409, "type": "conflict",        "scene": "删除 Provider 时仍有关联 Model" },
+      "sync_in_progress":       { "http": 409, "type": "conflict",        "scene": "已有 catalog 同步任务运行，禁止并行触发" },
       "upstream_error":         { "http": 502, "type": "upstream_error",  "scene": "上游 vendor API 异常" },
       "internal_error":         { "http": 500, "type": "internal_error",  "scene": "未知内部错误（兜底）" }
     },
@@ -288,7 +292,37 @@
         "request_fields_optional": [],
         "query_params": ["page", "page_size", "provider_id"],
         "response_status": [200, 400, 401, 500],
-        "response_envelope": "success_list"
+        "response_envelope": "success_list",
+        "$comment_catalog_fields": "Catalog 自动拉取功能（CAT-1）新增 4 个字段：catalog_id / ctx_overridden / max_output_overridden / catalog（嵌套对象，nullable）。FE 用于渲染能力图标、deprecation 红标、目录参考价对照。",
+        "response_item_fields": [
+          "id", "name", "provider_id", "model_type", "enabled",
+          "upstream_model_id", "description", "context_length",
+          "max_output_tokens", "input_price", "output_price", "weight",
+          "catalog_id", "ctx_overridden", "max_output_overridden", "catalog",
+          "created_at", "updated_at"
+        ]
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/models/:id",
+        "auth": "admin",
+        "handler": "ModelHandler.GetModel",
+        "request_fields_required": [],
+        "request_fields_optional": [],
+        "response_status": [200, 400, 401, 404, 500],
+        "response_envelope": "success_single",
+        "$comment_route_status": "CAT-1 新增。当前 router.go 尚未注册（由 Team B 在落地实现时一并补齐），契约先行声明，作为 BE/FE 共同约束。",
+        "response_item_fields": [
+          "id", "name", "provider_id", "model_type", "enabled",
+          "upstream_model_id", "description", "context_length",
+          "max_output_tokens", "input_price", "output_price", "weight",
+          "catalog_id", "ctx_overridden", "max_output_overridden", "catalog",
+          "created_at", "updated_at"
+        ],
+        "error_codes": {
+          "404": "not_found/model_not_found",
+          "500": "internal_error/internal_error"
+        }
       },
       {
         "method": "GET",
@@ -318,16 +352,158 @@
         "request_fields_optional": [
           "name", "provider_id", "model_type", "enabled",
           "upstream_model_id", "description", "context_length",
-          "max_output_tokens", "input_price", "output_price", "weight"
+          "max_output_tokens", "input_price", "output_price", "weight",
+          "catalog_id"
         ],
         "request_fields_ignored_by_backend": [],
-        "$comment_pointer_semantics": "标量字段（upstream_model_id/description）使用 *string，可以显式清空；数值/布尔字段使用 *int/*float64/*bool 区分 '未传' 与 '0/false'",
+        "$comment_pointer_semantics": "标量字段（upstream_model_id/description）使用 *string，可以显式清空；数值/布尔字段使用 *int/*float64/*bool 区分 '未传' 与 '0/false'。catalog_id 使用 *uuid（nullable），传 null 即解绑。",
+        "$comment_catalog_override": "CAT-1: 当 request 改变 context_length 且 model.catalog_id != null，BE 自动置 ctx_overridden=true；max_output_tokens 同理 → max_output_overridden=true。FE 不需要也不应该显式传这两个 override 标志，BE 单边推导。",
         "response_status": [200, 400, 401, 404, 409, 500],
         "response_envelope": "success_single",
+        "response_item_fields": [
+          "id", "name", "provider_id", "model_type", "enabled",
+          "upstream_model_id", "description", "context_length",
+          "max_output_tokens", "input_price", "output_price", "weight",
+          "catalog_id", "ctx_overridden", "max_output_overridden", "catalog",
+          "created_at", "updated_at"
+        ],
         "error_codes": {
           "400": "invalid_request/model_provider_invalid OR invalid_request/bad_request",
-          "404": "not_found/model_not_found",
+          "404": "not_found/model_not_found OR not_found/catalog_not_found",
           "409": "conflict/model_name_conflict",
+          "500": "internal_error/internal_error"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/models/from-catalog",
+        "auth": "admin",
+        "handler": "ModelHandler.CreateFromCatalog",
+        "input_struct": "service.CreateModelFromCatalogInput",
+        "request_fields_required": ["catalog_id", "provider_id", "name"],
+        "request_fields_optional": [],
+        "request_field_constraints": {
+          "catalog_id": "required,uuid",
+          "provider_id": "required,uuid",
+          "name": "required,max=200"
+        },
+        "$comment_route_order": "CAT-1 新增。静态路径，必须在 :id 通配前注册（与 /models/check-name / /models/batch* 同等约束）。",
+        "$comment_semantics": "以 catalog 当前快照为模板创建本地 Model：context_length / max_output_tokens / input_price / output_price 从 catalog 复制；同时设置 catalog_id 绑定关系，ctx_overridden / max_output_overridden 初始为 false。",
+        "response_status": [201, 400, 401, 404, 409, 500],
+        "response_envelope": "success_single",
+        "response_item_fields": [
+          "id", "name", "provider_id", "model_type", "enabled",
+          "upstream_model_id", "description", "context_length",
+          "max_output_tokens", "input_price", "output_price", "weight",
+          "catalog_id", "ctx_overridden", "max_output_overridden", "catalog",
+          "created_at", "updated_at"
+        ],
+        "error_codes": {
+          "400": "invalid_request/bad_request",
+          "404": "not_found/catalog_not_found OR not_found/provider_not_found",
+          "409": "conflict/model_name_conflict",
+          "500": "internal_error/internal_error"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/models/:id/reset-override",
+        "auth": "admin",
+        "handler": "ModelHandler.ResetOverride",
+        "input_struct": "inline {Field string}",
+        "request_fields_required": ["field"],
+        "request_fields_optional": [],
+        "request_field_constraints": {
+          "field": "required,oneof=context_length max_output_tokens"
+        },
+        "$comment_semantics": "CAT-1: 把指定字段重新从 catalog 拉值并清除对应 override 标志（ctx_overridden / max_output_overridden）。要求 model 已绑定 catalog（catalog_id != null），否则 400/catalog_not_bound。",
+        "response_status": [200, 400, 401, 404, 500],
+        "response_envelope": "success_single",
+        "response_item_fields": [
+          "id", "name", "provider_id", "model_type", "enabled",
+          "upstream_model_id", "description", "context_length",
+          "max_output_tokens", "input_price", "output_price", "weight",
+          "catalog_id", "ctx_overridden", "max_output_overridden", "catalog",
+          "created_at", "updated_at"
+        ],
+        "error_codes": {
+          "400": "invalid_request/bad_request OR invalid_request/catalog_not_bound",
+          "404": "not_found/model_not_found",
+          "500": "internal_error/internal_error"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/models/:id/bind-catalog",
+        "auth": "admin",
+        "handler": "ModelHandler.BindCatalog",
+        "input_struct": "inline {CatalogID uuid; ResetFields bool}",
+        "request_fields_required": ["catalog_id"],
+        "request_fields_optional": ["reset_fields"],
+        "request_field_constraints": {
+          "catalog_id": "required,uuid",
+          "reset_fields": "boolean (default false)"
+        },
+        "$comment_semantics": "CAT-2: 把 model 关联到 catalog 条目；catalog 已绑定时变成换绑。reset_fields=true 时把 InputPrice/OutputPrice/ContextLength/MaxOutputTokens/UpstreamModelID 重置为新 catalog 当前值；标志位 ctx_overridden/max_output_overridden 始终重置为 false。同 catalog 且 reset_fields=false 时报 already_bound_to_same（幂等保护）。",
+        "response_status": [200, 400, 401, 404, 500],
+        "response_envelope": "success_single",
+        "response_item_fields": [
+          "id", "name", "provider_id", "model_type", "enabled",
+          "upstream_model_id", "description", "context_length",
+          "max_output_tokens", "input_price", "output_price", "weight",
+          "catalog_id", "ctx_overridden", "max_output_overridden", "catalog",
+          "created_at", "updated_at"
+        ],
+        "error_codes": {
+          "400": "invalid_request/bad_request OR invalid_request/already_bound_to_same",
+          "404": "not_found/model_not_found OR not_found/catalog_not_found",
+          "500": "internal_error/internal_error"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/models/:id/unbind-catalog",
+        "auth": "admin",
+        "handler": "ModelHandler.UnbindCatalog",
+        "request_fields_required": [],
+        "request_fields_optional": [],
+        "$comment_semantics": "CAT-2: catalog_id → NULL；ctx_overridden / max_output_overridden 重置为 false；价格/容量保留 snapshot。未绑定时报 catalog_not_bound。",
+        "response_status": [200, 400, 401, 404, 500],
+        "response_envelope": "success_single",
+        "response_item_fields": [
+          "id", "name", "provider_id", "model_type", "enabled",
+          "upstream_model_id", "description", "context_length",
+          "max_output_tokens", "input_price", "output_price", "weight",
+          "catalog_id", "ctx_overridden", "max_output_overridden", "catalog",
+          "created_at", "updated_at"
+        ],
+        "error_codes": {
+          "400": "invalid_request/bad_request OR invalid_request/catalog_not_bound",
+          "404": "not_found/model_not_found",
+          "500": "internal_error/internal_error"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/models/batch-bind-catalog",
+        "auth": "admin",
+        "handler": "ModelHandler.BatchBindCatalog",
+        "input_struct": "inline {Bindings []{ModelID uuid; CatalogID uuid; ResetFields bool}}",
+        "request_fields_required": ["bindings"],
+        "request_fields_optional": [],
+        "request_field_constraints": {
+          "bindings": "required,min=1,dive",
+          "bindings[].model_id": "required,uuid",
+          "bindings[].catalog_id": "required,uuid",
+          "bindings[].reset_fields": "boolean (default false)"
+        },
+        "$comment_route_order": "CAT-2 新增。静态路径，必须在 :id 通配前注册。",
+        "$comment_semantics": "CAT-2: 批量绑定（用于 ambiguous 选择保存）。单条失败不阻塞，最终返回 applied 数 + 失败映射 model_id → reason。每条独立执行 BindCatalog，复用其校验/事件逻辑。",
+        "response_status": [200, 400, 401, 500],
+        "response_envelope": "success_single",
+        "response_item_fields": ["applied", "failed_ids"],
+        "error_codes": {
+          "400": "invalid_request/bad_request",
           "500": "internal_error/internal_error"
         }
       },
@@ -461,6 +637,127 @@
         "request_fields_optional": [],
         "response_status": [200, 403, 500],
         "response_envelope": "success_single"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/model-catalog/search",
+        "auth": "admin",
+        "handler": "CatalogHandler.Search",
+        "request_fields_required": [],
+        "request_fields_optional": [],
+        "query_params": ["q", "provider", "mode", "limit"],
+        "query_param_constraints": {
+          "q":        "omitempty,max=200",
+          "provider": "omitempty,max=100",
+          "mode":     "omitempty,oneof=chat embedding image audio",
+          "limit":    "omitempty,min=1,max=100,default=20"
+        },
+        "$comment_empty_result": "空结果不是错误：返回 {data: [], total: 0}。",
+        "response_status": [200, 400, 401, 500],
+        "response_envelope": "{ data: CatalogItem[], total: number }",
+        "response_item_fields": [
+          "id", "source", "source_model_id", "display_name", "provider", "mode",
+          "context_length", "max_output_tokens",
+          "input_price_per_million", "output_price_per_million",
+          "cache_read_price", "cache_write_price",
+          "supports_function_calling", "supports_vision", "supports_prompt_caching",
+          "supports_response_schema", "supports_tool_choice",
+          "deprecation_date", "synced_at"
+        ],
+        "error_codes": {
+          "400": "invalid_request/bad_request",
+          "500": "internal_error/internal_error"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/model-catalog/by-source",
+        "auth": "admin",
+        "handler": "CatalogHandler.GetBySource",
+        "request_fields_required": [],
+        "request_fields_optional": [],
+        "query_params": ["source_model_id"],
+        "query_params_required": ["source_model_id"],
+        "$comment_source_model_id": "完整 source_model_id 通过 query 传递，允许含 '/'（FE 必须 URL-encode）。这样可避免引入额外路径段导致的路由抢占。",
+        "response_status": [200, 400, 401, 404, 500],
+        "response_envelope": "success_single",
+        "response_item_fields": [
+          "id", "source", "source_model_id", "display_name", "provider", "mode",
+          "context_length", "max_output_tokens",
+          "input_price_per_million", "output_price_per_million",
+          "cache_read_price", "cache_write_price",
+          "supports_function_calling", "supports_vision", "supports_prompt_caching",
+          "supports_response_schema", "supports_tool_choice",
+          "deprecation_date", "synced_at"
+        ],
+        "error_codes": {
+          "400": "invalid_request/bad_request",
+          "404": "not_found/catalog_not_found",
+          "500": "internal_error/internal_error"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/model-catalog/sync",
+        "auth": "admin",
+        "handler": "CatalogHandler.TriggerSync",
+        "input_struct": "inline {Force bool}",
+        "request_fields_required": [],
+        "request_fields_optional": ["force"],
+        "request_field_constraints": {
+          "force": "omitempty"
+        },
+        "$comment_async": "异步触发拉取 litellm 目录。同时只允许一个任务运行；并行触发返回 409 + sync_in_progress。force=true 允许在已有任务时强制重排（实现细节由 Team B 决定，契约只保证语义）。",
+        "response_status": [202, 400, 401, 409, 500],
+        "response_envelope": "success_single",
+        "response_item_fields": ["job_id", "status", "source"],
+        "error_codes": {
+          "400": "invalid_request/bad_request",
+          "409": "conflict/sync_in_progress",
+          "500": "internal_error/internal_error"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/model-catalog/diff",
+        "auth": "admin",
+        "handler": "CatalogHandler.Diff",
+        "request_fields_required": [],
+        "request_fields_optional": [],
+        "$comment_diff_filter": "仅返回与 catalog 存在差异的 model：local_input_price/local_output_price != catalog_input_price/catalog_output_price，或 catalog_deprecation_date != null。无差异时返回 {data: [], total: 0}。",
+        "response_status": [200, 401, 500],
+        "response_envelope": "{ data: DiffItem[], total: number }",
+        "response_item_fields": [
+          "model_id", "model_name", "catalog_id", "catalog_source_model_id",
+          "local_input_price", "local_output_price",
+          "catalog_input_price", "catalog_output_price",
+          "is_overridden", "input_delta_pct", "output_delta_pct",
+          "catalog_deprecation_date"
+        ],
+        "error_codes": {
+          "500": "internal_error/internal_error"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/model-catalog/apply-diff",
+        "auth": "admin",
+        "handler": "CatalogHandler.ApplyDiff",
+        "input_struct": "inline {ModelIDs []string}",
+        "request_fields_required": ["model_ids"],
+        "request_fields_optional": [],
+        "request_field_constraints": {
+          "model_ids": "required,min=1,dive,uuid"
+        },
+        "$comment_semantics": "对 request 中指定的 model（必须已绑定 catalog）批量从 catalog 重拉 input_price / output_price，清除对应 override 标志。已被显式 override 且不在 model_ids 中的不会被覆盖。response.failed_ids 列举因 catalog_not_found / catalog_not_bound 等原因跳过的 id。",
+        "response_status": [200, 400, 401, 404, 500],
+        "response_envelope": "success_single",
+        "response_item_fields": ["updated", "skipped", "failed_ids"],
+        "error_codes": {
+          "400": "invalid_request/bad_request OR invalid_request/invalid_model_id",
+          "404": "not_found/model_not_found",
+          "500": "internal_error/internal_error"
+        }
       }
     ]
   },
@@ -553,7 +850,37 @@
         { "fn": "syncModels",              "method": "POST",   "url": "/api/v1/providers/:id/sync-models" },
         { "fn": "confirmSync",             "method": "POST",   "url": "/api/v1/providers/:id/sync-models/confirm",
           "body_fields": ["models_to_add"],
-          "$comment": "P5-1: 已删除 disable_removed（历史 no-op）。" }
+          "$comment": "P5-1: 已删除 disable_removed（历史 no-op）。" },
+        { "fn": "searchCatalog",           "method": "GET",    "url": "/api/v1/model-catalog/search",
+          "query_params": ["q", "provider", "mode", "limit"],
+          "$comment": "CAT-1: Model Catalog 自动拉取功能 — 搜索 litellm 同步的目录条目，FE 在添加模型对话框、Diff 面板里使用。" },
+        { "fn": "getCatalogBySource",      "method": "GET",    "url": "/api/v1/model-catalog/by-source",
+          "query_params": ["source_model_id"],
+          "$comment": "CAT-1: 按完整 source_model_id 查询单个 catalog 条目；FE 必须对 source_model_id 做 URL-encode（可能含 '/'）。" },
+        { "fn": "triggerCatalogSync",      "method": "POST",   "url": "/api/v1/model-catalog/sync",
+          "body_fields": ["force"],
+          "$comment": "CAT-1: 触发后台异步拉取 litellm 目录；返回 job_id，FE 提示 toast 即可，不需要轮询完成。" },
+        { "fn": "getCatalogDiff",          "method": "GET",    "url": "/api/v1/model-catalog/diff",
+          "$comment": "CAT-1: 取本地 model 与 catalog 价格/上下文/deprecation 的差异列表，仅返回有 diff 的条目。" },
+        { "fn": "applyCatalogDiff",        "method": "POST",   "url": "/api/v1/model-catalog/apply-diff",
+          "body_fields": ["model_ids"],
+          "$comment": "CAT-1: 对选中 model 应用 diff（从 catalog 重拉价格、清除 override 标志）。" },
+        { "fn": "createModelFromCatalog",  "method": "POST",   "url": "/api/v1/models/from-catalog",
+          "body_fields": ["catalog_id", "provider_id", "name"],
+          "$comment": "CAT-1: 以 catalog 快照为模板创建本地 Model，自动绑定 catalog_id。" },
+        { "fn": "resetModelOverride",      "method": "POST",   "url": "/api/v1/models/:id/reset-override",
+          "body_fields": ["field"],
+          "$comment": "CAT-1: 把指定字段（context_length / max_output_tokens）重新从绑定的 catalog 拉值；要求 model 已绑定 catalog。" },
+        { "fn": "autoBindCatalog",         "method": "POST",   "url": "/api/v1/model-catalog/auto-bind",
+          "$comment": "CAT-2: 智能绑定，按 name/upstream_model_id 严格匹配 + 尾段 fallback 把本地 model 一键绑到 catalog；多候选只返回不写库。" },
+        { "fn": "bindModelCatalog",        "method": "POST",   "url": "/api/v1/models/:id/bind-catalog",
+          "body_fields": ["catalog_id", "reset_fields"],
+          "$comment": "CAT-2: 把单个 model 关联到指定 catalog；catalog 已绑定时变成换绑。reset_fields=true 时同步把价格/容量/上游 ID 重置为新 catalog 的当前值。" },
+        { "fn": "unbindModelCatalog",      "method": "POST",   "url": "/api/v1/models/:id/unbind-catalog",
+          "$comment": "CAT-2: catalog_id → null；ctx_overridden / max_output_overridden 清零；价格/容量保留 snapshot。" },
+        { "fn": "batchBindModelCatalog",   "method": "POST",   "url": "/api/v1/models/batch-bind-catalog",
+          "body_fields": ["bindings"],
+          "$comment": "CAT-2: 批量绑定；用于 ambiguous picker 一次保存。单条失败不阻塞，返回 applied + failed_ids。" }
       ]
     },
     "gateway-api.ts": {

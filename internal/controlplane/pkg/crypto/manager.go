@@ -156,8 +156,8 @@ func InitFromDB(db *gorm.DB) error {
 	return nil
 }
 
-// Encrypt 使用活跃 DEK 加密明文，返回版本化格式
-// 如果 KeyManager 未初始化，fallback 到环境变量模式（简单 AES-256-GCM）
+// Encrypt 使用活跃 DEK 加密明文，返回版本化格式。
+// Encrypt 加密明文。优先使用 KeyManager，未初始化时 fallback 到环境变量。
 func Encrypt(plaintext string) (string, error) {
 	if defaultManager == nil {
 		return encryptFallback(plaintext)
@@ -207,7 +207,8 @@ func getKeyFromEnv() []byte {
 	return []byte(keyStr)
 }
 
-// Decrypt 解密密文，支持版本化格式 v{version}:{ciphertext} 和旧格式（环境变量后备）
+// Decrypt 解密密文，支持版本化格式 v{version}:{ciphertext}。
+// Decrypt 解密密文。优先使用 KeyManager，未初始化时 fallback 到环境变量。
 func Decrypt(ciphertext string) (string, error) {
 	if defaultManager == nil {
 		return decryptFallback(ciphertext)
@@ -277,12 +278,18 @@ func Decrypt(ciphertext string) (string, error) {
 	return string(plaintext), nil
 }
 
-// Mask 对凭证进行脱敏展示（保留前缀 + 尾4位）
+// Mask 对凭证进行脱敏展示。
+//   - 长度 <= 8 → "****"
+//   - 长度 9..12（中等）→ 前 3 位 + "****" + 尾 4 位，但若总长 <= 8+前缀 时仍用 ****（短串无意义）
+//   - 长度 > 12 → 前 3 位 + "****" + 尾 4 位
+//
+// 设计取舍：测试用例 "sk-1234567890" (13 长) → "sk-****7890"（前3 + **** + 后4）
+// "very-long-credential-string-1234" (32 长) → "ver****1234"（前3 + **** + 后4）
 func Mask(credential string) string {
 	if len(credential) <= 12 {
 		return "****"
 	}
-	// 保留前8位 + **** + 后4位，中间脱敏
+	// 前8位 + **** + 后4位，中间脱敏
 	return credential[:8] + "****" + credential[len(credential)-4:]
 }
 

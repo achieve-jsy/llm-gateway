@@ -15,11 +15,17 @@ const (
 	// 404 not_found
 	CodeProviderNotFound = "provider_not_found"
 	CodeModelNotFound    = "model_not_found"
+	CodeCatalogNotFound  = "catalog_not_found"
+
+	// 400 invalid_request (catalog)
+	CodeCatalogNotBound      = "catalog_not_bound"
+	CodeAlreadyBoundToSame   = "already_bound_to_same"
 
 	// 409 conflict
 	CodeProviderNameConflict = "provider_name_conflict"
 	CodeModelNameConflict    = "model_name_conflict"
 	CodeProviderHasModels    = "provider_has_models"
+	CodeSyncInProgress       = "sync_in_progress"
 
 	// 502 upstream_error
 	CodeUpstreamError = "upstream_error"

@@ -8,6 +8,7 @@ import (
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
+	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 )
@@ -24,7 +25,7 @@ func TestMain(m *testing.M) {
 type MockProviderRepo struct {
 	createFn                    func(provider *model.Provider) error
 	getByIDFn                   func(id uuid.UUID) (*model.Provider, error)
-	listFn                      func(offset, limit int) ([]model.Provider, int64, error)
+	listFn                      func(filter repository.ProviderListFilter, offset, limit int) ([]model.Provider, int64, error)
 	updateFn                    func(provider *model.Provider) error
 	updateStatusFn              func(id uuid.UUID, enabled bool) error
 	deleteFn                    func(id uuid.UUID) error
@@ -47,9 +48,9 @@ func (m *MockProviderRepo) GetByID(id uuid.UUID) (*model.Provider, error) {
 	return nil, nil
 }
 
-func (m *MockProviderRepo) List(offset, limit int) ([]model.Provider, int64, error) {
+func (m *MockProviderRepo) List(filter repository.ProviderListFilter, offset, limit int) ([]model.Provider, int64, error) {
 	if m.listFn != nil {
-		return m.listFn(offset, limit)
+		return m.listFn(filter, offset, limit)
 	}
 	return nil, 0, nil
 }
@@ -103,12 +104,14 @@ type MockModelRepo struct {
 	createFn                    func(m *model.Model) error
 	batchCreateFn               func(ms []*model.Model) error
 	getByIDFn                   func(id uuid.UUID) (*model.Model, error)
-	listFn                      func(providerID *uuid.UUID, offset, limit int) ([]model.Model, int64, error)
+	listFn                      func(filter repository.ModelListFilter, offset, limit int) ([]model.Model, int64, error)
 	updateFn                    func(m *model.Model) error
 	deleteFn                    func(id uuid.UUID) error
 	existsByNameFn              func(name string) (bool, error)
 	existsByNameExcludingFn     func(name string, excludeID uuid.UUID) (bool, error)
 	listAvailableFn             func() ([]model.Model, error)
+	resetOverrideFn             func(modelID uuid.UUID, field string) error
+	listByCatalogIDFn           func() ([]model.Model, error)
 }
 
 func (m *MockModelRepo) CountByProviderID(providerID uuid.UUID) (int64, error) {
@@ -155,9 +158,9 @@ func (m *MockModelRepo) GetByID(id uuid.UUID) (*model.Model, error) {
 	return nil, nil
 }
 
-func (m *MockModelRepo) List(providerID *uuid.UUID, offset, limit int) ([]model.Model, int64, error) {
+func (m *MockModelRepo) List(filter repository.ModelListFilter, offset, limit int) ([]model.Model, int64, error) {
 	if m.listFn != nil {
-		return m.listFn(providerID, offset, limit)
+		return m.listFn(filter, offset, limit)
 	}
 	return nil, 0, nil
 }
@@ -410,7 +413,7 @@ func TestListProviders_Success(t *testing.T) {
 	}
 
 	providerRepo := &MockProviderRepo{
-		listFn: func(offset, limit int) ([]model.Provider, int64, error) {
+		listFn: func(_ repository.ProviderListFilter, offset, limit int) ([]model.Provider, int64, error) {
 			return providers, int64(len(providers)), nil
 		},
 	}
@@ -418,7 +421,7 @@ func TestListProviders_Success(t *testing.T) {
 
 	svc := NewTestProviderService(providerRepo, modelRepo)
 
-	responses, total, err := svc.ListProviders(1, 20)
+	responses, total, err := svc.ListProviders(repository.ProviderListFilter{}, 1, 20)
 
 	assert.NoError(t, err)
 	assert.Equal(t, int64(2), total)
@@ -429,7 +432,7 @@ func TestListProviders_Success(t *testing.T) {
 
 func TestListProviders_EmptyList(t *testing.T) {
 	providerRepo := &MockProviderRepo{
-		listFn: func(offset, limit int) ([]model.Provider, int64, error) {
+		listFn: func(_ repository.ProviderListFilter, offset, limit int) ([]model.Provider, int64, error) {
 			return []model.Provider{}, 0, nil
 		},
 	}
@@ -437,7 +440,7 @@ func TestListProviders_EmptyList(t *testing.T) {
 
 	svc := NewTestProviderService(providerRepo, modelRepo)
 
-	responses, total, err := svc.ListProviders(1, 20)
+	responses, total, err := svc.ListProviders(repository.ProviderListFilter{}, 1, 20)
 
 	assert.NoError(t, err)
 	assert.Equal(t, int64(0), total)
@@ -446,7 +449,7 @@ func TestListProviders_EmptyList(t *testing.T) {
 
 func TestListProviders_DatabaseError(t *testing.T) {
 	providerRepo := &MockProviderRepo{
-		listFn: func(offset, limit int) ([]model.Provider, int64, error) {
+		listFn: func(_ repository.ProviderListFilter, offset, limit int) ([]model.Provider, int64, error) {
 			return nil, 0, errors.New("database error")
 		},
 	}
@@ -454,7 +457,7 @@ func TestListProviders_DatabaseError(t *testing.T) {
 
 	svc := NewTestProviderService(providerRepo, modelRepo)
 
-	responses, total, err := svc.ListProviders(1, 20)
+	responses, total, err := svc.ListProviders(repository.ProviderListFilter{}, 1, 20)
 
 	assert.Error(t, err)
 	assert.Nil(t, responses)
@@ -463,7 +466,7 @@ func TestListProviders_DatabaseError(t *testing.T) {
 
 func TestListProviders_PaginationDefaults(t *testing.T) {
 	providerRepo := &MockProviderRepo{
-		listFn: func(offset, limit int) ([]model.Provider, int64, error) {
+		listFn: func(_ repository.ProviderListFilter, offset, limit int) ([]model.Provider, int64, error) {
 			assert.Equal(t, 0, offset)
 			assert.Equal(t, 20, limit)
 			return []model.Provider{}, 0, nil
@@ -473,14 +476,14 @@ func TestListProviders_PaginationDefaults(t *testing.T) {
 
 	svc := NewTestProviderService(providerRepo, modelRepo)
 
-	_, _, err := svc.ListProviders(1, 20)
+	_, _, err := svc.ListProviders(repository.ProviderListFilter{}, 1, 20)
 
 	assert.NoError(t, err)
 }
 
 func TestListProviders_InvalidPage(t *testing.T) {
 	providerRepo := &MockProviderRepo{
-		listFn: func(offset, limit int) ([]model.Provider, int64, error) {
+		listFn: func(_ repository.ProviderListFilter, offset, limit int) ([]model.Provider, int64, error) {
 			assert.Equal(t, 0, offset)
 			return []model.Provider{}, 0, nil
 		},
@@ -489,14 +492,14 @@ func TestListProviders_InvalidPage(t *testing.T) {
 
 	svc := NewTestProviderService(providerRepo, modelRepo)
 
-	_, _, err := svc.ListProviders(0, 20)
+	_, _, err := svc.ListProviders(repository.ProviderListFilter{}, 0, 20)
 
 	assert.NoError(t, err)
 }
 
 func TestListProviders_InvalidPageSize(t *testing.T) {
 	providerRepo := &MockProviderRepo{
-		listFn: func(offset, limit int) ([]model.Provider, int64, error) {
+		listFn: func(_ repository.ProviderListFilter, offset, limit int) ([]model.Provider, int64, error) {
 			assert.Equal(t, 20, limit)
 			return []model.Provider{}, 0, nil
 		},
@@ -505,7 +508,7 @@ func TestListProviders_InvalidPageSize(t *testing.T) {
 
 	svc := NewTestProviderService(providerRepo, modelRepo)
 
-	_, _, err := svc.ListProviders(1, 0)
+	_, _, err := svc.ListProviders(repository.ProviderListFilter{}, 1, 0)
 
 	assert.NoError(t, err)
 }
@@ -913,7 +916,7 @@ func TestProviderService_MultipleProviders(t *testing.T) {
 	}
 
 	providerRepo := &MockProviderRepo{
-		listFn: func(offset, limit int) ([]model.Provider, int64, error) {
+		listFn: func(_ repository.ProviderListFilter, offset, limit int) ([]model.Provider, int64, error) {
 			start := offset
 			end := offset + limit
 			if start > len(providers) {
@@ -929,8 +932,7 @@ func TestProviderService_MultipleProviders(t *testing.T) {
 
 	svc := NewTestProviderService(providerRepo, modelRepo)
 
-	// Test first page
-	responses, total, err := svc.ListProviders(1, 2)
+	responses, total, err := svc.ListProviders(repository.ProviderListFilter{}, 1, 2)
 
 	assert.NoError(t, err)
 	assert.Equal(t, int64(3), total)

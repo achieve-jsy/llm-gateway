@@ -74,8 +74,12 @@ type ConfirmSyncResult struct {
 func (s *SyncService) SyncModels(providerID uuid.UUID) (*SyncResult, error) {
 	// 获取渠道
 	provider, err := s.providerRepo.GetByID(providerID)
-	if err != nil {
+	if err != nil || provider == nil {
 		return nil, fmt.Errorf("provider not found")
+	}
+
+	if !provider.Enabled {
+		return nil, fmt.Errorf("provider is disabled")
 	}
 
 	// 检查是否支持同步（Anthropic/Bedrock 不支持 /models 接口）

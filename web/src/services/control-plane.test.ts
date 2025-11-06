@@ -88,7 +88,7 @@ describe('Control Plane API Service', () => {
       const result = await controlPlane.getProviders()
 
       expect(mockHttp.get).toHaveBeenCalledWith('/api/v1/providers')
-      expect(result).toEqual(mockProviders)
+      expect(result.data).toEqual(mockProviders)
     })
 
     it('should pass pagination params when opts provided', async () => {
@@ -632,6 +632,155 @@ describe('Control Plane API Service', () => {
 
       expect(mockHttp.post).toHaveBeenCalledWith('/api/v1/providers/provider1/sync-models')
       expect(result).toEqual(mockResult)
+    })
+  })
+
+  // ==================== Model Catalog (T7) ====================
+
+  describe('searchCatalog', () => {
+    it('calls /api/v1/model-catalog/search with query/provider/mode/limit', async () => {
+      const mockData = [
+        {
+          id: 'cat-1',
+          source: 'litellm',
+          source_model_id: 'gpt-4o',
+          display_name: 'GPT-4o',
+          provider: 'openai',
+          mode: 'chat',
+          context_length: 128000,
+          max_output_tokens: 4096,
+          input_price_per_million: 2.5,
+          output_price_per_million: 10,
+          cache_read_price: null,
+          cache_write_price: null,
+          supports_function_calling: true,
+          supports_vision: true,
+          supports_prompt_caching: false,
+          supports_response_schema: false,
+          supports_tool_choice: true,
+          deprecation_date: null,
+          synced_at: '2026-05-22T00:00:00Z'
+        }
+      ]
+      mockHttp.get.mockResolvedValueOnce({ data: { data: mockData, total: 1 } })
+
+      const result = await controlPlane.searchCatalog({
+        q: 'gpt',
+        provider: 'openai',
+        mode: 'chat',
+        limit: 10
+      })
+
+      expect(mockHttp.get).toHaveBeenCalledWith('/api/v1/model-catalog/search', {
+        params: { q: 'gpt', provider: 'openai', mode: 'chat', limit: 10 }
+      })
+      expect(result.data).toEqual(mockData)
+      expect(result.total).toBe(1)
+    })
+  })
+
+  describe('getCatalogBySource', () => {
+    it('calls /api/v1/model-catalog/by-source with source_model_id query', async () => {
+      const mockItem = { id: 'cat-1', source: 'litellm', source_model_id: 'gpt-4o' }
+      mockHttp.get.mockResolvedValueOnce({ data: { data: mockItem } })
+
+      const result = await controlPlane.getCatalogBySource('gpt-4o')
+
+      expect(mockHttp.get).toHaveBeenCalledWith('/api/v1/model-catalog/by-source', {
+        params: { source_model_id: 'gpt-4o' }
+      })
+      expect(result).toEqual(mockItem)
+    })
+  })
+
+  describe('triggerCatalogSync', () => {
+    it('POSTs /api/v1/model-catalog/sync with empty body and returns job descriptor', async () => {
+      const mockJob = { job_id: 'job-123', status: 'queued', source: 'litellm' }
+      mockHttp.post.mockResolvedValueOnce({ data: { data: mockJob } })
+
+      const result = await controlPlane.triggerCatalogSync()
+
+      expect(mockHttp.post).toHaveBeenCalledWith('/api/v1/model-catalog/sync')
+      expect(result).toEqual(mockJob)
+    })
+  })
+
+  describe('getCatalogDiff', () => {
+    it('GETs /api/v1/model-catalog/diff and returns {data,total}', async () => {
+      const mockDiff = [
+        {
+          model_id: 'm1',
+          model_name: 'gpt-4o',
+          catalog_id: 'cat-1',
+          catalog_source_model_id: 'gpt-4o',
+          local_input_price: 2.5,
+          local_output_price: 10,
+          catalog_input_price: 2.6,
+          catalog_output_price: 10.5,
+          is_overridden: false,
+          input_delta_pct: 4,
+          output_delta_pct: 5,
+          catalog_deprecation_date: null
+        }
+      ]
+      mockHttp.get.mockResolvedValueOnce({ data: { data: mockDiff, total: 1 } })
+
+      const result = await controlPlane.getCatalogDiff()
+
+      expect(mockHttp.get).toHaveBeenCalledWith('/api/v1/model-catalog/diff')
+      expect(result.data).toEqual(mockDiff)
+      expect(result.total).toBe(1)
+    })
+  })
+
+  describe('applyCatalogDiff', () => {
+    it('POSTs /api/v1/model-catalog/apply-diff with model_ids body', async () => {
+      const mockResp = { updated: 2, skipped: 1, failed_ids: ['m3'] }
+      mockHttp.post.mockResolvedValueOnce({ data: { data: mockResp } })
+
+      const result = await controlPlane.applyCatalogDiff(['m1', 'm2', 'm3'])
+
+      expect(mockHttp.post).toHaveBeenCalledWith('/api/v1/model-catalog/apply-diff', {
+        model_ids: ['m1', 'm2', 'm3']
+      })
+      expect(result).toEqual(mockResp)
+    })
+  })
+
+  describe('createModelFromCatalog', () => {
+    it('POSTs /api/v1/models/from-catalog with catalog_id/provider_id/name', async () => {
+      const payload = { catalog_id: 'cat-1', provider_id: 'p1', name: 'gpt-4o' }
+      const mockModel = { id: 'm1', name: 'gpt-4o' }
+      mockHttp.post.mockResolvedValueOnce({ data: { data: mockModel } })
+
+      const result = await controlPlane.createModelFromCatalog(payload)
+
+      expect(mockHttp.post).toHaveBeenCalledWith('/api/v1/models/from-catalog', payload)
+      expect(result).toEqual(mockModel)
+    })
+  })
+
+  describe('resetModelOverride', () => {
+    it('POSTs /api/v1/models/:id/reset-override with field body', async () => {
+      const mockModel = { id: 'm1', name: 'gpt-4o', ctx_overridden: false }
+      mockHttp.post.mockResolvedValueOnce({ data: { data: mockModel } })
+
+      const result = await controlPlane.resetModelOverride('m1', 'context_length')
+
+      expect(mockHttp.post).toHaveBeenCalledWith('/api/v1/models/m1/reset-override', {
+        field: 'context_length'
+      })
+      expect(result).toEqual(mockModel)
+    })
+
+    it('supports max_output_tokens field', async () => {
+      mockHttp.post.mockResolvedValueOnce({ data: { data: { id: 'm1' } } })
+
+      await controlPlane.resetModelOverride('m1', 'max_output_tokens')
+
+      expect(mockHttp.post).toHaveBeenCalledWith('/api/v1/models/m1/reset-override', {
+        field: 'max_output_tokens'
+      })
     })
   })
 

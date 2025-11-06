@@ -19,7 +19,10 @@ vi.mock('@/services/control-plane', () => ({
   updateModel: vi.fn(),
   getProviders: vi.fn(),
   getModelTags: vi.fn(),
-  getModelTagsForModel: vi.fn()
+  getModelTagsForModel: vi.fn(),
+  resetModelOverride: vi.fn(),
+  batchDeleteModels: vi.fn(),
+  batchUpdateModelStatus: vi.fn()
 }))
 
 import { ElMessage } from 'element-plus'
@@ -29,7 +32,8 @@ import {
   updateModel,
   getProviders,
   getModelTags,
-  getModelTagsForModel
+  getModelTagsForModel,
+  resetModelOverride
 } from '@/services/control-plane'
 
 const mockedGetModels = vi.mocked(getModels)
@@ -38,6 +42,7 @@ const mockedUpdate = vi.mocked(updateModel)
 const mockedGetProviders = vi.mocked(getProviders)
 const mockedGetTags = vi.mocked(getModelTags)
 const mockedGetForModel = vi.mocked(getModelTagsForModel)
+const mockedResetOverride = vi.mocked(resetModelOverride)
 
 const sampleModels = [
   {
@@ -116,11 +121,12 @@ describe('ModelListPage.vue', () => {
       data: sampleModels.map((m) => ({ ...m })),
       total: sampleModels.length
     }) as any)
-    mockedGetProviders.mockResolvedValue(sampleProviders as any)
+    mockedGetProviders.mockResolvedValue({ data: sampleProviders, total: sampleProviders.length } as any)
     mockedGetTags.mockResolvedValue(sampleTags as any)
     mockedGetForModel.mockResolvedValue([] as any)
     mockedDelete.mockResolvedValue(undefined as any)
     mockedUpdate.mockResolvedValue(undefined as any)
+    mockedResetOverride.mockResolvedValue({ id: 'm1' } as any)
   })
 
   describe('initial load', () => {
@@ -235,6 +241,94 @@ describe('ModelListPage.vue', () => {
       await switches[0].setValue(false)
       await flushPromises()
       expect(ElMessage.error).toHaveBeenCalledWith('状态切换失败')
+    })
+  })
+
+  describe('catalog capability + override (T10)', () => {
+    const catalogModel = {
+      id: 'm-cat',
+      name: 'gpt-4o-cat',
+      provider_id: 'p1',
+      model_type: 'chat',
+      enabled: true,
+      upstream_model_id: 'gpt-4o',
+      description: '',
+      context_length: 128000,
+      max_output_tokens: 4096,
+      input_price: 2.5,
+      output_price: 10,
+      weight: 1,
+      created_at: '',
+      updated_at: '',
+      catalog_id: 'cat-1',
+      ctx_overridden: true,
+      max_output_overridden: false,
+      catalog: {
+        id: 'cat-1',
+        source: 'litellm',
+        source_model_id: 'gpt-4o',
+        display_name: 'GPT-4o',
+        provider: 'openai',
+        mode: 'chat',
+        context_length: 128000,
+        max_output_tokens: 4096,
+        input_price_per_million: 2.5,
+        output_price_per_million: 10,
+        cache_read_price: null,
+        cache_write_price: null,
+        supports_function_calling: true,
+        supports_vision: true,
+        supports_prompt_caching: true,
+        supports_response_schema: false,
+        supports_tool_choice: true,
+        deprecation_date: '2026-12-31T00:00:00Z',
+        synced_at: '2026-05-22T00:00:00Z'
+      }
+    }
+
+    beforeEach(() => {
+      mockedGetModels.mockImplementation(async () => ({
+        data: [{ ...catalogModel }],
+        total: 1
+      }) as any)
+      // 基线里 getProviders mock 返回纯数组（没有 {data,total} 包装），渲染时
+      // 会让 providerOptions.value 变成 undefined，进而触发表格列里 getProviderName
+      // 的 NPE。这里仅在 T10 套件里把 mock 调成 BE 真实返回形态，避免无关失败。
+      mockedGetProviders.mockResolvedValue({ data: sampleProviders, total: sampleProviders.length } as any)
+    })
+
+    it('renders capability icons based on catalog.supports_* flags', async () => {
+      const wrapper = mountPage()
+      await flushPromises()
+      const text = wrapper.text()
+      expect(text).toContain('🛠')
+      expect(text).toContain('🖼')
+      expect(text).toContain('💾')
+      expect(text).not.toContain('📋')
+    })
+
+    it('shows deprecation badge with date when catalog.deprecation_date is set', async () => {
+      const wrapper = mountPage()
+      await flushPromises()
+      const text = wrapper.text()
+      expect(text).toContain('2026-12-31')
+      expect(text).toContain('废弃')
+    })
+
+    it('shows "已脱离目录" label next to context_length when ctx_overridden=true', async () => {
+      const wrapper = mountPage()
+      await flushPromises()
+      expect(wrapper.text()).toContain('已脱离目录')
+    })
+
+    it('calls resetModelOverride when the restore button is clicked', async () => {
+      const wrapper = mountPage()
+      await flushPromises()
+      const restoreBtn = wrapper.find('.restore-btn')
+      expect(restoreBtn.exists()).toBe(true)
+      await restoreBtn.trigger('click')
+      await flushPromises()
+      expect(mockedResetOverride).toHaveBeenCalledWith('m-cat', 'context_length')
     })
   })
 

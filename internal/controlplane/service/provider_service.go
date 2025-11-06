@@ -172,11 +172,13 @@ type ProviderResponse struct {
 	ResponseTime      int       `json:"response_time"`
 	Balance           float64   `json:"balance"`
 	Remark            string    `json:"remark"`
-	MaxRetries        int       `json:"max_retries"`
-	Timeout           int       `json:"timeout"`
-	Tag               string    `json:"tag"`
-	CreatedAt         string    `json:"created_at"`
-	UpdatedAt         string    `json:"updated_at"`
+	MaxRetries           int       `json:"max_retries"`
+	Timeout              int       `json:"timeout"`
+	Tag                  string    `json:"tag"`
+	ConsecutiveFailures  int       `json:"consecutive_failures"`
+	LastCheckError       string    `json:"last_check_error"`
+	CreatedAt            string    `json:"created_at"`
+	UpdatedAt            string    `json:"updated_at"`
 }
 
 // toResponse 将 Provider 转为脱敏响应
@@ -205,7 +207,9 @@ func (s *ProviderService) toResponse(p *model.Provider) ProviderResponse {
 		Remark:            p.Remark,
 		MaxRetries:        p.MaxRetries,
 		Timeout:           p.Timeout,
-		Tag:               p.Tag,
+		Tag:                  p.Tag,
+		ConsecutiveFailures:  p.ConsecutiveFailures,
+		LastCheckError:       p.LastCheckError,
 		CreatedAt:         p.CreatedAt.Format("2006-01-02T15:04:05Z"),
 		UpdatedAt:         p.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 	}

@@ -15,9 +15,16 @@ type HealthCheckConfig struct {
 	FailureAction    string    `gorm:"type:varchar(20);not null;default:'auto_disable'" json:"failure_action"`
 	CheckProviders   bool      `gorm:"not null;default:true" json:"check_providers"`
 	CheckModels      bool      `gorm:"not null;default:true" json:"check_models"`
+	CheckMode        string    `gorm:"type:varchar(20);not null;default:'connectivity'" json:"check_mode"`
 	TimeoutSeconds   int       `gorm:"not null;default:15" json:"timeout_seconds"`
-	CreatedAt        time.Time `gorm:"not null;autoCreateTime" json:"created_at"`
-	UpdatedAt        time.Time `gorm:"not null;autoUpdateTime" json:"updated_at"`
+
+	// 模型检测独立配置（与渠道检测解耦）
+	ModelCheckEnabled          bool `gorm:"not null;default:true" json:"model_check_enabled"`
+	ModelCheckIntervalSeconds  int  `gorm:"not null;default:300" json:"model_check_interval_seconds"`
+	ModelCheckFailureThreshold int  `gorm:"not null;default:3" json:"model_check_failure_threshold"`
+
+	CreatedAt time.Time `gorm:"not null;autoCreateTime" json:"created_at"`
+	UpdatedAt time.Time `gorm:"not null;autoUpdateTime" json:"updated_at"`
 }
 
 func (HealthCheckConfig) TableName() string { return "health_check_configs" }

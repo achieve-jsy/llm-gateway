@@ -677,5 +677,159 @@ func TestBindingStats_ModelRepoNil(t *testing.T) {
 	assert.Contains(t, err.Error(), "model repo not configured")
 }
 
+// ===================== SyncStatus =====================
+
+// TestSyncStatus_InitiallyEmpty 从未跑过同步时，时间字段应为 nil（前端能干净判定）。
+func TestSyncStatus_InitiallyEmpty(t *testing.T) {
+	repo := newFakeCatalogRepo()
+	svc := NewCatalogSyncService(repo, nil, CatalogSyncOpts{})
+
+	st, err := svc.SyncStatus(context.Background())
+	require.NoError(t, err)
+	assert.False(t, st.Running)
+	assert.Nil(t, st.LastStartedAt, "从未跑过时 LastStartedAt 必须是 nil")
+	assert.Nil(t, st.LastFinishedAt)
+	assert.Equal(t, int64(0), st.LastDurationMs)
+	assert.Equal(t, "", st.LastSource)
+	assert.Equal(t, 0, st.LastCount)
+	assert.Equal(t, "", st.LastError)
+	assert.Equal(t, int64(0), st.CatalogTotal)
+}
+
+// TestSyncStatus_AfterRemoteSuccess 远程同步成功后，状态字段应反映 "remote" 来源 + 条目数。
+func TestSyncStatus_AfterRemoteSuccess(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(minimalRemoteJSON))
+	}))
+	defer ts.Close()
+
+	repo := newFakeCatalogRepo()
+	svc := NewCatalogSyncService(repo, nil, CatalogSyncOpts{
+		RemoteURL:   ts.URL,
+		HTTPTimeout: 2 * time.Second,
+	})
+
+	beforeStart := time.Now()
+	n, err := svc.SyncFromRemote(context.Background())
+	require.NoError(t, err)
+	require.Greater(t, n, 0)
+
+	st, err := svc.SyncStatus(context.Background())
+	require.NoError(t, err)
+	assert.False(t, st.Running, "同步已结束，Running 必须翻为 false")
+	require.NotNil(t, st.LastStartedAt)
+	require.NotNil(t, st.LastFinishedAt)
+	assert.False(t, st.LastStartedAt.Before(beforeStart.Add(-time.Second)),
+		"LastStartedAt 必须落在最近一次调用之内")
+	assert.GreaterOrEqual(t, st.LastDurationMs, int64(0))
+	assert.Equal(t, "remote", st.LastSource)
+	assert.Equal(t, n, st.LastCount)
+	assert.Equal(t, "", st.LastError)
+	assert.Equal(t, int64(n), st.CatalogTotal,
+		"BatchUpsert 后 CatalogTotal 应等于这次写入条目数")
+}
+
+// TestSyncStatus_AfterFallback 远程失败、走 bundled 兜底也算成功，但 LastSource = "bundled"
+// 让 admin 看到"这次走的是回退链路"。
+func TestSyncStatus_AfterFallback(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	repo := newFakeCatalogRepo()
+	svc := NewCatalogSyncService(repo, nil, CatalogSyncOpts{
+		RemoteURL:    ts.URL,
+		HTTPTimeout:  500 * time.Millisecond,
+		BundledBytes: []byte(minimalRemoteJSON),
+	})
+
+	n, err := svc.SyncFromRemote(context.Background())
+	require.NoError(t, err)
+	require.Greater(t, n, 0)
+
+	st, err := svc.SyncStatus(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "bundled", st.LastSource, "回退到 bundled 必须明确告诉前端，不能伪装成 remote")
+	assert.Equal(t, "", st.LastError, "回退成功不应残留 error 字段，避免 UI 误报")
+	assert.Equal(t, n, st.LastCount)
+}
+
+// TestSyncStatus_AfterTotalFailure 远程失败 + 无 bundled，必须返回 err 并把 LastError 写入。
+func TestSyncStatus_AfterTotalFailure(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	repo := newFakeCatalogRepo()
+	svc := NewCatalogSyncService(repo, nil, CatalogSyncOpts{
+		RemoteURL:    ts.URL,
+		HTTPTimeout:  500 * time.Millisecond,
+		BundledBytes: []byte{}, // 显式无兜底
+	})
+
+	_, err := svc.SyncFromRemote(context.Background())
+	require.Error(t, err)
+
+	st, err := svc.SyncStatus(context.Background())
+	require.NoError(t, err)
+	assert.False(t, st.Running)
+	assert.Equal(t, "", st.LastSource, "彻底失败时 LastSource 不应是 remote 也不应是 bundled")
+	assert.NotEmpty(t, st.LastError, "彻底失败必须把错误写进 LastError 让前端能展示")
+	assert.Equal(t, 0, st.LastCount)
+}
+
+// TestSyncStatus_ConcurrentTriggerIsRejected 两次并发 SyncFromRemote，第二次必须立刻拒绝，
+// 否则会出现 last* 字段被竞争写坏的情况。
+func TestSyncStatus_ConcurrentTriggerIsRejected(t *testing.T) {
+	// 用一个会卡 200ms 的 server 模拟"上次还没跑完"
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(minimalRemoteJSON))
+	}))
+	defer ts.Close()
+
+	repo := newFakeCatalogRepo()
+	svc := NewCatalogSyncService(repo, nil, CatalogSyncOpts{
+		RemoteURL:   ts.URL,
+		HTTPTimeout: 2 * time.Second,
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, e := svc.SyncFromRemote(context.Background())
+		done <- e
+	}()
+
+	// 给第一个 goroutine 一点时间进到 syncing=true
+	time.Sleep(30 * time.Millisecond)
+	_, err := svc.SyncFromRemote(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already in progress")
+
+	require.NoError(t, <-done)
+}
+
+// TestSyncStatus_RepoCountError 当 repo.Count 失败时，SyncStatus 必须把错误冒出来，
+// 不能静默把 CatalogTotal 写成 0 让用户以为"目录是空的"。
+func TestSyncStatus_RepoCountError(t *testing.T) {
+	repo := &countErrCatalogRepo{fakeCatalogRepo: newFakeCatalogRepo()}
+	svc := NewCatalogSyncService(repo, nil, CatalogSyncOpts{})
+
+	_, err := svc.SyncStatus(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "count catalog for sync status")
+}
+
+// countErrCatalogRepo: Count 永远报错，其余继承 fakeCatalogRepo
+type countErrCatalogRepo struct{ *fakeCatalogRepo }
+
+func (r *countErrCatalogRepo) Count() (int64, error) {
+	return 0, errors.New("db down")
+}
+
 // 防止未使用 import 的烦恼
 var _ = strings.Contains

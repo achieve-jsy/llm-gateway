@@ -172,6 +172,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.POST("/model-catalog/apply-diff", catalogHandler.ApplyDiff)
 		adminGroup.POST("/model-catalog/auto-bind", catalogHandler.AutoBind)
 		adminGroup.GET("/model-catalog/binding-stats", catalogHandler.BindingStats)
+		adminGroup.GET("/model-catalog/sync-status", catalogHandler.SyncStatus)
 		// :id（UUID）放最后，避免吃掉前面的静态路径
 		adminGroup.GET("/model-catalog/:id", catalogHandler.GetByID)
 	}

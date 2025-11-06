@@ -14,7 +14,8 @@ import type {
   BindCatalogPayload,
   BatchBindItem,
   BatchBindResult,
-  CatalogBindingStats
+  CatalogBindingStats,
+  CatalogSyncStatus
 } from '@/types/catalog'
 import type { ApiResponse, PaginatedResponse } from '@/types/api'
 
@@ -139,6 +140,11 @@ export interface HealthCheckConfig {
   check_mode: string
   timeout_seconds: number
   failure_action: string
+  // 模型检测独立配置
+  model_check_enabled: boolean
+  model_check_interval_minutes: number
+  model_check_interval_seconds: number
+  model_check_failure_threshold: number
 }
 
 /** 获取健康检测配置 */
@@ -354,6 +360,18 @@ export async function triggerCatalogSync(): Promise<SyncTriggerResponse> {
 export async function getCatalogBindingStats(): Promise<CatalogBindingStats> {
   const response = await http.get<ApiResponse<CatalogBindingStats>>(
     '/api/v1/model-catalog/binding-stats'
+  )
+  return response.data.data
+}
+
+/**
+ * 获取目录同步任务的当前状态（用于"手动刷新"后的轮询）。
+ *
+ * 后端：GET /api/v1/model-catalog/sync-status
+ */
+export async function getCatalogSyncStatus(): Promise<CatalogSyncStatus> {
+  const response = await http.get<ApiResponse<CatalogSyncStatus>>(
+    '/api/v1/model-catalog/sync-status'
   )
   return response.data.data
 }

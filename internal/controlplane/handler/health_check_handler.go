@@ -30,16 +30,30 @@ func (h *HealthCheckHandler) GetConfig(c *gin.Context) {
 	if checkMode == "" {
 		checkMode = "connectivity"
 	}
+	// 模型检测独立配置：使用默认值兜底
+	modelCheckIntervalSeconds := config.ModelCheckIntervalSeconds
+	if modelCheckIntervalSeconds <= 0 {
+		modelCheckIntervalSeconds = 300
+	}
+	modelCheckFailureThreshold := config.ModelCheckFailureThreshold
+	if modelCheckFailureThreshold <= 0 {
+		modelCheckFailureThreshold = 3
+	}
+
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
-		"interval_minutes":  config.IntervalSeconds / 60,
-		"interval_seconds":  config.IntervalSeconds,
-		"max_failures":      config.FailureThreshold,
-		"enabled":           config.Enabled,
-		"check_providers":   config.CheckProviders,
-		"check_models":      config.CheckModels,
-		"timeout_seconds":   config.TimeoutSeconds,
-		"failure_action":    config.FailureAction,
-		"check_mode":        checkMode,
+		"interval_minutes":               config.IntervalSeconds / 60,
+		"interval_seconds":               config.IntervalSeconds,
+		"max_failures":                   config.FailureThreshold,
+		"enabled":                        config.Enabled,
+		"check_providers":                config.CheckProviders,
+		"check_models":                   config.CheckModels,
+		"timeout_seconds":                config.TimeoutSeconds,
+		"failure_action":                 config.FailureAction,
+		"check_mode":                     checkMode,
+		"model_check_enabled":            config.ModelCheckEnabled,
+		"model_check_interval_minutes":   modelCheckIntervalSeconds / 60,
+		"model_check_interval_seconds":   modelCheckIntervalSeconds,
+		"model_check_failure_threshold":  modelCheckFailureThreshold,
 	}})
 }
 
@@ -56,6 +70,12 @@ func (h *HealthCheckHandler) UpdateConfig(c *gin.Context) {
 		CheckModels      *bool   `json:"check_models"`
 		CheckMode        *string `json:"check_mode"`
 		TimeoutSeconds   *int    `json:"timeout_seconds"`
+
+		// 模型检测独立配置
+		ModelCheckEnabled          *bool `json:"model_check_enabled"`
+		ModelCheckIntervalMinutes  *int  `json:"model_check_interval_minutes"`
+		ModelCheckIntervalSeconds  *int  `json:"model_check_interval_seconds"`
+		ModelCheckFailureThreshold *int  `json:"model_check_failure_threshold"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error()}})
@@ -99,6 +119,20 @@ func (h *HealthCheckHandler) UpdateConfig(c *gin.Context) {
 		config.TimeoutSeconds = *input.TimeoutSeconds
 	}
 
+	// 模型检测独立配置
+	if input.ModelCheckEnabled != nil {
+		config.ModelCheckEnabled = *input.ModelCheckEnabled
+	}
+	if input.ModelCheckIntervalSeconds != nil {
+		config.ModelCheckIntervalSeconds = *input.ModelCheckIntervalSeconds
+	}
+	if input.ModelCheckIntervalMinutes != nil {
+		config.ModelCheckIntervalSeconds = *input.ModelCheckIntervalMinutes * 60
+	}
+	if input.ModelCheckFailureThreshold != nil {
+		config.ModelCheckFailureThreshold = *input.ModelCheckFailureThreshold
+	}
+
 	if err := h.svc.UpdateConfig(config); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"message": "failed to update config"}})
 		return
@@ -108,16 +142,28 @@ func (h *HealthCheckHandler) UpdateConfig(c *gin.Context) {
 	if checkMode == "" {
 		checkMode = "connectivity"
 	}
+	modelCheckIntervalSeconds := config.ModelCheckIntervalSeconds
+	if modelCheckIntervalSeconds <= 0 {
+		modelCheckIntervalSeconds = 300
+	}
+	modelCheckFailureThreshold := config.ModelCheckFailureThreshold
+	if modelCheckFailureThreshold <= 0 {
+		modelCheckFailureThreshold = 3
+	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
-		"interval_minutes":  config.IntervalSeconds / 60,
-		"interval_seconds":  config.IntervalSeconds,
-		"max_failures":      config.FailureThreshold,
-		"enabled":           config.Enabled,
-		"check_providers":   config.CheckProviders,
-		"check_models":      config.CheckModels,
-		"timeout_seconds":   config.TimeoutSeconds,
-		"failure_action":    config.FailureAction,
-		"check_mode":        checkMode,
+		"interval_minutes":               config.IntervalSeconds / 60,
+		"interval_seconds":               config.IntervalSeconds,
+		"max_failures":                   config.FailureThreshold,
+		"enabled":                        config.Enabled,
+		"check_providers":                config.CheckProviders,
+		"check_models":                   config.CheckModels,
+		"timeout_seconds":                config.TimeoutSeconds,
+		"failure_action":                 config.FailureAction,
+		"check_mode":                     checkMode,
+		"model_check_enabled":            config.ModelCheckEnabled,
+		"model_check_interval_minutes":   modelCheckIntervalSeconds / 60,
+		"model_check_interval_seconds":   modelCheckIntervalSeconds,
+		"model_check_failure_threshold":  modelCheckFailureThreshold,
 	}})
 }
 

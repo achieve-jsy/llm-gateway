@@ -72,8 +72,38 @@ type CatalogSyncService struct {
 	modelRepo CatalogSyncModelRepo
 	opts      CatalogSyncOpts
 
-	mu      sync.Mutex
-	syncing bool
+	// mu 同时保护 syncing 标志 + last* 一组追踪字段，
+	// 让 SyncStatus 读取与 SyncFromRemote 写入之间不会出现错位的中间状态。
+	mu             sync.Mutex
+	syncing        bool
+	lastStartedAt  time.Time     // 零值表示从未跑过
+	lastFinishedAt time.Time     // 零值表示从未完成过
+	lastDuration   time.Duration // 最近一次耗时（成功 / 失败都计）
+	lastSource     string        // "remote" / "bundled" / "" (尚未跑过 or 失败到无源)
+	lastCount      int           // 最近一次写库的条目数；失败时为 0
+	lastError      string        // 最近一次失败的错误消息；成功时为 ""
+}
+
+// SyncStatus 描述目录同步任务的当前状态 + 最近一次执行结果。
+//
+// 用途：前端 CatalogSyncPage 在"手动刷新"后用它轮询，显示
+//
+//	- 是否还在跑（loading 转圈）
+//	- 上一次什么时候跑的、耗时多久、用的远程还是 bundled 兜底
+//	- 上一次有没有报错
+//	- 当前 catalog 里有多少条
+//
+// 时间字段用 *time.Time，"从未发生"序列化成 null 让前端能干净判定，
+// 避免 time.Time 零值 "0001-01-01T00:00:00Z" 这种丑陋占位。
+type SyncStatus struct {
+	Running        bool       `json:"running"`
+	LastStartedAt  *time.Time `json:"last_started_at,omitempty"`
+	LastFinishedAt *time.Time `json:"last_finished_at,omitempty"`
+	LastDurationMs int64      `json:"last_duration_ms"`
+	LastSource     string     `json:"last_source"`
+	LastCount      int        `json:"last_count"`
+	LastError      string     `json:"last_error"`
+	CatalogTotal   int64      `json:"catalog_total"`
 }
 
 // NewCatalogSyncService 构造。
@@ -107,35 +137,93 @@ func (s *CatalogSyncService) IsSyncing() bool {
 	return s.syncing
 }
 
-// SyncFromRemote 从 RemoteURL 拉取 + retry，失败回退到 BundledBytes。
+// SyncStatus 返回同步任务的当前 / 最近一次执行状态，外加目录总数。
 //
-// 错误语义：
-//   - 远程成功 → 返回 (n, nil)
-//   - 远程失败但 bundled 加载成功 → 返回 (n, nil)（fallback OK）
-//   - 远程失败且 bundled 也无 → 返回 (0, err)
-func (s *CatalogSyncService) SyncFromRemote(ctx context.Context) (int, error) {
+// 实现注意：先拿 mu 读全部 last* 字段（让它们彼此一致），再放锁后做 repo.Count()
+// 的数据库 IO——避免持锁做 IO 阻塞别的同步触发。
+func (s *CatalogSyncService) SyncStatus(_ context.Context) (*SyncStatus, error) {
+	s.mu.Lock()
+	st := SyncStatus{
+		Running:        s.syncing,
+		LastDurationMs: s.lastDuration.Milliseconds(),
+		LastSource:     s.lastSource,
+		LastCount:      s.lastCount,
+		LastError:      s.lastError,
+	}
+	if !s.lastStartedAt.IsZero() {
+		started := s.lastStartedAt
+		st.LastStartedAt = &started
+	}
+	if !s.lastFinishedAt.IsZero() {
+		finished := s.lastFinishedAt
+		st.LastFinishedAt = &finished
+	}
+	s.mu.Unlock()
+
+	total, err := s.repo.Count()
+	if err != nil {
+		return nil, fmt.Errorf("count catalog for sync status: %w", err)
+	}
+	st.CatalogTotal = total
+	return &st, nil
+}
+
+// doTrackedSync 包了一层"互斥 + 记录 last* 字段"的逻辑，
+// 让所有走它的同步路径（目前是 SyncFromRemote）都能自动暴露给 SyncStatus。
+//
+// fn 返回 (count, source, err)，其中 source 描述真正用了哪条链路：
+// "remote"（远程拉取成功）/ "bundled"（远程失败回退到内置）/ ""（彻底失败）。
+func (s *CatalogSyncService) doTrackedSync(fn func() (int, string, error)) (int, error) {
 	s.mu.Lock()
 	if s.syncing {
 		s.mu.Unlock()
 		return 0, errors.New("catalog sync already in progress")
 	}
 	s.syncing = true
+	started := time.Now()
+	s.lastStartedAt = started
+	// 清掉旧的失败信息，避免 UI 把上次的报错继续挂在那。
+	s.lastError = ""
+	s.lastSource = ""
 	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		s.syncing = false
-		s.mu.Unlock()
-	}()
 
-	body, err := s.fetchRemote(ctx)
+	count, source, err := fn()
+
+	s.mu.Lock()
+	finished := time.Now()
+	s.syncing = false
+	s.lastFinishedAt = finished
+	s.lastDuration = finished.Sub(started)
+	s.lastSource = source
+	s.lastCount = count
 	if err != nil {
-		slog.Warn("catalog sync remote failed, falling back to bundled", "error", err)
-		if len(s.opts.BundledBytes) == 0 {
-			return 0, fmt.Errorf("remote fetch failed and no bundled fallback: %w", err)
-		}
-		return s.applyBytes(s.opts.BundledBytes)
+		s.lastError = err.Error()
 	}
-	return s.applyBytes(body)
+	s.mu.Unlock()
+
+	return count, err
+}
+
+// SyncFromRemote 从 RemoteURL 拉取 + retry，失败回退到 BundledBytes。
+//
+// 错误语义：
+//   - 远程成功 → 返回 (n, nil)；SyncStatus.LastSource = "remote"
+//   - 远程失败但 bundled 加载成功 → 返回 (n, nil)（fallback OK）；LastSource = "bundled"
+//   - 远程失败且 bundled 也无 → 返回 (0, err)；LastError 保留
+func (s *CatalogSyncService) SyncFromRemote(ctx context.Context) (int, error) {
+	return s.doTrackedSync(func() (int, string, error) {
+		body, err := s.fetchRemote(ctx)
+		if err != nil {
+			slog.Warn("catalog sync remote failed, falling back to bundled", "error", err)
+			if len(s.opts.BundledBytes) == 0 {
+				return 0, "", fmt.Errorf("remote fetch failed and no bundled fallback: %w", err)
+			}
+			n, e := s.applyBytes(s.opts.BundledBytes)
+			return n, "bundled", e
+		}
+		n, e := s.applyBytes(body)
+		return n, "remote", e
+	})
 }
 
 // SyncFromBundled 直接走 bundled fixture，不发起任何 HTTP。

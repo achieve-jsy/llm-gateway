@@ -184,8 +184,13 @@ func (h *ModelCheckHandler) checkModel(ctx context.Context, m *model.Model) *Mod
 func (h *ModelCheckHandler) handleModelFailure(id uuid.UUID, cr *ModelCheckResult) {
 	maxFailures := 3
 	config, err := h.healthRepo.GetConfig()
-	if err == nil && config != nil && config.FailureThreshold > 0 {
-		maxFailures = config.FailureThreshold
+	if err == nil && config != nil {
+		// 优先使用模型检测独立阈值
+		if config.ModelCheckFailureThreshold > 0 {
+			maxFailures = config.ModelCheckFailureThreshold
+		} else if config.FailureThreshold > 0 {
+			maxFailures = config.FailureThreshold
+		}
 	}
 
 	newCount, err := h.modelRepo.IncrementModelFailures(id)

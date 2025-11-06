@@ -33,6 +33,9 @@ type CatalogServiceInterface interface {
 	// BindingStats 返回 catalog 总数 + 本地 model 绑定分布，
 	// 让前端在 diff 为空时能区分 "目录空 / 未绑定 / 全部一致" 这几种语义。
 	BindingStats(ctx context.Context) (*service.BindingStats, error)
+	// SyncStatus 给前端轮询同步任务的实时状态：
+	// 是否在跑、上次开始/结束、耗时、来源（remote/bundled）、错误、目录总数。
+	SyncStatus(ctx context.Context) (*service.SyncStatus, error)
 }
 
 // CatalogHandler 路由：
@@ -176,6 +179,29 @@ func (h *CatalogHandler) AutoBind(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": res})
+}
+
+// SyncStatus GET /api/v1/model-catalog/sync-status
+//
+// 给前端"手动刷新"按钮做轮询。返回结构包含：
+//   - running:           当前是否还在跑同步任务
+//   - last_started_at:   最近一次开始时间（从未跑过为 null）
+//   - last_finished_at:  最近一次结束时间
+//   - last_duration_ms:  最近一次耗时
+//   - last_source:       "remote" | "bundled" | ""（用了哪条链路）
+//   - last_count:        最近一次写库条目数
+//   - last_error:        最近一次错误（成功为空字符串）
+//   - catalog_total:     当前 catalog 表总条目数
+//
+// 前端轮询逻辑：running=true 继续轮询；running=false 后根据 last_error 决定
+// 提示成功还是失败，再用 last_count / catalog_total 给用户一个明确的"同步了多少"反馈。
+func (h *CatalogHandler) SyncStatus(c *gin.Context) {
+	status, err := h.svc.SyncStatus(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"message": err.Error(), "code": CodeInternalError}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": status})
 }
 
 // BindingStats GET /api/v1/model-catalog/binding-stats

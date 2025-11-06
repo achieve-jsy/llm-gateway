@@ -24,11 +24,33 @@
           title="按 name / upstream_model_id 严格同名将本地模型自动绑定到目录条目；同名多个候选只列出候选，不会盲绑。"
           >智能绑定</el-button
         >
-        <el-button :loading="refreshing" @click="handleManualRefresh">
-          手动刷新目录
+        <el-button :loading="refreshing || syncRunning" @click="handleManualRefresh">
+          {{ syncRunning ? '同步中…' : '手动刷新目录' }}
         </el-button>
       </div>
     </div>
+
+    <!--
+      同步状态横幅（修复 B）：在用户视野最显眼的位置展示后端 sync-status 的"事实"。
+      - running=true → 蓝色 info，提示"正在同步…"
+      - 有 last_error → 红色 error，把上次失败原因明确摆出来
+      - 成功且来源 bundled → 黄色 warning，提示走了回退链路（远程不可达）
+      - 成功且来源 remote → 绿色 success，简要展示"同步了 N 条 · 耗时 Xs · X 前"
+
+      为什么这是关键修复：之前用户点了"手动刷新"，前端只 setTimeout(4000) 然后
+      重新拉 diff —— 一旦后端 sync 实际上失败了，用户既看不到错误，也无从知道
+      为什么 catalog_total 没变。这个横幅把后端真实状态贴脸告诉用户。
+    -->
+    <el-alert
+      v-if="syncStatusBanner"
+      :type="syncStatusBanner.type"
+      :title="syncStatusBanner.title"
+      :description="syncStatusBanner.description"
+      :closable="syncStatusBanner.closable"
+      show-icon
+      class="sync-status-banner"
+      data-testid="sync-status-banner"
+    />
 
     <!-- 空状态：完全没有 diff（按 bindingStats 分四种语义） -->
     <el-empty
@@ -409,9 +431,15 @@ import {
   searchCatalog,
   autoBindCatalog,
   batchBindModelCatalog,
-  getCatalogBindingStats
+  getCatalogBindingStats,
+  getCatalogSyncStatus
 } from '@/services/control-plane'
-import type { PriceDiffEntry, AutoBindResult, CatalogBindingStats } from '@/types/catalog'
+import type {
+  PriceDiffEntry,
+  AutoBindResult,
+  CatalogBindingStats,
+  CatalogSyncStatus
+} from '@/types/catalog'
 
 // ===================== 数据 / 状态 =====================
 const diffRows = ref<PriceDiffEntry[]>([])
@@ -427,6 +455,10 @@ const autoBindResult = ref<AutoBindResult | null>(null)
 // 目录绑定状态：catalog 总数 + 本地 model 已绑定 / 未绑定计数。
 // 空状态区域用它来精准判定"diff 为空到底意味着啥"。
 const bindingStats = ref<CatalogBindingStats | null>(null)
+
+// 目录同步任务状态（来自 GET /api/v1/model-catalog/sync-status）。
+// 修复 B：用它驱动顶部状态横幅，让用户能直接看到"上次同步成功/失败/在跑"。
+const syncStatus = ref<CatalogSyncStatus | null>(null)
 // CAT-2: ambiguous 段每个 model_id → 选中的 catalog_id（admin 显式选定）
 const ambiguousSelections = ref<Record<string, string>>({})
 const ambiguousResetFields = ref(false)
@@ -472,6 +504,115 @@ const hasFilter = computed(
 const syncedAtText = computed(() =>
   lastSyncedAt.value ? new Date(lastSyncedAt.value).toLocaleString() : ''
 )
+
+/**
+ * 空状态语义判定。把"diff 为空"细分成 5 种 case，
+ * 让模板能精准给出"该点哪个按钮"的指引。
+ *
+ * - 'catalog_empty'      目录里没东西 / stats 加载失败 → 引导同步
+ * - 'no_local_models'    本地一个 model 都没有        → 引导去模型管理
+ * - 'all_unbound'        本地有 model 但都没绑定      → 引导点智能绑定
+ * - 'mixed_no_diff'      部分绑定 + 部分未绑定，已绑的一致 → 继续绑余下
+ * - 'all_bound_no_diff'  全部绑定且无差异              → 一切安好
+ */
+type EmptyKind =
+  | 'catalog_empty'
+  | 'no_local_models'
+  | 'all_unbound'
+  | 'mixed_no_diff'
+  | 'all_bound_no_diff'
+
+const emptyKind = computed<EmptyKind>(() => {
+  const s = bindingStats.value
+  // stats 加载失败时按"目录空"兜底。即使后端真有数据，也促使用户去
+  // 重试一次同步，比展示一段含糊文案要好。
+  if (!s) return 'catalog_empty'
+  if (s.catalog_total <= 0) return 'catalog_empty'
+  if (s.model_total <= 0) return 'no_local_models'
+  if (s.bound_count <= 0) return 'all_unbound'
+  if (s.unbound_count > 0) return 'mixed_no_diff'
+  return 'all_bound_no_diff'
+})
+
+// 同步状态便利访问：用于按钮 loading + "同步中" 显示
+const syncRunning = computed(() => !!syncStatus.value?.running)
+
+/**
+ * 同步状态横幅配置。null 表示不显示横幅（从未跑过 + 不在跑 + 没历史错误）。
+ *
+ * 设计原则：
+ *  - 不在跑、没历史 → 不显示（避免横幅噪音占地方）
+ *  - 在跑 → 蓝色 info，提示用户等待
+ *  - 有 last_error → 红色 error，把上次失败原因显出来（最重要）
+ *  - 成功 bundled → 黄色 warning，提示走了回退（远程不可达，admin 该关注）
+ *  - 成功 remote → 绿色 success，简要回执，可关闭
+ *
+ * 时间字段用了 Date.toLocaleString()，浏览器自动按本地时区显示。
+ */
+type BannerType = 'success' | 'info' | 'warning' | 'error'
+const syncStatusBanner = computed<
+  { type: BannerType; title: string; description: string; closable: boolean } | null
+>(() => {
+  const s = syncStatus.value
+  if (!s) return null
+
+  if (s.running) {
+    return {
+      type: 'info',
+      title: '正在同步目录…',
+      description: s.last_started_at
+        ? `本次开始于 ${new Date(s.last_started_at).toLocaleString()}，请稍候。`
+        : '请稍候，结果将自动刷新。',
+      closable: false
+    }
+  }
+
+  // 不在跑：根据 last_error / last_source 决定横幅类型
+  if (s.last_error) {
+    return {
+      type: 'error',
+      title: '上次同步失败',
+      description: `错误：${s.last_error}` +
+        (s.last_finished_at
+          ? `（${new Date(s.last_finished_at).toLocaleString()}）`
+          : ''),
+      closable: true
+    }
+  }
+
+  // 没有错误且也没跑过 → 不显示横幅
+  if (!s.last_finished_at) return null
+
+  const durSec = (s.last_duration_ms / 1000).toFixed(1)
+  const finishedText = new Date(s.last_finished_at).toLocaleString()
+
+  if (s.last_source === 'bundled') {
+    return {
+      type: 'warning',
+      title: '已用内置兜底数据完成同步',
+      description: `远程目录拉取失败，已回退到内置快照（${s.last_count} 条 · 耗时 ${durSec}s · ${finishedText}）。建议检查 GitHub raw 链路是否可达。`,
+      closable: true
+    }
+  }
+
+  if (s.last_source === 'remote') {
+    return {
+      type: 'success',
+      title: '目录已同步',
+      description: `从远程拉取 ${s.last_count} 条 · 耗时 ${durSec}s · ${finishedText}`,
+      closable: true
+    }
+  }
+
+  // last_source 为空但又有 last_finished_at —— 理论上不应发生，
+  // 保留兜底文案防止 UI 留白让人困惑。
+  return {
+    type: 'info',
+    title: '目录同步已完成',
+    description: `${finishedText} · 写入 ${s.last_count} 条`,
+    closable: true
+  }
+})
 
 // ===================== 过滤 + 排序 + 分页 =====================
 function isPriceUnset(row: PriceDiffEntry): boolean {
@@ -602,6 +743,7 @@ async function loadCatalogMeta() {
   // 1) 拿 catalog 总数 + 本地 model 绑定分布（binding-stats 是元信息真源）。
   // 2) 顺便用 searchCatalog({limit:1}) 拿一条最新条目的 synced_at，展示"最近同步于"。
   //    catalogTotal 不再依赖 search 接口的 total（历史 bug：曾把 len(results) 当 total）。
+  // 3) 拉一次 sync-status，让进入页面就能看到上次同步成功 / 失败的横幅。
   try {
     const stats = await getCatalogBindingStats()
     bindingStats.value = stats
@@ -616,6 +758,12 @@ async function loadCatalogMeta() {
   } catch {
     // searched 失败时同步时间留空即可。
   }
+  try {
+    syncStatus.value = await getCatalogSyncStatus()
+  } catch {
+    // 同步状态拉取失败不影响主流程；横幅不会显示。
+    syncStatus.value = null
+  }
 }
 
 async function loadDiff() {
@@ -629,6 +777,14 @@ async function loadDiff() {
   } finally {
     loading.value = false
   }
+}
+
+/**
+ * 改了绑定关系（autoBind / ambiguousSave / applyDiff）之后调用，
+ * 同时刷新 diff 表和 bindingStats，让空状态文案立即跟上真实情况。
+ */
+async function reloadDiffAndStats() {
+  await Promise.all([loadDiff(), loadCatalogMeta()])
 }
 
 // ===================== 选择 / 应用 =====================
@@ -658,7 +814,7 @@ async function handleApply() {
       (result.failed_ids.length ? ` · 失败 ${result.failed_ids.length} 项` : '')
     ElMessage.success(msg)
     selectedIds.value = []
-    await loadDiff()
+    await reloadDiffAndStats()
   } catch {
     ElMessage.error('应用差异失败')
   } finally {
@@ -736,7 +892,7 @@ async function handleAutoBind() {
     autoBindDialogVisible.value = true
     if (res.matched.length > 0) {
       ElMessage.success(`已自动绑定 ${res.matched.length} 条本地模型到目录`)
-      await loadDiff()
+      await reloadDiffAndStats()
     } else if (res.ambiguous.length > 0) {
       ElMessage.warning(
         `${res.ambiguous.length} 条本地模型有多个目录候选，需要人工选择`
@@ -810,7 +966,7 @@ async function handleAmbiguousSave() {
         delete ambiguousSelections.value[id]
       }
     }
-    await loadDiff()
+    await reloadDiffAndStats()
   } catch {
     ElMessage.error('批量绑定失败，请重试或检查后端日志')
   } finally {
@@ -818,17 +974,59 @@ async function handleAmbiguousSave() {
   }
 }
 
+/**
+ * 修复 B + C：轮询 sync-status 等同步真正结束（替换原来的 setTimeout(4000)）。
+ *
+ * 旧实现的问题：
+ *   - 同步可能 < 1s 也可能 > 10s，固定 4s 既等不及也浪费等
+ *   - 同步失败了用户看不到任何反馈
+ *
+ * 新实现：触发 sync 后立刻轮询 sync-status，running 翻 false 时
+ *   - 有 last_error → toast 错误 + 横幅红色显示原因
+ *   - 成功         → toast "同步了 N 条"，再 reload diff
+ *
+ * 轮询参数：每 1.5s 一次，最长 60s（remote 路径慢起来 ~ 15s）。
+ */
+const SYNC_POLL_INTERVAL_MS = 1500
+const SYNC_POLL_TIMEOUT_MS = 60_000
+
+async function pollSyncStatusUntilDone(): Promise<CatalogSyncStatus | null> {
+  const deadline = Date.now() + SYNC_POLL_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    let st: CatalogSyncStatus | null = null
+    try {
+      st = await getCatalogSyncStatus()
+      syncStatus.value = st
+    } catch {
+      // 单次失败不致命，继续轮询
+    }
+    if (st && !st.running) return st
+    await new Promise((resolve) => setTimeout(resolve, SYNC_POLL_INTERVAL_MS))
+  }
+  return syncStatus.value
+}
+
 async function handleManualRefresh() {
   refreshing.value = true
   try {
-    const job = await triggerCatalogSync()
-    ElMessage.success(
-      `已触发同步任务（${job.job_id?.slice(0, 8) ?? ''}），稍后将在后台拉取最新目录数据`
-    )
-    setTimeout(() => {
-      loadCatalogMeta()
-      loadDiff()
-    }, 4000)
+    await triggerCatalogSync()
+    ElMessage.info('已触发同步任务，正在等待结果…')
+
+    const finalStatus = await pollSyncStatusUntilDone()
+
+    if (!finalStatus) {
+      ElMessage.warning('同步状态轮询超时，请稍后手动刷新页面查看结果')
+    } else if (finalStatus.last_error) {
+      ElMessage.error(`同步失败：${finalStatus.last_error}`)
+    } else {
+      const sourceLabel = finalStatus.last_source === 'bundled' ? '内置兜底' : '远程'
+      ElMessage.success(
+        `同步完成：${sourceLabel}写入 ${finalStatus.last_count} 条 · 耗时 ${(finalStatus.last_duration_ms / 1000).toFixed(1)}s`
+      )
+    }
+    // 不管成功失败，都把元信息 / diff 拉一次：成功要让 catalog_total 上来，
+    // 失败要让横幅展示最新错误。
+    await reloadDiffAndStats()
   } catch {
     ElMessage.error('触发同步任务失败')
   } finally {
@@ -991,6 +1189,17 @@ defineExpose({ selectedIds, loadDiff, filteredRows, sortedRows, pagedRows })
   font-size: 13px;
   line-height: 1.7;
   margin: 6px 0;
+}
+
+.empty-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.sync-status-banner {
+  margin: 0 0 16px 0;
 }
 
 .empty-hint code {

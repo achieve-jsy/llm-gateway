@@ -57,6 +57,12 @@ func (s *CatalogService) IsSyncing() bool {
 	return s.syncSvc.IsSyncing()
 }
 
+// SyncStatus 返回最近一次同步的全部观察值（运行中？上次开始/结束时间、耗时、来源、
+// 条目数、错误信息、目录总数），供前端轮询展示同步状态。
+func (s *CatalogService) SyncStatus(ctx context.Context) (*SyncStatus, error) {
+	return s.syncSvc.SyncStatus(ctx)
+}
+
 func (s *CatalogService) ComputePriceDiff(ctx context.Context) ([]PriceDiffEntry, error) {
 	return s.syncSvc.ComputePriceDiff(ctx)
 }

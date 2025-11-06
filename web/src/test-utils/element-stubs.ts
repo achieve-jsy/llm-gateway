@@ -371,8 +371,51 @@ const ElPagination = defineComponent({
 const ElEmpty = defineComponent({
   name: 'ElEmptyStub',
   props: { description: String },
-  setup(props) {
-    return () => h('div', { class: 'el-empty-stub' }, [props.description])
+  setup(props, { slots }) {
+    // 既支持 description prop（旧用法），也支持 #description / 默认 slot
+    // （CatalogSyncPage 空状态把 CTA 按钮放在 #description slot 里，桩必须把它渲染出来，
+    //   否则 data-testid="empty-cta-*" 在测试里永远找不到）。
+    return () =>
+      h(
+        'div',
+        { class: 'el-empty-stub' },
+        [
+          props.description,
+          slots.description ? slots.description() : null,
+          slots.default ? slots.default() : null
+        ]
+      )
+  }
+})
+
+// ElAlert 桩：把 type/title/description 都摆到 DOM 上，方便测试用 data-* 或 text 断言。
+// CatalogSyncPage 用它做同步状态横幅（修复 B）。
+const ElAlert = defineComponent({
+  name: 'ElAlertStub',
+  props: {
+    type: String,
+    title: String,
+    description: String,
+    closable: { type: Boolean, default: true },
+    showIcon: Boolean
+  },
+  setup(props, { slots }) {
+    return () =>
+      h(
+        'div',
+        {
+          class: 'el-alert-stub',
+          'data-type': props.type,
+          'data-title': props.title,
+          'data-description': props.description
+        },
+        [
+          props.title,
+          ' ',
+          props.description,
+          slots.default ? slots.default() : null
+        ]
+      )
   }
 })
 
@@ -489,6 +532,7 @@ export const elementStubsKebab: Record<string, any> = {
   'el-table-column': ElTableColumn,
   'el-pagination': ElPagination,
   'el-empty': ElEmpty,
+  'el-alert': ElAlert,
   'el-divider': ElDivider,
   'el-icon': ElIcon,
   'el-tooltip': ElTooltip,

@@ -44,9 +44,11 @@ type HealthCheckService struct {
 	providerRepo *repository.ProviderRepo
 	modelRepo    *repository.ModelRepo
 
-	mu      sync.Mutex
-	cancel  context.CancelFunc
-	running bool
+	mu               sync.Mutex
+	cancel           context.CancelFunc
+	modelCheckCancel context.CancelFunc
+	running          bool
+	modelCheckRunning bool
 }
 
 // NewHealthCheckService 创建 HealthCheckService 实例
@@ -115,14 +117,14 @@ func (s *HealthCheckService) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if !s.running {
-		return
-	}
-
-	if s.cancel != nil {
+	if s.running && s.cancel != nil {
 		s.cancel()
+		s.running = false
 	}
-	s.running = false
+	if s.modelCheckRunning && s.modelCheckCancel != nil {
+		s.modelCheckCancel()
+		s.modelCheckRunning = false
+	}
 	slog.Info("health check scheduler stopped")
 }
 
@@ -172,6 +174,7 @@ func (s *HealthCheckService) StartBackground(ctx context.Context) {
 	s.cancel = cancel
 	s.mu.Unlock()
 
+	// 渠道检测后台 goroutine
 	go func() {
 		interval := time.Duration(intervalMin) * time.Minute
 		ticker := time.NewTicker(interval)
@@ -198,6 +201,211 @@ func (s *HealthCheckService) StartBackground(ctx context.Context) {
 			}
 		}
 	}()
+
+	// 启动独立的模型检测后台 goroutine
+	s.startModelCheckBackground(ctx, config)
+}
+
+// startModelCheckBackground 启动模型检测独立后台定时器
+func (s *HealthCheckService) startModelCheckBackground(ctx context.Context, config *model.HealthCheckConfig) {
+	if !config.ModelCheckEnabled {
+		slog.Info("model check background disabled (model_check_enabled=false)")
+		return
+	}
+
+	modelInterval := config.ModelCheckIntervalSeconds
+	if modelInterval <= 0 {
+		modelInterval = 300 // 默认 5 分钟
+	}
+
+	s.mu.Lock()
+	if s.modelCheckRunning {
+		s.mu.Unlock()
+		return
+	}
+	s.modelCheckRunning = true
+	s.mu.Unlock()
+
+	modelCtx, modelCancel := context.WithCancel(ctx)
+	s.mu.Lock()
+	s.modelCheckCancel = modelCancel
+	s.mu.Unlock()
+
+	go func() {
+		interval := time.Duration(modelInterval) * time.Second
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		slog.Info("model check background started", "interval_seconds", modelInterval)
+
+		// 首次延迟 45 秒（错开渠道检测的 30 秒）
+		select {
+		case <-modelCtx.Done():
+			return
+		case <-time.After(45 * time.Second):
+			s.runBackgroundModelCheck()
+		}
+
+		for {
+			select {
+			case <-modelCtx.Done():
+				s.mu.Lock()
+				s.modelCheckRunning = false
+				s.mu.Unlock()
+				return
+			case <-ticker.C:
+				// 每次重新读配置，支持动态关闭
+				cfg, err := s.healthRepo.GetConfig()
+				if err != nil || !cfg.ModelCheckEnabled {
+					slog.Info("model check background stopping (disabled in config)")
+					s.mu.Lock()
+					s.modelCheckRunning = false
+					s.mu.Unlock()
+					return
+				}
+				s.runBackgroundModelCheck()
+			}
+		}
+	}()
+}
+
+// runBackgroundModelCheck 后台执行一轮模型检测
+func (s *HealthCheckService) runBackgroundModelCheck() {
+	config, _ := s.healthRepo.GetConfig()
+	maxFailures := 3
+	if config != nil && config.ModelCheckFailureThreshold > 0 {
+		maxFailures = config.ModelCheckFailureThreshold
+	}
+
+	filter := &repository.ModelListFilter{}
+	models, _, err := s.modelRepo.List(*filter, 0, 1000)
+	if err != nil {
+		slog.Error("model check background: failed to list models", "error", err)
+		return
+	}
+
+	var total, success, failed, autoDisabled int
+	var mu sync.Mutex
+	sem := make(chan struct{}, 10)
+	var wg sync.WaitGroup
+
+	for i := range models {
+		m := &models[i]
+		if m.Enabled == nil || !*m.Enabled {
+			continue
+		}
+		if strings.Contains(strings.ToLower(m.ModelType), "embed") {
+			continue
+		}
+
+		total++
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(mod *model.Model) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			ok, elapsed, errMsg := s.doModelForwardCheck(mod)
+			if ok {
+				mu.Lock()
+				success++
+				mu.Unlock()
+				s.modelRepo.ResetModelFailures(mod.ID)
+				s.modelRepo.UpdateModelCheckResult(mod.ID, elapsed, "")
+				s.recordLog("model", mod.ID, mod.Name, true, elapsed, "")
+			} else {
+				s.modelRepo.UpdateModelCheckResult(mod.ID, elapsed, errMsg)
+				s.recordLog("model", mod.ID, mod.Name, false, elapsed, errMsg)
+
+				newCount, err := s.modelRepo.IncrementModelFailures(mod.ID)
+				if err == nil && newCount >= maxFailures {
+					slog.Warn("model check: auto-disabling model",
+						"model_id", mod.ID, "model_name", mod.Name,
+						"failures", newCount, "threshold", maxFailures)
+					if err := s.modelRepo.AutoDisableModel(mod.ID); err == nil {
+						mu.Lock()
+						autoDisabled++
+						mu.Unlock()
+					}
+				}
+				mu.Lock()
+				failed++
+				mu.Unlock()
+			}
+		}(m)
+	}
+
+	wg.Wait()
+	slog.Info("background model check completed",
+		"total", total, "success", success, "failed", failed, "auto_disabled", autoDisabled)
+}
+
+// doModelForwardCheck 对单个模型做 chat/completions 检测
+func (s *HealthCheckService) doModelForwardCheck(m *model.Model) (bool, int, string) {
+	provider := &m.Provider
+	if provider.ID == uuid.Nil {
+		p, err := s.providerRepo.GetByID(m.ProviderID)
+		if err != nil {
+			return false, 0, "渠道不存在"
+		}
+		provider = p
+	}
+
+	credJSON, err := crypto.Decrypt(provider.EncryptedCredentials)
+	if err != nil {
+		return false, 0, "解密凭证失败"
+	}
+
+	var creds map[string]string
+	json.Unmarshal([]byte(credJSON), &creds)
+	apiKey := creds["api_key"]
+	if apiKey == "" {
+		apiKey = credJSON
+	}
+
+	modelName := m.UpstreamModelID
+	if modelName == "" {
+		modelName = m.Name
+	}
+
+	endpoint := strings.TrimRight(provider.Endpoint, "/") + "/chat/completions"
+	chatReq := map[string]interface{}{
+		"model":      modelName,
+		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
+		"max_tokens": 1,
+	}
+	body, _ := json.Marshal(chatReq)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	start := time.Now()
+	req, _ := http.NewRequestWithContext(context.Background(), "POST", endpoint, strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := client.Do(req)
+	elapsed := int(time.Since(start).Milliseconds())
+
+	if err != nil {
+		return false, elapsed, fmt.Sprintf("请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return false, elapsed, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, truncateStr(string(respBody), 200))
+	}
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var chatResp struct {
+		Choices []interface{} `json:"choices"`
+	}
+	if err := json.Unmarshal(respBody, &chatResp); err != nil {
+		return false, elapsed, fmt.Sprintf("响应体解析失败: %v", err)
+	}
+	if len(chatResp.Choices) == 0 {
+		return false, elapsed, "响应 choices 为空"
+	}
+
+	return true, elapsed, ""
 }
 
 // runBackgroundCheck 后台执行一轮检测

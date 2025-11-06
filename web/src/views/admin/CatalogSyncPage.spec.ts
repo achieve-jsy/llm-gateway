@@ -21,7 +21,9 @@ vi.mock('@/services/control-plane', () => ({
   triggerCatalogSync: vi.fn(),
   searchCatalog: vi.fn(),
   autoBindCatalog: vi.fn(),
-  batchBindModelCatalog: vi.fn()
+  batchBindModelCatalog: vi.fn(),
+  getCatalogBindingStats: vi.fn(),
+  getCatalogSyncStatus: vi.fn()
 }))
 
 import { ElMessage } from 'element-plus'
@@ -31,7 +33,9 @@ import {
   triggerCatalogSync,
   searchCatalog,
   autoBindCatalog,
-  batchBindModelCatalog
+  batchBindModelCatalog,
+  getCatalogBindingStats,
+  getCatalogSyncStatus
 } from '@/services/control-plane'
 
 const mockedGetDiff = vi.mocked(getCatalogDiff)
@@ -40,6 +44,8 @@ const mockedTrigger = vi.mocked(triggerCatalogSync)
 const mockedSearch = vi.mocked(searchCatalog)
 const mockedAutoBind = vi.mocked(autoBindCatalog)
 const mockedBatchBind = vi.mocked(batchBindModelCatalog)
+const mockedBindingStats = vi.mocked(getCatalogBindingStats)
+const mockedSyncStatus = vi.mocked(getCatalogSyncStatus)
 
 const sampleDiff = [
   {
@@ -100,12 +106,32 @@ describe('CatalogSyncPage.vue', () => {
     mockedTrigger.mockResolvedValue({ job_id: 'job-1', status: 'queued', source: 'litellm' } as any)
     mockedSearch.mockResolvedValue({
       data: [{ synced_at: '2026-05-22T06:51:58Z' } as any],
-      total: 2719
+      total: 1
+    } as any)
+    // 默认场景：目录有 2719 条，本地 3 个 model 全部绑定且与 catalog 一致
+    // → diff 仍然渲染 sampleDiff（mockedGetDiff 返回 3 行），不会进空状态分支。
+    // 各个 it 块如果想测空状态，自行 mockResolvedValueOnce 覆盖。
+    mockedBindingStats.mockResolvedValue({
+      catalog_total: 2719,
+      model_total: 3,
+      bound_count: 3,
+      unbound_count: 0
     } as any)
     mockedAutoBind.mockResolvedValue({
       matched: [],
       ambiguous: [],
       unmatched: 0
+    } as any)
+    // 默认场景：同步从未跑过 → 横幅不显示，但 catalog_total 已有数据。
+    mockedSyncStatus.mockResolvedValue({
+      running: false,
+      last_started_at: null,
+      last_finished_at: null,
+      last_duration_ms: 0,
+      last_source: '',
+      last_count: 0,
+      last_error: '',
+      catalog_total: 2719
     } as any)
   })
 
@@ -458,6 +484,254 @@ describe('CatalogSyncPage.vue', () => {
       expect(result.matched.length).toBe(1)
       expect(result.ambiguous.length).toBe(1)
       expect(result.ambiguous[0].model_id).toBe('m2')
+    })
+  })
+
+  // ===================== 修复 D：空状态语义化文案 + CTA =====================
+  //
+  // 历史 bug：diff 永远空（因为本地 model 没绑 catalog_id），空状态文案又把
+  // catalogTotal 显示成 1（修复 A 已修），让用户以为"同步没生效"。
+  // 修复 D 把"diff 为空"细分成 5 种 case，每种给出明确的下一步引导。
+  describe('empty state — semantic guidance', () => {
+    beforeEach(() => {
+      // 这一组都测空 diff 场景
+      mockedGetDiff.mockResolvedValue({ data: [], total: 0 } as any)
+    })
+
+    it('catalog_empty: when stats says catalog is empty, shows sync CTA', async () => {
+      mockedBindingStats.mockResolvedValueOnce({
+        catalog_total: 0,
+        model_total: 5,
+        bound_count: 0,
+        unbound_count: 5
+      } as any)
+      const wrapper = mountPage()
+      await flushPromises()
+
+      expect((wrapper.vm as any).emptyKind).toBe('catalog_empty')
+      const title = wrapper.find('[data-testid="empty-title"]').text()
+      expect(title).toMatch(/目录为空|同步尚未生效/)
+      expect(wrapper.find('[data-testid="empty-cta-sync"]').exists()).toBe(true)
+    })
+
+    it('no_local_models: when catalog has data but no local models, shows model-management CTA', async () => {
+      mockedBindingStats.mockResolvedValueOnce({
+        catalog_total: 2719,
+        model_total: 0,
+        bound_count: 0,
+        unbound_count: 0
+      } as any)
+      const wrapper = mountPage()
+      await flushPromises()
+
+      expect((wrapper.vm as any).emptyKind).toBe('no_local_models')
+      expect(wrapper.find('[data-testid="empty-cta-models"]').exists()).toBe(true)
+    })
+
+    it('all_unbound: when all local models are unbound, shows autobind CTA with count', async () => {
+      mockedBindingStats.mockResolvedValueOnce({
+        catalog_total: 2719,
+        model_total: 7,
+        bound_count: 0,
+        unbound_count: 7
+      } as any)
+      const wrapper = mountPage()
+      await flushPromises()
+
+      expect((wrapper.vm as any).emptyKind).toBe('all_unbound')
+      const cta = wrapper.find('[data-testid="empty-cta-autobind"]')
+      expect(cta.exists()).toBe(true)
+      expect(cta.text()).toContain('7')
+    })
+
+    it('mixed_no_diff: some bound (consistent) + some unbound → continue-autobind CTA', async () => {
+      mockedBindingStats.mockResolvedValueOnce({
+        catalog_total: 2719,
+        model_total: 10,
+        bound_count: 4,
+        unbound_count: 6
+      } as any)
+      const wrapper = mountPage()
+      await flushPromises()
+
+      expect((wrapper.vm as any).emptyKind).toBe('mixed_no_diff')
+      const cta = wrapper.find('[data-testid="empty-cta-autobind"]')
+      expect(cta.exists()).toBe(true)
+      expect(cta.text()).toContain('6')
+    })
+
+    it('all_bound_no_diff: everything bound and consistent → no CTA, "all good" message', async () => {
+      mockedBindingStats.mockResolvedValueOnce({
+        catalog_total: 2719,
+        model_total: 8,
+        bound_count: 8,
+        unbound_count: 0
+      } as any)
+      const wrapper = mountPage()
+      await flushPromises()
+
+      expect((wrapper.vm as any).emptyKind).toBe('all_bound_no_diff')
+      const title = wrapper.find('[data-testid="empty-title"]').text()
+      expect(title).toMatch(/一切就绪/)
+      // 这种状态下不应该有 CTA 按钮
+      expect(wrapper.find('[data-testid="empty-cta-sync"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="empty-cta-autobind"]').exists()).toBe(false)
+    })
+
+    it('stats fetch fails → falls back to catalog_empty (safe default)', async () => {
+      mockedBindingStats.mockRejectedValueOnce(new Error('boom'))
+      const wrapper = mountPage()
+      await flushPromises()
+
+      expect((wrapper.vm as any).emptyKind).toBe('catalog_empty')
+      expect(wrapper.find('[data-testid="empty-cta-sync"]').exists()).toBe(true)
+    })
+  })
+
+  // ===================== 修复 B：sync-status 横幅 + 轮询 =====================
+  //
+  // 历史 bug：手动刷新走 setTimeout(4000)，4 秒后无脑刷新页面，无论后端真的同步成不成功。
+  // 修复 B 让前端轮询 sync-status，把后端 SyncStatus 的真实状态（running / 错误 / 来源）
+  // 通过状态横幅明确告诉用户。
+  describe('sync-status banner', () => {
+    it('hides banner when sync has never run', async () => {
+      // 默认 mock：running=false, last_finished_at=null, last_error="" → 不显示横幅
+      const wrapper = mountPage()
+      await flushPromises()
+      expect(wrapper.find('[data-testid="sync-status-banner"]').exists()).toBe(false)
+    })
+
+    it('shows info banner while sync is running', async () => {
+      mockedSyncStatus.mockResolvedValueOnce({
+        running: true,
+        last_started_at: '2026-05-22T09:00:00Z',
+        last_finished_at: null,
+        last_duration_ms: 0,
+        last_source: '',
+        last_count: 0,
+        last_error: '',
+        catalog_total: 0
+      } as any)
+      const wrapper = mountPage()
+      await flushPromises()
+      const banner = wrapper.find('[data-testid="sync-status-banner"]')
+      expect(banner.exists()).toBe(true)
+      expect(banner.attributes('data-type')).toBe('info')
+      expect(banner.attributes('data-title')).toContain('正在同步')
+    })
+
+    it('shows error banner with last_error message when sync failed', async () => {
+      mockedSyncStatus.mockResolvedValueOnce({
+        running: false,
+        last_started_at: '2026-05-22T09:00:00Z',
+        last_finished_at: '2026-05-22T09:00:05Z',
+        last_duration_ms: 5000,
+        last_source: '',
+        last_count: 0,
+        last_error: 'upstream HTTP 500',
+        catalog_total: 0
+      } as any)
+      const wrapper = mountPage()
+      await flushPromises()
+      const banner = wrapper.find('[data-testid="sync-status-banner"]')
+      expect(banner.exists()).toBe(true)
+      expect(banner.attributes('data-type')).toBe('error')
+      expect(banner.attributes('data-description')).toContain('upstream HTTP 500')
+    })
+
+    it('shows warning banner when remote failed and bundled fallback was used', async () => {
+      mockedSyncStatus.mockResolvedValueOnce({
+        running: false,
+        last_started_at: '2026-05-22T09:00:00Z',
+        last_finished_at: '2026-05-22T09:00:01Z',
+        last_duration_ms: 800,
+        last_source: 'bundled',
+        last_count: 2719,
+        last_error: '',
+        catalog_total: 2719
+      } as any)
+      const wrapper = mountPage()
+      await flushPromises()
+      const banner = wrapper.find('[data-testid="sync-status-banner"]')
+      expect(banner.exists()).toBe(true)
+      expect(banner.attributes('data-type')).toBe('warning')
+      expect(banner.text()).toContain('内置兜底')
+    })
+
+    it('shows success banner with count + duration when remote sync succeeded', async () => {
+      mockedSyncStatus.mockResolvedValueOnce({
+        running: false,
+        last_started_at: '2026-05-22T09:00:00Z',
+        last_finished_at: '2026-05-22T09:00:02Z',
+        last_duration_ms: 2300,
+        last_source: 'remote',
+        last_count: 2719,
+        last_error: '',
+        catalog_total: 2719
+      } as any)
+      const wrapper = mountPage()
+      await flushPromises()
+      const banner = wrapper.find('[data-testid="sync-status-banner"]')
+      expect(banner.exists()).toBe(true)
+      expect(banner.attributes('data-type')).toBe('success')
+      const desc = banner.attributes('data-description')
+      expect(desc).toContain('2719')
+      expect(desc).toMatch(/2\.[0-9]s/)
+    })
+
+    it('polls sync-status after manual refresh and reports success', async () => {
+      // 默认 mock running=false 已经被设置；手动刷新点击后第一次轮询拿到 running=false，
+      // 立即把 success toast 打出来。
+      mockedSyncStatus.mockResolvedValue({
+        running: false,
+        last_started_at: '2026-05-22T09:00:00Z',
+        last_finished_at: '2026-05-22T09:00:01Z',
+        last_duration_ms: 1000,
+        last_source: 'remote',
+        last_count: 2719,
+        last_error: '',
+        catalog_total: 2719
+      } as any)
+
+      const wrapper = mountPage()
+      await flushPromises()
+      mockedSyncStatus.mockClear()
+
+      const refreshBtn = wrapper
+        .findAll('.el-button-stub')
+        .find((b) => b.text().includes('手动刷新'))!
+      await refreshBtn.trigger('click')
+      await flushPromises()
+
+      expect(mockedTrigger).toHaveBeenCalled()
+      expect(mockedSyncStatus).toHaveBeenCalled()
+      expect(ElMessage.success).toHaveBeenCalled()
+    })
+
+    it('polls sync-status after manual refresh and reports error', async () => {
+      mockedSyncStatus.mockResolvedValue({
+        running: false,
+        last_started_at: '2026-05-22T09:00:00Z',
+        last_finished_at: '2026-05-22T09:00:05Z',
+        last_duration_ms: 5000,
+        last_source: '',
+        last_count: 0,
+        last_error: 'remote fetch failed and no bundled fallback',
+        catalog_total: 0
+      } as any)
+
+      const wrapper = mountPage()
+      await flushPromises()
+
+      const refreshBtn = wrapper
+        .findAll('.el-button-stub')
+        .find((b) => b.text().includes('手动刷新'))!
+      await refreshBtn.trigger('click')
+      await flushPromises()
+
+      expect(ElMessage.error).toHaveBeenCalled()
+      const errCall = (ElMessage.error as any).mock.calls[0][0]
+      expect(errCall).toContain('remote fetch failed')
     })
   })
 })

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
@@ -30,6 +31,7 @@ type fakeCatalogService struct {
 	applyDiffFn     func(ctx context.Context, ids []uuid.UUID) (int, error)
 	autoBindFn      func(ctx context.Context) (*service.AutoBindResult, error)
 	bindingStatsFn  func(ctx context.Context) (*service.BindingStats, error)
+	syncStatusFn    func(ctx context.Context) (*service.SyncStatus, error)
 	syncTriggered   int
 	asyncCompletion chan struct{}
 }
@@ -99,6 +101,13 @@ func (f *fakeCatalogService) BindingStats(ctx context.Context) (*service.Binding
 	return &service.BindingStats{}, nil
 }
 
+func (f *fakeCatalogService) SyncStatus(ctx context.Context) (*service.SyncStatus, error) {
+	if f.syncStatusFn != nil {
+		return f.syncStatusFn(ctx)
+	}
+	return &service.SyncStatus{}, nil
+}
+
 func newCatalogRouter(svc CatalogServiceInterface) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
@@ -112,6 +121,7 @@ func newCatalogRouter(svc CatalogServiceInterface) *gin.Engine {
 	g.POST("/apply-diff", h.ApplyDiff)
 	g.POST("/auto-bind", h.AutoBind)
 	g.GET("/binding-stats", h.BindingStats)
+	g.GET("/sync-status", h.SyncStatus)
 	return r
 }
 
@@ -348,5 +358,80 @@ func TestCatalogHandler_BindingStats_ServiceError(t *testing.T) {
 	r := newCatalogRouter(svc)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/binding-stats", nil))
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// TestCatalogHandler_SyncStatus_Idle 同步未跑过时返回 running=false + 时间字段缺省。
+func TestCatalogHandler_SyncStatus_Idle(t *testing.T) {
+	svc := &fakeCatalogService{syncStatusFn: func(ctx context.Context) (*service.SyncStatus, error) {
+		return &service.SyncStatus{
+			Running:      false,
+			CatalogTotal: 2719,
+		}, nil
+	}}
+	r := newCatalogRouter(svc)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/sync-status", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.Contains(t, body, `"running":false`)
+	assert.Contains(t, body, `"catalog_total":2719`)
+	// nil 时间字段必须 omitempty 不出现，避免前端拿到 "0001-01-01T00:00:00Z" 这种垃圾值
+	assert.NotContains(t, body, `"last_started_at"`)
+	assert.NotContains(t, body, `"last_finished_at"`)
+}
+
+// TestCatalogHandler_SyncStatus_Running 同步进行中时各字段都正确序列化。
+func TestCatalogHandler_SyncStatus_Running(t *testing.T) {
+	started := time.Date(2026, 5, 22, 9, 0, 0, 0, time.UTC)
+	svc := &fakeCatalogService{syncStatusFn: func(ctx context.Context) (*service.SyncStatus, error) {
+		return &service.SyncStatus{
+			Running:       true,
+			LastStartedAt: &started,
+			CatalogTotal:  2719,
+		}, nil
+	}}
+	r := newCatalogRouter(svc)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/sync-status", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.Contains(t, body, `"running":true`)
+	assert.Contains(t, body, `"last_started_at":"2026-05-22T09:00:00Z"`)
+}
+
+// TestCatalogHandler_SyncStatus_FinishedWithError 完成但有错时，前端依赖 last_error 走错误分支。
+func TestCatalogHandler_SyncStatus_FinishedWithError(t *testing.T) {
+	started := time.Date(2026, 5, 22, 9, 0, 0, 0, time.UTC)
+	finished := time.Date(2026, 5, 22, 9, 0, 1, 0, time.UTC)
+	svc := &fakeCatalogService{syncStatusFn: func(ctx context.Context) (*service.SyncStatus, error) {
+		return &service.SyncStatus{
+			Running:        false,
+			LastStartedAt:  &started,
+			LastFinishedAt: &finished,
+			LastDurationMs: 1000,
+			LastSource:     "",
+			LastCount:      0,
+			LastError:      "upstream HTTP 500",
+			CatalogTotal:   2719,
+		}, nil
+	}}
+	r := newCatalogRouter(svc)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/sync-status", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.Contains(t, body, `"running":false`)
+	assert.Contains(t, body, `"last_error":"upstream HTTP 500"`)
+	assert.Contains(t, body, `"last_duration_ms":1000`)
+}
+
+func TestCatalogHandler_SyncStatus_ServiceError(t *testing.T) {
+	svc := &fakeCatalogService{syncStatusFn: func(ctx context.Context) (*service.SyncStatus, error) {
+		return nil, errors.New("boom")
+	}}
+	r := newCatalogRouter(svc)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/sync-status", nil))
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }

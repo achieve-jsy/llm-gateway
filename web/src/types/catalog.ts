@@ -129,6 +129,29 @@ export interface BatchBindResult {
 }
 
 /**
+ * GET /api/v1/model-catalog/sync-status 返回的目录同步任务状态。
+ *
+ * 前端在用户点「手动刷新」后会轮询这个端点：
+ *   - running=true  → 继续轮询，UI 显示 loading
+ *   - running=false → 根据 last_error 走成功 / 失败分支：
+ *       - 有 last_error    → 红色提示，展示 last_error
+ *       - 否则             → 成功提示，告诉用户「已同步 N 条（来源 X）」
+ *   - 时间字段缺省（从未跑过）以 null 出现，前端按 null 隐藏显示
+ */
+export interface CatalogSyncStatus {
+  running: boolean
+  last_started_at?: string | null
+  last_finished_at?: string | null
+  last_duration_ms: number
+  /** "remote"（拉远程成功） / "bundled"（远程失败回退到内置） / ""（从未跑过 or 彻底失败） */
+  last_source: string
+  last_count: number
+  /** 最近一次失败的错误消息；成功为空字符串。前端用它区分成功 / 失败 toast */
+  last_error: string
+  catalog_total: number
+}
+
+/**
  * GET /api/v1/model-catalog/binding-stats 返回的目录绑定状态。
  *
  * CatalogSyncPage 用这四个数字做"空 diff"语义判定：

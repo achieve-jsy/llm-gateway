@@ -151,6 +151,29 @@ func TestCatalogRepo_Search_TotalIsFullCountNotPage(t *testing.T) {
 	assert.Equal(t, int64(5), total, "total 必须反映全表总数，与 limit 无关")
 }
 
+// TestCatalogRepo_Count 验证 Count 返回 catalog 表当前条目总数。
+//
+// 这是 CatalogSyncPage 空状态语义判定（修复 D）的真源：
+// 前端用它来区分「目录是空的（同步未生效）」vs「目录有数据只是没绑定」。
+// 之所以不复用 Search().total，是因为 Search 路径走全字段扫描 + filter，
+// 拿元信息成本太高且容易把 filter 算错。
+func TestCatalogRepo_Count(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewModelCatalogRepo(db)
+
+	n, err := repo.Count()
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), n, "空库时 Count 应为 0")
+
+	for i := 0; i < 3; i++ {
+		require.NoError(t, repo.Upsert(newCatalogEntry("model-"+uuid.NewString()[:6])))
+	}
+
+	n, err = repo.Count()
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), n)
+}
+
 // TestCatalogRepo_List_Pagination 验证 List 支持 offset/limit。
 func TestCatalogRepo_List_Pagination(t *testing.T) {
 	db := newTestDB(t)

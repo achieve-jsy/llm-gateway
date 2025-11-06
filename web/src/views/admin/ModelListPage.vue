@@ -80,7 +80,11 @@
         >
           批量删除{{ selectedModels.length > 0 ? `(${selectedModels.length})` : '' }}
         </el-button>
-        <el-button type="info" :loading="checkingAll" @click="handleCheckAll">检测所有模型</el-button>
+        <el-tooltip content="检测设置" placement="top">
+          <el-button text type="info" @click="modelCheckSettingsVisible = true">
+            <el-icon :size="18"><Setting /></el-icon>
+          </el-button>
+        </el-tooltip>
         <el-button type="primary" @click="openCreateDialog">注册模型</el-button>
       </div>
     </div>
@@ -277,19 +281,28 @@
       @saved="onBatchTagSaved"
       @close="batchTagDialogVisible = false"
     />
+
+    <!-- 模型检测设置对话框 -->
+    <ModelCheckSettingsDialog
+      :visible="modelCheckSettingsVisible"
+      @close="modelCheckSettingsVisible = false"
+      @saved="onModelCheckSettingsSaved"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getModels, deleteModel, updateModel, getProviders, getModelTags, getModelTagsForModel, batchDeleteModels, batchUpdateModelStatus, resetModelOverride, checkModel, checkAllModels } from '@/services/control-plane'
+import { Setting } from '@element-plus/icons-vue'
+import { getModels, deleteModel, updateModel, getProviders, getModelTags, getModelTagsForModel, batchDeleteModels, batchUpdateModelStatus, resetModelOverride, checkModel } from '@/services/control-plane'
 import type { Model } from '@/types/model'
 import type { Provider } from '@/types/provider'
 import type { ModelTag } from '@/types/model-tag'
 import type { ResettableOverrideField } from '@/types/catalog'
 import ModelDialog from '@/components/admin/ModelDialog.vue'
 import BatchTagDialog from '@/components/admin/BatchTagDialog.vue'
+import ModelCheckSettingsDialog from '@/components/admin/ModelCheckSettingsDialog.vue'
 
 // const allModels = ref<Model[]>([]) // 已改为后端分页，不再使用
 const models = ref<Model[]>([])
@@ -310,8 +323,8 @@ const editingModel = ref<Model | null>(null)
 const selectedModels = ref<Model[]>([])
 const selectedModelIds = computed(() => selectedModels.value.map(m => m.id))
 const batchTagDialogVisible = ref(false)
+const modelCheckSettingsVisible = ref(false)
 const checkingModelId = ref('')
-const checkingAll = ref(false)
 
 /** 客户端标签筛选（在后端分页结果上进一步过滤） */
 const filteredModels = computed(() => {
@@ -482,6 +495,12 @@ function onBatchTagSaved() {
   loadModels()
 }
 
+/** 模型检测设置保存成功 */
+function onModelCheckSettingsSaved() {
+  modelCheckSettingsVisible.value = false
+  loadModels()
+}
+
 /** 批量启用模型 */
 async function handleBatchEnable() {
   try {
@@ -545,20 +564,6 @@ async function handleCheckModel(row: Model) {
     ElMessage.error('检测请求失败')
   } finally {
     checkingModelId.value = ''
-  }
-}
-
-/** 检测所有启用模型 */
-async function handleCheckAll() {
-  checkingAll.value = true
-  try {
-    const result = await checkAllModels()
-    ElMessage.success(`检测完成: ${result.success} 成功, ${result.failed} 失败 (共 ${result.total} 个模型)`)
-    loadModels()
-  } catch {
-    ElMessage.error('批量检测请求失败')
-  } finally {
-    checkingAll.value = false
   }
 }
 

@@ -196,7 +196,8 @@
       <el-table-column label="健康" width="160" align="center">
         <template #default="{ row }">
           <div class="health-cell">
-            <template v-if="!row.enabled && row.consecutive_failures >= 3">
+            <!-- 连续失败达阈值（≥3），不管是否已被禁用 -->
+            <template v-if="row.consecutive_failures >= 3">
               <el-tooltip :content="row.last_check_error || '连续失败达阈值'" placement="top">
                 <div class="health-inner">
                   <span class="health-dot health-error"></span>
@@ -204,6 +205,7 @@
                 </div>
               </el-tooltip>
             </template>
+            <!-- 有失败但未达阈值 -->
             <template v-else-if="row.consecutive_failures > 0">
               <el-tooltip :content="row.last_check_error || '检测失败'" placement="top">
                 <div class="health-inner">
@@ -212,12 +214,14 @@
                 </div>
               </el-tooltip>
             </template>
+            <!-- 检测成功，有响应时间 -->
             <template v-else-if="row.response_time > 0">
               <div class="health-inner">
                 <span class="health-dot health-ok"></span>
                 <span class="health-text health-ok-text">{{ row.response_time }}ms</span>
               </div>
             </template>
+            <!-- 从未检测过 -->
             <template v-else>
               <div class="health-inner">
                 <span class="health-dot health-unknown"></span>
@@ -555,11 +559,21 @@ async function handleCheckModel(row: Model) {
   try {
     const result = await checkModel(row.id)
     if (result.success) {
+      // 直接更新行数据，即时反映在健康列
+      row.response_time = result.response_time
+      row.consecutive_failures = 0
+      row.last_check_error = ''
       ElMessage.success(`${row.name} 检测通过 (${result.response_time}ms)`)
     } else {
-      ElMessage.warning(`${row.name} 检测失败: ${result.error}`)
+      row.consecutive_failures = (row.consecutive_failures || 0) + 1
+      row.last_check_error = result.error || '检测失败'
+      if (result.auto_disabled) {
+        ElMessage.error(`${row.name} 检测失败已自动禁用: ${result.error}`)
+        loadModels()
+      } else {
+        ElMessage.warning(`${row.name} 检测失败: ${result.error}`)
+      }
     }
-    loadModels()
   } catch {
     ElMessage.error('检测请求失败')
   } finally {

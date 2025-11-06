@@ -410,6 +410,71 @@ func TestComputePriceDiff_KeepsDeprecated(t *testing.T) {
 	assert.Equal(t, dep, *diffs[0].CatalogDeprecationDate)
 }
 
+// TestComputePriceDiff_PriceUnsetIsNotOverridden 本地价格 $0/$0（从未设置）时，
+// is_overridden 必须为 false，不能把"价格未设"误标记为"已脱离目录"。
+//
+// 历史 bug：ComputePriceDiff 把 priceMismatch 直接赋给 IsOverridden，
+// 导致 local=$0、catalog>0 的 model 全部显示"已脱离目录"标签，
+// 造成 admin 以为这些 model 是主动背离目录价格的，实际上只是从未填过价格。
+func TestComputePriceDiff_PriceUnsetIsNotOverridden(t *testing.T) {
+	repo := newFakeCatalogRepo()
+	mr := newFakeCatalogModelRepo()
+	svc := NewCatalogSyncService(repo, mr, CatalogSyncOpts{})
+
+	cat := makeCatalogEntry("qwen-turbo-latest", "dashscope", 128000, 16384, 0.05, 0.20)
+	require.NoError(t, repo.BatchUpsert([]*model.ModelCatalog{cat}))
+
+	mid := uuid.New()
+	// 本地价格 $0/$0 ← 注册模型时从未填过价格
+	mr.put(&model.Model{
+		ID: mid, Name: "qwen-turbo-latest", ProviderID: uuid.New(), ModelType: "chat",
+		InputPrice:  0,
+		OutputPrice: 0,
+		CatalogID:   &cat.ID,
+	})
+
+	diffs, err := svc.ComputePriceDiff(context.Background())
+	require.NoError(t, err)
+	require.Len(t, diffs, 1, "价格未设的 model 仍应出现在 diff 列表（提醒 admin 去设置）")
+	d := diffs[0]
+	// 核心断言：is_overridden 必须是 false
+	assert.False(t, d.IsOverridden,
+		"local=$0 表示从未设置价格，不是 admin 主动背离目录，不能标记为 is_overridden=true")
+	// 顺带验证价格字段值正确透传
+	assert.InDelta(t, 0, d.LocalInputPrice, 1e-9)
+	assert.InDelta(t, 0.05, d.CatalogInputPrice, 1e-9)
+	assert.InDelta(t, 0, d.LocalOutputPrice, 1e-9)
+	assert.InDelta(t, 0.20, d.CatalogOutputPrice, 1e-9)
+}
+
+// TestComputePriceDiff_PriceSetAndDifferentIsOverridden admin 之前 apply 过一次价格
+// （local > 0），但后来 catalog 更新了，这才是真正的"已脱离目录"。
+func TestComputePriceDiff_PriceSetAndDifferentIsOverridden(t *testing.T) {
+	repo := newFakeCatalogRepo()
+	mr := newFakeCatalogModelRepo()
+	svc := NewCatalogSyncService(repo, mr, CatalogSyncOpts{})
+
+	cat := makeCatalogEntry("gpt-4o-mini", "openai", 128000, 16384, 0.15, 0.60)
+	require.NoError(t, repo.BatchUpsert([]*model.ModelCatalog{cat}))
+
+	mid := uuid.New()
+	// admin 之前 apply 了旧价格，catalog 后来更新了，本地没有跟上
+	mr.put(&model.Model{
+		ID: mid, Name: "gpt-4o-mini", ProviderID: uuid.New(), ModelType: "chat",
+		InputPrice:  0.10, // 旧价格，现在 catalog 是 0.15
+		OutputPrice: 0.40, // 旧价格，现在 catalog 是 0.60
+		CatalogID:   &cat.ID,
+	})
+
+	diffs, err := svc.ComputePriceDiff(context.Background())
+	require.NoError(t, err)
+	require.Len(t, diffs, 1)
+	d := diffs[0]
+	// local > 0 且与 catalog 不同 → 这才是真正的"已脱离目录"
+	assert.True(t, d.IsOverridden,
+		"local>0 且与 catalog 不同，说明 admin 曾经 apply 过价格但 catalog 又更新了，应标记为 is_overridden=true")
+}
+
 // TestApplyPriceDiff_BatchUpdate apply 后价格同步到 catalog 的当前值。
 func TestApplyPriceDiff_BatchUpdate(t *testing.T) {
 	repo := newFakeCatalogRepo()

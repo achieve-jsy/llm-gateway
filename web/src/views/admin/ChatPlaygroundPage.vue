@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
-import { fetchModels } from '@/services/gateway-api'
-import http from '@/services/http'
-import type { ModelInfo, Model } from '@/types/model'
+import { getModels } from '@/services/control-plane'
+import type { Model } from '@/types/model'
 
 // ─── 类型 ──────────────────────────────────────────────────────────────────
 interface ChatMessage {
@@ -13,7 +12,7 @@ interface ChatMessage {
 }
 
 // ─── 状态 ──────────────────────────────────────────────────────────────────
-const models = ref<ModelInfo[]>([])
+const models = ref<Model[]>([])
 const loadingModels = ref(false)
 
 const config = reactive({
@@ -34,15 +33,20 @@ const isStreaming = ref(false)
 const chatContainerRef = ref<HTMLElement>()
 const showAdvanced = ref(false)
 
-// 模型元数据（从 control-plane 获取）
-const modelMeta = ref<Model | null>(null)
+// 模型元数据缓存（keyed by model name）
 const modelMetaMap = ref<Map<string, Model>>(new Map())
+
+// 当前选中模型的元数据（从加载的模型列表中直接获取）
+const currentModelMeta = computed(() => {
+  if (!config.model) return null
+  return modelMetaMap.value.get(config.model) ?? null
+})
 
 const effectiveApiBase = computed(() => config.apiBase || '/v1')
 
 // 选中模型的上下文窗口提示
 const modelHint = computed(() => {
-  const meta = modelMeta.value
+  const meta = currentModelMeta.value
   if (!meta) return ''
   const parts: string[] = []
   if (meta.context_length) parts.push(`上下文 ${(meta.context_length / 1024).toFixed(0)}K`)
@@ -50,45 +54,37 @@ const modelHint = computed(() => {
   return parts.join(' / ')
 })
 
-// 模型切换时加载元数据
-watch(() => config.model, (modelName) => {
-  if (!modelName) {
-    modelMeta.value = null
-    return
-  }
-  // 从缓存中查找
-  if (modelMetaMap.value.has(modelName)) {
-    modelMeta.value = modelMetaMap.value.get(modelName)!
-    return
-  }
-  // 从 control-plane 模型列表查
-  http.get('/api/v1/models', { params: { name: modelName, page_size: 1 } })
-    .then(res => {
-      const list = res.data?.data || []
-      if (list.length > 0) {
-        modelMeta.value = list[0]
-        modelMetaMap.value.set(modelName, list[0])
-      } else {
-        modelMeta.value = null
-      }
-    })
-    .catch(() => { modelMeta.value = null })
-})
-
-// ─── 加载模型列表 ──────────────────────────────────────────────────────────
-onMounted(async () => {
+// ─── 加载模型列表（从 control-plane 管理列表） ──────────────────────────────
+async function loadModelList() {
   loadingModels.value = true
   try {
-    models.value = await fetchModels()
-    if (models.value.length > 0 && !config.model) {
-      config.model = models.value[0].id
+    const result = await getModels(undefined, { pageSize: 200 })
+    // 只取 chat 类型、启用状态的模型
+    const list = result.data.filter(m => m.model_type === 'chat' && m.enabled)
+    models.value = list
+    // 填充元数据缓存
+    const map = new Map<string, Model>()
+    list.forEach(m => {
+      const key = m.upstream_model_id || m.name
+      map.set(key, m)
+      // 同时用 name 也可查到
+      if (m.name !== key) {
+        map.set(m.name, m)
+      }
+    })
+    modelMetaMap.value = map
+    // 默认选中第一个
+    if (list.length > 0 && !config.model) {
+      config.model = list[0].upstream_model_id || list[0].name
     }
   } catch {
-    // Gateway 可能未启动
+    models.value = []
   } finally {
     loadingModels.value = false
   }
-})
+}
+
+onMounted(loadModelList)
 
 // ─── 滚动到底部 ──────────────────────────────────────────────────────────
 function scrollToBottom() {
@@ -254,12 +250,12 @@ function renderContent(content: string): string {
             <el-option
               v-for="m in models"
               :key="m.id"
-              :label="m.id"
-              :value="m.id"
+              :label="m.name"
+              :value="m.upstream_model_id || m.name"
             >
               <div class="model-option">
-                <span class="model-option__name">{{ m.id }}</span>
-                <span class="model-option__owner">{{ m.owned_by }}</span>
+                <span class="model-option__name">{{ m.name }}</span>
+                <span class="model-option__owner">{{ m.provider?.name || m.provider_id }}</span>
               </div>
             </el-option>
           </el-select>

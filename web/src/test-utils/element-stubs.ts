@@ -423,7 +423,7 @@ const ElDivider = defineComponent({
   name: 'ElDividerStub',
   props: { contentPosition: String },
   setup(_, { slots }) {
-    return () => h('hr', { class: 'el-divider-stub' }, slots.default ? slots.default() : [])
+    return () => h('div', { class: 'el-divider-stub' }, slots.default ? slots.default() : [])
   }
 })
 

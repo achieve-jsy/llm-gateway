@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -107,12 +108,32 @@ type SyncStatus struct {
 }
 
 // NewCatalogSyncService 构造。
+//
+// 优先级（高 → 低）：
+//   - opts 字段（代码显式传入）
+//   - 环境变量 CATALOG_REMOTE_URL / CATALOG_HTTP_TIMEOUT
+//   - 内置默认值（GitHub raw / 15s）
+//
+// 内网部署无法访问 GitHub 时，设置 CATALOG_REMOTE_URL 指向内网镜像即可，
+// 无需改代码或重新编译。
 func NewCatalogSyncService(repo CatalogRepoInterface, modelRepo CatalogSyncModelRepo, opts CatalogSyncOpts) *CatalogSyncService {
 	if opts.RemoteURL == "" {
-		opts.RemoteURL = defaultLiteLLMURL
+		if v := os.Getenv("CATALOG_REMOTE_URL"); v != "" {
+			opts.RemoteURL = v
+		} else {
+			opts.RemoteURL = defaultLiteLLMURL
+		}
 	}
 	if opts.HTTPTimeout <= 0 {
-		opts.HTTPTimeout = defaultHTTPTimeout
+		if v := os.Getenv("CATALOG_HTTP_TIMEOUT"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil && d > 0 {
+				opts.HTTPTimeout = d
+			} else {
+				opts.HTTPTimeout = defaultHTTPTimeout
+			}
+		} else {
+			opts.HTTPTimeout = defaultHTTPTimeout
+		}
 	}
 	if opts.MaxRetries <= 0 {
 		opts.MaxRetries = defaultRetry
@@ -407,6 +428,16 @@ func (s *CatalogSyncService) ComputePriceDiff(ctx context.Context) ([]PriceDiffE
 		if !priceMismatch && cat.DeprecationDate == nil {
 			continue
 		}
+		// is_overridden 语义："admin 曾经主动设定过价格，现在与目录不一致"。
+		//
+		// 区分两种"价格不一致"场景：
+		//   - local = $0/$0 → 从未设置，属于"价格未设"，应提示"未设 → 跟随"
+		//   - local > 0 但与 catalog 不同 → admin 之前 apply 过、后来 catalog 又更新了，
+		//     属于真正的"已脱离目录"（主动背离），显示"已脱离目录"标签
+		//
+		// 不引入新 DB 列（price_overridden），用 local>0 作为"曾经设置过"的代理。
+		// 如果后续需要精确追踪每一次手动改价，再加 price_overridden boolean 列。
+		priceWasSet := m.InputPrice > 0 || m.OutputPrice > 0
 		out = append(out, PriceDiffEntry{
 			ModelID:                m.ID,
 			ModelName:              m.Name,
@@ -416,7 +447,7 @@ func (s *CatalogSyncService) ComputePriceDiff(ctx context.Context) ([]PriceDiffE
 			LocalOutputPrice:       m.OutputPrice,
 			CatalogInputPrice:      cat.InputPricePerMillion,
 			CatalogOutputPrice:     cat.OutputPricePerMillion,
-			IsOverridden:           priceMismatch,
+			IsOverridden:           priceMismatch && priceWasSet,
 			InputDeltaPct:          deltaPct(m.InputPrice, cat.InputPricePerMillion),
 			OutputDeltaPct:         deltaPct(m.OutputPrice, cat.OutputPricePerMillion),
 			CatalogDeprecationDate: cat.DeprecationDate,

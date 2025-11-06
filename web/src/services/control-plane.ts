@@ -117,9 +117,9 @@ export interface CheckAllResult {
   results: CheckResult[]
 }
 
-/** 批量检测所有启用渠道 */
+/** 批量检测所有启用渠道（超时设为3分钟） */
 export async function checkAllProviders(): Promise<CheckAllResult> {
-  const response = await http.post<ApiResponse<CheckAllResult>>('/api/v1/providers/check-all')
+  const response = await http.post<ApiResponse<CheckAllResult>>('/api/v1/providers/check-all', undefined, { timeout: 180000 })
   return response.data.data
 }
 
@@ -169,6 +169,7 @@ export interface ModelCheckResult {
   response_time: number
   error?: string
   auto_disabled: boolean
+  auto_reenabled: boolean
 }
 
 /** 批量模型检测汇总结果 */
@@ -185,9 +186,9 @@ export async function checkModel(id: string): Promise<ModelCheckResult> {
   return response.data.data
 }
 
-/** 检测所有启用模型 */
+/** 检测所有启用模型（批量操作，超时设为3分钟） */
 export async function checkAllModels(): Promise<ModelCheckAllResult> {
-  const response = await http.post<ApiResponse<ModelCheckAllResult>>('/api/v1/models/check-all')
+  const response = await http.post<ApiResponse<ModelCheckAllResult>>('/api/v1/models/check-all', undefined, { timeout: 180000 })
   return response.data.data
 }
 

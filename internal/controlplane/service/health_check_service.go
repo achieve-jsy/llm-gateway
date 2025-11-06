@@ -369,9 +369,10 @@ func (s *HealthCheckService) doModelForwardCheck(m *model.Model) (bool, int, str
 
 	endpoint := strings.TrimRight(provider.Endpoint, "/") + "/chat/completions"
 	chatReq := map[string]interface{}{
-		"model":      modelName,
-		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
-		"max_tokens": 1,
+		"model":           modelName,
+		"messages":        []map[string]string{{"role": "user", "content": "hi"}},
+		"max_tokens":      1,
+		"enable_thinking": false,
 	}
 	body, _ := json.Marshal(chatReq)
 
@@ -591,9 +592,10 @@ func (s *HealthCheckService) checkModelForward(ctx context.Context, provider *mo
 	// 构造请求
 	endpoint := strings.TrimRight(provider.Endpoint, "/") + "/chat/completions"
 	chatReq := map[string]interface{}{
-		"model":      testModel,
-		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
-		"max_tokens": 1,
+		"model":           testModel,
+		"messages":        []map[string]string{{"role": "user", "content": "hi"}},
+		"max_tokens":      1,
+		"enable_thinking": false,
 	}
 	body, _ := json.Marshal(chatReq)
 
@@ -755,9 +757,10 @@ func (s *HealthCheckService) checkSingleModel(client *http.Client, m *model.Mode
 
 	endpoint := strings.TrimRight(provider.Endpoint, "/") + "/chat/completions"
 	chatReq := map[string]interface{}{
-		"model":      m.Name,
-		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
-		"max_tokens": 1,
+		"model":           m.Name,
+		"messages":        []map[string]string{{"role": "user", "content": "hi"}},
+		"max_tokens":      1,
+		"enable_thinking": false,
 	}
 	body, _ := json.Marshal(chatReq)
 

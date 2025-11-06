@@ -47,7 +47,11 @@
 
       <el-form-item v-if="checkResult" label=" ">
         <span class="check-result-text">
-          上次结果：成功 {{ checkResult.success }} / 失败 {{ checkResult.failed }} / 自动禁用 {{ autoDisabledCount }}
+          共 {{ checkResult.total }} 个 &nbsp;|&nbsp;
+          成功 {{ checkResult.success }}
+          <template v-if="autoReenabledCount > 0">（含 {{ autoReenabledCount }} 个自动恢复）</template>
+          &nbsp;/&nbsp;失败 {{ checkResult.failed }}
+          <template v-if="autoDisabledCount > 0">（含 {{ autoDisabledCount }} 个自动禁用）</template>
         </span>
       </el-form-item>
     </el-form>
@@ -94,6 +98,11 @@ const autoDisabledCount = computed(() => {
   return checkResult.value.results.filter(r => r.auto_disabled).length
 })
 
+const autoReenabledCount = computed(() => {
+  if (!checkResult.value) return 0
+  return checkResult.value.results.filter(r => r.auto_reenabled).length
+})
+
 /** 弹窗打开时加载配置 */
 watch(
   () => props.visible,
@@ -136,10 +145,16 @@ async function handleCheckNow() {
   try {
     const result = await checkAllModels()
     checkResult.value = result
+    const reenabledCount = result.results.filter(r => r.auto_reenabled).length
+    const disabledCount = result.results.filter(r => r.auto_disabled).length
     if (result.failed > 0) {
-      ElMessage.warning(`检测完成：成功 ${result.success}，失败 ${result.failed}`)
+      ElMessage.warning(`检测完成：成功 ${result.success}，失败 ${result.failed}${disabledCount > 0 ? `（${disabledCount} 个已自动禁用）` : ''}`)
     } else {
-      ElMessage.success(`检测完成：全部 ${result.success} 个模型正常`)
+      ElMessage.success(`检测完成：全部 ${result.success} 个模型正常${reenabledCount > 0 ? `，${reenabledCount} 个已自动恢复` : ''}`)
+    }
+    // 有模型状态变更（自动恢复/禁用），通知父页面刷新列表
+    if (reenabledCount > 0 || disabledCount > 0) {
+      emit('saved')
     }
   } catch {
     ElMessage.error('检测请求异常')

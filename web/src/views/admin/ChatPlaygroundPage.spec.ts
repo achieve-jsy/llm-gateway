@@ -15,8 +15,8 @@ vi.mock('element-plus', () => ({
   }
 }))
 
-vi.mock('@/services/gateway-api', () => ({
-  fetchModels: vi.fn()
+vi.mock('@/services/control-plane', () => ({
+  getModels: vi.fn()
 }))
 
 vi.mock('@/services/http', () => ({
@@ -27,10 +27,10 @@ vi.mock('@/services/http', () => ({
 }))
 
 import { ElMessage } from 'element-plus'
-import { fetchModels } from '@/services/gateway-api'
+import { getModels } from '@/services/control-plane'
 import http from '@/services/http'
 
-const mockedFetchModels = vi.mocked(fetchModels)
+const mockedGetModels = vi.mocked(getModels)
 const mockedHttpGet = vi.mocked(http.get)
 
 // ─── Stubs ────────────────────────────────────────────────────────────────────
@@ -79,26 +79,47 @@ const stubs = {
 // ─── Sample data ──────────────────────────────────────────────────────────────
 
 const sampleModels = [
-  { id: 'qwen3-next-80b', object: 'model', created: 1700000000, owned_by: 'bailian' },
-  { id: 'deepseek-v3', object: 'model', created: 1700000001, owned_by: 'deepseek' },
+  {
+    id: 'uuid-1',
+    name: 'qwen3-next-80b',
+    provider_id: 'p1',
+    model_type: 'chat',
+    enabled: true,
+    upstream_model_id: 'qwen3-next-80b',
+    description: '',
+    context_length: 131072,
+    max_output_tokens: 8192,
+    input_price: 0.01,
+    output_price: 0.03,
+    weight: 1,
+    consecutive_failures: 0,
+    last_check_error: '',
+    response_time: 0,
+    created_at: '2025-01-01',
+    updated_at: '2025-01-01',
+    provider: { id: 'p1', name: '百炼', definition_id: 'dashscope', enabled: true },
+  },
+  {
+    id: 'uuid-2',
+    name: 'deepseek-v3',
+    provider_id: 'p2',
+    model_type: 'chat',
+    enabled: true,
+    upstream_model_id: 'deepseek-v3',
+    description: '',
+    context_length: 64000,
+    max_output_tokens: 4096,
+    input_price: 0.01,
+    output_price: 0.03,
+    weight: 1,
+    consecutive_failures: 0,
+    last_check_error: '',
+    response_time: 0,
+    created_at: '2025-01-02',
+    updated_at: '2025-01-02',
+    provider: { id: 'p2', name: 'DeepSeek', definition_id: 'deepseek', enabled: true },
+  },
 ]
-
-const sampleModelMeta = {
-  id: 'uuid-1',
-  name: 'qwen3-next-80b',
-  provider_id: 'p1',
-  model_type: 'chat',
-  enabled: true,
-  upstream_model_id: 'qwen3-next-80b',
-  description: '',
-  context_length: 131072,
-  max_output_tokens: 8192,
-  input_price: 0.01,
-  output_price: 0.03,
-  weight: 1,
-  created_at: '2025-01-01',
-  updated_at: '2025-01-01',
-}
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
@@ -115,9 +136,7 @@ function createWrapper() {
 describe('ChatPlaygroundPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockedFetchModels.mockResolvedValue(sampleModels as any)
-    mockedHttpGet.mockResolvedValue({ data: { data: [sampleModelMeta] } } as any)
-    // Mock fetch for streaming
+    mockedGetModels.mockResolvedValue({ data: sampleModels as any, total: 2 })
     global.fetch = vi.fn()
   })
 
@@ -125,41 +144,53 @@ describe('ChatPlaygroundPage', () => {
     vi.restoreAllMocks()
   })
 
-  describe('模型加载', () => {
-    it('挂载时自动加载模型列表', async () => {
+  describe('模型加载（从管理模型列表）', () => {
+    it('挂载时从 control-plane 加载模型列表', async () => {
       createWrapper()
       await flushPromises()
-      expect(mockedFetchModels).toHaveBeenCalledTimes(1)
+      expect(mockedGetModels).toHaveBeenCalledTimes(1)
     })
 
     it('默认选中第一个模型', async () => {
       const wrapper = createWrapper()
       await flushPromises()
-      const select = wrapper.find('.el-select-stub')
-      expect(select.exists()).toBe(true)
-      // select v-model should be the first model
-      expect((select.element as HTMLSelectElement).value || wrapper.vm.config?.model).toBeTruthy()
+      const vm = wrapper.vm as any
+      expect(vm.config.model).toBe('qwen3-next-80b')
+    })
+
+    it('列表为空时 config.model 保持空', async () => {
+      mockedGetModels.mockResolvedValue({ data: [], total: 0 })
+      const wrapper = createWrapper()
+      await flushPromises()
+      expect((wrapper.vm as any).config.model).toBe('')
     })
 
     it('模型加载失败不影响页面渲染', async () => {
-      mockedFetchModels.mockRejectedValue(new Error('network error'))
+      mockedGetModels.mockRejectedValue(new Error('network error'))
       const wrapper = createWrapper()
       await flushPromises()
-      // 页面仍然正常渲染
       expect(wrapper.find('.pg').exists()).toBe(true)
+    })
+
+    it('模型选项显示名称和渠道名', async () => {
+      const wrapper = createWrapper()
+      await flushPromises()
+      const vm = wrapper.vm as any
+      // 模型列表包含两个带 provider 的条目
+      expect(vm.models).toHaveLength(2)
+      expect(vm.models[0].name).toBe('qwen3-next-80b')
+      expect(vm.models[0].provider?.name).toBe('百炼')
     })
   })
 
-  describe('模型元数据提示', () => {
-    it('选中模型后请求元数据并显示上下文窗口提示', async () => {
+  describe('上下文窗口提示（来自模型列表）', () => {
+    it('选中模型后上下文提示来自模型列表数据（无需额外 API 调用）', async () => {
       const wrapper = createWrapper()
       await flushPromises()
-      // 等待 watch 触发
       await flushPromises()
-      expect(mockedHttpGet).toHaveBeenCalledWith('/api/v1/models', expect.objectContaining({
-        params: expect.objectContaining({ name: 'qwen3-next-80b' })
-      }))
-      // 应该显示模型提示
+      // 不应该再单独调 /api/v1/models 查元数据
+      expect(mockedHttpGet).not.toHaveBeenCalled()
+      // 上下文提示应显示
       const hint = wrapper.find('.field__hint')
       expect(hint.exists()).toBe(true)
       expect(hint.text()).toContain('128K')
@@ -187,7 +218,6 @@ describe('ChatPlaygroundPage', () => {
       const wrapper = createWrapper()
       await flushPromises()
       expect(wrapper.html()).toContain('高级设置')
-      // 接口地址在高级设置中，默认不显示
       expect(wrapper.html()).not.toContain('接口地址')
     })
   })
@@ -196,43 +226,29 @@ describe('ChatPlaygroundPage', () => {
     it('输入为空时不发送', async () => {
       const wrapper = createWrapper()
       await flushPromises()
-      // 触发发送
       const sendBtn = wrapper.find('.input-box__send')
       await sendBtn.trigger('click')
       expect(global.fetch).not.toHaveBeenCalled()
     })
 
     it('未选择模型时显示警告', async () => {
-      mockedFetchModels.mockResolvedValue([])
+      mockedGetModels.mockResolvedValue({ data: [], total: 0 })
       const wrapper = createWrapper()
       await flushPromises()
-
-      // 手动设置输入
-      const textarea = wrapper.find('.input-box__textarea input, .input-box__textarea textarea')
-      if (textarea.exists()) {
-        await textarea.setValue('hello')
-      }
-      // 使用 vm 调用 sendMessage
-      ;(wrapper.vm as any).userInput = 'hello'
       ;(wrapper.vm as any).config.model = ''
+      ;(wrapper.vm as any).userInput = 'hello'
       await (wrapper.vm as any).sendMessage()
       expect(ElMessage.warning).toHaveBeenCalledWith('请先选择或输入模型')
     })
 
-    it('发送时构建正确的请求体（包含 top_p 和 stop）', async () => {
+    it('发送时使用 upstream_model_id 作为模型名', async () => {
       const mockResponse = {
         ok: true,
         body: {
           getReader: () => ({
             read: vi.fn()
-              .mockResolvedValueOnce({
-                done: false,
-                value: new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n')
-              })
-              .mockResolvedValueOnce({
-                done: false,
-                value: new TextEncoder().encode('data: [DONE]\n\n')
-              })
+              .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n') })
+              .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode('data: [DONE]\n\n') })
               .mockResolvedValueOnce({ done: true, value: undefined })
           })
         }
@@ -242,7 +258,34 @@ describe('ChatPlaygroundPage', () => {
       const wrapper = createWrapper()
       await flushPromises()
 
-      // 配置参数
+      const vm = wrapper.vm as any
+      vm.config.model = 'deepseek-v3'
+      vm.userInput = '你好'
+      await vm.sendMessage()
+      await flushPromises()
+
+      const [url, opts] = (global.fetch as any).mock.calls[0]
+      const body = JSON.parse(opts.body)
+      expect(body.model).toBe('deepseek-v3')
+    })
+
+    it('发送时构建正确的请求体（包含 top_p 和 stop）', async () => {
+      const mockResponse = {
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: vi.fn()
+              .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n') })
+              .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode('data: [DONE]\n\n') })
+              .mockResolvedValueOnce({ done: true, value: undefined })
+          })
+        }
+      }
+      ;(global.fetch as any).mockResolvedValue(mockResponse)
+
+      const wrapper = createWrapper()
+      await flushPromises()
+
       const vm = wrapper.vm as any
       vm.config.model = 'qwen3-next-80b'
       vm.config.temperature = 0.5
@@ -266,7 +309,6 @@ describe('ChatPlaygroundPage', () => {
       expect(body.max_tokens).toBe(4096)
       expect(body.stop).toEqual(['END', 'STOP'])
       expect(body.stream).toBe(true)
-      // messages 应包含 system + user
       expect(body.messages).toHaveLength(2)
       expect(body.messages[0].role).toBe('system')
       expect(body.messages[0].content).toBe('你是一个助手')
@@ -335,7 +377,6 @@ describe('ChatPlaygroundPage', () => {
       await vm.sendMessage()
       await flushPromises()
 
-      // 应有 2 条消息：user + assistant
       expect(vm.messages).toHaveLength(2)
       expect(vm.messages[1].role).toBe('assistant')
       expect(vm.messages[1].content).toBe('你好')

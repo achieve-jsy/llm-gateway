@@ -20,12 +20,13 @@ import (
 
 // ModelCheckResult 单个模型检测结果
 type ModelCheckResult struct {
-	ModelID      uuid.UUID `json:"model_id"`
-	ModelName    string    `json:"model_name"`
-	Success      bool      `json:"success"`
-	ResponseTime int       `json:"response_time"`
-	Error        string    `json:"error,omitempty"`
-	AutoDisabled bool      `json:"auto_disabled"`
+	ModelID       uuid.UUID `json:"model_id"`
+	ModelName     string    `json:"model_name"`
+	Success       bool      `json:"success"`
+	ResponseTime  int       `json:"response_time"`
+	Error         string    `json:"error,omitempty"`
+	AutoDisabled  bool      `json:"auto_disabled"`
+	AutoReenabled bool      `json:"auto_reenabled"`
 }
 
 // ModelCheckAllResult 批量模型检测汇总结果
@@ -70,7 +71,7 @@ func (h *ModelCheckHandler) CheckOne(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": result})
 }
 
-// CheckAll POST /api/v1/models/check-all — 检测所有启用模型
+// CheckAll POST /api/v1/models/check-all — 检测所有模型（含 disabled）
 func (h *ModelCheckHandler) CheckAll(c *gin.Context) {
 	filter := repository.ModelListFilter{}
 	models, _, err := h.modelRepo.List(filter, 0, 1000)
@@ -90,10 +91,7 @@ func (h *ModelCheckHandler) CheckAll(c *gin.Context) {
 
 	for i := range models {
 		m := &models[i]
-		if m.Enabled == nil || !*m.Enabled {
-			continue
-		}
-		// 跳过 embedding 类型
+		// 跳过 embedding 类型（无法用 chat/completions 检测）
 		if strings.Contains(strings.ToLower(m.ModelType), "embed") {
 			continue
 		}
@@ -166,10 +164,15 @@ func (h *ModelCheckHandler) checkModel(ctx context.Context, m *model.Model) *Mod
 	cr.ResponseTime = responseTime
 
 	if success {
-		// 检测成功：重置失败计数 + 更新响应时间
+		// 检测成功：重置失败计数 + 更新响应时间 + 如果之前被自动禁用则恢复启用
 		cr.Success = true
 		h.modelRepo.ResetModelFailures(m.ID)
 		h.modelRepo.UpdateModelCheckResult(m.ID, responseTime, "")
+		if m.Enabled == nil || !*m.Enabled {
+			enabled := true
+			h.modelRepo.UpdateEnabled(m.ID, &enabled)
+			cr.AutoReenabled = true
+		}
 	} else {
 		// 检测失败：递增失败计数 + 保存错误
 		cr.Error = errMsg
@@ -217,9 +220,10 @@ func (h *ModelCheckHandler) handleModelFailure(id uuid.UUID, cr *ModelCheckResul
 func doModelCheck(ctx context.Context, endpoint string, modelName string, apiKey string) (success bool, responseTime int, errMsg string) {
 	url := strings.TrimRight(endpoint, "/") + "/chat/completions"
 	chatReq := map[string]interface{}{
-		"model":      modelName,
-		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
-		"max_tokens": 1,
+		"model":          modelName,
+		"messages":       []map[string]string{{"role": "user", "content": "hi"}},
+		"max_tokens":     1,
+		"enable_thinking": false, // 兼容 qwen3 系列：非流式调用必须关闭思维链
 	}
 	body, _ := json.Marshal(chatReq)
 

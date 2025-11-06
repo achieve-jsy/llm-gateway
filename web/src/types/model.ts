@@ -59,6 +59,7 @@ export interface ModelPayload {
   name: string
   provider_id: string
   model_type: string
+  enabled?: boolean
   upstream_model_id?: string
   description?: string
   context_length?: number

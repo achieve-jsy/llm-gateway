@@ -1,7 +1,6 @@
 package integration
 
 import (
-	"database/sql"
 	"fmt"
 	"os"
 	"testing"
@@ -21,10 +20,10 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		t.Skip("skipping integration test: set RUN_INTEGRATION_TESTS=1 to enable")
 	}
 
-	host := getTestEnv("TEST_DB_HOST", "115.190.242.137")
-	port := getTestEnv("TEST_DB_PORT", "5433")
+	host := getTestEnv("TEST_DB_HOST", "192.0.2.10")
+	port := getTestEnv("TEST_DB_PORT", "5432")
 	user := getTestEnv("TEST_DB_USER", "llm_gateway")
-	pass := getTestEnv("TEST_DB_PASSWORD", "llm_gateway_dev_2026")
+	pass := getTestEnv("TEST_DB_PASSWORD", "CHANGE_ME_PASSWORD")
 	dbname := getTestEnv("TEST_DB_NAME", "llm_gateway_test")
 
 	// 安全检查：禁止使用生产数据库
@@ -63,16 +62,70 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("ping 测试数据库失败: %v", perr)
 	}
 
-	// 每次测试前清表并重建（注意顺序：先删有外键的子表）
-	db.Migrator().DropTable(&model.ModelTagRelation{})
-	db.Migrator().DropTable(&model.ModelTag{})
-	db.Migrator().DropTable(&model.Model{})
-	db.Migrator().DropTable(&model.Provider{})
-	if err := db.AutoMigrate(&model.Provider{}, &model.Model{}, &model.ModelTag{}, &model.ModelTagRelation{}); err != nil {
+	// 每次测试前清表并重建。
+	// 这里直接用 CASCADE 清理，避免 PG 因残留类型/外键导致 DropTable/AutoMigrate 不稳定。
+	cleanupSQL := []string{
+		"DROP TABLE IF EXISTS model_tag_relations CASCADE",
+		"DROP TABLE IF EXISTS model_tags CASCADE",
+		"DROP TABLE IF EXISTS health_check_logs CASCADE",
+		"DROP TABLE IF EXISTS health_check_configs CASCADE",
+		"DROP TABLE IF EXISTS models CASCADE",
+		"DROP TABLE IF EXISTS providers CASCADE",
+		"DROP TABLE IF EXISTS provider_definitions CASCADE",
+	}
+	for _, sql := range cleanupSQL {
+		if err := db.Exec(sql).Error; err != nil {
+			t.Fatalf("清理测试表失败 (%s): %v", sql, err)
+		}
+	}
+
+	if err := db.AutoMigrate(
+		&model.ProviderDefinition{},
+		&model.Provider{},
+		&model.Model{},
+		&model.ModelTag{},
+		&model.ModelTagRelation{},
+		&model.HealthCheckConfig{},
+		&model.HealthCheckLog{},
+	); err != nil {
 		t.Fatalf("迁移表结构失败: %v", err)
 	}
 
+	seedProviderDefinitions(t, db)
+
 	return db
+}
+
+func seedProviderDefinitions(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	defs := []model.ProviderDefinition{
+		{ID: "dashscope", DisplayName: "阿里百炼", Adapter: "openai-compatible", BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", Builtin: true, Enabled: true},
+		{ID: "deepseek", DisplayName: "DeepSeek", Adapter: "openai-compatible", BaseURL: "https://api.deepseek.com/v1", Builtin: true, Enabled: true},
+		{ID: "anthropic", DisplayName: "Anthropic", Adapter: "anthropic", BaseURL: "https://api.anthropic.com/v1", Builtin: true, Enabled: true},
+		{ID: "bedrock", DisplayName: "AWS Bedrock", Adapter: "bedrock", BaseURL: "https://bedrock-runtime.us-east-1.amazonaws.com", Builtin: true, Enabled: true},
+	}
+	for _, def := range defs {
+		if err := db.Create(&def).Error; err != nil {
+			t.Fatalf("seed provider definition %s 失败: %v", def.ID, err)
+		}
+	}
+
+	cfg := model.HealthCheckConfig{
+		Enabled:                    true,
+		IntervalSeconds:            300,
+		FailureThreshold:           3,
+		FailureAction:              "auto_disable",
+		CheckProviders:             true,
+		CheckModels:                true,
+		CheckMode:                  "connectivity",
+		TimeoutSeconds:             15,
+		ModelCheckEnabled:          true,
+		ModelCheckIntervalSeconds:  300,
+		ModelCheckFailureThreshold: 3,
+	}
+	if err := db.Create(&cfg).Error; err != nil {
+		t.Fatalf("seed health_check_config 失败: %v", err)
+	}
 }
 
 // createTestDatabase 连接默认库创建测试数据库

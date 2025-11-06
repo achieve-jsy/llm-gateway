@@ -64,31 +64,31 @@ function formatK(n: number): string {
 .model-card {
   background: var(--el-bg-color);
   border: 1px solid var(--el-border-color);
-  border-radius: 12px;
+  border-radius: 8px;
   display: flex;
   overflow: hidden;
   transition: all 0.2s;
-  box-shadow: 0 1px 4px rgba(43, 168, 162, 0.06);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
 }
 
 .model-card:hover {
-  box-shadow: 0 4px 16px rgba(43, 168, 162, 0.14);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
   transform: translateY(-1px);
   border-color: var(--el-color-primary);
 }
 
 .card-accent {
-  width: 3px;
+  width: 2px;
   background: var(--el-color-primary);
   flex-shrink: 0;
 }
 
 .card-body {
-  padding: 14px 16px;
+  padding: 12px 14px;
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -100,7 +100,7 @@ function formatK(n: number): string {
 }
 
 .model-name {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   color: var(--el-text-color-primary);
   font-family: 'Fira Code', 'SF Mono', monospace;
@@ -116,7 +116,7 @@ function formatK(n: number): string {
   border-radius: 50%;
   flex-shrink: 0;
   background: #27AE60;
-  box-shadow: 0 0 4px rgba(39, 174, 96, 0.4);
+  box-shadow: 0 0 0 2px rgba(39, 174, 96, 0.12);
 }
 
 .card-tags {
@@ -128,8 +128,8 @@ function formatK(n: number): string {
 
 .model-tag {
   display: inline-block;
-  padding: 2px 8px;
-  font-size: 11px;
+  padding: 1px 7px;
+  font-size: 10px;
   font-weight: 500;
   border-radius: 4px;
   border: 1px solid;
@@ -146,7 +146,7 @@ function formatK(n: number): string {
 .card-stats {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   margin-top: 2px;
 }
 
@@ -154,13 +154,13 @@ function formatK(n: number): string {
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: 10px;
   color: var(--el-text-color-secondary);
   font-weight: 500;
 }
 
 .stat-price {
-  color: #EAB308;
+  color: #B68A2A;
   font-weight: 600;
 }
 </style>

@@ -18,6 +18,7 @@ import type {
   CatalogSyncStatus
 } from '@/types/catalog'
 import type { ApiResponse, PaginatedResponse } from '@/types/api'
+import type { ListKeysResponse, CreateKeyWrappedResponse } from '@/types/api-key'
 
 // ===================== 渠道定义（Registry） =====================
 
@@ -177,6 +178,7 @@ export interface ModelCheckAllResult {
   total: number
   success: number
   failed: number
+  failure_summary?: Record<string, number>
   results: ModelCheckResult[]
 }
 
@@ -193,13 +195,14 @@ export async function checkAllModels(): Promise<ModelCheckAllResult> {
 }
 
 /** 获取模型列表（支持筛选和分页） */
-export async function getModels(providerId?: string, opts?: { page?: number; pageSize?: number; name?: string; model_type?: string }): Promise<{ data: Model[]; total: number }> {
+export async function getModels(providerId?: string, opts?: { page?: number; pageSize?: number; name?: string; model_type?: string; enabled?: boolean }): Promise<{ data: Model[]; total: number }> {
   const params: Record<string, any> = {}
   if (providerId) params.provider_id = providerId
   if (opts?.page !== undefined) params.page = opts.page
   if (opts?.pageSize !== undefined) params.page_size = opts.pageSize
   if (opts?.name !== undefined) params.name = opts.name
   if (opts?.model_type !== undefined) params.model_type = opts.model_type
+  if (opts?.enabled !== undefined) params.enabled = opts.enabled
   const response = await http.get<PaginatedResponse<Model>>('/api/v1/models', { params })
   return { data: response.data.data, total: response.data.total }
 }
@@ -472,4 +475,57 @@ export async function batchBindModelCatalog(
     { bindings }
   )
   return response.data.data
+}
+
+// ===================== API Key 管理 =====================
+
+/** 获取 API Key 列表（分页） */
+export async function listKeys(page = 1, size = 20): Promise<ListKeysResponse> {
+  const response = await http.get<ListKeysResponse>('/api/v1/keys', { params: { page, page_size: size } })
+  return response.data
+}
+
+/** 创建 API Key */
+export async function createKey(name: string, expiresAt?: string): Promise<CreateKeyWrappedResponse> {
+  const response = await http.post<CreateKeyWrappedResponse>('/api/v1/keys', { name, expires_at: expiresAt || undefined })
+  return response.data
+}
+
+/** 禁用 API Key */
+export async function disableKey(id: string): Promise<void> {
+  await http.patch(`/api/v1/keys/${id}/disable`)
+}
+
+/** 启用 API Key */
+export async function enableKey(id: string): Promise<void> {
+  await http.patch(`/api/v1/keys/${id}/enable`)
+}
+
+/** 删除 API Key */
+export async function deleteKey(id: string): Promise<void> {
+  await http.delete(`/api/v1/keys/${id}`)
+}
+
+/** 重置 API Key（重新生成密钥） */
+export async function resetKey(id: string): Promise<CreateKeyWrappedResponse> {
+  const response = await http.post<CreateKeyWrappedResponse>(`/api/v1/keys/${id}/reset`)
+  return response.data
+}
+
+// ===================== 系统设置 =====================
+
+import type { SystemSettings, SettingsResponse, PublicSettingsResponse } from '@/types/settings'
+
+export async function getPublicSettings(): Promise<PublicSettingsResponse> {
+  const response = await http.get<PublicSettingsResponse>('/api/v1/settings/public')
+  return response.data
+}
+
+export async function getSystemSettings(): Promise<SettingsResponse> {
+  const response = await http.get<SettingsResponse>('/api/v1/settings')
+  return response.data
+}
+
+export async function updateSystemSettings(settings: SystemSettings): Promise<void> {
+  await http.put('/api/v1/settings', settings)
 }

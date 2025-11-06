@@ -60,6 +60,14 @@ var (
 		Type: ErrorTypeAuthError, Code: "invalid_api_key",
 		Message: "invalid or missing API key", HTTPStatus: http.StatusUnauthorized,
 	}
+	ErrKeyDisabled = &UnifiedError{
+		Type: ErrorTypeAuthError, Code: "key_disabled",
+		Message: "the API key has been disabled", HTTPStatus: http.StatusUnauthorized,
+	}
+	ErrAuthServiceDown = &UnifiedError{
+		Type: "service_unavailable", Code: "auth_service_unavailable",
+		Message: "auth service temporarily unavailable", HTTPStatus: http.StatusServiceUnavailable,
+	}
 	ErrInternal = &UnifiedError{
 		Type: ErrorTypeInternal, Code: "internal",
 		Message: "internal server error", HTTPStatus: http.StatusInternalServerError,

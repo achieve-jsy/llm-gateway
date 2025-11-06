@@ -1,19 +1,106 @@
 <template>
   <div class="catalog-sync-page">
+    <div class="stage-panel" data-testid="stage-panel">
+      <div class="stage-summary">
+        <p class="stage-kicker">你当前在做什么</p>
+        <h3 class="stage-title">{{ stageTitle }}</h3>
+        <p class="stage-description">{{ stageDescription }}</p>
+      </div>
+      <div class="stage-steps" aria-label="Catalog 使用流程">
+        <div class="stage-step" :class="{ active: stageStep === 1 }">
+          <span class="step-index">1</span>
+          <div>
+            <p class="step-title">同步目录</p>
+            <p class="step-hint">从上游拉取 Catalog 条目</p>
+          </div>
+        </div>
+        <div class="stage-step" :class="{ active: stageStep === 2 }">
+          <span class="step-index">2</span>
+          <div>
+            <p class="step-title">绑定本地模型</p>
+            <p class="step-hint">把本地 model 关联到 Catalog</p>
+          </div>
+        </div>
+        <div class="stage-step" :class="{ active: stageStep === 3 }">
+          <span class="step-index">3</span>
+          <div>
+            <p class="step-title">处理差异</p>
+            <p class="step-hint">检查并应用价格变化</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="action-board" data-testid="action-board">
+      <div class="action-card action-card-primary">
+        <p class="action-kicker">当前状态</p>
+        <h3 class="action-title">{{ currentStatusTitle }}</h3>
+        <p class="action-description">{{ currentStatusDescription }}</p>
+      </div>
+      <div class="action-card">
+        <p class="action-kicker">推荐动作</p>
+        <h3 class="action-title">{{ recommendedActionTitle }}</h3>
+        <p class="action-description">{{ recommendedActionDescription }}</p>
+        <div class="action-buttons">
+          <el-button
+            v-if="recommendedActionKey === 'sync'"
+            type="primary"
+            :loading="refreshing || syncRunning"
+            data-testid="recommended-action-sync"
+            @click="handleManualRefresh"
+          >
+            {{ syncRunning ? '同步中…' : '立即同步目录' }}
+          </el-button>
+          <el-button
+            v-else-if="recommendedActionKey === 'bind'"
+            type="primary"
+            :loading="autoBinding"
+            data-testid="recommended-action-bind"
+            @click="handleAutoBind"
+          >
+            去处理未关联模型
+          </el-button>
+          <el-button
+            v-else-if="recommendedActionKey === 'review_diff'"
+            type="primary"
+            data-testid="recommended-action-diff"
+            @click="scrollToDiffSection"
+          >
+            去查看差异列表
+          </el-button>
+          <el-button
+            v-else
+            data-testid="recommended-action-idle"
+            @click="$router.push('/admin/models')"
+          >
+            去模型管理查看详情
+          </el-button>
+        </div>
+      </div>
+      <div class="action-card">
+        <p class="action-kicker">可选动作</p>
+        <ul class="action-list">
+          <li>如果你怀疑目录数据旧了，可以随时点击“手动刷新目录”。</li>
+          <li>如果自动绑定结果不符合预期，可以去“模型管理”手动调整绑定关系。</li>
+          <li>如果差异很多，建议先筛选“已脱离目录”或“价格未设”的模型优先处理。</li>
+        </ul>
+      </div>
+    </div>
+
     <!-- 顶部：同步元信息 + 操作按钮 -->
     <div class="page-header">
       <div>
-        <h2 class="page-title">Catalog 同步</h2>
+        <h2 class="page-title">模型目录管理</h2>
         <p class="page-subtitle">
-          目录已收录
+          当前目录已收录
           <strong>{{ catalogTotal }}</strong>
-          个上游模型
+          个模型参考项
           <span v-if="syncedAtText" class="sync-meta">
             · 最近同步于 <span class="sync-time">{{ syncedAtText }}</span>
           </span>
           ·
           <strong>{{ diffRows.length }}</strong>
-          个本地模型与目录存在差异（当前筛选 {{ filteredRows.length }} 条）
+          个本地模型需要你进一步确认（当前筛选 {{ filteredRows.length }} 条）
         </p>
       </div>
       <div class="header-actions">
@@ -21,13 +108,118 @@
           type="primary"
           :loading="autoBinding"
           @click="handleAutoBind"
-          title="按 name / upstream_model_id 严格同名将本地模型自动绑定到目录条目；同名多个候选只列出候选，不会盲绑。"
-          >智能绑定</el-button
+          title="把尚未关联 Catalog 的本地模型，按 name / upstream_model_id 自动匹配到目录条目；同名多个候选只列出候选，不会盲绑。"
+          >处理未关联模型</el-button
         >
         <el-button :loading="refreshing || syncRunning" @click="handleManualRefresh">
           {{ syncRunning ? '同步中…' : '手动刷新目录' }}
         </el-button>
       </div>
+    </div>
+
+    <div class="tab-nav" data-testid="tab-nav">
+      <button
+        type="button"
+        class="tab-nav-item"
+        :class="{ active: currentTab === 'sync' }"
+        @click="switchTab('sync')"
+      >
+        目录更新
+      </button>
+      <button
+        type="button"
+        class="tab-nav-item"
+        :class="{ active: currentTab === 'bind' }"
+        @click="switchTab('bind')"
+      >
+        模型对应
+      </button>
+      <button
+        type="button"
+        class="tab-nav-item"
+        :class="{ active: currentTab === 'diff' }"
+        @click="switchTab('diff')"
+      >
+        价格差异
+      </button>
+    </div>
+
+    <div class="tab-intro" data-testid="tab-intro">
+      <h3 class="section-title">{{ currentTabTitle }}</h3>
+      <p class="section-description">{{ currentTabDescription }}</p>
+    </div>
+
+    <div class="workspace-grid" data-testid="workspace-grid">
+      <section v-if="currentTab === 'sync'" class="workspace-card" :class="workspaceSyncStatus.panelClassName">
+        <div class="workspace-head">
+          <p class="workspace-kicker">任务区 1</p>
+          <div class="workspace-title-row">
+            <h4>同步 Catalog 目录</h4>
+            <span class="workspace-status" :class="workspaceSyncStatus.className">{{ workspaceSyncStatus.label }}</span>
+          </div>
+        </div>
+        <p class="workspace-text">
+          先把平台提供的模型目录同步到本地。没有这份目录，后面的关联和价格对比都无法进行。
+        </p>
+        <p class="workspace-why">页面里的参考价格和状态说明，都来自这一步。</p>
+        <div class="workspace-actions">
+          <el-button :loading="refreshing || syncRunning" @click="handleManualRefresh">
+            {{ syncRunning ? '同步中…' : '更新目录数据' }}
+          </el-button>
+        </div>
+      </section>
+
+      <section v-if="currentTab === 'bind'" class="workspace-card" :class="workspaceBindStatus.panelClassName">
+        <div class="workspace-head">
+          <p class="workspace-kicker">任务区 2</p>
+          <div class="workspace-title-row">
+            <h4>绑定本地模型</h4>
+            <span class="workspace-status" :class="workspaceBindStatus.className">{{ workspaceBindStatus.label }}</span>
+          </div>
+        </div>
+        <p class="workspace-text">
+          把你已经接入的本地模型，对应到目录里的参考项。没完成对应的模型，不会进入差异检查。
+        </p>
+        <p class="workspace-why">很多“这里为什么没东西”的情况，其实只是模型还没对应到目录。</p>
+        <div class="workspace-actions">
+          <el-button
+            type="primary"
+            :loading="autoBinding"
+            @click="handleAutoBind"
+            title="把尚未关联 Catalog 的本地模型，按 name / upstream_model_id 自动匹配到目录条目；同名多个候选只列出候选，不会盲绑。"
+          >
+            处理未对应模型
+          </el-button>
+          <el-button @click="$router.push('/admin/models')">去模型列表手动处理</el-button>
+        </div>
+      </section>
+
+      <section v-if="currentTab === 'diff'" class="workspace-card" :class="workspaceDiffStatus.panelClassName">
+        <div class="workspace-head">
+          <p class="workspace-kicker">任务区 3</p>
+          <div class="workspace-title-row">
+            <h4>处理价格差异</h4>
+            <span class="workspace-status" :class="workspaceDiffStatus.className">{{ workspaceDiffStatus.label }}</span>
+          </div>
+        </div>
+        <p class="workspace-text">
+          这里只展示“已经完成对应”的模型里，价格需要确认、或者目录提示即将下线的项目。
+        </p>
+        <p class="workspace-why">这里为空，通常表示价格本来就一致，或者模型还没完成目录对应。</p>
+        <div class="workspace-subtypes">
+          <div class="workspace-subtype">
+            <strong>价格未设</strong>
+            <p>本地价格是 $0/$0，但目录里已经有参考价格。通常表示模型已经完成对应，但你还没决定是否直接采用参考价。</p>
+          </div>
+          <div class="workspace-subtype">
+            <strong>已脱离目录</strong>
+            <p>本地价格已经设置过，而且和目录里的参考价格不同。通常表示你曾手动改过价格，或者目录后来更新了。</p>
+          </div>
+        </div>
+        <div class="workspace-actions">
+          <el-button @click="scrollToDiffSection">查看差异列表</el-button>
+        </div>
+      </section>
     </div>
 
     <!--
@@ -42,7 +234,7 @@
       为什么 catalog_total 没变。这个横幅把后端真实状态贴脸告诉用户。
     -->
     <el-alert
-      v-if="syncStatusBanner"
+      v-if="currentTab === 'sync' && syncStatusBanner"
       :type="syncStatusBanner.type"
       :title="syncStatusBanner.title"
       :description="syncStatusBanner.description"
@@ -54,7 +246,7 @@
 
     <!-- 空状态：完全没有 diff（按 bindingStats 分四种语义） -->
     <el-empty
-      v-if="!loading && !diffRows.length"
+      v-if="currentTab === 'diff' && !loading && !diffRows.length"
       description=""
       class="empty-state"
       data-testid="empty-state"
@@ -113,6 +305,9 @@
               本地有 <strong>{{ bindingStats?.unbound_count }}</strong> 个 model 尚未绑定。
               绑定之后才能看到价格与能力差异、自动跟随目录更新。
             </p>
+            <p class="empty-hint empty-next-step">
+              下一步建议：先把这些未对应模型和目录关联起来，再回来处理价格差异。
+            </p>
             <div class="empty-actions">
               <el-button
                 type="primary"
@@ -120,13 +315,13 @@
                 data-testid="empty-cta-autobind"
                 @click="handleAutoBind"
               >
-                立即智能绑定（{{ bindingStats?.unbound_count }} 条）
+                去绑定这 {{ bindingStats?.unbound_count }} 个未关联模型
               </el-button>
               <el-button
                 data-testid="empty-cta-manual-bind"
                 @click="$router.push('/admin/models')"
               >
-                到模型管理手动选择
+                去模型管理手动处理
               </el-button>
             </div>
           </template>
@@ -142,6 +337,9 @@
               另外还有 <strong>{{ bindingStats?.unbound_count }}</strong> 个未绑定 model，
               如果想纳入目录管理可点下方按钮。
             </p>
+            <p class="empty-hint empty-next-step">
+              你现在不需要处理差异；下一步更有价值的是，把剩余未对应模型纳入目录管理。
+            </p>
             <div class="empty-actions">
               <el-button
                 type="primary"
@@ -149,7 +347,7 @@
                 data-testid="empty-cta-autobind"
                 @click="handleAutoBind"
               >
-                继续智能绑定（{{ bindingStats?.unbound_count }} 条）
+                去绑定剩余 {{ bindingStats?.unbound_count }} 个未关联模型
               </el-button>
             </div>
           </template>
@@ -170,7 +368,11 @@
     </el-empty>
 
     <!-- 筛选区 -->
-    <div v-else class="filter-bar">
+    <div v-if="currentTab === 'diff' && diffRows.length" class="filter-bar" data-testid="diff-section">
+      <div class="filter-header">
+        <h3 class="section-title">差异筛选</h3>
+        <p class="section-description">在这里筛选“已经完成目录对应”的模型里，哪些需要你关注和处理。</p>
+      </div>
       <el-input
         v-model="searchKeyword"
         placeholder="搜索本地模型名或目录上游 ID"
@@ -216,91 +418,173 @@
       <el-button @click="exportCSV" :icon="Download">导出 CSV</el-button>
     </div>
 
+    <div v-if="currentTab === 'diff' && diffRows.length" class="diff-explainer" data-testid="diff-explainer">
+      <div class="diff-explainer-main">
+        <h3 class="section-title">你现在看到的是什么</h3>
+        <p class="section-description">
+          这里只显示“已经完成目录对应”的模型里，需要你进一步确认的项目：
+          可能是本地价格还没填，也可能是本地价格已经和目录参考价不一致，或者目录提示该模型即将下线。
+        </p>
+      </div>
+      <div v-if="deprecatedCount > 0" class="deprecation-banner" data-testid="deprecation-banner">
+        <strong>优先关注：</strong>
+        当前有 {{ deprecatedCount }} 个项目对应的目录条目标记了下线时间，建议优先确认是否需要切换模型。
+      </div>
+      <div class="diff-summary-grid">
+        <div class="diff-summary-card">
+          <p class="diff-summary-label">待补价格</p>
+          <strong class="diff-summary-value">{{ priceUnsetCount }}</strong>
+          <p class="diff-summary-hint">本地价格还是 $0/$0，但目录里已经有参考价格。</p>
+        </div>
+        <div class="diff-summary-card">
+          <p class="diff-summary-label">已脱离目录</p>
+          <strong class="diff-summary-value">{{ overriddenCount }}</strong>
+          <p class="diff-summary-hint">本地价格已经填写过，但和目录里的参考价格不同。</p>
+        </div>
+        <div class="diff-summary-card">
+          <p class="diff-summary-label">废弃提醒</p>
+          <strong class="diff-summary-value">{{ deprecatedCount }}</strong>
+          <p class="diff-summary-hint">目录提示该模型即将下线，建议优先检查。</p>
+        </div>
+      </div>
+    </div>
+
     <!-- 差异表格 -->
-    <el-table
-      v-if="diffRows.length"
-      v-loading="loading"
-      :data="pagedRows"
-      border
-      stripe
-      row-key="model_id"
-      :empty-text="filteredRows.length ? '当前页无数据' : '没有匹配筛选条件的差异行'"
-      @selection-change="handleSelectionChange"
-    >
-      <el-table-column
-        type="selection"
-        width="45"
-        :reserve-selection="true"
-      />
-      <el-table-column label="本地模型" prop="model_name" min-width="240">
-        <template #default="{ row }">
-          <span class="mono">{{ row.model_name }}</span>
-          <el-tag
-            v-if="row.is_overridden"
-            type="danger"
-            size="small"
-            class="badge-override"
-            >已脱离目录</el-tag
-          >
-          <el-tag
-            v-if="isPriceUnset(row)"
-            type="warning"
-            size="small"
-            class="badge-override"
-            >价格未设</el-tag
-          >
-          <el-tag
-            v-if="row.catalog_deprecation_date"
-            type="warning"
-            size="small"
-            class="badge-deprecation"
-            >⏰ {{ formatDate(row.catalog_deprecation_date) }} 废弃</el-tag
-          >
-        </template>
-      </el-table-column>
+    <div v-if="currentTab === 'diff' && diffRows.length" class="diff-groups">
+      <section v-if="priceUnsetRows.length" class="diff-group" data-testid="group-price-unset">
+        <div class="diff-group-header">
+          <h3 class="section-title">待补价格</h3>
+          <p class="section-description">这些模型已经完成目录对应，但本地价格还是 $0/$0。你现在要决定是否直接采用目录里的参考价格。</p>
+          <div class="diff-group-actions">
+            <el-button size="small" @click="selectPriceUnsetRows">选中这组 {{ priceUnsetRows.length }} 条</el-button>
+          </div>
+        </div>
+        <el-table
+          v-loading="loading"
+          :data="pagedPriceUnsetRows"
+          border
+          stripe
+          row-key="model_id"
+          @selection-change="handleSelectionChange"
+        >
+          <el-table-column type="selection" width="45" :reserve-selection="true" />
+          <el-table-column label="本地模型" prop="model_name" min-width="240">
+            <template #default="{ row }">
+              <span class="mono">{{ row.model_name }}</span>
+              <el-tag type="warning" size="small" class="badge-override">价格未设</el-tag>
+              <el-tag
+                v-if="row.catalog_deprecation_date"
+                type="warning"
+                size="small"
+                class="badge-deprecation"
+                >⏰ {{ formatDate(row.catalog_deprecation_date) }} 废弃</el-tag
+              >
+            </template>
+          </el-table-column>
+          <el-table-column label="目录上游" min-width="220">
+            <template #default="{ row }">
+              <span class="mono dim">{{ row.catalog_source_model_id }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="本地价 (in/out, $/M tok)" width="200" align="right">
+            <template #default="{ row }">
+              {{ formatPrice(row.local_input_price) }} /
+              {{ formatPrice(row.local_output_price) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="目录价 (in/out, $/M tok)" width="200" align="right">
+            <template #default="{ row }">
+              {{ formatPrice(row.catalog_input_price) }} /
+              {{ formatPrice(row.catalog_output_price) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="建议" width="180" align="center">
+            <template #default>
+              <span class="delta-flat">未设 → 跟随</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </section>
 
-      <el-table-column label="目录上游" min-width="220">
-        <template #default="{ row }">
-          <span class="mono dim">{{ row.catalog_source_model_id }}</span>
-        </template>
-      </el-table-column>
-
-      <el-table-column label="本地价 (in/out, $/M tok)" width="200" align="right">
-        <template #default="{ row }">
-          {{ formatPrice(row.local_input_price) }} /
-          {{ formatPrice(row.local_output_price) }}
-        </template>
-      </el-table-column>
-
-      <el-table-column label="目录价 (in/out, $/M tok)" width="200" align="right">
-        <template #default="{ row }">
-          {{ formatPrice(row.catalog_input_price) }} /
-          {{ formatPrice(row.catalog_output_price) }}
-        </template>
-      </el-table-column>
-
-      <el-table-column label="变化%" width="180" align="center">
-        <template #default="{ row }">
-          <template v-if="isPriceUnset(row)">
-            <span class="delta-flat">未设 → 跟随</span>
-          </template>
-          <template v-else>
-            <span :class="deltaClass(row.input_delta_pct)">
-              {{ deltaArrow(row.input_delta_pct) }}
-              {{ formatPct(row.input_delta_pct) }}
-            </span>
-            /
-            <span :class="deltaClass(row.output_delta_pct)">
-              {{ deltaArrow(row.output_delta_pct) }}
-              {{ formatPct(row.output_delta_pct) }}
-            </span>
-          </template>
-        </template>
-      </el-table-column>
-    </el-table>
+      <section v-if="followupRows.length" class="diff-group" data-testid="group-followup">
+        <div class="diff-group-header">
+          <h3 class="section-title">已偏离参考价 / 需要复核</h3>
+          <p class="section-description">这些模型已经设置过本地价格，但和目录里的参考价格不同。你需要判断是继续保留当前设置，还是改回参考价。</p>
+          <div class="diff-group-actions">
+            <el-button size="small" @click="selectFollowupRows">选中这组 {{ followupRows.length }} 条</el-button>
+          </div>
+        </div>
+        <el-table
+          v-loading="loading"
+          :data="pagedFollowupRows"
+          border
+          stripe
+          row-key="model_id"
+          @selection-change="handleSelectionChange"
+        >
+          <el-table-column type="selection" width="45" :reserve-selection="true" />
+          <el-table-column label="本地模型" prop="model_name" min-width="240">
+            <template #default="{ row }">
+              <span class="mono">{{ row.model_name }}</span>
+              <el-tag
+                v-if="row.is_overridden"
+                type="danger"
+                size="small"
+                class="badge-override"
+                >已脱离目录</el-tag
+              >
+              <el-tag
+                v-if="row.catalog_deprecation_date"
+                type="warning"
+                size="small"
+                class="badge-deprecation"
+                >⏰ {{ formatDate(row.catalog_deprecation_date) }} 废弃</el-tag
+              >
+            </template>
+          </el-table-column>
+          <el-table-column label="目录上游" min-width="220">
+            <template #default="{ row }">
+              <span class="mono dim">{{ row.catalog_source_model_id }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="本地价 (in/out, $/M tok)" width="200" align="right">
+            <template #default="{ row }">
+              {{ formatPrice(row.local_input_price) }} /
+              {{ formatPrice(row.local_output_price) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="目录价 (in/out, $/M tok)" width="200" align="right">
+            <template #default="{ row }">
+              {{ formatPrice(row.catalog_input_price) }} /
+              {{ formatPrice(row.catalog_output_price) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="变化%" width="180" align="center">
+            <template #default="{ row }">
+              <span :class="deltaClass(row.input_delta_pct)">
+                {{ deltaArrow(row.input_delta_pct) }}
+                {{ formatPct(row.input_delta_pct) }}
+              </span>
+              /
+              <span :class="deltaClass(row.output_delta_pct)">
+                {{ deltaArrow(row.output_delta_pct) }}
+                {{ formatPct(row.output_delta_pct) }}
+              </span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </section>
+    </div>
 
     <!-- 底部：分页 + 操作 -->
-    <div v-if="diffRows.length" class="footer-bar">
+    <div v-if="currentTab === 'diff' && diffRows.length" class="footer-bar">
+      <div class="footer-intro">
+        <h3 class="section-title">下一步动作</h3>
+        <p class="section-description">勾选你确认要采用目录参考价格的模型，然后批量更新本地价格。</p>
+        <p class="footer-risk-note">
+          注意：执行后会直接把所选模型的本地价格改成目录里的参考价格。
+        </p>
+      </div>
       <el-pagination
         v-if="filteredRows.length > pageSize"
         v-model:current-page="currentPage"
@@ -318,7 +602,7 @@
           >清空选择</el-button
         >
         <el-button type="primary" :loading="applying" @click="handleApply">
-          应用选中项{{ selectedIds.length ? `(${selectedIds.length})` : '' }}
+          采用目录参考价格{{ selectedIds.length ? `(${selectedIds.length})` : '' }}
         </el-button>
       </div>
     </div>
@@ -451,6 +735,7 @@ const lastSyncedAt = ref<string>('')
 const autoBinding = ref(false)
 const autoBindDialogVisible = ref(false)
 const autoBindResult = ref<AutoBindResult | null>(null)
+const currentTab = ref<'sync' | 'bind' | 'diff'>('sync')
 
 // 目录绑定状态：catalog 总数 + 本地 model 已绑定 / 未绑定计数。
 // 空状态区域用它来精准判定"diff 为空到底意味着啥"。
@@ -536,6 +821,186 @@ const emptyKind = computed<EmptyKind>(() => {
 
 // 同步状态便利访问：用于按钮 loading + "同步中" 显示
 const syncRunning = computed(() => !!syncStatus.value?.running)
+
+const preferredTab = computed<'sync' | 'bind' | 'diff'>(() => {
+  const s = bindingStats.value
+  if (!s || s.catalog_total <= 0) return 'sync'
+  if (s.unbound_count > 0) return 'bind'
+  return 'diff'
+})
+
+const stageStep = computed(() => {
+  const s = bindingStats.value
+  if (!s || s.catalog_total <= 0) return 1
+  if (s.unbound_count > 0) return 2
+  return 3
+})
+
+const stageTitle = computed(() => {
+  const s = bindingStats.value
+  if (!s || s.catalog_total <= 0) return '第 1 步：先同步 Catalog 目录'
+  if (s.model_total <= 0) return '第 2 步：先注册本地模型，再绑定到 Catalog'
+  if (s.unbound_count > 0) return `第 2 步：还有 ${s.unbound_count} 个本地模型未关联 Catalog`
+  if (diffRows.value.length > 0) return `第 3 步：当前有 ${diffRows.value.length} 个已绑定模型存在差异`
+  return '第 3 步已完成：已绑定模型当前与 Catalog 一致'
+})
+
+const stageDescription = computed(() => {
+  const s = bindingStats.value
+  if (!s || s.catalog_total <= 0) {
+    return '先把上游 Catalog 同步到本地；没有目录数据时，后面的绑定和差异对比都无从进行。'
+  }
+  if (s.model_total <= 0) {
+    return '目录已经有数据，但你还没有注册任何本地模型；先去模型管理创建或导入模型。'
+  }
+  if (s.unbound_count > 0) {
+    return '当前页面推荐你先处理“未关联模型”。没绑定到 Catalog 的模型不会参与价格差异对比，也不会自动跟随目录更新。'
+  }
+  if (diffRows.value.length > 0) {
+    return '现在可以专注处理差异：这些模型已经绑定了 Catalog，但本地价格与目录价格不一致，或者目录条目已废弃。'
+  }
+  return '当前不需要处理差异；目录、绑定关系和已绑定模型价格都处于一致状态。'
+})
+
+const currentStatusTitle = computed(() => {
+  const s = bindingStats.value
+  if (!s || s.catalog_total <= 0) return 'Catalog 目录还没有准备好'
+  if (s.model_total <= 0) return '目录有数据，但本地还没有模型'
+  if (s.unbound_count > 0 && s.bound_count <= 0) return `当前有 ${s.unbound_count} 个本地模型完全未关联 Catalog`
+  if (s.unbound_count > 0) return `当前还有 ${s.unbound_count} 个本地模型未关联 Catalog`
+  if (diffRows.value.length > 0) return `当前有 ${diffRows.value.length} 个已绑定模型存在差异`
+  return '当前已绑定模型与 Catalog 保持一致'
+})
+
+const currentStatusDescription = computed(() => {
+  const s = bindingStats.value
+  if (!s || s.catalog_total <= 0) {
+    return '目录里还没有可用的模型目录数据。'
+  }
+  if (s.model_total <= 0) {
+    return '目录已有数据，但你还没有本地模型。'
+  }
+  if (s.unbound_count > 0 && s.bound_count <= 0) {
+    return '这些模型还没对应到目录，所以系统暂时无法判断它们和目录之间的价格差异。'
+  }
+  if (s.unbound_count > 0) {
+    return '已完成对应的模型目前没有差异，但剩余模型还没纳入目录管理。'
+  }
+  if (diffRows.value.length > 0) {
+    return '这些模型已经完成目录对应，但本地价格和目录参考价不同，或目录提示该模型即将下线。'
+  }
+  return '你当前已经完成目录同步、模型对应和差异处理。'
+})
+
+const recommendedActionKey = computed<'sync' | 'bind' | 'review_diff' | 'idle'>(() => {
+  const s = bindingStats.value
+  if (!s || s.catalog_total <= 0) return 'sync'
+  if (s.model_total <= 0) return 'idle'
+  if (s.unbound_count > 0) return 'bind'
+  if (diffRows.value.length > 0) return 'review_diff'
+  return 'idle'
+})
+
+const recommendedActionTitle = computed(() => {
+  switch (recommendedActionKey.value) {
+    case 'sync':
+      return '先把目录同步下来'
+    case 'bind':
+      return '先处理未关联模型'
+    case 'review_diff':
+      return '先确认并处理差异'
+    default:
+      return '当前没有必须立刻执行的动作'
+  }
+})
+
+const recommendedActionDescription = computed(() => {
+  switch (recommendedActionKey.value) {
+    case 'sync':
+      return '先把模型目录拉下来，后面的对应和差异判断才能成立。'
+    case 'bind':
+      return '没对应到目录的模型，不会进入差异列表。'
+    case 'review_diff':
+      return '确认哪些模型采用目录参考价，哪些继续保留当前价格。'
+    default:
+      return '如果只是想核对细节，可以去模型列表查看单个模型状态。'
+  }
+})
+
+const currentTabTitle = computed(() => {
+  switch (currentTab.value) {
+    case 'sync':
+      return '目录更新'
+    case 'bind':
+      return '模型对应'
+    default:
+      return '价格差异'
+  }
+})
+
+const currentTabDescription = computed(() => {
+  switch (currentTab.value) {
+    case 'sync':
+      return '这里只处理目录数据本身：是否同步成功、同步了多少、最近一次更新时间和失败原因。'
+    case 'bind':
+      return '这里只处理“本地模型如何对应到目录参考项”。没完成对应的模型，不会进入价格差异检查。'
+    default:
+      return '这里只处理“已经完成目录对应”的模型价格问题，包括待补价格、偏离参考价和下线提醒。'
+  }
+})
+
+const priceUnsetCount = computed(() => diffRows.value.filter((row) => isPriceUnset(row)).length)
+const overriddenCount = computed(() => diffRows.value.filter((row) => row.is_overridden).length)
+const deprecatedCount = computed(() => diffRows.value.filter((row) => !!row.catalog_deprecation_date).length)
+const priceUnsetRows = computed(() => sortedRows.value.filter((row) => isPriceUnset(row)))
+const followupRows = computed(() => sortedRows.value.filter((row) => !isPriceUnset(row)))
+const pagedPriceUnsetRows = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return priceUnsetRows.value.slice(start, start + pageSize.value)
+})
+const pagedFollowupRows = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return followupRows.value.slice(start, start + pageSize.value)
+})
+
+const workspaceSyncStatus = computed(() => {
+  const s = bindingStats.value
+  if (!s || s.catalog_total <= 0) {
+    return { label: '阻塞', className: 'status-blocked', panelClassName: 'panel-blocked' }
+  }
+  if (syncRunning.value) {
+    return { label: '进行中', className: 'status-pending', panelClassName: 'panel-pending' }
+  }
+  return { label: '已完成', className: 'status-done', panelClassName: 'panel-done' }
+})
+
+const workspaceBindStatus = computed(() => {
+  const s = bindingStats.value
+  if (!s || s.catalog_total <= 0) {
+    return { label: '等待上一步', className: 'status-blocked', panelClassName: 'panel-blocked' }
+  }
+  if (s.model_total <= 0) {
+    return { label: '待处理', className: 'status-pending', panelClassName: 'panel-pending' }
+  }
+  if (s.unbound_count > 0) {
+    return { label: '待处理', className: 'status-pending', panelClassName: 'panel-pending' }
+  }
+  return { label: '已完成', className: 'status-done', panelClassName: 'panel-done' }
+})
+
+const workspaceDiffStatus = computed(() => {
+  const s = bindingStats.value
+  if (!s || s.catalog_total <= 0) {
+    return { label: '等待上一步', className: 'status-blocked', panelClassName: 'panel-blocked' }
+  }
+  if (s.bound_count <= 0) {
+    return { label: '等待绑定', className: 'status-blocked', panelClassName: 'panel-blocked' }
+  }
+  if (diffRows.value.length > 0) {
+    return { label: '待处理', className: 'status-pending', panelClassName: 'panel-pending' }
+  }
+  return { label: '已完成', className: 'status-done', panelClassName: 'panel-done' }
+})
 
 /**
  * 同步状态横幅配置。null 表示不显示横幅（从未跑过 + 不在跑 + 没历史错误）。
@@ -738,32 +1203,41 @@ function resetFilters() {
   sortKey.value = 'delta_desc'
 }
 
+function switchTab(tab: 'sync' | 'bind' | 'diff') {
+  currentTab.value = tab
+}
+
+function scrollToDiffSection() {
+  currentTab.value = 'diff'
+  const el = document.querySelector('[data-testid="diff-section"]')
+  if (el && 'scrollIntoView' in el) {
+    ;(el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+}
+
 // ===================== 数据加载 =====================
 async function loadCatalogMeta() {
-  // 1) 拿 catalog 总数 + 本地 model 绑定分布（binding-stats 是元信息真源）。
-  // 2) 顺便用 searchCatalog({limit:1}) 拿一条最新条目的 synced_at，展示"最近同步于"。
-  //    catalogTotal 不再依赖 search 接口的 total（历史 bug：曾把 len(results) 当 total）。
-  // 3) 拉一次 sync-status，让进入页面就能看到上次同步成功 / 失败的横幅。
-  try {
-    const stats = await getCatalogBindingStats()
-    bindingStats.value = stats
-    catalogTotal.value = stats.catalog_total
-  } catch {
-    // stats 失败不阻塞主流程，但要把 stats 置空，避免空状态文案乱猜。
+  const [statsRes, searchRes, statusRes] = await Promise.allSettled([
+    getCatalogBindingStats(),
+    searchCatalog({ limit: 1 }),
+    getCatalogSyncStatus(),
+  ])
+  if (statsRes.status === 'fulfilled') {
+    bindingStats.value = statsRes.value
+    catalogTotal.value = statsRes.value.catalog_total
+  } else {
     bindingStats.value = null
   }
-  try {
-    const res = await searchCatalog({ limit: 1 })
-    if (res.data.length > 0) lastSyncedAt.value = res.data[0].synced_at
-  } catch {
-    // searched 失败时同步时间留空即可。
+  if (searchRes.status === 'fulfilled' && searchRes.value.data.length > 0) {
+    lastSyncedAt.value = searchRes.value.data[0].synced_at
   }
-  try {
-    syncStatus.value = await getCatalogSyncStatus()
-  } catch {
-    // 同步状态拉取失败不影响主流程；横幅不会显示。
+  if (statusRes.status === 'fulfilled') {
+    syncStatus.value = statusRes.value
+  } else {
     syncStatus.value = null
   }
+
+  currentTab.value = preferredTab.value
 }
 
 async function loadDiff() {
@@ -795,6 +1269,16 @@ function handleSelectionChange(rows: PriceDiffEntry[]) {
 function selectAllFiltered() {
   selectedIds.value = filteredRows.value.map((r) => r.model_id)
   ElMessage.info(`已选中筛选范围内全部 ${selectedIds.value.length} 条`)
+}
+
+function selectPriceUnsetRows() {
+  selectedIds.value = priceUnsetRows.value.map((r) => r.model_id)
+  ElMessage.info(`已选中待补价格分组 ${selectedIds.value.length} 条`)
+}
+
+function selectFollowupRows() {
+  selectedIds.value = followupRows.value.map((r) => r.model_id)
+  ElMessage.info(`已选中已脱离目录分组 ${selectedIds.value.length} 条`)
 }
 
 function clearSelection() {
@@ -1047,12 +1531,295 @@ defineExpose({ selectedIds, loadDiff, filteredRows, sortedRows, pagedRows })
   padding: 24px;
 }
 
+.stage-panel {
+  display: grid;
+  grid-template-columns: minmax(320px, 1.2fr) minmax(420px, 1fr);
+  gap: 16px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+  background: linear-gradient(135deg, rgba(64, 158, 255, 0.08), rgba(103, 194, 58, 0.06));
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 10px;
+}
+
+.action-board {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.action-card {
+  padding: 16px;
+  background: var(--el-fill-color-blank);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 10px;
+}
+
+.action-card-primary {
+  background: linear-gradient(180deg, rgba(64, 158, 255, 0.08), rgba(64, 158, 255, 0.02));
+}
+
+.action-kicker {
+  margin: 0;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.action-title {
+  margin: 6px 0 8px;
+  color: var(--el-text-color-primary);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.action-description {
+  margin: 0;
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.action-buttons {
+  margin-top: 14px;
+}
+
+.action-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.stage-kicker,
+.step-hint,
+.section-description {
+  margin: 0;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.stage-title,
+.section-title {
+  margin: 4px 0 8px;
+  color: var(--el-text-color-primary);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.stage-description {
+  margin: 0;
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.stage-steps {
+  display: grid;
+  gap: 10px;
+}
+
+.stage-step {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+}
+
+.stage-step.active {
+  border-color: var(--el-color-primary);
+  box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.15) inset;
+}
+
+.step-index {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-primary);
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.stage-step.active .step-index {
+  background: var(--el-color-primary);
+  color: #fff;
+}
+
+.step-title {
+  margin: 0 0 4px;
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.section-intro {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.workspace-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.workspace-card {
+  padding: 16px;
+  background: var(--el-fill-color-blank);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+.workspace-card.panel-done {
+  border-color: rgba(103, 194, 58, 0.35);
+  background: linear-gradient(180deg, rgba(103, 194, 58, 0.07), rgba(103, 194, 58, 0.02));
+}
+
+.workspace-card.panel-pending {
+  border-color: rgba(230, 162, 60, 0.35);
+  background: linear-gradient(180deg, rgba(230, 162, 60, 0.08), rgba(230, 162, 60, 0.02));
+}
+
+.workspace-card.panel-blocked {
+  border-color: rgba(245, 108, 108, 0.35);
+  background: linear-gradient(180deg, rgba(245, 108, 108, 0.08), rgba(245, 108, 108, 0.02));
+}
+
+.workspace-head h4 {
+  margin: 4px 0 10px;
+  color: var(--el-text-color-primary);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.workspace-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workspace-status {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.workspace-status.status-done {
+  background: rgba(103, 194, 58, 0.12);
+  color: #3f8f22;
+}
+
+.workspace-status.status-pending {
+  background: rgba(230, 162, 60, 0.12);
+  color: #b67518;
+}
+
+.workspace-status.status-blocked {
+  background: rgba(245, 108, 108, 0.12);
+  color: #c45656;
+}
+
+.workspace-kicker {
+  margin: 0;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.workspace-text,
+.workspace-why {
+  margin: 0;
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.workspace-why {
+  margin-top: 8px;
+  padding-left: 10px;
+  border-left: 3px solid var(--el-color-primary-light-5);
+}
+
+.workspace-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.workspace-subtypes {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.workspace-subtype {
+  padding: 10px 12px;
+  background: var(--el-fill-color-extra-light);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+}
+
+.workspace-subtype strong {
+  display: inline-block;
+  margin-bottom: 6px;
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+}
+
+.workspace-subtype p {
+  margin: 0;
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.section-card {
+  padding: 14px 16px;
+  background: var(--el-fill-color-extra-light);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+}
+
+.section-card h4 {
+  margin: 0 0 8px;
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.section-card p {
+  margin: 0;
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
 .page-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 16px;
-  gap: 16px;
+  margin-bottom: 20px;
+  gap: 12px;
 }
 
 .page-title {
@@ -1072,8 +1839,9 @@ defineExpose({ selectedIds, loadDiff, filteredRows, sortedRows, pagedRows })
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .sync-meta {
@@ -1084,16 +1852,127 @@ defineExpose({ selectedIds, loadDiff, filteredRows, sortedRows, pagedRows })
   font-family: monospace;
 }
 
+.tab-nav {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.tab-nav-item {
+  border: 1px solid var(--el-border-color-light);
+  background: var(--el-fill-color-blank);
+  color: var(--el-text-color-regular);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tab-nav-item.active {
+  background: var(--el-color-primary);
+  border-color: var(--el-color-primary);
+  color: #fff;
+}
+
+.tab-intro {
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  background: var(--el-fill-color-extra-light);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+}
+
 .filter-bar {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
-  padding: 12px 16px;
+  padding: 10px 14px;
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: 6px;
+  border-radius: 8px;
   margin-bottom: 12px;
+}
+
+.filter-header,
+.footer-intro {
+  width: 100%;
+  margin-bottom: 4px;
+}
+
+.diff-explainer {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  background: var(--el-fill-color-extra-light);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+}
+
+.diff-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.diff-summary-card {
+  padding: 12px;
+  background: var(--el-fill-color-blank);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+}
+
+.diff-summary-label {
+  margin: 0 0 6px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.diff-summary-value {
+  display: inline-block;
+  margin-bottom: 6px;
+  color: var(--el-text-color-primary);
+  font-size: 24px;
+  line-height: 1;
+}
+
+.diff-summary-hint {
+  margin: 0;
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.deprecation-banner {
+  padding: 10px 12px;
+  background: rgba(230, 162, 60, 0.12);
+  border: 1px solid rgba(230, 162, 60, 0.24);
+  border-radius: 8px;
+  color: var(--el-color-warning-dark-2);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.diff-groups {
+  display: grid;
+  gap: 14px;
+}
+
+.diff-group {
+  display: grid;
+  gap: 8px;
+}
+
+.diff-group-header {
+  padding: 10px 12px 0;
+}
+
+.diff-group-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .search-input {
@@ -1156,14 +2035,21 @@ defineExpose({ selectedIds, loadDiff, filteredRows, sortedRows, pagedRows })
   align-items: center;
   justify-content: space-between;
   margin-top: 16px;
-  gap: 16px;
+  gap: 12px;
   flex-wrap: wrap;
 }
 
 .footer-actions {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   margin-left: auto;
+}
+
+.footer-risk-note {
+  margin: 8px 0 0;
+  color: var(--el-color-warning-dark-2);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .empty-state {
@@ -1191,11 +2077,26 @@ defineExpose({ selectedIds, loadDiff, filteredRows, sortedRows, pagedRows })
   margin: 6px 0;
 }
 
+.empty-next-step {
+  padding-left: 10px;
+  border-left: 3px solid var(--el-color-primary-light-5);
+}
+
 .empty-actions {
   display: flex;
   justify-content: center;
-  gap: 12px;
+  gap: 10px;
   margin-top: 18px;
+}
+
+@media (max-width: 900px) {
+  .page-header {
+    flex-direction: column;
+  }
+
+  .header-actions {
+    width: 100%;
+  }
 }
 
 .sync-status-banner {
@@ -1291,5 +2192,47 @@ defineExpose({ selectedIds, loadDiff, filteredRows, sortedRows, pagedRows })
   margin-top: 12px;
   padding-top: 8px;
   border-top: 1px dashed var(--el-border-color-lighter);
+}
+
+@media (max-width: 960px) {
+  .stage-panel,
+  .section-intro,
+  .action-board,
+  .workspace-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .diff-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .page-header,
+  .footer-bar {
+    align-items: stretch;
+  }
+
+  .header-actions,
+  .workspace-actions,
+  .diff-group-actions,
+  .footer-actions,
+  .empty-actions {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .search-input,
+  .status-select,
+  .sort-select {
+    width: 100%;
+  }
+
+  .stage-panel,
+  .action-card,
+  .workspace-card,
+  .diff-explainer,
+  .filter-bar {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
 }
 </style>

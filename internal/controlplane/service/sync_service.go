@@ -35,11 +35,17 @@ type SyncService struct {
 	providerRepo SyncProviderRepo
 	modelRepo    SyncModelRepo
 	publisher    *event.Publisher
+	snapshotter  *ProviderSnapshotRefresher
 }
 
 // NewSyncService 创建 SyncService
 func NewSyncService(providerRepo SyncProviderRepo, modelRepo SyncModelRepo, publisher *event.Publisher) *SyncService {
 	return &SyncService{providerRepo: providerRepo, modelRepo: modelRepo, publisher: publisher}
+}
+
+// SetSnapshotRefresher injects the shared provider snapshot refresher.
+func (s *SyncService) SetSnapshotRefresher(snapshotter *ProviderSnapshotRefresher) {
+	s.snapshotter = snapshotter
 }
 
 // SyncModelItem 同步结果中的模型条目
@@ -93,12 +99,7 @@ func (s *SyncService) SyncModels(providerID uuid.UUID) (*SyncResult, error) {
 		return nil, fmt.Errorf("failed to decrypt credentials")
 	}
 
-	var creds map[string]string
-	json.Unmarshal([]byte(credJSON), &creds)
-	apiKey := creds["api_key"]
-	if apiKey == "" {
-		apiKey = credJSON
-	}
+	apiKey := extractAPIKey(credJSON)
 
 	// 调用厂商 GET /models
 	upstreamModels, err := fetchUpstreamModels(provider.Endpoint, apiKey)
@@ -199,10 +200,19 @@ func (s *SyncService) ConfirmSync(providerID uuid.UUID, input ConfirmSyncInput) 
 
 // publishEvent 安全发布事件（publisher 为 nil 或发布失败不影响业务）
 func (s *SyncService) publishEvent(eventType event.ChangeEventType, resourceType string, resourceID uuid.UUID) {
+	snapshotVersion := int64(0)
+	if s.snapshotter != nil {
+		version, err := s.snapshotter.RefreshAvailableSnapshot(context.Background())
+		if err != nil {
+			slog.Error("failed to refresh provider snapshot", "type", eventType, "resource_id", resourceID, "error", err)
+		} else {
+			snapshotVersion = version
+		}
+	}
 	if s.publisher == nil {
 		return
 	}
-	ev := event.NewChangeEvent(eventType, resourceType, resourceID)
+	ev := event.NewChangeEvent(eventType, resourceType, resourceID, snapshotVersion)
 	if err := s.publisher.Publish(context.Background(), ev); err != nil {
 		slog.Error("failed to publish event", "type", eventType, "resource_id", resourceID, "error", err)
 	}

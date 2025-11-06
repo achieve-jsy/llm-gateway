@@ -40,17 +40,20 @@ type ProviderRepoInterface interface {
 type ModelRepoInterface interface {
 	Create(m *model.Model) error
 	GetByID(id uuid.UUID) (*model.Model, error)
+	GetByIDs(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error)
 	List(filter repository.ModelListFilter, offset, limit int) ([]model.Model, int64, error)
 	Update(m *model.Model) error
 	Delete(id uuid.UUID) error
 	ExistsByName(name string) (bool, error)
 	ExistsByNameExcluding(name string, excludeID uuid.UUID) (bool, error)
 	CountByProviderID(providerID uuid.UUID) (int64, error)
+	BatchCountByProviderID(providerIDs []uuid.UUID) (map[uuid.UUID]int64, error)
 	ListAvailable() ([]model.Model, error)
 	UpdateEnabledByProviderID(providerID uuid.UUID, enabled bool) error
 	BatchDelete(ids []uuid.UUID) (int64, error)
 	BatchUpdateEnabled(ids []uuid.UUID, enabled bool) (int64, error)
 	DeleteModelTagRelations(modelID uuid.UUID) error
+	GetHealthByNames(names []string) (map[string]repository.ModelHealthSummary, error)
 }
 
 // ProviderService 渠道配置管理服务
@@ -58,6 +61,7 @@ type ProviderService struct {
 	providerRepo ProviderRepoInterface
 	modelRepo    ModelRepoInterface
 	publisher    *event.Publisher
+	snapshotter  *ProviderSnapshotRefresher
 }
 
 // NewProviderService 创建 ProviderService 实例
@@ -69,12 +73,26 @@ func NewProviderService(providerRepo ProviderRepoInterface, modelRepo ModelRepoI
 	}
 }
 
+// SetSnapshotRefresher injects the shared provider snapshot refresher.
+func (s *ProviderService) SetSnapshotRefresher(snapshotter *ProviderSnapshotRefresher) {
+	s.snapshotter = snapshotter
+}
+
 // publishEvent 安全发布事件（publisher 为 nil 或发布失败不影响业务）
 func (s *ProviderService) publishEvent(eventType event.ChangeEventType, resourceType string, resourceID uuid.UUID) {
+	snapshotVersion := int64(0)
+	if s.snapshotter != nil {
+		version, err := s.snapshotter.RefreshAvailableSnapshot(context.Background())
+		if err != nil {
+			slog.Error("failed to refresh provider snapshot", "type", eventType, "resource_id", resourceID, "error", err)
+		} else {
+			snapshotVersion = version
+		}
+	}
 	if s.publisher == nil {
 		return
 	}
-	ev := event.NewChangeEvent(eventType, resourceType, resourceID)
+	ev := event.NewChangeEvent(eventType, resourceType, resourceID, snapshotVersion)
 	if err := s.publisher.Publish(context.Background(), ev); err != nil {
 		slog.Error("failed to publish event", "type", eventType, "resource_id", resourceID, "error", err)
 	}
@@ -158,60 +176,69 @@ func (s *ProviderService) CreateProvider(input CreateProviderInput) (*model.Prov
 
 // ProviderResponse 渠道响应（凭证脱敏）
 type ProviderResponse struct {
-	ID                uuid.UUID `json:"id"`
-	Name              string    `json:"name"`
-	DefinitionID      string    `json:"definition_id"`
-	Type              string    `json:"type"`
-	Endpoint          string    `json:"endpoint"`
-	MaskedCredentials string    `json:"credentials"`
-	Enabled           bool      `json:"enabled"`
-	Weight            int       `json:"weight"`
-	Priority          int       `json:"priority"`
-	Status            int       `json:"status"`
-	TestModel         string    `json:"test_model"`
-	ResponseTime      int       `json:"response_time"`
-	Balance           float64   `json:"balance"`
-	Remark            string    `json:"remark"`
-	MaxRetries           int       `json:"max_retries"`
-	Timeout              int       `json:"timeout"`
-	Tag                  string    `json:"tag"`
-	ConsecutiveFailures  int       `json:"consecutive_failures"`
-	LastCheckError       string    `json:"last_check_error"`
-	CreatedAt            string    `json:"created_at"`
-	UpdatedAt            string    `json:"updated_at"`
+	ID                  uuid.UUID `json:"id"`
+	Name                string    `json:"name"`
+	DefinitionID        string    `json:"definition_id"`
+	Type                string    `json:"type"`
+	Endpoint            string    `json:"endpoint"`
+	MaskedCredentials   string    `json:"credentials"`
+	Enabled             bool      `json:"enabled"`
+	Weight              int       `json:"weight"`
+	Priority            int       `json:"priority"`
+	Status              int       `json:"status"`
+	TestModel           string    `json:"test_model"`
+	ResponseTime        int       `json:"response_time"`
+	Balance             float64   `json:"balance"`
+	Remark              string    `json:"remark"`
+	MaxRetries          int       `json:"max_retries"`
+	Timeout             int       `json:"timeout"`
+	Tag                 string    `json:"tag"`
+	ConsecutiveFailures int       `json:"consecutive_failures"`
+	LastCheckError      string    `json:"last_check_error"`
+	ModelCount          int64     `json:"model_count"`
+	CreatedAt           string    `json:"created_at"`
+	UpdatedAt           string    `json:"updated_at"`
 }
 
-// toResponse 将 Provider 转为脱敏响应
-func (s *ProviderService) toResponse(p *model.Provider) ProviderResponse {
-	// 解密凭证用于脱敏展示
+// toResponse 将 Provider 转为脱敏响应。
+// modelCounts 为预批量查询的渠道模型数映射，nil 时退化为逐条 CountByProviderID（兼容单条查询场景）。
+func (s *ProviderService) toResponse(p *model.Provider, modelCounts map[uuid.UUID]int64) ProviderResponse {
 	decrypted, err := crypto.Decrypt(p.EncryptedCredentials)
 	masked := "****"
 	if err == nil {
 		masked = maskCredentialJSON(decrypted)
 	}
 
+	var modelCount int64
+	if modelCounts != nil {
+		modelCount = modelCounts[p.ID]
+	} else if s.modelRepo != nil {
+		modelCount, _ = s.modelRepo.CountByProviderID(p.ID)
+	}
+
 	return ProviderResponse{
-		ID:                p.ID,
-		Name:              p.Name,
-		DefinitionID:      p.DefinitionID,
-		Type:              p.Type,
-		Endpoint:          p.Endpoint,
-		MaskedCredentials: masked,
-		Enabled:           p.Enabled,
-		Weight:            p.Weight,
-		Priority:          p.Priority,
-		Status:            p.Status,
-		TestModel:         p.TestModel,
-		ResponseTime:      p.ResponseTime,
-		Balance:           p.Balance,
-		Remark:            p.Remark,
-		MaxRetries:        p.MaxRetries,
-		Timeout:           p.Timeout,
-		Tag:                  p.Tag,
-		ConsecutiveFailures:  p.ConsecutiveFailures,
-		LastCheckError:       p.LastCheckError,
-		CreatedAt:         p.CreatedAt.Format("2006-01-02T15:04:05Z"),
-		UpdatedAt:         p.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+		ID:                  p.ID,
+		Name:                p.Name,
+		DefinitionID:        p.DefinitionID,
+		Type:                p.Type,
+		Endpoint:            p.Endpoint,
+		MaskedCredentials:   masked,
+		Enabled:             p.Enabled,
+		Weight:              p.Weight,
+		Priority:            p.Priority,
+		Status:              p.Status,
+		TestModel:           p.TestModel,
+		ResponseTime:        p.ResponseTime,
+		Balance:             p.Balance,
+		Remark:              p.Remark,
+		MaxRetries:          p.MaxRetries,
+		Timeout:             p.Timeout,
+		Tag:                 p.Tag,
+		ConsecutiveFailures: p.ConsecutiveFailures,
+		LastCheckError:      p.LastCheckError,
+		ModelCount:          modelCount,
+		CreatedAt:           p.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		UpdatedAt:           p.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 	}
 }
 
@@ -221,7 +248,7 @@ func (s *ProviderService) GetProvider(id uuid.UUID) (*ProviderResponse, error) {
 	if err != nil {
 		return nil, ErrProviderNotFound
 	}
-	resp := s.toResponse(provider)
+	resp := s.toResponse(provider, nil)
 	return &resp, nil
 }
 
@@ -240,9 +267,15 @@ func (s *ProviderService) ListProviders(filter repository.ProviderListFilter, pa
 		return nil, 0, fmt.Errorf("list providers: %w", err)
 	}
 
+	providerIDs := make([]uuid.UUID, len(providers))
+	for i := range providers {
+		providerIDs[i] = providers[i].ID
+	}
+	modelCounts, _ := s.modelRepo.BatchCountByProviderID(providerIDs)
+
 	responses := make([]ProviderResponse, len(providers))
 	for i := range providers {
-		responses[i] = s.toResponse(&providers[i])
+		responses[i] = s.toResponse(&providers[i], modelCounts)
 	}
 
 	return responses, total, nil
@@ -330,7 +363,7 @@ func (s *ProviderService) UpdateProvider(id uuid.UUID, input UpdateProviderInput
 
 	s.publishEvent(event.ProviderUpdated, "provider", provider.ID)
 
-	resp := s.toResponse(provider)
+	resp := s.toResponse(provider, nil)
 	return &resp, nil
 }
 
@@ -346,6 +379,11 @@ func (s *ProviderService) ToggleProviderStatus(id uuid.UUID, enabled bool) (*Pro
 		return nil, fmt.Errorf("update provider status: %w", err)
 	}
 	provider.Enabled = enabled
+	if enabled {
+		provider.Status = 1
+	} else {
+		provider.Status = 2
+	}
 
 	// 级联更新下属模型启用状态
 	if err := s.modelRepo.UpdateEnabledByProviderID(id, enabled); err != nil {
@@ -358,7 +396,7 @@ func (s *ProviderService) ToggleProviderStatus(id uuid.UUID, enabled bool) (*Pro
 		s.publishEvent(event.ProviderDisabled, "provider", id)
 	}
 
-	resp := s.toResponse(provider)
+	resp := s.toResponse(provider, nil)
 	return &resp, nil
 }
 
@@ -389,9 +427,13 @@ func (s *ProviderService) DeleteProvider(id uuid.UUID) error {
 }
 
 // maskCredentialJSON 对 JSON 格式凭证中的每个值单独脱敏
+// 空值字段保留为空字符串（前端显示"未配置"），非空值按长度分级脱敏。
 // 输入: {"api_key": "sk-REDACTED"}
-// 输出: {"api_key": "sk-703ff****a13f"}
+// 输出: {"api_key": "sk-****a13f"}
 func maskCredentialJSON(decrypted string) string {
+	if decrypted == "" {
+		return ""
+	}
 	var creds map[string]string
 	if err := json.Unmarshal([]byte(decrypted), &creds); err != nil {
 		// 非 JSON 格式，直接对整体脱敏
@@ -400,7 +442,11 @@ func maskCredentialJSON(decrypted string) string {
 
 	masked := make(map[string]string)
 	for k, v := range creds {
-		masked[k] = crypto.Mask(v)
+		if v == "" {
+			masked[k] = ""
+		} else {
+			masked[k] = crypto.Mask(v)
+		}
 	}
 
 	result, _ := json.Marshal(masked)

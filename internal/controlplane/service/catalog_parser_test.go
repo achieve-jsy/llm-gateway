@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/seed"
 	"github.com/stretchr/testify/assert"
@@ -88,6 +89,120 @@ func findEntry(items []*ModelCatalogParsed, sourceID string) *ModelCatalogParsed
 	return nil
 }
 
+// ===================== tryParseDate =====================
+
+func TestTryParseDate_YYYYMMDD(t *testing.T) {
+	got, ok := tryParseDate("2026-12-01")
+	assert.True(t, ok)
+	assert.Equal(t, 2026, got.Year())
+	assert.Equal(t, time.December, got.Month())
+	assert.Equal(t, 1, got.Day())
+}
+
+func TestTryParseDate_RFC3339(t *testing.T) {
+	got, ok := tryParseDate("2026-12-01T00:00:00Z")
+	assert.True(t, ok)
+	assert.Equal(t, 2026, got.Year())
+}
+
+func TestTryParseDate_SlashFormat(t *testing.T) {
+	got, ok := tryParseDate("2026/12/01")
+	assert.True(t, ok)
+	assert.Equal(t, 2026, got.Year())
+}
+
+func TestTryParseDate_InvalidFormat(t *testing.T) {
+	_, ok := tryParseDate("not-a-date")
+	assert.False(t, ok)
+}
+
+func TestTryParseDate_EmptyString(t *testing.T) {
+	_, ok := tryParseDate("")
+	assert.False(t, ok)
+}
+
+func TestTryParseDate_Whitespace(t *testing.T) {
+	got, ok := tryParseDate("  2026-12-01  ")
+	assert.True(t, ok)
+	assert.Equal(t, 2026, got.Year())
+}
+
+// ===================== DeprecationDate formats =====================
+
+func TestParseLiteLLMJSON_DeprecationDate_RFC3339(t *testing.T) {
+	fixture := `{
+  "model-with-rfc3339-dep": {
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 2e-06,
+    "max_input_tokens": 32000,
+    "mode": "chat",
+    "litellm_provider": "openai",
+    "deprecation_date": "2026-12-01T23:59:59Z"
+  }
+}`
+	items := parseFixture(t, fixture)
+	entry := findEntry(items, "model-with-rfc3339-dep")
+	require.NotNil(t, entry)
+	require.NotNil(t, entry.DeprecationDate)
+	assert.Equal(t, 2026, entry.DeprecationDate.Year())
+}
+
+func TestParseLiteLLMJSON_DeprecationDate_Invalid(t *testing.T) {
+	fixture := `{
+  "model-bad-dep": {
+    "input_cost_per_token": 1e-06,
+    "max_input_tokens": 32000,
+    "mode": "chat",
+    "litellm_provider": "openai",
+    "deprecation_date": "sometime-in-the-future"
+  }
+}`
+	items := parseFixture(t, fixture)
+	entry := findEntry(items, "model-bad-dep")
+	require.NotNil(t, entry)
+	assert.Nil(t, entry.DeprecationDate, "invalid deprecation_date should be nil, not causing parse error")
+}
+
+// ===================== Cache pricing =====================
+
+func TestParseLiteLLMJSON_CachePrices(t *testing.T) {
+	fixture := `{
+  "model-cache": {
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 1.5e-05,
+    "cache_read_input_token_cost": 1.5e-06,
+    "cache_creation_input_token_cost": 3.75e-06,
+    "max_input_tokens": 200000,
+    "mode": "chat",
+    "litellm_provider": "anthropic"
+  }
+}`
+	items := parseFixture(t, fixture)
+	entry := findEntry(items, "model-cache")
+	require.NotNil(t, entry)
+	require.NotNil(t, entry.CacheReadPrice)
+	assert.InDelta(t, 1.5, *entry.CacheReadPrice, 1e-6)
+	require.NotNil(t, entry.CacheWritePrice)
+	assert.InDelta(t, 3.75, *entry.CacheWritePrice, 1e-6)
+}
+
+// ===================== numberField / floatField =====================
+
+func TestParseLiteLLMJSON_StringMaxTokensSkipped(t *testing.T) {
+	fixture := `{
+  "model-string-tokens": {
+    "input_cost_per_token": 1e-06,
+    "max_input_tokens": "not-a-number",
+    "mode": "chat",
+    "litellm_provider": "openai"
+  }
+}`
+	items := parseFixture(t, fixture)
+	entry := findEntry(items, "model-string-tokens")
+	require.NotNil(t, entry)
+	assert.Equal(t, int64(0), entry.ContextLength, "string max_input_tokens should be skipped, falling back to 0")
+}
+
 func TestParseLiteLLMJSON_BasicEntry(t *testing.T) {
 	items := parseFixture(t, fixtureBasic)
 	gpt := findEntry(items, "gpt-4o-2024-11-20")
@@ -167,7 +282,6 @@ func TestParseLiteLLMJSON_FullBundledFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, len(got), 2000, "should parse at least 2000 entries from bundle")
 
-	// 有效条目（有 source_model_id 且非 sample_spec 且 mode 非空）占比 > 80%
 	valid := 0
 	for _, it := range got {
 		if it.SourceModelID != "" && it.SourceModelID != "sample_spec" && it.Mode != "" {
@@ -177,8 +291,122 @@ func TestParseLiteLLMJSON_FullBundledFile(t *testing.T) {
 	ratio := float64(valid) / float64(len(got))
 	assert.Greater(t, ratio, 0.80, "valid entry ratio should be > 80%%, got %.2f", ratio)
 
-	// 没有 sample_spec 漏网
 	for _, it := range got {
 		assert.False(t, strings.EqualFold(it.SourceModelID, "sample_spec"))
 	}
+}
+
+func TestParseLiteLLMJSON_EmptyInput(t *testing.T) {
+	got, err := ParseLiteLLMJSON(map[string]json.RawMessage{})
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestParseLiteLLMJSON_DisplayNameIsSourceID(t *testing.T) {
+	fixture := `{
+  "my-model": {
+    "input_cost_per_token": 1e-06,
+    "max_input_tokens": 32000,
+    "mode": "chat",
+    "litellm_provider": "openai"
+  }
+}`
+	items := parseFixture(t, fixture)
+	entry := findEntry(items, "my-model")
+	require.NotNil(t, entry)
+	assert.Equal(t, "my-model", entry.DisplayName, "display_name defaults to source_model_id")
+}
+
+func TestParseLiteLLMJSON_NoPricingFields(t *testing.T) {
+	fixture := `{
+  "free-model": {
+    "max_input_tokens": 32000,
+    "mode": "chat",
+    "litellm_provider": "openai"
+  }
+}`
+	items := parseFixture(t, fixture)
+	entry := findEntry(items, "free-model")
+	require.NotNil(t, entry)
+	assert.Equal(t, 0.0, entry.InputPricePerMillion)
+	assert.Equal(t, 0.0, entry.OutputPricePerMillion)
+	assert.Nil(t, entry.CacheReadPrice)
+	assert.Nil(t, entry.CacheWritePrice)
+}
+
+func TestParseLiteLLMJSON_MultipleTierThresholds(t *testing.T) {
+	fixture := `{
+  "model-multi-tier": {
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 2e-06,
+    "input_cost_per_token_above_100k_tokens": 2e-06,
+    "output_cost_per_token_above_100k_tokens": 4e-06,
+    "input_cost_per_token_above_200k_tokens": 3e-06,
+    "output_cost_per_token_above_200k_tokens": 6e-06,
+    "max_input_tokens": 200000,
+    "mode": "chat",
+    "litellm_provider": "anthropic"
+  }
+}`
+	items := parseFixture(t, fixture)
+	entry := findEntry(items, "model-multi-tier")
+	require.NotNil(t, entry)
+	require.NotNil(t, entry.TierThreshold)
+	assert.Equal(t, int64(100000), *entry.TierThreshold, "should pick the smallest threshold")
+	require.NotNil(t, entry.InputPriceAboveTier)
+	assert.InDelta(t, 3.0, *entry.InputPriceAboveTier, 1e-6, "last processed tier price for input")
+	require.NotNil(t, entry.OutputPriceAboveTier)
+	assert.InDelta(t, 6.0, *entry.OutputPriceAboveTier, 1e-6, "last processed tier price for output")
+}
+
+func TestParseLiteLLMJSON_SkipsInvalidJSONEntry(t *testing.T) {
+	fixture := `{
+  "bad-json": "this is not a JSON object",
+  "good-entry": {
+    "input_cost_per_token": 1e-06,
+    "max_input_tokens": 32000,
+    "mode": "chat",
+    "litellm_provider": "openai"
+  }
+}`
+	items := parseFixture(t, fixture)
+	assert.Len(t, items, 1)
+	entry := findEntry(items, "good-entry")
+	require.NotNil(t, entry)
+	assert.Nil(t, findEntry(items, "bad-json"))
+}
+
+func TestParseLiteLLMJSON_MaxOutputFallsBackToMaxTokens(t *testing.T) {
+	fixture := `{
+  "no-max-output": {
+    "input_cost_per_token": 1e-06,
+    "max_tokens": 8192,
+    "mode": "chat",
+    "litellm_provider": "openai"
+  }
+}`
+	items := parseFixture(t, fixture)
+	entry := findEntry(items, "no-max-output")
+	require.NotNil(t, entry)
+	assert.Equal(t, int64(8192), entry.MaxOutputTokens, "max_output_tokens should fall back to max_tokens")
+	assert.Equal(t, int64(8192), entry.ContextLength)
+}
+
+func TestParseLiteLLMJSON_CacheWritePrice(t *testing.T) {
+	fixture := `{
+  "model-cache-write": {
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 1.5e-05,
+    "cache_creation_input_token_cost": 3.75e-06,
+    "max_input_tokens": 200000,
+    "mode": "chat",
+    "litellm_provider": "anthropic"
+  }
+}`
+	items := parseFixture(t, fixture)
+	entry := findEntry(items, "model-cache-write")
+	require.NotNil(t, entry)
+	assert.Nil(t, entry.CacheReadPrice, "no cache_read field means nil")
+	require.NotNil(t, entry.CacheWritePrice)
+	assert.InDelta(t, 3.75, *entry.CacheWritePrice, 1e-6)
 }

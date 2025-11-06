@@ -9,8 +9,8 @@
 | **所属变更** | CHG-20260521-001 |
 | **生产方（Provider）** | control-plane 服务 |
 | **消费方（Consumer）** | ops-console（管理接口）、gateway-api（内部接口） |
-| **当前版本** | `v1.0.0` |
-| **最后更新** | 2026-05-21 |
+| **当前版本** | `v1.1.0` |
+| **最后更新** | 2026-05-23 |
 | **修改人** | OpenCode |
 
 ---
@@ -85,6 +85,8 @@
 | 更新模型 | PUT | `/api/v1/models/:id` | 更新模型配置 | JWT | 是 |
 | 删除模型 | DELETE | `/api/v1/models/:id` | 删除模型注册 | JWT | 是 |
 | 可用模型列表 | GET | `/internal/v1/models/available` | 返回所有启用模型及渠道信息 | 内部Token | 是 |
+| 同步模型（拉取对比） | POST | `/api/v1/providers/:id/sync-models` | 从厂商拉取模型列表并与本地对比 | JWT | 否 |
+| 确认同步（批量注册+禁用） | POST | `/api/v1/providers/:id/sync-models/confirm` | 确认批量注册选中模型并禁用已下架模型 | JWT | 否 |
 
 ---
 
@@ -715,6 +717,125 @@ curl -X GET \
 
 ---
 
+### 4.12 同步模型（拉取对比）
+
+* **接口描述**：从上游厂商拉取模型列表并与本地已注册模型对比，返回分类结果（新增/已存在/已下架）。
+* **请求方法**：`POST`
+* **请求路径**：`/api/v1/providers/:id/sync-models`
+
+#### 请求参数
+
+| 参数名 | 类型 | 位置 | 必填 | 描述 | 示例 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| id | string(uuid) | path | 是 | 渠道ID | `"550e8400-..."` |
+
+**请求示例**：
+
+```bash
+curl -X POST \
+  'https://control-plane.internal/api/v1/providers/550e8400-e29b-41d4-a716-446655440000/sync-models' \
+  -H 'Authorization: Bearer {jwt_token}'
+```
+
+#### 响应
+
+**成功响应**（200 OK）：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "added": [
+      {"id": "qwen-max", "owned_by": "dashscope"}
+    ],
+    "existing": [
+      {"id": "qwen-turbo", "owned_by": "dashscope"}
+    ],
+    "removed": [
+      {"id": "old-model", "owned_by": "dashscope"}
+    ],
+    "total_upstream": 244,
+    "total_local": 5,
+    "unsupported": false
+  },
+  "request_id": "req-uuid"
+}
+```
+
+**响应参数说明**：
+
+| 参数路径 | 类型 | 描述 |
+| :--- | :--- | :--- |
+| data.added | array | 上游有但本地无的模型列表（待注册） |
+| data.added[].id | string | 上游模型标识 |
+| data.added[].owned_by | string | 上游模型归属 |
+| data.existing | array | 上游和本地都存在的模型列表 |
+| data.removed | array | 本地有但上游不存在的模型列表（已下架） |
+| data.total_upstream | integer | 上游模型总数 |
+| data.total_local | integer | 本地已注册模型数 |
+| data.unsupported | boolean | 该渠道类型是否不支持自动同步 |
+
+**可能的错误码**：`E4011`（认证失败）、`E4041`（渠道不存在）、`E4222`（渠道类型不支持自动同步）、`E5021`（厂商 API 调用失败）
+
+---
+
+### 4.13 确认同步（批量注册+禁用）
+
+* **接口描述**：确认批量注册选中的模型，同时禁用已下架模型。所有新注册模型默认 enabled=false。
+* **请求方法**：`POST`
+* **请求路径**：`/api/v1/providers/:id/sync-models/confirm`
+
+#### 请求参数
+
+| 参数名 | 类型 | 位置 | 必填 | 描述 | 示例 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| id | string(uuid) | path | 是 | 渠道ID | `"550e8400-..."` |
+| models_to_add | string[] | body | 是 | 要注册的模型名称列表 | `["qwen-max", "qwen-plus"]` |
+| disable_removed | boolean | body | 否 | 是否禁用已下架模型，默认 true | `true` |
+
+**请求示例**：
+
+```bash
+curl -X POST \
+  'https://control-plane.internal/api/v1/providers/550e8400-e29b-41d4-a716-446655440000/sync-models/confirm' \
+  -H 'Authorization: Bearer {jwt_token}' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "models_to_add": ["qwen-max", "qwen-plus", "qwen-vl-max"],
+    "disable_removed": true
+  }'
+```
+
+#### 响应
+
+**成功响应**（200 OK）：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "registered": 3,
+    "skipped": 0,
+    "disabled": 2
+  },
+  "request_id": "req-uuid"
+}
+```
+
+**响应参数说明**：
+
+| 参数路径 | 类型 | 描述 |
+| :--- | :--- | :--- |
+| data.registered | integer | 成功注册的模型数量 |
+| data.skipped | integer | 因重名跳过的模型数量 |
+| data.disabled | integer | 因下架被禁用的模型数量 |
+
+**可能的错误码**：`E4001`（参数校验失败，models_to_add 为空）、`E4011`（认证失败）、`E4041`（渠道不存在）
+
+---
+
 ## 5. 错误码
 
 ### 5.1 统一错误响应结构
@@ -740,6 +861,8 @@ curl -X GET \
 | E4091 | 409 | 名称冲突 | 渠道名称或模型名称已存在 | 否（需换名） |
 | E4092 | 409 | 存在关联资源 | 删除渠道时其下仍有注册模型 | 否（需先删模型） |
 | E4221 | 422 | 业务规则校验失败 | 在已禁用的渠道下注册模型 | 否（需先启用渠道） |
+| E4222 | 400 | 渠道类型不支持自动同步 | 渠道类型（如 Anthropic/Bedrock）不支持模型列表接口 | 否 |
+| E5021 | 502 | 厂商 API 调用失败 | 厂商接口超时、网络错误或返回异常 | 是（可重试） |
 | E4291 | 429 | 请求频率超限 | 超过限流阈值 | 是（等待 Retry-After） |
 | E5001 | 500 | 内部服务错误 | 未预期异常（数据库错误、加密失败等） | 是（可重试） |
 
@@ -751,6 +874,8 @@ curl -X GET \
 | E4091 | 注册模型时名称重复 | `"模型名称 'qwen-turbo' 已存在"` |
 | E4092 | 删除渠道时存在模型 | `"渠道下仍有 3 个注册模型，请先移除"` |
 | E4221 | 在禁用渠道下注册模型 | `"渠道 'bailian-main' 当前已禁用，无法注册模型"` |
+| E4222 | 同步模型时渠道类型不支持 | `"该渠道类型不支持自动同步，请使用预置模型列表"` |
+| E5021 | 同步模型时厂商 API 调用失败 | `"厂商 API 调用超时"` |
 
 ---
 
@@ -824,3 +949,4 @@ curl -X GET \
 | 版本号 | 更新时间 | 变更类型 | 变更描述 | 变更人 |
 | :--- | :--- | :---: | :--- | :--- |
 | v1.0.0 | 2026-05-21 | — | 初始版本：渠道 CRUD + 模型 CRUD + 内部查询接口 | OpenCode |
+| v1.1.0 | 2026-05-23 | 新增 | 新增同步模型接口（sync-models + confirm），新增错误码 E4222、E5021 | OpenCode |

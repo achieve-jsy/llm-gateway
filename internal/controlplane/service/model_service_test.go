@@ -94,13 +94,17 @@ func TestModelService_CreateModel_DBError(t *testing.T) {
 func TestModelService_ListModels(t *testing.T) {
 	want := []model.Model{{ID: uuid.New(), Name: "x"}}
 	pid := uuid.New()
+	enabled := false
 	modelRepo := &MockModelRepo{listFn: func(filter repository.ModelListFilter, offset, limit int) ([]model.Model, int64, error) {
 		assert.NotNil(t, filter.ProviderID)
+		if assert.NotNil(t, filter.Enabled) {
+			assert.Equal(t, enabled, *filter.Enabled)
+		}
 		return want, 1, nil
 	}}
 	svc := NewModelService(modelRepo, &MockProviderRepo{}, nil)
 
-	got, total, err := svc.ListModels(repository.ModelListFilter{ProviderID: &pid}, 0, 0)
+	got, total, err := svc.ListModels(repository.ModelListFilter{ProviderID: &pid, Enabled: &enabled}, 0, 0)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), total)
 	assert.Equal(t, want, got)
@@ -444,6 +448,31 @@ func TestUpdateModel_UntouchedFieldsArePreserved(t *testing.T) {
 	assert.InDelta(t, 0.1, captured.InputPrice, 1e-9)
 	assert.InDelta(t, 0.2, captured.OutputPrice, 1e-9)
 	assert.Equal(t, 3, captured.Weight)
+}
+
+func TestUpdateModel_ExplicitDisableClearsFailureState(t *testing.T) {
+	mid := uuid.New()
+	enabled := true
+	disabled := false
+	original := &model.Model{
+		ID: mid, Name: "m", ProviderID: uuid.New(), ModelType: "chat", Enabled: &enabled,
+		ConsecutiveFailures: 3,
+		LastCheckError:      "HTTP 401",
+	}
+	var captured *model.Model
+	modelRepo := &MockModelRepo{
+		getByIDFn: func(id uuid.UUID) (*model.Model, error) { return original, nil },
+		updateFn:  func(m *model.Model) error { captured = m; return nil },
+	}
+	svc := NewModelService(modelRepo, &MockProviderRepo{}, nil)
+
+	_, err := svc.UpdateModel(mid, UpdateModelInput{Enabled: &disabled})
+	require.NoError(t, err)
+	require.NotNil(t, captured)
+	require.NotNil(t, captured.Enabled)
+	assert.False(t, *captured.Enabled)
+	assert.Equal(t, 0, captured.ConsecutiveFailures)
+	assert.Equal(t, "", captured.LastCheckError)
 }
 
 // =============================================================================

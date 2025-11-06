@@ -33,23 +33,25 @@ func TestCache_GetSetModelList_RoundTrip(t *testing.T) {
 	}
 	require.NoError(t, cache.SetModelList(ctx, models))
 
-	got, err := cache.GetModelList(ctx)
+	got, version, err := cache.GetModelListWithVersion(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, models, got)
+	assert.Equal(t, int64(0), version)
 }
 
 func TestCache_GetModelList_Miss(t *testing.T) {
 	cache, _, _ := newCacheWithRedis(t)
-	got, err := cache.GetModelList(context.Background())
+	got, version, err := cache.GetModelListWithVersion(context.Background())
 	require.NoError(t, err)
 	assert.Nil(t, got)
+	assert.Equal(t, int64(0), version)
 }
 
 func TestCache_GetModelList_UnmarshalError(t *testing.T) {
 	cache, _, rdb := newCacheWithRedis(t)
 	require.NoError(t, rdb.Set(context.Background(), "gateway:models:list", "not-json", 0).Err())
 
-	_, err := cache.GetModelList(context.Background())
+	_, _, err := cache.GetModelListWithVersion(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unmarshal")
 }
@@ -57,8 +59,21 @@ func TestCache_GetModelList_UnmarshalError(t *testing.T) {
 func TestCache_GetModelList_RedisError(t *testing.T) {
 	cache, mr, _ := newCacheWithRedis(t)
 	mr.Close() // 触发连接错误
-	_, err := cache.GetModelList(context.Background())
+	_, _, err := cache.GetModelListWithVersion(context.Background())
 	require.Error(t, err)
+}
+
+func TestCache_GetSetModelList_WithVersion(t *testing.T) {
+	cache, _, _ := newCacheWithRedis(t)
+	ctx := context.Background()
+
+	models := []model.ModelInfo{{ID: "gpt-4", Object: "model", Created: 2, OwnedBy: "openai"}}
+	require.NoError(t, cache.SetModelListWithVersion(ctx, models, 99))
+
+	got, version, err := cache.GetModelListWithVersion(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, models, got)
+	assert.Equal(t, int64(99), version)
 }
 
 func TestCache_IsAPIKeyValid(t *testing.T) {

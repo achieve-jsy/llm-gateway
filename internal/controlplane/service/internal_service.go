@@ -52,10 +52,40 @@ func (s *InternalService) ListAvailableModels() ([]AvailableModel, error) {
 			ProviderName:        m.Provider.Name,
 			ProviderType:        m.Provider.Type,
 			ProviderEndpoint:    m.Provider.Endpoint,
-			ProviderCredentials: credentials,
+			ProviderCredentials: extractAPIKey(credentials),
 		})
 	}
 
+	return result, nil
+}
+
+// ModelHealthInfo 模型健康信息（供 gateway-api 消费）
+type ModelHealthInfo struct {
+	Name                string `json:"name"`
+	ModelType           string `json:"model_type"`
+	Enabled             *bool  `json:"enabled"`
+	ConsecutiveFailures int    `json:"consecutive_failures"`
+	LastCheckError      string `json:"last_check_error"`
+	ResponseTime        int    `json:"response_time"`
+}
+
+// GetModelHealth 按模型名称批量查询健康数据
+func (s *InternalService) GetModelHealth(names []string) (map[string]ModelHealthInfo, error) {
+	healthMap, err := s.modelRepo.GetHealthByNames(names)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]ModelHealthInfo, len(healthMap))
+	for name, h := range healthMap {
+		result[name] = ModelHealthInfo{
+			Name:                h.Name,
+			ModelType:           h.ModelType,
+			Enabled:             h.Enabled,
+			ConsecutiveFailures: h.ConsecutiveFailures,
+			LastCheckError:      h.LastCheckError,
+			ResponseTime:        h.ResponseTime,
+		}
+	}
 	return result, nil
 }
 

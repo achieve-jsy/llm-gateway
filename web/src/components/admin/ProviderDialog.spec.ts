@@ -286,16 +286,13 @@ describe('ProviderDialog.vue', () => {
       expect(Number((retries.element as HTMLInputElement).value)).toBe(5)
     })
 
-    it('accepts text input for test_model / tag / remark fields', async () => {
+    it('accepts input for test_model / remark fields', async () => {
       const wrapper = mountDialog()
       await flushPromises()
-      const tag = findInputByLabel(wrapper, '标签')!
       const remark = findInputByLabel(wrapper, '备注')!
       const tm = findInputByLabel(wrapper, '测试模型')!
-      await tag.setValue('prod')
       await remark.setValue('main pool')
       await tm.setValue('gpt-4o')
-      expect((tag.element as HTMLInputElement).value).toBe('prod')
       expect((remark.element as HTMLInputElement).value).toBe('main pool')
       expect((tm.element as HTMLInputElement).value).toBe('gpt-4o')
     })
@@ -520,6 +517,175 @@ describe('ProviderDialog.vue', () => {
       await flushPromises()
       const payload = mockedUpdate.mock.calls[0][1] as any
       expect(payload.credentials).toBeUndefined()
+    })
+  })
+
+  describe('tags - 多标签输入', () => {
+    it('新建模式：初始无标签，显示添加按钮', async () => {
+      const wrapper = mountDialog()
+      await flushPromises()
+      const vm = wrapper.vm as any
+      expect(vm.formData.tags).toEqual([])
+      expect(wrapper.find('.tag-add-btn').exists()).toBe(true)
+    })
+
+    it('点击添加标签按钮后显示输入框', async () => {
+      const wrapper = mountDialog()
+      await flushPromises()
+      await wrapper.find('.tag-add-btn').trigger('click')
+      await wrapper.vm.$nextTick()
+      const vm = wrapper.vm as any
+      expect(vm.tagInputVisible).toBe(true)
+    })
+
+    it('通过 vm 直接添加标签：confirmTag 后 tags 增加', async () => {
+      const wrapper = mountDialog()
+      await flushPromises()
+      const vm = wrapper.vm as any
+      vm.tagInputVisible = true
+      vm.tagInputVal = 'production'
+      vm.confirmTag()
+      await wrapper.vm.$nextTick()
+      expect(vm.formData.tags).toContain('production')
+      expect(vm.tagInputVisible).toBe(false)
+      expect(vm.tagInputVal).toBe('')
+    })
+
+    it('重复标签不重复添加', async () => {
+      const wrapper = mountDialog()
+      await flushPromises()
+      const vm = wrapper.vm as any
+      vm.tagInputVal = 'fast'
+      vm.confirmTag()
+      vm.tagInputVal = 'fast'
+      vm.confirmTag()
+      expect(vm.formData.tags.filter((t: string) => t === 'fast')).toHaveLength(1)
+    })
+
+    it('空字符串不添加', async () => {
+      const wrapper = mountDialog()
+      await flushPromises()
+      const vm = wrapper.vm as any
+      vm.tagInputVal = '   '
+      vm.confirmTag()
+      expect(vm.formData.tags).toHaveLength(0)
+    })
+
+    it('可以添加多个不同标签', async () => {
+      const wrapper = mountDialog()
+      await flushPromises()
+      const vm = wrapper.vm as any
+      for (const t of ['production', 'chat', 'fast']) {
+        vm.tagInputVal = t
+        vm.confirmTag()
+      }
+      expect(vm.formData.tags).toEqual(['production', 'chat', 'fast'])
+    })
+
+    it('删除标签：splice 后 tags 减少', async () => {
+      const wrapper = mountDialog()
+      await flushPromises()
+      const vm = wrapper.vm as any
+      vm.formData.tags = ['production', 'chat', 'fast']
+      await wrapper.vm.$nextTick()
+      vm.formData.tags.splice(1, 1) // 删除 'chat'
+      expect(vm.formData.tags).toEqual(['production', 'fast'])
+    })
+
+    it('渲染已有标签为 tag pill', async () => {
+      const wrapper = mountDialog()
+      await flushPromises()
+      const vm = wrapper.vm as any
+      vm.formData.tags = ['production', 'chat']
+      await wrapper.vm.$nextTick()
+      const tags = wrapper.findAll('.tag-item')
+      expect(tags).toHaveLength(2)
+      expect(tags[0].text()).toContain('production')
+      expect(tags[1].text()).toContain('chat')
+    })
+
+    it('编辑模式：已有单标签 tag 字段正确回填为 tags 数组', async () => {
+      const wrapper = mountDialog({
+        provider: {
+          id: 'p1',
+          name: 'Test',
+          definition_id: 'openai',
+          endpoint: 'https://api.openai.com/v1',
+          tag: 'production',
+        } as any
+      })
+      await flushPromises()
+      const vm = wrapper.vm as any
+      expect(vm.formData.tags).toEqual(['production'])
+    })
+
+    it('编辑模式：已有多标签 tag 字段正确拆分为 tags 数组', async () => {
+      const wrapper = mountDialog({
+        provider: {
+          id: 'p1',
+          name: 'Test',
+          definition_id: 'openai',
+          endpoint: 'https://api.openai.com/v1',
+          tag: 'production,chat,fast',
+        } as any
+      })
+      await flushPromises()
+      const vm = wrapper.vm as any
+      expect(vm.formData.tags).toEqual(['production', 'chat', 'fast'])
+    })
+
+    it('提交时 tags 数组拼接为逗号字符串写入 payload.tag', async () => {
+      const wrapper = mountDialog()
+      await flushPromises()
+      const def = findInputByLabel(wrapper, '渠道类型')!
+      await def.setValue('openai')
+      await flushPromises()
+      await findInputByLabel(wrapper, '名称')!.setValue('Tagged Provider')
+      await findInputByLabel(wrapper, 'API Key')!.setValue('sk-x')
+      const vm = wrapper.vm as any
+      vm.formData.tags = ['production', 'chat']
+      const submitBtn = wrapper.findAll('.el-button-stub').find(b => b.text().includes('确定'))!
+      await submitBtn.trigger('click')
+      await flushPromises()
+      const payload = mockedCreate.mock.calls[0][0] as any
+      expect(payload.tag).toBe('production,chat')
+    })
+
+    it('tags 为空时 payload.tag 为空字符串（让后端清空标签）', async () => {
+      const wrapper = mountDialog()
+      await flushPromises()
+      const def = findInputByLabel(wrapper, '渠道类型')!
+      await def.setValue('openai')
+      await flushPromises()
+      await findInputByLabel(wrapper, '名称')!.setValue('No Tag Provider')
+      await findInputByLabel(wrapper, 'API Key')!.setValue('sk-x')
+      // 不添加任何标签
+      const submitBtn = wrapper.findAll('.el-button-stub').find(b => b.text().includes('确定'))!
+      await submitBtn.trigger('click')
+      await flushPromises()
+      const payload = mockedCreate.mock.calls[0][0] as any
+      expect(payload.tag).toBe('')
+    })
+
+    it('编辑保存时 tags 变更后 payload.tag 更新为新字符串', async () => {
+      const wrapper = mountDialog({
+        provider: {
+          id: 'p1',
+          name: 'Old',
+          definition_id: 'openai',
+          endpoint: 'https://api.openai.com/v1',
+          tag: 'old-tag',
+        } as any
+      })
+      await flushPromises()
+      const vm = wrapper.vm as any
+      // 清空旧标签，加入新标签
+      vm.formData.tags = ['new-tag', 'extra']
+      const submitBtn = wrapper.findAll('.el-button-stub').find(b => b.text().includes('确定'))!
+      await submitBtn.trigger('click')
+      await flushPromises()
+      const payload = mockedUpdate.mock.calls[0][1] as any
+      expect(payload.tag).toBe('new-tag,extra')
     })
   })
 

@@ -5,10 +5,11 @@ import { describe, it, expect } from 'vitest'
  * 定义编辑渠道时凭证字段的行为规范
  */
 
-// 模拟后端返回的脱敏凭证格式
+// 与后端 crypto.Mask 一致的脱敏逻辑
 function maskCredential(value: string): string {
   if (!value || value.length <= 8) return '****'
-  return value.slice(0, 3) + '****' + value.slice(-4)
+  const tail = value.length >= 12 ? 4 : 3
+  return value.slice(0, 3) + '****' + value.slice(-tail)
 }
 
 // 判断凭证是否被修改（用于决定是否发送到后端）

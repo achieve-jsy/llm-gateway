@@ -20,11 +20,15 @@ describe('maskCredential', () => {
     expect(maskCredential('1234567')).toBe('****')
   })
 
-  it('should mask string with length 9 correctly', () => {
+  it('should mask 9-char string with first 3 + last 3', () => {
     expect(maskCredential('123456789')).toBe('123****789')
   })
 
-  it('should mask string with length 10 correctly', () => {
+  it('should mask 12-char string with first 3 + last 4', () => {
+    expect(maskCredential('123456789012')).toBe('123****9012')
+  })
+
+  it('should mask 11-char string with first 3 + last 3', () => {
     expect(maskCredential('12345678901')).toBe('123****901')
   })
 

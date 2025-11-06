@@ -248,3 +248,18 @@ DROP TABLE IF EXISTS providers;
 * **外键约束**：`models.provider_id` 的 RESTRICT 策略确保不会出现孤儿模型记录
 * **凭证安全**：`encrypted_credentials` 存储的是 Base64 编码的密文，永远不存储明文；数据库级别无法解密，必须通过应用层持有的密钥解密
 * **名称格式**：`providers.name` 仅允许 `[a-zA-Z0-9_-]`，长度 2-64；`models.name` 允许更宽松的字符集（含 `.` 和 `/`），长度 2-128，由应用层校验
+
+---
+
+## 9. 同步功能数据操作说明
+
+> CHG-20260521-002 新增模型同步功能，不引入新表或新字段，复用现有 `models` 表。
+
+同步功能对 `models` 表的操作：
+
+| 操作场景 | SQL 操作 | 说明 |
+| :--- | :--- | :--- |
+| 批量注册（确认同步） | `INSERT INTO models (name, provider_id, model_type, enabled) VALUES ...` | 所有新注册模型 `enabled=false`，逐条插入，已存在的跳过 |
+| 下架禁用（同步检测） | `UPDATE models SET enabled=false WHERE name IN (...) AND provider_id=?` | 仅在上游返回非空列表时执行，防止网络故障导致全量误禁用 |
+
+无需新增字段、索引或迁移脚本。

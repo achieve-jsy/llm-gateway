@@ -100,6 +100,8 @@ func (m *MockProviderRepo) UpdateResponseTime(id uuid.UUID, ms int) error {
 // MockModelRepo 实现 ModelRepoInterface（service 包中已定义）
 type MockModelRepo struct {
 	countByProviderIDFn         func(providerID uuid.UUID) (int64, error)
+	batchCountByProviderIDFn    func(providerIDs []uuid.UUID) (map[uuid.UUID]int64, error)
+	getByIDsFn                  func(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error)
 	updateEnabledByProviderIDFn func(providerID uuid.UUID, enabled bool) error
 	createFn                    func(m *model.Model) error
 	batchCreateFn               func(ms []*model.Model) error
@@ -212,6 +214,41 @@ func (m *MockModelRepo) BatchUpdateEnabled(ids []uuid.UUID, enabled bool) (int64
 
 func (m *MockModelRepo) DeleteModelTagRelations(modelID uuid.UUID) error {
 	return nil
+}
+
+func (m *MockModelRepo) BatchCountByProviderID(providerIDs []uuid.UUID) (map[uuid.UUID]int64, error) {
+	result := map[uuid.UUID]int64{}
+	if m.countByProviderIDFn != nil {
+		for _, id := range providerIDs {
+			count, err := m.countByProviderIDFn(id)
+			if err != nil {
+				return nil, err
+			}
+			result[id] = count
+		}
+	}
+	return result, nil
+}
+
+func (m *MockModelRepo) GetByIDs(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error) {
+	if m.getByIDsFn != nil {
+		return m.getByIDsFn(ids)
+	}
+	result := map[uuid.UUID]*model.Model{}
+	if m.getByIDFn != nil {
+		for _, id := range ids {
+			m2, err := m.getByIDFn(id)
+			if err != nil {
+				return nil, err
+			}
+			result[id] = m2
+		}
+	}
+	return result, nil
+}
+
+func (m *MockModelRepo) GetHealthByNames(names []string) (map[string]repository.ModelHealthSummary, error) {
+	return nil, nil
 }
 
 // NewTestProviderService 通过 interface 注入 mock，无需 unsafe 转换

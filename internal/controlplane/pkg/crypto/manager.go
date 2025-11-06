@@ -283,14 +283,19 @@ func Decrypt(ciphertext string) (string, error) {
 //   - 长度 9..12（中等）→ 前 3 位 + "****" + 尾 4 位，但若总长 <= 8+前缀 时仍用 ****（短串无意义）
 //   - 长度 > 12 → 前 3 位 + "****" + 尾 4 位
 //
-// 设计取舍：测试用例 "sk-1234567890" (13 长) → "sk-****7890"（前3 + **** + 后4）
-// "very-long-credential-string-1234" (32 长) → "ver****1234"（前3 + **** + 后4）
+// Mask 对凭证值进行部分脱敏：
+//   - 空值或长度 <= 8：完全屏蔽，返回 ****
+//   - 9 <= 长度 <= 11：保留前 3 + 后 3（例：123456789 → 123****789）
+//   - 长度 >= 12：保留前 3 + 后 4（例：sk-REDACTED → sk-****a13f）
 func Mask(credential string) string {
-	if len(credential) <= 12 {
+	if len(credential) <= 8 {
 		return "****"
 	}
-	// 前8位 + **** + 后4位，中间脱敏
-	return credential[:8] + "****" + credential[len(credential)-4:]
+	tail := 4
+	if len(credential) <= 11 {
+		tail = 3
+	}
+	return credential[:3] + "****" + credential[len(credential)-tail:]
 }
 
 // RotateKey 生成新的 DEK 版本并存储

@@ -12,7 +12,8 @@ import (
 
 // stubCatalogLookup 给 ModelService 做 catalog 查询的 mock。
 type stubCatalogLookup struct {
-	getByIDFn func(id uuid.UUID) (*model.ModelCatalog, error)
+	getByIDFn   func(id uuid.UUID) (*model.ModelCatalog, error)
+	getByIDsFn  func(ids []uuid.UUID) (map[uuid.UUID]*model.ModelCatalog, error)
 }
 
 func (s *stubCatalogLookup) GetByID(id uuid.UUID) (*model.ModelCatalog, error) {
@@ -20,6 +21,23 @@ func (s *stubCatalogLookup) GetByID(id uuid.UUID) (*model.ModelCatalog, error) {
 		return s.getByIDFn(id)
 	}
 	return nil, nil
+}
+
+func (s *stubCatalogLookup) GetByIDs(ids []uuid.UUID) (map[uuid.UUID]*model.ModelCatalog, error) {
+	if s.getByIDsFn != nil {
+		return s.getByIDsFn(ids)
+	}
+	result := map[uuid.UUID]*model.ModelCatalog{}
+	for _, id := range ids {
+		cat, err := s.GetByID(id)
+		if err != nil {
+			return nil, err
+		}
+		if cat != nil {
+			result[id] = cat
+		}
+	}
+	return result, nil
 }
 
 // TestCreateModelFromCatalog_CopiesSnapshot 验证从 catalog 创建 model 时复制全部业务字段。
@@ -425,22 +443,30 @@ func TestUnbindCatalog_ModelNotFound(t *testing.T) {
 func TestBatchBindCatalog_PartialFailure(t *testing.T) {
 	cid := uuid.New()
 	cat := &model.ModelCatalog{ID: cid, SourceModelID: "x", InputPricePerMillion: 1, OutputPricePerMillion: 2}
-	mid1 := uuid.New() // 成功
-	mid2 := uuid.New() // model 不存在 → 失败
-	mid3 := uuid.New() // 成功
+	mid1 := uuid.New()
+	mid2 := uuid.New()
+	mid3 := uuid.New()
 
 	modelRepo := &MockModelRepo{
-		getByIDFn: func(id uuid.UUID) (*model.Model, error) {
-			if id == mid2 {
-				return nil, errors.New("nope")
+		getByIDsFn: func(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error) {
+			m := map[uuid.UUID]*model.Model{}
+			for _, id := range ids {
+				if id == mid2 {
+					continue
+				}
+				m[id] = &model.Model{ID: id}
 			}
-			return &model.Model{ID: id}, nil
+			return m, nil
 		},
 		updateFn: func(*model.Model) error { return nil },
 	}
 	svc := NewModelService(modelRepo, &MockProviderRepo{}, nil)
-	svc.SetCatalogLookup(&stubCatalogLookup{getByIDFn: func(uuid.UUID) (*model.ModelCatalog, error) {
-		return cat, nil
+	svc.SetCatalogLookup(&stubCatalogLookup{getByIDsFn: func(ids []uuid.UUID) (map[uuid.UUID]*model.ModelCatalog, error) {
+		m := map[uuid.UUID]*model.ModelCatalog{}
+		for _, id := range ids {
+			m[id] = cat
+		}
+		return m, nil
 	}})
 
 	res, err := svc.BatchBindCatalog([]BatchBindInput{

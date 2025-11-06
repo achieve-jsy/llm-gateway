@@ -217,3 +217,274 @@ func TestCatalogRepo_GetByID_RoundTrip(t *testing.T) {
 	require.NotNil(t, got)
 	assert.Equal(t, "gpt-4o", got.SourceModelID)
 }
+
+// TestCatalogRepo_GetByID_NotFound 验证按主键查不存在时返回 nil, nil。
+func TestCatalogRepo_GetByID_NotFound(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewModelCatalogRepo(db)
+
+	got, err := repo.GetByID(uuid.New())
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+// TestCatalogRepo_BatchUpsert 批量写入并验证每条都存在。
+func TestCatalogRepo_BatchUpsert(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewModelCatalogRepo(db)
+
+	entries := []*model.ModelCatalog{
+		newCatalogEntry("gpt-4o"),
+		newCatalogEntry("claude-3-opus"),
+		newCatalogEntry("deepseek-v3"),
+	}
+	require.NoError(t, repo.BatchUpsert(entries))
+
+	n, err := repo.Count()
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), n)
+}
+
+// TestCatalogRepo_BatchUpsert_Empty 空列表应直接返回 nil。
+func TestCatalogRepo_BatchUpsert_Empty(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewModelCatalogRepo(db)
+
+	require.NoError(t, repo.BatchUpsert(nil))
+}
+
+// TestCatalogRepo_DeleteStale 删除旧条目后总数减少。
+func TestCatalogRepo_DeleteStale(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewModelCatalogRepo(db)
+
+	old := newCatalogEntry("old-model")
+	old.SyncedAt = time.Now().Add(-2 * time.Hour)
+	require.NoError(t, repo.Upsert(old))
+
+	newEntry := newCatalogEntry("new-model")
+	newEntry.SyncedAt = time.Now()
+	require.NoError(t, repo.Upsert(newEntry))
+
+	cutoff := time.Now().Add(-1 * time.Hour)
+	affected, err := repo.DeleteStale("litellm", cutoff)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), affected)
+
+	n, err := repo.Count()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n, "only the new entry should remain")
+}
+
+// TestCatalogRepo_ListAll 返回全量 catalog 条目。
+func TestCatalogRepo_ListAll(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewModelCatalogRepo(db)
+
+	require.NoError(t, repo.Upsert(newCatalogEntry("a")))
+	require.NoError(t, repo.Upsert(newCatalogEntry("b")))
+	require.NoError(t, repo.Upsert(newCatalogEntry("c")))
+
+	all, err := repo.ListAll()
+	require.NoError(t, err)
+	assert.Len(t, all, 3)
+}
+
+func TestCatalogRepo_ListAutoBindCandidates(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewModelCatalogRepo(db)
+
+	entry := newCatalogEntry("gpt-4o")
+	entry.Provider = "openai"
+	entry.RawPayload = `{"large":"payload"}`
+	require.NoError(t, repo.Upsert(entry))
+
+	all, err := repo.ListAutoBindCandidates()
+	require.NoError(t, err)
+	require.Len(t, all, 1)
+	assert.Equal(t, entry.ID, all[0].ID)
+	assert.Equal(t, "gpt-4o", all[0].SourceModelID)
+	assert.Equal(t, "openai", all[0].Provider)
+	assert.Empty(t, all[0].RawPayload, "auto-bind candidates should not load raw_payload")
+}
+
+// TestCatalogRepo_Search_BySource 验证按 source 过滤。
+func TestCatalogRepo_Search_BySource(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewModelCatalogRepo(db)
+
+	lite := newCatalogEntry("gpt-4o")
+	lite.Source = "litellm"
+	require.NoError(t, repo.Upsert(lite))
+
+	other := newCatalogEntry("custom-model")
+	other.Source = "internal"
+	require.NoError(t, repo.Upsert(other))
+
+	results, total, err := repo.Search(CatalogSearchOpts{Source: "litellm", Limit: 20})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), total)
+	require.Len(t, results, 1)
+	assert.Equal(t, "gpt-4o", results[0].SourceModelID)
+}
+
+// TestCatalogRepo_Search_CaseInsensitive 模糊匹配应大小写不敏感。
+func TestCatalogRepo_Search_CaseInsensitive(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewModelCatalogRepo(db)
+
+	require.NoError(t, repo.Upsert(newCatalogEntry("GPT-4O-2024-11-20")))
+
+	results, total, err := repo.Search(CatalogSearchOpts{Query: "gpt-4o", Limit: 20})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), total)
+	require.Len(t, results, 1)
+}
+
+// TestCatalogRepo_Search_CombinedFilters 多个 filter 组合使用。
+func TestCatalogRepo_Search_CombinedFilters(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewModelCatalogRepo(db)
+
+	openaiChat := newCatalogEntry("gpt-4o")
+	openaiChat.Provider = "openai"
+	openaiChat.Mode = "chat"
+	require.NoError(t, repo.Upsert(openaiChat))
+
+	openaiEmb := newCatalogEntry("text-embedding-3-small")
+	openaiEmb.Provider = "openai"
+	openaiEmb.Mode = "embedding"
+	require.NoError(t, repo.Upsert(openaiEmb))
+
+	anthropicChat := newCatalogEntry("claude-3-opus")
+	anthropicChat.Provider = "anthropic"
+	anthropicChat.Mode = "chat"
+	require.NoError(t, repo.Upsert(anthropicChat))
+
+	results, total, err := repo.Search(CatalogSearchOpts{Provider: "openai", Mode: "chat", Limit: 20})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), total)
+	require.Len(t, results, 1)
+	assert.Equal(t, "gpt-4o", results[0].SourceModelID)
+}
+
+// TestCatalogRepo_Search_EmptyQueryReturnsAll 空 query 不做模糊匹配，返回全量（受 limit 控制）。
+func TestCatalogRepo_Search_EmptyQueryReturnsAll(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewModelCatalogRepo(db)
+
+	for i := 0; i < 3; i++ {
+		require.NoError(t, repo.Upsert(newCatalogEntry("model-"+uuid.NewString()[:6])))
+	}
+
+	results, total, err := repo.Search(CatalogSearchOpts{Limit: 20})
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), total)
+	assert.Len(t, results, 3)
+}
+
+// TestCatalogRepo_Search_DisplayNameFuzzy display_name 也能模糊匹配。
+func TestCatalogRepo_Search_DisplayNameFuzzy(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewModelCatalogRepo(db)
+
+	entry := newCatalogEntry("gpt-4o")
+	entry.DisplayName = "GPT-4o Turbo Model"
+	require.NoError(t, repo.Upsert(entry))
+
+	results, total, err := repo.Search(CatalogSearchOpts{Query: "turbo", Limit: 20})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), total)
+	require.Len(t, results, 1)
+}
+
+func TestCatalogRepo_Upsert_AutoGenerateID(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewModelCatalogRepo(db)
+
+	entry := newCatalogEntry("auto-id-model")
+	entry.ID = uuid.Nil
+	require.NoError(t, repo.Upsert(entry))
+
+	got, err := repo.GetBySourceModelID("litellm", "auto-id-model")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.NotEqual(t, uuid.Nil, got.ID, "ID should be auto-generated when nil")
+}
+
+func TestCatalogRepo_Upsert_DefaultSource(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewModelCatalogRepo(db)
+
+	entry := newCatalogEntry("no-source-model")
+	entry.Source = ""
+	require.NoError(t, repo.Upsert(entry))
+
+	got, err := repo.GetBySourceModelID("litellm", "no-source-model")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "litellm", got.Source, "empty source should default to litellm")
+}
+
+func TestCatalogRepo_Upsert_DefaultSyncedAt(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewModelCatalogRepo(db)
+
+	entry := newCatalogEntry("no-syncedat-model")
+	entry.SyncedAt = time.Time{}
+	before := time.Now()
+	require.NoError(t, repo.Upsert(entry))
+
+	got, err := repo.GetBySourceModelID("litellm", "no-syncedat-model")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.True(t, got.SyncedAt.After(before.Add(-5*time.Second)), "zero synced_at should be auto-set to now")
+}
+
+func TestCatalogRepo_Search_LimitBounds(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewModelCatalogRepo(db)
+
+	for i := 0; i < 25; i++ {
+		require.NoError(t, repo.Upsert(newCatalogEntry("model-"+uuid.NewString()[:6])))
+	}
+
+	results, total, err := repo.Search(CatalogSearchOpts{Limit: 0})
+	require.NoError(t, err)
+	assert.Len(t, results, 20, "limit=0 should default to 20")
+	assert.Equal(t, int64(25), total)
+
+	results, total, err = repo.Search(CatalogSearchOpts{Limit: 250})
+	require.NoError(t, err)
+	assert.Len(t, results, 20, "limit>200 should default to 20")
+	assert.Equal(t, int64(25), total)
+}
+
+func TestCatalogRepo_Search_OrderByCreatedAtDesc(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewModelCatalogRepo(db)
+
+	require.NoError(t, repo.Upsert(newCatalogEntry("first")))
+	time.Sleep(10 * time.Millisecond)
+	require.NoError(t, repo.Upsert(newCatalogEntry("second")))
+
+	results, _, err := repo.Search(CatalogSearchOpts{Limit: 20})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "second", results[0].SourceModelID, "newest should come first")
+	assert.Equal(t, "first", results[1].SourceModelID)
+}
+
+func TestCatalogRepo_List_DefaultLimit(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewModelCatalogRepo(db)
+
+	for i := 0; i < 60; i++ {
+		require.NoError(t, repo.Upsert(newCatalogEntry("model-"+uuid.NewString()[:6])))
+	}
+
+	results, total, err := repo.List(CatalogListFilter{}, 0, 0)
+	require.NoError(t, err)
+	assert.Equal(t, int64(60), total)
+	assert.Len(t, results, 50, "limit=0 should default to 50")
+}

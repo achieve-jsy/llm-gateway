@@ -3,17 +3,15 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
+	cpservice "github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -31,10 +29,11 @@ type ModelCheckResult struct {
 
 // ModelCheckAllResult 批量模型检测汇总结果
 type ModelCheckAllResult struct {
-	Total   int                `json:"total"`
-	Success int                `json:"success"`
-	Failed  int                `json:"failed"`
-	Results []ModelCheckResult `json:"results"`
+	Total          int                `json:"total"`
+	Success        int                `json:"success"`
+	Failed         int                `json:"failed"`
+	FailureSummary map[string]int     `json:"failure_summary,omitempty"`
+	Results        []ModelCheckResult `json:"results"`
 }
 
 // ModelCheckHandler 模型健康检测 Handler
@@ -81,7 +80,8 @@ func (h *ModelCheckHandler) CheckAll(c *gin.Context) {
 	}
 
 	result := &ModelCheckAllResult{
-		Results: make([]ModelCheckResult, 0),
+		FailureSummary: make(map[string]int),
+		Results:        make([]ModelCheckResult, 0),
 	}
 
 	// 并发检测，最多 10 个 goroutine
@@ -110,6 +110,7 @@ func (h *ModelCheckHandler) CheckAll(c *gin.Context) {
 				result.Success++
 			} else {
 				result.Failed++
+				result.FailureSummary[classifyModelCheckError(cr.Error)]++
 			}
 			mu.Unlock()
 		}(m)
@@ -117,6 +118,26 @@ func (h *ModelCheckHandler) CheckAll(c *gin.Context) {
 
 	wg.Wait()
 	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+func classifyModelCheckError(errMsg string) string {
+	lower := strings.ToLower(errMsg)
+	switch {
+	case strings.Contains(lower, "401") || strings.Contains(lower, "invalid api key") || strings.Contains(lower, "invalid key") || strings.Contains(lower, "authentication fails"):
+		return "invalid_api_key"
+	case strings.Contains(lower, "403") || strings.Contains(lower, "access denied"):
+		return "access_denied"
+	case strings.Contains(lower, "404") || strings.Contains(lower, "model_not_found") || strings.Contains(lower, "does not exist"):
+		return "model_not_found"
+	case strings.Contains(lower, "429") || strings.Contains(lower, "rate limit") || strings.Contains(lower, "limit_requests"):
+		return "rate_limited"
+	case strings.Contains(lower, "product is not activated") || strings.Contains(lower, "not activated"):
+		return "product_not_activated"
+	case strings.Contains(lower, "timeout") || strings.Contains(lower, "超时"):
+		return "timeout"
+	default:
+		return "other"
+	}
 }
 
 // checkModel 执行单个模型的健康检测
@@ -159,8 +180,8 @@ func (h *ModelCheckHandler) checkModel(ctx context.Context, m *model.Model) *Mod
 		modelName = m.Name
 	}
 
-	// 发送检测请求
-	success, responseTime, errMsg := doModelCheck(ctx, provider.Endpoint, modelName, apiKey)
+	// 发送检测请求（对 thinking / stream-only / 非 chat 模型做自适应处理）
+	success, skipped, responseTime, errMsg := cpservice.ProbeModelForward(ctx, provider.Endpoint, modelName, apiKey)
 	cr.ResponseTime = responseTime
 
 	if success {
@@ -168,11 +189,16 @@ func (h *ModelCheckHandler) checkModel(ctx context.Context, m *model.Model) *Mod
 		cr.Success = true
 		h.modelRepo.ResetModelFailures(m.ID)
 		h.modelRepo.UpdateModelCheckResult(m.ID, responseTime, "")
-		if m.Enabled == nil || !*m.Enabled {
+		if shouldAutoReenableModel(m, h.getModelFailureThreshold()) {
 			enabled := true
 			h.modelRepo.UpdateEnabled(m.ID, &enabled)
 			cr.AutoReenabled = true
 		}
+	} else if skipped {
+		// 不适合标准 chat 探针的模型不计失败，也不保留错误状态。
+		cr.Success = true
+		h.modelRepo.ResetModelFailures(m.ID)
+		h.modelRepo.UpdateModelCheckResult(m.ID, 0, "")
 	} else {
 		// 检测失败：递增失败计数 + 保存错误
 		cr.Error = errMsg
@@ -183,18 +209,29 @@ func (h *ModelCheckHandler) checkModel(ctx context.Context, m *model.Model) *Mod
 	return cr
 }
 
-// handleModelFailure 处理模型检测失败（递增计数，可能自动禁用）
-func (h *ModelCheckHandler) handleModelFailure(id uuid.UUID, cr *ModelCheckResult) {
+func (h *ModelCheckHandler) getModelFailureThreshold() int {
 	maxFailures := 3
 	config, err := h.healthRepo.GetConfig()
 	if err == nil && config != nil {
-		// 优先使用模型检测独立阈值
 		if config.ModelCheckFailureThreshold > 0 {
 			maxFailures = config.ModelCheckFailureThreshold
 		} else if config.FailureThreshold > 0 {
 			maxFailures = config.FailureThreshold
 		}
 	}
+	return maxFailures
+}
+
+func shouldAutoReenableModel(m *model.Model, threshold int) bool {
+	if m == nil || m.Enabled == nil || *m.Enabled {
+		return false
+	}
+	return m.ConsecutiveFailures >= threshold
+}
+
+// handleModelFailure 处理模型检测失败（递增计数，可能自动禁用）
+func (h *ModelCheckHandler) handleModelFailure(id uuid.UUID, cr *ModelCheckResult) {
+	maxFailures := h.getModelFailureThreshold()
 
 	newCount, err := h.modelRepo.IncrementModelFailures(id)
 	if err != nil {
@@ -214,57 +251,4 @@ func (h *ModelCheckHandler) handleModelFailure(id uuid.UUID, cr *ModelCheckResul
 			cr.AutoDisabled = true
 		}
 	}
-}
-
-// doModelCheck 向上游发送 chat/completions 请求检测模型可用性
-func doModelCheck(ctx context.Context, endpoint string, modelName string, apiKey string) (success bool, responseTime int, errMsg string) {
-	url := strings.TrimRight(endpoint, "/") + "/chat/completions"
-	chatReq := map[string]interface{}{
-		"model":          modelName,
-		"messages":       []map[string]string{{"role": "user", "content": "hi"}},
-		"max_tokens":     1,
-		"enable_thinking": false, // 兼容 qwen3 系列：非流式调用必须关闭思维链
-	}
-	body, _ := json.Marshal(chatReq)
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	start := time.Now()
-	req, _ := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(body)))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	resp, err := client.Do(req)
-	elapsed := int(time.Since(start).Milliseconds())
-
-	if err != nil {
-		return false, elapsed, fmt.Sprintf("请求失败: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return false, elapsed, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, truncateModelCheckStr(string(respBody), 200))
-	}
-
-	// 验证 choices 非空
-	respBody, _ := io.ReadAll(resp.Body)
-	var chatResp struct {
-		Choices []interface{} `json:"choices"`
-	}
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return false, elapsed, fmt.Sprintf("响应体解析失败: %v", err)
-	}
-	if len(chatResp.Choices) == 0 {
-		return false, elapsed, "响应 choices 为空"
-	}
-
-	return true, elapsed, ""
-}
-
-// truncateModelCheckStr 截断字符串
-func truncateModelCheckStr(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }

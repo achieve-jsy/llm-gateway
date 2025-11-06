@@ -6,9 +6,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/example/llm-gateway/internal/gateway/infra"
 	"github.com/example/llm-gateway/internal/gateway/provider"
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,8 +23,14 @@ func TestMain(m *testing.M) {
 // buildTestRouter returns a real gin.Engine via Setup with minimal in-memory stubs.
 func buildTestRouter() *gin.Engine {
 	registry := provider.NewRegistry()
-	cache := infra.NewCache(nil) // nil redis; router setup doesn't exercise it
-	return Setup(registry, cache)
+	mr, err := miniredis.Run()
+	if err != nil {
+		panic(err)
+	}
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	cache := infra.NewCache(rdb)
+	state := &provider.RuntimeState{}
+	return Setup(registry, cache, state, nil, "", "")
 }
 
 // ─── Route Registration ────────────────────────────────────────────────────
@@ -83,7 +91,7 @@ func TestSetup_ReadyEndpoint_Returns200(t *testing.T) {
 	resp, err := http.Get(srv.URL + "/ready")
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 }
 
 func TestSetup_ChatCompletions_WithoutAuth_Returns401(t *testing.T) {

@@ -39,9 +39,8 @@ const http: AxiosInstance = axios.create({
 /** 请求拦截器：注入认证 Token */
 http.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    // 开发阶段使用固定 Token（后续对接 SSO 后从 Cookie/Storage 中读取）
-    const token = localStorage.getItem('auth_token') || 'dev-token'
-    if (config.headers) {
+    const token = localStorage.getItem('access_token')
+    if (token && config.headers) {
       config.headers.Authorization = `Bearer ${token}`
     }
     return config

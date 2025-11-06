@@ -133,14 +133,15 @@ func TestSubscriber_StartAndReceive(t *testing.T) {
 	// miniredis 是即时的；多发几次确保被消费
 	deadline := time.After(2 * time.Second)
 	for {
-		ev := ChangeEvent{Type: "provider_created", ResourceType: "provider", ResourceID: "id-1", Timestamp: time.Now().UTC()}
-		payload, _ := json.Marshal(ev)
-		require.NoError(t, rdb.Publish(ctx, ConfigChangeChannel, string(payload)).Err())
+			ev := ChangeEvent{Type: "provider_created", ResourceType: "provider", ResourceID: "id-1", SnapshotVersion: 7, Timestamp: time.Now().UTC()}
+			payload, _ := json.Marshal(ev)
+			require.NoError(t, rdb.Publish(ctx, ConfigChangeChannel, string(payload)).Err())
 
 		select {
 		case got := <-received:
 			assert.Equal(t, ev.Type, got.Type)
 			assert.Equal(t, ev.ResourceID, got.ResourceID)
+			assert.Equal(t, ev.SnapshotVersion, got.SnapshotVersion)
 			return
 		case <-time.After(100 * time.Millisecond):
 			// 重试
@@ -166,8 +167,9 @@ func TestSubscriber_HandleMessage_Valid(t *testing.T) {
 
 	var got ChangeEvent
 	sub := NewSubscriber(rdb, func(e ChangeEvent) { got = e })
-	payload, _ := json.Marshal(ChangeEvent{Type: "model_created", ResourceID: "abc"})
+	payload, _ := json.Marshal(ChangeEvent{Type: "model_created", ResourceID: "abc", SnapshotVersion: 11})
 	sub.handleMessage(&redis.Message{Payload: string(payload)})
 	assert.Equal(t, "model_created", got.Type)
 	assert.Equal(t, "abc", got.ResourceID)
+	assert.Equal(t, int64(11), got.SnapshotVersion)
 }

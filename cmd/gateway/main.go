@@ -3,14 +3,23 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/example/llm-gateway/internal/configsync"
 	"github.com/joho/godotenv"
+
+	acrypto "github.com/example/llm-gateway/internal/auth/crypto"
+	authcfg "github.com/example/llm-gateway/internal/auth/config"
+	authhandler "github.com/example/llm-gateway/internal/auth/handler"
+	authsvc "github.com/example/llm-gateway/internal/auth/service"
 
 	"github.com/example/llm-gateway/internal/gateway/config"
 	"github.com/example/llm-gateway/internal/gateway/infra"
@@ -22,7 +31,13 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/provider/deepseek"
 	"github.com/example/llm-gateway/internal/gateway/provider/litellm"
 	"github.com/example/llm-gateway/internal/gateway/server"
+	"github.com/redis/go-redis/v9"
 )
+
+type providerLoadResult struct {
+	source  string
+	version int64
+}
 
 func main() {
 	// 加载 .env 文件（开发环境，文件不存在时不报错）
@@ -52,36 +67,41 @@ func main() {
 
 	// 初始化 Provider Registry
 	registry := provider.NewRegistry()
+	state := &provider.RuntimeState{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// 尝试从 control-plane 加载 Provider 配置
 	controlPlaneURL := cfg.Provider.ControlPlaneURL
 	internalToken := cfg.Provider.InternalToken
 
-	if controlPlaneURL != "" && internalToken != "" {
-		if err := loadAndRegisterProviders(registry, controlPlaneURL, internalToken); err != nil {
-			slog.Warn("failed to load from control-plane, falling back to env vars", "error", err)
-			registerProvidersFromEnv(registry)
-		} else {
-			slog.Info("providers loaded from control-plane successfully")
-		}
-	} else {
+	if result, err := loadProviders(ctx, rdb, registry, controlPlaneURL, internalToken); err != nil {
+		state.MarkLoadFailure(err)
+		slog.Warn("failed to load providers from shared sources, falling back to env vars", "error", err)
 		registerProvidersFromEnv(registry)
+		state.MarkLoadSuccess("env", len(registry.ListAllModels()), 0)
+	} else {
+		state.MarkLoadSuccess(result.source, len(registry.ListAllModels()), result.version)
 	}
 
 	// 启动配置变更订阅（US-06）
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	subscriber := infra.NewSubscriber(rdb, func(ev infra.ChangeEvent) {
+		loaded, _, _, _, _, currentVersion := state.Snapshot()
+		if ev.SnapshotVersion != 0 && loaded && len(registry.ListAllModels()) > 0 && ev.SnapshotVersion == currentVersion {
+			slog.Info("config change already applied, skipping reload", "type", ev.Type, "snapshot_version", ev.SnapshotVersion)
+			return
+		}
 		slog.Info("config change received, reloading registry", "type", ev.Type, "resource_type", ev.ResourceType)
-		if controlPlaneURL != "" && internalToken != "" {
-			if err := loadAndRegisterProviders(registry, controlPlaneURL, internalToken); err != nil {
-				slog.Error("failed to reload providers from control-plane", "error", err)
-			} else {
-				slog.Info("registry reloaded successfully")
-			}
+		if result, err := loadProviders(ctx, rdb, registry, controlPlaneURL, internalToken); err != nil {
+			state.MarkLoadFailure(err)
+			slog.Error("failed to reload providers", "error", err)
+		} else {
+			state.MarkLoadSuccess(result.source, len(registry.ListAllModels()), result.version)
+			slog.Info("registry reloaded successfully")
 		}
 	})
+
+	go reconcileProviders(ctx, rdb, registry, state, controlPlaneURL, internalToken)
 
 	go subscriber.Start(ctx)
 
@@ -94,13 +114,106 @@ func main() {
 		cancel()
 	}()
 
+	authClient := infra.NewAuthClient(cfg.Auth.URL, cfg.Auth.Token)
+
+	// Wire auth services (JWT / Key Auth / OIDC)
+	authJWTManager, err := acrypto.NewJWTManagerFromEnv()
+	if err != nil {
+		slog.Warn("JWT manager init failed, JWKS/token endpoints disabled", "error", err)
+	}
+	authTokenSvc := authsvc.NewTokenService(authJWTManager)
+
+	authHTTPClient := &http.Client{Timeout: 5 * time.Second}
+	authKeyAuthSvc := authsvc.NewKeyAuthService(authHTTPClient, rdb, controlPlaneURL, internalToken)
+
+	authOIDCSvc, _ := authsvc.NewOIDCService(authcfg.OIDCConfig{
+		IssuerURL:        cfg.OIDC.IssuerURL,
+		ClientID:         cfg.OIDC.ClientID,
+		ClientSecret:     cfg.OIDC.ClientSecret,
+		RedirectURL:      cfg.OIDC.RedirectURL,
+		FrontendURL:      cfg.OIDC.FrontendURL,
+		Scopes:           cfg.OIDC.Scopes,
+		RoleClaimPath:    cfg.OIDC.RoleClaimPath,
+		AdminMatchValues: cfg.OIDC.AdminMatchValues,
+		DefaultRole:      cfg.OIDC.DefaultRole,
+	})
+	_ = authOIDCSvc
+
+	// Auth handlers
+	authJWKSHandler := authhandler.NewJWKSHandler()
+	authTokenHandler := authhandler.NewTokenHandler(authTokenSvc, rdb)
+	authInternalHandler := authhandler.NewInternalHandler(authKeyAuthSvc)
+
 	// 初始化路由（注入依赖）
-	r := server.Setup(registry, cache)
+	r := server.Setup(registry, cache, state, authClient, controlPlaneURL, internalToken)
+
+	// Register auth routes
+	r.GET("/.well-known/jwks.json", authJWKSHandler.GetJWKS)
+	r.POST("/auth/refresh", authTokenHandler.Refresh)
+	r.POST("/auth/logout", authTokenHandler.Logout)
+	r.POST("/internal/v1/auth/verify-key", authInternalHandler.VerifyKey)
 
 	// 启动服务
 	slog.Info("gateway starting", "port", cfg.Server.Port)
 	if err := r.Run(":" + cfg.Server.Port); err != nil {
 		log.Fatalf("failed to start server: %v", err)
+	}
+}
+
+func loadProviders(ctx context.Context, rdb *redis.Client, registry *provider.Registry, controlPlaneURL, token string) (*providerLoadResult, error) {
+	if result, err := loadAndRegisterProvidersFromSnapshot(ctx, rdb, registry); err == nil {
+		slog.Info("providers loaded from redis snapshot successfully")
+		return result, nil
+	} else {
+		slog.Warn("failed to load providers from redis snapshot", "error", err)
+	}
+
+	if controlPlaneURL != "" && token != "" {
+		if err := loadAndRegisterProviders(registry, controlPlaneURL, token); err != nil {
+			return nil, fmt.Errorf("load providers from control-plane: %w", err)
+		}
+		slog.Info("providers loaded from control-plane successfully")
+		return &providerLoadResult{source: "control-plane", version: 0}, nil
+	}
+
+	return nil, fmt.Errorf("no provider snapshot or control-plane source available")
+}
+
+func loadAndRegisterProvidersFromSnapshot(ctx context.Context, rdb *redis.Client, registry *provider.Registry) (*providerLoadResult, error) {
+	snapshot, err := configsync.LoadProviderSnapshot(ctx, rdb)
+	if err != nil {
+		return nil, err
+	}
+
+	registry.Reload(snapshot.Entries, providerFactory)
+	slog.Info("registry reloaded from redis snapshot", "providers", len(snapshot.Entries), "version", snapshot.Version)
+	return &providerLoadResult{source: "redis-snapshot", version: snapshot.Version}, nil
+}
+
+func reconcileProviders(ctx context.Context, rdb *redis.Client, registry *provider.Registry, state *provider.RuntimeState, controlPlaneURL, token string) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			loaded, _, _, _, _, currentVersion := state.Snapshot()
+			if snapshot, err := configsync.LoadProviderSnapshot(ctx, rdb); err == nil {
+				if loaded && len(registry.ListAllModels()) > 0 && snapshot.Version == currentVersion {
+					continue
+				}
+			}
+
+			if result, err := loadProviders(ctx, rdb, registry, controlPlaneURL, token); err != nil {
+				state.MarkLoadFailure(err)
+				slog.Warn("periodic provider reconcile failed", "error", err)
+				continue
+			} else {
+				state.MarkLoadSuccess(result.source, len(registry.ListAllModels()), result.version)
+			}
+		}
 	}
 }
 

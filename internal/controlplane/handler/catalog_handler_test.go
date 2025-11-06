@@ -435,3 +435,194 @@ func TestCatalogHandler_SyncStatus_ServiceError(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/sync-status", nil))
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
+
+func TestCatalogHandler_GetBySource_MissingSourceModelID(t *testing.T) {
+	r := newCatalogRouter(&fakeCatalogService{})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/by-source", nil))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "source_model_id is required")
+}
+
+func TestCatalogHandler_GetBySource_ServiceError(t *testing.T) {
+	svc := &fakeCatalogService{getBySrcFn: func(source, id string) (*model.ModelCatalog, error) {
+		return nil, errors.New("db error")
+	}}
+	r := newCatalogRouter(svc)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/by-source?source_model_id=x", nil))
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestCatalogHandler_Search_ServiceError(t *testing.T) {
+	svc := &fakeCatalogService{searchFn: func(opts repository.CatalogSearchOpts) ([]model.ModelCatalog, int64, error) {
+		return nil, 0, errors.New("db down")
+	}}
+	r := newCatalogRouter(svc)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/search", nil))
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestCatalogHandler_GetByID_InvalidUUID(t *testing.T) {
+	r := newCatalogRouter(&fakeCatalogService{})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/not-a-uuid", nil))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "invalid id")
+}
+
+func TestCatalogHandler_GetByID_NotFound(t *testing.T) {
+	svc := &fakeCatalogService{getByIDFn: func(id uuid.UUID) (*model.ModelCatalog, error) {
+		return nil, nil
+	}}
+	r := newCatalogRouter(svc)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/"+uuid.NewString(), nil))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestCatalogHandler_GetByID_ServiceError(t *testing.T) {
+	svc := &fakeCatalogService{getByIDFn: func(id uuid.UUID) (*model.ModelCatalog, error) {
+		return nil, errors.New("db")
+	}}
+	r := newCatalogRouter(svc)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/"+uuid.NewString(), nil))
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestCatalogHandler_Diff_ServiceError(t *testing.T) {
+	svc := &fakeCatalogService{computeDiffFn: func(ctx context.Context) ([]service.PriceDiffEntry, error) {
+		return nil, errors.New("db")
+	}}
+	r := newCatalogRouter(svc)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/diff", nil))
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestCatalogHandler_ApplyDiff_EmptyBody(t *testing.T) {
+	r := newCatalogRouter(&fakeCatalogService{})
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/v1/model-catalog/apply-diff", nil)
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestCatalogHandler_ApplyDiff_EmptyModelIDs(t *testing.T) {
+	r := newCatalogRouter(&fakeCatalogService{})
+	body := []byte(`{"model_ids": []}`)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/v1/model-catalog/apply-diff", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestCatalogHandler_GetBySource_DefaultSource(t *testing.T) {
+	svc := &fakeCatalogService{getBySrcFn: func(source, id string) (*model.ModelCatalog, error) {
+		assert.Equal(t, "litellm", source, "default source should be litellm")
+		return &model.ModelCatalog{ID: uuid.New(), SourceModelID: id}, nil
+	}}
+	r := newCatalogRouter(svc)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/by-source?source_model_id=gpt-4o", nil))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestCatalogHandler_Search_DefaultLimit(t *testing.T) {
+	svc := &fakeCatalogService{searchFn: func(opts repository.CatalogSearchOpts) ([]model.ModelCatalog, int64, error) {
+		assert.Equal(t, 20, opts.Limit, "default limit should be 20")
+		return []model.ModelCatalog{}, 0, nil
+	}}
+	r := newCatalogRouter(svc)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/search", nil))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestCatalogHandler_GetByID_OK(t *testing.T) {
+	want := &model.ModelCatalog{ID: uuid.New(), SourceModelID: "gpt-4o", Provider: "openai"}
+	svc := &fakeCatalogService{getByIDFn: func(id uuid.UUID) (*model.ModelCatalog, error) {
+		assert.Equal(t, want.ID, id)
+		return want, nil
+	}}
+	r := newCatalogRouter(svc)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/"+want.ID.String(), nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "gpt-4o")
+}
+
+func TestCatalogHandler_Search_SourceParam(t *testing.T) {
+	svc := &fakeCatalogService{searchFn: func(opts repository.CatalogSearchOpts) ([]model.ModelCatalog, int64, error) {
+		assert.Equal(t, "litellm", opts.Source)
+		assert.Equal(t, "gpt", opts.Query)
+		return []model.ModelCatalog{}, 0, nil
+	}}
+	r := newCatalogRouter(svc)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/search?source=litellm&q=gpt", nil))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestCatalogHandler_Diff_OK_Empty(t *testing.T) {
+	svc := &fakeCatalogService{computeDiffFn: func(ctx context.Context) ([]service.PriceDiffEntry, error) {
+		return []service.PriceDiffEntry{}, nil
+	}}
+	r := newCatalogRouter(svc)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/diff", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	data := resp["data"].([]any)
+	assert.Len(t, data, 0)
+	assert.Equal(t, float64(0), resp["total"])
+}
+
+func TestCatalogHandler_ApplyDiff_OK_SingleID(t *testing.T) {
+	id := uuid.New()
+	svc := &fakeCatalogService{applyDiffFn: func(ctx context.Context, ids []uuid.UUID) (int, error) {
+		assert.Len(t, ids, 1)
+		assert.Equal(t, id, ids[0])
+		return 1, nil
+	}}
+	r := newCatalogRouter(svc)
+	body, _ := json.Marshal(map[string]any{"model_ids": []string{id.String()}})
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/v1/model-catalog/apply-diff", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"updated":1`)
+}
+
+func TestCatalogHandler_Sync_ReturnsSyncingTrue(t *testing.T) {
+	svc := &fakeCatalogService{syncFromRemote: func(ctx context.Context) (int, error) { return 0, nil }}
+	r := newCatalogRouter(svc)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("POST", "/api/v1/model-catalog/sync", nil))
+	require.Equal(t, http.StatusAccepted, w.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+	assert.Equal(t, true, data["syncing"])
+}
+
+func TestCatalogHandler_BindingStats_OK_Empty(t *testing.T) {
+	svc := &fakeCatalogService{bindingStatsFn: func(ctx context.Context) (*service.BindingStats, error) {
+		return &service.BindingStats{CatalogTotal: 0, ModelTotal: 0, BoundCount: 0, UnboundCount: 0}, nil
+	}}
+	r := newCatalogRouter(svc)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/model-catalog/binding-stats", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+	assert.Equal(t, float64(0), data["catalog_total"])
+	assert.Equal(t, float64(0), data["model_total"])
+}

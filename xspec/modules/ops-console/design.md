@@ -197,11 +197,11 @@
 │  └─────────────────────────────────────────────────────────────────┘│
 │                                                                      │
 │  ┌─── 渠道列表表格  #1E1E1E  radius:16px  border:#2C2C2E ────────┐│
-│  │ 渠道名称     │ 类型      │ 状态   │ 创建时间        │ 操作      ││
-│  ├──────────────┼───────────┼────────┼─────────────────┼──────────┤│
-│  │ OpenAI生产   │ openai    │ 🟢启用 │ 2026-05-01      │ 编辑│禁用││
-│  │ Azure备份    │ azure     │ 🔴禁用 │ 2026-05-10      │ 编辑│启用││
-│  │ 千问主力     │ alibaba   │ 🟢启用 │ 2026-05-15      │ 编辑│禁用││
+│  │ 渠道名称     │ 类型      │ 状态   │ 创建时间        │ 操作           ││
+│  ├──────────────┼───────────┼────────┼─────────────────┼─────────────────┤│
+│  │ OpenAI生产   │ openai    │ 🟢启用 │ 2026-05-01      │ 编辑│同步│禁用 ││
+│  │ Azure备份    │ azure     │ 🔴禁用 │ 2026-05-10      │ 编辑│同步(灰)│启用││
+│  │ 千问主力     │ alibaba   │ 🟢启用 │ 2026-05-15      │ 编辑│同步│禁用 ││
 │  └──────────────┴───────────┴────────┴─────────────────┴──────────┘│
 │                                                                      │
 │  状态指示灯：🟢 #32D74B（启用）  🔴 #FF453A（禁用）                 │
@@ -250,6 +250,26 @@
 └───────────────────────────────────────┘
 ```
 
+**同步模型弹窗（SyncModelsDialog）**：
+
+```
+┌─────────────────────────────────────────────┐
+│ 同步模型 — 百炼                        [×] │
+├─────────────────────────────────────────────┤
+│ 新增 238 个 │ 已存在 5 个 │ 已下架 1 个   │
+├─────────────────────────────────────────────┤
+│ 🔍 [搜索模型名称...                     ]  │
+├─────────────────────────────────────────────┤
+│ ☑ qwen-max                      [新增]    │
+│ ☑ qwen-plus                     [新增]    │
+│ ☐ qwen-turbo              [已存在] (禁用) │
+│ ☑ qwen-vl-max                   [新增]    │
+│ ...（滚动）                                │
+├─────────────────────────────────────────────┤
+│ [☑ 一键全选]        [取消]  [确认注册(3)]  │
+└─────────────────────────────────────────────┘
+```
+
 **删除确认弹窗**：
 
 ```
@@ -278,6 +298,7 @@
 | 创建/编辑对话框 | POST/PUT /api/v1/providers | 表单：名称、类型选择、Endpoint、凭证、启用开关 | 必填校验；编辑时凭证脱敏显示，留空不修改 |
 | 禁用确认弹窗 | 无 | 影响提示文案 | 确认后 PUT 修改状态 |
 | 删除确认弹窗 | GET /api/v1/providers/{id}/models 计数 | 有模型时阻断提示，无模型时确认提示 | 阻断态仅关闭；无模型态确认后 DELETE |
+| 同步模型弹窗 | POST /api/v1/providers/{id}/sync-models | 标题含渠道名、统计栏（新增/已存在/已下架）、搜索框、勾选列表、一键全选+确认注册 | 搜索实时过滤；"已存在"checkbox 禁用；一键全选仅选"新增"；确认后 POST confirm 接口 |
 
 ### 4.6 模型管理页（/admin/models）
 
@@ -361,6 +382,7 @@ graph TD
     ProvPage["ProviderListPage.vue（渠道管理页）"]
     ProvTable["ProviderTable.vue（渠道列表表格）"]
     ProvDialog["ProviderFormDialog.vue（创建/编辑对话框）"]
+    SyncDlg["SyncModelsDialog.vue（同步结果弹窗）"]
     ProvAPI["control-plane /api/v1/providers"]
 
     ModelPage["ModelListPage.vue（模型管理页）"]
@@ -383,7 +405,9 @@ graph TD
 
     ProvPage --> ProvTable
     ProvPage --> ProvDialog
+    ProvPage --> SyncDlg
     ProvPage -.->|"CRUD 请求"| ProvAPI
+    SyncDlg -.->|"同步确认请求"| ProvAPI
 
     ModelPage --> ModelTable
     ModelPage --> ModelDialog
@@ -402,6 +426,7 @@ graph TD
 | 页面容器 | ProviderListPage.vue | 渠道管理页状态管理、CRUD 接口调用、对话框控制 |
 | 功能区组件 | ProviderTable.vue | 渲染渠道列表表格（含状态指示灯、脱敏凭证、操作按钮） |
 | 功能区组件 | ProviderFormDialog.vue | 创建/编辑渠道表单对话框（含表单校验） |
+| 功能区组件 | SyncModelsDialog.vue | 同步结果弹窗：展示模型列表、关键词过滤、勾选、一键全选、确认注册 |
 | 页面容器 | ModelListPage.vue | 模型管理页状态管理、CRUD 接口调用、筛选逻辑 |
 | 功能区组件 | ModelTable.vue | 渲染模型列表表格（含分页、状态、操作） |
 | 功能区组件 | ModelFormDialog.vue | 注册/编辑模型表单对话框（含名称唯一性校验） |
@@ -616,6 +641,27 @@ sequenceDiagram
     Page-->>User: 刷新列表，ElMessage.success('模型已删除')
 ```
 
+### 6.5 同步模型流程
+
+```mermaid
+sequenceDiagram
+    participant User as 管理员
+    participant Btn as 同步按钮
+    participant API as control-plane
+    participant Dlg as SyncModelsDialog
+
+    User->>Btn: 点击"同步模型"
+    Btn->>API: POST /providers/:id/sync-models
+    API-->>Btn: SyncResult
+    Btn->>Dlg: 打开弹窗(result)
+    User->>Dlg: 输入关键词过滤
+    User->>Dlg: 一键全选 / 手动勾选
+    User->>Dlg: 确认注册
+    Dlg->>API: POST /providers/:id/sync-models/confirm
+    API-->>Dlg: {registered: 5}
+    Dlg-->>User: 成功提示 + 关闭弹窗
+```
+
 ---
 
 ## 7. 数据流转
@@ -697,6 +743,19 @@ stateDiagram-v2
 | UnifiedEntryPage | ModelDiscoverySection | loading | boolean |
 | UnifiedEntryPage | ModelDiscoverySection | error | string \| null |
 | ModelDiscoverySection | ModelCard | model | ModelInfo |
+| ProviderListPage | SyncModelsDialog | syncResult | SyncResult |
+| ProviderListPage | SyncModelsDialog | visible | boolean |
+
+### 8.5 SyncModelsDialog 状态管理
+
+组件内 ref 管理，无需 Pinia store。
+
+| 状态 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| syncResult | SyncResult \| null | 同步结果数据 |
+| filterKeyword | string | 搜索关键词 |
+| selectedModels | string[] | 勾选的模型名列表 |
+| confirming | boolean | 确认注册 loading |
 
 ---
 
@@ -727,6 +786,10 @@ stateDiagram-v2
 | POST/PUT 请求返回 422 | 对话框 | 解析 errors 字段，在对应表单项下方展示校验错误 | 后端返回字段级错误映射到 el-form-item |
 | DELETE 渠道返回 409（仍有模型） | 删除弹窗 | 阻断提示"该渠道下仍有模型，请先删除相关模型" | 前置检查 + 后端双重保护 |
 | PUT 禁用渠道返回 500 | 操作反馈 | ElMessage.error('操作失败，请稍后重试') | catch 中统一 toast 提示 |
+| POST sync-models 返回 400 (sync_not_supported) | 同步弹窗 | 弹窗显示"该渠道类型不支持自动同步，请手动注册或使用预置模型" | 根据 error.type 判断弹窗替换为提示信息 |
+| POST sync-models 返回 400 (provider_disabled) | 同步按钮 | ElMessage.warning('请先启用渠道') | 渠道禁用时按钮置灰，后端双重保护 |
+| POST sync-models 返回 502 (upstream_error) | 同步按钮 | ElMessage.error('厂商接口调用失败：' + message) | catch 中统一 toast 提示 |
+| POST sync-models/confirm 返回 500 | 同步弹窗 | ElMessage.error('注册失败，请稍后重试') | catch 中统一 toast 提示，弹窗不关闭 |
 
 ### 9.3 模型管理页错误处理
 

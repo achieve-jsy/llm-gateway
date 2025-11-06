@@ -228,6 +228,9 @@ describe('API Type Definitions', () => {
         max_retries: 3,
         timeout: 30,
         tag: 'production',
+        consecutive_failures: 0,
+        last_check_error: '',
+        model_count: 5,
         created_at: '2024-01-01T00:00:00Z',
         updated_at: '2024-01-01T00:00:00Z'
       }

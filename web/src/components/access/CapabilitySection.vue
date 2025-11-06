@@ -45,111 +45,118 @@ import config from '@/assets/capability.json'
 
 <style scoped>
 .capability-section {
-  margin-bottom: 32px;
+  margin-bottom: 28px;
 }
 
 .section-title {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 800;
   color: #1E8C86;
-  margin-bottom: 16px;
-  padding-bottom: 12px;
-  border-bottom: 3px dashed #D1E9E7;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #D9E6E5;
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
 .title-icon {
-  font-size: 20px;
+  font-size: 18px;
 }
 
 .exclude-title {
-  margin-top: 32px;
+  margin-top: 28px;
 }
 
 .capability-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
 }
 
 .capability-card {
   background: #FFFFFF;
-  border: 1px solid #D1E9E7;
-  border-radius: 12px;
+  border: 1px solid #D9E6E5;
+  border-radius: 8px;
   display: flex;
   overflow: hidden;
   transition: all 0.2s;
-  box-shadow: 0 2px 10px rgba(43, 168, 162, 0.06);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
 }
 
 .capability-card:hover {
-  box-shadow: 0 4px 20px rgba(43, 168, 162, 0.15);
-  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.07);
+  transform: translateY(-1px);
+  border-color: rgba(43, 168, 162, 0.28);
 }
 
 .card-accent {
-  width: 4px;
+  width: 3px;
   background: linear-gradient(180deg, #2BA8A2, #3CC4BD);
   flex-shrink: 0;
 }
 
 .card-body {
-  padding: 16px 20px;
+  padding: 14px 16px;
   flex: 1;
 }
 
 .card-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
+  gap: 8px;
+  margin-bottom: 6px;
 }
 
 .card-icon {
-  font-size: 20px;
+  font-size: 18px;
   color: #2BA8A2;
 }
 
 .card-title {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   color: #1E8C86;
 }
 
 .card-desc {
-  font-size: 13px;
+  font-size: 12px;
   color: #64748B;
-  line-height: 1.6;
+  line-height: 1.55;
   margin: 0;
 }
 
 .exclude-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .exclude-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 16px;
-  background: #FFF8E7;
+  padding: 10px 14px;
+  background: #FAFBF9;
   border-radius: 8px;
-  border: 1px solid #FFE47A;
+  border: 1px solid #E7ECE8;
 }
 
 .exclude-icon {
   font-size: 16px;
-  color: #E6B800;
+  color: #C49A3A;
 }
 
 .exclude-text {
-  font-size: 14px;
+  font-size: 13px;
   color: #64748B;
   font-weight: 500;
+}
+
+@media (max-width: 640px) {
+  .capability-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* 深色模式 */

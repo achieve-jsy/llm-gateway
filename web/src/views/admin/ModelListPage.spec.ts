@@ -19,6 +19,7 @@ vi.mock('@/services/control-plane', () => ({
   updateModel: vi.fn(),
   getProviders: vi.fn(),
   getModelTags: vi.fn(),
+  batchGetModelTags: vi.fn(),
   getModelTagsForModel: vi.fn(),
   resetModelOverride: vi.fn(),
   batchDeleteModels: vi.fn(),
@@ -32,6 +33,7 @@ import {
   updateModel,
   getProviders,
   getModelTags,
+  batchGetModelTags,
   getModelTagsForModel,
   resetModelOverride
 } from '@/services/control-plane'
@@ -41,6 +43,7 @@ const mockedDelete = vi.mocked(deleteModel)
 const mockedUpdate = vi.mocked(updateModel)
 const mockedGetProviders = vi.mocked(getProviders)
 const mockedGetTags = vi.mocked(getModelTags)
+const mockedBatchGetModelTags = vi.mocked(batchGetModelTags)
 const mockedGetForModel = vi.mocked(getModelTagsForModel)
 const mockedResetOverride = vi.mocked(resetModelOverride)
 
@@ -49,7 +52,6 @@ const sampleModels = [
     id: 'm1',
     name: 'gpt-4o',
     provider_id: 'p1',
-    model_type: 'chat',
     enabled: true,
     upstream_model_id: 'gpt-4o-2024',
     description: 'desc',
@@ -58,14 +60,13 @@ const sampleModels = [
     input_price: 2.5,
     output_price: 10,
     weight: 1,
-    created_at: '',
-    updated_at: ''
+    created_at: '2026-05-23T10:20:30Z',
+    updated_at: '2026-05-23T11:21:31Z'
   },
   {
     id: 'm2',
     name: 'text-embedding-3',
     provider_id: 'p2',
-    model_type: 'embedding',
     enabled: false,
     upstream_model_id: '',
     description: '',
@@ -74,8 +75,8 @@ const sampleModels = [
     input_price: 0.13,
     output_price: 0,
     weight: 1,
-    created_at: '',
-    updated_at: ''
+    created_at: '2026-05-22T08:09:10Z',
+    updated_at: '2026-05-22T09:10:11Z'
   }
 ]
 
@@ -123,6 +124,7 @@ describe('ModelListPage.vue', () => {
     }) as any)
     mockedGetProviders.mockResolvedValue({ data: sampleProviders, total: sampleProviders.length } as any)
     mockedGetTags.mockResolvedValue(sampleTags as any)
+    mockedBatchGetModelTags.mockResolvedValue({} as any)
     mockedGetForModel.mockResolvedValue([] as any)
     mockedDelete.mockResolvedValue(undefined as any)
     mockedUpdate.mockResolvedValue(undefined as any)
@@ -152,6 +154,29 @@ describe('ModelListPage.vue', () => {
       expect(wrapper.text()).toContain('text-embedding-3')
     })
 
+    it('keeps backend model order without frontend re-sorting', async () => {
+      mockedGetModels.mockResolvedValueOnce({
+        data: [
+          { ...sampleModels[1], name: 'newest-model' },
+          { ...sampleModels[0], name: 'older-model' }
+        ],
+        total: 2
+      } as any)
+      const wrapper = mountPage()
+      await flushPromises()
+      const text = wrapper.text()
+      expect(text.indexOf('newest-model')).toBeGreaterThan(-1)
+      expect(text.indexOf('older-model')).toBeGreaterThan(-1)
+      expect(text.indexOf('newest-model')).toBeLessThan(text.indexOf('older-model'))
+    })
+
+    it('renders created_at and updated_at columns', async () => {
+      const wrapper = mountPage()
+      await flushPromises()
+      expect(wrapper.text()).toContain('2026-05-23 18:20:30')
+      expect(wrapper.text()).toContain('2026-05-23 19:21:31')
+    })
+
     it('shows error when providers loading fails', async () => {
       mockedGetProviders.mockRejectedValueOnce(new Error('boom'))
       mountPage()
@@ -165,25 +190,42 @@ describe('ModelListPage.vue', () => {
       const wrapper = mountPage()
       await flushPromises()
       mockedGetModels.mockClear()
-      const selects = wrapper.findAll('.el-select-stub')
-      const providerSelect = selects[0]
-      await providerSelect.setValue('p1')
+      ;(wrapper.vm as any).filterProviderId = 'p1'
+      ;(wrapper.vm as any).handleFilterChange()
       await flushPromises()
       expect(mockedGetModels).toHaveBeenCalledWith('p1', expect.objectContaining({ page: 1 }))
     })
 
-    it('filters models by tag when tag filter changes', async () => {
-      mockedGetForModel.mockImplementation(async (id: string) => {
-        if (id === 'm1') return [sampleTags[0]] as any
-        return [] as any
-      })
+    it('reloads models when enabled filter changes', async () => {
       const wrapper = mountPage()
       await flushPromises()
-      const selects = wrapper.findAllComponents({ name: 'ElSelectStub' })
-      const tagSelect = selects[1]
-      tagSelect.vm.$emit('update:modelValue', ['t1'])
-      tagSelect.vm.$emit('change', ['t1'])
+      mockedGetModels.mockClear()
+      ;(wrapper.vm as any).filterEnabled = 'false'
+      ;(wrapper.vm as any).handleFilterChange()
       await flushPromises()
+      expect(mockedGetModels).toHaveBeenCalledWith(undefined, expect.objectContaining({ page: 1, enabled: false }))
+    })
+
+    it('clears enabled filter to undefined when status select is cleared', async () => {
+      const wrapper = mountPage()
+      await flushPromises()
+      mockedGetModels.mockClear()
+      ;(wrapper.vm as any).filterEnabled = undefined
+      ;(wrapper.vm as any).handleFilterChange()
+      await flushPromises()
+      expect(mockedGetModels).toHaveBeenCalledWith(undefined, expect.objectContaining({ page: 1, enabled: undefined }))
+    })
+
+    it('filters models by tag when tag filter changes', async () => {
+      mockedBatchGetModelTags.mockResolvedValue({
+        m1: [sampleTags[0]],
+        m2: []
+      } as any)
+      const wrapper = mountPage()
+      await flushPromises()
+      ;(wrapper.vm as any).filterTagIds = ['t1']
+      await flushPromises()
+      expect(wrapper.findAll('.el-table-row')).toHaveLength(1)
       expect(wrapper.text()).toContain('gpt-4o')
       expect(wrapper.text()).not.toContain('text-embedding-3')
     })
@@ -244,12 +286,11 @@ describe('ModelListPage.vue', () => {
     })
   })
 
-  describe('catalog capability + override (T10)', () => {
+  describe('catalog override (T10)', () => {
     const catalogModel = {
       id: 'm-cat',
       name: 'gpt-4o-cat',
       provider_id: 'p1',
-      model_type: 'chat',
       enabled: true,
       upstream_model_id: 'gpt-4o',
       description: '',
@@ -295,24 +336,6 @@ describe('ModelListPage.vue', () => {
       // 会让 providerOptions.value 变成 undefined，进而触发表格列里 getProviderName
       // 的 NPE。这里仅在 T10 套件里把 mock 调成 BE 真实返回形态，避免无关失败。
       mockedGetProviders.mockResolvedValue({ data: sampleProviders, total: sampleProviders.length } as any)
-    })
-
-    it('renders capability icons based on catalog.supports_* flags', async () => {
-      const wrapper = mountPage()
-      await flushPromises()
-      const text = wrapper.text()
-      expect(text).toContain('🛠')
-      expect(text).toContain('🖼')
-      expect(text).toContain('💾')
-      expect(text).not.toContain('📋')
-    })
-
-    it('shows deprecation badge with date when catalog.deprecation_date is set', async () => {
-      const wrapper = mountPage()
-      await flushPromises()
-      const text = wrapper.text()
-      expect(text).toContain('2026-12-31')
-      expect(text).toContain('废弃')
     })
 
     it('shows "已脱离目录" label next to context_length when ctx_overridden=true', async () => {

@@ -17,12 +17,13 @@ func TestNewChangeEvent(t *testing.T) {
 	id := uuid.New()
 	before := time.Now().UTC().Add(-time.Second)
 
-	ev := NewChangeEvent(ProviderCreated, "provider", id)
+	ev := NewChangeEvent(ProviderCreated, "provider", id, 123)
 
 	require.NotNil(t, ev)
 	assert.Equal(t, ProviderCreated, ev.Type)
 	assert.Equal(t, "provider", ev.ResourceType)
 	assert.Equal(t, id, ev.ResourceID)
+	assert.Equal(t, int64(123), ev.SnapshotVersion)
 	assert.False(t, ev.Timestamp.Before(before))
 	assert.False(t, ev.Timestamp.After(time.Now().UTC().Add(time.Second)))
 }
@@ -54,7 +55,7 @@ func TestPublisher_Publish(t *testing.T) {
 	pub := NewPublisher(rdb)
 	require.NotNil(t, pub)
 
-	ev := NewChangeEvent(ModelCreated, "model", uuid.New())
+	ev := NewChangeEvent(ModelCreated, "model", uuid.New(), 456)
 
 	// 订阅频道以验证消息已发布
 	sub := rdb.Subscribe(context.Background(), configChangeChannel)
@@ -73,6 +74,7 @@ func TestPublisher_Publish(t *testing.T) {
 		assert.Equal(t, ev.Type, decoded.Type)
 		assert.Equal(t, ev.ResourceType, decoded.ResourceType)
 		assert.Equal(t, ev.ResourceID, decoded.ResourceID)
+		assert.Equal(t, ev.SnapshotVersion, decoded.SnapshotVersion)
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not receive published event in time")
 	}
@@ -88,6 +90,6 @@ func TestPublisher_PublishOnClosedClient(t *testing.T) {
 	_ = rdb.Close()
 
 	pub := NewPublisher(rdb)
-	err = pub.Publish(context.Background(), NewChangeEvent(ProviderUpdated, "provider", uuid.New()))
+	err = pub.Publish(context.Background(), NewChangeEvent(ProviderUpdated, "provider", uuid.New(), 0))
 	require.Error(t, err)
 }

@@ -14,6 +14,7 @@
 | 版本号 | 修改日期 | 修改内容摘要 | 修改人 |
 | :--- | :--- | :--- | :--- |
 | v1.0 | 2026-05-21 | 初稿创建 | OpenCode |
+| v1.1 | 2026-05-23 | 新增模型同步接口架构（SyncHandler + SyncService） | OpenCode |
 
 ---
 
@@ -71,9 +72,11 @@ flowchart TD
     subgraph "control-plane 服务"
         Router["Gin Router + 中间件链"]
         AdminHandler["管理 Handler"]
+        SyncHandler["同步 Handler"]
         InternalHandler["内部 Handler"]
         ProviderService["ProviderService"]
         ModelService["ModelService"]
+        SyncService["SyncService"]
         ProviderRepo["ProviderRepository"]
         ModelRepo["ModelRepository"]
         Crypto["凭证加解密模块"]
@@ -83,15 +86,22 @@ flowchart TD
     OpsConsole -->|"JWT 认证"| Router
     GatewayAPI -->|"内部 Token"| Router
     Router --> AdminHandler
+    Router --> SyncHandler
     Router --> InternalHandler
     AdminHandler --> ProviderService
     AdminHandler --> ModelService
+    SyncHandler --> SyncService
     InternalHandler --> ModelService
     ProviderService --> ProviderRepo
     ProviderService --> Crypto
     ProviderService --> Notifier
     ModelService --> ModelRepo
     ModelService --> Notifier
+    SyncService --> ModelRepo
+    SyncService --> ProviderRepo
+    SyncService --> Crypto
+    SyncService -->|"HTTP GET /models"| Upstream["厂商 API"]
+    SyncService --> Notifier
     ProviderRepo --> DB["PostgreSQL"]
     ModelRepo --> DB
     Notifier --> Redis["Redis pub/sub"]
@@ -135,6 +145,41 @@ sequenceDiagram
     S-->>H: 更新后的 provider
     H-->>OC: 200 OK
 ```
+
+### 3.3 同步模型流程
+
+```mermaid
+sequenceDiagram
+    participant Admin as 管理员
+    participant API as SyncHandler
+    participant Svc as SyncService
+    participant Upstream as 厂商 GET /models
+    participant DB as ModelRepo
+
+    Admin->>API: POST /providers/:id/sync-models
+    API->>Svc: SyncModels(providerID)
+    Svc->>Upstream: GET {endpoint}/models (带凭证)
+    Upstream-->>Svc: 模型列表
+    Svc->>DB: 查询本地已注册模型(provider_id)
+    Svc->>Svc: 对比分类(新增/已存在/已下架)
+    Svc-->>API: SyncResult{added[], existing[], removed[]}
+    API-->>Admin: 返回同步结果
+
+    Admin->>API: POST /providers/:id/sync-models/confirm
+    Note over API: body: {model_names: [...]}
+    API->>Svc: ConfirmSync(providerID, modelNames)
+    Svc->>DB: 批量 Create models (enabled=false)
+    Svc->>DB: 批量 Update removed models (enabled=false)
+    Svc-->>API: 注册结果
+    API-->>Admin: 成功注册 X 个
+```
+
+### 3.4 新增组件
+
+| 组件 | 位置 | 职责 |
+| :--- | :--- | :--- |
+| SyncHandler | handler/sync_handler.go | 处理同步请求，调用 SyncService |
+| SyncService | service/sync_service.go | 编排同步逻辑：调厂商 API → 对比本地 → 分类 → 批量写入/禁用 |
 
 ---
 

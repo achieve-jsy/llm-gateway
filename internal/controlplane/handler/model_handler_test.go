@@ -270,6 +270,36 @@ func TestModelHandler_ListModels_InvalidProviderID(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "bad_request")
 }
 
+func TestModelHandler_ListModels_EnabledFilter(t *testing.T) {
+	svc := &fakeModelSvc{
+		listFn: func(filter repository.ModelListFilter, page, pageSize int) ([]model.Model, int64, error) {
+			if assert.NotNil(t, filter.Enabled) {
+				assert.False(t, *filter.Enabled)
+			}
+			return []model.Model{}, 0, nil
+		},
+	}
+	r := newModelRouter(svc)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/v1/models?enabled=false", nil)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestModelHandler_ListModels_InvalidEnabled(t *testing.T) {
+	svc := &fakeModelSvc{}
+	r := newModelRouter(svc)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/v1/models?enabled=maybe", nil)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "bad_request")
+}
+
 func TestModelHandler_ListModels_DBError(t *testing.T) {
 	svc := &fakeModelSvc{listFn: func(_ repository.ModelListFilter, page, pageSize int) ([]model.Model, int64, error) {
 		return nil, 0, errors.New("boom")

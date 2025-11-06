@@ -11,6 +11,7 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/event"
 	"github.com/example/llm-gateway/internal/controlplane/handler"
 	"github.com/example/llm-gateway/internal/controlplane/middleware"
+	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/gin-gonic/gin"
@@ -47,6 +48,10 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		r.GET("/api/v1/me", middleware.JWTAuth(), authHandler.GetCurrentUser)
 	}
 
+	// Dev login (no auth required)
+	devLoginHandler := handler.NewDevLoginHandler(db, authCfg.JWTSecret)
+	r.POST("/auth/dev/login", devLoginHandler.Login)
+
 	// 初始化依赖
 	providerRepo := repository.NewProviderRepo(db)
 	modelRepo := repository.NewModelRepo(db)
@@ -54,24 +59,41 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	modelTagRepo := repository.NewModelTagRepo(db)
 	healthCheckRepo := repository.NewHealthCheckRepo(db)
 
+	keyRepo := repository.NewKeyRepo(db)
+	settingsRepo := repository.NewSettingsRepo(db)
+
+	if err := crypto.InitFromDB(db); err != nil {
+		slog.Warn("crypto key manager init failed", "error", err)
+	}
+
 	// 创建事件发布器
 	publisher := event.NewPublisher(rdb)
+	snapshotter := service.NewProviderSnapshotRefresher(modelRepo, rdb)
 
 	providerSvc := service.NewProviderService(providerRepo, modelRepo, publisher)
+	providerSvc.SetSnapshotRefresher(snapshotter)
 	modelSvc := service.NewModelService(modelRepo, providerRepo, publisher)
+	modelSvc.SetSnapshotRefresher(snapshotter)
 	internalSvc := service.NewInternalService(modelRepo, providerRepo)
 	healthCheckSvc := service.NewHealthCheckService(healthCheckRepo, providerRepo, modelRepo)
 
+	keySvc := service.NewKeyService(keyRepo, service.NewEventPublisherAdapter(publisher))
+	settingsSvc := service.NewSettingsService(settingsRepo)
+
 	providerHandler := handler.NewProviderHandler(providerSvc)
 	modelHandler := handler.NewModelHandler(modelSvc)
-	internalHandler := handler.NewInternalHandler(internalSvc)
+	internalHandler := handler.NewInternalHandler(internalSvc, keySvc)
 	defHandler := handler.NewDefinitionHandler(defRepo)
 	testHandler := handler.NewTestHandler(providerRepo, modelRepo)
 	modelTagHandler := handler.NewModelTagHandler(modelTagRepo)
 	healthCheckHandler := handler.NewHealthCheckHandler(healthCheckSvc)
 	modelCheckHandler := handler.NewModelCheckHandler(modelRepo, providerRepo, healthCheckRepo)
 	syncSvc := service.NewSyncService(providerRepo, modelRepo, publisher)
+	syncSvc.SetSnapshotRefresher(snapshotter)
 	syncHandler := handler.NewSyncHandler(syncSvc)
+
+	keyHandler := handler.NewKeyHandler(keySvc)
+	settingsHandler := handler.NewSettingsHandler(settingsSvc)
 
 	// 模型 Catalog（D1: LiteLLM 单源；D3: bundled fallback；D4: 启动异步首刷 + 24h cron + 手动）
 	catalogRepo := repository.NewModelCatalogRepo(db)
@@ -80,6 +102,9 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	catalogHandler := handler.NewCatalogHandler(catalogSvc)
 	// 让 ModelService 也能解析 catalog（CreateModelFromCatalog/ResetOverride）
 	modelSvc.SetCatalogLookup(catalogRepo)
+	if _, err := snapshotter.RefreshAvailableSnapshot(context.Background()); err != nil {
+		slog.Warn("initial provider snapshot refresh failed", "error", err)
+	}
 
 	// 启动异步首刷（不阻塞 HTTP 启动），失败回退 bundled
 	go func() {
@@ -102,6 +127,11 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 			cancel()
 		}
 	}()
+
+	// 公开设置（无需认证）
+	r.GET("/api/v1/settings/public", func(c *gin.Context) {
+		settingsHandler.GetPublicSettings(c)
+	})
 
 	// 启动健康检测调度器（优先使用环境变量 HEALTH_CHECK_INTERVAL 控制）
 	healthCheckSvc.StartBackground(context.Background())
@@ -166,6 +196,15 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 		// 模型 Catalog（注意：source_model_id 含 '/'，通过 query 入口而非路径参数访问）
 		adminGroup.GET("/model-catalog/search", catalogHandler.Search)
+
+		// API Key 管理
+		adminGroup.POST("/keys", keyHandler.CreateKey)
+		adminGroup.GET("/keys", keyHandler.ListKeys)
+		adminGroup.GET("/keys/:id", keyHandler.GetKey)
+		adminGroup.PATCH("/keys/:id/disable", keyHandler.DisableKey)
+		adminGroup.PATCH("/keys/:id/enable", keyHandler.EnableKey)
+		adminGroup.DELETE("/keys/:id", keyHandler.DeleteKey)
+		adminGroup.POST("/keys/:id/reset", keyHandler.ResetKey)
 		adminGroup.GET("/model-catalog/by-source", catalogHandler.GetBySource)
 		adminGroup.POST("/model-catalog/sync", catalogHandler.Sync)
 		adminGroup.GET("/model-catalog/diff", catalogHandler.Diff)
@@ -175,13 +214,19 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/model-catalog/sync-status", catalogHandler.SyncStatus)
 		// :id（UUID）放最后，避免吃掉前面的静态路径
 		adminGroup.GET("/model-catalog/:id", catalogHandler.GetByID)
+
+		// 系统设置
+		adminGroup.GET("/settings", settingsHandler.GetSystemSettings)
+		adminGroup.PUT("/settings", settingsHandler.UpdateSettings)
 	}
 
 	// 内部接口组（内部 Token 认证）
 	internalGroup := r.Group("/internal/v1")
 	internalGroup.Use(middleware.InternalAuth())
 	{
-		internalGroup.GET("/models/available", internalHandler.ListAvailableModels)
+internalGroup.GET("/models/available", internalHandler.ListAvailableModels)
+	internalGroup.GET("/models/health", internalHandler.GetModelHealth)
+	internalGroup.POST("/keys/verify", keyHandler.VerifyKey)
 	}
 
 	return r

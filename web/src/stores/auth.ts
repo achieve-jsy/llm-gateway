@@ -1,67 +1,50 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import http from '@/services/http'
-
-export interface UserInfo {
-  email: string
-  name: string
-  passport: string
-  avatar: string
-  company_name: string
-  dept_name: string
-}
+import { oidcCallback, refreshToken as refreshTokenApi, logout as logoutApi } from '@/services/auth'
+import type { User } from '@/types/auth'
 
 export const useAuthStore = defineStore('auth', () => {
-  const token = ref<string | null>(localStorage.getItem('auth_token'))
-  const user = ref<UserInfo | null>(null)
-  const loading = ref(false)
+  const accessToken = ref<string | null>(localStorage.getItem('access_token') || null)
+  const refreshTokenValue = ref<string | null>(localStorage.getItem('refresh_token') || null)
+  const user = ref<User | null>(null)
+  const role = ref<'employee' | 'admin' | null>(null)
 
-  const isAuthenticated = computed(() => !!token.value && token.value !== 'dev-token')
+  const isLoggedIn = computed(() => !!accessToken.value)
+  const userName = computed(() => user.value?.name || '')
+  const departmentName = computed(() => user.value?.departmentName || '')
 
-  function setToken(newToken: string) {
-    token.value = newToken
-    localStorage.setItem('auth_token', newToken)
+  function setAuth(data: { accessToken: string; refreshToken: string; user: User; role: 'employee' | 'admin' }) {
+    accessToken.value = data.accessToken
+    refreshTokenValue.value = data.refreshToken
+    user.value = data.user
+    role.value = data.role
+    localStorage.setItem('access_token', data.accessToken)
+    localStorage.setItem('refresh_token', data.refreshToken)
   }
 
-  function clearAuth() {
-    token.value = null
+  async function handleCallback(code: string, state: string) {
+    const data = await oidcCallback(code, state)
+    setAuth(data)
+  }
+
+  async function refresh() {
+    if (!refreshTokenValue.value) throw new Error('no refresh token')
+    const data = await refreshTokenApi(refreshTokenValue.value)
+    accessToken.value = data.accessToken
+    refreshTokenValue.value = data.refreshToken
+    localStorage.setItem('access_token', data.accessToken)
+    localStorage.setItem('refresh_token', data.refreshToken)
+  }
+
+  async function handleLogout() {
+    try { await logoutApi() } catch {}
+    accessToken.value = null
+    refreshTokenValue.value = null
     user.value = null
-    localStorage.removeItem('auth_token')
+    role.value = null
+    localStorage.removeItem('access_token')
+    localStorage.removeItem('refresh_token')
   }
 
-  async function fetchCurrentUser() {
-    if (!token.value) return
-    loading.value = true
-    try {
-      const res = await http.get('/api/v1/me')
-      user.value = res.data
-    } catch {
-      // Token invalid, clear auth
-      clearAuth()
-    } finally {
-      loading.value = false
-    }
-  }
-
-  function loginRedirect() {
-    const backendURL = import.meta.env.VITE_API_BASE_URL || ''
-    window.location.href = `${backendURL}/auth/login`
-  }
-
-  function logout() {
-    clearAuth()
-    window.location.href = '/'
-  }
-
-  return {
-    token,
-    user,
-    loading,
-    isAuthenticated,
-    setToken,
-    clearAuth,
-    fetchCurrentUser,
-    loginRedirect,
-    logout,
-  }
+  return { accessToken, refreshTokenValue, user, role, isLoggedIn, userName, departmentName, setAuth, handleCallback, refresh, handleLogout }
 })

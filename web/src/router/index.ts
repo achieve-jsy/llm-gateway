@@ -1,11 +1,15 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
     redirect: '/access/unified-entry'
   },
+  { path: '/home', name: 'Home', component: () => import('@/views/home/HomePage.vue'), meta: { title: '首页' } },
+  { path: '/keys', name: 'KeyList', component: () => import('@/views/key/KeyListPage.vue'), meta: { title: '我的 Key' } },
+  { path: '/models', name: 'MeModels', component: () => import('@/views/model/ModelListPage.vue'), meta: { title: '可用模型' } },
   {
     path: '/login',
     name: 'Login',
@@ -13,8 +17,8 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '登录', public: true }
   },
   {
-    path: '/oauth/callback',
-    name: 'OAuthCallback',
+    path: '/auth/callback',
+    name: 'AuthCallback',
     component: () => import('@/views/auth/OAuthCallbackPage.vue'),
     meta: { title: '登录中...', public: true }
   },
@@ -53,6 +57,12 @@ const routes: RouteRecordRaw[] = [
     name: 'ChatPlayground',
     component: () => import('@/views/admin/ChatPlaygroundPage.vue'),
     meta: { title: '对话测试' }
+  },
+  {
+    path: '/admin/settings',
+    name: 'Settings',
+    component: () => import('@/views/admin/SettingsPage.vue'),
+    meta: { title: '系统设置' }
   }
 ]
 
@@ -61,9 +71,10 @@ const router = createRouter({
   routes
 })
 
-/** 路由守卫：开发模式下直接放行，生产模式未登录跳转登录页 */
-router.beforeEach((_to, _from, next) => {
-  // 当前开发阶段直接放行，后续对接 SSO 后恢复认证检查
+router.beforeEach((to, _from, next) => {
+  if (to.meta.public) { next(); return }
+  const authStore = useAuthStore()
+  if (!authStore.isLoggedIn) { next('/login'); return }
   next()
 })
 

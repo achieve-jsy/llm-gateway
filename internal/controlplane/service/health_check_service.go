@@ -44,10 +44,10 @@ type HealthCheckService struct {
 	providerRepo *repository.ProviderRepo
 	modelRepo    *repository.ModelRepo
 
-	mu               sync.Mutex
-	cancel           context.CancelFunc
-	modelCheckCancel context.CancelFunc
-	running          bool
+	mu                sync.Mutex
+	cancel            context.CancelFunc
+	modelCheckCancel  context.CancelFunc
+	running           bool
 	modelCheckRunning bool
 }
 
@@ -355,58 +355,18 @@ func (s *HealthCheckService) doModelForwardCheck(m *model.Model) (bool, int, str
 		return false, 0, "解密凭证失败"
 	}
 
-	var creds map[string]string
-	json.Unmarshal([]byte(credJSON), &creds)
-	apiKey := creds["api_key"]
-	if apiKey == "" {
-		apiKey = credJSON
-	}
+	apiKey := extractAPIKey(credJSON)
 
 	modelName := m.UpstreamModelID
 	if modelName == "" {
 		modelName = m.Name
 	}
 
-	endpoint := strings.TrimRight(provider.Endpoint, "/") + "/chat/completions"
-	chatReq := map[string]interface{}{
-		"model":           modelName,
-		"messages":        []map[string]string{{"role": "user", "content": "hi"}},
-		"max_tokens":      1,
-		"enable_thinking": false,
+	success, skipped, elapsed, errMsg := ProbeModelForward(context.Background(), provider.Endpoint, modelName, apiKey)
+	if skipped {
+		return true, elapsed, "no model to test, skipped"
 	}
-	body, _ := json.Marshal(chatReq)
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	start := time.Now()
-	req, _ := http.NewRequestWithContext(context.Background(), "POST", endpoint, strings.NewReader(string(body)))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	resp, err := client.Do(req)
-	elapsed := int(time.Since(start).Milliseconds())
-
-	if err != nil {
-		return false, elapsed, fmt.Sprintf("请求失败: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return false, elapsed, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, truncateStr(string(respBody), 200))
-	}
-
-	respBody, _ := io.ReadAll(resp.Body)
-	var chatResp struct {
-		Choices []interface{} `json:"choices"`
-	}
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return false, elapsed, fmt.Sprintf("响应体解析失败: %v", err)
-	}
-	if len(chatResp.Choices) == 0 {
-		return false, elapsed, "响应 choices 为空"
-	}
-
-	return true, elapsed, ""
+	return success, elapsed, errMsg
 }
 
 // runBackgroundCheck 后台执行一轮检测
@@ -422,7 +382,7 @@ func (s *HealthCheckService) runBackgroundCheck() {
 	)
 }
 
-// CheckAll 检测所有启用渠道，同步返回结果
+// CheckAll 检测所有启用渠道，并行返回结果
 func (s *HealthCheckService) CheckAll(ctx context.Context) *CheckAllResult {
 	filter := &repository.ProviderListFilter{}
 	providers, _, err := s.providerRepo.List(*filter, 0, 1000)
@@ -444,28 +404,44 @@ func (s *HealthCheckService) CheckAll(ctx context.Context) *CheckAllResult {
 	}
 
 	result := &CheckAllResult{
-		Results: make([]CheckResult, 0),
+		Results: make([]CheckResult, 0, len(providers)),
 	}
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 5)
 
 	for i := range providers {
 		p := &providers[i]
 		if !p.Enabled {
 			continue
 		}
+		mu.Lock()
 		result.Total++
-		cr := s.CheckOne(ctx, p, maxFailures, checkMode)
-		result.Results = append(result.Results, *cr)
-		if cr.Success {
-			result.Success++
-		} else {
-			result.Failed++
-		}
-		if cr.AutoDisabled {
-			result.AutoDisabled++
-		}
+		mu.Unlock()
+
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(provider *model.Provider) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			cr := s.CheckOne(ctx, provider, maxFailures, checkMode)
+			mu.Lock()
+			result.Results = append(result.Results, *cr)
+			if cr.Success {
+				result.Success++
+			} else {
+				result.Failed++
+			}
+			if cr.AutoDisabled {
+				result.AutoDisabled++
+			}
+			mu.Unlock()
+		}(p)
 	}
 
-	// 清理旧日志
+	wg.Wait()
+
 	s.healthRepo.CleanOldLogs(30)
 
 	return result
@@ -487,12 +463,7 @@ func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provi
 		return cr
 	}
 
-	var creds map[string]string
-	json.Unmarshal([]byte(credJSON), &creds)
-	apiKey := creds["api_key"]
-	if apiKey == "" {
-		apiKey = credJSON
-	}
+	apiKey := extractAPIKey(credJSON)
 
 	// 连通性检测
 	if checkMode == "connectivity" || checkMode == "both" {
@@ -589,48 +560,14 @@ func (s *HealthCheckService) checkModelForward(ctx context.Context, provider *mo
 		return false, 0, "no model to test, skipped"
 	}
 
-	// 构造请求
-	endpoint := strings.TrimRight(provider.Endpoint, "/") + "/chat/completions"
-	chatReq := map[string]interface{}{
-		"model":           testModel,
-		"messages":        []map[string]string{{"role": "user", "content": "hi"}},
-		"max_tokens":      1,
-		"enable_thinking": false,
+	success, skipped, elapsed, errMsg := ProbeModelForward(ctx, provider.Endpoint, testModel, apiKey)
+	if skipped {
+		return false, elapsed, "no model to test, skipped"
 	}
-	body, _ := json.Marshal(chatReq)
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	start := time.Now()
-	req, _ := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(string(body)))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	resp, err := client.Do(req)
-	elapsed := int(time.Since(start).Milliseconds())
-
-	if err != nil {
-		return false, elapsed, fmt.Sprintf("model forward failed: %v", err)
+	if !success && errMsg != "" {
+		return false, elapsed, "model forward " + errMsg
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return false, elapsed, fmt.Sprintf("model forward HTTP %d: %s", resp.StatusCode, truncateStr(string(respBody), 200))
-	}
-
-	// 验证 choices 非空
-	respBody, _ := io.ReadAll(resp.Body)
-	var chatResp struct {
-		Choices []interface{} `json:"choices"`
-	}
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return false, elapsed, fmt.Sprintf("model forward: invalid response body: %v", err)
-	}
-	if len(chatResp.Choices) == 0 {
-		return false, elapsed, "model forward: empty choices in response"
-	}
-
-	return true, elapsed, ""
+	return success, elapsed, errMsg
 }
 
 // CheckOneByID 通过 ID 查找渠道并检测
@@ -748,40 +685,18 @@ func (s *HealthCheckService) checkSingleModel(client *http.Client, m *model.Mode
 		return
 	}
 
-	var creds map[string]string
-	json.Unmarshal([]byte(credJSON), &creds)
-	apiKey := creds["api_key"]
-	if apiKey == "" {
-		apiKey = credJSON
+	apiKey := extractAPIKey(credJSON)
+
+	modelName := m.UpstreamModelID
+	if modelName == "" {
+		modelName = m.Name
 	}
-
-	endpoint := strings.TrimRight(provider.Endpoint, "/") + "/chat/completions"
-	chatReq := map[string]interface{}{
-		"model":           m.Name,
-		"messages":        []map[string]string{{"role": "user", "content": "hi"}},
-		"max_tokens":      1,
-		"enable_thinking": false,
-	}
-	body, _ := json.Marshal(chatReq)
-
-	start := time.Now()
-	req, _ := http.NewRequest("POST", endpoint, strings.NewReader(string(body)))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	resp, err := client.Do(req)
-	elapsed := int(time.Since(start).Milliseconds())
-
-	if err != nil {
-		s.recordLog("model", m.ID, m.Name, false, elapsed, fmt.Sprintf("request failed: %v", err))
-		s.handleModelFailure("model", m.ID, config)
+	success, skipped, elapsed, errMsg := ProbeModelForward(context.Background(), provider.Endpoint, modelName, apiKey)
+	if skipped {
+		s.recordLog("model", m.ID, m.Name, true, elapsed, "skipped")
 		return
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
-		errMsg := extractErrMsg(respBody)
+	if !success {
 		s.recordLog("model", m.ID, m.Name, false, elapsed, errMsg)
 		s.handleModelFailure("model", m.ID, config)
 		return

@@ -91,12 +91,7 @@ func (h *TestHandler) TestProvider(c *gin.Context) {
 	}
 
 	// 解析凭证获取 api_key
-	var creds map[string]string
-	json.Unmarshal([]byte(credJSON), &creds)
-	apiKey := creds["api_key"]
-	if apiKey == "" {
-		apiKey = credJSON
-	}
+	apiKey := extractAPIKey(credJSON)
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	result := testResult{}
@@ -291,6 +286,16 @@ func extractErrorMessage(body []byte) string {
 	}
 
 	return truncate(string(body), 150)
+}
+
+func extractAPIKey(credentialJSON string) string {
+	var m map[string]string
+	if json.Unmarshal([]byte(credentialJSON), &m) == nil {
+		if key, ok := m["api_key"]; ok && key != "" {
+			return key
+		}
+	}
+	return credentialJSON
 }
 
 // truncate 截断字符串

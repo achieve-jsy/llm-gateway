@@ -64,6 +64,51 @@ interface ModelInfo {
 }
 ```
 
+### 2.5 同步模型条目（SyncModelItem）
+
+```typescript
+/** 同步结果中的模型条目 */
+interface SyncModelItem {
+  id: string
+  owned_by: string
+}
+```
+
+### 2.6 同步结果（SyncResult）
+
+```typescript
+/** 同步模型接口返回结果 */
+interface SyncResult {
+  added: SyncModelItem[]
+  existing: SyncModelItem[]
+  removed: SyncModelItem[]
+  total_upstream: number
+  total_local: number
+  unsupported: boolean
+}
+```
+
+### 2.7 确认注册请求体（ConfirmSyncPayload）
+
+```typescript
+/** 确认注册请求体 */
+interface ConfirmSyncPayload {
+  models_to_add: string[]
+  disable_removed?: boolean
+}
+```
+
+### 2.8 确认注册结果（ConfirmSyncResult）
+
+```typescript
+/** 确认注册返回结果 */
+interface ConfirmSyncResult {
+  registered: number
+  skipped: number
+  disabled: number
+}
+```
+
 ---
 
 ## 3. 数据关系
@@ -99,6 +144,35 @@ erDiagram
         string name
         string reason
     }
+
+    SyncResult ||--o{ SyncModelItem : "新增模型"
+    SyncResult ||--o{ SyncModelItem : "已存在模型"
+    SyncResult ||--o{ SyncModelItem : "已下架模型"
+
+    SyncResult {
+        SyncModelItem[] added
+        SyncModelItem[] existing
+        SyncModelItem[] removed
+        number total_upstream
+        number total_local
+        boolean unsupported
+    }
+
+    SyncModelItem {
+        string id PK
+        string owned_by
+    }
+
+    ConfirmSyncPayload {
+        string[] models_to_add
+        boolean disable_removed
+    }
+
+    ConfirmSyncResult {
+        number registered
+        number skipped
+        number disabled
+    }
 ```
 
 **关系说明**：
@@ -108,6 +182,10 @@ erDiagram
 | UnifiedEntryPageState | 包含 | ModelInfo | 0..N |
 | CapabilityConfig | 包含 | CapabilityItem | 1..N |
 | CapabilityConfig | 包含 | ExcludeItem | 1..N |
+| SyncResult | 包含 | SyncModelItem (added) | 0..N |
+| SyncResult | 包含 | SyncModelItem (existing) | 0..N |
+| SyncResult | 包含 | SyncModelItem (removed) | 0..N |
+| ConfirmSyncPayload | 引用 | SyncModelItem.id | 0..N |
 
 ---
 

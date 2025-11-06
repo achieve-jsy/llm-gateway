@@ -95,10 +95,23 @@ func (h *ModelHandler) ListModels(c *gin.Context) {
 		providerID = &pid
 	}
 
+	var enabled *bool
+	if enabledStr := c.Query("enabled"); enabledStr != "" {
+		parsed, err := strconv.ParseBool(enabledStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": gin.H{"type": "invalid_request", "message": "invalid enabled", "code": CodeBadRequest},
+			})
+			return
+		}
+		enabled = &parsed
+	}
+
 	filter := repository.ModelListFilter{
 		ProviderID: providerID,
 		Name:       c.Query("name"),
 		ModelType:  c.Query("model_type"),
+		Enabled:    enabled,
 	}
 
 	models, total, err := h.svc.ListModels(filter, page, pageSize)

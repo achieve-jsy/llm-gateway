@@ -48,6 +48,7 @@ type ModelListFilter struct {
 	ProviderID *uuid.UUID
 	Name       string
 	ModelType  string
+	Enabled    *bool
 }
 
 // List 查询模型列表（支持筛选和分页）
@@ -65,13 +66,16 @@ func (r *ModelRepo) List(filter ModelListFilter, offset, limit int) ([]model.Mod
 	if filter.ModelType != "" {
 		query = query.Where("model_type = ?", filter.ModelType)
 	}
+	if filter.Enabled != nil {
+		query = query.Where("enabled = ?", *filter.Enabled)
+	}
 
 	err := query.Count(&total).Error
 	if err != nil {
 		return nil, 0, err
 	}
 
-	err = query.Preload("Provider").Order("created_at DESC").Offset(offset).Limit(limit).Find(&models).Error
+	err = query.Preload("Provider").Order("created_at DESC").Order("name ASC").Offset(offset).Limit(limit).Find(&models).Error
 	if err != nil {
 		return nil, 0, err
 	}
@@ -168,18 +172,22 @@ func (r *ModelRepo) UpdateEnabled(id uuid.UUID, enabled *bool) error {
 	return r.db.Model(&model.Model{}).Where("id = ?", id).Update("enabled", enabled).Error
 }
 
-// IncrementModelFailures 递增模型失败计数并返回新值
+// IncrementModelFailures 递增模型失败计数并返回新值。
+// 生产 PG 使用 RETURNING 单条 SQL；SQLite 不支持 RETURNING 时回退到 UPDATE+SELECT。
 func (r *ModelRepo) IncrementModelFailures(id uuid.UUID) (int, error) {
 	result := r.db.Model(&model.Model{}).Where("id = ?", id).
 		UpdateColumn("consecutive_failures", gorm.Expr("consecutive_failures + 1"))
 	if result.Error != nil {
 		return 0, result.Error
 	}
-	var m model.Model
-	if err := r.db.Select("consecutive_failures").First(&m, "id = ?", id).Error; err != nil {
-		return 0, err
+	if result.RowsAffected > 0 {
+		var m model.Model
+		if err := r.db.Select("consecutive_failures").First(&m, "id = ?", id).Error; err != nil {
+			return 0, err
+		}
+		return m.ConsecutiveFailures, nil
 	}
-	return m.ConsecutiveFailures, nil
+	return 0, nil
 }
 
 // ResetModelFailures 重置模型失败计数为 0
@@ -202,4 +210,82 @@ func (r *ModelRepo) UpdateModelCheckResult(id uuid.UUID, responseTime int, check
 func (r *ModelRepo) AutoDisableModel(id uuid.UUID) error {
 	enabled := false
 	return r.db.Model(&model.Model{}).Where("id = ?", id).Update("enabled", &enabled).Error
+}
+
+// ModelHealthSummary 模型健康摘要（供 gateway-api 消费）
+type ModelHealthSummary struct {
+	Name                string `json:"name"`
+	ModelType           string `json:"model_type"`
+	Enabled             *bool  `json:"enabled"`
+	ConsecutiveFailures int    `json:"consecutive_failures"`
+	LastCheckError      string `json:"last_check_error"`
+	ResponseTime        int    `json:"response_time"`
+}
+
+// GetHealthByNames 按模型名称批量查询健康数据
+func (r *ModelRepo) GetHealthByNames(names []string) (map[string]ModelHealthSummary, error) {
+	if len(names) == 0 {
+		return map[string]ModelHealthSummary{}, nil
+	}
+	var models []model.Model
+	err := r.db.Select("name, model_type, enabled, consecutive_failures, last_check_error, response_time").
+		Where("name IN ?", names).
+		Find(&models).Error
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]ModelHealthSummary, len(models))
+	for i := range models {
+		m[models[i].Name] = ModelHealthSummary{
+			Name:                models[i].Name,
+			ModelType:           models[i].ModelType,
+			Enabled:             models[i].Enabled,
+			ConsecutiveFailures: models[i].ConsecutiveFailures,
+			LastCheckError:      models[i].LastCheckError,
+			ResponseTime:        models[i].ResponseTime,
+		}
+	}
+	return m, nil
+}
+
+// BatchCountByProviderID 批量统计各渠道下模型数量（单次 GROUP BY 查询，消除 N+1）
+func (r *ModelRepo) BatchCountByProviderID(providerIDs []uuid.UUID) (map[uuid.UUID]int64, error) {
+	if len(providerIDs) == 0 {
+		return map[uuid.UUID]int64{}, nil
+	}
+	type row struct {
+		ProviderID uuid.UUID
+		Count      int64
+	}
+	var rows []row
+	err := r.db.Model(&model.Model{}).
+		Select("provider_id, count(*) as count").
+		Where("provider_id IN ?", providerIDs).
+		Group("provider_id").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[uuid.UUID]int64, len(rows))
+	for _, r := range rows {
+		m[r.ProviderID] = r.Count
+	}
+	return m, nil
+}
+
+// GetByIDs 批量按主键查询模型（单次 SELECT ... WHERE id IN (?)，消除 N+1）
+func (r *ModelRepo) GetByIDs(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error) {
+	if len(ids) == 0 {
+		return map[uuid.UUID]*model.Model{}, nil
+	}
+	var results []model.Model
+	err := r.db.Preload("Provider").Where("id IN ?", ids).Find(&results).Error
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[uuid.UUID]*model.Model, len(results))
+	for i := range results {
+		m[results[i].ID] = &results[i]
+	}
+	return m, nil
 }

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"testing"
+	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/glebarez/sqlite"
@@ -39,6 +40,8 @@ func newTestDB(t *testing.T) *gorm.DB {
 			max_retries INTEGER NOT NULL DEFAULT 3,
 			timeout INTEGER NOT NULL DEFAULT 30,
 			tag TEXT DEFAULT '',
+			consecutive_failures INTEGER NOT NULL DEFAULT 0,
+			last_check_error TEXT DEFAULT '',
 			created_at DATETIME NOT NULL,
 			updated_at DATETIME NOT NULL
 		)`,
@@ -58,6 +61,9 @@ func newTestDB(t *testing.T) *gorm.DB {
 			catalog_id TEXT,
 			ctx_overridden INTEGER NOT NULL DEFAULT 0,
 			max_output_overridden INTEGER NOT NULL DEFAULT 0,
+			consecutive_failures INTEGER NOT NULL DEFAULT 0,
+			last_check_error TEXT DEFAULT '',
+			response_time INTEGER DEFAULT 0,
 			created_at DATETIME NOT NULL,
 			updated_at DATETIME NOT NULL
 		)`,
@@ -255,6 +261,19 @@ func TestModelRepo_CRUD(t *testing.T) {
 	assert.Equal(t, int64(1), total)
 	assert.Len(t, list, 1)
 
+	// List with enabled filter
+	enabledTrue := true
+	list, total, err = modelRepo.List(ModelListFilter{Enabled: &enabledTrue}, 0, 10)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), total)
+	assert.Len(t, list, 1)
+
+	enabledFalse := false
+	list, total, err = modelRepo.List(ModelListFilter{Enabled: &enabledFalse}, 0, 10)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), total)
+	assert.Len(t, list, 0)
+
 	// CountByProviderID
 	count, err := modelRepo.CountByProviderID(p.ID)
 	require.NoError(t, err)
@@ -287,6 +306,129 @@ func TestModelRepo_CRUD(t *testing.T) {
 	require.NoError(t, modelRepo.Delete(m.ID))
 	_, err = modelRepo.GetByID(m.ID)
 	assert.Error(t, err)
+}
+
+func TestModelRepo_Update_PreservesCatalogID(t *testing.T) {
+	db := newTestDB(t)
+	providerRepo := NewProviderRepo(db)
+	modelRepo := NewModelRepo(db)
+	catalogRepo := NewModelCatalogRepo(db)
+
+	p := newProvider("p-catalog-test")
+	require.NoError(t, providerRepo.Create(p))
+
+	cat := &model.ModelCatalog{
+		ID:                    uuid.New(),
+		Source:                "litellm",
+		SourceModelID:         "gpt-4o",
+		Provider:              "openai",
+		Mode:                  "chat",
+		ContextLength:         128000,
+		MaxOutputTokens:       16384,
+		InputPricePerMillion:  2.5,
+		OutputPricePerMillion: 10,
+		SyncedAt:              time.Now(),
+	}
+	require.NoError(t, catalogRepo.Upsert(cat))
+
+	enabled := true
+	m := &model.Model{
+		ID:          uuid.New(),
+		Name:        "gpt-4o-test",
+		ProviderID:  p.ID,
+		ModelType:   "chat",
+		Enabled:     &enabled,
+		CatalogID:   &cat.ID,
+		InputPrice:  2.5,
+		OutputPrice: 10,
+	}
+	require.NoError(t, modelRepo.Create(m))
+	require.NoError(t, db.Model(&model.Model{}).Where("name = ?", "gpt-4o-test").Update("id", m.ID).Error)
+
+	bound, err := modelRepo.ListByCatalogID()
+	require.NoError(t, err)
+	require.Len(t, bound, 1, "model should appear in ListByCatalogID after binding")
+
+	got, err := modelRepo.GetByID(m.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.CatalogID, "GetByID should return catalog_id")
+
+	got.InputPrice = 99
+	require.NoError(t, modelRepo.Update(got))
+
+	bound2, err := modelRepo.ListByCatalogID()
+	require.NoError(t, err)
+	assert.Len(t, bound2, 1, "catalog_id must NOT be nullified by Update(Save)")
+
+	got2, err := modelRepo.GetByID(m.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got2.CatalogID, "Update must preserve catalog_id")
+	assert.Equal(t, cat.ID, *got2.CatalogID)
+	assert.InDelta(t, 99.0, got2.InputPrice, 1e-6)
+}
+
+func TestModelRepo_List_SortsByCreatedAtDesc(t *testing.T) {
+	db := newTestDB(t)
+	providerRepo := NewProviderRepo(db)
+	modelRepo := NewModelRepo(db)
+
+	p := newProvider("p-sort")
+	require.NoError(t, providerRepo.Create(p))
+
+	oldEnabled := newModel("enabled-old", p.ID, true)
+	newEnabled := newModel("enabled-new", p.ID, true)
+	disabledModel := newModel("disabled-newest", p.ID, false)
+
+	require.NoError(t, modelRepo.Create(oldEnabled))
+	require.NoError(t, db.Model(&model.Model{}).Where("name = ?", oldEnabled.Name).Update("id", oldEnabled.ID).Error)
+	require.NoError(t, db.Model(&model.Model{}).Where("id = ?", oldEnabled.ID).Update("created_at", time.Now().Add(-2*time.Hour)).Error)
+
+	require.NoError(t, modelRepo.Create(newEnabled))
+	require.NoError(t, db.Model(&model.Model{}).Where("name = ?", newEnabled.Name).Update("id", newEnabled.ID).Error)
+	require.NoError(t, db.Model(&model.Model{}).Where("id = ?", newEnabled.ID).Update("created_at", time.Now().Add(-1*time.Hour)).Error)
+
+	require.NoError(t, modelRepo.Create(disabledModel))
+	require.NoError(t, db.Model(&model.Model{}).Where("name = ?", disabledModel.Name).Update("id", disabledModel.ID).Error)
+	require.NoError(t, db.Model(&model.Model{}).Where("id = ?", disabledModel.ID).Update("created_at", time.Now()).Error)
+
+	list, total, err := modelRepo.List(ModelListFilter{}, 0, 10)
+	require.NoError(t, err)
+	require.Equal(t, int64(3), total)
+	require.Len(t, list, 3)
+	assert.Equal(t, "disabled-newest", list[0].Name)
+	assert.Equal(t, "enabled-new", list[1].Name)
+	assert.Equal(t, "enabled-old", list[2].Name)
+	if assert.NotNil(t, list[0].Enabled) {
+		assert.False(t, *list[0].Enabled)
+	}
+}
+
+func TestModelRepo_List_SortsByNameWhenCreatedAtMatches(t *testing.T) {
+	db := newTestDB(t)
+	providerRepo := NewProviderRepo(db)
+	modelRepo := NewModelRepo(db)
+
+	p := newProvider("p-same-created-at")
+	require.NoError(t, providerRepo.Create(p))
+
+	commonTime := time.Now().Add(-time.Hour)
+	bModel := newModel("b-model", p.ID, true)
+	aModel := newModel("a-model", p.ID, true)
+
+	require.NoError(t, modelRepo.Create(bModel))
+	require.NoError(t, db.Model(&model.Model{}).Where("name = ?", bModel.Name).Update("id", bModel.ID).Error)
+	require.NoError(t, db.Model(&model.Model{}).Where("id = ?", bModel.ID).Update("created_at", commonTime).Error)
+
+	require.NoError(t, modelRepo.Create(aModel))
+	require.NoError(t, db.Model(&model.Model{}).Where("name = ?", aModel.Name).Update("id", aModel.ID).Error)
+	require.NoError(t, db.Model(&model.Model{}).Where("id = ?", aModel.ID).Update("created_at", commonTime).Error)
+
+	list, total, err := modelRepo.List(ModelListFilter{}, 0, 10)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), total)
+	require.Len(t, list, 2)
+	assert.Equal(t, "a-model", list[0].Name)
+	assert.Equal(t, "b-model", list[1].Name)
 }
 
 // ============ ProviderDefinitionRepo ============

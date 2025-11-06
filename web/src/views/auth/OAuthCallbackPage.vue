@@ -1,79 +1,42 @@
+<template>
+  <div class="callback-page">
+    <el-result v-if="error" icon="error" title="登录失败" :sub-title="error">
+      <template #extra><el-button type="primary" @click="$router.push('/login')">重新登录</el-button></template>
+    </el-result>
+    <el-result v-else icon="success" title="登录成功">
+      <template #sub-title>正在跳转...</template>
+    </el-result>
+  </div>
+</template>
+
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
-const router = useRouter()
 const route = useRoute()
+const router = useRouter()
 const authStore = useAuthStore()
 const error = ref('')
 
 onMounted(async () => {
-  const token = route.query.token as string
-
-  if (!token) {
-    error.value = '登录失败：未获取到认证令牌'
-    return
-  }
-
-  // Save token and fetch user info
-  authStore.setToken(token)
-  await authStore.fetchCurrentUser()
-
-  if (authStore.isAuthenticated) {
-    const redirect = localStorage.getItem('auth_redirect') || '/'
-    localStorage.removeItem('auth_redirect')
-    router.replace(redirect)
-  } else {
-    error.value = '登录失败：令牌验证未通过'
+  const code = route.query.code as string
+  const state = route.query.state as string
+  if (!code || !state) { error.value = '缺少认证参数'; return }
+  try {
+    await authStore.handleCallback(code, state)
+    setTimeout(() => router.replace('/home'), 500)
+  } catch (e: any) {
+    error.value = e?.response?.data?.message || '认证失败，请重试'
   }
 })
 </script>
 
-<template>
-  <div class="callback-page">
-    <div class="callback-container">
-      <template v-if="error">
-        <el-result icon="error" :title="error">
-          <template #extra>
-            <el-button type="primary" @click="authStore.loginRedirect()">
-              重新登录
-            </el-button>
-          </template>
-        </el-result>
-      </template>
-      <template v-else>
-        <div class="callback-loading">
-          <el-icon class="is-loading" :size="48">
-            <Loading />
-          </el-icon>
-          <p>登录成功，正在跳转...</p>
-        </div>
-      </template>
-    </div>
-  </div>
-</template>
-
 <style scoped>
 .callback-page {
-  height: 100vh;
   display: flex;
-  align-items: center;
   justify-content: center;
-  background: var(--el-bg-color-page);
-}
-
-.callback-container {
-  text-align: center;
-}
-
-.callback-loading .el-icon {
-  color: var(--el-color-primary);
-  margin-bottom: 16px;
-}
-
-.callback-loading p {
-  color: var(--el-text-color-secondary);
-  font-size: 16px;
+  align-items: center;
+  min-height: 60vh;
 }
 </style>

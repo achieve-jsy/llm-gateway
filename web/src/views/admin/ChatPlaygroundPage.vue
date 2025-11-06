@@ -449,7 +449,7 @@ function renderContent(content: string): string {
 .pg {
   display: flex;
   height: calc(100vh - 97px); /* 减去顶栏+padding */
-  margin: -24px -32px; /* 抵消 page-container padding */
+  margin: -20px -24px; /* 抵消 page-container padding */
   background: var(--el-bg-color);
   border-radius: 0;
   overflow: hidden;

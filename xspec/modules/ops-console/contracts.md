@@ -121,6 +121,101 @@ async function fetchModels(): Promise<ModelInfo[]> {
 
 ---
 
+### 2.2 POST /api/v1/providers/:id/sync-models
+
+**基本信息**：
+
+| 项 | 内容 |
+| :--- | :--- |
+| 接口路径 | /api/v1/providers/:id/sync-models |
+| 请求方法 | POST |
+| 生产方 | control-plane |
+| 消费方 | ops-console |
+| 用途 | 触发指定渠道的模型同步，获取上游模型与本地模型的差异列表 |
+| 调用时机 | 渠道列表页点击"同步模型"按钮时调用 |
+
+**请求参数**：
+
+| 参数 | 位置 | 类型 | 必填 | 说明 |
+| :--- | :--- | :--- | :---: | :--- |
+| id | URL Path | string | 是 | 渠道唯一标识 |
+
+**成功响应**（HTTP 200）：
+
+```typescript
+interface SyncResult {
+  added: SyncModelItem[]
+  existing: SyncModelItem[]
+  removed: SyncModelItem[]
+  total_upstream: number
+  total_local: number
+  unsupported: boolean
+}
+
+interface SyncModelItem {
+  id: string
+  owned_by: string
+}
+```
+
+**错误处理**：
+
+| HTTP 状态 | error.type | 前端处理 |
+| :--- | :--- | :--- |
+| 400 | sync_not_supported | 弹窗显示"该渠道类型不支持自动同步" |
+| 400 | provider_disabled | ElMessage.warning("请先启用渠道") |
+| 502 | upstream_error | ElMessage.error("厂商接口调用失败：" + message) |
+
+---
+
+### 2.3 POST /api/v1/providers/:id/sync-models/confirm
+
+**基本信息**：
+
+| 项 | 内容 |
+| :--- | :--- |
+| 接口路径 | /api/v1/providers/:id/sync-models/confirm |
+| 请求方法 | POST |
+| 生产方 | control-plane |
+| 消费方 | ops-console |
+| 用途 | 确认批量注册勾选的新增模型，并可选禁用已下架模型 |
+| 调用时机 | SyncModelsDialog 点击"确认注册"按钮时调用 |
+
+**请求参数**：
+
+| 参数 | 位置 | 类型 | 必填 | 说明 |
+| :--- | :--- | :--- | :---: | :--- |
+| id | URL Path | string | 是 | 渠道唯一标识 |
+
+**请求体**：
+
+```typescript
+interface ConfirmSyncPayload {
+  models_to_add: string[]
+  disable_removed?: boolean  // 默认 true
+}
+```
+
+**成功响应**（HTTP 200）：
+
+```typescript
+interface ConfirmSyncResult {
+  registered: number
+  skipped: number
+  disabled: number
+}
+```
+
+**错误处理**：
+
+| HTTP 状态 | 前端处理 |
+| :--- | :--- |
+| 400 | ElMessage.error("请求参数错误") |
+| 401 | 后台统一拦截器重定向到登录页 |
+| 500 | ElMessage.error("注册失败，请稍后重试") |
+
+---
+
 ## 3. 错误码与前端处理
 
 | HTTP 状态码 | 错误场景 | error.type | 前端处理策略 | UI 表现 |

@@ -20,7 +20,7 @@ vi.mock('@/services/control-plane', () => ({
   deleteProvider: vi.fn(),
   toggleProviderStatus: vi.fn(),
   updateProvider: vi.fn(),
-  testProvider: vi.fn(),
+  checkProvider: vi.fn(),
   syncModels: vi.fn()
 }))
 
@@ -44,7 +44,7 @@ import {
   deleteProvider,
   toggleProviderStatus,
   updateProvider,
-  testProvider,
+  checkProvider,
   syncModels
 } from '@/services/control-plane'
 import { resolveErrorMessage } from '@/services/http'
@@ -56,7 +56,7 @@ const mockedDelete = vi.mocked(deleteProvider)
 const mockedToggle = vi.mocked(toggleProviderStatus)
 const mockedResolveError = vi.mocked(resolveErrorMessage)
 const mockedUpdate = vi.mocked(updateProvider)
-const mockedTest = vi.mocked(testProvider)
+const mockedTest = vi.mocked(checkProvider)
 const mockedSync = vi.mocked(syncModels)
 
 const sampleProviders = [
@@ -78,8 +78,8 @@ const sampleProviders = [
     max_retries: 3,
     timeout: 30,
     tag: 'production',
-    created_at: '',
-    updated_at: ''
+    created_at: '2026-05-23T10:20:30Z',
+    updated_at: '2026-05-23T11:21:31Z'
   },
   {
     id: 'p2',
@@ -99,8 +99,8 @@ const sampleProviders = [
     max_retries: 3,
     timeout: 30,
     tag: 'staging',
-    created_at: '',
-    updated_at: ''
+    created_at: '2026-05-22T08:09:10Z',
+    updated_at: '2026-05-22T09:10:11Z'
   }
 ] as any[]
 
@@ -147,9 +147,10 @@ function mountPage() {
 describe('ProviderListPage.vue', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockedGetProviders.mockImplementation(async () =>
-      sampleProviders.map((p) => ({ ...p }))
-    )
+    mockedGetProviders.mockImplementation(async () => ({
+      data: sampleProviders.map((p) => ({ ...p })),
+      total: sampleProviders.length,
+    }))
     mockedGetDefs.mockResolvedValue([
       { id: 'openai', display_name: 'OpenAI' } as any,
       { id: 'anthropic', display_name: 'Anthropic' } as any
@@ -159,7 +160,7 @@ describe('ProviderListPage.vue', () => {
       total: 1
     })
     mockedDelete.mockResolvedValue(undefined as any)
-    mockedToggle.mockResolvedValue({ ...sampleProviders[0], status: 2 } as any)
+    mockedToggle.mockResolvedValue({ ...sampleProviders[0], enabled: false, status: 2 } as any)
     mockedUpdate.mockResolvedValue(undefined as any)
     mockedTest.mockResolvedValue({
       success: true,
@@ -181,16 +182,17 @@ describe('ProviderListPage.vue', () => {
   })
 
   describe('initial load', () => {
-    it('loads providers, definitions and models on mount', async () => {
+    it('loads providers and definitions on mount', async () => {
       mountPage()
       await flushPromises()
       expect(mockedGetProviders).toHaveBeenCalled()
       expect(mockedGetDefs).toHaveBeenCalled()
-      expect(mockedGetModels).toHaveBeenCalled()
+      // model_count 现在由后端直接返回，前端不再单独调用 getModels
+      expect(mockedGetModels).not.toHaveBeenCalled()
     })
 
     it('shows error when providers loading fails', async () => {
-      mockedGetProviders.mockRejectedValueOnce(new Error('boom'))
+      mockedGetProviders.mockRejectedValue(new Error('boom'))
       mountPage()
       await flushPromises()
       expect(ElMessage.error).toHaveBeenCalledWith('加载渠道列表失败')
@@ -202,17 +204,29 @@ describe('ProviderListPage.vue', () => {
       expect(wrapper.text()).toContain('OpenAI Prod')
       expect(wrapper.text()).toContain('Anthropic')
     })
+
+    it('renders created_at and updated_at columns', async () => {
+      const wrapper = mountPage()
+      await flushPromises()
+      expect(wrapper.text()).toContain('创建时间')
+      expect(wrapper.text()).toContain('更新时间')
+      expect(wrapper.text()).toContain('2026-05-23 10:20:30')
+      expect(wrapper.text()).toContain('2026-05-23 11:21:31')
+    })
   })
 
   describe('tag filter', () => {
     it('filters providers by selected tag', async () => {
       const wrapper = mountPage()
       await flushPromises()
-      const tagSelect = wrapper.find('.header-actions select')
-      await tagSelect.setValue('production')
+      ;(wrapper.vm as any).filterTag = 'production'
+      ;(wrapper.vm as any).handleFilterChange()
       await flushPromises()
-      expect(wrapper.text()).toContain('OpenAI Prod')
-      expect(wrapper.text()).not.toContain('Anthropic')
+      expect(mockedGetProviders).toHaveBeenLastCalledWith(expect.objectContaining({
+        page: 1,
+        pageSize: 10,
+        tag: 'production'
+      }))
     })
   })
 
@@ -239,16 +253,15 @@ describe('ProviderListPage.vue', () => {
       expect(dialog.attributes('data-provider-id')).toBe('p1')
     })
 
-    it('reloads data after dialog saved event', async () => {
+    it('reloads providers after dialog saved event', async () => {
       const wrapper = mountPage()
       await flushPromises()
       mockedGetProviders.mockClear()
-      mockedGetModels.mockClear()
       const dialog = wrapper.findComponent(ProviderDialogStub)
       dialog.vm.$emit('saved')
       await flushPromises()
       expect(mockedGetProviders).toHaveBeenCalled()
-      expect(mockedGetModels).toHaveBeenCalled()
+      // 不再单独调 getModels，model_count 由 providers 接口直接携带
     })
   })
 
@@ -264,7 +277,7 @@ describe('ProviderListPage.vue', () => {
       expect(ElMessage.success).toHaveBeenCalledWith('已禁用')
     })
 
-    it('uses returned Provider from toggle to update local state (S1-6)', async () => {
+    it('toggle 后会重新加载渠道列表', async () => {
       const updatedProvider = { ...sampleProviders[0], status: 2, response_time: 999 }
       mockedToggle.mockResolvedValueOnce(updatedProvider as any)
       const wrapper = mountPage()
@@ -273,8 +286,7 @@ describe('ProviderListPage.vue', () => {
       const disableBtn = wrapper.findAll('.el-button-stub').find((b) => b.text() === '禁用')!
       await disableBtn.trigger('click')
       await flushPromises()
-      // Should NOT refetch providers — uses returned value directly
-      expect(mockedGetProviders).not.toHaveBeenCalled()
+      expect(mockedGetProviders).toHaveBeenCalled()
     })
 
     it('shows error when toggle fails', async () => {
@@ -307,7 +319,7 @@ describe('ProviderListPage.vue', () => {
       const testBtn = wrapper.findAll('.el-button-stub').find((b) => b.text() === '测试')!
       await testBtn.trigger('click')
       await flushPromises()
-      expect(ElMessage.error).toHaveBeenCalledWith('测试请求异常，请检查网络')
+      expect(ElMessage.error).toHaveBeenCalledWith('检测请求异常，请检查网络')
     })
   })
 
@@ -420,14 +432,14 @@ describe('ProviderListPage.vue', () => {
   })
 
   describe('sync dialog saved', () => {
-    it('reloads models when sync dialog emits saved', async () => {
+    it('reloads providers when sync dialog emits saved', async () => {
       const wrapper = mountPage()
       await flushPromises()
-      mockedGetModels.mockClear()
+      mockedGetProviders.mockClear()
       const sd = wrapper.findComponent(SyncModelsDialogStub)
       sd.vm.$emit('saved')
       await flushPromises()
-      expect(mockedGetModels).toHaveBeenCalled()
+      expect(mockedGetProviders).toHaveBeenCalled()
     })
   })
 })

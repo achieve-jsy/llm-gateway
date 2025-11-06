@@ -6,27 +6,17 @@
       <div class="header-actions">
         <el-input
           v-model="filterName"
-          placeholder="搜索模型名称"
+          placeholder="搜索上游模型ID"
           clearable
           :prefix-icon="Search"
-          style="width: 200px; margin-right: 12px"
+          class="toolbar-field toolbar-field-lg"
           @input="handleFilterChange"
         />
-        <el-select
-          v-model="filterModelType"
-          placeholder="按类型筛选"
-          clearable
-          style="width: 130px; margin-right: 12px"
-          @change="handleFilterChange"
-        >
-          <el-option label="chat" value="chat" />
-          <el-option label="embedding" value="embedding" />
-        </el-select>
         <el-select
           v-model="filterProviderId"
           placeholder="按渠道筛选"
           clearable
-          style="width: 180px; margin-right: 12px"
+          class="toolbar-field"
           @change="handleFilterChange"
         >
           <el-option
@@ -37,12 +27,22 @@
           />
         </el-select>
         <el-select
+          v-model="filterEnabled"
+          placeholder="按状态筛选"
+          clearable
+          class="toolbar-field toolbar-field-xs"
+          @change="handleFilterChange"
+        >
+          <el-option label="已启用" value="true" />
+          <el-option label="已停用" value="false" />
+        </el-select>
+        <el-select
           v-model="filterTagIds"
           placeholder="按标签筛选"
           multiple
           clearable
           collapse-tags
-          style="width: 200px; margin-right: 12px"
+          class="toolbar-field toolbar-field-lg"
           @change="handleFilterChange"
         >
           <el-option
@@ -92,9 +92,9 @@
     <!-- 模型列表表格 -->
     <el-table :data="filteredModels" border stripe @selection-change="handleSelectionChange">
       <el-table-column type="selection" width="45" />
-      <el-table-column prop="name" label="模型名称" min-width="180" show-overflow-tooltip />
+      <el-table-column prop="name" label="上游模型ID" min-width="180" show-overflow-tooltip />
 
-      <el-table-column label="上游模型ID" min-width="160" show-overflow-tooltip>
+      <el-table-column label="模型名称" min-width="160" show-overflow-tooltip>
         <template #default="{ row }">
           <span v-if="row.upstream_model_id" class="mono-text">{{ row.upstream_model_id }}</span>
           <span v-else class="text-muted">-</span>
@@ -106,35 +106,6 @@
           {{ row.provider?.name || getProviderName(row.provider_id) }}
         </template>
       </el-table-column>
-
-      <el-table-column label="类型" width="100">
-        <template #default="{ row }">
-          <el-tag :type="row.model_type === 'embedding' ? 'warning' : 'success'" size="small">
-            {{ row.model_type || 'chat' }}
-          </el-tag>
-        </template>
-      </el-table-column>
-
-      <el-table-column label="能力" width="140">
-        <template #default="{ row }">
-          <span v-if="row.catalog" class="capability-row">
-            <span v-if="row.catalog.supports_function_calling" title="function calling">🛠</span>
-            <span v-if="row.catalog.supports_vision" title="vision">🖼</span>
-            <span v-if="row.catalog.supports_prompt_caching" title="prompt caching">💾</span>
-            <span v-if="row.catalog.supports_response_schema" title="response schema">📋</span>
-          </span>
-          <span v-else class="text-muted">-</span>
-          <el-tag
-            v-if="row.catalog?.deprecation_date"
-            type="danger"
-            size="small"
-            class="dep-badge"
-          >
-            ⏰ {{ row.catalog.deprecation_date.slice(0, 10) }} 废弃
-          </el-tag>
-        </template>
-      </el-table-column>
-
 
       <el-table-column label="标签" min-width="160">
         <template #default="{ row }">
@@ -232,6 +203,18 @@
         </template>
       </el-table-column>
 
+      <el-table-column label="创建时间" width="170" align="center">
+        <template #default="{ row }">
+          <span>{{ formatDateTime(row.created_at) }}</span>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="更新时间" width="170" align="center">
+        <template #default="{ row }">
+          <span>{{ formatDateTime(row.updated_at) }}</span>
+        </template>
+      </el-table-column>
+
       <el-table-column label="操作" width="180" align="center">
         <template #default="{ row }">
           <el-button text type="primary" size="small" @click="openEditDialog(row)">编辑</el-button>
@@ -298,8 +281,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Setting } from '@element-plus/icons-vue'
-import { getModels, deleteModel, updateModel, getProviders, getModelTags, getModelTagsForModel, batchDeleteModels, batchUpdateModelStatus, resetModelOverride, checkModel } from '@/services/control-plane'
+import { Search, Setting } from '@element-plus/icons-vue'
+import { getModels, deleteModel, updateModel, getProviders, getModelTags, batchGetModelTags, batchDeleteModels, batchUpdateModelStatus, resetModelOverride, checkModel } from '@/services/control-plane'
 import type { Model } from '@/types/model'
 import type { Provider } from '@/types/provider'
 import type { ModelTag } from '@/types/model-tag'
@@ -314,7 +297,7 @@ const providerOptions = ref<Provider[]>([])
 const allTags = ref<ModelTag[]>([])
 const filterProviderId = ref('')
 const filterName = ref('')
-const filterModelType = ref('')
+const filterEnabled = ref('')
 const filterTagIds = ref<string[]>([])
 const modelTagsMap = ref<Record<string, ModelTag[]>>({})
 const currentPage = ref(1)
@@ -329,6 +312,11 @@ const selectedModelIds = computed(() => selectedModels.value.map(m => m.id))
 const batchTagDialogVisible = ref(false)
 const modelCheckSettingsVisible = ref(false)
 const checkingModelId = ref('')
+
+function normalizeEnabledFilter(value: string | null | undefined): boolean | undefined {
+	if (value == null || value === '') return undefined
+	return value === 'true'
+}
 
 /** 客户端标签筛选（在后端分页结果上进一步过滤） */
 const filteredModels = computed(() => {
@@ -350,7 +338,7 @@ async function loadModels() {
       page: currentPage.value,
       pageSize: pageSize.value,
       name: filterName.value,
-      model_type: filterModelType.value,
+      enabled: normalizeEnabledFilter(filterEnabled.value),
     })
     models.value = result.data
     total.value = result.total
@@ -360,19 +348,17 @@ async function loadModels() {
   }
 }
 
-/** 加载当前页模型的标签 */
+/** 加载当前页模型的标签（单次批量查询，消除 N+1） */
 async function loadModelTags() {
-  const map: Record<string, ModelTag[]> = {}
-  await Promise.all(
-    models.value.map(async (model) => {
-      try {
-        map[model.id] = await getModelTagsForModel(model.id)
-      } catch {
-        map[model.id] = []
-      }
-    })
-  )
-  modelTagsMap.value = map
+  if (models.value.length === 0) {
+    modelTagsMap.value = {}
+    return
+  }
+  try {
+    modelTagsMap.value = await batchGetModelTags(models.value.map(m => m.id))
+  } catch {
+    modelTagsMap.value = {}
+  }
 }
 
 /** 翻页或切换 size 时重新加载 */
@@ -426,6 +412,14 @@ function formatTokenCount(count: number): string {
   return String(count)
 }
 
+function formatDateTime(value: string): string {
+	if (!value) return '-'
+	const date = new Date(value)
+	if (Number.isNaN(date.getTime())) return value
+	const pad = (n: number) => String(n).padStart(2, '0')
+	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
 /** 恢复某字段跟随目录（取消人工覆盖） */
 async function handleResetOverride(row: Model, field: ResettableOverrideField) {
   try {
@@ -445,6 +439,7 @@ async function handleToggleModel(row: Model, enabled: boolean) {
       name: row.name,
       provider_id: row.provider_id,
       model_type: row.model_type,
+      enabled: enabled,
       upstream_model_id: row.upstream_model_id,
       description: row.description,
       context_length: row.context_length,
@@ -454,6 +449,7 @@ async function handleToggleModel(row: Model, enabled: boolean) {
       weight: row.weight
     })
     row.enabled = enabled
+    ElMessage.success(enabled ? '已启用' : '已禁用')
   } catch {
     ElMessage.error('状态切换失败')
   }
@@ -598,15 +594,13 @@ function shortenError(error: string): string {
 }
 
 onMounted(() => {
-  loadProviders()
-  loadAllTags()
-  loadModels()
+  Promise.all([loadProviders(), loadAllTags(), loadModels()])
 })
 </script>
 
 <style scoped>
 .model-page {
-  padding: 24px;
+  padding: 0;
 }
 
 .page-header {
@@ -626,6 +620,21 @@ onMounted(() => {
 .header-actions {
   display: flex;
   align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.toolbar-field {
+  width: 180px;
+}
+
+.toolbar-field-xs {
+  width: 130px;
+}
+
+.toolbar-field-lg {
+  width: 200px;
 }
 
 .mono-text {
@@ -644,18 +653,8 @@ onMounted(() => {
   margin-top: 16px;
 }
 
-.capability-row {
-  display: inline-flex;
-  gap: 4px;
-  font-size: 14px;
-}
-
-.dep-badge {
-  margin-left: 6px;
-}
-
 .override-badge {
-  margin-left: 6px;
+	margin-left: 6px;
 }
 
 .restore-btn {
@@ -698,4 +697,17 @@ onMounted(() => {
 .health-ok-text { color: #27AE60; }
 .health-warn-text { color: #EAB308; }
 .health-error-text { color: #E74C3C; }
+
+@media (max-width: 900px) {
+  .page-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .header-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
 </style>

@@ -200,7 +200,7 @@ onMounted(() => {
 
 <style scoped>
 .model-discovery-section {
-  margin-top: 8px;
+  margin-top: 4px;
 }
 
 /* ─── 标题行 ───────────────────────────────── */
@@ -208,13 +208,13 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
-  padding-bottom: 12px;
-  border-bottom: 3px dashed var(--el-border-color);
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--el-border-color);
 }
 
 .section-title {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 800;
   color: var(--el-text-color-primary);
   display: flex;
@@ -224,7 +224,7 @@ onMounted(() => {
 }
 
 .title-icon {
-  font-size: 20px;
+  font-size: 18px;
 }
 
 .model-count {
@@ -239,7 +239,7 @@ onMounted(() => {
 }
 
 .search-input {
-  width: 180px;
+  width: 168px;
 }
 
 .refresh-btn {
@@ -250,17 +250,18 @@ onMounted(() => {
 .filter-bar {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
-  margin-bottom: 16px;
-  padding: 12px 16px;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 10px 14px;
   background: var(--el-fill-color-light);
-  border-radius: 10px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
 }
 
 .filter-group {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .filter-label {
@@ -281,8 +282,8 @@ onMounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 10px;
-  font-size: 12px;
+  padding: 3px 9px;
+  font-size: 11px;
   font-weight: 500;
   color: var(--el-text-color-secondary);
   background: var(--el-bg-color);
@@ -313,7 +314,7 @@ onMounted(() => {
 
 /* ─── 滚动区域 ─────────────────────────────── */
 .model-scroll-area {
-  max-height: 480px;
+  max-height: 520px;
   overflow-y: auto;
   padding-right: 4px;
   scrollbar-width: thin;
@@ -341,15 +342,15 @@ onMounted(() => {
 .skeleton-grid,
 .model-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px;
 }
 
 .skeleton-card {
   background: var(--el-bg-color);
   border: 1px solid var(--el-border-color);
-  border-radius: 12px;
-  padding: 20px;
+  border-radius: 8px;
+  padding: 16px;
 }
 
 /* ─── 错误/空态 ─────────────────────────────── */
@@ -357,8 +358,8 @@ onMounted(() => {
   background: rgba(231, 76, 60, 0.06);
   border: 1px solid rgba(231, 76, 60, 0.2);
   border-left: 4px solid #E74C3C;
-  border-radius: 12px;
-  padding: 24px;
+  border-radius: 8px;
+  padding: 20px;
   text-align: center;
 }
 
@@ -376,7 +377,7 @@ onMounted(() => {
 
 .empty-state {
   text-align: center;
-  padding: 48px 0;
+  padding: 40px 0;
 }
 
 .empty-icon {
@@ -400,8 +401,29 @@ onMounted(() => {
 .no-results {
   grid-column: 1 / -1;
   text-align: center;
-  padding: 40px;
+  padding: 32px;
   color: var(--el-text-color-secondary);
+}
+
+@media (max-width: 640px) {
+  .section-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .section-actions {
+    width: 100%;
+  }
+
+  .search-input {
+    width: 100%;
+  }
+
+  .model-grid,
+  .skeleton-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .no-results p {

@@ -86,7 +86,9 @@ func TestMask(t *testing.T) {
 	}{
 		{"empty", "", "****"},
 		{"<=8 chars", "abcdefgh", "****"},
-		{"normal", "sk-1234567890", "sk-****7890"},
+		{"9 chars", "123456789", "123****789"},
+		{"12 chars", "123456789012", "123****9012"},
+		{"13 chars", "sk-1234567890", "sk-****7890"},
 		{"long", "very-long-credential-string-1234", "ver****1234"},
 	}
 	for _, tt := range tests {

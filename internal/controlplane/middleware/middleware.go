@@ -1,10 +1,13 @@
 package middleware
 
 import (
+	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
 
@@ -30,6 +33,10 @@ func Logger() gin.HandlerFunc {
 
 // JWTAuth 管理员 JWT 认证中间件
 func JWTAuth() gin.HandlerFunc {
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		secret = "CHANGE_ME_JWT_SECRET"
+	}
 	return func(c *gin.Context) {
 		auth := c.GetHeader("Authorization")
 		if auth == "" || !strings.HasPrefix(auth, "Bearer ") {
@@ -43,7 +50,6 @@ func JWTAuth() gin.HandlerFunc {
 			return
 		}
 		token := strings.TrimPrefix(auth, "Bearer ")
-		// TODO: 实际 JWT 验证逻辑在后续版本完善（当前 SSO 未对接，先做 token 非空校验）
 		if token == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": gin.H{
@@ -53,6 +59,37 @@ func JWTAuth() gin.HandlerFunc {
 				},
 			})
 			return
+		}
+		parsed, err := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) {
+			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, jwt.ErrSignatureInvalid
+			}
+			return []byte(secret), nil
+		})
+		if err != nil || !parsed.Valid {
+			log.Printf("[JWTAuth] token parse failed: %v", err)
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": gin.H{
+					"type":    "authentication_error",
+					"message": "invalid token",
+					"code":    "unauthorized",
+				},
+			})
+			return
+		}
+		claims, ok := parsed.Claims.(jwt.MapClaims)
+		if !ok {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gin.H{"type": "authentication_error", "message": "invalid claims", "code": "unauthorized"}})
+			return
+		}
+		if passport, ok := claims["passport"].(string); ok {
+			c.Set("user_id", passport)
+		}
+		if email, ok := claims["email"].(string); ok {
+			c.Set("user_email", email)
+		}
+		if name, ok := claims["name"].(string); ok {
+			c.Set("user_name", name)
 		}
 		c.Set("admin_token", token)
 		c.Next()

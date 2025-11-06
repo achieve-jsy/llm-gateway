@@ -71,10 +71,30 @@ func (f *fakeCatalogRepo) ListAll() ([]model.ModelCatalog, error) {
 	return out, nil
 }
 
+func (f *fakeCatalogRepo) ListAutoBindCandidates() ([]model.ModelCatalog, error) {
+	return f.ListAll()
+}
+
 func (f *fakeCatalogRepo) Count() (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return int64(len(f.entries)), nil
+}
+
+func (f *fakeCatalogRepo) GetByIDs(ids []uuid.UUID) (map[uuid.UUID]*model.ModelCatalog, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	result := map[uuid.UUID]*model.ModelCatalog{}
+	for _, id := range ids {
+		for _, e := range f.entries {
+			if e.ID == id {
+				c := *e
+				result[id] = &c
+				break
+			}
+		}
+	}
+	return result, nil
 }
 
 // fakeCatalogModelRepo 实现 catalog 自动同步测试中需要的最小 ModelRepo 子集。
@@ -107,6 +127,19 @@ func (f *fakeCatalogModelRepo) GetByID(id uuid.UUID) (*model.Model, error) {
 		return &c, nil
 	}
 	return nil, errors.New("not found")
+}
+
+func (f *fakeCatalogModelRepo) GetByIDs(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	result := map[uuid.UUID]*model.Model{}
+	for _, id := range ids {
+		if m, ok := f.models[id]; ok {
+			c := *m
+			result[id] = &c
+		}
+	}
+	return result, nil
 }
 
 func (f *fakeCatalogModelRepo) Update(m *model.Model) error {
@@ -898,3 +931,402 @@ func (r *countErrCatalogRepo) Count() (int64, error) {
 
 // 防止未使用 import 的烦恼
 var _ = strings.Contains
+
+// ===================== parsedToModel =====================
+
+func TestParsedToModel_FieldsCopied(t *testing.T) {
+	p := &ModelCatalogParsed{
+		SourceModelID:           "gpt-4o",
+		Provider:                "openai",
+		Mode:                    "chat",
+		DisplayName:             "gpt-4o",
+		ContextLength:           128000,
+		MaxOutputTokens:         16384,
+		InputPricePerMillion:    2.5,
+		OutputPricePerMillion:   10,
+		SupportsFunctionCalling: true,
+		SupportsVision:          true,
+		RawPayload:              "{}",
+	}
+	now := time.Now()
+	m := parsedToModel(p, "litellm", now)
+	assert.NotEqual(t, uuid.Nil, m.ID, "ID should be auto-generated")
+	assert.Equal(t, "litellm", m.Source)
+	assert.Equal(t, "gpt-4o", m.SourceModelID)
+	assert.Equal(t, "openai", m.Provider)
+	assert.Equal(t, int64(128000), m.ContextLength)
+	assert.Equal(t, int64(16384), m.MaxOutputTokens)
+	assert.InDelta(t, 2.5, m.InputPricePerMillion, 1e-6)
+	assert.True(t, m.SupportsFunctionCalling)
+	assert.True(t, m.SupportsVision)
+	assert.Equal(t, now, m.SyncedAt)
+}
+
+func TestParsedToModel_TierPricing(t *testing.T) {
+	threshold := int64(200000)
+	inputAbove := 6.0
+	outputAbove := 30.0
+	p := &ModelCatalogParsed{
+		SourceModelID:       "claude-3-5-sonnet-200k",
+		TierThreshold:       &threshold,
+		InputPriceAboveTier: &inputAbove,
+		OutputPriceAboveTier: &outputAbove,
+	}
+	m := parsedToModel(p, "litellm", time.Now())
+	require.NotNil(t, m.TierThreshold)
+	assert.Equal(t, int64(200000), *m.TierThreshold)
+	require.NotNil(t, m.InputPriceAboveTier)
+	assert.InDelta(t, 6.0, *m.InputPriceAboveTier, 1e-6)
+}
+
+// ===================== deltaPct / floatEqual =====================
+
+func TestDeltaPct_FromZero(t *testing.T) {
+	assert.Equal(t, 0.0, deltaPct(0, 10))
+	assert.Equal(t, 0.0, deltaPct(0, 0))
+}
+
+func TestDeltaPct_Normal(t *testing.T) {
+	assert.InDelta(t, 150.0, deltaPct(1, 2.5), 0.01)
+	assert.InDelta(t, -50.0, deltaPct(2, 1), 0.01)
+}
+
+func TestFloatEqual(t *testing.T) {
+	assert.True(t, floatEqual(1.0, 1.0))
+	assert.True(t, floatEqual(1.0, 1.0+1e-10))
+	assert.False(t, floatEqual(1.0, 1.01))
+}
+
+// ===================== lastSegment =====================
+
+func TestLastSegment(t *testing.T) {
+	assert.Equal(t, "deepseek-r1", lastSegment("azure_ai/deepseek-r1"))
+	assert.Equal(t, "kimi-k2.5", lastSegment("baseten/moonshotai/Kimi-K2.5"))
+	assert.Equal(t, "deepseek-chat", lastSegment("deepseek-chat"))
+	assert.Equal(t, "gpt-4o", lastSegment("  GPT-4O  "))
+}
+
+// ===================== SyncFromBundled empty =====================
+
+func TestCatalogSync_SyncFromBundled_EmptyBytes(t *testing.T) {
+	repo := newFakeCatalogRepo()
+	svc := NewCatalogSyncService(repo, nil, CatalogSyncOpts{BundledBytes: []byte{}})
+	_, err := svc.SyncFromBundled()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no bundled")
+}
+
+// ===================== ApplyPriceDiff edge cases =====================
+
+func TestApplyPriceDiff_NoModelRepo(t *testing.T) {
+	svc := NewCatalogSyncService(newFakeCatalogRepo(), nil, CatalogSyncOpts{})
+	_, err := svc.ApplyPriceDiff(context.Background(), []uuid.UUID{uuid.New()})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "model repo not configured")
+}
+
+func TestApplyPriceDiff_NoCatalogLink(t *testing.T) {
+	repo := newFakeCatalogRepo()
+	mr := newFakeCatalogModelRepo()
+	svc := NewCatalogSyncService(repo, mr, CatalogSyncOpts{})
+
+	mid := uuid.New()
+	mr.put(&model.Model{ID: mid, Name: "m", ProviderID: uuid.New(), ModelType: "chat"})
+
+	_, err := svc.ApplyPriceDiff(context.Background(), []uuid.UUID{mid})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no catalog link")
+}
+
+func TestApplyPriceDiff_EmptyIDs(t *testing.T) {
+	repo := newFakeCatalogRepo()
+	mr := newFakeCatalogModelRepo()
+	svc := NewCatalogSyncService(repo, mr, CatalogSyncOpts{})
+	_, err := svc.ApplyPriceDiff(context.Background(), []uuid.UUID{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no model ids provided")
+}
+
+// ===================== ApplyAutoUpdates nil modelRepo =====================
+
+func TestApplyAutoUpdates_NoModelRepo(t *testing.T) {
+	svc := NewCatalogSyncService(newFakeCatalogRepo(), nil, CatalogSyncOpts{})
+	_, err := svc.ApplyAutoUpdates(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "model repo not configured")
+}
+
+// ===================== ComputePriceDiff nil modelRepo =====================
+
+func TestComputePriceDiff_NoModelRepo(t *testing.T) {
+	svc := NewCatalogSyncService(newFakeCatalogRepo(), nil, CatalogSyncOpts{})
+	_, err := svc.ComputePriceDiff(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "model repo not configured")
+}
+
+// ===================== AutoBind nil modelRepo =====================
+
+func TestAutoBind_NoModelRepo(t *testing.T) {
+	svc := NewCatalogSyncService(newFakeCatalogRepo(), nil, CatalogSyncOpts{})
+	_, err := svc.AutoBind(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "model repo not configured")
+}
+
+// ===================== AutoBind SetCatalogID failure =====================
+
+func TestAutoBind_SetCatalogIDFailure_FallsToUnmatched(t *testing.T) {
+	repo := newFakeCatalogRepo()
+	mr := &setCatalogIDFailRepo{fakeCatalogModelRepo: newFakeCatalogModelRepo()}
+	svc := NewCatalogSyncService(repo, mr, CatalogSyncOpts{})
+
+	cat := makeCatalogEntry("gpt-4o", "openai", 128000, 16384, 2.5, 10)
+	require.NoError(t, repo.BatchUpsert([]*model.ModelCatalog{cat}))
+
+	mid := uuid.New()
+	mr.put(&model.Model{ID: mid, Name: "gpt-4o", ProviderID: uuid.New(), ModelType: "chat"})
+
+	res, err := svc.AutoBind(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, res.Matched, "SetCatalogID fail should not add to matched")
+	assert.Equal(t, 1, res.Unmatched, "should fall into unmatched when SetCatalogID fails")
+}
+
+type setCatalogIDFailRepo struct{ *fakeCatalogModelRepo }
+
+func (r *setCatalogIDFailRepo) SetCatalogID(_, _ uuid.UUID) error {
+	return errors.New("write failed")
+}
+
+// ===================== applyBytes invalid JSON =====================
+
+func TestCatalogSync_ApplyBytes_InvalidJSON(t *testing.T) {
+	repo := newFakeCatalogRepo()
+	svc := NewCatalogSyncService(repo, nil, CatalogSyncOpts{})
+
+	_, err := svc.applyBytes([]byte("not-json"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode catalog payload")
+}
+
+// ===================== applyBytes tolerant parsing =====================
+
+func TestCatalogSync_ApplyBytes_TolerantParsing(t *testing.T) {
+	repo := newFakeCatalogRepo()
+	svc := NewCatalogSyncService(repo, nil, CatalogSyncOpts{})
+
+	payload := `{
+  "bad-entry": {"max_input_tokens": "string-not-number", "mode": "chat", "litellm_provider": "unknown"},
+  "good-entry": {"max_input_tokens": 32000, "mode": "chat", "litellm_provider": "openai", "input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}
+}`
+	count, err := svc.applyBytes([]byte(payload))
+	require.NoError(t, err)
+	assert.Equal(t, 2, count, "parser tolerates bad fields, both entries get through")
+	got, _ := repo.GetBySourceModelID("litellm", "good-entry")
+	require.NotNil(t, got)
+	assert.Equal(t, int64(32000), got.ContextLength)
+}
+
+func TestCatalogSync_FetchRemote_RetryOnTransientError(t *testing.T) {
+	callCount := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount < 3 {
+			http.Error(w, "temp error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(minimalRemoteJSON))
+	}))
+	defer ts.Close()
+
+	repo := newFakeCatalogRepo()
+	svc := NewCatalogSyncService(repo, nil, CatalogSyncOpts{
+		RemoteURL:   ts.URL,
+		HTTPTimeout: 2 * time.Second,
+		MaxRetries:  2,
+	})
+
+	count, err := svc.SyncFromRemote(context.Background())
+	require.NoError(t, err)
+	assert.Greater(t, count, 0)
+	assert.Equal(t, 3, callCount, "should retry 2 extra times (total 3 calls)")
+}
+
+func TestCatalogSync_IsSyncing_ReflectsState(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(minimalRemoteJSON))
+	}))
+	defer ts.Close()
+
+	repo := newFakeCatalogRepo()
+	svc := NewCatalogSyncService(repo, nil, CatalogSyncOpts{
+		RemoteURL:   ts.URL,
+		HTTPTimeout: 2 * time.Second,
+	})
+
+	assert.False(t, svc.IsSyncing(), "initially not syncing")
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = svc.SyncFromRemote(context.Background())
+		done <- struct{}{}
+	}()
+
+	time.Sleep(30 * time.Millisecond)
+	assert.True(t, svc.IsSyncing(), "should be syncing during remote fetch")
+
+	<-done
+	assert.False(t, svc.IsSyncing(), "should not be syncing after completion")
+}
+
+func TestCatalogSync_HTTPClientInjection(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(minimalRemoteJSON))
+	}))
+	defer ts.Close()
+
+	repo := newFakeCatalogRepo()
+	customClient := &http.Client{Timeout: 5 * time.Second}
+	svc := NewCatalogSyncService(repo, nil, CatalogSyncOpts{
+		RemoteURL:   ts.URL,
+		HTTPClient:  customClient,
+		HTTPTimeout: 2 * time.Second,
+	})
+
+	count, err := svc.SyncFromRemote(context.Background())
+	require.NoError(t, err)
+	assert.Greater(t, count, 0)
+}
+
+func TestAutoBind_UpstreamModelIDTailSegment(t *testing.T) {
+	repo := newFakeCatalogRepo()
+	mr := newFakeCatalogModelRepo()
+	svc := NewCatalogSyncService(repo, mr, CatalogSyncOpts{})
+
+	cat := makeCatalogEntry("anthropic/claude-3-opus", "anthropic", 200000, 4096, 15, 75)
+	require.NoError(t, repo.BatchUpsert([]*model.ModelCatalog{cat}))
+
+	mid := uuid.New()
+	mr.put(&model.Model{
+		ID: mid, Name: "my-claude-opus", ProviderID: uuid.New(), ModelType: "chat",
+		UpstreamModelID: "vanchin/claude-3-opus",
+	})
+
+	res, err := svc.AutoBind(context.Background())
+	require.NoError(t, err)
+	require.Len(t, res.Matched, 1, "tail segment match on upstream_model_id should bind")
+	assert.Equal(t, cat.ID, res.Matched[0].CatalogID)
+}
+
+func TestAutoBind_EmptyNameAndUpstream(t *testing.T) {
+	repo := newFakeCatalogRepo()
+	mr := newFakeCatalogModelRepo()
+	svc := NewCatalogSyncService(repo, mr, CatalogSyncOpts{})
+
+	cat := makeCatalogEntry("gpt-4o", "openai", 128000, 16384, 2.5, 10)
+	require.NoError(t, repo.BatchUpsert([]*model.ModelCatalog{cat}))
+
+	mr.put(&model.Model{
+		ID: uuid.New(), Name: "", ProviderID: uuid.New(), ModelType: "chat",
+		UpstreamModelID: "",
+	})
+
+	res, err := svc.AutoBind(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, res.Matched)
+	assert.Empty(t, res.Ambiguous)
+	assert.Equal(t, 1, res.Unmatched, "model with empty name and upstream_model_id should be unmatched")
+}
+
+func TestApplyAutoUpdates_MultipleModels(t *testing.T) {
+	repo := newFakeCatalogRepo()
+	mr := newFakeCatalogModelRepo()
+	svc := NewCatalogSyncService(repo, mr, CatalogSyncOpts{})
+
+	cat1 := makeCatalogEntry("gpt-4o", "openai", 128000, 16384, 2.5, 10)
+	cat2 := makeCatalogEntry("claude-3-opus", "anthropic", 200000, 4096, 15, 75)
+	require.NoError(t, repo.BatchUpsert([]*model.ModelCatalog{cat1, cat2}))
+
+	mid1 := uuid.New()
+	mid2 := uuid.New()
+	mr.put(&model.Model{
+		ID: mid1, Name: "gpt-4o", ProviderID: uuid.New(), ModelType: "chat",
+		ContextLength: 8000, MaxOutputTokens: 1024,
+		CatalogID: &cat1.ID,
+	})
+	mr.put(&model.Model{
+		ID: mid2, Name: "claude-3-opus", ProviderID: uuid.New(), ModelType: "chat",
+		ContextLength: 5000, MaxOutputTokens: 500,
+		CatalogID: &cat2.ID,
+	})
+
+	count, err := svc.ApplyAutoUpdates(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2, count, "both models should be updated")
+
+	got1, _ := mr.GetByID(mid1)
+	assert.Equal(t, 128000, got1.ContextLength)
+	got2, _ := mr.GetByID(mid2)
+	assert.Equal(t, 200000, got2.ContextLength)
+}
+
+func TestComputePriceDiff_MultipleModels(t *testing.T) {
+	repo := newFakeCatalogRepo()
+	mr := newFakeCatalogModelRepo()
+	svc := NewCatalogSyncService(repo, mr, CatalogSyncOpts{})
+
+	cat1 := makeCatalogEntry("gpt-4o", "openai", 128000, 16384, 2.5, 10)
+	cat2 := makeCatalogEntry("claude-3-opus", "anthropic", 200000, 4096, 15, 75)
+	require.NoError(t, repo.BatchUpsert([]*model.ModelCatalog{cat1, cat2}))
+
+	mid1 := uuid.New()
+	mid2 := uuid.New()
+	mr.put(&model.Model{
+		ID: mid1, Name: "gpt-4o", ProviderID: uuid.New(), ModelType: "chat",
+		InputPrice: 1, OutputPrice: 5,
+		CatalogID: &cat1.ID,
+	})
+	mr.put(&model.Model{
+		ID: mid2, Name: "claude-3-opus", ProviderID: uuid.New(), ModelType: "chat",
+		InputPrice: 15, OutputPrice: 75,
+		CatalogID: &cat2.ID,
+	})
+
+	diffs, err := svc.ComputePriceDiff(context.Background())
+	require.NoError(t, err)
+	require.Len(t, diffs, 1, "only mismatched model should appear in diff")
+	assert.Equal(t, mid1, diffs[0].ModelID)
+	assert.True(t, diffs[0].IsOverridden)
+}
+
+func TestApplyPriceDiff_CatalogNotFound(t *testing.T) {
+	repo := newFakeCatalogRepo()
+	mr := newFakeCatalogModelRepo()
+	svc := NewCatalogSyncService(repo, mr, CatalogSyncOpts{})
+
+	cid := uuid.New()
+	mid := uuid.New()
+	mr.put(&model.Model{
+		ID: mid, Name: "m", ProviderID: uuid.New(), ModelType: "chat",
+		CatalogID: &cid,
+	})
+
+	_, err := svc.ApplyPriceDiff(context.Background(), []uuid.UUID{mid})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "catalog for model")
+}
+
+func TestCatalogSync_SyncFromBundled_InvalidJSON(t *testing.T) {
+	repo := newFakeCatalogRepo()
+	svc := NewCatalogSyncService(repo, nil, CatalogSyncOpts{
+		BundledBytes: []byte("not-json"),
+	})
+	_, err := svc.SyncFromBundled()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode catalog payload")
+}

@@ -25,12 +25,16 @@ func (f *fakeInternalSvc) ListAvailableModels() ([]service.AvailableModel, error
 	return nil, nil
 }
 
+func (f *fakeInternalSvc) GetModelHealth(names []string) (map[string]service.ModelHealthInfo, error) {
+	return nil, nil
+}
+
 var _ InternalServiceInterface = (*fakeInternalSvc)(nil)
 
 func newInternalRouter(svc InternalServiceInterface) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	h := NewInternalHandler(svc)
+	h := NewInternalHandler(svc, nil)
 	r.GET("/internal/v1/models/available", h.ListAvailableModels)
 	return r
 }

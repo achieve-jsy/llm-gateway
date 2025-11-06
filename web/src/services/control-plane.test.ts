@@ -391,6 +391,18 @@ describe('Control Plane API Service', () => {
         params: { provider_id: 'provider1', page: 3, page_size: 20 }
       })
     })
+
+    it('should pass enabled filter when provided', async () => {
+      mockHttp.get.mockResolvedValueOnce({
+        data: { data: [], total: 0, page: 1, page_size: 20 }
+      })
+
+      await controlPlane.getModels(undefined, { enabled: false })
+
+      expect(mockHttp.get).toHaveBeenCalledWith('/api/v1/models', {
+        params: { enabled: false }
+      })
+    })
   })
 
   describe('createModel', () => {

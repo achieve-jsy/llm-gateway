@@ -181,6 +181,34 @@ describe('ChatPlaygroundPage', () => {
       expect(vm.models[0].name).toBe('qwen3-next-80b')
       expect(vm.models[0].provider?.name).toBe('百炼')
     })
+
+	it('只保留启用的 chat 模型', async () => {
+	  mockedGetModels.mockResolvedValue({
+	    data: [
+	      ...sampleModels,
+	      {
+	        ...sampleModels[0],
+	        id: 'uuid-embed',
+	        name: 'embed-v1',
+	        model_type: 'embedding',
+	        enabled: true,
+	      },
+	      {
+	        ...sampleModels[1],
+	        id: 'uuid-disabled',
+	        name: 'disabled-chat',
+	        model_type: 'chat',
+	        enabled: false,
+	      },
+	    ] as any,
+	    total: 4,
+	  })
+	  const wrapper = createWrapper()
+	  await flushPromises()
+	  const vm = wrapper.vm as any
+	  expect(vm.models).toHaveLength(2)
+	  expect(vm.models.map((m: any) => m.name)).toEqual(['qwen3-next-80b', 'deepseek-v3'])
+	})
   })
 
   describe('上下文窗口提示（来自模型列表）', () => {
@@ -343,6 +371,168 @@ describe('ChatPlaygroundPage', () => {
       const body = JSON.parse((global.fetch as any).mock.calls[0][1].body)
       expect(body.stop).toBeUndefined()
     })
+
+	it('非流式模式下直接渲染 message.content', async () => {
+	  ;(global.fetch as any).mockResolvedValue({
+	    ok: true,
+	    json: () => Promise.resolve({
+	      choices: [{ message: { content: '非流式回复' } }]
+	    })
+	  })
+
+	  const wrapper = createWrapper()
+	  await flushPromises()
+
+	  const vm = wrapper.vm as any
+	  vm.config.model = 'qwen3-next-80b'
+	  vm.config.stream = false
+	  vm.userInput = 'hello'
+
+	  await vm.sendMessage()
+	  await flushPromises()
+
+	  expect(vm.messages[1].content).toBe('非流式回复')
+	})
+
+    it('未填写 apiKey 时回退使用 localStorage auth_token', async () => {
+	  localStorage.setItem('auth_token', 'stored-token')
+	  ;(global.fetch as any).mockResolvedValue({
+	    ok: true,
+	    body: {
+	      getReader: () => ({
+	        read: vi.fn()
+	          .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode('data: [DONE]\n\n') })
+	          .mockResolvedValueOnce({ done: true, value: undefined })
+	      })
+	    }
+	  })
+
+	  const wrapper = createWrapper()
+	  await flushPromises()
+
+	  const vm = wrapper.vm as any
+	  vm.config.model = 'qwen3-next-80b'
+	  vm.config.apiKey = ''
+	  vm.userInput = 'auth'
+
+	  await vm.sendMessage()
+	  await flushPromises()
+
+      const [, opts] = (global.fetch as any).mock.calls[0]
+      expect(opts.headers['Authorization']).toBe('Bearer stored-token')
+    })
+
+	it('streaming 进行中时重复发送会被忽略', async () => {
+	  let resolveFirstRead: ((value: any) => void) | null = null
+	  ;(global.fetch as any).mockResolvedValue({
+	    ok: true,
+	    body: {
+	      getReader: () => ({
+	        read: vi.fn()
+	          .mockImplementationOnce(() => new Promise((resolve) => { resolveFirstRead = resolve }))
+	          .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode('data: [DONE]\n\n') })
+	          .mockResolvedValueOnce({ done: true, value: undefined })
+	      })
+	    }
+	  })
+
+	  const wrapper = createWrapper()
+	  await flushPromises()
+
+	  const vm = wrapper.vm as any
+	  vm.config.model = 'qwen3-next-80b'
+	  vm.userInput = 'first'
+	  const firstPromise = vm.sendMessage()
+	  await flushPromises()
+
+	  vm.userInput = 'second'
+	  await vm.sendMessage()
+	  expect(global.fetch).toHaveBeenCalledTimes(1)
+
+	  resolveFirstRead?.({ done: false, value: new TextEncoder().encode('data: [DONE]\n\n') })
+	  await firstPromise
+	})
+
+    it('Enter 发送而 Shift+Enter 不发送', async () => {
+	  ;(global.fetch as any).mockResolvedValue({
+	    ok: true,
+	    body: {
+	      getReader: () => ({
+	        read: vi.fn()
+	          .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode('data: [DONE]\n\n') })
+	          .mockResolvedValueOnce({ done: true, value: undefined })
+	      })
+	    }
+	  })
+
+	  const wrapper = createWrapper()
+	  await flushPromises()
+
+	  const vm = wrapper.vm as any
+	  vm.config.model = 'qwen3-next-80b'
+	  vm.userInput = 'keyboard'
+
+	  const preventDefault = vi.fn()
+	  await vm.onKeydown({ key: 'Enter', shiftKey: true, preventDefault } as any)
+	  expect(global.fetch).toHaveBeenCalledTimes(0)
+	  expect(preventDefault).not.toHaveBeenCalled()
+
+      await vm.onKeydown({ key: 'Enter', shiftKey: false, preventDefault } as any)
+      expect(preventDefault).toHaveBeenCalledTimes(1)
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+    })
+
+	it('发送后立即清空输入框', async () => {
+	  ;(global.fetch as any).mockResolvedValue({
+	    ok: true,
+	    body: {
+	      getReader: () => ({
+	        read: vi.fn()
+	          .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode('data: [DONE]\n\n') })
+	          .mockResolvedValueOnce({ done: true, value: undefined })
+	      })
+	    }
+	  })
+
+	  const wrapper = createWrapper()
+	  await flushPromises()
+
+	  const vm = wrapper.vm as any
+	  vm.config.model = 'qwen3-next-80b'
+	  vm.userInput = 'clear me'
+	  const promise = vm.sendMessage()
+	  expect(vm.userInput).toBe('')
+	  await promise
+	})
+
+	it('发送过程中 isStreaming 为 true，结束后恢复 false', async () => {
+	  let resolveRead: ((value: any) => void) | null = null
+	  ;(global.fetch as any).mockResolvedValue({
+	    ok: true,
+	    body: {
+	      getReader: () => ({
+	        read: vi.fn()
+	          .mockImplementationOnce(() => new Promise((resolve) => { resolveRead = resolve }))
+	          .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode('data: [DONE]\n\n') })
+	          .mockResolvedValueOnce({ done: true, value: undefined })
+	      })
+	    }
+	  })
+
+	  const wrapper = createWrapper()
+	  await flushPromises()
+	  const vm = wrapper.vm as any
+	  vm.config.model = 'qwen3-next-80b'
+	  vm.userInput = 'stream state'
+
+	  const promise = vm.sendMessage()
+	  await flushPromises()
+	  expect(vm.isStreaming).toBe(true)
+
+	  resolveRead?.({ done: false, value: new TextEncoder().encode('data: [DONE]\n\n') })
+	  await promise
+	  expect(vm.isStreaming).toBe(false)
+	})
   })
 
   describe('流式响应', () => {
@@ -440,6 +630,24 @@ describe('ChatPlaygroundPage', () => {
       expect(vm.messages[1].content).toContain('请求过于频繁')
       expect(ElMessage.error).toHaveBeenCalled()
     })
+
+	it('网络异常时 assistant 占位消息显示 Error 文本', async () => {
+	  ;(global.fetch as any).mockRejectedValue(new Error('network down'))
+
+	  const wrapper = createWrapper()
+	  await flushPromises()
+
+	  const vm = wrapper.vm as any
+	  vm.config.model = 'qwen3-next-80b'
+	  vm.userInput = 'failure'
+
+	  await vm.sendMessage()
+	  await flushPromises()
+
+	  expect(vm.messages).toHaveLength(2)
+	  expect(vm.messages[1].role).toBe('assistant')
+	  expect(vm.messages[1].content).toContain('[Error] network down')
+	})
   })
 
   describe('清空对话', () => {
@@ -468,6 +676,36 @@ describe('ChatPlaygroundPage', () => {
       vm.clearChat()
       expect(vm.messages).toHaveLength(0)
     })
+
+	it('streaming 进行中时清空按钮应处于禁用态', async () => {
+	  let resolveRead: ((value: any) => void) | null = null
+	  ;(global.fetch as any).mockResolvedValue({
+	    ok: true,
+	    body: {
+	      getReader: () => ({
+	        read: vi.fn()
+	          .mockImplementationOnce(() => new Promise((resolve) => { resolveRead = resolve }))
+	          .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode('data: [DONE]\n\n') })
+	          .mockResolvedValueOnce({ done: true, value: undefined })
+	      })
+	    }
+	  })
+
+	  const wrapper = createWrapper()
+	  await flushPromises()
+
+	  const vm = wrapper.vm as any
+	  vm.config.model = 'qwen3-next-80b'
+	  vm.userInput = 'disable clear'
+	  const promise = vm.sendMessage()
+	  await flushPromises()
+
+	  const clearBtn = wrapper.find('.pg-sidebar__btn')
+	  expect((clearBtn.element as HTMLButtonElement).disabled).toBe(true)
+
+	  resolveRead?.({ done: false, value: new TextEncoder().encode('data: [DONE]\n\n') })
+	  await promise
+	})
   })
 
   describe('自定义接口地址', () => {

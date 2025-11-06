@@ -8,14 +8,14 @@
           v-model="filterName"
           placeholder="搜索名称"
           clearable
-          style="width: 160px; margin-right: 12px"
+          class="toolbar-field toolbar-field-sm"
           @input="handleFilterChange"
         />
         <el-select
           v-model="filterDefinition"
           placeholder="按类型筛选"
           clearable
-          style="width: 160px; margin-right: 12px"
+          class="toolbar-field toolbar-field-sm"
           @change="handleFilterChange"
         >
           <el-option
@@ -29,7 +29,7 @@
           v-model="filterTag"
           placeholder="按标签筛选"
           clearable
-          style="width: 160px; margin-right: 12px"
+          class="toolbar-field toolbar-field-sm"
           @change="handleFilterChange"
         >
           <el-option
@@ -62,13 +62,39 @@
       <el-table-column label="类型" min-width="120">
         <template #default="{ row }">
           <span>{{ getDefinitionName(row.definition_id) }}</span>
-          <el-tag v-if="row.tag" size="small" style="margin-left: 6px">{{ row.tag }}</el-tag>
         </template>
       </el-table-column>
 
       <el-table-column label="Endpoint" min-width="200" show-overflow-tooltip>
         <template #default="{ row }">
           <span class="mono-text">{{ row.endpoint }}</span>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="凭证" min-width="200" show-overflow-tooltip>
+        <template #default="{ row }">
+          <template v-if="parseCredentials(row.credentials)">
+            <div class="cred-tags">
+              <div
+                v-for="(val, key) in parseCredentials(row.credentials)"
+                :key="key"
+                class="cred-item"
+              >
+                <el-icon :size="13" class="cred-icon"><Key /></el-icon>
+                <span class="cred-key">{{ key }}</span>
+                <span class="cred-sep">:</span>
+                <span v-if="val" class="cred-masked">{{ val }}</span>
+                <span v-else class="cred-empty">未配置</span>
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <div class="cred-plain">
+              <el-icon :size="13" class="cred-icon"><Lock /></el-icon>
+              <span v-if="row.credentials" class="mono-text cred-masked">{{ row.credentials }}</span>
+              <span v-else class="cred-empty">未配置</span>
+            </div>
+          </template>
         </template>
       </el-table-column>
 
@@ -146,14 +172,33 @@
 
       <el-table-column label="模型数" width="80" align="center">
         <template #default="{ row }">
-          {{ getModelCount(row.id) }}
+          {{ row.model_count ?? 0 }}
         </template>
       </el-table-column>
 
-      <el-table-column label="标签" width="100">
+      <el-table-column label="标签" min-width="120">
         <template #default="{ row }">
-          <el-tag v-if="row.tag" size="small">{{ row.tag }}</el-tag>
+          <template v-if="row.tag">
+            <el-tag
+              v-for="t in row.tag.split(',').map((s: string) => s.trim()).filter(Boolean)"
+              :key="t"
+              size="small"
+              style="margin-right: 4px; margin-bottom: 2px"
+            >{{ t }}</el-tag>
+          </template>
           <span v-else class="text-muted">-</span>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="创建时间" width="170" align="center">
+        <template #default="{ row }">
+          <span>{{ formatDateTime(row.created_at) }}</span>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="更新时间" width="170" align="center">
+        <template #default="{ row }">
+          <span>{{ formatDateTime(row.updated_at) }}</span>
         </template>
       </el-table-column>
 
@@ -235,11 +280,10 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Setting } from '@element-plus/icons-vue'
+import { Setting, Lock, Key } from '@element-plus/icons-vue'
 import {
   getProviders,
   getProviderDefinitions,
-  getModels,
   deleteProvider,
   toggleProviderStatus,
   updateProvider,
@@ -249,7 +293,6 @@ import {
 import { resolveErrorMessage } from '@/services/http'
 import type { Provider, ProviderDefinition } from '@/types/provider'
 import { ProviderStatus } from '@/types/provider'
-import type { Model } from '@/types/model'
 import type { SyncResult } from '@/types/sync'
 import ProviderDialog from '@/components/admin/ProviderDialog.vue'
 import SyncModelsDialog from '@/components/admin/SyncModelsDialog.vue'
@@ -257,7 +300,6 @@ import HealthCheckSettingsDialog from '@/components/admin/HealthCheckSettingsDia
 
 const providers = ref<Provider[]>([])
 const definitions = ref<ProviderDefinition[]>([])
-const allModels = ref<Model[]>([])
 const tagOptions = ref<string[]>([])
 const filterTag = ref('')
 const filterName = ref('')
@@ -277,17 +319,15 @@ const syncResult = ref<SyncResult | null>(null)
 const syncingId = ref('')
 
 const healthCheckSettingsVisible = ref(false)
-
-/** 加载所有标签选项（从全量渠道列表） */
-async function loadTagOptions() {
-  try {
-    const result = await getProviders({ page: 1, pageSize: 1000 })
-    const tags = new Set<string>()
-    result.data.forEach(p => { if (p.tag) tags.add(p.tag) })
-    tagOptions.value = Array.from(tags)
-  } catch {
-    // 静默失败
-  }
+/** 从分页结果中提取标签选项（消除重复 fetch 全量渠道的 N+1） */
+function extractTagOptionsFromProviders(list: Provider[]) {
+  const tags = new Set<string>()
+  list.forEach(p => {
+    if (p.tag) {
+      p.tag.split(',').map(t => t.trim()).filter(Boolean).forEach(t => tags.add(t))
+    }
+  })
+  tagOptions.value = Array.from(tags)
 }
 
 /** 加载渠道列表 */
@@ -302,6 +342,7 @@ async function loadProviders() {
     })
     providers.value = result.data
     total.value = result.total
+    extractTagOptionsFromProviders(result.data)
   } catch {
     ElMessage.error('加载渠道列表失败')
   }
@@ -327,25 +368,30 @@ async function loadDefinitions() {
   }
 }
 
-/** 加载模型列表（用于显示模型数量） */
-async function loadModels() {
-  try {
-    const result = await getModels(undefined, { page: 1, pageSize: 200 })
-    allModels.value = result.data
-  } catch {
-    // 静默失败
-  }
-}
-
 /** 获取渠道定义显示名 */
 function getDefinitionName(definitionId: string): string {
   const def = definitions.value.find(d => d.id === definitionId)
   return def?.display_name || definitionId
 }
 
-/** 获取模型数量 */
-function getModelCount(providerId: string): number {
-  return allModels.value.filter(m => m.provider_id === providerId).length
+/** 解析脱敏凭证 JSON 为 key-value map，失败返回 null */
+function parseCredentials(credentials: string): Record<string, string> | null {
+  if (!credentials || credentials === '****') return null
+  try {
+    const parsed = JSON.parse(credentials)
+    if (typeof parsed === 'object' && parsed !== null) {
+      return parsed as Record<string, string>
+    }
+  } catch {}
+  return null
+}
+
+function formatDateTime(value: string): string {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
 /** 响应时间样式 */
@@ -442,7 +488,7 @@ async function handleSync(row: Provider) {
 /** 同步对话框保存成功 */
 function onSyncSaved() {
   syncDialogVisible.value = false
-  loadModels()
+  loadProviders()
 }
 
 /** 检测设置保存成功 */
@@ -475,7 +521,6 @@ async function handleDelete(row: Provider) {
     ElMessage.success('删除成功')
     currentPage.value = 1
     loadProviders()
-    loadTagOptions()
   } catch (e: any) {
     const friendly = resolveErrorMessage(e)
     if (friendly) {
@@ -505,21 +550,16 @@ function onDialogSaved() {
   dialogVisible.value = false
   currentPage.value = 1
   loadProviders()
-  loadModels()
-  loadTagOptions()
 }
 
 onMounted(() => {
-  loadDefinitions()
-  loadTagOptions()
-  loadProviders()
-  loadModels()
+  Promise.all([loadDefinitions(), loadProviders()])
 })
 </script>
 
 <style scoped>
 .provider-page {
-  padding: 24px;
+  padding: 0;
 }
 
 .page-header {
@@ -539,6 +579,17 @@ onMounted(() => {
 .header-actions {
   display: flex;
   align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.toolbar-field {
+  width: 180px;
+}
+
+.toolbar-field-sm {
+  width: 160px;
 }
 
 .name-cell {
@@ -577,6 +628,19 @@ onMounted(() => {
   margin-top: 16px;
 }
 
+@media (max-width: 900px) {
+  .page-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .header-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
 .health-cell {
   display: flex;
   align-items: center;
@@ -610,4 +674,54 @@ onMounted(() => {
 .health-ok-text { color: #27AE60; }
 .health-warn-text { color: #EAB308; }
 .health-error-text { color: #E74C3C; }
+
+.cred-tags {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cred-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  line-height: 1;
+}
+
+.cred-icon {
+  color: var(--el-color-info);
+  flex-shrink: 0;
+}
+
+.cred-key {
+  font-size: 12px;
+  color: var(--el-text-color-primary);
+}
+
+.cred-sep {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.cred-masked {
+  color: var(--el-text-color-secondary);
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.cred-empty {
+  color: var(--el-text-color-placeholder);
+  font-size: 12px;
+}
+
+.cred-plain {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cred-lock {
+  color: var(--el-text-color-secondary);
+  flex-shrink: 0;
+}
 </style>

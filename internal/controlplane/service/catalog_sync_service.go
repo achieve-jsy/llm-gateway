@@ -27,8 +27,10 @@ import (
 type CatalogRepoInterface interface {
 	BatchUpsert(items []*model.ModelCatalog) error
 	GetByID(id uuid.UUID) (*model.ModelCatalog, error)
+	GetByIDs(ids []uuid.UUID) (map[uuid.UUID]*model.ModelCatalog, error)
 	GetBySourceModelID(source, sourceModelID string) (*model.ModelCatalog, error)
 	ListAll() ([]model.ModelCatalog, error)
+	ListAutoBindCandidates() ([]model.ModelCatalog, error)
 	Count() (int64, error)
 }
 
@@ -38,6 +40,7 @@ type CatalogSyncModelRepo interface {
 	ListByCatalogID() ([]model.Model, error)
 	ListUnboundFromCatalog() ([]model.Model, error)
 	GetByID(id uuid.UUID) (*model.Model, error)
+	GetByIDs(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error)
 	Update(m *model.Model) error
 	SetCatalogID(id, catalogID uuid.UUID) error
 }
@@ -352,14 +355,25 @@ func (s *CatalogSyncService) ApplyAutoUpdates(ctx context.Context) (int, error) 
 		return 0, fmt.Errorf("list models with catalog_id: %w", err)
 	}
 
+	catalogIDs := make([]uuid.UUID, 0, len(models))
+	for i := range models {
+		if models[i].CatalogID != nil {
+			catalogIDs = append(catalogIDs, *models[i].CatalogID)
+		}
+	}
+	catalogMap, err := s.repo.GetByIDs(catalogIDs)
+	if err != nil {
+		return 0, fmt.Errorf("batch fetch catalogs: %w", err)
+	}
+
 	updated := 0
 	for i := range models {
 		m := models[i]
 		if m.CatalogID == nil {
 			continue
 		}
-		cat, err := s.repo.GetByID(*m.CatalogID)
-		if err != nil || cat == nil {
+		cat := catalogMap[*m.CatalogID]
+		if cat == nil {
 			continue
 		}
 		dirty := false
@@ -412,14 +426,26 @@ func (s *CatalogSyncService) ComputePriceDiff(ctx context.Context) ([]PriceDiffE
 	if err != nil {
 		return nil, fmt.Errorf("list models with catalog_id: %w", err)
 	}
+
+	catalogIDs := make([]uuid.UUID, 0, len(models))
+	for i := range models {
+		if models[i].CatalogID != nil {
+			catalogIDs = append(catalogIDs, *models[i].CatalogID)
+		}
+	}
+	catalogMap, err := s.repo.GetByIDs(catalogIDs)
+	if err != nil {
+		return nil, fmt.Errorf("batch fetch catalogs: %w", err)
+	}
+
 	out := make([]PriceDiffEntry, 0, len(models))
 	for i := range models {
 		m := models[i]
 		if m.CatalogID == nil {
 			continue
 		}
-		cat, err := s.repo.GetByID(*m.CatalogID)
-		if err != nil || cat == nil {
+		cat := catalogMap[*m.CatalogID]
+		if cat == nil {
 			continue
 		}
 		priceMismatch := !floatEqual(m.InputPrice, cat.InputPricePerMillion) ||
@@ -486,17 +512,33 @@ func (s *CatalogSyncService) ApplyPriceDiff(ctx context.Context, ids []uuid.UUID
 	if len(ids) == 0 {
 		return 0, errors.New("no model ids provided")
 	}
-	updated := 0
+
+	modelMap, err := s.modelRepo.GetByIDs(ids)
+	if err != nil {
+		return 0, fmt.Errorf("batch fetch models: %w", err)
+	}
+
+	catalogIDs := make([]uuid.UUID, 0, len(ids))
 	for _, id := range ids {
-		m, err := s.modelRepo.GetByID(id)
-		if err != nil || m == nil {
-			return updated, fmt.Errorf("model %s not found", id)
+		m := modelMap[id]
+		if m == nil {
+			return 0, fmt.Errorf("model %s not found", id)
 		}
 		if m.CatalogID == nil {
-			return updated, fmt.Errorf("model %s has no catalog link", id)
+			return 0, fmt.Errorf("model %s has no catalog link", id)
 		}
-		cat, err := s.repo.GetByID(*m.CatalogID)
-		if err != nil || cat == nil {
+		catalogIDs = append(catalogIDs, *m.CatalogID)
+	}
+	catalogMap, err := s.repo.GetByIDs(catalogIDs)
+	if err != nil {
+		return 0, fmt.Errorf("batch fetch catalogs: %w", err)
+	}
+
+	updated := 0
+	for _, id := range ids {
+		m := modelMap[id]
+		cat := catalogMap[*m.CatalogID]
+		if cat == nil {
 			return updated, fmt.Errorf("catalog for model %s not found", id)
 		}
 		m.InputPrice = cat.InputPricePerMillion
@@ -570,14 +612,24 @@ func (s *CatalogSyncService) AutoBind(ctx context.Context) (*AutoBindResult, err
 	if s.modelRepo == nil {
 		return nil, errors.New("model repo not configured")
 	}
+	slog.Info("catalog auto-bind started")
 	models, err := s.modelRepo.ListUnboundFromCatalog()
 	if err != nil {
+		slog.Error("catalog auto-bind failed to load unbound models", "error", err)
 		return nil, fmt.Errorf("list unbound models: %w", err)
 	}
-	cats, err := s.repo.ListAll()
+	// AutoBind 只需要 id/source_model_id/provider 三列做匹配和候选展示。
+	// 如果把 model_catalog 全表所有列（尤其 raw_payload 大文本）都拉出来，
+	// 在真实库里会显著拖慢请求，甚至触发上层 500/超时。
+	cats, err := s.repo.ListAutoBindCandidates()
 	if err != nil {
+		slog.Error("catalog auto-bind failed to load catalog candidates", "error", err)
 		return nil, fmt.Errorf("list catalog entries: %w", err)
 	}
+	slog.Info("catalog auto-bind loaded candidates",
+		"unbound_model_count", len(models),
+		"catalog_candidate_count", len(cats),
+	)
 	// 双索引：strict（lower(source_model_id) 整串）+ tail（lower(lastSegment(source_model_id))）。
 	strict := make(map[string][]*model.ModelCatalog, len(cats))
 	tail := make(map[string][]*model.ModelCatalog, len(cats))
@@ -643,7 +695,13 @@ func (s *CatalogSyncService) AutoBind(ctx context.Context) (*AutoBindResult, err
 		case 1:
 			c := cands[0]
 			if err := s.modelRepo.SetCatalogID(m.ID, c.ID); err != nil {
-				slog.Warn("auto-bind set catalog_id failed", "model_id", m.ID, "error", err)
+				slog.Warn("catalog auto-bind failed to persist binding",
+					"model_id", m.ID,
+					"model_name", m.Name,
+					"catalog_id", c.ID,
+					"catalog_source_model_id", c.SourceModelID,
+					"error", err,
+				)
 				res.Unmatched++
 				continue
 			}
@@ -669,6 +727,11 @@ func (s *CatalogSyncService) AutoBind(ctx context.Context) (*AutoBindResult, err
 			})
 		}
 	}
+	slog.Info("catalog auto-bind finished",
+		"matched_count", len(res.Matched),
+		"ambiguous_count", len(res.Ambiguous),
+		"unmatched_count", res.Unmatched,
+	)
 	return res, nil
 }
 

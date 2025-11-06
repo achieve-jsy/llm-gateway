@@ -14,6 +14,8 @@ type Config struct {
 	Redis    RedisConfig
 	OTLP     OTLPConfig
 	Provider ProviderConfig
+	Auth     AuthConfig
+	OIDC     OIDCConfig
 }
 
 // ServerConfig 服务配置
@@ -40,6 +42,25 @@ type ProviderConfig struct {
 	ControlPlaneURL string `mapstructure:"control_plane_url"`
 }
 
+// AuthConfig auth 服务配置
+type AuthConfig struct {
+	URL   string `mapstructure:"url"`
+	Token string `mapstructure:"token"`
+}
+
+// OIDCConfig OIDC 登录配置
+type OIDCConfig struct {
+	IssuerURL        string   `mapstructure:"issuer_url"`
+	ClientID         string   `mapstructure:"client_id"`
+	ClientSecret     string   `mapstructure:"client_secret"`
+	RedirectURL      string   `mapstructure:"redirect_url"`
+	FrontendURL      string   `mapstructure:"frontend_url"`
+	Scopes           []string `mapstructure:"scopes"`
+	RoleClaimPath    string   `mapstructure:"role_claim_path"`
+	AdminMatchValues []string `mapstructure:"admin_match_values"`
+	DefaultRole      string   `mapstructure:"default_role"`
+}
+
 // Load 加载配置：Viper 读取 YAML + 环境变量覆盖
 //
 // 优先级（从高到低）：
@@ -58,6 +79,17 @@ func Load() *Config {
 	v.SetDefault("otlp.enabled", false)
 	v.SetDefault("provider.internal_token", "")
 	v.SetDefault("provider.control_plane_url", "http://localhost:8081")
+	v.SetDefault("auth.url", "http://localhost:8082")
+	v.SetDefault("auth.token", "")
+	v.SetDefault("oidc.issuer_url", "")
+	v.SetDefault("oidc.client_id", "")
+	v.SetDefault("oidc.client_secret", "")
+	v.SetDefault("oidc.redirect_url", "http://localhost:8080/auth/oidc/callback")
+	v.SetDefault("oidc.frontend_url", "http://localhost:5173")
+	v.SetDefault("oidc.scopes", "openid profile email")
+	v.SetDefault("oidc.role_claim_path", "groups")
+	v.SetDefault("oidc.admin_match_values", "llm-gateway-admins")
+	v.SetDefault("oidc.default_role", "user")
 
 	// 确定环境：APP_ENV 可选 dev / staging / prod
 	env := os.Getenv("APP_ENV")
@@ -90,6 +122,17 @@ func Load() *Config {
 	_ = v.BindEnv("otlp.enabled", "OTLP_ENABLED")
 	_ = v.BindEnv("provider.internal_token", "INTERNAL_TOKEN")
 	_ = v.BindEnv("provider.control_plane_url", "CONTROL_PLANE_URL")
+	_ = v.BindEnv("auth.url", "AUTH_URL")
+	_ = v.BindEnv("auth.token", "AUTH_INTERNAL_TOKEN")
+	_ = v.BindEnv("oidc.issuer_url", "OAUTH_ISSUER_URL")
+	_ = v.BindEnv("oidc.client_id", "OAUTH_CLIENT_ID")
+	_ = v.BindEnv("oidc.client_secret", "OAUTH_CLIENT_SECRET")
+	_ = v.BindEnv("oidc.redirect_url", "OAUTH_REDIRECT_URI")
+	_ = v.BindEnv("oidc.frontend_url", "FRONTEND_URL")
+	_ = v.BindEnv("oidc.scopes", "OAUTH_SCOPES")
+	_ = v.BindEnv("oidc.role_claim_path", "OIDC_ROLE_CLAIM_PATH")
+	_ = v.BindEnv("oidc.admin_match_values", "OIDC_ADMIN_MATCH_VALUES")
+	_ = v.BindEnv("oidc.default_role", "OIDC_DEFAULT_ROLE")
 
 	cfg := &Config{
 		Server: ServerConfig{
@@ -108,7 +151,36 @@ func Load() *Config {
 			InternalToken:   v.GetString("provider.internal_token"),
 			ControlPlaneURL: v.GetString("provider.control_plane_url"),
 		},
+		Auth: AuthConfig{
+			URL:   v.GetString("auth.url"),
+			Token: v.GetString("auth.token"),
+		},
+		OIDC: OIDCConfig{
+			IssuerURL:        v.GetString("oidc.issuer_url"),
+			ClientID:         v.GetString("oidc.client_id"),
+			ClientSecret:     v.GetString("oidc.client_secret"),
+			RedirectURL:      v.GetString("oidc.redirect_url"),
+			FrontendURL:      v.GetString("oidc.frontend_url"),
+			Scopes:           splitList(v.GetString("oidc.scopes")),
+			RoleClaimPath:    v.GetString("oidc.role_claim_path"),
+			AdminMatchValues: splitList(v.GetString("oidc.admin_match_values")),
+			DefaultRole:      v.GetString("oidc.default_role"),
+		},
 	}
 
 	return cfg
+}
+
+func splitList(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' })
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
 }

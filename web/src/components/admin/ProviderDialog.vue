@@ -130,7 +130,37 @@
           </el-form-item>
 
           <el-form-item label="标签">
-            <el-input v-model="formData.tag" placeholder="可选，用于分组筛选" />
+            <!-- 多标签输入：回车确认，点 × 删除 -->
+            <div class="tag-input-wrap">
+              <el-tag
+                v-for="(t, i) in formData.tags"
+                :key="t"
+                closable
+                size="small"
+                class="tag-item"
+                @close="formData.tags.splice(i, 1)"
+              >
+                {{ t }}
+              </el-tag>
+              <el-input
+                v-if="tagInputVisible"
+                ref="tagInputRef"
+                v-model="tagInputVal"
+                size="small"
+                class="tag-input"
+                @keyup.enter="confirmTag"
+                @blur="confirmTag"
+              />
+              <el-button
+                v-else
+                size="small"
+                class="tag-add-btn"
+                @click="showTagInput"
+              >
+                + 添加标签
+              </el-button>
+            </div>
+            <div class="form-hint">多个标签用于分组筛选，回车确认每个标签</div>
           </el-form-item>
 
           <el-form-item label="备注">
@@ -151,7 +181,7 @@
               :key="model"
               :label="model"
               :value="model"
-              style="display: block; margin-bottom: 6px"
+              class="prefill-model-item"
             >
               {{ model }}
             </el-checkbox>
@@ -162,17 +192,17 @@
             <el-input
               v-model="extraModelName"
               placeholder="输入额外模型名称"
-              style="width: 280px; margin-right: 8px"
+              class="extra-model-field"
               @keyup.enter="addExtraModel"
             />
             <el-button size="small" @click="addExtraModel">添加</el-button>
           </div>
-          <div v-if="formData.extra_models.length" style="margin-top: 8px">
+          <div v-if="formData.extra_models.length" class="extra-model-tags">
             <el-tag
               v-for="(m, idx) in formData.extra_models"
               :key="m"
               closable
-              style="margin-right: 6px; margin-bottom: 4px"
+              class="extra-model-tag"
               @close="formData.extra_models.splice(idx, 1)"
             >
               {{ m }}
@@ -193,8 +223,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
-import type { FormInstance, FormRules } from 'element-plus'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import type { FormInstance, FormRules, InputInstance } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { createProvider, updateProvider, getProviderDefinitions, createModel } from '@/services/control-plane'
 import type { Provider, ProviderPayload, ProviderDefinition, CredentialFieldSchema } from '@/types/provider'
@@ -235,7 +265,7 @@ interface FormData {
   timeout: number
   max_retries: number
   test_model: string
-  tag: string
+  tags: string[]       // 多标签，提交时用逗号拼接存入 tag 字段
   remark: string
   region: string
   api_version: string
@@ -253,13 +283,33 @@ const formData = ref<FormData>({
   timeout: 30,
   max_retries: 2,
   test_model: '',
-  tag: '',
+  tags: [],
   remark: '',
   region: '',
   api_version: '',
   selected_models: [],
   extra_models: []
 })
+
+// ─── 多标签输入逻辑 ───────────────────────────────────────────────────────────
+const tagInputVisible = ref(false)
+const tagInputVal = ref('')
+const tagInputRef = ref<InputInstance>()
+
+function showTagInput() {
+  tagInputVisible.value = true
+  nextTick(() => tagInputRef.value?.focus())
+}
+
+function confirmTag() {
+  const val = tagInputVal.value.trim()
+  if (val && !formData.value.tags.includes(val)) {
+    formData.value.tags.push(val)
+  }
+  tagInputVal.value = ''
+  tagInputVisible.value = false
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 /** 加载渠道定义列表 */
 onMounted(async () => {
@@ -286,7 +336,7 @@ watch(
         timeout: val.timeout || 30,
         max_retries: val.max_retries || 2,
         test_model: val.test_model || '',
-        tag: val.tag || '',
+        tags: val.tag ? val.tag.split(',').map(t => t.trim()).filter(Boolean) : [],
         remark: val.remark || '',
         region: '',
         api_version: '',
@@ -326,7 +376,7 @@ watch(
         timeout: 30,
         max_retries: 2,
         test_model: '',
-        tag: '',
+        tags: [],
         remark: '',
         region: '',
         api_version: '',
@@ -438,7 +488,7 @@ async function handleSubmit() {
       timeout: formData.value.timeout,
       max_retries: formData.value.max_retries,
       test_model: formData.value.test_model || undefined,
-      tag: formData.value.tag || undefined,
+      tag: formData.value.tags.join(','),  // 空数组时传 '' 让后端清空标签
       remark: formData.value.remark || undefined
     }
 
@@ -505,6 +555,50 @@ async function handleSubmit() {
   margin-top: 4px;
 }
 
+.tag-input-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 6px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  width: 100%;
+  box-sizing: border-box;
+  cursor: text;
+  transition: border-color 0.2s;
+}
+
+.tag-input-wrap:focus-within {
+  border-color: var(--el-color-primary);
+}
+
+.tag-item {
+  flex-shrink: 0;
+}
+
+.tag-input {
+  width: 120px;
+  flex-shrink: 0;
+}
+
+.tag-input :deep(.el-input__wrapper) {
+  box-shadow: none !important;
+  padding: 0 4px;
+}
+
+.tag-add-btn {
+  border: 1px dashed var(--el-border-color);
+  background: transparent;
+  color: var(--el-text-color-secondary);
+}
+
+.tag-add-btn:hover {
+  border-color: var(--el-color-primary);
+  color: var(--el-color-primary);
+}
+
 .form-hint.inline {
   margin-top: 0;
   margin-left: 12px;
@@ -517,6 +611,25 @@ async function handleSubmit() {
 .extra-model-input {
   display: flex;
   align-items: center;
+  gap: 8px;
+}
+
+.extra-model-field {
+  width: 280px;
+}
+
+.extra-model-tags {
+  margin-top: 8px;
+}
+
+.extra-model-tag {
+  margin-right: 6px;
+  margin-bottom: 4px;
+}
+
+.prefill-model-item {
+  display: block;
+  margin-bottom: 6px;
 }
 
 .el-divider {

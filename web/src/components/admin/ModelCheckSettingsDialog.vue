@@ -54,6 +54,10 @@
           <template v-if="autoDisabledCount > 0">（含 {{ autoDisabledCount }} 个自动禁用）</template>
         </span>
       </el-form-item>
+
+      <el-form-item v-if="failureSummaryText" label="失败分类">
+        <span class="check-result-text">{{ failureSummaryText }}</span>
+      </el-form-item>
     </el-form>
 
     <template #footer>
@@ -101,6 +105,25 @@ const autoDisabledCount = computed(() => {
 const autoReenabledCount = computed(() => {
   if (!checkResult.value) return 0
   return checkResult.value.results.filter(r => r.auto_reenabled).length
+})
+
+const failureSummaryText = computed(() => {
+  const summary = checkResult.value?.failure_summary
+  if (!summary) return ''
+  const labelMap: Record<string, string> = {
+    invalid_api_key: 'Key无效',
+    access_denied: '无权限',
+    model_not_found: '模型不存在',
+    rate_limited: '限流',
+    product_not_activated: '未开通',
+    timeout: '超时',
+    other: '其他',
+  }
+  const parts = Object.entries(summary)
+    .filter(([, count]) => count > 0)
+    .sort((a, b) => b[1] - a[1])
+    .map(([key, count]) => `${labelMap[key] || key} ${count}`)
+  return parts.join(' / ')
 })
 
 /** 弹窗打开时加载配置 */

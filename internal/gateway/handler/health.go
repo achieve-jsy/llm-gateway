@@ -14,11 +14,12 @@ import (
 type HealthHandler struct {
 	rdb      *redis.Client
 	registry *provider.Registry
+	state    *provider.RuntimeState
 }
 
 // NewHealthHandler 创建 HealthHandler
-func NewHealthHandler(rdb *redis.Client, registry *provider.Registry) *HealthHandler {
-	return &HealthHandler{rdb: rdb, registry: registry}
+func NewHealthHandler(rdb *redis.Client, registry *provider.Registry, state *provider.RuntimeState) *HealthHandler {
+	return &HealthHandler{rdb: rdb, registry: registry, state: state}
 }
 
 // Health GET /health 存活探针
@@ -36,7 +37,31 @@ func (h *HealthHandler) Ready(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"status": "not_ready",
 			"checks": gin.H{
-				"redis": "unavailable",
+				"redis":    "unavailable",
+				"registry": "unknown",
+			},
+		})
+		return
+	}
+
+	modelCount := len(h.registry.ListAllModels())
+	loaded, source, loadedAt, lastError, stateModelCount, version := false, "", time.Time{}, "", 0, int64(0)
+	if h.state != nil {
+		loaded, source, loadedAt, lastError, stateModelCount, version = h.state.Snapshot()
+	}
+	if modelCount == 0 || !loaded {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"status": "not_ready",
+			"checks": gin.H{
+				"redis":    "ok",
+				"registry": "empty",
+			},
+			"details": gin.H{
+				"source":      source,
+				"loaded_at":   loadedAt,
+				"last_error":  lastError,
+				"model_count": maxInt(modelCount, stateModelCount),
+				"version":     version,
 			},
 		})
 		return
@@ -45,7 +70,21 @@ func (h *HealthHandler) Ready(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ready",
 		"checks": gin.H{
-			"redis": "ok",
+			"redis":    "ok",
+			"registry": "ok",
+		},
+		"details": gin.H{
+			"source":      source,
+			"loaded_at":   loadedAt,
+			"model_count": modelCount,
+			"version":     version,
 		},
 	})
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

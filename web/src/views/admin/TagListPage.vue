@@ -106,7 +106,7 @@ onMounted(() => {
 
 <style scoped>
 .tag-page {
-  padding: 24px;
+  padding: 0;
 }
 
 .page-header {
@@ -131,15 +131,15 @@ onMounted(() => {
 .tag-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 16px;
+  gap: 12px;
 }
 
 .tag-card {
   background: var(--el-bg-color);
   border: 1px solid var(--el-border-color-light);
   border-left: 4px solid #409EFF;
-  border-radius: 12px;
-  padding: 16px;
+  border-radius: 10px;
+  padding: 14px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -147,7 +147,7 @@ onMounted(() => {
 }
 
 .tag-card:hover {
-  transform: translateY(-2px);
+  transform: translateY(-1px);
   box-shadow: 0 4px 16px rgba(0, 128, 128, 0.08);
 }
 
@@ -158,7 +158,7 @@ onMounted(() => {
 .tag-card-header {
   display: flex;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .color-dot {
@@ -170,7 +170,7 @@ onMounted(() => {
 }
 
 .tag-name {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
@@ -178,7 +178,7 @@ onMounted(() => {
 .tag-desc {
   font-size: 13px;
   color: var(--el-text-color-secondary);
-  margin: 0 0 12px;
+  margin: 0 0 10px;
   line-height: 1.5;
 }
 
@@ -187,7 +187,15 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   border-top: 1px solid var(--el-border-color-lighter);
-  padding-top: 10px;
+  padding-top: 8px;
+}
+
+@media (max-width: 900px) {
+  .page-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
 }
 
 .tag-sort {

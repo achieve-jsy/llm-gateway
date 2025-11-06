@@ -25,6 +25,7 @@ var (
 //  2. 未来 catalog 加 Redis 缓存装饰器时可以无侵入挂上来。
 type CatalogLookup interface {
 	GetByID(id uuid.UUID) (*model.ModelCatalog, error)
+	GetByIDs(ids []uuid.UUID) (map[uuid.UUID]*model.ModelCatalog, error)
 }
 
 // ModelService 模型注册管理服务
@@ -32,6 +33,7 @@ type ModelService struct {
 	modelRepo     ModelRepoInterface
 	providerRepo  ProviderRepoInterface
 	publisher     *event.Publisher
+	snapshotter   *ProviderSnapshotRefresher
 	catalogLookup CatalogLookup // 可选，未注入时 ResetOverride / CreateModelFromCatalog 走 fallback / 报错
 }
 
@@ -44,6 +46,11 @@ func NewModelService(modelRepo ModelRepoInterface, providerRepo ProviderRepoInte
 	}
 }
 
+// SetSnapshotRefresher injects the shared provider snapshot refresher.
+func (s *ModelService) SetSnapshotRefresher(snapshotter *ProviderSnapshotRefresher) {
+	s.snapshotter = snapshotter
+}
+
 // SetCatalogLookup 注入 catalog 只读依赖。生产入口由 main.go wiring；
 // 测试可以传任意实现 GetByID 的对象。
 func (s *ModelService) SetCatalogLookup(lookup CatalogLookup) {
@@ -52,10 +59,19 @@ func (s *ModelService) SetCatalogLookup(lookup CatalogLookup) {
 
 // publishEvent 安全发布事件（publisher 为 nil 或发布失败不影响业务）
 func (s *ModelService) publishEvent(eventType event.ChangeEventType, resourceType string, resourceID uuid.UUID) {
+	snapshotVersion := int64(0)
+	if s.snapshotter != nil {
+		version, err := s.snapshotter.RefreshAvailableSnapshot(context.Background())
+		if err != nil {
+			slog.Error("failed to refresh provider snapshot", "type", eventType, "resource_id", resourceID, "error", err)
+		} else {
+			snapshotVersion = version
+		}
+	}
 	if s.publisher == nil {
 		return
 	}
-	ev := event.NewChangeEvent(eventType, resourceType, resourceID)
+	ev := event.NewChangeEvent(eventType, resourceType, resourceID, snapshotVersion)
 	if err := s.publisher.Publish(context.Background(), ev); err != nil {
 		slog.Error("failed to publish event", "type", eventType, "resource_id", resourceID, "error", err)
 	}
@@ -223,6 +239,9 @@ func (s *ModelService) UpdateModel(id uuid.UUID, input UpdateModelInput) (*model
 
 	if input.Enabled != nil {
 		m.Enabled = input.Enabled
+		// 管理员显式切换启停后，清空失败状态，避免被健康检测按旧失败计数立即抢回。
+		m.ConsecutiveFailures = 0
+		m.LastCheckError = ""
 	}
 	if input.UpstreamModelID != nil {
 		m.UpstreamModelID = *input.UpstreamModelID
@@ -461,12 +480,59 @@ func (s *ModelService) BatchBindCatalog(items []BatchBindInput) (*BatchBindResul
 	if len(items) == 0 {
 		return nil, errors.New("empty bindings")
 	}
+
+	modelIDs := make([]uuid.UUID, len(items))
+	catalogIDs := make([]uuid.UUID, len(items))
+	for i, it := range items {
+		modelIDs[i] = it.ModelID
+		catalogIDs[i] = it.CatalogID
+	}
+
+	modelMap, err := s.modelRepo.GetByIDs(modelIDs)
+	if err != nil {
+		return nil, fmt.Errorf("batch fetch models: %w", err)
+	}
+
+	catalogMap, err := s.catalogLookup.GetByIDs(catalogIDs)
+	if err != nil {
+		return nil, fmt.Errorf("batch fetch catalogs: %w", err)
+	}
+
 	res := &BatchBindResult{FailedIDs: map[string]string{}}
 	for _, it := range items {
-		if _, err := s.BindCatalog(it.ModelID, it.CatalogID, it.ResetFields); err != nil {
-			res.FailedIDs[it.ModelID.String()] = err.Error()
+		m := modelMap[it.ModelID]
+		if m == nil {
+			res.FailedIDs[it.ModelID.String()] = ErrModelNotFound.Error()
 			continue
 		}
+		if m.CatalogID != nil && *m.CatalogID == it.CatalogID && !it.ResetFields {
+			res.FailedIDs[it.ModelID.String()] = ErrCatalogAlreadyBoundToSame.Error()
+			continue
+		}
+		cat := catalogMap[it.CatalogID]
+		if cat == nil {
+			res.FailedIDs[it.ModelID.String()] = fmt.Sprintf("catalog %s not found", it.CatalogID)
+			continue
+		}
+
+		cid := cat.ID
+		m.CatalogID = &cid
+		m.CtxOverridden = false
+		m.MaxOutputOverridden = false
+
+		if it.ResetFields {
+			m.InputPrice = cat.InputPricePerMillion
+			m.OutputPrice = cat.OutputPricePerMillion
+			m.ContextLength = int(cat.ContextLength)
+			m.MaxOutputTokens = int(cat.MaxOutputTokens)
+			m.UpstreamModelID = cat.SourceModelID
+		}
+
+		if err := s.modelRepo.Update(m); err != nil {
+			res.FailedIDs[it.ModelID.String()] = fmt.Errorf("update model: %w", err).Error()
+			continue
+		}
+		s.publishEvent(event.ModelUpdated, "model", it.ModelID)
 		res.Applied++
 	}
 	return res, nil

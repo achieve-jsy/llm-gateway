@@ -160,7 +160,7 @@ func (h *CatalogHandler) ApplyDiff(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"message": err.Error(), "code": CodeInternalError}})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{"updated": updated}})
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"updated": updated, "skipped": 0, "failed_ids": []string{}}})
 }
 
 // AutoBind POST /api/v1/model-catalog/auto-bind

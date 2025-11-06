@@ -13,7 +13,7 @@
       label-width="110px"
       label-position="left"
     >
-      <el-form-item label="模型名称" prop="name">
+      <el-form-item label="上游模型ID" prop="name">
         <el-input
           v-model="formData.name"
           placeholder="如 gpt-4o, qwen-turbo"
@@ -50,10 +50,10 @@
         </div>
       </el-form-item>
 
-      <el-form-item label="上游模型ID" prop="upstream_model_id">
+      <el-form-item label="模型名称" prop="upstream_model_id">
         <el-input
           v-model="formData.upstream_model_id"
-          placeholder="留空则使用模型名原样转发"
+          placeholder="留空则使用上游模型ID原样转发"
         />
       </el-form-item>
 
@@ -161,7 +161,7 @@
           :min="0"
           :max="10000000"
           :step="1024"
-          style="width: 200px"
+          class="metric-input"
         />
         <span class="form-hint inline">tokens</span>
       </el-form-item>
@@ -172,7 +172,7 @@
           :min="0"
           :max="1000000"
           :step="256"
-          style="width: 200px"
+          class="metric-input"
         />
         <span class="form-hint inline">tokens</span>
       </el-form-item>
@@ -183,7 +183,7 @@
           :min="0"
           :precision="6"
           :step="0.1"
-          style="width: 200px"
+          class="metric-input"
         />
         <span class="form-hint inline">USD / 百万 tokens</span>
       </el-form-item>
@@ -194,7 +194,7 @@
           :min="0"
           :precision="6"
           :step="0.1"
-          style="width: 200px"
+          class="metric-input"
         />
         <span class="form-hint inline">USD / 百万 tokens</span>
       </el-form-item>
@@ -204,7 +204,7 @@
           v-model="formData.weight"
           :min="0"
           :max="9999"
-          style="width: 200px"
+          class="metric-input"
         />
       </el-form-item>
     </el-form>
@@ -768,6 +768,10 @@ async function handleSubmit() {
   max-height: 220px;
   overflow-y: auto;
   background: #1C1C1E;
+}
+
+.metric-input {
+  width: 156px;
 }
 
 .catalog-suggestion-item {

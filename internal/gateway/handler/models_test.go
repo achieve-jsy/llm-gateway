@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/example/llm-gateway/internal/gateway/model"
+	"github.com/example/llm-gateway/internal/gateway/provider"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 )
@@ -20,6 +21,7 @@ import (
 type fakeModelsCache struct {
 	mu        sync.Mutex
 	stored    []model.ModelInfo
+	version   int64
 	getErr    error
 	setErr    error
 	getCalls  int
@@ -28,19 +30,28 @@ type fakeModelsCache struct {
 }
 
 func (c *fakeModelsCache) GetModelList(_ context.Context) ([]model.ModelInfo, error) {
+	models, _, err := c.GetModelListWithVersion(context.Background())
+	return models, err
+}
+
+func (c *fakeModelsCache) GetModelListWithVersion(_ context.Context) ([]model.ModelInfo, int64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.getCalls++
 	if c.getErr != nil {
-		return nil, c.getErr
+		return nil, 0, c.getErr
 	}
 	if c.returnNil {
-		return nil, nil
+		return nil, 0, nil
 	}
-	return c.stored, nil
+	return c.stored, c.version, nil
 }
 
 func (c *fakeModelsCache) SetModelList(_ context.Context, models []model.ModelInfo) error {
+	return c.SetModelListWithVersion(context.Background(), models, 0)
+}
+
+func (c *fakeModelsCache) SetModelListWithVersion(_ context.Context, models []model.ModelInfo, version int64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.setCalls++
@@ -48,6 +59,7 @@ func (c *fakeModelsCache) SetModelList(_ context.Context, models []model.ModelIn
 		return c.setErr
 	}
 	c.stored = models
+	c.version = version
 	return nil
 }
 
@@ -71,7 +83,7 @@ func TestModelsHandler_CacheHit(t *testing.T) {
 	cache := &fakeModelsCache{stored: cached}
 	registry := &fakeRegistry{models: []string{"should-not-be-used"}}
 
-	handler := NewModelsHandler(cache, registry)
+	handler := NewModelsHandler(cache, registry, nil)
 	c, w := createTestContext()
 	c.Request = httptest.NewRequest("GET", "/v1/models", nil)
 
@@ -103,7 +115,7 @@ func TestModelsHandler_CacheMiss(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cache := &fakeModelsCache{returnNil: true}
 			registry := &fakeRegistry{models: tc.models}
-			handler := NewModelsHandler(cache, registry)
+			handler := NewModelsHandler(cache, registry, nil)
 
 			c, w := createTestContext()
 			c.Request = httptest.NewRequest("GET", "/v1/models", nil)
@@ -133,7 +145,7 @@ func TestModelsHandler_CacheGetError(t *testing.T) {
 	cache := &fakeModelsCache{getErr: errors.New("redis down")}
 	registry := &fakeRegistry{models: []string{"fallback-model"}}
 
-	handler := NewModelsHandler(cache, registry)
+	handler := NewModelsHandler(cache, registry, nil)
 	c, w := createTestContext()
 	c.Request = httptest.NewRequest("GET", "/v1/models", nil)
 
@@ -146,12 +158,32 @@ func TestModelsHandler_CacheGetError(t *testing.T) {
 	assert.Equal(t, "fallback-model", resp.Data[0].ID)
 }
 
+func TestModelsHandler_StaleVersionFallsBackToRegistry(t *testing.T) {
+	cache := &fakeModelsCache{stored: []model.ModelInfo{{ID: "stale-model"}}, version: 1}
+	registry := &fakeRegistry{models: []string{"fresh-model"}}
+	state := &provider.RuntimeState{}
+	state.MarkLoadSuccess("redis-snapshot", 1, 2)
+
+	handler := NewModelsHandler(cache, registry, state)
+	c, w := createTestContext()
+	c.Request = httptest.NewRequest("GET", "/v1/models", nil)
+
+	handler.Handle(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp model.ModelsResponse
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, 1, len(resp.Data))
+	assert.Equal(t, "fresh-model", resp.Data[0].ID)
+	assert.Equal(t, int64(2), cache.version)
+}
+
 // TestModelsHandler_CacheSetError 缓存写入错误：仍然返回 Registry 数据。
 func TestModelsHandler_CacheSetError(t *testing.T) {
 	cache := &fakeModelsCache{returnNil: true, setErr: errors.New("redis down")}
 	registry := &fakeRegistry{models: []string{"gpt-x"}}
 
-	handler := NewModelsHandler(cache, registry)
+	handler := NewModelsHandler(cache, registry, nil)
 	c, w := createTestContext()
 	c.Request = httptest.NewRequest("GET", "/v1/models", nil)
 
@@ -167,7 +199,7 @@ func TestModelsHandler_CacheSetError(t *testing.T) {
 func TestModelsHandler_ResponseStructure(t *testing.T) {
 	cache := &fakeModelsCache{returnNil: true}
 	registry := &fakeRegistry{models: []string{"gpt-3.5-turbo", "gpt-4", "claude-3-opus"}}
-	handler := NewModelsHandler(cache, registry)
+	handler := NewModelsHandler(cache, registry, nil)
 
 	c, w := createTestContext()
 	c.Request = httptest.NewRequest("GET", "/v1/models", nil)
@@ -193,7 +225,7 @@ func TestModelsHandler_ModelIDOrdering(t *testing.T) {
 	order := []string{"model-z", "model-a", "model-m"}
 	cache := &fakeModelsCache{returnNil: true}
 	registry := &fakeRegistry{models: order}
-	handler := NewModelsHandler(cache, registry)
+	handler := NewModelsHandler(cache, registry, nil)
 
 	c, w := createTestContext()
 	c.Request = httptest.NewRequest("GET", "/v1/models", nil)
@@ -210,7 +242,7 @@ func TestModelsHandler_ModelIDOrdering(t *testing.T) {
 func TestModelsHandler_CreatedTimestamp(t *testing.T) {
 	cache := &fakeModelsCache{returnNil: true}
 	registry := &fakeRegistry{models: []string{"test-model"}}
-	handler := NewModelsHandler(cache, registry)
+	handler := NewModelsHandler(cache, registry, nil)
 
 	c, w := createTestContext()
 	c.Request = httptest.NewRequest("GET", "/v1/models", nil)
@@ -235,7 +267,7 @@ func TestModelsHandler_LargeModelList(t *testing.T) {
 	}
 	cache := &fakeModelsCache{returnNil: true}
 	registry := &fakeRegistry{models: models}
-	handler := NewModelsHandler(cache, registry)
+	handler := NewModelsHandler(cache, registry, nil)
 
 	c, w := createTestContext()
 	c.Request = httptest.NewRequest("GET", "/v1/models", nil)
@@ -251,7 +283,7 @@ func TestModelsHandler_LargeModelList(t *testing.T) {
 func TestModelsHandler_ContextPropagation(t *testing.T) {
 	cache := &fakeModelsCache{returnNil: true}
 	registry := &fakeRegistry{models: []string{"a"}}
-	handler := NewModelsHandler(cache, registry)
+	handler := NewModelsHandler(cache, registry, nil)
 
 	c, w := createTestContext()
 	ctx := context.WithValue(context.Background(), ctxKey("test"), "v")

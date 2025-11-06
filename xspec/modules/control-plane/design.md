@@ -10,6 +10,13 @@
 | **创建时间** | 2026-05-21 |
 | **修改人** | OpenCode |
 
+### 修订记录
+
+| 版本号 | 修改日期 | 修改内容摘要 | 修改人 |
+| :--- | :--- | :--- | :--- |
+| v1.0 | 2026-05-21 | 初稿创建 | OpenCode |
+| v1.1 | 2026-05-23 | 新增模型同步功能（SyncHandler + SyncService，两步接口设计） | OpenCode |
+
 ---
 
 ## 1. 背景与目标
@@ -24,6 +31,7 @@
 **负责：**
 - 渠道（Provider）的创建、查询、更新、启用/禁用、删除操作
 - 模型（Model）的注册、查询、更新、删除操作
+- 模型同步（从厂商拉取模型列表、对比去重、批量注册、下架禁用）
 - 渠道凭证的加密存储与查询脱敏
 - 禁用渠道时级联禁用其下模型
 - 配置变更时通过 Redis pub/sub 通知 gateway-api
@@ -78,13 +86,20 @@ graph TD
         GinRouter --> MW["中间件链\n(RequestID/Auth/Logger/Recovery)"]
         MW --> PH["ProviderHandler"]
         MW --> MH["ModelHandler"]
+        MW --> SH["SyncHandler"]
         MW --> IH["InternalHandler"]
         PH --> PS["ProviderService"]
         MH --> MS["ModelService"]
+        SH --> SS["SyncService"]
         IH --> MS
         PS --> PR["ProviderRepository"]
         PS --> Crypto["CryptoService"]
         PS --> Notifier["ChangeNotifier"]
+        SS --> MR["ModelRepository"]
+        SS --> PR
+        SS --> Crypto
+        SS -->|"HTTP GET /models"| Upstream["厂商 API"]
+        SS --> Notifier
         MS --> MR["ModelRepository"]
         MS --> PR
         MS --> Notifier
@@ -108,6 +123,7 @@ control-plane/
 │   ├── handler/
 │   │   ├── provider.go          # 渠道管理 Handler
 │   │   ├── model.go             # 模型管理 Handler
+│   │   ├── sync.go              # 同步模型 Handler
 │   │   └── internal.go          # 内部接口 Handler
 │   ├── middleware/
 │   │   ├── auth.go              # JWT / Token 认证
@@ -117,6 +133,7 @@ control-plane/
 │   ├── service/
 │   │   ├── provider.go          # 渠道业务逻辑
 │   │   ├── model.go             # 模型业务逻辑
+│   │   ├── sync.go              # 同步模型业务逻辑
 │   │   ├── crypto.go            # 凭证加解密
 │   │   └── notifier.go          # Redis 变更通知
 │   ├── repository/
@@ -127,7 +144,8 @@ control-plane/
 │   │   └── model.go             # 模型实体定义
 │   ├── dto/
 │   │   ├── provider.go          # 渠道请求/响应 DTO
-│   │   └── model.go             # 模型请求/响应 DTO
+│   │   ├── model.go             # 模型请求/响应 DTO
+│   │   └── sync.go              # 同步请求/响应 DTO
 │   └── errors/
 │       └── errors.go            # 业务错误定义
 ├── migrations/
@@ -240,6 +258,67 @@ sequenceDiagram
     H-->>OC: 200 OK + JSON
 ```
 
+### 5.4 同步模型（拉取对比）
+
+```mermaid
+sequenceDiagram
+    participant OC as ops-console
+    participant H as SyncHandler
+    participant S as SyncService
+    participant P as ProviderRepo
+    participant M as ModelRepo
+    participant C as CryptoService
+    participant U as 厂商 API
+
+    OC->>H: POST /api/v1/providers/:id/sync-models
+    H->>H: 绑定参数 + 校验渠道存在且启用
+    H->>S: SyncModels(ctx, providerID)
+    S->>P: FindByID(ctx, providerID)
+    P-->>S: Provider{endpoint, encrypted_credentials}
+    S->>C: Decrypt(credentials)
+    C-->>S: apiKey
+    S->>U: GET {endpoint}/models (Bearer apiKey)
+    U-->>S: {data: [{id, ...}, ...]}
+    S->>M: ListByProviderID(ctx, providerID)
+    M-->>S: 本地模型列表
+    S->>S: 对比分类(新增/已存在/已下架)
+    Note over S: added = 上游有本地无<br/>existing = 都有<br/>removed = 本地有上游无
+    S-->>H: SyncResult{added[], existing[], removed[]}
+    H-->>OC: 200 OK + JSON
+```
+
+### 5.5 确认同步（批量注册+禁用）
+
+```mermaid
+sequenceDiagram
+    participant OC as ops-console
+    participant H as SyncHandler
+    participant S as SyncService
+    participant M as ModelRepo
+    participant DB as PostgreSQL
+    participant N as ChangeNotifier
+    participant Redis as Redis
+
+    OC->>H: POST /api/v1/providers/:id/sync-models/confirm {models_to_add, disable_removed}
+    H->>H: 绑定参数 + 校验 models_to_add 非空
+    H->>S: ConfirmSync(ctx, providerID, modelsToAdd, disableRemoved)
+    S->>DB: BEGIN TRANSACTION
+    loop 逐个模型
+        S->>M: FindByName(ctx, name)
+        M-->>S: nil (不存在)
+        S->>M: Create(ctx, model) [enabled=false]
+    end
+    opt disable_removed=true && 上游非空
+        S->>M: BatchDisableByNames(ctx, removedNames, providerID)
+        M->>DB: UPDATE models SET enabled=false WHERE name IN (...) AND provider_id=?
+    end
+    S->>DB: COMMIT
+    S->>N: Publish(ctx, "models:synced", providerID)
+    N->>Redis: PUBLISH config_changes {event}
+    S-->>H: ConfirmResult{registered, skipped, disabled}
+    H-->>OC: 200 OK + JSON
+```
+
 ---
 
 ## 6. 数据流转
@@ -316,6 +395,14 @@ flowchart TD
 | `provider_id` | 非空，合法 UUID 格式 | 400 |
 | `model_type` | 枚举值：chat / embedding | 400 |
 
+**SyncHandler 输入校验：**
+
+| 字段 / 参数 | 校验规则 | 失败时 |
+| :--- | :--- | :--- |
+| `:id`（path） | 非空，合法 UUID 格式，渠道必须存在且启用 | 404 / 400 |
+| `models_to_add`（confirm body） | 非空数组，每个元素长度 2–128 | 400 |
+| `disable_removed`（confirm body） | 布尔值，可选，默认 true | 400 |
+
 ### 7.2 Service 层
 
 > 包含全部业务逻辑和事务编排，不处理 HTTP 细节。
@@ -340,6 +427,13 @@ flowchart TD
 | `Update(ctx, id string, input UpdateModelInput) (*Model, error)` | 更新模型信息，发布通知 | 是 | NotFoundError, ConflictError |
 | `Delete(ctx, id string) error` | 删除模型，发布通知 | 是 | NotFoundError |
 | `ListAvailable(ctx) ([]*ModelWithProvider, error)` | 查询所有启用的模型及其渠道信息（含解密凭证），供 gateway-api 使用 | 否 | — |
+
+**SyncService 公开方法：**
+
+| 方法签名 | 职责 | 事务 | 抛出异常 |
+| :--- | :--- | :---: | :--- |
+| `SyncModels(ctx, providerID string) (*SyncResult, error)` | 查询渠道信息，解密凭证，调厂商 API 拉取模型列表，与本地对比分类 | 否 | NotFoundError, ProviderDisabledError, SyncNotSupportedError, UpstreamError |
+| `ConfirmSync(ctx, providerID string, modelsToAdd []string, disableRemoved bool) (*ConfirmResult, error)` | 批量注册新模型（enabled=false），禁用已下架模型，发布通知 | 是 | NotFoundError |
 
 **业务规则：**
 - 渠道名称全局唯一，不允许重复创建同名渠道
@@ -396,6 +490,9 @@ flowchart TD
 | UpdateModelRequest | 接收 PUT /api/v1/models/:id 请求体 | Handler 入口绑定 |
 | ModelResponse | 序列化模型响应体 | Handler 出口 |
 | ModelAvailableResponse | 序列化内部接口模型+渠道响应 | InternalHandler 出口 |
+| SyncModelsResponse | 序列化同步拉取对比响应 | SyncHandler 出口 |
+| ConfirmSyncRequest | 接收 POST /providers/:id/sync-models/confirm 请求体 | SyncHandler 入口绑定 |
+| ConfirmSyncResponse | 序列化确认同步响应 | SyncHandler 出口 |
 | Provider (entity) | 数据库持久化对象 | Repository ↔ Service |
 | Model (entity) | 数据库持久化对象 | Repository ↔ Service |
 
@@ -413,6 +510,8 @@ flowchart TD
 | ConflictError | Repository / Service | 资源名称冲突或唯一约束违反 |
 | HasModelsError | Service | 渠道下存在模型，不允许删除 |
 | ProviderDisabledError | Service | 渠道已禁用，不允许注册模型 |
+| SyncNotSupportedError | Service | 渠道类型不支持模型列表同步 |
+| UpstreamError | Service | 厂商 API 调用失败或超时 |
 | ValidationError | Handler | 请求参数格式校验失败 |
 | UnauthorizedError | Middleware | 认证失败（Token 无效或过期） |
 | InternalError | 任意层 | 未预期的系统错误 |
@@ -427,6 +526,8 @@ flowchart TD
 | ConflictError | 409 | E4091 | 名称冲突 |
 | HasModelsError | 409 | E4092 | 渠道下有模型，不可删除 |
 | ProviderDisabledError | 422 | E4221 | 渠道已禁用 |
+| SyncNotSupportedError | 400 | E4222 | 渠道类型不支持自动同步 |
+| UpstreamError | 502 | E5021 | 厂商 API 调用失败 |
 | InternalError | 500 | E5001 | 不暴露内部细节 |
 
 ---
@@ -524,3 +625,21 @@ flowchart TD
   * C — 软删除 + 恢复：标记删除，保留恢复能力 / 增加复杂度
 * **决策**：选择方案 B
 * **理由**：管理面操作应当谨慎，阻断删除能有效防止误操作导致大面积服务中断；操作频率极低，手动清理模型的额外步骤在可接受范围内。
+
+### 决策 5：同步接口拆为两步
+
+* **问题**：模型同步是一次性完成还是分步？
+* **候选方案**：
+  * A — 一步完成：全量导入后管理员逐个禁用不需要的模型
+  * B — 两步接口：先拉取对比展示结果 → 管理员勾选后再确认注册
+* **决策**：选择方案 B
+* **理由**：管理员需要在中间环节勾选确认，不能全量盲导入。两步设计允许管理员对新增模型做筛选，避免引入不需要的模型。第一步结果可在前端缓存，确认时直接提交勾选列表即可。
+
+### 决策 6：下架检测防误禁用
+
+* **问题**：上游返回空列表时是否禁用本地所有模型？
+* **候选方案**：
+  * A — 无论如何都执行禁用：逻辑一致但风险大
+  * B — 空列表时不执行禁用，仅提示
+* **决策**：选择方案 B
+* **理由**：网络故障可能导致厂商 API 返回空结果而非真实空列表，全量禁用影响严重。空列表时跳过下架检测是更安全的策略，管理员可手动处理。

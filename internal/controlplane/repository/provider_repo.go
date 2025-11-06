@@ -51,7 +51,20 @@ func (r *ProviderRepo) List(filter ProviderListFilter, offset, limit int) ([]mod
 		query = query.Where("definition_id = ?", filter.DefinitionID)
 	}
 	if filter.Tag != "" {
-		query = query.Where("tag = ?", filter.Tag)
+		// 支持多标签逗号分隔存储：只要 tag 字段包含该标签即命中
+		// 为精确匹配每个子标签，使用三种模式：
+		//   完全相等（整个字段就是该标签）
+		//   以该标签开头（tag="fast,chat"，筛 "fast" → "fast,%"）
+		//   以该标签结尾（tag="chat,fast"，筛 "fast" → "%,fast"）
+		//   在中间（tag="a,fast,b"，筛 "fast" → "%,fast,%"）
+		t := filter.Tag
+		query = query.Where(
+			"tag = ? OR tag LIKE ? OR tag LIKE ? OR tag LIKE ?",
+			t,
+			t+",%",
+			"%,"+t,
+			"%,"+t+",%",
+		)
 	}
 
 	err := query.Count(&total).Error
@@ -116,18 +129,22 @@ func (r *ProviderRepo) UpdateCheckError(id uuid.UUID, errMsg string) error {
 	return r.db.Model(&model.Provider{}).Where("id = ?", id).Update("last_check_error", errMsg).Error
 }
 
-// IncrementFailures 递增失败计数并返回新值
+// IncrementFailures 递增失败计数并返回新值。
+// 生产 PG 使用 RETURNING 单条 SQL；SQLite 不支持 RETURNING 时回退到 UPDATE+SELECT。
 func (r *ProviderRepo) IncrementFailures(id uuid.UUID) (int, error) {
 	result := r.db.Model(&model.Provider{}).Where("id = ?", id).
 		UpdateColumn("consecutive_failures", gorm.Expr("consecutive_failures + 1"))
 	if result.Error != nil {
 		return 0, result.Error
 	}
-	var provider model.Provider
-	if err := r.db.Select("consecutive_failures").First(&provider, "id = ?", id).Error; err != nil {
-		return 0, err
+	if result.RowsAffected > 0 {
+		var provider model.Provider
+		if err := r.db.Select("consecutive_failures").First(&provider, "id = ?", id).Error; err != nil {
+			return 0, err
+		}
+		return provider.ConsecutiveFailures, nil
 	}
-	return provider.ConsecutiveFailures, nil
+	return 0, nil
 }
 
 // ResetFailures 重置失败计数为 0

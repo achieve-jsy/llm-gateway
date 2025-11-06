@@ -1,10 +1,10 @@
 /**
- * 凭证脱敏：保留前 3 位 + **** + 末尾若干位。
+ * 凭证脱敏：与后端 crypto.Mask 保持一致。
  *
  * 长度规则：
- * - length <= 8：完全屏蔽，返回 ****
- * - 9 <= length <= 11：保留前 3 + 后 3
- * - length >= 12：保留前 3 + 后 4
+ * - 空值或长度 <= 8：完全屏蔽，返回 ****
+ * - 9 <= 长度 <= 11：保留前 3 + 后 3
+ * - 长度 >= 12：保留前 3 + 后 4
  */
 export function maskCredential(value: string): string {
   if (!value || value.length <= 8) return '****'

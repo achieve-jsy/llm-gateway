@@ -62,6 +62,7 @@ export interface Provider {
   tag: string
   consecutive_failures: number
   last_check_error: string
+  model_count: number
   created_at: string
   updated_at: string
 }

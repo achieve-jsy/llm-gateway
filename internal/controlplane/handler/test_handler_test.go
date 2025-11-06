@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -178,11 +179,14 @@ func TestTestProvider_Connectivity_OK(t *testing.T) {
 }
 
 func TestTestProvider_WithChatTest_Success(t *testing.T) {
+	var capturedBody string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/models") {
 			_, _ = w.Write([]byte(`{"data":[{"id":"only-model"}]}`))
 			return
 		}
+		body, _ := io.ReadAll(r.Body)
+		capturedBody = string(body)
 		_, _ = w.Write([]byte(`{"id":"resp-1","model":"only-model","choices":[{"message":{"content":"hi"}}]}`))
 	}))
 	defer upstream.Close()
@@ -201,6 +205,88 @@ func TestTestProvider_WithChatTest_Success(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), `"chat_success":true`)
 	assert.Contains(t, w.Body.String(), `"chat_model":"only-model"`)
+	assert.Contains(t, capturedBody, `"max_tokens":1`)
+}
+
+func TestTestProvider_WithChatTest_SkipsEmbeddingModel(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/models") {
+			_, _ = w.Write([]byte(`{"data":[{"id":"text-embedding-v3"},{"id":"qwen-chat"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"resp-2","model":"qwen-chat","choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer upstream.Close()
+
+	provider := mkProvider(t, upstream.URL, "sk-test", "")
+	repo := &fakeTestProviderRepo{getByIDFn: func(id uuid.UUID) (*model.Provider, error) {
+		return provider, nil
+	}}
+	r := newTestProviderRouter(repo)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/v1/providers/"+provider.ID.String()+"/test", strings.NewReader(`{"test_chat":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"chat_success":true`)
+	assert.Contains(t, w.Body.String(), `"chat_model":"qwen-chat"`)
+}
+
+func TestTestProvider_WithChatTest_PrefersConfiguredTestModel(t *testing.T) {
+	var usedChatModel string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/models") {
+			_, _ = w.Write([]byte(`{"data":[{"id":"auto-model"}]}`))
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		usedChatModel = string(body)
+		_, _ = w.Write([]byte(`{"id":"resp-pref","model":"configured-model","choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer upstream.Close()
+
+	provider := mkProvider(t, upstream.URL, "sk-test", "configured-model")
+	repo := &fakeTestProviderRepo{getByIDFn: func(id uuid.UUID) (*model.Provider, error) {
+		return provider, nil
+	}}
+	r := newTestProviderRouter(repo)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/v1/providers/"+provider.ID.String()+"/test", strings.NewReader(`{"test_chat":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"chat_model":"configured-model"`)
+	assert.Contains(t, usedChatModel, `"model":"configured-model"`)
+}
+
+func TestTestProvider_WithChatTest_ModelsResponseMalformedButConfiguredModelStillWorks(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/models") {
+			_, _ = w.Write([]byte(`{"unexpected":true}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"resp-malformed","model":"configured-model","choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer upstream.Close()
+
+	provider := mkProvider(t, upstream.URL, "sk-test", "configured-model")
+	repo := &fakeTestProviderRepo{getByIDFn: func(id uuid.UUID) (*model.Provider, error) {
+		return provider, nil
+	}}
+	r := newTestProviderRouter(repo)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/v1/providers/"+provider.ID.String()+"/test", strings.NewReader(`{"test_chat":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"chat_success":true`)
+	assert.Contains(t, w.Body.String(), `"chat_model":"configured-model"`)
 }
 
 func TestTestProvider_WithChatTest_NoModelAvailable(t *testing.T) {
@@ -298,6 +384,86 @@ func TestTestProvider_WithChatTest_MissingID(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "响应缺少 id")
+}
+
+func TestTestProvider_WithChatTest_MissingChoicesMessageStillReturnsSuccess(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/models") {
+			_, _ = w.Write([]byte(`{"data":[{"id":"m1"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"resp-ok","model":"m1","choices":[{}]}`))
+	}))
+	defer upstream.Close()
+
+	provider := mkProvider(t, upstream.URL, "sk-test", "m1")
+	repo := &fakeTestProviderRepo{getByIDFn: func(id uuid.UUID) (*model.Provider, error) {
+		return provider, nil
+	}}
+	r := newTestProviderRouter(repo)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/v1/providers/"+provider.ID.String()+"/test", strings.NewReader(`{"test_chat":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"chat_success":true`)
+	assert.Contains(t, w.Body.String(), `"chat_model":"m1"`)
+}
+
+func TestTestProvider_WithoutTestChat_DoesNotCallChatEndpoint(t *testing.T) {
+	chatCalled := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/models") {
+			_, _ = w.Write([]byte(`{"data":[{"id":"m1"}]}`))
+			return
+		}
+		chatCalled = true
+		_, _ = w.Write([]byte(`{"id":"resp","model":"m1","choices":[{"message":{"content":"hi"}}]}`))
+	}))
+	defer upstream.Close()
+
+	provider := mkProvider(t, upstream.URL, "sk-test", "m1")
+	repo := &fakeTestProviderRepo{getByIDFn: func(id uuid.UUID) (*model.Provider, error) {
+		return provider, nil
+	}}
+	r := newTestProviderRouter(repo)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/v1/providers/"+provider.ID.String()+"/test", strings.NewReader(`{"test_chat":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.False(t, chatCalled)
+	assert.NotContains(t, w.Body.String(), `"chat_success"`)
+}
+
+func TestTestProvider_WithChatTest_UpstreamPlainMessageFallback(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/models") {
+			_, _ = w.Write([]byte(`{"data":[{"id":"m1"}]}`))
+			return
+		}
+		http.Error(w, `{"message":"temporary unavailable"}`, http.StatusBadGateway)
+	}))
+	defer upstream.Close()
+
+	provider := mkProvider(t, upstream.URL, "sk-test", "m1")
+	repo := &fakeTestProviderRepo{getByIDFn: func(id uuid.UUID) (*model.Provider, error) {
+		return provider, nil
+	}}
+	r := newTestProviderRouter(repo)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/v1/providers/"+provider.ID.String()+"/test", strings.NewReader(`{"test_chat":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"chat_success":false`)
+	assert.Contains(t, w.Body.String(), `temporary unavailable`)
 }
 
 func TestTestProvider_WithChatTest_NetworkError(t *testing.T) {

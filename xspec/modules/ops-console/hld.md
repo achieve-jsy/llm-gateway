@@ -14,6 +14,7 @@
 | 版本号 | 修改日期 | 修改内容摘要 | 修改人 |
 | :--- | :--- | :--- | :--- |
 | v1.0 | 2026-05-21 | 初稿创建 | OpenCode |
+| v1.1 | 2026-05-23 | 新增 SyncModelsDialog 组件与同步模型交互流程（CHG-20260521-002） | OpenCode |
 
 ---
 
@@ -93,6 +94,34 @@ sequenceDiagram
     end
     Admin->>Page: 查看页面内容
 ```
+
+### 3.2b 同步模型交互流程
+
+```mermaid
+sequenceDiagram
+    participant Admin as 管理员
+    participant Page as ProviderListPage
+    participant Dialog as SyncModelsDialog
+    participant API as control-plane
+
+    Admin->>Page: 点击"同步模型"按钮
+    Page->>API: POST /providers/:id/sync-models
+    API-->>Page: SyncResult
+    Page->>Dialog: 打开弹窗(传入 result)
+    Admin->>Dialog: 输入关键词过滤
+    Dialog->>Dialog: 实时过滤列表
+    Admin->>Dialog: 一键全选 / 手动勾选
+    Admin->>Dialog: 点击"确认注册"
+    Dialog->>API: POST /providers/:id/sync-models/confirm
+    API-->>Dialog: 注册成功
+    Dialog->>Page: 关闭弹窗，刷新模型列表
+```
+
+**新增组件**：
+
+| 组件 | 位置 | 职责 |
+| :--- | :--- | :--- |
+| SyncModelsDialog.vue | components/admin/ | 同步结果弹窗：展示列表、过滤、勾选、确认注册 |
 
 ### 3.3 路由规划
 

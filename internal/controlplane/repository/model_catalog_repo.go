@@ -2,7 +2,6 @@ package repository
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -74,20 +73,38 @@ func (r *ModelCatalogRepo) Upsert(entry *model.ModelCatalog) error {
 	}).Create(entry).Error
 }
 
-// BatchUpsert 批量 Upsert（一次事务）。
+// BatchUpsert 批量 Upsert（按 100 条分批，每批一条 INSERT ... ON CONFLICT DO UPDATE 语句）。
+//
+// 相比逐条循环 Upsert（N 条 → N 条 SQL），分批后 3000 条 catalog 只需 ~30 条 SQL。
 func (r *ModelCatalogRepo) BatchUpsert(entries []*model.ModelCatalog) error {
 	if len(entries) == 0 {
 		return nil
 	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		repo := &ModelCatalogRepo{db: tx}
-		for _, e := range entries {
-			if err := repo.Upsert(e); err != nil {
-				return fmt.Errorf("upsert %s/%s: %w", e.Source, e.SourceModelID, err)
-			}
+	for _, e := range entries {
+		if e.ID == uuid.Nil {
+			e.ID = uuid.New()
 		}
-		return nil
-	})
+		if e.SyncedAt.IsZero() {
+			e.SyncedAt = time.Now()
+		}
+		if e.Source == "" {
+			e.Source = "litellm"
+		}
+	}
+	return r.db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "source"}, {Name: "source_model_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"display_name", "provider", "mode",
+			"context_length", "max_output_tokens",
+			"input_price_per_million", "output_price_per_million",
+			"cache_read_price", "cache_write_price",
+			"tier_threshold", "input_price_above_tier", "output_price_above_tier",
+			"supports_function_calling", "supports_vision",
+			"supports_prompt_caching", "supports_response_schema",
+			"supports_tool_choice", "supports_parallel_function_calling",
+			"deprecation_date", "raw_payload", "synced_at", "updated_at",
+		}),
+	}).CreateInBatches(entries, 100).Error
 }
 
 // GetByID 按主键查询；找不到时返回 (nil, nil) 而非 ErrRecordNotFound，
@@ -210,6 +227,16 @@ func (r *ModelCatalogRepo) ListAll() ([]model.ModelCatalog, error) {
 	return results, err
 }
 
+// ListAutoBindCandidates 返回 auto-bind 需要的最小列集合。
+//
+// 只取 id/source_model_id/provider，避免把 raw_payload 等大字段整表拉进内存。
+// 在真实 catalog 库中 raw_payload 是整条上游 JSON，SELECT * 会显著拖慢请求。
+func (r *ModelCatalogRepo) ListAutoBindCandidates() ([]model.ModelCatalog, error) {
+	var results []model.ModelCatalog
+	err := r.db.Select("id", "source_model_id", "provider").Find(&results).Error
+	return results, err
+}
+
 // Count 返回 catalog 表中的总条目数。
 //
 // 用于"目录同步状态"展示（前端页头的「目录已收录 N 条」）。
@@ -219,4 +246,21 @@ func (r *ModelCatalogRepo) Count() (int64, error) {
 	var n int64
 	err := r.db.Model(&model.ModelCatalog{}).Count(&n).Error
 	return n, err
+}
+
+// GetByIDs 批量按主键查询 catalog 条目（单次 SELECT ... WHERE id IN (?)，消除 N+1）
+func (r *ModelCatalogRepo) GetByIDs(ids []uuid.UUID) (map[uuid.UUID]*model.ModelCatalog, error) {
+	if len(ids) == 0 {
+		return map[uuid.UUID]*model.ModelCatalog{}, nil
+	}
+	var results []model.ModelCatalog
+	err := r.db.Where("id IN ?", ids).Find(&results).Error
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[uuid.UUID]*model.ModelCatalog, len(results))
+	for i := range results {
+		m[results[i].ID] = &results[i]
+	}
+	return m, nil
 }

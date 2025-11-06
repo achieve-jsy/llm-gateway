@@ -16,10 +16,11 @@ const (
 
 // ChangeEvent 配置变更事件（与 control-plane 的 event/change_event.go 结构一致）
 type ChangeEvent struct {
-	Type         string    `json:"type"`
-	ResourceType string    `json:"resource_type"`
-	ResourceID   string    `json:"resource_id"`
-	Timestamp    time.Time `json:"timestamp"`
+	Type            string    `json:"type"`
+	ResourceType    string    `json:"resource_type"`
+	ResourceID      string    `json:"resource_id"`
+	SnapshotVersion int64     `json:"snapshot_version,omitempty"`
+	Timestamp       time.Time `json:"timestamp"`
 }
 
 // ChangeCallback 配置变更回调函数类型
@@ -75,6 +76,7 @@ func (s *Subscriber) handleMessage(msg *redis.Message) {
 		"type", event.Type,
 		"resource_type", event.ResourceType,
 		"resource_id", event.ResourceID,
+		"snapshot_version", event.SnapshotVersion,
 		"timestamp", event.Timestamp,
 	)
 

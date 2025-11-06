@@ -145,6 +145,26 @@ describe('CatalogSyncPage.vue', () => {
       expect(wrapper.text()).toContain('old-model')
     })
 
+    it('renders stage panel and section descriptions', async () => {
+      const wrapper = mountPage()
+      await flushPromises()
+      expect(wrapper.find('[data-testid="stage-panel"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="action-board"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="tab-nav"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="tab-intro"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="workspace-grid"]').exists()).toBe(true)
+      const text = wrapper.text()
+      expect(text).toContain('你当前在做什么')
+      expect(text).toContain('目录更新')
+      expect(text).toContain('模型对应')
+      expect(text).toContain('价格差异')
+      expect(text).toContain('当前状态')
+      expect(text).toContain('推荐动作')
+      expect(text).toContain('可选动作')
+      expect(text).toContain('绑定本地模型')
+      expect(text).toContain('本地模型如何对应到目录参考项')
+    })
+
     it('renders override badge when is_overridden=true', async () => {
       const wrapper = mountPage()
       await flushPromises()
@@ -172,7 +192,9 @@ describe('CatalogSyncPage.vue', () => {
       await flushPromises()
       ;(wrapper.vm as any).selectedIds = ['m1', 'm3']
       await flushPromises()
-      const applyBtn = wrapper.findAll('.el-button-stub').find((b) => b.text().includes('应用选中项'))!
+      ;(wrapper.vm as any).switchTab('diff')
+      await flushPromises()
+      const applyBtn = wrapper.findAll('.el-button-stub').find((b) => b.text().includes('采用目录参考价格'))!
       await applyBtn.trigger('click')
       await flushPromises()
       expect(mockedApply).toHaveBeenCalledWith(['m1', 'm3'])
@@ -184,7 +206,9 @@ describe('CatalogSyncPage.vue', () => {
       mockedGetDiff.mockClear()
       ;(wrapper.vm as any).selectedIds = ['m1']
       await flushPromises()
-      const applyBtn = wrapper.findAll('.el-button-stub').find((b) => b.text().includes('应用选中项'))!
+      ;(wrapper.vm as any).switchTab('diff')
+      await flushPromises()
+      const applyBtn = wrapper.findAll('.el-button-stub').find((b) => b.text().includes('采用目录参考价格'))!
       await applyBtn.trigger('click')
       await flushPromises()
       expect(mockedGetDiff).toHaveBeenCalled()
@@ -193,7 +217,9 @@ describe('CatalogSyncPage.vue', () => {
     it('shows a hint and does nothing when apply pressed with empty selection', async () => {
       const wrapper = mountPage()
       await flushPromises()
-      const applyBtn = wrapper.findAll('.el-button-stub').find((b) => b.text().includes('应用选中项'))!
+      ;(wrapper.vm as any).switchTab('diff')
+      await flushPromises()
+      const applyBtn = wrapper.findAll('.el-button-stub').find((b) => b.text().includes('采用目录参考价格'))!
       await applyBtn.trigger('click')
       await flushPromises()
       expect(mockedApply).not.toHaveBeenCalled()
@@ -205,7 +231,9 @@ describe('CatalogSyncPage.vue', () => {
     it('calls triggerCatalogSync when "手动刷新" is clicked', async () => {
       const wrapper = mountPage()
       await flushPromises()
-      const refreshBtn = wrapper.findAll('.el-button-stub').find((b) => b.text().includes('手动刷新'))!
+      ;(wrapper.vm as any).switchTab('sync')
+      await flushPromises()
+      const refreshBtn = wrapper.findAll('.el-button-stub').find((b) => b.text().includes('更新目录数据'))!
       await refreshBtn.trigger('click')
       await flushPromises()
       expect(mockedTrigger).toHaveBeenCalled()
@@ -308,7 +336,9 @@ describe('CatalogSyncPage.vue', () => {
 
       const wrapper = mountPage()
       await flushPromises()
-      const btn = wrapper.findAll('.el-button-stub').find((b) => b.text().includes('智能绑定'))!
+      ;(wrapper.vm as any).switchTab('bind')
+      await flushPromises()
+      const btn = wrapper.findAll('.el-button-stub').find((b) => b.text().includes('处理未对应模型'))!
       await btn.trigger('click')
       await flushPromises()
 
@@ -336,7 +366,9 @@ describe('CatalogSyncPage.vue', () => {
 
       const wrapper = mountPage()
       await flushPromises()
-      const btn = wrapper.findAll('.el-button-stub').find((b) => b.text().includes('智能绑定'))!
+      ;(wrapper.vm as any).switchTab('bind')
+      await flushPromises()
+      const btn = wrapper.findAll('.el-button-stub').find((b) => b.text().includes('处理未对应模型'))!
       await btn.trigger('click')
       await flushPromises()
 
@@ -370,7 +402,9 @@ describe('CatalogSyncPage.vue', () => {
     }
 
     async function openAmbiguousDialog(wrapper: any) {
-      const btn = wrapper.findAll('.el-button-stub').find((b: any) => b.text().includes('智能绑定'))!
+      ;(wrapper.vm as any).switchTab('bind')
+      await flushPromises()
+      const btn = wrapper.findAll('.el-button-stub').find((b: any) => b.text().includes('处理未对应模型'))!
       await btn.trigger('click')
       await flushPromises()
     }
@@ -507,6 +541,8 @@ describe('CatalogSyncPage.vue', () => {
       } as any)
       const wrapper = mountPage()
       await flushPromises()
+      ;(wrapper.vm as any).switchTab('diff')
+      await flushPromises()
 
       expect((wrapper.vm as any).emptyKind).toBe('catalog_empty')
       const title = wrapper.find('[data-testid="empty-title"]').text()
@@ -523,6 +559,8 @@ describe('CatalogSyncPage.vue', () => {
       } as any)
       const wrapper = mountPage()
       await flushPromises()
+      ;(wrapper.vm as any).switchTab('diff')
+      await flushPromises()
 
       expect((wrapper.vm as any).emptyKind).toBe('no_local_models')
       expect(wrapper.find('[data-testid="empty-cta-models"]').exists()).toBe(true)
@@ -537,11 +575,15 @@ describe('CatalogSyncPage.vue', () => {
       } as any)
       const wrapper = mountPage()
       await flushPromises()
+      ;(wrapper.vm as any).switchTab('diff')
+      await flushPromises()
 
       expect((wrapper.vm as any).emptyKind).toBe('all_unbound')
       const cta = wrapper.find('[data-testid="empty-cta-autobind"]')
       expect(cta.exists()).toBe(true)
       expect(cta.text()).toContain('7')
+      expect(cta.text()).toContain('未关联模型')
+      expect(wrapper.text()).toContain('下一步建议')
     })
 
     it('mixed_no_diff: some bound (consistent) + some unbound → continue-autobind CTA', async () => {
@@ -553,11 +595,15 @@ describe('CatalogSyncPage.vue', () => {
       } as any)
       const wrapper = mountPage()
       await flushPromises()
+      ;(wrapper.vm as any).switchTab('diff')
+      await flushPromises()
 
       expect((wrapper.vm as any).emptyKind).toBe('mixed_no_diff')
       const cta = wrapper.find('[data-testid="empty-cta-autobind"]')
       expect(cta.exists()).toBe(true)
       expect(cta.text()).toContain('6')
+      expect(cta.text()).toContain('未关联模型')
+      expect(wrapper.text()).toContain('你现在不需要处理差异')
     })
 
     it('all_bound_no_diff: everything bound and consistent → no CTA, "all good" message', async () => {
@@ -582,9 +628,89 @@ describe('CatalogSyncPage.vue', () => {
       mockedBindingStats.mockRejectedValueOnce(new Error('boom'))
       const wrapper = mountPage()
       await flushPromises()
+      ;(wrapper.vm as any).switchTab('diff')
+      await flushPromises()
 
       expect((wrapper.vm as any).emptyKind).toBe('catalog_empty')
       expect(wrapper.find('[data-testid="empty-cta-sync"]').exists()).toBe(true)
+    })
+
+    it('stage panel explains current step when unbound models exist', async () => {
+      mockedBindingStats.mockResolvedValueOnce({
+        catalog_total: 2719,
+        model_total: 10,
+        bound_count: 4,
+        unbound_count: 6
+      } as any)
+      const wrapper = mountPage()
+      await flushPromises()
+
+      const text = wrapper.text()
+      expect(text).toContain('还有 6 个本地模型未关联 Catalog')
+      expect(text).toContain('当前页面推荐你先处理“未关联模型”')
+      expect(text).toContain('先处理未关联模型')
+      expect(wrapper.find('[data-testid="recommended-action-bind"]').exists()).toBe(true)
+    })
+
+    it('recommends sync action when catalog is empty', async () => {
+      mockedGetDiff.mockResolvedValueOnce({ data: [], total: 0 } as any)
+      mockedBindingStats.mockResolvedValueOnce({
+        catalog_total: 0,
+        model_total: 5,
+        bound_count: 0,
+        unbound_count: 5
+      } as any)
+      const wrapper = mountPage()
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('Catalog 目录还没有准备好')
+      expect(wrapper.text()).toContain('先把目录同步下来')
+      expect(wrapper.text()).toContain('阻塞')
+      expect(wrapper.find('[data-testid="recommended-action-sync"]').exists()).toBe(true)
+    })
+
+    it('shows pending status for binding area when unbound models exist', async () => {
+      mockedBindingStats.mockResolvedValueOnce({
+        catalog_total: 2719,
+        model_total: 10,
+        bound_count: 4,
+        unbound_count: 6
+      } as any)
+      const wrapper = mountPage()
+      await flushPromises()
+
+      const text = wrapper.text()
+      expect(text).toContain('待处理')
+      expect(text).toContain('很多“看不到差异”的情况，其实是因为模型还没绑定')
+    })
+
+    it('shows diff summary counts and risk note when diff rows exist', async () => {
+      const wrapper = mountPage()
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="diff-explainer"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="deprecation-banner"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="group-followup"]').exists()).toBe(true)
+      const text = wrapper.text()
+      expect(text).toContain('待补价格')
+      expect(text).toContain('已脱离目录')
+      expect(text).toContain('废弃提醒')
+      expect(text).toContain('执行后会直接把所选模型的本地价格改成目录里的参考价格')
+      expect(text).toContain('采用目录参考价格')
+      expect(text).toContain('选中这组')
+    })
+
+    it('group actions select price-unset and followup rows separately', async () => {
+      const wrapper = mountPage()
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      expect(vm.priceUnsetRows.length).toBeGreaterThanOrEqual(0)
+      expect(vm.followupRows.length).toBeGreaterThan(0)
+
+      vm.selectFollowupRows()
+      await flushPromises()
+      expect(vm.selectedIds.length).toBe(vm.followupRows.length)
     })
   })
 

@@ -105,5 +105,40 @@ func (r *ProviderRepo) ExistsByNameExcluding(name string, excludeID uuid.UUID) (
 
 // UpdateResponseTime 更新渠道最近测试响应时间
 func (r *ProviderRepo) UpdateResponseTime(id uuid.UUID, ms int) error {
-	return r.db.Model(&model.Provider{}).Where("id = ?", id).Update("response_time", ms).Error
+	return r.db.Model(&model.Provider{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"response_time":    ms,
+		"last_check_error": "",
+	}).Error
+}
+
+// UpdateCheckError 更新最近检测错误信息
+func (r *ProviderRepo) UpdateCheckError(id uuid.UUID, errMsg string) error {
+	return r.db.Model(&model.Provider{}).Where("id = ?", id).Update("last_check_error", errMsg).Error
+}
+
+// IncrementFailures 递增失败计数并返回新值
+func (r *ProviderRepo) IncrementFailures(id uuid.UUID) (int, error) {
+	result := r.db.Model(&model.Provider{}).Where("id = ?", id).
+		UpdateColumn("consecutive_failures", gorm.Expr("consecutive_failures + 1"))
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	var provider model.Provider
+	if err := r.db.Select("consecutive_failures").First(&provider, "id = ?", id).Error; err != nil {
+		return 0, err
+	}
+	return provider.ConsecutiveFailures, nil
+}
+
+// ResetFailures 重置失败计数为 0
+func (r *ProviderRepo) ResetFailures(id uuid.UUID) error {
+	return r.db.Model(&model.Provider{}).Where("id = ?", id).Update("consecutive_failures", 0).Error
+}
+
+// AutoDisable 设置 status=3（自动禁用）并关闭 enabled
+func (r *ProviderRepo) AutoDisable(id uuid.UUID) error {
+	return r.db.Model(&model.Provider{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"enabled": false,
+		"status":  3,
+	}).Error
 }

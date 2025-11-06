@@ -540,10 +540,16 @@ type claudeDelta struct {
 // - 合并相邻相同 role 的消息
 func convertRequest(req *model.ChatCompletionRequest, stream bool) *claudeRequest {
 	claudeReq := &claudeRequest{
-		Model:       req.Model,
-		Stream:      stream,
-		Temperature: req.Temperature,
-		TopP:        req.TopP,
+		Model:  req.Model,
+		Stream: stream,
+	}
+	if req.Temperature != nil {
+		v := float64(*req.Temperature)
+		claudeReq.Temperature = &v
+	}
+	if req.TopP != nil {
+		v := float64(*req.TopP)
+		claudeReq.TopP = &v
 	}
 
 	// 设置 max_tokens

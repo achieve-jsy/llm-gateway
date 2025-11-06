@@ -338,8 +338,9 @@ func strPtr(s string) *string {
 	return &s
 }
 
-func float64Ptr(f float64) *float64 {
-	return &f
+func float64Ptr(f float64) *model.JSONFloat64 {
+	v := model.JSONFloat64(f)
+	return &v
 }
 
 func intPtr(i int) *int {

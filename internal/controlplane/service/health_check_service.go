@@ -7,6 +7,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,15 +19,34 @@ import (
 	"github.com/google/uuid"
 )
 
+// CheckResult 单次检测结果
+type CheckResult struct {
+	ProviderID   uuid.UUID `json:"provider_id"`
+	ProviderName string    `json:"provider_name"`
+	Success      bool      `json:"success"`
+	ResponseTime int       `json:"response_time"` // 毫秒
+	Error        string    `json:"error,omitempty"`
+	AutoDisabled bool      `json:"auto_disabled"` // 本次是否触发了自动禁用
+}
+
+// CheckAllResult 批量检测汇总结果
+type CheckAllResult struct {
+	Total        int           `json:"total"`
+	Success      int           `json:"success"`
+	Failed       int           `json:"failed"`
+	AutoDisabled int           `json:"auto_disabled"`
+	Results      []CheckResult `json:"results"`
+}
+
 // HealthCheckService 健康检测调度服务
 type HealthCheckService struct {
 	healthRepo   *repository.HealthCheckRepo
 	providerRepo *repository.ProviderRepo
 	modelRepo    *repository.ModelRepo
 
-	mu       sync.Mutex
-	cancel   context.CancelFunc
-	running  bool
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	running bool
 }
 
 // NewHealthCheckService 创建 HealthCheckService 实例
@@ -112,13 +133,356 @@ func (s *HealthCheckService) IsRunning() bool {
 	return s.running
 }
 
-// runLoop 定时执行健康检测
+// StartBackground 根据环境变量启动后台定时检测 goroutine
+// HEALTH_CHECK_INTERVAL 单位为分钟，默认 5，0 表示禁用
+func (s *HealthCheckService) StartBackground(ctx context.Context) {
+	intervalStr := os.Getenv("HEALTH_CHECK_INTERVAL")
+	intervalMin := 5
+	if intervalStr != "" {
+		if v, err := strconv.Atoi(intervalStr); err == nil {
+			intervalMin = v
+		}
+	}
+	if intervalMin <= 0 {
+		slog.Info("health check background disabled (HEALTH_CHECK_INTERVAL=0)")
+		return
+	}
+
+	// 同步 interval 到 config 表
+	config, err := s.healthRepo.GetConfig()
+	if err != nil {
+		slog.Warn("failed to get health check config for background start", "error", err)
+		return
+	}
+	config.IntervalSeconds = intervalMin * 60
+	config.Enabled = true
+	s.healthRepo.UpdateConfig(config)
+
+	s.mu.Lock()
+	if s.running {
+		s.mu.Unlock()
+		return
+	}
+	s.cancel = func() {} // 占位，下面覆盖
+	s.running = true
+	s.mu.Unlock()
+
+	bgCtx, cancel := context.WithCancel(ctx)
+	s.mu.Lock()
+	s.cancel = cancel
+	s.mu.Unlock()
+
+	go func() {
+		interval := time.Duration(intervalMin) * time.Minute
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		slog.Info("health check background started", "interval_minutes", intervalMin)
+
+		// 首次延迟 30 秒执行，避免启动时立即发请求
+		select {
+		case <-bgCtx.Done():
+			return
+		case <-time.After(30 * time.Second):
+			s.runBackgroundCheck()
+		}
+
+		for {
+			select {
+			case <-bgCtx.Done():
+				s.mu.Lock()
+				s.running = false
+				s.mu.Unlock()
+				return
+			case <-ticker.C:
+				s.runBackgroundCheck()
+			}
+		}
+	}()
+}
+
+// runBackgroundCheck 后台执行一轮检测
+func (s *HealthCheckService) runBackgroundCheck() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	result := s.CheckAll(ctx)
+	slog.Info("background health check completed",
+		"total", result.Total,
+		"success", result.Success,
+		"failed", result.Failed,
+		"auto_disabled", result.AutoDisabled,
+	)
+}
+
+// CheckAll 检测所有启用渠道，同步返回结果
+func (s *HealthCheckService) CheckAll(ctx context.Context) *CheckAllResult {
+	filter := &repository.ProviderListFilter{}
+	providers, _, err := s.providerRepo.List(*filter, 0, 1000)
+	if err != nil {
+		slog.Error("health check: failed to list providers", "error", err)
+		return &CheckAllResult{}
+	}
+
+	config, _ := s.healthRepo.GetConfig()
+	maxFailures := 3
+	checkMode := "connectivity"
+	if config != nil {
+		if config.FailureThreshold > 0 {
+			maxFailures = config.FailureThreshold
+		}
+		if config.CheckMode != "" {
+			checkMode = config.CheckMode
+		}
+	}
+
+	result := &CheckAllResult{
+		Results: make([]CheckResult, 0),
+	}
+
+	for i := range providers {
+		p := &providers[i]
+		if !p.Enabled {
+			continue
+		}
+		result.Total++
+		cr := s.CheckOne(ctx, p, maxFailures, checkMode)
+		result.Results = append(result.Results, *cr)
+		if cr.Success {
+			result.Success++
+		} else {
+			result.Failed++
+		}
+		if cr.AutoDisabled {
+			result.AutoDisabled++
+		}
+	}
+
+	// 清理旧日志
+	s.healthRepo.CleanOldLogs(30)
+
+	return result
+}
+
+// CheckOne 检测单个渠道，支持 connectivity / model_forward / both 三种模式
+func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provider, maxFailures int, checkMode string) *CheckResult {
+	cr := &CheckResult{
+		ProviderID:   provider.ID,
+		ProviderName: provider.Name,
+	}
+
+	// 解密凭证
+	credJSON, err := crypto.Decrypt(provider.EncryptedCredentials)
+	if err != nil {
+		cr.Error = "decrypt credentials failed"
+		s.recordLog("provider", provider.ID, provider.Name, false, 0, cr.Error)
+		s.handleProviderFailure(provider.ID, maxFailures, cr)
+		return cr
+	}
+
+	var creds map[string]string
+	json.Unmarshal([]byte(credJSON), &creds)
+	apiKey := creds["api_key"]
+	if apiKey == "" {
+		apiKey = credJSON
+	}
+
+	// 连通性检测
+	if checkMode == "connectivity" || checkMode == "both" {
+		success, elapsed, errMsg := s.checkConnectivity(ctx, provider, apiKey)
+		cr.ResponseTime = elapsed
+		if !success {
+			cr.Error = errMsg
+			s.recordLog("provider", provider.ID, provider.Name, false, elapsed, errMsg)
+			s.handleProviderFailure(provider.ID, maxFailures, cr)
+			return cr
+		}
+		// 仅连通性模式直接返回成功
+		if checkMode == "connectivity" {
+			cr.Success = true
+			s.recordLog("provider", provider.ID, provider.Name, true, elapsed, "")
+			s.providerRepo.UpdateResponseTime(provider.ID, elapsed)
+			s.providerRepo.ResetFailures(provider.ID)
+			return cr
+		}
+	}
+
+	// 模型转发检测
+	if checkMode == "model_forward" || checkMode == "both" {
+		success, elapsed, errMsg := s.checkModelForward(ctx, provider, apiKey)
+		if cr.ResponseTime == 0 {
+			cr.ResponseTime = elapsed
+		} else {
+			cr.ResponseTime += elapsed
+		}
+		if !success {
+			// errMsg 为 "skipped" 表示无模型可测，视为通过
+			if errMsg == "no model to test, skipped" {
+				cr.Success = true
+				s.recordLog("provider", provider.ID, provider.Name, true, cr.ResponseTime, errMsg)
+				s.providerRepo.UpdateResponseTime(provider.ID, cr.ResponseTime)
+				s.providerRepo.ResetFailures(provider.ID)
+				return cr
+			}
+			cr.Error = errMsg
+			s.recordLog("provider", provider.ID, provider.Name, false, cr.ResponseTime, errMsg)
+			s.handleProviderFailure(provider.ID, maxFailures, cr)
+			return cr
+		}
+	}
+
+	// 全部通过
+	cr.Success = true
+	s.recordLog("provider", provider.ID, provider.Name, true, cr.ResponseTime, "")
+	s.providerRepo.UpdateResponseTime(provider.ID, cr.ResponseTime)
+	s.providerRepo.ResetFailures(provider.ID)
+	return cr
+}
+
+// checkConnectivity 连通性检测：GET {endpoint}/models
+func (s *HealthCheckService) checkConnectivity(ctx context.Context, provider *model.Provider, apiKey string) (bool, int, string) {
+	endpoint := strings.TrimRight(provider.Endpoint, "/") + "/models"
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	start := time.Now()
+	req, _ := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := client.Do(req)
+	elapsed := int(time.Since(start).Milliseconds())
+
+	if err != nil {
+		return false, elapsed, fmt.Sprintf("connection failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return false, elapsed, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, truncateStr(string(body), 200))
+	}
+
+	return true, elapsed, ""
+}
+
+// checkModelForward 模型转发检测：POST {endpoint}/chat/completions（max_tokens=1）
+func (s *HealthCheckService) checkModelForward(ctx context.Context, provider *model.Provider, apiKey string) (bool, int, string) {
+	// 确定测试模型：优先使用渠道的 test_model
+	testModel := provider.TestModel
+	if testModel == "" {
+		// 从 models 表取第一个属于该渠道且启用的模型
+		providerID := provider.ID
+		filter := repository.ModelListFilter{ProviderID: &providerID}
+		models, _, _ := s.modelRepo.List(filter, 0, 1)
+		if len(models) > 0 {
+			testModel = models[0].Name
+		}
+	}
+	if testModel == "" {
+		// 无模型可测，视为通过
+		return false, 0, "no model to test, skipped"
+	}
+
+	// 构造请求
+	endpoint := strings.TrimRight(provider.Endpoint, "/") + "/chat/completions"
+	chatReq := map[string]interface{}{
+		"model":      testModel,
+		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
+		"max_tokens": 1,
+	}
+	body, _ := json.Marshal(chatReq)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	start := time.Now()
+	req, _ := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := client.Do(req)
+	elapsed := int(time.Since(start).Milliseconds())
+
+	if err != nil {
+		return false, elapsed, fmt.Sprintf("model forward failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return false, elapsed, fmt.Sprintf("model forward HTTP %d: %s", resp.StatusCode, truncateStr(string(respBody), 200))
+	}
+
+	// 验证 choices 非空
+	respBody, _ := io.ReadAll(resp.Body)
+	var chatResp struct {
+		Choices []interface{} `json:"choices"`
+	}
+	if err := json.Unmarshal(respBody, &chatResp); err != nil {
+		return false, elapsed, fmt.Sprintf("model forward: invalid response body: %v", err)
+	}
+	if len(chatResp.Choices) == 0 {
+		return false, elapsed, "model forward: empty choices in response"
+	}
+
+	return true, elapsed, ""
+}
+
+// CheckOneByID 通过 ID 查找渠道并检测
+func (s *HealthCheckService) CheckOneByID(ctx context.Context, id uuid.UUID) (*CheckResult, error) {
+	provider, err := s.providerRepo.GetByID(id)
+	if err != nil {
+		return nil, fmt.Errorf("provider not found")
+	}
+
+	config, _ := s.healthRepo.GetConfig()
+	maxFailures := 3
+	checkMode := "connectivity"
+	if config != nil {
+		if config.FailureThreshold > 0 {
+			maxFailures = config.FailureThreshold
+		}
+		if config.CheckMode != "" {
+			checkMode = config.CheckMode
+		}
+	}
+
+	return s.CheckOne(ctx, provider, maxFailures, checkMode), nil
+}
+
+// handleProviderFailure 处理渠道失败（递增计数，可能自动禁用）
+func (s *HealthCheckService) handleProviderFailure(id uuid.UUID, maxFailures int, cr *CheckResult) {
+	newCount, err := s.providerRepo.IncrementFailures(id)
+	if err != nil {
+		slog.Error("failed to increment failures", "provider_id", id, "error", err)
+		return
+	}
+
+	if newCount >= maxFailures {
+		slog.Warn("auto-disabling provider due to consecutive failures",
+			"provider_id", id,
+			"failures", newCount,
+			"threshold", maxFailures,
+		)
+		if err := s.providerRepo.AutoDisable(id); err != nil {
+			slog.Error("failed to auto-disable provider", "provider_id", id, "error", err)
+		} else {
+			cr.AutoDisabled = true
+		}
+	}
+}
+
+// RunNow 手动触发一次检测（异步，兼容旧调用）
+func (s *HealthCheckService) RunNow() {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		s.CheckAll(ctx)
+	}()
+}
+
+// runLoop 定时执行健康检测（config 驱动模式）
 func (s *HealthCheckService) runLoop(ctx context.Context, config *model.HealthCheckConfig) {
 	ticker := time.NewTicker(time.Duration(config.IntervalSeconds) * time.Second)
 	defer ticker.Stop()
 
 	// 首次立即执行一轮
-	s.runCheck(config)
+	s.runBackgroundCheck()
 
 	for {
 		select {
@@ -133,91 +497,12 @@ func (s *HealthCheckService) runLoop(ctx context.Context, config *model.HealthCh
 				s.mu.Unlock()
 				return
 			}
-			s.runCheck(newConfig)
+			s.runBackgroundCheck()
 		}
 	}
 }
 
-// runCheck 执行一轮完整检测
-func (s *HealthCheckService) runCheck(config *model.HealthCheckConfig) {
-	slog.Info("health check round started")
-
-	client := &http.Client{Timeout: time.Duration(config.TimeoutSeconds) * time.Second}
-
-	if config.CheckProviders {
-		s.checkProviders(client, config)
-	}
-
-	if config.CheckModels {
-		s.checkModels(client, config)
-	}
-
-	// 清理 30 天前的日志
-	s.healthRepo.CleanOldLogs(30)
-}
-
-// checkProviders 检测所有启用的渠道
-func (s *HealthCheckService) checkProviders(client *http.Client, config *model.HealthCheckConfig) {
-	filter := &repository.ProviderListFilter{}
-	providers, _, err := s.providerRepo.List(*filter, 0, 1000)
-	if err != nil {
-		slog.Error("health check: failed to list providers", "error", err)
-		return
-	}
-
-	for _, provider := range providers {
-		if !provider.Enabled {
-			continue
-		}
-		s.checkSingleProvider(client, &provider, config)
-	}
-}
-
-// checkSingleProvider 检测单个渠道
-func (s *HealthCheckService) checkSingleProvider(client *http.Client, provider *model.Provider, config *model.HealthCheckConfig) {
-	// 解密凭证
-	credJSON, err := crypto.Decrypt(provider.EncryptedCredentials)
-	if err != nil {
-		s.recordLog("provider", provider.ID, provider.Name, false, 0, "decrypt credentials failed")
-		return
-	}
-
-	var creds map[string]string
-	json.Unmarshal([]byte(credJSON), &creds)
-	apiKey := creds["api_key"]
-	if apiKey == "" {
-		apiKey = credJSON
-	}
-
-	// GET /models 连通性检测
-	endpoint := strings.TrimRight(provider.Endpoint, "/") + "/models"
-	start := time.Now()
-	req, _ := http.NewRequest("GET", endpoint, nil)
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	resp, err := client.Do(req)
-	elapsed := int(time.Since(start).Milliseconds())
-
-	if err != nil {
-		s.recordLog("provider", provider.ID, provider.Name, false, elapsed, fmt.Sprintf("connection failed: %v", err))
-		s.handleFailure("provider", provider.ID, config)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		s.recordLog("provider", provider.ID, provider.Name, false, elapsed, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, truncateStr(string(body), 200)))
-		s.handleFailure("provider", provider.ID, config)
-		return
-	}
-
-	// 成功
-	s.recordLog("provider", provider.ID, provider.Name, true, elapsed, "")
-	s.providerRepo.UpdateResponseTime(provider.ID, elapsed)
-}
-
-// checkModels 检测所有启用的模型
+// checkModels 检测所有启用的模型（保留原有功能）
 func (s *HealthCheckService) checkModels(client *http.Client, config *model.HealthCheckConfig) {
 	filter := &repository.ModelListFilter{}
 	models, _, err := s.modelRepo.List(*filter, 0, 1000)
@@ -230,11 +515,10 @@ func (s *HealthCheckService) checkModels(client *http.Client, config *model.Heal
 		if m.Enabled == nil || !*m.Enabled {
 			continue
 		}
-		// 跳过 embedding 类型
 		if strings.Contains(strings.ToLower(m.ModelType), "embed") {
 			continue
 		}
-		if m.Provider == nil {
+		if m.Provider.ID == uuid.Nil {
 			continue
 		}
 		s.checkSingleModel(client, &m, config)
@@ -243,12 +527,11 @@ func (s *HealthCheckService) checkModels(client *http.Client, config *model.Heal
 
 // checkSingleModel 检测单个模型
 func (s *HealthCheckService) checkSingleModel(client *http.Client, m *model.Model, config *model.HealthCheckConfig) {
-	provider := m.Provider
-	if provider == nil || !provider.Enabled {
+	provider := &m.Provider
+	if provider.ID == uuid.Nil || !provider.Enabled {
 		return
 	}
 
-	// 解密凭证
 	credJSON, err := crypto.Decrypt(provider.EncryptedCredentials)
 	if err != nil {
 		s.recordLog("model", m.ID, m.Name, false, 0, "decrypt provider credentials failed")
@@ -262,7 +545,6 @@ func (s *HealthCheckService) checkSingleModel(client *http.Client, m *model.Mode
 		apiKey = credJSON
 	}
 
-	// POST /chat/completions 最小请求
 	endpoint := strings.TrimRight(provider.Endpoint, "/") + "/chat/completions"
 	chatReq := map[string]interface{}{
 		"model":      m.Name,
@@ -281,7 +563,7 @@ func (s *HealthCheckService) checkSingleModel(client *http.Client, m *model.Mode
 
 	if err != nil {
 		s.recordLog("model", m.ID, m.Name, false, elapsed, fmt.Sprintf("request failed: %v", err))
-		s.handleFailure("model", m.ID, config)
+		s.handleModelFailure("model", m.ID, config)
 		return
 	}
 	defer resp.Body.Close()
@@ -290,12 +572,32 @@ func (s *HealthCheckService) checkSingleModel(client *http.Client, m *model.Mode
 		respBody, _ := io.ReadAll(resp.Body)
 		errMsg := extractErrMsg(respBody)
 		s.recordLog("model", m.ID, m.Name, false, elapsed, errMsg)
-		s.handleFailure("model", m.ID, config)
+		s.handleModelFailure("model", m.ID, config)
 		return
 	}
 
-	// 成功
 	s.recordLog("model", m.ID, m.Name, true, elapsed, "")
+}
+
+// handleModelFailure 处理模型失败（基于日志记录的连续失败判断）
+func (s *HealthCheckService) handleModelFailure(targetType string, targetID uuid.UUID, config *model.HealthCheckConfig) {
+	failures, err := s.healthRepo.CountConsecutiveFailures(targetType, targetID)
+	if err != nil {
+		return
+	}
+
+	if failures < config.FailureThreshold {
+		return
+	}
+
+	if config.FailureAction == "alert_only" {
+		slog.Warn("health check threshold reached (alert_only)", "type", targetType, "id", targetID, "failures", failures)
+		return
+	}
+
+	slog.Warn("auto-disabling model due to health check failures", "id", targetID, "failures", failures)
+	enabled := false
+	s.modelRepo.UpdateEnabled(targetID, &enabled)
 }
 
 // recordLog 记录检测日志
@@ -314,42 +616,6 @@ func (s *HealthCheckService) recordLog(targetType string, targetID uuid.UUID, ta
 	if !success {
 		slog.Warn("health check failed", "type", targetType, "name", targetName, "error", errMsg)
 	}
-}
-
-// handleFailure 处理失败（根据阈值和策略）
-func (s *HealthCheckService) handleFailure(targetType string, targetID uuid.UUID, config *model.HealthCheckConfig) {
-	failures, err := s.healthRepo.CountConsecutiveFailures(targetType, targetID)
-	if err != nil {
-		return
-	}
-
-	if failures < config.FailureThreshold {
-		slog.Info("health check failure below threshold", "type", targetType, "id", targetID, "failures", failures, "threshold", config.FailureThreshold)
-		return
-	}
-
-	if config.FailureAction == "alert_only" {
-		slog.Warn("health check threshold reached (alert_only)", "type", targetType, "id", targetID, "failures", failures)
-		return
-	}
-
-	// auto_disable: 自动禁用
-	slog.Warn("auto-disabling due to health check failures", "type", targetType, "id", targetID, "failures", failures)
-	if targetType == "provider" {
-		s.providerRepo.UpdateStatus(targetID, false)
-	} else if targetType == "model" {
-		enabled := false
-		s.modelRepo.UpdateEnabled(targetID, &enabled)
-	}
-}
-
-// RunNow 手动触发一次检测
-func (s *HealthCheckService) RunNow() {
-	config, err := s.healthRepo.GetConfig()
-	if err != nil {
-		return
-	}
-	go s.runCheck(config)
 }
 
 // truncateStr 截断字符串

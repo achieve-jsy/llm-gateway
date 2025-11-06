@@ -450,8 +450,14 @@ type bedrockDelta struct {
 func convertToBedrockRequest(req *model.ChatCompletionRequest) *bedrockRequest {
 	br := &bedrockRequest{
 		AnthropicVersion: anthropicVersion,
-		Temperature:      req.Temperature,
-		TopP:             req.TopP,
+	}
+	if req.Temperature != nil {
+		v := float64(*req.Temperature)
+		br.Temperature = &v
+	}
+	if req.TopP != nil {
+		v := float64(*req.TopP)
+		br.TopP = &v
 	}
 
 	// 设置 max_tokens

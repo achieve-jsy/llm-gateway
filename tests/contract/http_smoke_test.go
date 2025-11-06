@@ -634,6 +634,10 @@ func TestContracts_MachineCodes_AreCanonical(t *testing.T) {
 		"provider_not_found": {}, "model_not_found": {},
 		"provider_name_conflict": {}, "model_name_conflict": {}, "provider_has_models": {},
 		"upstream_error": {}, "internal_error": {},
+		// CAT-1 (Model Catalog 自动拉取): 新增 3 个机器码。
+		// 若进一步细化（如把 INVALID_PARAM / NAME_DUPLICATE 落地为独立 code），
+		// 同步更新此 expected 列表与 FE web/src/services/http.ts::ERROR_MESSAGES。
+		"catalog_not_found": {}, "catalog_not_bound": {}, "sync_in_progress": {},
 	}
 
 	var doc struct {
@@ -768,6 +772,264 @@ func TestContracts_TogglePropagatesProvider(t *testing.T) {
 
 func readContracts(path string) ([]byte, error) {
 	return os.ReadFile(path)
+}
+
+// =============================================================================
+// CAT-1: Model Catalog 自动拉取契约元测试
+//
+// 这些测试只读 contracts.json 做静态断言，不依赖 BE 实际跑起来；
+// 当 Team B 落地后端实现 / Team F 落地 FE 客户端时，必须使 contracts.json
+// 与代码保持一致，否则本测试集会失败，作为契约门禁。
+// =============================================================================
+
+// loadCPRoutes 加载 control_plane.routes 为 []map[string]any，方便逐条断言。
+func loadCPRoutes(t *testing.T) []map[string]any {
+	t.Helper()
+	raw, err := readContracts("contracts.json")
+	require.NoError(t, err)
+	var doc struct {
+		ControlPlane struct {
+			Routes []map[string]any `json:"routes"`
+		} `json:"control_plane"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &doc))
+	return doc.ControlPlane.Routes
+}
+
+// findRoute 在 routes 中按 method+path 精确匹配；找不到返回 nil。
+func findRoute(routes []map[string]any, method, path string) map[string]any {
+	for _, r := range routes {
+		if r["method"] == method && r["path"] == path {
+			return r
+		}
+	}
+	return nil
+}
+
+// asStringSlice 把 contracts.json 中常见的 []any 字段强转为 []string，
+// 便于 assert.Contains / 集合比较。
+func asStringSlice(v any) []string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, x := range arr {
+		if s, ok := x.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// TestContracts_CatalogRoutesPresent CAT-1:
+// 5 个 model-catalog 路由必须在 contracts.json 中完整声明（method+path 都正确）。
+func TestContracts_CatalogRoutesPresent(t *testing.T) {
+	routes := loadCPRoutes(t)
+
+	expected := []struct {
+		method string
+		path   string
+	}{
+		{"GET", "/api/v1/model-catalog/search"},
+		{"GET", "/api/v1/model-catalog/by-source"},
+		{"POST", "/api/v1/model-catalog/sync"},
+		{"GET", "/api/v1/model-catalog/diff"},
+		{"POST", "/api/v1/model-catalog/apply-diff"},
+	}
+	for _, e := range expected {
+		r := findRoute(routes, e.method, e.path)
+		require.NotNilf(t, r, "CAT-1: 路由 %s %s 必须在 contracts.json 中声明", e.method, e.path)
+		assert.Equal(t, "admin", r["auth"],
+			"CAT-1: %s %s 必须是 admin 认证", e.method, e.path)
+		// 必须声明 response_envelope，否则 FE 无从生成类型
+		assert.NotEmptyf(t, r["response_envelope"],
+			"CAT-1: %s %s 必须声明 response_envelope", e.method, e.path)
+	}
+}
+
+// TestContracts_ModelHasCatalogFields CAT-1:
+// GET /models（列表）和 GET /models/:id（单查）响应字段必须包含
+// catalog_id / ctx_overridden / max_output_overridden / catalog 这 4 个新字段。
+// PUT /models/:id 的请求字段必须包含 catalog_id（optional），且响应里同样含 catalog 4 字段。
+func TestContracts_ModelHasCatalogFields(t *testing.T) {
+	routes := loadCPRoutes(t)
+	wantCatalogFields := []string{"catalog_id", "ctx_overridden", "max_output_overridden", "catalog"}
+
+	respCheck := []struct {
+		method string
+		path   string
+	}{
+		{"GET", "/api/v1/models"},
+		{"GET", "/api/v1/models/:id"},
+		{"PUT", "/api/v1/models/:id"},
+	}
+	for _, e := range respCheck {
+		r := findRoute(routes, e.method, e.path)
+		require.NotNilf(t, r, "CAT-1: 路由 %s %s 必须存在", e.method, e.path)
+		fields := asStringSlice(r["response_item_fields"])
+		require.NotEmptyf(t, fields,
+			"CAT-1: %s %s 必须声明 response_item_fields 以反映新增的 catalog 字段",
+			e.method, e.path)
+		for _, want := range wantCatalogFields {
+			assert.Containsf(t, fields, want,
+				"CAT-1: %s %s 的 response_item_fields 必须含 %q", e.method, e.path, want)
+		}
+	}
+
+	// PUT /models/:id 请求体里必须可选地接收 catalog_id（绑定 / 解绑）。
+	put := findRoute(routes, "PUT", "/api/v1/models/:id")
+	require.NotNil(t, put)
+	optional := asStringSlice(put["request_fields_optional"])
+	assert.Contains(t, optional, "catalog_id",
+		"CAT-1: PUT /api/v1/models/:id 必须把 catalog_id 列入 request_fields_optional（用于绑定 / 解绑）")
+}
+
+// TestContracts_FromCatalogRoutePresent CAT-1:
+// POST /api/v1/models/from-catalog 必须存在，必填字段为 {catalog_id, provider_id, name}，
+// 响应含 catalog 4 字段。
+func TestContracts_FromCatalogRoutePresent(t *testing.T) {
+	routes := loadCPRoutes(t)
+	r := findRoute(routes, "POST", "/api/v1/models/from-catalog")
+	require.NotNil(t, r, "CAT-1: POST /api/v1/models/from-catalog 必须在 contracts.json 中声明")
+
+	required := asStringSlice(r["request_fields_required"])
+	for _, k := range []string{"catalog_id", "provider_id", "name"} {
+		assert.Containsf(t, required, k, "CAT-1: from-catalog 必填字段缺 %q", k)
+	}
+
+	respFields := asStringSlice(r["response_item_fields"])
+	for _, k := range []string{"catalog_id", "ctx_overridden", "max_output_overridden", "catalog"} {
+		assert.Containsf(t, respFields, k,
+			"CAT-1: from-catalog 响应必须含 %q（用于 FE 直接渲染目录关系）", k)
+	}
+
+	statuses, _ := r["response_status"].([]any)
+	hasCreated := false
+	for _, s := range statuses {
+		if n, ok := s.(float64); ok && int(n) == 201 {
+			hasCreated = true
+			break
+		}
+	}
+	assert.True(t, hasCreated, "CAT-1: from-catalog 成功路径必须返回 201 Created")
+}
+
+// TestContracts_ResetOverrideRoutePresent CAT-1:
+// POST /api/v1/models/:id/reset-override 必须存在，必填字段为 {field}，
+// field 限定 oneof=context_length max_output_tokens；
+// error_codes 必须引用 catalog_not_bound。
+func TestContracts_ResetOverrideRoutePresent(t *testing.T) {
+	routes := loadCPRoutes(t)
+	r := findRoute(routes, "POST", "/api/v1/models/:id/reset-override")
+	require.NotNil(t, r, "CAT-1: POST /api/v1/models/:id/reset-override 必须在 contracts.json 中声明")
+
+	required := asStringSlice(r["request_fields_required"])
+	assert.Contains(t, required, "field", "CAT-1: reset-override 必填字段缺 field")
+
+	if constraints, ok := r["request_field_constraints"].(map[string]any); ok {
+		if rule, ok := constraints["field"].(string); ok {
+			assert.Contains(t, rule, "context_length",
+				"CAT-1: reset-override field 约束必须允许 context_length")
+			assert.Contains(t, rule, "max_output_tokens",
+				"CAT-1: reset-override field 约束必须允许 max_output_tokens")
+		} else {
+			t.Errorf("CAT-1: reset-override 的 field 必须有 constraint（期望 oneof=...）")
+		}
+	} else {
+		t.Errorf("CAT-1: reset-override 必须声明 request_field_constraints.field")
+	}
+
+	// catalog_not_bound 必须出现在 error_codes 字符串中
+	ec, _ := r["error_codes"].(map[string]any)
+	require.NotNil(t, ec, "CAT-1: reset-override 必须声明 error_codes")
+	var allCodes string
+	for _, v := range ec {
+		if s, ok := v.(string); ok {
+			allCodes += " " + s
+		}
+	}
+	assert.Contains(t, allCodes, "catalog_not_bound",
+		"CAT-1: reset-override 的 error_codes 必须引用 catalog_not_bound")
+}
+
+// TestContracts_CatalogErrorCodesCanonical CAT-1:
+// 新增 3 个 canonical 错误码（catalog_not_found / catalog_not_bound / sync_in_progress）
+// 必须出现在 control_plane.error_codes_canonical 表中，且 type/http 分类正确。
+func TestContracts_CatalogErrorCodesCanonical(t *testing.T) {
+	raw, err := readContracts("contracts.json")
+	require.NoError(t, err)
+	var doc struct {
+		ControlPlane struct {
+			ErrorCodesCanonical map[string]map[string]any `json:"error_codes_canonical"`
+		} `json:"control_plane"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &doc))
+
+	canon := doc.ControlPlane.ErrorCodesCanonical
+	require.NotNil(t, canon)
+
+	want := map[string]struct {
+		http int
+		typ  string
+	}{
+		"catalog_not_found": {404, "not_found"},
+		"catalog_not_bound": {400, "invalid_request"},
+		"sync_in_progress":  {409, "conflict"},
+	}
+	for code, expect := range want {
+		entry, ok := canon[code]
+		require.Truef(t, ok, "CAT-1: 缺失 canonical code %q", code)
+		// http 在 JSON 里是 float64
+		gotHTTP, _ := entry["http"].(float64)
+		assert.Equalf(t, expect.http, int(gotHTTP),
+			"CAT-1: %s 的 http 应为 %d", code, expect.http)
+		assert.Equalf(t, expect.typ, entry["type"],
+			"CAT-1: %s 的 type 应为 %q", code, expect.typ)
+	}
+}
+
+// TestContracts_CatalogClientsPresent CAT-1:
+// frontend_clients.control-plane.ts 必须新增 7 个调用条目，方法和 URL 必须与 BE 路由一致。
+func TestContracts_CatalogClientsPresent(t *testing.T) {
+	raw, err := readContracts("contracts.json")
+	require.NoError(t, err)
+	var doc struct {
+		FrontendClients struct {
+			ControlPlane struct {
+				Calls []map[string]any `json:"calls"`
+			} `json:"control-plane.ts"`
+		} `json:"frontend_clients"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &doc))
+
+	want := []struct {
+		fn     string
+		method string
+		url    string
+	}{
+		{"searchCatalog", "GET", "/api/v1/model-catalog/search"},
+		{"getCatalogBySource", "GET", "/api/v1/model-catalog/by-source"},
+		{"triggerCatalogSync", "POST", "/api/v1/model-catalog/sync"},
+		{"getCatalogDiff", "GET", "/api/v1/model-catalog/diff"},
+		{"applyCatalogDiff", "POST", "/api/v1/model-catalog/apply-diff"},
+		{"createModelFromCatalog", "POST", "/api/v1/models/from-catalog"},
+		{"resetModelOverride", "POST", "/api/v1/models/:id/reset-override"},
+	}
+
+	index := map[string]map[string]any{}
+	for _, c := range doc.FrontendClients.ControlPlane.Calls {
+		if fn, ok := c["fn"].(string); ok {
+			index[fn] = c
+		}
+	}
+
+	for _, w := range want {
+		c, ok := index[w.fn]
+		require.Truef(t, ok, "CAT-1: frontend_clients 缺 fn=%s", w.fn)
+		assert.Equalf(t, w.method, c["method"], "CAT-1: %s.method 期望 %s", w.fn, w.method)
+		assert.Equalf(t, w.url, c["url"], "CAT-1: %s.url 期望 %s", w.fn, w.url)
+	}
 }
 
 func readAll(t *testing.T, resp *http.Response) []byte {

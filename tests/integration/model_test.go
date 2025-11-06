@@ -132,7 +132,7 @@ func TestListModels_FilterByProvider(t *testing.T) {
 	modelSvc := service.NewModelService(modelRepo, providerRepo, nil)
 
 	// 按渠道 A 筛选
-	models, total, err := modelSvc.ListModels(&p1.ID, 1, 10)
+	models, total, err := modelSvc.ListModels(repository.ModelListFilter{ProviderID: &p1.ID}, 1, 10)
 	if err != nil {
 		t.Fatalf("list models: %v", err)
 	}

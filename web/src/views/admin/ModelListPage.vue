@@ -80,6 +80,7 @@
         >
           批量删除{{ selectedModels.length > 0 ? `(${selectedModels.length})` : '' }}
         </el-button>
+        <el-button type="info" :loading="checkingAll" @click="handleCheckAll">检测所有模型</el-button>
         <el-button type="primary" @click="openCreateDialog">注册模型</el-button>
       </div>
     </div>
@@ -110,6 +111,26 @@
         </template>
       </el-table-column>
 
+      <el-table-column label="能力" width="140">
+        <template #default="{ row }">
+          <span v-if="row.catalog" class="capability-row">
+            <span v-if="row.catalog.supports_function_calling" title="function calling">🛠</span>
+            <span v-if="row.catalog.supports_vision" title="vision">🖼</span>
+            <span v-if="row.catalog.supports_prompt_caching" title="prompt caching">💾</span>
+            <span v-if="row.catalog.supports_response_schema" title="response schema">📋</span>
+          </span>
+          <span v-else class="text-muted">-</span>
+          <el-tag
+            v-if="row.catalog?.deprecation_date"
+            type="danger"
+            size="small"
+            class="dep-badge"
+          >
+            ⏰ {{ row.catalog.deprecation_date.slice(0, 10) }} 废弃
+          </el-tag>
+        </template>
+      </el-table-column>
+
 
       <el-table-column label="标签" min-width="160">
         <template #default="{ row }">
@@ -133,10 +154,20 @@
         </template>
       </el-table-column>
 
-      <el-table-column label="上下文" width="90" align="center">
+      <el-table-column label="上下文" width="180" align="center">
         <template #default="{ row }">
           <span v-if="row.context_length">{{ formatTokenCount(row.context_length) }}</span>
           <span v-else class="text-muted">-</span>
+          <template v-if="row.ctx_overridden">
+            <el-tag type="warning" size="small" class="override-badge">已脱离目录</el-tag>
+            <el-button
+              text
+              type="primary"
+              size="small"
+              class="restore-btn"
+              @click="handleResetOverride(row, 'context_length')"
+            >🔗 恢复跟随目录</el-button>
+          </template>
         </template>
       </el-table-column>
 
@@ -158,9 +189,51 @@
         </template>
       </el-table-column>
 
-      <el-table-column label="操作" width="140" align="center">
+      <el-table-column label="健康" width="160" align="center">
+        <template #default="{ row }">
+          <div class="health-cell">
+            <template v-if="!row.enabled && row.consecutive_failures >= 3">
+              <el-tooltip :content="row.last_check_error || '连续失败达阈值'" placement="top">
+                <div class="health-inner">
+                  <span class="health-dot health-error"></span>
+                  <span class="health-text health-error-text">{{ shortenError(row.last_check_error) || '模型不可用' }} {{ row.consecutive_failures }}/3</span>
+                </div>
+              </el-tooltip>
+            </template>
+            <template v-else-if="row.consecutive_failures > 0">
+              <el-tooltip :content="row.last_check_error || '检测失败'" placement="top">
+                <div class="health-inner">
+                  <span class="health-dot health-warn"></span>
+                  <span class="health-text health-warn-text">{{ shortenError(row.last_check_error) || '检测失败' }} {{ row.consecutive_failures }}/3</span>
+                </div>
+              </el-tooltip>
+            </template>
+            <template v-else-if="row.response_time > 0">
+              <div class="health-inner">
+                <span class="health-dot health-ok"></span>
+                <span class="health-text health-ok-text">{{ row.response_time }}ms</span>
+              </div>
+            </template>
+            <template v-else>
+              <div class="health-inner">
+                <span class="health-dot health-unknown"></span>
+                <span class="health-text text-muted">未检测</span>
+              </div>
+            </template>
+          </div>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="操作" width="180" align="center">
         <template #default="{ row }">
           <el-button text type="primary" size="small" @click="openEditDialog(row)">编辑</el-button>
+          <el-button
+            text
+            type="warning"
+            size="small"
+            :loading="checkingModelId === row.id"
+            @click="handleCheckModel(row)"
+          >检测</el-button>
           <el-popconfirm
             title="确定删除该模型？"
             confirm-button-text="确定"
@@ -210,10 +283,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getModels, deleteModel, updateModel, getProviders, getModelTags, getModelTagsForModel, batchDeleteModels, batchUpdateModelStatus } from '@/services/control-plane'
+import { getModels, deleteModel, updateModel, getProviders, getModelTags, getModelTagsForModel, batchDeleteModels, batchUpdateModelStatus, resetModelOverride, checkModel, checkAllModels } from '@/services/control-plane'
 import type { Model } from '@/types/model'
 import type { Provider } from '@/types/provider'
 import type { ModelTag } from '@/types/model-tag'
+import type { ResettableOverrideField } from '@/types/catalog'
 import ModelDialog from '@/components/admin/ModelDialog.vue'
 import BatchTagDialog from '@/components/admin/BatchTagDialog.vue'
 
@@ -236,6 +310,8 @@ const editingModel = ref<Model | null>(null)
 const selectedModels = ref<Model[]>([])
 const selectedModelIds = computed(() => selectedModels.value.map(m => m.id))
 const batchTagDialogVisible = ref(false)
+const checkingModelId = ref('')
+const checkingAll = ref(false)
 
 /** 客户端标签筛选（在后端分页结果上进一步过滤） */
 const filteredModels = computed(() => {
@@ -331,6 +407,18 @@ function formatTokenCount(count: number): string {
   if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M`
   if (count >= 1000) return `${Math.round(count / 1000)}K`
   return String(count)
+}
+
+/** 恢复某字段跟随目录（取消人工覆盖） */
+async function handleResetOverride(row: Model, field: ResettableOverrideField) {
+  try {
+    const updated = await resetModelOverride(row.id, field)
+    Object.assign(row, updated)
+    ElMessage.success('已恢复跟随目录')
+    loadModels()
+  } catch {
+    ElMessage.error('恢复跟随目录失败')
+  }
 }
 
 /** 切换模型启用状态 */
@@ -442,6 +530,54 @@ async function handleBatchDelete() {
   }
 }
 
+/** 检测单个模型 */
+async function handleCheckModel(row: Model) {
+  checkingModelId.value = row.id
+  try {
+    const result = await checkModel(row.id)
+    if (result.success) {
+      ElMessage.success(`${row.name} 检测通过 (${result.response_time}ms)`)
+    } else {
+      ElMessage.warning(`${row.name} 检测失败: ${result.error}`)
+    }
+    loadModels()
+  } catch {
+    ElMessage.error('检测请求失败')
+  } finally {
+    checkingModelId.value = ''
+  }
+}
+
+/** 检测所有启用模型 */
+async function handleCheckAll() {
+  checkingAll.value = true
+  try {
+    const result = await checkAllModels()
+    ElMessage.success(`检测完成: ${result.success} 成功, ${result.failed} 失败 (共 ${result.total} 个模型)`)
+    loadModels()
+  } catch {
+    ElMessage.error('批量检测请求失败')
+  } finally {
+    checkingAll.value = false
+  }
+}
+
+/** 缩短错误信息为关键词 */
+function shortenError(error: string): string {
+  if (!error) return ''
+  const lower = error.toLowerCase()
+  if (lower.includes('timeout') || lower.includes('超时')) return '连接超时'
+  if (lower.includes('401') || lower.includes('unauthorized') || lower.includes('invalid key')) return 'Key无效'
+  if (lower.includes('403') || lower.includes('forbidden')) return '无权限'
+  if (lower.includes('404') || lower.includes('not found')) return '地址无效'
+  if (lower.includes('connect') || lower.includes('dial') || lower.includes('refused')) return '连接失败'
+  if (lower.includes('dns') || lower.includes('no such host')) return 'DNS解析失败'
+  if (lower.includes('502') || lower.includes('bad gateway')) return '上游异常'
+  if (lower.includes('503') || lower.includes('unavailable')) return '服务不可用'
+  if (lower.includes('model')) return '模型不可用'
+  return error.length > 10 ? error.slice(0, 10) + '...' : error
+}
+
 onMounted(() => {
   loadProviders()
   loadAllTags()
@@ -487,5 +623,26 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
+}
+
+.capability-row {
+  display: inline-flex;
+  gap: 4px;
+  font-size: 14px;
+}
+
+.dep-badge {
+  margin-left: 6px;
+}
+
+.override-badge {
+  margin-left: 6px;
+}
+
+.restore-btn {
+  margin-left: 4px;
+  padding: 0;
+  height: auto;
+  font-size: 12px;
 }
 </style>

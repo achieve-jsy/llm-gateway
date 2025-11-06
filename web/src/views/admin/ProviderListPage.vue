@@ -39,6 +39,11 @@
             :value="tag"
           />
         </el-select>
+        <el-tooltip content="检测设置" placement="top">
+          <el-button text type="info" @click="healthCheckSettingsVisible = true">
+            <el-icon :size="18"><Setting /></el-icon>
+          </el-button>
+        </el-tooltip>
         <el-button type="primary" @click="openCreateDialog">新建渠道</el-button>
       </div>
     </div>
@@ -76,12 +81,38 @@
         </template>
       </el-table-column>
 
-      <el-table-column label="响应时间" width="110" align="center">
+      <el-table-column label="健康" width="160" align="center">
         <template #default="{ row }">
-          <span v-if="!row.response_time" class="text-muted">未测试</span>
-          <span v-else :class="responseTimeClass(row.response_time)">
-            {{ row.response_time }}ms
-          </span>
+          <div class="health-cell">
+            <template v-if="row.status === 3">
+              <el-tooltip :content="row.last_check_error || '连续失败达阈值'" placement="top">
+                <div class="health-inner">
+                  <span class="health-dot health-error"></span>
+                  <span class="health-text health-error-text">{{ shortenError(row.last_check_error) || '异常' }} {{ row.consecutive_failures }}/3</span>
+                </div>
+              </el-tooltip>
+            </template>
+            <template v-else-if="row.consecutive_failures > 0">
+              <el-tooltip :content="row.last_check_error || '检测失败'" placement="top">
+                <div class="health-inner">
+                  <span class="health-dot health-warn"></span>
+                  <span class="health-text health-warn-text">{{ shortenError(row.last_check_error) || '检测失败' }} {{ row.consecutive_failures }}/3</span>
+                </div>
+              </el-tooltip>
+            </template>
+            <template v-else-if="row.response_time > 0">
+              <div class="health-inner">
+                <span class="health-dot health-ok"></span>
+                <span class="health-text health-ok-text">{{ row.response_time }}ms</span>
+              </div>
+            </template>
+            <template v-else>
+              <div class="health-inner">
+                <span class="health-dot health-unknown"></span>
+                <span class="health-text text-muted">未检测</span>
+              </div>
+            </template>
+          </div>
         </template>
       </el-table-column>
 
@@ -191,12 +222,20 @@
       @close="syncDialogVisible = false"
       @saved="onSyncSaved"
     />
+
+    <!-- 健康检测设置对话框 -->
+    <HealthCheckSettingsDialog
+      :visible="healthCheckSettingsVisible"
+      @close="healthCheckSettingsVisible = false"
+      @saved="onHealthCheckSettingsSaved"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Setting } from '@element-plus/icons-vue'
 import {
   getProviders,
   getProviderDefinitions,
@@ -204,8 +243,8 @@ import {
   deleteProvider,
   toggleProviderStatus,
   updateProvider,
-  testProvider,
-  syncModels
+  syncModels,
+  checkProvider,
 } from '@/services/control-plane'
 import { resolveErrorMessage } from '@/services/http'
 import type { Provider, ProviderDefinition } from '@/types/provider'
@@ -214,6 +253,7 @@ import type { Model } from '@/types/model'
 import type { SyncResult } from '@/types/sync'
 import ProviderDialog from '@/components/admin/ProviderDialog.vue'
 import SyncModelsDialog from '@/components/admin/SyncModelsDialog.vue'
+import HealthCheckSettingsDialog from '@/components/admin/HealthCheckSettingsDialog.vue'
 
 const providers = ref<Provider[]>([])
 const definitions = ref<ProviderDefinition[]>([])
@@ -235,6 +275,8 @@ const syncProviderId = ref('')
 const syncProviderName = ref('')
 const syncResult = ref<SyncResult | null>(null)
 const syncingId = ref('')
+
+const healthCheckSettingsVisible = ref(false)
 
 /** 加载所有标签选项（从全量渠道列表） */
 async function loadTagOptions() {
@@ -313,6 +355,23 @@ function responseTimeClass(ms: number): string {
   return 'rt-bad'
 }
 
+/** 缩短错误信息为关键词 */
+function shortenError(error: string): string {
+  if (!error) return ''
+  const lower = error.toLowerCase()
+  if (lower.includes('timeout') || lower.includes('超时')) return '连接超时'
+  if (lower.includes('401') || lower.includes('unauthorized') || lower.includes('invalid key')) return 'Key无效'
+  if (lower.includes('403') || lower.includes('forbidden')) return '无权限'
+  if (lower.includes('404') || lower.includes('not found')) return '地址无效'
+  if (lower.includes('connect') || lower.includes('dial') || lower.includes('refused')) return '连接失败'
+  if (lower.includes('dns') || lower.includes('no such host')) return 'DNS解析失败'
+  if (lower.includes('502') || lower.includes('bad gateway')) return '上游异常'
+  if (lower.includes('503') || lower.includes('unavailable')) return '服务不可用'
+  if (lower.includes('model')) return '模型不可用'
+  // 截取前 10 个字符
+  return error.length > 10 ? error.slice(0, 10) + '...' : error
+}
+
 /** 筛选变化 */
 function handleFilterChange() {
   currentPage.value = 1
@@ -335,34 +394,21 @@ async function handleToggle(row: Provider) {
 async function handleTest(row: Provider) {
   testingId.value = row.id
   try {
-    // 始终测试连通性 + 转发（未配置 test_model 时自动取第一个模型）
-    const result = await testProvider(row.id, true)
-
-    if (!result.success) {
-      // 连通性测试失败
-      const errMsg = result.error || `状态码 ${result.status_code}`
-      ElMessage.error(`连通性测试失败：${errMsg}（${result.response_time}ms）`)
-      return
-    }
-
-    // 连通性成功
-    row.response_time = result.response_time
-    let msg = `连通性正常，响应 ${result.response_time}ms`
-    if (result.model_count !== undefined) {
-      msg += `，检测到 ${result.model_count} 个模型`
-    }
-
-    // 检查转发测试结果
-    if (result.chat_success === true) {
-      msg += `；转发正常（${result.chat_model}，${result.chat_response_time}ms）`
-      ElMessage.success(msg)
-    } else if (result.chat_success === false) {
-      ElMessage.warning(`连通性正常，但转发测试失败：${result.chat_error}`)
+    const result = await checkProvider(row.id)
+    if (result.success) {
+      row.response_time = result.response_time
+      ElMessage.success(`检测成功，响应 ${result.response_time}ms`)
     } else {
-      ElMessage.success(msg)
+      const errMsg = result.error || '未知错误'
+      if (result.auto_disabled) {
+        ElMessage.error(`检测失败：${errMsg}（已自动禁用）`)
+        loadProviders()
+      } else {
+        ElMessage.error(`检测失败：${errMsg}`)
+      }
     }
   } catch {
-    ElMessage.error('测试请求异常，请检查网络')
+    ElMessage.error('检测请求异常，请检查网络')
   } finally {
     testingId.value = ''
   }
@@ -397,6 +443,12 @@ async function handleSync(row: Provider) {
 function onSyncSaved() {
   syncDialogVisible.value = false
   loadModels()
+}
+
+/** 检测设置保存成功 */
+function onHealthCheckSettingsSaved() {
+  healthCheckSettingsVisible.value = false
+  loadProviders()
 }
 
 /** 行内编辑优先级/权重 */
@@ -524,4 +576,38 @@ onMounted(() => {
   justify-content: flex-end;
   margin-top: 16px;
 }
+
+.health-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.health-inner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: default;
+}
+
+.health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.health-ok { background: #27AE60; }
+.health-warn { background: #EAB308; }
+.health-error { background: #E74C3C; }
+.health-unknown { background: #CBD5E1; }
+
+.health-text {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.health-ok-text { color: #27AE60; }
+.health-warn-text { color: #EAB308; }
+.health-error-text { color: #E74C3C; }
 </style>

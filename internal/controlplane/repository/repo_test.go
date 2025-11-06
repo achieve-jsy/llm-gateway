@@ -55,8 +55,40 @@ func newTestDB(t *testing.T) *gorm.DB {
 			input_price REAL DEFAULT 0,
 			output_price REAL DEFAULT 0,
 			weight INTEGER NOT NULL DEFAULT 1,
+			catalog_id TEXT,
+			ctx_overridden INTEGER NOT NULL DEFAULT 0,
+			max_output_overridden INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME NOT NULL,
 			updated_at DATETIME NOT NULL
+		)`,
+		`CREATE TABLE model_catalog (
+			id TEXT PRIMARY KEY,
+			source TEXT NOT NULL,
+			source_model_id TEXT NOT NULL,
+			display_name TEXT,
+			provider TEXT,
+			mode TEXT,
+			context_length INTEGER DEFAULT 0,
+			max_output_tokens INTEGER DEFAULT 0,
+			input_price_per_million REAL DEFAULT 0,
+			output_price_per_million REAL DEFAULT 0,
+			cache_read_price REAL,
+			cache_write_price REAL,
+			tier_threshold INTEGER,
+			input_price_above_tier REAL,
+			output_price_above_tier REAL,
+			supports_function_calling INTEGER DEFAULT 0,
+			supports_vision INTEGER DEFAULT 0,
+			supports_prompt_caching INTEGER DEFAULT 0,
+			supports_response_schema INTEGER DEFAULT 0,
+			supports_tool_choice INTEGER DEFAULT 0,
+			supports_parallel_function_calling INTEGER DEFAULT 0,
+			deprecation_date DATETIME,
+			raw_payload TEXT,
+			synced_at DATETIME NOT NULL,
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL,
+			UNIQUE(source, source_model_id)
 		)`,
 		`CREATE TABLE provider_definitions (
 			id TEXT PRIMARY KEY,
@@ -142,7 +174,7 @@ func TestProviderRepo_CRUD(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		require.NoError(t, repo.Create(newProvider("more-"+uuid.New().String()[:6])))
 	}
-	list, total, err := repo.List(0, 10)
+	list, total, err := repo.List(ProviderListFilter{}, 0, 10)
 	require.NoError(t, err)
 	assert.True(t, total >= 4)
 	assert.True(t, len(list) >= 4)
@@ -212,13 +244,13 @@ func TestModelRepo_CRUD(t *testing.T) {
 
 	// List with providerID
 	pid := p.ID
-	list, total, err := modelRepo.List(&pid, 0, 10)
+	list, total, err := modelRepo.List(ModelListFilter{ProviderID: &pid}, 0, 10)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), total)
 	assert.Len(t, list, 1)
 
 	// List全部
-	list, total, err = modelRepo.List(nil, 0, 10)
+	list, total, err = modelRepo.List(ModelListFilter{}, 0, 10)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), total)
 	assert.Len(t, list, 1)

@@ -24,6 +24,14 @@
           <el-icon><PriceTag /></el-icon>
           <span>标签管理</span>
         </el-menu-item>
+        <el-menu-item index="/admin/catalog-sync">
+          <el-icon><Refresh /></el-icon>
+          <span>Catalog 同步</span>
+        </el-menu-item>
+        <el-menu-item index="/admin/chat-playground">
+          <el-icon><ChatDotRound /></el-icon>
+          <span>对话测试</span>
+        </el-menu-item>
       </el-menu>
     </aside>
 
@@ -47,7 +55,7 @@
 <script setup lang="ts">
 import { useRoute } from 'vue-router'
 import { isDark, toggleTheme } from './composables/useTheme'
-import { Connection, Operation, Cpu, PriceTag } from '@element-plus/icons-vue'
+import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound } from '@element-plus/icons-vue'
 
 const route = useRoute()
 </script>

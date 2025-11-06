@@ -204,7 +204,7 @@ html.dark .el-dialog .el-dialog__header {
 /* 表单输入 */
 .el-input__wrapper {
   border-radius: 8px;
-  background-color: #FFF8E7 !important;
+  background-color: var(--el-fill-color-blank) !important;
   box-shadow: 0 0 0 1px var(--el-border-color) inset !important;
   transition: all 0.2s;
 
@@ -228,7 +228,7 @@ html.dark .el-input__wrapper {
 
 .el-textarea__inner {
   border-radius: 8px;
-  background-color: #FFF8E7 !important;
+  background-color: var(--el-fill-color-blank) !important;
 }
 
 html.dark .el-textarea__inner {

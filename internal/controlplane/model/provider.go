@@ -25,6 +25,8 @@ type Provider struct {
 	MaxRetries           int       `gorm:"not null;default:3" json:"max_retries"`
 	Timeout              int       `gorm:"not null;default:30" json:"timeout"`
 	Tag                  string    `gorm:"type:varchar(100);default:''" json:"tag"`
+	ConsecutiveFailures  int       `gorm:"not null;default:0" json:"consecutive_failures"`
+	LastCheckError       string    `gorm:"type:varchar(500);default:''" json:"last_check_error"`
 	CreatedAt            time.Time `gorm:"not null;autoCreateTime" json:"created_at"`
 	UpdatedAt            time.Time `gorm:"not null;autoUpdateTime" json:"updated_at"`
 

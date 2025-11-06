@@ -1,92 +1,184 @@
-# llm_gateway
+# LLM Gateway
 
+统一大模型网关 — 通过标准化的 OpenAI 兼容接口，统一对接多家大模型厂商服务。
 
-
-## Getting started
-
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
+## 架构概览
 
 ```
-cd existing_repo
-git remote add origin https://git.example.com/honggangfeng/llm_gateway.git
-git branch -M main
-git push -uf origin main
+┌──────────────┐     ┌─────────────────────────────────────────────────┐
+│   客户端     │     │                LLM Gateway                       │
+│  (OpenAI SDK)│────▶│  Gateway API ──▶ Orchestrator ──▶ Provider       │
+└──────────────┘     │       │                             │            │
+                     │       ▼                             ▼            │
+                     │  Redis Cache              ┌─────────────────┐   │
+                     │                           │ Bailian/DeepSeek│   │
+                     │  Control-Plane ◀─ DB      │ Anthropic/Bedrock│  │
+                     │  (模型 & 渠道管理)         │ LiteLLM          │  │
+                     └─────────────────────────────────────────────────┘
 ```
 
-## Integrate with your tools
+项目包含两个服务：
 
-- [ ] [Set up project integrations](https://git.example.com/honggangfeng/llm_gateway/-/settings/integrations)
+- **gateway-api**（端口 8080）：对外暴露 OpenAI 兼容接口，处理路由分发、负载均衡和流式转发
+- **control-plane**（端口 8081）：管理后台，负责渠道/模型注册、配置下发、ops-console 前端
 
-## Collaborate with your team
+## 支持的厂商
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Automatically merge when pipeline succeeds](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
+| Provider | 说明 |
+|----------|------|
+| Bailian (百炼/通义) | 阿里云 DashScope OpenAI 兼容模式 |
+| DeepSeek | DeepSeek 官方 API |
+| Anthropic | Claude 系列模型 |
+| Bedrock | AWS Bedrock (Claude/Titan/Nova 等) |
+| LiteLLM | 通用代理，可接入 100+ 模型 |
 
-## Test and Deploy
+## 快速开始
 
-Use the built-in continuous integration in GitLab.
+### 前置要求
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing(SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+- Go 1.22+
+- Docker & Docker Compose
+- Node.js 18+（前端开发）
 
-***
+### 1. 启动基础设施
 
-# Editing this README
+```bash
+# 启动 Postgres + Redis
+make dev-infra
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thank you to [makeareadme.com](https://www.makeareadme.com/) for this template.
+# 如需可观测性组件（Jaeger + OTel Collector）
+make dev-infra-full
+```
 
-## Suggestions for a good README
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+### 2. 配置环境
 
-## Name
-Choose a self-explaining name for your project.
+项目使用 Viper 配置体系，按 `APP_ENV` 环境变量加载对应配置文件：
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+```bash
+config/
+├── dev.yaml      # 开发环境（默认）
+├── staging.yaml  # 预发环境
+└── prod.yaml     # 生产环境
+```
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+环境变量可覆盖 YAML 中的任何配置项。关键环境变量参考 `.env.example`。
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+### 3. 启动服务
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+```bash
+# 启动 gateway-api
+make dev
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+# 启动 control-plane（另一个终端）
+make dev-cp
+```
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+### 4. 验证
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+```bash
+# 健康检查
+curl http://localhost:8080/health
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+# 查看可用模型
+curl -H "Authorization: Bearer your-api-key" http://localhost:8080/v1/models
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+# 聊天补全
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-api-key" \
+  -d '{
+    "model": "deepseek-chat",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+## API 文档
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+启动服务后访问 Swagger UI：
+
+```
+http://localhost:8080/swagger/index.html
+```
+
+生成/更新 Swagger 文档：
+
+```bash
+make swagger
+```
+
+## 项目结构
+
+```
+.
+├── cmd/
+│   ├── gateway/          # Gateway API 入口
+│   └── control-plane/    # Control-Plane 入口
+├── config/               # 环境配置文件 (dev/staging/prod)
+├── internal/
+│   ├── gateway/          # Gateway 核心逻辑
+│   │   ├── config/       # Viper 配置加载
+│   │   ├── handler/      # HTTP Handler (chat, models, health)
+│   │   ├── infra/        # Redis, OTLP, ConfigLoader
+│   │   ├── middleware/   # RequestID, Logger, Auth, Tracing
+│   │   ├── orchestrator/ # 请求编排 (同步/流式)
+│   │   ├── provider/     # Provider 接口 & 各厂商 Adapter
+│   │   └── server/       # Gin 路由注册
+│   └── controlplane/     # Control-Plane 核心逻辑
+│       ├── handler/      # Admin API Handler
+│       ├── model/        # 数据模型 (Provider, Model, Tag)
+│       ├── repository/   # GORM 数据访问层
+│       └── service/      # 业务服务层
+├── migrations/           # SQL 迁移文件
+├── web/                  # 前端 (Vue 3 + Element Plus)
+├── deploy/               # 部署配置 (OTel Collector 等)
+├── api/swagger/          # Swagger 注解入口
+├── docker-compose.dev.yml
+├── Makefile
+└── go.mod
+```
+
+## 开发命令
+
+| 命令 | 说明 |
+|------|------|
+| `make build` | 编译 gateway + control-plane |
+| `make test` | 运行所有测试 |
+| `make lint` | 代码静态检查 |
+| `make swagger` | 生成 Swagger 文档 |
+| `make dev` | 启动开发环境 (gateway) |
+| `make dev-cp` | 启动开发环境 (control-plane) |
+| `make dev-infra` | 启动 Postgres + Redis |
+| `make dev-infra-full` | 启动全部基础设施 (含 Jaeger/Langfuse) |
+| `make dev-down` | 停止所有容器 |
+| `make clean` | 清理构建产物 |
+
+## 可观测性
+
+启用 OTLP 追踪：
+
+```bash
+# 在 config/dev.yaml 中设置或通过环境变量
+OTLP_ENABLED=true
+OTLP_ENDPOINT=localhost:4317
+```
+
+启动 Jaeger UI 查看 trace：
+
+```bash
+make dev-infra-full
+# 打开 http://localhost:16686
+```
+
+Gateway 会自动为每个请求创建入口 span，并在调用上游模型时创建子 span，记录模型名、Provider、token 用量等信息。
+
+## 配置优先级
+
+从高到低：
+
+1. 环境变量（如 `REDIS_ADDR`、`GATEWAY_PORT`）
+2. `config/{APP_ENV}.yaml` 配置文件
+3. 代码中的默认值
 
 ## License
-For open source projects, say how it is licensed.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+Internal use only.

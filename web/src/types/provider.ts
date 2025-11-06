@@ -60,6 +60,8 @@ export interface Provider {
   max_retries: number
   timeout: number
   tag: string
+  consecutive_failures: number
+  last_check_error: string
   created_at: string
   updated_at: string
 }

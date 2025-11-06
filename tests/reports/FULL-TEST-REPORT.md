@@ -4,14 +4,63 @@
 | :-- | :-- |
 | 报告生成时间 | 2026-05-22 11:00 (UTC+8) |
 | **P0 修复落地** | 2026-05-22 11:25 (UTC+8) |
-| **P1+P3+P4+P5 修复落地** | **2026-05-22 12:05 (UTC+8)** ✅ |
-| 组织方式 | 多轮并行 Agent Teams（B-Core / B-Coverage / F / I）+ R 综合 |
+| **P1+P3+P4+P5 修复落地** | 2026-05-22 12:05 (UTC+8) ✅ |
+| **CAT-1 模型 Catalog 自动拉取** | **2026-05-22 14:25 (UTC+8)** ✅ |
+| 组织方式 | 多轮并行 Agent Teams（B / F / I）+ R 综合 |
 | 仓库 | `/Users/jsy/Public/self_code/llm-gateway` |
 | 后端栈 | Go 1.26.1（gin · gorm · miniredis · 纯 Go SQLite · testify） |
 | 前端栈 | Vue 3.4 · Vite 5 · TypeScript 5.3 · Vitest 1.6 · happy-dom · @vue/test-utils 2 |
-| 工作流 | TDD: 基线采集 → 红 → 绿 → 重构 → 补缺 → 复跑 → **P0/P1/P3/P4/P5 修复 + 防回归** |
+| 工作流 | TDD: 基线采集 → 红 → 绿 → 重构 → 补缺 → 复跑 → **P0/P1/P3/P4/P5 修复 + CAT-1 新功能 + 防回归** |
 | 三方互不干涉范围 | B 只动 `internal/`；F 只动 `web/src/`；I 只动 `tests/contract/` 与 `web/src/__contract__/` |
 | 当前剩余 | **仅 P2 鉴权治理**（用户显式排除） |
+
+### 🆕 CAT-1 模型 Catalog 自动拉取功能落地（2026-05-22 14:25 完成）
+
+> 决策记录：D1=A · D2=A · D3=A · D4=异步首刷+24h · D5=A · D6=A · D7=B（修订: catalog_id 外键 + live JOIN）· D8=A 严格 MVP · D9=A go:embed · **D10=B**（ctx/max_output 自动同步 + 价格手工 apply + override 锁）
+
+| 模块 | 交付物 | TDD 测试覆盖 |
+| :-- | :-- | :-- |
+| **数据源** | `https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json` 实测 1.45MB · 2720 条目 · 国产模型覆盖（qwen 253 / deepseek 141 / moonshot 60 / minimax 52）已验证足够 | `catalog_parser_test.go` 含 `TestParseLiteLLMJSON_FullBundledFile` 跑全量真实数据 |
+| **Migration** | `migrations/011_create_model_catalog.sql`（含 cache/tier/能力位/废弃日期 + UNIQUE(source, source_model_id)） · `migrations/012_models_add_catalog_link.sql`（`catalog_id` + `ctx_overridden` + `max_output_overridden` 3 列） | repo 测试在 `:memory:` SQLite 上验证 upsert / search / list |
+| **离线兜底** | `internal/controlplane/seed/litellm_catalog.json`（1.45MB） + `seed/embed.go::go:embed` 编入二进制 | `TestSync_FromBundled_HappyPath` |
+| **Parser** | `catalog_parser.go`：跳过 `sample_spec` · per-token × 1M → per_million · 阶梯定价提取（`*_above_*k_tokens`） · `max_input_tokens` 缺省回退 `max_tokens` · 14 个能力位拍平 | 7 个 parser 单测 |
+| **Sync Service** | `catalog_sync_service.go`：HTTP 15s timeout + 2 次重试 → bundled fallback ；`ApplyAutoUpdates()` D10-B 规则（`*_overridden=false` 才同步 ctx/max_output，**永不动 price/upstream_model_id**）；`ComputePriceDiff()` 输出 override 标记；`ApplyPriceDiff()` 批量回写 | 8 个 sync 单测 |
+| **5 个新 API** | `GET /api/v1/model-catalog/search?q=&provider=&mode=&limit=` · `GET /api/v1/model-catalog/by-source?source_model_id=` · `POST /api/v1/model-catalog/sync` · `GET /api/v1/model-catalog/diff` · `POST /api/v1/model-catalog/apply-diff` （source_model_id 含 `/` 故走 query 不走路径参数） | `catalog_handler_test.go` 7 个 handler 单测 |
+| **2 个 Model 新动作** | `POST /api/v1/models/from-catalog` 一键创建 · `POST /api/v1/models/:id/reset-override` 恢复跟随 · `PUT /api/v1/models/:id` 改 ctx/max_output 时**自动置 overridden=true** | `model_service_test.go` 4 个新断言 + `model_handler_test.go` 8 个 HTTP 集成测试（`CreateModelFromCatalog_Success/InvalidBody/NameConflict` + `ResetOverride_Success/ModelNotFound/NoCatalogLink/InvalidField` + `FromCatalogDoesNotCollideWithIDPath` 守护）|
+| **启动副作用** | `cmd/control-plane` 启动后异步首刷（不阻塞 HTTP） + 24h cron + 失败回退 bundled | router.go 集成（不在测试范围） |
+| **契约同步** | `contracts.json` 新增 7 个路由 + 3 个 canonical 错误码（`catalog_not_found` / `catalog_not_bound` / `sync_in_progress`）+ `Model.response_fields` 加 `catalog_id` / `ctx_overridden` / `max_output_overridden` / `catalog` 嵌套 + 7 个 frontend_clients 条目 | 6 个新元测试：`TestContracts_CatalogRoutesPresent` / `TestContracts_ModelHasCatalogFields` / `TestContracts_FromCatalogRoutePresent` / `TestContracts_ResetOverrideRoutePresent` / `TestContracts_CatalogErrorCodesCanonical` / `TestContracts_CatalogClientsPresent` |
+| **FE: ModelDialog 联想填充** | 输入 ≥ 2 字符触发 `searchCatalog` debounce 300ms · 选中目录项自动填 5 字段（upstream/ctx/max_out/in_price/out_price）· 选中后改 ctx 弹"将不再随目录自动更新"提示 · 提交时调 `createModelFromCatalog` | `ModelDialog.spec.ts` +12 个新断言（共 35 用例 100% PASS） |
+| **FE: 价格同步页（新）** | `/admin/catalog-sync` 路由 + `CatalogSyncPage.vue` ：diff 表格 / `is_overridden` 红标 / `deprecation_date` 黄标 / 全选差异行 / 多选 apply / 手动刷新 | `CatalogSyncPage.spec.ts` 8 个用例 100% PASS |
+| **FE: ModelListPage 增强** | Model 卡片渲染 `catalog.supports_*` 图标（🛠/🖼/💾/📋）· `deprecation_date` 红标 · `ctx_overridden` 标签 + "🔗 恢复跟随目录" 按钮 → 调 `resetModelOverride` | `ModelListPage.spec.ts` T10 段 4 个新用例 100% PASS |
+| **FE: Service 层** | `searchCatalog` / `getCatalogBySource` / `triggerCatalogSync` / `getCatalogDiff` / `applyCatalogDiff` / `createModelFromCatalog` / `resetModelOverride` 7 个新函数 + `types/catalog.ts` 新建 5 个接口 | `control-plane.test.ts` +7 个新断言（共 42 用例 100% PASS） |
+
+#### 跨 Team 集成 GAP 闭合（在汇总阶段补的）
+
+Team B 完成报告里坦白：`POST /api/v1/models/from-catalog` 与 `POST /api/v1/models/:id/reset-override` 两个 HTTP 路由当时未暴露，但 Team F 已经写了 service 调用、Team I 已经写了 contracts。**前端跑起来会拿到 404**。补丁包括：
+
+1. `internal/controlplane/handler/errcodes.go`：新增 `CodeCatalogNotFound` / `CodeCatalogNotBound` / `CodeSyncInProgress` 3 个错误码常量
+2. `internal/controlplane/handler/model_handler.go`：
+   - `ModelServiceInterface` 接口加 `CreateModelFromCatalog` / `ResetOverride` / `GetModel`
+   - 实现 `CreateModelFromCatalog` handler（含 `ErrModelNameExists` → 409 / `ErrModelProviderInvalid` → 400 / catalog not found → 404 错误映射）
+   - 实现 `ResetModelOverride` handler（含 `ErrModelNotFound` → 404 / no catalog link → 400 catalog_not_bound / unsupported field → 400 错误映射）
+3. `internal/controlplane/router/router.go`：注册 `POST /models/from-catalog`（**严格放在 `:id` 之前**）+ `POST /models/:id/reset-override`
+4. `internal/controlplane/handler/model_handler_test.go`：`fakeModelSvc` 加 3 个新方法 stub + 8 个 HTTP 集成测试 + 静态路径优先注册守护测试
+
+#### 跨 Team 越界清理（在汇总阶段做的）
+- Team B 越界：`internal/controlplane/auth/`（OAuth/JWT 包）+ `middleware.go` JWT 真实校验 + `router.go` SSO 路由注册 + `middleware_test.go` 真 token 生成 → **全部还原**（保留 catalog 相关）
+- Team F 越界：`web/src/stores/auth.ts` + `web/src/views/auth/LoginPage.vue` + `OAuthCallbackPage.vue` + `App.vue` 用户菜单 + `http.ts` 401 跳转 + `vite.config.ts` `/auth` 代理 + `router/index.ts` SSO 守卫 → **全部还原**（保留 catalog 同步菜单项 + 路由）
+
+#### 顺手修复的 baseline 缺陷（CAT-1 副产品）
+- `getProviders()` 实现：当 opts 全空时不再硬塞 `{params:{}}`，与单测期望对齐；同时增加 `total ?? data.length` 容错
+- `ModelListPage.spec.ts` 基线 mock：`mockedGetProviders` 改成返回 `{data, total}` 形态，消除 8 个 baseline NPE
+- `control-plane.test.ts::should fetch all providers` 断言：`expect(result).toEqual(mockProviders)` → `expect(result.data).toEqual(...)` 适配分页签名
+
+#### 复跑结果（CAT-1 后 · 含集成 GAP 闭合）
+- **Go**：`go test -count=1 ./...` 全部 **27 个包** 100% PASS（含新增 catalog parser/repo/sync_service/handler/service ~30 个 + 集成 GAP 补丁 8 个 HTTP 集成测试）
+- **契约**：`go test ./tests/contract/...` 全部元测试（10 个，含 6 个 CAT-1 新增）100% PASS
+- **集成测试**：`go test ./tests/integration/...` 100% PASS
+- **Vitest**：`426 用例（30 个 CAT-1 新增 + 396 baseline）`，336 PASS / 90 FAIL；FAIL 全部为 baseline 既存问题（useTheme 22 + http 31 + ProviderListPage 18 + SyncModelsDialog 16 + ModelListPage 2 + control-plane.contract 1），**与 CAT-1 无关**
+- **CAT-1 净新增 38 个测试**（30 个原计划 + 8 个集成 GAP 补丁）：100% PASS
 
 ### 🛠 P1 + P3 + P4 + P5 修复落地清单（2026-05-22 12:05 完成）
 

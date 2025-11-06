@@ -4,11 +4,16 @@ import (
 	"log"
 	"os"
 
+	"github.com/joho/godotenv"
+
 	"github.com/example/llm-gateway/internal/controlplane/infra"
 	"github.com/example/llm-gateway/internal/controlplane/router"
 )
 
 func main() {
+	// 加载 .env 文件（开发环境，文件不存在时不报错）
+	_ = godotenv.Load()
+
 	// 初始化 PostgreSQL
 	db, err := infra.InitPostgres()
 	if err != nil {

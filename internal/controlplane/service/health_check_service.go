@@ -234,7 +234,7 @@ func (s *HealthCheckService) checkModels(client *http.Client, config *model.Heal
 		if strings.Contains(strings.ToLower(m.ModelType), "embed") {
 			continue
 		}
-		if m.Provider == nil {
+		if m.ProviderID == uuid.Nil {
 			continue
 		}
 		s.checkSingleModel(client, &m, config)
@@ -244,7 +244,7 @@ func (s *HealthCheckService) checkModels(client *http.Client, config *model.Heal
 // checkSingleModel 检测单个模型
 func (s *HealthCheckService) checkSingleModel(client *http.Client, m *model.Model, config *model.HealthCheckConfig) {
 	provider := m.Provider
-	if provider == nil || !provider.Enabled {
+	if m.ProviderID == uuid.Nil || !provider.Enabled {
 		return
 	}
 

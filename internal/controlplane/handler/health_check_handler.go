@@ -102,7 +102,7 @@ func (h *HealthCheckHandler) GetStatus(c *gin.Context) {
 
 // RunNow POST /api/v1/health-check/run
 func (h *HealthCheckHandler) RunNow(c *gin.Context) {
-	config, err := h.svc.GetConfig()
+	_, err := h.svc.GetConfig()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"message": "failed to get config"}})
 		return

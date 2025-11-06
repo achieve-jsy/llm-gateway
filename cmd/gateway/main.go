@@ -10,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/joho/godotenv"
+
 	"github.com/example/llm-gateway/internal/gateway/config"
 	"github.com/example/llm-gateway/internal/gateway/infra"
 	"github.com/example/llm-gateway/internal/gateway/model"
@@ -23,6 +25,9 @@ import (
 )
 
 func main() {
+	// 加载 .env 文件（开发环境，文件不存在时不报错）
+	_ = godotenv.Load()
+
 	// 配置 slog JSON 格式
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 

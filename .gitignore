@@ -2,3 +2,7 @@
 .sisyphus/
 
 node_modules/
+
+# 编译产物
+/gateway
+/control-plane

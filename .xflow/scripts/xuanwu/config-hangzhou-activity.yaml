@@ -1,0 +1,87 @@
+# 杭州玄武-活动 · scaffold-init / scaffold.bat 选项 2
+
+required:
+  client:
+    git: https://git.example.com/GameAbcTea_mobile/commonlobbyframe/client/cocoscreatorlobby/xuanwulobby.git
+    branch: dev_dist_xuanwulobby_v3.0.0
+    target: client
+    depends:
+      - xwRef
+
+  agActivitySvr:
+    git: https://git.example.com/luotuo/AG33/aggo/AgActivitySvr.git
+    branch: dev
+    target: server/go
+
+  gamelogic:
+    git: ""
+    branch: ""
+    target: server/game/gamelogic
+    depend_env: ag33_scaffold
+    depends:
+      - include
+      - protocol
+      - lib
+
+  gameprocess:
+    git: ""
+    branch: ""
+    target: server/game/gameprocess
+    depend_env: ag33_scaffold
+    depends:
+      - include
+      - protocol
+      - lib
+
+optional:
+  xwRef:
+    git: https://git.example.com/GameAbcTea_mobile/ai_code/reference_xuanwulobby.git
+    branch: main
+    target: xwRef
+
+  include:
+    git: https://git.example.com/luotuo/AG33/Public/include.git
+    branch: dev
+    target: server/include
+
+  protocol:
+    git: https://git.example.com/luotuo/AG33/Public/protocol.git
+    branch: dev
+    target: server/protocol
+
+  lib:
+    git: https://git.example.com/luotuo/AG33/Public/lib.git
+    branch: dev
+    target: server/lib
+
+env:
+  ag33_scaffold:
+    image: harbor.xkdevops.com/ag53/ag33_builder:v1.0.9
+    username: robot@polang+ag53
+    password: CHANGE_ME_PASSWORD
+    registry: harbor.xkdevops.com
+    container: ag33_scaffold
+    volume: /home
+    path: ./server
+
+tools:
+  opencode:
+    enabled: true
+    config_path: .opencode
+    install_cmd: curl -fsSL https://opencode.ai/install | bash
+
+model:
+  url: https://llm.xk-devops.com
+  apikey: ""
+  models:
+    claude-opus-4-5:
+      id: claude-opus-4-5-20251101
+      name: claude-opus-4-5-20251101
+    glm-5: {}
+    qwen3.6-plus: {}
+    doubao-seed-2.0-code: {}
+    doubao-seed-2.0-pro: {}
+    deepseek-v3.2: {}
+
+files:
+  - AGENTS.md

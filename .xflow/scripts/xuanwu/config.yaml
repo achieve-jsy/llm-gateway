@@ -1,0 +1,129 @@
+# =============================================================================
+# XuanWu Scaffold 配置文件 — 广州玄武-活动（默认）
+# =============================================================================
+# 说明：本配置用于生成玄武项目基础环境框架
+#
+# 配置区段：
+#   required  - 必需模块，初始化时强制拉取（配置 git 字段才会克隆）
+#   optional  - 可选模块，被 required 依赖时自动拉取
+#   env       - Docker 编译环境配置（仅需要 C++ 编译时配置）
+#   tools     - AI 工具配置（OpenCode 等）
+#   model     - 大模型 API 配置
+#   files     - 初始化时自动创建的模板文件
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 必需模块 - 项目核心依赖
+# git 字段留空则跳过克隆；target 为相对项目根目录的路径
+# -----------------------------------------------------------------------------
+required:
+  # FairyGUI 客户端资源 - 游戏 UI 界面资源
+  # 替换为实际项目的 fgui 仓库地址
+  client:
+    git: https://git.example.com/GameAbcTea_mobile/SiChuanMahjongFairyGUI/client/fgui-scmahjong-lobby.git
+    branch: gz_dev
+    target: client
+    depends:
+      - xwRef
+  
+  # Lua 脚本 - 游戏服务端脚本逻辑 按需配置（如没有则不配置）
+  lua:
+    git: https://gitlab.example.com/scripts/5238-ChuanMaDaTing.git
+    branch: release
+    target: lua
+
+  # 游戏逻辑模块 - 核心 C++ 游戏业务逻辑（按需配置，无 C++ 则留空）
+  gamelogic:
+    git: ""
+    branch: ""
+    target: server/game/gamelogic
+    depend_env: ag33_scaffold      # 指定 Docker 编译环境
+    depends:                       # 依赖的 optional 模块（自动拉取）
+      - include
+      - protocol
+      - lib
+
+  # 游戏进程模块 - 游戏服务器进程（按需配置，无 C++ 则留空）
+  gameprocess:
+    git: ""
+    branch: ""
+    target: server/game/gameprocess
+    depend_env: ag33_scaffold
+    depends:
+      - include
+      - protocol
+      - lib
+
+# -----------------------------------------------------------------------------
+# 可选模块 - 公共依赖库，被 required 模块依赖时自动拉取
+# -----------------------------------------------------------------------------
+optional:
+  # AI reference - xflow / xuanwu skill reference bundle, cloned with client.
+  xwRef:
+    git: https://git.example.com/GameAbcTea_mobile/ai_code/reference_sichuanmahjongfairygui.git
+    branch: main
+    target: xwRef
+
+  # 公共头文件 - C++ 公共接口定义
+  include:
+    git: https://git.example.com/luotuo/AG33/Public/include.git
+    branch: dev
+    target: server/include
+
+  # 协议定义 - C2S/S2C 协议配置文件
+  protocol:
+    git: https://git.example.com/luotuo/AG33/Public/protocol.git
+    branch: dev
+    target: server/protocol
+
+  # 公共库 - 通用工具库和第三方库
+  lib:
+    git: https://git.example.com/luotuo/AG33/Public/lib.git
+    branch: dev
+    target: server/lib
+
+# -----------------------------------------------------------------------------
+# 编译环境配置 - Docker 容器化编译环境（仅 C++ 模块需要）
+# -----------------------------------------------------------------------------
+env:
+  ag33_scaffold:
+    image: harbor.xkdevops.com/ag53/ag33_builder:v1.0.9
+    username: robot@polang+ag53
+    password: CHANGE_ME_PASSWORD
+    registry: harbor.xkdevops.com
+    container: ag33_scaffold
+    volume: /home
+    path: ./server
+
+# -----------------------------------------------------------------------------
+# AI 工具配置
+# -----------------------------------------------------------------------------
+tools:
+  # OpenCode - AI 编程助手
+  opencode:
+    enabled: true
+    config_path: .opencode
+    install_cmd: curl -fsSL https://opencode.ai/install | bash
+
+# -----------------------------------------------------------------------------
+# 大模型 API 配置
+# 建议使用环境变量 OPENCODE_APIKEY 替代明文 apikey
+# -----------------------------------------------------------------------------
+model:
+  url: https://llm.xk-devops.com
+  apikey: ""           # 填入 API 密钥，或使用环境变量 OPENCODE_APIKEY
+  models:
+    claude-opus-4-5:
+      id: claude-opus-4-5-20251101
+      name: claude-opus-4-5-20251101
+    glm-5: {}
+    qwen3.6-plus: {}
+    doubao-seed-2.0-code: {}
+    doubao-seed-2.0-pro: {}
+    deepseek-v3.2: {}
+
+# -----------------------------------------------------------------------------
+# 生成文件列表 - 初始化时自动创建的模板文件
+# -----------------------------------------------------------------------------
+files:
+  - AGENTS.md

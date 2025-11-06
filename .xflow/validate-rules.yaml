@@ -1,0 +1,131 @@
+# xflow 产出自检规则配置
+# 此文件由人工维护，禁止 AI 修改。
+#
+# 用法：node .xflow/scripts/xf-validate.mjs --phase <phase>
+#
+# 说明：
+#   本文件仅保留"校验规则"类数据（占位符、空章节标记、语义检查清单）。
+#   每个阶段要校验哪些文件由 .xflow/templates/CATALOG.yaml（SSOT）+ xf-manifest.mjs 决定，
+#   不再在此文件硬编码。
+#
+#   validate 的 --phase → CATALOG.yaml 文件 phase 的映射语义：
+#     clarify → { clarify }         只校验 spec.md（clarify 阶段产物）
+#     detail  → { design, detail }  校验 hld.md 及 detail 阶段全部技术文档
+
+# 空章节中以下内容视为有效（不算空）
+valid_empty_markers:
+  - "不适用"
+  - "N/A"
+  - "本模块不涉及"
+
+phases:
+  # ── clarify 阶段（clarify / brainstorm 完成后） ──
+  clarify:
+    # 变更级文件（不归属任何模块）
+    change_files:
+      - change.yaml
+
+    # 该阶段检查的占位符（文件由 CATALOG.yaml 驱动，不在此列出）
+    placeholders:
+      - "[MODULE_NAME]"
+      - "[CHANGE_ID]"
+      - "[CREATED_AT]"
+      - "[AUTHOR]"
+      - "[MODULE_TYPE]"
+      - "[TODO]"
+      - "[TBD]"
+      - "[待填写]"
+      - "[待确认]"
+
+    # AI 语义检查清单
+    semantic_checks:
+      - id: ac-measurable
+        name: "验收标准可衡量性"
+        target: "spec.md / spec.delta.md 的验收标准章节"
+        basis: "AC 文本本身"
+        fail_condition: "含模糊词（等、若干、适当、合理、尽可能、如有必要、大量、部分），需改为具体数值或明确条件"
+
+      - id: constitution-alignment
+        name: "需求与宪章一致性"
+        target: "spec.md / spec.delta.md 的功能描述"
+        basis: "constitution.md 核心原则 + 技术约束"
+        fail_condition: "需求与宪章禁止项矛盾，或超出宪章技术约束"
+
+      - id: scope-coverage
+        name: "功能范围闭合性"
+        target: "change.yaml scope.include vs spec.md 内容"
+        basis: "两者交叉对比"
+        fail_condition: "scope.include 中有功能点但 spec 没覆盖，或 spec 描述了 scope 之外内容"
+
+      - id: scope-no-overlap
+        name: "排除项与包含项无交叉"
+        target: "change.yaml scope.include vs scope.exclude"
+        basis: "两个列表"
+        fail_condition: "同一功能同时出现在 include 和 exclude"
+
+      - id: module-alignment
+        name: "模块划分与产品定位一致"
+        target: "change.yaml affected_modules"
+        basis: "PRODUCT.md 模块列表"
+        fail_condition: "引用了 PRODUCT.md 中不存在的模块（且非新增），提示先 /xf/split"
+
+      - id: ac-bdd-format
+        name: "验收标准 BDD 格式完整性"
+        target: "spec.md / spec.delta.md 的验收标准章节"
+        basis: "AC 表格每行的 Given/When/Then 列"
+        fail_condition: "存在 AC 条目的 Given、When 或 Then 列为空或仅含占位符"
+
+      - id: no-tech-leak
+        name: "功能描述无技术实现泄漏"
+        target: "spec.md / spec.delta.md 的功能描述章节"
+        basis: "章节文本"
+        fail_condition: "功能描述中出现框架/库名（如 React、Express、MySQL）、API 路径、数据库表名等技术实现细节"
+
+  # ── detail 阶段（detail 完成后） ──
+  detail:
+    # 文件由 CATALOG.yaml 驱动：phase ∈ {design, detail} 的所有文件均会被校验
+    # （required 必须存在，optional 不存在则跳过，dynamic 不存在则跳过）
+
+    placeholders:
+      - "[MODULE_NAME]"
+      - "[CHANGE_ID]"
+      - "[CREATED_AT]"
+      - "[AUTHOR]"
+      - "[MODULE_TYPE]"
+      - "[TODO]"
+      - "[TBD]"
+      - "[待填写]"
+      - "[待确认]"
+
+    semantic_checks:
+      - id: tech-compliance
+        name: "技术选型合规"
+        target: "design.md 技术选型"
+        basis: "constitution.md 技术约束章节"
+        fail_condition: "选型不在宪章允许范围内"
+
+      - id: spec-design-coverage
+        name: "需求→设计覆盖"
+        target: "spec.md 功能点 vs design.md 内容"
+        basis: "spec 功能列表"
+        fail_condition: "spec 中有功能但 design 完全没提及"
+
+      - id: contract-alignment
+        name: "前后端接口对齐"
+        target: "前端 contracts.md vs 后端 contracts.md"
+        basis: "跨模块交叉对比"
+        fail_condition: "前端调用了后端未定义的接口，或参数/响应字段不匹配"
+        skip_when: "变更仅涉及单端；或任一端模块 manifest 不含 contracts.md"
+
+      - id: model-contract-consistency
+        name: "数据模型与接口一致"
+        target: "data-model.md 字段 vs contracts.md 响应字段"
+        basis: "同模块内交叉对比"
+        fail_condition: "接口返回了 data-model 中不存在的字段"
+        skip_when: "模块 manifest 不含 contracts.md"
+
+      - id: decision-rationale
+        name: "设计决策有理由"
+        target: "design.md 设计决策章节"
+        basis: "章节内容"
+        fail_condition: "有决策但没有理由/备选方案记录"

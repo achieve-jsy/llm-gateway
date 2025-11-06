@@ -1,0 +1,22 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Docs
+docs/
+xspec/
+.opencode/
+.xflow/
+
+# CI/CD
+.gitlab-ci.yml
+
+# OS
+.DS_Store
+Thumbs.db

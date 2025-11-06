@@ -1,0 +1,29 @@
+package handler
+
+// Error code constants for all control-plane handler responses.
+// Team F keys off these strings for user-facing copy.
+// Team I should update contracts.json error_codes blocks to match.
+const (
+	// 400 invalid_request
+	CodeBadRequest          = "bad_request"
+	CodeInvalidTagID        = "invalid_tag_id"
+	CodeInvalidModelID      = "invalid_model_id"
+	CodeModelProviderInvalid = "model_provider_invalid"
+	CodeSyncNotSupported    = "sync_not_supported"
+	CodeProviderDisabled    = "provider_disabled"
+
+	// 404 not_found
+	CodeProviderNotFound = "provider_not_found"
+	CodeModelNotFound    = "model_not_found"
+
+	// 409 conflict
+	CodeProviderNameConflict = "provider_name_conflict"
+	CodeModelNameConflict    = "model_name_conflict"
+	CodeProviderHasModels    = "provider_has_models"
+
+	// 502 upstream_error
+	CodeUpstreamError = "upstream_error"
+
+	// 500 internal_error
+	CodeInternalError = "internal_error"
+)

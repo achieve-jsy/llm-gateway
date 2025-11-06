@@ -8,6 +8,9 @@
 ```
 docs/
 ├── README.md                   # 本文件：导航
+├── ui/                         # 项目级 UI 设计规范
+│   ├── README.md               # UI 规范导航
+│   └── WattVision-UI-Guideline.md
 ├── AGENTS.md                   # 项目管理总则：版本号、需求变更、文档维护规范
 ├── 00-PRD.md                   # 产品需求文档（项目背景 / 用户 / 价值 / 成功指标）
 ├── 01-TECH-STACK.md            # 技术架构文档（技术选型 / 整体架构 / 关键决策）
@@ -45,3 +48,16 @@ docs/
 | 修改约束 | 直接 PR 修改 | 遵守 xflow 活跃变更保护与门禁 |
 
 > 一句话：**`docs/` 回答「我们要做什么 / 为什么这么做 / 什么时候做」，`xspec/` 回答「具体每个模块怎么设计、怎么实现」。**
+
+## UI 规范
+
+项目级 UI 设计规范放在 `docs/ui/` 下，供多个前端模块共享引用。
+
+当前可用规范：
+
+- `docs/ui/WattVision-UI-Guideline.md`：WattVision 电力监控界面的统一视觉与样式规范
+
+使用建议：
+
+- 全局视觉语言、配色、字体、布局原则放在 `docs/ui/`
+- 模块级页面实现和交互特化仍写入 `xspec/changes/<module>/design.md`

@@ -744,6 +744,118 @@ func (s *HealthCheckService) recordLog(targetType string, targetID uuid.UUID, ta
 	}
 }
 
+// TimelineEntry 时间线单条记录
+type TimelineEntry struct {
+	CheckedAt      time.Time `json:"checked_at"`
+	Success        bool      `json:"success"`
+	ResponseTimeMs int       `json:"response_time_ms"`
+	ErrorMessage   string    `json:"error_message,omitempty"`
+}
+
+// TimelineGroup 按模型端点聚合的监控组
+type TimelineGroup struct {
+	TargetName    string          `json:"target_name"`
+	TargetType    string          `json:"target_type"`
+	HealthPercent int             `json:"health_percent"`
+	TotalChecks   int             `json:"total_checks"`
+	SuccessChecks int             `json:"success_checks"`
+	ProviderCount int             `json:"provider_count"`
+	KeyCount      int             `json:"key_count"`
+	Timeline      []TimelineEntry `json:"timeline"`
+}
+
+// TimelineResult 时间线监控结果
+type TimelineResult struct {
+	Lookback string          `json:"lookback"`
+	Groups   []TimelineGroup `json:"groups"`
+}
+
+// GetTimeline 获取健康监控时间线数据
+func (s *HealthCheckService) GetTimeline(lookback string, search string) (*TimelineResult, error) {
+	duration := parseLookback(lookback)
+	since := time.Now().Add(-duration)
+
+	logs, err := s.healthRepo.GetLogsByTimeRange(since, "model")
+	if err != nil {
+		return nil, err
+	}
+
+	groupMap := make(map[string]*TimelineGroup)
+	var targetNames []string
+
+	for _, log := range logs {
+		group, ok := groupMap[log.TargetName]
+		if !ok {
+			group = &TimelineGroup{
+				TargetName: log.TargetName,
+				TargetType: log.TargetType,
+				Timeline:   make([]TimelineEntry, 0),
+			}
+			groupMap[log.TargetName] = group
+			targetNames = append(targetNames, log.TargetName)
+		}
+		group.TotalChecks++
+		if log.Success {
+			group.SuccessChecks++
+		}
+		group.Timeline = append(group.Timeline, TimelineEntry{
+			CheckedAt:      log.CheckedAt,
+			Success:        log.Success,
+			ResponseTimeMs: log.ResponseTimeMs,
+			ErrorMessage:   log.ErrorMessage,
+		})
+	}
+
+	// 计算健康率
+	providerCounts, _ := s.healthRepo.GetTargetProviderCounts(targetNames)
+	for _, group := range groupMap {
+		if group.TotalChecks > 0 {
+			group.HealthPercent = group.SuccessChecks * 100 / group.TotalChecks
+		} else {
+			group.HealthPercent = 100
+		}
+		if pc, ok := providerCounts[group.TargetName]; ok {
+			group.ProviderCount = pc.ProviderCnt
+			group.KeyCount = pc.KeyCnt
+		}
+	}
+
+	// 按健康率升序排列（最差的在最上面）
+	groups := make([]TimelineGroup, 0, len(groupMap))
+	for _, g := range groupMap {
+		if search != "" && !strings.Contains(strings.ToLower(g.TargetName), strings.ToLower(search)) {
+			continue
+		}
+		groups = append(groups, *g)
+	}
+	sortTimelineGroupsByHealth(groups)
+
+	return &TimelineResult{Lookback: lookback, Groups: groups}, nil
+}
+
+func parseLookback(lookback string) time.Duration {
+	switch lookback {
+	case "12h":
+		return 12 * time.Hour
+	case "24h":
+		return 24 * time.Hour
+	case "7d":
+		return 7 * 24 * time.Hour
+	default:
+		return 6 * time.Hour
+	}
+}
+
+func sortTimelineGroupsByHealth(groups []TimelineGroup) {
+	for i := 0; i < len(groups); i++ {
+		for j := i + 1; j < len(groups); j++ {
+			if groups[i].HealthPercent > groups[j].HealthPercent {
+				groups[i], groups[j] = groups[j], groups[i]
+			}
+		}
+	}
+}
+
 // truncateStr 截断字符串
 func truncateStr(s string, maxLen int) string {
 	if len(s) <= maxLen {

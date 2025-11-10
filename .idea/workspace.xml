@@ -4,8 +4,110 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="af7f4b61-a5e3-4748-bcf3-e1eb914177d5" name="Changes" comment="feat(auth): 实现 SSO 登录和 API Key 管理功能&#10;&#10;- 添加 OIDC SSO 登录功能，支持公司账号认证&#10;- 实现 API Key 的创建、列表、启用/禁用和删除功能&#10;- 添加 API Key 鉴权中间件替换原有硬编码 token 方式&#10;- 集成用户和部门信息绑定，支持身份追溯&#10;- 更新前端菜单结构，添加员工和管理功能模块&#10;- 增加系统设置和用户信息显示功能&#10;- 添加模型列表缓存版本控制功能&#10;- 完善模型目录同步和搜索功能&#10;- 优化界面样式和响应式布局">
+    <list default="true" id="af7f4b61-a5e3-4748-bcf3-e1eb914177d5" name="Changes" comment="chore(config): 更新环境配置和工作区设置&#10;&#10;- 配置 OAuth2 SSO 认证参数，包括客户端ID、密钥和回调地址&#10;- 设置 JWT 密钥和前端URL指向生产环境域名&#10;- 更新工作区 Git 分支信息为开发版本分支&#10;- 优化 IDE 工作空间配置，添加最新任务历史记录&#10;- 清理临时文件路径配置，调整 Git widget 显示名称">
       <change beforePath="$PROJECT_DIR$/.env" beforeDir="false" afterPath="$PROJECT_DIR$/.env" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cmd/gateway/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/cmd/gateway/main.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/config/dev.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/config/dev.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/control-plane" beforeDir="false" afterPath="$PROJECT_DIR$/control-plane" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/gateway" beforeDir="false" afterPath="$PROJECT_DIR$/gateway" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/auth/service/oidc.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/auth/service/oidc.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/controlplane/auth/handler.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/auth/handler.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/controlplane/auth/token.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/auth/token.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/controlplane/handler/dev_login.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/handler/dev_login.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/controlplane/handler/health_check_handler.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/handler/health_check_handler.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/controlplane/handler/key_handler.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/handler/key_handler.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/controlplane/middleware/middleware.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/middleware/middleware.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/controlplane/model/settings.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/model/settings.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/controlplane/repository/health_check_repo.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/repository/health_check_repo.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/controlplane/repository/settings_repo.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/repository/settings_repo.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/controlplane/router/router.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/router/router.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/controlplane/service/health_check_service.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/service/health_check_service.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/controlplane/service/key_service.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/service/key_service.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/controlplane/service/settings_service.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/service/settings_service.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/gateway/config/config.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/gateway/config/config.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/migrations/016_create_auth_identity_tables.sql" beforeDir="false" afterPath="$PROJECT_DIR$/migrations/016_create_auth_identity_tables.sql" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/ModelListPage-Be8larkt.css" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/ModelListPage-BzHXnbmd.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/ProviderListPage-dwDXhz1y.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/ProviderListPage-l28XSq8v.css" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/UnifiedEntryPage-CdvSoOD2.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/UnifiedEntryPage-DWkpgpoe.css" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/control-plane-BKxxCZNZ.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/http-DBl0D3kB.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/index-DZAe3ldL.css" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/index-cIGuMNCK.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/web/dist/index.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/App.vue" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/App.vue" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/components/key/KeyCreateDialog.vue" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/components/key/KeyCreateDialog.vue" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/composables/useTheme.test.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/composables/useTheme.test.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/composables/useTheme.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/composables/useTheme.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/router/index.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/router/index.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/services/auth.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/services/auth.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/services/control-plane.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/services/control-plane.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/services/http.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/services/http.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/stores/auth.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/stores/auth.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/stores/settings.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/stores/settings.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/types/settings.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/types/settings.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/utils/ccs-import.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/utils/ccs-import.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/views/admin/SettingsPage.vue" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/views/admin/SettingsPage.vue" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/views/key/KeyListPage.vue" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/views/key/KeyListPage.vue" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/vite.config.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/vite.config.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/.gates/clarify.json" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/.gates/clarify.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/.gates/detail.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/contracts.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/data-model.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/design.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/hld.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/research.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/research/001-rs256-key-rotation.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/research/002-key-cache-invalidation.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/research/003-oidc-role-mapping.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/research/004-key-query-contract.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/spec.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/task.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/brainstorm.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/brainstorm.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/change.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/change.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/control-plane/contracts.delta.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/control-plane/data-model.delta.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/control-plane/design.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/control-plane/design.delta.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/control-plane/hld.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/control-plane/hld.delta.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/control-plane/spec.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/control-plane/spec.delta.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/control-plane/task.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/gateway-api/contracts.delta.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/gateway-api/data-model.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/gateway-api/data-model.delta.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/gateway-api/design.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/gateway-api/design.delta.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/gateway-api/hld.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/gateway-api/hld.delta.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/gateway-api/spec.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/gateway-api/spec.delta.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/gateway-api/task.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/integration.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/ops-console/contracts.delta.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/ops-console/data-model.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/ops-console/data-model.delta.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/ops-console/design.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/ops-console/design.delta.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/ops-console/hld.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/ops-console/hld.delta.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/ops-console/spec.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/ops-console/spec.delta.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/ops-console/task.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/constitution.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/constitution.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/modules/CHANGELOG.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/CHANGELOG.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/modules/PRODUCT.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/PRODUCT.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/modules/control-plane/contracts.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/control-plane/contracts.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/modules/control-plane/data-model.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/control-plane/data-model.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/modules/control-plane/design.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/control-plane/design.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/modules/control-plane/hld.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/control-plane/hld.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/modules/control-plane/module.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/control-plane/module.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/modules/control-plane/spec.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/control-plane/spec.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/modules/gateway-api/contracts.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/gateway-api/contracts.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/modules/gateway-api/data-model.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/gateway-api/data-model.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/modules/gateway-api/design.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/gateway-api/design.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/modules/gateway-api/hld.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/gateway-api/hld.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/modules/gateway-api/module.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/gateway-api/module.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/modules/gateway-api/spec.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/gateway-api/spec.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/modules/ops-console/contracts.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/ops-console/contracts.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/modules/ops-console/data-model.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/ops-console/data-model.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/modules/ops-console/design.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/ops-console/design.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/modules/ops-console/hld.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/ops-console/hld.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/modules/ops-console/module.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/ops-console/module.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/modules/ops-console/spec.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/ops-console/spec.md" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -28,23 +130,23 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.com.insyncwithfoo.pyright.configurations.converters.pyrightls.ConfigurationsConverter": "true",
-    "RunOnceActivity.com.insyncwithfoo.pyright.configurations.converters.v1.ConfigurationsConverter": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "git-widget-placeholder": "dev",
-    "last_opened_file_path": "/Users/jsy/Public/self_code/llm-gateway/web/public/images",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "settings.editor.selected.configurable": "http.proxy",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.com.insyncwithfoo.pyright.configurations.converters.pyrightls.ConfigurationsConverter&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.com.insyncwithfoo.pyright.configurations.converters.v1.ConfigurationsConverter&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;dev&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/jsy/Public/self_code/llm-gateway/web/public/images&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;http.proxy&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="$PROJECT_DIR$/web/public/images" />
@@ -70,6 +172,8 @@
       <workItem from="1779269364817" duration="15410000" />
       <workItem from="1779331836465" duration="5032000" />
       <workItem from="1779351233934" duration="34050000" />
+      <workItem from="1779674989691" duration="7547000" />
+      <workItem from="1779700802756" duration="621000" />
     </task>
     <task id="LOCAL-00001" summary="feat(database): 初始化数据库迁移脚本并完善数据表结构&#10;&#10;- 删除废弃的变更元数据模板文件 .xflow/templates/_shared/change.yaml&#10;- 添加项目 UI 设计规范文档 docs/ui/ 目录结构和导航&#10;- 创建 10 个数据库迁移脚本，包括 providers/models/provider_definitions 表的基础结构&#10;- 添加 model_tags 标签系统、health_check 健康检测、encryption_keys 加密密钥管理等功能表&#10;- 补充 providers/models 表的权重、优先级、价格、上下文长度等完整业务字段&#10;- 完善 provider_definitions 表的厂商配置、协议差异、默认模型列表等扩展属性&#10;- 修复 AWS Bedrock 和 Azure OpenAI 的认证参数配置结构&#10;- 添加前端 Vue 组件缺失测试的基线快照报告 tests/reports/00-baseline.md&#10;- 添加 node_modules/ 到 .gitignore 文件">
       <option name="closed" value="true" />
@@ -135,7 +239,15 @@
       <option name="project" value="LOCAL" />
       <updated>1779674444452</updated>
     </task>
-    <option name="localTasksCounter" value="9" />
+    <task id="LOCAL-00009" summary="chore(config): 更新环境配置和工作区设置&#10;&#10;- 配置 OAuth2 SSO 认证参数，包括客户端ID、密钥和回调地址&#10;- 设置 JWT 密钥和前端URL指向生产环境域名&#10;- 更新工作区 Git 分支信息为开发版本分支&#10;- 优化 IDE 工作空间配置，添加最新任务历史记录&#10;- 清理临时文件路径配置，调整 Git widget 显示名称">
+      <option name="closed" value="true" />
+      <created>1779675099855</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1779675099855</updated>
+    </task>
+    <option name="localTasksCounter" value="10" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -160,6 +272,7 @@
     <MESSAGE value="feat(deploy): 添加 Docker 部署配置&#10;&#10;- 新增 .dockerignore 文件配置忽略规则&#10;- 添加 control-plane、gateway 和 web 的 Dockerfile 多阶段构建&#10;- 配置 nginx 反向代理支持 LLM API 和管理 API 分发&#10;- 创建完整的 docker-compose.yml 包含服务编排和健康检查&#10;- 添加 OpenTelemetry 和 Jaeger 观察性支持配置" />
     <MESSAGE value="feat(catalog): 支持环境变量配置 Catalog 同步选项&#10;&#10;- 添加 CATALOG_REMOTE_URL 环境变量支持，允许指定内网镜像或代理地址&#10;- 添加 CATALOG_HTTP_TIMEOUT 环境变量支持，可自定义远程拉取超时时间&#10;- 重构 NewCatalogSyncService 优先级逻辑：代码传入 &gt; 环境变量 &gt; 默认值&#10;- 修复 PriceDiffEntry" />
     <MESSAGE value="feat(auth): 实现 SSO 登录和 API Key 管理功能&#10;&#10;- 添加 OIDC SSO 登录功能，支持公司账号认证&#10;- 实现 API Key 的创建、列表、启用/禁用和删除功能&#10;- 添加 API Key 鉴权中间件替换原有硬编码 token 方式&#10;- 集成用户和部门信息绑定，支持身份追溯&#10;- 更新前端菜单结构，添加员工和管理功能模块&#10;- 增加系统设置和用户信息显示功能&#10;- 添加模型列表缓存版本控制功能&#10;- 完善模型目录同步和搜索功能&#10;- 优化界面样式和响应式布局" />
-    <option name="LAST_COMMIT_MESSAGE" value="feat(auth): 实现 SSO 登录和 API Key 管理功能&#10;&#10;- 添加 OIDC SSO 登录功能，支持公司账号认证&#10;- 实现 API Key 的创建、列表、启用/禁用和删除功能&#10;- 添加 API Key 鉴权中间件替换原有硬编码 token 方式&#10;- 集成用户和部门信息绑定，支持身份追溯&#10;- 更新前端菜单结构，添加员工和管理功能模块&#10;- 增加系统设置和用户信息显示功能&#10;- 添加模型列表缓存版本控制功能&#10;- 完善模型目录同步和搜索功能&#10;- 优化界面样式和响应式布局" />
+    <MESSAGE value="chore(config): 更新环境配置和工作区设置&#10;&#10;- 配置 OAuth2 SSO 认证参数，包括客户端ID、密钥和回调地址&#10;- 设置 JWT 密钥和前端URL指向生产环境域名&#10;- 更新工作区 Git 分支信息为开发版本分支&#10;- 优化 IDE 工作空间配置，添加最新任务历史记录&#10;- 清理临时文件路径配置，调整 Git widget 显示名称" />
+    <option name="LAST_COMMIT_MESSAGE" value="chore(config): 更新环境配置和工作区设置&#10;&#10;- 配置 OAuth2 SSO 认证参数，包括客户端ID、密钥和回调地址&#10;- 设置 JWT 密钥和前端URL指向生产环境域名&#10;- 更新工作区 Git 分支信息为开发版本分支&#10;- 优化 IDE 工作空间配置，添加最新任务历史记录&#10;- 清理临时文件路径配置，调整 Git widget 显示名称" />
   </component>
 </project>

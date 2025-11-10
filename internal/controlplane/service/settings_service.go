@@ -7,8 +7,10 @@ import (
 )
 
 const (
-	SettingKeySiteName   = "site_name"
-	SettingKeyAPIBaseURL = "api_base_url"
+	SettingKeySiteName     = "site_name"
+	SettingKeySiteLogo     = "site_logo"
+	SettingKeySiteSubtitle = "site_subtitle"
+	SettingKeyAPIBaseURL   = "api_base_url"
 )
 
 type SettingsRepository interface {
@@ -29,9 +31,11 @@ func NewSettingsService(repo SettingsRepository) *SettingsService {
 
 func (s *SettingsService) ensureDefaults() {
 	defaults := map[string]string{
-		SettingKeySiteName: "LLM Gateway",
+		SettingKeySiteName:     "LLM Gateway",
+		SettingKeySiteSubtitle: "LLM API 统一网关",
 	}
-	existing, _ := s.repo.GetMultiple([]string{SettingKeySiteName, SettingKeyAPIBaseURL})
+	allKeys := []string{SettingKeySiteName, SettingKeySiteLogo, SettingKeySiteSubtitle, SettingKeyAPIBaseURL}
+	existing, _ := s.repo.GetMultiple(allKeys)
 	for k, v := range defaults {
 		if _, ok := existing[k]; !ok {
 			_ = s.repo.SetMultiple(map[string]string{k: v})
@@ -40,24 +44,28 @@ func (s *SettingsService) ensureDefaults() {
 }
 
 func (s *SettingsService) GetSystemSettings(ctx context.Context) (*model.SystemSettings, error) {
-	vals, err := s.repo.GetMultiple([]string{SettingKeySiteName, SettingKeyAPIBaseURL})
+	vals, err := s.repo.GetMultiple([]string{SettingKeySiteName, SettingKeySiteLogo, SettingKeySiteSubtitle, SettingKeyAPIBaseURL})
 	if err != nil {
 		return nil, err
 	}
 	return &model.SystemSettings{
-		SiteName:   valOrDefault(vals, SettingKeySiteName, "LLM Gateway"),
-		APIBaseURL: valOrDefault(vals, SettingKeyAPIBaseURL, ""),
+		SiteName:     valOrDefault(vals, SettingKeySiteName, "LLM Gateway"),
+		SiteLogo:     valOrDefault(vals, SettingKeySiteLogo, ""),
+		SiteSubtitle: valOrDefault(vals, SettingKeySiteSubtitle, ""),
+		APIBaseURL:   valOrDefault(vals, SettingKeyAPIBaseURL, ""),
 	}, nil
 }
 
 func (s *SettingsService) GetPublicSettings(ctx context.Context) (*model.PublicSettings, error) {
-	vals, err := s.repo.GetMultiple([]string{SettingKeySiteName, SettingKeyAPIBaseURL})
+	vals, err := s.repo.GetMultiple([]string{SettingKeySiteName, SettingKeySiteLogo, SettingKeySiteSubtitle, SettingKeyAPIBaseURL})
 	if err != nil {
 		return nil, err
 	}
 	return &model.PublicSettings{
-		SiteName:   valOrDefault(vals, SettingKeySiteName, "LLM Gateway"),
-		APIBaseURL: valOrDefault(vals, SettingKeyAPIBaseURL, ""),
+		SiteName:     valOrDefault(vals, SettingKeySiteName, "LLM Gateway"),
+		SiteLogo:     valOrDefault(vals, SettingKeySiteLogo, ""),
+		SiteSubtitle: valOrDefault(vals, SettingKeySiteSubtitle, ""),
+		APIBaseURL:   valOrDefault(vals, SettingKeyAPIBaseURL, ""),
 	}, nil
 }
 
@@ -66,6 +74,8 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, settings *model.Sy
 	if settings.SiteName != "" {
 		updates[SettingKeySiteName] = settings.SiteName
 	}
+	updates[SettingKeySiteLogo] = settings.SiteLogo
+	updates[SettingKeySiteSubtitle] = settings.SiteSubtitle
 	updates[SettingKeyAPIBaseURL] = settings.APIBaseURL
 	return s.repo.SetMultiple(updates)
 }

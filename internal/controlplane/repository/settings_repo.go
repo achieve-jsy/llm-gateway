@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"time"
+
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -37,12 +39,13 @@ func (r *SettingsRepo) GetMultiple(keys []string) (map[string]string, error) {
 }
 
 func (r *SettingsRepo) SetMultiple(settings map[string]string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
 	cfgs := make([]model.SystemConfig, 0, len(settings))
 	for k, v := range settings {
-		cfgs = append(cfgs, model.SystemConfig{Key: k, Value: v})
+		cfgs = append(cfgs, model.SystemConfig{Key: k, Value: v, CreatedAt: now, UpdatedAt: now})
 	}
 	return r.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "key"}},
-		DoUpdates: clause.AssignmentColumns([]string{"value"}),
+		DoUpdates: clause.AssignmentColumns([]string{"value", "updated_at"}),
 	}).Create(&cfgs).Error
 }

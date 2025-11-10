@@ -14,11 +14,15 @@ func (SystemConfig) TableName() string {
 }
 
 type SystemSettings struct {
-	SiteName   string `json:"site_name"`
-	APIBaseURL string `json:"api_base_url"`
+	SiteName     string `json:"site_name"`
+	SiteLogo     string `json:"site_logo"`
+	SiteSubtitle string `json:"site_subtitle"`
+	APIBaseURL   string `json:"api_base_url"`
 }
 
 type PublicSettings struct {
-	SiteName   string `json:"site_name"`
-	APIBaseURL string `json:"api_base_url"`
+	SiteName     string `json:"site_name"`
+	SiteLogo     string `json:"site_logo"`
+	SiteSubtitle string `json:"site_subtitle"`
+	APIBaseURL   string `json:"api_base_url"`
 }

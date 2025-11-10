@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS users (
     role VARCHAR(16) NOT NULL DEFAULT 'user',
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    CONSTRAINT chk_users_role CHECK (role IN ('admin', 'user')),
+    CONSTRAINT chk_users_role CHECK (role IN ('admin', 'employee', 'user')),
     CONSTRAINT chk_users_source CHECK (source = 'oidc')
 );
 

@@ -1,10 +1,10 @@
 <template>
   <div class="layout-sidebar">
     <!-- 侧边栏 -->
-    <aside class="sidebar">
+    <aside v-if="!isPublicRoute" class="sidebar">
       <div class="sidebar-header">
-        <img src="/images/logo_example.png" class="sidebar-logo" alt="logo" />
-        <span class="sidebar-title">灵锋驿</span>
+        <img :src="sidebarLogoSrc" class="sidebar-logo" alt="logo" />
+        <span class="sidebar-title">{{ siteTitle }}</span>
       </div>
       <el-menu
         class="sidebar-menu"
@@ -27,6 +27,10 @@
         <el-menu-item index="/keys">
           <el-icon><Key /></el-icon>
           <span>我的 Key</span>
+        </el-menu-item>
+        <el-menu-item index="/admin/health-monitor">
+          <el-icon><Monitor /></el-icon>
+          <span>健康监控</span>
         </el-menu-item>
         <el-menu-item index="/models">
           <el-icon><Monitor /></el-icon>
@@ -70,7 +74,7 @@
     <!-- 主内容区 -->
     <div class="main-content">
       <!-- 顶部工具栏 -->
-      <div class="top-bar">
+      <div v-if="!isPublicRoute" class="top-bar">
         <span class="theme-toggle" @click="toggleTheme" :title="isDark ? '切换到浅色模式' : '切换到深色模式'">
           {{ isDark ? '☀️' : '🌙' }}
         </span>
@@ -90,7 +94,7 @@
       </div>
 
       <!-- 页面内容 -->
-      <div class="page-container">
+      <div class="page-container" :class="{ 'page-container--public': isPublicRoute }">
         <router-view />
       </div>
     </div>
@@ -99,7 +103,7 @@
 
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
-import { onMounted } from 'vue'
+import { onMounted, computed } from 'vue'
 import { isDark, toggleTheme } from './composables/useTheme'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
@@ -108,9 +112,20 @@ import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Home
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
+const settingsStore = useSettingsStore()
+
+const isPublicRoute = computed(() => route.meta.public as boolean | undefined)
+
+const sidebarLogoSrc = computed(() => {
+  return settingsStore.publicSettings?.site_logo || '/images/logo_example.png'
+})
+
+const siteTitle = computed(() => {
+  return settingsStore.publicSettings?.site_name || '灵锋驿'
+})
 
 onMounted(() => {
-  useSettingsStore().loadPublicSettings()
+  settingsStore.loadPublicSettings()
 })
 
 function handleUserCommand(command: string) {
@@ -168,5 +183,10 @@ function handleUserCommand(command: string) {
   padding: 2px 8px;
   border-radius: 4px;
   background-color: var(--el-fill-color);
+}
+
+.page-container--public {
+  padding: 0;
+  height: 100%;
 }
 </style>

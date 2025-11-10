@@ -25,17 +25,16 @@ export function buildCcsUsageScript(): string {
   })`
 }
 
-export function executeCcsImport(apiKey: string, clientType: 'claude' | 'gemini' = 'claude') {
+export function executeCcsImport(apiKey: string, clientType: string = 'claude') {
   const settingsStore = useSettingsStore()
   const baseUrl = settingsStore.getBaseUrl()
-  const app = clientType === 'gemini' ? 'gemini' : 'claude'
   const providerName = settingsStore.getSiteName()
 
   const usageScript = buildCcsUsageScript()
 
   const params = new URLSearchParams({
     resource: 'provider',
-    app: app,
+    app: clientType,
     name: providerName,
     homepage: baseUrl,
     endpoint: baseUrl,

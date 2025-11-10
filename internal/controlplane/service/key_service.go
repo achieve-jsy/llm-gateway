@@ -224,6 +224,22 @@ func (s *KeyService) DeleteKey(ctx context.Context, userID, keyID uuid.UUID) err
 	return nil
 }
 
+func (s *KeyService) RevealKey(ctx context.Context, userID, keyID uuid.UUID) (string, error) {
+	k, err := s.repo.FindByID(keyID)
+	if err != nil {
+		return "", ErrKeyNotFound
+	}
+	if k.UserID != userID {
+		return "", ErrKeyNotFound
+	}
+
+	plaintext, err := crypto.Decrypt(k.EncryptedKey)
+	if err != nil {
+		return "", fmt.Errorf("decrypt key: %w", err)
+	}
+	return plaintext, nil
+}
+
 func (s *KeyService) ResetKey(ctx context.Context, userID, keyID uuid.UUID) (*model.ApiKey, string, error) {
 	k, err := s.repo.FindByID(keyID)
 	if err != nil {

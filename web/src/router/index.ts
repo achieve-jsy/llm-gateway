@@ -59,6 +59,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '对话测试' }
   },
   {
+    path: '/admin/health-monitor',
+    name: 'HealthMonitor',
+    component: () => import('@/views/admin/HealthMonitorPage.vue'),
+    meta: { title: '健康监控' }
+  },
+  {
     path: '/admin/settings',
     name: 'Settings',
     component: () => import('@/views/admin/SettingsPage.vue'),

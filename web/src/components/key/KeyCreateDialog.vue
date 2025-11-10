@@ -60,9 +60,10 @@ import { ElMessage } from 'element-plus'
 import { createKey } from '@/services/control-plane'
 import { mapCreateKeyResponse } from '@/types/api-key'
 import { executeCcsImport } from '@/utils/ccs-import'
+import { useKeyCacheStore } from '@/stores/key-cache'
 
 const props = defineProps<{ modelValue: boolean }>()
-const emit = defineEmits<{ (e: 'update:modelValue', v: boolean): void; (e: 'success'): void }>()
+const emit = defineEmits<{ (e: 'update:modelValue', v: boolean): void; (e: 'success', keyId: string, rawKey: string): void }>()
 
 const visible = computed({
   get: () => props.modelValue,
@@ -85,7 +86,8 @@ async function handleCreate() {
     const response = await createKey(form.value.name.trim(), expiresAt)
     const mapped = mapCreateKeyResponse(response)
     createdKey.value = mapped.key
-    emit('success')
+    useKeyCacheStore().cacheKey(mapped.id, mapped.key)
+    emit('success', mapped.id, mapped.key)
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.message || '创建失败')
   } finally {

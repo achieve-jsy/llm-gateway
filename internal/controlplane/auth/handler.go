@@ -7,21 +7,29 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/oauth2"
+	"gorm.io/gorm"
+
+	amodel "github.com/example/llm-gateway/internal/auth/model"
+	arepo "github.com/example/llm-gateway/internal/auth/repository"
 )
 
-// Handler handles SSO authentication endpoints
 type Handler struct {
 	config      *Config
 	oauthConfig *oauth2.Config
 	endpoints   *OIDCEndpoints
+	db          *gorm.DB
+	rdb         *redis.Client
+	userRepo    *arepo.UserRepository
+	deptRepo    *arepo.DeptRepository
 }
 
-// DaQunUserInfo represents the user info returned by DaQun OAuth
 type DaQunUserInfo struct {
 	Avatar      string `json:"avatar"`
 	CompanyName string `json:"company_name"`
@@ -34,7 +42,6 @@ type DaQunUserInfo struct {
 	EhrOrgName  string `json:"ehr_org_name"`
 }
 
-// OIDCEndpoints holds discovered OIDC endpoints
 type OIDCEndpoints struct {
 	Issuer                string `json:"issuer"`
 	AuthorizationEndpoint string `json:"authorization_endpoint"`
@@ -43,9 +50,7 @@ type OIDCEndpoints struct {
 	JwksURI               string `json:"jwks_uri"`
 }
 
-// NewHandler creates a new auth handler
-func NewHandler(cfg *Config) (*Handler, error) {
-	// Discover OIDC endpoints from well-known configuration
+func NewHandler(cfg *Config, db *gorm.DB, rdb *redis.Client) (*Handler, error) {
 	endpoints, err := discoverEndpoints(cfg.IssuerURL)
 	if err != nil {
 		return nil, fmt.Errorf("discover OIDC endpoints: %w", err)
@@ -59,7 +64,7 @@ func NewHandler(cfg *Config) (*Handler, error) {
 		Endpoint: oauth2.Endpoint{
 			AuthURL:   endpoints.AuthorizationEndpoint,
 			TokenURL:  endpoints.TokenEndpoint,
-			AuthStyle: oauth2.AuthStyleInHeader, // client_secret_basic (大群默认)
+			AuthStyle: oauth2.AuthStyleInHeader,
 		},
 	}
 
@@ -67,13 +72,15 @@ func NewHandler(cfg *Config) (*Handler, error) {
 		config:      cfg,
 		oauthConfig: oauthCfg,
 		endpoints:   endpoints,
+		db:          db,
+		rdb:         rdb,
+		userRepo:    arepo.NewUserRepository(db),
+		deptRepo:    arepo.NewDeptRepository(db),
 	}, nil
 }
 
-// discoverEndpoints fetches OIDC configuration from well-known endpoint
 func discoverEndpoints(issuerURL string) (*OIDCEndpoints, error) {
 	wellKnownURL := issuerURL + "/.well-known/openid-configuration"
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -96,141 +103,131 @@ func discoverEndpoints(issuerURL string) (*OIDCEndpoints, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&endpoints); err != nil {
 		return nil, fmt.Errorf("decode openid-configuration: %w", err)
 	}
-
 	return &endpoints, nil
 }
 
-// Login redirects the user to the OAuth2 authorization endpoint
 func (h *Handler) Login(c *gin.Context) {
 	state := generateState()
-
-	// Store state in cookie for CSRF protection
-	c.SetCookie("oauth_state", state, 600, "/", "", false, true)
-
+	if err := h.rdb.Set(c.Request.Context(), "oidc:state:"+state, "1", 5*time.Minute).Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "failed to save state", "code": "internal"}})
+		return
+	}
 	url := h.oauthConfig.AuthCodeURL(state, oauth2.AccessTypeOffline)
 	c.Redirect(http.StatusTemporaryRedirect, url)
 }
 
-// Callback handles the OAuth2 callback after user authorization
+type oidcCallbackRequest struct {
+	Code  string `json:"code" binding:"required"`
+	State string `json:"state" binding:"required"`
+}
+
 func (h *Handler) Callback(c *gin.Context) {
-	// Verify state for CSRF protection
-	state := c.Query("state")
-	savedState, err := c.Cookie("oauth_state")
-	if err != nil || state != savedState {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": gin.H{
-				"type":    "authentication_error",
-				"message": "invalid oauth state",
-				"code":    "invalid_state",
-			},
-		})
+	var req oidcCallbackRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "message": "invalid payload", "code": "invalid_request"}})
 		return
 	}
 
-	// Clear state cookie
-	c.SetCookie("oauth_state", "", -1, "/", "", false, true)
-
-	// Exchange code for token
-	code := c.Query("code")
-	if code == "" {
-		errMsg := c.Query("error_description")
-		if errMsg == "" {
-			errMsg = c.Query("error")
-		}
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": gin.H{
-				"type":    "authentication_error",
-				"message": fmt.Sprintf("oauth callback error: %s", errMsg),
-				"code":    "oauth_error",
-			},
-		})
+	exists, err := h.rdb.Exists(c.Request.Context(), "oidc:state:"+req.State).Result()
+	if err != nil || exists == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "authentication_error", "message": "invalid oidc state", "code": "invalid_state"}})
 		return
 	}
+	h.rdb.Del(c.Request.Context(), "oidc:state:"+req.State)
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
 
-	token, err := h.oauthConfig.Exchange(ctx, code)
+	token, err := h.oauthConfig.Exchange(ctx, req.Code)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": gin.H{
-				"type":    "authentication_error",
-				"message": fmt.Sprintf("failed to exchange token: %v", err),
-				"code":    "token_exchange_failed",
-			},
-		})
+		c.JSON(http.StatusBadGateway, gin.H{"error": gin.H{"type": "authentication_error", "message": fmt.Sprintf("failed to exchange token: %v", err), "code": "token_exchange_failed"}})
 		return
 	}
 
-	// Fetch user info from DaQun
 	userInfo, err := h.fetchUserInfo(ctx, token)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": gin.H{
-				"type":    "authentication_error",
-				"message": fmt.Sprintf("failed to get user info: %v", err),
-				"code":    "userinfo_failed",
-			},
-		})
+		c.JSON(http.StatusBadGateway, gin.H{"error": gin.H{"type": "authentication_error", "message": fmt.Sprintf("failed to get user info: %v", err), "code": "userinfo_failed"}})
 		return
 	}
 
-	// Generate our own JWT for the session
-	claims := &UserClaims{
-		Email:       userInfo.Email,
-		Name:        userInfo.Name,
-		Passport:    userInfo.Passport,
-		Avatar:      userInfo.Avatar,
-		CompanyName: userInfo.CompanyName,
-		DeptName:    userInfo.EhrDeptName,
-	}
+	user, deptID, deptName := h.upsertUser(userInfo)
 
-	jwtToken, err := GenerateToken(h.config.JWTSecret, claims)
+	accessToken, err := GenerateAccessToken(h.config.JWTSecret, user.ID.String(), deptID, deptName, userInfo.Email, userInfo.Name, userInfo.Passport, user.Role)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": gin.H{
-				"type":    "authentication_error",
-				"message": "failed to generate session token",
-				"code":    "token_generation_failed",
-			},
-		})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "failed to generate token", "code": "token_generation_failed"}})
 		return
 	}
 
-	// Redirect to frontend with token
-	redirectURL := fmt.Sprintf("%s/oauth/callback?token=%s", h.config.FrontendURL, jwtToken)
-	c.Redirect(http.StatusTemporaryRedirect, redirectURL)
-}
-
-// GetCurrentUser returns the authenticated user's info
-func (h *Handler) GetCurrentUser(c *gin.Context) {
-	claims, exists := c.Get("user_claims")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"error": gin.H{
-				"type":    "authentication_error",
-				"message": "not authenticated",
-				"code":    "unauthorized",
-			},
-		})
+	refreshToken, err := GenerateRefreshToken(h.config.JWTSecret, user.ID.String(), user.Role)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "failed to generate token", "code": "token_generation_failed"}})
 		return
 	}
 
-	userClaims := claims.(*UserClaims)
 	c.JSON(http.StatusOK, gin.H{
-		"email":        userClaims.Email,
-		"name":         userClaims.Name,
-		"passport":     userClaims.Passport,
-		"avatar":       userClaims.Avatar,
-		"company_name": userClaims.CompanyName,
-		"dept_name":    userClaims.DeptName,
+		"accessToken":  accessToken,
+		"refreshToken": refreshToken,
+		"user": gin.H{
+			"id":             user.ID.String(),
+			"name":           userInfo.Name,
+			"email":          userInfo.Email,
+			"departmentId":   deptID,
+			"departmentName": deptName,
+		},
+		"role": user.Role,
 	})
 }
 
-// fetchUserInfo fetches user information from DaQun's userinfo endpoint
+func (h *Handler) upsertUser(info *DaQunUserInfo) (*amodel.User, string, string) {
+	role := "user"
+	deptID := info.EhrDeptID
+	deptName := info.EhrDeptName
+
+	var deptModel *amodel.Department
+	if deptID != "" {
+		dept, err := h.deptRepo.FindByDeptID(deptID)
+		if err != nil {
+			dept = &amodel.Department{DeptID: deptID, DeptName: deptName}
+			if createErr := h.deptRepo.Create(dept); createErr != nil {
+				slog.Warn("failed to create department", "error", createErr)
+			}
+		}
+		if dept != nil {
+			deptModel = dept
+		}
+	}
+
+	existingUser, err := h.userRepo.FindBySub(info.Passport)
+	if err == nil && existingUser != nil {
+		existingUser.Name = info.Name
+		existingUser.Email = info.Email
+		if deptModel != nil {
+			existingUser.DeptID = &deptModel.ID
+		}
+		if updateErr := h.userRepo.Update(existingUser); updateErr != nil {
+			slog.Warn("failed to update user", "error", updateErr)
+		}
+		return existingUser, deptID, deptName
+	}
+
+	newUser := &amodel.User{
+		Sub:    info.Passport,
+		Name:   info.Name,
+		Email:  info.Email,
+		Role:   role,
+		Source: "oidc",
+	}
+	if deptModel != nil {
+		newUser.DeptID = &deptModel.ID
+	}
+	if createErr := h.userRepo.Create(newUser); createErr != nil {
+		slog.Warn("failed to create user", "error", createErr)
+	}
+	return newUser, deptID, deptName
+}
+
 func (h *Handler) fetchUserInfo(ctx context.Context, token *oauth2.Token) (*DaQunUserInfo, error) {
 	client := h.oauthConfig.Client(ctx, token)
-
 	userinfoURL := h.endpoints.UserinfoEndpoint
 	if userinfoURL == "" {
 		userinfoURL = h.config.IssuerURL + "/userinfo"
@@ -251,13 +248,77 @@ func (h *Handler) fetchUserInfo(ctx context.Context, token *oauth2.Token) (*DaQu
 	if err := json.NewDecoder(resp.Body).Decode(&userInfo); err != nil {
 		return nil, fmt.Errorf("decode userinfo: %w", err)
 	}
-
 	return &userInfo, nil
 }
 
-// generateState generates a random state string for CSRF protection
+func (h *Handler) GetCurrentUser(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	email, _ := c.Get("user_email")
+	name, _ := c.Get("user_name")
+	if userID == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{"type": "authentication_error", "message": "not authenticated", "code": "unauthorized"}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"id":    userID,
+		"email": email,
+		"name":  name,
+	})
+}
+
+type refreshRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
+
+func (h *Handler) Refresh(c *gin.Context) {
+	var req refreshRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.RefreshToken == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request", "message": "missing refresh_token", "code": "invalid_request"}})
+		return
+	}
+	claims, err := ParseToken(h.config.JWTSecret, req.RefreshToken)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{"type": "authentication_error", "message": "invalid token", "code": "unauthorized"}})
+		return
+	}
+	if h.rdb.SIsMember(c.Request.Context(), "token:blacklist", claims.ID).Val() {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{"type": "authentication_error", "message": "token revoked", "code": "unauthorized"}})
+		return
+	}
+	accessToken, err := GenerateAccessToken(h.config.JWTSecret, claims.UserID, claims.DeptID, claims.DeptName, claims.Email, claims.Name, claims.Passport, claims.Role)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "token generation failed", "code": "internal"}})
+		return
+	}
+	refreshToken, err := GenerateRefreshToken(h.config.JWTSecret, claims.UserID, claims.Role)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "token generation failed", "code": "internal"}})
+		return
+	}
+	h.rdb.SAdd(c.Request.Context(), "token:blacklist", claims.ID)
+	c.JSON(http.StatusOK, gin.H{
+		"accessToken":  accessToken,
+		"refreshToken": refreshToken,
+	})
+}
+
+func (h *Handler) Logout(c *gin.Context) {
+	var req refreshRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.RefreshToken == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request", "message": "missing refresh_token", "code": "invalid_request"}})
+		return
+	}
+	claims, err := ParseToken(h.config.JWTSecret, req.RefreshToken)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{"type": "authentication_error", "message": "invalid token", "code": "unauthorized"}})
+		return
+	}
+	h.rdb.SAdd(c.Request.Context(), "token:blacklist", claims.ID)
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": nil})
+}
+
 func generateState() string {
-	b := make([]byte, 32)
+	b := make([]byte, 24)
 	rand.Read(b)
-	return base64.URLEncoding.EncodeToString(b)
+	return base64.RawURLEncoding.EncodeToString(b)
 }

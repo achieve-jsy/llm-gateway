@@ -93,8 +93,8 @@ func (s *OIDCService) HandleCallback(ctx context.Context, code string) (*OIDCUse
 		Sub:            stringValue(claims["sub"]),
 		Name:           stringValue(claims["name"]),
 		Email:          stringValue(claims["email"]),
-		DepartmentID:   stringValue(claims["department_id"]),
-		DepartmentName: stringValue(claims["department_name"]),
+		DepartmentID:   stringValue(claims["ehr_dept_id"]),
+		DepartmentName: stringValue(claims["ehr_dept_name"]),
 		Role:           role,
 	}, nil
 }

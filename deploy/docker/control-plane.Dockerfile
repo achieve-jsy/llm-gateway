@@ -1,5 +1,5 @@
 # ─── Stage 1: Build Go backend ───────────────────────────────────────────────
-FROM golang:1.23-alpine AS go-builder
+FROM 192.0.2.10:5000/golang:1.26-alpine AS go-builder
 
 RUN apk add --no-cache git ca-certificates
 

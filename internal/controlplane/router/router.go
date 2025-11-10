@@ -5,6 +5,7 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/auth"
@@ -33,8 +34,13 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
+	// 初始化依赖
+	settingsRepo := repository.NewSettingsRepo(db)
+	settingsSvc := service.NewSettingsService(settingsRepo)
+
 	// SSO/OAuth2 认证路由（无需认证）
 	authCfg := auth.LoadConfig()
+	applyOIDCFromDB(authCfg, settingsSvc)
 	authHandler, authErr := auth.NewHandler(authCfg, db, rdb)
 	if authErr != nil {
 		log.Printf("WARNING: SSO auth handler init failed: %v (SSO login disabled)", authErr)
@@ -61,7 +67,6 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	healthCheckRepo := repository.NewHealthCheckRepo(db)
 
 	keyRepo := repository.NewKeyRepo(db)
-	settingsRepo := repository.NewSettingsRepo(db)
 
 	if err := crypto.InitFromDB(db); err != nil {
 		slog.Warn("crypto key manager init failed", "error", err)
@@ -76,10 +81,13 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	modelSvc := service.NewModelService(modelRepo, providerRepo, publisher)
 	modelSvc.SetSnapshotRefresher(snapshotter)
 	internalSvc := service.NewInternalService(modelRepo, providerRepo)
-	healthCheckSvc := service.NewHealthCheckService(healthCheckRepo, providerRepo, modelRepo)
+	healthCheckSvc := service.NewHealthCheckService(healthCheckRepo, providerRepo, modelRepo, rdb)
 
 	keySvc := service.NewKeyService(keyRepo, service.NewEventPublisherAdapter(publisher))
-	settingsSvc := service.NewSettingsService(settingsRepo)
+
+	groupRepo := repository.NewGroupRepo(db)
+	groupSvc := service.NewGroupService(groupRepo)
+	groupHandler := handler.NewGroupHandler(groupSvc)
 
 	providerHandler := handler.NewProviderHandler(providerSvc)
 	modelHandler := handler.NewModelHandler(modelSvc)
@@ -136,6 +144,9 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 	// 启动健康检测调度器（优先使用环境变量 HEALTH_CHECK_INTERVAL 控制）
 	healthCheckSvc.StartBackground(context.Background())
+
+	// 内部调度器接口（X-Auth-Token 认证，在 handler 内自行校验）
+	r.GET("/api/v1/internal/groups", groupHandler.ListEnabledGroups)
 
 	// 管理接口组（JWT 认证）
 	adminGroup := r.Group("/api/v1")
@@ -218,9 +229,22 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		// :id（UUID）放最后，避免吃掉前面的静态路径
 		adminGroup.GET("/model-catalog/:id", catalogHandler.GetByID)
 
+		// 模型分组管理
+		adminGroup.POST("/groups", groupHandler.Create)
+		adminGroup.GET("/groups", groupHandler.List)
+		adminGroup.GET("/groups/:id", groupHandler.GetByID)
+		adminGroup.PUT("/groups/:id", groupHandler.Update)
+		adminGroup.DELETE("/groups/:id", groupHandler.Delete)
+		adminGroup.POST("/groups/:id/models", groupHandler.AddModels)
+		adminGroup.GET("/groups/:id/models", groupHandler.ListModels)
+		adminGroup.DELETE("/groups/:id/models/:model_id", groupHandler.RemoveModel)
+
 		// 系统设置
 		adminGroup.GET("/settings", settingsHandler.GetSystemSettings)
 		adminGroup.PUT("/settings", settingsHandler.UpdateSettings)
+		adminGroup.POST("/settings/test-webhook", settingsHandler.TestWebhook)
+		adminGroup.POST("/settings/export", settingsHandler.ExportSettings)
+		adminGroup.POST("/settings/import", settingsHandler.ImportSettings)
 	}
 
 	// 内部接口组（内部 Token 认证）
@@ -230,7 +254,43 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 internalGroup.GET("/models/available", internalHandler.ListAvailableModels)
 	internalGroup.GET("/models/health", internalHandler.GetModelHealth)
 	internalGroup.POST("/keys/verify", keyHandler.VerifyKey)
+	internalGroup.POST("/auth/verify-key", keyHandler.VerifyKey)
 	}
 
 	return r
+}
+
+func applyOIDCFromDB(cfg *auth.Config, settingsSvc *service.SettingsService) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	settings, err := settingsSvc.GetSystemSettings(ctx)
+	if err != nil || settings == nil {
+		return
+	}
+	if !settings.OIDCEnabled {
+		return
+	}
+	if settings.OIDCIssuerURL != "" {
+		cfg.IssuerURL = settings.OIDCIssuerURL
+	}
+	if settings.OIDCClientID != "" {
+		cfg.ClientID = settings.OIDCClientID
+	}
+	if settings.OIDCClientSecret != "" {
+		cfg.ClientSecret = settings.OIDCClientSecret
+	}
+	if settings.OIDCRedirectURL != "" {
+		cfg.RedirectURI = settings.OIDCRedirectURL
+	}
+	if settings.OIDCScopes != "" {
+		cfg.Scopes = splitScopes(settings.OIDCScopes)
+	}
+}
+
+func splitScopes(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Fields(strings.ReplaceAll(s, ",", " "))
 }

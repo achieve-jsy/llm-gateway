@@ -182,11 +182,12 @@ export interface TimelineGroup {
 
 export interface TimelineResult {
   lookback: string
+  total: number
   groups: TimelineGroup[]
 }
 
-export async function getHealthTimeline(lookback: string = '6h'): Promise<TimelineResult> {
-  const response = await http.get<ApiResponse<TimelineResult>>('/api/v1/health-check/timeline', { params: { lookback } })
+export async function getHealthTimeline(lookback: string = '6h', search: string = '', offset: number = 0, limit: number = 0): Promise<TimelineResult> {
+  const response = await http.get<ApiResponse<TimelineResult>>('/api/v1/health-check/timeline', { params: { lookback, search, offset, limit } })
   return response.data.data
 }
 
@@ -564,4 +565,17 @@ export async function getSystemSettings(): Promise<SettingsResponse> {
 
 export async function updateSystemSettings(settings: SystemSettings): Promise<void> {
   await http.put('/api/v1/settings', settings)
+}
+
+export async function testWebhook(): Promise<void> {
+  await http.post('/api/v1/settings/test-webhook')
+}
+
+export async function exportSettings(): Promise<Record<string, string>> {
+  const response = await http.post<{ code: number; data: Record<string, string> }>('/api/v1/settings/export')
+  return response.data.data
+}
+
+export async function importSettings(settings: Record<string, string>): Promise<void> {
+  await http.post('/api/v1/settings/import', settings)
 }

@@ -8,8 +8,24 @@
     </div>
 
     <div v-loading="settingsStore.loading" class="settings-content">
+      <!-- Tab Navigation -->
+      <div class="tab-nav-wrap">
+        <nav class="tab-nav">
+          <button
+            v-for="tab in tabs"
+            :key="tab.key"
+            type="button"
+            :class="['tab-btn', activeTab === tab.key && 'tab-btn-active']"
+            @click="activeTab = tab.key"
+          >
+            <span class="tab-btn-icon" v-html="tab.icon"></span>
+            <span>{{ tab.label }}</span>
+          </button>
+        </nav>
+      </div>
+
       <!-- 站点品牌 -->
-      <div class="settings-card">
+      <div v-show="activeTab === 'brand'" class="settings-card">
         <div class="card-header">
           <div class="card-title-row">
             <span class="card-icon">
@@ -59,7 +75,7 @@
       </div>
 
       <!-- 接入配置 -->
-      <div class="settings-card">
+      <div v-show="activeTab === 'access'" class="settings-card">
         <div class="card-header">
           <div class="card-title-row">
             <span class="card-icon">
@@ -98,6 +114,189 @@
         </div>
       </div>
 
+      <!-- 并发管控 -->
+      <div v-show="activeTab === 'concurrency'" class="settings-card">
+        <div class="card-header">
+          <div class="card-title-row">
+            <span class="card-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            </span>
+            <h3 class="card-title">并发管控</h3>
+          </div>
+          <p class="card-desc">控制 API 请求频率与并发数，防止资源过载，0 表示不限制</p>
+        </div>
+
+        <div class="card-body">
+          <div class="form-row form-row-3col">
+            <div class="form-group">
+              <label class="form-label">每分钟请求上限</label>
+              <el-input-number
+                v-model="form.rate_limit_per_minute"
+                :min="0"
+                :max="10000"
+                :step="10"
+                class="form-input-number"
+              />
+              <p class="form-hint">每个 API Key 每分钟最大请求数</p>
+            </div>
+            <div class="form-group">
+              <label class="form-label">单 Key 最大并发</label>
+              <el-input-number
+                v-model="form.max_concurrency_per_key"
+                :min="0"
+                :max="1000"
+                :step="1"
+                class="form-input-number"
+              />
+              <p class="form-hint">同一 Key 同时处理的最大请求数</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- OIDC 配置 -->
+      <div v-show="activeTab === 'oidc'" class="settings-card">
+        <div class="card-header">
+          <div class="card-title-row">
+            <span class="card-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            </span>
+            <h3 class="card-title">OIDC 配置</h3>
+          </div>
+          <p class="card-desc">配置 OIDC/SSO 单点登录参数，修改后需重启服务生效</p>
+        </div>
+
+        <div class="card-body">
+          <div class="form-group inline-toggle">
+            <label class="form-label">启用 OIDC 登录</label>
+            <el-switch v-model="form.oidc_enabled" />
+          </div>
+
+          <div v-show="form.oidc_enabled" class="form-section">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Issuer URL</label>
+                <el-input v-model="form.oidc_issuer_url" placeholder="https://sso.example.com" class="form-input mono" />
+                <p class="form-hint">OIDC Provider 的 issuer 地址</p>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Redirect URL</label>
+                <el-input v-model="form.oidc_redirect_url" placeholder="http://localhost:8082/auth/oidc/callback" class="form-input mono" />
+                <p class="form-hint">OAuth2 回调地址</p>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Client ID</label>
+                <el-input v-model="form.oidc_client_id" placeholder="your-client-id" class="form-input" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Client Secret</label>
+                <el-input v-model="form.oidc_client_secret" placeholder="已保存时为空" type="password" show-password class="form-input" />
+                <p class="form-hint">留空则不修改已保存的 Secret</p>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Scopes</label>
+              <el-input v-model="form.oidc_scopes" placeholder="openid profile email" class="form-input" />
+              <p class="form-hint">OAuth2 授权范围，空格分隔</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Webhook 通知 -->
+      <div v-show="activeTab === 'webhook'" class="settings-card">
+        <div class="card-header">
+          <div class="card-title-row">
+            <span class="card-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            </span>
+            <h3 class="card-title">Webhook 通知</h3>
+          </div>
+          <p class="card-desc">配置事件通知 Webhook，当监控事件发生时自动推送</p>
+        </div>
+
+        <div class="card-body">
+          <div class="form-group inline-toggle">
+            <label class="form-label">启用 Webhook</label>
+            <el-switch v-model="form.webhook_enabled" />
+          </div>
+
+          <div v-show="form.webhook_enabled" class="form-section">
+            <div class="form-group">
+              <label class="form-label">Webhook URL</label>
+              <el-input v-model="form.webhook_url" placeholder="https://hooks.example.com/notify" class="form-input mono" />
+              <p class="form-hint">接收通知的目标地址</p>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">签名密钥</label>
+                <el-input v-model="form.webhook_secret" placeholder="留空则不签名" type="password" show-password class="form-input mono" />
+                <p class="form-hint">用于 HMAC-SHA256 签名的密钥</p>
+              </div>
+              <div class="form-group">
+                <label class="form-label">通知事件</label>
+                <el-select v-model="selectedEvents" multiple placeholder="选择事件类型" class="form-select">
+                  <el-option label="健康检查失败" value="health_check_failed" />
+                  <el-option label="健康检查恢复" value="health_check_recovered" />
+                  <el-option label="Key 即将过期" value="key_expiring" />
+                  <el-option label="Key 已过期" value="key_expired" />
+                </el-select>
+                <p class="form-hint">选择需要通知的事件类型，可多选</p>
+              </div>
+            </div>
+            <el-button :loading="testingWebhook" @click="handleTestWebhook">
+              <template #icon>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+              </template>
+              发送测试通知
+            </el-button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 数据管理 -->
+      <div v-show="activeTab === 'data'" class="settings-card">
+        <div class="card-header">
+          <div class="card-title-row">
+            <span class="card-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+            </span>
+            <h3 class="card-title">数据管理</h3>
+          </div>
+          <p class="card-desc">导出当前所有设置项为 JSON 备份文件，或从备份文件恢复设置</p>
+        </div>
+
+        <div class="card-body">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">导出配置</label>
+              <el-button :loading="exporting" @click="handleExport">
+                <template #icon>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                </template>
+                导出 JSON
+              </el-button>
+              <p class="form-hint">下载当前所有设置项为 JSON 文件</p>
+            </div>
+            <div class="form-group">
+              <label class="form-label">导入配置</label>
+              <div class="import-group">
+                <el-button :loading="importing" @click="triggerImport">
+                  <template #icon>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                  </template>
+                  导入 JSON
+                </el-button>
+                <input ref="importInputRef" type="file" accept=".json" class="hidden-input" @change="handleImport" />
+              </div>
+              <p class="form-hint">选择备份的 JSON 文件恢复设置（合并模式，不删除已有配置）</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- 操作栏 -->
       <div class="action-bar">
         <div class="action-status">
@@ -122,16 +321,43 @@
 import { reactive, ref, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useSettingsStore } from '@/stores/settings'
+import { exportSettings, importSettings } from '@/services/control-plane'
 import ImageUpload from '@/components/common/ImageUpload.vue'
 
 const settingsStore = useSettingsStore()
 const saving = ref(false)
+const testingWebhook = ref(false)
+const exporting = ref(false)
+const importing = ref(false)
+const importInputRef = ref<HTMLInputElement>()
+const activeTab = ref('brand')
+
+const tabs = [
+  { key: 'brand', label: '站点品牌', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>' },
+  { key: 'access', label: '接入配置', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10"/></svg>' },
+  { key: 'concurrency', label: '并发管控', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>' },
+  { key: 'oidc', label: 'OIDC 配置', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>' },
+  { key: 'webhook', label: 'Webhook', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>' },
+  { key: 'data', label: '数据管理', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>' },
+]
 
 const form = reactive({
   site_name: '',
   site_logo: '',
   site_subtitle: '',
   api_base_url: '',
+  rate_limit_per_minute: 60,
+  max_concurrency_per_key: 10,
+  oidc_issuer_url: '',
+  oidc_client_id: '',
+  oidc_client_secret: '',
+  oidc_redirect_url: '',
+  oidc_scopes: 'openid profile email',
+  oidc_enabled: false,
+  webhook_enabled: false,
+  webhook_url: '',
+  webhook_secret: '',
+  webhook_events: 'health_check_failed',
 })
 
 const initialForm = reactive({
@@ -139,15 +365,23 @@ const initialForm = reactive({
   site_logo: '',
   site_subtitle: '',
   api_base_url: '',
+  rate_limit_per_minute: 60,
+  max_concurrency_per_key: 10,
+  oidc_issuer_url: '',
+  oidc_client_id: '',
+  oidc_client_secret: '',
+  oidc_redirect_url: '',
+  oidc_scopes: 'openid profile email',
+  oidc_enabled: false,
+  webhook_enabled: false,
+  webhook_url: '',
+  webhook_secret: '',
+  webhook_events: 'health_check_failed',
 })
 
-const formChanged = computed(() => {
-  return (
-    form.site_name !== initialForm.site_name ||
-    form.site_logo !== initialForm.site_logo ||
-    form.site_subtitle !== initialForm.site_subtitle ||
-    form.api_base_url !== initialForm.api_base_url
-  )
+const selectedEvents = computed({
+  get: () => form.webhook_events ? form.webhook_events.split(',').filter(Boolean) : [],
+  set: (val: string[]) => { form.webhook_events = val.join(',') }
 })
 
 const resolvedBaseUrl = computed(() => {
@@ -156,11 +390,44 @@ const resolvedBaseUrl = computed(() => {
   return window.location.origin
 })
 
+const formChanged = computed(() => {
+  return (
+    form.site_name !== initialForm.site_name ||
+    form.site_logo !== initialForm.site_logo ||
+    form.site_subtitle !== initialForm.site_subtitle ||
+    form.api_base_url !== initialForm.api_base_url ||
+    form.rate_limit_per_minute !== initialForm.rate_limit_per_minute ||
+    form.max_concurrency_per_key !== initialForm.max_concurrency_per_key ||
+    form.oidc_issuer_url !== initialForm.oidc_issuer_url ||
+    form.oidc_client_id !== initialForm.oidc_client_id ||
+    form.oidc_client_secret !== initialForm.oidc_client_secret ||
+    form.oidc_redirect_url !== initialForm.oidc_redirect_url ||
+    form.oidc_scopes !== initialForm.oidc_scopes ||
+    form.oidc_enabled !== initialForm.oidc_enabled ||
+    form.webhook_enabled !== initialForm.webhook_enabled ||
+    form.webhook_url !== initialForm.webhook_url ||
+    form.webhook_secret !== initialForm.webhook_secret ||
+    form.webhook_events !== initialForm.webhook_events
+  )
+})
+
 function setFormValues(source: typeof form) {
   form.site_name = source.site_name
   form.site_logo = source.site_logo
   form.site_subtitle = source.site_subtitle
   form.api_base_url = source.api_base_url
+  form.rate_limit_per_minute = source.rate_limit_per_minute
+  form.max_concurrency_per_key = source.max_concurrency_per_key
+  form.oidc_issuer_url = source.oidc_issuer_url
+  form.oidc_client_id = source.oidc_client_id
+  form.oidc_client_secret = source.oidc_client_secret
+  form.oidc_redirect_url = source.oidc_redirect_url
+  form.oidc_scopes = source.oidc_scopes
+  form.oidc_enabled = source.oidc_enabled
+  form.webhook_enabled = source.webhook_enabled
+  form.webhook_url = source.webhook_url
+  form.webhook_secret = source.webhook_secret
+  form.webhook_events = source.webhook_events
 }
 
 function captureInitial() {
@@ -168,6 +435,18 @@ function captureInitial() {
   initialForm.site_logo = form.site_logo
   initialForm.site_subtitle = form.site_subtitle
   initialForm.api_base_url = form.api_base_url
+  initialForm.rate_limit_per_minute = form.rate_limit_per_minute
+  initialForm.max_concurrency_per_key = form.max_concurrency_per_key
+  initialForm.oidc_issuer_url = form.oidc_issuer_url
+  initialForm.oidc_client_id = form.oidc_client_id
+  initialForm.oidc_client_secret = form.oidc_client_secret
+  initialForm.oidc_redirect_url = form.oidc_redirect_url
+  initialForm.oidc_scopes = form.oidc_scopes
+  initialForm.oidc_enabled = form.oidc_enabled
+  initialForm.webhook_enabled = form.webhook_enabled
+  initialForm.webhook_url = form.webhook_url
+  initialForm.webhook_secret = form.webhook_secret
+  initialForm.webhook_events = form.webhook_events
 }
 
 onMounted(async () => {
@@ -178,6 +457,16 @@ onMounted(async () => {
     form.site_logo = s.site_logo || ''
     form.site_subtitle = s.site_subtitle || ''
     form.api_base_url = s.api_base_url || ''
+    form.rate_limit_per_minute = s.rate_limit_per_minute ?? 60
+    form.max_concurrency_per_key = s.max_concurrency_per_key ?? 10
+    form.oidc_issuer_url = s.oidc_issuer_url || ''
+    form.oidc_client_id = s.oidc_client_id || ''
+    form.oidc_redirect_url = s.oidc_redirect_url || ''
+    form.oidc_scopes = s.oidc_scopes || 'openid profile email'
+    form.oidc_enabled = s.oidc_enabled ?? false
+    form.webhook_enabled = s.webhook_enabled ?? false
+    form.webhook_url = s.webhook_url || ''
+    form.webhook_events = s.webhook_events || 'health_check_failed'
   }
   captureInitial()
 })
@@ -190,6 +479,18 @@ async function handleSave() {
       site_logo: form.site_logo,
       site_subtitle: form.site_subtitle.trim(),
       api_base_url: form.api_base_url.trim(),
+      rate_limit_per_minute: form.rate_limit_per_minute,
+      max_concurrency_per_key: form.max_concurrency_per_key,
+      oidc_issuer_url: form.oidc_issuer_url.trim(),
+      oidc_client_id: form.oidc_client_id.trim(),
+      oidc_client_secret: form.oidc_client_secret,
+      oidc_redirect_url: form.oidc_redirect_url.trim(),
+      oidc_scopes: form.oidc_scopes.trim(),
+      oidc_enabled: form.oidc_enabled,
+      webhook_enabled: form.webhook_enabled,
+      webhook_url: form.webhook_url.trim(),
+      webhook_secret: form.webhook_secret,
+      webhook_events: form.webhook_events,
     })
     if (ok) {
       ElMessage.success('设置已保存')
@@ -207,12 +508,75 @@ async function handleSave() {
 function handleReset() {
   setFormValues(initialForm)
 }
+
+async function handleTestWebhook() {
+  if (!form.webhook_url) {
+    ElMessage.warning('请先填写 Webhook URL')
+    return
+  }
+  testingWebhook.value = true
+  try {
+    await settingsStore.testWebhook()
+    ElMessage.success('测试通知发送成功')
+  } catch {
+    ElMessage.error('测试通知发送失败，请检查 URL 是否正确')
+  } finally {
+    testingWebhook.value = false
+  }
+}
+
+async function handleExport() {
+  exporting.value = true
+  try {
+    const data = await exportSettings()
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `llm-gateway-settings-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success('配置已导出')
+  } catch {
+    ElMessage.error('导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
+
+function triggerImport() {
+  importInputRef.value?.click()
+}
+
+async function handleImport(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+
+  importing.value = true
+  try {
+    const text = await file.text()
+    const settings = JSON.parse(text)
+    if (typeof settings !== 'object' || Array.isArray(settings)) {
+      ElMessage.error('无效的 JSON 格式，应为 key-value 对象')
+      return
+    }
+    await importSettings(settings)
+    ElMessage.success('配置已导入，正在刷新...')
+    setTimeout(() => { window.location.reload() }, 800)
+  } catch {
+    ElMessage.error('导入失败，请检查文件格式')
+  } finally {
+    importing.value = false
+    input.value = ''
+  }
+}
 </script>
 
 <style scoped>
 .settings-page {
   padding: 0;
-  max-width: 720px;
+  width: 100%;
 }
 
 .page-header {
@@ -231,6 +595,69 @@ function handleReset() {
   color: var(--el-text-color-secondary);
   font-size: 14px;
   margin: 0;
+}
+
+/* ===== Tab 导航 ===== */
+.tab-nav-wrap {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--el-bg-color);
+  margin: 0 -24px;
+  padding: 0 24px;
+}
+
+.tab-nav {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  border-bottom: 2px solid var(--el-border-color-lighter);
+  padding-bottom: 0;
+  scrollbar-width: none;
+}
+
+.tab-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border: none;
+  background: none;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.tab-btn:hover {
+  color: var(--el-text-color-primary);
+}
+
+.tab-btn-active {
+  color: var(--el-color-primary);
+  border-bottom-color: var(--el-color-primary);
+}
+
+.tab-btn-icon {
+  display: flex;
+  align-items: center;
+  opacity: 0.7;
+}
+
+.tab-btn-active .tab-btn-icon {
+  opacity: 1;
+}
+
+.tab-nav + .settings-card {
+  margin-top: 20px;
 }
 
 /* ===== 卡片 ===== */
@@ -329,6 +756,23 @@ function handleReset() {
   font-size: 13px;
 }
 
+.form-input-number {
+  width: 100%;
+}
+
+.form-input-number :deep(.el-input__wrapper) {
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px var(--el-border-color) inset;
+}
+
+.form-input-number :deep(.el-input__wrapper:hover) {
+  box-shadow: 0 0 0 1px var(--el-border-color-darker) inset;
+}
+
+.form-input-number :deep(.el-input__wrapper.is-focus) {
+  box-shadow: 0 0 0 1px var(--el-color-primary) inset;
+}
+
 .input-prefix-icon {
   display: flex;
   align-items: center;
@@ -353,14 +797,53 @@ function handleReset() {
   color: var(--el-text-color-secondary);
 }
 
+.inline-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.inline-toggle .form-label {
+  margin-bottom: 0;
+}
+
+.form-section {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.form-select {
+  width: 100%;
+}
+
+.form-select :deep(.el-select__wrapper) {
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px var(--el-border-color) inset;
+}
+
+.import-group {
+  display: flex;
+  align-items: center;
+}
+
+.hidden-input {
+  display: none;
+}
+
 .form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 20px;
 }
 
-@media (max-width: 600px) {
-  .form-row {
+.form-row-3col {
+  grid-template-columns: 1fr 1fr;
+}
+
+@media (max-width: 768px) {
+  .form-row,
+  .form-row-3col {
     grid-template-columns: 1fr;
   }
 }
@@ -372,6 +855,7 @@ function handleReset() {
   background: var(--el-fill-color-lighter);
   border-radius: 8px;
   border: 1px solid var(--el-border-color-lighter);
+  overflow-x: auto;
 }
 
 .preview-label {
@@ -437,5 +921,198 @@ function handleReset() {
 .action-buttons {
   display: flex;
   gap: 8px;
+}
+
+/* ===== 响应式 ===== */
+
+/* 平板端 (≤1024px) */
+@media (max-width: 1024px) {
+  .card-header {
+    padding: 16px 20px 14px;
+  }
+
+  .card-body {
+    padding: 16px 20px 20px;
+  }
+
+  .card-desc {
+    margin-left: 42px;
+  }
+
+  .form-row {
+    gap: 16px;
+  }
+
+  .action-bar {
+    padding: 14px 20px;
+  }
+}
+
+/* 小屏端 (≤768px) */
+@media (max-width: 768px) {
+  .page-header {
+    margin-bottom: 20px;
+  }
+
+  .page-title {
+    font-size: 20px;
+  }
+
+  .page-desc {
+    font-size: 13px;
+  }
+
+  .tab-nav-wrap {
+    margin: 0 -16px;
+    padding: 0 16px;
+  }
+
+  .tab-btn {
+    padding: 8px 12px;
+    font-size: 12px;
+    gap: 4px;
+  }
+
+  .tab-btn svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .settings-content {
+    gap: 16px;
+  }
+
+  .settings-card {
+    border-radius: 10px;
+  }
+
+  .card-header {
+    padding: 14px 16px 12px;
+  }
+
+  .card-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+  }
+
+  .card-icon svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  .card-title {
+    font-size: 15px;
+  }
+
+  .card-desc {
+    font-size: 12px;
+    margin-left: 38px;
+  }
+
+  .card-body {
+    padding: 14px 16px 18px;
+  }
+
+  .form-group {
+    margin-bottom: 16px;
+  }
+
+  .action-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 14px 16px;
+    border-radius: 10px;
+  }
+
+  .action-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .action-buttons :deep(.el-button) {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .preview-box {
+    padding: 12px 14px;
+  }
+
+  .preview-url {
+    font-size: 12px;
+  }
+}
+
+/* 手机端 (≤480px) */
+@media (max-width: 480px) {
+  .page-title {
+    font-size: 18px;
+  }
+
+  .settings-content {
+    gap: 12px;
+  }
+
+  .settings-card {
+    border-radius: 8px;
+  }
+
+  .card-header {
+    padding: 12px 12px 10px;
+  }
+
+  .card-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+  }
+
+  .card-icon svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  .card-title {
+    font-size: 14px;
+  }
+
+  .card-desc {
+    font-size: 12px;
+    margin-left: 34px;
+  }
+
+  .card-body {
+    padding: 12px 12px 16px;
+  }
+
+  .form-label {
+    font-size: 12px;
+  }
+
+  .form-input :deep(.el-input__inner) {
+    font-size: 14px;
+  }
+
+  .preview-url {
+    font-size: 11px;
+  }
+
+  .action-bar {
+    padding: 12px;
+    border-radius: 8px;
+    bottom: 12px;
+  }
+
+  .action-buttons {
+    grid-template-columns: 1fr;
+  }
+
+  .action-status {
+    justify-content: center;
+    font-size: 12px;
+  }
 }
 </style>

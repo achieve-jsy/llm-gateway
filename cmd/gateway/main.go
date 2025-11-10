@@ -20,6 +20,7 @@ import (
 	authhandler "github.com/example/llm-gateway/internal/auth/handler"
 	authsvc "github.com/example/llm-gateway/internal/auth/service"
 
+	"github.com/example/llm-gateway/internal/gateway/cache"
 	"github.com/example/llm-gateway/internal/gateway/config"
 	"github.com/example/llm-gateway/internal/gateway/infra"
 	"github.com/example/llm-gateway/internal/gateway/model"
@@ -29,6 +30,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/provider/bedrock"
 	"github.com/example/llm-gateway/internal/gateway/provider/deepseek"
 	"github.com/example/llm-gateway/internal/gateway/provider/litellm"
+	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/example/llm-gateway/internal/gateway/server"
 	"github.com/redis/go-redis/v9"
 )
@@ -55,7 +57,7 @@ func main() {
 	}
 
 	// 初始化缓存
-	cache := infra.NewCache(rdb)
+	icache := infra.NewCache(rdb)
 
 	// 初始化 OTLP Tracer
 	shutdown, err := infra.InitTracer(cfg.OTLP)
@@ -104,6 +106,25 @@ func main() {
 
 	go subscriber.Start(ctx)
 
+	// 初始化 Scheduler
+	var sch *scheduler.Scheduler
+	var nameCache *cache.GroupNameCache
+	if controlPlaneURL != "" {
+		sch, err = scheduler.New(scheduler.DefaultConfig(controlPlaneURL))
+		if err != nil {
+			slog.Warn("failed to create scheduler", "error", err)
+		} else {
+			sch.Start(ctx)
+			defer sch.Shutdown()
+			slog.Info("scheduler started")
+
+			// 初始化模型组名称缓存
+			nameCache = cache.NewGroupNameCache()
+			go refreshGroupNameCache(ctx, nameCache, controlPlaneURL)
+			slog.Info("group name cache started")
+		}
+	}
+
 	// 处理优雅退出信号
 	go func() {
 		sigCh := make(chan os.Signal, 1)
@@ -131,7 +152,7 @@ func main() {
 	authInternalHandler := authhandler.NewInternalHandler(authKeyAuthSvc)
 
 	// 初始化路由（注入依赖）
-	r := server.Setup(registry, cache, state, authClient, controlPlaneURL, internalToken)
+	r := server.Setup(registry, icache, state, authClient, controlPlaneURL, internalToken, sch, nameCache)
 
 	// Register auth routes
 	r.GET("/.well-known/jwks.json", authJWKSHandler.GetJWKS)
@@ -143,6 +164,25 @@ func main() {
 	slog.Info("gateway starting", "port", cfg.Server.Port)
 	if err := r.Run(":" + cfg.Server.Port); err != nil {
 		log.Fatalf("failed to start server: %v", err)
+	}
+}
+
+func refreshGroupNameCache(ctx context.Context, nc *cache.GroupNameCache, controlPlaneURL string) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	// 立即执行一次
+	nc.Refresh(ctx, controlPlaneURL)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := nc.Refresh(ctx, controlPlaneURL); err != nil {
+				slog.Warn("group name cache refresh failed", "error", err)
+			}
+		}
 	}
 }
 

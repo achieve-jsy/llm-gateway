@@ -5,7 +5,10 @@ import { useSettingsStore } from '@/stores/settings'
 vi.mock('@/services/control-plane', () => ({
   getPublicSettings: vi.fn(),
   getSystemSettings: vi.fn(),
-  updateSystemSettings: vi.fn()
+  updateSystemSettings: vi.fn(),
+  testWebhook: vi.fn(),
+  exportSettings: vi.fn(),
+  importSettings: vi.fn(),
 }))
 
 import { getPublicSettings, getSystemSettings, updateSystemSettings } from '@/services/control-plane'
@@ -47,13 +50,27 @@ describe('useSettingsStore', () => {
         site_name: 'LLM Gateway',
         site_logo: '',
         site_subtitle: '',
-        api_base_url: ''
+        api_base_url: '',
+        rate_limit_per_minute: 60,
+        max_concurrency_per_key: 10,
       })
       expect(store.systemSettings).toEqual({
         site_name: 'LLM Gateway',
         site_logo: '',
         site_subtitle: '',
-        api_base_url: ''
+        api_base_url: '',
+        rate_limit_per_minute: 60,
+        max_concurrency_per_key: 10,
+        oidc_issuer_url: '',
+        oidc_client_id: '',
+        oidc_client_secret: '',
+        oidc_redirect_url: '',
+        oidc_scopes: 'openid profile email',
+        oidc_enabled: false,
+        webhook_enabled: false,
+        webhook_url: '',
+        webhook_secret: '',
+        webhook_events: 'health_check_failed',
       })
     })
   })

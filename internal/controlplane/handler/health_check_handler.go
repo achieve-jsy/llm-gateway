@@ -204,7 +204,9 @@ func (h *HealthCheckHandler) GetTimeline(c *gin.Context) {
 		lookback = "6h"
 	}
 	search := c.Query("search")
-	result, err := h.svc.GetTimeline(lookback, search)
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "0"))
+	result, err := h.svc.GetTimeline(lookback, search, offset, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"message": "failed to get timeline"}})
 		return

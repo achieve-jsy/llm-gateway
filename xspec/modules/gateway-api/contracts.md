@@ -545,6 +545,7 @@ flowchart TD
 | :--- | :--- | :--- | :--- |
 | v1.0.0 | 2026-05-21 | OpenCode | 初始版本，定义 OpenAI 兼容接口契约 |
 | v1.1.0 | 2026-05-25 | 新增 GET /v1/me/models 端点 — CHG-20260523-001 | OpenCode |
+| v1.2.0 | 2026-05-26 | 新增组名调用 + 故障切换错误码 — CHG-20260525-001 | OpenCode |
 
 ---
 
@@ -867,3 +868,284 @@ curl -s https://gateway.example.com/v1/me/models \
 | 旧格式 Key | 立即废弃 | 不再接受无 `sk-` 前缀的 API Key |
 | `/v1/models` 全量返回 | 立即变更 | 改为基于身份过滤，无过渡期 |
 | `/v1/me/models` | 立即可用 | 与变更同时上线 |
+
+---
+
+## 11. 变更记录 — CHG-20260525-001
+
+## 变更摘要
+
+`POST /v1/chat/completions` 端点的 `model` 字段新增语义：除接受直接模型名外，现也可接受模型组名。组名经 scheduler 路由后解析为目标模型，调用方无感知。流式响应行为、错误响应格式、认证方式均不变。新增三个与模型组相关的错误码。
+
+---
+
+## 1. 行为变更 — 现有接口
+
+### 1.1 POST /v1/chat/completions — model 字段语义变更
+
+**变更要点**：`model` 字段从仅接受模型名扩展为可接受模型组名或模型名。Gateway 内部自动判定并路由，调用方无需修改请求体结构。
+
+#### 请求变更
+
+| 维度 | 变更前 | 变更后 |
+| :--- | :--- | :--- |
+| `model` 字段语义 | 仅接受具体模型标识（如 `qwen-plus`、`deepseek-chat`） | 接受模型标识或模型组名（如 `日常推理`、`代码生成`） |
+| 组名定义 | 无概念 | 由 control-plane 管理的模型组，组内包含多个可路由模型 |
+| 路由逻辑 | 前缀匹配 Provider→直连调用 | 先判定组名/模型名；组名→scheduler 路由→Provider 调用 |
+| 调用失败处理 | 立即返回错误 | 组名调用时自动 failover 一次（切换组内其他模型）；模型名调用行为不变 |
+
+**Body 格式无变化**，调用方无需新增任何字段。组名作为 `model` 字段的值传入即可：
+
+```json
+// 组名调用 — 与模型名调用使用完全相同的请求格式
+{
+  "model": "日常推理",
+  "messages": [
+    {"role": "user", "content": "介绍一下大语言模型"}
+  ],
+  "stream": false
+}
+```
+
+**Headers 无变化**。Authorization、Content-Type、X-Request-ID 均沿用现有约定。
+
+#### 响应变更
+
+**成功响应无变化**。组名调用成功返回的 `model` 字段值为 scheduler 实际选中的目标模型 ID（如 `qwen-plus`），与直接传模型名的响应语义一致：
+
+```json
+{
+  "id": "chatcmpl-abc123",
+  "object": "chat.completion",
+  "created": 1716249600,
+  "model": "qwen-plus",
+  "choices": [...],
+  "usage": {...}
+}
+```
+
+> 调用方可通过日志或监控获取组名与选中模型的映射关系。`model` 字段返回的是实际调用的模型而非请求中的组名，这一行为对应 AC-GINV-01："返回与直接传模型名语义一致的结果"。
+
+#### 鉴权行为
+
+组名调用经过与模型名调用完全相同的鉴权中间件（API Key → User → Department），鉴权失败的行为无变化。
+
+#### 错误响应变更
+
+组名调用新增以下错误场景，原有错误码保持不变：
+
+| HTTP 码 | error.type | error.code | 场景 | 触发条件 |
+| :--- | :--- | :--- | :--- | :--- |
+| 404 | `group_not_found` | `group_not_found` | 请求的模型组不存在 | GroupNameCache 未命中 且 scheduler 查询确认不存在 |
+| 503 | `model_unavailable` | `no_available_model` | 模型组内无可用模型 | scheduler.Route 返回无可用模型 |
+| 503 | `model_unavailable` | `no_other_model_available` | 首次调用失败且切换后也无可用模型 | scheduler.Failover 返回无其他可用模型 |
+
+**完整错误响应示例**：
+
+```json
+// 模型组不存在
+{
+  "error": {
+    "type": "group_not_found",
+    "message": "模型组 '不存在的组' 不存在，请检查组名是否正确",
+    "code": "group_not_found"
+  }
+}
+```
+
+```json
+// 模型组无可用模型
+{
+  "error": {
+    "type": "model_unavailable",
+    "message": "模型组 '日常推理' 当前无可用模型，请稍后重试",
+    "code": "no_available_model"
+  }
+}
+```
+
+```json
+// 模型组无其他可用模型（切换失败）
+{
+  "error": {
+    "type": "model_unavailable",
+    "message": "模型组 '日常推理' 内无其他可用模型可供切换",
+    "code": "no_other_model_available"
+  }
+}
+```
+
+---
+
+### 1.2 GET /v1/models — 行为不变
+
+**无变更**。`GET /v1/models` 仍返回当前认证用户可用的**个体模型列表**，不返回模型组信息。
+
+| 维度 | 说明 |
+| :--- | :--- |
+| 返回内容 | 基于 `dept_id` 过滤后的可用模型列表（与 v1.1 行为一致） |
+| 模型组信息 | **不返回**。模型组列表通过 `GET /v1/me/models`（已有）查询，其响应将在后续变更中由 control-plane/ops-console 扩展 |
+| 向后兼容 | 完全保持 v1.1 行为，已有调用方无需改动 |
+
+### 1.3 GET /v1/me/models — 不变
+
+**无变更**。`GET /v1/me/models` 端点继续返回基于当前身份过滤后的模型列表。模型组维度的查询由 control-plane 管理端提供，不在此端点中暴露。
+
+---
+
+## 2. 新增错误响应
+
+### 2.1 错误码扩充
+
+在原有错误码表基础上新增以下错误码，归入**模型组相关（新增分类）**：
+
+| HTTP 码 | error.type | error.code | 含义 | 触发条件 | 处理建议 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **404** | **`group_not_found`** | **`group_not_found`** | **请求的模型组不存在** | **GroupNameCache 未命中 + scheduler 查询也未找到该组** | **确认组名是否正确；调用 GET /v1/me/models 确认可用模型组** |
+| **503** | **`model_unavailable`** | **`no_available_model`** | **模型组内当前无可用模型** | **scheduler.Route 返回该组所有模型均不健康/离线** | **稍后重试；若持续出现，联系管理员检查组配置** |
+| **503** | **`model_unavailable`** | **`no_other_model_available`** | **调用失败且组内无其他模型可切换** | **首次调用失败 + scheduler.Failover 返回无其他健康模型** | **稍后重试；与 no_available_model 处理方式相同** |
+
+### 2.2 变更后完整错误码表
+
+#### 输入错误类（调用方应修正请求）
+
+| HTTP 码 | error.type | error.code | 含义 | 处理建议 |
+| :--- | :--- | :--- | :--- | :--- |
+| 400 | `invalid_request_error` | `invalid_json` | 请求体 JSON 格式错误 | 检查 JSON 语法 |
+| 400 | `invalid_request_error` | `missing_required_field` | 缺少必填字段 | 补充 model/messages 等必填字段 |
+| 400 | `invalid_request_error` | `invalid_field_value` | 字段值不合法 | 修正参数值 |
+| 400 | `invalid_request_error` | `empty_messages` | messages 数组为空 | 至少提供一条消息 |
+| 400 | `invalid_request_error` | `too_many_messages` | messages 超过 256 条 | 减少对话历史长度 |
+| 400 | `invalid_request_error` | `request_too_large` | 请求体超过 1MB | 缩减请求体大小 |
+
+#### 认证不可用类（调用方应修正认证或稍后重试）
+
+| HTTP 码 | error.type | error.code | 含义 | 处理建议 |
+| :--- | :--- | :--- | :--- | :--- |
+| 401 | `authentication_error` | `missing_api_key` | 未提供 API Key | 添加 Authorization Header |
+| 401 | `authentication_error` | `invalid_api_key` | API Key 格式非法或不存在 | 确认 Key 格式：`sk-{32+ chars}` |
+| 401 | `authentication_error` | `key_disabled` | API Key 已被禁用 | 联系管理员 |
+| 503 | `service_unavailable` | `auth_service_unavailable` | 鉴权服务暂时不可用 | 稍后重试 |
+
+#### 模型组相关（新增分类）
+
+| HTTP 码 | error.type | error.code | 含义 | 处理建议 |
+| :--- | :--- | :--- | :--- | :--- |
+| **404** | **`group_not_found`** | **`group_not_found`** | **模型组不存在** | **确认组名是否正确** |
+| **503** | **`model_unavailable`** | **`no_available_model`** | **模型组内无可用模型** | **稍后重试** |
+| **503** | **`model_unavailable`** | **`no_other_model_available`** | **调用失败后切换也无可用模型** | **稍后重试** |
+
+#### 模型不可用类（调用方应换模型或稍后重试）
+
+| HTTP 码 | error.type | error.code | 含义 | 处理建议 |
+| :--- | :--- | :--- | :--- | :--- |
+| 404 | `model_not_found` | `unknown_model` | 请求模型未注册 | 调用 GET /v1/me/models 确认可用模型 |
+| 503 | `model_unavailable` | `model_disabled` | 模型已被管理员禁用 | 更换模型或稍后重试 |
+| 503 | `model_unavailable` | `model_offline` | 模型临时下线维护 | 稍后重试 |
+
+#### 临时失败类（调用方应重试）
+
+| HTTP 码 | error.type | error.code | 含义 | 处理建议 |
+| :--- | :--- | :--- | :--- | :--- |
+| 502 | `upstream_error` | `provider_error` | 厂商 API 返回错误 | 稍后重试 |
+| 502 | `upstream_error` | `provider_rate_limited` | 厂商限流 | 降低调用频率后重试 |
+| 502 | `upstream_error` | `stream_interrupted` | 流式传输中途中断 | 重新发起请求 |
+| 504 | `upstream_timeout` | `provider_timeout` | 厂商 API 响应超时 | 稍后重试 |
+| 500 | `internal_error` | `unexpected_error` | 网关内部非预期异常 | 联系网关管理员 |
+
+> 新增/变更错误码以粗体标注。其中 `group_not_found` 为新增 error.type，其余两个为 `model_unavailable` 下的新增 error.code。
+
+---
+
+## 3. 行为不变保证
+
+### 3.1 模型名直连行为完全不变
+
+当请求中的 `model` 字段为直接模型名（在 GroupNameCache 中未命中时），gateway-api 的处理行为与变更前**完全一致**：
+
+| 维度 | 保证内容 |
+| :--- | :--- |
+| 路由逻辑 | 走原有 Orchestrator → Provider Registry 前缀匹配 → Provider 调用链路 |
+| 模型可用性校验 | 走原有 Redis GET `model:available:{id}` 校验逻辑 |
+| 错误码 | 模型不存在返回 `unknown_model`；模型不可用返回 `model_offline` 或 `model_disabled` |
+| 调用失败处理 | 不触发 failover，立即返回错误 |
+| 响应格式 | 成功/错误响应的 JSON 结构完全不变 |
+
+### 3.2 错误响应格式兼容性
+
+新增的错误响应沿用现有统一错误体格式：
+
+```json
+{
+  "error": {
+    "type": "...",
+    "message": "...",
+    "code": "..."
+  }
+}
+```
+
+`error.type` 新增 `group_not_found`；`error.code` 新增三个 code 值。均为**兼容性增量扩展**，不破坏现有 error.code 的解析逻辑。调用方若只处理已知 error.code 集，新增 code 不会导致解析异常。
+
+### 3.3 流式响应行为不变
+
+| 维度 | 保证内容 |
+| :--- | :--- |
+| SSE 格式 | `data: {JSON}\n\n` 格式不变；`data: [DONE]\n\n` 结束标记不变 |
+| chunk 结构 | `ChatCompletionChunk` 字段不变 |
+| 流式错误 | SSE `event: error` 事件格式不变 |
+| failover 行为 | 流式调用中途失败**不触发切换重试**（数据已部分发送给客户端，无法透明重试） |
+| 连接管理 | 连接超时、chunk 间隔超时行为不变 |
+
+### 3.4 认证方式不变
+
+| 维度 | 保证内容 |
+| :--- | :--- |
+| API Key 格式 | `sk-{32+ chars}` 不变 |
+| JWT 支持 | `/v1/me/models` 继续支持 JWT 认证 |
+| 鉴权链路 | AuthMiddleware → auth 服务路径不变；`UserIdentity` 注入不变 |
+| 豁免路径 | `/health`、`/ready` 无需认证 |
+
+### 3.5 其他端点无变更
+
+以下端点行为完全不变：
+
+| 端点 | 方法 | 说明 |
+| :--- | :--- | :--- |
+| `/v1/models` | GET | 返回基于身份的模型列表（与 v1.1 行为一致） |
+| `/v1/me/models` | GET | 返回当前用户可用的模型列表（与 v1.1 行为一致） |
+| `/health` | GET | 存活探针，检查项新增 `scheduler` |
+| `/ready` | GET | 就绪探针，检查项新增 `scheduler` |
+
+---
+
+## 4. 兼容性说明
+
+### 4.1 向后兼容
+
+| 变更项 | Breaking? | 说明 |
+| :--- | :--- | :--- |
+| `model` 字段接受组名 | **否** | 纯增量语义扩张。模型名直连行为完全不动，组名调用为新增能力 |
+| 新增错误码 | **否** | 增量错误码。不删除/重命名现有 error.code |
+| 新增 `group_not_found` error.type | **否** | 增量 error.type。客户端未知 type 可 fallback 为通用错误处理 |
+| GET /v1/models 不变 | **否** | 行为与 v1.1 完全一致 |
+
+### 4.2 调用方适配指引
+
+1. **现有调用方无需改动**。直接传模型名的调用行为完全不变。
+2. **希望使用组名调用的业务方**：将 `model` 字段的值改为组名即可（如 `"日常推理"`），其余请求参数和错误处理逻辑不变。
+3. **错误处理建议**：调用方应在重试逻辑中识别以下新增错误码并合理处理：
+   - `group_not_found` — 不重试，确认组名是否正确
+   - `no_available_model` — 退避重试（组内模型可能正在恢复）
+   - `no_other_model_available` — 退避重试或降级为指定具体模型名调用
+
+### 4.3 兼容性测试矩阵
+
+| 场景 | 预期行为 | 兼容性 |
+| :--- | :--- | :--- |
+| 传已有模型名（如 `qwen-plus`） | 与变更前行为完全一致 | 完全兼容 |
+| 传新增组名（如 `日常推理`） | 路由到组内模型，返回成功 | 新增能力 |
+| 传不存在的组名 | 返回 404 `group_not_found` | 新增错误 |
+| 组内模型全部不可用 | 返回 503 `no_available_model` | 新增错误 |
+| 传已有错误模型名 | 返回 404 `unknown_model`（与变更前一致） | 完全兼容 |
+| 流式调用 | 行为与变更前一致 | 完全兼容 |

@@ -5,91 +5,69 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="af7f4b61-a5e3-4748-bcf3-e1eb914177d5" name="Changes" comment="chore(config): 更新环境配置和工作区设置&#10;&#10;- 配置 OAuth2 SSO 认证参数，包括客户端ID、密钥和回调地址&#10;- 设置 JWT 密钥和前端URL指向生产环境域名&#10;- 更新工作区 Git 分支信息为开发版本分支&#10;- 优化 IDE 工作空间配置，添加最新任务历史记录&#10;- 清理临时文件路径配置，调整 Git widget 显示名称">
-      <change beforePath="$PROJECT_DIR$/.env" beforeDir="false" afterPath="$PROJECT_DIR$/.env" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/cmd/gateway/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/cmd/gateway/main.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/config/dev.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/config/dev.yaml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/control-plane" beforeDir="false" afterPath="$PROJECT_DIR$/control-plane" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/gateway" beforeDir="false" afterPath="$PROJECT_DIR$/gateway" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/auth/service/oidc.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/auth/service/oidc.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/controlplane/auth/handler.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/auth/handler.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/controlplane/auth/token.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/auth/token.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/controlplane/handler/dev_login.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/handler/dev_login.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/controlplane/handler/errcodes.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/handler/errcodes.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/internal/controlplane/handler/health_check_handler.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/handler/health_check_handler.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/controlplane/handler/key_handler.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/handler/key_handler.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/controlplane/handler/settings_handler.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/handler/settings_handler.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/internal/controlplane/middleware/middleware.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/middleware/middleware.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/internal/controlplane/model/settings.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/model/settings.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/internal/controlplane/repository/health_check_repo.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/repository/health_check_repo.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/internal/controlplane/repository/settings_repo.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/repository/settings_repo.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/internal/controlplane/router/router.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/router/router.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/internal/controlplane/service/health_check_service.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/service/health_check_service.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/controlplane/service/key_service.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/service/key_service.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/internal/controlplane/service/settings_service.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/service/settings_service.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/gateway/config/config.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/gateway/config/config.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/migrations/016_create_auth_identity_tables.sql" beforeDir="false" afterPath="$PROJECT_DIR$/migrations/016_create_auth_identity_tables.sql" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/dist/assets/ModelListPage-Be8larkt.css" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/dist/assets/ModelListPage-BzHXnbmd.js" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/dist/assets/ProviderListPage-dwDXhz1y.js" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/dist/assets/ProviderListPage-l28XSq8v.css" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/dist/assets/UnifiedEntryPage-CdvSoOD2.js" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/dist/assets/UnifiedEntryPage-DWkpgpoe.css" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/dist/assets/control-plane-BKxxCZNZ.js" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/dist/assets/http-DBl0D3kB.js" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/dist/assets/index-DZAe3ldL.css" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/dist/assets/index-cIGuMNCK.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/gateway/handler/chat.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/gateway/handler/chat.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/gateway/handler/health.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/gateway/handler/health.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/gateway/handler/health_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/gateway/handler/health_test.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/gateway/infra/auth_client.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/gateway/infra/auth_client.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/gateway/middleware/middleware.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/gateway/middleware/middleware.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/gateway/server/router.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/gateway/server/router.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/gateway/server/router_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/gateway/server/router_test.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/CatalogSyncPage-CS4fv0bp.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/ChatPlaygroundPage-BxTmPi-8.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/ChatPlaygroundPage-COEYGuog.css" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/HomePage-B-3ODPGg.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/KeyListPage-BH5Y5Yh7.css" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/KeyListPage-DUezT0de.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/KeyListPage-Da3EbFg1.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/LoginPage-DpK6xSr1.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/ModelListPage-D9wtHykI.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/ModelListPage-Dy0NOsPP.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/OAuthCallbackPage-VAT2DiBD.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/ProviderListPage-KF7EFExT.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/SettingsPage-Bux2M55O.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/SettingsPage-Zcd5Z3ny.css" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/TagListPage-CMPbMwfz.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/UnifiedEntryPage-DBVhsSpx.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/index-BvU50HCk.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/dist/assets/index-CmJdXSnQ.css" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/web/dist/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/web/dist/index.html" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/web/src/App.vue" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/App.vue" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/src/components/key/KeyCreateDialog.vue" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/components/key/KeyCreateDialog.vue" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/src/composables/useTheme.test.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/composables/useTheme.test.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/src/composables/useTheme.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/composables/useTheme.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/components/admin/HealthTimeline.vue" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/components/admin/HealthTimeline.vue" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/components/common/ImageUpload.vue" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/components/common/ImageUpload.vue" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/web/src/router/index.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/router/index.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/src/services/auth.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/services/auth.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/web/src/services/control-plane.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/services/control-plane.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/src/services/http.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/services/http.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/src/stores/auth.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/stores/auth.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/stores/__tests__/settings.spec.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/stores/__tests__/settings.spec.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/web/src/stores/settings.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/stores/settings.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/styles/global.scss" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/styles/global.scss" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/test-utils/element-stubs.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/test-utils/element-stubs.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/web/src/types/settings.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/types/settings.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/src/utils/ccs-import.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/utils/ccs-import.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/views/admin/ChatPlaygroundPage.spec.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/views/admin/ChatPlaygroundPage.spec.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/views/admin/ChatPlaygroundPage.vue" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/views/admin/ChatPlaygroundPage.vue" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/views/admin/HealthMonitorPage.vue" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/views/admin/HealthMonitorPage.vue" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/web/src/views/admin/SettingsPage.vue" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/views/admin/SettingsPage.vue" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/src/views/key/KeyListPage.vue" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/views/key/KeyListPage.vue" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/vite.config.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/vite.config.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/.gates/clarify.json" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/.gates/clarify.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/.gates/detail.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/contracts.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/data-model.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/design.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/hld.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/research.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/research/001-rs256-key-rotation.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/research/002-key-cache-invalidation.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/research/003-oidc-role-mapping.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/research/004-key-query-contract.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/spec.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/auth/task.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/brainstorm.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/brainstorm.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/src/views/admin/__tests__/SettingsPage.spec.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/views/admin/__tests__/SettingsPage.spec.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/xspec/changes/change.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/change.yaml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/control-plane/contracts.delta.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/control-plane/data-model.delta.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/control-plane/design.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/control-plane/design.delta.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/control-plane/hld.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/control-plane/hld.delta.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/control-plane/spec.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/control-plane/spec.delta.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/control-plane/task.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/gateway-api/contracts.delta.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/gateway-api/data-model.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/gateway-api/data-model.delta.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/gateway-api/design.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/gateway-api/design.delta.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/gateway-api/hld.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/gateway-api/hld.delta.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/gateway-api/spec.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/gateway-api/spec.delta.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/gateway-api/task.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/integration.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/ops-console/contracts.delta.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/ops-console/data-model.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/ops-console/data-model.delta.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/ops-console/design.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/ops-console/design.delta.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/ops-console/hld.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/ops-console/hld.delta.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/ops-console/spec.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/ops-console/spec.delta.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/changes/ops-console/task.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/constitution.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/constitution.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/modules/CHANGELOG.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/CHANGELOG.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xspec/modules/PRODUCT.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/PRODUCT.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/gateway-api/contracts.delta.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/gateway-api/contracts.delta.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/scheduler/contracts.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/scheduler/contracts.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/scheduler/data-model.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/scheduler/data-model.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/scheduler/design.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/scheduler/design.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/scheduler/hld.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/scheduler/hld.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xspec/changes/scheduler/task.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/changes/scheduler/task.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/xspec/modules/control-plane/contracts.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/control-plane/contracts.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/xspec/modules/control-plane/data-model.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/control-plane/data-model.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/xspec/modules/control-plane/design.md" beforeDir="false" afterPath="$PROJECT_DIR$/xspec/modules/control-plane/design.md" afterDir="false" />

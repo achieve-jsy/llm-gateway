@@ -1,20 +1,21 @@
 <template>
   <div class="layout-sidebar">
     <!-- 侧边栏 -->
-    <aside v-if="!isPublicRoute" class="sidebar">
+    <aside v-if="!isPublicRoute" class="sidebar" :class="{ 'sidebar--collapsed': isCollapsed }">
       <div class="sidebar-header">
         <img :src="sidebarLogoSrc" class="sidebar-logo" alt="logo" />
-        <span class="sidebar-title">{{ siteTitle }}</span>
+        <span v-show="!isCollapsed" class="sidebar-title">{{ siteTitle }}</span>
       </div>
       <el-menu
         class="sidebar-menu"
         :default-active="route.path"
+        :collapse="isCollapsed"
         router
       >
         <div class="menu-group-label">接入</div>
         <el-menu-item index="/access/unified-entry">
           <el-icon><Connection /></el-icon>
-          <span>统一接入</span>
+          <template #title>统一接入</template>
         </el-menu-item>
 
         <el-divider class="menu-divider" />
@@ -22,19 +23,19 @@
         <div class="menu-group-label">员工</div>
         <el-menu-item index="/home">
           <el-icon><HomeFilled /></el-icon>
-          <span>首页</span>
+          <template #title>首页</template>
         </el-menu-item>
         <el-menu-item index="/keys">
           <el-icon><Key /></el-icon>
-          <span>我的 Key</span>
+          <template #title>我的 Key</template>
         </el-menu-item>
         <el-menu-item index="/admin/health-monitor">
           <el-icon><Monitor /></el-icon>
-          <span>健康监控</span>
+          <template #title>健康监控</template>
         </el-menu-item>
         <el-menu-item index="/models">
-          <el-icon><Monitor /></el-icon>
-          <span>可用模型</span>
+          <el-icon><Histogram /></el-icon>
+          <template #title>可用模型</template>
         </el-menu-item>
 
         <el-divider class="menu-divider" />
@@ -42,15 +43,15 @@
         <div class="menu-group-label">管理</div>
         <el-menu-item index="/admin/providers">
           <el-icon><Operation /></el-icon>
-          <span>渠道管理</span>
+          <template #title>渠道管理</template>
         </el-menu-item>
         <el-menu-item index="/admin/models">
           <el-icon><Cpu /></el-icon>
-          <span>模型管理</span>
+          <template #title>模型管理</template>
         </el-menu-item>
         <el-menu-item index="/admin/tags">
           <el-icon><PriceTag /></el-icon>
-          <span>标签管理</span>
+          <template #title>标签管理</template>
         </el-menu-item>
 
         <el-divider class="menu-divider" />
@@ -58,15 +59,15 @@
         <div class="menu-group-label">运维</div>
         <el-menu-item index="/admin/catalog-sync">
           <el-icon><Refresh /></el-icon>
-          <span>Catalog 同步</span>
+          <template #title>Catalog 同步</template>
         </el-menu-item>
         <el-menu-item index="/admin/chat-playground">
           <el-icon><ChatDotRound /></el-icon>
-          <span>对话测试</span>
+          <template #title>对话测试</template>
         </el-menu-item>
         <el-menu-item index="/admin/settings">
           <el-icon><Setting /></el-icon>
-          <span>系统设置</span>
+          <template #title>系统设置</template>
         </el-menu-item>
       </el-menu>
     </aside>
@@ -75,6 +76,10 @@
     <div class="main-content">
       <!-- 顶部工具栏 -->
       <div v-if="!isPublicRoute" class="top-bar">
+        <button class="collapse-btn" @click="toggleCollapse" :title="isCollapsed ? '展开菜单' : '收起菜单'">
+          <el-icon :size="18"><Fold v-if="!isCollapsed" /><Expand v-else /></el-icon>
+        </button>
+        <div class="top-bar-spacer"></div>
         <span class="theme-toggle" @click="toggleTheme" :title="isDark ? '切换到浅色模式' : '切换到深色模式'">
           {{ isDark ? '☀️' : '🌙' }}
         </span>
@@ -103,16 +108,18 @@
 
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
-import { onMounted, computed } from 'vue'
+import { onMounted, computed, ref } from 'vue'
 import { isDark, toggleTheme } from './composables/useTheme'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
-import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, HomeFilled, Key, Monitor, Setting } from '@element-plus/icons-vue'
+import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, HomeFilled, Key, Monitor, Setting, Fold, Expand, Histogram } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const settingsStore = useSettingsStore()
+
+const isCollapsed = ref(localStorage.getItem('sidebar-collapsed') === 'true')
 
 const isPublicRoute = computed(() => route.meta.public as boolean | undefined)
 
@@ -128,6 +135,11 @@ onMounted(() => {
   settingsStore.loadPublicSettings()
 })
 
+function toggleCollapse() {
+  isCollapsed.value = !isCollapsed.value
+  localStorage.setItem('sidebar-collapsed', String(isCollapsed.value))
+}
+
 function handleUserCommand(command: string) {
   if (command === 'logout') {
     authStore.handleLogout()
@@ -142,6 +154,27 @@ function handleUserCommand(command: string) {
   align-items: center;
   gap: 10px;
   font-family: var(--font-family);
+  overflow: hidden;
+}
+
+.collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--el-text-color-secondary);
+  transition: background-color 0.2s;
+  flex-shrink: 0;
+}
+
+.collapse-btn:hover {
+  background-color: var(--el-fill-color);
+  color: #1E8C86;
 }
 
 .sidebar-logo {
@@ -189,4 +222,6 @@ function handleUserCommand(command: string) {
   padding: 0;
   height: 100%;
 }
+
+
 </style>

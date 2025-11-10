@@ -12,12 +12,14 @@ const (
 	CodeSyncNotSupported    = "sync_not_supported"
 	CodeProviderDisabled    = "provider_disabled"
 	CodeKeyLimitExceeded    = "key_limit_exceeded"
+	CodeInvalidStrategy     = "invalid_strategy"
 
 	// 404 not_found
 	CodeProviderNotFound = "provider_not_found"
 	CodeModelNotFound    = "model_not_found"
 	CodeCatalogNotFound  = "catalog_not_found"
 	CodeKeyNotFound      = "key_not_found"
+	CodeGroupNotFound    = "group_not_found"
 
 	// 400 invalid_request (catalog)
 	CodeCatalogNotBound      = "catalog_not_bound"
@@ -29,6 +31,10 @@ const (
 	CodeProviderHasModels    = "provider_has_models"
 	CodeSyncInProgress       = "sync_in_progress"
 	CodeKeyNameConflict      = "key_name_conflict"
+	CodeGroupNameConflict    = "group_name_conflict"
+
+	// 422 unprocessable
+	CodeStrategySwitchWarning = "strategy_switch_warning"
 
 	// 403 forbidden
 	CodeKeyPermission = "key_permission_denied"

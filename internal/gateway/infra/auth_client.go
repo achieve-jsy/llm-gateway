@@ -50,7 +50,7 @@ func (c *AuthClient) VerifyKey(ctx context.Context, key string) (*VerifyKeyResp,
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+		req.Header.Set("X-Internal-Token", c.token)
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {

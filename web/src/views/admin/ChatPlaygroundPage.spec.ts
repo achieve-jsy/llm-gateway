@@ -138,10 +138,12 @@ describe('ChatPlaygroundPage', () => {
     vi.clearAllMocks()
     mockedGetModels.mockResolvedValue({ data: sampleModels as any, total: 2 })
     global.fetch = vi.fn()
+    localStorage.setItem('access_token', 'eyJ.mock.token')
   })
 
   afterEach(() => {
     vi.restoreAllMocks()
+    localStorage.clear()
   })
 
   describe('模型加载（从管理模型列表）', () => {
@@ -394,8 +396,8 @@ describe('ChatPlaygroundPage', () => {
 	  expect(vm.messages[1].content).toBe('非流式回复')
 	})
 
-    it('未填写 apiKey 时回退使用 localStorage auth_token', async () => {
-	  localStorage.setItem('auth_token', 'stored-token')
+    it('未填写 apiKey 时回退使用 localStorage access_token', async () => {
+	  localStorage.setItem('access_token', 'stored-token')
 	  ;(global.fetch as any).mockResolvedValue({
 	    ok: true,
 	    body: {
@@ -752,6 +754,7 @@ describe('ChatPlaygroundPage', () => {
       await flushPromises()
 
       const vm = wrapper.vm as any
+      vm.mode = 'apikey'
       vm.config.model = 'gpt-4'
       vm.config.apiKey = 'sk-custom-key-123'
       vm.userInput = 'test'
@@ -761,6 +764,69 @@ describe('ChatPlaygroundPage', () => {
 
       const [, opts] = (global.fetch as any).mock.calls[0]
       expect(opts.headers['Authorization']).toBe('Bearer sk-custom-key-123')
+    })
+
+    it('会话模式下未填 apiKey 时使用 localStorage access_token', async () => {
+      localStorage.setItem('access_token', 'eyJ.session.token')
+      ;(global.fetch as any).mockResolvedValue({
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: vi.fn()
+              .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode('data: [DONE]\n\n') })
+              .mockResolvedValueOnce({ done: true, value: undefined })
+          })
+        }
+      })
+
+      const wrapper = createWrapper()
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.mode = 'session'
+      vm.config.apiKey = ''
+      vm.config.model = 'qwen3-next-80b'
+      vm.userInput = 'auth'
+
+      await vm.sendMessage()
+      await flushPromises()
+
+      const [, opts] = (global.fetch as any).mock.calls[0]
+      expect(opts.headers['Authorization']).toBe('Bearer eyJ.session.token')
+    })
+
+    it('API Key 模式下从网关 /v1/models 加载模型列表', async () => {
+      ;(global.fetch as any).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ object: 'list', data: [{ id: 'gpt-4', object: 'model', created: 1, owned_by: 'openai' }, { id: 'claude-3', object: 'model', created: 2, owned_by: 'anthropic' }] })
+      })
+
+      const wrapper = createWrapper()
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.mode = 'apikey'
+      vm.config.apiKey = 'sk-test'
+      await vm.loadModels()
+      await flushPromises()
+
+      expect(vm.gatewayModelIds).toEqual(['gpt-4', 'claude-3'])
+      expect(vm.config.model).toBe('gpt-4')
+    })
+
+    it('会话模式下从 control-plane 管理 API 加载模型', async () => {
+      mockedGetModels.mockResolvedValue({ data: sampleModels as any, total: 2 })
+
+      const wrapper = createWrapper()
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.mode = 'session'
+      await vm.loadModels()
+      await flushPromises()
+
+      expect(mockedGetModels).toHaveBeenCalled()
+      expect(vm.models).toHaveLength(2)
     })
   })
 })

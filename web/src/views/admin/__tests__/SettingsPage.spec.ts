@@ -17,7 +17,10 @@ vi.mock('element-plus', () => ({
 vi.mock('@/services/control-plane', () => ({
   getSystemSettings: vi.fn(),
   updateSystemSettings: vi.fn(),
-  getPublicSettings: vi.fn()
+  getPublicSettings: vi.fn(),
+  testWebhook: vi.fn(),
+  exportSettings: vi.fn(),
+  importSettings: vi.fn(),
 }))
 
 import { ElMessage } from 'element-plus'
@@ -150,12 +153,12 @@ describe('SettingsPage.vue', () => {
       expect(stub.attributes('data-current')).toContain('data:image/png;base64,abc')
     })
 
-    it('should render two setting cards', async () => {
+    it('should render six setting cards', async () => {
       const wrapper = mountPage()
       await flushPromises()
 
       const cards = wrapper.findAll('.settings-card')
-      expect(cards).toHaveLength(2)
+      expect(cards).toHaveLength(6)
     })
 
     it('should render card with site brand header', async () => {
@@ -255,7 +258,19 @@ describe('SettingsPage.vue', () => {
         site_name: 'Updated Gateway',
         site_logo: 'data:image/png;base64,abc',
         site_subtitle: 'My Subtitle',
-        api_base_url: 'https://api.example.com'
+        api_base_url: 'https://api.example.com',
+        rate_limit_per_minute: 60,
+        max_concurrency_per_key: 10,
+        oidc_issuer_url: '',
+        oidc_client_id: '',
+        oidc_client_secret: '',
+        oidc_redirect_url: '',
+        oidc_scopes: 'openid profile email',
+        oidc_enabled: false,
+        webhook_enabled: false,
+        webhook_url: '',
+        webhook_secret: '',
+        webhook_events: 'health_check_failed',
       })
     })
 

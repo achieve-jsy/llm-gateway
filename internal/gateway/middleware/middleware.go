@@ -38,14 +38,21 @@ func Logger() gin.HandlerFunc {
 		duration := time.Since(start)
 		requestID, _ := c.Get("request_id")
 
-		slog.Info("request",
+		attrs := []any{
 			"request_id", requestID,
 			"method", c.Request.Method,
 			"path", path,
 			"status", c.Writer.Status(),
 			"duration_ms", duration.Milliseconds(),
 			"model", c.GetString("model"),
-		)
+		}
+		if gn := c.GetString("group_name"); gn != "" {
+			attrs = append(attrs, "group_name", gn)
+		}
+		if rm := c.GetString("routed_model_id"); rm != "" {
+			attrs = append(attrs, "routed_model_id", rm)
+		}
+		slog.Info("request", attrs...)
 	}
 }
 

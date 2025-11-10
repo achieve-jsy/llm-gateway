@@ -19,6 +19,7 @@
 | 版本号 | 修改日期 | 修改内容摘要 | 修改人 |
 | :--- | :--- | :--- | :--- |
 | v1.2 | 2026-05-25 | 新增 api_keys 表 — CHG-20260523-001 | OpenCode |
+| v1.3 | 2026-05-26 | 新增 model_groups 和 group_models 表 — CHG-20260525-001 | OpenCode |
 
 ---
 
@@ -512,3 +513,292 @@ DROP TABLE IF EXISTS api_keys;
 | 版本号 | 更新时间 | 变更类型 | 变更描述 | 变更人 |
 | :--- | :--- | :---: | :--- | :--- |
 | v1.2 | 2026-05-23 | 新增 | 新增 api_keys 表及索引，迁移脚本 002_add_api_keys | OpenCode |
+
+---
+
+## 11. 变更记录 — CHG-20260525-001
+
+## 变更摘要
+
+新增 `model_groups`（模型组主表）和 `group_models`（组内模型关联表）两张表，支持模型组创建、多模型关联和三种路由策略参数存储。现有 `providers`、`models`、`api_keys` 表结构不变，无需数据迁移。
+
+---
+
+## 1. 实体关系变更
+
+> 新增 model_groups 与 models 的 M:N 关系（通过 group_models 关联表）。一个模型组可包含多个模型，一个模型可同时属于多个模型组。
+
+| 关系 | 类型 | 说明 |
+| :--- | :---: | :--- |
+| model_groups → group_models | 1:N | 一个组下有多个模型关联记录 |
+| models → group_models | 1:N | 一个模型可被多个组引用 |
+| group_models | — | M:N 关联表，含策略参数属性 |
+
+### 更新 ER 图
+
+```mermaid
+erDiagram
+    providers ||--o{ models : "拥有"
+    users ||--o{ api_keys : "拥有"
+    model_groups ||--o{ group_models : "包含"
+    models ||--o{ group_models : "被引用"
+
+    model_groups {
+        uint id PK "主键ID，自增"
+        varchar_64 name UK "模型组名称，全局唯一"
+        text description "组描述"
+        enum strategy "路由策略：round_robin/priority/weighted"
+        boolean enabled "是否启用，默认true"
+        timestamp created_at "创建时间UTC"
+        timestamp updated_at "更新时间UTC"
+        timestamp deleted_at "软删除时间UTC"
+    }
+
+    group_models {
+        uint id PK "主键ID，自增"
+        uint group_id FK "所属模型组ID，级联删除"
+        varchar model_id FK "关联模型ID，级联删除"
+        int priority_nullable "优先级（priority策略）"
+        int weight_nullable "权重1-100（weighted策略）"
+        timestamp created_at "创建时间UTC"
+        timestamp updated_at "更新时间UTC"
+    }
+
+    providers {
+        uuid id PK
+        varchar_64 name UK
+        varchar_32 type
+        varchar_512 endpoint
+        text encrypted_credentials
+        boolean enabled
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    models {
+        uuid id PK
+        varchar_128 name UK
+        uuid provider_id FK
+        varchar_32 model_type
+        boolean enabled
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    api_keys {
+        uuid id PK
+        uuid user_id FK
+        varchar_64 name
+        varchar_128 key_hash UK
+        text encrypted_key
+        varchar_8 key_prefix
+        varchar_8 key_hint
+        boolean enabled
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    users {
+        uuid id PK
+        varchar name
+        uuid department_id
+    }
+```
+
+---
+
+## 2. 新增实体定义
+
+### 2.1 model_groups（模型组主表）
+
+**用途**：存储模型组的基本信息，包括名称、路由策略类型和启用状态。模型组是 scheduler 路由决策的基础配置单元。
+
+| 字段 | 逻辑类型 | 约束 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `id` | `uint` | PK，非空，自增 | 主键，自增整数 |
+| `name` | `string(64)` | 非空，唯一 | 模型组名称，全局唯一，如 `"日常推理"`、`"高智能"` |
+| `description` | `text` | 可空 | 模型组描述，用于管理后台展示，长度 ≤ 512 |
+| `strategy` | `enum` | 非空 | 路由策略枚举：`round_robin`（轮询）、`priority`（优先级）、`weighted`（加权） |
+| `enabled` | `boolean` | 非空，默认 `true` | 是否启用；禁用后 scheduler 配置读取跳过该组 |
+| `created_at` | `timestamp` | 非空，自动填充 | UTC 时间戳，记录创建时刻 |
+| `updated_at` | `timestamp` | 非空，自动更新 | UTC 时间戳，每次更新自动刷新 |
+| `deleted_at` | `timestamp` | 可空 | 软删除时间戳，非空表示已删除（GORM Soft Delete） |
+
+**删除策略**：软删除（GORM DeletedAt）。模型组是调度基础设施，误删影响面大。软删除后 group_models 关联表保留不清理，scheduler 读取配置时过滤 `deleted_at IS NOT NULL` 的记录。管理员可手动恢复（清除 deleted_at + 设 enabled=true）。
+
+**策略枚举约束：**
+
+| 策略值 | 说明 | group_models 参数要求 |
+| :--- | :--- | :--- |
+| `round_robin` | 轮询：按顺序均匀分配请求到组内所有模型 | priority / weight 均可为 NULL |
+| `priority` | 优先级：数字越小越优先，同优先级模型内部轮询 | priority 必填，weight 可为 NULL |
+| `weighted` | 加权：按权重比例分配请求，1–100 | weight 必填，priority 可为 NULL |
+
+---
+
+### 2.2 group_models（组内模型关联表）
+
+**用途**：存储模型组与模型的 M:N 关联关系，同时承载策略相关参数（priority / weight），这些参数是关联边的属性，属于 group_models 表而非 models 表。
+
+| 字段 | 逻辑类型 | 约束 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `id` | `uint` | PK，非空，自增 | 主键，自增整数 |
+| `group_id` | `uint` | FK → model_groups.id，非空 | 所属模型组 ID；组被删除时级联删除关联记录 |
+| `model_id` | `varchar(255)` | FK → models.id，非空 | 关联模型 ID（models 表使用 UUID 字符串主键）；模型被删除时级联删除关联记录 |
+| `priority` | `int` | 可空 | 优先级数值（正整数），越小越优先；仅 strategy=priority 时有效 |
+| `weight` | `int` | 可空 | 权重值，范围 1–100；仅 strategy=weighted 时有效，scheduler 端做归一化处理 |
+| `created_at` | `timestamp` | 非空，自动填充 | UTC 时间戳，记录模型加入组的时刻 |
+| `updated_at` | `timestamp` | 非空，自动更新 | UTC 时间戳，每次更新自动刷新 |
+
+**删除策略**：物理删除。模型从组内移除即时生效，无需保留历史记录。组被软删除时关联记录保留不清除，组恢复后关联关系完整保留。
+
+**跨组约束**：一组内同一模型不可重复添加（`uniq_group_model` 唯一约束保证），但同一模型可同时存在于不同组中（跨组允许）。
+
+---
+
+## 3. 索引设计
+
+### 3.1 新增索引
+
+| 索引名 | 所在实体 | 覆盖字段 | 访问模式 | 取舍说明 |
+| :--- | :--- | :--- | :--- | :--- |
+| `uniq_group_name` | model_groups | `name` | 创建/更新时唯一性检查 | 唯一索引，保证组名称全局不重复；同时排除软删除记录（需应用层或部分索引配合） |
+| `uniq_group_model` | group_models | `group_id, model_id` | 向组内添加模型时检查重复 | 联合唯一索引，防止同一模型在同一组内重复添加 |
+| `idx_group_models_model_id` | group_models | `model_id` | 模型被删除时级联查找关联记录 | 外键关联查询，模型删除时遍历所有包含该模型的组 |
+| `idx_model_groups_enabled` | model_groups | `enabled` | 内部接口查询启用的组 | 过滤条件索引，scheduler 配置读取为高频读操作 |
+
+**索引维护注意：**
+- `uniq_group_name` 在软删除场景下需注意：GORM 默认查询自动附加 `deleted_at IS NULL` 条件，唯一性检查在应用层无问题；如需数据库层面保证，可建 PostgreSQL 部分索引 `CREATE UNIQUE INDEX ON model_groups (name) WHERE deleted_at IS NULL`
+- `uniq_group_model` 联合唯一索引覆盖添加模型的主要校验路径
+- 预估数据量：模型组 < 50，每组模型数 < 20，总关联记录数 < 1000，索引开销可忽略
+
+### 3.2 已有索引（不变更）
+
+`providers`、`models`、`api_keys` 表的所有现有索引保持不变。
+
+---
+
+## 4. 外键约束
+
+| 外键字段 | 引用表.字段 | ON DELETE | ON UPDATE | 说明 |
+| :--- | :--- | :---: | :---: | :--- |
+| `group_models.group_id` | `model_groups.id` | CASCADE | CASCADE | 组被物理删除时级联清除所有组内模型关联；组 ID 变更时级联更新 |
+| `group_models.model_id` | `models.id` | CASCADE | CASCADE | 模型被删除时级联清除所有包含该模型的组关联；模型 ID 变更时级联更新 |
+
+> **注意**：`model_groups` 采用软删除（`deleted_at`），物理上不从数据库移除。外键 CASCADE 仅在应用层执行物理删除（如强制清理历史数据）时生效。日常操作中组软删除不触发外键级联。
+
+---
+
+## 5. 事务边界
+
+### 5.1 新增事务场景
+
+| 操作场景 | 涉及实体 | 事务 | 隔离级别 | 说明 |
+| :--- | :--- | :---: | :--- | :--- |
+| 创建模型组 | model_groups | 是 | Read Committed | 唯一性检查 + INSERT 在同一事务中 |
+| 更新模型组 | model_groups | 是 | Read Committed | 存在性检查 + 更新在同一事务中 |
+| 软删除模型组 | model_groups | 是 | Read Committed | 存在性检查 + UPDATE enabled/deleted_at 在同一事务中 |
+| 添加模型到组 | group_models | 是 | Read Committed | 检查组存在 + 检查模型存在 + 重复检查 + INSERT 在同一事务中 |
+| 从组移除模型 | group_models | 是 | Read Committed | 存在性检查 + DELETE 在同一事务中 |
+| 查询组详情 | model_groups + group_models + models | 否 | — | 只读 JOIN 查询 |
+| 内部接口读取全部启用组 | model_groups + group_models + models + providers | 否 | — | 只读 JOIN 查询 |
+
+### 5.2 已有事务场景（不变更）
+
+现有 `providers`、`models`、`api_keys` 表的所有事务边界保持不变。模型组操作与渠道/模型/Key 操作无事务交叉。
+
+---
+
+## 6. 迁移脚本
+
+### 6.1 迁移编号
+
+| 字段 | 内容 |
+| :--- | :--- |
+| 迁移序号 | `003` |
+| 迁移名称 | `add_model_groups` |
+
+### 6.2 UP 脚本
+
+```sql
+-- 003_add_model_groups.up.sql
+
+CREATE TABLE model_groups (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(64) NOT NULL,
+    description TEXT,
+    strategy VARCHAR(32) NOT NULL DEFAULT 'round_robin',
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMP WITH TIME ZONE,
+    CONSTRAINT uniq_group_name UNIQUE (name),
+    CONSTRAINT chk_group_strategy CHECK (strategy IN ('round_robin', 'priority', 'weighted'))
+);
+
+CREATE INDEX idx_model_groups_enabled ON model_groups (enabled) WHERE deleted_at IS NULL;
+
+CREATE TABLE group_models (
+    id SERIAL PRIMARY KEY,
+    group_id INTEGER NOT NULL,
+    model_id VARCHAR(255) NOT NULL,
+    priority INTEGER,
+    weight INTEGER,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    CONSTRAINT uniq_group_model UNIQUE (group_id, model_id),
+    CONSTRAINT fk_group_models_group FOREIGN KEY (group_id) REFERENCES model_groups(id) ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_group_models_model FOREIGN KEY (model_id) REFERENCES models(id) ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT chk_group_weight_range CHECK (weight IS NULL OR (weight >= 1 AND weight <= 100)),
+    CONSTRAINT chk_group_priority_positive CHECK (priority IS NULL OR priority > 0)
+);
+
+CREATE INDEX idx_group_models_model_id ON group_models (model_id);
+```
+
+### 6.3 DOWN 脚本
+
+```sql
+-- 003_add_model_groups.down.sql
+
+DROP TABLE IF EXISTS group_models;
+DROP TABLE IF EXISTS model_groups;
+```
+
+---
+
+## 7. 数据约束与规则
+
+**新增约束：**
+
+- `model_groups.name` 全局唯一，长度 2–64，仅允许字母数字下划线连字符
+- `model_groups.strategy` CHECK 约束限制为 `round_robin` / `priority` / `weighted`
+- `model_groups.deleted_at` 软删除字段，GORM 自动管理，查询默认排除已删除记录
+- `group_models` 的 `(group_id, model_id)` 联合唯一约束，防止组内重复添加同一模型
+- `group_models.weight` CHECK 约束范围 1–100（仅 weighted 策略使用）
+- `group_models.priority` CHECK 约束正整数（仅 priority 策略使用）
+- `group_models.group_id` 外键 CASCADE：组物理删除时自动清理关联
+- `group_models.model_id` 外键 CASCADE：模型删除时自动清理关联
+
+**已有约束（不变更）：**
+
+`providers`、`models`、`api_keys` 表的所有现有约束保持不变。
+
+---
+
+## 8. 迁移注意事项
+
+- 现有 `providers`、`models`、`api_keys` 表结构完全不变，无需任何数据迁移
+- 模型组为全新功能，无历史数据需要转换或导入
+- `model_groups` 主键使用自增 INTEGER 而非 UUID（与 provider/model 的 UUID 主键不同），原因是模型组为内部配置单元，无需外部引用或跨系统唯一标识，自增主键更简洁高效
+- `group_models.model_id` 使用 VARCHAR(255) 以兼容现有 `models.id` 的 UUID 字符串格式
+- 迁移脚本 `003` 应在 `001_init_schema` 和 `002_add_api_keys` 之后执行
+- 建议在生产发布前在 staging 环境验证迁移脚本的 up/down 完整流程
+
+---
+
+## 9. 变更历史
+
+| 版本号 | 更新时间 | 变更类型 | 变更描述 | 变更人 |
+| :--- | :--- | :---: | :--- | :--- |
+| v1.3-delta | 2026-05-25 | 新增 | 新增 model_groups 表和 group_models 关联表，迁移脚本 003_add_model_groups | OpenCode |

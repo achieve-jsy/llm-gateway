@@ -17,6 +17,7 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 // CheckResult 单次检测结果
@@ -43,6 +44,7 @@ type HealthCheckService struct {
 	healthRepo   *repository.HealthCheckRepo
 	providerRepo *repository.ProviderRepo
 	modelRepo    *repository.ModelRepo
+	rdb          *redis.Client
 
 	mu                sync.Mutex
 	cancel            context.CancelFunc
@@ -56,11 +58,13 @@ func NewHealthCheckService(
 	healthRepo *repository.HealthCheckRepo,
 	providerRepo *repository.ProviderRepo,
 	modelRepo *repository.ModelRepo,
+	rdb *redis.Client,
 ) *HealthCheckService {
 	return &HealthCheckService{
 		healthRepo:   healthRepo,
 		providerRepo: providerRepo,
 		modelRepo:    modelRepo,
+		rdb:          rdb,
 	}
 }
 
@@ -337,6 +341,23 @@ func (s *HealthCheckService) runBackgroundModelCheck() {
 	wg.Wait()
 	slog.Info("background model check completed",
 		"total", total, "success", success, "failed", failed, "auto_disabled", autoDisabled)
+	s.invalidateTimelineCache()
+}
+
+// invalidateTimelineCache 清除所有健康监控时间线缓存
+func (s *HealthCheckService) invalidateTimelineCache() {
+	if s.rdb == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	iter := s.rdb.Scan(ctx, 0, "health:timeline:*", 0).Iterator()
+	for iter.Next(ctx) {
+		s.rdb.Del(ctx, iter.Val())
+	}
+	if err := iter.Err(); err != nil {
+		slog.Warn("health timeline cache invalidate scan failed", "error", err)
+	}
 }
 
 // doModelForwardCheck 对单个模型做 chat/completions 检测
@@ -380,6 +401,7 @@ func (s *HealthCheckService) runBackgroundCheck() {
 		"failed", result.Failed,
 		"auto_disabled", result.AutoDisabled,
 	)
+	s.invalidateTimelineCache()
 }
 
 // CheckAll 检测所有启用渠道，并行返回结果
@@ -744,7 +766,7 @@ func (s *HealthCheckService) recordLog(targetType string, targetID uuid.UUID, ta
 	}
 }
 
-// TimelineEntry 时间线单条记录
+// TimelineEntry 时间线聚合桶（最多 100 个桶）
 type TimelineEntry struct {
 	CheckedAt      time.Time `json:"checked_at"`
 	Success        bool      `json:"success"`
@@ -767,73 +789,116 @@ type TimelineGroup struct {
 // TimelineResult 时间线监控结果
 type TimelineResult struct {
 	Lookback string          `json:"lookback"`
+	Total    int             `json:"total"`
 	Groups   []TimelineGroup `json:"groups"`
 }
 
+const timelineBuckets = 100
+
 // GetTimeline 获取健康监控时间线数据
-func (s *HealthCheckService) GetTimeline(lookback string, search string) (*TimelineResult, error) {
+func (s *HealthCheckService) GetTimeline(lookback string, search string, offset int, limit int) (*TimelineResult, error) {
+	cacheKey := fmt.Sprintf("health:timeline:%s:%s", lookback, search)
+	if s.rdb != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if val, err := s.rdb.Get(ctx, cacheKey).Result(); err == nil {
+			var full TimelineResult
+			if json.Unmarshal([]byte(val), &full) == nil {
+				slog.Debug("health timeline cache hit", "key", cacheKey, "total", full.Total)
+				return paginateTimelineResult(&full, offset, limit), nil
+			}
+		} else if err != redis.Nil {
+			slog.Warn("health timeline redis get failed", "error", err)
+		}
+	}
+
 	duration := parseLookback(lookback)
 	since := time.Now().Add(-duration)
 
-	logs, err := s.healthRepo.GetLogsByTimeRange(since, "model")
+	rows, providerCounts, err := s.healthRepo.GetTimelineBuckets(since, search, timelineBuckets)
 	if err != nil {
 		return nil, err
 	}
 
-	groupMap := make(map[string]*TimelineGroup)
-	var targetNames []string
+	type agg struct {
+		totalChecks   int
+		successChecks int
+		timeline      []TimelineEntry
+	}
+	groupMap := make(map[string]*agg)
 
-	for _, log := range logs {
-		group, ok := groupMap[log.TargetName]
+	for _, r := range rows {
+		a, ok := groupMap[r.TargetName]
 		if !ok {
-			group = &TimelineGroup{
-				TargetName: log.TargetName,
-				TargetType: log.TargetType,
-				Timeline:   make([]TimelineEntry, 0),
-			}
-			groupMap[log.TargetName] = group
-			targetNames = append(targetNames, log.TargetName)
+			a = &agg{}
+			groupMap[r.TargetName] = a
 		}
-		group.TotalChecks++
-		if log.Success {
-			group.SuccessChecks++
-		}
-		group.Timeline = append(group.Timeline, TimelineEntry{
-			CheckedAt:      log.CheckedAt,
-			Success:        log.Success,
-			ResponseTimeMs: log.ResponseTimeMs,
-			ErrorMessage:   log.ErrorMessage,
+		a.totalChecks += r.TotalCount
+		a.successChecks += r.OkCount
+		a.timeline = append(a.timeline, TimelineEntry{
+			CheckedAt:      r.BucketStart,
+			Success:        r.TotalCount == r.OkCount,
+			ResponseTimeMs: r.AvgRtt,
+			ErrorMessage:   r.FirstErr,
 		})
 	}
 
-	// 计算健康率
-	providerCounts, _ := s.healthRepo.GetTargetProviderCounts(targetNames)
-	for _, group := range groupMap {
-		if group.TotalChecks > 0 {
-			group.HealthPercent = group.SuccessChecks * 100 / group.TotalChecks
-		} else {
-			group.HealthPercent = 100
-		}
-		if pc, ok := providerCounts[group.TargetName]; ok {
-			group.ProviderCount = pc.ProviderCnt
-			group.KeyCount = pc.KeyCnt
-		}
-	}
-
-	// 按健康率升序排列（最差的在最上面）
 	groups := make([]TimelineGroup, 0, len(groupMap))
-	for _, g := range groupMap {
-		if search != "" && !strings.Contains(strings.ToLower(g.TargetName), strings.ToLower(search)) {
-			continue
+	for name, a := range groupMap {
+		g := TimelineGroup{
+			TargetName:    name,
+			TargetType:    "model",
+			TotalChecks:   a.totalChecks,
+			SuccessChecks: a.successChecks,
+			Timeline:      a.timeline,
 		}
-		groups = append(groups, *g)
+		if g.TotalChecks > 0 {
+			g.HealthPercent = g.SuccessChecks * 100 / g.TotalChecks
+		} else {
+			g.HealthPercent = 100
+		}
+		if pc, ok := providerCounts[name]; ok {
+			g.ProviderCount = pc.ProviderCnt
+			g.KeyCount = pc.KeyCnt
+		}
+		groups = append(groups, g)
 	}
 	sortTimelineGroupsByHealth(groups)
 
-	return &TimelineResult{Lookback: lookback, Groups: groups}, nil
+	full := &TimelineResult{Lookback: lookback, Total: len(groups), Groups: groups}
+
+	if s.rdb != nil {
+		if data, err := json.Marshal(full); err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if err := s.rdb.Set(ctx, cacheKey, data, 30*time.Second).Err(); err != nil {
+				slog.Warn("health timeline redis set failed", "error", err)
+			}
+			cancel()
+		}
+	}
+
+	return paginateTimelineResult(full, offset, limit), nil
 }
 
-func parseLookback(lookback string) time.Duration {
+func paginateTimelineResult(full *TimelineResult, offset int, limit int) *TimelineResult {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = len(full.Groups)
+	}
+	total := len(full.Groups)
+	if offset >= total {
+		return &TimelineResult{Lookback: full.Lookback, Total: total, Groups: []TimelineGroup{}}
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return &TimelineResult{Lookback: full.Lookback, Total: total, Groups: full.Groups[offset:end]}
+}
+
+	func parseLookback(lookback string) time.Duration {
 	switch lookback {
 	case "12h":
 		return 12 * time.Hour

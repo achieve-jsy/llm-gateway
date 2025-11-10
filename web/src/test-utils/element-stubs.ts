@@ -486,6 +486,58 @@ const ElSkeleton = defineComponent({
   }
 })
 
+const ElRadio = defineComponent({
+  name: 'ElRadioStub',
+  props: {
+    value: { type: [String, Number, Boolean], default: '' },
+    label: [String, Number, Boolean],
+    disabled: Boolean
+  },
+  setup(props, { slots }) {
+    return () =>
+      h('label', { class: 'el-radio-stub' }, [
+        h('input', {
+          type: 'radio',
+          value: String(props.value),
+          disabled: props.disabled
+        }),
+        slots.default ? slots.default() : String(props.label ?? props.value)
+      ])
+  }
+})
+
+const ElRadioGroup = defineComponent({
+  name: 'ElRadioGroupStub',
+  props: {
+    modelValue: { type: [String, Number, Boolean], default: '' }
+  },
+  emits: ['update:modelValue', 'change'],
+  setup(props, { slots, emit }) {
+    return () =>
+      h('div', { class: 'el-radio-group-stub' }, slots.default ? slots.default() : [])
+  }
+})
+
+const ElResult = defineComponent({
+  name: 'ElResultStub',
+  props: {
+    icon: String,
+    title: String,
+    subTitle: String
+  },
+  setup(props, { slots }) {
+    return () =>
+      h(
+        'div',
+        { class: 'el-result-stub', 'data-title': props.title, 'data-sub-title': props.subTitle },
+        [
+          props.title ? h('span', props.title) : null,
+          slots.extra ? h('div', { class: 'el-result__extra' }, slots.extra()) : null
+        ]
+      )
+  }
+})
+
 export const elementStubs = {
   ElInput,
   ElInputNumber,
@@ -510,7 +562,10 @@ export const elementStubs = {
   ElTooltip,
   ElSwitch,
   ElColorPicker,
-  ElSkeleton
+  ElSkeleton,
+  ElRadio,
+  ElRadioGroup,
+  ElResult
 }
 
 export const elementStubsKebab: Record<string, any> = {
@@ -538,7 +593,10 @@ export const elementStubsKebab: Record<string, any> = {
   'el-tooltip': ElTooltip,
   'el-switch': ElSwitch,
   'el-color-picker': ElColorPicker,
-  'el-skeleton': ElSkeleton
+  'el-skeleton': ElSkeleton,
+  'el-radio': ElRadio,
+  'el-radio-group': ElRadioGroup,
+  'el-result': ElResult
 }
 
 export function findInputByLabel(wrapper: any, label: string) {

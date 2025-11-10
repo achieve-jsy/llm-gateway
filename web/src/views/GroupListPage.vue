@@ -1,0 +1,271 @@
+<template>
+  <div class="group-page">
+    <div class="page-header">
+      <h2 class="page-title">模型组</h2>
+      <div class="header-actions">
+        <el-input
+          v-model="search"
+          placeholder="搜索模型组名称"
+          clearable
+          class="toolbar-field toolbar-field-lg"
+          @input="handleSearch"
+        />
+        <el-button type="primary" @click="openCreateDialog">创建模型组</el-button>
+      </div>
+    </div>
+
+    <div v-if="loading" class="state-wrapper">
+      <el-skeleton :rows="5" animated />
+    </div>
+
+    <template v-else-if="error">
+      <el-result icon="error" title="加载失败" sub-title="无法加载模型组列表，请稍后重试">
+        <template #extra>
+          <el-button type="primary" @click="loadGroups">重新加载</el-button>
+        </template>
+      </el-result>
+    </template>
+
+    <template v-else-if="isEmpty">
+      <el-empty :description="search ? '未找到匹配的模型组' : '暂无模型组，点击上方按钮创建'" />
+    </template>
+
+    <template v-else>
+      <el-table :data="groups" border stripe>
+        <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip />
+        <el-table-column label="策略" width="120" align="center">
+          <template #default="{ row }">
+            <el-tag :type="strategyTagType(row.strategy)" size="small">
+              {{ strategyLabel(row.strategy) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="模型数" width="100" align="center">
+          <template #default="{ row }">
+            {{ row.model_count ?? row.models?.length ?? 0 }}
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="100" align="center">
+          <template #default="{ row }">
+            <el-switch
+              :model-value="row.enabled"
+              @change="(val: boolean) => handleToggleEnabled(row, val)"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column label="创建时间" width="170" align="center">
+          <template #default="{ row }">
+            {{ formatDateTime(row.created_at) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="160" align="center">
+          <template #default="{ row }">
+            <el-button text type="primary" size="small" @click="openEditDialog(row)">编辑</el-button>
+            <el-popconfirm
+              title="确定删除该模型组？"
+              confirm-button-text="确定"
+              cancel-button-text="取消"
+              @confirm="handleDelete(row)"
+            >
+              <template #reference>
+                <el-button text type="danger" size="small">删除</el-button>
+              </template>
+            </el-popconfirm>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div class="pagination-wrapper">
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :total="total"
+          :page-sizes="[10, 20, 50]"
+          layout="total, sizes, prev, pager, next, jumper"
+          @current-change="loadGroups"
+          @size-change="handleSizeChange"
+        />
+      </div>
+    </template>
+
+    <GroupEditDialog
+      v-model:visible="dialogVisible"
+      :group="editingGroup"
+      @saved="onDialogSaved"
+      @close="dialogVisible = false"
+    />
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
+import { groupsApi } from '@/api/groups'
+import type { GroupListItem, Strategy } from '@/types/group'
+import GroupEditDialog from '@/components/GroupEditDialog.vue'
+
+const groups = ref<GroupListItem[]>([])
+const loading = ref(false)
+const error = ref(false)
+const search = ref('')
+const currentPage = ref(1)
+const pageSize = ref(10)
+const total = ref(0)
+
+const dialogVisible = ref(false)
+const editingGroup = ref<GroupListItem | null>(null)
+
+const isEmpty = computed(() => {
+  const val = groups.value
+  return Array.isArray(val) ? val.length === 0 : false
+})
+
+const STRATEGY_MAP: Record<Strategy, string> = {
+  round_robin: '轮询',
+  priority: '优先级',
+  weighted: '加权',
+}
+
+function strategyLabel(strategy: Strategy): string {
+  return STRATEGY_MAP[strategy] || strategy
+}
+
+function strategyTagType(strategy: Strategy): '' | 'success' | 'warning' {
+  if (strategy === 'round_robin') return ''
+  if (strategy === 'priority') return 'success'
+  if (strategy === 'weighted') return 'warning'
+  return ''
+}
+
+function formatDateTime(value: string): string {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+async function loadGroups() {
+  loading.value = true
+  error.value = false
+  try {
+    const res = await groupsApi.listGroups({
+      search: search.value || undefined,
+      page: currentPage.value,
+      page_size: pageSize.value,
+    })
+    groups.value = res.data.data
+    total.value = res.data.total
+  } catch {
+    error.value = true
+  } finally {
+    loading.value = false
+  }
+}
+
+function handleSearch() {
+  currentPage.value = 1
+  loadGroups()
+}
+
+function handleSizeChange() {
+  currentPage.value = 1
+  loadGroups()
+}
+
+function openCreateDialog() {
+  editingGroup.value = null
+  dialogVisible.value = true
+}
+
+function openEditDialog(row: GroupListItem) {
+  editingGroup.value = row
+  dialogVisible.value = true
+}
+
+async function handleDelete(row: GroupListItem) {
+  try {
+    await groupsApi.deleteGroup(row.id)
+    ElMessage.success('删除成功')
+    loadGroups()
+  } catch {
+    ElMessage.error('删除失败')
+  }
+}
+
+async function handleToggleEnabled(row: GroupListItem, enabled: boolean) {
+  try {
+    await groupsApi.updateGroup(row.id, { enabled })
+    row.enabled = enabled
+    ElMessage.success(enabled ? '已启用' : '已禁用')
+  } catch {
+    ElMessage.error('状态切换失败')
+  }
+}
+
+function onDialogSaved() {
+  dialogVisible.value = false
+  loadGroups()
+}
+
+onMounted(() => {
+  loadGroups()
+})
+</script>
+
+<style scoped>
+.group-page {
+  padding: 0;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.page-title {
+  color: var(--el-text-color-primary);
+  font-size: var(--font-title-size);
+  font-weight: var(--font-title-weight);
+  margin: 0;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.toolbar-field {
+  width: 180px;
+}
+
+.toolbar-field-lg {
+  width: 220px;
+}
+
+.state-wrapper {
+  padding: 40px 0;
+}
+
+.pagination-wrapper {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+@media (max-width: 900px) {
+  .page-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .header-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+</style>

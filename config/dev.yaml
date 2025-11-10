@@ -21,6 +21,10 @@ provider:
   internal_token: "CHANGE_ME_INTERNAL_TOKEN"
   control_plane_url: "http://localhost:8081"
 
+auth:
+  url: "http://localhost:8081"
+  token: "CHANGE_ME_INTERNAL_TOKEN"
+
 oauth:
   issuer_url: "https://oauth.example.net/"
   client_id: "5514f6bb0a"

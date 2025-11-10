@@ -41,6 +41,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '模型管理' }
   },
   {
+    path: '/admin/groups',
+    name: 'Groups',
+    component: () => import('@/views/GroupListPage.vue'),
+    meta: { title: '模型组' }
+  },
+  {
     path: '/admin/tags',
     name: 'TagList',
     component: () => import('@/views/admin/TagListPage.vue'),
@@ -62,7 +68,7 @@ const routes: RouteRecordRaw[] = [
     path: '/admin/health-monitor',
     name: 'HealthMonitor',
     component: () => import('@/views/admin/HealthMonitorPage.vue'),
-    meta: { title: '健康监控' }
+    meta: { title: '模型健康监控' }
   },
   {
     path: '/admin/settings',

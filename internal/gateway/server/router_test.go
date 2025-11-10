@@ -30,7 +30,7 @@ func buildTestRouter() *gin.Engine {
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	cache := infra.NewCache(rdb)
 	state := &provider.RuntimeState{}
-	return Setup(registry, cache, state, nil, "", "")
+	return Setup(registry, cache, state, nil, "", "", nil, nil)
 }
 
 // ─── Route Registration ────────────────────────────────────────────────────

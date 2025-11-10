@@ -49,3 +49,9 @@ func (r *SettingsRepo) SetMultiple(settings map[string]string) error {
 		DoUpdates: clause.AssignmentColumns([]string{"value", "updated_at"}),
 	}).Create(&cfgs).Error
 }
+
+func (r *SettingsRepo) GetAll() ([]model.SystemConfig, error) {
+	var cfgs []model.SystemConfig
+	err := r.db.Order("key").Find(&cfgs).Error
+	return cfgs, err
+}

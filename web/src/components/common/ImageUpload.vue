@@ -234,4 +234,23 @@ function handleUpload(event: Event) {
   margin: 8px 0 0;
   line-height: 1.5;
 }
+
+@media (max-width: 480px) {
+  .image-upload {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .preview-box {
+    width: 72px;
+    height: 72px;
+    border-radius: 10px;
+  }
+
+  .upload-btn,
+  .remove-btn {
+    padding: 6px 12px;
+    font-size: 12px;
+  }
+}
 </style>

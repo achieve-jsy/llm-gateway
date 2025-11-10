@@ -112,9 +112,13 @@ func JWTAuth() gin.HandlerFunc {
 }
 
 // InternalAuth 内部服务间 Token 认证中间件
+// 支持 X-Internal-Token Header 和 Authorization: Bearer Header 两种方式
 func InternalAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		auth := c.GetHeader("X-Internal-Token")
+		if auth == "" {
+			auth = strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
+		}
 		if auth == "" {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"error": gin.H{

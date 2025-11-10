@@ -20,7 +20,7 @@ func newHealthRouter(rdb *redis.Client, reg *provider.Registry) *gin.Engine {
 	if len(reg.ListAllModels()) > 0 {
 		state.MarkLoadSuccess("test", len(reg.ListAllModels()), 1)
 	}
-	h := NewHealthHandler(rdb, reg, state)
+	h := NewHealthHandler(rdb, reg, state, nil)
 	r.GET("/health", h.Health)
 	r.GET("/ready", h.Ready)
 	return r

@@ -18,6 +18,7 @@
 | 版本号 | 修改日期 | 修改内容摘要 | 修改人 |
 | :--- | :--- | :--- | :--- |
 | v1.2.0 | 2026-05-25 | 新增 Key 管理端点（6 个）及内部 Key 验证端点（1 个）— CHG-20260523-001 | OpenCode |
+| v1.3.0 | 2026-05-26 | 新增模型组管理 9 个端点 + 故障切换配置 — CHG-20260525-001 | OpenCode |
 
 ---
 
@@ -1475,3 +1476,764 @@ curl -X POST \
 | 版本号 | 更新时间 | 变更类型 | 变更描述 | 变更人 |
 | :--- | :--- | :---: | :--- | :--- |
 | v1.2.0 | 2026-05-23 | 新增 | 新增 Key CRUD 管理端点（6 个）+ 内部 Key 验证端点（1 个）；新增错误码 E4031/E4042/E4093/E4094/E4095/E4223 | OpenCode |
+
+---
+
+## 11. 变更记录 — CHG-20260525-001
+
+## 变更摘要
+
+新增模型组管理端点（5 个）及组内模型管理端点（3 个）供 ops-console 消费（JWT 认证），新增 Scheduler 内部配置端点（1 个）供 scheduler 消费（预共享 Token 认证）。新增错误码 E4096（group_name_conflict）、E4043（group_not_found）、E4224（invalid_strategy）、E4225（strategy_switch_warning）。现有端点、错误码、认证方式均不受影响。
+
+---
+
+## 1. 版本信息变更
+
+| 属性 | 旧值 | 新值 |
+| :--- | :--- | :--- |
+| **当前版本** | v1.2.0 | v1.3.0 |
+| **最后更新** | 2026-05-25 | 2026-05-25 |
+
+---
+
+## 2. 端点索引变更
+
+> 在现有 20 个端点（13 个管理 + 7 个 Key 管理）基础上新增 9 个端点，按非 Breaking Change 规则在当前版本 v1 下发布。
+
+### 2.1 新增端点
+
+| 端点 | 方法 | 路径 | 用途 | 认证 | 幂等 |
+| :--- | :---: | :--- | :--- | :---: | :---: |
+| 创建模型组 | POST | `/api/v1/groups` | 创建新的模型组并配置路由策略 | JWT | 否 |
+| 模型组列表 | GET | `/api/v1/groups` | 分页查询模型组列表，支持搜索 | JWT | 是 |
+| 模型组详情 | GET | `/api/v1/groups/:id` | 查询模型组详情（含组内模型列表） | JWT | 是 |
+| 更新模型组 | PUT | `/api/v1/groups/:id` | 更新组名称、描述、策略类型 | JWT | 是 |
+| 删除模型组 | DELETE | `/api/v1/groups/:id` | 软删除模型组（设为禁用 + 标记删除时间） | JWT | 是 |
+| 添加模型到组 | POST | `/api/v1/groups/:id/models` | 将已有模型添加到模型组（含策略参数） | JWT | 否 |
+| 组内模型列表 | GET | `/api/v1/groups/:id/models` | 查询组内模型列表 | JWT | 是 |
+| 从组移除模型 | DELETE | `/api/v1/groups/:id/models/:model_id` | 从模型组中移除指定模型 | JWT | 是 |
+| Scheduler 组配置（内部） | GET | `/api/v1/internal/groups` | 返回所有启用模型组的完整配置 | 内部Token | 是 |
+
+---
+
+## 3. 新增端点详细设计
+
+### 3.1 创建模型组
+
+- **接口描述**：创建新的模型组，指定组名称、描述和路由策略类型。组创建后默认为启用状态。
+- **请求方法**：`POST`
+- **请求路径**：`/api/v1/groups`
+
+#### 请求参数
+
+| 参数名 | 类型 | 位置 | 必填 | 描述 | 示例 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| name | string | body | 是 | 模型组名称，2–64 字符，全局唯一 | `"日常推理"` |
+| description | string | body | 否 | 模型组描述，最长 512 字符 | `"用于日常对话推理任务的模型组"` |
+| strategy | string | body | 是 | 路由策略枚举 | `"round_robin"` |
+
+**请求示例**：
+
+```bash
+curl -X POST \
+  'https://control-plane.internal/api/v1/groups' \
+  -H 'Authorization: Bearer {jwt_token}' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "日常推理",
+    "description": "用于日常对话推理任务的模型组",
+    "strategy": "round_robin"
+  }'
+```
+
+#### 响应
+
+**成功响应**（201 Created）：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "id": 1,
+    "name": "日常推理",
+    "description": "用于日常对话推理任务的模型组",
+    "strategy": "round_robin",
+    "enabled": true,
+    "model_count": 0,
+    "created_at": "2026-05-25T10:00:00Z",
+    "updated_at": "2026-05-25T10:00:00Z"
+  },
+  "request_id": "req-uuid"
+}
+```
+
+**响应参数说明**：
+
+| 参数路径 | 类型 | 描述 |
+| :--- | :--- | :--- |
+| data.id | integer | 模型组唯一标识（自增 ID） |
+| data.name | string | 模型组名称 |
+| data.description | string | 模型组描述 |
+| data.strategy | string | 路由策略：round_robin / priority / weighted |
+| data.enabled | boolean | 是否启用 |
+| data.model_count | integer | 组内模型数量 |
+| data.created_at | string(datetime) | 创建时间 |
+| data.updated_at | string(datetime) | 更新时间 |
+
+**可能的错误码**：`E4001`（参数校验失败）、`E4011`（认证失败）、`E4096`（组名称冲突）、`E4224`（策略类型非法）
+
+---
+
+### 3.2 模型组列表
+
+- **接口描述**：分页查询模型组列表，支持按名称模糊搜索。不返回已软删除的组。
+- **请求方法**：`GET`
+- **请求路径**：`/api/v1/groups`
+
+#### 请求参数
+
+| 参数名 | 类型 | 位置 | 必填 | 描述 | 示例 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| page | integer | query | 否 | 页码（默认 1） | `1` |
+| page_size | integer | query | 否 | 每页条数（默认 20，最大 100） | `20` |
+| search | string | query | 否 | 按名称模糊搜索 | `"推理"` |
+| enabled | boolean | query | 否 | 按启用状态过滤 | `true` |
+
+**请求示例**：
+
+```bash
+curl -X GET \
+  'https://control-plane.internal/api/v1/groups?page=1&page_size=20&search=推理' \
+  -H 'Authorization: Bearer {jwt_token}'
+```
+
+#### 响应
+
+**成功响应**（200 OK）：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "items": [
+      {
+        "id": 1,
+        "name": "日常推理",
+        "description": "用于日常对话推理任务的模型组",
+        "strategy": "round_robin",
+        "enabled": true,
+        "model_count": 3,
+        "created_at": "2026-05-25T10:00:00Z",
+        "updated_at": "2026-05-25T10:00:00Z"
+      },
+      {
+        "id": 2,
+        "name": "高智能推理",
+        "description": "用于复杂推理任务的高质量模型组",
+        "strategy": "priority",
+        "enabled": true,
+        "model_count": 2,
+        "created_at": "2026-05-25T11:00:00Z",
+        "updated_at": "2026-05-25T11:00:00Z"
+      }
+    ],
+    "total": 2,
+    "page": 1,
+    "page_size": 20
+  },
+  "request_id": "req-uuid"
+}
+```
+
+**响应参数说明**：
+
+| 参数路径 | 类型 | 描述 |
+| :--- | :--- | :--- |
+| data.items[].id | integer | 模型组 ID |
+| data.items[].name | string | 模型组名称 |
+| data.items[].description | string | 模型组描述 |
+| data.items[].strategy | string | 路由策略 |
+| data.items[].enabled | boolean | 启用状态 |
+| data.items[].model_count | integer | 组内模型数量 |
+| data.items[].created_at | string(datetime) | 创建时间 |
+| data.items[].updated_at | string(datetime) | 更新时间 |
+
+**可能的错误码**：`E4001`（分页参数非法）、`E4011`（认证失败）
+
+---
+
+### 3.3 模型组详情
+
+- **接口描述**：查询单个模型组详情，包含组内模型列表（含策略参数 priority/weight）。
+- **请求方法**：`GET`
+- **请求路径**：`/api/v1/groups/:id`
+
+#### 请求参数
+
+| 参数名 | 类型 | 位置 | 必填 | 描述 | 示例 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| id | integer | path | 是 | 模型组 ID | `1` |
+
+**请求示例**：
+
+```bash
+curl -X GET \
+  'https://control-plane.internal/api/v1/groups/1' \
+  -H 'Authorization: Bearer {jwt_token}'
+```
+
+#### 响应
+
+**成功响应**（200 OK）：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "id": 1,
+    "name": "日常推理",
+    "description": "用于日常对话推理任务的模型组",
+    "strategy": "round_robin",
+    "enabled": true,
+    "model_count": 2,
+    "models": [
+      {
+        "model_id": "660e8400-e29b-41d4-a716-446655440001",
+        "model_name": "qwen-turbo",
+        "model_type": "chat",
+        "provider_name": "bailian-main",
+        "priority": null,
+        "weight": null
+      },
+      {
+        "model_id": "660e8400-e29b-41d4-a716-446655440002",
+        "model_name": "deepseek-chat",
+        "model_type": "chat",
+        "provider_name": "deepseek-main",
+        "priority": null,
+        "weight": null
+      }
+    ],
+    "created_at": "2026-05-25T10:00:00Z",
+    "updated_at": "2026-05-25T10:00:00Z"
+  },
+  "request_id": "req-uuid"
+}
+```
+
+**可能的错误码**：`E4011`（认证失败）、`E4043`（模型组不存在或已被删除）
+
+---
+
+### 3.4 更新模型组
+
+- **接口描述**：更新模型组名称、描述和策略类型。策略切换时如旧参数不兼容新策略，返回警告但不阻断操作。
+- **请求方法**：`PUT`
+- **请求路径**：`/api/v1/groups/:id`
+
+#### 请求参数
+
+| 参数名 | 类型 | 位置 | 必填 | 描述 | 示例 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| id | integer | path | 是 | 模型组 ID | `1` |
+| name | string | body | 是 | 模型组名称 | `"日常推理"` |
+| description | string | body | 否 | 模型组描述 | `"更新后的描述"` |
+| strategy | string | body | 是 | 路由策略枚举 | `"priority"` |
+
+**请求示例**：
+
+```bash
+curl -X PUT \
+  'https://control-plane.internal/api/v1/groups/1' \
+  -H 'Authorization: Bearer {jwt_token}' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "日常推理",
+    "description": "更新后的描述",
+    "strategy": "priority"
+  }'
+```
+
+#### 响应
+
+**成功响应**（200 OK）：
+
+```json
+{
+  "code": 0,
+  "message": "策略已变更为 'priority'，原有 weight 参数可能不兼容，请重新配置组内模型",
+  "data": {
+    "id": 1,
+    "name": "日常推理",
+    "description": "更新后的描述",
+    "strategy": "priority",
+    "enabled": true,
+    "model_count": 2,
+    "created_at": "2026-05-25T10:00:00Z",
+    "updated_at": "2026-05-25T12:00:00Z"
+  },
+  "request_id": "req-uuid"
+}
+```
+
+**策略切换行为说明**：
+- 从 `round_robin` → `priority`：组内模型缺少 priority 值，message 提示需重新配置
+- 从 `weighted` → `round_robin`：原有 weight 参数保留但不生效，scheduler 按轮询处理
+- 从 `priority` → `weighted`：原有 priority 参数保留但不生效，message 提示需重新配置
+- 相同策略不切换：直接返回成功，无额外提示
+
+**可能的错误码**：`E4001`（参数校验失败）、`E4011`（认证失败）、`E4043`（模型组不存在）、`E4096`（名称冲突）、`E4224`（策略类型非法）、`E4225`（策略切换警告，非阻断）
+
+---
+
+### 3.5 删除模型组
+
+- **接口描述**：软删除模型组（设 enabled=false + 标记 deleted_at）。组内模型关联保留不清除，组恢复后关联关系完整保留。已删除的组在 scheduler 配置读取中自动过滤。
+- **请求方法**：`DELETE`
+- **请求路径**：`/api/v1/groups/:id`
+
+#### 请求参数
+
+| 参数名 | 类型 | 位置 | 必填 | 描述 | 示例 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| id | integer | path | 是 | 模型组 ID | `1` |
+
+**请求示例**：
+
+```bash
+curl -X DELETE \
+  'https://control-plane.internal/api/v1/groups/1' \
+  -H 'Authorization: Bearer {jwt_token}'
+```
+
+#### 响应
+
+**成功响应**（200 OK）：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": null,
+  "request_id": "req-uuid"
+}
+```
+
+**幂等行为**：对已删除的组再次调用，返回 404 E4043 `"模型组不存在或已被删除"`。
+
+**可能的错误码**：`E4011`（认证失败）、`E4043`（模型组不存在或已被删除）
+
+---
+
+### 3.6 添加模型到组
+
+- **接口描述**：将已有模型添加到指定模型组。根据组的策略类型，需提供对应的策略参数（priority 或 weight）。同一模型不可在同一组内重复添加，但可跨组添加。
+- **请求方法**：`POST`
+- **请求路径**：`/api/v1/groups/:id/models`
+
+#### 请求参数
+
+| 参数名 | 类型 | 位置 | 必填 | 描述 | 示例 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| id | integer | path | 是 | 模型组 ID | `2` |
+| model_id | string(uuid) | body | 是 | 模型 ID（models 表 UUID） | `"660e8400-e29b-41d4-a716-446655440001"` |
+| priority | integer | body | 条件必填 | 优先级（strategy=priority 时必填，正整数） | `1` |
+| weight | integer | body | 条件必填 | 权重值（strategy=weighted 时必填，1–100） | `50` |
+
+**请求示例**：
+
+```bash
+# 优先级策略 — 添加模型
+curl -X POST \
+  'https://control-plane.internal/api/v1/groups/2/models' \
+  -H 'Authorization: Bearer {jwt_token}' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model_id": "660e8400-e29b-41d4-a716-446655440001",
+    "priority": 1
+  }'
+
+# 加权策略 — 添加模型
+curl -X POST \
+  'https://control-plane.internal/api/v1/groups/3/models' \
+  -H 'Authorization: Bearer {jwt_token}' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model_id": "660e8400-e29b-41d4-a716-446655440001",
+    "weight": 50
+  }'
+
+# 轮询策略 — 添加模型（无需策略参数）
+curl -X POST \
+  'https://control-plane.internal/api/v1/groups/1/models' \
+  -H 'Authorization: Bearer {jwt_token}' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model_id": "660e8400-e29b-41d4-a716-446655440001"
+  }'
+```
+
+#### 响应
+
+**成功响应**（201 Created）：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "group_id": 2,
+    "model_id": "660e8400-e29b-41d4-a716-446655440001",
+    "model_name": "qwen-turbo",
+    "model_type": "chat",
+    "priority": 1,
+    "weight": null,
+    "created_at": "2026-05-25T13:00:00Z"
+  },
+  "request_id": "req-uuid"
+}
+```
+
+**可能的错误码**：`E4001`（参数校验失败）、`E4011`（认证失败）、`E4041`（模型不存在）、`E4043`（模型组不存在）、`E4096`（模型已在组内）
+
+---
+
+### 3.7 组内模型列表
+
+- **接口描述**：查询指定模型组内的模型列表，返回模型信息及策略参数。
+- **请求方法**：`GET`
+- **请求路径**：`/api/v1/groups/:id/models`
+
+#### 请求参数
+
+| 参数名 | 类型 | 位置 | 必填 | 描述 | 示例 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| id | integer | path | 是 | 模型组 ID | `1` |
+
+**请求示例**：
+
+```bash
+curl -X GET \
+  'https://control-plane.internal/api/v1/groups/1/models' \
+  -H 'Authorization: Bearer {jwt_token}'
+```
+
+#### 响应
+
+**成功响应**（200 OK）：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "items": [
+      {
+        "group_id": 1,
+        "model_id": "660e8400-e29b-41d4-a716-446655440001",
+        "model_name": "qwen-turbo",
+        "model_type": "chat",
+        "provider_name": "bailian-main",
+        "priority": null,
+        "weight": null,
+        "created_at": "2026-05-25T10:05:00Z"
+      },
+      {
+        "group_id": 1,
+        "model_id": "660e8400-e29b-41d4-a716-446655440002",
+        "model_name": "deepseek-chat",
+        "model_type": "chat",
+        "provider_name": "deepseek-main",
+        "priority": null,
+        "weight": null,
+        "created_at": "2026-05-25T10:10:00Z"
+      }
+    ],
+    "total": 2
+  },
+  "request_id": "req-uuid"
+}
+```
+
+**可能的错误码**：`E4011`（认证失败）、`E4043`（模型组不存在）
+
+---
+
+### 3.8 从组移除模型
+
+- **接口描述**：从模型组中移除指定模型。移除后该模型在该组中不再参与路由，但不影响该模型在其他组的路由。
+- **请求方法**：`DELETE`
+- **请求路径**：`/api/v1/groups/:id/models/:model_id`
+
+#### 请求参数
+
+| 参数名 | 类型 | 位置 | 必填 | 描述 | 示例 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| id | integer | path | 是 | 模型组 ID | `1` |
+| model_id | string(uuid) | path | 是 | 模型 ID | `"660e8400-e29b-41d4-a716-446655440001"` |
+
+**请求示例**：
+
+```bash
+curl -X DELETE \
+  'https://control-plane.internal/api/v1/groups/1/models/660e8400-e29b-41d4-a716-446655440001' \
+  -H 'Authorization: Bearer {jwt_token}'
+```
+
+#### 响应
+
+**成功响应**（200 OK）：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": null,
+  "request_id": "req-uuid"
+}
+```
+
+**幂等行为**：对已不在组内的模型再次调用，返回 200 OK 且 message 为 `"模型不在该组内"`。
+
+**可能的错误码**：`E4011`（认证失败）、`E4043`（模型组不存在）
+
+---
+
+### 3.9 Scheduler 组配置（内部接口）
+
+- **接口描述**：返回所有启用且未软删除的模型组完整配置，包含组内模型列表、渠道信息（含解密后凭证）和策略参数。供 scheduler 启动时全量拉取或定期刷新配置使用。
+- **请求方法**：`GET`
+- **请求路径**：`/api/v1/internal/groups`
+
+#### 请求参数
+
+无请求参数。
+
+**请求示例**：
+
+```bash
+curl -X GET \
+  'https://control-plane.internal/api/v1/internal/groups' \
+  -H 'Authorization: Bearer {internal_token}'
+```
+
+#### 响应
+
+**成功响应**（200 OK）：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "groups": [
+      {
+        "id": 1,
+        "name": "日常推理",
+        "strategy": "round_robin",
+        "models": [
+          {
+            "model_name": "qwen-turbo",
+            "model_type": "chat",
+            "provider": {
+              "id": "550e8400-e29b-41d4-a716-446655440000",
+              "name": "bailian-main",
+              "type": "bailian",
+              "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+              "credentials": {
+                "api_key": "sk-abcdefghijklmnop"
+              }
+            },
+            "priority": null,
+            "weight": null
+          },
+          {
+            "model_name": "deepseek-chat",
+            "model_type": "chat",
+            "provider": {
+              "id": "660e8400-e29b-41d4-a716-446655440005",
+              "name": "deepseek-main",
+              "type": "deepseek",
+              "endpoint": "https://api.deepseek.com/v1",
+              "credentials": {
+                "api_key": "sk-deepseekkey1234"
+              }
+            },
+            "priority": null,
+            "weight": null
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "name": "高智能",
+        "strategy": "priority",
+        "models": [
+          {
+            "model_name": "qwen-max",
+            "model_type": "chat",
+            "provider": {
+              "id": "550e8400-e29b-41d4-a716-446655440000",
+              "name": "bailian-main",
+              "type": "bailian",
+              "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+              "credentials": {
+                "api_key": "sk-abcdefghijklmnop"
+              }
+            },
+            "priority": 1,
+            "weight": null
+          },
+          {
+            "model_name": "deepseek-r1",
+            "model_type": "chat",
+            "provider": {
+              "id": "660e8400-e29b-41d4-a716-446655440005",
+              "name": "deepseek-main",
+              "type": "deepseek",
+              "endpoint": "https://api.deepseek.com/v1",
+              "credentials": {
+                "api_key": "sk-deepseekkey1234"
+              }
+            },
+            "priority": 2,
+            "weight": null
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "name": "成本优化",
+        "strategy": "weighted",
+        "models": [
+          {
+            "model_name": "qwen-turbo",
+            "model_type": "chat",
+            "provider": {
+              "id": "550e8400-e29b-41d4-a716-446655440000",
+              "name": "bailian-main",
+              "type": "bailian",
+              "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+              "credentials": {
+                "api_key": "sk-abcdefghijklmnop"
+              }
+            },
+            "priority": null,
+            "weight": 70
+          },
+          {
+            "model_name": "qwen-plus",
+            "model_type": "chat",
+            "provider": {
+              "id": "550e8400-e29b-41d4-a716-446655440000",
+              "name": "bailian-main",
+              "type": "bailian",
+              "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+              "credentials": {
+                "api_key": "sk-abcdefghijklmnop"
+              }
+            },
+            "priority": null,
+            "weight": 30
+          }
+        ]
+      }
+    ],
+    "updated_at": "2026-05-25T12:00:00Z"
+  },
+  "request_id": "req-uuid"
+}
+```
+
+**响应参数说明**：
+
+| 参数路径 | 类型 | 描述 |
+| :--- | :--- | :--- |
+| data.groups[].id | integer | 模型组 ID |
+| data.groups[].name | string | 模型组名称 |
+| data.groups[].strategy | string | 路由策略枚举：round_robin / priority / weighted |
+| data.groups[].models[].model_name | string | 模型名称（scheduler 路由匹配键） |
+| data.groups[].models[].model_type | string | 模型类型（chat/embedding） |
+| data.groups[].models[].provider.id | string(uuid) | 渠道 ID |
+| data.groups[].models[].provider.name | string | 渠道名称 |
+| data.groups[].models[].provider.type | string | 渠道类型 |
+| data.groups[].models[].provider.endpoint | string | API 端点 URL |
+| data.groups[].models[].provider.credentials | object | 解密后的完整凭证（仅内部接口返回） |
+| data.groups[].models[].priority | integer\|null | 优先级值（仅 priority 策略有效） |
+| data.groups[].models[].weight | integer\|null | 权重值（仅 weighted 策略有效，1–100） |
+| data.updated_at | string(datetime) | 配置最后更新时间（用于缓存判断） |
+
+> **安全说明**：此接口返回完整凭证明文，仅供 scheduler 内部调用，通过预共享 Token 认证 + 网络隔离保护。接口仅返回 `enabled=true` 且未软删除（`deleted_at IS NULL`）的模型组，组内仅包含 `enabled=true` 的模型及其对应 `enabled=true` 的渠道。
+
+**可能的错误码**：`E4011`（认证失败）、`E5001`（凭证解密失败等内部错误）
+
+---
+
+## 4. 错误码变更
+
+### 4.1 新增错误码
+
+| 错误码 | HTTP 状态 | 语义 | 触发条件 | 可重试 |
+| :--- | :---: | :--- | :--- | :---: |
+| E4043 | 404 | 模型组不存在 | 指定 ID 的模型组不存在或已被软删除 | 否 |
+| E4096 | 409 | 模型组名称冲突 | 创建或更新时组名称与已有组重复 | 否（需换名） |
+| E4224 | 422 | 策略类型非法 | strategy 字段不属于 round_robin / priority / weighted | 否 |
+| E4225 | 422 | 策略切换参数警告 | 策略类型变更后旧参数可能不兼容新策略（非阻断） | — |
+
+> **错误码分配说明**：E4091–E4095 已被 Key CRUD 功能占用，故组名称冲突使用 E4096。E4041、E4042 分别被通用资源不存在和 Key 不存在占用，故组不存在使用 E4043。
+
+### 4.2 业务错误码补充说明
+
+| 错误码 | 场景 | message 示例 |
+| :--- | :--- | :--- |
+| E4043 | 模型组不存在或已删除 | `"模型组不存在或已被删除"` |
+| E4096 | 创建组时名称冲突 | `"模型组名称 '日常推理' 已存在"` |
+| E4096 | 更新组时名称冲突 | `"模型组名称 '高智能' 已存在，请使用其他名称"` |
+| E4224 | 非法策略值 | `"无效的策略类型 'xxx'，支持：round_robin, priority, weighted"` |
+| E4225 | 策略切换警告 | `"策略已变更为 'round_robin'，原有 priority/weight 参数可能不兼容，请重新配置组内模型"` |
+
+### 4.3 已有错误码（不变更）
+
+现有错误码 `E4001`、`E4011`、`E4031`、`E4041`、`E4042`、`E4091`–`E4095`、`E4221`–`E4223`、`E4291`、`E5021`、`E5001` 保持不变。模型不存在使用已有 `E4041`；模型已在组内重复添加使用已有 `E4091`（通用冲突错误码）。
+
+---
+
+## 5. 版本策略适用
+
+**当前版本**：`v1` — 新增 9 个端点按 **非 Breaking Change** 规则在当前版本发布：
+
+| 变更类型 | 规则符合性 |
+| :--- | :--- |
+| 新增端点 | 符合 — 非 Breaking Change 允许新增端点 |
+| 新增响应字段 | 符合 — 新增字段为可选或仅在新增端点中出现 |
+| 新增错误码 | 符合 — 不修改已有错误码含义 |
+| 新增路径 `/api/v1/groups/*` | 符合 — 新增 URL 路径前缀，不修改已有路径 |
+| 新增路径 `/api/v1/internal/groups` | 符合 — 新增内部路径，不修改已有路径 |
+
+---
+
+## 6. 接口安全
+
+**管理接口（/api/v1/groups/*）：**
+
+- 认证方式：JWT Bearer Token（RS256），要求 token 中含 `role: admin`
+- Token 来源：ops-console 从公司统一身份平台获取
+- 授权控制：仅平台管理员可操作模型组（admin role），普通用户通过 Key CRUD 端点管理自有 Key
+
+**内部接口（/api/v1/internal/groups）：**
+
+- 认证方式：预共享 Token
+- 网络隔离：仅 scheduler 可调用，不暴露对外网关
+- 返回信息：返回解密后的完整渠道凭证，供 scheduler 构建路由表使用
+- 数据范围：仅返回 `enabled=true` 且未软删除的组及其模型和渠道
+
+---
+
+## 7. 变更历史
+
+| 版本号 | 更新时间 | 变更类型 | 变更描述 | 变更人 |
+| :--- | :--- | :---: | :--- | :--- |
+| v1.3.0 | 2026-05-25 | 新增 | 新增模型组管理端点（5 个）+ 组内模型管理端点（3 个）+ Scheduler 内部配置端点（1 个）；新增错误码 E4043/E4096/E4224/E4225 | OpenCode |

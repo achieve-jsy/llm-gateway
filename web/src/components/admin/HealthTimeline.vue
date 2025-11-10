@@ -2,8 +2,8 @@
   <div class="health-timeline">
     <div class="timeline-grid">
       <el-tooltip
-        v-for="(segment, index) in segments"
-        :key="index"
+        v-for="(segment, idx) in segments"
+        :key="idx"
         :content="segment.tooltip"
         placement="top"
         :show-after="200"

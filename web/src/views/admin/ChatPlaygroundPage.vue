@@ -1,18 +1,29 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getModels } from '@/services/control-plane'
 import type { Model } from '@/types/model'
 
 // ─── 类型 ──────────────────────────────────────────────────────────────────
+type PlaygroundMode = 'session' | 'apikey'
+
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
   content: string
   reasoning_content?: string
 }
 
+interface GatewayModelInfo {
+  id: string
+  object: string
+  created: number
+  owned_by: string
+}
+
 // ─── 状态 ──────────────────────────────────────────────────────────────────
+const mode = ref<PlaygroundMode>('session')
 const models = ref<Model[]>([])
+const gatewayModelIds = ref<string[]>([])
 const loadingModels = ref(false)
 
 const config = reactive({
@@ -46,6 +57,7 @@ const effectiveApiBase = computed(() => config.apiBase || '/v1')
 
 // 选中模型的上下文窗口提示
 const modelHint = computed(() => {
+  if (mode.value === 'apikey') return ''
   const meta = currentModelMeta.value
   if (!meta) return ''
   const parts: string[] = []
@@ -54,26 +66,28 @@ const modelHint = computed(() => {
   return parts.join(' / ')
 })
 
-// ─── 加载模型列表（从 control-plane 管理列表） ──────────────────────────────
-async function loadModelList() {
+// 在 API Key 模式下，模型选项来自 gateway 名称列表
+const modelOptions = computed(() => {
+  if (mode.value === 'apikey') {
+    return gatewayModelIds.value.map(id => ({ id: '', name: id, upstream_model_id: id, model_type: 'chat', enabled: true } as Model))
+  }
+  return models.value
+})
+
+// ─── 加载模型列表 ──────────────────────────────────────────────────────────
+async function loadAdminModels() {
   loadingModels.value = true
   try {
     const result = await getModels(undefined, { pageSize: 200 })
-    // 只取 chat 类型、启用状态的模型
     const list = result.data.filter(m => m.model_type === 'chat' && m.enabled)
     models.value = list
-    // 填充元数据缓存
     const map = new Map<string, Model>()
     list.forEach(m => {
       const key = m.upstream_model_id || m.name
       map.set(key, m)
-      // 同时用 name 也可查到
-      if (m.name !== key) {
-        map.set(m.name, m)
-      }
+      if (m.name !== key) map.set(m.name, m)
     })
     modelMetaMap.value = map
-    // 默认选中第一个
     if (list.length > 0 && !config.model) {
       config.model = list[0].upstream_model_id || list[0].name
     }
@@ -84,7 +98,57 @@ async function loadModelList() {
   }
 }
 
-onMounted(loadModelList)
+async function loadGatewayModels() {
+  if (!config.apiKey) {
+    gatewayModelIds.value = []
+    models.value = []
+    return
+  }
+  loadingModels.value = true
+  try {
+    const baseUrl = effectiveApiBase.value.replace(/\/$/, '')
+    const resp = await fetch(`${baseUrl}/models`, {
+      headers: { Authorization: `Bearer ${config.apiKey}` },
+    })
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => null)
+      throw new Error(err?.error?.message || `HTTP ${resp.status}`)
+    }
+    const data = await resp.json()
+    gatewayModelIds.value = (data.data as GatewayModelInfo[]).map(m => m.id)
+    if (gatewayModelIds.value.length > 0 && !config.model) {
+      config.model = gatewayModelIds.value[0]
+    } else if (gatewayModelIds.value.length === 0) {
+      ElMessage.warning('网关未返回可用模型')
+    }
+  } catch (err: any) {
+    gatewayModelIds.value = []
+    ElMessage.error(`获取模型列表失败: ${err.message}`)
+  } finally {
+    loadingModels.value = false
+  }
+}
+
+async function loadModels() {
+  if (mode.value === 'apikey') {
+    await loadGatewayModels()
+  } else {
+    await loadAdminModels()
+  }
+}
+
+watch(mode, () => {
+  config.model = ''
+  loadModels()
+})
+
+onMounted(loadAdminModels)
+
+// ─── 主动获取鉴权 token ───────────────────────────────────────────────────
+function getAuthToken(): string {
+  if (mode.value === 'apikey') return config.apiKey
+  return localStorage.getItem('access_token') || ''
+}
 
 // ─── 滚动到底部 ──────────────────────────────────────────────────────────
 function scrollToBottom() {
@@ -104,6 +168,12 @@ async function sendMessage() {
     return
   }
 
+  const token = getAuthToken()
+  if (!token) {
+    ElMessage.warning(mode.value === 'apikey' ? '请先输入 API Key' : '请先登录获取会话令牌')
+    return
+  }
+
   messages.value.push({ role: 'user', content })
   userInput.value = ''
   scrollToBottom()
@@ -112,7 +182,7 @@ async function sendMessage() {
   if (config.systemPrompt) {
     reqMessages.push({ role: 'system', content: config.systemPrompt })
   }
-  reqMessages.push(...messages.value.filter(m => m.role !== 'system'))
+  reqMessages.push(...messages.value.filter(m => m.role !== 'system' && m.content))
 
   const assistantMsg: ChatMessage = { role: 'assistant', content: '', reasoning_content: '' }
   messages.value.push(assistantMsg)
@@ -125,7 +195,7 @@ async function sendMessage() {
     const url = `${baseUrl}/chat/completions`
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    const token = config.apiKey || localStorage.getItem('auth_token') || 'dev-token'
+    const token = getAuthToken()
     headers['Authorization'] = `Bearer ${token}`
 
     const stopSeqs = config.stop.trim()
@@ -235,6 +305,29 @@ function renderContent(content: string): string {
       </div>
 
       <div class="pg-sidebar__body">
+        <!-- 模式切换 -->
+        <div class="field">
+          <label class="field__label">模式</label>
+          <el-radio-group v-model="mode" size="small" class="field__control" :disabled="isStreaming">
+            <el-radio-button value="session">会话</el-radio-button>
+            <el-radio-button value="apikey">API Key</el-radio-button>
+          </el-radio-group>
+        </div>
+
+        <!-- API Key 模式密钥输入 -->
+        <div v-if="mode === 'apikey'" class="field">
+          <label class="field__label">API Key</label>
+          <el-input
+            v-model="config.apiKey"
+            placeholder="sk-..."
+            type="password"
+            show-password
+            clearable
+            class="field__control"
+            @change="loadGatewayModels"
+          />
+        </div>
+
         <!-- 模型选择 -->
         <div class="field">
           <label class="field__label">模型</label>
@@ -248,14 +341,14 @@ function renderContent(content: string): string {
             class="field__control"
           >
             <el-option
-              v-for="m in models"
-              :key="m.id"
+              v-for="m in modelOptions"
+              :key="mode === 'apikey' ? m.name : m.id"
               :label="m.name"
               :value="m.upstream_model_id || m.name"
             >
               <div class="model-option">
                 <span class="model-option__name">{{ m.name }}</span>
-                <span class="model-option__owner">{{ m.provider?.name || m.provider_id }}</span>
+                <span v-if="mode === 'session'" class="model-option__owner">{{ m.provider?.name || m.provider_id }}</span>
               </div>
             </el-option>
           </el-select>
@@ -319,6 +412,11 @@ function renderContent(content: string): string {
           />
         </div>
 
+        <div class="field">
+          <label class="field__label">流式输出</label>
+          <el-switch v-model="config.stream" />
+        </div>
+
         <!-- 高级配置折叠 -->
         <el-divider content-position="center">
           <span class="advanced-toggle" @click="showAdvanced = !showAdvanced">
@@ -337,11 +435,11 @@ function renderContent(content: string): string {
             />
           </div>
 
-          <div class="field">
+          <div v-if="mode === 'session'" class="field">
             <label class="field__label">密钥</label>
             <el-input
               v-model="config.apiKey"
-              placeholder="默认使用系统令牌"
+              placeholder="默认为会话令牌"
               type="password"
               show-password
               clearable
@@ -349,11 +447,7 @@ function renderContent(content: string): string {
             />
           </div>
 
-          <div class="field">
-            <label class="field__label">流式输出</label>
-            <el-switch v-model="config.stream" />
-          </div>
-        </template>
+          </template>
       </div>
 
       <!-- 底部操作 -->

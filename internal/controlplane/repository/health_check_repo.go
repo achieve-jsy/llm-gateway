@@ -74,11 +74,14 @@ func (r *HealthCheckRepo) CleanOldLogs(days int) error {
 	return r.db.Where("checked_at < ?", cutoff).Delete(&model.HealthCheckLog{}).Error
 }
 
-// GetLogsByTimeRange 获取指定时间范围内的检测记录
-func (r *HealthCheckRepo) GetLogsByTimeRange(since time.Time, targetType string) ([]model.HealthCheckLog, error) {
+// GetLogsByTimeRange 获取指定时间范围内的检测记录，支持按目标名称搜索
+func (r *HealthCheckRepo) GetLogsByTimeRange(since time.Time, targetType string, search string) ([]model.HealthCheckLog, error) {
 	query := r.db.Where("checked_at >= ?", since)
 	if targetType != "" {
 		query = query.Where("target_type = ?", targetType)
+	}
+	if search != "" {
+		query = query.Where("target_name ILIKE ?", "%"+search+"%")
 	}
 	var logs []model.HealthCheckLog
 	err := query.Order("checked_at ASC").Find(&logs).Error
@@ -124,4 +127,81 @@ func (r *HealthCheckRepo) GetTargetProviderCounts(targetNames []string) (map[str
 		}
 	}
 	return result, nil
+}
+
+// TimelineBucketRow 时间线聚合桶查询结果行
+type TimelineBucketRow struct {
+	TargetName  string    `gorm:"column:target_name"`
+	TargetType  string    `gorm:"column:target_type"`
+	BucketIdx   int       `gorm:"column:bucket_idx"`
+	TotalCount  int       `gorm:"column:total"`
+	OkCount     int       `gorm:"column:ok_count"`
+	AvgRtt      int       `gorm:"column:avg_rtt"`
+	FirstErr    string    `gorm:"column:first_err"`
+	BucketStart time.Time `gorm:"column:bucket_start"`
+}
+
+// GetTimelineBuckets SQL 层直接聚合 100 桶数据，同时返回 provider/key 计数
+func (r *HealthCheckRepo) GetTimelineBuckets(since time.Time, search string, bucketCount int) ([]TimelineBucketRow, map[string]TargetProviderCount, error) {
+	searchPattern := ""
+	if search != "" {
+		searchPattern = "%" + search + "%"
+	}
+	bucketMs := time.Since(since).Milliseconds() / int64(bucketCount)
+
+	var rows []TimelineBucketRow
+	err := r.db.Raw(`
+		SELECT
+			target_name,
+			target_type,
+			(EXTRACT(EPOCH FROM (checked_at - ?::timestamptz)) * 1000 / ?)::int AS bucket_idx,
+			COUNT(*)::int AS total,
+			COUNT(*) FILTER (WHERE success)::int AS ok_count,
+			AVG(response_time_ms)::int AS avg_rtt,
+			MIN(CASE WHEN NOT success THEN error_message END) AS first_err,
+			MIN(checked_at) AS bucket_start
+		FROM health_check_logs
+		WHERE checked_at >= ?
+		  AND target_type = 'model'
+		  AND (? = '' OR target_name ILIKE ?)
+		GROUP BY target_name, target_type, bucket_idx
+		ORDER BY target_name, bucket_idx
+	`, since, bucketMs, since, searchPattern, searchPattern).Scan(&rows).Error
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// 从 models 表直接获取 provider 计数（避免 JOIN health_check_logs 全表）
+	nameSet := make(map[string]bool)
+	for _, r := range rows {
+		nameSet[r.TargetName] = true
+	}
+	names := make([]string, 0, len(nameSet))
+	for n := range nameSet {
+		names = append(names, n)
+	}
+
+	type providerRow struct {
+		Name string `gorm:"column:name"`
+		Cnt  int    `gorm:"column:provider_count"`
+	}
+	var provRows []providerRow
+	if len(names) > 0 {
+		r.db.Raw(`
+			SELECT name, COUNT(DISTINCT provider_id)::int AS provider_count
+			FROM models
+			WHERE name IN ?
+			GROUP BY name
+		`, names).Scan(&provRows)
+	}
+	pcm := make(map[string]TargetProviderCount, len(provRows))
+	for i := range provRows {
+		pcm[provRows[i].Name] = TargetProviderCount{
+			TargetName:  provRows[i].Name,
+			TargetType:  "model",
+			ProviderCnt: provRows[i].Cnt,
+		}
+	}
+
+	return rows, pcm, nil
 }

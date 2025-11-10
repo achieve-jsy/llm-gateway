@@ -1,18 +1,23 @@
 package server
 
 import (
+	"log"
+	"time"
+
+	"github.com/example/llm-gateway/internal/gateway/cache"
 	"github.com/example/llm-gateway/internal/gateway/handler"
 	"github.com/example/llm-gateway/internal/gateway/infra"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/example/llm-gateway/internal/gateway/provider"
+	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
 // Setup 初始化 Gin 路由与中间件
-func Setup(registry *provider.Registry, cache *infra.Cache, state *provider.RuntimeState, authClient *infra.AuthClient, controlPlaneURL, internalToken string) *gin.Engine {
+func Setup(registry *provider.Registry, cache *infra.Cache, state *provider.RuntimeState, authClient *infra.AuthClient, controlPlaneURL, internalToken string, sch *scheduler.Scheduler, nameCache *cache.GroupNameCache) *gin.Engine {
 	r := gin.New()
 
 	// 全局中间件链
@@ -27,17 +32,33 @@ func Setup(registry *provider.Registry, cache *infra.Cache, state *provider.Runt
 
 	// 创建编排器和处理器
 	orch := orchestrator.NewChatOrchestrator(registry)
-	chatHandler := handler.NewChatHandler(orch)
+
+	var groupDispatch *orchestrator.GroupAwareDispatcher
+	if sch != nil && nameCache != nil {
+		groupDispatch = orchestrator.NewGroupAwareDispatcher(sch, nameCache)
+	}
+
+	var chatHandler *handler.ChatHandler
+	if groupDispatch != nil {
+		chatHandler = handler.NewChatHandlerWithGroup(orch, groupDispatch)
+	} else {
+		chatHandler = handler.NewChatHandler(orch)
+	}
+
 	modelsHandler := handler.NewModelsHandler(cache, registry, state)
-	healthHandler := handler.NewHealthHandler(cache.Client(), registry, state)
+	healthHandler := handler.NewHealthHandler(cache.Client(), registry, state, sch)
 	r.GET("/health", healthHandler.Health)
 	r.GET("/ready", healthHandler.Ready)
+
+	// 加载并发管控配置
+	guard := loadGatewayGuard(controlPlaneURL)
 
 	// OpenAI 兼容接口（需 API Key 认证）
 	v1 := r.Group("/v1")
 	meHandler := handler.NewMeHandler(registry, state, controlPlaneURL, internalToken)
 
 	v1.Use(middleware.AuthMiddleware(authClient))
+	v1.Use(guard.Handler())
 	{
 		v1.GET("/me/models", meHandler.Handle)
 		v1.POST("/chat/completions", chatHandler.Handle)
@@ -45,4 +66,31 @@ func Setup(registry *provider.Registry, cache *infra.Cache, state *provider.Runt
 	}
 
 	return r
+}
+
+func loadGatewayGuard(controlPlaneURL string) *middleware.GatewayGuard {
+	settings, err := infra.LoadGatewaySettings(controlPlaneURL)
+	if err != nil {
+		log.Printf("[guard] failed to load gateway settings from control-plane: %v, using defaults", err)
+		settings = &infra.GatewaySettings{RateLimitPerMinute: 60, MaxConcurrencyPerKey: 10}
+	}
+
+	guard := middleware.NewGatewayGuard(settings.RateLimitPerMinute, settings.MaxConcurrencyPerKey)
+	guard.StartCleanup(2 * time.Minute)
+
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			updated, err := infra.LoadGatewaySettings(controlPlaneURL)
+			if err != nil {
+				continue
+			}
+			guard.UpdateLimits(updated.RateLimitPerMinute, updated.MaxConcurrencyPerKey)
+		}
+	}()
+
+	log.Printf("[guard] gateway guard initialized: rate_limit=%d/min max_concurrency=%d",
+		settings.RateLimitPerMinute, settings.MaxConcurrencyPerKey)
+	return guard
 }

@@ -101,7 +101,76 @@ build-control-plane:
     paths: [control-plane.tar.gz]
     expire_in: 2 hours
 
-# ─── Deploy Stage ───────────────────────────────────────────────────────────
+# ─── Deploy Test (192.0.2.10) ─────────────────────────────────────────────
+deploy-test:
+  stage: deploy
+  image: alpine:latest
+  tags: [deploy]
+  variables:
+    TEST_HOST: "192.0.2.10"
+    TEST_PATH: "/opt/llm-gateway"
+    GATEWAY_PORT: "4010"
+    CONTROL_PLANE_PORT: "4011"
+  before_script:
+    - apk add --no-cache openssh-client curl
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        export IMAGE_TAG="$CI_COMMIT_TAG"
+      else
+        export IMAGE_TAG="$CI_COMMIT_SHORT_SHA"
+      fi
+  script:
+    - |
+      SSH_OPTS="-o StrictHostKeyChecking=no"
+      echo "=== Deploying IMAGE_TAG=${IMAGE_TAG} to ${TEST_HOST} (test) ==="
+
+      # 传输镜像文件
+      scp ${SSH_OPTS} gateway.tar.gz control-plane.tar.gz root@${TEST_HOST}:/tmp/
+
+      # 传输部署文件
+      ssh ${SSH_OPTS} root@${TEST_HOST} "mkdir -p ${TEST_PATH}"
+      scp ${SSH_OPTS} docker-compose.yml root@${TEST_HOST}:${TEST_PATH}/
+      [ -f .env.example ] && scp ${SSH_OPTS} .env.example root@${TEST_HOST}:${TEST_PATH}/
+
+      # 远程部署
+      ssh ${SSH_OPTS} root@${TEST_HOST} << REMOTE_SCRIPT
+        set -e
+        cd ${TEST_PATH}
+
+        # 加载镜像
+        echo "Loading gateway image..."
+        docker load < /tmp/gateway.tar.gz
+        echo "Loading control-plane image..."
+        docker load < /tmp/control-plane.tar.gz
+
+        # 清理传输文件
+        rm -f /tmp/gateway.tar.gz /tmp/control-plane.tar.gz
+
+        # 如果 .env 不存在则从 example 复制
+        [ ! -f .env ] && cp .env.example .env && echo "WARN: Created .env from .env.example"
+
+        # 覆盖端口映射启动
+        export IMAGE_TAG="${IMAGE_TAG}"
+        export GATEWAY_PORT="${GATEWAY_PORT}"
+        export CONTROL_PLANE_PORT="${CONTROL_PLANE_PORT}"
+        export GATEWAY_HOST="0.0.0.0"
+        export CP_HOST="0.0.0.0"
+        docker compose up -d --remove-orphans --wait --wait-timeout 60
+
+        echo "=== Deploy ${IMAGE_TAG} to test complete ==="
+        docker compose ps
+      REMOTE_SCRIPT
+  environment:
+    name: test
+    url: http://${TEST_HOST}:${GATEWAY_PORT}
+  dependencies:
+    - build-gateway
+    - build-control-plane
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev"
+      when: on_success
+
+# ─── Deploy Prod (192.0.2.10) ───────────────────────────────────────────
 deploy:
   stage: deploy
   image: alpine:latest
@@ -178,13 +247,37 @@ deploy:
       when: manual
 
 # ─── Verify Stage ───────────────────────────────────────────────────────────
+verify-test:
+  stage: verify
+  image: alpine:latest
+  tags: [deploy]
+  script:
+    - apk add --no-cache curl
+    - sleep 10
+    - |
+      echo "Checking gateway health on test..."
+      curl -sf http://192.0.2.10:4010/health || {
+        echo "ERROR: Gateway health check failed"
+        exit 1
+      }
+      echo " ✓ Gateway healthy"
+    - |
+      echo "Checking control-plane health on test..."
+      curl -sf http://192.0.2.10:4011/api/v1/provider-definitions || {
+        echo "ERROR: Control-plane health check failed"
+        exit 1
+      }
+      echo " ✓ Control-plane healthy"
+  dependencies: []
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev"
+
 verify:
   stage: verify
   image: alpine:latest
   tags: [deploy]
   script:
     - apk add --no-cache curl
-    - echo "Waiting for services to stabilize..."
     - sleep 15
     - |
       echo "Checking gateway health..."
@@ -200,7 +293,6 @@ verify:
         exit 1
       }
       echo " ✓ Control-plane healthy"
-    - echo "=== All services verified ==="
   dependencies: []
   rules:
     - if: $CI_COMMIT_TAG

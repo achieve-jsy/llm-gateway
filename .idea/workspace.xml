@@ -4,13 +4,21 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="af7f4b61-a5e3-4748-bcf3-e1eb914177d5" name="Changes" comment="chore(config): 更新环境配置和工作区设置&#10;&#10;- 配置 OAuth2 SSO 认证参数，包括客户端ID、密钥和回调地址&#10;- 设置 JWT 密钥和前端URL指向生产环境域名&#10;- 更新工作区 Git 分支信息为开发版本分支&#10;- 优化 IDE 工作空间配置，添加最新任务历史记录&#10;- 清理临时文件路径配置，调整 Git widget 显示名称">
+    <list default="true" id="af7f4b61-a5e3-4748-bcf3-e1eb914177d5" name="Changes" comment="feat(scheduler): 添加内部令牌认证和健康状态过滤功能&#10;&#10;- 添加 InternalToken 配置项用于控制平面通信认证&#10;- 实现 ConfigSyncer 使用内部令牌进行 API 请求验证&#10;- 添加 slog 日志记录配置同步和路由调试信息&#10;- 改进 GroupHandler 支持 X-Internal-Token 头部认证&#10;- 扩展控制面响应数据结构兼容性转换逻辑&#10;- 实现模型仓库和提供商仓库依赖注入查询&#10;- 更新 GatewayNameCache 使用内部令牌认证&#10;- 移除 HealthStore 中无用的健康状态过滤逻辑&#10;- 完善路由器日志输出和错误处理机制&#10;- 优化模型加载检查条件避免空提供商情况&#10;- 更新 GroupModel 数据结构增加模型名称和渠道类型字段">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/bin/control-plane" beforeDir="false" afterPath="$PROJECT_DIR$/bin/control-plane" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/bin/gateway" beforeDir="false" afterPath="$PROJECT_DIR$/bin/gateway" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/cmd/gateway/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/cmd/gateway/main.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/internal/controlplane/handler/group_handler.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/handler/group_handler.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/controlplane/router/router.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/controlplane/router/router.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/internal/gateway/cache/group_name_cache.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/gateway/cache/group_name_cache.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/gateway/scheduler/config.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/gateway/scheduler/config.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/gateway/scheduler/config_syncer.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/gateway/scheduler/config_syncer.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/gateway/scheduler/data.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/gateway/scheduler/data.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/gateway/scheduler/healthstore.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/gateway/scheduler/healthstore.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/gateway/scheduler/router.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/gateway/scheduler/router.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/gateway/scheduler/routetable.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/gateway/scheduler/routetable.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/gateway/scheduler/scheduler.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/gateway/scheduler/scheduler.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -77,7 +85,7 @@
       <workItem from="1779351233934" duration="34050000" />
       <workItem from="1779674989691" duration="7547000" />
       <workItem from="1779700802756" duration="621000" />
-      <workItem from="1779789970209" duration="1565000" />
+      <workItem from="1779789970209" duration="2234000" />
     </task>
     <task id="LOCAL-00001" summary="feat(database): 初始化数据库迁移脚本并完善数据表结构&#10;&#10;- 删除废弃的变更元数据模板文件 .xflow/templates/_shared/change.yaml&#10;- 添加项目 UI 设计规范文档 docs/ui/ 目录结构和导航&#10;- 创建 10 个数据库迁移脚本，包括 providers/models/provider_definitions 表的基础结构&#10;- 添加 model_tags 标签系统、health_check 健康检测、encryption_keys 加密密钥管理等功能表&#10;- 补充 providers/models 表的权重、优先级、价格、上下文长度等完整业务字段&#10;- 完善 provider_definitions 表的厂商配置、协议差异、默认模型列表等扩展属性&#10;- 修复 AWS Bedrock 和 Azure OpenAI 的认证参数配置结构&#10;- 添加前端 Vue 组件缺失测试的基线快照报告 tests/reports/00-baseline.md&#10;- 添加 node_modules/ 到 .gitignore 文件">
       <option name="closed" value="true" />
@@ -151,7 +159,15 @@
       <option name="project" value="LOCAL" />
       <updated>1779675099855</updated>
     </task>
-    <option name="localTasksCounter" value="10" />
+    <task id="LOCAL-00010" summary="feat(scheduler): 添加内部令牌认证和健康状态过滤功能&#10;&#10;- 添加 InternalToken 配置项用于控制平面通信认证&#10;- 实现 ConfigSyncer 使用内部令牌进行 API 请求验证&#10;- 添加 slog 日志记录配置同步和路由调试信息&#10;- 改进 GroupHandler 支持 X-Internal-Token 头部认证&#10;- 扩展控制面响应数据结构兼容性转换逻辑&#10;- 实现模型仓库和提供商仓库依赖注入查询&#10;- 更新 GatewayNameCache 使用内部令牌认证&#10;- 移除 HealthStore 中无用的健康状态过滤逻辑&#10;- 完善路由器日志输出和错误处理机制&#10;- 优化模型加载检查条件避免空提供商情况&#10;- 更新 GroupModel 数据结构增加模型名称和渠道类型字段">
+      <option name="closed" value="true" />
+      <created>1779800213370</created>
+      <option name="number" value="00010" />
+      <option name="presentableId" value="LOCAL-00010" />
+      <option name="project" value="LOCAL" />
+      <updated>1779800213370</updated>
+    </task>
+    <option name="localTasksCounter" value="11" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -177,6 +193,7 @@
     <MESSAGE value="feat(catalog): 支持环境变量配置 Catalog 同步选项&#10;&#10;- 添加 CATALOG_REMOTE_URL 环境变量支持，允许指定内网镜像或代理地址&#10;- 添加 CATALOG_HTTP_TIMEOUT 环境变量支持，可自定义远程拉取超时时间&#10;- 重构 NewCatalogSyncService 优先级逻辑：代码传入 &gt; 环境变量 &gt; 默认值&#10;- 修复 PriceDiffEntry" />
     <MESSAGE value="feat(auth): 实现 SSO 登录和 API Key 管理功能&#10;&#10;- 添加 OIDC SSO 登录功能，支持公司账号认证&#10;- 实现 API Key 的创建、列表、启用/禁用和删除功能&#10;- 添加 API Key 鉴权中间件替换原有硬编码 token 方式&#10;- 集成用户和部门信息绑定，支持身份追溯&#10;- 更新前端菜单结构，添加员工和管理功能模块&#10;- 增加系统设置和用户信息显示功能&#10;- 添加模型列表缓存版本控制功能&#10;- 完善模型目录同步和搜索功能&#10;- 优化界面样式和响应式布局" />
     <MESSAGE value="chore(config): 更新环境配置和工作区设置&#10;&#10;- 配置 OAuth2 SSO 认证参数，包括客户端ID、密钥和回调地址&#10;- 设置 JWT 密钥和前端URL指向生产环境域名&#10;- 更新工作区 Git 分支信息为开发版本分支&#10;- 优化 IDE 工作空间配置，添加最新任务历史记录&#10;- 清理临时文件路径配置，调整 Git widget 显示名称" />
-    <option name="LAST_COMMIT_MESSAGE" value="chore(config): 更新环境配置和工作区设置&#10;&#10;- 配置 OAuth2 SSO 认证参数，包括客户端ID、密钥和回调地址&#10;- 设置 JWT 密钥和前端URL指向生产环境域名&#10;- 更新工作区 Git 分支信息为开发版本分支&#10;- 优化 IDE 工作空间配置，添加最新任务历史记录&#10;- 清理临时文件路径配置，调整 Git widget 显示名称" />
+    <MESSAGE value="feat(scheduler): 添加内部令牌认证和健康状态过滤功能&#10;&#10;- 添加 InternalToken 配置项用于控制平面通信认证&#10;- 实现 ConfigSyncer 使用内部令牌进行 API 请求验证&#10;- 添加 slog 日志记录配置同步和路由调试信息&#10;- 改进 GroupHandler 支持 X-Internal-Token 头部认证&#10;- 扩展控制面响应数据结构兼容性转换逻辑&#10;- 实现模型仓库和提供商仓库依赖注入查询&#10;- 更新 GatewayNameCache 使用内部令牌认证&#10;- 移除 HealthStore 中无用的健康状态过滤逻辑&#10;- 完善路由器日志输出和错误处理机制&#10;- 优化模型加载检查条件避免空提供商情况&#10;- 更新 GroupModel 数据结构增加模型名称和渠道类型字段" />
+    <option name="LAST_COMMIT_MESSAGE" value="feat(scheduler): 添加内部令牌认证和健康状态过滤功能&#10;&#10;- 添加 InternalToken 配置项用于控制平面通信认证&#10;- 实现 ConfigSyncer 使用内部令牌进行 API 请求验证&#10;- 添加 slog 日志记录配置同步和路由调试信息&#10;- 改进 GroupHandler 支持 X-Internal-Token 头部认证&#10;- 扩展控制面响应数据结构兼容性转换逻辑&#10;- 实现模型仓库和提供商仓库依赖注入查询&#10;- 更新 GatewayNameCache 使用内部令牌认证&#10;- 移除 HealthStore 中无用的健康状态过滤逻辑&#10;- 完善路由器日志输出和错误处理机制&#10;- 优化模型加载检查条件避免空提供商情况&#10;- 更新 GroupModel 数据结构增加模型名称和渠道类型字段" />
   </component>
 </project>

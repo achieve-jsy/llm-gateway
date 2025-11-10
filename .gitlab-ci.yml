@@ -106,13 +106,19 @@ deploy:
   stage: deploy
   image: alpine:latest
   tags: [deploy]
+  variables:
+    SSH_DIR: "/tmp/ssh"
   before_script:
     - apk add --no-cache openssh-client curl
-    - mkdir -p /tmp/ssh && chmod 700 /tmp/ssh
-    - eval $(ssh-agent -a /tmp/ssh/agent.sock)
-    - echo "$DEPLOY_SSH_KEY" | tr -d '\r' | ssh-add -
-    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
-    - ssh-keyscan -H ${DEPLOY_HOST} >> ~/.ssh/known_hosts
+    - mkdir -p ${SSH_DIR} && chmod 700 ${SSH_DIR}
+    - eval $(ssh-agent -a ${SSH_DIR}/agent.sock)
+    - printf '%s\n' "$DEPLOY_SSH_KEY" > ${SSH_DIR}/deploy_key
+    - chmod 600 ${SSH_DIR}/deploy_key
+    - ssh-add ${SSH_DIR}/deploy_key
+    - rm -f ${SSH_DIR}/deploy_key
+    - >-
+      ssh-keyscan -H ${DEPLOY_HOST} > ${SSH_DIR}/known_hosts 2>/dev/null
+    - export GIT_SSH_COMMAND="ssh -o UserKnownHostsFile=${SSH_DIR}/known_hosts"
     - |
       if [ -n "$CI_COMMIT_TAG" ]; then
         export IMAGE_TAG="$CI_COMMIT_TAG"
@@ -121,19 +127,20 @@ deploy:
       fi
   script:
     - |
+      SSH_OPTS="-o UserKnownHostsFile=${SSH_DIR}/known_hosts -o StrictHostKeyChecking=yes"
       echo "=== Deploying IMAGE_TAG=${IMAGE_TAG} to ${DEPLOY_HOST} ==="
 
       # 传输镜像文件
-      scp gateway.tar.gz control-plane.tar.gz root@${DEPLOY_HOST}:/tmp/
+      scp ${SSH_OPTS} gateway.tar.gz control-plane.tar.gz root@${DEPLOY_HOST}:/tmp/
 
       # 传输部署文件
-      ssh root@${DEPLOY_HOST} "mkdir -p ${DEPLOY_PATH}"
-      scp docker-compose.yml root@${DEPLOY_HOST}:${DEPLOY_PATH}/
-      scp deploy/docker/nginx.conf root@${DEPLOY_HOST}:${DEPLOY_PATH}/
-      [ -f .env.example ] && scp .env.example root@${DEPLOY_HOST}:${DEPLOY_PATH}/
+      ssh ${SSH_OPTS} root@${DEPLOY_HOST} "mkdir -p ${DEPLOY_PATH}"
+      scp ${SSH_OPTS} docker-compose.yml root@${DEPLOY_HOST}:${DEPLOY_PATH}/
+      scp ${SSH_OPTS} deploy/docker/nginx.conf root@${DEPLOY_HOST}:${DEPLOY_PATH}/
+      [ -f .env.example ] && scp ${SSH_OPTS} .env.example root@${DEPLOY_HOST}:${DEPLOY_PATH}/
 
       # 远程部署
-      ssh root@${DEPLOY_HOST} << REMOTE_SCRIPT
+      ssh ${SSH_OPTS} root@${DEPLOY_HOST} << REMOTE_SCRIPT
         set -e
         cd ${DEPLOY_PATH}
 

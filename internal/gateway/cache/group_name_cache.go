@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -14,17 +15,18 @@ import (
 const (
 	groupNameRefreshTimeout = 10 * time.Second
 	groupNameEndpoint       = "/api/v1/internal/groups"
-	groupNameAuthToken      = "pre-shared-token-placeholder"
 )
 
 type GroupNameCache struct {
-	mu    sync.RWMutex
-	names map[string]struct{}
+	mu            sync.RWMutex
+	names         map[string]struct{}
+	internalToken string
 }
 
-func NewGroupNameCache() *GroupNameCache {
+func NewGroupNameCache(internalToken string) *GroupNameCache {
 	return &GroupNameCache{
-		names: make(map[string]struct{}),
+		names:         make(map[string]struct{}),
+		internalToken: internalToken,
 	}
 }
 
@@ -58,7 +60,7 @@ func (gc *GroupNameCache) Refresh(ctx context.Context, controlPlaneURL string) e
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
-	req.Header.Set("X-Auth-Token", groupNameAuthToken)
+	req.Header.Set("X-Auth-Token", gc.internalToken)
 
 	client := &http.Client{Timeout: groupNameRefreshTimeout}
 	resp, err := client.Do(req)
@@ -78,24 +80,24 @@ func (gc *GroupNameCache) Refresh(ctx context.Context, controlPlaneURL string) e
 	}
 
 	var cfg struct {
-		Groups []struct {
-			GroupName string `json:"group_name"`
-		} `json:"groups"`
+		Data []struct {
+			Name string `json:"name"`
+		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &cfg); err != nil {
 		return fmt.Errorf("parse json: %w", err)
 	}
 
-	newNames := make(map[string]struct{}, len(cfg.Groups))
-	for _, g := range cfg.Groups {
-		if g.GroupName != "" {
-			newNames[g.GroupName] = struct{}{}
+	newNames := make(map[string]struct{}, len(cfg.Data))
+	for _, g := range cfg.Data {
+		if g.Name != "" {
+			newNames[g.Name] = struct{}{}
 		}
 	}
 
 	gc.mu.Lock()
 	gc.names = newNames
 	gc.mu.Unlock()
-
+	slog.Info("group name cache refreshed", "count", len(newNames))
 	return nil
 }

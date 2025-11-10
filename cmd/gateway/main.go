@@ -110,7 +110,9 @@ func main() {
 	var sch *scheduler.Scheduler
 	var nameCache *cache.GroupNameCache
 	if controlPlaneURL != "" {
-		sch, err = scheduler.New(scheduler.DefaultConfig(controlPlaneURL))
+		schCfg := scheduler.DefaultConfig(controlPlaneURL)
+			schCfg.InternalToken = internalToken
+			sch, err = scheduler.New(schCfg)
 		if err != nil {
 			slog.Warn("failed to create scheduler", "error", err)
 		} else {
@@ -119,7 +121,7 @@ func main() {
 			slog.Info("scheduler started")
 
 			// 初始化模型组名称缓存
-			nameCache = cache.NewGroupNameCache()
+			nameCache = cache.NewGroupNameCache(internalToken)
 			go refreshGroupNameCache(ctx, nameCache, controlPlaneURL)
 			slog.Info("group name cache started")
 		}
@@ -187,11 +189,11 @@ func refreshGroupNameCache(ctx context.Context, nc *cache.GroupNameCache, contro
 }
 
 func loadProviders(ctx context.Context, rdb *redis.Client, registry *provider.Registry, controlPlaneURL, token string) (*providerLoadResult, error) {
-	if result, err := loadAndRegisterProvidersFromSnapshot(ctx, rdb, registry); err == nil {
+	if result, err := loadAndRegisterProvidersFromSnapshot(ctx, rdb, registry); err == nil && len(registry.ListAllModels()) > 0 {
 		slog.Info("providers loaded from redis snapshot successfully")
 		return result, nil
 	} else {
-		slog.Warn("failed to load providers from redis snapshot", "error", err)
+		slog.Warn("failed to load providers from redis snapshot or 0 providers", "error", err)
 	}
 
 	if controlPlaneURL != "" && token != "" {

@@ -9,6 +9,28 @@ import (
 type ControlPlaneConfig struct {
 	Groups []GroupConfig `json:"groups"`
 	Models []GroupModel  `json:"models"`
+	Data   []CPGroupData `json:"data"`
+}
+
+// CPGroupData 控制面返回的组数据结构
+type CPGroupData struct {
+	ID          uint          `json:"id"`
+	Name        string        `json:"name"`
+	Strategy    RoutingStrategy `json:"strategy"`
+	Enabled     bool          `json:"enabled"`
+	Description string        `json:"description"`
+	Models      []CPModelData `json:"models"`
+}
+
+// CPModelData 控制面返回的组内模型数据
+type CPModelData struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	ProviderID   string `json:"provider_id"`
+	ProviderType string `json:"provider_type"`
+	Endpoint     string `json:"endpoint"`
+	Priority     *int   `json:"priority"`
+	Weight       *int   `json:"weight"`
 }
 
 // GroupConfig 模型组配置
@@ -22,11 +44,14 @@ type GroupConfig struct {
 
 // GroupModel 组内模型关联
 type GroupModel struct {
-	ID       uint   `json:"id"`
-	GroupID  uint   `json:"group_id"`
-	ModelID  uint   `json:"model_id"`
-	Priority *int   `json:"priority"`
-	Weight   *int   `json:"weight"`
+	ID          uint   `json:"id"`
+	GroupID     uint   `json:"group_id"`
+	ModelID     uint   `json:"model_id"`
+	ModelName   string `json:"model_name"`
+	ChannelType string `json:"channel_type"`
+	Endpoint    string `json:"endpoint"`
+	Priority    *int   `json:"priority"`
+	Weight      *int   `json:"weight"`
 }
 
 // GroupRoutingConfig 内存中的组路由配置

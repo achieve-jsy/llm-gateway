@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -13,25 +14,25 @@ import (
 const (
 	configSyncTimeout     = 5 * time.Second
 	configSyncEndpoint    = "/api/v1/internal/groups"
-	configSyncAuthToken   = "pre-shared-token-placeholder"
 )
 
 // ConfigSyncer periodically fetches configuration from the control plane
 // and updates the local RouteTable and HealthStore.
 type ConfigSyncer struct {
-	httpClient  *http.Client
-	cpBaseURL   string
-	routeTable  *RouteTable
-	healthStore *HealthStore
-	interval    time.Duration
-	stopCh      chan struct{}
-	lastSyncAt  time.Time
-	syncMu      sync.RWMutex
+	httpClient    *http.Client
+	cpBaseURL     string
+	routeTable    *RouteTable
+	healthStore   *HealthStore
+	interval      time.Duration
+	stopCh        chan struct{}
+	lastSyncAt    time.Time
+	syncMu        sync.RWMutex
+	internalToken string
 }
 
 // NewConfigSyncer creates a ConfigSyncer with the given parameters.
 // If interval <= 0, the default sync interval of 5 seconds is used.
-func NewConfigSyncer(cpBaseURL string, routeTable *RouteTable, healthStore *HealthStore, interval time.Duration) *ConfigSyncer {
+func NewConfigSyncer(cpBaseURL, internalToken string, routeTable *RouteTable, healthStore *HealthStore, interval time.Duration) *ConfigSyncer {
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
@@ -41,11 +42,12 @@ func NewConfigSyncer(cpBaseURL string, routeTable *RouteTable, healthStore *Heal
 		httpClient: &http.Client{
 			Timeout: configSyncTimeout,
 		},
-		cpBaseURL:   cpBaseURL,
-		routeTable:  routeTable,
-		healthStore: healthStore,
-		interval:    interval,
-		stopCh:      make(chan struct{}),
+		cpBaseURL:     cpBaseURL,
+		routeTable:    routeTable,
+		healthStore:   healthStore,
+		interval:      interval,
+		stopCh:        make(chan struct{}),
+		internalToken: internalToken,
 	}
 }
 
@@ -59,7 +61,9 @@ func (cs *ConfigSyncer) Run() {
 		case <-cs.stopCh:
 			return
 		case <-ticker.C:
-			cs.doSync()
+			if err := cs.doSync(); err != nil {
+				slog.Warn("scheduler config sync failed", "error", err)
+			}
 		}
 	}
 }
@@ -82,6 +86,7 @@ func (cs *ConfigSyncer) doSync() error {
 	cs.lastSyncAt = time.Now()
 	cs.syncMu.Unlock()
 
+	slog.Info("scheduler config synced", "groups", len(config.Groups), "models", len(config.Models))
 	return nil
 }
 
@@ -106,7 +111,7 @@ func (cs *ConfigSyncer) fetchConfig() (*ControlPlaneConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
-	req.Header.Set("X-Auth-Token", configSyncAuthToken)
+	req.Header.Set("X-Auth-Token", cs.internalToken)
 
 	resp, err := cs.httpClient.Do(req)
 	if err != nil {
@@ -127,6 +132,35 @@ func (cs *ConfigSyncer) fetchConfig() (*ControlPlaneConfig, error) {
 	var config ControlPlaneConfig
 	if err := json.Unmarshal(body, &config); err != nil {
 		return nil, fmt.Errorf("parse json: %w", err)
+	}
+
+	// Convert from control-plane response format if Data is populated
+	if len(config.Data) > 0 {
+		config.Groups = make([]GroupConfig, 0, len(config.Data))
+		config.Models = make([]GroupModel, 0)
+		modelIdx := uint(1)
+		for _, g := range config.Data {
+			config.Groups = append(config.Groups, GroupConfig{
+				ID:          g.ID,
+				Name:        g.Name,
+				Strategy:    g.Strategy,
+				Enabled:     g.Enabled,
+				Description: g.Description,
+			})
+			for _, m := range g.Models {
+				config.Models = append(config.Models, GroupModel{
+					ID:          modelIdx,
+					GroupID:     g.ID,
+					ModelID:     modelIdx,
+					ModelName:   m.Name,
+					ChannelType: m.ProviderType,
+					Endpoint:    m.Endpoint,
+					Priority:    m.Priority,
+					Weight:      m.Weight,
+				})
+				modelIdx++
+			}
+		}
 	}
 
 	return &config, nil

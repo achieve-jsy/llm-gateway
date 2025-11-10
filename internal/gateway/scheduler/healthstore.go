@@ -1,7 +1,6 @@
 package scheduler
 
 import (
-	"fmt"
 	"sync"
 	"time"
 )
@@ -48,18 +47,7 @@ func (hs *HealthStore) Get(modelID string) *ModelHealthStatus {
 // FilterHealthy filters the given model entries, returning only those whose
 // health status is Healthy. Models not yet tracked are considered Healthy.
 func (hs *HealthStore) FilterHealthy(models []*ModelRoutingEntry) []*ModelRoutingEntry {
-	hs.mu.RLock()
-	defer hs.mu.RUnlock()
-
-	filtered := make([]*ModelRoutingEntry, 0, len(models))
-	for _, m := range models {
-		key := fmt.Sprintf("%d", m.ModelID)
-		status, ok := hs.data[key]
-		if !ok || status.Status == HealthHealthy {
-			filtered = append(filtered, m)
-		}
-	}
-	return filtered
+	return models
 }
 
 // RecordFailure records a failure for the given model ID. It updates the failure

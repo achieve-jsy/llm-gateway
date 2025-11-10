@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"sort"
 	"sync"
@@ -28,14 +29,19 @@ func (r *Router) Route(groupName string) (*RouteDecision, error) {
 
 	group := r.routeTable.Get(groupName)
 	if group == nil {
+		slog.Warn("router: group not found", "group", groupName)
 		return nil, ErrGroupNotFound
 	}
 
+	slog.Info("router: group found", "group", groupName, "models", len(group.Models), "strategy", group.Strategy)
+
 	healthyModels := r.healthStore.FilterHealthy(group.Models)
 	if len(healthyModels) == 0 {
+		slog.Warn("router: no healthy models", "group", groupName, "total", len(group.Models))
 		return nil, ErrNoAvailableModel
 	}
 
+	slog.Info("router: healthy models", "group", groupName, "healthy", len(healthyModels))
 	entry, err := r.selectEntry(group.Strategy, groupName, healthyModels)
 	if err != nil {
 		return nil, err

@@ -94,7 +94,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		settingsSvc.GetDefaultSameModelRetries(context.Background()),
 		settingsSvc.GetDefaultFailoverCooldownSeconds(context.Background()),
 	)
-	groupHandler := handler.NewGroupHandler(groupSvc)
+	groupHandler := handler.NewGroupHandler(groupSvc, modelRepo, providerRepo)
 
 	providerHandler := handler.NewProviderHandler(providerSvc)
 	modelHandler := handler.NewModelHandler(modelSvc)

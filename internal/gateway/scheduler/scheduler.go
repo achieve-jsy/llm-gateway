@@ -25,7 +25,7 @@ func New(cfg SchedulerConfig) (*Scheduler, error) {
 	hs := NewHealthStore(cfg.FailureThreshold, cfg.RecoverySuccessThreshold, cfg.QuickFailThreshold, cfg.QuickFailWindow)
 	router := NewRouter(rt, hs)
 	failoverHandler := NewFailoverHandler(rt, hs, router)
-	configSyncer := NewConfigSyncer(cfg.ControlPlaneURL, rt, hs, cfg.ConfigSyncInterval)
+	configSyncer := NewConfigSyncer(cfg.ControlPlaneURL, cfg.InternalToken, rt, hs, cfg.ConfigSyncInterval)
 	healthProber := NewHealthProber(hs, rt, cfg.HealthProbeInterval, cfg.MaxProbeConcurrency, cfg.ChannelProbeTimeout)
 
 	return &Scheduler{

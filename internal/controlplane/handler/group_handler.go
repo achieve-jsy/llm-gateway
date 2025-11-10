@@ -27,11 +27,21 @@ type GroupServiceInterface interface {
 }
 
 type GroupHandler struct {
-	svc GroupServiceInterface
+	svc        GroupServiceInterface
+	modelRepo  ModelRepoInterface
+	providerRepo ProviderRepoInterface
 }
 
-func NewGroupHandler(svc GroupServiceInterface) *GroupHandler {
-	return &GroupHandler{svc: svc}
+type ModelRepoInterface interface {
+	GetByID(id uuid.UUID) (*model.Model, error)
+}
+
+type ProviderRepoInterface interface {
+	GetByID(id uuid.UUID) (*model.Provider, error)
+}
+
+func NewGroupHandler(svc GroupServiceInterface, modelRepo ModelRepoInterface, providerRepo ProviderRepoInterface) *GroupHandler {
+	return &GroupHandler{svc: svc, modelRepo: modelRepo, providerRepo: providerRepo}
 }
 
 type addModelsRequest struct {
@@ -336,6 +346,9 @@ func (h *GroupHandler) GetDefaults(c *gin.Context) {
 
 func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 	token := c.GetHeader("X-Auth-Token")
+	if token == "" {
+		token = c.GetHeader("X-Internal-Token")
+	}
 	expected := os.Getenv("INTERNAL_AUTH_TOKEN")
 	if expected == "" {
 		expected = "internal-shared-secret"
@@ -356,12 +369,13 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 	}
 
 	type modelInfo struct {
-		ID          uuid.UUID `json:"id"`
-		Name        string    `json:"name"`
-		ChannelName string    `json:"channel_name"`
-		ChannelURL  string    `json:"channel_url"`
-		Priority    *int      `json:"priority"`
-		Weight      *int      `json:"weight"`
+		ID           uuid.UUID `json:"id"`
+		Name         string    `json:"name"`
+		ProviderID   uuid.UUID `json:"provider_id,omitempty"`
+		ProviderType string    `json:"provider_type,omitempty"`
+		Endpoint     string    `json:"endpoint,omitempty"`
+		Priority     *int      `json:"priority"`
+		Weight       *int      `json:"weight"`
 	}
 
 	type groupInfo struct {
@@ -369,6 +383,7 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 		Name        string      `json:"name"`
 		Description string      `json:"description"`
 		Strategy    string      `json:"strategy"`
+		Enabled     bool        `json:"enabled"`
 		Models      []modelInfo `json:"models"`
 	}
 
@@ -379,6 +394,7 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 			Name:        g.Name,
 			Description: g.Description,
 			Strategy:    g.Strategy,
+			Enabled:     g.Enabled,
 			Models:      make([]modelInfo, 0, len(g.Models)),
 		}
 		for _, gm := range g.Models {
@@ -386,6 +402,27 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 				ID:       gm.ModelID,
 				Priority: gm.Priority,
 				Weight:   gm.Weight,
+			}
+			if h.modelRepo != nil {
+				m, err := h.modelRepo.GetByID(gm.ModelID)
+				if err == nil && m != nil {
+					mi.Name = m.Name
+					mi.ProviderID = m.ProviderID
+					providerEnabled := false
+					if h.providerRepo != nil {
+						p, err := h.providerRepo.GetByID(m.ProviderID)
+						if err == nil && p != nil && p.Enabled {
+							mi.ProviderType = p.DefinitionID
+							mi.Endpoint = p.Endpoint
+							providerEnabled = true
+						}
+					}
+					if !providerEnabled {
+						continue
+					}
+				} else {
+					continue
+				}
 			}
 			gi.Models = append(gi.Models, mi)
 		}

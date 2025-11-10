@@ -5,6 +5,7 @@ import "time"
 // SchedulerConfig 调度器配置
 type SchedulerConfig struct {
 	ControlPlaneURL        string        `json:"control_plane_url"`
+	InternalToken          string        `json:"internal_token"`
 	ConfigSyncInterval     time.Duration `json:"config_sync_interval"`
 	HealthProbeInterval    time.Duration `json:"health_probe_interval"`
 	MaxProbeConcurrency    int           `json:"max_probe_concurrency"`

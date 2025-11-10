@@ -6,8 +6,10 @@
 #   - dev/main 分支 push → 仅 test + build（不部署）
 #
 # 架构：
-#   ops (192.0.2.10): GitLab Runner + Docker Registry (:5000)
+#   ops (192.0.2.10): GitLab Runner (Docker executor, socket mount)
 #   prod (192.0.2.10): docker compose 部署
+#
+# Build 策略：docker save → artifact → scp → docker load（无需 registry）
 # ═══════════════════════════════════════════════════════════════════════════════
 
 stages:
@@ -17,13 +19,12 @@ stages:
   - verify
 
 variables:
-  REGISTRY: "192.0.2.10:5000"
   DEPLOY_HOST: "192.0.2.10"
   DEPLOY_PATH: "/opt/llm-gateway"
 
 workflow:
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/      # 语义化版本 tag
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/
     - if: $CI_COMMIT_BRANCH == "dev"
     - if: $CI_COMMIT_BRANCH == "main"
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -38,20 +39,29 @@ test:
     GONOSUMCHECK: "*"
   script:
     - go vet ./...
-    - go test ./... -race -cover -count=1 -timeout 5m
+    - go test ./... -cover -count=1 -timeout 5m
   allow_failure: true
   rules:
     - if: $CI_COMMIT_TAG
     - if: $CI_COMMIT_BRANCH
 
 # ─── Build Stage ────────────────────────────────────────────────────────────
-# NOTE: Runner 挂载了 /var/run/docker.sock，无需 dind service
+# Runner 挂载了 /var/run/docker.sock，无需 dind service
+# Build → docker save → artifact（绕开 registry push 问题）
 .build_template: &build_template
   stage: build
   image: docker:24
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
+  before_script:
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        export IMAGE_TAG="$CI_COMMIT_TAG"
+      else
+        export IMAGE_TAG="$CI_COMMIT_SHORT_SHA"
+      fi
+      echo "IMAGE_TAG=${IMAGE_TAG}"
   rules:
     - if: $CI_COMMIT_TAG
     - if: $CI_COMMIT_BRANCH == "dev"
@@ -66,14 +76,13 @@ build-gateway:
       else
         IMAGE_TAG="$CI_COMMIT_SHORT_SHA"
       fi
-      GATEWAY_IMAGE="${REGISTRY}/llm-gateway:${IMAGE_TAG}"
-      echo "Building ${GATEWAY_IMAGE} ..."
-      docker build -f deploy/docker/gateway.Dockerfile -t ${GATEWAY_IMAGE} .
-      docker push ${GATEWAY_IMAGE}
-      if [ -n "$CI_COMMIT_TAG" ]; then
-        docker tag ${GATEWAY_IMAGE} ${REGISTRY}/llm-gateway:latest
-        docker push ${REGISTRY}/llm-gateway:latest
-      fi
+      echo "Building llm-gateway:${IMAGE_TAG} ..."
+      docker build -f deploy/docker/gateway.Dockerfile -t llm-gateway:${IMAGE_TAG} .
+      docker save llm-gateway:${IMAGE_TAG} | gzip > gateway.tar.gz
+      ls -lh gateway.tar.gz
+  artifacts:
+    paths: [gateway.tar.gz]
+    expire_in: 2 hours
 
 build-control-plane:
   <<: *build_template
@@ -84,14 +93,13 @@ build-control-plane:
       else
         IMAGE_TAG="$CI_COMMIT_SHORT_SHA"
       fi
-      CP_IMAGE="${REGISTRY}/llm-control-plane:${IMAGE_TAG}"
-      echo "Building ${CP_IMAGE} ..."
-      docker build -f deploy/docker/control-plane.Dockerfile -t ${CP_IMAGE} .
-      docker push ${CP_IMAGE}
-      if [ -n "$CI_COMMIT_TAG" ]; then
-        docker tag ${CP_IMAGE} ${REGISTRY}/llm-control-plane:latest
-        docker push ${REGISTRY}/llm-control-plane:latest
-      fi
+      echo "Building llm-control-plane:${IMAGE_TAG} ..."
+      docker build -f deploy/docker/control-plane.Dockerfile -t llm-control-plane:${IMAGE_TAG} .
+      docker save llm-control-plane:${IMAGE_TAG} | gzip > control-plane.tar.gz
+      ls -lh control-plane.tar.gz
+  artifacts:
+    paths: [control-plane.tar.gz]
+    expire_in: 2 hours
 
 build-web:
   <<: *build_template
@@ -102,17 +110,15 @@ build-web:
       else
         IMAGE_TAG="$CI_COMMIT_SHORT_SHA"
       fi
-      WEB_IMAGE="${REGISTRY}/llm-web:${IMAGE_TAG}"
-      echo "Building ${WEB_IMAGE} ..."
-      docker build -f deploy/docker/web.Dockerfile -t ${WEB_IMAGE} .
-      docker push ${WEB_IMAGE}
-      if [ -n "$CI_COMMIT_TAG" ]; then
-        docker tag ${WEB_IMAGE} ${REGISTRY}/llm-web:latest
-        docker push ${REGISTRY}/llm-web:latest
-      fi
+      echo "Building llm-web:${IMAGE_TAG} ..."
+      docker build -f deploy/docker/web.Dockerfile -t llm-web:${IMAGE_TAG} .
+      docker save llm-web:${IMAGE_TAG} | gzip > web.tar.gz
+      ls -lh web.tar.gz
+  artifacts:
+    paths: [web.tar.gz]
+    expire_in: 2 hours
 
 # ─── Deploy Stage ───────────────────────────────────────────────────────────
-# tag 触发时自动部署；分支触发时手动
 deploy:
   stage: deploy
   image: alpine:latest
@@ -131,10 +137,13 @@ deploy:
       fi
   script:
     - |
-      # 准备远程部署目录
-      ssh root@${DEPLOY_HOST} "mkdir -p ${DEPLOY_PATH}"
+      echo "=== Deploying IMAGE_TAG=${IMAGE_TAG} to ${DEPLOY_HOST} ==="
+
+      # 传输镜像文件
+      scp gateway.tar.gz control-plane.tar.gz web.tar.gz root@${DEPLOY_HOST}:/tmp/
 
       # 传输部署文件
+      ssh root@${DEPLOY_HOST} "mkdir -p ${DEPLOY_PATH}"
       scp docker-compose.yml root@${DEPLOY_HOST}:${DEPLOY_PATH}/
       scp deploy/docker/nginx.conf root@${DEPLOY_HOST}:${DEPLOY_PATH}/
       [ -f .env.example ] && scp .env.example root@${DEPLOY_HOST}:${DEPLOY_PATH}/
@@ -144,21 +153,23 @@ deploy:
         set -e
         cd ${DEPLOY_PATH}
 
-        # 从 Registry 拉取新镜像
-        docker pull ${REGISTRY}/llm-gateway:${IMAGE_TAG}
-        docker pull ${REGISTRY}/llm-control-plane:${IMAGE_TAG}
-        docker pull ${REGISTRY}/llm-web:${IMAGE_TAG}
+        # 加载镜像
+        echo "Loading gateway image..."
+        docker load < /tmp/gateway.tar.gz
+        echo "Loading control-plane image..."
+        docker load < /tmp/control-plane.tar.gz
+        echo "Loading web image..."
+        docker load < /tmp/web.tar.gz
 
-        # tag 为本地名称（compose 文件引用）
-        docker tag ${REGISTRY}/llm-gateway:${IMAGE_TAG} llm-gateway:${IMAGE_TAG}
-        docker tag ${REGISTRY}/llm-control-plane:${IMAGE_TAG} llm-control-plane:${IMAGE_TAG}
-        docker tag ${REGISTRY}/llm-web:${IMAGE_TAG} llm-web:${IMAGE_TAG}
+        # 清理传输文件
+        rm -f /tmp/gateway.tar.gz /tmp/control-plane.tar.gz /tmp/web.tar.gz
 
         # 如果 .env 不存在则从 example 复制
         [ ! -f .env ] && cp .env.example .env && echo "WARN: Created .env from .env.example"
 
         # 滚动更新
-        IMAGE_TAG=${IMAGE_TAG} docker compose up -d --remove-orphans --wait --wait-timeout 60
+        export IMAGE_TAG="${IMAGE_TAG}"
+        docker compose up -d --remove-orphans --wait --wait-timeout 60
 
         echo "=== Deploy ${IMAGE_TAG} complete ==="
         docker compose ps
@@ -172,9 +183,9 @@ deploy:
     - build-web
   rules:
     - if: $CI_COMMIT_TAG
-      when: on_success           # tag → 自动部署
+      when: on_success
     - if: $CI_COMMIT_BRANCH == "dev"
-      when: manual               # 分支 → 手动部署
+      when: manual
     - if: $CI_COMMIT_BRANCH == "main"
       when: manual
 

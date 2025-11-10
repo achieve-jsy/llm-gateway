@@ -1,11 +1,15 @@
 # ─── Stage 1: Build Go backend ───────────────────────────────────────────────
 FROM 192.0.2.10:5000/golang:1.26-alpine AS go-builder
 
+ENV GOPROXY=https://goproxy.cn,direct
+ENV GONOSUMCHECK=*
+
 RUN apk add --no-cache git ca-certificates
 
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN GOPROXY=https://goproxy.cn,direct go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \

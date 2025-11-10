@@ -264,7 +264,7 @@ verify-test:
       echo " ✓ Gateway healthy"
     - |
       echo "Checking control-plane health on test..."
-      curl -sf http://192.0.2.10:4011/api/v1/provider-definitions || {
+      curl -sf http://192.0.2.10:4011/healthz || {
         echo "ERROR: Control-plane health check failed"
         exit 1
       }
@@ -289,7 +289,7 @@ verify:
       echo " ✓ Gateway healthy"
     - |
       echo "Checking control-plane health..."
-      curl -sf http://${DEPLOY_HOST}:80/api/v1/provider-definitions || curl -sf http://${DEPLOY_HOST}:8081/api/v1/provider-definitions || {
+      curl -sf http://${DEPLOY_HOST}:80/healthz || curl -sf http://${DEPLOY_HOST}:8081/healthz || {
         echo "ERROR: Control-plane health check failed"
         exit 1
       }

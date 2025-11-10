@@ -1,26 +1,32 @@
 # ─── Stage 1: Build Go backend ───────────────────────────────────────────────
-FROM golang:1.23-alpine AS go-builder
+FROM --platform=$BUILDPLATFORM golang:1.26.3-alpine AS go-builder
+
+ARG TARGETOS=linux
+ARG TARGETARCH
 
 RUN apk add --no-cache git ca-certificates
 
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+ENV GOPROXY=https://goproxy.cn,direct
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -ldflags="-s -w" -o /out/control-plane ./cmd/control-plane
 
 # ─── Stage 2: Runtime ────────────────────────────────────────────────────────
-FROM alpine:3.19
+FROM alpine:3.21
 
 RUN apk add --no-cache ca-certificates tzdata
 
 COPY --from=go-builder /out/control-plane /usr/local/bin/control-plane
 
-# 配置文件（通过 APP_ENV 查找 ./config/{env}.yaml）
-RUN mkdir -p /app/config
 COPY config/prod.yaml /app/config/prod.yaml
+COPY migrations/ /app/migrations/
 
 WORKDIR /app
 

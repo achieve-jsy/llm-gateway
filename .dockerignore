@@ -1,39 +1,45 @@
-# Git
+# ─── VCS ──────────────────────────────────────────────────────────────────────
 .git
 .gitignore
 
-# IDE
+# ─── IDE / Editor ─────────────────────────────────────────────────────────────
 .idea
 .vscode
 *.swp
 *.swo
 
-# Node
+# ─── Go ───────────────────────────────────────────────────────────────────────
+vendor/
+bin/
+tmp/
+
+# ─── Node / Frontend（web.Dockerfile 单独 COPY web/ 所以这里排除不影响） ────────
 web/node_modules
 web/coverage
+web/.vite
 
-# Go
-vendor/
-
-# Tests
+# ─── Tests（保留 _test.go 让构建上下文更轻量） ────────────────────────────────
 tests/
 *_test.go
 **/*_test.go
 
-# Docs
+# ─── Docs ─────────────────────────────────────────────────────────────────────
 docs/
 *.md
-!config/*.yaml
 
-# Dev files
+# ─── Dev / CI files ──────────────────────────────────────────────────────────
 docker-compose.dev.yml
 .env
 .env.*
 !.env.example
+.github
+.opencode
+.sisyphus
+Makefile
 
-# OS
+# ─── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 
-# Build artifacts
+# ─── Build artifacts ─────────────────────────────────────────────────────────
 web/dist

@@ -63,4 +63,5 @@ export interface ModelOption {
   id: string
   name: string
   model_type: string
+  provider?: { name: string }
 }

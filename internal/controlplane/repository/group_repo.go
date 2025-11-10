@@ -135,3 +135,9 @@ func (r *GroupRepo) CountGroupModels(groupID uint) (int64, error) {
 	err := r.db.Model(&model.GroupModel{}).Where("group_id = ?", groupID).Count(&count).Error
 	return count, err
 }
+
+func (r *GroupRepo) ListEnabled() ([]model.Group, error) {
+	var groups []model.Group
+	err := r.db.Where("enabled = ?", true).Order("name ASC").Find(&groups).Error
+	return groups, err
+}

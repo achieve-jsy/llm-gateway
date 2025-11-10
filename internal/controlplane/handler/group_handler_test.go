@@ -26,7 +26,8 @@ type fakeGroupSvc struct {
 	listModelsFn   func(groupID uint) ([]model.GroupModel, error)
 	removeModelFn  func(groupID uint, modelID uuid.UUID) error
 	listEnabledFn  func() ([]model.Group, error)
-	countModelsFn  func(groupID uint) int
+	countModelsFn      func(groupID uint) int
+	getDefaultsFn      func() service.FailoverDefaults
 }
 
 func (f *fakeGroupSvc) Create(req service.CreateGroupRequest) (*model.Group, error) {
@@ -91,6 +92,13 @@ func (f *fakeGroupSvc) CountGroupModels(groupID uint) int {
 	return 0
 }
 
+func (f *fakeGroupSvc) GetFailoverDefaults() service.FailoverDefaults {
+	if f.getDefaultsFn != nil {
+		return f.getDefaultsFn()
+	}
+	return service.FailoverDefaults{}
+}
+
 var _ GroupServiceInterface = (*fakeGroupSvc)(nil)
 
 func newGroupRouter(svc GroupServiceInterface) *gin.Engine {
@@ -98,6 +106,7 @@ func newGroupRouter(svc GroupServiceInterface) *gin.Engine {
 	r := gin.New()
 	h := NewGroupHandler(svc)
 	r.GET("/api/v1/internal/groups", h.ListEnabledGroups)
+	r.GET("/api/v1/groups/defaults", h.GetDefaults)
 	r.POST("/api/v1/groups", h.Create)
 	r.GET("/api/v1/groups", h.List)
 	r.GET("/api/v1/groups/:id", h.GetByID)
@@ -744,4 +753,48 @@ func TestInternalListEnabledGroups_Empty(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), `"data":[]`)
+}
+
+func TestGetDefaults_Success(t *testing.T) {
+	svc := &fakeGroupSvc{
+		getDefaultsFn: func() service.FailoverDefaults {
+			return service.FailoverDefaults{
+				MaxSwitches:      3,
+				SameModelRetries: 2,
+				CooldownSeconds:  120,
+			}
+		},
+	}
+	r := newGroupRouter(svc)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/v1/groups/defaults", nil)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"max_switches":3`)
+	assert.Contains(t, w.Body.String(), `"same_model_retries":2`)
+	assert.Contains(t, w.Body.String(), `"failover_cooldown_seconds":120`)
+}
+
+func TestGetDefaults_DefaultValues(t *testing.T) {
+	svc := &fakeGroupSvc{
+		getDefaultsFn: func() service.FailoverDefaults {
+			return service.FailoverDefaults{
+				MaxSwitches:      2,
+				SameModelRetries: 1,
+				CooldownSeconds:  60,
+			}
+		},
+	}
+	r := newGroupRouter(svc)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/v1/groups/defaults", nil)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"max_switches":2`)
+	assert.Contains(t, w.Body.String(), `"same_model_retries":1`)
+	assert.Contains(t, w.Body.String(), `"failover_cooldown_seconds":60`)
 }

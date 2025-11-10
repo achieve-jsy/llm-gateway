@@ -34,7 +34,7 @@ var _ InternalServiceInterface = (*fakeInternalSvc)(nil)
 func newInternalRouter(svc InternalServiceInterface) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	h := NewInternalHandler(svc, nil)
+	h := NewInternalHandler(svc, nil, nil)
 	r.GET("/internal/v1/models/available", h.ListAvailableModels)
 	return r
 }

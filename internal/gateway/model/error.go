@@ -72,6 +72,10 @@ var (
 		Type: ErrorTypeInternal, Code: "internal",
 		Message: "internal server error", HTTPStatus: http.StatusInternalServerError,
 	}
+	ErrModelGroupUnavailable = &UnifiedError{
+		Type: ErrorTypeModelUnavail, Code: "model_unavailable",
+		Message: "模型组不可用，请检查你的 API Key 是否有权使用该模型组", HTTPStatus: http.StatusBadRequest,
+	}
 )
 
 // NewUnifiedError 创建自定义统一错误

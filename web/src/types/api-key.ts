@@ -7,6 +7,19 @@ export interface ApiKey {
   createdAt: string
   lastUsedAt?: string
   expiresAt?: string
+  boundGroups?: BoundGroupInfo[]
+}
+
+export interface BoundGroupInfo {
+  id: number
+  name: string
+}
+
+export interface AvailableGroup {
+  id: number
+  name: string
+  description: string
+  strategy: string
 }
 
 export interface RawKeyItem {
@@ -19,6 +32,12 @@ export interface RawKeyItem {
   updated_at: string
   last_used_at?: string
   expires_at?: string
+  bound_groups?: RawBoundGroup[]
+}
+
+export interface RawBoundGroup {
+  id: number
+  name: string
 }
 
 export function mapKeysResponse(response: ListKeysResponse): ApiKey[] {
@@ -31,6 +50,7 @@ export function mapKeysResponse(response: ListKeysResponse): ApiKey[] {
     createdAt: item.created_at,
     lastUsedAt: item.last_used_at,
     expiresAt: item.expires_at,
+    boundGroups: (item.bound_groups || []).map((g) => ({ id: g.id, name: g.name })),
   }))
 }
 
@@ -65,6 +85,7 @@ export interface CreateKeyWrappedResponse {
     enabled: boolean
     created_at: string
     updated_at: string
+    bound_groups?: RawBoundGroup[]
   }
   request_id?: string
 }
@@ -75,5 +96,11 @@ export function mapCreateKeyResponse(response: CreateKeyWrappedResponse): Create
     name: response.data.name,
     key: response.data.key,
     keyHint: response.data.key_hint,
+  }
+}
+
+export interface AvailableGroupsResponse {
+  data: {
+    groups: AvailableGroup[]
   }
 }

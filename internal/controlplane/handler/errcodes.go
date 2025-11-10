@@ -36,6 +36,10 @@ const (
 	// 422 unprocessable
 	CodeStrategySwitchWarning = "strategy_switch_warning"
 
+	// 400 key group binding errors
+	CodeGroupAlreadyBound  = "group_already_bound"
+	CodeGroupNotBound      = "group_not_bound"
+
 	// 403 forbidden
 	CodeKeyPermission = "key_permission_denied"
 

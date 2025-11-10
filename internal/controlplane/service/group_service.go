@@ -17,6 +17,44 @@ var (
 	ErrGroupDeleted    = errors.New("group has been deleted")
 )
 
+type FailoverDefaults struct {
+	MaxSwitches      int
+	SameModelRetries int
+	CooldownSeconds  int
+}
+
+type GroupService struct {
+	repo             *repository.GroupRepo
+	failoverDefaults *FailoverDefaults
+}
+
+func NewGroupService(repo *repository.GroupRepo) *GroupService {
+	return &GroupService{
+		repo: repo,
+		failoverDefaults: &FailoverDefaults{
+			MaxSwitches:      2,
+			SameModelRetries: 1,
+			CooldownSeconds:  60,
+		},
+	}
+}
+
+func (s *GroupService) SetFailoverDefaults(maxSwitches, sameModelRetries, cooldownSeconds int) {
+	if maxSwitches > 0 {
+		s.failoverDefaults.MaxSwitches = maxSwitches
+	}
+	if sameModelRetries >= 0 {
+		s.failoverDefaults.SameModelRetries = sameModelRetries
+	}
+	if cooldownSeconds > 0 {
+		s.failoverDefaults.CooldownSeconds = cooldownSeconds
+	}
+}
+
+func (s *GroupService) GetFailoverDefaults() FailoverDefaults {
+	return *s.failoverDefaults
+}
+
 type CreateGroupRequest struct {
 	Name                    string `json:"name" binding:"required,max=64"`
 	Description             string `json:"description"`
@@ -34,14 +72,6 @@ type UpdateGroupRequest struct {
 	MaxSwitches             *int    `json:"max_switches"`
 	SameModelRetries        *int    `json:"same_model_retries"`
 	FailoverCooldownSeconds *int    `json:"failover_cooldown_seconds"`
-}
-
-type GroupService struct {
-	repo *repository.GroupRepo
-}
-
-func NewGroupService(repo *repository.GroupRepo) *GroupService {
-	return &GroupService{repo: repo}
 }
 
 func (s *GroupService) Create(req CreateGroupRequest) (*model.Group, error) {
@@ -66,9 +96,9 @@ func (s *GroupService) Create(req CreateGroupRequest) (*model.Group, error) {
 		Description:             req.Description,
 		Strategy:                req.Strategy,
 		Enabled:                 true,
-		MaxSwitches:             2,
-		SameModelRetries:        1,
-		FailoverCooldownSeconds: 60,
+		MaxSwitches:             s.failoverDefaults.MaxSwitches,
+		SameModelRetries:        s.failoverDefaults.SameModelRetries,
+		FailoverCooldownSeconds: s.failoverDefaults.CooldownSeconds,
 	}
 	if req.MaxSwitches != nil {
 		group.MaxSwitches = *req.MaxSwitches

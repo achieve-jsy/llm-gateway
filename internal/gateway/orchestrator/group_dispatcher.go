@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"log/slog"
 
+	"github.com/example/llm-gateway/internal/gateway/binding"
 	"github.com/example/llm-gateway/internal/gateway/cache"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
@@ -12,20 +13,50 @@ import (
 const maxFailoverRetries = 1
 
 type GroupAwareDispatcher struct {
-	scheduler Scheduler
-	nameCache *cache.GroupNameCache
+	scheduler    Scheduler
+	nameCache    *cache.GroupNameCache
+	bindingCheck *binding.Client
 }
 
 func NewGroupAwareDispatcher(sch Scheduler, nc *cache.GroupNameCache) *GroupAwareDispatcher {
 	return &GroupAwareDispatcher{
-		scheduler: sch,
-		nameCache: nc,
+		scheduler:    sch,
+		nameCache:    nc,
+		bindingCheck: nil,
+	}
+}
+
+func NewGroupAwareDispatcherWithBinding(sch Scheduler, nc *cache.GroupNameCache, bindClient *binding.Client) *GroupAwareDispatcher {
+	return &GroupAwareDispatcher{
+		scheduler:    sch,
+		nameCache:    nc,
+		bindingCheck: bindClient,
 	}
 }
 
 func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string) (*scheduler.RouteDecision, error) {
 	if !d.nameCache.IsGroupName(modelName) {
 		return nil, nil
+	}
+
+	if d.bindingCheck != nil {
+		identityVal, exists := c.Get("identity")
+		if exists {
+			if id, ok := identityVal.(*model.UserIdentity); ok && id.KeyID != "" {
+				groups, err := d.bindingCheck.GetKeyGroups(c.Request.Context(), id.KeyID)
+				if err != nil {
+					slog.Error("group dispatch: binding check failed",
+						"group_name", modelName,
+						"key_id", id.KeyID,
+						"error", err,
+					)
+					return nil, model.ErrModelGroupUnavailable
+				}
+				if !binding.ContainsGroup(groups, modelName) {
+					return nil, model.ErrModelGroupUnavailable
+				}
+			}
+		}
 	}
 
 	decision, err := d.scheduler.Route(modelName)

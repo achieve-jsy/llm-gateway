@@ -19,6 +19,24 @@
         </template>
       </el-table-column>
 
+      <el-table-column label="模型组" min-width="160">
+        <template #default="{ row }">
+          <div class="group-cell">
+            <template v-if="row.boundGroups && row.boundGroups.length > 0">
+              <el-tag
+                v-for="g in row.boundGroups"
+                :key="g.id"
+                size="small"
+                type="info"
+                style="margin-right:4px;margin-bottom:2px"
+              >{{ g.name }}</el-tag>
+            </template>
+            <span v-else class="text-muted" style="margin-right:4px">无</span>
+            <el-button size="small" text type="primary" @click="openGroupDialog(row)">管理</el-button>
+          </div>
+        </template>
+      </el-table-column>
+
       <el-table-column label="过期时间" width="170">
         <template #default="{ row }">
           <span v-if="row.expiresAt">{{ formatDate(row.expiresAt) }}</span>
@@ -73,6 +91,48 @@
       :key-hint="usageKey?.keyHint ?? ''"
     />
 
+    <!-- 组绑定管理弹窗 -->
+    <el-dialog v-model="showGroupDialog" title="管理模型组" width="500px" destroy-on-close @opened="loadGroupDialogData">
+      <div v-if="editGroupKey">
+        <div class="group-dialog-section">
+          <h4>当前已绑定</h4>
+          <div v-if="editGroupKey.boundGroups && editGroupKey.boundGroups.length > 0" class="bound-tags">
+            <el-tag
+              v-for="g in editGroupKey.boundGroups"
+              :key="g.id"
+              closable
+              size="large"
+              type="info"
+              @close="removeGroup(g)"
+            >{{ g.name }}</el-tag>
+          </div>
+          <span v-else class="text-muted">未绑定任何模型组</span>
+        </div>
+        <div class="group-dialog-section">
+          <h4>添加模型组</h4>
+          <el-select
+            v-model="addGroupIds"
+            multiple
+            filterable
+            placeholder="选择要添加的模型组"
+            style="width:100%"
+            :loading="groupLoading"
+          >
+            <el-option
+              v-for="g in availableAddGroups"
+              :key="g.id"
+              :label="`${g.name} (${strategyLabel(g.strategy)})`"
+              :value="g.id"
+            />
+          </el-select>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="showGroupDialog = false">取消</el-button>
+        <el-button type="primary" :loading="groupSaving" @click="saveGroupChanges">保存</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="showCcsSelect" title="导入 CCSwitch" width="480px" destroy-on-close>
       <p class="ccs-desc">选择要导入的目标客户端：</p>
       <div class="ccs-client-grid">
@@ -124,9 +184,9 @@ function formatDate(iso?: string): string {
 }
 
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { listKeys, disableKey, enableKey, deleteKey, resetKey, revealKey } from '@/services/control-plane'
-import { mapKeysResponse, mapCreateKeyResponse } from '@/types/api-key'
-import type { ApiKey } from '@/types/api-key'
+import { listKeys, disableKey, enableKey, deleteKey, resetKey, revealKey, updateKeyGroups, getAvailableGroups } from '@/services/control-plane'
+import { mapKeysResponse, mapCreateKeyResponse, type BoundGroupInfo } from '@/types/api-key'
+import type { ApiKey, AvailableGroup } from '@/types/api-key'
 import KeyCreateDialog from '@/components/key/KeyCreateDialog.vue'
 import UseKeyModal from '@/components/key/UseKeyModal.vue'
 import { executeCcsImport } from '@/utils/ccs-import'
@@ -146,7 +206,21 @@ const showCcsSelect = ref(false)
 const selectedCcsClient = ref('claude')
 const pendingCcsRow = ref<ApiKey | null>(null)
 
+// Group binding management
+const showGroupDialog = ref(false)
+const editGroupKey = ref<ApiKey | null>(null)
+const addGroupIds = ref<number[]>([])
+const removedGroupIds = ref<number[]>([])
+const availableAddGroups = ref<AvailableGroup[]>([])
+const groupLoading = ref(false)
+const groupSaving = ref(false)
+
 const keyCache = useKeyCacheStore()
+
+function strategyLabel(strategy: string): string {
+  const map: Record<string, string> = { round_robin: '轮询', priority: '优先级', weighted: '加权' }
+  return map[strategy] || strategy
+}
 
 async function loadKeys() {
   loading.value = true
@@ -245,6 +319,56 @@ function onKeyCreated(_keyId: string, _rawKey: string) {
   loadKeys()
 }
 
+// Group binding management
+function openGroupDialog(row: ApiKey) {
+  editGroupKey.value = { ...row, boundGroups: [...(row.boundGroups || [])] }
+  addGroupIds.value = []
+  removedGroupIds.value = []
+  showGroupDialog.value = true
+}
+
+async function loadGroupDialogData() {
+  groupLoading.value = true
+  try {
+    const resp = await getAvailableGroups()
+    const all = resp.data.groups || []
+    const boundIds = new Set((editGroupKey.value?.boundGroups || []).map((g) => g.id))
+    availableAddGroups.value = all.filter((g) => !boundIds.has(g.id))
+  } catch {
+    ElMessage.error('加载模型组列表失败')
+  } finally {
+    groupLoading.value = false
+  }
+}
+
+function removeGroup(group: BoundGroupInfo) {
+  if (!editGroupKey.value) return
+  editGroupKey.value.boundGroups = (editGroupKey.value.boundGroups || []).filter((g) => g.id !== group.id)
+  removedGroupIds.value.push(group.id)
+  addGroupIds.value = addGroupIds.value.filter((id) => id !== group.id)
+}
+
+async function saveGroupChanges() {
+  if (!editGroupKey.value) return
+  groupSaving.value = true
+  try {
+    const add = addGroupIds.value
+    const remove = removedGroupIds.value
+    if (add.length === 0 && remove.length === 0) {
+      showGroupDialog.value = false
+      return
+    }
+    await updateKeyGroups(editGroupKey.value.id, add, remove)
+    ElMessage.success('模型组已更新')
+    showGroupDialog.value = false
+    await loadKeys()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message || '更新失败')
+  } finally {
+    groupSaving.value = false
+  }
+}
+
 onMounted(() => {
   loadKeys()
   useSettingsStore().loadPublicSettings()
@@ -289,6 +413,12 @@ onMounted(() => {
   padding: 2px 10px;
   border-radius: 4px;
   color: var(--el-text-color-secondary);
+}
+
+.group-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
 .text-muted {
@@ -339,6 +469,20 @@ onMounted(() => {
   font-size: 14px;
   font-weight: 600;
   color: var(--el-text-color-primary);
+}
+
+.group-dialog-section {
+  margin-bottom: 20px;
+}
+
+.group-dialog-section h4 {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+  color: var(--el-text-color-primary);
+}
+
+.bound-tags {
+  min-height: 32px;
 }
 
 @media (max-width: 900px) {

@@ -41,6 +41,10 @@
 
       <el-divider content-position="left">故障切换配置</el-divider>
 
+      <div v-if="globalDefaults" class="global-defaults-hint">
+        全局默认：最大切换 <strong>{{ globalDefaults.max_switches }}</strong> 次，同模型重试 <strong>{{ globalDefaults.same_model_retries }}</strong> 次，冷却 <strong>{{ globalDefaults.failover_cooldown_seconds }}</strong> 秒
+      </div>
+
       <el-form-item label="最大切换次数">
         <el-input-number
           v-model="formData.max_switches"
@@ -144,7 +148,7 @@
 import { ref, computed, watch } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { groupsApi } from '@/api/groups'
+import { groupsApi, type FailoverDefaults } from '@/api/groups'
 import type { GroupListItem, Strategy, CreateGroupRequest } from '@/types/group'
 import ModelGroupSelector from '@/components/ModelGroupSelector.vue'
 
@@ -178,6 +182,7 @@ const emit = defineEmits<{
 const formRef = ref<FormInstance>()
 const submitting = ref(false)
 const selectorVisible = ref(false)
+const globalDefaults = ref<FailoverDefaults | null>(null)
 
 const isEdit = computed(() => !!props.group)
 
@@ -221,9 +226,9 @@ watch(
         name: '',
         description: '',
         strategy: 'round_robin',
-        max_switches: 2,
-        same_model_retries: 1,
-        failover_cooldown_seconds: 60,
+        max_switches: globalDefaults.value?.max_switches ?? 2,
+        same_model_retries: globalDefaults.value?.same_model_retries ?? 1,
+        failover_cooldown_seconds: globalDefaults.value?.failover_cooldown_seconds ?? 60,
       }
       originalStrategy.value = 'round_robin'
       modelList.value = []
@@ -231,6 +236,29 @@ watch(
   },
   { immediate: true }
 )
+
+watch(
+  () => props.visible,
+  async (val) => {
+    if (val) {
+      await loadFailoverDefaults()
+    }
+  }
+)
+
+async function loadFailoverDefaults() {
+  try {
+    const res = await groupsApi.getGroupDefaults()
+    globalDefaults.value = res.data.data
+    if (!props.group) {
+      formData.value.max_switches = globalDefaults.value?.max_switches ?? 2
+      formData.value.same_model_retries = globalDefaults.value?.same_model_retries ?? 1
+      formData.value.failover_cooldown_seconds = globalDefaults.value?.failover_cooldown_seconds ?? 60
+    }
+  } catch {
+    globalDefaults.value = null
+  }
+}
 
 async function loadGroupModels(groupId: number) {
   try {

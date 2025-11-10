@@ -9,7 +9,6 @@ const routes: RouteRecordRaw[] = [
   },
   { path: '/home', name: 'Home', component: () => import('@/views/home/HomePage.vue'), meta: { title: '首页' } },
   { path: '/keys', name: 'KeyList', component: () => import('@/views/key/KeyListPage.vue'), meta: { title: '我的 Key' } },
-  { path: '/models', name: 'MeModels', component: () => import('@/views/model/ModelListPage.vue'), meta: { title: '可用模型' } },
   {
     path: '/login',
     name: 'Login',

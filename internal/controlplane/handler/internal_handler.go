@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // InternalServiceInterface 内部服务抽象
@@ -17,12 +19,17 @@ type InternalServiceInterface interface {
 
 // InternalHandler 内部接口 Handler
 type InternalHandler struct {
-	svc    InternalServiceInterface
-	keySvc KeyServiceInterface
+	svc        InternalServiceInterface
+	keySvc     KeyServiceInterface
+	keyGroupSvc KeyGroupServiceInterface
 }
 
-func NewInternalHandler(svc InternalServiceInterface, keySvc KeyServiceInterface) *InternalHandler {
-	return &InternalHandler{svc: svc, keySvc: keySvc}
+type KeyGroupServiceInterface interface {
+	GetKeyGroups(ctx context.Context, keyID uuid.UUID) ([]service.BoundGroupItem, error)
+}
+
+func NewInternalHandler(svc InternalServiceInterface, keySvc KeyServiceInterface, keyGroupSvc KeyGroupServiceInterface) *InternalHandler {
+	return &InternalHandler{svc: svc, keySvc: keySvc, keyGroupSvc: keyGroupSvc}
 }
 
 // ListAvailableModels GET /internal/v1/models/available（T046）
@@ -102,4 +109,33 @@ func (h *InternalHandler) VerifyKey(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+func (h *InternalHandler) GetKeyGroups(c *gin.Context) {
+	keyIDStr := c.Param("id")
+	keyID, err := uuid.Parse(keyIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"type":    "invalid_request",
+				"message": "invalid key_id",
+				"code":    CodeBadRequest,
+			},
+		})
+		return
+	}
+
+	groups, err := h.keyGroupSvc.GetKeyGroups(c.Request.Context(), keyID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": gin.H{
+				"type":    "not_found",
+				"message": "key not found",
+				"code":    CodeKeyNotFound,
+			},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, groups)
 }

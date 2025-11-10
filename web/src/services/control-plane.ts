@@ -517,9 +517,26 @@ export async function listKeys(page = 1, size = 20): Promise<ListKeysResponse> {
 }
 
 /** 创建 API Key */
-export async function createKey(name: string, expiresAt?: string): Promise<CreateKeyWrappedResponse> {
-  const response = await http.post<CreateKeyWrappedResponse>('/api/v1/keys', { name, expires_at: expiresAt || undefined })
+export async function createKey(name: string, expiresAt?: string, groupIds?: number[]): Promise<CreateKeyWrappedResponse> {
+  const response = await http.post<CreateKeyWrappedResponse>('/api/v1/keys', { name, expires_at: expiresAt || undefined, group_ids: groupIds && groupIds.length > 0 ? groupIds : undefined })
   return response.data
+}
+
+/** 查看完整 API Key（解密展示） */
+export async function revealKey(id: string): Promise<{ key: string }> {
+  const response = await http.post<{ data: { key: string } }>(`/api/v1/keys/${id}/reveal`)
+  return response.data.data
+}
+
+/** 获取可选模型组列表 */
+export async function getAvailableGroups(): Promise<AvailableGroupsResponse> {
+  const response = await http.get<AvailableGroupsResponse>('/api/v1/groups/available')
+  return response.data
+}
+
+/** 更新 Key 的组绑定 */
+export async function updateKeyGroups(keyId: string, add: number[], remove: number[]): Promise<void> {
+  await http.post(`/api/v1/keys/${keyId}/groups`, { add, remove })
 }
 
 /** 禁用 API Key */
@@ -541,12 +558,6 @@ export async function deleteKey(id: string): Promise<void> {
 export async function resetKey(id: string): Promise<CreateKeyWrappedResponse> {
   const response = await http.post<CreateKeyWrappedResponse>(`/api/v1/keys/${id}/reset`)
   return response.data
-}
-
-/** 查看完整 API Key（解密展示） */
-export async function revealKey(id: string): Promise<{ key: string }> {
-  const response = await http.post<{ data: { key: string } }>(`/api/v1/keys/${id}/reveal`)
-  return response.data.data
 }
 
 // ===================== 系统设置 =====================

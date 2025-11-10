@@ -23,6 +23,24 @@
         />
         <div class="form-hint">不设置则 Key 永久有效</div>
       </el-form-item>
+      <el-form-item label="模型组">
+        <el-select
+          v-model="form.groupIds"
+          multiple
+          filterable
+          placeholder="选择可用的模型组（可选，不选则Key无可用模型）"
+          style="width:100%"
+          :loading="groupsLoading"
+        >
+          <el-option
+            v-for="g in availableGroups"
+            :key="g.id"
+            :label="`${g.name} (${strategyLabel(g.strategy)})`"
+            :value="g.id"
+          />
+        </el-select>
+        <div class="form-hint">选择后，该 Key 只能调用选中的模型组</div>
+      </el-form-item>
     </el-form>
 
     <el-alert
@@ -55,10 +73,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { createKey } from '@/services/control-plane'
-import { mapCreateKeyResponse } from '@/types/api-key'
+import { createKey, getAvailableGroups } from '@/services/control-plane'
+import { mapCreateKeyResponse, type AvailableGroup } from '@/types/api-key'
 import { executeCcsImport } from '@/utils/ccs-import'
 import { useKeyCacheStore } from '@/stores/key-cache'
 
@@ -80,11 +98,30 @@ const rules = reactive<FormRules>({
 })
 
 const loading = ref(false)
+const groupsLoading = ref(false)
 const createdKey = ref('')
-const form = ref({ name: '', expiresAt: '' })
+const availableGroups = ref<AvailableGroup[]>([])
+const form = ref({ name: '', expiresAt: '', groupIds: [] as number[] })
 
 function disabledDate(time: Date) {
   return time.getTime() < Date.now() - 86400000
+}
+
+function strategyLabel(strategy: string): string {
+  const map: Record<string, string> = { round_robin: '轮询', priority: '优先级', weighted: '加权' }
+  return map[strategy] || strategy
+}
+
+async function loadGroups() {
+  groupsLoading.value = true
+  try {
+    const resp = await getAvailableGroups()
+    availableGroups.value = resp.data.groups || []
+  } catch {
+    // silently fail, group list is optional
+  } finally {
+    groupsLoading.value = false
+  }
 }
 
 async function handleCreate() {
@@ -93,7 +130,8 @@ async function handleCreate() {
   loading.value = true
   try {
     const expiresAt = form.value.expiresAt ? new Date(form.value.expiresAt).toISOString() : undefined
-    const response = await createKey(form.value.name.trim(), expiresAt)
+    const groupIds = form.value.groupIds.length > 0 ? form.value.groupIds : undefined
+    const response = await createKey(form.value.name.trim(), expiresAt, groupIds)
     const mapped = mapCreateKeyResponse(response)
     createdKey.value = mapped.key
     useKeyCacheStore().cacheKey(mapped.id, mapped.key)
@@ -121,9 +159,14 @@ function importToCcs() {
 function resetForm() {
   form.value.name = ''
   form.value.expiresAt = ''
+  form.value.groupIds = []
   createdKey.value = ''
   formRef.value?.resetFields()
 }
+
+onMounted(() => {
+  loadGroups()
+})
 </script>
 
 <style scoped>

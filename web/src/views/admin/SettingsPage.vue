@@ -256,6 +256,57 @@
         </div>
       </div>
 
+      <!-- 故障默认配置 -->
+      <div v-show="activeTab === 'failover'" class="settings-card">
+        <div class="card-header">
+          <div class="card-title-row">
+            <span class="card-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+            </span>
+            <h3 class="card-title">模型组故障默认配置</h3>
+          </div>
+          <p class="card-desc">模型组不设置时默认使用此全局配置，单个模型组可独立覆盖</p>
+        </div>
+
+        <div class="card-body">
+          <div class="form-row form-row-3col">
+            <div class="form-group">
+              <label class="form-label">默认最大切换次数</label>
+              <el-input-number
+                v-model="form.default_max_switches"
+                :min="1"
+                :max="10"
+                :step="1"
+                class="form-input-number"
+              />
+              <p class="form-hint">单次请求最多切换几个模型</p>
+            </div>
+            <div class="form-group">
+              <label class="form-label">默认同模型重试</label>
+              <el-input-number
+                v-model="form.default_same_model_retries"
+                :min="0"
+                :max="5"
+                :step="1"
+                class="form-input-number"
+              />
+              <p class="form-hint">同一模型失败后重试几次</p>
+            </div>
+            <div class="form-group">
+              <label class="form-label">默认冷却时间(秒)</label>
+              <el-input-number
+                v-model="form.default_failover_cooldown_seconds"
+                :min="10"
+                :max="600"
+                :step="10"
+                class="form-input-number"
+              />
+              <p class="form-hint">模型切换后冷却多久</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- 数据管理 -->
       <div v-show="activeTab === 'data'" class="settings-card">
         <div class="card-header">
@@ -338,6 +389,7 @@ const tabs = [
   { key: 'concurrency', label: '并发管控', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>' },
   { key: 'oidc', label: 'OIDC 配置', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>' },
   { key: 'webhook', label: 'Webhook', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>' },
+  { key: 'failover', label: '故障默认配置', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>' },
   { key: 'data', label: '数据管理', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>' },
 ]
 
@@ -358,6 +410,9 @@ const form = reactive({
   webhook_url: '',
   webhook_secret: '',
   webhook_events: 'health_check_failed',
+  default_max_switches: 2,
+  default_same_model_retries: 1,
+  default_failover_cooldown_seconds: 60,
 })
 
 const initialForm = reactive({
@@ -377,6 +432,9 @@ const initialForm = reactive({
   webhook_url: '',
   webhook_secret: '',
   webhook_events: 'health_check_failed',
+  default_max_switches: 2,
+  default_same_model_retries: 1,
+  default_failover_cooldown_seconds: 60,
 })
 
 const selectedEvents = computed({
@@ -407,7 +465,10 @@ const formChanged = computed(() => {
     form.webhook_enabled !== initialForm.webhook_enabled ||
     form.webhook_url !== initialForm.webhook_url ||
     form.webhook_secret !== initialForm.webhook_secret ||
-    form.webhook_events !== initialForm.webhook_events
+    form.webhook_events !== initialForm.webhook_events ||
+    form.default_max_switches !== initialForm.default_max_switches ||
+    form.default_same_model_retries !== initialForm.default_same_model_retries ||
+    form.default_failover_cooldown_seconds !== initialForm.default_failover_cooldown_seconds
   )
 })
 
@@ -428,6 +489,9 @@ function setFormValues(source: typeof form) {
   form.webhook_url = source.webhook_url
   form.webhook_secret = source.webhook_secret
   form.webhook_events = source.webhook_events
+  form.default_max_switches = source.default_max_switches
+  form.default_same_model_retries = source.default_same_model_retries
+  form.default_failover_cooldown_seconds = source.default_failover_cooldown_seconds
 }
 
 function captureInitial() {
@@ -447,6 +511,9 @@ function captureInitial() {
   initialForm.webhook_url = form.webhook_url
   initialForm.webhook_secret = form.webhook_secret
   initialForm.webhook_events = form.webhook_events
+  initialForm.default_max_switches = form.default_max_switches
+  initialForm.default_same_model_retries = form.default_same_model_retries
+  initialForm.default_failover_cooldown_seconds = form.default_failover_cooldown_seconds
 }
 
 onMounted(async () => {
@@ -467,6 +534,9 @@ onMounted(async () => {
     form.webhook_enabled = s.webhook_enabled ?? false
     form.webhook_url = s.webhook_url || ''
     form.webhook_events = s.webhook_events || 'health_check_failed'
+    form.default_max_switches = s.default_max_switches ?? 2
+    form.default_same_model_retries = s.default_same_model_retries ?? 1
+    form.default_failover_cooldown_seconds = s.default_failover_cooldown_seconds ?? 60
   }
   captureInitial()
 })
@@ -524,6 +594,9 @@ async function handleSave() {
       webhook_url: form.webhook_url.trim(),
       webhook_secret: form.webhook_secret,
       webhook_events: form.webhook_events,
+      default_max_switches: form.default_max_switches,
+      default_same_model_retries: form.default_same_model_retries,
+      default_failover_cooldown_seconds: form.default_failover_cooldown_seconds,
     })
     if (ok) {
       ElMessage.success('设置已保存')

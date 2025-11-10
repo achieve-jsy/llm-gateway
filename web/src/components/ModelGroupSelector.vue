@@ -9,7 +9,7 @@
     <div class="selector-toolbar">
       <el-input
         v-model="filterName"
-        placeholder="搜索模型名称"
+        placeholder="搜索渠道或模型名称"
         clearable
         class="selector-search"
       />
@@ -40,7 +40,7 @@
           :disabled="props.existingModelIds.includes(model.id)"
           @change="(checked: boolean) => onCheckChange(model, checked)"
         >
-          <span class="model-label">{{ model.name }}</span>
+          <span class="model-label">{{ model.provider?.name ? model.provider.name + ': ' : '' }}{{ model.name }}</span>
           <el-tag size="small" type="info" class="model-type-tag">{{ model.model_type }}</el-tag>
         </el-checkbox>
         <div v-if="checkedIds.includes(model.id) && props.strategy !== 'round_robin'" class="model-param">
@@ -117,7 +117,10 @@ const visibleModels = computed(() => {
   let list = allModels.value
   if (filterName.value) {
     const kw = filterName.value.toLowerCase()
-    list = list.filter(m => m.name.toLowerCase().includes(kw))
+    list = list.filter(m =>
+      m.name.toLowerCase().includes(kw) ||
+      (m.provider?.name ?? '').toLowerCase().includes(kw)
+    )
   }
   return list
 })
@@ -264,6 +267,10 @@ function onConfirm() {
 
 .model-type-tag {
   margin-left: 8px;
+}
+
+.model-provider-tag {
+  margin-left: 4px;
 }
 
 .model-param {

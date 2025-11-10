@@ -78,10 +78,13 @@ func (s *HealthCheckService) UpdateConfig(config *model.HealthCheckConfig) error
 	if err := s.healthRepo.UpdateConfig(config); err != nil {
 		return err
 	}
-	// 重启调度器
+	// 重启调度器（provider + model）
 	s.Stop()
 	if config.Enabled {
 		s.Start()
+	}
+	if config.Enabled && config.ModelCheckEnabled {
+		s.startModelCheckBackground(context.Background(), config)
 	}
 	return nil
 }
@@ -643,6 +646,7 @@ func (s *HealthCheckService) RunNow() {
 		defer cancel()
 		s.CheckAll(ctx)
 	}()
+	go s.runBackgroundModelCheck()
 }
 
 // runLoop 定时执行健康检测（config 驱动模式）

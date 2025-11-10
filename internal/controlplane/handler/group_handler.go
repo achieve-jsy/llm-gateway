@@ -23,6 +23,7 @@ type GroupServiceInterface interface {
 	RemoveModelFromGroup(groupID uint, modelID uuid.UUID) error
 	ListEnabledGroupsWithModels() ([]model.Group, error)
 	CountGroupModels(groupID uint) int
+	GetFailoverDefaults() service.FailoverDefaults
 }
 
 type GroupHandler struct {
@@ -130,6 +131,10 @@ func (h *GroupHandler) List(c *gin.Context) {
 }
 
 func (h *GroupHandler) GetByID(c *gin.Context) {
+	if c.Param("id") == "defaults" {
+		h.GetDefaults(c)
+		return
+	}
 	id, err := parseGroupID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -316,6 +321,17 @@ func (h *GroupHandler) RemoveModel(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "model removed from group"})
+}
+
+func (h *GroupHandler) GetDefaults(c *gin.Context) {
+	d := h.svc.GetFailoverDefaults()
+	c.JSON(http.StatusOK, gin.H{
+		"data": gin.H{
+			"max_switches":              d.MaxSwitches,
+			"same_model_retries":        d.SameModelRetries,
+			"failover_cooldown_seconds": d.CooldownSeconds,
+		},
+	})
 }
 
 func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {

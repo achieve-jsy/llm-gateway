@@ -14,6 +14,7 @@ function defaultSystemSettings(): SystemSettings {
     oidc_issuer_url: '', oidc_client_id: '', oidc_client_secret: '',
     oidc_redirect_url: '', oidc_scopes: 'openid profile email', oidc_enabled: false,
     webhook_enabled: false, webhook_url: '', webhook_secret: '', webhook_events: 'health_check_failed',
+    default_max_switches: 2, default_same_model_retries: 1, default_failover_cooldown_seconds: 60,
   }
 }
 

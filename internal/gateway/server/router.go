@@ -4,6 +4,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/example/llm-gateway/internal/gateway/binding"
 	"github.com/example/llm-gateway/internal/gateway/cache"
 	"github.com/example/llm-gateway/internal/gateway/handler"
 	"github.com/example/llm-gateway/internal/gateway/infra"
@@ -33,9 +34,11 @@ func Setup(registry *provider.Registry, cache *infra.Cache, state *provider.Runt
 	// 创建编排器和处理器
 	orch := orchestrator.NewChatOrchestrator(registry)
 
+	bindClient := binding.NewClient(controlPlaneURL, internalToken)
+
 	var groupDispatch *orchestrator.GroupAwareDispatcher
 	if sch != nil && nameCache != nil {
-		groupDispatch = orchestrator.NewGroupAwareDispatcher(sch, nameCache)
+		groupDispatch = orchestrator.NewGroupAwareDispatcherWithBinding(sch, nameCache, bindClient)
 	}
 
 	var chatHandler *handler.ChatHandler
@@ -46,6 +49,7 @@ func Setup(registry *provider.Registry, cache *infra.Cache, state *provider.Runt
 	}
 
 	modelsHandler := handler.NewModelsHandler(cache, registry, state)
+	boundModelsHandler := handler.NewBoundModelsHandler(controlPlaneURL, internalToken)
 	healthHandler := handler.NewHealthHandler(cache.Client(), registry, state, sch)
 	r.GET("/health", healthHandler.Health)
 	r.GET("/ready", healthHandler.Ready)
@@ -55,14 +59,13 @@ func Setup(registry *provider.Registry, cache *infra.Cache, state *provider.Runt
 
 	// OpenAI 兼容接口（需 API Key 认证）
 	v1 := r.Group("/v1")
-	meHandler := handler.NewMeHandler(registry, state, controlPlaneURL, internalToken)
 
 	v1.Use(middleware.AuthMiddleware(authClient))
 	v1.Use(guard.Handler())
 	{
-		v1.GET("/me/models", meHandler.Handle)
+		v1.GET("/models", boundModelsHandler.Handle)
 		v1.POST("/chat/completions", chatHandler.Handle)
-		v1.GET("/models", modelsHandler.Handle)
+		v1.GET("/health/models", modelsHandler.Handle)
 	}
 
 	return r

@@ -10,6 +10,12 @@ import type {
 } from '@/types/group'
 import type { ApiResponse, PaginatedResponse } from '@/types/api'
 
+export interface FailoverDefaults {
+  max_switches: number
+  same_model_retries: number
+  failover_cooldown_seconds: number
+}
+
 export const groupsApi = {
   createGroup(data: CreateGroupRequest) {
     return http.post<ApiResponse<Group>>('/api/v1/groups', data)
@@ -45,5 +51,9 @@ export const groupsApi = {
 
   listAllModels(params?: { page_size?: number }) {
     return http.get<ApiResponse<ModelOption[]>>('/api/v1/models', { params })
+  },
+
+  getGroupDefaults() {
+    return http.get<ApiResponse<FailoverDefaults>>('/api/v1/groups/defaults')
   },
 }

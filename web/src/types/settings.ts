@@ -15,6 +15,9 @@ export interface SystemSettings {
   webhook_url: string
   webhook_secret: string
   webhook_events: string
+  default_max_switches: number
+  default_same_model_retries: number
+  default_failover_cooldown_seconds: number
 }
 
 export interface PublicSettings {

@@ -8,9 +8,9 @@
       </div>
       <el-menu
         class="sidebar-menu"
-        :default-active="route.path"
+        :default-active="activeMenu"
         :collapse="isCollapsed"
-        router
+        @select="handleMenuSelect"
       >
         <div class="menu-group-label">接入</div>
         <el-menu-item index="/access/unified-entry">
@@ -33,10 +33,6 @@
           <el-icon><Monitor /></el-icon>
           <template #title>健康监控</template>
         </el-menu-item>
-        <el-menu-item index="/models">
-          <el-icon><Histogram /></el-icon>
-          <template #title>可用模型</template>
-        </el-menu-item>
 
         <el-divider class="menu-divider" />
 
@@ -48,6 +44,10 @@
         <el-menu-item index="/admin/models">
           <el-icon><Cpu /></el-icon>
           <template #title>模型管理</template>
+        </el-menu-item>
+        <el-menu-item index="/admin/groups">
+          <el-icon><Collection /></el-icon>
+          <template #title>模型组</template>
         </el-menu-item>
         <el-menu-item index="/admin/tags">
           <el-icon><PriceTag /></el-icon>
@@ -108,11 +108,11 @@
 
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
-import { onMounted, computed, ref } from 'vue'
+import { onMounted, computed, ref, watch } from 'vue'
 import { isDark, toggleTheme } from './composables/useTheme'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
-import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, HomeFilled, Key, Monitor, Setting, Fold, Expand, Histogram } from '@element-plus/icons-vue'
+import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, HomeFilled, Key, Monitor, Setting, Fold, Expand, Histogram, Collection } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -120,6 +120,11 @@ const authStore = useAuthStore()
 const settingsStore = useSettingsStore()
 
 const isCollapsed = ref(localStorage.getItem('sidebar-collapsed') === 'true')
+const activeMenu = ref(route.path)
+
+watch(() => route.path, (newPath) => {
+  activeMenu.value = newPath
+})
 
 const isPublicRoute = computed(() => route.meta.public as boolean | undefined)
 
@@ -134,6 +139,12 @@ const siteTitle = computed(() => {
 onMounted(() => {
   settingsStore.loadPublicSettings()
 })
+
+function handleMenuSelect(index: string) {
+  if (index && index !== route.path) {
+    router.push(index)
+  }
+}
 
 function toggleCollapse() {
   isCollapsed.value = !isCollapsed.value

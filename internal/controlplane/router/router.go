@@ -83,15 +83,22 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	internalSvc := service.NewInternalService(modelRepo, providerRepo)
 	healthCheckSvc := service.NewHealthCheckService(healthCheckRepo, providerRepo, modelRepo, rdb)
 
-	keySvc := service.NewKeyService(keyRepo, service.NewEventPublisherAdapter(publisher))
-
 	groupRepo := repository.NewGroupRepo(db)
+	keyGroupRepo := repository.NewKeyGroupRepo(db)
+	keyGroupSvc := service.NewKeyGroupService(keyGroupRepo, groupRepo, keyRepo, service.NewEventPublisherAdapter(publisher))
+	keySvc := service.NewKeyService(keyRepo, keyGroupSvc, service.NewEventPublisherAdapter(publisher))
+
 	groupSvc := service.NewGroupService(groupRepo)
+	groupSvc.SetFailoverDefaults(
+		settingsSvc.GetDefaultMaxSwitches(context.Background()),
+		settingsSvc.GetDefaultSameModelRetries(context.Background()),
+		settingsSvc.GetDefaultFailoverCooldownSeconds(context.Background()),
+	)
 	groupHandler := handler.NewGroupHandler(groupSvc)
 
 	providerHandler := handler.NewProviderHandler(providerSvc)
 	modelHandler := handler.NewModelHandler(modelSvc)
-	internalHandler := handler.NewInternalHandler(internalSvc, keySvc)
+	internalHandler := handler.NewInternalHandler(internalSvc, keySvc, keyGroupSvc)
 	defHandler := handler.NewDefinitionHandler(defRepo)
 	testHandler := handler.NewTestHandler(providerRepo, modelRepo)
 	modelTagHandler := handler.NewModelTagHandler(modelTagRepo)
@@ -219,6 +226,9 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.DELETE("/keys/:id", keyHandler.DeleteKey)
 		adminGroup.POST("/keys/:id/reset", keyHandler.ResetKey)
 		adminGroup.POST("/keys/:id/reveal", keyHandler.RevealKey)
+		adminGroup.GET("/keys/:id/groups", keyHandler.ListKeyGroups)
+		adminGroup.POST("/keys/:id/groups", keyHandler.UpdateKeyGroups)
+		adminGroup.GET("/groups/available", keyHandler.ListAvailableGroups)
 		adminGroup.GET("/model-catalog/by-source", catalogHandler.GetBySource)
 		adminGroup.POST("/model-catalog/sync", catalogHandler.Sync)
 		adminGroup.GET("/model-catalog/diff", catalogHandler.Diff)
@@ -230,6 +240,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/model-catalog/:id", catalogHandler.GetByID)
 
 		// 模型分组管理
+		adminGroup.GET("/groups/defaults", groupHandler.GetDefaults)
 		adminGroup.POST("/groups", groupHandler.Create)
 		adminGroup.GET("/groups", groupHandler.List)
 		adminGroup.GET("/groups/:id", groupHandler.GetByID)
@@ -255,6 +266,7 @@ internalGroup.GET("/models/available", internalHandler.ListAvailableModels)
 	internalGroup.GET("/models/health", internalHandler.GetModelHealth)
 	internalGroup.POST("/keys/verify", keyHandler.VerifyKey)
 	internalGroup.POST("/auth/verify-key", keyHandler.VerifyKey)
+	internalGroup.GET("/keys/:id/groups", internalHandler.GetKeyGroups)
 	}
 
 	return r

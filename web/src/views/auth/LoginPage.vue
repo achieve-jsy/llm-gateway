@@ -1,13 +1,28 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { type FormInstance, type FormRules } from 'element-plus'
 import http from '@/services/http'
 
 const authStore = useAuthStore()
 const router = useRouter()
-const username = ref('')
-const password = ref('')
+const formRef = ref<FormInstance>()
+
+const form = reactive({
+  username: '',
+  password: '',
+})
+
+const rules = reactive<FormRules>({
+  username: [
+    { required: true, message: '请输入用户名', trigger: 'blur' },
+  ],
+  password: [
+    { required: true, message: '请输入密码', trigger: 'blur' },
+  ],
+})
+
 const loginLoading = ref(false)
 const loginError = ref('')
 
@@ -16,15 +31,16 @@ function redirectToSSO() {
 }
 
 async function handleDevLogin() {
-  if (!username.value || !password.value) return
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
   loginLoading.value = true
   loginError.value = ''
   try {
-    const res = await http.post('/auth/dev/login', { username: username.value, password: password.value })
+    const res = await http.post('/auth/dev/login', { username: form.username, password: form.password })
     authStore.setAuth({
       accessToken: res.data.accessToken,
       refreshToken: res.data.refreshToken || '',
-      user: { id: res.data.user?.id || '', name: res.data.user?.name || username.value, email: '', departmentId: '', departmentName: '' },
+      user: { id: res.data.user?.id || '', name: res.data.user?.name || form.username, email: '', departmentId: '', departmentName: '' },
       role: res.data.user?.role || 'admin',
     })
     router.replace('/home')
@@ -44,14 +60,20 @@ async function handleDevLogin() {
         <p>统一大模型接入管理平台</p>
       </div>
 
-      <div class="login-form">
-        <el-input v-model="username" placeholder="用户名" size="large" clearable />
-        <el-input v-model="password" type="password" placeholder="密码" size="large" show-password @keyup.enter="handleDevLogin" />
-        <el-button type="primary" size="large" :loading="loginLoading" @click="handleDevLogin" style="width:100%">
-          登录
-        </el-button>
+      <el-form ref="formRef" :model="form" :rules="rules" class="login-form" @submit.prevent>
+        <el-form-item prop="username">
+          <el-input v-model="form.username" placeholder="用户名" size="large" clearable />
+        </el-form-item>
+        <el-form-item prop="password">
+          <el-input v-model="form.password" type="password" placeholder="密码" size="large" show-password @keyup.enter="handleDevLogin" />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" size="large" :loading="loginLoading" @click="handleDevLogin" style="width:100%">
+            登录
+          </el-button>
+        </el-form-item>
         <p v-if="loginError" class="login-error">{{ loginError }}</p>
-      </div>
+      </el-form>
 
       <el-divider>或</el-divider>
 

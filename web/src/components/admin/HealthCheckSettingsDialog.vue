@@ -6,12 +6,12 @@
     :close-on-click-modal="false"
     @close="emit('close')"
   >
-    <el-form :model="form" label-width="100px">
+    <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
       <el-form-item label="启用自动检测">
         <el-switch v-model="form.enabled" />
       </el-form-item>
 
-      <el-form-item label="检测间隔">
+      <el-form-item label="检测间隔" prop="interval_minutes">
         <el-select v-model="form.interval_minutes" style="width: 100%">
           <el-option
             v-for="opt in intervalOptions"
@@ -22,7 +22,7 @@
         </el-select>
       </el-form-item>
 
-      <el-form-item label="检测模式">
+      <el-form-item label="检测模式" prop="check_mode">
         <el-select v-model="form.check_mode" style="width: 100%">
           <el-option
             v-for="opt in checkModeOptions"
@@ -33,7 +33,7 @@
         </el-select>
       </el-form-item>
 
-      <el-form-item label="失败阈值">
+      <el-form-item label="失败阈值" prop="max_failures">
         <el-input-number v-model="form.max_failures" :min="1" :max="100" />
         <span style="margin-left: 8px; color: var(--el-text-color-secondary); font-size: 12px">次</span>
       </el-form-item>
@@ -66,8 +66,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, reactive, watch } from 'vue'
+import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import {
   getHealthCheckConfig,
   updateHealthCheckConfig,
@@ -91,6 +91,14 @@ const checkModeOptions = [
   { label: '模型转发（消耗极少量 Token）', value: 'model_forward' },
   { label: '两者都做', value: 'both' },
 ]
+
+const formRef = ref<FormInstance>()
+
+const rules = reactive<FormRules>({
+  interval_minutes: [{ required: true, message: '请选择检测间隔', trigger: 'change' }],
+  check_mode: [{ required: true, message: '请选择检测模式', trigger: 'change' }],
+  max_failures: [{ required: true, message: '请设置失败阈值', trigger: 'blur' }],
+})
 
 const form = ref({
   enabled: true,
@@ -131,6 +139,8 @@ watch(
 
 /** 保存设置 */
 async function handleSave() {
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
   saving.value = true
   try {
     // 从 check_mode 映射回后端字段

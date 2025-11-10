@@ -7,12 +7,12 @@
     destroy-on-close
     @closed="resetForm"
   >
-    <el-form ref="formRef" :model="form" label-width="80px" label-position="left" @submit.prevent>
-      <el-form-item label="名称" required>
+    <el-form ref="formRef" :model="form" :rules="rules" label-width="80px" label-position="left" @submit.prevent>
+      <el-form-item label="名称" prop="name">
         <el-input v-model="form.name" placeholder="输入 Key 名称，便于识别" maxlength="64" />
         <div class="form-hint">仅允许字母、数字、下划线和连字符</div>
       </el-form-item>
-      <el-form-item label="过期时间">
+      <el-form-item label="过期时间" prop="expiresAt">
         <el-date-picker
           v-model="form.expiresAt"
           type="datetime"
@@ -55,8 +55,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, reactive, computed } from 'vue'
+import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { createKey } from '@/services/control-plane'
 import { mapCreateKeyResponse } from '@/types/api-key'
 import { executeCcsImport } from '@/utils/ccs-import'
@@ -70,6 +70,15 @@ const visible = computed({
   set: (v) => emit('update:modelValue', v),
 })
 
+const formRef = ref<FormInstance>()
+
+const rules = reactive<FormRules>({
+  name: [
+    { required: true, message: '请输入 Key 名称', trigger: 'blur' },
+    { pattern: /^[a-zA-Z0-9_-]+$/, message: '仅允许字母、数字、下划线和连字符', trigger: 'blur' },
+  ],
+})
+
 const loading = ref(false)
 const createdKey = ref('')
 const form = ref({ name: '', expiresAt: '' })
@@ -79,7 +88,8 @@ function disabledDate(time: Date) {
 }
 
 async function handleCreate() {
-  if (!form.value.name.trim()) return
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
   loading.value = true
   try {
     const expiresAt = form.value.expiresAt ? new Date(form.value.expiresAt).toISOString() : undefined
@@ -112,6 +122,7 @@ function resetForm() {
   form.value.name = ''
   form.value.expiresAt = ''
   createdKey.value = ''
+  formRef.value?.resetFields()
 }
 </script>
 

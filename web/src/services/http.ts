@@ -79,8 +79,8 @@ http.interceptors.response.use(
       return new Promise(() => {}) // 阻塞 Promise 链，不让各页面 .catch 再弹一层错
     }
 
-    // 409 已知机器码由业务层自行处理，拦截器只兜底未知码
-    if (status !== 409 || !friendlyMsg) {
+    // 统一错误出口：拦截器处理所有错误，业务代码只做状态清理，不再弹重复消息
+    if (status !== 409 || friendlyMsg) {
       ElMessage.error(`[${status || 'ERR'}] ${message}`)
     }
 

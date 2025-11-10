@@ -471,7 +471,40 @@ onMounted(async () => {
   captureInitial()
 })
 
+function isValidHttpUrl(url: string): boolean {
+  if (!url) return true
+  return /^https?:\/\/.+/.test(url)
+}
+
+function validateForm(): string | null {
+  if (form.api_base_url && !isValidHttpUrl(form.api_base_url)) {
+    return 'API 基础 URL 格式不正确，请输入以 http:// 或 https:// 开头的地址'
+  }
+  if (form.oidc_enabled) {
+    if (form.oidc_issuer_url && !isValidHttpUrl(form.oidc_issuer_url)) {
+      return 'OIDC Issuer URL 格式不正确，请输入以 http:// 或 https:// 开头的地址'
+    }
+    if (form.oidc_redirect_url && !isValidHttpUrl(form.oidc_redirect_url)) {
+      return 'OIDC Redirect URL 格式不正确，请输入以 http:// 或 https:// 开头的地址'
+    }
+  }
+  if (form.webhook_enabled) {
+    if (!form.webhook_url) {
+      return '启用 Webhook 时请填写 Webhook URL'
+    }
+    if (!isValidHttpUrl(form.webhook_url)) {
+      return 'Webhook URL 格式不正确，请输入以 http:// 或 https:// 开头的地址'
+    }
+  }
+  return null
+}
+
 async function handleSave() {
+  const error = validateForm()
+  if (error) {
+    ElMessage.warning(error)
+    return
+  }
   saving.value = true
   try {
     const ok = await settingsStore.saveSettings({

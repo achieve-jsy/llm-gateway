@@ -432,7 +432,7 @@ async function handleToggle(row: Provider) {
     ElMessage.success(shouldEnable ? '已启用' : '已禁用')
     loadProviders()
   } catch {
-    ElMessage.error('状态切换失败')
+    // 错误由全局拦截器统一处理
   }
 }
 
@@ -509,7 +509,6 @@ async function handleInlineUpdate(row: Provider) {
       weight: row.weight
     })
   } catch {
-    ElMessage.error('更新失败')
     loadProviders()
   }
 }
@@ -522,13 +521,9 @@ async function handleDelete(row: Provider) {
     currentPage.value = 1
     loadProviders()
   } catch (e: any) {
-    const friendly = resolveErrorMessage(e)
-    if (friendly) {
-      ElMessage.error(friendly)
-    } else if (e?.response?.status === 409) {
+    // 已知错误码由全局拦截器处理，只处理未注册的特殊码
+    if (!resolveErrorMessage(e) && e?.response?.status === 409) {
       ElMessage.error('请先删除关联模型')
-    } else {
-      ElMessage.error('删除失败')
     }
   }
 }

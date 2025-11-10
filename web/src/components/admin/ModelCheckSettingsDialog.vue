@@ -6,7 +6,7 @@
     :close-on-click-modal="false"
     @close="emit('close')"
   >
-    <el-form :model="form" label-width="120px">
+    <el-form ref="formRef" :model="form" :rules="rules" label-width="120px">
       <el-form-item label="启用自动检测">
         <el-switch v-model="form.model_check_enabled" />
       </el-form-item>
@@ -16,7 +16,7 @@
         </span>
       </el-form-item>
 
-      <el-form-item label="检测间隔">
+      <el-form-item label="检测间隔" prop="model_check_interval_minutes">
         <el-select v-model="form.model_check_interval_minutes" style="width: 100%">
           <el-option
             v-for="opt in intervalOptions"
@@ -27,7 +27,7 @@
         </el-select>
       </el-form-item>
 
-      <el-form-item label="失败阈值">
+      <el-form-item label="失败阈值" prop="model_check_failure_threshold">
         <el-input-number v-model="form.model_check_failure_threshold" :min="1" :max="100" />
         <span style="margin-left: 8px; color: var(--el-text-color-secondary); font-size: 12px">次</span>
       </el-form-item>
@@ -68,8 +68,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, reactive, computed, watch } from 'vue'
+import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import {
   getHealthCheckConfig,
   updateHealthCheckConfig,
@@ -86,6 +86,13 @@ const intervalOptions = [
   { label: '每 30 分钟', value: 30 },
   { label: '每 60 分钟', value: 60 },
 ]
+
+const formRef = ref<FormInstance>()
+
+const rules = reactive<FormRules>({
+  model_check_interval_minutes: [{ required: true, message: '请选择检测间隔', trigger: 'change' }],
+  model_check_failure_threshold: [{ required: true, message: '请设置失败阈值', trigger: 'blur' }],
+})
 
 const form = ref({
   model_check_enabled: true,
@@ -146,6 +153,8 @@ watch(
 
 /** 保存设置 */
 async function handleSave() {
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
   saving.value = true
   try {
     await updateHealthCheckConfig({

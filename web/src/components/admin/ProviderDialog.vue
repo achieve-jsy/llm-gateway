@@ -227,7 +227,6 @@ import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import type { FormInstance, FormRules, InputInstance } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { createProvider, updateProvider, getProviderDefinitions, createModel } from '@/services/control-plane'
-import { resolveErrorMessage } from '@/services/http'
 import type { Provider, ProviderPayload, ProviderDefinition, CredentialFieldSchema } from '@/types/provider'
 
 const props = defineProps<{
@@ -556,9 +555,8 @@ async function handleSubmit() {
       }
     }
     emit('saved')
-  } catch (e: any) {
-    const friendly = resolveErrorMessage(e)
-    ElMessage.error(friendly || (isEdit.value ? '更新失败' : '创建失败'))
+  } catch {
+    // 错误已在全局拦截器统一处理
   } finally {
     submitting.value = false
   }

@@ -163,8 +163,34 @@ function scrollToBottom() {
 async function sendMessage() {
   const content = userInput.value.trim()
   if (!content || isStreaming.value) return
+
   if (!config.model) {
     ElMessage.warning('请先选择或输入模型')
+    return
+  }
+
+  if (mode.value === 'apikey' && !config.apiKey.trim()) {
+    ElMessage.warning('请先输入 API Key')
+    return
+  }
+
+  if (config.temperature < 0 || config.temperature > 2) {
+    ElMessage.warning('温度值应在 0 到 2 之间')
+    return
+  }
+
+  if (config.topP < 0 || config.topP > 1) {
+    ElMessage.warning('Top P 值应在 0 到 1 之间')
+    return
+  }
+
+  if (config.maxTokens < 1 || config.maxTokens > 128000) {
+    ElMessage.warning('最大令牌数应在 1 到 128000 之间')
+    return
+  }
+
+  if (config.apiBase && !/^https?:\/\/.+/.test(config.apiBase) && config.apiBase !== '/v1') {
+    ElMessage.warning('接口地址格式不正确，请输入以 http(s):// 开头的地址或 /v1 路径')
     return
   }
 

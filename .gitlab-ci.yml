@@ -101,6 +101,23 @@ build-control-plane:
     paths: [control-plane.tar.gz]
     expire_in: 2 hours
 
+build-web:
+  stage: build
+  image: node:20-alpine
+  tags: [docker]
+  script:
+    - cd web
+    - npm ci
+    - npm run build
+    - tar -czf ../web-dist.tar.gz -C dist .
+  artifacts:
+    paths: [web-dist.tar.gz]
+    expire_in: 2 hours
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == "dev"
+    - if: $CI_COMMIT_BRANCH == "main"
+
 # ─── Deploy Test (192.0.2.10) ─────────────────────────────────────────────
 deploy-test:
   stage: deploy
@@ -126,7 +143,7 @@ deploy-test:
       echo "=== Deploying IMAGE_TAG=${IMAGE_TAG} to ${TEST_HOST} (test) ==="
 
       # 传输镜像文件
-      scp ${SSH_OPTS} gateway.tar.gz control-plane.tar.gz ${TEST_USER}@${TEST_HOST}:/tmp/
+      scp ${SSH_OPTS} gateway.tar.gz control-plane.tar.gz web-dist.tar.gz ${TEST_USER}@${TEST_HOST}:/tmp/
 
       # 传输部署文件
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "mkdir -p ${TEST_PATH}"
@@ -143,9 +160,12 @@ deploy-test:
         docker load < /tmp/gateway.tar.gz
         echo "Loading control-plane image..."
         docker load < /tmp/control-plane.tar.gz
-
-        # 清理传输文件
         rm -f /tmp/gateway.tar.gz /tmp/control-plane.tar.gz
+
+        # 部署前端静态文件
+        mkdir -p /var/www/aimeter/dist
+        tar -xzf /tmp/web-dist.tar.gz -C /var/www/aimeter/dist
+        rm -f /tmp/web-dist.tar.gz
 
         # 如果 .env 不存在则从 example 复制
         [ ! -f .env ] && cp .env.example .env && echo "WARN: Created .env from .env.example"
@@ -167,6 +187,7 @@ deploy-test:
   dependencies:
     - build-gateway
     - build-control-plane
+    - build-web
   rules:
     - if: $CI_COMMIT_BRANCH == "dev"
       when: on_success
@@ -201,7 +222,7 @@ deploy:
       echo "=== Deploying IMAGE_TAG=${IMAGE_TAG} to ${DEPLOY_HOST} ==="
 
       # 传输镜像文件
-      scp ${SSH_OPTS} gateway.tar.gz control-plane.tar.gz root@${DEPLOY_HOST}:/tmp/
+      scp ${SSH_OPTS} gateway.tar.gz control-plane.tar.gz web-dist.tar.gz root@${DEPLOY_HOST}:/tmp/
 
       # 传输部署文件
       ssh ${SSH_OPTS} root@${DEPLOY_HOST} "mkdir -p ${DEPLOY_PATH}"
@@ -223,6 +244,11 @@ deploy:
         # 清理传输文件
         rm -f /tmp/gateway.tar.gz /tmp/control-plane.tar.gz
 
+        # 部署前端静态文件
+        mkdir -p /var/www/aimeter/dist
+        tar -xzf /tmp/web-dist.tar.gz -C /var/www/aimeter/dist
+        rm -f /tmp/web-dist.tar.gz
+
         # 如果 .env 不存在则从 example 复制
         [ ! -f .env ] && cp .env.example .env && echo "WARN: Created .env from .env.example"
 
@@ -239,6 +265,7 @@ deploy:
   dependencies:
     - build-gateway
     - build-control-plane
+    - build-web
   rules:
     - if: $CI_COMMIT_TAG
       when: on_success

@@ -108,6 +108,7 @@ deploy-test:
   tags: [deploy]
   variables:
     TEST_HOST: "192.0.2.10"
+    TEST_USER: "hgf"
     TEST_PATH: "/opt/llm-gateway"
     GATEWAY_PORT: "4010"
     CONTROL_PLANE_PORT: "4011"
@@ -125,23 +126,23 @@ deploy-test:
       echo "=== Deploying IMAGE_TAG=${IMAGE_TAG} to ${TEST_HOST} (test) ==="
 
       # 传输镜像文件
-      scp ${SSH_OPTS} gateway.tar.gz control-plane.tar.gz root@${TEST_HOST}:/tmp/
+      scp ${SSH_OPTS} gateway.tar.gz control-plane.tar.gz ${TEST_USER}@${TEST_HOST}:/tmp/
 
       # 传输部署文件
-      ssh ${SSH_OPTS} root@${TEST_HOST} "mkdir -p ${TEST_PATH}"
-      scp ${SSH_OPTS} docker-compose.yml root@${TEST_HOST}:${TEST_PATH}/
-      [ -f .env.example ] && scp ${SSH_OPTS} .env.example root@${TEST_HOST}:${TEST_PATH}/
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "sudo mkdir -p ${TEST_PATH} && sudo chown ${TEST_USER}:${TEST_USER} ${TEST_PATH}"
+      scp ${SSH_OPTS} docker-compose.yml ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/
+      [ -f .env.example ] && scp ${SSH_OPTS} .env.example ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/
 
       # 远程部署
-      ssh ${SSH_OPTS} root@${TEST_HOST} << REMOTE_SCRIPT
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} << REMOTE_SCRIPT
         set -e
         cd ${TEST_PATH}
 
         # 加载镜像
         echo "Loading gateway image..."
-        docker load < /tmp/gateway.tar.gz
+        sudo docker load < /tmp/gateway.tar.gz
         echo "Loading control-plane image..."
-        docker load < /tmp/control-plane.tar.gz
+        sudo docker load < /tmp/control-plane.tar.gz
 
         # 清理传输文件
         rm -f /tmp/gateway.tar.gz /tmp/control-plane.tar.gz
@@ -155,10 +156,10 @@ deploy-test:
         export CONTROL_PLANE_PORT="${CONTROL_PLANE_PORT}"
         export GATEWAY_HOST="0.0.0.0"
         export CP_HOST="0.0.0.0"
-        docker compose up -d --remove-orphans --wait --wait-timeout 60
+        sudo -E docker compose up -d --remove-orphans --wait --wait-timeout 60
 
         echo "=== Deploy ${IMAGE_TAG} to test complete ==="
-        docker compose ps
+        sudo docker compose ps
       REMOTE_SCRIPT
   environment:
     name: test

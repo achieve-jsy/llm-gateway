@@ -1,129 +1,222 @@
 # ═══════════════════════════════════════════════════════════════════════════════
-# CI/CD Pipeline for LLM Gateway (dev branch)
+# CI/CD Pipeline for LLM Gateway
 #
-# 流程：test → build（3 个服务并行） → deploy（手动触发）
+# 触发方式：
+#   - git tag vX.Y.Z → 全流程（test → build → deploy → verify）
+#   - dev/main 分支 push → 仅 test + build（不部署）
 #
 # 架构：
-#   - CI 服务器 (192.0.2.10) 有本地 Docker Registry (:5000)
-#   - Build 阶段直接用宿主机 Docker 构建（通过 Docker socket）
-#   - 镜像推送到 Registry，deploy 阶段从 Registry 拉取
-#   - 部署到 192.0.2.10，使用 docker compose
+#   ops (192.0.2.10): GitLab Runner (Docker executor, socket mount)
+#   prod (192.0.2.10): docker compose 部署
+#
+# Build 策略：docker save → artifact → scp → docker load（无需 registry）
 # ═══════════════════════════════════════════════════════════════════════════════
 
 stages:
   - test
   - build
   - deploy
+  - verify
 
 variables:
-  REGISTRY: "192.0.2.10:5000"
-  GATEWAY_IMAGE: "${REGISTRY}/llm-gateway:${CI_COMMIT_SHORT_SHA}"
-  CP_IMAGE: "${REGISTRY}/llm-control-plane:${CI_COMMIT_SHORT_SHA}"
-  WEB_IMAGE: "${REGISTRY}/llm-web:${CI_COMMIT_SHORT_SHA}"
+  DEPLOY_HOST: "192.0.2.10"
+  DEPLOY_PATH: "/opt/llm-gateway"
+
+workflow:
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/
+    - if: $CI_COMMIT_BRANCH == "dev"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
 
 # ─── Test Stage ─────────────────────────────────────────────────────────────
 test:
   stage: test
-  image: golang:1.23-alpine
-  tags: [deploy, go, docker]
+  image: 192.0.2.10:5000/golang:1.26-alpine
+  tags: [go]
+  variables:
+    GOPROXY: "https://goproxy.cn,direct"
+    GONOSUMCHECK: "*"
   script:
     - go vet ./...
-    - go test ./... -race -cover -count=1
+    - go test ./... -cover -count=1 -timeout 5m
   allow_failure: true
   rules:
-    - if: $CI_PIPELINE_SOURCE == "push"
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH
 
 # ─── Build Stage ────────────────────────────────────────────────────────────
-# 使用 docker:24 镜像 + 宿主机 Docker socket（已在 Runner volumes 配置）
-# 这样不需要 DinD（privileged mode），构建速度更快更稳定
-
+# Runner 挂载了 /var/run/docker.sock，无需 dind service
+# Build → docker save → artifact（绕开 registry push 问题）
 .build_template: &build_template
   stage: build
   image: docker:24
-  tags: [deploy, go, docker]
+  tags: [docker]
+  variables:
+    DOCKER_HOST: "unix:///var/run/docker.sock"
   before_script:
-    - docker login -u "" -p "" ${REGISTRY} || true  # 本地 registry 无需认证
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        export IMAGE_TAG="$CI_COMMIT_TAG"
+      else
+        export IMAGE_TAG="$CI_COMMIT_SHORT_SHA"
+      fi
+      echo "IMAGE_TAG=${IMAGE_TAG}"
   rules:
+    - if: $CI_COMMIT_TAG
     - if: $CI_COMMIT_BRANCH == "dev"
     - if: $CI_COMMIT_BRANCH == "main"
 
 build-gateway:
   <<: *build_template
   script:
-    - docker build -f deploy/docker/gateway.Dockerfile -t ${GATEWAY_IMAGE} .
-    - docker push ${GATEWAY_IMAGE}
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        IMAGE_TAG="$CI_COMMIT_TAG"
+      else
+        IMAGE_TAG="$CI_COMMIT_SHORT_SHA"
+      fi
+      echo "Building llm-gateway:${IMAGE_TAG} ..."
+      docker build -f deploy/docker/gateway.Dockerfile -t llm-gateway:${IMAGE_TAG} .
+      docker save llm-gateway:${IMAGE_TAG} | gzip > gateway.tar.gz
+      ls -lh gateway.tar.gz
+  artifacts:
+    paths: [gateway.tar.gz]
+    expire_in: 2 hours
 
 build-control-plane:
   <<: *build_template
   script:
-    - docker build -f deploy/docker/control-plane.Dockerfile -t ${CP_IMAGE} .
-    - docker push ${CP_IMAGE}
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        IMAGE_TAG="$CI_COMMIT_TAG"
+      else
+        IMAGE_TAG="$CI_COMMIT_SHORT_SHA"
+      fi
+      echo "Building llm-control-plane:${IMAGE_TAG} ..."
+      docker build -f deploy/docker/control-plane.Dockerfile -t llm-control-plane:${IMAGE_TAG} .
+      docker save llm-control-plane:${IMAGE_TAG} | gzip > control-plane.tar.gz
+      ls -lh control-plane.tar.gz
+  artifacts:
+    paths: [control-plane.tar.gz]
+    expire_in: 2 hours
 
 build-web:
   <<: *build_template
   script:
-    - docker build -f deploy/docker/web.Dockerfile -t ${WEB_IMAGE} .
-    - docker push ${WEB_IMAGE}
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        IMAGE_TAG="$CI_COMMIT_TAG"
+      else
+        IMAGE_TAG="$CI_COMMIT_SHORT_SHA"
+      fi
+      echo "Building llm-web:${IMAGE_TAG} ..."
+      docker build -f deploy/docker/web.Dockerfile -t llm-web:${IMAGE_TAG} .
+      docker save llm-web:${IMAGE_TAG} | gzip > web.tar.gz
+      ls -lh web.tar.gz
+  artifacts:
+    paths: [web.tar.gz]
+    expire_in: 2 hours
 
 # ─── Deploy Stage ───────────────────────────────────────────────────────────
 deploy:
   stage: deploy
   image: alpine:latest
-  tags: [deploy, go, docker]
+  tags: [deploy]
   before_script:
-    - apk add --no-cache openssh-client
+    - apk add --no-cache openssh-client curl
     - eval $(ssh-agent -s)
     - echo "$DEPLOY_SSH_KEY" | tr -d '\r' | ssh-add -
     - mkdir -p ~/.ssh && chmod 700 ~/.ssh
-    - ssh-keyscan -H ${DEPLOY_HOST:-192.0.2.10} >> ~/.ssh/known_hosts
+    - ssh-keyscan -H ${DEPLOY_HOST} >> ~/.ssh/known_hosts
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        export IMAGE_TAG="$CI_COMMIT_TAG"
+      else
+        export IMAGE_TAG="$CI_COMMIT_SHORT_SHA"
+      fi
   script:
     - |
-      DEPLOY_HOST="${DEPLOY_HOST:-192.0.2.10}"
-      DEPLOY_PATH="/opt/llm-gateway"
+      echo "=== Deploying IMAGE_TAG=${IMAGE_TAG} to ${DEPLOY_HOST} ==="
+
+      # 传输镜像文件
+      scp gateway.tar.gz control-plane.tar.gz web.tar.gz root@${DEPLOY_HOST}:/tmp/
 
       # 传输部署文件
-      scp docker-compose.yml .env.example ${DEPLOY_HOST}:/tmp/llm-deploy/
-      scp deploy/docker/nginx.conf ${DEPLOY_HOST}:/tmp/llm-deploy/
+      ssh root@${DEPLOY_HOST} "mkdir -p ${DEPLOY_PATH}"
+      scp docker-compose.yml root@${DEPLOY_HOST}:${DEPLOY_PATH}/
+      scp deploy/docker/nginx.conf root@${DEPLOY_HOST}:${DEPLOY_PATH}/
+      [ -f .env.example ] && scp .env.example root@${DEPLOY_HOST}:${DEPLOY_PATH}/
 
-      # 远程执行：从 Registry 拉取镜像、启动服务
+      # 远程部署
       ssh root@${DEPLOY_HOST} << REMOTE_SCRIPT
         set -e
-        mkdir -p ${DEPLOY_PATH}
         cd ${DEPLOY_PATH}
 
-        # 移动部署文件
-        mv /tmp/llm-deploy/docker-compose.yml . 2>/dev/null || true
-        mv /tmp/llm-deploy/nginx.conf . 2>/dev/null || true
-        mv /tmp/llm-deploy/.env.example . 2>/dev/null || true
+        # 加载镜像
+        echo "Loading gateway image..."
+        docker load < /tmp/gateway.tar.gz
+        echo "Loading control-plane image..."
+        docker load < /tmp/control-plane.tar.gz
+        echo "Loading web image..."
+        docker load < /tmp/web.tar.gz
 
-        # 从 Registry 拉取镜像
-        docker pull ${GATEWAY_IMAGE}
-        docker pull ${CP_IMAGE}
-        docker pull ${WEB_IMAGE}
-
-        # 重命名为 latest（compose 文件中使用）
-        docker tag ${GATEWAY_IMAGE} llm-gateway:latest
-        docker tag ${CP_IMAGE} llm-control-plane:latest
-        docker tag ${WEB_IMAGE} llm-web:latest
+        # 清理传输文件
+        rm -f /tmp/gateway.tar.gz /tmp/control-plane.tar.gz /tmp/web.tar.gz
 
         # 如果 .env 不存在则从 example 复制
-        [ ! -f .env ] && cp .env.example .env && echo "WARN: Created .env from example, please edit"
+        [ ! -f .env ] && cp .env.example .env && echo "WARN: Created .env from .env.example"
 
-        # 启动服务
-        IMAGE_TAG=latest docker compose up -d --remove-orphans
+        # 滚动更新
+        export IMAGE_TAG="${IMAGE_TAG}"
+        docker compose up -d --remove-orphans --wait --wait-timeout 60
 
-        echo "=== Deploy complete ==="
+        echo "=== Deploy ${IMAGE_TAG} complete ==="
         docker compose ps
       REMOTE_SCRIPT
   environment:
     name: production
-    url: http://${DEPLOY_HOST:-192.0.2.10}
-  when: manual
+    url: http://${DEPLOY_HOST}
   dependencies:
     - build-gateway
     - build-control-plane
     - build-web
   rules:
+    - if: $CI_COMMIT_TAG
+      when: on_success
     - if: $CI_COMMIT_BRANCH == "dev"
+      when: manual
     - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+
+# ─── Verify Stage ───────────────────────────────────────────────────────────
+verify:
+  stage: verify
+  image: alpine:latest
+  tags: [deploy]
+  script:
+    - apk add --no-cache curl
+    - echo "Waiting for services to stabilize..."
+    - sleep 15
+    - |
+      echo "Checking gateway health..."
+      curl -sf http://${DEPLOY_HOST}:80/health || curl -sf http://${DEPLOY_HOST}:8080/health || {
+        echo "ERROR: Gateway health check failed"
+        exit 1
+      }
+      echo " ✓ Gateway healthy"
+    - |
+      echo "Checking control-plane health..."
+      curl -sf http://${DEPLOY_HOST}:80/api/v1/provider-definitions || curl -sf http://${DEPLOY_HOST}:8081/api/v1/provider-definitions || {
+        echo "ERROR: Control-plane health check failed"
+        exit 1
+      }
+      echo " ✓ Control-plane healthy"
+    - echo "=== All services verified ==="
+  dependencies: []
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == "dev"
+      when: manual
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual

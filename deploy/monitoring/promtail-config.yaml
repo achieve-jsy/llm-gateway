@@ -1,0 +1,31 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://192.0.2.10:3100/loki/api/v1/push
+
+scrape_configs:
+  # Docker 容器日志
+  - job_name: docker
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: llm-gateway
+          host: prod
+          __path__: /var/lib/docker/containers/*/*-json.log
+
+    pipeline_stages:
+      - docker: {}
+      - labeldrop:
+          - filename
+      # 从容器名提取 service 标签
+      - regex:
+          source: container_name
+          expression: "llm-gw-(?P<service>.+)"
+      - labels:
+          service:

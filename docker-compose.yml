@@ -43,9 +43,15 @@ services:
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-}
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
-      interval: 15s
+      interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 10s
+    stop_grace_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
 
   # ─── Control Plane（管理后端 API） ─────────────────────────────────────────────
   control-plane:
@@ -73,9 +79,15 @@ services:
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost}
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/api/v1/provider-definitions"]
-      interval: 15s
+      interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 10s
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
 
   # ─── OpenTelemetry Collector（可选） ───────────────────────────────────────────
   otel-collector:

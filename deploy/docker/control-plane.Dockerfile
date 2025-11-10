@@ -1,21 +1,16 @@
 # ─── Stage 1: Build Go backend ───────────────────────────────────────────────
-FROM --platform=$BUILDPLATFORM golang:1.26.3-alpine AS go-builder
-
-ARG TARGETOS=linux
-ARG TARGETARCH
+FROM 192.0.2.10:5000/golang:1.26-alpine AS go-builder
 
 RUN apk add --no-cache git ca-certificates
 
 WORKDIR /src
 COPY go.mod go.sum ./
-ENV GOPROXY=https://goproxy.cn,direct
-RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download
+RUN GOPROXY=https://goproxy.cn,direct go mod download
 
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    CGO_ENABLED=0 \
     go build -ldflags="-s -w" -o /out/control-plane ./cmd/control-plane
 
 # ─── Stage 2: Runtime ────────────────────────────────────────────────────────

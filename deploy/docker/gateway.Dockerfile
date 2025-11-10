@@ -1,26 +1,31 @@
 # ─── Stage 1: Build ──────────────────────────────────────────────────────────
-FROM golang:1.23-alpine AS builder
+FROM 192.0.2.10:5000/golang:1.26-alpine AS builder
+
+ENV GOPROXY=https://goproxy.cn,direct
+ENV GONOSUMCHECK=*
 
 RUN apk add --no-cache git ca-certificates
 
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 \
     go build -ldflags="-s -w" -o /out/gateway ./cmd/gateway
 
 # ─── Stage 2: Runtime ────────────────────────────────────────────────────────
-FROM alpine:3.19
+FROM alpine:3.21
 
 RUN apk add --no-cache ca-certificates tzdata
 
 COPY --from=builder /out/gateway /usr/local/bin/gateway
 
-# 配置文件（Load() 通过 APP_ENV 查找 ./config/{env}.yaml）
-RUN mkdir -p /app/config
 COPY config/prod.yaml /app/config/prod.yaml
+COPY migrations/ /app/migrations/
 
 WORKDIR /app
 

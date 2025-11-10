@@ -8,14 +8,10 @@ RUN apk add --no-cache git ca-certificates
 
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download
+RUN go mod download
 
 COPY . .
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 \
-    go build -ldflags="-s -w" -o /out/gateway ./cmd/gateway
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/gateway ./cmd/gateway
 
 # ─── Stage 2: Runtime ────────────────────────────────────────────────────────
 FROM alpine:3.21

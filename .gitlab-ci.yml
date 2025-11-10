@@ -46,6 +46,7 @@ test:
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
+    DOCKER_BUILDKIT: "0"
   before_script:
     - export IMAGE_TAG="$CI_COMMIT_TAG"
   rules:

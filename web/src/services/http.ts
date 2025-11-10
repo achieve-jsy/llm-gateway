@@ -79,8 +79,8 @@ http.interceptors.response.use(
       return new Promise(() => {}) // 阻塞 Promise 链，不让各页面 .catch 再弹一层错
     }
 
-    // 409 冲突默认由业务层处理，但若 BE 返回了已知机器码则直接展示友好提示
-    if (status !== 409 || friendlyMsg) {
+    // 409 已知机器码由业务层自行处理，拦截器只兜底未知码
+    if (status !== 409 || !friendlyMsg) {
       ElMessage.error(`[${status || 'ERR'}] ${message}`)
     }
 

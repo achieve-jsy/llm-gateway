@@ -129,7 +129,7 @@ deploy-test:
       scp ${SSH_OPTS} gateway.tar.gz control-plane.tar.gz ${TEST_USER}@${TEST_HOST}:/tmp/
 
       # 传输部署文件
-      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "sudo mkdir -p ${TEST_PATH} && sudo chown ${TEST_USER}:${TEST_USER} ${TEST_PATH}"
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "mkdir -p ${TEST_PATH}"
       scp ${SSH_OPTS} docker-compose.yml ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/
       [ -f .env.example ] && scp ${SSH_OPTS} .env.example ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/
 
@@ -140,9 +140,9 @@ deploy-test:
 
         # 加载镜像
         echo "Loading gateway image..."
-        sudo docker load < /tmp/gateway.tar.gz
+        docker load < /tmp/gateway.tar.gz
         echo "Loading control-plane image..."
-        sudo docker load < /tmp/control-plane.tar.gz
+        docker load < /tmp/control-plane.tar.gz
 
         # 清理传输文件
         rm -f /tmp/gateway.tar.gz /tmp/control-plane.tar.gz
@@ -156,10 +156,10 @@ deploy-test:
         export CONTROL_PLANE_PORT="${CONTROL_PLANE_PORT}"
         export GATEWAY_HOST="0.0.0.0"
         export CP_HOST="0.0.0.0"
-        sudo -E docker compose up -d --remove-orphans --wait --wait-timeout 60
+        docker compose up -d --remove-orphans --wait --wait-timeout 60
 
         echo "=== Deploy ${IMAGE_TAG} to test complete ==="
-        sudo docker compose ps
+        docker compose ps
       REMOTE_SCRIPT
   environment:
     name: test

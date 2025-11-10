@@ -89,7 +89,7 @@ func Load() *Config {
 	v.SetDefault("oidc.scopes", "openid profile email")
 	v.SetDefault("oidc.role_claim_path", "groups")
 	v.SetDefault("oidc.admin_match_values", "llm-gateway-admins")
-	v.SetDefault("oidc.default_role", "user")
+	v.SetDefault("oidc.default_role", "employee")
 
 	// 确定环境：APP_ENV 可选 dev / staging / prod
 	env := os.Getenv("APP_ENV")

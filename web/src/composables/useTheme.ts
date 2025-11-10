@@ -13,8 +13,8 @@ export function initTheme() {
   } else if (stored === 'light') {
     isDark.value = false
   } else {
-    // 未设置过，跟随系统
-    isDark.value = window.matchMedia('(prefers-color-scheme: dark)').matches
+    // 默认浅色模式
+    isDark.value = false
   }
   applyTheme()
 }
@@ -35,13 +35,4 @@ function applyTheme() {
   }
 }
 
-// 监听系统主题变化
-if (typeof window !== 'undefined') {
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-    // 仅在用户未手动设置时跟随系统
-    if (!localStorage.getItem(STORAGE_KEY)) {
-      isDark.value = e.matches
-      applyTheme()
-    }
-  })
-}
+

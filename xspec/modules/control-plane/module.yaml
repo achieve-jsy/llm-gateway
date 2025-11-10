@@ -1,9 +1,9 @@
 name: "control-plane"
 type: "web-backend"
-version: "1.1"
+version: "1.2"
 created_at: "2026-05-21"
 created_by_change: "CHG-20260521-001"
-last_updated: "2026-05-23"
+last_updated: "2026-05-25"
 change_history:
   - change_id: "CHG-20260521-001"
     date: "2026-05-21"
@@ -11,3 +11,6 @@ change_history:
   - change_id: "CHG-20260521-002"
     date: "2026-05-23"
     description: "新增同步模型接口（sync-models + confirm），含拉取对比、批量注册、下架禁用逻辑"
+  - change_id: "CHG-20260523-001"
+    date: "2026-05-25"
+    description: "新增 Key CRUD 功能（创建/列表/禁用/启用/删除），Key 与 user_id 强绑定"

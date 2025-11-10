@@ -1,20 +1,20 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { isDark, initTheme, toggleTheme } from './useTheme'
+
+const storage: Record<string, string> = {}
+
+vi.stubGlobal('localStorage', {
+  getItem: vi.fn((key: string) => storage[key] ?? null),
+  setItem: vi.fn((key: string, value: string) => { storage[key] = value }),
+  removeItem: vi.fn((key: string) => { delete storage[key] }),
+  clear: vi.fn(() => { Object.keys(storage).forEach(k => delete storage[k]) }),
+  length: 0,
+  key: vi.fn(() => null)
+})
 
 describe('useTheme Composable', () => {
   beforeEach(() => {
-    // Clear localStorage before each test
-    localStorage.clear()
-    // Reset isDark to false
-    isDark.value = false
-    // Clear all mocks
     vi.clearAllMocks()
-    // Reset DOM classes
-    document.documentElement.className = ''
-  })
-
-  afterEach(() => {
-    localStorage.clear()
     document.documentElement.className = ''
   })
 
@@ -51,42 +51,17 @@ describe('useTheme Composable', () => {
       expect(isDark.value).toBe(false)
     })
 
-    it('should follow system preference when localStorage is empty', () => {
-      localStorage.removeItem('llm-gateway-theme')
-
-      // Mock matchMedia
-      const mockMatchMedia = vi.fn().mockReturnValue({
-        matches: true,
-        media: '(prefers-color-scheme: dark)',
-        onchange: null,
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-        dispatchEvent: vi.fn()
-      })
-      window.matchMedia = mockMatchMedia
+    it('should default to light mode when localStorage is empty', () => {
+      localStorage.setItem('llm-gateway-theme', '')
 
       initTheme()
 
-      expect(isDark.value).toBe(true)
+      expect(isDark.value).toBe(false)
     })
 
-    it('should follow system preference for light mode', () => {
-      localStorage.removeItem('llm-gateway-theme')
-
-      // Mock matchMedia to return light mode preference
-      const mockMatchMedia = vi.fn().mockReturnValue({
-        matches: false,
-        media: '(prefers-color-scheme: dark)',
-        onchange: null,
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-        dispatchEvent: vi.fn()
-      })
-      window.matchMedia = mockMatchMedia
+    it('should default to light mode despite system dark preference', () => {
+      localStorage.setItem('llm-gateway-theme', '')
+      isDark.value = true
 
       initTheme()
 
@@ -113,21 +88,17 @@ describe('useTheme Composable', () => {
     })
 
     it('should handle null localStorage value', () => {
-      localStorage.removeItem('llm-gateway-theme')
-
-      const mockMatchMedia = vi.fn().mockReturnValue({
-        matches: false,
-        media: '(prefers-color-scheme: dark)',
-        onchange: null,
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-        dispatchEvent: vi.fn()
-      })
-      window.matchMedia = mockMatchMedia
+      localStorage.setItem('llm-gateway-theme', '')
 
       expect(() => initTheme()).not.toThrow()
+    })
+
+    it('should default to light when localStorage has invalid value', () => {
+      localStorage.setItem('llm-gateway-theme', 'invalid')
+
+      initTheme()
+
+      expect(isDark.value).toBe(false)
     })
   })
 
@@ -186,15 +157,15 @@ describe('useTheme Composable', () => {
     it('should persist theme preference across multiple toggles', () => {
       isDark.value = false
 
-      toggleTheme() // -> true
+      toggleTheme()
       expect(localStorage.getItem('llm-gateway-theme')).toBe('dark')
       expect(isDark.value).toBe(true)
 
-      toggleTheme() // -> false
+      toggleTheme()
       expect(localStorage.getItem('llm-gateway-theme')).toBe('light')
       expect(isDark.value).toBe(false)
 
-      toggleTheme() // -> true
+      toggleTheme()
       expect(localStorage.getItem('llm-gateway-theme')).toBe('dark')
       expect(isDark.value).toBe(true)
     })
@@ -235,7 +206,6 @@ describe('useTheme Composable', () => {
       expect(isDark.value).toBe(false)
       expect(localStorage.getItem('llm-gateway-theme')).toBe('light')
 
-      // Simulate page reload - reinitialize
       isDark.value = false
       document.documentElement.className = ''
       initTheme()
@@ -245,24 +215,6 @@ describe('useTheme Composable', () => {
   })
 
   describe('edge cases', () => {
-    it('should handle invalid localStorage values gracefully', () => {
-      localStorage.setItem('llm-gateway-theme', 'invalid')
-
-      const mockMatchMedia = vi.fn().mockReturnValue({
-        matches: false,
-        media: '(prefers-color-scheme: dark)',
-        onchange: null,
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-        dispatchEvent: vi.fn()
-      })
-      window.matchMedia = mockMatchMedia
-
-      expect(() => initTheme()).not.toThrow()
-    })
-
     it('should handle multiple consecutive toggles', () => {
       isDark.value = false
 
@@ -270,7 +222,6 @@ describe('useTheme Composable', () => {
         toggleTheme()
       }
 
-      // After 10 toggles (even number), should be back to false
       expect(isDark.value).toBe(false)
       expect(document.documentElement.classList.contains('dark')).toBe(false)
     })
@@ -283,7 +234,6 @@ describe('useTheme Composable', () => {
       expect(isDark.value).toBe(true)
       expect(document.documentElement.classList.contains('dark')).toBe(true)
 
-      // Manually check that class is present
       const hasDarkClass = Array.from(document.documentElement.classList).includes('dark')
       expect(hasDarkClass).toBe(true)
     })

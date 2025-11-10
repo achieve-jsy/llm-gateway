@@ -7,10 +7,11 @@ export async function oidcCallback(code: string, state: string): Promise<LoginRe
 }
 
 export async function refreshToken(token: string): Promise<RefreshResponse> {
-  const response = await http.post<RefreshResponse>('/auth/refresh', { refreshToken: token })
+  const response = await http.post<RefreshResponse>('/auth/refresh', { refresh_token: token })
   return response.data
 }
 
 export async function logout(): Promise<void> {
-  await http.post('/auth/logout')
+  const refreshToken = localStorage.getItem('refresh_token')
+  await http.post('/auth/logout', { refresh_token: refreshToken || '' })
 }

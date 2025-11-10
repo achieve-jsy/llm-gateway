@@ -16,6 +16,7 @@ export const ERROR_MESSAGES: Record<string, string> = {
   invalid_tag_id:          '提交的标签 ID 不是有效 UUID',
   invalid_model_id:        '提交的模型 ID 不是有效 UUID',
   bad_request:             '请求参数有误',
+  unauthorized:           '登录已失效，请重新登录',
   internal_error:          '服务器开小差了，请稍后重试',
 }
 
@@ -50,6 +51,11 @@ http.interceptors.request.use(
   }
 )
 
+/** 判断是否为认证相关接口（登录/刷新/回调等，这些接口的 401 不触发全局跳转） */
+function isAuthEndpoint(url: string): boolean {
+  return url.startsWith('/auth/') || url.startsWith('/api/v1/me')
+}
+
 /** 响应拦截器：统一错误处理 */
 http.interceptors.response.use(
   (response: AxiosResponse) => {
@@ -57,8 +63,21 @@ http.interceptors.response.use(
   },
   (error) => {
     const status = error.response?.status
+    const requestUrl = String(error.config?.url || '')
     const friendlyMsg = resolveErrorMessage(error)
-    const message = friendlyMsg ?? (error.response?.data?.message || error.message || '请求失败')
+    const backendMessage = error.response?.data?.error?.message || error.response?.data?.message
+    const message = friendlyMsg ?? backendMessage ?? error.message ?? '请求失败'
+
+    // 全局 401 处理：登录态失效时直接清 token 跳登录页，不继续 reject 避免业务层重复弹错
+    if (status === 401 && !isAuthEndpoint(requestUrl)) {
+      localStorage.removeItem('access_token')
+      localStorage.removeItem('refresh_token')
+      ElMessage.error(backendMessage || '登录已失效，请重新登录')
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
+      return new Promise(() => {}) // 阻塞 Promise 链，不让各页面 .catch 再弹一层错
+    }
 
     // 409 冲突默认由业务层处理，但若 BE 返回了已知机器码则直接展示友好提示
     if (status !== 409 || friendlyMsg) {

@@ -10,10 +10,18 @@ export default defineConfig({
     }
   },
   server: {
-    port: 3000,
+    port: 5173,
+    https: {
+      key: resolve(__dirname, 'certs/localhost.key'),
+      cert: resolve(__dirname, 'certs/localhost.crt'),
+    },
     proxy: {
       '/v1': {
         target: 'http://localhost:8080',
+        changeOrigin: true
+      },
+      '/api/v1/auth': {
+        target: 'http://localhost:8081',
         changeOrigin: true
       },
       '/api': {
@@ -22,7 +30,12 @@ export default defineConfig({
       },
       '/auth': {
         target: 'http://localhost:8081',
-        changeOrigin: true
+        changeOrigin: true,
+        bypass(req) {
+          if (req.url?.startsWith('/auth/callback') && req.method === 'GET') {
+            return '/index.html'
+          }
+        }
       }
     }
   }

@@ -160,6 +160,36 @@ export async function updateHealthCheckConfig(payload: Partial<HealthCheckConfig
   return response.data.data
 }
 
+// ===================== 健康监控时间线 =====================
+
+export interface TimelineEntry {
+  checked_at: string
+  success: boolean
+  response_time_ms: number
+  error_message?: string
+}
+
+export interface TimelineGroup {
+  target_name: string
+  target_type: string
+  health_percent: number
+  total_checks: number
+  success_checks: number
+  provider_count: number
+  key_count: number
+  timeline: TimelineEntry[]
+}
+
+export interface TimelineResult {
+  lookback: string
+  groups: TimelineGroup[]
+}
+
+export async function getHealthTimeline(lookback: string = '6h'): Promise<TimelineResult> {
+  const response = await http.get<ApiResponse<TimelineResult>>('/api/v1/health-check/timeline', { params: { lookback } })
+  return response.data.data
+}
+
 // ===================== 模型管理 =====================
 
 /** 单个模型检测结果 */
@@ -510,6 +540,12 @@ export async function deleteKey(id: string): Promise<void> {
 export async function resetKey(id: string): Promise<CreateKeyWrappedResponse> {
   const response = await http.post<CreateKeyWrappedResponse>(`/api/v1/keys/${id}/reset`)
   return response.data
+}
+
+/** 查看完整 API Key（解密展示） */
+export async function revealKey(id: string): Promise<{ key: string }> {
+  const response = await http.post<{ data: { key: string } }>(`/api/v1/keys/${id}/reveal`)
+  return response.data.data
 }
 
 // ===================== 系统设置 =====================

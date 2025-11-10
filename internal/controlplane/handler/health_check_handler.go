@@ -197,6 +197,21 @@ func (h *HealthCheckHandler) RunNow(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"message": "health check triggered"}})
 }
 
+// GetTimeline GET /api/v1/health-check/timeline — 获取健康监控时间线数据
+func (h *HealthCheckHandler) GetTimeline(c *gin.Context) {
+	lookback := c.DefaultQuery("lookback", "6h")
+	if lookback != "6h" && lookback != "12h" && lookback != "24h" && lookback != "7d" {
+		lookback = "6h"
+	}
+	search := c.Query("search")
+	result, err := h.svc.GetTimeline(lookback, search)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"message": "failed to get timeline"}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
 // CheckAll POST /api/v1/providers/check-all — 批量检测所有启用渠道（同步返回结果）
 func (h *HealthCheckHandler) CheckAll(c *gin.Context) {
 	result := h.svc.CheckAll(c.Request.Context())

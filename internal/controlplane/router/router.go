@@ -35,15 +35,16 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 	// SSO/OAuth2 认证路由（无需认证）
 	authCfg := auth.LoadConfig()
-	authHandler, authErr := auth.NewHandler(authCfg)
+	authHandler, authErr := auth.NewHandler(authCfg, db, rdb)
 	if authErr != nil {
 		log.Printf("WARNING: SSO auth handler init failed: %v (SSO login disabled)", authErr)
 	} else {
-		authGroup := r.Group("/auth")
-		{
-			authGroup.GET("/login", authHandler.Login)
-			authGroup.GET("/callback", authHandler.Callback)
-		}
+		// SSO login redirect (frontend: GET /api/v1/auth/oidc/login)
+		r.GET("/api/v1/auth/oidc/login", authHandler.Login)
+		// SSO callback (frontend: POST /auth/oidc/callback)
+		r.POST("/auth/oidc/callback", authHandler.Callback)
+		r.POST("/auth/refresh", authHandler.Refresh)
+		r.POST("/auth/logout", authHandler.Logout)
 		// 需要认证的用户信息接口
 		r.GET("/api/v1/me", middleware.JWTAuth(), authHandler.GetCurrentUser)
 	}
@@ -193,6 +194,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/health-check/logs", healthCheckHandler.GetLogs)
 		adminGroup.GET("/health-check/status", healthCheckHandler.GetStatus)
 		adminGroup.POST("/health-check/run", healthCheckHandler.RunNow)
+		adminGroup.GET("/health-check/timeline", healthCheckHandler.GetTimeline)
 
 		// 模型 Catalog（注意：source_model_id 含 '/'，通过 query 入口而非路径参数访问）
 		adminGroup.GET("/model-catalog/search", catalogHandler.Search)
@@ -205,6 +207,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.PATCH("/keys/:id/enable", keyHandler.EnableKey)
 		adminGroup.DELETE("/keys/:id", keyHandler.DeleteKey)
 		adminGroup.POST("/keys/:id/reset", keyHandler.ResetKey)
+		adminGroup.POST("/keys/:id/reveal", keyHandler.RevealKey)
 		adminGroup.GET("/model-catalog/by-source", catalogHandler.GetBySource)
 		adminGroup.POST("/model-catalog/sync", catalogHandler.Sync)
 		adminGroup.GET("/model-catalog/diff", catalogHandler.Diff)

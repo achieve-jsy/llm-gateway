@@ -20,6 +20,7 @@ type KeyServiceInterface interface {
 	UpdateKeyStatus(ctx context.Context, userID, keyID uuid.UUID, enabled bool) (*model.ApiKey, error)
 	DeleteKey(ctx context.Context, userID, keyID uuid.UUID) error
 	ResetKey(ctx context.Context, userID, keyID uuid.UUID) (*model.ApiKey, string, error)
+	RevealKey(ctx context.Context, userID, keyID uuid.UUID) (string, error)
 }
 
 type CreateKeyResponse struct {
@@ -286,6 +287,35 @@ func (h *KeyHandler) ResetKey(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": CreateKeyResponse{
 		ID: k.ID, Name: k.Name, Key: plaintext, KeyHint: k.KeyHint, Enabled: k.Enabled, CreatedAt: k.CreatedAt, UpdatedAt: k.UpdatedAt, ExpiresAt: k.ExpiresAt,
 	}})
+}
+
+func (h *KeyHandler) RevealKey(c *gin.Context) {
+	userIDStr := c.GetString("user_id")
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"type":    "invalid_request",
+				"message": "invalid user_id in context",
+				"code":    CodeBadRequest,
+			},
+		})
+		return
+	}
+
+	keyID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request", "message": "invalid key id", "code": CodeBadRequest}})
+		return
+	}
+
+	plaintext, err := h.svc.RevealKey(c.Request.Context(), userID, keyID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"type": "not_found", "message": "key not found", "code": CodeKeyNotFound}})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"key": plaintext}})
 }
 
 func (h *KeyHandler) VerifyKey(c *gin.Context) {

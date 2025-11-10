@@ -1,9 +1,9 @@
 name: "ops-console"
 type: "web-frontend"
-version: "1.1"
+version: "1.2"
 created_at: "2026-05-21"
 created_by_change: "CHG-20260521-001"
-last_updated: "2026-05-23"
+last_updated: "2026-05-25"
 change_history:
   - change_id: "CHG-20260521-001"
     date: "2026-05-21"
@@ -11,3 +11,6 @@ change_history:
   - change_id: "CHG-20260521-002"
     date: "2026-05-23"
     description: "渠道列表页新增同步模型按钮，同步结果弹窗含过滤、勾选、一键全选功能"
+  - change_id: "CHG-20260523-001"
+    date: "2026-05-25"
+    description: "新增 OIDC 登录回调页、Key 管理页面、模型列表页面、首页使用文档"

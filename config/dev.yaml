@@ -22,10 +22,10 @@ provider:
   control_plane_url: "http://localhost:8081"
 
 oauth:
-  issuer_url: "https://oauth.example.net"
-  client_id: ""
-  client_secret: ""
-  redirect_uri: "http://localhost:5173/auth/callback"
+  issuer_url: "https://oauth.example.net/"
+  client_id: "5514f6bb0a"
+  client_secret: "CHANGE_ME_OAUTH_SECRET"
+  redirect_uri: "https://aimeter.xk-devops.com/auth/callback"
   scopes: "openid profile email"
 
 jwt:

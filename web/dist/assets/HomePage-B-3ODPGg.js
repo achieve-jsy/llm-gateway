@@ -1,0 +1,1 @@
+import{_ as e,a5 as c,v as o}from"./index-BvU50HCk.js";const a={},s={class:"home-page"};function t(_,n){return c(),o("div",s)}const d=e(a,[["render",t],["__scopeId","data-v-879d2794"]]);export{d as default};

@@ -35,7 +35,7 @@ func Logger() gin.HandlerFunc {
 func JWTAuth() gin.HandlerFunc {
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
-		secret = "CHANGE_ME_JWT_SECRET"
+		secret = "change-me-in-production"
 	}
 	return func(c *gin.Context) {
 		auth := c.GetHeader("Authorization")
@@ -82,8 +82,23 @@ func JWTAuth() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gin.H{"type": "authentication_error", "message": "invalid claims", "code": "unauthorized"}})
 			return
 		}
-		if passport, ok := claims["passport"].(string); ok {
-			c.Set("user_id", passport)
+		if uid, ok := claims["user_id"].(string); ok && uid != "" {
+			c.Set("user_id", uid)
+		}
+		if c.GetString("user_id") == "" {
+			if passport, ok := claims["passport"].(string); ok && passport != "" {
+				c.Set("user_id", passport)
+			}
+		}
+		if c.GetString("user_id") == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": gin.H{
+					"type":    "authentication_error",
+					"message": "invalid token: missing user identity",
+					"code":    "unauthorized",
+				},
+			})
+			return
 		}
 		if email, ok := claims["email"].(string); ok {
 			c.Set("user_email", email)

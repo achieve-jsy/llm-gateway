@@ -14,7 +14,7 @@
         <template #default="{ row }">
           <div class="key-cell">
             <span class="key-masked">{{ row.maskedKey }}</span>
-            <el-button size="small" text type="primary" @click="copyHint(row)">复制</el-button>
+            <el-button size="small" text type="primary" @click="copyFullKey(row)">复制</el-button>
           </div>
         </template>
       </el-table-column>
@@ -47,9 +47,10 @@
         <template #default="{ row }">{{ formatDate(row.lastUsedAt) }}</template>
       </el-table-column>
 
-      <el-table-column label="操作" width="200" fixed="right" align="center">
+      <el-table-column label="操作" width="280" fixed="right" align="center">
         <template #default="{ row }">
           <el-button size="small" text type="primary" @click="handleUseKey(row)">使用密钥</el-button>
+          <el-button size="small" text type="primary" @click="handleCcsImport(row)">导入 CCSwitch</el-button>
           <el-button size="small" text type="warning" @click="handleReset(row)">重置</el-button>
           <el-button size="small" text type="danger" @click="handleDelete(row)">删除</el-button>
         </template>
@@ -66,53 +67,47 @@
 
     <KeyCreateDialog v-model="showCreateDialog" @success="onKeyCreated" />
 
-    <el-dialog v-model="showUsage" title="使用密钥" width="680px" destroy-on-close>
-      <template v-if="usageKey">
-        <el-tabs v-model="usageTab">
-          <el-tab-pane label="cURL" name="curl">
-            <pre class="code-block"><code>curl https://your-gateway/v1/chat/completions \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4","messages":[{"role":"user","content":"Hi"}]}'</code></pre>
-          </el-tab-pane>
-          <el-tab-pane label="Python SDK" name="python">
-            <pre class="code-block"><code>from openai import OpenAI
-client = OpenAI(
-    base_url="https://your-gateway/v1",
-    api_key="YOUR_API_KEY"
-)
-response = client.chat.completions.create(
-    model="gpt-4",
-    messages=[{"role":"user","content":"Hi"}]
-)</code></pre>
-          </el-tab-pane>
-          <el-tab-pane label="Codex CLI" name="codex">
-            <p class="usage-tip">将以下内容写入 <code>~/.codex/config.toml</code>：</p>
-            <pre class="code-block"><code>model_provider = "OpenAI"
-model = "gpt-4"
+    <UseKeyModal
+      v-model="showUsage"
+      :api-key-id="usageKey?.id ?? null"
+      :key-hint="usageKey?.keyHint ?? ''"
+    />
 
-[model_providers.OpenAI]
-name = "OpenAI"
-base_url = "https://your-gateway/v1"
-wire_api = "responses"
-requires_openai_auth = true</code></pre>
-            <p class="usage-tip">将以下内容写入 <code>~/.codex/auth.json</code>：</p>
-            <pre class="code-block"><code>{
-  "OPENAI_API_KEY": "YOUR_API_KEY"
-}</code></pre>
-          </el-tab-pane>
-          <el-tab-pane label="OpenCode" name="opencode">
-            <p class="usage-tip">设置环境变量：</p>
-            <pre class="code-block"><code>export OPENAI_API_KEY="YOUR_API_KEY"
-export OPENAI_BASE_URL="https://your-gateway/v1"</code></pre>
-          </el-tab-pane>
-          <el-tab-pane label="CCSwitch" name="ccswitch">
-            <p class="usage-tip">CCSwitch 桌面客户端支持一键导入密钥。创建或重置 Key 时会自动弹出导入选项。</p>
-            <p class="usage-tip">如需手动配置，在 CCSwitch 中设置以下端点：</p>
-            <pre class="code-block"><code>端点: {{ getBaseUrl() }}
-API Key: 创建或重置 Key 时获取的完整密钥</code></pre>
-          </el-tab-pane>
-        </el-tabs>
+    <el-dialog v-model="showCcsSelect" title="导入 CCSwitch" width="480px" destroy-on-close>
+      <p class="ccs-desc">选择要导入的目标客户端：</p>
+      <div class="ccs-client-grid">
+        <div
+          class="ccs-client-card"
+          :class="{ active: selectedCcsClient === 'claude' }"
+          @click="selectedCcsClient = 'claude'"
+        >
+          <span class="ccs-client-name">Claude Code</span>
+        </div>
+        <div
+          class="ccs-client-card"
+          :class="{ active: selectedCcsClient === 'codex' }"
+          @click="selectedCcsClient = 'codex'"
+        >
+          <span class="ccs-client-name">Codex CLI</span>
+        </div>
+        <div
+          class="ccs-client-card"
+          :class="{ active: selectedCcsClient === 'opencode' }"
+          @click="selectedCcsClient = 'opencode'"
+        >
+          <span class="ccs-client-name">OpenCode</span>
+        </div>
+        <div
+          class="ccs-client-card"
+          :class="{ active: selectedCcsClient === 'gemini' }"
+          @click="selectedCcsClient = 'gemini'"
+        >
+          <span class="ccs-client-name">Gemini CLI</span>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="showCcsSelect = false">取消</el-button>
+        <el-button type="primary" @click="confirmCcsImport">导入</el-button>
       </template>
     </el-dialog>
   </div>
@@ -127,13 +122,16 @@ function formatDate(iso?: string): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
+
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { listKeys, disableKey, enableKey, deleteKey, resetKey } from '@/services/control-plane'
+import { listKeys, disableKey, enableKey, deleteKey, resetKey, revealKey } from '@/services/control-plane'
 import { mapKeysResponse, mapCreateKeyResponse } from '@/types/api-key'
 import type { ApiKey } from '@/types/api-key'
 import KeyCreateDialog from '@/components/key/KeyCreateDialog.vue'
-import { executeCcsImport, getBaseUrl } from '@/utils/ccs-import'
+import UseKeyModal from '@/components/key/UseKeyModal.vue'
+import { executeCcsImport } from '@/utils/ccs-import'
 import { useSettingsStore } from '@/stores/settings'
+import { useKeyCacheStore } from '@/stores/key-cache'
 
 const loading = ref(false)
 const keys = ref<ApiKey[]>([])
@@ -143,7 +141,12 @@ const pageSize = 20
 const showCreateDialog = ref(false)
 const showUsage = ref(false)
 const usageKey = ref<ApiKey | null>(null)
-const usageTab = ref('curl')
+
+const showCcsSelect = ref(false)
+const selectedCcsClient = ref('claude')
+const pendingCcsRow = ref<ApiKey | null>(null)
+
+const keyCache = useKeyCacheStore()
 
 async function loadKeys() {
   loading.value = true
@@ -151,20 +154,45 @@ async function loadKeys() {
     const response = await listKeys(currentPage.value, pageSize)
     keys.value = mapKeysResponse(response)
     total.value = response.data.total
-  } catch (e: any) {
+  } catch {
     ElMessage.error('加载 Key 列表失败')
   } finally {
     loading.value = false
   }
 }
 
-function copyHint(row: ApiKey) {
-  navigator.clipboard.writeText(`sk-...${row.keyHint}`).then(() => ElMessage.success('已复制')).catch(() => ElMessage.warning('复制失败'))
+async function copyFullKey(row: ApiKey) {
+  try {
+    const result = await revealKey(row.id)
+    await navigator.clipboard.writeText(result.key)
+    ElMessage.success('完整 Key 已复制到剪贴板')
+  } catch {
+    ElMessage.warning('获取 Key 失败，请重试')
+  }
 }
 
 function handleUseKey(row: ApiKey) {
   usageKey.value = row
   showUsage.value = true
+}
+
+function handleCcsImport(row: ApiKey) {
+  pendingCcsRow.value = row
+  selectedCcsClient.value = 'claude'
+  showCcsSelect.value = true
+}
+
+async function confirmCcsImport() {
+  const row = pendingCcsRow.value
+  if (!row) return
+  try {
+    const result = await revealKey(row.id)
+    executeCcsImport(result.key, selectedCcsClient.value)
+    showCcsSelect.value = false
+    pendingCcsRow.value = null
+  } catch {
+    ElMessage.warning('获取 Key 失败，请重试')
+  }
 }
 
 async function handleToggle(row: ApiKey, enabled: boolean) {
@@ -180,7 +208,6 @@ async function handleToggle(row: ApiKey, enabled: boolean) {
     await loadKeys()
   } catch {
     row.enabled = !enabled
-    /* cancelled or failed, revert */
   }
 }
 
@@ -189,8 +216,9 @@ async function handleReset(row: ApiKey) {
     await ElMessageBox.confirm(`重置后 Key「${row.name}」的旧密钥将立即失效，新密钥仅显示一次。确定重置？`, '确认重置', { type: 'warning' })
     const response = await resetKey(row.id)
     const mapped = mapCreateKeyResponse(response)
+    keyCache.cacheKey(mapped.id, mapped.key)
     await ElMessageBox.alert(
-      `<p style="margin:0 0 8px;font-weight:600">新密钥（仅显示一次，请复制保存）</p><pre style="background:var(--el-fill-color-light);padding:10px;border-radius:6px;font-size:13px;margin:0">${mapped.key}</pre>`,
+      `<pre style="background:var(--el-fill-color-light);padding:10px;border-radius:6px;font-size:13px;margin:0;white-space:pre-wrap;word-break:break-all;max-width:100%;overflow:hidden">${mapped.key}</pre>`,
       '密钥已重置', { dangerouslyUseHTMLString: true, confirmButtonText: '已复制，关闭' }
     )
     try {
@@ -205,12 +233,13 @@ async function handleDelete(row: ApiKey) {
   try {
     await ElMessageBox.confirm(`确定删除 Key「${row.name}」？此操作不可恢复。`, '确认删除', { type: 'error' })
     await deleteKey(row.id)
+    keyCache.clearKey(row.id)
     ElMessage.success('已删除')
     await loadKeys()
   } catch { /* cancelled */ }
 }
 
-function onKeyCreated() {
+function onKeyCreated(_keyId: string, _rawKey: string) {
   showCreateDialog.value = false
   currentPage.value = 1
   loadKeys()
@@ -267,33 +296,49 @@ onMounted(() => {
   font-size: 13px;
 }
 
-.code-block {
-  background: var(--el-fill-color-light);
-  border-radius: 6px;
-  padding: 12px 14px;
-  font-size: 12.5px;
-  line-height: 1.7;
-  margin: 0;
-  overflow-x: auto;
-}
-
-.usage-tip {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-  margin: 12px 0 6px;
-}
-
-.usage-tip code {
-  background: var(--el-fill-color);
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 12px;
-}
-
 .pagination-wrapper {
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
+}
+
+.ccs-desc {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  margin: 0 0 16px;
+}
+
+.ccs-client-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.ccs-client-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  border: 2px solid var(--el-border-color-light);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.ccs-client-card:hover {
+  border-color: var(--el-color-primary-light-5);
+  background: var(--el-color-primary-light-9);
+}
+
+.ccs-client-card.active {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+
+.ccs-client-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
 }
 
 @media (max-width: 900px) {

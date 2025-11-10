@@ -17,7 +17,6 @@ import (
 	"github.com/joho/godotenv"
 
 	acrypto "github.com/example/llm-gateway/internal/auth/crypto"
-	authcfg "github.com/example/llm-gateway/internal/auth/config"
 	authhandler "github.com/example/llm-gateway/internal/auth/handler"
 	authsvc "github.com/example/llm-gateway/internal/auth/service"
 
@@ -125,19 +124,6 @@ func main() {
 
 	authHTTPClient := &http.Client{Timeout: 5 * time.Second}
 	authKeyAuthSvc := authsvc.NewKeyAuthService(authHTTPClient, rdb, controlPlaneURL, internalToken)
-
-	authOIDCSvc, _ := authsvc.NewOIDCService(authcfg.OIDCConfig{
-		IssuerURL:        cfg.OIDC.IssuerURL,
-		ClientID:         cfg.OIDC.ClientID,
-		ClientSecret:     cfg.OIDC.ClientSecret,
-		RedirectURL:      cfg.OIDC.RedirectURL,
-		FrontendURL:      cfg.OIDC.FrontendURL,
-		Scopes:           cfg.OIDC.Scopes,
-		RoleClaimPath:    cfg.OIDC.RoleClaimPath,
-		AdminMatchValues: cfg.OIDC.AdminMatchValues,
-		DefaultRole:      cfg.OIDC.DefaultRole,
-	})
-	_ = authOIDCSvc
 
 	// Auth handlers
 	authJWKSHandler := authhandler.NewJWKSHandler()

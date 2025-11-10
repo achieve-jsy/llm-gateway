@@ -8,6 +8,11 @@
 *.swp
 *.swo
 
+# AI/Dev tools (heavy!)
+.opencode
+.xflow
+xspec
+
 # Node
 web/node_modules
 web/coverage
@@ -27,9 +32,13 @@ docs/
 
 # Dev files
 docker-compose.dev.yml
+docker-compose.yml
 .env
 .env.*
 !.env.example
+
+# CI/CD
+.gitlab-ci.yml
 
 # OS
 .DS_Store
@@ -37,3 +46,4 @@ Thumbs.db
 
 # Build artifacts
 web/dist
+*.tar

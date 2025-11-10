@@ -33,6 +33,9 @@ test:
   stage: test
   image: 192.0.2.10:5000/golang:1.26-alpine
   tags: [go]
+  variables:
+    GOPROXY: "https://goproxy.cn,direct"
+    GONOSUMCHECK: "*"
   script:
     - go vet ./...
     - go test ./... -race -cover -count=1 -timeout 5m

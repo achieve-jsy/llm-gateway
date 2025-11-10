@@ -30,7 +30,7 @@ services:
     container_name: llm-gw-gateway
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8080:8080"
+      - "${GATEWAY_HOST:-127.0.0.1}:${GATEWAY_PORT:-8080}:8080"
     environment:
       APP_ENV: prod
       GATEWAY_PORT: "8080"
@@ -62,7 +62,7 @@ services:
     container_name: llm-gw-control-plane
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8081:8081"
+      - "${CP_HOST:-127.0.0.1}:${CONTROL_PLANE_PORT:-8081}:8081"
     environment:
       APP_ENV: prod
       CONTROL_PLANE_PORT: "8081"
@@ -78,7 +78,7 @@ services:
       OAUTH_REDIRECT_URI: ${OAUTH_REDIRECT_URI:-}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost}
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/api/v1/provider-definitions"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/healthz"]
       interval: 10s
       timeout: 5s
       retries: 3

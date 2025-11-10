@@ -43,7 +43,7 @@ test:
   allow_failure: true
   rules:
     - if: $CI_COMMIT_TAG
-    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_BRANCH == "main"
 
 # ─── Build Stage ────────────────────────────────────────────────────────────
 # Runner 挂载了 /var/run/docker.sock，无需 dind service
@@ -101,18 +101,35 @@ build-control-plane:
     paths: [control-plane.tar.gz]
     expire_in: 2 hours
 
-# ─── Deploy Stage ───────────────────────────────────────────────────────────
-deploy:
+build-web:
+  stage: build
+  image: node:20-alpine
+  tags: [docker]
+  script:
+    - cd web
+    - npm ci
+    - npm run build
+    - tar -czf ../web-dist.tar.gz -C dist .
+  artifacts:
+    paths: [web-dist.tar.gz]
+    expire_in: 2 hours
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == "dev"
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# ─── Deploy Test (192.0.2.10) ─────────────────────────────────────────────
+deploy-test:
   stage: deploy
-  image: alpine:latest
+  image: 192.0.2.10:5000/deploy-tools:latest
   tags: [deploy]
+  variables:
+    TEST_HOST: "192.0.2.10"
+    TEST_USER: "hgf"
+    TEST_PATH: "/opt/llm-gateway"
+    GATEWAY_PORT: "4010"
+    CONTROL_PLANE_PORT: "4011"
   before_script:
-    - apk add --no-cache openssh-client curl
-    - mkdir -p /tmp/ssh && chmod 700 /tmp/ssh
-    - eval $(ssh-agent -a /tmp/ssh/agent.sock)
-    - echo "$DEPLOY_SSH_KEY" | tr -d '\r' | ssh-add -
-    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
-    - ssh-keyscan -H ${DEPLOY_HOST} >> ~/.ssh/known_hosts
     - |
       if [ -n "$CI_COMMIT_TAG" ]; then
         export IMAGE_TAG="$CI_COMMIT_TAG"
@@ -121,19 +138,116 @@ deploy:
       fi
   script:
     - |
+      SSH_OPTS="-o StrictHostKeyChecking=no"
+      echo "=== Deploying IMAGE_TAG=${IMAGE_TAG} to ${TEST_HOST} (test) ==="
+
+      # 传输镜像文件
+      scp ${SSH_OPTS} gateway.tar.gz control-plane.tar.gz ${TEST_USER}@${TEST_HOST}:/tmp/
+
+      # 传输部署文件
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "mkdir -p ${TEST_PATH}"
+      scp ${SSH_OPTS} docker-compose.yml ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/
+      [ -f .env.example ] && scp ${SSH_OPTS} .env.example ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/
+
+      # 远程部署
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} << REMOTE_SCRIPT
+        set -e
+        cd ${TEST_PATH}
+
+        # 加载镜像
+        echo "Loading gateway image..."
+        docker load < /tmp/gateway.tar.gz
+        echo "Loading control-plane image..."
+        docker load < /tmp/control-plane.tar.gz
+        rm -f /tmp/gateway.tar.gz /tmp/control-plane.tar.gz
+
+        # 如果 .env 不存在则从 example 复制
+        [ ! -f .env ] && cp .env.example .env && echo "WARN: Created .env from .env.example"
+
+        # 覆盖端口映射启动
+        export IMAGE_TAG="${IMAGE_TAG}"
+        export GATEWAY_PORT="${GATEWAY_PORT}"
+        export CONTROL_PLANE_PORT="${CONTROL_PLANE_PORT}"
+        export GATEWAY_HOST="0.0.0.0"
+        export CP_HOST="0.0.0.0"
+        docker compose up -d --remove-orphans --wait --wait-timeout 60
+
+        echo "=== Deploy ${IMAGE_TAG} to test complete ==="
+        docker compose ps
+      REMOTE_SCRIPT
+  environment:
+    name: test
+    url: http://${TEST_HOST}:${GATEWAY_PORT}
+  dependencies:
+    - build-gateway
+    - build-control-plane
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev"
+      when: on_success
+
+# ─── Deploy Web to Prod ──────────────────────────────────────────────────────
+deploy-web:
+  stage: deploy
+  image: 192.0.2.10:5000/deploy-tools:latest
+  tags: [deploy]
+  variables:
+    PROD_HOST: "192.0.2.10"
+    PROD_USER: "root"
+    WEB_DIR: "/var/www/aimeter/dist"
+  script:
+    - |
+      SSH_OPTS="-o StrictHostKeyChecking=no"
+      echo "=== Deploying frontend to ${PROD_HOST}:${WEB_DIR} ==="
+      scp ${SSH_OPTS} web-dist.tar.gz ${PROD_USER}@${PROD_HOST}:/tmp/
+      ssh ${SSH_OPTS} ${PROD_USER}@${PROD_HOST} "mkdir -p ${WEB_DIR} && tar -xzf /tmp/web-dist.tar.gz -C ${WEB_DIR} && rm -f /tmp/web-dist.tar.gz"
+      echo "=== Frontend deployed ==="
+  dependencies:
+    - build-web
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev"
+      when: on_success
+    - if: $CI_COMMIT_TAG
+      when: on_success
+
+# ─── Deploy Prod (192.0.2.10) ───────────────────────────────────────────
+deploy:
+  stage: deploy
+  image: 192.0.2.10:5000/deploy-tools:latest
+  tags: [deploy]
+  variables:
+    SSH_DIR: "/tmp/ssh"
+  before_script:
+    - mkdir -p ${SSH_DIR} && chmod 700 ${SSH_DIR}
+    - eval $(ssh-agent -a ${SSH_DIR}/agent.sock)
+    - printf '%s\n' "$DEPLOY_SSH_KEY" > ${SSH_DIR}/deploy_key
+    - chmod 600 ${SSH_DIR}/deploy_key
+    - ssh-add ${SSH_DIR}/deploy_key
+    - rm -f ${SSH_DIR}/deploy_key
+    - >-
+      ssh-keyscan -H ${DEPLOY_HOST} > ${SSH_DIR}/known_hosts 2>/dev/null
+    - export GIT_SSH_COMMAND="ssh -o UserKnownHostsFile=${SSH_DIR}/known_hosts"
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        export IMAGE_TAG="$CI_COMMIT_TAG"
+      else
+        export IMAGE_TAG="$CI_COMMIT_SHORT_SHA"
+      fi
+  script:
+    - |
+      SSH_OPTS="-o UserKnownHostsFile=${SSH_DIR}/known_hosts -o StrictHostKeyChecking=yes"
       echo "=== Deploying IMAGE_TAG=${IMAGE_TAG} to ${DEPLOY_HOST} ==="
 
       # 传输镜像文件
-      scp gateway.tar.gz control-plane.tar.gz root@${DEPLOY_HOST}:/tmp/
+      scp ${SSH_OPTS} gateway.tar.gz control-plane.tar.gz root@${DEPLOY_HOST}:/tmp/
 
       # 传输部署文件
-      ssh root@${DEPLOY_HOST} "mkdir -p ${DEPLOY_PATH}"
-      scp docker-compose.yml root@${DEPLOY_HOST}:${DEPLOY_PATH}/
-      scp deploy/docker/nginx.conf root@${DEPLOY_HOST}:${DEPLOY_PATH}/
-      [ -f .env.example ] && scp .env.example root@${DEPLOY_HOST}:${DEPLOY_PATH}/
+      ssh ${SSH_OPTS} root@${DEPLOY_HOST} "mkdir -p ${DEPLOY_PATH}"
+      scp ${SSH_OPTS} docker-compose.yml root@${DEPLOY_HOST}:${DEPLOY_PATH}/
+      scp ${SSH_OPTS} deploy/docker/nginx.conf root@${DEPLOY_HOST}:${DEPLOY_PATH}/
+      [ -f .env.example ] && scp ${SSH_OPTS} .env.example root@${DEPLOY_HOST}:${DEPLOY_PATH}/
 
       # 远程部署
-      ssh root@${DEPLOY_HOST} << REMOTE_SCRIPT
+      ssh ${SSH_OPTS} root@${DEPLOY_HOST} << REMOTE_SCRIPT
         set -e
         cd ${DEPLOY_PATH}
 
@@ -171,13 +285,35 @@ deploy:
       when: manual
 
 # ─── Verify Stage ───────────────────────────────────────────────────────────
-verify:
+verify-test:
   stage: verify
-  image: alpine:latest
+  image: 192.0.2.10:5000/deploy-tools:latest
   tags: [deploy]
   script:
-    - apk add --no-cache curl
-    - echo "Waiting for services to stabilize..."
+    - sleep 10
+    - |
+      echo "Checking gateway health on test..."
+      curl -sf http://192.0.2.10:4010/health || {
+        echo "ERROR: Gateway health check failed"
+        exit 1
+      }
+      echo " ✓ Gateway healthy"
+    - |
+      echo "Checking control-plane health on test..."
+      curl -sf http://192.0.2.10:4011/healthz || {
+        echo "ERROR: Control-plane health check failed"
+        exit 1
+      }
+      echo " ✓ Control-plane healthy"
+  dependencies: []
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev"
+
+verify:
+  stage: verify
+  image: 192.0.2.10:5000/deploy-tools:latest
+  tags: [deploy]
+  script:
     - sleep 15
     - |
       echo "Checking gateway health..."
@@ -188,12 +324,11 @@ verify:
       echo " ✓ Gateway healthy"
     - |
       echo "Checking control-plane health..."
-      curl -sf http://${DEPLOY_HOST}:80/api/v1/provider-definitions || curl -sf http://${DEPLOY_HOST}:8081/api/v1/provider-definitions || {
+      curl -sf http://${DEPLOY_HOST}:80/healthz || curl -sf http://${DEPLOY_HOST}:8081/healthz || {
         echo "ERROR: Control-plane health check failed"
         exit 1
       }
       echo " ✓ Control-plane healthy"
-    - echo "=== All services verified ==="
   dependencies: []
   rules:
     - if: $CI_COMMIT_TAG

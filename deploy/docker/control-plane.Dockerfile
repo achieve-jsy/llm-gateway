@@ -24,12 +24,13 @@ RUN apk add --no-cache ca-certificates tzdata
 
 COPY --from=go-builder /out/control-plane /usr/local/bin/control-plane
 
-COPY config/prod.yaml /app/config/prod.yaml
+COPY config/ /app/config/
 COPY migrations/ /app/migrations/
 
 WORKDIR /app
 
-ENV APP_ENV=prod
+ARG APP_ENV=prod
+ENV APP_ENV=${APP_ENV}
 ENV CONTROL_PLANE_PORT=8081
 EXPOSE 8081
 

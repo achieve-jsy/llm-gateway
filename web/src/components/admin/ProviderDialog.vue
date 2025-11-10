@@ -227,6 +227,7 @@ import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import type { FormInstance, FormRules, InputInstance } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { createProvider, updateProvider, getProviderDefinitions, createModel } from '@/services/control-plane'
+import { resolveErrorMessage } from '@/services/http'
 import type { Provider, ProviderPayload, ProviderDefinition, CredentialFieldSchema } from '@/types/provider'
 
 const props = defineProps<{
@@ -441,19 +442,25 @@ function addExtraModel() {
   extraModelName.value = ''
 }
 
-/** 根据 schema 生成凭证字段校验规则 */
+/** 根据 schema 生成凭证字段校验规则（新建模式必填，编辑模式不必填） */
 function getCredentialFieldRules(field: CredentialFieldSchema) {
   const rules: any[] = []
-  if (field.required && !isEdit.value) {
-    rules.push({ required: true, message: `请输入${field.label}`, trigger: 'blur' })
+  if (field.required) {
+    rules.push({ required: !isEdit.value, message: `请输入${field.label}`, trigger: 'blur' })
   }
   return rules
+}
+
+const endpointValidator = (_rule: any, value: string, callback: any) => {
+  if (!value) return callback(new Error('请输入 Endpoint'))
+  if (!/^https?:\/\/.+/.test(value)) return callback(new Error('Endpoint 必须以 http:// 或 https:// 开头'))
+  callback()
 }
 
 const basicRules: FormRules = {
   name: [{ required: true, message: '请输入渠道名称', trigger: 'blur' }],
   definition_id: [{ required: true, message: '请选择渠道类型', trigger: 'change' }],
-  endpoint: [{ required: true, message: '请输入 Endpoint', trigger: 'blur' }]
+  endpoint: [{ required: true, validator: endpointValidator, trigger: 'blur' }]
 }
 
 /** 提交表单 */
@@ -463,6 +470,15 @@ async function handleSubmit() {
     const valid = await basicFormRef.value.validate().catch(() => false)
     if (!valid) {
       activeTab.value = 'basic'
+      return
+    }
+  }
+
+  // 新建模式：校验凭证必填
+  if (!isEdit.value && credFormRef.value) {
+    const valid = await credFormRef.value.validate().catch(() => false)
+    if (!valid) {
+      activeTab.value = 'credentials'
       return
     }
   }
@@ -540,8 +556,9 @@ async function handleSubmit() {
       }
     }
     emit('saved')
-  } catch {
-    ElMessage.error(isEdit.value ? '更新失败' : '创建失败')
+  } catch (e: any) {
+    const friendly = resolveErrorMessage(e)
+    ElMessage.error(friendly || (isEdit.value ? '更新失败' : '创建失败'))
   } finally {
     submitting.value = false
   }

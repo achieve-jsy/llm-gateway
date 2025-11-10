@@ -101,23 +101,6 @@ build-control-plane:
     paths: [control-plane.tar.gz]
     expire_in: 2 hours
 
-build-web:
-  <<: *build_template
-  script:
-    - |
-      if [ -n "$CI_COMMIT_TAG" ]; then
-        IMAGE_TAG="$CI_COMMIT_TAG"
-      else
-        IMAGE_TAG="$CI_COMMIT_SHORT_SHA"
-      fi
-      echo "Building llm-web:${IMAGE_TAG} ..."
-      docker build -f deploy/docker/web.Dockerfile -t llm-web:${IMAGE_TAG} .
-      docker save llm-web:${IMAGE_TAG} | gzip > web.tar.gz
-      ls -lh web.tar.gz
-  artifacts:
-    paths: [web.tar.gz]
-    expire_in: 2 hours
-
 # ─── Deploy Stage ───────────────────────────────────────────────────────────
 deploy:
   stage: deploy
@@ -125,7 +108,8 @@ deploy:
   tags: [deploy]
   before_script:
     - apk add --no-cache openssh-client curl
-    - eval $(ssh-agent -s)
+    - mkdir -p /tmp/ssh && chmod 700 /tmp/ssh
+    - eval $(ssh-agent -a /tmp/ssh/agent.sock)
     - echo "$DEPLOY_SSH_KEY" | tr -d '\r' | ssh-add -
     - mkdir -p ~/.ssh && chmod 700 ~/.ssh
     - ssh-keyscan -H ${DEPLOY_HOST} >> ~/.ssh/known_hosts
@@ -140,7 +124,7 @@ deploy:
       echo "=== Deploying IMAGE_TAG=${IMAGE_TAG} to ${DEPLOY_HOST} ==="
 
       # 传输镜像文件
-      scp gateway.tar.gz control-plane.tar.gz web.tar.gz root@${DEPLOY_HOST}:/tmp/
+      scp gateway.tar.gz control-plane.tar.gz root@${DEPLOY_HOST}:/tmp/
 
       # 传输部署文件
       ssh root@${DEPLOY_HOST} "mkdir -p ${DEPLOY_PATH}"
@@ -158,11 +142,9 @@ deploy:
         docker load < /tmp/gateway.tar.gz
         echo "Loading control-plane image..."
         docker load < /tmp/control-plane.tar.gz
-        echo "Loading web image..."
-        docker load < /tmp/web.tar.gz
 
         # 清理传输文件
-        rm -f /tmp/gateway.tar.gz /tmp/control-plane.tar.gz /tmp/web.tar.gz
+        rm -f /tmp/gateway.tar.gz /tmp/control-plane.tar.gz
 
         # 如果 .env 不存在则从 example 复制
         [ ! -f .env ] && cp .env.example .env && echo "WARN: Created .env from .env.example"
@@ -180,7 +162,6 @@ deploy:
   dependencies:
     - build-gateway
     - build-control-plane
-    - build-web
   rules:
     - if: $CI_COMMIT_TAG
       when: on_success

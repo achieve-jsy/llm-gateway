@@ -24,12 +24,13 @@ RUN apk add --no-cache ca-certificates tzdata
 
 COPY --from=builder /out/gateway /usr/local/bin/gateway
 
-COPY config/prod.yaml /app/config/prod.yaml
+COPY config/ /app/config/
 COPY migrations/ /app/migrations/
 
 WORKDIR /app
 
-ENV APP_ENV=prod
+ARG APP_ENV=prod
+ENV APP_ENV=${APP_ENV}
 ENV GATEWAY_PORT=8080
 EXPOSE 8080
 

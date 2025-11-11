@@ -4,6 +4,7 @@ export interface ApiKey {
   maskedKey: string
   keyHint: string
   enabled: boolean
+  accessAllGroups?: boolean
   createdAt: string
   lastUsedAt?: string
   expiresAt?: string
@@ -28,6 +29,7 @@ export interface RawKeyItem {
   masked_key: string
   key_hint: string
   enabled: boolean
+  access_all_groups?: boolean
   created_at: string
   updated_at: string
   last_used_at?: string
@@ -47,6 +49,7 @@ export function mapKeysResponse(response: ListKeysResponse): ApiKey[] {
     maskedKey: item.masked_key,
     keyHint: item.key_hint,
     enabled: item.enabled,
+    accessAllGroups: item.access_all_groups || false,
     createdAt: item.created_at,
     lastUsedAt: item.last_used_at,
     expiresAt: item.expires_at,

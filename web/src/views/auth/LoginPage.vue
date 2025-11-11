@@ -25,9 +25,15 @@ const rules = reactive<FormRules>({
 
 const loginLoading = ref(false)
 const loginError = ref('')
+const showDevLogin = ref(false)
 
 function redirectToSSO() {
   window.location.href = '/api/v1/auth/oidc/login'
+}
+
+function toggleDevLogin() {
+  showDevLogin.value = !showDevLogin.value
+  loginError.value = ''
 }
 
 async function handleDevLogin() {
@@ -60,35 +66,114 @@ async function handleDevLogin() {
         <p>统一大模型接入管理平台</p>
       </div>
 
-      <el-form ref="formRef" :model="form" :rules="rules" class="login-form" @submit.prevent>
-        <el-form-item prop="username">
-          <el-input v-model="form.username" placeholder="用户名" size="large" clearable />
-        </el-form-item>
-        <el-form-item prop="password">
-          <el-input v-model="form.password" type="password" placeholder="密码" size="large" show-password @keyup.enter="handleDevLogin" />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" size="large" :loading="loginLoading" @click="handleDevLogin" style="width:100%">
-            登录
-          </el-button>
-        </el-form-item>
-        <p v-if="loginError" class="login-error">{{ loginError }}</p>
-      </el-form>
-
-      <el-divider>或</el-divider>
-
-      <el-button size="large" @click="redirectToSSO" style="width:100%">
+      <el-button type="primary" size="large" @click="redirectToSSO" class="sso-btn">
         使用公司账号登录 (SSO)
       </el-button>
+
+      <div class="dev-login-toggle">
+        <span @click="toggleDevLogin" class="toggle-link">
+          {{ showDevLogin ? '收起' : '其他登录方式' }}
+        </span>
+      </div>
+
+      <transition name="slide-down">
+        <div v-if="showDevLogin" class="dev-login-section">
+          <el-divider />
+          <el-form ref="formRef" :model="form" :rules="rules" class="login-form" @submit.prevent>
+            <el-form-item prop="username">
+              <el-input v-model="form.username" placeholder="用户名" size="large" clearable />
+            </el-form-item>
+            <el-form-item prop="password">
+              <el-input v-model="form.password" type="password" placeholder="密码" size="large" show-password @keyup.enter="handleDevLogin" />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" plain size="large" :loading="loginLoading" @click="handleDevLogin" style="width:100%">
+                账号密码登录
+              </el-button>
+            </el-form-item>
+            <p v-if="loginError" class="login-error">{{ loginError }}</p>
+          </el-form>
+        </div>
+      </transition>
     </div>
   </div>
 </template>
 
 <style scoped>
-.login-page { height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--el-bg-color-page); }
-.login-card { width: 400px; padding: 48px 32px; background: var(--el-bg-color); border-radius: 12px; box-shadow: var(--el-box-shadow-light); text-align: center; }
-.login-logo h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; color: var(--el-text-color-primary); }
-.login-logo p { color: var(--el-text-color-secondary); margin-bottom: 24px; }
-.login-form { display: flex; flex-direction: column; gap: 12px; }
-.login-error { color: var(--el-color-danger); font-size: 13px; margin: 0; }
+.login-page {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--el-bg-color-page);
+}
+
+.login-card {
+  width: 400px;
+  padding: 48px 32px 40px;
+  background: var(--el-bg-color);
+  border-radius: 12px;
+  box-shadow: var(--el-box-shadow-light);
+  text-align: center;
+}
+
+.login-logo h1 {
+  font-size: 28px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: var(--el-text-color-primary);
+}
+
+.login-logo p {
+  color: var(--el-text-color-secondary);
+  margin-bottom: 32px;
+}
+
+.sso-btn {
+  width: 100%;
+}
+
+.dev-login-toggle {
+  margin-top: 20px;
+}
+
+.toggle-link {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.2s;
+}
+
+.toggle-link:hover {
+  color: var(--el-text-color-secondary);
+}
+
+.dev-login-section {
+  overflow: hidden;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.login-error {
+  color: var(--el-color-danger);
+  font-size: 13px;
+  margin: 0;
+}
+
+.slide-down-enter-active,
+.slide-down-leave-active {
+  transition: all 0.25s ease;
+  max-height: 300px;
+}
+
+.slide-down-enter-from,
+.slide-down-leave-to {
+  max-height: 0;
+  opacity: 0;
+}
 </style>

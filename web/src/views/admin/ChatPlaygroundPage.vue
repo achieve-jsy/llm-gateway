@@ -249,7 +249,7 @@ async function sendMessage() {
     if (!config.stream) {
       // Non-streaming
       const data = await response.json()
-      assistantMsg.content = data.choices?.[0]?.message?.content || ''
+      messages.value[messages.value.length - 1].content = data.choices?.[0]?.message?.content || ''
       scrollToBottom()
       return
     }
@@ -278,11 +278,12 @@ async function sendMessage() {
           const chunk = JSON.parse(data)
           const delta = chunk.choices?.[0]?.delta
           if (delta?.content) {
-            assistantMsg.content += delta.content
+            messages.value[messages.value.length - 1].content += delta.content
             scrollToBottom()
           }
           if (delta?.reasoning_content) {
-            assistantMsg.reasoning_content = (assistantMsg.reasoning_content || '') + delta.reasoning_content
+            const last = messages.value[messages.value.length - 1]
+            last.reasoning_content = (last.reasoning_content || '') + delta.reasoning_content
             scrollToBottom()
           }
         } catch {
@@ -291,7 +292,7 @@ async function sendMessage() {
       }
     }
   } catch (err: any) {
-    assistantMsg.content = `[Error] ${err.message}`
+    messages.value[messages.value.length - 1].content = `[Error] ${err.message}`
     ElMessage.error(`请求失败: ${err.message}`)
   } finally {
     isStreaming.value = false

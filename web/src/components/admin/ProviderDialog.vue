@@ -44,11 +44,10 @@
           <el-form-item label="Endpoint" prop="endpoint">
             <el-input
               v-model="formData.endpoint"
-              :disabled="formData.definition_id === 'bedrock'"
               placeholder="https://..."
             />
             <div v-if="formData.definition_id === 'bedrock'" class="form-hint">
-              由 Region 自动生成，格式：https://bedrock-runtime.{region}.amazonaws.com
+              Region 变更时自动填充，也可手动输入自定义 Endpoint（如 VPC Endpoint）
             </div>
             <div v-else-if="selectedDef?.base_url" class="form-hint">
               默认地址：{{ selectedDef.base_url }}
@@ -66,23 +65,82 @@
           label-position="left"
         >
           <template v-if="selectedDef">
-            <el-form-item
-              v-for="(field, key) in selectedDef.credential_schema"
-              :key="key"
-              :label="field.label"
-              :prop="'credentials_map.' + key"
-              :rules="getCredentialFieldRules(field)"
-            >
-              <el-input
-                v-model="formData.credentials_map[key]"
-                :type="field.secret && !isEdit ? 'password' : 'text'"
-                :show-password="field.secret && !isEdit"
-                :placeholder="field.placeholder || (isEdit ? '已配置，清空后输入新值可更新' : `请输入${field.label}`)"
-              />
-              <div v-if="field.default && !formData.credentials_map[key]" class="form-hint">
-                默认值：{{ field.default }}
-              </div>
-            </el-form-item>
+            <!-- AWS Bedrock 专属凭证区域：支持两种认证方式 -->
+            <template v-if="selectedDef.id === 'bedrock'">
+              <el-form-item label="认证方式">
+                <el-radio-group v-model="bedrockAuthType">
+                  <el-radio value="api_key">Bedrock API Key</el-radio>
+                  <el-radio value="iam">IAM Access Key</el-radio>
+                </el-radio-group>
+                <div class="form-hint">
+                  <span v-if="bedrockAuthType === 'api_key'">
+                    在 AWS Console → Amazon Bedrock → API keys 中创建，格式：bdru-...
+                  </span>
+                  <span v-else>
+                    IAM 用户的 Access Key ID + Secret Access Key，需有 Bedrock 调用权限
+                  </span>
+                </div>
+              </el-form-item>
+
+              <!-- Bedrock API Key 方式 -->
+              <template v-if="bedrockAuthType === 'api_key'">
+                <el-form-item label="API Key" prop="credentials_map.api_key" :rules="bedrockApiKeyRules">
+                  <el-input
+                    v-model="formData.credentials_map.api_key"
+                    :type="!isEdit ? 'password' : 'text'"
+                    :show-password="!isEdit"
+                    placeholder="bdru-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                  />
+                </el-form-item>
+              </template>
+
+              <!-- IAM Access Key 方式 -->
+              <template v-else>
+                <el-form-item label="Access Key ID" :rules="bedrockIamRules">
+                  <el-input
+                    v-model="bedrockIamForm.access_key_id"
+                    placeholder="AKIAXXXXXXXXXXXXXXXX"
+                  />
+                </el-form-item>
+                <el-form-item label="Secret Access Key">
+                  <el-input
+                    v-model="bedrockIamForm.secret_access_key"
+                    :type="!isEdit ? 'password' : 'text'"
+                    :show-password="!isEdit"
+                    :placeholder="isEdit ? '已配置，清空后输入新值可更新' : 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'"
+                  />
+                </el-form-item>
+                <el-form-item label="Session Token">
+                  <el-input
+                    v-model="bedrockIamForm.session_token"
+                    :type="!isEdit ? 'password' : 'text'"
+                    :show-password="!isEdit"
+                    placeholder="临时凭证才需要填写（可选）"
+                  />
+                </el-form-item>
+              </template>
+            </template>
+
+            <!-- 其他渠道类型：通用 schema 渲染 -->
+            <template v-else>
+              <el-form-item
+                v-for="(field, key) in selectedDef.credential_schema"
+                :key="key"
+                :label="field.label"
+                :prop="'credentials_map.' + key"
+                :rules="getCredentialFieldRules(field)"
+              >
+                <el-input
+                  v-model="formData.credentials_map[key]"
+                  :type="field.secret && !isEdit ? 'password' : 'text'"
+                  :show-password="field.secret && !isEdit"
+                  :placeholder="field.placeholder || (isEdit ? '已配置，清空后输入新值可更新' : `请输入${field.label}`)"
+                />
+                <div v-if="field.default && !formData.credentials_map[key]" class="form-hint">
+                  默认值：{{ field.default }}
+                </div>
+              </el-form-item>
+            </template>
           </template>
           <el-empty v-else description="请先选择渠道类型" :image-size="60" />
         </el-form>
@@ -252,6 +310,13 @@ const activeTab = ref('basic')
 const extraModelName = ref('')
 const maskedCredentials = ref('') // 编辑模式下记住脱敏值，用于判断是否修改
 
+// ─── Bedrock 专属认证状态 ─────────────────────────────────────────────────────
+const bedrockAuthType = ref<'api_key' | 'iam'>('api_key')
+const bedrockIamForm = ref({ access_key_id: '', secret_access_key: '', session_token: '' })
+const bedrockApiKeyRules = [{ required: true, message: '请输入 Bedrock API Key', trigger: 'blur' }]
+const bedrockIamRules = [{ required: true, message: '请输入 Access Key ID', trigger: 'blur' }]
+// ─────────────────────────────────────────────────────────────────────────────
+
 const isEdit = computed(() => !!props.provider)
 
 /** 当前选中的渠道定义 */
@@ -351,14 +416,34 @@ watch(
       if (val.credentials && selectedDef.value?.credential_schema) {
         try {
           const parsed = JSON.parse(val.credentials)
-          for (const key of Object.keys(selectedDef.value.credential_schema)) {
-            formData.value.credentials_map[key] = parsed[key] || ''
+          // Bedrock 专属：判断是 API Key 还是 IAM JSON
+          if (val.definition_id === 'bedrock') {
+            if (parsed.access_key_id) {
+              bedrockAuthType.value = 'iam'
+              bedrockIamForm.value = {
+                access_key_id: parsed.access_key_id || '',
+                secret_access_key: parsed.secret_access_key || '',
+                session_token: parsed.session_token || ''
+              }
+            } else if (parsed.api_key) {
+              bedrockAuthType.value = 'api_key'
+              formData.value.credentials_map.api_key = parsed.api_key
+            }
+          } else {
+            for (const key of Object.keys(selectedDef.value.credential_schema)) {
+              formData.value.credentials_map[key] = parsed[key] || ''
+            }
           }
         } catch {
           // 非 JSON 格式（兼容旧数据），整体填入第一个字段
-          const firstKey = Object.keys(selectedDef.value.credential_schema)[0]
-          if (firstKey) {
-            formData.value.credentials_map[firstKey] = val.credentials
+          if (val.definition_id === 'bedrock') {
+            bedrockAuthType.value = 'api_key'
+            formData.value.credentials_map.api_key = val.credentials
+          } else {
+            const firstKey = Object.keys(selectedDef.value.credential_schema)[0]
+            if (firstKey) {
+              formData.value.credentials_map[firstKey] = val.credentials
+            }
           }
         }
       }
@@ -412,6 +497,10 @@ function handleDefinitionChange(defId: string) {
     formData.value.region = def.vendor_options?.default_region || 'us-east-1'
     // 自动用 region 构造 endpoint
     formData.value.endpoint = `https://bedrock-runtime.${formData.value.region}.amazonaws.com`
+    // 重置 Bedrock 专属认证状态
+    bedrockAuthType.value = 'api_key'
+    bedrockIamForm.value = { access_key_id: '', secret_access_key: '', session_token: '' }
+    formData.value.credentials_map = { api_key: '' }
   }
   if (defId === 'azure-openai') {
     formData.value.api_version = def.vendor_options?.default_api_version || '2024-02-01'
@@ -498,6 +587,19 @@ async function handleSubmit() {
 
   submitting.value = true
   try {
+    // Bedrock 专属：根据认证方式组装 credentials_map.api_key
+    if (formData.value.definition_id === 'bedrock') {
+      if (bedrockAuthType.value === 'iam') {
+        const { access_key_id, secret_access_key, session_token } = bedrockIamForm.value
+        if (access_key_id || secret_access_key) {
+          const iamJson: Record<string, string> = { access_key_id, secret_access_key }
+          if (session_token) iamJson.session_token = session_token
+          formData.value.credentials_map.api_key = JSON.stringify(iamJson)
+        }
+      }
+      // api_key 方式：credentials_map.api_key 已直接绑定
+    }
+
     const credentialsJson = JSON.stringify(formData.value.credentials_map)
     const hasCredentials = Object.values(formData.value.credentials_map).some(v => v !== '')
 

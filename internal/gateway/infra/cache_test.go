@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/llm-gateway/internal/gateway/model"
+	"github.com/example/llm-gateway/internal/core"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 )
@@ -53,13 +53,13 @@ func TestGetModelList_Miss(t *testing.T) {
 func TestSetAndGetModelList(t *testing.T) {
 	tests := []struct {
 		name     string
-		models   []model.ModelInfo
+		models   []core.Model
 		numMdls  int
 		shouldErr bool
 	}{
 		{
 			name: "set and get single model",
-			models: []model.ModelInfo{
+			models: []core.Model{
 				{
 					ID:      "gpt-3.5",
 					Object:  "model",
@@ -72,7 +72,7 @@ func TestSetAndGetModelList(t *testing.T) {
 		},
 		{
 			name: "set and get multiple models",
-			models: []model.ModelInfo{
+			models: []core.Model{
 				{ID: "gpt-3.5", Object: "model", Created: 1234567890, OwnedBy: "openai"},
 				{ID: "gpt-4", Object: "model", Created: 1234567891, OwnedBy: "openai"},
 				{ID: "claude-3", Object: "model", Created: 1234567892, OwnedBy: "anthropic"},
@@ -82,7 +82,7 @@ func TestSetAndGetModelList(t *testing.T) {
 		},
 		{
 			name:      "empty model list",
-			models:    []model.ModelInfo{},
+			models:    []core.Model{},
 			numMdls:   0,
 			shouldErr: false,
 		},
@@ -94,7 +94,7 @@ func TestSetAndGetModelList(t *testing.T) {
 			data, err := json.Marshal(tt.models)
 			assert.NoError(t, err)
 
-			var unmarshalled []model.ModelInfo
+			var unmarshalled []core.Model
 			err = json.Unmarshal(data, &unmarshalled)
 			assert.NoError(t, err)
 
@@ -149,7 +149,7 @@ func TestGetModelList_MarshalError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var models []model.ModelInfo
+			var models []core.Model
 			err := json.Unmarshal([]byte(tt.jsonData), &models)
 
 			if tt.expectErr {
@@ -195,7 +195,7 @@ func TestCacheKeyFormats(t *testing.T) {
 
 // TestModelInfoStructure tests ModelInfo marshaling
 func TestModelInfoStructure(t *testing.T) {
-	model := model.ModelInfo{
+	m := core.Model{
 		ID:      "gpt-3.5-turbo",
 		Object:  "model",
 		Created: 1234567890,
@@ -203,7 +203,7 @@ func TestModelInfoStructure(t *testing.T) {
 	}
 
 	// Marshal and verify JSON structure
-	data, err := json.Marshal(model)
+	data, err := json.Marshal(m)
 	assert.NoError(t, err)
 
 	var decoded map[string]interface{}
@@ -219,9 +219,9 @@ func TestModelInfoStructure(t *testing.T) {
 // TestModelListCacheLargeList tests cache with many models
 func TestModelListCacheLargeList(t *testing.T) {
 	// Create 1000 models
-	models := make([]model.ModelInfo, 1000)
+	models := make([]core.Model, 1000)
 	for i := 0; i < 1000; i++ {
-		models[i] = model.ModelInfo{
+		models[i] = core.Model{
 			ID:      fmt.Sprintf("model-%d", i),
 			Object:  "model",
 			Created: int64(1234567890 + i),
@@ -233,7 +233,7 @@ func TestModelListCacheLargeList(t *testing.T) {
 	data, err := json.Marshal(models)
 	assert.NoError(t, err)
 
-	var result []model.ModelInfo
+	var result []core.Model
 	err = json.Unmarshal(data, &result)
 	assert.NoError(t, err)
 
@@ -243,7 +243,7 @@ func TestModelListCacheLargeList(t *testing.T) {
 }
 
 // Helper function to simulate cache miss
-func simGetModelListMiss(ctx context.Context, err error) ([]model.ModelInfo, error) {
+func simGetModelListMiss(ctx context.Context, err error) ([]core.Model, error) {
 	if err == redis.Nil {
 		return nil, nil // cache miss
 	}
@@ -311,7 +311,7 @@ func TestCacheTimeoutHandling(t *testing.T) {
 
 // TestModelInfoJSONTags tests JSON tag serialization
 func TestModelInfoJSONTags(t *testing.T) {
-	info := model.ModelInfo{
+	info := core.Model{
 		ID:      "test-model",
 		Object:  "model",
 		Created: 1234567890,
@@ -334,12 +334,12 @@ func TestModelInfoJSONTags(t *testing.T) {
 
 // TestEmptyModelList tests marshaling empty model list
 func TestEmptyModelList(t *testing.T) {
-	var models []model.ModelInfo
+	var models []core.Model
 
 	data, err := json.Marshal(models)
 	assert.NoError(t, err)
 
-	var result []model.ModelInfo
+	var result []core.Model
 	err = json.Unmarshal(data, &result)
 	assert.NoError(t, err)
 

@@ -28,7 +28,7 @@ func (m *mockScheduler) Failover(groupName, failedModelID string) (*scheduler.Ro
 
 func newTestDispatcher() (*GroupAwareDispatcher, *mockScheduler, *cache.GroupNameCache) {
 	sch := &mockScheduler{}
-	nc := cache.NewGroupNameCache()
+	nc := cache.NewGroupNameCache("") // empty token for tests
 	return NewGroupAwareDispatcher(sch, nc), sch, nc
 }
 

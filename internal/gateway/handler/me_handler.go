@@ -12,16 +12,16 @@ import (
 
 // MeHandler handles the /v1/me/models endpoint for authenticated employees
 type MeHandler struct {
-	registry        *provider.Registry
+	router          ModelsRouterInterface
 	state           *provider.RuntimeState
 	controlPlaneURL string
 	internalToken   string
 }
 
 // NewMeHandler creates a new MeHandler instance
-func NewMeHandler(registry *provider.Registry, state *provider.RuntimeState, controlPlaneURL, internalToken string) *MeHandler {
+func NewMeHandler(router ModelsRouterInterface, state *provider.RuntimeState, controlPlaneURL, internalToken string) *MeHandler {
 	return &MeHandler{
-		registry:        registry,
+		router:          router,
 		state:           state,
 		controlPlaneURL: controlPlaneURL,
 		internalToken:   internalToken,
@@ -36,22 +36,31 @@ func (h *MeHandler) Handle(c *gin.Context) {
 		return
 	}
 	_ = identityVal
-	names := h.registry.ListAllModels()
-	items := make([]model.MeModelItem, 0, len(names))
 
+	var names []string
+	if h.router != nil {
+		resp, err := h.router.ListModels(c.Request.Context())
+		if err == nil && resp != nil {
+			for _, m := range resp.Data {
+				names = append(names, m.ID)
+			}
+		}
+	}
+
+	items := make([]model.MeModelItem, 0, len(names))
 	healthMap := h.fetchHealth(names)
 
 	for _, name := range names {
 		item := model.MeModelItem{ID: name, Object: "model", OwnedBy: "llm-gateway", Type: "chat", Enabled: true}
-		if h, ok := healthMap[name]; ok {
-			if h.Enabled != nil {
-				item.Enabled = *h.Enabled
+		if hEntry, ok := healthMap[name]; ok {
+			if hEntry.Enabled != nil {
+				item.Enabled = *hEntry.Enabled
 			}
-			item.ConsecutiveFailures = h.ConsecutiveFailures
-			item.LastCheckError = h.LastCheckError
-			item.ResponseTime = h.ResponseTime
-			if h.ModelType != "" {
-				item.Type = h.ModelType
+			item.ConsecutiveFailures = hEntry.ConsecutiveFailures
+			item.LastCheckError = hEntry.LastCheckError
+			item.ResponseTime = hEntry.ResponseTime
+			if hEntry.ModelType != "" {
+				item.Type = hEntry.ModelType
 			}
 		}
 		items = append(items, item)

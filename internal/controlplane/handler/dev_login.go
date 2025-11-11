@@ -44,15 +44,21 @@ func (h *DevLoginHandler) Login(c *gin.Context) {
 		return
 	}
 
-	token, err := auth.GenerateAccessToken(h.jwtSecret, user.ID, "", "", user.Username+"@admin.local", user.Username, user.ID, user.Role)
+	accessToken, err := auth.GenerateAccessToken(h.jwtSecret, user.ID, "", "", user.Username+"@admin.local", user.Username, user.ID, user.Role)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "token generation failed"})
+		return
+	}
+
+	refreshToken, err := auth.GenerateRefreshToken(h.jwtSecret, user.ID, user.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "token generation failed"})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"accessToken":  token,
-		"refreshToken": "",
+		"accessToken":  accessToken,
+		"refreshToken": refreshToken,
 		"user": gin.H{
 			"id":   user.ID,
 			"name": user.Username,

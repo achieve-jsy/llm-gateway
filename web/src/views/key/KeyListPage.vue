@@ -22,7 +22,10 @@
       <el-table-column label="模型组" min-width="160">
         <template #default="{ row }">
           <div class="group-cell">
-            <template v-if="row.boundGroups && row.boundGroups.length > 0">
+            <template v-if="row.accessAllGroups">
+              <el-tag size="small" type="success" style="margin-right:4px;margin-bottom:2px">万能模型组</el-tag>
+            </template>
+            <template v-else-if="row.boundGroups && row.boundGroups.length > 0">
               <el-tag
                 v-for="g in row.boundGroups"
                 :key="g.id"
@@ -96,7 +99,10 @@
       <div v-if="editGroupKey">
         <div class="group-dialog-section">
           <h4>当前已绑定</h4>
-          <div v-if="editGroupKey.boundGroups && editGroupKey.boundGroups.length > 0" class="bound-tags">
+          <template v-if="editGroupKey.accessAllGroups">
+            <el-tag size="large" type="success" closable @close="handleAccessAllToggle(false)">万能模型组</el-tag>
+          </template>
+          <div v-if="!editGroupKey.accessAllGroups && editGroupKey.boundGroups && editGroupKey.boundGroups.length > 0" class="bound-tags">
             <el-tag
               v-for="g in editGroupKey.boundGroups"
               :key="g.id"
@@ -106,7 +112,7 @@
               @close="removeGroup(g)"
             >{{ g.name }}</el-tag>
           </div>
-          <span v-else class="text-muted">未绑定任何模型组</span>
+          <span v-if="!editGroupKey.accessAllGroups && (!editGroupKey.boundGroups || editGroupKey.boundGroups.length === 0)" class="text-muted">未绑定任何模型组</span>
         </div>
         <div class="group-dialog-section">
           <h4>添加模型组</h4>
@@ -117,12 +123,20 @@
             placeholder="选择要添加的模型组"
             style="width:100%"
             :loading="groupLoading"
+            @change="handleAddGroupChange"
           >
+            <el-option
+              key="__all__"
+              label="万能模型组（所有模型）"
+              value="__all__"
+              :disabled="editGroupKey.accessAllGroups"
+            />
             <el-option
               v-for="g in availableAddGroups"
               :key="g.id"
-              :label="`${g.name} (${strategyLabel(g.strategy)})`"
+              :label="g.name"
               :value="g.id"
+              :disabled="editGroupKey.accessAllGroups"
             />
           </el-select>
         </div>
@@ -184,7 +198,7 @@ function formatDate(iso?: string): string {
 }
 
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { listKeys, disableKey, enableKey, deleteKey, resetKey, revealKey, updateKeyGroups, getAvailableGroups } from '@/services/control-plane'
+import { listKeys, disableKey, enableKey, deleteKey, resetKey, revealKey, updateKeyGroups, getAvailableGroups, toggleAccessAllGroups } from '@/services/control-plane'
 import { mapKeysResponse, mapCreateKeyResponse, type BoundGroupInfo } from '@/types/api-key'
 import type { ApiKey, AvailableGroup } from '@/types/api-key'
 import KeyCreateDialog from '@/components/key/KeyCreateDialog.vue'
@@ -209,11 +223,13 @@ const pendingCcsRow = ref<ApiKey | null>(null)
 // Group binding management
 const showGroupDialog = ref(false)
 const editGroupKey = ref<ApiKey | null>(null)
-const addGroupIds = ref<number[]>([])
+const addGroupIds = ref<(string | number)[]>([])
 const removedGroupIds = ref<number[]>([])
 const availableAddGroups = ref<AvailableGroup[]>([])
 const groupLoading = ref(false)
 const groupSaving = ref(false)
+// 万能模型组待保存状态（null = 未改动，true/false = 待提交）
+const pendingAccessAll = ref<boolean | null>(null)
 
 const keyCache = useKeyCacheStore()
 
@@ -324,6 +340,7 @@ function openGroupDialog(row: ApiKey) {
   editGroupKey.value = { ...row, boundGroups: [...(row.boundGroups || [])] }
   addGroupIds.value = []
   removedGroupIds.value = []
+  pendingAccessAll.value = null
   showGroupDialog.value = true
 }
 
@@ -332,8 +349,8 @@ async function loadGroupDialogData() {
   try {
     const resp = await getAvailableGroups()
     const all = resp.data.groups || []
-    const boundIds = new Set((editGroupKey.value?.boundGroups || []).map((g) => g.id))
-    availableAddGroups.value = all.filter((g) => !boundIds.has(g.id))
+    const boundIds = new Set((editGroupKey.value?.boundGroups || []).map((g: BoundGroupInfo) => g.id))
+    availableAddGroups.value = all.filter((g: AvailableGroup) => !boundIds.has(g.id))
   } catch {
     ElMessage.error('加载模型组列表失败')
   } finally {
@@ -346,19 +363,50 @@ function removeGroup(group: BoundGroupInfo) {
   editGroupKey.value.boundGroups = (editGroupKey.value.boundGroups || []).filter((g) => g.id !== group.id)
   removedGroupIds.value.push(group.id)
   addGroupIds.value = addGroupIds.value.filter((id) => id !== group.id)
+  const alreadyInList = availableAddGroups.value.some(g => g.id === group.id)
+  if (!alreadyInList) {
+    availableAddGroups.value = [...availableAddGroups.value, { id: group.id, name: group.name, description: '', strategy: '' }]
+  }
+}
+
+function handleAddGroupChange(values: (string | number)[]) {
+  if (values.includes('__all__')) {
+    addGroupIds.value = []
+    pendingAccessAll.value = true
+    if (editGroupKey.value) {
+      const boundGroups = editGroupKey.value.boundGroups || []
+      for (const g of boundGroups) {
+        if (!removedGroupIds.value.includes(g.id)) {
+          removedGroupIds.value.push(g.id)
+        }
+        if (!availableAddGroups.value.some(a => a.id === g.id)) {
+          availableAddGroups.value = [...availableAddGroups.value, { id: g.id, name: g.name, description: '', strategy: '' }]
+        }
+      }
+      editGroupKey.value.boundGroups = []
+      editGroupKey.value.accessAllGroups = true
+    }
+  }
+}
+
+function handleAccessAllToggle(value: boolean) {
+  if (!editGroupKey.value) return
+  pendingAccessAll.value = value
+  editGroupKey.value.accessAllGroups = value
 }
 
 async function saveGroupChanges() {
   if (!editGroupKey.value) return
   groupSaving.value = true
   try {
-    const add = addGroupIds.value
-    const remove = removedGroupIds.value
-    if (add.length === 0 && remove.length === 0) {
-      showGroupDialog.value = false
-      return
+    if (pendingAccessAll.value !== null) {
+      await toggleAccessAllGroups(editGroupKey.value.id, pendingAccessAll.value)
     }
-    await updateKeyGroups(editGroupKey.value.id, add, remove)
+    const add = addGroupIds.value.filter((v): v is number => typeof v === 'number')
+    const remove = removedGroupIds.value
+    if (add.length > 0 || remove.length > 0) {
+      await updateKeyGroups(editGroupKey.value.id, add, remove)
+    }
     ElMessage.success('模型组已更新')
     showGroupDialog.value = false
     await loadKeys()

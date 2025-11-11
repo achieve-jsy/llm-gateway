@@ -2,7 +2,7 @@ import http from './http'
 import type { Provider, ProviderPayload, ProviderDefinition } from '@/types/provider'
 import type { Model, ModelPayload } from '@/types/model'
 import type { ModelTag, ModelTagPayload } from '@/types/model-tag'
-import type { SyncResult, ConfirmSyncPayload, ConfirmSyncResult } from '@/types/sync'
+import type { SyncResult, ConfirmSyncPayload, ConfirmSyncResult, CheckModelsPayload, CheckModelsResult } from '@/types/sync'
 import type {
   ModelCatalog,
   PriceDiffEntry,
@@ -346,6 +346,12 @@ export async function confirmSync(providerId: string, payload: ConfirmSyncPayloa
   return response.data.data
 }
 
+/** 批量检测模型可用性 */
+export async function checkModels(providerId: string, payload: CheckModelsPayload): Promise<CheckModelsResult> {
+  const response = await http.post<ApiResponse<CheckModelsResult>>(`/api/v1/providers/${providerId}/check-models`, payload)
+  return response.data.data
+}
+
 // ===================== 模型 Catalog 自动拉取 =====================
 
 /**
@@ -537,6 +543,11 @@ export async function getAvailableGroups(): Promise<AvailableGroupsResponse> {
 /** 更新 Key 的组绑定 */
 export async function updateKeyGroups(keyId: string, add: number[], remove: number[]): Promise<void> {
   await http.post(`/api/v1/keys/${keyId}/groups`, { add, remove })
+}
+
+/** 切换万能模型组（access_all_groups）*/
+export async function toggleAccessAllGroups(keyId: string, value: boolean): Promise<void> {
+  await http.post(`/api/v1/keys/${keyId}/access-all-groups`, { access_all_groups: value })
 }
 
 /** 禁用 API Key */

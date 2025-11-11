@@ -63,7 +63,7 @@ func TestSyncModels_Success(t *testing.T) {
 	}
 
 	router := gin.New()
-	handler := NewSyncHandler(mockSvc)
+	handler := NewSyncHandler(mockSvc, nil)
 
 	router.POST("/api/v1/providers/:id/sync-models", handler.SyncModels)
 
@@ -89,7 +89,7 @@ func TestSyncModels_InvalidID(t *testing.T) {
 
 	router := gin.New()
 	mockSvc := &MockSyncService{}
-	handler := NewSyncHandler(mockSvc)
+	handler := NewSyncHandler(mockSvc, nil)
 
 	router.POST("/api/v1/providers/:id/sync-models", handler.SyncModels)
 
@@ -116,7 +116,7 @@ func TestSyncModels_ProviderNotFound(t *testing.T) {
 	}
 
 	router := gin.New()
-	handler := NewSyncHandler(mockSvc)
+	handler := NewSyncHandler(mockSvc, nil)
 
 	router.POST("/api/v1/providers/:id/sync-models", handler.SyncModels)
 
@@ -146,7 +146,7 @@ func TestSyncModels_ProviderDisabled(t *testing.T) {
 	}
 
 	router := gin.New()
-	handler := NewSyncHandler(mockSvc)
+	handler := NewSyncHandler(mockSvc, nil)
 
 	router.POST("/api/v1/providers/:id/sync-models", handler.SyncModels)
 
@@ -174,7 +174,7 @@ func TestSyncModels_UpstreamError(t *testing.T) {
 	}
 
 	router := gin.New()
-	handler := NewSyncHandler(mockSvc)
+	handler := NewSyncHandler(mockSvc, nil)
 
 	router.POST("/api/v1/providers/:id/sync-models", handler.SyncModels)
 
@@ -214,7 +214,7 @@ func TestSyncModels_Unsupported(t *testing.T) {
 	}
 
 	router := gin.New()
-	handler := NewSyncHandler(mockSvc)
+	handler := NewSyncHandler(mockSvc, nil)
 
 	router.POST("/api/v1/providers/:id/sync-models", handler.SyncModels)
 
@@ -253,7 +253,7 @@ func TestConfirmSync_Success(t *testing.T) {
 	}
 
 	router := gin.New()
-	handler := NewSyncHandler(mockSvc)
+	handler := NewSyncHandler(mockSvc, nil)
 
 	router.POST("/api/v1/providers/:id/sync-models/confirm", handler.ConfirmSync)
 
@@ -284,7 +284,7 @@ func TestConfirmSync_InvalidID(t *testing.T) {
 
 	router := gin.New()
 	mockSvc := &MockSyncService{}
-	handler := NewSyncHandler(mockSvc)
+	handler := NewSyncHandler(mockSvc, nil)
 
 	router.POST("/api/v1/providers/:id/sync-models/confirm", handler.ConfirmSync)
 
@@ -332,7 +332,7 @@ func TestConfirmSync_InvalidBody(t *testing.T) {
 
 	router := gin.New()
 	mockSvc := &MockSyncService{}
-	handler := NewSyncHandler(mockSvc)
+	handler := NewSyncHandler(mockSvc, nil)
 
 	router.POST("/api/v1/providers/:id/sync-models/confirm", handler.ConfirmSync)
 
@@ -371,7 +371,7 @@ func TestConfirmSync_EmptyModelsToAdd(t *testing.T) {
 	}
 
 	router := gin.New()
-	handler := NewSyncHandler(mockSvc)
+	handler := NewSyncHandler(mockSvc, nil)
 
 	router.POST("/api/v1/providers/:id/sync-models/confirm", handler.ConfirmSync)
 
@@ -411,7 +411,7 @@ func TestConfirmSync_DisableRemovedNil(t *testing.T) {
 	}
 
 	router := gin.New()
-	handler := NewSyncHandler(mockSvc)
+	handler := NewSyncHandler(mockSvc, nil)
 
 	router.POST("/api/v1/providers/:id/sync-models/confirm", handler.ConfirmSync)
 
@@ -439,7 +439,7 @@ func TestConfirmSync_ServiceError(t *testing.T) {
 	}
 
 	router := gin.New()
-	handler := NewSyncHandler(mockSvc)
+	handler := NewSyncHandler(mockSvc, nil)
 
 	router.POST("/api/v1/providers/:id/sync-models/confirm", handler.ConfirmSync)
 
@@ -511,7 +511,7 @@ func TestSyncHandler_TableDrivenTests(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			router := gin.New()
 			mockSvc := &MockSyncService{}
-			handler := NewSyncHandler(mockSvc)
+			handler := NewSyncHandler(mockSvc, nil)
 
 			if tc.endpoint == "/sync-models" {
 				router.POST("/api/v1/providers/:id/sync-models", handler.SyncModels)

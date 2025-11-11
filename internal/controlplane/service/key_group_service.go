@@ -57,6 +57,26 @@ func (s *KeyGroupService) BindGroups(ctx context.Context, tx *gorm.DB, keyID uui
 }
 
 func (s *KeyGroupService) GetKeyGroups(ctx context.Context, keyID uuid.UUID) ([]BoundGroupItem, error) {
+	key, err := s.keyRepo.FindByID(keyID)
+	if err != nil {
+		return nil, fmt.Errorf("get key: %w", err)
+	}
+	if key.AccessAllGroups {
+		groups, err := s.groupRepo.ListEnabled()
+		if err != nil {
+			return nil, fmt.Errorf("list enabled groups: %w", err)
+		}
+		items := make([]BoundGroupItem, 0, len(groups))
+		for _, g := range groups {
+			items = append(items, BoundGroupItem{
+				ID:      g.ID,
+				Name:    g.Name,
+				Enabled: g.Enabled,
+			})
+		}
+		return items, nil
+	}
+
 	results, err := s.repo.FindByKeyID(ctx, keyID)
 	if err != nil {
 		return nil, fmt.Errorf("get key groups: %w", err)

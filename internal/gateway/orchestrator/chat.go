@@ -5,10 +5,11 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/errormap"
 	"github.com/example/llm-gateway/internal/gateway/model"
-	"github.com/example/llm-gateway/internal/gateway/normalizer"
-	"github.com/example/llm-gateway/internal/gateway/provider"
+	"github.com/example/llm-gateway/internal/providers"
+	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -20,32 +21,64 @@ const (
 	defaultTimeout = 30 * time.Second
 	// 流式请求超时 300 秒（匹配 Nginx proxy_read_timeout）
 	defaultStreamTimeout = 300 * time.Second
+
+	// ginCtxKey is the context key used to carry *gin.Context into the orchestrator
+	// so that provider/token info can be written back for the Logger middleware.
+	ginCtxKey = contextKey("gin_context")
 )
 
-// ChatOrchestrator 聊天编排器，协调 Registry、Provider、Normalizer
+type contextKey string
+
+// routerProvider is a minimal interface that the orchestrator needs from providers.Router.
+// Using an interface (rather than a concrete type) keeps the orchestrator testable.
+type routerProvider interface {
+	ChatCompletion(ctx context.Context, req *core.ChatRequest) (*core.ChatResponse, error)
+	ListModels(ctx context.Context) (*core.ModelsResponse, error)
+	Embeddings(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error)
+	ModelCount() int
+}
+
+// ChatOrchestrator 聊天编排器，协调 Router、core.Provider
 type ChatOrchestrator struct {
-	registry *provider.Registry
+	router *providers.Router
 }
 
 // NewChatOrchestrator 创建编排器实例
-func NewChatOrchestrator(registry *provider.Registry) *ChatOrchestrator {
+func NewChatOrchestrator(router *providers.Router) *ChatOrchestrator {
 	return &ChatOrchestrator{
-		registry: registry,
+		router: router,
 	}
 }
 
+// routerSnapshot returns the current router snapshot for use within a single request.
+// The *providers.Router is an atomic.Value-backed pointer so this is safe.
+func (o *ChatOrchestrator) routerSnapshot() *providers.Router {
+	return o.router
+}
+
+// WithGinContext attaches the Gin context to a Go context so the orchestrator
+// can write provider/usage info back to it for structured logging.
+func WithGinContext(ctx context.Context, c *gin.Context) context.Context {
+	return context.WithValue(ctx, ginCtxKey, c)
+}
+
+// ginContextFrom extracts the Gin context from the request context (may be nil).
+func ginContextFrom(ctx context.Context) *gin.Context {
+	v, _ := ctx.Value(ginCtxKey).(*gin.Context)
+	return v
+}
+
 // Chat 执行普通聊天调用
-// 校验模型可用性 → 解析 Provider → 调用 Chat → 归一化响应
-func (o *ChatOrchestrator) Chat(ctx context.Context, req *model.ChatCompletionRequest) (*model.ChatCompletionResponse, error) {
+// 校验模型可用性 → 调用 Router → 返回归一化响应
+func (o *ChatOrchestrator) Chat(ctx context.Context, req *core.ChatRequest) (*core.ChatResponse, error) {
 	tracer := otel.Tracer("llm-gateway/orchestrator")
 
 	// 超时控制
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 
-	// 从 Registry 解析 Provider
-	p, err := o.registry.Resolve(req.Model)
-	if err != nil {
+	router := o.routerSnapshot()
+	if router == nil || router.ModelCount() == 0 {
 		return nil, model.ErrModelNotFound
 	}
 
@@ -53,34 +86,60 @@ func (o *ChatOrchestrator) Chat(ctx context.Context, req *model.ChatCompletionRe
 	ctx, span := tracer.Start(ctx, "upstream.chat",
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(
-			attribute.String("llm.provider", p.Name()),
 			attribute.String("llm.model", req.Model),
 			attribute.Int("llm.messages_count", len(req.Messages)),
 		),
 	)
 	defer span.End()
 
-	// 调用 Provider
-	resp, err := p.Chat(ctx, req)
+	slog.DebugContext(ctx, "upstream_call_start",
+		"model", req.Model,
+		"messages_count", len(req.Messages),
+		"stream", false,
+	)
+
+	start := time.Now()
+
+	// 通过 Router 分发请求
+	resp, err := router.ChatCompletion(ctx, req)
+	elapsed := time.Since(start)
+
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
-		slog.Error("provider chat error", "provider", p.Name(), "model", req.Model, "error", err.Error())
-		// 经 errormap 转换为 UnifiedError
+		slog.Error("upstream_call_error",
+			"model", req.Model,
+			"duration_ms", elapsed.Milliseconds(),
+			"error", err.Error(),
+		)
 		return nil, errormap.MapProviderError(err)
 	}
 
-	// 记录 token 用量
-	if resp.Usage != nil {
-		span.SetAttributes(
-			attribute.Int("llm.usage.prompt_tokens", resp.Usage.PromptTokens),
-			attribute.Int("llm.usage.completion_tokens", resp.Usage.CompletionTokens),
-			attribute.Int("llm.usage.total_tokens", resp.Usage.TotalTokens),
-		)
-	}
+	// 记录 token 用量到 OTel span
+	span.SetAttributes(
+		attribute.Int("llm.usage.prompt_tokens", resp.Usage.PromptTokens),
+		attribute.Int("llm.usage.completion_tokens", resp.Usage.CompletionTokens),
+		attribute.Int("llm.usage.total_tokens", resp.Usage.TotalTokens),
+	)
 	span.SetStatus(codes.Ok, "")
 
-	// 归一化响应
-	resp = normalizer.NormalizeResponse(resp)
+	// 将 provider 名、token 用量写回 Gin context 供 Logger 使用
+	if gc := ginContextFrom(ctx); gc != nil {
+		if resp.Model != "" {
+			gc.Set("routed_model", resp.Model)
+		}
+		gc.Set("prompt_tokens", resp.Usage.PromptTokens)
+		gc.Set("completion_tokens", resp.Usage.CompletionTokens)
+		gc.Set("stream", false)
+	}
+
+	slog.DebugContext(ctx, "upstream_call_done",
+		"model", req.Model,
+		"duration_ms", elapsed.Milliseconds(),
+		"prompt_tokens", resp.Usage.PromptTokens,
+		"completion_tokens", resp.Usage.CompletionTokens,
+		"total_tokens", resp.Usage.TotalTokens,
+	)
+
 	return resp, nil
 }

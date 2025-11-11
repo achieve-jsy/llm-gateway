@@ -183,19 +183,42 @@ deploy-web-test:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-rc/
       when: on_success
 
-# ─── Deploy Prod (占位，脚本待配置) ──────────────────────────────────────────
+# ─── Deploy Prod (192.0.2.10) ─────────────────────────────────────────────
 deploy-prod:
   stage: deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
+  variables:
+    GATEWAY_PORT: "8080"
+    CONTROL_PLANE_PORT: "8081"
   script:
     - |
+      SSH_OPTS="-o StrictHostKeyChecking=no"
       IMAGE_TAG="$CI_COMMIT_TAG"
-      echo "TODO - 生产部署脚本待配置"
-      echo "镜像已推送至 registry:"
-      echo "  ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}"
-      echo "  ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}"
-      echo "部署目标: ${PROD_HOST}:${PROD_PATH}"
+      echo "=== Deploying ${IMAGE_TAG} to ${PROD_HOST} (prod) ==="
+
+      ssh ${SSH_OPTS} root@${PROD_HOST} "mkdir -p ${PROD_PATH}"
+      scp ${SSH_OPTS} docker-compose.yml root@${PROD_HOST}:${PROD_PATH}/
+
+      ssh ${SSH_OPTS} root@${PROD_HOST} << REMOTE_SCRIPT
+        set -e
+        cd ${PROD_PATH}
+
+        docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
+        docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
+
+        export IMAGE_TAG="${IMAGE_TAG}"
+        export REGISTRY="${REGISTRY}"
+        export APP_ENV="prod"
+        export GATEWAY_PORT="${GATEWAY_PORT}"
+        export CONTROL_PLANE_PORT="${CONTROL_PLANE_PORT}"
+        export GATEWAY_HOST="0.0.0.0"
+        export CP_HOST="0.0.0.0"
+        docker compose up -d --remove-orphans --wait --wait-timeout 60
+
+        echo "=== Deploy ${IMAGE_TAG} to prod complete ==="
+        docker compose ps
+      REMOTE_SCRIPT
   environment:
     name: production
     url: http://192.0.2.10
@@ -211,7 +234,12 @@ deploy-web-prod:
   variables:
     WEB_DIR: "/data/web/aimeter/dist"
   script:
-    - echo "TODO - 生产前端部署脚本待配置"
+    - |
+      SSH_OPTS="-o StrictHostKeyChecking=no"
+      echo "=== Deploying frontend to ${PROD_HOST}:${WEB_DIR} ==="
+      scp ${SSH_OPTS} web-dist.tar.gz root@${PROD_HOST}:/tmp/
+      ssh ${SSH_OPTS} root@${PROD_HOST} "mkdir -p ${WEB_DIR} && tar -xzf /tmp/web-dist.tar.gz -C ${WEB_DIR} && rm -f /tmp/web-dist.tar.gz"
+      echo "=== Frontend deployed to prod ==="
   dependencies:
     - build-web-prod
   rules:

@@ -22,3 +22,19 @@ export interface ConfirmSyncResult {
   skipped: number
   disabled: number
 }
+
+export interface ModelAvailabilityItem {
+  name: string
+  available: boolean
+  skipped: boolean
+  response_time: number
+  error?: string
+}
+
+export interface CheckModelsPayload {
+  model_names: string[]
+}
+
+export interface CheckModelsResult {
+  models: ModelAvailabilityItem[]
+}

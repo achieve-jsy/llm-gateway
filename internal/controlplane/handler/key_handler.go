@@ -24,6 +24,7 @@ type KeyServiceInterface interface {
 	ListKeyGroups(ctx context.Context, userID, keyID uuid.UUID) ([]service.BoundGroupItem, error)
 	UpdateKeyGroups(ctx context.Context, userID, keyID uuid.UUID, add, remove []uint) ([]service.BoundGroupItem, error)
 	ListAvailableGroups(ctx context.Context) ([]service.AvailableGroupItem, error)
+	UpdateAccessAllGroups(ctx context.Context, userID, keyID uuid.UUID, value bool) (*model.ApiKey, error)
 }
 
 type CreateKeyResponse struct {
@@ -44,16 +45,17 @@ type BoundGroupItem struct {
 }
 
 type KeyListItem struct {
-	ID          uuid.UUID        `json:"id"`
-	Name        string           `json:"name"`
-	MaskedKey   string           `json:"masked_key"`
-	KeyHint     string           `json:"key_hint"`
-	Enabled     bool             `json:"enabled"`
-	CreatedAt   time.Time        `json:"created_at"`
-	UpdatedAt   time.Time        `json:"updated_at"`
-	LastUsedAt  *time.Time       `json:"last_used_at,omitempty"`
-	ExpiresAt   *time.Time       `json:"expires_at,omitempty"`
-	BoundGroups []BoundGroupItem `json:"bound_groups,omitempty"`
+	ID              uuid.UUID        `json:"id"`
+	Name            string           `json:"name"`
+	MaskedKey       string           `json:"masked_key"`
+	KeyHint         string           `json:"key_hint"`
+	Enabled         bool             `json:"enabled"`
+	AccessAllGroups bool             `json:"access_all_groups"`
+	CreatedAt       time.Time        `json:"created_at"`
+	UpdatedAt       time.Time        `json:"updated_at"`
+	LastUsedAt      *time.Time       `json:"last_used_at,omitempty"`
+	ExpiresAt       *time.Time       `json:"expires_at,omitempty"`
+	BoundGroups     []BoundGroupItem `json:"bound_groups,omitempty"`
 }
 
 type KeyDetailResponse struct {
@@ -463,4 +465,32 @@ func convertBoundGroups(items []service.BoundGroupItem) []BoundGroupItem {
 		})
 	}
 	return result
+}
+
+// ToggleAccessAllGroups POST /api/v1/keys/:id/access-all-groups
+func (h *KeyHandler) ToggleAccessAllGroups(c *gin.Context) {
+	userIDStr := c.GetString("user_id")
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request", "message": "invalid user_id", "code": CodeBadRequest}})
+		return
+	}
+	keyID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request", "message": "invalid key id", "code": CodeBadRequest}})
+		return
+	}
+	var input struct {
+		AccessAllGroups bool `json:"access_all_groups"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request", "message": err.Error(), "code": CodeBadRequest}})
+		return
+	}
+	k, err := h.svc.UpdateAccessAllGroups(c.Request.Context(), userID, keyID, input.AccessAllGroups)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"type": "not_found", "message": "key not found", "code": CodeKeyNotFound}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"id": k.ID, "access_all_groups": k.AccessAllGroups}})
 }

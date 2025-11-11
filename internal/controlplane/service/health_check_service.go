@@ -545,7 +545,12 @@ func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provi
 // checkConnectivity 连通性检测：GET {endpoint}/models
 func (s *HealthCheckService) checkConnectivity(ctx context.Context, provider *model.Provider, apiKey string) (bool, int, string) {
 	endpoint := strings.TrimRight(provider.Endpoint, "/") + "/models"
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			Proxy: nil,
+		},
+	}
 
 	start := time.Now()
 	req, _ := http.NewRequestWithContext(ctx, "GET", endpoint, nil)

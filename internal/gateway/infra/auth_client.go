@@ -31,9 +31,10 @@ type VerifyKeyResp struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 	Data    struct {
-		Status string `json:"status"`
-		KeyID  string `json:"key_id,omitempty"`
-		User   struct {
+		Status          string `json:"status"`
+		KeyID           string `json:"key_id,omitempty"`
+		AccessAllGroups bool   `json:"access_all_groups"`
+		User            struct {
 			UserID       string `json:"user_id"`
 			Name         string `json:"name"`
 			DepartmentID string `json:"department_id,omitempty"`

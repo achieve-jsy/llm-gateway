@@ -40,6 +40,9 @@ func New(cfg Config) provider.Provider {
 		vendorCfg: provider.DefaultVendorConfig,
 		client: &http.Client{
 			Timeout: 120 * time.Second,
+			Transport: &http.Transport{
+				Proxy: nil,
+			},
 		},
 	}
 }

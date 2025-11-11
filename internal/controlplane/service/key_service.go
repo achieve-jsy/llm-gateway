@@ -22,16 +22,17 @@ var (
 )
 
 type KeyItem struct {
-	ID          uuid.UUID       `json:"id"`
-	Name        string          `json:"name"`
-	MaskedKey   string          `json:"masked_key"`
-	KeyHint     string          `json:"key_hint"`
-	Enabled     bool            `json:"enabled"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
-	LastUsedAt  *time.Time      `json:"last_used_at,omitempty"`
-	ExpiresAt   *time.Time      `json:"expires_at,omitempty"`
-	BoundGroups []BoundGroupItem `json:"bound_groups,omitempty"`
+	ID              uuid.UUID        `json:"id"`
+	Name            string           `json:"name"`
+	MaskedKey       string           `json:"masked_key"`
+	KeyHint         string           `json:"key_hint"`
+	Enabled         bool             `json:"enabled"`
+	AccessAllGroups bool             `json:"access_all_groups"`
+	CreatedAt       time.Time        `json:"created_at"`
+	UpdatedAt       time.Time        `json:"updated_at"`
+	LastUsedAt      *time.Time       `json:"last_used_at,omitempty"`
+	ExpiresAt       *time.Time       `json:"expires_at,omitempty"`
+	BoundGroups     []BoundGroupItem `json:"bound_groups,omitempty"`
 }
 
 type KeyDetail struct {
@@ -51,9 +52,10 @@ type VerifyResultUser struct {
 }
 
 type VerifyResult struct {
-	KeyID  uuid.UUID        `json:"key_id"`
-	Status string           `json:"status"`
-	User   VerifyResultUser `json:"user"`
+	KeyID           uuid.UUID        `json:"key_id"`
+	Status          string           `json:"status"`
+	AccessAllGroups bool             `json:"access_all_groups"`
+	User            VerifyResultUser `json:"user"`
 }
 
 type EventPublisher interface {
@@ -170,16 +172,17 @@ func (s *KeyService) ListKeys(ctx context.Context, userID uuid.UUID, page, size 
 			}
 		}
 		items = append(items, KeyItem{
-			ID:          k.ID,
-			Name:        k.Name,
-			MaskedKey:   k.KeyPrefix + "****" + k.KeyHint,
-			KeyHint:     k.KeyHint,
-			Enabled:     k.Enabled,
-			CreatedAt:   k.CreatedAt,
-			UpdatedAt:   k.UpdatedAt,
-			LastUsedAt:  k.LastUsedAt,
-			ExpiresAt:   k.ExpiresAt,
-			BoundGroups: boundGroups,
+			ID:              k.ID,
+			Name:            k.Name,
+			MaskedKey:       k.KeyPrefix + "****" + k.KeyHint,
+			KeyHint:         k.KeyHint,
+			Enabled:         k.Enabled,
+			AccessAllGroups: k.AccessAllGroups,
+			CreatedAt:       k.CreatedAt,
+			UpdatedAt:       k.UpdatedAt,
+			LastUsedAt:      k.LastUsedAt,
+			ExpiresAt:       k.ExpiresAt,
+			BoundGroups:     boundGroups,
 		})
 	}
 
@@ -348,6 +351,18 @@ func (s *KeyService) ListAvailableGroups(ctx context.Context) ([]AvailableGroupI
 	return s.keyGroupSvc.ListAvailableGroups(ctx)
 }
 
+func (s *KeyService) UpdateAccessAllGroups(ctx context.Context, userID, keyID uuid.UUID, value bool) (*model.ApiKey, error) {
+	k, err := s.repo.FindByID(keyID)
+	if err != nil {
+		return nil, ErrKeyNotFound
+	}
+	if err := s.repo.UpdateAccessAllGroups(keyID, value); err != nil {
+		return nil, fmt.Errorf("update access_all_groups: %w", err)
+	}
+	k.AccessAllGroups = value
+	return k, nil
+}
+
 func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResult, error) {
 	hash := sha256.Sum256([]byte(keyRaw))
 	keyHash := hex.EncodeToString(hash[:])
@@ -368,8 +383,9 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 	s.repo.TouchLastUsed(keyHash) // best-effort update
 
 	return &VerifyResult{
-		KeyID:  k.ID,
-		Status: status,
+		KeyID:           k.ID,
+		Status:          status,
+		AccessAllGroups: k.AccessAllGroups,
 		User: VerifyResultUser{
 			UserID: k.UserID,
 		},

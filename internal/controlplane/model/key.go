@@ -15,6 +15,7 @@ type ApiKey struct {
 	KeyPrefix    string    `gorm:"type:varchar(8);not null;default:sk-" json:"key_prefix"`
 	KeyHint      string    `gorm:"type:varchar(8);not null" json:"key_hint"`
 	Enabled      bool      `gorm:"not null;default:true;index:idx_api_keys_enabled" json:"enabled"`
+	AccessAllGroups bool   `gorm:"not null;default:false" json:"access_all_groups"`
 	CreatedAt   time.Time  `gorm:"not null;autoCreateTime" json:"created_at"`
 	UpdatedAt   time.Time  `gorm:"not null;autoUpdateTime" json:"updated_at"`
 	LastUsedAt  *time.Time `gorm:"type:timestamp with time zone" json:"last_used_at,omitempty"`

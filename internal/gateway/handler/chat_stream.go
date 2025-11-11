@@ -17,7 +17,10 @@ func HandleStreamResponse(c *gin.Context, ch <-chan model.StreamChunk) {
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 
-	c.Status(200)
+	// 立即写出响应头（含 200 状态码），让浏览器/客户端可以立刻开始消费 SSE 流
+	// 不调用此步骤时，Gin 会延迟写头，浏览器将等到连接关闭才收到数据，流式效果失效
+	c.Writer.WriteHeader(200)
+	c.Writer.Flush()
 
 	clientCtx := c.Request.Context()
 	flusher := c.Writer

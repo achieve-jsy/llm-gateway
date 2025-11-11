@@ -20,10 +20,10 @@ otlp:
 
 provider:
   internal_token: "CHANGE_ME_INTERNAL_TOKEN"
-  control_plane_url: "http://localhost:8081"
+  control_plane_url: "http://llm-gw-control-plane:8081"
 
 auth:
-  url: "http://localhost:8081"
+  url: "http://llm-gw-control-plane:8081"
   token: "CHANGE_ME_INTERNAL_TOKEN"
 
 oauth:

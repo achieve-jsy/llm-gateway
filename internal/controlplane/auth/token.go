@@ -1,11 +1,19 @@
 package auth
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
+
+func newJTI() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
 
 type UserClaims struct {
 	jwt.RegisteredClaims
@@ -44,6 +52,7 @@ func GenerateRefreshToken(secret, userID, role string) (string, error) {
 	now := time.Now()
 	claims := &UserClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        newJTI(),
 			Issuer:    "llm-gateway",
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(7 * 24 * time.Hour)),

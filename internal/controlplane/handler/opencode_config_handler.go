@@ -235,10 +235,10 @@ DISCOVERY_PLUGIN="opencode-models-discovery"
 
 # ── 颜色 & 输出函数 ───────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; CYAN='\033[0;36m'; RED='\033[0;31m'; YELLOW='\033[1;33m'; NC='\033[0m'
-info()  { echo -e "${GREEN}[✓]${NC} $1"; }
-step()  { echo -e "${CYAN}[..]${NC} $1"; }
-warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
-err()   { echo -e "${RED}[✗]${NC} $1"; }
+info()    { echo -e "${GREEN}[✓]${NC} $1"; }
+step()    { echo -e "${CYAN}[..]${NC} $1"; }
+warn()    { echo -e "${YELLOW}[!]${NC} $1"; }
+err()     { echo -e "${RED}[✗]${NC} $1"; }
 divider() { echo -e "${CYAN}────────────────────────────────────────${NC}"; }
 
 send_callback() {
@@ -259,18 +259,11 @@ echo ""
 step "阶段 1/4  检验本地环境..."
 
 MISSING=""
-
 if ! command -v python3 &>/dev/null; then
   MISSING="${MISSING}\n  - python3（未找到，请先安装）"
 fi
 if ! command -v curl &>/dev/null; then
   MISSING="${MISSING}\n  - curl（未找到，请先安装）"
-fi
-if ! command -v npm &>/dev/null && ! command -v node &>/dev/null; then
-  warn "npm/node 未找到，将跳过插件自动安装（模型列表需手动配置）"
-  SKIP_PLUGIN=1
-else
-  SKIP_PLUGIN=0
 fi
 
 if [ -n "$MISSING" ]; then
@@ -287,6 +280,14 @@ if ! mkdir -p "$CONFIG_DIR" 2>/dev/null; then
   exit 1
 fi
 
+# 检测 npm 可用性（不强制，失败不中断）
+if command -v npm &>/dev/null; then
+  NPM_OK=1
+else
+  NPM_OK=0
+  warn "npm 未找到，将跳过插件安装（opencode 启动时会尝试自动安装）"
+fi
+
 info "环境检验通过（python3 ✓  curl ✓  配置目录可写 ✓）"
 echo ""
 
@@ -295,42 +296,68 @@ echo ""
 # ══════════════════════════════════════════════════════════════════════════════
 step "阶段 2/4  检测并安装模型发现插件..."
 
-if [ "${SKIP_PLUGIN:-0}" = "1" ]; then
-  warn "跳过插件安装（npm 未找到）"
-else
-  # 检查插件是否已全局安装
-  PLUGIN_PATH=$(npm root -g 2>/dev/null)
-  if [ -d "${PLUGIN_PATH}/${DISCOVERY_PLUGIN}" ]; then
+PLUGIN_INSTALLED=0
+
+if [ "$NPM_OK" = "1" ]; then
+  PLUGIN_PATH=$(npm root -g 2>/dev/null || echo "")
+  if [ -n "$PLUGIN_PATH" ] && [ -d "${PLUGIN_PATH}/${DISCOVERY_PLUGIN}" ]; then
     info "插件已安装: ${DISCOVERY_PLUGIN}"
+    PLUGIN_INSTALLED=1
   else
     step "正在安装 ${DISCOVERY_PLUGIN}..."
+    # 全局安装（失败不退出，继续后续步骤）
     if npm install -g "${DISCOVERY_PLUGIN}" --silent 2>/dev/null; then
       info "插件安装成功: ${DISCOVERY_PLUGIN}"
+      PLUGIN_INSTALLED=1
     else
       warn "全局安装失败，尝试用户级安装..."
       if npm install --prefix "$HOME/.local" "${DISCOVERY_PLUGIN}" --silent 2>/dev/null; then
         info "插件安装成功（用户级）"
+        PLUGIN_INSTALLED=1
       else
-        warn "插件安装失败，将由 opencode 在启动时自动安装"
+        warn "插件安装失败 — 不影响配置写入，opencode 启动时会再次尝试自动安装"
+        PLUGIN_INSTALLED=0
       fi
     fi
   fi
+else
+  warn "跳过插件安装（npm 不可用）— opencode 启动时会尝试自动安装"
 fi
+
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 阶段 3：写入 OpenCode 配置
+# 阶段 3：获取模型列表 + 写入 OpenCode 配置
 # ══════════════════════════════════════════════════════════════════════════════
-step "阶段 3/4  写入 OpenCode 配置..."
+step "阶段 3/4  获取模型列表并写入配置..."
 
 python3 - << PYEOF
-import json, os, time
+import json, os, time, urllib.request, urllib.error
 
 config_path      = os.path.expanduser("$CONFIG_FILE")
 provider_id      = "$PROVIDER_ID"
 base_url         = "$BASE_URL"
 api_key          = "$API_KEY"
 discovery_plugin = "$DISCOVERY_PLUGIN"
+
+# 用 Python 直接调接口获取模型列表（避免 bash 变量注入 heredoc 的风险）
+models = {}
+try:
+    # GET {base_url}/models — 按 key 返回有权限的模型组
+    models_url = base_url.rstrip("/") + "/models"
+    req = urllib.request.Request(
+        models_url,
+        headers={"Authorization": f"Bearer {api_key}"}
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read().decode())
+        for m in data.get("data", []):
+            mid = m.get("id", "")
+            if mid:
+                models[mid] = {"name": m.get("name", mid)}
+    print(f"  获取到 {len(models)} 个模型")
+except Exception as e:
+    print(f"  模型列表获取失败（{e}），跳过静态写入")
 
 # 读取现有配置
 if os.path.exists(config_path):
@@ -344,10 +371,7 @@ else:
 
 providers = cfg.setdefault("provider", {})
 
-# 判断 provider_id 使用策略：
-#   - 不存在           → 直接用 provider_id
-#   - 存在且 URL 相同  → 只更新 apiKey（换 key 场景）
-#   - 存在但 URL 不同  → 加时间戳避免覆盖用户已有配置
+# 判断 provider_id 使用策略
 target_id = provider_id
 action    = "新增"
 if provider_id in providers:
@@ -359,7 +383,7 @@ if provider_id in providers:
     else:
         action = "更新 API Key"
 
-providers[target_id] = {
+entry = {
     "npm":  "@ai-sdk/openai-compatible",
     "name": "LLM Gateway",
     "options": {
@@ -367,6 +391,10 @@ providers[target_id] = {
         "apiKey":  api_key,
     },
 }
+if models:
+    entry["models"] = models
+
+providers[target_id] = entry
 
 # 写入插件（去重）
 plugins = cfg.get("plugin", [])
@@ -384,6 +412,7 @@ with open(config_path, "w") as f:
 print(f"RESULT_TARGET_ID={target_id}")
 print(f"RESULT_ACTION={action}")
 print(f"RESULT_PLUGIN={plugin_action}")
+print(f"RESULT_MODELS={len(models)}")
 PYEOF
 
 WRITE_STATUS=$?
@@ -395,18 +424,16 @@ echo ""
 step "阶段 4/4  验证配置写入..."
 
 if [ $WRITE_STATUS -ne 0 ]; then
-  err "写入失败（python3 执行出错，请确认 python3 正常工作）"
+  err "写入失败（python3 执行出错）"
   send_callback "failed" "python3 执行失败"
   exit 1
 fi
 
-# 验证文件存在且包含正确的 provider
 if python3 -c "
 import json, sys
 with open('$CONFIG_FILE') as f:
     cfg = json.load(f)
-providers = cfg.get('provider', {})
-found = any('$PROVIDER_ID' in k for k in providers.keys())
+found = any('$PROVIDER_ID' in k for k in cfg.get('provider', {}).keys())
 sys.exit(0 if found else 1)
 " 2>/dev/null; then
   info "验证通过：配置文件写入正确"
@@ -427,7 +454,13 @@ echo -e "  ${GREEN}执行完成${NC}"
 divider
 info "配置文件：$CONFIG_FILE"
 info "Provider：${PROVIDER_ID}（已写入）"
-info "插件：${DISCOVERY_PLUGIN}（模型列表将在 opencode 启动时自动发现）"
+
+if [ "$PLUGIN_INSTALLED" = "1" ]; then
+  info "插件：${DISCOVERY_PLUGIN} 已安装（每次启动自动刷新模型列表）"
+else
+  warn "插件：${DISCOVERY_PLUGIN} 未安装成功（已写入配置，opencode 启动时会自动尝试安装）"
+fi
+
 echo ""
 echo -e "  ${CYAN}下一步：${NC}重启 opencode，即可在模型列表中看到 LLM Gateway 的所有模型。"
 echo ""

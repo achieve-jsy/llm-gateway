@@ -38,9 +38,11 @@ services:
       REDIS_ADDR: ${REDIS_ADDR}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       REDIS_DB: ${REDIS_DB:-0}
-      INTERNAL_TOKEN: ${INTERNAL_TOKEN:-}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:-CHANGE_ME_INTERNAL_TOKEN}
       JWT_SECRET: ${JWT_SECRET}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-}
+      CONTROL_PLANE_URL: http://control-plane:8081
+      AUTH_URL: http://localhost:8080
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
       interval: 10s

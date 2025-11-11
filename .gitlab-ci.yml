@@ -173,10 +173,10 @@ deploy-web-test:
   script:
     - |
       SSH_OPTS="-o StrictHostKeyChecking=no"
-      echo "=== Deploying frontend to ${TEST_HOST}:${WEB_DIR} ==="
-      scp ${SSH_OPTS} web-dist.tar.gz ${TEST_USER}@${TEST_HOST}:/tmp/
-      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "mkdir -p ${WEB_DIR} && tar -xzf /tmp/web-dist.tar.gz -C ${WEB_DIR} && rm -f /tmp/web-dist.tar.gz"
-      echo "=== Frontend deployed to test ==="
+      echo "=== Deploying frontend to ${PROD_HOST}:${WEB_DIR} ==="
+      scp ${SSH_OPTS} web-dist.tar.gz root@${PROD_HOST}:/tmp/
+      ssh ${SSH_OPTS} root@${PROD_HOST} "mkdir -p ${WEB_DIR} && tar -xzf /tmp/web-dist.tar.gz -C ${WEB_DIR} && rm -f /tmp/web-dist.tar.gz"
+      echo "=== Frontend deployed to prod ==="
   dependencies:
     - build-web-test
   rules:

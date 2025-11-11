@@ -59,19 +59,19 @@ services:
       - "${CP_HOST:-127.0.0.1}:${CONTROL_PLANE_PORT:-8081}:8081"
     environment:
       APP_ENV: ${APP_ENV:-prod}
-      DATABASE_URL: "host=192.0.2.10 port=5432 user=llm_gateway password=CHANGE_ME_PASSWORD dbname=llm_gateway_prod sslmode=disable"
-      REDIS_ADDR: "192.0.2.10:6379"
-      REDIS_PASSWORD: "CHANGE_ME_REDIS_PASSWORD"
-      REDIS_DB: "2"
-      JWT_SECRET: "CHANGE_ME_JWT_SECRET"
-      INTERNAL_AUTH_TOKEN: "CHANGE_ME_INTERNAL_TOKEN"
-      ENCRYPTION_KEY: "12345678901234567890123456789012"
-      OAUTH_ISSUER_URL: "https://oauth.example.net/"
-      OAUTH_CLIENT_ID: "5514f6bb0a"
-      OAUTH_CLIENT_SECRET: "CHANGE_ME_OAUTH_SECRET"
-      OAUTH_REDIRECT_URI: "https://aimeter.xk-devops.com/auth/callback"
-      OAUTH_SCOPES: "openid profile email"
-      FRONTEND_URL: "https://aimeter.xk-devops.com"
+      DATABASE_URL: ${DATABASE_URL:-"host=192.0.2.10 port=5432 user=llm_gateway password=CHANGE_ME_PASSWORD dbname=llm_gateway_prod sslmode=disable"}
+      REDIS_ADDR: ${REDIS_ADDR:-"192.0.2.10:6379"}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-"CHANGE_ME_REDIS_PASSWORD"}
+      REDIS_DB: ${REDIS_DB:-"2"}
+      JWT_SECRET: ${JWT_SECRET:-"CHANGE_ME_JWT_SECRET"}
+      INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN:-"CHANGE_ME_INTERNAL_TOKEN"}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-"12345678901234567890123456789012"}
+      OAUTH_ISSUER_URL: ${OAUTH_ISSUER_URL:-"https://oauth.example.net/"}
+      OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID:-"5514f6bb0a"}
+      OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET:-"CHANGE_ME_OAUTH_SECRET"}
+      OAUTH_REDIRECT_URI: ${OAUTH_REDIRECT_URI:-"https://aimeter.xk-devops.com/auth/callback"}
+      OAUTH_SCOPES: ${OAUTH_SCOPES:-"openid profile email"}
+      FRONTEND_URL: ${FRONTEND_URL:-"https://aimeter.xk-devops.com"}
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/healthz"]
       interval: 10s

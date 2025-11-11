@@ -68,10 +68,11 @@
         <template #default="{ row }">{{ formatDate(row.lastUsedAt) }}</template>
       </el-table-column>
 
-      <el-table-column label="操作" width="280" fixed="right" align="center">
+      <el-table-column label="操作" width="340" fixed="right" align="center">
         <template #default="{ row }">
           <el-button size="small" text type="primary" @click="handleUseKey(row)">使用密钥</el-button>
           <el-button size="small" text type="primary" @click="handleCcsImport(row)">导入 CCSwitch</el-button>
+          <el-button size="small" text type="primary" @click="handleOpenCodeConfig(row)">配置 OpenCode</el-button>
           <el-button size="small" text type="warning" @click="handleReset(row)">重置</el-button>
           <el-button size="small" text type="danger" @click="handleDelete(row)">删除</el-button>
         </template>
@@ -184,6 +185,12 @@
         <el-button type="primary" @click="confirmCcsImport">导入</el-button>
       </template>
     </el-dialog>
+
+    <OpenCodeConfigDialog
+      v-model:visible="showOpenCodeConfig"
+      :api-key-id="openCodeConfigKeyId"
+      :masked-key="openCodeConfigMaskedKey"
+    />
   </div>
 </template>
 
@@ -203,6 +210,7 @@ import { mapKeysResponse, mapCreateKeyResponse, type BoundGroupInfo } from '@/ty
 import type { ApiKey, AvailableGroup } from '@/types/api-key'
 import KeyCreateDialog from '@/components/key/KeyCreateDialog.vue'
 import UseKeyModal from '@/components/key/UseKeyModal.vue'
+import OpenCodeConfigDialog from '@/components/key/OpenCodeConfigDialog.vue'
 import { executeCcsImport } from '@/utils/ccs-import'
 import { useSettingsStore } from '@/stores/settings'
 import { useKeyCacheStore } from '@/stores/key-cache'
@@ -219,6 +227,10 @@ const usageKey = ref<ApiKey | null>(null)
 const showCcsSelect = ref(false)
 const selectedCcsClient = ref('claude')
 const pendingCcsRow = ref<ApiKey | null>(null)
+
+const showOpenCodeConfig = ref(false)
+const openCodeConfigKeyId = ref('')
+const openCodeConfigMaskedKey = ref('')
 
 // Group binding management
 const showGroupDialog = ref(false)
@@ -283,6 +295,12 @@ async function confirmCcsImport() {
   } catch {
     ElMessage.warning('获取 Key 失败，请重试')
   }
+}
+
+function handleOpenCodeConfig(row: ApiKey) {
+  openCodeConfigKeyId.value = row.id
+  openCodeConfigMaskedKey.value = row.maskedKey
+  showOpenCodeConfig.value = true
 }
 
 async function handleToggle(row: ApiKey, enabled: boolean) {

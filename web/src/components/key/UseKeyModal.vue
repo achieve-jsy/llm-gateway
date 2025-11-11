@@ -29,38 +29,77 @@
           />
         </el-tab-pane>
 
-        <el-tab-pane label="Codex CLI" name="codex">
-          <p class="hint">将以下内容写入 <code>~/.codex/config.toml</code>：</p>
+        <!-- Codex CLI tab hidden for now -->
+        <!-- <el-tab-pane label="Codex CLI" name="codex"> ... </el-tab-pane> -->
+
+        <el-tab-pane label="Claude Code" name="claude">
+          <p class="hint">设置环境变量后启动 Claude Code：</p>
           <CodeBlock
-            title="~/.codex/config.toml"
-            :code="codexConfigContent"
+            :title="osLabel"
+            :code="claudeCodeEnvContent"
             :can-copy="true"
           />
-          <p class="hint">将以下内容写入 <code>~/.codex/auth.json</code>：</p>
+          <div class="shell-tabs">
+            <button
+              v-for="t in shellOptions"
+              :key="t.id"
+              :class="['shell-tab', { active: osTab === t.id }]"
+              @click="osTab = t.id"
+            >{{ t.label }}</button>
+          </div>
+          <p class="hint mt-2">或者写入 VSCode 配置文件 <code>~/.claude/settings.json</code>：</p>
           <CodeBlock
-            title="~/.codex/auth.json"
-            :code="codexAuthContent"
+            title="~/.claude/settings.json"
+            :code="claudeCodeSettingsContent"
             :can-copy="true"
           />
         </el-tab-pane>
 
         <el-tab-pane label="OpenCode" name="opencode">
-          <p class="hint">设置环境变量后启动 OpenCode：</p>
-          <CodeBlock
-            :title="osTab === 'unix' ? '终端 (macOS / Linux)' : 'PowerShell (Windows)'"
-            :code="opencodeEnvContent"
-            :can-copy="true"
-          />
-          <div class="shell-tabs">
+          <p class="hint">
+            OpenCode 支持两种密钥配置方式：
+          </p>
+          <div class="sub-tabs">
             <button
-              :class="['shell-tab', { active: osTab === 'unix' }]"
-              @click="osTab = 'unix'"
-            >macOS / Linux</button>
+              :class="['sub-tab', { active: opencodeMode === 'json' }]"
+              @click="opencodeMode = 'json'"
+            >opencode.json 配置文件（推荐）</button>
             <button
-              :class="['shell-tab', { active: osTab === 'windows' }]"
-              @click="osTab = 'windows'"
-            >Windows</button>
+              :class="['sub-tab', { active: opencodeMode === 'env' }]"
+              @click="opencodeMode = 'env'"
+            >环境变量</button>
           </div>
+
+          <template v-if="opencodeMode === 'json'">
+            <p class="hint">将以下内容保存为 <code>~/opencode.json</code>（或放在 <code>~/.config/opencode/opencode.json</code>）：</p>
+            <CodeBlock
+              title="opencode.json"
+              :code="opencodeJsonContent"
+              :can-copy="true"
+            />
+            <el-alert type="success" :closable="false" show-icon class="config-note">
+              将 JSON 内容复制后，在终端中执行以下命令即可一键写入：
+              <br />
+              <code class="inline-command">mkdir -p ~/.config/opencode && echo '[粘贴 JSON 内容]' > ~/.config/opencode/opencode.json</code>
+            </el-alert>
+          </template>
+
+          <template v-else>
+            <p class="hint">设置环境变量后启动 OpenCode：</p>
+            <CodeBlock
+              :title="osLabel"
+              :code="opencodeEnvContent"
+              :can-copy="true"
+            />
+            <div class="shell-tabs">
+              <button
+                v-for="t in shellOptions"
+                :key="t.id"
+                :class="['shell-tab', { active: osTab === t.id }]"
+                @click="osTab = t.id"
+              >{{ t.label }}</button>
+            </div>
+          </template>
         </el-tab-pane>
       </el-tabs>
 
@@ -93,8 +132,26 @@ const visible = computed({
 })
 
 const activeTab = ref('curl')
-const osTab = ref('unix')
+const osTab = ref<'unix' | 'cmd' | 'powershell'>('unix')
+const opencodeMode = ref('json')
 const fullKey = ref('')
+
+type OsTab = 'unix' | 'cmd' | 'powershell'
+
+const shellOptions: { id: OsTab; label: string }[] = [
+  { id: 'unix', label: 'macOS / Linux' },
+  { id: 'cmd', label: 'Windows CMD' },
+  { id: 'powershell', label: 'PowerShell' },
+]
+
+const osLabel = computed(() => {
+  const labels: Record<OsTab, string> = {
+    unix: '终端 (macOS / Linux)',
+    cmd: 'Command Prompt (Windows)',
+    powershell: 'PowerShell (Windows)',
+  }
+  return labels[osTab.value]
+})
 
 const settingsStore = useSettingsStore()
 const baseUrl = computed(() => settingsStore.getBaseUrl() + '/v1')
@@ -136,38 +193,75 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)`
 )
 
-const codexConfigContent = computed(() =>
-  `model_provider = "OpenAI"
-model = "gpt-4"
-
-[model_providers.OpenAI]
-name = "OpenAI"
-base_url = "${baseUrl.value}"
-wire_api = "responses"
-requires_openai_auth = true`
-)
-
-const codexAuthContent = computed(() =>
-  `{
-  "OPENAI_API_KEY": "${keyPlaceholder.value}"
-}`)
-
 const opencodeEnvContent = computed(() => {
+  const key = keyPlaceholder.value
+  const url = baseUrl.value
   if (osTab.value === 'unix') {
-    return `export OPENAI_API_KEY="${keyPlaceholder.value}"
-export OPENAI_BASE_URL="${baseUrl.value}"
+    return `export OPENAI_API_KEY="${key}"
+export OPENAI_BASE_URL="${url}"
 
 opencode`
   }
-  return `$env:OPENAI_API_KEY="${keyPlaceholder.value}"
-$env:OPENAI_BASE_URL="${baseUrl.value}"
+  if (osTab.value === 'cmd') {
+    return `set OPENAI_API_KEY=${key}
+set OPENAI_BASE_URL=${url}
 
 opencode`
+  }
+  return `$env:OPENAI_API_KEY="${key}"
+$env:OPENAI_BASE_URL="${url}"
+
+opencode`
+})
+
+const claudeCodeEnvContent = computed(() => {
+  const key = keyPlaceholder.value
+  const url = baseUrl.value
+  if (osTab.value === 'unix') {
+    return `export ANTHROPIC_BASE_URL="${url}"
+export ANTHROPIC_AUTH_TOKEN="${key}"
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
+  }
+  if (osTab.value === 'cmd') {
+    return `set ANTHROPIC_BASE_URL=${url}
+set ANTHROPIC_AUTH_TOKEN=${key}
+set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
+  }
+  return `$env:ANTHROPIC_BASE_URL="${url}"
+$env:ANTHROPIC_AUTH_TOKEN="${key}"
+$env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
+})
+
+const claudeCodeSettingsContent = computed(() =>
+  `{
+  "env": {
+    "ANTHROPIC_BASE_URL": "${baseUrl.value}",
+    "ANTHROPIC_AUTH_TOKEN": "${keyPlaceholder.value}",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
+  }
+}`)
+
+const opencodeJsonContent = computed(() => {
+  const config: Record<string, unknown> = {
+    $schema: 'https://opencode.ai/config.json',
+    provider: {
+      'llm-gateway': {
+        options: {
+          baseURL: baseUrl.value,
+          apiKey: keyPlaceholder.value,
+        },
+      },
+    },
+  }
+
+  return JSON.stringify(config, null, 2)
 })
 
 function resetState() {
   activeTab.value = 'curl'
   osTab.value = 'unix'
+  opencodeMode.value = 'json'
 }
 </script>
 
@@ -223,5 +317,54 @@ function resetState() {
   background: var(--el-color-primary-light-9);
   color: var(--el-color-primary);
   font-weight: 600;
+}
+
+.sub-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--el-border-color-light);
+  padding-bottom: 8px;
+}
+
+.sub-tab {
+  padding: 6px 16px;
+  border: none;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+  border-bottom: 2px solid transparent;
+}
+
+.sub-tab:hover {
+  color: var(--el-text-color-primary);
+  background: var(--el-fill-color-light);
+}
+
+.sub-tab.active {
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  border-bottom-color: var(--el-color-primary);
+  font-weight: 600;
+}
+
+.config-note {
+  margin-top: 8px;
+}
+
+.inline-command {
+  background: var(--el-fill-color);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-primary);
+  word-break: break-all;
+}
+
+.mt-2 {
+  margin-top: 12px;
 }
 </style>

@@ -601,3 +601,35 @@ export async function exportSettings(): Promise<Record<string, string>> {
 export async function importSettings(settings: Record<string, string>): Promise<void> {
   await http.post('/api/v1/settings/import', settings)
 }
+
+// ===================== OpenCode 配置 =====================
+
+/** 生成一次性 token（同时把 provider 信息存入 Redis） */
+export async function generateOpencodeConfigToken(
+  keyId: string,
+  params: { provider_id?: string; base_url: string; api_key: string }
+): Promise<{ token: string; ttl_seconds: number }> {
+  const response = await http.post<{ code: number; data: { token: string; ttl_seconds: number } }>(
+    `/api/v1/keys/${keyId}/opencode-config/token`,
+    params
+  )
+  return response.data.data
+}
+
+/** 获取脚本内容的完整 URL（用于 curl | bash 或 iex 命令） */
+export function getScriptURL(token: string, os: 'mac' | 'windows'): string {
+  const params = new URLSearchParams({ token, os })
+  return `/api/v1/opencode-config/script?${params.toString()}`
+}
+
+/** 轮询配置写入状态 */
+export async function getOpencodeConfigStatus(
+  keyId: string,
+  token: string
+): Promise<{ status: 'pending' | 'success' | 'failed'; msg?: string }> {
+  const response = await http.get<{ code: number; data: { status: string; msg?: string } }>(
+    `/api/v1/keys/${keyId}/opencode-config/status`,
+    { params: { token } }
+  )
+  return response.data.data as { status: 'pending' | 'success' | 'failed'; msg?: string }
+}

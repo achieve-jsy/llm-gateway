@@ -1,0 +1,113 @@
+# LLM Gateway — OpenCode 配置助手安装 & 配置脚本 (Windows)
+# 此脚本由网页自动生成，请勿修改
+# 运行方式：右键 -> 使用 PowerShell 运行
+
+$ErrorActionPreference = "Stop"
+
+$TOKEN = "{{.Token}}"
+$PAYLOAD = "{{.Payload}}"
+$CALLBACK_URL = "{{.CallbackURL}}"
+$URL_SCHEME = "llm-gateway-opencode"
+$INSTALL_DIR = "$env:APPDATA\LLMGatewayOpencodeHelper"
+$HANDLER_PATH = "$INSTALL_DIR\handler.ps1"
+
+function Send-Callback {
+    param($status, $msg = "")
+    try {
+        $body = "{`"token`":`"$TOKEN`",`"status`":`"$status`",`"msg`":`"$msg`"}"
+        Invoke-RestMethod -Uri $CALLBACK_URL -Method Post -Body $body -ContentType "application/json" -TimeoutSec 8 | Out-Null
+    } catch {}
+}
+
+function Decode-Payload {
+    param($b64)
+    $b64 = [Uri]::UnescapeDataString($b64)
+    $pad = (4 - $b64.Length % 4) % 4
+    $b64 += "=" * $pad
+    [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64))
+}
+
+function Merge-Config {
+    param($configPath, $newConfig)
+    New-Item -ItemType Directory -Path (Split-Path $configPath) -Force | Out-Null
+    $existing = if (Test-Path $configPath) {
+        Get-Content $configPath -Raw | ConvertFrom-Json
+    } else {
+        [PSCustomObject]@{}
+    }
+    if ($newConfig.provider) {
+        if (-not $existing.PSObject.Properties['provider']) {
+            $existing | Add-Member -NotePropertyName provider -NotePropertyValue ([PSCustomObject]@{})
+        }
+        $newConfig.provider.PSObject.Properties | ForEach-Object {
+            $existing.provider | Add-Member -NotePropertyName $_.Name -NotePropertyValue $_.Value -Force
+        }
+    }
+    if ($newConfig.model) {
+        $existing | Add-Member -NotePropertyName model -NotePropertyValue $newConfig.model -Force
+    }
+    if ($newConfig.small_model) {
+        $existing | Add-Member -NotePropertyName small_model -NotePropertyValue $newConfig.small_model -Force
+    }
+    $existing | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8
+}
+
+Write-Host "[..] 正在安装本地配置工具..." -ForegroundColor Cyan
+New-Item -ItemType Directory -Path $INSTALL_DIR -Force | Out-Null
+
+# 写入 handler 脚本（用于之后的 protocol handler 调用）
+$handlerContent = @'
+param([string]$Url)
+if (-not $Url) { exit 0 }
+$base64 = [regex]::Match($Url, '[?&]base64=([^&]*)').Groups[1].Value
+if (-not $base64) { exit 0 }
+$base64 = [Uri]::UnescapeDataString($base64)
+$pad = (4 - $base64.Length % 4) % 4
+$base64 += "=" * $pad
+$json = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($base64))
+$config = $json | ConvertFrom-Json
+$cbUrl = $config._callback.url; $cbToken = $config._callback.token
+function Cb($s) {
+    if ($cbUrl -and $cbToken) {
+        try { Invoke-RestMethod -Uri $cbUrl -Method Post -Body ("{`"token`":`"$cbToken`",`"status`":`"$s`"}") -ContentType "application/json" -TimeoutSec 5|Out-Null }catch{}
+    }
+}
+$cfgPath = "$env:USERPROFILE\.config\opencode\opencode.json"
+New-Item -ItemType Directory -Path (Split-Path $cfgPath) -Force | Out-Null
+$ex = if (Test-Path $cfgPath){Get-Content $cfgPath -Raw|ConvertFrom-Json}else{[PSCustomObject]@{}}
+if ($config.provider){
+    if(-not $ex.PSObject.Properties['provider']){$ex|Add-Member -NotePropertyName provider -NotePropertyValue([PSCustomObject]@{})}
+    $config.provider.PSObject.Properties|ForEach-Object{$ex.provider|Add-Member -NotePropertyName $_.Name -NotePropertyValue $_.Value -Force}
+}
+if ($config.model){$ex|Add-Member -NotePropertyName model -NotePropertyValue $config.model -Force}
+try{$ex|ConvertTo-Json -Depth 10|Set-Content $cfgPath -Encoding UTF8; Cb "success"}catch{Cb "failed"}
+'@
+Set-Content -Path $HANDLER_PATH -Value $handlerContent -Encoding UTF8
+
+# 注册注册表（HKCU 无需管理员）
+$regPath = "HKCU:\Software\Classes\$URL_SCHEME"
+New-Item -Path $regPath -Force | Out-Null
+Set-ItemProperty -Path $regPath -Name "(Default)" -Value "LLM Gateway OpenCode Helper"
+New-Item -Path "$regPath\shell\open\command" -Force | Out-Null
+Set-ItemProperty -Path "$regPath\shell\open\command" -Name "(Default)" `
+    -Value "powershell.exe -WindowStyle Hidden -NonInteractive -File `"$HANDLER_PATH`" `"%1`""
+
+Write-Host "[✓] 工具安装完成，已注册 ${URL_SCHEME}:// 协议" -ForegroundColor Green
+
+# 直接写入本次配置
+Write-Host "[..] 正在写入 OpenCode 配置..." -ForegroundColor Cyan
+try {
+    $json = Decode-Payload $PAYLOAD
+    $newConfig = $json | ConvertFrom-Json
+    # 移除 _callback 字段
+    $newConfig.PSObject.Properties.Remove('_callback')
+    $configPath = "$env:USERPROFILE\.config\opencode\opencode.json"
+    Merge-Config $configPath $newConfig
+    Send-Callback "success"
+    Write-Host "[✓] 配置写入成功！重启 opencode 即可使用。" -ForegroundColor Green
+    Start-Sleep -Seconds 2
+} catch {
+    Send-Callback "failed" $_.Exception.Message
+    Write-Host "[!] 配置写入失败: $_" -ForegroundColor Red
+    exit 1
+}

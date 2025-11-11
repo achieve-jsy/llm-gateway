@@ -105,6 +105,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 	keyHandler := handler.NewKeyHandler(keySvc)
 	settingsHandler := handler.NewSettingsHandler(settingsSvc)
+	opencodeConfigHandler := handler.NewOpencodeConfigHandler(rdb)
 
 	// 模型 Catalog（D1: LiteLLM 单源；D3: bundled fallback；D4: 启动异步首刷 + 24h cron + 手动）
 	catalogRepo := repository.NewModelCatalogRepo(db)
@@ -143,6 +144,10 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	r.GET("/api/v1/settings/public", func(c *gin.Context) {
 		settingsHandler.GetPublicSettings(c)
 	})
+
+	// OpenCode 配置（无需 JWT，token 即凭证）
+	r.GET("/api/v1/opencode-config/script", opencodeConfigHandler.GetScript)
+	r.POST("/api/v1/opencode-config/callback", opencodeConfigHandler.Callback)
 
 	// 启动健康检测调度器（优先使用环境变量 HEALTH_CHECK_INTERVAL 控制）
 	healthCheckSvc.StartBackground(context.Background())
@@ -226,6 +231,10 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.POST("/keys/:id/groups", keyHandler.UpdateKeyGroups)
 		adminGroup.POST("/keys/:id/access-all-groups", keyHandler.ToggleAccessAllGroups)
 		adminGroup.GET("/groups/available", keyHandler.ListAvailableGroups)
+
+		// OpenCode 配置（token 生成 + 状态轮询）
+		adminGroup.POST("/keys/:id/opencode-config/token", opencodeConfigHandler.GenerateToken)
+		adminGroup.GET("/keys/:id/opencode-config/status", opencodeConfigHandler.GetStatus)
 		adminGroup.GET("/model-catalog/by-source", catalogHandler.GetBySource)
 		adminGroup.POST("/model-catalog/sync", catalogHandler.Sync)
 		adminGroup.GET("/model-catalog/diff", catalogHandler.Diff)

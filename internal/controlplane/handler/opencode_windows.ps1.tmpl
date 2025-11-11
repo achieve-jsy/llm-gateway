@@ -1,0 +1,200 @@
+# LLM Gateway — OpenCode 配置脚本（自动生成，请勿修改）
+# 适用于 Windows PowerShell
+
+$ErrorActionPreference = "Stop"
+
+$TOKEN            = "{{.Token}}"
+$PROVIDER_ID      = "{{.ProviderID}}"
+$BASE_URL         = "{{.BaseURL}}"
+$API_KEY          = "{{.APIKey}}"
+$CALLBACK_URL     = "{{.CallbackURL}}"
+$CONFIG_FILE      = "$env:USERPROFILE\.config\opencode\opencode.json"
+$DISCOVERY_PLUGIN = "opencode-models-discovery"
+
+function Send-Callback($status, $msg = "") {
+    try {
+        $body = @{ token = $TOKEN; status = $status; msg = $msg } | ConvertTo-Json -Compress
+        Invoke-RestMethod -Uri $CALLBACK_URL -Method Post `
+            -Body $body -ContentType "application/json" -TimeoutSec 8 | Out-Null
+    } catch {}
+}
+
+function Write-Step($msg)    { Write-Host "[..] $msg" -ForegroundColor Cyan }
+function Write-Ok($msg)      { Write-Host "[✓] $msg"  -ForegroundColor Green }
+function Write-Warn($msg)    { Write-Host "[!] $msg"  -ForegroundColor Yellow }
+function Write-Fail($msg)    { Write-Host "[✗] $msg"  -ForegroundColor Red }
+function Write-Divider()     { Write-Host "────────────────────────────────────────" -ForegroundColor Cyan }
+
+Write-Divider
+Write-Host "  LLM Gateway — OpenCode 配置助手" -ForegroundColor White
+Write-Divider
+Write-Host ""
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 阶段 1：环境检验
+# ══════════════════════════════════════════════════════════════════════════════
+Write-Step "阶段 1/4  检验本地环境..."
+
+$missing = @()
+
+if (-not (Get-Command python3 -ErrorAction SilentlyContinue) -and
+    -not (Get-Command python  -ErrorAction SilentlyContinue)) {
+    $missing += "python3（未找到，请先安装）"
+}
+if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue) -and
+    -not (Get-Command curl    -ErrorAction SilentlyContinue)) {
+    $missing += "curl（未找到）"
+}
+
+if ($missing.Count -gt 0) {
+    Write-Fail "缺少必要依赖，无法继续："
+    $missing | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+    Send-Callback "failed" "缺少依赖"
+    exit 1
+}
+
+$configDir = Split-Path $CONFIG_FILE
+if (-not (Test-Path $configDir)) {
+    New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+}
+
+$npmAvailable = $null -ne (Get-Command npm -ErrorAction SilentlyContinue)
+
+Write-Ok "环境检验通过（python ✓  curl ✓  配置目录可写 ✓）"
+Write-Host ""
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 阶段 2：安装 opencode-models-discovery 插件
+# ══════════════════════════════════════════════════════════════════════════════
+Write-Step "阶段 2/4  检测并安装模型发现插件..."
+
+if (-not $npmAvailable) {
+    Write-Warn "npm 未找到，跳过插件安装（opencode 启动时会自动安装）"
+} else {
+    $globalRoot = npm root -g 2>$null
+    $pluginPath = Join-Path $globalRoot $DISCOVERY_PLUGIN
+    if (Test-Path $pluginPath) {
+        Write-Ok "插件已安装: $DISCOVERY_PLUGIN"
+    } else {
+        Write-Step "正在安装 $DISCOVERY_PLUGIN..."
+        try {
+            npm install -g $DISCOVERY_PLUGIN --silent 2>$null | Out-Null
+            Write-Ok "插件安装成功: $DISCOVERY_PLUGIN"
+        } catch {
+            Write-Warn "插件安装失败，将由 opencode 在启动时自动安装"
+        }
+    }
+}
+Write-Host ""
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 阶段 3：写入 OpenCode 配置
+# ══════════════════════════════════════════════════════════════════════════════
+Write-Step "阶段 3/4  写入 OpenCode 配置..."
+
+$writeOk = $false
+$resultAction = ""
+$resultPlugin = ""
+$targetId = $PROVIDER_ID
+
+try {
+    # 读取现有配置
+    if (Test-Path $CONFIG_FILE) {
+        $cfg = Get-Content $CONFIG_FILE -Raw -Encoding UTF8 | ConvertFrom-Json
+    } else {
+        $cfg = [PSCustomObject]@{}
+    }
+
+    # 确保 provider 字段存在
+    if (-not $cfg.PSObject.Properties['provider']) {
+        $cfg | Add-Member -NotePropertyName provider -NotePropertyValue ([PSCustomObject]@{})
+    }
+
+    # 判断 provider_id 使用策略
+    if ($cfg.provider.PSObject.Properties[$PROVIDER_ID]) {
+        $existingUrl = ""
+        try { $existingUrl = $cfg.provider.$PROVIDER_ID.options.baseURL } catch {}
+        if ($existingUrl -and ($existingUrl.TrimEnd('/') -ne $BASE_URL.TrimEnd('/'))) {
+            $ts = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+            $targetId = "$PROVIDER_ID-$ts"
+            $resultAction = "重名（URL 不同），新建 $targetId"
+        } else {
+            $resultAction = "更新 API Key"
+        }
+    } else {
+        $resultAction = "新增"
+    }
+
+    # 写入 provider 基础配置（不写死 models，交给插件动态发现）
+    $providerConfig = [PSCustomObject]@{
+        npm     = "@ai-sdk/openai-compatible"
+        name    = "LLM Gateway"
+        options = [PSCustomObject]@{
+            baseURL = $BASE_URL
+            apiKey  = $API_KEY
+        }
+    }
+    $cfg.provider | Add-Member -NotePropertyName $targetId -NotePropertyValue $providerConfig -Force
+
+    # 写入插件（去重）
+    if (-not $cfg.PSObject.Properties['plugin']) {
+        $cfg | Add-Member -NotePropertyName plugin -NotePropertyValue @()
+    }
+    $plugins = @($cfg.plugin)
+    if ($plugins -notcontains $DISCOVERY_PLUGIN) {
+        $plugins += $DISCOVERY_PLUGIN
+        $cfg.plugin = $plugins
+        $resultPlugin = "已添加"
+    } else {
+        $resultPlugin = "已存在"
+    }
+
+    $cfg | ConvertTo-Json -Depth 10 | Set-Content $CONFIG_FILE -Encoding UTF8
+    $writeOk = $true
+
+} catch {
+    Write-Fail "写入失败: $_"
+    Send-Callback "failed" $_.Exception.Message
+    exit 1
+}
+
+Write-Host ""
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 阶段 4：验证写入结果
+# ══════════════════════════════════════════════════════════════════════════════
+Write-Step "阶段 4/4  验证配置写入..."
+
+if (-not $writeOk) {
+    Write-Fail "写入未完成"
+    Send-Callback "failed" "写入未完成"
+    exit 1
+}
+
+try {
+    $verify = Get-Content $CONFIG_FILE -Raw -Encoding UTF8 | ConvertFrom-Json
+    $found = $verify.provider.PSObject.Properties | Where-Object { $_.Name -like "*$PROVIDER_ID*" }
+    if (-not $found) { throw "Provider 未找到" }
+    Write-Ok "验证通过：配置文件写入正确"
+} catch {
+    Write-Fail "验证失败：配置文件中未找到 Provider"
+    Send-Callback "failed" "配置验证失败"
+    exit 1
+}
+
+Send-Callback "success"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 输出执行结论
+# ══════════════════════════════════════════════════════════════════════════════
+Write-Host ""
+Write-Divider
+Write-Host "  执行完成" -ForegroundColor Green
+Write-Divider
+Write-Ok "配置文件：$CONFIG_FILE"
+Write-Ok "Provider：$targetId（$resultAction）"
+Write-Ok "插件：$DISCOVERY_PLUGIN（$resultPlugin）"
+Write-Host ""
+Write-Host "  下一步：" -NoNewline; Write-Host "重启 opencode，即可在模型列表中看到 LLM Gateway 的所有模型。" -ForegroundColor Cyan
+Write-Host ""
+Write-Divider

@@ -1,0 +1,16 @@
+# Promtail - 推送 Docker 容器日志到 ops Loki
+# 部署在 prod 服务器 (192.0.2.10)
+# 使用方式: docker compose -f promtail-compose.yml up -d
+
+services:
+  promtail:
+    image: grafana/promtail:2.9.10
+    container_name: promtail
+    restart: unless-stopped
+    volumes:
+      - ./promtail-config.yaml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/log:/var/log:ro
+    command: -config.file=/etc/promtail/config.yml
+    mem_limit: 128m
+    memswap_limit: 128m

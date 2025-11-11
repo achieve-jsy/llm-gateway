@@ -1,0 +1,46 @@
+{
+  "title": "统一接入能力",
+  "description": "LLM Gateway 提供标准化的 OpenAI 兼容接口，统一对接多种大模型供应商，一次接入即可访问所有已注册模型。",
+  "capabilities": [
+    {
+      "id": "openai-compatible",
+      "title": "OpenAI 兼容协议",
+      "description": "完全兼容 OpenAI Chat Completions API 格式，现有客户端零改造即可接入。",
+      "icon": "Connection"
+    },
+    {
+      "id": "multi-provider",
+      "title": "多渠道统一路由",
+      "description": "支持 OpenAI、Anthropic、Azure、本地模型等多种后端，统一入口自动路由至对应渠道。",
+      "icon": "Guide"
+    },
+    {
+      "id": "model-discovery",
+      "title": "模型自动发现",
+      "description": "通过 GET /v1/models 接口实时返回所有已注册且启用的模型列表，客户端动态感知可用模型。",
+      "icon": "Search"
+    },
+    {
+      "id": "streaming",
+      "title": "流式响应支持",
+      "description": "完整支持 SSE 流式输出，适配实时对话场景的低延迟要求。",
+      "icon": "VideoPlay"
+    },
+    {
+      "id": "credential-isolation",
+      "title": "凭证隔离管理",
+      "description": "各渠道凭证独立配置，客户端无需感知底层 API Key，统一通过 Gateway 鉴权。",
+      "icon": "Lock"
+    }
+  ],
+  "excludes": [
+    {
+      "id": "fine-tune",
+      "reason": "暂不支持模型微调（Fine-Tuning）接口代理"
+    },
+    {
+      "id": "file-upload",
+      "reason": "暂不支持文件上传类接口（Files API）"
+    }
+  ]
+}

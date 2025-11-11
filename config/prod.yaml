@@ -1,0 +1,38 @@
+server:
+  port: "8080"
+
+controlplane:
+  port: "8081"
+
+redis:
+  addr: "192.0.2.10:6379"
+  password: "CHANGE_ME_REDIS_PASSWORD"
+  db: 2
+
+database:
+  url: "host=192.0.2.10 port=5432 user=llm_gateway password=CHANGE_ME_PASSWORD dbname=llm_gateway_prod sslmode=disable"
+
+otlp:
+  endpoint: "localhost:4317"
+  enabled: false
+
+provider:
+  internal_token: "CHANGE_ME_INTERNAL_TOKEN"
+  control_plane_url: "http://llm-gw-control-plane:8081"
+
+auth:
+  url: "http://llm-gw-control-plane:8081"
+  token: "CHANGE_ME_INTERNAL_TOKEN"
+
+oauth:
+  issuer_url: "https://oauth.example.net/"
+  client_id: "5514f6bb0a"
+  client_secret: "CHANGE_ME_OAUTH_SECRET"
+  redirect_uri: "https://aimeter.xk-devops.com/auth/callback"
+  scopes: "openid profile email"
+
+jwt:
+  secret: "CHANGE_ME_JWT_SECRET"
+
+frontend:
+  url: "https://aimeter.xk-devops.com"

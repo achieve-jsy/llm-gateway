@@ -1,0 +1,18 @@
+id: "CHG-20260526-001"
+name: "Key ↔ 模型组绑定与透明暴露"
+status: "in-progress"
+phase: "implement"
+created_at: "2026-05-26"
+updated_at: "2026-05-26"
+scope:
+  include: "Key 创建时可选多个模型组绑定、Key 绑定模型组的后续增删变更、Key 禁用或组解绑时新请求即时拦截且进行中调用允许自然完成、/v1/models 返回 Key 所绑定的模型组名称列表、业务方以组名发起调用路由至组内模型"
+  exclude: "组对员工的可见性权限过滤（所有注册组全员可见可选）、跨模型组的负载均衡、组级别的限额策略、Key 组绑定变更的历史审计、ops-console 前端配套（后续单独推进）"
+affected_modules:
+  - name: "control-plane"
+    change_type: "modified"
+    module_type: "web-backend"
+    summary: "Key CRUD 增加模型组绑定：创建 Key 时选择模型组、查询 Key 时返回绑定组列表、变更 Key 的组绑定（增加/移除）"
+  - name: "gateway-api"
+    change_type: "modified"
+    module_type: "web-backend"
+    summary: "/v1/models 基于 Key 绑定返回模型组名称列表（非个体模型）、组名路由沿用已有 scheduler 委托链路"

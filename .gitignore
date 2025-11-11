@@ -1,2 +1,8 @@
 # Sisyphus 运行时数据
 .sisyphus/
+
+node_modules/
+
+# 编译产物
+/gateway
+/control-plane

@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===================== Flip7 Design Tokens → Element Plus ===================== */
+:root {
+  /* Primary Teal */
+  --el-color-primary: #2BA8A2;
+  --el-color-primary-light-3: #3CC4BD;
+  --el-color-primary-light-5: #6DD4CF;
+  --el-color-primary-light-7: #9EE3E0;
+  --el-color-primary-light-9: #E8F6F5;
+  --el-color-primary-dark-2: #1E8C86;
+
+  --el-color-success: #27AE60;
+  --el-color-warning: #EAB308;
+  --el-color-danger: #E74C3C;
+  --el-color-info: #5DADE2;
+
+  /* 背景 */
+  --el-bg-color-page: #EFF8F7;
+  --el-bg-color: #FFFFFF;
+  --el-bg-color-overlay: #FFFFFF;
+
+  /* 文字 */
+  --el-text-color-primary: #1E8C86;
+  --el-text-color-regular: #334155;
+  --el-text-color-secondary: #64748B;
+  --el-text-color-placeholder: #94A3B8;
+
+  /* 边框 */
+  --el-border-color: #D1E9E7;
+  --el-border-color-light: #E8F6F5;
+  --el-border-color-lighter: #EFF8F7;
+
+  /* 填充 */
+  --el-fill-color-blank: #FFFFFF;
+  --el-fill-color: #E8F6F5;
+  --el-fill-color-light: #EFF8F7;
+
+  /* 圆角 */
+  --el-border-radius-base: 12px;
+  --el-border-radius-small: 8px;
+  --el-border-radius-round: 999px;
+
+  /* 字体 */
+  --el-font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --el-font-size-base: 14px;
+
+  /* 阴影 */
+  --el-box-shadow: 0 2px 10px rgba(43, 168, 162, 0.10);
+  --el-box-shadow-light: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+/* ===================== Dark Mode ===================== */
+html.dark {
+  --el-bg-color-page: #0F2928;
+  --el-bg-color: #163B3A;
+  --el-bg-color-overlay: #163B3A;
+  --el-text-color-primary: #E8F6F5;
+  --el-text-color-regular: #B0D9D6;
+  --el-text-color-secondary: #7BBFBB;
+  --el-text-color-placeholder: #4A8A86;
+  --el-border-color: #1E5653;
+  --el-border-color-light: #163B3A;
+  --el-fill-color-blank: #163B3A;
+  --el-fill-color: #1E5653;
+  --el-fill-color-light: #0F2928;
+  --el-color-primary: #3CC4BD;
+  --el-color-primary-light-3: #6DD4CF;
+  --el-color-primary-light-9: #0F2928;
+  --el-box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}

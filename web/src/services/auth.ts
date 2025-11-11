@@ -13,5 +13,6 @@ export async function refreshToken(token: string): Promise<RefreshResponse> {
 
 export async function logout(): Promise<void> {
   const refreshToken = localStorage.getItem('refresh_token')
-  await http.post('/auth/logout', { refresh_token: refreshToken || '' })
+  if (!refreshToken) return
+  await http.post('/auth/logout', { refresh_token: refreshToken })
 }

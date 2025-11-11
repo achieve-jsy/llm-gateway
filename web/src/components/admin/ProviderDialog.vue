@@ -175,6 +175,10 @@
           <p class="form-hint" style="margin-bottom: 12px">
             选择要自动注册的模型（来自 {{ selectedDef.display_name }} 默认模型列表）
           </p>
+          <div class="models-actions">
+            <el-button size="small" text type="primary" @click="selectAllModels">全选</el-button>
+            <el-button size="small" text type="danger" @click="clearAllModels">一键清除</el-button>
+          </div>
           <el-checkbox-group v-model="formData.selected_models">
             <el-checkbox
               v-for="model in selectedDef.default_models"
@@ -429,6 +433,16 @@ watch(
   }
 )
 
+function selectAllModels() {
+  if (selectedDef.value?.default_models?.length) {
+    formData.value.selected_models = [...selectedDef.value.default_models]
+  }
+}
+
+function clearAllModels() {
+  formData.value.selected_models = []
+}
+
 /** 添加额外模型 */
 function addExtraModel() {
   const name = extraModelName.value.trim()
@@ -645,6 +659,12 @@ async function handleSubmit() {
 .prefill-model-item {
   display: block;
   margin-bottom: 6px;
+}
+
+.models-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 
 .el-divider {

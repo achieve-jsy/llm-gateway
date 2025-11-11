@@ -44,8 +44,8 @@ type ModelRepoInterface interface {
 	List(filter repository.ModelListFilter, offset, limit int) ([]model.Model, int64, error)
 	Update(m *model.Model) error
 	Delete(id uuid.UUID) error
-	ExistsByName(name string) (bool, error)
-	ExistsByNameExcluding(name string, excludeID uuid.UUID) (bool, error)
+	ExistsByName(name string, providerID uuid.UUID) (bool, error)
+	ExistsByNameExcluding(name string, providerID uuid.UUID, excludeID uuid.UUID) (bool, error)
 	CountByProviderID(providerID uuid.UUID) (int64, error)
 	BatchCountByProviderID(providerIDs []uuid.UUID) (map[uuid.UUID]int64, error)
 	ListAvailable() ([]model.Model, error)

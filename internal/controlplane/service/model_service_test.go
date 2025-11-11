@@ -20,7 +20,7 @@ func TestNewModelService(t *testing.T) {
 func TestModelService_CreateModel_Success(t *testing.T) {
 	providerID := uuid.New()
 	modelRepo := &MockModelRepo{
-		existsByNameFn: func(name string) (bool, error) { return false, nil },
+		existsByNameFn: func(name string, providerID uuid.UUID) (bool, error) { return false, nil },
 		createFn: func(m *model.Model) error {
 			m.ID = uuid.New()
 			return nil
@@ -38,20 +38,26 @@ func TestModelService_CreateModel_Success(t *testing.T) {
 }
 
 func TestModelService_CreateModel_NameExists(t *testing.T) {
-	providerRepo := &MockProviderRepo{}
-	modelRepo := &MockModelRepo{existsByNameFn: func(name string) (bool, error) { return true, nil }}
+	pid := uuid.New()
+	providerRepo := &MockProviderRepo{getByIDFn: func(id uuid.UUID) (*model.Provider, error) {
+		return &model.Provider{ID: pid, Enabled: true}, nil
+	}}
+	modelRepo := &MockModelRepo{existsByNameFn: func(name string, providerID uuid.UUID) (bool, error) { return true, nil }}
 	svc := NewModelService(modelRepo, providerRepo, nil)
 
-	_, err := svc.CreateModel(CreateModelInput{Name: "n", ProviderID: uuid.New().String(), ModelType: "chat"})
+	_, err := svc.CreateModel(CreateModelInput{Name: "n", ProviderID: pid.String(), ModelType: "chat"})
 	require.ErrorIs(t, err, ErrModelNameExists)
 }
 
 func TestModelService_CreateModel_ExistsCheckError(t *testing.T) {
-	providerRepo := &MockProviderRepo{}
-	modelRepo := &MockModelRepo{existsByNameFn: func(name string) (bool, error) { return false, errors.New("db") }}
+	pid := uuid.New()
+	providerRepo := &MockProviderRepo{getByIDFn: func(id uuid.UUID) (*model.Provider, error) {
+		return &model.Provider{ID: pid, Enabled: true}, nil
+	}}
+	modelRepo := &MockModelRepo{existsByNameFn: func(name string, providerID uuid.UUID) (bool, error) { return false, errors.New("db") }}
 	svc := NewModelService(modelRepo, providerRepo, nil)
 
-	_, err := svc.CreateModel(CreateModelInput{Name: "n", ProviderID: uuid.New().String(), ModelType: "chat"})
+	_, err := svc.CreateModel(CreateModelInput{Name: "n", ProviderID: pid.String(), ModelType: "chat"})
 	require.Error(t, err)
 }
 
@@ -59,7 +65,7 @@ func TestModelService_CreateModel_ProviderMissing(t *testing.T) {
 	providerRepo := &MockProviderRepo{getByIDFn: func(id uuid.UUID) (*model.Provider, error) {
 		return nil, errors.New("not found")
 	}}
-	modelRepo := &MockModelRepo{existsByNameFn: func(name string) (bool, error) { return false, nil }}
+	modelRepo := &MockModelRepo{existsByNameFn: func(name string, providerID uuid.UUID) (bool, error) { return false, nil }}
 	svc := NewModelService(modelRepo, providerRepo, nil)
 
 	_, err := svc.CreateModel(CreateModelInput{Name: "n", ProviderID: uuid.New().String(), ModelType: "chat"})
@@ -70,7 +76,7 @@ func TestModelService_CreateModel_ProviderDisabled(t *testing.T) {
 	providerRepo := &MockProviderRepo{getByIDFn: func(id uuid.UUID) (*model.Provider, error) {
 		return &model.Provider{ID: id, Enabled: false}, nil
 	}}
-	modelRepo := &MockModelRepo{existsByNameFn: func(name string) (bool, error) { return false, nil }}
+	modelRepo := &MockModelRepo{existsByNameFn: func(name string, providerID uuid.UUID) (bool, error) { return false, nil }}
 	svc := NewModelService(modelRepo, providerRepo, nil)
 
 	_, err := svc.CreateModel(CreateModelInput{Name: "n", ProviderID: uuid.New().String(), ModelType: "chat"})
@@ -82,7 +88,7 @@ func TestModelService_CreateModel_DBError(t *testing.T) {
 		return &model.Provider{ID: id, Enabled: true}, nil
 	}}
 	modelRepo := &MockModelRepo{
-		existsByNameFn: func(name string) (bool, error) { return false, nil },
+		existsByNameFn: func(name string, providerID uuid.UUID) (bool, error) { return false, nil },
 		createFn:       func(m *model.Model) error { return errors.New("insert error") },
 	}
 	svc := NewModelService(modelRepo, providerRepo, nil)
@@ -138,7 +144,7 @@ func TestModelService_UpdateModel_Success(t *testing.T) {
 	existing := &model.Model{ID: id, Name: "old"}
 	modelRepo := &MockModelRepo{
 		getByIDFn: func(uuid.UUID) (*model.Model, error) { return existing, nil },
-		existsByNameExcludingFn: func(string, uuid.UUID) (bool, error) { return false, nil },
+		existsByNameExcludingFn: func(string, uuid.UUID, uuid.UUID) (bool, error) { return false, nil },
 		updateFn: func(*model.Model) error { return nil },
 	}
 	providerRepo := &MockProviderRepo{getByIDFn: func(id uuid.UUID) (*model.Provider, error) {
@@ -165,7 +171,7 @@ func TestModelService_UpdateModel_NameConflict(t *testing.T) {
 	id := uuid.New()
 	modelRepo := &MockModelRepo{
 		getByIDFn:               func(uuid.UUID) (*model.Model, error) { return &model.Model{ID: id, Name: "old"}, nil },
-		existsByNameExcludingFn: func(string, uuid.UUID) (bool, error) { return true, nil },
+		existsByNameExcludingFn: func(string, uuid.UUID, uuid.UUID) (bool, error) { return true, nil },
 	}
 	svc := NewModelService(modelRepo, &MockProviderRepo{}, nil)
 	_, err := svc.UpdateModel(id, UpdateModelInput{Name: "new"})
@@ -266,21 +272,22 @@ func TestInternalService_ListAvailableModels_Error(t *testing.T) {
 
 func TestInternalService_CheckModelNameExists(t *testing.T) {
 	id := uuid.New()
+	pid := uuid.New()
 	modelRepo := &MockModelRepo{
-		existsByNameFn:          func(name string) (bool, error) { return name == "exists", nil },
-		existsByNameExcludingFn: func(name string, excludeID uuid.UUID) (bool, error) { return false, nil },
+		existsByNameFn:          func(name string, providerID uuid.UUID) (bool, error) { return name == "exists", nil },
+		existsByNameExcludingFn: func(name string, providerID uuid.UUID, excludeID uuid.UUID) (bool, error) { return false, nil },
 	}
 	svc := NewInternalService(modelRepo, &MockProviderRepo{})
 
-	ok, err := svc.CheckModelNameExists("exists", nil)
+	ok, err := svc.CheckModelNameExists("exists", pid, nil)
 	require.NoError(t, err)
 	assert.True(t, ok)
 
-	ok, err = svc.CheckModelNameExists("missing", nil)
+	ok, err = svc.CheckModelNameExists("missing", pid, nil)
 	require.NoError(t, err)
 	assert.False(t, ok)
 
-	ok, err = svc.CheckModelNameExists("anything", &id)
+	ok, err = svc.CheckModelNameExists("anything", pid, &id)
 	require.NoError(t, err)
 	assert.False(t, ok)
 }
@@ -331,7 +338,7 @@ func TestCreateModel_AdvancedFieldsAllPassed(t *testing.T) {
 	pid := uuid.New()
 	var captured *model.Model
 	modelRepo := &MockModelRepo{
-		existsByNameFn: func(string) (bool, error) { return false, nil },
+		existsByNameFn: func(string, uuid.UUID) (bool, error) { return false, nil },
 		createFn: func(m *model.Model) error {
 			m.ID = uuid.New()
 			captured = m
@@ -372,7 +379,7 @@ func TestCreateModel_DefaultWeightIsOne(t *testing.T) {
 	pid := uuid.New()
 	var captured *model.Model
 	modelRepo := &MockModelRepo{
-		existsByNameFn: func(string) (bool, error) { return false, nil },
+		existsByNameFn: func(string, uuid.UUID) (bool, error) { return false, nil },
 		createFn:       func(m *model.Model) error { captured = m; return nil },
 	}
 	svc := modelTestSvc(modelRepo, pid)
@@ -480,31 +487,34 @@ func TestUpdateModel_ExplicitDisableClearsFailureState(t *testing.T) {
 // =============================================================================
 
 func TestCheckModelName_Available(t *testing.T) {
+	pid := uuid.New()
 	modelRepo := &MockModelRepo{
-		existsByNameFn: func(string) (bool, error) { return false, nil },
+		existsByNameFn: func(string, uuid.UUID) (bool, error) { return false, nil },
 	}
 	svc := NewModelService(modelRepo, &MockProviderRepo{}, nil)
-	ok, err := svc.CheckModelName("never-used")
+	ok, err := svc.CheckModelName("never-used", pid)
 	assert.NoError(t, err)
 	assert.True(t, ok, "未存在的名字应返回 available=true")
 }
 
 func TestCheckModelName_NotAvailable(t *testing.T) {
+	pid := uuid.New()
 	modelRepo := &MockModelRepo{
-		existsByNameFn: func(string) (bool, error) { return true, nil },
+		existsByNameFn: func(string, uuid.UUID) (bool, error) { return true, nil },
 	}
 	svc := NewModelService(modelRepo, &MockProviderRepo{}, nil)
-	ok, err := svc.CheckModelName("gpt-4o")
+	ok, err := svc.CheckModelName("gpt-4o", pid)
 	assert.NoError(t, err)
 	assert.False(t, ok, "已存在的名字应返回 available=false")
 }
 
 func TestCheckModelName_RepoError(t *testing.T) {
+	pid := uuid.New()
 	modelRepo := &MockModelRepo{
-		existsByNameFn: func(string) (bool, error) { return false, errors.New("db down") },
+		existsByNameFn: func(string, uuid.UUID) (bool, error) { return false, errors.New("db down") },
 	}
 	svc := NewModelService(modelRepo, &MockProviderRepo{}, nil)
-	ok, err := svc.CheckModelName("anything")
+	ok, err := svc.CheckModelName("anything", pid)
 	assert.Error(t, err)
 	assert.False(t, ok)
 	assert.Contains(t, err.Error(), "db down")

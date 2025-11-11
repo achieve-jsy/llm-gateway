@@ -17,8 +17,9 @@ import (
 func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *model.ChatCompletionRequest) (<-chan model.StreamChunk, error) {
 	tracer := otel.Tracer("llm-gateway/orchestrator")
 
-	// 超时控制
-	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
+	// 流式请求超时控制（300s，匹配 Nginx proxy_read_timeout）
+	// 从请求 ctx 派生，客户端断开时自动取消上游连接
+	ctx, cancel := context.WithTimeout(ctx, defaultStreamTimeout)
 
 	// 从 Registry 解析 Provider
 	p, err := o.registry.Resolve(req.Model)

@@ -93,17 +93,17 @@ func (r *ModelRepo) Delete(id uuid.UUID) error {
 	return r.db.Delete(&model.Model{}, "id = ?", id).Error
 }
 
-// ExistsByName 检查模型名称是否已存在
-func (r *ModelRepo) ExistsByName(name string) (bool, error) {
+// ExistsByName 检查同一渠道下模型名称是否已存在
+func (r *ModelRepo) ExistsByName(name string, providerID uuid.UUID) (bool, error) {
 	var count int64
-	err := r.db.Model(&model.Model{}).Where("name = ?", name).Count(&count).Error
+	err := r.db.Model(&model.Model{}).Where("name = ? AND provider_id = ?", name, providerID).Count(&count).Error
 	return count > 0, err
 }
 
-// ExistsByNameExcluding 检查模型名称是否已存在（排除指定 ID）
-func (r *ModelRepo) ExistsByNameExcluding(name string, excludeID uuid.UUID) (bool, error) {
+// ExistsByNameExcluding 检查同一渠道下模型名称是否已存在（排除指定 ID）
+func (r *ModelRepo) ExistsByNameExcluding(name string, providerID uuid.UUID, excludeID uuid.UUID) (bool, error) {
 	var count int64
-	err := r.db.Model(&model.Model{}).Where("name = ? AND id != ?", name, excludeID).Count(&count).Error
+	err := r.db.Model(&model.Model{}).Where("name = ? AND provider_id = ? AND id != ?", name, providerID, excludeID).Count(&count).Error
 	return count > 0, err
 }
 

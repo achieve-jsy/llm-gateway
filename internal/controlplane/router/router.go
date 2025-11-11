@@ -2,7 +2,6 @@ package router
 
 import (
 	"context"
-	"log"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -41,19 +40,15 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	// SSO/OAuth2 认证路由（无需认证）
 	authCfg := auth.LoadConfig()
 	applyOIDCFromDB(authCfg, settingsSvc)
-	authHandler, authErr := auth.NewHandler(authCfg, db, rdb)
-	if authErr != nil {
-		log.Printf("WARNING: SSO auth handler init failed: %v (SSO login disabled)", authErr)
-	} else {
-		// SSO login redirect (frontend: GET /api/v1/auth/oidc/login)
-		r.GET("/api/v1/auth/oidc/login", authHandler.Login)
-		// SSO callback (frontend: POST /auth/oidc/callback)
-		r.POST("/auth/oidc/callback", authHandler.Callback)
-		r.POST("/auth/refresh", authHandler.Refresh)
-		r.POST("/auth/logout", authHandler.Logout)
-		// 需要认证的用户信息接口
-		r.GET("/api/v1/me", middleware.JWTAuth(), authHandler.GetCurrentUser)
-	}
+	authHandler := auth.NewHandler(authCfg, db, rdb)
+	// SSO login redirect (frontend: GET /api/v1/auth/oidc/login)
+	r.GET("/api/v1/auth/oidc/login", authHandler.Login)
+	// SSO callback (frontend: POST /auth/oidc/callback)
+	r.POST("/auth/oidc/callback", authHandler.Callback)
+	r.POST("/auth/refresh", authHandler.Refresh)
+	r.POST("/auth/logout", authHandler.Logout)
+	// 需要认证的用户信息接口
+	r.GET("/api/v1/me", middleware.JWTAuth(), authHandler.GetCurrentUser)
 
 	// Dev login (no auth required)
 	devLoginHandler := handler.NewDevLoginHandler(db, authCfg.JWTSecret)

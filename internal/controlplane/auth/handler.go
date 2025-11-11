@@ -21,13 +21,15 @@ import (
 )
 
 type Handler struct {
-	config      *Config
-	oauthConfig *oauth2.Config
-	endpoints   *OIDCEndpoints
-	db          *gorm.DB
-	rdb         *redis.Client
-	userRepo    *arepo.UserRepository
-	deptRepo    *arepo.DeptRepository
+	config       *Config
+	oauthConfig  *oauth2.Config
+	endpoints    *OIDCEndpoints
+	db           *gorm.DB
+	rdb          *redis.Client
+	userRepo     *arepo.UserRepository
+	deptRepo     *arepo.DeptRepository
+	initAttempted bool
+	initErr      error
 }
 
 type DaQunUserInfo struct {
@@ -50,33 +52,51 @@ type OIDCEndpoints struct {
 	JwksURI               string `json:"jwks_uri"`
 }
 
-func NewHandler(cfg *Config, db *gorm.DB, rdb *redis.Client) (*Handler, error) {
-	endpoints, err := discoverEndpoints(cfg.IssuerURL)
-	if err != nil {
-		return nil, fmt.Errorf("discover OIDC endpoints: %w", err)
+func NewHandler(cfg *Config, db *gorm.DB, rdb *redis.Client) *Handler {
+	h := &Handler{
+		config:    cfg,
+		db:        db,
+		rdb:       rdb,
+		userRepo:  arepo.NewUserRepository(db),
+		deptRepo:  arepo.NewDeptRepository(db),
 	}
+	_ = h.tryInit()
+	return h
+}
+
+func (h *Handler) tryInit() error {
+	if h.initAttempted {
+		return h.initErr
+	}
+	h.initAttempted = true
+
+	endpoints, err := discoverEndpoints(h.config.IssuerURL)
+	if err != nil {
+		h.initErr = fmt.Errorf("discover OIDC endpoints: %w", err)
+		return h.initErr
+	}
+	h.endpoints = endpoints
 
 	oauthCfg := &oauth2.Config{
-		ClientID:     cfg.ClientID,
-		ClientSecret: cfg.ClientSecret,
-		RedirectURL:  cfg.RedirectURI,
-		Scopes:       cfg.Scopes,
+		ClientID:     h.config.ClientID,
+		ClientSecret: h.config.ClientSecret,
+		RedirectURL:  h.config.RedirectURI,
+		Scopes:       h.config.Scopes,
 		Endpoint: oauth2.Endpoint{
 			AuthURL:   endpoints.AuthorizationEndpoint,
 			TokenURL:  endpoints.TokenEndpoint,
 			AuthStyle: oauth2.AuthStyleInHeader,
 		},
 	}
+	h.oauthConfig = oauthCfg
+	return nil
+}
 
-	return &Handler{
-		config:      cfg,
-		oauthConfig: oauthCfg,
-		endpoints:   endpoints,
-		db:          db,
-		rdb:         rdb,
-		userRepo:    arepo.NewUserRepository(db),
-		deptRepo:    arepo.NewDeptRepository(db),
-	}, nil
+var oidcHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy: nil,
+	},
+	Timeout: 10 * time.Second,
 }
 
 func discoverEndpoints(issuerURL string) (*OIDCEndpoints, error) {
@@ -89,7 +109,7 @@ func discoverEndpoints(issuerURL string) (*OIDCEndpoints, error) {
 		return nil, err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := oidcHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch openid-configuration: %w", err)
 	}
@@ -107,6 +127,11 @@ func discoverEndpoints(issuerURL string) (*OIDCEndpoints, error) {
 }
 
 func (h *Handler) Login(c *gin.Context) {
+	if err := h.tryInit(); err != nil {
+		slog.Error("SSO init failed", "error", err)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"type": "sso_unavailable", "message": "SSO 服务暂时不可用，请稍后重试", "code": "sso_unavailable"}})
+		return
+	}
 	state := generateState()
 	if err := h.rdb.Set(c.Request.Context(), "oidc:state:"+state, "1", 5*time.Minute).Err(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "failed to save state", "code": "internal"}})
@@ -122,6 +147,11 @@ type oidcCallbackRequest struct {
 }
 
 func (h *Handler) Callback(c *gin.Context) {
+	if err := h.tryInit(); err != nil {
+		slog.Error("SSO init failed in callback", "error", err)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"type": "sso_unavailable", "message": "SSO 服务暂时不可用，请稍后重试", "code": "sso_unavailable"}})
+		return
+	}
 	var req oidcCallbackRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "message": "invalid payload", "code": "invalid_request"}})
@@ -137,6 +167,8 @@ func (h *Handler) Callback(c *gin.Context) {
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
+
+	ctx = context.WithValue(ctx, oauth2.HTTPClient, oidcHTTPClient)
 
 	token, err := h.oauthConfig.Exchange(ctx, req.Code)
 	if err != nil {

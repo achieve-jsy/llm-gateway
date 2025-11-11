@@ -100,14 +100,6 @@ type CreateModelInput struct {
 
 // CreateModel 注册模型（T030）
 func (s *ModelService) CreateModel(input CreateModelInput) (*model.Model, error) {
-	exists, err := s.modelRepo.ExistsByName(input.Name)
-	if err != nil {
-		return nil, fmt.Errorf("check name uniqueness: %w", err)
-	}
-	if exists {
-		return nil, ErrModelNameExists
-	}
-
 	providerID, _ := uuid.Parse(input.ProviderID)
 	provider, err := s.providerRepo.GetByID(providerID)
 	if err != nil || provider == nil {
@@ -115,6 +107,14 @@ func (s *ModelService) CreateModel(input CreateModelInput) (*model.Model, error)
 	}
 	if !provider.Enabled {
 		return nil, ErrModelProviderInvalid
+	}
+
+	exists, err := s.modelRepo.ExistsByName(input.Name, providerID)
+	if err != nil {
+		return nil, fmt.Errorf("check name uniqueness: %w", err)
+	}
+	if exists {
+		return nil, ErrModelNameExists
 	}
 
 	enabled := true
@@ -153,14 +153,14 @@ func (s *ModelService) CreateModel(input CreateModelInput) (*model.Model, error)
 	return m, nil
 }
 
-// CheckModelName 检查模型名称是否可用（S0-3 修复）
+// CheckModelName 检查模型名称在指定渠道下是否可用（S0-3 修复）
 //
-// 单独路由 GET /api/v1/models/check-name?name=X 服务，避免 ListModels 端点
+// 单独路由 GET /api/v1/models/check-name?name=X&provider_id=Y 服务，避免 ListModels 端点
 // 通过 check_name query 隐式重载导致 FE 永远拿不到 available 字段。
 //
 // 返回 (available, error)：true 表示名称可用。
-func (s *ModelService) CheckModelName(name string) (bool, error) {
-	exists, err := s.modelRepo.ExistsByName(name)
+func (s *ModelService) CheckModelName(name string, providerID uuid.UUID) (bool, error) {
+	exists, err := s.modelRepo.ExistsByName(name, providerID)
 	if err != nil {
 		return false, fmt.Errorf("check name uniqueness: %w", err)
 	}
@@ -214,7 +214,7 @@ func (s *ModelService) UpdateModel(id uuid.UUID, input UpdateModelInput) (*model
 	}
 
 	if input.Name != "" && input.Name != m.Name {
-		exists, err := s.modelRepo.ExistsByNameExcluding(input.Name, id)
+		exists, err := s.modelRepo.ExistsByNameExcluding(input.Name, m.ProviderID, id)
 		if err != nil {
 			return nil, fmt.Errorf("check name uniqueness: %w", err)
 		}
@@ -306,7 +306,7 @@ func (s *ModelService) CreateModelFromCatalog(catalogID, providerID uuid.UUID, n
 	if !provider.Enabled {
 		return nil, ErrModelProviderInvalid
 	}
-	exists, err := s.modelRepo.ExistsByName(name)
+	exists, err := s.modelRepo.ExistsByName(name, providerID)
 	if err != nil {
 		return nil, fmt.Errorf("check name uniqueness: %w", err)
 	}

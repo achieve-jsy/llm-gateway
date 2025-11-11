@@ -20,8 +20,8 @@ import (
 // 一键填充直接复制，禁止再次乘除。
 type Model struct {
 	ID                  uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	Name                string     `gorm:"type:varchar(200);not null;uniqueIndex:idx_models_name_unique" json:"name"`
-	ProviderID          uuid.UUID  `gorm:"type:uuid;not null;index:idx_models_provider_id" json:"provider_id"`
+	Name                string     `gorm:"type:varchar(200);not null;uniqueIndex:idx_models_name_provider_unique,composite:name_provider" json:"name"`
+	ProviderID          uuid.UUID  `gorm:"type:uuid;not null;index:idx_models_provider_id;uniqueIndex:idx_models_name_provider_unique,composite:name_provider" json:"provider_id"`
 	ModelType           string     `gorm:"type:varchar(50);not null;default:chat" json:"model_type"`
 	Enabled             *bool      `gorm:"not null;default:true;index:idx_models_enabled" json:"enabled"`
 	UpstreamModelID     string     `gorm:"type:varchar(200);default:''" json:"upstream_model_id"`

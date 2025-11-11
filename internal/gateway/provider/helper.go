@@ -2,6 +2,7 @@ package provider
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -85,6 +86,11 @@ func SetAuthHeader(req *http.Request, apiKey string, cfg VendorConfig) {
 
 // OpenAICompatChat 通用 OpenAI 兼容非流式调用（配置驱动版本）
 func OpenAICompatChat(client *http.Client, baseURL string, req *model.ChatCompletionRequest, apiKey string, cfg VendorConfig, parseError func(int, []byte) error) (*model.ChatCompletionResponse, error) {
+	return OpenAICompatChatWithContext(context.Background(), client, baseURL, req, apiKey, cfg, parseError)
+}
+
+// OpenAICompatChatWithContext 通用 OpenAI 兼容非流式调用（带 context 版本）
+func OpenAICompatChatWithContext(ctx context.Context, client *http.Client, baseURL string, req *model.ChatCompletionRequest, apiKey string, cfg VendorConfig, parseError func(int, []byte) error) (*model.ChatCompletionResponse, error) {
 	// 确保非流式
 	reqCopy := *req
 	reqCopy.Stream = false
@@ -95,7 +101,7 @@ func OpenAICompatChat(client *http.Client, baseURL string, req *model.ChatComple
 	}
 
 	url := BuildRequestURL(baseURL, "/chat/completions", cfg, req.Model)
-	httpReq, err := http.NewRequest(http.MethodPost, url, strings.NewReader(string(body)))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(body)))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -128,6 +134,11 @@ func OpenAICompatChat(client *http.Client, baseURL string, req *model.ChatComple
 
 // OpenAICompatStream 通用 OpenAI 兼容流式调用（配置驱动版本）
 func OpenAICompatStream(client *http.Client, baseURL string, req *model.ChatCompletionRequest, apiKey string, cfg VendorConfig, parseError func(int, []byte) error) (<-chan model.StreamChunk, error) {
+	return OpenAICompatStreamWithContext(context.Background(), client, baseURL, req, apiKey, cfg, parseError)
+}
+
+// OpenAICompatStreamWithContext 通用 OpenAI 兼容流式调用（带 context 版本）
+func OpenAICompatStreamWithContext(ctx context.Context, client *http.Client, baseURL string, req *model.ChatCompletionRequest, apiKey string, cfg VendorConfig, parseError func(int, []byte) error) (<-chan model.StreamChunk, error) {
 	// 确保流式
 	reqCopy := *req
 	reqCopy.Stream = true
@@ -138,7 +149,7 @@ func OpenAICompatStream(client *http.Client, baseURL string, req *model.ChatComp
 	}
 
 	url := BuildRequestURL(baseURL, "/chat/completions", cfg, req.Model)
-	httpReq, err := http.NewRequest(http.MethodPost, url, strings.NewReader(string(body)))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(body)))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

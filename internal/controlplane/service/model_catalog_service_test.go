@@ -58,7 +58,7 @@ func TestCreateModelFromCatalog_CopiesSnapshot(t *testing.T) {
 
 	var captured *model.Model
 	modelRepo := &MockModelRepo{
-		existsByNameFn: func(string) (bool, error) { return false, nil },
+		existsByNameFn: func(string, uuid.UUID) (bool, error) { return false, nil },
 		createFn: func(m *model.Model) error {
 			m.ID = uuid.New()
 			captured = m

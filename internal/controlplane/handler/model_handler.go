@@ -20,7 +20,7 @@ type ModelServiceInterface interface {
 	ListModels(filter repository.ModelListFilter, page, pageSize int) ([]model.Model, int64, error)
 	UpdateModel(id uuid.UUID, input service.UpdateModelInput) (*model.Model, error)
 	DeleteModel(id uuid.UUID) error
-	CheckModelName(name string) (bool, error)
+	CheckModelName(name string, providerID uuid.UUID) (bool, error)
 	BatchDeleteModels(ids []uuid.UUID) (int64, error)
 	BatchUpdateModelStatus(ids []uuid.UUID, enabled bool) (int64, error)
 
@@ -166,7 +166,7 @@ func (h *ModelHandler) UpdateModel(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": m})
 }
 
-// CheckModelName GET /api/v1/models/check-name?name=…
+// CheckModelName GET /api/v1/models/check-name?name=…&provider_id=…
 func (h *ModelHandler) CheckModelName(c *gin.Context) {
 	name := c.Query("name")
 	if name == "" {
@@ -175,8 +175,22 @@ func (h *ModelHandler) CheckModelName(c *gin.Context) {
 		})
 		return
 	}
+	providerIDStr := c.Query("provider_id")
+	if providerIDStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{"type": "invalid_request", "message": "provider_id query parameter is required", "code": CodeBadRequest},
+		})
+		return
+	}
+	providerID, err := uuid.Parse(providerIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{"type": "invalid_request", "message": "invalid provider_id", "code": CodeBadRequest},
+		})
+		return
+	}
 
-	available, err := h.svc.CheckModelName(name)
+	available, err := h.svc.CheckModelName(name, providerID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{"type": "internal_error", "message": "failed to check model name", "code": CodeInternalError},

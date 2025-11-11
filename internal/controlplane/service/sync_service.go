@@ -25,7 +25,7 @@ type SyncProviderRepo interface {
 // SyncModelRepo SyncService 依赖的 ModelRepo 子集
 type SyncModelRepo interface {
 	List(filter repository.ModelListFilter, offset, limit int) ([]model.Model, int64, error)
-	ExistsByName(name string) (bool, error)
+	ExistsByName(name string, providerID uuid.UUID) (bool, error)
 	Create(m *model.Model) error
 	BatchCreate(models []*model.Model) error
 }

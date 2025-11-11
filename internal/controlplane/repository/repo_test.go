@@ -239,13 +239,13 @@ func TestModelRepo_CRUD(t *testing.T) {
 	assert.Equal(t, p.Name, got.Provider.Name)
 
 	// ExistsByName
-	exists, _ := modelRepo.ExistsByName("gpt-4")
+	exists, _ := modelRepo.ExistsByName("gpt-4", p.ID)
 	assert.True(t, exists)
-	exists, _ = modelRepo.ExistsByName("none")
+	exists, _ = modelRepo.ExistsByName("none", p.ID)
 	assert.False(t, exists)
-	exists, _ = modelRepo.ExistsByNameExcluding("gpt-4", m.ID)
+	exists, _ = modelRepo.ExistsByNameExcluding("gpt-4", p.ID, m.ID)
 	assert.False(t, exists)
-	exists, _ = modelRepo.ExistsByNameExcluding("gpt-4", uuid.New())
+	exists, _ = modelRepo.ExistsByNameExcluding("gpt-4", p.ID, uuid.New())
 	assert.True(t, exists)
 
 	// List with providerID

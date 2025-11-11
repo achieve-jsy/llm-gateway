@@ -16,8 +16,10 @@ import (
 )
 
 const (
-	// 默认超时时间 30 秒
+	// 非流式请求超时 30 秒
 	defaultTimeout = 30 * time.Second
+	// 流式请求超时 300 秒（匹配 Nginx proxy_read_timeout）
+	defaultStreamTimeout = 300 * time.Second
 )
 
 // ChatOrchestrator 聊天编排器，协调 Registry、Provider、Normalizer

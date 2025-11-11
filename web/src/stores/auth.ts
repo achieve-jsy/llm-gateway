@@ -26,6 +26,34 @@ function restoreUser(): { user: User | null; role: string | null } {
 
 const restored = restoreUser()
 
+let refreshTimer: ReturnType<typeof setTimeout> | null = null
+
+function scheduleRefresh(token: string, refreshFn: () => Promise<void>) {
+  clearRefreshTimer()
+  const claims = parseJWT(token)
+  const DEFAULT_REFRESH_MS = 25 * 60 * 1000
+  let delay: number
+
+  if (claims?.exp) {
+    const nowSec = Math.floor(Date.now() / 1000)
+    delay = Math.max(0, (claims.exp - nowSec - 300) * 1000) // 过期前5分钟刷新
+    if (delay === 0) delay = DEFAULT_REFRESH_MS // 已过期或即将过期，直接刷新
+  } else {
+    delay = DEFAULT_REFRESH_MS
+  }
+
+  refreshTimer = setTimeout(() => {
+    refreshFn().catch(() => {})
+  }, delay)
+}
+
+function clearRefreshTimer() {
+  if (refreshTimer) {
+    clearTimeout(refreshTimer)
+    refreshTimer = null
+  }
+}
+
 export const useAuthStore = defineStore('auth', () => {
   const accessToken = ref<string | null>(localStorage.getItem('access_token') || null)
   const refreshTokenValue = ref<string | null>(localStorage.getItem('refresh_token') || null)
@@ -36,6 +64,10 @@ export const useAuthStore = defineStore('auth', () => {
   const userName = computed(() => user.value?.name || '')
   const departmentName = computed(() => user.value?.departmentName || '')
 
+  if (accessToken.value) {
+    scheduleRefresh(accessToken.value, refresh)
+  }
+
   function setAuth(data: { accessToken: string; refreshToken: string; user: User; role: 'employee' | 'admin' }) {
     accessToken.value = data.accessToken
     refreshTokenValue.value = data.refreshToken
@@ -44,6 +76,7 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.setItem('access_token', data.accessToken)
     localStorage.setItem('refresh_token', data.refreshToken)
     localStorage.setItem('save_user', JSON.stringify({ user: data.user, role: data.role }))
+    scheduleRefresh(data.accessToken, refresh)
   }
 
   async function handleCallback(code: string, state: string) {
@@ -58,10 +91,12 @@ export const useAuthStore = defineStore('auth', () => {
     refreshTokenValue.value = data.refreshToken
     localStorage.setItem('access_token', data.accessToken)
     localStorage.setItem('refresh_token', data.refreshToken)
+    scheduleRefresh(data.accessToken, refresh)
   }
 
   async function handleLogout() {
     try { await logoutApi() } catch {}
+    clearRefreshTimer()
     accessToken.value = null
     refreshTokenValue.value = null
     user.value = null

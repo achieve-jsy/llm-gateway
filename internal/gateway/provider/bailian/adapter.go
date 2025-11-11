@@ -51,7 +51,7 @@ func (a *Adapter) Name() string {
 
 // Chat 普通调用（非流式），POST /chat/completions
 func (a *Adapter) Chat(ctx context.Context, req *model.ChatCompletionRequest) (*model.ChatCompletionResponse, error) {
-	return provider.OpenAICompatChat(a.client, a.config.BaseURL, req, a.config.APIKey, a.vendorCfg, ToBailianError)
+	return provider.OpenAICompatChatWithContext(ctx, a.client, a.config.BaseURL, req, a.config.APIKey, a.vendorCfg, ToBailianError)
 }
 
 // ChatStream 流式调用，返回 chunk channel
@@ -61,7 +61,7 @@ func (a *Adapter) Chat(ctx context.Context, req *model.ChatCompletionRequest) (*
 // - 跳过空 choices chunk
 // - 兼容 reasoning_content 字段
 func (a *Adapter) ChatStream(ctx context.Context, req *model.ChatCompletionRequest) (<-chan model.StreamChunk, error) {
-	return provider.OpenAICompatStream(a.client, a.config.BaseURL, req, a.config.APIKey, a.vendorCfg, ToBailianError)
+	return provider.OpenAICompatStreamWithContext(ctx, a.client, a.config.BaseURL, req, a.config.APIKey, a.vendorCfg, ToBailianError)
 }
 
 // ListModels 返回配置中的模型列表

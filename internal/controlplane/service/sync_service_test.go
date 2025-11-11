@@ -209,7 +209,7 @@ func TestConfirmSync_NoModelsToAdd(t *testing.T) {
 	providerID := uuid.New()
 
 	modelRepo := &MockModelRepo{
-		existsByNameFn: func(name string) (bool, error) {
+		existsByNameFn: func(name string, providerID uuid.UUID) (bool, error) {
 			return false, nil
 		},
 	}
@@ -286,7 +286,7 @@ func TestConfirmSync_RegistersNewModel(t *testing.T) {
 	providerID := uuid.New()
 
 	modelRepo := &MockModelRepo{
-		existsByNameFn: func(name string) (bool, error) {
+		existsByNameFn: func(name string, providerID uuid.UUID) (bool, error) {
 			return false, nil
 		},
 		createFn: func(m *model.Model) error {
@@ -355,7 +355,7 @@ func TestConfirmSync_LargeModelList(t *testing.T) {
 	registeredCount := 0
 
 	modelRepo := &MockModelRepo{
-		existsByNameFn: func(name string) (bool, error) {
+		existsByNameFn: func(name string, providerID uuid.UUID) (bool, error) {
 			return false, nil
 		},
 		createFn: func(m *model.Model) error {
@@ -455,7 +455,7 @@ func TestConfirmSync_ExistsCheckError(t *testing.T) {
 	providerID := uuid.New()
 
 	modelRepo := &MockModelRepo{
-		existsByNameFn: func(name string) (bool, error) {
+		existsByNameFn: func(name string, providerID uuid.UUID) (bool, error) {
 			return false, errors.New("database error")
 		},
 		createFn: func(m *model.Model) error {
@@ -484,7 +484,7 @@ func TestConfirmSync_ModelTypeInference(t *testing.T) {
 	var capturedModels []*model.Model
 
 	modelRepo := &MockModelRepo{
-		existsByNameFn: func(name string) (bool, error) {
+		existsByNameFn: func(name string, providerID uuid.UUID) (bool, error) {
 			return false, nil
 		},
 		createFn: func(m *model.Model) error {
@@ -519,7 +519,7 @@ func TestConfirmSync_ProviderIDAssignment(t *testing.T) {
 	var capturedModels []*model.Model
 
 	modelRepo := &MockModelRepo{
-		existsByNameFn: func(name string) (bool, error) {
+		existsByNameFn: func(name string, providerID uuid.UUID) (bool, error) {
 			return false, nil
 		},
 		createFn: func(m *model.Model) error {

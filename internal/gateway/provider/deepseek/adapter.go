@@ -53,13 +53,13 @@ func (a *Adapter) Name() string {
 // 注意：OpenAICompatChat 内部会通过 BuildRequestURL 追加 /chat/completions，
 // 因此此处只能传 BaseURL，不能再额外拼接路径，避免双路径 bug。
 func (a *Adapter) Chat(ctx context.Context, req *model.ChatCompletionRequest) (*model.ChatCompletionResponse, error) {
-	return provider.OpenAICompatChat(a.client, a.config.BaseURL, req, a.config.APIKey, a.vendorCfg, ToDeepSeekError)
+	return provider.OpenAICompatChatWithContext(ctx, a.client, a.config.BaseURL, req, a.config.APIKey, a.vendorCfg, ToDeepSeekError)
 }
 
 // ChatStream 流式调用，返回 chunk channel
 // DeepSeek 完全 OpenAI 兼容，支持 reasoning_content 字段
 func (a *Adapter) ChatStream(ctx context.Context, req *model.ChatCompletionRequest) (<-chan model.StreamChunk, error) {
-	return provider.OpenAICompatStream(a.client, a.config.BaseURL, req, a.config.APIKey, a.vendorCfg, ToDeepSeekError)
+	return provider.OpenAICompatStreamWithContext(ctx, a.client, a.config.BaseURL, req, a.config.APIKey, a.vendorCfg, ToDeepSeekError)
 }
 
 // ListModels 返回配置中的模型列表

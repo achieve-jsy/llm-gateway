@@ -49,12 +49,12 @@ func (a *Adapter) Name() string {
 // 注意：OpenAICompatChat 内部会通过 BuildRequestURL 追加 /chat/completions，
 // 因此 baseURL 只能传到 /v1，不能再额外拼 /chat/completions，避免双路径 bug。
 func (a *Adapter) Chat(ctx context.Context, req *model.ChatCompletionRequest) (*model.ChatCompletionResponse, error) {
-	return provider.OpenAICompatChat(a.client, a.config.Endpoint+"/v1", req, a.config.APIKey, a.vendorCfg, ToLiteLLMError)
+	return provider.OpenAICompatChatWithContext(ctx, a.client, a.config.Endpoint+"/v1", req, a.config.APIKey, a.vendorCfg, ToLiteLLMError)
 }
 
 // ChatStream 流式调用，返回 chunk channel
 func (a *Adapter) ChatStream(ctx context.Context, req *model.ChatCompletionRequest) (<-chan model.StreamChunk, error) {
-	return provider.OpenAICompatStream(a.client, a.config.Endpoint+"/v1", req, a.config.APIKey, a.vendorCfg, ToLiteLLMError)
+	return provider.OpenAICompatStreamWithContext(ctx, a.client, a.config.Endpoint+"/v1", req, a.config.APIKey, a.vendorCfg, ToLiteLLMError)
 }
 
 // ListModels 返回配置中的模型列表

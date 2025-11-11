@@ -104,7 +104,7 @@ var _ GroupServiceInterface = (*fakeGroupSvc)(nil)
 func newGroupRouter(svc GroupServiceInterface) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	h := NewGroupHandler(svc)
+	h := NewGroupHandler(svc, nil, nil)
 	r.GET("/api/v1/internal/groups", h.ListEnabledGroups)
 	r.GET("/api/v1/groups/defaults", h.GetDefaults)
 	r.POST("/api/v1/groups", h.Create)

@@ -21,7 +21,7 @@ type fakeModelSvc struct {
 	listFn              func(filter repository.ModelListFilter, page, pageSize int) ([]model.Model, int64, error)
 	updateFn            func(id uuid.UUID, input service.UpdateModelInput) (*model.Model, error)
 	deleteFn            func(id uuid.UUID) error
-	checkNameFn         func(name string) (bool, error)
+	checkNameFn         func(name string, providerID uuid.UUID) (bool, error)
 	createFromCatalogFn func(catalogID, providerID uuid.UUID, name string) (*model.Model, error)
 	resetOverrideFn     func(modelID uuid.UUID, field string) error
 	getModelFn          func(id uuid.UUID) (*model.Model, error)
@@ -54,9 +54,9 @@ func (f *fakeModelSvc) DeleteModel(id uuid.UUID) error {
 	}
 	return nil
 }
-func (f *fakeModelSvc) CheckModelName(name string) (bool, error) {
+func (f *fakeModelSvc) CheckModelName(name string, providerID uuid.UUID) (bool, error) {
 	if f.checkNameFn != nil {
-		return f.checkNameFn(name)
+		return f.checkNameFn(name, providerID)
 	}
 	return true, nil
 }
@@ -541,14 +541,15 @@ func TestModelHandler_UpdateModel_AdvancedFieldsForwardedToService(t *testing.T)
 // =============================================================================
 
 func TestModelHandler_CheckModelName_Available(t *testing.T) {
-	svc := &fakeModelSvc{checkNameFn: func(name string) (bool, error) {
+	pid := uuid.New()
+	svc := &fakeModelSvc{checkNameFn: func(name string, providerID uuid.UUID) (bool, error) {
 		assert.Equal(t, "gpt-5", name)
 		return true, nil
 	}}
 	r := newModelRouter(svc)
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/v1/models/check-name?name=gpt-5", nil)
+	req := httptest.NewRequest("GET", "/api/v1/models/check-name?name=gpt-5&provider_id="+pid.String(), nil)
 	r.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -559,10 +560,11 @@ func TestModelHandler_CheckModelName_Available(t *testing.T) {
 }
 
 func TestModelHandler_CheckModelName_NotAvailable(t *testing.T) {
-	svc := &fakeModelSvc{checkNameFn: func(string) (bool, error) { return false, nil }}
+	pid := uuid.New()
+	svc := &fakeModelSvc{checkNameFn: func(string, uuid.UUID) (bool, error) { return false, nil }}
 	r := newModelRouter(svc)
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/v1/models/check-name?name=gpt-4o", nil)
+	req := httptest.NewRequest("GET", "/api/v1/models/check-name?name=gpt-4o&provider_id="+pid.String(), nil)
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]map[string]bool
@@ -580,12 +582,13 @@ func TestModelHandler_CheckModelName_MissingName(t *testing.T) {
 }
 
 func TestModelHandler_CheckModelName_ServiceError(t *testing.T) {
-	svc := &fakeModelSvc{checkNameFn: func(string) (bool, error) {
+pid := uuid.New()
+	svc := &fakeModelSvc{checkNameFn: func(string, uuid.UUID) (bool, error) {
 		return false, errors.New("db down")
 	}}
 	r := newModelRouter(svc)
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/v1/models/check-name?name=foo", nil)
+	req := httptest.NewRequest("GET", "/api/v1/models/check-name?name=foo&provider_id="+pid.String(), nil)
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
@@ -593,10 +596,10 @@ func TestModelHandler_CheckModelName_ServiceError(t *testing.T) {
 // 防止 :id 通配路由抢占 check-name 静态路径的回归用例
 // （router.go 中必须 GET /models/check-name 在 PUT/DELETE /models/:id 之前注册）
 func TestModelHandler_CheckNameDoesNotCollideWithGetByID(t *testing.T) {
-	svc := &fakeModelSvc{checkNameFn: func(string) (bool, error) { return true, nil }}
+	svc := &fakeModelSvc{checkNameFn: func(string, uuid.UUID) (bool, error) { return true, nil }}
 	r := newModelRouter(svc)
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/v1/models/check-name?name=anything", nil)
+	req := httptest.NewRequest("GET", "/api/v1/models/check-name?name=anything&provider_id="+uuid.New().String(), nil)
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code, "/models/check-name 必须命中 CheckModelName 而非被 :id 吞掉")
 }

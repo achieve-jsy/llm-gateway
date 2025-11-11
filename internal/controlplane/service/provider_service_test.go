@@ -109,8 +109,8 @@ type MockModelRepo struct {
 	listFn                      func(filter repository.ModelListFilter, offset, limit int) ([]model.Model, int64, error)
 	updateFn                    func(m *model.Model) error
 	deleteFn                    func(id uuid.UUID) error
-	existsByNameFn              func(name string) (bool, error)
-	existsByNameExcludingFn     func(name string, excludeID uuid.UUID) (bool, error)
+	existsByNameFn              func(name string, providerID uuid.UUID) (bool, error)
+	existsByNameExcludingFn     func(name string, providerID uuid.UUID, excludeID uuid.UUID) (bool, error)
 	listAvailableFn             func() ([]model.Model, error)
 	resetOverrideFn             func(modelID uuid.UUID, field string) error
 	listByCatalogIDFn           func() ([]model.Model, error)
@@ -181,16 +181,16 @@ func (m *MockModelRepo) Delete(id uuid.UUID) error {
 	return nil
 }
 
-func (m *MockModelRepo) ExistsByName(name string) (bool, error) {
+func (m *MockModelRepo) ExistsByName(name string, providerID uuid.UUID) (bool, error) {
 	if m.existsByNameFn != nil {
-		return m.existsByNameFn(name)
+		return m.existsByNameFn(name, providerID)
 	}
 	return false, nil
 }
 
-func (m *MockModelRepo) ExistsByNameExcluding(name string, excludeID uuid.UUID) (bool, error) {
+func (m *MockModelRepo) ExistsByNameExcluding(name string, providerID uuid.UUID, excludeID uuid.UUID) (bool, error) {
 	if m.existsByNameExcludingFn != nil {
-		return m.existsByNameExcludingFn(name, excludeID)
+		return m.existsByNameExcludingFn(name, providerID, excludeID)
 	}
 	return false, nil
 }

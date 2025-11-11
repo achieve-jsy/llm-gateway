@@ -89,12 +89,12 @@ func (s *InternalService) GetModelHealth(names []string) (map[string]ModelHealth
 	return result, nil
 }
 
-// CheckModelNameExists 检查模型名称是否已存在（供前端实时校验）
-func (s *InternalService) CheckModelNameExists(name string, excludeID *uuid.UUID) (bool, error) {
+// CheckModelNameExists 检查模型名称在指定渠道下是否已存在（供前端实时校验）
+func (s *InternalService) CheckModelNameExists(name string, providerID uuid.UUID, excludeID *uuid.UUID) (bool, error) {
 	if excludeID != nil {
-		return s.modelRepo.ExistsByNameExcluding(name, *excludeID)
+		return s.modelRepo.ExistsByNameExcluding(name, providerID, *excludeID)
 	}
-	return s.modelRepo.ExistsByName(name)
+	return s.modelRepo.ExistsByName(name, providerID)
 }
 
 // GetProviderWithDecryptedCredentials 获取渠道含解密凭证（内部使用）

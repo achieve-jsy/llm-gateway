@@ -72,7 +72,7 @@
       <workItem from="1779351233934" duration="34050000" />
       <workItem from="1779674989691" duration="7547000" />
       <workItem from="1779700802756" duration="621000" />
-      <workItem from="1779789970209" duration="3521000" />
+      <workItem from="1779789970209" duration="5180000" />
     </task>
     <task id="LOCAL-00001" summary="feat(database): 初始化数据库迁移脚本并完善数据表结构&#10;&#10;- 删除废弃的变更元数据模板文件 .xflow/templates/_shared/change.yaml&#10;- 添加项目 UI 设计规范文档 docs/ui/ 目录结构和导航&#10;- 创建 10 个数据库迁移脚本，包括 providers/models/provider_definitions 表的基础结构&#10;- 添加 model_tags 标签系统、health_check 健康检测、encryption_keys 加密密钥管理等功能表&#10;- 补充 providers/models 表的权重、优先级、价格、上下文长度等完整业务字段&#10;- 完善 provider_definitions 表的厂商配置、协议差异、默认模型列表等扩展属性&#10;- 修复 AWS Bedrock 和 Azure OpenAI 的认证参数配置结构&#10;- 添加前端 Vue 组件缺失测试的基线快照报告 tests/reports/00-baseline.md&#10;- 添加 node_modules/ 到 .gitignore 文件">
       <option name="closed" value="true" />
@@ -162,7 +162,15 @@
       <option name="project" value="LOCAL" />
       <updated>1779800236380</updated>
     </task>
-    <option name="localTasksCounter" value="12" />
+    <task id="LOCAL-00012" summary="feat(scheduler): 添加内部令牌认证和健康状态过滤功能&#10;&#10;- 添加 InternalToken 配置项用于控制平面通信认证&#10;- 实现 ConfigSyncer 使用内部令牌进行 API 请求验证&#10;- 添加 slog 日志记录配置同步和路由调试信息&#10;- 改进 GroupHandler 支持 X-Internal-Token 头部认证&#10;- 扩展控制面响应数据结构兼容性转换逻辑&#10;- 实现模型仓库和提供商仓库依赖注入查询&#10;- 更新 GatewayNameCache 使用内部令牌认证&#10;- 移除 HealthStore 中无用的健康状态过滤逻辑&#10;- 完善路由器日志输出和错误处理机制&#10;- 优化模型加载检查条件避免空提供商情况&#10;- 更新 GroupModel 数据结构增加模型名称和渠道类型字段">
+      <option name="closed" value="true" />
+      <created>1779803459759</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1779803459759</updated>
+    </task>
+    <option name="localTasksCounter" value="13" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">

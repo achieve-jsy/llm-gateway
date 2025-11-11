@@ -169,7 +169,7 @@ deploy-web-test:
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   variables:
-    WEB_DIR: "/opt/llm-gateway/web-dist"
+    WEB_DIR: "/var/www/aimeter/dist"
   script:
     - |
       SSH_OPTS="-o StrictHostKeyChecking=no"

@@ -36,8 +36,12 @@ function scheduleRefresh(token: string, refreshFn: () => Promise<void>) {
 
   if (claims?.exp) {
     const nowSec = Math.floor(Date.now() / 1000)
-    delay = Math.max(0, (claims.exp - nowSec - 300) * 1000) // 过期前5分钟刷新
-    if (delay === 0) delay = DEFAULT_REFRESH_MS // 已过期或即将过期，直接刷新
+    const remaining = claims.exp - nowSec
+    if (remaining <= 300) {
+      delay = 0 // 已过期或即将过期，立即刷新
+    } else {
+      delay = (remaining - 300) * 1000 // 过期前5分钟刷新
+    }
   } else {
     delay = DEFAULT_REFRESH_MS
   }
@@ -85,8 +89,9 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function refresh() {
-    if (!refreshTokenValue.value) throw new Error('no refresh token')
-    const data = await refreshTokenApi(refreshTokenValue.value)
+    const currentRefreshToken = localStorage.getItem('refresh_token')
+    if (!currentRefreshToken) throw new Error('no refresh token')
+    const data = await refreshTokenApi(currentRefreshToken)
     accessToken.value = data.accessToken
     refreshTokenValue.value = data.refreshToken
     localStorage.setItem('access_token', data.accessToken)

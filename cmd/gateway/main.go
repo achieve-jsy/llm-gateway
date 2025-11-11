@@ -220,6 +220,20 @@ func buildProviderFactory() *providers.ProviderFactory {
 	factory.Add(providersgemini.Registration)
 	factory.Add(providersgroq.Registration)
 	factory.Add(providerslitellm.Registration)
+	// "openai-compatible" is the type name the Control Plane uses for generic
+	// self-hosted OpenAI-compatible endpoints (e.g. GoModel on :9050). Map it to
+	// the LiteLLM adapter, which is a generic OpenAI-compatible provider with a
+	// configurable base URL. Register the underscore variant too for safety.
+	factory.Add(providers.Registration{
+		Type:      "openai-compatible",
+		New:       providerslitellm.New,
+		Discovery: providerslitellm.Registration.Discovery,
+	})
+	factory.Add(providers.Registration{
+		Type:      "openai_compatible",
+		New:       providerslitellm.New,
+		Discovery: providerslitellm.Registration.Discovery,
+	})
 	factory.Add(providersminimax.Registration)
 	factory.Add(providersopenai.Registration)
 	factory.Add(providersopenrouter.Registration)

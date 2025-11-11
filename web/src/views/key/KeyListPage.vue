@@ -19,11 +19,11 @@
         </template>
       </el-table-column>
 
-      <el-table-column label="模型组" min-width="160">
+      <el-table-column label="我的模型" min-width="160">
         <template #default="{ row }">
           <div class="group-cell">
             <template v-if="row.accessAllGroups">
-              <el-tag size="small" type="success" style="margin-right:4px;margin-bottom:2px">万能模型组</el-tag>
+              <el-tag size="small" type="success" style="margin-right:4px;margin-bottom:2px">全部模型</el-tag>
             </template>
             <template v-else-if="row.boundGroups && row.boundGroups.length > 0">
               <el-tag
@@ -34,7 +34,7 @@
                 style="margin-right:4px;margin-bottom:2px"
               >{{ g.name }}</el-tag>
             </template>
-            <span v-else class="text-muted" style="margin-right:4px">无</span>
+            <span v-else class="text-muted" style="margin-right:4px">未分配</span>
             <el-button size="small" text type="primary" @click="openGroupDialog(row)">管理</el-button>
           </div>
         </template>
@@ -96,12 +96,12 @@
     />
 
     <!-- 组绑定管理弹窗 -->
-    <el-dialog v-model="showGroupDialog" title="管理模型组" width="500px" destroy-on-close @opened="loadGroupDialogData">
+    <el-dialog v-model="showGroupDialog" title="管理我的模型" width="500px" destroy-on-close @opened="loadGroupDialogData">
       <div v-if="editGroupKey">
         <div class="group-dialog-section">
-          <h4>当前已绑定</h4>
+          <h4>当前可用模型</h4>
           <template v-if="editGroupKey.accessAllGroups">
-            <el-tag size="large" type="success" closable @close="handleAccessAllToggle(false)">万能模型组</el-tag>
+            <el-tag size="large" type="success" closable @close="handleAccessAllToggle(false)">全部模型</el-tag>
           </template>
           <div v-if="!editGroupKey.accessAllGroups && editGroupKey.boundGroups && editGroupKey.boundGroups.length > 0" class="bound-tags">
             <el-tag
@@ -113,22 +113,22 @@
               @close="removeGroup(g)"
             >{{ g.name }}</el-tag>
           </div>
-          <span v-if="!editGroupKey.accessAllGroups && (!editGroupKey.boundGroups || editGroupKey.boundGroups.length === 0)" class="text-muted">未绑定任何模型组</span>
+          <span v-if="!editGroupKey.accessAllGroups && (!editGroupKey.boundGroups || editGroupKey.boundGroups.length === 0)" class="text-muted">未分配任何模型</span>
         </div>
         <div class="group-dialog-section">
-          <h4>添加模型组</h4>
+          <h4>添加模型</h4>
           <el-select
             v-model="addGroupIds"
             multiple
             filterable
-            placeholder="选择要添加的模型组"
+            placeholder="选择要添加的模型"
             style="width:100%"
             :loading="groupLoading"
             @change="handleAddGroupChange"
           >
             <el-option
               key="__all__"
-              label="万能模型组（所有模型）"
+              label="全部模型（不限制）"
               value="__all__"
               :disabled="editGroupKey.accessAllGroups"
             />
@@ -370,7 +370,7 @@ async function loadGroupDialogData() {
     const boundIds = new Set((editGroupKey.value?.boundGroups || []).map((g: BoundGroupInfo) => g.id))
     availableAddGroups.value = all.filter((g: AvailableGroup) => !boundIds.has(g.id))
   } catch {
-    ElMessage.error('加载模型组列表失败')
+    ElMessage.error('加载可用模型列表失败')
   } finally {
     groupLoading.value = false
   }
@@ -425,7 +425,7 @@ async function saveGroupChanges() {
     if (add.length > 0 || remove.length > 0) {
       await updateKeyGroups(editGroupKey.value.id, add, remove)
     }
-    ElMessage.success('模型组已更新')
+    ElMessage.success('我的模型已更新')
     showGroupDialog.value = false
     await loadKeys()
   } catch (e: any) {

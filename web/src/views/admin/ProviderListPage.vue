@@ -39,11 +39,6 @@
             :value="tag"
           />
         </el-select>
-        <el-tooltip content="检测设置" placement="top">
-          <el-button text type="info" @click="healthCheckSettingsVisible = true">
-            <el-icon :size="18"><Setting /></el-icon>
-          </el-button>
-        </el-tooltip>
         <el-button type="primary" @click="openCreateDialog">新建渠道</el-button>
       </div>
     </div>
@@ -102,43 +97,7 @@
         <template #default="{ row }">
           <el-tag v-if="row.status === ProviderStatus.ENABLED" type="success" size="small">启用</el-tag>
           <el-tag v-else-if="row.status === ProviderStatus.MANUALLY_DISABLED" type="info" size="small">已禁用</el-tag>
-          <el-tag v-else-if="row.status === ProviderStatus.AUTO_DISABLED" type="danger" size="small">自动禁用</el-tag>
           <el-tag v-else type="info" size="small">未知</el-tag>
-        </template>
-      </el-table-column>
-
-      <el-table-column label="健康" width="160" align="center">
-        <template #default="{ row }">
-          <div class="health-cell">
-            <template v-if="row.status === 3">
-              <el-tooltip :content="row.last_check_error || '连续失败达阈值'" placement="top">
-                <div class="health-inner">
-                  <span class="health-dot health-error"></span>
-                  <span class="health-text health-error-text">{{ shortenError(row.last_check_error) || '异常' }} {{ row.consecutive_failures }}/3</span>
-                </div>
-              </el-tooltip>
-            </template>
-            <template v-else-if="row.consecutive_failures > 0">
-              <el-tooltip :content="row.last_check_error || '检测失败'" placement="top">
-                <div class="health-inner">
-                  <span class="health-dot health-warn"></span>
-                  <span class="health-text health-warn-text">{{ shortenError(row.last_check_error) || '检测失败' }} {{ row.consecutive_failures }}/3</span>
-                </div>
-              </el-tooltip>
-            </template>
-            <template v-else-if="row.response_time > 0">
-              <div class="health-inner">
-                <span class="health-dot health-ok"></span>
-                <span class="health-text health-ok-text">{{ row.response_time }}ms</span>
-              </div>
-            </template>
-            <template v-else>
-              <div class="health-inner">
-                <span class="health-dot health-unknown"></span>
-                <span class="health-text text-muted">未检测</span>
-              </div>
-            </template>
-          </div>
         </template>
       </el-table-column>
 
@@ -202,10 +161,9 @@
         </template>
       </el-table-column>
 
-      <el-table-column label="操作" width="260" align="center">
+      <el-table-column label="操作" width="200" align="center">
         <template #default="{ row }">
           <el-button text type="primary" size="small" @click="openEditDialog(row)">编辑</el-button>
-          <el-button text type="warning" size="small" :loading="testingId === row.id" @click="handleTest(row)">测试</el-button>
           <el-button
             text
             type="primary"
@@ -214,14 +172,6 @@
             @click="handleSync(row)"
           >
             同步
-          </el-button>
-          <el-button
-            text
-            :type="row.status === ProviderStatus.ENABLED ? 'info' : 'success'"
-            size="small"
-            @click="handleToggle(row)"
-          >
-            {{ row.status === ProviderStatus.ENABLED ? '禁用' : '启用' }}
           </el-button>
           <el-popconfirm
             title="确定删除该渠道？"
@@ -268,27 +218,19 @@
       @saved="onSyncSaved"
     />
 
-    <!-- 健康检测设置对话框 -->
-    <HealthCheckSettingsDialog
-      :visible="healthCheckSettingsVisible"
-      @close="healthCheckSettingsVisible = false"
-      @saved="onHealthCheckSettingsSaved"
-    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Setting, Lock, Key } from '@element-plus/icons-vue'
+import { Lock, Key } from '@element-plus/icons-vue'
 import {
   getProviders,
   getProviderDefinitions,
   deleteProvider,
-  toggleProviderStatus,
   updateProvider,
   syncModels,
-  checkProvider,
 } from '@/services/control-plane'
 import { resolveErrorMessage } from '@/services/http'
 import type { Provider, ProviderDefinition } from '@/types/provider'
@@ -296,7 +238,6 @@ import { ProviderStatus } from '@/types/provider'
 import type { SyncResult } from '@/types/sync'
 import ProviderDialog from '@/components/admin/ProviderDialog.vue'
 import SyncModelsDialog from '@/components/admin/SyncModelsDialog.vue'
-import HealthCheckSettingsDialog from '@/components/admin/HealthCheckSettingsDialog.vue'
 
 const providers = ref<Provider[]>([])
 const definitions = ref<ProviderDefinition[]>([])
@@ -307,7 +248,6 @@ const filterDefinition = ref('')
 const currentPage = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
-const testingId = ref('')
 
 const dialogVisible = ref(false)
 const editingProvider = ref<Provider | null>(null)
@@ -318,7 +258,6 @@ const syncProviderName = ref('')
 const syncResult = ref<SyncResult | null>(null)
 const syncingId = ref('')
 
-const healthCheckSettingsVisible = ref(false)
 /** 从分页结果中提取标签选项（消除重复 fetch 全量渠道的 N+1） */
 function extractTagOptionsFromProviders(list: Provider[]) {
   const tags = new Set<string>()
@@ -394,29 +333,6 @@ function formatDateTime(value: string): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
-/** 响应时间样式 */
-function responseTimeClass(ms: number): string {
-  if (ms < 500) return 'rt-good'
-  if (ms < 2000) return 'rt-warn'
-  return 'rt-bad'
-}
-
-/** 缩短错误信息为关键词 */
-function shortenError(error: string): string {
-  if (!error) return ''
-  const lower = error.toLowerCase()
-  if (lower.includes('timeout') || lower.includes('超时')) return '连接超时'
-  if (lower.includes('401') || lower.includes('unauthorized') || lower.includes('invalid key')) return 'Key无效'
-  if (lower.includes('403') || lower.includes('forbidden')) return '无权限'
-  if (lower.includes('404') || lower.includes('not found')) return '地址无效'
-  if (lower.includes('connect') || lower.includes('dial') || lower.includes('refused')) return '连接失败'
-  if (lower.includes('dns') || lower.includes('no such host')) return 'DNS解析失败'
-  if (lower.includes('502') || lower.includes('bad gateway')) return '上游异常'
-  if (lower.includes('503') || lower.includes('unavailable')) return '服务不可用'
-  if (lower.includes('model')) return '模型不可用'
-  // 截取前 10 个字符
-  return error.length > 10 ? error.slice(0, 10) + '...' : error
-}
 
 /** 筛选变化 */
 function handleFilterChange() {
@@ -424,41 +340,6 @@ function handleFilterChange() {
   applyFilter()
 }
 
-/** 切换启用/禁用状态 */
-async function handleToggle(row: Provider) {
-  const shouldEnable = row.status !== ProviderStatus.ENABLED
-  try {
-    await toggleProviderStatus(row.id, shouldEnable)
-    ElMessage.success(shouldEnable ? '已启用' : '已禁用')
-    loadProviders()
-  } catch {
-    // 错误由全局拦截器统一处理
-  }
-}
-
-/** 测试渠道（连通性 + 转发） */
-async function handleTest(row: Provider) {
-  testingId.value = row.id
-  try {
-    const result = await checkProvider(row.id)
-    if (result.success) {
-      row.response_time = result.response_time
-      ElMessage.success(`检测成功，响应 ${result.response_time}ms`)
-    } else {
-      const errMsg = result.error || '未知错误'
-      if (result.auto_disabled) {
-        ElMessage.error(`检测失败：${errMsg}（已自动禁用）`)
-        loadProviders()
-      } else {
-        ElMessage.error(`检测失败：${errMsg}`)
-      }
-    }
-  } catch {
-    ElMessage.error('检测请求异常，请检查网络')
-  } finally {
-    testingId.value = ''
-  }
-}
 
 /** 同步模型 */
 async function handleSync(row: Provider) {
@@ -491,11 +372,6 @@ function onSyncSaved() {
   loadProviders()
 }
 
-/** 检测设置保存成功 */
-function onHealthCheckSettingsSaved() {
-  healthCheckSettingsVisible.value = false
-  loadProviders()
-}
 
 /** 行内编辑优先级/权重 */
 async function handleInlineUpdate(row: Provider) {
@@ -602,20 +478,6 @@ onMounted(() => {
   color: var(--el-text-color-secondary);
 }
 
-.rt-good {
-  color: #67C23A;
-  font-weight: 500;
-}
-
-.rt-warn {
-  color: #E6A23C;
-  font-weight: 500;
-}
-
-.rt-bad {
-  color: #F56C6C;
-  font-weight: 500;
-}
 
 .pagination-wrapper {
   display: flex;
@@ -636,39 +498,6 @@ onMounted(() => {
   }
 }
 
-.health-cell {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.health-inner {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: default;
-}
-
-.health-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.health-ok { background: #27AE60; }
-.health-warn { background: #EAB308; }
-.health-error { background: #E74C3C; }
-.health-unknown { background: #CBD5E1; }
-
-.health-text {
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.health-ok-text { color: #27AE60; }
-.health-warn-text { color: #EAB308; }
-.health-error-text { color: #E74C3C; }
 
 .cred-tags {
   display: flex;

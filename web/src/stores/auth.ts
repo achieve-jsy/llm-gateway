@@ -31,7 +31,7 @@ let refreshTimer: ReturnType<typeof setTimeout> | null = null
 function scheduleRefresh(token: string, refreshFn: () => Promise<void>) {
   clearRefreshTimer()
   const claims = parseJWT(token)
-  const DEFAULT_REFRESH_MS = 25 * 60 * 1000
+  const DEFAULT_REFRESH_MS = 23 * 60 * 60 * 1000
   let delay: number
 
   if (claims?.exp) {

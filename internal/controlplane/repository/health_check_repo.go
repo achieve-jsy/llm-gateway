@@ -164,6 +164,7 @@ func (r *HealthCheckRepo) GetTimelineBuckets(since time.Time, search string, buc
 		WHERE checked_at >= ?
 		  AND target_type = 'model'
 		  AND (? = '' OR target_name ILIKE ?)
+		  AND target_name IN (SELECT DISTINCT name FROM models WHERE enabled = true)
 		GROUP BY target_name, target_type, bucket_idx
 		ORDER BY target_name, bucket_idx
 	`, since, bucketMs, since, searchPattern, searchPattern).Scan(&rows).Error
@@ -190,7 +191,7 @@ func (r *HealthCheckRepo) GetTimelineBuckets(since time.Time, search string, buc
 		r.db.Raw(`
 			SELECT name, COUNT(DISTINCT provider_id)::int AS provider_count
 			FROM models
-			WHERE name IN ?
+			WHERE name IN ? AND enabled = true
 			GROUP BY name
 		`, names).Scan(&provRows)
 	}

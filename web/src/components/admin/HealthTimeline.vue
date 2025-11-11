@@ -51,20 +51,29 @@ const segments = computed(() => {
     const i = Math.floor((new Date(e.checked_at).getTime() - start) / perGrid)
     if (i >= 0 && i < GRID) buckets[i].push(e)
   }
+  let lastKnown: { colorClass: string; success: boolean } | null = null
   return buckets.map((cell, i) => {
     const ts = new Date(start + i * perGrid)
-    if (cell.length === 0) return { colorClass: 'cell-empty', tooltip: `${fmt(ts)}\n暂无检测数据` }
+    if (cell.length === 0) {
+      if (lastKnown) {
+        return { colorClass: lastKnown.colorClass, tooltip: `${fmt(ts)}\n延续上次状态（无新检测）` }
+      }
+      return { colorClass: 'cell-empty', tooltip: `${fmt(ts)}\n暂无检测数据` }
+    }
     if (cell.length === 1) {
       const e = cell[0]
+      const cls = e.success ? 'cell-ok' : 'cell-err'
+      lastKnown = { colorClass: cls, success: e.success }
       return {
-        colorClass: e.success ? 'cell-ok' : 'cell-err',
+        colorClass: cls,
         tooltip: `${fmt(new Date(e.checked_at))}\n${e.success ? '成功' : '失败'} • ${e.response_time_ms}ms${e.error_message ? ' • ' + e.error_message : ''}`
       }
     }
     const ok = cell.filter(e => e.success).length
     const fail = cell.length - ok
-    const icon = fail > ok ? 'cell-err' : ok > fail ? 'cell-ok' : 'cell-warn'
-    return { colorClass: icon, tooltip: `${fmt(new Date(cell[0].checked_at))}\n共${cell.length}次\n成功:${ok} 失败:${fail}` }
+    const cls = fail > ok ? 'cell-err' : ok > fail ? 'cell-ok' : 'cell-warn'
+    lastKnown = { colorClass: cls, success: fail === 0 }
+    return { colorClass: cls, tooltip: `${fmt(new Date(cell[0].checked_at))}\n共${cell.length}次\n成功:${ok} 失败:${fail}` }
   })
 })
 

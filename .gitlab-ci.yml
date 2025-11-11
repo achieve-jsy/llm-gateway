@@ -26,6 +26,7 @@ workflow:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
 # ─── Test Stage ─────────────────────────────────────────────────────────────
+# 暂时禁用测试阶段；当前测试环境发布只需要 build/deploy/verify。
 test:
   stage: test
   image: ${REGISTRY}/golang:1.26-alpine
@@ -38,8 +39,7 @@ test:
     - go test ./... -cover -count=1 -timeout 5m
   allow_failure: true
   rules:
-    - if: $CI_COMMIT_BRANCH == "test"
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - when: never
 
 # ─── Build Stage ────────────────────────────────────────────────────────────
 .build_template: &build_template

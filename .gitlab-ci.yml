@@ -169,7 +169,7 @@ deploy-web-test:
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   variables:
-    WEB_DIR: "/var/www/aimeter/dist"
+    WEB_DIR: "/data/web/aimeter/dist"
   script:
     - |
       SSH_OPTS="-o StrictHostKeyChecking=no"
@@ -209,7 +209,7 @@ deploy-web-prod:
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   variables:
-    WEB_DIR: "/var/www/aimeter/dist"
+    WEB_DIR: "/data/web/aimeter/dist"
   script:
     - echo "TODO - 生产前端部署脚本待配置"
   dependencies:

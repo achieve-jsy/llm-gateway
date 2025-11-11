@@ -41,7 +41,11 @@ import (
 	providersminimax "github.com/example/llm-gateway/internal/providers/minimax"
 	providersopenai "github.com/example/llm-gateway/internal/providers/openai"
 	providersopenrouter "github.com/example/llm-gateway/internal/providers/openrouter"
+	providersollama "github.com/example/llm-gateway/internal/providers/ollama"
+	providersoracle "github.com/example/llm-gateway/internal/providers/oracle"
+	providersvertex "github.com/example/llm-gateway/internal/providers/vertex"
 	providersvllm "github.com/example/llm-gateway/internal/providers/vllm"
+	providersxai "github.com/example/llm-gateway/internal/providers/xai"
 	providerszai "github.com/example/llm-gateway/internal/providers/zai"
 
 	"github.com/redis/go-redis/v9"
@@ -219,7 +223,11 @@ func buildProviderFactory() *providers.ProviderFactory {
 	factory.Add(providersminimax.Registration)
 	factory.Add(providersopenai.Registration)
 	factory.Add(providersopenrouter.Registration)
+	factory.Add(providersollama.Registration)
+	factory.Add(providersoracle.Registration)
+	factory.Add(providersvertex.Registration)
 	factory.Add(providersvllm.Registration)
+	factory.Add(providersxai.Registration)
 	factory.Add(providerszai.Registration)
 
 	return factory

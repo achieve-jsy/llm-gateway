@@ -4,6 +4,7 @@ package httpclient
 import (
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"time"
@@ -86,7 +87,7 @@ func NewHTTPClient(config *ClientConfig) *http.Client {
 	}
 
 	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
+		Proxy: proxyFunc(),
 		DialContext: (&net.Dialer{
 			Timeout:   config.DialTimeout,
 			KeepAlive: config.KeepAlive,
@@ -110,4 +111,24 @@ func NewHTTPClient(config *ClientConfig) *http.Client {
 // This is a convenience function equivalent to NewHTTPClient(nil).
 func NewDefaultHTTPClient() *http.Client {
 	return NewHTTPClient(nil)
+}
+
+// proxyFunc returns the proxy function for LLM outbound requests.
+//
+// Priority:
+//  1. LLM_PROXY env var — a fixed proxy URL used only for LLM API requests,
+//     e.g. LLM_PROXY=http://user:pass@192.0.2.10:18080
+//     This does NOT affect any other HTTP clients in the process (auth, control-plane, etc.)
+//  2. Falls back to http.ProxyFromEnvironment (HTTP_PROXY / HTTPS_PROXY / NO_PROXY)
+//     when LLM_PROXY is not set.
+func proxyFunc() func(*http.Request) (*url.URL, error) {
+	raw := os.Getenv("LLM_PROXY")
+	if raw == "" {
+		return http.ProxyFromEnvironment
+	}
+	proxyURL, err := url.Parse(raw)
+	if err != nil || proxyURL.Host == "" {
+		return http.ProxyFromEnvironment
+	}
+	return http.ProxyURL(proxyURL)
 }

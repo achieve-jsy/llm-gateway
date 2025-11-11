@@ -11,14 +11,38 @@ import (
 )
 
 // ProbeModelForward 用最小请求探测模型可用性。
+// modelType 对应 models.model_type 字段，决定使用哪个探针接口。
 //
 // 返回值：
 //   - success=true: 检测成功
-//   - skipped=true: 当前模型类型不适合用 chat/completions 通用探针，跳过且不计失败
-func ProbeModelForward(ctx context.Context, endpoint, modelName, apiKey string) (success bool, skipped bool, responseTime int, errMsg string) {
-	endpoint = strings.TrimRight(endpoint, "/") + "/chat/completions"
+//   - skipped=true: 当前模型类型不适合通用探针，跳过且不计失败
+func ProbeModelForward(ctx context.Context, endpoint, modelName, apiKey, modelType string) (success bool, skipped bool, responseTime int, errMsg string) {
+	lower := strings.ToLower(strings.TrimSpace(modelType))
 
-	// 默认先用标准非流式 chat 探针。
+	switch {
+	case strings.Contains(lower, "embed"):
+		return probeEmbedding(ctx, endpoint, modelName, apiKey)
+
+	case lower == "image_generation" || lower == "image":
+		return probeImageGeneration(ctx, endpoint, modelName, apiKey)
+
+	case lower == "rerank":
+		return probeRerank(ctx, endpoint, modelName, apiKey)
+
+	case lower == "audio_transcription" || lower == "audio_speech" || lower == "audio":
+		// 音频类模型需要上传文件，无法用轻量探针，直接跳过
+		return false, true, 0, "audio model: skipped"
+
+	default:
+		// chat / completion / reasoning / 未知类型 → 走 /chat/completions
+		return probeChatCompletion(ctx, endpoint, modelName, apiKey)
+	}
+}
+
+// probeChatCompletion POST /chat/completions，适用于 chat/reasoning 模型
+func probeChatCompletion(ctx context.Context, endpoint, modelName, apiKey string) (bool, bool, int, string) {
+	chatEndpoint := strings.TrimRight(endpoint, "/") + "/chat/completions"
+
 	baseReq := map[string]interface{}{
 		"model":           modelName,
 		"messages":        []map[string]string{{"role": "user", "content": "hi"}},
@@ -26,42 +50,93 @@ func ProbeModelForward(ctx context.Context, endpoint, modelName, apiKey string) 
 		"enable_thinking": false,
 	}
 
-	success, responseTime, errMsg = doProbeRequest(ctx, endpoint, apiKey, baseReq, false)
+	success, elapsed, errMsg := doProbeRequest(ctx, chatEndpoint, apiKey, baseReq, false)
 	if success {
-		return true, false, responseTime, ""
+		return true, false, elapsed, ""
 	}
 
 	lower := strings.ToLower(errMsg)
 
-	// Qwen thinking 类模型要求 enable_thinking=true。
+	// Qwen thinking 类模型要求 enable_thinking=true
 	if strings.Contains(lower, "enable_thinking") && strings.Contains(lower, "true") {
 		thinkingReq := cloneProbeRequest(baseReq)
 		thinkingReq["enable_thinking"] = true
-		thinkingReq["max_tokens"] = 10
-		ok, elapsed, thinkingErr := doProbeRequest(ctx, endpoint, apiKey, thinkingReq, false)
+		ok, t, thinkingErr := doProbeRequest(ctx, chatEndpoint, apiKey, thinkingReq, false)
 		if ok {
-			return true, false, elapsed, ""
+			return true, false, t, ""
 		}
-		return false, false, elapsed, thinkingErr
+		return false, false, t, thinkingErr
 	}
 
-	// 某些模型仅支持 stream 模式。
+	// 某些模型仅支持 stream 模式
 	if strings.Contains(lower, "only support stream mode") || strings.Contains(lower, "stream mode") {
 		streamReq := cloneProbeRequest(baseReq)
 		streamReq["stream"] = true
-		ok, elapsed, streamErr := doProbeRequest(ctx, endpoint, apiKey, streamReq, true)
+		ok, t, streamErr := doProbeRequest(ctx, chatEndpoint, apiKey, streamReq, true)
 		if ok {
-			return true, false, elapsed, ""
+			return true, false, t, ""
 		}
-		return false, false, elapsed, streamErr
+		return false, false, t, streamErr
 	}
 
-	// 这些错误说明模型不是标准 chat 模型，跳过而不是记失败。
+	// 不兼容错误 → skipped
 	if isIncompatibleProbeError(lower) {
-		return false, true, responseTime, errMsg
+		return false, true, elapsed, errMsg
 	}
 
-	return false, false, responseTime, errMsg
+	return false, false, elapsed, errMsg
+}
+
+// probeEmbedding POST /embeddings，适用于 embedding 模型
+func probeEmbedding(ctx context.Context, endpoint, modelName, apiKey string) (bool, bool, int, string) {
+	embEndpoint := strings.TrimRight(endpoint, "/") + "/embeddings"
+
+	req := map[string]interface{}{
+		"model": modelName,
+		"input": "test",
+	}
+
+	success, elapsed, errMsg := doProbeRequest(ctx, embEndpoint, apiKey, req, false)
+	if success {
+		return true, false, elapsed, ""
+	}
+	return false, false, elapsed, errMsg
+}
+
+// probeImageGeneration POST /images/generations，适用于图像生成模型
+func probeImageGeneration(ctx context.Context, endpoint, modelName, apiKey string) (bool, bool, int, string) {
+	imgEndpoint := strings.TrimRight(endpoint, "/") + "/images/generations"
+
+	req := map[string]interface{}{
+		"model":  modelName,
+		"prompt": "a cat",
+		"n":      1,
+		"size":   "256x256",
+	}
+
+	success, elapsed, errMsg := doProbeRequest(ctx, imgEndpoint, apiKey, req, false)
+	if success {
+		return true, false, elapsed, ""
+	}
+	return false, false, elapsed, errMsg
+}
+
+// probeRerank POST /rerank，适用于重排序模型
+func probeRerank(ctx context.Context, endpoint, modelName, apiKey string) (bool, bool, int, string) {
+	rerankEndpoint := strings.TrimRight(endpoint, "/") + "/rerank"
+
+	req := map[string]interface{}{
+		"model":     modelName,
+		"query":     "test",
+		"documents": []string{"hello world"},
+		"top_n":     1,
+	}
+
+	success, elapsed, errMsg := doProbeRequest(ctx, rerankEndpoint, apiKey, req, false)
+	if success {
+		return true, false, elapsed, ""
+	}
+	return false, false, elapsed, errMsg
 }
 
 func cloneProbeRequest(src map[string]interface{}) map[string]interface{} {
@@ -93,28 +168,21 @@ func doProbeRequest(ctx context.Context, endpoint, apiKey string, payload map[st
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
+
+	// 非 2xx 明确失败
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return false, elapsed, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, truncateProbeString(string(respBody), 200))
 	}
 
 	if streamMode {
-		// SSE 场景只要返回 2xx 且 body 非空即可认为模型支持该模式。
 		if len(respBody) == 0 {
 			return false, elapsed, "stream 响应体为空"
 		}
 		return true, elapsed, ""
 	}
 
-	var chatResp struct {
-		Choices []interface{} `json:"choices"`
-	}
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return false, elapsed, fmt.Sprintf("响应体解析失败: %v", err)
-	}
-	if len(chatResp.Choices) == 0 {
-		return false, elapsed, "响应 choices 为空"
-	}
-
+	// HTTP 2xx 即成功，不检查响应内容格式
+	// reasoning/thinking 模型 choices 为空也算通过，参考 GoModel 设计
 	return true, elapsed, ""
 }
 

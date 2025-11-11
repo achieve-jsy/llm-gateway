@@ -182,7 +182,7 @@ func (h *SyncHandler) CheckModels(c *gin.Context) {
 			defer func() { <-sem }()
 
 			success, skipped, responseTime, errMsg := cpservice.ProbeModelForward(
-				context.Background(), provider.Endpoint, modelName, apiKey,
+				context.Background(), provider.Endpoint, modelName, apiKey, "chat",
 			)
 
 			item := ModelAvailabilityItem{

@@ -9,6 +9,7 @@ import (
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/errormap"
 	"github.com/example/llm-gateway/internal/gateway/model"
+	"github.com/example/llm-gateway/internal/streaming"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -17,6 +18,7 @@ import (
 
 // ChatStream 执行流式聊天调用
 // 返回 io.ReadCloser（原始 SSE 字节流），调用方负责关闭。
+// 流被 ObservedSSEStream 包装，旁路解析每个 SSE chunk 并写入 OTel span（chunk 计数）。
 func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest) (io.ReadCloser, error) {
 	tracer := otel.Tracer("llm-gateway/orchestrator")
 
@@ -29,7 +31,7 @@ func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest
 		return nil, model.ErrModelNotFound
 	}
 
-	// 创建上游流式调用 span
+	// 创建上游流式调用 span（在流关闭时由 OTelObserver 写入 chunk 计数）
 	ctx, span := tracer.Start(ctx, "upstream.chat_stream",
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(
@@ -48,7 +50,7 @@ func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest
 	start := time.Now()
 
 	// 通过 Router 获取流
-	stream, err := router.StreamChatCompletion(ctx, req)
+	rawStream, err := router.StreamChatCompletion(ctx, req)
 	if err != nil {
 		elapsed := time.Since(start)
 		span.RecordError(err)
@@ -70,15 +72,26 @@ func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest
 	)
 
 	span.SetStatus(codes.Ok, "")
-	span.End()
 
 	// 将流式标记写回 Gin context 供 Logger 使用
 	if gc := ginContextFrom(ctx); gc != nil {
 		gc.Set("stream", true)
 	}
 
-	// Wrap stream so the context cancel fires when the stream is closed.
-	return &cancelOnCloseStream{ReadCloser: stream, cancel: cancel}, nil
+	// 用 ObservedSSEStream 包装原始流：
+	//   - 字节流原样透传给客户端（零拷贝，不影响主链路）
+	//   - OTelObserver 旁路统计 chunk 数量，流关闭时写入 span
+	otelObserver := streaming.NewOTelObserver(span)
+	observed := streaming.NewObservedSSEStream(rawStream, otelObserver)
+
+	// cancelOnCloseStream 确保流关闭时同步取消 context + 结束 span
+	return &cancelOnCloseStream{
+		ReadCloser: observed,
+		cancel: func() {
+			span.End()
+			cancel()
+		},
+	}, nil
 }
 
 // cancelOnCloseStream wraps an io.ReadCloser and cancels the associated

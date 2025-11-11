@@ -26,7 +26,7 @@ func (s *TokenService) SignTokenPair(userID, role string) (string, string, error
 		"user_id": userID,
 		"role":    role,
 		"iat":     now.Unix(),
-		"exp":     now.Add(30 * time.Minute).Unix(),
+		"exp":     now.Add(24 * time.Hour).Unix(),
 		"jti":     uuid.NewString(),
 	}
 	refreshClaims := jwt.MapClaims{

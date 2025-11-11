@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/example/llm-gateway/internal/gateway/model"
+	"github.com/example/llm-gateway/internal/core"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -16,8 +16,8 @@ type Cache struct {
 }
 
 type modelListCacheEnvelope struct {
-	Version int64            `json:"version"`
-	Data    []model.ModelInfo `json:"data"`
+	Version int64        `json:"version"`
+	Data    []core.Model `json:"data"`
 }
 
 // NewCache 创建 Cache 实例
@@ -39,13 +39,13 @@ const (
 )
 
 // GetModelList 获取模型列表缓存
-func (c *Cache) GetModelList(ctx context.Context) ([]model.ModelInfo, error) {
+func (c *Cache) GetModelList(ctx context.Context) ([]core.Model, error) {
 	models, _, err := c.GetModelListWithVersion(ctx)
 	return models, err
 }
 
 // GetModelListWithVersion 获取模型列表缓存及其绑定的 snapshot version。
-func (c *Cache) GetModelListWithVersion(ctx context.Context) ([]model.ModelInfo, int64, error) {
+func (c *Cache) GetModelListWithVersion(ctx context.Context) ([]core.Model, int64, error) {
 	data, err := c.rdb.Get(ctx, modelListCacheKey).Bytes()
 	if err == redis.Nil {
 		return nil, 0, nil // cache miss
@@ -59,7 +59,7 @@ func (c *Cache) GetModelListWithVersion(ctx context.Context) ([]model.ModelInfo,
 		return envelope.Data, envelope.Version, nil
 	}
 
-	var models []model.ModelInfo
+	var models []core.Model
 	if err := json.Unmarshal(data, &models); err != nil {
 		return nil, 0, fmt.Errorf("unmarshal model list: %w", err)
 	}
@@ -67,12 +67,12 @@ func (c *Cache) GetModelListWithVersion(ctx context.Context) ([]model.ModelInfo,
 }
 
 // SetModelList 设置模型列表缓存
-func (c *Cache) SetModelList(ctx context.Context, models []model.ModelInfo) error {
+func (c *Cache) SetModelList(ctx context.Context, models []core.Model) error {
 	return c.SetModelListWithVersion(ctx, models, 0)
 }
 
 // SetModelListWithVersion 设置模型列表缓存，并绑定 provider snapshot version。
-func (c *Cache) SetModelListWithVersion(ctx context.Context, models []model.ModelInfo, version int64) error {
+func (c *Cache) SetModelListWithVersion(ctx context.Context, models []core.Model, version int64) error {
 	data, err := json.Marshal(modelListCacheEnvelope{Version: version, Data: models})
 	if err != nil {
 		return fmt.Errorf("marshal model list: %w", err)

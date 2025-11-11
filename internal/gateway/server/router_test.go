@@ -21,8 +21,9 @@ func TestMain(m *testing.M) {
 }
 
 // buildTestRouter returns a real gin.Engine via Setup with minimal in-memory stubs.
+// A nil providers.Router is used (no providers loaded), which is valid for route
+// registration and auth smoke tests.
 func buildTestRouter() *gin.Engine {
-	registry := provider.NewRegistry()
 	mr, err := miniredis.Run()
 	if err != nil {
 		panic(err)
@@ -30,7 +31,8 @@ func buildTestRouter() *gin.Engine {
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	cache := infra.NewCache(rdb)
 	state := &provider.RuntimeState{}
-	return Setup(registry, cache, state, nil, "", "", nil, nil)
+	// Pass nil router – the gateway starts in a degraded (no-model) state.
+	return Setup(nil, cache, state, nil, "", "", nil, nil)
 }
 
 // ─── Route Registration ────────────────────────────────────────────────────
@@ -55,6 +57,11 @@ func TestSetup_ModelsRoute_Registered(t *testing.T) {
 	assertRouteExists(t, r.Routes(), "GET", "/v1/models")
 }
 
+func TestSetup_EmbeddingsRoute_Registered(t *testing.T) {
+	r := buildTestRouter()
+	assertRouteExists(t, r.Routes(), "POST", "/v1/embeddings")
+}
+
 func TestSetup_AllExpectedRoutes_Registered(t *testing.T) {
 	r := buildTestRouter()
 	routes := r.Routes()
@@ -63,6 +70,7 @@ func TestSetup_AllExpectedRoutes_Registered(t *testing.T) {
 		{"GET", "/health"},
 		{"GET", "/ready"},
 		{"POST", "/v1/chat/completions"},
+		{"POST", "/v1/embeddings"},
 		{"GET", "/v1/models"},
 	}
 	for _, w := range want {
@@ -84,7 +92,7 @@ func TestSetup_HealthEndpoint_Returns200(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
-func TestSetup_ReadyEndpoint_Returns200(t *testing.T) {
+func TestSetup_ReadyEndpoint_Returns503_WhenNoModels(t *testing.T) {
 	srv := httptest.NewServer(buildTestRouter())
 	defer srv.Close()
 
@@ -113,6 +121,19 @@ func TestSetup_Models_WithoutAuth_Returns401(t *testing.T) {
 	defer srv.Close()
 
 	req, _ := http.NewRequest("GET", srv.URL+"/v1/models", nil)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
+func TestSetup_Embeddings_WithoutAuth_Returns401(t *testing.T) {
+	srv := httptest.NewServer(buildTestRouter())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("POST", srv.URL+"/v1/embeddings",
+		strings.NewReader(`{"model":"text-embedding-ada-002","input":"test"}`))
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()

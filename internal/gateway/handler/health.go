@@ -14,14 +14,14 @@ import (
 // HealthHandler 健康检查 Handler
 type HealthHandler struct {
 	rdb       *redis.Client
-	registry  *provider.Registry
+	router    ModelsRouterInterface
 	state     *provider.RuntimeState
 	scheduler *scheduler.Scheduler
 }
 
 // NewHealthHandler 创建 HealthHandler
-func NewHealthHandler(rdb *redis.Client, registry *provider.Registry, state *provider.RuntimeState, sch *scheduler.Scheduler) *HealthHandler {
-	return &HealthHandler{rdb: rdb, registry: registry, state: state, scheduler: sch}
+func NewHealthHandler(rdb *redis.Client, router ModelsRouterInterface, state *provider.RuntimeState, sch *scheduler.Scheduler) *HealthHandler {
+	return &HealthHandler{rdb: rdb, router: router, state: state, scheduler: sch}
 }
 
 // Health GET /health 存活探针
@@ -53,7 +53,14 @@ func (h *HealthHandler) Ready(c *gin.Context) {
 		schedulerReady = false
 	}
 
-	modelCount := len(h.registry.ListAllModels())
+	// 获取模型数量
+	modelCount := 0
+	if h.router != nil {
+		if resp, err := h.router.ListModels(ctx); err == nil && resp != nil {
+			modelCount = len(resp.Data)
+		}
+	}
+
 	loaded, source, loadedAt, lastError, stateModelCount, version := false, "", time.Time{}, "", 0, int64(0)
 	if h.state != nil {
 		loaded, source, loadedAt, lastError, stateModelCount, version = h.state.Snapshot()

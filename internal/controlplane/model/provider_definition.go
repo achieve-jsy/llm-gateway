@@ -33,6 +33,10 @@ type VendorOptions struct {
 	SupportsReasoningContent bool `json:"supports_reasoning_content,omitempty"`
 	// 自定义请求头（key-value 对，在默认 Header 之外追加）
 	ExtraHeaders map[string]string `json:"extra_headers,omitempty"`
+	// 跳过转发检测（非 OpenAI 兼容接口，如 AWS Bedrock，无法直接 POST /chat/completions）
+	SkipForwardCheck bool `json:"skip_forward_check,omitempty"`
+	// 默认 Region（用于自动构造 Endpoint，如 Bedrock）
+	DefaultRegion string `json:"default_region,omitempty"`
 }
 
 // ProviderDefinition 渠道定义（Registry 条目）

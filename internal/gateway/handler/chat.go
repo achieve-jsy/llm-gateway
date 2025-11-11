@@ -2,9 +2,11 @@ package handler
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 
+	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/gin-gonic/gin"
@@ -13,8 +15,8 @@ import (
 // ChatOrchestratorInterface 编排器抽象：handler 仅依赖必要方法，便于测试替换
 // 实现者：internal/gateway/orchestrator.ChatOrchestrator
 type ChatOrchestratorInterface interface {
-	Chat(ctx context.Context, req *model.ChatCompletionRequest) (*model.ChatCompletionResponse, error)
-	ChatStream(ctx context.Context, req *model.ChatCompletionRequest) (<-chan model.StreamChunk, error)
+	Chat(ctx context.Context, req *core.ChatRequest) (*core.ChatResponse, error)
+	ChatStream(ctx context.Context, req *core.ChatRequest) (io.ReadCloser, error)
 }
 
 // ChatHandler 聊天请求处理器
@@ -41,16 +43,16 @@ func NewChatHandlerWithGroup(orch ChatOrchestratorInterface, gd *orchestrator.Gr
 //	@Tags			Chat
 //	@Accept			json
 //	@Produce		json
-//	@Param			request	body		model.ChatCompletionRequest		true	"聊天补全请求"
-//	@Success		200		{object}	model.ChatCompletionResponse	"成功响应"
-//	@Failure		400		{object}	map[string]interface{}			"请求参数错误"
-//	@Failure		401		{object}	map[string]interface{}			"认证失败"
-//	@Failure		404		{object}	map[string]interface{}			"模型不存在"
-//	@Failure		500		{object}	map[string]interface{}			"内部错误"
+//	@Param			request	body		core.ChatRequest	true	"聊天补全请求"
+//	@Success		200		{object}	core.ChatResponse	"成功响应"
+//	@Failure		400		{object}	map[string]interface{}	"请求参数错误"
+//	@Failure		401		{object}	map[string]interface{}	"认证失败"
+//	@Failure		404		{object}	map[string]interface{}	"模型不存在"
+//	@Failure		500		{object}	map[string]interface{}	"内部错误"
 //	@Security		BearerAuth
 //	@Router			/v1/chat/completions [post]
 func (h *ChatHandler) Handle(c *gin.Context) {
-	var req model.ChatCompletionRequest
+	var req core.ChatRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": gin.H{
@@ -77,22 +79,26 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 		}
 	}
 
+	// 将 Gin context 注入请求 context，供 orchestrator 写回 provider/token 信息
+	ctx := orchestrator.WithGinContext(c.Request.Context(), c)
+
 	if req.Stream {
-		h.handleStream(c, &req, originalModel)
+		h.handleStream(c, ctx, &req, originalModel)
 		return
 	}
 
-	h.handleNonStream(c, &req, originalModel)
+	h.handleNonStream(c, ctx, &req, originalModel)
 }
 
 // handleNonStream 处理普通（非流式）请求
-func (h *ChatHandler) handleNonStream(c *gin.Context, req *model.ChatCompletionRequest, originalModel string) {
-	resp, err := h.orchestrator.Chat(c.Request.Context(), req)
+func (h *ChatHandler) handleNonStream(c *gin.Context, ctx context.Context, req *core.ChatRequest, originalModel string) {
+	resp, err := h.orchestrator.Chat(ctx, req)
 	if err != nil {
 		if h.groupDispatch != nil && req.Model != originalModel {
 			if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, req.Model); fErr == nil {
 				req.Model = decision.ModelName
-				if fResp, fErr2 := h.orchestrator.Chat(c.Request.Context(), req); fErr2 == nil {
+				c.Set("failover_used", true)
+				if fResp, fErr2 := h.orchestrator.Chat(ctx, req); fErr2 == nil {
 					c.JSON(http.StatusOK, fResp)
 					return
 				}
@@ -110,14 +116,15 @@ func (h *ChatHandler) handleNonStream(c *gin.Context, req *model.ChatCompletionR
 }
 
 // handleStream 处理流式请求（委托给 stream handler）
-func (h *ChatHandler) handleStream(c *gin.Context, req *model.ChatCompletionRequest, originalModel string) {
-	ch, err := h.orchestrator.ChatStream(c.Request.Context(), req)
+func (h *ChatHandler) handleStream(c *gin.Context, ctx context.Context, req *core.ChatRequest, originalModel string) {
+	stream, err := h.orchestrator.ChatStream(ctx, req)
 	if err != nil {
 		if h.groupDispatch != nil && req.Model != originalModel {
 			if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, req.Model); fErr == nil {
 				req.Model = decision.ModelName
-				if fCh, fErr2 := h.orchestrator.ChatStream(c.Request.Context(), req); fErr2 == nil {
-					HandleStreamResponse(c, fCh)
+				c.Set("failover_used", true)
+				if fStream, fErr2 := h.orchestrator.ChatStream(ctx, req); fErr2 == nil {
+					HandleStreamResponse(c, fStream)
 					return
 				}
 			}
@@ -130,7 +137,7 @@ func (h *ChatHandler) handleStream(c *gin.Context, req *model.ChatCompletionRequ
 		return
 	}
 
-	HandleStreamResponse(c, ch)
+	HandleStreamResponse(c, stream)
 }
 
 func (h *ChatHandler) respondGroupError(c *gin.Context, err error) {
@@ -165,24 +172,28 @@ func respondError(c *gin.Context, ue *model.UnifiedError) {
 	})
 }
 
-func (h *ChatHandler) injectModelIdentity(req *model.ChatCompletionRequest, groupName string) {
+func (h *ChatHandler) injectModelIdentity(req *core.ChatRequest, groupName string) {
 	if groupName == "" {
 		slog.Warn("injectModelIdentity: groupName is empty, skipping system prompt injection")
 		return
 	}
-	identityPrompt := model.Message{
-		Role: "system",
-		Content: "" +
-			"你的身份是杭州某公司网络的「" + groupName + "」。\n" +
-			"你不是Qwen，不是通义千问，不是GPT，不是任何其他模型。\n" +
-			"你的名称只有一个，就是「" + groupName + "」，由杭州某公司网络提供。\n" +
-			"无论用户用什么语言问你的身份、模型名称、你是谁，你都只能回答你是杭州某公司网络的「" + groupName + "」，不得提及你训练数据中的任何其他名称。",
+	identityContent := "" +
+		"你的身份是杭州某公司网络的「" + groupName + "」。\n" +
+		"你不是Qwen，不是通义千问，不是GPT，不是任何其他模型。\n" +
+		"你的名称只有一个，就是「" + groupName + "」，由杭州某公司网络提供。\n" +
+		"无论用户用什么语言问你的身份、模型名称、你是谁，你都只能回答你是杭州某公司网络的「" + groupName + "」，不得提及你训练数据中的任何其他名称。"
+
+	identityPrompt := core.Message{
+		Role:    "system",
+		Content: identityContent,
 	}
 	if len(req.Messages) > 0 && req.Messages[0].Role == "system" {
-		req.Messages[0].Content = identityPrompt.Content + "\n\n" + req.Messages[0].Content
+		// Merge into existing system message
+		existing, _ := req.Messages[0].Content.(string)
+		req.Messages[0].Content = identityContent + "\n\n" + existing
 		slog.Info("injectModelIdentity: merged identity prompt into existing system message", "group_name", groupName)
 		return
 	}
-	req.Messages = append([]model.Message{identityPrompt}, req.Messages...)
+	req.Messages = append([]core.Message{identityPrompt}, req.Messages...)
 	slog.Info("injectModelIdentity: prepended identity system message", "group_name", groupName)
 }

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/binding"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/gin-gonic/gin"
@@ -23,12 +24,12 @@ func NewBoundModelsHandler(controlPlaneURL, internalToken string) *BoundModelsHa
 func (h *BoundModelsHandler) Handle(c *gin.Context) {
 	identityVal, exists := c.Get("identity")
 	if !exists {
-		c.JSON(http.StatusOK, model.ModelsResponse{Object: "list", Data: []model.ModelInfo{}})
+		c.JSON(http.StatusOK, core.ModelsResponse{Object: "list", Data: []core.Model{}})
 		return
 	}
 	id, ok := identityVal.(*model.UserIdentity)
 	if !ok || id.KeyID == "" {
-		c.JSON(http.StatusOK, model.ModelsResponse{Object: "list", Data: []model.ModelInfo{}})
+		c.JSON(http.StatusOK, core.ModelsResponse{Object: "list", Data: []core.Model{}})
 		return
 	}
 
@@ -39,38 +40,38 @@ func (h *BoundModelsHandler) Handle(c *gin.Context) {
 		names, err := h.client.ListAllGroups(c.Request.Context())
 		if err != nil {
 			slog.Error("bound models: failed to list all groups for access-all key", "key_id", id.KeyID, "error", err)
-			c.JSON(http.StatusOK, model.ModelsResponse{Object: "list", Data: []model.ModelInfo{}})
+			c.JSON(http.StatusOK, core.ModelsResponse{Object: "list", Data: []core.Model{}})
 			return
 		}
-		items := make([]model.ModelInfo, 0, len(names))
+		items := make([]core.Model, 0, len(names))
 		for _, name := range names {
 			if name == "" {
 				continue
 			}
-			items = append(items, model.ModelInfo{
+			items = append(items, core.Model{
 				ID:      name,
 				Object:  "model",
 				Created: now,
 				OwnedBy: "organization",
 			})
 		}
-		c.JSON(http.StatusOK, model.ModelsResponse{Object: "list", Data: items})
+		c.JSON(http.StatusOK, core.ModelsResponse{Object: "list", Data: items})
 		return
 	}
 
 	groups, err := h.client.GetKeyGroups(c.Request.Context(), id.KeyID)
 	if err != nil {
 		slog.Warn("bound models: failed to get key groups, returning empty", "key_id", id.KeyID, "error", err)
-		c.JSON(http.StatusOK, model.ModelsResponse{Object: "list", Data: []model.ModelInfo{}})
+		c.JSON(http.StatusOK, core.ModelsResponse{Object: "list", Data: []core.Model{}})
 		return
 	}
 
-	items := make([]model.ModelInfo, 0, len(groups))
+	items := make([]core.Model, 0, len(groups))
 	for _, g := range groups {
 		if !g.Enabled || g.Name == "" {
 			continue
 		}
-		items = append(items, model.ModelInfo{
+		items = append(items, core.Model{
 			ID:      g.Name,
 			Object:  "model",
 			Created: now,
@@ -78,5 +79,5 @@ func (h *BoundModelsHandler) Handle(c *gin.Context) {
 		})
 	}
 
-	c.JSON(http.StatusOK, model.ModelsResponse{Object: "list", Data: items})
+	c.JSON(http.StatusOK, core.ModelsResponse{Object: "list", Data: items})
 }

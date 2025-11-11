@@ -10,11 +10,9 @@ version: "3.9"
 #   /*            → /var/www/aimeter/dist/ (宿主机静态文件)
 #
 # 使用方式：
-#   1. cp .env.example .env && 编辑 .env 填入实际配置
-#   2. docker compose build
-#   3. docker compose up -d
-#   4. 将 deploy/docker/nginx.conf 软链到 /etc/nginx/conf.d/aimeter.conf
-#   5. 将前端 build 产物部署到 /var/www/aimeter/dist/
+#   1. docker compose up -d
+#   2. 将 deploy/docker/nginx.conf 软链到 /etc/nginx/conf.d/aimeter.conf
+#   3. 将前端 build 产物部署到 /var/www/aimeter/dist/
 #
 # 如需自带 PostgreSQL/Redis（测试用），请使用 docker-compose.dev.yml
 # 如需 OTEL + Jaeger：docker compose --profile observability up -d
@@ -33,16 +31,10 @@ services:
       - "${GATEWAY_HOST:-127.0.0.1}:${GATEWAY_PORT:-8080}:8080"
     environment:
       APP_ENV: ${APP_ENV:-prod}
-      GATEWAY_PORT: "8080"
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_ADDR: ${REDIS_ADDR}
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-      REDIS_DB: ${REDIS_DB:-0}
-      INTERNAL_TOKEN: ${INTERNAL_TOKEN:-CHANGE_ME_INTERNAL_TOKEN}
-      JWT_SECRET: ${JWT_SECRET}
-      OTLP_ENDPOINT: ${OTLP_ENDPOINT:-}
-      CONTROL_PLANE_URL: http://control-plane:8081
-      AUTH_URL: http://localhost:8080
+      # AWS Bedrock 代理：通过生产服务器（新加坡出口）访问 AWS，避免国内 IP 被封
+      HTTPS_PROXY: "http://llmgw:Proxy2026!@192.0.2.10:18080"
+      HTTP_PROXY: "http://llmgw:Proxy2026!@192.0.2.10:18080"
+      NO_PROXY: "localhost,127.0.0.1,192.0.2.10/16,10.0.0.0/8,172.16.0.0/12"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
       interval: 10s
@@ -67,19 +59,19 @@ services:
       - "${CP_HOST:-127.0.0.1}:${CONTROL_PLANE_PORT:-8081}:8081"
     environment:
       APP_ENV: ${APP_ENV:-prod}
-      CONTROL_PLANE_PORT: "8081"
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_ADDR: ${REDIS_ADDR}
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-      REDIS_DB: ${REDIS_DB:-0}
-      INTERNAL_TOKEN: ${INTERNAL_TOKEN:-}
-      INTERNAL_AUTH_TOKEN: ${INTERNAL_TOKEN:-CHANGE_ME_INTERNAL_TOKEN}
-      JWT_SECRET: ${JWT_SECRET}
-      OAUTH_ISSUER_URL: ${OAUTH_ISSUER_URL:-}
-      OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID:-}
-      OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET:-}
-      OAUTH_REDIRECT_URI: ${OAUTH_REDIRECT_URI:-}
-      FRONTEND_URL: ${FRONTEND_URL:-http://localhost}
+      DATABASE_URL: "host=192.0.2.10 port=5432 user=llm_gateway password=CHANGE_ME_PASSWORD dbname=llm_gateway_prod sslmode=disable"
+      REDIS_ADDR: "192.0.2.10:6379"
+      REDIS_PASSWORD: "CHANGE_ME_REDIS_PASSWORD"
+      REDIS_DB: "2"
+      JWT_SECRET: "CHANGE_ME_JWT_SECRET"
+      INTERNAL_AUTH_TOKEN: "CHANGE_ME_INTERNAL_TOKEN"
+      ENCRYPTION_KEY: "12345678901234567890123456789012"
+      OAUTH_ISSUER_URL: "https://oauth.example.net/"
+      OAUTH_CLIENT_ID: "5514f6bb0a"
+      OAUTH_CLIENT_SECRET: "CHANGE_ME_OAUTH_SECRET"
+      OAUTH_REDIRECT_URI: "https://aimeter.xk-devops.com/auth/callback"
+      OAUTH_SCOPES: "openid profile email"
+      FRONTEND_URL: "https://aimeter.xk-devops.com"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/healthz"]
       interval: 10s

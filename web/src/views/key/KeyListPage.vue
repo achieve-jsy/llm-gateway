@@ -212,6 +212,7 @@ import KeyCreateDialog from '@/components/key/KeyCreateDialog.vue'
 import UseKeyModal from '@/components/key/UseKeyModal.vue'
 import OpenCodeConfigDialog from '@/components/key/OpenCodeConfigDialog.vue'
 import { executeCcsImport } from '@/utils/ccs-import'
+import { copyToClipboard } from '@/utils/clipboard'
 import { useSettingsStore } from '@/stores/settings'
 import { useKeyCacheStore } from '@/stores/key-cache'
 
@@ -266,7 +267,7 @@ async function loadKeys() {
 async function copyFullKey(row: ApiKey) {
   try {
     const result = await revealKey(row.id)
-    await navigator.clipboard.writeText(result.key)
+    await copyToClipboard(result.key)
     ElMessage.success('完整 Key 已复制到剪贴板')
   } catch {
     ElMessage.warning('获取 Key 失败，请重试')

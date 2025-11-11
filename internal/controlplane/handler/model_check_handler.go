@@ -180,8 +180,8 @@ func (h *ModelCheckHandler) checkModel(ctx context.Context, m *model.Model) *Mod
 		modelName = m.Name
 	}
 
-	// 发送检测请求（对 thinking / stream-only / 非 chat 模型做自适应处理）
-	success, skipped, responseTime, errMsg := cpservice.ProbeModelForward(ctx, provider.Endpoint, modelName, apiKey)
+	// 发送检测请求（按模型类型选择探针接口）
+	success, skipped, responseTime, errMsg := cpservice.ProbeModelForward(ctx, provider.Endpoint, modelName, apiKey, m.ModelType)
 	cr.ResponseTime = responseTime
 
 	if success {

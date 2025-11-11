@@ -80,3 +80,7 @@ func (r *KeyRepo) UpdateHashAndKey(id uuid.UUID, keyHash, encryptedKey, keyHint 
 		"key_hash": keyHash, "encrypted_key": encryptedKey, "key_hint": keyHint,
 	}).Error
 }
+
+func (r *KeyRepo) UpdateAccessAllGroups(id uuid.UUID, value bool) error {
+	return r.db.Model(&model.ApiKey{}).Where("id = ?", id).Update("access_all_groups", value).Error
+}

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/example/llm-gateway/internal/gateway/model"
+	"github.com/example/llm-gateway/internal/core"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,7 +27,7 @@ func TestCache_GetSetModelList_RoundTrip(t *testing.T) {
 	cache, _, _ := newCacheWithRedis(t)
 	ctx := context.Background()
 
-	models := []model.ModelInfo{
+	models := []core.Model{
 		{ID: "gpt-3.5", Object: "model", Created: 1, OwnedBy: "openai"},
 		{ID: "gpt-4", Object: "model", Created: 2, OwnedBy: "openai"},
 	}
@@ -67,7 +67,7 @@ func TestCache_GetSetModelList_WithVersion(t *testing.T) {
 	cache, _, _ := newCacheWithRedis(t)
 	ctx := context.Background()
 
-	models := []model.ModelInfo{{ID: "gpt-4", Object: "model", Created: 2, OwnedBy: "openai"}}
+	models := []core.Model{{ID: "gpt-4", Object: "model", Created: 2, OwnedBy: "openai"}}
 	require.NoError(t, cache.SetModelListWithVersion(ctx, models, 99))
 
 	got, version, err := cache.GetModelListWithVersion(ctx)

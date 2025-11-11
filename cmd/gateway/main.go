@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"log/slog"
@@ -23,15 +22,32 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/cache"
 	"github.com/example/llm-gateway/internal/gateway/config"
 	"github.com/example/llm-gateway/internal/gateway/infra"
-	"github.com/example/llm-gateway/internal/gateway/model"
+	"github.com/example/llm-gateway/internal/gateway/loader"
+	gatewaymodel "github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/provider"
-	"github.com/example/llm-gateway/internal/gateway/provider/anthropic"
-	"github.com/example/llm-gateway/internal/gateway/provider/bailian"
-	"github.com/example/llm-gateway/internal/gateway/provider/bedrock"
-	"github.com/example/llm-gateway/internal/gateway/provider/deepseek"
-	"github.com/example/llm-gateway/internal/gateway/provider/litellm"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/example/llm-gateway/internal/gateway/server"
+
+	// Register all GoModel provider adapters.
+	"github.com/example/llm-gateway/internal/providers"
+	providersanthropic "github.com/example/llm-gateway/internal/providers/anthropic"
+	providersazure "github.com/example/llm-gateway/internal/providers/azure"
+	providersbailian "github.com/example/llm-gateway/internal/providers/bailian"
+	providersbedrock "github.com/example/llm-gateway/internal/providers/bedrock"
+	providersdeepseek "github.com/example/llm-gateway/internal/providers/deepseek"
+	providersgemini "github.com/example/llm-gateway/internal/providers/gemini"
+	providersgroq "github.com/example/llm-gateway/internal/providers/groq"
+	providerslitellm "github.com/example/llm-gateway/internal/providers/litellm"
+	providersminimax "github.com/example/llm-gateway/internal/providers/minimax"
+	providersopenai "github.com/example/llm-gateway/internal/providers/openai"
+	providersopenrouter "github.com/example/llm-gateway/internal/providers/openrouter"
+	providersollama "github.com/example/llm-gateway/internal/providers/ollama"
+	providersoracle "github.com/example/llm-gateway/internal/providers/oracle"
+	providersvertex "github.com/example/llm-gateway/internal/providers/vertex"
+	providersvllm "github.com/example/llm-gateway/internal/providers/vllm"
+	providersxai "github.com/example/llm-gateway/internal/providers/xai"
+	providerszai "github.com/example/llm-gateway/internal/providers/zai"
+
 	"github.com/redis/go-redis/v9"
 )
 
@@ -44,8 +60,10 @@ func main() {
 	// 加载 .env 文件（开发环境，文件不存在时不报错）
 	_ = godotenv.Load()
 
-	// 配置 slog JSON 格式
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	// 配置 slog JSON 格式，支持 LOG_LEVEL 环境变量动态控制日志级别
+	// LOG_LEVEL 可选值: debug, info, warn, error（不区分大小写，默认 info）
+	logLevel := resolveLogLevel(os.Getenv("LOG_LEVEL"))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})))
 
 	// 加载配置
 	cfg := config.Load()
@@ -66,53 +84,65 @@ func main() {
 	}
 	defer shutdown()
 
-	// 初始化 Provider Registry
-	registry := provider.NewRegistry()
+	// Build the GoModel ProviderFactory and register all provider types.
+	factory := buildProviderFactory()
+
+	// 注入 LLMClient 可观测性 Hooks（上游请求开始/结束日志 + OTel span 属性）
+	factory.SetHooks(infra.NewLLMClientHooks())
+
+	// RuntimeState tracks load metadata (source, version, model count).
 	state := &provider.RuntimeState{}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 尝试从 control-plane 加载 Provider 配置
 	controlPlaneURL := cfg.Provider.ControlPlaneURL
 	internalToken := cfg.Provider.InternalToken
 
-	if result, err := loadProviders(ctx, rdb, registry, controlPlaneURL, internalToken); err != nil {
-		state.MarkLoadFailure(err)
-		slog.Warn("failed to load providers from shared sources, falling back to env vars", "error", err)
-		registerProvidersFromEnv(registry)
-		state.MarkLoadSuccess("env", len(registry.ListAllModels()), 0)
-	} else {
-		state.MarkLoadSuccess(result.source, len(registry.ListAllModels()), result.version)
-	}
-
-	// 启动配置变更订阅（US-06）
-	subscriber := infra.NewSubscriber(rdb, func(ev infra.ChangeEvent) {
-		loaded, _, _, _, _, currentVersion := state.Snapshot()
-		if ev.SnapshotVersion != 0 && loaded && len(registry.ListAllModels()) > 0 && ev.SnapshotVersion == currentVersion {
-			slog.Info("config change already applied, skipping reload", "type", ev.Type, "snapshot_version", ev.SnapshotVersion)
-			return
-		}
-		slog.Info("config change received, reloading registry", "type", ev.Type, "resource_type", ev.ResourceType)
-		if result, err := loadProviders(ctx, rdb, registry, controlPlaneURL, internalToken); err != nil {
-			state.MarkLoadFailure(err)
-			slog.Error("failed to reload providers", "error", err)
-		} else {
-			state.MarkLoadSuccess(result.source, len(registry.ListAllModels()), result.version)
-			slog.Info("registry reloaded successfully")
-		}
+	// ProviderLoader bridges control-plane entries → GoModel Router.
+	providerLoader := loader.NewProviderLoader(factory, func(r *providers.Router) {
+		state.MarkLoadSuccess("reload", r.ModelCount(), 0)
 	})
 
-	go reconcileProviders(ctx, rdb, registry, state, controlPlaneURL, internalToken)
+	// Load providers: try Redis snapshot first, then control-plane HTTP.
+	var activeRouter *providers.Router
+	if result, err := loadProviders(ctx, rdb, providerLoader, controlPlaneURL, internalToken); err != nil {
+		state.MarkLoadFailure(err)
+		slog.Warn("failed to load providers, gateway will serve with empty registry", "error", err)
+		// Build an empty router so the server can still start.
+		if activeRouter, err = providerLoader.Build(nil); err != nil {
+			log.Fatalf("failed to build empty router: %v", err)
+		}
+	} else {
+		activeRouter = providerLoader.Router()
+		state.MarkLoadSuccess(result.source, activeRouter.ModelCount(), result.version)
+	}
 
+	// Start config change subscriber so the loader rebuilds atomically on changes.
+	fetchEntries := func() ([]gatewaymodel.ProviderEntry, error) {
+		if snapshot, err := configsync.LoadProviderSnapshot(ctx, rdb); err == nil {
+			return snapshot.Entries, nil
+		}
+		if controlPlaneURL != "" && internalToken != "" {
+			return infra.LoadFromControlPlane(controlPlaneURL, internalToken)
+		}
+		return nil, fmt.Errorf("no config source available")
+	}
+
+	subscriber := infra.NewSubscriber(rdb, providerLoader.HandleChangeEvent(fetchEntries))
 	go subscriber.Start(ctx)
+
+	// Periodic reconciliation loop (every 30s) – brings in any changes missed
+	// by pub/sub (e.g. gateway restart after config push).
+	go reconcileProviders(ctx, rdb, providerLoader, state, controlPlaneURL, internalToken)
 
 	// 初始化 Scheduler
 	var sch *scheduler.Scheduler
 	var nameCache *cache.GroupNameCache
 	if controlPlaneURL != "" {
 		schCfg := scheduler.DefaultConfig(controlPlaneURL)
-			schCfg.InternalToken = internalToken
-			sch, err = scheduler.New(schCfg)
+		schCfg.InternalToken = internalToken
+		sch, err = scheduler.New(schCfg)
 		if err != nil {
 			slog.Warn("failed to create scheduler", "error", err)
 		} else {
@@ -127,7 +157,7 @@ func main() {
 		}
 	}
 
-	// 处理优雅退出信号
+	// Handle graceful shutdown signal.
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -153,8 +183,9 @@ func main() {
 	authTokenHandler := authhandler.NewTokenHandler(authTokenSvc, rdb)
 	authInternalHandler := authhandler.NewInternalHandler(authKeyAuthSvc)
 
-	// 初始化路由（注入依赖）
-	r := server.Setup(registry, icache, state, authClient, controlPlaneURL, internalToken, sch, nameCache)
+	// Initialize router (inject dependencies). We always use the router obtained
+	// from the ProviderLoader – which is atomically swapped on config changes.
+	r := server.Setup(activeRouter, icache, state, authClient, controlPlaneURL, internalToken, sch, nameCache)
 
 	// Register auth routes
 	r.GET("/.well-known/jwks.json", authJWKSHandler.GetJWKS)
@@ -167,6 +198,39 @@ func main() {
 	if err := r.Run(":" + cfg.Server.Port); err != nil {
 		log.Fatalf("failed to start server: %v", err)
 	}
+}
+
+// buildProviderFactory creates a ProviderFactory and registers all known provider types.
+func buildProviderFactory() *providers.ProviderFactory {
+	factory := providers.NewProviderFactory()
+
+	// Register GoModel provider adapters.
+	factory.Add(providersanthropic.Registration)
+	factory.Add(providersazure.Registration)
+	factory.Add(providersbedrock.Registration)
+	factory.Add(providersbailian.Registration)
+	// "dashscope" is the legacy type name used by the Control Plane for Bailian/DashScope.
+	// Register it as an alias so existing DB records continue to work.
+	factory.Add(providers.Registration{
+		Type:      "dashscope",
+		New:       providersbailian.New,
+		Discovery: providersbailian.Registration.Discovery,
+	})
+	factory.Add(providersdeepseek.Registration)
+	factory.Add(providersgemini.Registration)
+	factory.Add(providersgroq.Registration)
+	factory.Add(providerslitellm.Registration)
+	factory.Add(providersminimax.Registration)
+	factory.Add(providersopenai.Registration)
+	factory.Add(providersopenrouter.Registration)
+	factory.Add(providersollama.Registration)
+	factory.Add(providersoracle.Registration)
+	factory.Add(providersvertex.Registration)
+	factory.Add(providersvllm.Registration)
+	factory.Add(providersxai.Registration)
+	factory.Add(providerszai.Registration)
+
+	return factory
 }
 
 func refreshGroupNameCache(ctx context.Context, nc *cache.GroupNameCache, controlPlaneURL string) {
@@ -188,17 +252,27 @@ func refreshGroupNameCache(ctx context.Context, nc *cache.GroupNameCache, contro
 	}
 }
 
-func loadProviders(ctx context.Context, rdb *redis.Client, registry *provider.Registry, controlPlaneURL, token string) (*providerLoadResult, error) {
-	if result, err := loadAndRegisterProvidersFromSnapshot(ctx, rdb, registry); err == nil && len(registry.ListAllModels()) > 0 {
-		slog.Info("providers loaded from redis snapshot successfully")
-		return result, nil
+func loadProviders(ctx context.Context, rdb *redis.Client, pl *loader.ProviderLoader, controlPlaneURL, token string) (*providerLoadResult, error) {
+	// Try Redis snapshot first.
+	if snapshot, err := configsync.LoadProviderSnapshot(ctx, rdb); err == nil && len(snapshot.Entries) > 0 {
+		if _, buildErr := pl.Build(snapshot.Entries); buildErr != nil {
+			slog.Warn("failed to build router from redis snapshot", "error", buildErr)
+		} else {
+			slog.Info("providers loaded from redis snapshot successfully")
+			return &providerLoadResult{source: "redis-snapshot", version: snapshot.Version}, nil
+		}
 	} else {
-		slog.Warn("failed to load providers from redis snapshot or 0 providers", "error", err)
+		slog.Warn("failed to load or use redis snapshot", "error", err)
 	}
 
+	// Fall back to control-plane HTTP.
 	if controlPlaneURL != "" && token != "" {
-		if err := loadAndRegisterProviders(registry, controlPlaneURL, token); err != nil {
+		entries, err := infra.LoadFromControlPlane(controlPlaneURL, token)
+		if err != nil {
 			return nil, fmt.Errorf("load providers from control-plane: %w", err)
+		}
+		if _, buildErr := pl.Build(entries); buildErr != nil {
+			return nil, fmt.Errorf("build router from control-plane entries: %w", buildErr)
 		}
 		slog.Info("providers loaded from control-plane successfully")
 		return &providerLoadResult{source: "control-plane", version: 0}, nil
@@ -207,18 +281,7 @@ func loadProviders(ctx context.Context, rdb *redis.Client, registry *provider.Re
 	return nil, fmt.Errorf("no provider snapshot or control-plane source available")
 }
 
-func loadAndRegisterProvidersFromSnapshot(ctx context.Context, rdb *redis.Client, registry *provider.Registry) (*providerLoadResult, error) {
-	snapshot, err := configsync.LoadProviderSnapshot(ctx, rdb)
-	if err != nil {
-		return nil, err
-	}
-
-	registry.Reload(snapshot.Entries, providerFactory)
-	slog.Info("registry reloaded from redis snapshot", "providers", len(snapshot.Entries), "version", snapshot.Version)
-	return &providerLoadResult{source: "redis-snapshot", version: snapshot.Version}, nil
-}
-
-func reconcileProviders(ctx context.Context, rdb *redis.Client, registry *provider.Registry, state *provider.RuntimeState, controlPlaneURL, token string) {
+func reconcileProviders(ctx context.Context, rdb *redis.Client, pl *loader.ProviderLoader, state *provider.RuntimeState, controlPlaneURL, token string) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -227,158 +290,40 @@ func reconcileProviders(ctx context.Context, rdb *redis.Client, registry *provid
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			loaded, _, _, _, _, currentVersion := state.Snapshot()
+			_, _, _, _, _, currentVersion := state.Snapshot()
 			if snapshot, err := configsync.LoadProviderSnapshot(ctx, rdb); err == nil {
-				if loaded && len(registry.ListAllModels()) > 0 && snapshot.Version == currentVersion {
+				if pl.Router() != nil && pl.Router().ModelCount() > 0 && snapshot.Version == currentVersion {
 					continue
 				}
 			}
 
-			if result, err := loadProviders(ctx, rdb, registry, controlPlaneURL, token); err != nil {
+			if result, err := loadProviders(ctx, rdb, pl, controlPlaneURL, token); err != nil {
 				state.MarkLoadFailure(err)
 				slog.Warn("periodic provider reconcile failed", "error", err)
-				continue
 			} else {
-				state.MarkLoadSuccess(result.source, len(registry.ListAllModels()), result.version)
+				router := pl.Router()
+				modelCount := 0
+				if router != nil {
+					modelCount = router.ModelCount()
+				}
+				state.MarkLoadSuccess(result.source, modelCount, result.version)
 			}
 		}
 	}
 }
 
-// loadAndRegisterProviders 从 control-plane 加载配置并使用 Reload 原子替换 registry
-func loadAndRegisterProviders(registry *provider.Registry, controlPlaneURL, token string) error {
-	entries, err := infra.LoadFromControlPlane(controlPlaneURL, token)
-	if err != nil {
-		return err
-	}
-
-	registry.Reload(entries, providerFactory)
-	slog.Info("registry reloaded from control-plane", "providers", len(entries))
-	return nil
-}
-
-// providerFactory 根据 ProviderEntry 创建对应的 Provider 实例
-func providerFactory(entry model.ProviderEntry) provider.Provider {
-	switch entry.Type {
-	case "anthropic":
-		return anthropic.New(anthropic.Config{
-			APIKey:  entry.Credentials,
-			BaseURL: entry.Endpoint,
-			Models:  entry.Models,
-		})
-	case "bedrock":
-		// bedrock 凭证格式: JSON {"access_key_id": "...", "secret_access_key": "...", "region": "..."}
-		var creds struct {
-			AccessKeyID    string `json:"access_key_id"`
-			SecretAccessKey string `json:"secret_access_key"`
-			Region         string `json:"region"`
-		}
-		if err := json.Unmarshal([]byte(entry.Credentials), &creds); err != nil {
-			slog.Error("failed to parse bedrock credentials", "provider", entry.Name, "error", err)
-			// fallback: 使用整个 credentials 字符串作为 access key
-			return bedrock.New(bedrock.Config{
-				AccessKeyID:    entry.Credentials,
-				SecretAccessKey: "",
-				Region:         "us-east-1",
-				Models:         entry.Models,
-			})
-		}
-		return bedrock.New(bedrock.Config{
-			AccessKeyID:    creds.AccessKeyID,
-			SecretAccessKey: creds.SecretAccessKey,
-			Region:         creds.Region,
-			Models:         entry.Models,
-		})
-	case "deepseek":
-		return deepseek.New(deepseek.Config{
-			APIKey:  entry.Credentials,
-			BaseURL: entry.Endpoint,
-			Models:  entry.Models,
-		})
-	case "litellm":
-		return litellm.New(litellm.Config{
-			Endpoint: entry.Endpoint,
-			APIKey:   entry.Credentials,
-			Models:   entry.Models,
-		})
+// resolveLogLevel maps LOG_LEVEL env var string to slog.Level.
+// Supported values (case-insensitive): debug, info, warn, error.
+// Defaults to slog.LevelInfo for unknown or empty values.
+func resolveLogLevel(s string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
 	default:
-		// dashscope, openai-compatible 等都走 bailian adapter（OpenAI 兼容模式）
-		return bailian.New(bailian.Config{
-			APIKey:  entry.Credentials,
-			BaseURL: entry.Endpoint,
-			Models:  entry.Models,
-		})
+		return slog.LevelInfo
 	}
-}
-
-// registerProvidersFromEnv 从环境变量注册 Provider（向后兼容）
-func registerProvidersFromEnv(registry *provider.Registry) {
-	// 注册百炼 Provider
-	bailianAPIKey := os.Getenv("BAILIAN_API_KEY")
-	bailianModels := os.Getenv("BAILIAN_MODELS")
-	if bailianAPIKey != "" {
-		models := parseModelList(bailianModels)
-		bailianProvider := bailian.New(bailian.Config{
-			APIKey: bailianAPIKey,
-			Models: models,
-		})
-		registry.Register("bailian", bailianProvider)
-		for _, m := range models {
-			registry.RegisterModel(m, "bailian")
-		}
-		slog.Info("百炼 Provider 已注册", "models", models)
-	}
-
-	// 注册 DeepSeek Provider
-	deepseekAPIKey := os.Getenv("DEEPSEEK_API_KEY")
-	deepseekModels := os.Getenv("DEEPSEEK_MODELS")
-	if deepseekAPIKey != "" {
-		models := parseModelList(deepseekModels)
-		if len(models) == 0 {
-			models = []string{"deepseek-chat", "deepseek-reasoner"}
-		}
-		deepseekProvider := deepseek.New(deepseek.Config{
-			APIKey: deepseekAPIKey,
-			Models: models,
-		})
-		registry.Register("deepseek", deepseekProvider)
-		for _, m := range models {
-			registry.RegisterModel(m, "deepseek")
-		}
-		slog.Info("DeepSeek Provider 已注册", "models", models)
-	}
-
-	// 注册 litellm 兜底 Provider
-	litellmEndpoint := os.Getenv("LITELLM_ENDPOINT")
-	litellmAPIKey := os.Getenv("LITELLM_API_KEY")
-	litellmModels := os.Getenv("LITELLM_MODELS")
-	if litellmEndpoint != "" {
-		models := parseModelList(litellmModels)
-		litellmProvider := litellm.New(litellm.Config{
-			Endpoint: litellmEndpoint,
-			APIKey:   litellmAPIKey,
-			Models:   models,
-		})
-		registry.Register("litellm", litellmProvider)
-		for _, m := range models {
-			registry.RegisterModel(m, "litellm")
-		}
-		slog.Info("LiteLLM Provider 已注册", "models", models)
-	}
-}
-
-// parseModelList 解析逗号分隔的模型列表
-func parseModelList(s string) []string {
-	if s == "" {
-		return nil
-	}
-	parts := strings.Split(s, ",")
-	models := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			models = append(models, p)
-		}
-	}
-	return models
 }

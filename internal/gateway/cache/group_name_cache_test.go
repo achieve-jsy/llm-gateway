@@ -7,7 +7,7 @@ import (
 )
 
 func TestGroupNameCache_IsGroupName(t *testing.T) {
-	gc := NewGroupNameCache()
+	gc := NewGroupNameCache("")
 
 	assert.False(t, gc.IsGroupName("gpt-4"))
 	assert.False(t, gc.IsGroupName("claude-group"))
@@ -23,7 +23,7 @@ func TestGroupNameCache_IsGroupName(t *testing.T) {
 }
 
 func TestGroupNameCache_Empty(t *testing.T) {
-	gc := NewGroupNameCache()
+	gc := NewGroupNameCache("")
 	assert.False(t, gc.IsGroupName(""))
 	assert.False(t, gc.IsGroupName("any"))
 }

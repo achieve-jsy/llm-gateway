@@ -13,6 +13,13 @@ import (
 	"sync"
 	"time"
 
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/bedrock"
+	bedrocktypes "github.com/aws/aws-sdk-go-v2/service/bedrock/types"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	bedrockruntimetypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"github.com/aws/smithy-go/auth/bearer"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
@@ -300,7 +307,8 @@ func (s *HealthCheckService) runBackgroundModelCheck() {
 		if m.Enabled == nil || !*m.Enabled {
 			continue
 		}
-		if strings.Contains(strings.ToLower(m.ModelType), "embed") {
+		// 音频类模型无法用轻量探针，直接跳过（ProbeModelForward 内部也会跳过，这里提前过滤减少并发数）
+		if strings.Contains(strings.ToLower(m.ModelType), "audio") {
 			continue
 		}
 
@@ -363,7 +371,7 @@ func (s *HealthCheckService) invalidateTimelineCache() {
 	}
 }
 
-// doModelForwardCheck 对单个模型做 chat/completions 检测
+// doModelForwardCheck 对单个模型做转发检测
 func (s *HealthCheckService) doModelForwardCheck(m *model.Model) (bool, int, string) {
 	provider := &m.Provider
 	if provider.ID == uuid.Nil {
@@ -379,6 +387,11 @@ func (s *HealthCheckService) doModelForwardCheck(m *model.Model) (bool, int, str
 		return false, 0, "解密凭证失败"
 	}
 
+	// Bedrock 模型用 AWS SDK Converse API 检测（而非 /chat/completions）
+	if isNonOpenAICompatible(provider.DefinitionID) {
+		return s.doBedrockModelCheck(provider, credJSON, m)
+	}
+
 	apiKey := extractAPIKey(credJSON)
 
 	modelName := m.UpstreamModelID
@@ -386,11 +399,89 @@ func (s *HealthCheckService) doModelForwardCheck(m *model.Model) (bool, int, str
 		modelName = m.Name
 	}
 
-	success, skipped, elapsed, errMsg := ProbeModelForward(context.Background(), provider.Endpoint, modelName, apiKey)
+	success, skipped, elapsed, errMsg := ProbeModelForward(context.Background(), provider.Endpoint, modelName, apiKey, m.ModelType)
 	if skipped {
 		return true, elapsed, "no model to test, skipped"
 	}
 	return success, elapsed, errMsg
+}
+
+// doBedrockModelCheck 用 AWS SDK Converse(max_tokens=1) 验证具体模型是否可调用。
+// 这样可以发现：模型名拼错、账号没有该模型的访问权限等问题。
+func (s *HealthCheckService) doBedrockModelCheck(provider *model.Provider, credJSON string, m *model.Model) (bool, int, string) {
+	apiKey := extractAPIKey(credJSON)
+	region := regionFromBedrockEndpoint(provider.Endpoint)
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	loadOpts := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(region)}
+	var runtimeOpts []func(*bedrockruntime.Options)
+
+	if apiKey != "" {
+		if strings.HasPrefix(apiKey, "{") {
+			var creds struct {
+				AccessKeyID     string `json:"access_key_id"`
+				SecretAccessKey string `json:"secret_access_key"`
+				SessionToken    string `json:"session_token,omitempty"`
+			}
+			if err := json.Unmarshal([]byte(apiKey), &creds); err == nil && creds.AccessKeyID != "" {
+				loadOpts = append(loadOpts, awsconfig.WithCredentialsProvider(
+					credentials.NewStaticCredentialsProvider(creds.AccessKeyID, creds.SecretAccessKey, creds.SessionToken),
+				))
+			}
+		} else {
+			tokenVal := apiKey
+			runtimeOpts = append(runtimeOpts, func(o *bedrockruntime.Options) {
+				o.BearerAuthTokenProvider = bearer.TokenProviderFunc(func(_ context.Context) (bearer.Token, error) {
+					return bearer.Token{Value: tokenVal}, nil
+				})
+				o.AuthSchemePreference = []string{"smithy.api#httpBearerAuth"}
+			})
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, loadOpts...)
+	if err != nil {
+		return false, 0, "AWS 配置加载失败: " + err.Error()
+	}
+
+	runtime := bedrockruntime.NewFromConfig(awsCfg, runtimeOpts...)
+
+	modelName := m.UpstreamModelID
+	if modelName == "" {
+		modelName = m.Name
+	}
+
+	maxTokens := int32(1)
+	userMsg := "hi"
+	start := time.Now()
+
+	_, err = runtime.Converse(ctx, &bedrockruntime.ConverseInput{
+		ModelId: &modelName,
+		Messages: []bedrockruntimetypes.Message{
+			{
+				Role: bedrockruntimetypes.ConversationRoleUser,
+				Content: []bedrockruntimetypes.ContentBlock{
+					&bedrockruntimetypes.ContentBlockMemberText{
+						Value: bedrockruntimetypes.ContentBlockMemberText{Value: userMsg}.Value,
+					},
+				},
+			},
+		},
+		InferenceConfig: &bedrockruntimetypes.InferenceConfiguration{
+			MaxTokens: &maxTokens,
+		},
+	})
+
+	elapsed := int(time.Since(start).Milliseconds())
+	if err != nil {
+		return false, elapsed, err.Error()
+	}
+	return true, elapsed, ""
 }
 
 // runBackgroundCheck 后台执行一轮检测
@@ -488,6 +579,11 @@ func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provi
 		return cr
 	}
 
+	// 非 OpenAI 兼容 provider 走专属检测路径
+	if isNonOpenAICompatible(provider.DefinitionID) {
+		return s.checkNonOpenAIProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
+	}
+
 	apiKey := extractAPIKey(credJSON)
 
 	// 连通性检测
@@ -542,10 +638,198 @@ func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provi
 	return cr
 }
 
+// isNonOpenAICompatible 返回该 definition_id 是否为非 OpenAI 兼容协议
+func isNonOpenAICompatible(definitionID string) bool {
+	switch definitionID {
+	case "bedrock":
+		return true
+	}
+	return false
+}
+
+// checkNonOpenAIProvider 对非 OpenAI 兼容 provider 做专属健康检测。
+// 参考 GoModel AvailabilityChecker 设计模式。
+func (s *HealthCheckService) checkNonOpenAIProvider(ctx context.Context, provider *model.Provider, credJSON string, checkMode string, maxFailures int, cr *CheckResult) *CheckResult {
+	switch provider.DefinitionID {
+	case "bedrock":
+		return s.checkBedrockProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
+	default:
+		cr.Success = true // 未知类型跳过，不计失败
+		s.recordLog("provider", provider.ID, provider.Name, true, 0, "skipped: unsupported provider type for auto-check")
+		return cr
+	}
+}
+
+// checkBedrockProvider 使用 AWS SDK 对 Bedrock 做健康检测。
+//
+// 连通性检测：ListFoundationModels（控制面 API，零推理消耗）
+//   - 同时验证网络可达 + AWS 凭证有效
+//
+// 转发检测：Converse API（max_tokens=1，实际调用推理端）
+func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider *model.Provider, credJSON string, checkMode string, maxFailures int, cr *CheckResult) *CheckResult {
+	apiKey := extractAPIKey(credJSON)
+	region := regionFromBedrockEndpoint(provider.Endpoint)
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	// 构建 AWS 凭证选项
+	loadOpts := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(region)}
+	var ctrlOpts []func(*bedrock.Options)
+	var runtimeOpts []func(*bedrockruntime.Options)
+
+	if apiKey != "" {
+		if strings.HasPrefix(apiKey, "{") {
+			var creds struct {
+				AccessKeyID     string `json:"access_key_id"`
+				SecretAccessKey string `json:"secret_access_key"`
+				SessionToken    string `json:"session_token,omitempty"`
+			}
+			if err := json.Unmarshal([]byte(apiKey), &creds); err == nil && creds.AccessKeyID != "" {
+				loadOpts = append(loadOpts, awsconfig.WithCredentialsProvider(
+					credentials.NewStaticCredentialsProvider(creds.AccessKeyID, creds.SecretAccessKey, creds.SessionToken),
+				))
+			}
+		} else {
+			tokenVal := apiKey
+			ctrlOpts = append(ctrlOpts, func(o *bedrock.Options) {
+				o.BearerAuthTokenProvider = bearer.TokenProviderFunc(func(_ context.Context) (bearer.Token, error) {
+					return bearer.Token{Value: tokenVal}, nil
+				})
+				o.AuthSchemePreference = []string{"smithy.api#httpBearerAuth"}
+			})
+			runtimeOpts = append(runtimeOpts, func(o *bedrockruntime.Options) {
+				o.BearerAuthTokenProvider = bearer.TokenProviderFunc(func(_ context.Context) (bearer.Token, error) {
+					return bearer.Token{Value: tokenVal}, nil
+				})
+				o.AuthSchemePreference = []string{"smithy.api#httpBearerAuth"}
+			})
+		}
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	awsCfg, err := awsconfig.LoadDefaultConfig(probeCtx, loadOpts...)
+	if err != nil {
+		cr.Error = "AWS 配置加载失败: " + err.Error()
+		s.recordLog("provider", provider.ID, provider.Name, false, 0, cr.Error)
+		s.handleProviderFailure(provider.ID, maxFailures, cr)
+		return cr
+	}
+
+	// ===== 连通性检测：ListFoundationModels =====
+	if checkMode == "connectivity" || checkMode == "both" {
+		start := time.Now()
+		bedrockCtrl := bedrock.NewFromConfig(awsCfg, ctrlOpts...)
+		out, err := bedrockCtrl.ListFoundationModels(probeCtx, &bedrock.ListFoundationModelsInput{
+			ByInferenceType: bedrocktypes.InferenceTypeOnDemand,
+		})
+		elapsed := int(time.Since(start).Milliseconds())
+		cr.ResponseTime = elapsed
+
+		if err != nil {
+			cr.Error = err.Error()
+			s.recordLog("provider", provider.ID, provider.Name, false, elapsed, cr.Error)
+			s.handleProviderFailure(provider.ID, maxFailures, cr)
+			return cr
+		}
+
+		_ = out // model count available at out.ModelSummaries if needed
+		s.providerRepo.UpdateResponseTime(provider.ID, elapsed)
+		s.providerRepo.ResetFailures(provider.ID)
+
+		if checkMode == "connectivity" {
+			cr.Success = true
+			s.recordLog("provider", provider.ID, provider.Name, true, elapsed, "")
+			return cr
+		}
+	}
+
+	// ===== 转发检测：Converse API =====
+	if checkMode == "model_forward" || checkMode == "both" {
+		testModel := provider.TestModel
+		if testModel == "" {
+			// 从该 provider 的模型表取第一个启用的模型
+			providerID := provider.ID
+			filter := repository.ModelListFilter{ProviderID: &providerID}
+			models, _, _ := s.modelRepo.List(filter, 0, 1)
+			if len(models) > 0 {
+				testModel = models[0].Name
+			}
+		}
+		if testModel == "" {
+			// 无模型可测，跳过转发检测视为通过
+			cr.Success = true
+			s.recordLog("provider", provider.ID, provider.Name, true, cr.ResponseTime, "no model to test, skipped")
+			return cr
+		}
+
+		start := time.Now()
+		runtime := bedrockruntime.NewFromConfig(awsCfg, runtimeOpts...)
+		userMsg := "hi"
+		maxTokens := int32(1)
+		_, err := runtime.Converse(probeCtx, &bedrockruntime.ConverseInput{
+			ModelId: &testModel,
+			Messages: []bedrockruntimetypes.Message{
+				{
+					Role: bedrockruntimetypes.ConversationRoleUser,
+					Content: []bedrockruntimetypes.ContentBlock{
+						&bedrockruntimetypes.ContentBlockMemberText{
+							Value: bedrockruntimetypes.ContentBlockMemberText{Value: userMsg}.Value,
+						},
+					},
+				},
+			},
+			InferenceConfig: &bedrockruntimetypes.InferenceConfiguration{MaxTokens: &maxTokens},
+		})
+		elapsed := int(time.Since(start).Milliseconds())
+		cr.ResponseTime += elapsed
+
+		if err != nil {
+			cr.Error = "model forward: " + err.Error()
+			s.recordLog("provider", provider.ID, provider.Name, false, cr.ResponseTime, cr.Error)
+			s.handleProviderFailure(provider.ID, maxFailures, cr)
+			return cr
+		}
+	}
+
+	cr.Success = true
+	s.recordLog("provider", provider.ID, provider.Name, true, cr.ResponseTime, "")
+	s.providerRepo.UpdateResponseTime(provider.ID, cr.ResponseTime)
+	s.providerRepo.ResetFailures(provider.ID)
+	return cr
+}
+
+// regionFromBedrockEndpoint 从 Bedrock endpoint URL 中提取 AWS region
+func regionFromBedrockEndpoint(endpoint string) string {
+	ep := strings.Replace(endpoint, "bedrock-runtime.", "bedrock.", 1)
+	idx := strings.Index(ep, "://")
+	if idx < 0 {
+		return ""
+	}
+	host := ep[idx+3:]
+	if slash := strings.IndexByte(host, '/'); slash >= 0 {
+		host = host[:slash]
+	}
+	parts := strings.Split(host, ".")
+	for i, part := range parts {
+		if part == "bedrock" && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return ""
+}
+
 // checkConnectivity 连通性检测：GET {endpoint}/models
 func (s *HealthCheckService) checkConnectivity(ctx context.Context, provider *model.Provider, apiKey string) (bool, int, string) {
 	endpoint := strings.TrimRight(provider.Endpoint, "/") + "/models"
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			Proxy: nil,
+		},
+	}
 
 	start := time.Now()
 	req, _ := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
@@ -567,10 +851,11 @@ func (s *HealthCheckService) checkConnectivity(ctx context.Context, provider *mo
 	return true, elapsed, ""
 }
 
-// checkModelForward 模型转发检测：POST {endpoint}/chat/completions（max_tokens=1）
+// checkModelForward 模型转发检测：按模型类型选择对应探针接口
 func (s *HealthCheckService) checkModelForward(ctx context.Context, provider *model.Provider, apiKey string) (bool, int, string) {
 	// 确定测试模型：优先使用渠道的 test_model
 	testModel := provider.TestModel
+	testModelType := "chat" // 默认 chat
 	if testModel == "" {
 		// 从 models 表取第一个属于该渠道且启用的模型
 		providerID := provider.ID
@@ -578,6 +863,7 @@ func (s *HealthCheckService) checkModelForward(ctx context.Context, provider *mo
 		models, _, _ := s.modelRepo.List(filter, 0, 1)
 		if len(models) > 0 {
 			testModel = models[0].Name
+			testModelType = models[0].ModelType
 		}
 	}
 	if testModel == "" {
@@ -585,7 +871,7 @@ func (s *HealthCheckService) checkModelForward(ctx context.Context, provider *mo
 		return false, 0, "no model to test, skipped"
 	}
 
-	success, skipped, elapsed, errMsg := ProbeModelForward(ctx, provider.Endpoint, testModel, apiKey)
+	success, skipped, elapsed, errMsg := ProbeModelForward(ctx, provider.Endpoint, testModel, apiKey, testModelType)
 	if skipped {
 		return false, elapsed, "no model to test, skipped"
 	}
@@ -688,7 +974,7 @@ func (s *HealthCheckService) checkModels(client *http.Client, config *model.Heal
 		if m.Enabled == nil || !*m.Enabled {
 			continue
 		}
-		if strings.Contains(strings.ToLower(m.ModelType), "embed") {
+		if strings.Contains(strings.ToLower(m.ModelType), "audio") {
 			continue
 		}
 		if m.Provider.ID == uuid.Nil {
@@ -717,7 +1003,7 @@ func (s *HealthCheckService) checkSingleModel(client *http.Client, m *model.Mode
 	if modelName == "" {
 		modelName = m.Name
 	}
-	success, skipped, elapsed, errMsg := ProbeModelForward(context.Background(), provider.Endpoint, modelName, apiKey)
+	success, skipped, elapsed, errMsg := ProbeModelForward(context.Background(), provider.Endpoint, modelName, apiKey, m.ModelType)
 	if skipped {
 		s.recordLog("model", m.ID, m.Name, true, elapsed, "skipped")
 		return

@@ -41,9 +41,10 @@ func AuthMiddleware(authClient *infra.AuthClient) gin.HandlerFunc {
 				return
 			}
 			c.Set("identity", &gwmodel.UserIdentity{
-				UserID:       resp.Data.User.UserID,
-				KeyID:        resp.Data.KeyID,
-				DepartmentID: resp.Data.User.DepartmentID,
+				UserID:          resp.Data.User.UserID,
+				KeyID:           resp.Data.KeyID,
+				DepartmentID:    resp.Data.User.DepartmentID,
+				AccessAllGroups: resp.Data.AccessAllGroups,
 			})
 			c.Next()
 			return

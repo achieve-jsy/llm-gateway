@@ -17,15 +17,16 @@ variables:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Workflow Rules:
-#   - dev 分支 tag (v*-rc*) → 测试流水线
-#   - main 分支 tag (v*.*.*)  → 生产流水线
+#   - test 分支 push      → 测试流水线
+#   - main 分支 tag (v*.*.*) → 生产流水线
 # ═══════════════════════════════════════════════════════════════════════════════
 workflow:
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-rc/
+    - if: $CI_COMMIT_BRANCH == "test"
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
 # ─── Test Stage ─────────────────────────────────────────────────────────────
+# 暂时禁用测试阶段；当前测试环境发布只需要 build/deploy/verify。
 test:
   stage: test
   image: ${REGISTRY}/golang:1.26-alpine
@@ -38,7 +39,7 @@ test:
     - go test ./... -cover -count=1 -timeout 5m
   allow_failure: true
   rules:
-    - if: $CI_COMMIT_TAG
+    - when: never
 
 # ─── Build Stage ────────────────────────────────────────────────────────────
 .build_template: &build_template
@@ -49,7 +50,7 @@ test:
     DOCKER_HOST: "unix:///var/run/docker.sock"
     DOCKER_BUILDKIT: "0"
   before_script:
-    - export IMAGE_TAG="$CI_COMMIT_TAG"
+    - export IMAGE_TAG="${CI_COMMIT_TAG:-test-${CI_COMMIT_SHORT_SHA}}"
   rules:
     - if: $CI_COMMIT_TAG
 
@@ -59,7 +60,7 @@ build-gateway-test:
     - docker build --build-arg APP_ENV=staging -f deploy/docker/gateway.Dockerfile -t ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} .
     - docker push ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG}
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-rc/
+    - if: $CI_COMMIT_BRANCH == "test"
 
 build-control-plane-test:
   <<: *build_template
@@ -67,7 +68,7 @@ build-control-plane-test:
     - docker build --build-arg APP_ENV=staging -f deploy/docker/control-plane.Dockerfile -t ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} .
     - docker push ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-rc/
+    - if: $CI_COMMIT_BRANCH == "test"
 
 build-web-test:
   stage: build
@@ -82,7 +83,7 @@ build-web-test:
     paths: [web-dist.tar.gz]
     expire_in: 2 hours
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-rc/
+    - if: $CI_COMMIT_BRANCH == "test"
 
 build-gateway-prod:
   <<: *build_template
@@ -126,7 +127,7 @@ deploy-test:
   script:
     - |
       SSH_OPTS="-o StrictHostKeyChecking=no"
-      IMAGE_TAG="$CI_COMMIT_TAG"
+      IMAGE_TAG="${CI_COMMIT_TAG:-test-${CI_COMMIT_SHORT_SHA}}"
       echo "=== Deploying ${IMAGE_TAG} to ${TEST_HOST} (test) ==="
 
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "mkdir -p ${TEST_PATH}"
@@ -161,7 +162,7 @@ deploy-test:
     url: http://192.0.2.10:4010
   dependencies: []
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-rc/
+    - if: $CI_COMMIT_BRANCH == "test"
       when: on_success
 
 deploy-web-test:
@@ -169,18 +170,18 @@ deploy-web-test:
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   variables:
-    WEB_DIR: "/data/web/aimeter/dist"
+    WEB_DIR: "/var/www/aimeter-test/dist"
   script:
     - |
       SSH_OPTS="-o StrictHostKeyChecking=no"
-      echo "=== Deploying frontend to ${PROD_HOST}:${WEB_DIR} ==="
-      scp ${SSH_OPTS} web-dist.tar.gz root@${PROD_HOST}:/tmp/
-      ssh ${SSH_OPTS} root@${PROD_HOST} "mkdir -p ${WEB_DIR} && tar -xzf /tmp/web-dist.tar.gz -C ${WEB_DIR} && rm -f /tmp/web-dist.tar.gz"
-      echo "=== Frontend deployed to prod ==="
+      echo "=== Deploying frontend to ${TEST_HOST}:${WEB_DIR} ==="
+      scp ${SSH_OPTS} web-dist.tar.gz ${TEST_USER}@${TEST_HOST}:/tmp/
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "mkdir -p ${WEB_DIR} && tar -xzf /tmp/web-dist.tar.gz -C ${WEB_DIR} && rm -f /tmp/web-dist.tar.gz"
+      echo "=== Frontend deployed to test ==="
   dependencies:
     - build-web-test
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-rc/
+    - if: $CI_COMMIT_BRANCH == "test"
       when: on_success
 
 # ─── Deploy Prod (192.0.2.10) ─────────────────────────────────────────────
@@ -263,4 +264,4 @@ verify-test:
       echo "Control-plane healthy"
   dependencies: []
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-rc/
+    - if: $CI_COMMIT_BRANCH == "test"

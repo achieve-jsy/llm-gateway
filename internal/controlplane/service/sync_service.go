@@ -242,7 +242,12 @@ func fetchUpstreamModels(endpoint, apiKey string) ([]upstreamModel, error) {
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		Transport: &http.Transport{
+			Proxy: nil,
+		},
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

@@ -101,7 +101,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	modelCheckHandler := handler.NewModelCheckHandler(modelRepo, providerRepo, healthCheckRepo)
 	syncSvc := service.NewSyncService(providerRepo, modelRepo, publisher)
 	syncSvc.SetSnapshotRefresher(snapshotter)
-	syncHandler := handler.NewSyncHandler(syncSvc)
+	syncHandler := handler.NewSyncHandler(syncSvc, providerRepo)
 
 	keyHandler := handler.NewKeyHandler(keySvc)
 	settingsHandler := handler.NewSettingsHandler(settingsSvc)
@@ -170,6 +170,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.POST("/providers/:id/check", healthCheckHandler.CheckOne)
 		adminGroup.POST("/providers/:id/sync-models", syncHandler.SyncModels)
 		adminGroup.POST("/providers/:id/sync-models/confirm", syncHandler.ConfirmSync)
+		adminGroup.POST("/providers/:id/check-models", syncHandler.CheckModels)
 
 		// 模型管理
 		adminGroup.POST("/models", modelHandler.CreateModel)
@@ -223,6 +224,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.POST("/keys/:id/reveal", keyHandler.RevealKey)
 		adminGroup.GET("/keys/:id/groups", keyHandler.ListKeyGroups)
 		adminGroup.POST("/keys/:id/groups", keyHandler.UpdateKeyGroups)
+		adminGroup.POST("/keys/:id/access-all-groups", keyHandler.ToggleAccessAllGroups)
 		adminGroup.GET("/groups/available", keyHandler.ListAvailableGroups)
 		adminGroup.GET("/model-catalog/by-source", catalogHandler.GetBySource)
 		adminGroup.POST("/model-catalog/sync", catalogHandler.Sync)

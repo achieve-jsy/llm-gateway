@@ -31,10 +31,6 @@ services:
       - "${GATEWAY_HOST:-127.0.0.1}:${GATEWAY_PORT:-8080}:8080"
     environment:
       APP_ENV: ${APP_ENV:-prod}
-      # AWS Bedrock 代理：通过生产服务器（新加坡出口）访问 AWS，避免国内 IP 被封
-      HTTPS_PROXY: "http://llmgw:Proxy2026!@192.0.2.10:18080"
-      HTTP_PROXY: "http://llmgw:Proxy2026!@192.0.2.10:18080"
-      NO_PROXY: "localhost,127.0.0.1,llm-gw-control-plane,control-plane,llm-gw-gateway,gateway,192.0.2.10/16,10.0.0.0/8,172.16.0.0/12"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
       interval: 10s

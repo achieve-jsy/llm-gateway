@@ -50,7 +50,7 @@ func (s *InternalService) ListAvailableModels() ([]AvailableModel, error) {
 			ModelType:           m.ModelType,
 			ProviderID:          m.ProviderID,
 			ProviderName:        m.Provider.Name,
-			ProviderType:        m.Provider.Type,
+			ProviderType:        providerTypeForGateway(m.Provider),
 			ProviderEndpoint:    m.Provider.Endpoint,
 			ProviderCredentials: extractAPIKey(credentials),
 		})

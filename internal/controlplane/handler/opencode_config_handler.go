@@ -5,8 +5,9 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
-	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"text/template"
 	"time"
 
@@ -17,6 +18,20 @@ import (
 
 //go:embed opencode_windows.ps1.tmpl
 var windowsTmplRaw string
+
+// discoveryPluginJS 是二开后的 opencode-models-discovery 插件单文件 bundle。
+// 源码位于 tools/opencode-models-discovery/，通过 `npm run build:bundle` 重新生成
+// 到 assets/opencode-models-discovery.js（提交入库），由网关在配置脚本中下发，
+// 避免依赖 npm 公网安装。
+//
+//go:embed assets/opencode-models-discovery.js
+var discoveryPluginJS []byte
+
+// discoveryPluginVersion 是上面 bundle 对应的版本号（构建脚本与 .js 同源生成），
+// 供插件自更新时比对。
+//
+//go:embed assets/opencode-models-discovery.version
+var discoveryPluginVersionRaw string
 
 var windowsTmpl = template.Must(template.New("win").Parse(windowsTmplRaw))
 var macTmpl = template.Must(template.New("mac").Parse(macTmplRaw))
@@ -86,6 +101,26 @@ func (h *OpencodeConfigHandler) GenerateToken(c *gin.Context) {
 	})
 }
 
+// externalOrigin 计算对外访问 origin（scheme://host[:port]）。
+// 优先用 baseURL（管理员配置的网关公开地址，端口/scheme 可靠），
+// 解析失败时回退到请求头（X-Forwarded-Proto/Host），最后回退 c.Request.Host。
+func externalOrigin(c *gin.Context, baseURL string) string {
+	if u, err := url.Parse(strings.TrimSpace(baseURL)); err == nil && u.Scheme != "" && u.Host != "" {
+		return u.Scheme + "://" + u.Host
+	}
+	scheme := "https"
+	if proto := c.GetHeader("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	} else if c.Request.TLS == nil {
+		scheme = "http"
+	}
+	host := c.Request.Host
+	if fwdHost := c.GetHeader("X-Forwarded-Host"); fwdHost != "" {
+		host = fwdHost
+	}
+	return scheme + "://" + host
+}
+
 // GetScript GET /api/v1/opencode-config/script?token=xxx&os=mac|windows
 // 无需 JWT，返回动态生成的脚本内容（纯文本）
 func (h *OpencodeConfigHandler) GetScript(c *gin.Context) {
@@ -109,16 +144,13 @@ func (h *OpencodeConfigHandler) GetScript(c *gin.Context) {
 		return
 	}
 
-	// 回调地址：使用请求的 Host，支持反代
-	scheme := "https"
-	if c.Request.TLS == nil && c.GetHeader("X-Forwarded-Proto") == "" {
-		scheme = "http"
-	}
-	host := c.Request.Host
-	if fwdHost := c.GetHeader("X-Forwarded-Host"); fwdHost != "" {
-		host = fwdHost
-	}
-	callbackURL := fmt.Sprintf("%s://%s/api/v1/opencode-config/callback", scheme, host)
+	// 外部访问地址（含端口）以 token 里存的 BaseURL 为准 —— 它是管理员配置、
+	// opencode 实际用来访问网关的公开地址，scheme/host/端口都正确。回调与插件下载
+	// 走同一个对外 origin（nginx 按路径转发到控制面）。
+	// 反代场景下 c.Request.Host / X-Forwarded-* 可能丢端口或改写 scheme，故不优先使用。
+	origin := externalOrigin(c, rec.BaseURL)
+	callbackURL := origin + "/api/v1/opencode-config/callback"
+	pluginURL := origin + "/api/v1/opencode-config/plugin"
 
 	params := scriptParams{
 		Token:       token,
@@ -126,6 +158,7 @@ func (h *OpencodeConfigHandler) GetScript(c *gin.Context) {
 		BaseURL:     rec.BaseURL,
 		APIKey:      rec.APIKey,
 		CallbackURL: callbackURL,
+		PluginURL:   pluginURL,
 	}
 
 	var buf bytes.Buffer
@@ -147,6 +180,25 @@ func (h *OpencodeConfigHandler) GetScript(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	c.Status(http.StatusOK)
 	_, _ = c.Writer.Write(buf.Bytes())
+}
+
+// GetPlugin GET /api/v1/opencode-config/plugin
+// 返回二开后的 opencode-models-discovery 插件单文件 bundle（纯 JS，无需 JWT）。
+// 配置脚本会下载它到 ~/.config/opencode/plugin/ 供 opencode 本地加载。
+func (h *OpencodeConfigHandler) GetPlugin(c *gin.Context) {
+	c.Header("Content-Type", "application/javascript; charset=utf-8")
+	c.Header("Cache-Control", "no-store")
+	c.Header("X-Plugin-Version", strings.TrimSpace(discoveryPluginVersionRaw))
+	c.Status(http.StatusOK)
+	_, _ = c.Writer.Write(discoveryPluginJS)
+}
+
+// GetPluginVersion GET /api/v1/opencode-config/plugin/version
+// 返回当前内嵌插件 bundle 的版本号（纯文本，无需 JWT），供插件自更新比对。
+func (h *OpencodeConfigHandler) GetPluginVersion(c *gin.Context) {
+	c.Header("Content-Type", "text/plain; charset=utf-8")
+	c.Header("Cache-Control", "no-store")
+	c.String(http.StatusOK, strings.TrimSpace(discoveryPluginVersionRaw))
 }
 
 // Callback POST /api/v1/opencode-config/callback  (无需 JWT，token 即凭证)
@@ -217,6 +269,7 @@ type scriptParams struct {
 	BaseURL     string
 	APIKey      string
 	CallbackURL string
+	PluginURL   string
 }
 
 // macTmplRaw macOS/Linux bash 脚本模板
@@ -230,7 +283,13 @@ PROVIDER_ID="{{.ProviderID}}"
 BASE_URL="{{.BaseURL}}"
 API_KEY="{{.APIKey}}"
 CALLBACK_URL="{{.CallbackURL}}"
+PLUGIN_URL="{{.PluginURL}}"
 CONFIG_FILE="$HOME/.config/opencode/opencode.json"
+# opencode 标准插件目录为复数 plugins/（单数 plugin/ 在新版可能不被加载）。
+PLUGIN_DIR="$HOME/.config/opencode/plugins"
+PLUGIN_FILE="$PLUGIN_DIR/opencode-models-discovery.js"
+# 旧版脚本曾下到单数目录，清理掉以免重复加载或加载到旧副本。
+LEGACY_PLUGIN_FILE="$HOME/.config/opencode/plugin/opencode-models-discovery.js"
 DISCOVERY_PLUGIN="opencode-models-discovery"
 
 # ── 颜色 & 输出函数 ───────────────────────────────────────────────────────────
@@ -275,89 +334,48 @@ fi
 
 CONFIG_DIR="$(dirname "$CONFIG_FILE")"
 if ! mkdir -p "$CONFIG_DIR" 2>/dev/null; then
-  err "无法创建配置目录: $CONFIG_DIR（请检查权限）"
+  err "无法创建配置目录: ${CONFIG_DIR}（请检查权限）"
   send_callback "failed" "无法创建配置目录"
   exit 1
-fi
-
-# 检测 npm 可用性（不强制，失败不中断）
-if command -v npm &>/dev/null; then
-  NPM_OK=1
-else
-  NPM_OK=0
-  warn "npm 未找到，将跳过插件安装（opencode 启动时会尝试自动安装）"
 fi
 
 info "环境检验通过（python3 ✓  curl ✓  配置目录可写 ✓）"
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 阶段 2：安装 opencode-models-discovery 插件
+# 阶段 2：下载模型发现插件（由网关托管，无需 npm）
 # ══════════════════════════════════════════════════════════════════════════════
-step "阶段 2/4  检测并安装模型发现插件..."
+step "阶段 2/4  下载模型发现插件..."
 
 PLUGIN_INSTALLED=0
-
-if [ "$NPM_OK" = "1" ]; then
-  PLUGIN_PATH=$(npm root -g 2>/dev/null || echo "")
-  if [ -n "$PLUGIN_PATH" ] && [ -d "${PLUGIN_PATH}/${DISCOVERY_PLUGIN}" ]; then
-    info "插件已安装: ${DISCOVERY_PLUGIN}"
-    PLUGIN_INSTALLED=1
-  else
-    step "正在安装 ${DISCOVERY_PLUGIN}..."
-    # 全局安装（失败不退出，继续后续步骤）
-    if npm install -g "${DISCOVERY_PLUGIN}" --silent 2>/dev/null; then
-      info "插件安装成功: ${DISCOVERY_PLUGIN}"
-      PLUGIN_INSTALLED=1
-    else
-      warn "全局安装失败，尝试用户级安装..."
-      if npm install --prefix "$HOME/.local" "${DISCOVERY_PLUGIN}" --silent 2>/dev/null; then
-        info "插件安装成功（用户级）"
-        PLUGIN_INSTALLED=1
-      else
-        warn "插件安装失败 — 不影响配置写入，opencode 启动时会再次尝试自动安装"
-        PLUGIN_INSTALLED=0
-      fi
-    fi
-  fi
+# 清理旧的单数目录副本，避免重复加载或加载旧版本。
+rm -f "$LEGACY_PLUGIN_FILE" 2>/dev/null || true
+if mkdir -p "$PLUGIN_DIR" 2>/dev/null && \
+   curl -fsSL "$PLUGIN_URL" -o "$PLUGIN_FILE.tmp" 2>/dev/null && [ -s "$PLUGIN_FILE.tmp" ]; then
+  mv "$PLUGIN_FILE.tmp" "$PLUGIN_FILE"
+  PLUGIN_INSTALLED=1
+  info "插件已下载: $PLUGIN_FILE"
 else
-  warn "跳过插件安装（npm 不可用）— opencode 启动时会尝试自动安装"
+  rm -f "$PLUGIN_FILE.tmp" 2>/dev/null || true
+  PLUGIN_INSTALLED=0
+  warn "插件下载失败（不影响配置写入），可稍后重试"
 fi
 
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 阶段 3：获取模型列表 + 写入 OpenCode 配置
+# 阶段 3：写入 OpenCode 配置（模型交给插件按 key 动态发现+富化）
 # ══════════════════════════════════════════════════════════════════════════════
-step "阶段 3/4  获取模型列表并写入配置..."
+step "阶段 3/4  写入 OpenCode 配置..."
 
 python3 - << PYEOF
-import json, os, time, urllib.request, urllib.error
+import json, os
 
 config_path      = os.path.expanduser("$CONFIG_FILE")
 provider_id      = "$PROVIDER_ID"
 base_url         = "$BASE_URL"
 api_key          = "$API_KEY"
 discovery_plugin = "$DISCOVERY_PLUGIN"
-
-# 用 Python 直接调接口获取模型列表（避免 bash 变量注入 heredoc 的风险）
-models = {}
-try:
-    # GET {base_url}/models — 按 key 返回有权限的模型组
-    models_url = base_url.rstrip("/") + "/models"
-    req = urllib.request.Request(
-        models_url,
-        headers={"Authorization": f"Bearer {api_key}"}
-    )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        data = json.loads(resp.read().decode())
-        for m in data.get("data", []):
-            mid = m.get("id", "")
-            if mid:
-                models[mid] = {"name": m.get("name", mid)}
-    print(f"  获取到 {len(models)} 个模型")
-except Exception as e:
-    print(f"  模型列表获取失败（{e}），跳过静态写入")
 
 # 读取现有配置
 if os.path.exists(config_path):
@@ -371,39 +389,42 @@ else:
 
 providers = cfg.setdefault("provider", {})
 
-# 判断 provider_id 使用策略
+# 同名 provider 直接覆盖（不再按 URL 不同新建带时间戳的副本）
 target_id = provider_id
-action    = "新增"
-if provider_id in providers:
-    existing_url = providers[provider_id].get("options", {}).get("baseURL", "")
-    if existing_url and existing_url.rstrip("/") != base_url.rstrip("/"):
-        ts = int(time.time())
-        target_id = f"{provider_id}-{ts}"
-        action = f"重名（URL 不同），新建 {target_id}"
-    else:
-        action = "更新 API Key"
+action    = "更新（覆盖）" if provider_id in providers else "新增"
 
-entry = {
+# 不再静态写死模型：交给插件按 key 动态发现，并通过 /v1/model/info 富化能力
+# （attachment/图像输入、tool_call、上下文/输出上限等）。
+# modelsDiscovery.enabled=true 仅对本 provider 开启发现；其它 OpenAI 兼容渠道
+# 因插件默认 discovery 关闭而不会被同步。
+providers[target_id] = {
     "npm":  "@ai-sdk/openai-compatible",
     "name": "LLM Gateway",
     "options": {
         "baseURL": base_url,
         "apiKey":  api_key,
+        "modelsDiscovery": {
+            "enabled": True,
+            "endpoint": "/v1/models",
+            "modelInfoEndpoint": "/v1/model/info",
+            "modelInfoFormat": "litellm",
+        },
     },
 }
-if models:
-    entry["models"] = models
 
-providers[target_id] = entry
-
-# 写入插件（去重）
+# 本地文件插件已下发到 plugin 目录（opencode 自动加载），移除 plugin 数组里旧的
+# npm 引用，避免重复加载或联网安装旧版本（旧版默认会同步所有渠道）。
 plugins = cfg.get("plugin", [])
-if discovery_plugin not in plugins:
-    plugins.append(discovery_plugin)
-    cfg["plugin"] = plugins
-    plugin_action = "已添加"
-else:
-    plugin_action = "已存在"
+kept = []
+for p in plugins:
+    name = p[0] if isinstance(p, list) and p else p
+    if name == discovery_plugin:
+        continue
+    kept.append(p)
+if kept:
+    cfg["plugin"] = kept
+elif "plugin" in cfg:
+    del cfg["plugin"]
 
 with open(config_path, "w") as f:
     json.dump(cfg, f, indent=2, ensure_ascii=False)
@@ -411,8 +432,6 @@ with open(config_path, "w") as f:
 
 print(f"RESULT_TARGET_ID={target_id}")
 print(f"RESULT_ACTION={action}")
-print(f"RESULT_PLUGIN={plugin_action}")
-print(f"RESULT_MODELS={len(models)}")
 PYEOF
 
 WRITE_STATUS=$?
@@ -456,13 +475,13 @@ info "配置文件：$CONFIG_FILE"
 info "Provider：${PROVIDER_ID}（已写入）"
 
 if [ "$PLUGIN_INSTALLED" = "1" ]; then
-  info "插件：${DISCOVERY_PLUGIN} 已安装（每次启动自动刷新模型列表）"
+  info "插件：已下载到 ${PLUGIN_FILE}（每次启动按 key 动态发现并富化模型能力）"
 else
-  warn "插件：${DISCOVERY_PLUGIN} 未安装成功（已写入配置，opencode 启动时会自动尝试安装）"
+  warn "插件：下载失败（配置已写入），请确认能访问 ${PLUGIN_URL} 后重试"
 fi
 
 echo ""
-echo -e "  ${CYAN}下一步：${NC}重启 opencode，即可在模型列表中看到 LLM Gateway 的所有模型。"
+echo -e "  ${CYAN}下一步：${NC}重启 opencode，即可在模型列表中看到 LLM Gateway 的模型（含图像输入等能力）。"
 echo ""
 divider
 

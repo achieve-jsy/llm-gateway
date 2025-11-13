@@ -83,6 +83,58 @@ type allGroupItem struct {
 	Enabled bool   `json:"enabled"`
 }
 
+// GroupModelInfo 模型组聚合能力信息（与 control-plane service.GroupModelInfo 对应）。
+type GroupModelInfo struct {
+	Mode                    string `json:"mode"`
+	MaxInputTokens          int    `json:"max_input_tokens"`
+	MaxOutputTokens         int    `json:"max_output_tokens"`
+	SupportsVision          bool   `json:"supports_vision"`
+	SupportsFunctionCalling bool   `json:"supports_function_calling"`
+	SupportsToolChoice      bool   `json:"supports_tool_choice"`
+}
+
+// GetGroupModelInfo 从 control-plane 拉取指定模型组名的聚合能力信息。
+// names 为空时返回所有启用组。
+func (c *Client) GetGroupModelInfo(ctx context.Context, names []string) (map[string]GroupModelInfo, error) {
+	u := fmt.Sprintf("%s/internal/v1/groups/model-info", c.baseURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	q := req.URL.Query()
+	for _, n := range names {
+		if n != "" {
+			q.Add("names", n)
+		}
+	}
+	req.URL.RawQuery = q.Encode()
+	req.Header.Set("X-Internal-Token", c.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.longClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("call control-plane: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("control-plane returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+
+	var result struct {
+		Data map[string]GroupModelInfo `json:"data"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("parse response: %w", err)
+	}
+	return result.Data, nil
+}
+
 // ListAllGroups 从 control-plane 拉取所有启用的模型组名（供万能模型组使用）
 func (c *Client) ListAllGroups(ctx context.Context) ([]string, error) {
 	url := fmt.Sprintf("%s/api/v1/internal/groups", c.baseURL)

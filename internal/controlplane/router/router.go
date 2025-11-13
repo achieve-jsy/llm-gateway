@@ -111,6 +111,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	providerHandler := handler.NewProviderHandler(providerSvc)
 	modelHandler := handler.NewModelHandler(modelSvc)
 	internalHandler := handler.NewInternalHandler(internalSvc, keySvc, keyGroupSvc)
+	modelInfoSvc := service.NewModelInfoService(groupRepo, modelRepo)
+	modelInfoHandler := handler.NewModelInfoHandler(modelInfoSvc)
 	defHandler := handler.NewDefinitionHandler(defRepo)
 	testHandler := handler.NewTestHandler(providerRepo, modelRepo)
 	modelTagHandler := handler.NewModelTagHandler(modelTagRepo)
@@ -164,6 +166,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 	// OpenCode 配置（无需 JWT，token 即凭证）
 	r.GET("/api/v1/opencode-config/script", opencodeConfigHandler.GetScript)
+	r.GET("/api/v1/opencode-config/plugin", opencodeConfigHandler.GetPlugin)
+	r.GET("/api/v1/opencode-config/plugin/version", opencodeConfigHandler.GetPluginVersion)
 	r.POST("/api/v1/opencode-config/callback", opencodeConfigHandler.Callback)
 
 	// 启动健康检测调度器（优先使用环境变量 HEALTH_CHECK_INTERVAL 控制）
@@ -264,6 +268,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/model-catalog/:id", catalogHandler.GetByID)
 
 		// 模型分组管理
+		adminGroup.GET("/groups/capabilities", modelInfoHandler.GetGroupModelInfo)
 		adminGroup.GET("/groups/defaults", groupHandler.GetDefaults)
 		adminGroup.POST("/groups/check-all", groupCheckHandler.CheckAll)
 		adminGroup.POST("/groups", groupHandler.Create)
@@ -293,6 +298,7 @@ internalGroup.GET("/models/available", internalHandler.ListAvailableModels)
 	internalGroup.POST("/keys/verify", keyHandler.VerifyKey)
 	internalGroup.POST("/auth/verify-key", keyHandler.VerifyKey)
 	internalGroup.GET("/keys/:id/groups", internalHandler.GetKeyGroups)
+	internalGroup.GET("/groups/model-info", modelInfoHandler.GetGroupModelInfo)
 	}
 
 	return r

@@ -45,6 +45,29 @@
             {{ row.model_count ?? row.models?.length ?? 0 }}
           </template>
         </el-table-column>
+        <el-table-column label="能力（聚合）" min-width="220">
+          <template #default="{ row }">
+            <div class="cap-cell">
+              <template v-if="capabilities[row.name]">
+                <el-tag v-if="capabilities[row.name].supports_vision" type="success" size="small" effect="light">图像输入</el-tag>
+                <el-tag v-if="capabilities[row.name].supports_function_calling" type="warning" size="small" effect="light">工具调用</el-tag>
+                <el-tag v-if="capabilities[row.name].supports_tool_choice" type="warning" size="small" effect="plain">tool_choice</el-tag>
+                <el-tag v-if="capabilities[row.name].max_input_tokens" type="info" size="small" effect="plain">
+                  ctx {{ formatTokens(capabilities[row.name].max_input_tokens) }}
+                </el-tag>
+                <el-tag v-if="capabilities[row.name].max_output_tokens" type="info" size="small" effect="plain">
+                  out {{ formatTokens(capabilities[row.name].max_output_tokens) }}
+                </el-tag>
+                <span
+                  v-if="!hasAnyCapability(row.name)"
+                  class="cap-empty"
+                  title="组内并非全部成员都具备能力，或成员未绑定 Catalog"
+                >无（成员未全绑定 Catalog）</span>
+              </template>
+              <span v-else class="cap-empty">—</span>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="100" align="center">
           <template #default="{ row }">
             <el-switch
@@ -101,10 +124,12 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { groupsApi } from '@/api/groups'
+import type { GroupCapability } from '@/api/groups'
 import type { GroupListItem, Strategy } from '@/types/group'
 import GroupEditDialog from '@/components/GroupEditDialog.vue'
 
 const groups = ref<GroupListItem[]>([])
+const capabilities = ref<Record<string, GroupCapability>>({})
 const loading = ref(false)
 const error = ref(false)
 const search = ref('')
@@ -137,6 +162,24 @@ function strategyTagType(strategy: Strategy): '' | 'success' | 'warning' {
   return ''
 }
 
+function formatTokens(n: number): string {
+  if (!n) return '0'
+  if (n >= 1000) return `${Math.round(n / 1000)}K`
+  return String(n)
+}
+
+function hasAnyCapability(name: string): boolean {
+  const c = capabilities.value[name]
+  if (!c) return false
+  return (
+    c.supports_vision ||
+    c.supports_function_calling ||
+    c.supports_tool_choice ||
+    c.max_input_tokens > 0 ||
+    c.max_output_tokens > 0
+  )
+}
+
 function formatDateTime(value: string): string {
   if (!value) return '-'
   const date = new Date(value)
@@ -156,10 +199,21 @@ async function loadGroups() {
     })
     groups.value = res.data.data
     total.value = res.data.total
+    loadCapabilities()
   } catch {
     error.value = true
   } finally {
     loading.value = false
+  }
+}
+
+// 拉取模型组聚合能力（失败不影响列表渲染，仅能力列显示 —）。
+async function loadCapabilities() {
+  try {
+    const res = await groupsApi.getGroupCapabilities()
+    capabilities.value = res.data.data || {}
+  } catch {
+    capabilities.value = {}
   }
 }
 
@@ -248,6 +302,18 @@ onMounted(() => {
 
 .state-wrapper {
   padding: 40px 0;
+}
+
+.cap-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.cap-empty {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 
 .pagination-wrapper {

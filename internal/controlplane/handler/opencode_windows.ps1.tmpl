@@ -8,7 +8,12 @@ $PROVIDER_ID      = "{{.ProviderID}}"
 $BASE_URL         = "{{.BaseURL}}"
 $API_KEY          = "{{.APIKey}}"
 $CALLBACK_URL     = "{{.CallbackURL}}"
+$PLUGIN_URL       = "{{.PluginURL}}"
 $CONFIG_FILE      = "$env:USERPROFILE\.config\opencode\opencode.json"
+# opencode 标准插件目录为复数 plugins/（单数 plugin/ 在新版可能不被加载）。
+$PLUGIN_DIR       = "$env:USERPROFILE\.config\opencode\plugins"
+$PLUGIN_FILE      = "$PLUGIN_DIR\opencode-models-discovery.js"
+$LEGACY_PLUGIN_FILE = "$env:USERPROFILE\.config\opencode\plugin\opencode-models-discovery.js"
 $DISCOVERY_PLUGIN = "opencode-models-discovery"
 
 function Send-Callback($status, $msg = "") {
@@ -64,26 +69,26 @@ Write-Ok "环境检验通过（python ✓  curl ✓  配置目录可写 ✓）"
 Write-Host ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 阶段 2：安装 opencode-models-discovery 插件
+# 阶段 2：下载模型发现插件（由网关托管，无需 npm）
 # ══════════════════════════════════════════════════════════════════════════════
-Write-Step "阶段 2/4  检测并安装模型发现插件..."
+Write-Step "阶段 2/4  下载模型发现插件..."
 
-if (-not $npmAvailable) {
-    Write-Warn "npm 未找到，跳过插件安装（opencode 启动时会自动安装）"
-} else {
-    $globalRoot = npm root -g 2>$null
-    $pluginPath = Join-Path $globalRoot $DISCOVERY_PLUGIN
-    if (Test-Path $pluginPath) {
-        Write-Ok "插件已安装: $DISCOVERY_PLUGIN"
-    } else {
-        Write-Step "正在安装 $DISCOVERY_PLUGIN..."
-        try {
-            npm install -g $DISCOVERY_PLUGIN --silent 2>$null | Out-Null
-            Write-Ok "插件安装成功: $DISCOVERY_PLUGIN"
-        } catch {
-            Write-Warn "插件安装失败，将由 opencode 在启动时自动安装"
-        }
+$pluginInstalled = $false
+# 清理旧的单数目录副本，避免重复加载或加载旧版本。
+if (Test-Path $LEGACY_PLUGIN_FILE) { Remove-Item $LEGACY_PLUGIN_FILE -Force -ErrorAction SilentlyContinue }
+try {
+    if (-not (Test-Path $PLUGIN_DIR)) {
+        New-Item -ItemType Directory -Path $PLUGIN_DIR -Force | Out-Null
     }
+    Invoke-WebRequest -Uri $PLUGIN_URL -OutFile $PLUGIN_FILE -TimeoutSec 15 -UseBasicParsing
+    if ((Test-Path $PLUGIN_FILE) -and ((Get-Item $PLUGIN_FILE).Length -gt 0)) {
+        $pluginInstalled = $true
+        Write-Ok "插件已下载: $PLUGIN_FILE"
+    } else {
+        Write-Warn "插件下载失败（不影响配置写入），可稍后重试"
+    }
+} catch {
+    Write-Warn "插件下载失败（不影响配置写入）: $_"
 }
 Write-Host ""
 
@@ -110,44 +115,44 @@ try {
         $cfg | Add-Member -NotePropertyName provider -NotePropertyValue ([PSCustomObject]@{})
     }
 
-    # 判断 provider_id 使用策略
+    # 同名 provider 直接覆盖（不再按 URL 不同新建带时间戳的副本）
     if ($cfg.provider.PSObject.Properties[$PROVIDER_ID]) {
-        $existingUrl = ""
-        try { $existingUrl = $cfg.provider.$PROVIDER_ID.options.baseURL } catch {}
-        if ($existingUrl -and ($existingUrl.TrimEnd('/') -ne $BASE_URL.TrimEnd('/'))) {
-            $ts = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-            $targetId = "$PROVIDER_ID-$ts"
-            $resultAction = "重名（URL 不同），新建 $targetId"
-        } else {
-            $resultAction = "更新 API Key"
-        }
+        $resultAction = "更新（覆盖）"
     } else {
         $resultAction = "新增"
     }
 
-    # 写入 provider 基础配置（不写死 models，交给插件动态发现）
+    # 写入 provider 配置：不写死 models，交给插件按 key 动态发现，并通过
+    # /v1/model/info 富化能力（attachment/图像输入、tool_call、上下文上限等）。
+    # modelsDiscovery.enabled=true 仅对本 provider 开启发现，其它渠道不会被同步。
     $providerConfig = [PSCustomObject]@{
         npm     = "@ai-sdk/openai-compatible"
         name    = "LLM Gateway"
         options = [PSCustomObject]@{
             baseURL = $BASE_URL
             apiKey  = $API_KEY
+            modelsDiscovery = [PSCustomObject]@{
+                enabled           = $true
+                endpoint          = "/v1/models"
+                modelInfoEndpoint = "/v1/model/info"
+                modelInfoFormat   = "litellm"
+            }
         }
     }
     $cfg.provider | Add-Member -NotePropertyName $targetId -NotePropertyValue $providerConfig -Force
 
-    # 写入插件（去重）
-    if (-not $cfg.PSObject.Properties['plugin']) {
-        $cfg | Add-Member -NotePropertyName plugin -NotePropertyValue @()
+    # 本地文件插件已下发到 plugin 目录（opencode 自动加载），移除 plugin 数组里旧的
+    # npm 引用，避免重复加载或联网安装旧版本。
+    if ($cfg.PSObject.Properties['plugin']) {
+        $kept = @()
+        foreach ($p in @($cfg.plugin)) {
+            $name = if ($p -is [System.Array] -and $p.Count -gt 0) { $p[0] } else { $p }
+            if ($name -ne $DISCOVERY_PLUGIN) { $kept += ,$p }
+        }
+        if ($kept.Count -gt 0) { $cfg.plugin = $kept }
+        else { $cfg.PSObject.Properties.Remove('plugin') }
     }
-    $plugins = @($cfg.plugin)
-    if ($plugins -notcontains $DISCOVERY_PLUGIN) {
-        $plugins += $DISCOVERY_PLUGIN
-        $cfg.plugin = $plugins
-        $resultPlugin = "已添加"
-    } else {
-        $resultPlugin = "已存在"
-    }
+    $resultPlugin = if ($pluginInstalled) { "已下载到 $PLUGIN_FILE" } else { "下载失败（请确认可访问 $PLUGIN_URL）" }
 
     $cfg | ConvertTo-Json -Depth 10 | Set-Content $CONFIG_FILE -Encoding UTF8
     $writeOk = $true
@@ -195,6 +200,6 @@ Write-Ok "配置文件：$CONFIG_FILE"
 Write-Ok "Provider：$targetId（$resultAction）"
 Write-Ok "插件：$DISCOVERY_PLUGIN（$resultPlugin）"
 Write-Host ""
-Write-Host "  下一步：" -NoNewline; Write-Host "重启 opencode，即可在模型列表中看到 LLM Gateway 的所有模型。" -ForegroundColor Cyan
+Write-Host "  下一步：" -NoNewline; Write-Host "重启 opencode，即可在模型列表中看到 LLM Gateway 的模型（含图像输入等能力）。" -ForegroundColor Cyan
 Write-Host ""
 Write-Divider

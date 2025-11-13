@@ -16,6 +16,17 @@ export interface FailoverDefaults {
   failover_cooldown_seconds: number
 }
 
+// GroupCapability 模型组聚合能力（与控制面 service.GroupModelInfo 对应）。
+// 能力位为「组内全部成员都支持才为 true」；上限取成员最小正值。
+export interface GroupCapability {
+  mode: string
+  max_input_tokens: number
+  max_output_tokens: number
+  supports_vision: boolean
+  supports_function_calling: boolean
+  supports_tool_choice: boolean
+}
+
 export const groupsApi = {
   createGroup(data: CreateGroupRequest) {
     return http.post<ApiResponse<Group>>('/api/v1/groups', data)
@@ -55,5 +66,12 @@ export const groupsApi = {
 
   getGroupDefaults() {
     return http.get<ApiResponse<FailoverDefaults>>('/api/v1/groups/defaults')
+  },
+
+  // 返回 { [模型组名]: GroupCapability }，不传 names 时返回所有启用组。
+  getGroupCapabilities(names?: string[]) {
+    return http.get<ApiResponse<Record<string, GroupCapability>>>('/api/v1/groups/capabilities', {
+      params: names && names.length ? { names } : undefined,
+    })
   },
 }

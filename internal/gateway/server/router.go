@@ -74,6 +74,7 @@ func Setup(
 	}
 	modelsHandler := handler.NewModelsHandler(routerCache, modelsRouter, state)
 	boundModelsHandler := handler.NewBoundModelsHandler(controlPlaneURL, internalToken)
+	modelInfoHandler := handler.NewModelInfoHandler(controlPlaneURL, internalToken)
 	healthHandler := handler.NewHealthHandler(routerCache.Client(), modelsRouter, state, sch)
 
 	r.GET("/health", healthHandler.Health)
@@ -89,6 +90,7 @@ func Setup(
 	{
 		// Models
 		v1.GET("/models", boundModelsHandler.Handle)
+		v1.GET("/model/info", modelInfoHandler.Handle)
 		v1.GET("/health/models", modelsHandler.HandleLegacy)
 
 		// Chat completions

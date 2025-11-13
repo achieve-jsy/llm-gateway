@@ -37,3 +37,6 @@ jwt:
 
 frontend:
   url: "http://localhost:5173"
+
+gateway:
+  url: "http://localhost:8080"

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	cpconfig "github.com/example/llm-gateway/internal/controlplane/config"
 	"github.com/example/llm-gateway/internal/controlplane/auth"
 	"github.com/example/llm-gateway/internal/controlplane/event"
 	"github.com/example/llm-gateway/internal/controlplane/handler"
@@ -21,6 +22,9 @@ import (
 
 // Setup 初始化 Gin 路由和中间件链
 func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
+	// 加载配置（YAML + 环境变量）
+	cfg := cpconfig.Load()
+
 	r := gin.New()
 
 	// 全局中间件
@@ -92,7 +96,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	groupHandler := handler.NewGroupHandler(groupSvc, modelRepo, providerRepo)
 
 	systemKeySvc := service.NewSystemKeyService(db)
-	groupCheckSvc := service.NewGroupCheckService(groupRepo, healthCheckRepo, systemKeySvc)
+	// gateway.url 从 yaml 配置读取，环境变量 GATEWAY_URL 可覆盖
+	groupCheckSvc := service.NewGroupCheckService(groupRepo, healthCheckRepo, systemKeySvc, cfg.Gateway.URL)
 	groupCheckHandler := handler.NewGroupCheckHandler(groupCheckSvc)
 	healthCheckSvc.SetGroupCheckService(groupCheckSvc)
 

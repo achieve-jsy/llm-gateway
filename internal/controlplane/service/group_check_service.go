@@ -47,12 +47,16 @@ type GroupCheckService struct {
 }
 
 // NewGroupCheckService 创建 GroupCheckService
+// gatewayURL 为空时自动从环境变量 GATEWAY_URL / GATEWAY_PORT 读取，最终兜底 http://localhost:8080
 func NewGroupCheckService(
 	groupRepo *repository.GroupRepo,
 	healthRepo *repository.HealthCheckRepo,
 	systemKeySvc *SystemKeyService,
+	gatewayURL string,
 ) *GroupCheckService {
-	gatewayURL := os.Getenv("GATEWAY_URL")
+	if gatewayURL == "" {
+		gatewayURL = os.Getenv("GATEWAY_URL")
+	}
 	if gatewayURL == "" {
 		port := os.Getenv("GATEWAY_PORT")
 		if port == "" {

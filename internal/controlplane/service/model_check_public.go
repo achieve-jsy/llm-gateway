@@ -49,6 +49,11 @@ func DoBedrockModelCheckPublic(provider *model.Provider, credJSON string, m *mod
 				))
 			}
 		} else {
+			// Bedrock API Key (Bearer token) 模式：
+			// 需要提供匿名凭证避免 SDK 走默认凭证链（IMDS 超时）
+			loadOpts = append(loadOpts, awsconfig.WithCredentialsProvider(
+				credentials.NewStaticCredentialsProvider("anonymous", "anonymous", ""),
+			))
 			tokenVal := apiKey
 			runtimeOpts = append(runtimeOpts, func(o *bedrockruntime.Options) {
 				o.BearerAuthTokenProvider = bearer.TokenProviderFunc(func(_ context.Context) (bearer.Token, error) {

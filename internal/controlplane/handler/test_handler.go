@@ -254,7 +254,10 @@ func (h *TestHandler) testBedrock(provider *model.Provider, credJSON string, tes
 				credentials.NewStaticCredentialsProvider(creds.AccessKeyID, creds.SecretAccessKey, creds.SessionToken),
 			))
 		} else {
-			// Bedrock API Key（Bearer token）
+			// Bedrock API Key（Bearer token）：提供匿名凭证避免 SDK 走默认凭证链（IMDS 超时）
+			loadOpts = append(loadOpts, awsconfig.WithCredentialsProvider(
+				credentials.NewStaticCredentialsProvider("anonymous", "anonymous", ""),
+			))
 			tokenVal := apiKey
 			bedrockCtrlOpts = append(bedrockCtrlOpts, func(o *bedrock.Options) {
 				o.BearerAuthTokenProvider = bearer.TokenProviderFunc(func(_ context.Context) (bearer.Token, error) {

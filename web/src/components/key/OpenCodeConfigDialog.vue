@@ -136,6 +136,7 @@ import {
   getOpencodeConfigStatus,
 } from '@/services/control-plane'
 import { useSettingsStore } from '@/stores/settings'
+import { copyToClipboard } from '@/utils/clipboard'
 
 const props = defineProps<{
   visible: boolean
@@ -263,8 +264,12 @@ async function copyCommand() {
     await generateToken()
   }
   if (!scriptURL.value) return
-  await navigator.clipboard.writeText(scriptURL.value)
-  ElMessage.success('命令已复制，请粘贴到终端执行')
+  try {
+    await copyToClipboard(scriptURL.value)
+    ElMessage.success('命令已复制，请粘贴到终端执行')
+  } catch {
+    ElMessage.error('复制失败，请手动选中命令复制')
+  }
 }
 
 /** 用户点「已复制，等待结果」——开始轮询 */

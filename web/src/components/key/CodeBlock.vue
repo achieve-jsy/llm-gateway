@@ -20,6 +20,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { copyToClipboard } from '@/utils/clipboard'
 
 const props = defineProps<{
   title: string
@@ -31,7 +32,7 @@ const copied = ref(false)
 
 async function handleCopy() {
   try {
-    await navigator.clipboard.writeText(props.code)
+    await copyToClipboard(props.code)
     ElMessage.success('已复制')
     copied.value = true
     setTimeout(() => { copied.value = false }, 2000)

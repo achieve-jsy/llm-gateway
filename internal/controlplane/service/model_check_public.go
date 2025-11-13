@@ -75,7 +75,7 @@ func DoBedrockModelCheckPublic(provider *model.Provider, credJSON string, m *mod
 
 	modelName := m.UpstreamModelID
 	if modelName == "" {
-		modelName = m.Name
+		modelName = bedrockModelID(m.Name)
 	}
 
 	maxTokens := int32(1)

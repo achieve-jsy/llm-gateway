@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/bedrock"
@@ -254,7 +255,8 @@ func (h *TestHandler) testBedrock(provider *model.Provider, credJSON string, tes
 				credentials.NewStaticCredentialsProvider(creds.AccessKeyID, creds.SecretAccessKey, creds.SessionToken),
 			))
 		} else {
-			// Bedrock API Key（Bearer token）
+			// Bedrock API Key（Bearer token）：使用 AnonymousCredentials 让 SDK 不做 SigV4 签名
+			loadOpts = append(loadOpts, awsconfig.WithCredentialsProvider(aws.AnonymousCredentials{}))
 			tokenVal := apiKey
 			bedrockCtrlOpts = append(bedrockCtrlOpts, func(o *bedrock.Options) {
 				o.BearerAuthTokenProvider = bearer.TokenProviderFunc(func(_ context.Context) (bearer.Token, error) {

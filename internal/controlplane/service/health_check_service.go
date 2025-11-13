@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/bedrock"
@@ -447,6 +448,9 @@ func (s *HealthCheckService) doBedrockModelCheck(provider *model.Provider, credJ
 				))
 			}
 		} else {
+			// Bedrock API Key (Bearer token) 模式：
+			// 使用 AnonymousCredentials 让 SDK 不做 SigV4 签名，也不走默认凭证链
+			loadOpts = append(loadOpts, awsconfig.WithCredentialsProvider(aws.AnonymousCredentials{}))
 			tokenVal := apiKey
 			runtimeOpts = append(runtimeOpts, func(o *bedrockruntime.Options) {
 				o.BearerAuthTokenProvider = bearer.TokenProviderFunc(func(_ context.Context) (bearer.Token, error) {

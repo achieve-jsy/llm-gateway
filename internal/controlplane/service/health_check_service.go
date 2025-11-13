@@ -473,7 +473,7 @@ func (s *HealthCheckService) doBedrockModelCheck(provider *model.Provider, credJ
 
 	modelName := m.UpstreamModelID
 	if modelName == "" {
-		modelName = m.Name
+		modelName = bedrockModelID(m.Name)
 	}
 
 	maxTokens := int32(1)
@@ -775,7 +775,7 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 			filter := repository.ModelListFilter{ProviderID: &providerID}
 			models, _, _ := s.modelRepo.List(filter, 0, 1)
 			if len(models) > 0 {
-				testModel = models[0].Name
+				testModel = bedrockModelID(models[0].Name)
 			}
 		}
 		if testModel == "" {
@@ -819,6 +819,17 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 	s.providerRepo.UpdateResponseTime(provider.ID, cr.ResponseTime)
 	s.providerRepo.ResetFailures(provider.ID)
 	return cr
+}
+
+// bedrockModelID 从模型名称中提取实际的 Bedrock model ID。
+// 模型名称在 gateway 内部格式为 "{provider}/{model_id}"（如 "bedrock/global.anthropic.claude-opus-4-6-v1"），
+// 但 AWS Bedrock API 只接受 "/" 之后的部分（如 "global.anthropic.claude-opus-4-6-v1"）。
+// 若不含 "/"，原样返回。
+func bedrockModelID(name string) string {
+	if idx := strings.Index(name, "/"); idx >= 0 {
+		return name[idx+1:]
+	}
+	return name
 }
 
 // regionFromBedrockEndpoint 从 Bedrock endpoint URL 中提取 AWS region

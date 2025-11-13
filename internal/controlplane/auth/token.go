@@ -27,13 +27,13 @@ type UserClaims struct {
 	CompanyName  string `json:"company_name,omitempty"`
 }
 
-func GenerateAccessToken(secret, userID, deptID, deptName, email, name, passport, role string) (string, error) {
+func GenerateAccessToken(secret string, ttl time.Duration, userID, deptID, deptName, email, name, passport, role string) (string, error) {
 	now := time.Now()
 	claims := &UserClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "llm-gateway",
 			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(30 * time.Minute)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
 		},
 		UserID:   userID,
 		DeptID:   deptID,

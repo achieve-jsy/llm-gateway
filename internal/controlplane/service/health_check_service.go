@@ -53,11 +53,15 @@ type HealthCheckService struct {
 	modelRepo    *repository.ModelRepo
 	rdb          *redis.Client
 
-	mu                sync.Mutex
-	cancel            context.CancelFunc
-	modelCheckCancel  context.CancelFunc
-	running           bool
-	modelCheckRunning bool
+	groupCheckSvc *GroupCheckService // 可选：模型组检测（nil 表示未启用）
+
+	mu                   sync.Mutex
+	cancel               context.CancelFunc
+	modelCheckCancel     context.CancelFunc
+	groupCheckCancel     context.CancelFunc
+	running              bool
+	modelCheckRunning    bool
+	groupCheckRunning    bool
 }
 
 // NewHealthCheckService 创建 HealthCheckService 实例
@@ -73,6 +77,11 @@ func NewHealthCheckService(
 		modelRepo:    modelRepo,
 		rdb:          rdb,
 	}
+}
+
+// SetGroupCheckService 注入模型组检测服务（在 router 中完成依赖装配后调用）
+func (s *HealthCheckService) SetGroupCheckService(svc *GroupCheckService) {
+	s.groupCheckSvc = svc
 }
 
 // GetConfig 获取配置
@@ -138,6 +147,10 @@ func (s *HealthCheckService) Stop() {
 	if s.modelCheckRunning && s.modelCheckCancel != nil {
 		s.modelCheckCancel()
 		s.modelCheckRunning = false
+	}
+	if s.groupCheckRunning && s.groupCheckCancel != nil {
+		s.groupCheckCancel()
+		s.groupCheckRunning = false
 	}
 	slog.Info("health check scheduler stopped")
 }
@@ -218,6 +231,9 @@ func (s *HealthCheckService) StartBackground(ctx context.Context) {
 
 	// 启动独立的模型检测后台 goroutine
 	s.startModelCheckBackground(ctx, config)
+
+	// 启动独立的模型组检测后台 goroutine
+	s.startGroupCheckBackground(ctx, config)
 }
 
 // startModelCheckBackground 启动模型检测独立后台定时器
@@ -933,6 +949,14 @@ func (s *HealthCheckService) RunNow() {
 		s.CheckAll(ctx)
 	}()
 	go s.runBackgroundModelCheck()
+	if s.groupCheckSvc != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			s.groupCheckSvc.CheckAll(ctx)
+			s.invalidateGroupTimelineCache()
+		}()
+	}
 }
 
 // runLoop 定时执行健康检测（config 驱动模式）
@@ -1211,7 +1235,243 @@ func sortTimelineGroupsByHealth(groups []TimelineGroup) {
 	}
 }
 
-// truncateStr 截断字符串
+// GroupTimelineGroup 按模型组聚合的监控组
+type GroupTimelineGroup struct {
+	GroupName     string          `json:"group_name"`
+	Strategy      string          `json:"strategy"`
+	ModelCount    int             `json:"model_count"`
+	HealthPercent int             `json:"health_percent"`
+	TotalChecks   int             `json:"total_checks"`
+	SuccessChecks int             `json:"success_checks"`
+	Timeline      []TimelineEntry `json:"timeline"`
+}
+
+// GroupTimelineResult 模型组时间线监控结果
+type GroupTimelineResult struct {
+	Lookback string               `json:"lookback"`
+	Total    int                  `json:"total"`
+	Groups   []GroupTimelineGroup `json:"groups"`
+}
+
+// GetGroupTimeline 获取按模型组聚合的健康监控时间线数据
+func (s *HealthCheckService) GetGroupTimeline(lookback string, search string, offset int, limit int) (*GroupTimelineResult, error) {
+	cacheKey := fmt.Sprintf("health:group-timeline:%s:%s", lookback, search)
+	if s.rdb != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if val, err := s.rdb.Get(ctx, cacheKey).Result(); err == nil {
+			var full GroupTimelineResult
+			if json.Unmarshal([]byte(val), &full) == nil {
+				slog.Debug("health group timeline cache hit", "key", cacheKey, "total", full.Total)
+				return paginateGroupTimelineResult(&full, offset, limit), nil
+			}
+		} else if err != redis.Nil {
+			slog.Warn("health group timeline redis get failed", "error", err)
+		}
+	}
+
+	duration := parseLookback(lookback)
+	since := time.Now().Add(-duration)
+
+	rows, metaMap, err := s.healthRepo.GetGroupTimelineBuckets(since, search, timelineBuckets)
+	if err != nil {
+		return nil, err
+	}
+
+	type agg struct {
+		totalChecks   int
+		successChecks int
+		timeline      []TimelineEntry
+	}
+	groupMap := make(map[string]*agg)
+
+	for _, r := range rows {
+		a, ok := groupMap[r.GroupName]
+		if !ok {
+			a = &agg{}
+			groupMap[r.GroupName] = a
+		}
+		a.totalChecks += r.TotalCount
+		a.successChecks += r.OkCount
+		a.timeline = append(a.timeline, TimelineEntry{
+			CheckedAt:      r.BucketStart,
+			Success:        r.TotalCount == r.OkCount,
+			ResponseTimeMs: r.AvgRtt,
+			ErrorMessage:   r.FirstErr,
+		})
+	}
+
+	groups := make([]GroupTimelineGroup, 0, len(metaMap))
+
+	// 先从日志数据填充有检测记录的组
+	for name, a := range groupMap {
+		g := GroupTimelineGroup{
+			GroupName:     name,
+			TotalChecks:   a.totalChecks,
+			SuccessChecks: a.successChecks,
+			Timeline:      a.timeline,
+		}
+		if g.TotalChecks > 0 {
+			g.HealthPercent = g.SuccessChecks * 100 / g.TotalChecks
+		} else {
+			g.HealthPercent = 100
+		}
+		if meta, ok := metaMap[name]; ok {
+			g.Strategy = meta.Strategy
+			g.ModelCount = meta.ModelCount
+		}
+		groups = append(groups, g)
+	}
+
+	// 补充没有检测日志的组（显示为暂无数据）
+	for name, meta := range metaMap {
+		if _, exists := groupMap[name]; !exists {
+			groups = append(groups, GroupTimelineGroup{
+				GroupName:     name,
+				Strategy:      meta.Strategy,
+				ModelCount:    meta.ModelCount,
+				HealthPercent: 100,
+				TotalChecks:   0,
+				SuccessChecks: 0,
+				Timeline:      []TimelineEntry{},
+			})
+		}
+	}
+	sortGroupTimelineByHealth(groups)
+
+	full := &GroupTimelineResult{Lookback: lookback, Total: len(groups), Groups: groups}
+
+	if s.rdb != nil {
+		if data, err := json.Marshal(full); err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if err := s.rdb.Set(ctx, cacheKey, data, 30*time.Second).Err(); err != nil {
+				slog.Warn("health group timeline redis set failed", "error", err)
+			}
+			cancel()
+		}
+	}
+
+	return paginateGroupTimelineResult(full, offset, limit), nil
+}
+
+func paginateGroupTimelineResult(full *GroupTimelineResult, offset int, limit int) *GroupTimelineResult {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = len(full.Groups)
+	}
+	total := len(full.Groups)
+	if offset >= total {
+		return &GroupTimelineResult{Lookback: full.Lookback, Total: total, Groups: []GroupTimelineGroup{}}
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return &GroupTimelineResult{Lookback: full.Lookback, Total: total, Groups: full.Groups[offset:end]}
+}
+
+// startGroupCheckBackground 启动模型组检测独立后台定时器（与模型检测间隔相同）
+func (s *HealthCheckService) startGroupCheckBackground(ctx context.Context, config *model.HealthCheckConfig) {
+	if s.groupCheckSvc == nil {
+		return
+	}
+	if !config.ModelCheckEnabled {
+		return
+	}
+
+	intervalSec := config.ModelCheckIntervalSeconds
+	if intervalSec <= 0 {
+		intervalSec = 300
+	}
+
+	s.mu.Lock()
+	if s.groupCheckRunning {
+		s.mu.Unlock()
+		return
+	}
+	s.groupCheckRunning = true
+	s.mu.Unlock()
+
+	groupCtx, groupCancel := context.WithCancel(ctx)
+	s.mu.Lock()
+	s.groupCheckCancel = groupCancel
+	s.mu.Unlock()
+
+	go func() {
+		ticker := time.NewTicker(time.Duration(intervalSec) * time.Second)
+		defer ticker.Stop()
+		slog.Info("group check background started", "interval_seconds", intervalSec)
+
+		// 首次延迟 60 秒（错开渠道/模型检测）
+		select {
+		case <-groupCtx.Done():
+			return
+		case <-time.After(60 * time.Second):
+			s.runBackgroundGroupCheck(groupCtx)
+		}
+
+		for {
+			select {
+			case <-groupCtx.Done():
+				s.mu.Lock()
+				s.groupCheckRunning = false
+				s.mu.Unlock()
+				return
+			case <-ticker.C:
+				cfg, err := s.healthRepo.GetConfig()
+				if err != nil || !cfg.ModelCheckEnabled {
+					s.mu.Lock()
+					s.groupCheckRunning = false
+					s.mu.Unlock()
+					return
+				}
+				s.runBackgroundGroupCheck(groupCtx)
+			}
+		}
+	}()
+}
+
+// runBackgroundGroupCheck 后台执行一轮模型组检测
+func (s *HealthCheckService) runBackgroundGroupCheck(ctx context.Context) {
+	if s.groupCheckSvc == nil {
+		return
+	}
+	result := s.groupCheckSvc.CheckAll(ctx)
+	slog.Info("background group check completed",
+		"total", result.Total, "success", result.Success, "failed", result.Failed)
+	s.invalidateGroupTimelineCache()
+}
+
+// invalidateGroupTimelineCache 清除模型组时间线 Redis 缓存
+func (s *HealthCheckService) invalidateGroupTimelineCache() {
+	if s.rdb == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	iter := s.rdb.Scan(ctx, 0, "health:group-timeline:*", 0).Iterator()
+	for iter.Next(ctx) {
+		s.rdb.Del(ctx, iter.Val())
+	}
+	if err := iter.Err(); err != nil {
+		slog.Warn("group timeline cache invalidate scan failed", "error", err)
+	}
+}
+
+
+func sortGroupTimelineByHealth(groups []GroupTimelineGroup) {
+	for i := 0; i < len(groups); i++ {
+		for j := i + 1; j < len(groups); j++ {
+			if groups[i].HealthPercent > groups[j].HealthPercent {
+				groups[i], groups[j] = groups[j], groups[i]
+			}
+		}
+	}
+}
+
+
 func truncateStr(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s

@@ -206,3 +206,90 @@ func (r *HealthCheckRepo) GetTimelineBuckets(since time.Time, search string, buc
 
 	return rows, pcm, nil
 }
+
+// GroupTimelineBucketRow 按模型组聚合的时间线桶查询结果行
+type GroupTimelineBucketRow struct {
+	GroupName   string    `gorm:"column:group_name"`
+	BucketIdx   int       `gorm:"column:bucket_idx"`
+	TotalCount  int       `gorm:"column:total"`
+	OkCount     int       `gorm:"column:ok_count"`
+	AvgRtt      int       `gorm:"column:avg_rtt"`
+	FirstErr    string    `gorm:"column:first_err"`
+	BucketStart time.Time `gorm:"column:bucket_start"`
+	ModelCount  int       `gorm:"column:model_count"`
+}
+
+// GroupMeta 模型组元数据（成员模型数、策略）
+type GroupMeta struct {
+	GroupID    int    `gorm:"column:group_id"`
+	GroupName  string `gorm:"column:group_name"`
+	Strategy   string `gorm:"column:strategy"`
+	ModelCount int    `gorm:"column:model_count"`
+}
+
+// GetGroupTimelineBuckets 以模型组为主驱动，查询各组的健康日志时间桶（target_type='group'）。
+// 先枚举所有启用的组（含元数据），再 LEFT JOIN 健康日志，确保无日志的组也能出现在结果中。
+func (r *HealthCheckRepo) GetGroupTimelineBuckets(since time.Time, search string, bucketCount int) ([]GroupTimelineBucketRow, map[string]GroupMeta, error) {
+	searchPattern := ""
+	if search != "" {
+		searchPattern = "%" + search + "%"
+	}
+	bucketMs := time.Since(since).Milliseconds() / int64(bucketCount)
+
+	// Step 1: 以组为主，查出所有符合条件的启用组元数据
+	var metas []GroupMeta
+	err := r.db.Raw(`
+		SELECT mg.id AS group_id, mg.name AS group_name, mg.strategy,
+		       COUNT(gm.model_id)::int AS model_count
+		FROM model_groups mg
+		LEFT JOIN group_models gm ON gm.group_id = mg.id
+		WHERE mg.deleted_at IS NULL
+		  AND mg.enabled = true
+		  AND (? = '' OR mg.name ILIKE ?)
+		GROUP BY mg.id, mg.name, mg.strategy
+		ORDER BY mg.name
+	`, searchPattern, searchPattern).Scan(&metas).Error
+	if err != nil {
+		return nil, nil, err
+	}
+
+	metaMap := make(map[string]GroupMeta, len(metas))
+	for i := range metas {
+		metaMap[metas[i].GroupName] = metas[i]
+	}
+
+	if len(metas) == 0 {
+		return []GroupTimelineBucketRow{}, metaMap, nil
+	}
+
+	// 收集组名用于日志查询
+	groupNames := make([]string, 0, len(metas))
+	for i := range metas {
+		groupNames = append(groupNames, metas[i].GroupName)
+	}
+
+	// Step 2: 查询这些组的健康日志时间桶（target_type='group'）
+	var rows []GroupTimelineBucketRow
+	err = r.db.Raw(`
+		SELECT
+			target_name AS group_name,
+			(EXTRACT(EPOCH FROM (checked_at - ?::timestamptz)) * 1000 / ?)::int AS bucket_idx,
+			COUNT(*)::int AS total,
+			COUNT(*) FILTER (WHERE success)::int AS ok_count,
+			AVG(response_time_ms)::int AS avg_rtt,
+			MIN(CASE WHEN NOT success THEN error_message END) AS first_err,
+			MIN(checked_at) AS bucket_start,
+			0::int AS model_count
+		FROM health_check_logs
+		WHERE checked_at >= ?
+		  AND target_type = 'group'
+		  AND target_name IN ?
+		GROUP BY target_name, bucket_idx
+		ORDER BY target_name, bucket_idx
+	`, since, bucketMs, since, groupNames).Scan(&rows).Error
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return rows, metaMap, nil
+}

@@ -51,7 +51,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	r.GET("/api/v1/me", middleware.JWTAuth(), authHandler.GetCurrentUser)
 
 	// Dev login (no auth required)
-	devLoginHandler := handler.NewDevLoginHandler(db, authCfg.JWTSecret)
+	devLoginHandler := handler.NewDevLoginHandler(db, authCfg.JWTSecret, authCfg.AccessTokenTTL)
 	r.POST("/auth/dev/login", devLoginHandler.Login)
 
 	// 初始化依赖
@@ -90,6 +90,18 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		settingsSvc.GetDefaultFailoverCooldownSeconds(context.Background()),
 	)
 	groupHandler := handler.NewGroupHandler(groupSvc, modelRepo, providerRepo)
+
+	systemKeySvc := service.NewSystemKeyService(db)
+	groupCheckSvc := service.NewGroupCheckService(groupRepo, healthCheckRepo, systemKeySvc)
+	groupCheckHandler := handler.NewGroupCheckHandler(groupCheckSvc)
+	healthCheckSvc.SetGroupCheckService(groupCheckSvc)
+
+	// 启动时确保系统探针 key 存在
+	go func() {
+		if _, err := systemKeySvc.EnsureProbeKey(context.Background()); err != nil {
+			slog.Warn("failed to ensure system probe key", "error", err)
+		}
+	}()
 
 	providerHandler := handler.NewProviderHandler(providerSvc)
 	modelHandler := handler.NewModelHandler(modelSvc)
@@ -214,6 +226,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/health-check/status", healthCheckHandler.GetStatus)
 		adminGroup.POST("/health-check/run", healthCheckHandler.RunNow)
 		adminGroup.GET("/health-check/timeline", healthCheckHandler.GetTimeline)
+		adminGroup.GET("/health-check/group-timeline", healthCheckHandler.GetGroupTimeline)
 
 		// 模型 Catalog（注意：source_model_id 含 '/'，通过 query 入口而非路径参数访问）
 		adminGroup.GET("/model-catalog/search", catalogHandler.Search)
@@ -247,6 +260,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 		// 模型分组管理
 		adminGroup.GET("/groups/defaults", groupHandler.GetDefaults)
+		adminGroup.POST("/groups/check-all", groupCheckHandler.CheckAll)
 		adminGroup.POST("/groups", groupHandler.Create)
 		adminGroup.GET("/groups", groupHandler.List)
 		adminGroup.GET("/groups/:id", groupHandler.GetByID)
@@ -255,6 +269,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.POST("/groups/:id/models", groupHandler.AddModels)
 		adminGroup.GET("/groups/:id/models", groupHandler.ListModels)
 		adminGroup.DELETE("/groups/:id/models/:model_id", groupHandler.RemoveModel)
+		adminGroup.POST("/groups/:id/check", groupCheckHandler.CheckOne)
 
 		// 系统设置
 		adminGroup.GET("/settings", settingsHandler.GetSystemSettings)

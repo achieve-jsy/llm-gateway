@@ -36,3 +36,6 @@ jwt:
 
 frontend:
   url: "https://aimeter.xk-devops.com"
+
+gateway:
+  url: "https://aimeter.xk-devops.com"

@@ -70,6 +70,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '模型健康监控' }
   },
   {
+    path: '/admin/group-health-monitor',
+    name: 'GroupHealthMonitor',
+    component: () => import('@/views/admin/GroupHealthMonitorPage.vue'),
+    meta: { title: '模型组健康监控' }
+  },
+  {
     path: '/admin/settings',
     name: 'Settings',
     component: () => import('@/views/admin/SettingsPage.vue'),

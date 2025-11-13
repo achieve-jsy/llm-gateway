@@ -184,7 +184,7 @@ func (h *Handler) Callback(c *gin.Context) {
 
 	user, deptID, deptName := h.upsertUser(userInfo)
 
-	accessToken, err := GenerateAccessToken(h.config.JWTSecret, user.ID.String(), deptID, deptName, userInfo.Email, userInfo.Name, userInfo.Passport, user.Role)
+	accessToken, err := GenerateAccessToken(h.config.JWTSecret, h.config.AccessTokenTTL, user.ID.String(), deptID, deptName, userInfo.Email, userInfo.Name, userInfo.Passport, user.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "failed to generate token", "code": "token_generation_failed"}})
 		return
@@ -317,7 +317,7 @@ func (h *Handler) Refresh(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{"type": "authentication_error", "message": "token revoked", "code": "unauthorized"}})
 		return
 	}
-	accessToken, err := GenerateAccessToken(h.config.JWTSecret, claims.UserID, claims.DeptID, claims.DeptName, claims.Email, claims.Name, claims.Passport, claims.Role)
+	accessToken, err := GenerateAccessToken(h.config.JWTSecret, h.config.AccessTokenTTL, claims.UserID, claims.DeptID, claims.DeptName, claims.Email, claims.Name, claims.Passport, claims.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "token generation failed", "code": "internal"}})
 		return

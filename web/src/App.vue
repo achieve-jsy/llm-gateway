@@ -29,9 +29,9 @@
           <el-icon><Key /></el-icon>
           <template #title>我的 Key</template>
         </el-menu-item>
-        <el-menu-item index="/admin/health-monitor">
-          <el-icon><Monitor /></el-icon>
-          <template #title>健康监控</template>
+        <el-menu-item index="/admin/group-health-monitor">
+          <el-icon><Histogram /></el-icon>
+          <template #title>模型组健康</template>
         </el-menu-item>
 
         <el-divider class="menu-divider" />
@@ -57,6 +57,10 @@
         <el-divider class="menu-divider" />
 
         <div class="menu-group-label">运维</div>
+        <el-menu-item index="/admin/health-monitor">
+          <el-icon><Monitor /></el-icon>
+          <template #title>模型健康监控</template>
+        </el-menu-item>
         <el-menu-item index="/admin/catalog-sync">
           <el-icon><Refresh /></el-icon>
           <template #title>Catalog 同步</template>

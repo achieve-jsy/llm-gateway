@@ -1,4 +1,5 @@
 import http from './http'
+import axios from 'axios'
 import type { ModelInfo, ModelsResponse } from '@/types/model'
 
 // ===================== 模型 =====================
@@ -7,6 +8,20 @@ import type { ModelInfo, ModelsResponse } from '@/types/model'
 export async function fetchModels(): Promise<ModelInfo[]> {
   const response = await http.get<ModelsResponse>('/v1/models')
   return response.data.data
+}
+
+/** 用指定 API Key 获取该 Key 有权限的模型列表 */
+export async function fetchModelsByApiKey(baseURL: string, apiKey: string): Promise<ModelInfo[]> {
+  try {
+    const url = baseURL.replace(/\/+$/, '') + '/models'
+    const response = await axios.get<ModelsResponse>(url, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      timeout: 10000,
+    })
+    return response.data.data ?? []
+  } catch {
+    return []
+  }
 }
 
 // ===================== Me Models =====================

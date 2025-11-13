@@ -191,6 +191,41 @@ export async function getHealthTimeline(lookback: string = '6h', search: string 
   return response.data.data
 }
 
+// ===================== 模型组健康监控时间线 =====================
+
+export interface GroupTimelineGroup {
+  group_name: string
+  strategy: string
+  model_count: number
+  health_percent: number
+  total_checks: number
+  success_checks: number
+  timeline: TimelineEntry[]
+}
+
+export interface GroupTimelineResult {
+  lookback: string
+  total: number
+  groups: GroupTimelineGroup[]
+}
+
+export async function getGroupHealthTimeline(lookback: string = '6h', search: string = '', offset: number = 0, limit: number = 0): Promise<GroupTimelineResult> {
+  const response = await http.get<ApiResponse<GroupTimelineResult>>('/api/v1/health-check/group-timeline', { params: { lookback, search, offset, limit } })
+  return response.data.data
+}
+
+/** 触发所有模型组的健康检测（异步，超时 3 分钟） */
+export async function checkAllGroups(): Promise<{ total: number; success: number; failed: number }> {
+  const response = await http.post<ApiResponse<{ total: number; success: number; failed: number }>>('/api/v1/groups/check-all', undefined, { timeout: 180000 })
+  return response.data.data
+}
+
+/** 触发单个模型组的健康检测 */
+export async function checkGroup(id: number): Promise<{ group_id: number; group_name: string; success: boolean; response_time: number; error?: string }> {
+  const response = await http.post<ApiResponse<{ group_id: number; group_name: string; success: boolean; response_time: number; error?: string }>>(`/api/v1/groups/${id}/check`)
+  return response.data.data
+}
+
 // ===================== 模型管理 =====================
 
 /** 单个模型检测结果 */

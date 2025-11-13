@@ -236,3 +236,20 @@ func (h *HealthCheckHandler) CheckOne(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"data": result})
 }
+
+// GetGroupTimeline GET /api/v1/health-check/group-timeline — 获取按模型组聚合的健康时间线
+func (h *HealthCheckHandler) GetGroupTimeline(c *gin.Context) {
+	lookback := c.DefaultQuery("lookback", "6h")
+	if lookback != "6h" && lookback != "12h" && lookback != "24h" && lookback != "7d" {
+		lookback = "6h"
+	}
+	search := c.Query("search")
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "0"))
+	result, err := h.svc.GetGroupTimeline(lookback, search, offset, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"message": "failed to get group timeline"}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": result})
+}

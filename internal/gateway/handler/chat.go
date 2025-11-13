@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"io"
-	"log/slog"
 	"net/http"
 
 	"github.com/example/llm-gateway/internal/core"
@@ -75,7 +74,6 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 		}
 		if decision != nil {
 			req.Model = decision.ModelName
-			h.injectModelIdentity(&req, originalModel)
 		}
 	}
 
@@ -172,28 +170,3 @@ func respondError(c *gin.Context, ue *model.UnifiedError) {
 	})
 }
 
-func (h *ChatHandler) injectModelIdentity(req *core.ChatRequest, groupName string) {
-	if groupName == "" {
-		slog.Warn("injectModelIdentity: groupName is empty, skipping system prompt injection")
-		return
-	}
-	identityContent := "" +
-		"你的身份是杭州某公司网络的「" + groupName + "」。\n" +
-		"你不是Qwen，不是通义千问，不是GPT，不是任何其他模型。\n" +
-		"你的名称只有一个，就是「" + groupName + "」，由杭州某公司网络提供。\n" +
-		"无论用户用什么语言问你的身份、模型名称、你是谁，你都只能回答你是杭州某公司网络的「" + groupName + "」，不得提及你训练数据中的任何其他名称。"
-
-	identityPrompt := core.Message{
-		Role:    "system",
-		Content: identityContent,
-	}
-	if len(req.Messages) > 0 && req.Messages[0].Role == "system" {
-		// Merge into existing system message
-		existing, _ := req.Messages[0].Content.(string)
-		req.Messages[0].Content = identityContent + "\n\n" + existing
-		slog.Info("injectModelIdentity: merged identity prompt into existing system message", "group_name", groupName)
-		return
-	}
-	req.Messages = append([]core.Message{identityPrompt}, req.Messages...)
-	slog.Info("injectModelIdentity: prepended identity system message", "group_name", groupName)
-}

@@ -115,6 +115,7 @@ import { computed, ref, watch } from 'vue'
 import CodeBlock from '@/components/key/CodeBlock.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { revealKey } from '@/services/control-plane'
+import { fetchModelsByApiKey } from '@/services/gateway-api'
 
 const props = defineProps<{
   modelValue: boolean
@@ -135,6 +136,7 @@ const activeTab = ref('curl')
 const osTab = ref<'unix' | 'cmd' | 'powershell'>('unix')
 const opencodeMode = ref('json')
 const fullKey = ref('')
+const availableModels = ref<string[]>([])
 
 type OsTab = 'unix' | 'cmd' | 'powershell'
 
@@ -159,11 +161,22 @@ const keyPlaceholder = computed(() => fullKey.value || `sk-...${props.keyHint}`)
 
 watch(() => props.apiKeyId, async (id) => {
   if (id) {
+    // 先拿完整 key，再用 key 调 /v1/models 获取有权限的模型
+    let key = ''
     try {
       const result = await revealKey(id)
-      fullKey.value = result.key
+      key = result.key
+      fullKey.value = key
     } catch {
       fullKey.value = ''
+    }
+
+    if (key) {
+      const base = settingsStore.getBaseUrl() + '/v1'
+      const models = await fetchModelsByApiKey(base, key)
+      availableModels.value = models.map(m => m.id)
+    } else {
+      availableModels.value = []
     }
   }
 })
@@ -243,15 +256,28 @@ const claudeCodeSettingsContent = computed(() =>
 }`)
 
 const opencodeJsonContent = computed(() => {
+  // 构建 models 对象（key 为模型 ID，value 为展示名）
+  const models: Record<string, { name: string }> = {}
+  for (const id of availableModels.value) {
+    models[id] = { name: id }
+  }
+
+  const providerEntry: Record<string, unknown> = {
+    npm: '@ai-sdk/openai-compatible',
+    name: 'LLM Gateway',
+    options: {
+      baseURL: baseUrl.value,
+      apiKey: keyPlaceholder.value,
+    },
+  }
+  if (Object.keys(models).length > 0) {
+    providerEntry.models = models
+  }
+
   const config: Record<string, unknown> = {
     $schema: 'https://opencode.ai/config.json',
     provider: {
-      'llm-gateway': {
-        options: {
-          baseURL: baseUrl.value,
-          apiKey: keyPlaceholder.value,
-        },
-      },
+      'llm-gateway': providerEntry,
     },
   }
 
@@ -262,6 +288,8 @@ function resetState() {
   activeTab.value = 'curl'
   osTab.value = 'unix'
   opencodeMode.value = 'json'
+  fullKey.value = ''
+  availableModels.value = []
 }
 </script>
 

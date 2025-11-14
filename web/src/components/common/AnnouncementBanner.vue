@@ -54,6 +54,7 @@ function next() { currentIndex.value = (currentIndex.value + 1) % bannerItems.va
 function goDetail(id: string) { router.push(`/announcements/${id}`) }
 
 async function loadBanners() {
+  if (!localStorage.getItem('access_token')) return
   try {
     const items = await getUnreadAnnouncements()
     bannerItems.value = (items || []).filter(a => a.display_mode === 'banner')

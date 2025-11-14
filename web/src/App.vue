@@ -187,6 +187,7 @@ function handleUserCommand(command: string) {
 
 async function checkPopupAnnouncements() {
   if (sessionStorage.getItem('popup_shown')) return
+  if (!localStorage.getItem('access_token')) return
   try {
     const items = await getUnreadAnnouncements()
     if ((items || []).some(a => a.display_mode === 'popup')) {

@@ -77,6 +77,7 @@ async function handleReadAll() {
 }
 
 onMounted(async () => {
+  if (!localStorage.getItem('access_token')) return
   try {
     const all = await getUnreadAnnouncements()
     items.value = (all || []).filter(a => a.display_mode === 'popup')
@@ -101,6 +102,7 @@ onMounted(async () => {
 .panel {
   width: 100%;
   max-width: 560px;
+  max-height: 90vh;
   background: #fff;
   border-radius: 20px;
   box-shadow: 0 24px 64px rgba(0,0,0,0.14), 0 0 0 1px rgba(0,0,0,0.06);
@@ -154,8 +156,9 @@ onMounted(async () => {
 
 /* ── 列表 ──────────── */
 .panel-items {
-  max-height: 420px;
+  flex: 1;
   overflow-y: auto;
+  min-height: 0;
 }
 .panel-items::-webkit-scrollbar { width: 3px; }
 .panel-items::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 2px; }

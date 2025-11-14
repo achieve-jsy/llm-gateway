@@ -40,7 +40,6 @@ type CreateAnnouncementRequest struct {
 	Level       string `json:"level"`
 	DisplayMode string `json:"display_mode"`
 	SortOrder   int    `json:"sort_order"`
-	CreatedBy   string `json:"created_by"`
 }
 
 type UpdateAnnouncementRequest struct {
@@ -103,7 +102,7 @@ func (h *AnnouncementHandler) Create(c *gin.Context) {
 		DisplayMode: displayMode,
 		Status:      "draft",
 		SortOrder:   req.SortOrder,
-		CreatedBy:   req.CreatedBy,
+		CreatedBy:   c.GetString("user_name"),
 	}
 
 	if err := h.repo.Create(a); err != nil {

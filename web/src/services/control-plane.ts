@@ -724,20 +724,20 @@ export async function archiveAnnouncement(id: string): Promise<void> {
 }
 
 export async function getUnreadAnnouncements(): Promise<Announcement[]> {
-  const response = await http.get<ApiResponse<Announcement[]>>('/api/v1/announcements/unread')
+  const response = await http.get<ApiResponse<Announcement[]>>('/api/v1/announcements/unread', { _silent: true } as any)
   return response.data.data
 }
 
 export async function getUnreadAnnouncementCount(): Promise<number> {
-  const response = await http.get<{ count: number }>('/api/v1/announcements/unread/count')
+  const response = await http.get<{ count: number }>('/api/v1/announcements/unread/count', { _silent: true } as any)
   return response.data.count
 }
 
 export async function getReadHistoryAnnouncements(): Promise<Announcement[]> {
-  const response = await http.get<ApiResponse<Announcement[]>>('/api/v1/announcements/history')
+  const response = await http.get<ApiResponse<Announcement[]>>('/api/v1/announcements/history', { _silent: true } as any)
   return response.data.data
 }
 
 export async function markAnnouncementRead(id: string): Promise<void> {
-  await http.post(`/api/v1/announcements/${id}/read`)
+  await http.post(`/api/v1/announcements/${id}/read`, {}, { _silent: true } as any)
 }

@@ -139,6 +139,7 @@ function relativeTime(dateStr: string | null): string {
 }
 
 async function loadUnread() {
+  if (!localStorage.getItem('access_token')) return
   try {
     const [items, count] = await Promise.all([getUnreadAnnouncements(), getUnreadAnnouncementCount()])
     unreadItems.value = items || []
@@ -147,6 +148,7 @@ async function loadUnread() {
 }
 
 async function loadHistory() {
+  if (!localStorage.getItem('access_token')) return
   try {
     const data = await getReadHistoryAnnouncements()
     historyItems.value = data || []

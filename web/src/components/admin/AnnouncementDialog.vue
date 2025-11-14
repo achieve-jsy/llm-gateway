@@ -104,6 +104,10 @@
         </el-select>
       </el-form-item>
 
+      <el-form-item label="创建人" v-if="isEdit && formData.created_by">
+        <el-input :value="formData.created_by" disabled />
+      </el-form-item>
+
       <el-form-item label="排序">
         <el-input-number v-model="formData.sort_order" :min="0" :max="9999" style="width: 160px" />
         <span class="form-hint inline">数值越大越靠前</span>
@@ -141,13 +145,13 @@ interface FormState {
   display_mode: string
   sort_order: number
   status: string
+  created_by: string
 }
 
 const props = defineProps<{
   visible: boolean
   announcement: Announcement | null
 }>()
-
 const emit = defineEmits<{
   close: []
   saved: []
@@ -160,11 +164,20 @@ const isEdit = computed(() => !!props.announcement)
 const editorMode = ref<'edit' | 'preview' | 'split'>('edit')
 
 const formData = ref<FormState>({
-  title: '', content: '', category: 'system', level: 'info', display_mode: 'banner', sort_order: 0, status: 'draft'
+  title: '', content: '', category: 'system', level: 'info', display_mode: 'banner', sort_order: 0, status: 'draft', created_by: ''
 })
 
-watch(() => props.announcement, (val) => {
-  if (val) {
+const resetForm = () => {
+  formData.value = { title: '', content: '', category: 'system', level: 'info', display_mode: 'banner', sort_order: 0, status: 'draft', created_by: '' }
+  editorMode.value = 'edit'
+  formRef.value?.resetFields()
+}
+
+// 每次弹窗打开时重新初始化表单
+watch(() => props.visible, (visible) => {
+  if (!visible) return
+  if (props.announcement) {
+    const val = props.announcement
     formData.value = {
       title: val.title,
       content: val.content,
@@ -172,13 +185,14 @@ watch(() => props.announcement, (val) => {
       level: val.level,
       display_mode: val.display_mode || 'banner',
       sort_order: val.sort_order,
-      status: val.status || 'draft'
+      status: val.status || 'draft',
+      created_by: val.created_by || ''
     }
-  } else {
-    formData.value = { title: '', content: '', category: 'system', level: 'info', display_mode: 'banner', sort_order: 0, status: 'draft' }
     editorMode.value = 'edit'
+  } else {
+    resetForm()
   }
-}, { immediate: true })
+})
 
 const rules: FormRules = {
   title: [{ required: true, message: '请输入公告标题', trigger: 'blur' }],

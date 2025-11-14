@@ -88,10 +88,10 @@
         </button>
         <div class="top-bar-spacer"></div>
         <AnnouncementBanner v-if="authStore.isLoggedIn" ref="bannerRef" />
+        <NotificationBell v-if="authStore.isLoggedIn" ref="notificationBellRef" />
         <span class="theme-toggle" @click="toggleTheme" :title="isDark ? '切换到浅色模式' : '切换到深色模式'">
           {{ isDark ? '☀️' : '🌙' }}
         </span>
-        <NotificationBell v-if="authStore.isLoggedIn" ref="notificationBellRef" />
         <el-dropdown v-if="authStore.isLoggedIn" trigger="click" @command="handleUserCommand">
           <div class="user-info">
             <el-icon class="user-icon" size="22"><User /></el-icon>

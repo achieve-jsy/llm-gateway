@@ -52,11 +52,6 @@
                 {{ truncate(markdownToPlainText(item.content), 60) }}
               </div>
               <div v-else class="item-expanded">
-                <div class="item-expanded-header">
-                  <span class="item-category-icon">{{ categoryIcon(item.category) }}</span>
-                  <span class="item-expanded-title">{{ item.title }}</span>
-                  <span class="item-time">{{ relativeTime(item.published_at) }}</span>
-                </div>
                 <div class="item-expanded-body">
                   <div class="item-full-content md-content" v-html="renderMarkdown(item.content)"></div>
                 </div>
@@ -212,6 +207,14 @@ function handleClickOutside(e: MouseEvent) {
 defineExpose({ refresh: loadUnread })
 </script>
 
+<style>
+/* 铃铛面板内文字颜色覆盖，防止继承全局绿色主题变量 */
+.el-popover .panel-title { color: #1a1a1a !important; }
+.el-popover .item-title   { color: #1a1a1a !important; }
+.el-popover .tab-btn      { color: #64748b; }
+.el-popover .tab-btn.active { color: #1E8C86 !important; }
+</style>
+
 <style scoped>
 .notification-bell {
   cursor: pointer;
@@ -219,8 +222,14 @@ defineExpose({ refresh: loadUnread })
   padding: 4px;
   display: flex;
   align-items: center;
+  height: 100%;
 }
 .notification-bell:hover { color: var(--el-text-color-primary); }
+
+.notification-bell :deep(.el-badge) {
+  display: flex;
+  align-items: center;
+}
 
 /* ── 面板整体 ────────────── */
 .notification-panel { display: flex; flex-direction: column; }
@@ -324,17 +333,6 @@ defineExpose({ refresh: loadUnread })
   border-color: rgba(0,0,0,0.07);
   box-shadow: none;
   background: rgba(255,255,255,0.5);
-}
-
-.item-expanded-header {
-  display: flex; align-items: center; gap: 6px;
-  padding: 8px 12px;
-  background: rgba(43,168,162,0.06);
-  border-bottom: 1px solid rgba(43,168,162,0.1);
-}
-.item-expanded-title {
-  font-size: 12px; font-weight: 700; color: #1a1a1a;
-  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
 .item-expanded-body {

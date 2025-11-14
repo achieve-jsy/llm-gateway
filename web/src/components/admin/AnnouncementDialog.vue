@@ -217,6 +217,17 @@ async function handleSubmit() {
 }
 </script>
 
+<style>
+/* 覆盖弹窗内全局绿色文字 */
+.el-dialog .el-form-item__label { color: #374151 !important; }
+.el-dialog .el-input__inner,
+.el-dialog .el-textarea__inner,
+.el-dialog .el-select .el-input__inner { color: #1a1a1a !important; }
+.el-dialog .el-radio__label,
+.el-dialog .el-checkbox__label { color: #374151 !important; }
+.el-dialog .el-dialog__title { color: #1a1a1a !important; }
+</style>
+
 <style scoped>
 /* ─── 编辑器 ──────────────────────────────── */
 .editor-wrap {
@@ -280,7 +291,7 @@ async function handleSubmit() {
   font-size: 14px;
   font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
   line-height: 1.7;
-  color: var(--el-text-color-primary);
+  color: #1a1a1a;
   background: #fff;
   min-height: 300px;
 }
@@ -293,7 +304,7 @@ async function handleSubmit() {
   min-height: 300px;
 }
 
-.preview-content { font-size: 14px; }
+.preview-content { font-size: 14px; color: #334155; }
 
 .preview-placeholder {
   color: var(--el-text-color-placeholder);

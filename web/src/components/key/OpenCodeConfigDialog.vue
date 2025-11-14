@@ -22,7 +22,7 @@
           </div>
           <div class="config-row">
             <span class="config-key">Provider</span>
-            <code class="config-val">{{ PROVIDER_ID }}</code>
+            <code class="config-val">{{ settingsStore.publicSettings?.supplier_name || PROVIDER_ID }}</code>
           </div>
           <div class="config-row">
             <span class="config-key">Base URL</span>
@@ -154,7 +154,7 @@ const dialogVisible = computed({
 })
 
 // ── 常量 ──────────────────────────────────────────────────────────────────────
-const PROVIDER_ID   = 'llm-gateway'
+const PROVIDER_ID   = 'biangfeng-gateway'
 const POLL_INTERVAL = 2000   // ms
 const POLL_TIMEOUT  = 120000 // ms — 2 分钟
 
@@ -246,9 +246,10 @@ async function generateToken() {
   try {
     const base = settingsStore.getBaseUrl()
     const { token } = await generateOpencodeConfigToken(props.apiKeyId, {
-      provider_id: PROVIDER_ID,
-      base_url:    base ? `${base}/v1` : '',
-      api_key:     apiKey.value,
+      provider_id:   PROVIDER_ID,
+      provider_name: settingsStore.publicSettings?.supplier_name || PROVIDER_ID,
+      base_url:      base ? `${base}/v1` : '',
+      api_key:       apiKey.value,
     })
     currentToken.value = token
   } catch {

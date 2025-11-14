@@ -1,5 +1,6 @@
 <template>
   <div class="home-page">
+    <el-empty description="欢迎使用 LLM Gateway" />
   </div>
 </template>
 

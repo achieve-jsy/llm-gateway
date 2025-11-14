@@ -40,12 +40,13 @@ func NewOpencodeConfigHandler(rdb *redis.Client, settingsSvc SettingsServiceProv
 }
 
 type tokenRecord struct {
-	KeyID       string `json:"key_id"`
-	ProviderID  string `json:"provider_id"`
-	BaseURL     string `json:"base_url"`
-	APIKey      string `json:"api_key"`
-	Status      string `json:"status"` // pending | success | failed
-	Msg         string `json:"msg,omitempty"`
+	KeyID        string `json:"key_id"`
+	ProviderID   string `json:"provider_id"`
+	ProviderName string `json:"provider_name,omitempty"`
+	BaseURL      string `json:"base_url"`
+	APIKey       string `json:"api_key"`
+	Status       string `json:"status"` // pending | success | failed
+	Msg          string `json:"msg,omitempty"`
 }
 
 // GenerateToken POST /api/v1/keys/:id/opencode-config/token  (JWT required)
@@ -54,25 +55,27 @@ func (h *OpencodeConfigHandler) GenerateToken(c *gin.Context) {
 	keyID := c.Param("id")
 
 	var req struct {
-		ProviderID string `json:"provider_id"` // 如 "llm-gateway"
-		BaseURL    string `json:"base_url" binding:"required"`
-		APIKey     string `json:"api_key"  binding:"required"`
+		ProviderID   string `json:"provider_id"`   // 如 "llm-gateway"
+		ProviderName string `json:"provider_name"` // 用户设置的名称
+		BaseURL      string `json:"base_url" binding:"required"`
+		APIKey       string `json:"api_key"  binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
 		return
 	}
 	if req.ProviderID == "" {
-		req.ProviderID = "llm-gateway"
+		req.ProviderID = "biangfeng-gateway"
 	}
 
 	token := uuid.New().String()
 	rec := tokenRecord{
-		KeyID:      keyID,
-		ProviderID: req.ProviderID,
-		BaseURL:    req.BaseURL,
-		APIKey:     req.APIKey,
-		Status:     "pending",
+		KeyID:        keyID,
+		ProviderID:   req.ProviderID,
+		ProviderName: req.ProviderName,
+		BaseURL:      req.BaseURL,
+		APIKey:       req.APIKey,
+		Status:       "pending",
 	}
 	data, _ := json.Marshal(rec)
 
@@ -125,7 +128,10 @@ func (h *OpencodeConfigHandler) GetScript(c *gin.Context) {
 	}
 	callbackURL := fmt.Sprintf("%s://%s/api/v1/opencode-config/callback", scheme, host)
 
-	supplierName := h.settingsSvc.GetSupplierName(ctx)
+	supplierName := rec.ProviderName
+	if supplierName == "" {
+		supplierName = h.settingsSvc.GetSupplierName(ctx)
+	}
 
 	params := scriptParams{
 		Token:        token,

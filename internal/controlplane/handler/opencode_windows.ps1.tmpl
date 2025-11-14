@@ -8,6 +8,7 @@ $PROVIDER_ID      = "{{.ProviderID}}"
 $BASE_URL         = "{{.BaseURL}}"
 $API_KEY          = "{{.APIKey}}"
 $CALLBACK_URL     = "{{.CallbackURL}}"
+$SUPPLIER_NAME    = "{{.SupplierName}}"
 $CONFIG_FILE      = "$env:USERPROFILE\.config\opencode\opencode.json"
 $DISCOVERY_PLUGIN = "opencode-models-discovery"
 
@@ -26,7 +27,7 @@ function Write-Fail($msg)    { Write-Host "[✗] $msg"  -ForegroundColor Red }
 function Write-Divider()     { Write-Host "────────────────────────────────────────" -ForegroundColor Cyan }
 
 Write-Divider
-Write-Host "  LLM Gateway — OpenCode 配置助手" -ForegroundColor White
+Write-Host "  $SUPPLIER_NAME — OpenCode 配置助手" -ForegroundColor White
 Write-Divider
 Write-Host ""
 
@@ -128,7 +129,7 @@ try {
     # 写入 provider 基础配置（不写死 models，交给插件动态发现）
     $providerConfig = [PSCustomObject]@{
         npm     = "@ai-sdk/openai-compatible"
-        name    = "LLM Gateway"
+        name    = $SUPPLIER_NAME
         options = [PSCustomObject]@{
             baseURL = $BASE_URL
             apiKey  = $API_KEY
@@ -195,6 +196,6 @@ Write-Ok "配置文件：$CONFIG_FILE"
 Write-Ok "Provider：$targetId（$resultAction）"
 Write-Ok "插件：$DISCOVERY_PLUGIN（$resultPlugin）"
 Write-Host ""
-Write-Host "  下一步：" -NoNewline; Write-Host "重启 opencode，即可在模型列表中看到 LLM Gateway 的所有模型。" -ForegroundColor Cyan
+Write-Host "  下一步：" -NoNewline; Write-Host "重启 opencode，即可在模型列表中看到 $SUPPLIER_NAME 的所有模型。" -ForegroundColor Cyan
 Write-Host ""
 Write-Divider

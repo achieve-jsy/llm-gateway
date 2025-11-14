@@ -122,7 +122,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 	keyHandler := handler.NewKeyHandler(keySvc)
 	settingsHandler := handler.NewSettingsHandler(settingsSvc)
-	opencodeConfigHandler := handler.NewOpencodeConfigHandler(rdb)
+	opencodeConfigHandler := handler.NewOpencodeConfigHandler(rdb, settingsSvc)
 
 	// 模型 Catalog（D1: LiteLLM 单源；D3: bundled fallback；D4: 启动异步首刷 + 24h cron + 手动）
 	catalogRepo := repository.NewModelCatalogRepo(db)

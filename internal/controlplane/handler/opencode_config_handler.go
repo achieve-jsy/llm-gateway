@@ -26,12 +26,17 @@ const (
 	opencodeTokenPrefix = "opencode_cfg_token:"
 )
 
-type OpencodeConfigHandler struct {
-	rdb *redis.Client
+type SettingsServiceProvider interface {
+	GetSupplierName(ctx context.Context) string
 }
 
-func NewOpencodeConfigHandler(rdb *redis.Client) *OpencodeConfigHandler {
-	return &OpencodeConfigHandler{rdb: rdb}
+type OpencodeConfigHandler struct {
+	rdb        *redis.Client
+	settingsSvc SettingsServiceProvider
+}
+
+func NewOpencodeConfigHandler(rdb *redis.Client, settingsSvc SettingsServiceProvider) *OpencodeConfigHandler {
+	return &OpencodeConfigHandler{rdb: rdb, settingsSvc: settingsSvc}
 }
 
 type tokenRecord struct {
@@ -120,12 +125,15 @@ func (h *OpencodeConfigHandler) GetScript(c *gin.Context) {
 	}
 	callbackURL := fmt.Sprintf("%s://%s/api/v1/opencode-config/callback", scheme, host)
 
+	supplierName := h.settingsSvc.GetSupplierName(ctx)
+
 	params := scriptParams{
-		Token:       token,
-		ProviderID:  rec.ProviderID,
-		BaseURL:     rec.BaseURL,
-		APIKey:      rec.APIKey,
-		CallbackURL: callbackURL,
+		Token:        token,
+		ProviderID:   rec.ProviderID,
+		BaseURL:      rec.BaseURL,
+		APIKey:       rec.APIKey,
+		CallbackURL:  callbackURL,
+		SupplierName: supplierName,
 	}
 
 	var buf bytes.Buffer
@@ -217,6 +225,7 @@ type scriptParams struct {
 	BaseURL     string
 	APIKey      string
 	CallbackURL string
+	SupplierName string
 }
 
 // macTmplRaw macOS/Linux bash 脚本模板
@@ -230,6 +239,7 @@ PROVIDER_ID="{{.ProviderID}}"
 BASE_URL="{{.BaseURL}}"
 API_KEY="{{.APIKey}}"
 CALLBACK_URL="{{.CallbackURL}}"
+SUPPLIER_NAME="{{.SupplierName}}"
 CONFIG_FILE="$HOME/.config/opencode/opencode.json"
 DISCOVERY_PLUGIN="opencode-models-discovery"
 
@@ -249,7 +259,7 @@ send_callback() {
 }
 
 divider
-echo -e "  LLM Gateway — OpenCode 配置助手"
+echo -e "  ${SUPPLIER_NAME} — OpenCode 配置助手"
 divider
 echo ""
 
@@ -339,6 +349,7 @@ provider_id      = "$PROVIDER_ID"
 base_url         = "$BASE_URL"
 api_key          = "$API_KEY"
 discovery_plugin = "$DISCOVERY_PLUGIN"
+supplier_name    = "$SUPPLIER_NAME"
 
 # 用 Python 直接调接口获取模型列表（避免 bash 变量注入 heredoc 的风险）
 models = {}
@@ -385,7 +396,7 @@ if provider_id in providers:
 
 entry = {
     "npm":  "@ai-sdk/openai-compatible",
-    "name": "LLM Gateway",
+    "name": supplier_name,
     "options": {
         "baseURL": base_url,
         "apiKey":  api_key,
@@ -462,10 +473,10 @@ else
 fi
 
 echo ""
-echo -e "  ${CYAN}下一步：${NC}重启 opencode，即可在模型列表中看到 LLM Gateway 的所有模型。"
+echo -e "  ${CYAN}下一步：${NC}重启 opencode，即可在模型列表中看到 ${SUPPLIER_NAME} 的所有模型。"
 echo ""
 divider
 
 command -v osascript >/dev/null 2>&1 && \
-  osascript -e "display notification \"OpenCode 配置已完成，请重启 opencode\" with title \"LLM Gateway\"" 2>/dev/null || true
+  osascript -e "display notification \"OpenCode 配置已完成，请重启 opencode\" with title \"${SUPPLIER_NAME}\"" 2>/dev/null || true
 `

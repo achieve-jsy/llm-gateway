@@ -21,14 +21,16 @@ const systemSettingsData = {
   site_name: 'My Gateway',
   site_logo: 'data:image/png;base64,abc123',
   site_subtitle: 'Awesome API Gateway',
-  api_base_url: 'https://api.example.com'
+  api_base_url: 'https://api.example.com',
+  supplier_name: '某公司',
 }
 
 const publicSettingsData = {
   site_name: 'My Gateway',
   site_logo: 'data:image/png;base64,abc123',
   site_subtitle: 'Awesome API Gateway',
-  api_base_url: 'https://api.example.com'
+  api_base_url: 'https://api.example.com',
+  supplier_name: '某公司',
 }
 
 function createStore() {

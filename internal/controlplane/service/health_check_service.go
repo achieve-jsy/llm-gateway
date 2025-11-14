@@ -711,6 +711,8 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 				))
 			}
 		} else {
+			// Bearer token 模式：用 AnonymousCredentials 阻止 SDK 走默认凭证链（EC2 IMDS 等）
+			loadOpts = append(loadOpts, awsconfig.WithCredentialsProvider(aws.AnonymousCredentials{}))
 			tokenVal := apiKey
 			ctrlOpts = append(ctrlOpts, func(o *bedrock.Options) {
 				o.BearerAuthTokenProvider = bearer.TokenProviderFunc(func(_ context.Context) (bearer.Token, error) {

@@ -185,7 +185,7 @@ func main() {
 
 	// Initialize router (inject dependencies). We always use the router obtained
 	// from the ProviderLoader – which is atomically swapped on config changes.
-	r := server.Setup(activeRouter, icache, state, authClient, controlPlaneURL, internalToken, sch, nameCache)
+	r := server.Setup(providerLoader.Router, icache, state, authClient, controlPlaneURL, internalToken, sch, nameCache)
 
 	// Register auth routes
 	r.GET("/.well-known/jwks.json", authJWKSHandler.GetJWKS)

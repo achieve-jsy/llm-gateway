@@ -343,10 +343,10 @@ func (s *HealthCheckService) runBackgroundModelCheck() {
 				mu.Unlock()
 				s.modelRepo.ResetModelFailures(mod.ID)
 				s.modelRepo.UpdateModelCheckResult(mod.ID, elapsed, "")
-				s.recordLog("model", mod.ID, mod.Name, true, elapsed, "")
+				s.recordLog("model", mod.ID, mod.Name, mod.Provider.ID, mod.Provider.Name, true, elapsed, "")
 			} else {
 				s.modelRepo.UpdateModelCheckResult(mod.ID, elapsed, errMsg)
-				s.recordLog("model", mod.ID, mod.Name, false, elapsed, errMsg)
+				s.recordLog("model", mod.ID, mod.Name, mod.Provider.ID, mod.Provider.Name, false, elapsed, errMsg)
 
 				newCount, err := s.modelRepo.IncrementModelFailures(mod.ID)
 				if err == nil && newCount >= maxFailures {
@@ -594,7 +594,7 @@ func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provi
 	credJSON, err := crypto.Decrypt(provider.EncryptedCredentials)
 	if err != nil {
 		cr.Error = "decrypt credentials failed"
-		s.recordLog("provider", provider.ID, provider.Name, false, 0, cr.Error)
+		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, 0, cr.Error)
 		s.handleProviderFailure(provider.ID, maxFailures, cr)
 		return cr
 	}
@@ -612,14 +612,14 @@ func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provi
 		cr.ResponseTime = elapsed
 		if !success {
 			cr.Error = errMsg
-			s.recordLog("provider", provider.ID, provider.Name, false, elapsed, errMsg)
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, elapsed, errMsg)
 			s.handleProviderFailure(provider.ID, maxFailures, cr)
 			return cr
 		}
 		// 仅连通性模式直接返回成功
 		if checkMode == "connectivity" {
 			cr.Success = true
-			s.recordLog("provider", provider.ID, provider.Name, true, elapsed, "")
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, elapsed, "")
 			s.providerRepo.UpdateResponseTime(provider.ID, elapsed)
 			s.providerRepo.ResetFailures(provider.ID)
 			return cr
@@ -638,13 +638,13 @@ func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provi
 			// errMsg 为 "skipped" 表示无模型可测，视为通过
 			if errMsg == "no model to test, skipped" {
 				cr.Success = true
-				s.recordLog("provider", provider.ID, provider.Name, true, cr.ResponseTime, errMsg)
+				s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, errMsg)
 				s.providerRepo.UpdateResponseTime(provider.ID, cr.ResponseTime)
 				s.providerRepo.ResetFailures(provider.ID)
 				return cr
 			}
 			cr.Error = errMsg
-			s.recordLog("provider", provider.ID, provider.Name, false, cr.ResponseTime, errMsg)
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, cr.ResponseTime, errMsg)
 			s.handleProviderFailure(provider.ID, maxFailures, cr)
 			return cr
 		}
@@ -652,7 +652,7 @@ func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provi
 
 	// 全部通过
 	cr.Success = true
-	s.recordLog("provider", provider.ID, provider.Name, true, cr.ResponseTime, "")
+	s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, "")
 	s.providerRepo.UpdateResponseTime(provider.ID, cr.ResponseTime)
 	s.providerRepo.ResetFailures(provider.ID)
 	return cr
@@ -675,7 +675,7 @@ func (s *HealthCheckService) checkNonOpenAIProvider(ctx context.Context, provide
 		return s.checkBedrockProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
 	default:
 		cr.Success = true // 未知类型跳过，不计失败
-		s.recordLog("provider", provider.ID, provider.Name, true, 0, "skipped: unsupported provider type for auto-check")
+		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, 0, "skipped: unsupported provider type for auto-check")
 		return cr
 	}
 }
@@ -735,7 +735,7 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 	awsCfg, err := awsconfig.LoadDefaultConfig(probeCtx, loadOpts...)
 	if err != nil {
 		cr.Error = "AWS 配置加载失败: " + err.Error()
-		s.recordLog("provider", provider.ID, provider.Name, false, 0, cr.Error)
+		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, 0, cr.Error)
 		s.handleProviderFailure(provider.ID, maxFailures, cr)
 		return cr
 	}
@@ -752,7 +752,7 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 
 		if err != nil {
 			cr.Error = err.Error()
-			s.recordLog("provider", provider.ID, provider.Name, false, elapsed, cr.Error)
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, elapsed, cr.Error)
 			s.handleProviderFailure(provider.ID, maxFailures, cr)
 			return cr
 		}
@@ -763,7 +763,7 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 
 		if checkMode == "connectivity" {
 			cr.Success = true
-			s.recordLog("provider", provider.ID, provider.Name, true, elapsed, "")
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, elapsed, "")
 			return cr
 		}
 	}
@@ -783,7 +783,7 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 		if testModel == "" {
 			// 无模型可测，跳过转发检测视为通过
 			cr.Success = true
-			s.recordLog("provider", provider.ID, provider.Name, true, cr.ResponseTime, "no model to test, skipped")
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, "no model to test, skipped")
 			return cr
 		}
 
@@ -810,14 +810,14 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 
 		if err != nil {
 			cr.Error = "model forward: " + err.Error()
-			s.recordLog("provider", provider.ID, provider.Name, false, cr.ResponseTime, cr.Error)
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, cr.ResponseTime, cr.Error)
 			s.handleProviderFailure(provider.ID, maxFailures, cr)
 			return cr
 		}
 	}
 
 	cr.Success = true
-	s.recordLog("provider", provider.ID, provider.Name, true, cr.ResponseTime, "")
+	s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, "")
 	s.providerRepo.UpdateResponseTime(provider.ID, cr.ResponseTime)
 	s.providerRepo.ResetFailures(provider.ID)
 	return cr
@@ -1034,7 +1034,7 @@ func (s *HealthCheckService) checkSingleModel(client *http.Client, m *model.Mode
 
 	credJSON, err := crypto.Decrypt(provider.EncryptedCredentials)
 	if err != nil {
-		s.recordLog("model", m.ID, m.Name, false, 0, "decrypt provider credentials failed")
+		s.recordLog("model", m.ID, m.Name, provider.ID, provider.Name, false, 0, "decrypt provider credentials failed")
 		return
 	}
 
@@ -1046,16 +1046,16 @@ func (s *HealthCheckService) checkSingleModel(client *http.Client, m *model.Mode
 	}
 	success, skipped, elapsed, errMsg := ProbeModelForward(context.Background(), provider.Endpoint, modelName, apiKey, m.ModelType)
 	if skipped {
-		s.recordLog("model", m.ID, m.Name, true, elapsed, "skipped")
+		s.recordLog("model", m.ID, m.Name, provider.ID, provider.Name, true, elapsed, "skipped")
 		return
 	}
 	if !success {
-		s.recordLog("model", m.ID, m.Name, false, elapsed, errMsg)
+		s.recordLog("model", m.ID, m.Name, provider.ID, provider.Name, false, elapsed, errMsg)
 		s.handleModelFailure("model", m.ID, config)
 		return
 	}
 
-	s.recordLog("model", m.ID, m.Name, true, elapsed, "")
+	s.recordLog("model", m.ID, m.Name, provider.ID, provider.Name, true, elapsed, "")
 }
 
 // handleModelFailure 处理模型失败（基于日志记录的连续失败判断）
@@ -1080,11 +1080,13 @@ func (s *HealthCheckService) handleModelFailure(targetType string, targetID uuid
 }
 
 // recordLog 记录检测日志
-func (s *HealthCheckService) recordLog(targetType string, targetID uuid.UUID, targetName string, success bool, responseTimeMs int, errMsg string) {
+func (s *HealthCheckService) recordLog(targetType string, targetID uuid.UUID, targetName string, providerID uuid.UUID, providerName string, success bool, responseTimeMs int, errMsg string) {
 	log := &model.HealthCheckLog{
 		TargetType:     targetType,
 		TargetID:       targetID,
 		TargetName:     targetName,
+		ProviderID:     providerID,
+		ProviderName:   providerName,
 		Success:        success,
 		ResponseTimeMs: responseTimeMs,
 		ErrorMessage:   errMsg,
@@ -1093,7 +1095,7 @@ func (s *HealthCheckService) recordLog(targetType string, targetID uuid.UUID, ta
 		slog.Error("failed to create health check log", "error", err)
 	}
 	if !success {
-		slog.Warn("health check failed", "type", targetType, "name", targetName, "error", errMsg)
+		slog.Warn("health check failed", "type", targetType, "name", targetName, "provider", providerName, "error", errMsg)
 	}
 }
 
@@ -1105,15 +1107,14 @@ type TimelineEntry struct {
 	ErrorMessage   string    `json:"error_message,omitempty"`
 }
 
-// TimelineGroup 按模型端点聚合的监控组
+// TimelineGroup 按模型+渠道分行的监控组
 type TimelineGroup struct {
 	TargetName    string          `json:"target_name"`
 	TargetType    string          `json:"target_type"`
+	ProviderName  string          `json:"provider_name"`
 	HealthPercent int             `json:"health_percent"`
 	TotalChecks   int             `json:"total_checks"`
 	SuccessChecks int             `json:"success_checks"`
-	ProviderCount int             `json:"provider_count"`
-	KeyCount      int             `json:"key_count"`
 	Timeline      []TimelineEntry `json:"timeline"`
 }
 
@@ -1146,23 +1147,29 @@ func (s *HealthCheckService) GetTimeline(lookback string, search string, offset 
 	duration := parseLookback(lookback)
 	since := time.Now().Add(-duration)
 
-	rows, providerCounts, err := s.healthRepo.GetTimelineBuckets(since, search, timelineBuckets)
+	rows, err := s.healthRepo.GetTimelineBuckets(since, search, timelineBuckets)
 	if err != nil {
 		return nil, err
 	}
 
+	type aggKey struct{ targetID, providerID string }
 	type agg struct {
+		targetName    string
+		providerName  string
 		totalChecks   int
 		successChecks int
 		timeline      []TimelineEntry
 	}
-	groupMap := make(map[string]*agg)
+	groupMap := make(map[aggKey]*agg)
+	keyOrder := make([]aggKey, 0)
 
 	for _, r := range rows {
-		a, ok := groupMap[r.TargetName]
+		k := aggKey{targetID: r.TargetID, providerID: r.ProviderID}
+		a, ok := groupMap[k]
 		if !ok {
-			a = &agg{}
-			groupMap[r.TargetName] = a
+			a = &agg{targetName: r.TargetName, providerName: r.ProviderName}
+			groupMap[k] = a
+			keyOrder = append(keyOrder, k)
 		}
 		a.totalChecks += r.TotalCount
 		a.successChecks += r.OkCount
@@ -1175,10 +1182,12 @@ func (s *HealthCheckService) GetTimeline(lookback string, search string, offset 
 	}
 
 	groups := make([]TimelineGroup, 0, len(groupMap))
-	for name, a := range groupMap {
+	for _, k := range keyOrder {
+		a := groupMap[k]
 		g := TimelineGroup{
-			TargetName:    name,
+			TargetName:    a.targetName,
 			TargetType:    "model",
+			ProviderName:  a.providerName,
 			TotalChecks:   a.totalChecks,
 			SuccessChecks: a.successChecks,
 			Timeline:      a.timeline,
@@ -1187,10 +1196,6 @@ func (s *HealthCheckService) GetTimeline(lookback string, search string, offset 
 			g.HealthPercent = g.SuccessChecks * 100 / g.TotalChecks
 		} else {
 			g.HealthPercent = 100
-		}
-		if pc, ok := providerCounts[name]; ok {
-			g.ProviderCount = pc.ProviderCnt
-			g.KeyCount = pc.KeyCnt
 		}
 		groups = append(groups, g)
 	}

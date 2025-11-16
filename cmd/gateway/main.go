@@ -77,6 +77,10 @@ func main() {
 	// 初始化缓存
 	icache := infra.NewCache(rdb)
 
+	// 初始化 KeyCache：API Key 验证结果双层缓存（本地内存 + Redis）
+	keyCache := infra.NewKeyCache(rdb)
+	defer keyCache.Close()
+
 	// 初始化 OTLP Tracer
 	shutdown, err := infra.InitTracer(cfg.OTLP)
 	if err != nil {
@@ -130,6 +134,7 @@ func main() {
 	}
 
 	subscriber := infra.NewSubscriber(rdb, providerLoader.HandleChangeEvent(fetchEntries))
+	subscriber.AddCallback(keyCache.HandleChangeEvent)
 	go subscriber.Start(ctx)
 
 	// Periodic reconciliation loop (every 30s) – brings in any changes missed
@@ -167,6 +172,7 @@ func main() {
 	}()
 
 	authClient := infra.NewAuthClient(cfg.Auth.URL, cfg.Auth.Token)
+	authClient.SetKeyCache(keyCache)
 
 	// Wire auth services (JWT / Key Auth / OIDC)
 	authJWTManager, err := acrypto.NewJWTManagerFromEnv()

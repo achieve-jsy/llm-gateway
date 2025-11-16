@@ -131,18 +131,21 @@ func (r *HealthCheckRepo) GetTargetProviderCounts(targetNames []string) (map[str
 
 // TimelineBucketRow 时间线聚合桶查询结果行
 type TimelineBucketRow struct {
-	TargetName  string    `gorm:"column:target_name"`
-	TargetType  string    `gorm:"column:target_type"`
-	BucketIdx   int       `gorm:"column:bucket_idx"`
-	TotalCount  int       `gorm:"column:total"`
-	OkCount     int       `gorm:"column:ok_count"`
-	AvgRtt      int       `gorm:"column:avg_rtt"`
-	FirstErr    string    `gorm:"column:first_err"`
-	BucketStart time.Time `gorm:"column:bucket_start"`
+	TargetID     string    `gorm:"column:target_id"`
+	TargetName   string    `gorm:"column:target_name"`
+	TargetType   string    `gorm:"column:target_type"`
+	ProviderID   string    `gorm:"column:provider_id"`
+	ProviderName string    `gorm:"column:provider_name"`
+	BucketIdx    int       `gorm:"column:bucket_idx"`
+	TotalCount   int       `gorm:"column:total"`
+	OkCount      int       `gorm:"column:ok_count"`
+	AvgRtt       int       `gorm:"column:avg_rtt"`
+	FirstErr     string    `gorm:"column:first_err"`
+	BucketStart  time.Time `gorm:"column:bucket_start"`
 }
 
-// GetTimelineBuckets SQL 层直接聚合 100 桶数据，同时返回 provider/key 计数
-func (r *HealthCheckRepo) GetTimelineBuckets(since time.Time, search string, bucketCount int) ([]TimelineBucketRow, map[string]TargetProviderCount, error) {
+// GetTimelineBuckets SQL 层直接聚合 100 桶数据，按 (target_id, provider_id) 分组
+func (r *HealthCheckRepo) GetTimelineBuckets(since time.Time, search string, bucketCount int) ([]TimelineBucketRow, error) {
 	searchPattern := ""
 	if search != "" {
 		searchPattern = "%" + search + "%"
@@ -152,8 +155,11 @@ func (r *HealthCheckRepo) GetTimelineBuckets(since time.Time, search string, buc
 	var rows []TimelineBucketRow
 	err := r.db.Raw(`
 		SELECT
+			target_id::text,
 			target_name,
 			target_type,
+			provider_id::text,
+			provider_name,
 			(EXTRACT(EPOCH FROM (checked_at - ?::timestamptz)) * 1000 / ?)::int AS bucket_idx,
 			COUNT(*)::int AS total,
 			COUNT(*) FILTER (WHERE success)::int AS ok_count,
@@ -165,46 +171,10 @@ func (r *HealthCheckRepo) GetTimelineBuckets(since time.Time, search string, buc
 		  AND target_type = 'model'
 		  AND (? = '' OR target_name ILIKE ?)
 		  AND target_name IN (SELECT DISTINCT name FROM models WHERE enabled = true)
-		GROUP BY target_name, target_type, bucket_idx
-		ORDER BY target_name, bucket_idx
+		GROUP BY target_id, target_name, target_type, provider_id, provider_name, bucket_idx
+		ORDER BY target_name, provider_name, bucket_idx
 	`, since, bucketMs, since, searchPattern, searchPattern).Scan(&rows).Error
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// 从 models 表直接获取 provider 计数（避免 JOIN health_check_logs 全表）
-	nameSet := make(map[string]bool)
-	for _, r := range rows {
-		nameSet[r.TargetName] = true
-	}
-	names := make([]string, 0, len(nameSet))
-	for n := range nameSet {
-		names = append(names, n)
-	}
-
-	type providerRow struct {
-		Name string `gorm:"column:name"`
-		Cnt  int    `gorm:"column:provider_count"`
-	}
-	var provRows []providerRow
-	if len(names) > 0 {
-		r.db.Raw(`
-			SELECT name, COUNT(DISTINCT provider_id)::int AS provider_count
-			FROM models
-			WHERE name IN ? AND enabled = true
-			GROUP BY name
-		`, names).Scan(&provRows)
-	}
-	pcm := make(map[string]TargetProviderCount, len(provRows))
-	for i := range provRows {
-		pcm[provRows[i].Name] = TargetProviderCount{
-			TargetName:  provRows[i].Name,
-			TargetType:  "model",
-			ProviderCnt: provRows[i].Cnt,
-		}
-	}
-
-	return rows, pcm, nil
+	return rows, err
 }
 
 // GroupTimelineBucketRow 按模型组聚合的时间线桶查询结果行

@@ -173,6 +173,7 @@ export interface TimelineEntry {
 export interface TimelineGroup {
   target_name: string
   target_type: string
+  provider_name: string
   health_percent: number
   total_checks: number
   success_checks: number

@@ -28,16 +28,21 @@ type ChangeCallback func(event ChangeEvent)
 
 // Subscriber Redis pub/sub 订阅器
 type Subscriber struct {
-	rdb      *redis.Client
-	callback ChangeCallback
+	rdb       *redis.Client
+	callbacks []ChangeCallback
 }
 
 // NewSubscriber 创建配置变更订阅器
 func NewSubscriber(rdb *redis.Client, callback ChangeCallback) *Subscriber {
 	return &Subscriber{
-		rdb:      rdb,
-		callback: callback,
+		rdb:       rdb,
+		callbacks: []ChangeCallback{callback},
 	}
+}
+
+// AddCallback 追加额外的回调函数。
+func (s *Subscriber) AddCallback(cb ChangeCallback) {
+	s.callbacks = append(s.callbacks, cb)
 }
 
 // Start 启动订阅监听（阻塞直到 ctx 取消）
@@ -80,5 +85,7 @@ func (s *Subscriber) handleMessage(msg *redis.Message) {
 		"timestamp", event.Timestamp,
 	)
 
-	s.callback(event)
+	for _, cb := range s.callbacks {
+		cb(event)
+	}
 }

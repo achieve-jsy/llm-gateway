@@ -121,9 +121,6 @@ deploy-test:
   stage: deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
-  before_script:
-    - chmod 600 /root/.ssh/config || true
-    - chmod 700 /root/.ssh || true
   variables:
     GATEWAY_PORT: "4010"
     CONTROL_PLANE_PORT: "4011"
@@ -171,9 +168,6 @@ deploy-web-test:
   stage: deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
-  before_script:
-    - chmod 600 /root/.ssh/config || true
-    - chmod 700 /root/.ssh || true
   variables:
     WEB_DIR: "/var/www/aimeter-test/dist"
   script:
@@ -194,9 +188,6 @@ deploy-prod:
   stage: deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
-  before_script:
-    - chmod 600 /root/.ssh/config || true
-    - chmod 700 /root/.ssh || true
   variables:
     GATEWAY_PORT: "8080"
     CONTROL_PLANE_PORT: "8081"
@@ -240,9 +231,6 @@ deploy-web-prod:
   stage: deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
-  before_script:
-    - chmod 600 /root/.ssh/config || true
-    - chmod 700 /root/.ssh || true
   variables:
     WEB_DIR: "/data/web/aimeter/dist"
   script:

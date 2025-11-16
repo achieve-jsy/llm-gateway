@@ -22,7 +22,7 @@ func NewAuthClient(baseURL, internalToken string) *AuthClient {
 	return &AuthClient{
 		base:   strings.TrimRight(baseURL, "/"),
 		token:  internalToken,
-		client: &http.Client{Timeout: 500 * time.Millisecond},
+		client: &http.Client{Timeout: 3 * time.Second},
 	}
 }
 

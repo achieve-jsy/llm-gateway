@@ -67,9 +67,63 @@ func TraceCapture() gin.HandlerFunc {
 		reqBody, err := io.ReadAll(io.LimitReader(c.Request.Body, maxReqBody))
 		if err == nil && len(reqBody) > 0 {
 			c.Request.Body = io.NopCloser(bytes.NewBuffer(reqBody))
-			c.Set("trace_req_body", reqBody)
+			c.Set("trace_req_body", sanitizeChatRequestBody(reqBody))
 		}
 
 		c.Next()
 	}
+}
+
+// sanitizeChatRequestBody 解析 chat completion 请求体，将 messages 中
+// 每条消息的 content 截断（保留前 200 字符），避免把完整上下文存入 trace 表。
+// 非 chat 请求或不合法 JSON 原样返回。
+func sanitizeChatRequestBody(raw []byte) []byte {
+	const maxContentLen = 200
+
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return raw
+	}
+
+	messages, ok := body["messages"].([]any)
+	if !ok {
+		return raw
+	}
+
+	for i, m := range messages {
+		msg, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		content, ok := msg["content"]
+		if !ok {
+			continue
+		}
+		switch v := content.(type) {
+		case string:
+			if len(v) > maxContentLen {
+				msg["content"] = v[:maxContentLen] + "..."
+			}
+		case []any:
+			for j, part := range v {
+				p, ok := part.(map[string]any)
+				if !ok {
+					continue
+				}
+				if s, ok := p["text"].(string); ok && len(s) > maxContentLen {
+					p["text"] = s[:maxContentLen] + "..."
+					v[j] = p
+				}
+			}
+			msg["content"] = v
+		}
+		messages[i] = msg
+	}
+	body["messages"] = messages
+
+	b, err := json.Marshal(body)
+	if err != nil {
+		return raw
+	}
+	return b
 }

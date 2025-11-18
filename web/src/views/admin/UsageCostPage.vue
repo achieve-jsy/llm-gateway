@@ -365,7 +365,7 @@
           <el-table-column prop="user_name" label="用户" min-width="90" fixed="left">
             <template #default="{ row }">
               <span v-if="row.user_name" class="up-name">{{ row.user_name }}</span>
-              <span v-else class="up-mono up-mono--sm">{{ maskKey(row.user_id) }}</span>
+              <span v-else class="up-dash">—</span>
             </template>
           </el-table-column>
           <!-- 部门 -->
@@ -640,7 +640,7 @@
             <div class="up-meta-section">
               <div class="up-meta-heading">调用者</div>
               <div class="up-meta-row"><span>Key</span><span>{{ keyLabel(traceRow?.key_id || '', traceRow?.key_name || '') }}</span></div>
-              <div class="up-meta-row"><span>用户</span><span>{{ traceRow?.user_name || traceRow?.user_id || '—' }}</span></div>
+              <div class="up-meta-row"><span>用户</span><span>{{ traceRow?.user_name || '—' }}</span></div>
               <div class="up-meta-row"><span>部门</span><span>{{ traceRow?.dept_name || traceRow?.dept_id || '—' }}</span></div>
               <div class="up-meta-row"><span>IP</span><code>{{ traceRow?.ip_address || '—' }}</code></div>
               <div class="up-meta-row up-meta-row--wrap"><span>UA</span><code class="up-meta-ua">{{ traceRow?.user_agent || '—' }}</code></div>

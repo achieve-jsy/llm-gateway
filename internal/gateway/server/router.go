@@ -22,9 +22,10 @@ import (
 )
 
 // Setup 初始化 Gin 路由与中间件
-// router is the new GoModel-based providers.Router; state tracks load status.
+// routerGetter 在每次请求时被调用以获取最新的 Router（支持热更新）。
+// state tracks load status.
 func Setup(
-	router *providers.Router,
+	routerGetter func() *providers.Router,
 	routerCache *infra.Cache,
 	state *provider.RuntimeState,
 	authClient *infra.AuthClient,
@@ -32,6 +33,9 @@ func Setup(
 	sch *scheduler.Scheduler,
 	nameCache *cache.GroupNameCache,
 ) *gin.Engine {
+	// 获取初始 router 用于 models/health/passthrough 等（不需要热更新的场景）
+	router := routerGetter()
+
 	r := gin.New()
 
 	// 全局中间件链
@@ -47,7 +51,7 @@ func Setup(
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	// 创建编排器和处理器
-	orch := orchestrator.NewChatOrchestrator(router)
+	orch := orchestrator.NewChatOrchestratorWithGetter(routerGetter)
 
 	bindClient := binding.NewClient(controlPlaneURL, internalToken)
 

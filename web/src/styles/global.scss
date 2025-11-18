@@ -82,11 +82,14 @@ body,
   border-bottom: 1px solid var(--el-border-color);
   background-color: var(--el-bg-color);
   gap: 10px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
 
   .top-bar-title {
     font-size: 16px;
     font-weight: 800;
-    color: #1E8C86;
+    color: var(--el-text-color-primary);
     letter-spacing: 1px;
     white-space: nowrap;
   }
@@ -573,5 +576,107 @@ html.dark ::-webkit-scrollbar-thumb {
 
   &:hover {
     background: #3CC4BD;
+  }
+}
+
+/* ===================== Markdown 通用样式 ===================== */
+.md-content {
+  font-size: 14px;
+  color: #334155;
+  line-height: 1.8;
+  word-break: break-word;
+
+  h1, h2, h3, h4, h5, h6 {
+    font-weight: 700;
+    line-height: 1.35;
+    color: #1a1a1a;
+    margin: 1.25em 0 0.5em;
+    &:first-child { margin-top: 0; }
+  }
+  h1 { font-size: 1.5em; }
+  h2 { font-size: 1.3em; border-bottom: 1px solid var(--el-border-color-light); padding-bottom: 0.3em; }
+  h3 { font-size: 1.1em; }
+  h4 { font-size: 1em; }
+
+  p { margin: 0 0 0.875em; &:last-child { margin-bottom: 0; } }
+
+  strong { font-weight: 700; color: #1a1a1a; }
+  em { font-style: italic; }
+
+  a { color: var(--el-color-primary); text-decoration: underline; text-underline-offset: 2px; }
+  a:hover { opacity: 0.8; }
+
+  ul, ol { padding-left: 1.5em; margin: 0.5em 0 0.875em; }
+  li { margin-bottom: 0.3em; }
+  li > ul, li > ol { margin: 0.2em 0; }
+
+  blockquote {
+    border-left: 3px solid var(--el-color-primary);
+    margin: 1em 0;
+    padding: 0.5em 1em;
+    background: var(--el-fill-color-light);
+    border-radius: 0 6px 6px 0;
+    color: #64748B;
+    p { margin-bottom: 0; }
+  }
+
+  code {
+    font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+    font-size: 0.875em;
+    background: var(--el-fill-color);
+    border: 1px solid var(--el-border-color-light);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    color: #c7254e;
+  }
+
+  pre {
+    background: #1e1e2e;
+    border-radius: 8px;
+    padding: 1em 1.25em;
+    overflow-x: auto;
+    margin: 0.875em 0;
+
+    code {
+      background: transparent;
+      border: none;
+      padding: 0;
+      font-size: 13px;
+      color: #cdd6f4;
+    }
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.875em 0;
+    font-size: 13px;
+
+    th, td {
+      border: 1px solid var(--el-border-color);
+      padding: 8px 12px;
+      text-align: left;
+    }
+
+    th {
+      background: var(--el-fill-color-light);
+      font-weight: 600;
+      color: #1a1a1a;
+    }
+
+    tr:nth-child(even) td { background: var(--el-fill-color-light); }
+  }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--el-border-color);
+    margin: 1.25em 0;
+  }
+
+  img {
+    max-width: 100%;
+    border-radius: 6px;
+    display: block;
+    margin: 0.5em 0;
   }
 }

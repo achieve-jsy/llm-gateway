@@ -73,17 +73,22 @@
           <el-icon><Setting /></el-icon>
           <template #title>系统设置</template>
         </el-menu-item>
+        <el-menu-item index="/admin/announcements">
+          <el-icon><Bell /></el-icon>
+          <template #title>公告管理</template>
+        </el-menu-item>
       </el-menu>
     </aside>
 
     <!-- 主内容区 -->
     <div class="main-content">
       <!-- 顶部工具栏 -->
-      <div v-if="!isPublicRoute" class="top-bar">
-        <button class="collapse-btn" @click="toggleCollapse" :title="isCollapsed ? '展开菜单' : '收起菜单'">
+      <div v-if="!isPublicRoute" class="top-bar">        <button class="collapse-btn" @click="toggleCollapse" :title="isCollapsed ? '展开菜单' : '收起菜单'">
           <el-icon :size="18"><Fold v-if="!isCollapsed" /><Expand v-else /></el-icon>
         </button>
         <div class="top-bar-spacer"></div>
+        <AnnouncementBanner v-if="authStore.isLoggedIn" ref="bannerRef" />
+        <NotificationBell v-if="authStore.isLoggedIn" ref="notificationBellRef" />
         <span class="theme-toggle" @click="toggleTheme" :title="isDark ? '切换到浅色模式' : '切换到深色模式'">
           {{ isDark ? '☀️' : '🌙' }}
         </span>
@@ -107,6 +112,13 @@
         <router-view />
       </div>
     </div>
+
+    <AnnouncementPopup
+      v-if="authStore.isLoggedIn"
+      :visible="showPopup"
+      @close="showPopup = false"
+      @all-read="onPopupAllRead"
+    />
   </div>
 </template>
 
@@ -116,7 +128,11 @@ import { onMounted, computed, ref, watch } from 'vue'
 import { isDark, toggleTheme } from './composables/useTheme'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
-import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, HomeFilled, Key, Monitor, Setting, Fold, Expand, Histogram, Collection } from '@element-plus/icons-vue'
+import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, HomeFilled, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell } from '@element-plus/icons-vue'
+import NotificationBell from '@/components/common/NotificationBell.vue'
+import AnnouncementBanner from '@/components/common/AnnouncementBanner.vue'
+import AnnouncementPopup from '@/components/common/AnnouncementPopup.vue'
+import { getUnreadAnnouncements } from '@/services/control-plane'
 
 const route = useRoute()
 const router = useRouter()
@@ -125,6 +141,7 @@ const settingsStore = useSettingsStore()
 
 const isCollapsed = ref(localStorage.getItem('sidebar-collapsed') === 'true')
 const activeMenu = ref(route.path)
+const showPopup = ref(false)
 
 watch(() => route.path, (newPath) => {
   activeMenu.value = newPath
@@ -142,6 +159,11 @@ const siteTitle = computed(() => {
 
 onMounted(() => {
   settingsStore.loadPublicSettings()
+  checkPopupAnnouncements()
+})
+
+watch(() => authStore.isLoggedIn, (loggedIn) => {
+  if (loggedIn) checkPopupAnnouncements()
 })
 
 function handleMenuSelect(index: string) {
@@ -158,8 +180,25 @@ function toggleCollapse() {
 function handleUserCommand(command: string) {
   if (command === 'logout') {
     authStore.handleLogout()
+    sessionStorage.removeItem('popup_shown')
     router.push('/login')
   }
+}
+
+async function checkPopupAnnouncements() {
+  if (sessionStorage.getItem('popup_shown')) return
+  if (!localStorage.getItem('access_token')) return
+  try {
+    const items = await getUnreadAnnouncements()
+    if ((items || []).some(a => a.display_mode === 'popup')) {
+      showPopup.value = true
+      sessionStorage.setItem('popup_shown', '1')
+    }
+  } catch {}
+}
+
+function onPopupAllRead() {
+  showPopup.value = false
 }
 </script>
 

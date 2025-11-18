@@ -28,6 +28,7 @@ const (
 	SettingKeyDefaultMaxSwitches          = "fault_default_max_switches"
 	SettingKeyDefaultSameModelRetries     = "fault_default_same_model_retries"
 	SettingKeyDefaultFailoverCooldown     = "fault_default_cooldown_seconds"
+	SettingKeySupplierName                = "supplier_name"
 )
 
 const (
@@ -38,6 +39,7 @@ const (
 	defaultMaxSwitches                  = 2
 	defaultSameModelRetries             = 1
 	defaultFailoverCooldownSeconds      = 60
+	defaultSupplierName                 = "某公司"
 )
 
 type SettingsRepository interface {
@@ -65,6 +67,7 @@ func allSettingKeys() []string {
 		SettingKeyOIDCRedirectURL, SettingKeyOIDCScopes, SettingKeyOIDCEnabled,
 		SettingKeyWebhookEnabled, SettingKeyWebhookURL, SettingKeyWebhookSecret, SettingKeyWebhookEvents,
 		SettingKeyDefaultMaxSwitches, SettingKeyDefaultSameModelRetries, SettingKeyDefaultFailoverCooldown,
+		SettingKeySupplierName,
 	}
 }
 
@@ -81,6 +84,7 @@ func (s *SettingsService) ensureDefaults() {
 		SettingKeyDefaultMaxSwitches:        fmt.Sprintf("%d", defaultMaxSwitches),
 		SettingKeyDefaultSameModelRetries:   fmt.Sprintf("%d", defaultSameModelRetries),
 		SettingKeyDefaultFailoverCooldown:   fmt.Sprintf("%d", defaultFailoverCooldownSeconds),
+		SettingKeySupplierName:              defaultSupplierName,
 	}
 	existing, _ := s.repo.GetMultiple(allSettingKeys())
 	for k, v := range defaults {
@@ -115,6 +119,7 @@ func (s *SettingsService) GetSystemSettings(ctx context.Context) (*model.SystemS
 		DefaultMaxSwitches:             intOrDefault(vals, SettingKeyDefaultMaxSwitches, defaultMaxSwitches),
 		DefaultSameModelRetries:        intOrDefault(vals, SettingKeyDefaultSameModelRetries, defaultSameModelRetries),
 		DefaultFailoverCooldownSeconds: intOrDefault(vals, SettingKeyDefaultFailoverCooldown, defaultFailoverCooldownSeconds),
+		SupplierName:                  valOrDefault(vals, SettingKeySupplierName, defaultSupplierName),
 	}, nil
 }
 
@@ -122,6 +127,7 @@ func (s *SettingsService) GetPublicSettings(ctx context.Context) (*model.PublicS
 	vals, err := s.repo.GetMultiple([]string{
 		SettingKeySiteName, SettingKeySiteLogo, SettingKeySiteSubtitle, SettingKeyAPIBaseURL,
 		SettingKeyRateLimitPerMin, SettingKeyMaxConcurrencyPerKey,
+		SettingKeySupplierName,
 	})
 	if err != nil {
 		return nil, err
@@ -133,6 +139,7 @@ func (s *SettingsService) GetPublicSettings(ctx context.Context) (*model.PublicS
 		APIBaseURL:           valOrDefault(vals, SettingKeyAPIBaseURL, ""),
 		RateLimitPerMinute:   intOrDefault(vals, SettingKeyRateLimitPerMin, defaultRateLimitPerMin),
 		MaxConcurrencyPerKey: intOrDefault(vals, SettingKeyMaxConcurrencyPerKey, defaultMaxConcurrencyPerKey),
+		SupplierName:        valOrDefault(vals, SettingKeySupplierName, defaultSupplierName),
 	}, nil
 }
 
@@ -173,6 +180,7 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, settings *model.Sy
 	if settings.DefaultFailoverCooldownSeconds > 0 {
 		updates[SettingKeyDefaultFailoverCooldown] = fmt.Sprintf("%d", settings.DefaultFailoverCooldownSeconds)
 	}
+	updates[SettingKeySupplierName] = settings.SupplierName
 	return s.repo.SetMultiple(updates)
 }
 
@@ -257,6 +265,14 @@ func boolOrDefault(vals map[string]string, key string, def bool) bool {
 		return def
 	}
 	return v == "true"
+}
+
+func (s *SettingsService) GetSupplierName(ctx context.Context) string {
+	v, err := s.repo.GetValue(SettingKeySupplierName)
+	if err != nil || v == "" {
+		return defaultSupplierName
+	}
+	return v
 }
 
 func (s *SettingsService) ExportAll(ctx context.Context) (map[string]string, error) {

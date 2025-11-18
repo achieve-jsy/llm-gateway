@@ -63,6 +63,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	modelRepo := repository.NewModelRepo(db)
 	defRepo := repository.NewProviderDefinitionRepo(db)
 	modelTagRepo := repository.NewModelTagRepo(db)
+	announcementRepo := repository.NewAnnouncementRepo(db)
 	healthCheckRepo := repository.NewHealthCheckRepo(db)
 
 	keyRepo := repository.NewKeyRepo(db)
@@ -116,6 +117,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	defHandler := handler.NewDefinitionHandler(defRepo)
 	testHandler := handler.NewTestHandler(providerRepo, modelRepo)
 	modelTagHandler := handler.NewModelTagHandler(modelTagRepo)
+	announcementHandler := handler.NewAnnouncementHandler(announcementRepo)
 	healthCheckHandler := handler.NewHealthCheckHandler(healthCheckSvc)
 	modelCheckHandler := handler.NewModelCheckHandler(modelRepo, providerRepo, healthCheckRepo)
 	syncSvc := service.NewSyncService(providerRepo, modelRepo, publisher)
@@ -124,7 +126,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 	keyHandler := handler.NewKeyHandler(keySvc)
 	settingsHandler := handler.NewSettingsHandler(settingsSvc)
-	opencodeConfigHandler := handler.NewOpencodeConfigHandler(rdb)
+	opencodeConfigHandler := handler.NewOpencodeConfigHandler(rdb, settingsSvc)
 
 	// 模型 Catalog（D1: LiteLLM 单源；D3: bundled fallback；D4: 启动异步首刷 + 24h cron + 手动）
 	catalogRepo := repository.NewModelCatalogRepo(db)
@@ -163,6 +165,10 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	r.GET("/api/v1/settings/public", func(c *gin.Context) {
 		settingsHandler.GetPublicSettings(c)
 	})
+
+	// 公开公告（无需认证）
+	r.GET("/api/v1/public/announcements", announcementHandler.ListActive)
+	r.GET("/api/v1/public/announcements/:id", announcementHandler.GetPublicByID)
 
 	// OpenCode 配置（无需 JWT，token 即凭证）
 	r.GET("/api/v1/opencode-config/script", opencodeConfigHandler.GetScript)
@@ -287,6 +293,19 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.POST("/settings/test-webhook", settingsHandler.TestWebhook)
 		adminGroup.POST("/settings/export", settingsHandler.ExportSettings)
 		adminGroup.POST("/settings/import", settingsHandler.ImportSettings)
+
+		// 公告管理
+		adminGroup.GET("/announcements", announcementHandler.List)
+		adminGroup.POST("/announcements", announcementHandler.Create)
+		adminGroup.GET("/announcements/:id", announcementHandler.GetByID)
+		adminGroup.PUT("/announcements/:id", announcementHandler.Update)
+		adminGroup.DELETE("/announcements/:id", announcementHandler.Delete)
+		adminGroup.PATCH("/announcements/:id/publish", announcementHandler.Publish)
+		adminGroup.PATCH("/announcements/:id/archive", announcementHandler.Archive)
+		adminGroup.POST("/announcements/:id/read", announcementHandler.MarkRead)
+		adminGroup.GET("/announcements/unread", announcementHandler.GetUnread)
+		adminGroup.GET("/announcements/unread/count", announcementHandler.GetUnreadCount)
+		adminGroup.GET("/announcements/history", announcementHandler.GetReadHistory)
 	}
 
 	// 内部接口组（内部 Token 认证）

@@ -99,7 +99,7 @@ http.interceptors.response.use(
     const friendlyMsg = resolveErrorMessage(error)
     const backendMessage = error.response?.data?.error?.message || error.response?.data?.message
     const message = friendlyMsg ?? backendMessage ?? error.message ?? '请求失败'
-    const config = error.config as InternalAxiosRequestConfig & { _retrying?: boolean }
+    const config = error.config as InternalAxiosRequestConfig & { _retrying?: boolean; _silent?: boolean }
 
     // 全局 401 处理：先尝试 refresh token 续期，失败后再清 token 跳登录
     if (status === 401 && !isAuthEndpoint(requestUrl) && !config._retrying) {
@@ -117,6 +117,11 @@ http.interceptors.response.use(
 
       clearAuthAndRedirect(backendMessage || '登录已失效，请重新登录')
       return new Promise(() => {})
+    }
+
+    // _silent 标记：通知类接口静默失败，不弹 toast
+    if (config._silent) {
+      return Promise.reject(error)
     }
 
     // 统一错误出口：拦截器处理所有错误，业务代码只做状态清理，不再弹重复消息

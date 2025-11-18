@@ -12,9 +12,10 @@ import (
 
 // AuthClient HTTP client that calls auth service verify-key endpoint
 type AuthClient struct {
-	base   string
-	token  string
-	client *http.Client
+	base     string
+	token    string
+	client   *http.Client
+	keyCache *KeyCache
 }
 
 // NewAuthClient creates a new AuthClient
@@ -22,8 +23,13 @@ func NewAuthClient(baseURL, internalToken string) *AuthClient {
 	return &AuthClient{
 		base:   strings.TrimRight(baseURL, "/"),
 		token:  internalToken,
-		client: &http.Client{Timeout: 500 * time.Millisecond},
+		client: &http.Client{Timeout: 3 * time.Second},
 	}
+}
+
+// SetKeyCache 设置 KeyCache 以启用双层缓存。
+func (c *AuthClient) SetKeyCache(kc *KeyCache) {
+	c.keyCache = kc
 }
 
 // VerifyKeyResp is the response from auth service verify-key endpoint
@@ -42,8 +48,27 @@ type VerifyKeyResp struct {
 	} `json:"data"`
 }
 
-// VerifyKey calls auth service to verify an API key
+// VerifyKey calls auth service to verify an API key.
+// When KeyCache is configured, it first checks the local+Redis cache.
 func (c *AuthClient) VerifyKey(ctx context.Context, key string) (*VerifyKeyResp, error) {
+	if c.keyCache != nil {
+		if resp, ok := c.keyCache.Get(ctx, key); ok {
+			return resp, nil
+		}
+	}
+
+	resp, err := c.verifyKeyHTTP(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	if c.keyCache != nil {
+		c.keyCache.Set(ctx, key, resp)
+	}
+	return resp, nil
+}
+
+func (c *AuthClient) verifyKeyHTTP(ctx context.Context, key string) (*VerifyKeyResp, error) {
 	body, _ := json.Marshal(map[string]string{"key": key})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/internal/v1/auth/verify-key", bytes.NewReader(body))
 	if err != nil {

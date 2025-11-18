@@ -41,21 +41,27 @@ const (
 	opencodeTokenPrefix = "opencode_cfg_token:"
 )
 
-type OpencodeConfigHandler struct {
-	rdb *redis.Client
+type SettingsServiceProvider interface {
+	GetSupplierName(ctx context.Context) string
 }
 
-func NewOpencodeConfigHandler(rdb *redis.Client) *OpencodeConfigHandler {
-	return &OpencodeConfigHandler{rdb: rdb}
+type OpencodeConfigHandler struct {
+	rdb        *redis.Client
+	settingsSvc SettingsServiceProvider
+}
+
+func NewOpencodeConfigHandler(rdb *redis.Client, settingsSvc SettingsServiceProvider) *OpencodeConfigHandler {
+	return &OpencodeConfigHandler{rdb: rdb, settingsSvc: settingsSvc}
 }
 
 type tokenRecord struct {
-	KeyID       string `json:"key_id"`
-	ProviderID  string `json:"provider_id"`
-	BaseURL     string `json:"base_url"`
-	APIKey      string `json:"api_key"`
-	Status      string `json:"status"` // pending | success | failed
-	Msg         string `json:"msg,omitempty"`
+	KeyID        string `json:"key_id"`
+	ProviderID   string `json:"provider_id"`
+	ProviderName string `json:"provider_name,omitempty"`
+	BaseURL      string `json:"base_url"`
+	APIKey       string `json:"api_key"`
+	Status       string `json:"status"` // pending | success | failed
+	Msg          string `json:"msg,omitempty"`
 }
 
 // GenerateToken POST /api/v1/keys/:id/opencode-config/token  (JWT required)
@@ -64,25 +70,27 @@ func (h *OpencodeConfigHandler) GenerateToken(c *gin.Context) {
 	keyID := c.Param("id")
 
 	var req struct {
-		ProviderID string `json:"provider_id"` // 如 "llm-gateway"
-		BaseURL    string `json:"base_url" binding:"required"`
-		APIKey     string `json:"api_key"  binding:"required"`
+		ProviderID   string `json:"provider_id"`   // 如 "llm-gateway"
+		ProviderName string `json:"provider_name"` // 用户设置的名称
+		BaseURL      string `json:"base_url" binding:"required"`
+		APIKey       string `json:"api_key"  binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
 		return
 	}
 	if req.ProviderID == "" {
-		req.ProviderID = "llm-gateway"
+		req.ProviderID = "biangfeng-gateway"
 	}
 
 	token := uuid.New().String()
 	rec := tokenRecord{
-		KeyID:      keyID,
-		ProviderID: req.ProviderID,
-		BaseURL:    req.BaseURL,
-		APIKey:     req.APIKey,
-		Status:     "pending",
+		KeyID:        keyID,
+		ProviderID:   req.ProviderID,
+		ProviderName: req.ProviderName,
+		BaseURL:      req.BaseURL,
+		APIKey:       req.APIKey,
+		Status:       "pending",
 	}
 	data, _ := json.Marshal(rec)
 
@@ -152,13 +160,19 @@ func (h *OpencodeConfigHandler) GetScript(c *gin.Context) {
 	callbackURL := origin + "/api/v1/opencode-config/callback"
 	pluginURL := origin + "/api/v1/opencode-config/plugin"
 
+	supplierName := rec.ProviderName
+	if supplierName == "" {
+		supplierName = h.settingsSvc.GetSupplierName(ctx)
+	}
+
 	params := scriptParams{
-		Token:       token,
-		ProviderID:  rec.ProviderID,
-		BaseURL:     rec.BaseURL,
-		APIKey:      rec.APIKey,
-		CallbackURL: callbackURL,
-		PluginURL:   pluginURL,
+		Token:        token,
+		ProviderID:   rec.ProviderID,
+		BaseURL:      rec.BaseURL,
+		APIKey:       rec.APIKey,
+		CallbackURL:  callbackURL,
+		PluginURL:    pluginURL,
+		SupplierName: supplierName,
 	}
 
 	var buf bytes.Buffer
@@ -268,8 +282,9 @@ type scriptParams struct {
 	ProviderID  string
 	BaseURL     string
 	APIKey      string
-	CallbackURL string
-	PluginURL   string
+	CallbackURL  string
+	PluginURL    string
+	SupplierName string
 }
 
 // macTmplRaw macOS/Linux bash 脚本模板
@@ -284,6 +299,7 @@ BASE_URL="{{.BaseURL}}"
 API_KEY="{{.APIKey}}"
 CALLBACK_URL="{{.CallbackURL}}"
 PLUGIN_URL="{{.PluginURL}}"
+SUPPLIER_NAME="{{.SupplierName}}"
 CONFIG_FILE="$HOME/.config/opencode/opencode.json"
 # opencode 标准插件目录为复数 plugins/（单数 plugin/ 在新版可能不被加载）。
 PLUGIN_DIR="$HOME/.config/opencode/plugins"
@@ -308,7 +324,7 @@ send_callback() {
 }
 
 divider
-echo -e "  LLM Gateway — OpenCode 配置助手"
+echo -e "  ${SUPPLIER_NAME} — OpenCode 配置助手"
 divider
 echo ""
 
@@ -376,6 +392,7 @@ provider_id      = "$PROVIDER_ID"
 base_url         = "$BASE_URL"
 api_key          = "$API_KEY"
 discovery_plugin = "$DISCOVERY_PLUGIN"
+supplier_name    = "$SUPPLIER_NAME"
 
 # 读取现有配置
 if os.path.exists(config_path):
@@ -399,7 +416,7 @@ action    = "更新（覆盖）" if provider_id in providers else "新增"
 # 因插件默认 discovery 关闭而不会被同步。
 providers[target_id] = {
     "npm":  "@ai-sdk/openai-compatible",
-    "name": "LLM Gateway",
+    "name": supplier_name,
     "options": {
         "baseURL": base_url,
         "apiKey":  api_key,
@@ -481,10 +498,10 @@ else
 fi
 
 echo ""
-echo -e "  ${CYAN}下一步：${NC}重启 opencode，即可在模型列表中看到 LLM Gateway 的模型（含图像输入等能力）。"
+echo -e "  ${CYAN}下一步：${NC}重启 opencode，即可在模型列表中看到 ${SUPPLIER_NAME} 的模型（含图像输入等能力）。"
 echo ""
 divider
 
 command -v osascript >/dev/null 2>&1 && \
-  osascript -e "display notification \"OpenCode 配置已完成，请重启 opencode\" with title \"LLM Gateway\"" 2>/dev/null || true
+  osascript -e "display notification \"OpenCode 配置已完成，请重启 opencode\" with title \"${SUPPLIER_NAME}\"" 2>/dev/null || true
 `

@@ -103,6 +103,14 @@ func buildConverseParts(req *core.ChatRequest) (converseParts, error) {
 	if err != nil {
 		return converseParts{}, err
 	}
+	// AWS Bedrock requires toolConfig to be present whenever any message
+	// contains toolUse or toolResult content blocks. If the caller omitted
+	// the tools list but the conversation history already contains tool
+	// blocks (e.g. a follow-up turn after a function call), supply an empty
+	// toolConfig to satisfy the API constraint.
+	if toolCfg == nil && messagesContainToolBlocks(messages) {
+		toolCfg = &brtypes.ToolConfiguration{Tools: []brtypes.Tool{}}
+	}
 	parts.toolCfg = toolCfg
 
 	return parts, nil
@@ -224,6 +232,21 @@ func convertToolResultMessage(msg core.Message) (brtypes.ContentBlock, error) {
 			Content:   content,
 		},
 	}, nil
+}
+
+// messagesContainToolBlocks returns true if any Bedrock message contains a
+// toolUse or toolResult content block. Used to detect when toolConfig must be
+// supplied even if the caller did not pass a tools list.
+func messagesContainToolBlocks(messages []brtypes.Message) bool {
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			switch block.(type) {
+			case *brtypes.ContentBlockMemberToolUse, *brtypes.ContentBlockMemberToolResult:
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func convertTools(tools []map[string]any, toolChoice any) (*brtypes.ToolConfiguration, error) {

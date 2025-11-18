@@ -30,7 +30,7 @@
         <div v-else class="monitor-list">
           <div
             v-for="group in groups"
-            :key="group.target_name"
+            :key="group.target_name + group.provider_name"
             class="monitor-item"
           >
             <div class="item-row">
@@ -50,8 +50,8 @@
                     {{ group.health_percent }}%
                   </el-tag>
                 </div>
-                <div class="provider-line">
-                  {{ group.provider_count }} 个提供商 / {{ group.key_count }} 个密钥
+                <div class="provider-line" v-if="group.provider_name">
+                  渠道：{{ group.provider_name }}
                 </div>
               </div>
               <div class="item-timeline">

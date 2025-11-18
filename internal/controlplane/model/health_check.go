@@ -35,6 +35,8 @@ type HealthCheckLog struct {
 	TargetType     string    `gorm:"type:varchar(20);not null" json:"target_type"`
 	TargetID       uuid.UUID `gorm:"type:uuid;not null" json:"target_id"`
 	TargetName     string    `gorm:"type:varchar(200);not null;default:''" json:"target_name"`
+	ProviderID     uuid.UUID `gorm:"type:uuid;not null;default:'00000000-0000-0000-0000-000000000000'" json:"provider_id"`
+	ProviderName   string    `gorm:"type:varchar(200);not null;default:''" json:"provider_name"`
 	Success        bool      `gorm:"not null" json:"success"`
 	ResponseTimeMs int       `gorm:"not null;default:0" json:"response_time_ms"`
 	ErrorMessage   string    `gorm:"type:text;default:''" json:"error_message"`

@@ -80,6 +80,24 @@ const routes: RouteRecordRaw[] = [
     name: 'Settings',
     component: () => import('@/views/admin/SettingsPage.vue'),
     meta: { title: '系统设置' }
+  },
+  {
+    path: '/admin/announcements',
+    name: 'AnnouncementList',
+    component: () => import('@/views/admin/AnnouncementListPage.vue'),
+    meta: { title: '公告管理' }
+  },
+  {
+    path: '/announcements',
+    name: 'AnnouncementFeed',
+    component: () => import('@/views/AnnouncementFeedPage.vue'),
+    meta: { title: '公告中心' }
+  },
+  {
+    path: '/announcements/:id',
+    name: 'AnnouncementDetail',
+    component: () => import('@/views/AnnouncementDetailPage.vue'),
+    meta: { title: '公告详情' }
   }
 ]
 

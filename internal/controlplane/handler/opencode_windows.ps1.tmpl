@@ -9,6 +9,7 @@ $BASE_URL         = "{{.BaseURL}}"
 $API_KEY          = "{{.APIKey}}"
 $CALLBACK_URL     = "{{.CallbackURL}}"
 $PLUGIN_URL       = "{{.PluginURL}}"
+$SUPPLIER_NAME    = "{{.SupplierName}}"
 $CONFIG_FILE      = "$env:USERPROFILE\.config\opencode\opencode.json"
 # opencode 标准插件目录为复数 plugins/（单数 plugin/ 在新版可能不被加载）。
 $PLUGIN_DIR       = "$env:USERPROFILE\.config\opencode\plugins"
@@ -31,7 +32,7 @@ function Write-Fail($msg)    { Write-Host "[✗] $msg"  -ForegroundColor Red }
 function Write-Divider()     { Write-Host "────────────────────────────────────────" -ForegroundColor Cyan }
 
 Write-Divider
-Write-Host "  LLM Gateway — OpenCode 配置助手" -ForegroundColor White
+Write-Host "  $SUPPLIER_NAME — OpenCode 配置助手" -ForegroundColor White
 Write-Divider
 Write-Host ""
 
@@ -93,14 +94,33 @@ try {
 Write-Host ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 阶段 3：写入 OpenCode 配置
+# 阶段 3：获取模型列表并写入 OpenCode 配置
 # ══════════════════════════════════════════════════════════════════════════════
-Write-Step "阶段 3/4  写入 OpenCode 配置..."
+Write-Step "阶段 3/4  获取模型列表并写入配置..."
 
 $writeOk = $false
 $resultAction = ""
 $resultPlugin = ""
+$resultModels = 0
 $targetId = $PROVIDER_ID
+
+# 获取模型列表（失败不中断，仅跳过静态写入）
+$models = [PSCustomObject]@{}
+try {
+    $modelsUrl = $BASE_URL.TrimEnd('/') + "/models"
+    $headers   = @{ Authorization = "Bearer $API_KEY" }
+    $resp      = Invoke-RestMethod -Uri $modelsUrl -Headers $headers -TimeoutSec 10 -ErrorAction Stop
+    foreach ($m in $resp.data) {
+        $mid = $m.id
+        if ($mid) {
+            $models | Add-Member -NotePropertyName $mid -NotePropertyValue ([PSCustomObject]@{ name = if ($m.name) { $m.name } else { $mid } }) -Force
+            $resultModels++
+        }
+    }
+    Write-Ok "获取到 $resultModels 个模型"
+} catch {
+    Write-Warn "模型列表获取失败（$_），跳过静态写入，将由插件动态发现"
+}
 
 try {
     # 读取现有配置
@@ -127,7 +147,7 @@ try {
     # modelsDiscovery.enabled=true 仅对本 provider 开启发现，其它渠道不会被同步。
     $providerConfig = [PSCustomObject]@{
         npm     = "@ai-sdk/openai-compatible"
-        name    = "LLM Gateway"
+        name    = $SUPPLIER_NAME
         options = [PSCustomObject]@{
             baseURL = $BASE_URL
             apiKey  = $API_KEY
@@ -138,6 +158,10 @@ try {
                 modelInfoFormat   = "litellm"
             }
         }
+    }
+    # 有模型列表时写入静态兜底（与 macOS 脚本行为一致）
+    if ($resultModels -gt 0) {
+        $providerConfig | Add-Member -NotePropertyName models -NotePropertyValue $models -Force
     }
     $cfg.provider | Add-Member -NotePropertyName $targetId -NotePropertyValue $providerConfig -Force
 
@@ -198,8 +222,9 @@ Write-Host "  执行完成" -ForegroundColor Green
 Write-Divider
 Write-Ok "配置文件：$CONFIG_FILE"
 Write-Ok "Provider：$targetId（$resultAction）"
+Write-Ok "模型列表：$resultModels 个（$(if ($resultModels -gt 0) { '已静态写入' } else { '获取失败，由插件动态发现' })）"
 Write-Ok "插件：$DISCOVERY_PLUGIN（$resultPlugin）"
 Write-Host ""
-Write-Host "  下一步：" -NoNewline; Write-Host "重启 opencode，即可在模型列表中看到 LLM Gateway 的模型（含图像输入等能力）。" -ForegroundColor Cyan
+Write-Host "  下一步：" -NoNewline; Write-Host "重启 opencode，即可在模型列表中看到 $SUPPLIER_NAME 的模型（含图像输入等能力）。" -ForegroundColor Cyan
 Write-Host ""
 Write-Divider

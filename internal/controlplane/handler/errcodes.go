@@ -15,11 +15,12 @@ const (
 	CodeInvalidStrategy     = "invalid_strategy"
 
 	// 404 not_found
-	CodeProviderNotFound = "provider_not_found"
-	CodeModelNotFound    = "model_not_found"
-	CodeCatalogNotFound  = "catalog_not_found"
-	CodeKeyNotFound      = "key_not_found"
-	CodeGroupNotFound    = "group_not_found"
+	CodeProviderNotFound      = "provider_not_found"
+	CodeModelNotFound         = "model_not_found"
+	CodeCatalogNotFound       = "catalog_not_found"
+	CodeKeyNotFound           = "key_not_found"
+	CodeGroupNotFound         = "group_not_found"
+	CodeAnnouncementNotFound  = "announcement_not_found"
 
 	// 400 invalid_request (catalog)
 	CodeCatalogNotBound      = "catalog_not_bound"

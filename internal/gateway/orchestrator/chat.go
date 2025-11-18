@@ -40,7 +40,8 @@ type routerProvider interface {
 
 // ChatOrchestrator 聊天编排器，协调 Router、core.Provider
 type ChatOrchestrator struct {
-	router *providers.Router
+	router       *providers.Router
+	routerGetter func() *providers.Router // 动态获取最新 router（热更新时使用）
 }
 
 // NewChatOrchestrator 创建编排器实例
@@ -50,9 +51,21 @@ func NewChatOrchestrator(router *providers.Router) *ChatOrchestrator {
 	}
 }
 
+// NewChatOrchestratorWithGetter 创建支持热更新的编排器实例。
+// routerGetter 在每次请求时被调用以获取最新的 Router（从 ProviderLoader 的 atomic.Value 读取）。
+func NewChatOrchestratorWithGetter(routerGetter func() *providers.Router) *ChatOrchestrator {
+	return &ChatOrchestrator{
+		routerGetter: routerGetter,
+	}
+}
+
 // routerSnapshot returns the current router snapshot for use within a single request.
-// The *providers.Router is an atomic.Value-backed pointer so this is safe.
+// 当配置了 routerGetter 时，动态获取最新 router（支持热更新）；
+// 否则使用启动时传入的静态 router 指针（向后兼容）。
 func (o *ChatOrchestrator) routerSnapshot() *providers.Router {
+	if o.routerGetter != nil {
+		return o.routerGetter()
+	}
 	return o.router
 }
 

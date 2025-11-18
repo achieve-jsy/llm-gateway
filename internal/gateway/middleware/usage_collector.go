@@ -1,10 +1,8 @@
 package middleware
 
 import (
-	"bytes"
 	"encoding/json"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -122,19 +120,18 @@ func UsageCollector(collector *gwobs.Collector, traceWriter ...*gwobs.TraceWrite
 			}
 		}
 
-		// 响应体：从 TraceCapture 注入的 responseBodyWriter 直接读取
-		const maxRespBody = 2 * 1024 * 1024
+		// 响应体
 		isStream, _ := c.Get("stream")
 		if isStream == true {
-			// 流式：解析 SSE 缓冲区重组完整回复
-			if rw, ok := c.Get("trace_resp_writer"); ok {
-				if rbw, ok := rw.(*responseBodyWriter); ok {
-					if assembled := assembleSSEResponse(rbw.buf.Bytes()); len(assembled) > 0 {
-						te.ResponseBodyRaw = assembled
-					}
+			// 流式：优先使用 streamUsageObserver 在流中逐 chunk 拼接的合成响应
+			// 这是根本性优化：observer 已在 ObservedSSEStream 旁路中解析每个 chunk，
+			// 无需 responseBodyWriter buf 双写，峰值内存从 O(响应体大小) 降为 O(文本大小)
+			if assembled, ok := c.Get("stream_assembled_response"); ok {
+				if b, err := json.Marshal(assembled); err == nil {
+					te.ResponseBodyRaw = b
 				}
 			}
-			// 兜底：仅存 usage 摘要
+			// 兜底：仅存 usage 摘要（observer 未触发时）
 			if len(te.ResponseBodyRaw) == 0 {
 				if usage, ok := c.Get("usage"); ok {
 					if b, err := json.Marshal(map[string]any{"usage": usage, "stream": true}); err == nil {
@@ -142,12 +139,12 @@ func UsageCollector(collector *gwobs.Collector, traceWriter ...*gwobs.TraceWrite
 					}
 				}
 			}
-		} else if rw, ok := c.Get("trace_resp_writer"); ok {
-			if rbw, ok := rw.(*responseBodyWriter); ok {
-				buf := rbw.buf.Bytes()
-				if len(buf) > 0 && len(buf) <= maxRespBody {
-					te.ResponseBodyRaw = make([]byte, len(buf))
-					copy(te.ResponseBodyRaw, buf)
+		} else {
+			// 非流式：直接从 orchestrator 写回的完整响应对象序列化
+			// 避免 responseBodyWriter buf 对非流式响应的重复内存占用
+			if respObj, ok := c.Get("resp_object"); ok {
+				if b, err := json.Marshal(respObj); err == nil {
+					te.ResponseBodyRaw = b
 				}
 			}
 		}
@@ -176,91 +173,6 @@ func isSystemKey(c *gin.Context) bool {
 	}
 	name, ok := v.(string)
 	return ok && len(name) >= 9 && name[:9] == "__system_"
-}
-
-// assembleSSEResponse 解析原始 SSE 字节流，重组成标准 Chat Completion JSON
-// 格式：data: {...chunk...}\n\n  ...  data: [DONE]\n\n
-func assembleSSEResponse(raw []byte) []byte {
-	type delta struct {
-		Role    string `json:"role,omitempty"`
-		Content string `json:"content,omitempty"`
-	}
-	type choice struct {
-		Delta        delta  `json:"delta"`
-		FinishReason string `json:"finish_reason,omitempty"`
-	}
-	type chunk struct {
-		ID      string                 `json:"id,omitempty"`
-		Model   string                 `json:"model,omitempty"`
-		Created int64                  `json:"created,omitempty"`
-		Usage   map[string]any         `json:"usage,omitempty"`
-		Choices []choice               `json:"choices,omitempty"`
-	}
-
-	var sb strings.Builder
-	var lastID, lastModel string
-	var lastCreated int64
-	var lastUsage map[string]any
-
-	for _, line := range bytes.Split(raw, []byte("\n")) {
-		line = bytes.TrimSpace(line)
-		if !bytes.HasPrefix(line, []byte("data: ")) {
-			continue
-		}
-		data := bytes.TrimPrefix(line, []byte("data: "))
-		if bytes.Equal(data, []byte("[DONE]")) {
-			break
-		}
-		var c chunk
-		if err := json.Unmarshal(data, &c); err != nil {
-			continue
-		}
-		if c.ID != "" {
-			lastID = c.ID
-		}
-		if c.Model != "" {
-			lastModel = c.Model
-		}
-		if c.Created != 0 {
-			lastCreated = c.Created
-		}
-		if c.Usage != nil {
-			lastUsage = c.Usage
-		}
-		if len(c.Choices) > 0 {
-			sb.WriteString(c.Choices[0].Delta.Content)
-		}
-	}
-
-	content := sb.String()
-	if content == "" && lastUsage == nil {
-		return nil
-	}
-
-	synthesized := map[string]any{
-		"id":      lastID,
-		"model":   lastModel,
-		"created": lastCreated,
-		"object":  "chat.completion",
-		"stream":  true,
-		"choices": []map[string]any{
-			{
-				"message": map[string]any{
-					"role":    "assistant",
-					"content": content,
-				},
-				"finish_reason": "stop",
-			},
-		},
-	}
-	if lastUsage != nil {
-		synthesized["usage"] = lastUsage
-	}
-	b, err := json.Marshal(synthesized)
-	if err != nil {
-		return nil
-	}
-	return b
 }
 
 func getInt16(c *gin.Context, key string) (int16, bool) {

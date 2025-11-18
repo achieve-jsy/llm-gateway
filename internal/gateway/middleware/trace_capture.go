@@ -18,19 +18,18 @@ var sensitiveHeaders = map[string]bool{
 	"x-api-key":     true,
 }
 
-// responseBodyWriter 包装 gin.ResponseWriter，同时将响应体写入 buf
-type responseBodyWriter struct {
-	gin.ResponseWriter
-	buf *bytes.Buffer
-}
-
-func (w *responseBodyWriter) Write(b []byte) (int, error) {
-	w.buf.Write(b)
-	return w.ResponseWriter.Write(b)
-}
-
-// TraceCapture 捕获请求体，并将 responseBodyWriter 注入 context 供 UsageCollector 使用
-// 仅对 /v1/chat/completions 生效，请求体限制 512KB
+// TraceCapture 捕获请求头和请求体，注入 context 供 UsageCollector 使用。
+// 仅对 POST /v1/chat/completions 生效，请求体限制 512KB。
+//
+// 内存优化说明：
+//   - 流式响应：由 streamUsageObserver 在 ObservedSSEStream 旁路中逐 chunk
+//     拼接 content/reasoning_content，流结束时写入 stream_assembled_response，
+//     无需 responseBodyWriter buf 双写，峰值内存从 O(原始字节) 降为 O(文本长度)。
+//   - 非流式响应：orchestrator 已将完整响应对象写入 resp_object，
+//     UsageCollector 直接序列化，无需 buf。
+//   - 因此本中间件不再注入 responseBodyWriter，仅捕获请求头和请求体。
+//
+// 注意：本中间件注册在 AuthMiddleware 之后，log_enabled 此时已可读。
 func TraceCapture() gin.HandlerFunc {
 	const maxReqBody = 512 * 1024 // 512 KB
 
@@ -40,10 +39,17 @@ func TraceCapture() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		path := c.Request.URL.Path
-		if path != "/v1/chat/completions" {
+		if c.Request.URL.Path != "/v1/chat/completions" {
 			c.Next()
 			return
+		}
+
+		// log_enabled 由 AuthMiddleware 写入 context，提前跳过不需要记录的请求
+		if v, ok := c.Get("log_enabled"); ok {
+			if enabled, ok := v.(bool); ok && !enabled {
+				c.Next()
+				return
+			}
 		}
 
 		// 采集请求头（过滤敏感字段）
@@ -63,11 +69,6 @@ func TraceCapture() gin.HandlerFunc {
 			c.Request.Body = io.NopCloser(bytes.NewBuffer(reqBody))
 			c.Set("trace_req_body", reqBody)
 		}
-
-		// 注入 responseBodyWriter，供内层中间件（UsageCollector）直接读取
-		rbw := &responseBodyWriter{ResponseWriter: c.Writer, buf: &bytes.Buffer{}}
-		c.Writer = rbw
-		c.Set("trace_resp_writer", rbw)
 
 		c.Next()
 	}

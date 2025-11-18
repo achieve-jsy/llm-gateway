@@ -340,7 +340,7 @@ import { join, dirname } from "node:path";
 import { writeFile, mkdir } from "node:fs/promises";
 
 // src/version.ts
-var PLUGIN_VERSION = "0.9.0-llmgw.1";
+var PLUGIN_VERSION = "0.9.0-llmgw.3";
 
 // src/utils/discovery-report.ts
 var SNAPSHOT_PATH = join(homedir(), ".config", "opencode", "plugins", "models-discovery.snapshot.json");
@@ -674,7 +674,7 @@ async function enhanceConfig(config, client, toastNotifier, pluginConfig, logger
         continue;
       }
       let baseURL;
-      let displayName = providerName;
+      let displayName = typeof p.name === "string" && p.name.trim() ? p.name.trim() : providerName;
       if (p.options?.baseURL) {
         baseURL = normalizeBaseURL(p.options.baseURL);
       } else {
@@ -780,7 +780,10 @@ async function enhanceConfig(config, client, toastNotifier, pluginConfig, logger
         reasoning: summary.reasoning
       });
       await writeDiscoverySnapshot(openAICompatibleProviders, summary, logger);
-      toastNotifier.info(`发现 ${summary.models} 个模型 · 图像输入 ${summary.vision} · 工具调用 ${summary.toolCall} · 推理 ${summary.reasoning}`, "LLM Gateway 模型发现").catch(() => {});
+      for (const prov of openAICompatibleProviders) {
+        const provSummary = summarizeProviders([prov]);
+        toastNotifier.info(`发现 ${provSummary.models} 个模型 · 图像输入 ${provSummary.vision} · 工具调用 ${provSummary.toolCall} · 推理 ${provSummary.reasoning}`, `${prov.name} · 模型发现`, 1e4).catch(() => {});
+      }
     }
     if (Object.keys(providers).length === 0) {
       const detected = await autoDetectOpenAICompatibleProvider();
@@ -883,7 +886,7 @@ async function maybeSelfUpdate(config, toastNotifier, logger) {
     return;
   }
   logger.info("self-update: plugin updated, restart required", { from: PLUGIN_VERSION, to: remote, target });
-  toastNotifier.info(`模型发现插件已更新 ${PLUGIN_VERSION} → ${remote}，重启 opencode 生效`, "LLM Gateway").catch(() => {});
+  toastNotifier.info(`模型发现插件已更新 ${PLUGIN_VERSION} → ${remote}，重启 opencode 生效`, "LLM Gateway", 1e4).catch(() => {});
 }
 
 // src/plugin/config-hook.ts

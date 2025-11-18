@@ -107,6 +107,6 @@ export async function maybeSelfUpdate(
 
   logger.info('self-update: plugin updated, restart required', { from: PLUGIN_VERSION, to: remote, target })
   toastNotifier
-    .info(`模型发现插件已更新 ${PLUGIN_VERSION} → ${remote}，重启 opencode 生效`, 'LLM Gateway')
+    .info(`模型发现插件已更新 ${PLUGIN_VERSION} → ${remote}，重启 opencode 生效`, 'LLM Gateway', 10000)
     .catch(() => {})
 }

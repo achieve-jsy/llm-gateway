@@ -5,32 +5,50 @@
 ## 架构概览
 
 ```
-┌──────────────┐     ┌─────────────────────────────────────────────────┐
-│   客户端     │     │                LLM Gateway                       │
-│  (OpenAI SDK)│────▶│  Gateway API ──▶ Orchestrator ──▶ Provider       │
-└──────────────┘     │       │                             │            │
-                     │       ▼                             ▼            │
-                     │  Redis Cache              ┌─────────────────┐   │
-                     │                           │ Bailian/DeepSeek│   │
-                     │  Control-Plane ◀─ DB      │ Anthropic/Bedrock│  │
-                     │  (模型 & 渠道管理)         │ LiteLLM          │  │
-                     └─────────────────────────────────────────────────┘
+  客户端 / OpenCode            浏览器 (Vue SPA)
+        │                            │
+        └──────────────┬─────────────┘
+                       ▼
+                   nginx 反代
+        /v1/* │      /api/* /auth/* │     /* (web/dist)
+              ▼                     ▼
+   ┌──────────────────┐   ┌──────────────────────┐
+   │ gateway  :8080   │   │ control-plane :8081  │
+   │ 鉴权→模型组调度  │◀──│ 渠道/模型/Key/组管理 │
+   │ →providers.Router│   │ Catalog 同步/配置下发│
+   └────────┬─────────┘   └──────────┬───────────┘
+            │  provider snapshot      │
+            ├──────────  Redis  ◀─────┤  config:change pub/sub
+            ▼                         ▼
+     上游厂商 (17+)             PostgreSQL
 ```
 
-项目包含两个服务：
+项目包含两个 Go 服务 + 一个前端：
 
-- **gateway-api**（端口 8080）：对外暴露 OpenAI 兼容接口，处理路由分发、负载均衡和流式转发
-- **control-plane**（端口 8081）：管理后台，负责渠道/模型注册、配置下发、ops-console 前端
+- **gateway**（端口 8080）：对外暴露 OpenAI 兼容接口（`/v1/*`），鉴权 → 模型组调度 → 转发上游、流式转发。不直连数据库，配置来自 Redis snapshot / 控制面。
+- **control-plane**（端口 8081）：管理后台 API、OAuth/SSO、渠道/模型/Key/模型组管理、Catalog 同步、配置下发。持久化在 PostgreSQL。
+- **web**（Vue3 + Element Plus）：管理面 SPA，构建到 `web/dist`，由 nginx 静态托管。
+
+> `/v1`、`/api`、`/auth`、`/`（前端）的分流由宿主机 **nginx** 完成（见 `deploy/docker/nginx*.conf`）。
+>
+> 架构与开发约定详见 [`AGENTS.md`](AGENTS.md)，OpenCode 模型发现插件详见 [`docs/opencode-models-discovery.md`](docs/opencode-models-discovery.md)。
 
 ## 支持的厂商
 
-| Provider | 说明 |
+通过 `internal/providers/<vendor>/` 适配，在 `cmd/gateway/main.go` 的 `buildProviderFactory()` 注册：
+
+| Provider 类型 | 说明 |
 |----------|------|
-| Bailian (百炼/通义) | 阿里云 DashScope OpenAI 兼容模式 |
-| DeepSeek | DeepSeek 官方 API |
-| Anthropic | Claude 系列模型 |
-| Bedrock | AWS Bedrock (Claude/Titan/Nova 等) |
-| LiteLLM | 通用代理，可接入 100+ 模型 |
+| `openai` / `litellm` / `openai-compatible` | OpenAI 及任意 OpenAI 兼容代理 |
+| `anthropic` | Claude 系列 |
+| `bedrock` | AWS Bedrock（Claude/Titan/Nova 等） |
+| `gemini` / `vertex` | Google Gemini / Vertex AI |
+| `azure` | Azure OpenAI |
+| `bailian`（`dashscope`） | 阿里云百炼/通义 |
+| `deepseek` / `minimax` / `zai` / `xai` / `groq` / `openrouter` / `oracle` | 各厂商官方 API |
+| `ollama` / `vllm` | 本地/自托管推理 |
+
+> 对外的「模型名」通常是**模型组（Group）**：一个组内可挂多个具体模型，按 round_robin / priority / weighted 策略调度，并支持 fallback。模型能力（图像输入/工具调用/上下文/价格）由 `model_catalog`（从 LiteLLM 同步）提供。
 
 ## 快速开始
 
@@ -39,6 +57,7 @@
 - Go 1.22+
 - Docker & Docker Compose
 - Node.js 18+（前端开发）
+- Bun（仅在改 `tools/opencode-models-discovery` 插件时需要）
 
 ### 1. 启动基础设施
 
@@ -106,33 +125,42 @@ http://localhost:8080/swagger/index.html
 make swagger
 ```
 
+## OpenCode 接入
+
+控制面可一键下发 OpenCode 配置：在管理面「我的 Key」处生成配置脚本，脚本会把内嵌的模型发现插件下载到 `~/.config/opencode/plugins/`，并把对应 provider 配成自动发现网关模型、并通过 `/v1/model/info`（LiteLLM 兼容）带上真实能力（图像输入 / 工具调用 / 推理 / 上下文上限）。
+
+完整架构、能力聚合规则与排查方法见 [`docs/opencode-models-discovery.md`](docs/opencode-models-discovery.md)。
+
 ## 项目结构
 
 ```
 .
 ├── cmd/
-│   ├── gateway/          # Gateway API 入口
-│   └── control-plane/    # Control-Plane 入口
-├── config/               # 环境配置文件 (dev/staging/prod)
+│   ├── gateway/          # Gateway 入口
+│   ├── control-plane/    # Control-Plane 入口
+│   ├── opencode-helper/  # macOS URL Scheme 助手
+│   └── bedrock_test/     # Bedrock 连通性调试
+├── config/               # 环境配置 (dev/staging/prod.yaml)
 ├── internal/
-│   ├── gateway/          # Gateway 核心逻辑
-│   │   ├── config/       # Viper 配置加载
-│   │   ├── handler/      # HTTP Handler (chat, models, health)
-│   │   ├── infra/        # Redis, OTLP, ConfigLoader
-│   │   ├── middleware/   # RequestID, Logger, Auth, Tracing
-│   │   ├── orchestrator/ # 请求编排 (同步/流式)
-│   │   ├── provider/     # Provider 接口 & 各厂商 Adapter
-│   │   └── server/       # Gin 路由注册
-│   └── controlplane/     # Control-Plane 核心逻辑
-│       ├── handler/      # Admin API Handler
-│       ├── model/        # 数据模型 (Provider, Model, Tag)
-│       ├── repository/   # GORM 数据访问层
-│       └── service/      # 业务服务层
-├── migrations/           # SQL 迁移文件
-├── web/                  # 前端 (Vue 3 + Element Plus)
-├── deploy/               # 部署配置 (OTel Collector 等)
+│   ├── gateway/          # Gateway 进程逻辑 (config/handler/infra/orchestrator/scheduler/server/binding/loader)
+│   ├── controlplane/     # 控制面 (handler/service/repository/model/router/middleware/event/seed)
+│   ├── providers/        # 各厂商 Adapter + factory + registry + router
+│   ├── core/             # 共享领域类型与 Provider 接口
+│   ├── auth/             # 可嵌入的 JWT/OIDC/Key 验证库
+│   ├── configsync/       # 控制面→网关的 provider snapshot (Redis)
+│   ├── llmclient/        # 上游 HTTP 客户端（重试/熔断）
+│   ├── fallback/         # fallback 候选链解析
+│   └── cache/ modeldata/ streaming/ httpclient/ llmclientconfig/
+├── migrations/           # PostgreSQL SQL 迁移 (按序号)
+├── web/                  # 前端 (Vue 3 + Element Plus + Vite)，构建到 web/dist
+├── tools/
+│   └── opencode-models-discovery/  # OpenCode 模型发现插件 (fork)
+├── deploy/docker/        # Dockerfile + nginx 配置
+├── docs/                 # 架构/设计文档
+├── tests/                # contract / integration 测试
 ├── api/swagger/          # Swagger 注解入口
-├── docker-compose.dev.yml
+├── docker-compose.yml
+├── AGENTS.md
 ├── Makefile
 └── go.mod
 ```

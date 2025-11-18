@@ -49,7 +49,9 @@ export async function enhanceConfig(
       }
 
       let baseURL: string
-      let displayName = providerName
+      // 优先用 provider 配置里的 name（即网关下发的供应商名称，如"某公司"），
+      // 没有时回退到 provider 的 key 名。
+      let displayName = (typeof p.name === 'string' && p.name.trim()) ? p.name.trim() : providerName
 
       if (p.options?.baseURL) {
         baseURL = normalizeBaseURL(p.options.baseURL)
@@ -182,14 +184,21 @@ export async function enhanceConfig(
         reasoning: summary.reasoning,
       })
 
-      // 写快照 + 启动摘要 toast，方便确认能力是否被正确加载（不写 opencode.json）。
+      // 写快照（聚合全部 provider）+ 启动摘要 toast，方便确认能力是否被正确加载
+      //（发现的模型只在内存、不写 opencode.json）。
       await writeDiscoverySnapshot(openAICompatibleProviders, summary, logger)
-      toastNotifier
-        .info(
-          `发现 ${summary.models} 个模型 · 图像输入 ${summary.vision} · 工具调用 ${summary.toolCall} · 推理 ${summary.reasoning}`,
-          'LLM Gateway 模型发现',
-        )
-        .catch(() => {})
+      // 按 provider 分别提示：标题用各自的供应商名称，数量是各自发现到的模型数，
+      // 避免多个开启发现的网关被混在一起加总，造成"为什么是 N 个"的困惑。
+      for (const prov of openAICompatibleProviders) {
+        const provSummary = summarizeProviders([prov])
+        toastNotifier
+          .info(
+            `发现 ${provSummary.models} 个模型 · 图像输入 ${provSummary.vision} · 工具调用 ${provSummary.toolCall} · 推理 ${provSummary.reasoning}`,
+            `${prov.name} · 模型发现`,
+            10000,
+          )
+          .catch(() => {})
+      }
     }
 
     if (Object.keys(providers).length === 0) {

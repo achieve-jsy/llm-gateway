@@ -1,8 +1,18 @@
 import { getProcessor } from 'bytemd'
 import gfm from '@bytemd/plugin-gfm'
+import highlight from '@bytemd/plugin-highlight'
+import remarkBreaks from 'remark-breaks'
+import type { BytemdPlugin } from 'bytemd'
 
-// 与编辑器保持一致的 processor（GFM + breaks）
-const processor = getProcessor({ plugins: [gfm()] })
+// 把 remark-breaks 包装成 ByteMD plugin 格式
+const breaksPlugin = (): BytemdPlugin => ({
+  remark: (processor) => processor.use(remarkBreaks),
+})
+
+// 与编辑器完全一致的 processor：GFM + 代码高亮 + 软换行转 <br>
+const processor = getProcessor({
+  plugins: [gfm(), highlight(), breaksPlugin()],
+})
 
 export function renderMarkdown(text: string): string {
   if (!text) return ''

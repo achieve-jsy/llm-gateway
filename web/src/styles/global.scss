@@ -581,102 +581,234 @@ html.dark ::-webkit-scrollbar-thumb {
 
 /* ===================== Markdown 通用样式 ===================== */
 .md-content {
-  font-size: 14px;
-  color: #334155;
-  line-height: 1.8;
+  font-size: 15px;
+  color: #1e293b;
+  line-height: 1.85;
   word-break: break-word;
+  font-feature-settings: 'kern' 1, 'liga' 1;
 
+  /* ── 标题 ── */
   h1, h2, h3, h4, h5, h6 {
     font-weight: 700;
     line-height: 1.35;
-    color: #1a1a1a;
-    margin: 1.25em 0 0.5em;
+    color: #0f172a;
+    margin: 1.75em 0 0.6em;
+    letter-spacing: -0.01em;
     &:first-child { margin-top: 0; }
   }
-  h1 { font-size: 1.5em; }
-  h2 { font-size: 1.3em; border-bottom: 1px solid var(--el-border-color-light); padding-bottom: 0.3em; }
-  h3 { font-size: 1.1em; }
-  h4 { font-size: 1em; }
+  h1 {
+    font-size: 1.75em;
+    font-weight: 800;
+    border-bottom: 2px solid #e2e8f0;
+    padding-bottom: 0.4em;
+    letter-spacing: -0.02em;
+  }
+  h2 {
+    font-size: 1.375em;
+    font-weight: 700;
+    border-bottom: 1px solid #e2e8f0;
+    padding-bottom: 0.3em;
+  }
+  h3 { font-size: 1.15em; font-weight: 700; }
+  h4 { font-size: 1.05em; font-weight: 600; }
+  h5 { font-size: 0.95em; font-weight: 600; color: #475569; }
+  h6 { font-size: 0.875em; font-weight: 600; color: #64748b; }
 
-  p { margin: 0 0 0.875em; &:last-child { margin-bottom: 0; } }
+  /* ── 段落 ── */
+  p { margin: 0 0 1em; &:last-child { margin-bottom: 0; } }
 
-  strong { font-weight: 700; color: #1a1a1a; }
-  em { font-style: italic; }
+  strong { font-weight: 700; color: #0f172a; }
+  em { font-style: italic; color: #334155; }
+  del { color: #94a3b8; text-decoration: line-through; }
 
-  a { color: var(--el-color-primary); text-decoration: underline; text-underline-offset: 2px; }
-  a:hover { opacity: 0.8; }
+  /* ── 链接 ── */
+  a {
+    color: #2BA8A2;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    text-decoration-thickness: 1px;
+    font-weight: 500;
+    transition: color 0.15s;
+    &:hover { color: #1E8C86; text-decoration-thickness: 2px; }
+  }
 
-  ul, ol { padding-left: 1.5em; margin: 0.5em 0 0.875em; }
-  li { margin-bottom: 0.3em; }
-  li > ul, li > ol { margin: 0.2em 0; }
+  /* ── 列表 ── */
+  ul, ol {
+    padding-left: 1.75em;
+    margin: 0.625em 0 1em;
+  }
+  ul { list-style-type: disc; }
+  ul ul { list-style-type: circle; }
+  ul ul ul { list-style-type: square; }
+  ol { list-style-type: decimal; }
+  li {
+    margin-bottom: 0.35em;
+    line-height: 1.75;
+  }
+  li > ul, li > ol { margin: 0.25em 0 0.25em; }
+  li > p { margin-bottom: 0.5em; }
 
+  /* 任务列表 */
+  input[type="checkbox"] {
+    margin-right: 0.4em;
+    vertical-align: middle;
+    accent-color: #2BA8A2;
+  }
+
+  /* ── 引用块 ── */
   blockquote {
-    border-left: 3px solid var(--el-color-primary);
-    margin: 1em 0;
-    padding: 0.5em 1em;
-    background: var(--el-fill-color-light);
-    border-radius: 0 6px 6px 0;
-    color: #64748B;
-    p { margin-bottom: 0; }
+    border-left: 4px solid #2BA8A2;
+    margin: 1.25em 0;
+    padding: 0.75em 1.25em;
+    background: linear-gradient(to right, #f0fafa, #f8fffe);
+    border-radius: 0 8px 8px 0;
+    color: #475569;
+    font-style: italic;
+
+    > *:last-child { margin-bottom: 0; }
+    > p { margin-bottom: 0.5em; }
+
+    blockquote {
+      border-left-color: #94a3b8;
+      background: #f1f5f9;
+      margin: 0.75em 0;
+    }
   }
 
+  /* ── 行内代码 ── */
   code {
-    font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
-    font-size: 0.875em;
-    background: var(--el-fill-color);
-    border: 1px solid var(--el-border-color-light);
-    padding: 0.15em 0.4em;
-    border-radius: 4px;
-    color: #c7254e;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, 'Courier New', monospace;
+    font-size: 0.85em;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    padding: 0.2em 0.45em;
+    border-radius: 5px;
+    color: #be185d;
+    font-weight: 500;
+    white-space: nowrap;
   }
 
+  /* ── 代码块 ── */
   pre {
-    background: #1e1e2e;
-    border-radius: 8px;
-    padding: 1em 1.25em;
+    background: #0f172a;
+    border-radius: 10px;
+    padding: 1.125em 1.375em;
     overflow-x: auto;
-    margin: 0.875em 0;
+    margin: 1.125em 0;
+    border: 1px solid #1e293b;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+    position: relative;
 
     code {
       background: transparent;
       border: none;
       padding: 0;
       font-size: 13px;
-      color: #cdd6f4;
+      color: #e2e8f0;
+      font-weight: 400;
+      white-space: pre;
     }
   }
 
+  /* ── 表格 ── */
   table {
     width: 100%;
     border-collapse: collapse;
-    margin: 0.875em 0;
-    font-size: 13px;
+    margin: 1.125em 0;
+    font-size: 13.5px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
 
     th, td {
-      border: 1px solid var(--el-border-color);
-      padding: 8px 12px;
+      border: 1px solid #e2e8f0;
+      padding: 10px 14px;
       text-align: left;
+      line-height: 1.5;
     }
 
     th {
-      background: var(--el-fill-color-light);
+      background: #f1f5f9;
       font-weight: 600;
-      color: #1a1a1a;
+      color: #0f172a;
+      font-size: 13px;
+      text-transform: none;
+      letter-spacing: 0;
     }
 
-    tr:nth-child(even) td { background: var(--el-fill-color-light); }
+    tbody tr {
+      transition: background 0.1s;
+      &:nth-child(even) td { background: #f8fafc; }
+      &:hover td { background: #f0fafa; }
+    }
   }
 
+  /* ── 分割线 ── */
   hr {
     border: none;
-    border-top: 1px solid var(--el-border-color);
-    margin: 1.25em 0;
+    height: 1px;
+    background: linear-gradient(to right, transparent, #cbd5e1, transparent);
+    margin: 1.75em 0;
   }
 
+  /* ── 图片 ── */
   img {
     max-width: 100%;
-    border-radius: 6px;
+    border-radius: 8px;
     display: block;
-    margin: 0.5em 0;
+    margin: 0.75em 0;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  }
+
+  /* ── 暗色模式适配 ── */
+  html.dark & {
+    color: #cbd5e1;
+
+    h1, h2, h3, h4, h5, h6 { color: #f1f5f9; }
+    h1, h2 { border-bottom-color: #1e293b; }
+    strong { color: #f1f5f9; }
+    em { color: #94a3b8; }
+    del { color: #475569; }
+
+    a { color: #3CC4BD; &:hover { color: #5DD9D4; } }
+
+    blockquote {
+      background: linear-gradient(to right, #0c2625, #0f2a29);
+      border-left-color: #2BA8A2;
+      color: #94a3b8;
+      blockquote { background: #0f172a; border-left-color: #475569; }
+    }
+
+    code {
+      background: #1e293b;
+      border-color: #334155;
+      color: #f472b6;
+    }
+
+    pre {
+      background: #020617;
+      border-color: #0f172a;
+      code { color: #cbd5e1; }
+    }
+
+    table {
+      border-color: #1e293b;
+      th {
+        background: #1e293b;
+        color: #e2e8f0;
+        border-color: #1e293b;
+      }
+      td { border-color: #1e293b; }
+      tbody tr {
+        &:nth-child(even) td { background: #0f1923; }
+        &:hover td { background: #0c2625; }
+      }
+    }
+
+    hr { background: linear-gradient(to right, transparent, #334155, transparent); }
+
+    img { border-color: #1e293b; }
   }
 }

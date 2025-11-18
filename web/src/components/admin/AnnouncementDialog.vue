@@ -107,10 +107,16 @@ import type { Announcement } from '@/types/announcement'
 import { Editor } from '@bytemd/vue-next'
 import gfm from '@bytemd/plugin-gfm'
 import highlight from '@bytemd/plugin-highlight'
+import remarkBreaks from 'remark-breaks'
+import type { BytemdPlugin } from 'bytemd'
 import 'bytemd/dist/index.css'
 import 'highlight.js/styles/github.css'
 
-const plugins = [gfm(), highlight()]
+const breaksPlugin = (): BytemdPlugin => ({
+  remark: (processor) => processor.use(remarkBreaks),
+})
+
+const plugins = [gfm(), highlight(), breaksPlugin()]
 
 interface FormState {
   title: string
@@ -212,6 +218,11 @@ async function handleSubmit() {
 .el-dialog .el-radio__label,
 .el-dialog .el-checkbox__label { color: #374151 !important; }
 .el-dialog .el-dialog__title { color: #1a1a1a !important; }
+
+/* ByteMD 全屏时：把编辑器层叠到弹窗所有内容之上 */
+.bytemd-fullscreen.bytemd {
+  z-index: 3000 !important;
+}
 </style>
 
 <style scoped>
@@ -232,6 +243,11 @@ async function handleSubmit() {
 .bytemd-wrap :deep(.bytemd-toolbar) {
   background: var(--el-fill-color-light);
   border-bottom-color: var(--el-border-color-light);
+}
+
+/* 隐藏 ByteMD 工具栏中的 GitHub Source Code 图标 */
+.bytemd-wrap :deep(.bytemd-toolbar-right .bytemd-toolbar-icon:has(svg path[d^="M29.344"])) {
+  display: none;
 }
 
 .bytemd-wrap :deep(.CodeMirror) {

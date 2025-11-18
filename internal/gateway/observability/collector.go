@@ -320,14 +320,21 @@ func (w *BatchWriter) fillMissingIdentity(ctx context.Context, batch []model.Cal
 		DeptName string `gorm:"column:dept_name"`
 	}
 	var rows []keyInfo
-	// 从 api_keys 直接读冗余字段，若仍为空则 JOIN users/departments 补一次
+	// 从 api_keys 直接读冗余字段，若仍为空则 JOIN users/departments 补一次；
+	// OIDC users 找不到时再从 dev_users（本地账号）兜底取 username。
 	if err := w.db.WithContext(ctx).Raw(`
 		SELECT ak.id::text, ak.name AS key_name,
-		       COALESCE(NULLIF(ak.user_name,''), u.name, '') AS user_name,
+		       COALESCE(
+		           NULLIF(ak.user_name,''),
+		           u.name,
+		           du.username,
+		           ''
+		       ) AS user_name,
 		       COALESCE(NULLIF(ak.dept_name,''), d.dept_name, '') AS dept_name
 		FROM api_keys ak
 		LEFT JOIN users u ON u.id = ak.user_id
 		LEFT JOIN departments d ON d.id = u.dept_id
+		LEFT JOIN dev_users du ON du.id = ak.user_id
 		WHERE ak.id::text IN ?`, keyIDs).Scan(&rows).Error; err != nil {
 		log.Printf("[observability] fillMissingIdentity query error: %v", err)
 		return

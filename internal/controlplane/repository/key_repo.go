@@ -103,6 +103,7 @@ func (r *KeyRepo) BackfillUserDeptNames(keyID uuid.UUID, userName, deptName stri
 }
 
 // GetUserDeptInfo 通过 user_id 查询用户姓名及所属部门名称。
+// 优先查 users（OIDC 用户），查不到时回退到 dev_users（本地账号）。
 func (r *KeyRepo) GetUserDeptInfo(userID uuid.UUID) (UserDeptInfo, error) {
 	var info UserDeptInfo
 	err := r.db.Raw(`
@@ -111,5 +112,12 @@ func (r *KeyRepo) GetUserDeptInfo(userID uuid.UUID) (UserDeptInfo, error) {
 		LEFT JOIN departments d ON d.id = u.dept_id
 		WHERE u.id = ?
 	`, userID).Scan(&info).Error
-	return info, err
+	if err != nil {
+		return info, err
+	}
+	// 未在 OIDC users 表中找到（本地 dev 账号），从 dev_users 取 username
+	if info.UserName == "" {
+		_ = r.db.Raw(`SELECT username AS user_name FROM dev_users WHERE id = ?`, userID).Scan(&info).Error
+	}
+	return info, nil
 }

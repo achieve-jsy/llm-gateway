@@ -177,12 +177,23 @@
         <span class="form-hint inline">tokens</span>
       </el-form-item>
 
+      <el-form-item label="价格模式">
+        <el-radio-group v-model="formData.price_mode">
+          <el-radio value="catalog">跟随目录价格</el-radio>
+          <el-radio value="manual">手动指定</el-radio>
+        </el-radio-group>
+        <span v-if="formData.price_mode === 'catalog'" class="form-hint inline" style="margin-left:8px">
+          实时读取 Catalog 价格，无需手动维护
+        </span>
+      </el-form-item>
+
       <el-form-item label="输入价格">
         <el-input-number
           v-model="formData.input_price"
           :min="0"
           :precision="6"
           :step="0.1"
+          :disabled="formData.price_mode === 'catalog'"
           class="metric-input"
         />
         <span class="form-hint inline">USD / 百万 tokens</span>
@@ -194,6 +205,7 @@
           :min="0"
           :precision="6"
           :step="0.1"
+          :disabled="formData.price_mode === 'catalog'"
           class="metric-input"
         />
         <span class="form-hint inline">USD / 百万 tokens</span>
@@ -314,6 +326,7 @@ interface FormState {
   description: string
   context_length: number
   max_output_tokens: number
+  price_mode: 'catalog' | 'manual'
   input_price: number
   output_price: number
   weight: number
@@ -362,6 +375,7 @@ const formData = ref<FormState>({
   description: '',
   context_length: 0,
   max_output_tokens: 0,
+  price_mode: 'catalog',
   input_price: 0,
   output_price: 0,
   weight: 1
@@ -381,6 +395,7 @@ watch(
         description: val.description || '',
         context_length: val.context_length || 0,
         max_output_tokens: val.max_output_tokens || 0,
+        price_mode: val.price_mode || 'catalog',
         input_price: val.input_price || 0,
         output_price: val.output_price || 0,
         weight: val.weight || 1
@@ -689,8 +704,9 @@ async function handleSubmit() {
       description: formData.value.description || undefined,
       context_length: formData.value.context_length || undefined,
       max_output_tokens: formData.value.max_output_tokens || undefined,
-      input_price: formData.value.input_price || undefined,
-      output_price: formData.value.output_price || undefined,
+      price_mode: formData.value.price_mode,
+      input_price: formData.value.price_mode === 'manual' ? (formData.value.input_price || undefined) : undefined,
+      output_price: formData.value.price_mode === 'manual' ? (formData.value.output_price || undefined) : undefined,
       weight: formData.value.weight
     }
 

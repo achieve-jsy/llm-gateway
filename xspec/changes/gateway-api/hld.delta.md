@@ -1,109 +1,62 @@
-# gateway-api 概要设计变更 — CHG-20260526-001
+# gateway-api 概要设计变更 — CHG-20260603-001
 
-> 基线：xspec/modules/gateway-api/hld.md (v1.2)
+> 基线：xspec/modules/gateway-api/hld.md (v1.3)
 
 ## 变更摘要
 
-修改 `/v1/models` 查询链路：从返回部门维度的个体模型列表 → 改为调用 control-plane `/internal/v1/keys/:id/groups` 返回该 Key 绑定的模型组名称列表。在 GroupAwareDispatcher 中追加 Key 绑定校验：组名调用前先确认该组在 Key 绑定范围内。现有 scheduler 组内路由和故障切换逻辑不变。
+在现有 Logger 中间件和 Orchestrator 基础上新增埋点采集链路：c.Next() 完成后构造 UsageEvent（含 key/user/dept/studio 维度 + 缓存 token 分桶 + 流式 usage 回填），调用 EstimateCost 锁价算成本，通过进程内 channel 异步批量写入 call_logs。
 
 ## 架构变更
 
 ```mermaid
 flowchart TD
-    subgraph GW["gateway-api (变更部分)"]
-        AuthMW["AuthMiddleware<br/>(不变：鉴权后注入 key_id)"]
-        ModelsH["ModelsHandler<br/>(修改)"]
-        GD["GroupAwareDispatcher<br/>(修改：追加绑定校验)"]
-        SCH["scheduler<br/>(嵌入，不变)"]
+    subgraph GW["gateway-api 进程（变更部分）"]
+        MID["AuthMiddleware<br/>（变更：解析 key→user→dept→studio）"]
+        ORCH["Orchestrator<br/>（变更：流式 usage 回填）"]
+        COLL["Collector<br/>（新增）"]
+        CH["channel 缓冲<br/>（新增）"]
+        BW["batch writer<br/>（新增）"]
     end
 
-    CP["control-plane<br/>/internal/v1/keys/:id/groups"]
-
-    REQ["业务方"] -->|"GET /v1/models"| AuthMW
-    REQ -->|"POST /v1/chat/completions\n{model: 日常推理}"| AuthMW
-    AuthMW -->|"注入 key_id → c.Next()"| ModelsH
-    AuthMW -->|"注入 key_id → c.Next()"| GD
-    ModelsH -->|"HTTP: 查Key绑定组"| CP
-    GD -->|"HTTP: 校验Key绑定了该组"| CP
-    GD -->|"通过 → 委托路由"| SCH
-```
-
-### /v1/models 查询流程
-
-```mermaid
-sequenceDiagram
-    participant BIZ as 业务方
-    participant GW as gateway-api
-    participant CP as control-plane
-
-    BIZ->>GW: GET /v1/models (Authorization: Bearer sk-xxx)
-    GW->>GW: AuthMiddleware: 验证 Key → 注入 key_id + user_id + dept_id
-    GW->>CP: GET /internal/v1/keys/:key_id/groups
-    CP-->>GW: [{id, name:"日常推理", enabled:true}, {id, name:"高智能", enabled:true}]
-    GW->>GW: 转换为 OpenAI /v1/models 格式
-    GW-->>BIZ: {"object":"list", "data":[{"id":"日常推理","object":"model"},{"id":"高智能","object":"model"}]}
-```
-
-### 组名调用 + 绑定校验流程
-
-```mermaid
-sequenceDiagram
-    participant BIZ as 业务方
-    participant GW as gateway-api
-    participant CP as control-plane
-    participant SCH as scheduler(嵌入)
-    participant PROV as Provider
-
-    BIZ->>GW: POST /v1/chat/completions {model: "高智能"}
-    GW->>GW: AuthMiddleware → 注入 key_id
-    GW->>GW: GroupAwareDispatcher: 判定"高智能"为组名
-    GW->>CP: GET /internal/v1/keys/:key_id/groups → 校验"高智能"在列表中
-    alt 组名在绑定范围内
-        GW->>SCH: Route("高智能")
-        SCH-->>GW: {model: gpt-4o, channel: azure}
-        GW->>PROV: 转发请求
-        PROV-->>GW: 响应
-        GW-->>BIZ: 正常返回
-    else 组名不在绑定范围内
-        GW-->>BIZ: 400 模型组不可用（不泄露组是否存在）
+    subgraph EXIST["现有（不变）"]
+        ROUTER["Router / Handler"]
+        PROV["Provider Adapters"]
     end
+
+    MID -->|identity 注入| ROUTER
+    ROUTER --> ORCH
+    ORCH -->|c.Next() 后| COLL
+    COLL -->|Emit| CH
+    CH --> BW
+    BW -->|批量 INSERT| DB["PostgreSQL call_logs"]
+    PROV --> ORCH
 ```
+
+## 新增组件
+
+| 组件 | 位置 | 职责 |
+| :--- | :--- | :--- |
+| Collector | internal/gateway/observability/collector.go | 在 Logger 中间件 c.Next() 后构造 UsageEvent、调用 EstimateCost 算成本、投递 channel |
+| batch writer | internal/gateway/observability/writer.go | goroutine 消费 channel，按 N=200 或 T=1s 批量 GORM INSERT call_logs，ON CONFLICT DO NOTHING 幂等 |
+| UsageEvent | internal/gateway/observability/event.go | 数据契约：request_id / ts / key_id / user_id / dept_id / studio_id / model / tokens / status / duration / est_cost |
 
 ## 变更组件
 
 | 组件 | 变更 | 说明 |
 | :--- | :--- | :--- |
-| ModelsHandler | 修改 | `/v1/models`（原 `/v1/me/models`）从查询部门维度的个体模型 → 改为调 control-plane `/internal/v1/keys/:id/groups` 返回 Key 绑定的模型组列表 |
-| GroupAwareDispatcher | 修改 | 组名判定后、委托 scheduler 前，增加一次 control-plane 调用校验该组在 Key 绑定范围内；不在范围则直接返回错误 |
-
-## 变更端点
-
-| 端点 | 变更前 | 变更后 |
-| :--- | :--- | :--- |
-| GET /v1/me/models | 基于 department_id 返回个体模型列表 | 改为 GET /v1/models，基于 key_id 绑定返回模型组名称列表 |
-
-## 外部服务依赖变更
-
-| 服务 | 调用方式 | 用途 | 超时 | 降级策略 |
-| :--- | :--- | :--- | :---: | :--- |
-| control-plane /internal/v1/keys/:id/groups | HTTP GET | 查询 Key 绑定的模型组列表 | 500 ms | 超时则 `/v1/models` 返回空列表；组名调用校验超时则拒绝请求（安全优先） |
+| AuthMiddleware | 修改 | 从 Key 缓存或 control-plane 回源解析 key_id/user_id/dept_id/studio_id，写入 model.UserIdentity 供 Logger 读取 |
+| Orchestrator | 修改 | 流式调用：注入 stream_options.include_usage=true，末尾 chunk 解析 usage 回填 gin.Context；Anthropic 专有字段归一化 |
+| Logger 中间件 | 修改 | c.Next() 后调用 Collector.Emit()，补齐 cached/cache_write/reasoning 字段 |
 
 ## 关键决策
 
 | 决策 | 选择 | 理由 |
 | :--- | :--- | :--- |
-| 绑定校验前置 | 在 GroupAwareDispatcher 内、scheduler 路由之前校验 | 越早拒绝无效请求越省资源；scheduler 不关心 Key 权限 |
-| 校验源 | 每次实时调用 control-plane | 绑定变更即时生效；后续可补缓存优化但不影响正确性 |
-| 校验失败语义 | 返回"模型组不可用"，不区分组不存在 vs 未绑定 | 不向调用方泄露组配置信息 |
-| 绑定缓存 | 本期不做，每次实时查询 | 避免缓存导致绑定变更不即时生效；后续高频场景按需补 |
+| 异步写入方式 | 进程内 channel + 批量写（L1） | 热路径非阻塞，万级/天在途丢失可接受，不引入 Redis Stream |
+| 流式 usage 采集 | stream_options.include_usage=true | 使上游在末尾 chunk 返回 usage，与非流式同口径 |
+| 身份解析 | 复用 KeyCache + 回源 control-plane | 已有 infra/key_cache.go，不新增外部依赖 |
+| 成本计算时机 | 采集时锁价算好 | 明细行直接存 est_cost，聚合永不需重算历史 |
 
 ## 技术选型变更
 
-无变更。沿用 Go + Gin 技术栈，HTTP 调用 control-plane。
-
-## 安全设计补充
-
-| 威胁 | 防御措施 |
-| :--- | :--- |
-| 调用方枚举组名试探绑定范围 | 绑定校验失败统一返回"模型组不可用"错误，与组不存在返回相同语义 |
-| control-plane 绑定查询不可达 | 超时后拒绝请求（不降级为放行），避免绕过绑定校验 |
+无。沿用 Go + Gin + GORM + Redis 技术栈，不引入新依赖。

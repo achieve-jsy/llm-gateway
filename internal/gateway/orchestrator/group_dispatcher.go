@@ -42,7 +42,7 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string) (*sche
 	if d.bindingCheck != nil {
 		identityVal, exists := c.Get("identity")
 		if exists {
-			if id, ok := identityVal.(*model.UserIdentity); ok && id.KeyID != "" {
+			if id, ok := identityVal.(*model.UserIdentity); ok && id.KeyID != "" && !id.AccessAllGroups {
 				groups, err := d.bindingCheck.GetKeyGroups(c.Request.Context(), id.KeyID)
 				if err != nil {
 					slog.Error("group dispatch: binding check failed",

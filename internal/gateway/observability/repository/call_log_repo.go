@@ -22,6 +22,9 @@ func NewCallLogRepository(db *gorm.DB) *CallLogRepository {
 	return &CallLogRepository{db: db}
 }
 
+// DB 暴露底层 *gorm.DB，供 BatchWriter 做落库前补查使用
+func (r *CallLogRepository) DB() *gorm.DB { return r.db }
+
 // BatchInsert 批量写入 call_logs
 // 使用 ON CONFLICT (request_id) DO NOTHING 保证幂等
 func (r *CallLogRepository) BatchInsert(ctx context.Context, logs []model.CallLog) error {

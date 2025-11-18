@@ -7,6 +7,7 @@ type UserIdentity struct {
 	DepartmentID    string `json:"department_id"`
 	StudioID        string `json:"studio_id,omitempty"`
 	AccessAllGroups bool   `json:"access_all_groups"`
+	LogEnabled      bool   `json:"log_enabled"`
 }
 
 // MeModelItem represents a single model in /v1/me/models response

@@ -132,9 +132,10 @@ func (r *ModelRepo) ListByCatalogID() ([]model.Model, error) {
 }
 
 // ListUnboundFromCatalog 列出所有 catalog_id 为空的模型（供 catalog 自动绑定任务用）。
+// Preload Provider 以便 AutoBind 用 Provider.Type 做 provider 二次过滤，减少 ambiguous。
 func (r *ModelRepo) ListUnboundFromCatalog() ([]model.Model, error) {
 	var models []model.Model
-	err := r.db.Where("catalog_id IS NULL").Find(&models).Error
+	err := r.db.Preload("Provider").Where("catalog_id IS NULL").Find(&models).Error
 	return models, err
 }
 

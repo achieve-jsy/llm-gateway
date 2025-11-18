@@ -33,8 +33,13 @@ func Setup(
 	controlPlaneURL, internalToken string,
 	sch *scheduler.Scheduler,
 	nameCache *cache.GroupNameCache,
-	collector ...*gwobs.Collector, // 可选：埋点 Collector
+	collectorOpt *gwobs.Collector,
+	traceWriterOpt *gwobs.TraceWriter,
 ) *gin.Engine {
+	var collector []*gwobs.Collector
+	if collectorOpt != nil {
+		collector = []*gwobs.Collector{collectorOpt}
+	}
 	// 获取初始 router 用于 models/health/passthrough 等（不需要热更新的场景）
 	router := routerGetter()
 
@@ -93,9 +98,11 @@ func Setup(
 	v1 := r.Group("/v1")
 	v1.Use(middleware.AuthMiddleware(authClient))
 	v1.Use(guard.Handler())
+	// 请求/响应正文捕获（供 trace 记录使用）
+	v1.Use(middleware.TraceCapture())
 	// 埋点采集中间件（可选，有 Collector 时生效）
 	if len(collector) > 0 && collector[0] != nil {
-		v1.Use(middleware.UsageCollector(collector[0]))
+		v1.Use(middleware.UsageCollector(collector[0], traceWriterOpt))
 	}
 	{
 		// Models

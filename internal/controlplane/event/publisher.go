@@ -4,11 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/redis/go-redis/v9"
 )
 
 const configChangeChannel = "config:change"
+
+// Redis key prefixes for auth caches (must match gateway/auth service constants)
+const (
+	authVerifyCachePrefix  = "key:auth:verify:"   // auth service Redis cache
+	gatewayCachePrefix     = "gateway:keycache:"  // gateway KeyCache Redis cache
+)
 
 // Publisher Redis 变更事件发布器
 type Publisher struct {
@@ -32,4 +39,19 @@ func (p *Publisher) Publish(ctx context.Context, event *ChangeEvent) error {
 	}
 
 	return nil
+}
+
+// InvalidateKeyAuthCache 主动删除 API Key 的所有 auth 缓存条目（不依赖 TTL）。
+// keyHash 为 sha256(plaintext_key)，与 api_keys.key_hash 一致。
+func (p *Publisher) InvalidateKeyAuthCache(ctx context.Context, keyHash string) {
+	if p.rdb == nil || keyHash == "" {
+		return
+	}
+	keys := []string{
+		authVerifyCachePrefix + keyHash,
+		gatewayCachePrefix + keyHash,
+	}
+	if err := p.rdb.Del(ctx, keys...).Err(); err != nil {
+		slog.Warn("failed to invalidate key auth cache", "key_hash", keyHash[:8]+"...", "error", err)
+	}
 }

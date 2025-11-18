@@ -118,14 +118,15 @@ func (kc *KeyCache) Invalidate(ctx context.Context, rawKey string) {
 	}
 }
 
-// HandleChangeEvent 处理配置变更事件中的 key 吊销通知。
-// 当收到 key_disabled 或 key_deleted 事件时，遍历本地缓存剔除匹配的条目（含 Redis）。
+// HandleChangeEvent 处理配置变更事件中的 key 吊销 / 日志开关变更通知。
+// 当收到 key_disabled、key_deleted 或 key_log_changed 事件时，
+// 遍历本地缓存剔除匹配的条目，并同步清除 Redis 双层缓存。
 func (kc *KeyCache) HandleChangeEvent(event ChangeEvent) {
 	if event.ResourceType != "api_key" {
 		return
 	}
 	switch event.Type {
-	case "key_disabled", "key_deleted":
+	case "key_disabled", "key_deleted", "key_log_changed":
 	default:
 		return
 	}
@@ -136,9 +137,13 @@ func (kc *KeyCache) HandleChangeEvent(event ChangeEvent) {
 	kc.local.Range(func(k, v any) bool {
 		e := v.(*cachedKeyEntry)
 		if e.data.Data.KeyID == keyID {
+			hash := k.(string)
 			kc.local.Delete(k)
 			if kc.rdb != nil {
-				kc.rdb.Del(ctx, keyCacheRedisPrefix+k.(string))
+				// 清除 gateway 自身的 KeyCache Redis 条目
+				kc.rdb.Del(ctx, keyCacheRedisPrefix+hash)
+				// 同时清除 auth service 的 Redis 缓存（key:auth:verify:{hash}）
+				kc.rdb.Del(ctx, "key:auth:verify:"+hash)
 			}
 			deleted++
 		}

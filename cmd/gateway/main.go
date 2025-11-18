@@ -183,6 +183,7 @@ func main() {
 	// 注意：gateway 不直连 Postgres（宪章原则）；埋点通过进程内 channel 写入 DB
 	// 仅在 DATABASE_URL 配置时启用；生产部署由 observability-hub 消费队列
 	var collector *gwobs.Collector
+	var traceWriter *gwobs.TraceWriter
 	if db, err := cpinfra.InitPostgres(); err != nil {
 		slog.Warn("usage tracking disabled: postgres not configured or unavailable", "error", err)
 	} else {
@@ -196,6 +197,11 @@ func main() {
 		collectorCfg := gwobs.DefaultCollectorConfig()
 		collector = gwobs.NewCollector(collectorCfg, pricingTable)
 		collector.StartWriter(ctx, callLogRepo)
+
+		// 请求/响应 trace 写入器
+		traceWriter = gwobs.NewTraceWriter(db, 512, 20, 5*time.Second)
+		go traceWriter.Run(ctx)
+
 		slog.Info("usage tracking enabled (direct-DB mode)")
 	}
 
@@ -216,7 +222,7 @@ func main() {
 
 	// Initialize router (inject dependencies). We always use the router obtained
 	// from the ProviderLoader – which is atomically swapped on config changes.
-	r := server.Setup(providerLoader.Router, icache, state, authClient, controlPlaneURL, internalToken, sch, nameCache, collector)
+	r := server.Setup(providerLoader.Router, icache, state, authClient, controlPlaneURL, internalToken, sch, nameCache, collector, traceWriter)
 
 	// Register auth routes
 	r.GET("/.well-known/jwks.json", authJWKSHandler.GetJWKS)

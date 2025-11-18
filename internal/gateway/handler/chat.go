@@ -97,6 +97,8 @@ func (h *ChatHandler) handleNonStream(c *gin.Context, ctx context.Context, req *
 				req.Model = decision.ModelName
 				c.Set("failover_used", true)
 				if fResp, fErr2 := h.orchestrator.Chat(ctx, req); fErr2 == nil {
+					// failover 成功，清除首次失败写入的 error_message
+					c.Set("error_message", "")
 					c.JSON(http.StatusOK, fResp)
 					return
 				}
@@ -122,6 +124,8 @@ func (h *ChatHandler) handleStream(c *gin.Context, ctx context.Context, req *cor
 				req.Model = decision.ModelName
 				c.Set("failover_used", true)
 				if fStream, fErr2 := h.orchestrator.ChatStream(ctx, req); fErr2 == nil {
+					// failover 成功，清除首次失败写入的 error_message
+					c.Set("error_message", "")
 					HandleStreamResponse(c, fStream)
 					return
 				}

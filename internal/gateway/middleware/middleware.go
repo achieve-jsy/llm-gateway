@@ -16,6 +16,9 @@ import (
 // RequestID 注入请求唯一标识（T004）
 func RequestID() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// 请求到达时间：作为所有阶段耗时的统一基准点
+		c.Set("start_time", time.Now())
+
 		id := c.GetHeader("X-Request-ID")
 		if id == "" {
 			id = uuid.New().String()

@@ -587,6 +587,10 @@ export async function toggleAccessAllGroups(keyId: string, value: boolean): Prom
   await http.post(`/api/v1/keys/${keyId}/access-all-groups`, { access_all_groups: value })
 }
 
+export async function toggleLogEnabled(keyId: string, value: boolean): Promise<void> {
+  await http.patch(`/api/v1/keys/${keyId}/log-enabled`, { log_enabled: value })
+}
+
 /** 禁用 API Key */
 export async function disableKey(id: string): Promise<void> {
   await http.patch(`/api/v1/keys/${id}/disable`)

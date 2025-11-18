@@ -272,6 +272,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/keys/:id/groups", keyHandler.ListKeyGroups)
 		adminGroup.POST("/keys/:id/groups", keyHandler.UpdateKeyGroups)
 		adminGroup.POST("/keys/:id/access-all-groups", keyHandler.ToggleAccessAllGroups)
+		adminGroup.PATCH("/keys/:id/log-enabled", keyHandler.ToggleLogEnabled)
 		adminGroup.GET("/groups/available", keyHandler.ListAvailableGroups)
 
 		// OpenCode 配置（token 生成 + 状态轮询）
@@ -279,7 +280,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/keys/:id/opencode-config/status", opencodeConfigHandler.GetStatus)
 		adminGroup.GET("/model-catalog/by-source", catalogHandler.GetBySource)
 		adminGroup.POST("/model-catalog/sync", catalogHandler.Sync)
-		// diff / apply-diff 已移除：定价改为读取时按 price_mode 解析，不再需要手工闸门
+		adminGroup.GET("/model-catalog/diff", catalogHandler.Diff)
+		adminGroup.POST("/model-catalog/apply-diff", catalogHandler.ApplyDiff)
 		adminGroup.POST("/model-catalog/auto-bind", catalogHandler.AutoBind)
 		adminGroup.GET("/model-catalog/binding-stats", catalogHandler.BindingStats)
 		adminGroup.GET("/model-catalog/sync-status", catalogHandler.SyncStatus)
@@ -318,12 +320,20 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/announcements/unread/count", announcementHandler.GetUnreadCount)
 		adminGroup.GET("/announcements/history", announcementHandler.GetReadHistory)
 
-		// 用量与成本查询
+		// 用量与成本查询（管理员全局）
 		rollupSvc := obssvc.NewRollupService(db)
-		usageHandler := obshandler.NewUsageHandler(rollupSvc)
+		usageHandler := obshandler.NewUsageHandler(rollupSvc, db)
 		adminGroup.GET("/usage/logs", usageHandler.Logs)
+		adminGroup.GET("/usage/logs/:request_id/trace", usageHandler.Trace)
+		adminGroup.GET("/usage/options", usageHandler.Options)
 		adminGroup.GET("/usage", usageHandler.Query)
 		adminGroup.GET("/usage-logs", usageHandler.Logs)
+
+		// 个人用量查询（按登录用户 user_id 隔离）
+		adminGroup.GET("/my/keys", keyHandler.MyKeys)
+		adminGroup.GET("/my/usage", usageHandler.MyQuery)
+		adminGroup.GET("/my/usage/logs", usageHandler.MyLogs)
+		adminGroup.GET("/my/usage/logs/:request_id/trace", usageHandler.Trace)
 	}
 
 	// 内部接口组（内部 Token 认证）

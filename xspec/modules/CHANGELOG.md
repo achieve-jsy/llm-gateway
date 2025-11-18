@@ -1,5 +1,12 @@
 # LLM Gateway 变更历史
 
+## [CHG-20260526-001] Key ↔ 模型组绑定与透明暴露 — 2026-06-03
+
+- 更新模块：control-plane（Key 模型组绑定：创建时选择/查询返回/增量变更 + 可选组列表 + gateway-api 内部查询接口）、gateway-api（/v1/models 基于 Key 返回模型组列表 + 组名调用绑定校验）
+- 关键决策：Key 创建与绑定同事务原子操作；PATCH 增量变更绑定；/v1/models 返回组列表替代模型列表；gateway-api 实时查询 control-plane 内部接口无本地缓存
+
+---
+
 ## [CHG-20260525-001] 模型组 + 智能调度（路由/负载/健康/切换） — 2026-05-26
 
 - 新增模块：scheduler（嵌入 gateway-api 的调度引擎：路由决策、负载均衡、健康探测、故障切换）

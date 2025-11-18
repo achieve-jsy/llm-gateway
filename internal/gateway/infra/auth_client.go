@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -39,12 +41,16 @@ type VerifyKeyResp struct {
 	Data    struct {
 		Status          string `json:"status"`
 		KeyID           string `json:"key_id,omitempty"`
-		AccessAllGroups bool   `json:"access_all_groups"`
+		KeyName         string `json:"key_name,omitempty"`
+		AccessAllGroups bool  `json:"access_all_groups"`
+		LogEnabled      *bool `json:"log_enabled,omitempty"` // nil = 字段缺失（旧缓存），默认 true
 		User            struct {
 			UserID       string `json:"user_id"`
 			Name         string `json:"name"`
 			DepartmentID string `json:"department_id,omitempty"`
+			DeptName     string `json:"dept_name,omitempty"`
 			StudioID     string `json:"studio_id,omitempty"`
+			StudioName   string `json:"studio_name,omitempty"`
 		} `json:"user,omitempty"`
 	} `json:"data"`
 }
@@ -54,6 +60,7 @@ type VerifyKeyResp struct {
 func (c *AuthClient) VerifyKey(ctx context.Context, key string) (*VerifyKeyResp, error) {
 	if c.keyCache != nil {
 		if resp, ok := c.keyCache.Get(ctx, key); ok {
+			log.Printf("[auth-client] cache HIT for key=...%s log_enabled=%v", key[len(key)-4:], resp.Data.LogEnabled)
 			return resp, nil
 		}
 	}
@@ -62,6 +69,7 @@ func (c *AuthClient) VerifyKey(ctx context.Context, key string) (*VerifyKeyResp,
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("[auth-client] HTTP response for key=...%s log_enabled=%v", key[len(key)-4:], resp.Data.LogEnabled)
 
 	if c.keyCache != nil {
 		c.keyCache.Set(ctx, key, resp)
@@ -70,8 +78,10 @@ func (c *AuthClient) VerifyKey(ctx context.Context, key string) (*VerifyKeyResp,
 }
 
 func (c *AuthClient) verifyKeyHTTP(ctx context.Context, key string) (*VerifyKeyResp, error) {
+	targetURL := c.base + "/internal/v1/auth/verify-key"
+	log.Printf("[auth-client] HTTP call to: %s", targetURL)
 	body, _ := json.Marshal(map[string]string{"key": key})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/internal/v1/auth/verify-key", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -87,8 +97,10 @@ func (c *AuthClient) verifyKeyHTTP(ctx context.Context, key string) (*VerifyKeyR
 	if resp.StatusCode >= 500 {
 		return nil, fmt.Errorf("auth service error %d", resp.StatusCode)
 	}
+	rawBody, _ := io.ReadAll(resp.Body)
+	log.Printf("[auth-client] raw response: %s", string(rawBody))
 	var result VerifyKeyResp
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(rawBody, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil

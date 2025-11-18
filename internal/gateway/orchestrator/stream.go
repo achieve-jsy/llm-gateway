@@ -56,6 +56,20 @@ func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest
 
 	start := time.Now()
 
+	// 阶段计时：上游开始
+	if gc := ginContextFrom(ctx); gc != nil {
+		if reqStart, ok := gc.Get("start_time"); ok {
+			if t, ok := reqStart.(time.Time); ok && !t.IsZero() {
+				elapsed := time.Since(t).Milliseconds()
+				if elapsed > 0 && elapsed <= 32767 {
+					ms := int16(elapsed)
+					gc.Set("t_route_ms", ms)
+					gc.Set("t_upstream_ms", ms)
+				}
+			}
+		}
+	}
+
 	// 通过 Router 获取流
 	rawStream, err := router.StreamChatCompletion(ctx, req)
 	if err != nil {
@@ -69,6 +83,9 @@ func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest
 			"duration_ms", elapsed.Milliseconds(),
 			"error", err.Error(),
 		)
+		if gc := ginContextFrom(ctx); gc != nil {
+			gc.Set("error_message", err.Error())
+		}
 		return nil, errormap.MapProviderError(err)
 	}
 
@@ -90,6 +107,10 @@ func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest
 		}
 		if name := router.GetProviderName(req.Model); name != "" {
 			gc.Set("provider", name)
+		}
+		// TTFB：从上游请求发出到收到响应头（HTTP 200）的耗时
+		if ttfb := elapsed.Milliseconds(); ttfb > 0 {
+			gc.Set("t_ttfb_ms", int(ttfb))
 		}
 		usageObserver = newStreamUsageObserver(gc, start)
 	}

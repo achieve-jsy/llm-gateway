@@ -33,13 +33,17 @@ type UsageEvent struct {
 	TotalTokens      int
 	UsageMissing     bool
 
-	// 状态
-	Status         int
-	UpstreamStatus int
-	DurationMs     int64
-	FirstTokenMs   *int  // 首 token 延迟（毫秒），流式时才有
-	Stream         bool
-	FailoverUsed   bool
+	// 状态与耗时
+	Status          int
+	UpstreamStatus  int
+	DurationMs      int64
+	FirstTokenMs    *int   // 首 token 延迟（毫秒），流式时才有（相对上游建连时刻）
+	StageTTFBMs     *int   // 上游 TTFB（毫秒）：从上游请求发出到收到响应头，仅流式
+	StageAuthMs     *int16 // auth 阶段耗时（始终记录，不受 log_enabled 影响）
+	StageRouteMs    *int16 // 路由阶段耗时
+	StageUpstreamMs *int16 // 上游 LLM 阶段耗时
+	Stream          bool
+	FailoverUsed    bool
 
 	// 请求元信息
 	ReasoningEffort string // low / medium / high

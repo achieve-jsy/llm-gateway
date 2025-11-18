@@ -1,108 +1,67 @@
-# control-plane 数据模型变更 — CHG-20260526-001
+# control-plane 数据模型变更 — CHG-20260603-001
 
-> 基线：xspec/modules/control-plane/data-model.md (v1.3)
+> 基线：xspec/modules/control-plane/data-model.md (v1.4)
 
 ## 变更摘要
 
-新增 `key_group_bindings` 关联表实现 Key ↔ 模型组多对多绑定。通过外键约束保证引用完整性，UNIQUE 约束防止重复绑定。
+models 表新增 `price_mode` 字段（catalog/manual），input_price / output_price 列保留但语义变更。新增 model_catalog 缓存/阶梯价字段。
 
-## 实体关系变更
+## 修改表
 
-```mermaid
-erDiagram
-    api_keys ||--o{ key_group_bindings : "has"
-    model_groups ||--o{ key_group_bindings : "has"
-    key_group_bindings {
-        uuid id PK
-        uuid key_id FK "→ api_keys ON DELETE CASCADE"
-        uuid group_id FK "→ model_groups"
-        timestamp created_at
-    }
-```
-
-## 新增表
-
-### key_group_bindings
-
-Key 与模型组的多对多关联表。一条记录表示一个 Key 绑定了一个模型组。
-
-| 字段 | 类型 | 约束 | 说明 |
-| :--- | :--- | :--- | :--- |
-| id | UUID | PK, NOT NULL, DEFAULT gen_random_uuid() | 主键 |
-| key_id | UUID | NOT NULL, FK → api_keys(id) ON DELETE CASCADE | Key 被删除时联动删除绑定记录 |
-| group_id | UUID | NOT NULL, FK → model_groups(id) | 模型组被删除时通过应用层控制（model_groups 软删除不走 CASCADE） |
-| created_at | TIMESTAMPTZ | NOT NULL, DEFAULT NOW() | 绑定创建时间 |
-
-**约束**：
-- `UNIQUE(key_id, group_id)` — 同一 Key 不可重复绑定同一模型组
-- `INDEX idx_kbg_key_id ON key_group_bindings(key_id)` — 加速按 Key 查询绑定
-- `INDEX idx_kbg_group_id ON key_group_bindings(group_id)` — 加速按组查询关联的 Key（预留扩展）
-
-## 查询模式
-
-### 按 Key 查询绑定组（含组启停状态）
+### models 表新增字段
 
 ```sql
-SELECT g.id, g.name, g.enabled, g.strategy, g.description
-FROM key_group_bindings kbg
-JOIN model_groups g ON g.id = kbg.group_id
-WHERE kbg.key_id = ?
-  AND g.deleted_at IS NULL;  -- GORM 软删除过滤
+ALTER TABLE models
+  ADD COLUMN price_mode VARCHAR(10) NOT NULL DEFAULT 'catalog';
 ```
 
-### 校验组是否绑定
+| 字段 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| price_mode | VARCHAR(10) | catalog=读取时按 catalog_id 解析 LiteLLM 价；manual=使用本表 input/output_price |
 
-```sql
-SELECT EXISTS(
-  SELECT 1 FROM key_group_bindings
-  WHERE key_id = ? AND group_id = ?
-);
-```
+**存量 backfill**：全部默认 catalog（运行时未用价，零风险）。
 
-### 批量插入（去重安全）
+**回滚**：`DROP COLUMN price_mode`（input/output_price 列保留，语义还原）。
 
-```sql
-INSERT INTO key_group_bindings (key_id, group_id)
-VALUES (?, ?), (?, ?), ...
-ON CONFLICT (key_id, group_id) DO NOTHING;
-```
+### model_catalog 表新增字段
+
+同步 LiteLLM 价格时填充缓存/阶梯价字段（已有字段，同步逻辑补充）：
+
+| 字段 | 说明 |
+| :--- | :--- |
+| cache_read_price | 缓存读取单价（来自 LiteLLM cache_read_input_token_cost） |
+| cache_write_price | 缓存写入单价（来自 LiteLLM cache_creation_input_token_cost） |
+| tier_threshold | 阶梯 Token 阈值 |
+| input_price_above_tier | 超出阶梯的输入单价 |
+| output_price_above_tier | 超出阶梯的输出单价 |
+
+## 删除
+
+无物理删除。input_price / output_price 列保留，语义从"模型定价"变为"仅 manual 模式生效的实付价"。
 
 ## 迁移方案
 
-### 迁移文件
+### 迁移 035
 
 ```sql
--- migrate/xxxxxx_create_key_group_bindings.up.sql
-
-CREATE TABLE IF NOT EXISTS key_group_bindings (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    key_id UUID NOT NULL,
-    group_id UUID NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT fk_kbg_key FOREIGN KEY (key_id) REFERENCES api_keys(id) ON DELETE CASCADE,
-    CONSTRAINT fk_kbg_group FOREIGN KEY (group_id) REFERENCES model_groups(id),
-    CONSTRAINT uq_kbg_key_group UNIQUE (key_id, group_id)
-);
-
-CREATE INDEX idx_kbg_key_id ON key_group_bindings(key_id);
-CREATE INDEX idx_kbg_group_id ON key_group_bindings(group_id);
+-- 035_price_mode.up.sql
+ALTER TABLE models ADD COLUMN price_mode VARCHAR(10) NOT NULL DEFAULT 'catalog';
 ```
 
 ```sql
--- migrate/xxxxxx_create_key_group_bindings.down.sql
-
-DROP INDEX IF EXISTS idx_kbg_group_id;
-DROP INDEX IF EXISTS idx_kbg_key_id;
-DROP TABLE IF EXISTS key_group_bindings;
+-- 035_price_mode.down.sql
+ALTER TABLE models DROP COLUMN price_mode;
 ```
 
-### 回滚策略
+### 影响面
 
-- 新表无历史数据，直接 DROP TABLE 即可回滚
-- api_keys 和 model_groups 未修改，不受影响
+| 面 | 影响 |
+| :--- | :--- |
+| 线上路由 | 无（运行时本就不读价） |
+| /v1/model/info | 无（仍走 catalog JOIN 能力字段） |
+| API | 删除 diff / apply-diff 两个端点 |
+| 成本估算 | 新增 ResolveModelPricing + 内存价表为唯一取价入口 |
 
-### 对现有数据的影响
+### 与 opencode 插件兼容性
 
-- 新增表，不影响已有数据和查询
-- 现有 Key 在迁移后默认无任何模型组绑定（`/v1/models` 返回空列表）
-- 管理员需手动为存量 Key 补充组绑定
+opencode 插件（tools/opencode-models-discovery）只调用 /v1/models 与 /v1/model/info，不消费价格字段。本次改造不影响插件行为。

@@ -9,6 +9,7 @@ type CallLog struct {
 	RequestID           string    `gorm:"type:text;primaryKey"                                          json:"request_id"`
 	TS                  time.Time `gorm:"not null;index:idx_call_logs_ts"                               json:"ts"`
 	KeyID               string    `gorm:"type:text;index:idx_call_logs_key_ts,composite:key_ts"         json:"key_id"`
+	KeyName             string    `gorm:"type:varchar(128)"                                             json:"key_name,omitempty"`
 	UserID              string    `gorm:"type:text"                                                     json:"user_id"`
 	UserName            string    `gorm:"type:varchar(128)"                                             json:"user_name,omitempty"`
 	DeptID              string    `gorm:"type:text;index:idx_call_logs_dept_ts,composite:dept_ts"       json:"dept_id"`
@@ -29,6 +30,10 @@ type CallLog struct {
 	UpstreamStatus      int       `                                                                     json:"upstream_status"`
 	DurationMs          int       `                                                                     json:"duration_ms"`
 	FirstTokenMs        *int      `                                                                     json:"first_token_ms,omitempty"`
+	StageTTFBMs         *int      `gorm:"column:stage_ttfb_ms"                                          json:"stage_ttfb_ms,omitempty"`
+	StageAuthMs         *int16    `gorm:"column:stage_auth_ms"                                          json:"stage_auth_ms,omitempty"`
+	StageRouteMs        *int16    `gorm:"column:stage_route_ms"                                         json:"stage_route_ms,omitempty"`
+	StageUpstreamMs     *int16    `gorm:"column:stage_upstream_ms"                                      json:"stage_upstream_ms,omitempty"`
 	Stream              bool      `gorm:"not null;default:false"                                        json:"stream"`
 	FailoverUsed        bool      `gorm:"not null;default:false"                                        json:"failover_used"`
 	UsageMissing        bool      `gorm:"not null;default:false"                                        json:"usage_missing"`

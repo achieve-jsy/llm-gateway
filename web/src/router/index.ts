@@ -82,6 +82,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '用量与成本' }
   },
   {
+    path: '/my/usage',
+    name: 'MyUsage',
+    component: () => import('@/views/MyUsagePage.vue'),
+    meta: { title: '我的用量' }
+  },
+  {
     path: '/admin/settings',
     name: 'Settings',
     component: () => import('@/views/admin/SettingsPage.vue'),

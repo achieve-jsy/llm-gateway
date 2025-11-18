@@ -25,6 +25,7 @@ type KeyServiceInterface interface {
 	UpdateKeyGroups(ctx context.Context, userID, keyID uuid.UUID, add, remove []uint) ([]service.BoundGroupItem, error)
 	ListAvailableGroups(ctx context.Context) ([]service.AvailableGroupItem, error)
 	UpdateAccessAllGroups(ctx context.Context, userID, keyID uuid.UUID, value bool) (*model.ApiKey, error)
+	UpdateLogEnabled(ctx context.Context, userID, keyID uuid.UUID, value bool) (*model.ApiKey, error)
 }
 
 type CreateKeyResponse struct {
@@ -173,6 +174,32 @@ func (h *KeyHandler) ListKeys(c *gin.Context) {
 		},
 		"request_id": c.GetString("request_id"),
 	})
+}
+
+// MyKeys GET /api/v1/my/keys — 当前登录用户的 Key 列表（轻量，仅返回 id/name）
+func (h *KeyHandler) MyKeys(c *gin.Context) {
+	userIDStr := c.GetString("user_id")
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{"code": "unauthorized", "message": "not authenticated"}})
+		return
+	}
+	keys, _, err := h.svc.ListKeys(c.Request.Context(), userID, 1, 200)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"code": "internal_error", "message": "failed to list keys"}})
+		return
+	}
+	type item struct {
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		KeyHint string `json:"key_hint"`
+		Enabled bool   `json:"enabled"`
+	}
+	items := make([]item, 0, len(keys))
+	for _, k := range keys {
+		items = append(items, item{ID: k.ID.String(), Name: k.Name, KeyHint: k.KeyHint, Enabled: k.Enabled})
+	}
+	c.JSON(http.StatusOK, gin.H{"keys": items})
 }
 
 func (h *KeyHandler) GetKey(c *gin.Context) {
@@ -468,6 +495,34 @@ func convertBoundGroups(items []service.BoundGroupItem) []BoundGroupItem {
 }
 
 // ToggleAccessAllGroups POST /api/v1/keys/:id/access-all-groups
+// ToggleLogEnabled PATCH /api/v1/keys/:id/log-enabled
+func (h *KeyHandler) ToggleLogEnabled(c *gin.Context) {
+	userIDStr := c.GetString("user_id")
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request", "message": "invalid user_id", "code": CodeBadRequest}})
+		return
+	}
+	keyID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request", "message": "invalid key id", "code": CodeBadRequest}})
+		return
+	}
+	var input struct {
+		LogEnabled bool `json:"log_enabled"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request", "message": err.Error(), "code": CodeBadRequest}})
+		return
+	}
+	k, err := h.svc.UpdateLogEnabled(c.Request.Context(), userID, keyID, input.LogEnabled)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"type": "not_found", "message": "key not found", "code": CodeKeyNotFound}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"id": k.ID, "log_enabled": k.LogEnabled}})
+}
+
 func (h *KeyHandler) ToggleAccessAllGroups(c *gin.Context) {
 	userIDStr := c.GetString("user_id")
 	userID, err := uuid.Parse(userIDStr)

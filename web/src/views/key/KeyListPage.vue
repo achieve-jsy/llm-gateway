@@ -60,6 +60,28 @@
         </template>
       </el-table-column>
 
+      <el-table-column label="日志记录" width="110" align="center">
+        <template #header>
+          <span>日志记录
+            <el-tooltip content="关闭后该 Key 的请求不写入调用日志，但耗时和 Token 仍会计算" placement="top">
+              <el-icon style="vertical-align:middle;cursor:help"><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </span>
+        </template>
+        <template #default="{ row }">
+          <el-switch
+            v-model="row.logEnabled"
+            size="small"
+            inline-prompt
+            active-text="记录"
+            inactive-text="关闭"
+            :active-color="'#67c23a'"
+            :inactive-color="'#909399'"
+            @change="(val: boolean) => handleToggleLog(row, val)"
+          />
+        </template>
+      </el-table-column>
+
       <el-table-column label="创建时间" width="170" sortable>
         <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
       </el-table-column>
@@ -196,6 +218,7 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { QuestionFilled } from '@element-plus/icons-vue'
 
 function formatDate(iso?: string): string {
   if (!iso) return '-'
@@ -205,7 +228,7 @@ function formatDate(iso?: string): string {
 }
 
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { listKeys, disableKey, enableKey, deleteKey, resetKey, revealKey, updateKeyGroups, getAvailableGroups, toggleAccessAllGroups } from '@/services/control-plane'
+import { listKeys, disableKey, enableKey, deleteKey, resetKey, revealKey, updateKeyGroups, getAvailableGroups, toggleAccessAllGroups, toggleLogEnabled } from '@/services/control-plane'
 import { mapKeysResponse, mapCreateKeyResponse, type BoundGroupInfo } from '@/types/api-key'
 import type { ApiKey, AvailableGroup } from '@/types/api-key'
 import KeyCreateDialog from '@/components/key/KeyCreateDialog.vue'
@@ -317,6 +340,16 @@ async function handleToggle(row: ApiKey, enabled: boolean) {
     await loadKeys()
   } catch {
     row.enabled = !enabled
+  }
+}
+
+async function handleToggleLog(row: ApiKey, logEnabled: boolean) {
+  try {
+    await toggleLogEnabled(row.id, logEnabled)
+    ElMessage.success(logEnabled ? '已开启日志记录' : '已关闭日志记录')
+  } catch {
+    row.logEnabled = !logEnabled
+    ElMessage.error('操作失败')
   }
 }
 

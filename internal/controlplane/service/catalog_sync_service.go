@@ -32,6 +32,7 @@ type CatalogRepoInterface interface {
 	ListAll() ([]model.ModelCatalog, error)
 	ListAutoBindCandidates() ([]model.ModelCatalog, error)
 	Count() (int64, error)
+	DeleteStaleUnbound(source string, cutoff time.Time) (int64, error)
 }
 
 // CatalogSyncModelRepo 抽 ModelRepo 子集（同步/自动绑定任务里需要"列出 catalog 关联/未关联的 model"
@@ -231,11 +232,12 @@ func (s *CatalogSyncService) doTrackedSync(fn func() (int, string, error)) (int,
 // SyncFromRemote 从 RemoteURL 拉取 + retry，失败回退到 BundledBytes。
 //
 // 错误语义：
-//   - 远程成功 → 返回 (n, nil)；SyncStatus.LastSource = "remote"
-//   - 远程失败但 bundled 加载成功 → 返回 (n, nil)（fallback OK）；LastSource = "bundled"
+//   - 远程成功 → 返回 (n, nil)；SyncStatus.LastSource = "remote"；并清理过期未绑定条目
+//   - 远程失败但 bundled 加载成功 → 返回 (n, nil)（fallback OK）；LastSource = "bundled"；不清理（bundled 是子集）
 //   - 远程失败且 bundled 也无 → 返回 (0, err)；LastError 保留
 func (s *CatalogSyncService) SyncFromRemote(ctx context.Context) (int, error) {
 	return s.doTrackedSync(func() (int, string, error) {
+		syncStart := time.Now()
 		body, err := s.fetchRemote(ctx)
 		if err != nil {
 			slog.Warn("catalog sync remote failed, falling back to bundled", "error", err)
@@ -246,6 +248,15 @@ func (s *CatalogSyncService) SyncFromRemote(ctx context.Context) (int, error) {
 			return n, "bundled", e
 		}
 		n, e := s.applyBytes(body)
+		if e == nil {
+			// 远程同步成功后清理 LiteLLM 已下线、且本地无 model 绑定的过期条目。
+			// bundled fallback 不清理，因为 bundled 是历史子集，清理会误删仍在线的条目。
+			if deleted, cleanErr := s.repo.DeleteStaleUnbound(s.opts.Source, syncStart); cleanErr != nil {
+				slog.Warn("catalog stale cleanup failed", "error", cleanErr)
+			} else if deleted > 0 {
+				slog.Info("catalog stale entries cleaned", "deleted", deleted)
+			}
+		}
 		return n, "remote", e
 	})
 }
@@ -448,22 +459,37 @@ func (s *CatalogSyncService) ComputePriceDiff(ctx context.Context) ([]PriceDiffE
 		if cat == nil {
 			continue
 		}
+
+		// price_mode=catalog 的 model 实时读 catalog 价格，不存在"价格脱离"问题，
+		// 只有 catalog 标记了废弃日期时才需要提醒 admin 注意。
+		if m.PriceMode == "catalog" {
+			if cat.DeprecationDate == nil {
+				continue
+			}
+			out = append(out, PriceDiffEntry{
+				ModelID:                m.ID,
+				ModelName:              m.Name,
+				CatalogID:              cat.ID,
+				CatalogSourceModelID:   cat.SourceModelID,
+				LocalInputPrice:        cat.InputPricePerMillion,
+				LocalOutputPrice:       cat.OutputPricePerMillion,
+				CatalogInputPrice:      cat.InputPricePerMillion,
+				CatalogOutputPrice:     cat.OutputPricePerMillion,
+				IsOverridden:           false,
+				InputDeltaPct:          0,
+				OutputDeltaPct:         0,
+				CatalogDeprecationDate: cat.DeprecationDate,
+			})
+			continue
+		}
+
+		// price_mode=manual：price_mode 本身就是"admin 主动设定价格"的声明，
+		// 用 PriceMode == "manual" 直接判断 is_overridden，比 local>0 代理更准确。
 		priceMismatch := !floatEqual(m.InputPrice, cat.InputPricePerMillion) ||
 			!floatEqual(m.OutputPrice, cat.OutputPricePerMillion)
-		// 过滤掉无任何差异的 model（既无价差也无 deprecation 提醒）。
 		if !priceMismatch && cat.DeprecationDate == nil {
 			continue
 		}
-		// is_overridden 语义："admin 曾经主动设定过价格，现在与目录不一致"。
-		//
-		// 区分两种"价格不一致"场景：
-		//   - local = $0/$0 → 从未设置，属于"价格未设"，应提示"未设 → 跟随"
-		//   - local > 0 但与 catalog 不同 → admin 之前 apply 过、后来 catalog 又更新了，
-		//     属于真正的"已脱离目录"（主动背离），显示"已脱离目录"标签
-		//
-		// 不引入新 DB 列（price_overridden），用 local>0 作为"曾经设置过"的代理。
-		// 如果后续需要精确追踪每一次手动改价，再加 price_overridden boolean 列。
-		priceWasSet := m.InputPrice > 0 || m.OutputPrice > 0
 		out = append(out, PriceDiffEntry{
 			ModelID:                m.ID,
 			ModelName:              m.Name,
@@ -473,7 +499,7 @@ func (s *CatalogSyncService) ComputePriceDiff(ctx context.Context) ([]PriceDiffE
 			LocalOutputPrice:       m.OutputPrice,
 			CatalogInputPrice:      cat.InputPricePerMillion,
 			CatalogOutputPrice:     cat.OutputPricePerMillion,
-			IsOverridden:           priceMismatch && priceWasSet,
+			IsOverridden:           priceMismatch,
 			InputDeltaPct:          deltaPct(m.InputPrice, cat.InputPricePerMillion),
 			OutputDeltaPct:         deltaPct(m.OutputPrice, cat.OutputPricePerMillion),
 			CatalogDeprecationDate: cat.DeprecationDate,
@@ -645,7 +671,10 @@ func (s *CatalogSyncService) AutoBind(ctx context.Context) (*AutoBindResult, err
 		}
 	}
 
-	res := &AutoBindResult{}
+	res := &AutoBindResult{
+		Matched:   []AutoBindMatch{},
+		Ambiguous: []AutoBindAmbiguity{},
+	}
 	for i := range models {
 		m := models[i]
 		seen := make(map[uuid.UUID]bool)
@@ -686,6 +715,21 @@ func (s *CatalogSyncService) AutoBind(ctx context.Context) (*AutoBindResult, err
 				for _, c := range strict[k] {
 					add(c)
 				}
+			}
+		}
+
+		// 多候选时用 model.Provider.Type 做二次过滤，大幅减少同一基础模型被多个
+		// provider 前缀（azure_ai/fireworks_ai/...）重复收录导致的 ambiguous。
+		// Provider.Type 对应 catalog.Provider（如 "openai"、"deepseek"、"anthropic"）。
+		if len(cands) > 1 && m.Provider.Type != "" {
+			filtered := make([]*model.ModelCatalog, 0, len(cands))
+			for _, c := range cands {
+				if strings.EqualFold(c.Provider, m.Provider.Type) {
+					filtered = append(filtered, c)
+				}
+			}
+			if len(filtered) > 0 {
+				cands = filtered
 			}
 		}
 

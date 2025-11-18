@@ -407,6 +407,10 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 			if h.modelRepo != nil {
 				m, err := h.modelRepo.GetByID(gm.ModelID)
 				if err == nil && m != nil {
+					// model 本身必须启用，否则跳过（不下发到 gateway snapshot）
+					if m.Enabled == nil || !*m.Enabled {
+						continue
+					}
 					mi.Name = upstreamModelName(m)
 					mi.ProviderID = m.ProviderID
 					providerEnabled := false

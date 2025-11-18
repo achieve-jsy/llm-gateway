@@ -113,6 +113,21 @@ func (o *ChatOrchestrator) Chat(ctx context.Context, req *core.ChatRequest) (*co
 
 	start := time.Now()
 
+	// 阶段计时：上游开始前，记录 route 完成时间和 upstream 开始时间
+	if gc := ginContextFrom(ctx); gc != nil {
+		if reqStart, ok := gc.Get("start_time"); ok {
+			if t, ok := reqStart.(time.Time); ok && !t.IsZero() {
+				elapsed := time.Since(t).Milliseconds()
+				// elapsed 必须 > 0 且不超出 int16 范围（32767ms ≈ 32s），否则丢弃
+				if elapsed > 0 && elapsed <= 32767 {
+					ms := int16(elapsed)
+					gc.Set("t_route_ms", ms)
+					gc.Set("t_upstream_ms", ms)
+				}
+			}
+		}
+	}
+
 	// 通过 Router 分发请求
 	resp, err := router.ChatCompletion(ctx, req)
 	elapsed := time.Since(start)
@@ -125,6 +140,9 @@ func (o *ChatOrchestrator) Chat(ctx context.Context, req *core.ChatRequest) (*co
 			"duration_ms", elapsed.Milliseconds(),
 			"error", err.Error(),
 		)
+		if gc := ginContextFrom(ctx); gc != nil {
+			gc.Set("error_message", err.Error())
+		}
 		return nil, errormap.MapProviderError(err)
 	}
 
@@ -149,6 +167,8 @@ func (o *ChatOrchestrator) Chat(ctx context.Context, req *core.ChatRequest) (*co
 		// 写完整 Usage 对象，使 collector 能通过 ExtractCostInput 解析缓存字段
 		gc.Set("usage", resp.Usage)
 		gc.Set("stream", false)
+		// 保存响应体供 TraceWriter 使用（仅非流式）
+		gc.Set("resp_object", resp)
 	}
 
 	slog.DebugContext(ctx, "upstream_call_done",

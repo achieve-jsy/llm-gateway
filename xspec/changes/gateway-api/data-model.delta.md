@@ -1,54 +1,73 @@
-# gateway-api 数据模型变更 — CHG-20260526-001
+# gateway-api 数据模型变更 — CHG-20260603-001
 
-> 基线：xspec/modules/gateway-api/data-model.md (v1.2)
+> 基线：xspec/modules/gateway-api/data-model.md (v1.3)
 
 ## 变更摘要
 
-gateway-api 本模块为无状态接入层，不持有业务数据表。本次变更新增外部数据消费关系：通过 HTTP 调用 control-plane 接口实时获取 Key 绑定的模型组列表。无数据库变更。
-
-## 新增数据消费
-
-| 数据源 | 消费方式 | 用途 | 数据内容 |
-| :--- | :--- | :--- | :--- |
-| control-plane `/internal/v1/keys/:id/groups` | HTTP GET，500ms 超时 | 获取 Key 绑定的模型组列表及启停状态 | `[{id, name, enabled}]` |
+gateway-api 无状态，不新增持久化表。仅新增内存数据结构 UsageEvent 和 Collector 配置。
 
 ## 新增内存结构
 
-### BoundGroupInfo
-
-gateway-api 消费 control-plane 响应后的内存表示：
+### UsageEvent
 
 ```go
-// model/bound_group.go
+// internal/gateway/observability/event.go
 
-type BoundGroupInfo struct {
-    ID      string `json:"id"`
-    Name    string `json:"name"`
-    Enabled bool   `json:"enabled"`
+type UsageEvent struct {
+    RequestID string
+    Timestamp time.Time
+
+    // 身份维度
+    KeyID    string
+    UserID   string
+    DeptID   string
+    StudioID string
+
+    // 路由/模型
+    Model       string
+    RoutedModel string
+    GroupName   string
+    Provider    string
+
+    // Token 用量
+    PromptTokens     int
+    CachedTokens     int
+    CacheWriteTokens int
+    CompletionTokens int
+    ReasoningTokens  int
+    TotalTokens      int
+    UsageMissing     bool
+
+    // 状态
+    Status         int
+    UpstreamStatus int
+    DurationMs     int64
+    Stream         bool
+    FailoverUsed   bool
+
+    // 成本（采集时锁价）
+    InputPriceSnapshot  float64
+    OutputPriceSnapshot float64
+    EstCostUSD          float64
 }
 ```
 
-### 消费上下文（修改）
-
-在 identity 上下文中消费 key_id 并作为调用参数：
+### Collector 配置
 
 ```go
-// 调度上下文中使用
-identity := Identity{
-    KeyID:   c.GetString("key_id"),    // AuthMiddleware 注入，已有
-    UserID:  c.GetString("user_id"),   // 已有
-    DeptID:  c.GetString("dept_id"),   // 已有
+type CollectorConfig struct {
+    Enabled       bool          // 默认 true
+    BufferSize    int           // 默认 10000
+    FlushN        int           // 默认 200
+    FlushInterval time.Duration // 默认 1s
 }
 ```
 
-## 缓存策略
+## 配置项
 
-| 数据 | 缓存 | TTL | 说明 |
-| :--- | :--- | :--- | :--- |
-| Key 绑定组列表 | 不缓存 | — | 每次实时查询 control-plane，保证绑定变更即时生效；后续高频场景按需补 Redis 缓存 |
-
-## 对现有数据模型的影响
-
-- `GroupNameCache`（v1.2 引入）不变：继续缓存组名与组内模型映射
-- `DispatchContext`（v1.2 引入）不变：调度上下文结构无变更
-- 无表结构变更、无迁移操作
+| 变量 | 默认 | 说明 |
+| :--- | :--- | :--- |
+| USAGE_COLLECT_ENABLED | true | 埋点总开关 |
+| USAGE_BUFFER_SIZE | 10000 | channel 缓冲容量 |
+| USAGE_FLUSH_N | 200 | 批量写条数阈值 |
+| USAGE_FLUSH_INTERVAL | 1s | 批量写时间阈值 |

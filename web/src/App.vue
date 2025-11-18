@@ -29,6 +29,10 @@
           <el-icon><Key /></el-icon>
           <template #title>我的 Key</template>
         </el-menu-item>
+        <el-menu-item index="/my/usage">
+          <el-icon><DataLine /></el-icon>
+          <template #title>我的用量</template>
+        </el-menu-item>
         <el-menu-item index="/admin/group-health-monitor">
           <el-icon><Histogram /></el-icon>
           <template #title>模型组健康</template>
@@ -132,7 +136,7 @@ import { onMounted, computed, ref, watch } from 'vue'
 import { isDark, toggleTheme } from './composables/useTheme'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
-import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, HomeFilled, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell } from '@element-plus/icons-vue'
+import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, HomeFilled, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/common/NotificationBell.vue'
 import AnnouncementBanner from '@/components/common/AnnouncementBanner.vue'
 import AnnouncementPopup from '@/components/common/AnnouncementPopup.vue'

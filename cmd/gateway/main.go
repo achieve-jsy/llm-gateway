@@ -184,13 +184,25 @@ func main() {
 	// 仅在 DATABASE_URL 配置时启用；生产部署由 observability-hub 消费队列
 	var collector *gwobs.Collector
 	var traceWriter *gwobs.TraceWriter
-	if db, err := cpinfra.InitPostgres(); err != nil {
+	if db, err := cpinfra.InitPostgres(cfg.Database.URL); err != nil {
 		slog.Warn("usage tracking disabled: postgres not configured or unavailable", "error", err)
 	} else {
 		pricingTable := cppricing.NewPricingTable()
 		go func() {
 			if err := pricingTable.Refresh(ctx, db); err != nil {
 				slog.Warn("pricing table initial load failed", "error", err)
+			}
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if err := pricingTable.Refresh(ctx, db); err != nil {
+						slog.Warn("pricing table refresh failed", "error", err)
+					}
+				}
 			}
 		}()
 		callLogRepo := gwobsrepo.NewCallLogRepository(db)

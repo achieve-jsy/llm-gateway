@@ -136,13 +136,18 @@ func (o *ChatOrchestrator) Chat(ctx context.Context, req *core.ChatRequest) (*co
 	)
 	span.SetStatus(codes.Ok, "")
 
-	// 将 provider 名、token 用量写回 Gin context 供 Logger 使用
+	// 将 provider 名、token 用量写回 Gin context 供 Logger / 埋点采集器使用
 	if gc := ginContextFrom(ctx); gc != nil {
 		if resp.Model != "" {
 			gc.Set("routed_model", resp.Model)
 		}
-		gc.Set("prompt_tokens", resp.Usage.PromptTokens)
-		gc.Set("completion_tokens", resp.Usage.CompletionTokens)
+		if name := router.GetProviderName(req.Model); name != "" {
+			gc.Set("provider", name)
+		} else if resp.Provider != "" {
+			gc.Set("provider", resp.Provider)
+		}
+		// 写完整 Usage 对象，使 collector 能通过 ExtractCostInput 解析缓存字段
+		gc.Set("usage", resp.Usage)
 		gc.Set("stream", false)
 	}
 

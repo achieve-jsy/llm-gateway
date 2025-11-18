@@ -44,6 +44,7 @@ type VerifyKeyResp struct {
 			UserID       string `json:"user_id"`
 			Name         string `json:"name"`
 			DepartmentID string `json:"department_id,omitempty"`
+			StudioID     string `json:"studio_id,omitempty"`
 		} `json:"user,omitempty"`
 	} `json:"data"`
 }

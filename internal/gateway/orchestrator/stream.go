@@ -22,6 +22,13 @@ import (
 func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest) (io.ReadCloser, error) {
 	tracer := otel.Tracer("llm-gateway/orchestrator")
 
+	// 注入 stream_options.include_usage=true 使上游末尾 chunk 返回 usage
+	if req.StreamOptions == nil {
+		req.StreamOptions = &core.StreamOptions{IncludeUsage: true}
+	} else {
+		req.StreamOptions.IncludeUsage = true
+	}
+
 	// 流式请求超时控制（300s，匹配 Nginx proxy_read_timeout）
 	ctx, cancel := context.WithTimeout(ctx, defaultStreamTimeout)
 
@@ -73,16 +80,26 @@ func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest
 
 	span.SetStatus(codes.Ok, "")
 
-	// 将流式标记写回 Gin context 供 Logger 使用
+	// 将流式标记、路由模型写回 Gin context 供 Logger / 埋点采集器使用。
+	// routed_model 取已解析的 req.Model（与非流式 resp.Model 一致），用于价表查询计价。
+	var usageObserver *streamUsageObserver
 	if gc := ginContextFrom(ctx); gc != nil {
 		gc.Set("stream", true)
+		if req.Model != "" {
+			gc.Set("routed_model", req.Model)
+		}
+		if name := router.GetProviderName(req.Model); name != "" {
+			gc.Set("provider", name)
+		}
+		usageObserver = newStreamUsageObserver(gc, start)
 	}
 
 	// 用 ObservedSSEStream 包装原始流：
 	//   - 字节流原样透传给客户端（零拷贝，不影响主链路）
 	//   - OTelObserver 旁路统计 chunk 数量，流关闭时写入 span
+	//   - streamUsageObserver 旁路提取末尾 usage 与首 token 延迟，流关闭时回写 context
 	otelObserver := streaming.NewOTelObserver(span)
-	observed := streaming.NewObservedSSEStream(rawStream, otelObserver)
+	observed := streaming.NewObservedSSEStream(rawStream, otelObserver, usageObserver)
 
 	// cancelOnCloseStream 确保流关闭时同步取消 context + 结束 span
 	return &cancelOnCloseStream{

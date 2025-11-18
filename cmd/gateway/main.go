@@ -49,6 +49,11 @@ import (
 	providerszai "github.com/example/llm-gateway/internal/providers/zai"
 
 	"github.com/redis/go-redis/v9"
+
+	cpinfra "github.com/example/llm-gateway/internal/controlplane/infra"
+	cppricing "github.com/example/llm-gateway/internal/controlplane/pricing"
+	gwobs "github.com/example/llm-gateway/internal/gateway/observability"
+	gwobsrepo "github.com/example/llm-gateway/internal/gateway/observability/repository"
 )
 
 type providerLoadResult struct {
@@ -174,6 +179,26 @@ func main() {
 	authClient := infra.NewAuthClient(cfg.Auth.URL, cfg.Auth.Token)
 	authClient.SetKeyCache(keyCache)
 
+	// 初始化埋点采集器（可选，DB 不可用时降级跳过）
+	// 注意：gateway 不直连 Postgres（宪章原则）；埋点通过进程内 channel 写入 DB
+	// 仅在 DATABASE_URL 配置时启用；生产部署由 observability-hub 消费队列
+	var collector *gwobs.Collector
+	if db, err := cpinfra.InitPostgres(); err != nil {
+		slog.Warn("usage tracking disabled: postgres not configured or unavailable", "error", err)
+	} else {
+		pricingTable := cppricing.NewPricingTable()
+		go func() {
+			if err := pricingTable.Refresh(ctx, db); err != nil {
+				slog.Warn("pricing table initial load failed", "error", err)
+			}
+		}()
+		callLogRepo := gwobsrepo.NewCallLogRepository(db)
+		collectorCfg := gwobs.DefaultCollectorConfig()
+		collector = gwobs.NewCollector(collectorCfg, pricingTable)
+		collector.StartWriter(ctx, callLogRepo)
+		slog.Info("usage tracking enabled (direct-DB mode)")
+	}
+
 	// Wire auth services (JWT / Key Auth / OIDC)
 	authJWTManager, err := acrypto.NewJWTManagerFromEnv()
 	if err != nil {
@@ -191,7 +216,7 @@ func main() {
 
 	// Initialize router (inject dependencies). We always use the router obtained
 	// from the ProviderLoader – which is atomically swapped on config changes.
-	r := server.Setup(providerLoader.Router, icache, state, authClient, controlPlaneURL, internalToken, sch, nameCache)
+	r := server.Setup(providerLoader.Router, icache, state, authClient, controlPlaneURL, internalToken, sch, nameCache, collector)
 
 	// Register auth routes
 	r.GET("/.well-known/jwks.json", authJWKSHandler.GetJWKS)

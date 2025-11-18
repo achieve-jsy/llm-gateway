@@ -12,6 +12,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/handler"
 	"github.com/example/llm-gateway/internal/gateway/infra"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
+	gwobs "github.com/example/llm-gateway/internal/gateway/observability"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/example/llm-gateway/internal/gateway/provider"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
@@ -32,6 +33,7 @@ func Setup(
 	controlPlaneURL, internalToken string,
 	sch *scheduler.Scheduler,
 	nameCache *cache.GroupNameCache,
+	collector ...*gwobs.Collector, // 可选：埋点 Collector
 ) *gin.Engine {
 	// 获取初始 router 用于 models/health/passthrough 等（不需要热更新的场景）
 	router := routerGetter()
@@ -91,6 +93,10 @@ func Setup(
 	v1 := r.Group("/v1")
 	v1.Use(middleware.AuthMiddleware(authClient))
 	v1.Use(guard.Handler())
+	// 埋点采集中间件（可选，有 Collector 时生效）
+	if len(collector) > 0 && collector[0] != nil {
+		v1.Use(middleware.UsageCollector(collector[0]))
+	}
 	{
 		// Models
 		v1.GET("/models", boundModelsHandler.Handle)

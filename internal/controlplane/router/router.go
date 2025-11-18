@@ -15,6 +15,8 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/example/llm-gateway/internal/controlplane/service"
+	obshandler "github.com/example/llm-gateway/internal/observability/handler"
+	obssvc "github.com/example/llm-gateway/internal/observability/service"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -112,6 +114,14 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	providerHandler := handler.NewProviderHandler(providerSvc)
 	modelHandler := handler.NewModelHandler(modelSvc)
 	internalHandler := handler.NewInternalHandler(internalSvc, keySvc, keyGroupSvc)
+	// 注入定价服务（供 /internal/v1/models/pricing 使用）
+	pricingSvc := service.NewPricingService(db)
+	go func() {
+		if err := pricingSvc.Refresh(context.Background()); err != nil {
+			slog.Warn("initial pricing table load failed", "error", err)
+		}
+	}()
+	internalHandler.SetPricingService(pricingSvc)
 	modelInfoSvc := service.NewModelInfoService(groupRepo, modelRepo)
 	modelInfoHandler := handler.NewModelInfoHandler(modelInfoSvc)
 	defHandler := handler.NewDefinitionHandler(defRepo)
@@ -175,6 +185,10 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	r.GET("/api/v1/opencode-config/plugin", opencodeConfigHandler.GetPlugin)
 	r.GET("/api/v1/opencode-config/plugin/version", opencodeConfigHandler.GetPluginVersion)
 	r.POST("/api/v1/opencode-config/callback", opencodeConfigHandler.Callback)
+
+	// 模型组静态路由：在 adminGroup 之前注册，避免被 /groups/:id 吞掉
+	r.GET("/api/v1/groups/capabilities", middleware.JWTAuth(), modelInfoHandler.GetGroupModelInfo)
+	r.GET("/api/v1/groups/defaults", middleware.JWTAuth(), groupHandler.GetDefaults)
 
 	// 启动健康检测调度器（优先使用环境变量 HEALTH_CHECK_INTERVAL 控制）
 	healthCheckSvc.StartBackground(context.Background())
@@ -265,8 +279,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/keys/:id/opencode-config/status", opencodeConfigHandler.GetStatus)
 		adminGroup.GET("/model-catalog/by-source", catalogHandler.GetBySource)
 		adminGroup.POST("/model-catalog/sync", catalogHandler.Sync)
-		adminGroup.GET("/model-catalog/diff", catalogHandler.Diff)
-		adminGroup.POST("/model-catalog/apply-diff", catalogHandler.ApplyDiff)
+		// diff / apply-diff 已移除：定价改为读取时按 price_mode 解析，不再需要手工闸门
 		adminGroup.POST("/model-catalog/auto-bind", catalogHandler.AutoBind)
 		adminGroup.GET("/model-catalog/binding-stats", catalogHandler.BindingStats)
 		adminGroup.GET("/model-catalog/sync-status", catalogHandler.SyncStatus)
@@ -274,8 +287,6 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/model-catalog/:id", catalogHandler.GetByID)
 
 		// 模型分组管理
-		adminGroup.GET("/groups/capabilities", modelInfoHandler.GetGroupModelInfo)
-		adminGroup.GET("/groups/defaults", groupHandler.GetDefaults)
 		adminGroup.POST("/groups/check-all", groupCheckHandler.CheckAll)
 		adminGroup.POST("/groups", groupHandler.Create)
 		adminGroup.GET("/groups", groupHandler.List)
@@ -306,14 +317,22 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/announcements/unread", announcementHandler.GetUnread)
 		adminGroup.GET("/announcements/unread/count", announcementHandler.GetUnreadCount)
 		adminGroup.GET("/announcements/history", announcementHandler.GetReadHistory)
+
+		// 用量与成本查询
+		rollupSvc := obssvc.NewRollupService(db)
+		usageHandler := obshandler.NewUsageHandler(rollupSvc)
+		adminGroup.GET("/usage/logs", usageHandler.Logs)
+		adminGroup.GET("/usage", usageHandler.Query)
+		adminGroup.GET("/usage-logs", usageHandler.Logs)
 	}
 
 	// 内部接口组（内部 Token 认证）
 	internalGroup := r.Group("/internal/v1")
 	internalGroup.Use(middleware.InternalAuth())
 	{
-internalGroup.GET("/models/available", internalHandler.ListAvailableModels)
+	internalGroup.GET("/models/available", internalHandler.ListAvailableModels)
 	internalGroup.GET("/models/health", internalHandler.GetModelHealth)
+	internalGroup.GET("/models/pricing", internalHandler.GetModelPricing)
 	internalGroup.POST("/keys/verify", keyHandler.VerifyKey)
 	internalGroup.POST("/auth/verify-key", keyHandler.VerifyKey)
 	internalGroup.GET("/keys/:id/groups", internalHandler.GetKeyGroups)

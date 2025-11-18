@@ -5,6 +5,7 @@ type UserIdentity struct {
 	UserID          string `json:"user_id"`
 	KeyID           string `json:"key_id"`
 	DepartmentID    string `json:"department_id"`
+	StudioID        string `json:"studio_id,omitempty"`
 	AccessAllGroups bool   `json:"access_all_groups"`
 }
 

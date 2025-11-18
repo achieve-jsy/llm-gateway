@@ -57,6 +57,10 @@
         <el-divider class="menu-divider" />
 
         <div class="menu-group-label">运维</div>
+        <el-menu-item index="/admin/usage-cost">
+          <el-icon><Histogram /></el-icon>
+          <template #title>用量与成本</template>
+        </el-menu-item>
         <el-menu-item index="/admin/health-monitor">
           <el-icon><Monitor /></el-icon>
           <template #title>模型健康监控</template>

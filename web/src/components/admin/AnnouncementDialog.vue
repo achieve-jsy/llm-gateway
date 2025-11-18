@@ -2,7 +2,7 @@
   <el-dialog
     :model-value="visible"
     :title="isEdit ? '编辑公告' : '新建公告'"
-    width="min(900px, 92vw)"
+    width="min(960px, 92vw)"
     destroy-on-close
     align-center
     @close="emit('close')"
@@ -19,45 +19,14 @@
       </el-form-item>
 
       <el-form-item label="公告内容" prop="content">
-        <div class="editor-wrap">
-          <div class="editor-toolbar">
-            <button type="button"
-              class="editor-tab"
-              :class="{ active: editorMode === 'edit' }"
-              @click="editorMode = 'edit'"
-            >编辑</button>
-            <button type="button"
-              class="editor-tab"
-              :class="{ active: editorMode === 'preview' }"
-              @click="editorMode = 'preview'"
-            >预览</button>
-            <button type="button"
-              class="editor-tab"
-              :class="{ active: editorMode === 'split' }"
-              @click="editorMode = 'split'"
-            >分栏</button>
-            <span class="editor-hint">支持 Markdown 语法</span>
-          </div>
-          <div class="editor-body" :class="`mode--${editorMode}`">
-            <textarea
-              v-show="editorMode !== 'preview'"
-              class="editor-textarea"
-              v-model="formData.content"
-              placeholder="请输入公告内容，支持 Markdown 语法..."
-            ></textarea>
-            <div
-              v-show="editorMode !== 'edit'"
-              class="editor-preview"
-              :class="{ 'preview-empty': !formData.content }"
-            >
-              <div
-                v-if="formData.content"
-                class="preview-content md-content"
-                v-html="renderMarkdown(formData.content)"
-              ></div>
-              <div v-else class="preview-placeholder">暂无内容，请在左侧输入...</div>
-            </div>
-          </div>
+        <div class="bytemd-wrap">
+          <Editor
+            :value="formData.content"
+            :plugins="plugins"
+            locale="zh_Hans"
+            placeholder="请输入公告内容，支持 Markdown 语法..."
+            @change="formData.content = $event"
+          />
         </div>
       </el-form-item>
 
@@ -134,8 +103,14 @@ import { ref, computed, watch } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { createAnnouncement, updateAnnouncement } from '@/services/control-plane'
-import { renderMarkdown } from '@/utils/markdown'
 import type { Announcement } from '@/types/announcement'
+import { Editor } from '@bytemd/vue-next'
+import gfm from '@bytemd/plugin-gfm'
+import highlight from '@bytemd/plugin-highlight'
+import 'bytemd/dist/index.css'
+import 'highlight.js/styles/github.css'
+
+const plugins = [gfm(), highlight()]
 
 interface FormState {
   title: string
@@ -161,7 +136,6 @@ const emit = defineEmits<{
 const formRef = ref<FormInstance>()
 const submitting = ref(false)
 const isEdit = computed(() => !!props.announcement)
-const editorMode = ref<'edit' | 'preview' | 'split'>('edit')
 
 const formData = ref<FormState>({
   title: '', content: '', category: 'system', level: 'info', display_mode: 'banner', sort_order: 0, status: 'draft', created_by: ''
@@ -169,7 +143,6 @@ const formData = ref<FormState>({
 
 const resetForm = () => {
   formData.value = { title: '', content: '', category: 'system', level: 'info', display_mode: 'banner', sort_order: 0, status: 'draft', created_by: '' }
-  editorMode.value = 'edit'
   formRef.value?.resetFields()
 }
 
@@ -188,7 +161,6 @@ watch(() => props.visible, (visible) => {
       status: val.status || 'draft',
       created_by: val.created_by || ''
     }
-    editorMode.value = 'edit'
   } else {
     resetForm()
   }
@@ -243,87 +215,33 @@ async function handleSubmit() {
 </style>
 
 <style scoped>
-/* ─── 编辑器 ──────────────────────────────── */
-.editor-wrap {
+/* ─── ByteMD 编辑器容器 ─────────────────────── */
+.bytemd-wrap {
   width: 100%;
-  border: 1px solid var(--el-border-color);
   border-radius: 8px;
   overflow: hidden;
 }
 
-.editor-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 6px 10px;
-  background: var(--el-fill-color-light);
-  border-bottom: 1px solid var(--el-border-color-light);
-}
-
-.editor-tab {
-  padding: 4px 12px;
-  border: none;
-  background: transparent;
-  border-radius: 6px;
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.editor-tab:hover { background: var(--el-fill-color); color: var(--el-text-color-primary); }
-
-.editor-tab.active {
-  background: #fff;
-  color: var(--el-color-primary);
-  font-weight: 600;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-}
-
-.editor-hint {
-  margin-left: auto;
-  font-size: 12px;
-  color: var(--el-text-color-placeholder);
-}
-
-.editor-body {
-  display: flex;
-  min-height: 300px;
-}
-
-.editor-body.mode--edit .editor-textarea { width: 100%; }
-.editor-body.mode--preview .editor-preview { width: 100%; }
-.editor-body.mode--split .editor-textarea { width: 50%; border-right: 1px solid var(--el-border-color-light); }
-.editor-body.mode--split .editor-preview { width: 50%; }
-
-.editor-textarea {
-  flex-shrink: 0;
-  padding: 14px 16px;
-  border: none;
-  outline: none;
-  resize: vertical;
+.bytemd-wrap :deep(.bytemd) {
+  height: 400px;
+  border-radius: 8px;
+  border-color: var(--el-border-color);
   font-size: 14px;
+}
+
+.bytemd-wrap :deep(.bytemd-toolbar) {
+  background: var(--el-fill-color-light);
+  border-bottom-color: var(--el-border-color-light);
+}
+
+.bytemd-wrap :deep(.CodeMirror) {
   font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
-  line-height: 1.7;
-  color: #1a1a1a;
-  background: #fff;
-  min-height: 300px;
-}
-
-.editor-preview {
-  flex-shrink: 0;
-  padding: 14px 16px;
-  overflow-y: auto;
-  background: var(--el-fill-color-light);
-  min-height: 300px;
-}
-
-.preview-content { font-size: 14px; color: #334155; }
-
-.preview-placeholder {
-  color: var(--el-text-color-placeholder);
   font-size: 14px;
-  padding: 20px 0;
+  line-height: 1.7;
+}
+
+.bytemd-wrap :deep(.bytemd-preview) {
+  background: var(--el-fill-color-light);
 }
 
 /* ─── 展示方式卡片 ─────────────────────────── */

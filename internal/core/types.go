@@ -312,6 +312,14 @@ type ModelPricingTier struct {
 	OutputPerMtok *float64 `json:"output_per_mtok,omitempty" yaml:"output_per_mtok,omitempty"`
 }
 
+// CostInput 成本计算输入，统一归一化
+type CostInput struct {
+	PromptTokens     int
+	CachedTokens     int // cache read 命中
+	CacheWriteTokens int // cache creation
+	CompletionTokens int
+}
+
 func cloneFloatPtr(v *float64) *float64 {
 	if v == nil {
 		return nil

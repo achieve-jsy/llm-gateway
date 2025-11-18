@@ -40,12 +40,19 @@ func AuthMiddleware(authClient *infra.AuthClient) gin.HandlerFunc {
 				})
 				return
 			}
-			c.Set("identity", &gwmodel.UserIdentity{
+			identity := &gwmodel.UserIdentity{
 				UserID:          resp.Data.User.UserID,
 				KeyID:           resp.Data.KeyID,
 				DepartmentID:    resp.Data.User.DepartmentID,
+				StudioID:        resp.Data.User.StudioID,
 				AccessAllGroups: resp.Data.AccessAllGroups,
-			})
+			}
+			c.Set("identity", identity)
+			c.Set("key_id", identity.KeyID)
+			c.Set("user_id", identity.UserID)
+			c.Set("user_name", resp.Data.User.Name)
+			c.Set("dept_id", identity.DepartmentID)
+			c.Set("studio_id", identity.StudioID)
 			c.Next()
 			return
 		}
@@ -62,7 +69,14 @@ func AuthMiddleware(authClient *infra.AuthClient) gin.HandlerFunc {
 			claims, _ := parsed.Claims.(j.MapClaims)
 			uid, _ := claims["user_id"].(string)
 			did, _ := claims["dept_id"].(string)
-			c.Set("identity", &gwmodel.UserIdentity{UserID: uid, DepartmentID: did})
+			uname, _ := claims["name"].(string)
+			dname, _ := claims["dept_name"].(string)
+			identity := &gwmodel.UserIdentity{UserID: uid, DepartmentID: did}
+			c.Set("identity", identity)
+			c.Set("user_id", uid)
+			c.Set("user_name", uname)
+			c.Set("dept_id", did)
+			c.Set("dept_name", dname)
 			c.Next()
 			return
 		}

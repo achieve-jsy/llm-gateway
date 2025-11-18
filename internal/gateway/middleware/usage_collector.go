@@ -46,6 +46,12 @@ func UsageCollector(collector *gwobs.Collector, traceWriter ...*gwobs.TraceWrite
 
 		c.Next()
 
+		// c.Next() 之后 key_name 才由鉴权中间件写入 context，再次检查一遍
+		// 防止系统探针 key 在鉴权完成后才可见的情况
+		if isSystemKey(c) {
+			return
+		}
+
 		totalMs := int(time.Since(start).Milliseconds())
 
 		// 判断该 key 是否开启日志记录（耗时/Token 始终计算，仅日志写入受此标志影响）

@@ -21,8 +21,9 @@ func UsageCollector(collector *gwobs.Collector, traceWriter ...*gwobs.TraceWrite
 
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
-		// 仅采集 LLM 调用，跳过健康检查和管理接口
-		if path == "/health" || path == "/ready" {
+		// 仅采集有实际 LLM 调用的路由，跳过模型列表、健康检查等非调用接口
+		if path == "/health" || path == "/ready" ||
+			path == "/v1/models" || path == "/v1/model/info" || path == "/v1/health/models" {
 			c.Next()
 			return
 		}

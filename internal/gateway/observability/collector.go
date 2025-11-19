@@ -66,6 +66,14 @@ func (c *Collector) NewUsageEvent(ctx *gin.Context) UsageEvent {
 		GroupName:       getString(ctx, "group_name"),
 		Provider:        getString(ctx, "provider"),
 		ReasoningEffort: getString(ctx, "reasoning_effort"),
+		RoutedViaGroup: func() bool {
+			v, ok := ctx.Get("routed_via_group")
+			if !ok {
+				return false
+			}
+			b, _ := v.(bool)
+			return b
+		}(),
 		UserAgent:       ctx.Request.UserAgent(),
 		IPAddress:       ctx.ClientIP(),
 		Status:          getInt(ctx, "status"),
@@ -390,6 +398,7 @@ func eventToCallLog(e UsageEvent) model.CallLog {
 		StageUpstreamMs:     e.StageUpstreamMs,
 		Stream:              e.Stream,
 		FailoverUsed:        e.FailoverUsed,
+		RoutedViaGroup:      e.RoutedViaGroup,
 		UsageMissing:        e.UsageMissing,
 		ReasoningEffort:     e.ReasoningEffort,
 		UserAgent:           e.UserAgent,

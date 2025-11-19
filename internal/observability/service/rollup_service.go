@@ -445,6 +445,7 @@ type LogRow struct {
 	StageUpstreamMs  *int16   `json:"stage_upstream_ms"   gorm:"column:stage_upstream_ms"`
 	Stream           bool     `json:"stream"              gorm:"column:stream"`
 	FailoverUsed     bool     `json:"failover_used"       gorm:"column:failover_used"`
+	RoutedViaGroup   bool     `json:"routed_via_group"    gorm:"column:routed_via_group"`
 	UsageMissing     bool     `json:"usage_missing"       gorm:"column:usage_missing"`
 	ReasoningEffort  string   `json:"reasoning_effort"    gorm:"column:reasoning_effort"`
 	UserAgent        string   `json:"user_agent"          gorm:"column:user_agent"`

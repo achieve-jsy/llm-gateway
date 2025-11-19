@@ -36,6 +36,7 @@ type CallLog struct {
 	StageUpstreamMs     *int16    `gorm:"column:stage_upstream_ms"                                      json:"stage_upstream_ms,omitempty"`
 	Stream              bool      `gorm:"not null;default:false"                                        json:"stream"`
 	FailoverUsed        bool      `gorm:"not null;default:false"                                        json:"failover_used"`
+	RoutedViaGroup      bool      `gorm:"not null;default:false"                                        json:"routed_via_group"`
 	UsageMissing        bool      `gorm:"not null;default:false"                                        json:"usage_missing"`
 	ReasoningEffort     string    `gorm:"type:varchar(16)"                                              json:"reasoning_effort,omitempty"`
 	UserAgent           string    `gorm:"type:text"                                                     json:"user_agent,omitempty"`

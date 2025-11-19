@@ -388,7 +388,7 @@
             <template #default="{ row }">
               <div class="up-model-cell">
                 <span class="up-model-name">{{ row.model || '—' }}</span>
-                <div v-if="row.routed_model && row.routed_model !== row.model" class="up-model-routed">
+                <div v-if="row.routed_via_group && row.routed_model" class="up-model-routed">
                   <span class="up-arrow">↳</span>
                   <span class="up-model-name up-model-name--muted">{{ row.routed_model }}</span>
                 </div>
@@ -809,7 +809,7 @@ interface StatsTotal { req_count: number; success_count?: number; prompt_tokens:
 interface LogRow {
   request_id: string; ts: string; key_id: string; key_name?: string
   user_id: string; user_name?: string; dept_id: string; dept_name?: string; studio_name?: string
-  model: string; routed_model: string; group_name: string; provider: string
+  model: string; routed_model: string; routed_via_group: boolean; group_name: string; provider: string
   prompt_tokens: number; cached_tokens: number; cache_write_tokens: number
   completion_tokens: number; reasoning_tokens: number; total_tokens: number
   status: number; upstream_status: number; duration_ms: number; first_token_ms?: number | null

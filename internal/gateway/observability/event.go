@@ -19,10 +19,11 @@ type UsageEvent struct {
 	StudioName string
 
 	// 路由/模型
-	Model       string
-	RoutedModel string
-	GroupName   string
-	Provider    string
+	Model          string
+	RoutedModel    string
+	GroupName      string
+	Provider       string
+	RoutedViaGroup bool // 是否经过模型组调度
 
 	// Token 用量
 	PromptTokens     int

@@ -63,11 +63,15 @@ func TraceCapture() gin.HandlerFunc {
 			c.Set("trace_req_headers", hb)
 		}
 
-		// 读取请求体（读后恢复，让 handler 仍能读取）
-		reqBody, err := io.ReadAll(io.LimitReader(c.Request.Body, maxReqBody))
-		if err == nil && len(reqBody) > 0 {
-			c.Request.Body = io.NopCloser(bytes.NewBuffer(reqBody))
-			c.Set("trace_req_body", sanitizeChatRequestBody(reqBody))
+		// 读取请求体（读后恢复完整 body，让 handler 仍能正常读取）
+		// 注意：io.LimitReader 只读前 maxReqBody 字节，超限部分还在原始 Body 里；
+		// 必须把"已读部分 + 剩余部分"一起拼回去，否则 handler 拿到截断的 JSON 会 400。
+		rawBody := c.Request.Body
+		limited, err := io.ReadAll(io.LimitReader(rawBody, maxReqBody))
+		if err == nil && len(limited) > 0 {
+			// 拼回完整 body：已读部分 + 原始流中剩余部分
+			c.Request.Body = io.NopCloser(io.MultiReader(bytes.NewBuffer(limited), rawBody))
+			c.Set("trace_req_body", sanitizeChatRequestBody(limited))
 		}
 
 		c.Next()

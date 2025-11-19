@@ -79,6 +79,12 @@ func (t *PricingTable) Refresh(ctx context.Context, db *gorm.DB) error {
 			r.CacheReadPrice, r.CacheWritePrice,
 			r.TierThreshold, r.InputPriceAboveTier, r.OutputPriceAboveTier,
 		)
+		// 同名模型多条（如不同 provider）时，空定价不应覆盖已有有效定价
+		if existing, ok := newData[r.ModelName]; ok {
+			if p.InputPerMtok == nil && existing.InputPerMtok != nil {
+				continue
+			}
+		}
 		newData[r.ModelName] = p
 	}
 

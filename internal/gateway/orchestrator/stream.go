@@ -98,12 +98,15 @@ func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest
 	span.SetStatus(codes.Ok, "")
 
 	// 将流式标记、路由模型写回 Gin context 供 Logger / 埋点采集器使用。
-	// routed_model 取已解析的 req.Model（与非流式 resp.Model 一致），用于价表查询计价。
+	// routed_model 仅在组调度未写入时才填（直接请求 model 名的场景）；
+	// 组调度路径已由 GroupAwareDispatcher 写入 models.name，此处不覆盖。
 	var usageObserver *streamUsageObserver
 	if gc := ginContextFrom(ctx); gc != nil {
 		gc.Set("stream", true)
 		if req.Model != "" {
-			gc.Set("routed_model", req.Model)
+			if _, exists := gc.Get("routed_model"); !exists {
+				gc.Set("routed_model", req.Model)
+			}
 		}
 		if name := router.GetProviderName(req.Model); name != "" {
 			gc.Set("provider", name)

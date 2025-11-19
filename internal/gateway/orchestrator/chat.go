@@ -156,8 +156,12 @@ func (o *ChatOrchestrator) Chat(ctx context.Context, req *core.ChatRequest) (*co
 
 	// 将 provider 名、token 用量写回 Gin context 供 Logger / 埋点采集器使用
 	if gc := ginContextFrom(ctx); gc != nil {
+		// routed_model 仅在组调度未写入时才填（直接请求 model 名的场景）；
+		// 组调度路径已由 GroupAwareDispatcher 写入 models.name，此处不覆盖。
 		if resp.Model != "" {
-			gc.Set("routed_model", resp.Model)
+			if _, exists := gc.Get("routed_model"); !exists {
+				gc.Set("routed_model", resp.Model)
+			}
 		}
 		if name := router.GetProviderName(req.Model); name != "" {
 			gc.Set("provider", name)

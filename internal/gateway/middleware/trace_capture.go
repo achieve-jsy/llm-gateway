@@ -82,7 +82,7 @@ func TraceCapture() gin.HandlerFunc {
 // 每条消息的 content 截断（保留前 200 字符），避免把完整上下文存入 trace 表。
 // 非 chat 请求或不合法 JSON 原样返回。
 func sanitizeChatRequestBody(raw []byte) []byte {
-	const maxContentLen = 200
+	const maxContentLen = 2048
 
 	var body map[string]any
 	if err := json.Unmarshal(raw, &body); err != nil {

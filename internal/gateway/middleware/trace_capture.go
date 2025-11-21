@@ -31,7 +31,7 @@ var sensitiveHeaders = map[string]bool{
 //
 // 注意：本中间件注册在 AuthMiddleware 之后，log_enabled 此时已可读。
 func TraceCapture() gin.HandlerFunc {
-	const maxReqBody = 512 * 1024 // 512 KB
+	const maxTraceBody = 512 * 1024 // trace 记录上限 512KB，超出部分截断后存库
 
 	return func(c *gin.Context) {
 		// 只处理 POST /v1/chat/completions
@@ -63,15 +63,15 @@ func TraceCapture() gin.HandlerFunc {
 			c.Set("trace_req_headers", hb)
 		}
 
-		// 读取请求体（读后恢复完整 body，让 handler 仍能正常读取）
-		// 注意：io.LimitReader 只读前 maxReqBody 字节，超限部分还在原始 Body 里；
-		// 必须把"已读部分 + 剩余部分"一起拼回去，否则 handler 拿到截断的 JSON 会 400。
-		rawBody := c.Request.Body
-		limited, err := io.ReadAll(io.LimitReader(rawBody, maxReqBody))
-		if err == nil && len(limited) > 0 {
-			// 拼回完整 body：已读部分 + 原始流中剩余部分
-			c.Request.Body = io.NopCloser(io.MultiReader(bytes.NewBuffer(limited), rawBody))
-			c.Set("trace_req_body", sanitizeChatRequestBody(limited))
+		// 读取完整请求体，恢复给 handler，trace 只记录前 maxTraceBody 字节（sanitize 后）
+		// 不对请求体大小做限制，由上游模型的 context window 自然约束
+		if body, err := io.ReadAll(c.Request.Body); err == nil && len(body) > 0 {
+			c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
+			traceBody := body
+			if len(traceBody) > maxTraceBody {
+				traceBody = traceBody[:maxTraceBody]
+			}
+			c.Set("trace_req_body", sanitizeChatRequestBody(traceBody))
 		}
 
 		c.Next()

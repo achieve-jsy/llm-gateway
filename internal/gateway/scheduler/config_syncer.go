@@ -149,14 +149,15 @@ func (cs *ConfigSyncer) fetchConfig() (*ControlPlaneConfig, error) {
 			})
 			for _, m := range g.Models {
 				config.Models = append(config.Models, GroupModel{
-					ID:          modelIdx,
-					GroupID:     g.ID,
-					ModelID:     modelIdx,
-					ModelName:   m.Name,
-					ChannelType: m.ProviderType,
-					Endpoint:    m.Endpoint,
-					Priority:    m.Priority,
-					Weight:      m.Weight,
+					ID:           modelIdx,
+					GroupID:      g.ID,
+					ModelID:      modelIdx,
+					ModelName:    m.Name,
+					ChannelType:  m.ProviderType,
+					ProviderName: m.ProviderName,
+					Endpoint:     m.Endpoint,
+					Priority:     m.Priority,
+					Weight:       m.Weight,
 				})
 				modelIdx++
 			}

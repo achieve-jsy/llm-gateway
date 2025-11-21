@@ -75,9 +75,12 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string) (*sche
 	})
 
 	c.Set("group_name", modelName)
-	c.Set("routed_model", decision.ModelName) // models.name，用于日志/计价展示
+	c.Set("routed_model", decision.ModelName)
 	c.Set("routed_model_id", decision.ModelID)
-	c.Set("routed_via_group", true) // 标记经过了组调度，前端据此显示 ↳
+	c.Set("routed_via_group", true)
+	if decision.ProviderName != "" {
+		c.Set("provider", decision.ProviderName)
+	}
 
 	return decision, nil
 }
@@ -109,8 +112,11 @@ func (d *GroupAwareDispatcher) HandleFailover(c *gin.Context, groupName, failedM
 		})
 	}
 
-	c.Set("routed_model", decision.ModelName) // failover 后更新路由模型名
+	c.Set("routed_model", decision.ModelName)
 	c.Set("routed_model_id", decision.ModelID)
+	if decision.ProviderName != "" {
+		c.Set("provider", decision.ProviderName)
+	}
 
 	slog.Info("group failover succeeded",
 		"group_name", groupName,

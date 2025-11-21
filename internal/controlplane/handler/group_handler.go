@@ -374,6 +374,7 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 		Name         string    `json:"name"`
 		ProviderID   uuid.UUID `json:"provider_id,omitempty"`
 		ProviderType string    `json:"provider_type,omitempty"`
+		ProviderName string    `json:"provider_name,omitempty"`
 		Endpoint     string    `json:"endpoint,omitempty"`
 		Priority     *int      `json:"priority"`
 		Weight       *int      `json:"weight"`
@@ -411,17 +412,18 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 					if m.Enabled == nil || !*m.Enabled {
 						continue
 					}
-					mi.Name = upstreamModelName(m)
-					mi.ProviderID = m.ProviderID
-					providerEnabled := false
-					if h.providerRepo != nil {
-						p, err := h.providerRepo.GetByID(m.ProviderID)
-						if err == nil && p != nil && p.Enabled {
-							mi.ProviderType = p.DefinitionID
-							mi.Endpoint = p.Endpoint
-							providerEnabled = true
-						}
+				mi.Name = upstreamModelName(m)
+				mi.ProviderID = m.ProviderID
+				providerEnabled := false
+				if h.providerRepo != nil {
+					p, err := h.providerRepo.GetByID(m.ProviderID)
+					if err == nil && p != nil && p.Enabled {
+						mi.ProviderType = p.DefinitionID
+						mi.ProviderName = p.Name
+						mi.Endpoint = p.Endpoint
+						providerEnabled = true
 					}
+				}
 					if !providerEnabled {
 						continue
 					}

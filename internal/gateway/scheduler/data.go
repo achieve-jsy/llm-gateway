@@ -28,6 +28,7 @@ type CPModelData struct {
 	Name         string `json:"name"`
 	ProviderID   string `json:"provider_id"`
 	ProviderType string `json:"provider_type"`
+	ProviderName string `json:"provider_name"`
 	Endpoint     string `json:"endpoint"`
 	Priority     *int   `json:"priority"`
 	Weight       *int   `json:"weight"`
@@ -44,14 +45,15 @@ type GroupConfig struct {
 
 // GroupModel 组内模型关联
 type GroupModel struct {
-	ID          uint   `json:"id"`
-	GroupID     uint   `json:"group_id"`
-	ModelID     uint   `json:"model_id"`
-	ModelName   string `json:"model_name"`
-	ChannelType string `json:"channel_type"`
-	Endpoint    string `json:"endpoint"`
-	Priority    *int   `json:"priority"`
-	Weight      *int   `json:"weight"`
+	ID           uint   `json:"id"`
+	GroupID      uint   `json:"group_id"`
+	ModelID      uint   `json:"model_id"`
+	ModelName    string `json:"model_name"`
+	ChannelType  string `json:"channel_type"`
+	ProviderName string `json:"provider_name"`
+	Endpoint     string `json:"endpoint"`
+	Priority     *int   `json:"priority"`
+	Weight       *int   `json:"weight"`
 }
 
 // GroupRoutingConfig 内存中的组路由配置
@@ -65,14 +67,15 @@ type GroupRoutingConfig struct {
 
 // ModelRoutingEntry 组内模型路由条目
 type ModelRoutingEntry struct {
-	ModelID       uint   `json:"model_id"`
-	ModelName     string `json:"model_name"`
-	ChannelID     uint   `json:"channel_id"`
-	ChannelType   string `json:"channel_type"`
-	Endpoint      string `json:"endpoint"`
-	Credential    string `json:"credential"`
-	Priority      int    `json:"priority"`
-	Weight        int    `json:"weight"`
+	ModelID      uint   `json:"model_id"`
+	ModelName    string `json:"model_name"`
+	ChannelID    uint   `json:"channel_id"`
+	ChannelType  string `json:"channel_type"`
+	ProviderName string `json:"provider_name"`
+	Endpoint     string `json:"endpoint"`
+	Credential   string `json:"credential"`
+	Priority     int    `json:"priority"`
+	Weight       int    `json:"weight"`
 }
 
 // ChannelEndpoint 渠道连接端点信息

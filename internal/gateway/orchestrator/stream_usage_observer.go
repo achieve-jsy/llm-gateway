@@ -55,7 +55,6 @@ func (o *streamUsageObserver) OnJSONEvent(payload map[string]any) {
 		if first, ok := choices[0].(map[string]any); ok {
 			if delta, ok := first["delta"].(map[string]any); ok {
 				if c, ok := delta["content"].(string); ok && c != "" {
-					// 首 token 延迟：content 首次出现
 					if o.firstTokenAt.IsZero() {
 						o.firstTokenAt = time.Now()
 					}
@@ -67,6 +66,37 @@ func (o *streamUsageObserver) OnJSONEvent(payload map[string]any) {
 					}
 					o.reasoningBuf.WriteString(rc)
 				}
+				// 兼容 Bedrock/Anthropic 等 provider：delta 中 "text" 字段
+				if t, ok := delta["text"].(string); ok && t != "" {
+					if o.firstTokenAt.IsZero() {
+						o.firstTokenAt = time.Now()
+					}
+					o.contentBuf.WriteString(t)
+				}
+			}
+			// 兼容 Bedrock content_block_delta 格式：
+			// {"choices":[{"content_block":{"type":"text","text":"..."}}]}
+			if cb, ok := first["content_block"].(map[string]any); ok {
+				if t, ok := cb["text"].(string); ok && t != "" {
+					if o.firstTokenAt.IsZero() {
+						o.firstTokenAt = time.Now()
+					}
+					o.contentBuf.WriteString(t)
+				}
+			}
+		}
+	}
+
+	// 兜底：如果 chunk 顶层有 delta（部分 provider 不套在 choices 里）
+	if o.firstTokenAt.IsZero() {
+		if delta, ok := payload["delta"].(map[string]any); ok {
+			if t, ok := delta["text"].(string); ok && t != "" {
+				o.firstTokenAt = time.Now()
+				o.contentBuf.WriteString(t)
+			}
+			if c, ok := delta["content"].(string); ok && c != "" {
+				o.firstTokenAt = time.Now()
+				o.contentBuf.WriteString(c)
 			}
 		}
 	}
@@ -94,6 +124,14 @@ func (o *streamUsageObserver) OnStreamClose() {
 	if !o.firstTokenAt.IsZero() {
 		if ms := int(o.firstTokenAt.Sub(o.start).Milliseconds()); ms > 0 {
 			o.gc.Set("first_token_ms", ms)
+		}
+	} else if o.contentBuf.Len() > 0 || o.reasoningBuf.Len() > 0 {
+		// 兜底：observer 解析到了文本内容但没有记录首 token 时间
+		// （格式兼容问题导致 firstTokenAt 未被设置），用 t_ttfb_ms 作为 fallback
+		if v, ok := o.gc.Get("t_ttfb_ms"); ok {
+			if ms, ok := v.(int); ok && ms > 0 {
+				o.gc.Set("first_token_ms", ms)
+			}
 		}
 	}
 

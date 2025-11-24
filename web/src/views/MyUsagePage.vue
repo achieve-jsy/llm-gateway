@@ -1253,7 +1253,7 @@ loadAll()
 .mu-arrow { color: var(--mu-faint); font-size: 10px; }
 .mu-tag { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
 /* ── 模型组列换行 ── */
-.mu-col--wrap .el-table__cell { white-space: normal; word-break: break-all; overflow: visible; }
+.mu-col--wrap .el-table__cell { white-space: normal !important; word-break: break-all !important; overflow: visible !important; text-overflow: clip !important; }
 .mu-tag--group { max-width: none; white-space: normal; word-break: break-all; }
 .mu-group-name { font-size: 11px; color: var(--mu-muted); word-break: break-all; line-height: 1.5; }
 .mu-dash { color: var(--mu-faint); }

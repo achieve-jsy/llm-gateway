@@ -1665,7 +1665,7 @@ loadAll()
 .up-arrow { color: var(--up-faint); font-size: 10px; }
 
 /* ── 模型组列换行 ── */
-.up-col--wrap .el-table__cell { white-space: normal; word-break: break-all; overflow: visible; }
+.up-col--wrap .el-table__cell { white-space: normal !important; word-break: break-all !important; overflow: visible !important; text-overflow: clip !important; }
 .up-tag { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
 .up-tag--group { max-width: none; white-space: normal; word-break: break-all; }
 .up-group-name { font-size: 11px; color: var(--up-muted); word-break: break-all; line-height: 1.5; }

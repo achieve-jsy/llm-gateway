@@ -63,12 +63,18 @@ $ARGUMENTS
 
    额外读取（可选）：`research.md`（技术决策参考，读取课题索引表获取结论；如需深入看 `research/` 子文件）
 4. 了解项目技术栈（从已有代码和设计文档中推断）
-5. **检测可用验证命令**（后续步骤复用此清单）：
-   - 检查 `package.json` 中的 scripts（`lint`、`typecheck`、`build`、`test` 等）
-   - 检查 `tsconfig.json` 是否存在（TypeScript 项目 → `npx tsc --noEmit`）
-   - 检查其他技术栈标志：`Cargo.toml`（Rust → `cargo check`）、`go.mod`（Go → `go build ./...`）、`pyproject.toml`（Python → 对应 lint 工具）等
-   - 将结果记为「验证命令清单」，格式如：`类型检查: npx tsc --noEmit`、`Lint: npm run lint`、`构建: npm run build`
-   - 如项目无任何可用验证命令，至少使用 IDE 的 ReadLints 检查变更文件
+
+
+
+### 步骤 1.5：检测可用验证命令
+
+检测项目可用的验证命令清单（后续步骤 3 / 5 / 8 复用此清单）：
+
+- 检查 `package.json` 中的 scripts（`lint`、`typecheck`、`build`、`test` 等）
+- 检查 `tsconfig.json` 是否存在（TypeScript 项目 → `npx tsc --noEmit`）
+- 检查其他技术栈标志：`Cargo.toml`（Rust → `cargo check`）、`go.mod`（Go → `go build ./...`）、`pyproject.toml`（Python → 对应 lint 工具）等
+- 将结果记为「验证命令清单」，格式如：`类型检查: npx tsc --noEmit`、`Lint: npm run lint`、`构建: npm run build`
+- 如项目无任何可用验证命令，至少使用 IDE 的 ReadLints 检查变更文件
 
 ## 步骤 2：初始化与确定范围
 
@@ -88,7 +94,7 @@ $ARGUMENTS
    - 接口是否符合 contracts 定义
    - 数据操作是否符合 data-model 定义
    - 代码风格是否符合项目约定和宪章要求
-4. **代码验证**（按步骤 1 检测的验证命令清单执行）：
+4. **代码验证**（按步骤 1.5 检测的验证命令清单执行）：
    - 对本任务新增/修改的文件执行 ReadLints 检查，确认无 lint 错误
    - 如有类型检查命令（如 `npx tsc --noEmit`），执行并确认无类型错误
    - 如有 lint 脚本（如 `npm run lint`），执行并确认通过

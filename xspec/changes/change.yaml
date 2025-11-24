@@ -1,22 +1,63 @@
+# 变更元数据（机器可读）
+# 说明：此文件由 /xf/clarify 生成，后续步骤持续更新 phase 字段。
+
 id: "CHG-20260603-001"
-name: "调用埋点、用量汇总与成本追踪"
+name: "用量采集与成本估算"
+description: "上线调用埋点与用量聚合，配置模型定价后换算成本估算，在个人用量页呈现——让每个员工一眼看清自己用了多少、花了多少"
+
 status: "in-progress"
 phase: "implement"
+
+project_profile: "llm-gateway"
+
+priority: "P0"
 created_at: "2026-06-03"
 updated_at: "2026-06-03"
+author: "TBD"
+
+source_doc: "v0.4.0 产品规格 C1 + C2"
+
 scope:
-  include: "gateway-api 每次调用后异步写入埋点事件（模型/Token数/耗时/状态/Key/部门维度）；埋点事件消费后按天/小时/月汇总用量（usage_daily，预留 dept_id/studio_id 维度）；control-plane 模型定价配置扩展（输入/输出单价、阶梯定价、历史单价锁定）；用量按单价换算估算成本；按 Key/时间/模型/部门筛选的成本查询接口，支持 CSV/Excel 导出"
-  exclude: "ops-console 前端成本看板（后续单独推进）；预算预警；厂商账单精确对账；流式调用中实时累计成本（仅在调用结束时计算）；定价变更重算历史成本"
+  include:
+    - "调用埋点采集：每次请求异步记录 UsageEvent（Token 含 reasoning/cached 分桶、TTFT/延迟细分、provider 路由信息、stream 标记、session_id）"
+    - "流式 usage 采集：注入 include_usage 解析末尾 chunk，与非流式同口径，回填 reasoning_tokens"
+    - "身份解析：Key 验证时解析完整身份链（key→user→dept），dept_id 从 SSO 直接获取"
+    - "成本估算引擎：多桶计价 EstimateCost（prompt/completion/reasoning/cached 分桶单价，对齐 LiteLLM），采集时锁价"
+    - "按天聚合 Rollup：每小时整日重算幂等 upsert → usage_daily，reasoning_tokens/cached_tokens 纳入分桶求和"
+    - "只读用量查询 API：GET /v1/usage，三级数据视角（管理员/部门/个人），返回 TTFT/延迟指标"
+    - "模型定价多桶：catalog 同步导入 reasoning/cached 分桶价格；ResolveModelPricing 返回多桶报价；手动模式支持多桶填价"
+    - "调用内容记录层：全量记录请求 messages + 响应正文（call_payloads），PG 直存"
+    - "个人用量页：总量/按模型/调用次数/成本估算 + TTFT/延迟趋势（日/周/月）+ 高消耗定位"
+    - "全局用量看板：管理员视角全公司用量概览（雏形），含延迟指标"
+    - "Catalog UI 简化：删价格差异 tab + 模型增 price_mode 开关 + 多桶定价输入框"
+  exclude:
+    - "限速与配额管控 / 硬限额拦截（v0.5.0）"
+    - "额度预警与拦截（v0.5.0）"
+    - "调用明细的前端页面（v0.8.0）"
+    - "成本分摊与财务对账 / 真实计费（v1.0+）"
+    - "ClickHouse / Kafka 等 OLAP / 流式基础设施"
+    - "剩余额度展示"
+    - "PII 脱敏（预留开关位，当前不启用）"
+
 affected_modules:
-  - name: "observability-hub"
-    change_type: "added"
-    module_type: "web-backend"
-    summary: "埋点事件消费与存储、按天/小时/月用量汇总、模型定价数据存储、成本估算与查询接口（按 Key/时间/模型/部门筛选）、CSV/Excel 导出"
-  - name: "gateway-api"
+  - name: "gateway-core"
     change_type: "modified"
     module_type: "web-backend"
-    summary: "每次模型调用完成后异步写入埋点事件（模型/Token数/耗时/状态/Key/部门维度），通过 Redis 队列发送到 observability-hub"
+    summary: "新增埋点采集（reasoning/cached 分桶、TTFT/延迟、provider 路由、stream/session 标记、collector + batch writer）、流式 usage 回填"
+
   - name: "control-plane"
     change_type: "modified"
     module_type: "web-backend"
-    summary: "模型定价配置扩展：输入/输出单价、阶梯定价规则、历史单价快照与锁定"
+    summary: "多桶定价同步（reasoning/cached 分桶价格）、ResolveModelPricing 统一取价入口、price_mode 改造"
+
+  - name: "ops-console"
+    change_type: "modified"
+    module_type: "web-frontend"
+    summary: "新增个人用量页（含 TTFT/延迟趋势）+ 全局用量看板；Catalog UI 简化 + 多桶定价输入"
+
+  - name: "observability-hub"
+    change_type: "added"
+    module_type: "web-backend"
+    summary: "call_logs 扩展 9 字段、rollup 分桶聚合、多桶成本引擎、只读用量查询 API（/v1/usage）、调用内容记录（call_payloads）"
+
+depends_on: []

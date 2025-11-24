@@ -1,139 +1,253 @@
-# control-plane 技术设计变更 — CHG-20260603-001
+# control-plane 详细设计变更 — CHG-20260603-001
 
-> 基线：xspec/modules/control-plane/design.md (v1.4)
+> 基线：xspec/modules/control-plane/spec.md (v1.0)
 
 ## 变更摘要
 
-定价体系从"手工 apply-diff 闸门"改为"读取时解析"：默认直读 model_catalog（LiteLLM 同步价），个别模型可选 price_mode=manual 手填实付价。新增 ResolveModelPricing 统一取价入口 + 内存价表 5min 刷新。删除 ComputePriceDiff / ApplyPriceDiff 及对应路由。
-
-## 设计决策变更
-
-| 决策点 | 选择 | 理由 |
-| :--- | :--- | :--- |
-| 价格来源 | catalog 默认 + manual override | 简化管理员心智模型：同步→自动对上→个别手填 |
-| 取价时机 | 读取时解析 | 价格跟随 LiteLLM 自动更新，不依赖手工 apply |
-| 删除 diff/apply | 是 | 线上路由本就不读价，删除零风险 |
-| 缓存分桶 | 始终分桶（即使自定义价） | 修正 LiteLLM 线上版"自定义价时缓存折扣失效"缺陷 |
+模型定价体系改造：Catalog 同步新增 reasoning/cached 分桶价格字段导入；ResolveModelPricing 从两桶扩展为四桶报价（含降级逻辑）；新增 GET /internal/v1/pricing 价表下发接口；删除 diff/apply-diff 端点及逻辑。
 
 ## 架构变更
 
-### ResolveModelPricing 统一取价
-
 ```mermaid
 flowchart TD
-    REQ["成本估算调用"] --> RESOLVE["ResolveModelPricing(model)"]
-    RESOLVE --> CHECK{"price_mode?"}
-    CHECK -->|catalog| CAT["从 model_catalog 解析<br/>含缓存/阶梯价"]
-    CHECK -->|manual| MAN["读 models.input_price<br/>/output_price"]
-    CAT --> RETURN["返回 ModelPricing"]
-    MAN --> RETURN
-    RETURN --> COST["EstimateCost"]
+    subgraph "control-plane 变更增量"
+        SYNC["CatalogSyncService\n(新增字段解析)"]
+        RMP["ResolveModelPricing\n(四桶取价 + 降级)"]
+        API_P["GET /internal/v1/pricing\n(全量价表下发) NEW"]
+        API_DIFF["DELETE: diff/apply-diff 端点"]
+    end
+
+    subgraph "已有组件"
+        SYNC_EX["CatalogSyncService\n(已有同步逻辑)"]
+        MODEL_SVC["ModelService\n(已有)"]
+        MODEL_REPO["ModelRepository\n(已有)"]
+    end
+
+    LL["LiteLLM JSON"] -->|price_mode=catalog 模型| SYNC
+    SYNC -->|写入 output_cost_per_reasoning_token<br>cache_read_input_token_cost| MC[("model_catalog\n+reasoning_price +cached_price")]
+
+    MODEL_SVC -->|price_mode=manual 模型<br>+reasoning_price +cached_price| MD[("models\n+price_mode +reasoning_price +cached_price")]
+
+    MC --> RMP
+    MD --> RMP
+
+    RMP -->|ModelPricing{4桶 + fallback}| API_P
+    API_P -->|每 5min 拉取| GW["gateway-core\nMemoryPricingCache"]
 ```
 
-### 内存价表刷新
+### ResolveModelPricing 取价流程
 
 ```mermaid
 sequenceDiagram
-    participant CRON as 5min cron
-    participant DB as PostgreSQL
-    participant MEM as 内存价表
+    participant Caller as 调用方
+    participant RMP as ResolveModelPricing
+    participant PG as PostgreSQL
 
-    CRON->>DB: SELECT m.id, m.price_mode,<br/>m.input_price, m.output_price,<br/>c.input_price_per_million,<br/>c.output_price_per_million,<br/>c.cache_read_price, c.cache_write_price,<br/>c.tier_threshold, c.input_price_above_tier,<br/>c.output_price_above_tier<br/>FROM models m<br/>LEFT JOIN model_catalog c ON m.catalog_id = c.id
-    DB-->>CRON: 结果
-    CRON->>MEM: 全量替换 map[modelKey]ModelPricing
+    Caller->>RMP: ResolveModelPricing(modelID)
+    RMP->>PG: SELECT price_mode, catalog_id FROM models WHERE id=?
+
+    alt price_mode = catalog
+        RMP->>PG: SELECT input_price, output_price,<br>reasoning_price, cached_price<br>FROM model_catalog WHERE id=?
+        PG-->>RMP: 四桶价格
+    else price_mode = manual
+        RMP->>PG: SELECT input_price, output_price,<br>reasoning_price, cached_price<br>FROM models WHERE id=?
+        PG-->>RMP: 手动填写的四桶价格
+    end
+
+    RMP->>RMP: 组装 ModelPricing 结构
+
+    alt reasoning_price IS NULL
+        RMP->>RMP: reasoning_price = completion_price<br>fallback_reasoning = true
+    end
+
+    alt cached_price IS NULL
+        RMP->>RMP: cached_price = 0<br>(不降级，缓存命中无独立价不计费)
+    end
+
+    alt prompt_price IS NULL (缺价)
+        RMP->>RMP: pricing_missing = true
+    end
+
+    RMP-->>Caller: ModelPricing{prompt, completion, reasoning, cached, pricing_missing}
 ```
 
-## 组件详细设计
+## CatalogSyncService 变更
 
-### ResolveModelPricing
+### 新增字段解析
+
+在 `internal/controlplane/service/catalog_sync_service.go` 中扩展 LiteLLM JSON 解析：
+
+| LiteLLM 字段 | → | model_catalog 列 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `output_cost_per_token` | → | `output_price` | 已有，不变 |
+| `output_cost_per_reasoning_token` | → | `reasoning_price` | **新增**，可为 null |
+| `cache_read_input_token_cost` | → | `cached_price` | **新增**，可为 null |
+
+解析逻辑（伪代码）：
 
 ```go
-// internal/controlplane/pricing/resolver.go
-
-type PricingTable struct {
-    mu   sync.RWMutex
-    data map[string]core.ModelPricing // key: modelKey
+// 在 LiteLLM model data 解析中新增
+if v, ok := modelData["output_cost_per_reasoning_token"]; ok && v != nil {
+    mc.ReasoningPrice = toNumeric(v)
 }
-
-func (t *PricingTable) Resolve(modelKey string) (core.ModelPricing, bool) {
-    t.mu.RLock()
-    defer t.mu.RUnlock()
-    p, ok := t.data[modelKey]
-    return p, ok
-}
-
-func (t *PricingTable) Refresh(ctx context.Context, db *gorm.DB) error {
-    // SELECT models JOIN model_catalog
-    // 构建 map[modelKey]ModelPricing
-    // 全量替换 atomic swap
-}
-
-func resolveModelPricing(m *Model, cat *ModelCatalog) (core.ModelPricing, bool) {
-    if m.PriceMode == "manual" {
-        if m.InputPrice <= 0 && m.OutputPrice <= 0 {
-            return core.ModelPricing{}, true // manual 但未填 → 缺价
-        }
-        return core.ModelPricing{
-            InputPerMtok:  &m.InputPrice,
-            OutputPerMtok: &m.OutputPrice,
-        }, false
-    }
-    // catalog 模式：直读 model_catalog
-    if cat == nil {
-        return core.ModelPricing{}, true
-    }
-    p := core.ModelPricing{
-        InputPerMtok:       &cat.InputPricePerMillion,
-        OutputPerMtok:      &cat.OutputPricePerMillion,
-        CachedInputPerMtok: cat.CacheReadPrice,
-        CacheWritePerMtok:  cat.CacheWritePrice,
-    }
-    if cat.TierThreshold != nil {
-        p.Tiers = []core.ModelPricingTier{{
-            UpToTokens:    cat.TierThreshold,
-            InputPerMtok:  cat.InputPriceAboveTier,
-            OutputPerMtok: cat.OutputPriceAboveTier,
-        }}
-    }
-    return p, false
+if v, ok := modelData["cache_read_input_token_cost"]; ok && v != nil {
+    mc.CachedPrice = toNumeric(v)
 }
 ```
 
-### 数据模型变更
+### 移除 diff 逻辑
 
-models 表新增 `price_mode` 字段：
+同步完成后不再触发 `ComputePriceDiff`。删除以下函数调用：
+- `catalogSyncService.ComputePriceDiff()`
+- `catalogSyncService.ApplyPriceDiff()`
 
-```sql
-ALTER TABLE models
-  ADD COLUMN price_mode VARCHAR(10) NOT NULL DEFAULT 'catalog';
+## ResolveModelPricing 变更
+
+### 位置
+
+`internal/controlplane/service/model_service.go`（或独立 `internal/controlplane/service/pricing_service.go`）
+
+### 函数签名
+
+```go
+// ResolveModelPricing 根据模型的 price_mode 解析返回四桶报价。
+// reasoning_price 缺失时使用 completion_price 降级（标记 fallback）。
+// cached_price 缺失时计 0（缓存命中无独立价不额外计费）。
+// prompt_price 或 completion_price 缺失时返回 pricing_missing=true。
+func (s *ModelService) ResolveModelPricing(ctx context.Context, modelID uuid.UUID) (*ModelPricing, error)
 ```
 
-- `catalog`：读取时按 catalog_id 解析 LiteLLM 价（忽略 input/output_price）
-- `manual`：使用本表 input_price/output_price 作为实付价
+### ModelPricing 结构体
 
-input_price / output_price 列保留，语义改为"仅 manual 模式生效的实付价"。
+```go
+type ModelPricing struct {
+    PromptPrice      float64 `json:"prompt_price"`       // USD/1M tokens
+    CompletionPrice  float64 `json:"completion_price"`    // USD/1M tokens
+    ReasoningPrice   *float64 `json:"reasoning_price"`    // USD/1M tokens, null=降级
+    CachedPrice      *float64 `json:"cached_price"`       // USD/1M tokens, null=0
+    PricingMissing   bool    `json:"pricing_missing"`     // 是否缺价
+    FallbackReasoning bool   `json:"fallback_reasoning"`  // reasoning 是否降级到 completion
+}
+```
 
-### 删除组件
+### 降级规则
 
-| 组件 | 说明 |
-| :--- | :--- |
-| ComputePriceDiff | 删除价格差异计算 |
-| ApplyPriceDiff | 删除手工 apply 价格差异 |
-| GET /model-catalog/diff | 删除路由 |
-| POST /model-catalog/apply-diff | 删除路由 |
+| 场景 | 行为 | 标记 |
+| :--- | :--- | :--- |
+| `reasoning_price` 为 NULL | 使用 `completion_price` | `fallback_reasoning = true` |
+| `cached_price` 为 NULL | 使用 0 | — |
+| `prompt_price` 为 NULL | 返回 `pricing_missing = true` | `pricing_missing = true` |
+| `completion_price` 为 NULL | 返回 `pricing_missing = true` | `pricing_missing = true` |
 
-### 保留组件
+## GET /internal/v1/pricing 设计
 
-| 组件 | 说明 |
-| :--- | :--- |
-| auto-bind | 价格解析仍需 catalog_id 知道模型对应哪条 LiteLLM 条目 |
-| sync / sync-status | 目录本身仍需同步和检索 |
+### 位置
 
-## 错误处理
+`internal/controlplane/handler/pricing_handler.go`
 
-| 场景 | 处理 |
-| :--- | :--- |
-| 模型未绑定 catalog | 缺价，price_missing 告警 |
-| manual 模式未填价 | 缺价，price_missing 告警 |
-| 内存价表缺失 | 返回 cost=0 + price_missing |
-| 阶梯价跨档 | applyTier 按 Token 数匹配区间 |
+### 路由注册
+
+在 `internal/controlplane/router/router.go` 中注册：
+
+```go
+internal := r.Group("/internal/v1")
+internal.Use(middleware.InternalAuth())
+{
+    internal.GET("/pricing", pricingHandler.GetAllPricing)
+}
+```
+
+### Handler 逻辑
+
+```mermaid
+sequenceDiagram
+    participant GW as gateway-core
+    participant H as PricingHandler
+    participant SVC as ModelService
+    participant PG as PostgreSQL
+
+    GW->>H: GET /internal/v1/pricing
+    H->>H: 验证 X-Internal-Token
+
+    H->>SVC: GetAllPricing(ctx)
+    SVC->>PG: SELECT m.id, m.name, m.price_mode,<br>m.catalog_id, m.input_price, m.output_price,<br>m.reasoning_price, m.cached_price<br>FROM models m
+
+    loop 每个模型
+        SVC->>SVC: ResolveModelPricing(modelID)
+    end
+
+    SVC-->>H: map[modelName]ModelPricing
+    H-->>GW: {"models": {"deepseek-chat": {...}, ...}}
+```
+
+## ModelService 变更
+
+### 创建模型
+
+在 `Create` 方法中新增 `price_mode` 字段处理：
+
+- `price_mode` 默认值：`"catalog"`
+- 当 `price_mode = "manual"` 时，校验 `input_price > 0 && output_price > 0`
+- `reasoning_price` 和 `cached_price` 可选（null 允许）
+- `price_mode = "catalog"` 时忽略手动价格字段
+
+### 更新模型
+
+在 `Update` 方法中新增校验：
+
+- 从 `catalog` 切换到 `manual`：必须提供 `input_price > 0 && output_price > 0`，否则返回 400
+- 从 `manual` 切换到 `catalog`：清除手动价格字段（设为 null），切换后价格跟随 catalog
+- `manual` 模式下修改价格：同创建校验
+
+### 校验规则表
+
+| 场景 | 校验 | 失败响应 |
+| :--- | :--- | :--- |
+| 创建模型，price_mode=manual，input_price=0 | `input_price` 必填 > 0 | 400 "手动模式下 Prompt 单价必须大于 0" |
+| 创建模型，price_mode=manual，output_price=0 | `output_price` 必填 > 0 | 400 "手动模式下 Completion 单价必须大于 0" |
+| 切换 catalog→manual，未填 input_price | 同上 | 400 |
+| manual 模式，reasoning_price 留空 | 允许（降级用 completion） | — |
+| manual 模式，cached_price 留空 | 允许（计 0） | — |
+
+## 删除 diff/apply-diff
+
+### 删除的端点
+
+| 方法 | 路径 | 原用途 |
+| :--- | :--- | :--- |
+| GET | /api/v1/model-catalog/diff | 计算价格差异 |
+| POST | /api/v1/model-catalog/apply-diff | 应用价格差异 |
+
+### 删除的代码
+
+- `internal/controlplane/handler/catalog_handler.go`：`ComputePriceDiff`、`ApplyPriceDiff` 方法
+- `internal/controlplane/service/catalog_service.go`：`ComputePriceDiff()`、`ApplyPriceDiff()` 方法
+- 对应路由注册
+
+### 保留的代码
+
+- `auto-bind` / `batch-bind-catalog`：模型与 catalog 条目关联关系仍然需要
+- `sync` / `sync-status` / `search` / `by-source`：目录同步与检索功能不变
+
+## 设计决策记录
+
+### 决策 1：reasoning_price 降级策略
+
+- **问题**：模型未配置 reasoning 独立价格时如何处理
+- **候选方案**：A — 降级使用 completion 价格 / B — 计 0（不估算）
+- **决策**：选择方案 A
+- **理由**：对齐 LiteLLM 定价模型（reasoning token 实际上是 output token 的子集，大多数模型 reasoning 价格 = completion 价格）
+
+### 决策 2：cached_price 降级策略
+
+- **问题**：模型未配置缓存命中价格时如何处理
+- **候选方案**：A — 降级使用 input 价格 / B — 计 0
+- **决策**：选择方案 B
+- **理由**：缓存命中 token 不计费是行业惯例（LiteLLM、OpenAI）；只有明确配置了 `cache_read_input_token_cost` 的模型才应计算缓存成本
+
+### 决策 3：价表下发频率 5 分钟
+
+- **问题**：价表下发间隔
+- **候选方案**：A — 1 分钟 / B — 5 分钟 / C — 10 分钟
+- **决策**：选择方案 B
+- **理由**：价格变更不频繁（通常数天到数周一次），5 分钟足以满足实时性；1 分钟对 control-plane 压力无谓增大；10 分钟可能导致新模型上线后较长空窗期

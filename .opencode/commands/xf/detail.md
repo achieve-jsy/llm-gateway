@@ -58,6 +58,8 @@ $ARGUMENTS
 6. 如存在 `research.md`，读取课题索引表获取技术研究结论摘要；如需深入了解某课题，读取对应的 `research/` 子文件
 7. 对变更模块：按 manifest 清单读取 `xspec/modules/<name>/` 下 phase=detail 的已有文档
 
+
+
 ## 步骤 2：确保骨架文件存在
 
 **仅对 `change_type: added` 的模块**执行脚本补充缺失的模板文件（脚本按 CATALOG.yaml 决定复制哪些文件，自定义类型自动回退 `_default`）：

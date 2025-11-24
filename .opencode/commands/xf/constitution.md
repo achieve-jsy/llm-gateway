@@ -20,11 +20,18 @@ $ARGUMENTS
 **注意**：本命令是**第一个**写入 constitution.md 的命令，因此 profile 状态要**先判断文件是否存在**再决定怎么打印，避免在"场景一"里把默认值 `general` 当成既成事实先宣布一遍误导用户。
 
 1. 检测 `xspec/constitution.md` 是否存在：
-   - **不存在（场景一：首次创建）** → **不要**执行 `xf-profile.mjs`，**不要**打印 `project_profile = general`；直接打印：
-     ```
-     📌 project_profile = <未设置>（首次创建宪章，稍后由步骤 1.5 让用户选择）
-     ```
-     然后跳过下文第 2~4 条，直接进入"场景一/步骤 1"。
+   - **不存在（场景一：首次创建）** → 读取 `.xflow/init.json` 的 `profiles.active`（若文件存在）：
+     - **已设定**（含 `general` 或任意 business profile）→ 打印：
+       ```
+       📌 project_profile = <active>（来自 xflow init，步骤 1.5 将跳过）
+       ```
+       若 `.xflow/profiles/<active>/constitution.md` 存在，**立即读取该方言文件**并按其覆写动词预加载（与场景二的 step 0 第 2~4 条相同逻辑），然后进入"场景一/步骤 1"。
+     - **未设定**（无 init.json 或 `profiles.active` 缺失，legacy 项目）→ 打印：
+       ```
+       📌 project_profile = <未设置>（首次创建宪章，稍后由步骤 1.5 让用户选择）
+       ```
+       然后进入"场景一/步骤 1"。
+     **不要**在首次创建且 init 未设定 profile 时执行 `xf-profile.mjs` 或提前宣布 `general`。
    - **已存在（场景二：修订）** → 执行 `node .xflow/scripts/xf-profile.mjs --value-only` 读取实际值，显眼打印：
      ```
      📌 project_profile = <profile>
@@ -69,9 +76,19 @@ $ARGUMENTS
 
 将推断结果作为后续问答的基础，减少用户输入量。
 
-### 步骤 1.5：项目 profile 选择（强制询问，不可跳过）
+### 步骤 1.5：项目 profile 选择
 
-constitution.md 的"项目配置 / `project_profile`"字段是**整个 xflow 后续命令链的行为开关**，必须由用户明确决策。即便步骤 1 推断出了候选，仍要弹选择题让用户确认（信号可能误判）。
+`project_profile` 是**整个 xflow 后续命令链的行为开关**。`xflow init --profile` 已在 `.xflow/init.json` 写入 `profiles.active` 时，**跳过本步交互**，直接将 `profiles.active` 记为 `selected_profile` 供步骤 3 写入宪章。
+
+**跳过条件（满足任一即跳过）**：
+- `.xflow/init.json` 存在且 `profiles.active` 为非空字符串（含 `general`）
+
+**跳过时的行为**：
+- `selected_profile = init.json` 中的 `profiles.active`
+- 打印一行确认：`✓ profile 已由 xflow init 确定为 <selected_profile>，跳过选择`
+- 若步骤 0 尚未加载方言（理论上 init 设定时 step 0 已预加载），步骤 1.6 仍负责补加载
+
+**仅 legacy 项目**（无 init.json 或缺少 `profiles.active`）才执行下方交互式选择。即便步骤 1 推断出了候选，仍要弹选择题让用户确认（信号可能误判）。
 
 向用户展示（遵循 CLAUDE.md 全局交互规则，**优先使用平台原生选择工具**如 Cursor 的 AskQuestion）：
 
@@ -95,16 +112,17 @@ constitution.md 的"项目配置 / `project_profile`"字段是**整个 xflow 后
 
 ### 步骤 1.6：Profile 方言延迟加载（首次创建场景专属）
 
-场景一下 step 0 无法加载方言（彼时 profile 未定），本步承接该职责：
+场景一下 step 0 在 init 已设定 profile 时会预加载方言；本步负责**补全**尚未加载的方言（legacy 项目在步骤 1.5 交互选定后才知 profile）。
 
-1. 检查 `.xflow/profiles/<selected_profile>/constitution.md` 是否存在
-2. 存在 → **读取该方言文件**并按其声明的覆写动词应用到后续 step 2 / step 3 / step 4：
+1. 若步骤 0 已加载过 `<selected_profile>` 的方言 → **跳过本步**
+2. 否则检查 `.xflow/profiles/<selected_profile>/constitution.md` 是否存在
+3. 存在 → **读取该方言文件**并按其声明的覆写动词应用到后续 step 2 / step 3 / step 4：
    - 指令 `跳过 <步骤>` → 执行到该步骤时直接跳过
    - 指令 `替换 <步骤>` → 改用方言文件中的替代内容
    - 指令 `追加 <位置>` → 在该位置附加方言文件的内容
-3. 不存在 / profile 为 `general` → 按下文通用 step 2 / step 3 / step 4 流程执行
+4. 不存在 / profile 为 `general` → 按下文通用 step 2 / step 3 / step 4 流程执行
 
-> 仅首次创建场景需要本步。场景二（修订）在 step 0 已经加载了方言，不再进入本步。
+> 仅首次创建场景需要本步。场景二（修订）在 step 0 已经加载了方言，不再进入本步。init 已设定 profile 且 step 0 已预加载方言时，本步自动跳过。
 
 ### 步骤 2：交互式问答（最多 2-3 轮）
 
@@ -140,7 +158,7 @@ constitution.md 的"项目配置 / `project_profile`"字段是**整个 xflow 后
 
 1. 读取 `.xflow/templates/_shared/constitution.md` 模板
 2. 基于问答结果填充各板块
-3. **将步骤 1.5 的 `selected_profile` 写入"项目配置"小节**：把模板中 `- ` + "`" + `project_profile` + "`" + `: general` 一行改为 `- ` + "`" + `project_profile` + "`" + `: <selected_profile>`
+3. **将 `selected_profile` 写入"项目配置"小节**：把模板中 `- ` + "`" + `project_profile` + "`" + `: general` 一行改为 `- ` + "`" + `project_profile` + "`" + `: <selected_profile>`（来自步骤 1.5 用户选择，或 init.json 的 `profiles.active`）
 4. 替换占位符（`[PROJECT_NAME]`、`[PRINCIPLE_*]`、`[VERSION]` → `1.0.0`、日期 → 当天）
 5. 未涉及的板块直接移除（不保留空板块）
 

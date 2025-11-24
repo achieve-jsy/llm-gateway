@@ -1,69 +1,60 @@
 # control-plane 需求变更 — CHG-20260603-001
 
-> 基线：xspec/modules/control-plane/spec.md (v1.4)
+> 基线：xspec/modules/control-plane/spec.md (v1.0)
 
 ## 变更摘要
 
-在现有模型定价配置基础上扩展：模型配置输入 Token 单价和输出 Token 单价的独立字段，支持阶梯定价规则（按 Token 区间匹配不同单价），定价变更时对历史单价做快照锁定。
+模型定价体系改造：从「手工 apply-diff 抄价」改为「读取时解析」，默认直读 LiteLLM 目录价格；Catalog 同步导入多桶价格（reasoning/cached 分桶）；新增统一取价入口 ResolveModelPricing 供成本估算使用，返回完整的多桶报价结构；移除 diff/apply-diff 接口。
 
 ## 新增需求
 
-### US-PRICING-01 — 模型输入/输出单价配置 (P0)
+### US-NEW-01：模型定价双来源（P0）
 
-**作为**平台管理员，**我想要**为每个模型配置输入 Token 和输出 Token 的独立单价，**以便**成本计算能区分输入和输出的不同费率。
+作为管理员，模型的有效价格默认自动跟随 Catalog 同步的 LiteLLM 价格（含缓存价/阶梯价），无需手工操作；当需要使用实付价时，可将某模型切换为 manual 模式并手填单价。
 
-**功能说明**：
-- 在模型管理界面中，每个模型可配置输入单价（元/千 Token）和输出单价（元/千 Token）
-- 单价字段支持小数精度（至少 4 位小数）
-- 模型创建时单价为必填或默认 0
-- 单价变更记录变更时间和操作人
+- 新增字段 price_mode：catalog（默认，直读 model_catalog）/ manual（使用 models 表的自定义价格）
+- catalog 模式下：定价随 Catalog 同步自动更新，管理员零维护
+- manual 模式下：允许为每个价格桶独立填价（prompt / completion / reasoning / cached），切换时强制至少 prompt 和 completion 非零
+- models 表已有 input_price / output_price 字段扩展为：input_price / output_price / reasoning_price / cached_price（仅 manual 模式生效）
+- Catalog 同步时新增导入字段：`output_cost_per_reasoning_token`、`cache_read_input_token_cost`
 
-**异常与边界**：
-- 单价为负数 → 拒绝保存，返回参数校验错误
-- 单价为 0 → 允许（表示该模型暂无计费），成本计算时标记为"定价缺失"
-- 单价精度超限 → 截断到 4 位小数
+### US-NEW-02：统一取价入口 ResolveModelPricing（P0）
 
-### US-PRICING-02 — 阶梯定价规则 (P1)
+作为系统，提供 ResolveModelPricing 函数作为唯一的价格解析入口，按 price_mode 决定从 model_catalog 还是 models 表取价，输出标准化的 ModelPricing 结构（含 prompt/completion/reasoning/cached 四桶单价）。
 
-**作为**平台管理员，**我想要**为模型配置阶梯定价（如 0-200K Token 一个价，200K 以上另一个价），**以便**精确匹配厂商的阶梯计费模式。
+- 供 gateway-core 的 collector 通过内存价表查询使用
+- 内存价表定时刷新（如 5min），从 models JOIN model_catalog 构建
+- 模型缺价时返回空 + missing 标记，调用方据此计 est_cost=0 并告警
+- 某桶无独立价格时在结构中标记 fallback，由成本估算引擎按降级规则处理
 
-**功能说明**：
-- 模型可配置多档阶梯定价，每档包含：Token 区间上限、输入单价、输出单价
-- 成本计算时，按 Token 数匹配对应的阶梯档位
-- 阶梯定价优先级高于默认单价：若配置了阶梯定价，则使用阶梯定价计算
-- 阶梯区间之间不允许重叠
+### US-NEW-03：移除 diff/apply-diff 闸门（P1）
 
-**异常与边界**：
-- 阶梯区间重叠 → 保存时校验拒绝
-- 阶梯区间有空隙（如 0-200K 和 300K-500K）→ 允许，空隙区间使用默认单价
-- 同一模型阶梯定价超过 10 档 → 提示"阶梯档位过多，建议简化"
+作为系统，删除 ComputePriceDiff / ApplyPriceDiff 逻辑及对应的 API 端点，简化管理员心智模型。
 
-### US-PRICING-03 — 定价快照与历史锁定 (P0)
-
-**作为**系统，**我想要**在模型定价变更时自动保存历史定价快照，**以便**历史成本计算使用变更前的单价，不受定价变更影响。
-
-**功能说明**：
-- 每次模型定价变更（单价修改、阶梯定价增删改）时，自动将变更前的定价数据保存为快照
-- 快照包含：模型标识、生效时间、失效时间、输入单价、输出单价、阶梯定价规则（JSON）
-- 成本计算时，根据用量发生时间匹配对应的定价快照
-- 快照数据不可修改，不可删除
-
-**异常与边界**：
-- 定价在一天内多次变更 → 每个变更版本均生成快照，成本计算取用量发生时刻的活跃快照
-- 模型删除 → 其定价快照保留，历史成本仍可计算
-- 快照数据量过大 → 定期归档超过 1 年的快照到冷存储
+- 删除：GET /api/v1/model-catalog/diff
+- 删除：POST /api/v1/model-catalog/apply-diff
+- 保留：auto-bind / batch-bind-catalog（仍需 catalog_id 建立模型-目录对应关系）
+- 保留：sync / sync-status / search / by-source（目录同步与检索）
 
 ## 修改需求
 
-- **模型注册管理（US-MODEL-01）** → 创建/编辑模型时追加 input_price 和 output_price 字段
-- **模型组管理** → 不变，定价在模型级别配置，不在组级别
+- 原 spec §6.2「模型管理」→ 模型创建/编辑增加 price_mode 字段（catalog/manual），编辑时如切换到 manual 需校验 input_price / output_price 非零
+- 原 spec §6.5「Catalog 同步」→ 同步完成后不再触发价格 diff 比对；catalog 价格变更直接通过 catalog 模式的模型实时生效
 
 ## 新增验收标准
 
-| 编号 | 关联 | Given（前置状态） | When（触发动作） | Then（预期结果） | 优先级 |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| AC-PRICE-01 | US-PRICING-01 | Given 管理员编辑模型"qwen-plus" | When 设置输入单价 0.002、输出单价 0.006 并保存 | Then 模型定价更新成功，输入单价和输出单价独立存储 | P0 |
-| AC-PRICE-02 | US-PRICING-01 | Given 管理员尝试设置输入单价为 -0.001 | When 保存 | Then 返回参数校验错误，提示"单价不能为负数" | P1 |
-| AC-PRICE-03 | US-PRICING-02 | Given 模型"gpt-4o"配置了阶梯定价：0-200K 输入 0.01、200K-∞ 输入 0.005 | When 用量为 150K 输入 Token | Then 成本计算使用阶梯 1 单价 0.01 | P1 |
-| AC-PRICE-04 | US-PRICING-03 | Given 模型"qwen-plus"输入单价为 0.002 | When 管理员将输入单价改为 0.003 | Then 变更前快照保存（单价 0.002），历史成本仍按 0.002 计算，新成本按 0.003 计算 | P0 |
-| AC-PRICE-05 | US-PRICING-03 | Given 模型一天内单价从 0.002 → 0.003 → 0.004 | When 查询当天不同时段的成本 | Then 三个时段分别使用对应时刻的活跃单价 | P1 |
+| 编号 | Given（前置状态） | When（触发动作） | Then（预期结果） | 优先级 |
+| :--- | :--- | :--- | :--- | :--- |
+| AC-NEW-01 | Given 模型 A 的 price_mode=catalog 且 model_catalog 有该模型的价格 | When 成本估算请求该模型的价格 | Then 返回 model_catalog 中的完整价格（含缓存价/阶梯价） | P0 |
+| AC-NEW-02 | Given 模型 B 的 price_mode=manual 且 input_price=3.0, output_price=15.0 | When 成本估算请求该模型的价格 | Then 返回手填的 input=3.0, output=15.0（忽略 catalog 价格） | P0 |
+| AC-NEW-03 | Given Catalog 同步更新了某模型的价格 | When price_mode=catalog 的该模型下次被调用 | Then 使用更新后的新价格计算成本 | P0 |
+| AC-NEW-04 | Given 管理员尝试将模型切换为 manual 模式 | When input_price 或 output_price 为 0 | Then 校验失败，返回错误提示 | P0 |
+| AC-NEW-05 | Given 某模型 price_mode=catalog 但未绑定 catalog_id | When 成本估算请求价格 | Then 返回缺价标记（missing=true），est_cost=0 | P1 |
+| AC-NEW-06 | Given 客户端请求 GET /api/v1/model-catalog/diff | When 请求发出 | Then 返回 404（端点已移除） | P1 |
+| AC-NEW-07 | Given Catalog 同步了 qwen3.6-plus 的 output_cost_per_reasoning_token=$3.52/M | When ResolveModelPricing(qwen3.6-plus) | Then 返回四桶价格，reasoning_price=$3.52/M | P0 |
+| AC-NEW-08 | Given 管理员将模型切换为 manual 模式 | When 填入 prompt/completion 价但 reasoning_price 留空 | Then reasoning_cost 在成本估算时标记 fallback，按 completion 价降级 | P0 |
+| AC-NEW-09 | Given Catalog 同步了某模型的 cache_read_input_token_cost=$0.15/M | When ResolveModelPricing | Then cached_price=$0.15/M | P0 |
+
+## 修改验收标准
+
+- 原 AC-05（Catalog 同步后 model_catalog 正确更新）→ 不变，但不再要求触发 diff 比对

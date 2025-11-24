@@ -1,5 +1,10 @@
 {
-  "version": "0.0.40",
+  "version": "0.1.2-beta.6",
   "platform": "opencode",
-  "initialized_at": "2026-05-20T02:42:04.015Z"
+  "initialized_at": "2026-06-03T07:55:52.476Z",
+  "profiles": {
+    "active": "llm-gateway",
+    "source": "xflow:draft:llm-gateway",
+    "version": "draft"
+  }
 }

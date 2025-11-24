@@ -533,7 +533,7 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 			"prompt_tokens, cached_tokens, cache_write_tokens, completion_tokens, reasoning_tokens, total_tokens, " +
 			"status, upstream_status, duration_ms, first_token_ms, " +
 			"stage_ttfb_ms, stage_auth_ms, stage_route_ms, stage_upstream_ms, " +
-			"stream, failover_used, usage_missing, " +
+			"stream, failover_used, routed_via_group, usage_missing, " +
 			"reasoning_effort, user_agent, ip_address, " +
 			"input_cost_usd, output_cost_usd, cache_read_cost_usd, est_cost_usd, " +
 			"input_price_snapshot, output_price_snapshot").

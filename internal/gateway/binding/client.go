@@ -7,6 +7,9 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/example/llm-gateway/internal/httpclient"
+	"golang.org/x/sync/singleflight"
 )
 
 type Client struct {
@@ -14,19 +17,31 @@ type Client struct {
 	httpClient *http.Client
 	longClient *http.Client
 	token      string
+	cache      KeyGroupCache    // 进程内 Key-Group 绑定缓存，TTL 60s
+	sf         singleflight.Group // 防缓存穿透：同一 keyID 同时只有一个飞行中 HTTP 请求
 }
 
 func NewClient(baseURL, token string) *Client {
+	// 使用项目标准 HTTP Client（MaxIdleConnsPerHost=100），替代裸 http.Client
+	shortCfg := httpclient.DefaultConfig()
+	shortCfg.Timeout = 500 * time.Millisecond
+	shortCfg.ResponseHeaderTimeout = 500 * time.Millisecond
+
+	longCfg := httpclient.DefaultConfig()
+	longCfg.Timeout = 5 * time.Second
+	longCfg.ResponseHeaderTimeout = 5 * time.Second
+
 	return &Client{
-		baseURL: baseURL,
-		httpClient: &http.Client{
-			Timeout: 500 * time.Millisecond,
-		},
-		longClient: &http.Client{
-			Timeout: 5 * time.Second,
-		},
-		token: token,
+		baseURL:    baseURL,
+		httpClient: httpclient.NewHTTPClient(&shortCfg),
+		longClient: httpclient.NewHTTPClient(&longCfg),
+		token:      token,
 	}
+}
+
+// Cache 返回内部 KeyGroupCache，供外部注册事件失效回调。
+func (c *Client) Cache() *KeyGroupCache {
+	return &c.cache
 }
 
 type BoundGroup struct {
@@ -35,7 +50,36 @@ type BoundGroup struct {
 	Enabled bool   `json:"enabled"`
 }
 
+// GetKeyGroups 返回 keyID 绑定的模型组列表。
+// 命中本地缓存（TTL 60s）直接返回，否则通过 singleflight 合并并发请求，
+// 仅发起一次 HTTP 调用到控制面并回填缓存。
 func (c *Client) GetKeyGroups(ctx context.Context, keyID string) ([]BoundGroup, error) {
+	// 1. 本地缓存命中，纳秒级返回
+	if groups, ok := c.cache.Get(keyID); ok {
+		return groups, nil
+	}
+
+	// 2. 缓存未命中：用 singleflight 合并同一 keyID 的并发穿透
+	val, err, _ := c.sf.Do(keyID, func() (any, error) {
+		// double-check：等待期间可能已被其他 goroutine 填充
+		if groups, ok := c.cache.Get(keyID); ok {
+			return groups, nil
+		}
+		groups, err := c.fetchKeyGroupsHTTP(ctx, keyID)
+		if err != nil {
+			return nil, err
+		}
+		c.cache.Set(keyID, groups)
+		return groups, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return val.([]BoundGroup), nil
+}
+
+// fetchKeyGroupsHTTP 向控制面发起实际 HTTP 请求。
+func (c *Client) fetchKeyGroupsHTTP(ctx context.Context, keyID string) ([]BoundGroup, error) {
 	url := fmt.Sprintf("%s/internal/v1/keys/%s/groups", c.baseURL, keyID)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {

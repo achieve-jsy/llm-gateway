@@ -24,28 +24,14 @@ func newTestKeyCache(t *testing.T) (*KeyCache, *miniredis.Miniredis) {
 }
 
 func makeActiveResp(keyID string) *VerifyKeyResp {
-	return &VerifyKeyResp{
+	r := &VerifyKeyResp{
 		Code:    0,
 		Message: "ok",
-		Data: struct {
-			Status          string `json:"status"`
-			KeyID           string `json:"key_id,omitempty"`
-			AccessAllGroups bool   `json:"access_all_groups"`
-			User            struct {
-				UserID       string `json:"user_id"`
-				Name         string `json:"name"`
-				DepartmentID string `json:"department_id,omitempty"`
-			} `json:"user,omitempty"`
-		}{
-			Status: "active",
-			KeyID:  keyID,
-			User: struct {
-				UserID       string `json:"user_id"`
-				Name         string `json:"name"`
-				DepartmentID string `json:"department_id,omitempty"`
-			}{UserID: "user-1"},
-		},
 	}
+	r.Data.Status = "active"
+	r.Data.KeyID = keyID
+	r.Data.User.UserID = "user-1"
+	return r
 }
 
 func makeDisabledResp(keyID string) *VerifyKeyResp {

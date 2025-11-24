@@ -116,7 +116,21 @@ cd tools/opencode-models-discovery && bun run build:bundle && bunx tsc --noEmit 
 
 ## 进一步阅读
 
-- `docs/opencode-models-discovery.md` — OpenCode 模型发现插件完整架构
+### 工程基建文档（docs/）
+
+| 文档 | 内容 |
+|------|------|
+| `docs/README.md` | docs 索引与分类规范 |
+| `docs/architecture.md` | 系统架构、服务边界、分层与依赖方向 |
+| `docs/deployment.md` | CI/CD、环境拓扑、容器部署、nginx 路由 |
+| `docs/database.md` | 数据库部署、迁移机制与规范 |
+| `docs/configuration.md` | 配置体系、参数注入、本地开发 |
+| `docs/observability.md` | 日志、链路追踪、埋点采集 |
+| `docs/guardrails.md` | 项目防护栏铁律 |
+| `docs/opencode-models-discovery.md` | OpenCode 模型发现插件架构 |
+
+### 其他
+
 - `README.md` — 快速开始与命令速查
 - `tests/README.md` — 测试原则、分层与文件组织
 - `xspec/` — 规格/契约相关资料

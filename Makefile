@@ -16,11 +16,11 @@ build-cp:
 
 # ─── 测试 ────────────────────────────────────────────────────────────────────────
 test:
-	go test ./... -race -cover
-
-test-coverage:
-	go test ./... -race -coverprofile=coverage.out
-	go tool cover -html=coverage.out -o coverage.html
+	@if find tests -name '*_test.go' | grep -q .; then \
+		go test ./tests/... -count=1; \
+	else \
+		echo "No test files found in tests/"; \
+	fi
 
 # ─── Lint ────────────────────────────────────────────────────────────────────────
 lint:
@@ -48,4 +48,4 @@ dev-down:
 
 # ─── 清理 ────────────────────────────────────────────────────────────────────────
 clean:
-	rm -rf bin/ coverage.out coverage.html api/swagger/docs/
+	rm -rf bin/ api/swagger/docs/

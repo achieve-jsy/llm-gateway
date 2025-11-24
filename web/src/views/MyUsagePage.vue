@@ -267,9 +267,9 @@
             </template>
           </el-table-column>
           <!-- 模型组 -->
-          <el-table-column prop="group_name" label="模型组" min-width="110">
+          <el-table-column prop="group_name" label="模型组" min-width="160">
             <template #default="{ row }">
-              <el-tag v-if="row.group_name" type="info" size="small" effect="plain" class="mu-tag">{{ row.group_name }}</el-tag>
+              <el-tag v-if="row.group_name" type="info" size="small" effect="plain" class="mu-tag mu-tag--group">{{ row.group_name }}</el-tag>
               <span v-else class="mu-dash">—</span>
             </template>
           </el-table-column>
@@ -1252,6 +1252,7 @@ loadAll()
 .mu-model-routed { display: flex; align-items: center; gap: 3px; }
 .mu-arrow { color: var(--mu-faint); font-size: 10px; }
 .mu-tag { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+.mu-tag--group { max-width: none; white-space: normal; word-break: break-all; }
 .mu-dash { color: var(--mu-faint); }
 
 .mu-token-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }

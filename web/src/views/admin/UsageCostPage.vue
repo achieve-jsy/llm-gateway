@@ -396,7 +396,7 @@
             </template>
           </el-table-column>
           <!-- 组名 -->
-          <el-table-column prop="group_name" label="模型组" min-width="110">
+          <el-table-column prop="group_name" label="模型组" min-width="160">
             <template #default="{ row }">
               <el-tag v-if="row.group_name" type="info" size="small" effect="plain" class="up-tag">{{ row.group_name }}</el-tag>
               <span v-else class="up-dash">—</span>

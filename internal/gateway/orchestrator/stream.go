@@ -108,8 +108,10 @@ func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest
 				gc.Set("routed_model", req.Model)
 			}
 		}
-		if name := router.GetProviderName(req.Model); name != "" {
-			gc.Set("provider", name)
+		if _, exists := gc.Get("provider"); !exists {
+			if name := router.GetProviderName(req.Model); name != "" {
+				gc.Set("provider", name)
+			}
 		}
 		// TTFB：从上游请求发出到收到响应头（HTTP 200）的耗时
 		if ttfb := elapsed.Milliseconds(); ttfb > 0 {

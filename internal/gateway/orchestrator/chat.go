@@ -163,10 +163,12 @@ func (o *ChatOrchestrator) Chat(ctx context.Context, req *core.ChatRequest) (*co
 				gc.Set("routed_model", resp.Model)
 			}
 		}
-		if name := router.GetProviderName(req.Model); name != "" {
-			gc.Set("provider", name)
-		} else if resp.Provider != "" {
-			gc.Set("provider", resp.Provider)
+		if _, exists := gc.Get("provider"); !exists {
+			if name := router.GetProviderName(req.Model); name != "" {
+				gc.Set("provider", name)
+			} else if resp.Provider != "" {
+				gc.Set("provider", resp.Provider)
+			}
 		}
 		// 写完整 Usage 对象，使 collector 能通过 ExtractCostInput 解析缓存字段
 		gc.Set("usage", resp.Usage)

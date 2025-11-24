@@ -1338,7 +1338,7 @@ function renderTrend() {
       responsive: true, maintainAspectRatio: false,
       interaction: { intersect: false, mode: 'index' },
       plugins: {
-        legend: { position: 'top', labels: { usePointStyle: true, pointStyle: 'circle', padding: 12, color: '#64748B', font: { size: 11 } } },
+        legend: { position: 'top', labels: { usePointStyle: true, pointStyle: 'line', padding: 12, color: '#64748B', font: { size: 11 } } },
         tooltip: {
           callbacks: {
             label: ctx => {

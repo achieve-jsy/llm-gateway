@@ -12,6 +12,8 @@ opencode.json
 # ── 编译产物 ─────────────────────────────────────────────────────────────────
 /gateway
 /control-plane
+/auth
+/bin/
 web/dist/
 web/images/
 

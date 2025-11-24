@@ -1,6 +1,31 @@
 # 部署指南
 
-## 架构拓扑
+> 适用范围: LLM Gateway 项目
+
+## 环境拓扑
+
+### 资源分布
+
+| 角色 | IP | 职责 |
+|------|----|------|
+| 运维服务器 | `192.0.2.10` | GitLab Runner、镜像仓库（`:5000`）、备份归档 |
+| 生产服务器 | `192.0.2.10` | 生产应用容器（gateway / control-plane） |
+| 测试服务器 | `192.0.2.10` | 测试应用容器 |
+
+### 系统组成
+
+```
+运维 12.15: GitLab Runner + Registry + 备份归档
+生产 191.99: 宿主 Nginx → blue/green 应用 → 本机 PG/Redis
+测试 191.121: 宿主 Nginx → blue/green 应用 → 本机 PG/Redis
+```
+
+- **gateway** (`:8080`)：对外 `/v1/*`，鉴权 → 模型组调度 → 转发上游。不直连 PG，配置来自 Redis snapshot / 控制面 HTTP。
+- **control-plane** (`:8081`)：管理后台 API、OAuth、Catalog 同步、CRUD。持久化在 PostgreSQL。
+- **web**：Vue3 SPA，构建产物由宿主机 Nginx 静态托管。
+- 分流由宿主机 **Nginx** 完成：`/v1/*`→gateway，`/api/* /auth/*`→control-plane，`/*`→静态。
+
+### 架构图
 
 ```
                      ┌─────────────────────────────────┐
@@ -22,15 +47,7 @@
               └──────────────┘
 ```
 
-## 环境一览
-
-| 环境 | 域名/地址 | Gateway | Control-Plane | 前端目录 |
-|------|----------|---------|---------------|----------|
-| **开发** | localhost:5173 | 8080 | 8081 | Vite dev server |
-| **测试** | 192.0.2.10:8090 | 4010 | 4011 | /var/www/aimeter-test/dist/ |
-| **生产** | aimeter.xk-devops.com | 8080 | 8081 | /data/web/aimeter/dist/ |
-
-## CI/CD 流水线（GitLab CI）
+## CI/CD 流水线
 
 ### 触发规则
 
@@ -39,16 +56,49 @@
 | `test` 分支 push | 测试 (192.0.2.10) | 自动 |
 | `v*.*.*` tag push | 生产 (192.0.2.10) | 手动 |
 
+### 目标流水线
+
+```
+push test / tag v* → build(镜像+web) → migrate(atlas apply) → deploy(blue-green.sh)
+  → 健康检查+冒烟 → [通过] Nginx切流reload → 停旧色
+                  → [失败] 销毁新色，线上不动
+```
+
 ### 流水线阶段
 
-```
-test → build → deploy → verify
+```yaml
+stages:
+  - build
+  - migrate      # 数据库迁移
+  - deploy       # 蓝绿部署
+  - verify       # 健康检查 + 冒烟
 ```
 
-1. **test**：`go vet` + `go test`（当前已禁用）
-2. **build**：多阶段 Docker 构建 → 推送到内部 Registry `192.0.2.10:5000`
-3. **deploy**：SSH 到目标机 → `docker compose up -d`
+1. **build**：多阶段 Docker 构建 → 推送到内部 Registry `192.0.2.10:5000`
+2. **migrate**：独立 job，在切流量之前执行 `atlas migrate apply`
+3. **deploy**：调用 `deploy/blue-green.sh` 蓝绿部署
 4. **verify**：健康检查 `/health` 和 `/healthz`
+
+### `.gitlab-ci.yml` 关键配置
+
+```yaml
+# migrate job（在 deploy 前执行）
+migrate:
+  stage: migrate
+  image: arigaio/atlas:latest
+  script:
+    - atlas migrate apply
+        --dir "file://migrations"
+        --url "${DATABASE_URL}"
+        --allow-dirty=false
+
+# deploy 调用蓝绿脚本
+deploy:
+  stage: deploy
+  script:
+    - scp deploy/blue-green.sh user@${TARGET_HOST}:/opt/llm-gateway/
+    - ssh user@${TARGET_HOST} "bash /opt/llm-gateway/blue-green.sh"
+```
 
 ### 构建产物
 
@@ -58,11 +108,54 @@ test → build → deploy → verify
 | `llm-control-plane` | `deploy/docker/control-plane.Dockerfile` | `APP_ENV=staging/prod` |
 | `web-dist.tar.gz` | Node 构建 artifact | - |
 
+## 蓝绿部署
+
+### 方案概述
+
+单机双栈：同机两套 compose project（blue/green）+ 不同端口 + 宿主 Nginx upstream 原子切流。
+
+```
+宿主 Nginx upstream → active:  blue  (gw:8080  cp:8081)
+                    → standby: green (gw:8082  cp:8083)
+blue + green 共享本机 PG/Redis
+```
+
+### 发布顺序
+
+```
+migrate（Expand 兼容） → 起空闲色 → 健康检查/冒烟 → Nginx 切流 reload → 停旧色
+                                           └─ 失败 → 销毁新色，线上不受影响
+```
+
+- `gateway` 已配 `stop_grace_period: 120s`，切流后再停旧色可优雅排空在途请求。
+
+### docker-compose.yml 参数化
+
+端口、project 名参数化（`GATEWAY_PORT`/`CP_PORT` 由 `.env` 注入）
+
+### Nginx 切流配置
+
+```nginx
+# /etc/nginx/conf.d/llm-active.conf —— 部署脚本只改这两行
+upstream gw_backend { server 127.0.0.1:8080; }   # 切换改 8082
+upstream cp_backend { server 127.0.0.1:8081; }   # 切换改 8083
+```
+
+### deploy/blue-green.sh
+
+判断空闲色 → 起新色 → 健康检查 + 冒烟 → 切 Nginx → 观察 → 停旧色；任意环节失败则销毁新色、流量不动。
+
+### 回滚能力
+
+| 场景 | 操作 | 影响 |
+|------|------|------|
+| 健康检查失败 | 销毁新色，旧色继续服务 | 零影响 |
+| 切流后发现异常 | 改 `llm-active.conf` 指回旧色 + `nginx -s reload` | 秒级回滚 |
+| 数据库迁移问题 | Expand-Contract 保证向后兼容，旧版应用仍可读写 | 可安全回切旧色 |
+
 ## 容器部署
 
 ### Docker Compose
-
-项目提供两个 compose 文件：
 
 | 文件 | 用途 | 服务 |
 |------|------|------|
@@ -96,6 +189,44 @@ docker compose ps
 | gateway | `/health` | `wget --spider` |
 | control-plane | `/healthz` | `wget --spider` |
 
+## 容器时区
+
+容器镜像基于 Alpine，默认 **UTC**。设置为北京时间：
+
+### Dockerfile 配置
+
+```dockerfile
+# gateway.Dockerfile / control-plane.Dockerfile（已装 tzdata）
+ENV TZ=Asia/Shanghai
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+# web.Dockerfile（需额外安装 tzdata）
+RUN apk add --no-cache tzdata
+ENV TZ=Asia/Shanghai
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+```
+
+### docker-compose.yml（可选）
+
+```yaml
+services:
+  gateway:
+    environment:
+      TZ: Asia/Shanghai
+  control-plane:
+    environment:
+      TZ: Asia/Shanghai
+```
+
+### 验证
+
+```bash
+docker exec <container> date
+# 期望输出: Fri Jun 05 2026 15:30:00 CST  （北京时间，非 UTC）
+```
+
+> PostgreSQL 时间字段为 `TIMESTAMP WITH TIME ZONE`（存 UTC、按会话时区展示），属规范做法，默认不动。仅应用层日志/展示需北京时间。
+
 ## Nginx 配置
 
 ### 路由规则
@@ -103,19 +234,19 @@ docker compose ps
 ```nginx
 # LLM Gateway API（OpenAI 兼容接口）
 location /v1/ {
-    proxy_pass http://gateway;
+    proxy_pass http://gw_backend;
     proxy_buffering off;           # SSE streaming 支持
     proxy_read_timeout 300s;
 }
 
 # Control Plane 管理 API
 location /api/ {
-    proxy_pass http://control_plane;
+    proxy_pass http://cp_backend;
 }
 
 # OAuth 认证
 location /auth/ {
-    proxy_pass http://control_plane;
+    proxy_pass http://cp_backend;
 }
 
 # OAuth 前端回调（SPA 路由）
@@ -134,7 +265,7 @@ location / {
 | 环境 | 配置文件 | 说明 |
 |------|----------|------|
 | 开发 | `deploy/nginx-dev.conf` | macOS 本地开发 |
-| 测试 | `deploy/docker/nginx-test.conf` | 192.0.2.10:9080 |
+| 测试 | `deploy/docker/nginx-test.conf` | 192.0.2.10 |
 | 生产 | `deploy/docker/nginx.conf` | HTTPS + 域名 |
 
 ### 生产部署
@@ -143,21 +274,6 @@ location / {
 # 软链到 nginx 配置目录
 ln -s /opt/llm-gateway/deploy/docker/nginx.conf /etc/nginx/conf.d/aimeter.conf
 nginx -t && systemctl reload nginx
-```
-
-## 时区
-
-容器内时区通过 Alpine `tzdata` 包支持，默认 UTC。如需修改：
-
-```dockerfile
-ENV TZ=Asia/Shanghai
-```
-
-或在 docker-compose 中：
-
-```yaml
-environment:
-  TZ: Asia/Shanghai
 ```
 
 ## 前端部署
@@ -192,3 +308,10 @@ cd web && npm run dev
 # 带可观测性（OTel + Jaeger + Langfuse）
 make dev-infra-full
 ```
+
+## 安全要点
+
+- migrate 必须在切流量**之前**执行
+- migrate 不可由蓝绿双实例在启动时争抢执行
+- deploy 失败 → 销毁新色，旧色不受影响
+- 密钥从 CI Variables 来，不写进仓库（详见 [配置体系](./configuration.md)）

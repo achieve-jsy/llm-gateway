@@ -1,6 +1,6 @@
 # 数据库
 
-## 数据库选型
+## 选型
 
 | 项目 | 选型 |
 |------|------|
@@ -8,12 +8,41 @@
 | ORM | GORM v1.31.1 |
 | 连接池 | MaxOpenConns=25, MaxIdleConns=10 |
 
+> **Gateway 不直连数据库** — 这是核心架构约束。Gateway 只通过 Redis snapshot 和内部 HTTP API 获取数据。
+
 ## 部署位置
 
-- **开发/测试**：192.0.2.10:5432
-- **生产**：内部网络，通过 `DATABASE_URL` 环境变量注入
+### 目标架构
 
-> **Gateway 不直连数据库** — 这是核心架构约束。Gateway 只通过 Redis snapshot 和内部 HTTP API 获取数据。
+| 数据 | 落位 | 持久化 |
+|------|------|--------|
+| 生产 PG / Redis | **生产机 `191.99` 本机** | `/data/pg`、`/data/redis` 绑定卷 |
+| 测试 PG / Redis | **测试机 `191.121` 本机** | 同上 |
+| 备份归档 | **运维机 `12.15`** | 各环境每日 `pg_dump` 推送，异机留存 |
+
+```
+运维 12.15: 备份归档（每日 pg_dump 推送）
+
+生产 191.99:
+  宿主 Nginx → blue/green 应用 → 本机 PG (127.0.0.1:5432)
+                                → 本机 Redis (127.0.0.1:6379)
+
+测试 191.121:
+  宿主 Nginx → blue/green 应用 → 本机 PG (127.0.0.1:5432)
+                                → 本机 Redis (127.0.0.1:6379)
+```
+
+- 新增 `docker-compose.db.yml`（每环境一套 PG + Redis），应用经 `127.0.0.1:5432` / `127.0.0.1:6379` 连本机。
+- 收益：环境物理隔离、同机低延迟、运维机回归本职。
+
+### 迁移步骤
+
+1. 在目标机创建 `docker-compose.db.yml`，启动空 PG + Redis
+2. 从 `12.15` 执行 `pg_dump` 生产库/测试库
+3. 分别导入目标机新实例
+4. 修改应用 DSN 指向 `127.0.0.1`
+5. 验证功能正常
+6. 下线 `12.15` 旧库实例
 
 ## 连接配置
 
@@ -44,52 +73,75 @@
 
 ## 迁移机制
 
-### 当前状态
+### 选型：Atlas + GORM Provider
 
-**项目暂无自动化迁移工具**。迁移文件位于 `migrations/` 目录，需手动执行。
+Go 生态里最贴近 Prisma 的是 **Atlas**。本项目已用 GORM，且 model 的 struct tag 完整，可直接把 **GORM model 当作 schema 单一事实源**：
 
-### 手动执行迁移
+| Prisma | Atlas（本项目） |
+|--------|----------------|
+| `schema.prisma`（声明式） | `internal/controlplane/model/*.go` 的 GORM 结构体（声明式 desired state） |
+| `prisma migrate dev` | `atlas migrate diff` —— 对比 model 与已有迁移目录，**自动生成增量 SQL** |
+| `migration.sql` 文件 | `migrations/2026..._xxx.sql`（Atlas 版本化目录 + `atlas.sum` 校验和） |
+| `_prisma_migrations` 表 | `atlas_schema_revisions` 表 |
+| `prisma migrate deploy` | `atlas migrate apply` —— 按版本表从落后处补齐 |
+
+### 开发期工作流
 
 ```bash
-# 执行单个迁移
-psql $DATABASE_URL -f migrations/NNN_xxx.sql
+# 1) 改 GORM model 后，自动 diff 出增量迁移
+atlas migrate diff <变更名> \
+  --dir "file://migrations" \
+  --to "ent://internal/controlplane/model" \
+  --dev-url "docker://postgres/16/dev?search_path=public"
 
-# 批量执行（按序号排序）
-for f in migrations/*.sql; do psql $DATABASE_URL -f "$f"; done
+# 2) 校验 + 查看将生成的 SQL
+atlas migrate validate --dir "file://migrations"
 ```
 
-### 迁移文件命名规范
+### 部署期工作流
 
+```bash
+# 对比 atlas_schema_revisions，从落后版本开始顺序执行；幂等、带锁、可重入
+atlas migrate apply \
+  --dir "file://migrations" \
+  --url "$DATABASE_URL" \
+  --allow-dirty=false
 ```
-NNN_description.sql        # up 迁移
-NNN_description.up.sql     # up 迁移（显式）
-NNN_description.down.sql   # down 迁移（回滚）
-```
 
-- 编号 `NNN` 递增，三位数字
-- 新增迁移时选择下一个可用编号
-- 同时更新 `internal/controlplane/model/` 中的 GORM 模型
+> Atlas 用 `--dev-url` 指向一个临时 dev 库做 schema 规范化与 diff，**不会动生产库**；diff 出来的 SQL 仍是人可审查的版本化文件，比 GORM `AutoMigrate` 安全得多。
 
-### 迁移文件清单
+### 备选方案对比
 
-当前共 52 个文件，编号 001-041：
+| 方案 | 声明式 diff | 版本表 | 回滚 | 生产安全 | 说明 |
+|------|------------|--------|------|----------|------|
+| **Atlas + GORM**（推荐） | ✅ 自动 | ✅ `atlas_schema_revisions` | ✅ | 高（diff 生成可审查 SQL） | 最贴近 Prisma，复用现有 model |
+| golang-migrate | ❌ 手写 SQL | ✅ `schema_migrations` | ✅ `.down.sql` | 高 | 传统、稳、但要手写增量 |
+| GORM `AutoMigrate` | ✅ 自动 | ❌ 无 | ❌ | **低**（只加不删、可能误判、不可控） | **不建议生产** |
 
-| 编号 | 文件 | 说明 |
-|------|------|------|
-| 001 | create_providers | 厂商渠道表 |
-| 002 | create_models | 模型表 |
-| 003 | create_provider_definitions | 厂商定义 + 内置 seed |
-| 007 | create_model_tags | 模型标签 |
-| 011 | create_model_catalog | Catalog 能力/价格真源 |
-| 016 | create_auth_identity_tables | 部门/用户 |
-| 018 | add_api_keys | API Key |
-| 022 | add_model_groups | 模型组 |
-| 024 | create_key_group_bindings | Key↔组绑定 |
-| 027-030 | announcements | 系统公告 |
-| 032 | create_call_logs | 调用明细 |
-| 033 | create_usage_daily | 按天聚合 |
+### 迁移文件规范
 
-完整列表见 `migrations/` 目录。
+1. **幂等性**：统一使用 `IF NOT EXISTS`、`IF EXISTS`
+2. **命名**：`NNN_description.sql`（编号三位数递增）
+3. **基线（baseline）**：线上库已有数据和表，需用 `atlas migrate apply --baseline <版本>` 把现状标成"已应用到 N"
+4. **执行位置**：CI 中独立一次性步骤，在切流量之前执行（不要让蓝绿双实例在启动时争抢迁移）
+
+## Expand-Contract 模式
+
+蓝绿期间新旧两版应用共享同一个库，**破坏性变更必须拆成多次发版**：
+
+| 阶段 | 动作 | 例：列 `a` → `b` |
+|------|------|------------------|
+| Expand（本次） | 只加不减，新旧兼容 | 加列 `b`，应用双写 `a`/`b` |
+| 回填 | 数据迁移 | `UPDATE ... SET b = a` |
+| Contract（下次，确认稳定后） | 删旧 | `DROP COLUMN a` |
+
+**禁止**单次发版：
+- `DROP COLUMN`
+- `RENAME COLUMN`
+- 加无默认值的 `NOT NULL`
+- 收窄类型
+
+→ 写进开发规范并在 code review 卡口。
 
 ## 核心表结构
 
@@ -156,13 +208,3 @@ NNN_description.down.sql   # down 迁移（回滚）
 | `api_keys` | `encrypted_key` | AES-256-GCM |
 
 密钥管理见 `encryption_keys` 表（DEK 版本轮换）。
-
-## Expand-Contract 模式
-
-对于需要修改列类型或重命名的破坏性变更，采用 Expand-Contract：
-
-1. **Expand**：添加新列，保持旧列
-2. **Migrate**：应用代码写入两列，迁移脚本填充新列
-3. **Contract**：确认无旧数据依赖后，删除旧列
-
-示例：`025_models_name_provider_unique.sql` 将单列唯一改为联合唯一，需先添加约束再删除旧约束。

@@ -18,6 +18,14 @@
 | `staging` | `config/staging.yaml` | 测试环境 |
 | `prod` | `config/prod.yaml` | 生产环境 |
 
+## 三层分离原则
+
+| 层 | 内容 | 落位 |
+|----|------|------|
+| 非敏感、环境无关 | 业务默认值 | `config/{env}.yaml`（进镜像） |
+| 环境相关 | 端口、URL、库名、镜像 tag | 目标机 `/opt/llm-gateway/.env`（CI 生成） |
+| **密钥** | DB/Redis 密码、`JWT_SECRET`、`ENCRYPTION_KEY`、OAuth secret、`INTERNAL_TOKEN` | **GitLab CI/CD Variables（Masked + Protected）** → CI 生成 `.env`，**绝不进 Git/镜像** |
+
 ## YAML 配置结构
 
 ### Gateway（`internal/gateway/config/config.go`）
@@ -138,6 +146,36 @@ frontend:
 | `GATEWAY_URL` | Gateway 地址 |
 | `CATALOG_REMOTE_URL` | LiteLLM Catalog 远程地址 |
 
+## GitLab CI/CD Variables 配置
+
+密钥必须配置在 GitLab CI/CD Settings → Variables，启用 **Masked + Protected**：
+
+| 变量名 | 说明 | 要求 |
+|--------|------|------|
+| `PROD_DATABASE_URL` | 生产数据库连接串 | Masked |
+| `PROD_REDIS_PASSWORD` | 生产 Redis 密码 | Masked |
+| `PROD_JWT_SECRET` | JWT 签名密钥 | Masked + Protected |
+| `PROD_ENCRYPTION_KEY` | 数据加密密钥 | Masked + Protected |
+| `PROD_OAUTH_CLIENT_SECRET` | OAuth 客户端密钥 | Masked + Protected |
+| `PROD_INTERNAL_TOKEN` | 内部服务通信令牌 | Masked + Protected |
+| `TEST_*` | 对应测试环境变量 | Masked |
+
+## CI 部署时生成 .env
+
+```bash
+cat > /opt/llm-gateway/.env <<EOF
+APP_ENV=prod
+IMAGE_TAG=${CI_COMMIT_TAG}
+GATEWAY_PORT=${TARGET_GW_PORT}
+CP_PORT=${TARGET_CP_PORT}
+DATABASE_URL=${PROD_DATABASE_URL}
+JWT_SECRET=${PROD_JWT_SECRET}
+ENCRYPTION_KEY=${PROD_ENCRYPTION_KEY}
+EOF
+chmod 600 /opt/llm-gateway/.env
+docker compose --env-file .env -p llm-${TARGET_COLOR} up -d --wait
+```
+
 ## 本地开发注入
 
 ### 方式一：.env 文件
@@ -171,25 +209,7 @@ export REDIS_ADDR="..."
 
 在 GoLand/VSCode 的 Run Configuration 中配置 Environment Variables。
 
-## CI/CD 注入
-
-### GitLab CI
-
-在 `.gitlab-ci.yml` 的 deploy 阶段通过 `export` 注入：
-
-```yaml
-deploy-prod:
-  script:
-    - |
-      export APP_ENV="prod"
-      export DATABASE_URL="$PROD_DATABASE_URL"
-      export REDIS_ADDR="$PROD_REDIS_ADDR"
-      docker compose up -d
-```
-
-敏感变量在 GitLab CI/CD Settings → Variables 中配置。
-
-### Docker Compose
+## Docker Compose 引用
 
 在 `docker-compose.yml` 中引用环境变量：
 
@@ -202,6 +222,8 @@ services:
       JWT_SECRET: '${JWT_SECRET}'
 ```
 
+**重要**：compose 中**禁止**使用弱默认值 `${SECRET:-xxx}` 兜底，应改为 `${SECRET:?must be set}`（缺失即报错，杜绝静默弱密钥）。
+
 ## 配置文件搜索路径
 
 Viper 按以下顺序搜索 `{APP_ENV}.yaml`：
@@ -211,3 +233,15 @@ Viper 按以下顺序搜索 `{APP_ENV}.yaml`：
 3. `../../config/`
 
 Docker 容器中 config 目录在 `COPY --from=builder /app/config ./config` 复制到工作目录。
+
+## 密钥轮换
+
+| 密钥 | 轮换难度 | 说明 |
+|------|----------|------|
+| DB/Redis 密码 | 低 | 改密码 + 重启即可 |
+| `JWT_SECRET` | 低 | 轮换后旧 token 立即失效 |
+| `INTERNAL_TOKEN` | 低 | 同步更新即可 |
+| `ENCRYPTION_KEY` | **高** | 需配套历史数据重加密流程 |
+| OAuth secret | 中 | 需在 OAuth 提供商同步更新 |
+
+> ⚠️ 仓库历史已泄露的密钥（尤其 `ENCRYPTION_KEY`，关系到存量数据加解密）建议轮换。`ENCRYPTION_KEY` 轮换需单独评估。

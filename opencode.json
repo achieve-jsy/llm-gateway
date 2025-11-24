@@ -2,5 +2,21 @@
   "$schema": "https://opencode.ai/config.json",
   "experimental": {
     "openTelemetry": true
+  },
+  "mcp": {
+    "feishu": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@larksuiteoapi/lark-mcp",
+        "mcp",
+        "-a", "cli_aa97940bf5fc5bd8",
+        "-s", "Ajkv33DyeegMoPzZcmBPieJ2kW8GBpci",
+        "--token-mode", "tenant_access_token",
+        "-l", "zh"
+      ],
+      "enabled": true
+    }
   }
 }

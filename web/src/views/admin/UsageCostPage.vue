@@ -398,7 +398,7 @@
           <!-- 组名 -->
           <el-table-column prop="group_name" label="模型组" min-width="160">
             <template #default="{ row }">
-              <el-tag v-if="row.group_name" type="info" size="small" effect="plain" class="up-tag">{{ row.group_name }}</el-tag>
+              <el-tag v-if="row.group_name" type="info" size="small" effect="plain" class="up-tag up-tag--group">{{ row.group_name }}</el-tag>
               <span v-else class="up-dash">—</span>
             </template>
           </el-table-column>
@@ -1665,6 +1665,7 @@ loadAll()
 .up-arrow { color: var(--up-faint); font-size: 10px; }
 
 .up-tag { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+.up-tag--group { max-width: none; white-space: normal; word-break: break-all; }
 .up-provider { font-size: 11px; color: var(--up-muted); }
 .up-dash { color: var(--up-faint); }
 

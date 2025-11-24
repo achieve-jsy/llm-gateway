@@ -14,15 +14,15 @@ database:
   url: "host=192.0.2.10 port=5432 user=llm_gateway password=CHANGE_ME_PASSWORD dbname=llm_gateway sslmode=disable"
 
 otlp:
-  endpoint: "localhost:4317"
+  endpoint: "127.0.0.1:4317"
   enabled: false
 
 provider:
   internal_token: "CHANGE_ME_INTERNAL_TOKEN"
-  control_plane_url: "http://localhost:8081"
+  control_plane_url: "http://127.0.0.1:8081"
 
 auth:
-  url: "http://localhost:8081"
+  url: "http://127.0.0.1:8081"
   token: "CHANGE_ME_INTERNAL_TOKEN"
 
 oauth:
@@ -36,7 +36,7 @@ jwt:
   secret: "CHANGE_ME_JWT_SECRET"
 
 frontend:
-  url: "http://localhost:5173"
+  url: "http://127.0.0.1:5173"
 
 gateway:
-  url: "http://localhost:8080"
+  url: "http://127.0.0.1:8080"

@@ -82,3 +82,65 @@ func TestProviderNamePropagation(t *testing.T) {
 	}
 	t.Logf("selected provider: %s (model: %s)", decision2.ProviderName, decision2.ModelName)
 }
+
+func TestRoundRobin_CounterOutOfBounds_WithFailover(t *testing.T) {
+	cfg := &ControlPlaneConfig{
+		Groups: []GroupConfig{
+			{ID: 1, Name: "test-rr", Strategy: StrategyRoundRobin, Enabled: true},
+		},
+		Models: []GroupModel{
+			{ID: 1, GroupID: 1, ModelName: "model-A", ChannelType: "openai", ProviderName: "openai"},
+			{ID: 2, GroupID: 1, ModelName: "model-B", ChannelType: "openai", ProviderName: "openai"},
+		},
+	}
+
+	rt := NewRouteTable()
+	rt.ReplaceAll(cfg)
+	hs := NewHealthStore(3, 3, 3, 30*time.Second)
+	router := NewRouter(rt, hs)
+
+	// 模拟场景：首轮 dispatch 选中 model-A（idx=0），counter 推进到 1
+	// 然后 model-A 失败，failover 只有 model-B 一个模型（len=1）
+	// 此时 counter=1，healthyModels 只有 1 个，应访问 idx=0 而非 idx=1
+	group := rt.Get("test-rr")
+	if group == nil {
+		t.Fatal("group not found")
+	}
+
+	// 第一次 Route：2 个模型，选中 idx=0，counter 变为 1
+	healthyModels := hs.FilterHealthy(group.Models)
+	if len(healthyModels) != 2 {
+		t.Fatalf("expected 2 healthy models, got %d", len(healthyModels))
+	}
+	router.counters["test-rr"] = 0 // 重置计数器
+	entry, err := router.routeRoundRobin("test-rr", healthyModels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.ModelName != "model-A" {
+		t.Fatalf("first pick should be model-A, got %s", entry.ModelName)
+	}
+
+	// 模拟 failover：排除 model-A，只剩 model-B
+	remaining := make([]*ModelRoutingEntry, 0)
+	for _, m := range group.Models {
+		if m.ModelName != "model-A" {
+			remaining = append(remaining, m)
+		}
+	}
+	healthyRemaining := hs.FilterHealthy(remaining)
+	if len(healthyRemaining) != 1 {
+		t.Fatalf("expected 1 healthy model after failover, got %d", len(healthyRemaining))
+	}
+
+	// 此时 counter=1，但 healthyRemaining 只有 1 个元素
+	// 修复前：healthyRemaining[1] 会 panic
+	// 修复后：healthyRemaining[1%1] = healthyRemaining[0] = model-B
+	entry, err = router.routeRoundRobin("test-rr", healthyRemaining)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.ModelName != "model-B" {
+		t.Fatalf("failover should pick model-B, got %s", entry.ModelName)
+	}
+}

@@ -104,7 +104,7 @@ func (r *Router) routeRoundRobin(groupName string, healthyModels []*ModelRouting
 	r.counters[groupName] = (idx + 1) % uint64(len(healthyModels))
 	r.countersMu.Unlock()
 
-	return healthyModels[idx], nil
+	return healthyModels[idx%uint64(len(healthyModels))], nil
 }
 
 func (r *Router) routePriority(groupName string, healthyModels []*ModelRoutingEntry) (*ModelRoutingEntry, error) {
@@ -132,7 +132,7 @@ func (r *Router) routePriority(groupName string, healthyModels []*ModelRoutingEn
 	r.counters[prioKey] = (idx + 1) % uint64(len(samePrio))
 	r.countersMu.Unlock()
 
-	return samePrio[idx], nil
+	return samePrio[idx%uint64(len(samePrio))], nil
 }
 
 func (r *Router) routeWeighted(healthyModels []*ModelRoutingEntry) (*ModelRoutingEntry, error) {

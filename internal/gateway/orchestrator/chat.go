@@ -118,8 +118,8 @@ func (o *ChatOrchestrator) Chat(ctx context.Context, req *core.ChatRequest) (*co
 		if reqStart, ok := gc.Get("start_time"); ok {
 			if t, ok := reqStart.(time.Time); ok && !t.IsZero() {
 				elapsed := time.Since(t).Milliseconds()
-				// elapsed 必须 > 0 且不超出 int16 范围（32767ms ≈ 32s），否则丢弃
-				if elapsed > 0 && elapsed <= 32767 {
+				// elapsed >= 0 且不超出 int16 范围（32767ms ≈ 32s），否则丢弃
+				if elapsed >= 0 && elapsed <= 32767 {
 					ms := int16(elapsed)
 					gc.Set("t_route_ms", ms)
 					gc.Set("t_upstream_ms", ms)

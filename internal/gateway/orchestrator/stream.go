@@ -61,7 +61,7 @@ func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest
 		if reqStart, ok := gc.Get("start_time"); ok {
 			if t, ok := reqStart.(time.Time); ok && !t.IsZero() {
 				elapsed := time.Since(t).Milliseconds()
-				if elapsed > 0 && elapsed <= 32767 {
+				if elapsed >= 0 && elapsed <= 32767 {
 					ms := int16(elapsed)
 					gc.Set("t_route_ms", ms)
 					gc.Set("t_upstream_ms", ms)

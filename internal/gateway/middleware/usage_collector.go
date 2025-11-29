@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"encoding/json"
-	"log"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -60,7 +59,6 @@ func UsageCollector(collector *gwobs.Collector, traceWriter ...*gwobs.TraceWrite
 				logEnabled = b
 			}
 		}
-		log.Printf("[trace] key=%s log_enabled=%v", c.GetString("key_name"), logEnabled)
 
 		// ── Usage 埋点：始终写入（耗时/Token/费用，无论 log_enabled） ──
 		if collector != nil {

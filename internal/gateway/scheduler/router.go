@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
-	"sort"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -33,7 +33,7 @@ func (r *Router) Route(groupName string) (*RouteDecision, error) {
 		return nil, ErrGroupNotFound
 	}
 
-	slog.Info("router: group found", "group", groupName, "models", len(group.Models), "strategy", group.Strategy)
+	slog.Debug("router: group found", "group", groupName, "models", len(group.Models), "strategy", group.Strategy)
 
 	healthyModels := r.healthStore.FilterHealthy(group.Models)
 	if len(healthyModels) == 0 {
@@ -41,7 +41,7 @@ func (r *Router) Route(groupName string) (*RouteDecision, error) {
 		return nil, ErrNoAvailableModel
 	}
 
-	slog.Info("router: healthy models", "group", groupName, "healthy", len(healthyModels))
+	slog.Debug("router: healthy models", "group", groupName, "healthy", len(healthyModels))
 	entry, err := r.selectEntry(group.Strategy, groupName, healthyModels)
 	if err != nil {
 		return nil, err
@@ -50,9 +50,9 @@ func (r *Router) Route(groupName string) (*RouteDecision, error) {
 	decision := &RouteDecision{
 		GroupName:      group.GroupName,
 		Strategy:       group.Strategy,
-		ModelID:        fmt.Sprintf("%d", entry.ModelID),
+		ModelID:        strconv.FormatUint(uint64(entry.ModelID), 10),
 		ModelName:      entry.ModelName,
-		ChannelID:      fmt.Sprintf("%d", entry.ChannelID),
+		ChannelID:      strconv.FormatUint(uint64(entry.ChannelID), 10),
 		ChannelType:    entry.ChannelType,
 		ProviderName:   entry.ProviderName,
 		Endpoint:       entry.Endpoint,
@@ -73,9 +73,9 @@ func (r *Router) SelectByStrategy(strategy RoutingStrategy, groupName string, he
 	decision := &RouteDecision{
 		Strategy:       strategy,
 		GroupName:      groupName,
-		ModelID:        fmt.Sprintf("%d", entry.ModelID),
+		ModelID:        strconv.FormatUint(uint64(entry.ModelID), 10),
 		ModelName:      entry.ModelName,
-		ChannelID:      fmt.Sprintf("%d", entry.ChannelID),
+		ChannelID:      strconv.FormatUint(uint64(entry.ChannelID), 10),
 		ChannelType:    entry.ChannelType,
 		ProviderName:   entry.ProviderName,
 		Endpoint:       entry.Endpoint,
@@ -108,17 +108,14 @@ func (r *Router) routeRoundRobin(groupName string, healthyModels []*ModelRouting
 }
 
 func (r *Router) routePriority(groupName string, healthyModels []*ModelRoutingEntry) (*ModelRoutingEntry, error) {
-	sort.Slice(healthyModels, func(i, j int) bool {
-		return healthyModels[i].Priority < healthyModels[j].Priority
-	})
-
+	// healthyModels 已在 RouteTable.ReplaceAll 时按 Priority 升序排好，无需再次排序。
 	minPriority := healthyModels[0].Priority
-	samePrio := make([]*ModelRoutingEntry, 0)
+	samePrio := make([]*ModelRoutingEntry, 0, len(healthyModels))
 	for _, m := range healthyModels {
 		if m.Priority == minPriority {
 			samePrio = append(samePrio, m)
 		} else {
-			break
+			break // 已排好序，后续优先级更高，直接退出
 		}
 	}
 

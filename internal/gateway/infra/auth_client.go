@@ -113,7 +113,11 @@ func (c *AuthClient) verifyKeyHTTP(ctx context.Context, key string) (*VerifyKeyR
 	targetURL := c.base + "/internal/v1/auth/verify-key"
 	slog.DebugContext(ctx, "auth-client: HTTP verify-key", "url", targetURL)
 
-	body, _ := json.Marshal(map[string]string{"key": key})
+	// 用具名 struct 替代临时 map，避免 map 堆分配
+	type verifyKeyReq struct {
+		Key string `json:"key"`
+	}
+	body, _ := json.Marshal(verifyKeyReq{Key: key})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err

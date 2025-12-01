@@ -893,7 +893,7 @@ const groupBy = ref('day')
 const statsPage      = ref(1)
 const statsPageSize  = 10
 const statsTotalCount = ref(0)        // 后端返回的实体总数
-const isEntityGroupBy = computed(() => ['key', 'model', 'dept', 'hour'].includes(groupBy.value))
+const isEntityGroupBy = computed(() => true) // 所有维度均支持后端分页
 const statsPageRows   = computed(() => {
   // 时间维度不分页，直接返回全量
   if (!isEntityGroupBy.value) return statsRows.value

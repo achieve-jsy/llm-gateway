@@ -187,26 +187,22 @@ func (s *RollupService) queryFromUsageDaily(ctx context.Context, params UsageDai
 
 	query = query.Group(groupCols).Order("est_cost_usd DESC")
 
-	timeGroupBy := params.GroupBy == "day" || params.GroupBy == "week" || params.GroupBy == "month"
-
 	var totalCount int64
-	if !timeGroupBy {
-		if err := s.db.WithContext(ctx).
-			Table("(?) AS sub", query.Session(&gorm.Session{NewDB: false})).
-			Select("COUNT(*)").
-			Scan(&totalCount).Error; err != nil {
-			return nil, fmt.Errorf("count usage_daily: %w", err)
-		}
-		page := params.Page
-		pageSize := params.PageSize
-		if pageSize <= 0 {
-			pageSize = 20
-		}
-		if page < 1 {
-			page = 1
-		}
-		query = query.Limit(pageSize).Offset((page - 1) * pageSize)
+	if err := s.db.WithContext(ctx).
+		Table("(?) AS sub", query.Session(&gorm.Session{NewDB: false})).
+		Select("COUNT(*)").
+		Scan(&totalCount).Error; err != nil {
+		return nil, fmt.Errorf("count usage_daily: %w", err)
 	}
+	page := params.Page
+	pageSize := params.PageSize
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if page < 1 {
+		page = 1
+	}
+	query = query.Limit(pageSize).Offset((page - 1) * pageSize)
 
 	var rows []UsageDailyRow
 	if err := query.Find(&rows).Error; err != nil {
@@ -216,14 +212,9 @@ func (s *RollupService) queryFromUsageDaily(ctx context.Context, params UsageDai
 		return nil, fmt.Errorf("query usage_daily: %w", err)
 	}
 	resp := buildResponse(params, rows)
-	if !timeGroupBy {
-		resp.TotalCount = totalCount
-		resp.Page = params.Page
-		resp.PageSize = params.PageSize
-		if resp.PageSize <= 0 {
-			resp.PageSize = 20
-		}
-	}
+	resp.TotalCount = totalCount
+	resp.Page = page
+	resp.PageSize = pageSize
 	return resp, nil
 }
 
@@ -271,36 +262,30 @@ func (s *RollupService) queryFromCallLogs(ctx context.Context, params UsageDaily
 	}
 
 	orderCol := "est_cost_usd DESC"
-	// day/week/month 是时间序列，全量返回（行数有限，最多 90 行），不分页
-	// hour 行数可能很多（查 30 天 = 720 行），需要分页
-	noPageGroupBy := params.GroupBy == "day" || params.GroupBy == "week" || params.GroupBy == "month"
-	timeGroupBy := noPageGroupBy || params.GroupBy == "hour"
+	// 时间维度按时间升序
+	timeGroupBy := params.GroupBy == "hour" || params.GroupBy == "day" || params.GroupBy == "week" || params.GroupBy == "month"
 	if timeGroupBy {
 		orderCol = "stat_date ASC"
 	}
 	query = query.Group(groupCols).Order(orderCol)
 
-	// day/week/month 不分页（行数有限）；hour/key/model/dept 支持真实分页
+	// 所有维度均支持分页
 	var totalCount int64
-	if !noPageGroupBy {
-		// 把当前带 WHERE+GROUP BY 的 query 包成子查询来 COUNT，
-		// 避免聚合列（SUM/COUNT）在外层 COUNT(*) 里触发 GROUP BY 冲突
-		if err := s.db.WithContext(ctx).
-			Table("(?) AS sub", query.Session(&gorm.Session{NewDB: false})).
-			Select("COUNT(*)").
-			Scan(&totalCount).Error; err != nil {
-			return nil, fmt.Errorf("count call_logs: %w", err)
-		}
-		page := params.Page
-		pageSize := params.PageSize
-		if pageSize <= 0 {
-			pageSize = 20
-		}
-		if page < 1 {
-			page = 1
-		}
-		query = query.Limit(pageSize).Offset((page - 1) * pageSize)
+	if err := s.db.WithContext(ctx).
+		Table("(?) AS sub", query.Session(&gorm.Session{NewDB: false})).
+		Select("COUNT(*)").
+		Scan(&totalCount).Error; err != nil {
+		return nil, fmt.Errorf("count call_logs: %w", err)
 	}
+	page := params.Page
+	pageSize := params.PageSize
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if page < 1 {
+		page = 1
+	}
+	query = query.Limit(pageSize).Offset((page - 1) * pageSize)
 
 	var rows []UsageDailyRow
 	if err := query.Find(&rows).Error; err != nil {
@@ -310,14 +295,9 @@ func (s *RollupService) queryFromCallLogs(ctx context.Context, params UsageDaily
 		return nil, fmt.Errorf("query call_logs: %w", err)
 	}
 	resp := buildResponse(params, rows)
-	if !noPageGroupBy {
-		resp.TotalCount = totalCount
-		resp.Page = params.Page
-		resp.PageSize = params.PageSize
-		if resp.PageSize <= 0 {
-			resp.PageSize = 20
-		}
-	}
+	resp.TotalCount = totalCount
+	resp.Page = page
+	resp.PageSize = pageSize
 	return resp, nil
 }
 

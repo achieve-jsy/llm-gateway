@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/example/llm-gateway/internal/core"
@@ -88,7 +89,7 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 	h.handleNonStream(c, ctx, &req, originalModel)
 }
 
-// handleNonStream 处理普通（非流式）请求
+	// handleNonStream 处理普通（非流式）请求
 func (h *ChatHandler) handleNonStream(c *gin.Context, ctx context.Context, req *core.ChatRequest, originalModel string) {
 	resp, err := h.orchestrator.Chat(ctx, req)
 	if err != nil {
@@ -99,15 +100,48 @@ func (h *ChatHandler) handleNonStream(c *gin.Context, ctx context.Context, req *
 			if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
 				failedID = dc.RoutedModelID
 			}
+			slog.Warn("failover: primary failed",
+				"request_id", c.GetString("request_id"),
+				"group", originalModel,
+				"failed_model", req.Model,
+				"failed_model_id", failedID,
+				"error", err.Error(),
+			)
 			if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID); fErr == nil {
 				req.Model = decision.ModelName
+				req.Provider = decision.ProviderName // 指定 provider，避免同名模型路由回故障节点
 				c.Set("failover_used", true)
+				slog.Info("failover: switching",
+					"request_id", c.GetString("request_id"),
+					"group", originalModel,
+					"target_provider", decision.ProviderName,
+					"target_model", decision.ModelName,
+					"target_model_id", decision.ModelID,
+				)
 				if fResp, fErr2 := h.orchestrator.Chat(ctx, req); fErr2 == nil {
 					// failover 成功，清除首次失败写入的 error_message
 					c.Set("error_message", "")
+					slog.Info("failover: success",
+						"request_id", c.GetString("request_id"),
+						"group", originalModel,
+						"final_provider", decision.ProviderName,
+					)
 					c.JSON(http.StatusOK, fResp)
 					return
+				} else {
+					slog.Error("failover: target also failed",
+						"request_id", c.GetString("request_id"),
+						"group", originalModel,
+						"target_provider", decision.ProviderName,
+						"error", fErr2.Error(),
+					)
 				}
+			} else {
+				slog.Error("failover: no available target",
+					"request_id", c.GetString("request_id"),
+					"group", originalModel,
+					"error", fErr.Error(),
+				)
 			}
 		}
 		if ue, ok := err.(*model.UnifiedError); ok {
@@ -131,15 +165,48 @@ func (h *ChatHandler) handleStream(c *gin.Context, ctx context.Context, req *cor
 			if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
 				failedID = dc.RoutedModelID
 			}
+			slog.Warn("failover: primary failed (stream)",
+				"request_id", c.GetString("request_id"),
+				"group", originalModel,
+				"failed_model", req.Model,
+				"failed_model_id", failedID,
+				"error", err.Error(),
+			)
 			if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID); fErr == nil {
 				req.Model = decision.ModelName
+				req.Provider = decision.ProviderName // 指定 provider，避免同名模型路由回故障节点
 				c.Set("failover_used", true)
+				slog.Info("failover: switching (stream)",
+					"request_id", c.GetString("request_id"),
+					"group", originalModel,
+					"target_provider", decision.ProviderName,
+					"target_model", decision.ModelName,
+					"target_model_id", decision.ModelID,
+				)
 				if fStream, fErr2 := h.orchestrator.ChatStream(ctx, req); fErr2 == nil {
 					// failover 成功，清除首次失败写入的 error_message
 					c.Set("error_message", "")
+					slog.Info("failover: success (stream)",
+						"request_id", c.GetString("request_id"),
+						"group", originalModel,
+						"final_provider", decision.ProviderName,
+					)
 					HandleStreamResponse(c, fStream)
 					return
+				} else {
+					slog.Error("failover: target also failed (stream)",
+						"request_id", c.GetString("request_id"),
+						"group", originalModel,
+						"target_provider", decision.ProviderName,
+						"error", fErr2.Error(),
+					)
 				}
+			} else {
+				slog.Error("failover: no available target (stream)",
+					"request_id", c.GetString("request_id"),
+					"group", originalModel,
+					"error", fErr.Error(),
+				)
 			}
 		}
 		if ue, ok := err.(*model.UnifiedError); ok {

@@ -138,7 +138,9 @@ build-web-prod:
 # ═══════════════════════════════════════════════════════════════════════════════
 migrate:
   stage: migrate
-  image: arigaio/atlas:latest
+  image:
+    name: arigaio/atlas:latest
+    entrypoint: [""]
   tags: [docker]
   script:
     - |

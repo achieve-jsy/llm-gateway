@@ -8,7 +8,7 @@ controlplane:
 
 redis:
   addr: "127.0.0.1:6379"
-  password: "CHANGE_ME_REDIS_PASSWORD"
+  password: "redis_bGNhwx"
   db: 0
 
 database:

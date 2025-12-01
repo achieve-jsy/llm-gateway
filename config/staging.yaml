@@ -12,7 +12,7 @@ redis:
   db: 1
 
 database:
-  url: "host=192.0.2.10 port=5432 user=llm_gateway password=CHANGE_ME_PASSWORD dbname=llm_gateway_test sslmode=disable"
+  url: "host=192.0.2.10 port=5432 user=llm_gateway password=CHANGE_ME_PASSWORD dbname=llm_gateway sslmode=disable"
 
 otlp:
   endpoint: "localhost:4317"

@@ -55,8 +55,19 @@ services:
       - "${CP_HOST:-127.0.0.1}:${CONTROL_PLANE_PORT:-8081}:8081"
     environment:
       APP_ENV: ${APP_ENV:-prod}
-      # INTERNAL_AUTH_TOKEN 由 group_handler os.Getenv 直接读取，从 yaml provider.internal_token 同值
+      DATABASE_URL: ${DATABASE_URL:-host=192.0.2.10 port=5432 user=llm_gateway password=CHANGE_ME_PASSWORD dbname=llm_gateway sslmode=disable}
+      REDIS_ADDR: ${REDIS_ADDR:-192.0.2.10:6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}
+      REDIS_DB: ${REDIS_DB:-0}
+      JWT_SECRET: ${JWT_SECRET:-d8f7a3b2c1e9f4567890abc123def456}
       INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN:-dev-test-token}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-12345678901234567890123456789012}
+      OAUTH_ISSUER_URL: ${OAUTH_ISSUER_URL:-https://oauth.example.net/}
+      OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID:-5514f6bb0a}
+      OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET:-CHANGE_ME_OAUTH_SECRET}
+      OAUTH_REDIRECT_URI: ${OAUTH_REDIRECT_URI:-http://192.0.2.10:9080/auth/callback}
+      OAUTH_SCOPES: ${OAUTH_SCOPES:-openid profile email}
+      FRONTEND_URL: ${FRONTEND_URL:-http://192.0.2.10:9080}
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/healthz"]
       interval: 10s

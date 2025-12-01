@@ -134,16 +134,18 @@ FRONTEND_URL=http://192.0.2.10:9080
 - **`migrate-prod`**（main 分支）：prod 库 `192.0.2.10:5432` 对 Runner 可路由，直接在 Runner 内执行。
 
 迁移连接串从 `config/test.yaml` 的 `database.url` 解析（`postgres://...@127.0.0.1:5432/llm_gateway_test`）。
+命令带 `--baseline $ATLAS_BASELINE`（CI 全局变量，当前 `20260609082623`）：线上库已有 schema，首次执行把该版本标记为已应用而不执行其 SQL；revision 表建立后再带它为无操作（幂等）。**切勿对空库使用**，否则不会建表。
 
 ### 手动执行迁移（排查/补救）
 
 正常无需手动操作；若 CI 失败需手动补迁移，**在测试主机上**执行（那里才能连到 `127.0.0.1:5432`）：
 
 ```bash
-# 在测试主机 192.0.2.10 上
+# 在测试主机 192.0.2.10 上（库已有 schema → 首次须带 --baseline）
 atlas migrate apply \
   --dir "file://atlas-migrations" \
-  --url "postgres://llm_gateway_test:CHANGE_ME_PASSWORD@127.0.0.1:5432/llm_gateway_test?sslmode=disable"
+  --url "postgres://llm_gateway_test:CHANGE_ME_PASSWORD@127.0.0.1:5432/llm_gateway_test?sslmode=disable" \
+  --baseline "20260609082623"
 
 # 只查看待应用的迁移、不实际执行
 atlas migrate status \
@@ -157,7 +159,7 @@ atlas migrate status \
 |------|------|------|
 | `dial tcp 127.0.0.1:5432: connect: connection refused` | 在 CI Runner 内直连测试库（错误），或测试主机 PG 未起 | 迁移须在测试主机本机执行（`migrate-test` 已走 SSH）；检查宿主机 PG |
 | `checksum mismatch` / `atlas.sum` 校验失败 | 改了迁移文件但没更新 `atlas.sum` | 本地 `atlas migrate hash` 后重新提交 |
-| `connected database is not clean` | 目标库已有非 Atlas 管理的表 | 用 `atlas migrate apply --baseline <version>` 设定基线 |
+| `connected database is not clean: found schema "public"` | 目标库已有表但无 revision 记录 | 带 `--baseline 20260609082623` 执行（CI 已默认带，幂等） |
 | `column xxx does not exist`（应用日志） | 迁移未跑到对应版本 | 在测试主机执行 `atlas migrate apply` 收敛 |
 
 ## 7. 常见故障排查

@@ -75,37 +75,49 @@ stages:
 ```
 
 1. **build**：多阶段 Docker 构建 → 推送到内部 Registry `192.0.2.10:5000`
-2. **migrate**：独立 job，在切流量之前执行 `atlas migrate apply`
-3. **deploy**：调用 `deploy/blue-green.sh` 蓝绿部署
+2. **migrate**：独立 job，在 deploy 之前执行 `atlas migrate apply`（见下方双 job 说明）
+3. **deploy**：SSH 到目标机 `docker compose up -d` 拉起新镜像
 4. **verify**：健康检查 `/health` 和 `/healthz`
 
-### `.gitlab-ci.yml` 关键配置
+### migrate 双 job（按环境拆分）
+
+迁移连接串从对应环境的 `config/<env>.yaml` 的 `database.url` 解析。因网络可达性不同，拆成两个 job：
+
+| job | 触发分支 | Runner 镜像 | 连接方式 |
+|-----|----------|-------------|----------|
+| `migrate-prod` | `main` | `alpine:3.21`（Runner 下载 atlas） | prod 库 `192.0.2.10:5432` 对 Runner 可路由，**直接在 Runner 内**执行 |
+| `migrate-test` | `test` | `deploy-tools:latest` | test 库地址是 `127.0.0.1:5432`（host 网络的宿主机本地库），Runner 连不上，**SSH 到测试机本机**执行 |
+
+> `migrate-test` 不受 `changes:` 限制，只要 push 到 `test` 就执行，确保 schema 先于部署收敛。
 
 ```yaml
-# migrate job（在 deploy 前执行）
-migrate:
+# 直连（prod）：Runner 内执行
+migrate-prod:
   stage: migrate
-  image: arigaio/atlas:latest
+  image: alpine:3.21
   script:
-    - atlas migrate apply
-        --dir "file://migrations"
-        --url "${DATABASE_URL}"
-        --allow-dirty=false
+    - export DATABASE_URL=$(grep -A1 ^database: config/prod.yaml | tail -1 | cut -d'"' -f2)
+    - atlas migrate apply --dir "file://atlas-migrations" --url "$DATABASE_URL" --baseline "$ATLAS_BASELINE"
 
-# deploy 调用蓝绿脚本
-deploy:
-  stage: deploy
+# SSH（test）：把 atlas 二进制 + atlas-migrations/ scp 到测试机，本机执行
+migrate-test:
+  stage: migrate
+  image: ${REGISTRY}/deploy-tools:latest
   script:
-    - scp deploy/blue-green.sh user@${TARGET_HOST}:/opt/llm-gateway/
-    - ssh user@${TARGET_HOST} "bash /opt/llm-gateway/blue-green.sh"
+    - DATABASE_URL=$(grep -A1 ^database: config/test.yaml | tail -1 | cut -d'"' -f2)
+    - scp atlas-bin/atlas atlas-migrations ${TEST_USER}@${TEST_HOST}:/tmp/atlas-migrate/
+    - ssh ${TEST_USER}@${TEST_HOST} "/tmp/atlas-migrate/atlas migrate apply
+        --dir 'file:///tmp/atlas-migrate/atlas-migrations' --url '$DATABASE_URL' --baseline '$ATLAS_BASELINE'"
 ```
+
+> **`--baseline $ATLAS_BASELINE`**（=`atlas-migrations/<时间戳>_baseline.sql` 的时间戳）：线上库已有 schema，首次执行时把该版本标记为已应用且不执行其 SQL；revision 表建立后再带此参数为无操作（幂等）。**切勿对空库使用**，否则不会建表。
 
 ### 构建产物
 
 | 镜像 | Dockerfile | 构建参数 |
 |------|------------|----------|
-| `llm-gateway` | `deploy/docker/gateway.Dockerfile` | `APP_ENV=staging/prod` |
-| `llm-control-plane` | `deploy/docker/control-plane.Dockerfile` | `APP_ENV=staging/prod` |
+| `llm-gateway` | `deploy/docker/gateway.Dockerfile` | `APP_ENV=test/prod` |
+| `llm-control-plane` | `deploy/docker/control-plane.Dockerfile` | `APP_ENV=test/prod` |
 | `web-dist.tar.gz` | Node 构建 artifact | - |
 
 ## 蓝绿部署

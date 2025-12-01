@@ -17,7 +17,7 @@
 | 数据 | 落位 | 持久化 |
 |------|------|--------|
 | 生产 PG / Redis | **生产机 `191.99` 本机** | `/data/pg`、`/data/redis` 绑定卷 |
-| 测试 PG / Redis | **测试机 `191.121` 本机** | 同上 |
+| 测试 PG / Redis | **测试机 `191.120` 本机** | 同上 |
 | 备份归档 | **运维机 `12.15`** | 各环境每日 `pg_dump` 推送，异机留存 |
 
 ```
@@ -27,7 +27,7 @@
   宿主 Nginx → blue/green 应用 → 本机 PG (127.0.0.1:5432)
                                 → 本机 Redis (127.0.0.1:6379)
 
-测试 191.121:
+测试 191.120:
   宿主 Nginx → blue/green 应用 → 本机 PG (127.0.0.1:5432)
                                 → 本机 Redis (127.0.0.1:6379)
 ```
@@ -81,7 +81,7 @@ Go 生态里最贴近 Prisma 的是 **Atlas**。本项目已用 GORM，且 model
 |--------|----------------|
 | `schema.prisma`（声明式） | `internal/controlplane/model/*.go` 的 GORM 结构体（声明式 desired state） |
 | `prisma migrate dev` | `atlas migrate diff` —— 对比 model 与已有迁移目录，**自动生成增量 SQL** |
-| `migration.sql` 文件 | `migrations/2026..._xxx.sql`（Atlas 版本化目录 + `atlas.sum` 校验和） |
+| `migration.sql` 文件 | `atlas-migrations/2026..._xxx.sql`（Atlas 版本化目录 + `atlas.sum` 校验和） |
 | `_prisma_migrations` 表 | `atlas_schema_revisions` 表 |
 | `prisma migrate deploy` | `atlas migrate apply` —— 按版本表从落后处补齐 |
 
@@ -150,29 +150,26 @@ git commit -m "feat(db): add user email column"
 > - 本地开发使用 `--env local`，CI/CD 使用生产环境配置
 > - Atlas 配置文件为 `atlas.hcl`，定义了 GORM loader 和环境配置
 
-### 部署期工作流
+### 部署期工作流（CI/CD）
 
-CI/CD 流程会在蓝绿部署前执行迁移：
+CI 在 `migrate` stage（deploy 之前）执行 `atlas migrate apply`，对比 `atlas_schema_revisions` 从落后版本顺序补齐；幂等、带锁、可重入。按环境网络可达性拆成两个 job：
 
 ```bash
-# 对比 atlas_schema_revisions，从落后版本开始顺序执行；幂等、带锁、可重入
+# migrate-prod（main 分支）：prod 库可路由，Runner 内直接执行
 atlas migrate apply \
   --dir "file://atlas-migrations" \
   --url "$DATABASE_URL" \
-  --allow-dirty=false
+  --baseline "$ATLAS_BASELINE"
+
+# migrate-test（test 分支）：test 库在测试机本机（127.0.0.1:5432），
+# Runner 无法直连，故 SSH 到测试机本机执行同样的命令。
 ```
 
-### 部署期工作流
+- `$DATABASE_URL` 从 `config/<env>.yaml` 的 `database.url` 解析。
+- `$ATLAS_BASELINE`（=`atlas-migrations/<时间戳>_baseline.sql` 的时间戳）：线上库已有 schema，首次执行把该版本标记为已应用而不执行其 SQL；revision 表建立后再带此参数为无操作（幂等）。**切勿对空库使用**。
+- 详见 [部署指南 · migrate 双 job](./deployment.md#migrate-双-job按环境拆分)。
 
-```bash
-# 对比 atlas_schema_revisions，从落后版本开始顺序执行；幂等、带锁、可重入
-atlas migrate apply \
-  --dir "file://migrations" \
-  --url "$DATABASE_URL" \
-  --allow-dirty=false
-```
-
-> Atlas 用 `--dev-url` 指向一个临时 dev 库做 schema 规范化与 diff，**不会动生产库**；diff 出来的 SQL 仍是人可审查的版本化文件，比 GORM `AutoMigrate` 安全得多。
+> 开发期 `atlas migrate diff` 用 `--dev-url` 指向临时 dev 库做 schema 规范化与 diff，**不会动生产库**；diff 出来的 SQL 仍是人可审查的版本化文件，比 GORM `AutoMigrate` 安全得多。
 
 ### 备选方案对比
 
@@ -185,9 +182,9 @@ atlas migrate apply \
 ### 迁移文件规范
 
 1. **幂等性**：统一使用 `IF NOT EXISTS`、`IF EXISTS`
-2. **命名**：`NNN_description.sql`（编号三位数递增）
-3. **基线（baseline）**：线上库已有数据和表，需用 `atlas migrate apply --baseline <版本>` 把现状标成"已应用到 N"
-4. **执行位置**：CI 中独立一次性步骤，在切流量之前执行（不要让蓝绿双实例在启动时争抢迁移）
+2. **命名**：由 Atlas 自动生成 `<时间戳>_description.sql`（如 `20260609082623_baseline.sql`），**不要手动改名**；改动迁移文件后须 `atlas migrate hash` 同步 `atlas.sum`
+3. **基线（baseline）**：线上库已有数据和表，首次接管用 `atlas migrate apply --baseline <版本>` 把现状标成"已应用到该版本"（CI 已通过 `$ATLAS_BASELINE` 配置，幂等）
+4. **执行位置**：CI `migrate` stage 独立一次性步骤，在 deploy 之前执行（不要让应用在启动时自行迁移）
 
 ## Expand-Contract 模式
 

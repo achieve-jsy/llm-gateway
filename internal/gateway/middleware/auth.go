@@ -1,7 +1,7 @@
 package middleware
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -11,7 +11,6 @@ import (
 	gwmodel "github.com/example/llm-gateway/internal/gateway/model"
 	j "github.com/golang-jwt/jwt/v5"
 )
-
 
 // AuthMiddleware provides unified authentication (API key via auth service + JWT).
 // Replaces the old APIKeyAuth middleware.
@@ -27,9 +26,10 @@ func AuthMiddleware(authClient *infra.AuthClient) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gwmodel.ErrUnauthorized})
 			return
 		}
+
 		// API Key path
 		if strings.HasPrefix(token, "sk-") {
-			_, _, _ = j.NewParser().ParseUnverified(token, j.MapClaims{})
+			// 注意：此处不再做无意义的 JWT ParseUnverified（原第 32 行已删除）
 			authStart := time.Now()
 			resp, err := authClient.VerifyKey(c.Request.Context(), token)
 			if err != nil {
@@ -44,45 +44,47 @@ func AuthMiddleware(authClient *infra.AuthClient) gin.HandlerFunc {
 				})
 				return
 			}
-		// log_enabled: nil（旧缓存无此字段）时默认 true，保持原有行为
-		var logEnabledPtr interface{} = nil
-		if resp.Data.LogEnabled != nil {
-			logEnabledPtr = *resp.Data.LogEnabled
-		}
-		log.Printf("[auth-debug] key=%s log_enabled_ptr=%v", resp.Data.KeyName, logEnabledPtr)
-		logEnabled := resp.Data.LogEnabled == nil || *resp.Data.LogEnabled
-		identity := &gwmodel.UserIdentity{
-			UserID:          resp.Data.User.UserID,
-			KeyID:           resp.Data.KeyID,
-			DepartmentID:    resp.Data.User.DepartmentID,
-			StudioID:        resp.Data.User.StudioID,
-			AccessAllGroups: resp.Data.AccessAllGroups,
-			LogEnabled:      logEnabled,
-		}
-	c.Set("identity", identity)
-	c.Set("key_id", identity.KeyID)
-	c.Set("key_name", resp.Data.KeyName)
-	c.Set("log_enabled", logEnabled)
-	c.Set("user_id", identity.UserID)
-	c.Set("user_name", resp.Data.User.Name)
-	c.Set("dept_id", identity.DepartmentID)
-	c.Set("dept_name", resp.Data.User.DeptName)
-	c.Set("studio_id", identity.StudioID)
-	c.Set("studio_name", resp.Data.User.StudioName)
-		// 阶段计时：auth 完成时间（相对于请求抵达）
-		if startTime, ok := c.Get("start_time"); ok {
-			if t, ok := startTime.(time.Time); ok {
-				ms := int16(time.Since(t).Milliseconds())
-				_ = authStart // suppress unused warning if start_time not set
+
+			// log_enabled: nil（旧缓存无此字段）时默认 true，保持原有行为
+			logEnabled := resp.Data.LogEnabled == nil || *resp.Data.LogEnabled
+			slog.DebugContext(c.Request.Context(), "auth: key verified",
+				"key_name", resp.Data.KeyName,
+				"log_enabled", logEnabled,
+			)
+
+			identity := &gwmodel.UserIdentity{
+				UserID:          resp.Data.User.UserID,
+				KeyID:           resp.Data.KeyID,
+				DepartmentID:    resp.Data.User.DepartmentID,
+				StudioID:        resp.Data.User.StudioID,
+				AccessAllGroups: resp.Data.AccessAllGroups,
+				LogEnabled:      logEnabled,
+			}
+			c.Set("identity", identity)
+			c.Set("key_id", identity.KeyID)
+			c.Set("key_name", resp.Data.KeyName)
+			c.Set("log_enabled", logEnabled)
+			c.Set("user_id", identity.UserID)
+			c.Set("user_name", resp.Data.User.Name)
+			c.Set("dept_id", identity.DepartmentID)
+			c.Set("dept_name", resp.Data.User.DeptName)
+			c.Set("studio_id", identity.StudioID)
+			c.Set("studio_name", resp.Data.User.StudioName)
+
+			// 阶段计时：auth 完成时间（相对于请求抵达）
+			if startTime, ok := c.Get("start_time"); ok {
+				if t, ok := startTime.(time.Time); ok {
+					ms := int16(time.Since(t).Milliseconds())
+					c.Set("t_auth_ms", ms)
+				}
+			} else {
+				ms := int16(time.Since(authStart).Milliseconds())
 				c.Set("t_auth_ms", ms)
 			}
-		} else {
-			ms := int16(time.Since(authStart).Milliseconds())
-			c.Set("t_auth_ms", ms)
-		}
-		c.Next()
+			c.Next()
 			return
 		}
+
 		// JWT path for employee self-service (e.g. /v1/me/models)
 		if strings.HasPrefix(token, "eyJ") {
 			parser := j.NewParser()
@@ -107,6 +109,7 @@ func AuthMiddleware(authClient *infra.AuthClient) gin.HandlerFunc {
 			c.Next()
 			return
 		}
+
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gwmodel.ErrUnauthorized})
 	}
 }

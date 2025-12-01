@@ -1,7 +1,6 @@
 package orchestrator
 
 import (
-	"encoding/json"
 	"strings"
 	"time"
 
@@ -30,7 +29,10 @@ type streamUsageObserver struct {
 }
 
 func newStreamUsageObserver(gc *gin.Context, start time.Time) *streamUsageObserver {
-	return &streamUsageObserver{gc: gc, start: start}
+	o := &streamUsageObserver{gc: gc, start: start}
+	// 预分配内容缓冲区，减少长输出时的扩容次数
+	o.contentBuf.Grow(2048)
+	return o
 }
 
 // OnJSONEvent 每个 SSE JSON chunk 触发一次（按流顺序）。payload 视为只读。
@@ -55,7 +57,6 @@ func (o *streamUsageObserver) OnJSONEvent(payload map[string]any) {
 		if first, ok := choices[0].(map[string]any); ok {
 			if delta, ok := first["delta"].(map[string]any); ok {
 				if c, ok := delta["content"].(string); ok && c != "" {
-					// 首 token 延迟：content 首次出现
 					if o.firstTokenAt.IsZero() {
 						o.firstTokenAt = time.Now()
 					}
@@ -67,16 +68,50 @@ func (o *streamUsageObserver) OnJSONEvent(payload map[string]any) {
 					}
 					o.reasoningBuf.WriteString(rc)
 				}
+				// 兼容 Bedrock/Anthropic 等 provider：delta 中 "text" 字段
+				if t, ok := delta["text"].(string); ok && t != "" {
+					if o.firstTokenAt.IsZero() {
+						o.firstTokenAt = time.Now()
+					}
+					o.contentBuf.WriteString(t)
+				}
+			}
+			// 兼容 Bedrock content_block_delta 格式：
+			// {"choices":[{"content_block":{"type":"text","text":"..."}}]}
+			if cb, ok := first["content_block"].(map[string]any); ok {
+				if t, ok := cb["text"].(string); ok && t != "" {
+					if o.firstTokenAt.IsZero() {
+						o.firstTokenAt = time.Now()
+					}
+					o.contentBuf.WriteString(t)
+				}
 			}
 		}
 	}
 
-	// 末尾 usage chunk
+	// 兜底：如果 chunk 顶层有 delta（部分 provider 不套在 choices 里）
+	if o.firstTokenAt.IsZero() {
+		if delta, ok := payload["delta"].(map[string]any); ok {
+			if t, ok := delta["text"].(string); ok && t != "" {
+				o.firstTokenAt = time.Now()
+				o.contentBuf.WriteString(t)
+			}
+			if c, ok := delta["content"].(string); ok && c != "" {
+				o.firstTokenAt = time.Now()
+				o.contentBuf.WriteString(c)
+			}
+		}
+	}
+
+	// 末尾 usage chunk：直接从 map 提取字段，避免 json.Marshal+Unmarshal 双往返
 	if raw, ok := payload["usage"]; ok && raw != nil {
-		if b, err := json.Marshal(raw); err == nil {
-			var u core.Usage
-			if err := json.Unmarshal(b, &u); err == nil &&
-				(u.PromptTokens > 0 || u.CompletionTokens > 0 || u.TotalTokens > 0) {
+		if usageMap, ok := raw.(map[string]any); ok {
+			u := core.Usage{
+				PromptTokens:     toInt(usageMap["prompt_tokens"]),
+				CompletionTokens: toInt(usageMap["completion_tokens"]),
+				TotalTokens:      toInt(usageMap["total_tokens"]),
+			}
+			if u.PromptTokens > 0 || u.CompletionTokens > 0 || u.TotalTokens > 0 {
 				o.usage = &u
 			}
 		}
@@ -94,6 +129,14 @@ func (o *streamUsageObserver) OnStreamClose() {
 	if !o.firstTokenAt.IsZero() {
 		if ms := int(o.firstTokenAt.Sub(o.start).Milliseconds()); ms > 0 {
 			o.gc.Set("first_token_ms", ms)
+		}
+	} else if o.contentBuf.Len() > 0 || o.reasoningBuf.Len() > 0 {
+		// 兜底：observer 解析到了文本内容但没有记录首 token 时间
+		// （格式兼容问题导致 firstTokenAt 未被设置），用 t_ttfb_ms 作为 fallback
+		if v, ok := o.gc.Get("t_ttfb_ms"); ok {
+			if ms, ok := v.(int); ok && ms > 0 {
+				o.gc.Set("first_token_ms", ms)
+			}
 		}
 	}
 
@@ -146,4 +189,12 @@ func chunkHasContent(payload map[string]any) bool {
 		return true
 	}
 	return false
+}
+
+// toInt 从 JSON 数字（float64）安全转换为 int，非数字返回 0。
+func toInt(v any) int {
+	if f, ok := v.(float64); ok {
+		return int(f)
+	}
+	return 0
 }

@@ -17,13 +17,14 @@ type rateCounter struct {
 
 // GatewayGuard provides per-API-key rate limiting and concurrency control.
 type GatewayGuard struct {
-	mu sync.Mutex
-	// rate counters
-	rateData      map[string]*rateCounter
-	limitPerMin   int32
-	// concurrency tracking
+	// 并发控制（独立锁，避免与限流锁互相阻塞）
+	inFlightMu    sync.Mutex
 	inFlight      map[string]int32
 	maxConcurrent int32
+	// 限流控制（独立锁）
+	rateMu      sync.Mutex
+	rateData    map[string]*rateCounter
+	limitPerMin int32
 }
 
 func NewGatewayGuard(limitPerMin, maxConcurrent int) *GatewayGuard {
@@ -34,7 +35,6 @@ func NewGatewayGuard(limitPerMin, maxConcurrent int) *GatewayGuard {
 		maxConcurrent: int32(maxConcurrent),
 	}
 }
-
 func (g *GatewayGuard) UpdateLimits(limitPerMin, maxConcurrent int) {
 	atomic.StoreInt32(&g.limitPerMin, int32(limitPerMin))
 	atomic.StoreInt32(&g.maxConcurrent, int32(maxConcurrent))
@@ -86,8 +86,8 @@ func (g *GatewayGuard) Handler() gin.HandlerFunc {
 }
 
 func (g *GatewayGuard) acquire(key string, maxConcurrent int) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	g.inFlightMu.Lock()
+	defer g.inFlightMu.Unlock()
 	current := g.inFlight[key]
 	if current >= int32(maxConcurrent) {
 		return false
@@ -97,8 +97,8 @@ func (g *GatewayGuard) acquire(key string, maxConcurrent int) bool {
 }
 
 func (g *GatewayGuard) release(key string) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	g.inFlightMu.Lock()
+	defer g.inFlightMu.Unlock()
 	current := g.inFlight[key]
 	if current <= 1 {
 		delete(g.inFlight, key)
@@ -108,9 +108,9 @@ func (g *GatewayGuard) release(key string) {
 }
 
 func (g *GatewayGuard) checkRate(key string, limit int) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	now := time.Now()
+	now := time.Now() // 在锁外获取时间，减少锁持有时间
+	g.rateMu.Lock()
+	defer g.rateMu.Unlock()
 	counter, ok := g.rateData[key]
 	if !ok || now.After(counter.resetAt) {
 		counter = &rateCounter{count: 0, resetAt: now.Add(time.Minute)}
@@ -126,14 +126,14 @@ func (g *GatewayGuard) StartCleanup(interval time.Duration) {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for range ticker.C {
-			g.mu.Lock()
 			now := time.Now()
+			g.rateMu.Lock()
 			for k, c := range g.rateData {
 				if now.After(c.resetAt) {
 					delete(g.rateData, k)
 				}
 			}
-			g.mu.Unlock()
+			g.rateMu.Unlock()
 		}
 	}()
 }

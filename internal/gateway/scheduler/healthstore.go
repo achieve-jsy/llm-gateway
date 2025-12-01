@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
@@ -45,9 +46,28 @@ func (hs *HealthStore) Get(modelID string) *ModelHealthStatus {
 }
 
 // FilterHealthy filters the given model entries, returning only those whose
-// health status is Healthy. Models not yet tracked are considered Healthy.
+// health status is Healthy or not yet tracked (treated as Healthy).
+// 兜底逻辑：若所有模型均不健康，返回原始全量列表，避免服务中断。
 func (hs *HealthStore) FilterHealthy(models []*ModelRoutingEntry) []*ModelRoutingEntry {
-	return models
+	hs.mu.RLock()
+	defer hs.mu.RUnlock()
+
+	result := make([]*ModelRoutingEntry, 0, len(models))
+	for _, m := range models {
+		modelKey := fmt.Sprintf("%d", m.ModelID)
+		status, tracked := hs.data[modelKey]
+		// 未追踪（从未失败过）或状态明确为 Healthy，则纳入候选
+		if !tracked || status.Status == HealthHealthy {
+			result = append(result, m)
+		}
+	}
+
+	// 兜底：全部标记为不健康时退化为全量，避免 0 个模型导致请求直接失败。
+	// 此时 Failover 机制会在实际转发失败时继续处理。
+	if len(result) == 0 {
+		return models
+	}
+	return result
 }
 
 // RecordFailure records a failure for the given model ID. It updates the failure

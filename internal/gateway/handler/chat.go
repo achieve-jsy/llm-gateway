@@ -93,7 +93,13 @@ func (h *ChatHandler) handleNonStream(c *gin.Context, ctx context.Context, req *
 	resp, err := h.orchestrator.Chat(ctx, req)
 	if err != nil {
 		if h.groupDispatch != nil && req.Model != originalModel {
-			if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, req.Model); fErr == nil {
+			// 用 RoutedModelID（数字 ID）而非模型名做 Failover 排除，
+			// 避免 failover.go 中字符串比对永远不匹配的 bug。
+			failedID := req.Model
+			if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
+				failedID = dc.RoutedModelID
+			}
+			if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID); fErr == nil {
 				req.Model = decision.ModelName
 				c.Set("failover_used", true)
 				if fResp, fErr2 := h.orchestrator.Chat(ctx, req); fErr2 == nil {
@@ -120,7 +126,12 @@ func (h *ChatHandler) handleStream(c *gin.Context, ctx context.Context, req *cor
 	stream, err := h.orchestrator.ChatStream(ctx, req)
 	if err != nil {
 		if h.groupDispatch != nil && req.Model != originalModel {
-			if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, req.Model); fErr == nil {
+			// 用 RoutedModelID（数字 ID）而非模型名做 Failover 排除
+			failedID := req.Model
+			if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
+				failedID = dc.RoutedModelID
+			}
+			if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID); fErr == nil {
 				req.Model = decision.ModelName
 				c.Set("failover_used", true)
 				if fStream, fErr2 := h.orchestrator.ChatStream(ctx, req); fErr2 == nil {

@@ -19,6 +19,7 @@ import (
 	authhandler "github.com/example/llm-gateway/internal/auth/handler"
 	authsvc "github.com/example/llm-gateway/internal/auth/service"
 
+	"github.com/example/llm-gateway/internal/gateway/binding"
 	"github.com/example/llm-gateway/internal/gateway/cache"
 	"github.com/example/llm-gateway/internal/gateway/config"
 	"github.com/example/llm-gateway/internal/gateway/infra"
@@ -140,6 +141,23 @@ func main() {
 
 	subscriber := infra.NewSubscriber(rdb, providerLoader.HandleChangeEvent(fetchEntries))
 	subscriber.AddCallback(keyCache.HandleChangeEvent)
+
+	// 创建 binding client（热路径：模型组权限校验），在 main 层管理生命周期
+	// 以便将 Key 禁用事件接入缓存失效回调
+	var bindClient *binding.Client
+	if controlPlaneURL != "" && internalToken != "" {
+		bindClient = binding.NewClient(controlPlaneURL, internalToken)
+		// Key 禁用/删除时主动清除 binding 缓存，避免旧授权残留
+		subscriber.AddCallback(func(ev infra.ChangeEvent) {
+			if ev.ResourceType == "api_key" {
+				switch ev.Type {
+				case "key_disabled", "key_deleted":
+					bindClient.Cache().Invalidate(ev.ResourceID)
+				}
+			}
+		})
+	}
+
 	go subscriber.Start(ctx)
 
 	// Periodic reconciliation loop (every 30s) – brings in any changes missed
@@ -234,7 +252,7 @@ func main() {
 
 	// Initialize router (inject dependencies). We always use the router obtained
 	// from the ProviderLoader – which is atomically swapped on config changes.
-	r := server.Setup(providerLoader.Router, icache, state, authClient, controlPlaneURL, internalToken, sch, nameCache, collector, traceWriter)
+	r := server.Setup(providerLoader.Router, icache, state, authClient, controlPlaneURL, internalToken, sch, nameCache, collector, traceWriter, bindClient)
 
 	// Register auth routes
 	r.GET("/.well-known/jwks.json", authJWKSHandler.GetJWKS)

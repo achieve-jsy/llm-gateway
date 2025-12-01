@@ -27,3 +27,10 @@ node_modules/
 .xflow/runtime/
 .xflow/profiles/*/working/
 
+# ── 本地脚本 ─────────────────────────────────────────────────────────────────
+diagnose_latency.sh
+
+# ── husky / git hooks（opencode 自动生成，无需跟踪） ─────────────────────────
+.husky/
+package.json
+package-lock.json

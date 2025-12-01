@@ -112,8 +112,19 @@ func traceEventToModel(e TraceEvent) obsmodel.CallTrace {
 	if len(e.RequestHeadersRaw) > 0 && json.Valid(e.RequestHeadersRaw) {
 		ct.RequestHeaders = e.RequestHeadersRaw
 	}
-	if len(e.RequestBodyRaw) > 0 && json.Valid(e.RequestBodyRaw) {
-		ct.RequestBody = e.RequestBodyRaw
+	// RequestBodyRaw 经过 sanitizeChatRequestBody 处理后始终是合法 JSON；
+	// json.Valid 作为防御性校验保留，非法时仍写入（避免因极端兜底路径导致数据丢失）
+	if len(e.RequestBodyRaw) > 0 {
+		if json.Valid(e.RequestBodyRaw) {
+			ct.RequestBody = e.RequestBodyRaw
+		} else {
+			// sanitize 兜底路径：原始请求体非合法 JSON（极少发生），
+			// 包装为 {"_raw_truncated": "..."} 写入，确保字段不为 null
+			wrapped, err := json.Marshal(map[string]string{"_raw_truncated": string(e.RequestBodyRaw[:min(256, len(e.RequestBodyRaw))])})
+			if err == nil {
+				ct.RequestBody = wrapped
+			}
+		}
 	}
 	if len(e.ResponseBodyRaw) > 0 && json.Valid(e.ResponseBodyRaw) {
 		ct.ResponseBody = e.ResponseBodyRaw

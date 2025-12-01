@@ -25,6 +25,7 @@ import (
 // Setup 初始化 Gin 路由与中间件
 // routerGetter 在每次请求时被调用以获取最新的 Router（支持热更新）。
 // state tracks load status.
+// bindClient 为可选参数（nil 时不启用模型组权限校验）。
 func Setup(
 	routerGetter func() *providers.Router,
 	routerCache *infra.Cache,
@@ -35,6 +36,7 @@ func Setup(
 	nameCache *cache.GroupNameCache,
 	collectorOpt *gwobs.Collector,
 	traceWriterOpt *gwobs.TraceWriter,
+	bindClient *binding.Client,
 ) *gin.Engine {
 	var collector []*gwobs.Collector
 	if collectorOpt != nil {
@@ -60,10 +62,8 @@ func Setup(
 	// 创建编排器和处理器
 	orch := orchestrator.NewChatOrchestratorWithGetter(routerGetter)
 
-	bindClient := binding.NewClient(controlPlaneURL, internalToken)
-
 	var groupDispatch *orchestrator.GroupAwareDispatcher
-	if sch != nil && nameCache != nil {
+	if sch != nil && nameCache != nil && bindClient != nil {
 		groupDispatch = orchestrator.NewGroupAwareDispatcherWithBinding(sch, nameCache, bindClient)
 	}
 

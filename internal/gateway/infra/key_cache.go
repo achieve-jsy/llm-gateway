@@ -14,8 +14,12 @@ import (
 
 const (
 	keyCacheRedisPrefix = "gateway:keycache:"
-	keyCacheRedisTTL    = 15 * time.Second
-	keyCacheLocalTTL    = 5 * time.Second
+	// keyCacheRedisTTL / keyCacheLocalTTL：Key 验证结果缓存时长。
+	// 主动吊销通过 HandleChangeEvent（key_disabled/key_deleted）立即失效，
+	// 因此可以设置较长的 TTL 而不影响安全性。
+	// 5s/15s 是历史遗留的过保守值，已导致高频 Redis/控制面穿透，影响 TTFT。
+	keyCacheRedisTTL = 5 * time.Minute
+	keyCacheLocalTTL = 60 * time.Second
 )
 
 type cachedKeyEntry struct {

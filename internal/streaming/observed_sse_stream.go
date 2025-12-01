@@ -164,20 +164,48 @@ func (s *ObservedSSEStream) processBufferedEvents(data []byte) {
 }
 
 func (s *ObservedSSEStream) processEvent(event []byte) {
-	lines := bytes.Split(event, []byte("\n"))
-	payloadLines := make([][]byte, 0, len(lines))
-	for _, line := range lines {
+	// 大多数 SSE event 只有单行 data:，直接逐行扫描避免 bytes.Split + bytes.Join 分配。
+	// 多行 data: 的情况极罕见（OpenAI/Bedrock 均为单行 JSON），退化为 Join 拼接兜底。
+	var firstPayload []byte
+	var extraPayloads [][]byte
+
+	remaining := event
+	for len(remaining) > 0 {
+		var line []byte
+		if idx := bytes.IndexByte(remaining, '\n'); idx >= 0 {
+			line = remaining[:idx]
+			remaining = remaining[idx+1:]
+		} else {
+			line = remaining
+			remaining = nil
+		}
 		jsonData, ok := parseDataLine(line)
 		if !ok {
 			continue
 		}
-		payloadLines = append(payloadLines, jsonData)
+		if firstPayload == nil {
+			firstPayload = jsonData
+		} else {
+			extraPayloads = append(extraPayloads, jsonData)
+		}
 	}
-	if len(payloadLines) == 0 {
+
+	if firstPayload == nil {
 		return
 	}
 
-	jsonData := bytes.Join(payloadLines, []byte("\n"))
+	// 单行（最常见路径）：直接使用，零额外分配
+	var jsonData []byte
+	if len(extraPayloads) == 0 {
+		jsonData = firstPayload
+	} else {
+		// 多行（极罕见）：拼接后再解析
+		all := make([][]byte, 0, 1+len(extraPayloads))
+		all = append(all, firstPayload)
+		all = append(all, extraPayloads...)
+		jsonData = bytes.Join(all, []byte("\n"))
+	}
+
 	if bytes.Equal(jsonData, donePayload) {
 		return
 	}

@@ -190,6 +190,10 @@ deploy-prod:
         docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
         docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
         export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=prod GATEWAY_HOST=0.0.0.0 CP_HOST=0.0.0.0
+        export DATABASE_URL='host=192.0.2.10 port=5432 user=llm_gateway password=CHANGE_ME_PASSWORD dbname=llm_gateway_prod sslmode=disable'
+        export REDIS_ADDR=192.0.2.10:6379 REDIS_DB=2
+        export OAUTH_REDIRECT_URI=https://aimeter.xk-devops.com/auth/callback
+        export FRONTEND_URL=https://aimeter.xk-devops.com
         docker compose up -d --remove-orphans --wait --wait-timeout 60
         echo '=== Deploy ${IMAGE_TAG} to prod complete ==='
         docker compose ps

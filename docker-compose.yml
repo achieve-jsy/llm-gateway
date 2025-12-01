@@ -55,8 +55,8 @@ services:
       - "${CP_HOST:-127.0.0.1}:${CONTROL_PLANE_PORT:-8081}:8081"
     environment:
       APP_ENV: ${APP_ENV:-prod}
-      DATABASE_URL: ${DATABASE_URL:-host=192.0.2.10 port=5432 user=llm_gateway password=CHANGE_ME_PASSWORD dbname=llm_gateway sslmode=disable}
-      REDIS_ADDR: ${REDIS_ADDR:-192.0.2.10:6379}
+      DATABASE_URL: ${DATABASE_URL:-host=172.17.0.1 port=5432 user=llm_gateway_test password=CHANGE_ME_PASSWORD dbname=llm_gateway_test sslmode=disable}
+      REDIS_ADDR: ${REDIS_ADDR:-172.17.0.1:6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}
       REDIS_DB: ${REDIS_DB:-0}
       JWT_SECRET: ${JWT_SECRET:-d8f7a3b2c1e9f4567890abc123def456}

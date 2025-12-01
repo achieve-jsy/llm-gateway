@@ -114,7 +114,9 @@ type UsageDailyQueryParams struct {
 	GroupName  string // 模型组名搜索（group_name，仅 call_logs 路径）
 	Provider  string // 渠道过滤（仅 call_logs 路径）
 	Status    string // "success" | "error" | ""（仅 call_logs 路径）
-	TopN      int    // 非时间维度（key/model/dept）限制行数，0 表示使用默认值
+	TopN      int    // 已废弃，保留兼容；非时间维度分页由 Page/PageSize 控制
+	Page      int    // 非时间维度分页页码，从 1 开始；0 表示不分页（返回全量，仅内部使用）
+	PageSize  int    // 非时间维度每页行数，0 时使用默认值 20
 }
 
 // UsageDailyRow 查询结果行
@@ -135,11 +137,14 @@ type UsageDailyRow struct {
 
 // UsageDailyResponse 查询响应
 type UsageDailyResponse struct {
-	From    string          `json:"from"`
-	To      string          `json:"to"`
-	GroupBy string          `json:"group_by"`
-	Rows    []UsageDailyRow `json:"rows"`
-	Total   *UsageDailyRow  `json:"total,omitempty"`
+	From       string          `json:"from"`
+	To         string          `json:"to"`
+	GroupBy    string          `json:"group_by"`
+	Rows       []UsageDailyRow `json:"rows"`
+	Total      *UsageDailyRow  `json:"total,omitempty"`
+	TotalCount int64           `json:"total_count"` // 非时间维度：满足条件的实体总数（用于前端分页）
+	Page       int             `json:"page,omitempty"`
+	PageSize   int             `json:"page_size,omitempty"`
 }
 
 // Query 查询用量数据。
@@ -182,6 +187,24 @@ func (s *RollupService) queryFromUsageDaily(ctx context.Context, params UsageDai
 
 	query = query.Group(groupCols).Order("est_cost_usd DESC")
 
+	timeGroupBy := params.GroupBy == "day" || params.GroupBy == "week" || params.GroupBy == "month"
+
+	var totalCount int64
+	if !timeGroupBy {
+		if err := query.Count(&totalCount).Error; err != nil {
+			return nil, fmt.Errorf("count usage_daily: %w", err)
+		}
+		page := params.Page
+		pageSize := params.PageSize
+		if pageSize <= 0 {
+			pageSize = 20
+		}
+		if page < 1 {
+			page = 1
+		}
+		query = query.Limit(pageSize).Offset((page - 1) * pageSize)
+	}
+
 	var rows []UsageDailyRow
 	if err := query.Find(&rows).Error; err != nil {
 		if isTableNotExistError(err) {
@@ -189,7 +212,16 @@ func (s *RollupService) queryFromUsageDaily(ctx context.Context, params UsageDai
 		}
 		return nil, fmt.Errorf("query usage_daily: %w", err)
 	}
-	return buildResponse(params, rows), nil
+	resp := buildResponse(params, rows)
+	if !timeGroupBy {
+		resp.TotalCount = totalCount
+		resp.Page = params.Page
+		resp.PageSize = params.PageSize
+		if resp.PageSize <= 0 {
+			resp.PageSize = 20
+		}
+	}
+	return resp, nil
 }
 
 // queryFromCallLogs 从原始日志实时聚合（支持 hour 粒度 / provider / status 过滤）
@@ -242,13 +274,22 @@ func (s *RollupService) queryFromCallLogs(ctx context.Context, params UsageDaily
 	}
 	query = query.Group(groupCols).Order(orderCol)
 
-	// 非时间维度（按 Key / 模型 / 部门）默认返回 Top 100，避免数万行传输
+	// 非时间维度（key / model / dept）：真实分页，先 COUNT 全量再 LIMIT+OFFSET
+	var totalCount int64
 	if !timeGroupBy {
-		topN := params.TopN
-		if topN <= 0 {
-			topN = 100
+		// COUNT 全量（不带 LIMIT）
+		if err := query.Count(&totalCount).Error; err != nil {
+			return nil, fmt.Errorf("count call_logs: %w", err)
 		}
-		query = query.Limit(topN)
+		page := params.Page
+		pageSize := params.PageSize
+		if pageSize <= 0 {
+			pageSize = 20
+		}
+		if page < 1 {
+			page = 1
+		}
+		query = query.Limit(pageSize).Offset((page - 1) * pageSize)
 	}
 
 	var rows []UsageDailyRow
@@ -258,7 +299,16 @@ func (s *RollupService) queryFromCallLogs(ctx context.Context, params UsageDaily
 		}
 		return nil, fmt.Errorf("query call_logs: %w", err)
 	}
-	return buildResponse(params, rows), nil
+	resp := buildResponse(params, rows)
+	if !timeGroupBy {
+		resp.TotalCount = totalCount
+		resp.Page = params.Page
+		resp.PageSize = params.PageSize
+		if resp.PageSize <= 0 {
+			resp.PageSize = 20
+		}
+	}
+	return resp, nil
 }
 
 func emptyResponse(params UsageDailyQueryParams) *UsageDailyResponse {
@@ -407,11 +457,13 @@ type LogsQueryParams struct {
 
 // MyStatsQueryParams 个人统计查询参数（直接从 call_logs 聚合）
 type MyStatsQueryParams struct {
-	From    time.Time
-	To      time.Time
-	UserID  string
-	GroupBy string // day / model
-	Model   string
+	From     time.Time
+	To       time.Time
+	UserID   string
+	GroupBy  string // day / model
+	Model    string
+	Page     int
+	PageSize int
 }
 
 // LogRow 明细记录行
@@ -563,11 +615,14 @@ type MyStatsRow struct {
 
 // MyStatsResponse 个人统计查询响应
 type MyStatsResponse struct {
-	From    string       `json:"from"`
-	To      string       `json:"to"`
-	GroupBy string       `json:"group_by"`
-	Rows    []MyStatsRow `json:"rows"`
-	Total   *MyStatsRow  `json:"total,omitempty"`
+	From       string       `json:"from"`
+	To         string       `json:"to"`
+	GroupBy    string       `json:"group_by"`
+	Rows       []MyStatsRow `json:"rows"`
+	Total      *MyStatsRow  `json:"total,omitempty"`
+	TotalCount int64        `json:"total_count"`
+	Page       int          `json:"page,omitempty"`
+	PageSize   int          `json:"page_size,omitempty"`
 }
 
 // QueryMyStats 查询个人用量统计（直接从 call_logs 聚合，不依赖 usage_daily）
@@ -602,6 +657,24 @@ func (s *RollupService) QueryMyStats(ctx context.Context, params MyStatsQueryPar
 
 	query = query.Group(groupCol).Order("est_cost_usd DESC")
 
+	timeGroupBy := params.GroupBy != "model"
+
+	var totalCount int64
+	if !timeGroupBy {
+		if err := query.Count(&totalCount).Error; err != nil {
+			return nil, fmt.Errorf("count my stats: %w", err)
+		}
+		page := params.Page
+		pageSize := params.PageSize
+		if pageSize <= 0 {
+			pageSize = 20
+		}
+		if page < 1 {
+			page = 1
+		}
+		query = query.Limit(pageSize).Offset((page - 1) * pageSize)
+	}
+
 	var rows []MyStatsRow
 	if err := query.Find(&rows).Error; err != nil {
 		if isTableNotExistError(err) {
@@ -618,6 +691,14 @@ func (s *RollupService) QueryMyStats(ctx context.Context, params MyStatsQueryPar
 		To:      params.To.Format("2006-01-02"),
 		GroupBy: params.GroupBy,
 		Rows:    rows,
+	}
+	if !timeGroupBy {
+		resp.TotalCount = totalCount
+		resp.Page = params.Page
+		resp.PageSize = params.PageSize
+		if resp.PageSize <= 0 {
+			resp.PageSize = 20
+		}
 	}
 	if len(rows) > 0 {
 		total := MyStatsRow{}

@@ -252,11 +252,10 @@
           <el-radio-button value="key">按 Key</el-radio-button>
         </el-radio-group>
       </div>
-      <!-- Top-N 提示：非时间维度时显示 -->
-      <div v-if="isEntityGroupBy && statsRows.length >= 10" class="up-topn-hint">
+      <!-- 实体维度数量提示 -->
+      <div v-if="isEntityGroupBy && statsTotalCount > 0" class="up-topn-hint">
         <el-icon><InfoFilled /></el-icon>
-        按用量排序，展示前 {{ statsRows.length }} 条
-        <span v-if="statsRows.length >= 100">（最多 100 条）</span>
+        按用量排序，共 {{ statsTotalCount }} 条
       </div>
       <div class="up-table-wrap" v-loading="statsLoading">
         <el-table :data="statsPageRows" size="small" :header-cell-style="TABLE_HEADER" style="width:100%"
@@ -330,16 +329,16 @@
           <p>暂无汇总数据</p>
         </div>
       </div>
-      <!-- 统计表格分页（仅多于一页时显示） -->
-      <div v-if="statsRows.length > statsPageSize" class="up-stats-pager">
+      <!-- 统计表格分页（仅实体维度且有多页时显示） -->
+      <div v-if="isEntityGroupBy && statsTotalCount > statsPageSize" class="up-stats-pager">
         <el-pagination
           v-model:current-page="statsPage"
           :page-size="statsPageSize"
-          :total="statsRows.length"
+          :total="statsTotalCount"
           layout="prev, pager, next, total"
           small
           background
-          @current-change="statsPage = $event"
+          @current-change="(p: number) => { statsPage = p; loadStats(false) }"
         />
       </div>
     </div>
@@ -890,14 +889,16 @@ function clearFilters() {
 }
 const groupBy = ref('day')
 
-// ── 统计表格本地分页 ──
-const statsPage     = ref(1)
-const statsPageSize = 10
+// ── 统计表格分页（后端真实分页）──
+const statsPage      = ref(1)
+const statsPageSize  = 10
+const statsTotalCount = ref(0)        // 后端返回的实体总数
 const isEntityGroupBy = computed(() => ['key', 'model', 'dept'].includes(groupBy.value))
 const statsPageRows   = computed(() => {
+  // 时间维度不分页，直接返回全量
   if (!isEntityGroupBy.value) return statsRows.value
-  const start = (statsPage.value - 1) * statsPageSize
-  return statsRows.value.slice(start, start + statsPageSize)
+  // 实体维度已由后端分页，返回的就是当页数据
+  return statsRows.value
 })
 
 // ── Stats state ──
@@ -1030,27 +1031,33 @@ function refreshFilterOptions(rows: StatsRow[], gb: string) {
 }
 
 // ── Load ──
-async function loadStats() {
+async function loadStats(resetPage = true) {
   if (!dateRange.value?.[0]) return
   statsLoading.value = true
-  statsPage.value = 1  // 切换维度或刷新时重置到第一页
+  if (resetPage) statsPage.value = 1  // 切换维度或刷新时重置到第一页
   try {
     const params: Record<string, string> = {
       from: dateRange.value[0], to: dateRange.value[1],
       group_by: groupBy.value,
+    }
+    // 实体维度传分页参数
+    if (isEntityGroupBy.value) {
+      params.page      = String(statsPage.value)
+      params.page_size = String(statsPageSize)
     }
     if (filterModelName.value) params.model_name = filterModelName.value
     if (filterGroupName.value) params.group_name = filterGroupName.value
     if (filterKeyId.value)     params.key_id     = filterKeyId.value
     if (filterKeyName.value)   params.key_name   = filterKeyName.value
     if (filterUserName.value)  params.user_name  = filterUserName.value
-    if (filterDeptName.value)    params.dept_name  = filterDeptName.value
+    if (filterDeptName.value)  params.dept_name  = filterDeptName.value
     if (filterStudioId.value)  params.studio_id  = filterStudioId.value
     if (filterProvider.value)  params.provider   = filterProvider.value
     if (filterStatus.value)    params.status     = filterStatus.value
     const r = await http.get('/api/v1/usage', { params })
-    statsRows.value = r.data.rows || []
-    statsTotal.value = r.data.total || null
+    statsRows.value       = r.data.rows || []
+    statsTotal.value      = r.data.total || null
+    statsTotalCount.value = r.data.total_count ?? statsRows.value.length
     refreshFilterOptions(statsRows.value, groupBy.value)
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.details || e?.response?.data?.error || '用量查询失败')

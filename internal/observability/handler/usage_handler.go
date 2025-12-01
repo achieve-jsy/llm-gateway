@@ -56,12 +56,8 @@ func (h *UsageHandler) Query(c *gin.Context) {
 	if !ok {
 		return
 	}
-	topN := 0
-	if v := c.Query("top_n"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			topN = n
-		}
-	}
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	params := service.UsageDailyQueryParams{
 		From:      from,
 		To:        to,
@@ -75,7 +71,8 @@ func (h *UsageHandler) Query(c *gin.Context) {
 		GroupName: c.Query("group_name"),
 		Provider:  c.Query("provider"),
 		Status:    c.Query("status"),
-		TopN:      topN,
+		Page:      page,
+		PageSize:  pageSize,
 	}
 	resp, err := h.svc.Query(c.Request.Context(), params)
 	if err != nil {
@@ -137,12 +134,16 @@ func (h *UsageHandler) MyQuery(c *gin.Context) {
 	if !ok {
 		return
 	}
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	params := service.MyStatsQueryParams{
-		From:    from,
-		To:      to,
-		UserID:  userID,
-		GroupBy: c.DefaultQuery("group_by", "day"),
-		Model:   c.Query("model"),
+		From:     from,
+		To:       to,
+		UserID:   userID,
+		GroupBy:  c.DefaultQuery("group_by", "day"),
+		Model:    c.Query("model_name"), // 前端传 model_name，与 Query 接口对齐
+		Page:     page,
+		PageSize: pageSize,
 	}
 	resp, err := h.svc.QueryMyStats(c.Request.Context(), params)
 	if err != nil {

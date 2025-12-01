@@ -194,6 +194,7 @@ deploy-prod:
         export REDIS_ADDR=192.0.2.10:6379 REDIS_DB=2
         export OAUTH_REDIRECT_URI=https://aimeter.xk-devops.com/auth/callback
         export FRONTEND_URL=https://aimeter.xk-devops.com
+        export INTERNAL_AUTH_TOKEN=CHANGE_ME_INTERNAL_TOKEN
         docker compose up -d --remove-orphans --wait --wait-timeout 60
         echo '=== Deploy ${IMAGE_TAG} to prod complete ==='
         docker compose ps

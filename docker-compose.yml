@@ -31,13 +31,19 @@ services:
       - "${GATEWAY_HOST:-127.0.0.1}:${GATEWAY_PORT:-8080}:8080"
     environment:
       APP_ENV: ${APP_ENV:-prod}
+      REDIS_ADDR: ${REDIS_ADDR:-172.17.0.1:6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}
+      REDIS_DB: ${REDIS_DB:-0}
+      INTERNAL_TOKEN: ${INTERNAL_AUTH_TOKEN:-dev-test-token}
+      CONTROL_PLANE_URL: http://llm-gw-control-plane:8081
+      AUTH_URL: http://llm-gw-control-plane:8081
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 10s
-    stop_grace_period: 120s
+      start_period: 15s
+    stop_grace_period: 30s
     deploy:
       resources:
         limits:

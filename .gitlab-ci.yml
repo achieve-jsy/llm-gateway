@@ -130,31 +130,29 @@ deploy-app-test:
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "mkdir -p ${TEST_PATH}"
       scp ${SSH_OPTS} docker-compose.yml ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/docker-compose.yml
 
-      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
-        printf '%s\n' \
-          'APP_ENV=staging' \
-          'IMAGE_TAG=${IMAGE_TAG}' \
-          'REGISTRY=${REGISTRY}' \
-          'GATEWAY_HOST=127.0.0.1' \
-          'GATEWAY_PORT=8080' \
-          'CP_HOST=127.0.0.1' \
-          'CONTROL_PLANE_PORT=8081' \
-          'DATABASE_URL=${TEST_DATABASE_URL}' \
-          'REDIS_ADDR=${TEST_REDIS_ADDR}' \
-          'REDIS_PASSWORD=${TEST_REDIS_PASSWORD}' \
-          'REDIS_DB=${TEST_REDIS_DB}' \
-          'JWT_SECRET=${TEST_JWT_SECRET}' \
-          'ENCRYPTION_KEY=${TEST_ENCRYPTION_KEY}' \
-          'INTERNAL_AUTH_TOKEN=${TEST_INTERNAL_TOKEN}' \
-          'OAUTH_ISSUER_URL=https://oauth.example.net/' \
-          'OAUTH_CLIENT_ID=5514f6bb0a' \
-          'OAUTH_CLIENT_SECRET=${TEST_OAUTH_CLIENT_SECRET}' \
-          'OAUTH_REDIRECT_URI=http://${TEST_HOST}:9080/auth/callback' \
-          'OAUTH_SCOPES=openid profile email' \
-          'FRONTEND_URL=http://${TEST_HOST}:9080' \
-          > ${TEST_PATH}/.env
-        chmod 600 ${TEST_PATH}/.env
-      "
+      ENV_CONTENT="APP_ENV=staging
+      IMAGE_TAG=${IMAGE_TAG}
+      REGISTRY=${REGISTRY}
+      GATEWAY_HOST=127.0.0.1
+      GATEWAY_PORT=8080
+      CP_HOST=127.0.0.1
+      CONTROL_PLANE_PORT=8081
+      DATABASE_URL=${TEST_DATABASE_URL}
+      REDIS_ADDR=${TEST_REDIS_ADDR}
+      REDIS_PASSWORD=${TEST_REDIS_PASSWORD}
+      REDIS_DB=${TEST_REDIS_DB}
+      JWT_SECRET=${TEST_JWT_SECRET}
+      ENCRYPTION_KEY=${TEST_ENCRYPTION_KEY}
+      INTERNAL_AUTH_TOKEN=${TEST_INTERNAL_TOKEN}
+      OAUTH_ISSUER_URL=https://oauth.example.net/
+      OAUTH_CLIENT_ID=5514f6bb0a
+      OAUTH_CLIENT_SECRET=${TEST_OAUTH_CLIENT_SECRET}
+      OAUTH_REDIRECT_URI=http://${TEST_HOST}:9080/auth/callback
+      OAUTH_SCOPES=openid profile email
+      FRONTEND_URL=http://${TEST_HOST}:9080"
+      echo "$ENV_CONTENT" | sed 's/^      //' > /tmp/.env.deploy
+      scp ${SSH_OPTS} /tmp/.env.deploy ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/.env
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "chmod 600 ${TEST_PATH}/.env"
 
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
         set -e

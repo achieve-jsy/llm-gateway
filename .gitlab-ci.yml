@@ -140,25 +140,32 @@ migrate:
   stage: migrate
   image: alpine:3.21
   tags: [docker]
+  cache:
+    key: atlas-bin
+    paths:
+      - atlas-bin/
   before_script:
-    - apk add --no-cache curl
-    - curl -sSfL https://release.ariga.io/atlas/atlas-community-linux-amd64-latest -o /usr/local/bin/atlas
-    - chmod +x /usr/local/bin/atlas
+    - |
+      if [ ! -f atlas-bin/atlas ]; then
+        apk add --no-cache curl
+        mkdir -p atlas-bin
+        curl -sSfL https://release.ariga.io/atlas/atlas-community-linux-amd64-latest -o atlas-bin/atlas
+        chmod +x atlas-bin/atlas
+      fi
+    - cp atlas-bin/atlas /usr/local/bin/atlas
   script:
     - |
       if [ "$CI_COMMIT_BRANCH" = "main" ]; then
-        export ATLAS_ENV="prod"
         CONFIG_FILE="config/prod.yaml"
       elif [ "$CI_COMMIT_BRANCH" = "test" ]; then
-        export ATLAS_ENV="test"
         CONFIG_FILE="config/test.yaml"
       else
         echo "Unexpected branch: $CI_COMMIT_BRANCH"
         exit 1
       fi
       export DATABASE_URL=$(grep -A1 ^database: "$CONFIG_FILE" | tail -1 | cut -d'"' -f2)
-      echo "Migrating $ATLAS_ENV database..."
-      atlas migrate apply --env "$ATLAS_ENV"
+      echo "Migrating database ($CI_COMMIT_BRANCH)..."
+      atlas migrate apply --dir "file://atlas-migrations" --url "$DATABASE_URL"
   rules:
     - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "test"'
 

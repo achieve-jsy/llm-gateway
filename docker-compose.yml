@@ -1,18 +1,12 @@
 version: "3.9"
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 生产部署 docker-compose
+# 部署 docker-compose
 #
-# 架构：宿主机 Nginx（HTTPS）→ 按路径反代到容器端口
-#   /v1/*         → 127.0.0.1:8080 (gateway)
-#   /api/*        → 127.0.0.1:8081 (control-plane)
-#   /auth/*       → 127.0.0.1:8081 (control-plane)
-#   /*            → /var/www/aimeter/dist/ (宿主机静态文件)
-#
-# 使用方式：
-#   1. docker compose up -d
-#   2. 将 deploy/docker/nginx.conf 软链到 /etc/nginx/conf.d/aimeter.conf
-#   3. 将前端 build 产物部署到 /var/www/aimeter/dist/
+# 使用 network_mode: host，容器直接用宿主机网络栈：
+#   - PG/Redis 通过 127.0.0.1 直连，无需 docker bridge 地址映射
+#   - 端口直接暴露在宿主机上，无需 ports 映射
+#   - 容器间互访也用 127.0.0.1
 #
 # 如需自带 PostgreSQL/Redis（测试用），请使用 docker-compose.dev.yml
 # 如需 OTEL + Jaeger：docker compose --profile observability up -d
@@ -27,18 +21,18 @@ services:
     image: ${REGISTRY:-192.0.2.10:5000}/llm-gateway:${IMAGE_TAG:-latest}
     container_name: llm-gw-gateway
     restart: unless-stopped
-    ports:
-      - "${GATEWAY_HOST:-127.0.0.1}:${GATEWAY_PORT:-8080}:8080"
+    network_mode: host
     environment:
       APP_ENV: ${APP_ENV:-prod}
-      REDIS_ADDR: ${REDIS_ADDR:-172.17.0.1:6379}
+      GATEWAY_PORT: ${GATEWAY_PORT:-8080}
+      REDIS_ADDR: ${REDIS_ADDR:-127.0.0.1:6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}
       REDIS_DB: ${REDIS_DB:-0}
       INTERNAL_TOKEN: ${INTERNAL_AUTH_TOKEN:-dev-test-token}
-      CONTROL_PLANE_URL: http://llm-gw-control-plane:8081
-      AUTH_URL: http://llm-gw-control-plane:8081
+      CONTROL_PLANE_URL: http://127.0.0.1:${CONTROL_PLANE_PORT:-8081}
+      AUTH_URL: http://127.0.0.1:${CONTROL_PLANE_PORT:-8081}
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:${GATEWAY_PORT:-8080}/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -57,12 +51,12 @@ services:
     image: ${REGISTRY:-192.0.2.10:5000}/llm-control-plane:${IMAGE_TAG:-latest}
     container_name: llm-gw-control-plane
     restart: unless-stopped
-    ports:
-      - "${CP_HOST:-127.0.0.1}:${CONTROL_PLANE_PORT:-8081}:8081"
+    network_mode: host
     environment:
       APP_ENV: ${APP_ENV:-prod}
-      DATABASE_URL: ${DATABASE_URL:-host=172.17.0.1 port=5432 user=llm_gateway_test password=CHANGE_ME_PASSWORD dbname=llm_gateway_test sslmode=disable}
-      REDIS_ADDR: ${REDIS_ADDR:-172.17.0.1:6379}
+      CONTROL_PLANE_PORT: ${CONTROL_PLANE_PORT:-8081}
+      DATABASE_URL: ${DATABASE_URL:-host=127.0.0.1 port=5432 user=llm_gateway_test password=CHANGE_ME_PASSWORD dbname=llm_gateway_test sslmode=disable}
+      REDIS_ADDR: ${REDIS_ADDR:-127.0.0.1:6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}
       REDIS_DB: ${REDIS_DB:-0}
       JWT_SECRET: ${JWT_SECRET:-d8f7a3b2c1e9f4567890abc123def456}
@@ -75,11 +69,11 @@ services:
       OAUTH_SCOPES: ${OAUTH_SCOPES:-openid profile email}
       FRONTEND_URL: ${FRONTEND_URL:-http://192.0.2.10:9080}
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/healthz"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:${CONTROL_PLANE_PORT:-8081}/healthz"]
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 15s
     stop_grace_period: 30s
     deploy:
       resources:

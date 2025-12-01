@@ -1,8 +1,8 @@
 data "external_schema" "gorm" {
   program = [
-    "go",
-    "run",
-    "./tools/atlas-loader",
+    "bash",
+    "-c",
+    "cd tools/atlas-loader && go run main.go"
   ]
 }
 

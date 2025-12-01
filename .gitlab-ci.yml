@@ -1,5 +1,4 @@
 stages:
-  - test
   - build
   - deploy
   - verify
@@ -10,61 +9,43 @@ variables:
   GATEWAY_IMAGE: "llm-gateway"
   CONTROL_PLANE_IMAGE: "llm-control-plane"
   TEST_HOST: "192.0.2.10"
-  TEST_USER: "hgf"
-  TEST_PATH: "/opt/llm-gateway"
+  TEST_USER: "root"
+  TEST_PATH: "/data/llm-gateway"
+  TEST_WEB_DIR: "/data/llm-gateway/web"
   PROD_HOST: "192.0.2.10"
   PROD_PATH: "/opt/llm-gateway"
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Workflow Rules:
-#   - test 分支 push      → 测试流水线
-#   - main 分支 tag (v*.*.*) → 生产流水线
-# ═══════════════════════════════════════════════════════════════════════════════
 workflow:
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
-# ─── Test Stage ─────────────────────────────────────────────────────────────
-# 暂时禁用测试阶段；当前测试环境发布只需要 build/deploy/verify。
-test:
-  stage: test
-  image: ${REGISTRY}/golang:1.26-alpine
-  tags: [go]
-  variables:
-    GOPROXY: "https://goproxy.cn,direct"
-    GONOSUMCHECK: "*"
-  script:
-    - go vet ./...
-    - go test ./... -cover -count=1 -timeout 5m
-  allow_failure: true
-  rules:
-    - when: never
-
-# ─── Build Stage ────────────────────────────────────────────────────────────
-.build_template: &build_template
+# ═══════════════════════════════════════════════════════════════════════════════
+# BUILD — 测试
+# ═══════════════════════════════════════════════════════════════════════════════
+build-gateway-test:
   stage: build
   image: docker:24
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
     DOCKER_BUILDKIT: "0"
-  before_script:
-    - export IMAGE_TAG="${CI_COMMIT_TAG:-test-${CI_COMMIT_SHORT_SHA}}"
-  rules:
-    - if: $CI_COMMIT_TAG
-
-build-gateway-test:
-  <<: *build_template
   script:
+    - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
     - docker build --build-arg APP_ENV=staging -f deploy/docker/gateway.Dockerfile -t ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} .
     - docker push ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG}
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
 
 build-control-plane-test:
-  <<: *build_template
+  stage: build
+  image: docker:24
+  tags: [docker]
+  variables:
+    DOCKER_HOST: "unix:///var/run/docker.sock"
+    DOCKER_BUILDKIT: "0"
   script:
+    - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
     - docker build --build-arg APP_ENV=staging -f deploy/docker/control-plane.Dockerfile -t ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} .
     - docker push ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
   rules:
@@ -85,8 +66,18 @@ build-web-test:
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# BUILD — 生产
+# ═══════════════════════════════════════════════════════════════════════════════
 build-gateway-prod:
-  <<: *build_template
+  stage: build
+  image: docker:24
+  tags: [docker]
+  variables:
+    DOCKER_HOST: "unix:///var/run/docker.sock"
+    DOCKER_BUILDKIT: "0"
+  before_script:
+    - export IMAGE_TAG="${CI_COMMIT_TAG}"
   script:
     - docker build --build-arg APP_ENV=prod -f deploy/docker/gateway.Dockerfile -t ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} .
     - docker push ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG}
@@ -94,7 +85,14 @@ build-gateway-prod:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
 build-control-plane-prod:
-  <<: *build_template
+  stage: build
+  image: docker:24
+  tags: [docker]
+  variables:
+    DOCKER_HOST: "unix:///var/run/docker.sock"
+    DOCKER_BUILDKIT: "0"
+  before_script:
+    - export IMAGE_TAG="${CI_COMMIT_TAG}"
   script:
     - docker build --build-arg APP_ENV=prod -f deploy/docker/control-plane.Dockerfile -t ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} .
     - docker push ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
@@ -116,49 +114,34 @@ build-web-prod:
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
-# ─── Deploy Test (192.0.2.10) ─────────────────────────────────────────────
-deploy-test:
+# ═══════════════════════════════════════════════════════════════════════════════
+# DEPLOY — 测试 (192.0.2.10)
+# ═══════════════════════════════════════════════════════════════════════════════
+deploy-app-test:
   stage: deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
-  variables:
-    GATEWAY_PORT: "4010"
-    CONTROL_PLANE_PORT: "4011"
   script:
     - |
       SSH_OPTS="-o StrictHostKeyChecking=no"
-      IMAGE_TAG="${CI_COMMIT_TAG:-test-${CI_COMMIT_SHORT_SHA}}"
+      IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
       echo "=== Deploying ${IMAGE_TAG} to ${TEST_HOST} (test) ==="
 
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "mkdir -p ${TEST_PATH}"
-      scp ${SSH_OPTS} docker-compose.yml ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/
+      scp ${SSH_OPTS} docker-compose.yml ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/docker-compose.yml
 
-      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} << REMOTE_SCRIPT
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
         set -e
         cd ${TEST_PATH}
-
         docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
         docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
-
-        export IMAGE_TAG="${IMAGE_TAG}"
-        export REGISTRY="${REGISTRY}"
-        export APP_ENV="staging"
-        export DATABASE_URL="host=192.0.2.10 port=5432 user=llm_gateway password=CHANGE_ME_PASSWORD dbname=llm_gateway_test sslmode=disable"
-        export REDIS_ADDR="192.0.2.10:6379"
-        export REDIS_PASSWORD="CHANGE_ME_REDIS_PASSWORD"
-        export REDIS_DB="1"
-        export GATEWAY_PORT="${GATEWAY_PORT}"
-        export CONTROL_PLANE_PORT="${CONTROL_PLANE_PORT}"
-        export GATEWAY_HOST="0.0.0.0"
-        export CP_HOST="0.0.0.0"
-        docker compose up -d --remove-orphans --wait --wait-timeout 60
-
-        echo "=== Deploy ${IMAGE_TAG} to test complete ==="
-        docker compose ps
-      REMOTE_SCRIPT
+        export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=staging
+        docker compose -p llm-test up -d --remove-orphans --wait --wait-timeout 90
+        docker compose -p llm-test ps
+      "
   environment:
     name: test
-    url: http://192.0.2.10:4010
+    url: http://192.0.2.10:9080
   dependencies: []
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
@@ -168,14 +151,16 @@ deploy-web-test:
   stage: deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
-  variables:
-    WEB_DIR: "/var/www/aimeter-test/dist"
   script:
     - |
       SSH_OPTS="-o StrictHostKeyChecking=no"
-      echo "=== Deploying frontend to ${TEST_HOST}:${WEB_DIR} ==="
-      scp ${SSH_OPTS} web-dist.tar.gz ${TEST_USER}@${TEST_HOST}:/tmp/
-      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "mkdir -p ${WEB_DIR} && tar -xzf /tmp/web-dist.tar.gz -C ${WEB_DIR} && rm -f /tmp/web-dist.tar.gz"
+      echo "=== Deploying frontend to ${TEST_HOST}:${TEST_WEB_DIR} ==="
+      scp ${SSH_OPTS} web-dist.tar.gz ${TEST_USER}@${TEST_HOST}:/tmp/web-dist.tar.gz
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
+        mkdir -p ${TEST_WEB_DIR}
+        tar -xzf /tmp/web-dist.tar.gz -C ${TEST_WEB_DIR}
+        rm -f /tmp/web-dist.tar.gz
+      "
       echo "=== Frontend deployed to test ==="
   dependencies:
     - build-web-test
@@ -183,14 +168,13 @@ deploy-web-test:
     - if: $CI_COMMIT_BRANCH == "test"
       when: on_success
 
-# ─── Deploy Prod (192.0.2.10) ─────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# DEPLOY — 生产 (192.0.2.10)
+# ═══════════════════════════════════════════════════════════════════════════════
 deploy-prod:
   stage: deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
-  variables:
-    GATEWAY_PORT: "8080"
-    CONTROL_PLANE_PORT: "8081"
   script:
     - |
       SSH_OPTS="-o StrictHostKeyChecking=no"
@@ -200,25 +184,21 @@ deploy-prod:
       ssh ${SSH_OPTS} root@${PROD_HOST} "mkdir -p ${PROD_PATH}"
       scp ${SSH_OPTS} docker-compose.yml root@${PROD_HOST}:${PROD_PATH}/
 
-      ssh ${SSH_OPTS} root@${PROD_HOST} << REMOTE_SCRIPT
+      ssh ${SSH_OPTS} root@${PROD_HOST} "
         set -e
         cd ${PROD_PATH}
-
         docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
         docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
-
-        export IMAGE_TAG="${IMAGE_TAG}"
-        export REGISTRY="${REGISTRY}"
-        export APP_ENV="prod"
-        export GATEWAY_PORT="${GATEWAY_PORT}"
-        export CONTROL_PLANE_PORT="${CONTROL_PLANE_PORT}"
-        export GATEWAY_HOST="0.0.0.0"
-        export CP_HOST="0.0.0.0"
+        export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=prod
+        export DATABASE_URL='host=192.0.2.10 port=5432 user=llm_gateway password=CHANGE_ME_PASSWORD dbname=llm_gateway_prod sslmode=disable'
+        export REDIS_ADDR=192.0.2.10:6379 REDIS_DB=2
+        export OAUTH_REDIRECT_URI=https://aimeter.xk-devops.com/auth/callback
+        export FRONTEND_URL=https://aimeter.xk-devops.com
+        export INTERNAL_AUTH_TOKEN=CHANGE_ME_INTERNAL_TOKEN
         docker compose up -d --remove-orphans --wait --wait-timeout 60
-
-        echo "=== Deploy ${IMAGE_TAG} to prod complete ==="
+        echo '=== Deploy ${IMAGE_TAG} to prod complete ==='
         docker compose ps
-      REMOTE_SCRIPT
+      "
   environment:
     name: production
     url: http://192.0.2.10
@@ -246,21 +226,23 @@ deploy-web-prod:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
       when: manual
 
-# ─── Verify Stage ───────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# VERIFY — 测试
+# ═══════════════════════════════════════════════════════════════════════════════
 verify-test:
   stage: verify
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   script:
-    - sleep 10
     - |
-      echo "Checking gateway health on test..."
-      curl -sf http://192.0.2.10:4010/health || { echo "ERROR: Gateway health check failed"; exit 1; }
-      echo "Gateway healthy"
-    - |
-      echo "Checking control-plane health on test..."
-      curl -sf http://192.0.2.10:4011/healthz || { echo "ERROR: Control-plane health check failed"; exit 1; }
-      echo "Control-plane healthy"
+      sleep 10
+      curl -sf --retry 3 --retry-delay 5 http://${TEST_HOST}:8080/health \
+        || { echo "ERROR: gateway /health failed"; exit 1; }
+      curl -sf --retry 3 --retry-delay 5 http://${TEST_HOST}:8081/healthz \
+        || { echo "ERROR: control-plane /healthz failed"; exit 1; }
+      curl -sf --retry 3 --retry-delay 5 http://${TEST_HOST}:9080/health \
+        || { echo "ERROR: nginx -> gateway smoke test failed"; exit 1; }
+      echo "=== All checks passed ==="
   dependencies: []
   rules:
     - if: $CI_COMMIT_BRANCH == "test"

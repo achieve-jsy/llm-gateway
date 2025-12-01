@@ -7,37 +7,37 @@ controlplane:
   port: "8081"
 
 redis:
-  addr: "192.0.2.10:6379"
-  password: "CHANGE_ME_REDIS_PASSWORD"
-  db: 1
+  addr: "127.0.0.1:6379"
+  password: "redis_bGNhwx"
+  db: 0
 
 database:
-  url: "host=192.0.2.10 port=5432 user=llm_gateway password=CHANGE_ME_PASSWORD dbname=llm_gateway_test sslmode=disable"
+  url: "host=127.0.0.1 port=5432 user=llm_gateway_test password=CHANGE_ME_PASSWORD dbname=llm_gateway_test sslmode=disable"
 
 otlp:
   endpoint: "localhost:4317"
   enabled: false
 
 provider:
-  internal_token: "CHANGE_ME_INTERNAL_TOKEN"
-  control_plane_url: "http://llm-gw-control-plane:8081"
+  internal_token: "dev-test-token"
+  control_plane_url: "http://127.0.0.1:8081"
 
 auth:
-  url: "http://llm-gw-control-plane:8081"
-  token: "CHANGE_ME_INTERNAL_TOKEN"
+  url: "http://127.0.0.1:8081"
+  token: "dev-test-token"
 
 oauth:
   issuer_url: "https://oauth.example.net/"
   client_id: "5514f6bb0a"
   client_secret: "CHANGE_ME_OAUTH_SECRET"
-  redirect_uri: "https://aimeter.xk-devops.com/auth/callback"
+  redirect_uri: "http://192.0.2.10:9080/auth/callback"
   scopes: "openid profile email"
 
 jwt:
-  secret: "CHANGE_ME_JWT_SECRET"
+  secret: "d8f7a3b2c1e9f4567890abc123def456"
 
 frontend:
-  url: "http://192.0.2.10:5173"
+  url: "http://192.0.2.10:9080"
 
 gateway:
-  url: "http://192.0.2.10:8080"
+  url: "http://192.0.2.10:9080"

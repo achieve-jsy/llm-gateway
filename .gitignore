@@ -1,5 +1,6 @@
 # ── 本地开发环境配置（含敏感信息，不提交） ──────────────────────────────────
 opencode.json
+.opencode/node_modules/
 .env
 .env.local
 .env.*.local
@@ -27,10 +28,5 @@ node_modules/
 .xflow/runtime/
 .xflow/profiles/*/working/
 
-# ── 本地脚本 ─────────────────────────────────────────────────────────────────
-diagnose_latency.sh
-
-# ── husky / git hooks（opencode 自动生成，无需跟踪） ─────────────────────────
+# ── pm管理 ──────────────────────────────────────────────────────────────────
 .husky/
-package.json
-package-lock.json

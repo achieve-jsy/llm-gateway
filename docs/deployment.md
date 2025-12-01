@@ -17,7 +17,7 @@
 ```
 运维 12.15: GitLab Runner + Registry + 备份归档
 生产 191.99: 宿主 Nginx → blue/green 应用 → 本机 PG/Redis
-测试 191.121: 宿主 Nginx → blue/green 应用 → 本机 PG/Redis
+测试 191.120: 宿主 Nginx → blue/green 应用 → 本机 PG/Redis
 ```
 
 - **gateway** (`:8080`)：对外 `/v1/*`，鉴权 → 模型组调度 → 转发上游。不直连 PG，配置来自 Redis snapshot / 控制面 HTTP。

@@ -7,13 +7,34 @@ description: 测试环境 CI/CD 部署运维指南。用于排查测试环境部
 
 ## 1. 触发条件
 
-**push 到 `test` 分支** 自动触发全流程：
+**push 到 `test` 分支** 且变更包含以下路径之一时自动触发：
+
+```
+internal/**/*  cmd/**/*  go.mod  go.sum         # Go 后端
+web/**/*                                        # Vue 前端
+deploy/docker/**/*  docker-compose.yml          # 构建/部署配置
+config/**/*                                     # 环境配置
+migrations/**/*                                 # 数据库迁移
+.gitlab-ci.yml                                  # CI 配置变更
+```
+
+以下路径变更**不会**触发流水线（避免浪费资源）：
+
+```
+docs/**/*  skills/**/*  *.md  AGENTS.md  README.md
+.gitignore  .env.example  .opencode/**/*
+```
+
+全流程：
 
 ```
 build-gateway-test    ─┐
-build-control-plane-test ─┤─→ deploy-app-test → deploy-web-test → verify-test
-build-web-test        ─┘
+build-control-plane-test ─┤─→ deploy-app-test → verify-test
+build-web-test        ─┘          │
+                            deploy-web-test ──┘
 ```
+
+> **注意**：`changes:` 规则作用在每个 job 上，各 job 共享同一份变更清单。如果变更只涉及 docs/skills/README 等，整个流水线不会执行任何 job。如果纯配置变更（如 `docker-compose.yml`），所有 job 都会运行，但 deploy 拉镜像失败时不中断（fallback 到已有镜像）。
 
 ## 2. 关键参数
 

@@ -15,6 +15,19 @@ variables:
   PROD_HOST: "192.0.2.10"
   PROD_PATH: "/opt/llm-gateway"
 
+# 有实际影响的文件变更（排除 docs/skills/README/.gitignore 等不会影响运行的文件）
+.test-significant-changes: &test-significant-changes
+  - "internal/**/*"
+  - "cmd/**/*"
+  - "go.mod"
+  - "go.sum"
+  - "web/**/*"
+  - "deploy/docker/**/*"
+  - "config/**/*"
+  - "docker-compose.yml"
+  - "migrations/**/*"
+  - ".gitlab-ci.yml"
+
 workflow:
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
@@ -36,6 +49,7 @@ build-gateway-test:
     - docker push ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG}
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
+      changes: *test-significant-changes
 
 build-control-plane-test:
   stage: build
@@ -50,6 +64,7 @@ build-control-plane-test:
     - docker push ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
+      changes: *test-significant-changes
 
 build-web-test:
   stage: build
@@ -65,6 +80,7 @@ build-web-test:
     expire_in: 2 hours
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
+      changes: *test-significant-changes
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # BUILD — 生产
@@ -133,8 +149,8 @@ deploy-app-test:
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
         set -e
         cd ${TEST_PATH}
-        docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
-        docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
+        docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG} || echo "Gateway image not found, reusing existing"
+        docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} || echo "CP image not found, reusing existing"
         export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=staging
         docker compose -p llm-test up -d --remove-orphans --wait --wait-timeout 90
         docker compose -p llm-test ps
@@ -145,6 +161,7 @@ deploy-app-test:
   dependencies: []
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
+      changes: *test-significant-changes
       when: on_success
 
 deploy-web-test:
@@ -166,6 +183,7 @@ deploy-web-test:
     - build-web-test
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
+      changes: *test-significant-changes
       when: on_success
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -246,3 +264,5 @@ verify-test:
   dependencies: []
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
+      changes: *test-significant-changes
+

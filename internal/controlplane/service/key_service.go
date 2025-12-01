@@ -423,16 +423,18 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 
 	s.repo.TouchLastUsed(keyHash) // best-effort update
 
-	// 懒补全：如果 key 创建时未写入 user_name/dept_name，异步补齐
-	if k.UserName == "" {
+	// 懒补全：如果 key 创建时未写入 user_name 或 dept_name/dept_id，异步补齐。
+	// dept_name/dept_id 也纳入触发条件，确保仅有 user_name 但 dept 信息为空的老 key 也能被补全。
+	if k.UserName == "" || k.DeptName == "" || k.DeptID == "" {
 		go func() {
 			info, err := s.repo.GetUserDeptInfo(k.UserID)
 			if err != nil || info.UserName == "" {
 				return
 			}
 			k.UserName = info.UserName
+			k.DeptID = info.DeptID
 			k.DeptName = info.DeptName
-			_ = s.repo.BackfillUserDeptNames(k.ID, info.UserName, info.DeptName)
+			_ = s.repo.BackfillUserDeptNames(k.ID, info.UserName, info.DeptID, info.DeptName)
 		}()
 	}
 
@@ -443,11 +445,24 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 		AccessAllGroups: k.AccessAllGroups,
 		LogEnabled:      k.LogEnabled,
 		User: VerifyResultUser{
-			UserID:     k.UserID,
-			Name:       k.UserName,
-			DeptName:   k.DeptName,
-			StudioID:   k.StudioID,
-			StudioName: k.StudioName,
+			UserID:       k.UserID,
+			Name:         k.UserName,
+			DepartmentID: parseDeptID(k.DeptID),
+			DeptName:     k.DeptName,
+			StudioID:     k.StudioID,
+			StudioName:   k.StudioName,
 		},
 	}, nil
+}
+
+// parseDeptID 将字符串形式的 dept_id 转换为 *uuid.UUID，空字符串返回 nil。
+func parseDeptID(s string) *uuid.UUID {
+	if s == "" {
+		return nil
+	}
+	id, err := uuid.Parse(s)
+	if err != nil {
+		return nil
+	}
+	return &id
 }

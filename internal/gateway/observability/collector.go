@@ -302,13 +302,13 @@ func (w *BatchWriter) Run(ctx context.Context, ch <-chan UsageEvent) {
 	}
 }
 
-// fillMissingIdentity 对 batch 中 user_name 为空的记录，批量查询 api_keys 补全。
+// fillMissingIdentity 对 batch 中 user_name 或 dept_name 为空的记录，批量查询 api_keys 补全。
 // 每批最多额外一条 IN 查询，不影响正常调用链路。
 func (w *BatchWriter) fillMissingIdentity(ctx context.Context, batch []model.CallLog) {
-	// 收集需要补查的 key_id（去重）
+	// 收集需要补查的 key_id（去重）：user_name、dept_id 或 dept_name 为空均触发
 	needed := make(map[string]struct{})
 	for i := range batch {
-		if batch[i].UserName == "" && batch[i].KeyID != "" {
+		if (batch[i].UserName == "" || batch[i].DeptID == "" || batch[i].DeptName == "") && batch[i].KeyID != "" {
 			needed[batch[i].KeyID] = struct{}{}
 		}
 	}
@@ -325,6 +325,7 @@ func (w *BatchWriter) fillMissingIdentity(ctx context.Context, batch []model.Cal
 		ID       string `gorm:"column:id"`
 		KeyName  string `gorm:"column:key_name"`
 		UserName string `gorm:"column:user_name"`
+		DeptID   string `gorm:"column:dept_id"`
 		DeptName string `gorm:"column:dept_name"`
 	}
 	var rows []keyInfo
@@ -338,6 +339,7 @@ func (w *BatchWriter) fillMissingIdentity(ctx context.Context, batch []model.Cal
 		           du.username,
 		           ''
 		       ) AS user_name,
+		       COALESCE(NULLIF(ak.dept_id,''), d.id::text, '') AS dept_id,
 		       COALESCE(NULLIF(ak.dept_name,''), d.dept_name, '') AS dept_name
 		FROM api_keys ak
 		LEFT JOIN users u ON u.id = ak.user_id
@@ -354,10 +356,17 @@ func (w *BatchWriter) fillMissingIdentity(ctx context.Context, batch []model.Cal
 	}
 
 	for i := range batch {
-		if batch[i].UserName == "" {
+		if batch[i].UserName == "" || batch[i].DeptID == "" || batch[i].DeptName == "" {
 			if info, ok := infoMap[batch[i].KeyID]; ok {
-				batch[i].UserName = info.UserName
-				batch[i].DeptName = info.DeptName
+				if batch[i].UserName == "" {
+					batch[i].UserName = info.UserName
+				}
+				if batch[i].DeptID == "" {
+					batch[i].DeptID = info.DeptID
+				}
+				if batch[i].DeptName == "" {
+					batch[i].DeptName = info.DeptName
+				}
 				if batch[i].KeyName == "" {
 					batch[i].KeyName = info.KeyName
 				}

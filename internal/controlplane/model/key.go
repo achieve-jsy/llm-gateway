@@ -18,6 +18,7 @@ type ApiKey struct {
 	LogEnabled      bool       `gorm:"not null;default:true" json:"log_enabled"`
 	AccessAllGroups bool       `gorm:"not null;default:false" json:"access_all_groups"`
 	UserName        string     `gorm:"type:varchar(128)" json:"user_name,omitempty"`
+	DeptID          string     `gorm:"type:text;default:''" json:"dept_id,omitempty"`
 	DeptName        string     `gorm:"type:varchar(128)" json:"dept_name,omitempty"`
 	StudioID        string     `gorm:"type:varchar(128)" json:"studio_id,omitempty"`
 	StudioName      string     `gorm:"type:varchar(128)" json:"studio_name,omitempty"`

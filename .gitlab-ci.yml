@@ -140,7 +140,7 @@ deploy-app-test:
           'CP_HOST=127.0.0.1' \
           'CONTROL_PLANE_PORT=8081' \
           'DATABASE_URL=${TEST_DATABASE_URL}' \
-          'REDIS_ADDR=192.0.2.10:6379' \
+          'REDIS_ADDR=${TEST_REDIS_ADDR}' \
           'REDIS_PASSWORD=${TEST_REDIS_PASSWORD}' \
           'REDIS_DB=${TEST_REDIS_DB}' \
           'JWT_SECRET=${TEST_JWT_SECRET}' \

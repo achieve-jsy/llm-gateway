@@ -14,7 +14,7 @@ internal/**/*  cmd/**/*  go.mod  go.sum         # Go 后端
 web/**/*                                        # Vue 前端
 deploy/docker/**/*  docker-compose.yml          # 构建/部署配置
 config/**/*                                     # 环境配置
-migrations/**/*                                 # 数据库迁移
+atlas-migrations/**/*                           # 数据库迁移（Atlas）
 .gitlab-ci.yml                                  # CI 配置变更
 ```
 
@@ -25,16 +25,18 @@ docs/**/*  skills/**/*  *.md  AGENTS.md  README.md
 .gitignore  .env.example  .opencode/**/*
 ```
 
-全流程：
+全流程（stage 顺序：`build → migrate → deploy → verify`）：
 
 ```
-build-gateway-test    ─┐
-build-control-plane-test ─┤─→ deploy-app-test → verify-test
-build-web-test        ─┘          │
-                            deploy-web-test ──┘
+build-gateway-test       ─┐
+build-control-plane-test ─┤─→ migrate-test ─→ deploy-app-test ─→ verify-test
+build-web-test           ─┘                        │
+                                            deploy-web-test ──┘
 ```
 
 > **注意**：`changes:` 规则作用在每个 job 上，各 job 共享同一份变更清单。如果变更只涉及 docs/skills/README 等，整个流水线不会执行任何 job。如果纯配置变更（如 `docker-compose.yml`），所有 job 都会运行，但 deploy 拉镜像失败时不中断（fallback 到已有镜像）。
+>
+> **`migrate-test` 不受 `changes:` 限制**：只要 push 到 `test` 分支就会执行（规则仅 `if: $CI_COMMIT_BRANCH == "test"`），确保 schema 始终先于部署收敛。它通过 SSH 到测试主机本机执行 Atlas 迁移（见第 6 节）。
 
 ## 2. 关键参数
 
@@ -61,7 +63,7 @@ build-web-test        ─┘          │
 ```
 环境变量（docker-compose environment）
     ↓ 覆盖
-config/staging.yaml（Viper，gateway 使用）
+config/test.yaml（Viper，gateway 使用，APP_ENV=test）
     ↓ 覆盖
 代码默认值
 ```
@@ -115,46 +117,48 @@ OAUTH_SCOPES=openid profile email
 FRONTEND_URL=http://192.0.2.10:9080
 ```
 
-## 6. 数据库迁移
+## 6. 数据库迁移（Atlas，自动执行）
 
-迁移文件在 `migrations/` 目录，**没有自动运行机制**，需手动执行。
+迁移已统一由 **Atlas** 管理，文件在 **`atlas-migrations/`** 目录（不再是 `migrations/`，也不再用编号 `NNN_*.up.sql` + 手动 psql）：
 
-### 检查当前版本
+- `atlas-migrations/*.sql` — 版本化迁移（如 `20260609082623_baseline.sql`）
+- `atlas-migrations/atlas.sum` — 校验和清单，改动迁移后必须同步（`atlas migrate hash`）
+- 已执行版本记录在库内的 `atlas_schema_revisions` 表
 
-在测试服上查询已执行的最高迁移号：
+### CI 自动迁移机制
 
-```sql
--- 如果有迁移记录表
-SELECT MAX(version) FROM schema_migrations;
--- 或直接检查某列是否存在
-SELECT column_name FROM information_schema.columns
-WHERE table_name='models' AND column_name='price_mode';
-```
+`migrate` stage 在 `build` 之后、`deploy` 之前自动执行，**只要 push 到 `test` 分支就运行**（不受 `changes:` 限制）：
 
-### 手动执行缺失迁移
+- **`migrate-test`**（test 分支）：Runner 内下载 atlas 二进制 → SSH 到测试主机 `192.0.2.10`，把 atlas 与 `atlas-migrations/` scp 到 `/tmp/atlas-migrate`，在**测试主机本机**执行 `atlas migrate apply`。
+  > 之所以走 SSH：测试库地址是 `127.0.0.1:5432`（host 网络下的宿主机本地库），CI Runner 容器无法直连，必须在测试主机本机执行。
+- **`migrate-prod`**（main 分支）：prod 库 `192.0.2.10:5432` 对 Runner 可路由，直接在 Runner 内执行。
 
-```bash
-# 连接测试库
-psql "host=127.0.0.1 port=5432 user=llm_gateway_test password=CHANGE_ME_PASSWORD dbname=llm_gateway_test"
+迁移连接串从 `config/test.yaml` 的 `database.url` 解析（`postgres://...@127.0.0.1:5432/llm_gateway_test`）。
 
-# 执行缺失的迁移（按序号顺序）
-\i /path/to/migrations/035_price_mode.up.sql
-```
+### 手动执行迁移（排查/补救）
 
-或通过 psql 命令行直接执行：
+正常无需手动操作；若 CI 失败需手动补迁移，**在测试主机上**执行（那里才能连到 `127.0.0.1:5432`）：
 
 ```bash
-psql "host=127.0.0.1 port=5432 user=llm_gateway_test password=CHANGE_ME_PASSWORD dbname=llm_gateway_test" \
-  -f migrations/035_price_mode.up.sql
+# 在测试主机 192.0.2.10 上
+atlas migrate apply \
+  --dir "file://atlas-migrations" \
+  --url "postgres://llm_gateway_test:CHANGE_ME_PASSWORD@127.0.0.1:5432/llm_gateway_test?sslmode=disable"
+
+# 只查看待应用的迁移、不实际执行
+atlas migrate status \
+  --dir "file://atlas-migrations" \
+  --url "postgres://llm_gateway_test:CHANGE_ME_PASSWORD@127.0.0.1:5432/llm_gateway_test?sslmode=disable"
 ```
 
 ### 常见报错
 
 | 错误 | 含义 | 处理 |
 |------|------|------|
-| `column models.price_mode does not exist` | 迁移未执行到 035 | 手动跑 `035_price_mode.up.sql` |
-| `relation "xxx" does not exist` | 建表迁移未执行 | 从头按序号执行迁移 |
-| `already exists` | 迁移重复执行 | 忽略，或跳过该文件 |
+| `dial tcp 127.0.0.1:5432: connect: connection refused` | 在 CI Runner 内直连测试库（错误），或测试主机 PG 未起 | 迁移须在测试主机本机执行（`migrate-test` 已走 SSH）；检查宿主机 PG |
+| `checksum mismatch` / `atlas.sum` 校验失败 | 改了迁移文件但没更新 `atlas.sum` | 本地 `atlas migrate hash` 后重新提交 |
+| `connected database is not clean` | 目标库已有非 Atlas 管理的表 | 用 `atlas migrate apply --baseline <version>` 设定基线 |
+| `column xxx does not exist`（应用日志） | 迁移未跑到对应版本 | 在测试主机执行 `atlas migrate apply` 收敛 |
 
 ## 7. 常见故障排查
 
@@ -170,7 +174,7 @@ docker logs llm-gw-control-plane --tail 50
 
 | 错误关键词 | 原因 | 处理 |
 |-----------|------|------|
-| `WRONGPASS invalid username-password pair` | Redis 密码错误 | 更新 `docker-compose.yml` 和 `config/staging.yaml` 中的 `REDIS_PASSWORD` |
+| `WRONGPASS invalid username-password pair` | Redis 密码错误 | 更新 `docker-compose.yml` 和 `config/test.yaml` 中的 `REDIS_PASSWORD` |
 | `failed to connect to PostgreSQL` | DB 连不上或密码错 | 检查 `DATABASE_URL` |
 | `INTERNAL_AUTH_TOKEN is missing` | 环境变量未传 | 检查 docker-compose `environment` 节 |
 | `connection refused 127.0.0.1:6379` | Redis 未启动或未监听 | 在宿主机上 `systemctl status redis` |
@@ -188,9 +192,9 @@ docker kill llm-gw-gateway llm-gw-control-plane
 
 ```bash
 cd /data/llm-gateway
-export IMAGE_TAG=test-<commit_sha> REGISTRY=192.0.2.10:5000 APP_ENV=staging
-docker compose up -d --remove-orphans
-docker compose ps
+export IMAGE_TAG=test-<commit_sha> REGISTRY=192.0.2.10:5000 APP_ENV=test
+docker compose -p llm-test up -d --remove-orphans
+docker compose -p llm-test ps
 ```
 
 ## 8. 重启顺序
@@ -207,9 +211,9 @@ docker restart llm-gw-gateway
 
 | 文件 | 职责 |
 |------|------|
-| `.gitlab-ci.yml` | CI 流水线定义，测试分支自动触发 |
+| `.gitlab-ci.yml` | CI 流水线定义，测试分支自动触发（含 `migrate-test`） |
 | `docker-compose.yml` | 部署配置，`network_mode: host`，所有环境变量默认值 |
-| `config/staging.yaml` | 测试环境 Viper 配置（gateway 读取，control-plane 部分读取） |
-| `migrations/` | SQL 迁移文件，需手动执行 |
+| `config/test.yaml` | 测试环境 Viper 配置（gateway 读取，control-plane 部分读取）；migrate 的库连接串也从此解析 |
+| `atlas-migrations/` | Atlas 迁移文件 + `atlas.sum`，CI `migrate` stage 自动执行 |
 | `cmd/control-plane/main.go` | 直接 `os.Getenv`，不走 Viper，环境变量必须注入 |
 | `cmd/gateway/main.go` | 走 `config.Load()`（Viper），环境变量可覆盖 yaml |

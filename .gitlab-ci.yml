@@ -135,8 +135,12 @@ build-web-prod:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # MIGRATE — 数据库迁移（在发布之前自动执行）
+#
+# prod：库地址 192.0.2.10:5432 对 Runner 可路由，直接在 Runner 内执行 atlas。
+# test：库在测试主机本机（docker-compose host 网络，应用走 127.0.0.1:5432），
+#       Runner 无法直连 127.0.0.1，故改为 SSH 到测试主机本机执行迁移。
 # ═══════════════════════════════════════════════════════════════════════════════
-migrate:
+migrate-prod:
   stage: migrate
   image: alpine:3.21
   tags: [docker]
@@ -155,19 +159,44 @@ migrate:
     - cp atlas-bin/atlas /usr/local/bin/atlas
   script:
     - |
-      if [ "$CI_COMMIT_BRANCH" = "main" ]; then
-        CONFIG_FILE="config/prod.yaml"
-      elif [ "$CI_COMMIT_BRANCH" = "test" ]; then
-        CONFIG_FILE="config/test.yaml"
-      else
-        echo "Unexpected branch: $CI_COMMIT_BRANCH"
-        exit 1
-      fi
-      export DATABASE_URL=$(grep -A1 ^database: "$CONFIG_FILE" | tail -1 | cut -d'"' -f2)
-      echo "Migrating database ($CI_COMMIT_BRANCH)..."
+      export DATABASE_URL=$(grep -A1 ^database: config/prod.yaml | tail -1 | cut -d'"' -f2)
+      echo "Migrating database (prod)..."
       atlas migrate apply --dir "file://atlas-migrations" --url "$DATABASE_URL"
   rules:
-    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "test"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+migrate-test:
+  stage: migrate
+  image: ${REGISTRY}/deploy-tools:latest
+  tags: [deploy]
+  cache:
+    key: atlas-bin
+    paths:
+      - atlas-bin/
+  before_script:
+    - |
+      if [ ! -f atlas-bin/atlas ]; then
+        mkdir -p atlas-bin
+        curl -sSfL https://release.ariga.io/atlas/atlas-community-linux-amd64-latest -o atlas-bin/atlas
+        chmod +x atlas-bin/atlas
+      fi
+  script:
+    - |
+      SSH_OPTS="-o StrictHostKeyChecking=no"
+      DATABASE_URL=$(grep -A1 ^database: config/test.yaml | tail -1 | cut -d'"' -f2)
+      echo "=== Shipping atlas + migrations to ${TEST_HOST} ==="
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "rm -rf /tmp/atlas-migrate && mkdir -p /tmp/atlas-migrate"
+      scp ${SSH_OPTS} atlas-bin/atlas ${TEST_USER}@${TEST_HOST}:/tmp/atlas-migrate/atlas
+      scp ${SSH_OPTS} -r atlas-migrations ${TEST_USER}@${TEST_HOST}:/tmp/atlas-migrate/atlas-migrations
+      echo "=== Migrating database (test) on ${TEST_HOST} ==="
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
+        set -e
+        chmod +x /tmp/atlas-migrate/atlas
+        /tmp/atlas-migrate/atlas migrate apply --dir 'file:///tmp/atlas-migrate/atlas-migrations' --url '${DATABASE_URL}'
+        rm -rf /tmp/atlas-migrate
+      "
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "test"'
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DEPLOY — 测试 (192.0.2.10)

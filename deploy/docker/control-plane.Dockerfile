@@ -23,7 +23,7 @@ RUN apk add --no-cache ca-certificates tzdata \
 COPY --from=go-builder /out/control-plane /usr/local/bin/control-plane
 
 COPY config/ /app/config/
-COPY migrations/ /app/migrations/
+COPY atlas-migrations/ /app/atlas-migrations/
 
 WORKDIR /app
 

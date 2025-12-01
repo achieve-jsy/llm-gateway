@@ -23,7 +23,7 @@ RUN apk add --no-cache ca-certificates tzdata \
 COPY --from=builder /out/gateway /usr/local/bin/gateway
 
 COPY config/ /app/config/
-COPY migrations/ /app/migrations/
+COPY atlas-migrations/ /app/atlas-migrations/
 
 WORKDIR /app
 

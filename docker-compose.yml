@@ -55,19 +55,8 @@ services:
       - "${CP_HOST:-127.0.0.1}:${CONTROL_PLANE_PORT:-8081}:8081"
     environment:
       APP_ENV: ${APP_ENV:-prod}
-      DATABASE_URL: '${DATABASE_URL:?DATABASE_URL must be set}'
-      REDIS_ADDR: '${REDIS_ADDR:-192.0.2.10:6379}'
-      REDIS_PASSWORD: '${REDIS_PASSWORD:?REDIS_PASSWORD must be set}'
-      REDIS_DB: '${REDIS_DB:-0}'
-      JWT_SECRET: '${JWT_SECRET:?JWT_SECRET must be set}'
-      INTERNAL_AUTH_TOKEN: '${INTERNAL_AUTH_TOKEN:?INTERNAL_AUTH_TOKEN must be set}'
-      ENCRYPTION_KEY: '${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set}'
-      OAUTH_ISSUER_URL: '${OAUTH_ISSUER_URL:-https://oauth.example.net/}'
-      OAUTH_CLIENT_ID: '${OAUTH_CLIENT_ID:-5514f6bb0a}'
-      OAUTH_CLIENT_SECRET: '${OAUTH_CLIENT_SECRET:?OAUTH_CLIENT_SECRET must be set}'
-      OAUTH_REDIRECT_URI: '${OAUTH_REDIRECT_URI:?OAUTH_REDIRECT_URI must be set}'
-      OAUTH_SCOPES: '${OAUTH_SCOPES:-openid profile email}'
-      FRONTEND_URL: '${FRONTEND_URL:?FRONTEND_URL must be set}'
+      # INTERNAL_AUTH_TOKEN 由 group_handler os.Getenv 直接读取，从 yaml provider.internal_token 同值
+      INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN:-dev-test-token}
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/healthz"]
       interval: 10s

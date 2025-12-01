@@ -130,28 +130,18 @@ deploy-app-test:
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "mkdir -p ${TEST_PATH}"
       scp ${SSH_OPTS} docker-compose.yml ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/docker-compose.yml
 
-      echo "APP_ENV=staging"                                                >  /tmp/.env.deploy
-      echo "IMAGE_TAG=${IMAGE_TAG}"                                         >> /tmp/.env.deploy
-      echo "REGISTRY=${REGISTRY}"                                           >> /tmp/.env.deploy
-      echo "GATEWAY_HOST=127.0.0.1"                                         >> /tmp/.env.deploy
-      echo "GATEWAY_PORT=8080"                                              >> /tmp/.env.deploy
-      echo "CP_HOST=127.0.0.1"                                             >> /tmp/.env.deploy
-      echo "CONTROL_PLANE_PORT=8081"                                        >> /tmp/.env.deploy
-      echo "DATABASE_URL='${TEST_DATABASE_URL}'"                            >> /tmp/.env.deploy
-      echo "REDIS_ADDR='${TEST_REDIS_ADDR}'"                                >> /tmp/.env.deploy
-      echo "REDIS_PASSWORD='${TEST_REDIS_PASSWORD}'"                        >> /tmp/.env.deploy
-      echo "REDIS_DB=${TEST_REDIS_DB}"                                      >> /tmp/.env.deploy
-      echo "JWT_SECRET='${TEST_JWT_SECRET}'"                                >> /tmp/.env.deploy
-      echo "ENCRYPTION_KEY='${TEST_ENCRYPTION_KEY}'"                        >> /tmp/.env.deploy
-      echo "INTERNAL_AUTH_TOKEN='${TEST_INTERNAL_TOKEN}'"                    >> /tmp/.env.deploy
-      echo "OAUTH_ISSUER_URL='https://oauth.example.net/'"                >> /tmp/.env.deploy
-      echo "OAUTH_CLIENT_ID=5514f6bb0a"                                     >> /tmp/.env.deploy
-      echo "OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'"              >> /tmp/.env.deploy
-      echo "OAUTH_REDIRECT_URI='http://${TEST_HOST}:9080/auth/callback'"    >> /tmp/.env.deploy
-      echo "OAUTH_SCOPES='openid profile email'"                            >> /tmp/.env.deploy
-      echo "FRONTEND_URL='http://${TEST_HOST}:9080'"                        >> /tmp/.env.deploy
+      # 只传 docker-compose 需要的变量（业务配置由容器内 config/staging.yaml 提供）
+      printf '%s\n' \
+        "IMAGE_TAG=${IMAGE_TAG}" \
+        "REGISTRY=${REGISTRY}" \
+        "APP_ENV=staging" \
+        "GATEWAY_HOST=127.0.0.1" \
+        "GATEWAY_PORT=8080" \
+        "CP_HOST=127.0.0.1" \
+        "CONTROL_PLANE_PORT=8081" \
+        "INTERNAL_AUTH_TOKEN=dev-test-token" \
+        > /tmp/.env.deploy
       scp ${SSH_OPTS} /tmp/.env.deploy ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/.env
-      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "chmod 600 ${TEST_PATH}/.env"
 
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
         set -e
@@ -197,9 +187,6 @@ deploy-prod:
   stage: deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
-  variables:
-    GATEWAY_PORT: "8080"
-    CONTROL_PLANE_PORT: "8081"
   script:
     - |
       SSH_OPTS="-o StrictHostKeyChecking=no"
@@ -209,25 +196,27 @@ deploy-prod:
       ssh ${SSH_OPTS} root@${PROD_HOST} "mkdir -p ${PROD_PATH}"
       scp ${SSH_OPTS} docker-compose.yml root@${PROD_HOST}:${PROD_PATH}/
 
-      ssh ${SSH_OPTS} root@${PROD_HOST} << REMOTE_SCRIPT
+      printf '%s\n' \
+        "IMAGE_TAG=${IMAGE_TAG}" \
+        "REGISTRY=${REGISTRY}" \
+        "APP_ENV=prod" \
+        "GATEWAY_HOST=0.0.0.0" \
+        "GATEWAY_PORT=8080" \
+        "CP_HOST=0.0.0.0" \
+        "CONTROL_PLANE_PORT=8081" \
+        "INTERNAL_AUTH_TOKEN=dev-test-token" \
+        > /tmp/.env.deploy
+      scp ${SSH_OPTS} /tmp/.env.deploy root@${PROD_HOST}:${PROD_PATH}/.env
+
+      ssh ${SSH_OPTS} root@${PROD_HOST} "
         set -e
         cd ${PROD_PATH}
-
         docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
         docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
-
-        export IMAGE_TAG="${IMAGE_TAG}"
-        export REGISTRY="${REGISTRY}"
-        export APP_ENV="prod"
-        export GATEWAY_PORT="${GATEWAY_PORT}"
-        export CONTROL_PLANE_PORT="${CONTROL_PLANE_PORT}"
-        export GATEWAY_HOST="0.0.0.0"
-        export CP_HOST="0.0.0.0"
-        docker compose up -d --remove-orphans --wait --wait-timeout 60
-
-        echo "=== Deploy ${IMAGE_TAG} to prod complete ==="
+        docker compose --env-file .env up -d --remove-orphans --wait --wait-timeout 60
+        echo '=== Deploy ${IMAGE_TAG} to prod complete ==='
         docker compose ps
-      REMOTE_SCRIPT
+      "
   environment:
     name: production
     url: http://192.0.2.10

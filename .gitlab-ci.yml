@@ -1,5 +1,6 @@
 stages:
   - build
+  - migrate
   - deploy
   - verify
 
@@ -129,6 +130,18 @@ build-web-prod:
     expire_in: 2 hours
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MIGRATE — 数据库迁移（在发布之前自动执行）
+# ═══════════════════════════════════════════════════════════════════════════════
+migrate:
+  stage: migrate
+  image: arigaio/atlas:latest
+  needs: [build]
+  script:
+    - atlas migrate apply --env ${CI_ENVIRONMENT_NAME:-local}
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "staging"'
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DEPLOY — 测试 (192.0.2.10)

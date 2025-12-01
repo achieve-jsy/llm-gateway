@@ -1313,13 +1313,16 @@ function renderTrend() {
   trendChart?.destroy()
 
   const labels = statsRows.value.map(r => {
-    if (groupBy.value === 'day') return fmtDate(r.stat_date)
+    if (groupBy.value === 'hour')  return r.stat_date ?? '—'
+    if (groupBy.value === 'day')   return fmtDate(r.stat_date)
+    if (groupBy.value === 'week')  return fmtDate(r.stat_date)
+    if (groupBy.value === 'month') return r.stat_date?.slice(0, 7) ?? '—'  // "2026-06"
     if (groupBy.value === 'model') return r.model || '未知'
-    if (groupBy.value === 'dept') return r.dept_name || r.dept_id || '未知'
+    if (groupBy.value === 'dept')  return r.dept_name || r.dept_id || '未知'
     return r.key_name || maskKey(r.key_id)
   })
 
-  const isLine = groupBy.value === 'day' && statsRows.value.length > 1
+  const isLine = ['hour', 'day', 'week', 'month'].includes(groupBy.value) && statsRows.value.length > 1
   const type = isLine ? 'line' : 'bar'
 
   let datasets: any[]

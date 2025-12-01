@@ -85,10 +85,10 @@ stages:
 
 | job | 触发分支 | Runner 镜像 | 连接方式 |
 |-----|----------|-------------|----------|
-| `migrate-prod` | `main` | `alpine:3.21`（Runner 下载 atlas） | prod 库 `192.0.2.10:5432` 对 Runner 可路由，**直接在 Runner 内**执行 |
-| `migrate-test` | `test` | `deploy-tools:latest` | test 库地址是 `127.0.0.1:5432`（host 网络的宿主机本地库），Runner 连不上，**SSH 到测试机本机**执行 |
+| `migrate-prod` | tag `v*.*.*`（手动） | `alpine:3.21`（Runner 下载 atlas） | prod 库 `192.0.2.10:5432` 对 Runner 可路由，**直接在 Runner 内**执行 |
+| `migrate-test` | `test`（+`changes`） | `deploy-tools:latest` | test 库地址是 `127.0.0.1:5432`（host 网络的宿主机本地库），Runner 连不上，**SSH 到测试机本机**执行 |
 
-> `migrate-test` 不受 `changes:` 限制，只要 push 到 `test` 就执行，确保 schema 先于部署收敛。
+> 两个 migrate job 的 `rules` 与对应 deploy job 完全一致：`migrate-test` = `deploy-app-test`（test 分支 + `changes` 实质变更），`migrate-prod` = `deploy-prod`（tag `v*.*.*` + 手动）。即「要部署时才迁移」，无实质变更的 push（如纯文档）不会触发迁移。
 
 ```yaml
 # 直连（prod）：Runner 内执行

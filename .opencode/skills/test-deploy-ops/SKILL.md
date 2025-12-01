@@ -36,7 +36,7 @@ build-web-test           ─┘                        │
 
 > **注意**：`changes:` 规则作用在每个 job 上，各 job 共享同一份变更清单。如果变更只涉及 docs/skills/README 等，整个流水线不会执行任何 job。如果纯配置变更（如 `docker-compose.yml`），所有 job 都会运行，但 deploy 拉镜像失败时不中断（fallback 到已有镜像）。
 >
-> **`migrate-test` 不受 `changes:` 限制**：只要 push 到 `test` 分支就会执行（规则仅 `if: $CI_COMMIT_BRANCH == "test"`），确保 schema 始终先于部署收敛。它通过 SSH 到测试主机本机执行 Atlas 迁移（见第 6 节）。
+> **`migrate-test` 的 `rules` 与 `deploy-app-test` 一致**：test 分支 + 命中 `changes` 实质变更才执行（「要部署时才迁移」）。纯文档/skill 等非实质变更不会触发迁移。它通过 SSH 到测试主机本机执行 Atlas 迁移（见第 6 节）。
 
 ## 2. 关键参数
 
@@ -127,11 +127,11 @@ FRONTEND_URL=http://192.0.2.10:9080
 
 ### CI 自动迁移机制
 
-`migrate` stage 在 `build` 之后、`deploy` 之前自动执行，**只要 push 到 `test` 分支就运行**（不受 `changes:` 限制）：
+`migrate` stage 在 `build` 之后、`deploy` 之前执行，触发条件与对应 deploy job 一致（要部署时才迁移）：
 
 - **`migrate-test`**（test 分支）：Runner 内下载 atlas 二进制 → SSH 到测试主机 `192.0.2.10`，把 atlas 与 `atlas-migrations/` scp 到 `/tmp/atlas-migrate`，在**测试主机本机**执行 `atlas migrate apply`。
   > 之所以走 SSH：测试库地址是 `127.0.0.1:5432`（host 网络下的宿主机本地库），CI Runner 容器无法直连，必须在测试主机本机执行。
-- **`migrate-prod`**（main 分支）：prod 库 `192.0.2.10:5432` 对 Runner 可路由，直接在 Runner 内执行。
+- **`migrate-prod`**（tag `v*.*.*`，手动）：prod 库 `192.0.2.10:5432` 对 Runner 可路由，直接在 Runner 内执行；与 `deploy-prod` 一样手动触发。
 
 迁移连接串从 `config/test.yaml` 的 `database.url` 解析（`postgres://...@127.0.0.1:5432/llm_gateway_test`）。
 命令带 `--baseline $ATLAS_BASELINE`（CI 全局变量，当前 `20260609082623`）：线上库已有 schema，首次执行把该版本标记为已应用而不执行其 SQL；revision 表建立后再带它为无操作（幂等）。**切勿对空库使用**，否则不会建表。

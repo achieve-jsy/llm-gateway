@@ -155,7 +155,7 @@ git commit -m "feat(db): add user email column"
 CI 在 `migrate` stage（deploy 之前）执行 `atlas migrate apply`，对比 `atlas_schema_revisions` 从落后版本顺序补齐；幂等、带锁、可重入。按环境网络可达性拆成两个 job：
 
 ```bash
-# migrate-prod（main 分支）：prod 库可路由，Runner 内直接执行
+# migrate-prod（tag v*.*.*，手动）：prod 库可路由，Runner 内直接执行
 atlas migrate apply \
   --dir "file://atlas-migrations" \
   --url "$DATABASE_URL" \

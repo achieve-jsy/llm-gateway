@@ -1,4 +1,4 @@
-# 测试环境配置 (APP_ENV=staging)
+# 测试环境配置 (APP_ENV=test)
 # 部署目标: 192.0.2.10
 server:
   port: "8080"

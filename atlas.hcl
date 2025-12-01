@@ -24,7 +24,7 @@ env "dev" {
   }
 }
 
-env "staging" {
+env "test" {
   src = data.external_schema.gorm.url
   dev = "docker://postgres/16/dev?search_path=public"
   url = getenv("DATABASE_URL")

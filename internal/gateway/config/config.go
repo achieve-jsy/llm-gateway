@@ -98,7 +98,7 @@ func Load() *Config {
 	v.SetDefault("oidc.admin_match_values", "llm-gateway-admins")
 	v.SetDefault("oidc.default_role", "employee")
 
-	// 确定环境：APP_ENV 可选 dev / staging / prod
+	// 确定环境：APP_ENV 可选 dev / test / prod
 	env := os.Getenv("APP_ENV")
 	if env == "" {
 		env = "dev"

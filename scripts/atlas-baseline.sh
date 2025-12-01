@@ -4,7 +4,7 @@ set -euo pipefail
 ENV=${1:-}
 if [[ -z "$ENV" ]]; then
     echo "Usage: $0 <env>" >&2
-    echo "  env: dev, staging, prod" >&2
+    echo "  env: dev, test, prod" >&2
     exit 1
 fi
 

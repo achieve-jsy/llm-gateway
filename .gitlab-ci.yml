@@ -48,7 +48,7 @@ build-gateway-test:
     DOCKER_BUILDKIT: "0"
   script:
     - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
-    - docker build --build-arg APP_ENV=staging -f deploy/docker/gateway.Dockerfile -t ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} .
+    - docker build --build-arg APP_ENV=test -f deploy/docker/gateway.Dockerfile -t ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} .
     - docker push ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG}
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
@@ -63,7 +63,7 @@ build-control-plane-test:
     DOCKER_BUILDKIT: "0"
   script:
     - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
-    - docker build --build-arg APP_ENV=staging -f deploy/docker/control-plane.Dockerfile -t ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} .
+    - docker build --build-arg APP_ENV=test -f deploy/docker/control-plane.Dockerfile -t ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} .
     - docker push ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
@@ -144,18 +144,18 @@ migrate:
       if [ "$CI_COMMIT_BRANCH" = "main" ]; then
         export ATLAS_ENV="prod"
         CONFIG_FILE="config/prod.yaml"
-      elif [ "$CI_COMMIT_BRANCH" = "staging" ]; then
-        export ATLAS_ENV="staging"
-        CONFIG_FILE="config/staging.yaml"
+      elif [ "$CI_COMMIT_BRANCH" = "test" ]; then
+        export ATLAS_ENV="test"
+        CONFIG_FILE="config/test.yaml"
       else
         echo "Unexpected branch: $CI_COMMIT_BRANCH"
         exit 1
       fi
-    - export DATABASE_URL=$(sed -n '/^database:/{n;s/.*url: "\(.*\)"/\1/p;q}' "$CONFIG_FILE")
-    - echo "Migrating $ATLAS_ENV database..."
-    - atlas migrate apply --env "$ATLAS_ENV"
+      export DATABASE_URL=$(grep -A1 ^database: "$CONFIG_FILE" | tail -1 | cut -d'"' -f2)
+      echo "Migrating $ATLAS_ENV database..."
+      atlas migrate apply --env "$ATLAS_ENV"
   rules:
-    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "staging"'
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "test"'
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DEPLOY — 测试 (192.0.2.10)
@@ -178,7 +178,7 @@ deploy-app-test:
         cd ${TEST_PATH}
         docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG} || echo "Gateway image not found, reusing existing"
         docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} || echo "CP image not found, reusing existing"
-        export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=staging
+        export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=test
         docker compose -p llm-test up -d --remove-orphans --wait --wait-timeout 90
         docker compose -p llm-test ps
       "

@@ -1,5 +1,0 @@
-ALTER TABLE health_check_logs
-    ADD COLUMN IF NOT EXISTS provider_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
-    ADD COLUMN IF NOT EXISTS provider_name VARCHAR(200) NOT NULL DEFAULT '';
-
-CREATE INDEX IF NOT EXISTS idx_hcl_provider_id ON health_check_logs (provider_id);

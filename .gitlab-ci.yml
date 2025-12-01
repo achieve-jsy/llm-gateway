@@ -26,12 +26,14 @@ variables:
   - "deploy/docker/**/*"
   - "config/**/*"
   - "docker-compose.yml"
-  - "migrations/**/*"
+  - "atlas-migrations/**/*"
   - ".gitlab-ci.yml"
 
 workflow:
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
+    - if: $CI_COMMIT_BRANCH == "staging"
+    - if: $CI_COMMIT_BRANCH == "main"
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -137,9 +139,21 @@ build-web-prod:
 migrate:
   stage: migrate
   image: arigaio/atlas:latest
-  needs: [build]
   script:
-    - atlas migrate apply --env ${CI_ENVIRONMENT_NAME:-local}
+    - |
+      if [ "$CI_COMMIT_BRANCH" = "main" ]; then
+        export ATLAS_ENV="prod"
+        CONFIG_FILE="config/prod.yaml"
+      elif [ "$CI_COMMIT_BRANCH" = "staging" ]; then
+        export ATLAS_ENV="staging"
+        CONFIG_FILE="config/staging.yaml"
+      else
+        echo "Unexpected branch: $CI_COMMIT_BRANCH"
+        exit 1
+      fi
+    - export DATABASE_URL=$(sed -n '/^database:/{n;s/.*url: "\(.*\)"/\1/p;q}' "$CONFIG_FILE")
+    - echo "Migrating $ATLAS_ENV database..."
+    - atlas migrate apply --env "$ATLAS_ENV"
   rules:
     - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "staging"'
 

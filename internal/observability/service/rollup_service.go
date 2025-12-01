@@ -191,7 +191,10 @@ func (s *RollupService) queryFromUsageDaily(ctx context.Context, params UsageDai
 
 	var totalCount int64
 	if !timeGroupBy {
-		if err := query.Count(&totalCount).Error; err != nil {
+		if err := s.db.WithContext(ctx).
+			Table("(?) AS sub", query.Session(&gorm.Session{NewDB: false})).
+			Select("COUNT(*)").
+			Scan(&totalCount).Error; err != nil {
 			return nil, fmt.Errorf("count usage_daily: %w", err)
 		}
 		page := params.Page
@@ -277,8 +280,12 @@ func (s *RollupService) queryFromCallLogs(ctx context.Context, params UsageDaily
 	// 非时间维度（key / model / dept）：真实分页，先 COUNT 全量再 LIMIT+OFFSET
 	var totalCount int64
 	if !timeGroupBy {
-		// COUNT 全量（不带 LIMIT）
-		if err := query.Count(&totalCount).Error; err != nil {
+		// 把当前带 WHERE+GROUP BY 的 query 包成子查询来 COUNT，
+		// 避免聚合列（SUM/COUNT）在外层 COUNT(*) 里触发 GROUP BY 冲突
+		if err := s.db.WithContext(ctx).
+			Table("(?) AS sub", query.Session(&gorm.Session{NewDB: false})).
+			Select("COUNT(*)").
+			Scan(&totalCount).Error; err != nil {
 			return nil, fmt.Errorf("count call_logs: %w", err)
 		}
 		page := params.Page
@@ -661,7 +668,10 @@ func (s *RollupService) QueryMyStats(ctx context.Context, params MyStatsQueryPar
 
 	var totalCount int64
 	if !timeGroupBy {
-		if err := query.Count(&totalCount).Error; err != nil {
+		if err := s.db.WithContext(ctx).
+			Table("(?) AS sub", query.Session(&gorm.Session{NewDB: false})).
+			Select("COUNT(*)").
+			Scan(&totalCount).Error; err != nil {
 			return nil, fmt.Errorf("count my stats: %w", err)
 		}
 		page := params.Page

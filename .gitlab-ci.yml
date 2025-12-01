@@ -82,29 +82,31 @@ deploy-app:
       scp ${SSH_OPTS} docker-compose.yml ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/docker-compose.yml
 
       # ③ 在远端生成 .env（密钥全部来自 GitLab CI Variables，不进 Git）
-      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "cat > ${TEST_PATH}/.env << 'ENVEOF'
-APP_ENV=staging
-IMAGE_TAG=${IMAGE_TAG}
-REGISTRY=${REGISTRY}
-GATEWAY_HOST=127.0.0.1
-GATEWAY_PORT=8080
-CP_HOST=127.0.0.1
-CONTROL_PLANE_PORT=8081
-DATABASE_URL=${TEST_DATABASE_URL}
-REDIS_ADDR=192.0.2.10:6379
-REDIS_PASSWORD=${TEST_REDIS_PASSWORD}
-REDIS_DB=1
-JWT_SECRET=${TEST_JWT_SECRET}
-ENCRYPTION_KEY=${TEST_ENCRYPTION_KEY}
-INTERNAL_AUTH_TOKEN=${TEST_INTERNAL_TOKEN}
-OAUTH_ISSUER_URL=https://oauth.example.net/
-OAUTH_CLIENT_ID=5514f6bb0a
-OAUTH_CLIENT_SECRET=${TEST_OAUTH_CLIENT_SECRET}
-OAUTH_REDIRECT_URI=http://${TEST_HOST}:9080/auth/callback
-OAUTH_SCOPES=openid profile email
-FRONTEND_URL=http://${TEST_HOST}:9080
-ENVEOF
-chmod 600 ${TEST_PATH}/.env"
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
+        printf '%s\n' \
+          'APP_ENV=staging' \
+          'IMAGE_TAG=${IMAGE_TAG}' \
+          'REGISTRY=${REGISTRY}' \
+          'GATEWAY_HOST=127.0.0.1' \
+          'GATEWAY_PORT=8080' \
+          'CP_HOST=127.0.0.1' \
+          'CONTROL_PLANE_PORT=8081' \
+          'DATABASE_URL=${TEST_DATABASE_URL}' \
+          'REDIS_ADDR=192.0.2.10:6379' \
+          'REDIS_PASSWORD=${TEST_REDIS_PASSWORD}' \
+          'REDIS_DB=1' \
+          'JWT_SECRET=${TEST_JWT_SECRET}' \
+          'ENCRYPTION_KEY=${TEST_ENCRYPTION_KEY}' \
+          'INTERNAL_AUTH_TOKEN=${TEST_INTERNAL_TOKEN}' \
+          'OAUTH_ISSUER_URL=https://oauth.example.net/' \
+          'OAUTH_CLIENT_ID=5514f6bb0a' \
+          'OAUTH_CLIENT_SECRET=${TEST_OAUTH_CLIENT_SECRET}' \
+          'OAUTH_REDIRECT_URI=http://${TEST_HOST}:9080/auth/callback' \
+          'OAUTH_SCOPES=openid profile email' \
+          'FRONTEND_URL=http://${TEST_HOST}:9080' \
+          > ${TEST_PATH}/.env
+        chmod 600 ${TEST_PATH}/.env
+      "
 
       # ④ 拉镜像、启动服务
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "

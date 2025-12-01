@@ -1,0 +1,10 @@
+name: "observability-hub"
+type: "web-backend"
+version: "1.0"
+created_at: "2026-06-09"
+created_by_change: "CHG-20260603-001"
+last_updated: "2026-06-09"
+change_history:
+  - change_id: "CHG-20260603-001"
+    date: "2026-06-09"
+    description: "初始创建"

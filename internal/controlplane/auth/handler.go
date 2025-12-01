@@ -215,6 +215,7 @@ func (h *Handler) upsertUser(info *DaQunUserInfo) (*amodel.User, string, string)
 	deptID := info.EhrDeptID
 	deptName := info.EhrDeptName
 
+	// 确保部门记录存在
 	var deptModel *amodel.Department
 	if deptID != "" {
 		dept, err := h.deptRepo.FindByDeptID(deptID)
@@ -233,7 +234,34 @@ func (h *Handler) upsertUser(info *DaQunUserInfo) (*amodel.User, string, string)
 	if err == nil && existingUser != nil {
 		existingUser.Name = info.Name
 		existingUser.Email = info.Email
+
 		if deptModel != nil {
+			// dept_source=manual：不覆盖手动归属，改为记录冲突提醒
+			if existingUser.DeptSource == "manual" {
+				currentDeptID := ""
+				if existingUser.DeptID != nil {
+					currentDeptID = existingUser.DeptID.String()
+				}
+				if currentDeptID != deptModel.ID.String() {
+					// 异步写冲突提醒，不阻塞登录
+					go func() {
+						if err := h.db.Exec(`
+							INSERT INTO user_dept_conflicts(user_id, current_dept_id, sso_dept_id, sso_dept_name)
+							VALUES(?, NULLIF(?,'')::uuid, NULLIF(?,'')::uuid, ?)
+							ON CONFLICT DO NOTHING
+						`, existingUser.ID, currentDeptID, deptModel.ID.String(), deptName).Error; err != nil {
+							slog.Warn("failed to record dept conflict", "user_id", existingUser.ID, "error", err)
+						}
+					}()
+				}
+				// 只更新 name/email，不改 dept_id
+				if updateErr := h.userRepo.Update(existingUser); updateErr != nil {
+					slog.Warn("failed to update user", "error", updateErr)
+				}
+				return existingUser, deptID, deptName
+			}
+
+			// dept_source=sso（默认）：按 SSO claims 正常迁移
 			existingUser.DeptID = &deptModel.ID
 		}
 		if updateErr := h.userRepo.Update(existingUser); updateErr != nil {

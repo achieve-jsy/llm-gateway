@@ -106,6 +106,9 @@ func JWTAuth() gin.HandlerFunc {
 		if name, ok := claims["name"].(string); ok {
 			c.Set("user_name", name)
 		}
+		if role, ok := claims["role"].(string); ok {
+			c.Set("user_role", role)
+		}
 		c.Set("admin_token", token)
 		c.Next()
 	}

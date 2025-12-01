@@ -130,25 +130,13 @@ deploy-app-test:
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "mkdir -p ${TEST_PATH}"
       scp ${SSH_OPTS} docker-compose.yml ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/docker-compose.yml
 
-      # 只传 docker-compose 需要的变量（业务配置由容器内 config/staging.yaml 提供）
-      printf '%s\n' \
-        "IMAGE_TAG=${IMAGE_TAG}" \
-        "REGISTRY=${REGISTRY}" \
-        "APP_ENV=staging" \
-        "GATEWAY_HOST=127.0.0.1" \
-        "GATEWAY_PORT=8080" \
-        "CP_HOST=127.0.0.1" \
-        "CONTROL_PLANE_PORT=8081" \
-        "INTERNAL_AUTH_TOKEN=dev-test-token" \
-        > /tmp/.env.deploy
-      scp ${SSH_OPTS} /tmp/.env.deploy ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/.env
-
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
         set -e
         cd ${TEST_PATH}
         docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
         docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
-        docker compose --env-file .env -p llm-test up -d --remove-orphans --wait --wait-timeout 90
+        export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=staging
+        docker compose -p llm-test up -d --remove-orphans --wait --wait-timeout 90
         docker compose -p llm-test ps
       "
   environment:
@@ -196,24 +184,13 @@ deploy-prod:
       ssh ${SSH_OPTS} root@${PROD_HOST} "mkdir -p ${PROD_PATH}"
       scp ${SSH_OPTS} docker-compose.yml root@${PROD_HOST}:${PROD_PATH}/
 
-      printf '%s\n' \
-        "IMAGE_TAG=${IMAGE_TAG}" \
-        "REGISTRY=${REGISTRY}" \
-        "APP_ENV=prod" \
-        "GATEWAY_HOST=0.0.0.0" \
-        "GATEWAY_PORT=8080" \
-        "CP_HOST=0.0.0.0" \
-        "CONTROL_PLANE_PORT=8081" \
-        "INTERNAL_AUTH_TOKEN=dev-test-token" \
-        > /tmp/.env.deploy
-      scp ${SSH_OPTS} /tmp/.env.deploy root@${PROD_HOST}:${PROD_PATH}/.env
-
       ssh ${SSH_OPTS} root@${PROD_HOST} "
         set -e
         cd ${PROD_PATH}
         docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
         docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
-        docker compose --env-file .env up -d --remove-orphans --wait --wait-timeout 60
+        export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=prod GATEWAY_HOST=0.0.0.0 CP_HOST=0.0.0.0
+        docker compose up -d --remove-orphans --wait --wait-timeout 60
         echo '=== Deploy ${IMAGE_TAG} to prod complete ==='
         docker compose ps
       "

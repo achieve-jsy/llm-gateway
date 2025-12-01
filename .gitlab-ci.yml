@@ -130,26 +130,26 @@ deploy-app-test:
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "mkdir -p ${TEST_PATH}"
       scp ${SSH_OPTS} docker-compose.yml ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/docker-compose.yml
 
-      echo "APP_ENV=staging"                                          >  /tmp/.env.deploy
-      echo "IMAGE_TAG=${IMAGE_TAG}"                                   >> /tmp/.env.deploy
-      echo "REGISTRY=${REGISTRY}"                                     >> /tmp/.env.deploy
-      echo "GATEWAY_HOST=127.0.0.1"                                   >> /tmp/.env.deploy
-      echo "GATEWAY_PORT=8080"                                        >> /tmp/.env.deploy
-      echo "CP_HOST=127.0.0.1"                                       >> /tmp/.env.deploy
-      echo "CONTROL_PLANE_PORT=8081"                                  >> /tmp/.env.deploy
-      echo "DATABASE_URL=${TEST_DATABASE_URL}"                        >> /tmp/.env.deploy
-      echo "REDIS_ADDR=${TEST_REDIS_ADDR}"                            >> /tmp/.env.deploy
-      echo "REDIS_PASSWORD=${TEST_REDIS_PASSWORD}"                    >> /tmp/.env.deploy
-      echo "REDIS_DB=${TEST_REDIS_DB}"                                >> /tmp/.env.deploy
-      echo "JWT_SECRET=${TEST_JWT_SECRET}"                            >> /tmp/.env.deploy
-      echo "ENCRYPTION_KEY=${TEST_ENCRYPTION_KEY}"                    >> /tmp/.env.deploy
-      echo "INTERNAL_AUTH_TOKEN=${TEST_INTERNAL_TOKEN}"                >> /tmp/.env.deploy
-      echo "OAUTH_ISSUER_URL=https://oauth.example.net/"            >> /tmp/.env.deploy
-      echo "OAUTH_CLIENT_ID=5514f6bb0a"                               >> /tmp/.env.deploy
-      echo "OAUTH_CLIENT_SECRET=${TEST_OAUTH_CLIENT_SECRET}"          >> /tmp/.env.deploy
-      echo "OAUTH_REDIRECT_URI=http://${TEST_HOST}:9080/auth/callback" >> /tmp/.env.deploy
-      echo "OAUTH_SCOPES=openid profile email"                        >> /tmp/.env.deploy
-      echo "FRONTEND_URL=http://${TEST_HOST}:9080"                    >> /tmp/.env.deploy
+      echo "APP_ENV=staging"                                                >  /tmp/.env.deploy
+      echo "IMAGE_TAG=${IMAGE_TAG}"                                         >> /tmp/.env.deploy
+      echo "REGISTRY=${REGISTRY}"                                           >> /tmp/.env.deploy
+      echo "GATEWAY_HOST=127.0.0.1"                                         >> /tmp/.env.deploy
+      echo "GATEWAY_PORT=8080"                                              >> /tmp/.env.deploy
+      echo "CP_HOST=127.0.0.1"                                             >> /tmp/.env.deploy
+      echo "CONTROL_PLANE_PORT=8081"                                        >> /tmp/.env.deploy
+      echo "DATABASE_URL='${TEST_DATABASE_URL}'"                            >> /tmp/.env.deploy
+      echo "REDIS_ADDR='${TEST_REDIS_ADDR}'"                                >> /tmp/.env.deploy
+      echo "REDIS_PASSWORD='${TEST_REDIS_PASSWORD}'"                        >> /tmp/.env.deploy
+      echo "REDIS_DB=${TEST_REDIS_DB}"                                      >> /tmp/.env.deploy
+      echo "JWT_SECRET='${TEST_JWT_SECRET}'"                                >> /tmp/.env.deploy
+      echo "ENCRYPTION_KEY='${TEST_ENCRYPTION_KEY}'"                        >> /tmp/.env.deploy
+      echo "INTERNAL_AUTH_TOKEN='${TEST_INTERNAL_TOKEN}'"                    >> /tmp/.env.deploy
+      echo "OAUTH_ISSUER_URL='https://oauth.example.net/'"                >> /tmp/.env.deploy
+      echo "OAUTH_CLIENT_ID=5514f6bb0a"                                     >> /tmp/.env.deploy
+      echo "OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'"              >> /tmp/.env.deploy
+      echo "OAUTH_REDIRECT_URI='http://${TEST_HOST}:9080/auth/callback'"    >> /tmp/.env.deploy
+      echo "OAUTH_SCOPES='openid profile email'"                            >> /tmp/.env.deploy
+      echo "FRONTEND_URL='http://${TEST_HOST}:9080'"                        >> /tmp/.env.deploy
       scp ${SSH_OPTS} /tmp/.env.deploy ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/.env
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "chmod 600 ${TEST_PATH}/.env"
 

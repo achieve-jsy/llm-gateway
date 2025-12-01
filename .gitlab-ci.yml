@@ -15,6 +15,10 @@ variables:
   TEST_WEB_DIR: "/data/llm-gateway/web"
   PROD_HOST: "192.0.2.10"
   PROD_PATH: "/opt/llm-gateway"
+  # Atlas 基线版本（atlas-migrations/20260609082623_baseline.sql 的时间戳）。
+  # 首次对“已有 schema 的非空库”执行迁移时，把该版本标记为已应用且不执行其 SQL；
+  # revision 表建立后再带此参数为无操作（幂等）。注意：切勿对空库使用，否则不会建表。
+  ATLAS_BASELINE: "20260609082623"
 
 # 有实际影响的文件变更（排除 docs/skills/README/.gitignore 等不会影响运行的文件）
 .test-significant-changes: &test-significant-changes
@@ -161,7 +165,7 @@ migrate-prod:
     - |
       export DATABASE_URL=$(grep -A1 ^database: config/prod.yaml | tail -1 | cut -d'"' -f2)
       echo "Migrating database (prod)..."
-      atlas migrate apply --dir "file://atlas-migrations" --url "$DATABASE_URL"
+      atlas migrate apply --dir "file://atlas-migrations" --url "$DATABASE_URL" --baseline "$ATLAS_BASELINE"
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
@@ -182,7 +186,7 @@ migrate-test:
       fi
   script:
     - |
-      SSH_OPTS="-o StrictHostKeyChecking=no"
+      SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
       DATABASE_URL=$(grep -A1 ^database: config/test.yaml | tail -1 | cut -d'"' -f2)
       echo "=== Shipping atlas + migrations to ${TEST_HOST} ==="
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "rm -rf /tmp/atlas-migrate && mkdir -p /tmp/atlas-migrate"
@@ -192,7 +196,7 @@ migrate-test:
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
         set -e
         chmod +x /tmp/atlas-migrate/atlas
-        /tmp/atlas-migrate/atlas migrate apply --dir 'file:///tmp/atlas-migrate/atlas-migrations' --url '${DATABASE_URL}'
+        /tmp/atlas-migrate/atlas migrate apply --dir 'file:///tmp/atlas-migrate/atlas-migrations' --url '${DATABASE_URL}' --baseline '${ATLAS_BASELINE}'
         rm -rf /tmp/atlas-migrate
       "
   rules:

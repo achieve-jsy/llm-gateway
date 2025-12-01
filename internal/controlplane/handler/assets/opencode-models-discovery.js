@@ -340,7 +340,7 @@ import { join, dirname } from "node:path";
 import { writeFile, mkdir } from "node:fs/promises";
 
 // src/version.ts
-var PLUGIN_VERSION = "0.9.0-llmgw.3";
+var PLUGIN_VERSION = "0.9.0-llmgw.4";
 
 // src/utils/discovery-report.ts
 var SNAPSHOT_PATH = join(homedir(), ".config", "opencode", "plugins", "models-discovery.snapshot.json");
@@ -725,7 +725,7 @@ async function enhanceConfig(config, client, toastNotifier, pluginConfig, logger
       }
       for (const model of models) {
         const modelKey = model.id;
-        if (!existingModels[modelKey]) {
+        if (forceDiscoveryEnabled || !existingModels[modelKey]) {
           const activeModelRegexFilter = hasProviderModelRegexFilter ? providerModelRegexFilter : modelRegexFilter;
           if (!shouldDiscoverModel(model.id, activeModelRegexFilter)) {
             continue;
@@ -759,7 +759,7 @@ async function enhanceConfig(config, client, toastNotifier, pluginConfig, logger
         }
       }
       if (Object.keys(discoveredModels).length > 0) {
-        p.models = {
+        p.models = forceDiscoveryEnabled ? discoveredModels : {
           ...existingModels,
           ...discoveredModels
         };

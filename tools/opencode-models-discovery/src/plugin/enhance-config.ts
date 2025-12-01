@@ -111,7 +111,11 @@ export async function enhanceConfig(
 
       for (const model of models) {
         const modelKey = model.id
-        if (!existingModels[modelKey]) {
+        // 对显式开启发现的 provider（即网关下发、modelsDiscovery.enabled=true 的渠道），
+        // 即使配置里已存在同名模型（通常是旧安装脚本静态写入、且缺少能力信息）也要
+        // 重新发现并富化，保证每次启动都动态加载模型、注入能力并弹出发现 toast；
+        // 其它 provider 仍沿用「跳过已存在模型」的保守行为，避免覆盖用户自定义。
+        if (forceDiscoveryEnabled || !existingModels[modelKey]) {
           const activeModelRegexFilter = hasProviderModelRegexFilter ? providerModelRegexFilter : modelRegexFilter
           if (!shouldDiscoverModel(model.id, activeModelRegexFilter)) {
             continue
@@ -161,10 +165,14 @@ export async function enhanceConfig(
       }
 
       if (Object.keys(discoveredModels).length > 0) {
-        p.models = {
-          ...existingModels,
-          ...discoveredModels,
-        }
+        // 显式开启发现时用新发现结果整体替换 models，丢弃旧的静态写入条目
+        //（避免残留缺能力信息的旧模型）；其它 provider 与既有模型合并。
+        p.models = forceDiscoveryEnabled
+          ? discoveredModels
+          : {
+              ...existingModels,
+              ...discoveredModels,
+            }
 
         openAICompatibleProviders.push({
           name: displayName,

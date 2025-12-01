@@ -828,6 +828,42 @@ describe('ModelDiscovery Plugin', () => {
       }))
     })
 
+    it('should re-discover and replace statically written models when provider discovery is enabled', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          data: [
+            { id: 'fresh-model', object: 'model', created: 1234567890, owned_by: 'local' }
+          ]
+        })
+      })
+
+      // 模拟旧安装脚本静态写入的、缺少能力信息的模型条目。
+      const config: any = {
+        provider: {
+          gateway: {
+            npm: '@ai-sdk/openai-compatible',
+            name: '某公司',
+            options: {
+              baseURL: 'http://127.0.0.1:8080/v1',
+              modelsDiscovery: {
+                enabled: true
+              }
+            },
+            models: {
+              'stale-model': { name: 'Stale Model' }
+            }
+          }
+        }
+      }
+
+      await pluginHooks.config(config)
+
+      // 旧的静态条目被丢弃，仅保留动态发现的模型。
+      expect(config.provider?.gateway?.models?.['stale-model']).toBeUndefined()
+      expect(config.provider?.gateway?.models?.['fresh-model']).toBeDefined()
+    })
+
     it('should skip provider when provider-level discovery is disabled', async () => {
       mockFetch.mockResolvedValue({
         ok: true,

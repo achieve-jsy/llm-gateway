@@ -2,6 +2,12 @@
 # 适用于 Windows PowerShell
 
 $ErrorActionPreference = "Stop"
+# Invoke-WebRequest 默认会渲染进度条，旧版 conhost 在某些控制台宽度/编码下计算
+# 缓冲区单元格会抛 IndexOutOfRangeException（索引超出数组界限），导致下载直接失败。
+# 关闭进度条既能规避该 bug，也能显著加快下载。
+$ProgressPreference = "SilentlyContinue"
+# 设置 UTF-8 输出编码，保证中文与特殊符号正常显示，并减少全角字符触发的渲染异常。
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
 $TOKEN            = "{{.Token}}"
 $PROVIDER_ID      = "{{.ProviderID}}"
@@ -25,14 +31,24 @@ function Send-Callback($status, $msg = "") {
     } catch {}
 }
 
-function Write-Step($msg)    { Write-Host "[..] $msg" -ForegroundColor Cyan }
-function Write-Ok($msg)      { Write-Host "[✓] $msg"  -ForegroundColor Green }
-function Write-Warn($msg)    { Write-Host "[!] $msg"  -ForegroundColor Yellow }
-function Write-Fail($msg)    { Write-Host "[✗] $msg"  -ForegroundColor Red }
-function Write-Divider()     { Write-Host "────────────────────────────────────────" -ForegroundColor Cyan }
+# 旧版 conhost 在 Write-Host -ForegroundColor 叠加全角/特殊字符时可能抛
+# IndexOutOfRangeException（索引超出数组界限）。这里统一退化为无颜色输出，
+# 保证一条着色失败不会因 $ErrorActionPreference=Stop 把整个脚本中断。
+function Write-Line($msg, $color) {
+    try {
+        Write-Host $msg -ForegroundColor $color
+    } catch {
+        try { [Console]::WriteLine($msg) } catch { Write-Output $msg }
+    }
+}
+function Write-Step($msg)    { Write-Line "[..] $msg" Cyan }
+function Write-Ok($msg)      { Write-Line "[OK] $msg"  Green }
+function Write-Warn($msg)    { Write-Line "[!] $msg"  Yellow }
+function Write-Fail($msg)    { Write-Line "[x] $msg"  Red }
+function Write-Divider()     { Write-Line "----------------------------------------" Cyan }
 
 Write-Divider
-Write-Host "  $SUPPLIER_NAME — OpenCode 配置助手" -ForegroundColor White
+Write-Line "  $SUPPLIER_NAME — OpenCode 配置助手" White
 Write-Divider
 Write-Host ""
 
@@ -54,7 +70,7 @@ if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue) -and
 
 if ($missing.Count -gt 0) {
     Write-Fail "缺少必要依赖，无法继续："
-    $missing | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+    $missing | ForEach-Object { Write-Line "  - $_" Red }
     Send-Callback "failed" "缺少依赖"
     exit 1
 }
@@ -94,33 +110,14 @@ try {
 Write-Host ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 阶段 3：获取模型列表并写入 OpenCode 配置
+# 阶段 3：写入 OpenCode 配置（模型交给插件按 key 动态发现+富化）
 # ══════════════════════════════════════════════════════════════════════════════
-Write-Step "阶段 3/4  获取模型列表并写入配置..."
+Write-Step "阶段 3/4  写入 OpenCode 配置..."
 
 $writeOk = $false
 $resultAction = ""
 $resultPlugin = ""
-$resultModels = 0
 $targetId = $PROVIDER_ID
-
-# 获取模型列表（失败不中断，仅跳过静态写入）
-$models = [PSCustomObject]@{}
-try {
-    $modelsUrl = $BASE_URL.TrimEnd('/') + "/models"
-    $headers   = @{ Authorization = "Bearer $API_KEY" }
-    $resp      = Invoke-RestMethod -Uri $modelsUrl -Headers $headers -TimeoutSec 10 -ErrorAction Stop
-    foreach ($m in $resp.data) {
-        $mid = $m.id
-        if ($mid) {
-            $models | Add-Member -NotePropertyName $mid -NotePropertyValue ([PSCustomObject]@{ name = if ($m.name) { $m.name } else { $mid } }) -Force
-            $resultModels++
-        }
-    }
-    Write-Ok "获取到 $resultModels 个模型"
-} catch {
-    Write-Warn "模型列表获取失败（$_），跳过静态写入，将由插件动态发现"
-}
 
 try {
     # 读取现有配置
@@ -159,10 +156,9 @@ try {
             }
         }
     }
-    # 有模型列表时写入静态兜底（与 macOS 脚本行为一致）
-    if ($resultModels -gt 0) {
-        $providerConfig | Add-Member -NotePropertyName models -NotePropertyValue $models -Force
-    }
+    # 不写死 models：交给插件按 key 动态发现并富化能力。若静态写入模型，
+    # 插件会把它们视为"已存在"而不再发现，导致启动 toast 不弹、且能力
+    #（图像输入/工具调用/上下文上限）无法注入——与 macOS 脚本保持一致。
     $cfg.provider | Add-Member -NotePropertyName $targetId -NotePropertyValue $providerConfig -Force
 
     # 本地文件插件已下发到 plugin 目录（opencode 自动加载），移除 plugin 数组里旧的
@@ -218,13 +214,13 @@ Send-Callback "success"
 # ══════════════════════════════════════════════════════════════════════════════
 Write-Host ""
 Write-Divider
-Write-Host "  执行完成" -ForegroundColor Green
+Write-Line "  执行完成" Green
 Write-Divider
 Write-Ok "配置文件：$CONFIG_FILE"
 Write-Ok "Provider：$targetId（$resultAction）"
-Write-Ok "模型列表：$resultModels 个（$(if ($resultModels -gt 0) { '已静态写入' } else { '获取失败，由插件动态发现' })）"
+Write-Ok "模型列表：由插件按 key 动态发现并富化能力"
 Write-Ok "插件：$DISCOVERY_PLUGIN（$resultPlugin）"
 Write-Host ""
-Write-Host "  下一步：" -NoNewline; Write-Host "重启 opencode，即可在模型列表中看到 $SUPPLIER_NAME 的模型（含图像输入等能力）。" -ForegroundColor Cyan
+Write-Line "  下一步：重启 opencode，即可在模型列表中看到 $SUPPLIER_NAME 的模型（含图像输入等能力）。" Cyan
 Write-Host ""
 Write-Divider

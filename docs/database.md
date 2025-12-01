@@ -85,17 +85,81 @@ Go 生态里最贴近 Prisma 的是 **Atlas**。本项目已用 GORM，且 model
 | `_prisma_migrations` 表 | `atlas_schema_revisions` 表 |
 | `prisma migrate deploy` | `atlas migrate apply` —— 按版本表从落后处补齐 |
 
-### 开发期工作流
+### 开发者工作流（已实施）
+
+**项目现已配置 Atlas 环境，开发者可使用简化命令执行迁移操作。**
+
+#### 1. 修改 GORM model 后生成迁移
 
 ```bash
-# 1) 改 GORM model 后，自动 diff 出增量迁移
-atlas migrate diff <变更名> \
-  --dir "file://migrations" \
-  --to "ent://internal/controlplane/model" \
-  --dev-url "docker://postgres/16/dev?search_path=public"
+# 使用 make target 生成增量迁移（name 参数必须提供）
+make atlas-diff name=add_user_email
 
-# 2) 校验 + 查看将生成的 SQL
-atlas migrate validate --dir "file://migrations"
+# 等价于完整命令：
+atlas migrate diff add_user_email --env local
+```
+
+生成的迁移文件会保存在 `atlas-migrations/` 目录，文件名格式为 `20260609123456_add_user_email.sql`。
+
+#### 2. 审查生成的 SQL
+
+检查新生成的迁移文件，确保：
+- SQL 语句符合预期
+- 使用了 `IF NOT EXISTS` / `IF EXISTS` 保证幂等性
+- 遵循 Expand-Contract 原则（只加不减）
+
+#### 3. 查看迁移状态
+
+```bash
+# 查看当前数据库迁移状态
+make atlas-status
+
+# 等价于：
+atlas migrate status --env local
+```
+
+#### 4. 应用迁移到本地开发库
+
+```bash
+# 应用所有待执行的迁移
+make atlas-apply
+
+# 等价于：
+atlas migrate apply --env local
+```
+
+#### 5. 提交迁移文件
+
+审查通过后，将迁移文件提交到版本控制：
+
+```bash
+git add atlas-migrations/
+git commit -m "feat(db): add user email column"
+```
+
+#### 常用命令速查
+
+| 命令 | 说明 |
+|------|------|
+| `make atlas-diff name=xxx` | 生成迁移（name 必填） |
+| `make atlas-apply` | 应用迁移到本地库 |
+| `make atlas-status` | 查看迁移状态 |
+
+> **注意**：
+> - 迁移文件生成后必须人工审查，不要盲目执行
+> - 本地开发使用 `--env local`，CI/CD 使用生产环境配置
+> - Atlas 配置文件为 `atlas.hcl`，定义了 GORM loader 和环境配置
+
+### 部署期工作流
+
+CI/CD 流程会在蓝绿部署前执行迁移：
+
+```bash
+# 对比 atlas_schema_revisions，从落后版本开始顺序执行；幂等、带锁、可重入
+atlas migrate apply \
+  --dir "file://atlas-migrations" \
+  --url "$DATABASE_URL" \
+  --allow-dirty=false
 ```
 
 ### 部署期工作流

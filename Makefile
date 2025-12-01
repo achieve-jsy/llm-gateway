@@ -49,3 +49,15 @@ dev-down:
 # ─── 清理 ────────────────────────────────────────────────────────────────────────
 clean:
 	rm -rf bin/ api/swagger/docs/
+
+# ─── Atlas 迁移 ───────────────────────────────────────────────────────────────────
+.PHONY: atlas-diff atlas-apply atlas-status
+
+atlas-diff:
+	atlas migrate diff $(name) --env local
+
+atlas-apply:
+	atlas migrate apply --env local
+
+atlas-status:
+	atlas migrate status --env local

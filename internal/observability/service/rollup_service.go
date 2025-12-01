@@ -271,15 +271,18 @@ func (s *RollupService) queryFromCallLogs(ctx context.Context, params UsageDaily
 	}
 
 	orderCol := "est_cost_usd DESC"
-	timeGroupBy := params.GroupBy == "hour" || params.GroupBy == "day" || params.GroupBy == "week" || params.GroupBy == "month"
+	// day/week/month 是时间序列，全量返回（行数有限，最多 90 行），不分页
+	// hour 行数可能很多（查 30 天 = 720 行），需要分页
+	noPageGroupBy := params.GroupBy == "day" || params.GroupBy == "week" || params.GroupBy == "month"
+	timeGroupBy := noPageGroupBy || params.GroupBy == "hour"
 	if timeGroupBy {
 		orderCol = "stat_date ASC"
 	}
 	query = query.Group(groupCols).Order(orderCol)
 
-	// 非时间维度（key / model / dept）：真实分页，先 COUNT 全量再 LIMIT+OFFSET
+	// day/week/month 不分页（行数有限）；hour/key/model/dept 支持真实分页
 	var totalCount int64
-	if !timeGroupBy {
+	if !noPageGroupBy {
 		// 把当前带 WHERE+GROUP BY 的 query 包成子查询来 COUNT，
 		// 避免聚合列（SUM/COUNT）在外层 COUNT(*) 里触发 GROUP BY 冲突
 		if err := s.db.WithContext(ctx).
@@ -307,7 +310,7 @@ func (s *RollupService) queryFromCallLogs(ctx context.Context, params UsageDaily
 		return nil, fmt.Errorf("query call_logs: %w", err)
 	}
 	resp := buildResponse(params, rows)
-	if !timeGroupBy {
+	if !noPageGroupBy {
 		resp.TotalCount = totalCount
 		resp.Page = params.Page
 		resp.PageSize = params.PageSize

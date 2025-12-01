@@ -12,6 +12,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/handler"
 	"github.com/example/llm-gateway/internal/gateway/infra"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
+	gwobs "github.com/example/llm-gateway/internal/gateway/observability"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/example/llm-gateway/internal/gateway/provider"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
@@ -22,16 +23,28 @@ import (
 )
 
 // Setup 初始化 Gin 路由与中间件
-// router is the new GoModel-based providers.Router; state tracks load status.
+// routerGetter 在每次请求时被调用以获取最新的 Router（支持热更新）。
+// state tracks load status.
+// bindClient 为可选参数（nil 时不启用模型组权限校验）。
 func Setup(
-	router *providers.Router,
+	routerGetter func() *providers.Router,
 	routerCache *infra.Cache,
 	state *provider.RuntimeState,
 	authClient *infra.AuthClient,
 	controlPlaneURL, internalToken string,
 	sch *scheduler.Scheduler,
 	nameCache *cache.GroupNameCache,
+	collectorOpt *gwobs.Collector,
+	traceWriterOpt *gwobs.TraceWriter,
+	bindClient *binding.Client,
 ) *gin.Engine {
+	var collector []*gwobs.Collector
+	if collectorOpt != nil {
+		collector = []*gwobs.Collector{collectorOpt}
+	}
+	// 获取初始 router 用于 models/health/passthrough 等（不需要热更新的场景）
+	router := routerGetter()
+
 	r := gin.New()
 
 	// 全局中间件链
@@ -47,12 +60,10 @@ func Setup(
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	// 创建编排器和处理器
-	orch := orchestrator.NewChatOrchestrator(router)
-
-	bindClient := binding.NewClient(controlPlaneURL, internalToken)
+	orch := orchestrator.NewChatOrchestratorWithGetter(routerGetter)
 
 	var groupDispatch *orchestrator.GroupAwareDispatcher
-	if sch != nil && nameCache != nil {
+	if sch != nil && nameCache != nil && bindClient != nil {
 		groupDispatch = orchestrator.NewGroupAwareDispatcherWithBinding(sch, nameCache, bindClient)
 	}
 
@@ -74,6 +85,7 @@ func Setup(
 	}
 	modelsHandler := handler.NewModelsHandler(routerCache, modelsRouter, state)
 	boundModelsHandler := handler.NewBoundModelsHandler(controlPlaneURL, internalToken)
+	modelInfoHandler := handler.NewModelInfoHandler(controlPlaneURL, internalToken)
 	healthHandler := handler.NewHealthHandler(routerCache.Client(), modelsRouter, state, sch)
 
 	r.GET("/health", healthHandler.Health)
@@ -86,9 +98,16 @@ func Setup(
 	v1 := r.Group("/v1")
 	v1.Use(middleware.AuthMiddleware(authClient))
 	v1.Use(guard.Handler())
+	// 请求/响应正文捕获（供 trace 记录使用）
+	v1.Use(middleware.TraceCapture())
+	// 埋点采集中间件（可选，有 Collector 时生效）
+	if len(collector) > 0 && collector[0] != nil {
+		v1.Use(middleware.UsageCollector(collector[0], traceWriterOpt))
+	}
 	{
 		// Models
 		v1.GET("/models", boundModelsHandler.Handle)
+		v1.GET("/model/info", modelInfoHandler.Handle)
 		v1.GET("/health/models", modelsHandler.HandleLegacy)
 
 		// Chat completions

@@ -32,14 +32,16 @@
           style="width:100%"
           :loading="groupsLoading"
         >
+          <el-option :key="'__all__'" label="全部模型（不限制）" :value="ALL_GROUPS_SENTINEL" />
           <el-option
             v-for="g in availableGroups"
             :key="g.id"
-            :label="`${g.name} (${strategyLabel(g.strategy)})`"
+            :label="g.name"
             :value="g.id"
+            :disabled="form.accessAllGroups"
           />
         </el-select>
-        <div class="form-hint">选择后，该 Key 只能调用选中的模型组</div>
+        <div class="form-hint">{{ form.accessAllGroups ? '该 Key 可访问全部模型，不限制' : '选择后，该 Key 只能调用选中的模型组' }}</div>
       </el-form-item>
     </el-form>
 
@@ -73,12 +75,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { createKey, getAvailableGroups } from '@/services/control-plane'
+import { createKey, getAvailableGroups, toggleAccessAllGroups } from '@/services/control-plane'
 import { mapCreateKeyResponse, type AvailableGroup } from '@/types/api-key'
 import { executeCcsImport } from '@/utils/ccs-import'
+import { copyToClipboard } from '@/utils/clipboard'
 import { useKeyCacheStore } from '@/stores/key-cache'
+
+const ALL_GROUPS_SENTINEL = -1
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ (e: 'update:modelValue', v: boolean): void; (e: 'success', keyId: string, rawKey: string): void }>()
@@ -101,15 +106,23 @@ const loading = ref(false)
 const groupsLoading = ref(false)
 const createdKey = ref('')
 const availableGroups = ref<AvailableGroup[]>([])
-const form = ref({ name: '', expiresAt: '', groupIds: [] as number[] })
+const form = ref({ name: '', expiresAt: '', groupIds: [] as number[], accessAllGroups: false })
+
+// 监听 groupIds 变化：选中"全部模型组"时自动清除其他选项并禁用；取消时恢复
+watch(() => form.value.groupIds, (val) => {
+  if (val.includes(ALL_GROUPS_SENTINEL)) {
+    if (val.length > 1) {
+      // 同时选了其他选项，保留"全部模型组"，清掉其余
+      form.value.groupIds = [ALL_GROUPS_SENTINEL]
+    }
+    form.value.accessAllGroups = true
+  } else {
+    form.value.accessAllGroups = false
+  }
+})
 
 function disabledDate(time: Date) {
   return time.getTime() < Date.now() - 86400000
-}
-
-function strategyLabel(strategy: string): string {
-  const map: Record<string, string> = { round_robin: '轮询', priority: '优先级', weighted: '加权' }
-  return map[strategy] || strategy
 }
 
 async function loadGroups() {
@@ -130,9 +143,13 @@ async function handleCreate() {
   loading.value = true
   try {
     const expiresAt = form.value.expiresAt ? new Date(form.value.expiresAt).toISOString() : undefined
-    const groupIds = form.value.groupIds.length > 0 ? form.value.groupIds : undefined
+    const groupIds = (!form.value.accessAllGroups && form.value.groupIds.length > 0) ? form.value.groupIds : undefined
     const response = await createKey(form.value.name.trim(), expiresAt, groupIds)
     const mapped = mapCreateKeyResponse(response)
+    // 如果选了全部模型组，创建后立即设置 access_all_groups
+    if (form.value.accessAllGroups) {
+      await toggleAccessAllGroups(mapped.id, true)
+    }
     createdKey.value = mapped.key
     useKeyCacheStore().cacheKey(mapped.id, mapped.key)
     emit('success', mapped.id, mapped.key)
@@ -145,7 +162,7 @@ async function handleCreate() {
 
 async function copyKey() {
   try {
-    await navigator.clipboard.writeText(createdKey.value)
+    await copyToClipboard(createdKey.value)
     ElMessage.success('已复制到剪贴板')
   } catch {
     ElMessage.warning('复制失败，请手动复制')
@@ -160,6 +177,7 @@ function resetForm() {
   form.value.name = ''
   form.value.expiresAt = ''
   form.value.groupIds = []
+  form.value.accessAllGroups = false
   createdKey.value = ''
   formRef.value?.resetFields()
 }

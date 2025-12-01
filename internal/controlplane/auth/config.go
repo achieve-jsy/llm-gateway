@@ -1,6 +1,10 @@
 package auth
 
-import "os"
+import (
+	"os"
+	"strconv"
+	"time"
+)
 
 // Config holds OAuth2/OIDC configuration for DaQun SSO
 type Config struct {
@@ -18,6 +22,8 @@ type Config struct {
 	JWTSecret string
 	// Frontend URL to redirect after login
 	FrontendURL string
+	// AccessTokenTTL is the lifetime of an access token (default 2h)
+	AccessTokenTTL time.Duration
 }
 
 // LoadConfig reads OAuth/SSO configuration from environment variables
@@ -28,14 +34,26 @@ func LoadConfig() *Config {
 	}
 
 	return &Config{
-		IssuerURL:    getEnvOrDefault("OAUTH_ISSUER_URL", "https://oauth.example.net"),
-		ClientID:     os.Getenv("OAUTH_CLIENT_ID"),
-		ClientSecret: os.Getenv("OAUTH_CLIENT_SECRET"),
-		RedirectURI:  os.Getenv("OAUTH_REDIRECT_URI"),
-		Scopes:       splitScopes(scopes),
-		JWTSecret:    getEnvOrDefault("JWT_SECRET", "change-me-in-production"),
-		FrontendURL:  getEnvOrDefault("FRONTEND_URL", "http://localhost:5173"),
+		IssuerURL:      getEnvOrDefault("OAUTH_ISSUER_URL", "https://oauth.example.net"),
+		ClientID:       os.Getenv("OAUTH_CLIENT_ID"),
+		ClientSecret:   os.Getenv("OAUTH_CLIENT_SECRET"),
+		RedirectURI:    os.Getenv("OAUTH_REDIRECT_URI"),
+		Scopes:         splitScopes(scopes),
+		JWTSecret:      getEnvOrDefault("JWT_SECRET", "change-me-in-production"),
+		FrontendURL:    getEnvOrDefault("FRONTEND_URL", "http://localhost:5173"),
+		AccessTokenTTL: getEnvDuration("JWT_ACCESS_TOKEN_TTL_MINUTES", 120),
 	}
+}
+
+// getEnvDuration reads an env var as minutes and returns a time.Duration.
+// Falls back to defaultMinutes if the env var is absent or invalid.
+func getEnvDuration(key string, defaultMinutes int) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if mins, err := strconv.Atoi(v); err == nil && mins > 0 {
+			return time.Duration(mins) * time.Minute
+		}
+	}
+	return time.Duration(defaultMinutes) * time.Minute
 }
 
 func getEnvOrDefault(key, defaultVal string) string {

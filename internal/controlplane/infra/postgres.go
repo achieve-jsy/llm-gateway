@@ -10,20 +10,27 @@ import (
 )
 
 // InitPostgres 初始化 PostgreSQL 连接
-func InitPostgres() (*gorm.DB, error) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
+// 优先使用传入的 dsn 参数；为空时回退读环境变量 DATABASE_URL / DB_* 系列。
+func InitPostgres(dsn ...string) (*gorm.DB, error) {
+	connStr := ""
+	if len(dsn) > 0 {
+		connStr = dsn[0]
+	}
+	if connStr == "" {
+		connStr = os.Getenv("DATABASE_URL")
+	}
+	if connStr == "" {
 		host := getEnvOrDefault("DB_HOST", "localhost")
 		port := getEnvOrDefault("DB_PORT", "5432")
 		user := getEnvOrDefault("DB_USER", "postgres")
 		pass := getEnvOrDefault("DB_PASSWORD", "postgres")
 		dbname := getEnvOrDefault("DB_NAME", "llm_gateway")
 		sslmode := getEnvOrDefault("DB_SSLMODE", "disable")
-		dsn = fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+		connStr = fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
 			host, port, user, pass, dbname, sslmode)
 	}
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+	db, err := gorm.Open(postgres.Open(connStr), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Warn),
 	})
 	if err != nil {

@@ -94,13 +94,6 @@
       <el-table-column type="selection" width="45" />
       <el-table-column prop="name" label="上游模型ID" min-width="180" show-overflow-tooltip />
 
-      <el-table-column label="模型名称" min-width="160" show-overflow-tooltip>
-        <template #default="{ row }">
-          <span v-if="row.upstream_model_id" class="mono-text">{{ row.upstream_model_id }}</span>
-          <span v-else class="text-muted">-</span>
-        </template>
-      </el-table-column>
-
       <el-table-column label="归属渠道" min-width="120">
         <template #default="{ row }">
           {{ row.provider?.name || getProviderName(row.provider_id) }}
@@ -440,7 +433,6 @@ async function handleToggleModel(row: Model, enabled: boolean) {
       provider_id: row.provider_id,
       model_type: row.model_type,
       enabled: enabled,
-      upstream_model_id: row.upstream_model_id,
       description: row.description,
       context_length: row.context_length,
       max_output_tokens: row.max_output_tokens,

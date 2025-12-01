@@ -19,11 +19,11 @@
         </template>
       </el-table-column>
 
-      <el-table-column label="模型组" min-width="160">
+      <el-table-column label="我的模型" min-width="160">
         <template #default="{ row }">
           <div class="group-cell">
             <template v-if="row.accessAllGroups">
-              <el-tag size="small" type="success" style="margin-right:4px;margin-bottom:2px">万能模型组</el-tag>
+              <el-tag size="small" type="success" style="margin-right:4px;margin-bottom:2px">全部模型</el-tag>
             </template>
             <template v-else-if="row.boundGroups && row.boundGroups.length > 0">
               <el-tag
@@ -34,7 +34,7 @@
                 style="margin-right:4px;margin-bottom:2px"
               >{{ g.name }}</el-tag>
             </template>
-            <span v-else class="text-muted" style="margin-right:4px">无</span>
+            <span v-else class="text-muted" style="margin-right:4px">未分配</span>
             <el-button size="small" text type="primary" @click="openGroupDialog(row)">管理</el-button>
           </div>
         </template>
@@ -60,6 +60,28 @@
         </template>
       </el-table-column>
 
+      <el-table-column label="日志记录" width="110" align="center">
+        <template #header>
+          <span>日志记录
+            <el-tooltip content="关闭后该 Key 的请求不写入调用日志，但耗时和 Token 仍会计算" placement="top">
+              <el-icon style="vertical-align:middle;cursor:help"><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </span>
+        </template>
+        <template #default="{ row }">
+          <el-switch
+            v-model="row.logEnabled"
+            size="small"
+            inline-prompt
+            active-text="记录"
+            inactive-text="关闭"
+            :active-color="'#67c23a'"
+            :inactive-color="'#909399'"
+            @change="(val: boolean) => handleToggleLog(row, val)"
+          />
+        </template>
+      </el-table-column>
+
       <el-table-column label="创建时间" width="170" sortable>
         <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
       </el-table-column>
@@ -68,10 +90,11 @@
         <template #default="{ row }">{{ formatDate(row.lastUsedAt) }}</template>
       </el-table-column>
 
-      <el-table-column label="操作" width="280" fixed="right" align="center">
+      <el-table-column label="操作" width="340" fixed="right" align="center">
         <template #default="{ row }">
           <el-button size="small" text type="primary" @click="handleUseKey(row)">使用密钥</el-button>
           <el-button size="small" text type="primary" @click="handleCcsImport(row)">导入 CCSwitch</el-button>
+          <el-button size="small" text type="primary" @click="handleOpenCodeConfig(row)">配置 OpenCode</el-button>
           <el-button size="small" text type="warning" @click="handleReset(row)">重置</el-button>
           <el-button size="small" text type="danger" @click="handleDelete(row)">删除</el-button>
         </template>
@@ -95,12 +118,12 @@
     />
 
     <!-- 组绑定管理弹窗 -->
-    <el-dialog v-model="showGroupDialog" title="管理模型组" width="500px" destroy-on-close @opened="loadGroupDialogData">
+    <el-dialog v-model="showGroupDialog" title="管理我的模型" width="500px" destroy-on-close @opened="loadGroupDialogData">
       <div v-if="editGroupKey">
         <div class="group-dialog-section">
-          <h4>当前已绑定</h4>
+          <h4>当前可用模型</h4>
           <template v-if="editGroupKey.accessAllGroups">
-            <el-tag size="large" type="success" closable @close="handleAccessAllToggle(false)">万能模型组</el-tag>
+            <el-tag size="large" type="success" closable @close="handleAccessAllToggle(false)">全部模型</el-tag>
           </template>
           <div v-if="!editGroupKey.accessAllGroups && editGroupKey.boundGroups && editGroupKey.boundGroups.length > 0" class="bound-tags">
             <el-tag
@@ -112,22 +135,22 @@
               @close="removeGroup(g)"
             >{{ g.name }}</el-tag>
           </div>
-          <span v-if="!editGroupKey.accessAllGroups && (!editGroupKey.boundGroups || editGroupKey.boundGroups.length === 0)" class="text-muted">未绑定任何模型组</span>
+          <span v-if="!editGroupKey.accessAllGroups && (!editGroupKey.boundGroups || editGroupKey.boundGroups.length === 0)" class="text-muted">未分配任何模型</span>
         </div>
         <div class="group-dialog-section">
-          <h4>添加模型组</h4>
+          <h4>添加模型</h4>
           <el-select
             v-model="addGroupIds"
             multiple
             filterable
-            placeholder="选择要添加的模型组"
+            placeholder="选择要添加的模型"
             style="width:100%"
             :loading="groupLoading"
             @change="handleAddGroupChange"
           >
             <el-option
               key="__all__"
-              label="万能模型组（所有模型）"
+              label="全部模型（不限制）"
               value="__all__"
               :disabled="editGroupKey.accessAllGroups"
             />
@@ -184,11 +207,18 @@
         <el-button type="primary" @click="confirmCcsImport">导入</el-button>
       </template>
     </el-dialog>
+
+    <OpenCodeConfigDialog
+      v-model:visible="showOpenCodeConfig"
+      :api-key-id="openCodeConfigKeyId"
+      :masked-key="openCodeConfigMaskedKey"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { QuestionFilled } from '@element-plus/icons-vue'
 
 function formatDate(iso?: string): string {
   if (!iso) return '-'
@@ -198,12 +228,14 @@ function formatDate(iso?: string): string {
 }
 
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { listKeys, disableKey, enableKey, deleteKey, resetKey, revealKey, updateKeyGroups, getAvailableGroups, toggleAccessAllGroups } from '@/services/control-plane'
+import { listKeys, disableKey, enableKey, deleteKey, resetKey, revealKey, updateKeyGroups, getAvailableGroups, toggleAccessAllGroups, toggleLogEnabled } from '@/services/control-plane'
 import { mapKeysResponse, mapCreateKeyResponse, type BoundGroupInfo } from '@/types/api-key'
 import type { ApiKey, AvailableGroup } from '@/types/api-key'
 import KeyCreateDialog from '@/components/key/KeyCreateDialog.vue'
 import UseKeyModal from '@/components/key/UseKeyModal.vue'
+import OpenCodeConfigDialog from '@/components/key/OpenCodeConfigDialog.vue'
 import { executeCcsImport } from '@/utils/ccs-import'
+import { copyToClipboard } from '@/utils/clipboard'
 import { useSettingsStore } from '@/stores/settings'
 import { useKeyCacheStore } from '@/stores/key-cache'
 
@@ -219,6 +251,10 @@ const usageKey = ref<ApiKey | null>(null)
 const showCcsSelect = ref(false)
 const selectedCcsClient = ref('claude')
 const pendingCcsRow = ref<ApiKey | null>(null)
+
+const showOpenCodeConfig = ref(false)
+const openCodeConfigKeyId = ref('')
+const openCodeConfigMaskedKey = ref('')
 
 // Group binding management
 const showGroupDialog = ref(false)
@@ -254,7 +290,7 @@ async function loadKeys() {
 async function copyFullKey(row: ApiKey) {
   try {
     const result = await revealKey(row.id)
-    await navigator.clipboard.writeText(result.key)
+    await copyToClipboard(result.key)
     ElMessage.success('完整 Key 已复制到剪贴板')
   } catch {
     ElMessage.warning('获取 Key 失败，请重试')
@@ -285,6 +321,12 @@ async function confirmCcsImport() {
   }
 }
 
+function handleOpenCodeConfig(row: ApiKey) {
+  openCodeConfigKeyId.value = row.id
+  openCodeConfigMaskedKey.value = row.maskedKey
+  showOpenCodeConfig.value = true
+}
+
 async function handleToggle(row: ApiKey, enabled: boolean) {
   try {
     if (enabled) {
@@ -298,6 +340,16 @@ async function handleToggle(row: ApiKey, enabled: boolean) {
     await loadKeys()
   } catch {
     row.enabled = !enabled
+  }
+}
+
+async function handleToggleLog(row: ApiKey, logEnabled: boolean) {
+  try {
+    await toggleLogEnabled(row.id, logEnabled)
+    ElMessage.success(logEnabled ? '已开启日志记录' : '已关闭日志记录')
+  } catch {
+    row.logEnabled = !logEnabled
+    ElMessage.error('操作失败')
   }
 }
 
@@ -352,7 +404,7 @@ async function loadGroupDialogData() {
     const boundIds = new Set((editGroupKey.value?.boundGroups || []).map((g: BoundGroupInfo) => g.id))
     availableAddGroups.value = all.filter((g: AvailableGroup) => !boundIds.has(g.id))
   } catch {
-    ElMessage.error('加载模型组列表失败')
+    ElMessage.error('加载可用模型列表失败')
   } finally {
     groupLoading.value = false
   }
@@ -407,7 +459,7 @@ async function saveGroupChanges() {
     if (add.length > 0 || remove.length > 0) {
       await updateKeyGroups(editGroupKey.value.id, add, remove)
     }
-    ElMessage.success('模型组已更新')
+    ElMessage.success('我的模型已更新')
     showGroupDialog.value = false
     await loadKeys()
   } catch (e: any) {

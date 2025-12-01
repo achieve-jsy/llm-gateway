@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/example/llm-gateway/internal/controlplane/service"
+	"github.com/example/llm-gateway/internal/core"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -17,11 +18,17 @@ type InternalServiceInterface interface {
 	GetModelHealth(names []string) (map[string]service.ModelHealthInfo, error)
 }
 
+// PricingServiceInterface 定价查询接口
+type PricingServiceInterface interface {
+	GetAllPricing(ctx context.Context) (map[string]core.ModelPricing, error)
+}
+
 // InternalHandler 内部接口 Handler
 type InternalHandler struct {
-	svc        InternalServiceInterface
-	keySvc     KeyServiceInterface
+	svc         InternalServiceInterface
+	keySvc      KeyServiceInterface
 	keyGroupSvc KeyGroupServiceInterface
+	pricingSvc  PricingServiceInterface
 }
 
 type KeyGroupServiceInterface interface {
@@ -30,6 +37,11 @@ type KeyGroupServiceInterface interface {
 
 func NewInternalHandler(svc InternalServiceInterface, keySvc KeyServiceInterface, keyGroupSvc KeyGroupServiceInterface) *InternalHandler {
 	return &InternalHandler{svc: svc, keySvc: keySvc, keyGroupSvc: keyGroupSvc}
+}
+
+// SetPricingService 注入定价服务（可选）
+func (h *InternalHandler) SetPricingService(svc PricingServiceInterface) {
+	h.pricingSvc = svc
 }
 
 // ListAvailableModels GET /internal/v1/models/available（T046）
@@ -138,4 +150,33 @@ func (h *InternalHandler) GetKeyGroups(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, groups)
+}
+
+// GetModelPricing GET /internal/v1/models/pricing
+// 返回全量模型定价数据，供 gateway-api 和 observability-hub 消费
+func (h *InternalHandler) GetModelPricing(c *gin.Context) {
+	if h.pricingSvc == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": gin.H{
+				"type":    "service_unavailable",
+				"message": "pricing service not initialized",
+				"code":    CodeInternalError,
+			},
+		})
+		return
+	}
+
+	pricing, err := h.pricingSvc.GetAllPricing(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{
+				"type":    "internal_error",
+				"message": "failed to get pricing",
+				"code":    CodeInternalError,
+			},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, pricing)
 }

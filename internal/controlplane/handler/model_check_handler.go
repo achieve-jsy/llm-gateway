@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -167,14 +166,28 @@ func (h *ModelCheckHandler) checkModel(ctx context.Context, m *model.Model) *Mod
 		return cr
 	}
 
-	var creds map[string]string
-	json.Unmarshal([]byte(credJSON), &creds)
-	apiKey := creds["api_key"]
-	if apiKey == "" {
-		apiKey = credJSON
+	// Bedrock 等非 OpenAI 兼容的 provider 走健康检测服务的专用路径
+	if cpservice.IsNonOpenAICompatible(provider.DefinitionID) {
+		success, responseTime, errMsg := cpservice.DoBedrockModelCheckPublic(provider, credJSON, m)
+		cr.ResponseTime = responseTime
+		if success {
+			cr.Success = true
+			h.modelRepo.ResetModelFailures(m.ID)
+			h.modelRepo.UpdateModelCheckResult(m.ID, responseTime, "")
+			if shouldAutoReenableModel(m, h.getModelFailureThreshold()) {
+				enabled := true
+				h.modelRepo.UpdateEnabled(m.ID, &enabled)
+				cr.AutoReenabled = true
+			}
+		} else {
+			cr.Error = errMsg
+			h.modelRepo.UpdateModelCheckResult(m.ID, responseTime, errMsg)
+			h.handleModelFailure(m.ID, cr)
+		}
+		return cr
 	}
 
-	// 确定上游模型名（优先使用 upstream_model_id）
+	apiKey := cpservice.ExtractAPIKey(credJSON)
 	modelName := m.UpstreamModelID
 	if modelName == "" {
 		modelName = m.Name

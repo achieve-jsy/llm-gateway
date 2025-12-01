@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestRequestID_Generated tests RequestID middleware generates new ID when missing
@@ -474,6 +476,172 @@ func TestRequestIDMiddlewareNext(t *testing.T) {
 
 	assert.True(t, nextCalled, "next handler should be called by middleware chain")
 	assert.NotEmpty(t, w.Header().Get("X-Request-ID"))
+}
+
+// ─── sanitizeChatRequestBody 单元测试 ─────────────────────────────────────────
+
+// TestSanitize_ShortBodyPassThrough 验证短请求体原样通过，不被截断
+func TestSanitize_ShortBodyPassThrough(t *testing.T) {
+	input := `{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello"}]}`
+	out := sanitizeChatRequestBody([]byte(input))
+
+	require.True(t, json.Valid(out), "output must be valid JSON")
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(out, &body))
+
+	msgs := body["messages"].([]any)
+	msg := msgs[0].(map[string]any)
+	assert.Equal(t, "hello", msg["content"])
+}
+
+// TestSanitize_LongContentTruncated 验证超长 content 被截断并保留首尾
+func TestSanitize_LongContentTruncated(t *testing.T) {
+	// 构造一条明显超过 2048 字符的 content（5000 字节）
+	longContent := strings.Repeat("A", 2000) + "MIDDLE" + strings.Repeat("Z", 2000)
+	input, _ := json.Marshal(map[string]any{
+		"model": "claude-sonnet-4-6",
+		"messages": []any{
+			map[string]any{"role": "user", "content": longContent},
+		},
+	})
+
+	out := sanitizeChatRequestBody(input)
+	require.True(t, json.Valid(out), "output must be valid JSON after truncation")
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(out, &body))
+
+	msgs := body["messages"].([]any)
+	msg := msgs[0].(map[string]any)
+	content := msg["content"].(string)
+
+	// 截断后长度应小于原始长度
+	assert.Less(t, len(content), len(longContent))
+	// 应包含截断标记
+	assert.Contains(t, content, "truncated")
+	// 应保留头部（首字符为 A）
+	assert.True(t, strings.HasPrefix(content, "A"), "should preserve leading content")
+	// 应保留尾部（末字符为 Z）
+	assert.True(t, strings.HasSuffix(content, "Z"), "should preserve trailing content")
+}
+
+// TestSanitize_Base64DataURIReplaced 验证超长 base64 data-URI 被替换为占位符
+func TestSanitize_Base64DataURIReplaced(t *testing.T) {
+	// 构造超过 64 字符的 base64 payload
+	longBase64 := strings.Repeat("A", 200)
+	imageDataURI := "data:image/jpeg;base64," + longBase64
+
+	input, _ := json.Marshal(map[string]any{
+		"model": "claude-sonnet-4-6",
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "image_url", "image_url": map[string]any{"url": imageDataURI}},
+					map[string]any{"type": "text", "text": "describe this image"},
+				},
+			},
+		},
+	})
+
+	out := sanitizeChatRequestBody(input)
+	require.True(t, json.Valid(out), "output must be valid JSON")
+
+	outStr := string(out)
+	// 原始 base64 payload 不应出现
+	assert.NotContains(t, outStr, longBase64)
+	// 应有截断占位符
+	assert.Contains(t, outStr, "base64_data truncated")
+	// KB/MB 大小描述应存在
+	assert.True(t, strings.Contains(outStr, "KB") || strings.Contains(outStr, "MB") || strings.Contains(outStr, "B"))
+}
+
+// TestSanitize_ShortBase64Kept 验证短 base64 data-URI 不被替换
+func TestSanitize_ShortBase64Kept(t *testing.T) {
+	shortBase64 := strings.Repeat("A", 30) // 短于 64 字符
+	imageDataURI := "data:image/png;base64," + shortBase64
+
+	input, _ := json.Marshal(map[string]any{
+		"model":    "gpt-4o",
+		"messages": []any{map[string]any{"role": "user", "content": imageDataURI}},
+	})
+
+	out := sanitizeChatRequestBody(input)
+	require.True(t, json.Valid(out), "output must be valid JSON")
+	assert.Contains(t, string(out), shortBase64, "short base64 should be preserved")
+}
+
+// TestSanitize_InvalidJSONPassThrough 验证非合法 JSON 原样返回
+func TestSanitize_InvalidJSONPassThrough(t *testing.T) {
+	invalid := []byte(`{not valid json`)
+	out := sanitizeChatRequestBody(invalid)
+	assert.Equal(t, invalid, out, "invalid JSON should be returned as-is")
+}
+
+// TestSanitize_MultipleMessages 验证多条消息各自独立截断
+func TestSanitize_MultipleMessages(t *testing.T) {
+	longA := strings.Repeat("A", 3000)
+	longB := strings.Repeat("B", 3000)
+
+	input, _ := json.Marshal(map[string]any{
+		"model": "claude-sonnet-4-6",
+		"messages": []any{
+			map[string]any{"role": "system", "content": longA},
+			map[string]any{"role": "user", "content": longB},
+		},
+	})
+
+	out := sanitizeChatRequestBody(input)
+	require.True(t, json.Valid(out), "output must be valid JSON")
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(out, &body))
+	msgs := body["messages"].([]any)
+
+	c0 := msgs[0].(map[string]any)["content"].(string)
+	c1 := msgs[1].(map[string]any)["content"].(string)
+
+	assert.Less(t, len(c0), len(longA), "system message should be truncated")
+	assert.Less(t, len(c1), len(longB), "user message should be truncated")
+	// 各自保留首字符
+	assert.True(t, strings.HasPrefix(c0, "A"))
+	assert.True(t, strings.HasPrefix(c1, "B"))
+}
+
+// TestSanitize_RealWorldLargeBody 模拟 829KB 超大请求体（复现 request_id=68505735 场景）
+func TestSanitize_RealWorldLargeBody(t *testing.T) {
+	// 构造多条长消息，总体接近 829KB
+	messages := make([]any, 0, 50)
+	messages = append(messages, map[string]any{
+		"role":    "system",
+		"content": strings.Repeat("System prompt. ", 200),
+	})
+	for i := 0; i < 49; i++ {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		messages = append(messages, map[string]any{
+			"role":    role,
+			"content": strings.Repeat("Long conversation turn content. ", 500),
+		})
+	}
+
+	input, _ := json.Marshal(map[string]any{
+		"model":    "claude-sonnet-4-6",
+		"stream":   true,
+		"messages": messages,
+	})
+
+	t.Logf("input size: %d bytes (%.1f KB)", len(input), float64(len(input))/1024)
+
+	out := sanitizeChatRequestBody(input)
+
+	// 核心断言：输出必须是合法 JSON（这正是之前 bug 的根因）
+	require.True(t, json.Valid(out), "output MUST be valid JSON regardless of input size")
+
+	t.Logf("output size: %d bytes (%.1f KB)", len(out), float64(len(out))/1024)
+	assert.Less(t, len(out), len(input), "sanitized output should be smaller than input")
 }
 
 // TestLogger_WithModel tests Logger includes model in logs

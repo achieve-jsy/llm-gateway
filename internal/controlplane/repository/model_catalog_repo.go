@@ -218,6 +218,18 @@ func (r *ModelCatalogRepo) DeleteStale(source string, cutoff time.Time) (int64, 
 	return res.RowsAffected, res.Error
 }
 
+// DeleteStaleUnbound 删除给定 source 下，syncedAt 早于 cutoff 且未被任何本地 model 绑定的旧条目。
+//
+// 比 DeleteStale 更安全：跳过仍有 model.catalog_id 引用的条目，避免破坏外键约束或孤立已绑定 model。
+// 典型调用时机：远程同步成功后，以同步开始时间为 cutoff，清理 LiteLLM 已下线的模型条目。
+func (r *ModelCatalogRepo) DeleteStaleUnbound(source string, cutoff time.Time) (int64, error) {
+	res := r.db.Where(
+		"source = ? AND synced_at < ? AND id NOT IN (SELECT catalog_id FROM models WHERE catalog_id IS NOT NULL)",
+		source, cutoff,
+	).Delete(&model.ModelCatalog{})
+	return res.RowsAffected, res.Error
+}
+
 // ListAll 返回全量 catalog 条目，用于 auto-bind 任务在内存里做 hash join。
 //
 // catalog 量级在 10K 以内（LiteLLM 当前 ~3K），全量内存匹配比 N+1 query 简单稳。

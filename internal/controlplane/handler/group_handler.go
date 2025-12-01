@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/service"
@@ -373,6 +374,7 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 		Name         string    `json:"name"`
 		ProviderID   uuid.UUID `json:"provider_id,omitempty"`
 		ProviderType string    `json:"provider_type,omitempty"`
+		ProviderName string    `json:"provider_name,omitempty"`
 		Endpoint     string    `json:"endpoint,omitempty"`
 		Priority     *int      `json:"priority"`
 		Weight       *int      `json:"weight"`
@@ -406,17 +408,22 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 			if h.modelRepo != nil {
 				m, err := h.modelRepo.GetByID(gm.ModelID)
 				if err == nil && m != nil {
-					mi.Name = m.Name
-					mi.ProviderID = m.ProviderID
-					providerEnabled := false
-					if h.providerRepo != nil {
-						p, err := h.providerRepo.GetByID(m.ProviderID)
-						if err == nil && p != nil && p.Enabled {
-							mi.ProviderType = p.DefinitionID
-							mi.Endpoint = p.Endpoint
-							providerEnabled = true
-						}
+					// model 本身必须启用，否则跳过（不下发到 gateway snapshot）
+					if m.Enabled == nil || !*m.Enabled {
+						continue
 					}
+				mi.Name = upstreamModelName(m)
+				mi.ProviderID = m.ProviderID
+				providerEnabled := false
+				if h.providerRepo != nil {
+					p, err := h.providerRepo.GetByID(m.ProviderID)
+					if err == nil && p != nil && p.Enabled {
+						mi.ProviderType = p.DefinitionID
+						mi.ProviderName = p.Name
+						mi.Endpoint = p.Endpoint
+						providerEnabled = true
+					}
+				}
 					if !providerEnabled {
 						continue
 					}
@@ -430,4 +437,18 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+// upstreamModelName 返回推送给 Gateway 的实际 model ID。
+// 优先使用 UpstreamModelID（明确指定的上游 ID），
+// 否则从 Name 中剥离 "{provider}/" 前缀（如 "bedrock/global.xxx" → "global.xxx"）。
+func upstreamModelName(m *model.Model) string {
+	if m.UpstreamModelID != "" {
+		return m.UpstreamModelID
+	}
+	name := m.Name
+	if idx := strings.Index(name, "/"); idx >= 0 {
+		return name[idx+1:]
+	}
+	return name
 }

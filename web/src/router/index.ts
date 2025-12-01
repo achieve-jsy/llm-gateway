@@ -70,10 +70,46 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '模型健康监控' }
   },
   {
+    path: '/admin/group-health-monitor',
+    name: 'GroupHealthMonitor',
+    component: () => import('@/views/admin/GroupHealthMonitorPage.vue'),
+    meta: { title: '模型组健康监控' }
+  },
+  {
+    path: '/admin/usage-cost',
+    name: 'UsageCost',
+    component: () => import('@/views/admin/UsageCostPage.vue'),
+    meta: { title: '用量与成本' }
+  },
+  {
+    path: '/my/usage',
+    name: 'MyUsage',
+    component: () => import('@/views/MyUsagePage.vue'),
+    meta: { title: '我的用量' }
+  },
+  {
     path: '/admin/settings',
     name: 'Settings',
     component: () => import('@/views/admin/SettingsPage.vue'),
     meta: { title: '系统设置' }
+  },
+  {
+    path: '/admin/announcements',
+    name: 'AnnouncementList',
+    component: () => import('@/views/admin/AnnouncementListPage.vue'),
+    meta: { title: '公告管理' }
+  },
+  {
+    path: '/announcements',
+    name: 'AnnouncementFeed',
+    component: () => import('@/views/AnnouncementFeedPage.vue'),
+    meta: { title: '公告中心' }
+  },
+  {
+    path: '/announcements/:id',
+    name: 'AnnouncementDetail',
+    component: () => import('@/views/AnnouncementDetailPage.vue'),
+    meta: { title: '公告详情' }
   }
 ]
 

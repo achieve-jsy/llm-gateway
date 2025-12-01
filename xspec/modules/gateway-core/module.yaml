@@ -1,0 +1,12 @@
+# gateway-core 模块元数据
+name: gateway-core
+display_name: Gateway 核心
+version: 1.0.0
+module_type: web-backend
+description: 请求转发核心：鉴权→模型组调度→provider 路由→流式转发
+status: active
+created: 2026-06-03
+updated: 2026-06-03
+dependencies:
+  - provider-adapters
+  - control-plane

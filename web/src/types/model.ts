@@ -31,6 +31,8 @@ export interface Model {
   max_output_tokens: number
   input_price: number
   output_price: number
+  /** 定价模式：catalog = 实时读取目录价格；manual = 手动指定固定价格 */
+  price_mode: 'catalog' | 'manual'
   weight: number
   consecutive_failures: number
   last_check_error: string
@@ -64,6 +66,7 @@ export interface ModelPayload {
   description?: string
   context_length?: number
   max_output_tokens?: number
+  price_mode?: 'catalog' | 'manual'
   input_price?: number
   output_price?: number
   weight?: number

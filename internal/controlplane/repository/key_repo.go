@@ -81,6 +81,43 @@ func (r *KeyRepo) UpdateHashAndKey(id uuid.UUID, keyHash, encryptedKey, keyHint 
 	}).Error
 }
 
+func (r *KeyRepo) UpdateLogEnabled(id uuid.UUID, value bool) error {
+	return r.db.Model(&model.ApiKey{}).Where("id = ?", id).Update("log_enabled", value).Error
+}
+
 func (r *KeyRepo) UpdateAccessAllGroups(id uuid.UUID, value bool) error {
 	return r.db.Model(&model.ApiKey{}).Where("id = ?", id).Update("access_all_groups", value).Error
+}
+
+// UserDeptInfo 用于创建 Key 时冗余写入用户/部门名称。
+type UserDeptInfo struct {
+	UserName string
+	DeptName string
+}
+
+// BackfillUserDeptNames 补全 api_keys 表中缺失的 user_name / dept_name（懒补全，异步调用）。
+func (r *KeyRepo) BackfillUserDeptNames(keyID uuid.UUID, userName, deptName string) error {
+	return r.db.Model(&model.ApiKey{}).
+		Where("id = ? AND (user_name = '' OR user_name IS NULL)", keyID).
+		Updates(map[string]any{"user_name": userName, "dept_name": deptName}).Error
+}
+
+// GetUserDeptInfo 通过 user_id 查询用户姓名及所属部门名称。
+// 优先查 users（OIDC 用户），查不到时回退到 dev_users（本地账号）。
+func (r *KeyRepo) GetUserDeptInfo(userID uuid.UUID) (UserDeptInfo, error) {
+	var info UserDeptInfo
+	err := r.db.Raw(`
+		SELECT u.name AS user_name, COALESCE(d.dept_name, '') AS dept_name
+		FROM users u
+		LEFT JOIN departments d ON d.id = u.dept_id
+		WHERE u.id = ?
+	`, userID).Scan(&info).Error
+	if err != nil {
+		return info, err
+	}
+	// 未在 OIDC users 表中找到（本地 dev 账号），从 dev_users 取 username
+	if info.UserName == "" {
+		_ = r.db.Raw(`SELECT username AS user_name FROM dev_users WHERE id = ?`, userID).Scan(&info).Error
+	}
+	return info, nil
 }

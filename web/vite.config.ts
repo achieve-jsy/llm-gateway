@@ -11,6 +11,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    allowedHosts: ['aimeter.xk-devops.com'],
     https: {
       key: resolve(__dirname, 'certs/localhost.key'),
       cert: resolve(__dirname, 'certs/localhost.crt'),

@@ -19,6 +19,7 @@ import (
 	authhandler "github.com/example/llm-gateway/internal/auth/handler"
 	authsvc "github.com/example/llm-gateway/internal/auth/service"
 
+	"github.com/example/llm-gateway/internal/gateway/binding"
 	"github.com/example/llm-gateway/internal/gateway/cache"
 	"github.com/example/llm-gateway/internal/gateway/config"
 	"github.com/example/llm-gateway/internal/gateway/infra"
@@ -49,6 +50,11 @@ import (
 	providerszai "github.com/example/llm-gateway/internal/providers/zai"
 
 	"github.com/redis/go-redis/v9"
+
+	cpinfra "github.com/example/llm-gateway/internal/controlplane/infra"
+	cppricing "github.com/example/llm-gateway/internal/controlplane/pricing"
+	gwobs "github.com/example/llm-gateway/internal/gateway/observability"
+	gwobsrepo "github.com/example/llm-gateway/internal/gateway/observability/repository"
 )
 
 type providerLoadResult struct {
@@ -76,6 +82,10 @@ func main() {
 
 	// 初始化缓存
 	icache := infra.NewCache(rdb)
+
+	// 初始化 KeyCache：API Key 验证结果双层缓存（本地内存 + Redis）
+	keyCache := infra.NewKeyCache(rdb)
+	defer keyCache.Close()
 
 	// 初始化 OTLP Tracer
 	shutdown, err := infra.InitTracer(cfg.OTLP)
@@ -130,6 +140,24 @@ func main() {
 	}
 
 	subscriber := infra.NewSubscriber(rdb, providerLoader.HandleChangeEvent(fetchEntries))
+	subscriber.AddCallback(keyCache.HandleChangeEvent)
+
+	// 创建 binding client（热路径：模型组权限校验），在 main 层管理生命周期
+	// 以便将 Key 禁用事件接入缓存失效回调
+	var bindClient *binding.Client
+	if controlPlaneURL != "" && internalToken != "" {
+		bindClient = binding.NewClient(controlPlaneURL, internalToken)
+		// Key 禁用/删除时主动清除 binding 缓存，避免旧授权残留
+		subscriber.AddCallback(func(ev infra.ChangeEvent) {
+			if ev.ResourceType == "api_key" {
+				switch ev.Type {
+				case "key_disabled", "key_deleted":
+					bindClient.Cache().Invalidate(ev.ResourceID)
+				}
+			}
+		})
+	}
+
 	go subscriber.Start(ctx)
 
 	// Periodic reconciliation loop (every 30s) – brings in any changes missed
@@ -167,6 +195,45 @@ func main() {
 	}()
 
 	authClient := infra.NewAuthClient(cfg.Auth.URL, cfg.Auth.Token)
+	authClient.SetKeyCache(keyCache)
+
+	// 初始化埋点采集器（可选，DB 不可用时降级跳过）
+	// 注意：gateway 不直连 Postgres（宪章原则）；埋点通过进程内 channel 写入 DB
+	// 仅在 DATABASE_URL 配置时启用；生产部署由 observability-hub 消费队列
+	var collector *gwobs.Collector
+	var traceWriter *gwobs.TraceWriter
+	if db, err := cpinfra.InitPostgres(cfg.Database.URL); err != nil {
+		slog.Warn("usage tracking disabled: postgres not configured or unavailable", "error", err)
+	} else {
+		pricingTable := cppricing.NewPricingTable()
+		go func() {
+			if err := pricingTable.Refresh(ctx, db); err != nil {
+				slog.Warn("pricing table initial load failed", "error", err)
+			}
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if err := pricingTable.Refresh(ctx, db); err != nil {
+						slog.Warn("pricing table refresh failed", "error", err)
+					}
+				}
+			}
+		}()
+		callLogRepo := gwobsrepo.NewCallLogRepository(db)
+		collectorCfg := gwobs.DefaultCollectorConfig()
+		collector = gwobs.NewCollector(collectorCfg, pricingTable)
+		collector.StartWriter(ctx, callLogRepo)
+
+		// 请求/响应 trace 写入器
+		traceWriter = gwobs.NewTraceWriter(db, 512, 20, 5*time.Second)
+		go traceWriter.Run(ctx)
+
+		slog.Info("usage tracking enabled (direct-DB mode)")
+	}
 
 	// Wire auth services (JWT / Key Auth / OIDC)
 	authJWTManager, err := acrypto.NewJWTManagerFromEnv()
@@ -185,7 +252,7 @@ func main() {
 
 	// Initialize router (inject dependencies). We always use the router obtained
 	// from the ProviderLoader – which is atomically swapped on config changes.
-	r := server.Setup(activeRouter, icache, state, authClient, controlPlaneURL, internalToken, sch, nameCache)
+	r := server.Setup(providerLoader.Router, icache, state, authClient, controlPlaneURL, internalToken, sch, nameCache, collector, traceWriter, bindClient)
 
 	// Register auth routes
 	r.GET("/.well-known/jwks.json", authJWKSHandler.GetJWKS)
@@ -220,6 +287,20 @@ func buildProviderFactory() *providers.ProviderFactory {
 	factory.Add(providersgemini.Registration)
 	factory.Add(providersgroq.Registration)
 	factory.Add(providerslitellm.Registration)
+	// "openai-compatible" is the type name the Control Plane uses for generic
+	// self-hosted OpenAI-compatible endpoints (e.g. GoModel on :9050). Map it to
+	// the LiteLLM adapter, which is a generic OpenAI-compatible provider with a
+	// configurable base URL. Register the underscore variant too for safety.
+	factory.Add(providers.Registration{
+		Type:      "openai-compatible",
+		New:       providerslitellm.New,
+		Discovery: providerslitellm.Registration.Discovery,
+	})
+	factory.Add(providers.Registration{
+		Type:      "openai_compatible",
+		New:       providerslitellm.New,
+		Discovery: providerslitellm.Registration.Discovery,
+	})
 	factory.Add(providersminimax.Registration)
 	factory.Add(providersopenai.Registration)
 	factory.Add(providersopenrouter.Registration)

@@ -1,0 +1,230 @@
+# LLM Gateway — OpenCode 配置脚本（自动生成，请勿修改）
+# 适用于 Windows PowerShell
+
+$ErrorActionPreference = "Stop"
+
+$TOKEN            = "{{.Token}}"
+$PROVIDER_ID      = "{{.ProviderID}}"
+$BASE_URL         = "{{.BaseURL}}"
+$API_KEY          = "{{.APIKey}}"
+$CALLBACK_URL     = "{{.CallbackURL}}"
+$PLUGIN_URL       = "{{.PluginURL}}"
+$SUPPLIER_NAME    = "{{.SupplierName}}"
+$CONFIG_FILE      = "$env:USERPROFILE\.config\opencode\opencode.json"
+# opencode 标准插件目录为复数 plugins/（单数 plugin/ 在新版可能不被加载）。
+$PLUGIN_DIR       = "$env:USERPROFILE\.config\opencode\plugins"
+$PLUGIN_FILE      = "$PLUGIN_DIR\opencode-models-discovery.js"
+$LEGACY_PLUGIN_FILE = "$env:USERPROFILE\.config\opencode\plugin\opencode-models-discovery.js"
+$DISCOVERY_PLUGIN = "opencode-models-discovery"
+
+function Send-Callback($status, $msg = "") {
+    try {
+        $body = @{ token = $TOKEN; status = $status; msg = $msg } | ConvertTo-Json -Compress
+        Invoke-RestMethod -Uri $CALLBACK_URL -Method Post `
+            -Body $body -ContentType "application/json" -TimeoutSec 8 | Out-Null
+    } catch {}
+}
+
+function Write-Step($msg)    { Write-Host "[..] $msg" -ForegroundColor Cyan }
+function Write-Ok($msg)      { Write-Host "[✓] $msg"  -ForegroundColor Green }
+function Write-Warn($msg)    { Write-Host "[!] $msg"  -ForegroundColor Yellow }
+function Write-Fail($msg)    { Write-Host "[✗] $msg"  -ForegroundColor Red }
+function Write-Divider()     { Write-Host "────────────────────────────────────────" -ForegroundColor Cyan }
+
+Write-Divider
+Write-Host "  $SUPPLIER_NAME — OpenCode 配置助手" -ForegroundColor White
+Write-Divider
+Write-Host ""
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 阶段 1：环境检验
+# ══════════════════════════════════════════════════════════════════════════════
+Write-Step "阶段 1/4  检验本地环境..."
+
+$missing = @()
+
+if (-not (Get-Command python3 -ErrorAction SilentlyContinue) -and
+    -not (Get-Command python  -ErrorAction SilentlyContinue)) {
+    $missing += "python3（未找到，请先安装）"
+}
+if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue) -and
+    -not (Get-Command curl    -ErrorAction SilentlyContinue)) {
+    $missing += "curl（未找到）"
+}
+
+if ($missing.Count -gt 0) {
+    Write-Fail "缺少必要依赖，无法继续："
+    $missing | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+    Send-Callback "failed" "缺少依赖"
+    exit 1
+}
+
+$configDir = Split-Path $CONFIG_FILE
+if (-not (Test-Path $configDir)) {
+    New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+}
+
+$npmAvailable = $null -ne (Get-Command npm -ErrorAction SilentlyContinue)
+
+Write-Ok "环境检验通过（python ✓  curl ✓  配置目录可写 ✓）"
+Write-Host ""
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 阶段 2：下载模型发现插件（由网关托管，无需 npm）
+# ══════════════════════════════════════════════════════════════════════════════
+Write-Step "阶段 2/4  下载模型发现插件..."
+
+$pluginInstalled = $false
+# 清理旧的单数目录副本，避免重复加载或加载旧版本。
+if (Test-Path $LEGACY_PLUGIN_FILE) { Remove-Item $LEGACY_PLUGIN_FILE -Force -ErrorAction SilentlyContinue }
+try {
+    if (-not (Test-Path $PLUGIN_DIR)) {
+        New-Item -ItemType Directory -Path $PLUGIN_DIR -Force | Out-Null
+    }
+    Invoke-WebRequest -Uri $PLUGIN_URL -OutFile $PLUGIN_FILE -TimeoutSec 15 -UseBasicParsing
+    if ((Test-Path $PLUGIN_FILE) -and ((Get-Item $PLUGIN_FILE).Length -gt 0)) {
+        $pluginInstalled = $true
+        Write-Ok "插件已下载: $PLUGIN_FILE"
+    } else {
+        Write-Warn "插件下载失败（不影响配置写入），可稍后重试"
+    }
+} catch {
+    Write-Warn "插件下载失败（不影响配置写入）: $_"
+}
+Write-Host ""
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 阶段 3：获取模型列表并写入 OpenCode 配置
+# ══════════════════════════════════════════════════════════════════════════════
+Write-Step "阶段 3/4  获取模型列表并写入配置..."
+
+$writeOk = $false
+$resultAction = ""
+$resultPlugin = ""
+$resultModels = 0
+$targetId = $PROVIDER_ID
+
+# 获取模型列表（失败不中断，仅跳过静态写入）
+$models = [PSCustomObject]@{}
+try {
+    $modelsUrl = $BASE_URL.TrimEnd('/') + "/models"
+    $headers   = @{ Authorization = "Bearer $API_KEY" }
+    $resp      = Invoke-RestMethod -Uri $modelsUrl -Headers $headers -TimeoutSec 10 -ErrorAction Stop
+    foreach ($m in $resp.data) {
+        $mid = $m.id
+        if ($mid) {
+            $models | Add-Member -NotePropertyName $mid -NotePropertyValue ([PSCustomObject]@{ name = if ($m.name) { $m.name } else { $mid } }) -Force
+            $resultModels++
+        }
+    }
+    Write-Ok "获取到 $resultModels 个模型"
+} catch {
+    Write-Warn "模型列表获取失败（$_），跳过静态写入，将由插件动态发现"
+}
+
+try {
+    # 读取现有配置
+    if (Test-Path $CONFIG_FILE) {
+        $cfg = Get-Content $CONFIG_FILE -Raw -Encoding UTF8 | ConvertFrom-Json
+    } else {
+        $cfg = [PSCustomObject]@{}
+    }
+
+    # 确保 provider 字段存在
+    if (-not $cfg.PSObject.Properties['provider']) {
+        $cfg | Add-Member -NotePropertyName provider -NotePropertyValue ([PSCustomObject]@{})
+    }
+
+    # 同名 provider 直接覆盖（不再按 URL 不同新建带时间戳的副本）
+    if ($cfg.provider.PSObject.Properties[$PROVIDER_ID]) {
+        $resultAction = "更新（覆盖）"
+    } else {
+        $resultAction = "新增"
+    }
+
+    # 写入 provider 配置：不写死 models，交给插件按 key 动态发现，并通过
+    # /v1/model/info 富化能力（attachment/图像输入、tool_call、上下文上限等）。
+    # modelsDiscovery.enabled=true 仅对本 provider 开启发现，其它渠道不会被同步。
+    $providerConfig = [PSCustomObject]@{
+        npm     = "@ai-sdk/openai-compatible"
+        name    = $SUPPLIER_NAME
+        options = [PSCustomObject]@{
+            baseURL = $BASE_URL
+            apiKey  = $API_KEY
+            modelsDiscovery = [PSCustomObject]@{
+                enabled           = $true
+                endpoint          = "/v1/models"
+                modelInfoEndpoint = "/v1/model/info"
+                modelInfoFormat   = "litellm"
+            }
+        }
+    }
+    # 有模型列表时写入静态兜底（与 macOS 脚本行为一致）
+    if ($resultModels -gt 0) {
+        $providerConfig | Add-Member -NotePropertyName models -NotePropertyValue $models -Force
+    }
+    $cfg.provider | Add-Member -NotePropertyName $targetId -NotePropertyValue $providerConfig -Force
+
+    # 本地文件插件已下发到 plugin 目录（opencode 自动加载），移除 plugin 数组里旧的
+    # npm 引用，避免重复加载或联网安装旧版本。
+    if ($cfg.PSObject.Properties['plugin']) {
+        $kept = @()
+        foreach ($p in @($cfg.plugin)) {
+            $name = if ($p -is [System.Array] -and $p.Count -gt 0) { $p[0] } else { $p }
+            if ($name -ne $DISCOVERY_PLUGIN) { $kept += ,$p }
+        }
+        if ($kept.Count -gt 0) { $cfg.plugin = $kept }
+        else { $cfg.PSObject.Properties.Remove('plugin') }
+    }
+    $resultPlugin = if ($pluginInstalled) { "已下载到 $PLUGIN_FILE" } else { "下载失败（请确认可访问 $PLUGIN_URL）" }
+
+    $cfg | ConvertTo-Json -Depth 10 | Set-Content $CONFIG_FILE -Encoding UTF8
+    $writeOk = $true
+
+} catch {
+    Write-Fail "写入失败: $_"
+    Send-Callback "failed" $_.Exception.Message
+    exit 1
+}
+
+Write-Host ""
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 阶段 4：验证写入结果
+# ══════════════════════════════════════════════════════════════════════════════
+Write-Step "阶段 4/4  验证配置写入..."
+
+if (-not $writeOk) {
+    Write-Fail "写入未完成"
+    Send-Callback "failed" "写入未完成"
+    exit 1
+}
+
+try {
+    $verify = Get-Content $CONFIG_FILE -Raw -Encoding UTF8 | ConvertFrom-Json
+    $found = $verify.provider.PSObject.Properties | Where-Object { $_.Name -like "*$PROVIDER_ID*" }
+    if (-not $found) { throw "Provider 未找到" }
+    Write-Ok "验证通过：配置文件写入正确"
+} catch {
+    Write-Fail "验证失败：配置文件中未找到 Provider"
+    Send-Callback "failed" "配置验证失败"
+    exit 1
+}
+
+Send-Callback "success"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 输出执行结论
+# ══════════════════════════════════════════════════════════════════════════════
+Write-Host ""
+Write-Divider
+Write-Host "  执行完成" -ForegroundColor Green
+Write-Divider
+Write-Ok "配置文件：$CONFIG_FILE"
+Write-Ok "Provider：$targetId（$resultAction）"
+Write-Ok "模型列表：$resultModels 个（$(if ($resultModels -gt 0) { '已静态写入' } else { '获取失败，由插件动态发现' })）"
+Write-Ok "插件：$DISCOVERY_PLUGIN（$resultPlugin）"
+Write-Host ""
+Write-Host "  下一步：" -NoNewline; Write-Host "重启 opencode，即可在模型列表中看到 $SUPPLIER_NAME 的模型（含图像输入等能力）。" -ForegroundColor Cyan
+Write-Host ""
+Write-Divider

@@ -1,1 +1,7 @@
-{"stage":"detail","status":"approved","approved_at":"2026-05-26"}
+{
+  "stage": "detail",
+  "status": "approved",
+  "reviewer": "honggangfeng",
+  "timestamp": "2026-06-04T08:35:25.147Z",
+  "comment": ""
+}

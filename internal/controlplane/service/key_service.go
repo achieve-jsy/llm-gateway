@@ -27,6 +27,7 @@ type KeyItem struct {
 	MaskedKey       string           `json:"masked_key"`
 	KeyHint         string           `json:"key_hint"`
 	Enabled         bool             `json:"enabled"`
+	LogEnabled      bool             `json:"log_enabled"`
 	AccessAllGroups bool             `json:"access_all_groups"`
 	CreatedAt       time.Time        `json:"created_at"`
 	UpdatedAt       time.Time        `json:"updated_at"`
@@ -48,18 +49,24 @@ type KeyDetail struct {
 type VerifyResultUser struct {
 	UserID       uuid.UUID  `json:"user_id"`
 	Name         string     `json:"name"`
-	DepartmentID *uuid.UUID `json:"department_id"`
+	DepartmentID *uuid.UUID `json:"department_id,omitempty"`
+	DeptName     string     `json:"dept_name,omitempty"`
+	StudioID     string     `json:"studio_id,omitempty"`
+	StudioName   string     `json:"studio_name,omitempty"`
 }
 
 type VerifyResult struct {
 	KeyID           uuid.UUID        `json:"key_id"`
+	KeyName         string           `json:"key_name,omitempty"`
 	Status          string           `json:"status"`
 	AccessAllGroups bool             `json:"access_all_groups"`
+	LogEnabled      bool             `json:"log_enabled"`
 	User            VerifyResultUser `json:"user"`
 }
 
 type EventPublisher interface {
 	Publish(eventType event.ChangeEventType, resourceType string, resourceID uuid.UUID)
+	InvalidateKeyCache(keyHash string)
 }
 
 type publisherAdapter struct {
@@ -74,6 +81,13 @@ func (a *publisherAdapter) Publish(eventType event.ChangeEventType, resourceType
 	if err := a.p.Publish(context.Background(), ev); err != nil {
 		slog.Error("failed to publish event", "type", eventType, "resource_id", resourceID, "error", err)
 	}
+}
+
+func (a *publisherAdapter) InvalidateKeyCache(keyHash string) {
+	if a.p == nil {
+		return
+	}
+	a.p.InvalidateKeyAuthCache(context.Background(), keyHash)
 }
 
 func NewEventPublisherAdapter(p *event.Publisher) EventPublisher {
@@ -109,6 +123,12 @@ func (s *KeyService) CreateKey(ctx context.Context, userID uuid.UUID, name strin
 		return nil, "", nil, fmt.Errorf("encrypt key: %w", err)
 	}
 
+	// 冗余写入用户/部门名称，供 verify-key 直接返回，无需 JOIN
+	info, infoErr := s.repo.GetUserDeptInfo(userID)
+	if infoErr != nil {
+		slog.Warn("create key: failed to fetch user/dept info", "user_id", userID, "error", infoErr)
+	}
+
 	k := &model.ApiKey{
 		UserID:       userID,
 		Name:         name,
@@ -118,6 +138,8 @@ func (s *KeyService) CreateKey(ctx context.Context, userID uuid.UUID, name strin
 		KeyHint:      keyHint,
 		Enabled:      true,
 		ExpiresAt:    expiresAt,
+		UserName:     info.UserName,
+		DeptName:     info.DeptName,
 	}
 
 	if err := s.repo.Create(k); err != nil {
@@ -177,6 +199,7 @@ func (s *KeyService) ListKeys(ctx context.Context, userID uuid.UUID, page, size 
 			MaskedKey:       k.KeyPrefix + "****" + k.KeyHint,
 			KeyHint:         k.KeyHint,
 			Enabled:         k.Enabled,
+			LogEnabled:      k.LogEnabled,
 			AccessAllGroups: k.AccessAllGroups,
 			CreatedAt:       k.CreatedAt,
 			UpdatedAt:       k.UpdatedAt,
@@ -363,6 +386,24 @@ func (s *KeyService) UpdateAccessAllGroups(ctx context.Context, userID, keyID uu
 	return k, nil
 }
 
+func (s *KeyService) UpdateLogEnabled(ctx context.Context, userID, keyID uuid.UUID, value bool) (*model.ApiKey, error) {
+	k, err := s.repo.FindByID(keyID)
+	if err != nil {
+		return nil, ErrKeyNotFound
+	}
+	if err := s.repo.UpdateLogEnabled(keyID, value); err != nil {
+		return nil, fmt.Errorf("update log_enabled: %w", err)
+	}
+	k.LogEnabled = value
+	if s.publisher != nil {
+		// 立即删除两层 Redis 缓存（auth service + gateway KeyCache），无需等 TTL
+		s.publisher.InvalidateKeyCache(k.KeyHash)
+		// 通知 gateway 订阅者清除本地内存缓存
+		s.publisher.Publish(event.KeyLogChanged, "api_key", keyID)
+	}
+	return k, nil
+}
+
 func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResult, error) {
 	hash := sha256.Sum256([]byte(keyRaw))
 	keyHash := hex.EncodeToString(hash[:])
@@ -382,12 +423,31 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 
 	s.repo.TouchLastUsed(keyHash) // best-effort update
 
+	// 懒补全：如果 key 创建时未写入 user_name/dept_name，异步补齐
+	if k.UserName == "" {
+		go func() {
+			info, err := s.repo.GetUserDeptInfo(k.UserID)
+			if err != nil || info.UserName == "" {
+				return
+			}
+			k.UserName = info.UserName
+			k.DeptName = info.DeptName
+			_ = s.repo.BackfillUserDeptNames(k.ID, info.UserName, info.DeptName)
+		}()
+	}
+
 	return &VerifyResult{
 		KeyID:           k.ID,
+		KeyName:         k.Name,
 		Status:          status,
 		AccessAllGroups: k.AccessAllGroups,
+		LogEnabled:      k.LogEnabled,
 		User: VerifyResultUser{
-			UserID: k.UserID,
+			UserID:     k.UserID,
+			Name:       k.UserName,
+			DeptName:   k.DeptName,
+			StudioID:   k.StudioID,
+			StudioName: k.StudioName,
 		},
 	}, nil
 }

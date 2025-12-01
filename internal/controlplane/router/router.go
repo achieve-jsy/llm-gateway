@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	cpconfig "github.com/example/llm-gateway/internal/controlplane/config"
 	"github.com/example/llm-gateway/internal/controlplane/auth"
 	"github.com/example/llm-gateway/internal/controlplane/event"
 	"github.com/example/llm-gateway/internal/controlplane/handler"
@@ -14,6 +15,8 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/example/llm-gateway/internal/controlplane/service"
+	obshandler "github.com/example/llm-gateway/internal/observability/handler"
+	obssvc "github.com/example/llm-gateway/internal/observability/service"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -21,6 +24,9 @@ import (
 
 // Setup 初始化 Gin 路由和中间件链
 func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
+	// 加载配置（YAML + 环境变量）
+	cfg := cpconfig.Load()
+
 	r := gin.New()
 
 	// 全局中间件
@@ -51,7 +57,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	r.GET("/api/v1/me", middleware.JWTAuth(), authHandler.GetCurrentUser)
 
 	// Dev login (no auth required)
-	devLoginHandler := handler.NewDevLoginHandler(db, authCfg.JWTSecret)
+	devLoginHandler := handler.NewDevLoginHandler(db, authCfg.JWTSecret, authCfg.AccessTokenTTL)
 	r.POST("/auth/dev/login", devLoginHandler.Login)
 
 	// 初始化依赖
@@ -59,6 +65,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	modelRepo := repository.NewModelRepo(db)
 	defRepo := repository.NewProviderDefinitionRepo(db)
 	modelTagRepo := repository.NewModelTagRepo(db)
+	announcementRepo := repository.NewAnnouncementRepo(db)
 	healthCheckRepo := repository.NewHealthCheckRepo(db)
 
 	keyRepo := repository.NewKeyRepo(db)
@@ -91,12 +98,36 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	)
 	groupHandler := handler.NewGroupHandler(groupSvc, modelRepo, providerRepo)
 
+	systemKeySvc := service.NewSystemKeyService(db)
+	// gateway.url 从 yaml 配置读取，环境变量 GATEWAY_URL 可覆盖
+	groupCheckSvc := service.NewGroupCheckService(groupRepo, healthCheckRepo, systemKeySvc, cfg.Gateway.URL)
+	groupCheckHandler := handler.NewGroupCheckHandler(groupCheckSvc)
+	healthCheckSvc.SetGroupCheckService(groupCheckSvc)
+
+	// 启动时确保系统探针 key 存在
+	go func() {
+		if _, err := systemKeySvc.EnsureProbeKey(context.Background()); err != nil {
+			slog.Warn("failed to ensure system probe key", "error", err)
+		}
+	}()
+
 	providerHandler := handler.NewProviderHandler(providerSvc)
 	modelHandler := handler.NewModelHandler(modelSvc)
 	internalHandler := handler.NewInternalHandler(internalSvc, keySvc, keyGroupSvc)
+	// 注入定价服务（供 /internal/v1/models/pricing 使用）
+	pricingSvc := service.NewPricingService(db)
+	go func() {
+		if err := pricingSvc.Refresh(context.Background()); err != nil {
+			slog.Warn("initial pricing table load failed", "error", err)
+		}
+	}()
+	internalHandler.SetPricingService(pricingSvc)
+	modelInfoSvc := service.NewModelInfoService(groupRepo, modelRepo)
+	modelInfoHandler := handler.NewModelInfoHandler(modelInfoSvc)
 	defHandler := handler.NewDefinitionHandler(defRepo)
 	testHandler := handler.NewTestHandler(providerRepo, modelRepo)
 	modelTagHandler := handler.NewModelTagHandler(modelTagRepo)
+	announcementHandler := handler.NewAnnouncementHandler(announcementRepo)
 	healthCheckHandler := handler.NewHealthCheckHandler(healthCheckSvc)
 	modelCheckHandler := handler.NewModelCheckHandler(modelRepo, providerRepo, healthCheckRepo)
 	syncSvc := service.NewSyncService(providerRepo, modelRepo, publisher)
@@ -105,6 +136,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 	keyHandler := handler.NewKeyHandler(keySvc)
 	settingsHandler := handler.NewSettingsHandler(settingsSvc)
+	opencodeConfigHandler := handler.NewOpencodeConfigHandler(rdb, settingsSvc)
 
 	// 模型 Catalog（D1: LiteLLM 单源；D3: bundled fallback；D4: 启动异步首刷 + 24h cron + 手动）
 	catalogRepo := repository.NewModelCatalogRepo(db)
@@ -143,6 +175,20 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	r.GET("/api/v1/settings/public", func(c *gin.Context) {
 		settingsHandler.GetPublicSettings(c)
 	})
+
+	// 公开公告（无需认证）
+	r.GET("/api/v1/public/announcements", announcementHandler.ListActive)
+	r.GET("/api/v1/public/announcements/:id", announcementHandler.GetPublicByID)
+
+	// OpenCode 配置（无需 JWT，token 即凭证）
+	r.GET("/api/v1/opencode-config/script", opencodeConfigHandler.GetScript)
+	r.GET("/api/v1/opencode-config/plugin", opencodeConfigHandler.GetPlugin)
+	r.GET("/api/v1/opencode-config/plugin/version", opencodeConfigHandler.GetPluginVersion)
+	r.POST("/api/v1/opencode-config/callback", opencodeConfigHandler.Callback)
+
+	// 模型组静态路由：在 adminGroup 之前注册，避免被 /groups/:id 吞掉
+	r.GET("/api/v1/groups/capabilities", middleware.JWTAuth(), modelInfoHandler.GetGroupModelInfo)
+	r.GET("/api/v1/groups/defaults", middleware.JWTAuth(), groupHandler.GetDefaults)
 
 	// 启动健康检测调度器（优先使用环境变量 HEALTH_CHECK_INTERVAL 控制）
 	healthCheckSvc.StartBackground(context.Background())
@@ -209,6 +255,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/health-check/status", healthCheckHandler.GetStatus)
 		adminGroup.POST("/health-check/run", healthCheckHandler.RunNow)
 		adminGroup.GET("/health-check/timeline", healthCheckHandler.GetTimeline)
+		adminGroup.GET("/health-check/group-timeline", healthCheckHandler.GetGroupTimeline)
 
 		// 模型 Catalog（注意：source_model_id 含 '/'，通过 query 入口而非路径参数访问）
 		adminGroup.GET("/model-catalog/search", catalogHandler.Search)
@@ -225,7 +272,12 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/keys/:id/groups", keyHandler.ListKeyGroups)
 		adminGroup.POST("/keys/:id/groups", keyHandler.UpdateKeyGroups)
 		adminGroup.POST("/keys/:id/access-all-groups", keyHandler.ToggleAccessAllGroups)
+		adminGroup.PATCH("/keys/:id/log-enabled", keyHandler.ToggleLogEnabled)
 		adminGroup.GET("/groups/available", keyHandler.ListAvailableGroups)
+
+		// OpenCode 配置（token 生成 + 状态轮询）
+		adminGroup.POST("/keys/:id/opencode-config/token", opencodeConfigHandler.GenerateToken)
+		adminGroup.GET("/keys/:id/opencode-config/status", opencodeConfigHandler.GetStatus)
 		adminGroup.GET("/model-catalog/by-source", catalogHandler.GetBySource)
 		adminGroup.POST("/model-catalog/sync", catalogHandler.Sync)
 		adminGroup.GET("/model-catalog/diff", catalogHandler.Diff)
@@ -237,7 +289,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/model-catalog/:id", catalogHandler.GetByID)
 
 		// 模型分组管理
-		adminGroup.GET("/groups/defaults", groupHandler.GetDefaults)
+		adminGroup.POST("/groups/check-all", groupCheckHandler.CheckAll)
 		adminGroup.POST("/groups", groupHandler.Create)
 		adminGroup.GET("/groups", groupHandler.List)
 		adminGroup.GET("/groups/:id", groupHandler.GetByID)
@@ -246,6 +298,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.POST("/groups/:id/models", groupHandler.AddModels)
 		adminGroup.GET("/groups/:id/models", groupHandler.ListModels)
 		adminGroup.DELETE("/groups/:id/models/:model_id", groupHandler.RemoveModel)
+		adminGroup.POST("/groups/:id/check", groupCheckHandler.CheckOne)
 
 		// 系统设置
 		adminGroup.GET("/settings", settingsHandler.GetSystemSettings)
@@ -253,17 +306,47 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.POST("/settings/test-webhook", settingsHandler.TestWebhook)
 		adminGroup.POST("/settings/export", settingsHandler.ExportSettings)
 		adminGroup.POST("/settings/import", settingsHandler.ImportSettings)
+
+		// 公告管理
+		adminGroup.GET("/announcements", announcementHandler.List)
+		adminGroup.POST("/announcements", announcementHandler.Create)
+		adminGroup.GET("/announcements/:id", announcementHandler.GetByID)
+		adminGroup.PUT("/announcements/:id", announcementHandler.Update)
+		adminGroup.DELETE("/announcements/:id", announcementHandler.Delete)
+		adminGroup.PATCH("/announcements/:id/publish", announcementHandler.Publish)
+		adminGroup.PATCH("/announcements/:id/archive", announcementHandler.Archive)
+		adminGroup.POST("/announcements/:id/read", announcementHandler.MarkRead)
+		adminGroup.GET("/announcements/unread", announcementHandler.GetUnread)
+		adminGroup.GET("/announcements/unread/count", announcementHandler.GetUnreadCount)
+		adminGroup.GET("/announcements/history", announcementHandler.GetReadHistory)
+
+		// 用量与成本查询（管理员全局）
+		rollupSvc := obssvc.NewRollupService(db)
+		usageHandler := obshandler.NewUsageHandler(rollupSvc, db)
+		adminGroup.GET("/usage/logs", usageHandler.Logs)
+		adminGroup.GET("/usage/logs/:request_id/trace", usageHandler.Trace)
+		adminGroup.GET("/usage/options", usageHandler.Options)
+		adminGroup.GET("/usage", usageHandler.Query)
+		adminGroup.GET("/usage-logs", usageHandler.Logs)
+
+		// 个人用量查询（按登录用户 user_id 隔离）
+		adminGroup.GET("/my/keys", keyHandler.MyKeys)
+		adminGroup.GET("/my/usage", usageHandler.MyQuery)
+		adminGroup.GET("/my/usage/logs", usageHandler.MyLogs)
+		adminGroup.GET("/my/usage/logs/:request_id/trace", usageHandler.Trace)
 	}
 
 	// 内部接口组（内部 Token 认证）
 	internalGroup := r.Group("/internal/v1")
 	internalGroup.Use(middleware.InternalAuth())
 	{
-internalGroup.GET("/models/available", internalHandler.ListAvailableModels)
+	internalGroup.GET("/models/available", internalHandler.ListAvailableModels)
 	internalGroup.GET("/models/health", internalHandler.GetModelHealth)
+	internalGroup.GET("/models/pricing", internalHandler.GetModelPricing)
 	internalGroup.POST("/keys/verify", keyHandler.VerifyKey)
 	internalGroup.POST("/auth/verify-key", keyHandler.VerifyKey)
 	internalGroup.GET("/keys/:id/groups", internalHandler.GetKeyGroups)
+	internalGroup.GET("/groups/model-info", modelInfoHandler.GetGroupModelInfo)
 	}
 
 	return r

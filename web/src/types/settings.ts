@@ -18,6 +18,7 @@ export interface SystemSettings {
   default_max_switches: number
   default_same_model_retries: number
   default_failover_cooldown_seconds: number
+  supplier_name: string
 }
 
 export interface PublicSettings {
@@ -27,6 +28,7 @@ export interface PublicSettings {
   api_base_url: string
   rate_limit_per_minute: number
   max_concurrency_per_key: number
+  supplier_name: string
 }
 
 export interface SettingsResponse {

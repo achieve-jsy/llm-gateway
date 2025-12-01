@@ -77,28 +77,6 @@ web-frontend:
       status: required
       phase: task
 
-native-app:
-  description: "声明式 UI 原生 App（SwiftUI / Jetpack Compose / Flutter / React Native）"
-  files:
-    spec.md:
-      status: required
-      phase: clarify
-    hld.md:
-      status: required
-      phase: design
-    design.md:
-      status: required
-      phase: detail
-    data-model.md:
-      status: required
-      phase: detail
-    task.md:
-      status: required
-      phase: task
-    contracts.md:
-      status: optional
-      phase: detail
-
 ai-agent:
   description: "AI Agent 架构（推理循环 + 工具调用 + 记忆管理）"
   files:
@@ -115,25 +93,6 @@ ai-agent:
       status: required
       phase: detail
     evaluation.md:
-      status: required
-      phase: detail
-    task.md:
-      status: required
-      phase: task
-
-systems:
-  description: "系统级后端（Zig / C / Rust，有二进制体积 / RSS / 启动时间硬约束，或主动选择无 GC 运行时）"
-  files:
-    spec.md:
-      status: required
-      phase: clarify
-    hld.md:
-      status: required
-      phase: design
-    design.md:
-      status: required
-      phase: detail
-    data-model.md:
       status: required
       phase: detail
     task.md:

@@ -1,217 +1,253 @@
-# control-plane 技术设计变更 — CHG-20260526-001
+# control-plane 详细设计变更 — CHG-20260603-001
 
-> 基线：xspec/modules/control-plane/design.md (v1.3)
+> 基线：xspec/modules/control-plane/spec.md (v1.0)
 
 ## 变更摘要
 
-在 Key 创建链路中嵌入模型组绑定逻辑：CreateKey 在同一数据库事务内完成 Key 记录写入和 key_group_bindings 批量插入。新增 KeyGroupHandler/Service/Repository 三层管理绑定增删查。提供内部接口供 gateway-api 实时查询 Key 绑定的模型组列表。
+模型定价体系改造：Catalog 同步新增 reasoning/cached 分桶价格字段导入；ResolveModelPricing 从两桶扩展为四桶报价（含降级逻辑）；新增 GET /internal/v1/pricing 价表下发接口；删除 diff/apply-diff 端点及逻辑。
 
-## 设计决策
+## 架构变更
 
-| 决策点 | 选择 | 理由 |
+```mermaid
+flowchart TD
+    subgraph "control-plane 变更增量"
+        SYNC["CatalogSyncService\n(新增字段解析)"]
+        RMP["ResolveModelPricing\n(四桶取价 + 降级)"]
+        API_P["GET /internal/v1/pricing\n(全量价表下发) NEW"]
+        API_DIFF["DELETE: diff/apply-diff 端点"]
+    end
+
+    subgraph "已有组件"
+        SYNC_EX["CatalogSyncService\n(已有同步逻辑)"]
+        MODEL_SVC["ModelService\n(已有)"]
+        MODEL_REPO["ModelRepository\n(已有)"]
+    end
+
+    LL["LiteLLM JSON"] -->|price_mode=catalog 模型| SYNC
+    SYNC -->|写入 output_cost_per_reasoning_token<br>cache_read_input_token_cost| MC[("model_catalog\n+reasoning_price +cached_price")]
+
+    MODEL_SVC -->|price_mode=manual 模型<br>+reasoning_price +cached_price| MD[("models\n+price_mode +reasoning_price +cached_price")]
+
+    MC --> RMP
+    MD --> RMP
+
+    RMP -->|ModelPricing{4桶 + fallback}| API_P
+    API_P -->|每 5min 拉取| GW["gateway-core\nMemoryPricingCache"]
+```
+
+### ResolveModelPricing 取价流程
+
+```mermaid
+sequenceDiagram
+    participant Caller as 调用方
+    participant RMP as ResolveModelPricing
+    participant PG as PostgreSQL
+
+    Caller->>RMP: ResolveModelPricing(modelID)
+    RMP->>PG: SELECT price_mode, catalog_id FROM models WHERE id=?
+
+    alt price_mode = catalog
+        RMP->>PG: SELECT input_price, output_price,<br>reasoning_price, cached_price<br>FROM model_catalog WHERE id=?
+        PG-->>RMP: 四桶价格
+    else price_mode = manual
+        RMP->>PG: SELECT input_price, output_price,<br>reasoning_price, cached_price<br>FROM models WHERE id=?
+        PG-->>RMP: 手动填写的四桶价格
+    end
+
+    RMP->>RMP: 组装 ModelPricing 结构
+
+    alt reasoning_price IS NULL
+        RMP->>RMP: reasoning_price = completion_price<br>fallback_reasoning = true
+    end
+
+    alt cached_price IS NULL
+        RMP->>RMP: cached_price = 0<br>(不降级，缓存命中无独立价不计费)
+    end
+
+    alt prompt_price IS NULL (缺价)
+        RMP->>RMP: pricing_missing = true
+    end
+
+    RMP-->>Caller: ModelPricing{prompt, completion, reasoning, cached, pricing_missing}
+```
+
+## CatalogSyncService 变更
+
+### 新增字段解析
+
+在 `internal/controlplane/service/catalog_sync_service.go` 中扩展 LiteLLM JSON 解析：
+
+| LiteLLM 字段 | → | model_catalog 列 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `output_cost_per_token` | → | `output_price` | 已有，不变 |
+| `output_cost_per_reasoning_token` | → | `reasoning_price` | **新增**，可为 null |
+| `cache_read_input_token_cost` | → | `cached_price` | **新增**，可为 null |
+
+解析逻辑（伪代码）：
+
+```go
+// 在 LiteLLM model data 解析中新增
+if v, ok := modelData["output_cost_per_reasoning_token"]; ok && v != nil {
+    mc.ReasoningPrice = toNumeric(v)
+}
+if v, ok := modelData["cache_read_input_token_cost"]; ok && v != nil {
+    mc.CachedPrice = toNumeric(v)
+}
+```
+
+### 移除 diff 逻辑
+
+同步完成后不再触发 `ComputePriceDiff`。删除以下函数调用：
+- `catalogSyncService.ComputePriceDiff()`
+- `catalogSyncService.ApplyPriceDiff()`
+
+## ResolveModelPricing 变更
+
+### 位置
+
+`internal/controlplane/service/model_service.go`（或独立 `internal/controlplane/service/pricing_service.go`）
+
+### 函数签名
+
+```go
+// ResolveModelPricing 根据模型的 price_mode 解析返回四桶报价。
+// reasoning_price 缺失时使用 completion_price 降级（标记 fallback）。
+// cached_price 缺失时计 0（缓存命中无独立价不额外计费）。
+// prompt_price 或 completion_price 缺失时返回 pricing_missing=true。
+func (s *ModelService) ResolveModelPricing(ctx context.Context, modelID uuid.UUID) (*ModelPricing, error)
+```
+
+### ModelPricing 结构体
+
+```go
+type ModelPricing struct {
+    PromptPrice      float64 `json:"prompt_price"`       // USD/1M tokens
+    CompletionPrice  float64 `json:"completion_price"`    // USD/1M tokens
+    ReasoningPrice   *float64 `json:"reasoning_price"`    // USD/1M tokens, null=降级
+    CachedPrice      *float64 `json:"cached_price"`       // USD/1M tokens, null=0
+    PricingMissing   bool    `json:"pricing_missing"`     // 是否缺价
+    FallbackReasoning bool   `json:"fallback_reasoning"`  // reasoning 是否降级到 completion
+}
+```
+
+### 降级规则
+
+| 场景 | 行为 | 标记 |
 | :--- | :--- | :--- |
-| Key 创建与绑定原子性 | 同一 DB 事务 | Key 创建 QPS < 1，事务开销可忽略；避免 Key 已创建但绑定失败的半状态 |
-| 绑定变更接口风格 | PATCH 增量 {add, remove} | 前端一次调用完成增删操作；增量更新不误覆盖未展示的绑定 |
-| Redis 通知颗粒度 | 绑定变更时发布 key:binding_updated + key_id | gateway-api 可精确感知哪些 Key 绑定变化 |
+| `reasoning_price` 为 NULL | 使用 `completion_price` | `fallback_reasoning = true` |
+| `cached_price` 为 NULL | 使用 0 | — |
+| `prompt_price` 为 NULL | 返回 `pricing_missing = true` | `pricing_missing = true` |
+| `completion_price` 为 NULL | 返回 `pricing_missing = true` | `pricing_missing = true` |
 
-## 组件详细设计
+## GET /internal/v1/pricing 设计
 
-### KeyGroupHandler
+### 位置
 
-```go
-// handler/key_group_handler.go
+`internal/controlplane/handler/pricing_handler.go`
 
-type KeyGroupHandler struct {
-    svc *KeyGroupService
-}
+### 路由注册
 
-// POST /api/v1/keys/:id/groups — 增量变更组绑定
-// body: { "add": ["uuid-g1", "uuid-g2"], "remove": ["uuid-g3"] }
-// add 和 remove 至少提供一个非空数组
-func (h *KeyGroupHandler) UpdateBindings(c *gin.Context)
-
-// GET /api/v1/keys/:id/groups — 查询 Key 当前绑定组列表
-func (h *KeyGroupHandler) ListBindings(c *gin.Context)
-```
-
-### KeyGroupService
+在 `internal/controlplane/router/router.go` 中注册：
 
 ```go
-// service/key_group_service.go
-
-type KeyGroupService struct {
-    repo   *KeyGroupRepository
-    keyRepo *KeyRepository
-    groupRepo *GroupRepository
-    notifier *Notifier
-}
-
-// BindGroups — 创建 Key 时绑定模型组（事务内调用，不单独开事务）
-// 校验：所有 groupIDs 在 model_groups 中存在且 status=enabled
-// 跳过已不存在的组（记录日志不中断）
-func (s *KeyGroupService) BindGroups(ctx context.Context, tx *gorm.DB, keyID string, groupIDs []string) error
-
-// UpdateBindings — PATCH 增量变更绑定
-// 步骤：
-//  1. 校验 all add groupIDs 存在且启用
-//  2. 校验 all remove groupIDs 当前已绑定该 Key
-//  3. 去重：add ∩ remove → 忽略
-//  4. 事务内：先 delete remove，再 insert add
-//  5. 通知 Redis: key:binding_updated
-func (s *KeyGroupService) UpdateBindings(ctx context.Context, keyID string, add, remove []string) ([]GroupInfo, error)
-
-// GetKeyGroups — 查询 Key 绑定的模型组（含启停状态）
-// 返回 JOIN model_groups 的结果，自动过滤已物理删除的组
-func (s *KeyGroupService) GetKeyGroups(ctx context.Context, keyID string) ([]GroupInfo, error)
-
-// ListAvailableGroups — 查询所有已启用模型组（供 Key 创建时选择）
-func (s *KeyGroupService) ListAvailableGroups(ctx context.Context) ([]GroupSummary, error)
-```
-
-### KeyGroupRepository
-
-```go
-// repository/key_group_repository.go
-
-type KeyGroupRepository struct {
-    db *gorm.DB
-}
-
-// BatchInsert — 批量写入 key_group_bindings，跳过已存在的 (key_id, group_id)
-// 使用 INSERT ... ON CONFLICT (key_id, group_id) DO NOTHING
-func (r *KeyGroupRepository) BatchInsert(ctx context.Context, tx *gorm.DB, keyID string, groupIDs []string) error
-
-// BatchDelete — 批量删除 key_group_bindings
-func (r *KeyGroupRepository) BatchDelete(ctx context.Context, tx *gorm.DB, keyID string, groupIDs []string) error
-
-// FindByKeyID — 查询 Key 所有绑定（JOIN model_groups 获取组名和状态）
-func (r *KeyGroupRepository) FindByKeyID(ctx context.Context, keyID string) ([]GroupBinding, error)
-```
-
-### KeyService 变更
-
-```go
-// service/key_service.go（修改部分）
-
-func (s *KeyService) CreateKey(ctx context.Context, userID string, name string, groupIDs []string) (*CreateKeyResult, error) {
-    // 生成 sk- Key 明文
-    // 加密 Key 密文
-
-    var result *CreateKeyResult
-
-    err := s.db.Transaction(func(tx *gorm.DB) error {
-        // 原有：Insert api_keys
-        keyEntity, err := s.keyRepo.Insert(tx, ...)
-        if err != nil { return err }
-
-        // 新增：如果提供了 groupIDs，在事务内绑定
-        if len(groupIDs) > 0 {
-            if err := s.keyGroupSvc.BindGroups(ctx, tx, keyEntity.ID, groupIDs); err != nil {
-                return err
-            }
-        }
-
-        result = &CreateKeyResult{...}
-        return nil
-    })
-
-    // 事务提交后发布 Redis 通知
-    s.notifier.Publish("key:created", keyEntity.ID)
-    return result, err
+internal := r.Group("/internal/v1")
+internal.Use(middleware.InternalAuth())
+{
+    internal.GET("/pricing", pricingHandler.GetAllPricing)
 }
 ```
 
-### 核心流程
-
-#### Key 创建（含组绑定）
+### Handler 逻辑
 
 ```mermaid
 sequenceDiagram
-    participant KH as KeyHandler
-    participant KS as KeyService
-    participant tx as DB Transaction
-    participant KR as KeyRepository
-    participant KGS as KeyGroupService
-    participant KGR as KeyGroupRepository
-    participant N as Notifier
+    participant GW as gateway-core
+    participant H as PricingHandler
+    participant SVC as ModelService
+    participant PG as PostgreSQL
 
-    KH->>KS: CreateKey(userID, name, groupIDs)
-    KS->>KS: 生成 sk- Key 明文 + 加密
+    GW->>H: GET /internal/v1/pricing
+    H->>H: 验证 X-Internal-Token
 
-    KS->>tx: db.Begin()
-    tx->>KR: Insert(api_keys{user_id, key_hash, key_ciphertext, ...})
-    KR-->>tx: keyEntity
+    H->>SVC: GetAllPricing(ctx)
+    SVC->>PG: SELECT m.id, m.name, m.price_mode,<br>m.catalog_id, m.input_price, m.output_price,<br>m.reasoning_price, m.cached_price<br>FROM models m
 
-    opt groupIDs 非空
-        tx->>KGS: BindGroups(tx, keyID, groupIDs)
-        KGS->>KGS: 逐一查 model_groups 校验存在 + enabled
-        KGS->>KGR: BatchInsert(tx, keyID, validGroupIDs)
-        KGR->>tx: INSERT INTO key_group_bindings
-        KGR-->>KGS: done
+    loop 每个模型
+        SVC->>SVC: ResolveModelPricing(modelID)
     end
 
-    tx->>tx: Commit()
-    KS->>N: Publish("key:created", keyID)
-    KS-->>KH: key(明文) + boundGroups + KeyID
+    SVC-->>H: map[modelName]ModelPricing
+    H-->>GW: {"models": {"deepseek-chat": {...}, ...}}
 ```
 
-#### 绑定变更
+## ModelService 变更
 
-```mermaid
-sequenceDiagram
-    participant KGH as KeyGroupHandler
-    participant KGS as KeyGroupService
-    participant tx as DB Transaction
-    participant KGR as KeyGroupRepository
-    participant N as Notifier
+### 创建模型
 
-    KGH->>KGS: UpdateBindings(keyID, add, remove)
-    KGS->>KGS: 校验 add 组存在且启用
-    KGS->>KGS: 校验 remove 组已绑定
-    KGS->>KGS: 去重 add ∩ remove
+在 `Create` 方法中新增 `price_mode` 字段处理：
 
-    KGS->>tx: db.Begin()
-    alt remove 非空
-        tx->>KGR: BatchDelete(tx, keyID, remove)
-    end
-    alt add 非空（去重后）
-        tx->>KGR: BatchInsert(tx, keyID, add)
-    end
-    tx->>tx: Commit()
+- `price_mode` 默认值：`"catalog"`
+- 当 `price_mode = "manual"` 时，校验 `input_price > 0 && output_price > 0`
+- `reasoning_price` 和 `cached_price` 可选（null 允许）
+- `price_mode = "catalog"` 时忽略手动价格字段
 
-    KGS->>N: Publish("key:binding_updated", keyID)
-    KGS-->>KGH: 更新后的完整绑定组列表
-```
+### 更新模型
 
-#### gateway-api 查询绑定组
+在 `Update` 方法中新增校验：
 
-```mermaid
-sequenceDiagram
-    participant GW as gateway-api
-    participant IH as InternalHandler
-    participant KGS as KeyGroupService
-    participant KGR as KeyGroupRepository
-    participant DB as PostgreSQL
+- 从 `catalog` 切换到 `manual`：必须提供 `input_price > 0 && output_price > 0`，否则返回 400
+- 从 `manual` 切换到 `catalog`：清除手动价格字段（设为 null），切换后价格跟随 catalog
+- `manual` 模式下修改价格：同创建校验
 
-    GW->>IH: GET /internal/v1/keys/:key_id/groups
-    IH->>IH: 验证内部 Token
-    IH->>KGS: GetKeyGroups(keyID)
-    KGS->>KGR: FindByKeyID(keyID)
-    KGR->>DB: SELECT g.id, g.name, g.enabled<br/>FROM key_group_bindings kbg<br/>JOIN model_groups g ON g.id = kbg.group_id<br/>WHERE kbg.key_id = ?
-    DB-->>KGR: 结果集
-    KGR-->>KGS: [{id, name, enabled}]
-    KGS-->>IH: 组列表
-    IH-->>GW: 200 OK [{id, name, enabled}]
-```
+### 校验规则表
 
-## 错误处理
+| 场景 | 校验 | 失败响应 |
+| :--- | :--- | :--- |
+| 创建模型，price_mode=manual，input_price=0 | `input_price` 必填 > 0 | 400 "手动模式下 Prompt 单价必须大于 0" |
+| 创建模型，price_mode=manual，output_price=0 | `output_price` 必填 > 0 | 400 "手动模式下 Completion 单价必须大于 0" |
+| 切换 catalog→manual，未填 input_price | 同上 | 400 |
+| manual 模式，reasoning_price 留空 | 允许（降级用 completion） | — |
+| manual 模式，cached_price 留空 | 允许（计 0） | — |
 
-| 场景 | HTTP 状态码 | 错误码 | 说明 |
-| :--- | :---: | :--- | :--- |
-| Key 不存在 | 404 | KEY_NOT_FOUND | 校验 key_id 有效性 |
-| add 中包含不存在的组 | 400 | GROUP_NOT_FOUND | 列出无效的 group_id |
-| add 中包含已绑定组 | 400 | GROUP_ALREADY_BOUND | 列出已绑定的组名 |
-| remove 中包含未绑定组 | 400 | GROUP_NOT_BOUND | 列出未绑定的组名 |
-| add 和 remove 同时为空 | 400 | INVALID_REQUEST | 至少提供一个非空数组 |
-| 内部 Token 无效 | 401 | UNAUTHORIZED | 内部接口 |
-| DB 事务失败 | 500 | INTERNAL_ERROR | 记录详细错误日志 |
+## 删除 diff/apply-diff
+
+### 删除的端点
+
+| 方法 | 路径 | 原用途 |
+| :--- | :--- | :--- |
+| GET | /api/v1/model-catalog/diff | 计算价格差异 |
+| POST | /api/v1/model-catalog/apply-diff | 应用价格差异 |
+
+### 删除的代码
+
+- `internal/controlplane/handler/catalog_handler.go`：`ComputePriceDiff`、`ApplyPriceDiff` 方法
+- `internal/controlplane/service/catalog_service.go`：`ComputePriceDiff()`、`ApplyPriceDiff()` 方法
+- 对应路由注册
+
+### 保留的代码
+
+- `auto-bind` / `batch-bind-catalog`：模型与 catalog 条目关联关系仍然需要
+- `sync` / `sync-status` / `search` / `by-source`：目录同步与检索功能不变
+
+## 设计决策记录
+
+### 决策 1：reasoning_price 降级策略
+
+- **问题**：模型未配置 reasoning 独立价格时如何处理
+- **候选方案**：A — 降级使用 completion 价格 / B — 计 0（不估算）
+- **决策**：选择方案 A
+- **理由**：对齐 LiteLLM 定价模型（reasoning token 实际上是 output token 的子集，大多数模型 reasoning 价格 = completion 价格）
+
+### 决策 2：cached_price 降级策略
+
+- **问题**：模型未配置缓存命中价格时如何处理
+- **候选方案**：A — 降级使用 input 价格 / B — 计 0
+- **决策**：选择方案 B
+- **理由**：缓存命中 token 不计费是行业惯例（LiteLLM、OpenAI）；只有明确配置了 `cache_read_input_token_cost` 的模型才应计算缓存成本
+
+### 决策 3：价表下发频率 5 分钟
+
+- **问题**：价表下发间隔
+- **候选方案**：A — 1 分钟 / B — 5 分钟 / C — 10 分钟
+- **决策**：选择方案 B
+- **理由**：价格变更不频繁（通常数天到数周一次），5 分钟足以满足实时性；1 分钟对 control-plane 压力无谓增大；10 分钟可能导致新模型上线后较长空窗期

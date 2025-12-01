@@ -1,5 +1,3 @@
-# 生产环境配置 (APP_ENV=prod)
-# 敏感值通过环境变量注入，此文件仅定义结构和非敏感默认值
 server:
   port: "8080"
 
@@ -7,34 +5,37 @@ controlplane:
   port: "8081"
 
 redis:
-  addr: "${REDIS_ADDR}"
-  password: "${REDIS_PASSWORD}"
-  db: 0
+  addr: "192.0.2.10:6379"
+  password: "CHANGE_ME_REDIS_PASSWORD"
+  db: 2
 
 database:
-  url: "${DATABASE_URL}"
+  url: "host=192.0.2.10 port=5432 user=llm_gateway password=CHANGE_ME_PASSWORD dbname=llm_gateway_prod sslmode=disable"
 
 otlp:
-  endpoint: "${OTLP_ENDPOINT}"
-  enabled: true
+  endpoint: "localhost:4317"
+  enabled: false
 
 provider:
-  internal_token: "${INTERNAL_TOKEN}"
-  control_plane_url: "http://localhost:8081"
+  internal_token: "CHANGE_ME_INTERNAL_TOKEN"
+  control_plane_url: "http://llm-gw-control-plane:8081"
 
 auth:
-  url: "http://localhost:8081"
-  token: "${INTERNAL_TOKEN}"
+  url: "http://llm-gw-control-plane:8081"
+  token: "CHANGE_ME_INTERNAL_TOKEN"
 
 oauth:
-  issuer_url: "${OAUTH_ISSUER_URL}"
-  client_id: "${OAUTH_CLIENT_ID}"
-  client_secret: "${OAUTH_CLIENT_SECRET}"
-  redirect_uri: "${OAUTH_REDIRECT_URI}"
+  issuer_url: "https://oauth.example.net/"
+  client_id: "5514f6bb0a"
+  client_secret: "CHANGE_ME_OAUTH_SECRET"
+  redirect_uri: "https://aimeter.xk-devops.com/auth/callback"
   scopes: "openid profile email"
 
 jwt:
-  secret: "${JWT_SECRET}"
+  secret: "CHANGE_ME_JWT_SECRET"
 
 frontend:
-  url: "${FRONTEND_URL}"
+  url: "https://aimeter.xk-devops.com"
+
+gateway:
+  url: "https://aimeter.xk-devops.com"

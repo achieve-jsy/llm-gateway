@@ -1,188 +1,117 @@
-# control-plane 接口契约变更 — CHG-20260526-001
+# control-plane 接口契约变更 — CHG-20260603-001
 
-> 基线：xspec/modules/control-plane/contracts.md (v1.3.0)
+> 基线：xspec/modules/control-plane/spec.md (v1.0)
 
 ## 变更摘要
 
-新增 4 个端点：Key 组绑定管理（PATCH 增量变更 + GET 查询）、可选模型组列表查询、供 gateway-api 读取绑定的内部接口。修改 Key 创建和查询端点追加 group_ids/bound_groups 字段。
+新增 1 个内部接口（GET /internal/v1/pricing），修改 2 个管理接口（模型创建/更新），删除 2 个接口（diff/apply-diff）。
 
 ## 新增接口
 
-### 1. PATCH /api/v1/keys/:id/groups — 增量变更 Key 组绑定
+### GET /internal/v1/pricing — 全量价表下发
 
-认证：JWT (Bearer Token)
+**接口说明**：返回所有已配置模型的四桶价格（含降级逻辑），供 gateway-core MemoryPricingCache 定时拉取。
 
-**请求体**：
+**路由**：`GET /internal/v1/pricing`
 
-```json
-{
-  "add": ["uuid-g1", "uuid-g2"],
-  "remove": ["uuid-g3"]
-}
-```
+**认证**：`InternalAuth` — 请求头 `X-Internal-Token: {INTERNAL_TOKEN}`
 
-| 字段 | 类型 | 必填 | 说明 |
-| :--- | :--- | :--- | :--- |
-| add | string[] | 否 | 要新增绑定的模型组 ID 列表 |
-| remove | string[] | 否 | 要移除绑定的模型组 ID 列表 |
+**请求参数**：无
 
-> add 和 remove 至少提供一个非空数组。
-
-**成功响应** (200)：
+**成功响应（200）**：
 
 ```json
 {
-  "key_id": "uuid-key-1",
-  "bound_groups": [
-    {"id": "uuid-g1", "name": "日常推理", "enabled": true},
-    {"id": "uuid-g2", "name": "高智能", "enabled": true}
-  ]
+  "models": {
+    "deepseek-chat": {
+      "prompt_price": 0.29,
+      "completion_price": 1.76,
+      "reasoning_price": null,
+      "cached_price": null
+    },
+    "qwen3.6-plus": {
+      "prompt_price": 0.29,
+      "completion_price": 1.76,
+      "reasoning_price": 3.52,
+      "cached_price": null
+    },
+    "claude-sonnet-4-20250514": {
+      "prompt_price": 3.0,
+      "completion_price": 15.0,
+      "reasoning_price": null,
+      "cached_price": 0.15
+    }
+  }
 }
 ```
 
-**错误响应**：
-
-| HTTP 状态 | 错误码 | 说明 |
-| :---: | :--- | :--- |
-| 400 | GROUP_NOT_FOUND | add 中包含不存在的模型组 ID |
-| 400 | GROUP_ALREADY_BOUND | add 中包含已绑定该 Key 的组 |
-| 400 | GROUP_NOT_BOUND | remove 中包含未绑定该 Key 的组 |
-| 400 | INVALID_REQUEST | add 和 remove 同时为空 |
-| 404 | KEY_NOT_FOUND | key_id 不存在 |
-
-### 2. GET /api/v1/keys/:id/groups — 查询 Key 绑定组列表
-
-认证：JWT (Bearer Token)
-
-**成功响应** (200)：
-
-```json
-{
-  "key_id": "uuid-key-1",
-  "bound_groups": [
-    {"id": "uuid-g1", "name": "日常推理", "enabled": true, "strategy": "round_robin"},
-    {"id": "uuid-g2", "name": "高智能", "enabled": false, "strategy": "priority"}
-  ]
-}
-```
+**响应字段说明**：
 
 | 字段 | 类型 | 说明 |
 | :--- | :--- | :--- |
-| key_id | string | Key 唯一标识 |
-| bound_groups[].id | string | 模型组唯一标识 |
-| bound_groups[].name | string | 模型组名称 |
-| bound_groups[].enabled | bool | 组启用状态 |
-| bound_groups[].strategy | string | 组路由策略（round_robin / priority / weighted） |
+| `models` | object | key 为模型名 |
+| `models.{name}.prompt_price` | number | Prompt 单价（USD / 1M tokens） |
+| `models.{name}.completion_price` | number | Completion 单价（USD / 1M tokens） |
+| `models.{name}.reasoning_price` | number \| null | Reasoning 单价，null = 降级到 completion_price |
+| `models.{name}.cached_price` | number \| null | 缓存命中单价，null = 不计费（0） |
 
 **错误响应**：
 
-| HTTP 状态 | 错误码 | 说明 |
-| :---: | :--- | :--- |
-| 404 | KEY_NOT_FOUND | key_id 不存在 |
-
-### 3. GET /api/v1/groups/available — 查询可选模型组列表
-
-认证：JWT (Bearer Token)
-
-> 返回所有已启用模型组，供 Key 创建/管理时选择。本期不做权限过滤。
-
-**成功响应** (200)：
-
-```json
-{
-  "groups": [
-    {"id": "uuid-g1", "name": "日常推理", "description": "日常对话和轻量推理场景", "strategy": "round_robin"},
-    {"id": "uuid-g2", "name": "高智能", "description": "复杂推理和代码生成", "strategy": "priority"}
-  ]
-}
-```
-
-**错误响应**：
-
-| HTTP 状态 | 错误码 | 说明 |
-| :---: | :--- | :--- |
-| — | — | 本接口无业务错误，无可用组时返回空数组 |
-
-### 4. GET /internal/v1/keys/:id/groups — 内部：查询 Key 绑定组
-
-认证：内部 Token（X-Internal-Token Header）
-
-> 供 gateway-api 调用，返回 Key 绑定的模型组列表及启停状态。
-
-**成功响应** (200)：
-
-```json
-[
-  {"id": "uuid-g1", "name": "日常推理", "enabled": true},
-  {"id": "uuid-g2", "name": "高智能", "enabled": true}
-]
-```
-
-**错误响应**：
-
-| HTTP 状态 | 错误码 | 说明 |
-| :---: | :--- | :--- |
-| 401 | UNAUTHORIZED | 内部 Token 无效 |
-| 404 | KEY_NOT_FOUND | key_id 不存在 |
+| 状态码 | 错误码 | 说明 |
+| :--- | :--- | :--- |
+| 401 | E4011 | `X-Internal-Token` 无效或缺失 |
+| 500 | E5001 | 数据库查询失败 |
 
 ## 修改接口
 
-### POST /api/v1/keys — 创建 Key（追加 group_ids 参数）
+### POST /api/v1/models — 创建模型（修改）
 
-**请求体变更**：
+**请求体新增字段**：
 
-```json
-{
-  "name": "我的日常Key",
-  "group_ids": ["uuid-g1", "uuid-g2"]
-}
-```
+| 字段 | 类型 | 必填 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `price_mode` | string | 否 | 定价模式：`catalog`（默认）/ `manual` |
+| `reasoning_price` | number \| null | 否 | 推理 token 单价（USD/1M tokens），manual 模式可选 |
+| `cached_price` | number \| null | 否 | 缓存命中单价（USD/1M tokens），manual 模式可选 |
 
-| 字段 | 类型 | 必填 | 变更 | 说明 |
-| :--- | :--- | :--- | :--- | :--- |
-| name | string | 是 | 原有 | Key 名称标识 |
-| group_ids | string[] | 否 | **新增** | 可选，创建时绑定的模型组 ID 列表；不传则创建无绑定 Key |
+**校验规则**：
 
-**响应体变更**（201）：
+| 条件 | 行为 |
+| :--- | :--- |
+| `price_mode = "manual"` 且 `input_price` ≤ 0 | 返回 400：`"手动模式下 Prompt 单价必须大于 0"` |
+| `price_mode = "manual"` 且 `output_price` ≤ 0 | 返回 400：`"手动模式下 Completion 单价必须大于 0"` |
+| `price_mode` 既非 `catalog` 也非 `manual` | 返回 400：`"price_mode 必须为 'catalog' 或 'manual'"` |
 
-```json
-{
-  "key": "sk-abc123...xyz",
-  "key_id": "uuid-key-1",
-  "name": "我的日常Key",
-  "status": "enabled",
-  "created_at": "2026-05-26T10:00:00Z",
-  "bound_groups": [
-    {"id": "uuid-g1", "name": "日常推理"},
-    {"id": "uuid-g2", "name": "高智能"}
-  ]
-}
-```
+### PUT /api/v1/models/:id — 更新模型（修改）
 
-新增字段 `bound_groups`：创建后 Key 当前绑定的模型组名称列表。
+**请求体新增字段**：同 POST 接口。
 
-### GET /api/v1/keys — 查询 Key 列表（追加 bound_groups）
+**校验规则**：同 POST 接口的 manual 模式校验，外加：
 
-**响应体变更**：每个 Key 条目追加 `bound_groups` 字段：
+| 条件 | 行为 |
+| :--- | :--- |
+| 切换 `catalog` → `manual`，`input_price` 或 `output_price` ≤ 0 | 返回 400 |
+| 切换 `manual` → `catalog` | 清除 `reasoning_price` 和 `cached_price`（设为 null），此后价格跟随 catalog |
 
-```json
-{
-  "keys": [
-    {
-      "id": "uuid-key-1",
-      "name": "我的日常Key",
-      "key_suffix": "xyz1",
-      "status": "enabled",
-      "created_at": "2026-05-26T10:00:00Z",
-      "bound_groups": [
-        {"id": "uuid-g1", "name": "日常推理"},
-        {"id": "uuid-g2", "name": "高智能"}
-      ]
-    }
-  ]
-}
-```
+## 删除接口
 
-### GET /api/v1/keys/:id — 查询 Key 详情（追加 bound_groups）
+| 方法 | 路径 | 原用途 | 替代方案 |
+| :--- | :--- | :--- | :--- |
+| GET | /api/v1/model-catalog/diff | 计算价格差异 | 不再需要（catalog 价格实时生效） |
+| POST | /api/v1/model-catalog/apply-diff | 应用价格差异 | 不再需要（catalog 价格实时生效） |
 
-与列表接口一致，追加 `bound_groups` 字段。
+**客户端影响**：调用上述端点的客户端将收到 `404 Not Found`。
+
+## 无影响的接口
+
+以下接口不变：
+
+| 接口 | 说明 |
+| :--- | :--- |
+| POST /api/v1/model-catalog/sync | Catalog 同步（新增字段导入对调用方透明） |
+| GET /api/v1/model-catalog/sync-status | 同步状态查询 |
+| GET /api/v1/model-catalog/search | Catalog 搜索 |
+| POST /api/v1/model-catalog/auto-bind | 自动绑定 |
+| POST /api/v1/model-catalog/batch-bind | 批量绑定 |
+| GET /api/v1/models | 模型列表（响应新增 price_mode 等字段） |
+| GET /api/v1/models/:id | 模型详情（响应新增 price_mode 等字段） |

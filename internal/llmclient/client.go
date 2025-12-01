@@ -41,6 +41,7 @@ type ResponseInfo struct {
 	Endpoint   string        // API endpoint
 	StatusCode int           // HTTP status code (0 if network error)
 	Duration   time.Duration // Request duration
+	TTFBMs     int64         // Time-to-first-byte (ms)：从请求发出到收到响应头（仅流式有效）
 	Stream     bool          // Whether this was a streaming request
 	Error      error         // Error if request failed (nil on success)
 }
@@ -441,6 +442,9 @@ func (c *Client) DoStream(ctx context.Context, req Request) (io.ReadCloser, erro
 		return nil, err
 	}
 
+	// TTFB：从请求发出（scope.startedAt）到收到响应头
+	ttfbMs := time.Since(scope.startedAt).Milliseconds()
+
 	if resp.StatusCode != http.StatusOK {
 		respBody, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
@@ -453,7 +457,20 @@ func (c *Client) DoStream(ctx context.Context, req Request) (io.ReadCloser, erro
 		return nil, providerErr
 	}
 
-	c.completeScope(scope, resp.StatusCode, nil, nil)
+	// 写入 TTFB 到 ResponseInfo（通过 OnRequestEnd hook 传出）
+	if c.config.Hooks.OnRequestEnd != nil {
+		c.config.Hooks.OnRequestEnd(scope.ctx, ResponseInfo{
+			Provider:   c.config.ProviderName,
+			Model:      scope.requestInfo.Model,
+			Endpoint:   scope.requestInfo.Endpoint,
+			StatusCode: resp.StatusCode,
+			Duration:   time.Since(scope.startedAt),
+			TTFBMs:     ttfbMs,
+			Stream:     true,
+			Error:      nil,
+		})
+	}
+	c.recordCircuitBreakerCompletion(resp.StatusCode, nil)
 	return resp.Body, nil
 }
 

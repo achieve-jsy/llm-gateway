@@ -60,6 +60,8 @@ $ARGUMENTS
 4. 对于变更模块：读取 `xspec/modules/<name>/` 下已有文档了解现状
 5. 读取 `xspec/modules/PRODUCT.md` 了解模块依赖关系
 
+
+
 ## 步骤 2：概要设计（逐模块）
 
 对每个受影响模块，执行以下设计流程：
@@ -231,7 +233,7 @@ phase: "design"
   - <module-a>：hld.md ✅ | research.md ✅
   - <module-b>：hld.md ✅ | research.md ⏭️ (跳过)
 
-技术研究：Y 个课题（均已完成）/ 无需研究
+技术研究：Y 个课题（均已完成）/ 无需研究1. 
 
 👉 下一步：执行 /xf/detail 进行详细设计
 ```

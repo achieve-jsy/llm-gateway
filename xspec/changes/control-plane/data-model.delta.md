@@ -1,108 +1,118 @@
-# control-plane 数据模型变更 — CHG-20260526-001
+# control-plane 数据模型变更 — CHG-20260603-001
 
-> 基线：xspec/modules/control-plane/data-model.md (v1.3)
+> 基线：xspec/modules/control-plane/spec.md (v1.0)
 
 ## 变更摘要
 
-新增 `key_group_bindings` 关联表实现 Key ↔ 模型组多对多绑定。通过外键约束保证引用完整性，UNIQUE 约束防止重复绑定。
+model_catalog 表新增 `reasoning_price`、`cached_price` 列（LiteLLM 同步导入）；models 表新增 `price_mode`、`reasoning_price`、`cached_price` 列（手动定价支持）。
 
-## 实体关系变更
+## model_catalog 表变更
 
-```mermaid
-erDiagram
-    api_keys ||--o{ key_group_bindings : "has"
-    model_groups ||--o{ key_group_bindings : "has"
-    key_group_bindings {
-        uuid id PK
-        uuid key_id FK "→ api_keys ON DELETE CASCADE"
-        uuid group_id FK "→ model_groups"
-        timestamp created_at
-    }
+### 新增列
+
+```sql
+ALTER TABLE model_catalog
+    ADD COLUMN IF NOT EXISTS reasoning_price NUMERIC DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS cached_price    NUMERIC DEFAULT NULL;
 ```
 
-## 新增表
+### 字段说明
 
-### key_group_bindings
-
-Key 与模型组的多对多关联表。一条记录表示一个 Key 绑定了一个模型组。
-
-| 字段 | 类型 | 约束 | 说明 |
+| 列名 | 类型 | 说明 | 来源 |
 | :--- | :--- | :--- | :--- |
-| id | UUID | PK, NOT NULL, DEFAULT gen_random_uuid() | 主键 |
-| key_id | UUID | NOT NULL, FK → api_keys(id) ON DELETE CASCADE | Key 被删除时联动删除绑定记录 |
-| group_id | UUID | NOT NULL, FK → model_groups(id) | 模型组被删除时通过应用层控制（model_groups 软删除不走 CASCADE） |
-| created_at | TIMESTAMPTZ | NOT NULL, DEFAULT NOW() | 绑定创建时间 |
+| `reasoning_price` | NUMERIC | 推理 token 单价（USD / 1M tokens） | LiteLLM `output_cost_per_reasoning_token` |
+| `cached_price` | NUMERIC | 缓存命中 token 单价（USD / 1M tokens） | LiteLLM `cache_read_input_token_cost` |
 
-**约束**：
-- `UNIQUE(key_id, group_id)` — 同一 Key 不可重复绑定同一模型组
-- `INDEX idx_kbg_key_id ON key_group_bindings(key_id)` — 加速按 Key 查询绑定
-- `INDEX idx_kbg_group_id ON key_group_bindings(group_id)` — 加速按组查询关联的 Key（预留扩展）
+### 已有字段（不变）
 
-## 查询模式
+| 列名 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `id` | UUID PK | 主键 |
+| `model_name` | VARCHAR(255) | 模型名称 |
+| `input_price` | NUMERIC | Prompt 单价 |
+| `output_price` | NUMERIC | Completion 单价 |
+| ... | ... | 其他已有字段 |
 
-### 按 Key 查询绑定组（含组启停状态）
+## models 表变更
 
-```sql
-SELECT g.id, g.name, g.enabled, g.strategy, g.description
-FROM key_group_bindings kbg
-JOIN model_groups g ON g.id = kbg.group_id
-WHERE kbg.key_id = ?
-  AND g.deleted_at IS NULL;  -- GORM 软删除过滤
-```
-
-### 校验组是否绑定
+### 新增列
 
 ```sql
-SELECT EXISTS(
-  SELECT 1 FROM key_group_bindings
-  WHERE key_id = ? AND group_id = ?
-);
+ALTER TABLE models
+    ADD COLUMN IF NOT EXISTS price_mode      VARCHAR(20) NOT NULL DEFAULT 'catalog',
+    ADD COLUMN IF NOT EXISTS reasoning_price NUMERIC DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS cached_price    NUMERIC DEFAULT NULL;
 ```
 
-### 批量插入（去重安全）
+### 字段说明
+
+| 列名 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `price_mode` | VARCHAR(20) | 定价模式：`catalog`（跟随目录）/ `manual`（手动填写） |
+| `reasoning_price` | NUMERIC | 推理 token 单价（USD / 1M tokens），仅 manual 模式生效 |
+| `cached_price` | NUMERIC | 缓存命中 token 单价（USD / 1M tokens），仅 manual 模式生效 |
+
+### 已有字段（不变）
+
+| 列名 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `id` | UUID PK | 主键 |
+| `name` | VARCHAR(255) | 模型名 |
+| `input_price` | NUMERIC | Prompt 单价（manual 模式使用） |
+| `output_price` | NUMERIC | Completion 单价（manual 模式使用） |
+| `catalog_id` | UUID FK → model_catalog | 关联的 Catalog 条目 |
+| ... | ... | 其他已有字段 |
+
+### price_mode 约束
+
+应用层校验（GORM 不强制 ENUM）：
+
+```go
+const (
+    PriceModeCatalog = "catalog"
+    PriceModeManual  = "manual"
+)
+
+func (m *Model) Validate() error {
+    if m.PriceMode != PriceModeCatalog && m.PriceMode != PriceModeManual {
+        return errors.New("price_mode must be 'catalog' or 'manual'")
+    }
+    if m.PriceMode == PriceModeManual {
+        if m.InputPrice == nil || *m.InputPrice <= 0 {
+            return errors.New("manual mode requires input_price > 0")
+        }
+        if m.OutputPrice == nil || *m.OutputPrice <= 0 {
+            return errors.New("manual mode requires output_price > 0")
+        }
+    }
+    return nil
+}
+```
+
+## 迁移文件
+
+迁移脚本：`migrations/NNN_add_pricing_fields.sql`
 
 ```sql
-INSERT INTO key_group_bindings (key_id, group_id)
-VALUES (?, ?), (?, ?), ...
-ON CONFLICT (key_id, group_id) DO NOTHING;
+-- NNN_add_pricing_fields.sql
+-- 变更：CHG-20260603-001 — 用量采集与成本估算
+-- 描述：model_catalog 新增 reasoning/cached 价格列；models 新增 price_mode 及手动价格列
+
+-- 1. model_catalog 新增分桶价格列
+ALTER TABLE model_catalog
+    ADD COLUMN IF NOT EXISTS reasoning_price NUMERIC DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS cached_price    NUMERIC DEFAULT NULL;
+
+-- 2. models 新增 price_mode + 手动价格列
+ALTER TABLE models
+    ADD COLUMN IF NOT EXISTS price_mode      VARCHAR(20) NOT NULL DEFAULT 'catalog',
+    ADD COLUMN IF NOT EXISTS reasoning_price NUMERIC DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS cached_price    NUMERIC DEFAULT NULL;
 ```
 
-## 迁移方案
+## 注意事项
 
-### 迁移文件
-
-```sql
--- migrate/xxxxxx_create_key_group_bindings.up.sql
-
-CREATE TABLE IF NOT EXISTS key_group_bindings (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    key_id UUID NOT NULL,
-    group_id UUID NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT fk_kbg_key FOREIGN KEY (key_id) REFERENCES api_keys(id) ON DELETE CASCADE,
-    CONSTRAINT fk_kbg_group FOREIGN KEY (group_id) REFERENCES model_groups(id),
-    CONSTRAINT uq_kbg_key_group UNIQUE (key_id, group_id)
-);
-
-CREATE INDEX idx_kbg_key_id ON key_group_bindings(key_id);
-CREATE INDEX idx_kbg_group_id ON key_group_bindings(group_id);
-```
-
-```sql
--- migrate/xxxxxx_create_key_group_bindings.down.sql
-
-DROP INDEX IF EXISTS idx_kbg_group_id;
-DROP INDEX IF EXISTS idx_kbg_key_id;
-DROP TABLE IF EXISTS key_group_bindings;
-```
-
-### 回滚策略
-
-- 新表无历史数据，直接 DROP TABLE 即可回滚
-- api_keys 和 model_groups 未修改，不受影响
-
-### 对现有数据的影响
-
-- 新增表，不影响已有数据和查询
-- 现有 Key 在迁移后默认无任何模型组绑定（`/v1/models` 返回空列表）
-- 管理员需手动为存量 Key 补充组绑定
+- 所有新增列 `DEFAULT NULL`，已有行不受影响
+- `price_mode` 默认 `'catalog'`，已有模型的行为完全不变（继续跟随 catalog 价格）
+- `NUMERIC` 类型（无精度限制）用于价格字段，与 LiteLLM 的 `float` 精度匹配
+- 手动模式下 `reasoning_price` / `cached_price` 为 NULL 时，取价逻辑按降级规则处理（见 design.delta.md）

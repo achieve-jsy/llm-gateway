@@ -1,0 +1,11 @@
+# opencode-plugin 模块元数据
+name: opencode-plugin
+display_name: OpenCode 模型发现插件
+version: 1.0.0
+module_type: _default
+description: OpenCode 模型发现插件：配置一键下发、模型自动发现
+status: active
+created: 2026-06-03
+updated: 2026-06-03
+dependencies:
+  - control-plane

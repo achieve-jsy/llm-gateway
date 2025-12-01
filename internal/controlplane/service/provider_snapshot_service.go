@@ -80,7 +80,7 @@ func buildProviderEntries(models []controlmodel.Model) ([]gatewaymodel.ProviderE
 			providerOrder = append(providerOrder, providerID)
 		}
 
-		entry.Models = append(entry.Models, m.Name)
+		entry.Models = append(entry.Models, bedrockModelID(m.Name))
 	}
 
 	entries := make([]gatewaymodel.ProviderEntry, 0, len(providerOrder))

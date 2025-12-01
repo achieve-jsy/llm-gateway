@@ -22,6 +22,13 @@ import (
 func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest) (io.ReadCloser, error) {
 	tracer := otel.Tracer("llm-gateway/orchestrator")
 
+	// 注入 stream_options.include_usage=true 使上游末尾 chunk 返回 usage
+	if req.StreamOptions == nil {
+		req.StreamOptions = &core.StreamOptions{IncludeUsage: true}
+	} else {
+		req.StreamOptions.IncludeUsage = true
+	}
+
 	// 流式请求超时控制（300s，匹配 Nginx proxy_read_timeout）
 	ctx, cancel := context.WithTimeout(ctx, defaultStreamTimeout)
 
@@ -49,6 +56,20 @@ func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest
 
 	start := time.Now()
 
+	// 阶段计时：上游开始
+	if gc := ginContextFrom(ctx); gc != nil {
+		if reqStart, ok := gc.Get("start_time"); ok {
+			if t, ok := reqStart.(time.Time); ok && !t.IsZero() {
+				elapsed := time.Since(t).Milliseconds()
+				if elapsed >= 0 && elapsed <= 32767 {
+					ms := int16(elapsed)
+					gc.Set("t_route_ms", ms)
+					gc.Set("t_upstream_ms", ms)
+				}
+			}
+		}
+	}
+
 	// 通过 Router 获取流
 	rawStream, err := router.StreamChatCompletion(ctx, req)
 	if err != nil {
@@ -62,6 +83,9 @@ func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest
 			"duration_ms", elapsed.Milliseconds(),
 			"error", err.Error(),
 		)
+		if gc := ginContextFrom(ctx); gc != nil {
+			gc.Set("error_message", err.Error())
+		}
 		return nil, errormap.MapProviderError(err)
 	}
 
@@ -73,16 +97,35 @@ func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest
 
 	span.SetStatus(codes.Ok, "")
 
-	// 将流式标记写回 Gin context 供 Logger 使用
+	// 将流式标记、路由模型写回 Gin context 供 Logger / 埋点采集器使用。
+	// routed_model 仅在组调度未写入时才填（直接请求 model 名的场景）；
+	// 组调度路径已由 GroupAwareDispatcher 写入 models.name，此处不覆盖。
+	var usageObserver *streamUsageObserver
 	if gc := ginContextFrom(ctx); gc != nil {
 		gc.Set("stream", true)
+		if req.Model != "" {
+			if _, exists := gc.Get("routed_model"); !exists {
+				gc.Set("routed_model", req.Model)
+			}
+		}
+		if _, exists := gc.Get("provider"); !exists {
+			if name := router.GetProviderName(req.Model); name != "" {
+				gc.Set("provider", name)
+			}
+		}
+		// TTFB：从上游请求发出到收到响应头（HTTP 200）的耗时
+		if ttfb := elapsed.Milliseconds(); ttfb > 0 {
+			gc.Set("t_ttfb_ms", int(ttfb))
+		}
+		usageObserver = newStreamUsageObserver(gc, start)
 	}
 
 	// 用 ObservedSSEStream 包装原始流：
 	//   - 字节流原样透传给客户端（零拷贝，不影响主链路）
 	//   - OTelObserver 旁路统计 chunk 数量，流关闭时写入 span
+	//   - streamUsageObserver 旁路提取末尾 usage 与首 token 延迟，流关闭时回写 context
 	otelObserver := streaming.NewOTelObserver(span)
-	observed := streaming.NewObservedSSEStream(rawStream, otelObserver)
+	observed := streaming.NewObservedSSEStream(rawStream, otelObserver, usageObserver)
 
 	// cancelOnCloseStream 确保流关闭时同步取消 context + 结束 span
 	return &cancelOnCloseStream{

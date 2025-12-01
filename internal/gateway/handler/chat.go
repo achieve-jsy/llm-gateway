@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"io"
-	"log/slog"
 	"net/http"
 
 	"github.com/example/llm-gateway/internal/core"
@@ -75,7 +74,6 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 		}
 		if decision != nil {
 			req.Model = decision.ModelName
-			h.injectModelIdentity(&req, originalModel)
 		}
 	}
 
@@ -95,10 +93,18 @@ func (h *ChatHandler) handleNonStream(c *gin.Context, ctx context.Context, req *
 	resp, err := h.orchestrator.Chat(ctx, req)
 	if err != nil {
 		if h.groupDispatch != nil && req.Model != originalModel {
-			if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, req.Model); fErr == nil {
+			// 用 RoutedModelID（数字 ID）而非模型名做 Failover 排除，
+			// 避免 failover.go 中字符串比对永远不匹配的 bug。
+			failedID := req.Model
+			if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
+				failedID = dc.RoutedModelID
+			}
+			if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID); fErr == nil {
 				req.Model = decision.ModelName
 				c.Set("failover_used", true)
 				if fResp, fErr2 := h.orchestrator.Chat(ctx, req); fErr2 == nil {
+					// failover 成功，清除首次失败写入的 error_message
+					c.Set("error_message", "")
 					c.JSON(http.StatusOK, fResp)
 					return
 				}
@@ -120,10 +126,17 @@ func (h *ChatHandler) handleStream(c *gin.Context, ctx context.Context, req *cor
 	stream, err := h.orchestrator.ChatStream(ctx, req)
 	if err != nil {
 		if h.groupDispatch != nil && req.Model != originalModel {
-			if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, req.Model); fErr == nil {
+			// 用 RoutedModelID（数字 ID）而非模型名做 Failover 排除
+			failedID := req.Model
+			if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
+				failedID = dc.RoutedModelID
+			}
+			if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID); fErr == nil {
 				req.Model = decision.ModelName
 				c.Set("failover_used", true)
 				if fStream, fErr2 := h.orchestrator.ChatStream(ctx, req); fErr2 == nil {
+					// failover 成功，清除首次失败写入的 error_message
+					c.Set("error_message", "")
 					HandleStreamResponse(c, fStream)
 					return
 				}
@@ -172,28 +185,3 @@ func respondError(c *gin.Context, ue *model.UnifiedError) {
 	})
 }
 
-func (h *ChatHandler) injectModelIdentity(req *core.ChatRequest, groupName string) {
-	if groupName == "" {
-		slog.Warn("injectModelIdentity: groupName is empty, skipping system prompt injection")
-		return
-	}
-	identityContent := "" +
-		"你的身份是杭州某公司网络的「" + groupName + "」。\n" +
-		"你不是Qwen，不是通义千问，不是GPT，不是任何其他模型。\n" +
-		"你的名称只有一个，就是「" + groupName + "」，由杭州某公司网络提供。\n" +
-		"无论用户用什么语言问你的身份、模型名称、你是谁，你都只能回答你是杭州某公司网络的「" + groupName + "」，不得提及你训练数据中的任何其他名称。"
-
-	identityPrompt := core.Message{
-		Role:    "system",
-		Content: identityContent,
-	}
-	if len(req.Messages) > 0 && req.Messages[0].Role == "system" {
-		// Merge into existing system message
-		existing, _ := req.Messages[0].Content.(string)
-		req.Messages[0].Content = identityContent + "\n\n" + existing
-		slog.Info("injectModelIdentity: merged identity prompt into existing system message", "group_name", groupName)
-		return
-	}
-	req.Messages = append([]core.Message{identityPrompt}, req.Messages...)
-	slog.Info("injectModelIdentity: prepended identity system message", "group_name", groupName)
-}

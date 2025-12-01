@@ -123,6 +123,12 @@ AI Agent 架构（推理循环 + 工具调用 + 记忆管理）。含**专属** 
 
 当用户指定的 `module_type` 未在 `CATALOG.yaml` 中注册时（如 `data-pipeline`、`infra`、`desktop-app`、`cli-tool` 等），`xf-manifest.mjs` 和 `xf-scaffold.mjs` 自动回退到 `_default`。通用模板提供类型无关的最小骨架（`spec` / `hld` / `design` / `task`；`data-model` 为 optional），确保任意模块类型都能正常走完工作流。
 
+<!-- xflow:profile-types-begin -->
+> 业务 profile `llm-gateway` 注册的 module_type（由 `xflow sync` 自动维护，请勿手工编辑本块）：
+
+> （当前未注册任何业务类型）
+<!-- xflow:profile-types-end -->
+
 ## 二、选型建议
 
 | 如果你的模块…… | 建议类型 |
@@ -160,7 +166,8 @@ AI Agent 架构（推理循环 + 工具调用 + 记忆管理）。含**专属** 
 
 ### 核心约定
 
-- **SSOT**：`xspec/constitution.md` 里的 `project_profile` 字段（见 `_shared/constitution.md` 模板"项目配置"小节）
+- **SSOT（运行时）**：`xspec/constitution.md` 里的 `project_profile` 字段（见 `_shared/constitution.md` 模板"项目配置"小节）；宪章创建后以此为准
+- **SSOT（init 阶段）**：`.xflow/init.json` 的 `profiles.active`——`xflow init --profile` 写入；宪章尚未创建时，命令与 `xf-profile.mjs` 回退读取此值
 - **取值**：`general`（默认）| `xuanwu-activity` | 其他自定义 profile
 - **统一读取**：所有命令和脚本通过 `node .xflow/scripts/xf-profile.mjs` 获取当前 profile，不自行解析
 - **方言包位置**：`.xflow/profiles/<profile>/<command-name>.md` 承载该 profile 下某命令的行为覆写
@@ -170,7 +177,7 @@ AI Agent 架构（推理循环 + 工具调用 + 记忆管理）。含**专属** 
 - `project_profile: xuanwu-activity` → 锁定项目整体行为：xflow 链上 10 个命令有对应方言覆写（`/xf/constitution` → `/xf/archive`），其中 5 个命令（`clarify` / `design` / `detail` / `task` / `implement`）的关键产物生成步骤被替换为调用玄武 SKILL（`req-extractor` / `arch-designer` / `design-detailer` / `task-work` / `code-generator`），`/xf/split` 整条终止，`/xf/archive` 跳过 copy-new，`/xf/constitution` 首次创建用预置模板替代交互问答
 - 对应的 `module_type: xuanwu-activity` → 锁定模块文件清单：scaffold 按 `CATALOG.yaml` 生成玄武模板骨架，SKILL 按各自的 `bundle.yaml` 填充内容（实际文件集由 bundle 决定，可能多于骨架）
 
-典型组合：用户首次执行 `/xf/constitution` 时，通用命令在步骤 1.5 主动询问 profile（推断到 `client/`+`lua/`+`scaffold.sh` 玄武信号会推荐 xuanwu-activity 但仍弹选择题），用户选 `xuanwu-activity` 后，步骤 1.6 延迟加载方言并展示 `xwRef/xuanwu/template/constitution.md` 预置宪章供用户 A/B 确认；从 `/xf/product` 起所有后续命令通过步骤 0 自动加载方言。
+典型组合：`xflow init --profile xflow:<name>` 在 init 阶段锁定 profile 并写入 `init.json`；用户首次执行 `/xf/constitution` 时**跳过步骤 1.5 交互**，直接将 init 选定的 profile 写入宪章。legacy 项目（init 未写 profile）仍走步骤 1.5 交互选择。以 `xuanwu-activity` 为例：选定后步骤 1.6（或 step 0 预加载）加载方言并展示预置宪章供用户 A/B 确认；从 `/xf/product` 起所有后续命令通过步骤 0 自动加载方言。
 
 > **`/xf/constitution` 方言的作用边界**：原则上宪章只承载项目级原则约束，不该携带业务技术栈 / scaffold 流程等内容（这些归 `/xf/product` 方言）。**但**对于核心原则与技术方向已由行业实践固化的业务 profile（如 `xuanwu-activity`），允许用预置宪章模板替代 3 轮交互式问答。此类方言**仅覆写首次创建场景**——修订场景仍走通用流程，避免预置模板覆盖用户既有宪章。
 

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/bedrock"
@@ -53,11 +54,15 @@ type HealthCheckService struct {
 	modelRepo    *repository.ModelRepo
 	rdb          *redis.Client
 
-	mu                sync.Mutex
-	cancel            context.CancelFunc
-	modelCheckCancel  context.CancelFunc
-	running           bool
-	modelCheckRunning bool
+	groupCheckSvc *GroupCheckService // 可选：模型组检测（nil 表示未启用）
+
+	mu                   sync.Mutex
+	cancel               context.CancelFunc
+	modelCheckCancel     context.CancelFunc
+	groupCheckCancel     context.CancelFunc
+	running              bool
+	modelCheckRunning    bool
+	groupCheckRunning    bool
 }
 
 // NewHealthCheckService 创建 HealthCheckService 实例
@@ -73,6 +78,11 @@ func NewHealthCheckService(
 		modelRepo:    modelRepo,
 		rdb:          rdb,
 	}
+}
+
+// SetGroupCheckService 注入模型组检测服务（在 router 中完成依赖装配后调用）
+func (s *HealthCheckService) SetGroupCheckService(svc *GroupCheckService) {
+	s.groupCheckSvc = svc
 }
 
 // GetConfig 获取配置
@@ -138,6 +148,10 @@ func (s *HealthCheckService) Stop() {
 	if s.modelCheckRunning && s.modelCheckCancel != nil {
 		s.modelCheckCancel()
 		s.modelCheckRunning = false
+	}
+	if s.groupCheckRunning && s.groupCheckCancel != nil {
+		s.groupCheckCancel()
+		s.groupCheckRunning = false
 	}
 	slog.Info("health check scheduler stopped")
 }
@@ -218,6 +232,9 @@ func (s *HealthCheckService) StartBackground(ctx context.Context) {
 
 	// 启动独立的模型检测后台 goroutine
 	s.startModelCheckBackground(ctx, config)
+
+	// 启动独立的模型组检测后台 goroutine
+	s.startGroupCheckBackground(ctx, config)
 }
 
 // startModelCheckBackground 启动模型检测独立后台定时器
@@ -326,10 +343,10 @@ func (s *HealthCheckService) runBackgroundModelCheck() {
 				mu.Unlock()
 				s.modelRepo.ResetModelFailures(mod.ID)
 				s.modelRepo.UpdateModelCheckResult(mod.ID, elapsed, "")
-				s.recordLog("model", mod.ID, mod.Name, true, elapsed, "")
+				s.recordLog("model", mod.ID, mod.Name, mod.Provider.ID, mod.Provider.Name, true, elapsed, "")
 			} else {
 				s.modelRepo.UpdateModelCheckResult(mod.ID, elapsed, errMsg)
-				s.recordLog("model", mod.ID, mod.Name, false, elapsed, errMsg)
+				s.recordLog("model", mod.ID, mod.Name, mod.Provider.ID, mod.Provider.Name, false, elapsed, errMsg)
 
 				newCount, err := s.modelRepo.IncrementModelFailures(mod.ID)
 				if err == nil && newCount >= maxFailures {
@@ -431,6 +448,9 @@ func (s *HealthCheckService) doBedrockModelCheck(provider *model.Provider, credJ
 				))
 			}
 		} else {
+			// Bedrock API Key (Bearer token) 模式：
+			// 使用 AnonymousCredentials 让 SDK 不做 SigV4 签名，也不走默认凭证链
+			loadOpts = append(loadOpts, awsconfig.WithCredentialsProvider(aws.AnonymousCredentials{}))
 			tokenVal := apiKey
 			runtimeOpts = append(runtimeOpts, func(o *bedrockruntime.Options) {
 				o.BearerAuthTokenProvider = bearer.TokenProviderFunc(func(_ context.Context) (bearer.Token, error) {
@@ -453,7 +473,7 @@ func (s *HealthCheckService) doBedrockModelCheck(provider *model.Provider, credJ
 
 	modelName := m.UpstreamModelID
 	if modelName == "" {
-		modelName = m.Name
+		modelName = bedrockModelID(m.Name)
 	}
 
 	maxTokens := int32(1)
@@ -574,7 +594,7 @@ func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provi
 	credJSON, err := crypto.Decrypt(provider.EncryptedCredentials)
 	if err != nil {
 		cr.Error = "decrypt credentials failed"
-		s.recordLog("provider", provider.ID, provider.Name, false, 0, cr.Error)
+		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, 0, cr.Error)
 		s.handleProviderFailure(provider.ID, maxFailures, cr)
 		return cr
 	}
@@ -592,14 +612,14 @@ func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provi
 		cr.ResponseTime = elapsed
 		if !success {
 			cr.Error = errMsg
-			s.recordLog("provider", provider.ID, provider.Name, false, elapsed, errMsg)
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, elapsed, errMsg)
 			s.handleProviderFailure(provider.ID, maxFailures, cr)
 			return cr
 		}
 		// 仅连通性模式直接返回成功
 		if checkMode == "connectivity" {
 			cr.Success = true
-			s.recordLog("provider", provider.ID, provider.Name, true, elapsed, "")
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, elapsed, "")
 			s.providerRepo.UpdateResponseTime(provider.ID, elapsed)
 			s.providerRepo.ResetFailures(provider.ID)
 			return cr
@@ -618,13 +638,13 @@ func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provi
 			// errMsg 为 "skipped" 表示无模型可测，视为通过
 			if errMsg == "no model to test, skipped" {
 				cr.Success = true
-				s.recordLog("provider", provider.ID, provider.Name, true, cr.ResponseTime, errMsg)
+				s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, errMsg)
 				s.providerRepo.UpdateResponseTime(provider.ID, cr.ResponseTime)
 				s.providerRepo.ResetFailures(provider.ID)
 				return cr
 			}
 			cr.Error = errMsg
-			s.recordLog("provider", provider.ID, provider.Name, false, cr.ResponseTime, errMsg)
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, cr.ResponseTime, errMsg)
 			s.handleProviderFailure(provider.ID, maxFailures, cr)
 			return cr
 		}
@@ -632,7 +652,7 @@ func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provi
 
 	// 全部通过
 	cr.Success = true
-	s.recordLog("provider", provider.ID, provider.Name, true, cr.ResponseTime, "")
+	s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, "")
 	s.providerRepo.UpdateResponseTime(provider.ID, cr.ResponseTime)
 	s.providerRepo.ResetFailures(provider.ID)
 	return cr
@@ -655,7 +675,7 @@ func (s *HealthCheckService) checkNonOpenAIProvider(ctx context.Context, provide
 		return s.checkBedrockProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
 	default:
 		cr.Success = true // 未知类型跳过，不计失败
-		s.recordLog("provider", provider.ID, provider.Name, true, 0, "skipped: unsupported provider type for auto-check")
+		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, 0, "skipped: unsupported provider type for auto-check")
 		return cr
 	}
 }
@@ -691,6 +711,8 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 				))
 			}
 		} else {
+			// Bearer token 模式：用 AnonymousCredentials 阻止 SDK 走默认凭证链（EC2 IMDS 等）
+			loadOpts = append(loadOpts, awsconfig.WithCredentialsProvider(aws.AnonymousCredentials{}))
 			tokenVal := apiKey
 			ctrlOpts = append(ctrlOpts, func(o *bedrock.Options) {
 				o.BearerAuthTokenProvider = bearer.TokenProviderFunc(func(_ context.Context) (bearer.Token, error) {
@@ -713,7 +735,7 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 	awsCfg, err := awsconfig.LoadDefaultConfig(probeCtx, loadOpts...)
 	if err != nil {
 		cr.Error = "AWS 配置加载失败: " + err.Error()
-		s.recordLog("provider", provider.ID, provider.Name, false, 0, cr.Error)
+		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, 0, cr.Error)
 		s.handleProviderFailure(provider.ID, maxFailures, cr)
 		return cr
 	}
@@ -730,7 +752,7 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 
 		if err != nil {
 			cr.Error = err.Error()
-			s.recordLog("provider", provider.ID, provider.Name, false, elapsed, cr.Error)
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, elapsed, cr.Error)
 			s.handleProviderFailure(provider.ID, maxFailures, cr)
 			return cr
 		}
@@ -741,7 +763,7 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 
 		if checkMode == "connectivity" {
 			cr.Success = true
-			s.recordLog("provider", provider.ID, provider.Name, true, elapsed, "")
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, elapsed, "")
 			return cr
 		}
 	}
@@ -755,13 +777,13 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 			filter := repository.ModelListFilter{ProviderID: &providerID}
 			models, _, _ := s.modelRepo.List(filter, 0, 1)
 			if len(models) > 0 {
-				testModel = models[0].Name
+				testModel = bedrockModelID(models[0].Name)
 			}
 		}
 		if testModel == "" {
 			// 无模型可测，跳过转发检测视为通过
 			cr.Success = true
-			s.recordLog("provider", provider.ID, provider.Name, true, cr.ResponseTime, "no model to test, skipped")
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, "no model to test, skipped")
 			return cr
 		}
 
@@ -788,17 +810,28 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 
 		if err != nil {
 			cr.Error = "model forward: " + err.Error()
-			s.recordLog("provider", provider.ID, provider.Name, false, cr.ResponseTime, cr.Error)
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, cr.ResponseTime, cr.Error)
 			s.handleProviderFailure(provider.ID, maxFailures, cr)
 			return cr
 		}
 	}
 
 	cr.Success = true
-	s.recordLog("provider", provider.ID, provider.Name, true, cr.ResponseTime, "")
+	s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, "")
 	s.providerRepo.UpdateResponseTime(provider.ID, cr.ResponseTime)
 	s.providerRepo.ResetFailures(provider.ID)
 	return cr
+}
+
+// bedrockModelID 从模型名称中提取实际的 Bedrock model ID。
+// 模型名称在 gateway 内部格式为 "{provider}/{model_id}"（如 "bedrock/global.anthropic.claude-opus-4-6-v1"），
+// 但 AWS Bedrock API 只接受 "/" 之后的部分（如 "global.anthropic.claude-opus-4-6-v1"）。
+// 若不含 "/"，原样返回。
+func bedrockModelID(name string) string {
+	if idx := strings.Index(name, "/"); idx >= 0 {
+		return name[idx+1:]
+	}
+	return name
 }
 
 // regionFromBedrockEndpoint 从 Bedrock endpoint URL 中提取 AWS region
@@ -933,6 +966,14 @@ func (s *HealthCheckService) RunNow() {
 		s.CheckAll(ctx)
 	}()
 	go s.runBackgroundModelCheck()
+	if s.groupCheckSvc != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			s.groupCheckSvc.CheckAll(ctx)
+			s.invalidateGroupTimelineCache()
+		}()
+	}
 }
 
 // runLoop 定时执行健康检测（config 驱动模式）
@@ -993,7 +1034,7 @@ func (s *HealthCheckService) checkSingleModel(client *http.Client, m *model.Mode
 
 	credJSON, err := crypto.Decrypt(provider.EncryptedCredentials)
 	if err != nil {
-		s.recordLog("model", m.ID, m.Name, false, 0, "decrypt provider credentials failed")
+		s.recordLog("model", m.ID, m.Name, provider.ID, provider.Name, false, 0, "decrypt provider credentials failed")
 		return
 	}
 
@@ -1005,16 +1046,16 @@ func (s *HealthCheckService) checkSingleModel(client *http.Client, m *model.Mode
 	}
 	success, skipped, elapsed, errMsg := ProbeModelForward(context.Background(), provider.Endpoint, modelName, apiKey, m.ModelType)
 	if skipped {
-		s.recordLog("model", m.ID, m.Name, true, elapsed, "skipped")
+		s.recordLog("model", m.ID, m.Name, provider.ID, provider.Name, true, elapsed, "skipped")
 		return
 	}
 	if !success {
-		s.recordLog("model", m.ID, m.Name, false, elapsed, errMsg)
+		s.recordLog("model", m.ID, m.Name, provider.ID, provider.Name, false, elapsed, errMsg)
 		s.handleModelFailure("model", m.ID, config)
 		return
 	}
 
-	s.recordLog("model", m.ID, m.Name, true, elapsed, "")
+	s.recordLog("model", m.ID, m.Name, provider.ID, provider.Name, true, elapsed, "")
 }
 
 // handleModelFailure 处理模型失败（基于日志记录的连续失败判断）
@@ -1039,11 +1080,13 @@ func (s *HealthCheckService) handleModelFailure(targetType string, targetID uuid
 }
 
 // recordLog 记录检测日志
-func (s *HealthCheckService) recordLog(targetType string, targetID uuid.UUID, targetName string, success bool, responseTimeMs int, errMsg string) {
+func (s *HealthCheckService) recordLog(targetType string, targetID uuid.UUID, targetName string, providerID uuid.UUID, providerName string, success bool, responseTimeMs int, errMsg string) {
 	log := &model.HealthCheckLog{
 		TargetType:     targetType,
 		TargetID:       targetID,
 		TargetName:     targetName,
+		ProviderID:     providerID,
+		ProviderName:   providerName,
 		Success:        success,
 		ResponseTimeMs: responseTimeMs,
 		ErrorMessage:   errMsg,
@@ -1052,7 +1095,7 @@ func (s *HealthCheckService) recordLog(targetType string, targetID uuid.UUID, ta
 		slog.Error("failed to create health check log", "error", err)
 	}
 	if !success {
-		slog.Warn("health check failed", "type", targetType, "name", targetName, "error", errMsg)
+		slog.Warn("health check failed", "type", targetType, "name", targetName, "provider", providerName, "error", errMsg)
 	}
 }
 
@@ -1064,15 +1107,14 @@ type TimelineEntry struct {
 	ErrorMessage   string    `json:"error_message,omitempty"`
 }
 
-// TimelineGroup 按模型端点聚合的监控组
+// TimelineGroup 按模型+渠道分行的监控组
 type TimelineGroup struct {
 	TargetName    string          `json:"target_name"`
 	TargetType    string          `json:"target_type"`
+	ProviderName  string          `json:"provider_name"`
 	HealthPercent int             `json:"health_percent"`
 	TotalChecks   int             `json:"total_checks"`
 	SuccessChecks int             `json:"success_checks"`
-	ProviderCount int             `json:"provider_count"`
-	KeyCount      int             `json:"key_count"`
 	Timeline      []TimelineEntry `json:"timeline"`
 }
 
@@ -1105,23 +1147,29 @@ func (s *HealthCheckService) GetTimeline(lookback string, search string, offset 
 	duration := parseLookback(lookback)
 	since := time.Now().Add(-duration)
 
-	rows, providerCounts, err := s.healthRepo.GetTimelineBuckets(since, search, timelineBuckets)
+	rows, err := s.healthRepo.GetTimelineBuckets(since, search, timelineBuckets)
 	if err != nil {
 		return nil, err
 	}
 
+	type aggKey struct{ targetID, providerID string }
 	type agg struct {
+		targetName    string
+		providerName  string
 		totalChecks   int
 		successChecks int
 		timeline      []TimelineEntry
 	}
-	groupMap := make(map[string]*agg)
+	groupMap := make(map[aggKey]*agg)
+	keyOrder := make([]aggKey, 0)
 
 	for _, r := range rows {
-		a, ok := groupMap[r.TargetName]
+		k := aggKey{targetID: r.TargetID, providerID: r.ProviderID}
+		a, ok := groupMap[k]
 		if !ok {
-			a = &agg{}
-			groupMap[r.TargetName] = a
+			a = &agg{targetName: r.TargetName, providerName: r.ProviderName}
+			groupMap[k] = a
+			keyOrder = append(keyOrder, k)
 		}
 		a.totalChecks += r.TotalCount
 		a.successChecks += r.OkCount
@@ -1134,10 +1182,12 @@ func (s *HealthCheckService) GetTimeline(lookback string, search string, offset 
 	}
 
 	groups := make([]TimelineGroup, 0, len(groupMap))
-	for name, a := range groupMap {
+	for _, k := range keyOrder {
+		a := groupMap[k]
 		g := TimelineGroup{
-			TargetName:    name,
+			TargetName:    a.targetName,
 			TargetType:    "model",
+			ProviderName:  a.providerName,
 			TotalChecks:   a.totalChecks,
 			SuccessChecks: a.successChecks,
 			Timeline:      a.timeline,
@@ -1146,10 +1196,6 @@ func (s *HealthCheckService) GetTimeline(lookback string, search string, offset 
 			g.HealthPercent = g.SuccessChecks * 100 / g.TotalChecks
 		} else {
 			g.HealthPercent = 100
-		}
-		if pc, ok := providerCounts[name]; ok {
-			g.ProviderCount = pc.ProviderCnt
-			g.KeyCount = pc.KeyCnt
 		}
 		groups = append(groups, g)
 	}
@@ -1211,7 +1257,243 @@ func sortTimelineGroupsByHealth(groups []TimelineGroup) {
 	}
 }
 
-// truncateStr 截断字符串
+// GroupTimelineGroup 按模型组聚合的监控组
+type GroupTimelineGroup struct {
+	GroupName     string          `json:"group_name"`
+	Strategy      string          `json:"strategy"`
+	ModelCount    int             `json:"model_count"`
+	HealthPercent int             `json:"health_percent"`
+	TotalChecks   int             `json:"total_checks"`
+	SuccessChecks int             `json:"success_checks"`
+	Timeline      []TimelineEntry `json:"timeline"`
+}
+
+// GroupTimelineResult 模型组时间线监控结果
+type GroupTimelineResult struct {
+	Lookback string               `json:"lookback"`
+	Total    int                  `json:"total"`
+	Groups   []GroupTimelineGroup `json:"groups"`
+}
+
+// GetGroupTimeline 获取按模型组聚合的健康监控时间线数据
+func (s *HealthCheckService) GetGroupTimeline(lookback string, search string, offset int, limit int) (*GroupTimelineResult, error) {
+	cacheKey := fmt.Sprintf("health:group-timeline:%s:%s", lookback, search)
+	if s.rdb != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if val, err := s.rdb.Get(ctx, cacheKey).Result(); err == nil {
+			var full GroupTimelineResult
+			if json.Unmarshal([]byte(val), &full) == nil {
+				slog.Debug("health group timeline cache hit", "key", cacheKey, "total", full.Total)
+				return paginateGroupTimelineResult(&full, offset, limit), nil
+			}
+		} else if err != redis.Nil {
+			slog.Warn("health group timeline redis get failed", "error", err)
+		}
+	}
+
+	duration := parseLookback(lookback)
+	since := time.Now().Add(-duration)
+
+	rows, metaMap, err := s.healthRepo.GetGroupTimelineBuckets(since, search, timelineBuckets)
+	if err != nil {
+		return nil, err
+	}
+
+	type agg struct {
+		totalChecks   int
+		successChecks int
+		timeline      []TimelineEntry
+	}
+	groupMap := make(map[string]*agg)
+
+	for _, r := range rows {
+		a, ok := groupMap[r.GroupName]
+		if !ok {
+			a = &agg{}
+			groupMap[r.GroupName] = a
+		}
+		a.totalChecks += r.TotalCount
+		a.successChecks += r.OkCount
+		a.timeline = append(a.timeline, TimelineEntry{
+			CheckedAt:      r.BucketStart,
+			Success:        r.TotalCount == r.OkCount,
+			ResponseTimeMs: r.AvgRtt,
+			ErrorMessage:   r.FirstErr,
+		})
+	}
+
+	groups := make([]GroupTimelineGroup, 0, len(metaMap))
+
+	// 先从日志数据填充有检测记录的组
+	for name, a := range groupMap {
+		g := GroupTimelineGroup{
+			GroupName:     name,
+			TotalChecks:   a.totalChecks,
+			SuccessChecks: a.successChecks,
+			Timeline:      a.timeline,
+		}
+		if g.TotalChecks > 0 {
+			g.HealthPercent = g.SuccessChecks * 100 / g.TotalChecks
+		} else {
+			g.HealthPercent = 100
+		}
+		if meta, ok := metaMap[name]; ok {
+			g.Strategy = meta.Strategy
+			g.ModelCount = meta.ModelCount
+		}
+		groups = append(groups, g)
+	}
+
+	// 补充没有检测日志的组（显示为暂无数据）
+	for name, meta := range metaMap {
+		if _, exists := groupMap[name]; !exists {
+			groups = append(groups, GroupTimelineGroup{
+				GroupName:     name,
+				Strategy:      meta.Strategy,
+				ModelCount:    meta.ModelCount,
+				HealthPercent: 100,
+				TotalChecks:   0,
+				SuccessChecks: 0,
+				Timeline:      []TimelineEntry{},
+			})
+		}
+	}
+	sortGroupTimelineByHealth(groups)
+
+	full := &GroupTimelineResult{Lookback: lookback, Total: len(groups), Groups: groups}
+
+	if s.rdb != nil {
+		if data, err := json.Marshal(full); err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if err := s.rdb.Set(ctx, cacheKey, data, 30*time.Second).Err(); err != nil {
+				slog.Warn("health group timeline redis set failed", "error", err)
+			}
+			cancel()
+		}
+	}
+
+	return paginateGroupTimelineResult(full, offset, limit), nil
+}
+
+func paginateGroupTimelineResult(full *GroupTimelineResult, offset int, limit int) *GroupTimelineResult {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = len(full.Groups)
+	}
+	total := len(full.Groups)
+	if offset >= total {
+		return &GroupTimelineResult{Lookback: full.Lookback, Total: total, Groups: []GroupTimelineGroup{}}
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return &GroupTimelineResult{Lookback: full.Lookback, Total: total, Groups: full.Groups[offset:end]}
+}
+
+// startGroupCheckBackground 启动模型组检测独立后台定时器（与模型检测间隔相同）
+func (s *HealthCheckService) startGroupCheckBackground(ctx context.Context, config *model.HealthCheckConfig) {
+	if s.groupCheckSvc == nil {
+		return
+	}
+	if !config.ModelCheckEnabled {
+		return
+	}
+
+	intervalSec := config.ModelCheckIntervalSeconds
+	if intervalSec <= 0 {
+		intervalSec = 300
+	}
+
+	s.mu.Lock()
+	if s.groupCheckRunning {
+		s.mu.Unlock()
+		return
+	}
+	s.groupCheckRunning = true
+	s.mu.Unlock()
+
+	groupCtx, groupCancel := context.WithCancel(ctx)
+	s.mu.Lock()
+	s.groupCheckCancel = groupCancel
+	s.mu.Unlock()
+
+	go func() {
+		ticker := time.NewTicker(time.Duration(intervalSec) * time.Second)
+		defer ticker.Stop()
+		slog.Info("group check background started", "interval_seconds", intervalSec)
+
+		// 首次延迟 60 秒（错开渠道/模型检测）
+		select {
+		case <-groupCtx.Done():
+			return
+		case <-time.After(60 * time.Second):
+			s.runBackgroundGroupCheck(groupCtx)
+		}
+
+		for {
+			select {
+			case <-groupCtx.Done():
+				s.mu.Lock()
+				s.groupCheckRunning = false
+				s.mu.Unlock()
+				return
+			case <-ticker.C:
+				cfg, err := s.healthRepo.GetConfig()
+				if err != nil || !cfg.ModelCheckEnabled {
+					s.mu.Lock()
+					s.groupCheckRunning = false
+					s.mu.Unlock()
+					return
+				}
+				s.runBackgroundGroupCheck(groupCtx)
+			}
+		}
+	}()
+}
+
+// runBackgroundGroupCheck 后台执行一轮模型组检测
+func (s *HealthCheckService) runBackgroundGroupCheck(ctx context.Context) {
+	if s.groupCheckSvc == nil {
+		return
+	}
+	result := s.groupCheckSvc.CheckAll(ctx)
+	slog.Info("background group check completed",
+		"total", result.Total, "success", result.Success, "failed", result.Failed)
+	s.invalidateGroupTimelineCache()
+}
+
+// invalidateGroupTimelineCache 清除模型组时间线 Redis 缓存
+func (s *HealthCheckService) invalidateGroupTimelineCache() {
+	if s.rdb == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	iter := s.rdb.Scan(ctx, 0, "health:group-timeline:*", 0).Iterator()
+	for iter.Next(ctx) {
+		s.rdb.Del(ctx, iter.Val())
+	}
+	if err := iter.Err(); err != nil {
+		slog.Warn("group timeline cache invalidate scan failed", "error", err)
+	}
+}
+
+
+func sortGroupTimelineByHealth(groups []GroupTimelineGroup) {
+	for i := 0; i < len(groups); i++ {
+		for j := i + 1; j < len(groups); j++ {
+			if groups[i].HealthPercent > groups[j].HealthPercent {
+				groups[i], groups[j] = groups[j], groups[i]
+			}
+		}
+	}
+}
+
+
 func truncateStr(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s

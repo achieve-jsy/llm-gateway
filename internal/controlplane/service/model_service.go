@@ -95,6 +95,7 @@ type CreateModelInput struct {
 	MaxOutputTokens *int     `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
 	InputPrice      *float64 `json:"input_price" binding:"omitempty,min=0"`
 	OutputPrice     *float64 `json:"output_price" binding:"omitempty,min=0"`
+	PriceMode       string   `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
 	Weight          *int     `json:"weight" binding:"omitempty,min=0,max=9999"`
 }
 
@@ -137,6 +138,14 @@ func (s *ModelService) CreateModel(input CreateModelInput) (*model.Model, error)
 	}
 	if input.OutputPrice != nil {
 		m.OutputPrice = *input.OutputPrice
+	}
+	if input.PriceMode != "" {
+		m.PriceMode = input.PriceMode
+	} else {
+		m.PriceMode = "catalog" // 默认跟随目录价
+	}
+	if m.PriceMode == "manual" && m.InputPrice <= 0 && m.OutputPrice <= 0 {
+		return nil, fmt.Errorf("manual price_mode requires input_price or output_price > 0")
 	}
 	if input.Weight != nil {
 		m.Weight = *input.Weight
@@ -203,6 +212,7 @@ type UpdateModelInput struct {
 	MaxOutputTokens *int     `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
 	InputPrice      *float64 `json:"input_price" binding:"omitempty,min=0"`
 	OutputPrice     *float64 `json:"output_price" binding:"omitempty,min=0"`
+	PriceMode       string   `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
 	Weight          *int     `json:"weight" binding:"omitempty,min=0,max=9999"`
 }
 
@@ -267,6 +277,13 @@ func (s *ModelService) UpdateModel(id uuid.UUID, input UpdateModelInput) (*model
 	}
 	if input.OutputPrice != nil {
 		m.OutputPrice = *input.OutputPrice
+	}
+	if input.PriceMode != "" {
+		m.PriceMode = input.PriceMode
+	}
+	// manual 模式校验
+	if m.PriceMode == "manual" && m.InputPrice <= 0 && m.OutputPrice <= 0 {
+		return nil, fmt.Errorf("manual price_mode requires input_price or output_price > 0")
 	}
 	if input.Weight != nil {
 		m.Weight = *input.Weight

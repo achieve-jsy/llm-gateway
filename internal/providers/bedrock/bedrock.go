@@ -113,6 +113,8 @@ func New(providerCfg providers.ProviderConfig, _ providers.ProviderOptions) core
 			))
 		} else {
 			// Mode 1: Bedrock API Key → Bearer token auth
+			// 使用 AnonymousCredentials 让 SDK 不做 SigV4 签名，也不走默认凭证链
+			loadOpts = append(loadOpts, awsconfig.WithCredentialsProvider(awssdk.AnonymousCredentials{}))
 			tokenValue := apiKey
 			bearerProvider := bearer.TokenProviderFunc(func(_ context.Context) (bearer.Token, error) {
 				return bearer.Token{Value: tokenValue}, nil

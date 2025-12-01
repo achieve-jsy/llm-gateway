@@ -14,12 +14,17 @@ type ApiKey struct {
 	EncryptedKey string    `gorm:"type:text;not null" json:"-"`
 	KeyPrefix    string    `gorm:"type:varchar(8);not null;default:sk-" json:"key_prefix"`
 	KeyHint      string    `gorm:"type:varchar(8);not null" json:"key_hint"`
-	Enabled      bool      `gorm:"not null;default:true;index:idx_api_keys_enabled" json:"enabled"`
-	AccessAllGroups bool   `gorm:"not null;default:false" json:"access_all_groups"`
-	CreatedAt   time.Time  `gorm:"not null;autoCreateTime" json:"created_at"`
-	UpdatedAt   time.Time  `gorm:"not null;autoUpdateTime" json:"updated_at"`
-	LastUsedAt  *time.Time `gorm:"type:timestamp with time zone" json:"last_used_at,omitempty"`
-	ExpiresAt   *time.Time `gorm:"type:timestamp with time zone" json:"expires_at,omitempty"`
+	Enabled         bool       `gorm:"not null;default:true;index:idx_api_keys_enabled" json:"enabled"`
+	LogEnabled      bool       `gorm:"not null;default:true" json:"log_enabled"`
+	AccessAllGroups bool       `gorm:"not null;default:false" json:"access_all_groups"`
+	UserName        string     `gorm:"type:varchar(128)" json:"user_name,omitempty"`
+	DeptName        string     `gorm:"type:varchar(128)" json:"dept_name,omitempty"`
+	StudioID        string     `gorm:"type:varchar(128)" json:"studio_id,omitempty"`
+	StudioName      string     `gorm:"type:varchar(128)" json:"studio_name,omitempty"`
+	CreatedAt       time.Time  `gorm:"not null;autoCreateTime" json:"created_at"`
+	UpdatedAt       time.Time  `gorm:"not null;autoUpdateTime" json:"updated_at"`
+	LastUsedAt      *time.Time `gorm:"type:timestamp with time zone" json:"last_used_at,omitempty"`
+	ExpiresAt       *time.Time `gorm:"type:timestamp with time zone" json:"expires_at,omitempty"`
 }
 
 func (ApiKey) TableName() string { return "api_keys" }

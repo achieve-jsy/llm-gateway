@@ -1,164 +1,98 @@
-# control-plane 概要设计变更 — CHG-20260526-001
+# control-plane 概要设计变更 — CHG-20260603-001
 
-> 基线：xspec/modules/control-plane/hld.md (v1.3)
+> 基线：xspec/modules/control-plane/spec.md (v1.0) — 无 hld.md 基线，首次增量设计
 
 ## 变更摘要
 
-在现有 Key CRUD 和 Group CRUD 分层架构上新增 Key↔模型组多对多绑定：key_group_bindings 关联表 + KeyGroupService 管理绑定关系 + 供 gateway-api 读取绑定的内部接口。Key 创建时可选择模型组，支持后续增删绑定，已启用的模型组列表供员工选择时查询。
+Catalog 同步新增导入 reasoning/cached 分桶价格字段；ResolveModelPricing 从两桶扩展为四桶报价结构；新增 GET /internal/v1/pricing 价表下发接口供 gateway-core 定时拉取。
 
 ## 架构变更
 
 ```mermaid
 flowchart TD
-    subgraph CP["control-plane (变更部分)"]
-        KGH["KeyGroupHandler<br/>POST/DELETE /api/v1/keys/:id/groups"]
-        KGS["KeyGroupService<br/>(新增)"]
-        KGR["KeyGroupRepository<br/>(新增)"]
-        
-        KH["KeyHandler<br/>(修改：创建时接收 group_ids)"]
-        KS["KeyService<br/>(修改：调用 KeyGroupService)"]
-        IH["InternalHandler<br/>(修改：新增绑定查询端点)"]
+    subgraph "control-plane 变更增量"
+        SYNC["CatalogSync\n(新增字段解析)"]
+        RMP["ResolveModelPricing\n(四桶取价)"]
+        API_P["GET /internal/v1/pricing\n(价表下发) NEW"]
     end
-
-    subgraph Existing["现有层(不变)"]
-        GH["GroupHandler"]
-        KR["KeyRepository"]
-        GR["GroupRepository"]
-        N["Redis 变更通知器"]
-        DB["PostgreSQL"]
+    
+    subgraph "已有组件"
+        SYNC_EX["CatalogSyncService\n(已有)"]
+        MODEL_SVC["ModelService\n(已有)"]
     end
-
-    OC["ops-console"] -->|"Key 创建(带组选择)"| KH
-    OC -->|"组绑定管理"| KGH
-    OC -->|"可选组列表查询"| GH
-    GW["gateway-api"] -->|"内部：读取Key绑定组"| IH
-
-    KH --> KS
-    KS --> KGS
-    KGH --> KGS
-    KGS --> KGR
-    KGR --> DB
-    IH --> KGS
-    KGS --> GR
-    KS --> N
+    
+    LL["LiteLLM JSON"] -->|price_mode=catalog| SYNC
+    SYNC -->|写入 output_cost_per_reasoning_token<br>cache_read_input_token_cost| MC[("model_catalog\n+reasoning_price +cached_price")]
+    
+    MODEL_SVC -->|price_mode=manual| MD[("models\n+reasoning_price +cached_price")]
+    
+    MC --> RMP
+    MD --> RMP
+    
+    RMP -->|ModelPricing{4 桶单价 + fallback}| API_P
+    API_P -->|每 5min 拉取| GW["gateway-core\nMemoryPricingCache"]
 ```
 
-### Key 创建含组绑定流程
+### 取价流程
 
 ```mermaid
 sequenceDiagram
-    participant OC as ops-console
-    participant KH as KeyHandler
-    participant KS as KeyService
-    participant KGS as KeyGroupService
-    participant KGR as KeyGroupRepository
-    participant DB as PostgreSQL
-    participant N as Notifier/Redis
-
-    OC->>KH: POST /api/v1/keys (JWT, body: {name, group_ids: ["g1","g2"]})
-    KH->>KH: 参数校验 + 提取 user_id
-    KH->>KS: CreateKey(user_id, name, group_ids)
-    KS->>KS: 生成 sk- Key + 加密 + Insert api_keys
-    KS->>KGS: BindGroups(key_id, group_ids)
-    KGS->>KGS: 校验 group_ids 均存在且启用
-    KGS->>KGR: BatchInsert(key_id, group_ids)
-    KGR->>DB: INSERT INTO key_group_bindings
-    KGS-->>KS: 绑定完成
-    KS->>N: Publish("key:binding_updated", key_id)
-    N->>Redis: PUBLISH config_changes
-    KS-->>KH: key(明文仅此一次) + bound_groups
-    KH-->>OC: 201 Created
+    participant GW as Gateway BatchWriter
+    participant API as GET /internal/v1/pricing
+    participant RMP as ResolveModelPricing
+    participant PG as PostgreSQL
+    
+    GW->>API: 每 5min 拉取全量价表
+    API->>PG: models JOIN model_catalog
+    
+    loop 每个模型
+        PG-->>API: price_mode, catalog_id, manual_prices
+        alt price_mode = catalog
+            API->>RMP: 从 model_catalog 取四桶价格
+            RMP-->>API: prompt / completion / reasoning / cached
+        else price_mode = manual
+            API->>RMP: 从 models 表取四桶价格
+            Note over RMP: reasoning/cached 缺失 → 标记 fallback
+        end
+    end
+    
+    API-->>GW: {"qwen3.6-plus": {prompt:0.29, completion:1.76, reasoning:3.52, cached:null}, ...}
 ```
-
-### 组绑定变更流程
-
-```mermaid
-sequenceDiagram
-    participant OC as ops-console
-    participant KGH as KeyGroupHandler
-    participant KGS as KeyGroupService
-    participant KGR as KeyGroupRepository
-    participant DB as PostgreSQL
-    participant N as Notifier/Redis
-
-    OC->>KGH: POST /api/v1/keys/:id/groups (body: {add: ["g3"], remove: ["g1"]})
-    KGH->>KGS: UpdateBindings(key_id, add, remove)
-    KGS->>KGS: 校验 add 组有效性 + remove 组绑定存在性
-    KGS->>KGR: BatchDelete(key_id, remove)
-    KGR->>DB: DELETE FROM key_group_bindings ...
-    KGS->>KGR: BatchInsert(key_id, add)
-    KGR->>DB: INSERT INTO key_group_bindings ...
-    KGS->>N: Publish("key:binding_updated", key_id)
-    N->>Redis: PUBLISH config_changes
-    KGS-->>KGH: 更新完成
-    KGH-->>OC: 200 OK + 当前绑定组列表
-```
-
-### gateway-api 查询 Key 绑定组流程
-
-```mermaid
-sequenceDiagram
-    participant GW as gateway-api
-    participant IH as InternalHandler
-    participant KGS as KeyGroupService
-    participant KGR as KeyGroupRepository
-    participant DB as PostgreSQL
-
-    GW->>IH: GET /internal/v1/keys/:id/groups (内部 Token)
-    IH->>KGS: GetKeyGroups(key_id)
-    KGS->>KGR: FindByKeyID(key_id)
-    KGR->>DB: SELECT g.id, g.name, g.enabled FROM key_group_bindings JOIN model_groups
-    DB-->>KGR: 记录集
-    KGR-->>KGS: [{group_id, name, enabled}, ...]
-    KGS-->>IH: 组列表(含启停状态)
-    IH-->>GW: 200 OK + JSON [{id, name, enabled}]
-```
-
-## 新增组件
-
-| 组件 | 位置 | 职责 |
-| :--- | :--- | :--- |
-| KeyGroupHandler | handler/key_group_handler.go | Key 组绑定 HTTP 入口：POST 变更绑定（add+remove）、GET 查询绑定列表 |
-| KeyGroupService | service/key_group_service.go | 绑定业务逻辑：组有效性校验、重复绑定检查、去重后的批量增删 |
-| KeyGroupRepository | repository/key_group_repository.go | key_group_bindings 表持久化：BatchInsert、BatchDelete、FindByKeyID |
-
-## 变更组件
-
-| 组件 | 变更 | 说明 |
-| :--- | :--- | :--- |
-| KeyHandler | 修改 | POST /api/v1/keys 接收可选 group_ids 参数，传递给 KeyService |
-| KeyService | 修改 | CreateKey 完成后调用 KeyGroupService.BindGroups 完成绑定 |
-| InternalHandler | 修改 | 新增 GET /internal/v1/keys/:id/groups 端点，调 KeyGroupService 查询 |
-
-## 新增端点
-
-| 端点 | 方法 | 认证 | 说明 |
-| :--- | :--- | :--- | :--- |
-| /api/v1/keys/:id/groups | POST | JWT | 变更组绑定：{add: ["g3"], remove: ["g1"]} |
-| /api/v1/keys/:id/groups | GET | JWT | 查询 Key 当前绑定组列表（含启停状态） |
-| /api/v1/groups/available | GET | JWT | 查询所有已启用模型组，供 Key 创建时选择 |
-| /internal/v1/keys/:id/groups | GET | 内部 Token | 供 gateway-api 读取 Key 绑定的组列表 |
-
-## 数据存储变更
-
-新增 `key_group_bindings` 表：
-
-| 字段 | 类型 | 说明 |
-| :--- | :--- | :--- |
-| id | UUID | 主键 |
-| key_id | UUID | FK → api_keys，ON DELETE CASCADE（Key 删除时联动删除绑定） |
-| group_id | UUID | FK → model_groups |
-| created_at | TIMESTAMP | 绑定创建时间 |
-
-**约束**：UNIQUE(key_id, group_id) — 同一 Key 不可重复绑定同一组。
 
 ## 技术选型变更
 
-无变更。沿用 Go + Gin + GORM + PostgreSQL + Redis 技术栈，不引入新依赖。
+无新增技术选型。所有变更在已有技术栈内：
 
-## 安全设计补充
+| 领域 | 选型 | 说明 |
+| :--- | :--- | :--- |
+| Catalog 同步 | 已有 JSON 解析逻辑扩展 | 新增字段解析，不影响已有同步流程 |
+| 数据库变更 | PG 新增 nullable 列 | 已有数据不受影响；GORM AutoMigrate 增量 |
+| 价表下发 | 已有 Gin router + InternalAuth | 复用 `/internal/v1/*` 内部 API 鉴权 |
 
-| 威胁 | 防御措施 |
+## 新增组件
+
+| 组件 | 位置 | 变更类型 | 职责 |
+| :--- | :--- | :--- | :--- |
+| `GET /internal/v1/pricing` | `internal/controlplane/handler/` | 新增 | 全量多桶价表下发接口，gateway-core 5min 拉取 |
+| `CatalogSyncService` | 已有 | 修改 | 新增解析 `output_cost_per_reasoning_token` / `cache_read_input_token_cost` |
+| `ResolveModelPricing` | 已有 | 修改 | 返回结构从 2 桶扩展为 4 桶 + fallback 标记 |
+| `model_catalog` 表 | 已有 | 修改 | 新增 `reasoning_price` / `cached_price` 列 |
+| `models` 表 | 已有 | 修改 | 新增 `reasoning_price` / `cached_price` 列（manual 模式） |
+
+## 新增列（Migration）
+
+```sql
+ALTER TABLE model_catalog ADD COLUMN reasoning_price NUMERIC DEFAULT NULL;
+ALTER TABLE model_catalog ADD COLUMN cached_price NUMERIC DEFAULT NULL;
+ALTER TABLE models ADD COLUMN reasoning_price NUMERIC DEFAULT NULL;
+ALTER TABLE models ADD COLUMN cached_price NUMERIC DEFAULT NULL;
+```
+
+## 宪章合规
+
+| 原则 | 检查结果 |
 | :--- | :--- |
-| Key 被删除后绑定残留 | ON DELETE CASCADE 自动清理；GORM 软删除模式使用 ForeignKey 约束 |
-| 绑定已删除的模型组 | BatchInsert 前逐一校验 group_id 存在性；GetKeyGroups 时 JOIN model_groups 自动过滤已删除记录 |
+| 不开倒车 | ✅ 已有 Catalog 同步逻辑增量扩展字段，不修改已有同步语义 |
+| 服务稳定 | ✅ 新增列 nullable，已有数据不受影响；价表下发接口独立不影响管理 API |
+| 服务快速 | ✅ 内存价表 5min 刷新，BatchWriter 本地查 Map（无远程调用） |
+| 架构清晰 | ✅ 定价职责仍在 control-plane，不扩散到 gateway |

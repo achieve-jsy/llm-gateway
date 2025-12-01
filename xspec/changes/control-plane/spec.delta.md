@@ -1,82 +1,60 @@
-# control-plane 需求变更 — CHG-20260526-001
+# control-plane 需求变更 — CHG-20260603-001
 
-> 基线：xspec/modules/control-plane/spec.md (v1.3)
+> 基线：xspec/modules/control-plane/spec.md (v1.0)
 
 ## 变更摘要
 
-Key CRUD 增加模型组绑定能力：员工创建 Key 时可选择多个模型组，Key 与模型组建立多对多绑定关系，支持后续增删绑定。模型组成为 Key 对外暴露的"模型"概念。
+模型定价体系改造：从「手工 apply-diff 抄价」改为「读取时解析」，默认直读 LiteLLM 目录价格；Catalog 同步导入多桶价格（reasoning/cached 分桶）；新增统一取价入口 ResolveModelPricing 供成本估算使用，返回完整的多桶报价结构；移除 diff/apply-diff 接口。
 
 ## 新增需求
 
-### US-KEY-BIND-01 — 创建 Key 时选择模型组 (P0)
+### US-NEW-01：模型定价双来源（P0）
 
-**作为**员工，**我想要**创建 API Key 时选择我需要的模型组，**以便**该 Key 只能调用我指定的模型组。
+作为管理员，模型的有效价格默认自动跟随 Catalog 同步的 LiteLLM 价格（含缓存价/阶梯价），无需手工操作；当需要使用实付价时，可将某模型切换为 manual 模式并手填单价。
 
-**功能说明**：
-- 创建 Key 时，员工可从所有已注册且启用的模型组列表中选择一个或多个组
-- 不选则创建未绑定任何模型组的 Key（该 Key 无可用模型）
-- Key 创建成功后，绑定的模型组列表与 Key 信息一同持久化
-- 批量创建不适用，一次只创建一个 Key
+- 新增字段 price_mode：catalog（默认，直读 model_catalog）/ manual（使用 models 表的自定义价格）
+- catalog 模式下：定价随 Catalog 同步自动更新，管理员零维护
+- manual 模式下：允许为每个价格桶独立填价（prompt / completion / reasoning / cached），切换时强制至少 prompt 和 completion 非零
+- models 表已有 input_price / output_price 字段扩展为：input_price / output_price / reasoning_price / cached_price（仅 manual 模式生效）
+- Catalog 同步时新增导入字段：`output_cost_per_reasoning_token`、`cache_read_input_token_cost`
 
-**异常与边界**：
-- 员工未选择任何模型组 → Key 创建成功，但该 Key 后续无可用模型（`/v1/models` 返回空列表）
-- 选择的模型组在创建 Key 前被管理员禁用 → Key 创建成功，禁用的组不出现在可用模型列表中
-- 选择的模型组在创建 Key 后被管理员删除 → 该绑定自动失效，不影响 Key 本身的存在
+### US-NEW-02：统一取价入口 ResolveModelPricing（P0）
 
-### US-KEY-BIND-02 — 查询 Key 时返回绑定模型组 (P0)
+作为系统，提供 ResolveModelPricing 函数作为唯一的价格解析入口，按 price_mode 决定从 model_catalog 还是 models 表取价，输出标准化的 ModelPricing 结构（含 prompt/completion/reasoning/cached 四桶单价）。
 
-**作为**员工，**我想要**查询我的 Key 时能看到它绑定了哪些模型组，**以便**了解该 Key 可以使用哪些模型组。
+- 供 gateway-core 的 collector 通过内存价表查询使用
+- 内存价表定时刷新（如 5min），从 models JOIN model_catalog 构建
+- 模型缺价时返回空 + missing 标记，调用方据此计 est_cost=0 并告警
+- 某桶无独立价格时在结构中标记 fallback，由成本估算引擎按降级规则处理
 
-**功能说明**：
-- Key 详情/列表查询结果中包含该 Key 绑定的模型组列表（组名称和组标识）
-- 已绑定但组已被删除的绑定自动剔除，不在结果中展示
+### US-NEW-03：移除 diff/apply-diff 闸门（P1）
 
-**异常与边界**：
-- Key 未绑定任何模型组 → 返回空的组列表
-- Key 绑定了已被禁用的组 → 仍在列表中展示，标注该组当前为禁用状态
+作为系统，删除 ComputePriceDiff / ApplyPriceDiff 逻辑及对应的 API 端点，简化管理员心智模型。
 
-### US-KEY-BIND-03 — 变更 Key 的模型组绑定 (P0)
-
-**作为**员工，**我想要**能在 Key 创建后增加或移除其绑定的模型组，**以便**按业务需要灵活调整该 Key 的能力范围。
-
-**功能说明**：
-- 员工对自己名下的 Key 执行组绑定变更：增加一个或多个模型组、移除一个或多个模型组
-- 变更后立即生效，使用该 Key 的新请求按变更后的绑定组运作
-- 进行中调用不受绑定变更影响，允许自然完成
-
-**异常与边界**：
-- 向 Key 添加已经绑定的组 → 返回"该模型组已绑定"提示，不做重复绑定
-- 从 Key 移除未绑定的组 → 返回"该模型组未绑定该 Key"提示
-- Key 的所有组被移除 → Key 仍存在但无可用模型
-- 添加的组已被删除 → 返回"模型组不存在"错误
-
-### US-KEY-BIND-04 — 模型组列表查询接口 (P1)
-
-**作为**员工，**我想要**在创建或管理 Key 时能看到所有可选的模型组列表，**以便**做出选择。
-
-**功能说明**：
-- 提供查询所有已注册且启用状态的模型组列表接口
-- 返回每个模型组的名称、标识、描述和路由策略类型（供展示参考）
-- 本期不对组列表做权限过滤，所有已注册且启用的组全员可见
-
-**异常与边界**：
-- 无任何已注册的模型组 → 返回空列表
-- 模型组被禁用 → 不出现在可选列表中
+- 删除：GET /api/v1/model-catalog/diff
+- 删除：POST /api/v1/model-catalog/apply-diff
+- 保留：auto-bind / batch-bind-catalog（仍需 catalog_id 建立模型-目录对应关系）
+- 保留：sync / sync-status / search / by-source（目录同步与检索）
 
 ## 修改需求
 
-- **US-KEY-01（员工自助创建 API Key）** → 原有创建逻辑不变，追加：创建时可选模型组绑定，作为创建请求的可选参数
-- **US-KEY-02（员工列表查看自有 Key）** → 原有列表字段不变，追加：每个 Key 展示其绑定的模型组名称列表
+- 原 spec §6.2「模型管理」→ 模型创建/编辑增加 price_mode 字段（catalog/manual），编辑时如切换到 manual 需校验 input_price / output_price 非零
+- 原 spec §6.5「Catalog 同步」→ 同步完成后不再触发价格 diff 比对；catalog 价格变更直接通过 catalog 模式的模型实时生效
 
 ## 新增验收标准
 
-| 编号 | 关联 | Given（前置状态） | When（触发动作） | Then（预期结果） | 优先级 |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| AC-KB-01 | US-KEY-BIND-01 | Given 员工已登录，系统中存在"日常推理"和"高智能"两个已启用的模型组 | When 员工创建 Key 并选择绑定这两个组 | Then Key 创建成功，该 Key 绑定"日常推理"和"高智能"两个模型组 | P0 |
-| AC-KB-02 | US-KEY-BIND-01 | Given 员工已登录，系统中存在已启用的模型组 | When 员工创建 Key 时不选择任何模型组 | Then Key 创建成功，该 Key 未绑定任何模型组 | P1 |
-| AC-KB-03 | US-KEY-BIND-02 | Given 员工名下有一个 Key 绑定了"日常推理"和"高智能" | When 员工查询该 Key 详情 | Then 返回结果中包含绑定组列表：日常推理（已启用）、高智能（已启用） | P0 |
-| AC-KB-04 | US-KEY-BIND-02 | Given Key K 绑定了组 G1，但 G1 已被管理员禁用 | When 员工查询 K 的详情 | Then G1 仍在绑定列表中，标注状态为"已禁用" | P1 |
-| AC-KB-05 | US-KEY-BIND-03 | Given 员工名下 Key K 绑定了组 G1 | When 员工向 K 追加绑定组 G2 | Then K 绑定组变为 G1 和 G2，后续新请求可使用 G1 或 G2 | P0 |
-| AC-KB-06 | US-KEY-BIND-03 | Given 员工名下 Key K 绑定了 G1 和 G2 | When 员工从 K 移除绑定组 G1 | Then K 仅绑定 G2，后续新请求只能使用 G2 | P0 |
-| AC-KB-07 | US-KEY-BIND-03 | Given Key K 绑定了 G1，此时有一个使用 K 且指定 G1 的流式调用正在进行中 | When 管理员从 K 移除 G1 绑定 | Then 该进行中的流式调用正常完成，K 的新请求中 G1 不再可用 | P1 |
-| AC-KB-08 | US-KEY-BIND-04 | Given 系统中存在 3 个已启用的模型组 | When 员工查询可选模型组列表 | Then 返回 3 个模型组的名称、标识、描述和路由策略类型 | P1 |
+| 编号 | Given（前置状态） | When（触发动作） | Then（预期结果） | 优先级 |
+| :--- | :--- | :--- | :--- | :--- |
+| AC-NEW-01 | Given 模型 A 的 price_mode=catalog 且 model_catalog 有该模型的价格 | When 成本估算请求该模型的价格 | Then 返回 model_catalog 中的完整价格（含缓存价/阶梯价） | P0 |
+| AC-NEW-02 | Given 模型 B 的 price_mode=manual 且 input_price=3.0, output_price=15.0 | When 成本估算请求该模型的价格 | Then 返回手填的 input=3.0, output=15.0（忽略 catalog 价格） | P0 |
+| AC-NEW-03 | Given Catalog 同步更新了某模型的价格 | When price_mode=catalog 的该模型下次被调用 | Then 使用更新后的新价格计算成本 | P0 |
+| AC-NEW-04 | Given 管理员尝试将模型切换为 manual 模式 | When input_price 或 output_price 为 0 | Then 校验失败，返回错误提示 | P0 |
+| AC-NEW-05 | Given 某模型 price_mode=catalog 但未绑定 catalog_id | When 成本估算请求价格 | Then 返回缺价标记（missing=true），est_cost=0 | P1 |
+| AC-NEW-06 | Given 客户端请求 GET /api/v1/model-catalog/diff | When 请求发出 | Then 返回 404（端点已移除） | P1 |
+| AC-NEW-07 | Given Catalog 同步了 qwen3.6-plus 的 output_cost_per_reasoning_token=$3.52/M | When ResolveModelPricing(qwen3.6-plus) | Then 返回四桶价格，reasoning_price=$3.52/M | P0 |
+| AC-NEW-08 | Given 管理员将模型切换为 manual 模式 | When 填入 prompt/completion 价但 reasoning_price 留空 | Then reasoning_cost 在成本估算时标记 fallback，按 completion 价降级 | P0 |
+| AC-NEW-09 | Given Catalog 同步了某模型的 cache_read_input_token_cost=$0.15/M | When ResolveModelPricing | Then cached_price=$0.15/M | P0 |
+
+## 修改验收标准
+
+- 原 AC-05（Catalog 同步后 model_catalog 正确更新）→ 不变，但不再要求触发 diff 比对

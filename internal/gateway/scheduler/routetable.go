@@ -1,6 +1,9 @@
 package scheduler
 
-import "sync"
+import (
+	"sort"
+	"sync"
+)
 
 // RouteTable holds the in-memory group routing configuration with thread-safe access.
 type RouteTable struct {
@@ -53,12 +56,13 @@ func (rt *RouteTable) ReplaceAll(config *ControlPlaneConfig) {
 	groupModels := make(map[uint][]*ModelRoutingEntry)
 	for _, m := range config.Models {
 		groupModels[m.GroupID] = append(groupModels[m.GroupID], &ModelRoutingEntry{
-			ModelID:     m.ModelID,
-			ModelName:   m.ModelName,
-			ChannelType: m.ChannelType,
-			Endpoint:    m.Endpoint,
-			Priority:    derefPriority(m.Priority),
-			Weight:      derefWeight(m.Weight),
+			ModelID:      m.ModelID,
+			ModelName:    m.ModelName,
+			ChannelType:  m.ChannelType,
+			ProviderName: m.ProviderName,
+			Endpoint:     m.Endpoint,
+			Priority:     derefPriority(m.Priority),
+			Weight:       derefWeight(m.Weight),
 		})
 	}
 
@@ -70,6 +74,10 @@ func (rt *RouteTable) ReplaceAll(config *ControlPlaneConfig) {
 		if models == nil {
 			models = []*ModelRoutingEntry{}
 		}
+		// 按 Priority 升序预排序（仅此一次），避免 routePriority 每次请求 sort.Slice
+		sort.Slice(models, func(i, j int) bool {
+			return models[i].Priority < models[j].Priority
+		})
 		newData[g.Name] = &GroupRoutingConfig{
 			GroupID:   g.ID,
 			GroupName: g.Name,

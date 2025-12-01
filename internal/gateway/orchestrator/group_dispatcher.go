@@ -42,7 +42,7 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string) (*sche
 	if d.bindingCheck != nil {
 		identityVal, exists := c.Get("identity")
 		if exists {
-			if id, ok := identityVal.(*model.UserIdentity); ok && id.KeyID != "" {
+			if id, ok := identityVal.(*model.UserIdentity); ok && id.KeyID != "" && !id.AccessAllGroups {
 				groups, err := d.bindingCheck.GetKeyGroups(c.Request.Context(), id.KeyID)
 				if err != nil {
 					slog.Error("group dispatch: binding check failed",
@@ -75,7 +75,12 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string) (*sche
 	})
 
 	c.Set("group_name", modelName)
+	c.Set("routed_model", decision.ModelName)
 	c.Set("routed_model_id", decision.ModelID)
+	c.Set("routed_via_group", true)
+	if decision.ProviderName != "" {
+		c.Set("provider", decision.ProviderName)
+	}
 
 	return decision, nil
 }
@@ -107,7 +112,11 @@ func (d *GroupAwareDispatcher) HandleFailover(c *gin.Context, groupName, failedM
 		})
 	}
 
+	c.Set("routed_model", decision.ModelName)
 	c.Set("routed_model_id", decision.ModelID)
+	if decision.ProviderName != "" {
+		c.Set("provider", decision.ProviderName)
+	}
 
 	slog.Info("group failover succeeded",
 		"group_name", groupName,

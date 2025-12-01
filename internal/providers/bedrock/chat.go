@@ -2,9 +2,13 @@ package bedrock
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
+	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -103,20 +107,50 @@ func buildConverseParts(req *core.ChatRequest) (converseParts, error) {
 	if err != nil {
 		return converseParts{}, err
 	}
+	// Bedrock Converse requires toolConfig to be present whenever any message
+	// contains toolUse or toolResult content blocks, with the actual tool
+	// definitions. When the conversation history has tool blocks but the
+	// caller did not provide tools, we inject a dummy tool to satisfy the
+	// Bedrock API constraint (matching LiteLLM's add_dummy_tool approach).
+	if toolCfg == nil && messagesContainToolBlocks(messages) {
+		toolCfg = &brtypes.ToolConfiguration{
+			Tools: []brtypes.Tool{
+				&brtypes.ToolMemberToolSpec{
+					Value: brtypes.ToolSpecification{
+						Name:        awssdk.String("dummy_tool"),
+						Description: awssdk.String("This is a dummy tool call"),
+						InputSchema: &brtypes.ToolInputSchemaMemberJson{
+							Value: toDocument(map[string]interface{}{
+								"type":       "object",
+								"properties": map[string]interface{}{},
+							}),
+						},
+					},
+				},
+			},
+		}
+	}
 	parts.toolCfg = toolCfg
 
 	return parts, nil
+}
+
+func messagesContainToolBlocks(messages []brtypes.Message) bool {
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			switch block.(type) {
+			case *brtypes.ContentBlockMemberToolUse, *brtypes.ContentBlockMemberToolResult:
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func convertMessages(messages []core.Message) ([]brtypes.SystemContentBlock, []brtypes.Message, error) {
 	system := make([]brtypes.SystemContentBlock, 0)
 	out := make([]brtypes.Message, 0, len(messages))
 
-	// Bedrock's Converse API requires strictly alternating user/assistant
-	// turns. Two adjacent inputs with the same role (the common pattern
-	// being a tool result followed by an additional user text message, or N
-	// parallel tool results) must collapse into a single Bedrock turn whose
-	// Content holds the union of their blocks.
 	appendOrMerge := func(role brtypes.ConversationRole, content []brtypes.ContentBlock) {
 		if len(content) == 0 {
 			return
@@ -127,11 +161,6 @@ func convertMessages(messages []core.Message) ([]brtypes.SystemContentBlock, []b
 		}
 		out = append(out, brtypes.Message{Role: role, Content: content})
 	}
-	// flushToolResults emits the buffered tool-result blocks (if any) as a
-	// user turn and returns nil so the caller's pending slice no longer
-	// aliases the emitted message's Content backing array. Returning
-	// blocks[:0] would let a subsequent append silently overwrite the first
-	// element of the previously emitted message.
 	flushToolResults := func(blocks []brtypes.ContentBlock) []brtypes.ContentBlock {
 		if len(blocks) == 0 {
 			return nil
@@ -159,12 +188,11 @@ func convertMessages(messages []core.Message) ([]brtypes.SystemContentBlock, []b
 			}
 			pendingToolResults = append(pendingToolResults, block)
 		case "user":
-			text := core.ExtractTextContent(msg.Content)
-			if text == "" {
-				continue
+			blocks, err := convertUserContentBlocks(msg.Content)
+			if err != nil {
+				return nil, nil, err
 			}
-			appendOrMerge(brtypes.ConversationRoleUser,
-				[]brtypes.ContentBlock{&brtypes.ContentBlockMemberText{Value: text}})
+			appendOrMerge(brtypes.ConversationRoleUser, blocks)
 		case "assistant":
 			blocks, err := convertAssistantMessage(msg)
 			if err != nil {
@@ -178,6 +206,143 @@ func convertMessages(messages []core.Message) ([]brtypes.SystemContentBlock, []b
 	flushToolResults(pendingToolResults)
 
 	return system, out, nil
+}
+
+var imageDownloadClient = &http.Client{Timeout: 30 * time.Second}
+
+func convertUserContentBlocks(content any) ([]brtypes.ContentBlock, error) {
+	parts, ok := core.NormalizeContentParts(content)
+	if !ok {
+		text := core.ExtractTextContent(content)
+		if text == "" {
+			return nil, nil
+		}
+		return []brtypes.ContentBlock{&brtypes.ContentBlockMemberText{Value: text}}, nil
+	}
+
+	blocks := make([]brtypes.ContentBlock, 0, len(parts))
+	for _, part := range parts {
+		switch part.Type {
+		case "text", "input_text":
+			if part.Text != "" {
+				blocks = append(blocks, &brtypes.ContentBlockMemberText{Value: part.Text})
+			}
+		case "image_url", "input_image":
+			if part.ImageURL == nil || part.ImageURL.URL == "" {
+				continue
+			}
+			imgBlock, err := convertImageBlock(part.ImageURL.URL, part.ImageURL.MediaType)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, &brtypes.ContentBlockMemberImage{Value: *imgBlock})
+		}
+	}
+	if len(blocks) == 0 {
+		return nil, nil
+	}
+	return blocks, nil
+}
+
+func convertImageBlock(raw, mediaTypeHint string) (*brtypes.ImageBlock, error) {
+	if strings.HasPrefix(raw, "data:") {
+		return convertDataURLImageBlock(raw, mediaTypeHint)
+	}
+	return convertURLImageBlock(raw)
+}
+
+func convertDataURLImageBlock(raw, mediaTypeHint string) (*brtypes.ImageBlock, error) {
+	comma := strings.IndexByte(raw, ',')
+	if comma < 0 {
+		return nil, core.NewInvalidRequestError("bedrock image data URL is missing a comma", nil)
+	}
+	meta := raw[len("data:"):comma]
+	tokens := strings.Split(meta, ";")
+	if len(tokens) == 0 {
+		return nil, core.NewInvalidRequestError("bedrock image data URL is missing a media type", nil)
+	}
+	mediaType := strings.TrimSpace(tokens[0])
+	if mediaType == "" {
+		mediaType = strings.TrimSpace(mediaTypeHint)
+	}
+	hasBase64 := false
+	for _, token := range tokens[1:] {
+		if strings.EqualFold(strings.TrimSpace(token), "base64") {
+			hasBase64 = true
+			break
+		}
+	}
+	if !hasBase64 {
+		return nil, core.NewInvalidRequestError("bedrock image data URL must be base64-encoded", nil)
+	}
+	imgFormat, err := parseImageFormat(mediaType)
+	if err != nil {
+		return nil, err
+	}
+	data := raw[comma+1:]
+	if data == "" {
+		return nil, core.NewInvalidRequestError("bedrock image data URL is missing image data", nil)
+	}
+	bytes, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return nil, core.NewInvalidRequestError("bedrock image data URL base64 decode failed: "+err.Error(), err)
+	}
+	return &brtypes.ImageBlock{
+		Format: imgFormat,
+		Source: &brtypes.ImageSourceMemberBytes{Value: bytes},
+	}, nil
+}
+
+func convertURLImageBlock(rawURL string) (*brtypes.ImageBlock, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || !parsed.IsAbs() || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return nil, core.NewInvalidRequestError("bedrock image_url must be a data: URL or http/https URL", nil)
+	}
+	resp, err := imageDownloadClient.Get(rawURL)
+	if err != nil {
+		return nil, core.NewInvalidRequestError("failed to download bedrock image: "+err.Error(), err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, core.NewInvalidRequestError(fmt.Sprintf("failed to download bedrock image: HTTP %d", resp.StatusCode), nil)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024))
+	if err != nil {
+		return nil, core.NewInvalidRequestError("failed to read bedrock image: "+err.Error(), err)
+	}
+	imgFormat := detectImageFormatFromContentType(resp.Header.Get("Content-Type"))
+	return &brtypes.ImageBlock{
+		Format: imgFormat,
+		Source: &brtypes.ImageSourceMemberBytes{Value: body},
+	}, nil
+}
+
+func parseImageFormat(mediaType string) (brtypes.ImageFormat, error) {
+	switch strings.ToLower(strings.TrimSpace(mediaType)) {
+	case "image/jpeg", "image/jpg":
+		return brtypes.ImageFormatJpeg, nil
+	case "image/png":
+		return brtypes.ImageFormatPng, nil
+	case "image/gif":
+		return brtypes.ImageFormatGif, nil
+	case "image/webp":
+		return brtypes.ImageFormatWebp, nil
+	default:
+		return "", core.NewInvalidRequestError("bedrock image media type is not supported: "+mediaType, nil)
+	}
+}
+
+func detectImageFormatFromContentType(ct string) brtypes.ImageFormat {
+	switch {
+	case strings.Contains(ct, "image/png"):
+		return brtypes.ImageFormatPng
+	case strings.Contains(ct, "image/gif"):
+		return brtypes.ImageFormatGif
+	case strings.Contains(ct, "image/webp"):
+		return brtypes.ImageFormatWebp
+	default:
+		return brtypes.ImageFormatJpeg
+	}
 }
 
 func convertAssistantMessage(msg core.Message) ([]brtypes.ContentBlock, error) {

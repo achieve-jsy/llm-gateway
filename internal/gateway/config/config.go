@@ -12,6 +12,7 @@ import (
 type Config struct {
 	Server   ServerConfig
 	Redis    RedisConfig
+	Database DatabaseConfig
 	OTLP     OTLPConfig
 	Provider ProviderConfig
 	Auth     AuthConfig
@@ -28,6 +29,11 @@ type RedisConfig struct {
 	Addr     string
 	Password string
 	DB       int
+}
+
+// DatabaseConfig 数据库连接配置
+type DatabaseConfig struct {
+	URL string
 }
 
 // OTLPConfig OpenTelemetry 导出配置
@@ -75,6 +81,7 @@ func Load() *Config {
 	v.SetDefault("redis.addr", "localhost:6379")
 	v.SetDefault("redis.password", "")
 	v.SetDefault("redis.db", 0)
+	v.SetDefault("database.url", "")
 	v.SetDefault("otlp.endpoint", "localhost:4317")
 	v.SetDefault("otlp.enabled", false)
 	v.SetDefault("provider.internal_token", "")
@@ -118,6 +125,7 @@ func Load() *Config {
 	_ = v.BindEnv("redis.addr", "REDIS_ADDR")
 	_ = v.BindEnv("redis.password", "REDIS_PASSWORD")
 	_ = v.BindEnv("redis.db", "REDIS_DB")
+	_ = v.BindEnv("database.url", "DATABASE_URL")
 	_ = v.BindEnv("otlp.endpoint", "OTLP_ENDPOINT")
 	_ = v.BindEnv("otlp.enabled", "OTLP_ENABLED")
 	_ = v.BindEnv("provider.internal_token", "INTERNAL_TOKEN")
@@ -142,6 +150,9 @@ func Load() *Config {
 			Addr:     v.GetString("redis.addr"),
 			Password: v.GetString("redis.password"),
 			DB:       v.GetInt("redis.db"),
+		},
+		Database: DatabaseConfig{
+			URL: v.GetString("database.url"),
 		},
 		OTLP: OTLPConfig{
 			Endpoint: v.GetString("otlp.endpoint"),

@@ -33,6 +33,7 @@ type SystemSettings struct {
 	DefaultMaxSwitches             int    `json:"default_max_switches"`
 	DefaultSameModelRetries        int    `json:"default_same_model_retries"`
 	DefaultFailoverCooldownSeconds int    `json:"default_failover_cooldown_seconds"`
+	SupplierName                  string `json:"supplier_name"`
 }
 
 type PublicSettings struct {
@@ -42,4 +43,5 @@ type PublicSettings struct {
 	APIBaseURL            string `json:"api_base_url"`
 	RateLimitPerMinute    int    `json:"rate_limit_per_minute"`
 	MaxConcurrencyPerKey  int    `json:"max_concurrency_per_key"`
+	SupplierName          string `json:"supplier_name"`
 }

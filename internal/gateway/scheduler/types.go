@@ -34,6 +34,7 @@ type RouteDecision struct {
 	ModelName      string          `json:"model_name"`
 	ChannelID      string          `json:"channel_id"`
 	ChannelType    string          `json:"channel_type"`
+	ProviderName   string          `json:"provider_name"`
 	Endpoint       string          `json:"endpoint"`
 	Credential     string          `json:"credential"`
 	DecisionTimeUs int64           `json:"decision_time_us"`

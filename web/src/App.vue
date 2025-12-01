@@ -29,9 +29,13 @@
           <el-icon><Key /></el-icon>
           <template #title>我的 Key</template>
         </el-menu-item>
-        <el-menu-item index="/admin/health-monitor">
-          <el-icon><Monitor /></el-icon>
-          <template #title>健康监控</template>
+        <el-menu-item index="/my/usage">
+          <el-icon><DataLine /></el-icon>
+          <template #title>我的用量</template>
+        </el-menu-item>
+        <el-menu-item index="/admin/group-health-monitor">
+          <el-icon><Histogram /></el-icon>
+          <template #title>模型组健康</template>
         </el-menu-item>
 
         <el-divider class="menu-divider" />
@@ -57,6 +61,14 @@
         <el-divider class="menu-divider" />
 
         <div class="menu-group-label">运维</div>
+        <el-menu-item index="/admin/usage-cost">
+          <el-icon><Histogram /></el-icon>
+          <template #title>用量与成本</template>
+        </el-menu-item>
+        <el-menu-item index="/admin/health-monitor">
+          <el-icon><Monitor /></el-icon>
+          <template #title>模型健康监控</template>
+        </el-menu-item>
         <el-menu-item index="/admin/catalog-sync">
           <el-icon><Refresh /></el-icon>
           <template #title>Catalog 同步</template>
@@ -69,17 +81,22 @@
           <el-icon><Setting /></el-icon>
           <template #title>系统设置</template>
         </el-menu-item>
+        <el-menu-item index="/admin/announcements">
+          <el-icon><Bell /></el-icon>
+          <template #title>公告管理</template>
+        </el-menu-item>
       </el-menu>
     </aside>
 
     <!-- 主内容区 -->
     <div class="main-content">
       <!-- 顶部工具栏 -->
-      <div v-if="!isPublicRoute" class="top-bar">
-        <button class="collapse-btn" @click="toggleCollapse" :title="isCollapsed ? '展开菜单' : '收起菜单'">
+      <div v-if="!isPublicRoute" class="top-bar">        <button class="collapse-btn" @click="toggleCollapse" :title="isCollapsed ? '展开菜单' : '收起菜单'">
           <el-icon :size="18"><Fold v-if="!isCollapsed" /><Expand v-else /></el-icon>
         </button>
         <div class="top-bar-spacer"></div>
+        <AnnouncementBanner v-if="authStore.isLoggedIn" ref="bannerRef" />
+        <NotificationBell v-if="authStore.isLoggedIn" ref="notificationBellRef" />
         <span class="theme-toggle" @click="toggleTheme" :title="isDark ? '切换到浅色模式' : '切换到深色模式'">
           {{ isDark ? '☀️' : '🌙' }}
         </span>
@@ -103,6 +120,13 @@
         <router-view />
       </div>
     </div>
+
+    <AnnouncementPopup
+      v-if="authStore.isLoggedIn"
+      :visible="showPopup"
+      @close="showPopup = false"
+      @all-read="onPopupAllRead"
+    />
   </div>
 </template>
 
@@ -112,7 +136,11 @@ import { onMounted, computed, ref, watch } from 'vue'
 import { isDark, toggleTheme } from './composables/useTheme'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
-import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, HomeFilled, Key, Monitor, Setting, Fold, Expand, Histogram, Collection } from '@element-plus/icons-vue'
+import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, HomeFilled, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine } from '@element-plus/icons-vue'
+import NotificationBell from '@/components/common/NotificationBell.vue'
+import AnnouncementBanner from '@/components/common/AnnouncementBanner.vue'
+import AnnouncementPopup from '@/components/common/AnnouncementPopup.vue'
+import { getUnreadAnnouncements } from '@/services/control-plane'
 
 const route = useRoute()
 const router = useRouter()
@@ -121,6 +149,7 @@ const settingsStore = useSettingsStore()
 
 const isCollapsed = ref(localStorage.getItem('sidebar-collapsed') === 'true')
 const activeMenu = ref(route.path)
+const showPopup = ref(false)
 
 watch(() => route.path, (newPath) => {
   activeMenu.value = newPath
@@ -138,6 +167,11 @@ const siteTitle = computed(() => {
 
 onMounted(() => {
   settingsStore.loadPublicSettings()
+  checkPopupAnnouncements()
+})
+
+watch(() => authStore.isLoggedIn, (loggedIn) => {
+  if (loggedIn) checkPopupAnnouncements()
 })
 
 function handleMenuSelect(index: string) {
@@ -154,8 +188,25 @@ function toggleCollapse() {
 function handleUserCommand(command: string) {
   if (command === 'logout') {
     authStore.handleLogout()
+    sessionStorage.removeItem('popup_shown')
     router.push('/login')
   }
+}
+
+async function checkPopupAnnouncements() {
+  if (sessionStorage.getItem('popup_shown')) return
+  if (!localStorage.getItem('access_token')) return
+  try {
+    const items = await getUnreadAnnouncements()
+    if ((items || []).some(a => a.display_mode === 'popup')) {
+      showPopup.value = true
+      sessionStorage.setItem('popup_shown', '1')
+    }
+  } catch {}
+}
+
+function onPopupAllRead() {
+  showPopup.value = false
 }
 </script>
 

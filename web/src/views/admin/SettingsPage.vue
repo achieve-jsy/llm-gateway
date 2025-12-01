@@ -88,6 +88,17 @@
 
         <div class="card-body">
           <div class="form-group">
+            <label class="form-label">供应商名称</label>
+            <el-input
+              v-model="form.supplier_name"
+              placeholder="某公司"
+              maxlength="64"
+              class="form-input"
+            />
+            <p class="form-hint">用户下载配置脚本时显示的供应商名称，默认"某公司"</p>
+          </div>
+
+          <div class="form-group">
             <label class="form-label">API 基础 URL</label>
             <el-input
               v-model="form.api_base_url"
@@ -398,6 +409,7 @@ const form = reactive({
   site_logo: '',
   site_subtitle: '',
   api_base_url: '',
+  supplier_name: '某公司',
   rate_limit_per_minute: 60,
   max_concurrency_per_key: 10,
   oidc_issuer_url: '',
@@ -420,6 +432,7 @@ const initialForm = reactive({
   site_logo: '',
   site_subtitle: '',
   api_base_url: '',
+  supplier_name: '某公司',
   rate_limit_per_minute: 60,
   max_concurrency_per_key: 10,
   oidc_issuer_url: '',
@@ -454,6 +467,7 @@ const formChanged = computed(() => {
     form.site_logo !== initialForm.site_logo ||
     form.site_subtitle !== initialForm.site_subtitle ||
     form.api_base_url !== initialForm.api_base_url ||
+    form.supplier_name !== initialForm.supplier_name ||
     form.rate_limit_per_minute !== initialForm.rate_limit_per_minute ||
     form.max_concurrency_per_key !== initialForm.max_concurrency_per_key ||
     form.oidc_issuer_url !== initialForm.oidc_issuer_url ||
@@ -477,6 +491,7 @@ function setFormValues(source: typeof form) {
   form.site_logo = source.site_logo
   form.site_subtitle = source.site_subtitle
   form.api_base_url = source.api_base_url
+  form.supplier_name = source.supplier_name
   form.rate_limit_per_minute = source.rate_limit_per_minute
   form.max_concurrency_per_key = source.max_concurrency_per_key
   form.oidc_issuer_url = source.oidc_issuer_url
@@ -499,6 +514,7 @@ function captureInitial() {
   initialForm.site_logo = form.site_logo
   initialForm.site_subtitle = form.site_subtitle
   initialForm.api_base_url = form.api_base_url
+  initialForm.supplier_name = form.supplier_name
   initialForm.rate_limit_per_minute = form.rate_limit_per_minute
   initialForm.max_concurrency_per_key = form.max_concurrency_per_key
   initialForm.oidc_issuer_url = form.oidc_issuer_url
@@ -524,6 +540,7 @@ onMounted(async () => {
     form.site_logo = s.site_logo || ''
     form.site_subtitle = s.site_subtitle || ''
     form.api_base_url = s.api_base_url || ''
+    form.supplier_name = s.supplier_name || '某公司'
     form.rate_limit_per_minute = s.rate_limit_per_minute ?? 60
     form.max_concurrency_per_key = s.max_concurrency_per_key ?? 10
     form.oidc_issuer_url = s.oidc_issuer_url || ''
@@ -582,6 +599,7 @@ async function handleSave() {
       site_logo: form.site_logo,
       site_subtitle: form.site_subtitle.trim(),
       api_base_url: form.api_base_url.trim(),
+      supplier_name: form.supplier_name.trim(),
       rate_limit_per_minute: form.rate_limit_per_minute,
       max_concurrency_per_key: form.max_concurrency_per_key,
       oidc_issuer_url: form.oidc_issuer_url.trim(),

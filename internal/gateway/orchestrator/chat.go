@@ -40,7 +40,8 @@ type routerProvider interface {
 
 // ChatOrchestrator 聊天编排器，协调 Router、core.Provider
 type ChatOrchestrator struct {
-	router *providers.Router
+	router       *providers.Router
+	routerGetter func() *providers.Router // 动态获取最新 router（热更新时使用）
 }
 
 // NewChatOrchestrator 创建编排器实例
@@ -50,9 +51,21 @@ func NewChatOrchestrator(router *providers.Router) *ChatOrchestrator {
 	}
 }
 
+// NewChatOrchestratorWithGetter 创建支持热更新的编排器实例。
+// routerGetter 在每次请求时被调用以获取最新的 Router（从 ProviderLoader 的 atomic.Value 读取）。
+func NewChatOrchestratorWithGetter(routerGetter func() *providers.Router) *ChatOrchestrator {
+	return &ChatOrchestrator{
+		routerGetter: routerGetter,
+	}
+}
+
 // routerSnapshot returns the current router snapshot for use within a single request.
-// The *providers.Router is an atomic.Value-backed pointer so this is safe.
+// 当配置了 routerGetter 时，动态获取最新 router（支持热更新）；
+// 否则使用启动时传入的静态 router 指针（向后兼容）。
 func (o *ChatOrchestrator) routerSnapshot() *providers.Router {
+	if o.routerGetter != nil {
+		return o.routerGetter()
+	}
 	return o.router
 }
 
@@ -100,6 +113,21 @@ func (o *ChatOrchestrator) Chat(ctx context.Context, req *core.ChatRequest) (*co
 
 	start := time.Now()
 
+	// 阶段计时：上游开始前，记录 route 完成时间和 upstream 开始时间
+	if gc := ginContextFrom(ctx); gc != nil {
+		if reqStart, ok := gc.Get("start_time"); ok {
+			if t, ok := reqStart.(time.Time); ok && !t.IsZero() {
+				elapsed := time.Since(t).Milliseconds()
+				// elapsed >= 0 且不超出 int16 范围（32767ms ≈ 32s），否则丢弃
+				if elapsed >= 0 && elapsed <= 32767 {
+					ms := int16(elapsed)
+					gc.Set("t_route_ms", ms)
+					gc.Set("t_upstream_ms", ms)
+				}
+			}
+		}
+	}
+
 	// 通过 Router 分发请求
 	resp, err := router.ChatCompletion(ctx, req)
 	elapsed := time.Since(start)
@@ -112,6 +140,9 @@ func (o *ChatOrchestrator) Chat(ctx context.Context, req *core.ChatRequest) (*co
 			"duration_ms", elapsed.Milliseconds(),
 			"error", err.Error(),
 		)
+		if gc := ginContextFrom(ctx); gc != nil {
+			gc.Set("error_message", err.Error())
+		}
 		return nil, errormap.MapProviderError(err)
 	}
 
@@ -123,14 +154,27 @@ func (o *ChatOrchestrator) Chat(ctx context.Context, req *core.ChatRequest) (*co
 	)
 	span.SetStatus(codes.Ok, "")
 
-	// 将 provider 名、token 用量写回 Gin context 供 Logger 使用
+	// 将 provider 名、token 用量写回 Gin context 供 Logger / 埋点采集器使用
 	if gc := ginContextFrom(ctx); gc != nil {
+		// routed_model 仅在组调度未写入时才填（直接请求 model 名的场景）；
+		// 组调度路径已由 GroupAwareDispatcher 写入 models.name，此处不覆盖。
 		if resp.Model != "" {
-			gc.Set("routed_model", resp.Model)
+			if _, exists := gc.Get("routed_model"); !exists {
+				gc.Set("routed_model", resp.Model)
+			}
 		}
-		gc.Set("prompt_tokens", resp.Usage.PromptTokens)
-		gc.Set("completion_tokens", resp.Usage.CompletionTokens)
+		if _, exists := gc.Get("provider"); !exists {
+			if name := router.GetProviderName(req.Model); name != "" {
+				gc.Set("provider", name)
+			} else if resp.Provider != "" {
+				gc.Set("provider", resp.Provider)
+			}
+		}
+		// 写完整 Usage 对象，使 collector 能通过 ExtractCostInput 解析缓存字段
+		gc.Set("usage", resp.Usage)
 		gc.Set("stream", false)
+		// 保存响应体供 TraceWriter 使用（仅非流式）
+		gc.Set("resp_object", resp)
 	}
 
 	slog.DebugContext(ctx, "upstream_call_done",

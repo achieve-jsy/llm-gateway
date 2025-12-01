@@ -3,7 +3,7 @@
 /**
  * xf-current-change — 查询当前活跃变更状态（事实来源）
  *
- * 设计意图：所有 /xf:* 命令、CLI、自动化脚本、不变量校验都通过本脚本统一获取
+ * 设计意图：所有 /xf/* 命令、CLI、自动化脚本、不变量校验都通过本脚本统一获取
  * "当前 changes/ 是否有活跃变更，活跃的话 id/phase/status/affected_modules
  * 是什么" 的事实。任何地方禁止自行 ls + grep / 散点解析 change.yaml。
  *

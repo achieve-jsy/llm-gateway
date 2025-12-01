@@ -3,7 +3,7 @@
 /**
  * xf-check-invariants — 校验 xspec/changes/ 结构不变量
  *
- * 设计意图：xflow 同一时间只允许一个活跃变更，结构上有几条死规矩。每个 /xf:*
+ * 设计意图：xflow 同一时间只允许一个活跃变更，结构上有几条死规矩。每个 /xf/*
  * 命令在"前置条件"段落（先于方言加载）调用本脚本，违反则整条命令立即终止，
  * 不允许 agent 在脏状态下继续叠加新动作。
  *
@@ -49,7 +49,7 @@ const USAGE = {
   usage: "node .xflow/scripts/xf-check-invariants.mjs [--json]",
   description:
     "校验 xspec/changes/ 结构是否合法：单 yaml 命名、目录与 affected_modules 一致、\n" +
-    "无归档中间文件残留。所有 /xf:* 命令的前置条件都该调用本脚本。",
+    "无归档中间文件残留。所有 /xf/* 命令的前置条件都该调用本脚本。",
   required: {},
   optional: {
     "--json": "以 JSON 格式输出（默认输出文本报告）",
@@ -111,7 +111,7 @@ export async function assertChangesInvariant() {
       evidence: illegalYamls.sort(),
       suggestion:
         "每份多余 yaml 通常代表一份未归档的历史变更。逐一确认其状态：\n" +
-        "  - 已完成 → 通过 /xf:archive 流程归档（注：本工具不会自动搬运）\n" +
+        "  - 已完成 → 通过 /xf/archive 流程归档（注：本工具不会自动搬运）\n" +
         "  - 已废弃 → 手动删除并在 modules/CHANGELOG.md 备注\n" +
         "  - 还没做完 → 暂存到仓库外，跑完当前活跃变更后再恢复",
     });
@@ -151,7 +151,7 @@ export async function assertChangesInvariant() {
         suggestion:
           `change.yaml.affected_modules 只声明了：[${[...declaredModules].join(", ")}]\n` +
           "上面这些孤儿目录通常是历史变更未归档残留。逐个确认：\n" +
-          "  - 应归档 → 通过 /xf:archive 处理（需先有对应的 change.yaml）\n" +
+          "  - 应归档 → 通过 /xf/archive 处理（需先有对应的 change.yaml）\n" +
           "  - 已废弃 → 直接删除\n" +
           "  - 是当前变更应该有的 → 把模块名加到 change.yaml.affected_modules",
       });
@@ -177,8 +177,8 @@ export async function assertChangesInvariant() {
         title: `检测到归档中间文件残留：${dir}/ARCHIVE.md`,
         evidence: [`${dir}/ARCHIVE.md`],
         suggestion:
-          "上次 /xf:archive 执行被打断，留下了中间产物。\n" +
-          "  - 重跑 /xf:archive 让它走完整流程，archive 完成后会自动清场\n" +
+          "上次 /xf/archive 执行被打断，留下了中间产物。\n" +
+          "  - 重跑 /xf/archive 让它走完整流程，archive 完成后会自动清场\n" +
           "  - 或人工删除该 ARCHIVE.md 后重试",
       });
     }

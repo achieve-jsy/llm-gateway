@@ -19,6 +19,7 @@ import type {
 } from '@/types/catalog'
 import type { ApiResponse, PaginatedResponse } from '@/types/api'
 import type { ListKeysResponse, CreateKeyWrappedResponse } from '@/types/api-key'
+import type { Announcement, AnnouncementPayload, UpdateAnnouncementPayload } from '@/types/announcement'
 
 // ===================== 渠道定义（Registry） =====================
 
@@ -172,6 +173,7 @@ export interface TimelineEntry {
 export interface TimelineGroup {
   target_name: string
   target_type: string
+  provider_name: string
   health_percent: number
   total_checks: number
   success_checks: number
@@ -188,6 +190,41 @@ export interface TimelineResult {
 
 export async function getHealthTimeline(lookback: string = '6h', search: string = '', offset: number = 0, limit: number = 0): Promise<TimelineResult> {
   const response = await http.get<ApiResponse<TimelineResult>>('/api/v1/health-check/timeline', { params: { lookback, search, offset, limit } })
+  return response.data.data
+}
+
+// ===================== 模型组健康监控时间线 =====================
+
+export interface GroupTimelineGroup {
+  group_name: string
+  strategy: string
+  model_count: number
+  health_percent: number
+  total_checks: number
+  success_checks: number
+  timeline: TimelineEntry[]
+}
+
+export interface GroupTimelineResult {
+  lookback: string
+  total: number
+  groups: GroupTimelineGroup[]
+}
+
+export async function getGroupHealthTimeline(lookback: string = '6h', search: string = '', offset: number = 0, limit: number = 0): Promise<GroupTimelineResult> {
+  const response = await http.get<ApiResponse<GroupTimelineResult>>('/api/v1/health-check/group-timeline', { params: { lookback, search, offset, limit } })
+  return response.data.data
+}
+
+/** 触发所有模型组的健康检测（异步，超时 3 分钟） */
+export async function checkAllGroups(): Promise<{ total: number; success: number; failed: number }> {
+  const response = await http.post<ApiResponse<{ total: number; success: number; failed: number }>>('/api/v1/groups/check-all', undefined, { timeout: 180000 })
+  return response.data.data
+}
+
+/** 触发单个模型组的健康检测 */
+export async function checkGroup(id: number): Promise<{ group_id: number; group_name: string; success: boolean; response_time: number; error?: string }> {
+  const response = await http.post<ApiResponse<{ group_id: number; group_name: string; success: boolean; response_time: number; error?: string }>>(`/api/v1/groups/${id}/check`)
   return response.data.data
 }
 
@@ -550,6 +587,10 @@ export async function toggleAccessAllGroups(keyId: string, value: boolean): Prom
   await http.post(`/api/v1/keys/${keyId}/access-all-groups`, { access_all_groups: value })
 }
 
+export async function toggleLogEnabled(keyId: string, value: boolean): Promise<void> {
+  await http.patch(`/api/v1/keys/${keyId}/log-enabled`, { log_enabled: value })
+}
+
 /** 禁用 API Key */
 export async function disableKey(id: string): Promise<void> {
   await http.patch(`/api/v1/keys/${id}/disable`)
@@ -600,4 +641,108 @@ export async function exportSettings(): Promise<Record<string, string>> {
 
 export async function importSettings(settings: Record<string, string>): Promise<void> {
   await http.post('/api/v1/settings/import', settings)
+}
+
+// ===================== OpenCode 配置 =====================
+
+/** 生成一次性 token（同时把 provider 信息存入 Redis） */
+export async function generateOpencodeConfigToken(
+  keyId: string,
+  params: { provider_id?: string; provider_name?: string; base_url: string; api_key: string }
+): Promise<{ token: string; ttl_seconds: number }> {
+  const response = await http.post<{ code: number; data: { token: string; ttl_seconds: number } }>(
+    `/api/v1/keys/${keyId}/opencode-config/token`,
+    params
+  )
+  return response.data.data
+}
+
+/** 获取脚本内容的完整 URL（用于 curl | bash 或 iex 命令） */
+export function getScriptURL(token: string, os: 'mac' | 'windows'): string {
+  const params = new URLSearchParams({ token, os })
+  return `/api/v1/opencode-config/script?${params.toString()}`
+}
+
+/** 轮询配置写入状态 */
+export async function getOpencodeConfigStatus(
+  keyId: string,
+  token: string
+): Promise<{ status: 'pending' | 'success' | 'failed'; msg?: string }> {
+  const response = await http.get<{ code: number; data: { status: string; msg?: string } }>(
+    `/api/v1/keys/${keyId}/opencode-config/status`,
+    { params: { token } }
+  )
+  return response.data.data as { status: 'pending' | 'success' | 'failed'; msg?: string }
+}
+
+// ===================== 公告管理 =====================
+
+export async function getActiveAnnouncements(page = 1, pageSize = 10): Promise<{ data: Announcement[]; total: number }> {
+  const response = await http.get<ApiResponse<Announcement[]> & { total: number }>(
+    '/api/v1/public/announcements',
+    { params: { page, page_size: pageSize } }
+  )
+  return { data: response.data.data || [], total: response.data.total ?? 0 }
+}
+
+export async function getPublicAnnouncement(id: string): Promise<Announcement> {
+  const response = await http.get<ApiResponse<Announcement>>(`/api/v1/public/announcements/${id}`)
+  return response.data.data
+}
+
+export async function getAnnouncements(opts?: { status?: string; page?: number; page_size?: number }): Promise<{ data: Announcement[]; total: number; page: number; page_size: number }> {
+  const params: Record<string, any> = {}
+  if (opts?.status) params.status = opts.status
+  if (opts?.page !== undefined) params.page = opts.page
+  if (opts?.page_size !== undefined) params.page_size = opts.page_size
+  const response = Object.keys(params).length > 0
+    ? await http.get<ApiResponse<Announcement[]> & { total: number; page: number; page_size: number }>('/api/v1/announcements', { params })
+    : await http.get<ApiResponse<Announcement[]> & { total: number; page: number; page_size: number }>('/api/v1/announcements')
+  return { data: response.data.data, total: response.data.total ?? response.data.data.length, page: response.data.page ?? 1, page_size: response.data.page_size ?? 10 }
+}
+
+export async function getAnnouncement(id: string): Promise<Announcement> {
+  const response = await http.get<ApiResponse<Announcement>>(`/api/v1/announcements/${id}`)
+  return response.data.data
+}
+
+export async function createAnnouncement(payload: AnnouncementPayload): Promise<Announcement> {
+  const response = await http.post<ApiResponse<Announcement>>('/api/v1/announcements', payload)
+  return response.data.data
+}
+
+export async function updateAnnouncement(id: string, payload: UpdateAnnouncementPayload): Promise<Announcement> {
+  const response = await http.put<ApiResponse<Announcement>>(`/api/v1/announcements/${id}`, payload)
+  return response.data.data
+}
+
+export async function deleteAnnouncement(id: string): Promise<void> {
+  await http.delete(`/api/v1/announcements/${id}`)
+}
+
+export async function publishAnnouncement(id: string): Promise<void> {
+  await http.patch(`/api/v1/announcements/${id}/publish`)
+}
+
+export async function archiveAnnouncement(id: string): Promise<void> {
+  await http.patch(`/api/v1/announcements/${id}/archive`)
+}
+
+export async function getUnreadAnnouncements(): Promise<Announcement[]> {
+  const response = await http.get<ApiResponse<Announcement[]>>('/api/v1/announcements/unread', { _silent: true } as any)
+  return response.data.data
+}
+
+export async function getUnreadAnnouncementCount(): Promise<number> {
+  const response = await http.get<{ count: number }>('/api/v1/announcements/unread/count', { _silent: true } as any)
+  return response.data.count
+}
+
+export async function getReadHistoryAnnouncements(): Promise<Announcement[]> {
+  const response = await http.get<ApiResponse<Announcement[]>>('/api/v1/announcements/history', { _silent: true } as any)
+  return response.data.data
+}
+
+export async function markAnnouncementRead(id: string): Promise<void> {
+  await http.post(`/api/v1/announcements/${id}/read`, {}, { _silent: true } as any)
 }

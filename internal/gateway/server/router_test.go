@@ -9,6 +9,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/example/llm-gateway/internal/gateway/infra"
 	"github.com/example/llm-gateway/internal/gateway/provider"
+	"github.com/example/llm-gateway/internal/providers"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
@@ -32,7 +33,8 @@ func buildTestRouter() *gin.Engine {
 	cache := infra.NewCache(rdb)
 	state := &provider.RuntimeState{}
 	// Pass nil router – the gateway starts in a degraded (no-model) state.
-	return Setup(nil, cache, state, nil, "", "", nil, nil)
+	// Pass nil bindClient – group binding check disabled in test.
+	return Setup(func() *providers.Router { return nil }, cache, state, nil, "", "", nil, nil, nil, nil, nil)
 }
 
 // ─── Route Registration ────────────────────────────────────────────────────

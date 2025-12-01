@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/auth"
 	"github.com/gin-gonic/gin"
@@ -10,12 +11,13 @@ import (
 )
 
 type DevLoginHandler struct {
-	db        *gorm.DB
-	jwtSecret string
+	db             *gorm.DB
+	jwtSecret      string
+	accessTokenTTL time.Duration
 }
 
-func NewDevLoginHandler(db *gorm.DB, jwtSecret string) *DevLoginHandler {
-	return &DevLoginHandler{db: db, jwtSecret: jwtSecret}
+func NewDevLoginHandler(db *gorm.DB, jwtSecret string, accessTokenTTL time.Duration) *DevLoginHandler {
+	return &DevLoginHandler{db: db, jwtSecret: jwtSecret, accessTokenTTL: accessTokenTTL}
 }
 
 func (h *DevLoginHandler) Login(c *gin.Context) {
@@ -44,7 +46,7 @@ func (h *DevLoginHandler) Login(c *gin.Context) {
 		return
 	}
 
-	accessToken, err := auth.GenerateAccessToken(h.jwtSecret, user.ID, "", "", user.Username+"@admin.local", user.Username, user.ID, user.Role)
+	accessToken, err := auth.GenerateAccessToken(h.jwtSecret, h.accessTokenTTL, user.ID, "", "", user.Username+"@admin.local", user.Username, user.ID, user.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "token generation failed"})
 		return

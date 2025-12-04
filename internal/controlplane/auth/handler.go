@@ -20,16 +20,27 @@ import (
 	arepo "github.com/example/llm-gateway/internal/auth/repository"
 )
 
+// BootstrapGranter 由 *bootstrap.Checker 实现，通过接口注入避免循环依赖
+type BootstrapGranter interface {
+	CheckAndGrant(ctx context.Context, email, userID string) bool
+}
+
 type Handler struct {
-	config       *Config
-	oauthConfig  *oauth2.Config
-	endpoints    *OIDCEndpoints
-	db           *gorm.DB
-	rdb          *redis.Client
-	userRepo     *arepo.UserRepository
-	deptRepo     *arepo.DeptRepository
-	initAttempted bool
-	initErr      error
+	config           *Config
+	oauthConfig      *oauth2.Config
+	endpoints        *OIDCEndpoints
+	db               *gorm.DB
+	rdb              *redis.Client
+	userRepo         *arepo.UserRepository
+	deptRepo         *arepo.DeptRepository
+	bootstrapGranter BootstrapGranter
+	initAttempted    bool
+	initErr          error
+}
+
+// SetBootstrapChecker 在 router 初始化后注入 bootstrap 检查器
+func (h *Handler) SetBootstrapChecker(g BootstrapGranter) {
+	h.bootstrapGranter = g
 }
 
 type DaQunUserInfo struct {
@@ -184,6 +195,18 @@ func (h *Handler) Callback(c *gin.Context) {
 
 	user, deptID, deptName := h.upsertUser(userInfo)
 
+	// ── Bootstrap：若系统无管理员且当前账号在白名单，自动授予 admin ──────────
+	isBootstrapAdmin := false
+	if h.bootstrapGranter != nil {
+		if h.bootstrapGranter.CheckAndGrant(c.Request.Context(), userInfo.Email, user.ID.String()) {
+			user.Role = "admin"
+			isBootstrapAdmin = true
+		}
+	}
+
+	// ── 部门映射状态（供前端展示引导提示） ─────────────────────────────────
+	deptStatus := h.deptMappingStatus(userInfo.EhrDeptID)
+
 	accessToken, err := GenerateAccessToken(h.config.JWTSecret, h.config.AccessTokenTTL, user.ID.String(), deptID, deptName, userInfo.Email, userInfo.Name, userInfo.Passport, user.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "failed to generate token", "code": "token_generation_failed"}})
@@ -206,7 +229,9 @@ func (h *Handler) Callback(c *gin.Context) {
 			"departmentId":   deptID,
 			"departmentName": deptName,
 		},
-		"role": user.Role,
+		"role":               user.Role,
+		"dept_status":        deptStatus,
+		"is_bootstrap_admin": isBootstrapAdmin,
 	})
 }
 
@@ -375,6 +400,24 @@ func (h *Handler) Logout(c *gin.Context) {
 	}
 	h.rdb.SAdd(c.Request.Context(), "token:blacklist", claims.ID)
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": nil})
+}
+
+// deptMappingStatus 返回部门的工作室映射状态：
+//   - "none"           → SSO 未携带部门信息
+//   - "pending_studio" → 部门存在但未映射工作室
+//   - "active"         → 已映射工作室
+func (h *Handler) deptMappingStatus(ehrDeptID string) string {
+	if ehrDeptID == "" {
+		return "none"
+	}
+	var count int64
+	if err := h.db.Raw("SELECT COUNT(*) FROM dept_studio_map WHERE dept_id = ?", ehrDeptID).Scan(&count).Error; err != nil {
+		return "unknown"
+	}
+	if count == 0 {
+		return "pending_studio"
+	}
+	return "active"
 }
 
 func generateState() string {

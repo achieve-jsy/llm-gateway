@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { oidcCallback, refreshToken as refreshTokenApi, logout as logoutApi } from '@/services/auth'
-import type { User } from '@/types/auth'
+import type { User, DeptStatus } from '@/types/auth'
 
 // org 角色（来自 user_roles 表）
 interface OrgRole {
@@ -92,6 +92,11 @@ export const useAuthStore = defineStore('auth', () => {
   const orgRoles = ref<OrgRole[]>([])
   const effectiveRole = ref<UserRole | null>(restored.role as any || null)
 
+  // 登录时后端返回的部门映射状态，供前端展示引导提示
+  const deptStatus = ref<DeptStatus | null>(null)
+  // 本次登录是否通过 bootstrap 自动授予了 admin（一次性标志，用完即清）
+  const isBootstrapAdmin = ref(false)
+
   const isLoggedIn = computed(() => !!accessToken.value)
   const userName = computed(() => user.value?.name || '')
   const departmentName = computed(() => user.value?.departmentName || '')
@@ -121,7 +126,7 @@ export const useAuthStore = defineStore('auth', () => {
     } catch {}
   }
 
-  function setAuth(data: { accessToken: string; refreshToken: string; user: User; role?: UserRole | string }) {
+  function setAuth(data: { accessToken: string; refreshToken: string; user: User; role?: UserRole | string; dept_status?: DeptStatus; is_bootstrap_admin?: boolean }) {
     accessToken.value = data.accessToken
     refreshTokenValue.value = data.refreshToken
     user.value = data.user
@@ -129,6 +134,8 @@ export const useAuthStore = defineStore('auth', () => {
     const resolvedRole = (data.role || parseJWT(data.accessToken)?.role || null) as UserRole | null
     role.value = resolvedRole
     effectiveRole.value = resolvedRole  // 先用 JWT role，fetchOrgRoles 后会覆盖
+    if (data.dept_status) deptStatus.value = data.dept_status
+    isBootstrapAdmin.value = !!data.is_bootstrap_admin
     localStorage.setItem('access_token', data.accessToken)
     localStorage.setItem('refresh_token', data.refreshToken)
     localStorage.setItem('save_user', JSON.stringify({ user: data.user, role: resolvedRole }))
@@ -177,7 +184,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   return {
     accessToken, refreshTokenValue, user, role, orgRoles, effectiveRole,
-    isLoggedIn, isAdmin, isManager, userName, departmentName,
+    isLoggedIn, isAdmin, isManager, userName, departmentName, deptStatus, isBootstrapAdmin,
     setAuth, handleCallback, refresh, handleLogout, fetchOrgRoles,
   }
 })

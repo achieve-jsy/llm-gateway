@@ -51,6 +51,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	authCfg := auth.LoadConfig()
 	applyOIDCFromDB(authCfg, settingsSvc)
 	authHandler := auth.NewHandler(authCfg, db, rdb)
+
 	// SSO login redirect (frontend: GET /api/v1/auth/oidc/login)
 	r.GET("/api/v1/auth/oidc/login", authHandler.Login)
 	// SSO callback (frontend: POST /auth/oidc/callback)
@@ -355,6 +356,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 	// ─── 组织架构服务（org-service）───────────────────────────────────────────
 	orgContainer := orgservice.New(db, rdb, orgservice.BootstrapAdmins())
+	// 将 Bootstrap Checker 注入 auth handler（此处已在 orgContainer 创建后）
+	authHandler.SetBootstrapChecker(orgContainer.Bootstrap)
 	deptRepo := orgrepo.NewDeptRepo(db)
 	userOrgRepo := orgrepo.NewUserOrgRepo(db)
 	roleRepo := orgrepo.NewRoleRepo(db)

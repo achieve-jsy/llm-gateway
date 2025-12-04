@@ -92,8 +92,10 @@ export const useAuthStore = defineStore('auth', () => {
   const orgRoles = ref<OrgRole[]>([])
   const effectiveRole = ref<UserRole | null>(restored.role as any || null)
 
-  // 登录时后端返回的部门映射状态，供前端展示引导提示
-  const deptStatus = ref<DeptStatus | null>(null)
+  // 登录时后端返回的部门映射状态，供前端展示引导提示（localStorage 持久化）
+  const deptStatus = ref<DeptStatus | null>(
+    (localStorage.getItem('dept_status') as DeptStatus | null) ?? null
+  )
   // 本次登录是否通过 bootstrap 自动授予了 admin（一次性标志，用完即清）
   const isBootstrapAdmin = ref(false)
 
@@ -134,7 +136,10 @@ export const useAuthStore = defineStore('auth', () => {
     const resolvedRole = (data.role || parseJWT(data.accessToken)?.role || null) as UserRole | null
     role.value = resolvedRole
     effectiveRole.value = resolvedRole  // 先用 JWT role，fetchOrgRoles 后会覆盖
-    if (data.dept_status) deptStatus.value = data.dept_status
+    if (data.dept_status) {
+      deptStatus.value = data.dept_status
+      localStorage.setItem('dept_status', data.dept_status)
+    }
     isBootstrapAdmin.value = !!data.is_bootstrap_admin
     localStorage.setItem('access_token', data.accessToken)
     localStorage.setItem('refresh_token', data.refreshToken)
@@ -175,16 +180,37 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('access_token')
     localStorage.removeItem('refresh_token')
     localStorage.removeItem('save_user')
+    localStorage.removeItem('dept_status')
+    deptStatus.value = null
+  }
+
+  // 从 /api/v1/me 实时刷新 dept_status（页面刷新或登录后调用）
+  async function refreshDeptStatus() {
+    if (!accessToken.value) return
+    try {
+      const { default: axios } = await import('axios')
+      const resp = await axios.get('/api/v1/me', {
+        headers: { Authorization: `Bearer ${accessToken.value}` },
+      })
+      const ds = resp.data?.dept_status as DeptStatus | undefined
+      if (ds) {
+        deptStatus.value = ds
+        localStorage.setItem('dept_status', ds)
+      }
+    } catch {
+      // 网络异常时静默降级，沿用 localStorage 的旧值
+    }
   }
 
   // 页面刷新时恢复 org 角色（如果已登录）
   if (accessToken.value) {
     fetchOrgRoles()
+    refreshDeptStatus()
   }
 
   return {
     accessToken, refreshTokenValue, user, role, orgRoles, effectiveRole,
     isLoggedIn, isAdmin, isManager, userName, departmentName, deptStatus, isBootstrapAdmin,
-    setAuth, handleCallback, refresh, handleLogout, fetchOrgRoles,
+    setAuth, handleCallback, refresh, handleLogout, fetchOrgRoles, refreshDeptStatus,
   }
 })

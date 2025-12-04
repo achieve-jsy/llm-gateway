@@ -128,6 +128,63 @@ body,
   padding: 20px 24px;
 }
 
+/* ── 部门状态 Banner ─────────────────────────────────────────────── */
+.dept-status-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 20px;
+  font-size: 13px;
+  line-height: 1.5;
+
+  &--warning {
+    background: #fff8e6;
+    border-bottom: 1px solid #f0c040;
+    color: #7d5a00;
+    .dept-banner__icon { color: #e6a700; }
+  }
+
+  &--error {
+    background: #fff1f0;
+    border-bottom: 1px solid #ffa39e;
+    color: #820014;
+    .dept-banner__icon { color: #f5222d; }
+  }
+
+  .dept-banner__icon {
+    flex-shrink: 0;
+    font-size: 15px;
+  }
+
+  .dept-banner__text {
+    flex: 1;
+  }
+
+  .dept-banner__close {
+    flex-shrink: 0;
+    opacity: 0.6;
+    &:hover { opacity: 1; }
+  }
+}
+
+.dept-banner-enter-active,
+.dept-banner-leave-active {
+  transition: all 0.25s ease;
+  overflow: hidden;
+}
+.dept-banner-enter-from,
+.dept-banner-leave-to {
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  opacity: 0;
+}
+.dept-banner-enter-to,
+.dept-banner-leave-from {
+  max-height: 60px;
+  opacity: 1;
+}
+
 /* el-table 在窄屏横向滚动 */
 .el-table-wrapper,
 .el-table {

@@ -27,27 +27,7 @@ onMounted(async () => {
   try {
     await authStore.handleCallback(code, state)
 
-    // ── 部门映射状态提示 ──────────────────────────────────────────────
-    const ds = authStore.deptStatus
-    if (ds === 'none') {
-      ElNotification({
-        title: '部门信息缺失',
-        message: '你的账号暂未关联部门，部分功能可能受限。请联系平台管理员。',
-        type: 'warning',
-        duration: 8000,
-        position: 'top-right',
-      })
-    } else if (ds === 'pending_studio') {
-      ElNotification({
-        title: '部门待归属',
-        message: '你所在的部门尚未归入任何工作室，数据统计可能不完整。请联系平台管理员完成映射配置。',
-        type: 'warning',
-        duration: 8000,
-        position: 'top-right',
-      })
-    }
-
-    // ── Bootstrap 管理员提示 ──────────────────────────────────────────
+    // 部门状态由 App.vue 的持久 banner 展示，此处仅处理 bootstrap 一次性提示
     if (authStore.isBootstrapAdmin) {
       ElNotification({
         title: '你已成为初始管理员',

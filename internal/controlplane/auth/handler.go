@@ -340,14 +340,22 @@ func (h *Handler) GetCurrentUser(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	email, _ := c.Get("user_email")
 	name, _ := c.Get("user_name")
+	// JWT dept_id 存的是 SSO 原始字符串（EhrDeptID），可直接用于 dept_studio_map 查询
+	deptIDRaw, _ := c.Get("user_dept_id")
 	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{"type": "authentication_error", "message": "not authenticated", "code": "unauthorized"}})
 		return
 	}
+
+	// 实时计算部门映射状态
+	ssoDeptID, _ := deptIDRaw.(string)
+	deptStatus := h.deptMappingStatus(ssoDeptID)
+
 	c.JSON(http.StatusOK, gin.H{
-		"id":    userID,
-		"email": email,
-		"name":  name,
+		"id":          userID,
+		"email":       email,
+		"name":        name,
+		"dept_status": deptStatus,
 	})
 }
 

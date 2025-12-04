@@ -324,12 +324,12 @@
                   <template #default="{ row }">
                     <el-button
                       link type="primary" size="small"
-                      @click="openChangeDeptDialog(row)"
+                      @click.stop="openChangeDeptDialog(row)"
                     >修改部门</el-button>
                     <el-button
                       v-if="row.dept_source === 'manual'"
                       link size="small"
-                      @click="doFollowSSO(row)"
+                      @click.stop="doFollowSSO(row)"
                     >恢复SSO</el-button>
                   </template>
                 </el-table-column>

@@ -140,6 +140,21 @@
         <el-icon v-else class="user-icon" size="24"><User /></el-icon>
       </div>
 
+      <!-- 部门状态警告 Banner（刷新后依然可见，直到用户手动关闭） -->
+      <transition name="dept-banner">
+        <div
+          v-if="authStore.isLoggedIn && showDeptBanner && deptBannerInfo"
+          class="dept-status-banner"
+          :class="`dept-status-banner--${deptBannerInfo.type}`"
+        >
+          <el-icon class="dept-banner__icon"><Warning /></el-icon>
+          <span class="dept-banner__text">{{ deptBannerInfo.message }}</span>
+          <el-button link size="small" class="dept-banner__close" @click="dismissDeptBanner">
+            <el-icon><Close /></el-icon>
+          </el-button>
+        </div>
+      </transition>
+
       <!-- 页面内容 -->
       <div class="page-container" :class="{ 'page-container--public': !authStore.isLoggedIn }">
         <router-view />
@@ -161,7 +176,7 @@ import { onMounted, computed, ref, watch } from 'vue'
 import { isDark, toggleTheme } from './composables/useTheme'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
-import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, HomeFilled, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled } from '@element-plus/icons-vue'
+import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, HomeFilled, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/common/NotificationBell.vue'
 import AnnouncementBanner from '@/components/common/AnnouncementBanner.vue'
 import AnnouncementPopup from '@/components/common/AnnouncementPopup.vue'
@@ -186,6 +201,37 @@ const sidebarLogoSrc = computed(() => {
 
 const siteTitle = computed(() => {
   return settingsStore.publicSettings?.site_name || '灵锋驿'
+})
+
+// ── 部门状态 Banner ────────────────────────────────────────────────────────
+const DEPT_BANNER_DISMISS_KEY = 'dept_banner_dismissed'
+const showDeptBanner = ref(sessionStorage.getItem(DEPT_BANNER_DISMISS_KEY) !== '1')
+
+const deptBannerInfo = computed<{ message: string; type: 'warning' | 'error' } | null>(() => {
+  const ds = authStore.deptStatus
+  if (ds === 'none') {
+    return { type: 'error', message: '你的账号暂未关联部门，部分功能可能受限，请联系平台管理员。' }
+  }
+  if (ds === 'pending_studio') {
+    return { type: 'warning', message: '你所在的部门尚未归入任何工作室，数据统计可能不完整，请联系管理员完成映射配置。' }
+  }
+  return null
+})
+
+function dismissDeptBanner() {
+  showDeptBanner.value = false
+  sessionStorage.setItem(DEPT_BANNER_DISMISS_KEY, '1')
+}
+
+// 当 dept_status 变为 active（映射完成后），自动隐藏 banner
+watch(() => authStore.deptStatus, (s) => {
+  if (s === 'active' || s == null) {
+    showDeptBanner.value = false
+    sessionStorage.removeItem(DEPT_BANNER_DISMISS_KEY)
+  } else {
+    // 新的问题状态出现时重置 dismissed，确保下次登录看到
+    showDeptBanner.value = true
+  }
 })
 
 onMounted(() => {

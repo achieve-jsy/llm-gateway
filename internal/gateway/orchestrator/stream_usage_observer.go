@@ -111,6 +111,30 @@ func (o *streamUsageObserver) OnJSONEvent(payload map[string]any) {
 				CompletionTokens: toInt(usageMap["completion_tokens"]),
 				TotalTokens:      toInt(usageMap["total_tokens"]),
 			}
+			// 提取 OpenAI-compatible prompt_tokens_details（含 cached_tokens）
+			if details, ok := usageMap["prompt_tokens_details"].(map[string]any); ok {
+				u.PromptTokensDetails = &core.PromptTokensDetails{
+					CachedTokens: toInt(details["cached_tokens"]),
+					AudioTokens:  toInt(details["audio_tokens"]),
+					TextTokens:   toInt(details["text_tokens"]),
+					ImageTokens:  toInt(details["image_tokens"]),
+				}
+			}
+			// 提取 DeepSeek / Anthropic / Bedrock 缓存字段到 RawUsage
+			rawKeys := []string{
+				"prompt_cache_hit_tokens",    // DeepSeek
+				"prompt_cache_miss_tokens",   // DeepSeek
+				"cache_read_input_tokens",    // Anthropic / Bedrock
+				"cache_creation_input_tokens", // Anthropic / Bedrock
+			}
+			for _, k := range rawKeys {
+				if v := usageMap[k]; v != nil {
+					if u.RawUsage == nil {
+						u.RawUsage = make(map[string]any)
+					}
+					u.RawUsage[k] = v
+				}
+			}
 			if u.PromptTokens > 0 || u.CompletionTokens > 0 || u.TotalTokens > 0 {
 				o.usage = &u
 			}

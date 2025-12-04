@@ -15,6 +15,7 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/example/llm-gateway/internal/controlplane/service"
+	obscron "github.com/example/llm-gateway/internal/observability/cron"
 	obshandler "github.com/example/llm-gateway/internal/observability/handler"
 	obssvc "github.com/example/llm-gateway/internal/observability/service"
 	"github.com/example/llm-gateway/internal/orgservice"
@@ -197,6 +198,17 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 	// 启动健康检测调度器（优先使用环境变量 HEALTH_CHECK_INTERVAL 控制）
 	healthCheckSvc.StartBackground(context.Background())
+
+	// 启动用量统计每小时聚合（写 usage_daily）
+	rollupSvc := obssvc.NewRollupService(db)
+	rollupCron := obscron.NewRollupCron(rollupSvc)
+	rollupCron.Start(context.Background())
+	// 启动时立即补跑一次今天 + 昨天，填充 usage_daily
+	go func() {
+		if err := rollupCron.RunOnce(context.Background()); err != nil {
+			slog.Warn("initial rollup failed", "error", err)
+		}
+	}()
 
 	// 内部调度器接口（X-Auth-Token 认证，在 handler 内自行校验）
 	r.GET("/api/v1/internal/groups", groupHandler.ListEnabledGroups)

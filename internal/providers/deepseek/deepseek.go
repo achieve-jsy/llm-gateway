@@ -126,18 +126,24 @@ func (p *Provider) ChatCompletion(ctx context.Context, req *core.ChatRequest) (*
 	if err != nil {
 		return nil, err
 	}
-	var resp core.ChatResponse
-	err = p.client.Do(ctx, llmclient.Request{
+	raw, err := p.client.DoRaw(ctx, llmclient.Request{
 		Method:   http.MethodPost,
 		Endpoint: "/chat/completions",
 		Body:     body,
-	}, &resp)
+	})
 	if err != nil {
+		return nil, err
+	}
+	var resp core.ChatResponse
+	if err := json.Unmarshal(raw.Body, &resp); err != nil {
 		return nil, err
 	}
 	if resp.Model == "" {
 		resp.Model = req.Model
 	}
+	// DeepSeek 在 usage 顶层返回 prompt_cache_hit_tokens / prompt_cache_miss_tokens，
+	// 这两个字段不在 core.Usage 的标准字段中，需手动提取到 RawUsage 供成本计算使用。
+	buildDeepSeekRawUsage(raw.Body, &resp.Usage)
 	return &resp, nil
 }
 
@@ -213,4 +219,36 @@ func (p *Provider) Passthrough(ctx context.Context, req *core.PassthroughRequest
 		Headers:    providers.CloneHTTPHeaders(resp.Header),
 		Body:       resp.Body,
 	}, nil
+}
+
+// buildDeepSeekRawUsage 从原始响应 JSON 中提取 DeepSeek 专属缓存字段，
+// 写入 usage.RawUsage，供 ExtractCostInput 的路径2计算缓存成本。
+//
+// DeepSeek usage 结构（顶层额外字段）：
+//
+//	"usage": {
+//	  "prompt_tokens": 100,
+//	  "prompt_cache_hit_tokens": 80,    ← 命中缓存的 tokens
+//	  "prompt_cache_miss_tokens": 20,   ← 未命中缓存的 tokens
+//	  "completion_tokens": 50,
+//	  "total_tokens": 150
+//	}
+func buildDeepSeekRawUsage(body []byte, u *core.Usage) {
+	var envelope struct {
+		Usage struct {
+			PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens"`
+			PromptCacheMissTokens int `json:"prompt_cache_miss_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return
+	}
+	if envelope.Usage.PromptCacheHitTokens == 0 && envelope.Usage.PromptCacheMissTokens == 0 {
+		return
+	}
+	if u.RawUsage == nil {
+		u.RawUsage = make(map[string]any)
+	}
+	u.RawUsage["prompt_cache_hit_tokens"] = envelope.Usage.PromptCacheHitTokens
+	u.RawUsage["prompt_cache_miss_tokens"] = envelope.Usage.PromptCacheMissTokens
 }

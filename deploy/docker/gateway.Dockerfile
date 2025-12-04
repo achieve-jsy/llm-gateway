@@ -14,7 +14,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/gateway ./cmd/gateway
 
 # ─── Stage 2: Runtime ────────────────────────────────────────────────────────
-FROM alpine:3.21
+FROM 192.0.2.10:5000/alpine:3.21
 
 RUN apk add --no-cache ca-certificates tzdata \
     && ln -snf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \

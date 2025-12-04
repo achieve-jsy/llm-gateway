@@ -1,7 +1,7 @@
 <template>
   <div class="layout-sidebar">
-    <!-- 侧边栏 -->
-    <aside v-if="!isPublicRoute" class="sidebar" :class="{ 'sidebar--collapsed': isCollapsed }">
+    <!-- 侧边栏：已登录时始终显示（/403 等兜底页也保留菜单） -->
+    <aside v-if="authStore.isLoggedIn" class="sidebar" :class="{ 'sidebar--collapsed': isCollapsed }">
       <div class="sidebar-header">
         <img :src="sidebarLogoSrc" class="sidebar-logo" alt="logo" />
         <span v-show="!isCollapsed" class="sidebar-title">{{ siteTitle }}</span>
@@ -38,60 +38,85 @@
           <template #title>模型组健康</template>
         </el-menu-item>
 
-        <el-divider class="menu-divider" />
+        <!-- 组织 & 用量看板（管理角色可见）-->
+        <template v-if="authStore.isManager">
+          <el-divider class="menu-divider" />
+          <div class="menu-group-label">组织</div>
+          <!-- 组织架构：admin 看全树，studio/dept admin 看自己管辖范围 -->
+          <el-menu-item index="/admin/org">
+            <el-icon><OfficeBuilding /></el-icon>
+            <template #title>
+              组织架构
+              <span v-if="!authStore.isAdmin" class="menu-scope-tag">我的范围</span>
+            </template>
+          </el-menu-item>
+          <el-menu-item index="/admin/usage/dashboard">
+            <el-icon><Histogram /></el-icon>
+            <template #title>用量看板</template>
+          </el-menu-item>
+          <!-- 角色管理仅 admin 可见 -->
+          <el-menu-item v-if="authStore.isAdmin" index="/admin/org/roles">
+            <el-icon><UserFilled /></el-icon>
+            <template #title>角色管理</template>
+          </el-menu-item>
+        </template>
 
-        <div class="menu-group-label">管理</div>
-        <el-menu-item index="/admin/providers">
-          <el-icon><Operation /></el-icon>
-          <template #title>渠道管理</template>
-        </el-menu-item>
-        <el-menu-item index="/admin/models">
-          <el-icon><Cpu /></el-icon>
-          <template #title>模型管理</template>
-        </el-menu-item>
-        <el-menu-item index="/admin/groups">
-          <el-icon><Collection /></el-icon>
-          <template #title>模型组</template>
-        </el-menu-item>
-        <el-menu-item index="/admin/tags">
-          <el-icon><PriceTag /></el-icon>
-          <template #title>标签管理</template>
-        </el-menu-item>
+        <!-- 管理 & 运维（仅 admin）-->
+        <template v-if="authStore.isAdmin">
+          <el-divider class="menu-divider" />
+          <div class="menu-group-label">管理</div>
+          <el-menu-item index="/admin/providers">
+            <el-icon><Operation /></el-icon>
+            <template #title>渠道管理</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/models">
+            <el-icon><Cpu /></el-icon>
+            <template #title>模型管理</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/groups">
+            <el-icon><Collection /></el-icon>
+            <template #title>模型组</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/tags">
+            <el-icon><PriceTag /></el-icon>
+            <template #title>标签管理</template>
+          </el-menu-item>
 
-        <el-divider class="menu-divider" />
+          <el-divider class="menu-divider" />
 
-        <div class="menu-group-label">运维</div>
-        <el-menu-item index="/admin/usage-cost">
-          <el-icon><Histogram /></el-icon>
-          <template #title>用量与成本</template>
-        </el-menu-item>
-        <el-menu-item index="/admin/health-monitor">
-          <el-icon><Monitor /></el-icon>
-          <template #title>模型健康监控</template>
-        </el-menu-item>
-        <el-menu-item index="/admin/catalog-sync">
-          <el-icon><Refresh /></el-icon>
-          <template #title>Catalog 同步</template>
-        </el-menu-item>
-        <el-menu-item index="/admin/chat-playground">
-          <el-icon><ChatDotRound /></el-icon>
-          <template #title>对话测试</template>
-        </el-menu-item>
-        <el-menu-item index="/admin/settings">
-          <el-icon><Setting /></el-icon>
-          <template #title>系统设置</template>
-        </el-menu-item>
-        <el-menu-item index="/admin/announcements">
-          <el-icon><Bell /></el-icon>
-          <template #title>公告管理</template>
-        </el-menu-item>
+          <div class="menu-group-label">运维</div>
+          <el-menu-item index="/admin/usage-cost">
+            <el-icon><Histogram /></el-icon>
+            <template #title>用量与成本</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/health-monitor">
+            <el-icon><Monitor /></el-icon>
+            <template #title>模型健康监控</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/catalog-sync">
+            <el-icon><Refresh /></el-icon>
+            <template #title>Catalog 同步</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/chat-playground">
+            <el-icon><ChatDotRound /></el-icon>
+            <template #title>对话测试</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/settings">
+            <el-icon><Setting /></el-icon>
+            <template #title>系统设置</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/announcements">
+            <el-icon><Bell /></el-icon>
+            <template #title>公告管理</template>
+          </el-menu-item>
+        </template>
       </el-menu>
     </aside>
 
     <!-- 主内容区 -->
     <div class="main-content">
       <!-- 顶部工具栏 -->
-      <div v-if="!isPublicRoute" class="top-bar">        <button class="collapse-btn" @click="toggleCollapse" :title="isCollapsed ? '展开菜单' : '收起菜单'">
+      <div v-if="authStore.isLoggedIn" class="top-bar">        <button class="collapse-btn" @click="toggleCollapse" :title="isCollapsed ? '展开菜单' : '收起菜单'">
           <el-icon :size="18"><Fold v-if="!isCollapsed" /><Expand v-else /></el-icon>
         </button>
         <div class="top-bar-spacer"></div>
@@ -115,8 +140,23 @@
         <el-icon v-else class="user-icon" size="24"><User /></el-icon>
       </div>
 
+      <!-- 部门状态警告 Banner（刷新后依然可见，直到用户手动关闭） -->
+      <transition name="dept-banner">
+        <div
+          v-if="authStore.isLoggedIn && showDeptBanner && deptBannerInfo"
+          class="dept-status-banner"
+          :class="`dept-status-banner--${deptBannerInfo.type}`"
+        >
+          <el-icon class="dept-banner__icon"><Warning /></el-icon>
+          <span class="dept-banner__text">{{ deptBannerInfo.message }}</span>
+          <el-button link size="small" class="dept-banner__close" @click="dismissDeptBanner">
+            <el-icon><Close /></el-icon>
+          </el-button>
+        </div>
+      </transition>
+
       <!-- 页面内容 -->
-      <div class="page-container" :class="{ 'page-container--public': isPublicRoute }">
+      <div class="page-container" :class="{ 'page-container--public': !authStore.isLoggedIn }">
         <router-view />
       </div>
     </div>
@@ -136,7 +176,7 @@ import { onMounted, computed, ref, watch } from 'vue'
 import { isDark, toggleTheme } from './composables/useTheme'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
-import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, HomeFilled, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine } from '@element-plus/icons-vue'
+import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, HomeFilled, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/common/NotificationBell.vue'
 import AnnouncementBanner from '@/components/common/AnnouncementBanner.vue'
 import AnnouncementPopup from '@/components/common/AnnouncementPopup.vue'
@@ -155,14 +195,43 @@ watch(() => route.path, (newPath) => {
   activeMenu.value = newPath
 })
 
-const isPublicRoute = computed(() => route.meta.public as boolean | undefined)
-
 const sidebarLogoSrc = computed(() => {
   return settingsStore.publicSettings?.site_logo || '/images/logo_example.png'
 })
 
 const siteTitle = computed(() => {
   return settingsStore.publicSettings?.site_name || '灵锋驿'
+})
+
+// ── 部门状态 Banner ────────────────────────────────────────────────────────
+const DEPT_BANNER_DISMISS_KEY = 'dept_banner_dismissed'
+const showDeptBanner = ref(sessionStorage.getItem(DEPT_BANNER_DISMISS_KEY) !== '1')
+
+const deptBannerInfo = computed<{ message: string; type: 'warning' | 'error' } | null>(() => {
+  const ds = authStore.deptStatus
+  if (ds === 'none') {
+    return { type: 'error', message: '你的账号暂未关联部门，部分功能可能受限，请联系平台管理员。' }
+  }
+  if (ds === 'pending_studio') {
+    return { type: 'warning', message: '你所在的部门尚未归入任何工作室，数据统计可能不完整，请联系管理员完成映射配置。' }
+  }
+  return null
+})
+
+function dismissDeptBanner() {
+  showDeptBanner.value = false
+  sessionStorage.setItem(DEPT_BANNER_DISMISS_KEY, '1')
+}
+
+// 当 dept_status 变为 active（映射完成后），自动隐藏 banner
+watch(() => authStore.deptStatus, (s) => {
+  if (s === 'active' || s == null) {
+    showDeptBanner.value = false
+    sessionStorage.removeItem(DEPT_BANNER_DISMISS_KEY)
+  } else {
+    // 新的问题状态出现时重置 dismissed，确保下次登录看到
+    showDeptBanner.value = true
+  }
 })
 
 onMounted(() => {
@@ -283,6 +352,19 @@ function onPopupAllRead() {
 .page-container--public {
   padding: 0;
   height: 100%;
+}
+
+/* org-tree 菜单项中"我的范围"小标签 */
+.menu-scope-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  font-size: 10px;
+  line-height: 1.4;
+  border-radius: 3px;
+  background: var(--el-color-primary-light-8);
+  color: var(--el-color-primary);
+  vertical-align: middle;
 }
 
 

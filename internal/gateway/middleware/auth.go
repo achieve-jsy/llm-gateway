@@ -14,14 +14,20 @@ import (
 
 // AuthMiddleware provides unified authentication (API key via auth service + JWT).
 // Replaces the old APIKeyAuth middleware.
+// 同时支持两种 Header 格式：
+//   - OpenAI 兼容格式：Authorization: Bearer sk-xxx
+//   - Anthropic 原生格式：x-api-key: sk-xxx（Claude Code 等客户端使用）
 func AuthMiddleware(authClient *infra.AuthClient) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		var token string
 		auth := c.GetHeader("Authorization")
-		if auth == "" || !strings.HasPrefix(auth, "Bearer ") {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gwmodel.ErrUnauthorized})
-			return
+		if strings.HasPrefix(auth, "Bearer ") {
+			// OpenAI 兼容格式：Authorization: Bearer sk-xxx
+			token = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+		} else {
+			// Anthropic 原生格式：x-api-key: sk-xxx（Claude Code 使用）
+			token = strings.TrimSpace(c.GetHeader("x-api-key"))
 		}
-		token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
 		if token == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gwmodel.ErrUnauthorized})
 			return

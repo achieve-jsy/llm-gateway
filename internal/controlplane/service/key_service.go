@@ -423,9 +423,8 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 
 	s.repo.TouchLastUsed(keyHash) // best-effort update
 
-	// 懒补全：如果 key 创建时未写入 user_name 或 dept_name/dept_id，异步补齐。
-	// dept_name/dept_id 也纳入触发条件，确保仅有 user_name 但 dept 信息为空的老 key 也能被补全。
-	if k.UserName == "" || k.DeptName == "" || k.DeptID == "" {
+	// 懒补全：如果 key 创建时未写入 user_name / dept / studio，异步补齐。
+	if k.UserName == "" || k.DeptName == "" || k.DeptID == "" || k.StudioName == "" {
 		go func() {
 			info, err := s.repo.GetUserDeptInfo(k.UserID)
 			if err != nil || info.UserName == "" {
@@ -434,7 +433,9 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 			k.UserName = info.UserName
 			k.DeptID = info.DeptID
 			k.DeptName = info.DeptName
-			_ = s.repo.BackfillUserDeptNames(k.ID, info.UserName, info.DeptID, info.DeptName)
+			k.StudioID = info.StudioID
+			k.StudioName = info.StudioName
+			_ = s.repo.BackfillUserDeptNames(k.ID, info.UserName, info.DeptID, info.DeptName, info.StudioID, info.StudioName)
 		}()
 	}
 

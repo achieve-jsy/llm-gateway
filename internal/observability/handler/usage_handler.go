@@ -10,7 +10,63 @@ import (
 
 	obsmodel "github.com/example/llm-gateway/internal/observability/model"
 	"github.com/example/llm-gateway/internal/observability/service"
+	"github.com/example/llm-gateway/internal/orgservice/rbac"
+	"github.com/example/llm-gateway/internal/orgservice/rbac/policy"
 )
+
+// DashboardSummary 汇总卡片
+type DashboardSummary struct {
+	TotalTokens      int64   `json:"total_tokens"`
+	CostEstimate     float64 `json:"cost_estimate"`
+	UserCount        int     `json:"user_count"`
+	CallCount        int64   `json:"call_count"`
+	ErrorCount       int64   `json:"error_count"`
+	SuccessRate      float64 `json:"success_rate"`
+	PrevCostEstimate float64 `json:"prev_cost_estimate"`
+	PrevCallCount    int64   `json:"prev_call_count"`
+}
+
+// DashboardBreakdownItem 排行列表行
+type DashboardBreakdownItem struct {
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	TotalTokens int64   `json:"total_tokens"`
+	CostEst     float64 `json:"cost_estimate"`
+	CallCount   int64   `json:"call_count"`
+	ErrorCount  int64   `json:"error_count"`
+	UserCount   int     `json:"user_count"`
+	Rank        int     `json:"rank"`
+}
+
+// TrendPoint 时间趋势数据点（按日聚合）
+type TrendPoint struct {
+	Date        string  `json:"date"`
+	Calls       int64   `json:"calls"`
+	Errors      int64   `json:"errors"`
+	TotalTokens int64   `json:"total_tokens"`
+	Cost        float64 `json:"cost"`
+}
+
+// ModelUsage 模型用量排行
+type ModelUsage struct {
+	Model       string  `json:"model"`
+	Calls       int64   `json:"calls"`
+	TotalTokens int64   `json:"total_tokens"`
+	Cost        float64 `json:"cost"`
+}
+
+// DashboardResponse 分层用量看板响应
+type DashboardResponse struct {
+	Scope     string                   `json:"scope"`
+	ID        string                   `json:"id"`
+	ScopeName string                   `json:"scope_name"`
+	Period    map[string]string        `json:"period"`
+	Summary   DashboardSummary         `json:"summary"`
+	Breakdown []DashboardBreakdownItem `json:"breakdown"`
+	Total     int                      `json:"total"`
+	Page      int                      `json:"page"`
+	PageSize  int                      `json:"page_size"`
+}
 
 // UsageHandler 用量与成本查询接口
 type UsageHandler struct {
@@ -215,4 +271,409 @@ func parseDateRange(c *gin.Context) (from, to time.Time, ok bool) {
 	}
 	ok = true
 	return
+}
+
+// GetDashboard GET /api/v1/usage/dashboard
+// 按 scope(company|studio|dept|user) 聚合用量，支持按角色注入过滤条件
+func (h *UsageHandler) GetDashboard(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db not configured"})
+		return
+	}
+
+	scope := c.DefaultQuery("scope", "company")
+	id := c.Query("id")
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+
+	startStr := c.DefaultQuery("start", time.Now().AddDate(0, -1, 0).Format("2006-01-02"))
+	endStr := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
+
+	// 用 Actor 替代手动查 user_roles 的 getEffectiveRole
+	// Guard(PermUsageViewScoped) middleware 已在路由层注入 Actor
+	userID := c.GetString("user_id")
+	actor := rbac.GetActor(c)
+	usagePolicy := policy.UsagePolicy{}
+	scope, id, _ = usagePolicy.EffectiveScope(actor, scope, id, userID)
+
+	// 构建聚合 SQL
+	// scope 语义：
+	//   company              → 按工作室聚合（全局）
+	//   studio (id="")       → 按工作室聚合（studio_admin 过滤到自己管辖）
+	//   studio (id=<uuid>)   → 按部门聚合，过滤到该工作室下的部门（下钻）
+	//   dept   (id=<sso_id>) → 按用户聚合，过滤到该部门的成员
+	//   user   (id=<uid>)    → 按模型聚合，只看该用户
+	var rows []struct {
+		GroupID     string  `gorm:"column:group_id"`
+		GroupName   string  `gorm:"column:group_name"`
+		TotalTokens int64   `gorm:"column:total_tokens"`
+		CostEst     float64 `gorm:"column:cost_est"`
+		UserCount   int     `gorm:"column:user_count"`
+		CallCount   int64   `gorm:"column:call_count"`
+		ErrorCount  int64   `gorm:"column:error_count"`
+	}
+
+	db := h.db.WithContext(c.Request.Context())
+
+	var groupExpr, nameExpr, whereClause string
+	var args []interface{}
+
+	switch scope {
+	case "dept":
+		// 按用户聚合，可选按部门过滤
+		groupExpr = "ud.user_id"
+		nameExpr = "COALESCE(u.name, ud.user_id)"
+		if id != "" {
+			whereClause = "AND ud.dept_id = ?"
+			args = append(args, id)
+		}
+	case "studio":
+		if id != "" {
+			// 下钻到工作室内的部门列表
+			groupExpr = "ud.dept_id"
+			nameExpr = "COALESCE(d.dept_name, ud.dept_id)"
+			whereClause = "AND dsm.studio_id::text = ?"
+			args = append(args, id)
+		} else {
+			// 按工作室聚合（studio_admin 起始视图）
+			groupExpr = "dsm.studio_id::text"
+			nameExpr = "COALESCE(s.name, dsm.studio_id::text)"
+		}
+	case "user":
+		// 按模型聚合，只看指定用户
+		groupExpr = "ud.model"
+		nameExpr = "ud.model"
+		if id != "" {
+			whereClause = "AND ud.user_id = ?"
+			args = append(args, id)
+		}
+	default: // company
+		groupExpr = "dsm.studio_id::text"
+		nameExpr = "COALESCE(s.name, dsm.studio_id::text)"
+	}
+
+	baseArgs := []interface{}{startStr, endStr}
+	queryArgs := append(baseArgs, args...)
+
+	rawSQL := `
+		SELECT ` + groupExpr + ` AS group_id,
+		       ` + nameExpr + ` AS group_name,
+		       SUM(ud.prompt_tokens + ud.completion_tokens + ud.reasoning_tokens) AS total_tokens,
+		       SUM(ud.est_cost_usd) AS cost_est,
+		       COUNT(DISTINCT ud.user_id) AS user_count,
+		       SUM(ud.req_count) AS call_count,
+		       SUM(ud.req_count - ud.success_count) AS error_count
+		FROM usage_daily ud
+		LEFT JOIN departments d ON d.dept_id = ud.dept_id
+		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = ud.dept_id
+		LEFT JOIN studios s ON s.id = dsm.studio_id
+		LEFT JOIN users u ON u.id::text = ud.user_id
+		WHERE ud.stat_date BETWEEN ? AND ?
+		` + whereClause + `
+		GROUP BY ` + groupExpr + `, ` + nameExpr + `
+		ORDER BY cost_est DESC
+	`
+
+	if err := db.Raw(rawSQL, queryArgs...).Scan(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 汇总当期（cost/tokens/calls 从排行直接加总；user_count 需全局去重避免跨组重复计数）
+	var summary DashboardSummary
+	for _, r := range rows {
+		summary.TotalTokens += r.TotalTokens
+		summary.CostEstimate += r.CostEst
+		summary.CallCount += r.CallCount
+		summary.ErrorCount += r.ErrorCount
+		// 不累加 r.UserCount，下面单独查全局去重人数
+	}
+	// 全局去重：用相同的 Actor 过滤条件查当期内活跃的唯一用户数
+	var userCountRow struct {
+		Count int `gorm:"column:cnt"`
+	}
+	userCountSQL := `
+		SELECT COUNT(DISTINCT ud.user_id) AS cnt
+		FROM usage_daily ud
+		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = ud.dept_id
+		WHERE ud.stat_date BETWEEN ? AND ?
+		` + whereClause
+	_ = db.Raw(userCountSQL, queryArgs...).Scan(&userCountRow).Error
+	summary.UserCount = userCountRow.Count
+	if summary.CallCount > 0 {
+		summary.SuccessRate = float64(summary.CallCount-summary.ErrorCount) / float64(summary.CallCount) * 100
+	} else {
+		summary.SuccessRate = 100
+	}
+
+	// 计算上一周期（环比）：相同时长的前一段
+	startDate, _ := time.Parse("2006-01-02", startStr)
+	endDate, _ := time.Parse("2006-01-02", endStr)
+	dur := endDate.Sub(startDate) + 24*time.Hour
+	prevEnd := startDate.AddDate(0, 0, -1)
+	prevStart := prevEnd.Add(-dur + 24*time.Hour)
+	var prevRow struct {
+		Cost  float64 `gorm:"column:cost"`
+		Calls int64   `gorm:"column:calls"`
+	}
+	_ = db.Table("usage_daily").
+		Select("SUM(est_cost_usd) AS cost, SUM(req_count) AS calls").
+		Where("stat_date BETWEEN ? AND ?", prevStart.Format("2006-01-02"), prevEnd.Format("2006-01-02")).
+		Scopes(usagePolicy.QueryScope(actor)).
+		Scan(&prevRow).Error
+	summary.PrevCostEstimate = prevRow.Cost
+	summary.PrevCallCount = prevRow.Calls
+
+	// 分页
+	total := len(rows)
+	start := (page - 1) * pageSize
+	end := start + pageSize
+	if start > total {
+		start = total
+	}
+	if end > total {
+		end = total
+	}
+	paged := rows[start:end]
+
+	breakdown := make([]DashboardBreakdownItem, 0, len(paged))
+	for i, r := range paged {
+		breakdown = append(breakdown, DashboardBreakdownItem{
+			ID:          r.GroupID,
+			Name:        r.GroupName,
+			TotalTokens: r.TotalTokens,
+			CostEst:     r.CostEst,
+			CallCount:   r.CallCount,
+			ErrorCount:  r.ErrorCount,
+			UserCount:   r.UserCount,
+			Rank:        start + i + 1,
+		})
+	}
+
+	c.JSON(http.StatusOK, DashboardResponse{
+		Scope:     scope,
+		ID:        id,
+		Period:    map[string]string{"start": startStr, "end": endStr},
+		Summary:   summary,
+		Breakdown: breakdown,
+		Total:     total,
+		Page:      page,
+		PageSize:  pageSize,
+	})
+}
+
+// DashboardTrend GET /api/v1/usage/dashboard/trend
+// 返回时间段内每日聚合：调用量、失败量、Token、成本（供前端趋势图使用）
+func (h *UsageHandler) DashboardTrend(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db not configured"})
+		return
+	}
+	startStr := c.DefaultQuery("start", time.Now().AddDate(0, -1, 0).Format("2006-01-02"))
+	endStr := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
+	filterUserID := c.Query("user_id")
+
+	actor := rbac.GetActor(c)
+	usagePol := policy.UsagePolicy{}
+
+	var rows []struct {
+		Date        string  `gorm:"column:date"`
+		Calls       int64   `gorm:"column:calls"`
+		Errors      int64   `gorm:"column:errors"`
+		TotalTokens int64   `gorm:"column:total_tokens"`
+		Cost        float64 `gorm:"column:cost"`
+	}
+	q := h.db.WithContext(c.Request.Context()).
+		Table("usage_daily").
+		Select(`stat_date::text AS date,
+			SUM(req_count) AS calls,
+			SUM(req_count - success_count) AS errors,
+			SUM(prompt_tokens + completion_tokens + reasoning_tokens) AS total_tokens,
+			SUM(est_cost_usd) AS cost`).
+		Where("stat_date BETWEEN ? AND ?", startStr, endStr).
+		Scopes(usagePol.QueryScope(actor))
+	if filterUserID != "" {
+		q = q.Where("user_id = ?", filterUserID)
+	}
+	if err := q.Group("stat_date").
+		Order("stat_date ASC").
+		Scan(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	points := make([]TrendPoint, 0, len(rows))
+	for _, r := range rows {
+		points = append(points, TrendPoint{
+			Date:        r.Date,
+			Calls:       r.Calls,
+			Errors:      r.Errors,
+			TotalTokens: r.TotalTokens,
+			Cost:        r.Cost,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"rows": points})
+}
+
+// DashboardModels GET /api/v1/usage/dashboard/models
+// 返回时间段内 Top N 模型成本分布
+func (h *UsageHandler) DashboardModels(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db not configured"})
+		return
+	}
+	startStr := c.DefaultQuery("start", time.Now().AddDate(0, -1, 0).Format("2006-01-02"))
+	endStr := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	if limit < 1 || limit > 30 {
+		limit = 10
+	}
+	filterUserID := c.Query("user_id")
+
+	actor := rbac.GetActor(c)
+	usagePol := policy.UsagePolicy{}
+
+	var rows []struct {
+		Model       string  `gorm:"column:model"`
+		Calls       int64   `gorm:"column:calls"`
+		TotalTokens int64   `gorm:"column:total_tokens"`
+		Cost        float64 `gorm:"column:cost"`
+	}
+	q := h.db.WithContext(c.Request.Context()).
+		Table("usage_daily").
+		Select(`model,
+			SUM(req_count) AS calls,
+			SUM(prompt_tokens + completion_tokens + reasoning_tokens) AS total_tokens,
+			SUM(est_cost_usd) AS cost`).
+		Where("stat_date BETWEEN ? AND ?", startStr, endStr).
+		Scopes(usagePol.QueryScope(actor))
+	if filterUserID != "" {
+		q = q.Where("user_id = ?", filterUserID)
+	}
+	if err := q.Group("model").
+		Order("cost DESC").
+		Limit(limit).
+		Scan(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	result := make([]ModelUsage, 0, len(rows))
+	for _, r := range rows {
+		result = append(result, ModelUsage{
+			Model:       r.Model,
+			Calls:       r.Calls,
+			TotalTokens: r.TotalTokens,
+			Cost:        r.Cost,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"rows": result})
+}
+
+// ScopedLogs GET /api/v1/usage/scoped/logs
+// 按 JWT role 自动注入 scope 过滤，只返回元数据（无 prompt/response 内容）：
+//   admin       → 全公司所有记录
+//   studio_admin → 自己工作室下所有部门成员的记录
+//   dept_admin  → 自己部门成员的记录
+//   其他         → 仅自己的记录（等同 /my/usage/logs）
+func (h *UsageHandler) ScopedLogs(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db not configured"})
+		return
+	}
+
+	startStr := c.DefaultQuery("start", time.Now().AddDate(0, -1, 0).Format("2006-01-02"))
+	endStr := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
+	modelName    := c.Query("model_name")
+	statusStr    := c.Query("status")   // "success" | "error" | ""
+	filterUserID := c.Query("user_id")  // 查看特定成员时传入（精确）
+	filterUser   := c.Query("user_name") // 成员姓名模糊搜索
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 200 {
+		pageSize = 50
+	}
+
+	db := h.db.WithContext(c.Request.Context())
+
+	// 用 Actor 过滤：Guard(PermUsageViewScoped) 已在路由层注入 Actor
+	actor := rbac.GetActor(c)
+	usagePol := policy.UsagePolicy{}
+
+	base := db.Table("call_logs").
+		Where("ts::date BETWEEN ? AND ?", startStr, endStr).
+		Scopes(usagePol.QueryScope(actor))
+
+	// 可选过滤条件
+	if filterUserID != "" {
+		base = base.Where("user_id = ?", filterUserID)
+	}
+	if filterUser != "" {
+		base = base.Where("user_name ILIKE ?", "%"+filterUser+"%")
+	}
+	if modelName != "" {
+		base = base.Where("model ILIKE ?", "%"+modelName+"%")
+	}
+	switch statusStr {
+	case "success":
+		base = base.Where("status = 200")
+	case "error":
+		base = base.Where("status <> 200")
+	}
+
+	// Count
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	cols := `request_id, ts,
+		key_name, user_id, user_name, dept_id, dept_name, studio_id, studio_name,
+		model, routed_model, group_name, provider,
+		prompt_tokens, cached_tokens, cache_write_tokens,
+		completion_tokens, reasoning_tokens, total_tokens,
+		status, duration_ms, first_token_ms,
+		est_cost_usd, input_cost_usd, output_cost_usd,
+		stream, failover_used, usage_missing, reasoning_effort,
+		ip_address, request_body, response_body`
+
+	var rows []map[string]interface{}
+	if err := base.Select(cols).
+		Order("ts DESC").
+		Limit(pageSize).Offset((page - 1) * pageSize).
+		Find(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"rows":      rows,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
+}
+
+func toString(v interface{}) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func toString2(v interface{}, _ bool) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
 }

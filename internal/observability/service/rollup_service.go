@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
 	"github.com/example/llm-gateway/internal/gateway/observability/model"
@@ -487,7 +488,6 @@ type LogRow struct {
 	StageUpstreamMs  *int16   `json:"stage_upstream_ms"   gorm:"column:stage_upstream_ms"`
 	Stream           bool     `json:"stream"              gorm:"column:stream"`
 	FailoverUsed     bool     `json:"failover_used"       gorm:"column:failover_used"`
-	RoutedViaGroup   bool     `json:"routed_via_group"    gorm:"column:routed_via_group"`
 	UsageMissing     bool     `json:"usage_missing"       gorm:"column:usage_missing"`
 	ReasoningEffort  string   `json:"reasoning_effort"    gorm:"column:reasoning_effort"`
 	UserAgent        string   `json:"user_agent"          gorm:"column:user_agent"`
@@ -496,8 +496,10 @@ type LogRow struct {
 	OutputCostUSD       float64  `json:"output_cost_usd"       gorm:"column:output_cost_usd"`
 	CacheReadCostUSD    float64  `json:"cache_read_cost_usd"   gorm:"column:cache_read_cost_usd"`
 	EstCostUSD          float64  `json:"est_cost_usd"          gorm:"column:est_cost_usd"`
-	InputPriceSnapshot  *float64 `json:"input_price_snapshot"  gorm:"column:input_price_snapshot"`
-	OutputPriceSnapshot *float64 `json:"output_price_snapshot" gorm:"column:output_price_snapshot"`
+	InputPriceSnapshot  *float64        `json:"input_price_snapshot"  gorm:"column:input_price_snapshot"`
+	OutputPriceSnapshot *float64        `json:"output_price_snapshot" gorm:"column:output_price_snapshot"`
+	RequestBody         *datatypes.JSON `json:"request_body,omitempty"  gorm:"column:request_body"`
+	ResponseBody        *datatypes.JSON `json:"response_body,omitempty" gorm:"column:response_body"`
 }
 
 // LogsResponse 明细查询响应
@@ -575,10 +577,11 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 			"prompt_tokens, cached_tokens, cache_write_tokens, completion_tokens, reasoning_tokens, total_tokens, " +
 			"status, upstream_status, duration_ms, first_token_ms, " +
 			"stage_ttfb_ms, stage_auth_ms, stage_route_ms, stage_upstream_ms, " +
-			"stream, failover_used, routed_via_group, usage_missing, " +
+			"stream, failover_used, usage_missing, " +
 			"reasoning_effort, user_agent, ip_address, " +
 			"input_cost_usd, output_cost_usd, cache_read_cost_usd, est_cost_usd, " +
-			"input_price_snapshot, output_price_snapshot").
+			"input_price_snapshot, output_price_snapshot, " +
+			"request_body, response_body").
 		Order("ts DESC").
 		Offset(offset).
 		Limit(params.PageSize).

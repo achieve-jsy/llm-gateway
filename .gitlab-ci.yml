@@ -45,7 +45,7 @@ workflow:
 # ═══════════════════════════════════════════════════════════════════════════════
 build-gateway-test:
   stage: build
-  image: ${REGISTRY}/docker:24
+  image: docker:24
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
@@ -60,7 +60,7 @@ build-gateway-test:
 
 build-control-plane-test:
   stage: build
-  image: ${REGISTRY}/docker:24
+  image: docker:24
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
@@ -75,7 +75,7 @@ build-control-plane-test:
 
 build-web-test:
   stage: build
-  image: ${REGISTRY}/node:20-alpine
+  image: node:20-alpine
   tags: [docker]
   script:
     - cd web
@@ -94,7 +94,7 @@ build-web-test:
 # ═══════════════════════════════════════════════════════════════════════════════
 build-gateway-prod:
   stage: build
-  image: ${REGISTRY}/docker:24
+  image: docker:24
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
@@ -109,7 +109,7 @@ build-gateway-prod:
 
 build-control-plane-prod:
   stage: build
-  image: ${REGISTRY}/docker:24
+  image: docker:24
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
@@ -124,7 +124,7 @@ build-control-plane-prod:
 
 build-web-prod:
   stage: build
-  image: ${REGISTRY}/node:20-alpine
+  image: node:20-alpine
   tags: [docker]
   script:
     - cd web
@@ -146,7 +146,7 @@ build-web-prod:
 # ═══════════════════════════════════════════════════════════════════════════════
 migrate-prod:
   stage: migrate
-  image: ${REGISTRY}/alpine:3.21
+  image: alpine:3.21
   tags: [docker]
   cache:
     key: atlas-bin
@@ -342,4 +342,3 @@ verify-test:
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
       changes: *test-significant-changes
-

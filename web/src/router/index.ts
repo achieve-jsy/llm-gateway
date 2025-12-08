@@ -100,6 +100,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '公告管理' }
   },
   {
+    path: '/admin/model-status-logs',
+    name: 'ModelStatusLogs',
+    component: () => import('@/views/admin/ModelStatusLogPage.vue'),
+    meta: { title: '模型状态变更日志' }
+  },
+  {
     path: '/announcements',
     name: 'AnnouncementFeed',
     component: () => import('@/views/AnnouncementFeedPage.vue'),

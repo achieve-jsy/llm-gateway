@@ -128,6 +128,17 @@ func (f *fakeModelRepoForModelSvc) GetHealthByNames(names []string) (map[string]
 	}
 	return nil, nil
 }
+func (f *fakeModelRepoForModelSvc) UpdateEnabled(id uuid.UUID, enabled *bool) error { return nil }
+func (f *fakeModelRepoForModelSvc) UpdateStatus(id uuid.UUID, enabled bool, status int) error { return nil }
+func (f *fakeModelRepoForModelSvc) AutoDisableModel(id uuid.UUID) error { return nil }
+func (f *fakeModelRepoForModelSvc) AutoEnableModel(id uuid.UUID) error { return nil }
+func (f *fakeModelRepoForModelSvc) IncrementModelFailures(id uuid.UUID) (int, error) { return 0, nil }
+func (f *fakeModelRepoForModelSvc) ResetModelFailures(id uuid.UUID) error { return nil }
+func (f *fakeModelRepoForModelSvc) UpdateModelCheckResult(id uuid.UUID, responseTime int, checkError string) error {
+	return nil
+}
+func (f *fakeModelRepoForModelSvc) IncrementRecoverySuccesses(id uuid.UUID) error { return nil }
+func (f *fakeModelRepoForModelSvc) ResetRecoverySuccesses(id uuid.UUID) error { return nil }
 
 // fakeProviderRepoForModelSvc 模拟 ProviderRepoInterface 用于 ModelService 单测
 type fakeProviderRepoForModelSvc struct {

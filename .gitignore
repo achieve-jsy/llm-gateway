@@ -37,4 +37,4 @@ node_modules/
 # ── Speckit 工作流配置 ────────────────────────────────────────────────────────
 .specify/
 .specs/
-specs/
+# specs/

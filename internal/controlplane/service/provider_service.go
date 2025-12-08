@@ -54,6 +54,15 @@ type ModelRepoInterface interface {
 	BatchUpdateEnabled(ids []uuid.UUID, enabled bool) (int64, error)
 	DeleteModelTagRelations(modelID uuid.UUID) error
 	GetHealthByNames(names []string) (map[string]repository.ModelHealthSummary, error)
+	UpdateEnabled(id uuid.UUID, enabled *bool) error
+	UpdateStatus(id uuid.UUID, enabled bool, status int) error
+	AutoDisableModel(id uuid.UUID) error
+	AutoEnableModel(id uuid.UUID) error
+	IncrementModelFailures(id uuid.UUID) (int, error)
+	ResetModelFailures(id uuid.UUID) error
+	UpdateModelCheckResult(id uuid.UUID, responseTime int, checkError string) error
+	IncrementRecoverySuccesses(id uuid.UUID) error
+	ResetRecoverySuccesses(id uuid.UUID) error
 }
 
 // ProviderService 渠道配置管理服务

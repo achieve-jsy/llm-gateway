@@ -57,7 +57,25 @@ body,
 
     .sidebar-menu {
       flex: 1;
+      min-height: 0;  // 允许 flex 子项收缩，使 overflow-y 生效
       padding: 10px 8px;
+      overflow-y: auto;
+      overflow-x: hidden;
+
+      // 自定义滚动条：细且与主题协调
+      &::-webkit-scrollbar {
+        width: 4px;
+      }
+      &::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      &::-webkit-scrollbar-thumb {
+        background-color: var(--el-border-color);
+        border-radius: 4px;
+        &:hover {
+          background-color: var(--el-border-color-dark);
+        }
+      }
 
       .sidebar--collapsed & {
         padding: 10px 0;

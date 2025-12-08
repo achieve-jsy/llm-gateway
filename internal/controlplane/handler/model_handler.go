@@ -23,6 +23,7 @@ type ModelServiceInterface interface {
 	CheckModelName(name string, providerID uuid.UUID) (bool, error)
 	BatchDeleteModels(ids []uuid.UUID) (int64, error)
 	BatchUpdateModelStatus(ids []uuid.UUID, enabled bool) (int64, error)
+	BatchUpdateModelStatusWithOperator(ids []uuid.UUID, enabled bool, operatorID *uuid.UUID, operatorName string) (int64, error)
 
 	// Catalog 联动（CAT-1）
 	CreateModelFromCatalog(catalogID, providerID uuid.UUID, name string) (*model.Model, error)
@@ -288,12 +289,17 @@ func (h *ModelHandler) BatchUpdateModelStatus(c *gin.Context) {
 		ids = append(ids, id)
 	}
 
-	updated, err := h.svc.BatchUpdateModelStatus(ids, *input.Enabled)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": gin.H{"type": "internal_error", "message": "failed to batch update model status", "code": CodeInternalError},
-		})
-		return
+	operatorID, operatorName := extractOperator(c)
+
+	var updated int64
+	for _, id := range ids {
+		if _, err := h.svc.BatchUpdateModelStatusWithOperator([]uuid.UUID{id}, *input.Enabled, operatorID, operatorName); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": gin.H{"type": "internal_error", "message": "failed to batch update model status", "code": CodeInternalError},
+			})
+			return
+		}
+		updated++
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"updated": updated}})
@@ -560,4 +566,19 @@ func (h *ModelHandler) BatchBindCatalog(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": res})
+}
+
+func extractOperator(c *gin.Context) (*uuid.UUID, string) {
+	userID := c.GetString("user_id")
+	userName := c.GetString("user_name")
+
+	if userID != "" {
+		if id, err := uuid.Parse(userID); err == nil {
+			return &id, userName
+		}
+	}
+	if userName != "" {
+		return nil, userName
+	}
+	return nil, ""
 }

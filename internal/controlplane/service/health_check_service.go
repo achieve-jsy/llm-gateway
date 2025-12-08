@@ -56,6 +56,8 @@ type HealthCheckService struct {
 
 	groupCheckSvc *GroupCheckService // 可选：模型组检测（nil 表示未启用）
 
+	modelStatusLogSvc *ModelStatusLogService // 模型状态变更日志服务
+
 	mu                   sync.Mutex
 	cancel               context.CancelFunc
 	modelCheckCancel     context.CancelFunc
@@ -83,6 +85,11 @@ func NewHealthCheckService(
 // SetGroupCheckService 注入模型组检测服务（在 router 中完成依赖装配后调用）
 func (s *HealthCheckService) SetGroupCheckService(svc *GroupCheckService) {
 	s.groupCheckSvc = svc
+}
+
+// SetModelStatusLogService 注入模型状态变更日志服务
+func (s *HealthCheckService) SetModelStatusLogService(svc *ModelStatusLogService) {
+	s.modelStatusLogSvc = svc
 }
 
 // GetConfig 获取配置
@@ -307,6 +314,15 @@ func (s *HealthCheckService) runBackgroundModelCheck() {
 		maxFailures = config.ModelCheckFailureThreshold
 	}
 
+	recoveryEnabled := false
+	recoveryThreshold := 2
+	if config != nil && config.ModelRecoveryEnabled {
+		recoveryEnabled = true
+		if config.ModelRecoverySuccessThreshold > 0 {
+			recoveryThreshold = config.ModelRecoverySuccessThreshold
+		}
+	}
+
 	filter := &repository.ModelListFilter{}
 	models, _, err := s.modelRepo.List(*filter, 0, 1000)
 	if err != nil {
@@ -322,9 +338,12 @@ func (s *HealthCheckService) runBackgroundModelCheck() {
 	for i := range models {
 		m := &models[i]
 		if m.Enabled == nil || !*m.Enabled {
-			continue
+			// 手动禁用 (status=2) 跳过，自动禁用 (status=3) 继续检测
+			if m.Status != model.ModelStatusAutoDisabled {
+				continue
+			}
+			// status=3 的模型继续检测
 		}
-		// 音频类模型无法用轻量探针，直接跳过（ProbeModelForward 内部也会跳过，这里提前过滤减少并发数）
 		if strings.Contains(strings.ToLower(m.ModelType), "audio") {
 			continue
 		}
@@ -344,9 +363,45 @@ func (s *HealthCheckService) runBackgroundModelCheck() {
 				s.modelRepo.ResetModelFailures(mod.ID)
 				s.modelRepo.UpdateModelCheckResult(mod.ID, elapsed, "")
 				s.recordLog("model", mod.ID, mod.Name, mod.Provider.ID, mod.Provider.Name, true, elapsed, "")
+
+				// 恢复逻辑：自动禁用的模型检测成功时处理恢复条件
+				if mod.Status == model.ModelStatusAutoDisabled && recoveryEnabled {
+					newRecoveryCount := mod.ConsecutiveRecoverySuccesses + 1
+					slog.Info("model auto-recovery: success count increased",
+						"model_id", mod.ID, "model_name", mod.Name,
+						"recovery_successes", newRecoveryCount, "threshold", recoveryThreshold)
+
+					if newRecoveryCount >= recoveryThreshold {
+						slog.Warn("model auto-recovery: threshold reached, re-enabling",
+							"model_id", mod.ID, "model_name", mod.Name,
+							"recovery_successes", newRecoveryCount)
+						if err := s.modelRepo.AutoEnableModel(mod.ID); err == nil {
+							reason := fmt.Sprintf("连续 %d 次健康检测成功", newRecoveryCount)
+							if s.modelStatusLogSvc != nil {
+								s.modelStatusLogSvc.LogStatusChange(
+									mod.ID, mod.Provider.ID,
+									mod.Name, mod.Provider.Name,
+									model.ChangeTypeAutoRecovered,
+									reason, "",
+									nil, "",
+								)
+							}
+						}
+					} else {
+						// 未达阈值：递增 recovery_successes
+						s.modelRepo.IncrementRecoverySuccesses(mod.ID)
+					}
+				}
 			} else {
 				s.modelRepo.UpdateModelCheckResult(mod.ID, elapsed, errMsg)
 				s.recordLog("model", mod.ID, mod.Name, mod.Provider.ID, mod.Provider.Name, false, elapsed, errMsg)
+
+				// 失败时重置恢复成功计数
+				if mod.Status == model.ModelStatusAutoDisabled {
+					s.modelRepo.ResetRecoverySuccesses(mod.ID)
+					slog.Info("model auto-recovery: reset recovery successes due to failure",
+						"model_id", mod.ID, "model_name", mod.Name)
+				}
 
 				newCount, err := s.modelRepo.IncrementModelFailures(mod.ID)
 				if err == nil && newCount >= maxFailures {
@@ -354,6 +409,15 @@ func (s *HealthCheckService) runBackgroundModelCheck() {
 						"model_id", mod.ID, "model_name", mod.Name,
 						"failures", newCount, "threshold", maxFailures)
 					if err := s.modelRepo.AutoDisableModel(mod.ID); err == nil {
+						if s.modelStatusLogSvc != nil {
+							s.modelStatusLogSvc.LogStatusChange(
+								mod.ID, mod.Provider.ID,
+								mod.Name, mod.Provider.Name,
+								model.ChangeTypeAutoDisabled,
+								fmt.Sprintf("连续 %d 次健康检测失败", newCount),
+								errMsg, nil, "",
+							)
+						}
 						mu.Lock()
 						autoDisabled++
 						mu.Unlock()

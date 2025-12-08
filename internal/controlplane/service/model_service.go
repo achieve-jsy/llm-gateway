@@ -30,11 +30,12 @@ type CatalogLookup interface {
 
 // ModelService 模型注册管理服务
 type ModelService struct {
-	modelRepo     ModelRepoInterface
-	providerRepo  ProviderRepoInterface
-	publisher     *event.Publisher
-	snapshotter   *ProviderSnapshotRefresher
-	catalogLookup CatalogLookup // 可选，未注入时 ResetOverride / CreateModelFromCatalog 走 fallback / 报错
+	modelRepo          ModelRepoInterface
+	providerRepo       ProviderRepoInterface
+	publisher          *event.Publisher
+	snapshotter        *ProviderSnapshotRefresher
+	catalogLookup      CatalogLookup // 可选，未注入时 ResetOverride / CreateModelFromCatalog 走 fallback / 报错
+	modelStatusLogSvc  *ModelStatusLogService
 }
 
 // NewModelService 创建 ModelService 实例
@@ -55,6 +56,11 @@ func (s *ModelService) SetSnapshotRefresher(snapshotter *ProviderSnapshotRefresh
 // 测试可以传任意实现 GetByID 的对象。
 func (s *ModelService) SetCatalogLookup(lookup CatalogLookup) {
 	s.catalogLookup = lookup
+}
+
+// SetModelStatusLogService 注入模型状态变更日志服务
+func (s *ModelService) SetModelStatusLogService(svc *ModelStatusLogService) {
+	s.modelStatusLogSvc = svc
 }
 
 // publishEvent 安全发布事件（publisher 为 nil 或发布失败不影响业务）
@@ -249,9 +255,14 @@ func (s *ModelService) UpdateModel(id uuid.UUID, input UpdateModelInput) (*model
 
 	if input.Enabled != nil {
 		m.Enabled = input.Enabled
-		// 管理员显式切换启停后，清空失败状态，避免被健康检测按旧失败计数立即抢回。
 		m.ConsecutiveFailures = 0
 		m.LastCheckError = ""
+		m.ConsecutiveRecoverySuccesses = 0
+		if *input.Enabled {
+			m.Status = model.ModelStatusEnabled
+		} else {
+			m.Status = model.ModelStatusManuallyDisabled
+		}
 	}
 	if input.UpstreamModelID != nil {
 		m.UpstreamModelID = *input.UpstreamModelID
@@ -588,14 +599,46 @@ func (s *ModelService) BatchDeleteModels(ids []uuid.UUID) (int64, error) {
 	return affected, nil
 }
 
-// BatchUpdateModelStatus 批量更新模型启用状态
-func (s *ModelService) BatchUpdateModelStatus(ids []uuid.UUID, enabled bool) (int64, error) {
-	affected, err := s.modelRepo.BatchUpdateEnabled(ids, enabled)
-	if err != nil {
-		return 0, fmt.Errorf("batch update model status: %w", err)
+// BatchUpdateModelStatusWithOperator 批量更新模型启用状态（含操作人信息和状态日志）
+func (s *ModelService) BatchUpdateModelStatusWithOperator(ids []uuid.UUID, enabled bool, operatorID *uuid.UUID, operatorName string) (int64, error) {
+	// 批量更新 enabled 和 status 字段
+	for _, id := range ids {
+		status := model.ModelStatusManuallyDisabled
+		if enabled {
+			status = model.ModelStatusEnabled
+		}
+		if err := s.modelRepo.UpdateStatus(id, enabled, status); err != nil {
+			return 0, fmt.Errorf("batch update model status: %w", err)
+		}
+
+		// 记录状态变更日志
+		if s.modelStatusLogSvc != nil {
+			m, _ := s.modelRepo.GetByID(id)
+			if m != nil {
+				changeType := model.ChangeTypeManualDisabled
+				if enabled {
+					changeType = model.ChangeTypeManualEnabled
+				}
+				s.modelStatusLogSvc.LogStatusChange(
+					m.ID, m.ProviderID,
+					m.Name, m.Provider.Name,
+					changeType,
+					"管理员操作",
+					"",
+					operatorID, operatorName,
+				)
+			}
+		}
 	}
+
+	affected := int64(len(ids))
 	for _, id := range ids {
 		s.publishEvent(event.ModelUpdated, "model", id)
 	}
 	return affected, nil
+}
+
+// BatchUpdateModelStatus 批量更新模型启用状态（兼容旧接口）
+func (s *ModelService) BatchUpdateModelStatus(ids []uuid.UUID, enabled bool) (int64, error) {
+	return s.BatchUpdateModelStatusWithOperator(ids, enabled, nil, "")
 }

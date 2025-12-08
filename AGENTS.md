@@ -80,10 +80,11 @@ flowchart TB
 # 构建
 make build              # = build-gateway + build-cp（输出到 bin/）
 
-# 本地起依赖 + 服务
-make dev-infra          # Postgres + Redis
-make dev                # APP_ENV=dev go run ./cmd/gateway
-make dev-cp             # APP_ENV=dev go run ./cmd/control-plane（另一个终端）
+# 本地起服务（需自行准备 Postgres + Redis）
+make dev-all            # 一键并行起 control-plane + gateway + web（Ctrl-C 全部停止）
+make dev                # 仅 gateway：APP_ENV=dev go run ./cmd/gateway
+make dev-cp             # 仅 control-plane：APP_ENV=dev go run ./cmd/control-plane
+make dev-web            # 仅前端：cd web && npm run dev（Vite，:5173）
 
 # 测试
 make test               # 全部单元测试 + 组件测试（tests/ 下）
@@ -94,14 +95,16 @@ make swagger            # swag init -> api/swagger/docs
 make lint               # golangci-lint run ./...
 
 # 前端
-cd web && npm install && npm run dev        # 开发
-cd web && npx vite build                    # 构建到 web/dist（nginx 直接服务）
+cd web && npm install                       # 首次安装依赖
+cd web && npm run dev                        # 开发（Vite，:5173，含 HMR；亦可 make dev-web）
+cd web && npx vite build                     # 构建到 web/dist（生产由 nginx 直接服务）
 
 # OpenCode 插件
 cd tools/opencode-models-discovery && bun run build:bundle && bunx tsc --noEmit && bun test
 ```
 
-> 注意：`make dev-infra` 引用的 `docker-compose.dev.yml` 当前不在工作区且被 `.dockerignore` 忽略，跑前确认其存在或改用其它 compose。
+> 注意：Makefile 已移除 Docker 相关目标（`dev-infra` 等），Postgres/Redis 需自行准备；连接信息见 `.env` / `config/dev.yaml`。
+> 开发态前端走 Vite dev server，统一入口可挂 `deploy/docker/nginx-dev.conf`（:8090，`/` 反代到 Vite，`/v1`、`/api`、`/auth` 直连后端）。
 
 ## 约定与注意事项
 
@@ -133,4 +136,15 @@ cd tools/opencode-models-discovery && bun run build:bundle && bunx tsc --noEmit 
 
 - `README.md` — 快速开始与命令速查
 - `tests/README.md` — 测试原则、分层与文件组织
-- `xspec/` — 规格/契约相关资料
+
+<!-- SPECKIT START -->
+## 当前开发计划
+
+> 本节由 Spec Kit 自动管理，请勿手动修改。
+
+**当前功能**: 模型自动恢复 (Model Auto Recovery)
+
+- **计划文档**: [specs/001-model-auto-recovery/plan.md](specs/001-model-auto-recovery/plan.md)
+- **功能规格**: [specs/001-model-auto-recovery/spec.md](specs/001-model-auto-recovery/spec.md)
+- **数据模型**: [specs/001-model-auto-recovery/data-model.md](specs/001-model-auto-recovery/data-model.md)
+<!-- SPECKIT END -->

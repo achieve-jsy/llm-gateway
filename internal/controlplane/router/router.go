@@ -73,6 +73,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	modelTagRepo := repository.NewModelTagRepo(db)
 	announcementRepo := repository.NewAnnouncementRepo(db)
 	healthCheckRepo := repository.NewHealthCheckRepo(db)
+	modelStatusLogRepo := repository.NewModelStatusLogRepo(db)
 
 	keyRepo := repository.NewKeyRepo(db)
 
@@ -84,12 +85,17 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	publisher := event.NewPublisher(rdb)
 	snapshotter := service.NewProviderSnapshotRefresher(modelRepo, rdb)
 
+	// 创建状态日志服务（注入到需要记录日志的服务中）
+	modelStatusLogSvc := service.NewModelStatusLogService(modelStatusLogRepo)
+
 	providerSvc := service.NewProviderService(providerRepo, modelRepo, publisher)
 	providerSvc.SetSnapshotRefresher(snapshotter)
 	modelSvc := service.NewModelService(modelRepo, providerRepo, publisher)
 	modelSvc.SetSnapshotRefresher(snapshotter)
+	modelSvc.SetModelStatusLogService(modelStatusLogSvc)
 	internalSvc := service.NewInternalService(modelRepo, providerRepo)
 	healthCheckSvc := service.NewHealthCheckService(healthCheckRepo, providerRepo, modelRepo, rdb)
+	healthCheckSvc.SetModelStatusLogService(modelStatusLogSvc)
 
 	groupRepo := repository.NewGroupRepo(db)
 	keyGroupRepo := repository.NewKeyGroupRepo(db)
@@ -139,6 +145,9 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	syncSvc := service.NewSyncService(providerRepo, modelRepo, publisher)
 	syncSvc.SetSnapshotRefresher(snapshotter)
 	syncHandler := handler.NewSyncHandler(syncSvc, providerRepo)
+
+	// 模型状态变更日志
+	modelStatusLogHandler := handler.NewModelStatusLogHandler(modelStatusLogRepo)
 
 	keyHandler := handler.NewKeyHandler(keySvc)
 	settingsHandler := handler.NewSettingsHandler(settingsSvc)
@@ -249,6 +258,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.POST("/models/from-catalog", modelHandler.CreateModelFromCatalog)
 		// CAT-2：批量绑定（静态路径，必须在 :id 之前）
 		adminGroup.POST("/models/batch-bind-catalog", modelHandler.BatchBindCatalog)
+		adminGroup.GET("/models/:id/status-logs", modelStatusLogHandler.GetModelStatusLogs)
 		adminGroup.PUT("/models/:id", modelHandler.UpdateModel)
 		adminGroup.DELETE("/models/:id", modelHandler.DeleteModel)
 		adminGroup.POST("/models/:id/check", modelCheckHandler.CheckOne)
@@ -273,6 +283,9 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.POST("/health-check/run", healthCheckHandler.RunNow)
 		adminGroup.GET("/health-check/timeline", healthCheckHandler.GetTimeline)
 		adminGroup.GET("/health-check/group-timeline", healthCheckHandler.GetGroupTimeline)
+
+		// 模型状态变更日志
+		adminGroup.GET("/model-status-logs", modelStatusLogHandler.ListModelStatusLogs)
 
 		// 模型 Catalog（注意：source_model_id 含 '/'，通过 query 入口而非路径参数访问）
 		adminGroup.GET("/model-catalog/search", catalogHandler.Search)

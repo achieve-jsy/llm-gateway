@@ -55,19 +55,13 @@
 ### 前置要求
 
 - Go 1.22+
-- Docker & Docker Compose
+- PostgreSQL + Redis（自行准备，连接信息见 `.env` / `config/dev.yaml`）
 - Node.js 18+（前端开发）
 - Bun（仅在改 `tools/opencode-models-discovery` 插件时需要）
 
-### 1. 启动基础设施
+### 1. 准备基础设施
 
-```bash
-# 启动 Postgres + Redis
-make dev-infra
-
-# 如需可观测性组件（Jaeger + OTel Collector）
-make dev-infra-full
-```
+确保本地或可访问的 **PostgreSQL** 与 **Redis** 已就绪，并在 `.env` / `config/dev.yaml` 中配置好 `DATABASE_URL`、`REDIS_ADDR` 等连接信息。
 
 ### 2. 配置环境
 
@@ -84,12 +78,21 @@ config/
 
 ### 3. 启动服务
 
-```bash
-# 启动 gateway-api
-make dev
+一键启动整套开发环境（control-plane + gateway + web 前端）：
 
-# 启动 control-plane（另一个终端）
-make dev-cp
+```bash
+# 同一个终端并行拉起三者，Ctrl-C 一次性停止
+make dev-all
+```
+
+> 前端由 Vite 开发服务器提供（`https://localhost:5173`，含 HMR 热更新）。如需通过统一入口访问，可挂上 `deploy/docker/nginx-dev.conf`（默认监听 `:8090`，已将 `/` 反代到 Vite，`/v1`、`/api`、`/auth` 直连后端）。首次运行前端前请先 `cd web && npm install`。
+
+也可按需单独启动各服务：
+
+```bash
+make dev      # 仅 gateway
+make dev-cp   # 仅 control-plane
+make dev-web  # 仅 web 前端（Vite）
 ```
 
 ### 4. 验证
@@ -173,11 +176,10 @@ make swagger
 | `make test` | 运行所有测试 |
 | `make lint` | 代码静态检查 |
 | `make swagger` | 生成 Swagger 文档 |
-| `make dev` | 启动开发环境 (gateway) |
-| `make dev-cp` | 启动开发环境 (control-plane) |
-| `make dev-infra` | 启动 Postgres + Redis |
-| `make dev-infra-full` | 启动全部基础设施 (含 Jaeger/Langfuse) |
-| `make dev-down` | 停止所有容器 |
+| `make dev-all` | 一键启动开发环境 (control-plane + gateway + web)，Ctrl-C 全部停止 |
+| `make dev` | 仅启动 gateway |
+| `make dev-cp` | 仅启动 control-plane |
+| `make dev-web` | 仅启动 web 前端 (Vite) |
 | `make clean` | 清理构建产物 |
 
 ## 可观测性
@@ -190,10 +192,10 @@ OTLP_ENABLED=true
 OTLP_ENDPOINT=localhost:4317
 ```
 
-启动 Jaeger UI 查看 trace：
+启动 Jaeger + OTel Collector 查看 trace（可选可观测性组件）：
 
 ```bash
-make dev-infra-full
+docker compose --profile observability up -d
 # 打开 http://localhost:16686
 ```
 

@@ -147,6 +147,9 @@ export interface HealthCheckConfig {
   model_check_interval_minutes: number
   model_check_interval_seconds: number
   model_check_failure_threshold: number
+  // 模型自动恢复配置
+  model_recovery_enabled: boolean
+  model_recovery_success_threshold: number
 }
 
 /** 获取健康检测配置 */
@@ -158,6 +161,43 @@ export async function getHealthCheckConfig(): Promise<HealthCheckConfig> {
 /** 更新健康检测配置 */
 export async function updateHealthCheckConfig(payload: Partial<HealthCheckConfig>): Promise<HealthCheckConfig> {
   const response = await http.put<ApiResponse<HealthCheckConfig>>('/api/v1/health-check/config', payload)
+  return response.data.data
+}
+
+// ===================== 模型状态变更日志 =====================
+
+/** 模型状态变更日志 */
+export interface ModelStatusLog {
+  id: string
+  model_id: string
+  model_name: string
+  provider_id: string
+  provider_name: string
+  change_type: 'auto_disabled' | 'auto_recovered' | 'manual_disabled' | 'manual_enabled'
+  reason: string
+  error_message: string
+  operator_id?: string
+  operator_name: string
+  created_at: string
+}
+
+/** 获取模型状态变更日志列表（支持筛选和分页） */
+export async function getModelStatusLogs(params: {
+  model_id?: string
+  provider_id?: string
+  change_type?: string
+  start_time?: string
+  end_time?: string
+  page?: number
+  page_size?: number
+}): Promise<{ items: ModelStatusLog[]; total: number; page: number; page_size: number }> {
+  const response = await http.get<ApiResponse<{ items: ModelStatusLog[]; total: number; page: number; page_size: number }>>('/api/v1/model-status-logs', { params })
+  return response.data.data
+}
+
+/** 获取单个模型的状态变更日志 */
+export async function getModelStatusLogsByModel(modelId: string, limit?: number): Promise<ModelStatusLog[]> {
+  const response = await http.get<ApiResponse<ModelStatusLog[]>>(`/api/v1/models/${modelId}/status-logs`, { params: { limit } })
   return response.data.data
 }
 

@@ -424,7 +424,8 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 	s.repo.TouchLastUsed(keyHash) // best-effort update
 
 	// 懒补全：如果 key 创建时未写入 user_name / dept / studio，异步补齐。
-	if k.UserName == "" || k.DeptName == "" || k.DeptID == "" || k.StudioName == "" {
+	// 注意：StudioID 也要纳入判断——部门映射工作室后需要重新补全。
+	if k.UserName == "" || k.DeptName == "" || k.DeptID == "" || k.StudioName == "" || k.StudioID == "" {
 		go func() {
 			info, err := s.repo.GetUserDeptInfo(k.UserID)
 			if err != nil || info.UserName == "" {
@@ -435,7 +436,13 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 			k.DeptName = info.DeptName
 			k.StudioID = info.StudioID
 			k.StudioName = info.StudioName
-			_ = s.repo.BackfillUserDeptNames(k.ID, info.UserName, info.DeptID, info.DeptName, info.StudioID, info.StudioName)
+			if err := s.repo.BackfillUserDeptNames(k.ID, info.UserName, info.DeptID, info.DeptName, info.StudioID, info.StudioName); err == nil {
+				// backfill 成功后发 key_updated 事件，让 gateway KeyCache 主动失效
+				if s.publisher != nil {
+					s.publisher.InvalidateKeyCache(k.KeyHash)
+					s.publisher.Publish(event.KeyUpdated, "api_key", k.ID)
+				}
+			}
 		}()
 	}
 

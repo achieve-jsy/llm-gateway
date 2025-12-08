@@ -1,0 +1,43 @@
+# 测试环境配置 (APP_ENV=test)
+# 部署目标: 192.0.2.10
+server:
+  port: "8080"
+
+controlplane:
+  port: "8081"
+
+redis:
+  addr: "127.0.0.1:6379"
+  password: "redis_bGNhwx"
+  db: 0
+
+database:
+  url: "postgres://llm_gateway_test:CHANGE_ME_PASSWORD@127.0.0.1:5432/llm_gateway_test?sslmode=disable"
+
+otlp:
+  endpoint: "localhost:4317"
+  enabled: false
+
+provider:
+  internal_token: "dev-test-token"
+  control_plane_url: "http://127.0.0.1:8081"
+
+auth:
+  url: "http://127.0.0.1:8081"
+  token: "dev-test-token"
+
+oauth:
+  issuer_url: "https://oauth.example.net/"
+  client_id: "5514f6bb0a"
+  client_secret: "CHANGE_ME_OAUTH_SECRET"
+  redirect_uri: "http://192.0.2.10:9080/auth/callback"
+  scopes: "openid profile email"
+
+jwt:
+  secret: "d8f7a3b2c1e9f4567890abc123def456"
+
+frontend:
+  url: "http://192.0.2.10:9080"
+
+gateway:
+  url: "http://192.0.2.10:9080"

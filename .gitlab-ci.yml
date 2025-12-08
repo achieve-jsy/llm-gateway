@@ -16,7 +16,7 @@ variables:
   PROD_HOST: "192.0.2.10"
   PROD_PATH: "/opt/llm-gateway"
   # Atlas 基线版本（atlas-migrations/20260609082623_baseline.sql 的时间戳）。
-  # 首次对"已有 schema 的非空库"执行迁移时，把该版本标记为已应用且不执行其 SQL；
+  # 首次对“已有 schema 的非空库”执行迁移时，把该版本标记为已应用且不执行其 SQL；
   # revision 表建立后再带此参数为无操作（幂等）。注意：切勿对空库使用，否则不会建表。
   ATLAS_BASELINE: "20260609082623"
 

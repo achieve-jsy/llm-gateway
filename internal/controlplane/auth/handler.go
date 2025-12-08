@@ -20,16 +20,27 @@ import (
 	arepo "github.com/example/llm-gateway/internal/auth/repository"
 )
 
+// BootstrapGranter 由 *bootstrap.Checker 实现，通过接口注入避免循环依赖
+type BootstrapGranter interface {
+	CheckAndGrant(ctx context.Context, email, userID string) bool
+}
+
 type Handler struct {
-	config       *Config
-	oauthConfig  *oauth2.Config
-	endpoints    *OIDCEndpoints
-	db           *gorm.DB
-	rdb          *redis.Client
-	userRepo     *arepo.UserRepository
-	deptRepo     *arepo.DeptRepository
-	initAttempted bool
-	initErr      error
+	config           *Config
+	oauthConfig      *oauth2.Config
+	endpoints        *OIDCEndpoints
+	db               *gorm.DB
+	rdb              *redis.Client
+	userRepo         *arepo.UserRepository
+	deptRepo         *arepo.DeptRepository
+	bootstrapGranter BootstrapGranter
+	initAttempted    bool
+	initErr          error
+}
+
+// SetBootstrapChecker 在 router 初始化后注入 bootstrap 检查器
+func (h *Handler) SetBootstrapChecker(g BootstrapGranter) {
+	h.bootstrapGranter = g
 }
 
 type DaQunUserInfo struct {
@@ -184,6 +195,18 @@ func (h *Handler) Callback(c *gin.Context) {
 
 	user, deptID, deptName := h.upsertUser(userInfo)
 
+	// ── Bootstrap：若系统无管理员且当前账号在白名单，自动授予 admin ──────────
+	isBootstrapAdmin := false
+	if h.bootstrapGranter != nil {
+		if h.bootstrapGranter.CheckAndGrant(c.Request.Context(), userInfo.Email, user.ID.String()) {
+			user.Role = "admin"
+			isBootstrapAdmin = true
+		}
+	}
+
+	// ── 部门映射状态（供前端展示引导提示） ─────────────────────────────────
+	deptStatus := h.deptMappingStatus(userInfo.EhrDeptID)
+
 	accessToken, err := GenerateAccessToken(h.config.JWTSecret, h.config.AccessTokenTTL, user.ID.String(), deptID, deptName, userInfo.Email, userInfo.Name, userInfo.Passport, user.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "failed to generate token", "code": "token_generation_failed"}})
@@ -206,7 +229,9 @@ func (h *Handler) Callback(c *gin.Context) {
 			"departmentId":   deptID,
 			"departmentName": deptName,
 		},
-		"role": user.Role,
+		"role":               user.Role,
+		"dept_status":        deptStatus,
+		"is_bootstrap_admin": isBootstrapAdmin,
 	})
 }
 
@@ -215,6 +240,7 @@ func (h *Handler) upsertUser(info *DaQunUserInfo) (*amodel.User, string, string)
 	deptID := info.EhrDeptID
 	deptName := info.EhrDeptName
 
+	// 确保部门记录存在
 	var deptModel *amodel.Department
 	if deptID != "" {
 		dept, err := h.deptRepo.FindByDeptID(deptID)
@@ -233,7 +259,34 @@ func (h *Handler) upsertUser(info *DaQunUserInfo) (*amodel.User, string, string)
 	if err == nil && existingUser != nil {
 		existingUser.Name = info.Name
 		existingUser.Email = info.Email
+
 		if deptModel != nil {
+			// dept_source=manual：不覆盖手动归属，改为记录冲突提醒
+			if existingUser.DeptSource == "manual" {
+				currentDeptID := ""
+				if existingUser.DeptID != nil {
+					currentDeptID = existingUser.DeptID.String()
+				}
+				if currentDeptID != deptModel.ID.String() {
+					// 异步写冲突提醒，不阻塞登录
+					go func() {
+						if err := h.db.Exec(`
+							INSERT INTO user_dept_conflicts(user_id, current_dept_id, sso_dept_id, sso_dept_name)
+							VALUES(?, NULLIF(?,'')::uuid, NULLIF(?,'')::uuid, ?)
+							ON CONFLICT DO NOTHING
+						`, existingUser.ID, currentDeptID, deptModel.ID.String(), deptName).Error; err != nil {
+							slog.Warn("failed to record dept conflict", "user_id", existingUser.ID, "error", err)
+						}
+					}()
+				}
+				// 只更新 name/email，不改 dept_id
+				if updateErr := h.userRepo.Update(existingUser); updateErr != nil {
+					slog.Warn("failed to update user", "error", updateErr)
+				}
+				return existingUser, deptID, deptName
+			}
+
+			// dept_source=sso（默认）：按 SSO claims 正常迁移
 			existingUser.DeptID = &deptModel.ID
 		}
 		if updateErr := h.userRepo.Update(existingUser); updateErr != nil {
@@ -287,14 +340,22 @@ func (h *Handler) GetCurrentUser(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	email, _ := c.Get("user_email")
 	name, _ := c.Get("user_name")
+	// JWT dept_id 存的是 SSO 原始字符串（EhrDeptID），可直接用于 dept_studio_map 查询
+	deptIDRaw, _ := c.Get("user_dept_id")
 	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{"type": "authentication_error", "message": "not authenticated", "code": "unauthorized"}})
 		return
 	}
+
+	// 实时计算部门映射状态
+	ssoDeptID, _ := deptIDRaw.(string)
+	deptStatus := h.deptMappingStatus(ssoDeptID)
+
 	c.JSON(http.StatusOK, gin.H{
-		"id":    userID,
-		"email": email,
-		"name":  name,
+		"id":          userID,
+		"email":       email,
+		"name":        name,
+		"dept_status": deptStatus,
 	})
 }
 
@@ -347,6 +408,24 @@ func (h *Handler) Logout(c *gin.Context) {
 	}
 	h.rdb.SAdd(c.Request.Context(), "token:blacklist", claims.ID)
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": nil})
+}
+
+// deptMappingStatus 返回部门的工作室映射状态：
+//   - "none"           → SSO 未携带部门信息
+//   - "pending_studio" → 部门存在但未映射工作室
+//   - "active"         → 已映射工作室
+func (h *Handler) deptMappingStatus(ehrDeptID string) string {
+	if ehrDeptID == "" {
+		return "none"
+	}
+	var count int64
+	if err := h.db.Raw("SELECT COUNT(*) FROM dept_studio_map WHERE dept_id = ?", ehrDeptID).Scan(&count).Error; err != nil {
+		return "unknown"
+	}
+	if count == 0 {
+		return "pending_studio"
+	}
+	return "active"
 }
 
 func generateState() string {

@@ -1,79 +1,52 @@
-# gateway-core 接口契约变更 — CHG-20260603-001
+# gateway-core 接口契约变更 — CHG-20260609-001
 
 > 基线：xspec/modules/gateway-core/spec.md (v1.0)
 
 ## 变更摘要
 
-gateway-core 不新增对外接口，但新增了一个内部 API 消费（从 control-plane 拉取价表）。**对外 `/v1/*` 接口无任何变更**。
+`/v1/*` 对外接口新增一种 403 错误响应（org_pending_studio）；内部 verify-key 调用响应结构扩展两个字段。
 
-## 无对外接口变更
+---
 
-gateway-core 的公共 API（`/v1/models`、`/v1/chat/completions`、`/v1/embeddings`、`/health`、`/ready`）无变更。所有采集逻辑在现有中间件链中透明完成。
+## 修改接口
 
-## 新增内部 API 消费
+### POST /v1/chat/completions、POST /v1/embeddings — 新增 403 错误
 
-### GET /internal/v1/pricing（消费方）
-
-**接口说明**：从 control-plane 拉取全量模型多桶价表，供 MemoryPricingCache 本地缓存。
-
-**生产方**：control-plane（见 `xspec/changes/control-plane/contracts.delta.md`）
-
-**消费方**：gateway-core — `internal/gateway/infra/pricing_cache.go`
-
-**请求**：
+**新增错误响应**（pending_studio 状态员工）：
 
 ```http
-GET /internal/v1/pricing HTTP/1.1
-Host: control-plane:8081
-X-Internal-Token: {INTERNAL_TOKEN}
-```
+HTTP/1.1 403 Forbidden
+Content-Type: application/json
 
-**响应格式（200）**：
-
-```json
 {
-  "models": {
-    "deepseek-chat": {
-      "prompt_price": 0.29,
-      "completion_price": 1.76,
-      "reasoning_price": null,
-      "cached_price": null
-    },
-    "qwen3.6-plus": {
-      "prompt_price": 0.29,
-      "completion_price": 1.76,
-      "reasoning_price": 3.52,
-      "cached_price": null
-    },
-    "claude-sonnet-4-20250514": {
-      "prompt_price": 3.0,
-      "completion_price": 15.0,
-      "reasoning_price": null,
-      "cached_price": 0.15
-    }
+  "error": {
+    "code": "org_pending_studio",
+    "message": "您所在部门尚未配置工作室归属，请联系管理员",
+    "type": "organization_error"
   }
 }
 ```
 
-**响应字段说明**：
+触发条件：通过鉴权的用户 `dept_id` 非空且 `studio_id` 为空（OrgCheckMiddleware 拦截）。
 
-| 字段 | 类型 | 说明 |
-| :--- | :--- | :--- |
-| `models` | object | key 为模型名，value 为 ModelPricing |
-| `models.{name}.prompt_price` | number | Prompt 单价（USD / 1M tokens） |
-| `models.{name}.completion_price` | number | Completion 单价（USD / 1M tokens） |
-| `models.{name}.reasoning_price` | number \| null | Reasoning 单价，null 表示无独立价格（降级用 completion_price） |
-| `models.{name}.cached_price` | number \| null | 缓存命中单价，null 表示无独立价格（不计费） |
+其余响应格式（200、401、503 等）不变，向后兼容。
 
-**认证方式**：`X-Internal-Token` Header（与现有 `/internal/v1/*` 鉴权方式一致）
+---
 
-**刷新策略**：gateway-core 每 5 分钟拉取一次，启动时立即拉取
+## 内部依赖变更（非对外接口）
 
-**失败处理**：
-- 拉取超时（10s）：保留上一份缓存，记录 `pricing_cache_refresh_errors_total`
-- 返回非 200：同上
-- 启动时拉取失败：使用空价表（所有调用标记 `pricing_missing`）
+### verify-key 响应消费
 
-## 无移除/废弃接口
+gateway-core 的 `AuthClient` 消费 control-plane 的 verify-key 响应，新增读取 `dept_id` 和 `studio_id` 字段（详见 `data-model.delta.md`）。
 
-本次变更不涉及任何接口的移除或废弃。
+变更对 gateway-core 对外接口透明，外部调用者无感知。
+
+---
+
+## 新增接口
+
+不适用
+
+## 废弃接口
+
+不适用

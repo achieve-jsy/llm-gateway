@@ -1,98 +1,137 @@
-# control-plane 概要设计变更 — CHG-20260603-001
+# control-plane 概要设计变更 — CHG-20260609-001
 
-> 基线：xspec/modules/control-plane/spec.md (v1.0) — 无 hld.md 基线，首次增量设计
+> 基线：xspec/modules/control-plane/spec.md (v1.0)
+> 注：control-plane 尚无 hld.md 基线，本 delta 基于 spec.md 描述的现有架构现状撰写。
 
 ## 变更摘要
 
-Catalog 同步新增导入 reasoning/cached 分桶价格字段；ResolveModelPricing 从两桶扩展为四桶报价结构；新增 GET /internal/v1/pricing 价表下发接口供 gateway-core 定时拉取。
+在 control-plane 进程内集成 `internal/orgservice/` package，接入 SSO 归集钩子并扩展路由，同时将 `verify-key` 内部接口的响应扩展为包含组织身份链（dept_id / studio_id），以及新增分层用量 Dashboard API。
+
+---
 
 ## 架构变更
 
 ```mermaid
 flowchart TD
-    subgraph "control-plane 变更增量"
-        SYNC["CatalogSync\n(新增字段解析)"]
-        RMP["ResolveModelPricing\n(四桶取价)"]
-        API_P["GET /internal/v1/pricing\n(价表下发) NEW"]
+    subgraph CP["control-plane 进程（变更后）"]
+        AuthHandler["auth_handler.go\nOAuth 回调"]
+        OrgService["internal/orgservice/\n（新增 package）"]
+        OrgRouter["/api/v1/org/* 路由\n（新增）"]
+        VerifyKey["/internal/v1/auth/verify-key\n（扩展响应）"]
+        DashAPI["/api/v1/usage/dashboard\n（新增）"]
     end
-    
-    subgraph "已有组件"
-        SYNC_EX["CatalogSyncService\n(已有)"]
-        MODEL_SVC["ModelService\n(已有)"]
-    end
-    
-    LL["LiteLLM JSON"] -->|price_mode=catalog| SYNC
-    SYNC -->|写入 output_cost_per_reasoning_token<br>cache_read_input_token_cost| MC[("model_catalog\n+reasoning_price +cached_price")]
-    
-    MODEL_SVC -->|price_mode=manual| MD[("models\n+reasoning_price +cached_price")]
-    
-    MC --> RMP
-    MD --> RMP
-    
-    RMP -->|ModelPricing{4 桶单价 + fallback}| API_P
-    API_P -->|每 5min 拉取| GW["gateway-core\nMemoryPricingCache"]
+
+    AuthHandler -->|"归集钩子（新增）"| OrgService
+    OrgRouter --> OrgService
+    VerifyKey -->|"查 org 身份链（新增）"| OrgService
+    DashAPI -->|"scope 过滤（新增）"| OBS["observability-hub\nusage_daily"]
+    OBS -->|JOIN| OrgService
+
+    OC["ops-console"] --> OrgRouter
+    OC --> DashAPI
+    GW["gateway-core"] --> VerifyKey
 ```
 
-### 取价流程
+### 新增路由清单
 
-```mermaid
-sequenceDiagram
-    participant GW as Gateway BatchWriter
-    participant API as GET /internal/v1/pricing
-    participant RMP as ResolveModelPricing
-    participant PG as PostgreSQL
-    
-    GW->>API: 每 5min 拉取全量价表
-    API->>PG: models JOIN model_catalog
-    
-    loop 每个模型
-        PG-->>API: price_mode, catalog_id, manual_prices
-        alt price_mode = catalog
-            API->>RMP: 从 model_catalog 取四桶价格
-            RMP-->>API: prompt / completion / reasoning / cached
-        else price_mode = manual
-            API->>RMP: 从 models 表取四桶价格
-            Note over RMP: reasoning/cached 缺失 → 标记 fallback
-        end
-    end
-    
-    API-->>GW: {"qwen3.6-plus": {prompt:0.29, completion:1.76, reasoning:3.52, cached:null}, ...}
-```
+| 路由前缀 | 说明 | 鉴权 |
+| :--- | :--- | :--- |
+| `GET /api/v1/org/tree` | 完整组织树（内部） | InternalToken |
+| `GET/POST /api/v1/org/studios` | 工作室列表/创建 | JWTAuth + admin |
+| `GET /api/v1/org/studios/:id` | 工作室详情 | JWTAuth + admin/studio_admin |
+| `GET /api/v1/org/departments` | 部门列表（含映射状态） | JWTAuth + admin |
+| `GET /api/v1/org/departments/unmapped` | 未映射部门清单 | JWTAuth + admin |
+| `GET /api/v1/org/dept-studio-map` | 映射列表 | JWTAuth + admin |
+| `POST /api/v1/org/dept-studio-map/import` | CSV 批量导入 | JWTAuth + admin |
+| `PUT /api/v1/org/departments/:id/studio` | 手工修改映射 | JWTAuth + admin |
+| `POST /api/v1/org/roles/grant` | 派发角色 | JWTAuth + admin/studio_admin |
+| `POST /api/v1/org/roles/revoke` | 卸任角色 | JWTAuth + admin/studio_admin |
+| `GET /api/v1/org/roles/:user_id` | 查询用户角色 | JWTAuth + admin |
+| `POST /internal/org/auth/check-scope` | 管辖域鉴权（内部） | InternalToken |
+| `GET /api/v1/usage/dashboard` | 分层用量 Dashboard | JWTAuth + 管理角色 |
+
+---
 
 ## 技术选型变更
 
-无新增技术选型。所有变更在已有技术栈内：
+无新增技术选型。全部复用现有 Go + Gin + GORM + PostgreSQL 技术栈。
 
-| 领域 | 选型 | 说明 |
-| :--- | :--- | :--- |
-| Catalog 同步 | 已有 JSON 解析逻辑扩展 | 新增字段解析，不影响已有同步流程 |
-| 数据库变更 | PG 新增 nullable 列 | 已有数据不受影响；GORM AutoMigrate 增量 |
-| 价表下发 | 已有 Gin router + InternalAuth | 复用 `/internal/v1/*` 内部 API 鉴权 |
+---
 
 ## 新增组件
 
-| 组件 | 位置 | 变更类型 | 职责 |
-| :--- | :--- | :--- | :--- |
-| `GET /internal/v1/pricing` | `internal/controlplane/handler/` | 新增 | 全量多桶价表下发接口，gateway-core 5min 拉取 |
-| `CatalogSyncService` | 已有 | 修改 | 新增解析 `output_cost_per_reasoning_token` / `cache_read_input_token_cost` |
-| `ResolveModelPricing` | 已有 | 修改 | 返回结构从 2 桶扩展为 4 桶 + fallback 标记 |
-| `model_catalog` 表 | 已有 | 修改 | 新增 `reasoning_price` / `cached_price` 列 |
-| `models` 表 | 已有 | 修改 | 新增 `reasoning_price` / `cached_price` 列（manual 模式） |
+### 1. SSO 归集钩子
 
-## 新增列（Migration）
+在 `internal/controlplane/handler/auth_handler.go` 的 OAuth callback 末尾追加调用：
 
-```sql
-ALTER TABLE model_catalog ADD COLUMN reasoning_price NUMERIC DEFAULT NULL;
-ALTER TABLE model_catalog ADD COLUMN cached_price NUMERIC DEFAULT NULL;
-ALTER TABLE models ADD COLUMN reasoning_price NUMERIC DEFAULT NULL;
-ALTER TABLE models ADD COLUMN cached_price NUMERIC DEFAULT NULL;
+```
+auth_handler.go
+  └── OAuthCallback()
+        └── (新增) orgService.AggregateUser(ctx, claims)
+              → 成功：JWT claims 写入 dept_id / studio_id
+              → 失败：降级（日志告警，不阻断登录）
 ```
 
-## 宪章合规
+### 2. verify-key 响应扩展
+
+`/internal/v1/auth/verify-key` 现有响应新增两个字段：
+
+```go
+// 变更前
+type VerifyKeyResponse struct {
+    UserID        string
+    AllowedGroups []string
+}
+
+// 变更后（新增字段）
+type VerifyKeyResponse struct {
+    UserID        string
+    AllowedGroups []string
+    DeptID        string   // 新增：用户所属部门 ID（空表示未归集）
+    StudioID      string   // 新增：用户所属工作室 ID（空表示 pending_studio）
+}
+```
+
+gateway-core 的 `AuthClient` 同步更新结构体；字段为空时不影响现有逻辑（向后兼容）。
+
+### 3. 分层用量 Dashboard API
+
+```
+GET /api/v1/usage/dashboard?scope=dept|studio|company&id=<scope_id>&start=<date>&end=<date>
+```
+
+鉴权逻辑：
+- 中间件从 JWT claims 读取 role + scope_id
+- `dept_admin` → 强制 scope=dept, id=自身 dept_id（忽略请求参数中的 id）
+- `studio_admin` → 强制 scope=studio, id=自身 studio_id
+- `admin` → 允许任意 scope + id
+- `user` → 403 直接拒绝
+
+数据查询：复用 `observability-hub` 提供的 `usage_daily` 表，按 scope JOIN `dept_studio_map` 做工作室维度聚合。
+
+---
+
+## 数据库变更（新增表）
+
+新增 5 张表（通过 migration 文件追加，不修改现有表）：
+
+| 表名 | 说明 |
+| :--- | :--- |
+| `studios` | 工作室 |
+| `departments` | 部门（含 studio_id FK、status） |
+| `dept_studio_map` | 部门↔工作室映射 |
+| `user_roles` | RBAC 角色授权 |
+| `org_migration_log` | 部门迁移日志 |
+
+同时在现有 `users` 表追加 `dept_id` 字段（nullable FK）。
+
+---
+
+## 宪章合规检查
 
 | 原则 | 检查结果 |
 | :--- | :--- |
-| 不开倒车 | ✅ 已有 Catalog 同步逻辑增量扩展字段，不修改已有同步语义 |
-| 服务稳定 | ✅ 新增列 nullable，已有数据不受影响；价表下发接口独立不影响管理 API |
-| 服务快速 | ✅ 内存价表 5min 刷新，BatchWriter 本地查 Map（无远程调用） |
-| 架构清晰 | ✅ 定价职责仍在 control-plane，不扩散到 gateway |
+| 零破坏性变更 | ✅ verify-key 响应新增字段，向后兼容；所有新增 API 为新端点 |
+| 架构清晰 | ✅ orgservice 作为独立 package 内嵌，依赖方向单向（handler → service → repo） |
+| 服务快速 | ✅ 归集钩子失败降级，不阻塞 OAuth 登录热路径 |
+| 交互至上 | ✅ Dashboard API 按角色自动注入 scope 过滤，越权直接 403 + 明确提示 |

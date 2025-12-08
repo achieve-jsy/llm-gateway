@@ -15,8 +15,13 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/example/llm-gateway/internal/controlplane/service"
+	obscron "github.com/example/llm-gateway/internal/observability/cron"
 	obshandler "github.com/example/llm-gateway/internal/observability/handler"
 	obssvc "github.com/example/llm-gateway/internal/observability/service"
+	"github.com/example/llm-gateway/internal/orgservice"
+	orghandler "github.com/example/llm-gateway/internal/orgservice/handler"
+	"github.com/example/llm-gateway/internal/orgservice/rbac"
+	orgrepo "github.com/example/llm-gateway/internal/orgservice/repository"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -47,6 +52,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	authCfg := auth.LoadConfig()
 	applyOIDCFromDB(authCfg, settingsSvc)
 	authHandler := auth.NewHandler(authCfg, db, rdb)
+
 	// SSO login redirect (frontend: GET /api/v1/auth/oidc/login)
 	r.GET("/api/v1/auth/oidc/login", authHandler.Login)
 	// SSO callback (frontend: POST /auth/oidc/callback)
@@ -193,6 +199,17 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	// 启动健康检测调度器（优先使用环境变量 HEALTH_CHECK_INTERVAL 控制）
 	healthCheckSvc.StartBackground(context.Background())
 
+	// 启动用量统计每小时聚合（写 usage_daily）
+	rollupSvc := obssvc.NewRollupService(db)
+	rollupCron := obscron.NewRollupCron(rollupSvc)
+	rollupCron.Start(context.Background())
+	// 启动时立即补跑一次今天 + 昨天，填充 usage_daily
+	go func() {
+		if err := rollupCron.RunOnce(context.Background()); err != nil {
+			slog.Warn("initial rollup failed", "error", err)
+		}
+	}()
+
 	// 内部调度器接口（X-Auth-Token 认证，在 handler 内自行校验）
 	r.GET("/api/v1/internal/groups", groupHandler.ListEnabledGroups)
 
@@ -320,21 +337,21 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/announcements/unread/count", announcementHandler.GetUnreadCount)
 		adminGroup.GET("/announcements/history", announcementHandler.GetReadHistory)
 
-		// 用量与成本查询（管理员全局）
-		rollupSvc := obssvc.NewRollupService(db)
-		usageHandler := obshandler.NewUsageHandler(rollupSvc, db)
-		adminGroup.GET("/usage/logs", usageHandler.Logs)
-		adminGroup.GET("/usage/logs/:request_id/trace", usageHandler.Trace)
-		adminGroup.GET("/usage/options", usageHandler.Options)
-		adminGroup.GET("/usage", usageHandler.Query)
-		adminGroup.GET("/usage-logs", usageHandler.Logs)
-
+		// 用量与成本查询
+		usageSvc := obssvc.NewRollupService(db)
+		usageH := obshandler.NewUsageHandler(usageSvc, db)
+		adminGroup.GET("/usage/logs", usageH.Logs)
+		adminGroup.GET("/usage/logs/:request_id/trace", usageH.Trace)
+		adminGroup.GET("/usage/options", usageH.Options)
+		adminGroup.GET("/usage", usageH.Query)
+		adminGroup.GET("/usage-logs", usageH.Logs)
 		// 个人用量查询（按登录用户 user_id 隔离）
 		adminGroup.GET("/my/keys", keyHandler.MyKeys)
-		adminGroup.GET("/my/usage", usageHandler.MyQuery)
-		adminGroup.GET("/my/usage/logs", usageHandler.MyLogs)
-		adminGroup.GET("/my/usage/logs/:request_id/trace", usageHandler.Trace)
+		adminGroup.GET("/my/usage", usageH.MyQuery)
+		adminGroup.GET("/my/usage/logs", usageH.MyLogs)
+		adminGroup.GET("/my/usage/logs/:request_id/trace", usageH.Trace)
 	}
+
 
 	// 内部接口组（内部 Token 认证）
 	internalGroup := r.Group("/internal/v1")
@@ -347,6 +364,76 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	internalGroup.POST("/auth/verify-key", keyHandler.VerifyKey)
 	internalGroup.GET("/keys/:id/groups", internalHandler.GetKeyGroups)
 	internalGroup.GET("/groups/model-info", modelInfoHandler.GetGroupModelInfo)
+	}
+
+	// ─── 组织架构服务（org-service）───────────────────────────────────────────
+	orgContainer := orgservice.New(db, rdb, orgservice.BootstrapAdmins())
+	// 将 Bootstrap Checker 注入 auth handler（此处已在 orgContainer 创建后）
+	authHandler.SetBootstrapChecker(orgContainer.Bootstrap)
+	deptRepo := orgrepo.NewDeptRepo(db)
+	userOrgRepo := orgrepo.NewUserOrgRepo(db)
+	roleRepo := orgrepo.NewRoleRepo(db)
+	mappingRepo := orgrepo.NewMappingRepo(db)
+	studioRepo := orgrepo.NewStudioRepo(db)
+	orgH := orghandler.NewOrgHandler(orgContainer.OrgSvc, orgContainer.StudioSvc, userOrgRepo, roleRepo)
+	mappingH := orghandler.NewMappingHandler(orgContainer.MappingSvc, deptRepo)
+	roleH := orghandler.NewRoleHandler(orgContainer.RoleSvc, mappingRepo)
+	empImportSvc := orgservice.NewEmployeeImportSvc(db, studioRepo, deptRepo, mappingRepo)
+	empImportH := orghandler.NewEmployeeImportHandler(empImportSvc)
+	deptAssignH := orghandler.NewDeptAssignHandler(userOrgRepo, deptRepo) // roleRepo 已移除
+
+	// Guard 快捷别名（绑定到 orgContainer.RBAC 实例）
+	guard := orgContainer.RBAC.Guard
+
+	// 管理接口（JWTAuth 已在 adminGroup 上）
+	orgGroup := adminGroup.Group("/org")
+	{
+		// ── 工作室（仅 admin 可增删，所有人可读）─────────────────────────────
+		orgGroup.GET("/studios", orgH.ListStudios)
+		orgGroup.POST("/studios", guard(rbac.PermStudioCreate), orgH.CreateStudio)
+		orgGroup.GET("/studios/:id", orgH.GetStudio)
+		orgGroup.DELETE("/studios/:id", guard(rbac.PermStudioDelete), orgH.DeleteStudio)
+
+		// ── 部门与映射（admin 可改映射，所有人可读列表）──────────────────────
+		orgGroup.GET("/departments", mappingH.ListDepartments)
+		orgGroup.GET("/departments/unmapped", mappingH.ListUnmappedDepts)
+		orgGroup.PUT("/departments/:id/studio", guard(rbac.PermMappingEdit), mappingH.SetDeptStudio)
+		orgGroup.GET("/dept-studio-map", mappingH.ListMappings)
+		orgGroup.POST("/dept-studio-map/import", guard(rbac.PermMappingEdit), mappingH.ImportMappings)
+
+		// ── 成员（管理角色可查，部门范围由 Policy 过滤）─────────────────────
+		orgGroup.GET("/departments/:dept_id/members", guard(rbac.PermMemberView), orgH.GetDeptMembers)
+		orgGroup.GET("/users", orgH.SearchUsers) // 用户搜索，无额外权限约束
+
+		// ── 角色管理 ─────────────────────────────────────────────────────────
+		orgGroup.GET("/all-roles", guard(rbac.PermRoleList), orgH.ListAllRoles)
+		orgGroup.POST("/roles/grant", guard(rbac.PermRoleGrant), roleH.GrantRole)
+		orgGroup.POST("/roles/revoke", guard(rbac.PermRoleRevoke), roleH.RevokeRole)
+		orgGroup.GET("/roles/me", roleH.GetMyRoles)           // 当前用户 org 角色（/me 须在 /:user_id 前）
+		orgGroup.GET("/roles/:user_id", roleH.GetUserRoles)
+
+		// ── 员工花名册导入（仅 admin）────────────────────────────────────────
+		orgGroup.POST("/employees/import", guard(rbac.PermEmployeeImport), empImportH.Import)
+
+		// ── 成员部门归属修正（studio_admin 及以上）───────────────────────────
+		orgGroup.PUT("/users/:id/department", guard(rbac.PermDeptChange), deptAssignH.ChangeDepartment)
+		orgGroup.PUT("/users/:id/department/follow-sso", guard(rbac.PermSSORevert), deptAssignH.FollowSSO)
+
+		// ── 用量看板：dashboard/scoped-logs 需 Guard 注入 Actor ─────────────
+		// usageH2 复用同一 DB，仅在此处注册带 Guard 的路由
+		usageH2 := obshandler.NewUsageHandler(obssvc.NewRollupService(db), db)
+		adminGroup.GET("/usage/dashboard", guard(rbac.PermUsageViewScoped), usageH2.GetDashboard)
+		adminGroup.GET("/usage/dashboard/trend", guard(rbac.PermUsageViewScoped), usageH2.DashboardTrend)
+		adminGroup.GET("/usage/dashboard/models", guard(rbac.PermUsageViewScoped), usageH2.DashboardModels)
+		adminGroup.GET("/usage/scoped/logs", guard(rbac.PermUsageViewScoped), usageH2.ScopedLogs)
+	}
+
+	// 内部接口（InternalAuth 已在 internalGroup 上，复用）
+	internalOrgGroup := r.Group("/internal/v1/org")
+	internalOrgGroup.Use(middleware.InternalAuth())
+	{
+		internalOrgGroup.POST("/auth/check-scope", roleH.CheckScope)
+		internalOrgGroup.GET("/tree", orgH.GetOrgTree)
 	}
 
 	return r

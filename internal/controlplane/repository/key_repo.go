@@ -89,30 +89,42 @@ func (r *KeyRepo) UpdateAccessAllGroups(id uuid.UUID, value bool) error {
 	return r.db.Model(&model.ApiKey{}).Where("id = ?", id).Update("access_all_groups", value).Error
 }
 
-// UserDeptInfo 用于创建 Key 时冗余写入用户/部门名称。
+// UserDeptInfo 用于创建 Key 时冗余写入用户/部门/工作室名称。
 type UserDeptInfo struct {
-	UserName string
-	DeptID   string
-	DeptName string
+	UserName   string
+	DeptID     string
+	DeptName   string
+	StudioID   string
+	StudioName string
 }
 
-// BackfillUserDeptNames 补全 api_keys 表中缺失的 user_name / dept_id / dept_name（懒补全，异步调用）。
-func (r *KeyRepo) BackfillUserDeptNames(keyID uuid.UUID, userName, deptID, deptName string) error {
+// BackfillUserDeptNames 补全 api_keys 表中缺失的 user_name / dept_id / dept_name / studio_id / studio_name（懒补全，异步调用）。
+func (r *KeyRepo) BackfillUserDeptNames(keyID uuid.UUID, userName, deptID, deptName, studioID, studioName string) error {
 	return r.db.Model(&model.ApiKey{}).
-		Where("id = ? AND (user_name = '' OR user_name IS NULL)", keyID).
-		Updates(map[string]any{"user_name": userName, "dept_id": deptID, "dept_name": deptName}).Error
+		Where("id = ? AND (user_name = '' OR user_name IS NULL OR studio_name = '' OR studio_name IS NULL)", keyID).
+		Updates(map[string]any{
+			"user_name":   userName,
+			"dept_id":     deptID,
+			"dept_name":   deptName,
+			"studio_id":   studioID,
+			"studio_name": studioName,
+		}).Error
 }
 
-// GetUserDeptInfo 通过 user_id 查询用户姓名及所属部门信息。
+// GetUserDeptInfo 通过 user_id 查询用户姓名及所属部门、工作室信息。
 // 优先查 users（OIDC 用户），查不到时回退到 dev_users（本地账号）。
 func (r *KeyRepo) GetUserDeptInfo(userID uuid.UUID) (UserDeptInfo, error) {
 	var info UserDeptInfo
 	err := r.db.Raw(`
 		SELECT u.name AS user_name,
 		       COALESCE(d.id::text, '') AS dept_id,
-		       COALESCE(d.dept_name, '') AS dept_name
+		       COALESCE(d.dept_name, '') AS dept_name,
+		       COALESCE(dsm.studio_id::text, '') AS studio_id,
+		       COALESCE(s.name, '') AS studio_name
 		FROM users u
 		LEFT JOIN departments d ON d.id = u.dept_id
+		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = d.dept_id
+		LEFT JOIN studios s ON s.id = dsm.studio_id
 		WHERE u.id = ?
 	`, userID).Scan(&info).Error
 	if err != nil {

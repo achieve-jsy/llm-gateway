@@ -98,6 +98,8 @@ func Setup(
 	v1 := r.Group("/v1")
 	v1.Use(middleware.AuthMiddleware(authClient))
 	v1.Use(guard.Handler())
+	// 组织归集状态检查：pending_studio 员工调用模型时返回 403
+	v1.Use(middleware.OrgCheckMiddleware())
 	// 请求/响应正文捕获（供 trace 记录使用）
 	v1.Use(middleware.TraceCapture())
 	// 埋点采集中间件（可选，有 Collector 时生效）

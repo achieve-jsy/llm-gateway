@@ -234,7 +234,7 @@ deploy-app-test:
       "
   environment:
     name: test
-    url: http://192.0.2.10:9080
+    url: http://192.0.2.10:4010
   dependencies: []
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
@@ -342,4 +342,3 @@ verify-test:
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
       changes: *test-significant-changes
-

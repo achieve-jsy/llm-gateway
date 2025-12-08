@@ -189,7 +189,9 @@ migrate-test:
   script:
     - |
       SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-      DATABASE_URL=$(grep -A1 ^database: config/test.yaml | tail -1 | cut -d'"' -f2)
+      # 数据库连接串改由 GitLab CI/CD 变量注入（不再从 config/test.yaml 解析明文）
+      DATABASE_URL="${TEST_DATABASE_URL}"
+      [ -z "$DATABASE_URL" ] && { echo "ERROR: TEST_DATABASE_URL 未注入（检查 GitLab 变量是否 protected 且 test 分支未受保护）"; exit 1; }
       echo "=== Shipping atlas + migrations to ${TEST_HOST} ==="
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "rm -rf /tmp/atlas-migrate && mkdir -p /tmp/atlas-migrate"
       scp ${SSH_OPTS} atlas-bin/atlas ${TEST_USER}@${TEST_HOST}:/tmp/atlas-migrate/atlas
@@ -229,6 +231,13 @@ deploy-app-test:
         docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG} || echo "Gateway image not found, reusing existing"
         docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} || echo "CP image not found, reusing existing"
         export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=test
+        # 密钥/连接串由 GitLab CI/CD 变量注入，docker-compose 读取这些环境变量（不再依赖仓库明文默认值）
+        export DATABASE_URL='${TEST_DATABASE_URL}'
+        export REDIS_ADDR='${TEST_REDIS_ADDR}' REDIS_PASSWORD='${TEST_REDIS_PASSWORD}' REDIS_DB='${TEST_REDIS_DB}'
+        export JWT_SECRET='${TEST_JWT_SECRET}'
+        export INTERNAL_AUTH_TOKEN='${TEST_INTERNAL_TOKEN}'
+        export ENCRYPTION_KEY='${TEST_ENCRYPTION_KEY}'
+        export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
         docker compose -p llm-test up -d --remove-orphans --wait --wait-timeout 90
         docker compose -p llm-test ps
       "

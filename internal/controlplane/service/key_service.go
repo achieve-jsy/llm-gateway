@@ -425,7 +425,10 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 
 	// 懒补全：如果 key 的 org 快照字段缺失，同步补齐后再返回，
 	// 确保本次请求就能拿到正确的 studio_id，不再需要等第二次请求。
-	if k.UserName == "" || k.DeptName == "" || k.DeptID == "" || k.StudioName == "" || k.StudioID == "" {
+	// 跳过条件：UserName 已有值且 DeptID 为空，说明该用户没有部门，查了也没用。
+	needBackfill := k.UserName == "" || k.DeptName == "" || k.DeptID == "" || k.StudioName == "" || k.StudioID == ""
+	hasNoDept := k.UserName != "" && k.DeptID == "" // 用户存在但确实没有部门，不查
+	if needBackfill && !hasNoDept {
 		info, err := s.repo.GetUserDeptInfo(k.UserID)
 		if err == nil && info.UserName != "" {
 			k.UserName = info.UserName

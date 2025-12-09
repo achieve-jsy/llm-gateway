@@ -49,7 +49,6 @@ type MappingService struct {
 type OrgSyncer interface {
 	OnDeptStudioChanged(ctx context.Context, deptSSOs []string)
 	OnUserDeptChanged(ctx context.Context, userID string)
-	OnStudioDeleted(ctx context.Context, studioID string)
 }
 
 func NewMappingService(

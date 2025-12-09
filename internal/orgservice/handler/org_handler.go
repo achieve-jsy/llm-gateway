@@ -20,17 +20,11 @@ type OrgHandler struct {
 	userOrgRepo *repository.UserOrgRepo
 	roleRepo    *repository.RoleRepo
 	orgPolicy   policy.OrgPolicy
-	orgSyncer   service.OrgSyncer
 }
 
 // NewOrgHandler 创建 OrgHandler
 func NewOrgHandler(orgSvc *service.OrgService, studioSvc *service.StudioService, userOrgRepo *repository.UserOrgRepo, roleRepo *repository.RoleRepo) *OrgHandler {
 	return &OrgHandler{orgSvc: orgSvc, studioSvc: studioSvc, userOrgRepo: userOrgRepo, roleRepo: roleRepo, orgPolicy: policy.OrgPolicy{}}
-}
-
-// SetOrgSyncer 注入 KeyOrgSyncer
-func (h *OrgHandler) SetOrgSyncer(syncer service.OrgSyncer) {
-	h.orgSyncer = syncer
 }
 
 // GetOrgTree GET /internal/org/tree
@@ -103,10 +97,9 @@ func (h *OrgHandler) DeleteStudio(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, errorResp("internal_error", err.Error(), "internal"))
 		return
 	}
-	// 工作室删除后，通知同步清空该工作室下所有用户 key 的 studio 字段
-	if h.orgSyncer != nil {
-		h.orgSyncer.OnStudioDeleted(c.Request.Context(), id)
-	}
+	// 注意：DeleteStudio 要求工作室下无部门（HasDepartments 校验），
+	// 部门移出工作室时 SetDeptStudio("") 已触发 OnDeptStudioChanged 同步，
+	// 此处无需再调 OnStudioDeleted。
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
 }
 

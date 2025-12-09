@@ -25,6 +25,11 @@ var pendingStudioError = gin.H{
 // 触发条件：dept_id 非空 AND studio_id 为空（已归集到部门但部门未映射工作室）
 // 放置位置：AuthMiddleware 之后、Scheduler 之前（路由链 /v1/* 上）
 // 性能影响：仅内存字段读取（O(1)），无 IO，对 P99 延迟无影响
+//
+// 注意：dept_id 在两条鉴权路径下语义不同，但 OrgCheck 只关心"是否非空"：
+//   - API Key 路径：dept_id = api_keys.dept_id，存的是 departments.id（UUID 字符串）
+//   - JWT 路径：dept_id = JWT claims.dept_id，存的是 SSO ehr_dept_id（varchar）
+// 两者均以"非空"表示"用户已归属部门"，OrgCheck 逻辑不依赖具体值，语义安全。
 func OrgCheckMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		deptID := c.GetString(CtxKeyDeptID)

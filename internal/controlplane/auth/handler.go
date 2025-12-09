@@ -397,7 +397,28 @@ func (h *Handler) Refresh(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{"type": "authentication_error", "message": "token revoked", "code": "unauthorized"}})
 		return
 	}
-	accessToken, err := GenerateAccessToken(h.config.JWTSecret, h.config.AccessTokenTTL, claims.UserID, claims.DeptID, claims.DeptName, claims.StudioID, claims.StudioName, claims.Email, claims.Name, claims.Passport, claims.Role)
+
+	// Refresh 时重新查库获取最新的 dept/studio 信息，
+	// 避免 org 变动后 token 里的 studio_id 仍为旧值导致 OrgCheck 403。
+	deptID, deptName, studioID, studioName := claims.DeptID, claims.DeptName, claims.StudioID, claims.StudioName
+	if claims.UserID != "" {
+		if freshStudioID, freshStudioName := h.deptStudioInfo(claims.DeptID); freshStudioID != "" {
+			studioID = freshStudioID
+			studioName = freshStudioName
+		}
+		// dept 信息也从 user 表刷新，防止部门迁移后 dept_id/dept_name 过期
+		if freshDeptID, freshDeptName := h.userDeptInfo(c.Request.Context(), claims.UserID); freshDeptID != "" {
+			deptID = freshDeptID
+			deptName = freshDeptName
+			// 用新 deptID 重新查 studio
+			if sid, sname := h.deptStudioInfo(freshDeptID); sid != "" {
+				studioID = sid
+				studioName = sname
+			}
+		}
+	}
+
+	accessToken, err := GenerateAccessToken(h.config.JWTSecret, h.config.AccessTokenTTL, claims.UserID, deptID, deptName, studioID, studioName, claims.Email, claims.Name, claims.Passport, claims.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "token generation failed", "code": "internal"}})
 		return
@@ -433,15 +454,14 @@ func (h *Handler) Logout(c *gin.Context) {
 //   - "none"           → SSO 未携带部门信息
 //   - "pending_studio" → 部门存在但未映射工作室
 //   - "active"         → 已映射工作室
+//
+// 内部复用 deptStudioInfo，避免两次查库。
 func (h *Handler) deptMappingStatus(ehrDeptID string) string {
 	if ehrDeptID == "" {
 		return "none"
 	}
-	var count int64
-	if err := h.db.Raw("SELECT COUNT(*) FROM dept_studio_map WHERE dept_id = ?", ehrDeptID).Scan(&count).Error; err != nil {
-		return "unknown"
-	}
-	if count == 0 {
+	studioID, _ := h.deptStudioInfo(ehrDeptID)
+	if studioID == "" {
 		return "pending_studio"
 	}
 	return "active"
@@ -465,6 +485,23 @@ func (h *Handler) deptStudioInfo(ehrDeptID string) (studioID, studioName string)
 		LIMIT 1
 	`, ehrDeptID).Scan(&row)
 	return row.StudioID, row.StudioName
+}
+
+// userDeptInfo 通过 user_id 查询用户最新的 SSO dept_id 和 dept_name。
+// 用于 Refresh Token 时刷新 JWT 里的部门信息。
+func (h *Handler) userDeptInfo(ctx context.Context, userID string) (deptID, deptName string) {
+	var row struct {
+		DeptID   string `gorm:"column:dept_id"`
+		DeptName string `gorm:"column:dept_name"`
+	}
+	h.db.WithContext(ctx).Raw(`
+		SELECT COALESCE(d.dept_id, '') AS dept_id, COALESCE(d.dept_name, '') AS dept_name
+		FROM users u
+		LEFT JOIN departments d ON d.id = u.dept_id
+		WHERE u.id::text = ?
+		LIMIT 1
+	`, userID).Scan(&row)
+	return row.DeptID, row.DeptName
 }
 
 func generateState() string {

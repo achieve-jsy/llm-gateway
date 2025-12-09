@@ -12,8 +12,12 @@ import (
 // KeyOrgSyncer 在 org 变动后异步重算受影响用户的 api_keys org 快照字段，
 // 并发 key_updated 事件让 gateway KeyCache 主动失效。
 //
-// 使用方式：在各 org 变动操作（SetDeptStudio、ChangeDepartment、FollowSSO、
-// upsertUser、ImportMappings）完成后调用对应方法（均为异步，不阻塞响应）。
+// 覆盖场景：
+//   - SetDeptStudio / ImportMappings → OnDeptStudioChanged
+//   - ChangeDepartment / FollowSSO / SSO 登录迁移 / EmployeeImport → OnUserDeptChanged
+//
+// 注意：DeleteStudio 不需要调用，因为删除工作室前必须先移出所有部门（SetDeptStudio("")），
+// 移出时 OnDeptStudioChanged 已经同步过了。
 type KeyOrgSyncer struct {
 	db        *gorm.DB
 	keyRepo   *KeyOrgSyncerKeyRepo
@@ -77,25 +81,8 @@ func (r *KeyOrgSyncerKeyRepo) getUserOrgByUserID(userID string) (*userOrgRow, er
 	return &row, err
 }
 
-// getUsersOrgByStudioID 按 studio_id 查询工作室下所有用户（工作室删除时清空 studio 字段用）
-func (r *KeyOrgSyncerKeyRepo) getUsersOrgByStudioID(studioID string) ([]userOrgRow, error) {
-	var rows []userOrgRow
-	err := r.db.Raw(`
-		SELECT u.id::text AS user_id,
-		       u.name AS user_name,
-		       COALESCE(d.id::text, '') AS dept_id,
-		       COALESCE(d.dept_name, '') AS dept_name,
-		       '' AS studio_id,
-		       '' AS studio_name
-		FROM users u
-		JOIN departments d ON d.id = u.dept_id
-		JOIN dept_studio_map dsm ON dsm.dept_id = d.dept_id
-		WHERE dsm.studio_id::text = ?
-	`, studioID).Scan(&rows).Error
-	return rows, err
-}
-
-// syncKeysForUsers 批量更新一批用户的 api_keys org 字段并发失效事件
+// syncKeysForUsers 批量更新一批用户的 api_keys org 字段
+// 每个用户的所有 key 合并为一条批量 UPDATE，减少 DB 往返。
 func (r *KeyOrgSyncerKeyRepo) syncKeysForUsers(rows []userOrgRow) []syncedKey {
 	type keyRow struct {
 		ID      string `gorm:"column:id"`
@@ -115,27 +102,50 @@ func (r *KeyOrgSyncerKeyRepo) syncKeysForUsers(rows []userOrgRow) []syncedKey {
 	var keys []keyRow
 	r.db.Raw(`SELECT id::text, key_hash, user_id::text FROM api_keys WHERE user_id::text IN ?`, userIDs).Scan(&keys)
 
+	// 按 org 快照值分组，相同快照的 key 合并为一条 UPDATE
+	type orgSnapshot struct {
+		userName, deptID, deptName, studioID, studioName string
+	}
+	type batchEntry struct {
+		snapshot orgSnapshot
+		keyIDs   []string
+		keyHashes []string
+	}
+	batchMap := make(map[string]*batchEntry) // key: userID
 	var synced []syncedKey
+
 	for _, k := range keys {
 		info, ok := infoByUser[k.UserID]
 		if !ok {
 			continue
 		}
-		keyUUID, err := uuid.Parse(k.ID)
-		if err != nil {
-			continue
+		snap := orgSnapshot{info.UserName, info.DeptID, info.DeptName, info.StudioID, info.StudioName}
+		if e, exists := batchMap[k.UserID]; exists {
+			e.keyIDs = append(e.keyIDs, k.ID)
+			e.keyHashes = append(e.keyHashes, k.KeyHash)
+		} else {
+			batchMap[k.UserID] = &batchEntry{snapshot: snap, keyIDs: []string{k.ID}, keyHashes: []string{k.KeyHash}}
 		}
-		if err := r.db.Model(&struct{ ID uuid.UUID }{ID: keyUUID}).
-			Table("api_keys").
-			Where("id = ?", keyUUID).
+	}
+
+	for _, entry := range batchMap {
+		snap := entry.snapshot
+		if err := r.db.Table("api_keys").
+			Where("id::text IN ?", entry.keyIDs).
 			Updates(map[string]any{
-				"user_name":   info.UserName,
-				"dept_id":     info.DeptID,
-				"dept_name":   info.DeptName,
-				"studio_id":   info.StudioID,
-				"studio_name": info.StudioName,
+				"user_name":   snap.userName,
+				"dept_id":     snap.deptID,
+				"dept_name":   snap.deptName,
+				"studio_id":   snap.studioID,
+				"studio_name": snap.studioName,
 			}).Error; err == nil {
-			synced = append(synced, syncedKey{id: keyUUID, hash: k.KeyHash})
+			for i, id := range entry.keyIDs {
+				keyUUID, err := uuid.Parse(id)
+				if err != nil {
+					continue
+				}
+				synced = append(synced, syncedKey{id: keyUUID, hash: entry.keyHashes[i]})
+			}
 		}
 	}
 	return synced
@@ -183,7 +193,7 @@ func (s *KeyOrgSyncer) OnDeptStudioChanged(ctx context.Context, deptSSOs []strin
 	}()
 }
 
-// OnUserDeptChanged 用户部门变更后调用（ChangeDepartment / FollowSSO / SSO 登录迁移）
+// OnUserDeptChanged 用户部门变更后调用（ChangeDepartment / FollowSSO / SSO 登录迁移 / EmployeeImport）
 func (s *KeyOrgSyncer) OnUserDeptChanged(ctx context.Context, userID string) {
 	go func() {
 		row, err := s.keyRepo.getUserOrgByUserID(userID)
@@ -194,19 +204,5 @@ func (s *KeyOrgSyncer) OnUserDeptChanged(ctx context.Context, userID string) {
 		synced := s.keyRepo.syncKeysForUsers([]userOrgRow{*row})
 		s.publish(synced)
 		slog.Info("KeyOrgSyncer: synced keys for user", "user_id", userID, "keys", len(synced))
-	}()
-}
-
-// OnStudioDeleted 工作室删除后调用，清空该工作室下所有用户 key 的 studio 字段
-func (s *KeyOrgSyncer) OnStudioDeleted(ctx context.Context, studioID string) {
-	go func() {
-		rows, err := s.keyRepo.getUsersOrgByStudioID(studioID)
-		if err != nil {
-			slog.Warn("KeyOrgSyncer: getUsersOrgByStudioID failed", "studio_id", studioID, "error", err)
-			return
-		}
-		synced := s.keyRepo.syncKeysForUsers(rows)
-		s.publish(synced)
-		slog.Info("KeyOrgSyncer: synced keys after studio deleted", "studio_id", studioID, "keys", len(synced))
 	}()
 }

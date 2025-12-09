@@ -128,3 +128,52 @@ func TestOrgCheckMiddleware_Abort(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, w.Code)
 	assert.False(t, handlerCalled, "403 时后续 handler 不应被执行")
 }
+
+func TestOrgCheckMiddleware_Passlist(t *testing.T) {
+	// 测试目的：passlist 中的只读路径即使 pending_studio 也应放行
+	gin.SetMode(gin.TestMode)
+
+	passlistPaths := []string{
+		"/v1/models",
+		"/v1/model/info",
+		"/v1/health/models",
+	}
+
+	for _, path := range passlistPaths {
+		t.Run(path, func(t *testing.T) {
+			r := gin.New()
+			// 模拟 pending_studio 状态：有部门无工作室
+			r.Use(setOrgContext("dept-uuid-001", ""))
+			r.Use(middleware.OrgCheckMiddleware())
+			r.GET(path, func(c *gin.Context) {
+				c.Status(http.StatusOK)
+			})
+
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", path, nil)
+			r.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code,
+				"pending_studio 状态下 %s 应放行", path)
+		})
+	}
+}
+
+func TestOrgCheckMiddleware_Passlist_NonPasslistStillBlocked(t *testing.T) {
+	// 测试目的：非 passlist 路径 pending_studio 仍应被拦截
+	gin.SetMode(gin.TestMode)
+
+	r := gin.New()
+	r.Use(setOrgContext("dept-uuid-001", ""))
+	r.Use(middleware.OrgCheckMiddleware())
+	r.POST("/v1/chat/completions", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/v1/chat/completions", nil)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code,
+		"pending_studio 状态下 /v1/chat/completions 应被拦截")
+}

@@ -21,6 +21,14 @@ var pendingStudioError = gin.H{
 	},
 }
 
+// orgCheckPasslist 列出不受 OrgCheck 拦截的只读非计费路径。
+// 这些接口是无害查询，用户需要能访问模型列表才能了解当前配置状态。
+var orgCheckPasslist = map[string]struct{}{
+	"/v1/models":        {},
+	"/v1/model/info":    {},
+	"/v1/health/models": {},
+}
+
 // OrgCheckMiddleware 检查用户是否处于 pending_studio 状态
 // 触发条件：dept_id 非空 AND studio_id 为空（已归集到部门但部门未映射工作室）
 // 放置位置：AuthMiddleware 之后、Scheduler 之前（路由链 /v1/* 上）
@@ -32,6 +40,12 @@ var pendingStudioError = gin.H{
 // 两者均以"非空"表示"用户已归属部门"，OrgCheck 逻辑不依赖具体值，语义安全。
 func OrgCheckMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// 只读非计费接口直接放行，不做工作室检查
+		if _, skip := orgCheckPasslist[c.Request.URL.Path]; skip {
+			c.Next()
+			return
+		}
+
 		deptID := c.GetString(CtxKeyDeptID)
 		studioID := c.GetString(CtxKeyStudioID)
 

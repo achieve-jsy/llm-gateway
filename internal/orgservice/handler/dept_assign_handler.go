@@ -6,6 +6,7 @@ import (
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
 	"github.com/example/llm-gateway/internal/orgservice/rbac/policy"
 	"github.com/example/llm-gateway/internal/orgservice/repository"
+	"github.com/example/llm-gateway/internal/orgservice/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -14,6 +15,7 @@ type DeptAssignHandler struct {
 	userOrgRepo *repository.UserOrgRepo
 	deptRepo    *repository.DeptRepo
 	deptPolicy  policy.OrgPolicy
+	orgSyncer   service.OrgSyncer
 }
 
 func NewDeptAssignHandler(
@@ -21,6 +23,11 @@ func NewDeptAssignHandler(
 	deptRepo *repository.DeptRepo,
 ) *DeptAssignHandler {
 	return &DeptAssignHandler{userOrgRepo: userOrgRepo, deptRepo: deptRepo, deptPolicy: policy.OrgPolicy{}}
+}
+
+// SetOrgSyncer 注入 KeyOrgSyncer
+func (h *DeptAssignHandler) SetOrgSyncer(syncer service.OrgSyncer) {
+	h.orgSyncer = syncer
 }
 
 // ChangeDepartment PUT /api/v1/org/users/:id/department
@@ -70,6 +77,12 @@ func (h *DeptAssignHandler) ChangeDepartment(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, errorResp("internal_error", "更新失败: "+err.Error(), "internal_error"))
 		return
 	}
+
+	// 通知 KeyOrgSyncer 同步该用户的 api_keys org 字段
+	if h.orgSyncer != nil {
+		h.orgSyncer.OnUserDeptChanged(c.Request.Context(), userID)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"message":     "已手动修正部门归属",
 		"dept_id":     body.DeptID,
@@ -86,6 +99,10 @@ func (h *DeptAssignHandler) FollowSSO(c *gin.Context) {
 	if err := h.userOrgRepo.FollowSSO(userID); err != nil {
 		c.JSON(http.StatusInternalServerError, errorResp("internal_error", "更新失败: "+err.Error(), "internal_error"))
 		return
+	}
+	// 通知 KeyOrgSyncer 同步该用户的 api_keys org 字段
+	if h.orgSyncer != nil {
+		h.orgSyncer.OnUserDeptChanged(c.Request.Context(), userID)
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "已恢复跟随 SSO，下次登录时将按 SSO 部门自动归集"})
 }

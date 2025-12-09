@@ -130,7 +130,7 @@ func (kc *KeyCache) HandleChangeEvent(event ChangeEvent) {
 		return
 	}
 	switch event.Type {
-	case "key_disabled", "key_deleted", "key_log_changed":
+	case "key_disabled", "key_deleted", "key_log_changed", "key_updated":
 	default:
 		return
 	}

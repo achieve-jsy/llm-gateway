@@ -97,6 +97,9 @@ func (h *OrgHandler) DeleteStudio(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, errorResp("internal_error", err.Error(), "internal"))
 		return
 	}
+	// 注意：DeleteStudio 要求工作室下无部门（HasDepartments 校验），
+	// 部门移出工作室时 SetDeptStudio("") 已触发 OnDeptStudioChanged 同步，
+	// 此处无需再调 OnStudioDeleted。
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
 }
 

@@ -21,6 +21,7 @@ type EmployeeImportService struct {
 	studioRepo  *repository.StudioRepo
 	deptRepo    *repository.DeptRepo
 	mappingRepo *repository.MappingRepo
+	orgSyncer   OrgSyncer
 }
 
 func NewEmployeeImportService(
@@ -35,6 +36,11 @@ func NewEmployeeImportService(
 		deptRepo:    deptRepo,
 		mappingRepo: mappingRepo,
 	}
+}
+
+// SetOrgSyncer 注入 KeyOrgSyncer
+func (s *EmployeeImportService) SetOrgSyncer(syncer OrgSyncer) {
+	s.orgSyncer = syncer
 }
 
 // ParseFile 解析上传文件，返回原始行列表。支持 .csv 和 .xlsx
@@ -183,6 +189,7 @@ func (s *EmployeeImportService) Import(
 	overrides map[int]string,
 ) (*model.EmployeeImportSummary, error) {
 	summary := &model.EmployeeImportSummary{Total: len(rows)}
+	var linkedUserIDs []string
 
 	// ── 1. 收集所有工作室/部门名 ──────────────────────────────────────────────
 	studioNames := uniqueStrings(collect(rows, func(r model.EmployeeImportRow) string { return r.StudioName }))
@@ -322,6 +329,16 @@ func (s *EmployeeImportService) Import(
 			return nil, fmt.Errorf("更新用户 %s 失败: %w", row.Email, err)
 		}
 		summary.UsersLinked++
+		linkedUserIDs = append(linkedUserIDs, userID)
+	}
+
+	// 通知 KeyOrgSyncer 同步受影响用户的 api_keys org 字段
+	if s.orgSyncer != nil && len(linkedUserIDs) > 0 {
+		go func() {
+			for _, uid := range linkedUserIDs {
+				s.orgSyncer.OnUserDeptChanged(context.Background(), uid)
+			}
+		}()
 	}
 
 	return summary, nil

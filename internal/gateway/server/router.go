@@ -98,14 +98,15 @@ func Setup(
 	v1 := r.Group("/v1")
 	v1.Use(middleware.AuthMiddleware(authClient))
 	v1.Use(guard.Handler())
-	// 组织归集状态检查：pending_studio 员工调用模型时返回 403
-	v1.Use(middleware.OrgCheckMiddleware())
 	// 请求/响应正文捕获（供 trace 记录使用）
 	v1.Use(middleware.TraceCapture())
-	// 埋点采集中间件（可选，有 Collector 时生效）
+	// 埋点采集中间件放在 OrgCheck 之前，确保 403 拦截的调用也能写入 call_logs
 	if len(collector) > 0 && collector[0] != nil {
 		v1.Use(middleware.UsageCollector(collector[0], traceWriterOpt))
 	}
+	// 组织归集状态检查：pending_studio 员工调用模型时返回 403
+	// 注意：必须在 UsageCollector 之后，403 才能被记录到调用明细
+	v1.Use(middleware.OrgCheckMiddleware())
 	{
 		// Models
 		v1.GET("/models", boundModelsHandler.Handle)

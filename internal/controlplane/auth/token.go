@@ -17,17 +17,19 @@ func newJTI() string {
 
 type UserClaims struct {
 	jwt.RegisteredClaims
-	UserID       string `json:"user_id"`
-	Email        string `json:"email"`
-	Name         string `json:"name"`
-	Passport     string `json:"passport"`
-	DeptID       string `json:"dept_id"`
-	DeptName     string `json:"dept_name,omitempty"`
-	Role         string `json:"role"`
-	CompanyName  string `json:"company_name,omitempty"`
+	UserID      string `json:"user_id"`
+	Email       string `json:"email"`
+	Name        string `json:"name"`
+	Passport    string `json:"passport"`
+	DeptID      string `json:"dept_id"`
+	DeptName    string `json:"dept_name,omitempty"`
+	StudioID    string `json:"studio_id,omitempty"`
+	StudioName  string `json:"studio_name,omitempty"`
+	Role        string `json:"role"`
+	CompanyName string `json:"company_name,omitempty"`
 }
 
-func GenerateAccessToken(secret string, ttl time.Duration, userID, deptID, deptName, email, name, passport, role string) (string, error) {
+func GenerateAccessToken(secret string, ttl time.Duration, userID, deptID, deptName, studioID, studioName, email, name, passport, role string) (string, error) {
 	now := time.Now()
 	claims := &UserClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -35,13 +37,15 @@ func GenerateAccessToken(secret string, ttl time.Duration, userID, deptID, deptN
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
 		},
-		UserID:   userID,
-		DeptID:   deptID,
-		DeptName: deptName,
-		Email:    email,
-		Name:     name,
-		Passport: passport,
-		Role:     role,
+		UserID:     userID,
+		DeptID:     deptID,
+		DeptName:   deptName,
+		StudioID:   studioID,
+		StudioName: studioName,
+		Email:      email,
+		Name:       name,
+		Passport:   passport,
+		Role:       role,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

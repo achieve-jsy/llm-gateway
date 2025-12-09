@@ -42,6 +42,13 @@ type MappingService struct {
 	mappingRepo *repository.MappingRepo
 	deptRepo    *repository.DeptRepo
 	studioRepo  *repository.StudioRepo
+	orgSyncer   OrgSyncer
+}
+
+// OrgSyncer 抽象 KeyOrgSyncer 依赖，避免循环引用
+type OrgSyncer interface {
+	OnDeptStudioChanged(ctx context.Context, deptSSOs []string)
+	OnUserDeptChanged(ctx context.Context, userID string)
 }
 
 func NewMappingService(
@@ -56,6 +63,11 @@ func NewMappingService(
 		deptRepo:    deptRepo,
 		studioRepo:  studioRepo,
 	}
+}
+
+// SetOrgSyncer 注入 KeyOrgSyncer（router 装配后调用）
+func (s *MappingService) SetOrgSyncer(syncer OrgSyncer) {
+	s.orgSyncer = syncer
 }
 
 // ParseCSV 解析 CSV 内容，返回 ImportRow 列表（最多 500 条）
@@ -173,6 +185,14 @@ func (s *MappingService) Import(ctx context.Context, rows []model.ImportRow, upd
 	if err != nil {
 		return nil, err
 	}
+	// 通知 KeyOrgSyncer 同步受影响用户的 api_keys org 字段
+	if s.orgSyncer != nil {
+		deptSSOs := make([]string, 0, len(rows))
+		for _, r := range rows {
+			deptSSOs = append(deptSSOs, r.DeptID)
+		}
+		s.orgSyncer.OnDeptStudioChanged(ctx, deptSSOs)
+	}
 	return result, nil
 }
 
@@ -184,7 +204,13 @@ func (s *MappingService) SetDeptStudio(ctx context.Context, deptID, studioID, up
 		if err := s.mappingRepo.DeleteByDeptID(deptID); err != nil {
 			return err
 		}
-		return s.deptRepo.UpdateStatus(deptID, model.DeptStatusPendingStudio, "")
+		if err := s.deptRepo.UpdateStatus(deptID, model.DeptStatusPendingStudio, ""); err != nil {
+			return err
+		}
+		if s.orgSyncer != nil {
+			s.orgSyncer.OnDeptStudioChanged(context.Background(), []string{deptID})
+		}
+		return nil
 	}
 	// 校验 studio 存在
 	if _, err := s.studioRepo.GetByID(studioID); err != nil {
@@ -200,7 +226,14 @@ func (s *MappingService) SetDeptStudio(ctx context.Context, deptID, studioID, up
 	if err := s.mappingRepo.Upsert(m); err != nil {
 		return err
 	}
-	return s.deptRepo.UpdateStatus(deptID, model.DeptStatusActive, studioID)
+	if err := s.deptRepo.UpdateStatus(deptID, model.DeptStatusActive, studioID); err != nil {
+		return err
+	}
+	// 通知同步
+	if s.orgSyncer != nil {
+		s.orgSyncer.OnDeptStudioChanged(context.Background(), []string{deptID})
+	}
+	return nil
 }
 
 // List 查询映射列表

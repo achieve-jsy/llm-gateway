@@ -236,6 +236,7 @@ deploy-app-test:
         export REDIS_ADDR='${TEST_REDIS_ADDR}' REDIS_PASSWORD='${TEST_REDIS_PASSWORD}' REDIS_DB='${TEST_REDIS_DB}'
         export JWT_SECRET='${TEST_JWT_SECRET}'
         export INTERNAL_AUTH_TOKEN='${TEST_INTERNAL_TOKEN}'
+        export AUTH_INTERNAL_TOKEN='${TEST_INTERNAL_TOKEN}'
         export ENCRYPTION_KEY='${TEST_ENCRYPTION_KEY}'
         export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
         docker compose -p llm-test up -d --remove-orphans --wait --wait-timeout 90

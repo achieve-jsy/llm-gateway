@@ -102,6 +102,9 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	keyGroupSvc := service.NewKeyGroupService(keyGroupRepo, groupRepo, keyRepo, service.NewEventPublisherAdapter(publisher))
 	keySvc := service.NewKeyService(keyRepo, keyGroupSvc, service.NewEventPublisherAdapter(publisher))
 
+	// KeyOrgSyncer：org 变动后异步同步 api_keys org 字段并失效 KeyCache
+	keyOrgSyncer := service.NewKeyOrgSyncer(db, service.NewEventPublisherAdapter(publisher))
+
 	groupSvc := service.NewGroupService(groupRepo)
 	groupSvc.SetFailoverDefaults(
 		settingsSvc.GetDefaultMaxSwitches(context.Background()),
@@ -383,6 +386,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	orgContainer := orgservice.New(db, rdb, orgservice.BootstrapAdmins())
 	// 将 Bootstrap Checker 注入 auth handler（此处已在 orgContainer 创建后）
 	authHandler.SetBootstrapChecker(orgContainer.Bootstrap)
+	// 注入 KeyOrgSyncer 到 auth handler（SSO 登录部门迁移后同步 api_keys）
+	authHandler.SetOrgSyncer(keyOrgSyncer)
 	deptRepo := orgrepo.NewDeptRepo(db)
 	userOrgRepo := orgrepo.NewUserOrgRepo(db)
 	roleRepo := orgrepo.NewRoleRepo(db)
@@ -390,10 +395,13 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	studioRepo := orgrepo.NewStudioRepo(db)
 	orgH := orghandler.NewOrgHandler(orgContainer.OrgSvc, orgContainer.StudioSvc, userOrgRepo, roleRepo)
 	mappingH := orghandler.NewMappingHandler(orgContainer.MappingSvc, deptRepo)
+	orgContainer.MappingSvc.SetOrgSyncer(keyOrgSyncer)
 	roleH := orghandler.NewRoleHandler(orgContainer.RoleSvc, mappingRepo)
 	empImportSvc := orgservice.NewEmployeeImportSvc(db, studioRepo, deptRepo, mappingRepo)
+	empImportSvc.SetOrgSyncer(keyOrgSyncer)
 	empImportH := orghandler.NewEmployeeImportHandler(empImportSvc)
-	deptAssignH := orghandler.NewDeptAssignHandler(userOrgRepo, deptRepo) // roleRepo 已移除
+	deptAssignH := orghandler.NewDeptAssignHandler(userOrgRepo, deptRepo)
+	deptAssignH.SetOrgSyncer(keyOrgSyncer)
 
 	// Guard 快捷别名（绑定到 orgContainer.RBAC 实例）
 	guard := orgContainer.RBAC.Guard

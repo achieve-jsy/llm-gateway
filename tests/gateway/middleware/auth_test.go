@@ -1,7 +1,6 @@
 package middleware_test
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -95,42 +94,19 @@ func TestAuthMiddleware_APIKey(t *testing.T) {
 		name        string
 		description string
 		apiKey      string
-		serverResp  infra.VerifyKeyResp
-		serverErr   bool
-		wantStatus  int
-		wantUserID  string
+		// serverJSON 直接用 JSON 字符串，避免内嵌匿名结构体字面量随字段增减而失效
+		serverJSON string
+		serverErr  bool
+		wantStatus int
+		wantUserID string
 	}{
 		{
 			name:        "有效的 sk- token",
 			description: "VerifyKey 返回 active 状态，请求应通过且 context 包含正确的 identity",
 			apiKey:      "sk-valid-key-123",
-			serverResp: infra.VerifyKeyResp{
-				Code:    0,
-				Message: "ok",
-				Data: struct {
-					Status          string `json:"status"`
-					KeyID           string `json:"key_id,omitempty"`
-					AccessAllGroups bool   `json:"access_all_groups"`
-					User            struct {
-						UserID       string `json:"user_id"`
-						Name         string `json:"name"`
-						DepartmentID string `json:"department_id,omitempty"`
-					} `json:"user,omitempty"`
-				}{
-					Status:          "active",
-					KeyID:           "key-001",
-					AccessAllGroups: true,
-					User: struct {
-						UserID       string `json:"user_id"`
-						Name         string `json:"name"`
-						DepartmentID string `json:"department_id,omitempty"`
-					}{
-						UserID:       "user-123",
-						Name:         "测试用户",
-						DepartmentID: "dept-456",
-					},
-				},
-			},
+			serverJSON: `{"code":0,"message":"ok","data":{` +
+				`"status":"active","key_id":"key-001","access_all_groups":true,` +
+				`"user":{"user_id":"user-123","name":"测试用户","department_id":"dept-456"}}}`,
 			wantStatus: http.StatusOK,
 			wantUserID: "user-123",
 		},
@@ -138,23 +114,8 @@ func TestAuthMiddleware_APIKey(t *testing.T) {
 			name:        "无效的 sk- token（inactive）",
 			description: "VerifyKey 返回 inactive 状态，应返回 401 认证失败",
 			apiKey:      "sk-disabled-key",
-			serverResp: infra.VerifyKeyResp{
-				Code:    0,
-				Message: "ok",
-				Data: struct {
-					Status          string `json:"status"`
-					KeyID           string `json:"key_id,omitempty"`
-					AccessAllGroups bool   `json:"access_all_groups"`
-					User            struct {
-						UserID       string `json:"user_id"`
-						Name         string `json:"name"`
-						DepartmentID string `json:"department_id,omitempty"`
-					} `json:"user,omitempty"`
-				}{
-					Status: "inactive",
-				},
-			},
-			wantStatus: http.StatusUnauthorized,
+			serverJSON:  `{"code":0,"message":"ok","data":{"status":"inactive"}}`,
+			wantStatus:  http.StatusUnauthorized,
 		},
 		{
 			name:        "auth service 不可用",
@@ -173,7 +134,7 @@ func TestAuthMiddleware_APIKey(t *testing.T) {
 					return
 				}
 				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(tt.serverResp)
+				w.Write([]byte(tt.serverJSON))
 			})
 			defer srv.Close()
 

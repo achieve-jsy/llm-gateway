@@ -46,7 +46,7 @@ func (h *DevLoginHandler) Login(c *gin.Context) {
 		return
 	}
 
-	accessToken, err := auth.GenerateAccessToken(h.jwtSecret, h.accessTokenTTL, user.ID, "", "", user.Username+"@admin.local", user.Username, user.ID, user.Role)
+	accessToken, err := auth.GenerateAccessToken(h.jwtSecret, h.accessTokenTTL, user.ID, "", "", "", "", user.Username+"@admin.local", user.Username, user.ID, user.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "token generation failed"})
 		return

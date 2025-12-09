@@ -25,6 +25,11 @@ type BootstrapGranter interface {
 	CheckAndGrant(ctx context.Context, email, userID string) bool
 }
 
+// OrgSyncer 抽象 KeyOrgSyncer 依赖，避免循环引用
+type OrgSyncer interface {
+	OnUserDeptChanged(ctx context.Context, userID string)
+}
+
 type Handler struct {
 	config           *Config
 	oauthConfig      *oauth2.Config
@@ -34,6 +39,7 @@ type Handler struct {
 	userRepo         *arepo.UserRepository
 	deptRepo         *arepo.DeptRepository
 	bootstrapGranter BootstrapGranter
+	orgSyncer        OrgSyncer
 	initAttempted    bool
 	initErr          error
 }
@@ -41,6 +47,11 @@ type Handler struct {
 // SetBootstrapChecker 在 router 初始化后注入 bootstrap 检查器
 func (h *Handler) SetBootstrapChecker(g BootstrapGranter) {
 	h.bootstrapGranter = g
+}
+
+// SetOrgSyncer 注入 KeyOrgSyncer
+func (h *Handler) SetOrgSyncer(s OrgSyncer) {
+	h.orgSyncer = s
 }
 
 type DaQunUserInfo struct {
@@ -195,6 +206,11 @@ func (h *Handler) Callback(c *gin.Context) {
 
 	user, deptID, deptName := h.upsertUser(userInfo)
 
+	// SSO 登录可能引起部门迁移，异步同步该用户的 api_keys org 字段
+	if h.orgSyncer != nil {
+		h.orgSyncer.OnUserDeptChanged(c.Request.Context(), user.ID.String())
+	}
+
 	// ── Bootstrap：若系统无管理员且当前账号在白名单，自动授予 admin ──────────
 	isBootstrapAdmin := false
 	if h.bootstrapGranter != nil {
@@ -207,7 +223,10 @@ func (h *Handler) Callback(c *gin.Context) {
 	// ── 部门映射状态（供前端展示引导提示） ─────────────────────────────────
 	deptStatus := h.deptMappingStatus(userInfo.EhrDeptID)
 
-	accessToken, err := GenerateAccessToken(h.config.JWTSecret, h.config.AccessTokenTTL, user.ID.String(), deptID, deptName, userInfo.Email, userInfo.Name, userInfo.Passport, user.Role)
+	// 查询 studio_id/studio_name 写入 JWT，供 gateway OrgCheckMiddleware 使用
+	studioID, studioName := h.deptStudioInfo(userInfo.EhrDeptID)
+
+	accessToken, err := GenerateAccessToken(h.config.JWTSecret, h.config.AccessTokenTTL, user.ID.String(), deptID, deptName, studioID, studioName, userInfo.Email, userInfo.Name, userInfo.Passport, user.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "failed to generate token", "code": "token_generation_failed"}})
 		return
@@ -378,7 +397,7 @@ func (h *Handler) Refresh(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{"type": "authentication_error", "message": "token revoked", "code": "unauthorized"}})
 		return
 	}
-	accessToken, err := GenerateAccessToken(h.config.JWTSecret, h.config.AccessTokenTTL, claims.UserID, claims.DeptID, claims.DeptName, claims.Email, claims.Name, claims.Passport, claims.Role)
+	accessToken, err := GenerateAccessToken(h.config.JWTSecret, h.config.AccessTokenTTL, claims.UserID, claims.DeptID, claims.DeptName, claims.StudioID, claims.StudioName, claims.Email, claims.Name, claims.Passport, claims.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "token generation failed", "code": "internal"}})
 		return
@@ -426,6 +445,26 @@ func (h *Handler) deptMappingStatus(ehrDeptID string) string {
 		return "pending_studio"
 	}
 	return "active"
+}
+
+// deptStudioInfo 根据 SSO dept_id 查询对应的 studio_id 和 studio_name。
+// 供生成 JWT 时写入 claims，让 gateway OrgCheckMiddleware 能正确判断。
+func (h *Handler) deptStudioInfo(ehrDeptID string) (studioID, studioName string) {
+	if ehrDeptID == "" {
+		return "", ""
+	}
+	var row struct {
+		StudioID   string `gorm:"column:studio_id"`
+		StudioName string `gorm:"column:studio_name"`
+	}
+	h.db.Raw(`
+		SELECT dsm.studio_id::text AS studio_id, COALESCE(s.name, '') AS studio_name
+		FROM dept_studio_map dsm
+		LEFT JOIN studios s ON s.id = dsm.studio_id
+		WHERE dsm.dept_id = ?
+		LIMIT 1
+	`, ehrDeptID).Scan(&row)
+	return row.StudioID, row.StudioName
 }
 
 func generateState() string {

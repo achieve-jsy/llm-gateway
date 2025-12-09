@@ -1487,7 +1487,7 @@ async function doEmpPreview() {
     const res = await http.post('/api/v1/org/employees/import?dry_run=true', fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
-    empPreviewRows.value = res.data.rows || []
+    empPreviewRows.value = res.data.data.rows || []
     empOverrides.value   = {}
     empUserSearchResults.value = {}
     empImportStep.value  = 'preview'
@@ -1523,7 +1523,7 @@ async function doEmpImport() {
     const res = await http.post('/api/v1/org/employees/import', fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
-    empImportSummary.value = res.data
+    empImportSummary.value = res.data.data
     empImportStep.value = 'done'
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.message || '导入失败')

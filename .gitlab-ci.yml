@@ -232,8 +232,8 @@ deploy-app-test:
         docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} || echo "CP image not found, reusing existing"
         export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=test
         # 密钥/连接串由 GitLab CI/CD 变量注入到本 SSH 会话，docker-compose 才读得到。
-        # 切勿删除：远程主机拿不到 Runner 上的 GitLab 变量，删掉这些 export 会导致
-        # docker-compose 的 ${VAR:?required} 插值失败、容器起不来（详见 test-env-config skill）。
+        # 切勿删除这些 export：远程主机拿不到 Runner 上的 GitLab 变量，删掉会导致
+        # docker-compose 的必填变量插值失败、容器起不来（详见 test-env-config skill）。
         export DATABASE_URL='${TEST_DATABASE_URL}'
         export REDIS_ADDR='${TEST_REDIS_ADDR}' REDIS_PASSWORD='${TEST_REDIS_PASSWORD}' REDIS_DB='${TEST_REDIS_DB}'
         export JWT_SECRET='${TEST_JWT_SECRET}'

@@ -476,9 +476,6 @@
   <!-- ═══ 批量导入弹窗 ══════════════════════════════════════════════════════ -->
   <el-dialog v-model="importDialogVisible" title="批量导入部门映射" width="520px" @close="resetImport">
     <template v-if="importState === 'idle'">
-      <el-alert type="info" :closable="false" style="margin-bottom: 16px">
-        <p>CSV 格式：首行 header 为 <code>dept_id,studio_id</code>，UTF-8，最多 500 条</p>
-      </el-alert>
       <el-upload :auto-upload="false" :limit="1" accept=".csv" @change="e => selectedFile = e.raw">
         <el-button>选择 CSV 文件</el-button>
         <template #tip><div class="el-upload__tip">{{ selectedFile?.name }}</div></template>

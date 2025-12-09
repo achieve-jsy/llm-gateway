@@ -179,6 +179,9 @@ func (s *KeyOrgSyncer) publish(synced []syncedKey) {
 // OnDeptStudioChanged 部门→工作室映射变更后调用（SetDeptStudio / ImportMappings）
 // deptSSOs: 受影响的 SSO dept_id 列表
 func (s *KeyOrgSyncer) OnDeptStudioChanged(ctx context.Context, deptSSOs []string) {
+	if s.keyRepo == nil || s.keyRepo.db == nil {
+		return
+	}
 	go func() {
 		for _, deptSSO := range deptSSOs {
 			rows, err := s.keyRepo.getUsersOrgByDeptSSO(deptSSO)
@@ -195,6 +198,9 @@ func (s *KeyOrgSyncer) OnDeptStudioChanged(ctx context.Context, deptSSOs []strin
 
 // OnUserDeptChanged 用户部门变更后调用（ChangeDepartment / FollowSSO / SSO 登录迁移 / EmployeeImport）
 func (s *KeyOrgSyncer) OnUserDeptChanged(ctx context.Context, userID string) {
+	if s.keyRepo == nil || s.keyRepo.db == nil {
+		return
+	}
 	go func() {
 		row, err := s.keyRepo.getUserOrgByUserID(userID)
 		if err != nil || row.UserID == "" {

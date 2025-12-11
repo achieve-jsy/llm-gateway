@@ -23,6 +23,8 @@ type User struct {
 	DeptSource    string     `gorm:"type:varchar(16);not null;default:sso" json:"dept_source"`
 	DeptUpdatedBy string     `gorm:"type:varchar(128)" json:"dept_updated_by,omitempty"`
 	DeptUpdatedAt *time.Time `gorm:"type:timestamptz" json:"dept_updated_at,omitempty"`
+	// 登录状态：active（已登录）/ pending（花名册导入，尚未 SSO 登录）
+	LoginStatus   string     `gorm:"type:varchar(16);not null;default:active" json:"login_status"`
 	CreatedAt     time.Time  `gorm:"not null;autoCreateTime" json:"created_at"`
 	UpdatedAt     time.Time  `gorm:"not null;autoUpdateTime" json:"updated_at"`
 }

@@ -274,6 +274,11 @@ func (h *Handler) upsertUser(info *DaQunUserInfo) (*amodel.User, string, string)
 		}
 	}
 
+	// 同步 dept_studio_map：如果导入时按名称创建了部门映射，将其同步到 SSO dept_id
+	if deptModel != nil && deptName != "" {
+		h.syncDeptStudioMap(deptID, deptName)
+	}
+
 	existingUser, err := h.userRepo.FindBySub(info.Passport)
 	if err == nil && existingUser != nil {
 		existingUser.Name = info.Name
@@ -345,6 +350,30 @@ func (h *Handler) upsertUser(info *DaQunUserInfo) (*amodel.User, string, string)
 		slog.Warn("failed to create user", "error", createErr)
 	}
 	return newUser, deptID, deptName
+}
+
+// syncDeptStudioMap 将导入时按 dept_name 创建的 dept_studio_map 同步到 SSO dept_id
+func (h *Handler) syncDeptStudioMap(deptID, deptName string) {
+	var importMapping struct {
+		DeptID   string `gorm:"column:dept_id"`
+		StudioID string `gorm:"column:studio_id"`
+	}
+	err := h.db.Table("dept_studio_map m").
+		Select("m.dept_id, m.studio_id").
+		Joins("JOIN departments d ON d.dept_id = m.dept_id").
+		Where("LOWER(d.dept_name) = LOWER(?) AND m.dept_id != ?", deptName, deptID).
+		First(&importMapping).Error
+	if err != nil {
+		return
+	}
+	if err := h.db.Exec(`
+		INSERT INTO dept_studio_map (dept_id, studio_id, source, updated_by, updated_at)
+		VALUES (?, ?, 'sso_sync', 'system', NOW())
+		ON CONFLICT (dept_id) DO UPDATE
+		SET studio_id = EXCLUDED.studio_id, source = 'sso_sync', updated_at = NOW()
+	`, deptID, importMapping.StudioID).Error; err != nil {
+		slog.Warn("failed to sync dept_studio_map from import", "dept_id", deptID, "error", err)
+	}
 }
 
 func (h *Handler) fetchUserInfo(ctx context.Context, token *oauth2.Token) (*DaQunUserInfo, error) {

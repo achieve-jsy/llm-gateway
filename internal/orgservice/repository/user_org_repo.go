@@ -127,6 +127,7 @@ type DeptMemberInfo struct {
 	JobFamily   string `gorm:"column:job_family"   json:"job_family,omitempty"`
 	JobCategory string `gorm:"column:job_category" json:"job_category,omitempty"`
 	DeptSource  string `gorm:"column:dept_source"  json:"dept_source"`
+	LoginStatus string `gorm:"column:login_status" json:"login_status"`
 	HasConflict bool   `gorm:"column:has_conflict" json:"has_conflict"`
 }
 
@@ -151,6 +152,7 @@ func (r *UserOrgRepo) ListMembersByDeptID(deptID string, page, pageSize int) ([]
 		       COALESCE(u.job_family, '')   AS job_family,
 		       COALESCE(u.job_category, '') AS job_category,
 		       COALESCE(u.dept_source, 'sso') AS dept_source,
+		       COALESCE(u.login_status, 'active') AS login_status,
 		       EXISTS(
 		           SELECT 1 FROM user_dept_conflicts c
 		           WHERE c.user_id = u.id

@@ -301,18 +301,27 @@ func (s *EmployeeImportService) Import(
 			userID = oid
 		}
 
-		if userID == "" {
-			summary.UnmatchedEmails = append(summary.UnmatchedEmails, row.Email)
-			continue
-		}
-
-		// 获取 departments.id（UUID）用于更新 users.dept_id
+		// 获取 departments.id（UUID）用于更新/创建 users.dept_id
 		var deptUUID string
 		if deptID != "" {
 			if err := s.db.Raw(`SELECT id::text FROM departments WHERE dept_id = ? LIMIT 1`, deptID).
 				Scan(&deptUUID).Error; err != nil {
 				return nil, err
 			}
+		}
+
+		if userID == "" {
+			// 未匹配到已有用户 → 创建 pending 用户，待 SSO 登录时自动激活
+			pendingSub := "pending:" + row.Email
+			if err := s.db.Exec(`
+				INSERT INTO users (sub, name, email, source, role, login_status, employee_id, job_family, job_category, job_title, dept_id)
+				VALUES (?, ?, ?, 'import', 'user', 'pending', ?, ?, ?, ?, NULLIF(?,'')::uuid)
+				ON CONFLICT (sub) DO NOTHING
+			`, pendingSub, row.Name, row.Email, row.EmployeeID, row.JobFamily, row.JobCategory, row.JobTitle, deptUUID).Error; err != nil {
+				return nil, fmt.Errorf("创建 pending 用户 %s 失败: %w", row.Email, err)
+			}
+			summary.UsersPending++
+			continue
 		}
 
 		updates := map[string]any{

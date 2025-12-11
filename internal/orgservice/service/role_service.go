@@ -62,10 +62,12 @@ func (s *RoleService) CheckScope(ctx context.Context, operatorID string, target 
 }
 
 // Grant 派发角色（幂等）
-func (s *RoleService) Grant(ctx context.Context, operatorID string, operatorTarget model.TargetScope, role *model.UserRole) error {
-	// 校验派发者管辖域
-	if err := s.CheckScope(ctx, operatorID, operatorTarget); err != nil {
-		return err
+// isGlobalAdmin 表示操作者是系统管理员（JWT user_role=admin），跳过管辖域检查
+func (s *RoleService) Grant(ctx context.Context, operatorID string, operatorTarget model.TargetScope, role *model.UserRole, isGlobalAdmin bool) error {
+	if !isGlobalAdmin {
+		if err := s.CheckScope(ctx, operatorID, operatorTarget); err != nil {
+			return err
+		}
 	}
 	// 派发者只能授予 <= 自己级别的角色
 	if role.GrantedBy == "" {
@@ -83,9 +85,12 @@ func (s *RoleService) Grant(ctx context.Context, operatorID string, operatorTarg
 }
 
 // Revoke 卸任角色
-func (s *RoleService) Revoke(ctx context.Context, operatorID string, operatorTarget model.TargetScope, userID string, role model.RoleType, scopeID string) error {
-	if err := s.CheckScope(ctx, operatorID, operatorTarget); err != nil {
-		return err
+// isGlobalAdmin 表示操作者是系统管理员（JWT user_role=admin），跳过管辖域检查
+func (s *RoleService) Revoke(ctx context.Context, operatorID string, operatorTarget model.TargetScope, userID string, role model.RoleType, scopeID string, isGlobalAdmin bool) error {
+	if !isGlobalAdmin {
+		if err := s.CheckScope(ctx, operatorID, operatorTarget); err != nil {
+			return err
+		}
 	}
 	if err := s.roleRepo.Revoke(userID, role, scopeID); err != nil {
 		return err

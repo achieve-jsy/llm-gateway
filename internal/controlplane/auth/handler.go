@@ -308,10 +308,27 @@ func (h *Handler) upsertUser(info *DaQunUserInfo) (*amodel.User, string, string)
 			// dept_source=sso（默认）：按 SSO claims 正常迁移
 			existingUser.DeptID = &deptModel.ID
 		}
+		// 确保登录状态为 active（可能之前是 pending）
+		existingUser.LoginStatus = "active"
 		if updateErr := h.userRepo.Update(existingUser); updateErr != nil {
 			slog.Warn("failed to update user", "error", updateErr)
 		}
 		return existingUser, deptID, deptName
+	}
+
+	// sub 未命中 → 检查是否有按邮箱导入的 pending 用户，激活之
+	pendingUser, pendingErr := h.userRepo.FindByEmail(info.Email)
+	if pendingErr == nil && pendingUser != nil && pendingUser.LoginStatus == "pending" {
+		pendingUser.Sub = info.Passport
+		pendingUser.Name = info.Name
+		pendingUser.LoginStatus = "active"
+		if deptModel != nil {
+			pendingUser.DeptID = &deptModel.ID
+		}
+		if updateErr := h.userRepo.Update(pendingUser); updateErr != nil {
+			slog.Warn("failed to activate pending user", "error", updateErr)
+		}
+		return pendingUser, deptID, deptName
 	}
 
 	newUser := &amodel.User{

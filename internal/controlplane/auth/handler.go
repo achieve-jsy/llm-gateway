@@ -373,6 +373,14 @@ func (h *Handler) syncDeptStudioMap(deptID, deptName string) {
 		SET studio_id = EXCLUDED.studio_id, source = 'sso_sync', updated_at = NOW()
 	`, deptID, importMapping.StudioID).Error; err != nil {
 		slog.Warn("failed to sync dept_studio_map from import", "dept_id", deptID, "error", err)
+		return
+	}
+	// 同步部门 status 为 active 并回填 studio_id
+	if err := h.db.Exec(`
+		UPDATE departments SET status = 'active', studio_id = ?::uuid
+		WHERE dept_id = ? AND (status != 'active' OR studio_id IS NULL)
+	`, importMapping.StudioID, deptID).Error; err != nil {
+		slog.Warn("failed to update dept status after map sync", "dept_id", deptID, "error", err)
 	}
 }
 

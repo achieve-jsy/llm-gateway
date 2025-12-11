@@ -264,7 +264,7 @@ import { join, dirname } from "node:path";
 import { writeFile, mkdir, readFile } from "node:fs/promises";
 
 // src/version.ts
-var PLUGIN_VERSION = "0.9.0-llmgw.3";
+var PLUGIN_VERSION = "0.9.0-llmgw.5";
 
 // src/utils/discovery-report.ts
 var SNAPSHOT_PATH = join(homedir(), ".config", "opencode", "plugins", "models-discovery.snapshot.json");
@@ -752,7 +752,7 @@ async function enhanceConfig(config, client, toastNotifier, pluginConfig, logger
           const modelList = newModels.length <= 5 ? newModels.join(", ") : `${newModels.slice(0, 5).join(", ")} 等 ${newModels.length} 个`;
           toastNotifier.success(`网关上新: ${modelList}`, "新模型", 15000).catch(() => {});
         }
-      }, 5000);
+      }, 3000);
     }
     if (Object.keys(providers).length === 0) {
       const detected = await autoDetectOpenAICompatibleProvider();

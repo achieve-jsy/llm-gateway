@@ -220,7 +220,7 @@ export async function enhanceConfig(
             .success(`网关上新: ${modelList}`, '新模型', 15000)
             .catch(() => {})
         }
-      }, 5000)
+      }, 3000)
     }
 
     if (Object.keys(providers).length === 0) {

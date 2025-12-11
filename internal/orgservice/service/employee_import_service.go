@@ -235,11 +235,12 @@ func (s *EmployeeImportService) Import(
 		}
 		key := strings.ToLower(name)
 		if _, ok := deptNameToID[key]; !ok {
-			// dept_id 用 dept_name 本身（导入场景无 SSO dept_id）
-			if err := s.deptRepo.UpsertDepartment(name, name); err != nil {
+			// dept_id 用 "import:" 前缀占位（导入场景无 SSO dept_id），避免与 SSO 创建的 UUID dept_id 冲突
+			placeholderID := "import:" + name
+			if err := s.deptRepo.UpsertDepartment(placeholderID, name); err != nil {
 				return nil, fmt.Errorf("创建部门 %q 失败: %w", name, err)
 			}
-			deptNameToID[key] = name
+			deptNameToID[key] = placeholderID
 			summary.DeptsCreated++
 		}
 	}
@@ -314,8 +315,8 @@ func (s *EmployeeImportService) Import(
 			// 未匹配到已有用户 → 创建 pending 用户，待 SSO 登录时自动激活
 			pendingSub := "pending:" + row.Email
 			if err := s.db.Exec(`
-				INSERT INTO users (sub, name, email, source, role, login_status, employee_id, job_family, job_category, job_title, dept_id)
-				VALUES (?, ?, ?, 'import', 'user', 'pending', ?, ?, ?, ?, NULLIF(?,'')::uuid)
+				INSERT INTO users (sub, name, email, source, role, login_status, employee_id, job_family, job_category, job_title, dept_id, created_at, updated_at)
+				VALUES (?, ?, ?, 'import', 'user', 'pending', ?, ?, ?, ?, NULLIF(?,'')::uuid, NOW(), NOW())
 				ON CONFLICT (sub) DO NOTHING
 			`, pendingSub, row.Name, row.Email, row.EmployeeID, row.JobFamily, row.JobCategory, row.JobTitle, deptUUID).Error; err != nil {
 				return nil, fmt.Errorf("创建 pending 用户 %s 失败: %w", row.Email, err)

@@ -264,9 +264,13 @@ func (h *Handler) upsertUser(info *DaQunUserInfo) (*amodel.User, string, string)
 	if deptID != "" {
 		dept, err := h.deptRepo.FindByDeptID(deptID)
 		if err != nil {
-			dept = &amodel.Department{DeptID: deptID, DeptName: deptName}
-			if createErr := h.deptRepo.Create(dept); createErr != nil {
-				slog.Warn("failed to create department", "error", createErr)
+			// SSO dept_id 未命中 → 检查是否有导入时按名称创建的部门，把 dept_id 改为 SSO 的
+			dept = h.mergeImportDept(deptID, deptName)
+			if dept == nil {
+				dept = &amodel.Department{DeptID: deptID, DeptName: deptName}
+				if createErr := h.deptRepo.Create(dept); createErr != nil {
+					slog.Warn("failed to create department", "error", createErr)
+				}
 			}
 		}
 		if dept != nil {
@@ -345,6 +349,34 @@ func (h *Handler) upsertUser(info *DaQunUserInfo) (*amodel.User, string, string)
 		slog.Warn("failed to create user", "error", createErr)
 	}
 	return newUser, deptID, deptName
+}
+
+// mergeImportDept 将导入创建的部门（dept_id 为 import: 前缀或名称）合并到 SSO 的 dept_id
+// 返回合并后的 department，失败或无匹配时返回 nil
+func (h *Handler) mergeImportDept(ssDeptID, deptName string) *amodel.Department {
+	var importDept amodel.Department
+	err := h.db.Where("LOWER(dept_name) = LOWER(?) AND dept_id != ?", deptName, ssDeptID).
+		First(&importDept).Error
+	if err != nil {
+		return nil
+	}
+
+	oldDeptID := importDept.DeptID
+	// 更新 dept_id 为 SSO 的
+	if err := h.db.Exec(`UPDATE departments SET dept_id = ? WHERE dept_id = ?`, ssDeptID, oldDeptID).Error; err != nil {
+		slog.Warn("failed to merge department dept_id", "old", oldDeptID, "new", ssDeptID, "error", err)
+		return nil
+	}
+	// 同步 dept_studio_map 的 dept_id
+	if err := h.db.Exec(`UPDATE dept_studio_map SET dept_id = ? WHERE dept_id = ?`, ssDeptID, oldDeptID).Error; err != nil {
+		slog.Warn("failed to update dept_studio_map dept_id", "old", oldDeptID, "new", ssDeptID, "error", err)
+	}
+
+	dept, err := h.deptRepo.FindByDeptID(ssDeptID)
+	if err != nil {
+		return nil
+	}
+	return dept
 }
 
 func (h *Handler) fetchUserInfo(ctx context.Context, token *oauth2.Token) (*DaQunUserInfo, error) {

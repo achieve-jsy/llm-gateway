@@ -56,9 +56,9 @@ func (p UsagePolicy) QueryScope(actor rbac.Actor) func(*gorm.DB) *gorm.DB {
 			return db.Where("studio_id IN ?", actor.StudioIDs)
 		}
 		if len(actor.DeptIDs) > 0 {
-			// usage_daily.dept_id 可能是 SSO EhrDeptID（JWT）或 departments.id UUID（API Key），
-			// 用 EXISTS 子查询同时匹配两种格式
-			return db.Where(`EXISTS (SELECT 1 FROM departments dd WHERE dd.dept_id IN ? AND (dd.dept_id = usage_daily.dept_id OR dd.id::text = usage_daily.dept_id))`, actor.DeptIDs)
+			// usage_daily/call_logs.dept_id 可能是 SSO EhrDeptID 或 departments.id UUID，
+			// 用 OR 同时匹配两种格式
+			return db.Where("dept_id IN ? OR dept_id IN (SELECT id::text FROM departments WHERE dept_id IN ?)", actor.DeptIDs, actor.DeptIDs)
 		}
 		return db.Where("user_id = ?", actor.UserID)
 	}

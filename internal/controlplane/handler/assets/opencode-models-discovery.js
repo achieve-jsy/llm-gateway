@@ -752,7 +752,7 @@ async function enhanceConfig(config, client, toastNotifier, pluginConfig, logger
           const modelList = newModels.length <= 5 ? newModels.join(", ") : `${newModels.slice(0, 5).join(", ")} 等 ${newModels.length} 个`;
           toastNotifier.success(`网关上新: ${modelList}`, "新模型", 15000).catch(() => {});
         }
-      }, 3000);
+      }, 1000);
     }
     if (Object.keys(providers).length === 0) {
       const detected = await autoDetectOpenAICompatibleProvider();

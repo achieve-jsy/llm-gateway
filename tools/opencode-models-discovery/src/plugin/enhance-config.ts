@@ -197,7 +197,8 @@ export async function enhanceConfig(
       const newModels = findNewModels(openAICompatibleProviders, previousSnapshot)
 
       await writeDiscoverySnapshot(openAICompatibleProviders, summary, logger)
-      
+
+      // 延迟 1 秒等待 TUI 初始化完成后再发送 toast
       setTimeout(() => {
         for (const prov of openAICompatibleProviders) {
           const provSummary = summarizeProviders([prov])
@@ -220,7 +221,7 @@ export async function enhanceConfig(
             .success(`网关上新: ${modelList}`, '新模型', 15000)
             .catch(() => {})
         }
-      }, 3000)
+      }, 1000)
     }
 
     if (Object.keys(providers).length === 0) {

@@ -294,6 +294,8 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 
 	startStr := c.DefaultQuery("start", time.Now().AddDate(0, -1, 0).Format("2006-01-02"))
 	endStr := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
+	modelName   := c.Query("model_name")
+	filterStatus := c.Query("status")
 
 	// 用 Actor 替代手动查 user_roles 的 getEffectiveRole
 	// Guard(PermUsageViewScoped) middleware 已在路由层注入 Actor
@@ -327,19 +329,18 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 	switch scope {
 	case "dept":
 		// 按用户聚合，可选按部门过滤
-		// ud.dept_id 可能是 SSO EhrDeptID（JWT 路径）或 departments.id UUID（API Key 路径），
-		// 用 EXISTS 子查询同时匹配两种格式
-		groupExpr = "ud.user_id"
-		nameExpr = "COALESCE(u.name, ud.user_id)"
+		// cl.dept_id 可能为空（历史数据）或 SSO EhrDeptID 或 departments.id UUID
+		groupExpr = "cl.user_id"
+		nameExpr = "COALESCE(u.name, cl.user_id)"
 		if id != "" {
-			whereClause = "AND EXISTS (SELECT 1 FROM departments dd WHERE dd.dept_id = ? AND (dd.dept_id = ud.dept_id OR dd.id::text = ud.dept_id))"
-			args = append(args, id)
+			whereClause = "AND (cl.dept_id = ? OR cl.dept_id IN (SELECT id::text FROM departments WHERE dept_id = ?) OR cl.user_id IN (SELECT u2.id::text FROM users u2 JOIN departments d2 ON d2.id = u2.dept_id WHERE d2.dept_id = ?))"
+			args = append(args, id, id, id)
 		}
 	case "studio":
 		if id != "" {
 			// 下钻到工作室内的部门列表
-			groupExpr = "ud.dept_id"
-			nameExpr = "COALESCE(d.dept_name, ud.dept_id)"
+			groupExpr = "cl.dept_id"
+			nameExpr = "COALESCE(d.dept_name, cl.dept_id)"
 			whereClause = "AND dsm.studio_id::text = ?"
 			args = append(args, id)
 		} else {
@@ -349,15 +350,27 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 		}
 	case "user":
 		// 按模型聚合，只看指定用户
-		groupExpr = "ud.model"
-		nameExpr = "ud.model"
+		groupExpr = "cl.model"
+		nameExpr = "cl.model"
 		if id != "" {
-			whereClause = "AND ud.user_id = ?"
+			whereClause = "AND cl.user_id = ?"
 			args = append(args, id)
 		}
 	default: // company
 		groupExpr = "dsm.studio_id::text"
 		nameExpr = "COALESCE(s.name, dsm.studio_id::text)"
+	}
+
+	// 模型/状态筛选（可选，与 scope 筛选叠加）
+	if modelName != "" {
+		whereClause += " AND (cl.model ILIKE ? OR cl.routed_model ILIKE ? OR cl.group_name ILIKE ?)"
+		like := "%" + modelName + "%"
+		args = append(args, like, like, like)
+	}
+	if filterStatus == "success" {
+		whereClause += " AND cl.status = 200"
+	} else if filterStatus == "error" {
+		whereClause += " AND cl.status != 200"
 	}
 
 	baseArgs := []interface{}{startStr, endStr}
@@ -366,17 +379,17 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 	rawSQL := `
 		SELECT ` + groupExpr + ` AS group_id,
 		       ` + nameExpr + ` AS group_name,
-		       SUM(ud.prompt_tokens + ud.completion_tokens + ud.reasoning_tokens) AS total_tokens,
-		       SUM(ud.est_cost_usd) AS cost_est,
-		       COUNT(DISTINCT ud.user_id) AS user_count,
-		       SUM(ud.req_count) AS call_count,
-		       SUM(ud.req_count - ud.success_count) AS error_count
-		FROM usage_daily ud
-		LEFT JOIN departments d ON (d.dept_id = ud.dept_id OR d.id::text = ud.dept_id)
-		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = COALESCE(d.dept_id, ud.dept_id)
+		       SUM(cl.prompt_tokens + cl.completion_tokens + cl.reasoning_tokens) AS total_tokens,
+		       SUM(cl.est_cost_usd) AS cost_est,
+		       COUNT(DISTINCT cl.user_id) AS user_count,
+		       COUNT(*) AS call_count,
+		       COUNT(*) FILTER (WHERE cl.status != 200) AS error_count
+		FROM call_logs cl
+		LEFT JOIN departments d ON (d.dept_id = cl.dept_id OR d.id::text = cl.dept_id)
+		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = COALESCE(d.dept_id, cl.dept_id)
 		LEFT JOIN studios s ON s.id = dsm.studio_id
-		LEFT JOIN users u ON u.id::text = ud.user_id
-		WHERE ud.stat_date BETWEEN ? AND ?
+		LEFT JOIN users u ON u.id::text = cl.user_id
+		WHERE cl.ts::date BETWEEN ?::date AND ?::date
 		` + whereClause + `
 		GROUP BY ` + groupExpr + `, ` + nameExpr + `
 		ORDER BY cost_est DESC
@@ -401,10 +414,10 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 		Count int `gorm:"column:cnt"`
 	}
 	userCountSQL := `
-		SELECT COUNT(DISTINCT ud.user_id) AS cnt
-		FROM usage_daily ud
-		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = ud.dept_id
-		WHERE ud.stat_date BETWEEN ? AND ?
+		SELECT COUNT(DISTINCT cl.user_id) AS cnt
+		FROM call_logs cl
+		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = cl.dept_id
+		WHERE cl.ts::date BETWEEN ?::date AND ?::date
 		` + whereClause
 	_ = db.Raw(userCountSQL, queryArgs...).Scan(&userCountRow).Error
 	summary.UserCount = userCountRow.Count
@@ -424,9 +437,9 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 		Cost  float64 `gorm:"column:cost"`
 		Calls int64   `gorm:"column:calls"`
 	}
-	_ = db.Table("usage_daily").
-		Select("SUM(est_cost_usd) AS cost, SUM(req_count) AS calls").
-		Where("stat_date BETWEEN ? AND ?", prevStart.Format("2006-01-02"), prevEnd.Format("2006-01-02")).
+	_ = db.Table("call_logs").
+		Select("SUM(est_cost_usd) AS cost, COUNT(*) AS calls").
+		Where("ts::date BETWEEN ?::date AND ?::date", prevStart.Format("2006-01-02"), prevEnd.Format("2006-01-02")).
 		Scopes(usagePolicy.QueryScope(actor)).
 		Scan(&prevRow).Error
 	summary.PrevCostEstimate = prevRow.Cost
@@ -479,7 +492,9 @@ func (h *UsageHandler) DashboardTrend(c *gin.Context) {
 	}
 	startStr := c.DefaultQuery("start", time.Now().AddDate(0, -1, 0).Format("2006-01-02"))
 	endStr := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
-	filterUserID := c.Query("user_id")
+	filterUserID  := c.Query("user_id")
+	filterModel   := c.Query("model_name")
+	filterStatus  := c.Query("status")
 
 	actor := rbac.GetActor(c)
 	usagePol := policy.UsagePolicy{}
@@ -492,19 +507,27 @@ func (h *UsageHandler) DashboardTrend(c *gin.Context) {
 		Cost        float64 `gorm:"column:cost"`
 	}
 	q := h.db.WithContext(c.Request.Context()).
-		Table("usage_daily").
-		Select(`stat_date::text AS date,
-			SUM(req_count) AS calls,
-			SUM(req_count - success_count) AS errors,
+		Table("call_logs").
+		Select(`ts::date::text AS date,
+			COUNT(*) AS calls,
+			COUNT(*) FILTER (WHERE status != 200) AS errors,
 			SUM(prompt_tokens + completion_tokens + reasoning_tokens) AS total_tokens,
 			SUM(est_cost_usd) AS cost`).
-		Where("stat_date BETWEEN ? AND ?", startStr, endStr).
+		Where("ts::date BETWEEN ?::date AND ?::date", startStr, endStr).
 		Scopes(usagePol.QueryScope(actor))
 	if filterUserID != "" {
 		q = q.Where("user_id = ?", filterUserID)
 	}
-	if err := q.Group("stat_date").
-		Order("stat_date ASC").
+	if filterModel != "" {
+		q = q.Where("(model ILIKE ? OR routed_model ILIKE ? OR group_name ILIKE ?)", "%"+filterModel+"%", "%"+filterModel+"%", "%"+filterModel+"%")
+	}
+	if filterStatus == "success" {
+		q = q.Where("status = 200")
+	} else if filterStatus == "error" {
+		q = q.Where("status != 200")
+	}
+	if err := q.Group("ts::date").
+		Order("ts::date ASC").
 		Scan(&rows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -537,6 +560,7 @@ func (h *UsageHandler) DashboardModels(c *gin.Context) {
 		limit = 10
 	}
 	filterUserID := c.Query("user_id")
+	filterStatus := c.Query("status")
 
 	actor := rbac.GetActor(c)
 	usagePol := policy.UsagePolicy{}
@@ -548,15 +572,20 @@ func (h *UsageHandler) DashboardModels(c *gin.Context) {
 		Cost        float64 `gorm:"column:cost"`
 	}
 	q := h.db.WithContext(c.Request.Context()).
-		Table("usage_daily").
+		Table("call_logs").
 		Select(`model,
-			SUM(req_count) AS calls,
+			COUNT(*) AS calls,
 			SUM(prompt_tokens + completion_tokens + reasoning_tokens) AS total_tokens,
 			SUM(est_cost_usd) AS cost`).
-		Where("stat_date BETWEEN ? AND ?", startStr, endStr).
+		Where("ts::date BETWEEN ?::date AND ?::date", startStr, endStr).
 		Scopes(usagePol.QueryScope(actor))
 	if filterUserID != "" {
 		q = q.Where("user_id = ?", filterUserID)
+	}
+	if filterStatus == "success" {
+		q = q.Where("status = 200")
+	} else if filterStatus == "error" {
+		q = q.Where("status != 200")
 	}
 	if err := q.Group("model").
 		Order("cost DESC").

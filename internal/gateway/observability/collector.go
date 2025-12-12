@@ -339,7 +339,7 @@ func (w *BatchWriter) fillMissingIdentity(ctx context.Context, batch []model.Cal
 		           du.username,
 		           ''
 		       ) AS user_name,
-		       COALESCE(NULLIF(ak.dept_id,''), d.id::text, '') AS dept_id,
+		       COALESCE(NULLIF(ak.dept_id,''), d.dept_id, '') AS dept_id,
 		       COALESCE(NULLIF(ak.dept_name,''), d.dept_name, '') AS dept_name
 		FROM api_keys ak
 		LEFT JOIN users u ON u.id = ak.user_id

@@ -49,7 +49,7 @@ func (r *KeyOrgSyncerKeyRepo) getUsersOrgByDeptSSO(deptSSO string) ([]userOrgRow
 	err := r.db.Raw(`
 		SELECT u.id::text AS user_id,
 		       u.name AS user_name,
-		       COALESCE(d.id::text, '') AS dept_id,
+		       COALESCE(d.dept_id, '') AS dept_id,
 		       COALESCE(d.dept_name, '') AS dept_name,
 		       COALESCE(dsm.studio_id::text, '') AS studio_id,
 		       COALESCE(s.name, '') AS studio_name
@@ -68,7 +68,7 @@ func (r *KeyOrgSyncerKeyRepo) getUserOrgByUserID(userID string) (*userOrgRow, er
 	err := r.db.Raw(`
 		SELECT u.id::text AS user_id,
 		       u.name AS user_name,
-		       COALESCE(d.id::text, '') AS dept_id,
+		       COALESCE(d.dept_id, '') AS dept_id,
 		       COALESCE(d.dept_name, '') AS dept_name,
 		       COALESCE(dsm.studio_id::text, '') AS studio_id,
 		       COALESCE(s.name, '') AS studio_name

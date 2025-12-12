@@ -327,10 +327,12 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 	switch scope {
 	case "dept":
 		// 按用户聚合，可选按部门过滤
+		// ud.dept_id 可能是 SSO EhrDeptID（JWT 路径）或 departments.id UUID（API Key 路径），
+		// 用 EXISTS 子查询同时匹配两种格式
 		groupExpr = "ud.user_id"
 		nameExpr = "COALESCE(u.name, ud.user_id)"
 		if id != "" {
-			whereClause = "AND ud.dept_id = ?"
+			whereClause = "AND EXISTS (SELECT 1 FROM departments dd WHERE dd.dept_id = ? AND (dd.dept_id = ud.dept_id OR dd.id::text = ud.dept_id))"
 			args = append(args, id)
 		}
 	case "studio":
@@ -370,8 +372,8 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 		       SUM(ud.req_count) AS call_count,
 		       SUM(ud.req_count - ud.success_count) AS error_count
 		FROM usage_daily ud
-		LEFT JOIN departments d ON d.dept_id = ud.dept_id
-		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = ud.dept_id
+		LEFT JOIN departments d ON (d.dept_id = ud.dept_id OR d.id::text = ud.dept_id)
+		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = COALESCE(d.dept_id, ud.dept_id)
 		LEFT JOIN studios s ON s.id = dsm.studio_id
 		LEFT JOIN users u ON u.id::text = ud.user_id
 		WHERE ud.stat_date BETWEEN ? AND ?

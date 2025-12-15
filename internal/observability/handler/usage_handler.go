@@ -373,6 +373,12 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 		whereClause += " AND cl.status != 200"
 	}
 
+	// studio_admin 钻取 dept scope 时，额外加工作室限制保障数据安全
+	if scope == "dept" && len(actor.StudioIDs) > 0 {
+		whereClause += " AND cl.studio_id = ANY(?)"
+		args = append(args, actor.StudioIDs)
+	}
+
 	baseArgs := []interface{}{startStr, endStr}
 	queryArgs := append(baseArgs, args...)
 

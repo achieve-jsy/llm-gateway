@@ -27,7 +27,8 @@ func (p UsagePolicy) EffectiveScope(actor rbac.Actor, reqScope, reqID, userID st
 	}
 	if len(actor.StudioIDs) > 0 {
 		// 允许 studio_admin 钻取到 dept scope（如看板中点击部门下钻到成员列表）
-		if reqScope == "dept" && reqID != "" && actor.HasDept(reqID) {
+		// 数据安全由 QueryScope 的 studio_id IN ? 保障，无需再校验 HasDept
+		if reqScope == "dept" && reqID != "" {
 			return "dept", reqID, true
 		}
 		id = reqID

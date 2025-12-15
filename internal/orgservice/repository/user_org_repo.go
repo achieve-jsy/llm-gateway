@@ -73,23 +73,30 @@ func (r *UserOrgRepo) GetDeptBySSO(ssoID string) (*model.OrgDepartment, error) {
 
 
 // ListDeptIDsByStudioIDs 查询属于指定工作室集合的所有 dept_id（用于角色列表过滤）
+// 同时返回 dept_id（SSO EhrDeptID）和 id::text（UUID PK），以兼容 call_logs 两种格式
 func (r *UserOrgRepo) ListDeptIDsByStudioIDs(studioIDs []string) ([]string, error) {
 	if len(studioIDs) == 0 {
 		return nil, nil
 	}
 	var rows []struct {
 		DeptID string `gorm:"column:dept_id"`
+		UUIDID string `gorm:"column:uuid_id"`
 	}
 	err := r.db.Raw(
-		`SELECT dept_id FROM departments WHERE studio_id::text = ANY(?)`,
+		`SELECT dept_id, id::text AS uuid_id FROM departments WHERE studio_id::text = ANY(?)`,
 		studioIDs,
 	).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(rows))
+	ids := make([]string, 0, len(rows)*2)
 	for _, row := range rows {
-		ids = append(ids, row.DeptID)
+		if row.DeptID != "" {
+			ids = append(ids, row.DeptID)
+		}
+		if row.UUIDID != "" {
+			ids = append(ids, row.UUIDID)
+		}
 	}
 	return ids, nil
 }
@@ -127,6 +134,7 @@ type DeptMemberInfo struct {
 	JobFamily   string `gorm:"column:job_family"   json:"job_family,omitempty"`
 	JobCategory string `gorm:"column:job_category" json:"job_category,omitempty"`
 	DeptSource  string `gorm:"column:dept_source"  json:"dept_source"`
+	LoginStatus string `gorm:"column:login_status" json:"login_status"`
 	HasConflict bool   `gorm:"column:has_conflict" json:"has_conflict"`
 }
 
@@ -151,6 +159,7 @@ func (r *UserOrgRepo) ListMembersByDeptID(deptID string, page, pageSize int) ([]
 		       COALESCE(u.job_family, '')   AS job_family,
 		       COALESCE(u.job_category, '') AS job_category,
 		       COALESCE(u.dept_source, 'sso') AS dept_source,
+		       COALESCE(u.login_status, 'active') AS login_status,
 		       EXISTS(
 		           SELECT 1 FROM user_dept_conflicts c
 		           WHERE c.user_id = u.id

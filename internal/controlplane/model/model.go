@@ -6,6 +6,13 @@ import (
 	"github.com/google/uuid"
 )
 
+// ModelStatus 模型状态枚举（与 Provider.Status 语义对齐）
+const (
+	ModelStatusEnabled          = 1 // 启用
+	ModelStatusManuallyDisabled = 2 // 手动禁用
+	ModelStatusAutoDisabled     = 3 // 自动禁用（健康检测触发）
+)
+
 // Model 模型注册实体
 //
 // catalog 联动字段：
@@ -22,8 +29,9 @@ type Model struct {
 	Name                string     `gorm:"type:varchar(200);not null;uniqueIndex:idx_models_name_provider_unique,composite:name_provider" json:"name"`
 	ProviderID          uuid.UUID  `gorm:"type:uuid;not null;index:idx_models_provider_id;uniqueIndex:idx_models_name_provider_unique,composite:name_provider" json:"provider_id"`
 	ModelType           string     `gorm:"type:varchar(50);not null;default:chat" json:"model_type"`
-	Enabled             *bool      `gorm:"not null;default:true;index:idx_models_enabled" json:"enabled"`
-	UpstreamModelID     string     `gorm:"type:varchar(200);default:''" json:"upstream_model_id"`
+Enabled                    *bool      `gorm:"not null;default:true;index:idx_models_enabled" json:"enabled"`
+	Status                     int        `gorm:"not null;default:1" json:"status"`
+	UpstreamModelID            string     `gorm:"type:varchar(200);default:''" json:"upstream_model_id"`
 	Description         string     `gorm:"type:varchar(500);default:''" json:"description"`
 	ContextLength       int        `gorm:"default:0" json:"context_length"`
 	MaxOutputTokens     int        `gorm:"default:0" json:"max_output_tokens"`
@@ -34,8 +42,9 @@ type Model struct {
 	CatalogID           *uuid.UUID `gorm:"type:uuid;index:idx_models_catalog_id" json:"catalog_id,omitempty"`
 	CtxOverridden       bool       `gorm:"not null;default:false" json:"ctx_overridden"`
 	MaxOutputOverridden bool       `gorm:"not null;default:false" json:"max_output_overridden"`
-	ConsecutiveFailures int        `gorm:"not null;default:0" json:"consecutive_failures"`
-	LastCheckError      string     `gorm:"type:varchar(500);default:''" json:"last_check_error"`
+ConsecutiveFailures         int        `gorm:"not null;default:0" json:"consecutive_failures"`
+	ConsecutiveRecoverySuccesses int        `gorm:"not null;default:0" json:"consecutive_recovery_successes"`
+	LastCheckError              string     `gorm:"type:varchar(500);default:''" json:"last_check_error"`
 	ResponseTime        int        `gorm:"default:0" json:"response_time"`
 	CreatedAt           time.Time  `gorm:"not null;autoCreateTime" json:"created_at"`
 	UpdatedAt           time.Time  `gorm:"not null;autoUpdateTime" json:"updated_at"`

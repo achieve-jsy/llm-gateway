@@ -8,26 +8,25 @@ import (
 	"github.com/example/llm-gateway/internal/observability/service"
 )
 
-// RollupCron 每小时聚合调度器
+// RollupCron 聚合调度器（每 5 分钟重算当天 + 昨天 usage_daily）
 type RollupCron struct {
 	svc      *service.RollupService
-	cronExpr string
+	interval time.Duration
 }
 
 // NewRollupCron 创建 RollupCron
 func NewRollupCron(svc *service.RollupService) *RollupCron {
 	return &RollupCron{
 		svc:      svc,
-		cronExpr: "0 * * * *", // 每整点执行
+		interval: 5 * time.Minute,
 	}
 }
 
-// Start 启动调度循环（每小时整日重算今天 + 昨天）
+// Start 启动调度循环
 func (c *RollupCron) Start(ctx context.Context) {
 	go func() {
-		slog.Info("rollup_cron_started")
-		// 等待到下一个整点
-		ticker := time.NewTicker(time.Hour)
+		slog.Info("rollup_cron_started", "interval", c.interval)
+		ticker := time.NewTicker(c.interval)
 		defer ticker.Stop()
 		for {
 			select {

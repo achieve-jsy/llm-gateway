@@ -50,7 +50,7 @@
         <div class="ud-filter-chip">
           <span class="ud-chip-label">模型</span>
           <el-input v-model="filterModel" placeholder="搜索模型名" clearable size="small"
-            class="ud-chip-input" @change="reloadLogs" @clear="reloadLogs">
+            class="ud-chip-input" @change="loadAll" @clear="loadAll">
             <template #prefix><el-icon><Search /></el-icon></template>
           </el-input>
         </div>
@@ -58,7 +58,7 @@
         <div class="ud-filter-chip">
           <span class="ud-chip-label">状态</span>
           <el-select v-model="filterStatus" placeholder="全部" clearable size="small"
-            class="ud-chip-select" @change="reloadLogs" @clear="reloadLogs">
+            class="ud-chip-select" @change="loadAll" @clear="loadAll">
             <el-option label="全部" value="" />
             <el-option value="success">
               <div style="display:flex;align-items:center;gap:6px"><span class="ud-status-dot ud-status-dot--ok" />成功</div>
@@ -586,12 +586,14 @@ import {
   Bottom, Top, List, Search, View, InfoFilled, Finished, CircleCheck,
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
+import { useOrgStore } from '@/stores/org'
 import { useRoute } from 'vue-router'
 import http from '@/services/http'
 
 Chart.register(...registerables)
 
 const authStore = useAuthStore()
+const orgStore  = useOrgStore()
 const route     = useRoute()
 
 const TABLE_HEADER = {
@@ -763,6 +765,8 @@ async function loadSummary() {
       end: dateRange.value[1],
     }
     if (last?.id) params.id = last.id
+    if (filterModel.value) params.model_name = filterModel.value
+    if (filterStatus.value) params.status = filterStatus.value
     const res = await http.get('/api/v1/usage/dashboard', { params })
     summary.value = res.data?.summary ?? null
     breakdown.value = res.data?.breakdown ?? []
@@ -821,6 +825,8 @@ async function loadTrend() {
     const trendParams: Record<string, any> = { start: dateRange.value[0], end: dateRange.value[1] }
     const last = breadcrumbs.value[breadcrumbs.value.length - 1]
     if (last?.scope === 'user' && last?.id) trendParams.user_id = last.id
+    if (filterModel.value) trendParams.model_name = filterModel.value
+    if (filterStatus.value) trendParams.status = filterStatus.value
     const res = await http.get('/api/v1/usage/dashboard/trend', { params: trendParams })
     trendData.value = res.data?.rows ?? []
   } catch {
@@ -952,6 +958,7 @@ async function loadModels() {
     const modelParams: Record<string, any> = { start: dateRange.value[0], end: dateRange.value[1] }
     const last = breadcrumbs.value[breadcrumbs.value.length - 1]
     if (last?.scope === 'user' && last?.id) modelParams.user_id = last.id
+    if (filterStatus.value) modelParams.status = filterStatus.value
     const res = await http.get('/api/v1/usage/dashboard/models', { params: modelParams })
     modelsData.value = res.data?.rows ?? []
   } catch {
@@ -1082,13 +1089,25 @@ function reloadLogs() {
   loadLogs()
 }
 
-function onUserNameChange() {
-  // 手动修改成员姓名时，退出 user scope（面包屑回到顶层）
+async function onUserNameChange() {
   const last = breadcrumbs.value[breadcrumbs.value.length - 1]
   if (last?.scope === 'user') {
     breadcrumbs.value = []
   }
-  reloadLogs()
+  if (filterUserName.value) {
+    try {
+      const results = await orgStore.searchUsers(filterUserName.value, 1)
+      if (results.length > 0) {
+        breadcrumbs.value = [{ scope: 'user' as const, id: results[0].id, name: results[0].name }]
+      } else {
+        // 未匹配到用户 → 设一个不存在的 user_id，让图表返回空
+        breadcrumbs.value = [{ scope: 'user' as const, id: '__no_match__', name: filterUserName.value }]
+      }
+    } catch {
+      breadcrumbs.value = [{ scope: 'user' as const, id: '__no_match__', name: filterUserName.value }]
+    }
+  }
+  loadAll()
 }
 
 function onUserNameClear() {

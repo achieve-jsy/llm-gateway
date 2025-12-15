@@ -13,6 +13,7 @@ export interface DeptMember {
   job_family?: string
   job_category?: string
   dept_source: 'sso' | 'manual'
+  login_status: string
   has_conflict: boolean
 }
 

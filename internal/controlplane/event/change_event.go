@@ -23,6 +23,7 @@ const (
 	KeyDisabled      ChangeEventType = "key_disabled"
 	KeyDeleted       ChangeEventType = "key_deleted"
 	KeyLogChanged    ChangeEventType = "key_log_changed"
+	KeyUpdated       ChangeEventType = "key_updated"
 )
 
 // ChangeEvent 配置变更事件

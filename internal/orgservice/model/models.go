@@ -199,10 +199,11 @@ type EmployeeImportRequest struct {
 
 // EmployeeImportSummary 导入结果汇总
 type EmployeeImportSummary struct {
-	Total            int      `json:"total"`
-	StudiosCreated   int      `json:"studios_created"`
-	DeptsCreated     int      `json:"depts_created"`
-	DeptsMapped      int      `json:"depts_mapped"`
-	UsersLinked      int      `json:"users_linked"`
-	UnmatchedEmails  []string `json:"unmatched_emails"`
+	Total          int      `json:"total"`
+	StudiosCreated int      `json:"studios_created"`
+	DeptsCreated   int      `json:"depts_created"`
+	DeptsMapped    int      `json:"depts_mapped"`
+	UsersLinked    int      `json:"users_linked"`
+	UsersPending   int      `json:"users_pending"`
+	UnmatchedEmails []string `json:"unmatched_emails"`
 }

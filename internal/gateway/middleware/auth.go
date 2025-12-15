@@ -104,14 +104,18 @@ func AuthMiddleware(authClient *infra.AuthClient) gin.HandlerFunc {
 			claims, _ := parsed.Claims.(j.MapClaims)
 			uid, _ := claims["user_id"].(string)
 			did, _ := claims["dept_id"].(string)
+			sid, _ := claims["studio_id"].(string)
 			uname, _ := claims["name"].(string)
 			dname, _ := claims["dept_name"].(string)
-			identity := &gwmodel.UserIdentity{UserID: uid, DepartmentID: did}
+			sname, _ := claims["studio_name"].(string)
+			identity := &gwmodel.UserIdentity{UserID: uid, DepartmentID: did, StudioID: sid}
 			c.Set("identity", identity)
 			c.Set("user_id", uid)
 			c.Set("user_name", uname)
 			c.Set("dept_id", did)
 			c.Set("dept_name", dname)
+			c.Set("studio_id", sid)
+			c.Set("studio_name", sname)
 			c.Next()
 			return
 		}

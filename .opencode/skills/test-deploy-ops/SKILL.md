@@ -1,9 +1,63 @@
 ---
 name: test-deploy-ops
-description: 测试环境 CI/CD 部署运维指南。用于排查测试环境部署失败、容器 unhealthy、数据库迁移缺失、环境变量配置等问题。当测试环境部署出现异常时使用此 skill。
+description: 测试环境 CI/CD 发布流程与部署运维指南。发布测试环境（push/merge test 分支）前必读——含发布前自检（配置/变量是否符合 CI/CD 要求、新增配置会不会不作用于镜像构建/部署、本次改动是否破坏既有发布逻辑）、数据库迁移冲突与版本检查、tag 规范、发布与验证步骤；以及部署失败、容器 unhealthy、迁移缺失、环境变量等故障排查。准备发布或排查测试环境时使用此 skill。
 ---
 
-# 测试环境部署运维 (test-deploy-ops)
+# 测试环境发布流程与部署运维 (test-deploy-ops)
+
+> 本 skill 供 AI 在「发布测试环境」与「排查测试环境」时遵循。**发布前必走 §0 自检流程**；故障排查见 §7 起。关联 skill：配置/变量规范 `test-env-config`、数据库迁移 `atlas-db-migration`、跑/查流水线与改 GitLab 变量 `gitlab-cicd`。
+
+## 0. 发布流程（AI 发布前必读 / 必走）
+
+> 「发布测试环境」= push / merge 到 `test` 分支触发流水线。动手 push 前，**必须按 A→B→C→D 顺序逐项自检**，确认本次改动没有破坏既有发布逻辑。任一项不通过先修，别急着推。
+
+### 阶段 A · 配置自检（是否符合 CI/CD 要求 / 新增配置会不会不生效）
+
+1. **零明文密钥**（铁律，见 `test-env-config`）：`config/test.yaml`、`docker-compose.yml` 的 diff 里**不得出现明文密钥/连接串**（DB / Redis 密码 / JWT_SECRET / ENCRYPTION_KEY / INTERNAL_TOKEN / OAuth secret）。一旦发现明文被加回 → 立即拦下并清空，改走 GitLab `TEST_*` 变量。
+2. **新增了环境变量？以下四处必须全部接齐，缺一就不生效**：
+   - [ ] GitLab 建了 `TEST_<NAME>`，且 `protected=false`、`environment_scope=*`（用 `gitlab-cicd` skill 操作；test 分支未受保护，protected 会注入为空）
+   - [ ] `.gitlab-ci.yml` 的 `deploy-app-test` ssh 块里 `export <STD_NAME>='${TEST_NAME}'`
+   - [ ] `docker-compose.yml` **对应服务**（gateway / control-plane，别放错）的 `environment:` 透传 `<STD_NAME>`；密钥用 `${VAR:?required}`，非密钥用 `${VAR:-default}`
+   - [ ] 消费方读得到：gateway 需 `internal/gateway/config/config.go` 里有 `BindEnv` 绑定；control-plane 直接 `os.Getenv("<STD_NAME>")`，名字必须对齐
+3. **分清「作用于镜像构建」还是「运行时」，否则改了不生效**：
+   - `config/test.yaml` 是 **build 时**（`--build-arg APP_ENV=test`）烤进 **gateway 镜像** 的 → 改它必须**重建 gateway 镜像**才生效（确认本次变更命中了 build job 的 `changes`，否则沿用旧镜像 = 改动不上线）。
+   - 环境变量（compose `environment`）是**运行时**注入 → 改它只需 deploy，无需重建镜像。
+   - **control-plane 完全不读 test.yaml**，配置只能靠环境变量注入。
+   - 经验法则：要运行时覆盖/密钥 → 走环境变量；改默认值/结构 → 确认 gateway 镜像会重建。
+4. **本次改动有没有破坏既有发布逻辑？重点 diff 这几处**：
+   - [ ] `deploy-app-test` 的 `export TEST_*` 注入块**没被误删**（删了 → 远程 docker-compose 的 `${VAR:?required}` 插值失败、容器起不来。**这是真实事故**：曾有人以为「GitLab 变量直通 docker-compose」删掉 export，导致 `INTERNAL_AUTH_TOKEN is missing`，deploy 连续失败）
+   - [ ] `docker-compose.yml` 新增的每个 `${VAR:?required}` 都有对应的 GitLab 变量 + export
+   - [ ] `migrate-test` 取连接串方式（`$TEST_DATABASE_URL`）没被改动
+   - [ ] `.gitlab-ci.yml` 的 `changes:` 规则没被改窄（漏触发）或改宽（多余构建）
+
+### 阶段 B · 数据库迁移自检（冲突 / 版本混乱）
+
+> 完整规范见 `atlas-db-migration` skill 的 §0 铁律。发布前至少确认：
+1. **本次新增/改动了 `atlas-migrations/*.sql` 吗？** 若有：
+   - [ ] 已**基于最新 `origin/test` rebase/pull** 后再生成 diff（不要基于陈旧 schema 生成，否则会漏改/冲突）
+   - [ ] 版本号（时间戳前缀）**单调递增**，无多人并行造成的乱序/插队
+   - [ ] `atlas migrate validate` 通过；`atlas.sum` 已用 `atlas migrate hash` 同步（**禁止手动编辑 atlas.sum**）
+   - [ ] 与 `--baseline 20260609082623` 兼容（线上库已有 schema，首迁需 baseline）
+2. **没改迁移文件，但本次发布依赖某迁移** → 确认它已在更早版本入库（测试主机 `atlas migrate status`）。
+3. ⚠️ **多人并行风险**：组员若在别的分支也生成了迁移，合并后极易出现 `atlas.sum` 冲突 / 版本乱序 → 按 `atlas-db-migration` 的「重新生成」流程重做，**切勿手动拼接 sql / sum**。
+
+### 阶段 C · 规范 tag
+
+- **测试环境发布不打 tag**：直接 push / merge 到 `test` 分支即触发；镜像 tag 由 CI 自动取 `test-<commit_short_sha>`。
+- **生产发布用语义化 tag** `vMAJOR.MINOR.PATCH`（如 `v1.4.0`）：`migrate-prod` / `deploy-prod` 由 `v*.*.*` tag **手动**触发。
+  - 不兼容/破坏性变更 → 升 MAJOR；向后兼容新功能 → 升 MINOR；修复 → 升 PATCH。
+  - 打 tag 前确保对应 commit 已在 `test` 验证通过；tag 落在已验证、已合主干的 commit 上。
+- commit message 用 Conventional Commits（`feat(...)` / `fix(...)` / `BUILD(...)` / `docs(...)`），便于回溯与推导版本号。
+
+### 阶段 D · 执行发布 + 验证
+
+1. 本地先过：改过 Go → `go build ./...`；改过迁移 → `atlas migrate validate`。
+2. 确认**不提交**编译产物（`bin/`、根目录大二进制）与 `.env` / 任何密钥。
+3. push `test`（或合并到 `test`）。
+4. 用 `gitlab-cicd` skill 监控流水线，确认按序通过：`build → migrate-test → deploy-app-test → verify-test`。
+5. `deploy-app-test` 必须 `--wait` 健康检查通过（容器起来 = 变量注入正确）。
+6. `verify-test` 三项全过：gateway `:8080` / control-plane `:8081` / nginx `:9080`。
+7. 任一 job 失败 → 取该 job trace 看报错，按 §7 故障表 + `test-env-config` 的「是否生效」排查清单定位。
 
 ## 1. 触发条件
 

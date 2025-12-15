@@ -133,8 +133,10 @@ func (c *AuthClient) verifyKeyHTTP(ctx context.Context, key string) (*VerifyKeyR
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 500 {
-		return nil, fmt.Errorf("auth service error %d", resp.StatusCode)
+	// 4xx 通常表示内部通信配置问题（如 token 缺失/错误），而非 key 本身无效。
+	// 统一作为服务错误处理，上层返回 503，避免误导调用方认为是 401 key 无效。
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("auth service returned %d", resp.StatusCode)
 	}
 
 	// 流式 JSON 解码，避免 io.ReadAll + string 转换的额外内存拷贝

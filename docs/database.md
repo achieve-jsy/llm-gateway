@@ -17,7 +17,7 @@
 | 数据 | 落位 | 持久化 |
 |------|------|--------|
 | 生产 PG / Redis | **生产机 `191.99` 本机** | `/data/pg`、`/data/redis` 绑定卷 |
-| 测试 PG / Redis | **测试机 `191.120` 本机** | 同上 |
+| 测试 PG / Redis | **测试机 `191.121` 本机** | 同上 |
 | 备份归档 | **运维机 `12.15`** | 各环境每日 `pg_dump` 推送，异机留存 |
 
 ```
@@ -27,7 +27,7 @@
   宿主 Nginx → blue/green 应用 → 本机 PG (127.0.0.1:5432)
                                 → 本机 Redis (127.0.0.1:6379)
 
-测试 191.120:
+测试 191.121:
   宿主 Nginx → blue/green 应用 → 本机 PG (127.0.0.1:5432)
                                 → 本机 Redis (127.0.0.1:6379)
 ```
@@ -185,6 +185,18 @@ atlas migrate apply \
 2. **命名**：由 Atlas 自动生成 `<时间戳>_description.sql`（如 `20260609082623_baseline.sql`），**不要手动改名**；改动迁移文件后须 `atlas migrate hash` 同步 `atlas.sum`
 3. **基线（baseline）**：线上库已有数据和表，首次接管用 `atlas migrate apply --baseline <版本>` 把现状标成"已应用到该版本"（CI 已通过 `$ATLAS_BASELINE` 配置，幂等）
 4. **执行位置**：CI `migrate` stage 独立一次性步骤，在 deploy 之前执行（不要让应用在启动时自行迁移）
+
+### 多人并行协作规范（避免 atlas.sum 冲突 / 版本乱序）
+
+> 详细流程与排查见 skill `atlas-db-migration`（团队成员每次生成迁移**必须**走该 skill）。
+
+并行开发的三大冲突来源：① `atlas.sum` 冲突（两分支各加迁移都改它）；② 版本乱序（时间戳早于库内已应用的最新版本，Atlas 拒绝执行）；③ diff 基于陈旧目录导致变更互相打架。规范如下：
+
+1. **生成前先同步目标分支**：先 `git fetch && git rebase origin/test`（或 `main`）让 `atlas-migrations/` 最新，再 `make atlas-diff`；尽量在 PR 即将合并前最后生成。
+2. **一个 PR 一个迁移**，逻辑单一，命名 `动词_表_描述`。
+3. **三件套一起提交**：`model` + `迁移.sql` + `atlas.sum`，缺一不可。
+4. **永远不要手动编辑 `atlas.sum`**；冲突/乱序时走「重生成」：rebase 最新 → 删自己那个迁移文件 → `make atlas-diff` 重新生成 → `atlas migrate hash` + `validate`。
+5. **`diff` 用临时 docker 库（`docker://postgres/16/dev`），不碰共享开发库**；开发期默认只 `diff`+`validate`，`apply` 交给 CI 或本机临时库，避免把共享库的 `atlas_schema_revisions` 状态搅乱。
 
 ## Expand-Contract 模式
 

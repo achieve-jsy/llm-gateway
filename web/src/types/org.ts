@@ -88,6 +88,7 @@ export interface EmployeeImportSummary {
   depts_created: number
   depts_mapped: number
   users_linked: number
+  users_pending: number
   unmatched_emails: string[]
 }
 

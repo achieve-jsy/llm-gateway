@@ -1,11 +1,13 @@
 ---
 name: atlas-db-migration
-description: Atlas 数据库迁移完整工作流。用于 GORM model 变更后生成声明式迁移 SQL、审查、应用和故障排查。当用户需要修改数据库 schema、添加/删除字段、创建索引时使用此 skill。
+description: Atlas 数据库迁移强制工作流。任何涉及数据库 schema 的改动都必须走此 skill——修改 GORM model、添加/删除/修改字段、加索引/约束/外键、新建表、生成或修改迁移 SQL、处理 atlas.sum 冲突或迁移乱序、排查迁移失败时使用。多人并行开发、共享同一开发库时尤其必须遵循，以避免 atlas.sum 冲突与版本乱序。
 ---
 
 # Atlas 数据库迁移工作流 (atlas-db-migration)
 
 本 skill 沉淀了 llm_gateway 项目使用 Atlas + GORM Provider 进行声明式数据库迁移的完整流程和最佳实践。
+
+> **强制要求**：团队任何成员（含 AI 助手）生成/修改数据库迁移时，**必须先读本 skill 并完整走一遍第 0 节流程**，不得凭记忆直接手写 SQL 或手改 `atlas.sum`。这是为了在多人并行、共享开发库的场景下避免迁移冲突。
 
 ## 适用场景
 
@@ -14,6 +16,70 @@ description: Atlas 数据库迁移完整工作流。用于 GORM model 变更后�
 - 修改字段类型或属性
 - 创建新表
 - 排查迁移失败问题
+
+## 0. 强制流程与多人并行铁律（先读这里）
+
+> 任何数据库 schema 改动都从这一节开始。**生成迁移前必须先同步目标分支的迁移目录**，否则并行开发几乎必然冲突。
+
+### 0.1 关键认知：diff 不碰共享库，冲突在「文件」层
+
+- `make atlas-diff`（即 `atlas migrate diff --env local`）的 **dev-url 是 `docker://postgres/16/dev`——每次起一个临时 Postgres 容器算增量，用完即弃，不连接你们的共享开发库**。所以「多人连同一个开发库」本身不会让 `diff` 出错。
+- 真正的冲突来源有三个，全在**迁移文件/校验和/版本顺序**层面：
+  1. **`atlas.sum` 冲突**：首行是整目录哈希 + 每文件一行。两个分支各加迁移都改它 → git 必冲突；硬改 → `checksum mismatch`。
+  2. **版本乱序（non-linear）**：Atlas 按文件名时间戳字典序、要求线性历史。B 分支 `…130000` 先合并并 apply，A 分支 `…120000` 后合并 → 时间戳比库内已应用的最新版本还早 → Atlas 拒绝执行。
+  3. **diff 基于陈旧状态**：两人都从旧 base diff，互不可见 → 合并后变更重复或互相打架（如都给同一表加列）。
+- 另外：若大家把 `atlas migrate apply` 都指向**同一个真实开发库**，会让库的 `atlas_schema_revisions` 状态与各分支的迁移目录发散。**约定 apply 只在本机临时库或由 CI 统一执行**，开发者本地一般只 `diff` + `validate`，不必 apply 到共享库。
+
+### 0.2 黄金规则（一句话）
+
+**迁移文件必须基于「目标分支(test/main)最新的 `atlas-migrations/`」生成，尽量在 PR 即将合并前最后再生成；永远不要手动编辑 `atlas.sum`。**
+
+### 0.3 标准生成流程（每次必走）
+
+```bash
+# 1. 先同步目标分支，确保 atlas-migrations/ 是最新的
+git fetch origin && git rebase origin/test     # 或 origin/main
+
+# 2. 改 GORM model（一次只改一个逻辑变更）
+
+# 3. 用 diff 生成迁移（自动起临时容器，不碰共享库）
+make atlas-diff name=add_models_status_field   # 命名: 动词_表_描述
+
+# 4. 重算校验和 + 校验（线性/完整性）
+atlas migrate hash --env local
+atlas migrate validate --env local
+
+# 5. 人工审查 SQL：无意外 DROP、类型/默认值/约束正确、向后兼容
+
+# 6. model + 新迁移.sql + atlas.sum 一起提交
+git add internal/.../xxx.go atlas-migrations/
+git commit -m "feat(db): add status to models"
+```
+
+> 不要手写 `.sql` 跳过 `diff`/`hash`。若确需手写 DML（数据订正），写完**必须** `atlas migrate hash --env local` 并连同 `atlas.sum` 一起提交（漏了就会像历史上那次一样 CI `checksum mismatch`）。
+
+### 0.4 遇到 atlas.sum 冲突 / 版本乱序时的「重生成」流程
+
+**不要手动解决 `atlas.sum` 冲突，按下面重生成**：
+
+```bash
+# 1. rebase 到最新目标分支（保留别人已合并的迁移）
+git fetch origin && git rebase origin/test
+# 2. 删掉自己本地新加的那一个迁移文件
+rm atlas-migrations/<你的时间戳>_xxx.sql
+# 3. 基于最新目录重新生成（时间戳自然排到最后，恢复线性）
+make atlas-diff name=xxx
+# 4. 重算校验和并校验
+atlas migrate hash --env local && atlas migrate validate --env local
+# 5. review SQL → 提交
+```
+
+### 0.5 团队约定速记
+
+- 一个 PR 一个迁移、逻辑单一、命名 `动词_表_描述`。
+- 提交三件套：`model` + `迁移.sql` + `atlas.sum`，缺一不可。
+- 破坏性变更走 **Expand-Contract**：先加新列/双写，下个版本再删旧列，保证滚动/蓝绿期间旧代码可运行。
+- 本地默认只 `diff` + `validate`；`apply` 交给 CI 或本机临时库，别乱 apply 到共享库。
 
 ## 1. 架构概览
 
@@ -312,8 +378,8 @@ Error: sql/sqlclient: missing driver
 
 **解决**:
 ```bash
-# 1. 启动本地 Postgres
-make dev-infra
+# 1. 自备本地 Postgres（Makefile 已无 dev-infra 目标，用本机或临时容器）
+#    docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16
 
 # 2. 设置环境变量
 export DATABASE_URL="postgres://postgres:postgres@localhost:5432/llm_gateway?sslmode=disable"
@@ -321,6 +387,7 @@ export DATABASE_URL="postgres://postgres:postgres@localhost:5432/llm_gateway?ssl
 # 3. 应用迁移
 make atlas-apply
 ```
+> 注意：`apply` 会写真实库的 `atlas_schema_revisions`。开发期默认只 `diff`+`validate`，不要把 `apply` 指向团队共享开发库（见 §0.1）。
 
 ## 5. 首次部署到线上环境
 
@@ -454,15 +521,11 @@ ALTER TABLE "providers" ALTER COLUMN "status" SET NOT NULL;
 - DML 需手动编辑迁移文件
 - 编辑后更新 `atlas.sum`: `atlas migrate hash --env local`
 
-### 场景 2: 多人协作冲突
+### 场景 2: 多人协作冲突（atlas.sum 冲突 / 版本乱序）
 
-**问题**: 两个开发者同时修改 model，生成了不同的迁移文件。
+**问题**: 两个开发者在各自分支同时生成迁移，合并时 `atlas.sum` 冲突或出现版本乱序。
 
-**解决**:
-1. 先合并 base branch
-2. 删除本地生成的迁移文件和 `atlas.sum`
-3. `git pull` 获取最新的迁移文件
-4. 重新运行 `make atlas-diff name=xxx`，Atlas 会基于最新状态生成
+**解决**: 见 **第 0.4 节「重生成流程」**（rebase 最新目标分支 → 删自己那个迁移文件 → `make atlas-diff` 重新生成 → `atlas migrate hash` + `validate`）。**切勿手动编辑 `atlas.sum`** 去解决冲突。根因与预防见 §0.1/§0.2。
 
 ### 场景 3: 回滚迁移
 

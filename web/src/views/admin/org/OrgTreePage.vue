@@ -300,9 +300,11 @@
                   </template>
                 </el-table-column>
                 <el-table-column label="邮箱" min-width="170" prop="email" />
-                <el-table-column label="归属来源" width="100">
+                <el-table-column label="归属来源" width="110">
                   <template #default="{ row }">
+                    <el-tag v-if="row.login_status === 'pending'" type="warning" size="small">未登录</el-tag>
                     <el-tag
+                      v-else
                       :type="row.dept_source === 'manual' ? 'warning' : 'info'"
                       size="small"
                       :title="row.dept_source === 'manual' ? '手动指定，不受 SSO 影响' : '跟随 SSO 自动归集'"
@@ -476,9 +478,6 @@
   <!-- ═══ 批量导入弹窗 ══════════════════════════════════════════════════════ -->
   <el-dialog v-model="importDialogVisible" title="批量导入部门映射" width="520px" @close="resetImport">
     <template v-if="importState === 'idle'">
-      <el-alert type="info" :closable="false" style="margin-bottom: 16px">
-        <p>CSV 格式：首行 header 为 <code>dept_id,studio_id</code>，UTF-8，最多 500 条</p>
-      </el-alert>
       <el-upload :auto-upload="false" :limit="1" accept=".csv" @change="e => selectedFile = e.raw">
         <el-button>选择 CSV 文件</el-button>
         <template #tip><div class="el-upload__tip">{{ selectedFile?.name }}</div></template>
@@ -776,6 +775,7 @@
           <div v-if="empImportSummary" class="emp-result-grid">
             <span>共处理 <b>{{ empImportSummary.total }}</b> 行</span>
             <span>用户归属 <b class="c-green">{{ empImportSummary.users_linked }}</b></span>
+            <span v-if="empImportSummary.users_pending">待登录 <b class="c-orange">{{ empImportSummary.users_pending }}</b></span>
             <span v-if="empImportSummary.studios_created">新建工作室 <b>{{ empImportSummary.studios_created }}</b></span>
             <span v-if="empImportSummary.depts_created">新建部门 <b>{{ empImportSummary.depts_created }}</b></span>
             <span v-if="empImportSummary.unmatched_emails?.length">
@@ -1487,7 +1487,7 @@ async function doEmpPreview() {
     const res = await http.post('/api/v1/org/employees/import?dry_run=true', fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
-    empPreviewRows.value = res.data.rows || []
+    empPreviewRows.value = res.data.data.rows || []
     empOverrides.value   = {}
     empUserSearchResults.value = {}
     empImportStep.value  = 'preview'
@@ -1523,7 +1523,7 @@ async function doEmpImport() {
     const res = await http.post('/api/v1/org/employees/import', fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
-    empImportSummary.value = res.data
+    empImportSummary.value = res.data.data
     empImportStep.value = 'done'
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.message || '导入失败')

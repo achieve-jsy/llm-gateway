@@ -54,6 +54,8 @@ func (h *HealthCheckHandler) GetConfig(c *gin.Context) {
 		"model_check_interval_minutes":   modelCheckIntervalSeconds / 60,
 		"model_check_interval_seconds":   modelCheckIntervalSeconds,
 		"model_check_failure_threshold":  modelCheckFailureThreshold,
+		"model_recovery_enabled":         config.ModelRecoveryEnabled,
+		"model_recovery_success_threshold": config.ModelRecoverySuccessThreshold,
 	}})
 }
 
@@ -76,6 +78,10 @@ func (h *HealthCheckHandler) UpdateConfig(c *gin.Context) {
 		ModelCheckIntervalMinutes  *int  `json:"model_check_interval_minutes"`
 		ModelCheckIntervalSeconds  *int  `json:"model_check_interval_seconds"`
 		ModelCheckFailureThreshold *int  `json:"model_check_failure_threshold"`
+
+		// 模型自动恢复配置
+		ModelRecoveryEnabled          *bool `json:"model_recovery_enabled"`
+		ModelRecoverySuccessThreshold *int  `json:"model_recovery_success_threshold"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error()}})
@@ -133,6 +139,14 @@ func (h *HealthCheckHandler) UpdateConfig(c *gin.Context) {
 		config.ModelCheckFailureThreshold = *input.ModelCheckFailureThreshold
 	}
 
+	// 模型自动恢复配置
+	if input.ModelRecoveryEnabled != nil {
+		config.ModelRecoveryEnabled = *input.ModelRecoveryEnabled
+	}
+	if input.ModelRecoverySuccessThreshold != nil {
+		config.ModelRecoverySuccessThreshold = *input.ModelRecoverySuccessThreshold
+	}
+
 	if err := h.svc.UpdateConfig(config); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"message": "failed to update config"}})
 		return
@@ -164,6 +178,8 @@ func (h *HealthCheckHandler) UpdateConfig(c *gin.Context) {
 		"model_check_interval_minutes":   modelCheckIntervalSeconds / 60,
 		"model_check_interval_seconds":   modelCheckIntervalSeconds,
 		"model_check_failure_threshold":  modelCheckFailureThreshold,
+		"model_recovery_enabled":         config.ModelRecoveryEnabled,
+		"model_recovery_success_threshold": config.ModelRecoverySuccessThreshold,
 	}})
 }
 

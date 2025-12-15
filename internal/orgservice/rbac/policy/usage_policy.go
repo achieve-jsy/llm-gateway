@@ -26,6 +26,11 @@ func (p UsagePolicy) EffectiveScope(actor rbac.Actor, reqScope, reqID, userID st
 		return "user", reqID, true
 	}
 	if len(actor.StudioIDs) > 0 {
+		// 允许 studio_admin 钻取到 dept scope（如看板中点击部门下钻到成员列表）
+		// 数据安全由 QueryScope 的 studio_id IN ? 保障，无需再校验 HasDept
+		if reqScope == "dept" && reqID != "" {
+			return "dept", reqID, true
+		}
 		id = reqID
 		if !actor.HasStudio(reqID) {
 			id = actor.StudioIDs[0]
@@ -56,7 +61,8 @@ func (p UsagePolicy) QueryScope(actor rbac.Actor) func(*gorm.DB) *gorm.DB {
 			return db.Where("studio_id IN ?", actor.StudioIDs)
 		}
 		if len(actor.DeptIDs) > 0 {
-			return db.Where("dept_id IN ?", actor.DeptIDs)
+			// dept_id 可能为空（历史数据）或 SSO EhrDeptID 或 departments.id UUID
+			return db.Where(`dept_id IN ? OR dept_id IN (SELECT id::text FROM departments WHERE dept_id IN ?) OR user_id IN (SELECT u2.id::text FROM users u2 JOIN departments d2 ON d2.id = u2.dept_id WHERE d2.dept_id IN ?)`, actor.DeptIDs, actor.DeptIDs, actor.DeptIDs)
 		}
 		return db.Where("user_id = ?", actor.UserID)
 	}

@@ -101,7 +101,7 @@ type UserDeptInfo struct {
 // BackfillUserDeptNames 补全 api_keys 表中缺失的 user_name / dept_id / dept_name / studio_id / studio_name（懒补全，异步调用）。
 func (r *KeyRepo) BackfillUserDeptNames(keyID uuid.UUID, userName, deptID, deptName, studioID, studioName string) error {
 	return r.db.Model(&model.ApiKey{}).
-		Where("id = ? AND (user_name = '' OR user_name IS NULL OR studio_name = '' OR studio_name IS NULL)", keyID).
+		Where("id = ?", keyID).
 		Updates(map[string]any{
 			"user_name":   userName,
 			"dept_id":     deptID,
@@ -117,7 +117,7 @@ func (r *KeyRepo) GetUserDeptInfo(userID uuid.UUID) (UserDeptInfo, error) {
 	var info UserDeptInfo
 	err := r.db.Raw(`
 		SELECT u.name AS user_name,
-		       COALESCE(d.id::text, '') AS dept_id,
+		       COALESCE(d.dept_id, '') AS dept_id,
 		       COALESCE(d.dept_name, '') AS dept_name,
 		       COALESCE(dsm.studio_id::text, '') AS studio_id,
 		       COALESCE(s.name, '') AS studio_name

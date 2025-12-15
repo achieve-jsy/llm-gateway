@@ -5,6 +5,11 @@ opencode.json
 .env.local
 .env.*.local
 
+# ── 含密钥的本地 skill（不提交，仅本地使用） ─────────────────────────────────
+# test-deploy-ops：内嵌测试环境真实密钥；gitlab-cicd：硬编码 GitLab API token
+.cursor/skills/gitlab-cicd/
+.opencode/skills/gitlab-cicd/
+
 # ── IDE ──────────────────────────────────────────────────────────────────────
 .idea/workspace.xml
 .idea/misc.xml
@@ -31,3 +36,11 @@ node_modules/
 
 # ── pm管理 ──────────────────────────────────────────────────────────────────
 .husky/
+
+# ── OpenCode 配置与命令 ───────────────────────────────────────────────────────
+.opencode/commands/
+
+# ── Speckit 工作流配置 ────────────────────────────────────────────────────────
+.specify/
+.specs/
+# specs/

@@ -173,6 +173,14 @@ func (r *ModelRepo) UpdateEnabled(id uuid.UUID, enabled *bool) error {
 	return r.db.Model(&model.Model{}).Where("id = ?", id).Update("enabled", enabled).Error
 }
 
+// UpdateStatus 更新模型启用状态和 status 字段
+func (r *ModelRepo) UpdateStatus(id uuid.UUID, enabled bool, status int) error {
+	return r.db.Model(&model.Model{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"enabled": enabled,
+		"status":  status,
+	}).Error
+}
+
 // IncrementModelFailures 递增模型失败计数并返回新值。
 // 生产 PG 使用 RETURNING 单条 SQL；SQLite 不支持 RETURNING 时回退到 UPDATE+SELECT。
 func (r *ModelRepo) IncrementModelFailures(id uuid.UUID) (int, error) {
@@ -210,7 +218,34 @@ func (r *ModelRepo) UpdateModelCheckResult(id uuid.UUID, responseTime int, check
 // AutoDisableModel 自动禁用模型（连续失败超阈值时调用）
 func (r *ModelRepo) AutoDisableModel(id uuid.UUID) error {
 	enabled := false
-	return r.db.Model(&model.Model{}).Where("id = ?", id).Update("enabled", &enabled).Error
+	return r.db.Model(&model.Model{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"enabled":                      &enabled,
+		"status":                       model.ModelStatusAutoDisabled,
+		"consecutive_recovery_successes": 0,
+	}).Error
+}
+
+// AutoEnableModel 自动启用模型（恢复检测连续成功达阈值时调用）
+func (r *ModelRepo) AutoEnableModel(id uuid.UUID) error {
+	enabled := true
+	return r.db.Model(&model.Model{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"enabled":                        &enabled,
+		"status":                         model.ModelStatusEnabled,
+		"consecutive_failures":           0,
+		"consecutive_recovery_successes": 0,
+	}).Error
+}
+
+// IncrementRecoverySuccesses 递增模型恢复成功计数
+func (r *ModelRepo) IncrementRecoverySuccesses(id uuid.UUID) error {
+	return r.db.Model(&model.Model{}).Where("id = ?", id).
+		UpdateColumn("consecutive_recovery_successes", gorm.Expr("consecutive_recovery_successes + 1")).Error
+}
+
+// ResetRecoverySuccesses 重置模型恢复成功计数为 0
+func (r *ModelRepo) ResetRecoverySuccesses(id uuid.UUID) error {
+	return r.db.Model(&model.Model{}).Where("id = ?", id).
+		UpdateColumn("consecutive_recovery_successes", 0).Error
 }
 
 // ModelHealthSummary 模型健康摘要（供 gateway-api 消费）

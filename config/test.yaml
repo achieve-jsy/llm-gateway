@@ -1,5 +1,10 @@
 # 测试环境配置 (APP_ENV=test)
 # 部署目标: 192.0.2.10
+#
+# 密钥/连接串不再明文写在此文件，统一由 GitLab CI/CD 变量（TEST_* 系列）经
+# docker-compose 环境变量注入；Viper 的环境变量绑定会覆盖以下留空项。
+# 规范见 skill: test-env-config。涉及：redis.password / database.url /
+# provider.internal_token / auth.token / oauth.client_id / oauth.client_secret / jwt.secret
 server:
   port: "8080"
 
@@ -8,33 +13,33 @@ controlplane:
 
 redis:
   addr: "127.0.0.1:6379"
-  password: "redis_bGNhwx"
+  password: ""
   db: 0
 
 database:
-  url: "postgres://llm_gateway_test:CHANGE_ME_PASSWORD@127.0.0.1:5432/llm_gateway_test?sslmode=disable"
+  url: ""
 
 otlp:
   endpoint: "localhost:4317"
   enabled: false
 
 provider:
-  internal_token: "dev-test-token"
+  internal_token: ""
   control_plane_url: "http://127.0.0.1:8081"
 
 auth:
   url: "http://127.0.0.1:8081"
-  token: "dev-test-token"
+  token: ""
 
 oauth:
   issuer_url: "https://oauth.example.net/"
-  client_id: "5514f6bb0a"
-  client_secret: "CHANGE_ME_OAUTH_SECRET"
+  client_id: ""
+  client_secret: ""
   redirect_uri: "http://192.0.2.10:9080/auth/callback"
   scopes: "openid profile email"
 
 jwt:
-  secret: "d8f7a3b2c1e9f4567890abc123def456"
+  secret: ""
 
 frontend:
   url: "http://192.0.2.10:9080"

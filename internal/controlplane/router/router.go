@@ -73,6 +73,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	modelTagRepo := repository.NewModelTagRepo(db)
 	announcementRepo := repository.NewAnnouncementRepo(db)
 	healthCheckRepo := repository.NewHealthCheckRepo(db)
+	modelStatusLogRepo := repository.NewModelStatusLogRepo(db)
 
 	keyRepo := repository.NewKeyRepo(db)
 
@@ -84,17 +85,25 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	publisher := event.NewPublisher(rdb)
 	snapshotter := service.NewProviderSnapshotRefresher(modelRepo, rdb)
 
+	// 创建状态日志服务（注入到需要记录日志的服务中）
+	modelStatusLogSvc := service.NewModelStatusLogService(modelStatusLogRepo)
+
 	providerSvc := service.NewProviderService(providerRepo, modelRepo, publisher)
 	providerSvc.SetSnapshotRefresher(snapshotter)
 	modelSvc := service.NewModelService(modelRepo, providerRepo, publisher)
 	modelSvc.SetSnapshotRefresher(snapshotter)
+	modelSvc.SetModelStatusLogService(modelStatusLogSvc)
 	internalSvc := service.NewInternalService(modelRepo, providerRepo)
 	healthCheckSvc := service.NewHealthCheckService(healthCheckRepo, providerRepo, modelRepo, rdb)
+	healthCheckSvc.SetModelStatusLogService(modelStatusLogSvc)
 
 	groupRepo := repository.NewGroupRepo(db)
 	keyGroupRepo := repository.NewKeyGroupRepo(db)
 	keyGroupSvc := service.NewKeyGroupService(keyGroupRepo, groupRepo, keyRepo, service.NewEventPublisherAdapter(publisher))
 	keySvc := service.NewKeyService(keyRepo, keyGroupSvc, service.NewEventPublisherAdapter(publisher))
+
+	// KeyOrgSyncer：org 变动后异步同步 api_keys org 字段并失效 KeyCache
+	keyOrgSyncer := service.NewKeyOrgSyncer(db, service.NewEventPublisherAdapter(publisher))
 
 	groupSvc := service.NewGroupService(groupRepo)
 	groupSvc.SetFailoverDefaults(
@@ -139,6 +148,9 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	syncSvc := service.NewSyncService(providerRepo, modelRepo, publisher)
 	syncSvc.SetSnapshotRefresher(snapshotter)
 	syncHandler := handler.NewSyncHandler(syncSvc, providerRepo)
+
+	// 模型状态变更日志
+	modelStatusLogHandler := handler.NewModelStatusLogHandler(modelStatusLogRepo)
 
 	keyHandler := handler.NewKeyHandler(keySvc)
 	settingsHandler := handler.NewSettingsHandler(settingsSvc)
@@ -249,6 +261,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.POST("/models/from-catalog", modelHandler.CreateModelFromCatalog)
 		// CAT-2：批量绑定（静态路径，必须在 :id 之前）
 		adminGroup.POST("/models/batch-bind-catalog", modelHandler.BatchBindCatalog)
+		adminGroup.GET("/models/:id/status-logs", modelStatusLogHandler.GetModelStatusLogs)
 		adminGroup.PUT("/models/:id", modelHandler.UpdateModel)
 		adminGroup.DELETE("/models/:id", modelHandler.DeleteModel)
 		adminGroup.POST("/models/:id/check", modelCheckHandler.CheckOne)
@@ -273,6 +286,9 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.POST("/health-check/run", healthCheckHandler.RunNow)
 		adminGroup.GET("/health-check/timeline", healthCheckHandler.GetTimeline)
 		adminGroup.GET("/health-check/group-timeline", healthCheckHandler.GetGroupTimeline)
+
+		// 模型状态变更日志
+		adminGroup.GET("/model-status-logs", modelStatusLogHandler.ListModelStatusLogs)
 
 		// 模型 Catalog（注意：source_model_id 含 '/'，通过 query 入口而非路径参数访问）
 		adminGroup.GET("/model-catalog/search", catalogHandler.Search)
@@ -370,6 +386,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	orgContainer := orgservice.New(db, rdb, orgservice.BootstrapAdmins())
 	// 将 Bootstrap Checker 注入 auth handler（此处已在 orgContainer 创建后）
 	authHandler.SetBootstrapChecker(orgContainer.Bootstrap)
+	// 注入 KeyOrgSyncer 到 auth handler（SSO 登录部门迁移后同步 api_keys）
+	authHandler.SetOrgSyncer(keyOrgSyncer)
 	deptRepo := orgrepo.NewDeptRepo(db)
 	userOrgRepo := orgrepo.NewUserOrgRepo(db)
 	roleRepo := orgrepo.NewRoleRepo(db)
@@ -377,10 +395,13 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	studioRepo := orgrepo.NewStudioRepo(db)
 	orgH := orghandler.NewOrgHandler(orgContainer.OrgSvc, orgContainer.StudioSvc, userOrgRepo, roleRepo)
 	mappingH := orghandler.NewMappingHandler(orgContainer.MappingSvc, deptRepo)
+	orgContainer.MappingSvc.SetOrgSyncer(keyOrgSyncer)
 	roleH := orghandler.NewRoleHandler(orgContainer.RoleSvc, mappingRepo)
 	empImportSvc := orgservice.NewEmployeeImportSvc(db, studioRepo, deptRepo, mappingRepo)
+	empImportSvc.SetOrgSyncer(keyOrgSyncer)
 	empImportH := orghandler.NewEmployeeImportHandler(empImportSvc)
-	deptAssignH := orghandler.NewDeptAssignHandler(userOrgRepo, deptRepo) // roleRepo 已移除
+	deptAssignH := orghandler.NewDeptAssignHandler(userOrgRepo, deptRepo)
+	deptAssignH.SetOrgSyncer(keyOrgSyncer)
 
 	// Guard 快捷别名（绑定到 orgContainer.RBAC 实例）
 	guard := orgContainer.RBAC.Guard

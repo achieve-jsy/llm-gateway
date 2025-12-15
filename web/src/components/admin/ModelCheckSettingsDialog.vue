@@ -37,6 +37,25 @@
         </span>
       </el-form-item>
 
+      <el-divider style="margin: 16px 0"><span style="font-size: 12px; color: var(--el-text-color-secondary)">模型恢复</span></el-divider>
+
+      <el-form-item label="启用自动恢复">
+        <el-switch v-model="form.model_recovery_enabled" />
+      </el-form-item>
+      <el-form-item label="恢复阈值(次)" prop="model_recovery_success_threshold">
+        <el-input-number
+          v-model="form.model_recovery_success_threshold"
+          :min="1"
+          :max="10"
+          :disabled="!form.model_recovery_enabled"
+        />
+      </el-form-item>
+      <el-form-item>
+        <span style="color: var(--el-text-color-secondary); font-size: 12px">
+          被自动禁用的模型会继续接受健康检测，连续成功达到阈值后自动恢复。手动禁用的模型不会自动恢复。
+        </span>
+      </el-form-item>
+
       <el-divider style="margin: 16px 0" />
 
       <el-form-item label=" ">
@@ -92,12 +111,15 @@ const formRef = ref<FormInstance>()
 const rules = reactive<FormRules>({
   model_check_interval_minutes: [{ required: true, message: '请选择检测间隔', trigger: 'change' }],
   model_check_failure_threshold: [{ required: true, message: '请设置失败阈值', trigger: 'blur' }],
+  model_recovery_success_threshold: [{ required: true, message: '请设置恢复阈值', trigger: 'blur' }],
 })
 
 const form = ref({
   model_check_enabled: true,
   model_check_interval_minutes: 5,
   model_check_failure_threshold: 3,
+  model_recovery_enabled: false,
+  model_recovery_success_threshold: 3,
 })
 
 const saving = ref(false)
@@ -144,6 +166,8 @@ watch(
         form.value.model_check_enabled = config.model_check_enabled ?? true
         form.value.model_check_interval_minutes = config.model_check_interval_minutes || 5
         form.value.model_check_failure_threshold = config.model_check_failure_threshold || 3
+        form.value.model_recovery_enabled = config.model_recovery_enabled ?? false
+        form.value.model_recovery_success_threshold = config.model_recovery_success_threshold || 3
       } catch {
         ElMessage.error('加载检测配置失败')
       }
@@ -161,6 +185,8 @@ async function handleSave() {
       model_check_enabled: form.value.model_check_enabled,
       model_check_interval_minutes: form.value.model_check_interval_minutes,
       model_check_failure_threshold: form.value.model_check_failure_threshold,
+      model_recovery_enabled: form.value.model_recovery_enabled,
+      model_recovery_success_threshold: form.value.model_recovery_success_threshold,
     })
     ElMessage.success('模型检测设置已保存')
     emit('saved')

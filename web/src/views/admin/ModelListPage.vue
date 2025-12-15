@@ -208,7 +208,7 @@
         </template>
       </el-table-column>
 
-      <el-table-column label="操作" width="180" align="center">
+      <el-table-column label="操作" width="240" align="center">
         <template #default="{ row }">
           <el-button text type="primary" size="small" @click="openEditDialog(row)">编辑</el-button>
           <el-button
@@ -218,6 +218,7 @@
             :loading="checkingModelId === row.id"
             @click="handleCheckModel(row)"
           >检测</el-button>
+          <el-button text type="info" size="small" @click="goToStatusLogs(row)">状态历史</el-button>
           <el-popconfirm
             title="确定删除该模型？"
             confirm-button-text="确定"
@@ -273,6 +274,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Setting } from '@element-plus/icons-vue'
 import { getModels, deleteModel, updateModel, getProviders, getModelTags, batchGetModelTags, batchDeleteModels, batchUpdateModelStatus, resetModelOverride, checkModel } from '@/services/control-plane'
@@ -283,6 +285,8 @@ import type { ResettableOverrideField } from '@/types/catalog'
 import ModelDialog from '@/components/admin/ModelDialog.vue'
 import BatchTagDialog from '@/components/admin/BatchTagDialog.vue'
 import ModelCheckSettingsDialog from '@/components/admin/ModelCheckSettingsDialog.vue'
+
+const router = useRouter()
 
 // const allModels = ref<Model[]>([]) // 已改为后端分页，不再使用
 const models = ref<Model[]>([])
@@ -583,6 +587,11 @@ function shortenError(error: string): string {
   if (lower.includes('503') || lower.includes('unavailable')) return '服务不可用'
   if (lower.includes('model')) return '模型不可用'
   return error.length > 10 ? error.slice(0, 10) + '...' : error
+}
+
+/** 跳转到模型状态历史页面 */
+function goToStatusLogs(row: Model) {
+  router.push({ path: '/admin/model-status-logs', query: { model_id: row.id } })
 }
 
 onMounted(() => {

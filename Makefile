@@ -1,5 +1,8 @@
 .PHONY: build test lint swagger dev clean
 
+# 使用 bash 以支持 trap / kill 0 等特性
+SHELL := /bin/bash
+
 # ─── 变量 ────────────────────────────────────────────────────────────────────────
 APP_ENV ?= dev
 GATEWAY_BIN := bin/gateway
@@ -31,20 +34,25 @@ swagger:
 	swag init -g api/swagger/doc.go -o api/swagger/docs --parseDependency --parseInternal
 
 # ─── 开发运行 ─────────────────────────────────────────────────────────────────────
-dev: dev-infra
+dev:
 	APP_ENV=dev go run ./cmd/gateway
 
 dev-cp:
 	APP_ENV=dev go run ./cmd/control-plane
 
-dev-infra:
-	docker compose -f docker-compose.dev.yml up -d postgres redis
+dev-web:
+	cd web && npm run dev
 
-dev-infra-full:
-	docker compose -f docker-compose.dev.yml --profile observability --profile langfuse up -d
-
-dev-down:
-	docker compose -f docker-compose.dev.yml --profile observability --profile langfuse down
+# 一键启动开发环境：control-plane + gateway + web 前端
+# Ctrl-C 会同时停止三个服务
+.PHONY: dev-all
+dev-all:
+	@echo "🚀 启动开发环境：control-plane(:8081) + gateway(:8080) + web 前端 ..."
+	@trap 'echo; echo "🛑 正在停止所有服务..."; kill 0' INT TERM EXIT; \
+	APP_ENV=$(APP_ENV) go run ./cmd/control-plane & \
+	APP_ENV=$(APP_ENV) go run ./cmd/gateway & \
+	( cd web && npm run dev ) & \
+	wait
 
 # ─── 清理 ────────────────────────────────────────────────────────────────────────
 clean:

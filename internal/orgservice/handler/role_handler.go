@@ -68,7 +68,7 @@ func (h *RoleHandler) GrantRole(c *gin.Context) {
 		ActorID:   opID,
 	}
 
-	if err := h.roleSvc.Grant(c.Request.Context(), opID, target, newRole); err != nil {
+	if err := h.roleSvc.Grant(c.Request.Context(), opID, target, newRole, actor.IsGlobal); err != nil {
 		if errors.Is(err, service.ErrForbidden) {
 			c.JSON(http.StatusForbidden, errorResp("org.forbidden", err.Error(), "org.forbidden"))
 			return
@@ -94,6 +94,8 @@ func (h *RoleHandler) RevokeRole(c *gin.Context) {
 	operatorID, _ := c.Get("user_id")
 	opID, _ := operatorID.(string)
 
+	actor := rbac.GetActor(c)
+
 	// 从被撤销角色的类型推导鉴权用的 TargetScope
 	target, err := h.buildRevokeTarget(c, req.Role, req.ScopeID)
 	if err != nil {
@@ -101,7 +103,7 @@ func (h *RoleHandler) RevokeRole(c *gin.Context) {
 		return
 	}
 
-	if err := h.roleSvc.Revoke(c.Request.Context(), opID, target, req.UserID, req.Role, req.ScopeID); err != nil {
+	if err := h.roleSvc.Revoke(c.Request.Context(), opID, target, req.UserID, req.Role, req.ScopeID, actor.IsGlobal); err != nil {
 		if errors.Is(err, service.ErrForbidden) {
 			c.JSON(http.StatusForbidden, errorResp("org.forbidden", err.Error(), "org.forbidden"))
 			return

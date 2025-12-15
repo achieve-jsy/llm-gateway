@@ -21,6 +21,7 @@ type EmployeeImportService struct {
 	studioRepo  *repository.StudioRepo
 	deptRepo    *repository.DeptRepo
 	mappingRepo *repository.MappingRepo
+	orgSyncer   OrgSyncer
 }
 
 func NewEmployeeImportService(
@@ -35,6 +36,11 @@ func NewEmployeeImportService(
 		deptRepo:    deptRepo,
 		mappingRepo: mappingRepo,
 	}
+}
+
+// SetOrgSyncer 注入 KeyOrgSyncer
+func (s *EmployeeImportService) SetOrgSyncer(syncer OrgSyncer) {
+	s.orgSyncer = syncer
 }
 
 // ParseFile 解析上传文件，返回原始行列表。支持 .csv 和 .xlsx
@@ -183,6 +189,7 @@ func (s *EmployeeImportService) Import(
 	overrides map[int]string,
 ) (*model.EmployeeImportSummary, error) {
 	summary := &model.EmployeeImportSummary{Total: len(rows)}
+	var linkedUserIDs []string
 
 	// ── 1. 收集所有工作室/部门名 ──────────────────────────────────────────────
 	studioNames := uniqueStrings(collect(rows, func(r model.EmployeeImportRow) string { return r.StudioName }))
@@ -228,11 +235,12 @@ func (s *EmployeeImportService) Import(
 		}
 		key := strings.ToLower(name)
 		if _, ok := deptNameToID[key]; !ok {
-			// dept_id 用 dept_name 本身（导入场景无 SSO dept_id）
-			if err := s.deptRepo.UpsertDepartment(name, name); err != nil {
+			// dept_id 用 "import:" 前缀占位（导入场景无 SSO dept_id），避免与 SSO 创建的 UUID dept_id 冲突
+			placeholderID := "import:" + name
+			if err := s.deptRepo.UpsertDepartment(placeholderID, name); err != nil {
 				return nil, fmt.Errorf("创建部门 %q 失败: %w", name, err)
 			}
-			deptNameToID[key] = name
+			deptNameToID[key] = placeholderID
 			summary.DeptsCreated++
 		}
 	}
@@ -294,18 +302,27 @@ func (s *EmployeeImportService) Import(
 			userID = oid
 		}
 
-		if userID == "" {
-			summary.UnmatchedEmails = append(summary.UnmatchedEmails, row.Email)
-			continue
-		}
-
-		// 获取 departments.id（UUID）用于更新 users.dept_id
+		// 获取 departments.id（UUID）用于更新/创建 users.dept_id
 		var deptUUID string
 		if deptID != "" {
 			if err := s.db.Raw(`SELECT id::text FROM departments WHERE dept_id = ? LIMIT 1`, deptID).
 				Scan(&deptUUID).Error; err != nil {
 				return nil, err
 			}
+		}
+
+		if userID == "" {
+			// 未匹配到已有用户 → 创建 pending 用户，待 SSO 登录时自动激活
+			pendingSub := "pending:" + row.Email
+			if err := s.db.Exec(`
+				INSERT INTO users (sub, name, email, source, role, login_status, employee_id, job_family, job_category, job_title, dept_id, created_at, updated_at)
+				VALUES (?, ?, ?, 'import', 'user', 'pending', ?, ?, ?, ?, NULLIF(?,'')::uuid, NOW(), NOW())
+				ON CONFLICT (sub) DO NOTHING
+			`, pendingSub, row.Name, row.Email, row.EmployeeID, row.JobFamily, row.JobCategory, row.JobTitle, deptUUID).Error; err != nil {
+				return nil, fmt.Errorf("创建 pending 用户 %s 失败: %w", row.Email, err)
+			}
+			summary.UsersPending++
+			continue
 		}
 
 		updates := map[string]any{
@@ -322,6 +339,16 @@ func (s *EmployeeImportService) Import(
 			return nil, fmt.Errorf("更新用户 %s 失败: %w", row.Email, err)
 		}
 		summary.UsersLinked++
+		linkedUserIDs = append(linkedUserIDs, userID)
+	}
+
+	// 通知 KeyOrgSyncer 同步受影响用户的 api_keys org 字段
+	if s.orgSyncer != nil && len(linkedUserIDs) > 0 {
+		go func() {
+			for _, uid := range linkedUserIDs {
+				s.orgSyncer.OnUserDeptChanged(context.Background(), uid)
+			}
+		}()
 	}
 
 	return summary, nil

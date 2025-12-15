@@ -26,6 +26,10 @@ func (p UsagePolicy) EffectiveScope(actor rbac.Actor, reqScope, reqID, userID st
 		return "user", reqID, true
 	}
 	if len(actor.StudioIDs) > 0 {
+		// 允许 studio_admin 钻取到 dept scope（如看板中点击部门下钻到成员列表）
+		if reqScope == "dept" && reqID != "" && actor.HasDept(reqID) {
+			return "dept", reqID, true
+		}
 		id = reqID
 		if !actor.HasStudio(reqID) {
 			id = actor.StudioIDs[0]

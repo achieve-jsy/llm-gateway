@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -374,9 +375,14 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 	}
 
 	// studio_admin 钻取 dept scope 时，额外加工作室限制保障数据安全
+	// 用占位符展开 IN 子句，避免 ANY(?) 与 GORM raw SQL 的兼容问题
 	if scope == "dept" && len(actor.StudioIDs) > 0 {
-		whereClause += " AND cl.studio_id = ANY(?)"
-		args = append(args, actor.StudioIDs)
+		placeholders := make([]string, len(actor.StudioIDs))
+		for i := range actor.StudioIDs {
+			placeholders[i] = "?"
+			args = append(args, actor.StudioIDs[i])
+		}
+		whereClause += " AND cl.studio_id IN (" + strings.Join(placeholders, ",") + ")"
 	}
 
 	baseArgs := []interface{}{startStr, endStr}

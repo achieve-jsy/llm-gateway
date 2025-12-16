@@ -47,12 +47,12 @@ type KeyDetail struct {
 }
 
 type VerifyResultUser struct {
-	UserID       uuid.UUID  `json:"user_id"`
-	Name         string     `json:"name"`
-	DepartmentID *uuid.UUID `json:"department_id,omitempty"`
-	DeptName     string     `json:"dept_name,omitempty"`
-	StudioID     string     `json:"studio_id,omitempty"`
-	StudioName   string     `json:"studio_name,omitempty"`
+	UserID       uuid.UUID `json:"user_id"`
+	Name         string    `json:"name"`
+	DepartmentID string    `json:"department_id,omitempty"` // SSO dept_id 原始字符串，不做 UUID 解析（避免大小写被标准化）
+	DeptName     string    `json:"dept_name,omitempty"`
+	StudioID     string    `json:"studio_id,omitempty"`
+	StudioName   string    `json:"studio_name,omitempty"`
 }
 
 type VerifyResult struct {
@@ -139,7 +139,10 @@ func (s *KeyService) CreateKey(ctx context.Context, userID uuid.UUID, name strin
 		Enabled:      true,
 		ExpiresAt:    expiresAt,
 		UserName:     info.UserName,
+		DeptID:       info.DeptID,
 		DeptName:     info.DeptName,
+		StudioID:     info.StudioID,
+		StudioName:   info.StudioName,
 	}
 
 	if err := s.repo.Create(k); err != nil {
@@ -457,7 +460,7 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 		User: VerifyResultUser{
 			UserID:       k.UserID,
 			Name:         k.UserName,
-			DepartmentID: parseDeptID(k.DeptID),
+			DepartmentID: k.DeptID, // 直接传 SSO dept_id 原始字符串，保留大小写
 			DeptName:     k.DeptName,
 			StudioID:     k.StudioID,
 			StudioName:   k.StudioName,

@@ -298,7 +298,10 @@ deploy-prod:
         docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
         export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=prod
         export DATABASE_URL='host=192.0.2.10 port=5432 user=llm_gateway password=CHANGE_ME_PASSWORD dbname=llm_gateway_prod sslmode=disable'
-        export REDIS_ADDR=192.0.2.10:6379 REDIS_DB=2
+        export REDIS_ADDR=192.0.2.10:6379 REDIS_DB=2 REDIS_PASSWORD=CHANGE_ME_REDIS_PASSWORD
+        export JWT_SECRET=d8f7a3b2c1e9f4567890abc123def456
+        export ENCRYPTION_KEY=12345678901234567890123456789012
+        export OAUTH_CLIENT_ID=5514f6bb0a OAUTH_CLIENT_SECRET=CHANGE_ME_OAUTH_SECRET
         export OAUTH_REDIRECT_URI=https://aimeter.xk-devops.com/auth/callback
         export FRONTEND_URL=https://aimeter.xk-devops.com
         export INTERNAL_AUTH_TOKEN=CHANGE_ME_INTERNAL_TOKEN

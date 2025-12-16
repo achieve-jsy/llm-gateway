@@ -302,13 +302,13 @@ func (w *BatchWriter) Run(ctx context.Context, ch <-chan UsageEvent) {
 	}
 }
 
-// fillMissingIdentity 对 batch 中 user_name 或 dept_name 为空的记录，批量查询 api_keys 补全。
+// fillMissingIdentity 对 batch 中 org 字段缺失的记录，批量查询 api_keys 补全。
 // 每批最多额外一条 IN 查询，不影响正常调用链路。
 func (w *BatchWriter) fillMissingIdentity(ctx context.Context, batch []model.CallLog) {
-	// 收集需要补查的 key_id（去重）：user_name、dept_id 或 dept_name 为空均触发
+	// 收集需要补查的 key_id（去重）：任意 org 字段为空均触发
 	needed := make(map[string]struct{})
 	for i := range batch {
-		if (batch[i].UserName == "" || batch[i].DeptID == "" || batch[i].DeptName == "") && batch[i].KeyID != "" {
+		if (batch[i].UserName == "" || batch[i].DeptID == "" || batch[i].DeptName == "" || batch[i].StudioID == "") && batch[i].KeyID != "" {
 			needed[batch[i].KeyID] = struct{}{}
 		}
 	}
@@ -322,14 +322,16 @@ func (w *BatchWriter) fillMissingIdentity(ctx context.Context, batch []model.Cal
 	}
 
 	type keyInfo struct {
-		ID       string `gorm:"column:id"`
-		KeyName  string `gorm:"column:key_name"`
-		UserName string `gorm:"column:user_name"`
-		DeptID   string `gorm:"column:dept_id"`
-		DeptName string `gorm:"column:dept_name"`
+		ID         string `gorm:"column:id"`
+		KeyName    string `gorm:"column:key_name"`
+		UserName   string `gorm:"column:user_name"`
+		DeptID     string `gorm:"column:dept_id"`
+		DeptName   string `gorm:"column:dept_name"`
+		StudioID   string `gorm:"column:studio_id"`
+		StudioName string `gorm:"column:studio_name"`
 	}
 	var rows []keyInfo
-	// 从 api_keys 直接读冗余字段，若仍为空则 JOIN users/departments 补一次；
+	// 从 api_keys 直接读冗余字段，若仍为空则 JOIN users/departments/dept_studio_map 补一次；
 	// OIDC users 找不到时再从 dev_users（本地账号）兜底取 username。
 	if err := w.db.WithContext(ctx).Raw(`
 		SELECT ak.id::text, ak.name AS key_name,
@@ -340,10 +342,14 @@ func (w *BatchWriter) fillMissingIdentity(ctx context.Context, batch []model.Cal
 		           ''
 		       ) AS user_name,
 		       COALESCE(NULLIF(ak.dept_id,''), d.dept_id, '') AS dept_id,
-		       COALESCE(NULLIF(ak.dept_name,''), d.dept_name, '') AS dept_name
+		       COALESCE(NULLIF(ak.dept_name,''), d.dept_name, '') AS dept_name,
+		       COALESCE(NULLIF(ak.studio_id,''), dsm.studio_id::text, '') AS studio_id,
+		       COALESCE(NULLIF(ak.studio_name,''), s.name, '') AS studio_name
 		FROM api_keys ak
 		LEFT JOIN users u ON u.id = ak.user_id
 		LEFT JOIN departments d ON d.id = u.dept_id
+		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = d.dept_id
+		LEFT JOIN studios s ON s.id = dsm.studio_id
 		LEFT JOIN dev_users du ON du.id = ak.user_id
 		WHERE ak.id::text IN ?`, keyIDs).Scan(&rows).Error; err != nil {
 		log.Printf("[observability] fillMissingIdentity query error: %v", err)
@@ -356,7 +362,7 @@ func (w *BatchWriter) fillMissingIdentity(ctx context.Context, batch []model.Cal
 	}
 
 	for i := range batch {
-		if batch[i].UserName == "" || batch[i].DeptID == "" || batch[i].DeptName == "" {
+		if batch[i].UserName == "" || batch[i].DeptID == "" || batch[i].DeptName == "" || batch[i].StudioID == "" {
 			if info, ok := infoMap[batch[i].KeyID]; ok {
 				if batch[i].UserName == "" {
 					batch[i].UserName = info.UserName
@@ -366,6 +372,12 @@ func (w *BatchWriter) fillMissingIdentity(ctx context.Context, batch []model.Cal
 				}
 				if batch[i].DeptName == "" {
 					batch[i].DeptName = info.DeptName
+				}
+				if batch[i].StudioID == "" {
+					batch[i].StudioID = info.StudioID
+				}
+				if batch[i].StudioName == "" {
+					batch[i].StudioName = info.StudioName
 				}
 				if batch[i].KeyName == "" {
 					batch[i].KeyName = info.KeyName

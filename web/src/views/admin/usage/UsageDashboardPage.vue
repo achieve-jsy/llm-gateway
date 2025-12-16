@@ -361,7 +361,7 @@
                       <div class="ud-tt__row"><span>输出</span><b>{{ fmtNum(row.completion_tokens) }}</b></div>
                       <div class="ud-tt__row" v-if="row.reasoning_tokens"><span class="ud-tt__sub">└ 推理</span><b class="c-purple">{{ fmtNum(row.reasoning_tokens) }}</b></div>
                       <div class="ud-tt__sep"></div>
-                      <div class="ud-tt__group"><el-icon class="ud-tt__group-ic"><Finished /></el-icon>缓存</div>
+                      <div class="ud-tt__group">缓存</div>
                       <div class="ud-tt__row"><span>缓存命中</span><b :class="row.cached_tokens ? 'c-cyan' : ''">{{ fmtNum(row.cached_tokens) }}</b></div>
                       <div class="ud-tt__row"><span>缓存写入</span><b :class="row.cache_write_tokens ? 'c-amber' : ''">{{ fmtNum(row.cache_write_tokens) }}</b></div>
                       <div class="ud-tt__sep"></div>
@@ -417,12 +417,12 @@
                     <div class="ud-tt">
                       <div class="ud-tt__title">成本明细 (USD)</div>
                       <template v-if="(row.input_price_snapshot ?? 0) > 0 || (row.output_price_snapshot ?? 0) > 0">
-                        <div class="ud-tt__group"><el-icon class="ud-tt__group-ic"><Money /></el-icon>单价 / 1M tokens</div>
+                        <div class="ud-tt__group">单价 / 1M tokens</div>
                         <div class="ud-tt__row"><span>输入单价</span><b>${{ fmtPrice(row.input_price_snapshot) }}</b></div>
                         <div class="ud-tt__row"><span>输出单价</span><b>${{ fmtPrice(row.output_price_snapshot) }}</b></div>
                         <div class="ud-tt__sep"></div>
                       </template>
-                      <div class="ud-tt__group"><el-icon class="ud-tt__group-ic"><Coin /></el-icon>费用</div>
+                      <div class="ud-tt__group">费用</div>
                       <div class="ud-tt__row"><span>输入</span><b>${{ (row.input_cost_usd || 0).toFixed(6) }}</b></div>
                       <div class="ud-tt__row"><span>输出</span><b>${{ (row.output_cost_usd || 0).toFixed(6) }}</b></div>
                       <div class="ud-tt__sep"></div>
@@ -491,6 +491,8 @@
         </div>
       </template>
       <div v-if="traceRow" class="ud-trace-body">
+
+        <!-- ── Meta Bar ── -->
         <div class="ud-trace-meta">
           <el-tag type="info" size="small" effect="plain">{{ traceRow.model }}</el-tag>
           <el-tag :type="(traceRow.status || 0) === 200 ? 'success' : 'danger'" size="small" effect="dark">{{ traceRow.status }}</el-tag>
@@ -499,6 +501,58 @@
           <span class="ud-trace-dur">{{ fmtDuration(traceRow.duration_ms) }}</span>
         </div>
 
+        <!-- ── 调用路线图 ── -->
+        <div class="ud-route-flow">
+          <div class="ud-rf-node ud-rf-node--src"><span>客户端</span></div>
+          <div class="ud-rf-arrow">›</div>
+          <template v-if="traceRow.group_name">
+            <div class="ud-rf-node ud-rf-node--group">
+              <small>模型组</small>
+              <code>{{ traceRow.group_name }}</code>
+            </div>
+            <div class="ud-rf-arrow">›</div>
+          </template>
+          <div class="ud-rf-node ud-rf-node--model">
+            <small>模型</small>
+            <code>{{ traceRow.routed_model || traceRow.model }}</code>
+          </div>
+          <template v-if="traceRow.provider">
+            <div class="ud-rf-arrow">›</div>
+            <div class="ud-rf-node ud-rf-node--provider">
+              <small>渠道</small>
+              <code>{{ traceRow.provider }}</code>
+            </div>
+          </template>
+          <div class="ud-rf-arrow">›</div>
+          <div class="ud-rf-node" :class="(traceRow.status||0)===200 ? 'ud-rf-node--ok' : 'ud-rf-node--err'">
+            <span>{{ (traceRow.status||0)===200 ? '✓ 成功' : '✕ 失败' }}</span>
+          </div>
+        </div>
+
+        <!-- ── 性能阶段时间轴 ── -->
+        <div class="ud-timeline" v-if="traceStages.length">
+          <div v-for="s in traceStages" :key="s.key"
+               :class="['ud-tl-node', s.status, { 'ud-tl-node--total': s.key === 'done' }]">
+            <div class="ud-tl-dot">
+              <el-icon v-if="s.status === 'ok'"><CircleCheck /></el-icon>
+              <el-icon v-else-if="s.status === 'error'"><CircleClose /></el-icon>
+              <span v-else class="ud-tl-dash">—</span>
+            </div>
+            <div class="ud-tl-label">{{ s.label }}</div>
+            <div class="ud-tl-ms" v-if="s.ms != null">{{ s.ms }}ms</div>
+          </div>
+        </div>
+
+        <!-- ── 报错信息 ── -->
+        <div v-if="(traceRow.status||0) >= 400" class="ud-err-panel">
+          <div class="ud-err-panel__head">
+            <span class="ud-err-panel__status">HTTP {{ traceRow.status }}</span>
+            <code v-if="traceErrorCode" class="ud-err-panel__code">{{ traceErrorCode }}</code>
+          </div>
+          <p class="ud-err-panel__msg">{{ traceErrorMsg || '请求失败，无错误详情' }}</p>
+        </div>
+
+        <!-- ── Tabs ── -->
         <el-tabs v-model="traceTab" class="ud-trace-tabs">
           <el-tab-pane label="调用信息" name="meta">
             <div class="ud-meta-grid">
@@ -522,13 +576,20 @@
               <div class="ud-meta-section">
                 <div class="ud-meta-heading">Token 用量</div>
                 <div class="ud-meta-row"><span>输入</span><b>{{ fmtNum(traceRow.prompt_tokens) }}</b></div>
-                <div class="ud-meta-row"><span>缓存命中</span><b class="c-cyan">{{ fmtNum(traceRow.cached_tokens) }}</b></div>
-                <div class="ud-meta-row"><span>缓存写入</span><b class="c-amber">{{ fmtNum(traceRow.cache_write_tokens) }}</b></div>
+                <template v-if="(traceRow.cached_tokens || 0) > 0 || (traceRow.cache_write_tokens || 0) > 0">
+                  <div class="ud-meta-row"><span>缓存命中</span><b class="c-cyan">{{ fmtNum(traceRow.cached_tokens) }}</b></div>
+                  <div class="ud-meta-row"><span>缓存写入</span><b class="c-amber">{{ fmtNum(traceRow.cache_write_tokens) }}</b></div>
+                </template>
+                <div class="ud-meta-row" v-if="(traceRow.reasoning_tokens || 0) > 0"><span>推理</span><b class="c-purple">{{ fmtNum(traceRow.reasoning_tokens) }}</b></div>
                 <div class="ud-meta-row"><span>输出</span><b>{{ fmtNum(traceRow.completion_tokens) }}</b></div>
                 <div class="ud-meta-row ud-meta-sep"><span>合计</span><b class="c-blue">{{ fmtNum(traceRow.total_tokens) }}</b></div>
               </div>
               <div class="ud-meta-section">
                 <div class="ud-meta-heading">费用 (USD)</div>
+                <template v-if="(traceRow.input_price_snapshot || 0) > 0 || (traceRow.output_price_snapshot || 0) > 0">
+                  <div class="ud-meta-row"><span>输入单价/1M</span><b>${{ fmtPrice(traceRow.input_price_snapshot) }}</b></div>
+                  <div class="ud-meta-row"><span>输出单价/1M</span><b>${{ fmtPrice(traceRow.output_price_snapshot) }}</b></div>
+                </template>
                 <div class="ud-meta-row"><span>输入</span><b>${{ fmtCost(traceRow.input_cost_usd) }}</b></div>
                 <div class="ud-meta-row"><span>输出</span><b>${{ fmtCost(traceRow.output_cost_usd) }}</b></div>
                 <div class="ud-meta-row ud-meta-sep"><span>合计</span><b class="c-green">${{ fmtCost(traceRow.est_cost_usd) }}</b></div>
@@ -571,6 +632,13 @@
             </div>
             <div v-else class="ud-trace-empty">无原始请求数据</div>
           </el-tab-pane>
+
+          <el-tab-pane v-if="(traceRow?.status || 0) >= 400" label="错误" name="error">
+            <div class="ud-error-block">
+              <div v-if="traceErrorCode" class="ud-error-code">{{ traceErrorCode }}</div>
+              <pre class="ud-error-msg">{{ traceErrorMsg || `HTTP ${traceRow?.status}` }}</pre>
+            </div>
+          </el-tab-pane>
         </el-tabs>
       </div>
     </el-drawer>
@@ -582,8 +650,8 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Chart, registerables } from 'chart.js'
 import {
-  Refresh, DataLine, Coin, Money, User, ArrowRight, ArrowUp, ArrowDown,
-  Bottom, Top, List, Search, View, InfoFilled, Finished, CircleCheck,
+  Refresh, DataLine, Money, User, ArrowRight, ArrowUp, ArrowDown,
+  Bottom, Top, List, Search, View, InfoFilled, Finished, CircleCheck, CircleClose,
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { useOrgStore } from '@/stores/org'
@@ -1164,6 +1232,41 @@ const traceResponseText = computed(() => {
   return ''
 })
 
+// 解析报错信息（从 response_body）
+const traceErrorObj = computed(() => {
+  if (!traceRow.value || (traceRow.value.status || 0) < 400) return null
+  try {
+    const body = traceRow.value.response_body
+    const obj = typeof body === 'string' ? JSON.parse(body) : body
+    return obj?.error || null
+  } catch { return null }
+})
+const traceErrorCode = computed(() => traceErrorObj.value?.code || traceErrorObj.value?.type || null)
+const traceErrorMsg  = computed(() => traceErrorObj.value?.message || null)
+
+// 性能阶段时间轴
+const traceStages = computed(() => {
+  const row = traceRow.value
+  if (!row) return []
+  const authMs  = row.stage_auth_ms     ?? null
+  const routeMs = row.stage_route_ms    ?? null
+  const upMs    = row.stage_upstream_ms ?? null
+  const total   = row.duration_ms       ?? null
+  const isError = (row.status ?? 200) >= 400
+  const errorInRoute = isError && upMs == null
+  const authDur  = authMs  != null ? Math.max(0, authMs)  : null
+  const routeDur = routeMs != null && authMs  != null ? Math.max(0, routeMs - authMs) : null
+  const upDur    = upMs    != null && total   != null ? Math.max(0, total - upMs)    : null
+  type StageStatus = 'ok' | 'error' | 'skip'
+  const stages: { key: string; label: string; ms: number | null; status: StageStatus }[] = [
+    { key: 'auth',     label: '鉴权', ms: authDur,  status: authMs  != null ? 'ok' : 'skip' },
+    { key: 'route',    label: '路由', ms: routeDur, status: errorInRoute ? 'error' : routeMs != null ? 'ok' : 'skip' },
+    { key: 'upstream', label: '上游', ms: upDur,    status: isError && upMs != null ? 'error' : upMs != null ? 'ok' : 'skip' },
+    { key: 'done',     label: '完成', ms: total,    status: isError ? 'error' : total != null ? 'ok' : 'skip' },
+  ]
+  return stages.filter(s => s.ms != null || s.status !== 'skip')
+})
+
 // ── 格式化 ────────────────────────────────────────────────────
 const fmtNum = (n?: number | null) => (n ?? 0).toLocaleString()
 const fmtTokens = (n?: number | null) => {
@@ -1511,8 +1614,7 @@ onUnmounted(() => {
 :deep(.ud-tt-popper) { padding: 0 !important; }
 .ud-tt { padding: 10px 14px; min-width: 200px; }
 .ud-tt__title { font-size: 12px; font-weight: 600; color: var(--el-text-color-primary); margin-bottom: 8px; }
-.ud-tt__group { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--ud-muted); margin: 6px 0 3px; }
-.ud-tt__group-ic { font-size: 12px; }
+.ud-tt__group { font-size: 10px; color: var(--ud-muted); margin: 6px 0 3px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; padding-left: 6px; border-left: 2px solid var(--el-color-primary-light-5); }
 .ud-tt__row { display: flex; justify-content: space-between; gap: 24px; font-size: 12px; padding: 1px 0; }
 .ud-tt__row span { color: var(--ud-muted); }
 .ud-tt__row b { font-weight: 600; }
@@ -1529,6 +1631,49 @@ onUnmounted(() => {
 .ud-trace-dur    { font-size: 12px; color: var(--ud-muted); font-family: var(--ud-mono); }
 .ud-trace-tabs   { padding: 0 20px; }
 .ud-trace-empty  { padding: 32px; text-align: center; color: var(--ud-faint); }
+
+/* ── 调用路线图 ── */
+.ud-route-flow { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; padding: 14px 20px; border-bottom: 1px solid var(--ud-border); background: var(--el-fill-color-light); }
+.ud-rf-node { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--ud-border); background: var(--el-bg-color); min-width: 72px; text-align: center; }
+.ud-rf-node small { font-size: 10px; color: var(--ud-muted); line-height: 1; }
+.ud-rf-node code  { font-size: 11px; font-family: var(--ud-mono); color: var(--el-text-color-primary); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ud-rf-node span  { font-size: 12px; font-weight: 500; }
+.ud-rf-node--src      { border-color: var(--el-color-info-light-5); color: var(--el-color-info); }
+.ud-rf-node--group    { border-color: var(--el-color-primary-light-5); }
+.ud-rf-node--model    { border-color: var(--el-color-primary-light-3); background: var(--el-color-primary-light-9); }
+.ud-rf-node--provider { border-color: var(--el-color-warning-light-5); }
+.ud-rf-node--ok  { border-color: var(--el-color-success-light-3); background: var(--el-color-success-light-9); color: var(--el-color-success); }
+.ud-rf-node--err { border-color: var(--el-color-danger-light-3);  background: var(--el-color-danger-light-9);  color: var(--el-color-danger); }
+.ud-rf-arrow { font-size: 16px; color: var(--ud-muted); flex-shrink: 0; }
+
+/* ── 性能时间轴 ── */
+.ud-timeline { display: flex; align-items: flex-start; gap: 0; padding: 12px 20px; border-bottom: 1px solid var(--ud-border); overflow-x: auto; }
+.ud-tl-node { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; min-width: 72px; position: relative; }
+.ud-tl-node::before { content: ''; position: absolute; top: 10px; left: 0; right: 50%; height: 2px; background: var(--ud-border); }
+.ud-tl-node:first-child::before { display: none; }
+.ud-tl-node::after  { content: ''; position: absolute; top: 10px; left: 50%; right: 0; height: 2px; background: var(--ud-border); }
+.ud-tl-node:last-child::after  { display: none; }
+.ud-tl-node.ok::before, .ud-tl-node.ok::after { background: var(--el-color-success-light-3); }
+.ud-tl-node.error::before, .ud-tl-node.error::after { background: var(--el-color-danger-light-3); }
+.ud-tl-dot  { width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; background: var(--el-fill-color); border: 2px solid var(--ud-border); z-index: 1; }
+.ud-tl-node.ok    .ud-tl-dot { color: var(--el-color-success); border-color: var(--el-color-success-light-3); background: var(--el-color-success-light-9); }
+.ud-tl-node.error .ud-tl-dot { color: var(--el-color-danger);  border-color: var(--el-color-danger-light-3);  background: var(--el-color-danger-light-9); }
+.ud-tl-label { font-size: 11px; color: var(--ud-muted); }
+.ud-tl-ms   { font-size: 12px; font-weight: 600; font-family: var(--ud-mono); color: var(--el-text-color-primary); }
+.ud-tl-dash { font-size: 12px; color: var(--ud-faint); }
+.ud-tl-node--total .ud-tl-ms { color: var(--el-color-primary); }
+
+/* ── 报错面板 ── */
+.ud-err-panel { margin: 0; padding: 12px 20px; background: var(--el-color-danger-light-9); border-bottom: 1px solid var(--el-color-danger-light-5); }
+.ud-err-panel__head  { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.ud-err-panel__status { font-size: 12px; font-weight: 700; color: var(--el-color-danger); }
+.ud-err-panel__code  { font-size: 11px; font-family: var(--ud-mono); background: var(--el-color-danger-light-7); padding: 1px 6px; border-radius: 4px; color: var(--el-color-danger); }
+.ud-err-panel__msg   { margin: 0; font-size: 12px; color: var(--el-color-danger-dark-2); line-height: 1.5; word-break: break-all; }
+
+/* ── 错误 Tab 详情 ── */
+.ud-error-block { padding: 16px 0; }
+.ud-error-code  { font-size: 11px; font-family: var(--ud-mono); color: var(--el-color-danger); background: var(--el-color-danger-light-9); padding: 2px 8px; border-radius: 4px; display: inline-block; margin-bottom: 8px; }
+.ud-error-msg   { margin: 0; padding: 12px; font-size: 12px; font-family: var(--ud-mono); white-space: pre-wrap; word-break: break-all; background: var(--el-fill-color-light); border-radius: 8px; color: var(--el-color-danger-dark-2); }
 
 .ud-meta-grid    { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; padding: 16px 0; }
 .ud-meta-section { }

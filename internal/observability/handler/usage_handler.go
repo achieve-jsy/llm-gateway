@@ -340,7 +340,10 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 	case "studio":
 		if id != "" {
 			// 下钻到工作室内的部门列表
-			groupExpr = "cl.dept_id"
+			// 用 COALESCE(d.dept_id, cl.dept_id) 归一化 dept_id：
+			// call_logs.dept_id 历史上混用了 SSO dept_id 和 departments.id UUID，
+			// 通过 d.dept_id（SSO 标准 ID）统一，避免同一部门出现两行
+			groupExpr = "COALESCE(d.dept_id, cl.dept_id)"
 			nameExpr = "COALESCE(d.dept_name, cl.dept_id)"
 			whereClause = "AND dsm.studio_id::text = ?"
 			args = append(args, id)
@@ -376,13 +379,23 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 
 	// studio_admin 钻取 dept scope 时，额外加工作室限制保障数据安全
 	// 用占位符展开 IN 子句，避免 ANY(?) 与 GORM raw SQL 的兼容问题
+	// 同时兼容 call_logs.studio_id 为空的历史数据：通过 dept_studio_map / departments 反查
 	if scope == "dept" && len(actor.StudioIDs) > 0 {
 		placeholders := make([]string, len(actor.StudioIDs))
 		for i := range actor.StudioIDs {
 			placeholders[i] = "?"
-			args = append(args, actor.StudioIDs[i])
 		}
-		whereClause += " AND cl.studio_id IN (" + strings.Join(placeholders, ",") + ")"
+		studioList := strings.Join(placeholders, ",")
+		// 三个 IN 子句各需要一份 studioIDs 参数
+		for j := 0; j < 3; j++ {
+			for _, sid := range actor.StudioIDs {
+				args = append(args, sid)
+			}
+		}
+		whereClause += " AND (" +
+			"cl.studio_id IN (" + studioList + ")" +
+			" OR cl.dept_id IN (SELECT dsm.dept_id FROM dept_studio_map dsm WHERE dsm.studio_id::text IN (" + studioList + "))" +
+			" OR cl.dept_id IN (SELECT id::text FROM departments dpt WHERE dpt.studio_id::text IN (" + studioList + ")))"
 	}
 
 	baseArgs := []interface{}{startStr, endStr}
@@ -687,6 +700,8 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 		completion_tokens, reasoning_tokens, total_tokens,
 		status, duration_ms, first_token_ms,
 		est_cost_usd, input_cost_usd, output_cost_usd,
+		input_price_snapshot, output_price_snapshot,
+		stage_auth_ms, stage_route_ms, stage_upstream_ms, stage_ttfb_ms,
 		stream, failover_used, usage_missing, reasoning_effort,
 		ip_address, request_body, response_body`
 

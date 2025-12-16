@@ -694,16 +694,16 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 	}
 
 	cols := `request_id, ts,
-		key_name, user_id, user_name, dept_id, dept_name, studio_id, studio_name,
+		key_id, key_name, user_id, user_name, dept_id, dept_name, studio_id, studio_name,
 		model, routed_model, group_name, provider,
 		prompt_tokens, cached_tokens, cache_write_tokens,
 		completion_tokens, reasoning_tokens, total_tokens,
 		status, duration_ms, first_token_ms,
-		est_cost_usd, input_cost_usd, output_cost_usd,
+		est_cost_usd, input_cost_usd, output_cost_usd, cache_read_cost_usd,
 		input_price_snapshot, output_price_snapshot,
 		stage_auth_ms, stage_route_ms, stage_upstream_ms, stage_ttfb_ms,
 		stream, failover_used, usage_missing, reasoning_effort,
-		ip_address, request_body, response_body`
+		ip_address, user_agent, request_body, response_body`
 
 	var rows []map[string]interface{}
 	if err := base.Select(cols).

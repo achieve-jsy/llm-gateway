@@ -490,115 +490,115 @@
           <span class="ud-trace-id">{{ traceRow?.request_id }}</span>
         </div>
       </template>
-      <div v-if="traceRow" class="ud-trace-body">
 
-        <!-- ── Meta Bar ── -->
+      <div v-if="traceLoading" class="ud-trace-loading"><el-icon class="is-loading" size="32"><Loading /></el-icon></div>
+      <div v-else-if="traceData || traceRow" class="ud-trace-body">
+
+        <!-- ── 概要条 ── -->
         <div class="ud-trace-meta">
-          <el-tag type="info" size="small" effect="plain">{{ traceRow.model }}</el-tag>
-          <el-tag :type="(traceRow.status || 0) === 200 ? 'success' : 'danger'" size="small" effect="dark">{{ traceRow.status }}</el-tag>
-          <el-tag v-if="traceRow.stream" type="primary" size="small" effect="plain">流式</el-tag>
-          <span class="ud-trace-time">{{ fmtDateTime(traceRow.ts) }}</span>
-          <span class="ud-trace-dur">{{ fmtDuration(traceRow.duration_ms) }}</span>
+          <el-tag type="info" size="small" effect="plain">{{ traceRow?.model }}</el-tag>
+          <el-tag :type="(traceRow?.status || 0) === 200 ? 'success' : 'danger'" size="small" effect="dark">{{ traceRow?.status }}</el-tag>
+          <el-tag v-if="traceRow?.stream" type="primary" size="small" effect="plain">流式</el-tag>
+          <el-tooltip v-if="traceRow?.failover_used" content="首选模型失败，已自动切换到备用模型" placement="top">
+            <el-tag type="warning" size="small" effect="light" class="ud-tag-failover">
+              <el-icon style="vertical-align:-2px;margin-right:2px"><SwitchButton /></el-icon>故障转移
+            </el-tag>
+          </el-tooltip>
+          <span class="ud-trace-time">{{ fmtDateTime(traceRow?.ts) }}</span>
+          <span class="ud-trace-dur">{{ fmtDuration(traceRow?.duration_ms) }}</span>
         </div>
 
-        <!-- ── 调用路线图 ── -->
-        <div class="ud-route-flow">
-          <div class="ud-rf-node ud-rf-node--src"><span>客户端</span></div>
-          <div class="ud-rf-arrow">›</div>
-          <template v-if="traceRow.group_name">
-            <div class="ud-rf-node ud-rf-node--group">
-              <small>模型组</small>
-              <code>{{ traceRow.group_name }}</code>
-            </div>
-            <div class="ud-rf-arrow">›</div>
-          </template>
-          <div class="ud-rf-node ud-rf-node--model">
-            <small>模型</small>
-            <code>{{ traceRow.routed_model || traceRow.model }}</code>
-          </div>
-          <template v-if="traceRow.provider">
-            <div class="ud-rf-arrow">›</div>
-            <div class="ud-rf-node ud-rf-node--provider">
-              <small>渠道</small>
-              <code>{{ traceRow.provider }}</code>
-            </div>
-          </template>
-          <div class="ud-rf-arrow">›</div>
-          <div class="ud-rf-node" :class="(traceRow.status||0)===200 ? 'ud-rf-node--ok' : 'ud-rf-node--err'">
-            <span>{{ (traceRow.status||0)===200 ? '✓ 成功' : '✕ 失败' }}</span>
-          </div>
-        </div>
-
-        <!-- ── 性能阶段时间轴 ── -->
-        <div class="ud-timeline" v-if="traceStages.length">
-          <div v-for="s in traceStages" :key="s.key"
-               :class="['ud-tl-node', s.status, { 'ud-tl-node--total': s.key === 'done' }]">
+        <!-- ── 时间线 ── -->
+        <div class="ud-timeline">
+          <div v-for="stage in timelineStages" :key="stage.key"
+               :class="['ud-tl-node', stage.status,
+                        { 'ud-tl-node--total': stage.key === 'done',
+                          'ud-tl-node--failover': stage.key === 'failover' }]">
             <div class="ud-tl-dot">
-              <el-icon v-if="s.status === 'ok'"><CircleCheck /></el-icon>
-              <el-icon v-else-if="s.status === 'error'"><CircleClose /></el-icon>
-              <span v-else class="ud-tl-dash">—</span>
+              <el-icon v-if="stage.key === 'failover'"><SwitchButton /></el-icon>
+              <el-icon v-else-if="stage.status === 'ok'"><SuccessFilled /></el-icon>
+              <el-icon v-else-if="stage.status === 'error'"><CircleCloseFilled /></el-icon>
+              <el-icon v-else><Loading /></el-icon>
             </div>
-            <div class="ud-tl-label">{{ s.label }}</div>
-            <div class="ud-tl-ms" v-if="s.ms != null">{{ s.ms }}ms</div>
+            <div class="ud-tl-label">
+              <el-tooltip v-if="stage.desc" :content="stage.desc" placement="top">
+                <span class="ud-tl-label-text">{{ stage.label }}</span>
+              </el-tooltip>
+              <span v-else class="ud-tl-label-text">{{ stage.label }}</span>
+              <span v-if="stage.key === 'done'" class="ud-tl-measured">实测</span>
+            </div>
+            <div class="ud-tl-ms" v-if="stage.ms != null">
+              {{ stage.ms }}ms
+              <el-tooltip v-if="stage.note" :content="stage.note" placement="top">
+                <el-icon class="ud-tl-warn"><WarningFilled /></el-icon>
+              </el-tooltip>
+            </div>
+            <div class="ud-tl-ms" v-else-if="stage.key === 'failover'">
+              <span class="ud-tl-failover-hint">已切换</span>
+            </div>
           </div>
-        </div>
-
-        <!-- ── 报错信息 ── -->
-        <div v-if="(traceRow.status||0) >= 400" class="ud-err-panel">
-          <div class="ud-err-panel__head">
-            <span class="ud-err-panel__status">HTTP {{ traceRow.status }}</span>
-            <code v-if="traceErrorCode" class="ud-err-panel__code">{{ traceErrorCode }}</code>
-          </div>
-          <p class="ud-err-panel__msg">{{ traceErrorMsg || '请求失败，无错误详情' }}</p>
         </div>
 
         <!-- ── Tabs ── -->
         <el-tabs v-model="traceTab" class="ud-trace-tabs">
+          <!-- 调用信息 -->
           <el-tab-pane label="调用信息" name="meta">
             <div class="ud-meta-grid">
               <div class="ud-meta-section">
                 <div class="ud-meta-heading">调用者</div>
-                <div class="ud-meta-row"><span>用户</span><span>{{ traceRow.user_name || '—' }}</span></div>
-                <div class="ud-meta-row"><span>部门</span><span>{{ traceRow.dept_name || traceRow.dept_id || '—' }}</span></div>
-                <div class="ud-meta-row"><span>工作室</span><span>{{ traceRow.studio_name || '—' }}</span></div>
-                <div class="ud-meta-row"><span>IP</span><code>{{ traceRow.ip_address || '—' }}</code></div>
+                <div class="ud-meta-row"><span>Key</span><span>{{ traceRow?.key_name || traceRow?.key_id || '—' }}</span></div>
+                <div class="ud-meta-row"><span>用户</span><span>{{ traceRow?.user_name || '—' }}</span></div>
+                <div class="ud-meta-row"><span>部门</span><span>{{ traceRow?.dept_name || traceRow?.dept_id || '—' }}</span></div>
+                <div class="ud-meta-row"><span>工作室</span><span>{{ traceRow?.studio_name || '—' }}</span></div>
+                <div class="ud-meta-row"><span>IP</span><code>{{ traceRow?.ip_address || '—' }}</code></div>
+                <div class="ud-meta-row ud-meta-row--wrap"><span>UA</span><code class="ud-meta-ua">{{ traceRow?.user_agent || '—' }}</code></div>
               </div>
               <div class="ud-meta-section">
                 <div class="ud-meta-heading">路由</div>
-                <div class="ud-meta-row"><span>请求模型</span><code>{{ traceRow.model }}</code></div>
-                <div class="ud-meta-row"><span>实际模型</span><code>{{ traceRow.routed_model || '—' }}</code></div>
-                <div class="ud-meta-row"><span>渠道</span><el-tag size="small" type="info" effect="plain">{{ traceRow.provider || '—' }}</el-tag></div>
-                <div class="ud-meta-row"><span>分组</span><code>{{ traceRow.group_name || '—' }}</code></div>
+                <div class="ud-meta-row"><span>请求模型</span><code>{{ traceRow?.model }}</code></div>
+                <div class="ud-meta-row"><span>实际模型</span><code>{{ traceRow?.routed_model || '—' }}</code></div>
+                <div class="ud-meta-row"><span>渠道</span><el-tag size="small" type="info" effect="plain">{{ traceRow?.provider || '—' }}</el-tag></div>
+                <div class="ud-meta-row"><span>分组</span><code>{{ traceRow?.group_name || '—' }}</code></div>
                 <div class="ud-meta-row"><span>故障转移</span>
-                  <el-tag size="small" :type="traceRow.failover_used ? 'warning' : 'success'" effect="plain">{{ traceRow.failover_used ? '是' : '否' }}</el-tag>
+                  <el-tag size="small" :type="traceRow?.failover_used ? 'warning' : 'success'" effect="plain">{{ traceRow?.failover_used ? '是' : '否' }}</el-tag>
+                </div>
+                <div class="ud-meta-row"><span>流式</span>
+                  <el-tag size="small" :type="traceRow?.stream ? 'primary' : ''" effect="plain">{{ traceRow?.stream ? '是' : '否' }}</el-tag>
                 </div>
               </div>
               <div class="ud-meta-section">
                 <div class="ud-meta-heading">Token 用量</div>
-                <div class="ud-meta-row"><span>输入</span><b>{{ fmtNum(traceRow.prompt_tokens) }}</b></div>
-                <template v-if="(traceRow.cached_tokens || 0) > 0 || (traceRow.cache_write_tokens || 0) > 0">
-                  <div class="ud-meta-row"><span>缓存命中</span><b class="c-cyan">{{ fmtNum(traceRow.cached_tokens) }}</b></div>
-                  <div class="ud-meta-row"><span>缓存写入</span><b class="c-amber">{{ fmtNum(traceRow.cache_write_tokens) }}</b></div>
-                </template>
-                <div class="ud-meta-row" v-if="(traceRow.reasoning_tokens || 0) > 0"><span>推理</span><b class="c-purple">{{ fmtNum(traceRow.reasoning_tokens) }}</b></div>
-                <div class="ud-meta-row"><span>输出</span><b>{{ fmtNum(traceRow.completion_tokens) }}</b></div>
-                <div class="ud-meta-row ud-meta-sep"><span>合计</span><b class="c-blue">{{ fmtNum(traceRow.total_tokens) }}</b></div>
+                <div class="ud-meta-row"><span>输入</span><b>{{ fmtNum(traceRow?.prompt_tokens) }}</b></div>
+                <div class="ud-meta-row"><span>缓存命中</span><b class="c-cyan">{{ fmtNum(traceRow?.cached_tokens) }}</b></div>
+                <div class="ud-meta-row"><span>缓存写入</span><b class="c-amber">{{ fmtNum(traceRow?.cache_write_tokens) }}</b></div>
+                <div class="ud-meta-row"><span>输出</span><b>{{ fmtNum(traceRow?.completion_tokens) }}</b></div>
+                <div class="ud-meta-row" v-if="(traceRow?.reasoning_tokens || 0) > 0">
+                  <span>推理</span><b class="c-purple">{{ fmtNum(traceRow?.reasoning_tokens) }}</b>
+                </div>
+                <div class="ud-meta-row ud-meta-sep"><span>合计</span><b class="c-blue">{{ fmtNum(traceRow?.total_tokens) }}</b></div>
+                <div class="ud-meta-row" v-if="traceRow?.usage_missing">
+                  <span></span><el-tag size="small" type="warning">用量缺失</el-tag>
+                </div>
               </div>
               <div class="ud-meta-section">
                 <div class="ud-meta-heading">费用 (USD)</div>
-                <template v-if="(traceRow.input_price_snapshot || 0) > 0 || (traceRow.output_price_snapshot || 0) > 0">
-                  <div class="ud-meta-row"><span>输入单价/1M</span><b>${{ fmtPrice(traceRow.input_price_snapshot) }}</b></div>
-                  <div class="ud-meta-row"><span>输出单价/1M</span><b>${{ fmtPrice(traceRow.output_price_snapshot) }}</b></div>
-                </template>
-                <div class="ud-meta-row"><span>输入</span><b>${{ fmtCost(traceRow.input_cost_usd) }}</b></div>
-                <div class="ud-meta-row"><span>输出</span><b>${{ fmtCost(traceRow.output_cost_usd) }}</b></div>
-                <div class="ud-meta-row ud-meta-sep"><span>合计</span><b class="c-green">${{ fmtCost(traceRow.est_cost_usd) }}</b></div>
-                <div class="ud-meta-row"><span>TTFT</span><b>{{ fmtDuration(traceRow.first_token_ms) }}</b></div>
-                <div class="ud-meta-row"><span>总耗时</span><b>{{ fmtDuration(traceRow.duration_ms) }}</b></div>
+                <div class="ud-meta-row" v-if="(traceRow?.input_price_snapshot || 0) > 0 || (traceRow?.output_price_snapshot || 0) > 0">
+                  <span>输入单价/1M</span><b>${{ fmtPrice(traceRow?.input_price_snapshot) }}</b>
+                </div>
+                <div class="ud-meta-row" v-if="(traceRow?.input_price_snapshot || 0) > 0 || (traceRow?.output_price_snapshot || 0) > 0">
+                  <span>输出单价/1M</span><b>${{ fmtPrice(traceRow?.output_price_snapshot) }}</b>
+                </div>
+                <div class="ud-meta-row"><span>输入费用</span><b>${{ fmtCost(traceRow?.input_cost_usd) }}</b></div>
+                <div class="ud-meta-row"><span>输出费用</span><b>${{ fmtCost(traceRow?.output_cost_usd) }}</b></div>
+                <div class="ud-meta-row" v-if="(traceRow?.cache_read_cost_usd || 0) > 0">
+                  <span>缓存读取</span><b class="c-cyan">${{ fmtCost(traceRow?.cache_read_cost_usd) }}</b>
+                </div>
+                <div class="ud-meta-row ud-meta-sep"><span>合计</span><b class="c-green">${{ fmtCost(traceRow?.est_cost_usd) }}</b></div>
               </div>
             </div>
           </el-tab-pane>
 
+          <!-- 提示词 -->
           <el-tab-pane label="提示词" name="prompt">
             <div v-if="traceMessages.length" class="ud-msgs">
               <div v-for="(msg, i) in traceMessages" :key="i" :class="['ud-msg', `ud-msg--${msg.role}`]">
@@ -609,10 +609,11 @@
             <div v-else class="ud-trace-empty">无提示词数据</div>
           </el-tab-pane>
 
+          <!-- 响应 -->
           <el-tab-pane name="response">
             <template #label>
               响应
-              <el-tag v-if="traceRow?.stream" size="small" type="info" style="margin-left:4px;vertical-align:middle">Stream</el-tag>
+              <el-tag v-if="traceIsStream" size="small" type="info" style="margin-left:4px;vertical-align:middle">Stream</el-tag>
             </template>
             <div v-if="traceResponseText" class="ud-msgs">
               <div class="ud-msg ud-msg--assistant">
@@ -620,27 +621,41 @@
                 <pre class="ud-msg-content">{{ traceResponseText }}</pre>
               </div>
             </div>
-            <div v-else-if="traceRow?.response_body" class="ud-json-view">
-              <pre>{{ fmtJSON(traceRow.response_body) }}</pre>
+            <div v-else-if="traceData?.response_body" class="ud-json-view">
+              <pre>{{ JSON.stringify(traceData.response_body, null, 2) }}</pre>
             </div>
             <div v-else class="ud-trace-empty">无响应数据</div>
           </el-tab-pane>
 
+          <!-- 原始请求 -->
           <el-tab-pane label="原始请求" name="raw_req">
-            <div v-if="traceRow?.request_body" class="ud-json-view">
-              <pre>{{ fmtJSON(traceRow.request_body) }}</pre>
+            <div v-if="traceData?.request_body" class="ud-json-view">
+              <pre>{{ JSON.stringify(traceData.request_body, null, 2) }}</pre>
             </div>
             <div v-else class="ud-trace-empty">无原始请求数据</div>
           </el-tab-pane>
 
-          <el-tab-pane v-if="(traceRow?.status || 0) >= 400" label="错误" name="error">
+          <!-- 请求头 -->
+          <el-tab-pane label="请求头" name="headers">
+            <div v-if="traceData?.request_headers && Object.keys(traceData.request_headers).length > 0" class="ud-headers-table">
+              <div v-for="(val, key) in traceData.request_headers" :key="key" class="ud-header-row">
+                <span class="ud-header-key">{{ key }}</span>
+                <span class="ud-header-val">{{ val }}</span>
+              </div>
+            </div>
+            <div v-else class="ud-trace-empty">无请求头数据</div>
+          </el-tab-pane>
+
+          <!-- 错误 -->
+          <el-tab-pane v-if="traceData?.error_message || (traceRow?.status || 0) >= 400" label="错误" name="error">
             <div class="ud-error-block">
-              <div v-if="traceErrorCode" class="ud-error-code">{{ traceErrorCode }}</div>
-              <pre class="ud-error-msg">{{ traceErrorMsg || `HTTP ${traceRow?.status}` }}</pre>
+              <div v-if="traceData?.error_code" class="ud-error-code">{{ traceData.error_code }}</div>
+              <pre class="ud-error-msg">{{ traceData?.error_message || `HTTP ${traceRow?.status}` }}</pre>
             </div>
           </el-tab-pane>
         </el-tabs>
       </div>
+      <div v-else class="ud-trace-empty">暂无 trace 数据</div>
     </el-drawer>
 
   </div>
@@ -651,7 +666,8 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Chart, registerables } from 'chart.js'
 import {
   Refresh, DataLine, Money, User, ArrowRight, ArrowUp, ArrowDown,
-  Bottom, Top, List, Search, View, InfoFilled, Finished, CircleCheck, CircleClose,
+  Bottom, Top, List, Search, View, InfoFilled, Finished,
+  Loading, SuccessFilled, CircleCloseFilled, WarningFilled, SwitchButton,
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { useOrgStore } from '@/stores/org'
@@ -1198,73 +1214,116 @@ function loadAll() {
 }
 
 // ── Trace Drawer ──────────────────────────────────────────────
+interface TraceData {
+  stage_auth_ms?: number; stage_route_ms?: number; stage_upstream_ms?: number
+  stage_ttfb_ms?: number; stage_ttft_ms?: number; stage_total_ms?: number
+  request_headers?: Record<string, string>
+  request_body?: any; response_body?: any
+  error_code?: string; error_message?: string
+}
+
 const traceVisible = ref(false)
+const traceLoading = ref(false)
 const traceRow     = ref<any | null>(null)
+const traceData    = ref<TraceData | null>(null)
 const traceTab     = ref('meta')
 
-function openTrace(row: any) {
-  traceRow.value = row
-  traceTab.value = row.request_body ? 'prompt' : 'meta'
+async function openTrace(row: any) {
+  traceRow.value  = row
+  traceData.value = null
+  traceTab.value  = 'prompt'
   traceVisible.value = true
+  traceLoading.value = true
+  try {
+    const r = await http.get(`/api/v1/usage/logs/${row.request_id}/trace`, { _silent: true } as any)
+    traceData.value = r.data
+  } catch {
+    traceData.value = null
+    traceTab.value = 'meta'
+  } finally {
+    traceLoading.value = false
+  }
 }
 
 function closeTrace() { traceVisible.value = false }
 
 const traceMessages = computed(() => {
-  const body = traceRow.value?.request_body
+  const body = traceData.value?.request_body
   if (!body) return []
-  try {
-    const obj = typeof body === 'string' ? JSON.parse(body) : body
-    return obj?.messages || []
-  } catch { return [] }
+  return (body as any).messages || []
 })
 
 const traceResponseText = computed(() => {
-  const body = traceRow.value?.response_body
+  const body = traceData.value?.response_body
   if (!body) return ''
-  try {
-    const obj = typeof body === 'string' ? JSON.parse(body) : body
-    const choices = obj?.choices
-    if (Array.isArray(choices) && choices.length > 0) {
-      return choices[0]?.message?.content ?? choices[0]?.delta?.content ?? ''
-    }
-  } catch { /* ignore */ }
+  const choices = (body as any).choices
+  if (Array.isArray(choices) && choices.length > 0) {
+    return choices[0]?.message?.content ?? choices[0]?.delta?.content ?? ''
+  }
   return ''
 })
 
-// 解析报错信息（从 response_body）
-const traceErrorObj = computed(() => {
-  if (!traceRow.value || (traceRow.value.status || 0) < 400) return null
-  try {
-    const body = traceRow.value.response_body
-    const obj = typeof body === 'string' ? JSON.parse(body) : body
-    return obj?.error || null
-  } catch { return null }
-})
-const traceErrorCode = computed(() => traceErrorObj.value?.code || traceErrorObj.value?.type || null)
-const traceErrorMsg  = computed(() => traceErrorObj.value?.message || null)
+const traceIsStream = computed(() => !!(traceData.value?.response_body as any)?.stream)
 
-// 性能阶段时间轴
-const traceStages = computed(() => {
+const timelineStages = computed(() => {
+  const td  = traceData.value
   const row = traceRow.value
   if (!row) return []
-  const authMs  = row.stage_auth_ms     ?? null
-  const routeMs = row.stage_route_ms    ?? null
-  const upMs    = row.stage_upstream_ms ?? null
-  const total   = row.duration_ms       ?? null
-  const isError = (row.status ?? 200) >= 400
-  const errorInRoute = isError && upMs == null
-  const authDur  = authMs  != null ? Math.max(0, authMs)  : null
-  const routeDur = routeMs != null && authMs  != null ? Math.max(0, routeMs - authMs) : null
-  const upDur    = upMs    != null && total   != null ? Math.max(0, total - upMs)    : null
-  type StageStatus = 'ok' | 'error' | 'skip'
-  const stages: { key: string; label: string; ms: number | null; status: StageStatus }[] = [
-    { key: 'auth',     label: '鉴权', ms: authDur,  status: authMs  != null ? 'ok' : 'skip' },
-    { key: 'route',    label: '路由', ms: routeDur, status: errorInRoute ? 'error' : routeMs != null ? 'ok' : 'skip' },
-    { key: 'upstream', label: '上游', ms: upDur,    status: isError && upMs != null ? 'error' : upMs != null ? 'ok' : 'skip' },
-    { key: 'done',     label: '完成', ms: total,    status: isError ? 'error' : total != null ? 'ok' : 'skip' },
-  ]
-  return stages.filter(s => s.ms != null || s.status !== 'skip')
+
+  const authMs  = td?.stage_auth_ms     ?? row.stage_auth_ms     ?? null
+  const routeMs = td?.stage_route_ms    ?? row.stage_route_ms    ?? null
+  const ttfbMs  = td?.stage_ttfb_ms     ?? row.stage_ttfb_ms     ?? null
+  const ttftMs  = td?.stage_ttft_ms     ?? row.first_token_ms    ?? null
+  const total   = row.duration_ms       ?? td?.stage_total_ms    ?? null
+
+  const isStream   = !!row.stream
+  const isFailover = !!row.failover_used
+  const isError    = (row.status ?? 200) >= 400
+  const errorInAuth  = isError && authMs  == null && routeMs == null
+  const errorInRoute = isError && routeMs == null && authMs  != null
+
+  const authDur  = authMs  != null ? Math.max(0, authMs) : null
+  const routeDur = routeMs != null && authMs != null
+    ? Math.max(0, routeMs - authMs)
+    : (routeMs != null ? Math.max(0, routeMs) : null)
+  const ttfbDur      = ttfbMs != null ? Math.max(0, ttfbMs) : null
+  const ttftDeltaDur = ttftMs != null && ttfbMs != null
+    ? Math.max(0, ttftMs - ttfbMs)
+    : (ttftMs != null ? Math.max(0, ttftMs) : null)
+  const streamReturnDur = isStream && ttftMs != null && routeMs != null && total != null
+    ? Math.max(0, total - routeMs - ttftMs) : null
+  const upstreamDur = !isStream && routeMs != null && total != null
+    ? Math.max(0, total - routeMs) : null
+
+  type Status = 'ok' | 'error' | 'skip'
+  const stages: { key: string; label: string; ms: number | null; status: Status; note?: string; desc?: string }[] = []
+
+  stages.push({ key: 'auth', label: '鉴权', desc: '请求到达 → API Key 验证完成',
+    ms: authDur, status: authMs != null ? 'ok' : (errorInAuth ? 'error' : 'skip') })
+  stages.push({ key: 'route', label: '路由', desc: '鉴权完成 → 模型组调度 + 选定上游渠道',
+    ms: routeDur,
+    status: errorInRoute ? 'error' : routeMs != null ? 'ok' : 'skip',
+    note: routeMs != null && authMs != null && routeMs < authMs ? '计时异常' : undefined })
+  if (isFailover) {
+    stages.push({ key: 'failover', label: '故障转移',
+      desc: `首选模型调用失败，自动切换到备用模型重试（实际路由至 ${row.routed_model || '备用模型'}）`,
+      ms: null, status: 'ok' })
+  }
+  if (isStream) {
+    stages.push({ key: 'ttfb', label: 'TTFB', desc: '上游请求发出 → 收到 HTTP 响应头',
+      ms: ttfbDur, status: isError ? 'error' : ttfbDur != null ? 'ok' : 'skip' })
+    stages.push({ key: 'ttft', label: 'TTFT',
+      desc: ttfbMs != null ? '收到响应头 → 首个 content token' : '上游请求发出 → 首个 content token',
+      ms: ttftDeltaDur, status: isError ? 'error' : ttftDeltaDur != null ? 'ok' : 'skip' })
+    stages.push({ key: 'stream', label: '流式返回', desc: '首个 token → 流式输出完成',
+      ms: streamReturnDur, status: isError ? 'error' : streamReturnDur != null ? 'ok' : 'skip' })
+  } else {
+    stages.push({ key: 'upstream', label: '上游响应', desc: '上游请求发出 → 收到完整响应',
+      ms: upstreamDur, status: isError ? 'error' : upstreamDur != null ? 'ok' : 'skip' })
+  }
+  stages.push({ key: 'done', label: '总耗时', ms: total, status: isError ? 'error' : 'ok' })
+
+  return stages.filter(s => s.status !== 'skip' || s.key === 'done')
 })
 
 // ── 格式化 ────────────────────────────────────────────────────
@@ -1622,74 +1681,109 @@ onUnmounted(() => {
 .ud-tt__sep { height: 1px; background: var(--ud-border); margin: 5px 0; }
 
 /* ── Trace Drawer ── */
-.ud-trace-header { display: flex; flex-direction: column; gap: 3px; }
-.ud-trace-title  { font-size: 15px; font-weight: 600; }
-.ud-trace-id     { font-size: 11px; color: var(--ud-muted); font-family: var(--ud-mono); }
-.ud-trace-body   { padding: 0; }
-.ud-trace-meta   { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 14px 20px; border-bottom: 1px solid var(--ud-border); }
-.ud-trace-time   { font-size: 12px; color: var(--ud-muted); margin-left: 6px; }
-.ud-trace-dur    { font-size: 12px; color: var(--ud-muted); font-family: var(--ud-mono); }
-.ud-trace-tabs   { padding: 0 20px; }
-.ud-trace-empty  { padding: 32px; text-align: center; color: var(--ud-faint); }
+.ud-trace-header  { display: flex; flex-direction: column; gap: 2px; }
+.ud-trace-title   { font-size: 15px; font-weight: 700; color: var(--el-text-color-primary); }
+.ud-trace-id      { font-size: 11px; color: var(--el-text-color-secondary); font-family: var(--ud-mono); word-break: break-all; }
+.ud-trace-loading { display: flex; justify-content: center; align-items: center; padding: 60px 0; color: var(--el-color-primary); }
+.ud-trace-body    { display: flex; flex-direction: column; gap: 20px; }
+.ud-trace-empty   { text-align: center; padding: 40px 0; color: var(--el-text-color-secondary); font-size: 13px; }
+.ud-trace-meta    { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ud-trace-time    { font-size: 12px; color: var(--el-text-color-secondary); margin-left: 4px; }
+.ud-trace-dur     { font-size: 12px; color: var(--el-color-primary); font-weight: 600; }
+.ud-trace-tabs    { margin-top: -8px; }
+.ud-tag-failover  { cursor: help; }
 
-/* ── 调用路线图 ── */
-.ud-route-flow { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; padding: 14px 20px; border-bottom: 1px solid var(--ud-border); background: var(--el-fill-color-light); }
-.ud-rf-node { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--ud-border); background: var(--el-bg-color); min-width: 72px; text-align: center; }
-.ud-rf-node small { font-size: 10px; color: var(--ud-muted); line-height: 1; }
-.ud-rf-node code  { font-size: 11px; font-family: var(--ud-mono); color: var(--el-text-color-primary); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ud-rf-node span  { font-size: 12px; font-weight: 500; }
-.ud-rf-node--src      { border-color: var(--el-color-info-light-5); color: var(--el-color-info); }
-.ud-rf-node--group    { border-color: var(--el-color-primary-light-5); }
-.ud-rf-node--model    { border-color: var(--el-color-primary-light-3); background: var(--el-color-primary-light-9); }
-.ud-rf-node--provider { border-color: var(--el-color-warning-light-5); }
-.ud-rf-node--ok  { border-color: var(--el-color-success-light-3); background: var(--el-color-success-light-9); color: var(--el-color-success); }
-.ud-rf-node--err { border-color: var(--el-color-danger-light-3);  background: var(--el-color-danger-light-9);  color: var(--el-color-danger); }
-.ud-rf-arrow { font-size: 16px; color: var(--ud-muted); flex-shrink: 0; }
+/* ── Timeline ── */
+.ud-timeline {
+  display: flex; align-items: flex-start; gap: 0;
+  background: var(--el-fill-color-light);
+  border-radius: 10px; padding: 16px 20px; overflow-x: auto;
+}
+.ud-tl-node {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  position: relative; flex: 1; min-width: 72px;
+}
+.ud-tl-node + .ud-tl-node::before {
+  content: ''; position: absolute; left: -50%; top: 13px;
+  width: 100%; height: 2px; background: var(--el-border-color); z-index: 0;
+}
+.ud-tl-node.ok    + .ud-tl-node::before { background: var(--el-color-success-light-5); }
+.ud-tl-node.error + .ud-tl-node::before { background: var(--el-color-danger-light-5); }
+.ud-tl-dot {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--el-fill-color); border: 2px solid var(--el-border-color);
+  font-size: 14px; position: relative; z-index: 1;
+}
+.ud-tl-node.ok    .ud-tl-dot { background: color-mix(in srgb, var(--el-color-success) 12%, #fff); border-color: var(--el-color-success); color: var(--el-color-success); }
+.ud-tl-node.error .ud-tl-dot { background: color-mix(in srgb, var(--el-color-danger)  12%, #fff); border-color: var(--el-color-danger);  color: var(--el-color-danger); }
+.ud-tl-node--failover .ud-tl-dot   { background: color-mix(in srgb, var(--el-color-warning) 12%, #fff); border-color: var(--el-color-warning); color: var(--el-color-warning); }
+.ud-tl-node--failover .ud-tl-label { color: var(--el-color-warning-dark-2); }
+.ud-tl-node--failover + .ud-tl-node::before { background: var(--el-color-warning-light-7); }
+.ud-tl-failover-hint { font-size: 10px; color: var(--el-color-warning-dark-2); font-style: italic; }
+.ud-tl-label      { font-size: 11px; color: var(--el-text-color-secondary); font-weight: 600; }
+.ud-tl-label-text { cursor: default; }
+.ud-tl-measured   { display: block; font-size: 9px; color: var(--el-text-color-placeholder); font-style: italic; }
+.ud-tl-ms         { font-size: 11px; color: var(--el-text-color-regular); font-family: var(--ud-mono); }
+.ud-tl-warn       { color: var(--el-color-warning); vertical-align: -2px; cursor: help; }
 
-/* ── 性能时间轴 ── */
-.ud-timeline { display: flex; align-items: flex-start; gap: 0; padding: 12px 20px; border-bottom: 1px solid var(--ud-border); overflow-x: auto; }
-.ud-tl-node { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; min-width: 72px; position: relative; }
-.ud-tl-node::before { content: ''; position: absolute; top: 10px; left: 0; right: 50%; height: 2px; background: var(--ud-border); }
-.ud-tl-node:first-child::before { display: none; }
-.ud-tl-node::after  { content: ''; position: absolute; top: 10px; left: 50%; right: 0; height: 2px; background: var(--ud-border); }
-.ud-tl-node:last-child::after  { display: none; }
-.ud-tl-node.ok::before, .ud-tl-node.ok::after { background: var(--el-color-success-light-3); }
-.ud-tl-node.error::before, .ud-tl-node.error::after { background: var(--el-color-danger-light-3); }
-.ud-tl-dot  { width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; background: var(--el-fill-color); border: 2px solid var(--ud-border); z-index: 1; }
-.ud-tl-node.ok    .ud-tl-dot { color: var(--el-color-success); border-color: var(--el-color-success-light-3); background: var(--el-color-success-light-9); }
-.ud-tl-node.error .ud-tl-dot { color: var(--el-color-danger);  border-color: var(--el-color-danger-light-3);  background: var(--el-color-danger-light-9); }
-.ud-tl-label { font-size: 11px; color: var(--ud-muted); }
-.ud-tl-ms   { font-size: 12px; font-weight: 600; font-family: var(--ud-mono); color: var(--el-text-color-primary); }
-.ud-tl-dash { font-size: 12px; color: var(--ud-faint); }
-.ud-tl-node--total .ud-tl-ms { color: var(--el-color-primary); }
+/* ── Meta grid ── */
+.ud-meta-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+}
+.ud-meta-section {
+  background: var(--el-fill-color-light); border-radius: 8px;
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 6px;
+}
+.ud-meta-heading {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--el-text-color-secondary);
+  margin-bottom: 4px; border-bottom: 1px solid var(--el-border-color-lighter); padding-bottom: 6px;
+}
+.ud-meta-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  font-size: 12.5px; min-height: 22px;
+}
+.ud-meta-row > span:first-child { color: var(--el-text-color-secondary); flex-shrink: 0; }
+.ud-meta-row > span:last-child, .ud-meta-row > b, .ud-meta-row > code { text-align: right; word-break: break-all; }
+.ud-meta-sep { border-top: 1px solid var(--el-border-color); margin-top: 4px; padding-top: 4px; }
+.ud-meta-row--wrap { align-items: flex-start; }
+.ud-meta-ua  { font-size: 11px; text-align: right; }
+.ud-meta-row code { font-family: var(--ud-mono); font-size: 12px; }
 
-/* ── 报错面板 ── */
-.ud-err-panel { margin: 0; padding: 12px 20px; background: var(--el-color-danger-light-9); border-bottom: 1px solid var(--el-color-danger-light-5); }
-.ud-err-panel__head  { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-.ud-err-panel__status { font-size: 12px; font-weight: 700; color: var(--el-color-danger); }
-.ud-err-panel__code  { font-size: 11px; font-family: var(--ud-mono); background: var(--el-color-danger-light-7); padding: 1px 6px; border-radius: 4px; color: var(--el-color-danger); }
-.ud-err-panel__msg   { margin: 0; font-size: 12px; color: var(--el-color-danger-dark-2); line-height: 1.5; word-break: break-all; }
+/* ── Messages / JSON ── */
+.ud-msgs    { display: flex; flex-direction: column; gap: 12px; }
+.ud-msg     { border-radius: 8px; overflow: hidden; border: 1px solid var(--el-border-color-light); }
+.ud-msg-role {
+  display: block; padding: 5px 12px; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .05em;
+  background: var(--el-fill-color-light); color: var(--el-text-color-secondary);
+}
+.ud-msg--system    .ud-msg-role { background: #fef3c7; color: #92400e; }
+.ud-msg--user      .ud-msg-role { background: #dbeafe; color: #1e40af; }
+.ud-msg--assistant .ud-msg-role { background: #d1fae5; color: #065f46; }
+.ud-msg-content {
+  margin: 0; padding: 12px; font-size: 12.5px; line-height: 1.65;
+  white-space: pre-wrap; word-break: break-word;
+  font-family: var(--ud-mono); background: var(--el-bg-color); max-height: 400px; overflow-y: auto;
+}
+.ud-json-view {
+  background: var(--el-fill-color-light); border-radius: 8px; padding: 14px;
+  max-height: 500px; overflow-y: auto;
+}
+.ud-json-view pre {
+  margin: 0; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all;
+  font-family: var(--ud-mono);
+}
 
-/* ── 错误 Tab 详情 ── */
-.ud-error-block { padding: 16px 0; }
-.ud-error-code  { font-size: 11px; font-family: var(--ud-mono); color: var(--el-color-danger); background: var(--el-color-danger-light-9); padding: 2px 8px; border-radius: 4px; display: inline-block; margin-bottom: 8px; }
-.ud-error-msg   { margin: 0; padding: 12px; font-size: 12px; font-family: var(--ud-mono); white-space: pre-wrap; word-break: break-all; background: var(--el-fill-color-light); border-radius: 8px; color: var(--el-color-danger-dark-2); }
+/* ── Headers table ── */
+.ud-headers-table { display: flex; flex-direction: column; gap: 4px; }
+.ud-header-row    { display: flex; gap: 12px; font-size: 12px; padding: 4px 0; border-bottom: 1px solid var(--el-border-color-lighter); }
+.ud-header-key    { color: var(--el-text-color-secondary); flex-shrink: 0; min-width: 140px; font-family: var(--ud-mono); }
+.ud-header-val    { color: var(--el-text-color-primary); word-break: break-all; font-family: var(--ud-mono); }
 
-.ud-meta-grid    { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; padding: 16px 0; }
-.ud-meta-section { }
-.ud-meta-heading { font-size: 12px; font-weight: 600; color: var(--ud-muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
-.ud-meta-row     { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 4px 0; font-size: 13px; border-bottom: 1px solid var(--ud-border); }
-.ud-meta-row span:first-child { color: var(--ud-muted); flex-shrink: 0; }
-.ud-meta-sep { border-color: var(--ud-muted) !important; }
-.ud-meta-row code { font-family: var(--ud-mono); font-size: 12px; background: var(--el-fill-color); padding: 1px 4px; border-radius: 4px; }
-
-.ud-msgs         { display: flex; flex-direction: column; gap: 8px; padding: 8px 0; }
-.ud-msg          { border-radius: 8px; overflow: hidden; }
-.ud-msg--system  { background: var(--el-fill-color-light); }
-.ud-msg--user    { background: var(--el-color-primary-light-9); }
-.ud-msg--assistant { background: var(--el-fill-color); }
-.ud-msg-role     { display: block; padding: 4px 10px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px; color: var(--ud-muted); border-bottom: 1px solid var(--ud-border); }
-.ud-msg-content  { margin: 0; padding: 10px; font-size: 13px; font-family: var(--ud-mono); white-space: pre-wrap; word-break: break-all; color: var(--el-text-color-primary); }
-.ud-json-view    { background: var(--el-fill-color-light); border-radius: 8px; overflow: auto; max-height: 60vh; }
-.ud-json-view pre { margin: 0; padding: 14px; font-size: 12px; font-family: var(--ud-mono); white-space: pre-wrap; word-break: break-all; color: var(--el-text-color-primary); }
+/* ── Error block ── */
+.ud-error-block { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 16px; }
+.ud-error-code  { font-size: 11px; font-weight: 700; color: #dc2626; text-transform: uppercase; margin-bottom: 8px; }
+.ud-error-msg   { margin: 0; font-size: 12.5px; color: #7f1d1d; white-space: pre-wrap; word-break: break-word; }
 </style>

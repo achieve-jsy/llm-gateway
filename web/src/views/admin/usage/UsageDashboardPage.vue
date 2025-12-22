@@ -204,7 +204,11 @@
               <tr>
                 <th class="col-rank">#</th>
                 <th class="col-name">名称</th>
-                <th>成本占比</th>
+                <th>
+                  <el-tooltip content="该成员成本占本期团队总成本的比例" placement="top">
+                    <span style="cursor:help;border-bottom:1px dashed currentColor">成本占比</span>
+                  </el-tooltip>
+                </th>
                 <th class="col-num">成本 (USD)</th>
                 <th class="col-num">调用次数</th>
                 <!-- user scope 展示 Token 消耗，否则展示活跃用户 -->
@@ -231,7 +235,7 @@
                     <div class="ud-bar-bg">
                       <div class="ud-bar-fill ud-bar-fill--cost" :style="{ width: barPct(row.cost_estimate, maxCost) + '%' }" />
                     </div>
-                    <span class="ud-bar-pct">{{ barPct(row.cost_estimate, maxCost) }}%</span>
+                    <span class="ud-bar-pct">{{ barPct(row.cost_estimate, totalCost) }}%</span>
                   </div>
                 </td>
                 <td class="col-num c-green fw6">${{ fmtCost(row.cost_estimate) }}</td>
@@ -796,6 +800,10 @@ const canDrill = computed(() =>
 
 const maxCost = computed(() =>
   Math.max(1, ...breakdown.value.map(r => r.cost_estimate || 0))
+)
+
+const totalCost = computed(() =>
+  breakdown.value.reduce((sum, r) => sum + (r.cost_estimate || 0), 0)
 )
 
 const avgCostPerCall = computed(() => {

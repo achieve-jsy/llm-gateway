@@ -66,6 +66,12 @@ func (s *Scheduler) Failover(groupName, failedModelID string) (*RouteDecision, e
 	return s.failoverHandler.Failover(groupName, failedModelID)
 }
 
+// GetGroupConfig 返回指定组的路由配置（含 TimeoutSeconds 等元数据）。
+// 若组不存在则返回 nil。
+func (s *Scheduler) GetGroupConfig(groupName string) *GroupRoutingConfig {
+	return s.router.routeTable.Get(groupName)
+}
+
 func (s *Scheduler) NotifyFailure(modelID string) {
 	s.healthProber.NotifyFailure(modelID)
 }

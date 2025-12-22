@@ -62,6 +62,7 @@ type CreateGroupRequest struct {
 	MaxSwitches             *int   `json:"max_switches"`
 	SameModelRetries        *int   `json:"same_model_retries"`
 	FailoverCooldownSeconds *int   `json:"failover_cooldown_seconds"`
+	TimeoutSeconds          *int   `json:"timeout_seconds"`
 }
 
 type UpdateGroupRequest struct {
@@ -72,6 +73,7 @@ type UpdateGroupRequest struct {
 	MaxSwitches             *int    `json:"max_switches"`
 	SameModelRetries        *int    `json:"same_model_retries"`
 	FailoverCooldownSeconds *int    `json:"failover_cooldown_seconds"`
+	TimeoutSeconds          *int    `json:"timeout_seconds"`
 }
 
 func (s *GroupService) Create(req CreateGroupRequest) (*model.Group, error) {
@@ -108,6 +110,9 @@ func (s *GroupService) Create(req CreateGroupRequest) (*model.Group, error) {
 	}
 	if req.FailoverCooldownSeconds != nil {
 		group.FailoverCooldownSeconds = *req.FailoverCooldownSeconds
+	}
+	if req.TimeoutSeconds != nil {
+		group.TimeoutSeconds = *req.TimeoutSeconds
 	}
 
 	if err := s.repo.Create(group); err != nil {
@@ -170,6 +175,9 @@ func (s *GroupService) Update(id uint, req UpdateGroupRequest) (*model.Group, er
 	}
 	if req.FailoverCooldownSeconds != nil {
 		group.FailoverCooldownSeconds = *req.FailoverCooldownSeconds
+	}
+	if req.TimeoutSeconds != nil {
+		group.TimeoutSeconds = *req.TimeoutSeconds
 	}
 
 	if err := s.repo.Update(group); err != nil {

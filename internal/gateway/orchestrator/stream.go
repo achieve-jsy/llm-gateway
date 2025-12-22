@@ -19,6 +19,7 @@ import (
 // ChatStream 执行流式聊天调用
 // 返回 io.ReadCloser（原始 SSE 字节流），调用方负责关闭。
 // 流被 ObservedSSEStream 包装，旁路解析每个 SSE chunk 并写入 OTel span（chunk 计数）。
+// 调用方负责在传入的 ctx 上设置超时，ChatStream 本身不再创建超时 context。
 func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest) (io.ReadCloser, error) {
 	tracer := otel.Tracer("llm-gateway/orchestrator")
 
@@ -29,12 +30,8 @@ func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest
 		req.StreamOptions.IncludeUsage = true
 	}
 
-	// 流式请求超时控制（300s，匹配 Nginx proxy_read_timeout）
-	ctx, cancel := context.WithTimeout(ctx, defaultStreamTimeout)
-
 	router := o.routerSnapshot()
 	if router == nil || router.ModelCount() == 0 {
-		cancel()
 		return nil, model.ErrModelNotFound
 	}
 
@@ -77,7 +74,6 @@ func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		span.End()
-		cancel()
 		slog.Error("upstream_stream_error",
 			"model", req.Model,
 			"duration_ms", elapsed.Milliseconds(),
@@ -127,12 +123,11 @@ func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest
 	otelObserver := streaming.NewOTelObserver(span)
 	observed := streaming.NewObservedSSEStream(rawStream, otelObserver, usageObserver)
 
-	// cancelOnCloseStream 确保流关闭时同步取消 context + 结束 span
+	// cancelOnCloseStream 确保流关闭时结束 OTel span（ctx/cancel 由调用方持有）
 	return &cancelOnCloseStream{
 		ReadCloser: observed,
 		cancel: func() {
 			span.End()
-			cancel()
 		},
 	}, nil
 }

@@ -17,11 +17,6 @@ import (
 )
 
 const (
-	// 非流式请求超时 30 秒
-	defaultTimeout = 30 * time.Second
-	// 流式请求超时 300 秒（匹配 Nginx proxy_read_timeout）
-	defaultStreamTimeout = 300 * time.Second
-
 	// ginCtxKey is the context key used to carry *gin.Context into the orchestrator
 	// so that provider/token info can be written back for the Logger middleware.
 	ginCtxKey = contextKey("gin_context")
@@ -83,12 +78,9 @@ func ginContextFrom(ctx context.Context) *gin.Context {
 
 // Chat 执行普通聊天调用
 // 校验模型可用性 → 调用 Router → 返回归一化响应
+// 调用方负责在传入的 ctx 上设置超时，Chat 本身不再创建超时 context。
 func (o *ChatOrchestrator) Chat(ctx context.Context, req *core.ChatRequest) (*core.ChatResponse, error) {
 	tracer := otel.Tracer("llm-gateway/orchestrator")
-
-	// 超时控制
-	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
-	defer cancel()
 
 	router := o.routerSnapshot()
 	if router == nil || router.ModelCount() == 0 {

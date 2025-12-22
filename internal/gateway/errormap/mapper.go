@@ -23,8 +23,11 @@ func MapProviderError(err error) *model.UnifiedError {
 
 	msg := strings.ToLower(err.Error())
 
-	// 超时检测
-	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(msg, "timeout") {
+	// 超时检测：context 超时 / 上游明确返回 504 / 错误消息含 timeout
+	if errors.Is(err, context.DeadlineExceeded) ||
+		strings.Contains(msg, "504") ||
+		strings.Contains(msg, "gateway timeout") ||
+		strings.Contains(msg, "timeout") {
 		return model.ErrProviderTimeout
 	}
 

@@ -432,14 +432,12 @@
                         <span>输出<span class="ud-tt__sub" v-if="row.completion_tokens"> ×{{ fmtNum(row.completion_tokens) }}</span></span>
                         <b>${{ (row.output_cost_usd || 0).toFixed(6) }}</b>
                       </div>
-                      <template v-if="(row.cache_read_cost_usd ?? 0) > 0 || (row.cache_write_cost_usd ?? 0) > 0">
-                        <div class="ud-tt__sep"></div>
-                        <div class="ud-tt__group">缓存</div>
-                        <div class="ud-tt__row" v-if="(row.cache_read_cost_usd ?? 0) > 0">
-                          <span>缓存读取<span class="ud-tt__sub" v-if="row.cached_tokens"> ×{{ fmtNum(row.cached_tokens) }}</span></span>
-                          <b class="c-cyan">${{ (row.cache_read_cost_usd || 0).toFixed(6) }}</b>
-                        </div>
-                      </template>
+                      <div class="ud-tt__sep"></div>
+                      <div class="ud-tt__group">缓存</div>
+                      <div class="ud-tt__row">
+                        <span>缓存读取<span class="ud-tt__sub" v-if="row.cached_tokens"> ×{{ fmtNum(row.cached_tokens) }}</span></span>
+                        <b :class="(row.cache_read_cost_usd || 0) > 0 ? 'c-cyan' : ''">${{ (row.cache_read_cost_usd || 0).toFixed(6) }}</b>
+                      </div>
                       <div class="ud-tt__sep"></div>
                       <div class="ud-tt__row"><span>合计</span><b class="c-green">${{ fmtCost(row.est_cost_usd) }}</b></div>
                     </div>

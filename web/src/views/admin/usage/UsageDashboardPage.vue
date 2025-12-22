@@ -357,13 +357,14 @@
                   <template #content>
                     <div class="ud-tt">
                       <div class="ud-tt__title">Token 明细</div>
-                      <div class="ud-tt__row"><span>输入</span><b>{{ fmtNum(row.prompt_tokens) }}</b></div>
+                      <div class="ud-tt__row"><span>输入（含缓存）</span><b>{{ fmtNum(row.prompt_tokens) }}</b></div>
                       <div class="ud-tt__row"><span>输出</span><b>{{ fmtNum(row.completion_tokens) }}</b></div>
                       <div class="ud-tt__row" v-if="row.reasoning_tokens"><span class="ud-tt__sub">└ 推理</span><b class="c-purple">{{ fmtNum(row.reasoning_tokens) }}</b></div>
                       <div class="ud-tt__sep"></div>
                       <div class="ud-tt__group">缓存</div>
-                      <div class="ud-tt__row"><span>缓存命中</span><b :class="row.cached_tokens ? 'c-cyan' : ''">{{ fmtNum(row.cached_tokens) }}</b></div>
+                      <div class="ud-tt__row"><span>缓存命中（读）</span><b :class="row.cached_tokens ? 'c-cyan' : ''">{{ fmtNum(row.cached_tokens) }}</b></div>
                       <div class="ud-tt__row"><span>缓存写入</span><b :class="row.cache_write_tokens ? 'c-amber' : ''">{{ fmtNum(row.cache_write_tokens) }}</b></div>
+                      <div class="ud-tt__row"><span class="ud-tt__sub">未缓存输入</span><b>{{ fmtNum(Math.max((row.prompt_tokens||0) - (row.cached_tokens||0) - (row.cache_write_tokens||0), 0)) }}</b></div>
                       <div class="ud-tt__sep"></div>
                       <div class="ud-tt__row"><span>总计</span><b class="c-blue">{{ fmtNum(row.total_tokens) }}</b></div>
                     </div>
@@ -423,8 +424,22 @@
                         <div class="ud-tt__sep"></div>
                       </template>
                       <div class="ud-tt__group">费用</div>
-                      <div class="ud-tt__row"><span>输入</span><b>${{ (row.input_cost_usd || 0).toFixed(6) }}</b></div>
-                      <div class="ud-tt__row"><span>输出</span><b>${{ (row.output_cost_usd || 0).toFixed(6) }}</b></div>
+                      <div class="ud-tt__row">
+                        <span>输入<span class="ud-tt__sub" v-if="row.prompt_tokens"> ×{{ fmtNum(Math.max((row.prompt_tokens||0) - (row.cached_tokens||0) - (row.cache_write_tokens||0), 0)) }}</span></span>
+                        <b>${{ (row.input_cost_usd || 0).toFixed(6) }}</b>
+                      </div>
+                      <div class="ud-tt__row">
+                        <span>输出<span class="ud-tt__sub" v-if="row.completion_tokens"> ×{{ fmtNum(row.completion_tokens) }}</span></span>
+                        <b>${{ (row.output_cost_usd || 0).toFixed(6) }}</b>
+                      </div>
+                      <template v-if="(row.cache_read_cost_usd ?? 0) > 0 || (row.cache_write_cost_usd ?? 0) > 0">
+                        <div class="ud-tt__sep"></div>
+                        <div class="ud-tt__group">缓存</div>
+                        <div class="ud-tt__row" v-if="(row.cache_read_cost_usd ?? 0) > 0">
+                          <span>缓存读取<span class="ud-tt__sub" v-if="row.cached_tokens"> ×{{ fmtNum(row.cached_tokens) }}</span></span>
+                          <b class="c-cyan">${{ (row.cache_read_cost_usd || 0).toFixed(6) }}</b>
+                        </div>
+                      </template>
                       <div class="ud-tt__sep"></div>
                       <div class="ud-tt__row"><span>合计</span><b class="c-green">${{ fmtCost(row.est_cost_usd) }}</b></div>
                     </div>
@@ -1669,16 +1684,7 @@ onUnmounted(() => {
 .c-purple { color: var(--ud-purple); }
 .fw6      { font-weight: 600; }
 
-/* ── Tooltip ── */
-:deep(.ud-tt-popper) { padding: 0 !important; }
-.ud-tt { padding: 10px 14px; min-width: 200px; }
-.ud-tt__title { font-size: 12px; font-weight: 600; color: var(--el-text-color-primary); margin-bottom: 8px; }
-.ud-tt__group { font-size: 10px; color: var(--ud-muted); margin: 6px 0 3px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; padding-left: 6px; border-left: 2px solid var(--el-color-primary-light-5); }
-.ud-tt__row { display: flex; justify-content: space-between; gap: 24px; font-size: 12px; padding: 1px 0; }
-.ud-tt__row span { color: var(--ud-muted); }
-.ud-tt__row b { font-weight: 600; }
-.ud-tt__sub { padding-left: 10px; }
-.ud-tt__sep { height: 1px; background: var(--ud-border); margin: 5px 0; }
+/* tooltip CSS 已移至文件末尾非 scoped <style> 块（因 el-tooltip 内容 teleport 到 body）*/
 
 /* ── Trace Drawer ── */
 .ud-trace-header  { display: flex; flex-direction: column; gap: 2px; }
@@ -1786,4 +1792,31 @@ onUnmounted(() => {
 .ud-error-block { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 16px; }
 .ud-error-code  { font-size: 11px; font-weight: 700; color: #dc2626; text-transform: uppercase; margin-bottom: 8px; }
 .ud-error-msg   { margin: 0; font-size: 12.5px; color: #7f1d1d; white-space: pre-wrap; word-break: break-word; }
+</style>
+
+<!-- tooltip 内容 teleport 到 body，需要非 scoped 全局样式 -->
+<style>
+.ud-tt-popper.el-popper {
+  background: #1f2937 !important;
+  border: 1px solid #374151 !important;
+  border-radius: 10px !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .35) !important;
+  padding: 0 !important;
+}
+.ud-tt-popper.el-popper .el-popper__arrow::before {
+  background: #1f2937 !important;
+  border: 1px solid #374151 !important;
+}
+.ud-tt { padding: 10px 14px; min-width: 200px; font-size: 12px; line-height: 1.7; font-variant-numeric: tabular-nums; }
+.ud-tt__title { font-weight: 700; font-size: 12px; margin-bottom: 7px; color: #e5e7eb; border-bottom: 1px solid #374151; padding-bottom: 5px; letter-spacing: .2px; }
+.ud-tt__group { margin: 6px 0 3px; font-size: 10px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; color: #38bdf8; padding-left: 6px; border-left: 2px solid rgba(56, 189, 248, 0.4); }
+.ud-tt__row { display: flex; justify-content: space-between; gap: 18px; align-items: center; color: #9ca3af; }
+.ud-tt__sub { color: #6b7280; padding-left: 2px; }
+.ud-tt__row b { color: #f9fafb; font-weight: 600; }
+.ud-tt__row b.c-cyan   { color: #38bdf8; }
+.ud-tt__row b.c-amber  { color: #fbbf24; }
+.ud-tt__row b.c-purple { color: #a78bfa; }
+.ud-tt__row b.c-blue   { color: #5eead4; }
+.ud-tt__row b.c-green  { color: #4ade80; }
+.ud-tt__sep { border-top: 1px solid #374151; margin: 6px 0; }
 </style>

@@ -19,6 +19,7 @@ type Group struct {
 	MaxSwitches             int            `gorm:"not null;default:2" json:"max_switches"`
 	SameModelRetries        int            `gorm:"not null;default:1" json:"same_model_retries"`
 	FailoverCooldownSeconds int            `gorm:"not null;default:60" json:"failover_cooldown_seconds"`
+	TimeoutSeconds          int            `gorm:"not null;default:0" json:"timeout_seconds"`
 	Models                  []GroupModel   `gorm:"foreignKey:GroupID" json:"models,omitempty"`
 }
 

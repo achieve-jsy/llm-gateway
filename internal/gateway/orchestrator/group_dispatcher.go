@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/example/llm-gateway/internal/gateway/binding"
 	"github.com/example/llm-gateway/internal/gateway/cache"
@@ -125,4 +126,14 @@ func (d *GroupAwareDispatcher) HandleFailover(c *gin.Context, groupName, failedM
 	)
 
 	return decision, nil
+}
+
+// GetGroupTimeout 返回组的自定义超时时长，0 表示使用系统默认值。
+// defaultTimeout 是调用方传入的系统默认值。
+func (d *GroupAwareDispatcher) GetGroupTimeout(groupName string, defaultTimeout time.Duration) time.Duration {
+	cfg := d.scheduler.GetGroupConfig(groupName)
+	if cfg != nil && cfg.TimeoutSeconds > 0 {
+		return time.Duration(cfg.TimeoutSeconds) * time.Second
+	}
+	return defaultTimeout
 }

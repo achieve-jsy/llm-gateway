@@ -12,19 +12,14 @@
         :collapse="isCollapsed"
         @select="handleMenuSelect"
       >
-        <div class="menu-group-label">接入</div>
         <el-menu-item index="/access/unified-entry">
           <el-icon><Connection /></el-icon>
-          <template #title>统一接入</template>
+          <template #title>首页</template>
         </el-menu-item>
 
         <el-divider class="menu-divider" />
 
         <div class="menu-group-label">员工</div>
-        <el-menu-item index="/home">
-          <el-icon><HomeFilled /></el-icon>
-          <template #title>首页</template>
-        </el-menu-item>
         <el-menu-item index="/keys">
           <el-icon><Key /></el-icon>
           <template #title>我的 Key</template>
@@ -176,7 +171,7 @@ import { onMounted, computed, ref, watch } from 'vue'
 import { isDark, toggleTheme } from './composables/useTheme'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
-import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, HomeFilled, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close } from '@element-plus/icons-vue'
+import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/common/NotificationBell.vue'
 import AnnouncementBanner from '@/components/common/AnnouncementBanner.vue'
 import AnnouncementPopup from '@/components/common/AnnouncementPopup.vue'

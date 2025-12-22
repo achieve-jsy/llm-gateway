@@ -7,7 +7,6 @@ const routes: RouteRecordRaw[] = [
     path: '/',
     redirect: '/access/unified-entry'
   },
-  { path: '/home', name: 'Home', component: () => import('@/views/home/HomePage.vue'), meta: { title: '首页' } },
   { path: '/keys', name: 'KeyList', component: () => import('@/views/key/KeyListPage.vue'), meta: { title: '我的 Key' } },
   {
     path: '/login',
@@ -25,7 +24,7 @@ const routes: RouteRecordRaw[] = [
     path: '/access/unified-entry',
     name: 'UnifiedEntry',
     component: () => import('@/views/access/UnifiedEntryPage.vue'),
-    meta: { title: '统一接入能力' }
+    meta: { title: '首页' }
   },
   // ─── 管理/运维页面（仅 admin）────────────────────────────────────────────
   {
@@ -147,7 +146,7 @@ const routes: RouteRecordRaw[] = [
     component: { template: '<div style="padding:60px;text-align:center;color:#909399"><h2 style="font-size:48px;margin:0">403</h2><p style="margin:12px 0 0">权限不足，无法访问该页面</p></div>' },
     meta: { title: '无权限' }
   },
-  { path: '/:pathMatch(.*)*', redirect: '/home' }
+  { path: '/:pathMatch(.*)*', redirect: '/access/unified-entry' }
 ]
 
 const router = createRouter({

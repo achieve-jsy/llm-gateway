@@ -141,11 +141,12 @@ func (cs *ConfigSyncer) fetchConfig() (*ControlPlaneConfig, error) {
 		modelIdx := uint(1)
 		for _, g := range config.Data {
 			config.Groups = append(config.Groups, GroupConfig{
-				ID:          g.ID,
-				Name:        g.Name,
-				Strategy:    g.Strategy,
-				Enabled:     g.Enabled,
-				Description: g.Description,
+				ID:             g.ID,
+				Name:           g.Name,
+				Strategy:       g.Strategy,
+				Enabled:        g.Enabled,
+				Description:    g.Description,
+				TimeoutSeconds: g.TimeoutSeconds,
 			})
 			for _, m := range g.Models {
 				config.Models = append(config.Models, GroupModel{

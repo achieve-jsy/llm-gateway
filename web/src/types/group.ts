@@ -9,6 +9,7 @@ export interface Group {
   max_switches: number
   same_model_retries: number
   failover_cooldown_seconds: number
+  timeout_seconds: number
   model_count?: number
   models?: GroupModel[]
   created_at: string
@@ -41,6 +42,7 @@ export interface CreateGroupRequest {
   max_switches?: number
   same_model_retries?: number
   failover_cooldown_seconds?: number
+  timeout_seconds?: number
 }
 
 export interface UpdateGroupRequest {
@@ -51,6 +53,7 @@ export interface UpdateGroupRequest {
   max_switches?: number
   same_model_retries?: number
   failover_cooldown_seconds?: number
+  timeout_seconds?: number
 }
 
 export interface AddModelToGroupRequest {

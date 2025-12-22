@@ -11,13 +11,19 @@ import (
 )
 
 // AuthMiddleware provides unified authentication (API key via auth service + JWT).
-// Replaces the old APIKeyAuth middleware.
+// Accepts tokens from either Authorization: Bearer <token> or x-api-key: <token>
+// headers. The x-api-key header is used by Anthropic-native clients (e.g. Claude Code)
+// and is treated equivalently to a Bearer token.
 func AuthMiddleware(authClient *infra.AuthClient) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		auth := c.GetHeader("Authorization")
 		if auth == "" || !strings.HasPrefix(auth, "Bearer ") {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gwmodel.ErrUnauthorized})
-			return
+			// Fall back to x-api-key header (Anthropic-native clients).
+			auth = c.GetHeader("x-api-key")
+			if auth == "" {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gwmodel.ErrUnauthorized})
+				return
+			}
 		}
 		token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
 		if token == "" {

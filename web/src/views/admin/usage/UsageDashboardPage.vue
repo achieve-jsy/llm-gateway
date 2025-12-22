@@ -417,10 +417,12 @@
                   <template #content>
                     <div class="ud-tt">
                       <div class="ud-tt__title">成本明细 (USD)</div>
-                      <div class="ud-tt__group">单价 / 1M tokens</div>
-                      <div class="ud-tt__row"><span>输入单价</span><b>${{ fmtPrice(row.input_price_snapshot) }}</b></div>
-                      <div class="ud-tt__row"><span>输出单价</span><b>${{ fmtPrice(row.output_price_snapshot) }}</b></div>
-                      <div class="ud-tt__sep"></div>
+                      <template v-if="(row.input_price_snapshot ?? 0) > 0 || (row.output_price_snapshot ?? 0) > 0">
+                        <div class="ud-tt__group">单价 / 1M tokens</div>
+                        <div class="ud-tt__row"><span>输入单价</span><b>${{ fmtPrice(row.input_price_snapshot) }}</b></div>
+                        <div class="ud-tt__row"><span>输出单价</span><b>${{ fmtPrice(row.output_price_snapshot) }}</b></div>
+                        <div class="ud-tt__sep"></div>
+                      </template>
                       <div class="ud-tt__group">费用</div>
                       <div class="ud-tt__row">
                         <span>输入<span class="ud-tt__sub" v-if="row.prompt_tokens"> ×{{ fmtNum(Math.max((row.prompt_tokens||0) - (row.cached_tokens||0) - (row.cache_write_tokens||0), 0)) }}</span></span>

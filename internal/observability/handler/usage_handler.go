@@ -199,6 +199,7 @@ func (h *UsageHandler) MyQuery(c *gin.Context) {
 		UserID:   userID,
 		GroupBy:  c.DefaultQuery("group_by", "day"),
 		Model:    c.Query("model_name"), // 前端传 model_name，与 Query 接口对齐
+		Status:   c.Query("status"),
 		Page:     page,
 		PageSize: pageSize,
 	}
@@ -232,6 +233,7 @@ func (h *UsageHandler) MyLogs(c *gin.Context) {
 		UserName:  c.Query("user_name"),
 		ModelName: c.Query("model_name"),
 		GroupName: c.Query("group_name"),
+		Status:    c.Query("status"),
 		Page:      page,
 		PageSize:  pageSize,
 	}

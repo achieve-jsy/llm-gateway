@@ -453,6 +453,7 @@ type MyStatsQueryParams struct {
 	UserID   string
 	GroupBy  string // day / model
 	Model    string
+	Status   string // "success" | "error" | ""
 	Page     int
 	PageSize int
 }
@@ -646,6 +647,11 @@ func (s *RollupService) QueryMyStats(ctx context.Context, params MyStatsQueryPar
 
 	if params.Model != "" {
 		query = query.Where("model = ? OR routed_model = ? OR group_name = ?", params.Model, params.Model, params.Model)
+	}
+	if params.Status == "success" {
+		query = query.Where("status = 200")
+	} else if params.Status == "error" {
+		query = query.Where("status != 200")
 	}
 
 	query = query.Group(groupCol).Order("est_cost_usd DESC")

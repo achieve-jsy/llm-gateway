@@ -16,13 +16,18 @@ import (
 //     以便组内的多模态模型能力被 opencode 感知（这正是用户的诉求）；
 //   - 上下文/输出上限：取成员中的最小正值，避免超过最弱成员的实际能力；
 //   - mode：任一成员为 chat 即为 chat，否则取首个非空 mode。
+//   - 价格：展示组内成员的最低/最高报价区间（单位 USD/1M tokens）。
 type GroupModelInfo struct {
-	Mode                    string `json:"mode"`
-	MaxInputTokens          int    `json:"max_input_tokens"`
-	MaxOutputTokens         int    `json:"max_output_tokens"`
-	SupportsVision          bool   `json:"supports_vision"`
-	SupportsFunctionCalling bool   `json:"supports_function_calling"`
-	SupportsToolChoice      bool   `json:"supports_tool_choice"`
+	Mode                    string   `json:"mode"`
+	MaxInputTokens          int      `json:"max_input_tokens"`
+	MaxOutputTokens         int      `json:"max_output_tokens"`
+	SupportsVision          bool     `json:"supports_vision"`
+	SupportsFunctionCalling bool     `json:"supports_function_calling"`
+	SupportsToolChoice      bool     `json:"supports_tool_choice"`
+	InputPriceMin           *float64 `json:"input_price_min,omitempty"`
+	InputPriceMax           *float64 `json:"input_price_max,omitempty"`
+	OutputPriceMin          *float64 `json:"output_price_min,omitempty"`
+	OutputPriceMax          *float64 `json:"output_price_max,omitempty"`
 }
 
 // GroupInfoRepo 抽象按需查询启用模型组（含成员）的能力。
@@ -119,6 +124,7 @@ func (s *ModelInfoService) GetGroupModelInfo(names []string) (map[string]GroupMo
 //     宣称能力却被路由到不支持的成员而失败。
 //   - 上下文/输出上限：取成员中的最小正值，不超过最弱成员的实际能力。
 //   - mode：任一成员为 chat 即为 chat，否则取首个非空 mode。
+//   - 价格：展示组内成员有效报价的 min/max 区间。
 func aggregateGroupModelInfo(members []*model.Model) GroupModelInfo {
 	info := GroupModelInfo{}
 	if len(members) == 0 {
@@ -158,6 +164,17 @@ func aggregateGroupModelInfo(members []*model.Model) GroupModelInfo {
 		vision = vision && memberVision
 		functionCalling = functionCalling && memberFC
 		toolChoice = toolChoice && memberTC
+
+		// 价格聚合：取成员有效价格的 min/max。
+		inP, outP := memberEffectivePrice(m)
+		if inP > 0 {
+			info.InputPriceMin = updateMin(info.InputPriceMin, inP)
+			info.InputPriceMax = updateMax(info.InputPriceMax, inP)
+		}
+		if outP > 0 {
+			info.OutputPriceMin = updateMin(info.OutputPriceMin, outP)
+			info.OutputPriceMax = updateMax(info.OutputPriceMax, outP)
+		}
 	}
 
 	info.SupportsVision = vision
@@ -167,6 +184,32 @@ func aggregateGroupModelInfo(members []*model.Model) GroupModelInfo {
 		info.Mode = firstMode
 	}
 	return info
+}
+
+// memberEffectivePrice 返回成员模型的有效输入/输出报价（USD/1M tokens）。
+// price_mode=manual 时使用模型自设价格，否则回退 Catalog 数据。
+func memberEffectivePrice(m *model.Model) (inputPrice, outputPrice float64) {
+	if m.PriceMode == "manual" {
+		return m.InputPrice, m.OutputPrice
+	}
+	if m.Catalog != nil {
+		return m.Catalog.InputPricePerMillion, m.Catalog.OutputPricePerMillion
+	}
+	return 0, 0
+}
+
+func updateMin(cur *float64, v float64) *float64 {
+	if cur == nil || v < *cur {
+		return &v
+	}
+	return cur
+}
+
+func updateMax(cur *float64, v float64) *float64 {
+	if cur == nil || v > *cur {
+		return &v
+	}
+	return cur
 }
 
 func memberMode(m *model.Model) string {

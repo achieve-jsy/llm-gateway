@@ -13,7 +13,8 @@ import (
 
 // ResponsesHandler 处理 OpenAI Responses API 请求。
 type ResponsesHandler struct {
-	orchestrator ResponsesOrchestratorInterface
+	orchestrator  ResponsesOrchestratorInterface
+	groupDispatch *orchestrator.GroupAwareDispatcher
 }
 
 // ResponsesOrchestratorInterface 编排器抽象，handler 仅依赖必要方法。
@@ -25,6 +26,11 @@ type ResponsesOrchestratorInterface interface {
 // NewResponsesHandler 创建 ResponsesHandler 实例
 func NewResponsesHandler(orch ResponsesOrchestratorInterface) *ResponsesHandler {
 	return &ResponsesHandler{orchestrator: orch}
+}
+
+// NewResponsesHandlerWithGroup 创建支持模型组路由的 ResponsesHandler 实例
+func NewResponsesHandlerWithGroup(orch ResponsesOrchestratorInterface, gd *orchestrator.GroupAwareDispatcher) *ResponsesHandler {
+	return &ResponsesHandler{orchestrator: orch, groupDispatch: gd}
 }
 
 // Handle 处理 POST /v1/responses 请求
@@ -42,6 +48,25 @@ func (h *ResponsesHandler) Handle(c *gin.Context) {
 	}
 
 	c.Set("model", req.Model)
+
+	// 若请求的是模型组名，通过 group dispatcher 解析到实际 provider 模型
+	if h.groupDispatch != nil {
+		decision, err := h.groupDispatch.Dispatch(c, req.Model)
+		if err != nil {
+			if ue, ok := err.(*model.UnifiedError); ok {
+				respondError(c, ue)
+			} else {
+				c.JSON(http.StatusServiceUnavailable, gin.H{
+					"error": gin.H{"type": "unavailable", "message": "no available model in group", "code": "no_available_model"},
+				})
+			}
+			return
+		}
+		if decision != nil {
+			req.Model = decision.ModelName
+			req.Provider = decision.ChannelType
+		}
+	}
 
 	ctx := orchestrator.WithGinContext(c.Request.Context(), c)
 

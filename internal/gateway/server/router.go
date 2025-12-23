@@ -79,7 +79,12 @@ func Setup(
 	modelsHandler := handler.NewModelsHandler(routerCache, modelsRouter, state)
 	boundModelsHandler := handler.NewBoundModelsHandler(controlPlaneURL, internalToken)
 	healthHandler := handler.NewHealthHandler(routerCache.Client(), modelsRouter, state, sch)
-	responsesHandler := handler.NewResponsesHandler(orch)
+	var responsesHandler *handler.ResponsesHandler
+	if groupDispatch != nil {
+		responsesHandler = handler.NewResponsesHandlerWithGroup(orch, groupDispatch)
+	} else {
+		responsesHandler = handler.NewResponsesHandler(orch)
+	}
 	messagesHandler := handler.NewMessagesHandler(router)
 
 	r.GET("/health", healthHandler.Health)

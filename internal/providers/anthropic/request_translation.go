@@ -239,14 +239,58 @@ func buildAnthropicMessageContent(msg core.Message) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(msg.ToolCalls) == 0 {
+
+	// Extract thinking_blocks from ExtraFields and prepend them to the assistant
+	// content. Anthropic requires thinking blocks to appear before any text or
+	// tool_use blocks in multi-turn conversations, and verifies their signatures.
+	//
+	// Claude Code stores thinking_blocks as a top-level field on the assistant
+	// message (not inside content), so they land in msg.ExtraFields after
+	// JSON deserialisation.
+	var prependBlocks []anthropicContentBlock
+	if msg.Role == "assistant" {
+		if raw := msg.ExtraFields.Lookup("thinking_blocks"); len(raw) > 0 {
+			var parsed []anthropicContentBlock
+			if err := json.Unmarshal(raw, &parsed); err == nil {
+				for _, b := range parsed {
+					switch b.Type {
+					case "thinking":
+						if b.Thinking != "" || b.Signature != "" {
+							prependBlocks = append(prependBlocks, anthropicContentBlock{
+								Type:      "thinking",
+								Thinking:  b.Thinking,
+								Signature: b.Signature,
+							})
+						}
+					case "redacted_thinking":
+						if b.Data != "" {
+							prependBlocks = append(prependBlocks, anthropicContentBlock{
+								Type: "redacted_thinking",
+								Data: b.Data,
+							})
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// No tool calls and no prepended blocks — return content directly.
+	if len(msg.ToolCalls) == 0 && len(prependBlocks) == 0 {
 		return content, nil
 	}
 	if len(msg.ToolCalls) > maxToolCallsPerMessage {
 		return nil, core.NewInvalidRequestError("too many tool calls in message", nil)
 	}
 
-	blocks := make([]anthropicContentBlock, 0, len(msg.ToolCalls)+1)
+	blocks := make([]anthropicContentBlock, 0, len(prependBlocks)+len(msg.ToolCalls)+1)
+
+	// Thinking blocks must come first.
+	blocks = append(blocks, prependBlocks...)
+
+	// Then text / image content from msg.Content (skipping any thinking blocks
+	// that may already be in content from convertMessageContentToAnthropic, to
+	// avoid duplication — they are already in prependBlocks).
 	switch c := content.(type) {
 	case string:
 		if strings.TrimSpace(c) != "" {
@@ -256,8 +300,18 @@ func buildAnthropicMessageContent(msg core.Message) (any, error) {
 			})
 		}
 	case []anthropicContentBlock:
-		blocks = append(blocks, c...)
+		for _, b := range c {
+			if b.Type == "thinking" || b.Type == "redacted_thinking" {
+				// Already prepended from ExtraFields; skip duplicates from content.
+				if len(prependBlocks) > 0 {
+					continue
+				}
+			}
+			blocks = append(blocks, b)
+		}
 	}
+
+	// Tool_use blocks last.
 	for _, toolCall := range msg.ToolCalls {
 		toolCallID := providers.ResponsesFunctionCallCallID(strings.TrimSpace(toolCall.ID))
 		toolName := strings.TrimSpace(toolCall.Function.Name)
@@ -591,6 +645,36 @@ func convertMessageContentToAnthropic(content any) (any, error) {
 				Text:         part.Text,
 				CacheControl: cacheControl,
 			})
+		case "thinking":
+			// Multi-turn extended thinking: the client echoes back the assistant's
+			// thinking block (including the encrypted signature) from the previous
+			// turn. Anthropic requires these to be present and unmodified so it can
+			// verify signature continuity. Drop silently if both thinking text and
+			// signature are absent (degenerate block that would be rejected anyway).
+			thinking := lookupStringFromExtraFields(part.ExtraFields, "thinking")
+			signature := lookupStringFromExtraFields(part.ExtraFields, "signature")
+			if thinking == "" && signature == "" && part.Text == "" {
+				continue
+			}
+			if thinking == "" {
+				thinking = part.Text // fallback: text field carries the thinking content
+			}
+			blocks = append(blocks, anthropicContentBlock{
+				Type:      "thinking",
+				Thinking:  thinking,
+				Signature: signature,
+			})
+		case "redacted_thinking":
+			// Redacted thinking blocks carry an encrypted `data` field that must be
+			// passed back verbatim. Dropping it breaks the conversation chain.
+			data := lookupStringFromExtraFields(part.ExtraFields, "data")
+			if data == "" {
+				continue
+			}
+			blocks = append(blocks, anthropicContentBlock{
+				Type: "redacted_thinking",
+				Data: data,
+			})
 		case "image_url":
 			if part.ImageURL == nil || part.ImageURL.URL == "" {
 				return nil, core.NewInvalidRequestError("anthropic image content requires image_url.url", nil)
@@ -705,4 +789,18 @@ func prefixAnthropicBatchItemError(index int, err error) error {
 		return &prefixed
 	}
 	return core.NewInvalidRequestError(fmt.Sprintf("batch item %d: %v", index, err), err)
+}
+
+// lookupStringFromExtraFields extracts a plain string value from ExtraFields by key.
+// Returns "" if the key is absent or the value is not a JSON string.
+func lookupStringFromExtraFields(fields core.UnknownJSONFields, key string) string {
+	raw := fields.Lookup(key)
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return ""
+	}
+	return s
 }

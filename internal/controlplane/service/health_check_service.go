@@ -56,7 +56,8 @@ type HealthCheckService struct {
 
 	groupCheckSvc *GroupCheckService // 可选：模型组检测（nil 表示未启用）
 
-	modelStatusLogSvc *ModelStatusLogService // 模型状态变更日志服务
+	modelStatusLogSvc *ModelStatusLogService    // 模型状态变更日志服务
+	snapshotter       *ProviderSnapshotRefresher // 自动禁用/恢复后刷新 Redis snapshot
 
 	mu                   sync.Mutex
 	cancel               context.CancelFunc
@@ -90,6 +91,11 @@ func (s *HealthCheckService) SetGroupCheckService(svc *GroupCheckService) {
 // SetModelStatusLogService 注入模型状态变更日志服务
 func (s *HealthCheckService) SetModelStatusLogService(svc *ModelStatusLogService) {
 	s.modelStatusLogSvc = svc
+}
+
+// SetSnapshotRefresher 注入 provider snapshot 刷新器，自动禁用/恢复后同步通知 gateway
+func (s *HealthCheckService) SetSnapshotRefresher(snapshotter *ProviderSnapshotRefresher) {
+	s.snapshotter = snapshotter
 }
 
 // GetConfig 获取配置
@@ -375,18 +381,22 @@ func (s *HealthCheckService) runBackgroundModelCheck() {
 						slog.Warn("model auto-recovery: threshold reached, re-enabling",
 							"model_id", mod.ID, "model_name", mod.Name,
 							"recovery_successes", newRecoveryCount)
-						if err := s.modelRepo.AutoEnableModel(mod.ID); err == nil {
-							reason := fmt.Sprintf("连续 %d 次健康检测成功", newRecoveryCount)
-							if s.modelStatusLogSvc != nil {
-								s.modelStatusLogSvc.LogStatusChange(
-									mod.ID, mod.Provider.ID,
-									mod.Name, mod.Provider.Name,
-									model.ChangeTypeAutoRecovered,
-									reason, "",
-									nil, "",
-								)
-							}
+				if err := s.modelRepo.AutoEnableModel(mod.ID); err == nil {
+						reason := fmt.Sprintf("连续 %d 次健康检测成功", newRecoveryCount)
+						if s.modelStatusLogSvc != nil {
+							s.modelStatusLogSvc.LogStatusChange(
+								mod.ID, mod.Provider.ID,
+								mod.Name, mod.Provider.Name,
+								model.ChangeTypeAutoRecovered,
+								reason, "",
+								nil, "",
+							)
 						}
+						// 刷新 Redis snapshot，让 gateway 立即感知模型恢复
+						if s.snapshotter != nil {
+							go s.snapshotter.RefreshAvailableSnapshot(context.Background())
+						}
+					}
 					} else {
 						// 未达阈值：递增 recovery_successes
 						s.modelRepo.IncrementRecoverySuccesses(mod.ID)
@@ -408,20 +418,24 @@ func (s *HealthCheckService) runBackgroundModelCheck() {
 					slog.Warn("model check: auto-disabling model",
 						"model_id", mod.ID, "model_name", mod.Name,
 						"failures", newCount, "threshold", maxFailures)
-					if err := s.modelRepo.AutoDisableModel(mod.ID); err == nil {
-						if s.modelStatusLogSvc != nil {
-							s.modelStatusLogSvc.LogStatusChange(
-								mod.ID, mod.Provider.ID,
-								mod.Name, mod.Provider.Name,
-								model.ChangeTypeAutoDisabled,
-								fmt.Sprintf("连续 %d 次健康检测失败", newCount),
-								errMsg, nil, "",
-							)
-						}
-						mu.Lock()
-						autoDisabled++
-						mu.Unlock()
+				if err := s.modelRepo.AutoDisableModel(mod.ID); err == nil {
+					if s.modelStatusLogSvc != nil {
+						s.modelStatusLogSvc.LogStatusChange(
+							mod.ID, mod.Provider.ID,
+							mod.Name, mod.Provider.Name,
+							model.ChangeTypeAutoDisabled,
+							fmt.Sprintf("连续 %d 次健康检测失败", newCount),
+							errMsg, nil, "",
+						)
 					}
+					// 刷新 Redis snapshot，让 gateway 立即感知模型禁用
+					if s.snapshotter != nil {
+						go s.snapshotter.RefreshAvailableSnapshot(context.Background())
+					}
+					mu.Lock()
+					autoDisabled++
+					mu.Unlock()
+				}
 				}
 				mu.Lock()
 				failed++

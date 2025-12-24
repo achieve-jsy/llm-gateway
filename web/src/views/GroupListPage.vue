@@ -68,24 +68,6 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="报价（$/1M tokens）" min-width="180" align="center">
-          <template #default="{ row }">
-            <div v-if="capabilities[row.name]" class="price-cell">
-              <template v-if="capabilities[row.name].input_price_min != null || capabilities[row.name].output_price_min != null">
-                <div class="price-row">
-                  <span class="price-label">输入</span>
-                  <span class="price-value">{{ formatPriceRange(capabilities[row.name].input_price_min, capabilities[row.name].input_price_max) }}</span>
-                </div>
-                <div class="price-row">
-                  <span class="price-label">输出</span>
-                  <span class="price-value">{{ formatPriceRange(capabilities[row.name].output_price_min, capabilities[row.name].output_price_max) }}</span>
-                </div>
-              </template>
-              <span v-else class="cap-empty">—</span>
-            </div>
-            <span v-else class="cap-empty">—</span>
-          </template>
-        </el-table-column>
         <el-table-column label="状态" width="100" align="center">
           <template #default="{ row }">
             <el-switch
@@ -196,20 +178,6 @@ function hasAnyCapability(name: string): boolean {
     c.max_input_tokens > 0 ||
     c.max_output_tokens > 0
   )
-}
-
-function formatPrice(v: number | undefined): string {
-  if (v == null || v === 0) return '—'
-  if (v < 0.001) return `$${v.toFixed(4)}`
-  if (v < 1) return `$${v.toFixed(3)}`
-  return `$${v.toFixed(2)}`
-}
-
-function formatPriceRange(min: number | undefined, max: number | undefined): string {
-  if (min == null && max == null) return '—'
-  if (min == null) return formatPrice(max)
-  if (max == null || Math.abs(max - min) < 0.0001) return formatPrice(min)
-  return `${formatPrice(min)} ~ ${formatPrice(max)}`
 }
 
 function formatDateTime(value: string): string {
@@ -346,29 +314,6 @@ onMounted(() => {
 .cap-empty {
   color: var(--el-text-color-secondary);
   font-size: 12px;
-}
-
-.price-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 12px;
-}
-
-.price-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.price-label {
-  color: var(--el-text-color-secondary);
-  min-width: 26px;
-}
-
-.price-value {
-  color: var(--el-text-color-primary);
-  font-variant-numeric: tabular-nums;
 }
 
 .pagination-wrapper {

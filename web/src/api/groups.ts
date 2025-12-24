@@ -25,11 +25,6 @@ export interface GroupCapability {
   supports_vision: boolean
   supports_function_calling: boolean
   supports_tool_choice: boolean
-  // 价格区间（USD/1M tokens），仅有价格数据时存在
-  input_price_min?: number
-  input_price_max?: number
-  output_price_min?: number
-  output_price_max?: number
 }
 
 export const groupsApi = {

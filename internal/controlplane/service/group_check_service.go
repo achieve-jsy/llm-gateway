@@ -126,16 +126,15 @@ func (s *GroupCheckService) CheckAll(ctx context.Context) *GroupCheckAllResult {
 
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 5)
 
+	// 所有模型组全量并发探测，消除 semaphore 排队导致的时序差异。
+	// 探针请求本身极轻量（max_tokens=5），不会对 Gateway 或上游产生显著压力。
 	for i := range groups {
 		g := &groups[i]
 		result.Total++
 		wg.Add(1)
-		sem <- struct{}{}
 		go func(grp *model.Group) {
 			defer wg.Done()
-			defer func() { <-sem }()
 			cr := s.CheckOne(ctx, grp)
 			mu.Lock()
 			result.Results = append(result.Results, *cr)
@@ -167,8 +166,9 @@ func (s *GroupCheckService) CheckOneByID(ctx context.Context, id uint) (*GroupCh
 	return s.CheckOne(ctx, g), nil
 }
 
-// probeGroup 向 Gateway POST /v1/chat/completions，model 字段填组名
-func (s *GroupCheckService) probeGroup(ctx context.Context, groupName, apiKey string) (bool, int, string) {
+// probeGroupOnce 向 Gateway 发送一次非流式探针请求，验证端到端推理链路可用性。
+// 超时 60s：全量并发后消除了排队延迟，60s 足够覆盖上游高峰时段的推理耗时。
+func (s *GroupCheckService) probeGroupOnce(ctx context.Context, groupName, apiKey string) (bool, int, string) {
 	endpoint := s.gatewayURL + "/v1/chat/completions"
 
 	payload := map[string]interface{}{
@@ -178,14 +178,14 @@ func (s *GroupCheckService) probeGroup(ctx context.Context, groupName, apiKey st
 	}
 	body, _ := json.Marshal(payload)
 
-	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	probeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	req, _ := http.NewRequestWithContext(probeCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: 60 * time.Second}
 	start := time.Now()
 	resp, err := client.Do(req)
 	elapsed := int(time.Since(start).Milliseconds())
@@ -203,6 +203,44 @@ func (s *GroupCheckService) probeGroup(ctx context.Context, groupName, apiKey st
 	}
 
 	return true, elapsed, ""
+}
+
+// probeGroup 向 Gateway POST /v1/chat/completions，model 字段填组名。
+// 失败后自动重试最多 probeMaxRetries 次（含首次共 probeMaxRetries+1 次机会），
+// 全部失败才返回错误，避免偶发超时或抖动被误判为健康异常。
+func (s *GroupCheckService) probeGroup(ctx context.Context, groupName, apiKey string) (bool, int, string) {
+	const probeMaxRetries = 1 // 失败后最多重试次数（流式 TTFB 很快，1 次重试即可）
+
+	var (
+		lastElapsed int
+		lastErr     string
+	)
+
+	for attempt := 0; attempt <= probeMaxRetries; attempt++ {
+		// 若外层 context 已取消，不再继续重试
+		if ctx.Err() != nil {
+			return false, lastElapsed, fmt.Sprintf("context canceled before attempt %d", attempt+1)
+		}
+
+		ok, elapsed, errMsg := s.probeGroupOnce(ctx, groupName, apiKey)
+		lastElapsed = elapsed
+		lastErr = errMsg
+
+		if ok {
+			if attempt > 0 {
+				slog.Info("group probe succeeded after retry",
+					"group", groupName, "attempt", attempt+1, "elapsed_ms", elapsed)
+			}
+			return true, elapsed, ""
+		}
+
+		if attempt < probeMaxRetries {
+			slog.Warn("group probe failed, will retry",
+				"group", groupName, "attempt", attempt+1, "error", errMsg)
+		}
+	}
+
+	return false, lastElapsed, lastErr
 }
 
 // recordLog 将组检测结果写入 health_check_logs（target_type='group'）

@@ -145,6 +145,79 @@ func AnthropicToChatRequest(anthReq *AnthropicMessagesRequest) *ChatRequest {
 
 // convertAnthropicMessages converts Anthropic messages (with content blocks)
 // to OpenAI messages (string content + tool_calls array).
+// decodeContentBlocks converts []any (JSON-decoded) to []AnthropicContentBlock.
+// This handles the case where JSON unmarshaling produces []any instead of
+// []AnthropicContentBlock when the Content field type is any.
+func decodeContentBlocks(content any) []AnthropicContentBlock {
+	arr, ok := content.([]any)
+	if !ok {
+		return nil
+	}
+	var blocks []AnthropicContentBlock
+	for _, item := range arr {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		block := AnthropicContentBlock{}
+		if t, ok := m["type"].(string); ok {
+			block.Type = t
+		}
+		if id, ok := m["id"].(string); ok {
+			block.ID = id
+		}
+		if text, ok := m["text"].(string); ok {
+			block.Text = text
+		}
+		if name, ok := m["name"].(string); ok {
+			block.Name = name
+		}
+		if toolID, ok := m["tool_use_id"].(string); ok {
+			block.ToolUseID = toolID
+		}
+		if thinking, ok := m["thinking"].(string); ok {
+			block.Thinking = thinking
+		}
+		if sig, ok := m["signature"].(string); ok {
+			block.Signature = sig
+		}
+		if isError, ok := m["is_error"].(bool); ok {
+			block.IsError = isError
+		}
+		// Source: *AnthropicImageSource
+		if sourceMap, ok := m["source"].(map[string]any); ok {
+			src := &AnthropicImageSource{}
+			if t, ok := sourceMap["type"].(string); ok {
+				src.Type = t
+			}
+			if mt, ok := sourceMap["media_type"].(string); ok {
+				src.MediaType = mt
+			}
+			if d, ok := sourceMap["data"].(string); ok {
+				src.Data = d
+			}
+			if u, ok := sourceMap["url"].(string); ok {
+				src.URL = u
+			}
+			block.Source = src
+		}
+		// Input: json.RawMessage — re-marshal from map
+		if inputMap, ok := m["input"].(map[string]any); ok {
+			if raw, err := json.Marshal(inputMap); err == nil {
+				block.Input = raw
+			}
+		}
+		// Content: any — pass through as-is
+		if c, exists := m["content"]; exists {
+			block.Content = c
+		}
+		if block.Type != "" {
+			blocks = append(blocks, block)
+		}
+	}
+	return blocks
+}
+
 func convertAnthropicMessages(anthMsgs []AnthropicMessage) []Message {
 	if len(anthMsgs) == 0 {
 		return nil
@@ -168,6 +241,14 @@ func convertOneAnthropicMessage(anthMsg AnthropicMessage) []Message {
 		return []Message{{Role: anthMsg.Role, Content: ""}}
 	case []AnthropicContentBlock:
 		return flattenAnthropicBlocksToMessages(anthMsg.Role, content)
+	case []any:
+		// JSON decoding produces []any for array content; re-marshal and decode
+		// into typed blocks.
+		blocks := decodeContentBlocks(content)
+		if len(blocks) > 0 {
+			return flattenAnthropicBlocksToMessages(anthMsg.Role, blocks)
+		}
+		return []Message{{Role: anthMsg.Role, Content: fmt.Sprintf("%v", content)}}
 	default:
 		return []Message{{Role: anthMsg.Role, Content: fmt.Sprintf("%v", content)}}
 	}
@@ -221,6 +302,24 @@ func flattenAnthropicBlocksToMessages(role string, blocks []AnthropicContentBloc
 				// Extract text from sub-blocks (could also contain images)
 				var parts []ContentPart
 				for _, sub := range resContent {
+					if sub.Type == "text" && sub.Text != "" {
+						parts = append(parts, ContentPart{Type: "text", Text: sub.Text})
+					} else if sub.Type == "image" {
+						if p := convertAnthropicImage(sub); p != nil {
+							parts = append(parts, *p)
+						}
+					}
+				}
+				if len(parts) == 1 && parts[0].Type == "text" {
+					toolMsg.Content = parts[0].Text
+				} else if len(parts) > 0 {
+					toolMsg.Content = parts
+				}
+			case []any:
+				// JSON decoding produces []any; decode into typed blocks.
+				subBlocks := decodeContentBlocks(resContent)
+				var parts []ContentPart
+				for _, sub := range subBlocks {
 					if sub.Type == "text" && sub.Text != "" {
 						parts = append(parts, ContentPart{Type: "text", Text: sub.Text})
 					} else if sub.Type == "image" {
@@ -372,6 +471,22 @@ func prependSystemMessage(system any, msgs []Message) []Message {
 					b.WriteString("\n\n")
 				}
 				b.WriteString(block.Text)
+			}
+		}
+		systemText = b.String()
+	case []any:
+		// JSON decoding produces []any for array system blocks; decode each map.
+		var b strings.Builder
+		for _, item := range s {
+			if m, ok := item.(map[string]any); ok {
+				if t, _ := m["type"].(string); t == "text" {
+					if text, ok := m["text"].(string); ok && text != "" {
+						if b.Len() > 0 {
+							b.WriteString("\n\n")
+						}
+						b.WriteString(text)
+					}
+				}
 			}
 		}
 		systemText = b.String()

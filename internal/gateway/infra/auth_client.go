@@ -133,7 +133,21 @@ func (c *AuthClient) verifyKeyHTTP(ctx context.Context, key string) (*VerifyKeyR
 	}
 	defer resp.Body.Close()
 
-	// 4xx 通常表示内部通信配置问题（如 token 缺失/错误），而非 key 本身无效。
+	// 404 = key not found: parse body and return a non-active VerifyKeyResp
+	// so the middleware returns 401 invalid_api_key (not 503 service unavailable).
+	if resp.StatusCode == http.StatusNotFound {
+		var errResp struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil && errResp.Error.Code == "key_not_found" {
+			return &VerifyKeyResp{Code: 404, Message: "key not found"}, nil
+		}
+		return nil, fmt.Errorf("auth service returned 404 (unknown error)")
+	}
+
+	// 其他 4xx/5xx 通常表示内部通信配置问题（如 token 缺失/错误），而非 key 本身无效。
 	// 统一作为服务错误处理，上层返回 503，避免误导调用方认为是 401 key 无效。
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("auth service returned %d", resp.StatusCode)

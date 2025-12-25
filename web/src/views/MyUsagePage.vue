@@ -247,7 +247,7 @@
         <span class="mu-section__count">共 {{ logTotal }} 条</span>
       </div>
       <div class="mu-table-wrap" v-loading="logLoading">
-        <el-table :data="logRows" size="small" :header-cell-style="TABLE_HEADER" style="width:100%">
+        <el-table :data="logRows" size="small" :header-cell-style="TABLE_HEADER" style="width:100%;cursor:pointer" @row-click="openTrace">
           <!-- Key -->
           <el-table-column prop="key_name" label="Key" min-width="120" fixed="left">
             <template #default="{ row }">
@@ -393,15 +393,7 @@
               <span class="mu-time">{{ fmtDateTime(row.ts) }}</span>
             </template>
           </el-table-column>
-          <!-- 详情 -->
-          <el-table-column label="" width="48" fixed="right">
-            <template #default="{ row }">
-              <el-button link size="small" title="查看详情" @click="openTrace(row)">
-                <el-icon><View /></el-icon>
-              </el-button>
-            </template>
-          </el-table-column>
-        </el-table>
+          </el-table>
 
         <div v-if="!logLoading && !logRows.length" class="mu-empty">
           <el-icon size="48" color="#c0c4cc"><List /></el-icon>
@@ -568,7 +560,7 @@ import { ref, computed, watch, nextTick } from 'vue'
 import {
   Refresh, Download, Search, Histogram, Money, DataLine, Coin,
   MagicStick, Top, Bottom, Finished, List, InfoFilled,
-  View, Loading, SuccessFilled, CircleCloseFilled,
+  Loading, SuccessFilled, CircleCloseFilled,
   Close, Grid, Cpu, Key, WarningFilled
 } from '@element-plus/icons-vue'
 import {

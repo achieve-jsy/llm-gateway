@@ -359,7 +359,7 @@
         <span class="up-section__count">共 {{ logTotal }} 条</span>
       </div>
       <div class="up-table-wrap" v-loading="logLoading">
-        <el-table :data="logRows" size="small" :header-cell-style="TABLE_HEADER" style="width:100%">
+        <el-table :data="logRows" size="small" :header-cell-style="TABLE_HEADER" style="width:100%;cursor:pointer" @row-click="openTrace">
 <!-- 时间（移到末尾） -->
           <!-- Key 名称（优先显示名字，无名则脱敏 ID） -->
           <el-table-column prop="key_name" label="Key" min-width="110" fixed="left">
@@ -547,15 +547,7 @@
               <span class="up-time">{{ fmtDateTime(row.ts) }}</span>
             </template>
           </el-table-column>
-          <!-- 详情 -->
-          <el-table-column label="" width="48" fixed="right">
-            <template #default="{ row }">
-              <el-button link size="small" title="查看详情" @click="openTrace(row)">
-                <el-icon><View /></el-icon>
-              </el-button>
-            </template>
-          </el-table-column>
-        </el-table>
+          </el-table>
 
         <div v-if="!logLoading && !logRows.length" class="up-empty">
           <el-icon size="48" color="#c0c4cc"><List /></el-icon>
@@ -770,7 +762,7 @@ import { ref, reactive, computed, watch, nextTick } from 'vue'
 import {
   Refresh, Download, Search, Histogram, Money, DataLine, Coin,
   MagicStick, Top, Bottom, Finished, List, InfoFilled,
-  View, Loading, SuccessFilled, CircleCloseFilled, WarningFilled, SwitchButton,
+  Loading, SuccessFilled, CircleCloseFilled, WarningFilled, SwitchButton,
   ArrowDown, ArrowUp
 } from '@element-plus/icons-vue'
 import {

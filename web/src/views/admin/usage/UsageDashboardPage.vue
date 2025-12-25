@@ -295,7 +295,7 @@
         <span class="ud-section__count">共 {{ logsTotal }} 条</span>
       </div>
       <div class="ud-table-wrap" v-loading="logsLoading">
-        <el-table :data="logRows" size="small" :header-cell-style="TABLE_HEADER" style="width:100%">
+        <el-table :data="logRows" size="small" :header-cell-style="TABLE_HEADER" style="width:100%;cursor:pointer" @row-click="openTrace">
 
           <!-- Key 名称 -->
           <el-table-column label="Key 名称" min-width="120" fixed="left">
@@ -477,15 +477,7 @@
             </template>
           </el-table-column>
 
-          <!-- 详情 -->
-          <el-table-column label="" width="48" fixed="right">
-            <template #default="{ row }">
-              <el-button link size="small" title="查看详情" @click="openTrace(row)">
-                <el-icon><View /></el-icon>
-              </el-button>
-            </template>
-          </el-table-column>
-        </el-table>
+          </el-table>
 
         <div v-if="!logsLoading && logRows.length === 0" class="ud-empty-block">
           <el-icon size="40" color="#c0c4cc"><List /></el-icon>
@@ -691,7 +683,7 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Chart, registerables } from 'chart.js'
 import {
   Refresh, DataLine, Money, User, ArrowRight, ArrowUp, ArrowDown,
-  Bottom, Top, List, Search, View, InfoFilled, Finished,
+  Bottom, Top, List, Search, InfoFilled, Finished,
   Loading, SuccessFilled, CircleCloseFilled, WarningFilled, SwitchButton,
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'

@@ -39,6 +39,7 @@
             :code="claudeCodeEnvContent"
             :can-copy="true"
           />
+          <p class="hint">启动时通过 <code>--model</code> 指定模型，例如：<code>claude --model claude-sonnet-4-6</code></p>
           <div class="shell-tabs">
             <button
               v-for="t in shellOptions"
@@ -232,16 +233,16 @@ const claudeCodeEnvContent = computed(() => {
   const url = baseUrl.value
   if (osTab.value === 'unix') {
     return `export ANTHROPIC_BASE_URL="${url}"
-export ANTHROPIC_AUTH_TOKEN="${key}"
+export ANTHROPIC_API_KEY="${key}"
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
   }
   if (osTab.value === 'cmd') {
     return `set ANTHROPIC_BASE_URL=${url}
-set ANTHROPIC_AUTH_TOKEN=${key}
+set ANTHROPIC_API_KEY=${key}
 set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
   }
   return `$env:ANTHROPIC_BASE_URL="${url}"
-$env:ANTHROPIC_AUTH_TOKEN="${key}"
+$env:ANTHROPIC_API_KEY="${key}"
 $env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
 })
 
@@ -249,7 +250,7 @@ const claudeCodeSettingsContent = computed(() =>
   `{
   "env": {
     "ANTHROPIC_BASE_URL": "${baseUrl.value}",
-    "ANTHROPIC_AUTH_TOKEN": "${keyPlaceholder.value}",
+    "ANTHROPIC_API_KEY": "${keyPlaceholder.value}",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
   }

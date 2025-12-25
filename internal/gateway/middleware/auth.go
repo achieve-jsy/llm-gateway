@@ -64,6 +64,9 @@ func AuthMiddleware(authClient *infra.AuthClient) gin.HandlerFunc {
 				StudioID:        resp.Data.User.StudioID,
 				AccessAllGroups: resp.Data.AccessAllGroups,
 				LogEnabled:      logEnabled,
+				// v0.7: 从 verify-key 快照直接下发，无需网关再查库
+				UsableGroups: resp.Data.UsableGroups,
+				KeyType:      resp.Data.KeyType,
 			}
 			c.Set("identity", identity)
 			c.Set("key_id", identity.KeyID)

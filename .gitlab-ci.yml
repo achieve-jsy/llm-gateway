@@ -49,7 +49,6 @@ build-gateway-test:
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
-    DOCKER_BUILDKIT: "0"
   script:
     - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
     - docker build --build-arg APP_ENV=test -f deploy/docker/gateway.Dockerfile -t ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} .
@@ -64,7 +63,6 @@ build-control-plane-test:
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
-    DOCKER_BUILDKIT: "0"
   script:
     - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
     - docker build --build-arg APP_ENV=test -f deploy/docker/control-plane.Dockerfile -t ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} .
@@ -98,7 +96,6 @@ build-gateway-prod:
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
-    DOCKER_BUILDKIT: "0"
   before_script:
     - export IMAGE_TAG="${CI_COMMIT_TAG}"
   script:
@@ -113,7 +110,6 @@ build-control-plane-prod:
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
-    DOCKER_BUILDKIT: "0"
   before_script:
     - export IMAGE_TAG="${CI_COMMIT_TAG}"
   script:

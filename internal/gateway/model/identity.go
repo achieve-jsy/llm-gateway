@@ -8,6 +8,11 @@ type UserIdentity struct {
 	StudioID        string `json:"studio_id,omitempty"`
 	AccessAllGroups bool   `json:"access_all_groups"`
 	LogEnabled      bool   `json:"log_enabled"`
+	// v0.7: 可用模型组名称集合（public ∪ 本部门已开通 controlled），由 verify-key 快照下发。
+	// group_dispatcher 据此判定授权而非依赖 key_group_bindings。
+	UsableGroups []string `json:"usable_groups,omitempty"`
+	// v0.7: Key 类型（personal/service）
+	KeyType string `json:"key_type,omitempty"`
 }
 
 // MeModelItem represents a single model in /v1/me/models response

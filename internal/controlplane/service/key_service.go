@@ -62,6 +62,21 @@ type VerifyResult struct {
 	AccessAllGroups bool             `json:"access_all_groups"`
 	LogEnabled      bool             `json:"log_enabled"`
 	User            VerifyResultUser `json:"user"`
+	// v0.7: 模型组授权快照。public ∪ 本部门已开通 controlled 的组名集合。
+	// 网关 group_dispatcher 直接消费，无需再查库。
+	// 授权变更时控制面主动 InvalidateKeyCache，下次 verify-key 即拉到最新值。
+	UsableGroups []string `json:"usable_groups,omitempty"`
+	// v0.7: Key 类型（personal/service）与预算链（scope 列表，不含实时 used）。
+	KeyType     string        `json:"key_type,omitempty"`
+	BudgetChain []BudgetScope `json:"budget_chain,omitempty"`
+}
+
+// BudgetScope 预算链中单层 scope 的标识与元数据（不含实时 used，used 实时从 Redis 读）。
+type BudgetScope struct {
+	ScopeType string  `json:"scope_type"` // company|studio|dept_daily|dept_service|member
+	ScopeID   string  `json:"scope_id"`
+	AmountUSD float64 `json:"amount_usd"` // 该层额度（-1 表示未配置/不限额）
+	Label     string  `json:"label"`      // 展示用标签，如「研发部·成员日常预算」
 }
 
 type EventPublisher interface {
@@ -101,10 +116,17 @@ type KeyService struct {
 	repo        *repository.KeyRepo
 	keyGroupSvc *KeyGroupService
 	publisher   EventPublisher
+	entSvc      *EntitlementService // v0.7: 授权计算，可选（nil 时跳过 usable_groups 填充）
 }
 
 func NewKeyService(repo *repository.KeyRepo, keyGroupSvc *KeyGroupService, publisher EventPublisher) *KeyService {
 	return &KeyService{repo: repo, keyGroupSvc: keyGroupSvc, publisher: publisher}
+}
+
+// WithEntitlementService 注入授权服务（v0.7 新增），用于 verify-key 下发 usable_groups 快照。
+func (s *KeyService) WithEntitlementService(svc *EntitlementService) *KeyService {
+	s.entSvc = svc
+	return s
 }
 
 func (s *KeyService) CreateKey(ctx context.Context, userID uuid.UUID, name string, expiresAt *time.Time, groupIDs []uint) (*model.ApiKey, string, []BoundGroupItem, error) {
@@ -458,12 +480,31 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 		}
 	}
 
+	// v0.7: 填充 usable_groups 快照（public ∪ 本部门已开通 controlled）
+	var usableGroups []string
+	if s.entSvc != nil && k.DeptID != "" && k.StudioID != "" {
+		if names, err := s.entSvc.UsableGroupNames(ctx, k.DeptID, k.StudioID); err == nil {
+			usableGroups = names
+		} else {
+			slog.Warn("verify-key: failed to compute usable_groups, fallback to empty",
+				"key_id", k.ID, "dept_id", k.DeptID, "error", err)
+		}
+	}
+
+	// v0.7: key_type（personal/service 默认 personal）
+	keyType := k.KeyType
+	if keyType == "" {
+		keyType = model.KeyTypePersonal
+	}
+
 	return &VerifyResult{
 		KeyID:           k.ID,
 		KeyName:         k.Name,
 		Status:          status,
 		AccessAllGroups: k.AccessAllGroups,
 		LogEnabled:      k.LogEnabled,
+		KeyType:         keyType,
+		UsableGroups:    usableGroups,
 		User: VerifyResultUser{
 			UserID:       k.UserID,
 			Name:         k.UserName,

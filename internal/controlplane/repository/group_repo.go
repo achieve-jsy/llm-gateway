@@ -141,3 +141,22 @@ func (r *GroupRepo) ListEnabled() ([]model.Group, error) {
 	err := r.db.Where("enabled = ?", true).Order("name ASC").Find(&groups).Error
 	return groups, err
 }
+
+// IDsByOpenMode 返回符合指定开放模式（public/controlled）且 enabled=true 的组 ID 集合。
+func (r *GroupRepo) IDsByOpenMode(openMode string) ([]uint, error) {
+	var ids []uint
+	err := r.db.Model(&model.Group{}).
+		Where("open_mode = ? AND enabled = true AND deleted_at IS NULL", openMode).
+		Pluck("id", &ids).Error
+	return ids, err
+}
+
+// UpdateOpenMode 更新模型组的开放模式（仅改 open_mode 字段）。
+func (r *GroupRepo) UpdateOpenMode(id uint, openMode string) error {
+	return r.db.Model(&model.Group{}).Where("id = ?", id).Update("open_mode", openMode).Error
+}
+
+// DB 暴露底层 db 实例，供跨 repo 联合查询使用。
+func (r *GroupRepo) DB() *gorm.DB {
+	return r.db
+}

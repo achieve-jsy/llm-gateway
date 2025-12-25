@@ -292,42 +292,73 @@ deploy-web-test:
       when: on_success
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# DEPLOY — 生产 (192.0.2.10)
+# DEPLOY — 生产 蓝绿部署 (192.0.2.10)
+# 流程：推送蓝绿文件 → pull 镜像 → 执行 deploy-blue-green.sh
+# drain 等待 600s 让存量 SSE 长连接自然结束，因此 job timeout 需足够长
 # ═══════════════════════════════════════════════════════════════════════════════
 deploy-prod:
   stage: deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
+  timeout: 20m
   script:
     - |
       SSH_OPTS="-o StrictHostKeyChecking=no"
       IMAGE_TAG="$CI_COMMIT_TAG"
-      echo "=== Deploying ${IMAGE_TAG} to ${PROD_HOST} (prod) ==="
+      echo "=== Blue-Green Deploy ${IMAGE_TAG} to ${PROD_HOST} (prod) ==="
 
+      # 同步蓝绿部署文件到目标机器
       ssh ${SSH_OPTS} root@${PROD_HOST} "mkdir -p ${PROD_PATH}"
-      scp ${SSH_OPTS} docker-compose.yml root@${PROD_HOST}:${PROD_PATH}/
+      scp ${SSH_OPTS} -r deploy/blue-green/* root@${PROD_HOST}:${PROD_PATH}/
 
+      # Pull 镜像
+      ssh ${SSH_OPTS} root@${PROD_HOST} "
+        docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
+        docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
+      "
+
+      # 执行蓝绿部署（脚本内包含 600s drain 等待）
       ssh ${SSH_OPTS} root@${PROD_HOST} "
         set -e
         cd ${PROD_PATH}
-        docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
-        docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
         export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=prod
-        export DATABASE_URL='host=192.0.2.10 port=5432 user=llm_gateway password=CHANGE_ME_PASSWORD dbname=llm_gateway_prod sslmode=disable'
-        export REDIS_ADDR=192.0.2.10:6379 REDIS_DB=2 REDIS_PASSWORD=CHANGE_ME_REDIS_PASSWORD
-        export JWT_SECRET=d8f7a3b2c1e9f4567890abc123def456
-        export ENCRYPTION_KEY=12345678901234567890123456789012
-        export OAUTH_CLIENT_ID=5514f6bb0a OAUTH_CLIENT_SECRET=CHANGE_ME_OAUTH_SECRET
-        export OAUTH_REDIRECT_URI=https://aimeter.xk-devops.com/auth/callback
-        export FRONTEND_URL=https://aimeter.xk-devops.com
-        export INTERNAL_AUTH_TOKEN=CHANGE_ME_INTERNAL_TOKEN
-        docker compose up -d --remove-orphans --wait --wait-timeout 60
-        echo '=== Deploy ${IMAGE_TAG} to prod complete ==='
-        docker compose ps
+        export DATABASE_URL='${PROD_DATABASE_URL}'
+        export REDIS_ADDR='${PROD_REDIS_ADDR}' REDIS_DB='${PROD_REDIS_DB}' REDIS_PASSWORD='${PROD_REDIS_PASSWORD}'
+        export JWT_SECRET='${PROD_JWT_SECRET}'
+        export ENCRYPTION_KEY='${PROD_ENCRYPTION_KEY}'
+        export OAUTH_CLIENT_ID='${PROD_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${PROD_OAUTH_CLIENT_SECRET}'
+        export OAUTH_REDIRECT_URI='${PROD_OAUTH_REDIRECT_URI:-https://aimeter.xk-devops.com/auth/callback}'
+        export FRONTEND_URL='${PROD_FRONTEND_URL:-https://aimeter.xk-devops.com}'
+        export INTERNAL_AUTH_TOKEN='${PROD_INTERNAL_AUTH_TOKEN}'
+        export OAUTH_ISSUER_URL='${PROD_OAUTH_ISSUER_URL:-https://oauth.example.net/}'
+        bash deploy-blue-green.sh
       "
   environment:
     name: production
-    url: http://192.0.2.10
+    url: https://aimeter.xk-devops.com
+  dependencies: []
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+      when: manual
+
+# 生产回滚（快速切回上一个颜色，无需重新构建）
+rollback-prod:
+  stage: deploy
+  image: ${REGISTRY}/deploy-tools:latest
+  tags: [deploy]
+  timeout: 15m
+  script:
+    - |
+      SSH_OPTS="-o StrictHostKeyChecking=no"
+      echo "=== Rollback prod to previous color ==="
+      ssh ${SSH_OPTS} root@${PROD_HOST} "
+        set -e
+        cd ${PROD_PATH}
+        bash deploy-blue-green.sh --rollback
+      "
+  environment:
+    name: production
+    url: https://aimeter.xk-devops.com
   dependencies: []
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/

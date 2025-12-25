@@ -1,0 +1,70 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# 蓝绿部署 — GREEN 环境
+# 端口：gateway:8082  control-plane:8083
+#
+# 使用方式：
+#   docker compose -f docker-compose.green.yml -p llm-green up -d
+# ═══════════════════════════════════════════════════════════════════════════════
+
+services:
+  gateway:
+    image: ${REGISTRY:-192.0.2.10:5000}/llm-gateway:${IMAGE_TAG:-latest}
+    container_name: llm-green-gateway
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      APP_ENV: ${APP_ENV:-prod}
+      GATEWAY_PORT: "8082"
+      REDIS_ADDR: ${REDIS_ADDR:-192.0.2.10:6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD required}
+      REDIS_DB: ${REDIS_DB_GREEN:-3}
+      INTERNAL_TOKEN: ${INTERNAL_AUTH_TOKEN:?INTERNAL_AUTH_TOKEN required}
+      AUTH_INTERNAL_TOKEN: ${INTERNAL_AUTH_TOKEN}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL required}
+      CONTROL_PLANE_URL: http://127.0.0.1:8083
+      AUTH_URL: http://127.0.0.1:8083
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8082/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    stop_grace_period: 600s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  control-plane:
+    image: ${REGISTRY:-192.0.2.10:5000}/llm-control-plane:${IMAGE_TAG:-latest}
+    container_name: llm-green-control-plane
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      APP_ENV: ${APP_ENV:-prod}
+      CONTROL_PLANE_PORT: "8083"
+      GATEWAY_URL: "http://127.0.0.1:8082"
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL required}
+      REDIS_ADDR: ${REDIS_ADDR:-192.0.2.10:6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD required}
+      REDIS_DB: ${REDIS_DB_GREEN:-3}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET required}
+      INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN:?INTERNAL_AUTH_TOKEN required}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY required}
+      OAUTH_ISSUER_URL: ${OAUTH_ISSUER_URL:-https://oauth.example.net/}
+      OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID:?OAUTH_CLIENT_ID required}
+      OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET:?OAUTH_CLIENT_SECRET required}
+      OAUTH_REDIRECT_URI: ${OAUTH_REDIRECT_URI:-https://aimeter.xk-devops.com/auth/callback}
+      OAUTH_SCOPES: ${OAUTH_SCOPES:-openid profile email}
+      FRONTEND_URL: ${FRONTEND_URL:-https://aimeter.xk-devops.com}
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8083/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    stop_grace_period: 600s
+    deploy:
+      resources:
+        limits:
+          memory: 512m

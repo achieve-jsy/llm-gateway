@@ -1,0 +1,217 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# 宿主机 nginx 配置 — aimeter.xk-devops.com（蓝绿部署版）
+#
+# 部署方式：
+#   ln -s /opt/llm-gateway/nginx-prod.conf /etc/nginx/conf.d/aimeter.conf
+#   nginx -t && systemctl reload nginx
+#
+# upstream 定义由部署脚本自动管理：
+#   /opt/llm-gateway/upstream-active.conf
+#
+# 前端静态文件：/data/web/aimeter/dist/
+# ═══════════════════════════════════════════════════════════════════════════════
+
+include /opt/llm-gateway/upstream-active.conf;
+
+# ─── HTTP → HTTPS 重定向 ─────────────────────────────────────────────────────
+server {
+    listen 80;
+    listen [::]:80;
+    server_name aimeter.xk-devops.com;
+    return 301 https://$host$request_uri;
+}
+
+# ─── HTTPS 主服务 ────────────────────────────────────────────────────────────
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name aimeter.xk-devops.com;
+
+    ssl_certificate     /etc/nginx/ssl/llm.xk-devops.com.pem;
+    ssl_certificate_key /etc/nginx/ssl/llm.xk-devops.com.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    root /data/web/aimeter/dist/;
+    index index.html;
+
+    client_max_body_size 0;
+
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml;
+    gzip_min_length 256;
+
+    # ─── LLM Gateway API（OpenAI 兼容接口） ──────────────────────────────────────
+    location /v1/ {
+        proxy_pass http://gateway;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+
+        # SSE 流式
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_cache off;
+        proxy_max_temp_file_size 0;
+        chunked_transfer_encoding on;
+        gzip off;
+
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 600s;
+        proxy_read_timeout 600s;
+        proxy_socket_keepalive on;
+    }
+
+    location /health {
+        proxy_pass http://gateway;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+
+    location /ready {
+        proxy_pass http://gateway;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+
+    location /swagger/ {
+        proxy_pass http://gateway;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+
+    # ─── Control Plane 管理 API ──────────────────────────────────────────────────
+    location /api/ {
+        proxy_pass http://control_plane;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_read_timeout 300s;
+    }
+
+    location = /auth/callback {
+        try_files /index.html =404;
+    }
+
+    location /auth/ {
+        proxy_pass http://control_plane;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+
+    # ─── 前端静态资源 ─────────────────────────────────────────────────────────────
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff2?)$ {
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+
+# ─── 纯 HTTP 服务（内网/调试，端口 9080） ─────────────────────────────────────
+server {
+    listen 9080;
+    listen [::]:9080;
+    server_name _;
+
+    root /data/web/aimeter/dist/;
+    index index.html;
+
+    client_max_body_size 0;
+
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml;
+    gzip_min_length 256;
+
+    location /v1/ {
+        proxy_pass http://gateway;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_cache off;
+        proxy_max_temp_file_size 0;
+        chunked_transfer_encoding on;
+        gzip off;
+
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 600s;
+        proxy_read_timeout 600s;
+        proxy_socket_keepalive on;
+    }
+
+    location /health {
+        proxy_pass http://gateway;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+
+    location /ready {
+        proxy_pass http://gateway;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+
+    location /swagger/ {
+        proxy_pass http://gateway;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+
+    location /api/ {
+        proxy_pass http://control_plane;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_read_timeout 300s;
+    }
+
+    location = /auth/callback {
+        try_files /index.html =404;
+    }
+
+    location /auth/ {
+        proxy_pass http://control_plane;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff2?)$ {
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

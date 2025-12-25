@@ -145,4 +145,18 @@ onMounted(async () => {
 }
 
 .modal-empty { padding: 40px 0; }
+
+@media (max-width: 768px) {
+  :deep(.el-dialog) {
+    width: 95% !important;
+    max-width: 95vw !important;
+  }
+  .modal-item-header {
+    flex-wrap: wrap;
+  }
+  .modal-item-time {
+    width: 100%;
+    text-align: left;
+  }
+}
 </style>

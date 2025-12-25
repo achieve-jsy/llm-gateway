@@ -1423,4 +1423,53 @@ loadAll()
 .mu-meta-row--wrap > span:first-child { padding-top: 2px; }
 .mu-meta-sep { border-top: 1px solid var(--el-border-color-lighter); padding-top: 6px; margin-top: 2px; }
 .mu-meta-ua { font-family: 'SFMono-Regular', monospace; font-size: 11px; color: var(--el-text-color-regular); word-break: break-all; text-align: right; }
+
+/* ═══════════════════════════ Responsive ═══════════════════════════ */
+@media (max-width: 768px) {
+  /* Header */
+  .mu-header { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .mu-header__right { width: 100%; justify-content: flex-start; }
+
+  /* Filter bar */
+  .mu-filter { flex-wrap: wrap; gap: 8px; }
+  .mu-presets { flex-wrap: wrap; gap: 4px; }
+  .mu-filter__date { width: 100% !important; }
+  .mu-filter__chip { width: 100% !important; }
+  .mu-filter__chip--key { width: 100% !important; }
+  .mu-filter__status { width: 100% !important; }
+  .mu-filter__clear { width: 100%; }
+  .mu-filter-divider { display: none; }
+
+  /* Stats grid: 2-column */
+  .mu-stats { grid-template-columns: repeat(2, 1fr); }
+
+  /* Charts: single column */
+  .mu-charts { grid-template-columns: 1fr; }
+
+  /* Tables: overflow-x auto */
+  .mu-table-wrap { overflow-x: auto; }
+  .mu-table-wrap :deep(.el-table) { min-width: 700px; }
+
+  /* Section header */
+  .mu-section__header { flex-direction: column; align-items: flex-start; gap: 8px; }
+
+  /* Pagination */
+  .mu-pagination { flex-direction: column; align-items: center; gap: 8px; }
+
+  /* Trace Drawer meta grid: single column */
+  .mu-meta-grid { grid-template-columns: 1fr; }
+
+  /* Trace timeline: allow scroll */
+  .mu-timeline { overflow-x: auto; white-space: nowrap; }
+  .mu-tl-node { min-width: 60px; }
+
+  /* Chart card header: stack */
+  .mu-chart-card__header { flex-direction: column; align-items: flex-start; gap: 8px; }
+}
+
+@media (max-width: 480px) {
+  .mu-stats { grid-template-columns: 1fr; }
+  .mu-stat-card__value { font-size: 18px; }
+  .mu-preset-btn { font-size: 12px; padding: 4px 10px; }
+}
 </style>

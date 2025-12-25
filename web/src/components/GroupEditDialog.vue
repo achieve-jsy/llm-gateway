@@ -446,4 +446,23 @@ if (isEdit.value && props.group) {
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }
+
+@media (max-width: 768px) {
+  :deep(.el-dialog) {
+    width: 95% !important;
+    max-width: 95vw !important;
+  }
+  :deep(.el-dialog .el-dialog__body) {
+    padding: 16px !important;
+  }
+  .model-item {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .form-item-tip {
+    display: block;
+    margin-left: 0;
+    margin-top: 4px;
+  }
+}
 </style>

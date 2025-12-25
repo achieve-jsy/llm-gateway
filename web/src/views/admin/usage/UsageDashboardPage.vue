@@ -1577,6 +1577,99 @@ onUnmounted(() => {
 }
 @media (max-width: 960px) { .ud-main-row { grid-template-columns: 1fr; } }
 
+/* Mobile responsive for very small screens */
+@media (max-width: 640px) {
+  .ud {
+    overflow-x: auto;
+  }
+
+  .ud-header {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .ud-header__right {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .ud-title {
+    font-size: 16px;
+  }
+
+  .ud-filter-row--date {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .ud-presets {
+    flex-wrap: wrap;
+  }
+
+  .ud-filter-row--dims {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .ud-filter-chip {
+    width: 100%;
+  }
+
+  .ud-chip-input,
+  .ud-chip-select {
+    width: 100% !important;
+  }
+
+  .ud-kpi-row {
+    grid-template-columns: 1fr;
+  }
+
+  .ud-section__header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .ud-trend-tabs {
+    width: 100%;
+  }
+
+  .ud-trend-tab {
+    flex: 1;
+    text-align: center;
+  }
+
+  :deep(.el-table) {
+    min-width: 700px;
+  }
+
+  .ud-pagination {
+    justify-content: center;
+  }
+
+  .ud-chart-wrap {
+    height: 200px;
+    padding: 12px 14px;
+  }
+
+  .ud-chart-wrap--model {
+    height: 220px;
+  }
+
+  .ud-rank-table {
+    font-size: 12px;
+  }
+
+  .ud-rank-table th,
+  .ud-rank-table td {
+    padding: 8px 10px;
+  }
+
+  .ud-breadcrumb {
+    font-size: 12px;
+  }
+}
+
 /* ── 排行表格 ── */
 .ud-table-wrap { padding: 0; overflow: auto; }
 .ud-rank-table {

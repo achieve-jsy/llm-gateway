@@ -31,7 +31,7 @@
     </template>
 
     <template v-else>
-      <el-table :data="groups" border stripe>
+      <div class="group-table-wrap"><el-table :data="groups" border stripe>
         <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip />
         <el-table-column label="策略" width="120" align="center">
           <template #default="{ row }">
@@ -96,7 +96,7 @@
             </el-popconfirm>
           </template>
         </el-table-column>
-      </el-table>
+      </el-table></div>
 
       <div class="pagination-wrapper">
         <el-pagination
@@ -322,6 +322,8 @@ onMounted(() => {
   margin-top: 16px;
 }
 
+.group-table-wrap { width: 100%; }
+
 @media (max-width: 900px) {
   .page-header {
     align-items: flex-start;
@@ -333,5 +335,22 @@ onMounted(() => {
     width: 100%;
     justify-content: flex-start;
   }
+
+  .toolbar-field,
+  .toolbar-field-lg {
+    width: 100%;
+  }
+
+  .group-table-wrap { overflow-x: auto; }
+  .group-table-wrap :deep(.el-table) { min-width: 750px; }
+
+  .pagination-wrapper {
+    justify-content: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .header-actions { flex-wrap: wrap; gap: 8px; }
+  .header-actions .el-button { width: 100%; }
 }
 </style>

@@ -227,4 +227,11 @@ async function handleCheckNow() {
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }
+
+@media (max-width: 768px) {
+  :deep(.el-dialog) {
+    width: 95% !important;
+    max-width: 95vw !important;
+  }
+}
 </style>

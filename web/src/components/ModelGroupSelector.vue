@@ -284,4 +284,23 @@ function onConfirm() {
   color: var(--el-text-color-secondary);
   white-space: nowrap;
 }
+
+@media (max-width: 768px) {
+  :deep(.el-dialog) {
+    width: 95% !important;
+    max-width: 95vw !important;
+  }
+  :deep(.el-dialog .el-dialog__body) {
+    padding: 12px !important;
+  }
+  .selector-item {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .model-param {
+    width: 100%;
+    justify-content: flex-end;
+    padding-left: 28px;
+  }
+}
 </style>

@@ -711,4 +711,46 @@ onMounted(() => {
     justify-content: flex-start;
   }
 }
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .model-page {
+    overflow-x: auto;
+  }
+
+  .page-title {
+    font-size: 16px;
+  }
+
+  .header-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .header-actions .el-button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .toolbar-field,
+  .toolbar-field-lg {
+    width: 100%;
+  }
+
+  .toolbar-field-xs {
+    width: 100%;
+  }
+
+  :deep(.el-table) {
+    min-width: 650px;
+  }
+
+  .pagination-wrapper {
+    justify-content: center;
+  }
+
+  .health-text {
+    font-size: 10px;
+  }
+}
 </style>

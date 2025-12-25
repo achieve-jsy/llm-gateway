@@ -120,7 +120,7 @@
                 >从待归属部门添加</el-button>
                 <span v-if="unmappedDepts.length === 0" class="text-muted" style="font-size:12px; margin-left:8px">暂无待归属部门</span>
               </div>
-              <el-table :data="selectedStudioDepts" stripe size="small">
+              <div class="org-table-wrap"><el-table :data="selectedStudioDepts" stripe size="small">
                 <el-table-column label="部门名称" min-width="160">
                   <template #default="{ row }">
                     <span class="clickable-dept" @click="clickDeptFromStudio(row)">{{ row.dept_name }}</span>
@@ -160,7 +160,7 @@
                     <el-button link type="danger" size="small" @click="unassignDept(row)">移出</el-button>
                   </template>
                 </el-table-column>
-              </el-table>
+              </el-table></div>
               <div v-if="selectedStudioDepts.length === 0" class="tab-empty">
                 该工作室暂无部门，可在「待归属部门」中为部门分配工作室
               </div>
@@ -271,7 +271,7 @@
                   @input="onMemberSearch"
                 />
               </div>
-              <el-table :data="filteredMembers" stripe size="small" v-loading="deptMembersLoading"
+              <div class="org-table-wrap"><el-table :data="filteredMembers" stripe size="small" v-loading="deptMembersLoading"
                 style="cursor:pointer" @row-click="openMemberDetail">
                 <el-table-column label="姓名" min-width="130">
                   <template #default="{ row }">
@@ -335,7 +335,7 @@
                     >恢复SSO</el-button>
                   </template>
                 </el-table-column>
-              </el-table>
+              </el-table></div>
               <div v-if="!deptMembersLoading && filteredMembers.length === 0" class="tab-empty">
                 {{ memberSearch ? '未找到匹配成员' : '该部门暂无成员（员工首次登录后自动归集）' }}
               </div>
@@ -425,7 +425,7 @@
             show-icon
             style="margin-bottom: 16px"
           />
-          <el-table :data="unmappedDepts" stripe size="small">
+          <div class="org-table-wrap"><el-table :data="unmappedDepts" stripe size="small">
             <el-table-column label="部门名称" min-width="160" prop="dept_name" />
             <el-table-column label="部门ID" min-width="140">
               <template #default="{ row }">
@@ -447,7 +447,7 @@
                 <el-text v-else type="warning" size="small">请先创建工作室</el-text>
               </template>
             </el-table-column>
-          </el-table>
+          </el-table></div>
         </div>
       </template>
 
@@ -1998,6 +1998,9 @@ function goToMemberDashboard() {
 
 .text-muted { color: var(--el-text-color-placeholder); font-size: 13px; }
 
+/* Table horizontal scroll wrapper */
+.org-table-wrap { width: 100%; }
+
 /* ─── 弹窗：授权 ─────────────────────────────────────────────────────────────── */
 .step-label { font-size: 13px; font-weight: 600; color: var(--el-text-color-secondary); margin-bottom: 10px; }
 .search-step { min-height: 180px; }
@@ -2180,5 +2183,57 @@ code { background: var(--el-fill-color); padding: 1px 4px; border-radius: 3px; f
   .tree-panel { width: 100%; border-right: none; border-bottom: 1px solid var(--el-border-color); }
   .tree-body { max-height: 240px; }
   .md-kpi-row { grid-template-columns: repeat(2, 1fr); }
+
+  /* Header: stack vertically */
+  .panel-header { flex-direction: column; align-items: flex-start; gap: 8px; padding: 16px 16px 0; }
+  .panel-actions { width: 100%; padding-top: 0; flex-wrap: wrap; }
+
+  /* Tabs: reduce padding */
+  .panel-tabs { padding: 0 16px; }
+
+  /* Tables: overflow-x auto */
+  .org-table-wrap { overflow-x: auto; width: 100%; }
+  .org-table-wrap :deep(.el-table) { min-width: 680px; }
+
+  /* Member toolbar: full-width */
+  .members-toolbar { width: 100%; }
+  .members-toolbar .el-input { width: 100% !important; }
+
+  /* Tab toolbar: allow wrap */
+  .tab-toolbar { flex-wrap: wrap; gap: 8px; }
+
+  /* Pagination: center */
+  .members-pagination { justify-content: center; }
+
+  /* Dept info grid: full width */
+  .dept-info-grid { max-width: 100%; }
+
+  /* Owner cards: full width */
+  .owner-card { max-width: 100%; }
+
+  /* Drawer: use narrower size on mobile */
+  :deep(.el-drawer) { width: 100% !important; max-width: 100vw; }
+  :deep(.md-drawer .el-drawer__body) { padding: 16px; }
+
+  /* KPI grid in drawer: single column */
+  .md-kpi-grid { grid-template-columns: 1fr; }
+
+  /* Dialog: responsive width */
+  :deep(.el-dialog) { width: 92% !important; max-width: 92vw !important; }
+
+  /* Breadcrumb: reduce size */
+  .panel-breadcrumb { font-size: 11px; }
+  .panel-title { font-size: 16px; }
+
+  /* Unmapped table action: full width select */
+  .unmapped-actions { flex-direction: column; gap: 8px; }
+}
+
+@media (max-width: 480px) {
+  .panel-header { padding: 12px 12px 0; }
+  .panel-tabs { padding: 0 12px; }
+  .panel-title { font-size: 15px; }
+  .tree-panel { min-width: 0; }
+  :deep(.md-drawer .el-drawer__body) { padding: 12px; }
 }
 </style>

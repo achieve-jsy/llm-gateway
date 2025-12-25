@@ -251,4 +251,24 @@ onMounted(async () => {
 .popup-leave-active { transition: all 0.18s ease; }
 .popup-enter-from   { opacity: 0; transform: translateY(12px) scale(0.97); }
 .popup-leave-to     { opacity: 0; transform: translateY(6px) scale(0.98); }
+
+@media (max-width: 768px) {
+  .panel {
+    max-width: 95vw !important;
+    border-radius: 16px;
+  }
+  .item {
+    gap: 10px;
+    padding: 14px 16px;
+  }
+  .item-meta {
+    display: none;
+  }
+  .panel-header {
+    padding: 16px;
+  }
+  .panel-footer {
+    padding: 14px 16px;
+  }
+}
 </style>

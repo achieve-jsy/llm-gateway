@@ -720,4 +720,46 @@ watch(activeTab, () => {
   display: flex;
   gap: 8px;
 }
+
+@media (max-width: 768px) {
+  :deep(.el-dialog) {
+    width: 95% !important;
+    max-width: 95vw !important;
+  }
+  :deep(.el-dialog .el-dialog__body) {
+    padding: 12px !important;
+  }
+  .model-table-wrapper {
+    overflow-x: auto;
+  }
+  .sync-model-table :deep(.el-table) {
+    min-width: 600px;
+  }
+  .availability-row {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .avail-select-btn {
+    margin-left: 0;
+    width: 100%;
+  }
+  .avail-summary {
+    width: 100%;
+  }
+  .sync-footer {
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
+  }
+  .footer-info {
+    order: 2;
+  }
+  .footer-buttons {
+    order: 1;
+    width: 100%;
+  }
+  .footer-buttons .el-button {
+    flex: 1;
+  }
+}
 </style>

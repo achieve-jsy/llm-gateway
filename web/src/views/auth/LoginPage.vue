@@ -176,4 +176,24 @@ async function handleDevLogin() {
   max-height: 0;
   opacity: 0;
 }
+
+@media (max-width: 768px) {
+  .login-card {
+    width: 90%;
+    max-width: 400px;
+    padding: 32px 20px 28px;
+    margin: 0 16px;
+  }
+  .login-logo h1 { font-size: 24px; }
+  .login-logo p { font-size: 14px; }
+}
+
+@media (max-width: 480px) {
+  .login-card {
+    padding: 24px 16px 20px;
+    margin: 0 12px;
+  }
+  .login-logo h1 { font-size: 22px; }
+  .sso-btn { font-size: 13px; }
+}
 </style>

@@ -240,7 +240,7 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
 }
 
 /* Left: info */
-.item-info { flex-shrink: 0; min-width: 200px; max-width: 280px; }
+.item-info { flex-shrink: 0; width: 260px; }
 .info-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .format-badge { cursor: default; max-width: 180px; overflow: hidden; min-width: 0; }
 .format-badge :deep(.el-tag__content) { overflow: hidden; }
@@ -264,7 +264,7 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
 /* ─── 平板 (768 ~ 1024) ─── */
 @media (max-width: 1024px) {
   .search-input { width: 140px; }
-  .item-info { min-width: 160px; max-width: 220px; }
+  .item-info { width: 220px; }
 }
 
 /* ─── 窄屏 / 手机 (≤768) ─── */

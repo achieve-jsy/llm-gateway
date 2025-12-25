@@ -165,7 +165,7 @@ func (s *KeyService) CreateKey(ctx context.Context, userID uuid.UUID, name strin
 	}
 
 	if s.publisher != nil {
-		s.publisher.Publish(event.KeyCreated, "key", k.ID)
+		s.publisher.Publish(event.KeyCreated, "api_key", k.ID)
 	}
 
 	return k, keyStr, boundGroups, nil
@@ -260,10 +260,13 @@ func (s *KeyService) UpdateKeyStatus(ctx context.Context, userID, keyID uuid.UUI
 	k.Enabled = enabled
 
 	if s.publisher != nil {
+		// FIX(v0.7): resource_type 统一为 "api_key"，与 KeyCache.HandleChangeEvent 期望一致；
+		// 同时补调 InvalidateKeyCache（Redis Del + pub/sub），保证「即时生效」承诺不落空。
+		s.publisher.InvalidateKeyCache(k.KeyHash)
 		if enabled {
-			s.publisher.Publish(event.KeyEnabled, "key", keyID)
+			s.publisher.Publish(event.KeyEnabled, "api_key", keyID)
 		} else {
-			s.publisher.Publish(event.KeyDisabled, "key", keyID)
+			s.publisher.Publish(event.KeyDisabled, "api_key", keyID)
 		}
 	}
 
@@ -284,7 +287,9 @@ func (s *KeyService) DeleteKey(ctx context.Context, userID, keyID uuid.UUID) err
 	}
 
 	if s.publisher != nil {
-		s.publisher.Publish(event.KeyDeleted, "key", keyID)
+		// FIX(v0.7): 统一 resource_type="api_key" + 主动失效缓存
+		s.publisher.InvalidateKeyCache(k.KeyHash)
+		s.publisher.Publish(event.KeyDeleted, "api_key", keyID)
 	}
 
 	return nil
@@ -336,7 +341,9 @@ func (s *KeyService) ResetKey(ctx context.Context, userID, keyID uuid.UUID) (*mo
 	}
 
 	if s.publisher != nil {
-		s.publisher.Publish(event.KeyCreated, "key", keyID)
+		// FIX(v0.7): 统一 resource_type="api_key" + 失效旧 hash 缓存（重置后旧 hash 作废）
+		s.publisher.InvalidateKeyCache(k.KeyHash)
+		s.publisher.Publish(event.KeyCreated, "api_key", keyID)
 	}
 
 	return k, keyStr, nil

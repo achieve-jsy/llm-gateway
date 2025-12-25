@@ -1937,7 +1937,7 @@ onUnmounted(() => {
 .ud-msg--assistant .ud-msg-role { background: #d1fae5; color: #065f46; }
 .ud-msg-content {
   margin: 0; padding: 12px; font-size: 12.5px; line-height: 1.65;
-  white-space: pre-wrap; word-break: break-word;
+  white-space: pre-wrap; word-break: break-word; overflow-x: auto; -webkit-overflow-scrolling: touch;
   font-family: var(--ud-mono); background: var(--el-bg-color); max-height: 400px; overflow-y: auto;
 }
 .ud-json-view {
@@ -1946,7 +1946,7 @@ onUnmounted(() => {
 }
 .ud-json-view pre {
   margin: 0; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all;
-  font-family: var(--ud-mono);
+  font-family: var(--ud-mono); overflow-x: auto; -webkit-overflow-scrolling: touch;
 }
 
 /* ── Headers table ── */
@@ -1959,6 +1959,40 @@ onUnmounted(() => {
 .ud-error-block { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 16px; }
 .ud-error-code  { font-size: 11px; font-weight: 700; color: #dc2626; text-transform: uppercase; margin-bottom: 8px; }
 .ud-error-msg   { margin: 0; font-size: 12.5px; color: #7f1d1d; white-space: pre-wrap; word-break: break-word; }
+
+/* ── Trace Drawer 移动端适配 ── */
+@media (max-width: 768px) {
+  /* Problem 1: Drawer 宽度 100% */
+  :deep(.el-drawer) { width: 100% !important; }
+
+  /* Problem 2: pre 内容横向滚动 */
+  .ud-msg-content {
+    font-size: 11px; padding: 8px;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+  }
+  .ud-json-view { padding: 10px; }
+  .ud-json-view pre {
+    font-size: 11px; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    white-space: pre;
+  }
+  .ud-error-msg { font-size: 11px; padding: 10px; }
+
+  /* Problem 3: Headers 表改成列布局 */
+  .ud-header-row { flex-direction: column; gap: 2px; padding: 6px 8px; }
+  .ud-header-key { min-width: auto; font-size: 11px; font-weight: 700; }
+  .ud-header-val { font-size: 11px; }
+
+  /* Problem 4: Meta Grid 单列 */
+  .ud-meta-grid { grid-template-columns: 1fr !important; }
+
+  /* Problem 5: Tabs 横向滚动 */
+  .ud-trace-tabs :deep(.el-tabs__nav-wrap) {
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+  }
+  .ud-trace-tabs :deep(.el-tabs__nav) {
+    flex-wrap: nowrap; display: inline-flex;
+  }
+}
 </style>
 
 <!-- tooltip 内容 teleport 到 body，需要非 scoped 全局样式 -->

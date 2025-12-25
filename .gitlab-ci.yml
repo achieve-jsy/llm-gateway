@@ -353,4 +353,3 @@ verify-test:
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
       changes: *test-significant-changes
-# perf-test: verifying cache-hit build speed

@@ -89,6 +89,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '我的用量' }
   },
   {
+    path: '/model-square',
+    name: 'ModelSquare',
+    component: () => import('@/views/ModelSquarePage.vue'),
+    meta: { title: '模型广场' }
+  },
+  {
     path: '/admin/settings',
     name: 'Settings',
     component: () => import('@/views/admin/SettingsPage.vue'),

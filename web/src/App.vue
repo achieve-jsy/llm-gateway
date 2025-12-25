@@ -28,6 +28,10 @@
           <el-icon><DataLine /></el-icon>
           <template #title>我的用量</template>
         </el-menu-item>
+        <el-menu-item index="/model-square">
+          <el-icon><Collection /></el-icon>
+          <template #title>模型广场</template>
+        </el-menu-item>
         <el-menu-item index="/admin/group-health-monitor">
           <el-icon><Histogram /></el-icon>
           <template #title>模型组健康</template>

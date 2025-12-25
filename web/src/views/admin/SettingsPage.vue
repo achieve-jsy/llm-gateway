@@ -1089,10 +1089,24 @@ async function handleImport(event: Event) {
   .tab-nav-wrap {
     margin: 0 -16px;
     padding: 0 16px;
+    position: relative;
+  }
+
+  /* 右侧渐变提示：还有更多 Tab 可滑动 */
+  .tab-nav-wrap::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 16px;
+    width: 32px;
+    height: 40px;
+    background: linear-gradient(to right, transparent, var(--el-bg-color));
+    pointer-events: none;
+    z-index: 1;
   }
 
   .tab-btn {
-    padding: 8px 12px;
+    padding: 8px 10px;
     font-size: 12px;
     gap: 4px;
   }

@@ -105,4 +105,11 @@ async function handleConfirm() {
   font-size: 14px;
   color: var(--el-text-color-regular);
 }
+
+@media (max-width: 768px) {
+  :deep(.el-dialog) {
+    width: 95% !important;
+    max-width: 95vw !important;
+  }
+}
 </style>

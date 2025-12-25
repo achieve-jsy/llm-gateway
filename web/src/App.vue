@@ -1,7 +1,7 @@
 <template>
-  <div class="layout-sidebar">
+  <div class="layout-sidebar" :class="{ 'layout-sidebar--mobile': isMobile }">
     <!-- 侧边栏：已登录时始终显示（/403 等兜底页也保留菜单） -->
-    <aside v-if="authStore.isLoggedIn" class="sidebar" :class="{ 'sidebar--collapsed': isCollapsed }">
+    <aside v-if="authStore.isLoggedIn" class="sidebar" :class="{ 'sidebar--collapsed': isCollapsed, 'sidebar--mobile-open': isMobile && showMobileSidebar }">
       <div class="sidebar-header">
         <img :src="sidebarLogoSrc" class="sidebar-logo" alt="logo" />
         <span v-show="!isCollapsed" class="sidebar-title">{{ siteTitle }}</span>
@@ -111,7 +111,10 @@
     <!-- 主内容区 -->
     <div class="main-content">
       <!-- 顶部工具栏 -->
-      <div v-if="authStore.isLoggedIn" class="top-bar">        <button class="collapse-btn" @click="toggleCollapse" :title="isCollapsed ? '展开菜单' : '收起菜单'">
+      <div v-if="authStore.isLoggedIn" class="top-bar">        <button v-if="isMobile" class="hamburger-btn" @click="showMobileSidebar = !showMobileSidebar">
+          <el-icon :size="20"><Menu /></el-icon>
+        </button>
+        <button v-if="!isMobile" class="collapse-btn" @click="toggleCollapse" :title="isCollapsed ? '展开菜单' : '收起菜单'">
           <el-icon :size="18"><Fold v-if="!isCollapsed" /><Expand v-else /></el-icon>
         </button>
         <div class="top-bar-spacer"></div>
@@ -156,6 +159,8 @@
       </div>
     </div>
 
+    <div v-if="isMobile && showMobileSidebar" class="sidebar-backdrop" @click="showMobileSidebar = false" />
+
     <AnnouncementPopup
       v-if="authStore.isLoggedIn"
       :visible="showPopup"
@@ -167,11 +172,11 @@
 
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
-import { onMounted, computed, ref, watch } from 'vue'
+import { onMounted, computed, ref, watch, onUnmounted } from 'vue'
 import { isDark, toggleTheme } from './composables/useTheme'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
-import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close } from '@element-plus/icons-vue'
+import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close, Menu } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/common/NotificationBell.vue'
 import AnnouncementBanner from '@/components/common/AnnouncementBanner.vue'
 import AnnouncementPopup from '@/components/common/AnnouncementPopup.vue'
@@ -183,6 +188,8 @@ const authStore = useAuthStore()
 const settingsStore = useSettingsStore()
 
 const isCollapsed = ref(localStorage.getItem('sidebar-collapsed') === 'true')
+const isMobile = ref(window.innerWidth < 768)
+const showMobileSidebar = ref(false)
 const activeMenu = ref(route.path)
 const showPopup = ref(false)
 
@@ -232,6 +239,12 @@ watch(() => authStore.deptStatus, (s) => {
 onMounted(() => {
   settingsStore.loadPublicSettings()
   checkPopupAnnouncements()
+  const handleResize = () => { isMobile.value = window.innerWidth < 768; if (!isMobile.value) showMobileSidebar.value = false }
+  window.addEventListener('resize', handleResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
 })
 
 watch(() => authStore.isLoggedIn, (loggedIn) => {
@@ -239,6 +252,7 @@ watch(() => authStore.isLoggedIn, (loggedIn) => {
 })
 
 function handleMenuSelect(index: string) {
+  if (isMobile.value) showMobileSidebar.value = false
   if (index && index !== route.path) {
     router.push(index)
   }
@@ -360,6 +374,57 @@ function onPopupAllRead() {
   background: var(--el-color-primary-light-8);
   color: var(--el-color-primary);
   vertical-align: middle;
+}
+
+.sidebar-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 998;
+}
+
+.hamburger-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--el-text-color-secondary);
+  transition: background-color 0.2s;
+  flex-shrink: 0;
+}
+
+.hamburger-btn:hover {
+  background-color: var(--el-fill-color);
+  color: #1E8C86;
+}
+
+/* Mobile sidebar drawer mode */
+.layout-sidebar--mobile .sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 999;
+  transform: translateX(-100%);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  width: 260px !important;
+}
+
+.layout-sidebar--mobile .sidebar.sidebar--mobile-open {
+  transform: translateX(0);
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.15);
+}
+
+.layout-sidebar--mobile .main-content {
+  width: 100%;
 }
 
 

@@ -229,4 +229,35 @@ onMounted(() => {
   justify-content: flex-end;
   margin-top: 16px;
 }
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .status-log-page {
+    overflow-x: auto;
+  }
+
+  .page-title {
+    font-size: 16px;
+  }
+
+  .filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .filter-bar .el-input,
+  .filter-bar .el-select,
+  .filter-bar .el-date-picker,
+  .filter-bar :deep(.el-date-editor--datetimerange) {
+    width: 100% !important;
+  }
+
+  :deep(.el-table) {
+    min-width: 600px;
+  }
+
+  .pagination-wrapper {
+    justify-content: center;
+  }
+}
 </style>

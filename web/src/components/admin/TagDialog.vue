@@ -167,4 +167,16 @@ async function handleSubmit() {
   vertical-align: middle;
   border: 1px solid var(--el-border-color);
 }
+
+@media (max-width: 768px) {
+  :deep(.el-dialog) {
+    width: 95% !important;
+    max-width: 95vw !important;
+  }
+  .form-hint.inline {
+    display: block;
+    margin-left: 0;
+    margin-top: 4px;
+  }
+}
 </style>

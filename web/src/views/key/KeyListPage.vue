@@ -7,7 +7,7 @@
       </div>
     </div>
 
-    <el-table v-loading="loading" :data="keys" border stripe :default-sort="{ prop: 'createdAt', order: 'descending' }">
+    <div class="key-table-wrap"><el-table v-loading="loading" :data="keys" border stripe :default-sort="{ prop: 'createdAt', order: 'descending' }">
       <el-table-column prop="name" label="名称" min-width="120" show-overflow-tooltip />
 
       <el-table-column label="API 密钥" min-width="180">
@@ -102,7 +102,7 @@
       <template #empty>
         <el-empty description="暂无 API Key" />
       </template>
-    </el-table>
+    </el-table></div>
 
     <div class="pagination-wrapper" v-if="total > pageSize">
       <el-pagination v-model:current-page="currentPage" :page-size="pageSize" :total="total" layout="prev, pager, next" @current-change="loadKeys" />
@@ -479,8 +479,18 @@ onMounted(() => {
   min-height: 32px;
 }
 
+.key-table-wrap { width: 100%; }
+
 @media (max-width: 900px) {
   .page-header { flex-direction: column; align-items: flex-start; gap: 12px; }
   .header-actions { width: 100%; justify-content: flex-start; }
+  .key-table-wrap { overflow-x: auto; }
+  .key-table-wrap :deep(.el-table) { min-width: 820px; }
+}
+
+@media (max-width: 480px) {
+  .header-actions { flex-wrap: wrap; gap: 8px; }
+  .header-actions .el-button { width: 100%; }
+  :deep(.el-dialog) { width: 92% !important; max-width: 92vw !important; }
 }
 </style>

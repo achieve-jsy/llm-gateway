@@ -903,4 +903,21 @@ async function handleSubmit() {
   font-size: 12px;
   color: #98989D;
 }
+
+@media (max-width: 768px) {
+  :deep(.el-dialog) {
+    width: 95% !important;
+    max-width: 95vw !important;
+  }
+  :deep(.el-dialog .el-dialog__body) {
+    padding: 16px !important;
+  }
+  .catalog-suggestion-item {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .cs-meta {
+    width: 100%;
+  }
+}
 </style>

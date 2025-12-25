@@ -395,4 +395,29 @@ function resetState() {
 .mt-2 {
   margin-top: 12px;
 }
+
+@media (max-width: 768px) {
+  :deep(.el-dialog) {
+    width: 95% !important;
+    max-width: 95vw !important;
+  }
+  :deep(.el-dialog .el-dialog__body) {
+    padding: 14px !important;
+  }
+  :deep(.el-tabs__nav) {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    white-space: nowrap;
+  }
+  .sub-tabs {
+    flex-wrap: wrap;
+  }
+  .sub-tab {
+    font-size: 12px;
+    padding: 4px 10px;
+  }
+  .shell-tabs {
+    flex-wrap: wrap;
+  }
+}
 </style>

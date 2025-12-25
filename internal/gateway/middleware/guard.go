@@ -42,6 +42,15 @@ func (g *GatewayGuard) UpdateLimits(limitPerMin, maxConcurrent int) {
 
 func (g *GatewayGuard) Handler() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// 系统探针 key（__system_ 前缀）不受并发/频率限制，
+		// 健康检测需要全量并发探测所有模型组。
+		if v, ok := c.Get("key_name"); ok {
+			if name, ok := v.(string); ok && len(name) >= 9 && name[:9] == "__system_" {
+				c.Next()
+				return
+			}
+		}
+
 		identityVal, exists := c.Get("identity")
 		if !exists {
 			c.Next()

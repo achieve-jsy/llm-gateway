@@ -92,6 +92,7 @@ func Setup(
 	}
 	modelsHandler := handler.NewModelsHandler(routerCache, modelsRouter, state)
 	boundModelsHandler := handler.NewBoundModelsHandler(controlPlaneURL, internalToken)
+	modelDetailHandler := handler.NewModelDetailHandler(controlPlaneURL, internalToken)
 	modelInfoHandler := handler.NewModelInfoHandler(controlPlaneURL, internalToken)
 	healthHandler := handler.NewHealthHandler(routerCache.Client(), modelsRouter, state, sch)
 	var responsesHandler *handler.ResponsesHandler
@@ -123,6 +124,7 @@ func Setup(
 	{
 		// Models
 		v1.GET("/models", boundModelsHandler.Handle)
+		v1.GET("/models/:model_id", modelDetailHandler.Handle)
 		v1.GET("/model/info", modelInfoHandler.Handle)
 		v1.GET("/health/models", modelsHandler.HandleLegacy)
 

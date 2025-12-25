@@ -581,7 +581,7 @@
   <!-- ═══════════════════════════════════════════
        Trace 详情 Drawer
   ═══════════════════════════════════════════ -->
-  <el-drawer v-model="traceVisible" title="" size="780px" direction="rtl" :before-close="closeTrace">
+  <el-drawer v-model="traceVisible" title="" size="780px" direction="rtl" :before-close="closeTrace" class="up-trace-drawer">
     <template #header>
       <div class="up-trace-header">
         <span class="up-trace-title">请求详情</span>
@@ -2049,36 +2049,31 @@ code { font-family: var(--up-mono); font-size: 12px; color: var(--el-text-color-
   color: var(--el-text-color-primary); word-break: break-all;
 }
 
-/* ── Trace Drawer 移动端适配 ── */
+/* ── Trace Drawer 移动端适配（非 scoped，因为 el-drawer teleport 到 body）── */
 @media (max-width: 768px) {
-  /* Problem 1: Drawer 宽度 100% */
-  :deep(.el-drawer) { width: 100% !important; }
+  .up-trace-drawer.el-drawer { width: 100% !important; }
 
-  /* Problem 2: pre 内容横向滚动 */
-  .up-msg-content {
-    font-size: 11px; padding: 8px;
+  .up-trace-drawer .up-msg-content {
+    font-size: 11px !important; padding: 8px !important;
     overflow-x: auto; -webkit-overflow-scrolling: touch;
   }
-  .up-json-view { padding: 10px; }
-  .up-json-view pre {
-    font-size: 11px; overflow-x: auto; -webkit-overflow-scrolling: touch;
+  .up-trace-drawer .up-json-view { padding: 10px; }
+  .up-trace-drawer .up-json-view pre {
+    font-size: 11px !important; overflow-x: auto; -webkit-overflow-scrolling: touch;
     white-space: pre;
   }
-  .up-error-msg { font-size: 11px; padding: 10px; }
+  .up-trace-drawer .up-error-msg { font-size: 11px; padding: 10px; }
 
-  /* Problem 3: Headers 表改成列布局 */
-  .up-header-row { flex-direction: column; gap: 2px; padding: 6px 8px; }
-  .up-header-key { min-width: auto; font-size: 11px; font-weight: 700; }
-  .up-header-val { font-size: 11px; }
+  .up-trace-drawer .up-header-row { flex-direction: column; gap: 2px; padding: 6px 8px; }
+  .up-trace-drawer .up-header-key { min-width: auto; font-size: 11px; font-weight: 700; }
+  .up-trace-drawer .up-header-val { font-size: 11px; }
 
-  /* Problem 4: Meta Grid 单列 */
-  .up-meta-grid { grid-template-columns: 1fr !important; }
+  .up-trace-drawer .up-meta-grid { grid-template-columns: 1fr !important; }
 
-  /* Problem 5: Tabs 横向滚动 */
-  .up-trace-tabs :deep(.el-tabs__nav-wrap) {
+  .up-trace-drawer .el-tabs__nav-wrap {
     overflow-x: auto; -webkit-overflow-scrolling: touch;
   }
-  .up-trace-tabs :deep(.el-tabs__nav) {
+  .up-trace-drawer .el-tabs__nav {
     flex-wrap: nowrap; display: inline-flex;
   }
 }

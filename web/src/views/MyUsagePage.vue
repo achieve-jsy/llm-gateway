@@ -426,7 +426,7 @@
     <!-- ═══════════════════════════════════════════
          Trace 详情 Drawer
     ═══════════════════════════════════════════ -->
-    <el-drawer v-model="traceVisible" title="" size="780px" direction="rtl" :before-close="closeTrace">
+    <el-drawer v-model="traceVisible" title="" size="780px" direction="rtl" :before-close="closeTrace" class="mu-trace-drawer">
       <template #header>
         <div class="mu-trace-header">
           <span class="mu-trace-title">请求详情</span>
@@ -1458,6 +1458,28 @@ loadAll()
 
   /* Trace Drawer meta grid: single column */
   .mu-meta-grid { grid-template-columns: 1fr; }
+
+  /* Trace Drawer 全宽 */
+  .mu-trace-drawer.el-drawer { width: 100% !important; }
+
+  /* Trace Drawer pre 溢出 */
+  .mu-trace-drawer .mu-msg-content {
+    font-size: 11px !important; padding: 8px !important;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+  }
+  .mu-trace-drawer .mu-json-view pre {
+    font-size: 11px !important; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    white-space: pre;
+  }
+  .mu-trace-drawer .mu-error-msg { font-size: 11px; }
+
+  /* Trace Drawer tabs 横滑 */
+  .mu-trace-drawer .el-tabs__nav-wrap {
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+  }
+  .mu-trace-drawer .el-tabs__nav {
+    flex-wrap: nowrap; display: inline-flex;
+  }
 
   /* Trace timeline: allow scroll */
   .mu-timeline { overflow-x: auto; white-space: nowrap; }

@@ -508,7 +508,7 @@
     </div>
 
     <!-- ══ Trace Drawer ══ -->
-    <el-drawer v-model="traceVisible" title="" size="780px" direction="rtl" :before-close="closeTrace">
+    <el-drawer v-model="traceVisible" title="" size="780px" direction="rtl" :before-close="closeTrace" class="ud-trace-drawer">
       <template #header>
         <div class="ud-trace-header">
           <span class="ud-trace-title">请求详情</span>
@@ -1959,40 +1959,6 @@ onUnmounted(() => {
 .ud-error-block { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 16px; }
 .ud-error-code  { font-size: 11px; font-weight: 700; color: #dc2626; text-transform: uppercase; margin-bottom: 8px; }
 .ud-error-msg   { margin: 0; font-size: 12.5px; color: #7f1d1d; white-space: pre-wrap; word-break: break-word; }
-
-/* ── Trace Drawer 移动端适配 ── */
-@media (max-width: 768px) {
-  /* Problem 1: Drawer 宽度 100% */
-  :deep(.el-drawer) { width: 100% !important; }
-
-  /* Problem 2: pre 内容横向滚动 */
-  .ud-msg-content {
-    font-size: 11px; padding: 8px;
-    overflow-x: auto; -webkit-overflow-scrolling: touch;
-  }
-  .ud-json-view { padding: 10px; }
-  .ud-json-view pre {
-    font-size: 11px; overflow-x: auto; -webkit-overflow-scrolling: touch;
-    white-space: pre;
-  }
-  .ud-error-msg { font-size: 11px; padding: 10px; }
-
-  /* Problem 3: Headers 表改成列布局 */
-  .ud-header-row { flex-direction: column; gap: 2px; padding: 6px 8px; }
-  .ud-header-key { min-width: auto; font-size: 11px; font-weight: 700; }
-  .ud-header-val { font-size: 11px; }
-
-  /* Problem 4: Meta Grid 单列 */
-  .ud-meta-grid { grid-template-columns: 1fr !important; }
-
-  /* Problem 5: Tabs 横向滚动 */
-  .ud-trace-tabs :deep(.el-tabs__nav-wrap) {
-    overflow-x: auto; -webkit-overflow-scrolling: touch;
-  }
-  .ud-trace-tabs :deep(.el-tabs__nav) {
-    flex-wrap: nowrap; display: inline-flex;
-  }
-}
 </style>
 
 <!-- tooltip 内容 teleport 到 body，需要非 scoped 全局样式 -->
@@ -2020,4 +1986,33 @@ onUnmounted(() => {
 .ud-tt__row b.c-blue   { color: #5eead4; }
 .ud-tt__row b.c-green  { color: #4ade80; }
 .ud-tt__sep { border-top: 1px solid #374151; margin: 6px 0; }
+
+/* ── Trace Drawer 移动端适配（非 scoped，因为 el-drawer teleport 到 body）── */
+@media (max-width: 768px) {
+  .ud-trace-drawer.el-drawer { width: 100% !important; }
+
+  .ud-trace-drawer .ud-msg-content {
+    font-size: 11px !important; padding: 8px !important;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+  }
+  .ud-trace-drawer .ud-json-view { padding: 10px; }
+  .ud-trace-drawer .ud-json-view pre {
+    font-size: 11px !important; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    white-space: pre;
+  }
+  .ud-trace-drawer .ud-error-msg { font-size: 11px; padding: 10px; }
+
+  .ud-trace-drawer .ud-header-row { flex-direction: column; gap: 2px; padding: 6px 8px; }
+  .ud-trace-drawer .ud-header-key { min-width: auto; font-size: 11px; font-weight: 700; }
+  .ud-trace-drawer .ud-header-val { font-size: 11px; }
+
+  .ud-trace-drawer .ud-meta-grid { grid-template-columns: 1fr !important; }
+
+  .ud-trace-drawer .el-tabs__nav-wrap {
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+  }
+  .ud-trace-drawer .el-tabs__nav {
+    flex-wrap: nowrap; display: inline-flex;
+  }
+}
 </style>

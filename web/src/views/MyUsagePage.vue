@@ -213,16 +213,25 @@
             <el-table-column label="输入占比" min-width="90" align="right">
               <template #default="{ row }">
                 <span class="c-blue">{{ tokenInputPct(row) }}%</span>
+                <el-tooltip v-if="isClaudeCacheBug(row) && (row.prompt_tokens || 0) > 100000" content="输入 Token 可能包含缓存读取，实际比例可能偏差" placement="top">
+                  <el-icon class="mu-info-icon" style="margin-left:4px;vertical-align:-2px;color:var(--el-text-color-secondary);cursor:help"><InfoFilled /></el-icon>
+                </el-tooltip>
               </template>
             </el-table-column>
             <el-table-column label="输出占比" min-width="90" align="right">
               <template #default="{ row }">
                 <span class="c-green">{{ tokenOutputPct(row) }}%</span>
+                <el-tooltip v-if="isClaudeCacheBug(row) && (row.prompt_tokens || 0) > 100000" content="输入 Token 可能包含缓存读取，实际比例可能偏差" placement="top">
+                  <el-icon class="mu-info-icon" style="margin-left:4px;vertical-align:-2px;color:var(--el-text-color-secondary);cursor:help"><InfoFilled /></el-icon>
+                </el-tooltip>
               </template>
             </el-table-column>
             <el-table-column label="缓存命中率" min-width="100" align="right">
               <template #default="{ row }">
-                <span class="c-cyan">{{ cacheHitRate(row) }}%</span>
+                <el-tooltip v-if="isClaudeCacheBug(row)" content="该模型的缓存数据暂不可用" placement="top">
+                  <span class="c-cyan" style="cursor:help">{{ cacheHitRate(row) }}</span>
+                </el-tooltip>
+                <span v-else class="c-cyan">{{ cacheHitRate(row) }}</span>
               </template>
             </el-table-column>
             <el-table-column prop="est_cost_usd" label="估算成本" min-width="110" align="right" sortable>
@@ -288,14 +297,14 @@
           <el-table-column prop="est_cost_usd" label="估算成本" min-width="110" align="right" sortable>
             <template #default="{ row }">
               <div class="mu-bar-cell">
-                <span :class="costColor(row.est_cost_usd)">${{ fmtCost(row.est_cost_usd) }}</span>
+                <span :class="costColor(row.est_cost_usd)">¥{{ fmtPreciseCny(row.est_cost_usd) }}</span>
                 <div class="mu-minibar"><div class="mu-minibar__fill mu-minibar__fill--red" :style="{ width: pct(row.est_cost_usd, maxCost) + '%' }" /></div>
               </div>
             </template>
           </el-table-column>
         </el-table>
         <div v-if="!statsLoading && !statsRows.length" class="mu-empty">
-          <el-icon size="48" color="#c0c4cc"><Histogram /></el-icon>
+          <el-icon size="48" color="var(--el-text-color-placeholder)"><Histogram /></el-icon>
           <p>暂无汇总数据</p>
         </div>
       </div>
@@ -412,25 +421,25 @@
           <el-table-column prop="est_cost_usd" label="费用" min-width="140" align="right">
             <template #default="{ row }">
               <div class="mu-cost-cell">
-                <span class="mu-cost" :class="logCostColor(row.est_cost_usd)">${{ fmtCost(row.est_cost_usd) }}</span>
+                <span class="mu-cost" :class="logCostColor(row.est_cost_usd)">¥{{ fmtPreciseCny(row.est_cost_usd) }}</span>
                 <el-tooltip placement="left" :show-after="120" popper-class="mu-tt-popper">
                   <template #content>
                     <div class="mu-tt">
-                      <div class="mu-tt__title">成本明细 (USD)</div>
+                      <div class="mu-tt__title">成本明细 (CNY)</div>
                       <template v-if="(row.input_price_snapshot ?? 0) > 0 || (row.output_price_snapshot ?? 0) > 0">
                         <div class="mu-tt__group"><el-icon class="mu-tt__group-ic"><Money /></el-icon>单价 / 1M tokens</div>
-                        <div class="mu-tt__row"><span>输入单价</span><b>${{ fmtPrice(row.input_price_snapshot) }}</b></div>
-                        <div class="mu-tt__row"><span>输出单价</span><b>${{ fmtPrice(row.output_price_snapshot) }}</b></div>
+                        <div class="mu-tt__row"><span>输入单价</span><b>¥{{ fmtPrice(toCny(row.input_price_snapshot)) }}</b></div>
+                        <div class="mu-tt__row"><span>输出单价</span><b>¥{{ fmtPrice(toCny(row.output_price_snapshot)) }}</b></div>
                         <div class="mu-tt__sep"></div>
                       </template>
                       <div class="mu-tt__group"><el-icon class="mu-tt__group-ic"><Coin /></el-icon>费用</div>
-                      <div class="mu-tt__row"><span>输入</span><b>${{ (row.input_cost_usd || 0).toFixed(6) }}</b></div>
-                      <div class="mu-tt__row"><span>输出</span><b>${{ (row.output_cost_usd || 0).toFixed(6) }}</b></div>
+                      <div class="mu-tt__row"><span>输入</span><b>¥{{ toCny(row.input_cost_usd).toFixed(6) }}</b></div>
+                      <div class="mu-tt__row"><span>输出</span><b>¥{{ toCny(row.output_cost_usd).toFixed(6) }}</b></div>
                       <div class="mu-tt__sep"></div>
                       <div class="mu-tt__group"><el-icon class="mu-tt__group-ic"><Finished /></el-icon>缓存</div>
-                      <div class="mu-tt__row"><span>缓存读取</span><b :class="row.cache_read_cost_usd > 0 ? 'c-cyan' : ''">${{ (row.cache_read_cost_usd || 0).toFixed(6) }}</b></div>
+                      <div class="mu-tt__row"><span>缓存读取</span><b :class="row.cache_read_cost_usd > 0 ? 'c-cyan' : ''">¥{{ toCny(row.cache_read_cost_usd).toFixed(6) }}</b></div>
                       <div class="mu-tt__sep"></div>
-                      <div class="mu-tt__row"><span>合计</span><b class="c-green">${{ fmtCost(row.est_cost_usd) }}</b></div>
+                      <div class="mu-tt__row"><span>合计</span><b class="c-green">¥{{ fmtPreciseCny(row.est_cost_usd) }}</b></div>
                     </div>
                   </template>
                   <span class="mu-info"><el-icon><InfoFilled /></el-icon></span>
@@ -459,7 +468,7 @@
           </el-table>
 
         <div v-if="!logLoading && !logRows.length" class="mu-empty">
-          <el-icon size="48" color="#c0c4cc"><List /></el-icon>
+          <el-icon size="48" color="var(--el-text-color-placeholder)"><List /></el-icon>
           <p>暂无调用记录</p>
         </div>
 
@@ -547,19 +556,19 @@
                 <div class="mu-meta-row mu-meta-sep"><span>合计</span><b class="c-blue">{{ fmtNum(traceRow?.total_tokens) }}</b></div>
               </div>
               <div class="mu-meta-section">
-                <div class="mu-meta-heading">费用 (USD)</div>
+                <div class="mu-meta-heading">费用 (CNY)</div>
                 <div class="mu-meta-row" v-if="(traceRow?.input_price_snapshot || 0) > 0">
-                  <span>输入单价/1M</span><b>${{ fmtPrice(traceRow?.input_price_snapshot) }}</b>
+                  <span>输入单价/1M</span><b>¥{{ fmtPrice(toCny(traceRow?.input_price_snapshot)) }}</b>
                 </div>
                 <div class="mu-meta-row" v-if="(traceRow?.output_price_snapshot || 0) > 0">
-                  <span>输出单价/1M</span><b>${{ fmtPrice(traceRow?.output_price_snapshot) }}</b>
+                  <span>输出单价/1M</span><b>¥{{ fmtPrice(toCny(traceRow?.output_price_snapshot)) }}</b>
                 </div>
-                <div class="mu-meta-row"><span>输入费用</span><b>${{ fmtCost(traceRow?.input_cost_usd) }}</b></div>
-                <div class="mu-meta-row"><span>输出费用</span><b>${{ fmtCost(traceRow?.output_cost_usd) }}</b></div>
+                <div class="mu-meta-row"><span>输入费用</span><b>¥{{ fmtPreciseCny(traceRow?.input_cost_usd) }}</b></div>
+                <div class="mu-meta-row"><span>输出费用</span><b>¥{{ fmtPreciseCny(traceRow?.output_cost_usd) }}</b></div>
                 <div class="mu-meta-row" v-if="(traceRow?.cache_read_cost_usd || 0) > 0">
-                  <span>缓存读取</span><b class="c-cyan">${{ fmtCost(traceRow?.cache_read_cost_usd) }}</b>
+                  <span>缓存读取</span><b class="c-cyan">¥{{ fmtPreciseCny(traceRow?.cache_read_cost_usd) }}</b>
                 </div>
-                <div class="mu-meta-row mu-meta-sep"><span>合计</span><b class="c-green">${{ fmtCost(traceRow?.est_cost_usd) }}</b></div>
+                <div class="mu-meta-row mu-meta-sep"><span>合计</span><b class="c-green">¥{{ fmtPreciseCny(traceRow?.est_cost_usd) }}</b></div>
               </div>
               <div class="mu-meta-section">
                 <div class="mu-meta-heading">来源</div>
@@ -897,6 +906,7 @@ const tokenBreakdown = computed(() => {
 const modelTokenRanking = computed(() => {
   return [...modelStatsRows.value]
     .map(r => ({ ...r, totalTokens: (r.prompt_tokens || 0) + (r.completion_tokens || 0) }))
+    .filter(r => r.totalTokens > 0)
     .sort((a, b) => b.totalTokens - a.totalTokens)
     .slice(0, 8)
 })
@@ -904,6 +914,7 @@ const modelTokenRanking = computed(() => {
 const costEfficiencyRows = computed(() => {
   return [...modelStatsRows.value]
     .map(r => ({ ...r, totalTokens: (r.prompt_tokens || 0) + (r.completion_tokens || 0) }))
+    .filter(r => r.totalTokens > 0)
     .sort((a, b) => b.totalTokens - a.totalTokens)
 })
 
@@ -915,22 +926,27 @@ const costPerMillionTokens = (row: StatsRow) => {
   return (row.est_cost_usd || 0) / total * 1e6
 }
 
+const isClaudeCacheBug = (row: StatsRow) => {
+  return (row.cached_tokens || 0) === 0 && (row.model || '').toLowerCase().includes('claude')
+}
+
 const tokenInputPct = (row: StatsRow) => {
   const total = (row.prompt_tokens || 0) + (row.completion_tokens || 0)
-  if (!total) return 0
+  if (!total) return '0.0'
   const input = (row.prompt_tokens || 0) - (row.cached_tokens || 0)
-  return Math.round(input / total * 100)
+  return (input / total * 100).toFixed(1)
 }
 
 const tokenOutputPct = (row: StatsRow) => {
   const total = (row.prompt_tokens || 0) + (row.completion_tokens || 0)
-  if (!total) return 0
-  return Math.round((row.completion_tokens || 0) / total * 100)
+  if (!total) return '0.0'
+  return ((row.completion_tokens || 0) / total * 100).toFixed(1)
 }
 
 const cacheHitRate = (row: StatsRow) => {
-  if (!row.prompt_tokens) return 0
-  return Math.round((row.cached_tokens || 0) / row.prompt_tokens * 100)
+  if (isClaudeCacheBug(row)) return 'N/A*'
+  if (!row.prompt_tokens) return '0%'
+  return Math.round((row.cached_tokens || 0) / row.prompt_tokens * 100) + '%'
 }
 
 function buildStatsParams(groupByVal: string): Record<string, string> {
@@ -1000,15 +1016,15 @@ const costColor = (v: number) => v > maxCost.value * 0.7 ? 'c-red fw6' : v > max
 
 // ── Formatters ──
 const fmtNum = (n?: number | null) => n?.toLocaleString() ?? '0'
-/** 动态精度：保留足够有效数字，自动去掉尾零 */
-const fmtCost = (v?: number | null): string => {
-  const n = Number(v || 0)
+/** 动态精度：保留足够有效数字，自动去掉尾零，用于显示 CNY */
+const fmtPreciseCny = (v?: number | null): string => {
+  const n = toCny(v)
   if (n === 0) return '0.00'
+  if (n < 0.01) return '< 0.01'
   let s: string
   if (n >= 1)        s = n.toFixed(2)
   else if (n >= 0.01)     s = n.toFixed(4)
-  else if (n >= 0.0001)   s = n.toFixed(6)
-  else                    s = n.toFixed(8)
+  else                    s = n.toFixed(6)
   return s.replace(/(\.\d{2,}?)0+$/, '$1')
 }
 const fmtPrice = (n?: number | null) => {
@@ -1018,8 +1034,8 @@ const fmtPrice = (n?: number | null) => {
 }
 const fmtTokens = (n?: number | null) => {
   if (!n) return '0'
-  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B'
-  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B'
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M'
   if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K'
   return String(n)
 }
@@ -1866,7 +1882,7 @@ if (typeof MutationObserver !== 'undefined') {
   background: var(--mu-surface);
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
-.mu-table-wrap :deep(.el-table__row:hover > td.el-table__cell) { background: var(--el-color-primary-light-9) !important; }
+.mu-table-wrap :deep(.el-table__row:hover > td.el-table__cell) { background: color-mix(in srgb, var(--el-color-primary) 10%, var(--mu-surface)) !important; }
 .mu-table-wrap :deep(.el-table .el-table-fixed-column--left.is-last-column.el-table__cell),
 .mu-table-wrap :deep(.el-table__fixed) { box-shadow: 6px 0 12px -6px rgba(0, 0, 0, .12); }
 
@@ -1974,8 +1990,8 @@ if (typeof MutationObserver !== 'undefined') {
   font-weight: 700; font-size: 12px; margin-bottom: 7px;
   color: #e5e7eb; border-bottom: 1px solid #374151; padding-bottom: 5px; letter-spacing: .2px;
 }
-.mu-tt__row { display: flex; justify-content: space-between; gap: 18px; align-items: center; color: #9ca3af; }
-.mu-tt__sub { color: #6b7280; padding-left: 2px; }
+.mu-tt__row { display: flex; justify-content: space-between; gap: 18px; align-items: center; color: #b0b8c4; }
+.mu-tt__sub { color: #9ca3af; padding-left: 2px; }
 .mu-tt__group { display: flex; align-items: center; gap: 4px; margin: 2px 0 1px; font-size: 11px; font-weight: 700; letter-spacing: .3px; color: #38bdf8; }
 .mu-tt__group-ic { font-size: 12px; }
 .mu-tt__row b { color: #f9fafb; font-weight: 600; }

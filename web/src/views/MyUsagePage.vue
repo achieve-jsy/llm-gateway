@@ -11,7 +11,7 @@
       </div>
       <div class="mu-header__right">
         <el-button :loading="statsLoading" :icon="Refresh" circle size="small" title="刷新" @click="loadAll" />
-        <el-button :icon="Download" size="small" :disabled="!logRows.length" @click="handleExport">导出当前页</el-button>
+        <el-button :icon="Download" size="small" :disabled="!logRows.length" @click="handleExport">导出当前页 ({{ logRows.length }} 条)</el-button>
       </div>
     </div>
 
@@ -95,7 +95,7 @@
           <el-icon size="22"><DataLine /></el-icon>
         </div>
         <div class="mu-stat-card__body">
-          <p class="mu-stat-card__label">本月调用</p>
+          <p class="mu-stat-card__label">{{ periodLabel }}调用</p>
           <p class="mu-stat-card__value">{{ fmtNum(statsTotal?.req_count) }}</p>
           <p class="mu-stat-card__sub">
             日均 <span class="c-blue">{{ fmtNum(Math.round(dailyAvgCalls)) }}</span> 次
@@ -108,10 +108,10 @@
           <el-icon size="22"><Money /></el-icon>
         </div>
         <div class="mu-stat-card__body">
-          <p class="mu-stat-card__label">本月花费</p>
-          <p class="mu-stat-card__value c-green">${{ fmtCost(statsTotal?.est_cost_usd) }}</p>
+          <p class="mu-stat-card__label">{{ periodLabel }}花费</p>
+          <p class="mu-stat-card__value c-green">¥{{ fmtCny(statsTotal?.est_cost_usd) }}</p>
           <p class="mu-stat-card__sub">
-            日均 <span class="c-orange">${{ fmtCost(dailyAvgCost) }}</span>
+            日均 <span class="c-orange">¥{{ fmtCny(dailyAvgCost) }}</span>
             <span v-if="costChangePct != null" :class="costChangeClass">较上期 {{ costChangePct > 0 ? '+' : '' }}{{ costChangePct }}%</span>
             <span v-else-if="(statsTotal?.est_cost_usd ?? 0) > 0" class="c-cyan">较上期 新增</span>
           </p>
@@ -161,6 +161,7 @@
       <div class="mu-chart-card">
         <div class="mu-chart-card__header">
           <span class="mu-chart-card__title">模型使用分布</span>
+          <span class="mu-chart-card__hint">点击模型可筛选明细</span>
         </div>
         <div class="mu-chart-card__body mu-chart-card__body--doughnut">
           <canvas ref="distCanvas" />
@@ -226,12 +227,12 @@
             </el-table-column>
             <el-table-column prop="est_cost_usd" label="估算成本" min-width="110" align="right" sortable>
               <template #default="{ row }">
-                <span :class="costColor(row.est_cost_usd)">${{ fmtCost(row.est_cost_usd) }}</span>
+                <span :class="costColor(row.est_cost_usd)">¥{{ fmtCny(row.est_cost_usd) }}</span>
               </template>
             </el-table-column>
             <el-table-column label="每百万 Token" min-width="120" align="right">
               <template #default="{ row }">
-                <span class="mu-cost">${{ fmtCost(costPerMillionTokens(row)) }}</span>
+                <span class="mu-cost">¥{{ fmtCny(costPerMillionTokens(row)) }}</span>
               </template>
             </el-table-column>
           </el-table>
@@ -468,7 +469,7 @@
             v-model:page-size="logPageSize"
             :page-sizes="[20, 50, 100, 200]"
             :total="logTotal"
-            layout="total, sizes, prev, pager, next"
+            layout="total, sizes, prev, pager, next, jumper"
             small
             @size-change="loadLogs"
             @current-change="loadLogs"
@@ -653,6 +654,11 @@ const TABLE_HEADER = {
 
 const CHART_PALETTE = ['#2BA8A2', '#27AE60', '#E0A100', '#5DADE2', '#8B5CF6', '#EC4899', '#E67E22', '#14B8A6']
 
+// USD → CNY 前端换算（常量，后续可改为从配置读取）
+const USD_TO_CNY = 7.2
+const toCny = (usd: number | undefined | null) => (usd ?? 0) * USD_TO_CNY
+const fmtCny = (usd: number | undefined | null) => toCny(usd).toFixed(2)
+
 function cssVar(name: string, fallback = '') {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
 }
@@ -821,6 +827,33 @@ const rangeDays = computed(() => {
   if (!from || !to) return 1
   const diff = parseLocalDate(to).getTime() - parseLocalDate(from).getTime()
   return Math.max(1, Math.round(diff / 86400000) + 1)
+})
+const periodLabel = computed(() => {
+  const [from, to] = dateRange.value
+  if (!from || !to) return '选定期间'
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const todayStr = fmtLocal(today)
+
+  // 今天
+  if (from === to && from === todayStr) return '今日'
+  // 昨天
+  const yesterday = new Date(today)
+  yesterday.setDate(yesterday.getDate() - 1)
+  if (from === to && from === fmtLocal(yesterday)) return '昨日'
+  // 本月（从月初到今天）
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1)
+  if (from === fmtLocal(monthStart) && to === todayStr) return '本月'
+  // 最近 7 天
+  const d7 = new Date(today)
+  d7.setDate(d7.getDate() - 6)
+  if (from === fmtLocal(d7) && to === todayStr) return '近 7 天'
+  // 最近 30 天
+  const d30 = new Date(today)
+  d30.setDate(d30.getDate() - 29)
+  if (from === fmtLocal(d30) && to === todayStr) return '近 30 天'
+  // 自定义
+  return `${from} ~ ${to}`
 })
 const dailyAvgCalls = computed(() => (statsTotal.value?.req_count ?? 0) / rangeDays.value)
 const dailyAvgCost = computed(() => (statsTotal.value?.est_cost_usd ?? 0) / rangeDays.value)
@@ -1207,6 +1240,32 @@ const doughnutCenterPlugin = {
   },
 }
 
+const segmentLabelPlugin = {
+  id: 'segmentLabel',
+  afterDraw(chart: Chart) {
+    if (chart.config.type !== 'doughnut') return
+    const ds = chart.data.datasets[0]
+    if (!ds?.data?.length) return
+    const total = (ds.data as number[]).reduce((a, b) => a + b, 0)
+    if (!total) return
+    const meta = chart.getDatasetMeta(0)
+    const ctx = chart.ctx
+    ctx.save()
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.font = 'bold 11px sans-serif'
+    meta.data.forEach((arc: any, i: number) => {
+      const value = (ds.data[i] as number) || 0
+      const pct = Math.round(value / total * 100)
+      if (pct < 5) return // 太小的不显示
+      const { x, y } = arc.tooltipPosition()
+      ctx.fillStyle = '#fff'
+      ctx.fillText(`${pct}%`, x, y)
+    })
+    ctx.restore()
+  },
+}
+
 const tokenDoughnutCenterPlugin = {
   id: 'tokenDoughnutCenter',
   afterDraw(chart: Chart) {
@@ -1259,8 +1318,8 @@ function renderTrend() {
           pointHoverRadius: 5,
         },
         {
-          label: '成本 (USD)',
-          data: sorted.map(r => r.est_cost_usd),
+          label: '成本 (CNY)',
+          data: sorted.map(r => toCny(r.est_cost_usd)),
           yAxisID: 'y1',
           borderColor: colors.primary,
           backgroundColor: colors.primary + '22',
@@ -1291,7 +1350,7 @@ function renderTrend() {
           callbacks: {
             label: ctx => {
               const v = ctx.raw as number
-              if (ctx.datasetIndex === 1) return `${ctx.dataset.label}: $${v.toFixed(4)}`
+              if (ctx.datasetIndex === 1) return `${ctx.dataset.label}: ¥${v.toFixed(2)}`
               return `${ctx.dataset.label}: ${fmtNum(v)}`
             },
           },
@@ -1315,7 +1374,7 @@ function renderTrend() {
           position: 'right',
           grid: { drawOnChartArea: false },
           border: { display: false },
-          ticks: { color: colors.textSecondary, font: { size: 10 }, callback: (v: any) => `$${Number(v).toFixed(2)}` },
+          ticks: { color: colors.textSecondary, font: { size: 10 }, callback: (v: any) => `¥${Number(v).toFixed(2)}` },
         },
       },
     },
@@ -1347,11 +1406,19 @@ function renderDist() {
         borderWidth: 1,
       }],
     },
-    plugins: [doughnutCenterPlugin],
+    plugins: [doughnutCenterPlugin, segmentLabelPlugin],
     options: {
       responsive: true,
       maintainAspectRatio: false,
       cutout: '62%',
+      onClick: (_evt: any, elements: any[]) => {
+        if (!elements.length || !distChart) return
+        const idx = elements[0].index
+        const model = (distChart.data.labels as string[])[idx]
+        if (!model) return
+        filterModelName.value = model
+        loadAll()
+      },
       plugins: {
         legend: {
           position: 'right',
@@ -1366,7 +1433,7 @@ function renderDist() {
                 const value = (ds.data[i] as number) || 0
                 const pct = total ? Math.round(value / total * 100) : 0
                 return {
-                  text: `${label} (${pct}%)`,
+                  text: `${label} ${fmtNum(value)}次 (${pct}%)`,
                   fillStyle: (ds.backgroundColor as string[])[i],
                   strokeStyle: (ds.borderColor as string[])[i],
                   lineWidth: 1,
@@ -1418,7 +1485,7 @@ function renderTokenBreakdown() {
         borderWidth: 1,
       }],
     },
-    plugins: [tokenDoughnutCenterPlugin],
+    plugins: [tokenDoughnutCenterPlugin, segmentLabelPlugin],
     options: {
       responsive: true,
       maintainAspectRatio: false,
@@ -1587,6 +1654,7 @@ function handleExport() {
     href: URL.createObjectURL(blob),
     download: `my_logs_${dateRange.value[0]}_${dateRange.value[1]}.csv`,
   }).click()
+  ElMessage.success(`已导出 ${logRows.value.length} 条记录`)
 }
 
 function rerenderCharts() {
@@ -1772,6 +1840,7 @@ if (typeof MutationObserver !== 'undefined') {
   font-size: 14px; font-weight: 600; color: var(--el-text-color-primary);
   display: inline-flex; align-items: center; gap: 8px;
 }
+.mu-chart-card__hint { font-size: 11px; color: var(--mu-muted); font-weight: normal; }
 .mu-chart-card__title::before, .mu-section__title::before {
   content: ''; width: 7px; height: 7px; border-radius: 999px;
   background: var(--el-color-primary);

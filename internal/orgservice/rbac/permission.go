@@ -31,6 +31,24 @@ const (
 	// ── 用量看板 ────────────────────────────────────────────────────────────
 	PermUsageViewAll    Permission = "usage:view:all"    // 查看全公司用量
 	PermUsageViewScoped Permission = "usage:view:scoped" // 查看自己管辖范围用量
+
+	// ── v0.7 模型组授权 ──────────────────────────────────────────────────────
+	PermGroupOpenModeSet   Permission = "group:open_mode:set"    // 设置组开放模式（仅平台 admin）
+	PermGroupEntitleGrant  Permission = "group:entitle:grant"    // 下放受控组给工作室/部门（studio_admin or admin）
+	PermGroupEntitleRevoke Permission = "group:entitle:revoke"   // 撤销授权（同上）
+
+	// ── v0.7 预算管理 ────────────────────────────────────────────────────────
+	PermBudgetViewAll    Permission = "budget:view:all"    // 查看全公司预算（admin）
+	PermBudgetViewScoped Permission = "budget:view:scoped" // 查看自己管辖范围预算（dept_admin/studio_admin）
+	PermBudgetSet        Permission = "budget:set"         // 设置/修改预算额度（按管辖域 RBAC 过滤）
+
+	// ── v0.7 Service Key ────────────────────────────────────────────────────
+	PermServiceKeyCreate Permission = "service_key:create" // 创建 Service Key（仅部门负责人）
+	PermServiceKeyRevoke Permission = "service_key:revoke" // 吊销 Service Key
+
+	// ── v0.7 扩容审批 ────────────────────────────────────────────────────────
+	PermExpansionRequest Permission = "expansion:request" // 发起扩容申请（dept_admin）
+	PermExpansionApprove Permission = "expansion:approve" // 审批扩容申请（studio_admin/admin）
 )
 
 // ScopeConstraint 权限的范围约束级别（从宽到严）

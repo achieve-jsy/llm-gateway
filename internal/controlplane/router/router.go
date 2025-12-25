@@ -114,6 +114,12 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	)
 	groupHandler := handler.NewGroupHandler(groupSvc, modelRepo, providerRepo)
 
+	// v0.7: 授权服务
+	entRepo := repository.NewEntitlementRepo(db)
+	entSvc := service.NewEntitlementService(entRepo, groupRepo, service.NewEventPublisherAdapter(publisher))
+	// 注入 EntitlementService 到 KeyService，enable verify-key 下发 usable_groups 快照
+	keySvc.WithEntitlementService(entSvc)
+
 	systemKeySvc := service.NewSystemKeyService(db)
 	// gateway.url 从 yaml 配置读取，环境变量 GATEWAY_URL 可覆盖
 	groupCheckSvc := service.NewGroupCheckService(groupRepo, healthCheckRepo, systemKeySvc, cfg.Gateway.URL)
@@ -406,6 +412,18 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 	// Guard 快捷别名（绑定到 orgContainer.RBAC 实例）
 	guard := orgContainer.RBAC.Guard
+
+	// v0.7: 授权管理路由（挂在 adminGroup 上，已带 JWTAuth）
+	entHandler := handler.NewEntitlementHandler(entSvc, orgContainer.RBAC)
+	{
+		// 设置模型组开放模式（仅平台 admin）
+		adminGroup.PUT("/groups/:id/open-mode", guard(rbac.PermGroupOpenModeSet), entHandler.SetOpenMode)
+		// 查看模型组授权列表
+		adminGroup.GET("/groups/:id/entitlements", guard(rbac.PermGroupEntitleGrant), entHandler.ListByGroup)
+		// 下放/撤销授权
+		adminGroup.POST("/group-entitlements", guard(rbac.PermGroupEntitleGrant), entHandler.Grant)
+		adminGroup.DELETE("/group-entitlements", guard(rbac.PermGroupEntitleRevoke), entHandler.Revoke)
+	}
 
 	// 管理接口（JWTAuth 已在 adminGroup 上）
 	orgGroup := adminGroup.Group("/org")

@@ -38,14 +38,28 @@ func convertFromAnthropicResponse(resp *anthropicResponse) *core.ChatResponse {
 		ToolCalls: toolCalls,
 	}
 
-	// Surface thinking content as reasoning_content (OpenAI-compatible format).
+	// Build ExtraFields with both reasoning_content (plain text for display)
+	// and thinking_blocks (full structures with signatures for multi-turn passback).
+	//
+	// Claude Code needs thinking_blocks to include the encrypted `signature` field so
+	// that Anthropic can verify continuity on the next request. Without it, multi-turn
+	// extended-thinking conversations fail with "signature mismatch" errors.
+	extraMap := make(map[string]json.RawMessage)
+
 	if thinking != "" {
-		raw, err := json.Marshal(thinking)
-		if err == nil {
-			msg.ExtraFields = core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
-				"reasoning_content": raw,
-			})
+		if raw, err := json.Marshal(thinking); err == nil {
+			extraMap["reasoning_content"] = raw
 		}
+	}
+
+	if blocks := extractThinkingBlocks(resp.Content); len(blocks) > 0 {
+		if raw, err := json.Marshal(blocks); err == nil {
+			extraMap["thinking_blocks"] = raw
+		}
+	}
+
+	if len(extraMap) > 0 {
+		msg.ExtraFields = core.UnknownJSONFieldsFromMap(extraMap)
 	}
 
 	return &core.ChatResponse{

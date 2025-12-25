@@ -59,6 +59,13 @@ type anthropicContentBlock struct {
 	IsError      bool                    `json:"is_error,omitempty"`
 	Source       *anthropicContentSource `json:"source,omitempty"`
 	CacheControl json.RawMessage         `json:"cache_control,omitempty"`
+	// thinking / redacted_thinking block fields.
+	// Thinking and Signature are used for extended-thinking blocks; Data is used
+	// for redacted_thinking blocks. These must be preserved verbatim across
+	// multi-turn conversations so Anthropic can verify the encrypted signatures.
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
+	Data      string `json:"data,omitempty"`
 }
 
 type anthropicContentSource struct {
@@ -85,6 +92,7 @@ type anthropicContent struct {
 	Text      string          `json:"text,omitempty"`
 	Thinking  string          `json:"thinking,omitempty"`
 	Signature string          `json:"signature,omitempty"`
+	Data      string          `json:"data,omitempty"` // redacted_thinking encrypted payload
 	ID        string          `json:"id,omitempty"`
 	Name      string          `json:"name,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`

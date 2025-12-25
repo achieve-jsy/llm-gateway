@@ -76,6 +76,13 @@ func Setup(
 
 	embeddingsHandler := handler.NewEmbeddingsHandler(orch)
 
+	var messagesHandler *handler.MessagesHandler
+	if groupDispatch != nil {
+		messagesHandler = handler.NewMessagesHandlerWithGroup(orch, groupDispatch)
+	} else {
+		messagesHandler = handler.NewMessagesHandler(orch)
+	}
+
 	// Convert *providers.Router to interface carefully to avoid the nil-interface trap.
 	// A nil *providers.Router assigned to a non-nil interface value would cause panics
 	// inside methods that check `router != nil` on the interface.
@@ -93,7 +100,6 @@ func Setup(
 	} else {
 		responsesHandler = handler.NewResponsesHandler(orch)
 	}
-	messagesHandler := handler.NewMessagesHandler(router)
 
 	r.GET("/health", healthHandler.Health)
 	r.GET("/ready", healthHandler.Ready)
@@ -129,8 +135,8 @@ func Setup(
 		// Responses API — OpenAI Agent SDK 核心依赖
 		v1.POST("/responses", responsesHandler.Handle)
 
-		// Anthropic Messages API — Claude Code 原生协议
-		v1.POST("/messages", messagesHandler.Handle)
+		// Anthropic Messages API
+		v1.POST("/messages", messagesHandler.HandleMessages)
 		v1.POST("/messages/count_tokens", messagesHandler.HandleCountTokens)
 
 		// Provider passthrough: /v1/p/:provider/*path forwards opaquely to the upstream.

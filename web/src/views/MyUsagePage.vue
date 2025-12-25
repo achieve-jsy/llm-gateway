@@ -147,7 +147,189 @@
     </div>
 
     <!-- ═══════════════════════════════════════════
-         Section 3: 🤖 模型偏好
+         ② 调用明细
+    ═══════════════════════════════════════════ -->
+    <div class="mu-section">
+      <div class="mu-section__header">
+        <span class="mu-section__title">📜 调用明细</span>
+        <span class="mu-section__count">共 {{ logTotal }} 条</span>
+      </div>
+      <div class="mu-table-wrap" v-loading="logLoading">
+        <el-table :data="logRows" size="small" :header-cell-style="TABLE_HEADER" style="width:100%;cursor:pointer" @row-click="openTrace">
+          <el-table-column prop="key_name" label="Key" min-width="120" fixed="left">
+            <template #default="{ row }">
+              <span class="mu-name">{{ keyLabel(row.key_id, row.key_name) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="model" label="模型 / 路由" min-width="160">
+            <template #default="{ row }">
+              <div class="mu-model-cell">
+                <span class="mu-model-name">{{ row.model || '—' }}</span>
+                <div v-if="row.routed_model && row.routed_model !== row.model" class="mu-model-routed">
+                  <span class="mu-arrow">↳</span>
+                  <span class="mu-model-name mu-model-name--muted">{{ row.routed_model }}</span>
+                </div>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="group_name" label="模型组" min-width="180" class-name="mu-col--wrap">
+            <template #default="{ row }">
+              <span v-if="row.group_name">{{ row.group_name }}</span>
+              <span v-else class="mu-dash">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="类型" min-width="70" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="row.stream" type="primary" size="small" effect="plain">流式</el-tag>
+              <el-tag v-else size="small" effect="plain">同步</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="Token 用量" min-width="210">
+            <template #default="{ row }">
+              <div class="mu-token-row">
+                <span class="mu-token-item mu-token-item--in" title="输入">
+                  <el-icon class="mu-token-icon"><Bottom /></el-icon>{{ fmtTokens(row.prompt_tokens) }}
+                </span>
+                <span class="mu-token-item mu-token-item--out" title="输出">
+                  <el-icon class="mu-token-icon"><Top /></el-icon>{{ fmtTokens(row.completion_tokens) }}
+                </span>
+                <span v-if="row.cached_tokens" class="mu-token-item mu-token-item--cache" title="缓存命中">
+                  <el-icon class="mu-token-icon"><Finished /></el-icon>{{ fmtTokens(row.cached_tokens) }}
+                </span>
+                <span v-if="row.reasoning_tokens" class="mu-token-item mu-token-item--reason" title="推理">
+                  <el-icon class="mu-token-icon"><MagicStick /></el-icon>{{ fmtTokens(row.reasoning_tokens) }}
+                </span>
+                <el-tooltip placement="top" :show-after="120" popper-class="mu-tt-popper">
+                  <template #content>
+                    <div class="mu-tt">
+                      <div class="mu-tt__title">Token 明细</div>
+                      <div class="mu-tt__row"><span>输入（含缓存）</span><b>{{ fmtNum(row.prompt_tokens) }}</b></div>
+                      <div class="mu-tt__row"><span>输出</span><b>{{ fmtNum(row.completion_tokens) }}</b></div>
+                      <div class="mu-tt__row" v-if="row.reasoning_tokens"><span class="mu-tt__sub">└ 推理</span><b class="c-purple">{{ fmtNum(row.reasoning_tokens) }}</b></div>
+                      <div class="mu-tt__sep"></div>
+                      <div class="mu-tt__group"><el-icon class="mu-tt__group-ic"><Finished /></el-icon>缓存</div>
+                      <div class="mu-tt__row"><span>缓存命中（读）</span><b :class="row.cached_tokens ? 'c-cyan' : ''">{{ fmtNum(row.cached_tokens) }}</b></div>
+                      <div class="mu-tt__row"><span>缓存写入</span><b :class="row.cache_write_tokens ? 'c-amber' : ''">{{ fmtNum(row.cache_write_tokens) }}</b></div>
+                      <div class="mu-tt__sep"></div>
+                      <div class="mu-tt__row"><span>总计</span><b class="c-blue">{{ fmtNum(row.total_tokens) }}</b></div>
+                    </div>
+                  </template>
+                  <span class="mu-info"><el-icon><InfoFilled /></el-icon></span>
+                </el-tooltip>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="status" label="状态" min-width="70" align="center">
+            <template #default="{ row }">
+              <el-tag :type="row.status === 200 ? 'success' : 'danger'" size="small" effect="dark">{{ row.status || '—' }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="first_token_ms" label="TTFT" min-width="70" align="right">
+            <template #default="{ row }">
+              <span v-if="row.first_token_ms != null" class="mu-duration">{{ fmtDuration(row.first_token_ms) }}</span>
+              <span v-else class="mu-dash">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="duration_ms" label="耗时" min-width="70" align="right">
+            <template #default="{ row }">
+              <span class="mu-duration">{{ fmtDuration(row.duration_ms) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="标记" min-width="90" align="center">
+            <template #default="{ row }">
+              <div class="mu-flags">
+                <el-tag v-if="row.reasoning_effort" :type="reasoningType(row.reasoning_effort)" size="small" effect="plain" class="mu-tag--effort">{{ row.reasoning_effort }}</el-tag>
+                <el-tag v-if="row.failover_used" type="warning" size="small" effect="plain">切换</el-tag>
+                <el-tag v-if="row.usage_missing" type="info" size="small" effect="plain">无Usage</el-tag>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="est_cost_usd" label="费用" min-width="140" align="right">
+            <template #default="{ row }">
+              <div class="mu-cost-cell">
+                <span class="mu-cost" :class="logCostColor(row.est_cost_usd)">¥{{ fmtPreciseCny(row.est_cost_usd) }}</span>
+                <el-tooltip placement="left" :show-after="120" popper-class="mu-tt-popper">
+                  <template #content>
+                    <div class="mu-tt">
+                      <div class="mu-tt__title">成本明细 (CNY)</div>
+                      <template v-if="(row.input_price_snapshot ?? 0) > 0 || (row.output_price_snapshot ?? 0) > 0">
+                        <div class="mu-tt__group"><el-icon class="mu-tt__group-ic"><Money /></el-icon>单价 / 1M tokens</div>
+                        <div class="mu-tt__row"><span>输入单价</span><b>¥{{ fmtPrice(toCny(row.input_price_snapshot)) }}</b></div>
+                        <div class="mu-tt__row"><span>输出单价</span><b>¥{{ fmtPrice(toCny(row.output_price_snapshot)) }}</b></div>
+                        <div class="mu-tt__sep"></div>
+                      </template>
+                      <div class="mu-tt__group"><el-icon class="mu-tt__group-ic"><Coin /></el-icon>费用</div>
+                      <div class="mu-tt__row"><span>输入</span><b>¥{{ toCny(row.input_cost_usd).toFixed(6) }}</b></div>
+                      <div class="mu-tt__row"><span>输出</span><b>¥{{ toCny(row.output_cost_usd).toFixed(6) }}</b></div>
+                      <div class="mu-tt__sep"></div>
+                      <div class="mu-tt__group"><el-icon class="mu-tt__group-ic"><Finished /></el-icon>缓存</div>
+                      <div class="mu-tt__row"><span>缓存读取</span><b :class="row.cache_read_cost_usd > 0 ? 'c-cyan' : ''">¥{{ toCny(row.cache_read_cost_usd).toFixed(6) }}</b></div>
+                      <div class="mu-tt__sep"></div>
+                      <div class="mu-tt__row"><span>合计</span><b class="c-green">¥{{ fmtPreciseCny(row.est_cost_usd) }}</b></div>
+                    </div>
+                  </template>
+                  <span class="mu-info"><el-icon><InfoFilled /></el-icon></span>
+                </el-tooltip>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="来源" min-width="180">
+            <template #default="{ row }">
+              <div class="mu-source">
+                <el-tooltip v-if="row.user_agent" :content="row.user_agent" placement="top" :show-after="300" popper-class="mu-ua-popper">
+                  <span class="mu-ua">{{ row.user_agent }}</span>
+                </el-tooltip>
+                <span v-else class="mu-dash">—</span>
+                <span v-if="row.ip_address" class="mu-ip">{{ row.ip_address }}</span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="ts" label="时间" min-width="155">
+            <template #default="{ row }">
+              <span class="mu-time">{{ fmtDateTime(row.ts) }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <div v-if="!logLoading && !logRows.length" class="mu-empty">
+          <el-icon size="48" color="var(--el-text-color-placeholder)"><List /></el-icon>
+          <p>暂无调用记录</p>
+        </div>
+
+        <div v-if="logTotal > 0" class="mu-pagination">
+          <el-pagination
+            v-model:current-page="logPage"
+            v-model:page-size="logPageSize"
+            :page-sizes="[20, 50, 100, 200]"
+            :total="logTotal"
+            layout="total, sizes, prev, pager, next, jumper"
+            small
+            @size-change="loadLogs"
+            @current-change="loadLogs"
+          />
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════
+         ③ 习惯与深度分析（默认折叠，懒加载图表）
+    ═══════════════════════════════════════════ -->
+    <button
+      type="button"
+      class="mu-analysis-toggle"
+      :aria-expanded="analysisOpen"
+      aria-controls="mu-analysis-body"
+      @click="analysisOpen = !analysisOpen"
+    >
+      <span class="mu-analysis-toggle__title">📊 习惯与深度分析</span>
+      <span class="mu-analysis-toggle__hint">{{ analysisOpen ? '点击收起' : '模型偏好 · 时段分布 · 效率洞察' }}</span>
+      <el-icon class="mu-analysis-toggle__chev" :class="{ 'is-open': analysisOpen }" aria-hidden="true"><ArrowDown /></el-icon>
+    </button>
+
+    <div v-if="analysisOpen" id="mu-analysis-body" class="mu-analysis-body">
+
+    <!-- ═══════════════════════════════════════════
+         模型偏好
     ═══════════════════════════════════════════ -->
     <template v-if="modelStatsRows.length">
       <div class="mu-sec-label">🤖 模型偏好</div>
@@ -369,170 +551,8 @@
       </div>
     </div>
 
-    <!-- ═══════════════════════════════════════════
-         Section 7: 📜 调用明细
-    ═══════════════════════════════════════════ -->
-    <div class="mu-section">
-      <div class="mu-section__header">
-        <span class="mu-section__title">📜 调用明细</span>
-        <span class="mu-section__count">共 {{ logTotal }} 条</span>
-      </div>
-      <div class="mu-table-wrap" v-loading="logLoading">
-        <el-table :data="logRows" size="small" :header-cell-style="TABLE_HEADER" style="width:100%;cursor:pointer" @row-click="openTrace">
-          <el-table-column prop="key_name" label="Key" min-width="120" fixed="left">
-            <template #default="{ row }">
-              <span class="mu-name">{{ keyLabel(row.key_id, row.key_name) }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="model" label="模型 / 路由" min-width="160">
-            <template #default="{ row }">
-              <div class="mu-model-cell">
-                <span class="mu-model-name">{{ row.model || '—' }}</span>
-                <div v-if="row.routed_model && row.routed_model !== row.model" class="mu-model-routed">
-                  <span class="mu-arrow">↳</span>
-                  <span class="mu-model-name mu-model-name--muted">{{ row.routed_model }}</span>
-                </div>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column prop="group_name" label="模型组" min-width="180" class-name="mu-col--wrap">
-            <template #default="{ row }">
-              <span v-if="row.group_name">{{ row.group_name }}</span>
-              <span v-else class="mu-dash">—</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="类型" min-width="70" align="center">
-            <template #default="{ row }">
-              <el-tag v-if="row.stream" type="primary" size="small" effect="plain">流式</el-tag>
-              <el-tag v-else size="small" effect="plain">同步</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="Token 用量" min-width="210">
-            <template #default="{ row }">
-              <div class="mu-token-row">
-                <span class="mu-token-item mu-token-item--in" title="输入">
-                  <el-icon class="mu-token-icon"><Bottom /></el-icon>{{ fmtTokens(row.prompt_tokens) }}
-                </span>
-                <span class="mu-token-item mu-token-item--out" title="输出">
-                  <el-icon class="mu-token-icon"><Top /></el-icon>{{ fmtTokens(row.completion_tokens) }}
-                </span>
-                <span v-if="row.cached_tokens" class="mu-token-item mu-token-item--cache" title="缓存命中">
-                  <el-icon class="mu-token-icon"><Finished /></el-icon>{{ fmtTokens(row.cached_tokens) }}
-                </span>
-                <span v-if="row.reasoning_tokens" class="mu-token-item mu-token-item--reason" title="推理">
-                  <el-icon class="mu-token-icon"><MagicStick /></el-icon>{{ fmtTokens(row.reasoning_tokens) }}
-                </span>
-                <el-tooltip placement="top" :show-after="120" popper-class="mu-tt-popper">
-                  <template #content>
-                    <div class="mu-tt">
-                      <div class="mu-tt__title">Token 明细</div>
-                      <div class="mu-tt__row"><span>输入（含缓存）</span><b>{{ fmtNum(row.prompt_tokens) }}</b></div>
-                      <div class="mu-tt__row"><span>输出</span><b>{{ fmtNum(row.completion_tokens) }}</b></div>
-                      <div class="mu-tt__row" v-if="row.reasoning_tokens"><span class="mu-tt__sub">└ 推理</span><b class="c-purple">{{ fmtNum(row.reasoning_tokens) }}</b></div>
-                      <div class="mu-tt__sep"></div>
-                      <div class="mu-tt__group"><el-icon class="mu-tt__group-ic"><Finished /></el-icon>缓存</div>
-                      <div class="mu-tt__row"><span>缓存命中（读）</span><b :class="row.cached_tokens ? 'c-cyan' : ''">{{ fmtNum(row.cached_tokens) }}</b></div>
-                      <div class="mu-tt__row"><span>缓存写入</span><b :class="row.cache_write_tokens ? 'c-amber' : ''">{{ fmtNum(row.cache_write_tokens) }}</b></div>
-                      <div class="mu-tt__sep"></div>
-                      <div class="mu-tt__row"><span>总计</span><b class="c-blue">{{ fmtNum(row.total_tokens) }}</b></div>
-                    </div>
-                  </template>
-                  <span class="mu-info"><el-icon><InfoFilled /></el-icon></span>
-                </el-tooltip>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column prop="status" label="状态" min-width="70" align="center">
-            <template #default="{ row }">
-              <el-tag :type="row.status === 200 ? 'success' : 'danger'" size="small" effect="dark">{{ row.status || '—' }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="first_token_ms" label="TTFT" min-width="70" align="right">
-            <template #default="{ row }">
-              <span v-if="row.first_token_ms != null" class="mu-duration">{{ fmtDuration(row.first_token_ms) }}</span>
-              <span v-else class="mu-dash">—</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="duration_ms" label="耗时" min-width="70" align="right">
-            <template #default="{ row }">
-              <span class="mu-duration">{{ fmtDuration(row.duration_ms) }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="标记" min-width="90" align="center">
-            <template #default="{ row }">
-              <div class="mu-flags">
-                <el-tag v-if="row.reasoning_effort" :type="reasoningType(row.reasoning_effort)" size="small" effect="plain" class="mu-tag--effort">{{ row.reasoning_effort }}</el-tag>
-                <el-tag v-if="row.failover_used" type="warning" size="small" effect="plain">切换</el-tag>
-                <el-tag v-if="row.usage_missing" type="info" size="small" effect="plain">无Usage</el-tag>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column prop="est_cost_usd" label="费用" min-width="140" align="right">
-            <template #default="{ row }">
-              <div class="mu-cost-cell">
-                <span class="mu-cost" :class="logCostColor(row.est_cost_usd)">¥{{ fmtPreciseCny(row.est_cost_usd) }}</span>
-                <el-tooltip placement="left" :show-after="120" popper-class="mu-tt-popper">
-                  <template #content>
-                    <div class="mu-tt">
-                      <div class="mu-tt__title">成本明细 (CNY)</div>
-                      <template v-if="(row.input_price_snapshot ?? 0) > 0 || (row.output_price_snapshot ?? 0) > 0">
-                        <div class="mu-tt__group"><el-icon class="mu-tt__group-ic"><Money /></el-icon>单价 / 1M tokens</div>
-                        <div class="mu-tt__row"><span>输入单价</span><b>¥{{ fmtPrice(toCny(row.input_price_snapshot)) }}</b></div>
-                        <div class="mu-tt__row"><span>输出单价</span><b>¥{{ fmtPrice(toCny(row.output_price_snapshot)) }}</b></div>
-                        <div class="mu-tt__sep"></div>
-                      </template>
-                      <div class="mu-tt__group"><el-icon class="mu-tt__group-ic"><Coin /></el-icon>费用</div>
-                      <div class="mu-tt__row"><span>输入</span><b>¥{{ toCny(row.input_cost_usd).toFixed(6) }}</b></div>
-                      <div class="mu-tt__row"><span>输出</span><b>¥{{ toCny(row.output_cost_usd).toFixed(6) }}</b></div>
-                      <div class="mu-tt__sep"></div>
-                      <div class="mu-tt__group"><el-icon class="mu-tt__group-ic"><Finished /></el-icon>缓存</div>
-                      <div class="mu-tt__row"><span>缓存读取</span><b :class="row.cache_read_cost_usd > 0 ? 'c-cyan' : ''">¥{{ toCny(row.cache_read_cost_usd).toFixed(6) }}</b></div>
-                      <div class="mu-tt__sep"></div>
-                      <div class="mu-tt__row"><span>合计</span><b class="c-green">¥{{ fmtPreciseCny(row.est_cost_usd) }}</b></div>
-                    </div>
-                  </template>
-                  <span class="mu-info"><el-icon><InfoFilled /></el-icon></span>
-                </el-tooltip>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="来源" min-width="180">
-            <template #default="{ row }">
-              <div class="mu-source">
-                <el-tooltip v-if="row.user_agent" :content="row.user_agent" placement="top" :show-after="300" popper-class="mu-ua-popper">
-                  <span class="mu-ua">{{ row.user_agent }}</span>
-                </el-tooltip>
-                <span v-else class="mu-dash">—</span>
-                <span v-if="row.ip_address" class="mu-ip">{{ row.ip_address }}</span>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column prop="ts" label="时间" min-width="155">
-            <template #default="{ row }">
-              <span class="mu-time">{{ fmtDateTime(row.ts) }}</span>
-            </template>
-          </el-table-column>
-        </el-table>
-
-        <div v-if="!logLoading && !logRows.length" class="mu-empty">
-          <el-icon size="48" color="var(--el-text-color-placeholder)"><List /></el-icon>
-          <p>暂无调用记录</p>
-        </div>
-
-        <div v-if="logTotal > 0" class="mu-pagination">
-          <el-pagination
-            v-model:current-page="logPage"
-            v-model:page-size="logPageSize"
-            :page-sizes="[20, 50, 100, 200]"
-            :total="logTotal"
-            layout="total, sizes, prev, pager, next, jumper"
-            small
-            @size-change="loadLogs"
-            @current-change="loadLogs"
-          />
-        </div>
-      </div>
     </div>
+    <!-- /③ 习惯与深度分析 -->
 
     <!-- ═══════════════════════════════════════════
          Trace 详情 Drawer
@@ -679,7 +699,7 @@ import {
   Refresh, Download, Histogram, Money, DataLine, Coin,
   MagicStick, Top, Bottom, Finished, List, InfoFilled,
   Loading, SuccessFilled, CircleCloseFilled,
-  Close, Grid, Cpu, WarningFilled
+  Close, Grid, Cpu, WarningFilled, ArrowDown
 } from '@element-plus/icons-vue'
 import {
   Chart, LineController, DoughnutController, BarController, CategoryScale, LinearScale,
@@ -802,6 +822,7 @@ const filterGroupName = ref('')
 const filterStatus    = ref('')
 const groupBy = ref('day')
 const modelDetailOpen = ref(false)
+const analysisOpen = ref(false)
 
 const activeFilterCount = computed(() =>
   [filterKeyId.value, filterModelName.value, filterGroupName.value, filterStatus.value].filter(Boolean).length
@@ -1092,8 +1113,10 @@ async function loadStats() {
   await nextTick()
   try {
     renderCostTrend()
-    renderDist()
-    renderCostPerM()
+    if (analysisOpen.value) {
+      renderDist()
+      renderCostPerM()
+    }
   } catch (e) {
     console.error('[my-usage] chart render failed', e)
   }
@@ -1371,13 +1394,22 @@ function renderCostPerM() {
 
 function rerenderCharts() {
   if (dayStatsRows.value.length) renderCostTrend()
-  if (modelStatsRows.value.length) {
+  if (analysisOpen.value && modelStatsRows.value.length) {
     renderDist()
     if (costPerMRows.value.length) renderCostPerM()
   }
 }
 
 watch(isDark, () => nextTick(() => rerenderCharts()))
+
+// 懒加载：首次展开「习惯与深度分析」时再渲染该区图表
+watch(analysisOpen, (open) => {
+  if (!open) return
+  nextTick(() => {
+    if (modelStatsRows.value.length) renderDist()
+    if (costPerMRows.value.length) renderCostPerM()
+  })
+})
 
 // ── Trace Drawer ──
 interface TraceData {
@@ -1569,6 +1601,21 @@ if (typeof MutationObserver !== 'undefined') {
   padding: 2px 0 0;
   margin-top: 4px;
 }
+
+/* ── ③ 习惯与深度分析 折叠区 ── */
+.mu-analysis-toggle {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 12px 16px; cursor: pointer; text-align: left;
+  background: var(--mu-surface); border: 1px solid var(--mu-border); border-radius: 12px;
+  transition: border-color .15s ease, background-color .15s ease;
+}
+.mu-analysis-toggle:hover { border-color: var(--el-color-primary-light-5); background: var(--el-fill-color-extra-light); }
+.mu-analysis-toggle:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; }
+.mu-analysis-toggle__title { font-size: 14px; font-weight: 700; color: var(--el-text-color-primary); flex-shrink: 0; }
+.mu-analysis-toggle__hint { font-size: 12px; color: var(--mu-muted); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mu-analysis-toggle__chev { color: var(--mu-muted); transition: transform .2s ease; flex-shrink: 0; }
+.mu-analysis-toggle__chev.is-open { transform: rotate(180deg); }
+.mu-analysis-body { display: flex; flex-direction: column; gap: 14px; }
 
 /* ── KPI 卡片 ── */
 .mu-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
@@ -1880,6 +1927,16 @@ if (typeof MutationObserver !== 'undefined') {
   .mu-stat-card__value { font-size: 20px; }
   .mu-preset-btn { font-size: 11px; padding: 3px 8px; }
   .mu-heatmap-cell { min-height: 14px; }
+}
+
+/* ── 尊重用户的减少动态偏好 ── */
+@media (prefers-reduced-motion: reduce) {
+  .mu *, .mu *::before, .mu *::after {
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+  }
+  .mu-stat-card:hover { transform: none; }
+  .mu-heatmap-cell:hover { transform: none; }
 }
 </style>
 

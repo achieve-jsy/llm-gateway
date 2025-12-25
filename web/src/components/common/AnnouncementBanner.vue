@@ -53,17 +53,23 @@ function next() { currentIndex.value = (currentIndex.value + 1) % bannerItems.va
 
 function goDetail(id: string) { router.push(`/announcements/${id}`) }
 
+const DISMISS_PREFIX = 'banner_dismissed_'
+
 async function loadBanners() {
   if (!localStorage.getItem('access_token')) return
   try {
     const items = await getUnreadAnnouncements()
-    bannerItems.value = (items || []).filter(a => a.display_mode === 'banner')
+    // 过滤掉已在本会话中关闭的公告
+    const filtered = (items || []).filter(a => a.display_mode === 'banner' && !localStorage.getItem(DISMISS_PREFIX + a.id))
+    bannerItems.value = filtered
     currentIndex.value = 0
   } catch { bannerItems.value = [] }
 }
 
 async function handleClose(item: Announcement) {
   try { await markAnnouncementRead(item.id) } catch {}
+  // 持久化到 localStorage，刷新页面后也不会再次显示
+  localStorage.setItem(DISMISS_PREFIX + item.id, '1')
   bannerItems.value = bannerItems.value.filter(a => a.id !== item.id)
   if (currentIndex.value >= bannerItems.value.length) currentIndex.value = Math.max(0, bannerItems.value.length - 1)
 }

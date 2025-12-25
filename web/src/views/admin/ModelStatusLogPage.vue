@@ -49,7 +49,10 @@
       />
     </div>
 
-    <el-table v-loading="loading" :data="logs" border stripe>
+    <!-- ═══════════════════════════════════════════
+         桌面表格
+    ═══════════════════════════════════════════ -->
+    <el-table v-loading="loading" :data="logs" border stripe class="desktop-table">
       <el-table-column prop="model_name" label="模型名" min-width="180" show-overflow-tooltip />
       <el-table-column prop="provider_name" label="渠道名" width="150" />
       <el-table-column label="变更类型" width="120" align="center">
@@ -69,6 +72,36 @@
       </el-table-column>
       <el-table-column prop="operator_name" label="操作人" width="120" />
     </el-table>
+
+    <!-- ═══════════════════════════════════════════
+         移动端卡片列表
+    ═══════════════════════════════════════════ -->
+    <div class="mobile-log-cards" v-if="logs.length">
+      <div v-for="(log, i) in logs" :key="i" class="log-card">
+        <div class="log-card__header">
+          <span class="log-card__model">{{ log.model_name }}</span>
+          <el-tag :type="changeTypeTag(log.change_type)" size="small">
+            {{ changeTypeLabel(log.change_type) }}
+          </el-tag>
+        </div>
+        <div class="log-card__row">
+          <span class="log-card__label">渠道名</span>
+          <span>{{ log.provider_name }}</span>
+        </div>
+        <div class="log-card__row">
+          <span class="log-card__label">变更原因</span>
+          <span>{{ log.reason }}</span>
+        </div>
+        <div class="log-card__row">
+          <span class="log-card__label">时间</span>
+          <span>{{ formatRelativeTime(log.created_at) }}</span>
+        </div>
+        <div class="log-card__row">
+          <span class="log-card__label">操作人</span>
+          <span>{{ log.operator_name }}</span>
+        </div>
+      </div>
+    </div>
 
     <div class="pagination-wrapper">
       <el-pagination
@@ -252,12 +285,60 @@ onMounted(() => {
     width: 100% !important;
   }
 
-  :deep(.el-table) {
-    min-width: 600px;
+  .desktop-table {
+    display: none;
+  }
+
+  .mobile-log-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
   }
 
   .pagination-wrapper {
     justify-content: center;
   }
+}
+
+/* 移动端卡片列表 */
+.mobile-log-cards {
+  display: none;
+}
+
+.log-card {
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.log-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.log-card__model {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--el-text-color-primary);
+  word-break: break-all;
+}
+
+.log-card__row {
+  display: flex;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.log-card__label {
+  color: var(--el-text-color-secondary);
+  flex-shrink: 0;
+  min-width: 60px;
 }
 </style>

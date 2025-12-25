@@ -77,11 +77,21 @@ async function handleCopy() {
   font-size: 12.5px;
   line-height: 1.65;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .code-block-body code {
   font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', monospace;
   color: var(--el-text-color-primary);
   white-space: pre;
+  word-break: break-all;
+  overflow-wrap: break-word;
+}
+
+@media (max-width: 768px) {
+  .code-block-body {
+    padding: 10px;
+    font-size: 11px;
+  }
 }
 </style>

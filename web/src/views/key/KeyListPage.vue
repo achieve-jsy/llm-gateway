@@ -14,7 +14,7 @@
         <template #default="{ row }">
           <div class="key-cell">
             <span class="key-masked">{{ row.maskedKey }}</span>
-            <el-button size="small" text type="primary" @click="copyFullKey(row)">复制</el-button>
+            <el-button size="small" text type="primary" @click.stop="copyFullKey(row)">复制</el-button>
           </div>
         </template>
       </el-table-column>
@@ -35,7 +35,7 @@
               >{{ g.name }}</el-tag>
             </template>
             <span v-else class="text-muted" style="margin-right:4px">未分配</span>
-            <el-button size="small" text type="primary" @click="openGroupDialog(row)">管理</el-button>
+            <el-button size="small" text type="primary" @click.stop="openGroupDialog(row)">管理</el-button>
           </div>
         </template>
       </el-table-column>
@@ -92,10 +92,10 @@
 
       <el-table-column label="操作" width="340" fixed="right" align="center">
         <template #default="{ row }">
-          <el-button size="small" text type="primary" @click="handleUseKey(row)">使用密钥</el-button>
-          <el-button size="small" text type="primary" @click="handleOpenCodeConfig(row)">配置 OpenCode</el-button>
-          <el-button size="small" text type="warning" @click="handleReset(row)">重置</el-button>
-          <el-button size="small" text type="danger" @click="handleDelete(row)">删除</el-button>
+          <el-button size="small" text type="primary" @click.stop="handleUseKey(row)">使用密钥</el-button>
+          <el-button size="small" text type="primary" @click.stop="handleOpenCodeConfig(row)">配置 OpenCode</el-button>
+          <el-button size="small" text type="warning" @click.stop="handleReset(row)">重置</el-button>
+          <el-button size="small" text type="danger" @click.stop="handleDelete(row)">删除</el-button>
         </template>
       </el-table-column>
 

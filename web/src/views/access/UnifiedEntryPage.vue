@@ -14,14 +14,10 @@ const displayUrl = computed(() => {
   return base.endsWith('/v1') ? base : base.replace(/\/$/, '') + '/v1'
 })
 
+import { copyToClipboard } from '@/utils/clipboard'
+
 function copyUrl() {
-  navigator.clipboard?.writeText(displayUrl.value).catch(() => {
-    const el = document.createElement('textarea')
-    el.value = displayUrl.value
-    document.body.appendChild(el); el.select()
-    document.execCommand('copy')
-    document.body.removeChild(el)
-  })
+  copyToClipboard(displayUrl.value)
   copied.value = true
   if (copyTimer) clearTimeout(copyTimer)
   copyTimer = setTimeout(() => { copied.value = false }, 2200)
@@ -452,6 +448,9 @@ resp = client.chat.completions.create(
     min-width: 0;
     padding: 10px 14px;
     font-size: 12px;
+    white-space: normal;
+    word-break: break-all;
+    overflow: visible;
   }
   .url-btn {
     flex-shrink: 0;
@@ -463,6 +462,7 @@ resp = client.chat.completions.create(
     font-size: 11px;
     padding: 16px;
     line-height: 1.65;
+    word-break: break-all;
   }
   .code-bar {
     padding: 10px 14px;

@@ -139,6 +139,7 @@ import {
 import { groupsApi } from '@/api/groups'
 import type { GroupListItem } from '@/types/group'
 import type { GroupCapability } from '@/api/groups'
+import { copyToClipboard } from '@/utils/clipboard'
 
 const STRATEGY_LABEL: Record<string, string> = {
   round_robin: '轮询',
@@ -194,13 +195,7 @@ function resetFilters() {
 
 function copyName(g: GroupListItem) {
   const name = g.name
-  navigator.clipboard?.writeText(name).catch(() => {
-    const el = document.createElement('textarea')
-    el.value = name
-    document.body.appendChild(el); el.select()
-    document.execCommand('copy')
-    document.body.removeChild(el)
-  })
+  copyToClipboard(name)
   copiedId.value = g.id
   if (copyTimer) clearTimeout(copyTimer)
   copyTimer = setTimeout(() => { copiedId.value = null }, 1800)

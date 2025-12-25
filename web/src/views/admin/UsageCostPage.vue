@@ -58,8 +58,7 @@
 
       <!-- 次筛选行：各维度 -->
       <div class="up-filter-dims">
-
-        <!-- 模型组 -->
+        <!-- 模型组（始终可见） -->
         <div class="up-filter-group">
           <span class="up-filter-label">模型组</span>
           <el-input v-model="filterGroupName" placeholder="搜索模型组" clearable size="small"
@@ -68,7 +67,7 @@
           </el-input>
         </div>
 
-        <!-- 模型名 -->
+        <!-- 模型名（始终可见） -->
         <div class="up-filter-group">
           <span class="up-filter-label">模型名</span>
           <el-input v-model="filterModelName" placeholder="搜索模型名" clearable size="small"
@@ -77,66 +76,74 @@
           </el-input>
         </div>
 
-        <div class="up-filter-sep" />
+        <!-- 更多筛选按钮（仅移动端显示） -->
+        <el-button class="up-more-filters-btn" link size="small" @click="showMoreFilters = !showMoreFilters">
+          <el-icon><ArrowDown v-if="!showMoreFilters" /><ArrowUp v-else /></el-icon>
+          {{ showMoreFilters ? '收起筛选' : '更多筛选' }}
+        </el-button>
 
-        <!-- 渠道 -->
-        <div class="up-filter-group">
-          <span class="up-filter-label">渠道</span>
-          <el-select v-model="filterProvider" placeholder="全部" clearable size="small"
-            class="up-filter__provider" filterable @change="loadAll" @clear="loadAll">
-            <el-option v-for="p in providerOptions" :key="p" :label="p" :value="p" />
-          </el-select>
+        <!-- 更多筛选（桌面端始终可见，移动端可折叠） -->
+        <div class="up-filter-dims-extra" :class="{ 'up-filter-dims-extra--open': showMoreFilters }">
+          <div class="up-filter-sep" />
+
+          <!-- 渠道 -->
+          <div class="up-filter-group">
+            <span class="up-filter-label">渠道</span>
+            <el-select v-model="filterProvider" placeholder="全部" clearable size="small"
+              class="up-filter__provider" filterable @change="loadAll" @clear="loadAll">
+              <el-option v-for="p in providerOptions" :key="p" :label="p" :value="p" />
+            </el-select>
+          </div>
+
+          <!-- 状态 -->
+          <div class="up-filter-group">
+            <span class="up-filter-label">状态</span>
+            <el-select v-model="filterStatus" placeholder="全部" clearable size="small"
+              class="up-filter__status" @change="loadAll" @clear="loadAll">
+              <el-option label="全部" value="" />
+              <el-option value="success"><span class="up-status-opt up-status-opt--ok">成功</span></el-option>
+              <el-option value="error"><span class="up-status-opt up-status-opt--err">失败</span></el-option>
+            </el-select>
+          </div>
+
+          <div class="up-filter-sep" />
+
+          <!-- Key 关键词 -->
+          <div class="up-filter-group">
+            <span class="up-filter-label">Key</span>
+            <el-input v-model="filterKeyName" placeholder="搜索 Key 名称" clearable size="small"
+              class="up-filter__key" @change="loadAll" @clear="loadAll">
+              <template #prefix><el-icon><Search /></el-icon></template>
+            </el-input>
+          </div>
+
+          <!-- 用户关键词 -->
+          <div class="up-filter-group">
+            <span class="up-filter-label">用户</span>
+            <el-input v-model="filterUserName" placeholder="搜索用户名" clearable size="small"
+              class="up-filter__user" @change="loadAll" @clear="loadAll">
+              <template #prefix><el-icon><Search /></el-icon></template>
+            </el-input>
+          </div>
+
+          <!-- 部门下拉 -->
+          <div class="up-filter-group">
+            <span class="up-filter-label">部门</span>
+            <el-select v-model="filterDeptName" placeholder="全部" clearable size="small"
+              class="up-filter__dept" filterable @change="loadAll" @clear="loadAll">
+              <el-option v-for="d in deptOptions" :key="d.value" :label="d.label" :value="d.value" />
+            </el-select>
+          </div>
+
+          <!-- 事业部（预留，暂无数据） -->
+          <div class="up-filter-group">
+            <span class="up-filter-label">事业部</span>
+            <el-select v-model="filterStudioId" placeholder="全部" clearable size="small"
+              class="up-filter__studio" filterable @change="loadAll" @clear="loadAll">
+              <el-option v-for="s in studioOptions" :key="s.value" :label="s.label" :value="s.value" />
+            </el-select>
+          </div>
         </div>
-
-        <!-- 状态 -->
-        <div class="up-filter-group">
-          <span class="up-filter-label">状态</span>
-          <el-select v-model="filterStatus" placeholder="全部" clearable size="small"
-            class="up-filter__status" @change="loadAll" @clear="loadAll">
-            <el-option label="全部" value="" />
-            <el-option value="success"><span class="up-status-opt up-status-opt--ok">成功</span></el-option>
-            <el-option value="error"><span class="up-status-opt up-status-opt--err">失败</span></el-option>
-          </el-select>
-        </div>
-
-        <div class="up-filter-sep" />
-
-        <!-- Key 关键词 -->
-        <div class="up-filter-group">
-          <span class="up-filter-label">Key</span>
-          <el-input v-model="filterKeyName" placeholder="搜索 Key 名称" clearable size="small"
-            class="up-filter__key" @change="loadAll" @clear="loadAll">
-            <template #prefix><el-icon><Search /></el-icon></template>
-          </el-input>
-        </div>
-
-        <!-- 用户关键词 -->
-        <div class="up-filter-group">
-          <span class="up-filter-label">用户</span>
-          <el-input v-model="filterUserName" placeholder="搜索用户名" clearable size="small"
-            class="up-filter__user" @change="loadAll" @clear="loadAll">
-            <template #prefix><el-icon><Search /></el-icon></template>
-          </el-input>
-        </div>
-
-        <!-- 部门下拉 -->
-        <div class="up-filter-group">
-          <span class="up-filter-label">部门</span>
-          <el-select v-model="filterDeptName" placeholder="全部" clearable size="small"
-            class="up-filter__dept" filterable @change="loadAll" @clear="loadAll">
-            <el-option v-for="d in deptOptions" :key="d.value" :label="d.label" :value="d.value" />
-          </el-select>
-        </div>
-
-        <!-- 事业部（预留，暂无数据） -->
-        <div class="up-filter-group">
-          <span class="up-filter-label">事业部</span>
-          <el-select v-model="filterStudioId" placeholder="全部" clearable size="small"
-            class="up-filter__studio" filterable @change="loadAll" @clear="loadAll">
-            <el-option v-for="s in studioOptions" :key="s.value" :label="s.label" :value="s.value" />
-          </el-select>
-        </div>
-
       </div>
     </div>
 
@@ -763,7 +770,8 @@ import { ref, reactive, computed, watch, nextTick } from 'vue'
 import {
   Refresh, Download, Search, Histogram, Money, DataLine, Coin,
   MagicStick, Top, Bottom, Finished, List, InfoFilled,
-  View, Loading, SuccessFilled, CircleCloseFilled, WarningFilled, SwitchButton
+  View, Loading, SuccessFilled, CircleCloseFilled, WarningFilled, SwitchButton,
+  ArrowDown, ArrowUp
 } from '@element-plus/icons-vue'
 import {
   Chart, BarController, LineController, CategoryScale, LinearScale, BarElement, LineElement,
@@ -867,6 +875,7 @@ const filterProvider = ref('')
 const filterStatus   = ref('')
 const filterModelName = ref('')
 const filterGroupName = ref('')
+const showMoreFilters = ref(false)
 
 const activeFilterCount = computed(() =>
   [filterModelName.value, filterGroupName.value,
@@ -1446,8 +1455,9 @@ loadAll()
   --up-ink:     var(--el-text-color-regular);
   --up-mono: 'SFMono-Regular', ui-monospace, 'JetBrains Mono', Consolas, monospace;
 
-  min-height: 100%; box-sizing: border-box;
+  min-height: 100vh; box-sizing: border-box;
   display: flex; flex-direction: column; gap: 16px;
+  overflow-y: auto;
 }
 
 /* ── 页头 ── */
@@ -1479,7 +1489,6 @@ loadAll()
 /* ── 筛选栏 ── */
 .up-filter {
   display: flex; flex-direction: column; gap: 0; padding: 0;
-  overflow: hidden;
 }
 
 /* 主筛选行：日期 + 激活提示 */
@@ -1519,7 +1528,39 @@ loadAll()
   row-gap: 10px;
 }
 
-/* 单个过滤组：label + control */
+/* 更多筛选按钮和额外筛选项容器（仅移动端折叠） */
+.up-more-filters-btn {
+  display: none !important;
+}
+
+.up-filter-dims-extra {
+  display: contents;
+}
+
+@media (max-width: 768px) {
+  .up-more-filters-btn {
+    display: inline-flex !important;
+    align-self: flex-start;
+    font-size: 13px;
+    color: var(--el-color-primary);
+  }
+  .up-filter-dims-extra {
+    display: none;
+    width: 100%;
+    gap: 8px;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .up-filter-dims-extra--open {
+    display: flex;
+  }
+  .up-filter-dims-extra .up-filter-sep {
+    display: none;
+  }
+  .up-filter-dims-extra .up-filter-group {
+    width: 100%;
+  }
+}
 .up-filter-group {
   display: flex; align-items: center; gap: 7px; flex-shrink: 0;
 }

@@ -11,7 +11,7 @@
       </div>
       <div class="mu-header__right">
         <el-button :loading="statsLoading" :icon="Refresh" circle size="small" title="刷新" @click="loadAll" />
-        <el-button :icon="Download" size="small" :disabled="!logRows.length" @click="handleExport">导出</el-button>
+        <el-button :icon="Download" size="small" :disabled="!logRows.length" @click="handleExport">导出当前页</el-button>
       </div>
     </div>
 
@@ -95,51 +95,51 @@
           <el-icon size="22"><DataLine /></el-icon>
         </div>
         <div class="mu-stat-card__body">
-          <p class="mu-stat-card__label">总调用次数</p>
+          <p class="mu-stat-card__label">本月调用</p>
           <p class="mu-stat-card__value">{{ fmtNum(statsTotal?.req_count) }}</p>
           <p class="mu-stat-card__sub">
-            成功
-            <span :class="['mu-stat-card__rate', successRateClass]">{{ successRate }}%</span>
+            日均 <span class="c-blue">{{ fmtNum(Math.round(dailyAvgCalls)) }}</span> 次
           </p>
         </div>
       </div>
 
       <div class="mu-stat-card">
         <div class="mu-stat-card__icon mu-stat-card__icon--amber">
-          <el-icon size="22"><Coin /></el-icon>
+          <el-icon size="22"><Money /></el-icon>
         </div>
         <div class="mu-stat-card__body">
-          <p class="mu-stat-card__label">总 Token</p>
-          <p class="mu-stat-card__value">{{ fmtTokens((statsTotal?.prompt_tokens ?? 0) + (statsTotal?.completion_tokens ?? 0)) }}</p>
+          <p class="mu-stat-card__label">本月花费</p>
+          <p class="mu-stat-card__value c-green">${{ fmtCost(statsTotal?.est_cost_usd) }}</p>
           <p class="mu-stat-card__sub">
-            输入 <span class="c-blue">{{ fmtTokens(statsTotal?.prompt_tokens) }}</span>
-            · 输出 <span class="c-green">{{ fmtTokens(statsTotal?.completion_tokens) }}</span>
+            日均 <span class="c-orange">${{ fmtCost(dailyAvgCost) }}</span>
+            <span v-if="costChangePct != null" :class="costChangeClass">较上期 {{ costChangePct > 0 ? '+' : '' }}{{ costChangePct }}%</span>
+            <span v-else-if="(statsTotal?.est_cost_usd ?? 0) > 0" class="c-cyan">较上期 新增</span>
           </p>
         </div>
       </div>
 
       <div class="mu-stat-card">
         <div class="mu-stat-card__icon mu-stat-card__icon--cyan">
-          <el-icon size="22"><MagicStick /></el-icon>
+          <el-icon size="22"><Cpu /></el-icon>
         </div>
         <div class="mu-stat-card__body">
-          <p class="mu-stat-card__label">缓存命中</p>
-          <p class="mu-stat-card__value">{{ fmtTokens(statsTotal?.cached_tokens) }}</p>
+          <p class="mu-stat-card__label">最爱模型</p>
+          <p class="mu-stat-card__value mu-stat-card__value--model" :title="favoriteModel?.name">{{ favoriteModel?.name || '—' }}</p>
           <p class="mu-stat-card__sub">
-            命中率 <span class="c-cyan">{{ cacheHitPct }}%</span>
+            占比 <span class="c-cyan">{{ favoriteModel?.pct ?? 0 }}%</span>
           </p>
         </div>
       </div>
 
       <div class="mu-stat-card">
         <div class="mu-stat-card__icon mu-stat-card__icon--green">
-          <el-icon size="22"><Money /></el-icon>
+          <el-icon size="22"><Finished /></el-icon>
         </div>
         <div class="mu-stat-card__body">
-          <p class="mu-stat-card__label">估算成本 (USD)</p>
-          <p class="mu-stat-card__value c-green">${{ fmtCost(statsTotal?.est_cost_usd) }}</p>
+          <p class="mu-stat-card__label">效率指数</p>
+          <p class="mu-stat-card__value">{{ cacheHitPct }}<span class="mu-stat-card__unit">%</span></p>
           <p class="mu-stat-card__sub">
-            均次 <span class="c-orange">${{ avgCostPerReq }}</span>
+            缓存命中 · 均响 <span class="c-green">{{ avgDurationMs != null ? fmtDuration(avgDurationMs) : '—' }}</span>
           </p>
         </div>
       </div>
@@ -148,15 +148,10 @@
     <!-- ═══════════════════════════════════════════
          图表区
     ═══════════════════════════════════════════ -->
-    <div class="mu-charts" v-if="statsRows.length">
+    <div class="mu-charts" v-if="dayStatsRows.length || modelStatsRows.length">
       <div class="mu-chart-card">
         <div class="mu-chart-card__header">
-          <span class="mu-chart-card__title">用量趋势</span>
-          <el-radio-group v-model="chartMetric" size="small" @change="renderTrend">
-            <el-radio-button value="tokens">Token</el-radio-button>
-            <el-radio-button value="reqs">调用</el-radio-button>
-            <el-radio-button value="cost">成本</el-radio-button>
-          </el-radio-group>
+          <span class="mu-chart-card__title">使用趋势</span>
         </div>
         <div class="mu-chart-card__body">
           <canvas ref="trendCanvas" />
@@ -165,13 +160,9 @@
 
       <div class="mu-chart-card">
         <div class="mu-chart-card__header">
-          <span class="mu-chart-card__title">Top 模型</span>
-          <el-radio-group v-model="distMetric" size="small" @change="renderDist">
-            <el-radio-button value="reqs">调用量</el-radio-button>
-            <el-radio-button value="tokens">Token</el-radio-button>
-          </el-radio-group>
+          <span class="mu-chart-card__title">模型使用分布</span>
         </div>
-        <div class="mu-chart-card__body">
+        <div class="mu-chart-card__body mu-chart-card__body--doughnut">
           <canvas ref="distCanvas" />
         </div>
       </div>
@@ -182,7 +173,7 @@
     ═══════════════════════════════════════════ -->
     <div class="mu-section">
       <div class="mu-section__header">
-        <span class="mu-section__title">用量汇总</span>
+        <span class="mu-section__title">模型使用明细</span>
         <el-radio-group v-model="groupBy" size="small" @change="loadStats">
           <el-radio-button value="day">按天</el-radio-button>
           <el-radio-button value="model">按模型</el-radio-button>
@@ -330,7 +321,7 @@
             </template>
           </el-table-column>
           <!-- 耗时 -->
-          <el-table-column prop="duration_ms" label="耗时" min-width="70" align="right" sortable>
+          <el-table-column prop="duration_ms" label="耗时" min-width="70" align="right">
             <template #default="{ row }">
               <span class="mu-duration">{{ fmtDuration(row.duration_ms) }}</span>
             </template>
@@ -346,7 +337,7 @@
             </template>
           </el-table-column>
           <!-- 费用 -->
-          <el-table-column prop="est_cost_usd" label="费用" min-width="140" align="right" sortable>
+          <el-table-column prop="est_cost_usd" label="费用" min-width="140" align="right">
             <template #default="{ row }">
               <div class="mu-cost-cell">
                 <span class="mu-cost" :class="logCostColor(row.est_cost_usd)">${{ fmtCost(row.est_cost_usd) }}</span>
@@ -388,7 +379,7 @@
             </template>
           </el-table-column>
           <!-- 时间 -->
-          <el-table-column prop="ts" label="时间" min-width="155" sortable>
+          <el-table-column prop="ts" label="时间" min-width="155">
             <template #default="{ row }">
               <span class="mu-time">{{ fmtDateTime(row.ts) }}</span>
             </template>
@@ -556,7 +547,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import {
   Refresh, Download, Search, Histogram, Money, DataLine, Coin,
   MagicStick, Top, Bottom, Finished, List, InfoFilled,
@@ -564,16 +555,18 @@ import {
   Close, Grid, Cpu, Key, WarningFilled
 } from '@element-plus/icons-vue'
 import {
-  Chart, BarController, LineController, CategoryScale, LinearScale, BarElement, LineElement,
-  PointElement, Tooltip, Legend, Filler
+  Chart, LineController, DoughnutController, CategoryScale, LinearScale,
+  LineElement, PointElement, ArcElement,
+  Tooltip, Legend, Filler
 } from 'chart.js'
 import http from '@/services/http'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
+import { isDark } from '@/composables/useTheme'
 
 Chart.register(
-  BarController, LineController,
-  CategoryScale, LinearScale, BarElement, LineElement, PointElement,
+  LineController, DoughnutController,
+  CategoryScale, LinearScale, LineElement, PointElement, ArcElement,
   Tooltip, Legend, Filler,
 )
 
@@ -587,14 +580,28 @@ const TABLE_HEADER = {
   borderBottom: '1px solid var(--el-border-color-light)',
 }
 
-const CHART_C = {
-  input:  '#2BA8A2',
-  output: '#27AE60',
-  cache:  '#5DADE2',
-  cost:   '#E0A100',
-  req:    '#E0A100',
-}
 const CHART_PALETTE = ['#2BA8A2', '#27AE60', '#E0A100', '#5DADE2', '#8B5CF6', '#EC4899', '#E67E22', '#14B8A6']
+
+function cssVar(name: string, fallback = '') {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
+}
+
+function chartTheme() {
+  return {
+    textSecondary: cssVar('--el-text-color-secondary', '#94A3B8'),
+    textPrimary: cssVar('--el-text-color-primary', '#303133'),
+    textRegular: cssVar('--el-text-color-regular', '#606266'),
+    primary: cssVar('--el-color-primary', '#2BA8A2'),
+    success: cssVar('--el-color-success', '#27AE60'),
+    warning: cssVar('--el-color-warning', '#E0A100'),
+    grid: cssVar('--el-border-color-lighter', 'rgba(125,125,125,0.12)'),
+  }
+}
+
+function gridColor() {
+  const c = cssVar('--el-border-color-lighter')
+  return c ? `color-mix(in srgb, ${c} 60%, transparent)` : 'rgba(125,125,125,0.12)'
+}
 
 // ── Types ──
 interface StatsRow {
@@ -616,17 +623,27 @@ interface LogRow {
   input_price_snapshot?: number | null; output_price_snapshot?: number | null
 }
 
-// ── Date shortcuts ──
-const fmt = (d: Date) => d.toISOString().split('T')[0]
-const today = new Date()
-const daysAgo = (n: number) => { const d = new Date(today); d.setDate(d.getDate() - n); return d }
-const dateRange = ref<[string, string]>([fmt(daysAgo(6)), fmt(today)])
+// ── Date shortcuts（本地日期，北京时间）──
+const fmtLocal = (d: Date) => {
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+const parseLocalDate = (s: string) => {
+  const [y, m, d] = s.split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
+const initEnd = new Date()
+const initStart = new Date()
+initStart.setDate(initEnd.getDate() - 6)
+const dateRange = ref<[string, string]>([fmtLocal(initStart), fmtLocal(initEnd)])
 const dateShortcuts = [
-  { text: '今天',       value: () => [fmt(today), fmt(today)] },
-  { text: '昨天',       value: () => { const d = fmt(daysAgo(1)); return [d, d] } },
-  { text: '最近 7 天',  value: () => [fmt(daysAgo(6)), fmt(today)] },
-  { text: '最近 30 天', value: () => [fmt(daysAgo(29)), fmt(today)] },
-  { text: '本月',       value: () => [fmt(new Date(today.getFullYear(), today.getMonth(), 1)), fmt(today)] },
+  { text: '今天', value: () => { const t = new Date(); const s = fmtLocal(t); return [s, s] as [string, string] } },
+  { text: '昨天', value: () => { const d = new Date(); d.setDate(d.getDate() - 1); const s = fmtLocal(d); return [s, s] as [string, string] } },
+  { text: '最近 7 天', value: () => { const end = new Date(); const start = new Date(); start.setDate(end.getDate() - 6); return [fmtLocal(start), fmtLocal(end)] as [string, string] } },
+  { text: '最近 30 天', value: () => { const end = new Date(); const start = new Date(); start.setDate(end.getDate() - 29); return [fmtLocal(start), fmtLocal(end)] as [string, string] } },
+  { text: '本月', value: () => { const end = new Date(); const start = new Date(end.getFullYear(), end.getMonth(), 1); return [fmtLocal(start), fmtLocal(end)] as [string, string] } },
 ]
 
 // ── Date presets ──
@@ -644,7 +661,7 @@ function applyPreset(p: { label: string; days: number }) {
   const end = new Date()
   const start = new Date()
   start.setDate(end.getDate() - p.days)
-  dateRange.value = [fmt(start), fmt(end)]
+  dateRange.value = [fmtLocal(start), fmtLocal(end)]
   activePreset.value = p.label
   loadAll()
 }
@@ -697,8 +714,10 @@ async function loadMyKeys() {
 const statsLoading = ref(false)
 const statsRows = ref<StatsRow[]>([])
 const statsTotal = ref<StatsTotal | null>(null)
-const chartMetric = ref<'tokens' | 'reqs' | 'cost'>('tokens')
-const distMetric = ref<'reqs' | 'tokens'>('reqs')
+const dayStatsRows = ref<StatsRow[]>([])
+const modelStatsRows = ref<StatsRow[]>([])
+const prevPeriodTotal = ref<StatsTotal | null>(null)
+const avgDurationMs = ref<number | null>(null)
 
 // ── Logs state ──
 const logLoading = ref(false)
@@ -708,25 +727,99 @@ const logPage = ref(1)
 const logPageSize = ref(50)
 
 // ── Derived stats ──
-const successRate = computed(() => {
-  const t = statsTotal.value
-  if (!t?.req_count) return 100
-  return Math.round((t.success_count ?? t.req_count) / t.req_count * 100)
+const rangeDays = computed(() => {
+  const [from, to] = dateRange.value
+  if (!from || !to) return 1
+  const diff = parseLocalDate(to).getTime() - parseLocalDate(from).getTime()
+  return Math.max(1, Math.round(diff / 86400000) + 1)
 })
-const successRateClass = computed(() => {
-  const r = successRate.value
-  return r >= 95 ? 'c-green' : r >= 80 ? 'c-orange' : 'c-red'
+const dailyAvgCalls = computed(() => (statsTotal.value?.req_count ?? 0) / rangeDays.value)
+const dailyAvgCost = computed(() => (statsTotal.value?.est_cost_usd ?? 0) / rangeDays.value)
+const costChangePct = computed(() => {
+  const cur = statsTotal.value?.est_cost_usd ?? 0
+  const prev = prevPeriodTotal.value?.est_cost_usd ?? 0
+  if (prev <= 0) return null
+  return Math.round((cur - prev) / prev * 100)
+})
+const costChangeClass = computed(() => {
+  const p = costChangePct.value
+  if (p == null) return ''
+  return p > 0 ? 'c-red' : p < 0 ? 'c-green' : ''
+})
+const favoriteModel = computed(() => {
+  if (!modelStatsRows.value.length) return null
+  const sorted = [...modelStatsRows.value].sort((a, b) => b.req_count - a.req_count)
+  const top = sorted[0]
+  const total = modelStatsRows.value.reduce((s, r) => s + (r.req_count || 0), 0)
+  return {
+    name: top.model || '未知',
+    pct: total ? Math.round(top.req_count / total * 100) : 0,
+  }
 })
 const cacheHitPct = computed(() => {
   const t = statsTotal.value
   if (!t?.prompt_tokens) return 0
   return Math.round(t.cached_tokens / t.prompt_tokens * 100)
 })
-const avgCostPerReq = computed(() => {
-  const t = statsTotal.value
-  if (!t?.req_count) return '0.000000'
-  return (t.est_cost_usd / t.req_count).toFixed(6)
-})
+
+function buildStatsParams(groupByVal: string): Record<string, string> {
+  const params: Record<string, string> = {
+    from: dateRange.value[0],
+    to: dateRange.value[1],
+    group_by: groupByVal,
+  }
+  if (filterModelName.value) params.model_name = filterModelName.value
+  if (filterGroupName.value) params.group_name = filterGroupName.value
+  if (filterKeyId.value)     params.key_id     = filterKeyId.value
+  if (filterStatus.value)    params.status     = filterStatus.value
+  return params
+}
+
+async function loadPrevPeriodStats() {
+  const [from, to] = dateRange.value
+  if (!from || !to) return
+  const fromD = parseLocalDate(from)
+  const toD = parseLocalDate(to)
+  const days = Math.round((toD.getTime() - fromD.getTime()) / 86400000) + 1
+  const prevEnd = new Date(fromD)
+  prevEnd.setDate(prevEnd.getDate() - 1)
+  const prevStart = new Date(prevEnd)
+  prevStart.setDate(prevStart.getDate() - (days - 1))
+  try {
+    const params = buildStatsParams('day')
+    params.from = fmtLocal(prevStart)
+    params.to = fmtLocal(prevEnd)
+    const r = await http.get('/api/v1/my/usage', { params })
+    prevPeriodTotal.value = r.data.total || null
+  } catch {
+    prevPeriodTotal.value = null
+  }
+}
+
+async function loadAvgDuration() {
+  if (!dateRange.value?.[0]) return
+  try {
+    const params: Record<string, string | number> = {
+      from: dateRange.value[0],
+      to: dateRange.value[1],
+      page: 1,
+      page_size: 200,
+    }
+    if (filterModelName.value) params.model_name = filterModelName.value
+    if (filterGroupName.value) params.group_name = filterGroupName.value
+    if (filterKeyId.value)     params.key_id     = filterKeyId.value
+    if (filterStatus.value)    params.status     = filterStatus.value
+    const r = await http.get('/api/v1/my/usage/logs', { params, _silent: true } as any)
+    const rows: LogRow[] = r.data.rows || []
+    if (!rows.length) {
+      avgDurationMs.value = null
+      return
+    }
+    avgDurationMs.value = Math.round(rows.reduce((s, row) => s + (row.duration_ms || 0), 0) / rows.length)
+  } catch {
+    avgDurationMs.value = null
+  }
+}
 
 const maxPrompt     = computed(() => Math.max(...statsRows.value.map(r => r.prompt_tokens || 0), 1))
 const maxCompletion = computed(() => Math.max(...statsRows.value.map(r => r.completion_tokens || 0), 1))
@@ -762,7 +855,9 @@ const fmtTokens = (n?: number | null) => {
 const fmtDate = (s?: string) => s ? s.split('T')[0] : '—'
 const fmtDateTime = (s?: string) => {
   if (!s) return '—'
-  return s.replace('T', ' ').replace(/\.\d+Z$/, '').replace('Z', '').substring(0, 19)
+  const d = new Date(s)
+  if (isNaN(d.getTime())) return s.replace('T', ' ').replace(/\.\d+Z?$/, '').substring(0, 19)
+  return d.toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' }).replace('T', ' ')
 }
 const fmtDuration = (ms?: number) => {
   if (!ms && ms !== 0) return '—'
@@ -792,17 +887,17 @@ async function loadStats() {
   if (!dateRange.value?.[0]) return
   statsLoading.value = true
   try {
-    const params: Record<string, string> = {
-      from: dateRange.value[0], to: dateRange.value[1],
-      group_by: groupBy.value,
-    }
-    if (filterModelName.value) params.model_name = filterModelName.value
-    if (filterGroupName.value) params.group_name = filterGroupName.value
-    if (filterKeyId.value)     params.key_id     = filterKeyId.value
-    if (filterStatus.value)    params.status     = filterStatus.value
-    const r = await http.get('/api/v1/my/usage', { params })
-    statsRows.value = r.data.rows || []
-    statsTotal.value = r.data.total || null
+    const tableParams = buildStatsParams(groupBy.value)
+    const [tableRes, dayRes, modelRes] = await Promise.all([
+      http.get('/api/v1/my/usage', { params: tableParams }),
+      http.get('/api/v1/my/usage', { params: buildStatsParams('day') }),
+      http.get('/api/v1/my/usage', { params: buildStatsParams('model') }),
+    ])
+    statsRows.value = tableRes.data.rows || []
+    statsTotal.value = tableRes.data.total || null
+    dayStatsRows.value = dayRes.data.rows || []
+    modelStatsRows.value = modelRes.data.rows || []
+    await loadPrevPeriodStats()
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.details || e?.response?.data?.error || '用量查询失败')
   } finally {
@@ -843,6 +938,7 @@ function loadAll() {
   logPage.value = 1
   loadStats()
   loadLogs()
+  loadAvgDuration()
 }
 
 // ── Trace Drawer ──
@@ -943,118 +1039,248 @@ const distCanvas  = ref<HTMLCanvasElement | null>(null)
 let trendChart: Chart | null = null
 let distChart:  Chart | null = null
 
+const doughnutCenterPlugin = {
+  id: 'doughnutCenter',
+  afterDraw(chart: Chart) {
+    const ds = chart.data.datasets[0]
+    if (!ds?.data?.length) return
+    const total = (ds.data as number[]).reduce((a, b) => a + b, 0)
+    const { left, right, top, bottom } = chart.chartArea
+    const x = (left + right) / 2
+    const y = (top + bottom) / 2
+    const colors = chartTheme()
+    const ctx = chart.ctx
+    ctx.save()
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.font = 'bold 18px sans-serif'
+    ctx.fillStyle = colors.textPrimary
+    ctx.fillText(fmtNum(total), x, y - 6)
+    ctx.font = '11px sans-serif'
+    ctx.fillStyle = colors.textSecondary
+    ctx.fillText('总调用', x, y + 14)
+    ctx.restore()
+  },
+}
+
 function renderTrend() {
   const canvas = trendCanvas.value
-  if (!canvas || !statsRows.value.length) return
+  if (!canvas || !dayStatsRows.value.length) return
   trendChart?.destroy()
 
-  const labels = statsRows.value.map(r =>
-    groupBy.value === 'day' ? fmtDate(r.stat_date) : (r.model || '未知')
+  const colors = chartTheme()
+  const sorted = [...dayStatsRows.value].sort((a, b) =>
+    (a.stat_date || '').localeCompare(b.stat_date || '')
   )
-
-  const isLine = groupBy.value === 'day' && statsRows.value.length > 1
-  const type = isLine ? 'line' : 'bar'
-
-  let datasets: any[]
-  if (chartMetric.value === 'tokens') {
-    datasets = [
-      { label: '输入', data: statsRows.value.map(r => r.prompt_tokens), backgroundColor: CHART_C.input + '33', borderColor: CHART_C.input, borderWidth: 2, fill: true, tension: 0.35, pointRadius: 0, pointHoverRadius: 4 },
-      { label: '输出', data: statsRows.value.map(r => r.completion_tokens), backgroundColor: CHART_C.output + '33', borderColor: CHART_C.output, borderWidth: 2, fill: true, tension: 0.35, pointRadius: 0, pointHoverRadius: 4 },
-      { label: '缓存', data: statsRows.value.map(r => r.cached_tokens), backgroundColor: CHART_C.cache + '22', borderColor: CHART_C.cache, borderWidth: 1.5, borderDash: [4, 3], fill: false, tension: 0.35, pointRadius: 0, pointHoverRadius: 4 },
-    ]
-  } else if (chartMetric.value === 'cost') {
-    datasets = [{ label: '成本 (USD)', data: statsRows.value.map(r => r.est_cost_usd), backgroundColor: CHART_C.cost + '33', borderColor: CHART_C.cost, borderWidth: 2, fill: true, tension: 0.35, pointRadius: 0, pointHoverRadius: 4 }]
-  } else {
-    datasets = [
-      { label: '调用', data: statsRows.value.map(r => r.req_count), backgroundColor: CHART_C.req + '33', borderColor: CHART_C.req, borderWidth: 2, fill: true, tension: 0.35, pointRadius: 0, pointHoverRadius: 4 },
-      { label: '成功', data: statsRows.value.map(r => r.success_count ?? r.req_count), backgroundColor: CHART_C.output + '22', borderColor: CHART_C.output, borderWidth: 2, fill: false, tension: 0.35, pointRadius: 0, pointHoverRadius: 4 },
-    ]
-  }
+  const labels = sorted.map(r => fmtDate(r.stat_date))
 
   trendChart = new Chart(canvas, {
-    type,
-    data: { labels, datasets },
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: '调用次数',
+          data: sorted.map(r => r.req_count),
+          yAxisID: 'y',
+          borderColor: colors.warning,
+          backgroundColor: colors.warning + '33',
+          borderWidth: 2,
+          fill: true,
+          tension: 0.35,
+          pointRadius: 2,
+          pointHoverRadius: 5,
+        },
+        {
+          label: '成本 (USD)',
+          data: sorted.map(r => r.est_cost_usd),
+          yAxisID: 'y1',
+          borderColor: colors.primary,
+          backgroundColor: colors.primary + '22',
+          borderWidth: 2,
+          fill: false,
+          tension: 0.35,
+          pointRadius: 2,
+          pointHoverRadius: 5,
+        },
+      ],
+    },
     options: {
-      responsive: true, maintainAspectRatio: false,
+      responsive: true,
+      maintainAspectRatio: false,
       interaction: { intersect: false, mode: 'index' },
       plugins: {
-        legend: { position: 'top', labels: { usePointStyle: true, pointStyle: 'line', padding: 12, color: '#64748B', font: { size: 11 } } },
+        legend: {
+          position: 'top',
+          labels: {
+            usePointStyle: true,
+            pointStyle: 'line',
+            padding: 12,
+            color: colors.textRegular,
+            font: { size: 11 },
+          },
+        },
         tooltip: {
           callbacks: {
             label: ctx => {
               const v = ctx.raw as number
-              if (chartMetric.value === 'cost') return `${ctx.dataset.label}: $${v.toFixed(4)}`
-              if (chartMetric.value === 'tokens') return `${ctx.dataset.label}: ${fmtTokens(v)}`
+              if (ctx.datasetIndex === 1) return `${ctx.dataset.label}: $${v.toFixed(4)}`
               return `${ctx.dataset.label}: ${fmtNum(v)}`
-            }
-          }
-        }
+            },
+          },
+        },
       },
       scales: {
-        x: { grid: { color: 'rgba(125,125,125,0.12)' }, border: { display: false }, ticks: { color: '#94A3B8', font: { size: 10 }, maxRotation: 30 } },
-        y: { grid: { color: 'rgba(125,125,125,0.12)' }, border: { display: false }, ticks: { color: '#94A3B8', font: { size: 10 }, callback: (v: any) => chartMetric.value === 'tokens' ? fmtTokens(v) : chartMetric.value === 'cost' ? `$${Number(v).toFixed(2)}` : fmtNum(v) } }
-      }
-    }
-  } as any)
+        x: {
+          grid: { color: gridColor() },
+          border: { display: false },
+          ticks: { color: colors.textSecondary, font: { size: 10 }, maxRotation: 30 },
+        },
+        y: {
+          type: 'linear',
+          position: 'left',
+          grid: { color: gridColor() },
+          border: { display: false },
+          ticks: { color: colors.textSecondary, font: { size: 10 }, callback: (v: any) => fmtNum(v) },
+        },
+        y1: {
+          type: 'linear',
+          position: 'right',
+          grid: { drawOnChartArea: false },
+          border: { display: false },
+          ticks: { color: colors.textSecondary, font: { size: 10 }, callback: (v: any) => `$${Number(v).toFixed(2)}` },
+        },
+      },
+    },
+  })
 }
 
 function renderDist() {
   const canvas = distCanvas.value
-  if (!canvas || !statsRows.value.length) return
+  if (!canvas || !modelStatsRows.value.length) return
   distChart?.destroy()
 
-  const modelMap = new Map<string, { reqs: number; tokens: number }>()
-  for (const r of statsRows.value) {
-    const key = groupBy.value === 'model' ? (r.model || '未知') : fmtDate(r.stat_date)
-    const cur = modelMap.get(key) || { reqs: 0, tokens: 0 }
-    modelMap.set(key, { reqs: cur.reqs + r.req_count, tokens: cur.tokens + r.prompt_tokens + r.completion_tokens })
-  }
-  const sorted = [...modelMap.entries()]
-    .sort((a, b) => b[1][distMetric.value === 'reqs' ? 'reqs' : 'tokens'] - a[1][distMetric.value === 'reqs' ? 'reqs' : 'tokens'])
+  const colors = chartTheme()
+  const sorted = [...modelStatsRows.value]
+    .sort((a, b) => b.req_count - a.req_count)
     .slice(0, 8)
-  const labels = sorted.map(([k]) => k)
-  const data = sorted.map(([, v]) => distMetric.value === 'reqs' ? v.reqs : v.tokens)
+  const labels = sorted.map(r => r.model || '未知')
+  const data = sorted.map(r => r.req_count)
+  const total = data.reduce((a, b) => a + b, 0)
+  const palette = CHART_PALETTE.map(c => c + 'CC')
 
   distChart = new Chart(canvas, {
-    type: 'bar',
+    type: 'doughnut',
     data: {
       labels,
       datasets: [{
-        label: distMetric.value === 'reqs' ? '调用次数' : 'Token 用量',
         data,
-        backgroundColor: CHART_PALETTE.map(c => c + 'CC'),
-        borderColor:     CHART_PALETTE,
-        borderWidth: 0, borderRadius: 6, barThickness: 'flex', maxBarThickness: 26
-      }]
+        backgroundColor: palette.slice(0, data.length),
+        borderColor: CHART_PALETTE.slice(0, data.length),
+        borderWidth: 1,
+      }],
     },
+    plugins: [doughnutCenterPlugin],
     options: {
-      responsive: true, maintainAspectRatio: false, indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '62%',
       plugins: {
-        legend: { display: false },
-        tooltip: { callbacks: { label: ctx => distMetric.value === 'reqs' ? `${fmtNum(ctx.raw as number)} 次` : fmtTokens(ctx.raw as number) } }
+        legend: {
+          position: 'right',
+          labels: {
+            color: colors.textRegular,
+            font: { size: 11 },
+            padding: 10,
+            usePointStyle: true,
+            generateLabels(chart) {
+              const ds = chart.data.datasets[0]
+              return (chart.data.labels || []).map((label, i) => {
+                const value = (ds.data[i] as number) || 0
+                const pct = total ? Math.round(value / total * 100) : 0
+                return {
+                  text: `${label} (${pct}%)`,
+                  fillStyle: (ds.backgroundColor as string[])[i],
+                  strokeStyle: (ds.borderColor as string[])[i],
+                  lineWidth: 1,
+                  hidden: false,
+                  index: i,
+                  pointStyle: 'circle',
+                }
+              })
+            },
+          },
+        },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const v = ctx.raw as number
+              const pct = total ? Math.round(v / total * 100) : 0
+              return `${ctx.label}: ${fmtNum(v)} 次 (${pct}%)`
+            },
+          },
+        },
       },
-      scales: {
-        x: { grid: { color: 'rgba(125,125,125,0.12)' }, border: { display: false }, ticks: { color: '#94A3B8', font: { size: 10 }, callback: (v: any) => distMetric.value === 'reqs' ? fmtNum(v) : fmtTokens(v) } },
-        y: { grid: { display: false }, border: { display: false }, ticks: { color: '#64748B', font: { size: 11 } } }
-      }
-    }
+    },
   })
 }
 
 // ── Export ──
-function handleExport() {
-  if (!logRows.value.length) return
-  const keys = Object.keys(logRows.value[0] || {})
-  const csv = [keys.join(','), ...logRows.value.map(r => keys.map(k => JSON.stringify((r as any)[k] ?? '')).join(','))].join('\n')
-  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' })
-  Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `my_logs_${dateRange.value[0]}_${dateRange.value[1]}.csv` }).click()
+const EXPORT_COLUMNS: { key: keyof LogRow | string; label: string }[] = [
+  { key: 'request_id', label: '请求ID' },
+  { key: 'ts', label: '时间' },
+  { key: 'model', label: '模型' },
+  { key: 'key_id', label: 'Key' },
+  { key: 'status', label: '状态' },
+  { key: 'duration_ms', label: '耗时ms' },
+  { key: 'prompt_tokens', label: '输入Token' },
+  { key: 'completion_tokens', label: '输出Token' },
+  { key: 'cached_tokens', label: '缓存Token' },
+  { key: 'est_cost_usd', label: '成本' },
+]
+
+function csvEscape(v: unknown): string {
+  const s = v == null ? '' : String(v)
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`
+  return s
 }
 
-watch(distMetric, () => { if (statsRows.value.length) renderDist() })
+function handleExport() {
+  if (!logRows.value.length) return
+  const header = EXPORT_COLUMNS.map(c => csvEscape(c.label)).join(',')
+  const body = logRows.value.map(row =>
+    EXPORT_COLUMNS.map(c => csvEscape((row as any)[c.key])).join(',')
+  ).join('\n')
+  const csv = [header, body].join('\n')
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' })
+  Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(blob),
+    download: `my_logs_${dateRange.value[0]}_${dateRange.value[1]}.csv`,
+  }).click()
+}
+
+function rerenderCharts() {
+  if (dayStatsRows.value.length) renderTrend()
+  if (modelStatsRows.value.length) renderDist()
+}
+
+watch(isDark, () => nextTick(() => rerenderCharts()))
+
+let themeObserver: MutationObserver | null = null
+onUnmounted(() => {
+  trendChart?.destroy()
+  distChart?.destroy()
+  themeObserver?.disconnect()
+})
 
 // init
 loadMyKeys()
 loadAll()
+
+if (typeof MutationObserver !== 'undefined') {
+  themeObserver = new MutationObserver(() => rerenderCharts())
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+}
 </script>
 
 <style scoped>
@@ -1111,29 +1337,38 @@ loadAll()
   gap: 8px;
   flex-wrap: wrap;
   padding: 10px 16px;
-  background: #fff;
+  background: var(--el-bg-color);
   border-radius: 10px;
   margin-bottom: 16px;
-  border: 1px solid #ebeef5;
+  border: 1px solid var(--el-border-color);
   box-shadow: 0 1px 4px rgba(0,0,0,.04);
 }
 .mu-presets { display: flex; align-items: center; gap: 4px; }
 .mu-preset-btn {
   padding: 3px 10px;
   border-radius: 20px;
-  border: 1px solid #dcdfe6;
-  background: #f5f7fa;
-  color: #606266;
+  border: 1px solid var(--el-border-color);
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-regular);
   font-size: 12px;
   cursor: pointer;
   transition: all .15s;
   white-space: nowrap;
   line-height: 1.6;
 }
-.mu-preset-btn:hover { border-color: #409eff; color: #409eff; background: #ecf5ff; }
-.mu-preset-btn--active { border-color: #409eff; color: #fff; background: #409eff; font-weight: 500; }
+.mu-preset-btn:hover {
+  border-color: var(--el-color-primary);
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+.mu-preset-btn--active {
+  border-color: var(--el-color-primary);
+  color: #fff;
+  background: var(--el-color-primary);
+  font-weight: 500;
+}
 .mu-filter__date { width: 195px; flex-shrink: 0; }
-.mu-filter-divider { width: 1px; height: 22px; background: #e4e7ed; margin: 0 4px; flex-shrink: 0; }
+.mu-filter-divider { width: 1px; height: 22px; background: var(--el-border-color); margin: 0 4px; flex-shrink: 0; }
 .mu-filter__chip { width: 130px; flex-shrink: 0; }
 .mu-filter__chip--key { width: 140px; }
 .mu-filter__status { width: 92px; flex-shrink: 0; }
@@ -1185,7 +1420,8 @@ loadAll()
   font-variant-numeric: tabular-nums;
 }
 .mu-stat-card__sub  { font-size: 12px; color: var(--mu-muted); margin: 0; display: flex; gap: 5px; flex-wrap: wrap; }
-.mu-stat-card__rate { font-weight: 600; }
+.mu-stat-card__value--model { font-size: 18px; }
+.mu-stat-card__unit { font-size: 16px; font-weight: 600; margin-left: 2px; }
 
 /* ── 图表区 ── */
 .mu-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -1204,6 +1440,7 @@ loadAll()
   background: var(--el-color-primary);
 }
 .mu-chart-card__body { padding: 14px 16px; height: 228px; position: relative; }
+.mu-chart-card__body--doughnut { height: 260px; }
 
 /* ── 区块 ── */
 .mu-section { overflow: hidden; }
@@ -1386,9 +1623,9 @@ loadAll()
   text-transform: uppercase; letter-spacing: .05em;
   background: var(--el-fill-color-light); color: var(--el-text-color-secondary);
 }
-.mu-msg--system    .mu-msg-role { background: #fef3c7; color: #92400e; }
-.mu-msg--user      .mu-msg-role { background: #dbeafe; color: #1e40af; }
-.mu-msg--assistant .mu-msg-role { background: #d1fae5; color: #065f46; }
+.mu-msg--system    .mu-msg-role { background: var(--el-color-warning-light-9); color: var(--el-color-warning-dark-2); }
+.mu-msg--user      .mu-msg-role { background: var(--el-color-primary-light-9); color: var(--el-color-primary-dark-2); }
+.mu-msg--assistant .mu-msg-role { background: var(--el-color-success-light-9); color: var(--el-color-success-dark-2); }
 .mu-msg-content {
   margin: 0; padding: 12px; font-size: 12.5px; line-height: 1.65;
   white-space: pre-wrap; word-break: break-word;
@@ -1402,9 +1639,9 @@ loadAll()
   margin: 0; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all;
   font-family: 'SFMono-Regular', monospace;
 }
-.mu-error-block { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 16px; }
-.mu-error-code  { font-size: 11px; font-weight: 700; color: #dc2626; text-transform: uppercase; margin-bottom: 8px; }
-.mu-error-msg   { margin: 0; font-size: 12.5px; color: #7f1d1d; white-space: pre-wrap; word-break: break-word; }
+.mu-error-block { background: var(--el-color-danger-light-9); border: 1px solid var(--el-color-danger-light-5); border-radius: 8px; padding: 16px; }
+.mu-error-code  { font-size: 11px; font-weight: 700; color: var(--el-color-danger); text-transform: uppercase; margin-bottom: 8px; }
+.mu-error-msg   { margin: 0; font-size: 12.5px; color: var(--el-color-danger-dark-2); white-space: pre-wrap; word-break: break-word; }
 .mu-meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .mu-meta-section { background: var(--el-fill-color-light); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
 .mu-meta-heading { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--el-text-color-secondary); margin-bottom: 4px; border-bottom: 1px solid var(--el-border-color-lighter); padding-bottom: 6px; }

@@ -1,10 +1,9 @@
 import { ToastNotifier } from '../ui/toast-notifier'
 import { categorizeModel, formatModelName, extractModelOwner } from '../utils'
-import { summarizeProviders, writeDiscoverySnapshot, readPreviousSnapshot, findNewModels } from '../utils/discovery-report'
+import { summarizeProviders, writeDiscoverySnapshot } from '../utils/discovery-report'
 import { normalizeBaseURL, discoverModelsFromProvider, discoverModelInfoFromProvider, autoDetectOpenAICompatibleProvider, canDiscoverModels } from '../utils/openai-compatible-api'
 import { createModelInfoEnricher, isSupportedModelInfoFormat, type ModelInfoEnricher } from '../utils/model-info'
 import { getProviderFilter, getDiscoveryConfig, getModelRegexFilter, getProviderModelRegexFilter, shouldDiscoverModel, shouldDiscoverProviderWithOverride } from '../types/plugin-config'
-import { PLUGIN_VERSION } from '../version'
 import type { PluginLogger } from './logger'
 import type { PluginInput } from '@opencode-ai/plugin'
 import type { OpenAIModel } from '../types'
@@ -193,35 +192,21 @@ export async function enhanceConfig(
         reasoning: summary.reasoning,
       })
 
-      const previousSnapshot = await readPreviousSnapshot()
-      const newModels = findNewModels(openAICompatibleProviders, previousSnapshot)
-
+      // 写快照（聚合全部 provider）+ 启动摘要 toast，方便确认能力是否被正确加载
+      //（发现的模型只在内存、不写 opencode.json）。
       await writeDiscoverySnapshot(openAICompatibleProviders, summary, logger)
-
-      // 延迟 1 秒等待 TUI 初始化完成后再发送 toast
-      setTimeout(() => {
-        for (const prov of openAICompatibleProviders) {
-          const provSummary = summarizeProviders([prov])
-          
-          let message = `发现 ${provSummary.models} 个模型`
-          if (provSummary.vision > 0) message += ` · 图像 ${provSummary.vision}`
-          if (provSummary.toolCall > 0) message += ` · 工具 ${provSummary.toolCall}`
-          if (provSummary.reasoning > 0) message += ` · 推理 ${provSummary.reasoning}`
-
-          toastNotifier
-            .info(message, `${prov.name} · v${PLUGIN_VERSION}`, 10000)
-            .catch(() => {})
-        }
-
-        if (newModels.length > 0) {
-          const modelList = newModels.length <= 5
-            ? newModels.join(', ')
-            : `${newModels.slice(0, 5).join(', ')} 等 ${newModels.length} 个`
-          toastNotifier
-            .success(`网关上新: ${modelList}`, '新模型', 15000)
-            .catch(() => {})
-        }
-      }, 1000)
+      // 按 provider 分别提示：标题用各自的供应商名称，数量是各自发现到的模型数，
+      // 避免多个开启发现的网关被混在一起加总，造成"为什么是 N 个"的困惑。
+      for (const prov of openAICompatibleProviders) {
+        const provSummary = summarizeProviders([prov])
+        toastNotifier
+          .info(
+            `发现 ${provSummary.models} 个模型 · 图像输入 ${provSummary.vision} · 工具调用 ${provSummary.toolCall} · 推理 ${provSummary.reasoning}`,
+            `${prov.name} · 模型发现`,
+            10000,
+          )
+          .catch(() => {})
+      }
     }
 
     if (Object.keys(providers).length === 0) {

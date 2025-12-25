@@ -13,6 +13,7 @@ import (
 )
 
 // AuthMiddleware provides unified authentication (API key via auth service + JWT).
+// Replaces the old APIKeyAuth middleware.
 // 同时支持两种 Header 格式：
 //   - OpenAI 兼容格式：Authorization: Bearer sk-xxx
 //   - Anthropic 原生格式：x-api-key: sk-xxx（Claude Code 等客户端使用）

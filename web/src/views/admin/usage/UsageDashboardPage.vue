@@ -233,7 +233,7 @@
                 <td>
                   <div class="ud-bar-wrap">
                     <div class="ud-bar-bg">
-                      <div class="ud-bar-fill ud-bar-fill--cost" :style="{ width: barPct(row.cost_estimate, totalCost) + '%' }" />
+                      <div class="ud-bar-fill ud-bar-fill--cost" :style="{ width: barPct(row.cost_estimate, maxCost) + '%' }" />
                     </div>
                     <span class="ud-bar-pct">{{ barPct(row.cost_estimate, totalCost) }}%</span>
                   </div>

@@ -33,10 +33,8 @@ func (p *Provider) StreamChatCompletion(ctx context.Context, req *core.ChatReque
 		return nil, err
 	}
 
-	// Honour stream_options.include_usage: emit a standalone usage-only chunk
-	// (choices:[]) before [DONE] so clients can reliably collect token counts.
-	includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
-	return newStreamConverter(stream, req.Model, includeUsage), nil
+	// Return a reader that converts Anthropic SSE format to OpenAI format
+	return newStreamConverter(stream, req.Model), nil
 }
 
 // streamConverter wraps an Anthropic stream and converts it to OpenAI format
@@ -48,26 +46,11 @@ type streamConverter struct {
 	nextToolCallIndex int
 	toolCalls         map[int]*streamToolCallState
 	thinkingBlocks    map[int]bool // tracks which content block indices are thinking blocks
-	// thinkingBlockStates accumulates the full thinking + signature for each
-	// thinking block by content-block index. This is needed to reconstruct
-	// thinking_blocks in the finish delta so Claude Code can pass them back
-	// verbatim on the next turn (Anthropic verifies the signature).
-	thinkingBlockStates map[int]*streamThinkingBlockState
-	usage               anthropicUsage
-	hasUsage            bool
-	buffer              streaming.StreamBuffer
-	closed              bool
-	emittedToolCalls    bool
-	// includeUsage controls whether a standalone usage-only chunk is emitted
-	// after the finish chunk, conforming to the OpenAI stream_options.include_usage spec.
-	includeUsage   bool
-	sentUsageChunk bool
-}
-
-// streamThinkingBlockState accumulates thinking text and signature for one block.
-type streamThinkingBlockState struct {
-	thinking  strings.Builder
-	signature string
+	usage             anthropicUsage
+	hasUsage          bool
+	buffer            streaming.StreamBuffer
+	closed            bool
+	emittedToolCalls  bool
 }
 
 type streamToolCallState struct {
@@ -79,16 +62,14 @@ type streamToolCallState struct {
 	PlaceholderObject bool
 }
 
-func newStreamConverter(body io.ReadCloser, model string, includeUsage bool) *streamConverter {
+func newStreamConverter(body io.ReadCloser, model string) *streamConverter {
 	return &streamConverter{
-		reader:              bufio.NewReader(body),
-		body:                body,
-		model:               model,
-		toolCalls:           make(map[int]*streamToolCallState),
-		thinkingBlocks:      make(map[int]bool),
-		thinkingBlockStates: make(map[int]*streamThinkingBlockState),
-		buffer:              streaming.NewStreamBuffer(1024),
-		includeUsage:        includeUsage,
+		reader:         bufio.NewReader(body),
+		body:           body,
+		model:          model,
+		toolCalls:      make(map[int]*streamToolCallState),
+		thinkingBlocks: make(map[int]bool),
+		buffer:         streaming.NewStreamBuffer(1024),
 	}
 }
 
@@ -127,17 +108,6 @@ func (sc *streamConverter) Read(p []byte) (n int, err error) {
 		line, err := sc.reader.ReadBytes('\n')
 		if err != nil {
 			if err == io.EOF {
-				// When stream_options.include_usage is set, emit a standalone usage-only
-				// chunk (choices:[]) before [DONE], matching the OpenAI specification.
-				// This lets clients like Claude Code reliably collect token usage by
-				// watching for the chunk where choices is empty and usage is non-null.
-				if sc.includeUsage && !sc.sentUsageChunk && sc.hasUsage {
-					sc.sentUsageChunk = true
-					usageChunk := sc.formatUsageOnlyChunk()
-					if usageChunk != "" {
-						sc.buffer.AppendString(usageChunk)
-					}
-				}
 				// Send final [DONE] message
 				sc.buffer.AppendString("data: [DONE]\n\n")
 				n = sc.buffer.Read(p)
@@ -215,33 +185,6 @@ func (sc *streamConverter) formatChatChunk(delta map[string]any, finishReason an
 	return fmt.Sprintf("data: %s\n\n", jsonData)
 }
 
-// formatUsageOnlyChunk returns an OpenAI-spec usage-only SSE chunk:
-//
-//	{"choices":[], "usage":{...}}
-//
-// This is emitted as the last data frame before [DONE] when
-// stream_options.include_usage is true, matching the OpenAI streaming contract.
-func (sc *streamConverter) formatUsageOnlyChunk() string {
-	if !sc.hasUsage {
-		return ""
-	}
-	chunk := map[string]any{
-		"id":       sc.msgID,
-		"object":   "chat.completion.chunk",
-		"created":  time.Now().Unix(),
-		"model":    sc.model,
-		"provider": "anthropic",
-		"choices":  []any{},
-		"usage":    anthropicChatUsagePayload(&sc.usage),
-	}
-	jsonData, err := json.Marshal(chunk)
-	if err != nil {
-		slog.Error("failed to marshal usage-only chunk", "error", err, "msg_id", sc.msgID)
-		return ""
-	}
-	return fmt.Sprintf("data: %s\n\n", jsonData)
-}
-
 func (sc *streamConverter) convertEvent(event *anthropicStreamEvent) string {
 	switch event.Type {
 	case "message_start":
@@ -269,7 +212,6 @@ func (sc *streamConverter) convertEvent(event *anthropicStreamEvent) string {
 	case "content_block_start":
 		if event.ContentBlock != nil && event.ContentBlock.Type == "thinking" {
 			sc.thinkingBlocks[event.Index] = true
-			sc.thinkingBlockStates[event.Index] = &streamThinkingBlockState{}
 			return ""
 		}
 		if event.ContentBlock != nil && event.ContentBlock.Type == "tool_use" {
@@ -317,21 +259,13 @@ func (sc *streamConverter) convertEvent(event *anthropicStreamEvent) string {
 		switch event.Delta.Type {
 		case "thinking_delta":
 			if sc.thinkingBlocks[event.Index] && event.Delta.Thinking != "" {
-				// Accumulate for thinking_blocks reconstruction at finish time.
-				if state, ok := sc.thinkingBlockStates[event.Index]; ok {
-					state.thinking.WriteString(event.Delta.Thinking)
-				}
 				return sc.formatChatChunk(map[string]any{
 					"reasoning_content": event.Delta.Thinking,
 				}, nil, nil)
 			}
 		case "signature_delta":
-			// Store the signature so we can include it in thinking_blocks at finish.
-			// The signature is Anthropic-internal and must be preserved verbatim for
-			// multi-turn extended thinking — it is not forwarded as a delta to clients.
-			if state, ok := sc.thinkingBlockStates[event.Index]; ok {
-				state.signature = event.Delta.Signature
-			}
+			// Signature deltas are internal to Anthropic's thinking protocol;
+			// no OpenAI-compatible equivalent to emit.
 			return ""
 		case "text_delta":
 			if event.Delta.Text != "" {
@@ -417,14 +351,7 @@ func (sc *streamConverter) convertEvent(event *anthropicStreamEvent) string {
 			if sc.hasUsage {
 				usage = &sc.usage
 			}
-			// Build the finish delta, injecting thinking_blocks when present.
-			// Clients (e.g. Claude Code) use thinking_blocks to echo back the
-			// thinking content with its signature on the next request turn.
-			finishDelta := map[string]any{}
-			if blocks := sc.buildThinkingBlocksPayload(); len(blocks) > 0 {
-				finishDelta["thinking_blocks"] = blocks
-			}
-			return sc.formatChatChunk(finishDelta, finishReason, usage)
+			return sc.formatChatChunk(map[string]any{}, finishReason, usage)
 		}
 
 	case "message_stop":
@@ -432,42 +359,4 @@ func (sc *streamConverter) convertEvent(event *anthropicStreamEvent) string {
 	}
 
 	return ""
-}
-
-// buildThinkingBlocksPayload returns the accumulated thinking blocks as a slice
-// of maps ready for JSON serialisation. The slice preserves the original content
-// block order (ascending index). Blocks with neither thinking text nor signature
-// are omitted. Returns nil when no thinking blocks were collected.
-func (sc *streamConverter) buildThinkingBlocksPayload() []map[string]any {
-	if len(sc.thinkingBlockStates) == 0 {
-		return nil
-	}
-
-	// Collect indices in ascending order to preserve block ordering.
-	indices := make([]int, 0, len(sc.thinkingBlockStates))
-	for idx := range sc.thinkingBlockStates {
-		indices = append(indices, idx)
-	}
-	// Simple insertion sort — block counts are tiny (usually 1–3).
-	for i := 1; i < len(indices); i++ {
-		for j := i; j > 0 && indices[j] < indices[j-1]; j-- {
-			indices[j], indices[j-1] = indices[j-1], indices[j]
-		}
-	}
-
-	var out []map[string]any
-	for _, idx := range indices {
-		state := sc.thinkingBlockStates[idx]
-		thinking := state.thinking.String()
-		if thinking == "" && state.signature == "" {
-			continue
-		}
-		block := map[string]any{
-			"type":      "thinking",
-			"thinking":  thinking,
-			"signature": state.signature,
-		}
-		out = append(out, block)
-	}
-	return out
 }

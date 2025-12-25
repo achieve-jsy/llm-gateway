@@ -7,7 +7,7 @@ import { createPluginLogger } from './logger'
 import { parsePluginConfig, type PluginConfig } from '../types/plugin-config'
 
 export const ModelDiscoveryPlugin: Plugin = async (input: PluginInput, options?: PluginOptions) => {
-  const { client, directory } = input
+  const { client } = input
   const logger = createPluginLogger(client, { category: 'plugin' })
 
   if (!client || typeof client !== 'object') {
@@ -19,7 +19,7 @@ export const ModelDiscoveryPlugin: Plugin = async (input: PluginInput, options?:
     }
   }
 
-  logger.info('Model discovery plugin initialized', { directory })
+  logger.info('Model discovery plugin initialized')
 
   const pluginConfig: PluginConfig = parsePluginConfig(options || {})
 
@@ -27,7 +27,7 @@ export const ModelDiscoveryPlugin: Plugin = async (input: PluginInput, options?:
     logger.info('Discovery disabled by configuration', { category: 'config' })
   }
 
-  const toastNotifier = new ToastNotifier(client, directory)
+  const toastNotifier = new ToastNotifier(client)
 
   return {
     config: createConfigHook(client, toastNotifier, pluginConfig, logger.child({ category: 'config' })),
@@ -35,3 +35,5 @@ export const ModelDiscoveryPlugin: Plugin = async (input: PluginInput, options?:
     "chat.params": createChatParamsHook(toastNotifier, pluginConfig),
   }
 }
+
+//export const LMStudioPlugin = ModelDiscoveryPlugin

@@ -99,13 +99,9 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	healthCheckSvc.SetSnapshotRefresher(snapshotter)
 
 	groupRepo := repository.NewGroupRepo(db)
-	entRepo := repository.NewGroupEntitlementRepo(db)
-	groupEntitlementSvc := service.NewGroupEntitlementService(groupRepo, entRepo)
-
 	keyGroupRepo := repository.NewKeyGroupRepo(db)
 	keyGroupSvc := service.NewKeyGroupService(keyGroupRepo, groupRepo, keyRepo, service.NewEventPublisherAdapter(publisher))
 	keySvc := service.NewKeyService(keyRepo, keyGroupSvc, service.NewEventPublisherAdapter(publisher))
-	keySvc.SetUsableGroupsComputer(groupEntitlementSvc)
 
 	// KeyOrgSyncer：org 变动后异步同步 api_keys org 字段并失效 KeyCache
 	keyOrgSyncer := service.NewKeyOrgSyncer(db, service.NewEventPublisherAdapter(publisher))

@@ -398,6 +398,21 @@ func unmarshalContentPart(data []byte) (ContentPart, error) {
 			InputAudio:  audio,
 			ExtraFields: extraFields,
 		}, nil
+	case "thinking", "redacted_thinking":
+		// Anthropic extended thinking blocks are passed back verbatim in multi-turn
+		// conversations. They carry an encrypted signature that Anthropic validates
+		// on subsequent requests; we preserve all fields via ExtraFields so the
+		// Anthropic provider can reconstruct the exact block on the way out.
+		// The text field (if present) is stored in ContentPart.Text for convenience.
+		text := ""
+		if raw.Text != nil {
+			text = *raw.Text
+		}
+		return ContentPart{
+			Type:        raw.Type,
+			Text:        text,
+			ExtraFields: extraFields,
+		}, nil
 	default:
 		return ContentPart{}, fmt.Errorf("unsupported content part type %q", raw.Type)
 	}
@@ -439,6 +454,13 @@ func normalizeTypedContentPart(part ContentPart) (ContentPart, error) {
 				Format:      part.InputAudio.Format,
 				ExtraFields: CloneUnknownJSONFields(part.InputAudio.ExtraFields),
 			},
+			ExtraFields: CloneUnknownJSONFields(part.ExtraFields),
+		}, nil
+	case "thinking", "redacted_thinking":
+		// Pass through verbatim — all payload fields live in ExtraFields.
+		return ContentPart{
+			Type:        part.Type,
+			Text:        part.Text,
 			ExtraFields: CloneUnknownJSONFields(part.ExtraFields),
 		}, nil
 	default:

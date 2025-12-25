@@ -117,11 +117,11 @@ src/
 │   ├── chat-params-hook.ts       # chat.params hook
 │   ├── event-hook.ts             # event hook
 │   └── logger.ts
-├── ui/toast-notifier.ts          # 封装 client.tui.showToast
+├── ui/toast-notifier.ts          # 封装 client.tui.showToast（需 directory 参数）
 ├── utils/
 │   ├── openai-compatible-api.ts  # /v1/models 与 /v1/model/info 拉取
 │   ├── self-update.ts            # 自更新：比对版本、下载覆盖、提示重启
-│   ├── discovery-report.ts       # 发现快照 + 摘要
+│   ├── discovery-report.ts       # 发现快照读写 + 新模型检测 + 摘要统计
 │   ├── model-info/litellm.ts     # LiteLLM 能力 → OpenCode 字段映射
 │   └── ...
 └── types/
@@ -139,7 +139,44 @@ OpenCode 的本地插件目录是**复数 `plugins/`**（单数 `plugin/` 在新
 
 OpenCode 启动时自动加载该目录下的 `.js`/`.ts`，**无需**在 `opencode.json` 的 `plugin` 数组里登记。脚本同时会清理旧的单数 `plugin/` 副本，避免重复加载或加载到旧版本。
 
-### 4.3 发现与富化流程（`enhance-config.ts`）
+### 4.3 插件生命周期
+
+```
+OpenCode 启动
+    │
+    ▼
+加载插件 → ModelDiscoveryPlugin(input, options)
+    │
+    ├─ 从 PluginInput 获取 client, directory
+    ├─ 创建 ToastNotifier(client, directory)
+    │
+    ▼
+返回 Hooks { config, event, chat.params }
+    │
+    ▼
+config hook 被调用
+    │
+    ├─ 验证配置有效性
+    ├─ 触发自更新检查（异步，不阻塞）
+    │
+    ▼
+enhanceConfig() 执行（5 秒超时）
+    │
+    ├─ 读取上次快照（~/.config/opencode/plugins/models-discovery.snapshot.json）
+    ├─ 遍历 config.provider，按条件发现模型
+    ├─ 拉取 /v1/models 和 /v1/model/info
+    ├─ 富化模型能力，注入到 provider.models
+    ├─ 对比新旧快照，找出新增模型
+    ├─ 写入新快照
+    │
+    ▼
+延迟 5 秒后发送 Toast 通知
+    │
+    ├─ 显示："{provider} · v{版本}" / "发现 N 个模型 · 图像 X · 工具 Y"
+    └─ 若有新模型：显示 "网关上新: {模型列表}"
+```
+
+### 4.4 发现与富化流程（`enhance-config.ts`）
 
 对 `config.provider` 里每个 provider：
 
@@ -149,9 +186,67 @@ OpenCode 启动时自动加载该目录下的 `.js`/`.ts`，**无需**在 `openc
 4. **逐模型注入**：跳过已存在/embedding/被过滤的模型，对其余模型：
    - 用 `model-info/litellm.ts` 把 `supports_vision` → `attachment` & `modalities.input` 含 `image`、`supports_function_calling|tool_choice` → `tool_call`、`supports_reasoning` → `reasoning`、`max_*_tokens` → `limit`；
    - 无能力信息时**保守**回退为纯文本 `modalities: { input: ["text"], output: ["text"] }`，不盲目假设图像支持。
-5. **可见性**：写发现快照 `~/.config/opencode/plugins/models-discovery.snapshot.json`，并**按 provider 各弹一条** toast（标题用 provider 的 `name`，即供应商名称，如「某公司」），展示该 provider 发现到的模型数与能力计数。
+5. **新模型检测**：与上次快照对比，找出新增的模型 ID 列表。
+6. **可见性**：
+   - 写发现快照 `~/.config/opencode/plugins/models-discovery.snapshot.json`；
+   - 延迟 5 秒后按 provider 各弹一条 toast，标题含插件版本号（如「某公司 · v0.9.0-llmgw.3」）；
+   - 若有新模型，额外弹一条 success toast：「网关上新: {模型列表}」。
 
-### 4.4 自更新（`self-update.ts`）
+### 4.5 Toast 通知
+
+插件使用 OpenCode 的 TUI toast API 显示通知：
+
+| Toast 类型 | 触发条件 | 内容示例 |
+|-----------|---------|---------|
+| info | 每次发现完成 | `某公司 · v0.9.0-llmgw.3` / `发现 15 个模型 · 图像 7 · 工具 9` |
+| success | 检测到新模型 | `新模型` / `网关上新: gpt-4o, claude-3.5-sonnet` |
+| warning | 配置异常 | `Configuration Error` / `Plugin configuration failed` |
+| info | 自更新完成 | `插件已更新` / `请重启 OpenCode 使新版本生效` |
+
+**技术细节**：
+- Toast API 需要传递 `directory` 参数（项目工作目录），从 `PluginInput.directory` 获取
+- Toast 延迟 5 秒发送，等待 TUI 完全初始化
+- 能力统计只显示非零项，避免冗余（如无推理模型则不显示「推理 0」）
+
+### 4.6 发现快照（`discovery-report.ts`）
+
+快照文件 `~/.config/opencode/plugins/models-discovery.snapshot.json` 记录每次发现结果：
+
+```json
+{
+  "generatedAt": "2026-06-11T10:30:00.000Z",
+  "pluginVersion": "0.9.0-llmgw.3",
+  "summary": {
+    "models": 15,
+    "vision": 7,
+    "toolCall": 9,
+    "reasoning": 0
+  },
+  "providers": {
+    "某公司": {
+      "baseURL": "https://gateway.example.com",
+      "modelCount": 15,
+      "models": {
+        "gpt-4o": {
+          "name": "gpt-4o",
+          "modalities": { "input": ["text", "image"], "output": ["text"] },
+          "attachment": true,
+          "tool_call": true,
+          "reasoning": false,
+          "limit": { "context": 128000, "output": 16384 }
+        }
+      }
+    }
+  }
+}
+```
+
+**用途**：
+- 供用户查看发现结果，无需翻 opencode.json
+- 插件启动时读取，与本次发现结果对比，检测新增模型
+- OpenCode 本身不读取此文件，不影响正常加载
+
+### 4.7 自更新（`self-update.ts`）
 
 - 在 config hook 中 fire-and-forget 触发，每个进程只跑一次、全程带超时、静默失败，不阻塞启动。
 - 从「开启了发现」的 provider 的 `baseURL` 推导网关 origin；
@@ -230,8 +325,46 @@ bun test                  # 单元测试
 
 ## 8. 排查与验证
 
-- **看发现快照**：`~/.config/opencode/plugins/models-discovery.snapshot.json`，含每个 provider 发现到的模型及解析出的能力。
-- **看启动 toast**：按 provider 分别提示「{供应商名} · 模型发现 / 发现 N 个模型 · 图像输入 X · 工具调用 Y · 推理 Z」，显示约 10 秒。
-- **模型不出来**：确认插件落在复数 `plugins/` 目录、且 OpenCode 已**完全重启**（非 reload）。
-- **数量比预期多**：toast 按 provider 分别统计；若有多个 provider 都开了 `modelsDiscovery.enabled`，它们会各自被发现。只想要本网关时，把其它 provider 的 `modelsDiscovery.enabled` 关掉。
-- **能力为 0**：检查对应模型/模型组成员是否绑定了 catalog，以及组能力是否因「保守聚合」被某个未绑定成员拉低。
+### 8.1 查看发现快照
+
+```bash
+cat ~/.config/opencode/plugins/models-discovery.snapshot.json | jq '.summary, .pluginVersion'
+```
+
+输出示例：
+```json
+{
+  "models": 15,
+  "vision": 7,
+  "toolCall": 9,
+  "reasoning": 0
+}
+"0.9.0-llmgw.3"
+```
+
+### 8.2 Toast 通知说明
+
+| Toast 标题 | 含义 |
+|-----------|------|
+| `{供应商名} · v{版本}` | 模型发现完成，显示发现的模型数和能力统计 |
+| `新模型` | 检测到网关新增了模型，列出模型 ID |
+| `插件已更新` | 自更新下载了新版本，需重启生效 |
+| `Configuration Error` | 配置验证失败 |
+
+### 8.3 常见问题
+
+| 现象 | 排查方向 |
+|------|---------|
+| 模型不出来 | 确认插件落在复数 `plugins/` 目录、且 OpenCode 已**完全重启**（非 reload） |
+| 数量比预期多 | toast 按 provider 分别统计；若有多个 provider 都开了 `modelsDiscovery.enabled`，它们会各自被发现。只想要本网关时，把其它 provider 的 `modelsDiscovery.enabled` 关掉 |
+| 能力为 0 | 检查对应模型/模型组成员是否绑定了 catalog，以及组能力是否因「保守聚合」被某个未绑定成员拉低 |
+| Toast 不显示 | Toast 需要 TUI 完全渲染；`--print-logs` 模式下 TUI 不完整，toast 不会显示 |
+| 新模型提示没出现 | 首次运行没有历史快照，不会显示新模型；第二次运行才会对比 |
+
+### 8.4 调试日志
+
+使用 `opencode --print-logs` 启动可查看插件日志（但 toast 不会显示）：
+
+```bash
+opencode --print-logs 2>&1 | grep -E "models-discovery|TOAST"
+```

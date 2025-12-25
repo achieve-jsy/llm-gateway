@@ -1,116 +1,40 @@
 // src/ui/toast-notifier.ts
 class ToastNotifier {
   client;
-  constructor(client) {
+  directory;
+  constructor(client, directory) {
     this.client = client;
+    this.directory = directory;
+  }
+  async showToast(message, variant, title, duration) {
+    try {
+      if (this.client?.tui?.showToast) {
+        await this.client.tui.showToast({
+          body: { title, message, variant, duration: duration || 3000 },
+          query: { directory: this.directory }
+        });
+      }
+    } catch {}
   }
   async success(message, title, duration) {
-    try {
-      if (!this.client?.tui?.showToast) {
-        console.warn("[opencode-models-discovery] Toast API not available (client.tui.showToast missing)");
-        return;
-      }
-      await this.client.tui.showToast({
-        body: {
-          title,
-          message,
-          variant: "success",
-          duration: duration || 3000
-        }
-      });
-    } catch (error) {
-      console.error(`[opencode-models-discovery] Failed to show success toast`, error);
-    }
+    await this.showToast(message, "success", title, duration || 3000);
   }
   async error(message, title, duration) {
-    try {
-      if (!this.client?.tui?.showToast) {
-        console.warn("[opencode-models-discovery] Toast API not available (client.tui.showToast missing)");
-        return;
-      }
-      await this.client.tui.showToast({
-        body: {
-          title,
-          message,
-          variant: "error",
-          duration: duration || 5000
-        }
-      });
-    } catch (error) {
-      console.error(`[opencode-models-discovery] Failed to show error toast`, error);
-    }
+    await this.showToast(message, "error", title, duration || 5000);
   }
   async warning(message, title, duration) {
-    try {
-      if (!this.client?.tui?.showToast) {
-        console.warn("[opencode-models-discovery] Toast API not available (client.tui.showToast missing)");
-        return;
-      }
-      await this.client.tui.showToast({
-        body: {
-          title,
-          message,
-          variant: "warning",
-          duration: duration || 4000
-        }
-      });
-    } catch (error) {
-      console.error(`[opencode-models-discovery] Failed to show warning toast`, error);
-    }
+    await this.showToast(message, "warning", title, duration || 4000);
   }
   async info(message, title, duration) {
-    try {
-      if (!this.client?.tui?.showToast) {
-        console.warn("[opencode-models-discovery] Toast API not available (client.tui.showToast missing)");
-        return;
-      }
-      await this.client.tui.showToast({
-        body: {
-          title,
-          message,
-          variant: "info",
-          duration: duration || 3000
-        }
-      });
-    } catch (error) {
-      console.error(`[opencode-models-discovery] Failed to show info toast`, error);
-    }
+    await this.showToast(message, "info", title, duration || 3000);
   }
   async progress(message, title, progress) {
-    try {
-      if (!this.client?.tui?.showToast) {
-        console.warn("[opencode-models-discovery] Toast API not available (client.tui.showToast missing)");
-        return;
-      }
-      await this.client.tui.showToast({
-        body: {
-          title,
-          message: progress !== undefined ? `${message} (${progress}%)` : message,
-          variant: "info",
-          duration: progress !== undefined ? 0 : 2000
-        }
-      });
-    } catch (error) {
-      console.error(`[opencode-models-discovery] Failed to show progress toast`, error);
-    }
+    const msg = progress !== undefined ? `${message} (${progress}%)` : message;
+    const dur = progress !== undefined ? 0 : 2000;
+    await this.showToast(msg, "info", title, dur);
   }
   async detailed(options) {
-    try {
-      if (!this.client?.tui?.showToast) {
-        console.warn("[opencode-models-discovery] Toast API not available (client.tui.showToast missing)");
-        return;
-      }
-      await this.client.tui.showToast({
-        body: {
-          title: options.title,
-          message: options.message,
-          variant: options.variant || "info",
-          duration: options.duration
-        }
-      });
-    } catch (error) {
-      console.error(`[opencode-models-discovery] Failed to show detailed toast`, error);
-    }
+    await this.showToast(options.message, options.variant || "info", options.title, options.duration);
   }
 }
 
@@ -337,10 +261,10 @@ function categorizeModel(modelId) {
 // src/utils/discovery-report.ts
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir, readFile } from "node:fs/promises";
 
 // src/version.ts
-var PLUGIN_VERSION = "0.9.0-llmgw.4";
+var PLUGIN_VERSION = "0.9.0-llmgw.5";
 
 // src/utils/discovery-report.ts
 var SNAPSHOT_PATH = join(homedir(), ".config", "opencode", "plugins", "models-discovery.snapshot.json");
@@ -349,6 +273,36 @@ function modelHasVision(model) {
     return true;
   const input = model?.modalities?.input;
   return Array.isArray(input) && input.includes("image");
+}
+async function readPreviousSnapshot() {
+  try {
+    const content = await readFile(SNAPSHOT_PATH, "utf8");
+    return JSON.parse(content);
+  } catch {
+    return null;
+  }
+}
+function findNewModels(currentProviders, previousSnapshot) {
+  if (!previousSnapshot?.providers) {
+    return [];
+  }
+  const newModels = [];
+  const previousModelIds = new Set;
+  for (const provData of Object.values(previousSnapshot.providers)) {
+    if (provData.models) {
+      for (const modelId of Object.keys(provData.models)) {
+        previousModelIds.add(modelId);
+      }
+    }
+  }
+  for (const provider of currentProviders) {
+    for (const modelId of Object.keys(provider.models)) {
+      if (!previousModelIds.has(modelId)) {
+        newModels.push(modelId);
+      }
+    }
+  }
+  return newModels;
 }
 function summarizeProviders(providers) {
   const summary = { models: 0, vision: 0, toolCall: 0, reasoning: 0 };
@@ -779,11 +733,26 @@ async function enhanceConfig(config, client, toastNotifier, pluginConfig, logger
         toolCall: summary.toolCall,
         reasoning: summary.reasoning
       });
+      const previousSnapshot = await readPreviousSnapshot();
+      const newModels = findNewModels(openAICompatibleProviders, previousSnapshot);
       await writeDiscoverySnapshot(openAICompatibleProviders, summary, logger);
-      for (const prov of openAICompatibleProviders) {
-        const provSummary = summarizeProviders([prov]);
-        toastNotifier.info(`发现 ${provSummary.models} 个模型 · 图像输入 ${provSummary.vision} · 工具调用 ${provSummary.toolCall} · 推理 ${provSummary.reasoning}`, `${prov.name} · 模型发现`, 1e4).catch(() => {});
-      }
+      setTimeout(() => {
+        for (const prov of openAICompatibleProviders) {
+          const provSummary = summarizeProviders([prov]);
+          let message = `发现 ${provSummary.models} 个模型`;
+          if (provSummary.vision > 0)
+            message += ` · 图像 ${provSummary.vision}`;
+          if (provSummary.toolCall > 0)
+            message += ` · 工具 ${provSummary.toolCall}`;
+          if (provSummary.reasoning > 0)
+            message += ` · 推理 ${provSummary.reasoning}`;
+          toastNotifier.info(message, `${prov.name} · v${PLUGIN_VERSION}`, 1e4).catch(() => {});
+        }
+        if (newModels.length > 0) {
+          const modelList = newModels.length <= 5 ? newModels.join(", ") : `${newModels.slice(0, 5).join(", ")} 等 ${newModels.length} 个`;
+          toastNotifier.success(`网关上新: ${modelList}`, "新模型", 15000).catch(() => {});
+        }
+      }, 1000);
     }
     if (Object.keys(providers).length === 0) {
       const detected = await autoDetectOpenAICompatibleProvider();
@@ -1011,7 +980,7 @@ function createPluginLogger(client, baseExtra = {}) {
 
 // src/plugin/index.ts
 var ModelDiscoveryPlugin = async (input, options) => {
-  const { client } = input;
+  const { client, directory } = input;
   const logger = createPluginLogger(client, { category: "plugin" });
   if (!client || typeof client !== "object") {
     logger.error("Invalid client provided to plugin");
@@ -1021,12 +990,12 @@ var ModelDiscoveryPlugin = async (input, options) => {
       "chat.params": async () => {}
     };
   }
-  logger.info("Model discovery plugin initialized");
+  logger.info("Model discovery plugin initialized", { directory });
   const pluginConfig = parsePluginConfig(options || {});
   if (pluginConfig.discovery?.enabled === false) {
     logger.info("Discovery disabled by configuration", { category: "config" });
   }
-  const toastNotifier = new ToastNotifier(client);
+  const toastNotifier = new ToastNotifier(client, directory);
   return {
     config: createConfigHook(client, toastNotifier, pluginConfig, logger.child({ category: "config" })),
     event: createEventHook(logger.child({ category: "event" })),

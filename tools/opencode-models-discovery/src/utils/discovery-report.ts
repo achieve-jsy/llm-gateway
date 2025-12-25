@@ -1,12 +1,6 @@
-// 发现结果可见性：把每次发现到的模型及其解析出的能力写一份快照文件，并返回
-// 一句话摘要用于启动 toast。这样用户无需翻 opencode.json（发现的模型只在内存、
-// 不落 opencode.json）即可确认多模态/工具调用等能力是否被正确加载。
-//
-// 快照文件：~/.config/opencode/plugin/models-discovery.snapshot.json
-// 该文件仅供查看，opencode 不读取它，因此既不影响加载也不影响自动刷新。
 import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { writeFile, mkdir } from 'node:fs/promises'
+import { writeFile, mkdir, readFile } from 'node:fs/promises'
 import { PLUGIN_VERSION } from '../version'
 import type { PluginLogger } from '../plugin/logger'
 
@@ -29,6 +23,50 @@ function modelHasVision(model: any): boolean {
   if (model?.attachment === true) return true
   const input = model?.modalities?.input
   return Array.isArray(input) && input.includes('image')
+}
+
+export interface PreviousSnapshot {
+  pluginVersion?: string
+  providers?: Record<string, { models?: Record<string, any> }>
+}
+
+export async function readPreviousSnapshot(): Promise<PreviousSnapshot | null> {
+  try {
+    const content = await readFile(SNAPSHOT_PATH, 'utf8')
+    return JSON.parse(content)
+  } catch {
+    return null
+  }
+}
+
+export function findNewModels(
+  currentProviders: DiscoveredProviderReport[],
+  previousSnapshot: PreviousSnapshot | null
+): string[] {
+  if (!previousSnapshot?.providers) {
+    return []
+  }
+
+  const newModels: string[] = []
+  const previousModelIds = new Set<string>()
+
+  for (const provData of Object.values(previousSnapshot.providers)) {
+    if (provData.models) {
+      for (const modelId of Object.keys(provData.models)) {
+        previousModelIds.add(modelId)
+      }
+    }
+  }
+
+  for (const provider of currentProviders) {
+    for (const modelId of Object.keys(provider.models)) {
+      if (!previousModelIds.has(modelId)) {
+        newModels.push(modelId)
+      }
+    }
+  }
+
+  return newModels
 }
 
 export function summarizeProviders(providers: DiscoveredProviderReport[]): DiscoverySummary {

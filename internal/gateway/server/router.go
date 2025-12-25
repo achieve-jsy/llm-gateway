@@ -87,6 +87,13 @@ func Setup(
 	boundModelsHandler := handler.NewBoundModelsHandler(controlPlaneURL, internalToken)
 	modelInfoHandler := handler.NewModelInfoHandler(controlPlaneURL, internalToken)
 	healthHandler := handler.NewHealthHandler(routerCache.Client(), modelsRouter, state, sch)
+	var responsesHandler *handler.ResponsesHandler
+	if groupDispatch != nil {
+		responsesHandler = handler.NewResponsesHandlerWithGroup(orch, groupDispatch)
+	} else {
+		responsesHandler = handler.NewResponsesHandler(orch)
+	}
+	messagesHandler := handler.NewMessagesHandler(router)
 
 	r.GET("/health", healthHandler.Health)
 	r.GET("/ready", healthHandler.Ready)
@@ -119,9 +126,21 @@ func Setup(
 		// Embeddings (new)
 		v1.POST("/embeddings", embeddingsHandler.Handle)
 
+		// Responses API — OpenAI Agent SDK 核心依赖
+		v1.POST("/responses", responsesHandler.Handle)
+
+		// Anthropic Messages API — Claude Code 原生协议
+		v1.POST("/messages", messagesHandler.Handle)
+		v1.POST("/messages/count_tokens", messagesHandler.HandleCountTokens)
+
 		// Provider passthrough: /v1/p/:provider/*path forwards opaquely to the upstream.
 		v1.Any("/p/:provider/*path", makePassthroughHandler(router))
 	}
+
+	// Claude Code telemetry stub — returns 200 to prevent client-side 404 errors.
+	r.POST("/api/event_logging/batch", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
 
 	return r
 }

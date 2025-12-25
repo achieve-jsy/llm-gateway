@@ -440,7 +440,7 @@
                       <div class="up-tt__row" v-if="row.reasoning_tokens"><span class="up-tt__sub">└ 推理</span><b class="c-purple">{{ fmtNum(row.reasoning_tokens) }}</b></div>
                       <!-- 缓存专项（始终展示，便于核对缓存命中/写入）-->
                       <div class="up-tt__sep"></div>
-                      <div class="up-tt__group"><el-icon class="up-tt__group-ic"><Finished /></el-icon>缓存</div>
+                      <div class="up-tt__group">缓存</div>
                       <div class="up-tt__row"><span>缓存命中（读）</span><b :class="row.cached_tokens ? 'c-cyan' : ''">{{ fmtNum(row.cached_tokens) }}</b></div>
                       <div class="up-tt__row"><span>缓存写入</span><b :class="row.cache_write_tokens ? 'c-amber' : ''">{{ fmtNum(row.cache_write_tokens) }}</b></div>
                       <div class="up-tt__row"><span class="up-tt__sub">未缓存输入</span><b>{{ fmtNum(Math.max((row.prompt_tokens||0) - (row.cached_tokens||0) - (row.cache_write_tokens||0), 0)) }}</b></div>
@@ -493,13 +493,13 @@
                       <div class="up-tt__title">成本明细 (USD)</div>
                       <!-- 单价（每 1M tokens）-->
                       <template v-if="(row.input_price_snapshot ?? 0) > 0 || (row.output_price_snapshot ?? 0) > 0">
-                        <div class="up-tt__group"><el-icon class="up-tt__group-ic"><Money /></el-icon>单价 / 1M tokens</div>
+                        <div class="up-tt__group">单价 / 1M tokens</div>
                         <div class="up-tt__row"><span>输入单价</span><b>${{ fmtPrice(row.input_price_snapshot) }}</b></div>
                         <div class="up-tt__row"><span>输出单价</span><b>${{ fmtPrice(row.output_price_snapshot) }}</b></div>
                         <div class="up-tt__sep"></div>
                       </template>
                       <!-- 费用 -->
-                      <div class="up-tt__group"><el-icon class="up-tt__group-ic"><Coin /></el-icon>费用</div>
+                      <div class="up-tt__group">费用</div>
                       <div class="up-tt__row">
                         <span>输入<span class="up-tt__sub" v-if="row.prompt_tokens"> ×{{ fmtNum(Math.max((row.prompt_tokens||0) - (row.cached_tokens||0) - (row.cache_write_tokens||0), 0)) }}</span></span><b>${{ (row.input_cost_usd || 0).toFixed(6) }}</b>
                       </div>
@@ -508,7 +508,7 @@
                       </div>
                       <!-- 缓存专项（始终展示，与 Token 明细保持一致） -->
                       <div class="up-tt__sep"></div>
-                      <div class="up-tt__group"><el-icon class="up-tt__group-ic"><Finished /></el-icon>缓存</div>
+                      <div class="up-tt__group">缓存</div>
                       <div class="up-tt__row">
                         <span>缓存读取<span class="up-tt__sub" v-if="row.cached_tokens"> ×{{ fmtNum(row.cached_tokens) }}</span></span>
                         <b :class="row.cache_read_cost_usd > 0 ? 'c-cyan' : ''">${{ (row.cache_read_cost_usd || 0).toFixed(6) }}</b>
@@ -1783,16 +1783,15 @@ loadAll()
 }
 .up-tt__sub { color: #6b7280; padding-left: 2px; }
 .up-tt__group {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin: 2px 0 1px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: .3px;
+  margin: 6px 0 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
   color: #38bdf8;
+  padding-left: 6px;
+  border-left: 2px solid rgba(56, 189, 248, 0.4);
 }
-.up-tt__group-ic { font-size: 12px; }
 .up-tt__row b { color: #f9fafb; font-weight: 600; }
 .up-tt__row b.c-cyan   { color: #38bdf8; }
 .up-tt__row b.c-amber  { color: #fbbf24; }

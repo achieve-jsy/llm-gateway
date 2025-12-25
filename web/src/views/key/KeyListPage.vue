@@ -93,7 +93,6 @@
       <el-table-column label="操作" width="340" fixed="right" align="center">
         <template #default="{ row }">
           <el-button size="small" text type="primary" @click="handleUseKey(row)">使用密钥</el-button>
-          <el-button size="small" text type="primary" @click="handleCcsImport(row)">导入 CCSwitch</el-button>
           <el-button size="small" text type="primary" @click="handleOpenCodeConfig(row)">配置 OpenCode</el-button>
           <el-button size="small" text type="warning" @click="handleReset(row)">重置</el-button>
           <el-button size="small" text type="danger" @click="handleDelete(row)">删除</el-button>
@@ -170,44 +169,6 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showCcsSelect" title="导入 CCSwitch" width="480px" destroy-on-close>
-      <p class="ccs-desc">选择要导入的目标客户端：</p>
-      <div class="ccs-client-grid">
-        <div
-          class="ccs-client-card"
-          :class="{ active: selectedCcsClient === 'claude' }"
-          @click="selectedCcsClient = 'claude'"
-        >
-          <span class="ccs-client-name">Claude Code</span>
-        </div>
-        <div
-          class="ccs-client-card"
-          :class="{ active: selectedCcsClient === 'codex' }"
-          @click="selectedCcsClient = 'codex'"
-        >
-          <span class="ccs-client-name">Codex CLI</span>
-        </div>
-        <div
-          class="ccs-client-card"
-          :class="{ active: selectedCcsClient === 'opencode' }"
-          @click="selectedCcsClient = 'opencode'"
-        >
-          <span class="ccs-client-name">OpenCode</span>
-        </div>
-        <div
-          class="ccs-client-card"
-          :class="{ active: selectedCcsClient === 'gemini' }"
-          @click="selectedCcsClient = 'gemini'"
-        >
-          <span class="ccs-client-name">Gemini CLI</span>
-        </div>
-      </div>
-      <template #footer>
-        <el-button @click="showCcsSelect = false">取消</el-button>
-        <el-button type="primary" @click="confirmCcsImport">导入</el-button>
-      </template>
-    </el-dialog>
-
     <OpenCodeConfigDialog
       v-model:visible="showOpenCodeConfig"
       :api-key-id="openCodeConfigKeyId"
@@ -234,7 +195,6 @@ import type { ApiKey, AvailableGroup } from '@/types/api-key'
 import KeyCreateDialog from '@/components/key/KeyCreateDialog.vue'
 import UseKeyModal from '@/components/key/UseKeyModal.vue'
 import OpenCodeConfigDialog from '@/components/key/OpenCodeConfigDialog.vue'
-import { executeCcsImport } from '@/utils/ccs-import'
 import { copyToClipboard } from '@/utils/clipboard'
 import { useSettingsStore } from '@/stores/settings'
 import { useKeyCacheStore } from '@/stores/key-cache'
@@ -247,10 +207,6 @@ const pageSize = 20
 const showCreateDialog = ref(false)
 const showUsage = ref(false)
 const usageKey = ref<ApiKey | null>(null)
-
-const showCcsSelect = ref(false)
-const selectedCcsClient = ref('claude')
-const pendingCcsRow = ref<ApiKey | null>(null)
 
 const showOpenCodeConfig = ref(false)
 const openCodeConfigKeyId = ref('')
@@ -302,25 +258,6 @@ function handleUseKey(row: ApiKey) {
   showUsage.value = true
 }
 
-function handleCcsImport(row: ApiKey) {
-  pendingCcsRow.value = row
-  selectedCcsClient.value = 'claude'
-  showCcsSelect.value = true
-}
-
-async function confirmCcsImport() {
-  const row = pendingCcsRow.value
-  if (!row) return
-  try {
-    const result = await revealKey(row.id)
-    executeCcsImport(result.key, selectedCcsClient.value)
-    showCcsSelect.value = false
-    pendingCcsRow.value = null
-  } catch {
-    ElMessage.warning('获取 Key 失败，请重试')
-  }
-}
-
 function handleOpenCodeConfig(row: ApiKey) {
   openCodeConfigKeyId.value = row.id
   openCodeConfigMaskedKey.value = row.maskedKey
@@ -363,10 +300,6 @@ async function handleReset(row: ApiKey) {
       `<pre style="background:var(--el-fill-color-light);padding:10px;border-radius:6px;font-size:13px;margin:0;white-space:pre-wrap;word-break:break-all;max-width:100%;overflow:hidden">${mapped.key}</pre>`,
       '密钥已重置', { dangerouslyUseHTMLString: true, confirmButtonText: '已复制，关闭' }
     )
-    try {
-      await ElMessageBox.confirm('是否一键导入密钥到 CCSwitch 桌面客户端？', '导入 CCSwitch', { confirmButtonText: '导入', cancelButtonText: '跳过' })
-      executeCcsImport(mapped.key)
-    } catch { /* user skipped */ }
     await loadKeys()
   } catch { /* cancelled */ }
 }
@@ -530,45 +463,6 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
-}
-
-.ccs-desc {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-  margin: 0 0 16px;
-}
-
-.ccs-client-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
-}
-
-.ccs-client-card {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
-  border: 2px solid var(--el-border-color-light);
-  border-radius: 12px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.ccs-client-card:hover {
-  border-color: var(--el-color-primary-light-5);
-  background: var(--el-color-primary-light-9);
-}
-
-.ccs-client-card.active {
-  border-color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
-}
-
-.ccs-client-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--el-text-color-primary);
 }
 
 .group-dialog-section {

@@ -78,6 +78,17 @@
         <span class="form-item-tip">模型被切换后多久不再参与路由</span>
       </el-form-item>
 
+      <el-form-item label="请求超时(秒)">
+        <el-input-number
+          v-model="formData.timeout_seconds"
+          :min="0"
+          :max="600"
+          size="small"
+          controls-position="right"
+        />
+        <span class="form-item-tip">0 = 使用系统默认（非流式 30s / 流式 300s）；每轮上游调用独立计时，failover 不受上一轮影响</span>
+      </el-form-item>
+
       <el-form-item label="关联模型">
         <div class="model-list-section">
           <div v-if="modelList.length === 0" class="model-empty-hint">
@@ -166,6 +177,7 @@ interface FormState {
   max_switches: number
   same_model_retries: number
   failover_cooldown_seconds: number
+  timeout_seconds: number
 }
 
 const props = defineProps<{
@@ -193,6 +205,7 @@ const formData = ref<FormState>({
   max_switches: 2,
   same_model_retries: 1,
   failover_cooldown_seconds: 60,
+  timeout_seconds: 0,
 })
 
 const modelList = ref<ModelItem[]>([])
@@ -218,6 +231,7 @@ watch(
         max_switches: val.max_switches ?? 2,
         same_model_retries: val.same_model_retries ?? 1,
         failover_cooldown_seconds: val.failover_cooldown_seconds ?? 60,
+        timeout_seconds: val.timeout_seconds ?? 0,
       }
       originalStrategy.value = val.strategy
       await loadGroupModels(val.id)
@@ -229,6 +243,7 @@ watch(
         max_switches: globalDefaults.value?.max_switches ?? 2,
         same_model_retries: globalDefaults.value?.same_model_retries ?? 1,
         failover_cooldown_seconds: globalDefaults.value?.failover_cooldown_seconds ?? 60,
+        timeout_seconds: 0,
       }
       originalStrategy.value = 'round_robin'
       modelList.value = []
@@ -336,6 +351,7 @@ async function handleSubmit() {
       max_switches: formData.value.max_switches,
       same_model_retries: formData.value.same_model_retries,
       failover_cooldown_seconds: formData.value.failover_cooldown_seconds,
+      timeout_seconds: formData.value.timeout_seconds,
     }
 
 if (isEdit.value && props.group) {

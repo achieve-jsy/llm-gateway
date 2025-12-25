@@ -200,4 +200,39 @@ onMounted(() => { loadAnnouncements() })
   justify-content: flex-end;
   margin-top: 16px;
 }
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .announcement-page {
+    overflow-x: auto;
+  }
+
+  .page-header {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .header-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .header-actions .el-select {
+    width: 100%;
+  }
+
+  .header-actions .el-button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  :deep(.el-table) {
+    min-width: 600px;
+  }
+
+  .pagination-wrapper {
+    justify-content: center;
+  }
+}
 </style>

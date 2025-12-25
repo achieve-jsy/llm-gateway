@@ -96,6 +96,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	internalSvc := service.NewInternalService(modelRepo, providerRepo)
 	healthCheckSvc := service.NewHealthCheckService(healthCheckRepo, providerRepo, modelRepo, rdb)
 	healthCheckSvc.SetModelStatusLogService(modelStatusLogSvc)
+	healthCheckSvc.SetSnapshotRefresher(snapshotter)
 
 	groupRepo := repository.NewGroupRepo(db)
 	keyGroupRepo := repository.NewKeyGroupRepo(db)

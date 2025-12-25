@@ -1743,6 +1743,76 @@ loadAll()
 
 /* ── 用户名 ── */
 .up-name { font-size: 12px; color: var(--el-text-color-regular); font-weight: 500; }
+
+/* Mobile responsive for very small screens */
+@media (max-width: 640px) {
+  .up-header {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .up-header__right {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .up-title {
+    font-size: 16px;
+  }
+
+  .up-stats {
+    grid-template-columns: 1fr !important;
+  }
+
+  .up-filter-main {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .up-presets {
+    flex-wrap: wrap;
+  }
+
+  .up-filter-dims {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .up-filter-group {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .up-filter__group,
+  .up-filter__model,
+  .up-filter__provider,
+  .up-filter__status,
+  .up-filter__key,
+  .up-filter__user,
+  .up-filter__dept,
+  .up-filter__studio {
+    width: 100% !important;
+  }
+
+  .up-filter-sep {
+    display: none;
+  }
+
+  .up-section__header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .up-chart-card__header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .up-chart-card__body {
+    height: 180px;
+  }
+}
 </style>
 
 <!-- tooltip 样式（全局，el-tooltip popper 不走 scoped）— 参考 sub2api 深色浮层 -->

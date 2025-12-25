@@ -1,0 +1,36 @@
+# 测试环境配置 (192.0.2.10)
+# 2026-06-10: 测试环境从 120 迁移至 121
+server:
+  port: "8080"
+
+controlplane:
+  port: "8081"
+
+redis:
+  addr: "127.0.0.1:6379"
+  password: "redis_bGNhwx"
+  db: 0
+
+database:
+  url: "host=127.0.0.1 port=5432 user=llm_gateway_test password=CHANGE_ME_PASSWORD dbname=llm_gateway_test sslmode=disable"
+
+otlp:
+  endpoint: "localhost:4317"
+  enabled: false
+
+provider:
+  internal_token: "test-internal-token"
+  control_plane_url: "http://localhost:8081"
+
+oauth:
+  issuer_url: "https://oauth.example.net"
+  client_id: ""
+  client_secret: ""
+  redirect_uri: "http://localhost:5173/auth/callback"
+  scopes: "openid profile email"
+
+jwt:
+  secret: "test-jwt-secret-change-in-production"
+
+frontend:
+  url: "http://localhost:5173"

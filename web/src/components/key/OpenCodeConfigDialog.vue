@@ -451,4 +451,28 @@ onUnmounted(stopPolling)
 
 .mt-2 { margin-top: 8px; }
 .mt-3 { margin-top: 12px; }
+
+@media (max-width: 768px) {
+  :deep(.el-dialog) {
+    width: 95% !important;
+    max-width: 95vw !important;
+  }
+  .config-row {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .config-key {
+    width: auto;
+  }
+  .cmd-block {
+    flex-direction: column;
+  }
+  .cmd-copy {
+    width: 100%;
+  }
+  .poll-bar {
+    width: 100%;
+    max-width: 280px;
+  }
+}
 </style>

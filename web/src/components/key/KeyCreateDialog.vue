@@ -227,4 +227,20 @@ onMounted(() => {
   font-size: 13px;
   color: var(--el-text-color-secondary);
 }
+
+@media (max-width: 768px) {
+  :deep(.el-dialog) {
+    width: 95% !important;
+    max-width: 95vw !important;
+  }
+  .key-display {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .ccs-import-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+}
 </style>

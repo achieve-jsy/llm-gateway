@@ -2235,4 +2235,55 @@ defineExpose({ selectedIds, loadDiff, filteredRows, sortedRows, pagedRows })
     padding-right: 14px;
   }
 }
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .catalog-sync-page {
+    overflow-x: auto;
+  }
+
+  .page-title {
+    font-size: 16px;
+  }
+
+  .action-board {
+    flex-direction: column;
+  }
+
+  .diff-summary-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .diff-explainer {
+    flex-direction: column;
+  }
+
+  .filter-bar {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .threshold-control {
+    width: 100%;
+  }
+
+  .threshold-control .el-input-number {
+    width: 100%;
+  }
+
+  :deep(.el-table) {
+    min-width: 600px;
+  }
+
+  .deprecation-banner {
+    font-size: 12px;
+    padding: 8px 12px;
+  }
+
+  .stage-steps {
+    flex-direction: column;
+    gap: 8px;
+  }
+}
 </style>

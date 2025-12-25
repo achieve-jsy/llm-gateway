@@ -778,4 +778,23 @@ async function handleSubmit() {
   color: #98989D;
   font-size: 13px;
 }
+
+@media (max-width: 768px) {
+  :deep(.el-dialog) {
+    width: 95% !important;
+    max-width: 95vw !important;
+  }
+  :deep(.el-dialog .el-dialog__body) {
+    padding: 16px !important;
+  }
+  .extra-model-field {
+    width: 100%;
+  }
+  .models-actions {
+    flex-wrap: wrap;
+  }
+  .prefill-model-item {
+    word-break: break-all;
+  }
+}
 </style>

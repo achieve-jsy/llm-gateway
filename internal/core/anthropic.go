@@ -547,6 +547,11 @@ func ChatResponseToAnthropic(resp *ChatResponse, model string) *AnthropicMessage
 		anthResp.Content = append(anthResp.Content, blocks...)
 	}
 
+	// Ensure Content is never null (Anthropic API requires an array)
+	if anthResp.Content == nil {
+		anthResp.Content = []AnthropicContentBlock{}
+	}
+
 	return anthResp
 }
 

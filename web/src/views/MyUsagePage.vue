@@ -166,7 +166,78 @@
           <canvas ref="distCanvas" />
         </div>
       </div>
+
+      <div v-if="modelStatsRows.length" class="mu-chart-card">
+        <div class="mu-chart-card__header">
+          <span class="mu-chart-card__title">Token 构成分析</span>
+        </div>
+        <div class="mu-chart-card__body mu-chart-card__body--doughnut">
+          <canvas ref="tokenBreakdownCanvas" />
+        </div>
+      </div>
     </div>
+
+    <!-- ═══════════════════════════════════════════
+         Token 深度分析
+    ═══════════════════════════════════════════ -->
+    <template v-if="modelStatsRows.length">
+      <div class="mu-section">
+        <div class="mu-section__header">
+          <span class="mu-section__title">模型 Token 消耗排行</span>
+        </div>
+        <div class="mu-chart-card__body mu-chart-card__body--ranking">
+          <canvas ref="modelTokenRankingCanvas" />
+        </div>
+      </div>
+
+      <div class="mu-section">
+        <div class="mu-section__header">
+          <span class="mu-section__title">Token 成本效率</span>
+        </div>
+        <div class="mu-table-wrap" v-loading="statsLoading">
+          <el-table :data="costEfficiencyRows" size="small" :header-cell-style="TABLE_HEADER" style="width:100%">
+            <el-table-column prop="model" label="模型" min-width="160">
+              <template #default="{ row }"><span class="mu-model-name">{{ row.model || '—' }}</span></template>
+            </el-table-column>
+            <el-table-column prop="totalTokens" label="总 Token" min-width="140" align="right" sortable>
+              <template #default="{ row }">
+                <div class="mu-bar-cell">
+                  <span>{{ fmtTokens(row.totalTokens) }}</span>
+                  <div class="mu-minibar">
+                    <div class="mu-minibar__fill mu-minibar__fill--blue" :style="{ width: pct(row.totalTokens, maxTotalTokens) + '%' }" />
+                  </div>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="输入占比" min-width="90" align="right">
+              <template #default="{ row }">
+                <span class="c-blue">{{ tokenInputPct(row) }}%</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="输出占比" min-width="90" align="right">
+              <template #default="{ row }">
+                <span class="c-green">{{ tokenOutputPct(row) }}%</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="缓存命中率" min-width="100" align="right">
+              <template #default="{ row }">
+                <span class="c-cyan">{{ cacheHitRate(row) }}%</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="est_cost_usd" label="估算成本" min-width="110" align="right" sortable>
+              <template #default="{ row }">
+                <span :class="costColor(row.est_cost_usd)">${{ fmtCost(row.est_cost_usd) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="每百万 Token" min-width="120" align="right">
+              <template #default="{ row }">
+                <span class="mu-cost">${{ fmtCost(costPerMillionTokens(row)) }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </div>
+    </template>
 
     <!-- ═══════════════════════════════════════════
          用量汇总表
@@ -555,8 +626,8 @@ import {
   Close, Grid, Cpu, Key, WarningFilled
 } from '@element-plus/icons-vue'
 import {
-  Chart, LineController, DoughnutController, CategoryScale, LinearScale,
-  LineElement, PointElement, ArcElement,
+  Chart, LineController, DoughnutController, BarController, CategoryScale, LinearScale,
+  LineElement, PointElement, ArcElement, BarElement,
   Tooltip, Legend, Filler
 } from 'chart.js'
 import http from '@/services/http'
@@ -565,8 +636,8 @@ import { useAuthStore } from '@/stores/auth'
 import { isDark } from '@/composables/useTheme'
 
 Chart.register(
-  LineController, DoughnutController,
-  CategoryScale, LinearScale, LineElement, PointElement, ArcElement,
+  LineController, DoughnutController, BarController,
+  CategoryScale, LinearScale, LineElement, PointElement, ArcElement, BarElement,
   Tooltip, Legend, Filler,
 )
 
@@ -586,6 +657,15 @@ function cssVar(name: string, fallback = '') {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
 }
 
+function muCssVar(name: string, fallback: string) {
+  const root = document.querySelector('.mu') as HTMLElement | null
+  if (root) {
+    const v = getComputedStyle(root).getPropertyValue(name).trim()
+    if (v) return v
+  }
+  return fallback
+}
+
 function chartTheme() {
   return {
     textSecondary: cssVar('--el-text-color-secondary', '#94A3B8'),
@@ -595,6 +675,10 @@ function chartTheme() {
     success: cssVar('--el-color-success', '#27AE60'),
     warning: cssVar('--el-color-warning', '#E0A100'),
     grid: cssVar('--el-border-color-lighter', 'rgba(125,125,125,0.12)'),
+    tokenInput: muCssVar('--mu-input', '#2BA8A2'),
+    tokenOutput: muCssVar('--mu-output', '#27AE60'),
+    tokenCache: muCssVar('--mu-cache', '#5DADE2'),
+    tokenReason: muCssVar('--mu-reason', '#8B5CF6'),
   }
 }
 
@@ -607,9 +691,14 @@ function gridColor() {
 interface StatsRow {
   stat_date?: string; model?: string
   req_count: number; success_count?: number
-  prompt_tokens: number; cached_tokens: number; completion_tokens: number; est_cost_usd: number
+  prompt_tokens: number; cached_tokens: number; completion_tokens: number
+  reasoning_tokens?: number; est_cost_usd: number
 }
-interface StatsTotal { req_count: number; success_count?: number; prompt_tokens: number; cached_tokens: number; completion_tokens: number; est_cost_usd: number }
+interface StatsTotal {
+  req_count: number; success_count?: number
+  prompt_tokens: number; cached_tokens: number; completion_tokens: number
+  reasoning_tokens?: number; est_cost_usd: number
+}
 interface LogRow {
   request_id: string; ts: string; key_id: string; key_name?: string
   model: string; routed_model: string; group_name: string; provider: string
@@ -762,6 +851,55 @@ const cacheHitPct = computed(() => {
   return Math.round(t.cached_tokens / t.prompt_tokens * 100)
 })
 
+const tokenBreakdown = computed(() => {
+  const t = statsTotal.value
+  if (!t) return { input: 0, output: 0, cached: 0, reasoning: 0, total: 0 }
+  const cached = t.cached_tokens || 0
+  const input = (t.prompt_tokens || 0) - cached
+  const output = t.completion_tokens || 0
+  const reasoning = t.reasoning_tokens || 0
+  return { input, output, cached, reasoning, total: input + output + cached + reasoning }
+})
+
+const modelTokenRanking = computed(() => {
+  return [...modelStatsRows.value]
+    .map(r => ({ ...r, totalTokens: (r.prompt_tokens || 0) + (r.completion_tokens || 0) }))
+    .sort((a, b) => b.totalTokens - a.totalTokens)
+    .slice(0, 8)
+})
+
+const costEfficiencyRows = computed(() => {
+  return [...modelStatsRows.value]
+    .map(r => ({ ...r, totalTokens: (r.prompt_tokens || 0) + (r.completion_tokens || 0) }))
+    .sort((a, b) => b.totalTokens - a.totalTokens)
+})
+
+const maxTotalTokens = computed(() => Math.max(...costEfficiencyRows.value.map(r => r.totalTokens), 1))
+
+const costPerMillionTokens = (row: StatsRow) => {
+  const total = (row.prompt_tokens || 0) + (row.completion_tokens || 0)
+  if (!total) return 0
+  return (row.est_cost_usd || 0) / total * 1e6
+}
+
+const tokenInputPct = (row: StatsRow) => {
+  const total = (row.prompt_tokens || 0) + (row.completion_tokens || 0)
+  if (!total) return 0
+  const input = (row.prompt_tokens || 0) - (row.cached_tokens || 0)
+  return Math.round(input / total * 100)
+}
+
+const tokenOutputPct = (row: StatsRow) => {
+  const total = (row.prompt_tokens || 0) + (row.completion_tokens || 0)
+  if (!total) return 0
+  return Math.round((row.completion_tokens || 0) / total * 100)
+}
+
+const cacheHitRate = (row: StatsRow) => {
+  if (!row.prompt_tokens) return 0
+  return Math.round((row.cached_tokens || 0) / row.prompt_tokens * 100)
+}
+
 function buildStatsParams(groupByVal: string): Record<string, string> {
   const params: Record<string, string> = {
     from: dateRange.value[0],
@@ -907,6 +1045,8 @@ async function loadStats() {
   try {
     renderTrend()
     renderDist()
+    renderTokenBreakdown()
+    renderModelTokenRanking()
   } catch (e) {
     console.error('[my-usage] chart render failed', e)
   }
@@ -1036,8 +1176,12 @@ const timelineStages = computed(() => {
 // ── Charts ──
 const trendCanvas = ref<HTMLCanvasElement | null>(null)
 const distCanvas  = ref<HTMLCanvasElement | null>(null)
+const tokenBreakdownCanvas = ref<HTMLCanvasElement | null>(null)
+const modelTokenRankingCanvas = ref<HTMLCanvasElement | null>(null)
 let trendChart: Chart | null = null
 let distChart:  Chart | null = null
+let tokenBreakdownChart: Chart | null = null
+let modelTokenRankingChart: Chart | null = null
 
 const doughnutCenterPlugin = {
   id: 'doughnutCenter',
@@ -1059,6 +1203,29 @@ const doughnutCenterPlugin = {
     ctx.font = '11px sans-serif'
     ctx.fillStyle = colors.textSecondary
     ctx.fillText('总调用', x, y + 14)
+    ctx.restore()
+  },
+}
+
+const tokenDoughnutCenterPlugin = {
+  id: 'tokenDoughnutCenter',
+  afterDraw(chart: Chart) {
+    const total = tokenBreakdown.value.total
+    if (!total) return
+    const { left, right, top, bottom } = chart.chartArea
+    const x = (left + right) / 2
+    const y = (top + bottom) / 2
+    const colors = chartTheme()
+    const ctx = chart.ctx
+    ctx.save()
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.font = 'bold 18px sans-serif'
+    ctx.fillStyle = colors.textPrimary
+    ctx.fillText(fmtTokens(total), x, y - 6)
+    ctx.font = '11px sans-serif'
+    ctx.fillStyle = colors.textSecondary
+    ctx.fillText('总 Token', x, y + 14)
     ctx.restore()
   },
 }
@@ -1225,6 +1392,169 @@ function renderDist() {
   })
 }
 
+function renderTokenBreakdown() {
+  const canvas = tokenBreakdownCanvas.value
+  if (!canvas || !modelStatsRows.value.length) return
+  tokenBreakdownChart?.destroy()
+
+  const bd = tokenBreakdown.value
+  if (!bd.total) return
+
+  const colors = chartTheme()
+  const labels = ['输入 Token', '输出 Token', '缓存命中', '推理 Token']
+  const data = [bd.input, bd.output, bd.cached, bd.reasoning].map(v => Math.max(0, v))
+  const segmentColors = [colors.tokenInput, colors.tokenOutput, colors.tokenCache, colors.tokenReason]
+  const bgColors = segmentColors.map(c => c + 'CC')
+  const total = bd.total
+
+  tokenBreakdownChart = new Chart(canvas, {
+    type: 'doughnut',
+    data: {
+      labels,
+      datasets: [{
+        data,
+        backgroundColor: bgColors,
+        borderColor: segmentColors,
+        borderWidth: 1,
+      }],
+    },
+    plugins: [tokenDoughnutCenterPlugin],
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '62%',
+      plugins: {
+        legend: {
+          position: 'right',
+          labels: {
+            color: colors.textRegular,
+            font: { size: 11 },
+            padding: 10,
+            usePointStyle: true,
+            generateLabels(chart) {
+              const ds = chart.data.datasets[0]
+              return (chart.data.labels || []).map((label, i) => {
+                const value = (ds.data[i] as number) || 0
+                const pctVal = total ? Math.round(value / total * 100) : 0
+                return {
+                  text: `${label} ${fmtTokens(value)} (${pctVal}%)`,
+                  fillStyle: (ds.backgroundColor as string[])[i],
+                  strokeStyle: (ds.borderColor as string[])[i],
+                  lineWidth: 1,
+                  hidden: false,
+                  index: i,
+                  pointStyle: 'circle',
+                }
+              })
+            },
+          },
+        },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const v = ctx.raw as number
+              const pctVal = total ? Math.round(v / total * 100) : 0
+              return `${ctx.label}: ${fmtTokens(v)} (${pctVal}%)`
+            },
+          },
+        },
+      },
+    },
+  })
+}
+
+function renderModelTokenRanking() {
+  const canvas = modelTokenRankingCanvas.value
+  if (!canvas || !modelStatsRows.value.length) return
+  modelTokenRankingChart?.destroy()
+
+  const colors = chartTheme()
+  const rows = modelTokenRanking.value
+  const labels = rows.map(r => r.model || '未知')
+  const inputData = rows.map(r => Math.max(0, (r.prompt_tokens || 0) - (r.cached_tokens || 0)))
+  const outputData = rows.map(r => r.completion_tokens || 0)
+  const totals = rows.map((_, i) => inputData[i] + outputData[i])
+
+  modelTokenRankingChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: '输入 Token',
+          data: inputData,
+          backgroundColor: colors.tokenInput + 'CC',
+          borderColor: colors.tokenInput,
+          borderWidth: 1,
+          stack: 'tokens',
+        },
+        {
+          label: '输出 Token',
+          data: outputData,
+          backgroundColor: colors.tokenOutput + 'CC',
+          borderColor: colors.tokenOutput,
+          borderWidth: 1,
+          stack: 'tokens',
+        },
+      ],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'top',
+          labels: {
+            usePointStyle: true,
+            pointStyle: 'rect',
+            padding: 12,
+            color: colors.textRegular,
+            font: { size: 11 },
+          },
+        },
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          callbacks: {
+            label: ctx => {
+              const v = ctx.raw as number
+              const idx = ctx.dataIndex
+              const total = totals[idx] || 0
+              const pctVal = total ? Math.round(v / total * 100) : 0
+              return `${ctx.dataset.label}: ${fmtTokens(v)} (${pctVal}%)`
+            },
+            afterBody: items => {
+              if (!items.length) return []
+              const idx = items[0].dataIndex
+              const total = totals[idx] || 0
+              return [`合计: ${fmtTokens(total)}`]
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          stacked: true,
+          grid: { color: gridColor() },
+          border: { display: false },
+          ticks: {
+            color: colors.textSecondary,
+            font: { size: 10 },
+            callback: (v: string | number) => fmtTokens(Number(v)),
+          },
+        },
+        y: {
+          stacked: true,
+          grid: { display: false },
+          border: { display: false },
+          ticks: { color: colors.textRegular, font: { size: 11 } },
+        },
+      },
+    },
+  })
+}
+
 // ── Export ──
 const EXPORT_COLUMNS: { key: keyof LogRow | string; label: string }[] = [
   { key: 'request_id', label: '请求ID' },
@@ -1261,7 +1591,11 @@ function handleExport() {
 
 function rerenderCharts() {
   if (dayStatsRows.value.length) renderTrend()
-  if (modelStatsRows.value.length) renderDist()
+  if (modelStatsRows.value.length) {
+    renderDist()
+    renderTokenBreakdown()
+    renderModelTokenRanking()
+  }
 }
 
 watch(isDark, () => nextTick(() => rerenderCharts()))
@@ -1270,6 +1604,8 @@ let themeObserver: MutationObserver | null = null
 onUnmounted(() => {
   trendChart?.destroy()
   distChart?.destroy()
+  tokenBreakdownChart?.destroy()
+  modelTokenRankingChart?.destroy()
   themeObserver?.disconnect()
 })
 
@@ -1424,7 +1760,8 @@ if (typeof MutationObserver !== 'undefined') {
 .mu-stat-card__unit { font-size: 16px; font-weight: 600; margin-left: 2px; }
 
 /* ── 图表区 ── */
-.mu-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.mu-charts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+@media (max-width: 1200px) { .mu-charts { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 900px) { .mu-charts { grid-template-columns: 1fr; } }
 .mu-chart-card { overflow: hidden; }
 .mu-chart-card__header, .mu-section__header {
@@ -1441,6 +1778,7 @@ if (typeof MutationObserver !== 'undefined') {
 }
 .mu-chart-card__body { padding: 14px 16px; height: 228px; position: relative; }
 .mu-chart-card__body--doughnut { height: 260px; }
+.mu-chart-card__body--ranking { padding: 14px 16px; height: 320px; position: relative; }
 
 /* ── 区块 ── */
 .mu-section { overflow: hidden; }

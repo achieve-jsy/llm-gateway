@@ -17,12 +17,16 @@ import (
 //   - 上下文/输出上限：取成员中的最小正值，避免超过最弱成员的实际能力；
 //   - mode：任一成员为 chat 即为 chat，否则取首个非空 mode。
 type GroupModelInfo struct {
-	Mode                    string `json:"mode"`
-	MaxInputTokens          int    `json:"max_input_tokens"`
-	MaxOutputTokens         int    `json:"max_output_tokens"`
-	SupportsVision          bool   `json:"supports_vision"`
-	SupportsFunctionCalling bool   `json:"supports_function_calling"`
-	SupportsToolChoice      bool   `json:"supports_tool_choice"`
+	Mode                    string  `json:"mode"`
+	MaxInputTokens          int     `json:"max_input_tokens"`
+	MaxOutputTokens         int     `json:"max_output_tokens"`
+	SupportsVision          bool    `json:"supports_vision"`
+	SupportsFunctionCalling bool    `json:"supports_function_calling"`
+	SupportsToolChoice      bool    `json:"supports_tool_choice"`
+	// 单价：USD per 1,000,000 tokens。组内成员价格不一致时取最大值（保守上界），
+	// 单模型组即为精确值；0 表示缺价（成员未绑定 catalog 或未配置 manual 价）。
+	InputPricePerMillion  float64 `json:"input_price_per_million"`
+	OutputPricePerMillion float64 `json:"output_price_per_million"`
 }
 
 // GroupInfoRepo 抽象按需查询启用模型组（含成员）的能力。
@@ -148,6 +152,14 @@ func aggregateGroupModelInfo(members []*model.Model) GroupModelInfo {
 			}
 		}
 
+		// 单价取组内最大值，作为对外展示的保守上界。
+		if in := memberInputPrice(m); in > info.InputPricePerMillion {
+			info.InputPricePerMillion = in
+		}
+		if out := memberOutputPrice(m); out > info.OutputPricePerMillion {
+			info.OutputPricePerMillion = out
+		}
+
 		// 未绑定 catalog 的成员视为「能力未知 = 不支持」，从而拉低组级能力。
 		var memberVision, memberFC, memberTC bool
 		if m.Catalog != nil {
@@ -192,6 +204,29 @@ func memberOutput(m *model.Model) int {
 	}
 	if m.Catalog != nil && m.Catalog.MaxOutputTokens > 0 {
 		return int(m.Catalog.MaxOutputTokens)
+	}
+	return 0
+}
+
+// memberInputPrice / memberOutputPrice 解析单个成员模型的有效单价：
+//   - price_mode=manual：取模型自身的 InputPrice/OutputPrice；
+//   - 其他（catalog/默认）：取关联 catalog 的 *PricePerMillion，未绑定则为 0。
+func memberInputPrice(m *model.Model) float64 {
+	if m.PriceMode == "manual" {
+		return m.InputPrice
+	}
+	if m.Catalog != nil {
+		return m.Catalog.InputPricePerMillion
+	}
+	return 0
+}
+
+func memberOutputPrice(m *model.Model) float64 {
+	if m.PriceMode == "manual" {
+		return m.OutputPrice
+	}
+	if m.Catalog != nil {
+		return m.Catalog.OutputPricePerMillion
 	}
 	return 0
 }

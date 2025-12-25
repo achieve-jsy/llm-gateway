@@ -25,6 +25,9 @@ export interface GroupCapability {
   supports_vision: boolean
   supports_function_calling: boolean
   supports_tool_choice: boolean
+  // 单价：USD per 1,000,000 tokens；0 表示缺价。
+  input_price_per_million: number
+  output_price_per_million: number
 }
 
 export const groupsApi = {

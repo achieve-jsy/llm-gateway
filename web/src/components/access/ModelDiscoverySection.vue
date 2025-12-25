@@ -89,6 +89,19 @@
             <!-- 描述 -->
             <p class="gc-desc">{{ g.description || '暂无描述' }}</p>
 
+            <!-- 单价（每百万 tokens） -->
+            <div class="gc-price" v-if="caps[g.name] && (caps[g.name].input_price_per_million > 0 || caps[g.name].output_price_per_million > 0)">
+              <span class="gc-price__item">
+                <i class="gc-price__dot in" /> 输入
+                <b>{{ formatPrice(caps[g.name].input_price_per_million) }}</b>
+              </span>
+              <span class="gc-price__item">
+                <i class="gc-price__dot out" /> 输出
+                <b>{{ formatPrice(caps[g.name].output_price_per_million) }}</b>
+              </span>
+              <span class="gc-price__unit">/ 1M tokens</span>
+            </div>
+
             <!-- 底部：能力 + 元信息 -->
             <div class="gc-foot">
               <div class="gc-caps">
@@ -186,6 +199,14 @@ function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(0)}M`
   if (n >= 1_000) return `${Math.round(n / 1_000)}K`
   return `${n}`
+}
+
+// 单价单位为 USD / 1M tokens。免费或缺价返回占位符。
+function formatPrice(n: number): string {
+  if (!n || n <= 0) return '免费'
+  if (n < 0.01) return `$${n.toFixed(4)}`
+  if (n < 1) return `$${n.toFixed(3)}`
+  return `$${n.toFixed(2)}`
 }
 
 function resetFilters() {
@@ -434,6 +455,44 @@ onMounted(() => { load() })
   flex: 1;
 }
 
+/* 单价 */
+.gc-price {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 7px 10px;
+  background: #F6FBFB;
+  border: 1px solid #E2F1F0;
+  border-radius: 8px;
+  font-size: 11.5px;
+  color: #6A8E8C;
+}
+.gc-price__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  b {
+    color: #0D4A47;
+    font-family: 'Fira Code', 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+}
+.gc-price__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  &.in { background: #3498DB; }
+  &.out { background: #2BA8A2; }
+}
+.gc-price__unit {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: #A8C4C2;
+}
+
 /* 底部 */
 .gc-foot {
   display: flex;
@@ -575,6 +634,9 @@ onMounted(() => { load() })
 :global(html.dark) .gc-copy-icon { background: #132322; border-color: #1F3A38; color: #3A7A78; }
 :global(html.dark) .gc-copy-icon.ok { background: rgba(39,174,96,0.12); border-color: #27AE60; color: #27AE60; }
 :global(html.dark) .gc-models { color: #2A5A58; }
+:global(html.dark) .gc-price { background: #0B1817; border-color: #1A3230; color: #4A7A78; }
+:global(html.dark) .gc-price__item b { color: #A0E0DC; }
+:global(html.dark) .gc-price__unit { color: #2A5A58; }
 
 :global(html.dark) .cap-mode { color: #3CC4BD; background: rgba(43,168,162,0.1); border-color: rgba(43,168,162,0.25); }
 :global(html.dark) .cap-v    { color: #5DADE2; background: rgba(52,152,219,0.1); border-color: rgba(52,152,219,0.22); }

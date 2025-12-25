@@ -22,8 +22,20 @@ func HandleStreamResponse(c *gin.Context, stream io.ReadCloser) {
 	c.Writer.WriteHeader(200)
 	c.Writer.Flush()
 
-	// Zero-copy pipe: upstream SSE bytes → client
-	// io.Copy terminates when the stream is exhausted or the client disconnects.
-	_, _ = io.Copy(c.Writer, stream)
-	c.Writer.Flush()
+	// 逐块读取并在每次写入后 flush，确保 SSE 事件实时下发给客户端。
+	// 不能用 io.Copy：gin/net-http 的 ResponseWriter 自带缓冲，小块 SSE 事件
+	// 会在缓冲区里攒到一定大小或请求结束才发出，表现为"流式请求却同步返回"。
+	buf := make([]byte, 16*1024)
+	for {
+		n, readErr := stream.Read(buf)
+		if n > 0 {
+			if _, writeErr := c.Writer.Write(buf[:n]); writeErr != nil {
+				return
+			}
+			c.Writer.Flush()
+		}
+		if readErr != nil {
+			return
+		}
+	}
 }

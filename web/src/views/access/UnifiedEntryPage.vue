@@ -379,6 +379,7 @@ const fmtCny = (n: number) => n < 0.01 && n > 0 ? '<0.01' : n.toLocaleString('zh
           </div>
 
           <div class="pd-comp">
+            <div class="pd-comp__spacer" aria-hidden="true"></div>
             <div class="pd-comp__bar">
               <div
                 v-for="seg in composition" :key="seg.key"
@@ -544,8 +545,18 @@ const fmtCny = (n: number) => n < 0.01 && n > 0 ? '<0.01' : n.toLocaleString('zh
 .pd-ms__label { font-size: 12px; color: var(--el-text-color-secondary); }
 
 /* ── 任务画像 ── */
-.pd-task__body { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: center; }
-@media (max-width: 720px) { .pd-task__body { grid-template-columns: 1fr; gap: 20px; } }
+/* 用 subgrid 让左右两列共享同一组行轨：行1=标题/占位、行2=进度条、行3=注释/图例，
+   从而保证左侧滑条与右侧构成条始终落在同一水平线上。 */
+.pd-task__body { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto auto auto; column-gap: 24px; align-items: start; }
+.pd-task__len, .pd-comp { display: grid; grid-template-rows: subgrid; grid-row: 1 / span 3; row-gap: 0; }
+.pd-comp__spacer { grid-row: 1; }
+.pd-slider, .pd-comp__bar { grid-row: 2; align-self: center; }
+.pd-task__note, .pd-comp__legend { grid-row: 3; }
+@media (max-width: 720px) {
+  .pd-task__body { grid-template-columns: 1fr; grid-template-rows: none; row-gap: 20px; }
+  .pd-task__len, .pd-comp { display: block; grid-row: auto; }
+  .pd-comp__spacer { display: none; }
+}
 .pd-task__len-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .pd-task__len-end { font-size: 12px; color: var(--el-text-color-secondary); }
 .pd-task__len-badge { font-size: 12px; font-weight: 700; color: var(--pd-brand); background: rgba(43,168,162,0.10); border-radius: 99px; padding: 2px 12px; }

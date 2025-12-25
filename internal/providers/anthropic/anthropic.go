@@ -349,33 +349,6 @@ func buildAnthropicRawUsage(u anthropicUsage) map[string]any {
 	return raw
 }
 
-// extractThinkingBlocks returns the complete thinking and redacted_thinking content
-// blocks from the response, preserving all fields including the encrypted signature.
-//
-// These blocks must be passed back verbatim in subsequent requests when using
-// extended thinking, so Anthropic can verify signature continuity across turns.
-// Each returned block is an anthropicContentBlock ready to be JSON-serialised and
-// stored in the assistant message's ExtraFields["thinking_blocks"].
-func extractThinkingBlocks(blocks []anthropicContent) []anthropicContentBlock {
-	var out []anthropicContentBlock
-	for _, b := range blocks {
-		switch b.Type {
-		case "thinking":
-			out = append(out, anthropicContentBlock{
-				Type:      "thinking",
-				Thinking:  b.Thinking,
-				Signature: b.Signature,
-			})
-		case "redacted_thinking":
-			out = append(out, anthropicContentBlock{
-				Type: "redacted_thinking",
-				Data: b.Data,
-			})
-		}
-	}
-	return out
-}
-
 func malformedAnthropicStreamError(err error) error {
 	return core.NewProviderError("anthropic", http.StatusBadGateway, "failed to decode anthropic stream event: "+err.Error(), err)
 }

@@ -145,7 +145,6 @@ resp = client.chat.completions.create(
   border-radius: 18px;
   padding: 40px 44px;
   position: relative;
-  overflow: hidden;
 
   // 左上角装饰
   &::before {
@@ -332,7 +331,7 @@ resp = client.chat.completions.create(
 .code-win {
   background: #131E2B;
   border-radius: 14px;
-  overflow: hidden;
+  overflow: visible;
   box-shadow: 0 20px 60px rgba(13, 43, 42, 0.18), 0 4px 12px rgba(0,0,0,0.12);
 }
 
@@ -343,6 +342,7 @@ resp = client.chat.completions.create(
   padding: 12px 16px;
   background: #0E1720;
   border-bottom: 1px solid rgba(255,255,255,0.06);
+  border-radius: 14px 14px 0 0;
 }
 
 .cb-dot {
@@ -367,6 +367,8 @@ resp = client.chat.completions.create(
   color: #9BB8C8;
   overflow-x: auto;
   tab-size: 4;
+  border-radius: 0 0 14px 14px;
+  -webkit-overflow-scrolling: touch;
 
   .t-comment { color: #3D6070; font-style: italic; }
   .t-kw      { color: #7EB8E0; }
@@ -433,6 +435,45 @@ resp = client.chat.completions.create(
   .hero { padding: 24px 20px; border-radius: 14px; }
   .hero-h1 { font-size: 28px; }
   .sec-title { font-size: 18px; }
+
+  /* URL 框：小屏幕竖排 */
+  .url-box {
+    flex-wrap: wrap;
+  }
+  .url-prefix {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid #D8EEEC;
+    padding: 8px 12px;
+    height: auto;
+  }
+  .url-value {
+    flex: 1;
+    min-width: 0;
+    padding: 10px 14px;
+    font-size: 12px;
+  }
+  .url-btn {
+    flex-shrink: 0;
+    padding: 0 14px;
+  }
+
+  /* 代码窗口：小屏幕字体缩小 + 滚动 */
+  .code-body {
+    font-size: 11px;
+    padding: 16px;
+    line-height: 1.65;
+  }
+  .code-bar {
+    padding: 10px 14px;
+    border-radius: 12px 12px 0 0;
+  }
+  .code-win {
+    border-radius: 12px;
+  }
+  .code-body {
+    border-radius: 0 0 12px 12px;
+  }
 }
 
 /* ══ 深色模式 ════════════════════════════════════ */

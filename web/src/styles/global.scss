@@ -203,10 +203,38 @@ body,
   opacity: 1;
 }
 
-/* el-table 在窄屏横向滚动 */
+/* el-table 在窄屏横向滚动 + 右侧渐变提示 */
 .el-table-wrapper,
 .el-table {
   overflow-x: auto;
+}
+
+/* 表格滚动提示：右侧渐隐遮罩，提示用户可横滑 */
+.el-table__body-wrapper {
+  position: relative;
+}
+
+@media (max-width: 768px) {
+  .el-table__body-wrapper::after {
+    content: '';
+    position: sticky;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 30px;
+    background: linear-gradient(to left, rgba(255,255,255,0.9), transparent);
+    pointer-events: none;
+    display: block;
+    float: right;
+    margin-top: -100%;
+    height: 100%;
+  }
+
+  /* 暗色模式适配 */
+  .dark .el-table__body-wrapper::after,
+  html.dark .el-table__body-wrapper::after {
+    background: linear-gradient(to left, rgba(#1d1e1f, 0.9), transparent);
+  }
 }
 
 /* el-card header 在窄屏允许换行 */
@@ -223,6 +251,15 @@ body,
 
   .page-container {
     padding: 18px 18px;
+  }
+}
+
+/* iPad / 平板优化：侧边栏更窄，留更多空间给内容区 */
+@media (max-width: 1024px) and (min-width: 768px) {
+  .layout-sidebar {
+    .sidebar {
+      width: 168px;
+    }
   }
 }
 

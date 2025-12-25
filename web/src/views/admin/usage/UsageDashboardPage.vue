@@ -36,42 +36,50 @@
           size="default"
           @change="onDateChange"
         />
+        <!-- 移动端筛选折叠按钮 -->
+        <button class="ud-filter-toggle" @click="showFilters = !showFilters">
+          <el-icon size="14"><component :is="showFilters ? 'ArrowUp' : 'ArrowDown'" /></el-icon>
+          筛选
+          <span v-if="activeFilterCount > 0" class="ud-filter-badge">{{ activeFilterCount }}</span>
+        </button>
       </div>
-      <div class="ud-filter-row ud-filter-row--dims">
-        <!-- 成员姓名：非普通用户可见 -->
-        <div v-if="authStore.effectiveRole !== 'user'" class="ud-filter-chip">
-          <span class="ud-chip-label">成员</span>
-          <el-input v-model="filterUserName" placeholder="姓名搜索" clearable size="small"
-            class="ud-chip-input" @change="onUserNameChange" @clear="onUserNameClear">
-            <template #prefix><el-icon><User /></el-icon></template>
-          </el-input>
+      <Transition name="ud-filter-collapse">
+        <div v-show="showFilters" class="ud-filter-row ud-filter-row--dims">
+          <!-- 成员姓名：非普通用户可见 -->
+          <div v-if="authStore.effectiveRole !== 'user'" class="ud-filter-chip">
+            <span class="ud-chip-label">成员</span>
+            <el-input v-model="filterUserName" placeholder="姓名搜索" clearable size="small"
+              class="ud-chip-input" @change="onUserNameChange" @clear="onUserNameClear">
+              <template #prefix><el-icon><User /></el-icon></template>
+            </el-input>
+          </div>
+          <!-- 模型 -->
+          <div class="ud-filter-chip">
+            <span class="ud-chip-label">模型</span>
+            <el-input v-model="filterModel" placeholder="搜索模型名" clearable size="small"
+              class="ud-chip-input" @change="loadAll" @clear="loadAll">
+              <template #prefix><el-icon><Search /></el-icon></template>
+            </el-input>
+          </div>
+          <!-- 状态 -->
+          <div class="ud-filter-chip">
+            <span class="ud-chip-label">状态</span>
+            <el-select v-model="filterStatus" placeholder="全部" clearable size="small"
+              class="ud-chip-select" @change="loadAll" @clear="loadAll">
+              <el-option label="全部" value="" />
+              <el-option value="success">
+                <div style="display:flex;align-items:center;gap:6px"><span class="ud-status-dot ud-status-dot--ok" />成功</div>
+              </el-option>
+              <el-option value="error">
+                <div style="display:flex;align-items:center;gap:6px"><span class="ud-status-dot ud-status-dot--err" />失败</div>
+              </el-option>
+            </el-select>
+          </div>
+          <el-button v-if="activeFilterCount > 0" link size="small" type="warning" @click="clearFilters">
+            清空 {{ activeFilterCount }} 个筛选
+          </el-button>
         </div>
-        <!-- 模型 -->
-        <div class="ud-filter-chip">
-          <span class="ud-chip-label">模型</span>
-          <el-input v-model="filterModel" placeholder="搜索模型名" clearable size="small"
-            class="ud-chip-input" @change="loadAll" @clear="loadAll">
-            <template #prefix><el-icon><Search /></el-icon></template>
-          </el-input>
-        </div>
-        <!-- 状态 -->
-        <div class="ud-filter-chip">
-          <span class="ud-chip-label">状态</span>
-          <el-select v-model="filterStatus" placeholder="全部" clearable size="small"
-            class="ud-chip-select" @change="loadAll" @clear="loadAll">
-            <el-option label="全部" value="" />
-            <el-option value="success">
-              <div style="display:flex;align-items:center;gap:6px"><span class="ud-status-dot ud-status-dot--ok" />成功</div>
-            </el-option>
-            <el-option value="error">
-              <div style="display:flex;align-items:center;gap:6px"><span class="ud-status-dot ud-status-dot--err" />失败</div>
-            </el-option>
-          </el-select>
-        </div>
-        <el-button v-if="activeFilterCount > 0" link size="small" type="warning" @click="clearFilters">
-          清空 {{ activeFilterCount }} 个筛选
-        </el-button>
-      </div>
+      </Transition>
     </div>
 
     <!-- ══ KPI 卡片 ══ -->
@@ -233,7 +241,7 @@
                 <td>
                   <div class="ud-bar-wrap">
                     <div class="ud-bar-bg">
-                      <div class="ud-bar-fill ud-bar-fill--cost" :style="{ width: barPct(row.cost_estimate, totalCost) + '%' }" />
+                      <div class="ud-bar-fill ud-bar-fill--cost" :style="{ width: barPct(row.cost_estimate, maxCost) + '%' }" />
                     </div>
                     <span class="ud-bar-pct">{{ barPct(row.cost_estimate, totalCost) }}%</span>
                   </div>
@@ -735,6 +743,7 @@ function onDateChange() {
 const filterUserName = ref('')
 const filterModel    = ref('')
 const filterStatus   = ref('')
+const showFilters    = ref(true)  // 移动端可折叠筛选栏
 
 const activeFilterCount = computed(() =>
   [filterUserName.value, filterModel.value, filterStatus.value].filter(Boolean).length
@@ -1480,6 +1489,56 @@ onUnmounted(() => {
 .ud-chip-input { width: 140px; }
 .ud-chip-select { width: 100px; }
 
+/* 移动端筛选折叠按钮 - 桌面端隐藏 */
+.ud-filter-toggle {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  background: #f5f7fa;
+  color: #606266;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.ud-filter-toggle:hover { border-color: #409eff; color: #409eff; }
+.ud-filter-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #409eff;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* 折叠动画 */
+.ud-filter-collapse-enter-active,
+.ud-filter-collapse-leave-active {
+  transition: all 0.25s ease;
+  overflow: hidden;
+}
+.ud-filter-collapse-enter-from,
+.ud-filter-collapse-leave-to {
+  opacity: 0;
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.ud-filter-collapse-enter-to,
+.ud-filter-collapse-leave-from {
+  opacity: 1;
+  max-height: 200px;
+}
+
 /* ── KPI 卡片 ── */
 .ud-kpi-row {
   display: grid;
@@ -1600,6 +1659,15 @@ onUnmounted(() => {
   .ud-filter-row--date {
     flex-wrap: wrap;
     gap: 6px;
+  }
+
+  /* 移动端显示筛选折叠按钮 */
+  .ud-filter-toggle {
+    display: flex;
+  }
+
+  .ud-filter-divider {
+    display: none;
   }
 
   .ud-presets {

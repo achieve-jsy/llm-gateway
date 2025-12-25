@@ -77,6 +77,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '模型组健康监控' }
   },
   {
+    path: '/admin/performance',
+    name: 'Performance',
+    component: () => import('@/views/admin/PerformancePage.vue'),
+    meta: { title: '模型性能看板' }
+  },
+  {
     path: '/admin/usage-cost',
     name: 'UsageCost',
     component: () => import('@/views/admin/UsageCostPage.vue'),

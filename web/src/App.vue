@@ -36,6 +36,10 @@
           <el-icon><Histogram /></el-icon>
           <template #title>模型组健康</template>
         </el-menu-item>
+        <el-menu-item index="/admin/performance">
+          <el-icon><TrendCharts /></el-icon>
+          <template #title>模型性能</template>
+        </el-menu-item>
 
         <!-- 组织 & 用量看板（管理角色可见）-->
         <template v-if="authStore.isManager">
@@ -180,7 +184,7 @@ import { onMounted, computed, ref, watch, onUnmounted } from 'vue'
 import { isDark, toggleTheme } from './composables/useTheme'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
-import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close, Menu } from '@element-plus/icons-vue'
+import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close, Menu, TrendCharts } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/common/NotificationBell.vue'
 import AnnouncementBanner from '@/components/common/AnnouncementBanner.vue'
 import AnnouncementPopup from '@/components/common/AnnouncementPopup.vue'

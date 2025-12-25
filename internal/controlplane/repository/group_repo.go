@@ -141,3 +141,59 @@ func (r *GroupRepo) ListEnabled() ([]model.Group, error) {
 	err := r.db.Where("enabled = ?", true).Order("name ASC").Find(&groups).Error
 	return groups, err
 }
+
+func (r *GroupRepo) FindNamesByOpenMode(openMode string) ([]string, error) {
+	var names []string
+	err := r.db.Model(&model.Group{}).
+		Where("open_mode = ? AND enabled = ? AND deleted_at IS NULL", openMode, true).
+		Pluck("name", &names).Error
+	return names, err
+}
+
+func (r *GroupRepo) FindNamesByIDs(ids []uint) ([]string, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var names []string
+	err := r.db.Model(&model.Group{}).
+		Select("name").Where("id IN ?", ids).
+		Pluck("name", &names).Error
+	return names, err
+}
+
+func (r *GroupRepo) UpdateOpenMode(id uint, openMode string) error {
+	return r.db.Model(&model.Group{}).
+		Where("id = ?", id).
+		Update("open_mode", openMode).Error
+}
+
+
+// GroupMetadata 模型组元数据（策略 + 成员模型数）
+type GroupMetadata struct {
+	Name       string `gorm:"column:name"`
+	Strategy   string `gorm:"column:strategy"`
+	ModelCount int    `gorm:"column:model_count"`
+}
+
+// GetGroupMetadata 批量获取模型组的策略与成员数
+func (r *GroupRepo) GetGroupMetadata(names []string) (map[string]GroupMetadata, error) {
+	if len(names) == 0 {
+		return map[string]GroupMetadata{}, nil
+	}
+	var rows []GroupMetadata
+	err := r.db.Raw(`
+		SELECT mg.name, mg.strategy, COUNT(gm.model_id)::int AS model_count
+		FROM model_groups mg
+		LEFT JOIN group_models gm ON gm.group_id = mg.id
+		WHERE mg.name IN ? AND mg.deleted_at IS NULL
+		GROUP BY mg.id, mg.name, mg.strategy
+	`, names).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]GroupMetadata, len(rows))
+	for i := range rows {
+		result[rows[i].Name] = rows[i]
+	}
+	return result, nil
+}

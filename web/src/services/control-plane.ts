@@ -786,3 +786,53 @@ export async function getReadHistoryAnnouncements(): Promise<Announcement[]> {
 export async function markAnnouncementRead(id: string): Promise<void> {
   await http.post(`/api/v1/announcements/${id}/read`, {}, { _silent: true } as any)
 }
+
+// ===================== 模型性能看板 =====================
+
+export interface PerformanceMember {
+  model_name: string
+  provider: string
+  traffic_pct: number
+  req_count: number
+  p50_ms: number
+  p95_ms: number
+  success_rate: number
+}
+
+export interface PerformanceItem {
+  name: string
+  strategy?: string
+  model_count?: number
+  used_by_groups?: number  // model view
+  req_count: number
+  success_rate: number
+  p50_ms: number
+  p95_ms: number
+  ttft_p50_ms: number
+  ttft_p95_ms: number
+  failover_count: number
+  pct_in_24h_p50?: number | null
+  err_429: number
+  err_5xx: number
+  members?: PerformanceMember[]
+}
+
+export interface PerformanceResult {
+  window: string
+  generated_at: string
+  items: PerformanceItem[]
+  total: number
+}
+
+export async function getPerformance(
+  window: string = '1h',
+  view: string = 'group',
+  search: string = '',
+  limit: number = 50,
+  offset: number = 0
+): Promise<PerformanceResult> {
+  const response = await http.get<ApiResponse<PerformanceResult>>('/api/v1/health/performance', {
+    params: { window, view, search, limit, offset }
+  })
+  return response.data.data
+}

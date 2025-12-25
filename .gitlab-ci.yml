@@ -49,6 +49,7 @@ build-gateway-test:
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
+    DOCKER_BUILDKIT: "1"
   script:
     - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
     - docker build --build-arg APP_ENV=test -f deploy/docker/gateway.Dockerfile -t ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} .
@@ -63,6 +64,7 @@ build-control-plane-test:
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
+    DOCKER_BUILDKIT: "1"
   script:
     - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
     - docker build --build-arg APP_ENV=test -f deploy/docker/control-plane.Dockerfile -t ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} .
@@ -75,9 +77,17 @@ build-web-test:
   stage: build
   image: node:20-alpine
   tags: [docker]
+  variables:
+    npm_config_cache: "$CI_PROJECT_DIR/.npm-cache"
+  cache:
+    key:
+      files:
+        - web/package-lock.json
+    paths:
+      - .npm-cache/
   script:
     - cd web
-    - npm ci
+    - npm ci --prefer-offline
     - npm run build
     - tar -czf ../web-dist.tar.gz -C dist .
   artifacts:
@@ -96,6 +106,7 @@ build-gateway-prod:
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
+    DOCKER_BUILDKIT: "1"
   before_script:
     - export IMAGE_TAG="${CI_COMMIT_TAG}"
   script:
@@ -110,6 +121,7 @@ build-control-plane-prod:
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
+    DOCKER_BUILDKIT: "1"
   before_script:
     - export IMAGE_TAG="${CI_COMMIT_TAG}"
   script:
@@ -122,9 +134,17 @@ build-web-prod:
   stage: build
   image: node:20-alpine
   tags: [docker]
+  variables:
+    npm_config_cache: "$CI_PROJECT_DIR/.npm-cache"
+  cache:
+    key:
+      files:
+        - web/package-lock.json
+    paths:
+      - .npm-cache/
   script:
     - cd web
-    - npm ci
+    - npm ci --prefer-offline
     - npm run build
     - tar -czf ../web-dist.tar.gz -C dist .
   artifacts:

@@ -3,7 +3,9 @@ package handler
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/model"
@@ -48,6 +50,7 @@ func (h *ResponsesHandler) Handle(c *gin.Context) {
 	}
 
 	c.Set("model", req.Model)
+	originalModel := req.Model
 
 	// 若请求的是模型组名，通过 group dispatcher 解析到实际 provider 模型
 	if h.groupDispatch != nil {
@@ -68,37 +71,97 @@ func (h *ResponsesHandler) Handle(c *gin.Context) {
 		}
 	}
 
-	ctx := orchestrator.WithGinContext(c.Request.Context(), c)
+	baseCtx := orchestrator.WithGinContext(c.Request.Context(), c)
+	nonStreamTimeout := h.groupTimeout(originalModel, false)
+	streamTimeout := h.groupTimeout(originalModel, true)
 
 	if req.Stream {
-		h.handleStream(c, ctx, &req)
+		h.handleStream(c, baseCtx, &req, originalModel, streamTimeout)
 		return
 	}
-
-	h.handleNonStream(c, ctx, &req)
+	h.handleNonStream(c, baseCtx, &req, originalModel, nonStreamTimeout)
 }
 
-func (h *ResponsesHandler) handleNonStream(c *gin.Context, ctx context.Context, req *core.ResponsesRequest) {
-	tctx, cancel := context.WithTimeout(ctx, defaultNonStreamTimeout)
-	defer cancel()
+func (h *ResponsesHandler) handleNonStream(c *gin.Context, baseCtx context.Context, req *core.ResponsesRequest, originalModel string, timeout time.Duration) {
+	tctx, cancel := context.WithTimeout(baseCtx, timeout)
 	resp, err := h.orchestrator.Responses(tctx, req)
-	if err != nil {
-		if ue, ok := err.(*model.UnifiedError); ok {
-			respondError(c, ue)
-			return
-		}
-		respondError(c, model.ErrInternal)
+	cancel()
+
+	if err == nil {
+		c.JSON(http.StatusOK, resp)
 		return
 	}
 
-	c.JSON(http.StatusOK, resp)
+	// failover（仅在通过 group routing 时尝试）
+	if h.groupDispatch != nil && req.Model != originalModel {
+		failedID := req.Model
+		if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
+			failedID = dc.RoutedModelID
+		}
+		if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID); fErr == nil {
+			req.Model = decision.ModelName
+			req.Provider = decision.ChannelType
+			c.Set("failover_used", true)
+			slog.Info("responses: failover switching",
+				"request_id", c.GetString("request_id"),
+				"group", originalModel,
+				"target", decision.ModelName,
+			)
+			ftctx, fcancel := context.WithTimeout(baseCtx, timeout)
+			fResp, fErr2 := h.orchestrator.Responses(ftctx, req)
+			fcancel()
+			if fErr2 == nil {
+				c.Set("error_message", "")
+				c.JSON(http.StatusOK, fResp)
+				return
+			}
+		}
+	}
+
+	if ue, ok := err.(*model.UnifiedError); ok {
+		respondError(c, ue)
+		return
+	}
+	respondError(c, model.ErrInternal)
 }
 
-func (h *ResponsesHandler) handleStream(c *gin.Context, ctx context.Context, req *core.ResponsesRequest) {
-	tctx, cancel := context.WithTimeout(ctx, defaultStreamTimeout)
-	defer cancel()
-	stream, err := h.orchestrator.ResponsesStream(tctx, req)
+func (h *ResponsesHandler) handleStream(c *gin.Context, baseCtx context.Context, req *core.ResponsesRequest, originalModel string, timeout time.Duration) {
+	open := func(r *core.ResponsesRequest) (io.ReadCloser, context.CancelFunc, error) {
+		tctx, cancel := context.WithTimeout(baseCtx, timeout)
+		s, e := h.orchestrator.ResponsesStream(tctx, r)
+		if e != nil {
+			cancel()
+			return nil, nil, e
+		}
+		return s, cancel, nil
+	}
+
+	stream, cancel, err := open(req)
+
 	if err != nil {
+		// failover（仅在通过 group routing 时尝试）
+		if h.groupDispatch != nil && req.Model != originalModel {
+			failedID := req.Model
+			if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
+				failedID = dc.RoutedModelID
+			}
+			if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID); fErr == nil {
+				req.Model = decision.ModelName
+				req.Provider = decision.ChannelType
+				c.Set("failover_used", true)
+				slog.Info("responses: stream failover switching",
+					"request_id", c.GetString("request_id"),
+					"group", originalModel,
+					"target", decision.ModelName,
+				)
+				fStream, fCancel, fErr2 := open(req)
+				if fErr2 == nil {
+					c.Set("error_message", "")
+					HandleStreamResponse(c, &cancelOnClose{ReadCloser: fStream, cancel: fCancel})
+					return
+				}
+			}
+		}
 		if ue, ok := err.(*model.UnifiedError); ok {
 			respondError(c, ue)
 			return
@@ -107,5 +170,17 @@ func (h *ResponsesHandler) handleStream(c *gin.Context, ctx context.Context, req
 		return
 	}
 
-	HandleStreamResponse(c, stream)
+	HandleStreamResponse(c, &cancelOnClose{ReadCloser: stream, cancel: cancel})
+}
+
+// groupTimeout 获取组的超时配置，未配置时使用默认值。
+func (h *ResponsesHandler) groupTimeout(modelName string, stream bool) time.Duration {
+	def := defaultNonStreamTimeout
+	if stream {
+		def = defaultStreamTimeout
+	}
+	if h.groupDispatch != nil {
+		return h.groupDispatch.GetGroupTimeout(modelName, def)
+	}
+	return def
 }

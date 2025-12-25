@@ -15,11 +15,12 @@ import (
 
 func main() {
 	loaded, err := gormschema.New("postgres").Load(
-		// controlplane/model (15 个表)
+		// controlplane/model (21 个表，v0.7 新增 6 张)
 		&cpmmodel.Announcement{},
 		&cpmmodel.AnnouncementRead{},
 		&cpmmodel.Group{},
 		&cpmmodel.GroupModel{},
+		&cpmmodel.GroupEntitlement{},
 		&cpmmodel.HealthCheckConfig{},
 		&cpmmodel.HealthCheckLog{},
 		&cpmmodel.KeyGroupBinding{},
@@ -31,6 +32,13 @@ func main() {
 		&cpmmodel.ProviderDefinition{},
 		&cpmmodel.Provider{},
 		&cpmmodel.SystemConfig{},
+		// v0.7 预算模块
+		&cpmmodel.BudgetAllocation{},
+		&cpmmodel.BudgetConsumption{},
+		&cpmmodel.BudgetAlertRecord{},
+		// v0.7 扩容审批
+		&cpmmodel.ExpansionRequest{},
+		&cpmmodel.ExpansionApprovalStep{},
 
 		// auth/model (3 个表)
 		&authmodel.Department{},

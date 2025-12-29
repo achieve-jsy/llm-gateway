@@ -116,6 +116,12 @@ func Setup(
 	v1 := r.Group("/v1")
 	v1.Use(middleware.AuthMiddleware(authClient))
 	v1.Use(guard.Handler())
+	// v0.7: 分层限速（③关 dept/studio 层，Redis 滑动窗口）
+	// RateLimitConfig 目前从 settings 下发全局 RPM，dept/studio 层先以 0（不限）兜底，
+	// 后续通过 verify-key 快照携带各层限速配置。
+	v1.Use(middleware.LayeredRateLimiter(rdb, func(c *gin.Context) middleware.RateLimitConfig {
+		return middleware.RateLimitConfig{} // TODO: 从 settings 读取各层 RPM
+	}))
 	// 请求/响应正文捕获（供 trace 记录使用）
 	v1.Use(middleware.TraceCapture())
 	// 埋点采集中间件放在 OrgCheck 之前，确保 403 拦截的调用也能写入 call_logs
@@ -146,8 +152,10 @@ func Setup(
 		v1.POST("/messages", messagesHandler.HandleMessages)
 		v1.POST("/messages/count_tokens", messagesHandler.HandleCountTokens)
 
-		// Provider passthrough: /v1/p/:provider/*path forwards opaquely to the upstream.
-		v1.Any("/p/:provider/*path", makePassthroughHandler(router))
+		// Provider passthrough: /v1/p/:provider/*path
+		// v0.7: 默认关闭，仅白名单 Key（access_all_groups=true 的管理员 Key）可用；
+		// 普通 Key 一律 403，白名单 Key 透传但不计入预算（豁免），记日志。
+		v1.Any("/p/:provider/*path", middleware.PassthroughGuard(), makePassthroughHandler(router))
 	}
 
 	// Claude Code telemetry stub — returns 200 to prevent client-side 404 errors.

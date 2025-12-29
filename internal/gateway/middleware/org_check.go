@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 
+	gwmodel "github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/gin-gonic/gin"
 )
 
@@ -66,6 +67,39 @@ func OrgCheckMiddleware() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusForbidden, pendingStudioError)
 			return
 		}
+		c.Next()
+	}
+}
+
+// PassthroughGuard v0.7: passthrough 接口白名单关。
+// 默认 403；仅 access_all_groups=true 的 Key（平台受信 Key）可透传。
+// 透传调用豁免预算（不过 budget_check）但记日志（budget_skipped=passthrough）。
+func PassthroughGuard() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		identityVal, exists := c.Get("identity")
+		if !exists {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error": gin.H{
+					"code":    "passthrough_forbidden",
+					"message": "passthrough is disabled for this key",
+					"type":    "authorization_error",
+				},
+			})
+			return
+		}
+		id, ok := identityVal.(*gwmodel.UserIdentity)
+		if !ok || !id.AccessAllGroups {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error": gin.H{
+					"code":    "passthrough_forbidden",
+					"message": "passthrough requires a privileged key with access_all_groups=true",
+					"type":    "authorization_error",
+				},
+			})
+			return
+		}
+		// 白名单 Key：标记豁免预算
+		c.Set("budget_skipped", "passthrough")
 		c.Next()
 	}
 }

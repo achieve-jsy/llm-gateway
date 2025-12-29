@@ -124,6 +124,12 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	keySvc.WithBudgetRepo(budgetRepo)
 	budgetAlertRepo := repository.NewBudgetAlertRepo(db)
 	budgetSvc := service.NewBudgetService(budgetRepo, budgetAlertRepo)
+	// v0.7: 告警 service（可选接 webhook notifier，nil=仅站内）
+	budgetAlertSvc := service.NewBudgetAlertService(budgetRepo, budgetAlertRepo, nil)
+	_ = budgetAlertSvc // 后续由 usage_collector 异步调用
+	// v0.7: 扩容审批 service
+	expansionRepo := repository.NewExpansionRepo(db)
+	expansionSvc := service.NewExpansionService(expansionRepo)
 
 	systemKeySvc := service.NewSystemKeyService(db)
 	// gateway.url 从 yaml 配置读取，环境变量 GATEWAY_URL 可覆盖
@@ -424,6 +430,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	serviceKeyHandler := handler.NewServiceKeyHandler(keySvc, orgContainer.RBAC)
 	// v0.7: 预算管理路由
 	budgetHandler := handler.NewBudgetHandler(budgetSvc, orgContainer.RBAC)
+	// v0.7: 扩容审批路由
+	expansionHandler := handler.NewExpansionHandler(expansionSvc, orgContainer.RBAC)
 	{
 		// 设置模型组开放模式（仅平台 admin）
 		adminGroup.PUT("/groups/:id/open-mode", guard(rbac.PermGroupOpenModeSet), entHandler.SetOpenMode)
@@ -439,6 +447,11 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		// 预算管理（管理面）
 		adminGroup.GET("/budgets", guard(rbac.PermBudgetViewScoped), budgetHandler.List)
 		adminGroup.PUT("/budgets", guard(rbac.PermBudgetSet), budgetHandler.Set)
+		// 扩容申请（管理面）
+		adminGroup.POST("/expansion-requests", guard(rbac.PermExpansionRequest), expansionHandler.Create)
+		adminGroup.GET("/expansion-requests", guard(rbac.PermExpansionRequest), expansionHandler.ListMine)
+		adminGroup.GET("/expansion-requests/pending", guard(rbac.PermExpansionApprove), expansionHandler.ListPending)
+		adminGroup.POST("/expansion-requests/:id/decision", guard(rbac.PermExpansionApprove), expansionHandler.Decide)
 	}
 
 	// 员工自助查询预算（JWTAuth 即可，不需要 admin）

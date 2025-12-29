@@ -63,5 +63,13 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 		return
 	}
 
+	// v0.7 FIX(A): 回填 embeddings usage 到 gin context，
+	// 使 usage_collector 能正确核销预算（原来 est_cost 恒为 0）。
+	c.Set("usage", core.Usage{
+		PromptTokens: resp.Usage.PromptTokens,
+		TotalTokens:  resp.Usage.TotalTokens,
+	})
+	c.Set("stream", false)
+
 	c.JSON(http.StatusOK, resp)
 }

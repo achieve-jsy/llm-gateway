@@ -786,3 +786,104 @@ export async function getReadHistoryAnnouncements(): Promise<Announcement[]> {
 export async function markAnnouncementRead(id: string): Promise<void> {
   await http.post(`/api/v1/announcements/${id}/read`, {}, { _silent: true } as any)
 }
+
+// ===================== v0.7 预算管理 =====================
+
+import type { BudgetItem, BudgetScopeType, BudgetSetPayload, BudgetChainItem } from '@/types/budget'
+import type { EntitlementPayload, GroupEntitlement } from '@/types/entitlement'
+import type { RawServiceKeyItem, ServiceKeyItem, CreateServiceKeyResponse } from '@/types/service-key'
+import type { ExpansionRequest, CreateExpansionPayload } from '@/types/expansion'
+import { mapServiceKey } from '@/types/service-key'
+
+/** 获取预算列表（按 scope 类型和 id 过滤） */
+export async function getBudgetList(scopeType?: BudgetScopeType, scopeId?: string): Promise<BudgetItem[]> {
+  const params: Record<string, string> = {}
+  if (scopeType) params.scope_type = scopeType
+  if (scopeId) params.scope_id = scopeId
+  const res = await http.get<ApiResponse<{ items: BudgetItem[] }>>('/api/v1/budgets', { params })
+  return res.data.data.items
+}
+
+/** 设置预算额度 */
+export async function setBudget(payload: BudgetSetPayload): Promise<void> {
+  await http.put('/api/v1/budgets', payload)
+}
+
+/** 获取我的预算链 */
+export async function getMyBudget(): Promise<BudgetChainItem[]> {
+  const res = await http.get<ApiResponse<{ chain: BudgetChainItem[] }>>('/api/v1/my/budget')
+  return res.data.data.chain
+}
+
+// ===================== v0.7 模型组授权 =====================
+
+/** 设置模型组开放模式 */
+export async function setGroupOpenMode(groupId: number, openMode: 'public' | 'controlled'): Promise<void> {
+  await http.put(`/api/v1/groups/${groupId}/open-mode`, { open_mode: openMode })
+}
+
+/** 获取模型组授权列表 */
+export async function getGroupEntitlements(groupId: number): Promise<GroupEntitlement[]> {
+  const res = await http.get<ApiResponse<{ items: GroupEntitlement[] }>>(`/api/v1/groups/${groupId}/entitlements`)
+  return res.data.data.items
+}
+
+/** 授权（下放给工作室或开通部门） */
+export async function grantEntitlement(payload: EntitlementPayload): Promise<void> {
+  await http.post('/api/v1/group-entitlements', payload)
+}
+
+/** 撤销授权 */
+export async function revokeEntitlement(payload: EntitlementPayload): Promise<void> {
+  await http.delete('/api/v1/group-entitlements', { data: payload })
+}
+
+// ===================== v0.7 Service Key =====================
+
+/** 获取部门 Service Key 列表 */
+export async function listServiceKeys(deptId: string): Promise<ServiceKeyItem[]> {
+  const res = await http.get<ApiResponse<{ items: RawServiceKeyItem[] }>>('/api/v1/service-keys', {
+    params: { dept_id: deptId }
+  })
+  return (res.data.data.items || []).map(mapServiceKey)
+}
+
+/** 创建 Service Key（返回明文 key） */
+export async function createServiceKey(deptId: string, name: string, purpose: string): Promise<CreateServiceKeyResponse> {
+  const res = await http.post<ApiResponse<CreateServiceKeyResponse>>('/api/v1/service-keys', {
+    dept_id: deptId, name, purpose
+  })
+  return res.data.data
+}
+
+/** 吊销 Service Key */
+export async function deleteServiceKey(keyId: string): Promise<void> {
+  await http.delete(`/api/v1/service-keys/${keyId}`)
+}
+
+// ===================== v0.7 扩容审批 =====================
+
+/** 发起扩容申请 */
+export async function createExpansionRequest(payload: CreateExpansionPayload): Promise<ExpansionRequest> {
+  const res = await http.post<ApiResponse<ExpansionRequest>>('/api/v1/expansion-requests', payload)
+  return res.data.data
+}
+
+/** 获取我的扩容申请列表 */
+export async function getMyExpansionRequests(status?: string): Promise<ExpansionRequest[]> {
+  const params: Record<string, string> = {}
+  if (status) params.status = status
+  const res = await http.get<ApiResponse<{ items: ExpansionRequest[] }>>('/api/v1/expansion-requests', { params })
+  return res.data.data.items
+}
+
+/** 获取待审批列表 */
+export async function getPendingExpansions(): Promise<ExpansionRequest[]> {
+  const res = await http.get<ApiResponse<{ items: ExpansionRequest[] }>>('/api/v1/expansion-requests/pending')
+  return res.data.data.items
+}
+
+/** 审批扩容申请 */
+export async function decideExpansion(requestId: string, action: 'approve' | 'reject' | 'escalate' | 'cancel', comment?: string): Promise<void> {
+  await http.post(`/api/v1/expansion-requests/${requestId}/decision`, { action, comment })
+}

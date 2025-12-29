@@ -28,6 +28,10 @@
           <el-icon><DataLine /></el-icon>
           <template #title>我的用量</template>
         </el-menu-item>
+        <el-menu-item index="/my/budget">
+          <el-icon><Wallet /></el-icon>
+          <template #title>我的预算</template>
+        </el-menu-item>
         <el-menu-item index="/admin/group-health-monitor">
           <el-icon><Histogram /></el-icon>
           <template #title>模型组健康</template>
@@ -48,6 +52,18 @@
           <el-menu-item index="/admin/usage/dashboard">
             <el-icon><Histogram /></el-icon>
             <template #title>用量看板</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/budget">
+            <el-icon><Wallet /></el-icon>
+            <template #title>预算管理</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/service-keys">
+            <el-icon><Key /></el-icon>
+            <template #title>Service Key</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/expansion-requests">
+            <el-icon><TrendCharts /></el-icon>
+            <template #title>扩容申请</template>
           </el-menu-item>
           <!-- 角色管理仅 admin 可见 -->
           <el-menu-item v-if="authStore.isAdmin" index="/admin/org/roles">
@@ -71,6 +87,10 @@
           <el-menu-item index="/admin/groups">
             <el-icon><Collection /></el-icon>
             <template #title>模型组</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/group-entitlements">
+            <el-icon><Lock /></el-icon>
+            <template #title>模型组授权</template>
           </el-menu-item>
           <el-menu-item index="/admin/tags">
             <el-icon><PriceTag /></el-icon>
@@ -176,7 +196,7 @@ import { onMounted, computed, ref, watch, onUnmounted } from 'vue'
 import { isDark, toggleTheme } from './composables/useTheme'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
-import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close, Menu } from '@element-plus/icons-vue'
+import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close, Menu, Wallet, Lock, TrendCharts } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/common/NotificationBell.vue'
 import AnnouncementBanner from '@/components/common/AnnouncementBanner.vue'
 import AnnouncementPopup from '@/components/common/AnnouncementPopup.vue'

@@ -89,6 +89,36 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '我的用量' }
   },
   {
+    path: '/my/budget',
+    name: 'MyBudget',
+    component: () => import('@/views/MyBudgetPage.vue'),
+    meta: { title: '我的预算' }
+  },
+  {
+    path: '/admin/budget',
+    name: 'BudgetManage',
+    component: () => import('@/views/admin/BudgetManagePage.vue'),
+    meta: { title: '预算管理', requiresManager: true }
+  },
+  {
+    path: '/admin/service-keys',
+    name: 'ServiceKeys',
+    component: () => import('@/views/admin/ServiceKeyPage.vue'),
+    meta: { title: 'Service Key', requiresManager: true }
+  },
+  {
+    path: '/admin/group-entitlements',
+    name: 'GroupEntitlements',
+    component: () => import('@/views/admin/GroupEntitlementPage.vue'),
+    meta: { title: '模型组授权', requiresAdmin: true }
+  },
+  {
+    path: '/admin/expansion-requests',
+    name: 'ExpansionRequests',
+    component: () => import('@/views/admin/ExpansionRequestPage.vue'),
+    meta: { title: '扩容申请', requiresManager: true }
+  },
+  {
     path: '/admin/settings',
     name: 'Settings',
     component: () => import('@/views/admin/SettingsPage.vue'),

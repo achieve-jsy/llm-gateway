@@ -124,9 +124,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	keySvc.WithBudgetRepo(budgetRepo)
 	budgetAlertRepo := repository.NewBudgetAlertRepo(db)
 	budgetSvc := service.NewBudgetService(budgetRepo, budgetAlertRepo)
-	// v0.7: 告警 service（可选接 webhook notifier，nil=仅站内）
 	budgetAlertSvc := service.NewBudgetAlertService(budgetRepo, budgetAlertRepo, nil)
-	_ = budgetAlertSvc // 后续由 usage_collector 异步调用
 	// v0.7: 扩容审批 service
 	expansionRepo := repository.NewExpansionRepo(db)
 	expansionSvc := service.NewExpansionService(expansionRepo)
@@ -430,6 +428,9 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	serviceKeyHandler := handler.NewServiceKeyHandler(keySvc, orgContainer.RBAC)
 	// v0.7: 预算管理路由
 	budgetHandler := handler.NewBudgetHandler(budgetSvc, orgContainer.RBAC)
+	budgetHandler.SetAlertService(budgetAlertSvc)
+	// 注册内部告警触发端点（供 gateway 调用）
+	internalGroup.POST("/budget/evaluate-alert", budgetHandler.EvaluateAlert)
 	// v0.7: 扩容审批路由
 	expansionHandler := handler.NewExpansionHandler(expansionSvc, orgContainer.RBAC)
 	{

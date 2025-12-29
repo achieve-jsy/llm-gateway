@@ -13,12 +13,18 @@ import (
 
 // BudgetHandler 处理预算额度的查询与设置。
 type BudgetHandler struct {
-	svc  *service.BudgetService
-	rbac *rbac.Checker
+	svc      *service.BudgetService
+	alertSvc *service.BudgetAlertService
+	rbac     *rbac.Checker
 }
 
 func NewBudgetHandler(svc *service.BudgetService, rbacChecker *rbac.Checker) *BudgetHandler {
 	return &BudgetHandler{svc: svc, rbac: rbacChecker}
+}
+
+// SetAlertService 注入告警服务（供 EvaluateAlert 使用，可选）。
+func (h *BudgetHandler) SetAlertService(svc *service.BudgetAlertService) {
+	h.alertSvc = svc
 }
 
 // List GET /api/v1/budgets?scope_type=xxx&scope_id=xxx
@@ -178,4 +184,26 @@ func (h *BudgetHandler) MyBudget(c *gin.Context) {
 		chain = append(chain, item)
 	}
 	c.JSON(http.StatusOK, gin.H{"chain": chain})
+}
+
+// EvaluateAlert POST /internal/v1/budget/evaluate-alert
+// 供 gateway 调用，触发预算阈值告警评估（阈值 80%/100% + 去重 + 通知）。
+// Body: {"scope_type": "dept_daily", "scope_id": "..."}
+// 该接口幂等且异步友好（控制面内部做去重）。
+// 由 InternalAuth 鉴权，gateway 通过 X-Internal-Token 调用。
+func (h *BudgetHandler) EvaluateAlert(c *gin.Context) {
+	var req struct {
+		ScopeType string `json:"scope_type" binding:"required"`
+		ScopeID   string `json:"scope_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 调用告警服务做阈值评估（需注入 alertSvc）
+	if h.alertSvc != nil {
+		h.alertSvc.EvaluateAndAlert(c.Request.Context(), req.ScopeType, req.ScopeID)
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

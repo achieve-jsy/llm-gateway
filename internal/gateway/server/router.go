@@ -1,6 +1,9 @@
 package server
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,6 +15,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/handler"
 	"github.com/example/llm-gateway/internal/gateway/infra"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
+	gwmodel "github.com/example/llm-gateway/internal/gateway/model"
 	gwobs "github.com/example/llm-gateway/internal/gateway/observability"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/example/llm-gateway/internal/gateway/provider"
@@ -126,7 +130,12 @@ func Setup(
 	v1.Use(middleware.TraceCapture())
 	// 埋点采集中间件放在 OrgCheck 之前，确保 403 拦截的调用也能写入 call_logs
 	if len(collector) > 0 && collector[0] != nil {
-		v1.Use(middleware.UsageCollector(collector[0], traceWriterOpt))
+		// v0.7: 构造预算核销+告警触发 hook（仅在 Redis 可用时启用）
+		var budgetHook middleware.PostCostHook
+		if rdb != nil {
+			budgetHook = buildBudgetPostHook(rdb, controlPlaneURL, internalToken)
+		}
+		v1.Use(middleware.UsageCollector(collector[0], traceWriterOpt, budgetHook))
 	}
 	// 组织归集状态检查：pending_studio 员工调用模型时返回 403
 	// 注意：必须在 UsageCollector 之后，403 才能被记录到调用明细
@@ -249,4 +258,94 @@ func loadGatewayGuard(controlPlaneURL string) *middleware.GatewayGuard {
 		"max_concurrency", settings.MaxConcurrencyPerKey,
 	)
 	return guard
+}
+
+// buildBudgetPostHook 构造预算核销 + 告警触发 hook。
+// hook 在 usage_collector 埋点后调用，异步执行 Redis 核销和控制面告警触发。
+//
+// 核销逻辑（同步）：
+//   - 请求失败（status >= 400）→ BudgetCancelReserve（冲销全部预扣）
+//   - 请求成功（status < 400） → BudgetSettle（delta = realCost - estCost）
+//
+// 告警触发（异步 fire-and-forget）：
+//   - 对 BudgetChain 中的每一层调用控制面 /internal/v1/budget/evaluate-alert
+//   - 控制面告警服务做阈值判断（80%/100%）+ 去重 + webhook 通知
+func buildBudgetPostHook(rdb *redis.Client, controlPlaneURL, internalToken string) middleware.PostCostHook {
+	return func(c *gin.Context, realCostUSD float64, httpStatus int) {
+		keysVal, ok := c.Get("budget_keys")
+		if !ok {
+			return
+		}
+		budgetKeys, ok := keysVal.([]string)
+		if !ok || len(budgetKeys) == 0 {
+			return
+		}
+		estVal, _ := c.Get("budget_est_cost")
+		estCost, _ := estVal.(float64)
+
+		// 1. Redis 核销（同步，耗时 < 1ms）
+		if httpStatus >= 400 {
+			// 请求失败 → 冲销全部预扣
+			middleware.BudgetCancelReserve(c.Request.Context(), rdb, budgetKeys, estCost)
+		} else {
+			// 请求成功 → settle(real - est)
+			middleware.BudgetSettle(c.Request.Context(), rdb, budgetKeys, estCost, realCostUSD)
+		}
+
+		// 2. 告警触发（异步 fire-and-forget，不影响响应）
+		identityVal, _ := c.Get("identity")
+		id, ok := identityVal.(*gwmodel.UserIdentity)
+		if !ok || len(id.BudgetChain) == 0 {
+			return
+		}
+
+		// 拷贝 chain 数据避免 gin.Context 生命周期问题
+		chain := make([]struct {
+			ScopeType string `json:"scope_type"`
+			ScopeID   string `json:"scope_id"`
+		}, 0, len(id.BudgetChain))
+		for _, s := range id.BudgetChain {
+			chain = append(chain, struct {
+				ScopeType string `json:"scope_type"`
+				ScopeID   string `json:"scope_id"`
+			}{ScopeType: s.ScopeType, ScopeID: s.ScopeID})
+		}
+
+		go triggerBudgetAlert(chain, controlPlaneURL, internalToken)
+	}
+}
+
+// triggerBudgetAlert 异步调用控制面 /internal/v1/budget/evaluate-alert。
+// 对 BudgetChain 的每一层各发一次请求（控制面内部做去重）。
+// 任一失败仅 log，不重试。
+func triggerBudgetAlert(chain []struct {
+	ScopeType string `json:"scope_type"`
+	ScopeID   string `json:"scope_id"`
+}, controlPlaneURL, internalToken string) {
+	if controlPlaneURL == "" {
+		return
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	for _, s := range chain {
+		if s.ScopeType == "" || s.ScopeID == "" {
+			continue
+		}
+		body, _ := json.Marshal(map[string]string{
+			"scope_type": s.ScopeType,
+			"scope_id":   s.ScopeID,
+		})
+		url := controlPlaneURL + "/internal/v1/budget/evaluate-alert"
+		req, err := http.NewRequestWithContext(context.Background(), "POST", url, bytes.NewReader(body))
+		if err != nil {
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Internal-Token", internalToken)
+		resp, err := client.Do(req)
+		if err != nil {
+			slog.Debug("budget alert: control-plane unreachable", "error", err)
+			continue
+		}
+		resp.Body.Close()
+	}
 }

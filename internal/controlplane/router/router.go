@@ -122,6 +122,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	// v0.7: 预算 repo，注入 KeyService 用于 verify-key 下发 BudgetChain
 	budgetRepo := repository.NewBudgetRepo(db)
 	keySvc.WithBudgetRepo(budgetRepo)
+	budgetAlertRepo := repository.NewBudgetAlertRepo(db)
+	budgetSvc := service.NewBudgetService(budgetRepo, budgetAlertRepo)
 
 	systemKeySvc := service.NewSystemKeyService(db)
 	// gateway.url 从 yaml 配置读取，环境变量 GATEWAY_URL 可覆盖
@@ -420,6 +422,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	entHandler := handler.NewEntitlementHandler(entSvc, orgContainer.RBAC)
 	// v0.7: Service Key 管理路由
 	serviceKeyHandler := handler.NewServiceKeyHandler(keySvc, orgContainer.RBAC)
+	// v0.7: 预算管理路由
+	budgetHandler := handler.NewBudgetHandler(budgetSvc, orgContainer.RBAC)
 	{
 		// 设置模型组开放模式（仅平台 admin）
 		adminGroup.PUT("/groups/:id/open-mode", guard(rbac.PermGroupOpenModeSet), entHandler.SetOpenMode)
@@ -432,7 +436,13 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.POST("/service-keys", guard(rbac.PermServiceKeyCreate), serviceKeyHandler.Create)
 		adminGroup.GET("/service-keys", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.List)
 		adminGroup.DELETE("/service-keys/:id", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.Delete)
+		// 预算管理（管理面）
+		adminGroup.GET("/budgets", guard(rbac.PermBudgetViewScoped), budgetHandler.List)
+		adminGroup.PUT("/budgets", guard(rbac.PermBudgetSet), budgetHandler.Set)
 	}
+
+	// 员工自助查询预算（JWTAuth 即可，不需要 admin）
+	r.GET("/api/v1/my/budget", middleware.JWTAuth(), budgetHandler.MyBudget)
 
 	// 管理接口（JWTAuth 已在 adminGroup 上）
 	orgGroup := adminGroup.Group("/org")

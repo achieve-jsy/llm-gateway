@@ -21,6 +21,16 @@ var pendingStudioError = gin.H{
 	},
 }
 
+// noDeptError 403 响应体（v0.7 FR-1.8：无部门用户拒绝调用）
+var noDeptError = gin.H{
+	"error": gin.H{
+		"code":    "budget_not_configured",
+		"message": "您尚未归属任何部门，无法使用服务，请联系管理员",
+		"type":    "organization_error",
+		"gate":    "identity",
+	},
+}
+
 // orgCheckPasslist 列出不受 OrgCheck 拦截的只读非计费路径。
 // 这些接口是无害查询，用户需要能访问模型列表才能了解当前配置状态。
 var orgCheckPasslist = map[string]struct{}{
@@ -29,18 +39,14 @@ var orgCheckPasslist = map[string]struct{}{
 	"/v1/health/models": {},
 }
 
-// OrgCheckMiddleware 检查用户是否处于 pending_studio 状态
-// 触发条件：dept_id 非空 AND studio_id 为空（已归集到部门但部门未映射工作室）
-// 放置位置：AuthMiddleware 之后、Scheduler 之前（路由链 /v1/* 上）
-// 性能影响：仅内存字段读取（O(1)），无 IO，对 P99 延迟无影响
+// OrgCheckMiddleware 检查用户组织归属状态：
+//  1. 无部门用户（dept_id 为空）→ 403 budget_not_configured（v0.7 FR-1.8）
+//  2. pending_studio 状态（dept_id 非空 + studio_id 为空）→ 403 org_pending_studio
 //
-// 注意：dept_id 在两条鉴权路径下语义不同，但 OrgCheck 只关心"是否非空"：
-//   - API Key 路径：dept_id = api_keys.dept_id，存的是 departments.id（UUID 字符串）
-//   - JWT 路径：dept_id = JWT claims.dept_id，存的是 SSO ehr_dept_id（varchar）
-// 两者均以"非空"表示"用户已归属部门"，OrgCheck 逻辑不依赖具体值，语义安全。
+// 放置位置：AuthMiddleware 之后、Scheduler 之前（/v1/* 链上）。
 func OrgCheckMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 只读非计费接口直接放行，不做工作室检查
+		// 只读非计费接口直接放行
 		if _, skip := orgCheckPasslist[c.Request.URL.Path]; skip {
 			c.Next()
 			return
@@ -49,8 +55,14 @@ func OrgCheckMiddleware() gin.HandlerFunc {
 		deptID := c.GetString(CtxKeyDeptID)
 		studioID := c.GetString(CtxKeyStudioID)
 
+		// v0.7 FR-1.8：无部门用户拒绝调用（原逻辑是放行，现改为 403）
+		if deptID == "" {
+			c.AbortWithStatusJSON(http.StatusForbidden, noDeptError)
+			return
+		}
+
 		// 员工已归集到部门，但部门尚未映射工作室 → 拒绝调用
-		if deptID != "" && studioID == "" {
+		if studioID == "" {
 			c.AbortWithStatusJSON(http.StatusForbidden, pendingStudioError)
 			return
 		}

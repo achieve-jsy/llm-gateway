@@ -67,6 +67,7 @@ func AuthMiddleware(authClient *infra.AuthClient) gin.HandlerFunc {
 				// v0.7: 从 verify-key 快照直接下发，无需网关再查库
 				UsableGroups: resp.Data.UsableGroups,
 				KeyType:      resp.Data.KeyType,
+				BudgetChain:  resp.Data.BudgetChain,
 			}
 			c.Set("identity", identity)
 			c.Set("key_id", identity.KeyID)

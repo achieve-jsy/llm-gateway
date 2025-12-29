@@ -18,9 +18,13 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/example/llm-gateway/internal/providers"
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 )
+
+// redisClient 接口让 Setup 对 *redis.Client 的依赖可 nil-safe。
+type redisClient = *redis.Client
 
 // Setup 初始化 Gin 路由与中间件
 // routerGetter 在每次请求时被调用以获取最新的 Router（支持热更新）。
@@ -37,6 +41,7 @@ func Setup(
 	collectorOpt *gwobs.Collector,
 	traceWriterOpt *gwobs.TraceWriter,
 	bindClient *binding.Client,
+	rdb redisClient, // v0.7: Redis client 用于预算计数中间件（nil = 禁用）
 ) *gin.Engine {
 	var collector []*gwobs.Collector
 	if collectorOpt != nil {
@@ -120,6 +125,8 @@ func Setup(
 	// 组织归集状态检查：pending_studio 员工调用模型时返回 403
 	// 注意：必须在 UsageCollector 之后，403 才能被记录到调用明细
 	v1.Use(middleware.OrgCheckMiddleware())
+	// v0.7: 预算并集校验（第④关，post-body；est_cost 由各 handler preflight 写入 ctx）
+	v1.Use(middleware.BudgetCheckMiddleware(rdb))
 	{
 		// Models
 		v1.GET("/models", boundModelsHandler.Handle)

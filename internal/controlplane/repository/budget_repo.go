@@ -73,6 +73,31 @@ func (r *BudgetRepo) ListByScopeIDs(scopes []struct{ ScopeType, ScopeID string }
 	return allocs, nil
 }
 
+// GetConsumption 查询某层某周期的已用量对账副本。
+func (r *BudgetRepo) GetConsumption(scopeType, scopeID, period string) (*model.BudgetConsumption, error) {
+	var c model.BudgetConsumption
+	err := r.db.Where("scope_type = ? AND scope_id = ? AND period = ?", scopeType, scopeID, period).First(&c).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &c, nil
+}
+
+// UpsertConsumption 更新或创建已用量对账副本（对账任务调用）。
+func (r *BudgetRepo) UpsertConsumption(c *model.BudgetConsumption) error {
+	return r.db.Where(model.BudgetConsumption{
+		ScopeType: c.ScopeType,
+		ScopeID:   c.ScopeID,
+		Period:    c.Period,
+	}).Assign(model.BudgetConsumption{
+		UsedUSD:  c.UsedUSD,
+		SyncedAt: c.SyncedAt,
+	}).FirstOrCreate(c).Error
+}
+
 // ListScoped 按管辖范围列出预算配置（用于管理面展示）。
 func (r *BudgetRepo) ListScoped(scopeTypes []string, scopeIDs []string) ([]model.BudgetAllocation, error) {
 	if len(scopeIDs) == 0 {

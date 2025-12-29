@@ -136,3 +136,29 @@ func (r *KeyRepo) GetUserDeptInfo(userID uuid.UUID) (UserDeptInfo, error) {
 	}
 	return info, nil
 }
+
+// ListByDeptAndType 按部门 SSO dept_id 和 key_type 列出 Key（v0.7 Service Key 列表）。
+func (r *KeyRepo) ListByDeptAndType(deptID, keyType string) ([]model.ApiKey, error) {
+	var keys []model.ApiKey
+	err := r.db.Where("dept_id = ? AND key_type = ?", deptID, keyType).
+		Order("created_at DESC").Find(&keys).Error
+	return keys, err
+}
+
+// GetDeptInfoByDeptID 通过 SSO dept_id 获取部门名称和所属工作室信息。
+func (r *KeyRepo) GetDeptInfoByDeptID(deptID string) (UserDeptInfo, error) {
+	var info UserDeptInfo
+	if deptID == "" {
+		return info, nil
+	}
+	r.db.Raw(`
+		SELECT COALESCE(d.dept_name, '') AS dept_name,
+		       COALESCE(dsm.studio_id::text, '') AS studio_id,
+		       COALESCE(s.name, '') AS studio_name
+		FROM departments d
+		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = d.dept_id
+		LEFT JOIN studios s ON s.id = dsm.studio_id
+		WHERE d.dept_id = ?
+	`, deptID).Scan(&info)
+	return info, nil
+}

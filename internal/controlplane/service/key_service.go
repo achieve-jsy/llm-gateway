@@ -116,7 +116,8 @@ type KeyService struct {
 	repo        *repository.KeyRepo
 	keyGroupSvc *KeyGroupService
 	publisher   EventPublisher
-	entSvc      *EntitlementService // v0.7: 授权计算，可选（nil 时跳过 usable_groups 填充）
+	entSvc      *EntitlementService   // v0.7: 授权计算，可选
+	budgetRepo  *repository.BudgetRepo // v0.7: 预算链构造，可选
 }
 
 func NewKeyService(repo *repository.KeyRepo, keyGroupSvc *KeyGroupService, publisher EventPublisher) *KeyService {
@@ -126,6 +127,12 @@ func NewKeyService(repo *repository.KeyRepo, keyGroupSvc *KeyGroupService, publi
 // WithEntitlementService 注入授权服务（v0.7 新增），用于 verify-key 下发 usable_groups 快照。
 func (s *KeyService) WithEntitlementService(svc *EntitlementService) *KeyService {
 	s.entSvc = svc
+	return s
+}
+
+// WithBudgetRepo 注入预算 repo（v0.7 新增），用于 verify-key 下发 BudgetChain。
+func (s *KeyService) WithBudgetRepo(repo *repository.BudgetRepo) *KeyService {
+	s.budgetRepo = repo
 	return s
 }
 
@@ -480,6 +487,12 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 		}
 	}
 
+	// v0.7: 构造预算链（scope 列表 + 各层额度，不含实时 used）
+	var budgetChain []BudgetScope
+	if s.budgetRepo != nil {
+		budgetChain = s.buildBudgetChain(k)
+	}
+
 	// v0.7: 填充 usable_groups 快照（public ∪ 本部门已开通 controlled）
 	var usableGroups []string
 	if s.entSvc != nil && k.DeptID != "" && k.StudioID != "" {
@@ -505,6 +518,7 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 		LogEnabled:      k.LogEnabled,
 		KeyType:         keyType,
 		UsableGroups:    usableGroups,
+		BudgetChain:     budgetChain,
 		User: VerifyResultUser{
 			UserID:       k.UserID,
 			Name:         k.UserName,
@@ -526,4 +540,178 @@ func parseDeptID(s string) *uuid.UUID {
 		return nil
 	}
 	return &id
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.7 Service Key
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ServiceKeyItem Service Key 列表项（不含明文 key）。
+type ServiceKeyItem struct {
+	ID         uuid.UUID  `json:"id"`
+	Name       string     `json:"name"`
+	MaskedKey  string     `json:"masked_key"`
+	KeyType    string     `json:"key_type"`
+	Purpose    string     `json:"purpose"`
+	DeptID     string     `json:"dept_id"`
+	DeptName   string     `json:"dept_name"`
+	Enabled    bool       `json:"enabled"`
+	CreatedBy  *uuid.UUID `json:"created_by,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+}
+
+// CreateServiceKey 创建 Service Key（仅部门负责人）。
+// actorID：操作人 user_id（部门负责人）；deptID：归属部门 SSO dept_id。
+// actor 权限校验由 handler 层完成（actor.HasDept(deptID) 或 IsGlobal）。
+func (s *KeyService) CreateServiceKey(ctx context.Context, actorID uuid.UUID, deptID, name, purpose string) (*model.ApiKey, string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return nil, "", fmt.Errorf("generate random key: %w", err)
+	}
+	keyStr := "sk-" + hex.EncodeToString(raw)
+	keyHint := keyStr[len(keyStr)-4:]
+	hash := sha256.Sum256([]byte(keyStr))
+	keyHash := hex.EncodeToString(hash[:])
+	encryptedKey, err := crypto.Encrypt(keyStr)
+	if err != nil {
+		return nil, "", fmt.Errorf("encrypt key: %w", err)
+	}
+
+	// 取部门/工作室名称（通过 actorID 找 userDeptInfo，再用 deptID 覆盖）
+	info, _ := s.repo.GetUserDeptInfo(actorID)
+	// deptID 是指定的归属部门，不一定和 actor 所在部门相同；名称通过 repo 补全
+	deptInfo, _ := s.repo.GetDeptInfoByDeptID(deptID)
+
+	k := &model.ApiKey{
+		UserID:       actorID, // service key 的 user_id = 创建者（仅作归属/审计，不影响预算链）
+		Name:         name,
+		KeyHash:      keyHash,
+		EncryptedKey: encryptedKey,
+		KeyPrefix:    "sk-",
+		KeyHint:      keyHint,
+		Enabled:      true,
+		KeyType:      model.KeyTypeService,
+		Purpose:      purpose,
+		CreatedBy:    &actorID,
+		// 归属部门（决定预算链和授权范围）
+		DeptID:     deptID,
+		DeptName:   deptInfo.DeptName,
+		StudioID:   deptInfo.StudioID,
+		StudioName: deptInfo.StudioName,
+		// 创建者信息（审计用）
+		UserName: info.UserName,
+	}
+
+	if err := s.repo.Create(k); err != nil {
+		return nil, "", fmt.Errorf("create service key: %w", err)
+	}
+	if s.publisher != nil {
+		s.publisher.Publish(event.KeyCreated, "api_key", k.ID)
+	}
+	return k, keyStr, nil
+}
+
+// ListServiceKeys 列出某部门的所有 Service Key（不含明文）。
+func (s *KeyService) ListServiceKeys(ctx context.Context, deptID string) ([]ServiceKeyItem, error) {
+	keys, err := s.repo.ListByDeptAndType(deptID, model.KeyTypeService)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]ServiceKeyItem, 0, len(keys))
+	for _, k := range keys {
+		items = append(items, ServiceKeyItem{
+			ID:         k.ID,
+			Name:       k.Name,
+			MaskedKey:  k.KeyPrefix + "****" + k.KeyHint,
+			KeyType:    k.KeyType,
+			Purpose:    k.Purpose,
+			DeptID:     k.DeptID,
+			DeptName:   k.DeptName,
+			Enabled:    k.Enabled,
+			CreatedBy:  k.CreatedBy,
+			CreatedAt:  k.CreatedAt,
+			LastUsedAt: k.LastUsedAt,
+		})
+	}
+	return items, nil
+}
+
+// DeleteServiceKey 吊销 Service Key（部门负责人或 admin）。
+// 权限校验由 handler 层完成。
+func (s *KeyService) DeleteServiceKey(ctx context.Context, keyID uuid.UUID) error {
+	k, err := s.repo.FindByID(keyID)
+	if err != nil {
+		return ErrKeyNotFound
+	}
+	if k.KeyType != model.KeyTypeService {
+		return ErrKeyNotFound // 不允许用此接口删个人 Key
+	}
+	if err := s.repo.Delete(keyID); err != nil {
+		return fmt.Errorf("delete service key: %w", err)
+	}
+	if s.publisher != nil {
+		s.publisher.InvalidateKeyCache(k.KeyHash)
+		s.publisher.Publish(event.KeyDeleted, "api_key", keyID)
+	}
+	return nil
+}
+
+// FindServiceKey 查找 Service Key（用于 handler 做 RBAC 前置校验）。
+func (s *KeyService) FindServiceKey(ctx context.Context, keyID uuid.UUID) (*model.ApiKey, error) {
+	k, err := s.repo.FindByID(keyID)
+	if err != nil || k.KeyType != model.KeyTypeService {
+		return nil, ErrKeyNotFound
+	}
+	return k, nil
+}
+
+// buildBudgetChain 根据 key 类型构造预算链（各层 scope + 已配额度）。
+// personal: member(有则含) → dept_daily → studio → company
+// service:  dept_service → studio → company
+func (s *KeyService) buildBudgetChain(k *model.ApiKey) []BudgetScope {
+	type scopeDef struct {
+		scopeType string
+		scopeID   string
+		label     string
+	}
+	var defs []scopeDef
+
+	if k.KeyType == model.KeyTypeService {
+		defs = []scopeDef{
+			{model.BudgetScopeDeptService, k.DeptID, k.DeptName + "·程序服务预算"},
+			{model.BudgetScopeStudio, k.StudioID, k.StudioName},
+			{model.BudgetScopeCompany, model.BudgetScopeGlobal, "全公司"},
+		}
+	} else {
+		// personal：member 单独设额时包含
+		defs = []scopeDef{
+			{model.BudgetScopeMember, k.UserID.String(), "我的额度"},
+			{model.BudgetScopeDeptDaily, k.DeptID, k.DeptName + "·成员日常预算"},
+			{model.BudgetScopeStudio, k.StudioID, k.StudioName},
+			{model.BudgetScopeCompany, model.BudgetScopeGlobal, "全公司"},
+		}
+	}
+
+	chain := make([]BudgetScope, 0, len(defs))
+	for _, d := range defs {
+		if d.scopeID == "" {
+			continue
+		}
+		amount := float64(-1) // -1 = 未配置/不限额
+		alloc, _ := s.budgetRepo.GetAllocation(d.scopeType, d.scopeID)
+		if alloc != nil && alloc.Enabled {
+			amount = alloc.AmountUSD
+		} else if d.scopeType == model.BudgetScopeMember {
+			// 成员未单独设额则跳过（走 dept_daily 共享池）
+			continue
+		}
+		chain = append(chain, BudgetScope{
+			ScopeType: d.scopeType,
+			ScopeID:   d.scopeID,
+			AmountUSD: amount,
+			Label:     d.label,
+		})
+	}
+	return chain
 }

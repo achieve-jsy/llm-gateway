@@ -119,6 +119,9 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	entSvc := service.NewEntitlementService(entRepo, groupRepo, service.NewEventPublisherAdapter(publisher))
 	// 注入 EntitlementService 到 KeyService，enable verify-key 下发 usable_groups 快照
 	keySvc.WithEntitlementService(entSvc)
+	// v0.7: 预算 repo，注入 KeyService 用于 verify-key 下发 BudgetChain
+	budgetRepo := repository.NewBudgetRepo(db)
+	keySvc.WithBudgetRepo(budgetRepo)
 
 	systemKeySvc := service.NewSystemKeyService(db)
 	// gateway.url 从 yaml 配置读取，环境变量 GATEWAY_URL 可覆盖
@@ -415,6 +418,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 	// v0.7: 授权管理路由（挂在 adminGroup 上，已带 JWTAuth）
 	entHandler := handler.NewEntitlementHandler(entSvc, orgContainer.RBAC)
+	// v0.7: Service Key 管理路由
+	serviceKeyHandler := handler.NewServiceKeyHandler(keySvc, orgContainer.RBAC)
 	{
 		// 设置模型组开放模式（仅平台 admin）
 		adminGroup.PUT("/groups/:id/open-mode", guard(rbac.PermGroupOpenModeSet), entHandler.SetOpenMode)
@@ -423,6 +428,10 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		// 下放/撤销授权
 		adminGroup.POST("/group-entitlements", guard(rbac.PermGroupEntitleGrant), entHandler.Grant)
 		adminGroup.DELETE("/group-entitlements", guard(rbac.PermGroupEntitleRevoke), entHandler.Revoke)
+		// Service Key CRUD（部门负责人+admin）
+		adminGroup.POST("/service-keys", guard(rbac.PermServiceKeyCreate), serviceKeyHandler.Create)
+		adminGroup.GET("/service-keys", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.List)
+		adminGroup.DELETE("/service-keys/:id", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.Delete)
 	}
 
 	// 管理接口（JWTAuth 已在 adminGroup 上）

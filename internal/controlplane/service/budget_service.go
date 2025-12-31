@@ -3,21 +3,39 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
+	"github.com/example/llm-gateway/internal/controlplane/event"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 // BudgetService 处理预算额度的 CRUD 与告警去重记录管理。
 type BudgetService struct {
 	repo      *repository.BudgetRepo
 	alertRepo *repository.BudgetAlertRepo
+	publisher EventPublisher
+	rdb       *redis.Client
 }
 
 func NewBudgetService(repo *repository.BudgetRepo, alertRepo *repository.BudgetAlertRepo) *BudgetService {
 	return &BudgetService{repo: repo, alertRepo: alertRepo}
+}
+
+// SetPublisher 注入事件发布器（可选，router setup 时调用）
+// 用于 SetBudget 改额后广播 auth_config_changed，刷新网关 BudgetChain 快照。
+func (s *BudgetService) SetPublisher(pub EventPublisher) {
+	s.publisher = pub
+}
+
+// SetRedis 注入 Redis 客户端（可选，router setup 时调用）
+// 用于 SetBudget 改额后写入 budget:amount:{scope_type}:{scope_id} 键，
+// 让网关能实时读取最新额度（无需等 verify-key 缓存刷新）。
+func (s *BudgetService) SetRedis(rdb *redis.Client) {
+	s.rdb = rdb
 }
 
 // BudgetItem 预算展示项（含实时 used_usd 占位，网关侧从 Redis 读）。
@@ -53,6 +71,21 @@ func (s *BudgetService) SetBudget(ctx context.Context, scopeType, scopeID string
 	// 改额后清理本月告警去重记录，让扩容后能再次触发告警
 	period := time.Now().Format("2006-01")
 	_ = s.alertRepo.DeleteByScope(scopeType, scopeID, period)
+	// v0.7: 写 Redis budget:amount:{scope_type}:{scope_id} 键，
+	// 让网关能即时读取最新额度（不依赖 verify-key 缓存刷新）。
+	// TTL=0 表示不设过期时间（配置类数据，仅在下次改额时被覆盖）。
+	if s.rdb != nil {
+		key := fmt.Sprintf("budget:amount:%s:%s", scopeType, scopeID)
+		if err := s.rdb.Set(context.Background(), key, amountUSD, 0).Err(); err != nil {
+			// 非致命：Redis 写失败只影响"即时生效"性能，DB 已落库
+			slog.Warn("budget: redis set amount failed", "key", key, "error", err)
+		}
+	}
+	// v0.7: 广播 auth_config_changed → 网关清空 KeyCache，下次 verify-key 拿到新 BudgetChain
+	// （即使没有 Redis 写入，这一步也确保缓存的 AmountUSD 被刷新）
+	if s.publisher != nil {
+		s.publisher.Publish(event.AuthConfigChanged, "auth_config", uuid.Nil)
+	}
 	return nil
 }
 

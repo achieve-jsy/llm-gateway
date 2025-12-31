@@ -124,6 +124,10 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	keySvc.WithBudgetRepo(budgetRepo)
 	budgetAlertRepo := repository.NewBudgetAlertRepo(db)
 	budgetSvc := service.NewBudgetService(budgetRepo, budgetAlertRepo)
+	// v0.7: 改额即时生效——注入 publisher 用于广播 auth_config_changed，
+	// 注入 Redis 用于写 budget:amount:{scope_type}:{scope_id} 键。
+	budgetSvc.SetPublisher(service.NewEventPublisherAdapter(publisher))
+	budgetSvc.SetRedis(rdb)
 	budgetAlertSvc := service.NewBudgetAlertService(budgetRepo, budgetAlertRepo, nil)
 	// v0.7: 上线默认预算初始化（异步，不阻塞启动）
 	// 默认额度：部门日常 500 USD/月，部门程序服务 200 USD/月，工作室 2000 USD/月

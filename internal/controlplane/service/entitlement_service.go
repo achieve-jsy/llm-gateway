@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/example/llm-gateway/internal/controlplane/event"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/google/uuid"
@@ -48,7 +49,11 @@ func (s *EntitlementService) SetOpenMode(ctx context.Context, groupID uint, open
 	if err := s.groupRepo.UpdateOpenMode(groupID, openMode); err != nil {
 		return fmt.Errorf("update open_mode: %w", err)
 	}
-	// 授权变更：失效相关 Key 缓存（由调用方决定是否需要，此处不强制）
+	// v0.7: 模型组开放模式变更 → 广播 auth_config_changed 事件
+	// 网关收到后会清空全部 KeyCache，下次 verify-key 重新计算 usable_groups
+	if s.publisher != nil {
+		s.publisher.Publish(event.AuthConfigChanged, "auth_config", uuid.Nil)
+	}
 	return nil
 }
 
@@ -67,13 +72,24 @@ func (s *EntitlementService) Grant(ctx context.Context, groupID uint, scopeType,
 	if err := s.entRepo.Upsert(e); err != nil {
 		return fmt.Errorf("grant entitlement: %w", err)
 	}
+	// v0.7: 授权下放开/启用 → 广播失效网关 KeyCache
+	if s.publisher != nil {
+		s.publisher.Publish(event.AuthConfigChanged, "auth_config", uuid.Nil)
+	}
 	return nil
 }
 
 // Revoke 撤销授权（软撤销，enabled=false）。
 // 平台撤销 studio 授权后，下属部门的 dept 行因级联判断即时失效，无需逐行清理。
 func (s *EntitlementService) Revoke(ctx context.Context, groupID uint, scopeType, scopeID string) error {
-	return s.entRepo.Revoke(groupID, scopeType, scopeID)
+	if err := s.entRepo.Revoke(groupID, scopeType, scopeID); err != nil {
+		return err
+	}
+	// v0.7: 撤销授权 → 广播失效网关 KeyCache（包含级联失效：studio 撤销会让下属 dept 行也失效）
+	if s.publisher != nil {
+		s.publisher.Publish(event.AuthConfigChanged, "auth_config", uuid.Nil)
+	}
+	return nil
 }
 
 // ListByGroup 查询某模型组的所有授权记录。

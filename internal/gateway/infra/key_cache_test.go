@@ -325,3 +325,35 @@ func TestKeyCache_ConcurrentSetGet(t *testing.T) {
 		<-done
 	}
 }
+// ─── HandleChangeEvent: AuthConfigChanged (v0.7) ────────────────────────────
+
+// TestKeyCache_HandleChangeEvent_AuthConfigChanged 验证 v0.7 新增的全局配置变更事件：
+// 收到 auth_config_changed 事件后清空本地 + Redis 所有缓存条目。
+func TestKeyCache_HandleChangeEvent_AuthConfigChanged(t *testing.T) {
+	kc := NewKeyCache(nil) // nil redis 简化本地验证
+	defer kc.Close()
+
+	ctx := context.Background()
+	// 预热若干不相关的 key
+	kc.Set(ctx, "sk-user-a", makeActiveResp("key-a"))
+	kc.Set(ctx, "sk-user-b", makeActiveResp("key-b"))
+	kc.Set(ctx, "sk-user-c", makeActiveResp("key-c"))
+
+	for _, key := range []string{"sk-user-a", "sk-user-b", "sk-user-c"} {
+		_, ok := kc.Get(ctx, key)
+		assert.True(t, ok, "key %s should be cached initially", key)
+	}
+
+	// 触发全局配置变更事件
+	kc.HandleChangeEvent(ChangeEvent{
+		Type:         "auth_config_changed",
+		ResourceType: "auth_config",
+		ResourceID:   "",
+	})
+
+	// 全部缓存应被清空
+	for _, key := range []string{"sk-user-a", "sk-user-b", "sk-user-c"} {
+		_, ok := kc.Get(ctx, key)
+		assert.False(t, ok, "key %s should be flushed after auth_config_changed", key)
+	}
+}

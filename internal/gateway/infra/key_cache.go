@@ -122,10 +122,17 @@ func (kc *KeyCache) Invalidate(ctx context.Context, rawKey string) {
 	}
 }
 
-// HandleChangeEvent 处理配置变更事件中的 key 吊销 / 日志开关变更通知。
+// HandleChangeEvent 处理配置变更事件中的 key 吊销 / 日志开关 / 授权配置变更通知。
 // 当收到 key_disabled、key_deleted 或 key_log_changed 事件时，
 // 遍历本地缓存剔除匹配的条目，并同步清除 Redis 双层缓存。
+// 当收到 auth_config_changed（v0.7）时，清空全部 KeyCache 条目：授权/预算配置变更
+// 会影响所有 key 的 usable_groups / budget_chain 快照，必须强制重新拉取。
 func (kc *KeyCache) HandleChangeEvent(event ChangeEvent) {
+	// v0.7: 授权 / 预算配置全局性变更——清空所有 key 缓存
+	if event.ResourceType == "auth_config" || event.Type == "auth_config_changed" {
+		kc.FlushAll("auth_config_changed")
+		return
+	}
 	if event.ResourceType != "api_key" {
 		return
 	}
@@ -156,6 +163,33 @@ func (kc *KeyCache) HandleChangeEvent(event ChangeEvent) {
 	if deleted > 0 {
 		slog.Info("key cache: invalidated entries", "event_type", event.Type, "key_id", keyID, "entries", deleted)
 	}
+}
+
+// FlushAll 清空本地内存缓存 + Redis 缓存中所有 KeyCache 条目。
+// 用于授权 / 预算等全局性配置变更，强制下次请求重新 verify-key 以拿到最新快照。
+func (kc *KeyCache) FlushAll(reason string) {
+	ctx := context.Background()
+	var localDeleted int
+	kc.local.Range(func(k, _ any) bool {
+		kc.local.Delete(k)
+		localDeleted++
+		return true
+	})
+	var redisDeleted int
+	if kc.rdb != nil {
+		// SCAN + DEL 模式，避免阻塞 Redis
+		iter := kc.rdb.Scan(ctx, 0, keyCacheRedisPrefix+"*", 200).Iterator()
+		for iter.Next(ctx) {
+			kc.rdb.Del(ctx, iter.Val())
+			redisDeleted++
+		}
+		_ = iter.Err()
+	}
+	slog.Info("key cache: flushed all entries",
+		"reason", reason,
+		"local_deleted", localDeleted,
+		"redis_deleted", redisDeleted,
+	)
 }
 
 func (kc *KeyCache) cleanupLoop() {

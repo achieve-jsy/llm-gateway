@@ -111,6 +111,21 @@ func Setup(
 		responsesHandler = handler.NewResponsesHandler(orch)
 	}
 
+	// v0.7: 预算预扣依赖（一次构造传给所有 handler）。
+	// Pricing 暂用 fallback（保守单价），后续接入 providers.ModelRegistry 真实 catalog 定价。
+	// FallbackOutputTokens：请求未传 max_tokens 时的保守估计（对齐控制面配置 2048）。
+	// MaxSingleRequestUSD：单请求成本上限（对齐控制面配置 10.0 美元，防单次击穿软上限）。
+	budgetDeps := &middleware.BudgetDeps{
+		RDB:                  rdb,
+		Pricing:              middleware.FallbackPricingResolver{},
+		FallbackOutputTokens: 2048,
+		MaxSingleRequestUSD:  10.0,
+	}
+	chatHandler.SetBudgetDeps(budgetDeps)
+	embeddingsHandler.SetBudgetDeps(budgetDeps)
+	messagesHandler.SetBudgetDeps(budgetDeps)
+	responsesHandler.SetBudgetDeps(budgetDeps)
+
 	r.GET("/health", healthHandler.Health)
 	r.GET("/ready", healthHandler.Ready)
 
@@ -153,8 +168,8 @@ func Setup(
 	// 组织归集状态检查：pending_studio 员工调用模型时返回 403
 	// 注意：必须在 UsageCollector 之后，403 才能被记录到调用明细
 	v1.Use(middleware.OrgCheckMiddleware())
-	// v0.7: 预算并集校验（第④关，post-body；est_cost 由各 handler preflight 写入 ctx）
-	v1.Use(middleware.BudgetCheckMiddleware(rdb))
+	// v0.7: 预算预扣已改由每个 handler 在解析 body 后主动调用 middleware.Reserve
+	// （不再用 BudgetCheckMiddleware，因为 middleware 拿不到 body 里的 model/max_tokens）
 	{
 		// Models
 		v1.GET("/models", boundModelsHandler.Handle)

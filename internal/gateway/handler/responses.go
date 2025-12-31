@@ -2,12 +2,14 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/example/llm-gateway/internal/core"
+	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/gin-gonic/gin"
@@ -17,6 +19,7 @@ import (
 type ResponsesHandler struct {
 	orchestrator  ResponsesOrchestratorInterface
 	groupDispatch *orchestrator.GroupAwareDispatcher
+	budgetDeps    *middleware.BudgetDeps
 }
 
 // ResponsesOrchestratorInterface 编排器抽象，handler 仅依赖必要方法。
@@ -35,6 +38,11 @@ func NewResponsesHandlerWithGroup(orch ResponsesOrchestratorInterface, gd *orche
 	return &ResponsesHandler{orchestrator: orch, groupDispatch: gd}
 }
 
+// SetBudgetDeps 注入预算依赖（router setup 时调用一次）
+func (h *ResponsesHandler) SetBudgetDeps(deps *middleware.BudgetDeps) {
+	h.budgetDeps = deps
+}
+
 // Handle 处理 POST /v1/responses 请求
 func (h *ResponsesHandler) Handle(c *gin.Context) {
 	var req core.ResponsesRequest
@@ -51,6 +59,22 @@ func (h *ResponsesHandler) Handle(c *gin.Context) {
 
 	c.Set("model", req.Model)
 	originalModel := req.Model
+
+	// v0.7: 预算预扣
+	if h.budgetDeps != nil {
+		promptChars := estimateResponsesInputChars(&req)
+		maxTokens := 0
+		if req.MaxOutputTokens != nil {
+			maxTokens = *req.MaxOutputTokens
+		}
+		if _, err := middleware.Reserve(c, h.budgetDeps, req.Model, maxTokens, promptChars); err != nil {
+			if be, ok := err.(*middleware.BudgetExceededError); ok {
+				be.WriteHTTPResponse(c)
+				return
+			}
+			slog.Warn("responses: budget reserve failed", "model", req.Model, "error", err)
+		}
+	}
 
 	// 若请求的是模型组名，通过 group dispatcher 解析到实际 provider 模型
 	if h.groupDispatch != nil {
@@ -80,6 +104,21 @@ func (h *ResponsesHandler) Handle(c *gin.Context) {
 		return
 	}
 	h.handleNonStream(c, baseCtx, &req, originalModel, nonStreamTimeout)
+}
+
+// estimateResponsesInputChars 估算 Responses API 的 input 字符数。
+// ResponsesRequest.Input 是 any，可能是 string 或结构化数据。
+func estimateResponsesInputChars(req *core.ResponsesRequest) int {
+	if req == nil || req.Input == nil {
+		return 0
+	}
+	switch v := req.Input.(type) {
+	case string:
+		return len(v)
+	default:
+		b, _ := json.Marshal(v)
+		return len(b)
+	}
 }
 
 func (h *ResponsesHandler) handleNonStream(c *gin.Context, baseCtx context.Context, req *core.ResponsesRequest, originalModel string, timeout time.Duration) {

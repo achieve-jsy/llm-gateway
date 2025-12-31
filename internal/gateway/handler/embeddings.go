@@ -2,9 +2,11 @@ package handler
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 
 	"github.com/example/llm-gateway/internal/core"
+	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/gin-gonic/gin"
 )
@@ -17,11 +19,17 @@ type EmbeddingsOrchestratorInterface interface {
 // EmbeddingsHandler handles POST /v1/embeddings
 type EmbeddingsHandler struct {
 	orchestrator EmbeddingsOrchestratorInterface
+	budgetDeps   *middleware.BudgetDeps
 }
 
 // NewEmbeddingsHandler creates a new EmbeddingsHandler.
 func NewEmbeddingsHandler(orch EmbeddingsOrchestratorInterface) *EmbeddingsHandler {
 	return &EmbeddingsHandler{orchestrator: orch}
+}
+
+// SetBudgetDeps 注入预算依赖（router setup 时调用一次）
+func (h *EmbeddingsHandler) SetBudgetDeps(deps *middleware.BudgetDeps) {
+	h.budgetDeps = deps
 }
 
 // Handle processes POST /v1/embeddings requests.
@@ -53,6 +61,18 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 
 	c.Set("model", req.Model)
 
+	// v0.7: 预算预扣（embeddings 仅输入 tokens，无 max_tokens）
+	if h.budgetDeps != nil {
+		promptChars := estimateEmbeddingInputChars(&req)
+		if _, err := middleware.Reserve(c, h.budgetDeps, req.Model, 0, promptChars); err != nil {
+			if be, ok := err.(*middleware.BudgetExceededError); ok {
+				be.WriteHTTPResponse(c)
+				return
+			}
+			slog.Warn("embeddings: budget reserve failed", "model", req.Model, "error", err)
+		}
+	}
+
 	resp, err := h.orchestrator.Embeddings(c.Request.Context(), &req)
 	if err != nil {
 		if ue, ok := err.(*model.UnifiedError); ok {
@@ -72,4 +92,29 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 	c.Set("stream", false)
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// estimateEmbeddingInputChars 估算 embedding 请求的输入字符数。
+// EmbeddingRequest.Input 可能是 string 或 []string，统一累加字符数。
+func estimateEmbeddingInputChars(req *core.EmbeddingRequest) int {
+	if req == nil {
+		return 0
+	}
+	total := 0
+	switch v := req.Input.(type) {
+	case string:
+		total += len(v)
+	case []string:
+		for _, s := range v {
+			total += len(s)
+		}
+	case []any:
+		// 兼容 JSON 里的 array of strings
+		for _, s := range v {
+			if str, ok := s.(string); ok {
+				total += len(str)
+			}
+		}
+	}
+	return total
 }

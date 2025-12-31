@@ -100,10 +100,19 @@ func (r *BudgetRepo) UpsertConsumption(c *model.BudgetConsumption) error {
 
 // ListScoped 按管辖范围列出预算配置（用于管理面展示）。
 func (r *BudgetRepo) ListScoped(scopeTypes []string, scopeIDs []string) ([]model.BudgetAllocation, error) {
-	if len(scopeIDs) == 0 {
-		return nil, nil
-	}
 	var allocs []model.BudgetAllocation
+
+	// admin 查全部：scopeIDs 为空时，只按 scopeTypes 过滤
+	if len(scopeIDs) == 0 {
+		if len(scopeTypes) == 0 {
+			return nil, nil
+		}
+		err := r.db.Where("scope_type IN ?", scopeTypes).
+			Order("scope_type, scope_id").Find(&allocs).Error
+		return allocs, err
+	}
+
+	// manager 查管辖范围：同时按 scopeTypes 和 scopeIDs 过滤
 	err := r.db.Where("scope_type IN ? AND scope_id IN ?", scopeTypes, scopeIDs).
 		Order("scope_type, scope_id").Find(&allocs).Error
 	return allocs, err

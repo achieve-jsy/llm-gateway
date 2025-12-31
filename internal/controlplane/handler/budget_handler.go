@@ -66,17 +66,27 @@ func (h *BudgetHandler) List(c *gin.Context) {
 	var scopeTypes []string
 	var scopeIDs []string
 	if actor.IsGlobal {
-		// admin 可查全部类型，此处先返回错误提示需要指定 scope_type
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请指定 scope_type 和 scope_id 查询"})
-		return
+		// admin 无 filter 时返回全部预算配置
+		if scopeType == "" {
+			scopeTypes = []string{
+				model.BudgetScopeCompany, model.BudgetScopeStudio,
+				model.BudgetScopeDeptDaily, model.BudgetScopeDeptService,
+				model.BudgetScopeMember,
+			}
+		} else {
+			// 指定 scope_type 但无 scope_id：返回该类型所有预算
+			scopeTypes = []string{scopeType}
+		}
+		// admin 查全部时 scopeIDs 留空，service 层走全量查询逻辑
+	} else {
+		// manager：dept + studio 维度
+		scopeTypes = []string{
+			model.BudgetScopeDeptDaily, model.BudgetScopeDeptService,
+			model.BudgetScopeStudio,
+		}
+		scopeIDs = append(scopeIDs, actor.DeptIDs...)
+		scopeIDs = append(scopeIDs, actor.StudioIDs...)
 	}
-	// manager：dept + studio 维度
-	scopeTypes = []string{
-		model.BudgetScopeDeptDaily, model.BudgetScopeDeptService,
-		model.BudgetScopeStudio,
-	}
-	scopeIDs = append(scopeIDs, actor.DeptIDs...)
-	scopeIDs = append(scopeIDs, actor.StudioIDs...)
 
 	items, err := h.svc.ListScoped(c.Request.Context(), scopeTypes, scopeIDs)
 	if err != nil {

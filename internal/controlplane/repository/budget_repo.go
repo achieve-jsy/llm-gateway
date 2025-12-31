@@ -108,3 +108,8 @@ func (r *BudgetRepo) ListScoped(scopeTypes []string, scopeIDs []string) ([]model
 		Order("scope_type, scope_id").Find(&allocs).Error
 	return allocs, err
 }
+
+// DB 暴露底层 db 实例，供跨 repo 联合查询使用（如 InitDefaultBudgets）。
+func (r *BudgetRepo) DB() *gorm.DB {
+	return r.db
+}

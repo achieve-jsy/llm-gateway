@@ -111,3 +111,71 @@ func (s *BudgetService) ListScoped(ctx context.Context, scopeTypes []string, sco
 	}
 	return items, nil
 }
+
+// InitDefaultBudgets 上线初始化：为所有「没有预算配置的部门+工作室」创建默认 budget_allocations。
+// 幂等：已有配置的对象跳过（由 repo.UpsertAllocation 的唯一约束保证）。
+// 在 control-plane 启动时由 router 调用一次。
+//
+// 默认额度从参数传入（来自 config 文件），便于运维按需调整。
+func (s *BudgetService) InitDefaultBudgets(
+	ctx context.Context,
+	defaultDeptDailyUSD, defaultDeptServiceUSD, defaultStudioUSD float64,
+) (created int, err error) {
+	// 1. dept_daily / dept_service：为每个部门创建默认额度
+	var deptRows []struct {
+		DeptID    string `gorm:"column:dept_id"`
+		StudioID  string `gorm:"column:studio_id"`
+		StudioName string `gorm:"column:studio_name"`
+	}
+	_ = s.repo.DB().Raw(`
+		SELECT DISTINCT d.dept_id::text AS dept_id,
+		       dsm.studio_id::text AS studio_id,
+		       s.name AS studio_name
+		FROM departments d
+		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = d.dept_id
+		LEFT JOIN studios s ON s.id = dsm.studio_id
+		WHERE d.dept_id IS NOT NULL
+	`).Scan(&deptRows).Error
+
+	for _, row := range deptRows {
+		if row.DeptID == "" {
+			continue
+		}
+		// dept_daily
+		if existing, _ := s.repo.GetAllocation(model.BudgetScopeDeptDaily, row.DeptID); existing == nil {
+			_ = s.repo.UpsertAllocation(&model.BudgetAllocation{
+				ScopeType: model.BudgetScopeDeptDaily,
+				ScopeID:   row.DeptID,
+				AmountUSD: defaultDeptDailyUSD,
+				Period:    "monthly",
+				Enabled:   true,
+			})
+			created++
+		}
+		// dept_service
+		if existing, _ := s.repo.GetAllocation(model.BudgetScopeDeptService, row.DeptID); existing == nil {
+			_ = s.repo.UpsertAllocation(&model.BudgetAllocation{
+				ScopeType: model.BudgetScopeDeptService,
+				ScopeID:   row.DeptID,
+				AmountUSD: defaultDeptServiceUSD,
+				Period:    "monthly",
+				Enabled:   true,
+			})
+			created++
+		}
+		// studio（同工作室只创建一次）
+		if row.StudioID != "" {
+			if existing, _ := s.repo.GetAllocation(model.BudgetScopeStudio, row.StudioID); existing == nil {
+				_ = s.repo.UpsertAllocation(&model.BudgetAllocation{
+					ScopeType: model.BudgetScopeStudio,
+					ScopeID:   row.StudioID,
+					AmountUSD: defaultStudioUSD,
+					Period:    "monthly",
+					Enabled:   true,
+				})
+				created++
+			}
+		}
+	}
+	return created, nil
+}

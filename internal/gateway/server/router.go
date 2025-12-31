@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/example/llm-gateway/internal/core"
@@ -116,15 +117,27 @@ func Setup(
 	// 加载并发管控配置
 	guard := loadGatewayGuard(controlPlaneURL)
 
+	// v0.7: 设置加载器（30s 轮询，供 guard 和分层限速共用）
+	settingsCache := newSettingsCache(controlPlaneURL)
+	go settingsCache.StartPolling(30 * time.Second)
+
 	// OpenAI 兼容接口（需 API Key 认证）
 	v1 := r.Group("/v1")
 	v1.Use(middleware.AuthMiddleware(authClient))
 	v1.Use(guard.Handler())
 	// v0.7: 分层限速（③关 dept/studio 层，Redis 滑动窗口）
-	// RateLimitConfig 目前从 settings 下发全局 RPM，dept/studio 层先以 0（不限）兜底，
-	// 后续通过 verify-key 快照携带各层限速配置。
+	// 每 30s 从 settings 缓存读取各层 RPM；默认 0 = 不限。
 	v1.Use(middleware.LayeredRateLimiter(rdb, func(c *gin.Context) middleware.RateLimitConfig {
-		return middleware.RateLimitConfig{} // TODO: 从 settings 读取各层 RPM
+		s := settingsCache.Get()
+		if s == nil {
+			return middleware.RateLimitConfig{}
+		}
+		return middleware.RateLimitConfig{
+			GlobalRPM: s.GlobalRPM,
+			StudioRPM: s.StudioRPM,
+			DeptRPM:   s.DeptRPM,
+			KeyRPM:    s.KeyRPM,
+		}
 	}))
 	// 请求/响应正文捕获（供 trace 记录使用）
 	v1.Use(middleware.TraceCapture())
@@ -348,4 +361,44 @@ func triggerBudgetAlert(chain []struct {
 		}
 		resp.Body.Close()
 	}
+}
+
+// settingsCache 是 GatewaySettings 的内存缓存，后台定时器定期从控制面刷新。
+// 供 guard（key 级 RPM）和 LayeredRateLimiter（分层 RPM）共用，避免每次请求都打 HTTP。
+type settingsCache struct {
+	mu              sync.RWMutex
+	current         *infra.GatewaySettings
+	controlPlaneURL string
+}
+
+func newSettingsCache(controlPlaneURL string) *settingsCache {
+	sc := &settingsCache{controlPlaneURL: controlPlaneURL}
+	// 初始同步加载一次（失败则保持 nil，由 guard 的默认值兜底）
+	if s, err := infra.LoadGatewaySettings(controlPlaneURL); err == nil {
+		sc.current = s
+	}
+	return sc
+}
+
+// StartPolling 后台每 interval 拉取最新 settings。
+func (sc *settingsCache) StartPolling(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		s, err := infra.LoadGatewaySettings(sc.controlPlaneURL)
+		if err != nil {
+			slog.Debug("settings cache: poll failed", "error", err)
+			continue
+		}
+		sc.mu.Lock()
+		sc.current = s
+		sc.mu.Unlock()
+	}
+}
+
+// Get 返回最新的 settings（可能为 nil）。
+func (sc *settingsCache) Get() *infra.GatewaySettings {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	return sc.current
 }

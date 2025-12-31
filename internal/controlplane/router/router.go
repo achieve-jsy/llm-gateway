@@ -125,6 +125,21 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	budgetAlertRepo := repository.NewBudgetAlertRepo(db)
 	budgetSvc := service.NewBudgetService(budgetRepo, budgetAlertRepo)
 	budgetAlertSvc := service.NewBudgetAlertService(budgetRepo, budgetAlertRepo, nil)
+	// v0.7: 上线默认预算初始化（异步，不阻塞启动）
+	// 默认额度：部门日常 500 USD/月，部门程序服务 200 USD/月，工作室 2000 USD/月
+	// 运维可通过 PUT /api/v1/budgets 按域调整
+	go func() {
+		if created, err := budgetSvc.InitDefaultBudgets(
+			context.Background(),
+			500.0,   // defaultDeptDailyUSD
+			200.0,   // defaultDeptServiceUSD
+			2000.0,  // defaultStudioUSD
+		); err != nil {
+			slog.Warn("budget: default allocation init failed", "error", err)
+		} else if created > 0 {
+			slog.Info("budget: default allocations initialized", "created", created)
+		}
+	}()
 	// v0.7: 扩容审批 service
 	expansionRepo := repository.NewExpansionRepo(db)
 	expansionSvc := service.NewExpansionService(expansionRepo)

@@ -13,6 +13,11 @@ import (
 type GatewaySettings struct {
 	RateLimitPerMinute   int `json:"rate_limit_per_minute"`
 	MaxConcurrencyPerKey int `json:"max_concurrency_per_key"`
+	// v0.7 分层限速：全局/工作室/部门/Key 四层最严胜出，0 = 不限
+	GlobalRPM int `json:"global_rpm,omitempty"`
+	StudioRPM int `json:"studio_rpm,omitempty"`
+	DeptRPM   int `json:"dept_rpm,omitempty"`
+	KeyRPM    int `json:"key_rpm,omitempty"`
 }
 
 type publicSettingsResponse struct {

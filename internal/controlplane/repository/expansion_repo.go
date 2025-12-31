@@ -2,6 +2,7 @@ package repository
 
 import (
 	"github.com/example/llm-gateway/internal/controlplane/model"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -39,7 +40,11 @@ func (r *ExpansionRepo) UpdateStatus(id, status, currentLevel string) error {
 }
 
 // ListByRequester 查询某用户发起的申请。
+// 若 requesterID 不是合法 UUID，返回空列表（防御性校验，避免 SQL 500）。
 func (r *ExpansionRepo) ListByRequester(requesterID string, status string) ([]model.ExpansionRequest, error) {
+	if _, err := uuid.Parse(requesterID); err != nil {
+		return []model.ExpansionRequest{}, nil
+	}
 	var reqs []model.ExpansionRequest
 	q := r.db.Where("requester_id = ?", requesterID)
 	if status != "" {

@@ -156,6 +156,18 @@ func (r *GroupRepo) UpdateOpenMode(id uint, openMode string) error {
 	return r.db.Model(&model.Group{}).Where("id = ?", id).Update("open_mode", openMode).Error
 }
 
+// ListGroupsByIDs 按 ID 列表返回 enabled 的组（不含已软删的）。
+// 用于 EntitlementService 把合并后的 ID 集合翻译成 group 名称。
+func (r *GroupRepo) ListGroupsByIDs(ids []uint) ([]model.Group, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var groups []model.Group
+	err := r.db.Where("id IN ? AND enabled = true AND deleted_at IS NULL", ids).
+		Select("id, name").Find(&groups).Error
+	return groups, err
+}
+
 // DB 暴露底层 db 实例，供跨 repo 联合查询使用。
 func (r *GroupRepo) DB() *gorm.DB {
 	return r.db

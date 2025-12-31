@@ -8,20 +8,40 @@ import (
 
 	"github.com/example/llm-gateway/internal/controlplane/event"
 	"github.com/example/llm-gateway/internal/controlplane/model"
-	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
 // BudgetService 处理预算额度的 CRUD 与告警去重记录管理。
 type BudgetService struct {
-	repo      *repository.BudgetRepo
-	alertRepo *repository.BudgetAlertRepo
+	repo      BudgetAllocationRepo
+	alertRepo BudgetAlertRecordRepo
 	publisher EventPublisher
 	rdb       *redis.Client
 }
 
-func NewBudgetService(repo *repository.BudgetRepo, alertRepo *repository.BudgetAlertRepo) *BudgetService {
+// BudgetAllocationRepo 预算额度表的访问接口。
+// 实现者：repository.BudgetRepo（真实 DB）。
+// 依赖注入点：测试可用 fake 替换。
+type BudgetAllocationRepo interface {
+	UpsertAllocation(a *model.BudgetAllocation) error
+	GetAllocation(scopeType, scopeID string) (*model.BudgetAllocation, error)
+	GetConsumption(scopeType, scopeID, period string) (*model.BudgetConsumption, error)
+	ListScoped(scopeTypes, scopeIDs []string) ([]model.BudgetAllocation, error)
+	// ListDeptStudioRows 列出「部门 - 所属工作室」组合（用于 InitDefaultBudgets）。
+	ListDeptStudioRows() ([]model.DeptStudioRow, error)
+}
+
+// BudgetAlertRecordRepo 告警去重表的访问接口。
+// 实现者：repository.BudgetAlertRepo（真实 DB）。
+// 依赖注入点：测试可用 fake 替换。
+type BudgetAlertRecordRepo interface {
+	ExistsForPeriod(scopeType, scopeID, period string, threshold int) bool
+	Create(a *model.BudgetAlertRecord) error
+	DeleteByScope(scopeType, scopeID, period string) error
+}
+
+func NewBudgetService(repo BudgetAllocationRepo, alertRepo BudgetAlertRecordRepo) *BudgetService {
 	return &BudgetService{repo: repo, alertRepo: alertRepo}
 }
 
@@ -154,23 +174,15 @@ func (s *BudgetService) InitDefaultBudgets(
 	ctx context.Context,
 	defaultDeptDailyUSD, defaultDeptServiceUSD, defaultStudioUSD float64,
 ) (created int, err error) {
-	// 1. dept_daily / dept_service：为每个部门创建默认额度
-	var deptRows []struct {
-		DeptID    string `gorm:"column:dept_id"`
-		StudioID  string `gorm:"column:studio_id"`
-		StudioName string `gorm:"column:studio_name"`
+	rows, err := s.repo.ListDeptStudioRows()
+	if err != nil {
+		return 0, fmt.Errorf("list dept studio rows: %w", err)
 	}
-	_ = s.repo.DB().Raw(`
-		SELECT DISTINCT d.dept_id::text AS dept_id,
-		       dsm.studio_id::text AS studio_id,
-		       s.name AS studio_name
-		FROM departments d
-		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = d.dept_id
-		LEFT JOIN studios s ON s.id = dsm.studio_id
-		WHERE d.dept_id IS NOT NULL
-	`).Scan(&deptRows).Error
 
-	for _, row := range deptRows {
+	// 同 studio 只创建一次（避免重复插入）
+	studioSeen := make(map[string]bool)
+
+	for _, row := range rows {
 		if row.DeptID == "" {
 			continue
 		}
@@ -197,7 +209,7 @@ func (s *BudgetService) InitDefaultBudgets(
 			created++
 		}
 		// studio（同工作室只创建一次）
-		if row.StudioID != "" {
+		if row.StudioID != "" && !studioSeen[row.StudioID] {
 			if existing, _ := s.repo.GetAllocation(model.BudgetScopeStudio, row.StudioID); existing == nil {
 				_ = s.repo.UpsertAllocation(&model.BudgetAllocation{
 					ScopeType: model.BudgetScopeStudio,
@@ -208,6 +220,7 @@ func (s *BudgetService) InitDefaultBudgets(
 				})
 				created++
 			}
+			studioSeen[row.StudioID] = true
 		}
 	}
 	return created, nil

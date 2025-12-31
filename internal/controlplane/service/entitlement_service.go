@@ -7,7 +7,6 @@ import (
 
 	"github.com/example/llm-gateway/internal/controlplane/event"
 	"github.com/example/llm-gateway/internal/controlplane/model"
-	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/google/uuid"
 )
 
@@ -17,16 +16,34 @@ var (
 	ErrEntitlementForbidden = errors.New("insufficient permission to manage entitlement")
 )
 
+// EntitlementRepo 两级授权表（studio / dept）的访问接口。
+// 实现者：repository.EntitlementRepo（真实 DB）。
+type EntitlementRepo interface {
+	Upsert(e *model.GroupEntitlement) error
+	Revoke(groupID uint, scopeType, scopeID string) error
+	FindByGroup(groupID uint) ([]model.GroupEntitlement, error)
+	EnabledControlledGroupIDs(deptID, studioID string) ([]uint, error)
+}
+
+// EntitlementGroupRepo GroupRepo 中 EntitlementService 实际依赖的子集。
+// 实现者：repository.GroupRepo。
+type EntitlementGroupRepo interface {
+	FindByID(id uint) (*model.Group, error)
+	UpdateOpenMode(id uint, openMode string) error
+	IDsByOpenMode(openMode string) ([]uint, error)
+	ListGroupsByIDs(ids []uint) ([]model.Group, error)
+}
+
 // EntitlementService 处理模型组开放模式设置与两级授权（工作室+部门）。
 type EntitlementService struct {
-	entRepo   *repository.EntitlementRepo
-	groupRepo *repository.GroupRepo
+	entRepo   EntitlementRepo
+	groupRepo EntitlementGroupRepo
 	publisher EventPublisher
 }
 
 func NewEntitlementService(
-	entRepo *repository.EntitlementRepo,
-	groupRepo *repository.GroupRepo,
+	entRepo EntitlementRepo,
+	groupRepo EntitlementGroupRepo,
 	publisher EventPublisher,
 ) *EntitlementService {
 	return &EntitlementService{
@@ -139,10 +156,9 @@ func (s *EntitlementService) UsableGroupNames(ctx context.Context, deptID, studi
 		return []string{}, nil
 	}
 
-	// 4. 查组名
-	var groups []model.Group
-	if err := s.groupRepo.DB().Where("id IN ? AND enabled = true AND deleted_at IS NULL", allIDs).
-		Select("id, name").Find(&groups).Error; err != nil {
+	// 4. 查组名（通过 repository 接口，避免 service 直接依赖 gorm）
+	groups, err := s.groupRepo.ListGroupsByIDs(allIDs)
+	if err != nil {
 		return nil, fmt.Errorf("fetch group names: %w", err)
 	}
 	names := make([]string, 0, len(groups))

@@ -137,8 +137,8 @@ func (h *BudgetHandler) Set(c *gin.Context) {
 // MyBudget GET /api/v1/my/budget
 // 员工查看自己的预算链（成员额度 + 部门 + 工作室 + 公司）。
 func (h *BudgetHandler) MyBudget(c *gin.Context) {
-	deptID := c.GetString("dept_id")
-	studioID := c.GetString("studio_id")
+	deptID := c.GetString("user_dept_id")
+	studioID := c.GetString("user_studio_id")
 	userID := c.GetString("user_id")
 
 	if deptID == "" {

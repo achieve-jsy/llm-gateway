@@ -113,3 +113,20 @@ func (r *BudgetRepo) ListScoped(scopeTypes []string, scopeIDs []string) ([]model
 func (r *BudgetRepo) DB() *gorm.DB {
 	return r.db
 }
+
+// ListDeptStudioRows 列出所有（部门 - 所属工作室）组合。
+// 满足 service.BudgetAllocationRepo 接口。
+// 返回的 DeptID 永不为空，StudioID 可能为空。
+func (r *BudgetRepo) ListDeptStudioRows() ([]model.DeptStudioRow, error) {
+	var rows []model.DeptStudioRow
+	err := r.db.Raw(`
+		SELECT DISTINCT d.dept_id::text AS dept_id,
+		       COALESCE(dsm.studio_id::text, '') AS studio_id,
+		       COALESCE(s.name, '') AS studio_name
+		FROM departments d
+		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = d.dept_id
+		LEFT JOIN studios s ON s.id = dsm.studio_id
+		WHERE d.dept_id IS NOT NULL
+	`).Scan(&rows).Error
+	return rows, err
+}

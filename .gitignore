@@ -44,3 +44,8 @@ node_modules/
 .specify/
 .specs/
 # specs/*.DS_Store
+
+# macOS
+.DS_Store
+**/.DS_Store
+tools/atlas-loader/atlas-loader

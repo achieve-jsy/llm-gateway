@@ -63,12 +63,18 @@ func (h *ServiceKeyHandler) Create(c *gin.Context) {
 
 // List GET /api/v1/service-keys?dept_id=xxx
 // 列出指定部门的 Service Key（不含明文）。
+// dept_id 可选：未提供时自动使用当前 JWT 用户的 user_dept_id
 func (h *ServiceKeyHandler) List(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
 
 	deptID := c.Query("dept_id")
 	if deptID == "" {
+		// 未指定 dept_id 时，优先使用当前 JWT 用户的 user_dept_id
+		deptID = c.GetString("user_dept_id")
+	}
+	if deptID == "" && !actor.IsGlobal {
+		// 普通用户既没传 dept_id 也没在 JWT 里 → 400
 		c.JSON(http.StatusBadRequest, gin.H{"error": "dept_id is required"})
 		return
 	}

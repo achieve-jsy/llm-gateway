@@ -801,7 +801,7 @@ export async function getBudgetList(scopeType?: BudgetScopeType, scopeId?: strin
   if (scopeType) params.scope_type = scopeType
   if (scopeId) params.scope_id = scopeId
   const res = await http.get<ApiResponse<{ items: BudgetItem[] }>>('/api/v1/budgets', { params })
-  return res.data.data.items
+  return res.data.items
 }
 
 /** 设置预算额度 */
@@ -812,7 +812,7 @@ export async function setBudget(payload: BudgetSetPayload): Promise<void> {
 /** 获取我的预算链 */
 export async function getMyBudget(): Promise<BudgetChainItem[]> {
   const res = await http.get<ApiResponse<{ chain: BudgetChainItem[] }>>('/api/v1/my/budget')
-  return res.data.data.chain
+  return res.data.chain
 }
 
 // ===================== v0.7 模型组授权 =====================
@@ -825,7 +825,7 @@ export async function setGroupOpenMode(groupId: number, openMode: 'public' | 'co
 /** 获取模型组授权列表 */
 export async function getGroupEntitlements(groupId: number): Promise<GroupEntitlement[]> {
   const res = await http.get<ApiResponse<{ items: GroupEntitlement[] }>>(`/api/v1/groups/${groupId}/entitlements`)
-  return res.data.data.items
+  return res.data.items
 }
 
 /** 授权（下放给工作室或开通部门） */
@@ -845,7 +845,7 @@ export async function listServiceKeys(deptId: string): Promise<ServiceKeyItem[]>
   const res = await http.get<ApiResponse<{ items: RawServiceKeyItem[] }>>('/api/v1/service-keys', {
     params: { dept_id: deptId }
   })
-  return (res.data.data.items || []).map(mapServiceKey)
+  return (res.data.items || []).map(mapServiceKey)
 }
 
 /** 创建 Service Key（返回明文 key） */
@@ -874,13 +874,13 @@ export async function getMyExpansionRequests(status?: string): Promise<Expansion
   const params: Record<string, string> = {}
   if (status) params.status = status
   const res = await http.get<ApiResponse<{ items: ExpansionRequest[] }>>('/api/v1/expansion-requests', { params })
-  return res.data.data.items
+  return res.data.items
 }
 
 /** 获取待审批列表 */
 export async function getPendingExpansions(): Promise<ExpansionRequest[]> {
   const res = await http.get<ApiResponse<{ items: ExpansionRequest[] }>>('/api/v1/expansion-requests/pending')
-  return res.data.data.items
+  return res.data.items
 }
 
 /** 审批扩容申请 */

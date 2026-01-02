@@ -866,6 +866,11 @@ export async function setBudgetBatch(items: BudgetSetPayload[]): Promise<{ resul
   return res.data
 }
 
+/** 删除成员单独配额，还原为共享部门预算池 */
+export async function deleteMemberBudget(scopeType: string, scopeId: string): Promise<void> {
+  await http.delete('/api/v1/budgets', { data: { scope_type: scopeType, scope_id: scopeId } })
+}
+
 /** 获取预算链路上下文（面包屑用） */
 export async function getBudgetContext(): Promise<BudgetContextItem[]> {
   const res = await http.get<ApiResponse<{ context: BudgetContextItem[] }>>('/api/v1/budgets/context')
@@ -903,20 +908,34 @@ export async function revokeEntitlement(payload: EntitlementPayload): Promise<vo
 
 // ===================== v0.7 Service Key =====================
 
-/** 获取部门 Service Key 列表 */
-export async function listServiceKeys(deptId: string): Promise<ServiceKeyItem[]> {
-  const res = await http.get<ApiResponse<{ items: RawServiceKeyItem[] }>>('/api/v1/service-keys', {
-    params: { dept_id: deptId }
-  })
-  return (res.data.items || []).map(mapServiceKey)
+/** 获取部门 Service Key 列表（分页） */
+export async function listServiceKeys(
+  deptId: string,
+  page = 1,
+  pageSize = 20
+): Promise<{ items: ServiceKeyItem[]; total: number }> {
+  const params: Record<string, string | number> = { page, page_size: pageSize }
+  if (deptId) params.dept_id = deptId
+  const res = await http.get<{ items: RawServiceKeyItem[]; total: number }>(
+    '/api/v1/service-keys', { params }
+  )
+  return {
+    items: (res.data.items || []).map(mapServiceKey),
+    total: res.data.total || 0,
+  }
 }
 
 /** 创建 Service Key（返回明文 key） */
 export async function createServiceKey(deptId: string, name: string, purpose: string): Promise<CreateServiceKeyResponse> {
-  const res = await http.post<ApiResponse<CreateServiceKeyResponse>>('/api/v1/service-keys', {
+  const res = await http.post<CreateServiceKeyResponse>('/api/v1/service-keys', {
     dept_id: deptId, name, purpose
   })
-  return res.data.data
+  return res.data
+}
+
+/** 启用/停用 Service Key */
+export async function toggleServiceKey(keyId: string, enabled: boolean): Promise<void> {
+  await http.patch(`/api/v1/service-keys/${keyId}/status`, { enabled })
 }
 
 /** 吊销 Service Key */
@@ -928,8 +947,9 @@ export async function deleteServiceKey(keyId: string): Promise<void> {
 
 /** 发起扩容申请 */
 export async function createExpansionRequest(payload: CreateExpansionPayload): Promise<ExpansionRequest> {
-  const res = await http.post<ApiResponse<ExpansionRequest>>('/api/v1/expansion-requests', payload)
-  return res.data.data
+  // 后端直接返回裸对象（HTTP 201），无 ApiResponse 包装
+  const res = await http.post<ExpansionRequest>('/api/v1/expansion-requests', payload)
+  return res.data
 }
 
 /** 获取我的扩容申请列表 */
@@ -940,9 +960,11 @@ export async function getMyExpansionRequests(status?: string): Promise<Expansion
   return res.data.items
 }
 
-/** 获取待审批列表 */
-export async function getPendingExpansions(): Promise<ExpansionRequest[]> {
-  const res = await http.get<ApiResponse<{ items: ExpansionRequest[] }>>('/api/v1/expansion-requests/pending')
+/** 获取待审批列表，name 非空时按申请人姓名模糊搜索 */
+export async function getPendingExpansions(name?: string): Promise<ExpansionRequest[]> {
+  const params: Record<string, string> = {}
+  if (name) params.name = name
+  const res = await http.get<ApiResponse<{ items: ExpansionRequest[] }>>('/api/v1/expansion-requests/pending', { params })
   return res.data.items
 }
 

@@ -162,9 +162,40 @@ func (r *BudgetRepo) MemberInDeptIDs(memberID string, deptIDs []string) (bool, e
 	return count > 0, nil
 }
 
+// DeleteAllocation 删除指定成员的单独配额，还原为共享部门预算池。
+func (r *BudgetRepo) DeleteAllocation(scopeType, scopeID string) error {
+	return r.db.Where("scope_type = ? AND scope_id = ?", scopeType, scopeID).
+		Delete(&model.BudgetAllocation{}).Error
+}
+
 // DB 暴露底层 db 实例，供跨 repo 联合查询使用（如 InitDefaultBudgets）。
 func (r *BudgetRepo) DB() *gorm.DB {
 	return r.db
+}
+
+// ListDeptIDsByStudioID 返回指定工作室下所有部门的 dept_id（SSO 字符串）。
+// 同时查询 dept_studio_map 和 departments.studio_id 两个来源，取并集。
+func (r *BudgetRepo) ListDeptIDsByStudioID(studioID string) ([]string, error) {
+	var rows []struct {
+		DeptID string `gorm:"column:dept_id"`
+	}
+	err := r.db.Raw(`
+		SELECT DISTINCT d.dept_id
+		FROM departments d
+		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = d.dept_id
+		WHERE dsm.studio_id = ?::uuid
+		   OR d.studio_id  = ?::uuid
+	`, studioID, studioID).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if row.DeptID != "" {
+			ids = append(ids, row.DeptID)
+		}
+	}
+	return ids, nil
 }
 
 // ListDeptStudioRows 列出所有（部门 - 所属工作室）组合。

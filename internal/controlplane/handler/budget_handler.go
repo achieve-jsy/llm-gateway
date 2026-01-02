@@ -50,6 +50,7 @@ func (h *BudgetHandler) List(c *gin.Context) {
 	if view != "" {
 		var scopeTypes []string
 		var scopeIDs []string
+		var userDeptMap map[string]string // user_id → dept_id，仅 department 视图使用
 
 		switch view {
 		case "company":
@@ -68,7 +69,20 @@ func (h *BudgetHandler) List(c *gin.Context) {
 				return
 			}
 			scopeTypes = []string{model.BudgetScopeStudio, model.BudgetScopeDeptDaily, model.BudgetScopeDeptService}
-			if !actor.IsGlobal {
+			if scopeID != "" {
+				// admin 下钻到单个工作室：返回该工作室 + 其下所有部门的预算
+				if !actor.IsGlobal && !actor.HasStudio(scopeID) {
+					c.JSON(http.StatusForbidden, gin.H{"error": "无权查看该工作室"})
+					return
+				}
+			deptIDs, err := h.svc.ListDeptIDsByStudioID(scopeID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			scopeIDs = append(scopeIDs, scopeID)
+			scopeIDs = append(scopeIDs, deptIDs...)
+			} else if !actor.IsGlobal {
 				// 返回自己管辖的工作室 + 下属部门
 				scopeIDs = append(scopeIDs, actor.StudioIDs...)
 				scopeIDs = append(scopeIDs, actor.DeptIDs...)
@@ -76,6 +90,8 @@ func (h *BudgetHandler) List(c *gin.Context) {
 
 		case "department":
 			// 部门视图：dept_admin+ 可见
+			// userDeptMap: user_id → dept_id，用于给 member item 附 ParentScopeID
+			userDeptMap = make(map[string]string)
 			scopeTypes = []string{model.BudgetScopeDeptDaily, model.BudgetScopeDeptService, model.BudgetScopeMember}
 			if scopeID != "" {
 				if !actor.IsGlobal && !actor.HasDept(scopeID) {
@@ -88,6 +104,9 @@ func (h *BudgetHandler) List(c *gin.Context) {
 					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 					return
 				}
+				for _, mID := range memberIDs {
+					userDeptMap[mID] = scopeID
+				}
 				scopeIDs = append(scopeIDs, memberIDs...)
 			} else if !actor.IsGlobal {
 				scopeIDs = append(scopeIDs, actor.DeptIDs...)
@@ -96,6 +115,9 @@ func (h *BudgetHandler) List(c *gin.Context) {
 					if err != nil {
 						c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 						return
+					}
+					for _, mID := range memberIDs {
+						userDeptMap[mID] = deptID
 					}
 					scopeIDs = append(scopeIDs, memberIDs...)
 				}
@@ -110,6 +132,14 @@ func (h *BudgetHandler) List(c *gin.Context) {
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
+		}
+		// 为 member item 填充所属部门（多部门场景路由跳转使用）
+		if len(userDeptMap) > 0 {
+			for i := range items {
+				if items[i].ScopeType == model.BudgetScopeMember {
+					items[i].ParentScopeID = userDeptMap[items[i].ScopeID]
+				}
+			}
 		}
 		c.JSON(http.StatusOK, gin.H{"items": items, "view": view})
 		return
@@ -386,6 +416,49 @@ func (h *BudgetHandler) BatchSet(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"results": results})
+}
+
+// Delete DELETE /api/v1/budgets
+// 删除成员的单独配额，还原为共享部门预算池。仅支持 scope_type=member。
+func (h *BudgetHandler) Delete(c *gin.Context) {
+	h.rbac.BuildAndInjectActor(c)
+	actor := rbac.GetActor(c)
+	if !actor.IsManager() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "需要管理员权限"})
+		return
+	}
+
+	var req struct {
+		ScopeType string `json:"scope_type" binding:"required"`
+		ScopeID   string `json:"scope_id"   binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.ScopeType != model.BudgetScopeMember {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "仅支持删除成员单独配额"})
+		return
+	}
+
+	if !actor.IsGlobal {
+		ok, err := h.svc.MemberInDeptIDs(req.ScopeID, actor.DeptIDs)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if !ok {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权删除该成员配额"})
+			return
+		}
+	}
+
+	if err := h.svc.DeleteMemberBudget(c.Request.Context(), req.ScopeType, req.ScopeID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // Context GET /api/v1/budgets/context

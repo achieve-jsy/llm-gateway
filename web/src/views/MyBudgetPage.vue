@@ -1,129 +1,279 @@
 <template>
-  <div class="budget-wallet">
-    <header class="wallet-head">
-      <div>
-        <span class="eyebrow">Personal budget</span>
-        <h1>我的预算</h1>
-        <p>查看个人额度、部门预算链路和周期重置时间。</p>
+  <div class="mb">
+    <header class="mb-head">
+      <div class="mb-head__left">
+        <h2 class="mb-title">我的预算</h2>
+        <span class="mb-badge">{{ authStore.userName || '个人' }}</span>
       </div>
-      <el-button :loading="loading" :icon="Refresh" circle @click="load" />
+      <el-button :loading="loading" :icon="Refresh" circle size="small" @click="loadAll" />
     </header>
 
-    <div v-if="loading && !chain.length" v-loading="true" class="loading-block" />
-
-    <el-empty v-else-if="!chain.length" description="暂无预算配置信息，请联系管理员" />
+    <div v-if="loading && !chain.length" v-loading="true" class="mb-loading" />
+    <div v-else-if="!chain.length" class="mb-no-budget">
+      <template v-if="authStore.isAdmin">
+        <el-icon class="mb-no-budget__icon"><Setting /></el-icon>
+        <p>平台管理员无个人预算配置</p>
+        <span>管理员可在预算管理中为组织配置预算，或在组织架构中为成员分配额度。</span>
+        <el-button type="primary" plain size="small" style="margin-top:12px" @click="router.push('/admin/budget')">前往预算管理</el-button>
+      </template>
+      <template v-else>
+        <el-empty description="暂无预算配置，请联系管理员" />
+      </template>
+    </div>
 
     <template v-else>
-      <section class="hero-panel">
-        <div class="hero-main">
-          <span class="hero-label">{{ primaryBudgetLabel }}</span>
-          <div class="hero-amount">
-            <strong>{{ formatUSD(remainingAmount) }}</strong>
-            <span>可用余额</span>
-          </div>
-          <div class="hero-meta">
-            已用 {{ formatUSD(primaryBudget?.used_usd || 0) }} / 总额 {{ primaryBudget ? displayAmount(primaryBudget.amount_usd) : '未设置' }}
-          </div>
-          <el-progress
-            :percentage="primaryRatioPercent"
-            :stroke-width="10"
-            :color="progressColor(primaryBudget?.used_ratio || 0)"
-            class="hero-progress"
-          />
+      <!-- KPI strip -->
+      <section class="mb-kpi-strip">
+        <div class="mb-kpi">
+          <span>可用余额</span>
+          <strong>{{ formatUSD(remainingAmount) }}</strong>
         </div>
-
-        <div class="hero-side">
-          <div class="reset-card">
-            <span>日额度</span>
-            <strong>{{ displayAmount(primaryBudget?.daily_amount_usd ?? -1) }}</strong>
-            <small>明天 00:00 重置</small>
-          </div>
-          <div class="reset-card">
-            <span>周额度</span>
-            <strong>{{ displayAmount(primaryBudget?.weekly_amount_usd ?? -1) }}</strong>
-            <small>下周一 00:00 重置</small>
-          </div>
-          <div class="reset-card">
-            <span>月额度</span>
-            <strong>{{ primaryBudget ? displayAmount(primaryBudget.amount_usd) : '未设置' }}</strong>
-            <small>下月 1 日 00:00 重置</small>
-          </div>
+        <div class="mb-kpi">
+          <span>本月已用</span>
+          <strong>{{ formatUSD(primaryBudget?.used_usd || 0) }}</strong>
         </div>
-
-        <div class="hero-actions">
-          <el-button v-if="canAdjustBudget" type="primary" @click="router.push('/admin/org')">去调整额度</el-button>
-          <el-button v-if="canOpenExpansion" type="primary" plain @click="openExpansion">申请扩容</el-button>
-          <el-button v-if="authStore.isManager" plain @click="router.push('/admin/expansion-requests')">查看申请</el-button>
+        <div class="mb-kpi">
+          <span>月度额度</span>
+          <strong>{{ primaryBudget ? displayAmount(primaryBudget.amount_usd) : '未设置' }}</strong>
+        </div>
+        <div class="mb-kpi">
+          <span>使用率</span>
+          <strong :class="{ 'is-danger': primaryRatioPercent >= 80 }">{{ primaryRatioPercent }}%</strong>
         </div>
       </section>
 
-      <section class="content-grid">
-        <div class="section-block">
-          <div class="section-head">
+      <!-- 主工作区 -->
+      <section class="mb-grid">
+        <!-- 左：额度详情 -->
+        <div class="mb-panel">
+          <div class="mb-panel-head">
             <div>
-              <h2>预算链路</h2>
-              <p>请求会按成员、部门、工作室和公司预算逐层校验。</p>
+              <h2>{{ primaryBudgetLabel }}</h2>
+              <p>当前周期额度与使用情况</p>
+            </div>
+            <div class="mb-panel-head-actions">
+              <span :class="`mb-tag mb-tag--${statusTagType}`">{{ statusText }}</span>
             </div>
           </div>
 
-          <div class="chain-list">
-            <div v-for="item in chain" :key="`${item.scope_type}:${item.scope_id || item.label}`" class="chain-row">
-              <div class="chain-left">
-                <span class="scope-dot" :style="{ background: SCOPE_TYPE_COLORS[item.scope_type] }" />
-                <div>
-                  <strong>{{ item.label || SCOPE_TYPE_LABELS[item.scope_type] }}</strong>
-                  <span>{{ SCOPE_TYPE_LABELS[item.scope_type] }}</span>
+          <div class="mb-balance-block">
+            <div>
+              <span class="mb-balance-label">可用余额</span>
+              <div class="mb-balance-amount">{{ formatUSD(remainingAmount) }}</div>
+              <div class="mb-balance-sub">已用 {{ formatUSD(primaryBudget?.used_usd || 0) }} / 总额 {{ primaryBudget ? displayAmount(primaryBudget.amount_usd) : '未设置' }}</div>
+            </div>
+            <div class="mb-balance-ring">
+              <svg viewBox="0 0 64 64">
+                <circle cx="32" cy="32" r="26" fill="none" stroke="var(--el-fill-color)" stroke-width="5"/>
+                <circle cx="32" cy="32" r="26" fill="none"
+                  :stroke="progressColor(primaryBudget?.used_ratio || 0)"
+                  stroke-width="5"
+                  stroke-linecap="round"
+                  :stroke-dasharray="`${primaryRatioPercent * 1.634} 163.4`"
+                  transform="rotate(-90 32 32)"
+                />
+              </svg>
+              <span>{{ primaryRatioPercent }}%</span>
+            </div>
+          </div>
+
+          <div class="mb-period-rows">
+            <div class="mb-period-item">
+              <span class="mb-period-name">今日额度</span>
+              <span class="mb-period-value">{{ displayAmount(primaryBudget?.daily_amount_usd ?? -1) }}</span>
+              <span class="mb-period-reset">明天 00:00 重置</span>
+            </div>
+            <div class="mb-period-item">
+              <span class="mb-period-name">本周额度</span>
+              <span class="mb-period-value">{{ displayAmount(primaryBudget?.weekly_amount_usd ?? -1) }}</span>
+              <span class="mb-period-reset">下周一 00:00 重置</span>
+            </div>
+            <div class="mb-period-item">
+              <span class="mb-period-name">本月额度</span>
+              <span class="mb-period-value">{{ primaryBudget ? displayAmount(primaryBudget.amount_usd) : '未设置' }}</span>
+              <span class="mb-period-reset">下月 1 日 00:00 重置</span>
+            </div>
+          </div>
+
+          <!-- 月度分析 -->
+          <div class="mb-monthly">
+            <div class="mb-monthly-title">月度分析</div>
+
+            <div class="mb-monthly-row">
+              <span class="mb-monthly-label">月内进度</span>
+              <span class="mb-monthly-sub">第 {{ monthDay }} 天 / 共 {{ daysInMonth }} 天</span>
+            </div>
+            <div class="mb-monthly-track">
+              <div class="mb-monthly-fill mb-monthly-fill--day" :style="{ width: monthDayPercent + '%' }" />
+            </div>
+
+            <div class="mb-monthly-stats">
+              <div class="mb-monthly-stat">
+                <span>日均消耗</span>
+                <strong>{{ dailyAvg > 0 ? formatUSD(dailyAvg) : '—' }}</strong>
+              </div>
+              <div class="mb-monthly-stat">
+                <span>预计月末</span>
+                <strong v-if="dailyAvg > 0" :class="projectedOver ? 'is-over' : ''">{{ formatUSD(projectedTotal) }}</strong>
+                <strong v-else class="mb-monthly-na">暂无数据</strong>
+              </div>
+              <div class="mb-monthly-stat">
+                <span>剩余天数</span>
+                <strong>{{ daysInMonth - monthDay }} 天</strong>
+              </div>
+            </div>
+
+            <div v-if="projectedOver" class="mb-monthly-warn">
+              ⚠ 按当前速率月末预计超出额度，建议申请提升
+            </div>
+            <div v-else-if="primaryRatioPercent === 0" class="mb-monthly-hint">
+              本月暂无消耗，额度充足
+            </div>
+          </div>
+        </div>
+
+        <!-- 右：扩容申请 -->
+        <div class="mb-panel">
+          <div class="mb-panel-head">
+            <div>
+              <h2>扩容申请</h2>
+              <p v-if="!authStore.isManager">个人额度提升申请</p>
+              <p v-else>额度直接调整</p>
+            </div>
+            <!-- 普通用户才显示新建申请按钮 -->
+            <template v-if="!authStore.isManager">
+              <el-tooltip v-if="hasPendingRequest" content="已有审批中的申请，请等待结果或取消后重新提交" placement="top">
+                <el-button size="small" disabled>新建申请</el-button>
+              </el-tooltip>
+              <el-button v-else size="small" type="primary" plain @click="openExpansion">新建申请</el-button>
+            </template>
+          </div>
+
+          <!-- 管理员：直接调额提示 -->
+          <div v-if="authStore.isManager" class="mb-manager-hint">
+            <div class="mb-manager-hint-icon">⚡</div>
+            <div>
+              <p class="mb-manager-hint-title">您可直接调整额度</p>
+              <p class="mb-manager-hint-desc">
+                <template v-if="authStore.effectiveRole === 'dept_admin'">作为部门负责人，可在「组织管理」中直接修改成员配额，无需提交申请。如需提升部门整体预算，请联系工作室负责人。</template>
+                <template v-else-if="authStore.effectiveRole === 'studio_admin'">作为工作室负责人，可在「组织管理」中直接修改部门预算，无需提交申请。如需提升工作室整体预算，请联系平台管理员。</template>
+                <template v-else>拥有全局额度管理权限，可在「预算总览」中直接调整任意层级的额度。</template>
+              </p>
+              <el-button
+                size="small" type="primary" plain style="margin-top: 12px"
+                @click="goManagerAdjust"
+              >前往调整 →</el-button>
+            </div>
+          </div>
+
+          <template v-else>
+          <div v-if="requestLoading" v-loading="true" class="mb-inner-loading" />
+
+          <!-- 空状态 -->
+          <div v-else-if="myRequests.length === 0" class="mb-empty">
+            <div class="mb-empty-icon">↑</div>
+            <p>尚未发起过扩容申请</p>
+            <span>额度不足时，点击右上角「新建申请」可提升个人配额，由部门负责人审批。</span>
+          </div>
+
+          <template v-else>
+            <!-- 最新申请：审批中 → 突出显示 + 取消入口 -->
+            <div v-if="latestRequest" class="mb-active-request" :class="`is-${latestRequest.status}`">
+              <div class="mb-active-header">
+                <div class="mb-active-meta">
+                  <span :class="`mb-tag mb-tag--${latestRequest.status}`">{{ statusLabel(latestRequest.status) }}</span>
+                  <strong class="mb-active-amount">{{ formatUSD(latestRequest.requested_amount) }} {{ PERIOD_SUFFIX[latestRequest.period_type || 'monthly'] }}</strong>
+                </div>
+                <div class="mb-active-actions">
+                  <span class="mb-muted">{{ formatDateTime(latestRequest.created_at) }}</span>
+                  <el-button
+                    v-if="latestRequest.status === 'pending'"
+                    size="small" type="danger" plain
+                    :loading="cancellingId === latestRequest.id"
+                    @click="cancelRequest(latestRequest.id)"
+                  >取消</el-button>
+                  <el-button
+                    v-else-if="latestRequest.status !== 'pending'"
+                    size="small" @click="openExpansion"
+                  >重新申请</el-button>
                 </div>
               </div>
-              <div class="chain-usage">
-                <span>{{ formatUSD(item.used_usd || 0) }} / {{ displayAmount(item.amount_usd) }}</span>
-                <el-progress
-                  :percentage="Math.min(Math.round((item.used_ratio || 0) * 100), 100)"
-                  :stroke-width="6"
-                  :color="progressColor(item.used_ratio || 0)"
-                />
+
+              <p v-if="latestRequest.reason" class="mb-active-reason">{{ latestRequest.reason }}</p>
+
+              <!-- 步进器 -->
+              <div class="mb-steps">
+                <div class="mb-step is-done">
+                  <div class="mb-step-node">✓</div>
+                  <span>提交</span>
+                </div>
+                <div class="mb-step-line" :class="{ 'is-done': latestRequest.status !== 'pending' }" />
+                <div class="mb-step" :class="{
+                  'is-active': latestRequest.status === 'pending',
+                  'is-done': latestRequest.status === 'approved',
+                  'is-rejected': latestRequest.status === 'rejected'
+                }">
+                  <div class="mb-step-node">{{ latestRequest.status === 'approved' ? '✓' : latestRequest.status === 'rejected' ? '✕' : '' }}</div>
+                  <span>审批</span>
+                </div>
+                <div class="mb-step-line" :class="{ 'is-done': latestRequest.status === 'approved' }" />
+                <div class="mb-step" :class="{
+                  'is-done': latestRequest.status === 'approved',
+                  'is-rejected': latestRequest.status === 'rejected'
+                }">
+                  <div class="mb-step-node">{{ latestRequest.status === 'approved' ? '✓' : latestRequest.status === 'rejected' ? '✕' : '' }}</div>
+                  <span>{{ latestRequest.status === 'rejected' ? '驳回' : '生效' }}</span>
+                </div>
+              </div>
+
+              <div class="mb-active-note">{{ requestProgressText(latestRequest) }}</div>
+            </div>
+
+            <!-- 历史记录 -->
+            <div v-if="historyRequests.length > 0" class="mb-history">
+              <div class="mb-history-header">
+                <span>历史记录</span>
+                <span class="mb-history-total">共 {{ historyRequests.length }} 条</span>
+              </div>
+              <div ref="historyScrollRef" class="mb-history-scroll">
+                <div v-for="item in visibleHistory" :key="item.id" class="mb-history-item">
+                  <span :class="`mb-tag mb-tag--${item.status} mb-tag--sm`">{{ statusLabel(item.status) }}</span>
+                  <span class="mb-history-amount">{{ formatUSD(item.requested_amount) }} {{ PERIOD_SUFFIX[(item.period_type as ExpansionPeriod) || 'monthly'] }}</span>
+                  <span class="mb-muted">{{ formatDateTime(item.created_at) }}</span>
+                </div>
+                <!-- 滚动到底部触发加载更多 -->
+                <div ref="historySentinelRef" class="mb-history-sentinel" />
               </div>
             </div>
-          </div>
+          </template>
+          </template>
         </div>
-
-        <aside class="section-block side-block">
-          <h2>使用提示</h2>
-          <div class="tip-list">
-            <div>
-              <strong>日/周额度</strong>
-              <span>用于控制短周期消耗节奏，恢复后可继续使用。</span>
-            </div>
-            <div>
-              <strong>月额度</strong>
-              <span>作为硬限制，超出后需要等待重置或申请扩容。</span>
-            </div>
-            <div>
-              <strong>扩容申请</strong>
-              <span>普通成员申请个人额度，部门负责人审批。</span>
-            </div>
-          </div>
-        </aside>
       </section>
+
     </template>
 
     <el-dialog v-model="expansionVisible" title="申请提升个人额度" width="520px">
-      <div class="dialog-summary">
-        <div>
-          <span>当前额度</span>
-          <strong>{{ primaryBudget ? displayAmount(primaryBudget.amount_usd) : '未设置' }}</strong>
-        </div>
-        <div>
-          <span>已用金额</span>
-          <strong>{{ formatUSD(primaryBudget?.used_usd || 0) }}</strong>
-        </div>
-      </div>
       <el-form label-position="top">
-        <el-form-item label="申请后的月额度（USD）">
+        <el-form-item label="调整维度">
+          <el-segmented v-model="expansionForm.periodType" :options="periodOptions" block style="width:100%" />
+        </el-form-item>
+        <el-form-item>
+          <div class="mb-dialog-summary">
+            <div>
+              <span>当前{{ PERIOD_LABELS[expansionForm.periodType] }}</span>
+              <strong>{{ dialogCurrentAmount }}</strong>
+            </div>
+            <div>
+              <span>已用金额</span>
+              <strong>{{ formatUSD(primaryBudget?.used_usd || 0) }}</strong>
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item :label="`申请后的${PERIOD_LABELS[expansionForm.periodType]}（USD）`">
           <el-input-number v-model="expansionForm.requestedAmount" :min="1" :precision="2" controls-position="right" style="width:100%" />
         </el-form-item>
         <el-form-item label="申请理由">
-          <el-input v-model="expansionForm.reason" type="textarea" :rows="3" placeholder="说明业务场景、预计消耗和需要提升个人额度的原因" />
+          <el-input v-model="expansionForm.reason" type="textarea" :rows="3" placeholder="说明业务场景、预计消耗和需要提升额度的原因" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -135,40 +285,133 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, Setting } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { createExpansionRequest, getMyBudget } from '@/services/control-plane'
+import { createExpansionRequest, decideExpansion, getMyBudget, getMyExpansionRequests } from '@/services/control-plane'
 import { useAuthStore } from '@/stores/auth'
 import type { BudgetChainItem } from '@/types/budget'
-import { SCOPE_TYPE_COLORS, SCOPE_TYPE_LABELS } from '@/types/budget'
+import type { ExpansionPeriod, ExpansionRequest, ExpansionStatus } from '@/types/expansion'
+import { PERIOD_LABELS, PERIOD_SUFFIX, STATUS_COLORS, STATUS_LABELS } from '@/types/expansion'
 
 const router = useRouter()
 const authStore = useAuthStore()
 
 const chain = ref<BudgetChainItem[]>([])
+const myRequests = ref<ExpansionRequest[]>([])
 const loading = ref(false)
+const requestLoading = ref(false)
 const expansionVisible = ref(false)
 const expansionSubmitting = ref(false)
-const expansionForm = ref({ requestedAmount: 100, reason: '' })
+const expansionForm = ref<{ periodType: ExpansionPeriod; requestedAmount: number; reason: string }>({
+  periodType: 'monthly',
+  requestedAmount: 100,
+  reason: '',
+})
+
+const periodOptions = [
+  { label: '日额度', value: 'daily' },
+  { label: '周额度', value: 'weekly' },
+  { label: '月额度', value: 'monthly' },
+]
+
+const dialogCurrentAmount = computed(() => {
+  const b = primaryBudget.value
+  if (!b) return '未设置'
+  const pt = expansionForm.value.periodType
+  if (pt === 'daily') return displayAmount(b.daily_amount_usd ?? -1)
+  if (pt === 'weekly') return displayAmount(b.weekly_amount_usd ?? -1)
+  return displayAmount(b.amount_usd)
+})
 
 const primaryBudget = computed(() =>
   chain.value.find(item => item.scope_type === 'member') ||
   chain.value.find(item => item.scope_type === 'dept_daily') ||
   chain.value[0]
 )
-const primaryBudgetLabel = computed(() => primaryBudget.value?.label || '个人可用预算')
+const primaryBudgetLabel = computed(() => primaryBudget.value?.label || '我的额度')
 const primaryRatioPercent = computed(() => Math.min(Math.round((primaryBudget.value?.used_ratio || 0) * 100), 100))
 const remainingAmount = computed(() => {
   const budget = primaryBudget.value
   if (!budget || budget.amount_usd < 0) return 0
   return Math.max((budget.amount_usd || 0) - (budget.used_usd || 0), 0)
 })
-const canAdjustBudget = computed(() => authStore.effectiveRole === 'admin' || authStore.effectiveRole === 'studio_admin')
+const statusText = computed(() => {
+  const ratio = primaryBudget.value?.used_ratio || 0
+  if (ratio >= 1) return '已用尽'
+  if (ratio >= 0.8) return '预警'
+  return '正常'
+})
+const statusTagType = computed(() => {
+  const ratio = primaryBudget.value?.used_ratio || 0
+  if (ratio >= 1) return 'danger'
+  if (ratio >= 0.8) return 'warning'
+  return 'success'
+})
+const statusClass = computed(() => `is-${statusTagType.value}`)
 const canOpenExpansion = computed(() => authStore.effectiveRole !== 'admin')
 
-async function load() {
+// 月度分析相关
+const now = new Date()
+const monthDay = now.getDate()
+const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+const monthDayPercent = Math.round((monthDay / daysInMonth) * 100)
+const dailyAvg = computed(() => {
+  const used = primaryBudget.value?.used_usd || 0
+  return monthDay > 0 ? used / monthDay : 0
+})
+const projectedTotal = computed(() => dailyAvg.value * daysInMonth)
+const projectedOver = computed(() => {
+  const limit = primaryBudget.value?.amount_usd
+  if (!limit || limit < 0) return false
+  return projectedTotal.value > limit
+})
+const latestRequest = computed(() => myRequests.value[0])
+const HISTORY_PAGE_SIZE = 5
+const historyPage = ref(1)
+const historyScrollRef = ref<HTMLElement | null>(null)
+const historySentinelRef = ref<HTMLElement | null>(null)
+let historyObserver: IntersectionObserver | null = null
+
+const historyRequests = computed(() => myRequests.value.slice(1))
+const visibleHistory = computed(() => historyRequests.value.slice(0, historyPage.value * HISTORY_PAGE_SIZE))
+const hasMoreHistory = computed(() => visibleHistory.value.length < historyRequests.value.length)
+
+function setupHistoryObserver() {
+  if (historyObserver) {
+    historyObserver.disconnect()
+    historyObserver = null
+  }
+  if (!historySentinelRef.value) return
+  historyObserver = new IntersectionObserver(
+    (entries) => {
+      if (entries[0].isIntersecting && hasMoreHistory.value) {
+        historyPage.value++
+      }
+    },
+    { root: historyScrollRef.value, threshold: 0.1 }
+  )
+  historyObserver.observe(historySentinelRef.value)
+}
+
+// 数据刷新后重置分页并重启 observer
+watch(historyRequests, () => {
+  historyPage.value = 1
+}, { flush: 'post' })
+
+watch(historySentinelRef, (el) => {
+  if (el) setupHistoryObserver()
+}, { flush: 'post' })
+// 只看最新一条是否 pending：历史里的旧 pending 记录不应永久阻塞新申请
+const hasPendingRequest = computed(() => latestRequest.value?.status === 'pending')
+const cancellingId = ref<string | null>(null)
+
+async function loadAll() {
+  await Promise.all([loadBudget(), loadRequests()])
+}
+
+async function loadBudget() {
   loading.value = true
   try {
     chain.value = await getMyBudget()
@@ -176,6 +419,17 @@ async function load() {
     ElMessage.error(e?.response?.data?.error || '预算加载失败')
   } finally {
     loading.value = false
+  }
+}
+
+async function loadRequests() {
+  requestLoading.value = true
+  try {
+    myRequests.value = await getMyExpansionRequests()
+  } catch {
+    myRequests.value = []
+  } finally {
+    requestLoading.value = false
   }
 }
 
@@ -194,6 +448,31 @@ function progressColor(ratio: number) {
   return '#2BA8A2'
 }
 
+
+function goManagerAdjust() {
+  if (authStore.isAdmin) {
+    router.push('/admin/budget')
+    return
+  }
+  // dept_admin：找到自己管辖的部门，直接定位到预算 tab
+  if (authStore.effectiveRole === 'dept_admin') {
+    const deptRole = authStore.orgRoles.find(r => r.role === 'dept_admin')
+    if (deptRole?.scope_id) {
+      router.push(`/admin/org?scope_type=dept_daily&scope_id=${encodeURIComponent(deptRole.scope_id)}&tab=budget`)
+      return
+    }
+  }
+  // studio_admin：找到自己管辖的工作室，直接定位到预算 tab
+  if (authStore.effectiveRole === 'studio_admin') {
+    const studioRole = authStore.orgRoles.find(r => r.role === 'studio_admin')
+    if (studioRole?.scope_id) {
+      router.push(`/admin/org?scope_type=studio&scope_id=${encodeURIComponent(studioRole.scope_id)}&tab=budget`)
+      return
+    }
+  }
+  router.push('/admin/org')
+}
+
 function openExpansion() {
   if (authStore.isManager) {
     router.push('/admin/expansion-requests')
@@ -206,6 +485,7 @@ function openExpansion() {
   }
   const base = primaryBudget.value?.amount_usd || 50
   expansionForm.value = {
+    periodType: 'monthly',
     requestedAmount: Math.max(Math.ceil(base * 1.5), base + 50),
     reason: '',
   }
@@ -227,252 +507,624 @@ async function submitExpansion() {
     await createExpansionRequest({
       scope_type: 'member',
       scope_id: userID,
+      period_type: expansionForm.value.periodType,
       requested_amount: expansionForm.value.requestedAmount,
       reason: expansionForm.value.reason,
     })
     ElMessage.success('申请已提交给部门负责人')
     expansionVisible.value = false
+    await loadRequests()
   } finally {
     expansionSubmitting.value = false
   }
 }
 
-onMounted(load)
+function statusLabel(status: ExpansionStatus) {
+  return STATUS_LABELS[status] || status
+}
+
+function statusColor(status: ExpansionStatus) {
+  return STATUS_COLORS[status] || '#6b7280'
+}
+
+function scopeLabel(type: string) {
+  const map: Record<string, string> = {
+    member: '个人额度',
+    dept_daily: '部门日常',
+    dept_service: '部门服务',
+    studio: '工作室',
+  }
+  return map[type] || type
+}
+
+function formatDateTime(value: string): string {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+async function cancelRequest(id: string) {
+  cancellingId.value = id
+  // 乐观更新：立刻把本地状态改为 cancelled，hasPendingRequest 即时变 false，"新建申请"立即可点
+  const req = myRequests.value.find(r => r.id === id)
+  if (req) req.status = 'cancelled'
+  try {
+    await decideExpansion(id, 'cancel')
+    ElMessage.success('申请已取消')
+    await loadRequests()
+  } catch (e: any) {
+    // 失败时回滚本地状态
+    if (req) req.status = 'pending'
+    ElMessage.error(e?.response?.data?.error || '取消失败')
+  } finally {
+    cancellingId.value = null
+  }
+}
+
+function requestProgressText(item: ExpansionRequest) {
+  if (item.status === 'pending') return '等待部门负责人审批'
+  if (item.status === 'approved') return '已批准，额度将按审批结果生效'
+  if (item.status === 'rejected') return '申请已驳回，可调整理由后重新提交'
+  if (item.status === 'cancelled') return '申请已取消'
+  return statusLabel(item.status)
+}
+
+onMounted(loadAll)
+onUnmounted(() => { historyObserver?.disconnect() })
 </script>
 
 <style scoped>
-.budget-wallet {
-  max-width: 1120px;
-  margin: 0 auto;
-  padding: 32px;
-}
-.wallet-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 20px;
-  align-items: flex-start;
-  margin-bottom: 22px;
-}
-.eyebrow {
-  color: var(--el-color-primary);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-}
-.wallet-head h1 {
-  margin: 4px 0 6px;
-  font-size: 28px;
-  color: var(--el-text-color-primary);
-}
-.wallet-head p {
-  margin: 0;
-  color: var(--el-text-color-secondary);
-}
-.loading-block {
-  height: 360px;
-}
-.hero-panel {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
-  gap: 28px;
-  padding: 28px;
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 22px;
-  background:
-    radial-gradient(circle at 10% 0%, rgba(43,168,162,.14), transparent 32%),
-    linear-gradient(135deg, var(--el-bg-color), var(--el-fill-color-light));
-}
-.hero-main {
-  min-width: 0;
-}
-.hero-label {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-}
-.hero-amount {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  margin: 16px 0 8px;
-}
-.hero-amount strong {
-  font-size: 48px;
-  line-height: 1;
-  color: var(--el-text-color-primary);
-  letter-spacing: -0.04em;
-}
-.hero-amount span,
-.hero-meta {
-  color: var(--el-text-color-secondary);
-}
-.hero-progress {
-  max-width: 560px;
-  margin-top: 24px;
-}
-.hero-side {
-  display: grid;
-  gap: 10px;
-}
-.reset-card {
-  padding: 14px 16px;
-  border-radius: 14px;
-  background: rgba(255,255,255,.56);
-  border: 1px solid var(--el-border-color-lighter);
-}
-.reset-card span,
-.reset-card small {
-  display: block;
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-}
-.reset-card strong {
-  display: block;
-  margin: 4px 0;
-  color: var(--el-text-color-primary);
-  font-size: 18px;
-}
-.hero-actions {
-  grid-column: 1 / -1;
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  padding-top: 4px;
-}
-.content-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 18px;
-  margin-top: 18px;
-}
-.section-block {
-  padding: 20px;
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 18px;
-  background: var(--el-bg-color);
-}
-.section-head {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 14px;
-}
-.section-head h2,
-.side-block h2 {
-  margin: 0;
-  color: var(--el-text-color-primary);
-  font-size: 16px;
-}
-.section-head p {
-  margin: 4px 0 0;
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-}
-.chain-list {
+/* ─────────────── Layout ─────────────── */
+.mb {
   display: flex;
   flex-direction: column;
-}
-.chain-row {
-  display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
   gap: 18px;
-  align-items: center;
-  padding: 14px 0;
-  border-top: 1px solid var(--el-border-color-lighter);
+  padding: 28px 32px;
 }
-.chain-row:first-child {
-  border-top: none;
-}
-.chain-left {
+
+/* ─────────────── Header ─────────────── */
+.mb-head {
   display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+.mb-head__left { display: flex; align-items: center; gap: 12px; }
+.mb-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--el-text-color-primary);
+  display: inline-flex;
   align-items: center;
   gap: 10px;
-  min-width: 0;
 }
-.scope-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 99px;
+.mb-title::before {
+  content: '';
+  width: 4px;
+  height: 18px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, var(--el-color-primary), #1a7a74);
   flex-shrink: 0;
 }
-.chain-left strong {
-  display: block;
-  color: var(--el-text-color-primary);
+.mb-badge {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  border: 1px solid var(--el-color-primary-light-7);
+  border-radius: 999px;
+  padding: 3px 12px;
 }
-.chain-left span:not(.scope-dot) {
+.mb-loading { height: 360px; }
+.mb-no-budget {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 80px 24px;
+  text-align: center;
+  color: var(--el-text-color-secondary);
+}
+.mb-no-budget__icon { font-size: 48px; color: var(--el-color-primary-light-5); margin-bottom: 8px; }
+.mb-no-budget p { margin: 0; font-size: 15px; font-weight: 600; color: var(--el-text-color-primary); }
+.mb-no-budget span { font-size: 13px; max-width: 320px; line-height: 1.7; }
+.mb-muted { font-size: 12px; color: var(--el-text-color-placeholder); }
+
+/* ─────────────── KPI strip ─────────────── */
+.mb-kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 16px;
+  background: var(--el-border-color-lighter);
+}
+.mb-kpi {
+  padding: 14px 18px;
+  background: var(--el-bg-color);
+}
+.mb-kpi span {
   display: block;
   color: var(--el-text-color-secondary);
   font-size: 12px;
-  margin-top: 2px;
+  margin-bottom: 8px;
 }
-.chain-usage {
+.mb-kpi strong {
+  font-size: 24px;
+  color: var(--el-text-color-primary);
+  letter-spacing: -.03em;
+}
+.mb-kpi strong.is-danger { color: var(--el-color-danger); }
+
+/* ─────────────── Grid ─────────────── */
+.mb-grid {
   display: grid;
-  grid-template-columns: 160px minmax(0, 1fr);
-  gap: 12px;
-  align-items: center;
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: stretch;
 }
-.tip-list {
+
+/* ─────────────── Panel (same as ExpansionRequestPage) ─────────────── */
+.mb-panel {
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 16px;
+  background: var(--el-bg-color);
+  overflow: hidden;
+}
+.mb-panel-head {
   display: flex;
-  flex-direction: column;
-  gap: 14px;
-  margin-top: 16px;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
 }
-.tip-list strong {
-  display: block;
-  margin-bottom: 4px;
+.mb-panel-head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
   color: var(--el-text-color-primary);
 }
-.tip-list span {
+.mb-panel-head p {
+  margin: 3px 0 0;
+  font-size: 12px;
   color: var(--el-text-color-secondary);
-  font-size: 13px;
+}
+.mb-panel-head-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+
+/* ─────────────── Status tags ─────────────── */
+.mb-tag {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
   line-height: 1.6;
 }
-.dialog-summary {
+.mb-tag--success  { background: #e6f9f1; color: #0a6640; }
+.mb-tag--warning  { background: #fff8e1; color: #8a5a00; }
+.mb-tag--danger   { background: #fff0f0; color: #c0392b; }
+.mb-tag--pending  { background: #eef2ff; color: #4338ca; }
+.mb-tag--approved { background: #e6f9f1; color: #0a6640; }
+.mb-tag--rejected { background: #fff0f0; color: #c0392b; }
+.mb-tag--cancelled { background: #f3f4f6; color: #6b7280; }
+.mb-tag--sm { font-size: 10px; padding: 2px 7px; }
+
+/* ─────────────── Balance block ─────────────── */
+.mb-balance-block {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 20px 18px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.mb-balance-label {
+  display: block;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 6px;
+}
+.mb-balance-amount {
+  font-size: 38px;
+  font-weight: 800;
+  color: var(--el-color-primary);
+  letter-spacing: -.04em;
+  line-height: 1;
+}
+.mb-balance-sub {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+}
+.mb-balance-ring {
+  position: relative;
+  flex-shrink: 0;
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.mb-balance-ring svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.mb-balance-ring span {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+  position: relative;
+  z-index: 1;
+}
+
+/* ─────────────── Period rows ─────────────── */
+.mb-period-rows { display: flex; flex-direction: column; }
+.mb-period-item {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 16px;
+  align-items: center;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.mb-period-item:last-child { border-bottom: 0; }
+.mb-period-name { color: var(--el-text-color-regular); font-size: 13px; }
+.mb-period-value { font-size: 15px; font-weight: 700; color: var(--el-text-color-primary); }
+.mb-period-reset { font-size: 12px; color: var(--el-text-color-placeholder); white-space: nowrap; }
+
+/* ─────────────── Monthly Analysis ─────────────── */
+.mb-monthly {
+  margin: 0 18px 18px;
+  padding: 14px 16px;
+  background: var(--el-fill-color-light);
+  border-radius: 10px;
+}
+.mb-monthly-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+.mb-monthly-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 5px;
+}
+.mb-monthly-label { font-size: 12px; color: var(--el-text-color-regular); }
+.mb-monthly-sub { font-size: 11px; color: var(--el-text-color-placeholder); }
+.mb-monthly-track {
+  height: 4px;
+  background: var(--el-border-color-lighter);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+.mb-monthly-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+.mb-monthly-fill--day { background: var(--el-color-primary-light-3); }
+.mb-monthly-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.mb-monthly-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid var(--el-border-color-lighter);
+}
+.mb-monthly-stat span { font-size: 11px; color: var(--el-text-color-placeholder); }
+.mb-monthly-stat strong { font-size: 13px; font-weight: 700; color: var(--el-text-color-primary); }
+.mb-monthly-stat strong.is-over { color: var(--el-color-danger); }
+.mb-monthly-stat strong.mb-monthly-na { font-weight: 400; color: var(--el-text-color-placeholder); font-size: 12px; }
+.mb-monthly-warn {
+  margin-top: 10px;
+  padding: 7px 10px;
+  background: var(--el-color-warning-light-9);
+  border: 1px solid var(--el-color-warning-light-5);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--el-color-warning-dark-2);
+}
+.mb-monthly-hint {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+  text-align: center;
+}
+
+/* ─────────────── Manager Hint ─────────────── */
+.mb-manager-hint {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 24px 20px;
+  margin: 8px 16px 16px;
+  background: var(--el-color-primary-light-9);
+  border: 1px solid var(--el-color-primary-light-7);
+  border-radius: 12px;
+}
+.mb-manager-hint-icon {
+  font-size: 22px;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.mb-manager-hint-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  margin-bottom: 6px;
+}
+.mb-manager-hint-desc {
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+  line-height: 1.6;
+}
+
+/* ─────────────── Empty / Loading ─────────────── */
+.mb-inner-loading { height: 180px; }
+.mb-empty {
+  padding: 36px 20px 28px;
+  text-align: center;
+  color: var(--el-text-color-secondary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.mb-empty-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+.mb-empty p { margin: 0 0 6px; font-size: 14px; font-weight: 600; color: var(--el-text-color-primary); }
+.mb-empty span { font-size: 12px; line-height: 1.7; max-width: 260px; }
+
+/* ─────────────── Active request card ─────────────── */
+.mb-active-request {
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.mb-active-request.is-pending {
+  background: var(--el-color-primary-light-9);
+  border-left: 3px solid var(--el-color-primary);
+}
+.mb-active-request.is-approved {
+  background: #f0faf5;
+  border-left: 3px solid #10b981;
+}
+.mb-active-request.is-rejected {
+  background: #fff8f8;
+  border-left: 3px solid #ef4444;
+}
+.mb-active-request.is-cancelled {
+  background: var(--el-fill-color-light);
+  border-left: 3px solid var(--el-border-color);
+}
+.mb-active-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.mb-active-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.mb-active-amount {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+}
+.mb-active-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.mb-active-reason {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.6;
+}
+.mb-active-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  padding: 7px 10px;
+  background: rgba(255,255,255,.6);
+  border-radius: 6px;
+}
+
+/* ─────────────── History ─────────────── */
+.mb-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 18px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--el-text-color-placeholder);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+/* ─────────────── Step track ─────────────── */
+.mb-steps {
+  display: flex;
+  align-items: flex-start;
+  padding: 14px 0 8px;
+}
+.mb-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.mb-step-node {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--el-fill-color);
+  color: var(--el-text-color-placeholder);
+  border: 1.5px solid var(--el-border-color);
+}
+.mb-step.is-done .mb-step-node {
+  background: var(--el-color-primary);
+  color: #fff;
+  border-color: var(--el-color-primary);
+}
+.mb-step.is-active .mb-step-node {
+  background: var(--el-bg-color);
+  border-color: var(--el-color-primary);
+  box-shadow: 0 0 0 3px var(--el-color-primary-light-8);
+}
+.mb-step.is-active .mb-step-node::after {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--el-color-primary);
+}
+.mb-step.is-rejected .mb-step-node {
+  background: #fff0f0;
+  color: #c24141;
+  border-color: #fcc;
+}
+.mb-step > span {
+  font-size: 11px;
+  color: var(--el-text-color-placeholder);
+}
+.mb-step.is-done > span,
+.mb-step.is-active > span { color: var(--el-text-color-primary); font-weight: 600; }
+.mb-step.is-rejected > span { color: #c24141; }
+.mb-step-line {
+  flex: 1;
+  height: 1.5px;
+  background: var(--el-border-color-light);
+  margin-top: 12px;
+}
+.mb-step-line.is-done { background: var(--el-color-primary); }
+
+/* ─────────────── History ─────────────── */
+.mb-history { display: flex; flex-direction: column; }
+.mb-history-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 18px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.mb-history-item:last-child { border-bottom: 0; }
+.mb-history-amount { flex: 1; font-size: 13px; font-weight: 600; color: var(--el-text-color-primary); }
+.mb-history-total { font-weight: 400; font-size: 11px; color: var(--el-text-color-placeholder); }
+.mb-history-scroll {
+  max-height: 220px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--el-border-color) transparent;
+}
+.mb-history-scroll::-webkit-scrollbar { width: 4px; }
+.mb-history-scroll::-webkit-scrollbar-thumb { background: var(--el-border-color); border-radius: 2px; }
+.mb-history-sentinel { height: 1px; }
+
+
+/* ─────────────── Dialog ─────────────── */
+.mb-dialog-summary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 18px;
 }
-.dialog-summary > div {
+.mb-dialog-summary > div {
   padding: 12px 14px;
   border: 1px solid var(--el-border-color-light);
   border-radius: 12px;
   background: var(--el-fill-color-light);
 }
-.dialog-summary span {
-  display: block;
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-  margin-bottom: 6px;
-}
-.dialog-summary strong {
-  color: var(--el-text-color-primary);
-  font-size: 18px;
-}
+.mb-dialog-summary span { display: block; font-size: 12px; color: var(--el-text-color-secondary); margin-bottom: 6px; }
+.mb-dialog-summary strong { font-size: 18px; color: var(--el-text-color-primary); }
+
+/* ─────────────── Responsive ─────────────── */
+
+/* ≤980px：左右双栏 → 上下单栏 */
 @media (max-width: 980px) {
-  .hero-panel,
-  .content-grid {
-    grid-template-columns: 1fr;
-  }
-  .chain-row,
-  .chain-usage {
-    grid-template-columns: 1fr;
-  }
+  .mb { padding: 20px 20px; }
+  .mb-grid { grid-template-columns: 1fr; }
+  .mb-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mb-panel { min-height: unset; }
+  .mb-monthly-stats { grid-template-columns: repeat(3, 1fr); }
 }
-@media (max-width: 640px) {
-  .budget-wallet {
-    padding: 18px;
-  }
-  .wallet-head {
-    align-items: center;
-  }
-  .hero-panel {
-    padding: 20px;
-  }
-  .hero-amount strong {
-    font-size: 38px;
-  }
+
+/* ≤720px */
+@media (max-width: 720px) {
+  .mb { padding: 14px 16px; }
+  .mb-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mb-kpi strong { font-size: 22px; }
+
+  /* 额度卡头部：允许换行 */
+  .mb-panel-head { flex-wrap: wrap; gap: 8px; }
+  .mb-panel-head-actions { width: 100%; justify-content: flex-start; }
+
+  /* 余额块：竖排 */
+  .mb-balance-block { flex-direction: column; align-items: flex-start; gap: 14px; }
+  .mb-balance-ring { width: 80px; height: 80px; align-self: flex-end; margin-top: -56px; }
+
+  /* 周期行 */
+  .mb-period-item { grid-template-columns: 1fr auto; }
+  .mb-period-reset { display: none; }
+
+  /* 月度分析：3列→2列 */
+  .mb-monthly-stats { grid-template-columns: repeat(2, 1fr); }
+
+  /* 历史区域 */
+  .mb-history-scroll { max-height: 160px; }
+}
+
+/* ≤480px */
+@media (max-width: 480px) {
+  .mb { padding: 12px; }
+  .mb-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; }
+  .mb-kpi { padding: 10px 12px; }
+  .mb-kpi strong { font-size: 18px; }
+
+  /* 月度分析：→1列 */
+  .mb-monthly-stats { grid-template-columns: 1fr; }
+
+  /* dialog */
+  .mb-dialog-summary { grid-template-columns: 1fr; }
 }
 </style>

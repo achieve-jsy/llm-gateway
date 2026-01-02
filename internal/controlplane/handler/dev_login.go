@@ -46,7 +46,40 @@ func (h *DevLoginHandler) Login(c *gin.Context) {
 		return
 	}
 
-	accessToken, err := auth.GenerateAccessToken(h.jwtSecret, h.accessTokenTTL, user.ID, "", "", "", "", user.Username+"@admin.local", user.Username, user.ID, user.Role)
+	var profile struct {
+		Email      string `gorm:"column:email"`
+		Name       string `gorm:"column:name"`
+		DeptID     string `gorm:"column:dept_id"`
+		DeptName   string `gorm:"column:dept_name"`
+		StudioID   string `gorm:"column:studio_id"`
+		StudioName string `gorm:"column:studio_name"`
+	}
+	_ = h.db.Raw(`
+		SELECT
+			COALESCE(u.email, '') AS email,
+			COALESCE(u.name, '') AS name,
+			COALESCE(d.dept_id, '') AS dept_id,
+			COALESCE(d.dept_name, '') AS dept_name,
+			COALESCE(dsm.studio_id::text, d.studio_id::text, '') AS studio_id,
+			COALESCE(s.name, '') AS studio_name
+		FROM users u
+		LEFT JOIN departments d ON d.id = u.dept_id
+		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = d.dept_id
+		LEFT JOIN studios s ON s.id = COALESCE(dsm.studio_id, d.studio_id)
+		WHERE u.id::text = ?
+		LIMIT 1
+	`, user.ID).Scan(&profile).Error
+
+	email := profile.Email
+	if email == "" {
+		email = user.Username + "@admin.local"
+	}
+	name := profile.Name
+	if name == "" {
+		name = user.Username
+	}
+
+	accessToken, err := auth.GenerateAccessToken(h.jwtSecret, h.accessTokenTTL, user.ID, profile.DeptID, profile.DeptName, profile.StudioID, profile.StudioName, email, name, user.ID, user.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "token generation failed"})
 		return
@@ -62,9 +95,14 @@ func (h *DevLoginHandler) Login(c *gin.Context) {
 		"accessToken":  accessToken,
 		"refreshToken": refreshToken,
 		"user": gin.H{
-			"id":   user.ID,
-			"name": user.Username,
-			"role": user.Role,
+			"id":             user.ID,
+			"name":           name,
+			"email":          email,
+			"role":           user.Role,
+			"departmentId":   profile.DeptID,
+			"departmentName": profile.DeptName,
+			"studioId":       profile.StudioID,
+			"studioName":     profile.StudioName,
 		},
 	})
 }

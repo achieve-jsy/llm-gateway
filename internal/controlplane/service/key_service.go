@@ -620,6 +620,26 @@ func (s *KeyService) ListServiceKeys(ctx context.Context, deptID string) ([]Serv
 	if err != nil {
 		return nil, err
 	}
+	return toServiceKeyItems(keys), nil
+}
+
+// ListServiceKeysPaged 分页列出 Service Key。
+// allowedDepts 非 nil 时限制可见部门范围（用于非全局管理员）；deptID 非空时再细化到单部门。
+func (s *KeyService) ListServiceKeysPaged(ctx context.Context, deptID string, allowedDepts []string, page, pageSize int) ([]ServiceKeyItem, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	keys, total, err := s.repo.ListByDeptAndTypePaged(deptID, allowedDepts, model.KeyTypeService, (page-1)*pageSize, pageSize)
+	if err != nil {
+		return nil, 0, err
+	}
+	return toServiceKeyItems(keys), total, nil
+}
+
+func toServiceKeyItems(keys []model.ApiKey) []ServiceKeyItem {
 	items := make([]ServiceKeyItem, 0, len(keys))
 	for _, k := range keys {
 		items = append(items, ServiceKeyItem{
@@ -636,7 +656,7 @@ func (s *KeyService) ListServiceKeys(ctx context.Context, deptID string) ([]Serv
 			LastUsedAt: k.LastUsedAt,
 		})
 	}
-	return items, nil
+	return items
 }
 
 // DeleteServiceKey 吊销 Service Key（部门负责人或 admin）。
@@ -655,6 +675,22 @@ func (s *KeyService) DeleteServiceKey(ctx context.Context, keyID uuid.UUID) erro
 	if s.publisher != nil {
 		s.publisher.InvalidateKeyCache(k.KeyHash)
 		s.publisher.Publish(event.KeyDeleted, "api_key", keyID)
+	}
+	return nil
+}
+
+// ToggleServiceKey 启用或停用 Service Key。
+// 权限校验由 handler 层完成。
+func (s *KeyService) ToggleServiceKey(ctx context.Context, keyID uuid.UUID, enabled bool) error {
+	k, err := s.repo.FindByID(keyID)
+	if err != nil || k.KeyType != model.KeyTypeService {
+		return ErrKeyNotFound
+	}
+	if err := s.repo.UpdateStatus(keyID, enabled); err != nil {
+		return fmt.Errorf("toggle service key: %w", err)
+	}
+	if s.publisher != nil {
+		s.publisher.InvalidateKeyCache(k.KeyHash)
 	}
 	return nil
 }

@@ -30,18 +30,31 @@ type BudgetAllocationRepo interface {
 	ListScoped(scopeTypes, scopeIDs []string) ([]model.BudgetAllocation, error)
 	ListMemberIDsByDeptID(deptID string) ([]string, error)
 	MemberInDeptIDs(memberID string, deptIDs []string) (bool, error)
+	// ListDeptIDsByStudioID 返回指定工作室下所有部门的 dept_id（admin 下钻用）。
+	ListDeptIDsByStudioID(studioID string) ([]string, error)
 	// ListDeptStudioRows 列出「部门 - 所属工作室」组合（用于 InitDefaultBudgets）。
 	ListDeptStudioRows() ([]model.DeptStudioRow, error)
 	// ResolveScopeNames 批量将 scope_id 解析为可读名称（用于管理面展示）。
 	ResolveScopeNames(scopeType string, scopeIDs []string) (map[string]string, error)
+	// DeleteAllocation 删除指定 scope 的单独配额。
+	DeleteAllocation(scopeType, scopeID string) error
 }
 
 func (s *BudgetService) ListMemberIDsByDeptID(deptID string) ([]string, error) {
 	return s.repo.ListMemberIDsByDeptID(deptID)
 }
 
+func (s *BudgetService) ListDeptIDsByStudioID(studioID string) ([]string, error) {
+	return s.repo.ListDeptIDsByStudioID(studioID)
+}
+
 func (s *BudgetService) MemberInDeptIDs(memberID string, deptIDs []string) (bool, error) {
 	return s.repo.MemberInDeptIDs(memberID, deptIDs)
+}
+
+// DeleteMemberBudget 删除成员的单独配额，还原为共享部门预算池。
+func (s *BudgetService) DeleteMemberBudget(ctx context.Context, scopeType, scopeID string) error {
+	return s.repo.DeleteAllocation(scopeType, scopeID)
 }
 
 // BudgetAlertRecordRepo 告警去重表的访问接口。
@@ -74,6 +87,9 @@ func (s *BudgetService) SetRedis(rdb *redis.Client) {
 type BudgetItem struct {
 	ScopeType       string  `json:"scope_type"`
 	ScopeID         string  `json:"scope_id"`
+	// ParentScopeID 仅 scope_type=member 时填充，值为所属部门的 dept_id，
+	// 供前端多部门场景路由跳转使用。
+	ParentScopeID   string  `json:"parent_scope_id,omitempty"`
 	Label           string  `json:"label,omitempty"`
 	AmountUSD       float64 `json:"amount_usd"`
 	DailyAmountUSD  float64 `json:"daily_amount_usd"`  // 日限额，-1=不限

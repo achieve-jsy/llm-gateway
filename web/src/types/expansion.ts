@@ -4,18 +4,21 @@
 export type ExpansionStatus = 'pending' | 'approved' | 'rejected' | 'cancelled'
 export type ExpansionLevel = 'dept' | 'studio' | 'platform'
 export type ExpansionAction = 'approve' | 'reject' | 'escalate' | 'cancel'
+export type ExpansionPeriod = 'daily' | 'weekly' | 'monthly'
 
 export interface ExpansionRequest {
   id: string
   scope_type: string
   scope_id: string
   requester_id: string
+  period_type: ExpansionPeriod
   current_amount?: number
   requested_amount: number
   reason: string
   status: ExpansionStatus
   current_level: ExpansionLevel
   current_usage_ratio?: number  // 审批列表用：申请人当前使用率
+  requester_name?: string       // 审批列表用：申请人姓名
   created_at: string
   updated_at: string
 }
@@ -23,8 +26,21 @@ export interface ExpansionRequest {
 export interface CreateExpansionPayload {
   scope_type: string
   scope_id: string
+  period_type: ExpansionPeriod
   requested_amount: number
   reason?: string
+}
+
+export const PERIOD_LABELS: Record<ExpansionPeriod, string> = {
+  daily: '日额度',
+  weekly: '周额度',
+  monthly: '月额度',
+}
+
+export const PERIOD_SUFFIX: Record<ExpansionPeriod, string> = {
+  daily: '/ 天',
+  weekly: '/ 周',
+  monthly: '/ 月',
 }
 
 export interface DecideExpansionPayload {

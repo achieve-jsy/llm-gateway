@@ -140,9 +140,28 @@ func (r *KeyRepo) GetUserDeptInfo(userID uuid.UUID) (UserDeptInfo, error) {
 // ListByDeptAndType 按部门 SSO dept_id 和 key_type 列出 Key（v0.7 Service Key 列表）。
 func (r *KeyRepo) ListByDeptAndType(deptID, keyType string) ([]model.ApiKey, error) {
 	var keys []model.ApiKey
-	err := r.db.Where("dept_id = ? AND key_type = ?", deptID, keyType).
-		Order("created_at DESC").Find(&keys).Error
+	q := r.db.Where("key_type = ?", keyType)
+	if deptID != "" {
+		q = q.Where("dept_id = ?", deptID)
+	}
+	err := q.Order("created_at DESC").Find(&keys).Error
 	return keys, err
+}
+
+func (r *KeyRepo) ListByDeptAndTypePaged(deptID string, allowedDepts []string, keyType string, offset, limit int) ([]model.ApiKey, int64, error) {
+	var keys []model.ApiKey
+	var total int64
+	q := r.db.Model(&model.ApiKey{}).Where("key_type = ?", keyType)
+	if deptID != "" {
+		q = q.Where("dept_id = ?", deptID)
+	} else if len(allowedDepts) > 0 {
+		q = q.Where("dept_id IN ?", allowedDepts)
+	}
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	err := q.Order("created_at DESC").Offset(offset).Limit(limit).Find(&keys).Error
+	return keys, total, err
 }
 
 // GetDeptInfoByDeptID 通过 SSO dept_id 获取部门名称和所属工作室信息。

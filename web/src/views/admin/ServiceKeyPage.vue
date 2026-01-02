@@ -16,7 +16,7 @@
           @change="onDeptFilterChange"
         >
           <el-option
-            v-for="dept in orgStore.departments"
+            v-for="dept in creatableDepts"
             :key="dept.dept_id"
             :label="`${dept.dept_name}（${dept.dept_id}）`"
             :value="dept.dept_id"
@@ -86,11 +86,11 @@
       <el-table-column label="状态" width="100" align="center">
         <template #default="{ row }">
           <el-switch
-            v-model="row.enabled"
+            :model-value="row.enabled"
             inline-prompt
             active-text="启"
             inactive-text="停"
-            disabled
+            @change="handleToggle(row)"
           />
         </template>
       </el-table-column>
@@ -126,6 +126,20 @@
       </el-table-column>
     </el-table>
 
+    <!-- 分页 -->
+    <div v-if="total > pageSize" class="pagination-bar">
+      <el-pagination
+        v-model:current-page="currentPage"
+        v-model:page-size="pageSize"
+        :page-sizes="[10, 20, 50]"
+        :total="total"
+        layout="total, sizes, prev, pager, next"
+        size="small"
+        @current-change="onPageChange"
+        @size-change="onSizeChange"
+      />
+    </div>
+
     <!-- 新建对话框 -->
     <el-dialog
       v-model="createDialogVisible"
@@ -141,22 +155,26 @@
         label-position="top"
         label-width="80px"
       >
-        <el-form-item label="部门 ID" prop="deptId">
+        <el-form-item label="部门" prop="deptId">
           <el-select
             v-model="createForm.deptId"
             filterable
-            allow-create
+            :allow-create="!isDeptLocked"
             default-first-option
-            placeholder="选择或输入部门 ID"
+            placeholder="选择部门"
             style="width: 100%"
+            :disabled="isDeptLocked"
           >
             <el-option
-              v-for="dept in orgStore.departments"
+              v-for="dept in creatableDepts"
               :key="dept.dept_id"
               :label="`${dept.dept_name}（${dept.dept_id}）`"
               :value="dept.dept_id"
             />
           </el-select>
+          <div v-if="authStore.effectiveRole === 'dept_admin'" style="font-size:11px;color:var(--el-text-color-secondary);margin-top:4px">
+            只能为自己管辖的部门创建 Service Key
+          </div>
         </el-form-item>
         <el-form-item label="名称" prop="name">
           <el-input v-model="createForm.name" placeholder="例如：线上推荐服务" maxlength="60" />
@@ -218,11 +236,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, InfoFilled, DocumentCopy } from '@element-plus/icons-vue'
 
-import { listServiceKeys, createServiceKey, deleteServiceKey } from '@/services/control-plane'
+import { listServiceKeys, createServiceKey, toggleServiceKey, deleteServiceKey } from '@/services/control-plane'
 import type { ServiceKeyItem, CreateServiceKeyResponse } from '@/types/service-key'
 import { useAuthStore } from '@/stores/auth'
 import { useOrgStore } from '@/stores/org'
@@ -234,6 +252,9 @@ const filterDeptId = ref('')
 const keys = ref<ServiceKeyItem[]>([])
 const loading = ref(false)
 const loadError = ref('')
+const currentPage = ref(1)
+const pageSize = ref(20)
+const total = ref(0)
 
 const createDialogVisible = ref(false)
 const creating = ref(false)
@@ -251,6 +272,32 @@ const createRules: FormRules = {
   purpose: [{ required: true, message: '请输入用途标签', trigger: 'blur' },
     { max: 40, message: '用途标签不超过 40 个字符', trigger: 'blur' }],
 }
+
+// 按角色过滤可选部门：admin 全部、studio_admin 仅自己工作室下的部门、dept_admin 仅自己的部门
+const creatableDepts = computed(() => {
+  const role = authStore.effectiveRole
+  if (role === 'admin') return orgStore.departments
+
+  const myStudioIds = new Set(
+    authStore.orgRoles.filter(r => r.role === 'studio_admin').map(r => r.scope_id)
+  )
+  const myDeptIds = new Set(
+    authStore.orgRoles.filter(r => r.role === 'dept_admin').map(r => r.scope_id)
+  )
+
+  if (role === 'studio_admin') {
+    return orgStore.departments.filter(d => d.studio_id && myStudioIds.has(d.studio_id))
+  }
+  if (role === 'dept_admin') {
+    return orgStore.departments.filter(d => myDeptIds.has(d.dept_id))
+  }
+  return orgStore.departments
+})
+
+// 只有 dept_admin 且只管辖 1 个部门时才锁定；多部门时显示下拉让其选择
+const isDeptLocked = computed(() =>
+  authStore.effectiveRole === 'dept_admin' && creatableDepts.value.length === 1
+)
 
 const keyRevealVisible = ref(false)
 const newKeyPlainText = ref('')
@@ -272,21 +319,41 @@ async function loadKeys() {
   loading.value = true
   loadError.value = ''
   try {
-    keys.value = await listServiceKeys(filterDeptId.value)
+    const res = await listServiceKeys(filterDeptId.value, currentPage.value, pageSize.value)
+    keys.value = res.items
+    total.value = res.total
   } catch (e: any) {
     loadError.value = e?.response?.data?.error?.message || e?.message || '未知错误'
     keys.value = []
+    total.value = 0
   } finally {
     loading.value = false
   }
 }
 
 function onDeptFilterChange() {
+  currentPage.value = 1
+  loadKeys()
+}
+
+function onPageChange(page: number) {
+  currentPage.value = page
+  loadKeys()
+}
+
+function onSizeChange(size: number) {
+  pageSize.value = size
+  currentPage.value = 1
   loadKeys()
 }
 
 function openCreateDialog() {
-  createForm.deptId = filterDeptId.value || ''
+  // dept_admin：自动锁定到自己的第一个部门
+  if (isDeptLocked.value && creatableDepts.value.length > 0) {
+    createForm.deptId = creatableDepts.value[0].dept_id
+  } else {
+    createForm.deptId = filterDeptId.value || ''
+  }
   createForm.name = ''
   createForm.purpose = ''
   createDialogVisible.value = true
@@ -312,6 +379,7 @@ async function handleCreate() {
     newKeyPurpose.value = resp.purpose
     createDialogVisible.value = false
     keyRevealVisible.value = true
+    currentPage.value = 1
     await loadKeys()
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.error?.message || e?.message || '创建失败')
@@ -330,6 +398,17 @@ async function copyKey() {
   }
 }
 
+async function handleToggle(row: ServiceKeyItem) {
+  const newVal = !row.enabled
+  try {
+    await toggleServiceKey(row.id, newVal)
+    row.enabled = newVal
+    ElMessage.success(newVal ? '已启用' : '已停用')
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error?.message || e?.message || '操作失败')
+  }
+}
+
 async function handleDelete(row: ServiceKeyItem) {
   try {
     await deleteServiceKey(row.id)
@@ -342,9 +421,9 @@ async function handleDelete(row: ServiceKeyItem) {
 
 onMounted(async () => {
   await orgStore.fetchDepartments().catch(() => {})
-  // dept_admin 锁定到自己的部门
-  if (authStore.effectiveRole === 'dept_admin' && authStore.user?.departmentId) {
-    filterDeptId.value = authStore.user.departmentId
+  // dept_admin 单部门时自动锁定筛选；多部门时留空让用户自选
+  if (authStore.effectiveRole === 'dept_admin' && isDeptLocked.value) {
+    filterDeptId.value = creatableDepts.value[0]?.dept_id || ''
   }
   await loadKeys()
 })
@@ -413,6 +492,12 @@ onMounted(async () => {
 
 .skeleton-wrap {
   padding: 8px 0;
+}
+
+.pagination-bar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 16px 0 4px;
 }
 
 /* 表格 */

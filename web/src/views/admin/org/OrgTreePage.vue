@@ -1133,7 +1133,7 @@ function applyRouteSelection() {
     return
   }
 
-  if (scopeType === 'dept_daily' || scopeType === 'dept_service') {
+  if (scopeType === 'dept' || scopeType === 'dept_daily' || scopeType === 'dept_service') {
     const dept = allDepts.value.find(d => d.dept_id === scopeID)
     if (!dept) return
     const parent = studios.value.find(s => s.id === dept.studio_id) || null
@@ -1141,7 +1141,8 @@ function applyRouteSelection() {
     selectedDept.value = dept
     selectedDeptParentStudio.value = parent
     selectedStudio.value = null
-    deptActiveTab.value = targetTab === 'budget' ? 'budget' : 'members'
+    // scope_type=dept 默认直接跳预算 tab；其他情况遵循 tab 参数
+    deptActiveTab.value = (scopeType === 'dept' || targetTab === 'budget') ? 'budget' : 'members'
     nextTick(() => treeRef.value?.setCurrentKey(`dept:${dept.dept_id}`))
     if (deptActiveTab.value === 'members') loadDeptMembers(1)
   }
@@ -1196,7 +1197,8 @@ const canEditSelectedStudioBudget = computed(() =>
 
 const canEditSelectedDeptBudget = computed(() =>
   isGlobalAdmin.value ||
-  myStudioIds.value.includes(selectedDeptParentStudio.value?.id ?? '')
+  myStudioIds.value.includes(selectedDeptParentStudio.value?.id ?? '') ||
+  myDeptIds.value.includes(selectedDept.value?.dept_id ?? '')
 )
 
 const selectedStudioOwners = computed(() =>
@@ -1657,9 +1659,17 @@ async function reload() {
 
 onMounted(reload)
 
+// immediate: true 保证跨页首次进入时（数据已缓存）也能正确选中节点；
+// reload() 末尾亦调用，两次调用互不干扰（未找到时直接返回）。
 watch(
   () => [route.query.scope_type, route.query.scope_id, route.query.tab],
-  () => applyRouteSelection()
+  () => {
+    // 若数据尚未加载（reload 正在进行），稍后由 reload 末尾的调用补偿
+    if (allDepts.value.length > 0 || studios.value.length > 0) {
+      applyRouteSelection()
+    }
+  },
+  { immediate: true },
 )
 
 // ─── 成员用量快览抽屉 ──────────────────────────────────────────────────────────

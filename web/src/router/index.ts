@@ -46,6 +46,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '模型组', requiresAdmin: true }
   },
   {
+    path: '/admin/groups/:id',
+    name: 'GroupDetail',
+    component: () => import('@/views/admin/GroupDetailPage.vue'),
+    meta: { title: '模型组详情', requiresAdmin: true }
+  },
+  {
     path: '/admin/tags',
     name: 'TagList',
     component: () => import('@/views/admin/TagListPage.vue'),
@@ -109,7 +115,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/admin/group-entitlements',
     name: 'GroupEntitlements',
-    component: () => import('@/views/admin/GroupEntitlementPage.vue'),
+    redirect: '/admin/groups',  // 授权管理已合并到模型组页面
     meta: { title: '模型组授权', requiresAdmin: true }
   },
   {

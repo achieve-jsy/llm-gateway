@@ -40,10 +40,10 @@
           <template #title>模型组健康</template>
         </el-menu-item>
 
-        <!-- 组织 & 用量看板（管理角色可见）-->
+        <!-- 管理（管理角色可见）-->
         <template v-if="authStore.isManager">
           <el-divider class="menu-divider" />
-          <div class="menu-group-label">组织</div>
+          <div class="menu-group-label">管理</div>
           <!-- 组织架构：admin 看全树，studio/dept admin 看自己管辖范围 -->
           <el-menu-item index="/admin/org">
             <el-icon><OfficeBuilding /></el-icon>
@@ -75,10 +75,10 @@
           </el-menu-item>
         </template>
 
-        <!-- 管理 & 运维（仅 admin）-->
+        <!-- 平台（仅 admin）-->
         <template v-if="authStore.isAdmin">
           <el-divider class="menu-divider" />
-          <div class="menu-group-label">管理</div>
+          <div class="menu-group-label">平台</div>
           <el-menu-item index="/admin/providers">
             <el-icon><Operation /></el-icon>
             <template #title>渠道管理</template>
@@ -91,14 +91,11 @@
             <el-icon><Collection /></el-icon>
             <template #title>模型组</template>
           </el-menu-item>
-          <el-menu-item index="/admin/group-entitlements">
-            <el-icon><Lock /></el-icon>
-            <template #title>模型组授权</template>
-          </el-menu-item>
           <el-menu-item index="/admin/tags">
             <el-icon><PriceTag /></el-icon>
             <template #title>标签管理</template>
           </el-menu-item>
+
 
           <el-divider class="menu-divider" />
 

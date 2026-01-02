@@ -81,21 +81,22 @@
             {{ formatDateTime(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="160" align="center">
-          <template #default="{ row }">
-            <el-button text type="primary" size="small" @click="openEditDialog(row)">编辑</el-button>
-            <el-popconfirm
-              title="确定删除该模型组？"
-              confirm-button-text="确定"
-              cancel-button-text="取消"
-              @confirm="handleDelete(row)"
-            >
-              <template #reference>
-                <el-button text type="danger" size="small">删除</el-button>
-              </template>
-            </el-popconfirm>
-          </template>
-        </el-table-column>
+         <el-table-column label="操作" width="200" align="center">
+           <template #default="{ row }">
+             <el-button text type="primary" size="small" @click="router.push(`/admin/groups/${row.id}`)">详情</el-button>
+             <el-button text type="primary" size="small" @click="openEditDialog(row)">编辑</el-button>
+             <el-popconfirm
+               title="确定删除该模型组？"
+               confirm-button-text="确定"
+               cancel-button-text="取消"
+               @confirm="handleDelete(row)"
+             >
+               <template #reference>
+                 <el-button text type="danger" size="small">删除</el-button>
+               </template>
+             </el-popconfirm>
+           </template>
+         </el-table-column>
       </el-table></div>
 
       <div class="pagination-wrapper">
@@ -122,12 +123,14 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { groupsApi } from '@/api/groups'
 import type { GroupCapability } from '@/api/groups'
 import type { GroupListItem, Strategy } from '@/types/group'
 import GroupEditDialog from '@/components/GroupEditDialog.vue'
 
+const router = useRouter()
 const groups = ref<GroupListItem[]>([])
 const capabilities = ref<Record<string, GroupCapability>>({})
 const loading = ref(false)

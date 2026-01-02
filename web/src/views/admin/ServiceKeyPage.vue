@@ -12,6 +12,7 @@
           clearable
           filterable
           class="toolbar-field"
+          :disabled="authStore.effectiveRole === 'dept_admin'"
           @change="onDeptFilterChange"
         >
           <el-option
@@ -341,6 +342,10 @@ async function handleDelete(row: ServiceKeyItem) {
 
 onMounted(async () => {
   await orgStore.fetchDepartments().catch(() => {})
+  // dept_admin 锁定到自己的部门
+  if (authStore.effectiveRole === 'dept_admin' && authStore.user?.departmentId) {
+    filterDeptId.value = authStore.user.departmentId
+  }
   await loadKeys()
 })
 </script>

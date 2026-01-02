@@ -1,15 +1,28 @@
--- Modify "api_keys" table
-ALTER TABLE "api_keys" ADD COLUMN "key_type" character varying(16) NOT NULL DEFAULT 'personal', ADD COLUMN "purpose" character varying(128) NOT NULL DEFAULT '', ADD COLUMN "created_by" uuid NULL;
+-- Modify "api_keys" table (幂等)
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "key_type" character varying(16) NOT NULL DEFAULT 'personal';
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "purpose" character varying(128) NOT NULL DEFAULT '';
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "created_by" uuid NULL;
 -- Create index "idx_api_keys_type" to table: "api_keys"
-CREATE INDEX "idx_api_keys_type" ON "api_keys" ("key_type");
+CREATE INDEX IF NOT EXISTS "idx_api_keys_type" ON "api_keys" ("key_type");
 -- Modify "health_check_configs" table
 ALTER TABLE "health_check_configs" ALTER COLUMN "model_recovery_success_threshold" TYPE bigint;
 -- Modify "model_groups" table
-ALTER TABLE "model_groups" ALTER COLUMN "timeout_seconds" TYPE bigint, ADD COLUMN "open_mode" character varying(16) NOT NULL DEFAULT 'public';
+ALTER TABLE "model_groups" ALTER COLUMN "timeout_seconds" TYPE bigint;
+ALTER TABLE "model_groups" ADD COLUMN IF NOT EXISTS "open_mode" character varying(16) NOT NULL DEFAULT 'public';
 -- Modify "models" table
-ALTER TABLE "models" ALTER COLUMN "status" TYPE bigint, ALTER COLUMN "consecutive_recovery_successes" TYPE bigint;
--- Modify "users" table
-ALTER TABLE "users" DROP CONSTRAINT "chk_users_source", ADD COLUMN "employee_id" character varying(64) NULL, ADD COLUMN "job_family" character varying(128) NULL, ADD COLUMN "job_category" character varying(128) NULL, ADD COLUMN "job_title" character varying(128) NULL, ADD COLUMN "dept_source" character varying(16) NOT NULL DEFAULT 'sso', ADD COLUMN "dept_updated_by" character varying(128) NULL, ADD COLUMN "dept_updated_at" timestamptz NULL;
+ALTER TABLE "models" ALTER COLUMN "status" TYPE bigint;
+ALTER TABLE "models" ALTER COLUMN "consecutive_recovery_successes" TYPE bigint;
+-- Modify "users" table (幂等写法，兼容字段已存在的情况)
+DO $$ BEGIN
+  ALTER TABLE "users" DROP CONSTRAINT "chk_users_source";
+EXCEPTION WHEN undefined_object THEN NULL; END; $$;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "employee_id" character varying(64) NULL;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "job_family" character varying(128) NULL;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "job_category" character varying(128) NULL;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "job_title" character varying(128) NULL;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "dept_source" character varying(16) NOT NULL DEFAULT 'sso';
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "dept_updated_by" character varying(128) NULL;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "dept_updated_at" timestamptz NULL;
 -- Create index "idx_users_employee_id" to table: "users"
 CREATE INDEX "idx_users_employee_id" ON "users" ("employee_id");
 -- Create "budget_alert_records" table

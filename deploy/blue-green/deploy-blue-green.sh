@@ -144,6 +144,18 @@ main() {
         return 0
     fi
 
+    # ─── 首次迁移：旧容器占用了 8080/8081，必须先停掉 ─────────────────────────
+    if [ "$active" = "none" ]; then
+        if docker ps --filter "name=llm-gw-gateway" --format '{{.Names}}' | grep -q llm-gw-gateway; then
+            log "First migration: draining legacy containers (llm-gw-gateway / llm-gw-control-plane)..."
+            log "  Waiting 30s for in-flight SSE streams to finish..."
+            sleep 30
+            docker stop llm-gw-gateway llm-gw-control-plane 2>/dev/null || true
+            docker rm llm-gw-gateway llm-gw-control-plane 2>/dev/null || true
+            log "Legacy containers removed. Ports 8080/8081 are now free."
+        fi
+    fi
+
     # 正常部署流程
     # 1. 启动目标环境
     start_env "$target"

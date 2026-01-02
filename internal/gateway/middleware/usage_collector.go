@@ -9,14 +9,18 @@ import (
 	gwobs "github.com/example/llm-gateway/internal/gateway/observability"
 )
 
+// PostCostHook 是埋点后的回调钩子，用于预算核销 + 告警触发。
+// 参数：gin.Context、实际成本 (USD)、HTTP 状态码。
+// 当状态码 >= 400 或 usage 缺失时，视为失败请求，应冲销预扣。
+// Hook 由调用者（server/router.go）负责提供，内部应异步执行以避免阻塞响应。
+type PostCostHook func(c *gin.Context, realCostUSD float64, httpStatus int)
+
 // UsageCollector 注入 Collector 到请求处理链
 // 在 c.Next() 后构造 UsageEvent 并异步投递埋点
 // 仅对 LLM 调用路径（/v1/chat/completions, /v1/embeddings 等）生效
-func UsageCollector(collector *gwobs.Collector, traceWriter ...*gwobs.TraceWriter) gin.HandlerFunc {
-	var tw *gwobs.TraceWriter
-	if len(traceWriter) > 0 {
-		tw = traceWriter[0]
-	}
+// postHook：埋点提交后的可选回调，用于预算核销等业务；传 nil 则跳过
+func UsageCollector(collector *gwobs.Collector, traceWriter *gwobs.TraceWriter, postHook PostCostHook) gin.HandlerFunc {
+	tw := traceWriter
 
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
@@ -66,6 +70,17 @@ func UsageCollector(collector *gwobs.Collector, traceWriter ...*gwobs.TraceWrite
 			event.Status = c.Writer.Status()
 			event.DurationMs = int64(totalMs)
 			collector.Emit(event)
+
+			// ── v0.7 预算核销 + 告警触发（postHook，异步） ──
+			// 仅当 BudgetCheckMiddleware 做了预扣（context 中有 budget_keys）
+			// 且未被 passthrough 豁免（budget_skipped 未设置）时才触发
+			if postHook != nil && event.EstCostUSD > 0 {
+				_, hasPreReserve := c.Get("budget_keys")
+				_, wasSkipped := c.Get("budget_skipped")
+				if hasPreReserve && !wasSkipped {
+					postHook(c, event.EstCostUSD, c.Writer.Status())
+				}
+			}
 		}
 
 		// ── Trace 记录（提示词/响应内容）：仅 log_enabled=true 时写入 ──

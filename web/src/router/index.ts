@@ -46,6 +46,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '模型组', requiresAdmin: true }
   },
   {
+    path: '/admin/groups/:id',
+    name: 'GroupDetail',
+    component: () => import('@/views/admin/GroupDetailPage.vue'),
+    meta: { title: '模型组详情', requiresAdmin: true }
+  },
+  {
     path: '/admin/tags',
     name: 'TagList',
     component: () => import('@/views/admin/TagListPage.vue'),
@@ -99,6 +105,36 @@ const routes: RouteRecordRaw[] = [
     name: 'ModelSquare',
     component: () => import('@/views/ModelSquarePage.vue'),
     meta: { title: '模型广场' }
+  },
+  {
+    path: '/my/budget',
+    name: 'MyBudget',
+    component: () => import('@/views/MyBudgetPage.vue'),
+    meta: { title: '我的预算' }
+  },
+  {
+    path: '/admin/budget',
+    name: 'BudgetManage',
+    component: () => import('@/views/admin/BudgetManagePage.vue'),
+    meta: { title: '预算管理', requiresManager: true }
+  },
+  {
+    path: '/admin/service-keys',
+    name: 'ServiceKeys',
+    component: () => import('@/views/admin/ServiceKeyPage.vue'),
+    meta: { title: 'Service Key', requiresManager: true }
+  },
+  {
+    path: '/admin/group-entitlements',
+    name: 'GroupEntitlements',
+    redirect: '/admin/groups',
+    meta: { title: '模型组授权', requiresAdmin: true }
+  },
+  {
+    path: '/admin/expansion-requests',
+    name: 'ExpansionRequests',
+    component: () => import('@/views/admin/ExpansionRequestPage.vue'),
+    meta: { title: '扩容申请' }
   },
   {
     path: '/admin/settings',

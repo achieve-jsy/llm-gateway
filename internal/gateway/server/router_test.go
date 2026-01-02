@@ -34,7 +34,7 @@ func buildTestRouter() *gin.Engine {
 	state := &provider.RuntimeState{}
 	// Pass nil router – the gateway starts in a degraded (no-model) state.
 	// Pass nil bindClient – group binding check disabled in test.
-	return Setup(func() *providers.Router { return nil }, cache, state, nil, "", "", nil, nil, nil, nil, nil)
+	return Setup(func() *providers.Router { return nil }, cache, state, nil, "", "", nil, nil, nil, nil, nil, nil)
 }
 
 // ─── Route Registration ────────────────────────────────────────────────────

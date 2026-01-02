@@ -103,6 +103,15 @@ func (f *fakeModelRepo) List(_ repository.ModelListFilter, _, _ int) ([]model.Mo
 }
 func (f *fakeModelRepo) Update(_ *model.Model) error { return nil }
 func (f *fakeModelRepo) Delete(_ uuid.UUID) error    { return nil }
+func (f *fakeModelRepo) AutoDisableModel(_ uuid.UUID) error { return nil }
+func (f *fakeModelRepo) AutoEnableModel(_ uuid.UUID) error  { return nil }
+func (f *fakeModelRepo) UpdateEnabled(_ uuid.UUID, _ *bool) error { return nil }
+func (f *fakeModelRepo) UpdateStatus(_ uuid.UUID, _ bool, _ int) error { return nil }
+func (f *fakeModelRepo) IncrementModelFailures(_ uuid.UUID) (int, error) { return 0, nil }
+func (f *fakeModelRepo) ResetModelFailures(_ uuid.UUID) error { return nil }
+func (f *fakeModelRepo) UpdateModelCheckResult(_ uuid.UUID, _ int, _ string) error { return nil }
+func (f *fakeModelRepo) IncrementRecoverySuccesses(_ uuid.UUID) error { return nil }
+func (f *fakeModelRepo) ResetRecoverySuccesses(_ uuid.UUID) error { return nil }
 func (f *fakeModelRepo) ExistsByName(_ string, _ uuid.UUID) (bool, error) {
 	return false, nil
 }

@@ -117,7 +117,7 @@ func TestAuthClient_VerifyKey_ServiceUnavailable(t *testing.T) {
 	})
 	_, err := client.VerifyKey(context.Background(), "sk-bad-key-0001")
 	assert.Error(t, err, "5xx 应返回错误")
-	assert.Contains(t, err.Error(), "auth service error 500")
+	assert.Contains(t, err.Error(), "auth service returned 500")
 }
 
 func TestAuthClient_VerifyKey_DisabledKey_NotCached(t *testing.T) {

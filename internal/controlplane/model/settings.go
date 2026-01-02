@@ -34,6 +34,11 @@ type SystemSettings struct {
 	DefaultSameModelRetries        int    `json:"default_same_model_retries"`
 	DefaultFailoverCooldownSeconds int    `json:"default_failover_cooldown_seconds"`
 	SupplierName                  string `json:"supplier_name"`
+	// v0.7 分层限速：0 = 不限
+	GlobalRPM int `json:"global_rpm"`
+	StudioRPM int `json:"studio_rpm"`
+	DeptRPM   int `json:"dept_rpm"`
+	KeyRPM    int `json:"key_rpm"`
 }
 
 type PublicSettings struct {
@@ -44,4 +49,9 @@ type PublicSettings struct {
 	RateLimitPerMinute    int    `json:"rate_limit_per_minute"`
 	MaxConcurrencyPerKey  int    `json:"max_concurrency_per_key"`
 	SupplierName          string `json:"supplier_name"`
+	// v0.7 分层限速：0 = 不限
+	GlobalRPM             int    `json:"global_rpm"`
+	StudioRPM             int    `json:"studio_rpm"`
+	DeptRPM               int    `json:"dept_rpm"`
+	KeyRPM                int    `json:"key_rpm"`
 }

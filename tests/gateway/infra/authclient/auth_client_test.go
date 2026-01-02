@@ -105,9 +105,10 @@ func TestVerifyKey_404_ReturnsError(t *testing.T) {
 	client := newTestAuthClient(srv)
 	resp, err := client.VerifyKey(context.Background(), "sk-testkey")
 
-	assert.Error(t, err, "404 应返回 error")
-	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "404")
+	// 404 返回特殊结构体（Code=404, Message="key not found"），不返回 error
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.Equal(t, 404, resp.Code)
 }
 
 func TestVerifyKey_InternalToken_Sent(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/example/llm-gateway/internal/httpclient"
+	gwmodel "github.com/example/llm-gateway/internal/gateway/model"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -52,7 +53,11 @@ type VerifyKeyResp struct {
 		KeyName         string `json:"key_name,omitempty"`
 		AccessAllGroups bool   `json:"access_all_groups"`
 		LogEnabled      *bool  `json:"log_enabled,omitempty"` // nil = 字段缺失（旧缓存），默认 true
-		User            struct {
+		// v0.7: 可用模型组快照 + Key 类型 + 预算链
+		UsableGroups []string             `json:"usable_groups,omitempty"`
+		KeyType      string               `json:"key_type,omitempty"`
+		BudgetChain  []gwmodel.BudgetScope `json:"budget_chain,omitempty"`
+		User         struct {
 			UserID       string `json:"user_id"`
 			Name         string `json:"name"`
 			DepartmentID string `json:"department_id,omitempty"`

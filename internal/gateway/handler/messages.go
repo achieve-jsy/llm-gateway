@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/example/llm-gateway/internal/core"
+	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/gin-gonic/gin"
@@ -22,6 +24,7 @@ import (
 type MessagesHandler struct {
 	orchestrator  ChatOrchestratorInterface
 	groupDispatch *orchestrator.GroupAwareDispatcher
+	budgetDeps    *middleware.BudgetDeps
 }
 
 // NewMessagesHandler creates a MessagesHandler.
@@ -32,6 +35,11 @@ func NewMessagesHandler(orch ChatOrchestratorInterface) *MessagesHandler {
 // NewMessagesHandlerWithGroup creates a MessagesHandler with group dispatch support.
 func NewMessagesHandlerWithGroup(orch ChatOrchestratorInterface, gd *orchestrator.GroupAwareDispatcher) *MessagesHandler {
 	return &MessagesHandler{orchestrator: orch, groupDispatch: gd}
+}
+
+// SetBudgetDeps 注入预算依赖（router setup 时调用一次）
+func (h *MessagesHandler) SetBudgetDeps(deps *middleware.BudgetDeps) {
+	h.budgetDeps = deps
 }
 
 // Handle processes POST /v1/messages requests.
@@ -53,6 +61,18 @@ func (h *MessagesHandler) HandleMessages(c *gin.Context) {
 	}
 
 	c.Set("model", anthReq.Model)
+
+	// v0.7: 预算预扣
+	if h.budgetDeps != nil {
+		promptChars := estimateAnthropicPromptChars(&anthReq)
+		if _, err := middleware.Reserve(c, h.budgetDeps, anthReq.Model, anthReq.MaxTokens, promptChars); err != nil {
+			if be, ok := err.(*middleware.BudgetExceededError); ok {
+				c.AbortWithStatusJSON(http.StatusPaymentRequired, be.ToJSON())
+				return
+			}
+			slog.Warn("messages: budget reserve failed", "model", anthReq.Model, "error", err)
+		}
+	}
 
 	// Convert Anthropic request to internal ChatRequest
 	req := core.AnthropicToChatRequest(&anthReq)
@@ -80,6 +100,32 @@ func (h *MessagesHandler) HandleMessages(c *gin.Context) {
 	}
 
 	h.handleNonStream(c, baseCtx, req, originalModel)
+}
+
+// estimateAnthropicPromptChars 估算 Anthropic 请求的 prompt 字符数（system + messages）。
+func estimateAnthropicPromptChars(req *core.AnthropicMessagesRequest) int {
+	if req == nil {
+		return 0
+	}
+	total := 0
+	// system 字段是 any，可能是 string 或 []ContentBlock
+	if req.System != nil {
+		switch v := req.System.(type) {
+		case string:
+			total += len(v)
+		default:
+			b, _ := json.Marshal(v)
+			total += len(b)
+		}
+	}
+	// messages 累加每条
+	for _, m := range req.Messages {
+		b, err := json.Marshal(m.Content)
+		if err == nil {
+			total += len(b)
+		}
+	}
+	return total
 }
 
 // nonStreamTimeout returns the timeout for non-streaming requests.

@@ -167,6 +167,23 @@
             </div>
           </el-tab-pane>
 
+          <!-- Tab：预算 -->
+          <el-tab-pane name="budget">
+            <template #label>
+              预算
+            </template>
+            <div class="tab-content">
+              <BudgetScopePanel
+                v-if="selectedStudio"
+                scope-type="studio"
+                :scope-id="selectedStudio.id"
+                :title="selectedStudio.name"
+                :child-scope-ids="selectedStudioDeptIds"
+                :can-edit="canEditSelectedStudioBudget"
+              />
+            </div>
+          </el-tab-pane>
+
           <!-- Tab：工作室负责人 -->
           <el-tab-pane name="owner">
             <template #label>
@@ -348,6 +365,22 @@
                 small
                 class="members-pagination"
                 @current-change="loadDeptMembers"
+              />
+            </div>
+          </el-tab-pane>
+
+          <!-- Tab：预算 -->
+          <el-tab-pane name="budget">
+            <template #label>
+              预算
+            </template>
+            <div class="tab-content">
+              <BudgetScopePanel
+                v-if="selectedDept"
+                scope-type="dept"
+                :scope-id="selectedDept.dept_id"
+                :title="selectedDept.dept_name"
+                :can-edit="canEditSelectedDeptBudget"
               />
             </div>
           </el-tab-pane>
@@ -947,10 +980,12 @@ import { useOrgStore, type RoleWithUser, type UserSearchResult, type DeptMember 
 import { useAuthStore } from '@/stores/auth'
 import type { Studio, OrgDepartment, ImportDiff, EmployeeImportPreviewRow, EmployeeImportSummary } from '@/types/org'
 import http from '@/services/http'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import BudgetScopePanel from '@/components/budget/BudgetScopePanel.vue'
 
 const orgStore  = useOrgStore()
 const authStore = useAuthStore()
+const route     = useRoute()
 const router    = useRouter()
 
 // ─── 数据 ─────────────────────────────────────────────────────────────────────
@@ -1080,6 +1115,38 @@ function onNodeClick(data: TreeNode) {
   }
 }
 
+function applyRouteSelection() {
+  const scopeType = String(route.query.scope_type || '')
+  const scopeID = String(route.query.scope_id || '')
+  const targetTab = String(route.query.tab || '')
+  if (!scopeType || !scopeID) return
+
+  if (scopeType === 'studio') {
+    const studio = studios.value.find(s => s.id === scopeID)
+    if (!studio) return
+    selectedType.value = 'studio'
+    selectedStudio.value = studio
+    selectedDept.value = null
+    selectedDeptParentStudio.value = null
+    studioActiveTab.value = targetTab === 'budget' ? 'budget' : 'depts'
+    nextTick(() => treeRef.value?.setCurrentKey(`studio:${studio.id}`))
+    return
+  }
+
+  if (scopeType === 'dept_daily' || scopeType === 'dept_service') {
+    const dept = allDepts.value.find(d => d.dept_id === scopeID)
+    if (!dept) return
+    const parent = studios.value.find(s => s.id === dept.studio_id) || null
+    selectedType.value = 'dept'
+    selectedDept.value = dept
+    selectedDeptParentStudio.value = parent
+    selectedStudio.value = null
+    deptActiveTab.value = targetTab === 'budget' ? 'budget' : 'members'
+    nextTick(() => treeRef.value?.setCurrentKey(`dept:${dept.dept_id}`))
+    if (deptActiveTab.value === 'members') loadDeptMembers(1)
+  }
+}
+
 function selectUnmapped() {
   selectedType.value  = 'unmapped'
   selectedStudio.value = null
@@ -1120,6 +1187,17 @@ const selectedStudioDepts = computed(() => {
   }
   return base
 })
+
+const selectedStudioDeptIds = computed(() => selectedStudioDepts.value.map(d => d.dept_id))
+
+const canEditSelectedStudioBudget = computed(() =>
+  isGlobalAdmin.value || myStudioIds.value.includes(selectedStudio.value?.id ?? '')
+)
+
+const canEditSelectedDeptBudget = computed(() =>
+  isGlobalAdmin.value ||
+  myStudioIds.value.includes(selectedDeptParentStudio.value?.id ?? '')
+)
 
 const selectedStudioOwners = computed(() =>
   allRoles.value.filter(r => r.role === 'studio_admin' && r.scope_id === selectedStudio.value?.id)
@@ -1571,12 +1649,18 @@ async function reload() {
       selectedDept.value = allDepts.value.find(d => d.dept_id === selectedDept.value!.dept_id) || null
       if (!selectedDept.value) selectedType.value = null
     }
+    applyRouteSelection()
   } finally {
     loading.value = false
   }
 }
 
 onMounted(reload)
+
+watch(
+  () => [route.query.scope_type, route.query.scope_id, route.query.tab],
+  () => applyRouteSelection()
+)
 
 // ─── 成员用量快览抽屉 ──────────────────────────────────────────────────────────
 const memberDrawerVisible = ref(false)

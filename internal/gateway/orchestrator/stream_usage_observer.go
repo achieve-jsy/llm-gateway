@@ -111,6 +111,21 @@ func (o *streamUsageObserver) OnJSONEvent(payload map[string]any) {
 				CompletionTokens: toInt(usageMap["completion_tokens"]),
 				TotalTokens:      toInt(usageMap["total_tokens"]),
 			}
+			// v0.7: 兼容 Responses API 的 input_tokens/output_tokens 命名
+			// Responses API 不使用 prompt_tokens/completion_tokens，但 usage_collector
+			// 依赖 PromptTokens/CompletionTokens 做成本估算。
+			if u.PromptTokens == 0 {
+				u.PromptTokens = toInt(usageMap["input_tokens"])
+			}
+			if u.CompletionTokens == 0 {
+				u.CompletionTokens = toInt(usageMap["output_tokens"])
+			}
+			if u.TotalTokens == 0 {
+				u.TotalTokens = toInt(usageMap["total_tokens"])
+				if u.TotalTokens == 0 {
+					u.TotalTokens = u.PromptTokens + u.CompletionTokens
+				}
+			}
 			// 提取 OpenAI-compatible prompt_tokens_details（含 cached_tokens）
 			if details, ok := usageMap["prompt_tokens_details"].(map[string]any); ok {
 				u.PromptTokensDetails = &core.PromptTokensDetails{

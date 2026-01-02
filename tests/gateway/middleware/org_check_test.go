@@ -49,10 +49,10 @@ func TestOrgCheckMiddleware(t *testing.T) {
 		},
 		{
 			name:        "dept 和 studio 均为空",
-			description: "用户没有部门信息（dept_status=none），OrgCheck 不拦截，应放行",
+			description: "v0.7 FR-1.8：无部门用户拒绝调用，应返回 403",
 			deptID:      "",
 			studioID:    "",
-			wantStatus:  http.StatusOK,
+			wantStatus:  http.StatusForbidden,
 		},
 		{
 			name:        "有 dept 无 studio",
@@ -63,10 +63,10 @@ func TestOrgCheckMiddleware(t *testing.T) {
 		},
 		{
 			name:        "无 dept 有 studio",
-			description: "异常情况：dept 为空但 studio 有值（不触发拦截），应放行",
+			description: "v0.7 FR-1.8：无部门用户拒绝调用（即使有 studio 也拒绝），应返回 403",
 			deptID:      "",
 			studioID:    "studio-uuid-001",
-			wantStatus:  http.StatusOK,
+			wantStatus:  http.StatusForbidden,
 		},
 	}
 

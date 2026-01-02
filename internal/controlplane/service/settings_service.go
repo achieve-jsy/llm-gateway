@@ -26,9 +26,14 @@ const (
 	SettingKeyWebhookSecret        = "webhook_secret"
 	SettingKeyWebhookEvents               = "webhook_events"
 	SettingKeyDefaultMaxSwitches          = "fault_default_max_switches"
-	SettingKeyDefaultSameModelRetries     = "fault_default_same_model_retries"
+	SettingKeyDefaultSameModelRetries     = "fault_default_same_model_retires"
 	SettingKeyDefaultFailoverCooldown     = "fault_default_cooldown_seconds"
 	SettingKeySupplierName                = "supplier_name"
+	// v0.7 分层限速
+	SettingKeyGlobalRPM = "global_rpm"
+	SettingKeyStudioRPM = "studio_rpm"
+	SettingKeyDeptRPM   = "dept_rpm"
+	SettingKeyKeyRPM    = "key_rpm"
 )
 
 const (
@@ -68,6 +73,7 @@ func allSettingKeys() []string {
 		SettingKeyWebhookEnabled, SettingKeyWebhookURL, SettingKeyWebhookSecret, SettingKeyWebhookEvents,
 		SettingKeyDefaultMaxSwitches, SettingKeyDefaultSameModelRetries, SettingKeyDefaultFailoverCooldown,
 		SettingKeySupplierName,
+		SettingKeyGlobalRPM, SettingKeyStudioRPM, SettingKeyDeptRPM, SettingKeyKeyRPM,
 	}
 }
 
@@ -120,6 +126,11 @@ func (s *SettingsService) GetSystemSettings(ctx context.Context) (*model.SystemS
 		DefaultSameModelRetries:        intOrDefault(vals, SettingKeyDefaultSameModelRetries, defaultSameModelRetries),
 		DefaultFailoverCooldownSeconds: intOrDefault(vals, SettingKeyDefaultFailoverCooldown, defaultFailoverCooldownSeconds),
 		SupplierName:                  valOrDefault(vals, SettingKeySupplierName, defaultSupplierName),
+		// v0.7 分层限速（默认 0 = 不限）
+		GlobalRPM: intOrDefault(vals, SettingKeyGlobalRPM, 0),
+		StudioRPM: intOrDefault(vals, SettingKeyStudioRPM, 0),
+		DeptRPM:   intOrDefault(vals, SettingKeyDeptRPM, 0),
+		KeyRPM:    intOrDefault(vals, SettingKeyKeyRPM, 0),
 	}, nil
 }
 
@@ -128,6 +139,7 @@ func (s *SettingsService) GetPublicSettings(ctx context.Context) (*model.PublicS
 		SettingKeySiteName, SettingKeySiteLogo, SettingKeySiteSubtitle, SettingKeyAPIBaseURL,
 		SettingKeyRateLimitPerMin, SettingKeyMaxConcurrencyPerKey,
 		SettingKeySupplierName,
+		SettingKeyGlobalRPM, SettingKeyStudioRPM, SettingKeyDeptRPM, SettingKeyKeyRPM,
 	})
 	if err != nil {
 		return nil, err
@@ -140,6 +152,10 @@ func (s *SettingsService) GetPublicSettings(ctx context.Context) (*model.PublicS
 		RateLimitPerMinute:   intOrDefault(vals, SettingKeyRateLimitPerMin, defaultRateLimitPerMin),
 		MaxConcurrencyPerKey: intOrDefault(vals, SettingKeyMaxConcurrencyPerKey, defaultMaxConcurrencyPerKey),
 		SupplierName:        valOrDefault(vals, SettingKeySupplierName, defaultSupplierName),
+		GlobalRPM:           intOrDefault(vals, SettingKeyGlobalRPM, 0),
+		StudioRPM:           intOrDefault(vals, SettingKeyStudioRPM, 0),
+		DeptRPM:             intOrDefault(vals, SettingKeyDeptRPM, 0),
+		KeyRPM:              intOrDefault(vals, SettingKeyKeyRPM, 0),
 	}, nil
 }
 
@@ -181,6 +197,11 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, settings *model.Sy
 		updates[SettingKeyDefaultFailoverCooldown] = fmt.Sprintf("%d", settings.DefaultFailoverCooldownSeconds)
 	}
 	updates[SettingKeySupplierName] = settings.SupplierName
+	// v0.7 分层限速：0 = 不限，始终写入（确保显式设置 0 也能覆盖旧值）
+	updates[SettingKeyGlobalRPM] = fmt.Sprintf("%d", settings.GlobalRPM)
+	updates[SettingKeyStudioRPM] = fmt.Sprintf("%d", settings.StudioRPM)
+	updates[SettingKeyDeptRPM] = fmt.Sprintf("%d", settings.DeptRPM)
+	updates[SettingKeyKeyRPM] = fmt.Sprintf("%d", settings.KeyRPM)
 	return s.repo.SetMultiple(updates)
 }
 

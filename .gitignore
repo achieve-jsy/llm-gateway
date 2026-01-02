@@ -43,4 +43,9 @@ node_modules/
 # ── Speckit 工作流配置 ────────────────────────────────────────────────────────
 .specify/
 .specs/
-# specs/
+# specs/*.DS_Store
+
+# macOS
+.DS_Store
+**/.DS_Store
+tools/atlas-loader/atlas-loader

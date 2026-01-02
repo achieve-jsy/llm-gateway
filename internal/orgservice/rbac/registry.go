@@ -49,4 +49,30 @@ var Registry = map[Permission]PolicyEntry{
 
 	// 用量看板（管辖范围）：任意管理角色
 	PermUsageViewScoped: {ScopeManage},
+
+	// ── v0.7 模型组授权 ──────────────────────────────────────────────────────
+	// 设置开放模式（public/controlled）：仅平台 admin
+	PermGroupOpenModeSet: {ScopeGlobal},
+	// 下放/撤销受控组授权：studio_admin（在自己工作室范围内）或 admin（全局）
+	PermGroupEntitleGrant:  {ScopeStudio},
+	PermGroupEntitleRevoke: {ScopeStudio},
+
+	// ── v0.7 预算管理 ────────────────────────────────────────────────────────
+	// 查看全公司预算：仅 admin
+	PermBudgetViewAll: {ScopeGlobal},
+	// 查看自己管辖范围预算：任意管理角色
+	PermBudgetViewScoped: {ScopeManage},
+	// 设置预算（按管辖域过滤）：任意管理角色（service 层做数据范围校验）
+	PermBudgetSet: {ScopeManage},
+
+	// ── v0.7 Service Key ────────────────────────────────────────────────────
+	// 创建/吊销 Service Key：任意管理角色（service 层校验只能操作自己部门）
+	PermServiceKeyCreate: {ScopeManage},
+	PermServiceKeyRevoke: {ScopeManage},
+
+	// ── v0.7 扩容审批 ────────────────────────────────────────────────────────
+	// 发起扩容申请：任意管理角色
+	PermExpansionRequest: {ScopeManage},
+	// 审批扩容：studio_admin 或 admin
+	PermExpansionApprove: {ScopeStudio},
 }

@@ -167,7 +167,6 @@ func (r *GroupRepo) UpdateOpenMode(id uint, openMode string) error {
 		Update("open_mode", openMode).Error
 }
 
-
 // GroupMetadata 模型组元数据（策略 + 成员模型数）
 type GroupMetadata struct {
 	Name       string `gorm:"column:name"`
@@ -196,4 +195,29 @@ func (r *GroupRepo) GetGroupMetadata(names []string) (map[string]GroupMetadata, 
 		result[rows[i].Name] = rows[i]
 	}
 	return result, nil
+}
+
+// IDsByOpenMode 返回符合指定开放模式（public/controlled）且 enabled=true 的组 ID 集合。
+func (r *GroupRepo) IDsByOpenMode(openMode string) ([]uint, error) {
+	var ids []uint
+	err := r.db.Model(&model.Group{}).
+		Where("open_mode = ? AND enabled = true AND deleted_at IS NULL", openMode).
+		Pluck("id", &ids).Error
+	return ids, err
+}
+
+// ListGroupsByIDs 按 ID 列表返回 enabled 的组（不含已软删的）。
+func (r *GroupRepo) ListGroupsByIDs(ids []uint) ([]model.Group, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var groups []model.Group
+	err := r.db.Where("id IN ? AND enabled = true AND deleted_at IS NULL", ids).
+		Select("id, name").Find(&groups).Error
+	return groups, err
+}
+
+// DB 暴露底层 db 实例，供跨 repo 联合查询使用。
+func (r *GroupRepo) DB() *gorm.DB {
+	return r.db
 }

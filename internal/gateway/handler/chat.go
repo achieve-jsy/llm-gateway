@@ -2,12 +2,14 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/example/llm-gateway/internal/core"
+	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/gin-gonic/gin"
@@ -32,6 +34,7 @@ type ChatOrchestratorInterface interface {
 type ChatHandler struct {
 	orchestrator  ChatOrchestratorInterface
 	groupDispatch *orchestrator.GroupAwareDispatcher
+	budgetDeps    *middleware.BudgetDeps // v0.7: 预算预扣依赖（nil 表示跳过预算校验）
 }
 
 // NewChatHandler 创建 ChatHandler 实例
@@ -42,6 +45,11 @@ func NewChatHandler(orch ChatOrchestratorInterface) *ChatHandler {
 // NewChatHandlerWithGroup 创建带模型组调度的 ChatHandler 实例
 func NewChatHandlerWithGroup(orch ChatOrchestratorInterface, gd *orchestrator.GroupAwareDispatcher) *ChatHandler {
 	return &ChatHandler{orchestrator: orch, groupDispatch: gd}
+}
+
+// SetBudgetDeps 注入预算依赖（router setup 时调用一次）
+func (h *ChatHandler) SetBudgetDeps(deps *middleware.BudgetDeps) {
+	h.budgetDeps = deps
 }
 
 // Handle 处理 POST /v1/chat/completions 请求
@@ -75,6 +83,22 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 
 	originalModel := req.Model
 	c.Set("model", req.Model)
+
+	// v0.7: 预算预扣（基于解析 body 后的 model + max_tokens + prompt 估算）
+	if h.budgetDeps != nil {
+		promptChars := estimateChatPromptChars(&req)
+		maxTokens := 0
+		if req.MaxTokens != nil {
+			maxTokens = *req.MaxTokens
+		}
+		if _, err := middleware.Reserve(c, h.budgetDeps, req.Model, maxTokens, promptChars); err != nil {
+			if be, ok := err.(*middleware.BudgetExceededError); ok {
+				be.WriteHTTPResponse(c)
+				return
+			}
+			slog.Warn("chat: budget reserve failed", "model", req.Model, "error", err)
+		}
+	}
 
 	if h.groupDispatch != nil {
 		decision, err := h.groupDispatch.Dispatch(c, req.Model)
@@ -323,5 +347,23 @@ func respondError(c *gin.Context, ue *model.UnifiedError) {
 			"message": ue.Message,
 		},
 	})
+}
+
+// estimateChatPromptChars 粗略估算 ChatRequest 的 prompt 字符数，用于预算预扣。
+// 算法：对每条 Message 的 Content JSON 序列化后取 byte 数累加。
+// 粗略但够用于 tokens 估算（英文 ~1 token per 4 chars）。
+func estimateChatPromptChars(req *core.ChatRequest) int {
+	if req == nil || len(req.Messages) == 0 {
+		return 0
+	}
+	total := 0
+	for _, m := range req.Messages {
+		// 序列化 Content 取字符数（Content 是 any，可能是 string 也可能是结构化）
+		b, err := json.Marshal(m.Content)
+		if err == nil {
+			total += len(b)
+		}
+	}
+	return total
 }
 

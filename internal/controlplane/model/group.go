@@ -7,6 +7,12 @@ import (
 	"gorm.io/gorm"
 )
 
+// GroupOpenModePublic 公开组：全公司默认可见可用
+const GroupOpenModePublic = "public"
+
+// GroupOpenModeControlled 受控组：需授权后才可见可用
+const GroupOpenModeControlled = "controlled"
+
 type Group struct {
 	ID                      uint           `gorm:"primaryKey" json:"id"`
 	CreatedAt               time.Time      `json:"created_at"`
@@ -20,7 +26,9 @@ type Group struct {
 	SameModelRetries        int            `gorm:"not null;default:1" json:"same_model_retries"`
 	FailoverCooldownSeconds int            `gorm:"not null;default:60" json:"failover_cooldown_seconds"`
 	TimeoutSeconds          int            `gorm:"not null;default:0" json:"timeout_seconds"`
-	Models                  []GroupModel   `gorm:"foreignKey:GroupID" json:"models,omitempty"`
+	// v0.7: 开放模式，取代 tier 分级。public=全员可用，controlled=需部门授权
+	OpenMode string `gorm:"type:varchar(16);not null;default:'public'" json:"open_mode"`
+	Models   []GroupModel `gorm:"foreignKey:GroupID" json:"models,omitempty"`
 }
 
 func (Group) TableName() string {

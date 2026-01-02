@@ -153,3 +153,16 @@ func applyTier(p *core.ModelPricing, totalPrompt int, inP, outP float64) (float6
 func perM(tokens int, pricePerMtok float64) float64 {
 	return float64(tokens) / 1e6 * pricePerMtok
 }
+
+// FallbackEstimateCost 使用保守固定单价估算成本（无真实定价时的兜底）。
+// 固定单价：输入输出均为 $50/1M tokens（≈ $0.05/1K tokens）。
+// 用途：
+//   - budget_reserve：handler 解析 body 后、上游响应返回前的 preflight 预扣
+//   - usage_collector post-hook：真实 pricing 查不到时仍能核销预算
+// 设计考量：偏高单价 → 预算提前耗尽 → 用户可申请扩容（安全）；反之偏低会让预算被绕过。
+func FallbackEstimateCost(u core.Usage) float64 {
+	in := ExtractCostInput(u)
+	// $50 per 1M tokens = 保守上限
+	price := 50.0
+	return perM(in.PromptTokens, price) + perM(in.CompletionTokens, price)
+}

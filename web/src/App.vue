@@ -32,6 +32,13 @@
           <el-icon><Collection /></el-icon>
           <template #title>模型广场</template>
         </el-menu-item>
+        <el-menu-item index="/my/budget">
+          <el-icon><Wallet /></el-icon>
+          <template #title>
+            我的预算
+            <span v-if="budgetAlert" class="budget-alert-dot" />
+          </template>
+        </el-menu-item>
         <el-menu-item index="/admin/group-health-monitor">
           <el-icon><Histogram /></el-icon>
           <template #title>模型组健康</template>
@@ -40,11 +47,15 @@
           <el-icon><TrendCharts /></el-icon>
           <template #title>模型性能</template>
         </el-menu-item>
+        <el-menu-item index="/admin/expansion-requests">
+          <el-icon><TrendCharts /></el-icon>
+          <template #title>扩容申请</template>
+        </el-menu-item>
 
-        <!-- 组织 & 用量看板（管理角色可见）-->
+        <!-- 管理（管理角色可见）-->
         <template v-if="authStore.isManager">
           <el-divider class="menu-divider" />
-          <div class="menu-group-label">组织</div>
+          <div class="menu-group-label">管理</div>
           <!-- 组织架构：admin 看全树，studio/dept admin 看自己管辖范围 -->
           <el-menu-item index="/admin/org">
             <el-icon><OfficeBuilding /></el-icon>
@@ -57,6 +68,14 @@
             <el-icon><Histogram /></el-icon>
             <template #title>用量看板</template>
           </el-menu-item>
+          <el-menu-item index="/admin/budget">
+            <el-icon><Wallet /></el-icon>
+            <template #title>预算管理</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/service-keys">
+            <el-icon><Key /></el-icon>
+            <template #title>Service Key</template>
+          </el-menu-item>
           <!-- 角色管理仅 admin 可见 -->
           <el-menu-item v-if="authStore.isAdmin" index="/admin/org/roles">
             <el-icon><UserFilled /></el-icon>
@@ -64,10 +83,10 @@
           </el-menu-item>
         </template>
 
-        <!-- 管理 & 运维（仅 admin）-->
+        <!-- 平台（仅 admin）-->
         <template v-if="authStore.isAdmin">
           <el-divider class="menu-divider" />
-          <div class="menu-group-label">管理</div>
+          <div class="menu-group-label">平台</div>
           <el-menu-item index="/admin/providers">
             <el-icon><Operation /></el-icon>
             <template #title>渠道管理</template>
@@ -84,6 +103,7 @@
             <el-icon><PriceTag /></el-icon>
             <template #title>标签管理</template>
           </el-menu-item>
+
 
           <el-divider class="menu-divider" />
 
@@ -184,7 +204,7 @@ import { onMounted, computed, ref, watch, onUnmounted } from 'vue'
 import { isDark, toggleTheme } from './composables/useTheme'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
-import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close, Menu, TrendCharts } from '@element-plus/icons-vue'
+import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close, Menu, Wallet, Lock, TrendCharts } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/common/NotificationBell.vue'
 import AnnouncementBanner from '@/components/common/AnnouncementBanner.vue'
 import AnnouncementPopup from '@/components/common/AnnouncementPopup.vue'
@@ -200,6 +220,17 @@ const isMobile = ref(window.innerWidth < 768)
 const showMobileSidebar = ref(false)
 const activeMenu = ref(route.path)
 const showPopup = ref(false)
+const budgetAlert = ref(false)
+
+// 预算告警检查：任一层 ≥80% 显示红点
+async function checkBudgetAlert() {
+  if (!authStore.isLoggedIn) return
+  try {
+    const { getMyBudget } = await import('@/services/control-plane')
+    const chain = await getMyBudget()
+    budgetAlert.value = chain.some(item => item.amount_usd > 0 && (item.used_ratio ?? 0) >= 0.8)
+  } catch { budgetAlert.value = false }
+}
 
 watch(() => route.path, (newPath) => {
   activeMenu.value = newPath
@@ -247,6 +278,7 @@ watch(() => authStore.deptStatus, (s) => {
 onMounted(() => {
   settingsStore.loadPublicSettings()
   checkPopupAnnouncements()
+  checkBudgetAlert()
   const handleResize = () => { isMobile.value = window.innerWidth < 768; if (!isMobile.value) showMobileSidebar.value = false }
   window.addEventListener('resize', handleResize)
 })
@@ -435,5 +467,16 @@ function onPopupAllRead() {
   width: 100%;
 }
 
+.budget-alert-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--el-color-danger);
+  margin-left: 4px;
+  vertical-align: middle;
+  animation: badge-pulse 1.5s infinite;
+}
+@keyframes badge-pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 
 </style>

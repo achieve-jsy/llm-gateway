@@ -127,12 +127,18 @@ func (o *ChatOrchestrator) ResponsesStream(ctx context.Context, req *core.Respon
 
 	span.SetStatus(codes.Ok, "")
 
+	var usageObserver *streamUsageObserver
 	if gc := ginContextFrom(ctx); gc != nil {
 		gc.Set("stream", true)
+		usageObserver = newStreamUsageObserver(gc, start)
 	}
 
+	// 用 ObservedSSEStream 包装原始流：
+	//   - 字节流原样透传给客户端
+	//   - OTelObserver 旁路统计 chunk 数量
+	//   - streamUsageObserver 旁路提取末尾 usage 与首 token 延迟，流关闭时回写 context
 	otelObserver := streaming.NewOTelObserver(span)
-	observed := streaming.NewObservedSSEStream(rawStream, otelObserver)
+	observed := streaming.NewObservedSSEStream(rawStream, otelObserver, usageObserver)
 
 	return &cancelOnCloseStream{
 		ReadCloser: observed,

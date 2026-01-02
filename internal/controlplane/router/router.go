@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	cpconfig "github.com/example/llm-gateway/internal/controlplane/config"
 	"github.com/example/llm-gateway/internal/controlplane/auth"
+	cpconfig "github.com/example/llm-gateway/internal/controlplane/config"
 	"github.com/example/llm-gateway/internal/controlplane/event"
 	"github.com/example/llm-gateway/internal/controlplane/handler"
 	"github.com/example/llm-gateway/internal/controlplane/middleware"
@@ -113,6 +113,41 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		settingsSvc.GetDefaultFailoverCooldownSeconds(context.Background()),
 	)
 	groupHandler := handler.NewGroupHandler(groupSvc, modelRepo, providerRepo)
+
+	// v0.7: 授权服务
+	entRepo := repository.NewEntitlementRepo(db)
+	entSvc := service.NewEntitlementService(entRepo, groupRepo, service.NewEventPublisherAdapter(publisher))
+	// 注入 EntitlementService 到 KeyService，enable verify-key 下发 usable_groups 快照
+	keySvc.WithEntitlementService(entSvc)
+	// v0.7: 预算 repo，注入 KeyService 用于 verify-key 下发 BudgetChain
+	budgetRepo := repository.NewBudgetRepo(db)
+	keySvc.WithBudgetRepo(budgetRepo)
+	budgetAlertRepo := repository.NewBudgetAlertRepo(db)
+	budgetSvc := service.NewBudgetService(budgetRepo, budgetAlertRepo)
+	// v0.7: 改额即时生效——注入 publisher 用于广播 auth_config_changed，
+	// 注入 Redis 用于写 budget:amount:{scope_type}:{scope_id} 键。
+	budgetSvc.SetPublisher(service.NewEventPublisherAdapter(publisher))
+	budgetSvc.SetRedis(rdb)
+	budgetAlertSvc := service.NewBudgetAlertService(budgetRepo, budgetAlertRepo, nil)
+	// v0.7: 上线默认预算初始化（异步，不阻塞启动）
+	// 默认额度：部门日常 500 USD/月，部门程序服务 200 USD/月，工作室 2000 USD/月
+	// 运维可通过 PUT /api/v1/budgets 按域调整
+	go func() {
+		if created, err := budgetSvc.InitDefaultBudgets(
+			context.Background(),
+			500.0,  // defaultDeptDailyUSD
+			200.0,  // defaultDeptServiceUSD
+			2000.0, // defaultStudioUSD
+		); err != nil {
+			slog.Warn("budget: default allocation init failed", "error", err)
+		} else if created > 0 {
+			slog.Info("budget: default allocations initialized", "created", created)
+		}
+	}()
+	// v0.7: 扩容审批 service
+	expansionRepo := repository.NewExpansionRepo(db)
+	expansionSvc := service.NewExpansionService(expansionRepo)
+	expansionSvc.SetBudgetService(budgetSvc)
 
 	systemKeySvc := service.NewSystemKeyService(db)
 	// gateway.url 从 yaml 配置读取，环境变量 GATEWAY_URL 可覆盖
@@ -375,18 +410,17 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/my/usage/logs/:request_id/trace", usageH.Trace)
 	}
 
-
 	// 内部接口组（内部 Token 认证）
 	internalGroup := r.Group("/internal/v1")
 	internalGroup.Use(middleware.InternalAuth())
 	{
-	internalGroup.GET("/models/available", internalHandler.ListAvailableModels)
-	internalGroup.GET("/models/health", internalHandler.GetModelHealth)
-	internalGroup.GET("/models/pricing", internalHandler.GetModelPricing)
-	internalGroup.POST("/keys/verify", keyHandler.VerifyKey)
-	internalGroup.POST("/auth/verify-key", keyHandler.VerifyKey)
-	internalGroup.GET("/keys/:id/groups", internalHandler.GetKeyGroups)
-	internalGroup.GET("/groups/model-info", modelInfoHandler.GetGroupModelInfo)
+		internalGroup.GET("/models/available", internalHandler.ListAvailableModels)
+		internalGroup.GET("/models/health", internalHandler.GetModelHealth)
+		internalGroup.GET("/models/pricing", internalHandler.GetModelPricing)
+		internalGroup.POST("/keys/verify", keyHandler.VerifyKey)
+		internalGroup.POST("/auth/verify-key", keyHandler.VerifyKey)
+		internalGroup.GET("/keys/:id/groups", internalHandler.GetKeyGroups)
+		internalGroup.GET("/groups/model-info", modelInfoHandler.GetGroupModelInfo)
 	}
 
 	// ─── 组织架构服务（org-service）───────────────────────────────────────────
@@ -413,6 +447,46 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	// Guard 快捷别名（绑定到 orgContainer.RBAC 实例）
 	guard := orgContainer.RBAC.Guard
 
+	// v0.7: 授权管理路由（挂在 adminGroup 上，已带 JWTAuth）
+	entHandler := handler.NewEntitlementHandler(entSvc, orgContainer.RBAC)
+	// v0.7: Service Key 管理路由
+	serviceKeyHandler := handler.NewServiceKeyHandler(keySvc, orgContainer.RBAC)
+	// v0.7: 预算管理路由
+	budgetHandler := handler.NewBudgetHandler(budgetSvc, orgContainer.RBAC)
+	budgetHandler.SetAlertService(budgetAlertSvc)
+	// 注册内部告警触发端点（供 gateway 调用）
+	internalGroup.POST("/budget/evaluate-alert", budgetHandler.EvaluateAlert)
+	// v0.7: 扩容审批路由
+	expansionHandler := handler.NewExpansionHandler(expansionSvc, orgContainer.RBAC)
+	{
+		// 设置模型组开放模式（仅平台 admin）
+		adminGroup.PUT("/groups/:id/open-mode", guard(rbac.PermGroupOpenModeSet), entHandler.SetOpenMode)
+		// 查看模型组授权列表
+		adminGroup.GET("/groups/:id/entitlements", guard(rbac.PermGroupEntitleGrant), entHandler.ListByGroup)
+		// 下放/撤销授权
+		adminGroup.POST("/group-entitlements", guard(rbac.PermGroupEntitleGrant), entHandler.Grant)
+		adminGroup.DELETE("/group-entitlements", guard(rbac.PermGroupEntitleRevoke), entHandler.Revoke)
+		// Service Key CRUD（部门负责人+admin）
+		adminGroup.POST("/service-keys", guard(rbac.PermServiceKeyCreate), serviceKeyHandler.Create)
+		adminGroup.GET("/service-keys", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.List)
+		adminGroup.DELETE("/service-keys/:id", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.Delete)
+		// 预算管理（管理面）
+		adminGroup.GET("/budgets", guard(rbac.PermBudgetViewScoped), budgetHandler.List)
+		adminGroup.PUT("/budgets", guard(rbac.PermBudgetSet), budgetHandler.Set)
+		adminGroup.PUT("/budgets/batch", guard(rbac.PermBudgetSet), budgetHandler.BatchSet)
+		adminGroup.GET("/budgets/context", guard(rbac.PermBudgetViewScoped), budgetHandler.Context)
+		// 扩容申请：创建/我的申请/流水允许登录用户访问；审批接口继续走 RBAC。
+		adminGroup.POST("/expansion-requests", expansionHandler.Create)
+		adminGroup.GET("/expansion-requests", expansionHandler.ListMine)
+		adminGroup.GET("/expansion-requests/pending", guard(rbac.PermExpansionRequest), expansionHandler.ListPending)
+		adminGroup.POST("/expansion-requests/:id/decision", expansionHandler.Decide)
+		adminGroup.GET("/expansion-requests/:id/steps", expansionHandler.ListSteps)
+		adminGroup.POST("/expansion-requests/batch-decision", guard(rbac.PermExpansionRequest), expansionHandler.BatchDecide)
+	}
+
+	// 员工自助查询预算（JWTAuth 即可，不需要 admin）
+	r.GET("/api/v1/my/budget", middleware.JWTAuth(), budgetHandler.MyBudget)
+
 	// 管理接口（JWTAuth 已在 adminGroup 上）
 	orgGroup := adminGroup.Group("/org")
 	{
@@ -437,7 +511,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		orgGroup.GET("/all-roles", guard(rbac.PermRoleList), orgH.ListAllRoles)
 		orgGroup.POST("/roles/grant", guard(rbac.PermRoleGrant), roleH.GrantRole)
 		orgGroup.POST("/roles/revoke", guard(rbac.PermRoleRevoke), roleH.RevokeRole)
-		orgGroup.GET("/roles/me", roleH.GetMyRoles)           // 当前用户 org 角色（/me 须在 /:user_id 前）
+		orgGroup.GET("/roles/me", roleH.GetMyRoles) // 当前用户 org 角色（/me 须在 /:user_id 前）
 		orgGroup.GET("/roles/:user_id", roleH.GetUserRoles)
 
 		// ── 员工花名册导入（仅 admin）────────────────────────────────────────

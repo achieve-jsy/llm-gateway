@@ -404,3 +404,41 @@ verify-test:
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
       changes: *test-significant-changes
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RECON — 只读侦察测试主机（蓝绿改造前的现状探查，手动触发，不改动任何东西）
+# 目的：确认 test 主机 nginx 形态/配置路径、容器命名、端口占用，为蓝绿割接设计提供依据。
+# 用完即删。
+# ═══════════════════════════════════════════════════════════════════════════════
+recon-test:
+  stage: build
+  image: ${REGISTRY}/deploy-tools:latest
+  tags: [deploy]
+  needs: []
+  script:
+    - |
+      SSH_OPTS="-o StrictHostKeyChecking=no"
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} '
+        echo "===== uname / hostname ====="; hostname; uname -a
+        echo; echo "===== nginx 形态 ====="
+        which nginx 2>/dev/null && nginx -v 2>&1 || echo "no host nginx binary"
+        ps -eo pid,comm,args | grep -i nginx | grep -v grep || echo "no nginx process"
+        echo; echo "===== nginx -T 关键行（listen/server_name/proxy_pass/upstream/include/root）====="
+        (nginx -T 2>/dev/null | grep -nE "listen|server_name|proxy_pass|upstream|include|root " | head -120) || echo "nginx -T unavailable (maybe containerized)"
+        echo; echo "===== /etc/nginx 结构 ====="
+        ls -la /etc/nginx/ 2>/dev/null; echo "--- conf.d ---"; ls -la /etc/nginx/conf.d/ 2>/dev/null; echo "--- sites-enabled ---"; ls -la /etc/nginx/sites-enabled/ 2>/dev/null
+        echo; echo "===== docker 容器（含 nginx 容器？）====="
+        docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Image}}" 2>/dev/null | grep -Ei "nginx|llm|NAMES" || true
+        echo; echo "===== compose 项目 ====="
+        docker compose ls 2>/dev/null || true
+        echo; echo "===== 端口占用 8080-8083 / 9080 ====="
+        ss -ltnp "( sport = :8080 or sport = :8081 or sport = :8082 or sport = :8083 or sport = :9080 )" 2>/dev/null || true
+        echo; echo "===== 部署目录 /data/llm-gateway ====="
+        ls -la /data/llm-gateway/ 2>/dev/null || true
+        echo; echo "===== RECON DONE ====="
+      '
+  dependencies: []
+  allow_failure: true
+  rules:
+    - if: $CI_COMMIT_BRANCH == "test"
+      when: manual

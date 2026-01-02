@@ -73,10 +73,12 @@ type VerifyResult struct {
 
 // BudgetScope 预算链中单层 scope 的标识与元数据（不含实时 used，used 实时从 Redis 读）。
 type BudgetScope struct {
-	ScopeType string  `json:"scope_type"` // company|studio|dept_daily|dept_service|member
-	ScopeID   string  `json:"scope_id"`
-	AmountUSD float64 `json:"amount_usd"` // 该层额度（-1 表示未配置/不限额）
-	Label     string  `json:"label"`      // 展示用标签，如「研发部·成员日常预算」
+	ScopeType       string  `json:"scope_type"`        // company|studio|dept_daily|dept_service|member
+	ScopeID         string  `json:"scope_id"`
+	AmountUSD       float64 `json:"amount_usd"`        // 月限额（-1 表示未配置/不限额）
+	DailyAmountUSD  float64 `json:"daily_amount_usd"`  // 日限额（-1 表示不限）
+	WeeklyAmountUSD float64 `json:"weekly_amount_usd"` // 周限额（-1 表示不限）
+	Label           string  `json:"label"`             // 展示用标签，如「研发部·成员日常预算」
 }
 
 type EventPublisher interface {
@@ -698,19 +700,25 @@ func (s *KeyService) buildBudgetChain(k *model.ApiKey) []BudgetScope {
 		if d.scopeID == "" {
 			continue
 		}
-		amount := float64(-1) // -1 = 未配置/不限额
+		amount := float64(-1)        // -1 = 未配置/不限额
+		dailyAmount := float64(-1)   // -1 = 不限
+		weeklyAmount := float64(-1)  // -1 = 不限
 		alloc, _ := s.budgetRepo.GetAllocation(d.scopeType, d.scopeID)
 		if alloc != nil && alloc.Enabled {
 			amount = alloc.AmountUSD
+			dailyAmount = alloc.DailyAmountUSD
+			weeklyAmount = alloc.WeeklyAmountUSD
 		} else if d.scopeType == model.BudgetScopeMember {
 			// 成员未单独设额则跳过（走 dept_daily 共享池）
 			continue
 		}
 		chain = append(chain, BudgetScope{
-			ScopeType: d.scopeType,
-			ScopeID:   d.scopeID,
-			AmountUSD: amount,
-			Label:     d.label,
+			ScopeType:       d.scopeType,
+			ScopeID:         d.scopeID,
+			AmountUSD:       amount,
+			DailyAmountUSD:  dailyAmount,
+			WeeklyAmountUSD: weeklyAmount,
+			Label:           d.label,
 		})
 	}
 	return chain

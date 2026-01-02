@@ -28,8 +28,20 @@ type BudgetAllocationRepo interface {
 	GetAllocation(scopeType, scopeID string) (*model.BudgetAllocation, error)
 	GetConsumption(scopeType, scopeID, period string) (*model.BudgetConsumption, error)
 	ListScoped(scopeTypes, scopeIDs []string) ([]model.BudgetAllocation, error)
+	ListMemberIDsByDeptID(deptID string) ([]string, error)
+	MemberInDeptIDs(memberID string, deptIDs []string) (bool, error)
 	// ListDeptStudioRows 列出「部门 - 所属工作室」组合（用于 InitDefaultBudgets）。
 	ListDeptStudioRows() ([]model.DeptStudioRow, error)
+	// ResolveScopeNames 批量将 scope_id 解析为可读名称（用于管理面展示）。
+	ResolveScopeNames(scopeType string, scopeIDs []string) (map[string]string, error)
+}
+
+func (s *BudgetService) ListMemberIDsByDeptID(deptID string) ([]string, error) {
+	return s.repo.ListMemberIDsByDeptID(deptID)
+}
+
+func (s *BudgetService) MemberInDeptIDs(memberID string, deptIDs []string) (bool, error) {
+	return s.repo.MemberInDeptIDs(memberID, deptIDs)
 }
 
 // BudgetAlertRecordRepo 告警去重表的访问接口。
@@ -60,30 +72,38 @@ func (s *BudgetService) SetRedis(rdb *redis.Client) {
 
 // BudgetItem 预算展示项（含实时 used_usd 占位，网关侧从 Redis 读）。
 type BudgetItem struct {
-	ScopeType string  `json:"scope_type"`
-	ScopeID   string  `json:"scope_id"`
-	Label     string  `json:"label,omitempty"`
-	AmountUSD float64 `json:"amount_usd"`
-	Period    string  `json:"period"`
-	Enabled   bool    `json:"enabled"`
+	ScopeType       string  `json:"scope_type"`
+	ScopeID         string  `json:"scope_id"`
+	Label           string  `json:"label,omitempty"`
+	AmountUSD       float64 `json:"amount_usd"`
+	DailyAmountUSD  float64 `json:"daily_amount_usd"`  // 日限额，-1=不限
+	WeeklyAmountUSD float64 `json:"weekly_amount_usd"` // 周限额，-1=不限
+	Period          string  `json:"period"`
+	Enabled         bool    `json:"enabled"`
 	// UsedUSD 在控制面接口中从 budget_consumption 取（对账副本，非实时）
-	UsedUSD   float64 `json:"used_usd"`
-	UsedRatio float64 `json:"used_ratio"`
+	UsedUSD       float64 `json:"used_usd"`
+	UsedRatio     float64 `json:"used_ratio"`
+	UpdatedBy     string  `json:"updated_by,omitempty"`      // 最后修改人 ID
+	UpdatedByName string  `json:"updated_by_name,omitempty"` // 最后修改人名称
+	UpdatedAt     string  `json:"updated_at,omitempty"`      // 最后修改时间
 }
 
 // SetBudget 设置/更新某层预算额度。
 // 改额后自动清理该 period 的告警去重记录，使扩容后可再次告警（§H 决策）。
-func (s *BudgetService) SetBudget(ctx context.Context, scopeType, scopeID string, amountUSD float64, createdBy uuid.UUID) error {
+func (s *BudgetService) SetBudget(ctx context.Context, scopeType, scopeID string, amountUSD, dailyAmountUSD, weeklyAmountUSD float64, createdBy uuid.UUID) error {
 	if amountUSD < 0 {
 		return fmt.Errorf("amount_usd must be >= 0")
 	}
 	a := &model.BudgetAllocation{
-		ScopeType: scopeType,
-		ScopeID:   scopeID,
-		AmountUSD: amountUSD,
-		Period:    "monthly",
-		Enabled:   true,
-		CreatedBy: createdBy,
+		ScopeType:       scopeType,
+		ScopeID:         scopeID,
+		AmountUSD:       amountUSD,
+		DailyAmountUSD:  dailyAmountUSD,
+		WeeklyAmountUSD: weeklyAmountUSD,
+		Period:          "monthly",
+		Enabled:         true,
+		CreatedBy:       createdBy,
+		UpdatedBy:       createdBy,
 	}
 	if err := s.repo.UpsertAllocation(a); err != nil {
 		return fmt.Errorf("upsert budget: %w", err)
@@ -116,13 +136,17 @@ func (s *BudgetService) GetBudget(ctx context.Context, scopeType, scopeID string
 		return nil, err
 	}
 	item := &BudgetItem{
-		ScopeType: scopeType,
-		ScopeID:   scopeID,
-		Period:    "monthly",
-		Enabled:   true,
+		ScopeType:       scopeType,
+		ScopeID:         scopeID,
+		Period:          "monthly",
+		Enabled:         true,
+		DailyAmountUSD:  -1,
+		WeeklyAmountUSD: -1,
 	}
 	if alloc != nil {
 		item.AmountUSD = alloc.AmountUSD
+		item.DailyAmountUSD = alloc.DailyAmountUSD
+		item.WeeklyAmountUSD = alloc.WeeklyAmountUSD
 		item.Enabled = alloc.Enabled
 	}
 	// 查对账副本 used_usd
@@ -143,15 +167,40 @@ func (s *BudgetService) ListScoped(ctx context.Context, scopeTypes []string, sco
 	if err != nil {
 		return nil, err
 	}
+
+	// 批量解析 scope_id → 可读名称
+	nameMap := s.resolveNames(allocs)
+
+	// 解析 updated_by → 名称
+	updaterIDs := make([]string, 0)
+	for _, a := range allocs {
+		if a.UpdatedBy != (uuid.UUID{}) {
+			updaterIDs = append(updaterIDs, a.UpdatedBy.String())
+		}
+	}
+	updaterNames, _ := s.repo.ResolveScopeNames("member", updaterIDs)
+
 	period := time.Now().Format("2006-01")
 	items := make([]BudgetItem, 0, len(allocs))
 	for _, a := range allocs {
 		item := BudgetItem{
-			ScopeType: a.ScopeType,
-			ScopeID:   a.ScopeID,
-			AmountUSD: a.AmountUSD,
-			Period:    a.Period,
-			Enabled:   a.Enabled,
+			ScopeType:       a.ScopeType,
+			ScopeID:         a.ScopeID,
+			Label:           nameMap[a.ScopeType+":"+a.ScopeID],
+			AmountUSD:       a.AmountUSD,
+			DailyAmountUSD:  a.DailyAmountUSD,
+			WeeklyAmountUSD: a.WeeklyAmountUSD,
+			Period:          a.Period,
+			Enabled:         a.Enabled,
+		}
+		if a.UpdatedBy != (uuid.UUID{}) {
+			item.UpdatedBy = a.UpdatedBy.String()
+			if name, ok := updaterNames[a.UpdatedBy.String()]; ok {
+				item.UpdatedByName = name
+			}
+		}
+		if !a.UpdatedAt.IsZero() {
+			item.UpdatedAt = a.UpdatedAt.Format("01/02 15:04")
 		}
 		cons, _ := s.repo.GetConsumption(a.ScopeType, a.ScopeID, period)
 		if cons != nil {
@@ -163,6 +212,34 @@ func (s *BudgetService) ListScoped(ctx context.Context, scopeTypes []string, sco
 		items = append(items, item)
 	}
 	return items, nil
+}
+
+// resolveNames 批量将 allocs 中的 scope_id 解析为可读名称。
+// 返回 map key 格式为 "scope_type:scope_id" → 名称。
+func (s *BudgetService) resolveNames(allocs []model.BudgetAllocation) map[string]string {
+	result := make(map[string]string)
+
+	// 按 scope_type 分组收集 IDs
+	grouped := make(map[string][]string)
+	for _, a := range allocs {
+		if a.ScopeType == model.BudgetScopeCompany {
+			result[a.ScopeType+":"+a.ScopeID] = "全公司"
+			continue
+		}
+		grouped[a.ScopeType] = append(grouped[a.ScopeType], a.ScopeID)
+	}
+
+	// 批量解析
+	for scopeType, ids := range grouped {
+		names, err := s.repo.ResolveScopeNames(scopeType, ids)
+		if err != nil {
+			continue
+		}
+		for id, name := range names {
+			result[scopeType+":"+id] = name
+		}
+	}
+	return result
 }
 
 // InitDefaultBudgets 上线初始化：为所有「没有预算配置的部门+工作室」创建默认 budget_allocations。

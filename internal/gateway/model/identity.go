@@ -18,12 +18,14 @@ type UserIdentity struct {
 }
 
 // BudgetScope 预算链中单层 scope 的标识与额度（与控制面 service.BudgetScope 镜像）。
-// 网关只需 ScopeType/ScopeID/AmountUSD/Label 做并集校验，不含实时 used（Redis 实时读）。
+// 网关只需 ScopeType/ScopeID/AmountUSD/DailyAmountUSD/WeeklyAmountUSD/Label 做并集校验，不含实时 used（Redis 实时读）。
 type BudgetScope struct {
-	ScopeType string  `json:"scope_type"`
-	ScopeID   string  `json:"scope_id"`
-	AmountUSD float64 `json:"amount_usd"` // -1 = 未配置/不限额
-	Label     string  `json:"label"`
+	ScopeType       string  `json:"scope_type"`
+	ScopeID         string  `json:"scope_id"`
+	AmountUSD       float64 `json:"amount_usd"`        // 月限额，-1=不限
+	DailyAmountUSD  float64 `json:"daily_amount_usd"`  // 日限额，-1=不限
+	WeeklyAmountUSD float64 `json:"weekly_amount_usd"` // 周限额，-1=不限
+	Label           string  `json:"label"`
 }
 
 // MeModelItem represents a single model in /v1/me/models response

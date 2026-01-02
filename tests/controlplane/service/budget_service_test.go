@@ -74,8 +74,21 @@ func (f *fakeBudgetAllocationRepo) ListScoped(scopeTypes, scopeIDs []string) ([]
 	return nil, nil
 }
 
+func (f *fakeBudgetAllocationRepo) ListMemberIDsByDeptID(deptID string) ([]string, error) {
+	return nil, nil
+}
+
+func (f *fakeBudgetAllocationRepo) MemberInDeptIDs(memberID string, deptIDs []string) (bool, error) {
+	return false, nil
+}
+
 func (f *fakeBudgetAllocationRepo) ListDeptStudioRows() ([]model.DeptStudioRow, error) {
 	return f.listDeptStudioRow, f.listDeptStudioErr
+}
+
+func (f *fakeBudgetAllocationRepo) ResolveScopeNames(scopeType string, scopeIDs []string) (map[string]string, error) {
+	// 测试中不需要真实名称解析，返回空 map
+	return make(map[string]string), nil
 }
 
 // fakeBudgetAlertRecordRepo 记录告警去重表操作
@@ -168,7 +181,7 @@ func TestBudgetService_SetBudget_Success(t *testing.T) {
 	creatorID := uuid.New()
 
 	// Act
-	err := svc.SetBudget(ctx, "dept_daily", "dept-001", 500.0, creatorID)
+	err := svc.SetBudget(ctx, "dept_daily", "dept-001", 500.0, -1, -1, creatorID)
 
 	// Assert: DB 写成功
 	assert.NoError(t, err)
@@ -209,7 +222,7 @@ func TestBudgetService_SetBudget_NegativeAmount(t *testing.T) {
 	svc.SetRedis(rdb)
 
 	// Act
-	err := svc.SetBudget(context.Background(), "dept_daily", "dept-001", -100.0, uuid.New())
+	err := svc.SetBudget(context.Background(), "dept_daily", "dept-001", -100.0, -1, -1, uuid.New())
 
 	// Assert
 	assert.Error(t, err)
@@ -233,7 +246,7 @@ func TestBudgetService_SetBudget_DBUpsertFails(t *testing.T) {
 	svc.SetPublisher(pub)
 	svc.SetRedis(rdb)
 
-	err := svc.SetBudget(context.Background(), "company", "GLOBAL", 1000.0, uuid.New())
+	err := svc.SetBudget(context.Background(), "company", "GLOBAL", 1000.0, -1, -1, uuid.New())
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "upsert budget")
@@ -258,7 +271,7 @@ func TestBudgetService_SetBudget_RedisFailureIsNonFatal(t *testing.T) {
 	// 模拟 Redis 写失败：关闭 server
 	rds.Close()
 
-	err := svc.SetBudget(context.Background(), "dept_daily", "dept-001", 500.0, uuid.New())
+	err := svc.SetBudget(context.Background(), "dept_daily", "dept-001", 500.0, -1, -1, uuid.New())
 
 	// 关键断言：Redis 失败不应传播错误
 	assert.NoError(t, err, "Redis 写失败应为非致命错误")
@@ -280,7 +293,7 @@ func TestBudgetService_SetBudget_NilPublisherDoesNotPanic(t *testing.T) {
 	svc.SetRedis(rdb)
 
 	ctx := context.Background()
-	err := svc.SetBudget(ctx, "dept_daily", "dept-001", 500.0, uuid.New())
+	err := svc.SetBudget(ctx, "dept_daily", "dept-001", 500.0, -1, -1, uuid.New())
 
 	assert.NoError(t, err)
 	assert.Len(t, repo.upsertCalls, 1)
@@ -298,7 +311,7 @@ func TestBudgetService_SetBudget_NilRedisSkipsCacheWrite(t *testing.T) {
 	svc.SetPublisher(pub)
 	// 故意不调 SetRedis，rdb 为 nil
 
-	err := svc.SetBudget(context.Background(), "dept_daily", "dept-001", 500.0, uuid.New())
+	err := svc.SetBudget(context.Background(), "dept_daily", "dept-001", 500.0, -1, -1, uuid.New())
 
 	assert.NoError(t, err)
 	require.Len(t, repo.upsertCalls, 1)
@@ -316,7 +329,7 @@ func TestBudgetService_SetBudget_ZeroAmount(t *testing.T) {
 	svc.SetPublisher(pub)
 	svc.SetRedis(rdb)
 
-	err := svc.SetBudget(context.Background(), "member", "user-001", 0.0, uuid.New())
+	err := svc.SetBudget(context.Background(), "member", "user-001", 0.0, -1, -1, uuid.New())
 
 	assert.NoError(t, err, "金额 = 0 应允许")
 	require.Len(t, repo.upsertCalls, 1)

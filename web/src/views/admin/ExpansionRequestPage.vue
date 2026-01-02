@@ -1,186 +1,183 @@
 <template>
-  <div class="expansion-page">
-    <div class="page-header">
-      <h2 class="page-title">扩容申请</h2>
-    </div>
+  <div class="expansion-center">
+    <header class="page-head">
+      <div>
+        <h1>扩容申请中心</h1>
+        <p>预算不足时发起申请；负责人在这里审批并回到组织预算页完成调额。</p>
+      </div>
+      <el-button type="primary" @click="openCreateDialog()">新建申请</el-button>
+    </header>
 
-    <el-tabs v-model="activeTab" class="expansion-tabs">
-      <el-tab-pane label="我的申请" name="mine">
-        <div class="tab-content">
-          <div class="tab-toolbar">
-            <el-button type="primary" @click="openCreateDialog">新建申请</el-button>
+    <section class="kpi-strip">
+      <div class="kpi">
+        <span>待我审批</span>
+        <strong>{{ pendingList.length }}</strong>
+      </div>
+      <div class="kpi">
+        <span>我发起的审批中</span>
+        <strong>{{ pendingMineCount }}</strong>
+      </div>
+      <div class="kpi">
+        <span>已批准</span>
+        <strong>{{ approvedMineCount }}</strong>
+      </div>
+      <div class="kpi">
+        <span>已驳回/取消</span>
+        <strong>{{ closedMineCount }}</strong>
+      </div>
+    </section>
+
+    <section class="center-grid">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>待我审批</h2>
+            <p>处理下级扩容诉求；通过后仍需到预算页手动调额。</p>
           </div>
-
-          <div v-loading="mineLoading" class="tab-body">
-            <el-table v-if="mineList.length" :data="mineList" border stripe>
-              <el-table-column label="申请对象" min-width="160">
-                <template #default="{ row }">
-                  <el-tag :color="scopeColor(row.scope_type)" class="scope-badge" effect="dark">
-                    {{ scopeLabel(row.scope_type) }}
-                  </el-tag>
-                  <span class="scope-id">{{ row.scope_id }}</span>
-                </template>
-              </el-table-column>
-
-              <el-table-column label="申请额度" width="160" align="center">
-                <template #default="{ row }">
-                  <span class="amount">${{ row.requested_amount.toFixed(2) }} USD</span>
-                </template>
-              </el-table-column>
-
-              <el-table-column label="理由" min-width="200" show-overflow-tooltip>
-                <template #default="{ row }">
-                  {{ row.reason || '-' }}
-                </template>
-              </el-table-column>
-
-              <el-table-column label="状态" width="120" align="center">
-                <template #default="{ row }">
-                  <span class="status-dot" :style="{ backgroundColor: STATUS_COLORS[row.status] }" />
-                  <el-tag :color="STATUS_COLORS[row.status]" class="status-tag" effect="dark">
-                    {{ STATUS_LABELS[row.status] }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-
-              <el-table-column label="审批级别" width="120" align="center">
-                <template #default="{ row }">
-                  {{ LEVEL_LABELS[row.current_level] || row.current_level }}
-                </template>
-              </el-table-column>
-
-              <el-table-column label="申请时间" width="170" align="center">
-                <template #default="{ row }">
-                  {{ formatDateTime(row.created_at) }}
-                </template>
-              </el-table-column>
-
-              <el-table-column label="操作" width="100" align="center">
-                <template #default="{ row }">
-                  <el-popconfirm
-                    v-if="row.status === 'pending'"
-                    title="确定取消该申请？"
-                    confirm-button-text="确定"
-                    cancel-button-text="取消"
-                    @confirm="handleCancel(row)"
-                  >
-                    <template #reference>
-                      <el-button text type="danger" size="small">取消</el-button>
-                    </template>
-                  </el-popconfirm>
-                  <span v-else class="text-muted">-</span>
-                </template>
-              </el-table-column>
-            </el-table>
-
-            <el-empty v-else-if="!mineLoading" description="暂无申请记录" />
-          </div>
+          <el-button :loading="pendingLoading" size="small" @click="loadPending">刷新</el-button>
         </div>
-      </el-tab-pane>
 
-      <el-tab-pane v-if="isAdmin" label="待审批" name="pending">
-        <div class="tab-content">
-          <div v-loading="pendingLoading" class="tab-body">
-            <div v-if="pendingList.length" class="pending-cards">
-              <div
-                v-for="item in pendingList"
-                :key="item.id"
-                class="pending-card"
-                :style="{ borderLeftColor: levelColor(item.current_level) }"
-              >
-                <div class="card-header">
-                  <div class="card-info">
-                    <span class="requester">{{ item.requester_id }}</span>
-                    <el-tag :color="scopeColor(item.scope_type)" class="scope-badge" effect="dark">
-                      {{ scopeLabel(item.scope_type) }}
-                    </el-tag>
-                    <span class="scope-id">{{ item.scope_id }}</span>
-                  </div>
-                  <div class="card-amount">
-                    ${{ item.requested_amount.toFixed(2) }} USD
-                  </div>
-                </div>
-
-                <div class="card-reason">{{ item.reason || '无理由' }}</div>
-
-                <div class="card-footer">
-                  <span class="card-time">{{ formatDateTime(item.created_at) }}</span>
-                  <div class="card-actions">
-                    <el-button type="success" size="small" @click="openActionDialog(item.id, 'approve')">批准</el-button>
-                    <el-button type="danger" size="small" @click="openActionDialog(item.id, 'reject')">拒绝</el-button>
-                    <el-button type="primary" size="small" @click="openActionDialog(item.id, 'escalate')">升级</el-button>
-                  </div>
-                </div>
+        <div v-loading="pendingLoading" class="pending-list">
+          <article v-for="item in pendingList" :key="item.id" class="approval-card">
+            <div class="approval-top">
+              <div class="scope-line">
+                <el-tag :color="scopeColor(item.scope_type)" effect="dark" size="small">{{ scopeLabel(item.scope_type) }}</el-tag>
+                <span class="scope-id">{{ item.scope_id }}</span>
+              </div>
+              <div class="amount-block">
+                <span v-if="item.current_amount !== undefined">{{ formatMoney(item.current_amount) }} → </span>
+                <strong>{{ formatMoney(item.requested_amount) }}</strong>
               </div>
             </div>
-
-            <el-empty v-else-if="!pendingLoading" description="暂无待审批申请" />
-          </div>
+            <p class="reason">{{ item.reason || '未填写申请理由' }}</p>
+            <div class="approval-meta">
+              <span>{{ LEVEL_LABELS[item.current_level] || item.current_level }}</span>
+              <span>{{ formatDateTime(item.created_at) }}</span>
+            </div>
+            <div class="approval-actions">
+              <el-button size="small" type="success" @click="openActionDialog(item, 'approve')">批准</el-button>
+              <el-button size="small" type="danger" plain @click="openActionDialog(item, 'reject')">驳回</el-button>
+              <el-button v-if="item.current_level === 'studio'" size="small" type="primary" plain @click="openActionDialog(item, 'escalate')">上报平台</el-button>
+            </div>
+          </article>
+          <el-empty v-if="!pendingLoading && pendingList.length === 0" description="暂无待审批申请" />
         </div>
-      </el-tab-pane>
-    </el-tabs>
+      </div>
 
-    <el-dialog v-model="createVisible" title="新建扩容申请" width="500px">
-      <el-form :model="createForm" label-width="100px">
-        <el-form-item label="申请类型">
-          <el-select v-model="createForm.scope_type" placeholder="请选择">
-            <el-option label="部门日额度" value="dept_daily" />
-            <el-option label="部门服务额度" value="dept_service" />
-            <el-option label="工作室额度" value="studio" />
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>我发起的申请</h2>
+            <p>跟踪申请状态；通过后可跳转到对应预算节点。</p>
+          </div>
+          <el-button :loading="mineLoading" size="small" @click="loadMine">刷新</el-button>
+        </div>
+
+        <el-table
+          v-loading="mineLoading"
+          :data="mineList"
+          stripe
+          size="small"
+          empty-text="暂无申请记录"
+        >
+          <el-table-column label="申请对象" min-width="180">
+            <template #default="{ row }">
+              <div class="scope-cell">
+                <el-tag :color="scopeColor(row.scope_type)" effect="dark" size="small">{{ scopeLabel(row.scope_type) }}</el-tag>
+                <span class="scope-id">{{ row.scope_id }}</span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="额度" width="140" align="right">
+            <template #default="{ row }">
+              <span class="amount-text">{{ formatMoney(row.requested_amount) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="105" align="center">
+            <template #default="{ row }">
+              <el-tag :color="STATUS_COLORS[row.status]" effect="dark" size="small">{{ STATUS_LABELS[row.status] }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="申请时间" width="140">
+            <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="130" fixed="right" align="center">
+            <template #default="{ row }">
+              <el-button v-if="row.status === 'approved'" link type="primary" @click="goBudget(row)">去调额</el-button>
+              <el-popconfirm
+                v-else-if="row.status === 'pending'"
+                title="确定取消该申请？"
+                confirm-button-text="确定"
+                cancel-button-text="取消"
+                @confirm="handleCancel(row)"
+              >
+                <template #reference>
+                  <el-button link type="danger">取消</el-button>
+                </template>
+              </el-popconfirm>
+              <span v-else class="muted">—</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </section>
+
+    <el-dialog v-model="createVisible" title="新建扩容申请" width="520px">
+      <el-form :model="createForm" label-width="96px">
+        <el-form-item label="申请对象">
+          <el-select v-model="createForm.scope_type" style="width: 160px; margin-right: 8px">
+            <el-option label="部门日常" value="dept_daily" />
+            <el-option label="部门服务" value="dept_service" />
+            <el-option label="工作室" value="studio" />
           </el-select>
-        </el-form-item>
-        <el-form-item label="对象 ID">
-          <el-input v-model="createForm.scope_id" placeholder="请输入 scope_id" />
+          <el-input v-model="createForm.scope_id" placeholder="scope_id" style="width: 240px" />
         </el-form-item>
         <el-form-item label="申请额度">
           <el-input-number v-model="createForm.requested_amount" :min="0" :precision="2" controls-position="right" style="width: 100%" />
         </el-form-item>
-        <el-form-item label="理由">
-          <el-input v-model="createForm.reason" type="textarea" :rows="3" placeholder="请输入申请理由" />
+        <el-form-item label="申请理由">
+          <el-input v-model="createForm.reason" type="textarea" :rows="3" placeholder="说明业务背景、预计消耗和需要扩容的原因" />
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="createVisible = false">取消</el-button>
-        <el-button type="primary" :loading="createLoading" @click="handleCreate">提交</el-button>
+        <el-button type="primary" :loading="createLoading" @click="handleCreate">提交申请</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="actionVisible" :title="actionTitle" width="400px">
+    <el-dialog v-model="actionVisible" :title="actionTitle" width="420px">
+      <div v-if="actionTarget" class="action-context">
+        <span>{{ scopeLabel(actionTarget.scope_type) }}</span>
+        <code>{{ actionTarget.scope_id }}</code>
+        <strong>{{ formatMoney(actionTarget.requested_amount) }}</strong>
+      </div>
       <el-input v-model="actionComment" type="textarea" :rows="3" placeholder="审批意见（可选）" />
       <template #footer>
         <el-button @click="actionVisible = false">取消</el-button>
-        <el-button type="primary" :loading="actionLoading" @click="handleAction">确定</el-button>
+        <el-button type="primary" :loading="actionLoading" @click="handleAction">确认</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { useAuthStore } from '@/stores/auth'
 import {
   createExpansionRequest,
+  decideExpansion,
   getMyExpansionRequests,
   getPendingExpansions,
-  decideExpansion
 } from '@/services/control-plane'
-import type {
-  ExpansionRequest,
-  CreateExpansionPayload,
-  ExpansionStatus,
-  ExpansionAction
-} from '@/types/expansion'
-import { STATUS_LABELS, STATUS_COLORS, LEVEL_LABELS } from '@/types/expansion'
+import type { CreateExpansionPayload, ExpansionAction, ExpansionRequest } from '@/types/expansion'
+import { LEVEL_LABELS, STATUS_COLORS, STATUS_LABELS } from '@/types/expansion'
 
-const auth = useAuthStore()
-const isAdmin = computed(() => ['studio_admin', 'admin'].includes(auth.effectiveRole || ''))
-
-const activeTab = ref('mine')
+const route = useRoute()
+const router = useRouter()
 
 const mineList = ref<ExpansionRequest[]>([])
 const mineLoading = ref(false)
-
 const pendingList = ref<ExpansionRequest[]>([])
 const pendingLoading = ref(false)
 
@@ -190,21 +187,25 @@ const createForm = ref<CreateExpansionPayload>({
   scope_type: 'dept_daily',
   scope_id: '',
   requested_amount: 100,
-  reason: ''
+  reason: '',
 })
 
 const actionVisible = ref(false)
 const actionLoading = ref(false)
-const actionRequestId = ref('')
 const actionType = ref<ExpansionAction>('approve')
+const actionTarget = ref<ExpansionRequest | null>(null)
 const actionComment = ref('')
+
+const pendingMineCount = computed(() => mineList.value.filter(i => i.status === 'pending').length)
+const approvedMineCount = computed(() => mineList.value.filter(i => i.status === 'approved').length)
+const closedMineCount = computed(() => mineList.value.filter(i => i.status === 'rejected' || i.status === 'cancelled').length)
 
 const actionTitle = computed(() => {
   const map: Record<ExpansionAction, string> = {
     approve: '批准申请',
-    reject: '拒绝申请',
-    escalate: '升级申请',
-    cancel: '取消申请'
+    reject: '驳回申请',
+    escalate: '上报平台',
+    cancel: '取消申请',
   }
   return map[actionType.value]
 })
@@ -213,33 +214,33 @@ async function loadMine() {
   mineLoading.value = true
   try {
     mineList.value = await getMyExpansionRequests()
-  } catch {
-    ElMessage.error('加载申请列表失败')
   } finally {
     mineLoading.value = false
   }
 }
 
 async function loadPending() {
-  if (!isAdmin.value) return
   pendingLoading.value = true
   try {
     pendingList.value = await getPendingExpansions()
-  } catch {
-    ElMessage.error('加载待审批列表失败')
   } finally {
     pendingLoading.value = false
   }
 }
 
-function openCreateDialog() {
-  createForm.value = { scope_type: 'dept_daily', scope_id: '', requested_amount: 100, reason: '' }
+function openCreateDialog(prefill?: Partial<CreateExpansionPayload>) {
+  createForm.value = {
+    scope_type: prefill?.scope_type || String(route.query.scope_type || 'dept_daily'),
+    scope_id: prefill?.scope_id || String(route.query.scope_id || ''),
+    requested_amount: prefill?.requested_amount || Number(route.query.requested_amount || 100),
+    reason: prefill?.reason || '',
+  }
   createVisible.value = true
 }
 
 async function handleCreate() {
   if (!createForm.value.scope_id) {
-    ElMessage.warning('请填写对象 ID')
+    ElMessage.warning('请填写申请对象 ID')
     return
   }
   createLoading.value = true
@@ -248,55 +249,53 @@ async function handleCreate() {
     mineList.value.unshift(created)
     ElMessage.success('申请已提交')
     createVisible.value = false
-  } catch {
-    ElMessage.error('提交失败')
   } finally {
     createLoading.value = false
   }
 }
 
-async function handleCancel(row: ExpansionRequest) {
-  try {
-    await decideExpansion(row.id, 'cancel')
-    ElMessage.success('已取消')
-    loadMine()
-  } catch {
-    ElMessage.error('取消失败')
-  }
-}
-
-function openActionDialog(requestId: string, action: ExpansionAction) {
-  actionRequestId.value = requestId
+function openActionDialog(item: ExpansionRequest, action: ExpansionAction) {
+  actionTarget.value = item
   actionType.value = action
   actionComment.value = ''
   actionVisible.value = true
 }
 
 async function handleAction() {
+  if (!actionTarget.value) return
   actionLoading.value = true
   try {
-    await decideExpansion(actionRequestId.value, actionType.value, actionComment.value || undefined)
-    const map: Record<ExpansionAction, string> = {
-      approve: '已批准',
-      reject: '已拒绝',
-      escalate: '已升级',
-      cancel: '已取消'
-    }
-    ElMessage.success(map[actionType.value])
+    await decideExpansion(actionTarget.value.id, actionType.value, actionComment.value || undefined)
+    ElMessage.success(actionTitle.value + '成功')
     actionVisible.value = false
-    loadPending()
-  } catch {
-    ElMessage.error('操作失败')
+    await Promise.all([loadPending(), loadMine()])
   } finally {
     actionLoading.value = false
   }
 }
 
+async function handleCancel(row: ExpansionRequest) {
+  await decideExpansion(row.id, 'cancel')
+  ElMessage.success('已取消')
+  await loadMine()
+}
+
+function goBudget(row: ExpansionRequest) {
+  router.push({
+    path: '/admin/org',
+    query: {
+      scope_type: row.scope_type,
+      scope_id: row.scope_id,
+      tab: 'budget',
+    },
+  })
+}
+
 function scopeLabel(type: string): string {
   const map: Record<string, string> = {
-    dept_daily: '部门日额度',
-    dept_service: '部门服务额度',
-    studio: '工作室额度'
+    dept_daily: '部门日常',
+    dept_service: '部门服务',
+    studio: '工作室',
   }
   return map[type] || type
 }
@@ -305,13 +304,13 @@ function scopeColor(type: string): string {
   const map: Record<string, string> = {
     dept_daily: '#3b82f6',
     dept_service: '#8b5cf6',
-    studio: '#f59e0b'
+    studio: '#f59e0b',
   }
   return map[type] || '#6b7280'
 }
 
-function levelColor(level: string): string {
-  return level === 'platform' ? '#ef4444' : '#f59e0b'
+function formatMoney(value?: number) {
+  return `$${(value || 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}`
 }
 
 function formatDateTime(value: string): string {
@@ -324,162 +323,97 @@ function formatDateTime(value: string): string {
 
 onMounted(() => {
   loadMine()
-  if (isAdmin.value) loadPending()
+  loadPending()
+  if (route.query.scope_type && route.query.scope_id) {
+    openCreateDialog()
+  }
 })
 </script>
 
 <style scoped>
-.expansion-page {
-  padding: 0;
-}
-
-.page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 20px;
-}
-
-.page-title {
-  color: var(--el-text-color-primary);
-  font-size: var(--font-title-size);
-  font-weight: var(--font-title-weight);
-  margin: 0;
-}
-
-.expansion-tabs {
-  background: transparent;
-}
-
-.tab-content {
-  padding: 16px 0;
-}
-
-.tab-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 16px;
-}
-
-.tab-body {
-  min-height: 300px;
-}
-
-.scope-badge {
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 4px;
-  margin-right: 8px;
-}
-
-.scope-id {
-  color: var(--el-text-color-primary);
-  font-family: monospace;
-  font-size: 13px;
-}
-
-.amount {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--el-color-primary);
-}
-
-.status-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  margin-right: 6px;
-  vertical-align: middle;
-}
-
-.status-tag {
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 12px;
-  vertical-align: middle;
-}
-
-.text-muted {
-  color: var(--el-text-color-secondary);
-}
-
-.pending-cards {
+.expansion-center {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
+  padding: 28px 32px;
 }
-
-.pending-card {
-  background: var(--el-bg-color);
-  border: 1px solid var(--el-border-color-lighter);
-  border-left: 4px solid #f59e0b;
+.page-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: flex-start;
+}
+.page-head h1 { margin: 0; font-size: 24px; color: var(--el-text-color-primary); }
+.page-head p { margin: 6px 0 0; color: var(--el-text-color-secondary); font-size: 13px; }
+.kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.kpi {
+  padding: 16px 18px;
+  border: 1px solid var(--el-border-color-light);
   border-radius: 12px;
-  padding: 16px 20px;
-  transition: box-shadow 0.2s;
+  background: var(--el-bg-color);
 }
-
-.pending-card:hover {
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+.kpi span { display: block; color: var(--el-text-color-secondary); font-size: 12px; margin-bottom: 8px; }
+.kpi strong { font-size: 24px; color: var(--el-text-color-primary); }
+.center-grid {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.9fr) minmax(0, 1.1fr);
+  gap: 16px;
+  align-items: start;
 }
-
-.card-header {
+.panel {
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 14px;
+  background: var(--el-bg-color);
+  overflow: hidden;
+}
+.panel-head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
 }
-
-.card-info {
+.panel-head h2 { margin: 0; font-size: 16px; color: var(--el-text-color-primary); }
+.panel-head p { margin: 4px 0 0; font-size: 12px; color: var(--el-text-color-secondary); }
+.pending-list { min-height: 260px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.approval-card {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--el-fill-color-blank);
+}
+.approval-top { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.scope-line, .scope-cell { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.scope-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--el-text-color-secondary); overflow: hidden; text-overflow: ellipsis; }
+.amount-block { font-size: 13px; color: var(--el-text-color-secondary); white-space: nowrap; }
+.amount-block strong, .amount-text { color: var(--el-color-primary); font-weight: 700; }
+.reason { margin: 12px 0; color: var(--el-text-color-regular); line-height: 1.6; font-size: 13px; }
+.approval-meta { display: flex; gap: 12px; color: var(--el-text-color-secondary); font-size: 12px; margin-bottom: 12px; }
+.approval-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.muted { color: var(--el-text-color-placeholder); }
+.action-context {
   display: flex;
   align-items: center;
-  gap: 10px;
-}
-
-.requester {
-  font-weight: 500;
-  color: var(--el-text-color-primary);
-}
-
-.card-amount {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--el-color-primary);
-}
-
-.card-reason {
-  color: var(--el-text-color-regular);
-  margin-bottom: 12px;
-  line-height: 1.5;
-}
-
-.card-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.card-time {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-}
-
-.card-actions {
-  display: flex;
   gap: 8px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--el-fill-color-light);
 }
-
-@media (max-width: 768px) {
-  .card-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
-  }
-
-  .card-footer {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
-  }
+.action-context code { color: var(--el-text-color-secondary); font-size: 12px; }
+.action-context strong { margin-left: auto; color: var(--el-color-primary); }
+@media (max-width: 1100px) {
+  .center-grid { grid-template-columns: 1fr; }
+  .kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+  .expansion-center { padding: 18px; }
+  .page-head { flex-direction: column; }
+  .kpi-strip { grid-template-columns: 1fr; }
 }
 </style>

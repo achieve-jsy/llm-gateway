@@ -467,6 +467,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		// 预算管理（管理面）
 		adminGroup.GET("/budgets", guard(rbac.PermBudgetViewScoped), budgetHandler.List)
 		adminGroup.PUT("/budgets", guard(rbac.PermBudgetSet), budgetHandler.Set)
+		adminGroup.PUT("/budgets/batch", guard(rbac.PermBudgetSet), budgetHandler.BatchSet)
+		adminGroup.GET("/budgets/context", guard(rbac.PermBudgetViewScoped), budgetHandler.Context)
 		// 扩容申请（管理面）
 		adminGroup.POST("/expansion-requests", guard(rbac.PermExpansionRequest), expansionHandler.Create)
 		adminGroup.GET("/expansion-requests", guard(rbac.PermExpansionRequest), expansionHandler.ListMine)

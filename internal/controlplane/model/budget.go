@@ -20,15 +20,18 @@ const (
 // BudgetAllocation 各层级预算额度配置（周期无关，每个周期共用）。
 // 允许超配——子级之和可超过父级，不做校验。
 type BudgetAllocation struct {
-	ID        uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	ScopeType string    `gorm:"type:varchar(16);not null;index:idx_budget_alloc_scope,unique" json:"scope_type"`
-	ScopeID   string    `gorm:"type:varchar(64);not null;index:idx_budget_alloc_scope,unique" json:"scope_id"`
-	AmountUSD float64   `gorm:"type:numeric(12,4);not null;default:0" json:"amount_usd"`
-	Period    string    `gorm:"type:varchar(8);not null;default:'monthly'" json:"period"` // monthly（本期固定）
-	Enabled   bool      `gorm:"not null;default:true" json:"enabled"`
-	CreatedBy uuid.UUID `gorm:"type:uuid" json:"created_by"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID              uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	ScopeType       string    `gorm:"type:varchar(16);not null;index:idx_budget_alloc_scope,unique" json:"scope_type"`
+	ScopeID         string    `gorm:"type:varchar(64);not null;index:idx_budget_alloc_scope,unique" json:"scope_id"`
+	AmountUSD       float64   `gorm:"type:numeric(12,4);not null;default:0" json:"amount_usd"`                // 月限额（USD）
+	DailyAmountUSD  float64   `gorm:"type:numeric(12,4);not null;default:-1" json:"daily_amount_usd"`         // 日限额（USD），-1=不限
+	WeeklyAmountUSD float64   `gorm:"type:numeric(12,4);not null;default:-1" json:"weekly_amount_usd"`        // 周限额（USD），-1=不限
+	Period          string    `gorm:"type:varchar(8);not null;default:'monthly'" json:"period"`                // monthly（本期固定）
+	Enabled         bool      `gorm:"not null;default:true" json:"enabled"`
+	CreatedBy       uuid.UUID `gorm:"type:uuid" json:"created_by"`
+	UpdatedBy       uuid.UUID `gorm:"type:uuid" json:"updated_by"`                                            // 最后修改人
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 func (BudgetAllocation) TableName() string { return "budget_allocations" }

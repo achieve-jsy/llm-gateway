@@ -1,29 +1,53 @@
 
-// v0.7 预算与额度相关类型
+// v0.7/v0.8 预算与额度相关类型
 
 export type BudgetScopeType = 'company' | 'studio' | 'dept_daily' | 'dept_service' | 'member'
+
+export type BudgetView = 'company' | 'studio' | 'department'
 
 export interface BudgetItem {
   scope_type: BudgetScopeType
   scope_id: string
   label?: string
   amount_usd: number
+  daily_amount_usd: number   // 日限额，-1=不限
+  weekly_amount_usd: number  // 周限额，-1=不限
   period: string
   enabled: boolean
   used_usd: number
   used_ratio: number
+  updated_by?: string         // 最后修改人 ID
+  updated_by_name?: string    // 最后修改人名称
+  updated_at?: string         // 最后修改时间
 }
 
 export interface BudgetSetPayload {
   scope_type: BudgetScopeType
   scope_id: string
   amount_usd: number
+  daily_amount_usd?: number   // 可选，默认 -1
+  weekly_amount_usd?: number  // 可选，默认 -1
+}
+
+export interface BudgetBatchPayload {
+  items: BudgetSetPayload[]
+}
+
+export interface BudgetContextItem {
+  scope_type: BudgetScopeType
+  scope_id: string
+  label: string
+  amount_usd: number
+  used_usd: number
+  used_ratio: number
 }
 
 export interface BudgetChainItem {
   scope_type: BudgetScopeType
   label: string
   amount_usd: number
+  used_usd?: number
+  used_ratio?: number
   period?: string
 }
 
@@ -31,6 +55,8 @@ export interface BudgetAllocForm {
   scope_type: BudgetScopeType
   scope_id: string
   amount_usd: number
+  daily_amount_usd: number
+  weekly_amount_usd: number
   label?: string
 }
 

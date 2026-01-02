@@ -1,7 +1,8 @@
-h1:RGuusZRo/QE053i25mQW3Vygc7iTPovwvbZBKfeznb4=
+h1:I1mIqfc1fG5PtpAjiwxvc3+i/rNAM+LcElcV5bjcTkY=
 20260609082623_baseline.sql h1:EypMLzQ+lwKOXInv3+ZdRYfRjDkE8V0LWKJ+7Ul6hMY=
 20260610120000_add_model_status.sql h1:dsiXmqu5v1ClJQJFnN8Ilphj0UtIN0I6bpvUW43i294=
 20260611000000_add_users_login_status.sql h1:IdW/XoVpwI/HIG0nsz+cLsWwQfoIhguaFU3LWMwelMY=
 20260611170000_allow_import_user_source.sql h1:J7EC2KLubMt8MsigeWcdukS8xvDgUrkLTGC3ug0Ch88=
 20260612170000_add_model_groups_timeout_seconds.sql h1:SwpLtawhSK1NFZXLw2SNX7AVa8NNL8w8x445n6EWCKI=
 20260615044045_v0.7_quota_permission.sql h1:KlpNItrtUlKbIUimKrTBYlSalhZcoaTmk565MH//ArY=
+20260616024514_add_budget_daily_weekly_amount.sql h1:3ROzYTwgF6SU78PzzJp6YrzaDH4+ay16/NpKmLG5skw=

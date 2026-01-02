@@ -91,7 +91,8 @@ const (
 
 const (
 	budgetRedisUsedKeyPrefix = "budget:used:"
-	budgetPeriodLayout       = "2006-01"
+	budgetPeriodMonthLayout  = "2006-01"
+	budgetPeriodDayLayout    = "2006-01-02"
 )
 
 // estimateTokensFromChars 粗略估计 prompt tokens（英文 ~4 chars/token 兜底）。
@@ -175,13 +176,24 @@ func Reserve(c *gin.Context, deps *BudgetDeps, model string, maxTokens, promptCh
 		}
 	}
 
-	period := time.Now().Format(budgetPeriodLayout)
-	keys := make([]string, 0, len(id.BudgetChain))
-	args := make([]interface{}, 0, 1+len(id.BudgetChain)*2)
+	period := time.Now().Format(budgetPeriodMonthLayout)
+	weekPeriod := isoWeekString(time.Now())
+	dayPeriod := time.Now().Format(budgetPeriodDayLayout)
+
+	// 每个 scope 产生 3 个 key（月/周/日）
+	keys := make([]string, 0, len(id.BudgetChain)*3)
+	// ARGV: [est_cost, monthly_amount_1, weekly_amount_1, daily_amount_1, label_1, ...]
+	args := make([]interface{}, 0, 1+len(id.BudgetChain)*4)
 	args = append(args, est)
 	for _, scope := range id.BudgetChain {
+		// 月 key
 		keys = append(keys, fmt.Sprintf("%s%s:%s:%s", budgetRedisUsedKeyPrefix, scope.ScopeType, scope.ScopeID, period))
-		args = append(args, scope.AmountUSD, scope.Label)
+		// 周 key
+		keys = append(keys, fmt.Sprintf("%s%s:%s:%s", budgetRedisUsedKeyPrefix, scope.ScopeType, scope.ScopeID, weekPeriod))
+		// 日 key
+		keys = append(keys, fmt.Sprintf("%s%s:%s:%s", budgetRedisUsedKeyPrefix, scope.ScopeType, scope.ScopeID, dayPeriod))
+		// 各维度额度 + label
+		args = append(args, scope.AmountUSD, scope.WeeklyAmountUSD, scope.DailyAmountUSD, scope.Label)
 	}
 
 	result, err := budgetReserveScript.Run(c.Request.Context(), deps.RDB, keys, args...).Slice()
@@ -244,4 +256,10 @@ func (d *BudgetDeps) Cancel(ctx context.Context, keys []string, estCost float64)
 		return
 	}
 	BudgetCancelReserve(ctx, d.RDB, keys, estCost)
+}
+
+// isoWeekString 返回 ISO 8601 周标识，格式 "YYYY-Www"，如 "2026-W24"。
+func isoWeekString(t time.Time) string {
+	year, week := t.ISOWeek()
+	return fmt.Sprintf("%d-W%02d", year, week)
 }

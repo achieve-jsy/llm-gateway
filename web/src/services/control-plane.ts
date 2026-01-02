@@ -789,15 +789,16 @@ export async function markAnnouncementRead(id: string): Promise<void> {
 
 // ===================== v0.7 预算管理 =====================
 
-import type { BudgetItem, BudgetScopeType, BudgetSetPayload, BudgetChainItem } from '@/types/budget'
+import type { BudgetItem, BudgetScopeType, BudgetSetPayload, BudgetChainItem, BudgetContextItem } from '@/types/budget'
 import type { EntitlementPayload, GroupEntitlement } from '@/types/entitlement'
 import type { RawServiceKeyItem, ServiceKeyItem, CreateServiceKeyResponse } from '@/types/service-key'
 import type { ExpansionRequest, CreateExpansionPayload } from '@/types/expansion'
 import { mapServiceKey } from '@/types/service-key'
 
-/** 获取预算列表（按 scope 类型和 id 过滤） */
-export async function getBudgetList(scopeType?: BudgetScopeType, scopeId?: string): Promise<BudgetItem[]> {
+/** 获取预算列表（按 scope 类型和 id 过滤，或按 view 参数） */
+export async function getBudgetList(scopeType?: BudgetScopeType, scopeId?: string, view?: string): Promise<BudgetItem[]> {
   const params: Record<string, string> = {}
+  if (view) params.view = view
   if (scopeType) params.scope_type = scopeType
   if (scopeId) params.scope_id = scopeId
   const res = await http.get<ApiResponse<{ items: BudgetItem[] }>>('/api/v1/budgets', { params })
@@ -807,6 +808,18 @@ export async function getBudgetList(scopeType?: BudgetScopeType, scopeId?: strin
 /** 设置预算额度 */
 export async function setBudget(payload: BudgetSetPayload): Promise<void> {
   await http.put('/api/v1/budgets', payload)
+}
+
+/** 批量设置预算额度 */
+export async function setBudgetBatch(items: BudgetSetPayload[]): Promise<{ results: Array<{ scope_type: string; scope_id: string; ok: boolean; error?: string }> }> {
+  const res = await http.put<ApiResponse<{ results: Array<{ scope_type: string; scope_id: string; ok: boolean; error?: string }> }>>('/api/v1/budgets/batch', { items })
+  return res.data
+}
+
+/** 获取预算链路上下文（面包屑用） */
+export async function getBudgetContext(): Promise<BudgetContextItem[]> {
+  const res = await http.get<ApiResponse<{ context: BudgetContextItem[] }>>('/api/v1/budgets/context')
+  return res.data.context
 }
 
 /** 获取我的预算链 */

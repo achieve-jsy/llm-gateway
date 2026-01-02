@@ -34,10 +34,13 @@ func (r *BudgetRepo) UpsertAllocation(a *model.BudgetAllocation) error {
 		ScopeType: a.ScopeType,
 		ScopeID:   a.ScopeID,
 	}).Assign(model.BudgetAllocation{
-		AmountUSD: a.AmountUSD,
-		Period:    a.Period,
-		Enabled:   a.Enabled,
-		CreatedBy: a.CreatedBy,
+		AmountUSD:       a.AmountUSD,
+		DailyAmountUSD:  a.DailyAmountUSD,
+		WeeklyAmountUSD: a.WeeklyAmountUSD,
+		Period:          a.Period,
+		Enabled:         a.Enabled,
+		CreatedBy:       a.CreatedBy,
+		UpdatedBy:       a.UpdatedBy,
 	}).FirstOrCreate(a).Error
 }
 
@@ -118,6 +121,47 @@ func (r *BudgetRepo) ListScoped(scopeTypes []string, scopeIDs []string) ([]model
 	return allocs, err
 }
 
+// ListMemberIDsByDeptID 返回指定部门下所有成员的 users.id。
+func (r *BudgetRepo) ListMemberIDsByDeptID(deptID string) ([]string, error) {
+	var rows []struct {
+		ID string `gorm:"column:id"`
+	}
+	err := r.db.Raw(`
+		SELECT u.id::text AS id
+		FROM users u
+		JOIN departments d ON d.id = u.dept_id
+		WHERE d.dept_id = ?
+	`, deptID).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if row.ID != "" {
+			ids = append(ids, row.ID)
+		}
+	}
+	return ids, nil
+}
+
+// MemberInDeptIDs 判断成员是否归属于指定部门集合。
+func (r *BudgetRepo) MemberInDeptIDs(memberID string, deptIDs []string) (bool, error) {
+	if memberID == "" || len(deptIDs) == 0 {
+		return false, nil
+	}
+	var count int64
+	err := r.db.Raw(`
+		SELECT COUNT(*)
+		FROM users u
+		JOIN departments d ON d.id = u.dept_id
+		WHERE u.id::text = ? AND d.dept_id IN ?
+	`, memberID, deptIDs).Scan(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 // DB 暴露底层 db 实例，供跨 repo 联合查询使用（如 InitDefaultBudgets）。
 func (r *BudgetRepo) DB() *gorm.DB {
 	return r.db
@@ -138,4 +182,59 @@ func (r *BudgetRepo) ListDeptStudioRows() ([]model.DeptStudioRow, error) {
 		WHERE d.dept_id IS NOT NULL
 	`).Scan(&rows).Error
 	return rows, err
+}
+
+// ResolveScopeNames 批量将 scope_id 解析为可读名称。
+// scope_type 决定查哪张表：
+//   - studio → studios.name
+//   - dept_daily / dept_service → departments.dept_name
+//   - member → users.name
+func (r *BudgetRepo) ResolveScopeNames(scopeType string, scopeIDs []string) (map[string]string, error) {
+	if len(scopeIDs) == 0 {
+		return nil, nil
+	}
+	result := make(map[string]string, len(scopeIDs))
+
+	switch scopeType {
+	case model.BudgetScopeStudio:
+		var rows []struct {
+			ID   string `gorm:"column:id"`
+			Name string `gorm:"column:name"`
+		}
+		err := r.db.Raw(`SELECT id::text AS id, name FROM studios WHERE id::text IN ?`, scopeIDs).Scan(&rows).Error
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			result[row.ID] = row.Name
+		}
+
+	case model.BudgetScopeDeptDaily, model.BudgetScopeDeptService:
+		var rows []struct {
+			DeptID   string `gorm:"column:dept_id"`
+			DeptName string `gorm:"column:dept_name"`
+		}
+		err := r.db.Raw(`SELECT dept_id::text AS dept_id, COALESCE(dept_name, dept_id::text) AS dept_name FROM departments WHERE dept_id::text IN ?`, scopeIDs).Scan(&rows).Error
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			result[row.DeptID] = row.DeptName
+		}
+
+	case model.BudgetScopeMember:
+		var rows []struct {
+			ID   string `gorm:"column:id"`
+			Name string `gorm:"column:name"`
+		}
+		err := r.db.Raw(`SELECT id::text AS id, COALESCE(name, id::text) AS name FROM users WHERE id::text IN ?`, scopeIDs).Scan(&rows).Error
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			result[row.ID] = row.Name
+		}
+	}
+
+	return result, nil
 }

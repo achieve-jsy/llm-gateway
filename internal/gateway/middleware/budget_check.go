@@ -14,39 +14,84 @@ import (
 //   - 问题：middleware 拿不到请求 body 里的 model / max_tokens，无法估算成本
 //   - 结果：BudgetCheckMiddleware 始终按 est_cost = 0 处理，预算拦截形同虚设
 //   - v0.7 修订：改为函数 Reserve，由每个 handler 在解析 body 后主动调用（见 budget_reserve.go）
+//   - v0.8：扩展为日/周/月三维度并行校验，每个 scope 产生 3 个 Redis key
 //
 // 本文件保留的：
 //   - Redis Lua 脚本（预扣 + 核销）
 //   - BudgetSettle / BudgetCancelReserve helpers（供 post-hook 调用）
 
-// budgetReserveScript 原子预扣 Lua：多层一次性校验 + 占用。
-// KEYS：各层 used 键；ARGV[1]：est_cost；ARGV[2..2n]：[amount_i, label_i]...
-// 返回：{1, ""} = 通过；{0, label} = 超额层
+// budgetReserveScript 原子预扣 Lua：多层多维度一次性校验 + 占用。
+// 每个 scope 有 3 个 key（月/周/日），逐一校验。
+// KEYS：[scope1_monthly, scope1_weekly, scope1_daily, scope2_monthly, scope2_weekly, scope2_daily, ...]
+// ARGV[1]：est_cost
+// ARGV[2..]: 每 scope 4 个值 [monthly_amount, weekly_amount, daily_amount, label] 循环
+// 返回：{1, ""} = 通过；{0, label} = 超额层+维度
 var budgetReserveScript = redis.NewScript(`
 local est = tonumber(ARGV[1])
-local n = #KEYS
--- 第一遍：纯校验，任一层超额立即返回
-for i = 1, n do
-  local used = tonumber(redis.call('GET', KEYS[i]) or '0')
-  local amount = tonumber(ARGV[i * 2])
-  local label = ARGV[i * 2 + 1]
-  if amount >= 0 and (used + est) > amount then
-    return {0, label}
+local n = #KEYS / 3
+-- 第一遍：纯校验，任一维度超额立即返回
+for i = 0, n - 1 do
+  local mk = KEYS[i * 3 + 1]
+  local wk = KEYS[i * 3 + 2]
+  local dk = KEYS[i * 3 + 3]
+  local base = i * 4 + 2
+  local m_amount = tonumber(ARGV[base])
+  local w_amount = tonumber(ARGV[base + 1])
+  local d_amount = tonumber(ARGV[base + 2])
+  local label = ARGV[base + 3]
+  -- 月度校验
+  if m_amount >= 0 then
+    local used = tonumber(redis.call('GET', mk) or '0')
+    if (used + est) > m_amount then
+      return {0, label .. ' [月限额]'}
+    end
+  end
+  -- 周度校验
+  if w_amount >= 0 then
+    local used = tonumber(redis.call('GET', wk) or '0')
+    if (used + est) > w_amount then
+      return {0, label .. ' [周限额]'}
+    end
+  end
+  -- 日度校验
+  if d_amount >= 0 then
+    local used = tonumber(redis.call('GET', dk) or '0')
+    if (used + est) > d_amount then
+      return {0, label .. ' [日限额]'}
+    end
   end
 end
--- 第二遍：全部通过才预占
-for i = 1, n do
-  redis.call('INCRBYFLOAT', KEYS[i], est)
+-- 第二遍：全部通过才预占（对所有 key 做 INCRBYFLOAT）
+for i = 0, n - 1 do
+  local mk = KEYS[i * 3 + 1]
+  local wk = KEYS[i * 3 + 2]
+  local dk = KEYS[i * 3 + 3]
+  local base = i * 4 + 2
+  local m_amount = tonumber(ARGV[base])
+  local w_amount = tonumber(ARGV[base + 1])
+  local d_amount = tonumber(ARGV[base + 2])
+  if m_amount >= 0 then
+    redis.call('INCRBYFLOAT', mk, est)
+  end
+  if w_amount >= 0 then
+    redis.call('INCRBYFLOAT', wk, est)
+  end
+  if d_amount >= 0 then
+    redis.call('INCRBYFLOAT', dk, est)
+  end
 end
 return {1, ''}
 `)
 
-// budgetSettleScript 核销 Lua：对各层 used 键回写差额（real_cost - est_cost）。
-// KEYS：各层 used 键；ARGV[1]：delta
+// budgetSettleScript 核销 Lua：对各层各维度 used 键回写差额（real_cost - est_cost）。
+// KEYS：所有 used 键（月+周+日 × N 个 scope）；ARGV[1]：delta
+// 只对有值的 key 做 INCRBYFLOAT（key 不存在说明该维度未配额，跳过）。
 var budgetSettleScript = redis.NewScript(`
 local delta = tonumber(ARGV[1])
 for i = 1, #KEYS do
-  redis.call('INCRBYFLOAT', KEYS[i], delta)
+  if redis.call('EXISTS', KEYS[i]) == 1 then
+    redis.call('INCRBYFLOAT', KEYS[i], delta)
+  end
 end
 return 1
 `)

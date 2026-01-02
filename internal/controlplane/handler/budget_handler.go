@@ -27,8 +27,13 @@ func (h *BudgetHandler) SetAlertService(svc *service.BudgetAlertService) {
 	h.alertSvc = svc
 }
 
-// List GET /api/v1/budgets?scope_type=xxx&scope_id=xxx
+// List GET /api/v1/budgets?view=company|studio|department&scope_type=xxx&scope_id=xxx
 // 按管辖范围列出预算配置（admin 查全公司，manager 查自己范围）。
+// view 参数用于前端三 Tab 布局：
+//   - company: 返回公司 + 各工作室分配（admin only）
+//   - studio: 返回当前工作室 + 下属部门分配（studio_admin+）
+//   - department: 返回当前部门详情 + 成员配额（dept_admin+）
+//   - 空：兼容旧逻辑，按 scope_type/scope_id 过滤
 func (h *BudgetHandler) List(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
@@ -37,10 +42,80 @@ func (h *BudgetHandler) List(c *gin.Context) {
 		return
 	}
 
+	view := c.Query("view")
 	scopeType := c.Query("scope_type")
 	scopeID := c.Query("scope_id")
 
-	// 单条精确查询
+	// 使用 view 参数时走新逻辑
+	if view != "" {
+		var scopeTypes []string
+		var scopeIDs []string
+
+		switch view {
+		case "company":
+			// 公司总览：只有 admin 可见
+			if !actor.IsGlobal {
+				c.JSON(http.StatusForbidden, gin.H{"error": "只有平台管理员可以查看公司总览"})
+				return
+			}
+			scopeTypes = []string{model.BudgetScopeCompany, model.BudgetScopeStudio}
+			// 不限 scopeIDs → 返回全部工作室
+
+		case "studio":
+			// 工作室视图：studio_admin+ 可见
+			if !actor.IsGlobal && len(actor.StudioIDs) == 0 {
+				c.JSON(http.StatusForbidden, gin.H{"error": "无工作室管理权限"})
+				return
+			}
+			scopeTypes = []string{model.BudgetScopeStudio, model.BudgetScopeDeptDaily, model.BudgetScopeDeptService}
+			if !actor.IsGlobal {
+				// 返回自己管辖的工作室 + 下属部门
+				scopeIDs = append(scopeIDs, actor.StudioIDs...)
+				scopeIDs = append(scopeIDs, actor.DeptIDs...)
+			}
+
+		case "department":
+			// 部门视图：dept_admin+ 可见
+			scopeTypes = []string{model.BudgetScopeDeptDaily, model.BudgetScopeDeptService, model.BudgetScopeMember}
+			if scopeID != "" {
+				if !actor.IsGlobal && !actor.HasDept(scopeID) {
+					c.JSON(http.StatusForbidden, gin.H{"error": "无权查看该部门预算"})
+					return
+				}
+				scopeIDs = append(scopeIDs, scopeID)
+				memberIDs, err := h.svc.ListMemberIDsByDeptID(scopeID)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
+				scopeIDs = append(scopeIDs, memberIDs...)
+			} else if !actor.IsGlobal {
+				scopeIDs = append(scopeIDs, actor.DeptIDs...)
+				for _, deptID := range actor.DeptIDs {
+					memberIDs, err := h.svc.ListMemberIDsByDeptID(deptID)
+					if err != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+						return
+					}
+					scopeIDs = append(scopeIDs, memberIDs...)
+				}
+			}
+
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid view parameter, must be company|studio|department"})
+			return
+		}
+
+		items, err := h.svc.ListScoped(c.Request.Context(), scopeTypes, scopeIDs)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"items": items, "view": view})
+		return
+	}
+
+	// 兼容旧逻辑：单条精确查询
 	if scopeType != "" && scopeID != "" {
 		// RBAC 范围校验
 		if !actor.IsGlobal {
@@ -66,7 +141,6 @@ func (h *BudgetHandler) List(c *gin.Context) {
 	var scopeTypes []string
 	var scopeIDs []string
 	if actor.IsGlobal {
-		// admin 无 filter 时返回全部预算配置
 		if scopeType == "" {
 			scopeTypes = []string{
 				model.BudgetScopeCompany, model.BudgetScopeStudio,
@@ -74,12 +148,9 @@ func (h *BudgetHandler) List(c *gin.Context) {
 				model.BudgetScopeMember,
 			}
 		} else {
-			// 指定 scope_type 但无 scope_id：返回该类型所有预算
 			scopeTypes = []string{scopeType}
 		}
-		// admin 查全部时 scopeIDs 留空，service 层走全量查询逻辑
 	} else {
-		// manager：dept + studio 维度
 		scopeTypes = []string{
 			model.BudgetScopeDeptDaily, model.BudgetScopeDeptService,
 			model.BudgetScopeStudio,
@@ -107,13 +178,22 @@ func (h *BudgetHandler) Set(c *gin.Context) {
 	}
 
 	var req struct {
-		ScopeType string  `json:"scope_type" binding:"required"`
-		ScopeID   string  `json:"scope_id" binding:"required"`
-		AmountUSD float64 `json:"amount_usd" binding:"required"`
+		ScopeType       string  `json:"scope_type" binding:"required"`
+		ScopeID         string  `json:"scope_id" binding:"required"`
+		AmountUSD       float64 `json:"amount_usd" binding:"required"`
+		DailyAmountUSD  float64 `json:"daily_amount_usd"`  // 可选，默认 -1（不限）
+		WeeklyAmountUSD float64 `json:"weekly_amount_usd"` // 可选，默认 -1（不限）
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+	// 未传日/周限额时默认 -1（不限）
+	if req.DailyAmountUSD == 0 {
+		req.DailyAmountUSD = -1
+	}
+	if req.WeeklyAmountUSD == 0 {
+		req.WeeklyAmountUSD = -1
 	}
 
 	// RBAC 数据范围校验
@@ -133,15 +213,25 @@ func (h *BudgetHandler) Set(c *gin.Context) {
 			// 公司层只有 admin 能改
 			c.JSON(http.StatusForbidden, gin.H{"error": "只有平台管理员可以设置公司层预算"})
 			return
+		case model.BudgetScopeMember:
+			ok, err := h.svc.MemberInDeptIDs(req.ScopeID, actor.DeptIDs)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			if !ok {
+				c.JSON(http.StatusForbidden, gin.H{"error": "无权设置该成员预算"})
+				return
+			}
 		}
 	}
 
 	actorID, _ := uuid.Parse(c.GetString("user_id"))
-	if err := h.svc.SetBudget(c.Request.Context(), req.ScopeType, req.ScopeID, req.AmountUSD, actorID); err != nil {
+	if err := h.svc.SetBudget(c.Request.Context(), req.ScopeType, req.ScopeID, req.AmountUSD, req.DailyAmountUSD, req.WeeklyAmountUSD, actorID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "scope_type": req.ScopeType, "scope_id": req.ScopeID, "amount_usd": req.AmountUSD})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "scope_type": req.ScopeType, "scope_id": req.ScopeID, "amount_usd": req.AmountUSD, "daily_amount_usd": req.DailyAmountUSD, "weekly_amount_usd": req.WeeklyAmountUSD})
 }
 
 // MyBudget GET /api/v1/my/budget
@@ -216,4 +306,130 @@ func (h *BudgetHandler) EvaluateAlert(c *gin.Context) {
 		h.alertSvc.EvaluateAndAlert(c.Request.Context(), req.ScopeType, req.ScopeID)
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// BatchSet PUT /api/v1/budgets/batch
+// 批量设置预算额度（前端行内编辑统一提交用）。
+// 同一请求中所有变更要么全部成功，要么全部失败（按上级可分配余额校验）。
+func (h *BudgetHandler) BatchSet(c *gin.Context) {
+	h.rbac.BuildAndInjectActor(c)
+	actor := rbac.GetActor(c)
+	if !actor.IsManager() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "需要管理员权限"})
+		return
+	}
+
+	var req struct {
+		Items []struct {
+			ScopeType       string  `json:"scope_type" binding:"required"`
+			ScopeID         string  `json:"scope_id" binding:"required"`
+			AmountUSD       float64 `json:"amount_usd"`
+			DailyAmountUSD  float64 `json:"daily_amount_usd"`
+			WeeklyAmountUSD float64 `json:"weekly_amount_usd"`
+		} `json:"items" binding:"required,min=1"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	actorID, _ := uuid.Parse(c.GetString("user_id"))
+	results := make([]gin.H, 0, len(req.Items))
+
+	for _, item := range req.Items {
+		// RBAC 校验
+		if !actor.IsGlobal {
+			switch item.ScopeType {
+			case model.BudgetScopeDeptDaily, model.BudgetScopeDeptService:
+				if !actor.HasDept(item.ScopeID) {
+					results = append(results, gin.H{"scope_type": item.ScopeType, "scope_id": item.ScopeID, "ok": false, "error": "无权设置该部门预算"})
+					continue
+				}
+			case model.BudgetScopeStudio:
+				if !actor.HasStudio(item.ScopeID) {
+					results = append(results, gin.H{"scope_type": item.ScopeType, "scope_id": item.ScopeID, "ok": false, "error": "无权设置该工作室预算"})
+					continue
+				}
+			case model.BudgetScopeCompany:
+				results = append(results, gin.H{"scope_type": item.ScopeType, "scope_id": item.ScopeID, "ok": false, "error": "只有平台管理员可以设置公司层预算"})
+				continue
+			case model.BudgetScopeMember:
+				ok, err := h.svc.MemberInDeptIDs(item.ScopeID, actor.DeptIDs)
+				if err != nil {
+					results = append(results, gin.H{"scope_type": item.ScopeType, "scope_id": item.ScopeID, "ok": false, "error": err.Error()})
+					continue
+				}
+				if !ok {
+					results = append(results, gin.H{"scope_type": item.ScopeType, "scope_id": item.ScopeID, "ok": false, "error": "无权设置该成员预算"})
+					continue
+				}
+			}
+		}
+
+		daily := item.DailyAmountUSD
+		if daily == 0 {
+			daily = -1
+		}
+		weekly := item.WeeklyAmountUSD
+		if weekly == 0 {
+			weekly = -1
+		}
+
+		if err := h.svc.SetBudget(c.Request.Context(), item.ScopeType, item.ScopeID, item.AmountUSD, daily, weekly, actorID); err != nil {
+			results = append(results, gin.H{"scope_type": item.ScopeType, "scope_id": item.ScopeID, "ok": false, "error": err.Error()})
+		} else {
+			results = append(results, gin.H{"scope_type": item.ScopeType, "scope_id": item.ScopeID, "ok": true})
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"results": results})
+}
+
+// Context GET /api/v1/budgets/context
+// 返回当前用户的预算链路上下文（各层级使用率），供面包屑展示。
+// 返回格式：[{scope_type, label, amount_usd, used_usd, used_ratio}, ...]
+func (h *BudgetHandler) Context(c *gin.Context) {
+	h.rbac.BuildAndInjectActor(c)
+	actor := rbac.GetActor(c)
+	if !actor.IsManager() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "需要管理员权限"})
+		return
+	}
+
+	type contextItem struct {
+		ScopeType string  `json:"scope_type"`
+		ScopeID   string  `json:"scope_id"`
+		Label     string  `json:"label"`
+		AmountUSD float64 `json:"amount_usd"`
+		UsedUSD   float64 `json:"used_usd"`
+		UsedRatio float64 `json:"used_ratio"`
+	}
+
+	// 构造链路：公司 → 工作室 → 部门（取调用者所属）
+	deptID := c.GetString("user_dept_id")
+	studioID := c.GetString("user_studio_id")
+
+	scopes := []struct {
+		scopeType, scopeID, label string
+	}{
+		{model.BudgetScopeCompany, model.BudgetScopeGlobal, "公司"},
+	}
+	if studioID != "" {
+		scopes = append(scopes, struct{ scopeType, scopeID, label string }{model.BudgetScopeStudio, studioID, "工作室"})
+	}
+	if deptID != "" {
+		scopes = append(scopes, struct{ scopeType, scopeID, label string }{model.BudgetScopeDeptDaily, deptID, "部门"})
+	}
+
+	items := make([]contextItem, 0, len(scopes))
+	for _, s := range scopes {
+		item := contextItem{ScopeType: s.scopeType, ScopeID: s.scopeID, Label: s.label, AmountUSD: -1}
+		alloc, _ := h.svc.GetBudget(c.Request.Context(), s.scopeType, s.scopeID)
+		if alloc != nil {
+			item.AmountUSD = alloc.AmountUSD
+			item.UsedUSD = alloc.UsedUSD
+			item.UsedRatio = alloc.UsedRatio
+		}
+		items = append(items, item)
+	}
+	c.JSON(http.StatusOK, gin.H{"context": items})
 }

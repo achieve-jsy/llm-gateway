@@ -83,7 +83,7 @@ func (r *UserOrgRepo) ListDeptIDsByStudioIDs(studioIDs []string) ([]string, erro
 		UUIDID string `gorm:"column:uuid_id"`
 	}
 	err := r.db.Raw(
-		`SELECT dept_id, id::text AS uuid_id FROM departments WHERE studio_id::text = ANY(?)`,
+		`SELECT dept_id, id::text AS uuid_id FROM departments WHERE studio_id::text IN ?`,
 		studioIDs,
 	).Scan(&rows).Error
 	if err != nil {

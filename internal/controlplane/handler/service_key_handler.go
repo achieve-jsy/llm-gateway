@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
@@ -62,33 +63,100 @@ func (h *ServiceKeyHandler) Create(c *gin.Context) {
 }
 
 // List GET /api/v1/service-keys?dept_id=xxx
-// 列出指定部门的 Service Key（不含明文）。
-// dept_id 可选：未提供时自动使用当前 JWT 用户的 user_dept_id
+// 列出 Service Key（不含明文）。
+// - admin/studio_admin：dept_id 可选，不传时列出所有可见范围的 Key
+// - dept_admin：dept_id 可选，不传时使用 JWT user_dept_id
 func (h *ServiceKeyHandler) List(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
 
 	deptID := c.Query("dept_id")
-	if deptID == "" {
-		// 未指定 dept_id 时，优先使用当前 JWT 用户的 user_dept_id
-		deptID = c.GetString("user_dept_id")
-	}
-	if deptID == "" && !actor.IsGlobal {
-		// 普通用户既没传 dept_id 也没在 JWT 里 → 400
-		c.JSON(http.StatusBadRequest, gin.H{"error": "dept_id is required"})
-		return
-	}
-	if !actor.IsGlobal && !actor.HasDept(deptID) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "无权查看该部门的 Service Key"})
-		return
+
+	// 非全局管理员：用 actor.DeptIDs 限制可见范围
+	// allowedDepts 为 nil 时表示不加 dept 过滤（全局 admin）
+	var allowedDepts []string
+	if !actor.IsGlobal {
+		allowedDepts = actor.DeptIDs
+		if len(allowedDepts) == 0 {
+			c.JSON(http.StatusOK, gin.H{"items": []struct{}{}, "total": 0, "page": 1, "page_size": 20})
+			return
+		}
+		// 明确指定 dept_id 时，校验是否在允许范围内
+		if deptID != "" {
+			found := false
+			for _, d := range allowedDepts {
+				if d == deptID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				c.JSON(http.StatusForbidden, gin.H{"error": "无权查看该部门的 Service Key"})
+				return
+			}
+		}
 	}
 
-	items, err := h.keySvc.ListServiceKeys(c.Request.Context(), deptID)
+	page := 1
+	pageSize := 20
+	if p := c.Query("page"); p != "" {
+		if v, err := strconv.Atoi(p); err == nil && v > 0 {
+			page = v
+		}
+	}
+	if ps := c.Query("page_size"); ps != "" {
+		if v, err := strconv.Atoi(ps); err == nil && v > 0 && v <= 100 {
+			pageSize = v
+		}
+	}
+
+	items, total, err := h.keySvc.ListServiceKeysPaged(c.Request.Context(), deptID, allowedDepts, page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items})
+	c.JSON(http.StatusOK, gin.H{"items": items, "total": total, "page": page, "page_size": pageSize})
+}
+
+// Toggle PATCH /api/v1/service-keys/:id/status
+// 启用或停用 Service Key（部门负责人或 admin）。
+func (h *ServiceKeyHandler) Toggle(c *gin.Context) {
+	h.rbac.BuildAndInjectActor(c)
+	actor := rbac.GetActor(c)
+
+	keyID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
+		return
+	}
+
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	k, findErr := h.keySvc.FindServiceKey(c.Request.Context(), keyID)
+	if findErr != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "service key not found"})
+		return
+	}
+	if !actor.IsGlobal && !actor.HasDept(k.DeptID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作该 Service Key"})
+		return
+	}
+
+	if err := h.keySvc.ToggleServiceKey(c.Request.Context(), keyID, req.Enabled); err != nil {
+		if err == service.ErrKeyNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "service key not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "enabled": req.Enabled})
 }
 
 // Delete DELETE /api/v1/service-keys/:id

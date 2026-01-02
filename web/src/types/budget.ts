@@ -8,6 +8,8 @@ export type BudgetView = 'company' | 'studio' | 'department'
 export interface BudgetItem {
   scope_type: BudgetScopeType
   scope_id: string
+  /** 仅 scope_type=member 时有值，表示该成员所属部门的 dept_id，多部门场景路由跳转使用 */
+  parent_scope_id?: string
   label?: string
   amount_usd: number
   daily_amount_usd: number   // 日限额，-1=不限

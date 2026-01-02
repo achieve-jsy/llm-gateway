@@ -169,7 +169,6 @@ func (s *ExpansionService) Decide(ctx context.Context, requestID string, approve
 	var newStatus, newLevel string
 	switch action {
 	case model.ExpansionActionApprove:
-		// approved ≠ 自动改额（FR-4.6）：仅标记同意，需上级手动走 PUT /api/v1/budgets 改额
 		newStatus = model.ExpansionStatusApproved
 		newLevel = req.CurrentLevel
 	case model.ExpansionActionReject:
@@ -194,6 +193,14 @@ func (s *ExpansionService) Decide(ctx context.Context, requestID string, approve
 		return fmt.Errorf("update expansion status: %w", err)
 	}
 
+	// 批准时自动按 period_type 更新对应预算字段
+	if action == model.ExpansionActionApprove && s.budgetSvc != nil {
+		if err := s.applyApprovedQuota(ctx, req, approverID); err != nil {
+			// 非致命：日志记录即可，申请状态已更新
+			slog.Warn("expansion: auto-apply quota failed", "request_id", requestID, "error", err)
+		}
+	}
+
 	// 写审批流水
 	_ = s.repo.CreateStep(&model.ExpansionApprovalStep{
 		RequestID:  uuid.MustParse(requestID),
@@ -203,6 +210,36 @@ func (s *ExpansionService) Decide(ctx context.Context, requestID string, approve
 		Comment:    comment,
 	})
 	return nil
+}
+
+// applyApprovedQuota 批准时自动将 RequestedAmount 写入 BudgetAllocation 对应维度字段。
+func (s *ExpansionService) applyApprovedQuota(ctx context.Context, req *model.ExpansionRequest, approverID uuid.UUID) error {
+	alloc, err := s.budgetSvc.repo.GetAllocation(req.ScopeType, req.ScopeID)
+	if err != nil {
+		// 该 scope 尚无预算记录，以请求额度初始化
+		alloc = &model.BudgetAllocation{
+			ScopeType:       req.ScopeType,
+			ScopeID:         req.ScopeID,
+			AmountUSD:       0,
+			DailyAmountUSD:  -1,
+			WeeklyAmountUSD: -1,
+		}
+	}
+
+	monthly := alloc.AmountUSD
+	daily := alloc.DailyAmountUSD
+	weekly := alloc.WeeklyAmountUSD
+
+	switch req.PeriodType {
+	case model.ExpansionPeriodDaily:
+		daily = req.RequestedAmount
+	case model.ExpansionPeriodWeekly:
+		weekly = req.RequestedAmount
+	default: // monthly
+		monthly = req.RequestedAmount
+	}
+
+	return s.budgetSvc.SetBudget(ctx, req.ScopeType, req.ScopeID, monthly, daily, weekly, approverID)
 }
 
 // DecideScoped 按审批人的管辖范围做决策。cancel 仅允许申请人本人取消。
@@ -234,15 +271,17 @@ func (s *ExpansionService) ListPending(ctx context.Context, level string) ([]mod
 }
 
 // ListPendingScoped 查询当前审批人管辖范围内的待审批申请。
-func (s *ExpansionService) ListPendingScoped(ctx context.Context, level string, isGlobal bool, deptIDs, studioIDs []string) ([]model.ExpansionRequest, error) {
+// requesterName 非空时按申请人姓名模糊过滤。
+func (s *ExpansionService) ListPendingScoped(ctx context.Context, level string, isGlobal bool, deptIDs, studioIDs []string, requesterName string) ([]model.ExpansionRequest, error) {
 	if isGlobal {
-		return s.repo.ListPendingForApprover(level)
+		// 全局管理员不受范围限制，但仍支持姓名过滤
+		return s.repo.ListPendingForApproverScoped(level, nil, nil, nil, requesterName)
 	}
 	memberIDs, err := s.memberIDsForDeptIDs(deptIDs)
 	if err != nil {
 		return nil, err
 	}
-	return s.repo.ListPendingForApproverScoped(level, deptIDs, studioIDs, memberIDs)
+	return s.repo.ListPendingForApproverScoped(level, deptIDs, studioIDs, memberIDs, requesterName)
 }
 
 // ListSteps 查询某扩容申请的审批流水。

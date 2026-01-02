@@ -62,19 +62,28 @@ func (r *ExpansionRepo) ListPendingForApprover(level string) ([]model.ExpansionR
 }
 
 // ListPendingForApproverScoped 查询审批人管辖范围内的待审批申请。
-func (r *ExpansionRepo) ListPendingForApproverScoped(level string, deptIDs, studioIDs, memberIDs []string) ([]model.ExpansionRequest, error) {
+// requesterName 非空时按申请人姓名模糊过滤（JOIN users 表）。
+func (r *ExpansionRepo) ListPendingForApproverScoped(level string, deptIDs, studioIDs, memberIDs []string, requesterName string) ([]model.ExpansionRequest, error) {
 	var reqs []model.ExpansionRequest
-	q := r.db.Where("status = ? AND current_level = ?", model.ExpansionStatusPending, level)
+	q := r.db.Table("expansion_requests er").
+		Select("er.*").
+		Where("er.status = ? AND er.current_level = ?", model.ExpansionStatusPending, level)
+
+	if requesterName != "" {
+		q = q.Joins("JOIN users u ON u.id = er.requester_id").
+			Where("u.name ILIKE ?", "%"+requesterName+"%")
+	}
+
 	switch level {
 	case model.ExpansionLevelDept:
-		q = q.Where("scope_type = ? AND scope_id IN ?", model.BudgetScopeMember, memberIDs)
+		q = q.Where("er.scope_type = ? AND er.scope_id IN ?", model.BudgetScopeMember, memberIDs)
 	case model.ExpansionLevelStudio:
 		q = q.Where(
-			r.db.Where("scope_type IN ? AND scope_id IN ?", []string{model.BudgetScopeDeptDaily, model.BudgetScopeDeptService}, deptIDs).
-				Or("scope_type = ? AND scope_id IN ?", model.BudgetScopeStudio, studioIDs),
+			r.db.Where("er.scope_type IN ? AND er.scope_id IN ?", []string{model.BudgetScopeDeptDaily, model.BudgetScopeDeptService}, deptIDs).
+				Or("er.scope_type = ? AND er.scope_id IN ?", model.BudgetScopeStudio, studioIDs),
 		)
 	}
-	err := q.Order("created_at ASC").Find(&reqs).Error
+	err := q.Order("er.created_at ASC").Find(&reqs).Error
 	return reqs, err
 }
 

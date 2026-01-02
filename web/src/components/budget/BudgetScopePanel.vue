@@ -56,8 +56,11 @@
 
     <template v-if="scopeType === 'dept'">
       <div class="member-quota-header">
-        <span class="member-quota-title">成员单独额度</span>
-        <el-button v-if="canEdit" size="small" type="primary" plain @click="openMemberDrawer">+ 添加</el-button>
+        <div>
+          <span class="member-quota-title">成员单独额度</span>
+          <span class="member-quota-count">{{ allocationRows.length }} 人</span>
+        </div>
+        <el-button v-if="canEdit" size="small" type="primary" plain @click="openMemberDrawer">+ 设置额度</el-button>
       </div>
       <el-table
         v-loading="loading"
@@ -65,31 +68,47 @@
         stripe
         size="small"
         class="budget-table"
-        empty-text="暂无成员单独额度，成员默认共享部门日常预算池"
+        empty-text="暂无成员"
+        :row-class-name="({ row }: any) => row.isDefaultPool ? 'row-pool-default' : ''"
       >
-      <el-table-column label="对象" min-width="180">
+      <el-table-column label="成员" min-width="180">
         <template #default="{ row }">
           <div class="scope-cell">
-            <span class="scope-dot" :style="{ background: SCOPE_TYPE_COLORS[row.scope_type] }" />
+            <span class="scope-dot" :style="{ background: row.isDefaultPool ? '#c0c4cc' : SCOPE_TYPE_COLORS[row.scope_type] }" />
             <div>
               <div class="scope-name">{{ row.label || row.scope_id }}</div>
-              <div class="scope-id">{{ SCOPE_TYPE_LABELS[row.scope_type] }}</div>
+              <div class="scope-id">
+                <template v-if="row.isDefaultPool">
+                  <el-tag size="small" type="info" effect="plain" style="font-size:10px;padding:0 4px;height:16px;line-height:16px;">共享预算池</el-tag>
+                </template>
+                <template v-else>成员配额</template>
+              </div>
             </div>
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="月额度" width="130" align="right">
-        <template #default="{ row }">{{ displayAmount(row.amount_usd) }}</template>
+      <el-table-column label="月额度" width="120" align="right">
+        <template #default="{ row }">
+          <span v-if="row.isDefaultPool" class="muted">—</span>
+          <template v-else>{{ displayAmount(row.amount_usd) }}</template>
+        </template>
       </el-table-column>
-      <el-table-column label="周额度" width="120" align="right">
-        <template #default="{ row }">{{ displayAmount(row.weekly_amount_usd) }}</template>
+      <el-table-column label="周额度" width="110" align="right">
+        <template #default="{ row }">
+          <span v-if="row.isDefaultPool" class="muted">—</span>
+          <template v-else>{{ displayAmount(row.weekly_amount_usd) }}</template>
+        </template>
       </el-table-column>
-      <el-table-column label="日额度" width="120" align="right">
-        <template #default="{ row }">{{ displayAmount(row.daily_amount_usd) }}</template>
+      <el-table-column label="日额度" width="110" align="right">
+        <template #default="{ row }">
+          <span v-if="row.isDefaultPool" class="muted">—</span>
+          <template v-else>{{ displayAmount(row.daily_amount_usd) }}</template>
+        </template>
       </el-table-column>
       <el-table-column label="已用 / 使用率" min-width="180">
         <template #default="{ row }">
-          <div class="usage-cell">
+          <div v-if="row.isDefaultPool" class="muted" style="font-size:12px;">共享计费，无单独统计</div>
+          <div v-else class="usage-cell">
             <span>{{ formatUSD(row.used_usd || 0, { compact: true }) }}</span>
             <el-progress
               :percentage="Math.min(Math.round((row.used_ratio || 0) * 100), 100)"
@@ -99,15 +118,25 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="状态" width="110" align="center">
+      <el-table-column label="状态" width="80" align="center">
         <template #default="{ row }">
-          <el-tag :type="statusType(row.used_ratio || 0)" size="small">{{ statusText(row.used_ratio || 0) }}</el-tag>
+          <el-tag v-if="!row.isDefaultPool" :type="statusType(row.used_ratio || 0)" size="small">{{ statusText(row.used_ratio || 0) }}</el-tag>
+          <span v-else class="muted">—</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="100" fixed="right" align="center">
+      <el-table-column label="操作" width="140" fixed="right" align="center">
         <template #default="{ row }">
-          <el-button v-if="canEdit" link type="primary" size="small" @click="openDrawer(row)">调额</el-button>
-          <el-button v-else link type="primary" size="small" @click="goExpansion(row)">申请</el-button>
+          <template v-if="canEdit">
+            <el-button v-if="row.isDefaultPool" link type="primary" size="small" @click="openDrawerForMember(row)">设置额度</el-button>
+            <template v-else>
+              <el-button link type="primary" size="small" @click="openDrawer(row)">调额</el-button>
+              <el-button link type="danger" size="small" @click="resetToPool(row)">还原</el-button>
+            </template>
+          </template>
+          <template v-else>
+            <el-button v-if="!row.isDefaultPool" link type="primary" size="small" @click="goExpansion(row)">申请</el-button>
+            <span v-else class="muted">—</span>
+          </template>
         </template>
       </el-table-column>
     </el-table>
@@ -151,10 +180,11 @@
                   <el-tag :type="statusType(row.used_ratio || 0)" size="small">{{ statusText(row.used_ratio || 0) }}</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="" width="70" align="center">
+              <el-table-column label="操作" width="130" align="center">
                 <template #default="{ row }">
                   <el-button v-if="canEdit" link type="primary" size="small" @click="openDrawer(row)">调额</el-button>
                   <el-button v-else link type="primary" size="small" @click="goExpansion(row)">申请</el-button>
+                  <el-button link type="info" size="small" @click="goToDept(row.scope_id)">成员预算</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -194,7 +224,7 @@
                   <el-tag :type="statusType(row.used_ratio || 0)" size="small">{{ statusText(row.used_ratio || 0) }}</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="" width="70" align="center">
+              <el-table-column label="操作" width="80" align="center">
                 <template #default="{ row }">
                   <el-button v-if="canEdit" link type="primary" size="small" @click="openDrawer(row)">调额</el-button>
                   <el-button v-else link type="primary" size="small" @click="goExpansion(row)">申请</el-button>
@@ -276,12 +306,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { getBudgetList, setBudgetBatch } from '@/services/control-plane'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { getBudgetList, setBudgetBatch, deleteMemberBudget } from '@/services/control-plane'
 import type { BudgetItem, BudgetSetPayload, BudgetView } from '@/types/budget'
 import { SCOPE_TYPE_COLORS, SCOPE_TYPE_LABELS } from '@/types/budget'
 import { formatUSD } from '@/utils/format'
 import { useOrgStore } from '@/stores/org'
+import type { DeptMember } from '@/stores/org'
 
 const props = defineProps<{
   scopeType: 'studio' | 'dept'
@@ -295,6 +326,9 @@ const router = useRouter()
 const loading = ref(false)
 const orgStore = useOrgStore()
 const items = ref<BudgetItem[]>([])
+// 部门全量成员列表（dept 模式使用）
+const deptMembers = ref<DeptMember[]>([])
+const deptMembersTotal = ref(0)
 const drawerVisible = ref(false)
 const editingItem = ref<BudgetItem | null>(null)
 const saving = ref(false)
@@ -319,7 +353,7 @@ async function searchMembers(keyword: string) {
   memberSearchLoading.value = true
   try {
     const results = await orgStore.searchUsers(keyword)
-    memberSearchResults.value = results.map(u => ({ id: u.user_id, name: u.user_name || u.user_id, email: u.email || '' }))
+    memberSearchResults.value = results.map(u => ({ id: u.id, name: u.name || u.id, email: u.email || '' }))
   } catch { memberSearchResults.value = [] }
   finally { memberSearchLoading.value = false }
 }
@@ -374,11 +408,41 @@ const deptPools = computed(() => {
   )
 })
 
-const allocationRows = computed(() => {
-  if (props.scopeType === 'dept') {
-    return displayItems.value.filter(i => i.scope_type === 'member')
+// 部门成员全量列表：以 deptMembers 为基础，已有配额的合并 budget 数据，未配置的显示"共享预算池"
+interface MemberRow extends BudgetItem {
+  isDefaultPool?: boolean  // true = 未单独配额，使用部门预算池
+}
+
+const allocationRows = computed<MemberRow[]>(() => {
+  if (props.scopeType !== 'dept') return displayItems.value as MemberRow[]
+
+  const budgetMap = new Map<string, BudgetItem>()
+  for (const item of items.value) {
+    if (item.scope_type === 'member') budgetMap.set(item.scope_id, item)
   }
-  return displayItems.value
+
+  if (deptMembers.value.length === 0) {
+    // 后备：没加载到成员列表时只显示已有配额的成员
+    return [...budgetMap.values()] as MemberRow[]
+  }
+
+  return deptMembers.value.map<MemberRow>(m => {
+    const existing = budgetMap.get(m.id)
+    if (existing) {
+      return { ...existing, isDefaultPool: false }
+    }
+    return {
+      scope_type: 'member',
+      scope_id: m.id,
+      label: m.name,
+      amount_usd: 0,
+      weekly_amount_usd: -1,
+      daily_amount_usd: -1,
+      used_usd: 0,
+      used_ratio: 0,
+      isDefaultPool: true,
+    } as MemberRow
+  })
 })
 
 // 工作室视图：按部门分组（同一 scope_id 的 dept_daily + dept_service 归为一组）
@@ -431,10 +495,28 @@ const tableDesc = computed(() => props.scopeType === 'studio'
 async function load() {
   loading.value = true
   try {
-    items.value = await getBudgetList(undefined, props.scopeType === 'dept' ? props.scopeId : undefined, view.value)
+    const [budgetData] = await Promise.all([
+      getBudgetList(undefined, props.scopeType === 'dept' ? props.scopeId : undefined, view.value),
+      props.scopeType === 'dept' ? loadAllDeptMembers() : Promise.resolve(),
+    ])
+    items.value = budgetData
   } finally {
     loading.value = false
   }
+}
+
+async function loadAllDeptMembers() {
+  const pageSize = 100
+  let page = 1
+  const all: DeptMember[] = []
+  while (true) {
+    const { members, total } = await orgStore.fetchDeptMembers(props.scopeId, page, pageSize)
+    all.push(...members)
+    if (all.length >= total || members.length === 0) break
+    page++
+  }
+  deptMembers.value = all
+  deptMembersTotal.value = all.length
 }
 
 function openDrawer(item: BudgetItem) {
@@ -444,6 +526,12 @@ function openDrawer(item: BudgetItem) {
     weekly: item.weekly_amount_usd,
     daily: item.daily_amount_usd,
   }
+  drawerVisible.value = true
+}
+
+function openDrawerForMember(row: MemberRow) {
+  editingItem.value = { ...row, amount_usd: 0, weekly_amount_usd: -1, daily_amount_usd: -1 }
+  editForm.value = { amount: 0, weekly: -1, daily: -1 }
   drawerVisible.value = true
 }
 
@@ -467,6 +555,25 @@ async function save() {
   }
 }
 
+async function resetToPool(row: MemberRow) {
+  try {
+    await ElMessageBox.confirm(
+      `确认移除「${row.label || row.scope_id}」的单独配额？移除后该成员将恢复共享部门预算池。`,
+      '还原到部门预算池',
+      { confirmButtonText: '确认移除', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  try {
+    await deleteMemberBudget(row.scope_type, row.scope_id)
+    ElMessage.success('已还原为共享部门预算池')
+    await load()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '操作失败')
+  }
+}
+
 function goExpansion(item: BudgetItem) {
   router.push({
     path: '/admin/expansion-requests',
@@ -475,6 +582,14 @@ function goExpansion(item: BudgetItem) {
       scope_id: item.scope_id,
       requested_amount: Math.max(Math.ceil((item.amount_usd || 0) * 1.2), (item.amount_usd || 0) + 100),
     },
+  })
+}
+
+/** 工作室视图：跳转到指定部门的预算详情（成员配额管理） */
+function goToDept(deptScopeId: string) {
+  router.push({
+    path: '/admin/org',
+    query: { scope_type: 'dept', scope_id: deptScopeId },
   })
 }
 
@@ -529,7 +644,10 @@ watch(() => [props.scopeType, props.scopeId, props.childScopeIds?.join(',')], lo
 .budget-toolbar p { margin: 4px 0 0; color: var(--el-text-color-secondary); font-size: 12px; }
 .budget-table { border: 1px solid var(--el-border-color-lighter); border-radius: 10px; overflow: hidden; }
 .member-quota-header { display: flex; align-items: center; justify-content: space-between; margin: 16px 0 8px; }
+.member-quota-header > div { display: flex; align-items: center; gap: 8px; }
 .member-quota-title { font-size: 14px; font-weight: 600; color: var(--el-text-color-primary); }
+.member-quota-count { font-size: 12px; color: var(--el-text-color-secondary); background: var(--el-fill-color); padding: 1px 8px; border-radius: 10px; }
+:deep(.row-pool-default td) { color: var(--el-text-color-secondary) !important; }
 .pool-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

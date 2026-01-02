@@ -18,6 +18,7 @@ export interface ExpansionRequest {
   status: ExpansionStatus
   current_level: ExpansionLevel
   current_usage_ratio?: number  // 审批列表用：申请人当前使用率
+  requester_name?: string       // 审批列表用：申请人姓名
   created_at: string
   updated_at: string
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	authrepo "github.com/example/llm-gateway/internal/auth/repository"
 	"github.com/example/llm-gateway/internal/controlplane/auth"
 	cpconfig "github.com/example/llm-gateway/internal/controlplane/config"
 	"github.com/example/llm-gateway/internal/controlplane/event"
@@ -148,6 +149,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	expansionRepo := repository.NewExpansionRepo(db)
 	expansionSvc := service.NewExpansionService(expansionRepo)
 	expansionSvc.SetBudgetService(budgetSvc)
+	expansionUserRepo := authrepo.NewUserRepository(db)
 
 	systemKeySvc := service.NewSystemKeyService(db)
 	// gateway.url 从 yaml 配置读取，环境变量 GATEWAY_URL 可覆盖
@@ -451,7 +453,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	// 注册内部告警触发端点（供 gateway 调用）
 	internalGroup.POST("/budget/evaluate-alert", budgetHandler.EvaluateAlert)
 	// v0.7: 扩容审批路由
-	expansionHandler := handler.NewExpansionHandler(expansionSvc, orgContainer.RBAC)
+	expansionHandler := handler.NewExpansionHandler(expansionSvc, orgContainer.RBAC, expansionUserRepo)
 	{
 		// 设置模型组开放模式（仅平台 admin）
 		adminGroup.PUT("/groups/:id/open-mode", guard(rbac.PermGroupOpenModeSet), entHandler.SetOpenMode)
@@ -463,11 +465,13 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		// Service Key CRUD（部门负责人+admin）
 		adminGroup.POST("/service-keys", guard(rbac.PermServiceKeyCreate), serviceKeyHandler.Create)
 		adminGroup.GET("/service-keys", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.List)
+		adminGroup.PATCH("/service-keys/:id/status", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.Toggle)
 		adminGroup.DELETE("/service-keys/:id", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.Delete)
 		// 预算管理（管理面）
 		adminGroup.GET("/budgets", guard(rbac.PermBudgetViewScoped), budgetHandler.List)
 		adminGroup.PUT("/budgets", guard(rbac.PermBudgetSet), budgetHandler.Set)
 		adminGroup.PUT("/budgets/batch", guard(rbac.PermBudgetSet), budgetHandler.BatchSet)
+		adminGroup.DELETE("/budgets", guard(rbac.PermBudgetSet), budgetHandler.Delete)
 		adminGroup.GET("/budgets/context", guard(rbac.PermBudgetViewScoped), budgetHandler.Context)
 		// 扩容申请：创建/我的申请/流水允许登录用户访问；审批接口继续走 RBAC。
 		adminGroup.POST("/expansion-requests", expansionHandler.Create)

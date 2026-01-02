@@ -122,7 +122,7 @@ const routes: RouteRecordRaw[] = [
     path: '/admin/expansion-requests',
     name: 'ExpansionRequests',
     component: () => import('@/views/admin/ExpansionRequestPage.vue'),
-    meta: { title: '扩容申请' }
+    meta: { title: '扩容申请', requiresManager: true }
   },
   {
     path: '/admin/settings',

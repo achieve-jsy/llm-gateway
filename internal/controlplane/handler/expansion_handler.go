@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 
+	authrepo "github.com/example/llm-gateway/internal/auth/repository"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
@@ -12,12 +13,13 @@ import (
 
 // ExpansionHandler 处理预算扩容申请的发起与审批。
 type ExpansionHandler struct {
-	svc  *service.ExpansionService
-	rbac *rbac.Checker
+	svc      *service.ExpansionService
+	rbac     *rbac.Checker
+	userRepo *authrepo.UserRepository
 }
 
-func NewExpansionHandler(svc *service.ExpansionService, rbacChecker *rbac.Checker) *ExpansionHandler {
-	return &ExpansionHandler{svc: svc, rbac: rbacChecker}
+func NewExpansionHandler(svc *service.ExpansionService, rbacChecker *rbac.Checker, userRepo *authrepo.UserRepository) *ExpansionHandler {
+	return &ExpansionHandler{svc: svc, rbac: rbacChecker, userRepo: userRepo}
 }
 
 // Create POST /api/v1/expansion-requests
@@ -143,22 +145,34 @@ func (h *ExpansionHandler) ListPending(c *gin.Context) {
 		level = model.ExpansionLevelStudio
 	}
 
-	items, err := h.svc.ListPendingScoped(c.Request.Context(), level, actor.IsGlobal, actor.DeptIDs, actor.StudioIDs)
+	requesterName := c.Query("name")
+	items, err := h.svc.ListPendingScoped(c.Request.Context(), level, actor.IsGlobal, actor.DeptIDs, actor.StudioIDs, requesterName)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
+	// 批量查申请人姓名
+	requesterIDs := make([]uuid.UUID, 0, len(items))
+	for _, item := range items {
+		requesterIDs = append(requesterIDs, item.RequesterID)
+	}
+	userMap, _ := h.userRepo.FindByIDs(requesterIDs)
+
 	// 补查每条申请对应 scope 的当前使用率
 	type PendingItem struct {
 		model.ExpansionRequest
 		CurrentUsageRatio float64 `json:"current_usage_ratio"`
+		RequesterName     string  `json:"requester_name"`
 	}
 	result := make([]PendingItem, 0, len(items))
 	for _, item := range items {
 		pi := PendingItem{ExpansionRequest: item}
 		budget, _ := h.svc.GetBudgetUsedRatio(c.Request.Context(), item.ScopeType, item.ScopeID)
 		pi.CurrentUsageRatio = budget
+		if u, ok := userMap[item.RequesterID]; ok {
+			pi.RequesterName = u.Name
+		}
 		result = append(result, pi)
 	}
 	c.JSON(http.StatusOK, gin.H{"items": result})

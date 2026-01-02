@@ -9,7 +9,17 @@
     </header>
 
     <div v-if="loading && !chain.length" v-loading="true" class="mb-loading" />
-    <el-empty v-else-if="!chain.length" description="暂无预算配置，请联系管理员" />
+    <div v-else-if="!chain.length" class="mb-no-budget">
+      <template v-if="authStore.isAdmin">
+        <el-icon class="mb-no-budget__icon"><Setting /></el-icon>
+        <p>平台管理员无个人预算配置</p>
+        <span>管理员可在预算管理中为组织配置预算，或在组织架构中为成员分配额度。</span>
+        <el-button type="primary" plain size="small" style="margin-top:12px" @click="router.push('/admin/budget')">前往预算管理</el-button>
+      </template>
+      <template v-else>
+        <el-empty description="暂无预算配置，请联系管理员" />
+      </template>
+    </div>
 
     <template v-else>
       <!-- KPI strip -->
@@ -151,7 +161,7 @@
               </p>
               <el-button
                 size="small" type="primary" plain style="margin-top: 12px"
-                @click="router.push(authStore.isAdmin ? '/admin/budget' : '/admin/org')"
+                @click="goManagerAdjust"
               >前往调整 →</el-button>
             </div>
           </div>
@@ -277,7 +287,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, Setting } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { createExpansionRequest, decideExpansion, getMyBudget, getMyExpansionRequests } from '@/services/control-plane'
 import { useAuthStore } from '@/stores/auth'
@@ -439,6 +449,30 @@ function progressColor(ratio: number) {
 }
 
 
+function goManagerAdjust() {
+  if (authStore.isAdmin) {
+    router.push('/admin/budget')
+    return
+  }
+  // dept_admin：找到自己管辖的部门，直接定位到预算 tab
+  if (authStore.effectiveRole === 'dept_admin') {
+    const deptRole = authStore.orgRoles.find(r => r.role === 'dept_admin')
+    if (deptRole?.scope_id) {
+      router.push(`/admin/org?scope_type=dept_daily&scope_id=${encodeURIComponent(deptRole.scope_id)}&tab=budget`)
+      return
+    }
+  }
+  // studio_admin：找到自己管辖的工作室，直接定位到预算 tab
+  if (authStore.effectiveRole === 'studio_admin') {
+    const studioRole = authStore.orgRoles.find(r => r.role === 'studio_admin')
+    if (studioRole?.scope_id) {
+      router.push(`/admin/org?scope_type=studio&scope_id=${encodeURIComponent(studioRole.scope_id)}&tab=budget`)
+      return
+    }
+  }
+  router.push('/admin/org')
+}
+
 function openExpansion() {
   if (authStore.isManager) {
     router.push('/admin/expansion-requests')
@@ -585,6 +619,19 @@ onUnmounted(() => { historyObserver?.disconnect() })
   padding: 3px 12px;
 }
 .mb-loading { height: 360px; }
+.mb-no-budget {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 80px 24px;
+  text-align: center;
+  color: var(--el-text-color-secondary);
+}
+.mb-no-budget__icon { font-size: 48px; color: var(--el-color-primary-light-5); margin-bottom: 8px; }
+.mb-no-budget p { margin: 0; font-size: 15px; font-weight: 600; color: var(--el-text-color-primary); }
+.mb-no-budget span { font-size: 13px; max-width: 320px; line-height: 1.7; }
 .mb-muted { font-size: 12px; color: var(--el-text-color-placeholder); }
 
 /* ─────────────── KPI strip ─────────────── */

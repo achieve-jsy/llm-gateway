@@ -39,6 +39,11 @@
           <div class="mb-card__center">
             <span v-if="item.amount_usd >= 0" class="mb-card__amount">${{ formatAmount(item.amount_usd) }}</span>
             <span v-else class="mb-card__amount mb-card__amount--unset">未设置</span>
+            <!-- 日/周限额标签 -->
+            <div v-if="item.amount_usd >= 0" class="mb-card__limits">
+              <span v-if="item.weekly_amount_usd != null && item.weekly_amount_usd >= 0" class="limit-tag">周 ${{ formatAmount(item.weekly_amount_usd) }}</span>
+              <span v-if="item.daily_amount_usd != null && item.daily_amount_usd >= 0" class="limit-tag">日 ${{ formatAmount(item.daily_amount_usd) }}</span>
+            </div>
           </div>
 
           <div v-if="item.amount_usd >= 0" class="mb-card__right">
@@ -50,6 +55,19 @@
               :color="getProgressColor(item.used_ratio ?? 0)"
               :format="() => `${Math.round((item.used_ratio ?? 0) * 100)}%`"
             />
+            <!-- 超支文案 + 恢复时间 -->
+            <div v-if="(item.used_ratio ?? 0) >= 1" class="mb-card__exhaust-hint danger">
+              {{ exhaustMessage(item) }}
+            </div>
+            <!-- ≥80% 显示扩容按钮 -->
+            <el-button
+              v-if="(item.used_ratio ?? 0) >= 0.8"
+              type="danger"
+              size="small"
+              link
+              class="mb-card__expand-btn"
+              @click="goExpansion(item)"
+            >申请扩容</el-button>
           </div>
           <div v-else class="mb-card__right">
             <div class="mb-card__unset-indicator">
@@ -128,6 +146,29 @@ function getCardStyle(item: BudgetChainItem) {
     background: `linear-gradient(135deg, ${c}12 0%, var(--el-bg-color) 60%)`,
     borderColor: `${c}40`,
   }
+}
+
+function goExpansion(item: BudgetChainItem) {
+  router.push({
+    path: '/admin/expansion-requests',
+    query: {
+      scope_type: item.scope_type,
+      scope_id: item.scope_id || '',
+      requested_amount: String(Math.ceil((item.amount_usd || 0) * 1.5)),
+    },
+  })
+}
+
+// FE-18 + FE-36: 超支文案区分维度 + 恢复时间
+function exhaustMessage(item: BudgetChainItem): string {
+  // 判断哪个维度超了（优先级：日 > 周 > 月）
+  if (item.daily_amount_usd != null && item.daily_amount_usd >= 0) {
+    return '今日限额已用尽，明天 00:00 恢复'
+  }
+  if (item.weekly_amount_usd != null && item.weekly_amount_usd >= 0) {
+    return '本周限额已用尽，下周一恢复'
+  }
+  return '月度预算已用尽，下月 1 号恢复或申请扩容'
 }
 
 onMounted(load)
@@ -285,6 +326,34 @@ onMounted(load)
 .mb-card__amount--unset {
   color: var(--el-text-color-placeholder);
   font-size: 16px;
+  font-weight: 500;
+}
+
+.mb-card__limits {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  margin-top: 4px;
+}
+.limit-tag {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  background: var(--el-fill-color-light);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.mb-card__expand-btn {
+  margin-top: 6px;
+  font-weight: 600;
+}
+.mb-card__exhaust-hint {
+  font-size: 11px;
+  margin-top: 4px;
+  text-align: center;
+  line-height: 1.3;
+}
+.mb-card__exhaust-hint.danger {
+  color: var(--el-color-danger);
   font-weight: 500;
 }
 

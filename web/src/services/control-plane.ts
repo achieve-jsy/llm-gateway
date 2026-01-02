@@ -900,3 +900,15 @@ export async function getPendingExpansions(): Promise<ExpansionRequest[]> {
 export async function decideExpansion(requestId: string, action: 'approve' | 'reject' | 'escalate' | 'cancel', comment?: string): Promise<void> {
   await http.post(`/api/v1/expansion-requests/${requestId}/decision`, { action, comment })
 }
+
+/** 批量审批扩容申请 */
+export async function batchDecideExpansion(decisions: Array<{ id: string; action: string; comment: string }>): Promise<{ results: Array<{ id: string; ok: boolean; error?: string }> }> {
+  const res = await http.post<ApiResponse<{ results: Array<{ id: string; ok: boolean; error?: string }> }>>('/api/v1/expansion-requests/batch-decision', { decisions })
+  return res.data
+}
+
+/** 获取扩容申请的审批流水 */
+export async function getExpansionSteps(requestId: string): Promise<Array<{ id: string; level: string; approver_id?: string; action: string; comment: string; created_at: string }>> {
+  const res = await http.get<ApiResponse<{ steps: Array<{ id: string; level: string; approver_id?: string; action: string; comment: string; created_at: string }> }>>(`/api/v1/expansion-requests/${requestId}/steps`)
+  return res.data.steps || []
+}

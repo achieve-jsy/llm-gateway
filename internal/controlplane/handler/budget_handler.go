@@ -248,12 +248,14 @@ func (h *BudgetHandler) MyBudget(c *gin.Context) {
 
 	period := time.Now().Format("2006-01")
 	type chainItem struct {
-		ScopeType string  `json:"scope_type"`
-		Label     string  `json:"label"`
-		AmountUSD float64 `json:"amount_usd"`
-		UsedUSD   float64 `json:"used_usd"`
-		UsedRatio float64 `json:"used_ratio"`
-		Period    string  `json:"period"`
+		ScopeType       string  `json:"scope_type"`
+		Label           string  `json:"label"`
+		AmountUSD       float64 `json:"amount_usd"`
+		DailyAmountUSD  float64 `json:"daily_amount_usd"`
+		WeeklyAmountUSD float64 `json:"weekly_amount_usd"`
+		UsedUSD         float64 `json:"used_usd"`
+		UsedRatio       float64 `json:"used_ratio"`
+		Period          string  `json:"period"`
 	}
 
 	scopes := []struct {
@@ -270,10 +272,12 @@ func (h *BudgetHandler) MyBudget(c *gin.Context) {
 		if s.scopeID == "" {
 			continue
 		}
-		item := chainItem{ScopeType: s.scopeType, Label: s.label, Period: period, AmountUSD: -1}
+		item := chainItem{ScopeType: s.scopeType, Label: s.label, Period: period, AmountUSD: -1, DailyAmountUSD: -1, WeeklyAmountUSD: -1}
 		alloc, _ := h.svc.GetBudget(c.Request.Context(), s.scopeType, s.scopeID)
 		if alloc != nil {
 			item.AmountUSD = alloc.AmountUSD
+			item.DailyAmountUSD = alloc.DailyAmountUSD
+			item.WeeklyAmountUSD = alloc.WeeklyAmountUSD
 			item.UsedUSD = alloc.UsedUSD
 			item.UsedRatio = alloc.UsedRatio
 		}

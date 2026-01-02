@@ -65,3 +65,10 @@ func (r *ExpansionRepo) ListPendingForApprover(level string) ([]model.ExpansionR
 func (r *ExpansionRepo) CreateStep(step *model.ExpansionApprovalStep) error {
 	return r.db.Create(step).Error
 }
+
+// ListSteps 查询某扩容申请的所有审批步骤（按时间正序）。
+func (r *ExpansionRepo) ListSteps(requestID string) ([]model.ExpansionApprovalStep, error) {
+	var steps []model.ExpansionApprovalStep
+	err := r.db.Where("request_id = ?", requestID).Order("created_at ASC").Find(&steps).Error
+	return steps, err
+}

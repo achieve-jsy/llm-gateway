@@ -30,7 +30,10 @@
         </el-menu-item>
         <el-menu-item index="/my/budget">
           <el-icon><Wallet /></el-icon>
-          <template #title>我的预算</template>
+          <template #title>
+            我的预算
+            <span v-if="budgetAlert" class="budget-alert-dot" />
+          </template>
         </el-menu-item>
         <el-menu-item index="/admin/group-health-monitor">
           <el-icon><Histogram /></el-icon>
@@ -212,6 +215,17 @@ const isMobile = ref(window.innerWidth < 768)
 const showMobileSidebar = ref(false)
 const activeMenu = ref(route.path)
 const showPopup = ref(false)
+const budgetAlert = ref(false)
+
+// 预算告警检查：任一层 ≥80% 显示红点
+async function checkBudgetAlert() {
+  if (!authStore.isLoggedIn) return
+  try {
+    const { getMyBudget } = await import('@/services/control-plane')
+    const chain = await getMyBudget()
+    budgetAlert.value = chain.some(item => item.amount_usd > 0 && (item.used_ratio ?? 0) >= 0.8)
+  } catch { budgetAlert.value = false }
+}
 
 watch(() => route.path, (newPath) => {
   activeMenu.value = newPath
@@ -259,6 +273,7 @@ watch(() => authStore.deptStatus, (s) => {
 onMounted(() => {
   settingsStore.loadPublicSettings()
   checkPopupAnnouncements()
+  checkBudgetAlert()
   const handleResize = () => { isMobile.value = window.innerWidth < 768; if (!isMobile.value) showMobileSidebar.value = false }
   window.addEventListener('resize', handleResize)
 })
@@ -447,5 +462,16 @@ function onPopupAllRead() {
   width: 100%;
 }
 
+.budget-alert-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--el-color-danger);
+  margin-left: 4px;
+  vertical-align: middle;
+  animation: badge-pulse 1.5s infinite;
+}
+@keyframes badge-pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 
 </style>

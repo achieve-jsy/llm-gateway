@@ -44,8 +44,11 @@ export interface BudgetContextItem {
 
 export interface BudgetChainItem {
   scope_type: BudgetScopeType
+  scope_id?: string
   label: string
   amount_usd: number
+  daily_amount_usd?: number
+  weekly_amount_usd?: number
   used_usd?: number
   used_ratio?: number
   period?: string

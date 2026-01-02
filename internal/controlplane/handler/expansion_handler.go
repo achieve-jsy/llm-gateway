@@ -101,8 +101,9 @@ func (h *ExpansionHandler) ListMine(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": items})
 }
 
-// ListPending GET /api/v1/expansion-requests?role=approver
+// ListPending GET /api/v1/expansion-requests/pending
 // 查询待审批的申请（按当前 actor 的角色过滤级别）。
+// 返回数据带 current_usage_ratio，方便审批人判断合理性。
 func (h *ExpansionHandler) ListPending(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
@@ -121,5 +122,71 @@ func (h *ExpansionHandler) ListPending(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items})
+
+	// 补查每条申请对应 scope 的当前使用率
+	type PendingItem struct {
+		model.ExpansionRequest
+		CurrentUsageRatio float64 `json:"current_usage_ratio"`
+	}
+	result := make([]PendingItem, 0, len(items))
+	for _, item := range items {
+		pi := PendingItem{ExpansionRequest: item}
+		if item.CurrentAmount > 0 {
+			budget, _ := h.svc.GetBudgetUsedRatio(c.Request.Context(), item.ScopeType, item.ScopeID)
+			pi.CurrentUsageRatio = budget
+		}
+		result = append(result, pi)
+	}
+	c.JSON(http.StatusOK, gin.H{"items": result})
+}
+
+// BatchDecide POST /api/v1/expansion-requests/batch-decision
+// 批量审批（通过/驳回），驳回时每条必须有 comment。
+func (h *ExpansionHandler) BatchDecide(c *gin.Context) {
+	h.rbac.BuildAndInjectActor(c)
+	actor := rbac.GetActor(c)
+	if !actor.IsManager() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "需要管理员权限"})
+		return
+	}
+
+	var req struct {
+		Decisions []struct {
+			ID      string `json:"id" binding:"required"`
+			Action  string `json:"action" binding:"required"`
+			Comment string `json:"comment"`
+		} `json:"decisions" binding:"required,min=1"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	approverID, _ := uuid.Parse(c.GetString("user_id"))
+	results := make([]gin.H, 0, len(req.Decisions))
+	for _, d := range req.Decisions {
+		// 驳回必须有理由
+		if d.Action == model.ExpansionActionReject && d.Comment == "" {
+			results = append(results, gin.H{"id": d.ID, "ok": false, "error": "驳回必须填写理由"})
+			continue
+		}
+		if err := h.svc.Decide(c.Request.Context(), d.ID, approverID, d.Action, d.Comment); err != nil {
+			results = append(results, gin.H{"id": d.ID, "ok": false, "error": err.Error()})
+		} else {
+			results = append(results, gin.H{"id": d.ID, "ok": true})
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"results": results})
+}
+
+// ListSteps GET /api/v1/expansion-requests/:id/steps
+// 查询某扩容申请的审批流水。
+func (h *ExpansionHandler) ListSteps(c *gin.Context) {
+	requestID := c.Param("id")
+	steps, err := h.svc.ListSteps(c.Request.Context(), requestID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"steps": steps})
 }

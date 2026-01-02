@@ -5,7 +5,7 @@
         <h1>扩容申请中心</h1>
         <p>预算不足时发起申请；负责人在这里审批并回到组织预算页完成调额。</p>
       </div>
-      <el-button type="primary" @click="openCreateDialog()">新建申请</el-button>
+      <el-button v-if="authStore.effectiveRole !== 'admin'" type="primary" @click="openCreateDialog()">新建申请</el-button>
     </header>
 
     <section class="kpi-strip">
@@ -38,26 +38,44 @@
         </div>
 
         <div v-loading="pendingLoading" class="pending-list">
-          <article v-for="item in pendingList" :key="item.id" class="approval-card">
-            <div class="approval-top">
-              <div class="scope-line">
-                <el-tag :color="scopeColor(item.scope_type)" effect="dark" size="small">{{ scopeLabel(item.scope_type) }}</el-tag>
-                <span class="scope-id">{{ item.scope_id }}</span>
-              </div>
-              <div class="amount-block">
-                <span v-if="item.current_amount !== undefined">{{ formatMoney(item.current_amount) }} → </span>
-                <strong>{{ formatMoney(item.requested_amount) }}</strong>
-              </div>
+          <!-- 批量操作栏 -->
+          <div v-if="selectedPending.length > 0" class="batch-bar">
+            <span>已选 {{ selectedPending.length }} 项</span>
+            <el-button size="small" type="success" @click="batchApprove">批量批准</el-button>
+            <el-button size="small" type="danger" plain @click="batchRejectVisible = true">批量驳回</el-button>
+            <el-button size="small" link @click="selectedPending = []">取消选择</el-button>
+          </div>
+          <article v-for="item in pendingList" :key="item.id" class="approval-card" :class="{ selected: selectedPending.includes(item.id) }">
+            <div class="approval-check">
+              <el-checkbox v-model="item._checked" @change="toggleSelect(item)" />
             </div>
-            <p class="reason">{{ item.reason || '未填写申请理由' }}</p>
-            <div class="approval-meta">
-              <span>{{ LEVEL_LABELS[item.current_level] || item.current_level }}</span>
-              <span>{{ formatDateTime(item.created_at) }}</span>
-            </div>
-            <div class="approval-actions">
-              <el-button size="small" type="success" @click="openActionDialog(item, 'approve')">批准</el-button>
-              <el-button size="small" type="danger" plain @click="openActionDialog(item, 'reject')">驳回</el-button>
-              <el-button v-if="item.current_level === 'studio'" size="small" type="primary" plain @click="openActionDialog(item, 'escalate')">上报平台</el-button>
+            <div class="approval-body">
+              <div class="approval-top">
+                <div class="scope-line">
+                  <el-tag :color="scopeColor(item.scope_type)" effect="dark" size="small">{{ scopeLabel(item.scope_type) }}</el-tag>
+                  <!-- FE-11: 使用率 -->
+                  <el-tag v-if="item.current_usage_ratio != null && item.current_usage_ratio >= 0.8" type="danger" size="small" effect="plain" style="margin-left: 6px;">
+                    使用率 {{ Math.round(item.current_usage_ratio * 100) }}%
+                  </el-tag>
+                  <el-tag v-else-if="item.current_usage_ratio != null" type="info" size="small" effect="plain" style="margin-left: 6px;">
+                    使用率 {{ Math.round(item.current_usage_ratio * 100) }}%
+                  </el-tag>
+                </div>
+                <div class="amount-block">
+                  <span v-if="item.current_amount !== undefined">{{ formatMoney(item.current_amount) }} → </span>
+                  <strong>{{ formatMoney(item.requested_amount) }}</strong>
+                </div>
+              </div>
+              <p class="reason">{{ item.reason || '未填写申请理由' }}</p>
+              <div class="approval-meta">
+                <span>{{ LEVEL_LABELS[item.current_level] || item.current_level }}</span>
+                <span>{{ formatDateTime(item.created_at) }}</span>
+              </div>
+              <div class="approval-actions">
+                <el-button size="small" type="success" @click="openActionDialog(item, 'approve')">批准</el-button>
+                <el-button size="small" type="danger" plain @click="openActionDialog(item, 'reject')">驳回</el-button>
+                <el-button v-if="item.current_level === 'studio'" size="small" type="primary" plain @click="openActionDialog(item, 'escalate')">上报平台</el-button>
+              </div>
             </div>
           </article>
           <el-empty v-if="!pendingLoading && pendingList.length === 0" description="暂无待审批申请" />
@@ -84,7 +102,6 @@
             <template #default="{ row }">
               <div class="scope-cell">
                 <el-tag :color="scopeColor(row.scope_type)" effect="dark" size="small">{{ scopeLabel(row.scope_type) }}</el-tag>
-                <span class="scope-id">{{ row.scope_id }}</span>
               </div>
             </template>
           </el-table-column>
@@ -116,6 +133,7 @@
                 </template>
               </el-popconfirm>
               <span v-else class="muted">—</span>
+              <el-button link type="info" size="small" @click="showSteps(row)">详情</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -124,16 +142,16 @@
 
     <el-dialog v-model="createVisible" title="新建扩容申请" width="520px">
       <el-form :model="createForm" label-width="96px">
-        <el-form-item label="申请对象">
-          <el-select v-model="createForm.scope_type" style="width: 160px; margin-right: 8px">
-            <el-option label="部门日常" value="dept_daily" />
-            <el-option label="部门服务" value="dept_service" />
-            <el-option label="工作室" value="studio" />
+        <el-form-item label="预算类型">
+          <el-select v-model="createForm.scope_type" style="width: 100%">
+            <el-option label="部门日常预算（个人 Key）" value="dept_daily" />
+            <el-option label="部门服务预算（Service Key）" value="dept_service" />
+            <el-option v-if="authStore.effectiveRole === 'studio_admin'" label="工作室预算" value="studio" />
           </el-select>
-          <el-input v-model="createForm.scope_id" placeholder="scope_id" style="width: 240px" />
         </el-form-item>
         <el-form-item label="申请额度">
           <el-input-number v-model="createForm.requested_amount" :min="0" :precision="2" controls-position="right" style="width: 100%" />
+          <div style="font-size: 12px; color: var(--el-text-color-secondary); margin-top: 4px;">填写期望的月度总额度（USD），审批通过后由负责人调整。</div>
         </el-form-item>
         <el-form-item label="申请理由">
           <el-input v-model="createForm.reason" type="textarea" :rows="3" placeholder="说明业务背景、预计消耗和需要扩容的原因" />
@@ -148,7 +166,6 @@
     <el-dialog v-model="actionVisible" :title="actionTitle" width="420px">
       <div v-if="actionTarget" class="action-context">
         <span>{{ scopeLabel(actionTarget.scope_type) }}</span>
-        <code>{{ actionTarget.scope_id }}</code>
         <strong>{{ formatMoney(actionTarget.requested_amount) }}</strong>
       </div>
       <el-input v-model="actionComment" type="textarea" :rows="3" placeholder="审批意见（可选）" />
@@ -157,6 +174,36 @@
         <el-button type="primary" :loading="actionLoading" @click="handleAction">确认</el-button>
       </template>
     </el-dialog>
+
+    <!-- 批量驳回弹窗 -->
+    <el-dialog v-model="batchRejectVisible" title="批量驳回" width="420px">
+      <p style="margin:0 0 12px; color: var(--el-text-color-secondary); font-size: 13px;">驳回 {{ selectedPending.length }} 项申请，请填写统一的驳回理由：</p>
+      <el-input v-model="batchRejectComment" type="textarea" :rows="3" placeholder="驳回理由（必填）" />
+      <template #footer>
+        <el-button @click="batchRejectVisible = false">取消</el-button>
+        <el-button type="danger" @click="batchReject">确认驳回</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 审批流水弹窗 -->
+    <el-dialog v-model="stepsVisible" title="审批流水" width="500px">
+      <div v-loading="stepsLoading">
+        <el-timeline v-if="stepsData.length > 0">
+          <el-timeline-item
+            v-for="step in stepsData"
+            :key="step.id"
+            :timestamp="step.created_at"
+            :type="stepColor(step.action)"
+            placement="top"
+          >
+            <strong>{{ stepActionLabel(step.action) }}</strong>
+            <span style="margin-left: 8px; color: var(--el-text-color-secondary); font-size: 12px;">{{ step.level === 'platform' ? '平台级' : '工作室级' }}</span>
+            <p v-if="step.comment" style="margin: 4px 0 0; color: var(--el-text-color-regular); font-size: 13px;">{{ step.comment }}</p>
+          </el-timeline-item>
+        </el-timeline>
+        <el-empty v-else description="暂无审批记录" />
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -164,17 +211,21 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { useAuthStore } from '@/stores/auth'
 import {
   createExpansionRequest,
   decideExpansion,
+  batchDecideExpansion,
   getMyExpansionRequests,
   getPendingExpansions,
+  getExpansionSteps,
 } from '@/services/control-plane'
 import type { CreateExpansionPayload, ExpansionAction, ExpansionRequest } from '@/types/expansion'
 import { LEVEL_LABELS, STATUS_COLORS, STATUS_LABELS } from '@/types/expansion'
 
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
 
 const mineList = ref<ExpansionRequest[]>([])
 const mineLoading = ref(false)
@@ -199,6 +250,73 @@ const actionComment = ref('')
 const pendingMineCount = computed(() => mineList.value.filter(i => i.status === 'pending').length)
 const approvedMineCount = computed(() => mineList.value.filter(i => i.status === 'approved').length)
 const closedMineCount = computed(() => mineList.value.filter(i => i.status === 'rejected' || i.status === 'cancelled').length)
+
+// 批量审批
+const selectedPending = ref<string[]>([])
+const batchRejectVisible = ref(false)
+const batchRejectComment = ref('')
+
+function toggleSelect(item: any) {
+  if (item._checked) {
+    if (!selectedPending.value.includes(item.id)) selectedPending.value.push(item.id)
+  } else {
+    selectedPending.value = selectedPending.value.filter(id => id !== item.id)
+  }
+}
+
+async function batchApprove() {
+  if (selectedPending.value.length === 0) return
+  try {
+    const decisions = selectedPending.value.map(id => ({ id, action: 'approve', comment: '' }))
+    await batchDecideExpansion(decisions)
+    ElMessage.success(`${decisions.length} 项已批准`)
+    selectedPending.value = []
+    await Promise.all([loadPending(), loadMine()])
+  } catch (e: any) {
+    ElMessage.error(e?.message || '批量批准失败')
+  }
+}
+
+async function batchReject() {
+  if (selectedPending.value.length === 0 || !batchRejectComment.value.trim()) {
+    ElMessage.warning('驳回必须填写理由')
+    return
+  }
+  try {
+    const decisions = selectedPending.value.map(id => ({ id, action: 'reject', comment: batchRejectComment.value }))
+    await batchDecideExpansion(decisions)
+    ElMessage.success(`${decisions.length} 项已驳回`)
+    selectedPending.value = []
+    batchRejectVisible.value = false
+    batchRejectComment.value = ''
+    await Promise.all([loadPending(), loadMine()])
+  } catch (e: any) {
+    ElMessage.error(e?.message || '批量驳回失败')
+  }
+}
+
+// 审批流水
+const stepsVisible = ref(false)
+const stepsLoading = ref(false)
+const stepsData = ref<Array<{ id: string; level: string; approver_id?: string; action: string; comment: string; created_at: string }>>([])
+
+async function showSteps(row: ExpansionRequest) {
+  stepsVisible.value = true
+  stepsLoading.value = true
+  try {
+    stepsData.value = await getExpansionSteps(row.id)
+  } catch { stepsData.value = [] }
+  finally { stepsLoading.value = false }
+}
+
+function stepActionLabel(action: string): string {
+  const map: Record<string, string> = { approve: '批准', reject: '驳回', escalate: '上报平台', cancel: '已取消' }
+  return map[action] || action
+}
+function stepColor(action: string): string {
+  const map: Record<string, string> = { approve: 'success', reject: 'danger', escalate: 'warning', cancel: 'info' }
+  return map[action] || 'info'
+}
 
 const actionTitle = computed(() => {
   const map: Record<ExpansionAction, string> = {
@@ -235,12 +353,20 @@ function openCreateDialog(prefill?: Partial<CreateExpansionPayload>) {
     requested_amount: prefill?.requested_amount || Number(route.query.requested_amount || 100),
     reason: prefill?.reason || '',
   }
+  // 自动填充 scope_id：从当前用户部门取
+  if (!createForm.value.scope_id) {
+    createForm.value.scope_id = authStore.user?.departmentId || ''
+  }
   createVisible.value = true
 }
 
 async function handleCreate() {
+  // 自动填充 scope_id
   if (!createForm.value.scope_id) {
-    ElMessage.warning('请填写申请对象 ID')
+    createForm.value.scope_id = authStore.user?.departmentId || ''
+  }
+  if (!createForm.value.scope_id) {
+    ElMessage.warning('无法确定所属部门，请联系管理员')
     return
   }
   createLoading.value = true

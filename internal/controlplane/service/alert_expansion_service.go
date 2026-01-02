@@ -95,11 +95,29 @@ func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, sc
 
 // ExpansionService 处理扩容申请的状态机与升级链。
 type ExpansionService struct {
-	repo *repository.ExpansionRepo
+	repo      *repository.ExpansionRepo
+	budgetSvc *BudgetService
 }
 
 func NewExpansionService(repo *repository.ExpansionRepo) *ExpansionService {
 	return &ExpansionService{repo: repo}
+}
+
+// SetBudgetService 注入预算服务（用于查询使用率）。
+func (s *ExpansionService) SetBudgetService(bs *BudgetService) {
+	s.budgetSvc = bs
+}
+
+// GetBudgetUsedRatio 查询某 scope 当前使用率（供 ListPending 附加信息用）。
+func (s *ExpansionService) GetBudgetUsedRatio(ctx context.Context, scopeType, scopeID string) (float64, error) {
+	if s.budgetSvc == nil {
+		return 0, nil
+	}
+	item, err := s.budgetSvc.GetBudget(ctx, scopeType, scopeID)
+	if err != nil || item == nil {
+		return 0, err
+	}
+	return item.UsedRatio, nil
 }
 
 // CreateRequest 部门负责人发起扩容申请。
@@ -178,4 +196,9 @@ func (s *ExpansionService) ListForRequester(ctx context.Context, requesterID str
 // ListPending 查询待某级别审批的申请。
 func (s *ExpansionService) ListPending(ctx context.Context, level string) ([]model.ExpansionRequest, error) {
 	return s.repo.ListPendingForApprover(level)
+}
+
+// ListSteps 查询某扩容申请的审批流水。
+func (s *ExpansionService) ListSteps(ctx context.Context, requestID string) ([]model.ExpansionApprovalStep, error) {
+	return s.repo.ListSteps(requestID)
 }

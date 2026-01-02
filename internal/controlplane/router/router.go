@@ -147,6 +147,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	// v0.7: 扩容审批 service
 	expansionRepo := repository.NewExpansionRepo(db)
 	expansionSvc := service.NewExpansionService(expansionRepo)
+	expansionSvc.SetBudgetService(budgetSvc)
 
 	systemKeySvc := service.NewSystemKeyService(db)
 	// gateway.url 从 yaml 配置读取，环境变量 GATEWAY_URL 可覆盖
@@ -474,6 +475,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/expansion-requests", guard(rbac.PermExpansionRequest), expansionHandler.ListMine)
 		adminGroup.GET("/expansion-requests/pending", guard(rbac.PermExpansionApprove), expansionHandler.ListPending)
 		adminGroup.POST("/expansion-requests/:id/decision", guard(rbac.PermExpansionApprove), expansionHandler.Decide)
+		adminGroup.GET("/expansion-requests/:id/steps", guard(rbac.PermExpansionRequest), expansionHandler.ListSteps)
+		adminGroup.POST("/expansion-requests/batch-decision", guard(rbac.PermExpansionApprove), expansionHandler.BatchDecide)
 	}
 
 	// 员工自助查询预算（JWTAuth 即可，不需要 admin）

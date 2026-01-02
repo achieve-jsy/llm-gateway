@@ -435,6 +435,12 @@ recon-test:
         ss -ltnp "( sport = :8080 or sport = :8081 or sport = :8082 or sport = :8083 or sport = :9080 )" 2>/dev/null || true
         echo; echo "===== 部署目录 /data/llm-gateway ====="
         ls -la /data/llm-gateway/ 2>/dev/null || true
+        echo; echo "===== nginx.conf ====="
+        cat /etc/nginx/nginx.conf 2>/dev/null
+        echo; echo "===== sites-available/default (蓝绿要改这个文件) ====="
+        cat -n /etc/nginx/sites-available/default 2>/dev/null
+        echo; echo "===== conf.d/*.conf ====="
+        for f in /etc/nginx/conf.d/*.conf; do echo "--- $f ---"; cat "$f"; done 2>/dev/null
         echo; echo "===== RECON DONE ====="
       '
   dependencies: []

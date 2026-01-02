@@ -61,6 +61,23 @@ func (r *ExpansionRepo) ListPendingForApprover(level string) ([]model.ExpansionR
 	return reqs, err
 }
 
+// ListPendingForApproverScoped 查询审批人管辖范围内的待审批申请。
+func (r *ExpansionRepo) ListPendingForApproverScoped(level string, deptIDs, studioIDs, memberIDs []string) ([]model.ExpansionRequest, error) {
+	var reqs []model.ExpansionRequest
+	q := r.db.Where("status = ? AND current_level = ?", model.ExpansionStatusPending, level)
+	switch level {
+	case model.ExpansionLevelDept:
+		q = q.Where("scope_type = ? AND scope_id IN ?", model.BudgetScopeMember, memberIDs)
+	case model.ExpansionLevelStudio:
+		q = q.Where(
+			r.db.Where("scope_type IN ? AND scope_id IN ?", []string{model.BudgetScopeDeptDaily, model.BudgetScopeDeptService}, deptIDs).
+				Or("scope_type = ? AND scope_id IN ?", model.BudgetScopeStudio, studioIDs),
+		)
+	}
+	err := q.Order("created_at ASC").Find(&reqs).Error
+	return reqs, err
+}
+
 // CreateStep 写审批流水。
 func (r *ExpansionRepo) CreateStep(step *model.ExpansionApprovalStep) error {
 	return r.db.Create(step).Error

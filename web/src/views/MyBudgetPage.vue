@@ -44,6 +44,9 @@
               <span v-if="item.weekly_amount_usd != null && item.weekly_amount_usd >= 0" class="limit-tag">周 ${{ formatAmount(item.weekly_amount_usd) }}</span>
               <span v-if="item.daily_amount_usd != null && item.daily_amount_usd >= 0" class="limit-tag">日 ${{ formatAmount(item.daily_amount_usd) }}</span>
             </div>
+            <div v-if="item.amount_usd >= 0" class="mb-card__reset">
+              {{ resetSummary(item) }}
+            </div>
           </div>
 
           <div v-if="item.amount_usd >= 0" class="mb-card__right">
@@ -59,9 +62,9 @@
             <div v-if="(item.used_ratio ?? 0) >= 1" class="mb-card__exhaust-hint danger">
               {{ exhaustMessage(item) }}
             </div>
-            <!-- ≥80% 显示扩容按钮 -->
+            <!-- ≥80% 且有申请权限才显示扩容按钮 -->
             <el-button
-              v-if="(item.used_ratio ?? 0) >= 0.8"
+              v-if="(item.used_ratio ?? 0) >= 0.8 && canRequestExpansion(item)"
               type="danger"
               size="small"
               link
@@ -78,23 +81,70 @@
       </div>
     </div>
 
+    <!-- 底部操作区：按角色显示不同入口 -->
     <div class="mb-footer">
-      <el-button type="primary" size="large" @click="router.push('/admin/expansion-requests')">
-        申请扩容
-      </el-button>
+      <template v-if="authStore.effectiveRole === 'admin'">
+        <el-button type="primary" size="large" @click="router.push('/admin/org')">
+          去调整额度
+        </el-button>
+      </template>
+      <template v-else-if="authStore.effectiveRole === 'studio_admin'">
+        <el-button type="primary" size="large" @click="router.push('/admin/org')">
+          去调整额度
+        </el-button>
+        <el-button size="large" @click="router.push('/admin/expansion-requests')">
+          申请扩容
+        </el-button>
+      </template>
+      <template v-else-if="authStore.effectiveRole === 'dept_admin'">
+        <el-button type="primary" size="large" @click="router.push('/admin/expansion-requests')">
+          申请扩容
+        </el-button>
+      </template>
+      <template v-else>
+        <!-- 普通员工：申请提升自己的成员额度 -->
+        <el-button type="primary" size="large" @click="openUserExpansionDialog">
+          申请扩容
+        </el-button>
+      </template>
       <el-tooltip placement="top" content="预算按自然月重置，每月1日自动清零">
         <el-icon class="mb-footer__info"><InfoFilled /></el-icon>
       </el-tooltip>
     </div>
+
+    <el-dialog v-model="expansionVisible" title="申请提升个人额度" width="520px">
+      <div class="expansion-summary">
+        <div>
+          <span>当前个人额度</span>
+          <strong>{{ personalBudget ? `$${formatAmount(personalBudget.amount_usd)}` : '未单独设置' }}</strong>
+        </div>
+        <div>
+          <span>当前已用</span>
+          <strong>{{ personalBudget ? `$${formatAmount(personalBudget.used_usd || 0)}` : '-' }}</strong>
+        </div>
+      </div>
+      <el-form label-position="top">
+        <el-form-item label="申请后的月额度（USD）">
+          <el-input-number v-model="expansionForm.requestedAmount" :min="1" :precision="2" controls-position="right" style="width:100%" />
+        </el-form-item>
+        <el-form-item label="申请理由">
+          <el-input v-model="expansionForm.reason" type="textarea" :rows="3" placeholder="说明业务场景、预计消耗和需要提升个人额度的原因" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="expansionVisible = false">取消</el-button>
+        <el-button type="primary" :loading="expansionSubmitting" @click="submitUserExpansion">提交申请</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Refresh, Wallet, WarningFilled, InfoFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { getMyBudget } from '@/services/control-plane'
+import { createExpansionRequest, getMyBudget } from '@/services/control-plane'
 import { useAuthStore } from '@/stores/auth'
 import type { BudgetChainItem, BudgetScopeType } from '@/types/budget'
 import { SCOPE_TYPE_LABELS, SCOPE_TYPE_COLORS } from '@/types/budget'
@@ -104,8 +154,12 @@ const authStore = useAuthStore()
 
 const chain = ref<BudgetChainItem[]>([])
 const loading = ref(false)
+const expansionVisible = ref(false)
+const expansionSubmitting = ref(false)
+const expansionForm = ref({ requestedAmount: 100, reason: '' })
 
 const currentPeriod = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long' })
+const personalBudget = computed(() => chain.value.find(item => item.scope_type === 'member'))
 
 async function load() {
   loading.value = true
@@ -159,7 +213,69 @@ function goExpansion(item: BudgetChainItem) {
   })
 }
 
-// FE-18 + FE-36: 超支文案区分维度 + 恢复时间
+function openUserExpansionDialog() {
+  const userId = authStore.user?.id || ''
+  if (!userId) {
+    ElMessage.warning('无法确定当前用户，请重新登录')
+    return
+  }
+  const base = personalBudget.value?.amount_usd || 50
+  expansionForm.value = {
+    requestedAmount: Math.max(Math.ceil(base * 1.5), base + 50),
+    reason: '',
+  }
+  expansionVisible.value = true
+}
+
+async function submitUserExpansion() {
+  const userId = authStore.user?.id || ''
+  if (!userId) {
+    ElMessage.warning('无法确定当前用户，请重新登录')
+    return
+  }
+  if (!expansionForm.value.reason.trim()) {
+    ElMessage.warning('请填写申请理由')
+    return
+  }
+  expansionSubmitting.value = true
+  try {
+    await createExpansionRequest({
+      scope_type: 'member',
+      scope_id: userId,
+      requested_amount: expansionForm.value.requestedAmount,
+      reason: expansionForm.value.reason,
+    })
+    ElMessage.success('申请已提交给部门负责人')
+    expansionVisible.value = false
+  } finally {
+    expansionSubmitting.value = false
+  }
+}
+
+// 判断某层预算是否可以发起扩容申请
+// - admin：直接改，不申请
+// - studio_admin：工作室层可申请（向 admin 申请）
+// - dept_admin：部门层可申请
+// - user：不可申请（联系部门负责人处理）
+function canRequestExpansion(item: BudgetChainItem): boolean {
+  const role = authStore.effectiveRole
+  if (role === 'admin') return false
+  if (role === 'studio_admin') return item.scope_type === 'studio'
+  if (role === 'dept_admin') return item.scope_type === 'dept_daily' || item.scope_type === 'dept_service'
+  return item.scope_type === 'member'
+}
+
+function resetSummary(item: BudgetChainItem): string {
+  const parts = ['月：下月 1 日 00:00']
+  if (item.weekly_amount_usd != null && item.weekly_amount_usd >= 0) {
+    parts.unshift('周：下周一 00:00')
+  }
+  if (item.daily_amount_usd != null && item.daily_amount_usd >= 0) {
+    parts.unshift('日：明天 00:00')
+  }
+  return `重置 ${parts.join(' · ')}`
+}
+
 function exhaustMessage(item: BudgetChainItem): string {
   // 判断哪个维度超了（优先级：日 > 周 > 月）
   if (item.daily_amount_usd != null && item.daily_amount_usd >= 0) {
@@ -342,6 +458,12 @@ onMounted(load)
   padding: 1px 6px;
   border-radius: 4px;
 }
+.mb-card__reset {
+  margin-top: 5px;
+  color: var(--el-text-color-secondary);
+  font-size: 11px;
+  text-align: center;
+}
 .mb-card__expand-btn {
   margin-top: 6px;
   font-weight: 600;
@@ -385,8 +507,39 @@ onMounted(load)
 }
 
 .mb-footer__info {
-  cursor: help;
+  font-size: 18px;
+  color: var(--el-text-color-placeholder);
+  cursor: pointer;
+}
+.mb-footer__tip {
+  font-size: 13px;
   color: var(--el-text-color-secondary);
+}
+
+.expansion-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.expansion-summary > div {
+  padding: 12px 14px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 10px;
+  background: var(--el-fill-color-light);
+}
+
+.expansion-summary span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.expansion-summary strong {
+  color: var(--el-text-color-primary);
+  font-size: 18px;
 }
 
 @keyframes mb-fade-in {

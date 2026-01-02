@@ -39,6 +39,10 @@
           <el-icon><Histogram /></el-icon>
           <template #title>模型组健康</template>
         </el-menu-item>
+        <el-menu-item index="/admin/expansion-requests">
+          <el-icon><TrendCharts /></el-icon>
+          <template #title>扩容申请</template>
+        </el-menu-item>
 
         <!-- 管理（管理角色可见）-->
         <template v-if="authStore.isManager">
@@ -63,10 +67,6 @@
           <el-menu-item index="/admin/service-keys">
             <el-icon><Key /></el-icon>
             <template #title>Service Key</template>
-          </el-menu-item>
-          <el-menu-item index="/admin/expansion-requests">
-            <el-icon><TrendCharts /></el-icon>
-            <template #title>扩容申请</template>
           </el-menu-item>
           <!-- 角色管理仅 admin 可见 -->
           <el-menu-item v-if="authStore.isAdmin" index="/admin/org/roles">

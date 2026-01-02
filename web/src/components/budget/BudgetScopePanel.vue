@@ -54,15 +54,19 @@
       </div>
     </div>
 
-    <el-table
-      v-if="scopeType === 'dept'"
-      v-loading="loading"
-      :data="allocationRows"
-      stripe
-      size="small"
-      class="budget-table"
-      empty-text="暂无成员单独额度"
-    >
+    <template v-if="scopeType === 'dept'">
+      <div class="member-quota-header">
+        <span class="member-quota-title">成员单独额度</span>
+        <el-button v-if="canEdit" size="small" type="primary" plain @click="openMemberDrawer">+ 添加</el-button>
+      </div>
+      <el-table
+        v-loading="loading"
+        :data="allocationRows"
+        stripe
+        size="small"
+        class="budget-table"
+        empty-text="暂无成员单独额度，成员默认共享部门日常预算池"
+      >
       <el-table-column label="对象" min-width="180">
         <template #default="{ row }">
           <div class="scope-cell">
@@ -107,6 +111,7 @@
         </template>
       </el-table-column>
     </el-table>
+    </template>
 
     <!-- 工作室视图：Tab 切换（日常预算 / 服务预算） -->
     <template v-else>
@@ -225,6 +230,46 @@
         <el-button type="primary" :loading="saving" @click="save">保存</el-button>
       </template>
     </el-drawer>
+
+    <!-- 添加成员配额弹窗 -->
+    <el-dialog v-model="memberDialogVisible" title="设置成员单独额度" width="460px" :close-on-click-modal="false">
+      <el-form label-width="80px">
+        <el-form-item label="选择成员">
+          <el-select
+            v-model="memberForm.userId"
+            filterable
+            remote
+            :remote-method="searchMembers"
+            :loading="memberSearchLoading"
+            placeholder="输入姓名搜索"
+            style="width: 100%"
+            value-key="id"
+          >
+            <el-option
+              v-for="u in memberSearchResults"
+              :key="u.id"
+              :label="`${u.name}（${u.email || u.id}）`"
+              :value="u.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="月限额">
+          <el-input-number v-model="memberForm.amount" :min="0" :precision="2" controls-position="right" style="width:100%" />
+        </el-form-item>
+        <el-form-item label="周限额">
+          <el-input-number v-model="memberForm.weekly" :min="-1" :precision="2" controls-position="right" style="width:100%" />
+          <div style="font-size:11px;color:var(--el-text-color-placeholder);margin-top:2px">-1 表示不限</div>
+        </el-form-item>
+        <el-form-item label="日限额">
+          <el-input-number v-model="memberForm.daily" :min="-1" :precision="2" controls-position="right" style="width:100%" />
+          <div style="font-size:11px;color:var(--el-text-color-placeholder);margin-top:2px">-1 表示不限</div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="memberDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="memberSaving" @click="saveMemberQuota">确认设置</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -236,6 +281,7 @@ import { getBudgetList, setBudgetBatch } from '@/services/control-plane'
 import type { BudgetItem, BudgetSetPayload, BudgetView } from '@/types/budget'
 import { SCOPE_TYPE_COLORS, SCOPE_TYPE_LABELS } from '@/types/budget'
 import { formatUSD } from '@/utils/format'
+import { useOrgStore } from '@/stores/org'
 
 const props = defineProps<{
   scopeType: 'studio' | 'dept'
@@ -247,12 +293,55 @@ const props = defineProps<{
 
 const router = useRouter()
 const loading = ref(false)
+const orgStore = useOrgStore()
 const items = ref<BudgetItem[]>([])
 const drawerVisible = ref(false)
 const editingItem = ref<BudgetItem | null>(null)
 const saving = ref(false)
 const editForm = ref({ amount: 0, weekly: -1, daily: -1 })
 const poolTab = ref('daily')
+
+// 成员配额
+const memberDialogVisible = ref(false)
+const memberSaving = ref(false)
+const memberSearchLoading = ref(false)
+const memberSearchResults = ref<Array<{ id: string; name: string; email?: string }>>([])
+const memberForm = ref({ userId: '', amount: 100, weekly: -1, daily: -1 })
+
+function openMemberDrawer() {
+  memberForm.value = { userId: '', amount: 100, weekly: -1, daily: -1 }
+  memberSearchResults.value = []
+  memberDialogVisible.value = true
+}
+
+async function searchMembers(keyword: string) {
+  if (!keyword) return
+  memberSearchLoading.value = true
+  try {
+    const results = await orgStore.searchUsers(keyword)
+    memberSearchResults.value = results.map(u => ({ id: u.user_id, name: u.user_name || u.user_id, email: u.email || '' }))
+  } catch { memberSearchResults.value = [] }
+  finally { memberSearchLoading.value = false }
+}
+
+async function saveMemberQuota() {
+  if (!memberForm.value.userId) { ElMessage.warning('请选择成员'); return }
+  memberSaving.value = true
+  try {
+    const payload: BudgetSetPayload = {
+      scope_type: 'member',
+      scope_id: memberForm.value.userId,
+      amount_usd: memberForm.value.amount,
+      weekly_amount_usd: memberForm.value.weekly,
+      daily_amount_usd: memberForm.value.daily,
+    }
+    await setBudgetBatch([payload])
+    ElMessage.success('成员配额已设置')
+    memberDialogVisible.value = false
+    await load()
+  } catch (e: any) { ElMessage.error(e?.message || '设置失败') }
+  finally { memberSaving.value = false }
+}
 
 const view = computed<BudgetView>(() => props.scopeType === 'studio' ? 'studio' : 'department')
 
@@ -439,6 +528,8 @@ watch(() => [props.scopeType, props.scopeId, props.childScopeIds?.join(',')], lo
 .budget-toolbar h3 { margin: 0; font-size: 15px; color: var(--el-text-color-primary); }
 .budget-toolbar p { margin: 4px 0 0; color: var(--el-text-color-secondary); font-size: 12px; }
 .budget-table { border: 1px solid var(--el-border-color-lighter); border-radius: 10px; overflow: hidden; }
+.member-quota-header { display: flex; align-items: center; justify-content: space-between; margin: 16px 0 8px; }
+.member-quota-title { font-size: 14px; font-weight: 600; color: var(--el-text-color-primary); }
 .pool-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

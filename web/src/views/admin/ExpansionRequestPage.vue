@@ -5,30 +5,30 @@
         <h1>扩容申请中心</h1>
         <p>预算不足时发起申请；负责人在这里审批并回到组织预算页完成调额。</p>
       </div>
-      <el-button v-if="authStore.effectiveRole !== 'admin'" type="primary" @click="openCreateDialog()">新建申请</el-button>
+      <el-button v-if="canCreateRequest" type="primary" @click="openCreateDialog()">新建申请</el-button>
     </header>
 
     <section class="kpi-strip">
-      <div class="kpi">
+      <div v-if="canApprove" class="kpi">
         <span>待我审批</span>
         <strong>{{ pendingList.length }}</strong>
       </div>
-      <div class="kpi">
+      <div v-if="!isAdmin" class="kpi">
         <span>我发起的审批中</span>
         <strong>{{ pendingMineCount }}</strong>
       </div>
-      <div class="kpi">
+      <div v-if="!isAdmin" class="kpi">
         <span>已批准</span>
         <strong>{{ approvedMineCount }}</strong>
       </div>
-      <div class="kpi">
+      <div v-if="!isAdmin" class="kpi">
         <span>已驳回/取消</span>
         <strong>{{ closedMineCount }}</strong>
       </div>
     </section>
 
-    <section class="center-grid">
-      <div class="panel">
+    <section class="center-grid" :class="{ 'single-panel': isAdmin || !canApprove }">
+      <div v-if="canApprove" class="panel">
         <div class="panel-head">
           <div>
             <h2>待我审批</h2>
@@ -82,7 +82,7 @@
         </div>
       </div>
 
-      <div class="panel">
+      <div v-if="!isAdmin" class="panel">
         <div class="panel-head">
           <div>
             <h2>我发起的申请</h2>
@@ -120,7 +120,7 @@
           </el-table-column>
           <el-table-column label="操作" width="130" fixed="right" align="center">
             <template #default="{ row }">
-              <el-button v-if="row.status === 'approved'" link type="primary" @click="goBudget(row)">去调额</el-button>
+              <el-button v-if="row.status === 'approved' && row.scope_type !== 'member'" link type="primary" @click="goBudget(row)">去调额</el-button>
               <el-popconfirm
                 v-else-if="row.status === 'pending'"
                 title="确定取消该申请？"
@@ -146,7 +146,7 @@
           <el-select v-model="createForm.scope_type" style="width: 100%">
             <el-option label="部门日常预算（个人 Key）" value="dept_daily" />
             <el-option label="部门服务预算（Service Key）" value="dept_service" />
-            <el-option v-if="authStore.effectiveRole === 'studio_admin'" label="工作室预算" value="studio" />
+            <el-option v-if="isStudioAdmin" label="工作室预算" value="studio" />
           </el-select>
         </el-form-item>
         <el-form-item label="申请额度">
@@ -208,7 +208,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
@@ -250,6 +250,11 @@ const actionComment = ref('')
 const pendingMineCount = computed(() => mineList.value.filter(i => i.status === 'pending').length)
 const approvedMineCount = computed(() => mineList.value.filter(i => i.status === 'approved').length)
 const closedMineCount = computed(() => mineList.value.filter(i => i.status === 'rejected' || i.status === 'cancelled').length)
+const isAdmin = computed(() => authStore.effectiveRole === 'admin')
+const isStudioAdmin = computed(() => authStore.effectiveRole === 'studio_admin')
+const isDeptAdmin = computed(() => authStore.effectiveRole === 'dept_admin')
+const canApprove = computed(() => isAdmin.value || isStudioAdmin.value || isDeptAdmin.value)
+const canCreateRequest = computed(() => isDeptAdmin.value || isStudioAdmin.value)
 
 // 批量审批
 const selectedPending = ref<string[]>([])
@@ -271,7 +276,7 @@ async function batchApprove() {
     await batchDecideExpansion(decisions)
     ElMessage.success(`${decisions.length} 项已批准`)
     selectedPending.value = []
-    await Promise.all([loadPending(), loadMine()])
+    await reloadLists()
   } catch (e: any) {
     ElMessage.error(e?.message || '批量批准失败')
   }
@@ -289,7 +294,7 @@ async function batchReject() {
     selectedPending.value = []
     batchRejectVisible.value = false
     batchRejectComment.value = ''
-    await Promise.all([loadPending(), loadMine()])
+    await reloadLists()
   } catch (e: any) {
     ElMessage.error(e?.message || '批量驳回失败')
   }
@@ -338,6 +343,7 @@ async function loadMine() {
 }
 
 async function loadPending() {
+  if (!canApprove.value) return
   pendingLoading.value = true
   try {
     pendingList.value = await getPendingExpansions()
@@ -349,13 +355,9 @@ async function loadPending() {
 function openCreateDialog(prefill?: Partial<CreateExpansionPayload>) {
   createForm.value = {
     scope_type: prefill?.scope_type || String(route.query.scope_type || 'dept_daily'),
-    scope_id: prefill?.scope_id || String(route.query.scope_id || ''),
+    scope_id: prefill?.scope_id || String(route.query.scope_id || '') || defaultScopeID(prefill?.scope_type || String(route.query.scope_type || 'dept_daily')),
     requested_amount: prefill?.requested_amount || Number(route.query.requested_amount || 100),
     reason: prefill?.reason || '',
-  }
-  // 自动填充 scope_id：从当前用户部门取
-  if (!createForm.value.scope_id) {
-    createForm.value.scope_id = authStore.user?.departmentId || ''
   }
   createVisible.value = true
 }
@@ -363,7 +365,7 @@ function openCreateDialog(prefill?: Partial<CreateExpansionPayload>) {
 async function handleCreate() {
   // 自动填充 scope_id
   if (!createForm.value.scope_id) {
-    createForm.value.scope_id = authStore.user?.departmentId || ''
+    createForm.value.scope_id = defaultScopeID(createForm.value.scope_type)
   }
   if (!createForm.value.scope_id) {
     ElMessage.warning('无法确定所属部门，请联系管理员')
@@ -394,7 +396,7 @@ async function handleAction() {
     await decideExpansion(actionTarget.value.id, actionType.value, actionComment.value || undefined)
     ElMessage.success(actionTitle.value + '成功')
     actionVisible.value = false
-    await Promise.all([loadPending(), loadMine()])
+    await reloadLists()
   } finally {
     actionLoading.value = false
   }
@@ -407,6 +409,7 @@ async function handleCancel(row: ExpansionRequest) {
 }
 
 function goBudget(row: ExpansionRequest) {
+  if (row.scope_type === 'member') return
   router.push({
     path: '/admin/org',
     query: {
@@ -421,6 +424,7 @@ function scopeLabel(type: string): string {
   const map: Record<string, string> = {
     dept_daily: '部门日常',
     dept_service: '部门服务',
+    member: '成员额度',
     studio: '工作室',
   }
   return map[type] || type
@@ -430,6 +434,7 @@ function scopeColor(type: string): string {
   const map: Record<string, string> = {
     dept_daily: '#3b82f6',
     dept_service: '#8b5cf6',
+    member: '#10b981',
     studio: '#f59e0b',
   }
   return map[type] || '#6b7280'
@@ -447,12 +452,32 @@ function formatDateTime(value: string): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
+async function reloadLists() {
+  await Promise.all([
+    canApprove.value ? loadPending() : Promise.resolve(),
+    !isAdmin.value ? loadMine() : Promise.resolve(),
+  ])
+}
+
+function defaultScopeID(scopeType: string): string {
+  if (scopeType === 'studio') {
+    const studioRole = authStore.orgRoles.find(role => role.role === 'studio_admin')
+    return studioRole?.scope_id || ''
+  }
+  return authStore.user?.departmentId || ''
+}
+
 onMounted(() => {
-  loadMine()
-  loadPending()
+  reloadLists()
   if (route.query.scope_type && route.query.scope_id) {
     openCreateDialog()
   }
+})
+
+watch(() => createForm.value.scope_type, (scopeType) => {
+  if (!createVisible.value) return
+  if (route.query.scope_id) return
+  createForm.value.scope_id = defaultScopeID(scopeType)
 })
 </script>
 
@@ -489,6 +514,9 @@ onMounted(() => {
   grid-template-columns: minmax(360px, 0.9fr) minmax(0, 1.1fr);
   gap: 16px;
   align-items: start;
+}
+.center-grid.single-panel {
+  grid-template-columns: minmax(0, 1fr);
 }
 .panel {
   border: 1px solid var(--el-border-color-light);

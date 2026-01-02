@@ -1196,8 +1196,7 @@ const canEditSelectedStudioBudget = computed(() =>
 
 const canEditSelectedDeptBudget = computed(() =>
   isGlobalAdmin.value ||
-  myStudioIds.value.includes(selectedDeptParentStudio.value?.id ?? '') ||
-  myDeptIds.value.includes(selectedDept.value?.dept_id ?? '')
+  myStudioIds.value.includes(selectedDeptParentStudio.value?.id ?? '')
 )
 
 const selectedStudioOwners = computed(() =>

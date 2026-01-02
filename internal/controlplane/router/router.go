@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	cpconfig "github.com/example/llm-gateway/internal/controlplane/config"
 	"github.com/example/llm-gateway/internal/controlplane/auth"
+	cpconfig "github.com/example/llm-gateway/internal/controlplane/config"
 	"github.com/example/llm-gateway/internal/controlplane/event"
 	"github.com/example/llm-gateway/internal/controlplane/handler"
 	"github.com/example/llm-gateway/internal/controlplane/middleware"
@@ -135,9 +135,9 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	go func() {
 		if created, err := budgetSvc.InitDefaultBudgets(
 			context.Background(),
-			500.0,   // defaultDeptDailyUSD
-			200.0,   // defaultDeptServiceUSD
-			2000.0,  // defaultStudioUSD
+			500.0,  // defaultDeptDailyUSD
+			200.0,  // defaultDeptServiceUSD
+			2000.0, // defaultStudioUSD
 		); err != nil {
 			slog.Warn("budget: default allocation init failed", "error", err)
 		} else if created > 0 {
@@ -404,18 +404,17 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/my/usage/logs/:request_id/trace", usageH.Trace)
 	}
 
-
 	// 内部接口组（内部 Token 认证）
 	internalGroup := r.Group("/internal/v1")
 	internalGroup.Use(middleware.InternalAuth())
 	{
-	internalGroup.GET("/models/available", internalHandler.ListAvailableModels)
-	internalGroup.GET("/models/health", internalHandler.GetModelHealth)
-	internalGroup.GET("/models/pricing", internalHandler.GetModelPricing)
-	internalGroup.POST("/keys/verify", keyHandler.VerifyKey)
-	internalGroup.POST("/auth/verify-key", keyHandler.VerifyKey)
-	internalGroup.GET("/keys/:id/groups", internalHandler.GetKeyGroups)
-	internalGroup.GET("/groups/model-info", modelInfoHandler.GetGroupModelInfo)
+		internalGroup.GET("/models/available", internalHandler.ListAvailableModels)
+		internalGroup.GET("/models/health", internalHandler.GetModelHealth)
+		internalGroup.GET("/models/pricing", internalHandler.GetModelPricing)
+		internalGroup.POST("/keys/verify", keyHandler.VerifyKey)
+		internalGroup.POST("/auth/verify-key", keyHandler.VerifyKey)
+		internalGroup.GET("/keys/:id/groups", internalHandler.GetKeyGroups)
+		internalGroup.GET("/groups/model-info", modelInfoHandler.GetGroupModelInfo)
 	}
 
 	// ─── 组织架构服务（org-service）───────────────────────────────────────────
@@ -470,13 +469,13 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.PUT("/budgets", guard(rbac.PermBudgetSet), budgetHandler.Set)
 		adminGroup.PUT("/budgets/batch", guard(rbac.PermBudgetSet), budgetHandler.BatchSet)
 		adminGroup.GET("/budgets/context", guard(rbac.PermBudgetViewScoped), budgetHandler.Context)
-		// 扩容申请（管理面）
-		adminGroup.POST("/expansion-requests", guard(rbac.PermExpansionRequest), expansionHandler.Create)
-		adminGroup.GET("/expansion-requests", guard(rbac.PermExpansionRequest), expansionHandler.ListMine)
-		adminGroup.GET("/expansion-requests/pending", guard(rbac.PermExpansionApprove), expansionHandler.ListPending)
-		adminGroup.POST("/expansion-requests/:id/decision", guard(rbac.PermExpansionApprove), expansionHandler.Decide)
-		adminGroup.GET("/expansion-requests/:id/steps", guard(rbac.PermExpansionRequest), expansionHandler.ListSteps)
-		adminGroup.POST("/expansion-requests/batch-decision", guard(rbac.PermExpansionApprove), expansionHandler.BatchDecide)
+		// 扩容申请：创建/我的申请/流水允许登录用户访问；审批接口继续走 RBAC。
+		adminGroup.POST("/expansion-requests", expansionHandler.Create)
+		adminGroup.GET("/expansion-requests", expansionHandler.ListMine)
+		adminGroup.GET("/expansion-requests/pending", guard(rbac.PermExpansionRequest), expansionHandler.ListPending)
+		adminGroup.POST("/expansion-requests/:id/decision", expansionHandler.Decide)
+		adminGroup.GET("/expansion-requests/:id/steps", expansionHandler.ListSteps)
+		adminGroup.POST("/expansion-requests/batch-decision", guard(rbac.PermExpansionRequest), expansionHandler.BatchDecide)
 	}
 
 	// 员工自助查询预算（JWTAuth 即可，不需要 admin）
@@ -506,7 +505,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		orgGroup.GET("/all-roles", guard(rbac.PermRoleList), orgH.ListAllRoles)
 		orgGroup.POST("/roles/grant", guard(rbac.PermRoleGrant), roleH.GrantRole)
 		orgGroup.POST("/roles/revoke", guard(rbac.PermRoleRevoke), roleH.RevokeRole)
-		orgGroup.GET("/roles/me", roleH.GetMyRoles)           // 当前用户 org 角色（/me 须在 /:user_id 前）
+		orgGroup.GET("/roles/me", roleH.GetMyRoles) // 当前用户 org 角色（/me 须在 /:user_id 前）
 		orgGroup.GET("/roles/:user_id", roleH.GetUserRoles)
 
 		// ── 员工花名册导入（仅 admin）────────────────────────────────────────

@@ -16,6 +16,7 @@ const (
 
 // 审批级别
 const (
+	ExpansionLevelDept     = "dept"     // 部门负责人受理成员额度申请
 	ExpansionLevelStudio   = "studio"   // 工作室负责人受理
 	ExpansionLevelPlatform = "platform" // 平台管理员受理（工作室盘子不足时升级）
 )
@@ -38,8 +39,8 @@ type ExpansionRequest struct {
 	CurrentAmount   float64   `gorm:"type:numeric(12,4)" json:"current_amount"`
 	RequestedAmount float64   `gorm:"type:numeric(12,4);not null" json:"requested_amount"`
 	Reason          string    `gorm:"type:text" json:"reason"`
-	Status          string    `gorm:"type:varchar(16);not null;default:'pending';index" json:"status"`       // pending|approved|rejected|cancelled
-	CurrentLevel    string    `gorm:"type:varchar(16);not null" json:"current_level"` // studio|platform 当前待审级别
+	Status          string    `gorm:"type:varchar(16);not null;default:'pending';index" json:"status"` // pending|approved|rejected|cancelled
+	CurrentLevel    string    `gorm:"type:varchar(16);not null" json:"current_level"`                  // dept|studio|platform 当前待审级别
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
@@ -50,9 +51,9 @@ func (ExpansionRequest) TableName() string { return "expansion_requests" }
 type ExpansionApprovalStep struct {
 	ID         uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	RequestID  uuid.UUID  `gorm:"type:uuid;not null;index" json:"request_id"`
-	Level      string     `gorm:"type:varchar(16);not null" json:"level"`      // studio|platform
+	Level      string     `gorm:"type:varchar(16);not null" json:"level"` // dept|studio|platform
 	ApproverID *uuid.UUID `gorm:"type:uuid" json:"approver_id,omitempty"`
-	Action     string     `gorm:"type:varchar(16);not null" json:"action"`  // approve|reject|escalate|cancel
+	Action     string     `gorm:"type:varchar(16);not null" json:"action"` // approve|reject|escalate|cancel
 	Comment    string     `gorm:"type:text" json:"comment"`
 	CreatedAt  time.Time  `json:"created_at"`
 }

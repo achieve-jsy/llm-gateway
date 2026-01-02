@@ -120,8 +120,21 @@ func (s *ExpansionService) GetBudgetUsedRatio(ctx context.Context, scopeType, sc
 	return item.UsedRatio, nil
 }
 
+func (s *ExpansionService) MemberInDeptIDs(memberID string, deptIDs []string) (bool, error) {
+	if s.budgetSvc == nil {
+		return false, nil
+	}
+	return s.budgetSvc.MemberInDeptIDs(memberID, deptIDs)
+}
+
 // CreateRequest 部门负责人发起扩容申请。
 func (s *ExpansionService) CreateRequest(ctx context.Context, scopeType, scopeID string, requesterID uuid.UUID, currentAmount, requestedAmount float64, reason string) (*model.ExpansionRequest, error) {
+	currentLevel := model.ExpansionLevelStudio
+	if scopeType == model.BudgetScopeMember {
+		currentLevel = model.ExpansionLevelDept
+	} else if scopeType == model.BudgetScopeStudio {
+		currentLevel = model.ExpansionLevelPlatform
+	}
 	req := &model.ExpansionRequest{
 		ScopeType:       scopeType,
 		ScopeID:         scopeID,
@@ -130,7 +143,7 @@ func (s *ExpansionService) CreateRequest(ctx context.Context, scopeType, scopeID
 		RequestedAmount: requestedAmount,
 		Reason:          reason,
 		Status:          model.ExpansionStatusPending,
-		CurrentLevel:    model.ExpansionLevelStudio, // 默认先到工作室级审批
+		CurrentLevel:    currentLevel,
 	}
 	if err := s.repo.Create(req); err != nil {
 		return nil, fmt.Errorf("create expansion request: %w", err)
@@ -188,6 +201,24 @@ func (s *ExpansionService) Decide(ctx context.Context, requestID string, approve
 	return nil
 }
 
+// DecideScoped 按审批人的管辖范围做决策。cancel 仅允许申请人本人取消。
+func (s *ExpansionService) DecideScoped(ctx context.Context, requestID string, actorID uuid.UUID, action, comment string, isGlobal bool, deptIDs, studioIDs []string) error {
+	req, err := s.repo.FindByID(requestID)
+	if err != nil {
+		return fmt.Errorf("expansion request not found: %w", err)
+	}
+	if action == model.ExpansionActionCancel {
+		if req.RequesterID != actorID {
+			return fmt.Errorf("only requester can cancel expansion request")
+		}
+		return s.Decide(ctx, requestID, actorID, action, comment)
+	}
+	if !s.canApproveExpansion(req, isGlobal, deptIDs, studioIDs) {
+		return fmt.Errorf("无权审批该扩容申请")
+	}
+	return s.Decide(ctx, requestID, actorID, action, comment)
+}
+
 // ListForRequester 查询申请人发起的申请。
 func (s *ExpansionService) ListForRequester(ctx context.Context, requesterID string, status string) ([]model.ExpansionRequest, error) {
 	return s.repo.ListByRequester(requesterID, status)
@@ -198,7 +229,70 @@ func (s *ExpansionService) ListPending(ctx context.Context, level string) ([]mod
 	return s.repo.ListPendingForApprover(level)
 }
 
+// ListPendingScoped 查询当前审批人管辖范围内的待审批申请。
+func (s *ExpansionService) ListPendingScoped(ctx context.Context, level string, isGlobal bool, deptIDs, studioIDs []string) ([]model.ExpansionRequest, error) {
+	if isGlobal {
+		return s.repo.ListPendingForApprover(level)
+	}
+	memberIDs, err := s.memberIDsForDeptIDs(deptIDs)
+	if err != nil {
+		return nil, err
+	}
+	return s.repo.ListPendingForApproverScoped(level, deptIDs, studioIDs, memberIDs)
+}
+
 // ListSteps 查询某扩容申请的审批流水。
 func (s *ExpansionService) ListSteps(ctx context.Context, requestID string) ([]model.ExpansionApprovalStep, error) {
 	return s.repo.ListSteps(requestID)
+}
+
+func (s *ExpansionService) canApproveExpansion(req *model.ExpansionRequest, isGlobal bool, deptIDs, studioIDs []string) bool {
+	if req.CurrentLevel == model.ExpansionLevelDept {
+		if isGlobal {
+			return true
+		}
+		if s.budgetSvc == nil {
+			return false
+		}
+		ok, err := s.budgetSvc.MemberInDeptIDs(req.ScopeID, deptIDs)
+		return err == nil && ok
+	}
+	if req.CurrentLevel == model.ExpansionLevelPlatform {
+		return isGlobal
+	}
+	if isGlobal {
+		return true
+	}
+	switch req.ScopeType {
+	case model.BudgetScopeDeptDaily, model.BudgetScopeDeptService:
+		return containsString(deptIDs, req.ScopeID)
+	case model.BudgetScopeStudio:
+		return containsString(studioIDs, req.ScopeID)
+	default:
+		return false
+	}
+}
+
+func (s *ExpansionService) memberIDsForDeptIDs(deptIDs []string) ([]string, error) {
+	if s.budgetSvc == nil {
+		return nil, nil
+	}
+	ids := make([]string, 0)
+	for _, deptID := range deptIDs {
+		memberIDs, err := s.budgetSvc.ListMemberIDsByDeptID(deptID)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, memberIDs...)
+	}
+	return ids, nil
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
 }

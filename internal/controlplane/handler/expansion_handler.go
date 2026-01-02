@@ -25,10 +25,6 @@ func NewExpansionHandler(svc *service.ExpansionService, rbacChecker *rbac.Checke
 func (h *ExpansionHandler) Create(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
-	if !actor.IsManager() {
-		c.JSON(http.StatusForbidden, gin.H{"error": "需要管理员权限"})
-		return
-	}
 
 	var req struct {
 		ScopeType       string  `json:"scope_type" binding:"required"`
@@ -41,16 +37,39 @@ func (h *ExpansionHandler) Create(c *gin.Context) {
 		return
 	}
 
+	requesterID, _ := uuid.Parse(c.GetString("user_id"))
 	// RBAC 范围校验
-	if !actor.IsGlobal {
+	if req.ScopeType == model.BudgetScopeMember {
+		if req.ScopeID != requesterID.String() && !actor.IsGlobal {
+			if !actor.IsManager() {
+				c.JSON(http.StatusForbidden, gin.H{"error": "只能为自己发起成员额度申请"})
+				return
+			}
+			ok, err := h.svc.MemberInDeptIDs(req.ScopeID, actor.DeptIDs)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			if !ok {
+				c.JSON(http.StatusForbidden, gin.H{"error": "无权为该成员发起扩容申请"})
+				return
+			}
+		}
+	} else if !actor.IsManager() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "需要管理员权限"})
+		return
+	} else if !actor.IsGlobal {
 		if (req.ScopeType == model.BudgetScopeDeptDaily || req.ScopeType == model.BudgetScopeDeptService) &&
 			!actor.HasDept(req.ScopeID) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "无权为该部门发起扩容申请"})
 			return
 		}
+		if req.ScopeType == model.BudgetScopeStudio && !actor.HasStudio(req.ScopeID) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权为该工作室发起扩容申请"})
+			return
+		}
 	}
 
-	requesterID, _ := uuid.Parse(c.GetString("user_id"))
 	result, err := h.svc.CreateRequest(c.Request.Context(), req.ScopeType, req.ScopeID,
 		requesterID, 0, req.RequestedAmount, req.Reason)
 	if err != nil {
@@ -65,10 +84,6 @@ func (h *ExpansionHandler) Create(c *gin.Context) {
 func (h *ExpansionHandler) Decide(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
-	if !actor.IsManager() {
-		c.JSON(http.StatusForbidden, gin.H{"error": "需要管理员权限"})
-		return
-	}
 
 	requestID := c.Param("id")
 	var req struct {
@@ -79,9 +94,13 @@ func (h *ExpansionHandler) Decide(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if req.Action != model.ExpansionActionCancel && !actor.IsManager() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "需要管理员权限"})
+		return
+	}
 
 	approverID, _ := uuid.Parse(c.GetString("user_id"))
-	if err := h.svc.Decide(c.Request.Context(), requestID, approverID, req.Action, req.Comment); err != nil {
+	if err := h.svc.DecideScoped(c.Request.Context(), requestID, approverID, req.Action, req.Comment, actor.IsGlobal, actor.DeptIDs, actor.StudioIDs); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -112,12 +131,14 @@ func (h *ExpansionHandler) ListPending(c *gin.Context) {
 		return
 	}
 
-	level := model.ExpansionLevelStudio
+	level := model.ExpansionLevelDept
 	if actor.IsGlobal {
 		level = model.ExpansionLevelPlatform
+	} else if len(actor.StudioIDs) > 0 {
+		level = model.ExpansionLevelStudio
 	}
 
-	items, err := h.svc.ListPending(c.Request.Context(), level)
+	items, err := h.svc.ListPendingScoped(c.Request.Context(), level, actor.IsGlobal, actor.DeptIDs, actor.StudioIDs)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -131,10 +152,8 @@ func (h *ExpansionHandler) ListPending(c *gin.Context) {
 	result := make([]PendingItem, 0, len(items))
 	for _, item := range items {
 		pi := PendingItem{ExpansionRequest: item}
-		if item.CurrentAmount > 0 {
-			budget, _ := h.svc.GetBudgetUsedRatio(c.Request.Context(), item.ScopeType, item.ScopeID)
-			pi.CurrentUsageRatio = budget
-		}
+		budget, _ := h.svc.GetBudgetUsedRatio(c.Request.Context(), item.ScopeType, item.ScopeID)
+		pi.CurrentUsageRatio = budget
 		result = append(result, pi)
 	}
 	c.JSON(http.StatusOK, gin.H{"items": result})
@@ -170,7 +189,7 @@ func (h *ExpansionHandler) BatchDecide(c *gin.Context) {
 			results = append(results, gin.H{"id": d.ID, "ok": false, "error": "驳回必须填写理由"})
 			continue
 		}
-		if err := h.svc.Decide(c.Request.Context(), d.ID, approverID, d.Action, d.Comment); err != nil {
+		if err := h.svc.DecideScoped(c.Request.Context(), d.ID, approverID, d.Action, d.Comment, actor.IsGlobal, actor.DeptIDs, actor.StudioIDs); err != nil {
 			results = append(results, gin.H{"id": d.ID, "ok": false, "error": err.Error()})
 		} else {
 			results = append(results, gin.H{"id": d.ID, "ok": true})

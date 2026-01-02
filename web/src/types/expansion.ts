@@ -2,7 +2,7 @@
 // v0.7 扩容申请类型
 
 export type ExpansionStatus = 'pending' | 'approved' | 'rejected' | 'cancelled'
-export type ExpansionLevel = 'studio' | 'platform'
+export type ExpansionLevel = 'dept' | 'studio' | 'platform'
 export type ExpansionAction = 'approve' | 'reject' | 'escalate' | 'cancel'
 
 export interface ExpansionRequest {
@@ -47,6 +47,7 @@ export const STATUS_COLORS: Record<ExpansionStatus, string> = {
 }
 
 export const LEVEL_LABELS: Record<ExpansionLevel, string> = {
+  dept: '部门级',
   studio: '工作室级',
   platform: '平台级',
 }

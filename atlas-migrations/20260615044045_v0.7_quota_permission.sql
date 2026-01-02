@@ -24,7 +24,7 @@ ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "dept_source" character varying(16)
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "dept_updated_by" character varying(128) NULL;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "dept_updated_at" timestamptz NULL;
 -- Create index "idx_users_employee_id" to table: "users"
-CREATE INDEX "idx_users_employee_id" ON "users" ("employee_id");
+CREATE INDEX IF NOT EXISTS "idx_users_employee_id" ON "users" ("employee_id");
 -- Create "budget_alert_records" table
 CREATE TABLE "budget_alert_records" (
   "id" uuid NOT NULL DEFAULT gen_random_uuid(),

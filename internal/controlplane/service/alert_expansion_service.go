@@ -128,17 +128,21 @@ func (s *ExpansionService) MemberInDeptIDs(memberID string, deptIDs []string) (b
 }
 
 // CreateRequest 部门负责人发起扩容申请。
-func (s *ExpansionService) CreateRequest(ctx context.Context, scopeType, scopeID string, requesterID uuid.UUID, currentAmount, requestedAmount float64, reason string) (*model.ExpansionRequest, error) {
+func (s *ExpansionService) CreateRequest(ctx context.Context, scopeType, scopeID string, requesterID uuid.UUID, currentAmount, requestedAmount float64, periodType, reason string) (*model.ExpansionRequest, error) {
 	currentLevel := model.ExpansionLevelStudio
 	if scopeType == model.BudgetScopeMember {
 		currentLevel = model.ExpansionLevelDept
 	} else if scopeType == model.BudgetScopeStudio {
 		currentLevel = model.ExpansionLevelPlatform
 	}
+	if periodType == "" {
+		periodType = model.ExpansionPeriodMonthly
+	}
 	req := &model.ExpansionRequest{
 		ScopeType:       scopeType,
 		ScopeID:         scopeID,
 		RequesterID:     requesterID,
+		PeriodType:      periodType,
 		CurrentAmount:   currentAmount,
 		RequestedAmount: requestedAmount,
 		Reason:          reason,

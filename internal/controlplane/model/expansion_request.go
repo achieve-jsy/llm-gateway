@@ -29,6 +29,13 @@ const (
 	ExpansionActionCancel   = "cancel"
 )
 
+// 申请的额度周期维度
+const (
+	ExpansionPeriodDaily   = "daily"
+	ExpansionPeriodWeekly  = "weekly"
+	ExpansionPeriodMonthly = "monthly"
+)
+
 // ExpansionRequest 扩容申请主表（自建审批）。
 // approved ≠ 自动改额，审批通过后由上级手动走 PUT /api/v1/budgets 改额（FR-4.6）。
 type ExpansionRequest struct {
@@ -36,6 +43,7 @@ type ExpansionRequest struct {
 	ScopeType       string    `gorm:"type:varchar(16);not null" json:"scope_type"` // dept_daily|dept_service|studio
 	ScopeID         string    `gorm:"type:varchar(64);not null;index" json:"scope_id"`
 	RequesterID     uuid.UUID `gorm:"type:uuid;not null;index" json:"requester_id"`
+	PeriodType      string    `gorm:"type:varchar(16);not null;default:'monthly'" json:"period_type"` // daily|weekly|monthly
 	CurrentAmount   float64   `gorm:"type:numeric(12,4)" json:"current_amount"`
 	RequestedAmount float64   `gorm:"type:numeric(12,4);not null" json:"requested_amount"`
 	Reason          string    `gorm:"type:text" json:"reason"`

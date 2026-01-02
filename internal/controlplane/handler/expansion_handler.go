@@ -29,6 +29,7 @@ func (h *ExpansionHandler) Create(c *gin.Context) {
 	var req struct {
 		ScopeType       string  `json:"scope_type" binding:"required"`
 		ScopeID         string  `json:"scope_id" binding:"required"`
+		PeriodType      string  `json:"period_type"`
 		RequestedAmount float64 `json:"requested_amount" binding:"required"`
 		Reason          string  `json:"reason"`
 	}
@@ -70,8 +71,12 @@ func (h *ExpansionHandler) Create(c *gin.Context) {
 		}
 	}
 
+	periodType := req.PeriodType
+	if periodType == "" {
+		periodType = model.ExpansionPeriodMonthly
+	}
 	result, err := h.svc.CreateRequest(c.Request.Context(), req.ScopeType, req.ScopeID,
-		requesterID, 0, req.RequestedAmount, req.Reason)
+		requesterID, 0, req.RequestedAmount, periodType, req.Reason)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

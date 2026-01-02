@@ -1,38 +1,42 @@
 <template>
-  <div class="expansion-center">
+  <div class="expansion-center" :class="{ 'expansion-center--admin': isAdmin }">
     <header class="page-head">
       <div>
-        <h1>扩容申请中心</h1>
-        <p>预算不足时发起申请；负责人在这里审批并回到组织预算页完成调额。</p>
+        <span class="page-kicker">{{ roleKicker }}</span>
+        <h1>{{ pageTitle }}</h1>
+        <p v-if="pageDesc">{{ pageDesc }}</p>
       </div>
-      <el-button v-if="canCreateRequest" type="primary" @click="openCreateDialog()">新建申请</el-button>
+      <div class="page-actions">
+        <el-button v-if="isAdmin" plain @click="router.push('/admin/org')">组织预算</el-button>
+        <el-button v-if="canCreateRequest" type="primary" @click="openCreateDialog()">新建申请</el-button>
+      </div>
     </header>
 
     <section class="kpi-strip">
-      <div v-if="canApprove" class="kpi">
-        <span>待我审批</span>
+      <div class="kpi is-primary">
+        <span>{{ primaryKpiLabel }}</span>
         <strong>{{ pendingList.length }}</strong>
       </div>
-      <div v-if="!isAdmin" class="kpi">
+      <div class="kpi">
         <span>我发起的审批中</span>
-        <strong>{{ pendingMineCount }}</strong>
+        <strong>{{ isAdmin ? platformPendingCount : pendingMineCount }}</strong>
       </div>
-      <div v-if="!isAdmin" class="kpi">
+      <div class="kpi">
         <span>已批准</span>
-        <strong>{{ approvedMineCount }}</strong>
+        <strong>{{ isAdmin ? approvedPendingCount : approvedMineCount }}</strong>
       </div>
-      <div v-if="!isAdmin" class="kpi">
+      <div class="kpi">
         <span>已驳回/取消</span>
-        <strong>{{ closedMineCount }}</strong>
+        <strong>{{ isAdmin ? closedPendingCount : closedMineCount }}</strong>
       </div>
     </section>
 
-    <section class="center-grid" :class="{ 'single-panel': isAdmin || !canApprove }">
-      <div v-if="canApprove" class="panel">
+    <section class="workspace-grid" :class="{ 'admin-workspace': isAdmin }">
+      <div v-if="canApprove" class="panel task-panel">
         <div class="panel-head">
           <div>
-            <h2>待我审批</h2>
-            <p>处理下级扩容诉求；通过后仍需到预算页手动调额。</p>
+            <h2>{{ pendingTitle }}</h2>
+            <p v-if="pendingDesc">{{ pendingDesc }}</p>
           </div>
           <el-button :loading="pendingLoading" size="small" @click="loadPending">刷新</el-button>
         </div>
@@ -78,11 +82,15 @@
               </div>
             </div>
           </article>
-          <el-empty v-if="!pendingLoading && pendingList.length === 0" description="暂无待审批申请" />
+          <div v-if="!pendingLoading && pendingList.length === 0" class="empty-approval">
+            <div class="empty-mark">0</div>
+            <strong>暂无待处理申请</strong>
+            <span>{{ emptyDesc }}</span>
+          </div>
         </div>
       </div>
 
-      <div v-if="!isAdmin" class="panel">
+      <div v-if="!isAdmin" class="panel mine-panel">
         <div class="panel-head">
           <div>
             <h2>我发起的申请</h2>
@@ -138,6 +146,25 @@
           </el-table-column>
         </el-table>
       </div>
+
+      <aside v-if="!isAdmin" class="panel context-panel">
+        <div class="panel-head">
+          <div>
+            <h2>{{ contextTitle }}</h2>
+            <p>{{ contextDesc }}</p>
+          </div>
+        </div>
+        <div class="context-list">
+          <div v-for="item in contextItems" :key="item.title" class="context-row">
+            <strong>{{ item.title }}</strong>
+            <span>{{ item.desc }}</span>
+          </div>
+        </div>
+        <div class="context-actions">
+          <el-button v-if="isAdmin || isStudioAdmin" type="primary" plain @click="router.push('/admin/org')">进入组织预算</el-button>
+          <el-button plain @click="router.push('/admin/budget')">查看预算总览</el-button>
+        </div>
+      </aside>
     </section>
 
     <el-dialog v-model="createVisible" title="新建扩容申请" width="520px">
@@ -255,6 +282,62 @@ const isStudioAdmin = computed(() => authStore.effectiveRole === 'studio_admin')
 const isDeptAdmin = computed(() => authStore.effectiveRole === 'dept_admin')
 const canApprove = computed(() => isAdmin.value || isStudioAdmin.value || isDeptAdmin.value)
 const canCreateRequest = computed(() => isDeptAdmin.value || isStudioAdmin.value)
+const platformPendingCount = computed(() => pendingList.value.filter(i => i.status === 'pending').length)
+const approvedPendingCount = computed(() => pendingList.value.filter(i => i.status === 'approved').length)
+const closedPendingCount = computed(() => pendingList.value.filter(i => i.status === 'rejected' || i.status === 'cancelled').length)
+const roleKicker = computed(() => {
+  if (isAdmin.value) return '审批工作台'
+  if (isStudioAdmin.value) return '工作室治理'
+  if (isDeptAdmin.value) return '部门治理'
+  return '扩容申请'
+})
+const pageTitle = computed(() => {
+  if (isAdmin.value) return '平台扩容审批'
+  if (isStudioAdmin.value) return '工作室扩容审批'
+  if (isDeptAdmin.value) return '部门额度审批'
+  return '扩容申请中心'
+})
+const pageDesc = computed(() => {
+  if (isAdmin.value) return ''
+  if (isStudioAdmin.value) return '审批下属部门申请，并在工作室预算不足时上报平台。'
+  if (isDeptAdmin.value) return '审批成员个人额度申请，并跟踪部门预算扩容进度。'
+  return '预算不足时发起申请；负责人在这里审批并回到组织预算页完成调额。'
+})
+const primaryKpiLabel = computed(() => {
+  if (isAdmin.value) return '平台待审批'
+  if (isStudioAdmin.value) return '部门待审批'
+  if (isDeptAdmin.value) return '成员待审批'
+  return '待我审批'
+})
+const pendingTitle = computed(() => primaryKpiLabel.value)
+const pendingDesc = computed(() => {
+  if (isAdmin.value) return ''
+  if (isStudioAdmin.value) return '处理部门预算池扩容，必要时上报平台。'
+  if (isDeptAdmin.value) return '处理成员个人额度申请，驳回时请填写明确理由。'
+  return '处理下级扩容诉求。'
+})
+const emptyDesc = computed(() => {
+  if (isAdmin.value) return '平台级申请会在工作室上报后出现在这里。'
+  if (isStudioAdmin.value) return '部门负责人提交的申请会出现在这里。'
+  if (isDeptAdmin.value) return '成员在“我的预算”提交的个人额度申请会出现在这里。'
+  return '暂无需要处理的申请。'
+})
+const contextTitle = computed(() => '下一步')
+const contextDesc = computed(() => '审批和申请的处理边界。')
+const contextItems = computed(() => {
+  if (isStudioAdmin.value) {
+    return [
+      { title: '审批部门申请', desc: '只显示自己工作室下属部门提交的扩容。' },
+      { title: '可上报平台', desc: '当工作室预算不足时，将申请升级到平台。' },
+      { title: '可发起工作室扩容', desc: '工作室预算不足时由平台管理员审批。' },
+    ]
+  }
+  return [
+    { title: '审批成员申请', desc: '只显示自己部门成员提交的个人额度申请。' },
+    { title: '发起部门扩容', desc: '部门预算池不足时向工作室负责人申请。' },
+    { title: '关注审批流水', desc: '申请状态变化会保留在详情中。' },
+  ]
+})
 
 // 批量审批
 const selectedPending = ref<string[]>([])
@@ -485,63 +568,109 @@ watch(() => createForm.value.scope_type, (scopeType) => {
 .expansion-center {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  padding: 28px 32px;
+  gap: 18px;
+  padding: 30px 32px;
+  max-width: 1240px;
+  margin: 0 auto;
+}
+.expansion-center--admin {
+  max-width: 1180px;
 }
 .page-head {
   display: flex;
   justify-content: space-between;
   gap: 20px;
   align-items: flex-start;
+  padding-bottom: 4px;
 }
-.page-head h1 { margin: 0; font-size: 24px; color: var(--el-text-color-primary); }
-.page-head p { margin: 6px 0 0; color: var(--el-text-color-secondary); font-size: 13px; }
+.page-kicker {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .04em;
+}
+.page-head h1 { margin: 6px 0 8px; font-size: 26px; color: var(--el-text-color-primary); letter-spacing: -.02em; }
+.page-head p { margin: 0; color: var(--el-text-color-secondary); font-size: 13px; line-height: 1.6; }
+.page-actions {
+  display: flex;
+  gap: 10px;
+  flex-shrink: 0;
+}
 .kpi-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 16px;
+  background: var(--el-border-color-lighter);
 }
 .kpi {
-  padding: 16px 18px;
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 12px;
+  padding: 14px 18px;
+  border: none;
+  border-radius: 0;
+  background: var(--el-bg-color);
+}
+.kpi.is-primary {
   background: var(--el-bg-color);
 }
 .kpi span { display: block; color: var(--el-text-color-secondary); font-size: 12px; margin-bottom: 8px; }
-.kpi strong { font-size: 24px; color: var(--el-text-color-primary); }
-.center-grid {
+.kpi strong { font-size: 24px; color: var(--el-text-color-primary); letter-spacing: -.03em; }
+.kpi.is-primary strong { color: var(--el-color-primary); }
+.workspace-grid {
   display: grid;
-  grid-template-columns: minmax(360px, 0.9fr) minmax(0, 1.1fr);
+  grid-template-columns: minmax(420px, 1fr) minmax(360px, .9fr) 300px;
   gap: 16px;
   align-items: start;
 }
-.center-grid.single-panel {
-  grid-template-columns: minmax(0, 1fr);
-}
+.workspace-grid.admin-workspace { grid-template-columns: minmax(0, 1fr); }
 .panel {
   border: 1px solid var(--el-border-color-light);
-  border-radius: 14px;
+  border-radius: 16px;
   background: var(--el-bg-color);
   overflow: hidden;
+}
+.task-panel {
+  min-height: 420px;
+}
+.mine-panel {
+  min-height: 420px;
+}
+.context-panel {
+  position: sticky;
+  top: 24px;
 }
 .panel-head {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   gap: 16px;
-  padding: 18px 20px;
+  padding: 16px 18px;
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
 .panel-head h2 { margin: 0; font-size: 16px; color: var(--el-text-color-primary); }
 .panel-head p { margin: 4px 0 0; font-size: 12px; color: var(--el-text-color-secondary); }
-.pending-list { min-height: 260px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.pending-list { min-height: 300px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .approval-card {
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 12px;
   padding: 14px;
   background: var(--el-fill-color-blank);
+  display: flex;
+  gap: 12px;
+  transition: border-color .16s, background .16s, transform .16s;
+}
+.approval-card:hover {
+  border-color: var(--el-border-color);
+  background: var(--el-fill-color-lighter);
+  transform: translateY(-1px);
+}
+.approval-card.selected {
+  border-color: var(--el-color-primary);
 }
 .approval-top { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.approval-body { flex: 1; min-width: 0; }
+.approval-check { padding-top: 2px; }
 .scope-line, .scope-cell { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .scope-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--el-text-color-secondary); overflow: hidden; text-overflow: ellipsis; }
 .amount-block { font-size: 13px; color: var(--el-text-color-secondary); white-space: nowrap; }
@@ -549,7 +678,72 @@ watch(() => createForm.value.scope_type, (scopeType) => {
 .reason { margin: 12px 0; color: var(--el-text-color-regular); line-height: 1.6; font-size: 13px; }
 .approval-meta { display: flex; gap: 12px; color: var(--el-text-color-secondary); font-size: 12px; margin-bottom: 12px; }
 .approval-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+.empty-approval {
+  min-height: 250px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--el-text-color-secondary);
+}
+.empty-mark {
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 12px;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-placeholder);
+  font-size: 28px;
+  font-weight: 700;
+}
+.empty-approval strong {
+  color: var(--el-text-color-primary);
+  margin-bottom: 4px;
+}
 .muted { color: var(--el-text-color-placeholder); }
+.context-list {
+  padding: 16px 18px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.context-row {
+  padding-bottom: 14px;
+  border-bottom: 1px dashed var(--el-border-color-lighter);
+}
+.context-row:last-child {
+  border-bottom: none;
+}
+.context-row strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+}
+.context-row span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.context-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 18px 18px;
+}
 .action-context {
   display: flex;
   align-items: center;
@@ -562,7 +756,9 @@ watch(() => createForm.value.scope_type, (scopeType) => {
 .action-context code { color: var(--el-text-color-secondary); font-size: 12px; }
 .action-context strong { margin-left: auto; color: var(--el-color-primary); }
 @media (max-width: 1100px) {
-  .center-grid { grid-template-columns: 1fr; }
+  .workspace-grid,
+  .workspace-grid.admin-workspace { grid-template-columns: 1fr; }
+  .context-panel { position: static; }
   .kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 720px) {

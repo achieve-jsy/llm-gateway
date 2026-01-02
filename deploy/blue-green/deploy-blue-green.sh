@@ -1,17 +1,26 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# 蓝绿部署脚本 — LLM Gateway 生产环境
+# 蓝绿部署脚本 — LLM Gateway（生产 / 测试通用）
 #
-# 流程：判断当前颜色 → 启动对端 → 健康检查 → nginx reload → drain → 停旧环境
+# 流程（始终「先起新、再停旧」，保证零宕机）：
+#   判断当前颜色 → 启动对端(target) → 健康检查 → nginx 切换 → drain → 停旧环境
 #
 # 用法:
-#   ./deploy-blue-green.sh                    # 自动切换到非活跃颜色
-#   ./deploy-blue-green.sh --rollback         # 回滚到上一个颜色（立即切换，不启动新容器）
+#   ./deploy-blue-green.sh                    # 部署到非活跃颜色
+#   ./deploy-blue-green.sh --rollback         # 回滚到上一个颜色（要求对端仍在运行）
+#
+# 可用环境变量（带默认值，生产默认行为不变）：
+#   NGINX_UPSTREAM   nginx 活跃 upstream 文件路径   (默认 /opt/llm-gateway/upstream-active.conf)
+#   DRAIN_TIMEOUT    切换后等待旧环境 SSE 自然结束的秒数 (默认 600)
+#   STOP_TIMEOUT     drain 后停止旧环境容器的超时秒数   (默认 600；旧容器若不响应 SIGTERM 会等满)
+#   HEALTH_RETRIES   健康检查重试次数               (默认 30)
+#   HEALTH_INTERVAL  健康检查间隔秒数               (默认 3)
+#   LEGACY_CONTAINERS 首次迁移时要下线的旧容器名     (默认 "llm-gw-gateway llm-gw-control-plane")
+#   IMAGE_TAG / REGISTRY / APP_ENV 及各密钥由 compose 透传
 #
 # 前置条件：
 #   - 环境变量已通过 .env 或 export 设置（DATABASE_URL, REDIS_*, JWT_SECRET 等）
-#   - docker compose v2+, nginx 已安装
-#   - upstream-active.conf 已被 nginx 主配置 include
+#   - docker compose v2+, nginx 已安装；nginx 主配置已 include $NGINX_UPSTREAM
 # ═══════════════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -19,10 +28,12 @@ set -euo pipefail
 DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
 STATE_FILE="${DEPLOY_DIR}/.active-color"
 UPSTREAM_DIR="${DEPLOY_DIR}"
-NGINX_UPSTREAM="/opt/llm-gateway/upstream-active.conf"
-DRAIN_TIMEOUT=600
-HEALTH_RETRIES=30
-HEALTH_INTERVAL=3
+NGINX_UPSTREAM="${NGINX_UPSTREAM:-/opt/llm-gateway/upstream-active.conf}"
+DRAIN_TIMEOUT="${DRAIN_TIMEOUT:-600}"
+STOP_TIMEOUT="${STOP_TIMEOUT:-600}"
+HEALTH_RETRIES="${HEALTH_RETRIES:-30}"
+HEALTH_INTERVAL="${HEALTH_INTERVAL:-3}"
+LEGACY_CONTAINERS="${LEGACY_CONTAINERS:-llm-gw-gateway llm-gw-control-plane}"
 
 # ─── 工具函数 ──────────────────────────────────────────────────────────────────
 
@@ -33,7 +44,7 @@ get_active_color() {
     if [ -f "$STATE_FILE" ]; then
         cat "$STATE_FILE"
     else
-        # 首次部署：检测哪个在运行
+        # 首次部署：检测哪个蓝绿容器在运行（旧的非蓝绿容器不算）
         if docker ps --format '{{.Names}}' | grep -q "llm-blue-gateway"; then
             echo "blue"
         elif docker ps --format '{{.Names}}' | grep -q "llm-green-gateway"; then
@@ -49,7 +60,9 @@ get_target_color() {
     case "$active" in
         blue)  echo "green" ;;
         green) echo "blue" ;;
-        none)  echo "blue" ;;  # 首次部署默认蓝
+        # 首次迁移：旧容器占用 blue 端口(8080/8081)，因此新版部署到 green，
+        # 旧容器继续服务，待 green 健康并切流后再下线 —— 零宕机。
+        none)  echo "green" ;;
         *)     die "Unknown active color: $active" ;;
     esac
 }
@@ -74,21 +87,23 @@ health_check() {
     gw_port=$(get_gateway_port "$color")
     cp_port=$(get_cp_port "$color")
 
-    log "Waiting for ${color} to become healthy..."
-    for i in $(seq 1 $HEALTH_RETRIES); do
-        if wget --spider -q "http://localhost:${gw_port}/health" 2>/dev/null && \
-           wget --spider -q "http://localhost:${cp_port}/healthz" 2>/dev/null; then
+    log "Waiting for ${color} to become healthy (gw:${gw_port} cp:${cp_port})..."
+    for i in $(seq 1 "$HEALTH_RETRIES"); do
+        # 用 curl 发 GET 探活：宿主机上的 GNU wget --spider 会发 HEAD，
+        # 而 gin 的 /health、/healthz 仅注册 GET，HEAD 会 404 导致误判不健康。
+        if curl -fsS -o /dev/null --max-time 5 "http://localhost:${gw_port}/health" && \
+           curl -fsS -o /dev/null --max-time 5 "http://localhost:${cp_port}/healthz"; then
             log "${color} is healthy (attempt ${i}/${HEALTH_RETRIES})"
             return 0
         fi
-        sleep $HEALTH_INTERVAL
+        sleep "$HEALTH_INTERVAL"
     done
-    die "${color} failed health check after $((HEALTH_RETRIES * HEALTH_INTERVAL))s"
+    return 1
 }
 
 switch_nginx() {
     local color="$1"
-    log "Switching nginx upstream to ${color}..."
+    log "Switching nginx upstream to ${color} (${NGINX_UPSTREAM})..."
     cp "${UPSTREAM_DIR}/upstream-${color}.conf" "$NGINX_UPSTREAM"
     nginx -t || die "nginx config test failed after switching to ${color}"
     nginx -s reload
@@ -103,8 +118,29 @@ start_env() {
 
 stop_env() {
     local color="$1"
-    log "Stopping ${color} environment..."
-    docker compose -f "${DEPLOY_DIR}/docker-compose.${color}.yml" -p "llm-${color}" down --timeout 600
+    local timeout="${2:-600}"
+    log "Stopping ${color} environment (timeout ${timeout}s)..."
+    docker compose -f "${DEPLOY_DIR}/docker-compose.${color}.yml" -p "llm-${color}" down --timeout "$timeout"
+}
+
+# 下线首次迁移前的旧（非蓝绿）容器，按名字停止并删除
+stop_legacy() {
+    local present=false c
+    for c in $LEGACY_CONTAINERS; do
+        if docker ps --format '{{.Names}}' | grep -qx "$c"; then present=true; fi
+    done
+    if [ "$present" = false ]; then
+        log "No legacy containers running, skip."
+        return 0
+    fi
+    log "Draining legacy containers (${LEGACY_CONTAINERS}) for ${DRAIN_TIMEOUT}s..."
+    log "  (existing SSE streams on legacy will finish naturally)"
+    sleep "$DRAIN_TIMEOUT"
+    # shellcheck disable=SC2086
+    docker stop $LEGACY_CONTAINERS 2>/dev/null || true
+    # shellcheck disable=SC2086
+    docker rm $LEGACY_CONTAINERS 2>/dev/null || true
+    log "Legacy containers stopped & removed. Ports freed."
 }
 
 save_state() {
@@ -125,54 +161,48 @@ main() {
     target=$(get_target_color "$active")
 
     log "═══════════════════════════════════════════════════════════"
-    log "Blue-Green Deploy: active=${active} → target=${target}"
+    log "Blue-Green Deploy: active=${active} → target=${target} (rollback=${rollback})"
+    log "  NGINX_UPSTREAM=${NGINX_UPSTREAM}  DRAIN_TIMEOUT=${DRAIN_TIMEOUT}s"
     log "═══════════════════════════════════════════════════════════"
 
     if [ "$rollback" = true ]; then
-        # 回滚：直接切 nginx，不启动新容器（假设对端还在运行）
-        if [ "$active" = "none" ]; then
-            die "No active environment to rollback from"
-        fi
+        # 回滚：直接切回对端（要求对端仍在运行，未被上次 drain 删除）
+        [ "$active" = "none" ] && die "No active environment to rollback from"
         log "ROLLBACK: switching back to ${target}"
-        health_check "$target" || die "${target} is not running, cannot rollback"
+        health_check "$target" || die "${target} is not running/healthy, cannot rollback (请改用指定版本重新部署)"
         switch_nginx "$target"
         save_state "$target"
-        log "Rollback complete. Drain old (${active}) for ${DRAIN_TIMEOUT}s then stop..."
+        log "Rollback complete. Draining old (${active}) for ${DRAIN_TIMEOUT}s then stop..."
         sleep "$DRAIN_TIMEOUT"
-        stop_env "$active"
-        log "═══ Rollback finished ═══"
+        stop_env "$active" "$STOP_TIMEOUT"
+        log "═══ Rollback finished, active=${target} ═══"
         return 0
     fi
 
-    # ─── 首次迁移：旧容器占用了 8080/8081，必须先停掉 ─────────────────────────
-    if [ "$active" = "none" ]; then
-        if docker ps --filter "name=llm-gw-gateway" --format '{{.Names}}' | grep -q llm-gw-gateway; then
-            log "First migration: draining legacy containers (llm-gw-gateway / llm-gw-control-plane)..."
-            log "  Waiting 30s for in-flight SSE streams to finish..."
-            sleep 30
-            docker stop llm-gw-gateway llm-gw-control-plane 2>/dev/null || true
-            docker rm llm-gw-gateway llm-gw-control-plane 2>/dev/null || true
-            log "Legacy containers removed. Ports 8080/8081 are now free."
-        fi
-    fi
-
-    # 正常部署流程
-    # 1. 启动目标环境
+    # ─── 正常部署：始终「先起新、再停旧」 ───────────────────────────────────────
+    # 1. 启动目标环境（新版本）
     start_env "$target"
 
-    # 2. 等待健康
-    health_check "$target"
+    # 2. 等待健康；失败则不动当前在跑的环境（旧栈/active 仍在服务），直接退出
+    if ! health_check "$target"; then
+        log "Health check failed for ${target}. Current traffic stays on previous env (no downtime)."
+        log "Tearing down failed ${target} to free ports..."
+        stop_env "$target" 30 || true
+        die "${target} failed health check after $((HEALTH_RETRIES * HEALTH_INTERVAL))s; deploy aborted, nothing switched."
+    fi
 
-    # 3. 切换 nginx
+    # 3. 切换 nginx 到新环境
     switch_nginx "$target"
     save_state "$target"
 
-    # 4. 等待 drain（让旧环境的存量 SSE 长连接自然结束）
-    if [ "$active" != "none" ]; then
+    # 4. 下线旧环境（流量已切走）
+    if [ "$active" = "none" ]; then
+        # 首次迁移：下线旧（非蓝绿）容器
+        stop_legacy
+    else
         log "Draining old environment (${active}) for ${DRAIN_TIMEOUT}s..."
-        log "  (existing SSE streams on ${active} will finish naturally)"
         sleep "$DRAIN_TIMEOUT"
-        stop_env "$active"
+        stop_env "$active" "$STOP_TIMEOUT"
     fi
 
     log "═══════════════════════════════════════════════════════════"

@@ -28,6 +28,7 @@ variables:
   - "go.sum"
   - "web/**/*"
   - "deploy/docker/**/*"
+  - "deploy/blue-green/**/*"
   - "config/**/*"
   - "docker-compose.yml"
   - "atlas-migrations/**/*"
@@ -232,33 +233,39 @@ deploy-app-test:
   stage: deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
+  timeout: 15m
   script:
     - |
       SSH_OPTS="-o StrictHostKeyChecking=no"
       IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
-      echo "=== Deploying ${IMAGE_TAG} to ${TEST_HOST} (test) ==="
+      echo "=== Blue-Green Deploy ${IMAGE_TAG} to ${TEST_HOST} (test) ==="
 
+      # 同步蓝绿部署文件（脚本/compose/upstream）到测试主机
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "mkdir -p ${TEST_PATH}"
-      scp ${SSH_OPTS} docker-compose.yml ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/docker-compose.yml
+      scp ${SSH_OPTS} -r deploy/blue-green/* ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/
 
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
         set -e
         cd ${TEST_PATH}
-        docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG} || echo "Gateway image not found, reusing existing"
-        docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} || echo "CP image not found, reusing existing"
+        docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG} || echo 'Gateway image not found, reusing existing'
+        docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} || echo 'CP image not found, reusing existing'
         export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=test
-        # 密钥/连接串由 GitLab CI/CD 变量注入到本 SSH 会话，docker-compose 才读得到。
-        # 切勿删除这些 export：远程主机拿不到 Runner 上的 GitLab 变量，删掉会导致
-        # docker-compose 的必填变量插值失败、容器起不来（详见 test-env-config skill）。
+        # 蓝绿参数：nginx upstream 走测试机路径；测试环境用短 drain/stop，避免流水线长时间等待
+        export NGINX_UPSTREAM=${TEST_PATH}/upstream-active.conf
+        export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30
+        export LEGACY_CONTAINERS='llm-gw-gateway llm-gw-control-plane'
+        # 密钥/连接串由 GitLab CI/CD 变量注入到本 SSH 会话，compose 才读得到。
+        # 切勿删除这些 export（详见 test-env-config skill）。
         export DATABASE_URL='${TEST_DATABASE_URL}'
-        export REDIS_ADDR='${TEST_REDIS_ADDR}' REDIS_PASSWORD='${TEST_REDIS_PASSWORD}' REDIS_DB='${TEST_REDIS_DB}'
+        export REDIS_ADDR='${TEST_REDIS_ADDR}' REDIS_PASSWORD='${TEST_REDIS_PASSWORD}'
+        export REDIS_DB='${TEST_REDIS_DB}' REDIS_DB_GREEN='${TEST_REDIS_DB_GREEN:-1}'
         export JWT_SECRET='${TEST_JWT_SECRET}'
         export INTERNAL_AUTH_TOKEN='${TEST_INTERNAL_TOKEN}'
-        export AUTH_INTERNAL_TOKEN='${TEST_INTERNAL_TOKEN}'
         export ENCRYPTION_KEY='${TEST_ENCRYPTION_KEY}'
         export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
-        docker compose -p llm-test up -d --remove-orphans --wait --wait-timeout 90
-        docker compose -p llm-test ps
+        export OAUTH_REDIRECT_URI='http://192.0.2.10:9080/auth/callback'
+        export FRONTEND_URL='http://192.0.2.10:9080'
+        bash deploy-blue-green.sh
       "
   environment:
     name: test
@@ -268,6 +275,42 @@ deploy-app-test:
     - if: $CI_COMMIT_BRANCH == "test"
       changes: *test-significant-changes
       when: on_success
+
+# 测试环境回滚（切回上一个颜色，要求对端仍在运行；手动触发）
+rollback-test:
+  stage: deploy
+  image: ${REGISTRY}/deploy-tools:latest
+  tags: [deploy]
+  timeout: 15m
+  script:
+    - |
+      SSH_OPTS="-o StrictHostKeyChecking=no"
+      echo "=== Rollback test to previous color ==="
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
+        set -e
+        cd ${TEST_PATH}
+        export REGISTRY=${REGISTRY} APP_ENV=test
+        export NGINX_UPSTREAM=${TEST_PATH}/upstream-active.conf
+        export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30
+        export DATABASE_URL='${TEST_DATABASE_URL}'
+        export REDIS_ADDR='${TEST_REDIS_ADDR}' REDIS_PASSWORD='${TEST_REDIS_PASSWORD}'
+        export REDIS_DB='${TEST_REDIS_DB}' REDIS_DB_GREEN='${TEST_REDIS_DB_GREEN:-1}'
+        export JWT_SECRET='${TEST_JWT_SECRET}'
+        export INTERNAL_AUTH_TOKEN='${TEST_INTERNAL_TOKEN}'
+        export ENCRYPTION_KEY='${TEST_ENCRYPTION_KEY}'
+        export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
+        export OAUTH_REDIRECT_URI='http://192.0.2.10:9080/auth/callback'
+        export FRONTEND_URL='http://192.0.2.10:9080'
+        bash deploy-blue-green.sh --rollback
+      "
+  environment:
+    name: test
+    url: http://192.0.2.10:9080
+  dependencies: []
+  rules:
+    - if: $CI_COMMIT_BRANCH == "test"
+      when: manual
+      allow_failure: true
 
 deploy-web-test:
   stage: deploy
@@ -392,11 +435,22 @@ verify-test:
   tags: [deploy]
   script:
     - |
+      SSH_OPTS="-o StrictHostKeyChecking=no"
       sleep 10
-      curl -sf --retry 3 --retry-delay 5 http://${TEST_HOST}:8080/health \
-        || { echo "ERROR: gateway /health failed"; exit 1; }
-      curl -sf --retry 3 --retry-delay 5 http://${TEST_HOST}:8081/healthz \
-        || { echo "ERROR: control-plane /healthz failed"; exit 1; }
+      # 蓝绿感知：按当前活跃颜色校验对应端口
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
+        cd ${TEST_PATH}
+        color=\$(cat .active-color 2>/dev/null || echo unknown)
+        case \$color in
+          blue)  gw=8080; cp=8081 ;;
+          green) gw=8082; cp=8083 ;;
+          *) echo 'ERROR: unknown active color'; exit 1 ;;
+        esac
+        echo \"active=\$color gateway=\$gw control-plane=\$cp\"
+        curl -fsS --retry 3 --retry-delay 5 http://127.0.0.1:\$gw/health   || { echo 'ERROR: gateway /health failed'; exit 1; }
+        curl -fsS --retry 3 --retry-delay 5 http://127.0.0.1:\$cp/healthz  || { echo 'ERROR: control-plane /healthz failed'; exit 1; }
+      "
+      # 走 nginx 的端到端冒烟（9080 → 活跃 gateway）
       curl -sf --retry 3 --retry-delay 5 http://${TEST_HOST}:9080/health \
         || { echo "ERROR: nginx -> gateway smoke test failed"; exit 1; }
       echo "=== All checks passed ==="
@@ -404,47 +458,3 @@ verify-test:
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
       changes: *test-significant-changes
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# RECON — 只读侦察测试主机（蓝绿改造前的现状探查，手动触发，不改动任何东西）
-# 目的：确认 test 主机 nginx 形态/配置路径、容器命名、端口占用，为蓝绿割接设计提供依据。
-# 用完即删。
-# ═══════════════════════════════════════════════════════════════════════════════
-recon-test:
-  stage: build
-  image: ${REGISTRY}/deploy-tools:latest
-  tags: [deploy]
-  needs: []
-  script:
-    - |
-      SSH_OPTS="-o StrictHostKeyChecking=no"
-      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} '
-        echo "===== uname / hostname ====="; hostname; uname -a
-        echo; echo "===== nginx 形态 ====="
-        which nginx 2>/dev/null && nginx -v 2>&1 || echo "no host nginx binary"
-        ps -eo pid,comm,args | grep -i nginx | grep -v grep || echo "no nginx process"
-        echo; echo "===== nginx -T 关键行（listen/server_name/proxy_pass/upstream/include/root）====="
-        (nginx -T 2>/dev/null | grep -nE "listen|server_name|proxy_pass|upstream|include|root " | head -120) || echo "nginx -T unavailable (maybe containerized)"
-        echo; echo "===== /etc/nginx 结构 ====="
-        ls -la /etc/nginx/ 2>/dev/null; echo "--- conf.d ---"; ls -la /etc/nginx/conf.d/ 2>/dev/null; echo "--- sites-enabled ---"; ls -la /etc/nginx/sites-enabled/ 2>/dev/null
-        echo; echo "===== docker 容器（含 nginx 容器？）====="
-        docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Image}}" 2>/dev/null | grep -Ei "nginx|llm|NAMES" || true
-        echo; echo "===== compose 项目 ====="
-        docker compose ls 2>/dev/null || true
-        echo; echo "===== 端口占用 8080-8083 / 9080 ====="
-        ss -ltnp "( sport = :8080 or sport = :8081 or sport = :8082 or sport = :8083 or sport = :9080 )" 2>/dev/null || true
-        echo; echo "===== 部署目录 /data/llm-gateway ====="
-        ls -la /data/llm-gateway/ 2>/dev/null || true
-        echo; echo "===== nginx.conf ====="
-        cat /etc/nginx/nginx.conf 2>/dev/null
-        echo; echo "===== sites-available/default (蓝绿要改这个文件) ====="
-        cat -n /etc/nginx/sites-available/default 2>/dev/null
-        echo; echo "===== conf.d/*.conf ====="
-        for f in /etc/nginx/conf.d/*.conf; do echo "--- $f ---"; cat "$f"; done 2>/dev/null
-        echo; echo "===== RECON DONE ====="
-      '
-  dependencies: []
-  allow_failure: true
-  rules:
-    - if: $CI_COMMIT_BRANCH == "test"
-      when: manual

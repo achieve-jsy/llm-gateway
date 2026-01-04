@@ -52,6 +52,7 @@ type VerifyKeyResp struct {
 		KeyID           string `json:"key_id,omitempty"`
 		KeyName         string `json:"key_name,omitempty"`
 		AccessAllGroups bool   `json:"access_all_groups"`
+		BypassOrgCheck  bool   `json:"bypass_org_check"`
 		LogEnabled      *bool  `json:"log_enabled,omitempty"` // nil = 字段缺失（旧缓存），默认 true
 		// v0.7: 可用模型组快照 + Key 类型 + 预算链
 		UsableGroups []string             `json:"usable_groups,omitempty"`

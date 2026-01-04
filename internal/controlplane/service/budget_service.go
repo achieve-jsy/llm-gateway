@@ -96,9 +96,11 @@ type BudgetItem struct {
 	WeeklyAmountUSD float64 `json:"weekly_amount_usd"` // 周限额，-1=不限
 	Period          string  `json:"period"`
 	Enabled         bool    `json:"enabled"`
-	// UsedUSD 在控制面接口中从 budget_consumption 取（对账副本，非实时）
-	UsedUSD       float64 `json:"used_usd"`
-	UsedRatio     float64 `json:"used_ratio"`
+	// UsedUSD/DailyUsedUSD/WeeklyUsedUSD 从 Redis 实时读取（budget:used:{scope_type}:{scope_id}:{period}）
+	UsedUSD        float64 `json:"used_usd"`
+	DailyUsedUSD   float64 `json:"daily_used_usd"`
+	WeeklyUsedUSD  float64 `json:"weekly_used_usd"`
+	UsedRatio      float64 `json:"used_ratio"`
 	UpdatedBy     string  `json:"updated_by,omitempty"`      // 最后修改人 ID
 	UpdatedByName string  `json:"updated_by_name,omitempty"` // 最后修改人名称
 	UpdatedAt     string  `json:"updated_at,omitempty"`      // 最后修改时间
@@ -145,7 +147,7 @@ func (s *BudgetService) SetBudget(ctx context.Context, scopeType, scopeID string
 	return nil
 }
 
-// GetBudget 查询单层预算（控制面展示，含 used_usd 对账副本）。
+// GetBudget 查询单层预算（控制面展示，used_usd 从 Redis 实时读取）。
 func (s *BudgetService) GetBudget(ctx context.Context, scopeType, scopeID string) (*BudgetItem, error) {
 	alloc, err := s.repo.GetAllocation(scopeType, scopeID)
 	if err != nil {
@@ -156,6 +158,7 @@ func (s *BudgetService) GetBudget(ctx context.Context, scopeType, scopeID string
 		ScopeID:         scopeID,
 		Period:          "monthly",
 		Enabled:         true,
+		AmountUSD:       -1, // -1 表示未配置（区别于显式设为 0 的封禁状态）
 		DailyAmountUSD:  -1,
 		WeeklyAmountUSD: -1,
 	}
@@ -165,16 +168,38 @@ func (s *BudgetService) GetBudget(ctx context.Context, scopeType, scopeID string
 		item.WeeklyAmountUSD = alloc.WeeklyAmountUSD
 		item.Enabled = alloc.Enabled
 	}
-	// 查对账副本 used_usd
-	period := time.Now().Format("2006-01")
-	cons, _ := s.repo.GetConsumption(scopeType, scopeID, period)
-	if cons != nil {
-		item.UsedUSD = cons.UsedUSD
-		if item.AmountUSD > 0 {
-			item.UsedRatio = item.UsedUSD / item.AmountUSD
-		}
+	// 从 Redis 读实时已用量（月/周/日，与网关 BudgetSettle 同源）
+	now := time.Now()
+	period := now.Format("2006-01")
+	item.UsedUSD = s.readUsedFromRedis(ctx, scopeType, scopeID, period)
+	if item.AmountUSD > 0 {
+		item.UsedRatio = item.UsedUSD / item.AmountUSD
+	}
+	if item.DailyAmountUSD >= 0 {
+		dayPeriod := now.Format("2006-01-02")
+		item.DailyUsedUSD = s.readUsedFromRedis(ctx, scopeType, scopeID, dayPeriod)
+	}
+	if item.WeeklyAmountUSD >= 0 {
+		year, week := now.ISOWeek()
+		weekPeriod := fmt.Sprintf("%d-W%02d", year, week)
+		item.WeeklyUsedUSD = s.readUsedFromRedis(ctx, scopeType, scopeID, weekPeriod)
 	}
 	return item, nil
+}
+
+// readUsedFromRedis 从 Redis 读取某 scope 某周期的已用量（USD）。
+// key 格式与网关保持一致：budget:used:{scope_type}:{scope_id}:{period}
+// Redis 不可用或 key 不存在时返回 0（fail-open，不影响展示加载）。
+func (s *BudgetService) readUsedFromRedis(ctx context.Context, scopeType, scopeID, period string) float64 {
+	if s.rdb == nil {
+		return 0
+	}
+	key := fmt.Sprintf("budget:used:%s:%s:%s", scopeType, scopeID, period)
+	val, err := s.rdb.Get(ctx, key).Float64()
+	if err != nil {
+		return 0 // key 不存在（未消费）或 Redis 异常，均视为 0
+	}
+	return val
 }
 
 // ListScoped 按管辖范围列出预算配置（管理面用）。
@@ -196,7 +221,8 @@ func (s *BudgetService) ListScoped(ctx context.Context, scopeTypes []string, sco
 	}
 	updaterNames, _ := s.repo.ResolveScopeNames("member", updaterIDs)
 
-	period := time.Now().Format("2006-01")
+	now := time.Now()
+	period := now.Format("2006-01")
 	items := make([]BudgetItem, 0, len(allocs))
 	for _, a := range allocs {
 		item := BudgetItem{
@@ -218,12 +244,18 @@ func (s *BudgetService) ListScoped(ctx context.Context, scopeTypes []string, sco
 		if !a.UpdatedAt.IsZero() {
 			item.UpdatedAt = a.UpdatedAt.Format("01/02 15:04")
 		}
-		cons, _ := s.repo.GetConsumption(a.ScopeType, a.ScopeID, period)
-		if cons != nil {
-			item.UsedUSD = cons.UsedUSD
-			if item.AmountUSD > 0 {
-				item.UsedRatio = item.UsedUSD / item.AmountUSD
-			}
+		item.UsedUSD = s.readUsedFromRedis(ctx, a.ScopeType, a.ScopeID, period)
+		if item.AmountUSD > 0 {
+			item.UsedRatio = item.UsedUSD / item.AmountUSD
+		}
+		if item.DailyAmountUSD >= 0 {
+			dayPeriod := now.Format("2006-01-02")
+			item.DailyUsedUSD = s.readUsedFromRedis(ctx, a.ScopeType, a.ScopeID, dayPeriod)
+		}
+		if item.WeeklyAmountUSD >= 0 {
+			year, week := now.ISOWeek()
+			weekPeriod := fmt.Sprintf("%d-W%02d", year, week)
+			item.WeeklyUsedUSD = s.readUsedFromRedis(ctx, a.ScopeType, a.ScopeID, weekPeriod)
 		}
 		items = append(items, item)
 	}

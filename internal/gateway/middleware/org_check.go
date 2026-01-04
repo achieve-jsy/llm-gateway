@@ -41,8 +41,9 @@ var orgCheckPasslist = map[string]struct{}{
 }
 
 // OrgCheckMiddleware 检查用户组织归属状态：
-//  1. 无部门用户（dept_id 为空）→ 403 budget_not_configured（v0.7 FR-1.8）
-//  2. pending_studio 状态（dept_id 非空 + studio_id 为空）→ 403 org_pending_studio
+//  1. bypass_org_check=true 的受信 Key（系统探针、平台内部 Key）→ 直接放行
+//  2. 无部门用户（dept_id 为空）→ 403 budget_not_configured（v0.7 FR-1.8）
+//  3. pending_studio 状态（dept_id 非空 + studio_id 为空）→ 403 org_pending_studio
 //
 // 放置位置：AuthMiddleware 之后、Scheduler 之前（/v1/* 链上）。
 func OrgCheckMiddleware() gin.HandlerFunc {
@@ -51,6 +52,14 @@ func OrgCheckMiddleware() gin.HandlerFunc {
 		if _, skip := orgCheckPasslist[c.Request.URL.Path]; skip {
 			c.Next()
 			return
+		}
+
+		// bypass_org_check=true 的受信 Key 豁免组织归属检查（如系统健康探针 Key）
+		if identityVal, exists := c.Get("identity"); exists {
+			if id, ok := identityVal.(*gwmodel.UserIdentity); ok && id.BypassOrgCheck {
+				c.Next()
+				return
+			}
 		}
 
 		deptID := c.GetString(CtxKeyDeptID)

@@ -23,6 +23,8 @@ type ApiKey struct {
 	Enabled         bool       `gorm:"not null;default:true;index:idx_api_keys_enabled" json:"enabled"`
 	LogEnabled      bool       `gorm:"not null;default:true" json:"log_enabled"`
 	AccessAllGroups bool       `gorm:"not null;default:false" json:"access_all_groups"`
+	// BypassOrgCheck 豁免组织归属检查（供系统探针、平台内部 Key 使用，默认 false）
+	BypassOrgCheck  bool       `gorm:"not null;default:false" json:"bypass_org_check"`
 	UserName        string     `gorm:"type:varchar(128)" json:"user_name,omitempty"`
 	DeptID          string     `gorm:"type:text;default:''" json:"dept_id,omitempty"`
 	DeptName        string     `gorm:"type:varchar(128)" json:"dept_name,omitempty"`

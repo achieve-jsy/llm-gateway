@@ -9,14 +9,21 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 // BudgetAlertService 处理告警触发（阈值+去重）与通知发送。
 type BudgetAlertService struct {
 	budgetRepo *repository.BudgetRepo
 	alertRepo  *repository.BudgetAlertRepo
+	rdb        *redis.Client
 	// notifier 可选：webhook 发送（nil = 仅站内）
 	notifier WebhookNotifier
+}
+
+// SetRedis 注入 Redis 客户端，用于读取实时已用量。
+func (s *BudgetAlertService) SetRedis(rdb *redis.Client) {
+	s.rdb = rdb
 }
 
 // WebhookNotifier 飞书/webhook 通知接口（由 settings_service 实现）。
@@ -42,12 +49,9 @@ func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, sc
 		return
 	}
 
-	cons, err := s.budgetRepo.GetConsumption(scopeType, scopeID, period)
-	if err != nil || cons == nil {
-		return
-	}
-
-	ratio := cons.UsedUSD / alloc.AmountUSD
+	// 从 Redis 读取实时已用量（与网关核销保持同源，budget_consumption 表未维护）
+	usedUSD := s.readUsedFromRedis(ctx, scopeType, scopeID, period)
+	ratio := usedUSD / alloc.AmountUSD
 
 	thresholds := []int{model.AlertThreshold80}
 	// 程序服务预算额外添加 100% 阈值
@@ -78,7 +82,7 @@ func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, sc
 		}
 		// 发通知（降级：webhook 失败不阻断，仅记录）
 		msg := fmt.Sprintf("【预算告警】%s(%s) 本月用量已达 %d%%（$%.2f / $%.2f），请关注并考虑扩容",
-			scopeType, scopeID, threshold, cons.UsedUSD, alloc.AmountUSD)
+			scopeType, scopeID, threshold, usedUSD, alloc.AmountUSD)
 		if s.notifier != nil {
 			if err := s.notifier.SendText(ctx, msg); err != nil {
 				slog.Warn("budget_alert: webhook notify failed", "error", err)
@@ -87,6 +91,19 @@ func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, sc
 		slog.Info("budget_alert: sent", "scope_type", scopeType, "scope_id", scopeID,
 			"threshold", threshold, "ratio", ratio)
 	}
+}
+
+// readUsedFromRedis 从 Redis 读取已用量（与 budget_service.readUsedFromRedis 同源）。
+func (s *BudgetAlertService) readUsedFromRedis(ctx context.Context, scopeType, scopeID, period string) float64 {
+	if s.rdb == nil {
+		return 0
+	}
+	key := fmt.Sprintf("budget:used:%s:%s:%s", scopeType, scopeID, period)
+	val, err := s.rdb.Get(ctx, key).Float64()
+	if err != nil {
+		return 0
+	}
+	return val
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

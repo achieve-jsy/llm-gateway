@@ -284,6 +284,8 @@ func (h *BudgetHandler) MyBudget(c *gin.Context) {
 		DailyAmountUSD  float64 `json:"daily_amount_usd"`
 		WeeklyAmountUSD float64 `json:"weekly_amount_usd"`
 		UsedUSD         float64 `json:"used_usd"`
+		DailyUsedUSD    float64 `json:"daily_used_usd"`
+		WeeklyUsedUSD   float64 `json:"weekly_used_usd"`
 		UsedRatio       float64 `json:"used_ratio"`
 		Period          string  `json:"period"`
 	}
@@ -309,6 +311,8 @@ func (h *BudgetHandler) MyBudget(c *gin.Context) {
 			item.DailyAmountUSD = alloc.DailyAmountUSD
 			item.WeeklyAmountUSD = alloc.WeeklyAmountUSD
 			item.UsedUSD = alloc.UsedUSD
+			item.DailyUsedUSD = alloc.DailyUsedUSD
+			item.WeeklyUsedUSD = alloc.WeeklyUsedUSD
 			item.UsedRatio = alloc.UsedRatio
 		}
 		// 成员层未配额度则跳过

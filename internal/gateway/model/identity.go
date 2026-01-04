@@ -7,6 +7,8 @@ type UserIdentity struct {
 	DepartmentID    string `json:"department_id"`
 	StudioID        string `json:"studio_id,omitempty"`
 	AccessAllGroups bool   `json:"access_all_groups"`
+	// BypassOrgCheck 豁免组织归属检查（来自 api_keys.bypass_org_check，供系统探针/内部 Key 使用）
+	BypassOrgCheck  bool   `json:"bypass_org_check"`
 	LogEnabled      bool   `json:"log_enabled"`
 	// v0.7: 可用模型组名称集合（public ∪ 本部门已开通 controlled），由 verify-key 快照下发。
 	UsableGroups []string `json:"usable_groups,omitempty"`

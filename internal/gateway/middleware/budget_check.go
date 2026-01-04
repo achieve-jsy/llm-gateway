@@ -61,7 +61,8 @@ for i = 0, n - 1 do
     end
   end
 end
--- 第二遍：全部通过才预占（对所有 key 做 INCRBYFLOAT）
+-- 第二遍：全部通过才预占（对所有 key 做 INCRBYFLOAT，并按周期设 TTL 防 key 积累）
+-- TTL：月 key 70 天，周 key 14 天，日 key 3 天
 for i = 0, n - 1 do
   local mk = KEYS[i * 3 + 1]
   local wk = KEYS[i * 3 + 2]
@@ -72,12 +73,15 @@ for i = 0, n - 1 do
   local d_amount = tonumber(ARGV[base + 2])
   if m_amount >= 0 then
     redis.call('INCRBYFLOAT', mk, est)
+    if redis.call('TTL', mk) < 0 then redis.call('EXPIRE', mk, 6048000) end  -- 70d
   end
   if w_amount >= 0 then
     redis.call('INCRBYFLOAT', wk, est)
+    if redis.call('TTL', wk) < 0 then redis.call('EXPIRE', wk, 1209600) end  -- 14d
   end
   if d_amount >= 0 then
     redis.call('INCRBYFLOAT', dk, est)
+    if redis.call('TTL', dk) < 0 then redis.call('EXPIRE', dk, 259200) end   -- 3d
   end
 end
 return {1, ''}

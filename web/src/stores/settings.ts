@@ -4,7 +4,7 @@ import { getPublicSettings as fetchPublicSettings, getSystemSettings as fetchSys
 import type { SystemSettings, PublicSettings } from '@/types/settings'
 
 function defaultPublicSettings(): PublicSettings {
-  return { site_name: 'LLM Gateway', site_logo: '', site_subtitle: '', api_base_url: '', rate_limit_per_minute: 60, max_concurrency_per_key: 10, supplier_name: '某公司' }
+  return { site_name: 'LLM Gateway', site_logo: '', site_subtitle: '', api_base_url: '', rate_limit_per_minute: 60, max_concurrency_per_key: 10, supplier_name: '某公司', pricing_usd_to_cny_rate: 7.2 }
 }
 
 function defaultSystemSettings(): SystemSettings {
@@ -16,6 +16,7 @@ function defaultSystemSettings(): SystemSettings {
     webhook_enabled: false, webhook_url: '', webhook_secret: '', webhook_events: 'health_check_failed',
     default_max_switches: 2, default_same_model_retries: 1, default_failover_cooldown_seconds: 60,
     supplier_name: '某公司',
+    pricing_usd_to_cny_rate: 7.2,
   }
 }
 

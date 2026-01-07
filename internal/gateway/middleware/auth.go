@@ -63,6 +63,7 @@ func AuthMiddleware(authClient *infra.AuthClient) gin.HandlerFunc {
 				DepartmentID:    resp.Data.User.DepartmentID,
 				StudioID:        resp.Data.User.StudioID,
 				AccessAllGroups: resp.Data.AccessAllGroups,
+				BypassOrgCheck:  resp.Data.BypassOrgCheck,
 				LogEnabled:      logEnabled,
 				// v0.7: 从 verify-key 快照直接下发，无需网关再查库
 				UsableGroups: resp.Data.UsableGroups,

@@ -60,6 +60,7 @@ type VerifyResult struct {
 	KeyName         string           `json:"key_name,omitempty"`
 	Status          string           `json:"status"`
 	AccessAllGroups bool             `json:"access_all_groups"`
+	BypassOrgCheck  bool             `json:"bypass_org_check"`
 	LogEnabled      bool             `json:"log_enabled"`
 	User            VerifyResultUser `json:"user"`
 	// v0.7: 模型组授权快照。public ∪ 本部门已开通 controlled 的组名集合。
@@ -517,6 +518,7 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 		KeyName:         k.Name,
 		Status:          status,
 		AccessAllGroups: k.AccessAllGroups,
+		BypassOrgCheck:  k.BypassOrgCheck,
 		LogEnabled:      k.LogEnabled,
 		KeyType:         keyType,
 		UsableGroups:    usableGroups,

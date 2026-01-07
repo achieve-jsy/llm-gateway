@@ -40,10 +40,13 @@
             </div>
             <div class="group-card__body">
               <p class="group-card__desc">{{ group.description || '暂无描述' }}</p>
-              <div v-if="group.open_mode === 'controlled'" class="group-card__stats">
-                <span>已授权 {{ getStudioCount(group.id) }} 工作室</span>
-                <span class="stats-separator">·</span>
-                <span>{{ getDeptCount(group.id) }} 部门开通</span>
+              <div class="group-card__stats">
+                <span v-if="group.open_mode === 'public'" class="stats-public-hint">全员可用</span>
+                <template v-else>
+                  <span>已授权 {{ getStudioCount(group.id) }} 工作室</span>
+                  <span class="stats-separator">·</span>
+                  <span>{{ getDeptCount(group.id) }} 部门开通</span>
+                </template>
               </div>
             </div>
             <div class="group-card__footer">
@@ -93,7 +96,9 @@
             <div class="group-card__body">
               <p class="group-card__desc">{{ group.description || '暂无描述' }}</p>
               <div class="group-card__stats">
-                <span>本工作室 {{ getMyStudioDeptCount(group.id) }} 部门开通</span>
+                <span class="stats-public-hint">本工作室已授权</span>
+                <span class="stats-separator">·</span>
+                <span>{{ getMyStudioDeptCount(group.id) }} 部门开通</span>
               </div>
             </div>
             <div class="group-card__footer">
@@ -143,7 +148,7 @@
                   :type="group.open_mode === 'public' ? 'success' : 'warning'"
                   size="small"
                 >
-                  {{ group.open_mode === 'public' ? '公开' : '已开通' }}
+                  {{ group.open_mode === 'public' ? '全员可用' : '已开通' }}
                 </el-tag>
               </div>
             </div>
@@ -191,6 +196,9 @@
       v-model:visible="drawerVisible"
       :group-id="activeGroupId"
       :group-name="activeGroupName"
+      :actor-role="actorRole"
+      :restrict-studio-id="myStudioId"
+      :restrict-dept-id="myDeptId"
       @closed="onDrawerClosed"
     />
   </div>
@@ -227,6 +235,13 @@ const openModeFilter = ref<'all' | 'public' | 'controlled'>('all')
 const enablingGroupId = ref<number | null>(null)
 
 // ─── 计算属性 ──────────────────────────────────────────────────────────────────
+
+// 传给 GroupEntitlementDialog 的调用者角色，用于隐藏 studio Tab 和锁定部门范围
+const actorRole = computed<'admin' | 'studio_admin' | 'dept_admin' | undefined>(() => {
+  const r = authStore.effectiveRole
+  if (r === 'admin' || r === 'studio_admin' || r === 'dept_admin') return r
+  return undefined
+})
 
 const roleDescription = computed(() => {
   switch (authStore.effectiveRole) {
@@ -535,6 +550,15 @@ onMounted(() => {
 
 .stats-separator {
   margin: 0 6px;
+}
+
+.stats-public-hint {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--el-color-success-light-8);
+  color: var(--el-color-success);
+  font-weight: 500;
 }
 
 .group-card__footer {

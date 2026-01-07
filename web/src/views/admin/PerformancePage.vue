@@ -118,6 +118,11 @@ import { onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { Refresh, Loading, ArrowDown, ArrowUp } from '@element-plus/icons-vue'
 import { getPerformance } from '@/services/control-plane'
 import type { PerformanceItem } from '@/services/control-plane'
+import { groupsApi } from '@/api/groups'
+import type { GroupEntitlement } from '@/types/group'
+import { useAuthStore } from '@/stores/auth'
+
+const authStore = useAuthStore()
 
 const PAGE_SIZE = 50
 const loading = ref(false)
@@ -130,12 +135,88 @@ let timer: ReturnType<typeof setInterval> | null = null
 
 const expandedGroups = ref<Set<string>>(new Set())
 
+// 授权相关
+const entitlementsMap = ref<Map<string, GroupEntitlement[]>>(new Map())
+const myDeptIds = ref<string[]>([])
+const myStudioId = ref('')
+
+// 判断模型组是否对当前用户可用
+function isGroupAvailable(groupName: string): boolean {
+  const role = authStore.effectiveRole
+  
+  // admin 可以看到所有组
+  if (role === 'admin') return true
+  
+  // 查找该组的授权记录
+  const ents = entitlementsMap.value.get(groupName) || []
+  
+  // studio_admin: 检查工作室是否被授权
+  if (role === 'studio_admin' && myStudioId.value) {
+    return ents.some(e => e.scope_type === 'studio' && e.scope_id === myStudioId.value && e.enabled)
+  }
+  
+  // dept_admin: 检查本部门是否被开通
+  if (role === 'dept_admin' && myDeptIds.value.length > 0) {
+    return myDeptIds.value.some(deptId => 
+      ents.some(e => e.scope_type === 'dept' && e.scope_id === deptId && e.enabled)
+    )
+  }
+  
+  // 普通用户：只能看到公开组（需要额外检查 open_mode）
+  return false
+}
+
+async function loadEntitlements() {
+  const role = authStore.effectiveRole
+  if (role !== 'studio_admin' && role !== 'dept_admin') return
+  
+  // 从 orgRoles 提取部门/工作室 ID
+  const deptRoles = authStore.orgRoles.filter(r => r.role === 'dept_admin' && r.scope_type === 'dept')
+  myDeptIds.value = deptRoles.map(r => r.scope_id)
+  
+  const studioRole = authStore.orgRoles.find(r => r.role === 'studio_admin' && r.scope_type === 'studio')
+  myStudioId.value = studioRole?.scope_id || ''
+  
+  // 获取所有模型组的授权记录
+  try {
+    const res = await groupsApi.listGroups({ page_size: 200 })
+    const allGroups = res.data.data ?? []
+    const controlledGroups = allGroups.filter(g => g.open_mode === 'controlled' && g.enabled)
+    
+    const entitlementPromises = controlledGroups.map(async g => {
+      try {
+        const entRes = await groupsApi.listEntitlements(g.id)
+        return { groupName: g.name, items: entRes.data.data?.items || [] }
+      } catch {
+        return { groupName: g.name, items: [] }
+      }
+    })
+    
+    const entResults = await Promise.all(entitlementPromises)
+    const newMap = new Map<string, GroupEntitlement[]>()
+    for (const r of entResults) {
+      newMap.set(r.groupName, r.items)
+    }
+    entitlementsMap.value = newMap
+  } catch {
+    entitlementsMap.value = new Map()
+  }
+}
+
 async function loadData() {
   loading.value = true
   try {
     const result = await getPerformance(windowVal.value, view.value, searchText.value, PAGE_SIZE)
-    items.value = result.items || []
-    total.value = result.total ?? (result.items?.length || 0)
+    let filteredItems = result.items || []
+    
+    // 对非 admin 用户进行授权过滤（仅 group 视角需要过滤）
+    const role = authStore.effectiveRole
+    if (role !== 'admin' && role !== null && view.value === 'group') {
+      filteredItems = filteredItems.filter(item => isGroupAvailable(item.name))
+    }
+    
+    items.value = filteredItems
+    total.value = result.total ?? filteredItems.length
   } catch {
     items.value = []
     total.value = 0
@@ -155,7 +236,15 @@ function toggleExpand(name: string) {
 }
 
 onMounted(() => {
-  refreshData()
+  // 非 admin 用户需要先加载授权数据
+  const role = authStore.effectiveRole
+  if (role !== 'admin' && role !== null) {
+    loadEntitlements().then(() => {
+      loadData()
+    })
+  } else {
+    loadData()
+  }
   timer = setInterval(() => loadData(), 60000)
 })
 onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })

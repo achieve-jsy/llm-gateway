@@ -49,4 +49,11 @@ var Registry = map[Permission]PolicyEntry{
 
 	// 用量看板（管辖范围）：任意管理角色
 	PermUsageViewScoped: {ScopeManage},
+
+	// 模型组授权管理：仅 admin（设开放模式 + 授权工作室）
+	PermEntitlementManage: {ScopeGlobal},
+
+	// 下放/开通部门：studio_admin（自己工作室范围）或 admin（全局）
+	// dept_admin 也可调用（但只能操作自己部门，由 Policy 层校验）
+	PermEntitlementGrantDept: {ScopeManage},
 }

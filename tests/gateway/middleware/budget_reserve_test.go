@@ -82,7 +82,9 @@ func TestReserve_NilDeps(t *testing.T) {
 // TestReserve_NilRDB 验证 deps.RDB=nil 时跳过预扣。
 func TestReserve_NilRDB(t *testing.T) {
 	c := newGinCtx()
-	c.Set("identity", &gwmodel.UserIdentity{BudgetChain: []gwmodel.BudgetScope{{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 100, Label: "s1"}}})
+	c.Set("identity", &gwmodel.UserIdentity{BudgetChain: []gwmodel.BudgetScope{
+		{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 100, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "s1"},
+	}})
 
 	deps := &middleware.BudgetDeps{RDB: nil}
 	result, err := middleware.Reserve(c, deps, "gpt-4o", 1000, 1000)
@@ -132,8 +134,8 @@ func TestReserve_Success(t *testing.T) {
 	c.Set("identity", &gwmodel.UserIdentity{
 		KeyID: "key-001",
 		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "dept_daily", ScopeID: "dept-d1", AmountUSD: 500.0, Label: "研发部日常"},
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 2000.0, Label: "工作室1"},
+			{ScopeType: "dept_daily", ScopeID: "dept-d1", AmountUSD: 500.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "研发部日常"},
+			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 2000.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"},
 		},
 	})
 
@@ -149,7 +151,8 @@ func TestReserve_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.NotEmpty(t, result.Keys)
-	assert.Len(t, result.Keys, 2, "应有 2 个 scope keys")
+	// 每个 scope 有 3 个 key（月/周/日），2 个 scope → 6 个 key
+	assert.Len(t, result.Keys, 6, "应有 6 个预算 key（2 scope × 3 维度）")
 	assert.InDelta(t, 0.0625, result.EstCost, 0.0001)
 
 	// ctx 设置了预算信息
@@ -181,8 +184,8 @@ func TestReserve_Exceeded_SingleLayer(t *testing.T) {
 	c := newGinCtx()
 	c.Set("identity", &gwmodel.UserIdentity{
 		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "dept_daily", ScopeID: "dept-d1", AmountUSD: 0.01, Label: "研发部日常"}, // 很小，必超额
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 2000.0, Label: "工作室1"},
+			{ScopeType: "dept_daily", ScopeID: "dept-d1", AmountUSD: 0.01, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "研发部日常"}, // 月额很小，必超额
+			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 2000.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"},
 		},
 	})
 
@@ -195,7 +198,8 @@ func TestReserve_Exceeded_SingleLayer(t *testing.T) {
 	require.Error(t, err)
 	beErr, ok := err.(*middleware.BudgetExceededError)
 	require.True(t, ok, "err 应为 *BudgetExceededError")
-	assert.Equal(t, "研发部日常", beErr.Label)
+	// Label 格式："{层名} [{维度}限额]"，只需断言包含层名即可
+	assert.Contains(t, beErr.Label, "研发部日常")
 	assert.Contains(t, beErr.Message, "研发部日常")
 }
 
@@ -204,8 +208,8 @@ func TestReserve_Exceeded_SecondLayer(t *testing.T) {
 	c := newGinCtx()
 	c.Set("identity", &gwmodel.UserIdentity{
 		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "dept_daily", ScopeID: "dept-d1", AmountUSD: 2000.0, Label: "研发部日常"}, // 充裕
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 0.01, Label: "工作室1"}, // 几乎空
+			{ScopeType: "dept_daily", ScopeID: "dept-d1", AmountUSD: 2000.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "研发部日常"}, // 充裕
+			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 0.01, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"},             // 月额几乎空
 		},
 	})
 
@@ -218,7 +222,7 @@ func TestReserve_Exceeded_SecondLayer(t *testing.T) {
 	require.Error(t, err)
 	beErr, ok := err.(*middleware.BudgetExceededError)
 	require.True(t, ok)
-	assert.Equal(t, "工作室1", beErr.Label, "应该报告 studio 层超额，不是 dept 层")
+	assert.Contains(t, beErr.Label, "工作室1", "应该报告 studio 层超额，不是 dept 层")
 }
 
 // TestReserve_Exceeded_PartialExistingUsage 验证已有部分用量时仍能正确判断。
@@ -226,7 +230,7 @@ func TestReserve_Exceeded_PartialExistingUsage(t *testing.T) {
 	c := newGinCtx()
 	c.Set("identity", &gwmodel.UserIdentity{
 		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "dept_daily", ScopeID: "dept-d1", AmountUSD: 1.0, Label: "研发部日常"},
+			{ScopeType: "dept_daily", ScopeID: "dept-d1", AmountUSD: 1.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "研发部日常"},
 		},
 	})
 
@@ -254,7 +258,7 @@ func TestReserve_SingleRequestLimit(t *testing.T) {
 	c := newGinCtx()
 	c.Set("identity", &gwmodel.UserIdentity{
 		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, Label: "工作室1"}, // 充足
+			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"}, // 充足
 		},
 	})
 
@@ -280,7 +284,7 @@ func TestReserve_SingleRequestLimit_ZeroMeansUnlimited(t *testing.T) {
 	c := newGinCtx()
 	c.Set("identity", &gwmodel.UserIdentity{
 		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, Label: "工作室1"},
+			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"},
 		},
 	})
 
@@ -309,7 +313,7 @@ func TestReserve_RedisFailure_FailOpen(t *testing.T) {
 	c := newGinCtx()
 	c.Set("identity", &gwmodel.UserIdentity{
 		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, Label: "工作室1"},
+			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"},
 		},
 	})
 
@@ -339,7 +343,7 @@ func TestReserve_CustomPricing(t *testing.T) {
 	c := newGinCtx()
 	c.Set("identity", &gwmodel.UserIdentity{
 		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, Label: "工作室1"},
+			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"},
 		},
 	})
 
@@ -379,7 +383,7 @@ func TestReserve_PricingReturnsNil_UsesFallback(t *testing.T) {
 	c := newGinCtx()
 	c.Set("identity", &gwmodel.UserIdentity{
 		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, Label: "工作室1"},
+			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"},
 		},
 	})
 
@@ -398,12 +402,13 @@ func TestReserve_PricingReturnsNil_UsesFallback(t *testing.T) {
 	assert.InDelta(t, 0.0625, result.EstCost, 0.0001)
 }
 
-// TestReserve_UnlimitedScope 验证 AmountUSD < 0 表示不限额的 scope 不触发超额。
+// TestReserve_UnlimitedScope 验证 AmountUSD/WeeklyAmountUSD/DailyAmountUSD 均为 -1
+// 时（全维度不限额）不触发超额。
 func TestReserve_UnlimitedScope(t *testing.T) {
 	c := newGinCtx()
 	c.Set("identity", &gwmodel.UserIdentity{
 		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: -1.0, Label: "工作室1"}, // 无限制
+			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: -1.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"}, // 全维度无限制
 		},
 	})
 
@@ -417,12 +422,54 @@ func TestReserve_UnlimitedScope(t *testing.T) {
 	require.NotNil(t, result)
 }
 
+// TestReserve_DailyLimitExceeded 验证日限额触发（AmountUSD=-1 不限月，但 DailyAmountUSD 很小）。
+func TestReserve_DailyLimitExceeded(t *testing.T) {
+	c := newGinCtx()
+	c.Set("identity", &gwmodel.UserIdentity{
+		BudgetChain: []gwmodel.BudgetScope{
+			{ScopeType: "dept_daily", ScopeID: "dept-d1", AmountUSD: -1, WeeklyAmountUSD: -1, DailyAmountUSD: 0.01, Label: "研发部日常"},
+		},
+	})
+	rdb, _ := startMiniredis(t)
+	deps := &middleware.BudgetDeps{RDB: rdb, FallbackOutputTokens: 2048}
+
+	result, err := middleware.Reserve(c, deps, "gpt-4o", 1000, 1000)
+
+	assert.Nil(t, result)
+	require.Error(t, err)
+	beErr, ok := err.(*middleware.BudgetExceededError)
+	require.True(t, ok)
+	assert.Contains(t, beErr.Label, "研发部日常")
+	assert.Contains(t, beErr.Label, "日限额")
+}
+
+// TestReserve_WeeklyLimitExceeded 验证周限额触发（月/日不限，但 WeeklyAmountUSD 很小）。
+func TestReserve_WeeklyLimitExceeded(t *testing.T) {
+	c := newGinCtx()
+	c.Set("identity", &gwmodel.UserIdentity{
+		BudgetChain: []gwmodel.BudgetScope{
+			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: -1, WeeklyAmountUSD: 0.01, DailyAmountUSD: -1, Label: "工作室1"},
+		},
+	})
+	rdb, _ := startMiniredis(t)
+	deps := &middleware.BudgetDeps{RDB: rdb, FallbackOutputTokens: 2048}
+
+	result, err := middleware.Reserve(c, deps, "gpt-4o", 1000, 1000)
+
+	assert.Nil(t, result)
+	require.Error(t, err)
+	beErr, ok := err.(*middleware.BudgetExceededError)
+	require.True(t, ok)
+	assert.Contains(t, beErr.Label, "工作室1")
+	assert.Contains(t, beErr.Label, "周限额")
+}
+
 // TestReserve_ZeroEstCost_Skips 验证估算成本为 0 时跳过预扣（避免 Redis 无谓操作）。
 func TestReserve_ZeroEstCost_Skips(t *testing.T) {
 	c := newGinCtx()
 	c.Set("identity", &gwmodel.UserIdentity{
 		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, Label: "工作室1"},
+			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"},
 		},
 	})
 
@@ -448,7 +495,7 @@ func TestReserve_FallbackDefaultOutputTokens(t *testing.T) {
 	c := newGinCtx()
 	c.Set("identity", &gwmodel.UserIdentity{
 		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, Label: "工作室1"},
+			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"},
 		},
 	})
 

@@ -86,6 +86,15 @@ func (f *fakeBudgetAllocationRepo) ListDeptStudioRows() ([]model.DeptStudioRow, 
 	return f.listDeptStudioRow, f.listDeptStudioErr
 }
 
+func (f *fakeBudgetAllocationRepo) ListDeptIDsByStudioID(studioID string) ([]string, error) {
+	return nil, nil
+}
+
+func (f *fakeBudgetAllocationRepo) DeleteAllocation(scopeType, scopeID string) error {
+	delete(f.allocations, allocationKey(scopeType, scopeID))
+	return nil
+}
+
 func (f *fakeBudgetAllocationRepo) ResolveScopeNames(scopeType string, scopeIDs []string) (map[string]string, error) {
 	// 测试中不需要真实名称解析，返回空 map
 	return make(map[string]string), nil
@@ -365,7 +374,7 @@ func TestBudgetService_GetBudget_WithConsumption(t *testing.T) {
 }
 
 // TestBudgetService_GetBudget_NotFound 验证未配置预算时返回默认 item
-// （amount_usd=0, enabled=true），不返回错误。
+// （amount_usd=-1 表示"未配置/不限"，有别于显式封禁的 0），不返回错误。
 func TestBudgetService_GetBudget_NotFound(t *testing.T) {
 	repo := newFakeAllocRepo()
 	// 注意：没预设任何 allocations
@@ -378,7 +387,7 @@ func TestBudgetService_GetBudget_NotFound(t *testing.T) {
 	require.NotNil(t, item)
 	assert.Equal(t, "company", item.ScopeType)
 	assert.Equal(t, "GLOBAL", item.ScopeID)
-	assert.Equal(t, 0.0, item.AmountUSD, "未配置预算默认为 0")
+	assert.Equal(t, -1.0, item.AmountUSD, "未配置预算时 AmountUSD=-1（区别于显式封禁的 0）")
 }
 
 // TestBudgetService_InitDefaultBudgets_SkipsExisting 验证初始化对已有配置跳过。

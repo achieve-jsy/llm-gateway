@@ -2,12 +2,13 @@ package model
 
 // UserIdentity represents the authenticated user identity
 type UserIdentity struct {
-	UserID          string `json:"user_id"`
-	KeyID           string `json:"key_id"`
-	DepartmentID    string `json:"department_id"`
-	StudioID        string `json:"studio_id,omitempty"`
-	AccessAllGroups bool   `json:"access_all_groups"`
-	LogEnabled      bool   `json:"log_enabled"`
+	UserID          string   `json:"user_id"`
+	KeyID           string   `json:"key_id"`
+	DepartmentID    string   `json:"department_id"`
+	StudioID        string   `json:"studio_id,omitempty"`
+	AccessAllGroups bool     `json:"access_all_groups"`
+	LogEnabled      bool     `json:"log_enabled"`
+	UsableGroups    []string `json:"usable_groups"`
 }
 
 // MeModelItem represents a single model in /v1/me/models response

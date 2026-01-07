@@ -103,6 +103,20 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	keyGroupSvc := service.NewKeyGroupService(keyGroupRepo, groupRepo, keyRepo, service.NewEventPublisherAdapter(publisher))
 	keySvc := service.NewKeyService(keyRepo, keyGroupSvc, service.NewEventPublisherAdapter(publisher))
 
+	// Org container (create early for entitlement DI + RBAC guard)
+	orgContainer := orgservice.New(db, rdb, orgservice.BootstrapAdmins())
+	authHandler.SetBootstrapChecker(orgContainer.Bootstrap)
+
+	// 模型组授权服务 & RBAC guard
+	entitlementRepo := repository.NewEntitlementRepo(db)
+	entitlementSvc := service.NewEntitlementService(entitlementRepo, groupRepo, publisher)
+	keySvc.SetEntitlementService(entitlementSvc)
+	deptRepo := orgrepo.NewDeptRepo(db)
+	deptLookup := &deptStudioAdapter{repo: deptRepo}
+	guard := func(perm rbac.Permission) gin.HandlerFunc {
+		return func(c *gin.Context) { orgContainer.RBAC.Guard(perm)(c) }
+	}
+
 	// KeyOrgSyncer：org 变动后异步同步 api_keys org 字段并失效 KeyCache
 	keyOrgSyncer := service.NewKeyOrgSyncer(db, service.NewEventPublisherAdapter(publisher))
 
@@ -389,17 +403,13 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	internalGroup.GET("/groups/model-info", modelInfoHandler.GetGroupModelInfo)
 	}
 
-	// ─── 组织架构服务（org-service）───────────────────────────────────────────
-	orgContainer := orgservice.New(db, rdb, orgservice.BootstrapAdmins())
-	// 将 Bootstrap Checker 注入 auth handler（此处已在 orgContainer 创建后）
-	authHandler.SetBootstrapChecker(orgContainer.Bootstrap)
-	// 注入 KeyOrgSyncer 到 auth handler（SSO 登录部门迁移后同步 api_keys）
+	// 组织架构服务（org-service）
 	authHandler.SetOrgSyncer(keyOrgSyncer)
-	deptRepo := orgrepo.NewDeptRepo(db)
 	userOrgRepo := orgrepo.NewUserOrgRepo(db)
 	roleRepo := orgrepo.NewRoleRepo(db)
 	mappingRepo := orgrepo.NewMappingRepo(db)
 	studioRepo := orgrepo.NewStudioRepo(db)
+
 	orgH := orghandler.NewOrgHandler(orgContainer.OrgSvc, orgContainer.StudioSvc, userOrgRepo, roleRepo)
 	mappingH := orghandler.NewMappingHandler(orgContainer.MappingSvc, deptRepo)
 	orgContainer.MappingSvc.SetOrgSyncer(keyOrgSyncer)
@@ -410,8 +420,12 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	deptAssignH := orghandler.NewDeptAssignHandler(userOrgRepo, deptRepo)
 	deptAssignH.SetOrgSyncer(keyOrgSyncer)
 
-	// Guard 快捷别名（绑定到 orgContainer.RBAC 实例）
-	guard := orgContainer.RBAC.Guard
+	// 模型组授权管理（注册在 adminGroup，与现有组管理路由同级）
+	entitlementHandler := handler.NewEntitlementHandler(entitlementSvc, deptLookup)
+	adminGroup.PUT("/groups/:id/open-mode", guard(rbac.PermEntitlementManage), entitlementHandler.SetOpenMode)
+	adminGroup.POST("/groups/:id/entitlements", guard(rbac.PermEntitlementGrantDept), entitlementHandler.Grant)
+	adminGroup.DELETE("/groups/:id/entitlements/:eid", guard(rbac.PermEntitlementGrantDept), entitlementHandler.Revoke)
+	adminGroup.GET("/groups/:id/entitlements", guard(rbac.PermEntitlementGrantDept), entitlementHandler.List)
 
 	// 管理接口（JWTAuth 已在 adminGroup 上）
 	orgGroup := adminGroup.Group("/org")
@@ -465,6 +479,18 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	}
 
 	return r
+}
+
+type deptStudioAdapter struct {
+	repo *orgrepo.DeptRepo
+}
+
+func (a *deptStudioAdapter) FindStudioIDByDeptID(deptID string) (string, error) {
+	dept, err := a.repo.GetByDeptID(deptID)
+	if err != nil {
+		return "", err
+	}
+	return dept.GetStudioID(), nil
 }
 
 func applyOIDCFromDB(cfg *auth.Config, settingsSvc *service.SettingsService) {

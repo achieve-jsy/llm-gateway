@@ -311,6 +311,10 @@ func (h *ChatHandler) respondGroupError(c *gin.Context, err error) {
 		respondError(c, model.ErrModelUnavailable)
 		return
 	}
+	if ue, ok := err.(*model.UnifiedError); ok {
+		respondError(c, ue)
+		return
+	}
 	respondError(c, model.ErrInternal)
 }
 

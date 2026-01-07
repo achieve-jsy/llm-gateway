@@ -43,6 +43,16 @@ const (
 
 	// 403 forbidden
 	CodeKeyPermission = "key_permission_denied"
+	CodeEntitlementForbidden = "entitlement_forbidden"
+
+	// 404 not_found (entitlement)
+	CodeEntitlementNotFound = "entitlement_not_found"
+
+	// 409 conflict (entitlement)
+	CodeEntitlementDuplicate = "entitlement_duplicate"
+
+	// 422 unprocessable (entitlement)
+	CodeGroupNotControlled = "group_not_controlled"
 
 	// 502 upstream_error
 	CodeUpstreamError = "upstream_error"

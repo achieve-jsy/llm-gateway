@@ -24,6 +24,9 @@ const (
 	KeyDeleted       ChangeEventType = "key_deleted"
 	KeyLogChanged    ChangeEventType = "key_log_changed"
 	KeyUpdated       ChangeEventType = "key_updated"
+	EntitlementGranted ChangeEventType = "entitlement_granted"
+	EntitlementRevoked ChangeEventType = "entitlement_revoked"
+	OpenModeChanged    ChangeEventType = "open_mode_changed"
 )
 
 // ChangeEvent 配置变更事件

@@ -116,6 +116,7 @@ func (h *GroupHandler) List(c *gin.Context) {
 		SameModelRetries        int    `json:"same_model_retries"`
 		FailoverCooldownSeconds int    `json:"failover_cooldown_seconds"`
 		ModelCount              int    `json:"model_count"`
+		OpenMode                string `json:"open_mode"`
 		CreatedAt               string `json:"created_at"`
 		UpdatedAt               string `json:"updated_at"`
 	}
@@ -133,6 +134,7 @@ func (h *GroupHandler) List(c *gin.Context) {
 			SameModelRetries:        g.SameModelRetries,
 			FailoverCooldownSeconds: g.FailoverCooldownSeconds,
 			ModelCount:              count,
+			OpenMode:                g.OpenMode,
 			CreatedAt:               g.CreatedAt.Format("2006-01-02T15:04:05Z"),
 			UpdatedAt:               g.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 		}

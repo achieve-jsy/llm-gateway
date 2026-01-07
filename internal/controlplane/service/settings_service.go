@@ -29,6 +29,7 @@ const (
 	SettingKeyDefaultSameModelRetries     = "fault_default_same_model_retries"
 	SettingKeyDefaultFailoverCooldown     = "fault_default_cooldown_seconds"
 	SettingKeySupplierName                = "supplier_name"
+	SettingKeyPricingUsdToCnyRate         = "pricing_usd_to_cny_rate"
 )
 
 const (
@@ -40,6 +41,7 @@ const (
 	defaultSameModelRetries             = 1
 	defaultFailoverCooldownSeconds      = 60
 	defaultSupplierName                 = "某公司"
+	defaultPricingUsdToCnyRate          = 7.2
 )
 
 type SettingsRepository interface {
@@ -68,6 +70,7 @@ func allSettingKeys() []string {
 		SettingKeyWebhookEnabled, SettingKeyWebhookURL, SettingKeyWebhookSecret, SettingKeyWebhookEvents,
 		SettingKeyDefaultMaxSwitches, SettingKeyDefaultSameModelRetries, SettingKeyDefaultFailoverCooldown,
 		SettingKeySupplierName,
+		SettingKeyPricingUsdToCnyRate,
 	}
 }
 
@@ -85,6 +88,7 @@ func (s *SettingsService) ensureDefaults() {
 		SettingKeyDefaultSameModelRetries:   fmt.Sprintf("%d", defaultSameModelRetries),
 		SettingKeyDefaultFailoverCooldown:   fmt.Sprintf("%d", defaultFailoverCooldownSeconds),
 		SettingKeySupplierName:              defaultSupplierName,
+		SettingKeyPricingUsdToCnyRate:       fmt.Sprintf("%f", defaultPricingUsdToCnyRate),
 	}
 	existing, _ := s.repo.GetMultiple(allSettingKeys())
 	for k, v := range defaults {
@@ -120,6 +124,7 @@ func (s *SettingsService) GetSystemSettings(ctx context.Context) (*model.SystemS
 		DefaultSameModelRetries:        intOrDefault(vals, SettingKeyDefaultSameModelRetries, defaultSameModelRetries),
 		DefaultFailoverCooldownSeconds: intOrDefault(vals, SettingKeyDefaultFailoverCooldown, defaultFailoverCooldownSeconds),
 		SupplierName:                  valOrDefault(vals, SettingKeySupplierName, defaultSupplierName),
+		PricingUsdToCnyRate:           floatOrDefault(vals, SettingKeyPricingUsdToCnyRate, defaultPricingUsdToCnyRate),
 	}, nil
 }
 
@@ -128,18 +133,20 @@ func (s *SettingsService) GetPublicSettings(ctx context.Context) (*model.PublicS
 		SettingKeySiteName, SettingKeySiteLogo, SettingKeySiteSubtitle, SettingKeyAPIBaseURL,
 		SettingKeyRateLimitPerMin, SettingKeyMaxConcurrencyPerKey,
 		SettingKeySupplierName,
+		SettingKeyPricingUsdToCnyRate,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &model.PublicSettings{
-		SiteName:             valOrDefault(vals, SettingKeySiteName, "LLM Gateway"),
-		SiteLogo:             valOrDefault(vals, SettingKeySiteLogo, ""),
-		SiteSubtitle:         valOrDefault(vals, SettingKeySiteSubtitle, ""),
-		APIBaseURL:           valOrDefault(vals, SettingKeyAPIBaseURL, ""),
-		RateLimitPerMinute:   intOrDefault(vals, SettingKeyRateLimitPerMin, defaultRateLimitPerMin),
-		MaxConcurrencyPerKey: intOrDefault(vals, SettingKeyMaxConcurrencyPerKey, defaultMaxConcurrencyPerKey),
-		SupplierName:        valOrDefault(vals, SettingKeySupplierName, defaultSupplierName),
+		SiteName:              valOrDefault(vals, SettingKeySiteName, "LLM Gateway"),
+		SiteLogo:              valOrDefault(vals, SettingKeySiteLogo, ""),
+		SiteSubtitle:          valOrDefault(vals, SettingKeySiteSubtitle, ""),
+		APIBaseURL:            valOrDefault(vals, SettingKeyAPIBaseURL, ""),
+		RateLimitPerMinute:    intOrDefault(vals, SettingKeyRateLimitPerMin, defaultRateLimitPerMin),
+		MaxConcurrencyPerKey:  intOrDefault(vals, SettingKeyMaxConcurrencyPerKey, defaultMaxConcurrencyPerKey),
+		SupplierName:          valOrDefault(vals, SettingKeySupplierName, defaultSupplierName),
+		PricingUsdToCnyRate:   floatOrDefault(vals, SettingKeyPricingUsdToCnyRate, defaultPricingUsdToCnyRate),
 	}, nil
 }
 
@@ -181,6 +188,9 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, settings *model.Sy
 		updates[SettingKeyDefaultFailoverCooldown] = fmt.Sprintf("%d", settings.DefaultFailoverCooldownSeconds)
 	}
 	updates[SettingKeySupplierName] = settings.SupplierName
+	if settings.PricingUsdToCnyRate > 0 {
+		updates[SettingKeyPricingUsdToCnyRate] = fmt.Sprintf("%f", settings.PricingUsdToCnyRate)
+	}
 	return s.repo.SetMultiple(updates)
 }
 
@@ -267,12 +277,36 @@ func boolOrDefault(vals map[string]string, key string, def bool) bool {
 	return v == "true"
 }
 
+func floatOrDefault(vals map[string]string, key string, def float64) float64 {
+	v, ok := vals[key]
+	if !ok || v == "" {
+		return def
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
+}
+
 func (s *SettingsService) GetSupplierName(ctx context.Context) string {
 	v, err := s.repo.GetValue(SettingKeySupplierName)
 	if err != nil || v == "" {
 		return defaultSupplierName
 	}
 	return v
+}
+
+func (s *SettingsService) GetPricingUsdToCnyRate(ctx context.Context) float64 {
+	v, err := s.repo.GetValue(SettingKeyPricingUsdToCnyRate)
+	if err != nil || v == "" {
+		return defaultPricingUsdToCnyRate
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil || n <= 0 {
+		return defaultPricingUsdToCnyRate
+	}
+	return n
 }
 
 func (s *SettingsService) ExportAll(ctx context.Context) (map[string]string, error) {

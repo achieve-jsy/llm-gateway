@@ -6,6 +6,7 @@ import (
 
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/model"
+	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/gin-gonic/gin"
 )
 
@@ -16,12 +17,18 @@ type EmbeddingsOrchestratorInterface interface {
 
 // EmbeddingsHandler handles POST /v1/embeddings
 type EmbeddingsHandler struct {
-	orchestrator EmbeddingsOrchestratorInterface
+	orchestrator  EmbeddingsOrchestratorInterface
+	groupDispatch *orchestrator.GroupAwareDispatcher
 }
 
 // NewEmbeddingsHandler creates a new EmbeddingsHandler.
 func NewEmbeddingsHandler(orch EmbeddingsOrchestratorInterface) *EmbeddingsHandler {
 	return &EmbeddingsHandler{orchestrator: orch}
+}
+
+// NewEmbeddingsHandlerWithGroup creates a new EmbeddingsHandler with group dispatch.
+func NewEmbeddingsHandlerWithGroup(orch EmbeddingsOrchestratorInterface, gd *orchestrator.GroupAwareDispatcher) *EmbeddingsHandler {
+	return &EmbeddingsHandler{orchestrator: orch, groupDispatch: gd}
 }
 
 // Handle processes POST /v1/embeddings requests.
@@ -52,6 +59,24 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 	}
 
 	c.Set("model", req.Model)
+
+	if h.groupDispatch != nil {
+		decision, err := h.groupDispatch.Dispatch(c, req.Model)
+		if err != nil {
+			if ue, ok := err.(*model.UnifiedError); ok {
+				respondError(c, ue)
+				return
+			}
+			respondError(c, model.ErrInternal)
+			return
+		}
+		if decision != nil {
+			req.Model = decision.ModelName
+			if decision.ProviderName != "" {
+				req.Provider = decision.ProviderName
+			}
+		}
+	}
 
 	resp, err := h.orchestrator.Embeddings(c.Request.Context(), &req)
 	if err != nil {

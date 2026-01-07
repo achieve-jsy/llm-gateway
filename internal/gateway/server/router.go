@@ -74,7 +74,12 @@ func Setup(
 		chatHandler = handler.NewChatHandler(orch)
 	}
 
-	embeddingsHandler := handler.NewEmbeddingsHandler(orch)
+	var embeddingsHandler *handler.EmbeddingsHandler
+	if groupDispatch != nil {
+		embeddingsHandler = handler.NewEmbeddingsHandlerWithGroup(orch, groupDispatch)
+	} else {
+		embeddingsHandler = handler.NewEmbeddingsHandler(orch)
+	}
 
 	var messagesHandler *handler.MessagesHandler
 	if groupDispatch != nil {

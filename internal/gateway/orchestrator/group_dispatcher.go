@@ -40,10 +40,31 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string) (*sche
 		return nil, nil
 	}
 
-	if d.bindingCheck != nil {
-		identityVal, exists := c.Get("identity")
-		if exists {
-			if id, ok := identityVal.(*model.UserIdentity); ok && id.KeyID != "" && !id.AccessAllGroups {
+	identityVal, exists := c.Get("identity")
+	if exists {
+		if id, ok := identityVal.(*model.UserIdentity); ok && id.KeyID != "" {
+			// usable_groups 天花板（控制面计算下发），空表示旧版控制面未下发
+			if len(id.UsableGroups) > 0 {
+				if !containsGroup(id.UsableGroups, modelName) {
+					return nil, model.ErrModelGroupUnauthorized
+				}
+				// access_all_groups=false 时额外收窄到 binding 子集
+				if !id.AccessAllGroups && d.bindingCheck != nil {
+					groups, err := d.bindingCheck.GetKeyGroups(c.Request.Context(), id.KeyID)
+					if err != nil {
+						slog.Error("group dispatch: binding check failed",
+							"group_name", modelName,
+							"key_id", id.KeyID,
+							"error", err,
+						)
+						return nil, model.ErrModelGroupUnavailable
+					}
+					if !binding.ContainsGroup(groups, modelName) {
+						return nil, model.ErrModelGroupUnauthorized
+					}
+				}
+			} else if !id.AccessAllGroups && d.bindingCheck != nil {
+				// 旧逻辑兼容：usable_groups 为空时走旧 binding 路径
 				groups, err := d.bindingCheck.GetKeyGroups(c.Request.Context(), id.KeyID)
 				if err != nil {
 					slog.Error("group dispatch: binding check failed",
@@ -84,6 +105,15 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string) (*sche
 	}
 
 	return decision, nil
+}
+
+func containsGroup(groups []string, target string) bool {
+	for _, g := range groups {
+		if g == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *GroupAwareDispatcher) HandleFailover(c *gin.Context, groupName, failedModelID string) (*scheduler.RouteDecision, error) {

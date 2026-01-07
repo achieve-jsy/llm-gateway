@@ -47,11 +47,12 @@ type VerifyKeyResp struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 	Data    struct {
-		Status          string `json:"status"`
-		KeyID           string `json:"key_id,omitempty"`
-		KeyName         string `json:"key_name,omitempty"`
-		AccessAllGroups bool   `json:"access_all_groups"`
-		LogEnabled      *bool  `json:"log_enabled,omitempty"` // nil = 字段缺失（旧缓存），默认 true
+		Status          string   `json:"status"`
+		KeyID           string   `json:"key_id,omitempty"`
+		KeyName         string   `json:"key_name,omitempty"`
+		AccessAllGroups bool     `json:"access_all_groups"`
+		LogEnabled      *bool    `json:"log_enabled,omitempty"` // nil = 字段缺失（旧缓存），默认 true
+		UsableGroups    []string `json:"usable_groups,omitempty"`
 		User            struct {
 			UserID       string `json:"user_id"`
 			Name         string `json:"name"`

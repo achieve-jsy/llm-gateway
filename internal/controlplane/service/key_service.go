@@ -62,6 +62,7 @@ type VerifyResult struct {
 	AccessAllGroups bool             `json:"access_all_groups"`
 	LogEnabled      bool             `json:"log_enabled"`
 	User            VerifyResultUser `json:"user"`
+	UsableGroups    []string         `json:"usable_groups,omitempty"`
 }
 
 type EventPublisher interface {
@@ -98,13 +99,18 @@ func NewEventPublisherAdapter(p *event.Publisher) EventPublisher {
 }
 
 type KeyService struct {
-	repo        *repository.KeyRepo
-	keyGroupSvc *KeyGroupService
-	publisher   EventPublisher
+	repo           *repository.KeyRepo
+	keyGroupSvc    *KeyGroupService
+	publisher      EventPublisher
+	entitlementSvc EntitlementComputer
 }
 
 func NewKeyService(repo *repository.KeyRepo, keyGroupSvc *KeyGroupService, publisher EventPublisher) *KeyService {
 	return &KeyService{repo: repo, keyGroupSvc: keyGroupSvc, publisher: publisher}
+}
+
+func (s *KeyService) SetEntitlementService(svc EntitlementComputer) {
+	s.entitlementSvc = svc
 }
 
 func (s *KeyService) CreateKey(ctx context.Context, userID uuid.UUID, name string, expiresAt *time.Time, groupIDs []uint) (*model.ApiKey, string, []BoundGroupItem, error) {
@@ -451,7 +457,7 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 		}
 	}
 
-	return &VerifyResult{
+	result := &VerifyResult{
 		KeyID:           k.ID,
 		KeyName:         k.Name,
 		Status:          status,
@@ -465,7 +471,13 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 			StudioID:     k.StudioID,
 			StudioName:   k.StudioName,
 		},
-	}, nil
+	}
+	if s.entitlementSvc != nil && k.DeptID != "" {
+		if usableGroups, err := s.entitlementSvc.ComputeUsableGroups(ctx, k.DeptID, k.StudioID); err == nil {
+			result.UsableGroups = usableGroups
+		}
+	}
+	return result, nil
 }
 
 // parseDeptID 将字符串形式的 dept_id 转换为 *uuid.UUID，空字符串返回 nil。

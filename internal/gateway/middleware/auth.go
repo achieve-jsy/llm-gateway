@@ -64,6 +64,7 @@ func AuthMiddleware(authClient *infra.AuthClient) gin.HandlerFunc {
 				StudioID:        resp.Data.User.StudioID,
 				AccessAllGroups: resp.Data.AccessAllGroups,
 				LogEnabled:      logEnabled,
+				UsableGroups:    resp.Data.UsableGroups,
 			}
 			c.Set("identity", identity)
 			c.Set("key_id", identity.KeyID)

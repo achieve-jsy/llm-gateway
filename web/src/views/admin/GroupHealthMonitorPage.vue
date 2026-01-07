@@ -103,6 +103,7 @@ let timer: ReturnType<typeof setInterval> | null = null
 
 // 授权相关
 const entitlementsMap = ref<Map<string, GroupEntitlement[]>>(new Map())
+const openModeMap = ref<Map<string, string>>(new Map()) // groupName -> open_mode
 const myDeptIds = ref<string[]>([])
 const myStudioId = ref('')
 
@@ -113,7 +114,10 @@ function isGroupAvailable(groupName: string): boolean {
   // admin 可以看到所有组
   if (role === 'admin') return true
   
-  // 查找该组的授权记录
+  // 公开组所有人都可见
+  if (openModeMap.value.get(groupName) === 'public') return true
+  
+  // 受控组需要检查授权
   const ents = entitlementsMap.value.get(groupName) || []
   
   // studio_admin: 检查工作室是否被授权
@@ -128,7 +132,6 @@ function isGroupAvailable(groupName: string): boolean {
     )
   }
   
-  // 普通用户：只能看到公开组（健康监控页面不显示公开组标记，需要额外检查）
   return false
 }
 
@@ -181,10 +184,19 @@ async function loadEntitlements() {
   const studioRole = authStore.orgRoles.find(r => r.role === 'studio_admin' && r.scope_type === 'studio')
   myStudioId.value = studioRole?.scope_id || ''
   
-  // 获取所有模型组的授权记录
+  // 获取所有模型组的授权记录 + open_mode
   try {
     const res = await groupsApi.listGroups({ page_size: 200 })
     const allGroups = res.data.data ?? []
+    
+    // 存储所有组的 open_mode
+    const newOpenModeMap = new Map<string, string>()
+    for (const g of allGroups) {
+      newOpenModeMap.set(g.name, g.open_mode)
+    }
+    openModeMap.value = newOpenModeMap
+    
+    // 只拉取受控组的授权记录
     const controlledGroups = allGroups.filter(g => g.open_mode === 'controlled' && g.enabled)
     
     const entitlementPromises = controlledGroups.map(async g => {

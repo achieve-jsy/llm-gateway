@@ -82,85 +82,165 @@
 
     <!-- ========== StudioAdmin 视图 ========== -->
     <template v-else-if="authStore.effectiveRole === 'studio_admin'">
+      <!-- 工作室信息卡 -->
+      <div v-if="myStudioInfo" class="dept-info-card">
+        <div class="dept-info-row">
+          <span class="dept-info-label">我的工作室：</span>
+          <span class="dept-info-name">{{ myStudioInfo.name }}</span>
+        </div>
+      </div>
+
       <div v-loading="loading" class="content-area">
-        <div v-if="studioAdminGroups.length" class="card-grid">
-          <div
-            v-for="group in studioAdminGroups"
-            :key="group.id"
-            class="group-card group-card--controlled"
-          >
-            <div class="group-card__header">
-              <span class="group-card__name">{{ group.name }}</span>
-              <el-tag type="warning" size="small">受控</el-tag>
-            </div>
-            <div class="group-card__body">
-              <p class="group-card__desc">{{ group.description || '暂无描述' }}</p>
-              <div class="group-card__stats">
-                <span class="stats-public-hint">本工作室已授权</span>
-                <span class="stats-separator">·</span>
-                <span>{{ getMyStudioDeptCount(group.id) }} 部门开通</span>
+        <div class="triple-column-layout">
+          <!-- 列1：全网关受控模型 -->
+          <div class="column column--readonly">
+            <h3 class="column-title">
+              <span class="column-title-dot column-title-dot--muted"></span>
+              全网关受控模型
+            </h3>
+            <p class="column-subtitle">系统全部受控组，标记您的权限范围</p>
+            <div v-if="studioAllControlled.length" class="column-cards">
+              <div
+                v-for="group in studioAllControlled"
+                :key="group.id"
+                class="mini-card"
+                :class="{
+                  'mini-card--available': isStudioGranted(group.id),
+                  'mini-card--muted': !isStudioGranted(group.id),
+                }"
+              >
+                <span class="mini-card__name">{{ group.name }}</span>
+                <el-tag v-if="isStudioGranted(group.id)" type="success" size="small" effect="light">
+                  已授权
+                </el-tag>
+                <el-tag v-else type="info" size="small" effect="plain">
+                  未授权
+                </el-tag>
               </div>
             </div>
-            <div class="group-card__footer">
-              <el-button
-                type="primary"
-                text
-                size="small"
-                @click="openDrawer(group)"
+            <el-empty v-else description="暂无受控模型" :image-size="48" />
+          </div>
+
+          <!-- 列2：本工作室已授权 + 管理入口 -->
+          <div class="column">
+            <h3 class="column-title">
+              <span class="column-title-dot column-title-dot--warning"></span>
+              本工作室已授权
+            </h3>
+            <p class="column-subtitle">可为下属部门开通</p>
+            <div v-if="studioAdminGroups.length" class="column-cards">
+              <div
+                v-for="group in studioAdminGroups"
+                :key="group.id"
+                class="mini-card mini-card--can-enable"
               >
-                管理部门开通 →
-              </el-button>
+                <div class="mini-card__info">
+                  <span class="mini-card__name">{{ group.name }}</span>
+                  <span class="mini-card__hint">{{ getMyStudioDeptCount(group.id) }} 部门已开通</span>
+                </div>
+                <el-button
+                  type="primary"
+                  text
+                  size="small"
+                  @click="openDrawer(group)"
+                >
+                  管理部门开通 →
+                </el-button>
+              </div>
             </div>
+            <el-empty v-else description="暂无已授权模型组" :image-size="48" />
+          </div>
+
+          <!-- 列3：全员可用（公开组） -->
+          <div class="column">
+            <h3 class="column-title">
+              <span class="column-title-dot column-title-dot--success"></span>
+              全员可用
+            </h3>
+            <p class="column-subtitle">公开模型组，全公司自动可用</p>
+            <div v-if="studioPublicGroups.length" class="column-cards">
+              <div
+                v-for="group in studioPublicGroups"
+                :key="group.id"
+                class="mini-card mini-card--available"
+              >
+                <span class="mini-card__name">{{ group.name }}</span>
+                <el-tag type="success" size="small">公开</el-tag>
+              </div>
+            </div>
+            <el-empty v-else description="暂无公开模型组" :image-size="48" />
           </div>
         </div>
-
-        <el-empty v-else-if="!loading" description="暂无已授权的模型组" :image-size="80" />
       </div>
     </template>
 
     <!-- ========== DeptAdmin 视图 ========== -->
     <template v-else-if="authStore.effectiveRole === 'dept_admin'">
-      <!-- 部门信息卡 -->
-      <div v-if="myDeptInfo" class="dept-info-card">
-        <span class="dept-info-label">我的部门：</span>
-        <span class="dept-info-name">{{ myDeptInfo.dept_name }}</span>
-        <span v-if="myDeptInfo.studio_name" class="dept-info-studio">
-          （所属工作室：{{ myDeptInfo.studio_name }}）
-        </span>
+      <!-- 部门信息卡 + 部门切换 -->
+      <div class="dept-info-card">
+        <div class="dept-info-row">
+          <span class="dept-info-label">我的部门：</span>
+          <el-select
+            v-model="selectedDeptId"
+            size="small"
+            style="width: 200px; margin-right: 16px"
+            @change="onDeptChange"
+          >
+            <el-option
+              v-for="deptId in myDeptIds"
+              :key="deptId"
+              :label="allDepts.find(d => d.dept_id === deptId)?.dept_name || deptId"
+              :value="deptId"
+            />
+          </el-select>
+          <span v-if="myDeptInfo?.studio_name" class="dept-info-studio">
+            所属工作室：{{ myDeptInfo.studio_name }}
+          </span>
+        </div>
       </div>
 
       <div v-loading="loading" class="content-area">
-        <div class="dual-column-layout">
-          <!-- 左列：已可用 -->
-          <div class="column">
+        <div class="triple-column-layout">
+          <!-- 列1：全网关受控模型 -->
+          <div class="column column--readonly">
             <h3 class="column-title">
-              <span class="column-title-dot column-title-dot--success"></span>
-              已可用
+              <span class="column-title-dot column-title-dot--muted"></span>
+              全网关受控模型
             </h3>
-            <div v-if="deptAdminAvailable.length" class="column-cards">
+            <p class="column-subtitle">系统全部受控组，标记您的权限范围</p>
+            <div v-if="deptAllControlled.length" class="column-cards">
               <div
-                v-for="group in deptAdminAvailable"
+                v-for="group in deptAllControlled"
                 :key="group.id"
-                class="mini-card mini-card--available"
+                class="mini-card"
+                :class="{
+                  'mini-card--available': isDeptEnabled(group.id),
+                  'mini-card--can-enable': isStudioGranted(group.id) && !isDeptEnabled(group.id),
+                  'mini-card--muted': !isStudioGranted(group.id),
+                }"
               >
                 <span class="mini-card__name">{{ group.name }}</span>
-                <el-tag
-                  :type="group.open_mode === 'public' ? 'success' : 'warning'"
-                  size="small"
-                >
-                  {{ group.open_mode === 'public' ? '全员可用' : '已开通' }}
+                <el-tag v-if="isDeptEnabled(group.id)" type="success" size="small" effect="light">
+                  已开通
+                </el-tag>
+                <el-tag v-else-if="isStudioGranted(group.id)" type="warning" size="small" effect="plain">
+                  工作室已授权
+                </el-tag>
+                <el-tag v-else type="info" size="small" effect="plain">
+                  未授权
                 </el-tag>
               </div>
             </div>
-            <el-empty v-else description="暂无可用组" :image-size="48" />
+            <el-empty v-else description="暂无受控模型" :image-size="48" />
           </div>
 
-          <!-- 右列：可开通 -->
+          <!-- 列2：可开通（工作室已授权但本部门未开通） -->
           <div class="column">
             <h3 class="column-title">
               <span class="column-title-dot column-title-dot--warning"></span>
               可开通
             </h3>
+            <p class="column-subtitle">工作室已授权，一键开通本部门</p>
             <div v-if="deptAdminCanEnable.length" class="column-cards">
               <div
                 v-for="group in deptAdminCanEnable"
@@ -178,7 +258,32 @@
                 </el-button>
               </div>
             </div>
-            <el-empty v-else description="暂无可开通组" :image-size="48" />
+            <el-empty v-else description="暂无可开通模型组" :image-size="48" />
+          </div>
+
+          <!-- 列3：已可用（本部门已开通的 controlled 组 + 公开组） -->
+          <div class="column">
+            <h3 class="column-title">
+              <span class="column-title-dot column-title-dot--success"></span>
+              已可用
+            </h3>
+            <p class="column-subtitle">本部门可用的模型组</p>
+            <div v-if="deptAdminAvailable.length" class="column-cards">
+              <div
+                v-for="group in deptAdminAvailable"
+                :key="group.id"
+                class="mini-card mini-card--available"
+              >
+                <span class="mini-card__name">{{ group.name }}</span>
+                <el-tag
+                  :type="group.open_mode === 'public' ? 'success' : 'warning'"
+                  size="small"
+                >
+                  {{ group.open_mode === 'public' ? '全员可用' : '已开通' }}
+                </el-tag>
+              </div>
+            </div>
+            <el-empty v-else description="暂无可用模型组" :image-size="48" />
           </div>
         </div>
       </div>
@@ -198,14 +303,14 @@
       :group-name="activeGroupName"
       :actor-role="actorRole"
       :restrict-studio-id="myStudioId"
-      :restrict-dept-id="myDeptId"
+      :restrict-dept-id="selectedDeptId"
       @closed="onDrawerClosed"
     />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { groupsApi } from '@/api/groups'
@@ -270,18 +375,27 @@ const myStudioId = computed(() => {
   return role?.scope_id || ''
 })
 
-// 获取本部门 ID（从 orgRoles 提取）
-const myDeptId = computed(() => {
-  const role = authStore.orgRoles.find(
-    r => r.role === 'dept_admin' && r.scope_type === 'dept'
-  )
-  return role?.scope_id || ''
+// 获取本部门 IDs（dept_admin 可能有多个部门）
+const myDeptIds = computed(() => {
+  return authStore.orgRoles
+    .filter(r => r.role === 'dept_admin' && r.scope_type === 'dept')
+    .map(r => r.scope_id)
 })
 
-// 本部门信息
+// 当前选中的部门（默认第一个）
+const selectedDeptId = ref('')
+
+// 监听部门列表变化，自动选中第一个
+watch(myDeptIds, (ids) => {
+  if (ids.length > 0 && !ids.includes(selectedDeptId.value)) {
+    selectedDeptId.value = ids[0]
+  }
+}, { immediate: true })
+
+// 当前部门信息
 const myDeptInfo = computed(() => {
-  if (!myDeptId.value) return null
-  return allDepts.value.find(d => d.dept_id === myDeptId.value) || null
+  if (!selectedDeptId.value) return null
+  return allDepts.value.find(d => d.dept_id === selectedDeptId.value) || null
 })
 
 // 本工作室所属部门 IDs
@@ -293,6 +407,44 @@ const myStudioDeptIds = computed(() => {
       .map(d => d.dept_id)
   )
 })
+
+// 本工作室详情对象
+const myStudioInfo = computed(() => {
+  if (!myStudioId.value) return null
+  return allStudios.value.find(s => s.id === myStudioId.value) || null
+})
+
+// 全网关受控模型列表
+const studioAllControlled = computed(() => {
+  return groups.value.filter(g => g.open_mode === 'controlled' && g.enabled)
+})
+
+const deptAllControlled = computed(() => {
+  return groups.value.filter(g => g.open_mode === 'controlled' && g.enabled)
+})
+
+// 全网关公开模型列表
+const studioPublicGroups = computed(() => {
+  return groups.value.filter(g => g.open_mode === 'public' && g.enabled)
+})
+
+// 判断某组是否已授权给本工作室
+function isStudioGranted(groupId: number): boolean {
+  if (!myStudioId.value) return false
+  const ents = entitlementsMap.value.get(groupId) || []
+  return ents.some(
+    e => e.scope_type === 'studio' && e.scope_id === myStudioId.value && e.enabled
+  )
+}
+
+// 判断某组是否已开通给本部门
+function isDeptEnabled(groupId: number): boolean {
+  if (!selectedDeptId.value) return false
+  const ents = entitlementsMap.value.get(groupId) || []
+  return ents.some(
+    e => e.scope_type === 'dept' && e.scope_id === selectedDeptId.value && e.enabled
+  )
+}
 
 // StudioAdmin: 只显示已授权给本工作室的 controlled 组
 const studioAdminGroups = computed(() => {
@@ -308,19 +460,19 @@ const studioAdminGroups = computed(() => {
 
 // DeptAdmin: 已可用 = public 组 + 本部门已开通的 controlled 组
 const deptAdminAvailable = computed(() => {
-  if (!myDeptId.value) return []
+  if (!selectedDeptId.value) return []
   return groups.value.filter(g => {
     if (g.open_mode === 'public') return true
     const ents = entitlementsMap.value.get(g.id) || []
     return ents.some(
-      e => e.scope_type === 'dept' && e.scope_id === myDeptId.value && e.enabled
+      e => e.scope_type === 'dept' && e.scope_id === selectedDeptId.value && e.enabled
     )
   })
 })
 
 // DeptAdmin: 可开通 = 本工作室已获授权但本部门未开通的 controlled 组
 const deptAdminCanEnable = computed(() => {
-  if (!myDeptId.value || !myDeptInfo.value?.studio_id) return []
+  if (!selectedDeptId.value || !myDeptInfo.value?.studio_id) return []
   const studioId = myDeptInfo.value.studio_id
   return groups.value.filter(g => {
     if (g.open_mode !== 'controlled') return false
@@ -332,7 +484,7 @@ const deptAdminCanEnable = computed(() => {
     if (!studioGranted) return false
     // 但本部门未开通
     const deptEnabled = ents.some(
-      e => e.scope_type === 'dept' && e.scope_id === myDeptId.value && e.enabled
+      e => e.scope_type === 'dept' && e.scope_id === selectedDeptId.value && e.enabled
     )
     return !deptEnabled
   })
@@ -369,7 +521,7 @@ async function loadData() {
       http.get('/api/v1/org/departments', { params: { page: 1, page_size: 500 } }),
     ])
 
-    groups.value = groupsRes.data.items || []
+    groups.value = groupsRes.data.data || []
     allStudios.value = studiosRes.data.studios || []
     allDepts.value = deptsRes.data.departments || []
 
@@ -422,22 +574,37 @@ function onDrawerClosed() {
   loadData()
 }
 
+function onDeptChange() {
+  // 切换部门后刷新数据
+  loadData()
+}
+
 // DeptAdmin 一键开通
 async function handleDeptAdminEnable(group: GroupListItem) {
-  if (!myDeptId.value) {
-    ElMessage.warning('无法获取您的部门信息')
+  if (!selectedDeptId.value) {
+    ElMessage.warning('请先选择部门')
     return
   }
   enablingGroupId.value = group.id
   try {
     await groupsApi.grantEntitlement(group.id, {
       scope_type: 'dept',
-      scope_id: myDeptId.value,
+      scope_id: selectedDeptId.value,
     })
-    ElMessage.success('已开通')
+    ElMessage.success(`已为「${myDeptInfo.value?.dept_name || selectedDeptId.value}」开通`)
     await loadData()
-  } catch {
-    ElMessage.error('开通失败')
+  } catch (e: any) {
+    const msg = e?.response?.data?.message || e?.message || '开通失败'
+    // 解析后端错误信息，给出友好提示
+    if (msg.includes('studio not granted') || msg.includes('ErrStudioNotGranted')) {
+      ElMessage.error('该模型组尚未授权给本部门所属工作室，无法开通')
+    } else if (msg.includes('forbidden') || msg.includes('ErrEntitlementForbidden')) {
+      ElMessage.error('权限不足，无法开通该部门')
+    } else if (msg.includes('duplicate') || msg.includes('ErrEntitlementExists')) {
+      ElMessage.warning('该部门已开通此模型组')
+    } else {
+      ElMessage.error(msg)
+    }
   } finally {
     enablingGroupId.value = null
   }
@@ -601,6 +768,19 @@ onMounted(() => {
   gap: 24px;
 }
 
+/* ===== 三列布局（全网关 / 管辖范围 / 已可用） ===== */
+.triple-column-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 20px;
+}
+
+@media (max-width: 1024px) {
+  .triple-column-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 768px) {
   .dual-column-layout {
     grid-template-columns: 1fr;
@@ -667,6 +847,11 @@ onMounted(() => {
   border-left: 3px solid var(--el-color-warning);
 }
 
+.mini-card--muted {
+  opacity: 0.55;
+  border-left: 3px solid var(--el-border-color-lighter);
+}
+
 .mini-card__name {
   font-size: 14px;
   font-weight: 500;
@@ -676,6 +861,43 @@ onMounted(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
   margin-right: 12px;
+}
+
+.mini-card__info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  margin-right: 12px;
+}
+
+.mini-card__hint {
+  font-size: 11px;
+  color: var(--el-text-color-placeholder);
+}
+
+/* ===== 三列布局扩展样式 ===== */
+.column--readonly {
+  background: var(--el-fill-color-lighter);
+}
+
+.column-subtitle {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+  margin: -12px 0 16px;
+  line-height: 1;
+}
+
+.column-title-dot--muted {
+  background: var(--el-border-color);
+}
+
+.dept-info-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 /* ===== 响应式 ===== */

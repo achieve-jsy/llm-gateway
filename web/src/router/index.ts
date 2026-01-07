@@ -46,6 +46,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '模型组', requiresAdmin: true }
   },
   {
+    path: '/admin/entitlements',
+    name: 'Entitlements',
+    component: () => import('@/views/admin/EntitlementsPage.vue'),
+    meta: { title: '模型组授权', requiresManager: true }
+  },
+  {
     path: '/admin/tags',
     name: 'TagList',
     component: () => import('@/views/admin/TagListPage.vue'),

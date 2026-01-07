@@ -31,6 +31,10 @@ const (
 	// ── 用量看板 ────────────────────────────────────────────────────────────
 	PermUsageViewAll    Permission = "usage:view:all"    // 查看全公司用量
 	PermUsageViewScoped Permission = "usage:view:scoped" // 查看自己管辖范围用量
+
+	// ── 模型组授权 ──────────────────────────────────────────────────────────────
+	PermEntitlementManage   Permission = "entitlement:manage"    // 平台管理员：设开放模式 + 授权工作室
+	PermEntitlementGrantDept Permission = "entitlement:grant_dept" // 工作室负责人：下放/开通部门
 )
 
 // ScopeConstraint 权限的范围约束级别（从宽到严）

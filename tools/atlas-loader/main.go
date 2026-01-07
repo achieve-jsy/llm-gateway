@@ -25,11 +25,13 @@ func main() {
 		&cpmmodel.KeyGroupBinding{},
 		&cpmmodel.ApiKey{},
 		&cpmmodel.Model{},
+		&cpmmodel.ModelStatusLog{},
 		&cpmmodel.ModelCatalog{},
 		&cpmmodel.ModelTag{},
 		&cpmmodel.ModelTagRelation{},
 		&cpmmodel.ProviderDefinition{},
 		&cpmmodel.Provider{},
+		&cpmmodel.GroupEntitlement{},
 		&cpmmodel.SystemConfig{},
 
 		// auth/model (3 个表)

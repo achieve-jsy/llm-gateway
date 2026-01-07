@@ -20,6 +20,7 @@ type Group struct {
 	SameModelRetries        int            `gorm:"not null;default:1" json:"same_model_retries"`
 	FailoverCooldownSeconds int            `gorm:"not null;default:60" json:"failover_cooldown_seconds"`
 	TimeoutSeconds          int            `gorm:"not null;default:0" json:"timeout_seconds"`
+	OpenMode                string         `gorm:"type:varchar(16);not null;default:'public';check:open_mode IN ('public','controlled')" json:"open_mode"`
 	Models                  []GroupModel   `gorm:"foreignKey:GroupID" json:"models,omitempty"`
 }
 

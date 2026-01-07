@@ -148,6 +148,7 @@
           <div class="kpi-pool-usage">
             <span>已下发 {{ formatUSD(companyAllocated, { compact: true }) }}</span>
             <span>余量 {{ formatUSD(companyUnallocated, { compact: true }) }}</span>
+            <span>已使用 {{ companyPoolItem ? formatUSD(companyPoolItem.used_usd || 0, { compact: true }) : '—' }}</span>
           </div>
           <el-progress
             :percentage="Math.min(Math.round(companyAllocRatio * 100), 100)"
@@ -206,6 +207,7 @@
           <div class="kpi-pool-usage">
             <span>已下发 {{ formatUSD(studioAllocated, { compact: true }) }}</span>
             <span>余量 {{ formatUSD(studioUnallocated, { compact: true }) }}</span>
+            <span>已使用 {{ studioPoolItem ? formatUSD(studioPoolItem.used_usd || 0, { compact: true }) : '—' }}</span>
           </div>
           <el-progress
             :percentage="Math.min(Math.round(studioAllocRatio * 100), 100)"

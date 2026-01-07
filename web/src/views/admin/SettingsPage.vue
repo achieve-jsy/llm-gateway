@@ -320,6 +320,47 @@
 
       <!-- 数据管理 -->
       <div v-show="activeTab === 'data'" class="settings-card">
+
+      <!-- 价格汇率 -->
+      <div v-show="activeTab === 'pricing'" class="settings-card">
+        <div class="card-header">
+          <div class="card-title-row">
+            <span class="card-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            </span>
+            <h3 class="card-title">价格汇率</h3>
+          </div>
+          <p class="card-desc">配置用量统计页面的人民币换算汇率</p>
+        </div>
+
+        <div class="card-body">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">USD → CNY 汇率</label>
+              <el-input-number
+                v-model="form.pricing_usd_to_cny_rate"
+                :min="0.01"
+                :max="100"
+                :step="0.1"
+                :precision="4"
+                class="form-input-number"
+              />
+              <p class="form-hint">用于用量统计页面的人民币换算展示，不影响实际计费数据</p>
+            </div>
+            <div class="form-group">
+              <label class="form-label">换算预览</label>
+              <div class="preview-box">
+                <div class="preview-label">
+                  示例：$1.00 USD = ¥{{ previewCny }} CNY
+                </div>
+              </div>
+              <p class="form-hint">默认 7.2，可随时按实际汇率调整</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 数据管理 -->
         <div class="card-header">
           <div class="card-title-row">
             <span class="card-icon">
@@ -401,6 +442,7 @@ const tabs = [
   { key: 'oidc', label: 'OIDC 配置', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>' },
   { key: 'webhook', label: 'Webhook', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>' },
   { key: 'failover', label: '故障默认配置', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>' },
+  { key: 'pricing', label: '价格汇率', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>' },
   { key: 'data', label: '数据管理', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>' },
 ]
 
@@ -425,6 +467,7 @@ const form = reactive({
   default_max_switches: 2,
   default_same_model_retries: 1,
   default_failover_cooldown_seconds: 60,
+  pricing_usd_to_cny_rate: 7.2,
 })
 
 const initialForm = reactive({
@@ -448,7 +491,10 @@ const initialForm = reactive({
   default_max_switches: 2,
   default_same_model_retries: 1,
   default_failover_cooldown_seconds: 60,
+  pricing_usd_to_cny_rate: 7.2,
 })
+
+const previewCny = computed(() => (form.pricing_usd_to_cny_rate || 0).toFixed(4).replace(/0+$/, '').replace(/\.$/, ''))
 
 const selectedEvents = computed({
   get: () => form.webhook_events ? form.webhook_events.split(',').filter(Boolean) : [],
@@ -482,7 +528,8 @@ const formChanged = computed(() => {
     form.webhook_events !== initialForm.webhook_events ||
     form.default_max_switches !== initialForm.default_max_switches ||
     form.default_same_model_retries !== initialForm.default_same_model_retries ||
-    form.default_failover_cooldown_seconds !== initialForm.default_failover_cooldown_seconds
+    form.default_failover_cooldown_seconds !== initialForm.default_failover_cooldown_seconds ||
+    form.pricing_usd_to_cny_rate !== initialForm.pricing_usd_to_cny_rate
   )
 })
 
@@ -507,6 +554,7 @@ function setFormValues(source: typeof form) {
   form.default_max_switches = source.default_max_switches
   form.default_same_model_retries = source.default_same_model_retries
   form.default_failover_cooldown_seconds = source.default_failover_cooldown_seconds
+  form.pricing_usd_to_cny_rate = source.pricing_usd_to_cny_rate
 }
 
 function captureInitial() {
@@ -530,6 +578,7 @@ function captureInitial() {
   initialForm.default_max_switches = form.default_max_switches
   initialForm.default_same_model_retries = form.default_same_model_retries
   initialForm.default_failover_cooldown_seconds = form.default_failover_cooldown_seconds
+  initialForm.pricing_usd_to_cny_rate = form.pricing_usd_to_cny_rate
 }
 
 onMounted(async () => {
@@ -554,6 +603,7 @@ onMounted(async () => {
     form.default_max_switches = s.default_max_switches ?? 2
     form.default_same_model_retries = s.default_same_model_retries ?? 1
     form.default_failover_cooldown_seconds = s.default_failover_cooldown_seconds ?? 60
+    form.pricing_usd_to_cny_rate = s.pricing_usd_to_cny_rate ?? 7.2
   }
   captureInitial()
 })
@@ -615,6 +665,7 @@ async function handleSave() {
       default_max_switches: form.default_max_switches,
       default_same_model_retries: form.default_same_model_retries,
       default_failover_cooldown_seconds: form.default_failover_cooldown_seconds,
+      pricing_usd_to_cny_rate: form.pricing_usd_to_cny_rate,
     })
     if (ok) {
       ElMessage.success('设置已保存')

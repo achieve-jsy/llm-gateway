@@ -12,11 +12,7 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
-    allowedHosts: ['aimeter.xk-devops.com', '127.0.0.1', 'localhost'],
-    https: {
-      key: resolve(__dirname, 'certs/localhost.key'),
-      cert: resolve(__dirname, 'certs/localhost.crt'),
-    },
+    allowedHosts: 'all',
     proxy: {
       '/v1': {
         target: 'http://127.0.0.1:8080',

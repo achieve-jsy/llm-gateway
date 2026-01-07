@@ -1,11 +1,13 @@
 package repository
 
 import (
+	"errors"
+
 	"github.com/example/llm-gateway/internal/controlplane/model"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
-// EntitlementRepo 处理模型组两级授权表的增删查。
 type EntitlementRepo struct {
 	db *gorm.DB
 }
@@ -14,50 +16,133 @@ func NewEntitlementRepo(db *gorm.DB) *EntitlementRepo {
 	return &EntitlementRepo{db: db}
 }
 
-// Upsert 创建或启用一条授权记录（已存在则置 enabled=true）。
-func (r *EntitlementRepo) Upsert(e *model.GroupEntitlement) error {
-	return r.db.Where(model.GroupEntitlement{
-		GroupID:   e.GroupID,
-		ScopeType: e.ScopeType,
-		ScopeID:   e.ScopeID,
-	}).Assign(model.GroupEntitlement{
-		Enabled:   true,
-		GrantedBy: e.GrantedBy,
-	}).FirstOrCreate(e).Error
+func (r *EntitlementRepo) Create(ent *model.GroupEntitlement) error {
+	return r.db.Create(ent).Error
 }
 
-// Revoke 撤销授权：将 enabled 置为 false（软撤销，保留审计记录）。
-func (r *EntitlementRepo) Revoke(groupID uint, scopeType, scopeID string) error {
-	return r.db.Model(&model.GroupEntitlement{}).
-		Where("group_id = ? AND scope_type = ? AND scope_id = ?", groupID, scopeType, scopeID).
-		Update("enabled", false).Error
-}
-
-// FindByGroup 查询某模型组的所有授权记录（含 disabled）。
-func (r *EntitlementRepo) FindByGroup(groupID uint) ([]model.GroupEntitlement, error) {
-	var list []model.GroupEntitlement
-	err := r.db.Where("group_id = ?", groupID).Find(&list).Error
-	return list, err
-}
-
-// EnabledControlledGroupIDs 返回受控组中，满足「dept 级 enabled 且其 studio 级也 enabled」的组 ID 集合。
-// deptID：SSO dept_id；studioID：工作室 UUID 字符串。
-// 实现级联判断：先找 dept 级 enabled 行，再交叉验证 studio 级也 enabled。
-func (r *EntitlementRepo) EnabledControlledGroupIDs(deptID, studioID string) ([]uint, error) {
-	// 找出该部门已开通的受控组 group_id 集合
-	var deptGroupIDs []uint
-	err := r.db.Model(&model.GroupEntitlement{}).
-		Where("scope_type = ? AND scope_id = ? AND enabled = true", model.EntitlementScopeDept, deptID).
-		Pluck("group_id", &deptGroupIDs).Error
-	if err != nil || len(deptGroupIDs) == 0 {
+func (r *EntitlementRepo) FindByID(id uuid.UUID) (*model.GroupEntitlement, error) {
+	var ent model.GroupEntitlement
+	if err := r.db.First(&ent, "id = ?", id).Error; err != nil {
 		return nil, err
 	}
-
-	// 在上述 group_id 集合中，过滤出工作室级也 enabled 的（级联校验）
-	var result []uint
-	err = r.db.Model(&model.GroupEntitlement{}).
-		Where("group_id IN ? AND scope_type = ? AND scope_id = ? AND enabled = true",
-			deptGroupIDs, model.EntitlementScopeStudio, studioID).
-		Pluck("group_id", &result).Error
-	return result, err
+	return &ent, nil
 }
+
+func (r *EntitlementRepo) Delete(id uuid.UUID) error {
+	return r.db.Delete(&model.GroupEntitlement{}, "id = ?", id).Error
+}
+
+func (r *EntitlementRepo) SetEnabled(id uuid.UUID, enabled bool) error {
+	return r.db.Model(&model.GroupEntitlement{}).Where("id = ?", id).Update("enabled", enabled).Error
+}
+
+func (r *EntitlementRepo) ListByGroup(groupID uint, scopeType string) ([]model.GroupEntitlement, error) {
+	var ents []model.GroupEntitlement
+	query := r.db.Where("group_id = ?", groupID)
+	if scopeType != "" {
+		query = query.Where("scope_type = ?", scopeType)
+	}
+	err := query.Order("created_at DESC").Find(&ents).Error
+	return ents, err
+}
+
+func (r *EntitlementRepo) ListByScope(scopeType, scopeID string) ([]model.GroupEntitlement, error) {
+	var ents []model.GroupEntitlement
+	err := r.db.Where("scope_type = ? AND scope_id = ?", scopeType, scopeID).
+		Order("created_at DESC").Find(&ents).Error
+	return ents, err
+}
+
+func (r *EntitlementRepo) FindOne(groupID uint, scopeType, scopeID string) (*model.GroupEntitlement, error) {
+	var ent model.GroupEntitlement
+	err := r.db.Where("group_id = ? AND scope_type = ? AND scope_id = ?", groupID, scopeType, scopeID).
+		First(&ent).Error
+	if err != nil {
+		return nil, err
+	}
+	return &ent, nil
+}
+
+// EnabledControlledGroupIDs 级联判定：返回同时存在 enabled dept 行 + enabled studio 行的 controlled 组 ID
+func (r *EntitlementRepo) EnabledControlledGroupIDs(deptID, studioID string) ([]uint, error) {
+	if deptID == "" || studioID == "" {
+		return nil, nil
+	}
+	var groupIDs []uint
+	err := r.db.Raw(`
+		SELECT d.group_id
+		FROM group_entitlements d
+		JOIN group_entitlements s
+		  ON d.group_id = s.group_id
+		  AND s.scope_type = 'studio'
+		  AND s.scope_id = ?
+		  AND s.enabled = true
+		JOIN model_groups g
+		  ON d.group_id = g.id
+		  AND g.open_mode = 'controlled'
+		  AND g.enabled = true
+		  AND g.deleted_at IS NULL
+		WHERE d.scope_type = 'dept'
+		  AND d.scope_id = ?
+		  AND d.enabled = true
+	`, studioID, deptID).Pluck("group_id", &groupIDs).Error
+	if err != nil {
+		return nil, err
+	}
+	return groupIDs, nil
+}
+
+// FindKeyIDsByDeptOrStudio 查询指定部门或工作室下所有已启用 API Key 的 ID（UUID）。
+// 用于授权变更时发布 key_updated 事件，使 gateway 本地 KeyCache 主动失效。
+func (r *EntitlementRepo) FindKeyIDsByDeptOrStudio(deptID, studioID string) ([]uuid.UUID, error) {
+	var ids []uuid.UUID
+	query := r.db.Model(&model.ApiKey{}).Where("enabled = ?", true)
+	if deptID != "" && studioID != "" {
+		query = query.Where("dept_id = ? OR studio_id = ?", deptID, studioID)
+	} else if deptID != "" {
+		query = query.Where("dept_id = ?", deptID)
+	} else if studioID != "" {
+		query = query.Where("studio_id = ?", studioID)
+	} else {
+		return nil, nil
+	}
+	err := query.Pluck("id", &ids).Error
+	return ids, err
+}
+
+// FindStudioName 根据工作室 UUID 查询工作室名称。
+func (r *EntitlementRepo) FindStudioName(studioID uuid.UUID) (string, error) {
+	var name string
+	err := r.db.Table("studios").Where("id = ?", studioID).Pluck("name", &name).Error
+	if err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// FindDeptName 根据 SSO dept_id 查询部门名称。
+func (r *EntitlementRepo) FindDeptName(deptID string) (string, error) {
+	var name string
+	err := r.db.Table("departments").Where("dept_id = ?", deptID).Pluck("dept_name", &name).Error
+	if err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// FindUserName 根据用户 UUID 查询用户姓名。
+// 优先查 users 表，未找到时 fallback 到 dev_users 表（返回 username）。
+func (r *EntitlementRepo) FindUserName(userID uuid.UUID) (string, error) {
+	var name string
+	err := r.db.Table("users").Where("id = ?", userID).Pluck("name", &name).Error
+	if err == nil && name != "" {
+		return name, nil
+	}
+	err = r.db.Table("dev_users").Where("id = ?", userID).Pluck("username", &name).Error
+	if err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+var ErrRecordNotFound = errors.New("record not found")

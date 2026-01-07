@@ -26,9 +26,8 @@ type Group struct {
 	SameModelRetries        int            `gorm:"not null;default:1" json:"same_model_retries"`
 	FailoverCooldownSeconds int            `gorm:"not null;default:60" json:"failover_cooldown_seconds"`
 	TimeoutSeconds          int            `gorm:"not null;default:0" json:"timeout_seconds"`
-	// v0.7: 开放模式，取代 tier 分级。public=全员可用，controlled=需部门授权
-	OpenMode string `gorm:"type:varchar(16);not null;default:'public'" json:"open_mode"`
-	Models   []GroupModel `gorm:"foreignKey:GroupID" json:"models,omitempty"`
+	OpenMode                string         `gorm:"type:varchar(16);not null;default:'public';check:open_mode IN ('public','controlled')" json:"open_mode"`
+	Models                  []GroupModel   `gorm:"foreignKey:GroupID" json:"models,omitempty"`
 }
 
 func (Group) TableName() string {

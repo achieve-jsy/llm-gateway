@@ -75,4 +75,10 @@ var Registry = map[Permission]PolicyEntry{
 	PermExpansionRequest: {ScopeManage},
 	// 审批扩容：studio_admin 或 admin
 	PermExpansionApprove: {ScopeStudio},
+
+	// 模型组授权管理：仅 admin（设开放模式 + 授权工作室）
+	PermEntitlementManage: {ScopeGlobal},
+
+	// 下放/开通部门：studio_admin（自己工作室范围）或 admin（全局）
+	PermEntitlementGrantDept: {ScopeManage},
 }

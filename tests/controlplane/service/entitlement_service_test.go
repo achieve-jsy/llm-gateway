@@ -2,452 +2,617 @@ package service_test
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"testing"
 
 	"github.com/example/llm-gateway/internal/controlplane/event"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/service"
+	"github.com/example/llm-gateway/internal/orgservice/rbac"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Fakes
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Mock 实现 ────────────────────────────────────────────────────────────────
 
-// fakeEntitlementRepo 模拟 EntitlementRepo
-type fakeEntitlementRepo struct {
-	upsertCalls       []*model.GroupEntitlement
-	revokeCalls       []revokeCall
-	findByGroupCalls  []uint
-	controlledIDs     []uint // EnabledControlledGroupIDs 返回
-	controlledErr     error
-	upsertErr         error
-	revokeErr         error
-	findByGroupResult []model.GroupEntitlement
-	findByGroupErr    error
+// stubEntitlementGroupRepo 模拟 EntitlementGroupRepo 接口
+type stubEntitlementGroupRepo struct {
+	groups       map[uint]*model.Group
+	namesByMode  map[string][]string
+	namesByIDs   map[uint]string
+	updateErr    error
+	findByIDErr  error
 }
 
-type revokeCall struct {
-	GroupID   uint
-	ScopeType string
-	ScopeID   string
-}
-
-func (f *fakeEntitlementRepo) Upsert(e *model.GroupEntitlement) error {
-	if f.upsertErr != nil {
-		return f.upsertErr
-	}
-	f.upsertCalls = append(f.upsertCalls, e)
-	return nil
-}
-
-func (f *fakeEntitlementRepo) Revoke(groupID uint, scopeType, scopeID string) error {
-	if f.revokeErr != nil {
-		return f.revokeErr
-	}
-	f.revokeCalls = append(f.revokeCalls, revokeCall{groupID, scopeType, scopeID})
-	return nil
-}
-
-func (f *fakeEntitlementRepo) FindByGroup(groupID uint) ([]model.GroupEntitlement, error) {
-	f.findByGroupCalls = append(f.findByGroupCalls, groupID)
-	return f.findByGroupResult, f.findByGroupErr
-}
-
-func (f *fakeEntitlementRepo) EnabledControlledGroupIDs(deptID, studioID string) ([]uint, error) {
-	return f.controlledIDs, f.controlledErr
-}
-
-// fakeEntitlementGroupRepo 模拟 EntitlementGroupRepo
-type fakeEntitlementGroupRepo struct {
-	groups          map[uint]*model.Group
-	updateCalls     []updateOpenModeCall
-	listByIDsCalls  [][]uint
-	idsByOpenMode   map[string][]uint // openMode -> []id
-	idsByOpenModeErr error
-	updateErr       error
-	listByIDsErr    error
-	listByIDsResult []model.Group // 预设结果（优先使用）
-}
-
-type updateOpenModeCall struct {
-	GroupID  uint
-	OpenMode string
-}
-
-func newFakeGroupRepo() *fakeEntitlementGroupRepo {
-	return &fakeEntitlementGroupRepo{
-		groups:        make(map[uint]*model.Group),
-		idsByOpenMode: make(map[string][]uint),
+func newStubEntitlementGroupRepo() *stubEntitlementGroupRepo {
+	return &stubEntitlementGroupRepo{
+		groups:      make(map[uint]*model.Group),
+		namesByMode: make(map[string][]string),
+		namesByIDs:  make(map[uint]string),
 	}
 }
 
-func (f *fakeEntitlementGroupRepo) addGroup(id uint, name, openMode string, enabled bool) {
-	f.groups[id] = &model.Group{ID: id, Name: name, OpenMode: openMode, Enabled: enabled}
-}
-
-func (f *fakeEntitlementGroupRepo) FindByID(id uint) (*model.Group, error) {
-	g, ok := f.groups[id]
-	if !ok {
-		return nil, nil
+func (f *stubEntitlementGroupRepo) FindByID(id uint) (*model.Group, error) {
+	if f.findByIDErr != nil {
+		return nil, f.findByIDErr
 	}
-	return g, nil
+	if g, ok := f.groups[id]; ok {
+		return g, nil
+	}
+	return nil, errors.New("record not found")
 }
 
-func (f *fakeEntitlementGroupRepo) UpdateOpenMode(id uint, openMode string) error {
+func (f *stubEntitlementGroupRepo) FindNamesByOpenMode(openMode string) ([]string, error) {
+	return f.namesByMode[openMode], nil
+}
+
+func (f *stubEntitlementGroupRepo) FindNamesByIDs(ids []uint) ([]string, error) {
+	var names []string
+	for _, id := range ids {
+		if name, ok := f.namesByIDs[id]; ok {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
+func (f *stubEntitlementGroupRepo) UpdateOpenMode(id uint, openMode string) error {
 	if f.updateErr != nil {
 		return f.updateErr
 	}
-	f.updateCalls = append(f.updateCalls, updateOpenModeCall{id, openMode})
 	if g, ok := f.groups[id]; ok {
 		g.OpenMode = openMode
 	}
 	return nil
 }
 
-func (f *fakeEntitlementGroupRepo) IDsByOpenMode(openMode string) ([]uint, error) {
-	if f.idsByOpenModeErr != nil {
-		return nil, f.idsByOpenModeErr
-	}
-	return f.idsByOpenMode[openMode], nil
+func (f *stubEntitlementGroupRepo) addGroup(id uint, name, openMode string) {
+	f.groups[id] = &model.Group{ID: id, Name: name, OpenMode: openMode, Enabled: true}
+	f.namesByIDs[id] = name
 }
 
-func (f *fakeEntitlementGroupRepo) ListGroupsByIDs(ids []uint) ([]model.Group, error) {
-	f.listByIDsCalls = append(f.listByIDsCalls, ids)
-	if f.listByIDsErr != nil {
-		return nil, f.listByIDsErr
+// stubEntitlementEntitlementRepo 模拟 EntitlementEntitlementRepo 接口
+type stubEntitlementEntitlementRepo struct {
+	rows           map[uuid.UUID]*model.GroupEntitlement
+	controlledIDs  []uint
+	controlledErr  error
+	keyIDs         []uuid.UUID
+	keyIDsErr      error
+	createErr      error
+	findOneErr     map[string]error
+}
+
+func newStubEntitlementEntitlementRepo() *stubEntitlementEntitlementRepo {
+	return &stubEntitlementEntitlementRepo{
+		rows:       make(map[uuid.UUID]*model.GroupEntitlement),
+		findOneErr: make(map[string]error),
 	}
-	if f.listByIDsResult != nil {
-		return f.listByIDsResult, nil
+}
+
+func (f *stubEntitlementEntitlementRepo) Create(ent *model.GroupEntitlement) error {
+	if f.createErr != nil {
+		return f.createErr
 	}
-	// 兜底：从 in-memory 数据查
-	out := make([]model.Group, 0, len(ids))
-	for _, id := range ids {
-		if g, ok := f.groups[id]; ok && g.Enabled {
-			out = append(out, *g)
+	if ent.ID == uuid.Nil {
+		ent.ID = uuid.New()
+	}
+	f.rows[ent.ID] = ent
+	return nil
+}
+
+func (f *stubEntitlementEntitlementRepo) FindByID(id uuid.UUID) (*model.GroupEntitlement, error) {
+	if ent, ok := f.rows[id]; ok {
+		return ent, nil
+	}
+	return nil, errors.New("record not found")
+}
+
+func (f *stubEntitlementEntitlementRepo) Delete(id uuid.UUID) error {
+	delete(f.rows, id)
+	return nil
+}
+
+func (f *stubEntitlementEntitlementRepo) SetEnabled(id uuid.UUID, enabled bool) error {
+	if ent, ok := f.rows[id]; ok {
+		ent.Enabled = enabled
+	}
+	return nil
+}
+
+func (f *stubEntitlementEntitlementRepo) ListByGroup(groupID uint, scopeType string) ([]model.GroupEntitlement, error) {
+	var ents []model.GroupEntitlement
+	for _, ent := range f.rows {
+		if ent.GroupID == groupID {
+			if scopeType == "" || ent.ScopeType == scopeType {
+				ents = append(ents, *ent)
+			}
 		}
 	}
-	return out, nil
+	return ents, nil
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Tests: SetOpenMode
-// ─────────────────────────────────────────────────────────────────────────────
-
-// TestEntitlementService_SetOpenMode_InvalidMode 验证无效 open_mode 直接返回错误，
-// 不查 DB、不写 DB、不发事件。
-func TestEntitlementService_SetOpenMode_InvalidMode(t *testing.T) {
-	gRepo := newFakeGroupRepo()
-	eRepo := &fakeEntitlementRepo{}
-	pub := &fakeBudgetEventPublisher{}
-
-	svc := service.NewEntitlementService(eRepo, gRepo, pub)
-
-	err := svc.SetOpenMode(context.Background(), 1, "invalid-mode")
-
-	assert.Equal(t, service.ErrInvalidOpenMode, err)
-	assert.Empty(t, gRepo.updateCalls, "DB 不应被调用")
-	assert.Empty(t, pub.events)
-}
-
-// TestEntitlementService_SetOpenMode_GroupNotFound 验证 group 不存在时返回 ErrGroupNotFound。
-func TestEntitlementService_SetOpenMode_GroupNotFound(t *testing.T) {
-	gRepo := newFakeGroupRepo()
-	// 不预设任何 group
-	svc := service.NewEntitlementService(&fakeEntitlementRepo{}, gRepo, nil)
-
-	err := svc.SetOpenMode(context.Background(), 999, "public")
-
-	assert.Equal(t, service.ErrGroupNotFound, err)
-	assert.Empty(t, gRepo.updateCalls)
-}
-
-// TestEntitlementService_SetOpenMode_UpdateFails 验证 DB UpdateOpenMode 失败时：
-// 返回 error，不发事件。
-func TestEntitlementService_SetOpenMode_UpdateFails(t *testing.T) {
-	gRepo := newFakeGroupRepo()
-	gRepo.addGroup(1, "gpt-4o", "public", true)
-	gRepo.updateErr = fmt.Errorf("db error")
-	pub := &fakeBudgetEventPublisher{}
-
-	svc := service.NewEntitlementService(&fakeEntitlementRepo{}, gRepo, pub)
-
-	err := svc.SetOpenMode(context.Background(), 1, "controlled")
-
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "update open_mode")
-	assert.Empty(t, pub.events, "DB 失败不应发事件")
-}
-
-// TestEntitlementService_SetOpenMode_Success 验证金线路径：
-// DB 更新 + 广播 auth_config_changed 事件。
-func TestEntitlementService_SetOpenMode_Success(t *testing.T) {
-	gRepo := newFakeGroupRepo()
-	gRepo.addGroup(1, "gpt-4o", "public", true)
-	pub := &fakeBudgetEventPublisher{}
-
-	svc := service.NewEntitlementService(&fakeEntitlementRepo{}, gRepo, pub)
-
-	err := svc.SetOpenMode(context.Background(), 1, "controlled")
-
-	assert.NoError(t, err)
-	require.Len(t, gRepo.updateCalls, 1)
-	assert.Equal(t, uint(1), gRepo.updateCalls[0].GroupID)
-	assert.Equal(t, "controlled", gRepo.updateCalls[0].OpenMode)
-	assert.Equal(t, "controlled", gRepo.groups[1].OpenMode, "内存中 open_mode 应被更新")
-
-	// 广播事件
-	require.Len(t, pub.events, 1)
-	assert.Equal(t, event.AuthConfigChanged, pub.events[0].EventType)
-	assert.Equal(t, "auth_config", pub.events[0].ResourceType)
-	assert.Equal(t, uuid.Nil, pub.events[0].ResourceID)
-}
-
-// TestEntitlementService_SetOpenMode_NilPublisher 验证 publisher 为 nil 时
-// 不 panic，DB 仍更新。
-func TestEntitlementService_SetOpenMode_NilPublisher(t *testing.T) {
-	gRepo := newFakeGroupRepo()
-	gRepo.addGroup(1, "gpt-4o", "public", true)
-
-	svc := service.NewEntitlementService(&fakeEntitlementRepo{}, gRepo, nil)
-
-	err := svc.SetOpenMode(context.Background(), 1, "controlled")
-
-	assert.NoError(t, err)
-	assert.Len(t, gRepo.updateCalls, 1)
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Tests: Grant / Revoke
-// ─────────────────────────────────────────────────────────────────────────────
-
-// TestEntitlementService_Grant_InvalidScopeType 验证无效 scope_type 返回 error，
-// 不写 DB、不发事件。
-func TestEntitlementService_Grant_InvalidScopeType(t *testing.T) {
-	pub := &fakeBudgetEventPublisher{}
-	svc := service.NewEntitlementService(&fakeEntitlementRepo{}, newFakeGroupRepo(), pub)
-
-	err := svc.Grant(context.Background(), 1, "user", "user-001", uuid.New())
-
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid scope_type")
-	assert.Empty(t, pub.events)
-}
-
-// TestEntitlementService_Grant_StudioScope 验证 studio 范围授权的正常路径。
-func TestEntitlementService_Grant_StudioScope(t *testing.T) {
-	eRepo := &fakeEntitlementRepo{}
-	pub := &fakeBudgetEventPublisher{}
-	grantedBy := uuid.New()
-
-	svc := service.NewEntitlementService(eRepo, newFakeGroupRepo(), pub)
-
-	err := svc.Grant(context.Background(), 1, model.EntitlementScopeStudio, "studio-1", grantedBy)
-
-	assert.NoError(t, err)
-	require.Len(t, eRepo.upsertCalls, 1)
-	assert.Equal(t, uint(1), eRepo.upsertCalls[0].GroupID)
-	assert.Equal(t, model.EntitlementScopeStudio, eRepo.upsertCalls[0].ScopeType)
-	assert.Equal(t, "studio-1", eRepo.upsertCalls[0].ScopeID)
-	assert.True(t, eRepo.upsertCalls[0].Enabled)
-	assert.Equal(t, grantedBy, eRepo.upsertCalls[0].GrantedBy)
-
-	// 事件发布
-	require.Len(t, pub.events, 1)
-	assert.Equal(t, event.AuthConfigChanged, pub.events[0].EventType)
-}
-
-// TestEntitlementService_Grant_DeptScope 验证部门范围授权的正常路径。
-func TestEntitlementService_Grant_DeptScope(t *testing.T) {
-	eRepo := &fakeEntitlementRepo{}
-	pub := &fakeBudgetEventPublisher{}
-
-	svc := service.NewEntitlementService(eRepo, newFakeGroupRepo(), pub)
-
-	err := svc.Grant(context.Background(), 1, model.EntitlementScopeDept, "dept-001", uuid.New())
-
-	assert.NoError(t, err)
-	assert.Equal(t, model.EntitlementScopeDept, eRepo.upsertCalls[0].ScopeType)
-	assert.Len(t, pub.events, 1)
-}
-
-// TestEntitlementService_Grant_UpsertFails 验证 DB 失败时返回 error，不发事件。
-func TestEntitlementService_Grant_UpsertFails(t *testing.T) {
-	eRepo := &fakeEntitlementRepo{upsertErr: fmt.Errorf("db err")}
-	pub := &fakeBudgetEventPublisher{}
-
-	svc := service.NewEntitlementService(eRepo, newFakeGroupRepo(), pub)
-
-	err := svc.Grant(context.Background(), 1, model.EntitlementScopeDept, "d-1", uuid.New())
-
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "grant entitlement")
-	assert.Empty(t, pub.events)
-}
-
-// TestEntitlementService_Revoke_Success 验证撤销路径：DB revoke + 广播事件。
-func TestEntitlementService_Revoke_Success(t *testing.T) {
-	eRepo := &fakeEntitlementRepo{}
-	pub := &fakeBudgetEventPublisher{}
-
-	svc := service.NewEntitlementService(eRepo, newFakeGroupRepo(), pub)
-
-	err := svc.Revoke(context.Background(), 1, model.EntitlementScopeDept, "dept-001")
-
-	assert.NoError(t, err)
-	require.Len(t, eRepo.revokeCalls, 1)
-	assert.Equal(t, uint(1), eRepo.revokeCalls[0].GroupID)
-	assert.Equal(t, model.EntitlementScopeDept, eRepo.revokeCalls[0].ScopeType)
-	assert.Len(t, pub.events, 1)
-}
-
-// TestEntitlementService_Revoke_DBFails 验证 DB 失败时返回 error，不发事件。
-func TestEntitlementService_Revoke_DBFails(t *testing.T) {
-	eRepo := &fakeEntitlementRepo{revokeErr: fmt.Errorf("db err")}
-	pub := &fakeBudgetEventPublisher{}
-
-	svc := service.NewEntitlementService(eRepo, newFakeGroupRepo(), pub)
-
-	err := svc.Revoke(context.Background(), 1, model.EntitlementScopeDept, "d-1")
-
-	assert.Error(t, err)
-	assert.Empty(t, pub.events)
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Tests: UsableGroupNames (核心级联逻辑)
-// ─────────────────────────────────────────────────────────────────────────────
-
-// TestEntitlementService_UsableGroupNames_OnlyPublic 验证无 deptID/studioID 时
-// 只返回 public 组。
-func TestEntitlementService_UsableGroupNames_OnlyPublic(t *testing.T) {
-	gRepo := newFakeGroupRepo()
-	gRepo.addGroup(1, "gpt-4o", "public", true)
-	gRepo.addGroup(2, "claude-opus", "controlled", true)
-	gRepo.idsByOpenMode["public"] = []uint{1}
-
-	eRepo := &fakeEntitlementRepo{controlledIDs: []uint{2}} // 部门已开通 claude-opus
-	svc := service.NewEntitlementService(eRepo, gRepo, nil)
-
-	// 注意：deptID 和 studioID 都为空
-	names, err := svc.UsableGroupNames(context.Background(), "", "")
-
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"gpt-4o"}, names, "无 deptID 应只返回 public 组")
-	// 验证没调用 controlled 路径
-}
-
-// TestEntitlementService_UsableGroupNames_MissingStudio 验证 studioID 为空时
-// 只返回 public（不跑受控组查询，因为级联校验需要 studioID）。
-func TestEntitlementService_UsableGroupNames_MissingStudio(t *testing.T) {
-	gRepo := newFakeGroupRepo()
-	gRepo.addGroup(1, "gpt-4o", "public", true)
-	gRepo.idsByOpenMode["public"] = []uint{1}
-
-	eRepo := &fakeEntitlementRepo{}
-	svc := service.NewEntitlementService(eRepo, gRepo, nil)
-
-	names, err := svc.UsableGroupNames(context.Background(), "dept-001", "" /*空 studio*/)
-
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"gpt-4o"}, names)
-}
-
-// TestEntitlementService_UsableGroupNames_ControlledCascadeEnabled 验证 dept+studio
-// 都 enabled 时，受控组正确返回。
-func TestEntitlementService_UsableGroupNames_ControlledCascadeEnabled(t *testing.T) {
-	gRepo := newFakeGroupRepo()
-	gRepo.addGroup(1, "gpt-4o", "public", true)
-	gRepo.addGroup(2, "claude-opus", "controlled", true)
-	gRepo.idsByOpenMode["public"] = []uint{1}
-
-	// 模拟：dept-001 在 studio-1 开通下开通了 claude-opus（受控组 ID=2），且 studio-1 已下放
-	eRepo := &fakeEntitlementRepo{controlledIDs: []uint{2}}
-	svc := service.NewEntitlementService(eRepo, gRepo, nil)
-
-	names, err := svc.UsableGroupNames(context.Background(), "dept-001", "studio-1")
-
-	assert.NoError(t, err)
-	assert.ElementsMatch(t, []string{"gpt-4o", "claude-opus"}, names)
-}
-
-// TestEntitlementService_UsableGroupNames_Dedupe 验证同一 group_id 同时出现在
-// public 和 controlled 时只返回一次。
-func TestEntitlementService_UsableGroupNames_Dedupe(t *testing.T) {
-	gRepo := newFakeGroupRepo()
-	gRepo.addGroup(1, "gpt-4o", "public", true) // group_id=1 是 public
-	// 但同一 group_id=1 也出现在 controlled 的返回（理论上不应该，但测代码的健壮性）
-	gRepo.idsByOpenMode["public"] = []uint{1}
-
-	eRepo := &fakeEntitlementRepo{controlledIDs: []uint{1}} // 重复
-	svc := service.NewEntitlementService(eRepo, gRepo, nil)
-
-	names, err := svc.UsableGroupNames(context.Background(), "dept-001", "studio-1")
-
-	assert.NoError(t, err)
-	require.Len(t, names, 1, "去重后应只出现 1 次 gpt-4o")
-	assert.Equal(t, "gpt-4o", names[0])
-}
-
-// TestEntitlementService_UsableGroupNames_Empty 验证没有任何组时返回空切片（非 nil）。
-func TestEntitlementService_UsableGroupNames_Empty(t *testing.T) {
-	gRepo := newFakeGroupRepo()
-	// 不预设 public 也不预设 controlled
-	eRepo := &fakeEntitlementRepo{}
-	svc := service.NewEntitlementService(eRepo, gRepo, nil)
-
-	names, err := svc.UsableGroupNames(context.Background(), "", "")
-
-	assert.NoError(t, err)
-	assert.NotNil(t, names, "应返回空切片而非 nil")
-	assert.Empty(t, names)
-}
-
-// TestEntitlementService_UsableGroupNames_PublicQueryFails 验证 public 组查询失败
-// 时向上传播错误。
-func TestEntitlementService_UsableGroupNames_PublicQueryFails(t *testing.T) {
-	gRepo := newFakeGroupRepo()
-	gRepo.idsByOpenModeErr = fmt.Errorf("db err")
-	svc := service.NewEntitlementService(&fakeEntitlementRepo{}, gRepo, nil)
-
-	_, err := svc.UsableGroupNames(context.Background(), "", "")
-
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "list public groups")
-}
-
-// TestEntitlementService_UsableGroupNames_ControlledQueryFails 验证受控组查询失败
-// 时向上传播错误（deptID 和 studioID 都非空时才触发）。
-func TestEntitlementService_UsableGroupNames_ControlledQueryFails(t *testing.T) {
-	gRepo := newFakeGroupRepo()
-	gRepo.idsByOpenMode["public"] = []uint{1}
-	gRepo.addGroup(1, "gpt-4o", "public", true)
-
-	eRepo := &fakeEntitlementRepo{controlledErr: fmt.Errorf("db err")}
-	svc := service.NewEntitlementService(eRepo, gRepo, nil)
-
-	_, err := svc.UsableGroupNames(context.Background(), "dept-001", "studio-1")
-
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "list controlled groups")
-}
-
-// TestEntitlementService_ListByGroup_Delegates 验证 ListByGroup 简单委托给 repo。
-func TestEntitlementService_ListByGroup_Delegates(t *testing.T) {
-	expected := []model.GroupEntitlement{
-		{GroupID: 1, ScopeType: "studio", ScopeID: "s-1", Enabled: true},
-		{GroupID: 1, ScopeType: "dept", ScopeID: "d-1", Enabled: true},
+func (f *stubEntitlementEntitlementRepo) FindOne(groupID uint, scopeType, scopeID string) (*model.GroupEntitlement, error) {
+	key := scopeType + ":" + scopeID
+	if err, ok := f.findOneErr[key]; ok {
+		return nil, err
 	}
-	eRepo := &fakeEntitlementRepo{findByGroupResult: expected}
+	for _, ent := range f.rows {
+		if ent.GroupID == groupID && ent.ScopeType == scopeType && ent.ScopeID == scopeID {
+			return ent, nil
+		}
+	}
+	return nil, errors.New("record not found")
+}
 
-	svc := service.NewEntitlementService(eRepo, newFakeGroupRepo(), nil)
+func (f *stubEntitlementEntitlementRepo) EnabledControlledGroupIDs(_, _ string) ([]uint, error) {
+	return f.controlledIDs, f.controlledErr
+}
 
-	result, err := svc.ListByGroup(context.Background(), 1)
+func (f *stubEntitlementEntitlementRepo) FindKeyIDsByDeptOrStudio(_, _ string) ([]uuid.UUID, error) {
+	return f.keyIDs, f.keyIDsErr
+}
 
-	assert.NoError(t, err)
-	assert.Equal(t, expected, result)
-	assert.Equal(t, []uint{1}, eRepo.findByGroupCalls)
+// stubEntitlementEventPublisher 模拟 EntitlementEventPublisher 接口，记录发布的事件
+type stubEntitlementEventPublisher struct {
+	events          []*event.ChangeEvent
+	publishErr      error
+	invalidatedKeys []string
+}
+
+func newStubEntitlementEventPublisher() *stubEntitlementEventPublisher {
+	return &stubEntitlementEventPublisher{}
+}
+
+func (f *stubEntitlementEventPublisher) Publish(_ context.Context, ev *event.ChangeEvent) error {
+	if f.publishErr != nil {
+		return f.publishErr
+	}
+	f.events = append(f.events, ev)
+	return nil
+}
+
+func (f *stubEntitlementEventPublisher) InvalidateKeyAuthCache(_ context.Context, keyHash string) {
+	f.invalidatedKeys = append(f.invalidatedKeys, keyHash)
+}
+
+// ── 测试 ─────────────────────────────────────────────────────────────────────
+
+func TestComputeUsableGroups_EmptyDeptID(t *testing.T) {
+	// 测试目的：当 deptID 为空时（旧 Key 或 Service Key），只返回 public 组，跳过 controlled 级联判定
+	grpRepo := newStubEntitlementGroupRepo()
+	grpRepo.namesByMode["public"] = []string{"deepseek-chat", "qwen-turbo"}
+
+	entRepo := newStubEntitlementEntitlementRepo()
+	pub := newStubEntitlementEventPublisher()
+
+	svc := service.NewEntitlementService(entRepo, grpRepo, pub)
+
+	groups, err := svc.ComputeUsableGroups(context.Background(), "", "studio-1")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"deepseek-chat", "qwen-turbo"}, groups)
+}
+
+func TestComputeUsableGroups_PublicOnly(t *testing.T) {
+	// 测试目的：deptID+studioID 都有值，但无 controlled 组被开通，仅返回 public 组
+	grpRepo := newStubEntitlementGroupRepo()
+	grpRepo.namesByMode["public"] = []string{"deepseek-chat"}
+
+	entRepo := newStubEntitlementEntitlementRepo()
+	entRepo.controlledIDs = nil
+
+	pub := newStubEntitlementEventPublisher()
+	svc := service.NewEntitlementService(entRepo, grpRepo, pub)
+
+	groups, err := svc.ComputeUsableGroups(context.Background(), "dept-1", "studio-1")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"deepseek-chat"}, groups)
+}
+
+func TestComputeUsableGroups_PublicAndControlled(t *testing.T) {
+	// 测试目的：dept D1 已开通 claude-opus，应返回 public + controlled 组名合并去重
+	grpRepo := newStubEntitlementGroupRepo()
+	grpRepo.namesByMode["public"] = []string{"deepseek-chat", "qwen-turbo"}
+	grpRepo.addGroup(10, "deepseek-chat", "public")
+	grpRepo.addGroup(20, "claude-opus", "controlled")
+
+	entRepo := newStubEntitlementEntitlementRepo()
+	entRepo.controlledIDs = []uint{20}
+
+	pub := newStubEntitlementEventPublisher()
+	svc := service.NewEntitlementService(entRepo, grpRepo, pub)
+
+	groups, err := svc.ComputeUsableGroups(context.Background(), "dept-1", "studio-1")
+	require.NoError(t, err)
+	assert.Len(t, groups, 3)
+	assert.Contains(t, groups, "deepseek-chat")
+	assert.Contains(t, groups, "qwen-turbo")
+	assert.Contains(t, groups, "claude-opus")
+}
+
+func TestGrantStudio_PublicGroupRejected(t *testing.T) {
+	// 测试目的：对 public 组调用 GrantStudio 必须返回 ErrGroupMustBeControlled
+	grpRepo := newStubEntitlementGroupRepo()
+	grpRepo.addGroup(1, "deepseek-chat", "public")
+
+	entRepo := newStubEntitlementEntitlementRepo()
+	pub := newStubEntitlementEventPublisher()
+	svc := service.NewEntitlementService(entRepo, grpRepo, pub)
+
+	_, err := svc.GrantStudio(context.Background(), 1, "studio-1", uuid.New())
+	assert.ErrorIs(t, err, service.ErrGroupMustBeControlled)
+}
+
+func TestGrantStudio_Success(t *testing.T) {
+	// 测试目的：对 controlled 组首次授权工作室，应成功创建 entitlement 并发布 EntitlementGranted 事件
+	grpRepo := newStubEntitlementGroupRepo()
+	grpRepo.addGroup(1, "claude-opus", "controlled")
+
+	entRepo := newStubEntitlementEntitlementRepo()
+	// FindOne 返回 not found，模拟首次授权
+	entRepo.findOneErr["studio:studio-1"] = errors.New("record not found")
+
+	pub := newStubEntitlementEventPublisher()
+	svc := service.NewEntitlementService(entRepo, grpRepo, pub)
+
+	operator := uuid.New()
+	item, err := svc.GrantStudio(context.Background(), 1, "studio-1", operator)
+	require.NoError(t, err)
+	assert.Equal(t, "claude-opus", item.GroupName)
+	assert.Equal(t, "studio", item.ScopeType)
+	assert.Equal(t, "studio-1", item.ScopeID)
+	assert.True(t, item.Enabled)
+
+	// 验证发布了 EntitlementGranted 事件
+	require.Len(t, pub.events, 1)
+	assert.Equal(t, event.EntitlementGranted, pub.events[0].Type)
+}
+
+func TestGrantStudio_DuplicateRejected(t *testing.T) {
+	// 测试目的：工作室已被授权（enabled=true），重复授权应返回 ErrEntitlementExists
+	grpRepo := newStubEntitlementGroupRepo()
+	grpRepo.addGroup(1, "claude-opus", "controlled")
+
+	entRepo := newStubEntitlementEntitlementRepo()
+	existingID := uuid.New()
+	entRepo.rows[existingID] = &model.GroupEntitlement{
+		ID:        existingID,
+		GroupID:   1,
+		ScopeType: "studio",
+		ScopeID:   "studio-1",
+		Enabled:   true,
+	}
+
+	pub := newStubEntitlementEventPublisher()
+	svc := service.NewEntitlementService(entRepo, grpRepo, pub)
+
+	_, err := svc.GrantStudio(context.Background(), 1, "studio-1", uuid.New())
+	assert.ErrorIs(t, err, service.ErrEntitlementExists)
+}
+
+func TestGrantDept_NoStudioGrant(t *testing.T) {
+	// 测试目的：工作室未下放时，部门开通应返回 ErrStudioNotGranted
+	grpRepo := newStubEntitlementGroupRepo()
+	grpRepo.addGroup(1, "claude-opus", "controlled")
+
+	entRepo := newStubEntitlementEntitlementRepo()
+	entRepo.findOneErr["studio:studio-1"] = errors.New("record not found")
+
+	pub := newStubEntitlementEventPublisher()
+	svc := service.NewEntitlementService(entRepo, grpRepo, pub)
+
+	actor := &rbac.Actor{IsGlobal: true}
+	_, err := svc.GrantDept(context.Background(), 1, "dept-1", "studio-1", uuid.New(), actor)
+	assert.ErrorIs(t, err, service.ErrStudioNotGranted)
+}
+
+func TestGrantDept_Forbidden(t *testing.T) {
+	// 测试目的：非 admin 且不管辖目标工作室时，返回 ErrEntitlementForbidden
+	grpRepo := newStubEntitlementGroupRepo()
+	grpRepo.addGroup(1, "claude-opus", "controlled")
+
+	entRepo := newStubEntitlementEntitlementRepo()
+	studioEntID := uuid.New()
+	entRepo.rows[studioEntID] = &model.GroupEntitlement{
+		ID: studioEntID, GroupID: 1, ScopeType: "studio", ScopeID: "studio-1", Enabled: true,
+	}
+	entRepo.findOneErr["dept:dept-1"] = errors.New("record not found")
+
+	pub := newStubEntitlementEventPublisher()
+	svc := service.NewEntitlementService(entRepo, grpRepo, pub)
+
+	// actor 不是 global，也不管辖 studio-1
+	actor := &rbac.Actor{IsGlobal: false, StudioIDs: []string{"other-studio"}}
+	_, err := svc.GrantDept(context.Background(), 1, "dept-1", "studio-1", uuid.New(), actor)
+	assert.ErrorIs(t, err, service.ErrEntitlementForbidden)
+}
+
+func TestGrantDept_Success(t *testing.T) {
+	// 测试目的：studio 已下放 + actor 为 admin + 部门未开通 → 成功创建 dept 授权
+	grpRepo := newStubEntitlementGroupRepo()
+	grpRepo.addGroup(1, "claude-opus", "controlled")
+
+	entRepo := newStubEntitlementEntitlementRepo()
+	studioEntID := uuid.New()
+	entRepo.rows[studioEntID] = &model.GroupEntitlement{
+		ID: studioEntID, GroupID: 1, ScopeType: "studio", ScopeID: "studio-1", Enabled: true,
+	}
+	entRepo.findOneErr["dept:dept-1"] = errors.New("record not found")
+	entRepo.keyIDs = []uuid.UUID{uuid.New(), uuid.New()}
+
+	pub := newStubEntitlementEventPublisher()
+	svc := service.NewEntitlementService(entRepo, grpRepo, pub)
+
+	actor := &rbac.Actor{IsGlobal: true}
+	item, err := svc.GrantDept(context.Background(), 1, "dept-1", "studio-1", uuid.New(), actor)
+	require.NoError(t, err)
+	assert.Equal(t, "dept", item.ScopeType)
+	assert.Equal(t, "dept-1", item.ScopeID)
+
+	// 验证发布了 EntitlementGranted + key_updated 事件
+	hasGranted := false
+	hasKeyUpdated := false
+	for _, ev := range pub.events {
+		if ev.Type == event.EntitlementGranted {
+			hasGranted = true
+		}
+		if ev.Type == event.KeyUpdated && ev.ResourceType == "api_key" {
+			hasKeyUpdated = true
+		}
+	}
+	assert.True(t, hasGranted, "应发布 EntitlementGranted 事件")
+	assert.True(t, hasKeyUpdated, "应发布 key_updated 事件通知 gateway 本地缓存失效")
+}
+
+func TestRevoke_NotFound(t *testing.T) {
+	// 测试目的：撤销不存在的 entitlement，返回 ErrEntitlementNotFound
+	grpRepo := newStubEntitlementGroupRepo()
+	entRepo := newStubEntitlementEntitlementRepo()
+	pub := newStubEntitlementEventPublisher()
+	svc := service.NewEntitlementService(entRepo, grpRepo, pub)
+
+	err := svc.Revoke(context.Background(), uuid.New(), uuid.New())
+	assert.ErrorIs(t, err, service.ErrEntitlementNotFound)
+}
+
+func TestRevoke_Success(t *testing.T) {
+	// 测试目的：撤销已有 entitlement，应删除记录、发布 EntitlementRevoked 并触发本地缓存失效
+	grpRepo := newStubEntitlementGroupRepo()
+	grpRepo.addGroup(1, "claude-opus", "controlled")
+
+	entRepo := newStubEntitlementEntitlementRepo()
+	entID := uuid.New()
+	entRepo.rows[entID] = &model.GroupEntitlement{
+		ID: entID, GroupID: 1, ScopeType: "dept", ScopeID: "dept-1", Enabled: true,
+	}
+	entRepo.keyIDs = []uuid.UUID{uuid.New()}
+
+	pub := newStubEntitlementEventPublisher()
+	svc := service.NewEntitlementService(entRepo, grpRepo, pub)
+
+	err := svc.Revoke(context.Background(), entID, uuid.New())
+	require.NoError(t, err)
+
+	// 验证记录被删除
+	_, err = entRepo.FindByID(entID)
+	assert.Error(t, err, "记录应已被删除")
+
+	// 验证发布了 EntitlementRevoked 事件
+	hasRevoked := false
+	hasKeyUpdated := false
+	for _, ev := range pub.events {
+		if ev.Type == event.EntitlementRevoked {
+			hasRevoked = true
+		}
+		if ev.Type == event.KeyUpdated {
+			hasKeyUpdated = true
+		}
+	}
+	assert.True(t, hasRevoked, "应发布 EntitlementRevoked 事件")
+	assert.True(t, hasKeyUpdated, "应发布 key_updated 事件通知 gateway 本地缓存失效")
+}
+
+func TestSetOpenMode_PublicToControlled(t *testing.T) {
+	// 测试目的：public→controlled 不触发缓存失效（无 key 受影响，因为 controlled 默认不可用）
+	grpRepo := newStubEntitlementGroupRepo()
+	grpRepo.addGroup(1, "deepseek-chat", "public")
+
+	entRepo := newStubEntitlementEntitlementRepo()
+	pub := newStubEntitlementEventPublisher()
+	svc := service.NewEntitlementService(entRepo, grpRepo, pub)
+
+	err := svc.SetOpenMode(context.Background(), 1, "controlled", uuid.New())
+	require.NoError(t, err)
+
+	// 验证 open_mode 已更新
+	assert.Equal(t, "controlled", grpRepo.groups[1].OpenMode)
+
+	// 应有 OpenModeChanged 事件，但不应该有 key_updated（controlled→public 才需要）
+	hasModeChanged := false
+	hasKeyUpdated := false
+	for _, ev := range pub.events {
+		if ev.Type == event.OpenModeChanged {
+			hasModeChanged = true
+		}
+		if ev.Type == event.KeyUpdated {
+			hasKeyUpdated = true
+		}
+	}
+	assert.True(t, hasModeChanged)
+	assert.False(t, hasKeyUpdated, "public→controlled 不应触发本地缓存失效")
+}
+
+func TestSetOpenMode_ControlledToPublic_TriggersInvalidation(t *testing.T) {
+	// 测试目的：controlled→public 触发缓存失效，因为原本依赖 controlled 授权的 key 现在可能受影响
+	grpRepo := newStubEntitlementGroupRepo()
+	grpRepo.addGroup(1, "claude-opus", "controlled")
+
+	entRepo := newStubEntitlementEntitlementRepo()
+	// 模拟该组有 studio 域授权
+	studioEntID := uuid.New()
+	entRepo.rows[studioEntID] = &model.GroupEntitlement{
+		ID: studioEntID, GroupID: 1, ScopeType: "studio", ScopeID: "studio-1", Enabled: true,
+	}
+	entRepo.keyIDs = []uuid.UUID{uuid.New(), uuid.New()}
+
+	pub := newStubEntitlementEventPublisher()
+	svc := service.NewEntitlementService(entRepo, grpRepo, pub)
+
+	err := svc.SetOpenMode(context.Background(), 1, "public", uuid.New())
+	require.NoError(t, err)
+
+	// 应为每个受影响的 scope 发布 key_updated 事件
+	hasKeyUpdated := false
+	for _, ev := range pub.events {
+		if ev.Type == event.KeyUpdated && ev.ResourceType == "api_key" {
+			hasKeyUpdated = true
+			break
+		}
+	}
+	assert.True(t, hasKeyUpdated, "controlled→public 应触发 gateway 本地缓存失效")
+}
+
+func TestSetOpenMode_InvalidMode(t *testing.T) {
+	// 测试目的：非法 open_mode 值应被拒绝
+	grpRepo := newStubEntitlementGroupRepo()
+	entRepo := newStubEntitlementEntitlementRepo()
+	pub := newStubEntitlementEventPublisher()
+	svc := service.NewEntitlementService(entRepo, grpRepo, pub)
+
+	err := svc.SetOpenMode(context.Background(), 1, "invalid", uuid.New())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid open_mode")
+}
+
+func TestSetOpenMode_GroupNotFound(t *testing.T) {
+	// 测试目的：组不存在时返回 ErrGroupNotFound
+	grpRepo := newStubEntitlementGroupRepo()
+	grpRepo.findByIDErr = errors.New("record not found")
+
+	entRepo := newStubEntitlementEntitlementRepo()
+	pub := newStubEntitlementEventPublisher()
+	svc := service.NewEntitlementService(entRepo, grpRepo, pub)
+
+	err := svc.SetOpenMode(context.Background(), 999, "public", uuid.New())
+	assert.ErrorIs(t, err, service.ErrGroupNotFound)
+}
+
+func TestListEntitlements_Success(t *testing.T) {
+	// 测试目的：列出组的授权记录，包含 group_name
+	grpRepo := newStubEntitlementGroupRepo()
+	grpRepo.addGroup(1, "claude-opus", "controlled")
+
+	entRepo := newStubEntitlementEntitlementRepo()
+	ent1ID := uuid.New()
+	ent2ID := uuid.New()
+	entRepo.rows[ent1ID] = &model.GroupEntitlement{
+		ID: ent1ID, GroupID: 1, ScopeType: "studio", ScopeID: "s1", Enabled: true,
+	}
+	entRepo.rows[ent2ID] = &model.GroupEntitlement{
+		ID: ent2ID, GroupID: 1, ScopeType: "dept", ScopeID: "d1", Enabled: true,
+	}
+
+	pub := newStubEntitlementEventPublisher()
+	svc := service.NewEntitlementService(entRepo, grpRepo, pub)
+
+	items, err := svc.ListEntitlements(context.Background(), 1, "")
+	require.NoError(t, err)
+	assert.Len(t, items, 2)
+	for _, item := range items {
+		assert.Equal(t, "claude-opus", item.GroupName)
+	}
+}
+
+func TestListEntitlements_ScopeFilter(t *testing.T) {
+	// 测试目的：scopeType 过滤只返回指定域类型的记录
+	grpRepo := newStubEntitlementGroupRepo()
+	grpRepo.addGroup(1, "claude-opus", "controlled")
+
+	entRepo := newStubEntitlementEntitlementRepo()
+	studioID := uuid.New()
+	deptID := uuid.New()
+	entRepo.rows[studioID] = &model.GroupEntitlement{
+		ID: studioID, GroupID: 1, ScopeType: "studio", ScopeID: "s1", Enabled: true,
+	}
+	entRepo.rows[deptID] = &model.GroupEntitlement{
+		ID: deptID, GroupID: 1, ScopeType: "dept", ScopeID: "d1", Enabled: true,
+	}
+
+	pub := newStubEntitlementEventPublisher()
+	svc := service.NewEntitlementService(entRepo, grpRepo, pub)
+
+	items, err := svc.ListEntitlements(context.Background(), 1, "studio")
+	require.NoError(t, err)
+	assert.Len(t, items, 1)
+	assert.Equal(t, "studio", items[0].ScopeType)
+}
+
+func TestNotifyLocalCacheInvalidation_NilInvalidator(t *testing.T) {
+	// 测试目的：invalidator 为 nil 时不 panic
+	entRepo := newStubEntitlementEntitlementRepo()
+	service.NotifyLocalCacheInvalidation(context.Background(), nil, entRepo, "d1", "s1")
+}
+
+func TestNotifyLocalCacheInvalidation_PublishesKeyUpdatedEvents(t *testing.T) {
+	// 测试目的：为每个受影响的 key 发布 key_updated 事件，resourceType=api_key
+	entRepo := newStubEntitlementEntitlementRepo()
+	kid1 := uuid.New()
+	kid2 := uuid.New()
+	kid3 := uuid.New()
+	entRepo.keyIDs = []uuid.UUID{kid1, kid2, kid3}
+
+	pub := newStubEntitlementEventPublisher()
+	service.NotifyLocalCacheInvalidation(context.Background(), pub, entRepo, "dept-1", "studio-1")
+
+	// 3 个 key → 3 个 key_updated 事件
+	assert.Len(t, pub.events, 3)
+	for _, ev := range pub.events {
+		assert.Equal(t, event.KeyUpdated, ev.Type)
+		assert.Equal(t, "api_key", ev.ResourceType)
+	}
+	// 验证每个 key ID 都被包含
+	publishedIDs := make(map[uuid.UUID]bool)
+	for _, ev := range pub.events {
+		publishedIDs[ev.ResourceID] = true
+	}
+	assert.True(t, publishedIDs[kid1])
+	assert.True(t, publishedIDs[kid2])
+	assert.True(t, publishedIDs[kid3])
+}
+
+func TestGrantStudio_ReEnableExistingDisabled(t *testing.T) {
+	// 测试目的：工作室授权已存在但 enabled=false 时，应重新启用而非创建新记录
+	grpRepo := newStubEntitlementGroupRepo()
+	grpRepo.addGroup(1, "claude-opus", "controlled")
+
+	entRepo := newStubEntitlementEntitlementRepo()
+	existingID := uuid.New()
+	entRepo.rows[existingID] = &model.GroupEntitlement{
+		ID: existingID, GroupID: 1, ScopeType: "studio", ScopeID: "studio-1", Enabled: false,
+	}
+	entRepo.keyIDs = []uuid.UUID{uuid.New()}
+
+	pub := newStubEntitlementEventPublisher()
+	svc := service.NewEntitlementService(entRepo, grpRepo, pub)
+
+	item, err := svc.GrantStudio(context.Background(), 1, "studio-1", uuid.New())
+	require.NoError(t, err)
+	assert.True(t, item.Enabled, "应重新启用已有记录")
+	assert.Equal(t, existingID, item.ID, "应复用已有记录而非新建")
+}
+
+func TestComputeUsableGroups_ErrorPropagation(t *testing.T) {
+	// 测试目的：级联判定查询失败时，错误应向上传播
+	grpRepo := newStubEntitlementGroupRepo()
+	grpRepo.namesByMode["public"] = []string{"deepseek-chat"}
+
+	entRepo := newStubEntitlementEntitlementRepo()
+	entRepo.controlledErr = errors.New("db connection failed")
+
+	pub := newStubEntitlementEventPublisher()
+	svc := service.NewEntitlementService(entRepo, grpRepo, pub)
+
+	_, err := svc.ComputeUsableGroups(context.Background(), "d1", "s1")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "db connection failed")
 }

@@ -3,167 +3,401 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
+	"log/slog"
 
 	"github.com/example/llm-gateway/internal/controlplane/event"
 	"github.com/example/llm-gateway/internal/controlplane/model"
+	"github.com/example/llm-gateway/internal/orgservice/rbac"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 var (
-	ErrEntitlementNotFound  = errors.New("entitlement not found")
-	ErrInvalidOpenMode      = errors.New("open_mode must be 'public' or 'controlled'")
-	ErrEntitlementForbidden = errors.New("insufficient permission to manage entitlement")
+	ErrEntitlementNotFound   = errors.New("entitlement not found")
+	ErrEntitlementExists     = errors.New("entitlement already exists")
+	ErrGroupMustBeControlled = errors.New("group must be controlled")
+	ErrStudioNotGranted      = errors.New("studio must be granted first")
+	ErrEntitlementForbidden  = errors.New("insufficient permission")
 )
 
-// EntitlementRepo 两级授权表（studio / dept）的访问接口。
-// 实现者：repository.EntitlementRepo（真实 DB）。
-type EntitlementRepo interface {
-	Upsert(e *model.GroupEntitlement) error
-	Revoke(groupID uint, scopeType, scopeID string) error
-	FindByGroup(groupID uint) ([]model.GroupEntitlement, error)
-	EnabledControlledGroupIDs(deptID, studioID string) ([]uint, error)
+// EntitlementComputer 供 KeyService 消费的最小接口，避免循环依赖。
+type EntitlementComputer interface {
+	ComputeUsableGroups(ctx context.Context, deptID, studioID string) ([]string, error)
 }
 
-// EntitlementGroupRepo GroupRepo 中 EntitlementService 实际依赖的子集。
-// 实现者：repository.GroupRepo。
+type EntitlementItem struct {
+	ID            uuid.UUID  `json:"id"`
+	GroupID       uint       `json:"group_id"`
+	GroupName     string     `json:"group_name"`
+	ScopeType     string     `json:"scope_type"`
+	ScopeID       string     `json:"scope_id"`
+	ScopeName     string     `json:"scope_name"`
+	Enabled       bool       `json:"enabled"`
+	GrantedBy     *uuid.UUID `json:"granted_by,omitempty"`
+	GrantedByName string     `json:"granted_by_name,omitempty"`
+	CreatedAt     string     `json:"created_at"`
+}
+
+// EntitlementGroupRepo 授权业务所需的组仓库能力。
 type EntitlementGroupRepo interface {
 	FindByID(id uint) (*model.Group, error)
+	FindNamesByOpenMode(openMode string) ([]string, error)
+	FindNamesByIDs(ids []uint) ([]string, error)
 	UpdateOpenMode(id uint, openMode string) error
-	IDsByOpenMode(openMode string) ([]uint, error)
-	ListGroupsByIDs(ids []uint) ([]model.Group, error)
 }
 
-// EntitlementService 处理模型组开放模式设置与两级授权（工作室+部门）。
+// EntitlementEntitlementRepo 授权业务所需的授权数据仓库能力。
+type EntitlementEntitlementRepo interface {
+	Create(ent *model.GroupEntitlement) error
+	FindByID(id uuid.UUID) (*model.GroupEntitlement, error)
+	Delete(id uuid.UUID) error
+	SetEnabled(id uuid.UUID, enabled bool) error
+	ListByGroup(groupID uint, scopeType string) ([]model.GroupEntitlement, error)
+	FindOne(groupID uint, scopeType, scopeID string) (*model.GroupEntitlement, error)
+	EnabledControlledGroupIDs(deptID, studioID string) ([]uint, error)
+	FindKeyIDsByDeptOrStudio(deptID, studioID string) ([]uuid.UUID, error)
+	FindStudioName(studioID uuid.UUID) (string, error)
+	FindDeptName(deptID string) (string, error)
+	FindUserName(userID uuid.UUID) (string, error)
+}
+
+// EntitlementEventPublisher 授权变更事件的发布能力。
+type EntitlementEventPublisher interface {
+	Publish(ctx context.Context, event *event.ChangeEvent) error
+	InvalidateKeyAuthCache(ctx context.Context, keyHash string)
+}
+
+// EntitlementInvalidator 通知 gateway 本地 KeyCache 失效的能力（通过发布 key_updated 事件）。
+type EntitlementInvalidator interface {
+	Publish(ctx context.Context, event *event.ChangeEvent) error
+}
+
 type EntitlementService struct {
-	entRepo   EntitlementRepo
+	repo      EntitlementEntitlementRepo
 	groupRepo EntitlementGroupRepo
-	publisher EventPublisher
+	publisher EntitlementEventPublisher
 }
 
-func NewEntitlementService(
-	entRepo EntitlementRepo,
-	groupRepo EntitlementGroupRepo,
-	publisher EventPublisher,
-) *EntitlementService {
+func NewEntitlementService(repo EntitlementEntitlementRepo, groupRepo EntitlementGroupRepo, publisher EntitlementEventPublisher) *EntitlementService {
 	return &EntitlementService{
-		entRepo:   entRepo,
+		repo:      repo,
 		groupRepo: groupRepo,
 		publisher: publisher,
 	}
 }
 
-// SetOpenMode 设置模型组的开放模式（平台管理员）。
-// openMode: "public" | "controlled"
-func (s *EntitlementService) SetOpenMode(ctx context.Context, groupID uint, openMode string) error {
-	if openMode != model.GroupOpenModePublic && openMode != model.GroupOpenModeControlled {
-		return ErrInvalidOpenMode
+func (s *EntitlementService) SetOpenMode(ctx context.Context, groupID uint, openMode string, operatorID uuid.UUID) error {
+	if openMode != "public" && openMode != "controlled" {
+		return errors.New("invalid open_mode: must be 'public' or 'controlled'")
 	}
-	g, err := s.groupRepo.FindByID(groupID)
-	if err != nil || g == nil {
-		return ErrGroupNotFound // 复用 group_service.go 中定义的 ErrGroupNotFound
+
+	group, err := s.groupRepo.FindByID(groupID)
+	if err != nil {
+		return ErrGroupNotFound
 	}
+
+	prevMode := group.OpenMode
+
 	if err := s.groupRepo.UpdateOpenMode(groupID, openMode); err != nil {
-		return fmt.Errorf("update open_mode: %w", err)
-	}
-	// v0.7: 模型组开放模式变更 → 广播 auth_config_changed 事件
-	// 网关收到后会清空全部 KeyCache，下次 verify-key 重新计算 usable_groups
-	if s.publisher != nil {
-		s.publisher.Publish(event.AuthConfigChanged, "auth_config", uuid.Nil)
-	}
-	return nil
-}
-
-// Grant 下放/开通授权：平台授权工作室（scope_type=studio）或工作室/负责人授权部门（scope_type=dept）。
-func (s *EntitlementService) Grant(ctx context.Context, groupID uint, scopeType, scopeID string, grantedBy uuid.UUID) error {
-	if scopeType != model.EntitlementScopeStudio && scopeType != model.EntitlementScopeDept {
-		return fmt.Errorf("invalid scope_type: %s", scopeType)
-	}
-	e := &model.GroupEntitlement{
-		GroupID:   groupID,
-		ScopeType: scopeType,
-		ScopeID:   scopeID,
-		Enabled:   true,
-		GrantedBy: grantedBy,
-	}
-	if err := s.entRepo.Upsert(e); err != nil {
-		return fmt.Errorf("grant entitlement: %w", err)
-	}
-	// v0.7: 授权下放开/启用 → 广播失效网关 KeyCache
-	if s.publisher != nil {
-		s.publisher.Publish(event.AuthConfigChanged, "auth_config", uuid.Nil)
-	}
-	return nil
-}
-
-// Revoke 撤销授权（软撤销，enabled=false）。
-// 平台撤销 studio 授权后，下属部门的 dept 行因级联判断即时失效，无需逐行清理。
-func (s *EntitlementService) Revoke(ctx context.Context, groupID uint, scopeType, scopeID string) error {
-	if err := s.entRepo.Revoke(groupID, scopeType, scopeID); err != nil {
 		return err
 	}
-	// v0.7: 撤销授权 → 广播失效网关 KeyCache（包含级联失效：studio 撤销会让下属 dept 行也失效）
-	if s.publisher != nil {
-		s.publisher.Publish(event.AuthConfigChanged, "auth_config", uuid.Nil)
+
+	s.publishEvent(event.OpenModeChanged, "group", uuid.UUID{}, groupID)
+
+	if prevMode == "controlled" && openMode == "public" {
+		s.invalidateByGroup(ctx, groupID)
 	}
+
 	return nil
 }
 
-// ListByGroup 查询某模型组的所有授权记录。
-func (s *EntitlementService) ListByGroup(ctx context.Context, groupID uint) ([]model.GroupEntitlement, error) {
-	return s.entRepo.FindByGroup(groupID)
+func (s *EntitlementService) GrantStudio(ctx context.Context, groupID uint, studioID string, grantedBy uuid.UUID) (*EntitlementItem, error) {
+	group, err := s.groupRepo.FindByID(groupID)
+	if err != nil {
+		return nil, ErrGroupNotFound
+	}
+	if group.OpenMode != "controlled" {
+		return nil, ErrGroupMustBeControlled
+	}
+
+	existing, err := s.repo.FindOne(groupID, model.EntitlementScopeStudio, studioID)
+	if err == nil {
+		if existing.Enabled {
+			return nil, ErrEntitlementExists
+		}
+		if err := s.repo.SetEnabled(existing.ID, true); err != nil {
+			return nil, err
+		}
+		existing.Enabled = true
+		s.publishEvent(event.EntitlementGranted, "group_entitlement", existing.ID, groupID)
+		s.invalidateByScope(ctx, studioID)
+		return s.toItem(existing, group.Name), nil
+	}
+
+	ent := &model.GroupEntitlement{
+		GroupID:   groupID,
+		ScopeType: model.EntitlementScopeStudio,
+		ScopeID:   studioID,
+		Enabled:   true,
+		GrantedBy: &grantedBy,
+	}
+	if err := s.repo.Create(ent); err != nil {
+		if isDuplicateKeyError(err) {
+			return nil, ErrEntitlementExists
+		}
+		return nil, err
+	}
+
+	s.publishEvent(event.EntitlementGranted, "group_entitlement", ent.ID, groupID)
+	return s.toItem(ent, group.Name), nil
 }
 
-// UsableGroupNames 计算某用户（部门+工作室维度）可用的模型组名称集合：
-//
-//	可用 = 公开组（open_mode=public）∪ 本部门已开通的受控组
-//
-// 返回组名称集合（string slice），供 verify-key 快照下发。
-// 如果 deptID 或 studioID 为空则只返回公开组。
-func (s *EntitlementService) UsableGroupNames(ctx context.Context, deptID, studioID string) ([]string, error) {
-	// 1. 取所有公开组 ID
-	pubIDs, err := s.groupRepo.IDsByOpenMode(model.GroupOpenModePublic)
+func (s *EntitlementService) GrantDept(ctx context.Context, groupID uint, deptID, studioID string, grantedBy uuid.UUID, actor *rbac.Actor) (*EntitlementItem, error) {
+	group, err := s.groupRepo.FindByID(groupID)
 	if err != nil {
-		return nil, fmt.Errorf("list public groups: %w", err)
+		return nil, ErrGroupNotFound
+	}
+	if group.OpenMode != "controlled" {
+		return nil, ErrGroupMustBeControlled
 	}
 
-	// 2. 取本部门已开通的受控组 ID（级联判断：dept enabled AND studio enabled）
-	var ctlIDs []uint
-	if deptID != "" && studioID != "" {
-		ctlIDs, err = s.entRepo.EnabledControlledGroupIDs(deptID, studioID)
-		if err != nil {
-			return nil, fmt.Errorf("list controlled groups: %w", err)
+	studioEnt, err := s.repo.FindOne(groupID, model.EntitlementScopeStudio, studioID)
+	if err != nil || !studioEnt.Enabled {
+		return nil, ErrStudioNotGranted
+	}
+
+	if !actor.IsGlobal && !actor.HasStudio(studioID) && !actor.HasDept(deptID) {
+		return nil, ErrEntitlementForbidden
+	}
+
+	existing, err := s.repo.FindOne(groupID, model.EntitlementScopeDept, deptID)
+	if err == nil {
+		if existing.Enabled {
+			return nil, ErrEntitlementExists
 		}
-	}
-
-	// 3. 合并去重
-	seen := make(map[uint]struct{})
-	allIDs := make([]uint, 0, len(pubIDs)+len(ctlIDs))
-	for _, id := range pubIDs {
-		if _, ok := seen[id]; !ok {
-			seen[id] = struct{}{}
-			allIDs = append(allIDs, id)
+		if err := s.repo.SetEnabled(existing.ID, true); err != nil {
+			return nil, err
 		}
+		existing.Enabled = true
+		s.publishEvent(event.EntitlementGranted, "group_entitlement", existing.ID, groupID)
+		s.invalidateByScope(ctx, deptID)
+		return s.toItem(existing, group.Name), nil
 	}
-	for _, id := range ctlIDs {
-		if _, ok := seen[id]; !ok {
-			seen[id] = struct{}{}
-			allIDs = append(allIDs, id)
+
+	ent := &model.GroupEntitlement{
+		GroupID:   groupID,
+		ScopeType: model.EntitlementScopeDept,
+		ScopeID:   deptID,
+		Enabled:   true,
+		GrantedBy: &grantedBy,
+	}
+	if err := s.repo.Create(ent); err != nil {
+		if isDuplicateKeyError(err) {
+			return nil, ErrEntitlementExists
 		}
+		return nil, err
 	}
 
-	if len(allIDs) == 0 {
-		return []string{}, nil
-	}
+	s.publishEvent(event.EntitlementGranted, "group_entitlement", ent.ID, groupID)
+	s.invalidateByScope(ctx, deptID)
+	return s.toItem(ent, group.Name), nil
+}
 
-	// 4. 查组名（通过 repository 接口，避免 service 直接依赖 gorm）
-	groups, err := s.groupRepo.ListGroupsByIDs(allIDs)
+func (s *EntitlementService) Revoke(ctx context.Context, entitlementID uuid.UUID, operatorID uuid.UUID) error {
+	ent, err := s.repo.FindByID(entitlementID)
 	if err != nil {
-		return nil, fmt.Errorf("fetch group names: %w", err)
+		return ErrEntitlementNotFound
 	}
-	names := make([]string, 0, len(groups))
-	for _, g := range groups {
-		names = append(names, g.Name)
+
+	if err := s.repo.Delete(entitlementID); err != nil {
+		return err
 	}
-	return names, nil
+
+	s.publishEvent(event.EntitlementRevoked, "group_entitlement", entitlementID, ent.GroupID)
+	s.invalidateByScope(ctx, ent.ScopeID)
+	return nil
+}
+
+func (s *EntitlementService) ListEntitlements(ctx context.Context, groupID uint, scopeType string) ([]EntitlementItem, error) {
+	ents, err := s.repo.ListByGroup(groupID, scopeType)
+	if err != nil {
+		return nil, err
+	}
+
+	group, err := s.groupRepo.FindByID(groupID)
+	if err != nil {
+		return nil, ErrGroupNotFound
+	}
+
+	// 批量解析 scope_name 和 granted_by_name，避免 N+1 查询
+	studioNames := make(map[uuid.UUID]string)
+	deptNames := make(map[string]string)
+	userNames := make(map[uuid.UUID]string)
+
+	items := make([]EntitlementItem, 0, len(ents))
+	for i := range ents {
+		ent := &ents[i]
+		scopeName := ""
+		if ent.ScopeType == "studio" {
+			if sid, err := uuid.Parse(ent.ScopeID); err == nil {
+				if name, ok := studioNames[sid]; ok {
+					scopeName = name
+				} else if name, err := s.repo.FindStudioName(sid); err == nil {
+					scopeName = name
+					studioNames[sid] = name
+				}
+			}
+		} else if ent.ScopeType == "dept" {
+			if name, ok := deptNames[ent.ScopeID]; ok {
+				scopeName = name
+			} else if name, err := s.repo.FindDeptName(ent.ScopeID); err == nil {
+				scopeName = name
+				deptNames[ent.ScopeID] = name
+			}
+		}
+
+		grantedByName := ""
+		if ent.GrantedBy != nil {
+			if name, ok := userNames[*ent.GrantedBy]; ok {
+				grantedByName = name
+			} else if name, err := s.repo.FindUserName(*ent.GrantedBy); err == nil {
+				grantedByName = name
+				userNames[*ent.GrantedBy] = name
+			}
+		}
+
+		item := &EntitlementItem{
+			ID:            ent.ID,
+			GroupID:       ent.GroupID,
+			GroupName:     group.Name,
+			ScopeType:     ent.ScopeType,
+			ScopeID:       ent.ScopeID,
+			ScopeName:     scopeName,
+			Enabled:       ent.Enabled,
+			GrantedBy:     ent.GrantedBy,
+			GrantedByName: grantedByName,
+			CreatedAt:     ent.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		}
+		items = append(items, *item)
+	}
+	return items, nil
+}
+
+func (s *EntitlementService) ComputeUsableGroups(ctx context.Context, deptID, studioID string) ([]string, error) {
+	publicNames, err := s.groupRepo.FindNamesByOpenMode("public")
+	if err != nil {
+		return nil, err
+	}
+	if deptID == "" || studioID == "" {
+		return publicNames, nil
+	}
+
+	controlledIDs, err := s.repo.EnabledControlledGroupIDs(deptID, studioID)
+	if err != nil {
+		return nil, err
+	}
+	if len(controlledIDs) == 0 {
+		return publicNames, nil
+	}
+
+	controlledNames, err := s.groupRepo.FindNamesByIDs(controlledIDs)
+	if err != nil {
+		return nil, err
+	}
+	return mergeUnique(publicNames, controlledNames), nil
+}
+
+// NotifyLocalCacheInvalidation 为指定 scope（deptID 或 studioID）下的所有已启用 API Key
+// 发布 key_updated 事件，使 gateway 订阅者主动清除进程内 KeyCache 的对应条目。
+// 与 publisher.InvalidateKeyAuthCache（仅删 Redis 缓存）互补，确保下次请求立即获取最新授权。
+func NotifyLocalCacheInvalidation(ctx context.Context, invalidator EntitlementInvalidator, repo EntitlementEntitlementRepo, deptID, studioID string) {
+	if invalidator == nil {
+		return
+	}
+	keyIDs, err := repo.FindKeyIDsByDeptOrStudio(deptID, studioID)
+	if err != nil {
+		slog.Warn("entitlement: find key IDs for local cache invalidation failed", "dept_id", deptID, "studio_id", studioID, "error", err)
+		return
+	}
+	for _, kid := range keyIDs {
+		ev := event.NewChangeEvent(event.KeyUpdated, "api_key", kid, 0)
+		if err := invalidator.Publish(ctx, ev); err != nil {
+			slog.Warn("entitlement: publish key_updated event for local invalidation failed", "key_id", kid, "error", err)
+		}
+	}
+}
+
+func (s *EntitlementService) toItem(ent *model.GroupEntitlement, groupName string) *EntitlementItem {
+	item := &EntitlementItem{
+		ID:        ent.ID,
+		GroupID:   ent.GroupID,
+		GroupName: groupName,
+		ScopeType: ent.ScopeType,
+		ScopeID:   ent.ScopeID,
+		Enabled:   ent.Enabled,
+		GrantedBy: ent.GrantedBy,
+		CreatedAt: ent.CreatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+	return item
+}
+
+func (s *EntitlementService) publishEvent(eventType event.ChangeEventType, resourceType string, resourceID uuid.UUID, groupID uint) {
+	if s.publisher == nil {
+		return
+	}
+	ev := event.NewChangeEvent(eventType, resourceType, resourceID, 0)
+	if err := s.publisher.Publish(context.Background(), ev); err != nil {
+		slog.Error("failed to publish entitlement event", "type", eventType, "group_id", groupID, "error", err)
+	}
+}
+
+func (s *EntitlementService) invalidateByGroup(ctx context.Context, groupID uint) {
+	if s.publisher == nil {
+		return
+	}
+	ents, err := s.repo.ListByGroup(groupID, "")
+	if err != nil {
+		slog.Warn("entitlement: invalidate cache: list failed", "group_id", groupID, "error", err)
+		return
+	}
+	seen := make(map[string]bool)
+	for _, e := range ents {
+		if seen[e.ScopeID] {
+			continue
+		}
+		seen[e.ScopeID] = true
+		NotifyLocalCacheInvalidation(ctx, s.publisher, s.repo, "", e.ScopeID)
+	}
+}
+
+func (s *EntitlementService) invalidateByScope(ctx context.Context, scopeID string) {
+	if s.publisher == nil || scopeID == "" {
+		return
+	}
+	NotifyLocalCacheInvalidation(ctx, s.publisher, s.repo, "", scopeID)
+}
+
+func mergeUnique(a, b []string) []string {
+	merged := make([]string, 0, len(a)+len(b))
+	seen := make(map[string]bool, len(a)+len(b))
+	for _, s := range a {
+		if !seen[s] {
+			seen[s] = true
+			merged = append(merged, s)
+		}
+	}
+	for _, s := range b {
+		if !seen[s] {
+			seen[s] = true
+			merged = append(merged, s)
+		}
+	}
+	return merged
+}
+
+func isDuplicateKeyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, gorm.ErrDuplicatedKey)
 }

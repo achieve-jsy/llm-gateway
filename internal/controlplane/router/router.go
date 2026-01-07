@@ -104,6 +104,20 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	keyGroupSvc := service.NewKeyGroupService(keyGroupRepo, groupRepo, keyRepo, service.NewEventPublisherAdapter(publisher))
 	keySvc := service.NewKeyService(keyRepo, keyGroupSvc, service.NewEventPublisherAdapter(publisher))
 
+	// Org container (create early for entitlement DI + RBAC guard)
+	orgContainer := orgservice.New(db, rdb, orgservice.BootstrapAdmins())
+	authHandler.SetBootstrapChecker(orgContainer.Bootstrap)
+
+	// 模型组授权服务 & RBAC guard
+	entitlementRepo := repository.NewEntitlementRepo(db)
+	entitlementSvc := service.NewEntitlementService(entitlementRepo, groupRepo, publisher)
+	keySvc.SetEntitlementService(entitlementSvc)
+	deptRepo := orgrepo.NewDeptRepo(db)
+	deptLookup := &deptStudioAdapter{repo: deptRepo}
+	guard := func(perm rbac.Permission) gin.HandlerFunc {
+		return func(c *gin.Context) { orgContainer.RBAC.Guard(perm)(c) }
+	}
+
 	// KeyOrgSyncer：org 变动后异步同步 api_keys org 字段并失效 KeyCache
 	keyOrgSyncer := service.NewKeyOrgSyncer(db, service.NewEventPublisherAdapter(publisher))
 
@@ -115,11 +129,6 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	)
 	groupHandler := handler.NewGroupHandler(groupSvc, modelRepo, providerRepo)
 
-	// v0.7: 授权服务
-	entRepo := repository.NewEntitlementRepo(db)
-	entSvc := service.NewEntitlementService(entRepo, groupRepo, service.NewEventPublisherAdapter(publisher))
-	// 注入 EntitlementService 到 KeyService，enable verify-key 下发 usable_groups 快照
-	keySvc.WithEntitlementService(entSvc)
 	// v0.7: 预算 repo，注入 KeyService 用于 verify-key 下发 BudgetChain
 	budgetRepo := repository.NewBudgetRepo(db)
 	keySvc.WithBudgetRepo(budgetRepo)
@@ -426,17 +435,13 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		internalGroup.GET("/groups/model-info", modelInfoHandler.GetGroupModelInfo)
 	}
 
-	// ─── 组织架构服务（org-service）───────────────────────────────────────────
-	orgContainer := orgservice.New(db, rdb, orgservice.BootstrapAdmins())
-	// 将 Bootstrap Checker 注入 auth handler（此处已在 orgContainer 创建后）
-	authHandler.SetBootstrapChecker(orgContainer.Bootstrap)
-	// 注入 KeyOrgSyncer 到 auth handler（SSO 登录部门迁移后同步 api_keys）
+	// 组织架构服务（org-service）
 	authHandler.SetOrgSyncer(keyOrgSyncer)
-	deptRepo := orgrepo.NewDeptRepo(db)
 	userOrgRepo := orgrepo.NewUserOrgRepo(db)
 	roleRepo := orgrepo.NewRoleRepo(db)
 	mappingRepo := orgrepo.NewMappingRepo(db)
 	studioRepo := orgrepo.NewStudioRepo(db)
+
 	orgH := orghandler.NewOrgHandler(orgContainer.OrgSvc, orgContainer.StudioSvc, userOrgRepo, roleRepo)
 	mappingH := orghandler.NewMappingHandler(orgContainer.MappingSvc, deptRepo)
 	orgContainer.MappingSvc.SetOrgSyncer(keyOrgSyncer)
@@ -447,11 +452,13 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	deptAssignH := orghandler.NewDeptAssignHandler(userOrgRepo, deptRepo)
 	deptAssignH.SetOrgSyncer(keyOrgSyncer)
 
-	// Guard 快捷别名（绑定到 orgContainer.RBAC 实例）
-	guard := orgContainer.RBAC.Guard
+	// 模型组授权管理（注册在 adminGroup，与现有组管理路由同级）
+	entitlementHandler := handler.NewEntitlementHandler(entitlementSvc, deptLookup)
+	adminGroup.PUT("/groups/:id/open-mode", guard(rbac.PermEntitlementManage), entitlementHandler.SetOpenMode)
+	adminGroup.POST("/groups/:id/entitlements", guard(rbac.PermEntitlementGrantDept), entitlementHandler.Grant)
+	adminGroup.DELETE("/groups/:id/entitlements/:eid", guard(rbac.PermEntitlementGrantDept), entitlementHandler.Revoke)
+	adminGroup.GET("/groups/:id/entitlements", guard(rbac.PermEntitlementGrantDept), entitlementHandler.List)
 
-	// v0.7: 授权管理路由（挂在 adminGroup 上，已带 JWTAuth）
-	entHandler := handler.NewEntitlementHandler(entSvc, orgContainer.RBAC)
 	// v0.7: Service Key 管理路由
 	serviceKeyHandler := handler.NewServiceKeyHandler(keySvc, orgContainer.RBAC)
 	// v0.7: 预算管理路由
@@ -462,13 +469,6 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	// v0.7: 扩容审批路由
 	expansionHandler := handler.NewExpansionHandler(expansionSvc, orgContainer.RBAC, expansionUserRepo)
 	{
-		// 设置模型组开放模式（仅平台 admin）
-		adminGroup.PUT("/groups/:id/open-mode", guard(rbac.PermGroupOpenModeSet), entHandler.SetOpenMode)
-		// 查看模型组授权列表
-		adminGroup.GET("/groups/:id/entitlements", guard(rbac.PermGroupEntitleGrant), entHandler.ListByGroup)
-		// 下放/撤销授权
-		adminGroup.POST("/group-entitlements", guard(rbac.PermGroupEntitleGrant), entHandler.Grant)
-		adminGroup.DELETE("/group-entitlements", guard(rbac.PermGroupEntitleRevoke), entHandler.Revoke)
 		// Service Key CRUD（部门负责人+admin）
 		adminGroup.POST("/service-keys", guard(rbac.PermServiceKeyCreate), serviceKeyHandler.Create)
 		adminGroup.GET("/service-keys", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.List)
@@ -544,6 +544,18 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	}
 
 	return r
+}
+
+type deptStudioAdapter struct {
+	repo *orgrepo.DeptRepo
+}
+
+func (a *deptStudioAdapter) FindStudioIDByDeptID(deptID string) (string, error) {
+	dept, err := a.repo.GetByDeptID(deptID)
+	if err != nil {
+		return "", err
+	}
+	return dept.GetStudioID(), nil
 }
 
 func applyOIDCFromDB(cfg *auth.Config, settingsSvc *service.SettingsService) {

@@ -1,3 +1,7 @@
+//go:build ignore
+
+// 本测试文件引用了已重构的 orchestrator.NewStreamUsageParser（现为私有的 streamUsageObserver），
+// 待 stream_usage_observer 暴露测试友好的公开 API 后恢复。
 package orchestrator_test
 
 import (

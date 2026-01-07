@@ -26,11 +26,13 @@ func main() {
 		&cpmmodel.KeyGroupBinding{},
 		&cpmmodel.ApiKey{},
 		&cpmmodel.Model{},
+		&cpmmodel.ModelStatusLog{},
 		&cpmmodel.ModelCatalog{},
 		&cpmmodel.ModelTag{},
 		&cpmmodel.ModelTagRelation{},
 		&cpmmodel.ProviderDefinition{},
 		&cpmmodel.Provider{},
+		&cpmmodel.GroupEntitlement{},
 		&cpmmodel.SystemConfig{},
 		// v0.7 预算模块
 		&cpmmodel.BudgetAllocation{},

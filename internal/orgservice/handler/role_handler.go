@@ -156,6 +156,16 @@ func (h *RoleHandler) GetMyRoles(c *gin.Context) {
 			}
 		}
 	}
+	// dev 用户没有 user_roles 记录，用 JWT role 构造一条虚拟 org role，
+	// 使前端 myDeptId / myStudioId 能正确从 orgRoles 提取 scope_id
+	if len(roles) == 0 && jwtRole != "" && jwtRole != "user" {
+		roles = []model.UserRole{{
+			UserID:    userID,
+			Role:      model.RoleType(jwtRole),
+			ScopeType: model.ScopeSelf,
+			ScopeID:   "",
+		}}
+	}
 	c.JSON(http.StatusOK, gin.H{"user_id": userID, "roles": roles, "effective_role": effectiveRole})
 }
 

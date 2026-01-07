@@ -85,7 +85,6 @@ func (h *ModelInfoHandler) Handle(c *gin.Context) {
 	c.JSON(http.StatusOK, litellmModelInfoResponse{Data: entries})
 }
 
-// resolveGroupNames 返回当前 API Key 可见的模型组名（与 BoundModelsHandler 一致）。
 func (h *ModelInfoHandler) resolveGroupNames(c *gin.Context) []string {
 	identityVal, exists := c.Get("identity")
 	if !exists {
@@ -94,6 +93,18 @@ func (h *ModelInfoHandler) resolveGroupNames(c *gin.Context) []string {
 	id, ok := identityVal.(*model.UserIdentity)
 	if !ok || id.KeyID == "" {
 		return nil
+	}
+
+	if len(id.UsableGroups) > 0 {
+		if id.AccessAllGroups {
+			return id.UsableGroups
+		}
+		groups, err := h.client.GetKeyGroups(c.Request.Context(), id.KeyID)
+		if err != nil {
+			slog.Warn("model info: failed to get key groups", "key_id", id.KeyID, "error", err)
+			return nil
+		}
+		return intersectStrings(id.UsableGroups, boundGroupNames(groups))
 	}
 
 	if id.AccessAllGroups {

@@ -7,6 +7,10 @@ import type {
   UpdateGroupRequest,
   AddModelToGroupRequest,
   ModelOption,
+  OpenMode,
+  GroupEntitlement,
+  GrantEntitlementRequest,
+  EntitlementListResponse,
 } from '@/types/group'
 import type { ApiResponse, PaginatedResponse } from '@/types/api'
 
@@ -76,5 +80,25 @@ export const groupsApi = {
     return http.get<ApiResponse<Record<string, GroupCapability>>>('/api/v1/groups/capabilities', {
       params: names && names.length ? { names } : undefined,
     })
+  },
+
+  // ─── 开放模式 + 授权管理 ─────────────────────────────────────────────────
+
+  setOpenMode(groupId: number, openMode: OpenMode) {
+    return http.put<ApiResponse<Group>>(`/api/v1/groups/${groupId}/open-mode`, { open_mode: openMode })
+  },
+
+  listEntitlements(groupId: number, scopeType?: string) {
+    return http.get<ApiResponse<EntitlementListResponse>>(`/api/v1/groups/${groupId}/entitlements`, {
+      params: scopeType ? { scope_type: scopeType } : undefined,
+    })
+  },
+
+  grantEntitlement(groupId: number, data: GrantEntitlementRequest) {
+    return http.post<ApiResponse<GroupEntitlement>>(`/api/v1/groups/${groupId}/entitlements`, data)
+  },
+
+  revokeEntitlement(groupId: number, entitlementId: string) {
+    return http.delete(`/api/v1/groups/${groupId}/entitlements/${entitlementId}`)
   },
 }

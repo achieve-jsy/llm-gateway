@@ -355,6 +355,11 @@ func (h *MessagesHandler) respondAnthropicGroupError(c *gin.Context, err error) 
 		h.respondAnthropicError(c, http.StatusServiceUnavailable, "overloaded_error", "No other model available for failover")
 		return
 	}
+	if ue, ok := err.(*model.UnifiedError); ok {
+		anthType := mapAnthropicErrorType(ue.Type)
+		h.respondAnthropicError(c, ue.HTTPStatus, anthType, ue.Message)
+		return
+	}
 	h.respondAnthropicError(c, http.StatusInternalServerError, "internal_error", err.Error())
 }
 

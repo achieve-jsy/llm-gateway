@@ -1,8 +1,9 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
@@ -10,158 +11,155 @@ import (
 	"github.com/google/uuid"
 )
 
-// EntitlementHandler 处理模型组开放模式设置与两级授权（工作室+部门）。
+type EntitlementServiceInterface interface {
+	SetOpenMode(ctx context.Context, groupID uint, openMode string, operatorID uuid.UUID) error
+	GrantStudio(ctx context.Context, groupID uint, studioID string, grantedBy uuid.UUID) (*service.EntitlementItem, error)
+	GrantDept(ctx context.Context, groupID uint, deptID, studioID string, grantedBy uuid.UUID, actor *rbac.Actor) (*service.EntitlementItem, error)
+	Revoke(ctx context.Context, entitlementID uuid.UUID, operatorID uuid.UUID) error
+	ListEntitlements(ctx context.Context, groupID uint, scopeType string) ([]service.EntitlementItem, error)
+}
+
+type DeptStudioLookup interface {
+	FindStudioIDByDeptID(deptID string) (string, error)
+}
+
 type EntitlementHandler struct {
-	svc  *service.EntitlementService
-	rbac *rbac.Checker
+	svc        EntitlementServiceInterface
+	deptLookup DeptStudioLookup
 }
 
-func NewEntitlementHandler(svc *service.EntitlementService, rbacChecker *rbac.Checker) *EntitlementHandler {
-	return &EntitlementHandler{svc: svc, rbac: rbacChecker}
+func NewEntitlementHandler(svc EntitlementServiceInterface, deptLookup DeptStudioLookup) *EntitlementHandler {
+	return &EntitlementHandler{svc: svc, deptLookup: deptLookup}
 }
 
-// SetOpenMode PUT /api/v1/groups/:id/open-mode
-// 设置模型组开放模式（仅平台 admin）。
 func (h *EntitlementHandler) SetOpenMode(c *gin.Context) {
-	h.rbac.BuildAndInjectActor(c)
-	actor := rbac.GetActor(c)
-	if !actor.IsGlobal {
-		c.JSON(http.StatusForbidden, gin.H{"error": "只有平台管理员可以设置开放模式"})
-		return
-	}
-
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	groupID, err := parseGroupID(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid group id"})
+		c.JSON(http.StatusBadRequest, errResp("invalid_request", "invalid group ID", CodeBadRequest))
 		return
 	}
 
-	var req struct {
-		OpenMode string `json:"open_mode" binding:"required"`
+	var body struct {
+		OpenMode string `json:"open_mode" binding:"required,oneof=public controlled"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, errResp("invalid_request", err.Error(), CodeBadRequest))
 		return
 	}
 
-	if err := h.svc.SetOpenMode(c.Request.Context(), uint(id), req.OpenMode); err != nil {
-		switch err {
-		case service.ErrInvalidOpenMode:
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		case service.ErrGroupNotFound:
-			c.JSON(http.StatusNotFound, gin.H{"error": "group not found"})
-		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		}
+	operatorID, _ := uuid.Parse(c.GetString("user_id"))
+
+	if err := h.svc.SetOpenMode(c.Request.Context(), groupID, body.OpenMode, operatorID); err != nil {
+		h.respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"group_id": groupID, "open_mode": body.OpenMode}})
 }
 
-// Grant POST /api/v1/group-entitlements
-// 下放/开通授权（studio_admin 下放给部门，平台 admin 授权工作室）。
-// Body: { group_id, scope_type, scope_id }
 func (h *EntitlementHandler) Grant(c *gin.Context) {
-	h.rbac.BuildAndInjectActor(c)
-	actor := rbac.GetActor(c)
+	groupID, err := parseGroupID(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errResp("invalid_request", "invalid group ID", CodeBadRequest))
+		return
+	}
 
-	var req struct {
-		GroupID   uint   `json:"group_id" binding:"required"`
-		ScopeType string `json:"scope_type" binding:"required"` // studio | dept
+	var body struct {
+		ScopeType string `json:"scope_type" binding:"required,oneof=studio dept"`
 		ScopeID   string `json:"scope_id" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, errResp("invalid_request", err.Error(), CodeBadRequest))
 		return
 	}
 
-	// RBAC 范围校验：
-	// - scope_type=studio：仅平台 admin 可授权给工作室
-	// - scope_type=dept：studio_admin（管辖工作室下的部门）或 admin
-	switch req.ScopeType {
-	case "studio":
-		if !actor.IsGlobal {
-			c.JSON(http.StatusForbidden, gin.H{"error": "只有平台管理员可以授权工作室"})
-			return
-		}
-	case "dept":
-		if !actor.IsGlobal && !actor.HasDept(req.ScopeID) {
-			c.JSON(http.StatusForbidden, gin.H{"error": "无权为该部门开通授权"})
-			return
-		}
-	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "scope_type must be studio or dept"})
-		return
-	}
-
+	actor := rbac.GetActor(c)
 	grantedBy, _ := uuid.Parse(c.GetString("user_id"))
-	if err := h.svc.Grant(c.Request.Context(), req.GroupID, req.ScopeType, req.ScopeID, grantedBy); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
-}
 
-// Revoke DELETE /api/v1/group-entitlements
-// 撤销授权（软撤销）。
-// Body: { group_id, scope_type, scope_id }
-func (h *EntitlementHandler) Revoke(c *gin.Context) {
-	h.rbac.BuildAndInjectActor(c)
-	actor := rbac.GetActor(c)
-
-	var req struct {
-		GroupID   uint   `json:"group_id" binding:"required"`
-		ScopeType string `json:"scope_type" binding:"required"`
-		ScopeID   string `json:"scope_id" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	switch req.ScopeType {
-	case "studio":
+	if body.ScopeType == "studio" {
 		if !actor.IsGlobal {
-			c.JSON(http.StatusForbidden, gin.H{"error": "只有平台管理员可以撤销工作室授权"})
+			c.JSON(http.StatusForbidden, errResp("forbidden",
+				"only platform admin can grant studio entitlements", CodeEntitlementForbidden))
 			return
 		}
-	case "dept":
-		if !actor.IsGlobal && !actor.HasDept(req.ScopeID) {
-			c.JSON(http.StatusForbidden, gin.H{"error": "无权撤销该部门授权"})
+		item, err := h.svc.GrantStudio(c.Request.Context(), groupID, body.ScopeID, grantedBy)
+		if err != nil {
+			h.respondError(c, err)
 			return
 		}
-	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "scope_type must be studio or dept"})
+		c.JSON(http.StatusCreated, gin.H{"data": item})
 		return
 	}
 
-	if err := h.svc.Revoke(c.Request.Context(), req.GroupID, req.ScopeType, req.ScopeID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	studioID := ""
+	if h.deptLookup != nil {
+		if sid, err := h.deptLookup.FindStudioIDByDeptID(body.ScopeID); err == nil {
+			studioID = sid
+		}
+	}
+
+	item, err := h.svc.GrantDept(c.Request.Context(), groupID, body.ScopeID, studioID, grantedBy, &actor)
+	if err != nil {
+		h.respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+	c.JSON(http.StatusCreated, gin.H{"data": item})
 }
 
-// ListByGroup GET /api/v1/groups/:id/entitlements
-// 查询某模型组的所有授权记录（平台 admin + studio_admin 可见）。
-func (h *EntitlementHandler) ListByGroup(c *gin.Context) {
-	h.rbac.BuildAndInjectActor(c)
-	actor := rbac.GetActor(c)
-	if !actor.IsManager() {
-		c.JSON(http.StatusForbidden, gin.H{"error": "需要管理员权限"})
+func (h *EntitlementHandler) Revoke(c *gin.Context) {
+	eid, err := uuid.Parse(c.Param("eid"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errResp("invalid_request", "invalid entitlement ID", CodeBadRequest))
 		return
 	}
 
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid group id"})
+	operatorID, _ := uuid.Parse(c.GetString("user_id"))
+
+	if err := h.svc.Revoke(c.Request.Context(), eid, operatorID); err != nil {
+		h.respondError(c, err)
 		return
 	}
 
-	list, err := h.svc.ListByGroup(c.Request.Context(), uint(id))
+	c.Status(http.StatusNoContent)
+}
+
+func (h *EntitlementHandler) List(c *gin.Context) {
+	groupID, err := parseGroupID(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, errResp("invalid_request", "invalid group ID", CodeBadRequest))
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": list})
+
+	scopeType := c.DefaultQuery("scope_type", "")
+
+	items, err := h.svc.ListEntitlements(c.Request.Context(), groupID, scopeType)
+	if err != nil {
+		h.respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"items": items}})
+}
+
+func (h *EntitlementHandler) respondError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, service.ErrGroupNotFound):
+		c.JSON(http.StatusNotFound, errResp("not_found", "group not found", CodeGroupNotFound))
+	case errors.Is(err, service.ErrEntitlementNotFound):
+		c.JSON(http.StatusNotFound, errResp("not_found", "entitlement not found", CodeEntitlementNotFound))
+	case errors.Is(err, service.ErrEntitlementExists):
+		c.JSON(http.StatusConflict, errResp("conflict", "entitlement already exists", CodeEntitlementDuplicate))
+	case errors.Is(err, service.ErrGroupMustBeControlled):
+		c.JSON(http.StatusUnprocessableEntity, errResp("unprocessable", "group must be in controlled mode", CodeGroupNotControlled))
+	case errors.Is(err, service.ErrStudioNotGranted):
+		c.JSON(http.StatusUnprocessableEntity, errResp("unprocessable", "studio must be granted first", CodeGroupNotControlled))
+	case errors.Is(err, service.ErrEntitlementForbidden):
+		c.JSON(http.StatusForbidden, errResp("forbidden", "insufficient permission", CodeEntitlementForbidden))
+	default:
+		c.JSON(http.StatusInternalServerError, errResp("internal_error", "internal error", CodeInternalError))
+	}
+}
+
+func errResp(errType, message, code string) gin.H {
+	return gin.H{"error": gin.H{"type": errType, "message": message, "code": code}}
 }

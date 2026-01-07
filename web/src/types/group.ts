@@ -1,5 +1,7 @@
 export type Strategy = 'round_robin' | 'priority' | 'weighted'
 
+export type OpenMode = 'public' | 'controlled'
+
 export interface Group {
   id: number
   name: string
@@ -12,6 +14,7 @@ export interface Group {
   timeout_seconds: number
   model_count?: number
   models?: GroupModel[]
+  open_mode: OpenMode
   created_at: string
   updated_at: string
 }
@@ -67,4 +70,30 @@ export interface ModelOption {
   name: string
   model_type: string
   provider?: { name: string }
+}
+
+// ─── 授权管理 ───────────────────────────────────────────────────────────────
+
+export type EntitlementScopeType = 'studio' | 'dept'
+
+export interface GroupEntitlement {
+  id: string
+  group_id: number
+  scope_type: EntitlementScopeType
+  scope_id: string
+  scope_name: string
+  enabled: boolean
+  granted_by: string
+  granted_by_name?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface GrantEntitlementRequest {
+  scope_type: EntitlementScopeType
+  scope_id: string
+}
+
+export interface EntitlementListResponse {
+  items: GroupEntitlement[]
 }

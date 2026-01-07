@@ -39,6 +39,13 @@ type OrgDepartment struct {
 
 func (OrgDepartment) TableName() string { return "departments" }
 
+func (d *OrgDepartment) GetStudioID() string {
+	if d.StudioID == nil {
+		return ""
+	}
+	return *d.StudioID
+}
+
 // ─── 部门↔工作室映射 ─────────────────────────────────────────────────────────
 
 type DeptStudioMap struct {

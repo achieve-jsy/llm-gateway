@@ -10,6 +10,10 @@
         <span class="up-badge">Token · 成本（估算）</span>
       </div>
       <div class="up-header__right">
+        <el-radio-group v-model="currency" size="small">
+          <el-radio-button value="USD">$ USD</el-radio-button>
+          <el-radio-button value="CNY">¥ CNY</el-radio-button>
+        </el-radio-group>
         <el-button :loading="statsLoading" :icon="Refresh" circle size="small" title="刷新" @click="loadAll" />
         <el-button :icon="Download" size="small" :disabled="!logRows.length" @click="handleExport">导出</el-button>
       </div>
@@ -197,11 +201,11 @@
           <el-icon size="22"><Money /></el-icon>
         </div>
         <div class="up-stat-card__body">
-          <p class="up-stat-card__label">估算成本 (USD)</p>
-          <p class="up-stat-card__value c-green">${{ fmtCost(statsTotal?.est_cost_usd) }}</p>
+          <p class="up-stat-card__label">估算成本 ({{ currency }})</p>
+          <p class="up-stat-card__value c-green">{{ fmtCost(statsTotal?.est_cost_usd) }}</p>
           <p class="up-stat-card__sub">
-            均次 <span class="c-orange">${{ avgCostPerReq }}</span>
-            <el-tooltip v-if="statsTotal && statsTotal.req_count > 0 && !statsTotal.est_cost_usd" content="当前筛选条件下的模型未配置定价，估算成本为 $0" placement="top">
+            均次 <span class="c-orange">{{ avgCostPerReq }}</span>
+            <el-tooltip v-if="statsTotal && statsTotal.req_count > 0 && !statsTotal.est_cost_usd" :content="`当前筛选条件下的模型未配置定价，估算成本为 ${currencySymbol(cc.currency)}0`" placement="top">
               <el-icon class="up-no-price-icon"><WarningFilled /></el-icon>
             </el-tooltip>
           </p>
@@ -325,7 +329,7 @@
           <el-table-column prop="est_cost_usd" label="估算成本" min-width="110" align="right" sortable>
             <template #default="{ row }">
               <div class="up-bar-cell">
-                <span :class="costColor(row.est_cost_usd)">${{ fmtCost(row.est_cost_usd) }}</span>
+                <span :class="costColor(row.est_cost_usd)">{{ fmtCost(row.est_cost_usd) }}</span>
                 <div class="up-minibar"><div class="up-minibar__fill up-minibar__fill--red" :style="{ width: pct(row.est_cost_usd, maxCost) + '%' }" /></div>
               </div>
             </template>
@@ -493,35 +497,35 @@
           <el-table-column prop="est_cost_usd" label="费用" min-width="140" align="right" sortable>
             <template #default="{ row }">
               <div class="up-cost-cell">
-                <span class="up-cost" :class="logCostColor(row.est_cost_usd)">${{ fmtCost(row.est_cost_usd) }}</span>
+                <span class="up-cost" :class="logCostColor(row.est_cost_usd)">{{ fmtCost(row.est_cost_usd) }}</span>
                 <el-tooltip placement="left" :show-after="120" popper-class="up-tt-popper">
                   <template #content>
                     <div class="up-tt">
-                      <div class="up-tt__title">成本明细 (USD)</div>
+                      <div class="up-tt__title">成本明细 ({{ currency }})</div>
                       <!-- 单价（每 1M tokens）-->
                       <template v-if="(row.input_price_snapshot ?? 0) > 0 || (row.output_price_snapshot ?? 0) > 0">
                         <div class="up-tt__group">单价 / 1M tokens</div>
-                        <div class="up-tt__row"><span>输入单价</span><b>${{ fmtPrice(row.input_price_snapshot) }}</b></div>
-                        <div class="up-tt__row"><span>输出单价</span><b>${{ fmtPrice(row.output_price_snapshot) }}</b></div>
+                        <div class="up-tt__row"><span>输入单价</span><b>{{ fmtPrice(row.input_price_snapshot) }}</b></div>
+                        <div class="up-tt__row"><span>输出单价</span><b>{{ fmtPrice(row.output_price_snapshot) }}</b></div>
                         <div class="up-tt__sep"></div>
                       </template>
                       <!-- 费用 -->
                       <div class="up-tt__group">费用</div>
                       <div class="up-tt__row">
-                        <span>输入<span class="up-tt__sub" v-if="row.prompt_tokens"> ×{{ fmtNum(Math.max((row.prompt_tokens||0) - (row.cached_tokens||0) - (row.cache_write_tokens||0), 0)) }}</span></span><b>${{ (row.input_cost_usd || 0).toFixed(6) }}</b>
+                        <span>输入<span class="up-tt__sub" v-if="row.prompt_tokens"> ×{{ fmtNum(Math.max((row.prompt_tokens||0) - (row.cached_tokens||0) - (row.cache_write_tokens||0), 0)) }}</span></span><b>{{ fmtCost6(row.input_cost_usd) }}</b>
                       </div>
                       <div class="up-tt__row">
-                        <span>输出<span class="up-tt__sub" v-if="row.completion_tokens"> ×{{ fmtNum(row.completion_tokens) }}</span></span><b>${{ (row.output_cost_usd || 0).toFixed(6) }}</b>
+                        <span>输出<span class="up-tt__sub" v-if="row.completion_tokens"> ×{{ fmtNum(row.completion_tokens) }}</span></span><b>{{ fmtCost6(row.output_cost_usd) }}</b>
                       </div>
                       <!-- 缓存专项（始终展示，与 Token 明细保持一致） -->
                       <div class="up-tt__sep"></div>
                       <div class="up-tt__group">缓存</div>
                       <div class="up-tt__row">
                         <span>缓存读取<span class="up-tt__sub" v-if="row.cached_tokens"> ×{{ fmtNum(row.cached_tokens) }}</span></span>
-                        <b :class="row.cache_read_cost_usd > 0 ? 'c-cyan' : ''">${{ (row.cache_read_cost_usd || 0).toFixed(6) }}</b>
+                        <b :class="row.cache_read_cost_usd > 0 ? 'c-cyan' : ''">{{ fmtCost6(row.cache_read_cost_usd) }}</b>
                       </div>
                       <div class="up-tt__sep"></div>
-                      <div class="up-tt__row"><span>合计</span><b class="c-green">${{ fmtCost(row.est_cost_usd) }}</b></div>
+                      <div class="up-tt__row"><span>合计</span><b class="c-green">{{ fmtCost(row.est_cost_usd) }}</b></div>
                     </div>
                   </template>
                   <span class="up-info"><el-icon><InfoFilled /></el-icon></span>
@@ -678,17 +682,17 @@
             <div class="up-meta-section">
               <div class="up-meta-heading">费用 (USD)</div>
               <div class="up-meta-row" v-if="(traceRow?.input_price_snapshot || 0) > 0 || (traceRow?.output_price_snapshot || 0) > 0">
-                <span>输入单价/1M</span><b>${{ fmtPrice(traceRow?.input_price_snapshot) }}</b>
+                <span>输入单价/1M</span><b>{{ fmtPrice(traceRow?.input_price_snapshot) }}</b>
               </div>
               <div class="up-meta-row" v-if="(traceRow?.input_price_snapshot || 0) > 0 || (traceRow?.output_price_snapshot || 0) > 0">
-                <span>输出单价/1M</span><b>${{ fmtPrice(traceRow?.output_price_snapshot) }}</b>
+                <span>输出单价/1M</span><b>{{ fmtPrice(traceRow?.output_price_snapshot) }}</b>
               </div>
-              <div class="up-meta-row"><span>输入费用</span><b>${{ fmtCost(traceRow?.input_cost_usd) }}</b></div>
-              <div class="up-meta-row"><span>输出费用</span><b>${{ fmtCost(traceRow?.output_cost_usd) }}</b></div>
+              <div class="up-meta-row"><span>输入费用</span><b>{{ fmtCost(traceRow?.input_cost_usd) }}</b></div>
+              <div class="up-meta-row"><span>输出费用</span><b>{{ fmtCost(traceRow?.output_cost_usd) }}</b></div>
               <div class="up-meta-row" v-if="(traceRow?.cache_read_cost_usd || 0) > 0">
-                <span>缓存读取</span><b class="c-cyan">${{ fmtCost(traceRow?.cache_read_cost_usd) }}</b>
+                <span>缓存读取</span><b class="c-cyan">{{ fmtCost(traceRow?.cache_read_cost_usd) }}</b>
               </div>
-              <div class="up-meta-row up-meta-sep"><span>合计</span><b class="c-green">${{ fmtCost(traceRow?.est_cost_usd) }}</b></div>
+              <div class="up-meta-row up-meta-sep"><span>合计</span><b class="c-green">{{ fmtCost(traceRow?.est_cost_usd) }}</b></div>
             </div>
           </div>
         </el-tab-pane>
@@ -771,12 +775,21 @@ import {
 } from 'chart.js'
 import http from '@/services/http'
 import { ElMessage } from 'element-plus'
+import { useSettingsStore } from '@/stores/settings'
+import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
 
 Chart.register(
   BarController, LineController,
   CategoryScale, LinearScale, BarElement, LineElement, PointElement,
   Tooltip, Legend, Filler,
 )
+
+const settingsStore = useSettingsStore()
+const currency = ref<Currency>('CNY')
+const cc = computed(() => ({
+  currency: currency.value,
+  rate: settingsStore.publicSettings.pricing_usd_to_cny_rate || 7.2,
+}))
 
 const TABLE_HEADER = {
   background: 'var(--el-fill-color-light)',
@@ -948,21 +961,26 @@ const costColor = (v: number) => v > maxCost.value * 0.7 ? 'c-red fw6' : v > max
 const fmtNum = (n?: number | null) => n?.toLocaleString() ?? '0'
 /** 动态精度：保留足够有效数字，自动去掉尾零 */
 const fmtCost = (v?: number | null): string => {
-  const n = Number(v || 0)
-  if (n === 0) return '0.00'
+  const n = convertCost(Number(v || 0), cc.value)
+  const sym = currencySymbol(cc.value.currency)
+  if (n === 0) return `${sym}0.00`
   let s: string
-  if (n >= 1)        s = n.toFixed(2)
-  else if (n >= 0.01)     s = n.toFixed(4)
-  else if (n >= 0.0001)   s = n.toFixed(6)
-  else                    s = n.toFixed(8)
-  // 去掉小数点后的尾零，但至少保留 2 位小数
-  return s.replace(/(\.\d{2,}?)0+$/, '$1')
+  if (Math.abs(n) >= 1)        s = n.toFixed(2)
+  else if (Math.abs(n) >= 0.01) s = n.toFixed(4)
+  else if (Math.abs(n) >= 0.0001) s = n.toFixed(6)
+  else s = n.toFixed(8)
+  return sym + s.replace(/(\.\d{2,}?)0+$/, '$1')
+}
+const fmtCost6 = (v?: number | null): string => {
+  const n = convertCost(Number(v || 0), cc.value)
+  return `${currencySymbol(cc.value.currency)}${n.toFixed(6)}`
 }
 const fmtPrice = (n?: number | null) => {
+  const sym = currencySymbol(cc.value.currency)
   if (n == null) return '—'
-  if (n === 0) return '0'
-  // 单价单位：USD / 1M tokens，保留有意义的小数位
-  return n >= 1 ? n.toFixed(2) : n.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
+  if (n === 0) return `${sym}0`
+  const v = convertCost(n, cc.value)
+  return sym + (Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(4).replace(/0+$/, '').replace(/\.$/, ''))
 }
 const fmtTokens = (n?: number | null) => {
   if (!n) return '0'
@@ -1334,7 +1352,7 @@ function renderTrend() {
       { label: '缓存', data: statsRows.value.map(r => r.cached_tokens), backgroundColor: CHART_C.cache + '22', borderColor: CHART_C.cache, borderWidth: 1.5, borderDash: [4, 3], fill: false, tension: 0.35, pointRadius: 0, pointHoverRadius: 4 },
     ]
   } else if (chartMetric.value === 'cost') {
-    datasets = [{ label: '成本 (USD)', data: statsRows.value.map(r => r.est_cost_usd), backgroundColor: CHART_C.cost + '33', borderColor: CHART_C.cost, borderWidth: 2, fill: true, tension: 0.35, pointRadius: 0, pointHoverRadius: 4 }]
+    datasets = [{ label: '成本 (' + currency.value + ')', data: statsRows.value.map(r => r.est_cost_usd), backgroundColor: CHART_C.cost + '33', borderColor: CHART_C.cost, borderWidth: 2, fill: true, tension: 0.35, pointRadius: 0, pointHoverRadius: 4 }]
   } else {
     datasets = [
       { label: '调用', data: statsRows.value.map(r => r.req_count), backgroundColor: CHART_C.req + '33', borderColor: CHART_C.req, borderWidth: 2, fill: true, tension: 0.35, pointRadius: 0, pointHoverRadius: 4 },
@@ -1354,7 +1372,7 @@ function renderTrend() {
           callbacks: {
             label: ctx => {
               const v = ctx.raw as number
-              if (chartMetric.value === 'cost') return `${ctx.dataset.label}: $${v.toFixed(4)}`
+              if (chartMetric.value === 'cost') return `${ctx.dataset.label}: ${currencySymbol(cc.value.currency)}${convertCost(Number(ctx.raw as number), cc.value).toFixed(4)}`
               if (chartMetric.value === 'tokens') return `${ctx.dataset.label}: ${fmtTokens(v)}`
               return `${ctx.dataset.label}: ${fmtNum(v)}`
             }
@@ -1363,7 +1381,7 @@ function renderTrend() {
       },
       scales: {
         x: { grid: { color: 'rgba(125,125,125,0.12)' }, border: { display: false }, ticks: { color: '#94A3B8', font: { size: 10 }, maxRotation: 30 } },
-        y: { grid: { color: 'rgba(125,125,125,0.12)' }, border: { display: false }, ticks: { color: '#94A3B8', font: { size: 10 }, callback: (v: any) => chartMetric.value === 'tokens' ? fmtTokens(v) : chartMetric.value === 'cost' ? `$${Number(v).toFixed(2)}` : fmtNum(v) } }
+        y: { grid: { color: 'rgba(125,125,125,0.12)' }, border: { display: false }, ticks: { color: '#94A3B8', font: { size: 10 }, callback: (v: any) => chartMetric.value === 'tokens' ? fmtTokens(v) : chartMetric.value === 'cost' ? `${currencySymbol(cc.value.currency)}${convertCost(Number(v), cc.value).toFixed(2)}` : fmtNum(v) } }
       }
     }
   } as any)
@@ -1419,10 +1437,11 @@ function handleExport() {
   const keys = Object.keys(logRows.value[0] || {})
   const csv = [keys.join(','), ...logRows.value.map(r => keys.map(k => JSON.stringify((r as any)[k] ?? '')).join(','))].join('\n')
   const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' })
-  Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `logs_${dateRange.value[0]}_${dateRange.value[1]}.csv` }).click()
+  Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `logs_${currency.value}_${dateRange.value[0]}_${dateRange.value[1]}.csv` }).click()
 }
 
 watch(distMetric, () => { if (statsRows.value.length) renderDist() })
+watch(currency, async () => { await nextTick(); if (statsRows.value.length) { renderTrend(); renderDist() } })
 
 // init
 loadOptions()

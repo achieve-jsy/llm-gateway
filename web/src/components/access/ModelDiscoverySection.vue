@@ -150,9 +150,11 @@ import {
   CircleCloseFilled,
 } from '@element-plus/icons-vue'
 import { groupsApi } from '@/api/groups'
-import type { GroupListItem } from '@/types/group'
+import type { GroupListItem, GroupEntitlement } from '@/types/group'
 import type { GroupCapability } from '@/api/groups'
 import { copyToClipboard } from '@/utils/clipboard'
+import { useAuthStore } from '@/stores/auth'
+import http from '@/services/http'
 
 const STRATEGY_LABEL: Record<string, string> = {
   round_robin: '轮询',
@@ -182,13 +184,46 @@ const toastName = ref('')
 let copyTimer: ReturnType<typeof setTimeout> | null = null
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
+const authStore = useAuthStore()
+const entitlementsMap = ref<Map<number, GroupEntitlement[]>>(new Map())
+const myDeptIds = ref<string[]>([])
+const myStudioId = ref('')
+
 const allModes = computed(() => {
   const s = new Set(Object.values(caps.value).map(c => c.mode).filter(Boolean))
   return Array.from(s).sort()
 })
 
+// 判断模型组是否对当前用户可用
+function isGroupAvailable(group: GroupListItem): boolean {
+  // 公开组始终可用
+  if (group.open_mode === 'public') return true
+  
+  // 受控组需要检查授权状态
+  const role = authStore.effectiveRole
+  const ents = entitlementsMap.value.get(group.id) || []
+  
+  // admin 可以看到所有组
+  if (role === 'admin') return true
+  
+  // studio_admin: 检查工作室是否被授权
+  if (role === 'studio_admin' && myStudioId.value) {
+    return ents.some(e => e.scope_type === 'studio' && e.scope_id === myStudioId.value && e.enabled)
+  }
+  
+  // dept_admin: 检查本部门是否被开通
+  if (role === 'dept_admin' && myDeptIds.value.length > 0) {
+    return myDeptIds.value.some(deptId => 
+      ents.some(e => e.scope_type === 'dept' && e.scope_id === deptId && e.enabled)
+    )
+  }
+  
+  // 普通用户：只能看到公开组（已在上面处理）
+  return false
+}
+
 const filteredGroups = computed(() => {
-  let list = groups.value.filter(g => g.enabled)
+  let list = groups.value.filter(g => g.enabled && isGroupAvailable(g))
   if (modeFilter.value) list = list.filter(g => caps.value[g.name]?.mode === modeFilter.value)
   const q = searchQuery.value.toLowerCase().trim()
   if (q) list = list.filter(g => g.name.toLowerCase().includes(q) || (g.description || '').toLowerCase().includes(q))
@@ -233,6 +268,35 @@ async function load() {
   try {
     const res = await groupsApi.listGroups({ page_size: 200 })
     groups.value = res.data.data ?? []
+    
+    // 获取用户角色和部门/工作室信息
+    const role = authStore.effectiveRole
+    if (role === 'studio_admin' || role === 'dept_admin') {
+      // 从 orgRoles 提取部门/工作室 ID
+      const deptRoles = authStore.orgRoles.filter(r => r.role === 'dept_admin' && r.scope_type === 'dept')
+      myDeptIds.value = deptRoles.map(r => r.scope_id)
+      
+      const studioRole = authStore.orgRoles.find(r => r.role === 'studio_admin' && r.scope_type === 'studio')
+      myStudioId.value = studioRole?.scope_id || ''
+      
+      // 获取所有模型组的授权记录
+      const enabledGroups = groups.value.filter(g => g.enabled && g.open_mode === 'controlled')
+      const entitlementPromises = enabledGroups.map(async g => {
+        try {
+          const res = await groupsApi.listEntitlements(g.id)
+          return { groupId: g.id, items: res.data.data?.items || [] }
+        } catch {
+          return { groupId: g.id, items: [] }
+        }
+      })
+      
+      const entResults = await Promise.all(entitlementPromises)
+      const newMap = new Map<number, GroupEntitlement[]>()
+      for (const r of entResults) {
+        newMap.set(r.groupId, r.items)
+      }
+      entitlementsMap.value = newMap
+    }
   } catch (e: any) {
     error.value = e?.message || '获取模型组失败'
     return

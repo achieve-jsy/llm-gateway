@@ -25,7 +25,10 @@ const (
 	KeyLogChanged    ChangeEventType = "key_log_changed"
 	KeyUpdated       ChangeEventType = "key_updated"
 	// v0.7: 授权 / 预算配置全局性变更（不针对特定 key，网关应清空全部 key 缓存）
-	AuthConfigChanged ChangeEventType = "auth_config_changed"
+	AuthConfigChanged  ChangeEventType = "auth_config_changed"
+	EntitlementGranted ChangeEventType = "entitlement_granted"
+	EntitlementRevoked ChangeEventType = "entitlement_revoked"
+	OpenModeChanged    ChangeEventType = "open_mode_changed"
 )
 
 // ChangeEvent 配置变更事件

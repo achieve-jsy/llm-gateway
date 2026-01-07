@@ -64,8 +64,6 @@ type VerifyResult struct {
 	LogEnabled      bool             `json:"log_enabled"`
 	User            VerifyResultUser `json:"user"`
 	// v0.7: 模型组授权快照。public ∪ 本部门已开通 controlled 的组名集合。
-	// 网关 group_dispatcher 直接消费，无需再查库。
-	// 授权变更时控制面主动 InvalidateKeyCache，下次 verify-key 即拉到最新值。
 	UsableGroups []string `json:"usable_groups,omitempty"`
 	// v0.7: Key 类型（personal/service）与预算链（scope 列表，不含实时 used）。
 	KeyType     string        `json:"key_type,omitempty"`
@@ -116,21 +114,20 @@ func NewEventPublisherAdapter(p *event.Publisher) EventPublisher {
 }
 
 type KeyService struct {
-	repo        *repository.KeyRepo
-	keyGroupSvc *KeyGroupService
-	publisher   EventPublisher
-	entSvc      *EntitlementService   // v0.7: 授权计算，可选
-	budgetRepo  *repository.BudgetRepo // v0.7: 预算链构造，可选
+	repo           *repository.KeyRepo
+	keyGroupSvc    *KeyGroupService
+	publisher      EventPublisher
+	entitlementSvc EntitlementComputer   // v0.8: 授权计算接口
+	budgetRepo     *repository.BudgetRepo // v0.7: 预算链构造，可选
 }
 
 func NewKeyService(repo *repository.KeyRepo, keyGroupSvc *KeyGroupService, publisher EventPublisher) *KeyService {
 	return &KeyService{repo: repo, keyGroupSvc: keyGroupSvc, publisher: publisher}
 }
 
-// WithEntitlementService 注入授权服务（v0.7 新增），用于 verify-key 下发 usable_groups 快照。
-func (s *KeyService) WithEntitlementService(svc *EntitlementService) *KeyService {
-	s.entSvc = svc
-	return s
+// SetEntitlementService 注入授权服务，用于 verify-key 下发 usable_groups 快照。
+func (s *KeyService) SetEntitlementService(svc EntitlementComputer) {
+	s.entitlementSvc = svc
 }
 
 // WithBudgetRepo 注入预算 repo（v0.7 新增），用于 verify-key 下发 BudgetChain。
@@ -496,24 +493,13 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 		budgetChain = s.buildBudgetChain(k)
 	}
 
-	// v0.7: 填充 usable_groups 快照（public ∪ 本部门已开通 controlled）
-	var usableGroups []string
-	if s.entSvc != nil && k.DeptID != "" && k.StudioID != "" {
-		if names, err := s.entSvc.UsableGroupNames(ctx, k.DeptID, k.StudioID); err == nil {
-			usableGroups = names
-		} else {
-			slog.Warn("verify-key: failed to compute usable_groups, fallback to empty",
-				"key_id", k.ID, "dept_id", k.DeptID, "error", err)
-		}
-	}
-
 	// v0.7: key_type（personal/service 默认 personal）
 	keyType := k.KeyType
 	if keyType == "" {
 		keyType = model.KeyTypePersonal
 	}
 
-	return &VerifyResult{
+	result := &VerifyResult{
 		KeyID:           k.ID,
 		KeyName:         k.Name,
 		Status:          status,
@@ -521,17 +507,25 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 		BypassOrgCheck:  k.BypassOrgCheck,
 		LogEnabled:      k.LogEnabled,
 		KeyType:         keyType,
-		UsableGroups:    usableGroups,
 		BudgetChain:     budgetChain,
 		User: VerifyResultUser{
 			UserID:       k.UserID,
 			Name:         k.UserName,
-			DepartmentID: k.DeptID, // 直接传 SSO dept_id 原始字符串，保留大小写
+			DepartmentID: k.DeptID,
 			DeptName:     k.DeptName,
 			StudioID:     k.StudioID,
 			StudioName:   k.StudioName,
 		},
-	}, nil
+	}
+	if s.entitlementSvc != nil && k.DeptID != "" {
+		if usableGroups, err := s.entitlementSvc.ComputeUsableGroups(ctx, k.DeptID, k.StudioID); err == nil {
+			result.UsableGroups = usableGroups
+		} else {
+			slog.Warn("verify-key: failed to compute usable_groups, fallback to empty",
+				"key_id", k.ID, "dept_id", k.DeptID, "error", err)
+		}
+	}
+	return result, nil
 }
 
 // parseDeptID 将字符串形式的 dept_id 转换为 *uuid.UUID，空字符串返回 nil。

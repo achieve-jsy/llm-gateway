@@ -1,0 +1,13 @@
+h1:muaACCN38jBmu45vqw1P33q5VArXOkvyBQe0uBnjQC4=
+043_add_org_tables.down.sql h1:vBtaH4WcP2x/a//7A+wrlQlW3k3m7KGbmwaflE4putk=
+043_add_org_tables.up.sql h1:0kCtd4g6TaYcwHV4n7enyuKPkWLD/NcgnMQwL6PVoRo=
+044_studios_uuid_pk.down.sql h1:C5Ks8GTDzRVfuclpK4ukO4rnDfGl0A+4V4bOkEygfTQ=
+044_studios_uuid_pk.up.sql h1:Aodpt4En32BVpFah+0JoQbcdsKt5VfkMyJvIRGMuZH4=
+045_call_logs_add_body.down.sql h1:FxKzOcd2DiA11LTfW3nz/KKrAQlmf+ZcFITj4Man5Ac=
+045_call_logs_add_body.up.sql h1:CGJW85vrgoH7ZcEGaaL32ZViXX6PO2eL3sJB1g8b8kg=
+046_call_logs_add_routed_via_group.down.sql h1:C9oXBEUdvWeh5gfYiiz6X4Jumt+8+W0sxL+2uEvPw9Y=
+046_call_logs_add_routed_via_group.up.sql h1:HPB7DnsdDTVvSO7pPoioOmxaU9uyM/awbtUhs8X0etw=
+047_users_add_hr_fields.down.sql h1:xT7DqEwdNl2rVXOiWlMILQ1Rs2UXN38dt5iMaFUNiBs=
+047_users_add_hr_fields.up.sql h1:bcqOZVugub/Mu9ZCRwfMH7EQHNIDw89PVHT1Ln7P554=
+048_users_dept_source.down.sql h1:J94NPiTri2m6bc4akqAL4NGBxkz0nbSbdVHXZK7JrkY=
+048_users_dept_source.up.sql h1:eA3ubsHuaIVu10wqEObIBgPbUlagPtrIogtaqcA2B0Y=

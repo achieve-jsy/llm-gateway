@@ -40,6 +40,35 @@
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="开放模式" width="110" align="center">
+          <template #default="{ row }">
+            <template v-if="canManageEntitlements">
+              <el-popconfirm
+                :title="row.open_mode === 'public' ? '切换为受控？受控后需逐工作室/部门授权' : '切换为公开？全公司自动可用'"
+                confirm-button-text="确定"
+                cancel-button-text="取消"
+                @confirm="handleToggleOpenMode(row)"
+              >
+                <template #reference>
+                  <el-tag
+                    :type="row.open_mode === 'public' ? 'success' : 'warning'"
+                    size="small"
+                    class="open-mode-tag"
+                  >
+                    {{ row.open_mode === 'public' ? '公开' : '受控' }}
+                  </el-tag>
+                </template>
+              </el-popconfirm>
+            </template>
+            <el-tag
+              v-else
+              :type="row.open_mode === 'public' ? 'success' : 'warning'"
+              size="small"
+            >
+              {{ row.open_mode === 'public' ? '公开' : '受控' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="模型数" width="100" align="center">
           <template #default="{ row }">
             {{ row.model_count ?? row.models?.length ?? 0 }}
@@ -81,22 +110,27 @@
             {{ formatDateTime(row.created_at) }}
           </template>
         </el-table-column>
-         <el-table-column label="操作" width="200" align="center">
-           <template #default="{ row }">
-             <el-button text type="primary" size="small" @click="router.push(`/admin/groups/${row.id}`)">详情</el-button>
-             <el-button text type="primary" size="small" @click="openEditDialog(row)">编辑</el-button>
-             <el-popconfirm
-               title="确定删除该模型组？"
-               confirm-button-text="确定"
-               cancel-button-text="取消"
-               @confirm="handleDelete(row)"
-             >
-               <template #reference>
-                 <el-button text type="danger" size="small">删除</el-button>
-               </template>
-             </el-popconfirm>
-           </template>
-         </el-table-column>
+        <el-table-column label="操作" width="280" align="center">
+          <template #default="{ row }">
+            <el-button text type="primary" size="small" @click="router.push(`/admin/groups/${row.id}`)">详情</el-button>
+            <el-button text type="primary" size="small" @click="openEditDialog(row)">编辑</el-button>
+            <el-button
+              v-if="canManageEntitlements && row.open_mode === 'controlled'"
+              text type="primary" size="small"
+              @click="openEntitlementDialog(row)"
+            >授权</el-button>
+            <el-popconfirm
+              title="确定删除该模型组？"
+              confirm-button-text="确定"
+              cancel-button-text="取消"
+              @confirm="handleDelete(row)"
+            >
+              <template #reference>
+                <el-button text type="danger" size="small">删除</el-button>
+              </template>
+            </el-popconfirm>
+          </template>
+        </el-table-column>
       </el-table></div>
 
       <div class="pagination-wrapper">
@@ -118,6 +152,13 @@
       @saved="onDialogSaved"
       @close="dialogVisible = false"
     />
+
+    <GroupEntitlementDialog
+      v-model:visible="entitlementDialogVisible"
+      :group-id="entitlementGroup?.id ?? null"
+      :group-name="entitlementGroup?.name ?? ''"
+      @closed="entitlementGroup = null"
+    />
   </div>
 </template>
 
@@ -127,8 +168,12 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { groupsApi } from '@/api/groups'
 import type { GroupCapability } from '@/api/groups'
-import type { GroupListItem, Strategy } from '@/types/group'
+import type { GroupListItem, Strategy, OpenMode } from '@/types/group'
 import GroupEditDialog from '@/components/GroupEditDialog.vue'
+import GroupEntitlementDialog from '@/components/GroupEntitlementDialog.vue'
+import { useAuthStore } from '@/stores/auth'
+
+const authStore = useAuthStore()
 
 const router = useRouter()
 const groups = ref<GroupListItem[]>([])
@@ -142,6 +187,11 @@ const total = ref(0)
 
 const dialogVisible = ref(false)
 const editingGroup = ref<GroupListItem | null>(null)
+
+const entitlementDialogVisible = ref(false)
+const entitlementGroup = ref<GroupListItem | null>(null)
+
+const canManageEntitlements = computed(() => authStore.isAdmin)
 
 const isEmpty = computed(() => {
   const val = groups.value
@@ -260,6 +310,22 @@ async function handleToggleEnabled(row: GroupListItem, enabled: boolean) {
   }
 }
 
+async function handleToggleOpenMode(row: GroupListItem) {
+  const newMode: OpenMode = row.open_mode === 'public' ? 'controlled' : 'public'
+  try {
+    await groupsApi.setOpenMode(row.id, newMode)
+    row.open_mode = newMode
+    ElMessage.success(newMode === 'public' ? '已设为公开' : '已设为受控')
+  } catch {
+    ElMessage.error('设置开放模式失败')
+  }
+}
+
+function openEntitlementDialog(row: GroupListItem) {
+  entitlementGroup.value = row
+  entitlementDialogVisible.value = true
+}
+
 function onDialogSaved() {
   dialogVisible.value = false
   loadGroups()
@@ -317,6 +383,15 @@ onMounted(() => {
 .cap-empty {
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+
+.open-mode-tag {
+  cursor: pointer;
+  user-select: none;
+}
+
+.open-mode-tag:hover {
+  opacity: 0.8;
 }
 
 .pagination-wrapper {

@@ -40,24 +40,16 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string) (*sche
 		return nil, nil
 	}
 
-	// v0.7: 基于 usable_groups 快照鉴权（取代 key_group_bindings 手动绑定）。
-	// 授权天花板 = public ∪ 本部门已开通 controlled，由 verify-key 快照下发。
-	// access_all_groups=true → 可用 usable_groups 全集；
-	// access_all_groups=false → 仅 usable_groups ∩ 手动绑定子集（兼容过渡期）。
 	identityVal, exists := c.Get("identity")
 	if exists {
-		if id, ok := identityVal.(*model.UserIdentity); ok {
-			// 有 usable_groups 快照：使用 v0.7 授权逻辑
+		if id, ok := identityVal.(*model.UserIdentity); ok && id.KeyID != "" {
+			// usable_groups 天花板（控制面计算下发），空表示旧版控制面未下发
 			if len(id.UsableGroups) > 0 {
-				if !containsStr(id.UsableGroups, modelName) {
-					slog.Warn("group dispatch: group not in usable_groups",
-						"group_name", modelName,
-						"key_id", id.KeyID,
-					)
-					return nil, model.ErrModelGroupUnavailable
+				if !containsGroup(id.UsableGroups, modelName) {
+					return nil, model.ErrModelGroupUnauthorized
 				}
-				// usable_groups 已通过，若 access_all_groups=false 还需检查手动绑定子集
-				if !id.AccessAllGroups && d.bindingCheck != nil && id.KeyID != "" {
+				// access_all_groups=false 时额外收窄到 binding 子集
+				if !id.AccessAllGroups && d.bindingCheck != nil {
 					groups, err := d.bindingCheck.GetKeyGroups(c.Request.Context(), id.KeyID)
 					if err != nil {
 						slog.Error("group dispatch: binding check failed",
@@ -68,11 +60,11 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string) (*sche
 						return nil, model.ErrModelGroupUnavailable
 					}
 					if !binding.ContainsGroup(groups, modelName) {
-						return nil, model.ErrModelGroupUnavailable
+						return nil, model.ErrModelGroupUnauthorized
 					}
 				}
-			} else if d.bindingCheck != nil && id.KeyID != "" && !id.AccessAllGroups {
-				// 无 usable_groups 快照（旧版缓存兼容）：退回原有 key_group_bindings 逻辑
+			} else if !id.AccessAllGroups && d.bindingCheck != nil {
+				// 旧逻辑兼容：usable_groups 为空时走旧 binding 路径
 				groups, err := d.bindingCheck.GetKeyGroups(c.Request.Context(), id.KeyID)
 				if err != nil {
 					slog.Error("group dispatch: binding check failed",
@@ -115,10 +107,9 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string) (*sche
 	return decision, nil
 }
 
-// containsStr 判断 slice 中是否包含指定字符串。
-func containsStr(slice []string, s string) bool {
-	for _, v := range slice {
-		if v == s {
+func containsGroup(groups []string, target string) bool {
+	for _, g := range groups {
+		if g == target {
 			return true
 		}
 	}

@@ -76,6 +76,10 @@
             <el-icon><Key /></el-icon>
             <template #title>Service Key</template>
           </el-menu-item>
+          <el-menu-item index="/admin/entitlements">
+            <el-icon><Lock /></el-icon>
+            <template #title>模型组授权</template>
+          </el-menu-item>
           <!-- 角色管理仅 admin 可见 -->
           <el-menu-item v-if="authStore.isAdmin" index="/admin/org/roles">
             <el-icon><UserFilled /></el-icon>

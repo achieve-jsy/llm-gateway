@@ -49,6 +49,10 @@ const (
 	// ── v0.7 扩容审批 ────────────────────────────────────────────────────────
 	PermExpansionRequest Permission = "expansion:request" // 发起扩容申请（dept_admin）
 	PermExpansionApprove Permission = "expansion:approve" // 审批扩容申请（studio_admin/admin）
+
+	// ── 模型组授权 ──────────────────────────────────────────────────────────────
+	PermEntitlementManage   Permission = "entitlement:manage"    // 平台管理员：设开放模式 + 授权工作室
+	PermEntitlementGrantDept Permission = "entitlement:grant_dept" // 工作室负责人：下放/开通部门
 )
 
 // ScopeConstraint 权限的范围约束级别（从宽到严）

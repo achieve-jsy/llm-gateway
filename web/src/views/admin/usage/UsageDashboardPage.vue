@@ -8,6 +8,10 @@
         <span class="ud-badge">{{ scopeLabel }}</span>
       </div>
       <div class="ud-header__right">
+        <el-radio-group v-model="currency" size="small">
+          <el-radio-button value="USD">$ USD</el-radio-button>
+          <el-radio-button value="CNY">¥ CNY</el-radio-button>
+        </el-radio-group>
         <el-button :loading="summaryLoading || logsLoading" :icon="Refresh"
           circle size="small" title="刷新" @click="loadAll" />
       </div>
@@ -89,7 +93,7 @@
         <div class="ud-kpi__icon"><el-icon size="20"><Money /></el-icon></div>
         <div class="ud-kpi__body">
           <p class="ud-kpi__label">总成本</p>
-          <p class="ud-kpi__value">${{ fmtCost(summary?.cost_estimate) }}</p>
+          <p class="ud-kpi__value">{{ fmtCost(summary?.cost_estimate) }}</p>
           <p class="ud-kpi__foot">
             <template v-if="costChange !== null">
               <el-tooltip :content="prevPeriodLabel" placement="bottom" :show-after="300">
@@ -143,7 +147,7 @@
             <p class="ud-kpi__label">活跃成员</p>
             <p class="ud-kpi__value">{{ summary?.user_count ?? '—' }}</p>
             <p class="ud-kpi__foot">
-              <span class="ud-kpi__sub">均次成本 ${{ avgCostPerCall }}</span>
+              <span class="ud-kpi__sub">均次成本 {{ avgCostPerCall }}</span>
             </p>
           </div>
         </template>
@@ -152,7 +156,7 @@
             <p class="ud-kpi__label">Token 消耗</p>
             <p class="ud-kpi__value">{{ summary?.total_tokens != null ? (summary.total_tokens >= 1000000 ? (summary.total_tokens/1000000).toFixed(2)+'M' : (summary.total_tokens/1000).toFixed(1)+'K') : '—' }}</p>
             <p class="ud-kpi__foot">
-              <span class="ud-kpi__sub">均次成本 ${{ avgCostPerCall }}</span>
+              <span class="ud-kpi__sub">均次成本 {{ avgCostPerCall }}</span>
             </p>
           </div>
         </template>
@@ -217,7 +221,7 @@
                     <span style="cursor:help;border-bottom:1px dashed currentColor">成本占比</span>
                   </el-tooltip>
                 </th>
-                <th class="col-num">成本 (USD)</th>
+                <th class="col-num">成本 ({{ currency }})</th>
                 <th class="col-num">调用次数</th>
                 <!-- user scope 展示 Token 消耗，否则展示活跃用户 -->
                 <th class="col-num">{{ currentScope === 'user' ? 'Token 消耗' : '活跃用户' }}</th>
@@ -246,7 +250,7 @@
                     <span class="ud-bar-pct">{{ barPct(row.cost_estimate, totalCost) }}%</span>
                   </div>
                 </td>
-                <td class="col-num c-green fw6">${{ fmtCost(row.cost_estimate) }}</td>
+                <td class="col-num c-green fw6">{{ fmtCost(row.cost_estimate) }}</td>
                 <td class="col-num">{{ fmtNum(row.call_count) }}</td>
                 <!-- user scope: 展示 token，否则展示活跃用户数 -->
                 <td class="col-num">
@@ -424,34 +428,34 @@
           <el-table-column prop="est_cost_usd" label="费用" min-width="140" align="right" sortable>
             <template #default="{ row }">
               <div class="ud-cost-cell">
-                <span class="ud-cost" :class="logCostColor(row.est_cost_usd)">${{ fmtCost(row.est_cost_usd) }}</span>
+                <span class="ud-cost" :class="logCostColor(row.est_cost_usd)">{{ fmtCost(row.est_cost_usd) }}</span>
                 <el-tooltip placement="left" :show-after="120" popper-class="ud-tt-popper">
                   <template #content>
                     <div class="ud-tt">
-                      <div class="ud-tt__title">成本明细 (USD)</div>
+                      <div class="ud-tt__title">成本明细 ({{ currency }})</div>
                       <template v-if="(row.input_price_snapshot ?? 0) > 0 || (row.output_price_snapshot ?? 0) > 0">
                         <div class="ud-tt__group">单价 / 1M tokens</div>
-                        <div class="ud-tt__row"><span>输入单价</span><b>${{ fmtPrice(row.input_price_snapshot) }}</b></div>
-                        <div class="ud-tt__row"><span>输出单价</span><b>${{ fmtPrice(row.output_price_snapshot) }}</b></div>
+                        <div class="ud-tt__row"><span>输入单价</span><b>{{ fmtPrice(row.input_price_snapshot) }}</b></div>
+                        <div class="ud-tt__row"><span>输出单价</span><b>{{ fmtPrice(row.output_price_snapshot) }}</b></div>
                         <div class="ud-tt__sep"></div>
                       </template>
                       <div class="ud-tt__group">费用</div>
                       <div class="ud-tt__row">
                         <span>输入<span class="ud-tt__sub" v-if="row.prompt_tokens"> ×{{ fmtNum(Math.max((row.prompt_tokens||0) - (row.cached_tokens||0) - (row.cache_write_tokens||0), 0)) }}</span></span>
-                        <b>${{ (row.input_cost_usd || 0).toFixed(6) }}</b>
+                        <b>{{ fmtCost6(row.input_cost_usd) }}</b>
                       </div>
                       <div class="ud-tt__row">
                         <span>输出<span class="ud-tt__sub" v-if="row.completion_tokens"> ×{{ fmtNum(row.completion_tokens) }}</span></span>
-                        <b>${{ (row.output_cost_usd || 0).toFixed(6) }}</b>
+                        <b>{{ fmtCost6(row.output_cost_usd) }}</b>
                       </div>
                       <div class="ud-tt__sep"></div>
                       <div class="ud-tt__group">缓存</div>
                       <div class="ud-tt__row">
                         <span>缓存读取<span class="ud-tt__sub" v-if="row.cached_tokens"> ×{{ fmtNum(row.cached_tokens) }}</span></span>
-                        <b :class="(row.cache_read_cost_usd || 0) > 0 ? 'c-cyan' : ''">${{ (row.cache_read_cost_usd || 0).toFixed(6) }}</b>
+                        <b :class="(row.cache_read_cost_usd || 0) > 0 ? 'c-cyan' : ''">{{ fmtCost6(row.cache_read_cost_usd) }}</b>
                       </div>
                       <div class="ud-tt__sep"></div>
-                      <div class="ud-tt__row"><span>合计</span><b class="c-green">${{ fmtCost(row.est_cost_usd) }}</b></div>
+                      <div class="ud-tt__row"><span>合计</span><b class="c-green">{{ fmtCost(row.est_cost_usd) }}</b></div>
                     </div>
                   </template>
                   <span class="ud-info"><el-icon><InfoFilled /></el-icon></span>
@@ -598,19 +602,19 @@
                 </div>
               </div>
               <div class="ud-meta-section">
-                <div class="ud-meta-heading">费用 (USD)</div>
+                <div class="ud-meta-heading">费用 ({{ currency }})</div>
                 <div class="ud-meta-row" v-if="(traceRow?.input_price_snapshot || 0) > 0 || (traceRow?.output_price_snapshot || 0) > 0">
-                  <span>输入单价/1M</span><b>${{ fmtPrice(traceRow?.input_price_snapshot) }}</b>
+                  <span>输入单价/1M</span><b>{{ fmtPrice(traceRow?.input_price_snapshot) }}</b>
                 </div>
                 <div class="ud-meta-row" v-if="(traceRow?.input_price_snapshot || 0) > 0 || (traceRow?.output_price_snapshot || 0) > 0">
-                  <span>输出单价/1M</span><b>${{ fmtPrice(traceRow?.output_price_snapshot) }}</b>
+                  <span>输出单价/1M</span><b>{{ fmtPrice(traceRow?.output_price_snapshot) }}</b>
                 </div>
-                <div class="ud-meta-row"><span>输入费用</span><b>${{ fmtCost(traceRow?.input_cost_usd) }}</b></div>
-                <div class="ud-meta-row"><span>输出费用</span><b>${{ fmtCost(traceRow?.output_cost_usd) }}</b></div>
+                <div class="ud-meta-row"><span>输入费用</span><b>{{ fmtCost(traceRow?.input_cost_usd) }}</b></div>
+                <div class="ud-meta-row"><span>输出费用</span><b>{{ fmtCost(traceRow?.output_cost_usd) }}</b></div>
                 <div class="ud-meta-row" v-if="(traceRow?.cache_read_cost_usd || 0) > 0">
-                  <span>缓存读取</span><b class="c-cyan">${{ fmtCost(traceRow?.cache_read_cost_usd) }}</b>
+                  <span>缓存读取</span><b class="c-cyan">{{ fmtCost(traceRow?.cache_read_cost_usd) }}</b>
                 </div>
-                <div class="ud-meta-row ud-meta-sep"><span>合计</span><b class="c-green">${{ fmtCost(traceRow?.est_cost_usd) }}</b></div>
+                <div class="ud-meta-row ud-meta-sep"><span>合计</span><b class="c-green">{{ fmtCost(traceRow?.est_cost_usd) }}</b></div>
               </div>
             </div>
           </el-tab-pane>
@@ -690,8 +694,17 @@ import { useAuthStore } from '@/stores/auth'
 import { useOrgStore } from '@/stores/org'
 import { useRoute } from 'vue-router'
 import http from '@/services/http'
+import { useSettingsStore } from '@/stores/settings'
+import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
 
 Chart.register(...registerables)
+
+const settingsStore = useSettingsStore()
+const currency = ref<Currency>('CNY')
+const cc = computed(() => ({
+  currency: currency.value,
+  rate: settingsStore.publicSettings.pricing_usd_to_cny_rate || 7.2,
+}))
 
 const authStore = useAuthStore()
 const orgStore  = useOrgStore()
@@ -965,7 +978,7 @@ function renderTrendChart() {
         labels,
         datasets: [
           {
-            type: 'line' as const, label: '成本 (USD)', data: costs,
+            type: 'line' as const, label: '成本 (' + currency.value + ')', data: costs,
             yAxisID: 'yCost', borderColor: '#67c23a', backgroundColor: 'rgba(103,194,58,0.10)',
             fill: true, tension: 0.35, pointRadius: showPoints ? 3 : 0, pointHoverRadius: 5, borderWidth: 2, order: 1,
           },
@@ -987,7 +1000,7 @@ function renderTrendChart() {
           yCost: {
             type: 'linear', position: 'left',
             grid: { color: 'rgba(0,0,0,0.05)' },
-            ticks: { font: { size: 11 }, callback: (v: any) => `$${fmtCost(v)}` },
+            ticks: { font: { size: 11 }, callback: (v: any) => `${currencySymbol(cc.value.currency)}${convertCost(Number(v), cc.value).toFixed(2)}` },
           },
           yCalls: {
             type: 'linear', position: 'right',
@@ -1000,7 +1013,7 @@ function renderTrendChart() {
           tooltip: {
             callbacks: {
               label: (ctx: any) => ctx.dataset.yAxisID === 'yCost'
-                ? ` 成本: $${fmtCost(ctx.raw)}`
+                ? ` 成本: ${fmtCost(ctx.raw as number)}`
                 : ` ${ctx.dataset.label}: ${Number(ctx.raw).toLocaleString()}`,
             },
           },
@@ -1012,7 +1025,7 @@ function renderTrendChart() {
 
   // 单指标模式
   const metricCfg = {
-    cost:   { data: costs,  color: '#67c23a', bgColor: 'rgba(103,194,58,0.12)', label: '成本 (USD)',  fmt: (v: any) => `$${fmtCost(v)}` },
+    cost:   { data: costs,  color: '#67c23a', bgColor: 'rgba(103,194,58,0.12)', label: '成本 (' + currency.value + ')',  fmt: (v: any) => fmtCost(v) },
     calls:  { data: calls,  color: '#409eff', bgColor: 'rgba(64,158,255,0.15)', label: '调用次数',    fmt: (v: any) => Number(v).toLocaleString() },
     tokens: { data: tokens, color: '#8b5cf6', bgColor: 'rgba(139,92,246,0.12)', label: 'Token 消耗',  fmt: (v: any) => fmtTokens(v) },
   }[metric]!
@@ -1107,7 +1120,7 @@ function renderModelChart() {
     data: {
       labels,
       datasets: [{
-        label: '成本 (USD)',
+        label: '成本 (' + currency.value + ')',
         data: costs,
         backgroundColor: colors,
         borderRadius: 4,
@@ -1122,7 +1135,7 @@ function renderModelChart() {
         legend: { display: false },
         tooltip: {
           callbacks: {
-            label: (ctx: any) => ` $${fmtCost(ctx.raw)}`,
+            label: (ctx: any) => ` ${fmtCost(ctx.raw as number)}`,
           },
         },
       },
@@ -1131,7 +1144,7 @@ function renderModelChart() {
           grid: { color: 'rgba(0,0,0,0.05)' },
           ticks: {
             font: { size: 11 },
-            callback: (v: any) => `$${fmtCost(v)}`,
+            callback: (v: any) => `${currencySymbol(cc.value.currency)}${convertCost(Number(v), cc.value).toFixed(2)}`,
           },
         },
         y: {
@@ -1358,17 +1371,26 @@ const fmtTokens = (n?: number | null) => {
   return String(n)
 }
 const fmtCost = (v?: number | null): string => {
-  const n = Number(v || 0)
-  if (n === 0) return '0.00'
-  if (n >= 1)        return n.toFixed(2)
-  if (n >= 0.01)     return n.toFixed(4)
-  if (n >= 0.0001)   return n.toFixed(6)
-  return n.toFixed(8)
+  const n = convertCost(Number(v || 0), cc.value)
+  const sym = currencySymbol(cc.value.currency)
+  if (n === 0) return `${sym}0.00`
+  let s: string
+  if (Math.abs(n) >= 1)        s = n.toFixed(2)
+  else if (Math.abs(n) >= 0.01) s = n.toFixed(4)
+  else if (Math.abs(n) >= 0.0001) s = n.toFixed(6)
+  else s = n.toFixed(8)
+  return sym + s.replace(/(\.\d{2,}?)0+$/, '$1')
+}
+const fmtCost6 = (v?: number | null): string => {
+  const n = convertCost(Number(v || 0), cc.value)
+  return `${currencySymbol(cc.value.currency)}${n.toFixed(6)}`
 }
 const fmtPrice = (n?: number | null) => {
+  const sym = currencySymbol(cc.value.currency)
   if (n == null) return '—'
-  if (n === 0) return '0'
-  return n >= 1 ? n.toFixed(2) : n.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
+  if (n === 0) return `${sym}0`
+  const v = convertCost(n, cc.value)
+  return sym + (Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(4).replace(/0+$/, '').replace(/\.$/, ''))
 }
 const fmtDateTime = (s?: string) =>
   s ? s.replace('T', ' ').replace(/\.\d+Z$/, '').slice(0, 19) : '—'
@@ -1402,6 +1424,12 @@ onMounted(() => {
 onUnmounted(() => {
   trendChartInst?.destroy()
   modelChartInst?.destroy()
+})
+
+watch(currency, async () => {
+  await nextTick()
+  renderTrendChart()
+  renderModelChart()
 })
 </script>
 

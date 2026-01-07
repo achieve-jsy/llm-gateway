@@ -76,6 +76,12 @@ var (
 		Type: ErrorTypeModelUnavail, Code: "model_unavailable",
 		Message: "模型组不可用，请检查你的 API Key 是否有权使用该模型组", HTTPStatus: http.StatusBadRequest,
 	}
+	// ErrModelGroupUnauthorized 授权天花板拦截：目标组不在 usable_groups 中，或 binding 子集中不包含目标组。
+	// 区别于 ErrModelGroupUnavailable（503/400 服务问题），此为 403 授权问题。
+	ErrModelGroupUnauthorized = &UnifiedError{
+		Type: "group_not_authorized", Code: "group_not_authorized",
+		Message: "your department does not have access to this model group", HTTPStatus: http.StatusForbidden,
+	}
 )
 
 // NewUnifiedError 创建自定义统一错误

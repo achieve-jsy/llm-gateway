@@ -10,6 +10,10 @@
         <span class="mu-badge">{{ authStore.userName || '个人记录' }}</span>
       </div>
       <div class="mu-header__right">
+        <el-radio-group v-model="currency" size="small" style="margin-right: 12px;">
+          <el-radio-button value="USD">$ USD</el-radio-button>
+          <el-radio-button value="CNY">¥ CNY</el-radio-button>
+        </el-radio-group>
         <el-button :loading="statsLoading" :icon="Refresh" circle size="small" title="刷新" @click="loadAll" />
         <el-button :icon="Download" size="small" :disabled="!logRows.length" @click="handleExport">导出 ({{ logRows.length }})</el-button>
       </div>
@@ -80,7 +84,7 @@
         </div>
         <div class="mu-stat-card__body">
           <p class="mu-stat-card__label">{{ periodLabel }}花费</p>
-          <p class="mu-stat-card__value c-amber">¥{{ fmtCny(statsTotal?.est_cost_usd) }}</p>
+          <p class="mu-stat-card__value c-amber">{{ fmtCny(statsTotal?.est_cost_usd) }}</p>
           <p class="mu-stat-card__sub">
             <span v-if="costChangePct != null" :class="['mu-trend', costChangePct > 0 ? 'mu-trend--up' : 'mu-trend--down']">
               {{ costChangePct > 0 ? '↑' : '↓' }} {{ Math.abs(costChangePct) }}% 较上期
@@ -98,7 +102,7 @@
         </div>
         <div class="mu-stat-card__body">
           <p class="mu-stat-card__label">日均花费</p>
-          <p class="mu-stat-card__value">¥{{ fmtCny(dailyAvgCost) }}</p>
+          <p class="mu-stat-card__value">{{ fmtCny(dailyAvgCost) }}</p>
           <p class="mu-stat-card__sub">
             共 <span class="c-blue">{{ rangeDays }}</span> 天统计周期
           </p>
@@ -247,25 +251,25 @@
           <el-table-column prop="est_cost_usd" label="费用" min-width="140" align="right">
             <template #default="{ row }">
               <div class="mu-cost-cell">
-                <span class="mu-cost" :class="logCostColor(row.est_cost_usd)">¥{{ fmtPreciseCny(row.est_cost_usd) }}</span>
+                <span class="mu-cost" :class="logCostColor(row.est_cost_usd)">{{ fmtPreciseCny(row.est_cost_usd) }}</span>
                 <el-tooltip placement="left" :show-after="120" popper-class="mu-tt-popper">
                   <template #content>
                     <div class="mu-tt">
                       <div class="mu-tt__title">成本明细 (CNY)</div>
                       <template v-if="(row.input_price_snapshot ?? 0) > 0 || (row.output_price_snapshot ?? 0) > 0">
                         <div class="mu-tt__group"><el-icon class="mu-tt__group-ic"><Money /></el-icon>单价 / 1M tokens</div>
-                        <div class="mu-tt__row"><span>输入单价</span><b>¥{{ fmtPrice(toCny(row.input_price_snapshot)) }}</b></div>
-                        <div class="mu-tt__row"><span>输出单价</span><b>¥{{ fmtPrice(toCny(row.output_price_snapshot)) }}</b></div>
+<div class="mu-tt__row"><span>输入单价</span><b>{{ fmtPrice(row.input_price_snapshot) }}</b></div>
+<div class="mu-tt__row"><span>输出单价</span><b>{{ fmtPrice(row.output_price_snapshot) }}</b></div>
                         <div class="mu-tt__sep"></div>
                       </template>
                       <div class="mu-tt__group"><el-icon class="mu-tt__group-ic"><Coin /></el-icon>费用</div>
-                      <div class="mu-tt__row"><span>输入</span><b>¥{{ toCny(row.input_cost_usd).toFixed(6) }}</b></div>
-                      <div class="mu-tt__row"><span>输出</span><b>¥{{ toCny(row.output_cost_usd).toFixed(6) }}</b></div>
+<div class="mu-tt__row"><span>输入</span><b>{{ toCnyFormatted(row.input_cost_usd) }}</b></div>
+<div class="mu-tt__row"><span>输出</span><b>{{ toCnyFormatted(row.output_cost_usd) }}</b></div>
                       <div class="mu-tt__sep"></div>
                       <div class="mu-tt__group"><el-icon class="mu-tt__group-ic"><Finished /></el-icon>缓存</div>
-                      <div class="mu-tt__row"><span>缓存读取</span><b :class="row.cache_read_cost_usd > 0 ? 'c-cyan' : ''">¥{{ toCny(row.cache_read_cost_usd).toFixed(6) }}</b></div>
+                      <div class="mu-tt__row"><span>缓存读取</span><b :class="row.cache_read_cost_usd > 0 ? 'c-cyan' : ''">{{ toCnyFormatted(row.cache_read_cost_usd) }}</b></div>
                       <div class="mu-tt__sep"></div>
-                      <div class="mu-tt__row"><span>合计</span><b class="c-green">¥{{ fmtPreciseCny(row.est_cost_usd) }}</b></div>
+                      <div class="mu-tt__row"><span>合计</span><b class="c-green">{{ fmtPreciseCny(row.est_cost_usd) }}</b></div>
                     </div>
                   </template>
                   <span class="mu-info"><el-icon><InfoFilled /></el-icon></span>
@@ -361,7 +365,7 @@
                        :style="{ width: pct(row.est_cost_usd, maxModelCost) + '%', background: rankBarColor(idx) }" />
                 </div>
               </div>
-              <span class="mu-rank-cost">¥{{ fmtPreciseCny(row.est_cost_usd) }}</span>
+              <span class="mu-rank-cost">{{ fmtPreciseCny(row.est_cost_usd) }}</span>
             </div>
             <div v-if="!modelByCost.length" class="mu-rank-empty">暂无数据</div>
           </div>
@@ -372,7 +376,7 @@
       <div v-if="costPerMRows.length" class="mu-chart-card">
         <div class="mu-chart-card__header">
           <span class="mu-chart-card__title">性价比对比</span>
-          <span class="mu-chart-card__hint">每百万 Token 花费 (¥ CNY)，越低越划算</span>
+          <span class="mu-chart-card__hint">每百万 Token 花费 ({{ currency }})，越低越划算</span>
         </div>
         <div class="mu-chart-card__body" :style="{ height: Math.max(180, costPerMRows.length * 36 + 30) + 'px' }">
           <canvas ref="costPerMCanvas" />
@@ -424,7 +428,7 @@
               <div class="mu-daytype-val">{{ fmtNum(weekdayVsWeekend.weekday.calls) }}</div>
               <div class="mu-daytype-sub">次调用</div>
               <div class="mu-daytype-avg">日均 {{ fmtNum(Math.round(weekdayVsWeekend.weekday.avgCalls)) }} 次</div>
-              <div class="mu-daytype-cost">¥{{ fmtCny(weekdayVsWeekend.weekday.cost) }}</div>
+              <div class="mu-daytype-cost">{{ fmtCny(weekdayVsWeekend.weekday.cost) }}</div>
               <div class="mu-daytype-days">{{ weekdayVsWeekend.weekday.days }} 天</div>
             </div>
             <div class="mu-daytype-divider" />
@@ -433,7 +437,7 @@
               <div class="mu-daytype-val">{{ fmtNum(weekdayVsWeekend.weekend.calls) }}</div>
               <div class="mu-daytype-sub">次调用</div>
               <div class="mu-daytype-avg">日均 {{ fmtNum(Math.round(weekdayVsWeekend.weekend.avgCalls)) }} 次</div>
-              <div class="mu-daytype-cost">¥{{ fmtCny(weekdayVsWeekend.weekend.cost) }}</div>
+              <div class="mu-daytype-cost">{{ fmtCny(weekdayVsWeekend.weekend.cost) }}</div>
               <div class="mu-daytype-days">{{ weekdayVsWeekend.weekend.days }} 天</div>
             </div>
           </div>
@@ -538,7 +542,7 @@
           <el-table-column prop="est_cost_usd" label="估算花费" min-width="110" align="right" sortable>
             <template #default="{ row }">
               <div class="mu-bar-cell">
-                <span :class="costColor(row.est_cost_usd)">¥{{ fmtPreciseCny(row.est_cost_usd) }}</span>
+                <span :class="costColor(row.est_cost_usd)">{{ fmtPreciseCny(row.est_cost_usd) }}</span>
                 <div class="mu-minibar"><div class="mu-minibar__fill mu-minibar__fill--red" :style="{ width: pct(row.est_cost_usd, maxCost) + '%' }" /></div>
               </div>
             </template>
@@ -624,17 +628,17 @@
               <div class="mu-meta-section">
                 <div class="mu-meta-heading">费用 (CNY)</div>
                 <div class="mu-meta-row" v-if="(traceRow?.input_price_snapshot || 0) > 0">
-                  <span>输入单价/1M</span><b>¥{{ fmtPrice(toCny(traceRow?.input_price_snapshot)) }}</b>
+                  <span>输入单价/1M</span><b>{{ fmtPrice(traceRow?.input_price_snapshot) }}</b>
                 </div>
                 <div class="mu-meta-row" v-if="(traceRow?.output_price_snapshot || 0) > 0">
-                  <span>输出单价/1M</span><b>¥{{ fmtPrice(toCny(traceRow?.output_price_snapshot)) }}</b>
+                  <span>输出单价/1M</span><b>{{ fmtPrice(traceRow?.output_price_snapshot) }}</b>
                 </div>
-                <div class="mu-meta-row"><span>输入费用</span><b>¥{{ fmtPreciseCny(traceRow?.input_cost_usd) }}</b></div>
-                <div class="mu-meta-row"><span>输出费用</span><b>¥{{ fmtPreciseCny(traceRow?.output_cost_usd) }}</b></div>
+                <div class="mu-meta-row"><span>输入费用</span><b>{{ fmtPreciseCny(traceRow?.input_cost_usd) }}</b></div>
+                <div class="mu-meta-row"><span>输出费用</span><b>{{ fmtPreciseCny(traceRow?.output_cost_usd) }}</b></div>
                 <div class="mu-meta-row" v-if="(traceRow?.cache_read_cost_usd || 0) > 0">
-                  <span>缓存读取</span><b class="c-cyan">¥{{ fmtPreciseCny(traceRow?.cache_read_cost_usd) }}</b>
+                  <span>缓存读取</span><b class="c-cyan">{{ fmtPreciseCny(traceRow?.cache_read_cost_usd) }}</b>
                 </div>
-                <div class="mu-meta-row mu-meta-sep"><span>合计</span><b class="c-green">¥{{ fmtPreciseCny(traceRow?.est_cost_usd) }}</b></div>
+                <div class="mu-meta-row mu-meta-sep"><span>合计</span><b class="c-green">{{ fmtPreciseCny(traceRow?.est_cost_usd) }}</b></div>
               </div>
               <div class="mu-meta-section">
                 <div class="mu-meta-heading">来源</div>
@@ -709,7 +713,9 @@ import {
 import http from '@/services/http'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
+import { useSettingsStore } from '@/stores/settings'
 import { isDark } from '@/composables/useTheme'
+import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
 
 Chart.register(
   LineController, DoughnutController, BarController,
@@ -718,6 +724,7 @@ Chart.register(
 )
 
 const authStore = useAuthStore()
+const settingsStore = useSettingsStore()
 
 const TABLE_HEADER = {
   background: 'var(--el-fill-color-light)',
@@ -730,9 +737,22 @@ const TABLE_HEADER = {
 const CHART_PALETTE = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#f97316']
 const RANK_COLORS = ['#f59e0b', '#94a3b8', '#92400e', '#3b82f6', '#10b981', '#8b5cf6', '#06b6d4', '#ec4899']
 
-const USD_TO_CNY = 7.2
-const toCny = (usd: number | undefined | null) => (usd ?? 0) * USD_TO_CNY
-const fmtCny = (usd: number | undefined | null) => toCny(usd).toFixed(2)
+const currency = ref<Currency>('CNY')
+const cc = computed(() => ({
+  currency: currency.value,
+  rate: settingsStore.publicSettings.pricing_usd_to_cny_rate || 7.2,
+}))
+
+const toCny = (usd: number | undefined | null) => convertCost(usd ?? 0, cc.value)
+const toCnyFormatted = (usd: number | undefined | null) => {
+  const n = convertCost(usd ?? 0, cc.value)
+  return `${currencySymbol(cc.value.currency)}${n.toFixed(6)}`
+}
+const fmtCny = (usd: number | undefined | null) => {
+  const n = convertCost(usd ?? 0, cc.value)
+  const sym = currencySymbol(cc.value.currency)
+  return `${sym}${n.toFixed(2)}`
+}
 
 function chartTheme() {
   const dark = isDark.value
@@ -994,19 +1014,22 @@ const costColor = (v: number) => v > maxCost.value * 0.7 ? 'c-red fw6' : v > max
 // ── Formatters ──
 const fmtNum = (n?: number | null) => n?.toLocaleString() ?? '0'
 const fmtPreciseCny = (v?: number | null): string => {
-  const n = toCny(v)
-  if (n === 0) return '0.00'
-  if (n < 0.01) return '< 0.01'
+  const n = convertCost(Number(v || 0), cc.value)
+  const sym = currencySymbol(cc.value.currency)
+  if (n === 0) return `${sym}0.00`
   let s: string
-  if (n >= 1) s = n.toFixed(2)
-  else if (n >= 0.01) s = n.toFixed(4)
-  else s = n.toFixed(6)
-  return s.replace(/(\.\d{2,}?)0+$/, '$1')
+  if (Math.abs(n) >= 1)        s = n.toFixed(2)
+  else if (Math.abs(n) >= 0.01) s = n.toFixed(4)
+  else if (Math.abs(n) >= 0.0001) s = n.toFixed(6)
+  else s = n.toFixed(8)
+  return sym + s.replace(/(\.\d{2,}?)0+$/, '$1')
 }
 const fmtPrice = (n?: number | null) => {
+  const sym = currencySymbol(cc.value.currency)
   if (n == null) return '—'
-  if (n === 0) return '0'
-  return n >= 1 ? n.toFixed(2) : n.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
+  if (n === 0) return `${sym}0`
+  const v = convertCost(n, cc.value)
+  return sym + (Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(4).replace(/0+$/, '').replace(/\.$/, ''))
 }
 const fmtTokens = (n?: number | null) => {
   if (!n) return '0'
@@ -1219,7 +1242,7 @@ function renderCostTrend() {
       labels,
       datasets: [
         {
-          label: '花费 (CNY)',
+          label: `花费 (${currency.value})`,
           data: sorted.map(r => toCny(r.est_cost_usd)),
           borderColor: isDark.value ? '#60a5fa' : '#3b82f6',
           backgroundColor: isDark.value ? 'rgba(96,165,250,0.15)' : 'rgba(59,130,246,0.12)',
@@ -1256,7 +1279,7 @@ function renderCostTrend() {
         tooltip: {
           callbacks: {
             label: ctx => {
-              if (ctx.datasetIndex === 0) return `花费: ¥${(ctx.raw as number).toFixed(2)}`
+              if (ctx.datasetIndex === 0) return `花费: ${currencySymbol(cc.value.currency)}${Number(ctx.raw as number).toFixed(2)}`
               return `调用: ${fmtNum(ctx.raw as number)} 次`
             },
           },
@@ -1272,7 +1295,7 @@ function renderCostTrend() {
           type: 'linear', position: 'left',
           grid: { color: colors.grid },
           border: { display: false },
-          ticks: { color: colors.textSecondary, font: { size: 10 }, callback: (v: any) => `¥${Number(v).toFixed(2)}` },
+          ticks: { color: colors.textSecondary, font: { size: 10 }, callback: (v: any) => `${currencySymbol(cc.value.currency)}${Number(v).toFixed(2)}` },
         },
         y1: {
           type: 'linear', position: 'right',
@@ -1357,7 +1380,7 @@ function renderCostPerM() {
     data: {
       labels: rows.map(r => r.model || '未知'),
       datasets: [{
-        label: '每百万 Token 花费 (¥)',
+        label: `每百万 Token 花费 (${currency.value})`,
         data: rows.map(r => toCny(r.cpm)),
         backgroundColor: CHART_PALETTE.map(c => c + 'CC'),
         borderColor: CHART_PALETTE,
@@ -1373,14 +1396,14 @@ function renderCostPerM() {
       plugins: {
         legend: { display: false },
         tooltip: {
-          callbacks: { label: ctx => `¥${(ctx.raw as number).toFixed(4)} / M tokens` },
+          callbacks: { label: ctx => `${currencySymbol(cc.value.currency)}${Number(ctx.raw as number).toFixed(4)} / M tokens` },
         },
       },
       scales: {
         x: {
           grid: { color: colors.grid },
           border: { display: false },
-          ticks: { color: colors.textSecondary, font: { size: 10 }, callback: (v: any) => `¥${Number(v).toFixed(2)}` },
+          ticks: { color: colors.textSecondary, font: { size: 10 }, callback: (v: any) => `${currencySymbol(cc.value.currency)}${Number(v).toFixed(2)}` },
         },
         y: {
           grid: { display: false },
@@ -1401,6 +1424,7 @@ function rerenderCharts() {
 }
 
 watch(isDark, () => nextTick(() => rerenderCharts()))
+watch(currency, () => nextTick(() => rerenderCharts()))
 
 // 懒加载：首次展开「习惯与深度分析」时再渲染该区图表
 watch(analysisOpen, (open) => {
@@ -1483,7 +1507,7 @@ const EXPORT_COLUMNS: { key: string; label: string }[] = [
   { key: 'model', label: '模型' }, { key: 'key_id', label: 'Key' },
   { key: 'status', label: '状态' }, { key: 'duration_ms', label: '耗时ms' },
   { key: 'prompt_tokens', label: '输入Token' }, { key: 'completion_tokens', label: '输出Token' },
-  { key: 'cached_tokens', label: '缓存Token' }, { key: 'est_cost_usd', label: '成本USD' },
+  { key: 'cached_tokens', label: '缓存Token' }, { key: 'est_cost_usd', label: '成本' },
 ]
 function csvEscape(v: unknown): string {
   const s = v == null ? '' : String(v)
@@ -1497,7 +1521,7 @@ function handleExport() {
   const blob = new Blob(['\ufeff' + [header, body].join('\n')], { type: 'text/csv;charset=utf-8;' })
   Object.assign(document.createElement('a'), {
     href: URL.createObjectURL(blob),
-    download: `my_logs_${dateRange.value[0]}_${dateRange.value[1]}.csv`,
+    download: `my_logs_${currency.value}_${dateRange.value[0]}_${dateRange.value[1]}.csv`,
   }).click()
   ElMessage.success(`已导出 ${logRows.value.length} 条记录`)
 }

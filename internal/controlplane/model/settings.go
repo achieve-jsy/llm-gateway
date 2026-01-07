@@ -14,26 +14,27 @@ func (SystemConfig) TableName() string {
 }
 
 type SystemSettings struct {
-	SiteName                       string `json:"site_name"`
-	SiteLogo                       string `json:"site_logo"`
-	SiteSubtitle                   string `json:"site_subtitle"`
-	APIBaseURL                     string `json:"api_base_url"`
-	RateLimitPerMinute             int    `json:"rate_limit_per_minute"`
-	MaxConcurrencyPerKey           int    `json:"max_concurrency_per_key"`
-	OIDCIssuerURL                  string `json:"oidc_issuer_url"`
-	OIDCClientID                   string `json:"oidc_client_id"`
-	OIDCClientSecret               string `json:"oidc_client_secret"`
-	OIDCRedirectURL                string `json:"oidc_redirect_url"`
-	OIDCScopes                     string `json:"oidc_scopes"`
-	OIDCEnabled                    bool   `json:"oidc_enabled"`
-	WebhookEnabled                 bool   `json:"webhook_enabled"`
-	WebhookURL                     string `json:"webhook_url"`
-	WebhookSecret                  string `json:"webhook_secret"`
-	WebhookEvents                  string `json:"webhook_events"`
-	DefaultMaxSwitches             int    `json:"default_max_switches"`
-	DefaultSameModelRetries        int    `json:"default_same_model_retries"`
-	DefaultFailoverCooldownSeconds int    `json:"default_failover_cooldown_seconds"`
-	SupplierName                  string `json:"supplier_name"`
+	SiteName                       string  `json:"site_name"`
+	SiteLogo                       string  `json:"site_logo"`
+	SiteSubtitle                   string  `json:"site_subtitle"`
+	APIBaseURL                     string  `json:"api_base_url"`
+	RateLimitPerMinute             int     `json:"rate_limit_per_minute"`
+	MaxConcurrencyPerKey           int     `json:"max_concurrency_per_key"`
+	OIDCIssuerURL                  string  `json:"oidc_issuer_url"`
+	OIDCClientID                   string  `json:"oidc_client_id"`
+	OIDCClientSecret               string  `json:"oidc_client_secret"`
+	OIDCRedirectURL                string  `json:"oidc_redirect_url"`
+	OIDCScopes                     string  `json:"oidc_scopes"`
+	OIDCEnabled                    bool    `json:"oidc_enabled"`
+	WebhookEnabled                 bool    `json:"webhook_enabled"`
+	WebhookURL                     string  `json:"webhook_url"`
+	WebhookSecret                  string  `json:"webhook_secret"`
+	WebhookEvents                  string  `json:"webhook_events"`
+	DefaultMaxSwitches             int     `json:"default_max_switches"`
+	DefaultSameModelRetries        int     `json:"default_same_model_retries"`
+	DefaultFailoverCooldownSeconds int     `json:"default_failover_cooldown_seconds"`
+	SupplierName                   string  `json:"supplier_name"`
+	PricingUsdToCnyRate            float64 `json:"pricing_usd_to_cny_rate"`
 	// v0.7 分层限速：0 = 不限
 	GlobalRPM int `json:"global_rpm"`
 	StudioRPM int `json:"studio_rpm"`
@@ -42,16 +43,17 @@ type SystemSettings struct {
 }
 
 type PublicSettings struct {
-	SiteName              string `json:"site_name"`
-	SiteLogo              string `json:"site_logo"`
-	SiteSubtitle          string `json:"site_subtitle"`
-	APIBaseURL            string `json:"api_base_url"`
-	RateLimitPerMinute    int    `json:"rate_limit_per_minute"`
-	MaxConcurrencyPerKey  int    `json:"max_concurrency_per_key"`
-	SupplierName          string `json:"supplier_name"`
+	SiteName              string  `json:"site_name"`
+	SiteLogo              string  `json:"site_logo"`
+	SiteSubtitle          string  `json:"site_subtitle"`
+	APIBaseURL            string  `json:"api_base_url"`
+	RateLimitPerMinute    int     `json:"rate_limit_per_minute"`
+	MaxConcurrencyPerKey  int     `json:"max_concurrency_per_key"`
+	SupplierName          string  `json:"supplier_name"`
+	PricingUsdToCnyRate   float64 `json:"pricing_usd_to_cny_rate"`
 	// v0.7 分层限速：0 = 不限
-	GlobalRPM             int    `json:"global_rpm"`
-	StudioRPM             int    `json:"studio_rpm"`
-	DeptRPM               int    `json:"dept_rpm"`
-	KeyRPM                int    `json:"key_rpm"`
+	GlobalRPM             int     `json:"global_rpm"`
+	StudioRPM             int     `json:"studio_rpm"`
+	DeptRPM               int     `json:"dept_rpm"`
+	KeyRPM                int     `json:"key_rpm"`
 }

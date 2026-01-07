@@ -15,12 +15,10 @@ type UserIdentity struct {
 	// v0.7: Key 类型（personal/service）
 	KeyType string `json:"key_type,omitempty"`
 	// v0.7: 预算链（scope 列表 + 各层额度），由 verify-key 快照下发。
-	// budget_check 中间件据此做并集校验，不用再查控制面。
 	BudgetChain []BudgetScope `json:"budget_chain,omitempty"`
 }
 
 // BudgetScope 预算链中单层 scope 的标识与额度（与控制面 service.BudgetScope 镜像）。
-// 网关只需 ScopeType/ScopeID/AmountUSD/DailyAmountUSD/WeeklyAmountUSD/Label 做并集校验，不含实时 used（Redis 实时读）。
 type BudgetScope struct {
 	ScopeType       string  `json:"scope_type"`
 	ScopeID         string  `json:"scope_id"`

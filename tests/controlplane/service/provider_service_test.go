@@ -140,6 +140,15 @@ func (f *fakeModelRepo) UpdateEnabledByProviderID(providerID uuid.UUID, enabled 
 func (f *fakeModelRepo) BatchDelete(_ []uuid.UUID) (int64, error)          { return 0, nil }
 func (f *fakeModelRepo) BatchUpdateEnabled(_ []uuid.UUID, _ bool) (int64, error) { return 0, nil }
 func (f *fakeModelRepo) DeleteModelTagRelations(_ uuid.UUID) error         { return nil }
+func (f *fakeModelRepo) AutoDisableModel(_ uuid.UUID) error                { return nil }
+func (f *fakeModelRepo) AutoEnableModel(_ uuid.UUID) error                 { return nil }
+func (f *fakeModelRepo) IncrementModelFailures(_ uuid.UUID) (int, error)   { return 0, nil }
+func (f *fakeModelRepo) ResetModelFailures(_ uuid.UUID) error              { return nil }
+func (f *fakeModelRepo) UpdateModelCheckResult(_ uuid.UUID, _ int, _ string) error { return nil }
+func (f *fakeModelRepo) IncrementRecoverySuccesses(_ uuid.UUID) error      { return nil }
+func (f *fakeModelRepo) ResetRecoverySuccesses(_ uuid.UUID) error          { return nil }
+func (f *fakeModelRepo) UpdateEnabled(_ uuid.UUID, _ *bool) error          { return nil }
+func (f *fakeModelRepo) UpdateStatus(_ uuid.UUID, _ bool, _ int) error     { return nil }
 func (f *fakeModelRepo) GetHealthByNames(_ []string) (map[string]repository.ModelHealthSummary, error) {
 	return nil, nil
 }

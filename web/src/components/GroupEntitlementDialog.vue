@@ -85,8 +85,8 @@
       </el-tabs>
     </div>
 
-    <el-dialog v-model="addStudioDialogVisible" title="授权工作室" width="400px" @close="resetAddStudio">
-      <el-form label-width="80px">
+    <el-dialog v-model="addStudioDialogVisible" title="授权工作室" width="400px" center @close="resetAddStudio">
+      <el-form label-width="60px" style="margin-top: 8px">
         <el-form-item label="工作室">
           <el-select v-model="newStudioId" placeholder="选择工作室" style="width: 100%" filterable>
             <el-option
@@ -100,15 +100,17 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="addStudioDialogVisible = false">取消</el-button>
-        <el-button type="primary" :disabled="!newStudioId" :loading="granting" @click="handleGrantStudio">
-          确定授权
-        </el-button>
+        <div style="display: flex; gap: 12px; justify-content: flex-end">
+          <el-button @click="addStudioDialogVisible = false">取消</el-button>
+          <el-button type="primary" :disabled="!newStudioId" :loading="granting" @click="handleGrantStudio">
+            确定授权
+          </el-button>
+        </div>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="addDeptDialogVisible" title="开通部门" width="400px" @close="resetAddDept">
-      <el-form label-width="80px">
+    <el-dialog v-model="addDeptDialogVisible" title="开通部门" width="400px" center @close="resetAddDept">
+      <el-form label-width="60px" style="margin-top: 8px">
         <el-form-item label="部门">
           <el-select
             v-model="newDeptId"
@@ -126,15 +128,14 @@
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="所属工作室">
-          <span class="dept-studio-name">{{ deptStudioHint }}</span>
-        </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="addDeptDialogVisible = false">取消</el-button>
-        <el-button type="primary" :disabled="!newDeptId" :loading="granting" @click="handleGrantDept">
-          确定开通
-        </el-button>
+        <div style="display: flex; gap: 12px; justify-content: flex-end">
+          <el-button @click="addDeptDialogVisible = false">取消</el-button>
+          <el-button type="primary" :disabled="!newDeptId" :loading="granting" @click="handleGrantDept">
+            确定开通
+          </el-button>
+        </div>
       </template>
     </el-dialog>
   </el-drawer>

@@ -275,12 +275,32 @@
                 class="mini-card mini-card--available"
               >
                 <span class="mini-card__name">{{ group.name }}</span>
-                <el-tag
-                  :type="group.open_mode === 'public' ? 'success' : 'warning'"
-                  size="small"
-                >
-                  {{ group.open_mode === 'public' ? '全员可用' : '已开通' }}
-                </el-tag>
+                <div class="mini-card__actions">
+                  <el-tag
+                    :type="group.open_mode === 'public' ? 'success' : 'warning'"
+                    size="small"
+                  >
+                    {{ group.open_mode === 'public' ? '全员可用' : '已开通' }}
+                  </el-tag>
+                  <el-popconfirm
+                    v-if="group.open_mode === 'controlled'"
+                    title="确定撤销本部门的开通？撤销后本部门将无法使用该模型组。"
+                    confirm-button-text="确定撤销"
+                    confirm-button-type="danger"
+                    @confirm="handleDeptAdminDisable(group)"
+                  >
+                    <template #reference>
+                      <el-button
+                        type="danger"
+                        text
+                        size="small"
+                        :loading="disablingGroupId === group.id"
+                      >
+                        撤销
+                      </el-button>
+                    </template>
+                  </el-popconfirm>
+                </div>
               </div>
             </div>
             <el-empty v-else description="暂无可用模型组" :image-size="48" />
@@ -338,6 +358,9 @@ const openModeFilter = ref<'all' | 'public' | 'controlled'>('all')
 
 // DeptAdmin 一键开通 loading
 const enablingGroupId = ref<number | null>(null)
+
+// DeptAdmin 撤销开通 loading
+const disablingGroupId = ref<number | null>(null)
 
 // ─── 计算属性 ──────────────────────────────────────────────────────────────────
 
@@ -610,6 +633,37 @@ async function handleDeptAdminEnable(group: GroupListItem) {
   }
 }
 
+// DeptAdmin 撤销开通
+async function handleDeptAdminDisable(group: GroupListItem) {
+  if (!selectedDeptId.value) {
+    ElMessage.warning('请先选择部门')
+    return
+  }
+  
+  // 查找本部门对该组的授权记录 ID
+  const ents = entitlementsMap.value.get(group.id) || []
+  const entitlement = ents.find(
+    e => e.scope_type === 'dept' && e.scope_id === selectedDeptId.value && e.enabled
+  )
+  
+  if (!entitlement) {
+    ElMessage.error('未找到开通记录')
+    return
+  }
+  
+  disablingGroupId.value = group.id
+  try {
+    await groupsApi.revokeEntitlement(group.id, entitlement.id)
+    ElMessage.success(`已撤销「${myDeptInfo.value?.dept_name || selectedDeptId.value}」的开通`)
+    await loadData()
+  } catch (e: any) {
+    const msg = e?.response?.data?.message || e?.message || '撤销失败'
+    ElMessage.error(msg)
+  } finally {
+    disablingGroupId.value = null
+  }
+}
+
 // ─── 生命周期 ──────────────────────────────────────────────────────────────────
 
 onMounted(() => {
@@ -861,6 +915,13 @@ onMounted(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
   margin-right: 12px;
+}
+
+.mini-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .mini-card__info {

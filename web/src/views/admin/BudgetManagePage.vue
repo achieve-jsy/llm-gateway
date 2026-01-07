@@ -140,15 +140,16 @@
               <span class="scope-dot" :style="{ background: SCOPE_TYPE_COLORS['company'] }" />
               公司预算池
             </span>
-            <el-tag type="info" size="small" style="flex-shrink:0">
-              下发率 {{ Math.round(companyAllocRatio * 100) }}%
-            </el-tag>
+            <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
+              <el-tag type="info" size="small">下发率 {{ Math.round(companyAllocRatio * 100) }}%</el-tag>
+              <el-button size="small" type="primary" plain style="padding:2px 8px;height:22px;font-size:11px" @click="goOrg()">调整</el-button>
+            </div>
           </div>
           <strong>{{ companyPoolItem ? displayAmount(companyPoolItem.amount_usd) : '—' }}</strong>
           <div class="kpi-pool-usage">
             <span>已下发 {{ formatUSD(companyAllocated, { compact: true }) }}</span>
             <span>余量 {{ formatUSD(companyUnallocated, { compact: true }) }}</span>
-            <span>已使用 {{ companyPoolItem ? formatUSD(companyPoolItem.used_usd || 0, { compact: true }) : '—' }}</span>
+            <span>已使用 {{ formatUSD(totalUsed, { compact: true }) }}</span>
           </div>
           <el-progress
             :percentage="Math.min(Math.round(companyAllocRatio * 100), 100)"
@@ -201,13 +202,16 @@
               <span class="scope-dot" :style="{ background: SCOPE_TYPE_COLORS['studio'] }" />
               工作室预算池
             </span>
-            <el-tag type="info" size="small" style="flex-shrink:0">下发率 {{ Math.round(studioAllocRatio * 100) }}%</el-tag>
+            <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
+              <el-tag type="info" size="small">下发率 {{ Math.round(studioAllocRatio * 100) }}%</el-tag>
+              <el-button size="small" plain style="padding:2px 8px;height:22px;font-size:11px" @click="goOrg()">调整部门</el-button>
+            </div>
           </div>
           <strong>{{ studioPoolItem ? displayAmount(studioPoolItem.amount_usd) : '—' }}</strong>
           <div class="kpi-pool-usage">
             <span>已下发 {{ formatUSD(studioAllocated, { compact: true }) }}</span>
             <span>余量 {{ formatUSD(studioUnallocated, { compact: true }) }}</span>
-            <span>已使用 {{ studioPoolItem ? formatUSD(studioPoolItem.used_usd || 0, { compact: true }) : '—' }}</span>
+            <span>已使用 {{ formatUSD(totalUsed, { compact: true }) }}</span>
           </div>
           <el-progress
             :percentage="Math.min(Math.round(studioAllocRatio * 100), 100)"
@@ -295,24 +299,32 @@
               </div>
             </template>
           </el-table-column>
-          <!-- 已分配额度 + 占公司总额比例 -->
-          <el-table-column label="已分配额度" min-width="220">
+          <!-- 已分配额度 -->
+          <el-table-column label="已分配额度" min-width="120" align="right">
+            <template #default="{ row }">
+              <span>{{ displayAmount(row.amount_usd) }}</span>
+            </template>
+          </el-table-column>
+          <!-- 已使用 + 用量占比 -->
+          <el-table-column label="已使用" min-width="180">
             <template #default="{ row }">
               <div class="usage-cell">
                 <div style="display:flex;justify-content:space-between;align-items:baseline">
-                  <span>{{ displayAmount(row.amount_usd) }}</span>
+                  <span>{{ formatUSD(row.used_usd || 0, { compact: true }) }}</span>
                   <span class="muted" style="font-size:11px">
-                    占 {{ companyPoolItem && companyPoolItem.amount_usd > 0
-                      ? Math.round((row.amount_usd / companyPoolItem.amount_usd) * 100)
+                    {{ row.amount_usd > 0
+                      ? Math.round(((row.used_usd || 0) / row.amount_usd) * 100)
                       : 0 }}%
                   </span>
                 </div>
                 <el-progress
-                  :percentage="companyPoolItem && companyPoolItem.amount_usd > 0
-                    ? Math.min(Math.round((row.amount_usd / companyPoolItem.amount_usd) * 100), 100)
+                  :percentage="row.amount_usd > 0
+                    ? Math.min(Math.round(((row.used_usd || 0) / row.amount_usd) * 100), 100)
                     : 0"
                   :stroke-width="5"
-                  :color="'var(--el-color-primary-light-3)'"
+                  :color="row.amount_usd > 0 && (row.used_usd || 0) / row.amount_usd >= 0.95
+                    ? '#e6a23c'
+                    : 'var(--el-color-primary-light-3)'"
                   :show-text="false"
                 />
               </div>
@@ -1345,16 +1357,25 @@ const topUsageItems = computed(() =>
     .sort((a, b) => {
       const ratioDiff = (b.used_ratio || 0) - (a.used_ratio || 0)
       return ratioDiff !== 0 ? ratioDiff : (b.used_usd || 0) - (a.used_usd || 0)
-    })
-    .slice(0, 8),
+    }),
 )
-const tableItems = computed(() => (riskItems.value.length > 0 ? filteredRiskItems.value : topUsageItems.value))
-const tableTitle = computed(() => (riskItems.value.length > 0 ? '预算风险' : '预算健康'))
-const tableDesc = computed(() =>
-  riskItems.value.length > 0
-    ? '优先处理已超额和预计耗尽的对象。'
-    : '没有超过 80% 的预算对象，展示当前消耗最高的对象。',
-)
+// admin 公司视图：展示全量工作室（无截断，方便调整每个工作室配额）
+// studio_admin 视图：topUsageItems 仍限 8 条作为 dashboard 摘要
+const tableItems = computed(() => {
+  if (riskItems.value.length > 0) return filteredRiskItems.value
+  if (overviewView.value === 'company') return topUsageItems.value
+  return topUsageItems.value.slice(0, 8)
+})
+const tableTitle = computed(() => {
+  if (riskItems.value.length > 0) return '预算风险'
+  return overviewView.value === 'company' ? '工作室预算' : '预算健康'
+})
+const tableDesc = computed(() => {
+  if (riskItems.value.length > 0) return '优先处理已超额和预计耗尽的对象。'
+  return overviewView.value === 'company'
+    ? '全部工作室的预算分配与消耗概览，可逐行点击「调整」进入配置。'
+    : '没有超过 80% 的预算对象，展示当前消耗最高的对象。'
+})
 
 // ─── dept_admin 专属计算 ───────────────────────────────────────────────────────
 const deptContainerItems = computed(() =>

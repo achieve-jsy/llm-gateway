@@ -30,7 +30,12 @@ func InitPostgres(dsn ...string) (*gorm.DB, error) {
 			host, port, user, pass, dbname, sslmode)
 	}
 
-	db, err := gorm.Open(postgres.Open(connStr), &gorm.Config{
+	db, err := gorm.Open(postgres.New(postgres.Config{
+		DSN: connStr,
+		// PreferSimpleProtocol 禁用 pgx prepared statement 缓存，
+		// 避免迁移后 "cached plan must not change result type" (SQLSTATE 0A000) 500 错误。
+		PreferSimpleProtocol: true,
+	}), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Warn),
 	})
 	if err != nil {

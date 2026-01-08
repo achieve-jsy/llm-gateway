@@ -11,7 +11,10 @@ import (
 
 func InitPostgres(cfg config.PostgresConfig) (*gorm.DB, error) {
 	dsn := cfg.DSN()
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Warn)})
+	db, err := gorm.Open(postgres.New(postgres.Config{
+		DSN:                  dsn,
+		PreferSimpleProtocol: true,
+	}), &gorm.Config{Logger: logger.Default.LogMode(logger.Warn)})
 	if err != nil {
 		return nil, fmt.Errorf("connect postgres: %w", err)
 	}

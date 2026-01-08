@@ -33,7 +33,7 @@
           <strong>{{ formatUSD(primaryBudget?.used_usd || 0) }}</strong>
         </div>
         <div class="mb-kpi">
-          <span>月度额度</span>
+          <span>月度额度<template v-if="isUsingSharedPool"> <em class="mb-kpi-pool-tag">共享池</em></template></span>
           <strong>{{ primaryBudget ? displayAmount(primaryBudget.amount_usd) : '未设置' }}</strong>
         </div>
         <div class="mb-kpi">
@@ -49,10 +49,22 @@
           <div class="mb-panel-head">
             <div>
               <h2>{{ primaryBudgetLabel }}</h2>
-              <p>当前周期额度与使用情况</p>
+              <p>{{ isUsingSharedPool ? '当前所用额度与使用情况' : '您的专属配额与使用情况' }}</p>
             </div>
             <div class="mb-panel-head-actions">
               <span :class="`mb-tag mb-tag--${statusTagType}`">{{ statusText }}</span>
+            </div>
+          </div>
+
+          <!-- 共享池提示 -->
+          <div v-if="isUsingSharedPool" class="mb-shared-pool-notice">
+            <span class="mb-shared-pool-icon">🔗</span>
+            <div class="mb-shared-pool-text">
+              <span class="mb-shared-pool-title">您正在使用部门共享预算池</span>
+              <span class="mb-shared-pool-desc">
+                您尚未分配个人独立配额，当前消耗计入「{{ primaryBudgetLabel }}」共享池。
+                如需独立额度管理，可向部门负责人申请。
+              </span>
             </div>
           </div>
 
@@ -329,6 +341,10 @@ const primaryBudget = computed(() =>
   chain.value.find(item => item.scope_type === 'member') ||
   chain.value.find(item => item.scope_type === 'dept_daily') ||
   chain.value[0]
+)
+// 是否正在消费共享部门池（未配置个人独立配额）
+const isUsingSharedPool = computed(() =>
+  !!primaryBudget.value && primaryBudget.value.scope_type !== 'member',
 )
 const primaryBudgetLabel = computed(() => primaryBudget.value?.label || '我的额度')
 const primaryRatioPercent = computed(() => Math.min(Math.round((primaryBudget.value?.used_ratio || 0) * 100), 100))
@@ -660,6 +676,16 @@ onUnmounted(() => { historyObserver?.disconnect() })
   letter-spacing: -.03em;
 }
 .mb-kpi strong.is-danger { color: var(--el-color-danger); }
+.mb-kpi-pool-tag {
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--el-color-info-light-8);
+  color: var(--el-color-info-dark-2);
+  vertical-align: middle;
+}
 
 /* ─────────────── Grid ─────────────── */
 .mb-grid {
@@ -714,6 +740,39 @@ onUnmounted(() => { historyObserver?.disconnect() })
 .mb-tag--rejected { background: #fff0f0; color: #c0392b; }
 .mb-tag--cancelled { background: #f3f4f6; color: #6b7280; }
 .mb-tag--sm { font-size: 10px; padding: 2px 7px; }
+
+/* ─────────────── Shared pool notice ─────────────── */
+.mb-shared-pool-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 18px 0;
+  padding: 11px 14px;
+  background: var(--el-color-info-light-9);
+  border: 1px solid var(--el-color-info-light-5);
+  border-radius: 10px;
+  margin-top: 12px;
+}
+.mb-shared-pool-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.mb-shared-pool-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.mb-shared-pool-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--el-color-info-dark-2);
+}
+.mb-shared-pool-desc {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.6;
+}
 
 /* ─────────────── Balance block ─────────────── */
 .mb-balance-block {

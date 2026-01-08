@@ -65,9 +65,9 @@
                 <div class="card-left">
                   <el-tag :type="scopeTagType(item.scope_type)" size="small">{{ scopeLabel(item.scope_type) }}</el-tag>
                   <span class="card-period-label">{{ PERIOD_LABELS[(item.period_type as ExpansionPeriod) || 'monthly'] }}</span>
-                  <!-- 申请来源：部门名 + 申请人 -->
-                  <span class="card-scope-name">{{ item.scope_id }}</span>
-                  <span v-if="item.requester_name" class="card-requester">· {{ item.requester_name }}</span>
+                  <!-- 申请来源：scope 可读名称 + 申请人（member 类型时 scope 本身就是申请人，不重复） -->
+                  <span class="card-scope-name">{{ resolveScopeName(item) }}</span>
+                  <span v-if="item.requester_name && item.scope_type !== 'member'" class="card-requester">· {{ item.requester_name }}</span>
                 </div>
                 <div class="card-amount">
                   <span v-if="item.current_amount" class="card-amount-from">{{ formatMoney(item.current_amount) }} →</span>
@@ -249,7 +249,7 @@
           <el-timeline-item
             v-for="step in stepsData"
             :key="step.id"
-            :timestamp="step.created_at"
+            :timestamp="formatDateTime(step.created_at)"
             :type="stepColor(step.action)"
             placement="top"
           >
@@ -667,6 +667,23 @@ function scopeLabel(type: string): string {
     studio: '工作室',
   }
   return map[type] || type
+}
+
+// 将 scope_id（UUID/dept_id）解析为可读名称
+function resolveScopeName(item: ExpansionRequest): string {
+  if (item.scope_type === 'member') {
+    // 成员请求自己的扩容，scope_id 就是该用户 ID，直接用 requester_name
+    return item.requester_name || item.scope_id
+  }
+  if (item.scope_type === 'studio') {
+    const studio = orgStore.studios.find(s => s.id === item.scope_id)
+    if (studio) return studio.name
+  }
+  if (item.scope_type === 'dept_daily' || item.scope_type === 'dept_service') {
+    const dept = orgStore.departments.find(d => d.dept_id === item.scope_id)
+    if (dept) return dept.dept_name
+  }
+  return item.scope_id
 }
 
 function scopeTagType(type: string): string {

@@ -191,16 +191,11 @@
         <el-form-item v-else-if="isDeptAdmin && myManagedDepts.length === 1" label="申请部门">
           <el-input :value="myManagedDepts[0].dept_name" disabled style="width: 100%" />
         </el-form-item>
-        <el-form-item label="预算类型">
+        <!-- studio_admin 时 scope_type 固定为 studio，无需展示选择器 -->
+        <el-form-item v-if="!isStudioAdmin" label="预算类型">
           <el-select v-model="createForm.scope_type" style="width: 100%">
-            <!-- studio_admin 只允许发起工作室级别扩容；部门级由 dept_admin 发起 -->
-            <template v-if="isStudioAdmin">
-              <el-option label="工作室月预算" value="studio" />
-            </template>
-            <template v-else>
-              <el-option label="部门日常预算（个人 Key）" value="dept_daily" />
-              <el-option label="部门服务预算（Service Key）" value="dept_service" />
-            </template>
+            <el-option label="部门日常预算（个人 Key）" value="dept_daily" />
+            <el-option label="部门服务预算（Service Key）" value="dept_service" />
           </el-select>
         </el-form-item>
         <el-form-item label="调整维度">

@@ -167,7 +167,7 @@
           </div>
         </div>
         <div class="studio-alloc-actions">
-          <el-button v-if="canEdit" size="small" type="primary" plain @click="openStudioAllocDrawer">调整额度</el-button>
+          <el-button v-if="effectiveCanEditSelf" size="small" type="primary" plain @click="openStudioAllocDrawer">调整额度</el-button>
           <el-button v-else size="small" plain @click="goExpansion(studioAllocPlaceholder)">申请扩容</el-button>
           <el-button :loading="loading" size="small" @click="load">刷新</el-button>
         </div>
@@ -348,6 +348,10 @@ const props = defineProps<{
   title: string
   childScopeIds?: string[]
   canEdit?: boolean
+  /** 是否可直接修改当前节点自身的额度（工作室总额度）。
+   *  不传时与 canEdit 保持一致。
+   *  用于区分"admin 可直接改工作室上限"与"studio_admin 只能申请扩容"。 */
+  canEditSelf?: boolean
 }>()
 
 const router = useRouter()
@@ -506,6 +510,8 @@ const serviceRows = computed(() => displayItems.value.filter(i => i.scope_type =
 
 // 工作室自身 allocation（用于总额度卡片）
 const studioAlloc = computed(() => currentItems.value[0] ?? null)
+// 是否可直接修改当前节点（工作室）自身额度；未传 canEditSelf 时回退到 canEdit
+const effectiveCanEditSelf = computed(() => props.canEditSelf ?? props.canEdit ?? false)
 const studioAllocPlaceholder = computed<BudgetItem>(() => studioAlloc.value ?? {
   scope_type: 'studio',
   scope_id: props.scopeId,

@@ -180,6 +180,7 @@
                 :title="selectedStudio.name"
                 :child-scope-ids="selectedStudioDeptIds"
                 :can-edit="canEditSelectedStudioBudget"
+                :can-edit-self="isGlobalAdmin"
               />
             </div>
           </el-tab-pane>

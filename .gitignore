@@ -27,6 +27,10 @@ web/images/
 node_modules/
 .opencode/node_modules/
 
+# ── 蓝绿部署运行态（主机生成，随颜色切换变化，不入库） ───────────────────────
+deploy/blue-green/.active-color
+deploy/blue-green/upstream-active.conf
+
 # ── 运行时数据 ───────────────────────────────────────────────────────────────
 .sisyphus/
 

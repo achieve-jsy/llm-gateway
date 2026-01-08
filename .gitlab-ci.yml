@@ -78,6 +78,7 @@ build-web-test:
   stage: build
   image: node:20-alpine
   tags: [docker]
+  retry: 2
   variables:
     npm_config_cache: "$CI_PROJECT_DIR/.npm-cache"
   cache:
@@ -135,6 +136,7 @@ build-web-prod:
   stage: build
   image: node:20-alpine
   tags: [docker]
+  retry: 2
   variables:
     npm_config_cache: "$CI_PROJECT_DIR/.npm-cache"
   cache:

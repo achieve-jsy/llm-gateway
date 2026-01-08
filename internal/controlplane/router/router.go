@@ -457,6 +457,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	// v0.7: 预算管理路由
 	budgetHandler := handler.NewBudgetHandler(budgetSvc, orgContainer.RBAC)
 	budgetHandler.SetAlertService(budgetAlertSvc)
+	budgetHandler.SetDB(db)
 	// 注册内部告警触发端点（供 gateway 调用）
 	internalGroup.POST("/budget/evaluate-alert", budgetHandler.EvaluateAlert)
 	// v0.7: 扩容审批路由
@@ -480,6 +481,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.PUT("/budgets/batch", guard(rbac.PermBudgetSet), budgetHandler.BatchSet)
 		adminGroup.DELETE("/budgets", guard(rbac.PermBudgetSet), budgetHandler.Delete)
 		adminGroup.GET("/budgets/context", guard(rbac.PermBudgetViewScoped), budgetHandler.Context)
+		adminGroup.POST("/budget/rebuild-counters", guard(rbac.PermBudgetSet), budgetHandler.RebuildCounters)
 		// 扩容申请：创建/我的申请/流水允许登录用户访问；审批接口继续走 RBAC。
 		adminGroup.POST("/expansion-requests", expansionHandler.Create)
 		adminGroup.GET("/expansion-requests", expansionHandler.ListMine)

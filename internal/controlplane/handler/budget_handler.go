@@ -9,6 +9,7 @@ import (
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // BudgetHandler 处理预算额度的查询与设置。
@@ -16,6 +17,7 @@ type BudgetHandler struct {
 	svc      *service.BudgetService
 	alertSvc *service.BudgetAlertService
 	rbac     *rbac.Checker
+	db       *gorm.DB
 }
 
 func NewBudgetHandler(svc *service.BudgetService, rbacChecker *rbac.Checker) *BudgetHandler {
@@ -25,6 +27,11 @@ func NewBudgetHandler(svc *service.BudgetService, rbacChecker *rbac.Checker) *Bu
 // SetAlertService 注入告警服务（供 EvaluateAlert 使用，可选）。
 func (h *BudgetHandler) SetAlertService(svc *service.BudgetAlertService) {
 	h.alertSvc = svc
+}
+
+// SetDB 注入数据库（供 RebuildCounters 查询 call_logs，可选）。
+func (h *BudgetHandler) SetDB(db *gorm.DB) {
+	h.db = db
 }
 
 // List GET /api/v1/budgets?view=company|studio|department&scope_type=xxx&scope_id=xxx
@@ -513,4 +520,25 @@ func (h *BudgetHandler) Context(c *gin.Context) {
 		items = append(items, item)
 	}
 	c.JSON(http.StatusOK, gin.H{"context": items})
+}
+
+// RebuildCounters POST /api/v1/budget/rebuild-counters
+// 从 call_logs 重算当前月/周/日各 scope 已用量并写回 Redis。仅 global admin 可操作。
+func (h *BudgetHandler) RebuildCounters(c *gin.Context) {
+	h.rbac.BuildAndInjectActor(c)
+	actor := rbac.GetActor(c)
+	if !actor.IsGlobal {
+		c.JSON(http.StatusForbidden, gin.H{"error": "仅平台管理员可执行此操作"})
+		return
+	}
+	if h.db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "数据库未注入，无法重建"})
+		return
+	}
+	result, err := h.svc.RebuildCounters(c.Request.Context(), h.db)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"result": result})
 }

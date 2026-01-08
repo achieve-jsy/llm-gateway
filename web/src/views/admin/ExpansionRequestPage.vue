@@ -249,7 +249,7 @@
           <el-timeline-item
             v-for="step in stepsData"
             :key="step.id"
-            :timestamp="step.created_at"
+            :timestamp="formatDateTime(step.created_at)"
             :type="stepColor(step.action)"
             placement="top"
           >

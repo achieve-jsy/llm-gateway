@@ -10,6 +10,7 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
 )
 
 // BudgetService 处理预算额度的 CRUD 与告警去重记录管理。
@@ -349,4 +350,130 @@ func (s *BudgetService) InitDefaultBudgets(
 		}
 	}
 	return created, nil
+}
+
+// ─── Redis 计数器重建 ────────────────────────────────────────────────────────
+
+// RebuildResult 重建结果摘要。
+type RebuildResult struct {
+	KeysWritten int    `json:"keys_written"`
+	MonthPeriod string `json:"month_period"`
+	WeekPeriod  string `json:"week_period"`
+	DayPeriod   string `json:"day_period"`
+}
+
+type callCostRow struct {
+	ScopeID string
+	KeyType string
+	CostUSD float64
+}
+
+// RebuildCounters 从 call_logs 重算各 scope 当前月/周/日已用量，写回 Redis。
+// 适用场景：Redis 数据丢失后恢复，防止预算误认为 $0 而被重复消费。
+func (s *BudgetService) RebuildCounters(ctx context.Context, db *gorm.DB) (*RebuildResult, error) {
+	if s.rdb == nil {
+		return nil, fmt.Errorf("redis 未配置，无法重建计数器")
+	}
+
+	now := time.Now()
+	month := now.Format("2006-01")
+	year, week := now.ISOWeek()
+	weekPeriod := fmt.Sprintf("%d-W%02d", year, week)
+	day := now.Format("2006-01-02")
+
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	weekdayOffset := (int(now.Weekday()) + 6) % 7 // ISO: Mon=0
+	weekStart := time.Date(now.Year(), now.Month(), now.Day()-weekdayOffset, 0, 0, 0, 0, now.Location())
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
+	type periodDef struct {
+		period string
+		since  time.Time
+		ttl    time.Duration
+	}
+	periods := []periodDef{
+		{month, monthStart, 70 * 24 * time.Hour},
+		{weekPeriod, weekStart, 14 * 24 * time.Hour},
+		{day, dayStart, 3 * 24 * time.Hour},
+	}
+
+	keysWritten := 0
+
+	for _, p := range periods {
+		// ── company ──────────────────────────────────────────────────────────
+		var companyTotal float64
+		db.WithContext(ctx).Table("call_logs").
+			Select("COALESCE(SUM(input_cost_usd + output_cost_usd + cache_read_cost_usd), 0)").
+			Where("ts >= ?", p.since).
+			Scan(&companyTotal)
+		if err := s.setRedisCounter(ctx, model.BudgetScopeCompany, model.BudgetScopeGlobal, p.period, companyTotal, p.ttl); err != nil {
+			slog.Warn("rebuild: set company counter", "err", err)
+		} else {
+			keysWritten++
+		}
+
+		// ── studio ────────────────────────────────────────────────────────────
+		var studioRows []callCostRow
+		db.WithContext(ctx).Table("call_logs").
+			Select("studio_id AS scope_id, '' AS key_type, COALESCE(SUM(input_cost_usd + output_cost_usd + cache_read_cost_usd), 0) AS cost_usd").
+			Where("ts >= ? AND studio_id != ''", p.since).
+			Group("studio_id").
+			Scan(&studioRows)
+		for _, r := range studioRows {
+			if err := s.setRedisCounter(ctx, model.BudgetScopeStudio, r.ScopeID, p.period, r.CostUSD, p.ttl); err != nil {
+				slog.Warn("rebuild: set studio counter", "scope_id", r.ScopeID, "err", err)
+			} else {
+				keysWritten++
+			}
+		}
+
+		// ── dept（区分 personal/service key）────────────────────────────────
+		var deptRows []callCostRow
+		db.WithContext(ctx).Table("call_logs cl").
+			Select("cl.dept_id AS scope_id, COALESCE(ak.key_type, 'personal') AS key_type, COALESCE(SUM(cl.input_cost_usd + cl.output_cost_usd + cl.cache_read_cost_usd), 0) AS cost_usd").
+			Joins("LEFT JOIN api_keys ak ON ak.id::text = cl.key_id").
+			Where("cl.ts >= ? AND cl.dept_id != ''", p.since).
+			Group("cl.dept_id, ak.key_type").
+			Scan(&deptRows)
+		for _, r := range deptRows {
+			scopeType := model.BudgetScopeDeptDaily
+			if r.KeyType == model.KeyTypeService {
+				scopeType = model.BudgetScopeDeptService
+			}
+			if err := s.setRedisCounter(ctx, scopeType, r.ScopeID, p.period, r.CostUSD, p.ttl); err != nil {
+				slog.Warn("rebuild: set dept counter", "scope_type", scopeType, "scope_id", r.ScopeID, "err", err)
+			} else {
+				keysWritten++
+			}
+		}
+
+		// ── member ────────────────────────────────────────────────────────────
+		var memberRows []callCostRow
+		db.WithContext(ctx).Table("call_logs cl").
+			Select("cl.user_id AS scope_id, '' AS key_type, COALESCE(SUM(cl.input_cost_usd + cl.output_cost_usd + cl.cache_read_cost_usd), 0) AS cost_usd").
+			Joins("LEFT JOIN api_keys ak ON ak.id::text = cl.key_id").
+			Where("cl.ts >= ? AND cl.user_id != '' AND (ak.key_type IS NULL OR ak.key_type != ?)", p.since, model.KeyTypeService).
+			Group("cl.user_id").
+			Scan(&memberRows)
+		for _, r := range memberRows {
+			if err := s.setRedisCounter(ctx, model.BudgetScopeMember, r.ScopeID, p.period, r.CostUSD, p.ttl); err != nil {
+				slog.Warn("rebuild: set member counter", "scope_id", r.ScopeID, "err", err)
+			} else {
+				keysWritten++
+			}
+		}
+	}
+
+	slog.Info("budget counters rebuilt", "keys_written", keysWritten)
+	return &RebuildResult{
+		KeysWritten: keysWritten,
+		MonthPeriod: month,
+		WeekPeriod:  weekPeriod,
+		DayPeriod:   day,
+	}, nil
+}
+
+func (s *BudgetService) setRedisCounter(ctx context.Context, scopeType, scopeID, period string, value float64, ttl time.Duration) error {
+	key := fmt.Sprintf("budget:used:%s:%s:%s", scopeType, scopeID, period)
+	return s.rdb.SetEx(ctx, key, value, ttl).Err()
 }

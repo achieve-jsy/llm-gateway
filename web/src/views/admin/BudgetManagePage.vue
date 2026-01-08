@@ -142,14 +142,17 @@
             </span>
             <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
               <el-tag type="info" size="small">下发率 {{ Math.round(companyAllocRatio * 100) }}%</el-tag>
-              <el-button size="small" type="primary" plain style="padding:2px 8px;height:22px;font-size:11px" @click="goOrg()">调整</el-button>
+              <el-button size="small" type="primary" plain style="padding:2px 8px;height:22px;font-size:11px" @click="openCompanyBudgetDialog">调整</el-button>
+              <el-tooltip content="Redis 数据丢失后，从 call_logs 重算当月/周/日用量并写回" placement="top">
+                <el-button size="small" type="warning" plain style="padding:2px 8px;height:22px;font-size:11px" :loading="rebuildLoading" @click="rebuildCounters">重建计数器</el-button>
+              </el-tooltip>
             </div>
           </div>
           <strong>{{ companyPoolItem ? displayAmount(companyPoolItem.amount_usd) : '—' }}</strong>
           <div class="kpi-pool-usage">
             <span>已下发 {{ formatUSD(companyAllocated, { compact: true }) }}</span>
             <span>余量 {{ formatUSD(companyUnallocated, { compact: true }) }}</span>
-            <span>已使用 {{ formatUSD(totalUsed, { compact: true }) }}</span>
+            <span>本月已用 {{ companyPoolItem ? formatUSD(companyPoolItem.used_usd, { compact: true }) : '—' }}</span>
           </div>
           <el-progress
             :percentage="Math.min(Math.round(companyAllocRatio * 100), 100)"
@@ -158,6 +161,20 @@
             :show-text="false"
             style="margin-top:8px"
           />
+          <div v-if="companyPoolItem && (companyPoolItem.weekly_amount_usd >= 0 || companyPoolItem.daily_amount_usd >= 0)" class="kpi-pool-sub-limits">
+            <div v-if="companyPoolItem.weekly_amount_usd >= 0" class="kpi-sub-limit-row">
+              <span class="kpi-sub-limit-label">周限额</span>
+              <span class="kpi-sub-limit-used">本周已用 {{ formatUSD(companyPoolItem.weekly_used_usd ?? 0, { compact: true }) }}</span>
+              <span class="kpi-sub-limit-slash">/</span>
+              <span class="kpi-sub-limit-amount">{{ displayAmount(companyPoolItem.weekly_amount_usd) }}</span>
+            </div>
+            <div v-if="companyPoolItem.daily_amount_usd >= 0" class="kpi-sub-limit-row">
+              <span class="kpi-sub-limit-label">日限额</span>
+              <span class="kpi-sub-limit-used">今日已用 {{ formatUSD(companyPoolItem.daily_used_usd ?? 0, { compact: true }) }}</span>
+              <span class="kpi-sub-limit-slash">/</span>
+              <span class="kpi-sub-limit-amount">{{ displayAmount(companyPoolItem.daily_amount_usd) }}</span>
+            </div>
+          </div>
         </div>
 
         <!-- 未下发余量 -->
@@ -1022,12 +1039,35 @@
       </div>
     </div>
   </el-dialog>
+
+  <!-- 公司预算池设置 dialog -->
+  <el-dialog v-model="companyBudgetDialogVisible" title="设置公司预算池" width="420px" :close-on-click-modal="false">
+    <el-form label-width="90px" style="margin-top:4px">
+      <el-form-item label="月度总额">
+        <el-input-number v-model="companyBudgetForm.amount" :min="-1" :precision="2" controls-position="right" style="width:100%" />
+        <div style="font-size:11px;color:var(--el-text-color-placeholder);margin-top:3px">-1 表示不限额</div>
+      </el-form-item>
+      <el-form-item label="周限额">
+        <el-input-number v-model="companyBudgetForm.weekly" :min="-1" :precision="2" controls-position="right" style="width:100%" />
+        <div style="font-size:11px;color:var(--el-text-color-placeholder);margin-top:3px">-1 表示不限</div>
+      </el-form-item>
+      <el-form-item label="日限额">
+        <el-input-number v-model="companyBudgetForm.daily" :min="-1" :precision="2" controls-position="right" style="width:100%" />
+        <div style="font-size:11px;color:var(--el-text-color-placeholder);margin-top:3px">-1 表示不限</div>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="companyBudgetDialogVisible = false">取消</el-button>
+      <el-button type="primary" :loading="companyBudgetSaving" @click="saveCompanyBudget">保存</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { getBudgetContext, getBudgetList } from '@/services/control-plane'
+import { ElMessage } from 'element-plus'
+import { getBudgetContext, getBudgetList, rebuildBudgetCounters, setBudget } from '@/services/control-plane'
 import http from '@/services/http'
 import { useAuthStore } from '@/stores/auth'
 import type { BudgetContextItem, BudgetItem, BudgetScopeType, BudgetView } from '@/types/budget'
@@ -1539,6 +1579,57 @@ function memberRiskRowClass({ row }: { row: EnrichedMember }) {
 }
 
 // ─── 导航 ─────────────────────────────────────────────────────────────────────
+// ─── Redis 计数器重建 ────────────────────────────────────────────────────────
+const rebuildLoading = ref(false)
+
+async function rebuildCounters() {
+  rebuildLoading.value = true
+  try {
+    const result = await rebuildBudgetCounters()
+    ElMessage.success(`重建完成：写入 ${result.keys_written} 个计数器（${result.month_period}）`)
+    await load()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '重建失败')
+  } finally {
+    rebuildLoading.value = false
+  }
+}
+
+// ─── 公司预算池设置 ──────────────────────────────────────────────────────────
+const companyBudgetDialogVisible = ref(false)
+const companyBudgetSaving = ref(false)
+const companyBudgetForm = ref({ amount: 0, weekly: -1, daily: -1 })
+
+function openCompanyBudgetDialog() {
+  const item = companyPoolItem.value
+  companyBudgetForm.value = {
+    amount: item ? item.amount_usd : 0,
+    weekly: item ? item.weekly_amount_usd : -1,
+    daily: item ? item.daily_amount_usd : -1,
+  }
+  companyBudgetDialogVisible.value = true
+}
+
+async function saveCompanyBudget() {
+  companyBudgetSaving.value = true
+  try {
+    await setBudget({
+      scope_type: 'company',
+      scope_id: 'GLOBAL',
+      amount_usd: companyBudgetForm.value.amount,
+      weekly_amount_usd: companyBudgetForm.value.weekly,
+      daily_amount_usd: companyBudgetForm.value.daily,
+    })
+    ElMessage.success('公司预算池已更新')
+    companyBudgetDialogVisible.value = false
+    await load()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '保存失败')
+  } finally {
+    companyBudgetSaving.value = false
+  }
+}
+
 function goOrg(row?: BudgetItem) {
   if (!row) {
     if (auth.effectiveRole === 'dept_admin') {
@@ -1815,6 +1906,28 @@ onMounted(load)
   color: var(--el-text-color-secondary);
   margin-top: 4px;
 }
+.kpi-pool-sub-limits {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.kpi-sub-limit-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+}
+.kpi-sub-limit-label {
+  background: var(--el-fill-color);
+  border-radius: 3px;
+  padding: 1px 5px;
+  color: var(--el-text-color-secondary);
+  flex-shrink: 0;
+}
+.kpi-sub-limit-used { color: var(--el-text-color-secondary); }
+.kpi-sub-limit-slash { color: var(--el-text-color-placeholder); }
+.kpi-sub-limit-amount { color: var(--el-text-color-primary); font-weight: 500; }
 .kpi-dept-count {
   font-size: 11px;
   color: var(--el-text-color-placeholder);

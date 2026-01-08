@@ -16,7 +16,9 @@ export interface BudgetItem {
   weekly_amount_usd: number  // 周限额，-1=不限
   period: string
   enabled: boolean
-  used_usd: number
+  used_usd: number           // 月度已用
+  weekly_used_usd?: number   // 本周已用（Redis 实时）
+  daily_used_usd?: number    // 今日已用（Redis 实时）
   used_ratio: number
   updated_by?: string         // 最后修改人 ID
   updated_by_name?: string    // 最后修改人名称

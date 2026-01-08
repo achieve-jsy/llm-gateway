@@ -866,6 +866,12 @@ export async function setBudgetBatch(items: BudgetSetPayload[]): Promise<{ resul
   return res.data
 }
 
+/** 从 call_logs 重建 Redis 预算计数器（Redis 丢失恢复用） */
+export async function rebuildBudgetCounters(): Promise<{ keys_written: number; month_period: string }> {
+  const res = await http.post<{ result: { keys_written: number; month_period: string } }>('/api/v1/budget/rebuild-counters')
+  return res.data.result
+}
+
 /** 删除成员单独配额，还原为共享部门预算池 */
 export async function deleteMemberBudget(scopeType: string, scopeId: string): Promise<void> {
   await http.delete('/api/v1/budgets', { data: { scope_type: scopeType, scope_id: scopeId } })

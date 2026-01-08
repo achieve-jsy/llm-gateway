@@ -78,7 +78,12 @@ build-web-test:
   stage: build
   image: node:20-alpine
   tags: [docker]
-  retry: 2
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
   variables:
     npm_config_cache: "$CI_PROJECT_DIR/.npm-cache"
   cache:
@@ -89,7 +94,7 @@ build-web-test:
       - .npm-cache/
   script:
     - cd web
-    - npm ci --prefer-offline
+    - npm ci --prefer-offline || { sleep 5; npm ci --prefer-offline; }
     - npm run build
     - tar -czf ../web-dist.tar.gz -C dist .
   artifacts:
@@ -136,7 +141,12 @@ build-web-prod:
   stage: build
   image: node:20-alpine
   tags: [docker]
-  retry: 2
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
   variables:
     npm_config_cache: "$CI_PROJECT_DIR/.npm-cache"
   cache:
@@ -147,7 +157,7 @@ build-web-prod:
       - .npm-cache/
   script:
     - cd web
-    - npm ci --prefer-offline
+    - npm ci --prefer-offline || { sleep 5; npm ci --prefer-offline; }
     - npm run build
     - tar -czf ../web-dist.tar.gz -C dist .
   artifacts:

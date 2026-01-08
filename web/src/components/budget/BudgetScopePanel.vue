@@ -6,7 +6,8 @@
         <div class="summary-title">{{ title }}</div>
         <div class="summary-meta">预算按 USD 计费，月额度为硬限制；周/日额度用于节奏控制。</div>
       </div>
-      <div class="summary-numbers">
+      <!-- 部门视图才在顶部 summary 里显示数字，工作室视图由下方池卡片承载 -->
+      <div v-if="scopeType !== 'studio'" class="summary-numbers">
         <div class="summary-amount">
           <strong>{{ formatUSD(totalUsed, { compact: true }) }}</strong>
           <span>/ {{ formatUSD(totalAmount, { compact: true }) }}</span>
@@ -24,7 +25,8 @@
         <h3>{{ tableTitle }}</h3>
         <p>{{ tableDesc }}</p>
       </div>
-      <el-button :loading="loading" size="small" @click="load">刷新</el-button>
+      <!-- 工作室视图刷新按钮已整合到总额度卡片中 -->
+      <el-button v-if="scopeType !== 'studio'" :loading="loading" size="small" @click="load">刷新</el-button>
     </div>
 
     <div v-if="scopeType === 'dept'" class="pool-grid">
@@ -144,6 +146,32 @@
 
     <!-- 工作室视图：Tab 切换（日常预算 / 服务预算） -->
     <template v-else>
+      <!-- 工作室总额度卡片（含已用/限额/月周日限/调整入口） -->
+      <div class="studio-alloc-card">
+        <div class="studio-alloc-main">
+          <div class="studio-alloc-amounts">
+            <span class="studio-alloc-used">{{ formatUSD(totalUsed, { compact: true }) }}</span>
+            <span class="studio-alloc-sep">/</span>
+            <span class="studio-alloc-total">{{ displayAmount(studioAlloc?.amount_usd ?? -1) }}</span>
+            <el-tag :type="statusType(totalRatio)" size="small" style="margin-left:8px">{{ statusText(totalRatio) }}</el-tag>
+          </div>
+          <el-progress
+            :percentage="Math.min(Math.round(totalRatio * 100), 100)"
+            :stroke-width="6"
+            :color="progressColor(totalRatio)"
+            style="margin-top:6px"
+          />
+          <div class="studio-alloc-limits">
+            <span>周限 {{ displayAmount(studioAlloc?.weekly_amount_usd ?? -1) }}</span>
+            <span>日限 {{ displayAmount(studioAlloc?.daily_amount_usd ?? -1) }}</span>
+          </div>
+        </div>
+        <div class="studio-alloc-actions">
+          <el-button v-if="canEdit" size="small" type="primary" plain @click="openStudioAllocDrawer">调整额度</el-button>
+          <el-button v-else size="small" plain @click="goExpansion(studioAllocPlaceholder)">申请扩容</el-button>
+          <el-button :loading="loading" size="small" @click="load">刷新</el-button>
+        </div>
+      </div>
       <div class="dual-table-section" v-loading="loading">
         <el-tabs v-model="poolTab" class="pool-tabs">
           <el-tab-pane name="daily">
@@ -476,6 +504,30 @@ const deptGroups = computed<DeptGroup[]>(() => {
 const dailyRows = computed(() => displayItems.value.filter(i => i.scope_type === 'dept_daily'))
 const serviceRows = computed(() => displayItems.value.filter(i => i.scope_type === 'dept_service'))
 
+// 工作室自身 allocation（用于总额度卡片）
+const studioAlloc = computed(() => currentItems.value[0] ?? null)
+const studioAllocPlaceholder = computed<BudgetItem>(() => studioAlloc.value ?? {
+  scope_type: 'studio',
+  scope_id: props.scopeId,
+  label: props.title,
+  amount_usd: -1,
+  weekly_amount_usd: -1,
+  daily_amount_usd: -1,
+  used_usd: 0,
+  used_ratio: 0,
+})
+
+function openStudioAllocDrawer() {
+  const item = studioAllocPlaceholder.value
+  editingItem.value = item
+  editForm.value = {
+    amount: item.amount_usd < 0 ? 0 : item.amount_usd,
+    weekly: item.weekly_amount_usd,
+    daily: item.daily_amount_usd,
+  }
+  drawerVisible.value = true
+}
+
 const totalAmount = computed(() => {
   const base = currentItems.value.length ? currentItems.value : displayItems.value
   return base.reduce((sum, item) => sum + Math.max(item.amount_usd || 0, 0), 0)
@@ -681,6 +733,26 @@ watch(() => [props.scopeType, props.scopeId, props.childScopeIds?.join(',')], lo
 /* 按部门分组卡片 */
 .dept-group-list { display: flex; flex-direction: column; gap: 16px; }
 .empty-hint { text-align: center; padding: 32px; color: var(--el-text-color-placeholder); font-size: 13px; }
+
+/* 工作室总额度横向卡片 */
+.studio-alloc-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 12px;
+  background: var(--el-fill-color-blank);
+  margin-bottom: 16px;
+}
+.studio-alloc-main { flex: 1; min-width: 0; }
+.studio-alloc-amounts { display: flex; align-items: baseline; gap: 5px; }
+.studio-alloc-used { font-size: 22px; font-weight: 700; color: var(--el-text-color-primary); }
+.studio-alloc-sep { font-size: 14px; color: var(--el-text-color-secondary); }
+.studio-alloc-total { font-size: 14px; color: var(--el-text-color-secondary); }
+.studio-alloc-limits { display: flex; gap: 14px; margin-top: 6px; font-size: 12px; color: var(--el-text-color-secondary); }
+.studio-alloc-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
 
 /* 双表格布局 */
 .dual-table-section { }

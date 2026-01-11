@@ -171,46 +171,51 @@ function isGroupAvailable(groupName: string): boolean {
 
 async function loadEntitlements() {
   const role = authStore.effectiveRole
-  if (role !== 'studio_admin' && role !== 'dept_admin') return
-  
-  // 从 orgRoles 提取部门/工作室 ID
-  const deptRoles = authStore.orgRoles.filter(r => r.role === 'dept_admin' && r.scope_type === 'dept')
-  myDeptIds.value = deptRoles.map(r => r.scope_id)
-  
-  const studioRole = authStore.orgRoles.find(r => r.role === 'studio_admin' && r.scope_type === 'studio')
-  myStudioId.value = studioRole?.scope_id || ''
-  
-  // 获取所有模型组的授权记录 + open_mode
+
+  // 所有非 admin 用户都需要知道哪些组是 public（普通员工仅靠 open_mode 判断可见性）。
+  // 之前这里对非 studio_admin/dept_admin 直接 return，导致 openModeMap 为空，
+  // 普通员工的 public 组在 group 视角被 isGroupAvailable 全部过滤、显示暂无数据。
   try {
     const res = await groupsApi.listGroups({ page_size: 200 })
     const allGroups = res.data.data ?? []
-    
+
     // 存储所有组的 open_mode
     const newOpenModeMap = new Map<string, string>()
     for (const g of allGroups) {
       newOpenModeMap.set(g.name, g.open_mode)
     }
     openModeMap.value = newOpenModeMap
-    
-    // 只拉取受控组的授权记录
-    const controlledGroups = allGroups.filter(g => g.open_mode === 'controlled' && g.enabled)
-    
-    const entitlementPromises = controlledGroups.map(async g => {
-      try {
-        const entRes = await groupsApi.listEntitlements(g.id)
-        return { groupName: g.name, items: entRes.data.data?.items || [] }
-      } catch {
-        return { groupName: g.name, items: [] }
+
+    // 仅 studio_admin / dept_admin 需要进一步加载受控组授权记录
+    if (role === 'studio_admin' || role === 'dept_admin') {
+      // 从 orgRoles 提取部门/工作室 ID
+      const deptRoles = authStore.orgRoles.filter(r => r.role === 'dept_admin' && r.scope_type === 'dept')
+      myDeptIds.value = deptRoles.map(r => r.scope_id)
+
+      const studioRole = authStore.orgRoles.find(r => r.role === 'studio_admin' && r.scope_type === 'studio')
+      myStudioId.value = studioRole?.scope_id || ''
+
+      // 只拉取受控组的授权记录
+      const controlledGroups = allGroups.filter(g => g.open_mode === 'controlled' && g.enabled)
+
+      const entitlementPromises = controlledGroups.map(async g => {
+        try {
+          const entRes = await groupsApi.listEntitlements(g.id)
+          return { groupName: g.name, items: entRes.data.data?.items || [] }
+        } catch {
+          return { groupName: g.name, items: [] }
+        }
+      })
+
+      const entResults = await Promise.all(entitlementPromises)
+      const newMap = new Map<string, GroupEntitlement[]>()
+      for (const r of entResults) {
+        newMap.set(r.groupName, r.items)
       }
-    })
-    
-    const entResults = await Promise.all(entitlementPromises)
-    const newMap = new Map<string, GroupEntitlement[]>()
-    for (const r of entResults) {
-      newMap.set(r.groupName, r.items)
+      entitlementsMap.value = newMap
     }
-    entitlementsMap.value = newMap
   } catch {
+    openModeMap.value = new Map()
     entitlementsMap.value = new Map()
   }
 }

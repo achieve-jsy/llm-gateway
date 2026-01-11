@@ -632,6 +632,14 @@ func (s *RollupService) QueryMyStats(ctx context.Context, params MyStatsQueryPar
 		selectCols = "model, COUNT(*) AS req_count, COUNT(*) FILTER (WHERE status = 200) AS success_count, " +
 			"SUM(prompt_tokens) AS prompt_tokens, SUM(cached_tokens) AS cached_tokens, " +
 			"SUM(completion_tokens) AS completion_tokens, SUM(est_cost_usd) AS est_cost_usd"
+	case "hour":
+		// 按小时聚合（使用画像/使用节律）。ts 为 UTC，转本地时区后再截断到小时，
+		// 否则"出没时段"会整体偏移 8 小时；stat_date 带时分，前端方能正确解析小时。
+		groupCol = "date_trunc('hour', ts AT TIME ZONE 'Asia/Shanghai')"
+		selectCols = "TO_CHAR(date_trunc('hour', ts AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI') AS stat_date, " +
+			"COUNT(*) AS req_count, COUNT(*) FILTER (WHERE status = 200) AS success_count, " +
+			"SUM(prompt_tokens) AS prompt_tokens, SUM(cached_tokens) AS cached_tokens, " +
+			"SUM(completion_tokens) AS completion_tokens, SUM(est_cost_usd) AS est_cost_usd"
 	default: // day
 		groupCol = "date(ts)"
 		selectCols = "date(ts) AS stat_date, COUNT(*) AS req_count, COUNT(*) FILTER (WHERE status = 200) AS success_count, " +

@@ -110,8 +110,9 @@ type BudgetItem struct {
 // SetBudget 设置/更新某层预算额度。
 // 改额后自动清理该 period 的告警去重记录，使扩容后可再次告警（§H 决策）。
 func (s *BudgetService) SetBudget(ctx context.Context, scopeType, scopeID string, amountUSD, dailyAmountUSD, weeklyAmountUSD float64, createdBy uuid.UUID) error {
-	if amountUSD < 0 {
-		return fmt.Errorf("amount_usd must be >= 0")
+	// -1 表示不限额（与 daily/weekly 语义一致）；< -1 无意义拒绝
+	if amountUSD < -1 {
+		return fmt.Errorf("amount_usd must be >= -1 (-1 means unlimited)")
 	}
 	a := &model.BudgetAllocation{
 		ScopeType:       scopeType,

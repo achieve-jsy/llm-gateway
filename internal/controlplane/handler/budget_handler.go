@@ -215,16 +215,17 @@ func (h *BudgetHandler) Set(c *gin.Context) {
 	}
 
 	var req struct {
-		ScopeType       string  `json:"scope_type" binding:"required"`
-		ScopeID         string  `json:"scope_id" binding:"required"`
-		AmountUSD       float64 `json:"amount_usd" binding:"required"`
-		DailyAmountUSD  float64 `json:"daily_amount_usd"`  // 可选，默认 -1（不限）
-		WeeklyAmountUSD float64 `json:"weekly_amount_usd"` // 可选，默认 -1（不限）
+		ScopeType       string   `json:"scope_type" binding:"required"`
+		ScopeID         string   `json:"scope_id" binding:"required"`
+		AmountUSD       *float64 `json:"amount_usd" binding:"required"` // 指针避免 0 被 required 拦截
+		DailyAmountUSD  float64  `json:"daily_amount_usd"`               // 可选，默认 -1（不限）
+		WeeklyAmountUSD float64  `json:"weekly_amount_usd"`              // 可选，默认 -1（不限）
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	amountUSD := *req.AmountUSD
 	// 未传日/周限额时默认 -1（不限）
 	if req.DailyAmountUSD == 0 {
 		req.DailyAmountUSD = -1
@@ -264,11 +265,11 @@ func (h *BudgetHandler) Set(c *gin.Context) {
 	}
 
 	actorID, _ := uuid.Parse(c.GetString("user_id"))
-	if err := h.svc.SetBudget(c.Request.Context(), req.ScopeType, req.ScopeID, req.AmountUSD, req.DailyAmountUSD, req.WeeklyAmountUSD, actorID); err != nil {
+	if err := h.svc.SetBudget(c.Request.Context(), req.ScopeType, req.ScopeID, amountUSD, req.DailyAmountUSD, req.WeeklyAmountUSD, actorID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "scope_type": req.ScopeType, "scope_id": req.ScopeID, "amount_usd": req.AmountUSD, "daily_amount_usd": req.DailyAmountUSD, "weekly_amount_usd": req.WeeklyAmountUSD})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "scope_type": req.ScopeType, "scope_id": req.ScopeID, "amount_usd": amountUSD, "daily_amount_usd": req.DailyAmountUSD, "weekly_amount_usd": req.WeeklyAmountUSD})
 }
 
 // MyBudget GET /api/v1/my/budget

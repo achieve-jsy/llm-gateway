@@ -60,19 +60,14 @@ func (h *ResponsesHandler) Handle(c *gin.Context) {
 	c.Set("model", req.Model)
 	originalModel := req.Model
 
-	// v0.7: 预算预扣
+	// v0.9: 预算检查（事后记账模式）
 	if h.budgetDeps != nil {
-		promptChars := estimateResponsesInputChars(&req)
-		maxTokens := 0
-		if req.MaxOutputTokens != nil {
-			maxTokens = *req.MaxOutputTokens
-		}
-		if _, err := middleware.Reserve(c, h.budgetDeps, req.Model, maxTokens, promptChars); err != nil {
+		if _, err := middleware.Reserve(c, h.budgetDeps); err != nil {
 			if be, ok := err.(*middleware.BudgetExceededError); ok {
 				be.WriteHTTPResponse(c)
 				return
 			}
-			slog.Warn("responses: budget reserve failed", "model", req.Model, "error", err)
+			slog.Warn("responses: budget check failed", "model", req.Model, "error", err)
 		}
 	}
 

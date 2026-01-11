@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	gwmodel "github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/gin-gonic/gin"
@@ -20,22 +19,9 @@ import (
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fakes
+// Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-// fakePricingResolver 按模型名返回固定价格，未配置返回 nil 触发 fallback
-type fakePricingResolver struct {
-	prices map[string]*core.ModelPricing
-}
-
-func (f *fakePricingResolver) GetModelPricing(model string) *core.ModelPricing {
-	if f.prices == nil {
-		return nil
-	}
-	return f.prices[model]
-}
-
-// newGinCtx 创建带 gin.Router 的测试 Context，可 Set 和 Get 值
 func newGinCtx() *gin.Context {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
@@ -44,8 +30,6 @@ func newGinCtx() *gin.Context {
 	return c
 }
 
-// startMiniredis 启动内存 Redis，返回 (client, server)。
-// 自动 cleanup。
 func startMiniredis(t *testing.T) (*redis.Client, *miniredis.Miniredis) {
 	t.Helper()
 	s, err := miniredis.Run()
@@ -54,490 +38,440 @@ func startMiniredis(t *testing.T) (*redis.Client, *miniredis.Miniredis) {
 	return redis.NewClient(&redis.Options{Addr: s.Addr()}), s
 }
 
-// seedBudgetUsed 预先在 Redis 中设置某 scope 的已用金额，用于测超额场景
-func seedBudgetUsed(rdb *redis.Client, scopeType, scopeID, period string, used float64) {
+func currentMonthPeriod() string {
+	parts := strings.Split(time.Now().Format("2006-01-02"), "-")
+	return parts[0] + "-" + parts[1]
+}
+
+func currentDayPeriod() string {
+	return time.Now().Format("2006-01-02")
+}
+
+func currentWeekPeriod() string {
+	year, week := time.Now().ISOWeek()
+	return strconv.Itoa(year) + "-W" + weekStr(week)
+}
+
+func weekStr(w int) string {
+	if w < 10 {
+		return "0" + strconv.Itoa(w)
+	}
+	return strconv.Itoa(w)
+}
+
+func setUsed(rdb *redis.Client, scopeType, scopeID, period string, used float64) {
 	key := "budget:used:" + scopeType + ":" + scopeID + ":" + period
 	rdb.Set(context.Background(), key, used, 0)
 }
 
-// currentBudgetPeriod 当前 period（YYYY-MM）和测试一致
-func currentBudgetPeriod() string {
-	return strings.Split(time.Now().Format("2006-01-02"), "-")[0] + "-" + strings.Split(time.Now().Format("2006-01-02"), "-")[1]
+func getUsed(mr *miniredis.Miniredis, scopeType, scopeID, period string) float64 {
+	v, _ := mr.Get("budget:used:" + scopeType + ":" + scopeID + ":" + period)
+	f, _ := strconv.ParseFloat(v, 64)
+	return f
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tests: Reserve — 边界条件
+// Tests: Reserve — 跳过场景
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TestReserve_NilDeps 验证 deps=nil 时返回 (nil, nil)，跳过预扣。
 func TestReserve_NilDeps(t *testing.T) {
-	c := newGinCtx()
-
-	result, err := middleware.Reserve(c, nil, "gpt-4o", 1000, 1000)
-
+	result, err := middleware.Reserve(newGinCtx(), nil)
 	assert.Nil(t, result)
 	assert.NoError(t, err)
 }
 
-// TestReserve_NilRDB 验证 deps.RDB=nil 时跳过预扣。
 func TestReserve_NilRDB(t *testing.T) {
 	c := newGinCtx()
 	c.Set("identity", &gwmodel.UserIdentity{BudgetChain: []gwmodel.BudgetScope{
 		{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 100, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "s1"},
 	}})
-
-	deps := &middleware.BudgetDeps{RDB: nil}
-	result, err := middleware.Reserve(c, deps, "gpt-4o", 1000, 1000)
-
+	result, err := middleware.Reserve(c, &middleware.BudgetDeps{RDB: nil})
 	assert.Nil(t, result)
 	assert.NoError(t, err)
 }
 
-// TestReserve_NoIdentity 验证 identity 不存在时跳过预扣。
 func TestReserve_NoIdentity(t *testing.T) {
-	c := newGinCtx()
-	// note: 不 Set identity
-
 	rdb, _ := startMiniredis(t)
-	deps := &middleware.BudgetDeps{RDB: rdb}
-
-	result, err := middleware.Reserve(c, deps, "gpt-4o", 1000, 1000)
-
+	result, err := middleware.Reserve(newGinCtx(), &middleware.BudgetDeps{RDB: rdb})
 	assert.Nil(t, result)
 	assert.NoError(t, err)
 }
 
-// TestReserve_EmptyBudgetChain 验证 BudgetChain 为空时跳过预扣（旧快照兼容）。
 func TestReserve_EmptyBudgetChain(t *testing.T) {
+	rdb, _ := startMiniredis(t)
 	c := newGinCtx()
 	c.Set("identity", &gwmodel.UserIdentity{BudgetChain: []gwmodel.BudgetScope{}})
-
-	rdb, _ := startMiniredis(t)
-	deps := &middleware.BudgetDeps{RDB: rdb}
-
-	result, err := middleware.Reserve(c, deps, "gpt-4o", 1000, 1000)
-
+	result, err := middleware.Reserve(c, &middleware.BudgetDeps{RDB: rdb})
 	assert.Nil(t, result)
 	assert.NoError(t, err)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tests: Reserve — 成功路径
+// Tests: Reserve — 通过场景
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TestReserve_Success 验证金线路径：预算充足时
-// - Redis 中对应 scope 的 used 值正确增加
-// - ctx 中设置了 budget_keys 和 budget_est_cost
-// - 返回 (result, nil)
+// TestReserve_Success 预算充足时检查通过，ctx 设置 budget_keys 和 budget_scope_args。
 func TestReserve_Success(t *testing.T) {
+	rdb, _ := startMiniredis(t)
 	c := newGinCtx()
 	c.Set("identity", &gwmodel.UserIdentity{
 		KeyID: "key-001",
 		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "dept_daily", ScopeID: "dept-d1", AmountUSD: 500.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "研发部日常"},
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 2000.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"},
+			{ScopeType: "dept_daily", ScopeID: "dept-1", AmountUSD: 500, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "研发部"},
+			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 2000, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室"},
 		},
 	})
 
-	rdb, mr := startMiniredis(t)
-	// 使用 fallback pricing（$0.05/1K tokens），估算：
-	// prompt ~250 tokens (1000 chars / 4) → input: 250 * 0.05/1000 = 0.0125 USD
-	// max 1000 → output: 1000 * 0.05/1000 = 0.05 USD
-	// 合计 est_cost ≈ 0.0625 USD
-	deps := &middleware.BudgetDeps{RDB: rdb, FallbackOutputTokens: 2048}
-
-	result, err := middleware.Reserve(c, deps, "gpt-4o", 1000 /*max_tokens*/, 1000 /*promptChars*/)
+	result, err := middleware.Reserve(c, &middleware.BudgetDeps{RDB: rdb})
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.NotEmpty(t, result.Keys)
-	// 每个 scope 有 3 个 key（月/周/日），2 个 scope → 6 个 key
-	assert.Len(t, result.Keys, 6, "应有 6 个预算 key（2 scope × 3 维度）")
-	assert.InDelta(t, 0.0625, result.EstCost, 0.0001)
+	// 2 scope × 3 维度 = 6 keys
+	assert.Len(t, result.Keys, 6)
 
-	// ctx 设置了预算信息
+	// ctx 已设置
 	keys, ok := c.Get("budget_keys")
 	assert.True(t, ok)
 	assert.Equal(t, result.Keys, keys)
 
-	est, ok := c.Get("budget_est_cost")
+	args, ok := c.Get("budget_scope_args")
 	assert.True(t, ok)
-	assert.Equal(t, result.EstCost, est)
-
-	// Redis 中 used 值正确增加
-	period := currentBudgetPeriod()
-	deptUsedStr, _ := mr.Get("budget:used:dept_daily:dept-d1:" + period)
-	deptUsed, _ := strconv.ParseFloat(deptUsedStr, 64)
-	assert.InDelta(t, 0.0625, deptUsed, 0.0001)
-
-	studioUsedStr, _ := mr.Get("budget:used:studio:s-1:" + period)
-	studioUsed, _ := strconv.ParseFloat(studioUsedStr, 64)
-	assert.InDelta(t, 0.0625, studioUsed, 0.0001)
+	assert.NotEmpty(t, args)
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Tests: Reserve — 超额场景
-// ─────────────────────────────────────────────────────────────────────────────
-
-// TestReserve_Exceeded_SingleLayer 验证任一层超额时返回 BudgetExceededError。
-func TestReserve_Exceeded_SingleLayer(t *testing.T) {
-	c := newGinCtx()
-	c.Set("identity", &gwmodel.UserIdentity{
-		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "dept_daily", ScopeID: "dept-d1", AmountUSD: 0.01, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "研发部日常"}, // 月额很小，必超额
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 2000.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"},
-		},
-	})
-
+// TestReserve_UnlimitedScope 全维度 -1（不限额）时始终通过。
+func TestReserve_UnlimitedScope(t *testing.T) {
 	rdb, _ := startMiniredis(t)
-	deps := &middleware.BudgetDeps{RDB: rdb, FallbackOutputTokens: 2048}
-
-	result, err := middleware.Reserve(c, deps, "gpt-4o", 1000, 1000)
-
-	assert.Nil(t, result)
-	require.Error(t, err)
-	beErr, ok := err.(*middleware.BudgetExceededError)
-	require.True(t, ok, "err 应为 *BudgetExceededError")
-	// Label 格式："{层名} [{维度}限额]"，只需断言包含层名即可
-	assert.Contains(t, beErr.Label, "研发部日常")
-	assert.Contains(t, beErr.Message, "研发部日常")
-}
-
-// TestReserve_Exceeded_SecondLayer 验证第二层超额也正确返回（Lua 按序检查）。
-func TestReserve_Exceeded_SecondLayer(t *testing.T) {
 	c := newGinCtx()
 	c.Set("identity", &gwmodel.UserIdentity{
 		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "dept_daily", ScopeID: "dept-d1", AmountUSD: 2000.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "研发部日常"}, // 充裕
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 0.01, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"},             // 月额几乎空
+			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: -1, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室"},
 		},
 	})
-
-	rdb, _ := startMiniredis(t)
-	deps := &middleware.BudgetDeps{RDB: rdb, FallbackOutputTokens: 2048}
-
-	result, err := middleware.Reserve(c, deps, "gpt-4o", 1000, 1000)
-
-	assert.Nil(t, result)
-	require.Error(t, err)
-	beErr, ok := err.(*middleware.BudgetExceededError)
-	require.True(t, ok)
-	assert.Contains(t, beErr.Label, "工作室1", "应该报告 studio 层超额，不是 dept 层")
-}
-
-// TestReserve_Exceeded_PartialExistingUsage 验证已有部分用量时仍能正确判断。
-func TestReserve_Exceeded_PartialExistingUsage(t *testing.T) {
-	c := newGinCtx()
-	c.Set("identity", &gwmodel.UserIdentity{
-		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "dept_daily", ScopeID: "dept-d1", AmountUSD: 1.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "研发部日常"},
-		},
-	})
-
-	rdb, mr := startMiniredis(t)
-	// 预先设 0.99 USD 已用，再加 ~0.06 就超
-	period := currentBudgetPeriod()
-	mr.Set("budget:used:dept_daily:dept-d1:"+period, "0.99")
-
-	deps := &middleware.BudgetDeps{RDB: rdb, FallbackOutputTokens: 2048}
-
-	result, err := middleware.Reserve(c, deps, "gpt-4o", 1000, 1000)
-
-	assert.Nil(t, result)
-	require.Error(t, err)
-	_, ok := err.(*middleware.BudgetExceededError)
-	assert.True(t, ok, "应触发超额（0.99 + 0.06 > 1.0）")
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Tests: Reserve — 单请求成本上限
-// ─────────────────────────────────────────────────────────────────────────────
-
-// TestReserve_SingleRequestLimit 验证 MaxSingleRequestUSD 生效。
-func TestReserve_SingleRequestLimit(t *testing.T) {
-	c := newGinCtx()
-	c.Set("identity", &gwmodel.UserIdentity{
-		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"}, // 充足
-		},
-	})
-
-	rdb, _ := startMiniredis(t)
-	deps := &middleware.BudgetDeps{
-		RDB:                 rdb,
-		FallbackOutputTokens: 2048,
-		MaxSingleRequestUSD: 0.001, // 极小
-	}
-
-	result, err := middleware.Reserve(c, deps, "gpt-4o", 1000, 1000)
-
-	assert.Nil(t, result)
-	require.Error(t, err)
-	beErr, ok := err.(*middleware.BudgetExceededError)
-	require.True(t, ok)
-	assert.Equal(t, "single_request_limit", beErr.Label)
-}
-
-// TestReserve_SingleRequestLimit_ZeroMeansUnlimited 验证 MaxSingleRequestUSD=0
-// 表示不限（默认行为）。
-func TestReserve_SingleRequestLimit_ZeroMeansUnlimited(t *testing.T) {
-	c := newGinCtx()
-	c.Set("identity", &gwmodel.UserIdentity{
-		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"},
-		},
-	})
-
-	rdb, _ := startMiniredis(t)
-	deps := &middleware.BudgetDeps{
-		RDB:                 rdb,
-		FallbackOutputTokens: 2048,
-		MaxSingleRequestUSD: 0, // 不限
-	}
-
-	// 即使 est_cost=0.125 USD 远大于 0，也应正常预扣
-	result, err := middleware.Reserve(c, deps, "gpt-4o", 1000, 1000)
-
+	result, err := middleware.Reserve(c, &middleware.BudgetDeps{RDB: rdb})
 	require.NoError(t, err)
 	require.NotNil(t, result)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: Reserve — 超额场景（v0.9：used >= limit 即拒绝）
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestReserve_Exceeded_MonthlyLimit 月累计已达上限时拒绝。
+func TestReserve_Exceeded_MonthlyLimit(t *testing.T) {
+	rdb, _ := startMiniredis(t)
+	period := currentMonthPeriod()
+	// 预设已用 = 500（等于月限额），应拒绝
+	setUsed(rdb, "dept_daily", "dept-1", period, 500)
+
+	c := newGinCtx()
+	c.Set("identity", &gwmodel.UserIdentity{
+		BudgetChain: []gwmodel.BudgetScope{
+			{ScopeType: "dept_daily", ScopeID: "dept-1", AmountUSD: 500, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "研发部"},
+		},
+	})
+	result, err := middleware.Reserve(c, &middleware.BudgetDeps{RDB: rdb})
+
+	assert.Nil(t, result)
+	require.Error(t, err)
+	beErr, ok := err.(*middleware.BudgetExceededError)
+	require.True(t, ok)
+	assert.Contains(t, beErr.Label, "研发部")
+	assert.Contains(t, beErr.Label, "月限额")
+}
+
+// TestReserve_Exceeded_DailyLimit 日累计已达上限时拒绝。
+func TestReserve_Exceeded_DailyLimit(t *testing.T) {
+	rdb, _ := startMiniredis(t)
+	day := currentDayPeriod()
+	setUsed(rdb, "dept_daily", "dept-1", day, 50)
+
+	c := newGinCtx()
+	c.Set("identity", &gwmodel.UserIdentity{
+		BudgetChain: []gwmodel.BudgetScope{
+			{ScopeType: "dept_daily", ScopeID: "dept-1", AmountUSD: -1, WeeklyAmountUSD: -1, DailyAmountUSD: 50, Label: "研发部"},
+		},
+	})
+	result, err := middleware.Reserve(c, &middleware.BudgetDeps{RDB: rdb})
+
+	assert.Nil(t, result)
+	require.Error(t, err)
+	beErr, ok := err.(*middleware.BudgetExceededError)
+	require.True(t, ok)
+	assert.Contains(t, beErr.Label, "日限额")
+}
+
+// TestReserve_Exceeded_WeeklyLimit 周累计已达上限时拒绝。
+func TestReserve_Exceeded_WeeklyLimit(t *testing.T) {
+	rdb, _ := startMiniredis(t)
+	year, week := time.Now().ISOWeek()
+	weekPeriod := strconv.Itoa(year) + "-W" + weekStr(week)
+	setUsed(rdb, "studio", "s-1", weekPeriod, 200)
+
+	c := newGinCtx()
+	c.Set("identity", &gwmodel.UserIdentity{
+		BudgetChain: []gwmodel.BudgetScope{
+			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: -1, WeeklyAmountUSD: 200, DailyAmountUSD: -1, Label: "工作室"},
+		},
+	})
+	result, err := middleware.Reserve(c, &middleware.BudgetDeps{RDB: rdb})
+
+	assert.Nil(t, result)
+	require.Error(t, err)
+	beErr, ok := err.(*middleware.BudgetExceededError)
+	require.True(t, ok)
+	assert.Contains(t, beErr.Label, "周限额")
+}
+
+// TestReserve_Exceeded_SecondLayer 第一层充足、第二层超限时报告第二层。
+func TestReserve_Exceeded_SecondLayer(t *testing.T) {
+	rdb, _ := startMiniredis(t)
+	period := currentMonthPeriod()
+	setUsed(rdb, "studio", "s-1", period, 5000) // 第二层超限
+
+	c := newGinCtx()
+	c.Set("identity", &gwmodel.UserIdentity{
+		BudgetChain: []gwmodel.BudgetScope{
+			{ScopeType: "dept_daily", ScopeID: "dept-1", AmountUSD: 500, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "研发部"},
+			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 5000, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室"},
+		},
+	})
+	result, err := middleware.Reserve(c, &middleware.BudgetDeps{RDB: rdb})
+
+	assert.Nil(t, result)
+	require.Error(t, err)
+	beErr, ok := err.(*middleware.BudgetExceededError)
+	require.True(t, ok)
+	assert.Contains(t, beErr.Label, "工作室", "应报告 studio 层超额")
+}
+
+// TestReserve_BelowLimit_Passes 已用接近但未达上限时通过。
+func TestReserve_BelowLimit_Passes(t *testing.T) {
+	rdb, _ := startMiniredis(t)
+	period := currentMonthPeriod()
+	setUsed(rdb, "dept_daily", "dept-1", period, 499.99)
+
+	c := newGinCtx()
+	c.Set("identity", &gwmodel.UserIdentity{
+		BudgetChain: []gwmodel.BudgetScope{
+			{ScopeType: "dept_daily", ScopeID: "dept-1", AmountUSD: 500, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "研发部"},
+		},
+	})
+	result, err := middleware.Reserve(c, &middleware.BudgetDeps{RDB: rdb})
+
+	require.NoError(t, err)
+	require.NotNil(t, result, "499.99 < 500，应通过")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests: Reserve — fail-open
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TestReserve_RedisFailure_FailOpen 验证 Redis 不可用时 fail-open：
-// - 返回 nil, nil
-// - ctx 设置 budget_skipped=true
 func TestReserve_RedisFailure_FailOpen(t *testing.T) {
+	rdb, mr := startMiniredis(t)
+	mr.Close() // 模拟 Redis 不可用
+
 	c := newGinCtx()
 	c.Set("identity", &gwmodel.UserIdentity{
 		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"},
+			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 100, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室"},
 		},
 	})
-
-	rdb, mr := startMiniredis(t)
-	// 关闭 Redis 模拟故障
-	mr.Close()
-
-	deps := &middleware.BudgetDeps{RDB: rdb, FallbackOutputTokens: 2048}
-
-	result, err := middleware.Reserve(c, deps, "gpt-4o", 1000, 1000)
+	result, err := middleware.Reserve(c, &middleware.BudgetDeps{RDB: rdb})
 
 	assert.Nil(t, result)
-	assert.NoError(t, err, "Redis fail 应 fail-open，不返回错误")
+	assert.NoError(t, err, "Redis 故障应 fail-open，不返回错误")
 
-	// ctx 标记 budget_skipped
 	skipped, ok := c.Get("budget_skipped")
-	assert.True(t, ok, "应设置 budget_skipped")
+	assert.True(t, ok)
 	assert.Equal(t, true, skipped)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tests: estimateCost (私有，但通过 Reserve 间接测)
+// Tests: BudgetAdd — 事后累加
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TestReserve_CustomPricing 验证自定义 PricingResolver 覆盖 fallback。
-func TestReserve_CustomPricing(t *testing.T) {
-	c := newGinCtx()
-	c.Set("identity", &gwmodel.UserIdentity{
-		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"},
-		},
-	})
-
+// TestBudgetAdd_Success 验证 BudgetAdd 正确累加真实成本到月/周/日计数器，并设 TTL。
+func TestBudgetAdd_Success(t *testing.T) {
 	rdb, mr := startMiniredis(t)
-	// 自定义 pricing: input $0.01/1K, output $0.02/1K（比 fallback 低）
-	inputPrice := 0.01
-	outputPrice := 0.02
-	deps := &middleware.BudgetDeps{
-		RDB: rdb,
-		Pricing: &fakePricingResolver{
-			prices: map[string]*core.ModelPricing{
-				"gpt-4o": {InputPerMtok: &inputPrice, OutputPerMtok: &outputPrice},
-			},
-		},
-		FallbackOutputTokens: 2048,
+	period := currentMonthPeriod()
+	day := currentDayPeriod()
+	year, week := time.Now().ISOWeek()
+	weekPeriod := strconv.Itoa(year) + "-W" + weekStr(week)
+
+	keys := []string{
+		"budget:used:dept_daily:dept-1:" + period,
+		"budget:used:dept_daily:dept-1:" + weekPeriod,
+		"budget:used:dept_daily:dept-1:" + day,
 	}
+	// scopeArgs: [monthly_amount, weekly_amount, daily_amount, label]
+	scopeArgs := []interface{}{500.0, -1.0, 50.0, "研发部"}
 
-	result, err := middleware.Reserve(c, deps, "gpt-4o", 1000 /*max_tokens*/, 4000 /*promptChars*/)
+	middleware.BudgetAdd(context.Background(), rdb, keys, scopeArgs, 0.15)
 
-	require.NoError(t, err)
-	require.NotNil(t, result)
+	// 月 key 应累加（monthly_amount=500 >= 0）
+	monthUsed := getUsed(mr, "dept_daily", "dept-1", period)
+	assert.InDelta(t, 0.15, monthUsed, 0.0001)
 
-	// 用自定义价格验证：
-	// prompt 4000 chars / 4 = 1000 tokens, × 0.01/1000 = 0.01 USD
-	// output 1000 tokens × 0.02/1000 = 0.02 USD
-	// 合计 0.03 USD
-	assert.InDelta(t, 0.03, result.EstCost, 0.0001, "应使用自定义价格 $0.01/$0.02，而非 fallback")
+	// 周 key 不应累加（weekly_amount=-1 < 0）
+	weekUsed := getUsed(mr, "dept_daily", "dept-1", weekPeriod)
+	assert.InDelta(t, 0.0, weekUsed, 0.0001, "weekly_amount=-1，不应累加")
 
-	period := currentBudgetPeriod()
-	usedStr, _ := mr.Get("budget:used:studio:s-1:" + period)
-	used, _ := strconv.ParseFloat(usedStr, 64)
-	assert.InDelta(t, 0.03, used, 0.0001)
+	// 日 key 应累加（daily_amount=50 >= 0）
+	dayUsed := getUsed(mr, "dept_daily", "dept-1", day)
+	assert.InDelta(t, 0.15, dayUsed, 0.0001)
 }
 
-// TestReserve_PricingReturnsNil_UsesFallback 验证 Pricing 返回 nil 时回退到 fallback。
-func TestReserve_PricingReturnsNil_UsesFallback(t *testing.T) {
-	c := newGinCtx()
-	c.Set("identity", &gwmodel.UserIdentity{
-		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"},
-		},
-	})
-
-	rdb, _ := startMiniredis(t)
-	deps := &middleware.BudgetDeps{
-		RDB:                  rdb,
-		Pricing:              &fakePricingResolver{prices: nil}, // 返回 nil
-		FallbackOutputTokens: 2048,
-	}
-
-	result, err := middleware.Reserve(c, deps, "unknown-model", 1000, 1000)
-
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	// fallback 0.05/1K → 和 TestReserve_Success 一致
-	assert.InDelta(t, 0.0625, result.EstCost, 0.0001)
-}
-
-// TestReserve_UnlimitedScope 验证 AmountUSD/WeeklyAmountUSD/DailyAmountUSD 均为 -1
-// 时（全维度不限额）不触发超额。
-func TestReserve_UnlimitedScope(t *testing.T) {
-	c := newGinCtx()
-	c.Set("identity", &gwmodel.UserIdentity{
-		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: -1.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"}, // 全维度无限制
-		},
-	})
-
-	rdb, _ := startMiniredis(t)
-	deps := &middleware.BudgetDeps{RDB: rdb, FallbackOutputTokens: 2048}
-
-	// 即使 est_cost 很大，AmountUSD < 0 应该不触发超额
-	result, err := middleware.Reserve(c, deps, "gpt-4o", 100000, 1000000)
-
-	require.NoError(t, err, "AmountUSD=-1 应允许任意成本")
-	require.NotNil(t, result)
-}
-
-// TestReserve_DailyLimitExceeded 验证日限额触发（AmountUSD=-1 不限月，但 DailyAmountUSD 很小）。
-func TestReserve_DailyLimitExceeded(t *testing.T) {
-	c := newGinCtx()
-	c.Set("identity", &gwmodel.UserIdentity{
-		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "dept_daily", ScopeID: "dept-d1", AmountUSD: -1, WeeklyAmountUSD: -1, DailyAmountUSD: 0.01, Label: "研发部日常"},
-		},
-	})
-	rdb, _ := startMiniredis(t)
-	deps := &middleware.BudgetDeps{RDB: rdb, FallbackOutputTokens: 2048}
-
-	result, err := middleware.Reserve(c, deps, "gpt-4o", 1000, 1000)
-
-	assert.Nil(t, result)
-	require.Error(t, err)
-	beErr, ok := err.(*middleware.BudgetExceededError)
-	require.True(t, ok)
-	assert.Contains(t, beErr.Label, "研发部日常")
-	assert.Contains(t, beErr.Label, "日限额")
-}
-
-// TestReserve_WeeklyLimitExceeded 验证周限额触发（月/日不限，但 WeeklyAmountUSD 很小）。
-func TestReserve_WeeklyLimitExceeded(t *testing.T) {
-	c := newGinCtx()
-	c.Set("identity", &gwmodel.UserIdentity{
-		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: -1, WeeklyAmountUSD: 0.01, DailyAmountUSD: -1, Label: "工作室1"},
-		},
-	})
-	rdb, _ := startMiniredis(t)
-	deps := &middleware.BudgetDeps{RDB: rdb, FallbackOutputTokens: 2048}
-
-	result, err := middleware.Reserve(c, deps, "gpt-4o", 1000, 1000)
-
-	assert.Nil(t, result)
-	require.Error(t, err)
-	beErr, ok := err.(*middleware.BudgetExceededError)
-	require.True(t, ok)
-	assert.Contains(t, beErr.Label, "工作室1")
-	assert.Contains(t, beErr.Label, "周限额")
-}
-
-// TestReserve_ZeroEstCost_Skips 验证估算成本为 0 时跳过预扣（避免 Redis 无谓操作）。
-func TestReserve_ZeroEstCost_Skips(t *testing.T) {
-	c := newGinCtx()
-	c.Set("identity", &gwmodel.UserIdentity{
-		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"},
-		},
-	})
-
+// TestBudgetAdd_Accumulates 多次调用累加。
+func TestBudgetAdd_Accumulates(t *testing.T) {
 	rdb, mr := startMiniredis(t)
-	deps := &middleware.BudgetDeps{RDB: rdb, FallbackOutputTokens: 2048}
+	period := currentMonthPeriod()
+	day := currentDayPeriod()
+	year, week := time.Now().ISOWeek()
+	weekPeriod := strconv.Itoa(year) + "-W" + weekStr(week)
 
-	// 0 maxTokens + 0 promptChars → est ≈ 0
-	// 但 FallbackOutputTokens 默认 2048 会产生 output 成本，所以这里设为 0
-	deps.FallbackOutputTokens = 0
+	keys := []string{
+		"budget:used:studio:s-1:" + period,
+		"budget:used:studio:s-1:" + weekPeriod,
+		"budget:used:studio:s-1:" + day,
+	}
+	scopeArgs := []interface{}{2000.0, 500.0, 100.0, "工作室"}
 
-	result, err := middleware.Reserve(c, deps, "gpt-4o", 0 /*maxTokens*/, 0 /*promptChars*/)
+	middleware.BudgetAdd(context.Background(), rdb, keys, scopeArgs, 1.0)
+	middleware.BudgetAdd(context.Background(), rdb, keys, scopeArgs, 2.5)
+	middleware.BudgetAdd(context.Background(), rdb, keys, scopeArgs, 0.3)
 
-	// 由于 fallback 默认 2048 输出，cost 不为 0，但若 FallbackOutputTokens=0 且 promptChars=0，应有极小 output 成本
-	// 实际代码中 maxTokens<=0 时会再用一次默认 2048，所以 cost 仍 > 0
-	// 让我用更直接的测试：传入非零但很小的值
-	_ = result
-	_ = err
-	_ = mr
+	monthUsed := getUsed(mr, "studio", "s-1", period)
+	assert.InDelta(t, 3.8, monthUsed, 0.0001, "三次累加应为 3.8")
 }
 
-// TestReserve_FallbackDefaultOutputTokens 验证 maxTokens<=0 时使用 FallbackOutputTokens。
-func TestReserve_FallbackDefaultOutputTokens(t *testing.T) {
+// TestBudgetAdd_ZeroCost_NoOp 成本为 0 时不操作 Redis。
+func TestBudgetAdd_ZeroCost_NoOp(t *testing.T) {
+	rdb, mr := startMiniredis(t)
+	period := currentMonthPeriod()
+	day := currentDayPeriod()
+	year, week := time.Now().ISOWeek()
+	weekPeriod := strconv.Itoa(year) + "-W" + weekStr(week)
+
+	keys := []string{
+		"budget:used:studio:s-1:" + period,
+		"budget:used:studio:s-1:" + weekPeriod,
+		"budget:used:studio:s-1:" + day,
+	}
+	middleware.BudgetAdd(context.Background(), rdb, keys, []interface{}{1000.0, -1.0, -1.0, "工作室"}, 0)
+
+	v, _ := mr.Get("budget:used:studio:s-1:" + period)
+	assert.Empty(t, v, "cost=0 时不应写 Redis")
+}
+
+// TestBudgetAdd_NilRDB_Safe nil Redis 不 panic。
+func TestBudgetAdd_NilRDB_Safe(t *testing.T) {
+	assert.NotPanics(t, func() {
+		middleware.BudgetAdd(context.Background(), nil, []string{"k"}, nil, 0.5)
+	})
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: Reserve + BudgetAdd 端到端
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestReserve_ThenAdd_CorrectFlow 验证完整流程：检查通过 → 请求成功 → 累加真实成本。
+func TestReserve_ThenAdd_CorrectFlow(t *testing.T) {
+	rdb, mr := startMiniredis(t)
+	period := currentMonthPeriod()
+	day := currentDayPeriod()
+	year, week := time.Now().ISOWeek()
+	weekPeriod := strconv.Itoa(year) + "-W" + weekStr(week)
+	_ = weekPeriod
+
 	c := newGinCtx()
 	c.Set("identity", &gwmodel.UserIdentity{
 		BudgetChain: []gwmodel.BudgetScope{
-			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 10000.0, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室1"},
+			{ScopeType: "dept_daily", ScopeID: "dept-1", AmountUSD: 500, WeeklyAmountUSD: -1, DailyAmountUSD: 50, Label: "研发部"},
 		},
 	})
 
-	rdb, _ := startMiniredis(t)
-	deps := &middleware.BudgetDeps{
-		RDB:                  rdb,
-		FallbackOutputTokens: 4096, // 自定义 fallback
-	}
-
-	// maxTokens=-1（未传），应使用 4096 作为 output tokens
-	result, err := middleware.Reserve(c, deps, "gpt-4o", -1 /*max_tokens*/, 0 /*promptChars*/)
-
+	// 1. 检查（已用 0，未超限）
+	result, err := middleware.Reserve(c, &middleware.BudgetDeps{RDB: rdb})
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	// fallback pricing 0.05/1K * 4096 / 1000 = 0.2048 USD
-	assert.InDelta(t, 0.2048, result.EstCost, 0.0001)
+
+	// 2. 请求成功，累加真实成本 $0.12
+	argsVal, _ := c.Get(middleware.CtxKeyBudgetScopeArgs)
+	scopeArgs := argsVal.([]interface{})
+	middleware.BudgetAdd(context.Background(), rdb, result.Keys, scopeArgs, 0.12)
+
+	// 3. 验证月/日 counter 均为 0.12
+	assert.InDelta(t, 0.12, getUsed(mr, "dept_daily", "dept-1", period), 0.0001)
+	assert.InDelta(t, 0.12, getUsed(mr, "dept_daily", "dept-1", day), 0.0001)
+}
+
+// TestReserve_ConcurrentWindow 验证并发窗口：两个请求同时通过检查，
+// 各自累加后总量可能超限（软超限，对内部场景可接受）。
+func TestReserve_ConcurrentWindow(t *testing.T) {
+	rdb, mr := startMiniredis(t)
+	period := currentMonthPeriod()
+	// 初始已用 490，限额 500，单次成本 8，两个并发请求各自看到 490 < 500 → 都通过
+	setUsed(rdb, "studio", "s-1", period, 490)
+
+	identity := &gwmodel.UserIdentity{
+		BudgetChain: []gwmodel.BudgetScope{
+			{ScopeType: "studio", ScopeID: "s-1", AmountUSD: 500, WeeklyAmountUSD: -1, DailyAmountUSD: -1, Label: "工作室"},
+		},
+	}
+
+	c1 := newGinCtx()
+	c1.Set("identity", identity)
+	c2 := newGinCtx()
+	c2.Set("identity", identity)
+
+	deps := &middleware.BudgetDeps{RDB: rdb}
+	r1, err1 := middleware.Reserve(c1, deps)
+	r2, err2 := middleware.Reserve(c2, deps)
+
+	// 两个请求都通过（490 < 500）
+	require.NoError(t, err1)
+	require.NoError(t, err2)
+	require.NotNil(t, r1)
+	require.NotNil(t, r2)
+
+	// 累加各自真实成本（8+8=16）
+	args := []interface{}{500.0, -1.0, -1.0, "工作室"}
+	day := currentDayPeriod()
+	year, week := time.Now().ISOWeek()
+	weekPeriod := strconv.Itoa(year) + "-W" + weekStr(week)
+	keys := []string{
+		"budget:used:studio:s-1:" + period,
+		"budget:used:studio:s-1:" + weekPeriod,
+		"budget:used:studio:s-1:" + day,
+	}
+	middleware.BudgetAdd(context.Background(), rdb, keys, args, 8)
+	middleware.BudgetAdd(context.Background(), rdb, keys, args, 8)
+
+	// 最终用量 506 > 500（软超限）— 这是 v0.9 已知的并发窗口，对内部场景可接受
+	finalUsed := getUsed(mr, "studio", "s-1", period)
+	assert.InDelta(t, 506, finalUsed, 0.001, "并发窗口导致软超限 506 > 500")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tests: BudgetExceededError — JSON 序列化
+// Tests: BudgetExceededError
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TestBudgetExceededError_ToJSON 验证 JSON 输出符合 OpenAI 错误格式。
 func TestBudgetExceededError_ToJSON(t *testing.T) {
 	e := &middleware.BudgetExceededError{
-		Message: "预算已用尽：研发部日常，请联系负责人扩容",
-		Label:   "研发部日常",
+		Message: "预算已用尽：研发部，请联系负责人扩容",
+		Label:   "研发部 [月限额]",
 	}
-
-	json := e.ToJSON()
-
-	// 结构：{"error": {"message": ..., "type": "budget_exceeded", ...}}
-	errObj, ok := json["error"].(gin.H)
+	j := e.ToJSON()
+	errObj, ok := j["error"].(gin.H)
 	require.True(t, ok)
-	assert.Equal(t, "预算已用尽：研发部日常，请联系负责人扩容", errObj["message"])
+	assert.Equal(t, "预算已用尽：研发部，请联系负责人扩容", errObj["message"])
 	assert.Equal(t, "budget_exceeded", errObj["type"])
 	assert.Equal(t, "budget_exceeded", errObj["code"])
-	assert.Equal(t, "研发部日常", errObj["param"])
+	assert.Equal(t, "研发部 [月限额]", errObj["param"])
 	assert.Equal(t, "budget", errObj["gate"])
 }
 
-// TestBudgetExceededError_WriteHTTPResponse 验证 402 响应正确写入。
 func TestBudgetExceededError_WriteHTTPResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
@@ -551,82 +485,4 @@ func TestBudgetExceededError_WriteHTTPResponse(t *testing.T) {
 
 	assert.Equal(t, http.StatusPaymentRequired, w.Code)
 	assert.Contains(t, w.Body.String(), "budget_exceeded")
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Tests: Settle / Cancel
-// ─────────────────────────────────────────────────────────────────────────────
-
-// TestBudgetDeps_Settle 验证 Settle 在 Redis 中正确写回差额（real - est）。
-func TestBudgetDeps_Settle(t *testing.T) {
-	rdb, mr := startMiniredis(t)
-	period := currentBudgetPeriod()
-	key := "budget:used:studio:s-1:" + period
-	mr.Set(key, "0.5") // 预扣 0.5
-
-	deps := &middleware.BudgetDeps{RDB: rdb}
-
-	// real 0.8, est 0.5 → delta +0.3
-	deps.Settle(context.Background(), []string{key}, 0.5, 0.8)
-
-	got, _ := mr.Get(key)
-	gotFloat, _ := strconv.ParseFloat(got, 64)
-	assert.InDelta(t, 0.8, gotFloat, 0.0001, "Settle 后应为 real cost 0.8")
-}
-
-// TestBudgetDeps_Settle_NegativeDelta 验证 real < est 时 delta 为负（退款/少算）。
-func TestBudgetDeps_Settle_NegativeDelta(t *testing.T) {
-	rdb, mr := startMiniredis(t)
-	period := currentBudgetPeriod()
-	key := "budget:used:studio:s-1:" + period
-	mr.Set(key, "1.0") // est 1.0
-
-	deps := &middleware.BudgetDeps{RDB: rdb}
-
-	// real 0.2, est 1.0 → delta -0.8（实际少用，应退回）
-	deps.Settle(context.Background(), []string{key}, 1.0, 0.2)
-
-	got, _ := mr.Get(key)
-	gotFloat, _ := strconv.ParseFloat(got, 64)
-	assert.InDelta(t, 0.2, gotFloat, 0.0001, "Settle 后应退回预扣的多出部分")
-}
-
-// TestBudgetDeps_Cancel 验证 Cancel 完全冲销预扣（real=0）。
-func TestBudgetDeps_Cancel(t *testing.T) {
-	rdb, mr := startMiniredis(t)
-	period := currentBudgetPeriod()
-	key := "budget:used:studio:s-1:" + period
-	mr.Set(key, "0.5")
-
-	deps := &middleware.BudgetDeps{RDB: rdb}
-
-	// Cancel → delta = -0.5
-	deps.Cancel(context.Background(), []string{key}, 0.5)
-
-	got, _ := mr.Get(key)
-	gotFloat, _ := strconv.ParseFloat(got, 64)
-	assert.InDelta(t, 0.0, gotFloat, 0.0001, "Cancel 后应归零")
-}
-
-// TestBudgetDeps_Settle_NilRDB_Safe 验证 rdb=nil 时不 panic。
-func TestBudgetDeps_Settle_NilRDB_Safe(t *testing.T) {
-	deps := &middleware.BudgetDeps{RDB: nil}
-	// 不应 panic
-	assert.NotPanics(t, func() {
-		deps.Settle(context.Background(), []string{"k"}, 0.5, 0.3)
-	})
-	assert.NotPanics(t, func() {
-		deps.Cancel(context.Background(), []string{"k"}, 0.5)
-	})
-}
-
-// TestBudgetDeps_Settle_NilSelf_Safe 验证 deps=nil 时不 panic。
-func TestBudgetDeps_Settle_NilSelf_Safe(t *testing.T) {
-	var deps *middleware.BudgetDeps
-	assert.NotPanics(t, func() {
-		deps.Settle(context.Background(), []string{"k"}, 0.5, 0.3)
-	})
-	assert.NotPanics(t, func() {
-		deps.Cancel(context.Background(), []string{"k"}, 0.5)
-	})
 }

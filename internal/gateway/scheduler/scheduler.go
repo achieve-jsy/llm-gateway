@@ -9,6 +9,7 @@ import (
 type Scheduler struct {
 	router          *Router
 	failoverHandler *FailoverHandler
+	healthStore     *HealthStore
 	configSyncer    *ConfigSyncer
 	healthProber    *HealthProber
 	eventPublisher  *EventPublisher
@@ -31,6 +32,7 @@ func New(cfg SchedulerConfig) (*Scheduler, error) {
 	return &Scheduler{
 		router:          router,
 		failoverHandler: failoverHandler,
+		healthStore:     hs,
 		configSyncer:    configSyncer,
 		healthProber:    healthProber,
 		eventPublisher:  hs.Events(),
@@ -64,6 +66,16 @@ func (s *Scheduler) Route(groupName string) (*RouteDecision, error) {
 
 func (s *Scheduler) Failover(groupName, failedModelID string) (*RouteDecision, error) {
 	return s.failoverHandler.Failover(groupName, failedModelID)
+}
+
+// FailoverExcluding 排除多个已失败模型后选出下一个候选（多轮 failover 使用）。
+func (s *Scheduler) FailoverExcluding(groupName string, excludeIDs []string) (*RouteDecision, error) {
+	return s.failoverHandler.FailoverExcluding(groupName, excludeIDs)
+}
+
+// SetCooldown 为指定模型设置 429 冷却期，冷却期内不会被路由选中。
+func (s *Scheduler) SetCooldown(modelID string, duration time.Duration) {
+	s.healthStore.SetCooldown(modelID, duration)
 }
 
 // GetGroupConfig 返回指定组的路由配置（含 TimeoutSeconds 等元数据）。

@@ -11,7 +11,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const maxFailoverRetries = 1
+// maxFailoverRounds 最大 failover 轮次（不含 primary）。
+// 例如值为 3 时，primary + 最多 3 次 failover = 最多 4 次上游调用。
+const maxFailoverRounds = 3
 
 type GroupAwareDispatcher struct {
 	scheduler    Scheduler
@@ -91,9 +93,8 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string) (*sche
 	}
 
 	model.SetDispatchContext(c, &model.DispatchContext{
-		GroupName:         modelName,
-		RoutedModelID:     decision.ModelID,
-		FailoverAttempted: false,
+		GroupName:     modelName,
+		RoutedModelID: decision.ModelID,
 	})
 
 	c.Set("group_name", modelName)
@@ -118,15 +119,29 @@ func containsGroup(groups []string, target string) bool {
 
 func (d *GroupAwareDispatcher) HandleFailover(c *gin.Context, groupName, failedModelID string) (*scheduler.RouteDecision, error) {
 	dc := model.GetDispatchContext(c)
-	if dc != nil && dc.FailoverAttempted {
+
+	rounds := 0
+	var triedIDs []string
+	if dc != nil {
+		rounds = dc.FailoverRounds
+		triedIDs = dc.TriedModelIDs
+	}
+
+	if rounds >= maxFailoverRounds {
 		return nil, model.ErrNoOtherModelAvailable
 	}
 
-	decision, err := d.scheduler.Failover(groupName, failedModelID)
+	// 将本轮失败的模型加入已尝试列表（去重）
+	if !containsID(triedIDs, failedModelID) {
+		triedIDs = append(triedIDs, failedModelID)
+	}
+
+	decision, err := d.scheduler.FailoverExcluding(groupName, triedIDs)
 	if err != nil {
 		slog.Error("group failover failed",
 			"group_name", groupName,
 			"failed_model_id", failedModelID,
+			"tried_ids", triedIDs,
 			"error", err,
 		)
 		return nil, model.ErrNoOtherModelAvailable
@@ -134,12 +149,14 @@ func (d *GroupAwareDispatcher) HandleFailover(c *gin.Context, groupName, failedM
 
 	if dc != nil {
 		dc.RoutedModelID = decision.ModelID
-		dc.FailoverAttempted = true
+		dc.FailoverRounds = rounds + 1
+		dc.TriedModelIDs = triedIDs
 	} else {
 		model.SetDispatchContext(c, &model.DispatchContext{
-			GroupName:         groupName,
-			RoutedModelID:     decision.ModelID,
-			FailoverAttempted: true,
+			GroupName:      groupName,
+			RoutedModelID:  decision.ModelID,
+			FailoverRounds: rounds + 1,
+			TriedModelIDs:  triedIDs,
 		})
 	}
 
@@ -151,11 +168,31 @@ func (d *GroupAwareDispatcher) HandleFailover(c *gin.Context, groupName, failedM
 
 	slog.Info("group failover succeeded",
 		"group_name", groupName,
+		"round", rounds+1,
 		"new_model_id", decision.ModelID,
-		"failed_model_id", failedModelID,
+		"tried_ids", triedIDs,
 	)
 
 	return decision, nil
+}
+
+// NotifyFailure 通知 scheduler 指定模型发生故障，触发健康探针提前检测。
+func (d *GroupAwareDispatcher) NotifyFailure(modelID string) {
+	d.scheduler.NotifyFailure(modelID)
+}
+
+// SetCooldown 为因 429 限流的模型设置冷却期，冷却期内不参与路由。
+func (d *GroupAwareDispatcher) SetCooldown(modelID string, duration time.Duration) {
+	d.scheduler.SetCooldown(modelID, duration)
+}
+
+func containsID(ids []string, target string) bool {
+	for _, id := range ids {
+		if id == target {
+			return true
+		}
+	}
+	return false
 }
 
 // GetGroupTimeout 返回组的自定义超时时长，0 表示使用系统默认值。

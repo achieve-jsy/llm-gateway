@@ -9,20 +9,22 @@ import (
 // HealthStore tracks the health status of models and provides health-based
 // filtering. It is safe for concurrent use.
 type HealthStore struct {
-	mu                      sync.RWMutex
-	data                    map[string]*ModelHealthStatus
-	events                  *EventPublisher
-	failureThreshold        int
+	mu                       sync.RWMutex
+	data                     map[string]*ModelHealthStatus
+	cooldowns                map[string]time.Time // 429 冷却截止时间（key: modelID string）
+	events                   *EventPublisher
+	failureThreshold         int
 	recoverySuccessThreshold int
-	quickFailWindow         time.Duration
-	quickFailThreshold      int
-	failureRingCapacity     int
+	quickFailWindow          time.Duration
+	quickFailThreshold       int
+	failureRingCapacity      int
 }
 
 // NewHealthStore creates a HealthStore with the given thresholds.
 func NewHealthStore(failureThreshold, recoverySuccessThreshold, quickFailThreshold int, quickFailWindow time.Duration) *HealthStore {
 	return &HealthStore{
 		data:                     make(map[string]*ModelHealthStatus),
+		cooldowns:                make(map[string]time.Time),
 		events:                   &EventPublisher{},
 		failureThreshold:         failureThreshold,
 		recoverySuccessThreshold: recoverySuccessThreshold,
@@ -30,6 +32,14 @@ func NewHealthStore(failureThreshold, recoverySuccessThreshold, quickFailThresho
 		quickFailThreshold:       quickFailThreshold,
 		failureRingCapacity:      defaultRingCapacity,
 	}
+}
+
+// SetCooldown 为指定模型设置 429 冷却截止时间。
+// 在冷却期内，FilterHealthy 会将其排除在候选池之外。
+func (hs *HealthStore) SetCooldown(modelID string, duration time.Duration) {
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+	hs.cooldowns[modelID] = time.Now().Add(duration)
 }
 
 // Events returns the EventPublisher for subscribing to health events.
@@ -46,15 +56,21 @@ func (hs *HealthStore) Get(modelID string) *ModelHealthStatus {
 }
 
 // FilterHealthy filters the given model entries, returning only those whose
-// health status is Healthy or not yet tracked (treated as Healthy).
-// 兜底逻辑：若所有模型均不健康，返回原始全量列表，避免服务中断。
+// health status is Healthy or not yet tracked (treated as Healthy), and that
+// are not currently in cooldown (from a recent 429 response).
+// 兜底逻辑：若所有模型均被排除，返回原始全量列表，避免服务中断。
 func (hs *HealthStore) FilterHealthy(models []*ModelRoutingEntry) []*ModelRoutingEntry {
 	hs.mu.RLock()
 	defer hs.mu.RUnlock()
 
+	now := time.Now()
 	result := make([]*ModelRoutingEntry, 0, len(models))
 	for _, m := range models {
 		modelKey := fmt.Sprintf("%d", m.ModelID)
+		// 冷却期内排除（429 rate limit 引起）
+		if coolUntil, ok := hs.cooldowns[modelKey]; ok && now.Before(coolUntil) {
+			continue
+		}
 		status, tracked := hs.data[modelKey]
 		// 未追踪（从未失败过）或状态明确为 Healthy，则纳入候选
 		if !tracked || status.Status == HealthHealthy {
@@ -62,7 +78,7 @@ func (hs *HealthStore) FilterHealthy(models []*ModelRoutingEntry) []*ModelRoutin
 		}
 	}
 
-	// 兜底：全部标记为不健康时退化为全量，避免 0 个模型导致请求直接失败。
+	// 兜底：全部标记为不健康/冷却时退化为全量，避免 0 个模型导致请求直接失败。
 	// 此时 Failover 机制会在实际转发失败时继续处理。
 	if len(result) == 0 {
 		return models

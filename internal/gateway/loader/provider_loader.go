@@ -11,6 +11,7 @@ import (
 
 	"github.com/example/llm-gateway/internal/gateway/infra"
 	gatewaymodel "github.com/example/llm-gateway/internal/gateway/model"
+	"github.com/example/llm-gateway/internal/llmclientconfig"
 	"github.com/example/llm-gateway/internal/providers"
 )
 
@@ -74,6 +75,11 @@ func (l *ProviderLoader) Build(entries []gatewaymodel.ProviderEntry) (*providers
 			APIKey:  entry.Credentials,
 			BaseURL: entry.Endpoint,
 			Models:  entry.Models,
+			// Phase 1: 启用 HTTP 重试（3 次指数退避）和熔断器
+			Resilience: providers.ResilienceConfig{
+				Retry:          llmclientconfig.DefaultRetryConfig(),
+				CircuitBreaker: llmclientconfig.DefaultCircuitBreakerConfig(),
+			},
 		}
 
 		p, err := l.factory.Create(cfg)

@@ -20,7 +20,7 @@
         </div>
       </div>
 
-      <div class="card-body scroll-body">
+      <div ref="scrollBodyRef" class="card-body scroll-body">
         <div v-if="loading && items.length === 0" class="state-loading">
           <el-icon class="is-loading" size="20"><Loading /></el-icon>
           <span>加载中...</span>
@@ -105,7 +105,15 @@
           </div>
         </div>
 
-        <div v-if="items.length > 0" class="state-end">
+        <!-- 滚动哨兵：进入可视区触发加载更多 -->
+        <div ref="sentinelRef" class="scroll-sentinel"></div>
+
+        <div v-if="loadingMore" class="state-load-more">
+          <el-icon class="is-loading" size="16"><Loading /></el-icon>
+          <span>加载更多...</span>
+        </div>
+
+        <div v-if="items.length > 0 && !hasMore && !loading" class="state-end">
           共 {{ total }} {{ view === 'group' ? '个模型组' : '个模型' }}
         </div>
       </div>
@@ -114,7 +122,7 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { Refresh, Loading, ArrowDown, ArrowUp } from '@element-plus/icons-vue'
 import { getPerformance } from '@/services/control-plane'
 import type { PerformanceItem } from '@/services/control-plane'
@@ -126,12 +134,19 @@ const authStore = useAuthStore()
 
 const PAGE_SIZE = 50
 const loading = ref(false)
+const loadingMore = ref(false)
 const items = shallowRef<PerformanceItem[]>([])
 const total = ref(0)
+const offset = ref(0)
 const windowVal = ref('1h')
 const view = ref('group')
 const searchText = ref('')
 let timer: ReturnType<typeof setInterval> | null = null
+
+// 无限滚动
+const scrollBodyRef = ref<HTMLElement | null>(null)
+const sentinelRef = ref<HTMLElement | null>(null)
+let observer: IntersectionObserver | null = null
 
 const expandedGroups = ref<Set<string>>(new Set())
 
@@ -217,8 +232,9 @@ async function loadEntitlements() {
 
 async function loadData() {
   loading.value = true
+  offset.value = 0
   try {
-    const result = await getPerformance(windowVal.value, view.value, searchText.value, PAGE_SIZE)
+    const result = await getPerformance(windowVal.value, view.value, searchText.value, PAGE_SIZE, 0)
     let filteredItems = result.items || []
     
     // 对非 admin 用户进行授权过滤（仅 group 视角需要过滤）
@@ -229,11 +245,36 @@ async function loadData() {
     
     items.value = filteredItems
     total.value = result.total ?? filteredItems.length
+    offset.value = result.items?.length ?? 0
   } catch {
     items.value = []
     total.value = 0
   } finally {
     loading.value = false
+    // 数据刷新后重新绑定 observer（sentinel 位置可能已变化）
+    setupObserver()
+  }
+}
+
+async function loadMore() {
+  if (loadingMore.value) return
+  loadingMore.value = true
+  try {
+    const result = await getPerformance(windowVal.value, view.value, searchText.value, PAGE_SIZE, offset.value)
+    let newItems = result.items || []
+
+    const role = authStore.effectiveRole
+    if (role !== 'admin' && role !== null && view.value === 'group') {
+      newItems = newItems.filter(item => isGroupAvailable(item.name))
+    }
+
+    items.value = [...items.value, ...newItems]
+    total.value = result.total ?? items.value.length
+    offset.value += newItems.length
+  } catch {
+    // keep existing items on error
+  } finally {
+    loadingMore.value = false
   }
 }
 
@@ -241,6 +282,27 @@ function refreshData() { loadData() }
 function onWindowChange() { loadData() }
 function onViewChange() { loadData() }
 function onSearch() { loadData() }
+
+const hasMore = computed(() => items.value.length < total.value)
+
+function setupObserver() {
+  if (observer) {
+    observer.disconnect()
+    observer = null
+  }
+  if (!sentinelRef.value || !scrollBodyRef.value) return
+
+  observer = new IntersectionObserver(
+    (entries) => {
+      if (entries[0].isIntersecting && hasMore.value && !loadingMore.value && !loading.value) {
+        loadMore()
+      }
+    },
+    { root: scrollBodyRef.value, rootMargin: '0px 0px 80px 0px', threshold: 0 }
+  )
+  observer.observe(sentinelRef.value)
+}
+
 function toggleExpand(name: string) {
   const s = new Set(expandedGroups.value)
   if (s.has(name)) s.delete(name); else s.add(name)
@@ -252,14 +314,17 @@ onMounted(() => {
   const role = authStore.effectiveRole
   if (role !== 'admin' && role !== null) {
     loadEntitlements().then(() => {
-      loadData()
+      loadData().then(() => setupObserver())
     })
   } else {
-    loadData()
+    loadData().then(() => setupObserver())
   }
   timer = setInterval(() => loadData(), 60000)
 })
-onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
+onBeforeUnmount(() => {
+  if (timer) { clearInterval(timer); timer = null }
+  if (observer) { observer.disconnect(); observer = null }
+})
 
 function formatMs(ms: number): string {
   if (ms >= 1000) return (ms / 1000).toFixed(1) + 's'
@@ -367,6 +432,20 @@ function pctClass(pct: number | null | undefined): string {
 .state-empty .sub {
   font-size: 12px;
   margin-top: 4px;
+}
+
+.scroll-sentinel {
+  height: 1px;
+}
+
+.state-load-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 .state-end {

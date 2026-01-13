@@ -12,7 +12,7 @@
         <el-button type="primary" @click="goOrg()">
           {{ isDeptAdmin ? '前往部门管理' : '进入组织治理' }}
         </el-button>
-      </div>
+    </div>
     </header>
 
     <!-- KPI 条：角色自适应列数 -->
@@ -62,7 +62,7 @@
             </div>
             <el-progress :percentage="Math.min(Math.round(deptServiceKpi.ratio * 100), 100)" :stroke-width="4" :color="riskColor(deptServiceKpi.ratio)" :show-text="false" style="margin-top:8px" />
           </div>
-        </template>
+      </template>
 
         <!-- ② 多部门：把池卡替换成"部门状态总览"横幅（跨满整行） -->
         <div v-else class="dept-pools-banner">
@@ -77,7 +77,7 @@
               <div class="dept-pool-group-name">
                 <span class="risk-indicator" :class="`risk-${budgetColorLevel(grp.maxRatio)}`" />
                 {{ grp.label || grp.deptId }}
-              </div>
+          </div>
               <div class="dept-pool-row" v-if="grp.daily">
                 <span class="scope-dot" :style="{ background: SCOPE_TYPE_COLORS['dept_daily'] }" />
                 <span class="pool-type-label">日常</span>
@@ -92,7 +92,7 @@
                 <el-tag :type="budgetColorLevel(grp.daily.used_ratio || 0)" size="small">
                   {{ statusText(grp.daily.used_ratio || 0) }}
                 </el-tag>
-              </div>
+        </div>
               <div class="dept-pool-row" v-if="grp.service">
                 <span class="scope-dot" :style="{ background: SCOPE_TYPE_COLORS['dept_service'] }" />
                 <span class="pool-type-label">服务</span>
@@ -107,9 +107,9 @@
                 <el-tag :type="budgetColorLevel(grp.service.used_ratio || 0)" size="small">
                   {{ statusText(grp.service.used_ratio || 0) }}
                 </el-tag>
-              </div>
-            </div>
-          </div>
+      </div>
+        </div>
+        </div>
         </div>
 
         <!-- 右侧 3 张辅助卡（单/多部门共用） -->
@@ -174,8 +174,8 @@
               <span class="kpi-sub-limit-slash">/</span>
               <span class="kpi-sub-limit-amount">{{ displayAmount(companyPoolItem.daily_amount_usd) }}</span>
             </div>
-          </div>
-        </div>
+      </div>
+    </div>
 
         <!-- 未下发余量 -->
         <div class="kpi" :class="{ 'kpi-pool--warning': companyUnallocated === 0 && companyAllocated > 0 }">
@@ -184,7 +184,7 @@
           <span class="kpi-note">
             {{ companyUnallocated > 0 ? '可继续分配给工作室' : companyPoolItem ? '已全部下发' : '—' }}
           </span>
-        </div>
+      </div>
 
         <!-- 风险工作室 -->
         <div class="kpi" :class="{ 'kpi-danger': riskItems.length > 0 }">
@@ -193,7 +193,7 @@
           <span class="kpi-note" :style="{ color: riskItems.length > 0 ? 'var(--el-color-warning)' : undefined }">
             {{ riskItems.length > 0 ? '需要关注' : '暂无风险' }}
           </span>
-        </div>
+    </div>
 
         <!-- 工作室总数 -->
         <div class="kpi">
@@ -237,7 +237,7 @@
             :show-text="false"
             style="margin-top:8px"
           />
-        </div>
+      </div>
 
         <!-- 未下发余量 -->
         <div class="kpi" :class="{ 'kpi-pool--warning': studioUnallocated === 0 && studioAllocated > 0 }">
@@ -246,7 +246,7 @@
           <span class="kpi-note">
             {{ studioUnallocated > 0 ? '可继续分配给部门' : studioPoolItem ? '已全部下发' : '—' }}
           </span>
-        </div>
+      </div>
 
         <!-- 风险部门 -->
         <div class="kpi" :class="{ 'kpi-danger': riskDeptCount > 0 }">
@@ -255,21 +255,21 @@
           <span class="kpi-note" :style="{ color: riskDeptCount > 0 ? 'var(--el-color-warning)' : undefined }">
             {{ riskDeptCount > 0 ? '需要关注' : '暂无风险' }}
           </span>
-        </div>
+      </div>
 
         <!-- 部门数 -->
         <div class="kpi">
           <span class="kpi-label">管辖部门</span>
           <strong>{{ studioDeptRows.length }}</strong>
           <span class="kpi-note">个部门</span>
-        </div>
+      </div>
 
         <!-- 待审申请 -->
         <div class="kpi kpi-action-card" @click="goExpansion">
           <span class="kpi-label">扩容申请</span>
           <strong class="kpi-action-text">查看</strong>
           <span class="kpi-note">审批部门申请 →</span>
-        </div>
+            </div>
       </template>
     </section>
 
@@ -282,14 +282,14 @@
           <div>
             <h2>{{ tableTitle }}</h2>
             <p>{{ tableDesc }}</p>
-          </div>
+              </div>
           <el-segmented
             v-if="riskItems.length > 0 || riskDeptCount > 0"
             v-model="riskFilter"
             :options="riskOptions"
             size="small"
           />
-        </div>
+            </div>
 
         <div v-if="!loading && riskItems.length === 0" class="healthy-state">
           <div class="healthy-icon">✓</div>
@@ -332,8 +332,8 @@
                     {{ row.amount_usd > 0
                       ? Math.round(((row.used_usd || 0) / row.amount_usd) * 100)
                       : 0 }}%
-                  </span>
-                </div>
+              </span>
+            </div>
                 <el-progress
                   :percentage="row.amount_usd > 0
                     ? Math.min(Math.round(((row.used_usd || 0) / row.amount_usd) * 100), 100)
@@ -344,7 +344,7 @@
                     : 'var(--el-color-primary-light-3)'"
                   :show-text="false"
                 />
-              </div>
+          </div>
             </template>
           </el-table-column>
           <!-- 日限 / 周限 -->
@@ -512,12 +512,12 @@
           <button class="quick-link-btn" @click="goOrg()">
             <span>{{ auth.effectiveRole === 'admin' ? '调整工作室预算' : '调整部门预算' }}</span>
             <span class="quick-link-arrow">→</span>
-          </button>
+            </button>
           <button class="quick-link-btn" @click="goExpansion">
             <span>{{ auth.effectiveRole === 'admin' ? '处理平台扩容申请' : '处理扩容申请' }}</span>
             <span class="quick-link-arrow">→</span>
-          </button>
-        </div>
+            </button>
+          </div>
       </aside>
     </section>
 
@@ -560,7 +560,7 @@
         <span v-if="selectedDeptFilter" class="dept-switcher-hint">
           仅显示「{{ deptFilterOptions.find(o => o.value === selectedDeptFilter)?.label }}」的成员
         </span>
-      </div>
+    </div>
 
       <!-- 预警区：riskMembers > 0 时展示，否则健康提示 -->
       <div v-if="riskMembers.length > 0" class="panel alert-panel">
@@ -622,7 +622,7 @@
             </template>
           </el-table-column>
         </el-table>
-      </div>
+    </div>
 
       <div v-else-if="!loading" class="panel healthy-panel">
         <div class="healthy-state">
@@ -635,8 +635,8 @@
             </strong>
             <span>所有成员月额度使用率低于 80%，日均消耗在安全范围内。</span>
           </div>
-        </div>
-      </div>
+          </div>
+          </div>
 
       <!-- 全部成员表格 -->
       <div class="panel members-panel">
@@ -652,7 +652,7 @@
               <template v-if="selectedDeptFilter">（已过滤，共 {{ memberTableItems.length }} 人）</template>
               · 按近7天消耗降序
             </p>
-          </div>
+        </div>
           <el-button size="small" @click="goOrg(selectedDeptFilter ? { scope_type: 'dept_daily', scope_id: selectedDeptFilter } as any : undefined)">
             前往配额管理
           </el-button>
@@ -674,7 +674,7 @@
                   <!-- 多部门全量视图时展示所属部门 -->
                   <div v-if="managedDeptIds.length > 1 && !selectedDeptFilter && row.parent_scope_id" class="member-dept-tag">
                     {{ row.parent_scope_id }}
-                  </div>
+      </div>
                 </div>
               </div>
             </template>
@@ -1056,11 +1056,11 @@
         <div style="font-size:11px;color:var(--el-text-color-placeholder);margin-top:3px">-1 表示不限</div>
       </el-form-item>
     </el-form>
-    <template #footer>
+      <template #footer>
       <el-button @click="companyBudgetDialogVisible = false">取消</el-button>
       <el-button type="primary" :loading="companyBudgetSaving" @click="saveCompanyBudget">保存</el-button>
-    </template>
-  </el-dialog>
+      </template>
+    </el-dialog>
 </template>
 
 <script setup lang="ts">

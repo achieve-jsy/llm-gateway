@@ -270,7 +270,7 @@ deploy-app-test:
         # 切勿删除这些 export（详见 test-env-config skill）。
         export DATABASE_URL='${TEST_DATABASE_URL}'
         export REDIS_ADDR='${TEST_REDIS_ADDR}' REDIS_PASSWORD='${TEST_REDIS_PASSWORD}'
-        export REDIS_DB='${TEST_REDIS_DB}' REDIS_DB_GREEN='${TEST_REDIS_DB_GREEN:-1}'
+        export REDIS_DB='${TEST_REDIS_DB}'
         export JWT_SECRET='${TEST_JWT_SECRET}'
         export INTERNAL_AUTH_TOKEN='${TEST_INTERNAL_TOKEN}'
         export ENCRYPTION_KEY='${TEST_ENCRYPTION_KEY}'
@@ -306,7 +306,7 @@ rollback-test:
         export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30
         export DATABASE_URL='${TEST_DATABASE_URL}'
         export REDIS_ADDR='${TEST_REDIS_ADDR}' REDIS_PASSWORD='${TEST_REDIS_PASSWORD}'
-        export REDIS_DB='${TEST_REDIS_DB}' REDIS_DB_GREEN='${TEST_REDIS_DB_GREEN:-1}'
+        export REDIS_DB='${TEST_REDIS_DB}'
         export JWT_SECRET='${TEST_JWT_SECRET}'
         export INTERNAL_AUTH_TOKEN='${TEST_INTERNAL_TOKEN}'
         export ENCRYPTION_KEY='${TEST_ENCRYPTION_KEY}'

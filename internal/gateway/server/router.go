@@ -121,11 +121,9 @@ func Setup(
 	// Pricing 暂用 fallback（保守单价），后续接入 providers.ModelRegistry 真实 catalog 定价。
 	// FallbackOutputTokens：请求未传 max_tokens 时的保守估计（对齐控制面配置 2048）。
 	// MaxSingleRequestUSD：单请求成本上限（对齐控制面配置 10.0 美元，防单次击穿软上限）。
+	// v0.9: 事后记账模式，BudgetDeps 只需要 Redis client
 	budgetDeps := &middleware.BudgetDeps{
-		RDB:                  rdb,
-		Pricing:              middleware.FallbackPricingResolver{},
-		FallbackOutputTokens: 2048,
-		MaxSingleRequestUSD:  10.0,
+		RDB: rdb,
 	}
 	chatHandler.SetBudgetDeps(budgetDeps)
 	embeddingsHandler.SetBudgetDeps(budgetDeps)
@@ -295,12 +293,12 @@ func loadGatewayGuard(controlPlaneURL string) *middleware.GatewayGuard {
 	return guard
 }
 
-// buildBudgetPostHook 构造预算核销 + 告警触发 hook。
-// hook 在 usage_collector 埋点后调用，异步执行 Redis 核销和控制面告警触发。
+// buildBudgetPostHook 构造预算累加 + 告警触发 hook。
+// hook 在 usage_collector 埋点后调用，异步执行 Redis 累加和控制面告警触发。
 //
-// 核销逻辑（同步）：
-//   - 请求失败（status >= 400）→ BudgetCancelReserve（冲销全部预扣）
-//   - 请求成功（status < 400） → BudgetSettle（delta = realCost - estCost）
+// v0.9 事后记账模式：
+//   - 请求失败（status >= 400）→ 不累加（没有预扣，无需冲销）
+//   - 请求成功（status < 400） → BudgetAdd（直接累加真实成本）
 //
 // 告警触发（异步 fire-and-forget）：
 //   - 对 BudgetChain 中的每一层调用控制面 /internal/v1/budget/evaluate-alert
@@ -315,16 +313,13 @@ func buildBudgetPostHook(rdb *redis.Client, controlPlaneURL, internalToken strin
 		if !ok || len(budgetKeys) == 0 {
 			return
 		}
-		estVal, _ := c.Get("budget_est_cost")
-		estCost, _ := estVal.(float64)
 
-		// 1. Redis 核销（同步，耗时 < 1ms）
-		if httpStatus >= 400 {
-			// 请求失败 → 冲销全部预扣
-			middleware.BudgetCancelReserve(c.Request.Context(), rdb, budgetKeys, estCost)
-		} else {
-			// 请求成功 → settle(real - est)
-			middleware.BudgetSettle(c.Request.Context(), rdb, budgetKeys, estCost, realCostUSD)
+		// 1. Redis 累加真实成本（同步，耗时 < 1ms）
+		// 请求失败不累加（没有预扣，无需冲销）
+		if httpStatus < 400 && realCostUSD > 0 {
+			argsVal, _ := c.Get(middleware.CtxKeyBudgetScopeArgs)
+			scopeArgs, _ := argsVal.([]interface{})
+			middleware.BudgetAdd(c.Request.Context(), rdb, budgetKeys, scopeArgs, realCostUSD)
 		}
 
 		// 2. 告警触发（异步 fire-and-forget，不影响响应）

@@ -114,7 +114,7 @@
         </div>
 
         <div v-if="items.length > 0 && !hasMore && !loading" class="state-end">
-          共 {{ total }} {{ view === 'group' ? '个模型组' : '个模型' }}
+          共 {{ items.length }} {{ view === 'group' ? '个模型组' : '个模型' }}
         </div>
       </div>
     </div>
@@ -122,7 +122,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { Refresh, Loading, ArrowDown, ArrowUp } from '@element-plus/icons-vue'
 import { getPerformance } from '@/services/control-plane'
 import type { PerformanceItem } from '@/services/control-plane'
@@ -137,7 +137,9 @@ const loading = ref(false)
 const loadingMore = ref(false)
 const items = shallowRef<PerformanceItem[]>([])
 const total = ref(0)
-const offset = ref(0)
+// rawLoaded / rawTotal 跟踪服务端原始分页状态，与客户端过滤无关
+const rawLoaded = ref(0)
+const rawTotal = ref(0)
 const windowVal = ref('1h')
 const view = ref('group')
 const searchText = ref('')
@@ -237,45 +239,50 @@ async function loadEntitlements() {
 
 async function loadData() {
   loading.value = true
-  offset.value = 0
+  rawLoaded.value = 0
+  rawTotal.value = 0
   try {
     const result = await getPerformance(windowVal.value, view.value, searchText.value, PAGE_SIZE, 0)
-    let filteredItems = result.items || []
-    
+    const rawItems = result.items || []
+
     // 对非 admin 用户进行授权过滤（仅 group 视角需要过滤）
     const role = authStore.effectiveRole
-    if (role !== 'admin' && role !== null && view.value === 'group') {
-      filteredItems = filteredItems.filter(item => isGroupAvailable(item.name))
-    }
-    
+    const filteredItems = (role !== 'admin' && role !== null && view.value === 'group')
+      ? rawItems.filter(item => isGroupAvailable(item.name))
+      : rawItems
+
     items.value = filteredItems
-    total.value = result.total ?? filteredItems.length
-    offset.value = result.items?.length ?? 0
+    // rawTotal / rawLoaded 始终基于服务端原始数据，与客户端过滤无关
+    rawTotal.value = result.total ?? rawItems.length
+    rawLoaded.value = rawItems.length
+    total.value = rawTotal.value
   } catch {
     items.value = []
+    rawTotal.value = 0
+    rawLoaded.value = 0
     total.value = 0
   } finally {
     loading.value = false
-    // 数据刷新后重新绑定 observer（sentinel 位置可能已变化）
-    setupObserver()
   }
 }
 
 async function loadMore() {
-  if (loadingMore.value) return
+  if (loadingMore.value || !hasMore.value) return
   loadingMore.value = true
   try {
-    const result = await getPerformance(windowVal.value, view.value, searchText.value, PAGE_SIZE, offset.value)
-    let newItems = result.items || []
+    // 用 rawLoaded 作为 offset，确保分页不错位
+    const result = await getPerformance(windowVal.value, view.value, searchText.value, PAGE_SIZE, rawLoaded.value)
+    const rawItems = result.items || []
 
     const role = authStore.effectiveRole
-    if (role !== 'admin' && role !== null && view.value === 'group') {
-      newItems = newItems.filter(item => isGroupAvailable(item.name))
-    }
+    const newItems = (role !== 'admin' && role !== null && view.value === 'group')
+      ? rawItems.filter(item => isGroupAvailable(item.name))
+      : rawItems
 
     items.value = [...items.value, ...newItems]
-    total.value = result.total ?? items.value.length
-    offset.value += newItems.length
+    rawTotal.value = result.total ?? rawTotal.value
+    rawLoaded.value += rawItems.length  // 累加服务端原始数量，而非过滤后数量
+    total.value = rawTotal.value
   } catch {
     // keep existing items on error
   } finally {
@@ -283,12 +290,18 @@ async function loadMore() {
   }
 }
 
-function refreshData() { loadData() }
-function onWindowChange() { loadData() }
-function onViewChange() { loadData() }
-function onSearch() { loadData() }
+async function reloadAndRebind() {
+  await loadData()
+  nextTick(setupObserver)
+}
 
-const hasMore = computed(() => items.value.length < total.value)
+function refreshData() { reloadAndRebind() }
+function onWindowChange() { reloadAndRebind() }
+function onViewChange() { reloadAndRebind() }
+function onSearch() { reloadAndRebind() }
+
+// hasMore 基于服务端原始分页状态，与客户端过滤无关
+const hasMore = computed(() => rawLoaded.value < rawTotal.value)
 
 function setupObserver() {
   if (observer) {
@@ -303,7 +316,7 @@ function setupObserver() {
         loadMore()
       }
     },
-    { root: scrollBodyRef.value, rootMargin: '0px 0px 80px 0px', threshold: 0 }
+    { root: scrollBodyRef.value, rootMargin: '0px 0px 120px 0px', threshold: 0 }
   )
   observer.observe(sentinelRef.value)
 }
@@ -314,17 +327,23 @@ function toggleExpand(name: string) {
   expandedGroups.value = s
 }
 
-onMounted(() => {
-  // 非 admin 用户需要先加载授权数据
+async function initialLoad() {
   const role = authStore.effectiveRole
   if (role !== 'admin' && role !== null) {
-    loadEntitlements().then(() => {
-      loadData().then(() => setupObserver())
-    })
-  } else {
-    loadData().then(() => setupObserver())
+    await loadEntitlements()
   }
-  timer = setInterval(() => loadData(), 60000)
+  await loadData()
+  // nextTick 保证 DOM 已渲染新 items 后再绑定 observer，避免 sentinel 位置错误
+  nextTick(setupObserver)
+}
+
+onMounted(() => {
+  initialLoad()
+  timer = setInterval(async () => {
+    await loadData()
+    // 定时刷新后重新绑定 observer（DOM 可能已变化）
+    nextTick(setupObserver)
+  }, 60000)
 })
 onBeforeUnmount(() => {
   if (timer) { clearInterval(timer); timer = null }

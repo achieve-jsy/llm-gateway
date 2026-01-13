@@ -393,14 +393,25 @@ func convertAnthropicTools(anthTools []AnthropicTool) []map[string]any {
 	if len(anthTools) == 0 {
 		return nil
 	}
+	defaultSchema := map[string]any{"type": "object", "properties": map[string]any{}}
 	tools := make([]map[string]any, 0, len(anthTools))
 	for _, tool := range anthTools {
+		// parameters 必须是 map[string]any（object），provider 层会做 type assertion。
+		// InputSchema 为空/null/非 object 时，兜底为空 schema。
+		var params map[string]any
+		if len(tool.InputSchema) > 0 && string(tool.InputSchema) != "null" {
+			if err := json.Unmarshal(tool.InputSchema, &params); err != nil || params == nil {
+				params = defaultSchema
+			}
+		} else {
+			params = defaultSchema
+		}
 		t := map[string]any{
 			"type": "function",
 			"function": map[string]any{
 				"name":        tool.Name,
 				"description": tool.Description,
-				"parameters":  tool.InputSchema,
+				"parameters":  params,
 			},
 		}
 		tools = append(tools, t)

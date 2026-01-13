@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/example/llm-gateway/internal/gateway/binding"
 	"github.com/example/llm-gateway/internal/gateway/cache"
@@ -30,9 +31,17 @@ func (f *fakeScheduler) Failover(_, _ string) (*scheduler.RouteDecision, error) 
 	return nil, model.ErrNoOtherModelAvailable
 }
 
+func (f *fakeScheduler) FailoverExcluding(_ string, _ []string) (*scheduler.RouteDecision, error) {
+	return nil, model.ErrNoOtherModelAvailable
+}
+
 func (f *fakeScheduler) GetGroupConfig(_ string) *scheduler.GroupRoutingConfig {
 	return nil
 }
+
+func (f *fakeScheduler) NotifyFailure(_ string) {}
+
+func (f *fakeScheduler) SetCooldown(_ string, _ time.Duration) {}
 
 // newBindingServer 创建模拟控制面 binding API 的 httptest.Server。
 // keyGroups 是 map[keyID] -> []BoundGroup，模拟不同 key 的绑定关系。

@@ -104,7 +104,7 @@ defineExpose({ refresh: loadBanners })
   white-space: nowrap;
 }
 
-.tag--info    { background: rgba(43,168,162,0.12); color: #1E8C86; }
+.tag--info    { background: rgba(54,179,78,0.12); color: #1F8A3B; }
 .tag--warning { background: rgba(245,124,0,0.12);  color: #E65100; }
 .tag--critical{ background: rgba(211,47,47,0.12);  color: #C62828; }
 

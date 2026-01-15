@@ -123,15 +123,15 @@ onMounted(async () => {
 .header-dot {
   width: 8px; height: 8px;
   border-radius: 50%;
-  background: #2BA8A2;
+  background: #36B34E;
   flex-shrink: 0;
-  box-shadow: 0 0 0 3px rgba(43,168,162,0.15);
+  box-shadow: 0 0 0 3px rgba(54,179,78,0.15);
   animation: pulse 2s ease-in-out infinite;
 }
 
 @keyframes pulse {
-  0%, 100% { box-shadow: 0 0 0 3px rgba(43,168,162,0.15); }
-  50%       { box-shadow: 0 0 0 5px rgba(43,168,162,0.08); }
+  0%, 100% { box-shadow: 0 0 0 3px rgba(54,179,78,0.15); }
+  50%       { box-shadow: 0 0 0 5px rgba(54,179,78,0.08); }
 }
 
 .header-title {
@@ -173,7 +173,7 @@ onMounted(async () => {
   border-bottom: 1px solid #f8fafc;
 }
 .item:last-child { border-bottom: none; }
-.item:hover { background: #f8fffe; }
+.item:hover { background: #F6FEF8; }
 
 .item-left { flex-shrink: 0; }
 .item-icon { font-size: 22px; line-height: 1; }
@@ -211,7 +211,7 @@ onMounted(async () => {
 .item-time { font-size: 11px; color: #94a3b8; white-space: nowrap; }
 
 .item-arrow { color: #cbd5e1; transition: all 0.15s; }
-.item:hover .item-arrow { color: #2BA8A2; transform: translateX(2px); }
+.item:hover .item-arrow { color: #36B34E; transform: translateX(2px); }
 
 /* ── 底部 ──────────── */
 .panel-footer {
@@ -240,11 +240,11 @@ onMounted(async () => {
 .btn-ghost:hover { background: #e2e8f0; }
 
 .btn-solid {
-  background: #1E8C86;
+  background: #1F8A3B;
   color: #fff;
-  box-shadow: 0 2px 6px rgba(30,140,134,0.25);
+  box-shadow: 0 2px 6px rgba(31,138,59,0.25);
 }
-.btn-solid:hover { background: #177a75; box-shadow: 0 3px 10px rgba(30,140,134,0.35); }
+.btn-solid:hover { background: #1A7A37; box-shadow: 0 3px 10px rgba(31,138,59,0.35); }
 
 /* ── 动画 ──────────── */
 .popup-enter-active { transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); }

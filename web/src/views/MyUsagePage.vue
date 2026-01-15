@@ -1575,7 +1575,7 @@ if (typeof MutationObserver !== 'undefined') {
 }
 .mu-title::before {
   content: ''; width: 4px; height: 18px; border-radius: 3px;
-  background: linear-gradient(180deg, var(--el-color-primary), var(--el-color-primary-dark-2, #1E8C86));
+  background: linear-gradient(180deg, var(--el-color-primary), var(--el-color-primary-dark-2, #1F8A3B));
 }
 .mu-badge {
   font-size: 11px; font-weight: 500; color: var(--el-color-primary);

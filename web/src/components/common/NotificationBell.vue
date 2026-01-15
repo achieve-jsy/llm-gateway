@@ -214,7 +214,7 @@ defineExpose({ refresh: loadUnread })
 .el-popover .panel-title { color: #1a1a1a !important; }
 .el-popover .item-title   { color: #1a1a1a !important; }
 .el-popover .tab-btn      { color: #64748b; }
-.el-popover .tab-btn.active { color: #1E8C86 !important; }
+.el-popover .tab-btn.active { color: #1F8A3B !important; }
 </style>
 
 <style scoped>
@@ -261,13 +261,13 @@ defineExpose({ refresh: loadUnread })
   font-size: 13px; color: #94a3b8;
   cursor: pointer; position: relative; transition: color 0.15s;
 }
-.tab-btn.active { color: #1E8C86; font-weight: 600; }
+.tab-btn.active { color: #1F8A3B; font-weight: 600; }
 .tab-btn.active::after {
   content: '';
   position: absolute; bottom: -1px; left: 25%; right: 25%;
-  height: 2px; background: #1E8C86; border-radius: 1px;
+  height: 2px; background: #1F8A3B; border-radius: 1px;
 }
-.tab-btn:hover { color: #1E8C86; }
+.tab-btn:hover { color: #1F8A3B; }
 
 /* ── 列表 ────────────────── */
 .panel-list {
@@ -276,7 +276,7 @@ defineExpose({ refresh: loadUnread })
   max-height: 400px;
 }
 .panel-list::-webkit-scrollbar { width: 3px; }
-.panel-list::-webkit-scrollbar-thumb { background: rgba(43,168,162,0.2); border-radius: 2px; }
+.panel-list::-webkit-scrollbar-thumb { background: rgba(54,179,78,0.2); border-radius: 2px; }
 
 /* ── 未读条目 ─────────────── */
 .notification-item {
@@ -288,7 +288,7 @@ defineExpose({ refresh: loadUnread })
   border-radius: 0;
 }
 .notification-item:last-child { border-bottom: none; }
-.notification-item:hover { background: rgba(43,168,162,0.04); }
+.notification-item:hover { background: rgba(54,179,78,0.04); }
 .notification-item.history-item { opacity: 0.7; }
 
 .item-dot {
@@ -296,7 +296,7 @@ defineExpose({ refresh: loadUnread })
   border-radius: 50%; flex-shrink: 0;
   margin-top: 5px;
 }
-.dot--info     { background: #2BA8A2; box-shadow: 0 0 0 2px rgba(43,168,162,0.15); }
+.dot--info     { background: #36B34E; box-shadow: 0 0 0 2px rgba(54,179,78,0.15); }
 .dot--warning  { background: #F57C00; box-shadow: 0 0 0 2px rgba(245,124,0,0.15); }
 .dot--critical { background: #D32F2F; box-shadow: 0 0 0 2px rgba(211,47,47,0.15); }
 
@@ -328,8 +328,8 @@ defineExpose({ refresh: loadUnread })
   background: rgba(255,255,255,0.7);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(43,168,162,0.18);
-  box-shadow: 0 2px 12px rgba(43,168,162,0.08);
+  border: 1px solid rgba(54,179,78,0.18);
+  box-shadow: 0 2px 12px rgba(54,179,78,0.08);
 }
 .item-expanded.history-expanded {
   border-color: rgba(0,0,0,0.07);
@@ -342,7 +342,7 @@ defineExpose({ refresh: loadUnread })
   max-height: 180px; overflow-y: auto;
 }
 .item-expanded-body::-webkit-scrollbar { width: 3px; }
-.item-expanded-body::-webkit-scrollbar-thumb { background: rgba(43,168,162,0.2); border-radius: 2px; }
+.item-expanded-body::-webkit-scrollbar-thumb { background: rgba(54,179,78,0.2); border-radius: 2px; }
 
 .item-full-content { font-size: 12px; color: #334155; line-height: 1.7; }
 .item-full-content :deep(p)  { margin: 0 0 0.4em; }
@@ -354,7 +354,7 @@ defineExpose({ refresh: loadUnread })
 .item-actions {
   display: flex; justify-content: flex-end; align-items: center; gap: 4px;
   padding: 5px 8px;
-  border-top: 1px solid rgba(43,168,162,0.08);
+  border-top: 1px solid rgba(54,179,78,0.08);
 }
 
 .panel-empty { padding: 20px 0; }

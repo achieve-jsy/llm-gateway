@@ -438,7 +438,7 @@ onMounted(() => { load() })
 }
 
 .gc:hover {
-  box-shadow: 0 10px 36px rgba(43,168,162,0.12), 0 2px 8px rgba(0,0,0,0.05);
+  box-shadow: 0 10px 36px rgba(54,179,78,0.12), 0 2px 8px rgba(0,0,0,0.05);
   transform: translateY(-3px);
   border-color: #A8DAD7;
 }
@@ -484,7 +484,7 @@ onMounted(() => { load() })
   width: 26px;
   height: 26px;
   border-radius: 6px;
-  background: #F0FAFA;
+  background: #EEF9F0;
   border: 1px solid #D0E8E6;
   display: flex;
   align-items: center;
@@ -495,15 +495,15 @@ onMounted(() => { load() })
 }
 
 .gc:hover .gc-copy-icon {
-  background: rgba(43,168,162,0.1);
-  border-color: #2BA8A2;
-  color: #2BA8A2;
+  background: rgba(54,179,78,0.1);
+  border-color: #36B34E;
+  color: #36B34E;
 }
 
 .gc-copy-icon.ok {
-  background: rgba(39,174,96,0.1);
-  border-color: #27AE60;
-  color: #27AE60;
+  background: rgba(14,163,113,0.1);
+  border-color: #0EA371;
+  color: #0EA371;
 }
 
 /* 描述 */
@@ -549,7 +549,7 @@ onMounted(() => { load() })
   border-radius: 50%;
   display: inline-block;
   &.in { background: #3498DB; }
-  &.out { background: #2BA8A2; }
+  &.out { background: #36B34E; }
 }
 .gc-price__unit {
   margin-left: auto;
@@ -585,7 +585,7 @@ onMounted(() => { load() })
   border: 1px solid;
 }
 
-.cap-mode    { color: #1A7A75; background: rgba(43,168,162,0.08);  border-color: rgba(43,168,162,0.2); }
+.cap-mode    { color: #1A7A37; background: rgba(54,179,78,0.08);  border-color: rgba(54,179,78,0.2); }
 .cap-v       { color: #2471A3; background: rgba(36,113,163,0.08);   border-color: rgba(36,113,163,0.2); }
 .cap-f       { color: #7D3C98; background: rgba(125,60,152,0.07);   border-color: rgba(125,60,152,0.18); }
 .cap-c       { color: #8A9A98; background: #F5FAFA; border-color: #D8EEEC; font-variant-numeric: tabular-nums; }
@@ -669,8 +669,8 @@ onMounted(() => { load() })
   box-shadow: 0 12px 32px rgba(0,0,0,0.22);
   white-space: nowrap;
 
-  b { color: #4DC8C2; }
-  .el-icon { color: #4DC8C2; font-size: 15px; }
+  b { color: #6CD083; }
+  .el-icon { color: #6CD083; font-size: 15px; }
 }
 
 .t-enter-active, .t-leave-active { transition: opacity 0.2s, transform 0.2s; }
@@ -690,19 +690,19 @@ onMounted(() => { load() })
   border-color: #1A3230;
 }
 :global(html.dark) .gc:hover {
-  border-color: #2BA8A2;
+  border-color: #36B34E;
   box-shadow: 0 10px 36px rgba(0,0,0,0.4);
 }
 :global(html.dark) .gc-name { color: #A0E0DC; }
 :global(html.dark) .gc-desc { color: #4A7A78; }
 :global(html.dark) .gc-copy-icon { background: #132322; border-color: #1F3A38; color: #3A7A78; }
-:global(html.dark) .gc-copy-icon.ok { background: rgba(39,174,96,0.12); border-color: #27AE60; color: #27AE60; }
+:global(html.dark) .gc-copy-icon.ok { background: rgba(14,163,113,0.12); border-color: #0EA371; color: #0EA371; }
 :global(html.dark) .gc-models { color: #2A5A58; }
 :global(html.dark) .gc-price { background: #0B1817; border-color: #1A3230; color: #4A7A78; }
 :global(html.dark) .gc-price__item b { color: #A0E0DC; }
 :global(html.dark) .gc-price__unit { color: #2A5A58; }
 
-:global(html.dark) .cap-mode { color: #3CC4BD; background: rgba(43,168,162,0.1); border-color: rgba(43,168,162,0.25); }
+:global(html.dark) .cap-mode { color: #5DC370; background: rgba(54,179,78,0.1); border-color: rgba(54,179,78,0.25); }
 :global(html.dark) .cap-v    { color: #5DADE2; background: rgba(52,152,219,0.1); border-color: rgba(52,152,219,0.22); }
 :global(html.dark) .cap-f    { color: #BB8FCE; background: rgba(155,89,182,0.1); border-color: rgba(155,89,182,0.22); }
 :global(html.dark) .cap-c    { color: #2A6A68; background: transparent; border-color: #1A3230; }

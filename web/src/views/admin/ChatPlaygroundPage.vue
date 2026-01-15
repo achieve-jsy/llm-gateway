@@ -858,7 +858,7 @@ function renderContent(content: string): string {
 
 .input-box:focus-within {
   border-color: var(--el-color-primary);
-  box-shadow: 0 0 0 3px rgba(43, 168, 162, 0.1);
+  box-shadow: 0 0 0 3px rgba(54, 179, 78, 0.1);
 }
 
 .input-box__textarea {

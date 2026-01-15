@@ -128,7 +128,7 @@ function formatPrice(n: number): string {
 }
 
 .gc-clickable:hover {
-  box-shadow: 0 10px 36px rgba(43, 168, 162, 0.12), 0 2px 8px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 10px 36px rgba(54, 179, 78, 0.12), 0 2px 8px rgba(0, 0, 0, 0.05);
   transform: translateY(-3px);
   border-color: #a8dad7;
 }
@@ -139,7 +139,7 @@ function formatPrice(n: number): string {
   background: #d8eeec;
 }
 
-.gc-accent-success .gc-stripe { background: linear-gradient(90deg, #27ae60, #6fcf97); }
+.gc-accent-success .gc-stripe { background: linear-gradient(90deg, #0EA371, #5FD3A8); }
 .gc-accent-warning .gc-stripe { background: linear-gradient(90deg, #e67e22, #f0a96a); }
 .gc-accent-muted .gc-stripe { background: #d8e2e1; }
 
@@ -181,7 +181,7 @@ function formatPrice(n: number): string {
   white-space: nowrap;
 }
 
-.st-success { color: #1e8e54; background: rgba(39, 174, 96, 0.1); border-color: rgba(39, 174, 96, 0.25); }
+.st-success { color: #1e8e54; background: rgba(14, 163, 113, 0.1); border-color: rgba(14, 163, 113, 0.25); }
 .st-warning { color: #ca6f1e; background: rgba(230, 126, 34, 0.1); border-color: rgba(230, 126, 34, 0.25); }
 .st-muted { color: #8a9a98; background: #f4f7f7; border-color: #dde6e5; }
 
@@ -234,7 +234,7 @@ function formatPrice(n: number): string {
 }
 
 .gc-price__dot.in { background: #3498db; }
-.gc-price__dot.out { background: #2ba8a2; }
+.gc-price__dot.out { background: #36B34E; }
 
 .gc-price__unit {
   margin-left: auto;
@@ -270,7 +270,7 @@ function formatPrice(n: number): string {
   border: 1px solid;
 }
 
-.cap-mode { color: #1a7a75; background: rgba(43, 168, 162, 0.08); border-color: rgba(43, 168, 162, 0.2); }
+.cap-mode { color: #1A7A37; background: rgba(54, 179, 78, 0.08); border-color: rgba(54, 179, 78, 0.2); }
 .cap-v { color: #2471a3; background: rgba(36, 113, 163, 0.08); border-color: rgba(36, 113, 163, 0.2); }
 .cap-f { color: #7d3c98; background: rgba(125, 60, 152, 0.07); border-color: rgba(125, 60, 152, 0.18); }
 .cap-c { color: #8a9a98; background: #f5fafa; border-color: #d8eeec; font-variant-numeric: tabular-nums; }
@@ -319,7 +319,7 @@ function formatPrice(n: number): string {
   flex-shrink: 0;
 }
 
-.dot-success { background: #27ae60; }
+.dot-success { background: #0EA371; }
 .dot-warning { background: #e67e22; }
 .dot-muted { background: #b0c4c2; }
 
@@ -337,7 +337,7 @@ function formatPrice(n: number): string {
 
 /* ── 深色模式 ───────────────────────────── */
 :global(html.dark) .gc { background: #0e1d1c; border-color: #1a3230; }
-:global(html.dark) .gc-clickable:hover { border-color: #2ba8a2; box-shadow: 0 10px 36px rgba(0, 0, 0, 0.4); }
+:global(html.dark) .gc-clickable:hover { border-color: #36B34E; box-shadow: 0 10px 36px rgba(0, 0, 0, 0.4); }
 :global(html.dark) .gc-name { color: #a0e0dc; }
 :global(html.dark) .gc-accent-muted .gc-name { color: #5a8a88; }
 :global(html.dark) .gc-desc { color: #4a7a78; }
@@ -347,10 +347,10 @@ function formatPrice(n: number): string {
 :global(html.dark) .gc-price { background: #0b1817; border-color: #1a3230; color: #4a7a78; }
 :global(html.dark) .gc-price__item b { color: #a0e0dc; }
 :global(html.dark) .gc-price__unit { color: #2a5a58; }
-:global(html.dark) .st-success { color: #5fd99a; background: rgba(39, 174, 96, 0.12); border-color: rgba(39, 174, 96, 0.28); }
+:global(html.dark) .st-success { color: #5fd99a; background: rgba(14, 163, 113, 0.12); border-color: rgba(14, 163, 113, 0.28); }
 :global(html.dark) .st-warning { color: #f0b27a; background: rgba(230, 126, 34, 0.12); border-color: rgba(230, 126, 34, 0.28); }
 :global(html.dark) .st-muted { color: #6a8a88; background: #112221; border-color: #1f3a38; }
-:global(html.dark) .cap-mode { color: #3cc4bd; background: rgba(43, 168, 162, 0.1); border-color: rgba(43, 168, 162, 0.25); }
+:global(html.dark) .cap-mode { color: #5DC370; background: rgba(54, 179, 78, 0.1); border-color: rgba(54, 179, 78, 0.25); }
 :global(html.dark) .cap-v { color: #5dade2; background: rgba(52, 152, 219, 0.1); border-color: rgba(52, 152, 219, 0.22); }
 :global(html.dark) .cap-f { color: #bb8fce; background: rgba(155, 89, 182, 0.1); border-color: rgba(155, 89, 182, 0.22); }
 :global(html.dark) .cap-c { color: #2a6a68; background: transparent; border-color: #1a3230; }

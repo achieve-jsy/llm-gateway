@@ -99,11 +99,11 @@ onMounted(async () => {
   font-weight: 600;
 }
 
-.cat--system { background: #E8F6F5; color: #2BA8A2; }
+.cat--system { background: #EAF7EC; color: #36B34E; }
 .cat--feature { background: #EDE7F6; color: #5E35B1; }
 .cat--alert { background: #FFF3E0; color: #E65100; }
 
-.level--info { background: #E8F6F5; color: #2BA8A2; }
+.level--info { background: #EAF7EC; color: #36B34E; }
 .level--warning { background: #FFF3E0; color: #E65100; }
 .level--critical { background: #FFEBEE; color: #C62828; }
 

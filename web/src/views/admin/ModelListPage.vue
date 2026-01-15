@@ -685,7 +685,7 @@ onMounted(() => {
   flex-shrink: 0;
 }
 
-.health-ok { background: #27AE60; }
+.health-ok { background: #0EA371; }
 .health-warn { background: #EAB308; }
 .health-error { background: #E74C3C; }
 .health-unknown { background: #CBD5E1; }
@@ -695,7 +695,7 @@ onMounted(() => {
   font-weight: 500;
 }
 
-.health-ok-text { color: #27AE60; }
+.health-ok-text { color: #0EA371; }
 .health-warn-text { color: #EAB308; }
 .health-error-text { color: #E74C3C; }
 

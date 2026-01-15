@@ -169,7 +169,7 @@
             <template #default="{ row }">
               <div class="mu-model-cell">
                 <span class="mu-model-name">{{ row.model || '—' }}</span>
-                <div v-if="row.routed_model && row.routed_model !== row.model" class="mu-model-routed">
+                <div v-if="row.routed_via_group && row.routed_model" class="mu-model-routed">
                   <span class="mu-arrow">↳</span>
                   <span class="mu-model-name mu-model-name--muted">{{ row.routed_model }}</span>
                 </div>
@@ -581,7 +581,8 @@
 
         <div class="mu-timeline">
           <div v-for="stage in timelineStages" :key="stage.key"
-               :class="['mu-tl-node', stage.status, { 'mu-tl-node--total': stage.key === 'done' }]">
+               :class="['mu-tl-node', stage.status, { 'mu-tl-node--total': stage.key === 'done',
+                        'mu-tl-node--failover': stage.key === 'failover' }]">
             <div class="mu-tl-dot">
               <el-icon v-if="stage.status === 'ok'"><SuccessFilled /></el-icon>
               <el-icon v-else-if="stage.status === 'error'"><CircleCloseFilled /></el-icon>
@@ -780,11 +781,11 @@ interface StatsTotal {
 }
 interface LogRow {
   request_id: string; ts: string; key_id: string; key_name?: string
-  model: string; routed_model: string; group_name: string; provider: string
+  model: string; routed_model: string; routed_via_group: boolean; group_name: string; provider: string
   prompt_tokens: number; cached_tokens: number; cache_write_tokens: number
   completion_tokens: number; reasoning_tokens: number; total_tokens: number
   status: number; upstream_status: number; duration_ms: number; first_token_ms?: number | null
-  stage_auth_ms?: number | null; stage_route_ms?: number | null; stage_upstream_ms?: number | null
+  stage_ttfb_ms?: number | null; stage_auth_ms?: number | null; stage_route_ms?: number | null; stage_upstream_ms?: number | null
   stream: boolean; failover_used: boolean; usage_missing: boolean
   reasoning_effort?: string; user_agent?: string; ip_address?: string
   input_cost_usd: number; output_cost_usd: number; cache_read_cost_usd: number; est_cost_usd: number
@@ -1438,7 +1439,7 @@ watch(analysisOpen, (open) => {
 // ── Trace Drawer ──
 interface TraceData {
   request_id: string; ts: string
-  stage_auth_ms?: number; stage_route_ms?: number; stage_upstream_ms?: number
+  stage_auth_ms?: number; stage_route_ms?: number; stage_ttfb_ms?: number; stage_upstream_ms?: number
   stage_ttft_ms?: number; stage_total_ms?: number
   request_headers?: Record<string, string>
   request_body?: any; response_body?: any
@@ -1478,26 +1479,90 @@ const traceResponseText = computed(() => {
 const traceIsStream = computed(() => !!(traceData.value?.response_body as any)?.stream)
 
 const timelineStages = computed(() => {
-  const td = traceData.value; const row = traceRow.value
+  const td = traceData.value
+  const row = traceRow.value
   if (!row) return []
-  const authMs  = td?.stage_auth_ms     ?? (row as any).stage_auth_ms     ?? null
-  const routeMs = td?.stage_route_ms    ?? (row as any).stage_route_ms    ?? null
-  const upMs    = td?.stage_upstream_ms ?? (row as any).stage_upstream_ms ?? null
-  const ttftMs  = td?.stage_ttft_ms     ?? row.first_token_ms             ?? null
-  const total   = row.duration_ms       ?? td?.stage_total_ms             ?? null
-  const isError = (row.status ?? 200) >= 400
+
+  // 各阶段累计时间点（均相对于请求抵达时刻）
+  const authMs  = td?.stage_auth_ms     ?? row.stage_auth_ms     ?? null
+  const routeMs = td?.stage_route_ms    ?? row.stage_route_ms    ?? null
+  const ttfbMs  = td?.stage_ttfb_ms     ?? row.stage_ttfb_ms     ?? null
+  const ttftMs  = td?.stage_ttft_ms     ?? row.first_token_ms    ?? null
+  const total   = row.duration_ms       ?? td?.stage_total_ms    ?? null
+
+  const isStream    = !!row.stream
+  const isFailover  = !!row.failover_used
+  const isError     = (row.status ?? 200) >= 400
+  const errorInAuth  = isError && authMs  == null && routeMs == null
+  const errorInRoute = isError && routeMs == null && authMs  != null
+
+  // 各阶段独立耗时（时间点差值，保证非负）
   const authDur  = authMs  != null ? Math.max(0, authMs) : null
-  const routeDur = (routeMs != null && authMs != null) ? Math.max(0, routeMs - authMs) : null
-  const upDur    = (upMs != null && total != null) ? Math.max(0, total - upMs) : null
+  const routeDur = (routeMs != null && authMs != null)
+    ? Math.max(0, routeMs - authMs)
+    : (routeMs != null ? Math.max(0, routeMs) : null)
+
+  // 流式：TTFB = 上游请求发出→响应头，TTFT_delta = 响应头→首个 content token
+  const ttfbDur       = ttfbMs != null ? Math.max(0, ttfbMs) : null
+  const ttftDeltaDur  = (ttftMs != null && ttfbMs != null)
+    ? Math.max(0, ttftMs - ttfbMs)
+    : (ttftMs != null ? Math.max(0, ttftMs) : null)
+
+  // 流式返回耗时：从首 token 到结束
+  const streamReturnDur = (isStream && ttftMs != null && routeMs != null && total != null)
+    ? Math.max(0, total - routeMs - ttftMs)
+    : null
+
+  // 非流式：整个上游往返耗时
+  const upstreamDur = (!isStream && routeMs != null && total != null)
+    ? Math.max(0, total - routeMs)
+    : null
+
   type Status = 'ok' | 'error' | 'skip'
-  const stages: { key: string; label: string; ms: number | null; status: Status; note?: string }[] = [
-    { key: 'auth',     label: '鉴权',  ms: authDur,  status: authMs  != null ? 'ok' : 'skip' },
-    { key: 'route',    label: '路由',  ms: routeDur, status: routeMs != null ? 'ok' : 'skip',
-      note: (routeMs != null && authMs != null && routeMs < authMs) ? '计时异常' : undefined },
-    { key: 'upstream', label: '上游',  ms: upDur,    status: isError ? 'error' : upMs != null ? 'ok' : 'skip' },
-    { key: 'ttft',     label: 'TTFT',  ms: ttftMs,   status: ttftMs  != null ? 'ok' : 'skip' },
-    { key: 'done',     label: '总耗时', ms: total,   status: isError ? 'error' : 'ok' },
-  ]
+  const stages: { key: string; label: string; ms: number | null; status: Status; note?: string }[] = []
+
+  stages.push({
+    key: 'auth', label: '鉴权', ms: authDur,
+    status: authMs != null ? 'ok' : (errorInAuth ? 'error' : 'skip'),
+  })
+
+  stages.push({
+    key: 'route', label: '路由', ms: routeDur,
+    status: errorInRoute ? 'error' : routeMs != null ? 'ok' : 'skip',
+    note: (routeMs != null && authMs != null && routeMs < authMs) ? '计时异常' : undefined,
+  })
+
+  if (isFailover) {
+    stages.push({
+      key: 'failover', label: '故障转移', ms: null, status: 'ok',
+    })
+  }
+
+  if (isStream) {
+    stages.push({
+      key: 'ttfb', label: 'TTFB', ms: ttfbDur,
+      status: isError ? 'error' : (ttfbDur != null ? 'ok' : 'skip'),
+    })
+    stages.push({
+      key: 'ttft', label: 'TTFT', ms: ttftDeltaDur,
+      status: isError ? 'error' : (ttftDeltaDur != null ? 'ok' : 'skip'),
+    })
+    stages.push({
+      key: 'stream', label: '流式返回', ms: streamReturnDur,
+      status: isError ? 'error' : (streamReturnDur != null ? 'ok' : 'skip'),
+    })
+  } else {
+    stages.push({
+      key: 'upstream', label: '上游响应', ms: upstreamDur,
+      status: isError ? 'error' : (upstreamDur != null ? 'ok' : 'skip'),
+    })
+  }
+
+  stages.push({
+    key: 'done', label: '总耗时', ms: total,
+    status: isError ? 'error' : 'ok',
+  })
+
   return stages.filter(s => s.status !== 'skip' || s.key === 'done')
 })
 

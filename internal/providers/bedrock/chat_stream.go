@@ -248,11 +248,19 @@ func (s *streamConverter) formatChunk(delta map[string]any, finishReason any, us
 		}},
 	}
 	if usage != nil {
-		chunk["usage"] = map[string]any{
+		u := map[string]any{
 			"prompt_tokens":     int(awssdk.ToInt32(usage.InputTokens)),
 			"completion_tokens": int(awssdk.ToInt32(usage.OutputTokens)),
 			"total_tokens":      int(awssdk.ToInt32(usage.TotalTokens)),
 		}
+		// 缓存字段：统一使用 Anthropic 约定的键名，供 stream_usage_observer / cost.go 读取
+		if usage.CacheReadInputTokens != nil {
+			u["cache_read_input_tokens"] = int(*usage.CacheReadInputTokens)
+		}
+		if usage.CacheWriteInputTokens != nil {
+			u["cache_creation_input_tokens"] = int(*usage.CacheWriteInputTokens)
+		}
+		chunk["usage"] = u
 	}
 	buf, err := json.Marshal(chunk)
 	if err != nil {

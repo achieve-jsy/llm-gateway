@@ -44,7 +44,7 @@ const modelRows = ref<Row[]>([])
 const hourRows = ref<Row[]>([])
 
 const RANGE_DAYS = 30
-const USD_TO_CNY = 7.2
+const usdToCny = ref(7.2)
 
 function fmtLocal(d: Date) {
   const y = d.getFullYear()
@@ -106,6 +106,7 @@ onMounted(async () => {
     const res = await getPublicSettings()
     apiBaseUrl.value = res.data.api_base_url || ''
     displayUrl.value = buildUrl(apiBaseUrl.value)
+    if (res.data.pricing_usd_to_cny_rate) usdToCny.value = res.data.pricing_usd_to_cny_rate
   } catch { /* noop */ }
   await load()
 })
@@ -393,7 +394,7 @@ const fmtTokens = (n?: number | null) => {
   return String(n)
 }
 const fmtNum = (n?: number | null) => (n || 0).toLocaleString()
-const totalCostCny = computed(() => (total.value?.est_cost_usd || 0) * USD_TO_CNY)
+const totalCostCny = computed(() => (total.value?.est_cost_usd || 0) * usdToCny.value)
 const fmtCny = (n: number) => n < 0.01 && n > 0 ? '<0.01' : n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 </script>
 

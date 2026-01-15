@@ -5,7 +5,9 @@ description: 生产环境蓝绿部署操作指南。用于执行生产发布（�
 
 # 生产环境蓝绿部署 (prod-blue-green-deploy)
 
-> 本 skill 供 AI 在「生产发布」「生产回滚」「首次迁移至蓝绿体系」和「排查生产部署故障」时遵循。关联 skill：`gitlab-cicd`（流水线/变量操作）、`atlas-db-migration`（数据库迁移）、`test-deploy-ops`（测试环境发布）。
+> 本 skill 供 AI 在「生产发布」「生产回滚」「首次迁移至蓝绿体系」和「排查生产部署故障」时遵循。关联 skill：`gitlab-cicd`（流水线/变量操作）、`atlas-db-migration`（数据库迁移）、`test-deploy-ops`（测试环境发布）、`blue-green-deploy`（蓝绿脚本机制与踩坑清单，test/prod 共用脚本）。
+
+> ⚠️ **脚本已更新（零宕机修复）**：`deploy-blue-green.sh` 现已修复——①健康检查改用 `curl(GET)`（旧 `wget --spider` 在宿主机发 HEAD，gin 仅 GET 的 `/health`/`/healthz` 会 404 误判不健康，**疑似旧版首次割接失败诱因**）；②首次割接改为 **none→green 零宕机**（先起 green 不占旧栈 8080/8081，健康后切流再停旧栈），不再「先停旧栈造成 15-30s 停机」；③新增 `STOP_TIMEOUT` 参数强制回收不响应 SIGTERM 的旧容器。机制细节与踩坑见 `blue-green-deploy` skill。
 
 ---
 
@@ -125,17 +127,11 @@ ssh root@192.0.2.10 "cd /opt/llm-gateway && bash deploy-blue-green.sh --rollback
 
 ### 执行步骤
 
+> ✅ **零宕机：不要手动停旧栈**。新脚本检测到无蓝绿容器(active=none)会自动选 **GREEN**(8082/8083，不占旧栈的 8080/8081)，健康检查通过、切流之后才下线旧栈(`LEGACY_CONTAINERS`)。直接跑脚本即可，**严禁先 `docker stop llm-gw-*`**(那会造成停机，正是已修复的旧问题)。
+
 ```bash
 ssh root@192.0.2.10 "
   set -e
-
-  # 1. 停旧容器（会有 15-30 秒停机）
-  echo '=== 停止旧容器 ==='
-  docker stop llm-gw-gateway llm-gw-control-plane
-  docker rm llm-gw-gateway llm-gw-control-plane
-
-  # 2. 启动蓝绿
-  echo '=== 启动蓝绿部署 ==='
   cd /opt/llm-gateway
   export IMAGE_TAG=latest
   export REGISTRY=192.0.2.10:5000
@@ -144,6 +140,7 @@ ssh root@192.0.2.10 "
   export REDIS_ADDR=192.0.2.10:6379
   export REDIS_PASSWORD=CHANGE_ME_REDIS_PASSWORD
   export REDIS_DB=2
+  export REDIS_DB_GREEN=3
   export JWT_SECRET=d8f7a3b2c1e9f4567890abc123def456
   export ENCRYPTION_KEY=12345678901234567890123456789012
   export INTERNAL_AUTH_TOKEN=CHANGE_ME_INTERNAL_TOKEN
@@ -152,11 +149,12 @@ ssh root@192.0.2.10 "
   export OAUTH_REDIRECT_URI=https://aimeter.xk-devops.com/auth/callback
   export OAUTH_ISSUER_URL=https://oauth.example.net/
   export FRONTEND_URL=https://aimeter.xk-devops.com
+  export LEGACY_CONTAINERS='llm-gw-gateway llm-gw-control-plane'
   bash deploy-blue-green.sh
 "
 ```
 
-首次部署时脚本检测到无蓝绿容器 → 自动选 BLUE → 启动 → 健康检查 → 切 nginx → 完成（无 drain）。
+首次割接：脚本检测到 active=none → 选 **GREEN** → 启动 green → 健康检查 → 切 nginx → drain → 停旧单体容器(`LEGACY_CONTAINERS`)，**全程零宕机**。
 
 ### 验证
 
@@ -172,25 +170,26 @@ curl -sf https://aimeter.xk-devops.com/api/v1/settings/public  # control-plane
 ### 流程
 
 ```
-1. 读取 .active-color 文件（或自动检测）
-2. 确定目标颜色（blue↔green 交替）
-3. docker compose -f docker-compose.{target}.yml -p llm-{target} up -d
-4. 健康检查（最多 90s：30 次 × 3s 间隔）
-5. cp upstream-{target}.conf → upstream-active.conf
-6. nginx -t && nginx -s reload
-7. 保存状态到 .active-color
-8. sleep 600（drain 旧环境的 SSE 长连接）
-9. docker compose -p llm-{old} down --timeout 600
+1. 读取 .active-color（或自动检测运行中的颜色）；none→green，否则 blue↔green 交替
+2. start_env target：docker compose -f docker-compose.{target}.yml -p llm-{target} up -d
+3. 健康检查 curl(GET) /health、/healthz（默认 30 次 × 3s）
+   失败 → 不切流量、拆掉坏掉的 target、退出（旧环境继续服务，零宕机）
+4. cp upstream-{target}.conf → upstream-active.conf；nginx -t && nginx -s reload
+5. 保存状态到 .active-color
+6. 停旧：active=none → stop_legacy(按名停旧单体容器)；否则 sleep DRAIN_TIMEOUT 后
+   docker compose -p llm-{old} down --timeout STOP_TIMEOUT
 ```
 
-### 关键参数
+### 关键参数（均可用 env 覆盖；prod 默认值如下）
 
-| 参数 | 值 | 说明 |
+| 参数 | 默认 | 说明 |
 |------|-----|------|
-| DRAIN_TIMEOUT | 600s | 等待存量 SSE 流结束 |
-| HEALTH_RETRIES | 30 | 健康检查重试次数 |
-| HEALTH_INTERVAL | 3s | 每次重试间隔 |
-| stop_grace_period | 600s | 容器收到 SIGTERM 后的等待时间 |
+| NGINX_UPSTREAM | `/opt/llm-gateway/upstream-active.conf` | nginx include 的活跃 upstream 文件 |
+| DRAIN_TIMEOUT | 600s | 切流后等待存量 SSE 流自然结束 |
+| STOP_TIMEOUT | 600s | drain 后停旧容器超时（gateway 不响应 SIGTERM 时到点强杀）|
+| HEALTH_RETRIES / HEALTH_INTERVAL | 30 / 3s | 健康检查重试次数 / 间隔（curl GET）|
+| LEGACY_CONTAINERS | `llm-gw-gateway llm-gw-control-plane` | 首次割接要下线的旧单体容器 |
+| REDIS_DB / REDIS_DB_GREEN | 2 / 3 | 两色用不同 redis DB |
 
 ### 状态文件
 
@@ -242,9 +241,10 @@ curl -sf https://aimeter.xk-devops.com/api/v1/settings/public  # control-plane
 
 | 错误 | 原因 | 解决 |
 |------|------|------|
-| `failed health check after 90s` | 新容器启动失败 | `docker logs llm-{color}-gateway` 查看原因 |
+| `failed health check` | 新容器启动失败，或宿主机用错探活工具 | `docker logs llm-{color}-gateway`；确认脚本用 `curl(GET)` 而非 `wget --spider`(HEAD 会 404 误判，见 `blue-green-deploy` §7) |
 | `nginx config test failed` | upstream 文件语法错误 | `cat /opt/llm-gateway/upstream-active.conf` 检查 |
-| `port already in use` | 旧容器未停/端口被占 | `ss -tlnp \| grep 808` 定位占用进程 |
+| `port already in use` | 残留蓝绿容器占端口（多因中途 kill 脚本）| `ss -tlnp \| grep 808` 定位；`docker compose -p llm-{color} down` 清残留后重试（down 也需先 export 密钥）|
+| 停旧容器卡住数百秒 | gateway 不响应 SIGTERM，等满 stop_grace_period | 设 `STOP_TIMEOUT` 到点强杀；必要时 `docker kill llm-{old}-gateway` |
 | 权限不足 | 非 root 执行 | 必须 root 或 sudo |
 
 ### 7.2 部署后服务异常

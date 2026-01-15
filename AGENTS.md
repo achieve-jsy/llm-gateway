@@ -130,6 +130,7 @@ cd tools/opencode-models-discovery && bun run build:bundle && bunx tsc --noEmit 
 | `docs/configuration.md` | 配置体系、参数注入、本地开发 |
 | `docs/observability.md` | 日志、链路追踪、埋点采集 |
 | `docs/guardrails.md` | 项目防护栏铁律 |
+| `docs/frontend-design-guidelines.md` | 前端 UI/UX 设计规范（Vue3 + Element Plus） |
 | `docs/opencode-models-discovery.md` | OpenCode 模型发现插件架构 |
 
 ### 其他

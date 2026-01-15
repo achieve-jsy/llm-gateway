@@ -181,6 +181,7 @@ const composition = computed(() => {
 
 // token 按模型分布
 const PALETTE = ['#36B34E', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899', '#06b6d4']
+const modelDim = ref<'token' | 'cost'>('token')
 const modelDist = computed(() => {
   const rows = modelRows.value.map(r => ({
     model: r.model || '未知',
@@ -189,6 +190,16 @@ const modelDist = computed(() => {
   const sum = rows.reduce((s, r) => s + r.tokens, 0) || 1
   return rows.slice(0, 6).map((r, i) => ({
     ...r, pct: Math.round(r.tokens / sum * 100), color: PALETTE[i % PALETTE.length],
+  }))
+})
+const costDist = computed(() => {
+  const rows = modelRows.value.map(r => ({
+    model: r.model || '未知',
+    costCny: (r.est_cost_usd || 0) * usdToCny.value,
+  })).filter(r => r.costCny > 0).sort((a, b) => b.costCny - a.costCny)
+  const sum = rows.reduce((s, r) => s + r.costCny, 0) || 1
+  return rows.slice(0, 6).map((r, i) => ({
+    ...r, pct: Math.round(r.costCny / sum * 100), color: PALETTE[i % PALETTE.length],
   }))
 })
 const topModel = computed(() => modelDist.value[0]?.model || '—')
@@ -554,13 +565,17 @@ const fmtCny = (n: number) => n < 0.01 && n > 0 ? '<0.01' : n.toLocaleString('zh
         </div>
       </section>
 
-      <!-- token 按模型分布 -->
+      <!-- 模型分布：Token + 花费 -->
       <section class="pd-card pd-models">
         <div class="pd-card__hd">
-          <h3 class="pd-card__title">你的 Token 都喂给了谁</h3>
-          <span class="pd-card__hint">按 token 占比 · 看你最爱用哪些模型</span>
+          <h3 class="pd-card__title">你的钱和 Token 都去了哪</h3>
+          <span class="pd-card__hint">双维度 · 看你最爱用哪些模型</span>
         </div>
-        <div class="pd-models__list">
+        <div class="pd-dim-tabs">
+          <button type="button" :class="{ active: modelDim === 'token' }" @click="modelDim = 'token'">Token 分布</button>
+          <button type="button" :class="{ active: modelDim === 'cost' }" @click="modelDim = 'cost'">花费分布</button>
+        </div>
+        <div v-if="modelDim === 'token'" class="pd-models__list">
           <div v-for="(m, i) in modelDist" :key="m.model" class="pd-mrow">
             <span class="pd-mrow__rank" :style="{ background: m.color }">{{ i + 1 }}</span>
             <span class="pd-mrow__name" :title="m.model">{{ m.model }}</span>
@@ -569,6 +584,17 @@ const fmtCny = (n: number) => n < 0.01 && n > 0 ? '<0.01' : n.toLocaleString('zh
             </div>
             <span class="pd-mrow__pct">{{ m.pct }}%</span>
             <span class="pd-mrow__tok">{{ fmtTokens(m.tokens) }}</span>
+          </div>
+        </div>
+        <div v-else class="pd-models__list">
+          <div v-for="(m, i) in costDist" :key="m.model" class="pd-mrow">
+            <span class="pd-mrow__rank" :style="{ background: m.color }">{{ i + 1 }}</span>
+            <span class="pd-mrow__name" :title="m.model">{{ m.model }}</span>
+            <div class="pd-mrow__track">
+              <div class="pd-mrow__fill" :style="{ width: m.pct + '%', background: m.color }" />
+            </div>
+            <span class="pd-mrow__pct">{{ m.pct }}%</span>
+            <span class="pd-mrow__tok">¥{{ fmtCny(m.costCny) }}</span>
           </div>
         </div>
       </section>
@@ -732,6 +758,16 @@ const fmtCny = (n: number) => n < 0.01 && n > 0 ? '<0.01' : n.toLocaleString('zh
 .pd-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 
 /* ── 模型分布 ── */
+.pd-dim-tabs { display: flex; gap: 8px; margin-bottom: 8px; }
+.pd-dim-tabs button {
+  padding: 4px 12px; border: 1px solid var(--el-border-color-lighter);
+  border-radius: 14px; background: transparent; color: var(--el-text-color-secondary);
+  font-size: 12px; cursor: pointer; transition: all .2s;
+}
+.pd-dim-tabs button.active {
+  background: var(--pd-brand, var(--el-color-primary));
+  color: #fff; border-color: var(--pd-brand, var(--el-color-primary));
+}
 .pd-models__list { display: flex; flex-direction: column; gap: 10px; }
 .pd-mrow { display: flex; align-items: center; gap: 10px; }
 .pd-mrow__rank { width: 20px; height: 20px; border-radius: 6px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; }

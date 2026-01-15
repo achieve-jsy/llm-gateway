@@ -355,7 +355,9 @@ deploy-prod:
   stage: deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
-  timeout: 20m
+  # 预算：preflight(~2m) + DRAIN_TIMEOUT(600s) + STOP_TIMEOUT(120s) ≈ 14m，留足余量。
+  # 旧值 20m 与「drain 600 + stop 600」相等，旧 gateway 停得慢时必超时（部署其实已成功）。
+  timeout: 30m
   script:
     - |
       SSH_OPTS="-o StrictHostKeyChecking=no"
@@ -377,6 +379,9 @@ deploy-prod:
         set -e
         cd ${PROD_PATH}
         export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=prod
+        # 旧环境经 600s drain 后已无新流量，停它不需再等 600s（默认值），
+        # 否则 drain 600 + stop 600 = 20m 撑满 job timeout，导致部署成功但 job 报错。
+        export DRAIN_TIMEOUT=600 STOP_TIMEOUT=120
         export DATABASE_URL='${PROD_DATABASE_URL}'
         export REDIS_ADDR='${PROD_REDIS_ADDR}' REDIS_DB='${PROD_REDIS_DB}' REDIS_PASSWORD='${PROD_REDIS_PASSWORD}'
         export JWT_SECRET='${PROD_JWT_SECRET}'
@@ -401,7 +406,8 @@ rollback-prod:
   stage: deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
-  timeout: 15m
+  # 预算：DRAIN_TIMEOUT(600s) + STOP_TIMEOUT(120s) + preflight ≈ 13m，留足余量。
+  timeout: 20m
   script:
     - |
       SSH_OPTS="-o StrictHostKeyChecking=no"
@@ -409,6 +415,8 @@ rollback-prod:
       ssh ${SSH_OPTS} root@${PROD_HOST} "
         set -e
         cd ${PROD_PATH}
+        # 同 deploy-prod：drain 后旧环境已空闲，停它无需默认 600s（否则会撑爆 timeout）。
+        export DRAIN_TIMEOUT=600 STOP_TIMEOUT=120
         bash deploy-blue-green.sh --rollback
       "
   environment:

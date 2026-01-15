@@ -23,6 +23,7 @@
          性格档案
     ═══════════════════════════════════════════ -->
     <div v-if="statsTotal && !statsLoading" class="mu-personality-card" :data-tag="currentTag.id">
+      <div class="mu-personality-accent" />
       <div class="mu-personality-inner">
         <div class="mu-personality-mascot">
           <img
@@ -36,6 +37,16 @@
           <div class="mu-personality-badge">性格档案</div>
           <h3 class="mu-personality-label">{{ currentTag.emoji }} {{ currentTag.label }}</h3>
           <p class="mu-personality-story">{{ currentTag.story }}</p>
+          <div class="mu-personality-metrics">
+            <div
+              v-for="m in getTagMetrics(currentTag.id)"
+              :key="m.label"
+              class="mu-personality-metric"
+            >
+              <span class="mu-personality-metric__value">{{ m.value }}</span>
+              <span class="mu-personality-metric__label">{{ m.label }}</span>
+            </div>
+          </div>
           <div class="mu-personality-actions">
             <el-button
               type="primary"
@@ -1227,6 +1238,70 @@ async function shareTag() {
   }
 }
 
+// ── 性格档案数据亮点 ──
+interface TagMetric { label: string; value: string }
+
+function getTagMetrics(tagId: string): TagMetric[] {
+  const t = statsTotal.value
+  const totalReq = t?.req_count ?? 0
+  switch (tagId) {
+    case 'volwang':
+      return [
+        { label: '日均调用', value: `${Math.round(dailyAvgCalls.value)} 次` },
+        { label: '全站排名', value: `Top ${Math.max(1, 100 - userPercentile.value)}%` },
+        { label: '累计调用', value: `${fmtNum(totalReq)} 次` },
+      ]
+    case 'shengqian':
+      return [
+        { label: '缓存命中', value: `${cacheHitPct.value}%` },
+        { label: '节省金额', value: fmtCny(savedCostEstimate.value) },
+        { label: '总调用', value: `${fmtNum(totalReq)} 次` },
+      ]
+    case 'xiaolv':
+      return [
+        { label: '输入输出比', value: `1:${inputOutputRatioNum.value.toFixed(1)}` },
+        { label: '总输入', value: fmtTokens(netInputTokens.value) },
+        { label: '总输出', value: fmtTokens(t?.completion_tokens) },
+      ]
+    case 'shenye':
+      return [
+        { label: '峰值时间', value: `${peakHour.value.hour}:00` },
+        { label: '峰值调用', value: `${fmtNum(peakHour.value.count)} 次` },
+        { label: '累计调用', value: `${fmtNum(totalReq)} 次` },
+      ]
+    case 'chenxing':
+      return [
+        { label: '峰值时间', value: `${peakHour.value.hour}:00` },
+        { label: '日均调用', value: `${Math.round(dailyAvgCalls.value)} 次` },
+        { label: '累计调用', value: `${fmtNum(totalReq)} 次` },
+      ]
+    case 'jiyou':
+      return [
+        { label: '模型数', value: `${uniqueModelCount.value} 个` },
+        { label: '累计调用', value: `${fmtNum(totalReq)} 次` },
+        { label: '使用天数', value: `${rangeDays.value} 天` },
+      ]
+    case 'zhuanyi':
+      return [
+        { label: '主力模型占比', value: `${topModelInfo.value.pct}%` },
+        { label: '累计调用', value: `${fmtNum(totalReq)} 次` },
+        { label: '模型数', value: `${uniqueModelCount.value} 个` },
+      ]
+    case 'sikao':
+      return [
+        { label: '深度推理占比', value: `${highReasoningPct.value}%` },
+        { label: '总输出', value: fmtTokens(t?.completion_tokens) },
+        { label: '累计调用', value: `${fmtNum(totalReq)} 次` },
+      ]
+    default:
+      return [
+        { label: '累计调用', value: `${fmtNum(totalReq)} 次` },
+        { label: '使用天数', value: `${rangeDays.value} 天` },
+        { label: '模型数', value: `${uniqueModelCount.value} 个` },
+      ]
+  }
+}
+
 // ── Heatmap ──
 const heatmapData = computed(() => {
   const buckets = Array(24).fill(0)
@@ -1850,15 +1925,26 @@ if (typeof MutationObserver !== 'undefined') {
   display: flex; flex-direction: column; gap: 14px;
 }
 
-/* ── 性格档案卡片 ── */
+/* ── 性格档案卡片（沉浸式个人档案） ── */
 .mu-personality-card {
   position: relative; overflow: hidden;
-  border-radius: 16px; border: 1px solid var(--mu-border);
+  border-radius: 20px; border: 1px solid var(--mu-border);
   background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
   padding: 0;
-  transition: box-shadow .25s ease;
+  /* 微妙内阴影增加层次感 */
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.5), inset 0 0 40px rgba(255,255,255,.12);
+  transition: box-shadow .3s ease, transform .3s ease;
 }
-.mu-personality-card:hover { box-shadow: 0 8px 28px rgba(0,0,0,.1); }
+.mu-personality-card:hover {
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.5), 0 12px 36px rgba(0,0,0,.12);
+}
+
+/* 顶部装饰条：跟当前 tag 颜色匹配 */
+.mu-personality-accent {
+  position: absolute; top: 0; left: 0; right: 0; height: 4px;
+  background: linear-gradient(90deg, #38bdf8, #0ea5e9);
+  z-index: 2;
+}
 
 /* 按标签 ID 设置渐变色 */
 .mu-personality-card[data-tag="volwang"]   { background: linear-gradient(135deg, #fef9c3, #fde68a); border-color: #fbbf24; }
@@ -1871,19 +1957,35 @@ if (typeof MutationObserver !== 'undefined') {
 .mu-personality-card[data-tag="sikao"]     { background: linear-gradient(135deg, #eff6ff, #bfdbfe); border-color: #60a5fa; }
 .mu-personality-card[data-tag="default"]   { background: linear-gradient(135deg, #f0f9ff, #e0f2fe); border-color: #38bdf8; }
 
+/* 顶部装饰条按 tag 配色 */
+.mu-personality-card[data-tag="volwang"]   .mu-personality-accent { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+.mu-personality-card[data-tag="shengqian"] .mu-personality-accent { background: linear-gradient(90deg, #10b981, #34d399); }
+.mu-personality-card[data-tag="xiaolv"]    .mu-personality-accent { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
+.mu-personality-card[data-tag="shenye"]    .mu-personality-accent { background: linear-gradient(90deg, #6366f1, #818cf8); }
+.mu-personality-card[data-tag="chenxing"]  .mu-personality-accent { background: linear-gradient(90deg, #f97316, #fb923c); }
+.mu-personality-card[data-tag="jiyou"]     .mu-personality-accent { background: linear-gradient(90deg, #d946ef, #e879f9); }
+.mu-personality-card[data-tag="zhuanyi"]   .mu-personality-accent { background: linear-gradient(90deg, #f43f5e, #fb7185); }
+.mu-personality-card[data-tag="sikao"]     .mu-personality-accent { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
+.mu-personality-card[data-tag="default"]   .mu-personality-accent { background: linear-gradient(90deg, #0ea5e9, #38bdf8); }
+
 /* 深夜哲学家深色主题下字色翻转 */
 .mu-personality-card[data-tag="shenye"] .mu-personality-badge { color: #818cf8; background: rgba(99,102,241,.15); border-color: rgba(99,102,241,.3); }
 .mu-personality-card[data-tag="shenye"] .mu-personality-label { color: #e2e8f0; }
 .mu-personality-card[data-tag="shenye"] .mu-personality-story { color: #94a3b8; }
+.mu-personality-card[data-tag="shenye"] .mu-personality-metric { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.12); }
+.mu-personality-card[data-tag="shenye"] .mu-personality-metric__value { color: #e2e8f0; }
+.mu-personality-card[data-tag="shenye"] .mu-personality-metric__label { color: #94a3b8; }
 
 .mu-personality-inner {
-  display: flex; align-items: center; gap: 0;
+  display: flex; align-items: center; gap: 8px;
 }
 
+/* 吉祥物展示区：大图 + 浮动动画 */
 .mu-personality-mascot {
-  flex-shrink: 0; width: 240px; height: 240px;
+  flex-shrink: 0; width: 290px; height: 290px;
   display: flex; align-items: center; justify-content: center;
-  padding: 16px;
+  padding: 20px;
+  cursor: pointer;
 }
 
 .mu-personality-img {
@@ -1892,16 +1994,30 @@ if (typeof MutationObserver !== 'undefined') {
   /* 白色背景图片在浅色卡片上用 multiply 混合模式视觉去白 */
   mix-blend-mode: multiply;
   border-radius: 8px;
-  transition: transform .3s ease;
+  filter: drop-shadow(0 12px 18px rgba(0,0,0,.12));
+  /* 上下浮动 6px，3s 循环 */
+  animation: mu-mascot-float 3s ease-in-out infinite;
+  transition: transform .35s cubic-bezier(.34, 1.56, .64, 1);
 }
 .mu-personality-card[data-tag="shenye"] .mu-personality-img {
   mix-blend-mode: screen;
 }
-.mu-personality-mascot:hover .mu-personality-img { transform: scale(1.06); }
+/* hover：轻微放大 + 旋转 */
+.mu-personality-mascot:hover .mu-personality-img {
+  transform: scale(1.08) rotate(3deg);
+}
+
+@keyframes mu-mascot-float {
+  0%, 100% { translate: 0 0; }
+  50%      { translate: 0 -6px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mu-personality-img { animation: none; }
+}
 
 .mu-personality-info {
-  flex: 1; min-width: 0; padding: 24px 28px 24px 8px;
-  display: flex; flex-direction: column; gap: 10px;
+  flex: 1; min-width: 0; padding: 28px 32px 28px 8px;
+  display: flex; flex-direction: column; gap: 12px;
 }
 
 .mu-personality-badge {
@@ -1914,30 +2030,71 @@ if (typeof MutationObserver !== 'undefined') {
 }
 
 .mu-personality-label {
-  margin: 0; font-size: 26px; font-weight: 800;
+  margin: 0; font-size: 27px; font-weight: 800;
   color: var(--el-text-color-primary); line-height: 1.2;
 }
 
+/* 故事文案：用伪元素加引号装饰 */
 .mu-personality-story {
+  position: relative;
   margin: 0; font-size: 14px; color: var(--el-text-color-regular);
-  line-height: 1.7; max-width: 480px;
+  line-height: 1.7; max-width: 520px;
+  padding: 0 2px;
+}
+.mu-personality-story::before { content: '“'; margin-right: 1px; opacity: .55; font-weight: 700; }
+.mu-personality-story::after  { content: '”'; margin-left: 1px; opacity: .55; font-weight: 700; }
+
+/* 数据亮点行：3 个指标卡片 */
+.mu-personality-metrics {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px; margin-top: 2px; max-width: 520px;
+}
+.mu-personality-metric {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 12px 14px; border-radius: 12px;
+  background: rgba(255,255,255,.45);
+  border: 1px solid rgba(255,255,255,.6);
+  backdrop-filter: blur(4px);
+}
+.mu-personality-metric__value {
+  font-size: 20px; font-weight: 800; line-height: 1.1;
+  color: var(--el-text-color-primary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mu-personality-metric__label {
+  font-size: 11px; font-weight: 500; letter-spacing: .02em;
+  color: var(--el-text-color-secondary);
 }
 
-.mu-personality-actions { margin-top: 4px; }
+.mu-personality-actions { margin-top: 6px; }
 
+/* 平板：吉祥物在上居中，信息在下 */
 @media (max-width: 768px) {
-  .mu-personality-inner { flex-direction: column; align-items: flex-start; }
-  .mu-personality-mascot { width: 160px; height: 160px; }
-  .mu-personality-info { padding: 0 16px 20px; }
-  .mu-personality-label { font-size: 22px; }
+  .mu-personality-inner { flex-direction: column; align-items: center; gap: 0; }
+  .mu-personality-mascot { width: 220px; height: 220px; padding: 16px 16px 0; }
+  .mu-personality-info { width: 100%; padding: 4px 20px 24px; align-items: center; text-align: center; }
+  .mu-personality-label { font-size: 23px; }
+  .mu-personality-story { max-width: 100%; }
+  .mu-personality-metrics { width: 100%; max-width: 420px; }
+  .mu-personality-metric { align-items: center; }
 }
+/* 手机：吉祥物缩小到 180px，指标卡片 1 列 */
 @media (max-width: 480px) {
-  .mu-personality-mascot { width: 120px; height: 120px; }
-  .mu-personality-label { font-size: 18px; }
+  .mu-personality-mascot { width: 180px; height: 180px; }
+  .mu-personality-label { font-size: 20px; }
   .mu-personality-story { font-size: 13px; }
+  .mu-personality-metrics { grid-template-columns: 1fr; gap: 8px; }
+  .mu-personality-metric { flex-direction: row; align-items: baseline; justify-content: center; gap: 8px; }
 }
 
 /* 暗色模式：浅色主题卡片降低亮度 */
+html.dark .mu-personality-card {
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.04), inset 0 0 40px rgba(0,0,0,.2);
+}
+html.dark .mu-personality-card:hover {
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 12px 36px rgba(0,0,0,.4);
+}
 html.dark .mu-personality-card[data-tag="volwang"]   { background: linear-gradient(135deg, #451a03, #78350f); border-color: #b45309; }
 html.dark .mu-personality-card[data-tag="shengqian"] { background: linear-gradient(135deg, #052e16, #14532d); border-color: #15803d; }
 html.dark .mu-personality-card[data-tag="xiaolv"]    { background: linear-gradient(135deg, #2e1065, #4c1d95); border-color: #7c3aed; }
@@ -1949,6 +2106,13 @@ html.dark .mu-personality-card[data-tag="default"]   { background: linear-gradie
 html.dark .mu-personality-badge { color: var(--el-color-primary-light-3); background: rgba(99,102,241,.12); border-color: rgba(99,102,241,.25); }
 html.dark .mu-personality-label { color: var(--el-text-color-primary); }
 html.dark .mu-personality-story { color: var(--el-text-color-regular); }
+/* 暗色下指标卡片用半透明白色背景 */
+html.dark .mu-personality-metric {
+  background: rgba(255,255,255,.06);
+  border-color: rgba(255,255,255,.1);
+}
+html.dark .mu-personality-metric__value { color: var(--el-text-color-primary); }
+html.dark .mu-personality-metric__label { color: var(--el-text-color-secondary); }
 
 /* ── 页头 ── */
 .mu-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }

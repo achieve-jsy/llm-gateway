@@ -207,22 +207,147 @@ const streak = computed(() => {
   return s
 })
 
-// ── 使用画像 / 称号 ──
-interface Persona { emoji: string; title: string; desc: string }
-const persona = computed<Persona>(() => {
-  if (!hasData.value) return { emoji: '🌱', title: '新手上路', desc: '还没有调用记录，去创建 Key 开启你的 AI 之旅吧。' }
-  const scores: { p: Persona; score: number }[] = []
-  const night = peakHour.value.hour <= 5 || peakHour.value.hour >= 22
-  scores.push({ score: (night ? 2 : 0) + taskLengthPct.value / 100, p: { emoji: '🦉', title: '夜行深思者', desc: `常在 ${peakHour.value.hour}:00 出没，偏爱有深度的长任务。` } })
-  scores.push({ score: outRatio.value > 1.2 ? 2 + outRatio.value * 0.3 : 0, p: { emoji: '✍️', title: '内容创作者', desc: '输出远多于输入，是个高产的创作型选手。' } })
-  scores.push({ score: outRatio.value > 0 && outRatio.value < 0.35 && netInput.value > 5000 ? 2.2 : 0, p: { emoji: '📚', title: '阅读总结家', desc: '喂进大量上下文、要言不烦，擅长读长文做总结。' } })
-  scores.push({ score: reasoningShare.value > 0.15 ? 2 + reasoningShare.value * 2 : 0, p: { emoji: '🧠', title: '推理控', desc: '钟爱会"思考"的模型，深度推理 token 占比很高。' } })
-  scores.push({ score: cacheRate.value > 0.35 ? 1.8 + cacheRate.value : 0, p: { emoji: '♻️', title: '缓存复用王', desc: `${Math.round(cacheRate.value * 100)}% 的输入命中缓存，把复用玩明白了。` } })
-  scores.push({ score: (total.value!.req_count > 200 && taskLengthPct.value < 35) ? 1.6 : 0, p: { emoji: '⚡', title: '短平快效率党', desc: '高频、轻量的调用风格，追求即问即答。' } })
-  scores.push({ score: 0.5 + modelDist.value.length * 0.2, p: { emoji: '🧭', title: '全能探索者', desc: `用过 ${modelDist.value.length} 个模型，什么都想试试。` } })
-  scores.sort((a, b) => b.score - a.score)
-  return scores[0].p
+// ── 动态形象 · 性格标签 ──
+interface MascotTag {
+  id: string
+  emoji: string
+  label: string
+  image: string
+  trigger: string   // 触发条件（绿色小字）
+  story: string     // 数据故事
+  shareText: string // 分享文案
+}
+
+// 派生：日均调用、不同模型数、top1 模型占比、缓存可省金额
+const dailyAvgCalls = computed(() => Math.round((total.value?.req_count || 0) / RANGE_DAYS))
+const uniqueModelCount = computed(() => modelDist.value.length)
+const topModelPct = computed(() => modelDist.value[0]?.pct || 0)
+const cacheHitPct = computed(() => Math.round(cacheRate.value * 100))
+// 缓存命中部分按命中 token 折算节省（粗略：命中 token 占 prompt 的比例 × 花费）
+const savedCny = computed(() => {
+  const cached = total.value?.cached_tokens || 0
+  const prompt = total.value?.prompt_tokens || 0
+  if (!prompt || !cached) return 0
+  return totalCostCny.value * (cached / (prompt + (total.value?.completion_tokens || 0)))
 })
+
+// 形象标签：按优先级从高到低判定，命中即返回（越稀有越靠前）
+const mascot = computed<MascotTag>(() => {
+  const h = peakHour.value.hour
+
+  // 空态 / 无数据：萌新探索者
+  if (!hasData.value) {
+    return {
+      id: 'default', emoji: '🌱', label: '萌新探索者',
+      image: '/images/mascot/default.png',
+      trigger: '还没有调用记录',
+      story: '背上小背包，去模型广场挑一个模型组，开启你的 AI 探索之旅吧。',
+      shareText: '萌新探索者，正在解锁 AiMeter 的无限可能。',
+    }
+  }
+
+  // 1. ⚡ 卷王本王：日均调用 ≥ 50
+  if (dailyAvgCalls.value >= 50) {
+    return {
+      id: 'volwang', emoji: '⚡', label: '卷王本王',
+      image: '/images/mascot/volwang.png',
+      trigger: '日均调用 ≥ 50 次',
+      story: `近 30 天日均调用 ${dailyAvgCalls.value} 次，累计 ${fmtNum(total.value?.req_count)} 次，火箭都追不上你。`,
+      shareText: `我是 AiMeter 卷王本王，日均 ${dailyAvgCalls.value} 次调用，谁与争锋？`,
+    }
+  }
+
+  // 2. 💎 省钱天才：缓存命中率 ≥ 25%
+  if (cacheHitPct.value >= 25) {
+    return {
+      id: 'shengqian', emoji: '💎', label: '省钱天才',
+      image: '/images/mascot/shengqian.png',
+      trigger: '缓存命中率 ≥ 25%',
+      story: `缓存命中率高达 ${cacheHitPct.value}%${savedCny.value > 0.01 ? `，相当于省了约 ¥${fmtCny(savedCny.value)}` : ''}，过日子哥就是专业。`,
+      shareText: `缓存命中率 ${cacheHitPct.value}%，AiMeter 省钱天才非我莫属。`,
+    }
+  }
+
+  // 3. 🎯 效率怪物：输入输出比 ≥ 4:1（输出远大于输入）
+  if (outRatio.value >= 4) {
+    return {
+      id: 'xiaolv', emoji: '🎯', label: '效率怪物',
+      image: '/images/mascot/xiaolv.png',
+      trigger: '输入输出比 ≥ 1:4',
+      story: `你的输入输出比为 1:${outRatio.value.toFixed(1)}，一发飞镖正中靶心，prompt 从不多写一字。`,
+      shareText: `1:${outRatio.value.toFixed(1)} 的输入输出比，效率怪物的 prompt 从不多写一个字。`,
+    }
+  }
+
+  // 4. 🌙 深夜哲学家：峰值在 22:00 - 04:00
+  if (h >= 22 || h <= 4) {
+    return {
+      id: 'shenye', emoji: '🌙', label: '深夜哲学家',
+      image: '/images/mascot/shenye.png',
+      trigger: '峰值时段 22:00 - 04:00',
+      story: `你最活跃的时段是 ${h}:00，坐在月牙上捧着发光的书，深夜才是灵感主场。`,
+      shareText: `凌晨 ${h} 点的 AiMeter 是我的主场，深夜哲学家在此。`,
+    }
+  }
+
+  // 5. 🌅 晨型打工人：峰值在 06:00 - 09:00
+  if (h >= 6 && h <= 9) {
+    return {
+      id: 'chenxing', emoji: '🌅', label: '晨型打工人',
+      image: '/images/mascot/chenxing.png',
+      trigger: '峰值时段 06:00 - 09:00',
+      story: `你每天 ${h}:00 就开始调用，迎着朝阳伸懒腰，打卡机一排全亮绿灯。`,
+      shareText: `每天早上 ${h} 点准时开干，晨型打工人的自我修养。`,
+    }
+  }
+
+  // 6. 🦄 模型集邮癖：使用过 ≥ 5 种模型
+  if (uniqueModelCount.value >= 5) {
+    return {
+      id: 'jiyou', emoji: '🦄', label: '模型集邮癖',
+      image: '/images/mascot/jiyou.png',
+      trigger: '使用过 ≥ 5 种模型',
+      story: `你用过 ${uniqueModelCount.value} 种不同模型，伸手就抓各家泡泡，是全站最博爱的探索者。`,
+      shareText: `我用过 ${uniqueModelCount.value} 种模型！集邮癖的快乐你不懂。`,
+    }
+  }
+
+  // 7. 💕 专一战士：top1 模型占比 ≥ 85% 且总调用 > 100
+  if (topModelPct.value >= 85 && (total.value?.req_count || 0) > 100) {
+    return {
+      id: 'zhuanyi', emoji: '💕', label: '专一战士',
+      image: '/images/mascot/zhuanyi.png',
+      trigger: 'top1 模型占比 ≥ 85% 且调用 > 100',
+      story: `你对 ${topModel.value} 的爱高达 ${topModelPct.value}%，抱着爱心抱枕谁也不换，真爱无疑。`,
+      shareText: `${topModel.value} 就是我的唯一，${topModelPct.value}% 的调用都是它，专一战士！`,
+    }
+  }
+
+  // 8. 🤔 深度思考家：推理 token 占比 ≥ 30%
+  if (reasoningShare.value >= 0.3) {
+    const pct = Math.round(reasoningShare.value * 100)
+    return {
+      id: 'sikao', emoji: '🤔', label: '深度思考家',
+      image: '/images/mascot/sikao.png',
+      trigger: '推理 token 占比 ≥ 30%',
+      story: `你有 ${pct}% 的输出来自深度推理，盘腿冥想头顶灯泡常亮，大脑永不停歇。`,
+      shareText: `${pct}% 的输出都是深度推理，思考家的大脑永不停歇。`,
+    }
+  }
+
+  // 0. 🌱 默认：萌新探索者
+  return {
+    id: 'default', emoji: '🌱', label: '萌新探索者',
+    image: '/images/mascot/default.png',
+    trigger: '继续探索，解锁更多标签',
+    story: `你已活跃 ${activeDays.value} 天、累计调用 ${fmtNum(total.value?.req_count)} 次，前方还有更多标签等你点亮。`,
+    shareText: '萌新探索者，正在解锁 AiMeter 的无限可能。',
+  }
+})
+
+// 形象卡片：只取图片 + 数据故事（不展示名字/标签/emoji）
+const mascotImage = computed(() => mascot.value.image)
+const mascotStory = computed(() => mascot.value.story)
 
 const traits = computed<string[]>(() => {
   if (!hasData.value) return []
@@ -313,13 +438,15 @@ const fmtCny = (n: number) => n < 0.01 && n > 0 ? '<0.01' : n.toLocaleString('zh
     <template v-else>
       <!-- 画像 + 里程碑 -->
       <div class="pd-top">
-        <section class="pd-persona pd-card">
-          <div class="pd-persona__halo" aria-hidden="true" />
-          <div class="pd-persona__emoji">{{ persona.emoji }}</div>
-          <div class="pd-persona__body">
-            <div class="pd-persona__eyebrow">你的使用画像</div>
-            <h2 class="pd-persona__title">{{ persona.title }}</h2>
-            <p class="pd-persona__desc">{{ persona.desc }}</p>
+        <section class="pd-mascot pd-card">
+          <div class="pd-mascot__halo" aria-hidden="true" />
+          <div class="pd-mascot__img-wrap">
+            <img :src="mascot.image" class="pd-mascot__img" @error="($event.target as HTMLImageElement).src = '/images/mascot/default.png'" />
+          </div>
+          <div class="pd-mascot__body">
+            <div class="pd-mascot__eyebrow">{{ mascot.trigger }}</div>
+            <h2 class="pd-mascot__title">{{ mascot.emoji }} {{ mascot.label }}</h2>
+            <p class="pd-mascot__story">{{ mascot.story }}</p>
             <div class="pd-traits">
               <span v-for="t in traits" :key="t" class="pd-trait">{{ t }}</span>
             </div>
@@ -507,18 +634,20 @@ const fmtCny = (n: number) => n < 0.01 && n > 0 ? '<0.01' : n.toLocaleString('zh
 .pd-top { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; }
 @media (max-width: 860px) { .pd-top { grid-template-columns: 1fr; } }
 
-.pd-persona {
+.pd-mascot {
   position: relative; overflow: hidden;
   display: flex; align-items: center; gap: 20px;
   background: linear-gradient(135deg, rgba(54,179,78,0.10), rgba(59,130,246,0.08));
   border-color: rgba(54,179,78,0.25);
 }
-.pd-persona__halo { position: absolute; top: -40px; right: -30px; width: 180px; height: 180px; border-radius: 50%; background: radial-gradient(circle, rgba(54,179,78,0.18), transparent 70%); pointer-events: none; }
-.pd-persona__emoji { font-size: 56px; line-height: 1; flex-shrink: 0; animation: pd-bob 5s ease-in-out infinite; z-index: 1; }
-.pd-persona__body { z-index: 1; min-width: 0; }
-.pd-persona__eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--pd-brand); }
-.pd-persona__title { font-size: 22px; font-weight: 800; margin: 3px 0 4px; color: var(--el-text-color-primary); }
-.pd-persona__desc { font-size: 13px; color: var(--el-text-color-regular); margin: 0; line-height: 1.55; }
+.pd-mascot__halo { position: absolute; top: -40px; right: -30px; width: 180px; height: 180px; border-radius: 50%; background: radial-gradient(circle, rgba(54,179,78,0.18), transparent 70%); pointer-events: none; }
+.pd-mascot__img-wrap { flex-shrink: 0; z-index: 1; width: 160px; height: 160px; border-radius: 16px; overflow: hidden; background: transparent; }
+.pd-mascot__img { width: 100%; height: 100%; object-fit: contain; transition: transform .3s ease; }
+.pd-mascot__img:hover { transform: scale(1.08); }
+.pd-mascot__body { z-index: 1; min-width: 0; }
+.pd-mascot__eyebrow { font-size: 11.5px; font-weight: 600; color: var(--pd-brand); opacity: 0.85; }
+.pd-mascot__title { font-size: 22px; font-weight: 800; margin: 3px 0 6px; color: var(--el-text-color-primary); }
+.pd-mascot__story { font-size: 13px; color: var(--el-text-color-regular); margin: 0; line-height: 1.55; }
 .pd-traits { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .pd-trait { font-size: 11.5px; font-weight: 600; color: var(--pd-brand); background: rgba(54,179,78,0.10); border: 1px solid rgba(54,179,78,0.22); border-radius: 99px; padding: 3px 10px; }
 
@@ -634,7 +763,7 @@ const fmtCny = (n: number) => n < 0.01 && n > 0 ? '<0.01' : n.toLocaleString('zh
 :global(html.dark) .pd-hero__sub { color: #5A8888; }
 :global(html.dark) .pd-hero__url { background: #0A1B1A; border-color: #1F5230; }
 :global(html.dark) .pd-hero__url-val { color: #6CD083; }
-:global(html.dark) .pd-persona {
+:global(html.dark) .pd-mascot {
   background: linear-gradient(135deg, rgba(54,179,78,0.14), rgba(59,130,246,0.10));
   border-color: rgba(54,179,78,0.30);
 }

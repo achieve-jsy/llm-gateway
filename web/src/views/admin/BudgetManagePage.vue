@@ -3,14 +3,17 @@
     <header class="overview-header">
       <div>
         <h1>预算总览</h1>
-        <p v-if="auth.effectiveRole === 'admin'">查看全公司各工作室预算风险与消耗；具体调额请进入工作室节点的「预算」Tab。</p>
-        <p v-else-if="auth.effectiveRole === 'studio_admin'">查看工作室下各部门预算状态；具体调额请进入部门节点的「预算」Tab。</p>
-        <p v-else>查看本部门预算与成员用量风险，可直接前往部门节点配置成员配额。</p>
+        <p v-if="auth.effectiveRole === 'admin'">查看全公司各工作室预算风险与消耗；点击「调整」可直接在当前页面配置预算。</p>
+        <p v-else-if="auth.effectiveRole === 'studio_admin'">查看工作室下各部门预算状态；点击「调整」可直接在当前页面配置预算。</p>
+        <p v-else>查看本部门预算与成员用量风险，可直接调整成员配额。</p>
       </div>
       <div class="header-actions">
         <el-button :loading="loading" @click="load">刷新</el-button>
-        <el-button type="primary" @click="goOrg()">
-          {{ isDeptAdmin ? '前往部门管理' : '进入组织治理' }}
+        <el-button v-if="auth.effectiveRole === 'admin'" type="primary" @click="router.push('/admin/org')">
+          进入组织治理
+        </el-button>
+        <el-button v-else type="primary" @click="goOrg()">
+          {{ isDeptAdmin ? '配置部门预算' : '配置工作室预算' }}
         </el-button>
     </div>
     </header>
@@ -221,7 +224,7 @@
             </span>
             <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
               <el-tag type="info" size="small">下发率 {{ Math.round(studioAllocRatio * 100) }}%</el-tag>
-              <el-button size="small" plain style="padding:2px 8px;height:22px;font-size:11px" @click="goOrg()">调整部门</el-button>
+              <el-button size="small" plain style="padding:2px 8px;height:22px;font-size:11px" @click="goOrg()">配置预算</el-button>
             </div>
           </div>
           <strong>{{ studioPoolItem ? displayAmount(studioPoolItem.amount_usd) : '—' }}</strong>
@@ -323,7 +326,7 @@
             </template>
           </el-table-column>
           <!-- 已使用 + 用量占比 -->
-          <el-table-column label="已使用" min-width="180">
+          <el-table-column label="已使用" min-width="160">
             <template #default="{ row }">
               <div class="usage-cell">
                 <div style="display:flex;justify-content:space-between;align-items:baseline">
@@ -348,7 +351,7 @@
             </template>
           </el-table-column>
           <!-- 日限 / 周限 -->
-          <el-table-column label="日限 / 周限" min-width="140" align="center">
+          <el-table-column label="日限 / 周限" min-width="120" align="center">
             <template #default="{ row }">
               <span v-if="row.daily_amount_usd > 0 || row.weekly_amount_usd > 0" class="limit-text">
                 {{ displayAmount(row.daily_amount_usd) }} / {{ displayAmount(row.weekly_amount_usd) }}
@@ -356,10 +359,10 @@
               <span v-else class="muted">无限额</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="168" align="center">
+          <el-table-column label="操作" width="152" align="center">
             <template #default="{ row }">
               <el-button size="small" type="primary" plain @click="openStudioDrawer(row)">查看部门</el-button>
-              <el-button size="small" @click="goOrg(row)">调整</el-button>
+              <el-button size="small" @click="openBudgetDrawer({ scope_type: 'studio', scope_id: row.scope_id, label: row.label })">配置</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -386,7 +389,7 @@
           </el-table-column>
 
           <!-- 日常预算池 -->
-          <el-table-column label="日常预算" min-width="200">
+          <el-table-column label="日常预算" min-width="180">
             <template #default="{ row }">
               <template v-if="row.daily">
                 <div class="pool-inline-cell">
@@ -415,7 +418,7 @@
           </el-table-column>
 
           <!-- 服务预算池 -->
-          <el-table-column label="服务预算" min-width="200">
+          <el-table-column label="服务预算" min-width="180">
             <template #default="{ row }">
               <template v-if="row.service">
                 <div class="pool-inline-cell">
@@ -444,10 +447,10 @@
           </el-table-column>
 
           <!-- 操作 -->
-          <el-table-column label="操作" width="168" align="center">
+          <el-table-column label="操作" width="152" align="center">
             <template #default="{ row }">
               <el-button size="small" type="primary" plain @click="openDeptMemberDrawer(row)">查看成员</el-button>
-              <el-button size="small" @click="goOrg({ scope_type: 'dept_daily', scope_id: row.deptId, label: row.label } as any)">调整</el-button>
+              <el-button size="small" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: row.deptId, label: row.label })">配置</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -509,10 +512,14 @@
         <!-- 快速跳转 -->
         <div class="quick-links">
           <h3>快速跳转</h3>
-          <button class="quick-link-btn" @click="goOrg()">
-            <span>{{ auth.effectiveRole === 'admin' ? '调整工作室预算' : '调整部门预算' }}</span>
+          <button v-if="auth.effectiveRole === 'admin'" class="quick-link-btn" @click="router.push('/admin/org')">
+            <span>进入组织治理</span>
             <span class="quick-link-arrow">→</span>
-            </button>
+          </button>
+          <button v-else class="quick-link-btn" @click="goOrg()">
+            <span>配置工作室 / 部门预算</span>
+            <span class="quick-link-arrow">→</span>
+          </button>
           <button class="quick-link-btn" @click="goExpansion">
             <span>{{ auth.effectiveRole === 'admin' ? '处理平台扩容申请' : '处理扩容申请' }}</span>
             <span class="quick-link-arrow">→</span>
@@ -616,9 +623,9 @@
               <span v-else class="muted">—</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="100" align="center">
+          <el-table-column label="操作" width="96" align="center">
             <template #default="{ row }">
-              <el-button size="small" type="primary" plain @click="goOrg(row)">调整配额</el-button>
+              <el-button size="small" type="primary" plain @click="openMemberQuota(row)">调整配额</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -653,8 +660,8 @@
               · 按近7天消耗降序
             </p>
         </div>
-          <el-button size="small" @click="goOrg(selectedDeptFilter ? { scope_type: 'dept_daily', scope_id: selectedDeptFilter } as any : undefined)">
-            前往配额管理
+          <el-button size="small" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: selectedDeptFilter || currentDeptId || '', label: selectedDeptFilter || currentDeptId || '' })">
+            配置配额
           </el-button>
         </div>
         <el-table
@@ -679,12 +686,12 @@
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="月配额" width="100" align="right">
+          <el-table-column label="月配额" width="90" align="right">
             <template #default="{ row }">
               <span class="tabular">{{ displayAmount(row.amount_usd) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="月额度进度" min-width="180">
+          <el-table-column label="月额度进度" min-width="160">
             <template #default="{ row }">
               <div class="usage-cell">
                 <span>{{ formatUSD(row.used_usd || 0, { compact: true }) }} / {{ displayAmount(row.amount_usd) }}</span>
@@ -696,14 +703,14 @@
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="近7天消耗" width="120" align="right">
+          <el-table-column label="近7天消耗" width="100" align="right">
             <template #default="{ row }">
               <span class="tabular" :class="{ 'text-muted': row.cost7d === 0 }">
                 {{ row.cost7d > 0 ? formatUSD(row.cost7d, { compact: true }) : '—' }}
               </span>
             </template>
           </el-table-column>
-          <el-table-column label="7天日均 / 日限" min-width="160">
+          <el-table-column label="7天日均 / 日限" min-width="140">
             <template #default="{ row }">
               <template v-if="row.daily_amount_usd > 0">
                 <div class="usage-cell">
@@ -718,9 +725,9 @@
               <span v-else class="muted">无日限</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="100" align="center">
+          <el-table-column label="操作" width="96" align="center">
             <template #default="{ row }">
-              <el-button size="small" type="primary" plain @click="goOrg(row)">调整配额</el-button>
+              <el-button size="small" type="primary" plain @click="openMemberQuota(row)">调整配额</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -746,9 +753,9 @@
           size="small"
           type="primary"
           plain
-          @click="goOrgFromDrawer('studio', drawerStudio!.scope_id)"
+          @click="goOrgFromDrawer('studio', drawerStudio!.scope_id, drawerStudio?.label)"
         >
-          去调整 →
+          配置预算 →
         </el-button>
       </div>
     </template>
@@ -781,9 +788,9 @@
             <el-button
               link
               size="small"
-              @click.stop="goOrgFromDrawer('dept_daily', dept.deptId)"
+              @click.stop="goOrgFromDrawer('dept', dept.deptId, dept.label)"
             >
-              调整
+              配置
             </el-button>
             <span class="drawer-expand-icon">{{ dept.expanded ? '▲' : '▼' }}</span>
           </div>
@@ -849,9 +856,9 @@
               size="small"
               link
               type="primary"
-              @click="goOrgFromDrawer('dept_daily', dept.deptId)"
+              @click="goOrgFromDrawer('dept', dept.deptId, dept.label)"
             >
-              在组织树中调整成员配额 →
+              调整成员配额 →
             </el-button>
           </div>
         </div>
@@ -878,9 +885,9 @@
           size="small"
           type="primary"
           plain
-          @click="goOrgFromDeptDrawer('dept_daily', deptMemberDrawerDept.deptId)"
+          @click="goOrgFromDeptDrawer('dept', deptMemberDrawerDept.deptId, deptMemberDrawerDept.label)"
         >
-          去调整 →
+          配置预算 →
         </el-button>
       </div>
     </template>
@@ -1061,6 +1068,25 @@
       <el-button type="primary" :loading="companyBudgetSaving" @click="saveCompanyBudget">保存</el-button>
       </template>
     </el-dialog>
+
+  <!-- ── 预算配置抽屉（BudgetScopePanel 内联，替换跳转 OrgTreePage）── -->
+  <BudgetEditDrawer
+    v-model="budgetDrawerVisible"
+    :scope-type="budgetDrawerScopeType"
+    :scope-id="budgetDrawerScopeId"
+    :title="budgetDrawerTitle"
+    :child-scope-ids="budgetDrawerChildIds"
+    :can-edit="budgetDrawerCanEdit"
+    :can-edit-self="budgetDrawerCanEditSelf"
+  />
+
+  <!-- ── 成员配额快速编辑弹窗（dept_admin 专用）── -->
+  <MemberQuotaDialog
+    v-model="memberQuotaVisible"
+    :member="memberQuotaTarget"
+    :can-edit="true"
+    @refresh="load"
+  />
 </template>
 
 <script setup lang="ts">
@@ -1073,6 +1099,8 @@ import { useAuthStore } from '@/stores/auth'
 import type { BudgetContextItem, BudgetItem, BudgetScopeType, BudgetView } from '@/types/budget'
 import { SCOPE_TYPE_COLORS, SCOPE_TYPE_LABELS } from '@/types/budget'
 import { budgetColorLevel, formatUSD } from '@/utils/format'
+import BudgetEditDrawer from '@/components/budget/BudgetEditDrawer.vue'
+import MemberQuotaDialog from '@/components/budget/MemberQuotaDialog.vue'
 
 // ─── 类型扩展：enrichedMember = BudgetItem + 7天用量字段 ──────────────────────
 interface EnrichedMember extends BudgetItem {
@@ -1578,6 +1606,45 @@ function memberRiskRowClass({ row }: { row: EnrichedMember }) {
   return row.riskLevel === 'danger' ? 'row-danger' : row.riskLevel === 'warning' ? 'row-warning' : ''
 }
 
+// ─── BudgetEditDrawer 状态 ────────────────────────────────────────────────────
+const budgetDrawerVisible = ref(false)
+const budgetDrawerScopeType = ref<'studio' | 'dept'>('studio')
+const budgetDrawerScopeId = ref('')
+const budgetDrawerTitle = ref('')
+const budgetDrawerChildIds = ref<string[] | undefined>(undefined)
+const budgetDrawerCanEdit = ref(false)
+const budgetDrawerCanEditSelf = ref(false)
+
+function openBudgetDrawer(
+  opts: { scope_type: string; scope_id: string; label?: string },
+  childIds?: string[],
+) {
+  const isStudio = opts.scope_type === 'studio'
+  budgetDrawerScopeType.value = isStudio ? 'studio' : 'dept'
+  budgetDrawerScopeId.value = opts.scope_id
+  budgetDrawerTitle.value = opts.label || opts.scope_id
+  budgetDrawerChildIds.value = childIds
+
+  if (auth.effectiveRole === 'admin') {
+    budgetDrawerCanEdit.value = true
+    budgetDrawerCanEditSelf.value = isStudio
+  } else {
+    // studio_admin / dept_admin：canEdit=true，不可直接修改自身节点总额
+    budgetDrawerCanEdit.value = true
+    budgetDrawerCanEditSelf.value = false
+  }
+  budgetDrawerVisible.value = true
+}
+
+// ─── MemberQuotaDialog 状态 ───────────────────────────────────────────────────
+const memberQuotaVisible = ref(false)
+const memberQuotaTarget = ref<BudgetItem | null>(null)
+
+function openMemberQuota(member: BudgetItem) {
+  memberQuotaTarget.value = member
+  memberQuotaVisible.value = true
+}
+
 // ─── 导航 ─────────────────────────────────────────────────────────────────────
 // ─── Redis 计数器重建 ────────────────────────────────────────────────────────
 const rebuildLoading = ref(false)
@@ -1631,24 +1698,27 @@ async function saveCompanyBudget() {
 }
 
 function goOrg(row?: BudgetItem) {
+  // admin：保留跳转到组织治理页面
+  if (!row && auth.effectiveRole === 'admin') {
+    router.push('/admin/org')
+    return
+  }
+
   if (!row) {
     if (auth.effectiveRole === 'dept_admin') {
       const deptRole = auth.orgRoles?.find(r => r.scope_type === 'dept_daily' || r.scope_type === 'dept')
       if (deptRole) {
-        router.push({
-          path: '/admin/org',
-          query: { scope_type: deptRole.scope_type, scope_id: deptRole.scope_id, tab: 'budget' },
-        })
+        openBudgetDrawer({ scope_type: 'dept', scope_id: deptRole.scope_id })
         return
       }
     }
     if (auth.effectiveRole === 'studio_admin') {
       const studioRole = auth.orgRoles?.find(r => r.scope_type === 'studio')
       if (studioRole) {
-        router.push({
-          path: '/admin/org',
-          query: { scope_type: 'studio', scope_id: studioRole.scope_id, tab: 'budget' },
-        })
+        openBudgetDrawer(
+          { scope_type: 'studio', scope_id: studioRole.scope_id, label: studioPoolItem.value?.label },
+          studioDeptRows.value.map(r => r.deptId),
+        )
         return
       }
     }
@@ -1656,33 +1726,28 @@ function goOrg(row?: BudgetItem) {
     return
   }
 
-  // OrgTreePage 不识别 scope_type=member，成员行改为跳到所属部门的预算 tab
+  // 成员行：打开所属部门的预算抽屉（而非跳转 OrgTreePage）
   if (row.scope_type === 'member') {
-    // 优先用后端返回的 parent_scope_id（精确），回退到第一个管辖部门
     const deptId = row.parent_scope_id || currentDeptId.value
     if (deptId) {
-      router.push({
-        path: '/admin/org',
-        query: { scope_type: 'dept_daily', scope_id: deptId, tab: 'budget' },
-      })
+      openBudgetDrawer({ scope_type: 'dept', scope_id: deptId, label: deptId })
     } else {
       router.push('/admin/org')
     }
     return
   }
 
-  router.push({ path: '/admin/org', query: { scope_type: row.scope_type, scope_id: row.scope_id, tab: 'budget' } })
+  openBudgetDrawer({ scope_type: row.scope_type, scope_id: row.scope_id, label: row.label })
 }
 
 function goExpansion() {
   router.push('/admin/expansion-requests')
 }
 
-// 按 scope_type + scope_id 直接跳转到 OrgTreePage 对应节点的预算 Tab
 // 供分配明细弹窗、其他场景下钻使用
-function drillDown(scopeType: string, scopeId: string) {
+function drillDown(scopeType: string, scopeId: string, label?: string) {
   showChainDetail.value = false
-  router.push({ path: '/admin/org', query: { scope_type: scopeType, scope_id: scopeId, tab: 'budget' } })
+  openBudgetDrawer({ scope_type: scopeType, scope_id: scopeId, label })
 }
 
 // ─── 下钻侧抽屉（admin 专用：工作室 → 部门 → 成员）──────────────────────────
@@ -1758,9 +1823,9 @@ async function toggleDeptMembers(row: DrawerDeptRow) {
   }
 }
 
-function goOrgFromDrawer(scopeType: string, scopeId: string) {
+function goOrgFromDrawer(scopeType: string, scopeId: string, label?: string) {
   drawerVisible.value = false
-  router.push({ path: '/admin/org', query: { scope_type: scopeType, scope_id: scopeId, tab: 'budget' } })
+  openBudgetDrawer({ scope_type: scopeType, scope_id: scopeId, label })
 }
 
 // ─── 成员配额抽屉（studio_admin 专用：部门 → 成员）──────────────────────────
@@ -1784,9 +1849,9 @@ async function openDeptMemberDrawer(deptRow: StudioDeptRow) {
   }
 }
 
-function goOrgFromDeptDrawer(scopeType: string, scopeId: string) {
+function goOrgFromDeptDrawer(scopeType: string, scopeId: string, label?: string) {
   deptMemberDrawerVisible.value = false
-  router.push({ path: '/admin/org', query: { scope_type: scopeType, scope_id: scopeId, tab: 'budget' } })
+  openBudgetDrawer({ scope_type: scopeType, scope_id: scopeId, label })
 }
 
 onMounted(load)

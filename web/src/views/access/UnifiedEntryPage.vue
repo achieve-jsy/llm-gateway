@@ -636,20 +636,20 @@ const fmtCny = (n: number) => n < 0.01 && n > 0 ? '<0.01' : n.toLocaleString('zh
 
 .pd-mascot {
   position: relative; overflow: hidden;
-  display: flex; align-items: center; gap: 20px;
-  background: linear-gradient(135deg, rgba(54,179,78,0.10), rgba(59,130,246,0.08));
-  border-color: rgba(54,179,78,0.25);
+  display: flex; align-items: center; gap: 24px;
+  background: var(--el-fill-color-blank);
+  border: 1px solid var(--el-border-color-light);
 }
-.pd-mascot__halo { position: absolute; top: -40px; right: -30px; width: 180px; height: 180px; border-radius: 50%; background: radial-gradient(circle, rgba(54,179,78,0.18), transparent 70%); pointer-events: none; }
+.pd-mascot__halo { position: absolute; top: -40px; right: -30px; width: 180px; height: 180px; border-radius: 50%; background: radial-gradient(circle, rgba(0,0,0,0.04), transparent 70%); pointer-events: none; }
 .pd-mascot__img-wrap { flex-shrink: 0; z-index: 1; width: 160px; height: 160px; border-radius: 16px; overflow: hidden; background: transparent; }
 .pd-mascot__img { width: 100%; height: 100%; object-fit: contain; transition: transform .3s ease; }
 .pd-mascot__img:hover { transform: scale(1.08); }
 .pd-mascot__body { z-index: 1; min-width: 0; }
-.pd-mascot__eyebrow { font-size: 11.5px; font-weight: 600; color: var(--pd-brand); opacity: 0.85; }
+.pd-mascot__eyebrow { font-size: 11.5px; font-weight: 600; color: var(--el-text-color-secondary); opacity: 0.85; }
 .pd-mascot__title { font-size: 22px; font-weight: 800; margin: 3px 0 6px; color: var(--el-text-color-primary); }
 .pd-mascot__story { font-size: 13px; color: var(--el-text-color-regular); margin: 0; line-height: 1.55; }
 .pd-traits { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.pd-trait { font-size: 11.5px; font-weight: 600; color: var(--pd-brand); background: rgba(54,179,78,0.10); border: 1px solid rgba(54,179,78,0.22); border-radius: 99px; padding: 3px 10px; }
+.pd-trait { font-size: 11.5px; font-weight: 600; color: var(--el-text-color-regular); background: var(--el-fill-color); border: 1px solid var(--el-border-color-lighter); border-radius: 99px; padding: 3px 10px; }
 
 .pd-milestones { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .pd-ms--cost {
@@ -764,8 +764,8 @@ const fmtCny = (n: number) => n < 0.01 && n > 0 ? '<0.01' : n.toLocaleString('zh
 :global(html.dark) .pd-hero__url { background: #0A1B1A; border-color: #1F5230; }
 :global(html.dark) .pd-hero__url-val { color: #6CD083; }
 :global(html.dark) .pd-mascot {
-  background: linear-gradient(135deg, rgba(54,179,78,0.14), rgba(59,130,246,0.10));
-  border-color: rgba(54,179,78,0.30);
+  background: var(--el-fill-color-blank);
+  border: 1px solid var(--el-border-color-light);
 }
 :global(html.dark) .pd-ms--cost { background: linear-gradient(135deg, rgba(245,158,11,0.16), rgba(236,72,153,0.12)); border-color: rgba(245,158,11,0.32); }
 :global(html.dark) .pd-ms__costnum { color: #fbbf24; }

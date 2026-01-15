@@ -2,23 +2,145 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ===================== 某公司绿 Design Tokens → Element Plus =====================
- * 标准：与登录页（web/src/views/auth/LoginPage.vue）色彩体系完全统一。
- * 北极星参考：Wise（getdesign.md）——浅色画布 + 单一自信的绿色主调 + 友好圆角，
- * 但色相锁定为品牌自有翠绿，而非 Wise 的柠檬绿。
- *
- * 品牌绿基准（来自登录页）：
- *   primary  #36B34E   light  #62C96C   deep  #2A9C4B   text  #2F9E4A
- * 改主题色请只改这里；页面/组件一律引用 CSS 变量，禁止再硬编码十六进制。
+/* ===================== Design v2 Tokens (Hermes + Cursor 统一方案) =====================
+ * 基于 test 分支的品牌绿体系，进一步克制绿色使用。
+ * 设计北极星: Airtable 信息架构 + Supabase 强调色克制
+ * 品牌绿 #36B34E 严格限定: 仅 CTA 按钮、链接、活跃态
+ * 数据区（表头/hover/focus/shadow）回归中性灰
  */
+
+/* ===================== Font Faces (自托管，CN 可用) ===================== */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/Inter-400-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/Inter-500-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/Inter-600-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/Inter-700-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/JetBrainsMono-400-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/JetBrainsMono-500-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/JetBrainsMono-600-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 :root {
-  /* 品牌绿（登录页同源，供渐变/装饰等场景直接引用） */
+  /* 品牌绿（克制使用：仅 CTA / 链接 / 活跃态）*/
   --brand-green: #36B34E;
   --brand-green-light: #62C96C;
   --brand-green-deep: #2A9C4B;
   --brand-green-text: #2F9E4A;
 
-  /* Primary Green */
+  /* 中性色（数据区基底）*/
+  --bg-page: #F8FAFC;
+  --bg-surface: #FFFFFF;
+  --bg-subtle: #F1F5F9;
+  --border-default: #E2E8F0;
+  --border-light: #F1F5F9;
+  --border-strong: #CBD5E1;
+
+  /* 文字 */
+  --text-primary: #0F172A;
+  --text-regular: #334155;
+  --text-secondary: #64748B;
+  --text-placeholder: #94A3B8;
+
+  /* 语义色 */
+  --color-success: #059669;
+  --color-warning: #D97706;
+  --color-danger: #DC2626;
+  --color-info: #2563EB;
+
+  /* 语义背景色（Tag/Badge）*/
+  --color-success-bg: #ECFDF5;
+  --color-warning-bg: #FFFBEB;
+  --color-danger-bg: #FEF2F2;
+  --color-info-bg: #EFF6FF;
+
+  /* 图表色板 */
+  --chart-1: #3B82F6;
+  --chart-2: #10B981;
+  --chart-3: #F59E0B;
+  --chart-4: #EF4444;
+  --chart-5: #8B5CF6;
+  --chart-6: #EC4899;
+  --chart-7: #06B6D4;
+  --chart-8: #F97316;
+
+  /* 字体 */
+  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+  --font-size-base: 14px;
+  --font-size-sm: 13px;
+  --font-size-xs: 12px;
+  --font-size-title: 20px;
+  --font-size-section: 16px;
+  --font-size-display: 28px;
+
+  /* 圆角（从 12px 降至 8px — 更紧凑专业）*/
+  --radius-sm: 4px;
+  --radius-base: 8px;
+  --radius-lg: 12px;
+  --radius-full: 999px;
+
+  /* 阴影（中性灰，去除绿色调）*/
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-base: 0 2px 6px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 4px 6px rgba(0, 0, 0, 0.07), 0 2px 4px rgba(0, 0, 0, 0.06);
+
+  /* 间距 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* ===== Element Plus 映射 ===== */
   --el-color-primary: #36B34E;
   --el-color-primary-light-3: #5DC370;
   --el-color-primary-light-5: #84D293;
@@ -26,65 +148,83 @@
   --el-color-primary-light-9: #EAF7EC;
   --el-color-primary-dark-2: #1F8A3B;
 
-  /* 语义状态色——与主色拉开，各自有清晰语义
-   * success 用偏冷的祖母绿（不与品牌草绿撞色），warning 统一为经典琥珀橙 */
   --el-color-success: #0EA371;
   --el-color-warning: #E6A23C;
   --el-color-danger: #E74C3C;
   --el-color-info: #5DADE2;
 
-  /* 背景 */
-  --el-bg-color-page: #F1F9F2;
+  /* 背景 — 中性 slate 色系（去除绿色调）*/
+  --el-bg-color-page: #F8FAFC;
   --el-bg-color: #FFFFFF;
   --el-bg-color-overlay: #FFFFFF;
 
-  /* 文字——可读性优先：正文/标题用近黑 slate，绿色只留给品牌/操作/选中。
-   * 切勿把 --el-text-color-primary 设成品牌色，否则全平台正文发绿、长时间看会累。 */
-  --el-text-color-primary: #1E293B;
+  /* 文字 — 近黑 slate，不发绿 */
+  --el-text-color-primary: #0F172A;
   --el-text-color-regular: #334155;
   --el-text-color-secondary: #64748B;
   --el-text-color-placeholder: #94A3B8;
 
-  /* 边框 */
-  --el-border-color: #D6EBD9;
-  --el-border-color-light: #EAF7EC;
-  --el-border-color-lighter: #F1F9F2;
+  /* 边框 — slate 色系（去除绿色调）*/
+  --el-border-color: #E2E8F0;
+  --el-border-color-light: #F1F5F9;
+  --el-border-color-lighter: #F8FAFC;
 
   /* 填充 */
   --el-fill-color-blank: #FFFFFF;
-  --el-fill-color: #EAF7EC;
-  --el-fill-color-light: #F1F9F2;
+  --el-fill-color: #F1F5F9;
+  --el-fill-color-light: #F8FAFC;
 
-  /* 圆角 */
-  --el-border-radius-base: 12px;
-  --el-border-radius-small: 8px;
+  /* 圆角 — 8px（从 12px 降低）*/
+  --el-border-radius-base: 8px;
+  --el-border-radius-small: 4px;
   --el-border-radius-round: 999px;
 
   /* 字体 */
-  --el-font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --el-font-family: var(--font-family);
   --el-font-size-base: 14px;
 
-  /* 阴影 */
-  --el-box-shadow: 0 2px 10px rgba(54, 179, 78, 0.10);
-  --el-box-shadow-light: 0 1px 4px rgba(0, 0, 0, 0.08);
+  /* 阴影 — 中性灰（去除绿色调）*/
+  --el-box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  --el-box-shadow-light: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
-/* ===================== Dark Mode ===================== */
+/* ===================== Dark Mode（slate 基底，去除绿色调）===================== */
 html.dark {
-  --el-bg-color-page: #0C2613;
-  --el-bg-color: #143523;
-  --el-bg-color-overlay: #143523;
-  --el-text-color-primary: #EAF7EC;
-  --el-text-color-regular: #B9DCC0;
-  --el-text-color-secondary: #84C592;
-  --el-text-color-placeholder: #4F9362;
-  --el-border-color: #1F5230;
-  --el-border-color-light: #143523;
-  --el-fill-color-blank: #143523;
-  --el-fill-color: #1F5230;
-  --el-fill-color-light: #0C2613;
+  --bg-page: #0F172A;
+  --bg-surface: #1E293B;
+  --bg-subtle: #263242;
+  --border-default: #334155;
+  --border-light: #1E293B;
+  --border-strong: #475569;
+  --text-primary: #F1F5F9;
+  --text-regular: #CBD5E1;
+  --text-secondary: #94A3B8;
+  --text-placeholder: #475569;
+  --brand-green: #5DC370;
+  --brand-green-light: #84D293;
+  --brand-green-bg: #1E293B;
+  --color-success-bg: #064E3B;
+  --color-warning-bg: #78350F;
+  --color-danger-bg: #7F1D1D;
+  --color-info-bg: #1E3A5F;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-base: 0 2px 6px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 4px 6px rgba(0, 0, 0, 0.3);
+
+  --el-bg-color-page: #0F172A;
+  --el-bg-color: #1E293B;
+  --el-bg-color-overlay: #1E293B;
+  --el-text-color-primary: #F1F5F9;
+  --el-text-color-regular: #CBD5E1;
+  --el-text-color-secondary: #94A3B8;
+  --el-text-color-placeholder: #475569;
+  --el-border-color: #334155;
+  --el-border-color-light: #1E293B;
+  --el-fill-color-blank: #1E293B;
+  --el-fill-color: #263242;
+  --el-fill-color-light: #0F172A;
   --el-color-primary: #5DC370;
   --el-color-primary-light-3: #84D293;
-  --el-color-primary-light-9: #0C2613;
+  --el-color-primary-light-9: #0F172A;
   --el-box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }

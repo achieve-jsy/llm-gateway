@@ -642,8 +642,10 @@ func bedrockUsageExtras(u *brtypes.TokenUsage) map[string]any {
 	if u.CacheReadInputTokens != nil {
 		out["cache_read_input_tokens"] = int(*u.CacheReadInputTokens)
 	}
+	// 统一使用 cache_creation_input_tokens（与 Anthropic 约定一致），
+	// 供 ExtractCostInput / stream_usage_observer 读取，避免键名不匹配漏算成本。
 	if u.CacheWriteInputTokens != nil {
-		out["cache_write_input_tokens"] = int(*u.CacheWriteInputTokens)
+		out["cache_creation_input_tokens"] = int(*u.CacheWriteInputTokens)
 	}
 	if len(out) == 0 {
 		return nil

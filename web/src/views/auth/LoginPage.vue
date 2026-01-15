@@ -168,7 +168,7 @@ async function handleDevLogin() {
               <el-input v-model="form.password" type="password" placeholder="密码" size="large" show-password @keyup.enter="handleDevLogin" />
             </el-form-item>
             <el-form-item>
-              <el-button type="primary" plain size="large" :loading="loginLoading" @click="handleDevLogin" style="width:100%">
+              <el-button type="primary" plain size="large" :loading="loginLoading" @click="handleDevLogin" class="dev-login-btn" style="width:100%">
                 账号密码登录
               </el-button>
             </el-form-item>
@@ -420,6 +420,19 @@ async function handleDevLogin() {
 /* 账号密码登录 */
 .dev-login-section {
   overflow: hidden;
+}
+.dev-login-btn {
+  background: linear-gradient(135deg, var(--login-green-light) 0%, var(--login-green-deep) 100%) !important;
+  border-color: var(--login-green) !important;
+  color: #fff !important;
+}
+.dev-login-btn:hover {
+  filter: brightness(1.04);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(42, 156, 75, 0.35);
+}
+.dev-login-btn:active {
+  transform: translateY(0);
 }
 .login-form {
   display: flex;

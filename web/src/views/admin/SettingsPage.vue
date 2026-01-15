@@ -318,9 +318,6 @@
         </div>
       </div>
 
-      <!-- 数据管理 -->
-      <div v-show="activeTab === 'data'" class="settings-card">
-
       <!-- 价格汇率 -->
       <div v-show="activeTab === 'pricing'" class="settings-card">
         <div class="card-header">
@@ -361,6 +358,7 @@
       </div>
 
       <!-- 数据管理 -->
+      <div v-show="activeTab === 'data'" class="settings-card">
         <div class="card-header">
           <div class="card-title-row">
             <span class="card-icon">

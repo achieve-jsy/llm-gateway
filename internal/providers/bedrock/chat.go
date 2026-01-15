@@ -216,9 +216,20 @@ func hasCacheControl(part core.ContentPart) bool {
 	return part.ExtraFields.Lookup("cache_control") != nil
 }
 
+// systemCacheMinChars 是触发自动 CachePoint 注入的 system 内容最小字符数。
+// ~2000 chars ≈ 500 tokens，低于 Bedrock 最小缓存粒度 1024 token 的两倍，
+// 对小 system prompt 不划算但也无害（只是多一点点 cache_write 费用）。
+// 实践中 OpenCode/Claude Code 的 system prompt 通常 > 10 万字符，远超阈值。
+const systemCacheMinChars = 2000
+
 // convertSystemContentBlocks converts a system message content value into
-// Bedrock SystemContentBlock slice, inserting a CachePoint after any text
-// block that carries a cache_control marker.
+// Bedrock SystemContentBlock slice.
+//
+// 自动注入策略：
+//  1. 若客户端在某个 text part 上携带了 cache_control 标记，在该 block 后插入 CachePoint。
+//  2. 若客户端未携带任何 cache_control（OpenAI 格式或旧 Anthropic 客户端），
+//     且 system 内容总字符数 >= systemCacheMinChars，则在所有 system block 末尾
+//     自动追加一个 CachePoint，缓存整段 system prompt。
 func convertSystemContentBlocks(content any) []brtypes.SystemContentBlock {
 	parts, ok := core.NormalizeContentParts(content)
 	if !ok {
@@ -226,10 +237,18 @@ func convertSystemContentBlocks(content any) []brtypes.SystemContentBlock {
 		if text == "" {
 			return nil
 		}
-		return []brtypes.SystemContentBlock{&brtypes.SystemContentBlockMemberText{Value: text}}
+		blocks := []brtypes.SystemContentBlock{&brtypes.SystemContentBlockMemberText{Value: text}}
+		if len(text) >= systemCacheMinChars {
+			blocks = append(blocks, &brtypes.SystemContentBlockMemberCachePoint{
+				Value: brtypes.CachePointBlock{Type: brtypes.CachePointTypeDefault},
+			})
+		}
+		return blocks
 	}
 
 	blocks := make([]brtypes.SystemContentBlock, 0, len(parts)*2)
+	clientHasCacheControl := false
+	totalChars := 0
 	for _, part := range parts {
 		if part.Type != "text" && part.Type != "input_text" {
 			continue
@@ -237,12 +256,20 @@ func convertSystemContentBlocks(content any) []brtypes.SystemContentBlock {
 		if part.Text == "" {
 			continue
 		}
+		totalChars += len(part.Text)
 		blocks = append(blocks, &brtypes.SystemContentBlockMemberText{Value: part.Text})
 		if hasCacheControl(part) {
+			clientHasCacheControl = true
 			blocks = append(blocks, &brtypes.SystemContentBlockMemberCachePoint{
 				Value: brtypes.CachePointBlock{Type: brtypes.CachePointTypeDefault},
 			})
 		}
+	}
+	// 客户端未标记 cache_control 且内容足够大时，自动在末尾注入 CachePoint。
+	if !clientHasCacheControl && totalChars >= systemCacheMinChars {
+		blocks = append(blocks, &brtypes.SystemContentBlockMemberCachePoint{
+			Value: brtypes.CachePointBlock{Type: brtypes.CachePointTypeDefault},
+		})
 	}
 	return blocks
 }

@@ -16,6 +16,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -170,6 +171,7 @@ type Request struct {
 type Response struct {
 	StatusCode int
 	Body       []byte
+	Headers    http.Header // upstream response headers（含 Retry-After 等）
 }
 
 type requestScope struct {
@@ -356,27 +358,36 @@ func (c *Client) DoRaw(ctx context.Context, req Request) (*Response, error) {
 		maxAttempts = 1
 	}
 
+	// retryAfterOverride: 当上游 429 响应含 Retry-After 头时，覆盖下一次的 backoff。
+	var retryAfterOverride time.Duration
+
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		if err := c.waitForRetryAttempt(ctx, scope, attempt); err != nil {
-			return nil, err
+		// 按轮次等待：第 0 轮不等待；后续轮次使用 Retry-After 覆盖或标准指数退避。
+		if attempt > 0 {
+			backoff := retryAfterOverride
+			retryAfterOverride = 0
+			if backoff == 0 {
+				backoff = c.calculateBackoff(attempt)
+			} else if backoff > c.config.Retry.MaxBackoff {
+				backoff = c.config.Retry.MaxBackoff
+			}
+			select {
+			case <-ctx.Done():
+				c.finishRequest(scope, 0, ctx.Err())
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
 		}
 
 		resp, err := c.doRequest(ctx, req)
 		if err != nil {
 			lastErr = err
 			lastStatusCode = extractStatusCode(err)
-			// Caller-side build errors (validation, body conflicts, marshal
-			// failures) will repeat deterministically and never reached the
-			// upstream — short-circuit without retrying and skip the breaker
-			// entirely (a 400 with cbErr=nil would otherwise be recorded as
-			// a success by recordCircuitBreakerCompletion).
 			if isLocalRequestBuildError(err) {
 				c.finishRequest(scope, lastStatusCode, err)
 				return nil, err
 			}
 			lastErrFromTransport = true
-			// Client-side timeouts are already the caller's latency budget. Do
-			// not retry them, or the logical request can outlive HTTP_TIMEOUT.
 			if scope.halfOpenProbe || isClientTimeoutGatewayError(lastErr) {
 				c.completeScope(scope, lastStatusCode, lastErr, lastErr)
 				return nil, lastErr
@@ -392,6 +403,10 @@ func (c *Client) DoRaw(ctx context.Context, req Request) (*Response, error) {
 			if scope.halfOpenProbe {
 				c.completeScope(scope, lastStatusCode, lastErr, nil)
 				return nil, lastErr
+			}
+			// 解析 Retry-After，优先使用上游指定的等待时间（仅 429 场景常见）
+			if d := parseRetryAfterHeader(resp.Headers); d > 0 {
+				retryAfterOverride = d
 			}
 			continue
 		}
@@ -418,6 +433,30 @@ func (c *Client) DoRaw(ctx context.Context, req Request) (*Response, error) {
 		return nil, lastErr
 	}
 	return nil, c.failAfterRetries(scope)
+}
+
+// parseRetryAfterHeader 解析 Retry-After 响应头，返回应等待的时长。
+// 支持整数秒（"30"）和 HTTP-date（RFC 7231）两种格式，最大遵守 MaxBackoff。
+// 解析失败或值为 0 时返回 0。
+func parseRetryAfterHeader(headers http.Header) time.Duration {
+	if headers == nil {
+		return 0
+	}
+	val := strings.TrimSpace(headers.Get("Retry-After"))
+	if val == "" {
+		return 0
+	}
+	// 整数秒格式
+	if secs, err := strconv.Atoi(val); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	// HTTP-date 格式
+	if t, err := http.ParseTime(val); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
 }
 
 // DoStream executes a streaming request, returning a ReadCloser
@@ -628,6 +667,7 @@ func (c *Client) doRequest(ctx context.Context, req Request) (*Response, error) 
 	return &Response{
 		StatusCode: resp.StatusCode,
 		Body:       body,
+		Headers:    resp.Header,
 	}, nil
 }
 

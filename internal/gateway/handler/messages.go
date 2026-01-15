@@ -146,73 +146,70 @@ func (h *MessagesHandler) streamTimeout(originalModel string) time.Duration {
 // handleNonStream processes a non-streaming request.
 func (h *MessagesHandler) handleNonStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, originalModel string) {
 	timeout := h.nonStreamTimeout(originalModel)
-	primaryCtx, primaryCancel := context.WithTimeout(baseCtx, timeout)
-	resp, err := h.orchestrator.Chat(primaryCtx, req)
-	primaryCancel()
+	var lastErr error
 
-	if err != nil {
-		if h.groupDispatch != nil && req.Model != originalModel {
-			// Try failover
-			failedID := req.Model
-			if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
-				failedID = dc.RoutedModelID
+	for {
+		roundCtx, roundCancel := context.WithTimeout(baseCtx, timeout)
+		resp, err := h.orchestrator.Chat(roundCtx, req)
+		roundCancel()
+
+		if err == nil {
+			if lastErr != nil {
+				c.Set("error_message", "")
 			}
-			slog.Warn("messages failover: primary failed",
+			anthResp := core.ChatResponseToAnthropic(resp, originalModel)
+			if anthResp.ID == "" {
+				anthResp.ID = generateAnthropicID(c)
+			}
+			c.JSON(http.StatusOK, anthResp)
+			return
+		}
+		lastErr = err
+
+		if h.groupDispatch == nil || req.Model == originalModel || !shouldTriggerFailover(err) {
+			break
+		}
+
+		failedID := req.Model
+		if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
+			failedID = dc.RoutedModelID
+		}
+		slog.Warn("messages failover: attempt",
+			"request_id", c.GetString("request_id"),
+			"group", originalModel,
+			"failed_model", req.Model,
+			"failed_model_id", failedID,
+			"error", err.Error(),
+		)
+
+		h.groupDispatch.NotifyFailure(failedID)
+		if is429Error(err) {
+			h.groupDispatch.SetCooldown(failedID, defaultCooldownDuration)
+		}
+
+		decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID)
+		if fErr != nil {
+			slog.Error("messages failover: no available target",
 				"request_id", c.GetString("request_id"),
 				"group", originalModel,
-				"failed_model", req.Model,
-				"failed_model_id", failedID,
-				"error", err.Error(),
+				"error", fErr.Error(),
 			)
-			if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID); fErr == nil {
-				req.Model = decision.ModelName
-				req.Provider = decision.ProviderName
-				c.Set("failover_used", true)
-				slog.Info("messages failover: switching",
-					"request_id", c.GetString("request_id"),
-					"group", originalModel,
-					"target_provider", decision.ProviderName,
-					"target_model", decision.ModelName,
-					"target_model_id", decision.ModelID,
-				)
-				failoverCtx, failoverCancel := context.WithTimeout(baseCtx, timeout)
-				fResp, fErr2 := h.orchestrator.Chat(failoverCtx, req)
-				failoverCancel()
-				if fErr2 == nil {
-					c.Set("error_message", "")
-					slog.Info("messages failover: success",
-						"request_id", c.GetString("request_id"),
-						"group", originalModel,
-						"final_provider", decision.ProviderName,
-					)
-					anthResp := core.ChatResponseToAnthropic(fResp, originalModel)
-					c.JSON(http.StatusOK, anthResp)
-					return
-				}
-				slog.Error("messages failover: target also failed",
-					"request_id", c.GetString("request_id"),
-					"group", originalModel,
-					"target_provider", decision.ProviderName,
-					"error", fErr2.Error(),
-				)
-			} else {
-				slog.Error("messages failover: no available target",
-					"request_id", c.GetString("request_id"),
-					"group", originalModel,
-					"error", fErr.Error(),
-				)
-			}
+			break
 		}
-		h.respondAnthropicUnifiedError(c, err)
-		return
+
+		req.Model = decision.ModelName
+		req.Provider = decision.ProviderName
+		c.Set("failover_used", true)
+		slog.Info("messages failover: switching",
+			"request_id", c.GetString("request_id"),
+			"group", originalModel,
+			"target_provider", decision.ProviderName,
+			"target_model", decision.ModelName,
+			"target_model_id", decision.ModelID,
+		)
 	}
 
-	anthResp := core.ChatResponseToAnthropic(resp, originalModel)
-	// Ensure we always have a proper ID and model
-	if anthResp.ID == "" {
-		anthResp.ID = generateAnthropicID(c)
-	}
-	c.JSON(http.StatusOK, anthResp)
+	h.respondAnthropicUnifiedError(c, lastErr)
 }
 
 // handleStream processes a streaming request.
@@ -229,61 +226,69 @@ func (h *MessagesHandler) handleStream(c *gin.Context, baseCtx context.Context, 
 		return s, cancel, nil
 	}
 
-	// Primary attempt
-	rawStream, cancel, err := openStream(req)
-	if err != nil {
-		if h.groupDispatch != nil && req.Model != originalModel {
-			failedID := req.Model
-			if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
-				failedID = dc.RoutedModelID
+	var lastErr error
+
+	for {
+		rawStream, cancel, err := openStream(req)
+
+		if err == nil {
+			if lastErr != nil {
+				c.Set("error_message", "")
 			}
-			slog.Warn("messages failover: primary failed (stream)",
+			anthStream := newAnthropicStreamAdapter(
+				&cancelOnClose{ReadCloser: rawStream, cancel: cancel},
+				c.GetString("request_id"),
+				originalModel,
+			)
+			HandleStreamResponse(c, anthStream)
+			return
+		}
+		lastErr = err
+
+		if h.groupDispatch == nil || req.Model == originalModel || !shouldTriggerFailover(err) {
+			break
+		}
+
+		failedID := req.Model
+		if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
+			failedID = dc.RoutedModelID
+		}
+		slog.Warn("messages failover: attempt (stream)",
+			"request_id", c.GetString("request_id"),
+			"group", originalModel,
+			"failed_model", req.Model,
+			"failed_model_id", failedID,
+			"error", err.Error(),
+		)
+
+		h.groupDispatch.NotifyFailure(failedID)
+		if is429Error(err) {
+			h.groupDispatch.SetCooldown(failedID, defaultCooldownDuration)
+		}
+
+		decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID)
+		if fErr != nil {
+			slog.Error("messages failover: no available target (stream)",
 				"request_id", c.GetString("request_id"),
 				"group", originalModel,
-				"failed_model", req.Model,
-				"failed_model_id", failedID,
-				"error", err.Error(),
+				"error", fErr.Error(),
 			)
-			if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID); fErr == nil {
-				req.Model = decision.ModelName
-				req.Provider = decision.ProviderName
-				c.Set("failover_used", true)
-				fStream, fCancel, fErr2 := openStream(req)
-				if fErr2 == nil {
-					c.Set("error_message", "")
-					anthStream := newAnthropicStreamAdapter(
-						&cancelOnClose{ReadCloser: fStream, cancel: fCancel},
-						c.GetString("request_id"),
-						originalModel,
-					)
-					HandleStreamResponse(c, anthStream)
-					return
-				}
-				slog.Error("messages failover: target also failed (stream)",
-					"request_id", c.GetString("request_id"),
-					"group", originalModel,
-					"target_provider", decision.ProviderName,
-					"error", fErr2.Error(),
-				)
-			} else {
-				slog.Error("messages failover: no available target (stream)",
-					"request_id", c.GetString("request_id"),
-					"group", originalModel,
-					"error", fErr.Error(),
-				)
-			}
+			break
 		}
-		h.respondAnthropicUnifiedError(c, err)
-		return
+
+		req.Model = decision.ModelName
+		req.Provider = decision.ProviderName
+		c.Set("failover_used", true)
+		slog.Info("messages failover: switching (stream)",
+			"request_id", c.GetString("request_id"),
+			"group", originalModel,
+			"target_provider", decision.ProviderName,
+			"target_model", decision.ModelName,
+			"target_model_id", decision.ModelID,
+		)
 	}
 
-	// Wrap the OpenAI SSE stream with our Anthropic SSE converter
-	anthStream := newAnthropicStreamAdapter(
-		&cancelOnClose{ReadCloser: rawStream, cancel: cancel},
-		c.GetString("request_id"),
-		originalModel,
-	)
-	HandleStreamResponse(c, anthStream)
+	h.respondAnthropicUnifiedError(c, lastErr)
 }
 
 // ──────────────────────────────────────────────

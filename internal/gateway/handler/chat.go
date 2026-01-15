@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -21,6 +22,8 @@ const (
 	defaultNonStreamTimeout = 600 * time.Second
 	// defaultStreamTimeout 流式请求总超时，需与 Nginx proxy_read_timeout 保持一致。
 	defaultStreamTimeout = 600 * time.Second
+	// defaultCooldownDuration 429 限流后默认冷却时长（无 Retry-After 时使用）。
+	defaultCooldownDuration = 60 * time.Second
 )
 
 // ChatOrchestratorInterface 编排器抽象：handler 仅依赖必要方法，便于测试替换
@@ -139,91 +142,92 @@ func (h *ChatHandler) streamTimeout(originalModel string) time.Duration {
 	return defaultStreamTimeout
 }
 
-// handleNonStream 处理普通（非流式）请求
+// handleNonStream 处理普通（非流式）请求。
 //
-// 每次上游调用（primary + failover）都从 baseCtx 派生独立的超时 context，
-// 确保 failover 轮次拥有完整的超时预算，不受前一次失败的影响。
+// 每轮上游调用都从 baseCtx 派生独立超时 context（完整预算），确保 failover
+// 轮次不受前一轮超时消耗的影响。多轮 failover 由 HandleFailover 内部的
+// DispatchContext 控制上限（最多 maxFailoverRounds 轮）。
 func (h *ChatHandler) handleNonStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, originalModel string) {
 	timeout := h.nonStreamTimeout(originalModel)
-	// 第一轮：primary
-	primaryCtx, primaryCancel := context.WithTimeout(baseCtx, timeout)
-	resp, err := h.orchestrator.Chat(primaryCtx, req)
-	primaryCancel()
+	var lastErr error
 
-	if err != nil {
-		if h.groupDispatch != nil && req.Model != originalModel {
-			// 用 RoutedModelID（数字 ID）而非模型名做 Failover 排除，
-			// 避免 failover.go 中字符串比对永远不匹配的 bug。
-			failedID := req.Model
-			if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
-				failedID = dc.RoutedModelID
+	for {
+		roundCtx, roundCancel := context.WithTimeout(baseCtx, timeout)
+		resp, err := h.orchestrator.Chat(roundCtx, req)
+		roundCancel()
+
+		if err == nil {
+			if lastErr != nil {
+				c.Set("error_message", "") // failover 成功，清除前轮错误
 			}
-			slog.Warn("failover: primary failed",
-				"request_id", c.GetString("request_id"),
-				"group", originalModel,
-				"failed_model", req.Model,
-				"failed_model_id", failedID,
-				"error", err.Error(),
-			)
-			if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID); fErr == nil {
-				req.Model = decision.ModelName
-				req.Provider = decision.ProviderName // 指定 provider，避免同名模型路由回故障节点
-				c.Set("failover_used", true)
-				slog.Info("failover: switching",
-					"request_id", c.GetString("request_id"),
-					"group", originalModel,
-					"target_provider", decision.ProviderName,
-					"target_model", decision.ModelName,
-					"target_model_id", decision.ModelID,
-				)
-				// 第二轮：failover —— 用全新的超时 context，不受第一轮超时影响
-				failoverCtx, failoverCancel := context.WithTimeout(baseCtx, timeout)
-				fResp, fErr2 := h.orchestrator.Chat(failoverCtx, req)
-				failoverCancel()
-				if fErr2 == nil {
-					// failover 成功，清除首次失败写入的 error_message
-					c.Set("error_message", "")
-					slog.Info("failover: success",
-						"request_id", c.GetString("request_id"),
-						"group", originalModel,
-						"final_provider", decision.ProviderName,
-					)
-					c.JSON(http.StatusOK, fResp)
-					return
-				}
-				slog.Error("failover: target also failed",
-					"request_id", c.GetString("request_id"),
-					"group", originalModel,
-					"target_provider", decision.ProviderName,
-					"error", fErr2.Error(),
-				)
-			} else {
-				slog.Error("failover: no available target",
-					"request_id", c.GetString("request_id"),
-					"group", originalModel,
-					"error", fErr.Error(),
-				)
-			}
-		}
-		if ue, ok := err.(*model.UnifiedError); ok {
-			respondError(c, ue)
+			c.JSON(http.StatusOK, resp)
 			return
 		}
-		respondError(c, model.ErrInternal)
-		return
+		lastErr = err
+
+		// 不触发 failover 的条件：无 groupDispatch、未路由到组、错误类型不可 failover
+		if h.groupDispatch == nil || req.Model == originalModel || !shouldTriggerFailover(err) {
+			break
+		}
+
+		failedID := req.Model
+		if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
+			failedID = dc.RoutedModelID
+		}
+
+		slog.Warn("failover: attempt",
+			"request_id", c.GetString("request_id"),
+			"group", originalModel,
+			"failed_model", req.Model,
+			"failed_model_id", failedID,
+			"error", err.Error(),
+		)
+
+		// Phase 3: 实时通知健康状态 + 429 冷却
+		h.groupDispatch.NotifyFailure(failedID)
+		if is429Error(err) {
+			h.groupDispatch.SetCooldown(failedID, defaultCooldownDuration)
+		}
+
+		decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID)
+		if fErr != nil {
+			slog.Error("failover: no available target",
+				"request_id", c.GetString("request_id"),
+				"group", originalModel,
+				"error", fErr.Error(),
+			)
+			break
+		}
+
+		req.Model = decision.ModelName
+		req.Provider = decision.ProviderName
+		c.Set("failover_used", true)
+		slog.Info("failover: switching",
+			"request_id", c.GetString("request_id"),
+			"group", originalModel,
+			"target_provider", decision.ProviderName,
+			"target_model", decision.ModelName,
+			"target_model_id", decision.ModelID,
+		)
 	}
 
-	c.JSON(http.StatusOK, resp)
+	// 所有轮次均失败
+	if ue, ok := lastErr.(*model.UnifiedError); ok {
+		respondError(c, ue)
+		return
+	}
+	respondError(c, model.ErrInternal)
 }
 
-// handleStream 处理流式请求
+// handleStream 处理流式请求。
 //
 // 流式场景下，若 primary 建立连接失败才可 failover；一旦流已建立则不中途切换。
-// 每次建流尝试从 baseCtx 派生独立超时 context，确保 failover 有完整预算。
+// 多轮 failover 逻辑与 handleNonStream 一致。
 func (h *ChatHandler) handleStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, originalModel string) {
 	timeout := h.streamTimeout(originalModel)
+
 	// openStream 封装"建立一次流"的逻辑：派生超时 ctx，连接失败时立即 cancel。
-	// 连接成功时返回 ctx cancel 与 stream，调用方需确保最终调用 cancel。
+	// 连接成功时返回 cancel 与 stream，调用方需确保最终调用 cancel。
 	openStream := func(r *core.ChatRequest) (io.ReadCloser, context.CancelFunc, error) {
 		streamCtx, cancel := context.WithTimeout(baseCtx, timeout)
 		s, e := h.orchestrator.ChatStream(streamCtx, r)
@@ -234,71 +238,100 @@ func (h *ChatHandler) handleStream(c *gin.Context, baseCtx context.Context, req 
 		return s, cancel, nil
 	}
 
-	// 第一轮：primary
-	stream, cancel, err := openStream(req)
+	var lastErr error
 
-	if err != nil {
-		if h.groupDispatch != nil && req.Model != originalModel {
-			// 用 RoutedModelID 做 Failover 排除
-			failedID := req.Model
-			if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
-				failedID = dc.RoutedModelID
+	for {
+		stream, cancel, err := openStream(req)
+
+		if err == nil {
+			if lastErr != nil {
+				c.Set("error_message", "")
 			}
-			slog.Warn("failover: primary failed (stream)",
-				"request_id", c.GetString("request_id"),
-				"group", originalModel,
-				"failed_model", req.Model,
-				"failed_model_id", failedID,
-				"error", err.Error(),
-			)
-			if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID); fErr == nil {
-				req.Model = decision.ModelName
-				req.Provider = decision.ProviderName
-				c.Set("failover_used", true)
-				slog.Info("failover: switching (stream)",
-					"request_id", c.GetString("request_id"),
-					"group", originalModel,
-					"target_provider", decision.ProviderName,
-					"target_model", decision.ModelName,
-					"target_model_id", decision.ModelID,
-				)
-				// 第二轮：failover —— 全新超时 context
-				fStream, fCancel, fErr2 := openStream(req)
-				if fErr2 == nil {
-					c.Set("error_message", "")
-					slog.Info("failover: success (stream)",
-						"request_id", c.GetString("request_id"),
-						"group", originalModel,
-						"final_provider", decision.ProviderName,
-					)
-					// 流关闭时释放 failover ctx
-					HandleStreamResponse(c, &cancelOnClose{ReadCloser: fStream, cancel: fCancel})
-					return
-				}
-				slog.Error("failover: target also failed (stream)",
-					"request_id", c.GetString("request_id"),
-					"group", originalModel,
-					"target_provider", decision.ProviderName,
-					"error", fErr2.Error(),
-				)
-			} else {
-				slog.Error("failover: no available target (stream)",
-					"request_id", c.GetString("request_id"),
-					"group", originalModel,
-					"error", fErr.Error(),
-				)
-			}
-		}
-		if ue, ok := err.(*model.UnifiedError); ok {
-			respondError(c, ue)
+			HandleStreamResponse(c, &cancelOnClose{ReadCloser: stream, cancel: cancel})
 			return
 		}
-		respondError(c, model.ErrInternal)
-		return
+		lastErr = err
+
+		if h.groupDispatch == nil || req.Model == originalModel || !shouldTriggerFailover(err) {
+			break
+		}
+
+		failedID := req.Model
+		if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
+			failedID = dc.RoutedModelID
+		}
+
+		slog.Warn("failover: attempt (stream)",
+			"request_id", c.GetString("request_id"),
+			"group", originalModel,
+			"failed_model", req.Model,
+			"failed_model_id", failedID,
+			"error", err.Error(),
+		)
+
+		h.groupDispatch.NotifyFailure(failedID)
+		if is429Error(err) {
+			h.groupDispatch.SetCooldown(failedID, defaultCooldownDuration)
+		}
+
+		decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID)
+		if fErr != nil {
+			slog.Error("failover: no available target (stream)",
+				"request_id", c.GetString("request_id"),
+				"group", originalModel,
+				"error", fErr.Error(),
+			)
+			break
+		}
+
+		req.Model = decision.ModelName
+		req.Provider = decision.ProviderName
+		c.Set("failover_used", true)
+		slog.Info("failover: switching (stream)",
+			"request_id", c.GetString("request_id"),
+			"group", originalModel,
+			"target_provider", decision.ProviderName,
+			"target_model", decision.ModelName,
+			"target_model_id", decision.ModelID,
+		)
 	}
 
-	// 流关闭时释放 primary ctx
-	HandleStreamResponse(c, &cancelOnClose{ReadCloser: stream, cancel: cancel})
+	if ue, ok := lastErr.(*model.UnifiedError); ok {
+		respondError(c, ue)
+		return
+	}
+	respondError(c, model.ErrInternal)
+}
+
+// shouldTriggerFailover 判断是否应根据错误类型触发 failover。
+// 上游 5xx/429/网络错误可 failover；参数错误（400）、鉴权（401/403）、
+// 内容过长（413）、context 取消不触发 failover。
+func shouldTriggerFailover(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var gwErr *core.GatewayError
+	if !errors.As(err, &gwErr) {
+		return true // 未知错误类型保守触发
+	}
+	switch gwErr.StatusCode {
+	case http.StatusBadRequest,
+		http.StatusUnauthorized,
+		http.StatusForbidden,
+		http.StatusRequestEntityTooLarge:
+		return false
+	default:
+		return true
+	}
+}
+
+// is429Error 判断错误是否为上游 429 限流错误。
+func is429Error(err error) bool {
+	var gwErr *core.GatewayError
+	return errors.As(err, &gwErr) && gwErr.StatusCode == http.StatusTooManyRequests
 }
 
 // cancelOnClose 包装 io.ReadCloser，Close 时调用 cancel 释放超时 context

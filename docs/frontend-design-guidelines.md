@@ -18,8 +18,11 @@
 **依据**：Design Tokens / Single Source of Truth、Consistency & Standards (Nielsen #4)
 
 - 颜色一律用 `--el-color-*`、`--el-text-color-*`、`--el-border-color-*`、`--el-fill-color-*`，**禁止**在页面里写 `#xxxxxx` 硬编码（语义状态色除外，且应集中定义）。
-- 主色 teal `#2BA8A2`，成功/警告/危险/信息见 `variables.scss`。
+- **主色为品牌绿 `#36B34E`**（深色 `--el-color-primary-dark-2: #1F8A3B`），与登录页（`web/src/views/auth/LoginPage.vue`）色彩体系**完全同源**，确保「登录 → 进入面板」视觉连续。成功/警告/危险/信息见 `variables.scss`。
+- 需要品牌渐变/装饰时引用 `--brand-green` / `--brand-green-light` / `--brand-green-deep`（登录页同源三档绿）。
 - 暗色模式：任何新增颜色都要在 `html.dark` 下给出对应值，否则暗色下会失真。
+
+> **设计北极星**：[Wise](https://getdesign.md/)（"Bright green accent, friendly and clear"）——浅色画布 + 单一自信的绿色主调 + 友好圆角。我们沿用其设计哲学，但色相锁定为品牌自有翠绿 `#36B34E`，而非 Wise 的柠檬绿。
 - **标题字号/字重**：使用统一 token（见下「待补齐 token」），不要每页 `font-size: 16px` 各写一套。
 
 > ⚠️ 已知债务：页面中引用的 `--font-title-size` / `--font-title-weight` / `--font-family` 当前**未在 `variables.scss` 定义**，导致标题样式 fallback。新建页面前应先补齐这组 token（或改用 `--el-font-size-*`）。

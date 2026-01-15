@@ -80,8 +80,8 @@ onMounted(async () => {
   font-size: 13px; color: var(--el-text-color-secondary); margin: 0; line-height: 1.5;
   code {
     font-family: 'Fira Code', monospace; font-size: 12px;
-    background: rgba(43,168,162,0.08); color: #1A8B85;
-    padding: 1px 5px; border-radius: 4px; border: 1px solid rgba(43,168,162,0.15);
+    background: rgba(54,179,78,0.08); color: #1F8A3B;
+    padding: 1px 5px; border-radius: 4px; border: 1px solid rgba(54,179,78,0.15);
   }
 }
 
@@ -89,15 +89,15 @@ onMounted(async () => {
   display: flex; align-items: center;
   background: var(--el-fill-color-blank);
   border: 1.5px solid #C8E4E2; border-radius: 10px; overflow: hidden;
-  box-shadow: 0 2px 8px rgba(43,168,162,0.06);
+  box-shadow: 0 2px 8px rgba(54,179,78,0.06);
   max-width: 100%;
 }
 .msq-url__prefix {
-  padding: 0 12px; font-size: 11px; font-weight: 700; color: #2BA8A2;
+  padding: 0 12px; font-size: 11px; font-weight: 700; color: #36B34E;
   letter-spacing: 0.6px; text-transform: uppercase;
   border-right: 1px solid #D8EEEC; height: 40px;
   display: flex; align-items: center; white-space: nowrap;
-  background: rgba(43,168,162,0.04);
+  background: rgba(54,179,78,0.04);
 }
 .msq-url__value {
   flex: 1; padding: 0 14px;
@@ -107,12 +107,12 @@ onMounted(async () => {
 }
 .msq-url__btn {
   display: flex; align-items: center; gap: 5px; padding: 0 16px; height: 40px;
-  background: #2BA8A2; border: none; color: #fff; font-size: 12px; font-weight: 600;
+  background: #36B34E; border: none; color: #fff; font-size: 12px; font-weight: 600;
   cursor: pointer; transition: background 0.15s; white-space: nowrap;
   .el-icon { font-size: 14px; }
   &:hover { background: #229A94; }
-  &.ok { background: #27AE60; }
-  &:focus-visible { outline: 2px solid #2BA8A2; outline-offset: 2px; }
+  &.ok { background: #0EA371; }
+  &:focus-visible { outline: 2px solid #36B34E; outline-offset: 2px; }
 }
 
 @media (max-width: 640px) {
@@ -121,8 +121,8 @@ onMounted(async () => {
   .msq-url { width: 100%; }
 }
 
-:global(html.dark) .msq-url { border-color: #1A3A38; background: #0A1B1A; box-shadow: none; }
-:global(html.dark) .msq-url__prefix { background: rgba(43,168,162,0.07); border-color: #1A3A38; }
-:global(html.dark) .msq-url__value { color: #4DC8C2; }
-:global(html.dark) .msq-desc code { background: rgba(43,168,162,0.12); color: #4DC8C2; border-color: rgba(43,168,162,0.25); }
+:global(html.dark) .msq-url { border-color: #1F5230; background: #0A1B1A; box-shadow: none; }
+:global(html.dark) .msq-url__prefix { background: rgba(54,179,78,0.07); border-color: #1F5230; }
+:global(html.dark) .msq-url__value { color: #6CD083; }
+:global(html.dark) .msq-desc code { background: rgba(54,179,78,0.12); color: #6CD083; border-color: rgba(54,179,78,0.25); }
 </style>

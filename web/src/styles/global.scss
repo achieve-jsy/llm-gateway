@@ -44,7 +44,7 @@ body,
       align-items: center;
       font-size: 18px;
       font-weight: 800;
-      color: #1E8C86;
+      color: #1F8A3B;
       letter-spacing: 1px;
       border-bottom: 1px solid var(--el-border-color);
       flex-shrink: 0;
@@ -137,7 +137,7 @@ body,
 
     &:hover {
       background-color: var(--el-fill-color);
-      color: #1E8C86;
+      color: #1F8A3B;
     }
   }
 }
@@ -297,22 +297,23 @@ body,
 }
 
 .el-button--primary {
-  --el-button-bg-color: #2BA8A2;
-  --el-button-border-color: #2BA8A2;
+  --el-button-bg-color: #36B34E;
+  --el-button-border-color: #36B34E;
   --el-button-text-color: #FFFFFF;
-  --el-button-hover-bg-color: #3CC4BD;
-  --el-button-hover-border-color: #3CC4BD;
+  --el-button-hover-bg-color: #5DC370;
+  --el-button-hover-border-color: #5DC370;
   --el-button-hover-text-color: #FFFFFF;
-  box-shadow: 0 4px 12px rgba(43, 168, 162, 0.22);
+  box-shadow: 0 4px 12px rgba(54, 179, 78, 0.22);
 }
 
 .el-button--warning {
-  --el-button-bg-color: #FFD23F;
-  --el-button-border-color: #FFD23F;
-  --el-button-text-color: #1E8C86;
-  --el-button-hover-bg-color: #FFE47A;
-  --el-button-hover-border-color: #FFE47A;
-  box-shadow: 0 2px 10px rgba(255, 210, 63, 0.40);
+  --el-button-bg-color: #E6A23C;
+  --el-button-border-color: #E6A23C;
+  --el-button-text-color: #FFFFFF;
+  --el-button-hover-bg-color: #ECB35C;
+  --el-button-hover-border-color: #ECB35C;
+  --el-button-hover-text-color: #FFFFFF;
+  box-shadow: 0 2px 10px rgba(230, 162, 60, 0.35);
 }
 
 .el-button--danger {
@@ -324,11 +325,30 @@ body,
   box-shadow: 0 2px 10px rgba(239, 108, 74, 0.35);
 }
 
+/* 文字/链接型主色按钮与链接：品牌主绿 #36B34E 当白底文字对比不足(AA)，
+ * 仅在明色模式加深到 dark-2，保证表格操作列/内联链接清晰可读；
+ * 暗色模式主色已是亮绿(#5DC370)，对比充足，无需覆盖。 */
+html:not(.dark) {
+  .el-button.is-text.el-button--primary:not(.is-disabled),
+  .el-button.is-link.el-button--primary:not(.is-disabled) {
+    color: #1F8A3B;
+  }
+  .el-button.is-text.el-button--primary:not(.is-disabled):hover,
+  .el-button.is-link.el-button--primary:not(.is-disabled):hover {
+    color: #146C2E;
+    background-color: var(--el-color-primary-light-9);
+  }
+  .el-link.el-link--primary {
+    --el-link-text-color: #1F8A3B;
+    --el-link-hover-text-color: #146C2E;
+  }
+}
+
 /* 表格 — 带 card shadow 和左侧色条感 */
 .el-table {
   border-radius: 10px;
   overflow: hidden;
-  box-shadow: 0 2px 10px rgba(43, 168, 162, 0.08);
+  box-shadow: 0 2px 10px rgba(54, 179, 78, 0.08);
   border: 1px solid var(--el-border-color);
 
   th.el-table__cell {
@@ -336,23 +356,23 @@ body,
     font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    color: #1E8C86;
-    background-color: #E8F6F5 !important;
+    color: #1F8A3B;
+    background-color: #EAF7EC !important;
   }
 
   .el-table__row:hover > td {
-    background-color: #E8F6F5 !important;
+    background-color: #EAF7EC !important;
   }
 }
 
 html.dark .el-table {
   th.el-table__cell {
-    background-color: #1E5653 !important;
-    color: #3CC4BD;
+    background-color: #1F5230 !important;
+    color: #5DC370;
   }
 
   .el-table__row:hover > td {
-    background-color: #1E5653 !important;
+    background-color: #1F5230 !important;
   }
 }
 
@@ -360,18 +380,18 @@ html.dark .el-table {
 .el-dialog {
   border-radius: 12px;
   overflow: hidden;
-  box-shadow: 0 8px 32px rgba(43, 168, 162, 0.15);
+  box-shadow: 0 8px 32px rgba(54, 179, 78, 0.15);
 
   .el-dialog__header {
     padding: 18px 20px 14px;
     border-bottom: 1px solid var(--el-border-color);
-    background: linear-gradient(135deg, #E8F6F5 0%, #FFFFFF 100%);
+    background: linear-gradient(135deg, #EAF7EC 0%, #FFFFFF 100%);
   }
 
   .el-dialog__title {
     font-weight: 800;
     font-size: 18px;
-    color: #1E8C86;
+    color: #1F8A3B;
     letter-spacing: 1px;
   }
 
@@ -389,7 +409,7 @@ html.dark .el-table {
 }
 
 html.dark .el-dialog .el-dialog__header {
-  background: linear-gradient(135deg, #163B3A 0%, #1E5653 100%);
+  background: linear-gradient(135deg, #143523 0%, #1F5230 100%);
 }
 
 /* 表单输入 */
@@ -400,20 +420,20 @@ html.dark .el-dialog .el-dialog__header {
   transition: all 0.2s;
 
   &:hover {
-    box-shadow: 0 0 0 1px #2BA8A2 inset !important;
+    box-shadow: 0 0 0 1px #36B34E inset !important;
   }
 
   &.is-focus {
-    box-shadow: 0 0 0 2px #2BA8A2 inset, 0 0 0 4px rgba(43, 168, 162, 0.15) !important;
+    box-shadow: 0 0 0 2px #36B34E inset, 0 0 0 4px rgba(54, 179, 78, 0.15) !important;
     background-color: #FFFFFF !important;
   }
 }
 
 html.dark .el-input__wrapper {
-  background-color: #163B3A !important;
+  background-color: #143523 !important;
 
   &.is-focus {
-    background-color: #0F2928 !important;
+    background-color: #0C2613 !important;
   }
 }
 
@@ -424,7 +444,7 @@ html.dark .el-input__wrapper {
 }
 
 html.dark .el-textarea__inner {
-  background-color: #163B3A !important;
+  background-color: #143523 !important;
 }
 
 /* 表单标签 */
@@ -441,7 +461,7 @@ html.dark .el-textarea__inner {
 .el-form-item__label {
   font-weight: 500;
   font-size: 13px;
-  color: #1E8C86 !important;
+  color: var(--el-text-color-regular) !important;
   line-height: 20px;
   padding-right: 12px;
 }
@@ -500,14 +520,14 @@ html.dark .el-textarea__inner {
     transition: all 0.2s;
 
     &:hover {
-      background-color: #E8F6F5;
-      color: #1E8C86;
+      background-color: #EAF7EC;
+      color: #1F8A3B;
     }
 
     &.is-active {
-      background-color: #2BA8A2;
+      background-color: #36B34E;
       color: #FFFFFF;
-      box-shadow: 0 2px 10px rgba(43, 168, 162, 0.30);
+      box-shadow: 0 2px 10px rgba(54, 179, 78, 0.30);
     }
   }
 
@@ -521,21 +541,21 @@ html.dark .el-textarea__inner {
 
 html.dark .el-menu {
   .menu-group-label {
-    color: #7BBFBB;
+    color: #84C592;
   }
 
   .menu-divider {
-    border-color: #1E5653;
+    border-color: #1F5230;
   }
 
   .el-menu-item {
     &:hover {
-      background-color: #1E5653;
-      color: #3CC4BD;
+      background-color: #1F5230;
+      color: #5DC370;
     }
 
     &.is-active {
-      background-color: #2BA8A2;
+      background-color: #36B34E;
       color: #FFFFFF;
     }
   }
@@ -552,18 +572,18 @@ html.dark .el-menu {
 }
 
 .el-tag--primary {
-  background-color: #E8F6F5;
-  color: #1E8C86;
+  background-color: #EAF7EC;
+  color: #1F8A3B;
 }
 
 .el-tag--success {
-  background-color: rgba(39, 174, 96, 0.12);
-  color: #27AE60;
+  background-color: rgba(14, 163, 113, 0.14);
+  color: #0B8A5F;
 }
 
 .el-tag--warning {
-  background-color: rgba(255, 210, 63, 0.15);
-  color: #E6B800;
+  background-color: rgba(230, 162, 60, 0.16);
+  color: #B97916;
 }
 
 .el-tag--danger {
@@ -578,8 +598,8 @@ html.dark .el-menu {
 
 /* Switch */
 .el-switch.is-checked .el-switch__core {
-  background-color: #2BA8A2;
-  border-color: #2BA8A2;
+  background-color: #36B34E;
+  border-color: #36B34E;
 }
 
 /* 分页 */
@@ -589,7 +609,7 @@ html.dark .el-menu {
   }
 
   .el-pager li.is-active {
-    background-color: #2BA8A2;
+    background-color: #36B34E;
     color: #FFFFFF;
   }
 }
@@ -616,19 +636,19 @@ html.dark .el-menu {
 /* 下拉 */
 .el-select-dropdown {
   border-radius: 10px;
-  box-shadow: 0 4px 16px rgba(43, 168, 162, 0.12);
+  box-shadow: 0 4px 16px rgba(54, 179, 78, 0.12);
 }
 
 /* Tooltip */
 .el-popper.is-dark {
-  background: #1E8C86 !important;
+  background: #1F8A3B !important;
   border-radius: 8px;
 }
 
 /* Card */
 .el-card {
   border-radius: 10px;
-  box-shadow: 0 2px 8px rgba(43, 168, 162, 0.09);
+  box-shadow: 0 2px 8px rgba(54, 179, 78, 0.09);
   border: 1px solid var(--el-border-color);
 }
 
@@ -638,12 +658,12 @@ html.dark .el-menu {
 }
 
 .el-tabs__item.is-active {
-  color: #1E8C86;
+  color: #1F8A3B;
   font-weight: 700;
 }
 
 .el-tabs__active-bar {
-  background-color: #2BA8A2;
+  background-color: #36B34E;
   border-radius: 2px;
   height: 3px;
 }
@@ -669,19 +689,19 @@ html.dark .el-menu {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #B0D9D6;
+  background: #B9DCC0;
   border-radius: 3px;
 
   &:hover {
-    background: #2BA8A2;
+    background: #36B34E;
   }
 }
 
 html.dark ::-webkit-scrollbar-thumb {
-  background: #1E5653;
+  background: #1F5230;
 
   &:hover {
-    background: #3CC4BD;
+    background: #5DC370;
   }
 }
 
@@ -729,13 +749,13 @@ html.dark ::-webkit-scrollbar-thumb {
 
   /* ── 链接 ── */
   a {
-    color: #2BA8A2;
+    color: #1F8A3B;
     text-decoration: underline;
     text-underline-offset: 3px;
     text-decoration-thickness: 1px;
     font-weight: 500;
     transition: color 0.15s;
-    &:hover { color: #1E8C86; text-decoration-thickness: 2px; }
+    &:hover { color: #146C2E; text-decoration-thickness: 2px; }
   }
 
   /* ── 列表 ── */
@@ -758,15 +778,15 @@ html.dark ::-webkit-scrollbar-thumb {
   input[type="checkbox"] {
     margin-right: 0.4em;
     vertical-align: middle;
-    accent-color: #2BA8A2;
+    accent-color: #36B34E;
   }
 
   /* ── 引用块 ── */
   blockquote {
-    border-left: 4px solid #2BA8A2;
+    border-left: 4px solid #36B34E;
     margin: 1.25em 0;
     padding: 0.75em 1.25em;
-    background: linear-gradient(to right, #f0fafa, #f8fffe);
+    background: linear-gradient(to right, #EEF9F0, #F6FEF8);
     border-radius: 0 8px 8px 0;
     color: #475569;
     font-style: italic;
@@ -846,7 +866,7 @@ html.dark ::-webkit-scrollbar-thumb {
     tbody tr {
       transition: background 0.1s;
       &:nth-child(even) td { background: #f8fafc; }
-      &:hover td { background: #f0fafa; }
+      &:hover td { background: #EEF9F0; }
     }
   }
 
@@ -878,11 +898,11 @@ html.dark ::-webkit-scrollbar-thumb {
     em { color: #94a3b8; }
     del { color: #475569; }
 
-    a { color: #3CC4BD; &:hover { color: #5DD9D4; } }
+    a { color: #5DC370; &:hover { color: #6FDD85; } }
 
     blockquote {
-      background: linear-gradient(to right, #0c2625, #0f2a29);
-      border-left-color: #2BA8A2;
+      background: linear-gradient(to right, #0B2614, #0C2A16);
+      border-left-color: #36B34E;
       color: #94a3b8;
       blockquote { background: #0f172a; border-left-color: #475569; }
     }
@@ -909,7 +929,7 @@ html.dark ::-webkit-scrollbar-thumb {
       td { border-color: #1e293b; }
       tbody tr {
         &:nth-child(even) td { background: #0f1923; }
-        &:hover td { background: #0c2625; }
+        &:hover td { background: #0B2614; }
       }
     }
 

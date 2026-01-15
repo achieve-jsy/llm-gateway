@@ -2022,7 +2022,7 @@ defineExpose({ selectedIds, loadDiff, filteredRows, sortedRows, pagedRows })
 }
 
 .delta-down {
-  color: #27ae60;
+  color: #0EA371;
   font-weight: 600;
 }
 

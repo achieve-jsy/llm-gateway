@@ -161,7 +161,7 @@ const composition = computed(() => {
 })
 
 // token 按模型分布
-const PALETTE = ['#2BA8A2', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899', '#06b6d4']
+const PALETTE = ['#36B34E', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899', '#06b6d4']
 const modelDist = computed(() => {
   const rows = modelRows.value.map(r => ({
     model: r.model || '未知',
@@ -460,7 +460,7 @@ const fmtCny = (n: number) => n < 0.01 && n > 0 ? '<0.01' : n.toLocaleString('zh
 
 <style scoped>
 .pdash {
-  --pd-brand: #2BA8A2;
+  --pd-brand: #36B34E;
   --pd-in: #3b82f6;
   --pd-out: #10b981;
   --pd-cache: #06b6d4;
@@ -474,7 +474,7 @@ const fmtCny = (n: number) => n < 0.01 && n > 0 ? '<0.01' : n.toLocaleString('zh
 /* ── Hero ── */
 .pd-hero {
   display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap;
-  background: linear-gradient(135deg, #F0FAFA 0%, #FFFFFF 60%, #F7F9FF 100%);
+  background: linear-gradient(135deg, #EEF9F0 0%, #FFFFFF 60%, #F7F9FF 100%);
   border: 1px solid #D8EEEC; border-radius: 16px; padding: 22px 26px;
 }
 .pd-hero__greet { display: flex; align-items: center; gap: 16px; min-width: 0; }
@@ -490,7 +490,7 @@ const fmtCny = (n: number) => n < 0.01 && n > 0 ? '<0.01' : n.toLocaleString('zh
 .pd-hero__url-val { font-family: 'Fira Code', monospace; font-size: 12px; color: #1A5C58; font-weight: 600; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pd-hero__url-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border: none; border-radius: 7px; background: var(--pd-brand); color: #fff; cursor: pointer; transition: background .15s; }
 .pd-hero__url-btn:hover { background: #229A94; }
-.pd-hero__url-btn.ok { background: #27AE60; }
+.pd-hero__url-btn.ok { background: #0EA371; }
 .pd-hero__url-btn:focus-visible { outline: 2px solid var(--pd-brand); outline-offset: 2px; }
 
 /* ── 卡片通用 ── */
@@ -510,17 +510,17 @@ const fmtCny = (n: number) => n < 0.01 && n > 0 ? '<0.01' : n.toLocaleString('zh
 .pd-persona {
   position: relative; overflow: hidden;
   display: flex; align-items: center; gap: 20px;
-  background: linear-gradient(135deg, rgba(43,168,162,0.10), rgba(59,130,246,0.08));
-  border-color: rgba(43,168,162,0.25);
+  background: linear-gradient(135deg, rgba(54,179,78,0.10), rgba(59,130,246,0.08));
+  border-color: rgba(54,179,78,0.25);
 }
-.pd-persona__halo { position: absolute; top: -40px; right: -30px; width: 180px; height: 180px; border-radius: 50%; background: radial-gradient(circle, rgba(43,168,162,0.18), transparent 70%); pointer-events: none; }
+.pd-persona__halo { position: absolute; top: -40px; right: -30px; width: 180px; height: 180px; border-radius: 50%; background: radial-gradient(circle, rgba(54,179,78,0.18), transparent 70%); pointer-events: none; }
 .pd-persona__emoji { font-size: 56px; line-height: 1; flex-shrink: 0; animation: pd-bob 5s ease-in-out infinite; z-index: 1; }
 .pd-persona__body { z-index: 1; min-width: 0; }
 .pd-persona__eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--pd-brand); }
 .pd-persona__title { font-size: 22px; font-weight: 800; margin: 3px 0 4px; color: var(--el-text-color-primary); }
 .pd-persona__desc { font-size: 13px; color: var(--el-text-color-regular); margin: 0; line-height: 1.55; }
 .pd-traits { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.pd-trait { font-size: 11.5px; font-weight: 600; color: var(--pd-brand); background: rgba(43,168,162,0.10); border: 1px solid rgba(43,168,162,0.22); border-radius: 99px; padding: 3px 10px; }
+.pd-trait { font-size: 11.5px; font-weight: 600; color: var(--pd-brand); background: rgba(54,179,78,0.10); border: 1px solid rgba(54,179,78,0.22); border-radius: 99px; padding: 3px 10px; }
 
 .pd-milestones { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .pd-ms--cost {
@@ -559,7 +559,7 @@ const fmtCny = (n: number) => n < 0.01 && n > 0 ? '<0.01' : n.toLocaleString('zh
 }
 .pd-task__len-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .pd-task__len-end { font-size: 12px; color: var(--el-text-color-secondary); }
-.pd-task__len-badge { font-size: 12px; font-weight: 700; color: var(--pd-brand); background: rgba(43,168,162,0.10); border-radius: 99px; padding: 2px 12px; }
+.pd-task__len-badge { font-size: 12px; font-weight: 700; color: var(--pd-brand); background: rgba(54,179,78,0.10); border-radius: 99px; padding: 2px 12px; }
 .pd-slider { position: relative; height: 8px; border-radius: 99px; background: linear-gradient(90deg, var(--pd-out), var(--pd-cache), var(--pd-in)); opacity: .9; }
 .pd-slider__fill { display: none; }
 .pd-slider__knob { position: absolute; top: 50%; width: 18px; height: 18px; border-radius: 50%; background: #fff; border: 3px solid var(--pd-brand); transform: translate(-50%, -50%); box-shadow: 0 2px 6px rgba(0,0,0,.18); transition: left .6s cubic-bezier(.22,1,.36,1); }
@@ -628,15 +628,15 @@ const fmtCny = (n: number) => n < 0.01 && n > 0 ? '<0.01' : n.toLocaleString('zh
 /* ── 深色模式 ── */
 :global(html.dark) .pd-hero {
   background: linear-gradient(135deg, #102826 0%, #0E1F1E 60%, #131820 100%);
-  border-color: #1A3A38;
+  border-color: #1F5230;
 }
 :global(html.dark) .pd-hero__h1 { color: #E0F5F3; }
 :global(html.dark) .pd-hero__sub { color: #5A8888; }
-:global(html.dark) .pd-hero__url { background: #0A1B1A; border-color: #1A3A38; }
-:global(html.dark) .pd-hero__url-val { color: #4DC8C2; }
+:global(html.dark) .pd-hero__url { background: #0A1B1A; border-color: #1F5230; }
+:global(html.dark) .pd-hero__url-val { color: #6CD083; }
 :global(html.dark) .pd-persona {
-  background: linear-gradient(135deg, rgba(43,168,162,0.14), rgba(59,130,246,0.10));
-  border-color: rgba(43,168,162,0.30);
+  background: linear-gradient(135deg, rgba(54,179,78,0.14), rgba(59,130,246,0.10));
+  border-color: rgba(54,179,78,0.30);
 }
 :global(html.dark) .pd-ms--cost { background: linear-gradient(135deg, rgba(245,158,11,0.16), rgba(236,72,153,0.12)); border-color: rgba(245,158,11,0.32); }
 :global(html.dark) .pd-ms__costnum { color: #fbbf24; }

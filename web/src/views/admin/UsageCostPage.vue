@@ -799,15 +799,15 @@ const TABLE_HEADER = {
   borderBottom: '1px solid var(--el-border-color-light)',
 }
 
-// 与主题（Flip7 Teal）一致的图表配色
+// 与主题（品牌绿）一致的图表配色
 const CHART_C = {
-  input:  '#2BA8A2', // 输入 = 主题青
-  output: '#27AE60', // 输出 = 成功绿
+  input:  '#36B34E', // 输入 = 品牌绿
+  output: '#0EA371', // 输出 = 成功祖母绿
   cache:  '#5DADE2', // 缓存 = 信息蓝
   cost:   '#E0A100', // 成本 = 金
   req:    '#E0A100', // 调用 = 金
 }
-const CHART_PALETTE = ['#2BA8A2', '#27AE60', '#E0A100', '#5DADE2', '#8B5CF6', '#EC4899', '#E67E22', '#14B8A6']
+const CHART_PALETTE = ['#36B34E', '#0EA371', '#E0A100', '#5DADE2', '#8B5CF6', '#EC4899', '#E67E22', '#14B8A6']
 
 // ── Types ──
 interface StatsRow {
@@ -1451,8 +1451,8 @@ loadAll()
 <style scoped>
 /* ── 调色板（与 Flip7 Teal 主题统一，深浅色自适应） ── */
 .up {
-  --up-input:  #2BA8A2;
-  --up-output: #27AE60;
+  --up-input:  #36B34E;
+  --up-output: #0EA371;
   --up-cache:  #5DADE2;
   --up-cost:   #C7900A;
   --up-reason: #8B5CF6;
@@ -1482,7 +1482,7 @@ loadAll()
 }
 .up-title::before {
   content: ''; width: 4px; height: 18px; border-radius: 3px;
-  background: linear-gradient(180deg, var(--el-color-primary), var(--el-color-primary-dark-2, #1E8C86));
+  background: linear-gradient(180deg, var(--el-color-primary), var(--el-color-primary-dark-2, #1F8A3B));
 }
 .up-badge {
   font-size: 11px; font-weight: 500; color: var(--el-color-primary);
@@ -1629,7 +1629,7 @@ loadAll()
   background: var(--accent, var(--el-color-primary)); opacity: .9;
 }
 .up-stat-card:hover {
-  box-shadow: 0 8px 24px rgba(43, 168, 162, .14);
+  box-shadow: 0 8px 24px rgba(54, 179, 78, .14);
   transform: translateY(-2px);
   border-color: var(--el-color-primary-light-5);
 }

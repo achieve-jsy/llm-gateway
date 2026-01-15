@@ -2,41 +2,58 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ===================== Flip7 Design Tokens → Element Plus ===================== */
+/* ===================== 某公司绿 Design Tokens → Element Plus =====================
+ * 标准：与登录页（web/src/views/auth/LoginPage.vue）色彩体系完全统一。
+ * 北极星参考：Wise（getdesign.md）——浅色画布 + 单一自信的绿色主调 + 友好圆角，
+ * 但色相锁定为品牌自有翠绿，而非 Wise 的柠檬绿。
+ *
+ * 品牌绿基准（来自登录页）：
+ *   primary  #36B34E   light  #62C96C   deep  #2A9C4B   text  #2F9E4A
+ * 改主题色请只改这里；页面/组件一律引用 CSS 变量，禁止再硬编码十六进制。
+ */
 :root {
-  /* Primary Teal */
-  --el-color-primary: #2BA8A2;
-  --el-color-primary-light-3: #3CC4BD;
-  --el-color-primary-light-5: #6DD4CF;
-  --el-color-primary-light-7: #9EE3E0;
-  --el-color-primary-light-9: #E8F6F5;
-  --el-color-primary-dark-2: #1E8C86;
+  /* 品牌绿（登录页同源，供渐变/装饰等场景直接引用） */
+  --brand-green: #36B34E;
+  --brand-green-light: #62C96C;
+  --brand-green-deep: #2A9C4B;
+  --brand-green-text: #2F9E4A;
 
-  --el-color-success: #27AE60;
-  --el-color-warning: #EAB308;
+  /* Primary Green */
+  --el-color-primary: #36B34E;
+  --el-color-primary-light-3: #5DC370;
+  --el-color-primary-light-5: #84D293;
+  --el-color-primary-light-7: #ACE1B6;
+  --el-color-primary-light-9: #EAF7EC;
+  --el-color-primary-dark-2: #1F8A3B;
+
+  /* 语义状态色——与主色拉开，各自有清晰语义
+   * success 用偏冷的祖母绿（不与品牌草绿撞色），warning 统一为经典琥珀橙 */
+  --el-color-success: #0EA371;
+  --el-color-warning: #E6A23C;
   --el-color-danger: #E74C3C;
   --el-color-info: #5DADE2;
 
   /* 背景 */
-  --el-bg-color-page: #EFF8F7;
+  --el-bg-color-page: #F1F9F2;
   --el-bg-color: #FFFFFF;
   --el-bg-color-overlay: #FFFFFF;
 
-  /* 文字 */
-  --el-text-color-primary: #1E8C86;
+  /* 文字——可读性优先：正文/标题用近黑 slate，绿色只留给品牌/操作/选中。
+   * 切勿把 --el-text-color-primary 设成品牌色，否则全平台正文发绿、长时间看会累。 */
+  --el-text-color-primary: #1E293B;
   --el-text-color-regular: #334155;
   --el-text-color-secondary: #64748B;
   --el-text-color-placeholder: #94A3B8;
 
   /* 边框 */
-  --el-border-color: #D1E9E7;
-  --el-border-color-light: #E8F6F5;
-  --el-border-color-lighter: #EFF8F7;
+  --el-border-color: #D6EBD9;
+  --el-border-color-light: #EAF7EC;
+  --el-border-color-lighter: #F1F9F2;
 
   /* 填充 */
   --el-fill-color-blank: #FFFFFF;
-  --el-fill-color: #E8F6F5;
-  --el-fill-color-light: #EFF8F7;
+  --el-fill-color: #EAF7EC;
+  --el-fill-color-light: #F1F9F2;
 
   /* 圆角 */
   --el-border-radius-base: 12px;
@@ -48,26 +65,26 @@
   --el-font-size-base: 14px;
 
   /* 阴影 */
-  --el-box-shadow: 0 2px 10px rgba(43, 168, 162, 0.10);
+  --el-box-shadow: 0 2px 10px rgba(54, 179, 78, 0.10);
   --el-box-shadow-light: 0 1px 4px rgba(0, 0, 0, 0.08);
 }
 
 /* ===================== Dark Mode ===================== */
 html.dark {
-  --el-bg-color-page: #0F2928;
-  --el-bg-color: #163B3A;
-  --el-bg-color-overlay: #163B3A;
-  --el-text-color-primary: #E8F6F5;
-  --el-text-color-regular: #B0D9D6;
-  --el-text-color-secondary: #7BBFBB;
-  --el-text-color-placeholder: #4A8A86;
-  --el-border-color: #1E5653;
-  --el-border-color-light: #163B3A;
-  --el-fill-color-blank: #163B3A;
-  --el-fill-color: #1E5653;
-  --el-fill-color-light: #0F2928;
-  --el-color-primary: #3CC4BD;
-  --el-color-primary-light-3: #6DD4CF;
-  --el-color-primary-light-9: #0F2928;
+  --el-bg-color-page: #0C2613;
+  --el-bg-color: #143523;
+  --el-bg-color-overlay: #143523;
+  --el-text-color-primary: #EAF7EC;
+  --el-text-color-regular: #B9DCC0;
+  --el-text-color-secondary: #84C592;
+  --el-text-color-placeholder: #4F9362;
+  --el-border-color: #1F5230;
+  --el-border-color-light: #143523;
+  --el-fill-color-blank: #143523;
+  --el-fill-color: #1F5230;
+  --el-fill-color-light: #0C2613;
+  --el-color-primary: #5DC370;
+  --el-color-primary-light-3: #84D293;
+  --el-color-primary-light-9: #0C2613;
   --el-box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }

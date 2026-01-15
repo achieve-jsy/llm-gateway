@@ -20,7 +20,7 @@
     </div>
 
     <!-- ═══════════════════════════════════════════
-         施小救の性格档案
+         性格档案
     ═══════════════════════════════════════════ -->
     <div v-if="statsTotal && !statsLoading" class="mu-personality-card" :data-tag="currentTag.id">
       <div class="mu-personality-inner">
@@ -33,7 +33,7 @@
           />
         </div>
         <div class="mu-personality-info">
-          <div class="mu-personality-badge">施小救の性格档案</div>
+          <div class="mu-personality-badge">性格档案</div>
           <h3 class="mu-personality-label">{{ currentTag.emoji }} {{ currentTag.label }}</h3>
           <p class="mu-personality-story">{{ currentTag.story }}</p>
           <div class="mu-personality-actions">
@@ -1215,7 +1215,7 @@ async function shareTag() {
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
-      link.download = `施小救-${tag.label}.png`
+      link.download = `性格标签-${tag.label}.png`
       link.click()
       setTimeout(() => URL.revokeObjectURL(url), 1000)
       ElMessage.success('分享卡片已下载')

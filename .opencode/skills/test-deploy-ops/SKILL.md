@@ -5,7 +5,9 @@ description: 测试环境 CI/CD 发布流程与部署运维指南。发布测试
 
 # 测试环境发布流程与部署运维 (test-deploy-ops)
 
-> 本 skill 供 AI 在「发布测试环境」与「排查测试环境」时遵循。**发布前必走 §0 自检流程**；故障排查见 §7 起。关联 skill：配置/变量规范 `test-env-config`、数据库迁移 `atlas-db-migration`、跑/查流水线与改 GitLab 变量 `gitlab-cicd`。
+> 本 skill 供 AI 在「发布测试环境」与「排查测试环境」时遵循。**发布前必走 §0 自检流程**；故障排查见 §7 起。关联 skill：配置/变量规范 `test-env-config`、数据库迁移 `atlas-db-migration`、跑/查流水线与改 GitLab 变量 `gitlab-cicd`、**蓝绿部署机制与排障 `blue-green-deploy`**。
+
+> ⚠️ **test 部署已改为蓝绿**：`deploy-app-test` 走 `deploy/blue-green/deploy-blue-green.sh`（blue 8080/8081 ↔ green 8082/8083，nginx 9080 切流，活跃颜色记于 `.active-color`）。涉及部署机制/割接/回滚/排障细节一律以 `blue-green-deploy` skill 为准；本 skill 的发布自检（§0）、迁移（§6）、变量（§5）仍适用。
 
 ## 0. 发布流程（AI 发布前必读 / 必走）
 
@@ -55,9 +57,9 @@ description: 测试环境 CI/CD 发布流程与部署运维指南。发布测试
 2. 确认**不提交**编译产物（`bin/`、根目录大二进制）与 `.env` / 任何密钥。
 3. push `test`（或合并到 `test`）。
 4. 用 `gitlab-cicd` skill 监控流水线，确认按序通过：`build → migrate-test → deploy-app-test → verify-test`。
-5. `deploy-app-test` 必须 `--wait` 健康检查通过（容器起来 = 变量注入正确）。
-6. `verify-test` 三项全过：gateway `:8080` / control-plane `:8081` / nginx `:9080`。
-7. 任一 job 失败 → 取该 job trace 看报错，按 §7 故障表 + `test-env-config` 的「是否生效」排查清单定位。
+5. `deploy-app-test`（**蓝绿**）日志应见：起新颜色 → `is healthy` → `nginx reloaded → traffic now on <color>` → 停旧颜色 → `Deploy complete`（详见 `blue-green-deploy`）。
+6. `verify-test`（**蓝绿感知**）按 `.active-color` 校验当前颜色端口（blue 8080/8081 或 green 8082/8083）+ nginx `:9080`。
+7. 任一 job 失败 → 取该 job trace 看报错，按 §7 故障表 + `blue-green-deploy` §7 踩坑清单 + `test-env-config` 的「是否生效」排查清单定位。
 
 ## 1. 触发条件
 
@@ -244,13 +246,17 @@ docker logs llm-gw-control-plane --tail 50
 docker kill llm-gw-gateway llm-gw-control-plane
 ```
 
-### 手动重新部署
+### 手动重新部署（蓝绿）
+
+test 已是蓝绿，手动部署/回滚走 `deploy-blue-green.sh`，**完整步骤与密钥加载见 `blue-green-deploy` skill §5**：
 
 ```bash
 cd /data/llm-gateway
-export IMAGE_TAG=test-<commit_sha> REGISTRY=192.0.2.10:5000 APP_ENV=test
-docker compose -p llm-test up -d --remove-orphans
-docker compose -p llm-test ps
+# 逐行 export 密钥（含空格的 DATABASE_URL/OAUTH_SCOPES 不能直接 source）
+while IFS= read -r line; do case "$line" in ""|\#*) continue;; esac; export "${line%%=*}=${line#*=}"; done < blue-green.env
+export NGINX_UPSTREAM=/data/llm-gateway/upstream-active.conf DRAIN_TIMEOUT=10 STOP_TIMEOUT=30 \
+       REDIS_DB=0 REDIS_DB_GREEN=1 APP_ENV=test REGISTRY=192.0.2.10:5000 IMAGE_TAG=test-<sha>
+bash deploy-blue-green.sh
 ```
 
 ## 8. 重启顺序

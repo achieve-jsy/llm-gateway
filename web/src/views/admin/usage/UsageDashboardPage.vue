@@ -94,18 +94,33 @@
         <div class="ud-kpi__body">
           <p class="ud-kpi__label">总成本</p>
           <p class="ud-kpi__value">{{ fmtCost(summary?.cost_estimate) }}</p>
-          <p class="ud-kpi__foot">
+          <div class="ud-kpi__change-row">
             <template v-if="costChange !== null">
               <el-tooltip :content="prevPeriodLabel" placement="bottom" :show-after="300">
-                <span :class="changeClass(costChange, true)" class="ud-change-chip">
-                  <el-icon size="11"><component :is="costChange >= 0 ? ArrowUp : ArrowDown" /></el-icon>
-                  {{ fmtChange(costChange) }}
-                  <span class="ud-kpi__vs">vs 上期</span>
+                <span :class="['ud-change-badge', changeClass(costChange, true)]">
+                  <el-icon size="15"><component :is="costChange >= 0 ? ArrowUp : ArrowDown" /></el-icon>
+                  <b>{{ fmtChange(costChange) }}</b>
+                  <span class="ud-change-badge__vs">vs 上期</span>
                 </span>
               </el-tooltip>
+              <span class="ud-kpi__prev-val">上期 {{ fmtCost(summary?.prev_cost_estimate) }}</span>
             </template>
             <span v-else class="ud-kpi__sub">暂无上期数据</span>
-          </p>
+          </div>
+          <!-- 预算进度 -->
+          <template v-if="currentBudget">
+            <div :class="['ud-kpi__budget', `ud-kpi__budget--${budgetLevel}`]">
+              <div class="ud-kpi__budget-hdr">
+                <span>预算</span>
+                <span>{{ fmtCost(currentBudget.used_usd) }} / {{ fmtCost(currentBudget.amount_usd) }}
+                  ({{ Math.round((currentBudget.used_ratio || 0) * 100) }}%)</span>
+              </div>
+              <div class="ud-kpi__budget-track">
+                <div class="ud-kpi__budget-fill"
+                  :style="{ width: Math.min((currentBudget.used_ratio || 0) * 100, 100) + '%' }" />
+              </div>
+            </div>
+          </template>
         </div>
       </div>
       <!-- 总调用 -->
@@ -114,18 +129,19 @@
         <div class="ud-kpi__body">
           <p class="ud-kpi__label">总调用次数</p>
           <p class="ud-kpi__value">{{ fmtNum(summary?.call_count) }}</p>
-          <p class="ud-kpi__foot">
+          <div class="ud-kpi__change-row">
             <template v-if="callsChange !== null">
               <el-tooltip :content="prevPeriodLabel" placement="bottom" :show-after="300">
-                <span :class="changeClass(callsChange)" class="ud-change-chip">
-                  <el-icon size="11"><component :is="callsChange >= 0 ? ArrowUp : ArrowDown" /></el-icon>
-                  {{ fmtChange(callsChange) }}
-                  <span class="ud-kpi__vs">vs 上期</span>
+                <span :class="['ud-change-badge', changeClass(callsChange)]">
+                  <el-icon size="15"><component :is="callsChange >= 0 ? ArrowUp : ArrowDown" /></el-icon>
+                  <b>{{ fmtChange(callsChange) }}</b>
+                  <span class="ud-change-badge__vs">vs 上期</span>
                 </span>
               </el-tooltip>
+              <span class="ud-kpi__prev-val">上期 {{ fmtNum(summary?.prev_call_count) }}</span>
             </template>
             <span v-else class="ud-kpi__sub">暂无上期数据</span>
-          </p>
+          </div>
         </div>
       </div>
       <!-- 成功率 -->
@@ -134,9 +150,15 @@
         <div class="ud-kpi__body">
           <p class="ud-kpi__label">成功率</p>
           <p class="ud-kpi__value">{{ successRate.toFixed(1) }}%</p>
-          <p class="ud-kpi__foot">
+          <div class="ud-kpi__change-row">
             <span class="ud-kpi__sub">失败 {{ fmtNum(summary?.error_count) }} 次</span>
-          </p>
+            <template v-if="successRateChange !== null">
+              <span :class="['ud-change-badge ud-change-badge--sm', successRateChange >= 0 ? 'ud-change--good' : 'ud-change--bad']">
+                <el-icon size="11"><component :is="successRateChange >= 0 ? ArrowUp : ArrowDown" /></el-icon>
+                {{ successRateChange >= 0 ? '+' : '' }}{{ successRateChange.toFixed(2) }}pp
+              </span>
+            </template>
+          </div>
         </div>
       </div>
       <!-- 活跃成员 / 个人视角下换成 Token 消耗 -->
@@ -146,18 +168,18 @@
           <div class="ud-kpi__body">
             <p class="ud-kpi__label">活跃成员</p>
             <p class="ud-kpi__value">{{ summary?.user_count ?? '—' }}</p>
-            <p class="ud-kpi__foot">
+            <div class="ud-kpi__change-row">
               <span class="ud-kpi__sub">均次成本 {{ avgCostPerCall }}</span>
-            </p>
+            </div>
           </div>
         </template>
         <template v-else>
           <div class="ud-kpi__body">
             <p class="ud-kpi__label">Token 消耗</p>
             <p class="ud-kpi__value">{{ summary?.total_tokens != null ? (summary.total_tokens >= 1000000 ? (summary.total_tokens/1000000).toFixed(2)+'M' : (summary.total_tokens/1000).toFixed(1)+'K') : '—' }}</p>
-            <p class="ud-kpi__foot">
+            <div class="ud-kpi__change-row">
               <span class="ud-kpi__sub">均次成本 {{ avgCostPerCall }}</span>
-            </p>
+            </div>
           </div>
         </template>
       </div>
@@ -181,6 +203,52 @@
       </div>
     </div>
 
+    <!-- ══ 花销构成 ══ -->
+    <div v-if="showCostBreakdown" class="ud-section">
+      <div class="ud-section__header">
+        <span class="ud-section__title">花销构成</span>
+        <span class="ud-section__hint">{{ currentScope === 'dept' ? '成员' : '子部门' }} · {{ dateRange[0] }} ~ {{ dateRange[1] }}</span>
+      </div>
+      <div class="ud-breakdown-body">
+        <!-- 预算池 -->
+        <div v-if="budgetPoolItems.length > 0" class="ud-breakdown-budgets">
+          <div v-for="item in budgetPoolItems" :key="item.scope_type + item.scope_id" class="ud-budget-pool">
+            <div class="ud-budget-pool__hdr">
+              <span class="ud-budget-pool__label">{{ item.label }}</span>
+              <span :class="['ud-budget-pool__ratio', item.used_ratio >= 1 ? 'c-red fw6' : item.used_ratio >= 0.8 ? 'c-orange fw6' : 'c-green fw6']">
+                {{ Math.round((item.used_ratio || 0) * 100) }}%
+              </span>
+            </div>
+            <el-progress
+              :percentage="Math.min((item.used_ratio || 0) * 100, 100)"
+              :status="item.used_ratio >= 1 ? 'exception' : item.used_ratio >= 0.8 ? 'warning' : 'success'"
+              :stroke-width="6"
+              :show-text="false"
+              class="ud-budget-progress"
+            />
+            <div class="ud-budget-pool__amts">
+              <span>已用 {{ fmtCost(item.used_usd) }}</span>
+              <span>共 {{ fmtCost(item.amount_usd) }}</span>
+            </div>
+          </div>
+        </div>
+        <!-- Top 5 成员/部门 -->
+        <div class="ud-breakdown-top5">
+          <div class="ud-breakdown-heading">{{ currentScope === 'dept' ? '成员' : '子部门' }}花销 Top 5</div>
+          <div v-if="top5Breakdown.length > 0" class="ud-top5-list">
+            <div v-for="(row, i) in top5Breakdown" :key="row.id ?? i" class="ud-top5-item">
+              <span :class="['ud-rank-num', i < 3 ? `ud-rank-num--top${i+1}` : '']">{{ i + 1 }}</span>
+              <span class="ud-top5-name">{{ row.name || row.id || '—' }}</span>
+              <div class="ud-top5-bar"><div class="ud-top5-fill" :style="{ width: barPct(row.cost_estimate, top5Max) + '%' }" /></div>
+              <span class="ud-top5-cost c-green fw6">{{ fmtCost(row.cost_estimate) }}</span>
+              <span class="ud-top5-pct">{{ barPct(row.cost_estimate, totalCost) }}%</span>
+            </div>
+          </div>
+          <div v-else class="ud-chart-empty" style="position:static;padding:16px 0">暂无数据</div>
+        </div>
+      </div>
+    </div>
+
     <!-- ══ 成本归因 + 模型分布 ══ -->
     <div class="ud-main-row">
 
@@ -197,7 +265,19 @@
         </div>
 
         <div class="ud-section__header">
-          <span class="ud-section__title">{{ rankTitle }}</span>
+          <div class="ud-section__title-row">
+            <span class="ud-section__title">{{ rankTitle }}</span>
+            <el-input
+              v-model="rankSearch"
+              placeholder="搜索名称"
+              clearable
+              size="small"
+              class="ud-rank-search"
+              @input="rankPage = 1"
+            >
+              <template #prefix><el-icon><Search /></el-icon></template>
+            </el-input>
+          </div>
           <div class="ud-breadcrumb">
             <span class="ud-bc-home" @click="resetToTop">{{ topLabel }}</span>
             <template v-for="(crumb, idx) in breadcrumbs" :key="crumb.id">
@@ -221,15 +301,32 @@
                     <span style="cursor:help;border-bottom:1px dashed currentColor">成本占比</span>
                   </el-tooltip>
                 </th>
-                <th class="col-num">成本 ({{ currency }})</th>
-                <th class="col-num">调用次数</th>
-                <!-- user scope 展示 Token 消耗，否则展示活跃用户 -->
-                <th class="col-num">{{ currentScope === 'user' ? 'Token 消耗' : '活跃用户' }}</th>
+                <th class="col-num col-sortable" @click="toggleSort('cost')">
+                  成本 ({{ currency }})
+                  <span class="ud-sort-arrows">
+                    <span :class="['ud-sort-arrow', rankSort.field === 'cost' && rankSort.order === 'asc' ? 'ud-sort-arrow--active' : '']">▲</span>
+                    <span :class="['ud-sort-arrow', rankSort.field === 'cost' && rankSort.order === 'desc' ? 'ud-sort-arrow--active' : '']">▼</span>
+                  </span>
+                </th>
+                <th class="col-num col-sortable" @click="toggleSort('calls')">
+                  调用次数
+                  <span class="ud-sort-arrows">
+                    <span :class="['ud-sort-arrow', rankSort.field === 'calls' && rankSort.order === 'asc' ? 'ud-sort-arrow--active' : '']">▲</span>
+                    <span :class="['ud-sort-arrow', rankSort.field === 'calls' && rankSort.order === 'desc' ? 'ud-sort-arrow--active' : '']">▼</span>
+                  </span>
+                </th>
+                <th class="col-num col-sortable" @click="toggleSort('tokens')">
+                  {{ currentScope === 'user' ? 'Token 消耗' : '活跃用户' }}
+                  <span class="ud-sort-arrows">
+                    <span :class="['ud-sort-arrow', rankSort.field === 'tokens' && rankSort.order === 'asc' ? 'ud-sort-arrow--active' : '']">▲</span>
+                    <span :class="['ud-sort-arrow', rankSort.field === 'tokens' && rankSort.order === 'desc' ? 'ud-sort-arrow--active' : '']">▼</span>
+                  </span>
+                </th>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="(row, i) in breakdown"
+                v-for="(row, i) in displayedBreakdown"
                 :key="row.id ?? i"
                 :class="{ 'ud-rank-drillable': canDrill }"
               >
@@ -260,7 +357,7 @@
                   <template v-else>{{ row.user_count ?? '—' }}</template>
                 </td>
               </tr>
-              <tr v-if="!summaryLoading && breakdown.length === 0">
+              <tr v-if="!summaryLoading && displayedBreakdown.length === 0">
                 <td colspan="6" class="ud-empty">暂无数据</td>
               </tr>
             </tbody>
@@ -282,7 +379,18 @@
       <div class="ud-section">
         <div class="ud-section__header">
           <span class="ud-section__title">模型成本分布</span>
-          <span class="ud-section__hint">Top {{ Math.min(modelsData.length, 6) }}{{ modelsData.length > 6 ? ` / 共 ${modelsData.length} 种` : '' }}</span>
+          <div class="ud-model-ctrl">
+            <div class="ud-trend-tabs">
+              <button :class="['ud-trend-tab', { 'ud-trend-tab--active': modelMetric === 'cost' }]" @click="switchModelMetric('cost')">成本</button>
+              <button :class="['ud-trend-tab', { 'ud-trend-tab--active': modelMetric === 'calls' }]" @click="switchModelMetric('calls')">调用量</button>
+              <button :class="['ud-trend-tab', { 'ud-trend-tab--active': modelMetric === 'tokens' }]" @click="switchModelMetric('tokens')">Token</button>
+            </div>
+            <div class="ud-trend-tabs">
+              <button :class="['ud-trend-tab', { 'ud-trend-tab--active': modelChartType === 'bar' }]" @click="switchModelChartType('bar')">柱状图</button>
+              <button :class="['ud-trend-tab', { 'ud-trend-tab--active': modelChartType === 'doughnut' }]" @click="switchModelChartType('doughnut')">饼图</button>
+            </div>
+            <span class="ud-section__hint">Top {{ Math.min(modelsData.length, 6) }}{{ modelsData.length > 6 ? ` / 共 ${modelsData.length} 种` : '' }}</span>
+          </div>
         </div>
         <div class="ud-chart-wrap ud-chart-wrap--model" v-loading="modelsLoading">
           <canvas ref="modelCanvasRef" class="ud-model-canvas" />
@@ -809,7 +917,7 @@ const currentScope = computed(() => {
 })
 
 const canDrill = computed(() =>
-  currentScope.value === 'company' || currentScope.value === 'studio'
+  currentScope.value === 'company' || currentScope.value === 'studio' || currentScope.value === 'dept'
 )
 
 const maxCost = computed(() =>
@@ -831,6 +939,86 @@ const successRate = computed(() => {
   if (!s?.call_count) return 100
   return ((s.call_count - (s.error_count ?? 0)) / s.call_count) * 100
 })
+
+// ── 成功率环比 ────────────────────────────────────────────────
+const successRateChange = computed(() => {
+  const s = summary.value
+  if (!s?.prev_call_count) return null
+  const prevErrors = s.prev_error_count ?? 0
+  const prevRate = s.prev_call_count > 0
+    ? ((s.prev_call_count - prevErrors) / s.prev_call_count) * 100
+    : 100
+  return successRate.value - prevRate
+})
+
+// ── 预算 ─────────────────────────────────────────────────────
+const budgetContext = ref<any[]>([])
+
+const currentBudget = computed(() => {
+  const valid = budgetContext.value.filter((c: any) => c.amount_usd > 0)
+  if (!valid.length) return null
+  return valid[valid.length - 1]
+})
+
+const budgetLevel = computed(() => {
+  const r = currentBudget.value?.used_ratio ?? 0
+  if (r >= 1) return 'danger'
+  if (r >= 0.8) return 'warn'
+  return 'ok'
+})
+
+const budgetPoolItems = computed(() =>
+  budgetContext.value.filter((c: any) => c.amount_usd > 0)
+)
+
+async function loadBudget() {
+  try {
+    const res = await http.get('/api/v1/budgets/context')
+    budgetContext.value = res.data?.context ?? []
+  } catch {
+    budgetContext.value = []
+  }
+}
+
+// ── 花销构成 ──────────────────────────────────────────────────
+const showCostBreakdown = computed(() =>
+  (currentScope.value === 'studio' || currentScope.value === 'dept') && breakdown.value.length > 0
+)
+
+const top5Breakdown = computed(() => breakdown.value.slice(0, 5))
+
+const top5Max = computed(() =>
+  Math.max(1, ...top5Breakdown.value.map((r: any) => r.cost_estimate || 0))
+)
+
+// ── 排行多维度排序 & 搜索 ─────────────────────────────────────
+const rankSort = ref<{ field: 'cost' | 'calls' | 'tokens'; order: 'asc' | 'desc' }>({ field: 'cost', order: 'desc' })
+const rankSearch = ref('')
+
+const displayedBreakdown = computed(() => {
+  let list = [...breakdown.value]
+  if (rankSearch.value) {
+    const q = rankSearch.value.toLowerCase()
+    list = list.filter((r: any) => (r.name || r.id || '').toLowerCase().includes(q))
+  }
+  const { field, order } = rankSort.value
+  const key = field === 'cost' ? 'cost_estimate'
+    : field === 'calls' ? 'call_count'
+    : currentScope.value === 'user' ? 'total_tokens' : 'user_count'
+  list.sort((a: any, b: any) => {
+    const av = a[key] ?? 0, bv = b[key] ?? 0
+    return order === 'desc' ? bv - av : av - bv
+  })
+  return list
+})
+
+function toggleSort(field: 'cost' | 'calls' | 'tokens') {
+  if (rankSort.value.field === field) {
+    rankSort.value = { field, order: rankSort.value.order === 'desc' ? 'asc' : 'desc' }
+  } else {
+    rankSort.value = { field, order: 'desc' }
+  }
+}
 
 // 环比
 const costChange = computed(() => {
@@ -899,7 +1087,7 @@ async function loadSummary() {
 }
 
 function drillDown(row: any) {
-  const next: Record<string, string> = { company: 'studio', studio: 'dept' }
+  const next: Record<string, string> = { company: 'studio', studio: 'dept', dept: 'user' }
   const nextScope = next[currentScope.value]
   if (!nextScope) return
   breadcrumbs.value.push({ scope: nextScope, id: row.id, name: row.name || row.id })
@@ -922,6 +1110,7 @@ function resetToTop() {
 // ── 趋势图 ────────────────────────────────────────────────────
 const trendLoading = ref(false)
 const trendData    = ref<any[]>([])
+const prevTrendData = ref<any[]>([])
 const trendCanvasRef = ref<HTMLCanvasElement | null>(null)
 let trendChartInst: Chart | null = null
 
@@ -946,10 +1135,24 @@ async function loadTrend() {
     if (last?.scope === 'user' && last?.id) trendParams.user_id = last.id
     if (filterModel.value) trendParams.model_name = filterModel.value
     if (filterStatus.value) trendParams.status = filterStatus.value
-    const res = await http.get('/api/v1/usage/dashboard/trend', { params: trendParams })
-    trendData.value = res.data?.rows ?? []
+
+    // 计算上期日期范围
+    const [start, end] = dateRange.value
+    const s = new Date(start), e = new Date(end)
+    const days = Math.round((e.getTime() - s.getTime()) / 86400000) + 1
+    const prevEnd = new Date(s); prevEnd.setDate(prevEnd.getDate() - 1)
+    const prevStart = new Date(prevEnd); prevStart.setDate(prevStart.getDate() - days + 1)
+    const prevParams = { ...trendParams, start: fmt(prevStart), end: fmt(prevEnd) }
+
+    const [res, prevRes] = await Promise.all([
+      http.get('/api/v1/usage/dashboard/trend', { params: trendParams }),
+      http.get('/api/v1/usage/dashboard/trend', { params: prevParams }).catch(() => ({ data: { rows: [] } })),
+    ])
+    trendData.value     = res.data?.rows     ?? []
+    prevTrendData.value = prevRes.data?.rows ?? []
   } catch {
-    trendData.value = []
+    trendData.value     = []
+    prevTrendData.value = []
   } finally {
     trendLoading.value = false
     await nextTick()
@@ -970,6 +1173,10 @@ function renderTrendChart() {
   const tokens     = data.map(d => d.total_tokens ?? 0)
   const showPoints = data.length <= 31
   const metric     = trendMetric.value
+
+  const prevData    = prevTrendData.value
+  const hasPrev     = prevData.length > 0
+  const alignPrev   = (arr: number[]) => labels.map((_, i) => i < arr.length ? arr[i] : null)
 
   // 综合模式：成本（折线，左轴）+ 调用（柱，右轴）
   if (metric === 'overview') {
@@ -1023,24 +1230,37 @@ function renderTrendChart() {
     return
   }
 
-  // 单指标模式
+  // 单指标模式（带上期虚线对比）
   const metricCfg = {
-    cost:   { data: costs,  color: '#67c23a', bgColor: 'rgba(103,194,58,0.12)', label: '成本 (' + currency.value + ')',  fmt: (v: any) => fmtCost(v) },
-    calls:  { data: calls,  color: '#409eff', bgColor: 'rgba(64,158,255,0.15)', label: '调用次数',    fmt: (v: any) => Number(v).toLocaleString() },
-    tokens: { data: tokens, color: '#8b5cf6', bgColor: 'rgba(139,92,246,0.12)', label: 'Token 消耗',  fmt: (v: any) => fmtTokens(v) },
+    cost:   { curr: costs,  prev: prevData.map(d => d.cost ?? 0),          color: '#67c23a', bgColor: 'rgba(103,194,58,0.12)', prevColor: 'rgba(103,194,58,0.5)', label: '成本 (' + currency.value + ')',  fmtFn: (v: any) => fmtCost(v) },
+    calls:  { curr: calls,  prev: prevData.map(d => d.calls ?? 0),          color: '#409eff', bgColor: 'rgba(64,158,255,0.15)', prevColor: 'rgba(64,158,255,0.5)', label: '调用次数',    fmtFn: (v: any) => Number(v).toLocaleString() },
+    tokens: { curr: tokens, prev: prevData.map(d => d.total_tokens ?? 0),  color: '#8b5cf6', bgColor: 'rgba(139,92,246,0.12)', prevColor: 'rgba(139,92,246,0.5)', label: 'Token 消耗',  fmtFn: (v: any) => fmtTokens(v) },
   }[metric]!
+
+  const datasets: any[] = [
+    {
+      label: metricCfg.label, data: metricCfg.curr,
+      borderColor: metricCfg.color, backgroundColor: metricCfg.bgColor,
+      fill: true, tension: 0.35,
+      pointRadius: showPoints ? 3 : 0, pointHoverRadius: 5, borderWidth: 2, order: 1,
+    },
+  ]
+
+  if (hasPrev) {
+    datasets.push({
+      label: '上期 ' + metricCfg.label,
+      data: alignPrev(metricCfg.prev),
+      borderColor: metricCfg.prevColor,
+      backgroundColor: 'transparent',
+      borderDash: [5, 5],
+      fill: false, tension: 0.35,
+      pointRadius: 0, pointHoverRadius: 4, borderWidth: 1.5, order: 2,
+    })
+  }
 
   trendChartInst = new Chart(trendCanvasRef.value, {
     type: 'line',
-    data: {
-      labels,
-      datasets: [{
-        label: metricCfg.label, data: metricCfg.data,
-        borderColor: metricCfg.color, backgroundColor: metricCfg.bgColor,
-        fill: true, tension: 0.35,
-        pointRadius: showPoints ? 3 : 0, pointHoverRadius: 5, borderWidth: 2,
-      }],
-    },
+    data: { labels, datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
       interaction: { intersect: false, mode: 'index' },
@@ -1048,12 +1268,12 @@ function renderTrendChart() {
         x: { grid: { display: false }, ticks: { maxTicksLimit: 15, font: { size: 11 } } },
         y: {
           grid: { color: 'rgba(0,0,0,0.05)' },
-          ticks: { font: { size: 11 }, callback: metricCfg.fmt },
+          ticks: { font: { size: 11 }, callback: metricCfg.fmtFn },
         },
       },
       plugins: {
-        legend: { display: false },
-        tooltip: { callbacks: { label: (ctx: any) => ` ${metricCfg.label}: ${metricCfg.fmt(ctx.raw)}` } },
+        legend: { display: hasPrev, position: 'bottom', labels: { boxWidth: 12, padding: 16, font: { size: 12 } } },
+        tooltip: { callbacks: { label: (ctx: any) => ` ${ctx.dataset.label}: ${metricCfg.fmtFn(ctx.raw)}` } },
       },
     },
   } as any)
@@ -1064,6 +1284,20 @@ const modelsLoading = ref(false)
 const modelsData    = ref<any[]>([])
 const modelCanvasRef = ref<HTMLCanvasElement | null>(null)
 let modelChartInst: Chart | null = null
+
+// 模型图类型 & 维度
+const modelChartType = ref<'bar' | 'doughnut'>('bar')
+const modelMetric    = ref<'cost' | 'calls' | 'tokens'>('cost')
+
+function switchModelChartType(t: 'bar' | 'doughnut') {
+  modelChartType.value = t
+  renderModelChart()
+}
+
+function switchModelMetric(m: 'cost' | 'calls' | 'tokens') {
+  modelMetric.value = m
+  renderModelChart()
+}
 
 const MODEL_COLORS = [
   '#409eff', '#67c23a', '#e6a23c', '#f56c6c',
@@ -1095,15 +1329,15 @@ function renderModelChart() {
   const raw = modelsData.value
   if (!raw.length) return
 
-  // Top 6 + 其他聚合
   const TOP_N = 6
   let data: any[]
   if (raw.length > TOP_N) {
     const top  = raw.slice(0, TOP_N)
     const rest = raw.slice(TOP_N)
-    const restCost  = rest.reduce((s: number, d: any) => s + (d.cost ?? 0), 0)
-    const restCalls = rest.reduce((s: number, d: any) => s + (d.calls ?? 0), 0)
-    data = [...top, { model: `其他 (${rest.length} 种)`, cost: restCost, calls: restCalls }]
+    const restCost   = rest.reduce((s: number, d: any) => s + (d.cost ?? 0), 0)
+    const restCalls  = rest.reduce((s: number, d: any) => s + (d.calls ?? 0), 0)
+    const restTokens = rest.reduce((s: number, d: any) => s + (d.total_tokens ?? 0), 0)
+    data = [...top, { model: `其他 (${rest.length} 种)`, cost: restCost, calls: restCalls, total_tokens: restTokens }]
   } else {
     data = raw
   }
@@ -1112,16 +1346,78 @@ function renderModelChart() {
     const m = d.model ?? ''
     return m.length > 28 ? m.slice(0, 26) + '…' : m
   })
-  const costs  = data.map(d => d.cost ?? 0)
   const colors = data.map((_: any, i: number) => MODEL_COLORS[i % MODEL_COLORS.length])
 
+  const metric = modelMetric.value
+  const metricData = data.map(d =>
+    metric === 'cost' ? (d.cost ?? 0)
+    : metric === 'calls' ? (d.calls ?? 0)
+    : (d.total_tokens ?? 0)
+  )
+  const metricLabel = metric === 'cost' ? `成本 (${currency.value})` : metric === 'calls' ? '调用次数' : 'Token 消耗'
+  const total = metricData.reduce((s: number, v: number) => s + v, 0)
+
+  const fmtMetric = (v: number) =>
+    metric === 'cost' ? fmtCost(v)
+    : metric === 'calls' ? v.toLocaleString() + ' 次'
+    : fmtTokens(v)
+
+  if (modelChartType.value === 'doughnut') {
+    modelChartInst = new Chart(modelCanvasRef.value, {
+      type: 'doughnut',
+      data: {
+        labels,
+        datasets: [{
+          data: metricData,
+          backgroundColor: colors,
+          borderColor: 'rgba(255,255,255,0.8)',
+          borderWidth: 2,
+          hoverOffset: 8,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: 'right',
+            labels: {
+              boxWidth: 12, padding: 10, font: { size: 11 },
+              generateLabels: (chart: any) => {
+                const meta = chart.getDatasetMeta(0)
+                return (chart.data.labels as string[]).map((label: string, i: number) => ({
+                  text: label,
+                  fillStyle: colors[i],
+                  strokeStyle: colors[i],
+                  hidden: meta.data[i]?.hidden,
+                  index: i,
+                }))
+              },
+            },
+          },
+          tooltip: {
+            callbacks: {
+              label: (ctx: any) => {
+                const val = ctx.raw as number
+                const pct = total > 0 ? ((val / total) * 100).toFixed(1) : '0.0'
+                return ` ${fmtMetric(val)} (${pct}%)`
+              },
+            },
+          },
+        },
+      },
+    } as any)
+    return
+  }
+
+  // 横向柱状图模式
   modelChartInst = new Chart(modelCanvasRef.value, {
     type: 'bar',
     data: {
       labels,
       datasets: [{
-        label: '成本 (' + currency.value + ')',
-        data: costs,
+        label: metricLabel,
+        data: metricData,
         backgroundColor: colors,
         borderRadius: 4,
         borderSkipped: false,
@@ -1135,7 +1431,11 @@ function renderModelChart() {
         legend: { display: false },
         tooltip: {
           callbacks: {
-            label: (ctx: any) => ` ${fmtCost(ctx.raw as number)}`,
+            label: (ctx: any) => {
+              const val = ctx.raw as number
+              const pct = total > 0 ? ((val / total) * 100).toFixed(1) : '0.0'
+              return ` ${fmtMetric(val)} (${pct}%)`
+            },
           },
         },
       },
@@ -1144,7 +1444,10 @@ function renderModelChart() {
           grid: { color: 'rgba(0,0,0,0.05)' },
           ticks: {
             font: { size: 11 },
-            callback: (v: any) => `${currencySymbol(cc.value.currency)}${convertCost(Number(v), cc.value).toFixed(2)}`,
+            callback: (v: any) =>
+              metric === 'cost' ? `${currencySymbol(cc.value.currency)}${convertCost(Number(v), cc.value).toFixed(2)}`
+              : metric === 'calls' ? Number(v).toLocaleString()
+              : fmtTokens(Number(v)),
           },
         },
         y: {
@@ -1246,6 +1549,7 @@ function loadAll() {
   loadTrend()
   loadModels()
   loadLogs()
+  loadBudget()
 }
 
 // ── Trace Drawer ──────────────────────────────────────────────
@@ -1604,12 +1908,48 @@ watch(currency, async () => {
 .ud-kpi__vs    { color: var(--ud-faint); }
 .ud-kpi__sub   { color: var(--ud-muted); }
 
-.ud-change-chip     { display: inline-flex; align-items: center; gap: 3px; cursor: default; }
-.ud-change--good    { color: #67c23a; font-weight: 600; }
-.ud-change--bad     { color: #f56c6c; font-weight: 600; }
-.ud-change--up      { color: #409eff; font-weight: 600; }
-.ud-change--down    { color: #e6a23c; font-weight: 600; }
-.ud-change--neutral { color: var(--ud-muted); }
+/* 环比变化 — 新的 badge 样式（更醒目） */
+.ud-kpi__change-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
+.ud-kpi__prev-val   { font-size: 11px; color: var(--ud-faint); }
+
+.ud-change-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 9px; border-radius: 6px;
+  font-size: 13px; cursor: default; white-space: nowrap;
+}
+.ud-change-badge b { font-size: 14px; font-weight: 700; }
+.ud-change-badge__vs { font-size: 11px; opacity: 0.75; }
+.ud-change-badge--sm { padding: 2px 7px; font-size: 11px; }
+.ud-change-badge--sm b { font-size: 11px; }
+.ud-change-badge.ud-change--good { background: rgba(103,194,58,0.14); color: #48a014; }
+.ud-change-badge.ud-change--bad  { background: rgba(245,108,108,0.14); color: #d63b3b; }
+.ud-change-badge.ud-change--up   { background: rgba(64,158,255,0.14);  color: #1872cc; }
+.ud-change-badge.ud-change--down { background: rgba(230,162,60,0.14);  color: #b87112; }
+.ud-change-badge.ud-change--neutral { background: var(--el-fill-color); color: var(--ud-muted); }
+
+/* 预算进度条（KPI卡片内） */
+.ud-kpi__budget {
+  margin-top: 8px; padding: 7px 10px; border-radius: 8px;
+  background: var(--el-fill-color-light);
+}
+.ud-kpi__budget--ok     { border-left: 3px solid #67c23a; }
+.ud-kpi__budget--warn   { border-left: 3px solid #e6a23c; }
+.ud-kpi__budget--danger { border-left: 3px solid #f56c6c; }
+.ud-kpi__budget-hdr {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 11px; color: var(--ud-muted); margin-bottom: 5px;
+}
+.ud-kpi__budget-track {
+  height: 5px; border-radius: 3px;
+  background: var(--el-fill-color);
+  overflow: hidden;
+}
+.ud-kpi__budget-fill {
+  height: 100%; border-radius: 3px; transition: width .4s ease;
+}
+.ud-kpi__budget--ok     .ud-kpi__budget-fill { background: linear-gradient(90deg, #67c23a, #95d475); }
+.ud-kpi__budget--warn   .ud-kpi__budget-fill { background: linear-gradient(90deg, #e6a23c, #f0bb6e); }
+.ud-kpi__budget--danger .ud-kpi__budget-fill { background: linear-gradient(90deg, #f56c6c, #f89898); }
 
 /* ── Section 通用 ── */
 .ud-section__header {
@@ -1818,6 +2158,57 @@ watch(currency, async () => {
 .ud-bc-item { color: var(--ud-muted); cursor: pointer; }
 .ud-bc-item:hover { color: var(--el-color-primary); }
 .ud-bc-current { color: var(--el-text-color-primary); font-weight: 500; cursor: default; }
+
+/* ── 排行表格排序 & 搜索 ── */
+.ud-section__title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ud-rank-search { width: 140px; }
+
+.col-sortable { cursor: pointer; user-select: none; }
+.col-sortable:hover { color: var(--el-color-primary); }
+.ud-sort-arrows { display: inline-flex; flex-direction: column; margin-left: 4px; vertical-align: middle; line-height: 1; gap: 0; }
+.ud-sort-arrow  { font-size: 8px; color: var(--el-border-color); line-height: 1; display: block; }
+.ud-sort-arrow--active { color: var(--el-color-primary); }
+
+/* ── 模型图控制栏 ── */
+.ud-model-ctrl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ── 花销构成区块 ── */
+.ud-breakdown-body {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 0;
+}
+@media (max-width: 768px) { .ud-breakdown-body { grid-template-columns: 1fr; } }
+
+.ud-breakdown-budgets {
+  border-right: 1px solid var(--ud-border);
+  padding: 16px 20px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.ud-breakdown-top5 {
+  padding: 16px 20px;
+}
+.ud-breakdown-heading {
+  font-size: 12px; font-weight: 600; color: var(--ud-muted);
+  text-transform: uppercase; letter-spacing: .04em;
+  margin-bottom: 12px;
+}
+
+.ud-budget-pool { display: flex; flex-direction: column; gap: 5px; }
+.ud-budget-pool__hdr { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+.ud-budget-pool__label { color: var(--el-text-color-regular); font-weight: 500; }
+.ud-budget-pool__ratio { font-size: 12px; }
+.ud-budget-pool__amts  { display: flex; justify-content: space-between; font-size: 11px; color: var(--ud-faint); }
+.ud-budget-progress :deep(.el-progress-bar__outer) { border-radius: 3px; }
+.ud-budget-progress :deep(.el-progress-bar__inner) { border-radius: 3px; }
+
+.ud-top5-list { display: flex; flex-direction: column; gap: 8px; }
+.ud-top5-item { display: flex; align-items: center; gap: 8px; }
+.ud-top5-name { flex: 1; font-size: 13px; color: var(--el-text-color-primary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ud-top5-bar  { width: 80px; height: 6px; border-radius: 3px; background: var(--el-fill-color); overflow: hidden; flex-shrink: 0; }
+.ud-top5-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #67c23a, #95d475); }
+.ud-top5-cost { font-size: 12px; white-space: nowrap; min-width: 60px; text-align: right; }
+.ud-top5-pct  { font-size: 11px; color: var(--ud-muted); min-width: 36px; text-align: right; }
 
 /* ── 分页 ── */
 .ud-pagination { display: flex; justify-content: flex-end; padding: 12px 16px; }

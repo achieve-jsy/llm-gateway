@@ -403,10 +403,13 @@ func (s *BudgetService) RebuildCounters(ctx context.Context, db *gorm.DB) (*Rebu
 	for _, p := range periods {
 		// ── company ──────────────────────────────────────────────────────────
 		var companyTotal float64
-		db.WithContext(ctx).Table("call_logs").
-			Select("COALESCE(SUM(input_cost_usd + output_cost_usd + cache_read_cost_usd), 0)").
-			Where("ts >= ?", p.since).
-			Scan(&companyTotal)
+		if err := db.WithContext(ctx).Table("call_logs").
+			Select("COALESCE(SUM(est_cost_usd), 0)").
+			Where("ts >= ? AND status = 200", p.since).
+			Scan(&companyTotal).Error; err != nil {
+			slog.Warn("rebuild: query company total failed, skipping period", "period", p.period, "err", err)
+			continue
+		}
 		if err := s.setRedisCounter(ctx, model.BudgetScopeCompany, model.BudgetScopeGlobal, p.period, companyTotal, p.ttl); err != nil {
 			slog.Warn("rebuild: set company counter", "err", err)
 		} else {
@@ -415,11 +418,13 @@ func (s *BudgetService) RebuildCounters(ctx context.Context, db *gorm.DB) (*Rebu
 
 		// ── studio ────────────────────────────────────────────────────────────
 		var studioRows []callCostRow
-		db.WithContext(ctx).Table("call_logs").
-			Select("studio_id AS scope_id, '' AS key_type, COALESCE(SUM(input_cost_usd + output_cost_usd + cache_read_cost_usd), 0) AS cost_usd").
-			Where("ts >= ? AND studio_id != ''", p.since).
+		if err := db.WithContext(ctx).Table("call_logs").
+			Select("studio_id AS scope_id, '' AS key_type, COALESCE(SUM(est_cost_usd), 0) AS cost_usd").
+			Where("ts >= ? AND studio_id != '' AND status = 200", p.since).
 			Group("studio_id").
-			Scan(&studioRows)
+			Scan(&studioRows).Error; err != nil {
+			slog.Warn("rebuild: query studio rows failed", "period", p.period, "err", err)
+		}
 		for _, r := range studioRows {
 			if err := s.setRedisCounter(ctx, model.BudgetScopeStudio, r.ScopeID, p.period, r.CostUSD, p.ttl); err != nil {
 				slog.Warn("rebuild: set studio counter", "scope_id", r.ScopeID, "err", err)
@@ -430,12 +435,14 @@ func (s *BudgetService) RebuildCounters(ctx context.Context, db *gorm.DB) (*Rebu
 
 		// ── dept（区分 personal/service key）────────────────────────────────
 		var deptRows []callCostRow
-		db.WithContext(ctx).Table("call_logs cl").
-			Select("cl.dept_id AS scope_id, COALESCE(ak.key_type, 'personal') AS key_type, COALESCE(SUM(cl.input_cost_usd + cl.output_cost_usd + cl.cache_read_cost_usd), 0) AS cost_usd").
+		if err := db.WithContext(ctx).Table("call_logs cl").
+			Select("cl.dept_id AS scope_id, COALESCE(ak.key_type, 'personal') AS key_type, COALESCE(SUM(cl.est_cost_usd), 0) AS cost_usd").
 			Joins("LEFT JOIN api_keys ak ON ak.id::text = cl.key_id").
-			Where("cl.ts >= ? AND cl.dept_id != ''", p.since).
+			Where("cl.ts >= ? AND cl.dept_id != '' AND cl.status = 200", p.since).
 			Group("cl.dept_id, ak.key_type").
-			Scan(&deptRows)
+			Scan(&deptRows).Error; err != nil {
+			slog.Warn("rebuild: query dept rows failed", "period", p.period, "err", err)
+		}
 		for _, r := range deptRows {
 			scopeType := model.BudgetScopeDeptDaily
 			if r.KeyType == model.KeyTypeService {
@@ -450,12 +457,14 @@ func (s *BudgetService) RebuildCounters(ctx context.Context, db *gorm.DB) (*Rebu
 
 		// ── member ────────────────────────────────────────────────────────────
 		var memberRows []callCostRow
-		db.WithContext(ctx).Table("call_logs cl").
-			Select("cl.user_id AS scope_id, '' AS key_type, COALESCE(SUM(cl.input_cost_usd + cl.output_cost_usd + cl.cache_read_cost_usd), 0) AS cost_usd").
+		if err := db.WithContext(ctx).Table("call_logs cl").
+			Select("cl.user_id AS scope_id, '' AS key_type, COALESCE(SUM(cl.est_cost_usd), 0) AS cost_usd").
 			Joins("LEFT JOIN api_keys ak ON ak.id::text = cl.key_id").
-			Where("cl.ts >= ? AND cl.user_id != '' AND (ak.key_type IS NULL OR ak.key_type != ?)", p.since, model.KeyTypeService).
+			Where("cl.ts >= ? AND cl.user_id != '' AND cl.status = 200 AND (ak.key_type IS NULL OR ak.key_type != ?)", p.since, model.KeyTypeService).
 			Group("cl.user_id").
-			Scan(&memberRows)
+			Scan(&memberRows).Error; err != nil {
+			slog.Warn("rebuild: query member rows failed", "period", p.period, "err", err)
+		}
 		for _, r := range memberRows {
 			if err := s.setRedisCounter(ctx, model.BudgetScopeMember, r.ScopeID, p.period, r.CostUSD, p.ttl); err != nil {
 				slog.Warn("rebuild: set member counter", "scope_id", r.ScopeID, "err", err)

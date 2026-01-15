@@ -19,10 +19,73 @@
           @click="modeFilter = m"
         >{{ m === '' ? '全部' : (MODE_LABEL[m] ?? m) }}</button>
       </div>
+      <el-button
+        class="mds-advanced-toggle"
+        :class="{ active: showAdvanced || hasAdvancedChanges }"
+        @click="showAdvanced = !showAdvanced"
+      >
+        <el-icon><Filter /></el-icon>
+        <span>高级筛选</span>
+        <span v-if="activeFilterCount > 0" class="mds-filter-count">{{ activeFilterCount }}</span>
+      </el-button>
       <button class="mds-refresh" @click="load" :disabled="loading">
         <el-icon :class="{ spinning: loading }"><Refresh /></el-icon>
       </button>
     </div>
+
+    <el-collapse-transition>
+      <div v-if="showAdvanced" class="advanced-filters">
+        <div class="filter-group">
+          <span class="filter-label">能力</span>
+          <div class="filter-controls filter-checks">
+            <el-checkbox v-model="advancedFilters.vision">视觉理解</el-checkbox>
+            <el-checkbox v-model="advancedFilters.functionCalling">工具调用</el-checkbox>
+            <el-checkbox v-model="advancedFilters.longContext">长上下文 (&gt;32K)</el-checkbox>
+          </div>
+        </div>
+
+        <div class="filter-group">
+          <span class="filter-label">价格</span>
+          <div class="filter-controls filter-price">
+            <el-input-number
+              v-model="advancedFilters.priceMin"
+              :min="0"
+              :step="0.1"
+              :precision="2"
+              :controls="false"
+              placeholder="最低"
+            />
+            <span class="filter-separator">至</span>
+            <el-input-number
+              v-model="advancedFilters.priceMax"
+              :min="0"
+              :step="0.1"
+              :precision="2"
+              :controls="false"
+              placeholder="最高"
+            />
+            <span class="filter-hint">/ 百万 tokens（输入输出均价）</span>
+          </div>
+        </div>
+
+        <div class="filter-group">
+          <span class="filter-label">排序</span>
+          <div class="filter-controls filter-sort">
+            <el-select v-model="advancedFilters.sortBy" class="filter-sort-select">
+              <el-option label="名称" value="name" />
+              <el-option label="价格" value="price" />
+              <el-option label="上下文长度" value="context" />
+            </el-select>
+            <el-button class="filter-sort-order" @click="advancedFilters.sortDesc = !advancedFilters.sortDesc">
+              {{ advancedFilters.sortDesc ? '降序' : '升序' }}
+            </el-button>
+            <el-button text size="small" :disabled="!hasAdvancedChanges" @click="resetAdvancedFilters">
+              重置高级筛选
+            </el-button>
+          </div>
+        </div>
+      </div>
+    </el-collapse-transition>
 
     <!-- ── 加载态 ────────────────────────────── -->
     <div v-if="loading" class="mds-grid">
@@ -144,17 +207,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, reactive } from 'vue'
 import {
   Search, CopyDocument, Check, Refresh,
-  CircleCloseFilled,
+  CircleCloseFilled, Filter,
 } from '@element-plus/icons-vue'
 import { groupsApi } from '@/api/groups'
 import type { GroupListItem, GroupEntitlement } from '@/types/group'
 import type { GroupCapability } from '@/api/groups'
 import { copyToClipboard } from '@/utils/clipboard'
 import { useAuthStore } from '@/stores/auth'
-import http from '@/services/http'
 
 const STRATEGY_LABEL: Record<string, string> = {
   round_robin: '轮询',
@@ -184,6 +246,27 @@ const toastName = ref('')
 let copyTimer: ReturnType<typeof setTimeout> | null = null
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
+type SortField = 'name' | 'price' | 'context'
+
+const showAdvanced = ref(false)
+const advancedFilters = reactive<{
+  vision: boolean
+  functionCalling: boolean
+  longContext: boolean
+  priceMin: number | undefined
+  priceMax: number | undefined
+  sortBy: SortField
+  sortDesc: boolean
+}>({
+  vision: false,
+  functionCalling: false,
+  longContext: false,
+  priceMin: undefined,
+  priceMax: undefined,
+  sortBy: 'name',
+  sortDesc: false,
+})
+
 const authStore = useAuthStore()
 const entitlementsMap = ref<Map<number, GroupEntitlement[]>>(new Map())
 const myDeptIds = ref<string[]>([])
@@ -193,6 +276,29 @@ const allModes = computed(() => {
   const s = new Set(Object.values(caps.value).map(c => c.mode).filter(Boolean))
   return Array.from(s).sort()
 })
+
+const hasAdvancedFilters = computed(() => (
+  advancedFilters.vision ||
+  advancedFilters.functionCalling ||
+  advancedFilters.longContext ||
+  advancedFilters.priceMin !== undefined ||
+  advancedFilters.priceMax !== undefined
+))
+
+const activeFilterCount = computed(() => {
+  let count = 0
+  if (advancedFilters.vision) count += 1
+  if (advancedFilters.functionCalling) count += 1
+  if (advancedFilters.longContext) count += 1
+  if (advancedFilters.priceMin !== undefined || advancedFilters.priceMax !== undefined) count += 1
+  return count
+})
+
+const hasAdvancedChanges = computed(() => (
+  hasAdvancedFilters.value ||
+  advancedFilters.sortBy !== 'name' ||
+  advancedFilters.sortDesc
+))
 
 // 判断模型组是否对当前用户可用
 function isGroupAvailable(group: GroupListItem): boolean {
@@ -227,7 +333,33 @@ const filteredGroups = computed(() => {
   if (modeFilter.value) list = list.filter(g => caps.value[g.name]?.mode === modeFilter.value)
   const q = searchQuery.value.toLowerCase().trim()
   if (q) list = list.filter(g => g.name.toLowerCase().includes(q) || (g.description || '').toLowerCase().includes(q))
-  return list
+  if (advancedFilters.vision) {
+    list = list.filter(g => caps.value[g.name]?.supports_vision)
+  }
+  if (advancedFilters.functionCalling) {
+    list = list.filter(g => {
+      const cap = caps.value[g.name]
+      return cap?.supports_function_calling || cap?.supports_tool_choice
+    })
+  }
+  if (advancedFilters.longContext) {
+    list = list.filter(g => (caps.value[g.name]?.max_input_tokens || 0) > 32_000)
+  }
+
+  const hasPriceMin = advancedFilters.priceMin !== undefined
+  const hasPriceMax = advancedFilters.priceMax !== undefined
+  if (hasPriceMin || hasPriceMax) {
+    const priceMin = advancedFilters.priceMin ?? 0
+    const priceMax = advancedFilters.priceMax ?? Number.POSITIVE_INFINITY
+    list = list.filter(g => {
+      const cap = caps.value[g.name]
+      if (!cap) return true
+      const avgPrice = getAveragePrice(cap)
+      return avgPrice >= priceMin && avgPrice <= priceMax
+    })
+  }
+
+  return [...list].sort(compareGroups)
 })
 
 function formatTokens(n: number): string {
@@ -244,9 +376,41 @@ function formatPrice(n: number): string {
   return `$${n.toFixed(2)}`
 }
 
+function getAveragePrice(cap?: GroupCapability): number {
+  if (!cap) return 0
+  return ((cap.input_price_per_million || 0) + (cap.output_price_per_million || 0)) / 2
+}
+
+function compareGroups(a: GroupListItem, b: GroupListItem): number {
+  let result = 0
+  const capA = caps.value[a.name]
+  const capB = caps.value[b.name]
+
+  if (advancedFilters.sortBy === 'name') {
+    result = a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+  } else if (advancedFilters.sortBy === 'price') {
+    result = getAveragePrice(capA) - getAveragePrice(capB)
+  } else {
+    result = (capA?.max_input_tokens || 0) - (capB?.max_input_tokens || 0)
+  }
+
+  return advancedFilters.sortDesc ? -result : result
+}
+
 function resetFilters() {
   searchQuery.value = ''
   modeFilter.value = ''
+  resetAdvancedFilters()
+}
+
+function resetAdvancedFilters() {
+  advancedFilters.vision = false
+  advancedFilters.functionCalling = false
+  advancedFilters.longContext = false
+  advancedFilters.priceMin = undefined
+  advancedFilters.priceMax = undefined
+  advancedFilters.sortBy = 'name'
+  advancedFilters.sortDesc = false
 }
 
 function copyName(g: GroupListItem) {
@@ -378,6 +542,84 @@ onMounted(() => { load() })
   &:hover { background: var(--el-fill-color); color: var(--el-color-primary); }
   &:disabled { opacity: 0.5; cursor: not-allowed; }
   .el-icon { font-size: 15px; }
+}
+
+.mds-advanced-toggle {
+  border-radius: 8px;
+  font-weight: 600;
+
+  &.active {
+    color: var(--el-color-primary);
+    border-color: var(--el-color-primary-light-5);
+    background: var(--el-color-primary-light-9);
+  }
+}
+
+.mds-filter-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--el-color-primary);
+  color: var(--el-color-white);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.advanced-filters {
+  margin: -6px 0 18px;
+  padding: 16px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 12px;
+  background: var(--el-fill-color-extra-light);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.filter-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.filter-label {
+  width: 52px;
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--el-text-color-regular);
+}
+
+.filter-controls {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--el-text-color-secondary);
+}
+
+.filter-checks {
+  gap: 4px 18px;
+}
+
+.filter-price :deep(.el-input-number) {
+  width: 116px;
+}
+
+.filter-separator,
+.filter-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.filter-sort-select {
+  width: 140px;
+}
+
+.filter-sort-order {
+  min-width: 72px;
 }
 
 .spinning { animation: spin 0.8s linear infinite; }
@@ -680,7 +922,23 @@ onMounted(() => { load() })
 @media (max-width: 640px) {
   .mds-bar { flex-direction: column; align-items: stretch; }
   .mds-search { width: 100%; }
+  .mds-filters { overflow-x: auto; }
+  .mds-advanced-toggle { width: 100%; justify-content: center; }
   .mds-refresh { margin-left: 0; align-self: flex-end; }
+  .advanced-filters { margin-top: -4px; }
+  .filter-group { align-items: stretch; flex-direction: column; gap: 8px; }
+  .filter-label { width: auto; }
+  .filter-controls { align-items: stretch; flex-direction: column; }
+  .filter-checks { gap: 0; }
+  .filter-price :deep(.el-input-number),
+  .filter-sort-select,
+  .filter-sort-order {
+    width: 100%;
+  }
+  .filter-separator,
+  .filter-hint {
+    align-self: flex-start;
+  }
   .mds-grid { grid-template-columns: 1fr; }
 }
 

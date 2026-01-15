@@ -183,18 +183,50 @@
           </div>
         </template>
       </div>
+      <!-- 异常概览 -->
+      <div
+        class="ud-kpi-card ud-kpi-card--anomaly"
+        :class="(summary?.error_count || 0) > 0 ? 'ud-kpi-card--red' : 'ud-kpi-card--amber'"
+        style="cursor:pointer"
+        title="点击筛选失败调用"
+        @click="filterToErrors"
+      >
+        <div class="ud-kpi__icon"><el-icon size="20"><WarningFilled /></el-icon></div>
+        <div class="ud-kpi__body">
+          <p class="ud-kpi__label">失败调用</p>
+          <p class="ud-kpi__value">{{ fmtNum(summary?.error_count) }}</p>
+          <div class="ud-kpi__change-row">
+            <el-tooltip v-if="anomalyStats.failover > 0" content="故障转移次数（本页）" placement="bottom" :show-after="300">
+              <span class="ud-anomaly-chip ud-anomaly-chip--warn">切换 {{ anomalyStats.failover }}</span>
+            </el-tooltip>
+            <el-tooltip v-if="anomalyStats.highLatency > 0" content="耗时 >10s 的高延迟调用（本页）" placement="bottom" :show-after="300">
+              <span class="ud-anomaly-chip ud-anomaly-chip--orange">慢 {{ anomalyStats.highLatency }}</span>
+            </el-tooltip>
+            <span v-if="anomalyStats.failover === 0 && anomalyStats.highLatency === 0" class="ud-kpi__sub">
+              {{ (summary?.error_count || 0) === 0 ? '运行正常' : '点击查看' }}
+            </span>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- ══ 趋势图 ══ -->
     <div class="ud-section">
       <div class="ud-section__header">
         <span class="ud-section__title">调用趋势</span>
-        <div class="ud-trend-tabs">
-          <button
-            v-for="m in trendMetrics" :key="m.value"
-            :class="['ud-trend-tab', { 'ud-trend-tab--active': trendMetric === m.value }]"
-            @click="switchTrendMetric(m.value)"
-          >{{ m.label }}</button>
+        <div class="ud-trend-header-ctrls">
+          <div class="ud-trend-tabs">
+            <button
+              v-for="m in trendMetrics" :key="m.value"
+              :class="['ud-trend-tab', { 'ud-trend-tab--active': trendMetric === m.value }]"
+              @click="switchTrendMetric(m.value)"
+            >{{ m.label }}</button>
+          </div>
+          <div class="ud-trend-tabs">
+            <button :class="['ud-trend-tab', { 'ud-trend-tab--active': trendGranularity === 'day' }]" @click="switchTrendGranularity('day')">日</button>
+            <button :class="['ud-trend-tab', { 'ud-trend-tab--active': trendGranularity === 'week' }]" @click="switchTrendGranularity('week')">周</button>
+            <button :class="['ud-trend-tab', { 'ud-trend-tab--active': trendGranularity === 'month' }]" @click="switchTrendGranularity('month')">月</button>
+          </div>
         </div>
       </div>
       <div class="ud-chart-wrap" v-loading="trendLoading">
@@ -844,11 +876,15 @@ const datePresets = [
 function applyPreset(p: { label: string; days: number }) {
   dateRange.value = [fmt(daysAgo(p.days)), fmt(today)]
   activePreset.value = p.label
+  granularityManuallySet = false
+  autoSetGranularity()
   loadAll()
 }
 
 function onDateChange() {
   activePreset.value = ''
+  granularityManuallySet = false
+  autoSetGranularity()
   loadAll()
 }
 
@@ -1127,6 +1163,60 @@ function switchTrendMetric(m: typeof trendMetric.value) {
   renderTrendChart()
 }
 
+// ── 趋势图粒度 ─────────────────────────────────────────────────
+const trendGranularity = ref<'day' | 'week' | 'month'>('day')
+let granularityManuallySet = false
+
+function autoSetGranularity() {
+  const [start, end] = dateRange.value
+  if (!start || !end) return
+  const days = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000) + 1
+  if (days > 90) trendGranularity.value = 'month'
+  else if (days > 30) trendGranularity.value = 'week'
+  else trendGranularity.value = 'day'
+}
+
+function switchTrendGranularity(g: 'day' | 'week' | 'month') {
+  granularityManuallySet = true
+  trendGranularity.value = g
+  renderTrendChart()
+}
+
+function getISOWeekLabel(date: Date): string {
+  const d = new Date(date)
+  d.setHours(0, 0, 0, 0)
+  d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7)
+  const week1 = new Date(d.getFullYear(), 0, 4)
+  const weekNum = 1 + Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7)
+  return `W${String(weekNum).padStart(2, '0')}`
+}
+
+const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+
+function getMonthLabel(date: Date): string {
+  return `${MONTH_ABBR[date.getMonth()]} ${date.getFullYear()}`
+}
+
+function aggregateTrendData(data: any[], granularity: 'day' | 'week' | 'month'): any[] {
+  if (granularity === 'day' || !data.length) return data
+  const groups = new Map<string, any>()
+  for (const d of data) {
+    const dateStr = d.date
+    if (!dateStr) continue
+    const date = new Date(dateStr)
+    const key = granularity === 'week' ? getISOWeekLabel(date) : getMonthLabel(date)
+    if (!groups.has(key)) {
+      groups.set(key, { date: key, cost: 0, calls: 0, errors: 0, total_tokens: 0 })
+    }
+    const g = groups.get(key)!
+    g.cost         += d.cost         ?? 0
+    g.calls        += d.calls        ?? 0
+    g.errors       += d.errors       ?? 0
+    g.total_tokens += d.total_tokens ?? 0
+  }
+  return Array.from(groups.values())
+}
+
 async function loadTrend() {
   trendLoading.value = true
   try {
@@ -1163,10 +1253,12 @@ async function loadTrend() {
 function renderTrendChart() {
   if (!trendCanvasRef.value) return
   trendChartInst?.destroy()
-  const data = trendData.value
+  const g = trendGranularity.value
+  const data = aggregateTrendData(trendData.value, g)
   if (!data.length) return
 
-  const labels     = data.map(d => d.date?.slice(5) ?? '')
+  const isDayView = g === 'day'
+  const labels     = data.map(d => isDayView ? (d.date?.slice(5) ?? '') : (d.date ?? ''))
   const costs      = data.map(d => d.cost ?? 0)
   const calls      = data.map(d => d.calls ?? 0)
   const errors     = data.map(d => d.errors ?? 0)
@@ -1174,8 +1266,8 @@ function renderTrendChart() {
   const showPoints = data.length <= 31
   const metric     = trendMetric.value
 
-  const prevData    = prevTrendData.value
-  const hasPrev     = prevData.length > 0
+  const prevAggData = aggregateTrendData(prevTrendData.value, g)
+  const hasPrev     = prevAggData.length > 0
   const alignPrev   = (arr: number[]) => labels.map((_, i) => i < arr.length ? arr[i] : null)
 
   // 综合模式：成本（折线，左轴）+ 调用（柱，右轴）
@@ -1232,9 +1324,9 @@ function renderTrendChart() {
 
   // 单指标模式（带上期虚线对比）
   const metricCfg = {
-    cost:   { curr: costs,  prev: prevData.map(d => d.cost ?? 0),          color: '#67c23a', bgColor: 'rgba(103,194,58,0.12)', prevColor: 'rgba(103,194,58,0.5)', label: '成本 (' + currency.value + ')',  fmtFn: (v: any) => fmtCost(v) },
-    calls:  { curr: calls,  prev: prevData.map(d => d.calls ?? 0),          color: '#409eff', bgColor: 'rgba(64,158,255,0.15)', prevColor: 'rgba(64,158,255,0.5)', label: '调用次数',    fmtFn: (v: any) => Number(v).toLocaleString() },
-    tokens: { curr: tokens, prev: prevData.map(d => d.total_tokens ?? 0),  color: '#8b5cf6', bgColor: 'rgba(139,92,246,0.12)', prevColor: 'rgba(139,92,246,0.5)', label: 'Token 消耗',  fmtFn: (v: any) => fmtTokens(v) },
+    cost:   { curr: costs,  prev: prevAggData.map(d => d.cost ?? 0),         color: '#67c23a', bgColor: 'rgba(103,194,58,0.12)', prevColor: 'rgba(103,194,58,0.5)', label: '成本 (' + currency.value + ')',  fmtFn: (v: any) => fmtCost(v) },
+    calls:  { curr: calls,  prev: prevAggData.map(d => d.calls ?? 0),         color: '#409eff', bgColor: 'rgba(64,158,255,0.15)', prevColor: 'rgba(64,158,255,0.5)', label: '调用次数',    fmtFn: (v: any) => Number(v).toLocaleString() },
+    tokens: { curr: tokens, prev: prevAggData.map(d => d.total_tokens ?? 0), color: '#8b5cf6', bgColor: 'rgba(139,92,246,0.12)', prevColor: 'rgba(139,92,246,0.5)', label: 'Token 消耗',  fmtFn: (v: any) => fmtTokens(v) },
   }[metric]!
 
   const datasets: any[] = [
@@ -1509,6 +1601,18 @@ async function loadLogs() {
 function reloadLogs() {
   logsPage.value = 1
   loadLogs()
+}
+
+// ── 异常聚合（本页统计） ─────────────────────────────────────
+const anomalyStats = computed(() => ({
+  failover:    logRows.value.filter(r => r.failover_used).length,
+  highLatency: logRows.value.filter(r => (r.duration_ms ?? 0) > 10000).length,
+}))
+
+function filterToErrors() {
+  filterStatus.value = 'error'
+  showFilters.value = true
+  loadAll()
 }
 
 async function onUserNameChange() {
@@ -1866,11 +1970,12 @@ watch(currency, async () => {
 /* ── KPI 卡片 ── */
 .ud-kpi-row {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 14px;
 }
-@media (max-width: 900px) { .ud-kpi-row { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 540px) { .ud-kpi-row { grid-template-columns: 1fr; } }
+@media (max-width: 1200px) { .ud-kpi-row { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 900px)  { .ud-kpi-row { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 540px)  { .ud-kpi-row { grid-template-columns: 1fr; } }
 
 .ud-kpi-card {
   background: var(--ud-surface);
@@ -1960,6 +2065,18 @@ watch(currency, async () => {
 .ud-section__title { font-size: 14px; font-weight: 600; color: var(--el-text-color-primary); }
 .ud-section__count { font-size: 12px; color: var(--ud-muted); }
 .ud-section__hint  { font-size: 12px; color: var(--ud-faint); }
+
+/* 异常聚合卡片 chips */
+.ud-anomaly-chip {
+  display: inline-flex; align-items: center;
+  padding: 2px 8px; border-radius: 20px;
+  font-size: 11px; font-weight: 600; white-space: nowrap; cursor: default;
+}
+.ud-anomaly-chip--warn   { background: rgba(230,162,60,0.18); color: #b87112; }
+.ud-anomaly-chip--orange { background: rgba(245,108,108,0.18); color: #c0392b; }
+
+/* 趋势图头部双控件行 */
+.ud-trend-header-ctrls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 /* 趋势图指标切换 */
 .ud-trend-tabs { display: flex; gap: 2px; background: var(--el-fill-color); border-radius: 6px; padding: 2px; }

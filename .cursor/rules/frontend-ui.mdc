@@ -1,0 +1,51 @@
+---
+description: 管理后台前端 UI/UX 规范（Vue3 + Element Plus），编辑 web 下页面/组件时遵守
+globs: web/**/*.vue
+alwaysApply: false
+---
+
+# 前端 UI/UX 规范
+
+完整规范见 `docs/frontend-design-guidelines.md`。写/改 `web/` 下 Vue 页面与组件时遵守以下铁律。
+
+## Token 与复用
+- 颜色一律用 CSS 变量（`--el-color-*` / `--el-text-color-*` / `--el-border-color-*` / `--el-fill-color-*`），禁止硬编码 `#xxxxxx`。
+- 新增颜色必须同时给 `html.dark` 暗色值。
+- 格式化（日期/货币/token）走 `web/src/utils/`，禁止页面内重复实现 `formatDateTime` 之类。
+
+## 三态（强制）
+列表/数据页必须显式处理加载/空/错误：
+
+```vue
+<el-table v-loading="loading" :data="rows">…</el-table>
+<el-empty v-if="!loading && !rows.length" description="暂无数据">
+  <el-button type="primary" @click="openCreate">新建</el-button>
+</el-empty>
+```
+
+## 操作反馈（强制）
+- 所有写操作（含行内编辑、`el-switch` 切换、排序）成功 `ElMessage.success`，失败 `ElMessage.error` 并回滚 UI。
+- 禁止「静默成功」。异步按钮加 `:loading` 防重复提交。
+
+## 危险操作确认（强制、统一）
+- 单行删除 → `el-popconfirm`。
+- 批量删除 / 影响线上流量（禁用渠道·模型·模型组）/ 不可逆 → `ElMessageBox.confirm`，文案含**对象名 + 后果**。
+- 影响线上的 `el-switch` 不可零确认直接生效。
+
+```ts
+await ElMessageBox.confirm(
+  `确定禁用模型「${row.name}」？禁用后将停止对外服务`,
+  '禁用模型', { type: 'warning' }
+)
+```
+
+## 动作密度（Hick's / Miller's Law）
+- 工具栏主操作 ≤ 1～2 个；批量操作收进「批量操作(N)」`el-dropdown`，仅选中时出现。
+- 筛选项 >3 收进折叠区/`el-popover`；表格操作列按钮 ≤3，其余收进 `⋯`。
+
+## 可访问性
+- 状态/健康不能只靠颜色：颜色 + 文字/图标双通道。
+- `el-tag` 用语义类型（success/warning/danger/info），不裸写色块。
+
+## 页面骨架
+统一为 `page-header`（标题 + `.header-actions`）→ 工具栏 → 内容 → 分页（右对齐）；复用现有响应式断点。

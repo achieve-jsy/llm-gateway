@@ -1,6 +1,6 @@
 <template>
   <div class="notification-bell" @click="togglePanel" ref="bellRef">
-    <el-badge :value="unreadCount" :hidden="unreadCount === 0" :max="99">
+    <el-badge :value="totalUnread" :hidden="totalUnread === 0" :max="99">
       <el-icon :size="20"><Bell /></el-icon>
     </el-badge>
     <el-popover
@@ -13,120 +13,213 @@
       <template #reference><span></span></template>
       <div class="notification-panel" @click.stop>
         <div class="panel-header">
-          <span class="panel-title">站内通知</span>
+          <span class="panel-title">消息中心</span>
           <div class="panel-header-actions">
-            <el-button v-if="unreadCount > 0" text size="small" type="primary" @click="handleReadAll">全部已读</el-button>
-            <el-button text size="small" @click="handleViewAll">查看全部</el-button>
+            <el-button v-if="totalUnread > 0" text size="small" type="primary" @click="handleReadAll">全部已读</el-button>
+            <el-button v-if="activeSource === 'announcements'" text size="small" @click="handleViewAll">查看全部</el-button>
           </div>
         </div>
+
+        <!-- 一级 tab：公告 / 通知 -->
         <div class="panel-tab-bar">
           <button
             class="tab-btn"
-            :class="{ active: activeTab === 'unread' }"
-            @click="activeTab = 'unread'"
-          >未读 ({{ unreadCount }})</button>
+            :class="{ active: activeSource === 'announcements' }"
+            @click="switchSource('announcements')"
+          >
+            公告
+            <span v-if="annUnreadCount > 0" class="tab-badge">{{ annUnreadCount }}</span>
+          </button>
           <button
             class="tab-btn"
-            :class="{ active: activeTab === 'history' }"
-            @click="activeTab = 'history'"
-          >已读</button>
-        </div>
-        <div class="panel-list" v-show="activeTab === 'unread'">
-          <div v-if="unreadItems.length === 0" class="panel-empty">
-            <el-empty description="暂无未读通知" :image-size="50" />
-          </div>
-          <div
-            v-for="item in unreadItems"
-            :key="item.id"
-            class="notification-item"
-            :class="`level--${item.level}`"
+            :class="{ active: activeSource === 'notifications' }"
+            @click="switchSource('notifications')"
           >
-            <span class="item-dot" :class="`dot--${item.level}`"></span>
-            <div class="item-body">
-              <div class="item-header" @click="expandedId = expandedId === item.id ? '' : item.id">
-                <span class="item-category-icon">{{ categoryIcon(item.category) }}</span>
-                <span class="item-title">{{ item.title }}</span>
-                <span class="item-time">{{ relativeTime(item.published_at) }}</span>
-              </div>
-              <div class="item-preview" v-if="expandedId !== item.id" @click="expandedId = item.id">
-                {{ truncate(markdownToPlainText(item.content), 60) }}
-              </div>
-              <div v-else class="item-expanded">
-                <div class="item-expanded-body">
-                  <div class="item-full-content md-content" v-html="renderMarkdown(item.content)"></div>
+            通知
+            <span v-if="notifUnreadCount > 0" class="tab-badge tab-badge--alert">{{ notifUnreadCount }}</span>
+          </button>
+        </div>
+
+        <!-- 二级 tab：未读 / 已读 -->
+        <div class="panel-subtab-bar">
+          <button class="subtab-btn" :class="{ active: activeTab === 'unread' }" @click="activeTab = 'unread'">
+            未读
+          </button>
+          <button class="subtab-btn" :class="{ active: activeTab === 'history' }" @click="activeTab = 'history'">
+            已读
+          </button>
+        </div>
+
+        <!-- 公告列表 -->
+        <template v-if="activeSource === 'announcements'">
+          <div class="panel-list" v-show="activeTab === 'unread'">
+            <div v-if="annUnreadItems.length === 0" class="panel-empty">
+              <el-empty description="暂无未读公告" :image-size="50" />
+            </div>
+            <div
+              v-for="item in annUnreadItems"
+              :key="item.id"
+              class="notification-item"
+              :class="`level--${item.level}`"
+            >
+              <span class="item-dot" :class="`dot--${item.level}`"></span>
+              <div class="item-body">
+                <div class="item-header" @click="expandedId = expandedId === item.id ? '' : item.id">
+                  <span class="item-category-icon">{{ annCategoryIcon(item.category) }}</span>
+                  <span class="item-title">{{ item.title }}</span>
+                  <span class="item-time">{{ relativeTime(item.published_at) }}</span>
                 </div>
-                <div class="item-actions">
-                  <el-button size="small" text @click.stop="router.push(`/announcements/${item.id}`)">
-                    查看详情
-                  </el-button>
-                  <el-button size="small" type="primary" @click.stop="handleRead(item.id)">
-                    标记已读
-                  </el-button>
+                <div class="item-preview" v-if="expandedId !== item.id" @click="expandedId = item.id">
+                  {{ truncate(markdownToPlainText(item.content), 60) }}
+                </div>
+                <div v-else class="item-expanded">
+                  <div class="item-expanded-body">
+                    <div class="item-full-content md-content" v-html="renderMarkdown(item.content)"></div>
+                  </div>
+                  <div class="item-actions">
+                    <el-button size="small" text @click.stop="router.push(`/announcements/${item.id}`)">查看详情</el-button>
+                    <el-button size="small" type="primary" @click.stop="handleAnnRead(item.id)">标记已读</el-button>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
-        <div class="panel-list" v-show="activeTab === 'history'">
-          <div v-if="historyItems.length === 0" class="panel-empty">
-            <el-empty description="暂无已读记录" :image-size="50" />
-          </div>
-          <div
-            v-for="item in historyItems"
-            :key="item.id"
-            class="notification-item history-item"
-            @click="expandedId = expandedId === item.id ? '' : item.id"
-          >
-            <div class="item-body">
-              <div class="item-header">
-                <span class="item-category-icon">{{ categoryIcon(item.category) }}</span>
-                <span class="item-title">{{ item.title }}</span>
-                <span class="item-time">{{ relativeTime(item.published_at) }}</span>
-              </div>
-              <div v-if="expandedId === item.id" class="item-expanded history-expanded">
-                <div class="item-expanded-body">
-                  <div class="item-full-content md-content" v-html="renderMarkdown(item.content)"></div>
+          <div class="panel-list" v-show="activeTab === 'history'">
+            <div v-if="annHistoryItems.length === 0" class="panel-empty">
+              <el-empty description="暂无已读公告" :image-size="50" />
+            </div>
+            <div
+              v-for="item in annHistoryItems"
+              :key="item.id"
+              class="notification-item history-item"
+              @click="expandedId = expandedId === item.id ? '' : item.id"
+            >
+              <div class="item-body">
+                <div class="item-header">
+                  <span class="item-category-icon">{{ annCategoryIcon(item.category) }}</span>
+                  <span class="item-title">{{ item.title }}</span>
+                  <span class="item-time">{{ relativeTime(item.published_at) }}</span>
                 </div>
-                <div class="item-actions">
-                  <el-button size="small" text @click.stop="router.push(`/announcements/${item.id}`)">
-                    查看详情
-                  </el-button>
+                <div v-if="expandedId === item.id" class="item-expanded history-expanded">
+                  <div class="item-expanded-body">
+                    <div class="item-full-content md-content" v-html="renderMarkdown(item.content)"></div>
+                  </div>
+                  <div class="item-actions">
+                    <el-button size="small" text @click.stop="router.push(`/announcements/${item.id}`)">查看详情</el-button>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
+        </template>
+
+        <!-- 通知列表 -->
+        <template v-else>
+          <div class="panel-list" v-show="activeTab === 'unread'">
+            <div v-if="notifUnreadItems.length === 0" class="panel-empty">
+              <el-empty description="暂无未读通知" :image-size="50" />
+            </div>
+            <div
+              v-for="item in notifUnreadItems"
+              :key="item.id"
+              class="notification-item"
+              :class="`level--${item.level}`"
+            >
+              <span class="item-dot" :class="`dot--${item.level}`"></span>
+              <div class="item-body">
+                <div class="item-header" @click="expandedId = expandedId === item.id ? '' : item.id">
+                  <span class="item-category-icon">{{ notifTypeIcon(item.type) }}</span>
+                  <span class="item-title">{{ item.title }}</span>
+                  <span class="item-time">{{ relativeTime(item.created_at) }}</span>
+                </div>
+                <div class="item-preview" v-if="expandedId !== item.id" @click="expandedId = item.id">
+                  {{ truncate(markdownToPlainText(item.content), 60) }}
+                </div>
+                <div v-else class="item-expanded">
+                  <div class="item-expanded-body">
+                    <div class="item-full-content md-content" v-html="renderMarkdown(item.content)"></div>
+                  </div>
+                  <div class="item-actions">
+                    <el-button size="small" type="primary" @click.stop="handleNotifRead(item.id)">标记已读</el-button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="panel-list" v-show="activeTab === 'history'">
+            <div v-if="notifHistoryItems.length === 0" class="panel-empty">
+              <el-empty description="暂无已读通知" :image-size="50" />
+            </div>
+            <div
+              v-for="item in notifHistoryItems"
+              :key="item.id"
+              class="notification-item history-item"
+              @click="expandedId = expandedId === item.id ? '' : item.id"
+            >
+              <div class="item-body">
+                <div class="item-header">
+                  <span class="item-category-icon">{{ notifTypeIcon(item.type) }}</span>
+                  <span class="item-title">{{ item.title }}</span>
+                  <span class="item-time">{{ relativeTime(item.created_at) }}</span>
+                </div>
+                <div v-if="expandedId === item.id" class="item-expanded history-expanded">
+                  <div class="item-expanded-body">
+                    <div class="item-full-content md-content" v-html="renderMarkdown(item.content)"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
       </div>
     </el-popover>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Bell } from '@element-plus/icons-vue'
-import { getUnreadAnnouncements, getUnreadAnnouncementCount, getReadHistoryAnnouncements, markAnnouncementRead } from '@/services/control-plane'
+import {
+  getUnreadAnnouncements, getUnreadAnnouncementCount, getReadHistoryAnnouncements, markAnnouncementRead,
+  getUnreadNotifications, getUnreadNotificationCount, getNotificationHistory, markNotificationRead, markAllNotificationsRead,
+} from '@/services/control-plane'
 import { renderMarkdown, markdownToPlainText } from '@/utils/markdown'
 import type { Announcement } from '@/types/announcement'
+import type { Notification } from '@/types/notification'
 
 const router = useRouter()
-const unreadCount = ref(0)
-const unreadItems = ref<Announcement[]>([])
-const historyItems = ref<Announcement[]>([])
+
+// ── 公告状态 ────────────────────────────────────────────────────────────────
+const annUnreadCount = ref(0)
+const annUnreadItems = ref<Announcement[]>([])
+const annHistoryItems = ref<Announcement[]>([])
+
+// ── 通知状态 ────────────────────────────────────────────────────────────────
+const notifUnreadCount = ref(0)
+const notifUnreadItems = ref<Notification[]>([])
+const notifHistoryItems = ref<Notification[]>([])
+
+// ── 面板状态 ────────────────────────────────────────────────────────────────
+const totalUnread = computed(() => annUnreadCount.value + notifUnreadCount.value)
 const panelVisible = ref(false)
-const activeTab = ref('unread')
+const activeSource = ref<'announcements' | 'notifications'>('announcements')
+const activeTab = ref<'unread' | 'history'>('unread')
 const expandedId = ref('')
 const bellRef = ref<HTMLElement>()
 
-const categoryIcons: Record<string, string> = { system: '🔧', feature: '✨', alert: '📣' }
-function categoryIcon(c: string) { return categoryIcons[c] || '📢' }
+// ── 图标 ─────────────────────────────────────────────────────────────────────
+const annCategoryIcons: Record<string, string> = { system: '🔧', feature: '✨', alert: '📣' }
+function annCategoryIcon(c: string) { return annCategoryIcons[c] || '📢' }
+
+const notifTypeIcons: Record<string, string> = { budget_alert: '⚠️', expansion_approved: '✅', expansion_rejected: '❌' }
+function notifTypeIcon(t: string) { return notifTypeIcons[t] || '🔔' }
+
 function truncate(text: string, max: number) { return text.length > max ? text.slice(0, max) + '...' : text }
 
 function relativeTime(dateStr: string | null): string {
   if (!dateStr) return '-'
-  const now = Date.now()
-  const then = new Date(dateStr).getTime()
-  const diff = now - then
+  const diff = Date.now() - new Date(dateStr).getTime()
   const mins = Math.floor(diff / 60000)
   if (mins < 1) return '刚刚'
   if (mins < 60) return `${mins}分钟前`
@@ -138,39 +231,75 @@ function relativeTime(dateStr: string | null): string {
   return new Date(dateStr).toLocaleDateString('zh-CN')
 }
 
-async function loadUnread() {
+// ── 数据加载 ──────────────────────────────────────────────────────────────────
+async function loadAnnUnread() {
   if (!localStorage.getItem('access_token')) return
   try {
     const [items, count] = await Promise.all([getUnreadAnnouncements(), getUnreadAnnouncementCount()])
-    unreadItems.value = items || []
-    unreadCount.value = count || 0
+    annUnreadItems.value = items || []
+    annUnreadCount.value = count || 0
   } catch {}
 }
 
-async function loadHistory() {
+async function loadAnnHistory() {
+  if (!localStorage.getItem('access_token')) return
+  try { annHistoryItems.value = (await getReadHistoryAnnouncements()) || [] } catch {}
+}
+
+async function loadNotifUnread() {
   if (!localStorage.getItem('access_token')) return
   try {
-    const data = await getReadHistoryAnnouncements()
-    historyItems.value = data || []
+    const [items, count] = await Promise.all([getUnreadNotifications(), getUnreadNotificationCount()])
+    notifUnreadItems.value = items || []
+    notifUnreadCount.value = count || 0
   } catch {}
 }
 
-async function handleRead(id: string) {
+async function loadNotifHistory() {
+  if (!localStorage.getItem('access_token')) return
+  try { notifHistoryItems.value = (await getNotificationHistory()) || [] } catch {}
+}
+
+// 供外部（App.vue）调用的整体刷新
+async function refresh() {
+  await Promise.all([loadAnnUnread(), loadNotifUnread()])
+}
+
+// ── 操作 ──────────────────────────────────────────────────────────────────────
+async function handleAnnRead(id: string) {
   try {
     await markAnnouncementRead(id)
-    const item = unreadItems.value.find(a => a.id === id)
-    unreadItems.value = unreadItems.value.filter(a => a.id !== id)
-    unreadCount.value = Math.max(0, unreadCount.value - 1)
-    if (item) historyItems.value = [item, ...historyItems.value]
+    const item = annUnreadItems.value.find(a => a.id === id)
+    annUnreadItems.value = annUnreadItems.value.filter(a => a.id !== id)
+    annUnreadCount.value = Math.max(0, annUnreadCount.value - 1)
+    if (item) annHistoryItems.value = [item, ...annHistoryItems.value]
+    expandedId.value = ''
+  } catch {}
+}
+
+async function handleNotifRead(id: string) {
+  try {
+    await markNotificationRead(id)
+    const item = notifUnreadItems.value.find(n => n.id === id)
+    notifUnreadItems.value = notifUnreadItems.value.filter(n => n.id !== id)
+    notifUnreadCount.value = Math.max(0, notifUnreadCount.value - 1)
+    if (item) notifHistoryItems.value = [item, ...notifHistoryItems.value]
     expandedId.value = ''
   } catch {}
 }
 
 async function handleReadAll() {
-  await Promise.all(unreadItems.value.map(a => markAnnouncementRead(a.id).catch(() => {})))
-  historyItems.value = [...unreadItems.value, ...historyItems.value]
-  unreadItems.value = []
-  unreadCount.value = 0
+  if (activeSource.value === 'announcements') {
+    await Promise.all(annUnreadItems.value.map(a => markAnnouncementRead(a.id).catch(() => {})))
+    annHistoryItems.value = [...annUnreadItems.value, ...annHistoryItems.value]
+    annUnreadItems.value = []
+    annUnreadCount.value = 0
+  } else {
+    await markAllNotificationsRead().catch(() => {})
+    notifHistoryItems.value = [...notifUnreadItems.value, ...notifHistoryItems.value]
+    notifUnreadItems.value = []
+    notifUnreadCount.value = 0
+  }
 }
 
 function handleViewAll() {
@@ -178,16 +307,26 @@ function handleViewAll() {
   router.push('/announcements')
 }
 
+function switchSource(src: 'announcements' | 'notifications') {
+  activeSource.value = src
+  activeTab.value = 'unread'
+  expandedId.value = ''
+  if (src === 'notifications' && notifHistoryItems.value.length === 0) loadNotifHistory()
+  if (src === 'announcements' && annHistoryItems.value.length === 0) loadAnnHistory()
+}
+
 function togglePanel() {
   if (!panelVisible.value) {
-    loadUnread()
-    loadHistory()
+    loadAnnUnread()
+    loadNotifUnread()
+    if (activeSource.value === 'announcements') loadAnnHistory()
+    else loadNotifHistory()
   }
   panelVisible.value = !panelVisible.value
 }
 
 onMounted(() => {
-  loadUnread()
+  refresh()
   document.addEventListener('click', handleClickOutside)
 })
 
@@ -200,21 +339,20 @@ function handleClickOutside(e: MouseEvent) {
   const target = e.target as HTMLElement
   if (bellRef.value && !bellRef.value.contains(target)) {
     const popover = document.querySelector('.el-popover')
-    if (popover && !popover.contains(target)) {
-      panelVisible.value = false
-    }
+    if (popover && !popover.contains(target)) panelVisible.value = false
   }
 }
 
-defineExpose({ refresh: loadUnread })
+defineExpose({ refresh })
 </script>
 
 <style>
-/* 铃铛面板内文字颜色覆盖，防止继承全局绿色主题变量 */
 .el-popover .panel-title { color: #1a1a1a !important; }
 .el-popover .item-title   { color: #1a1a1a !important; }
 .el-popover .tab-btn      { color: #64748b; }
 .el-popover .tab-btn.active { color: #1F8A3B !important; }
+.el-popover .subtab-btn   { color: #94a3b8; }
+.el-popover .subtab-btn.active { color: #1F8A3B !important; }
 </style>
 
 <style scoped>
@@ -227,85 +365,82 @@ defineExpose({ refresh: loadUnread })
   height: 100%;
 }
 .notification-bell:hover { color: var(--el-text-color-primary); }
+.notification-bell :deep(.el-badge) { display: flex; align-items: center; }
 
-.notification-bell :deep(.el-badge) {
-  display: flex;
-  align-items: center;
-}
-
-/* ── 面板整体 ────────────── */
+/* ── 面板 ────────────── */
 .notification-panel { display: flex; flex-direction: column; }
-
 .panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 0 10px;
-  border-bottom: 1px solid rgba(0,0,0,0.06);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 0 10px; border-bottom: 1px solid rgba(0,0,0,0.06);
 }
-
 .panel-title { font-size: 15px; font-weight: 700; color: #1a1a1a; }
 .panel-header-actions { display: flex; gap: 2px; }
 
-/* ── Tab ─────────────────── */
+/* ── 一级 tab：公告/通知 ────── */
 .panel-tab-bar {
-  display: flex;
-  gap: 0;
-  border-bottom: 1px solid rgba(0,0,0,0.06);
-  margin-bottom: 6px;
+  display: flex; border-bottom: 1px solid rgba(0,0,0,0.06); margin-bottom: 0;
 }
-
 .tab-btn {
-  flex: 1; padding: 8px 0;
-  border: none; background: none;
-  font-size: 13px; color: #94a3b8;
-  cursor: pointer; position: relative; transition: color 0.15s;
+  flex: 1; padding: 8px 0; border: none; background: none;
+  font-size: 13px; color: #94a3b8; cursor: pointer; position: relative;
+  transition: color 0.15s; display: flex; align-items: center; justify-content: center; gap: 4px;
 }
 .tab-btn.active { color: #1F8A3B; font-weight: 600; }
 .tab-btn.active::after {
-  content: '';
-  position: absolute; bottom: -1px; left: 25%; right: 25%;
+  content: ''; position: absolute; bottom: -1px; left: 25%; right: 25%;
   height: 2px; background: #1F8A3B; border-radius: 1px;
 }
 .tab-btn:hover { color: #1F8A3B; }
 
+.tab-badge {
+  background: #36B34E; color: #fff;
+  font-size: 10px; font-weight: 700; line-height: 1;
+  padding: 2px 5px; border-radius: 8px; min-width: 16px; text-align: center;
+}
+.tab-badge--alert { background: #F57C00; }
+
+/* ── 二级 tab：未读/已读 ────── */
+.panel-subtab-bar {
+  display: flex; gap: 0; padding: 4px 0 2px;
+  border-bottom: 1px solid rgba(0,0,0,0.04); margin-bottom: 4px;
+}
+.subtab-btn {
+  flex: 1; padding: 5px 0; border: none; background: none;
+  font-size: 12px; color: #94a3b8; cursor: pointer; position: relative; transition: color 0.15s;
+}
+.subtab-btn.active { color: #1F8A3B; font-weight: 600; }
+.subtab-btn.active::after {
+  content: ''; position: absolute; bottom: -2px; left: 30%; right: 30%;
+  height: 1.5px; background: #1F8A3B; border-radius: 1px;
+}
+.subtab-btn:hover { color: #1F8A3B; }
+
 /* ── 列表 ────────────────── */
 .panel-list {
-  flex: 1; overflow-y: auto;
-  display: flex; flex-direction: column;
-  max-height: 400px;
+  flex: 1; overflow-y: auto; display: flex; flex-direction: column; max-height: 360px;
 }
 .panel-list::-webkit-scrollbar { width: 3px; }
 .panel-list::-webkit-scrollbar-thumb { background: rgba(54,179,78,0.2); border-radius: 2px; }
 
-/* ── 未读条目 ─────────────── */
+/* ── 条目 ────────────────── */
 .notification-item {
-  display: flex; gap: 10px;
-  padding: 12px 4px;
-  border-bottom: 1px solid rgba(0,0,0,0.05);
-  cursor: pointer;
+  display: flex; gap: 10px; padding: 12px 4px;
+  border-bottom: 1px solid rgba(0,0,0,0.05); cursor: pointer;
   transition: background 0.15s;
-  border-radius: 0;
 }
 .notification-item:last-child { border-bottom: none; }
 .notification-item:hover { background: rgba(54,179,78,0.04); }
 .notification-item.history-item { opacity: 0.7; }
 
 .item-dot {
-  width: 7px; height: 7px;
-  border-radius: 50%; flex-shrink: 0;
-  margin-top: 5px;
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; margin-top: 5px;
 }
 .dot--info     { background: #36B34E; box-shadow: 0 0 0 2px rgba(54,179,78,0.15); }
 .dot--warning  { background: #F57C00; box-shadow: 0 0 0 2px rgba(245,124,0,0.15); }
 .dot--critical { background: #D32F2F; box-shadow: 0 0 0 2px rgba(211,47,47,0.15); }
 
 .item-body { flex: 1; min-width: 0; }
-
-.item-header {
-  display: flex; align-items: center; gap: 6px;
-  cursor: pointer;
-}
+.item-header { display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .item-category-icon { font-size: 12px; flex-shrink: 0; }
 .item-title {
   font-size: 13px; font-weight: 600; color: #1a1a1a;
@@ -314,33 +449,19 @@ defineExpose({ refresh: loadUnread })
 .item-time { font-size: 11px; color: #94a3b8; flex-shrink: 0; }
 
 .item-preview {
-  font-size: 12px; color: #64748b;
-  margin-top: 3px; line-height: 1.5;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  cursor: pointer;
+  font-size: 12px; color: #64748b; margin-top: 3px; line-height: 1.5;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
 }
 
-/* ── 展开详情 ─────────────── */
 .item-expanded {
-  margin-top: 8px;
-  border-radius: 10px;
-  overflow: hidden;
-  background: rgba(255,255,255,0.7);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(54,179,78,0.18);
-  box-shadow: 0 2px 12px rgba(54,179,78,0.08);
+  margin-top: 8px; border-radius: 10px; overflow: hidden;
+  background: rgba(255,255,255,0.7); backdrop-filter: blur(16px);
+  border: 1px solid rgba(54,179,78,0.18); box-shadow: 0 2px 12px rgba(54,179,78,0.08);
 }
 .item-expanded.history-expanded {
-  border-color: rgba(0,0,0,0.07);
-  box-shadow: none;
-  background: rgba(255,255,255,0.5);
+  border-color: rgba(0,0,0,0.07); box-shadow: none; background: rgba(255,255,255,0.5);
 }
-
-.item-expanded-body {
-  padding: 10px 12px;
-  max-height: 180px; overflow-y: auto;
-}
+.item-expanded-body { padding: 10px 12px; max-height: 180px; overflow-y: auto; }
 .item-expanded-body::-webkit-scrollbar { width: 3px; }
 .item-expanded-body::-webkit-scrollbar-thumb { background: rgba(54,179,78,0.2); border-radius: 2px; }
 
@@ -353,9 +474,7 @@ defineExpose({ refresh: loadUnread })
 
 .item-actions {
   display: flex; justify-content: flex-end; align-items: center; gap: 4px;
-  padding: 5px 8px;
-  border-top: 1px solid rgba(54,179,78,0.08);
+  padding: 5px 8px; border-top: 1px solid rgba(54,179,78,0.08);
 }
-
 .panel-empty { padding: 20px 0; }
 </style>

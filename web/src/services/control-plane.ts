@@ -990,3 +990,30 @@ export async function getExpansionSteps(requestId: string): Promise<Array<{ id: 
   const res = await http.get<ApiResponse<{ steps: Array<{ id: string; level: string; approver_id?: string; action: string; comment: string; created_at: string }> }>>(`/api/v1/expansion-requests/${requestId}/steps`)
   return res.data.steps || []
 }
+
+// ─── 站内通知 (Notifications) ──────────────────────────────────────────────
+
+import type { Notification } from '@/types/notification'
+
+export async function getUnreadNotifications(): Promise<Notification[]> {
+  const res = await http.get<ApiResponse<Notification[]>>('/api/v1/notifications/unread', { _silent: true } as any)
+  return res.data || []
+}
+
+export async function getUnreadNotificationCount(): Promise<number> {
+  const res = await http.get<{ count: number }>('/api/v1/notifications/unread/count', { _silent: true } as any)
+  return res.count || 0
+}
+
+export async function getNotificationHistory(): Promise<Notification[]> {
+  const res = await http.get<ApiResponse<Notification[]>>('/api/v1/notifications/history', { _silent: true } as any)
+  return res.data || []
+}
+
+export async function markNotificationRead(id: string): Promise<void> {
+  await http.post(`/api/v1/notifications/${id}/read`, {}, { _silent: true } as any)
+}
+
+export async function markAllNotificationsRead(): Promise<void> {
+  await http.post('/api/v1/notifications/read-all', {}, { _silent: true } as any)
+}

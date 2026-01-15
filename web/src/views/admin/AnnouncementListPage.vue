@@ -191,7 +191,7 @@ onMounted(() => { loadAnnouncements() })
   flex-shrink: 0;
 }
 
-.level--info { background-color: #E8F6F5; color: #2BA8A2; }
+.level--info { background-color: #EAF7EC; color: #36B34E; }
 .level--warning { background-color: #FFF3E0; color: #E65100; }
 .level--critical { background-color: #FFEBEE; color: #C62828; }
 

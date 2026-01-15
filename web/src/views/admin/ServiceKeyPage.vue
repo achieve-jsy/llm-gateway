@@ -475,8 +475,8 @@ onMounted(async () => {
 }
 
 .brand-btn {
-  background-color: #2BA8A2;
-  border-color: #2BA8A2;
+  background-color: #36B34E;
+  border-color: #36B34E;
 }
 
 .brand-btn:hover,

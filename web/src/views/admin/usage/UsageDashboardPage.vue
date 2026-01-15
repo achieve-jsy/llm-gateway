@@ -1436,8 +1436,8 @@ watch(currency, async () => {
 <style scoped>
 /* ── 根容器 ── */
 .ud {
-  --ud-input:  #2BA8A2;
-  --ud-output: #27AE60;
+  --ud-input:  #36B34E;
+  --ud-output: #0EA371;
   --ud-cache:  #5DADE2;
   --ud-cost:   #C7900A;
   --ud-warn:   #E0A100;
@@ -1467,7 +1467,7 @@ watch(currency, async () => {
 }
 .ud-title::before {
   content: ''; width: 4px; height: 18px; border-radius: 3px;
-  background: linear-gradient(180deg, var(--el-color-primary), var(--el-color-primary-dark-2, #1E8C86));
+  background: linear-gradient(180deg, var(--el-color-primary), var(--el-color-primary-dark-2, #1F8A3B));
 }
 .ud-badge {
   font-size: 11px; font-weight: 500; color: var(--el-color-primary);

@@ -115,8 +115,8 @@ function formatK(n: number): string {
   height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
-  background: #27AE60;
-  box-shadow: 0 0 0 2px rgba(39, 174, 96, 0.12);
+  background: #0EA371;
+  box-shadow: 0 0 0 2px rgba(14, 163, 113, 0.12);
 }
 
 .card-tags {

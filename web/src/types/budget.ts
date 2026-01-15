@@ -77,7 +77,7 @@ export const SCOPE_TYPE_LABELS: Record<BudgetScopeType, string> = {
 
 export const SCOPE_TYPE_COLORS: Record<BudgetScopeType, string> = {
   company: '#6366f1',
-  studio: '#2BA8A2',
+  studio: '#36B34E',
   dept_daily: '#f59e0b',
   dept_service: '#8b5cf6',
   member: '#10b981',

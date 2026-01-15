@@ -51,7 +51,7 @@ import config from '@/assets/capability.json'
 .section-title {
   font-size: 16px;
   font-weight: 800;
-  color: #1E8C86;
+  color: #1F8A3B;
   margin-bottom: 14px;
   padding-bottom: 10px;
   border-bottom: 1px solid #D9E6E5;
@@ -87,12 +87,12 @@ import config from '@/assets/capability.json'
 .capability-card:hover {
   box-shadow: 0 6px 18px rgba(15, 23, 42, 0.07);
   transform: translateY(-1px);
-  border-color: rgba(43, 168, 162, 0.28);
+  border-color: rgba(54, 179, 78, 0.28);
 }
 
 .card-accent {
   width: 3px;
-  background: linear-gradient(180deg, #2BA8A2, #3CC4BD);
+  background: linear-gradient(180deg, #36B34E, #5DC370);
   flex-shrink: 0;
 }
 
@@ -110,13 +110,13 @@ import config from '@/assets/capability.json'
 
 .card-icon {
   font-size: 18px;
-  color: #2BA8A2;
+  color: #36B34E;
 }
 
 .card-title {
   font-size: 14px;
   font-weight: 700;
-  color: #1E8C86;
+  color: #1F8A3B;
 }
 
 .card-desc {
@@ -161,21 +161,21 @@ import config from '@/assets/capability.json'
 
 /* 深色模式 */
 :global(html.dark) .capability-card {
-  background: #163B3A;
-  border-color: #1E5653;
+  background: #143523;
+  border-color: #1F5230;
 }
 
 :global(html.dark) .card-title {
-  color: #3CC4BD;
+  color: #5DC370;
 }
 
 :global(html.dark) .card-desc {
-  color: #7BBFBB;
+  color: #84C592;
 }
 
 :global(html.dark) .section-title {
-  color: #3CC4BD;
-  border-bottom-color: #1E5653;
+  color: #5DC370;
+  border-bottom-color: #1F5230;
 }
 
 :global(html.dark) .exclude-item {

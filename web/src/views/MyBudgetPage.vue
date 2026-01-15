@@ -461,7 +461,7 @@ function displayAmount(value: number) {
 function progressColor(ratio: number) {
   if (ratio >= 1) return '#ef4444'
   if (ratio >= 0.8) return '#f59e0b'
-  return '#2BA8A2'
+  return '#36B34E'
 }
 
 

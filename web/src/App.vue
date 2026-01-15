@@ -358,7 +358,7 @@ function onPopupAllRead() {
 
 .collapse-btn:hover {
   background-color: var(--el-fill-color);
-  color: #1E8C86;
+  color: #1F8A3B;
 }
 
 .sidebar-logo {
@@ -370,7 +370,7 @@ function onPopupAllRead() {
 .sidebar-title {
   font-size: 18px;
   font-weight: 800;
-  color: #1E8C86;
+  color: #1F8A3B;
   letter-spacing: 1px;
 }
 
@@ -447,7 +447,7 @@ function onPopupAllRead() {
 
 .hamburger-btn:hover {
   background-color: var(--el-fill-color);
-  color: #1E8C86;
+  color: #1F8A3B;
 }
 
 /* Mobile sidebar drawer mode */

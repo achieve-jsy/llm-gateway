@@ -99,7 +99,7 @@ function fmt(d: Date): string {
 .timeline-grid { display: flex; gap: 1px; height: 24px; width: 100%; }
 .timeline-block { flex: 1; height: 24px; border-radius: 2px; cursor: pointer; transition: all 0.15s; }
 .timeline-block:hover { transform: scaleY(1.15); filter: brightness(1.1); }
-.cell-ok    { background: #27AE60; }
+.cell-ok    { background: #0EA371; }
 .cell-warn  { background: #EAB308; }
 .cell-err   { background: #E74C3C; }
 .cell-empty { background: #E5E7EB; }

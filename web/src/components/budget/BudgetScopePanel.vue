@@ -659,7 +659,7 @@ function displayAmount(value: number) {
 function progressColor(ratio: number) {
   if (ratio >= 1) return '#f56c6c'
   if (ratio >= 0.8) return '#e6a23c'
-  return '#2BA8A2'
+  return '#36B34E'
 }
 
 function statusType(ratio: number) {

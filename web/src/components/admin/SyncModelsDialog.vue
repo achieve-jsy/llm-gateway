@@ -662,7 +662,7 @@ watch(activeTab, () => {
 }
 
 .avail-dot-ok {
-  background: #27ae60;
+  background: #0EA371;
 }
 
 .avail-dot-bad {
@@ -679,7 +679,7 @@ watch(activeTab, () => {
 }
 
 .avail-ok {
-  color: #27ae60;
+  color: #0EA371;
   font-weight: 500;
 }
 

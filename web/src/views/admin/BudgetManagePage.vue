@@ -157,7 +157,7 @@
           <el-progress
             :percentage="Math.min(Math.round(companyAllocRatio * 100), 100)"
             :stroke-width="4"
-            :color="companyAllocRatio >= 0.95 ? '#e6a23c' : '#2BA8A2'"
+            :color="companyAllocRatio >= 0.95 ? '#e6a23c' : '#36B34E'"
             :show-text="false"
             style="margin-top:8px"
           />
@@ -233,7 +233,7 @@
           <el-progress
             :percentage="Math.min(Math.round(studioAllocRatio * 100), 100)"
             :stroke-width="4"
-            :color="studioAllocRatio >= 0.95 ? '#e6a23c' : '#2BA8A2'"
+            :color="studioAllocRatio >= 0.95 ? '#e6a23c' : '#36B34E'"
             :show-text="false"
             style="margin-top:8px"
           />
@@ -1556,7 +1556,7 @@ function riskColor(ratio: number): string {
   const level = budgetColorLevel(ratio)
   if (level === 'danger') return '#f56c6c'
   if (level === 'warning') return '#e6a23c'
-  return '#2BA8A2'
+  return '#36B34E'
 }
 
 function statusText(ratio: number) {
@@ -1896,8 +1896,8 @@ onMounted(load)
   background: var(--el-color-danger-light-9);
 }
 .kpi-studio-pool {
-  border-color: color-mix(in srgb, #2BA8A2 30%, var(--el-border-color-light));
-  background: color-mix(in srgb, #2BA8A2 5%, var(--el-bg-color));
+  border-color: color-mix(in srgb, #36B34E 30%, var(--el-border-color-light));
+  background: color-mix(in srgb, #36B34E 5%, var(--el-bg-color));
 }
 .kpi-pool-usage {
   display: flex;

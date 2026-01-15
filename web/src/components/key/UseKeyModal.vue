@@ -48,7 +48,7 @@
               @click="osTab = t.id"
             >{{ t.label }}</button>
           </div>
-          <p class="hint mt-2">或者写入 VSCode 配置文件 <code>~/.claude/settings.json</code>：</p>
+          <p class="hint mt-2">或者写入配置文件 <code>~/.claude/settings.json</code>：</p>
           <CodeBlock
             title="~/.claude/settings.json"
             :code="claudeCodeSettingsContent"
@@ -230,30 +230,32 @@ opencode`
 
 const claudeCodeEnvContent = computed(() => {
   const key = keyPlaceholder.value
-  const url = baseUrl.value
+  const url = settingsStore.getBaseUrl()
   if (osTab.value === 'unix') {
     return `export ANTHROPIC_BASE_URL="${url}"
 export ANTHROPIC_API_KEY="${key}"
-export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
+
+claude`
   }
   if (osTab.value === 'cmd') {
     return `set ANTHROPIC_BASE_URL=${url}
 set ANTHROPIC_API_KEY=${key}
-set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
+
+claude`
   }
   return `$env:ANTHROPIC_BASE_URL="${url}"
 $env:ANTHROPIC_API_KEY="${key}"
-$env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
+
+claude`
 })
 
 const claudeCodeSettingsContent = computed(() =>
   `{
   "env": {
-    "ANTHROPIC_BASE_URL": "${baseUrl.value}",
-    "ANTHROPIC_API_KEY": "${keyPlaceholder.value}",
-    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
-  }
+    "ANTHROPIC_BASE_URL": "${settingsStore.getBaseUrl()}",
+    "ANTHROPIC_API_KEY": "${keyPlaceholder.value}"
+  },
+  "model": "claude-sonnet-4-6"
 }`)
 
 const opencodeJsonContent = computed(() => {

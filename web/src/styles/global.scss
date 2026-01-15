@@ -11,12 +11,18 @@ html,
 body,
 #app {
   height: 100%;
-  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  font-size: 14px;
-  color: var(--el-text-color-regular);
+  font-family: var(--font-family);
+  font-size: var(--font-size-base);
+  color: var(--text-regular);
   background-color: var(--el-bg-color-page);
   -webkit-font-smoothing: antialiased;
   transition: background-color 0.2s, color 0.2s;
+}
+
+/* 等宽字体工具类 — API Key / Endpoint / Token / 成本 */
+.font-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ===================== Layout ===================== */
@@ -44,8 +50,8 @@ body,
       align-items: center;
       font-size: 18px;
       font-weight: 800;
-      color: #1F8A3B;
-      letter-spacing: 1px;
+      color: var(--text-primary);
+      letter-spacing: 0.5px;
       border-bottom: 1px solid var(--el-border-color);
       flex-shrink: 0;
 
@@ -287,8 +293,8 @@ body,
 
 /* 按钮 — 活泼但不过分 */
 .el-button {
-  border-radius: 10px;
-  font-weight: 600;
+  border-radius: var(--radius-base);
+  font-weight: 500;
   transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
 
   &:active {
@@ -303,7 +309,7 @@ body,
   --el-button-hover-bg-color: #5DC370;
   --el-button-hover-border-color: #5DC370;
   --el-button-hover-text-color: #FFFFFF;
-  box-shadow: 0 4px 12px rgba(54, 179, 78, 0.22);
+  box-shadow: var(--shadow-sm);
 }
 
 .el-button--warning {
@@ -344,55 +350,56 @@ html:not(.dark) {
   }
 }
 
-/* 表格 — 带 card shadow 和左侧色条感 */
+/* 表格 — 中性灰基底，品牌绿仅留给 CTA */
 .el-table {
-  border-radius: 10px;
+  border-radius: var(--radius-base);
   overflow: hidden;
-  box-shadow: 0 2px 10px rgba(54, 179, 78, 0.08);
-  border: 1px solid var(--el-border-color);
+  box-shadow: none;
+  border: 1px solid var(--border-default);
 
   th.el-table__cell {
     font-weight: 600;
-    font-size: 12px;
+    font-size: var(--font-size-xs);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: #1F8A3B;
-    background-color: #EAF7EC !important;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary) !important;
+    background-color: var(--bg-subtle) !important;
+    border-bottom: 1px solid var(--border-default);
   }
 
   .el-table__row:hover > td {
-    background-color: #EAF7EC !important;
+    background-color: var(--bg-subtle) !important;
   }
 }
 
 html.dark .el-table {
   th.el-table__cell {
-    background-color: #1F5230 !important;
-    color: #5DC370;
+    background-color: var(--bg-subtle) !important;
+    color: var(--text-secondary);
   }
 
   .el-table__row:hover > td {
-    background-color: #1F5230 !important;
+    background-color: var(--bg-subtle) !important;
   }
 }
 
 /* 对话框 */
 .el-dialog {
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
-  box-shadow: 0 8px 32px rgba(54, 179, 78, 0.15);
+  box-shadow: var(--shadow-lg);
 
   .el-dialog__header {
     padding: 18px 20px 14px;
-    border-bottom: 1px solid var(--el-border-color);
-    background: linear-gradient(135deg, #EAF7EC 0%, #FFFFFF 100%);
+    border-bottom: 1px solid var(--border-default);
+    background: var(--bg-surface);
   }
 
   .el-dialog__title {
-    font-weight: 800;
+    font-weight: 700;
     font-size: 18px;
-    color: #1F8A3B;
-    letter-spacing: 1px;
+    color: var(--text-primary);
+    letter-spacing: 0.5px;
   }
 
   .el-dialog__body {
@@ -409,31 +416,31 @@ html.dark .el-table {
 }
 
 html.dark .el-dialog .el-dialog__header {
-  background: linear-gradient(135deg, #143523 0%, #1F5230 100%);
+  background: var(--bg-surface);
 }
 
-/* 表单输入 */
+/* 表单输入 — focus 蓝圈取代绿色 */
 .el-input__wrapper {
-  border-radius: 8px;
+  border-radius: var(--radius-base);
   background-color: var(--el-fill-color-blank) !important;
-  box-shadow: 0 0 0 1px var(--el-border-color) inset !important;
+  box-shadow: 0 0 0 1px var(--border-default) inset !important;
   transition: all 0.2s;
 
   &:hover {
-    box-shadow: 0 0 0 1px #36B34E inset !important;
+    box-shadow: 0 0 0 1px var(--border-strong) inset !important;
   }
 
   &.is-focus {
-    box-shadow: 0 0 0 2px #36B34E inset, 0 0 0 4px rgba(54, 179, 78, 0.15) !important;
+    box-shadow: 0 0 0 2px var(--color-info) inset !important;
     background-color: #FFFFFF !important;
   }
 }
 
 html.dark .el-input__wrapper {
-  background-color: #143523 !important;
+  background-color: var(--bg-surface) !important;
 
   &.is-focus {
-    background-color: #0C2613 !important;
+    background-color: var(--bg-page) !important;
   }
 }
 
@@ -444,7 +451,7 @@ html.dark .el-input__wrapper {
 }
 
 html.dark .el-textarea__inner {
-  background-color: #143523 !important;
+  background-color: var(--bg-surface) !important;
 }
 
 /* 表单标签 */
@@ -482,11 +489,11 @@ html.dark .el-textarea__inner {
 .el-select,
 .el-input,
 .el-input-number {
-  --el-component-size: 34px;
+  --el-component-size: 32px;
 }
 
 .el-textarea {
-  --el-component-size: 34px;
+  --el-component-size: 32px;
 }
 
 /* 侧边菜单 */
@@ -510,24 +517,24 @@ html.dark .el-textarea__inner {
   }
 
   .el-menu-item {
-    border-radius: 10px;
+    border-radius: var(--radius-base);
     margin: 4px 0;
     height: 40px;
     line-height: 40px;
-    font-size: 13px;
+    font-size: var(--font-size-sm);
     font-weight: 500;
     color: var(--el-text-color-secondary);
     transition: all 0.2s;
 
     &:hover {
-      background-color: #EAF7EC;
-      color: #1F8A3B;
+      background-color: var(--bg-subtle);
+      color: var(--text-primary);
     }
 
     &.is-active {
-      background-color: #36B34E;
+      background-color: var(--brand-green);
       color: #FFFFFF;
-      box-shadow: 0 2px 10px rgba(54, 179, 78, 0.30);
+      box-shadow: var(--shadow-sm);
     }
   }
 
@@ -541,21 +548,21 @@ html.dark .el-textarea__inner {
 
 html.dark .el-menu {
   .menu-group-label {
-    color: #84C592;
+    color: var(--text-placeholder);
   }
 
   .menu-divider {
-    border-color: #1F5230;
+    border-color: var(--border-default);
   }
 
   .el-menu-item {
     &:hover {
-      background-color: #1F5230;
-      color: #5DC370;
+      background-color: var(--bg-subtle);
+      color: var(--text-primary);
     }
 
     &.is-active {
-      background-color: #36B34E;
+      background-color: var(--brand-green);
       color: #FFFFFF;
     }
   }
@@ -572,8 +579,8 @@ html.dark .el-menu {
 }
 
 .el-tag--primary {
-  background-color: #EAF7EC;
-  color: #1F8A3B;
+  background-color: var(--color-info-bg);
+  color: var(--color-info);
 }
 
 .el-tag--success {
@@ -596,10 +603,10 @@ html.dark .el-menu {
   color: #5DADE2;
 }
 
-/* Switch */
+/* Switch — 语义绿而非品牌绿 */
 .el-switch.is-checked .el-switch__core {
-  background-color: #36B34E;
-  border-color: #36B34E;
+  background-color: var(--color-success);
+  border-color: var(--color-success);
 }
 
 /* 分页 */
@@ -635,30 +642,30 @@ html.dark .el-menu {
 
 /* 下拉 */
 .el-select-dropdown {
-  border-radius: 10px;
-  box-shadow: 0 4px 16px rgba(54, 179, 78, 0.12);
+  border-radius: var(--radius-base);
+  box-shadow: var(--shadow-lg);
 }
 
 /* Tooltip */
 .el-popper.is-dark {
-  background: #1F8A3B !important;
-  border-radius: 8px;
+  background: var(--text-primary) !important;
+  border-radius: var(--radius-base);
 }
 
 /* Card */
 .el-card {
-  border-radius: 10px;
-  box-shadow: 0 2px 8px rgba(54, 179, 78, 0.09);
-  border: 1px solid var(--el-border-color);
+  border-radius: var(--radius-base);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border-default);
 }
 
 /* Tabs */
 .el-tabs__header {
-  border-bottom: 1px solid var(--el-border-color) !important;
+  border-bottom: 1px solid var(--border-default) !important;
 }
 
 .el-tabs__item.is-active {
-  color: #1F8A3B;
+  color: var(--brand-green);
   font-weight: 700;
 }
 
@@ -675,10 +682,10 @@ html.dark .el-menu {
 
 /* Message Box */
 .el-message-box {
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
 }
 
-/* ===================== 滚动条 ===================== */
+/* ===================== 滚动条（中性灰）===================== */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -689,19 +696,19 @@ html.dark .el-menu {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #B9DCC0;
+  background: #CBD5E1;
   border-radius: 3px;
 
   &:hover {
-    background: #36B34E;
+    background: #94A3B8;
   }
 }
 
 html.dark ::-webkit-scrollbar-thumb {
-  background: #1F5230;
+  background: #475569;
 
   &:hover {
-    background: #5DC370;
+    background: #64748B;
   }
 }
 
@@ -783,11 +790,11 @@ html.dark ::-webkit-scrollbar-thumb {
 
   /* ── 引用块 ── */
   blockquote {
-    border-left: 4px solid #36B34E;
+    border-left: 4px solid var(--border-strong);
     margin: 1.25em 0;
     padding: 0.75em 1.25em;
-    background: linear-gradient(to right, #EEF9F0, #F6FEF8);
-    border-radius: 0 8px 8px 0;
+    background: var(--bg-subtle);
+    border-radius: 0 var(--radius-base) var(--radius-base) 0;
     color: #475569;
     font-style: italic;
 
@@ -929,7 +936,7 @@ html.dark ::-webkit-scrollbar-thumb {
       td { border-color: #1e293b; }
       tbody tr {
         &:nth-child(even) td { background: #0f1923; }
-        &:hover td { background: #0B2614; }
+        &:hover td { background: var(--bg-subtle); }
       }
     }
 

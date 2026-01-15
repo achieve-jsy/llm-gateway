@@ -932,10 +932,12 @@ export async function listServiceKeys(
 }
 
 /** 创建 Service Key（返回明文 key） */
-export async function createServiceKey(deptId: string, name: string, purpose: string): Promise<CreateServiceKeyResponse> {
-  const res = await http.post<CreateServiceKeyResponse>('/api/v1/service-keys', {
-    dept_id: deptId, name, purpose
-  })
+export async function createServiceKey(deptId: string, name: string, purpose: string, ipAllowlist?: string[]): Promise<CreateServiceKeyResponse> {
+  const payload: any = { dept_id: deptId, name, purpose }
+  if (ipAllowlist && ipAllowlist.length > 0) {
+    payload.ip_allowlist = JSON.stringify(ipAllowlist)
+  }
+  const res = await http.post<CreateServiceKeyResponse>('/api/v1/service-keys', payload)
   return res.data
 }
 

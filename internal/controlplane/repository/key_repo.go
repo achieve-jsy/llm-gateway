@@ -89,6 +89,11 @@ func (r *KeyRepo) UpdateAccessAllGroups(id uuid.UUID, value bool) error {
 	return r.db.Model(&model.ApiKey{}).Where("id = ?", id).Update("access_all_groups", value).Error
 }
 
+// UpdateIPAllowlist 更新 Key 的 IP 白名单（JSON 数组字符串）
+func (r *KeyRepo) UpdateIPAllowlist(id uuid.UUID, allowlist string) error {
+	return r.db.Model(&model.ApiKey{}).Where("id = ?", id).Update("ip_allowlist", allowlist).Error
+}
+
 // UserDeptInfo 用于创建 Key 时冗余写入用户/部门/工作室名称。
 type UserDeptInfo struct {
 	UserName   string

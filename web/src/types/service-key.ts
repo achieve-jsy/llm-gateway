@@ -12,6 +12,7 @@ export interface RawServiceKeyItem {
   dept_id: string
   dept_name: string
   enabled: boolean
+  ip_allowlist?: string
   created_by?: string
   created_at: string
   last_used_at?: string
@@ -26,6 +27,7 @@ export interface ServiceKeyItem {
   deptId: string
   deptName: string
   enabled: boolean
+  ipAllowlist?: string[]
   createdBy?: string
   createdAt: string
   lastUsedAt?: string
@@ -39,10 +41,23 @@ export interface CreateServiceKeyResponse {
   dept_id: string
   dept_name: string
   purpose: string
+  ip_allowlist?: string
   created_by: string
 }
 
 export function mapServiceKey(item: RawServiceKeyItem): ServiceKeyItem {
+  let ipAllowlist: string[] = []
+  if (item.ip_allowlist) {
+    try {
+      const parsed = JSON.parse(item.ip_allowlist)
+      if (Array.isArray(parsed)) {
+        ipAllowlist = parsed
+      }
+    } catch {
+      // ignore parse error
+    }
+  }
+
   return {
     id: item.id,
     name: item.name,
@@ -52,6 +67,7 @@ export function mapServiceKey(item: RawServiceKeyItem): ServiceKeyItem {
     deptId: item.dept_id,
     deptName: item.dept_name,
     enabled: item.enabled,
+    ipAllowlist,
     createdBy: item.created_by,
     createdAt: item.created_at,
     lastUsedAt: item.last_used_at,

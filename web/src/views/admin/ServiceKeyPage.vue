@@ -63,6 +63,32 @@
         </template>
       </el-table-column>
 
+      <el-table-column label="IP 白名单" min-width="140">
+        <template #default="{ row }">
+          <span v-if="row.ipAllowlist && row.ipAllowlist.length > 0" class="ip-allowlist-tags">
+            <el-tag
+              v-for="(ip, idx) in row.ipAllowlist"
+              :key="idx"
+              size="small"
+              type="info"
+              round
+              class="ip-tag"
+            >{{ ip }}</el-tag>
+            <span v-if="(row.ipAllowlist?.length ?? 0) > 2" class="ip-tag-more">
+              +{{ row.ipAllowlist!.length - 2 }}
+            </span>
+          </span>
+          <span v-else class="text-placeholder">不限</span>
+          <el-button
+            link type="primary"
+            size="small"
+            @click="openIPAllowlistDialog(row)"
+            style="margin-left: 4px"
+          >
+            <el-icon><Edit /></el-icon>
+          </el-button>
+        </template>
+      </el-table-column>
       <el-table-column label="所属部门" min-width="180">
         <template #default="{ row }">
           <div class="dept-cell">
@@ -182,6 +208,28 @@
         <el-form-item label="用途标签" prop="purpose">
           <el-input v-model="createForm.purpose" placeholder="例如：recommend-svc" maxlength="40" />
         </el-form-item>
+        <el-form-item label="IP 白名单（可选）">
+          <div class="ip-create-input-row">
+            <el-input
+              v-model="ipCreateInput"
+              placeholder="如 10.1.2.3 或 10.0.0.0/8"
+              maxlength="64"
+              @keydown.enter="addCreateIP"
+            />
+            <el-button type="primary" :disabled="!ipCreateInput.trim()" @click="addCreateIP">添加</el-button>
+          </div>
+          <div v-if="createForm.ipAllowlist.length > 0" class="ip-create-tags">
+            <el-tag
+              v-for="(ip, idx) in createForm.ipAllowlist"
+              :key="idx"
+              closable
+              size="small"
+              type="success"
+              @close="createForm.ipAllowlist.splice(idx, 1)"
+            >{{ ip }}</el-tag>
+          </div>
+          <div v-else class="ip-create-empty text-placeholder">未填写则不限制 IP</div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="createDialogVisible = false">取消</el-button>
@@ -232,13 +280,62 @@
         <el-button @click="keyRevealVisible = false">我已保存，关闭</el-button>
       </template>
     </el-dialog>
+
+    <!-- IP 白名单编辑对话框 -->
+    <el-dialog
+      v-model="ipEditDialogVisible"
+      title="编辑 IP 白名单"
+      width="500px"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <div v-if="ipEditingKey" class="ip-edit-body">
+        <el-alert
+          :title="`Service Key：${ipEditingKey.name}（${ipEditingKey.maskedKey}）`"
+          type="info"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px"
+        />
+        <el-form-item label="允许的 IP / CIDR" style="margin-bottom: 0">
+          <div class="ip-input-row">
+            <el-input
+              v-model="ipInputValue"
+              placeholder="如 10.1.2.3 或 10.0.0.0/8"
+              maxlength="64"
+              @keydown.enter="addIP"
+            />
+            <el-button type="primary" :disabled="!ipInputValue.trim()" @click="addIP">添加</el-button>
+          </div>
+        </el-form-item>
+        <div class="ip-tags-edit">
+          <el-tag
+            v-for="(ip, idx) in ipEditList"
+            :key="idx"
+            closable
+            size="default"
+            type="success"
+            class="ip-tag-edit"
+            @close="removeIP(idx)"
+          >
+            <span class="ip-tag-text">{{ ip }}</span>
+          </el-tag>
+          <span v-if="ipEditList.length === 0" class="text-placeholder">暂无，表示不限 IP</span>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="ipEditDialogVisible = false">取消</el-button>
+        <el-button type="primary" class="brand-btn" :loading="ipSaving" @click="saveIPAllowlist">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, InfoFilled, DocumentCopy } from '@element-plus/icons-vue'
+import { Plus, InfoFilled, DocumentCopy, Edit } from '@element-plus/icons-vue'
+import { updateServiceKeyIPAllowlist } from '@/services/audit'
 
 import { listServiceKeys, createServiceKey, toggleServiceKey, deleteServiceKey } from '@/services/control-plane'
 import type { ServiceKeyItem, CreateServiceKeyResponse } from '@/types/service-key'
@@ -263,6 +360,7 @@ const createForm = reactive({
   deptId: '',
   name: '',
   purpose: '',
+  ipAllowlist: [] as string[],
 })
 
 const createRules: FormRules = {
@@ -303,6 +401,56 @@ const keyRevealVisible = ref(false)
 const newKeyPlainText = ref('')
 const newKeyDept = ref('')
 const newKeyPurpose = ref('')
+
+// ── IP 白名单编辑 ──────────────────────────────────────────────
+const ipEditDialogVisible = ref(false)
+const ipEditingKey = ref<ServiceKeyItem | null>(null)
+const ipEditList = ref<string[]>([])
+const ipInputValue = ref('')
+const ipSaving = ref(false)
+
+// 创建对话框里的 IP 输入临时值
+const ipCreateInput = ref('')
+
+function openIPAllowlistDialog(row: ServiceKeyItem) {
+  ipEditingKey.value = row
+  ipEditList.value = row.ipAllowlist ? [...row.ipAllowlist] : []
+  ipInputValue.value = ''
+  ipEditDialogVisible.value = true
+}
+
+function addIP() {
+  const v = ipInputValue.value.trim()
+  if (!v) return
+  if (!ipEditList.value.includes(v)) ipEditList.value.push(v)
+  ipInputValue.value = ''
+}
+
+function removeIP(idx: number) {
+  ipEditList.value.splice(idx, 1)
+}
+
+async function saveIPAllowlist() {
+  if (!ipEditingKey.value) return
+  ipSaving.value = true
+  try {
+    await updateServiceKeyIPAllowlist(ipEditingKey.value.id, ipEditList.value)
+    ipEditingKey.value.ipAllowlist = [...ipEditList.value]
+    ipEditDialogVisible.value = false
+    ElMessage.success('IP 白名单已保存')
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error || e?.message || '保存失败')
+  } finally {
+    ipSaving.value = false
+  }
+}
+
+function addCreateIP() {
+  const v = ipCreateInput.value.trim()
+  if (!v) return
+  if (!createForm.ipAllowlist.includes(v)) createForm.ipAllowlist.push(v)
+  ipCreateInput.value = ''
+}
 
 function formatTime(iso: string): string {
   try {
@@ -356,6 +504,8 @@ function openCreateDialog() {
   }
   createForm.name = ''
   createForm.purpose = ''
+  createForm.ipAllowlist = []
+  ipCreateInput.value = ''
   createDialogVisible.value = true
   setTimeout(() => createFormRef.value?.clearValidate(), 80)
 }
@@ -371,7 +521,8 @@ async function handleCreate() {
     const resp: CreateServiceKeyResponse = await createServiceKey(
       createForm.deptId.trim(),
       createForm.name.trim(),
-      createForm.purpose.trim()
+      createForm.purpose.trim(),
+      createForm.ipAllowlist.length > 0 ? createForm.ipAllowlist : undefined
     )
     newKeyPlainText.value = resp.key
     const dept = orgStore.departments.find(d => d.dept_id === resp.dept_id)
@@ -704,5 +855,71 @@ html.dark .key-reveal-card {
   .key-reveal-code {
     font-size: 12px;
   }
+}
+
+/* ── IP 白名单样式 ────────────────────────────────────── */
+.ip-allowlist-tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.ip-tag {
+  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-size: 11px;
+}
+
+.ip-tag-more {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  margin-left: 4px;
+}
+
+.ip-create-input-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.ip-create-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.ip-create-empty {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.ip-edit-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ip-input-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.ip-tags-edit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 40px;
+  padding: 8px 0;
+  align-items: flex-start;
+}
+
+.ip-tag-edit {
+  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+}
+
+.ip-tag-text {
+  font-size: 12px;
 }
 </style>

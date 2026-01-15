@@ -153,6 +153,18 @@ func (f *stubEntitlementEntitlementRepo) FindKeyIDsByDeptOrStudio(_, _ string) (
 	return f.keyIDs, f.keyIDsErr
 }
 
+func (f *stubEntitlementEntitlementRepo) FindDeptName(_ string) (string, error) {
+	return "", nil
+}
+
+func (f *stubEntitlementEntitlementRepo) FindStudioName(_ uuid.UUID) (string, error) {
+	return "", nil
+}
+
+func (f *stubEntitlementEntitlementRepo) FindUserName(_ uuid.UUID) (string, error) {
+	return "", nil
+}
+
 // stubEntitlementEventPublisher 模拟 EntitlementEventPublisher 接口，记录发布的事件
 type stubEntitlementEventPublisher struct {
 	events          []*event.ChangeEvent

@@ -1,79 +1,153 @@
 package handler
 
 import (
+	"encoding/json"
+	"net"
 	"net/http"
 	"strconv"
+	"strings"
 
+	"github.com/example/llm-gateway/internal/controlplane/audit"
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
-// ServiceKeyHandler 处理程序服务 Key（Service Key）的创建、列表、吊销。
+// ServiceKeyHandler 处理程序服务 Key（Service Key）的创建、列表、吊销、IP 白名单管理。
 type ServiceKeyHandler struct {
-	keySvc *service.KeyService
-	rbac   *rbac.Checker
+	keySvc   *service.KeyService
+	recorder audit.Recorder
+	rbac     *rbac.Checker
 }
 
 func NewServiceKeyHandler(keySvc *service.KeyService, rbacChecker *rbac.Checker) *ServiceKeyHandler {
 	return &ServiceKeyHandler{keySvc: keySvc, rbac: rbacChecker}
 }
 
+// SetAuditRecorder 注入审计记录器（可传 audit.Nop{} 表示禁用审计）
+func (h *ServiceKeyHandler) SetAuditRecorder(r audit.Recorder) {
+	h.recorder = audit.Wrap(r)
+}
+
+func (h *ServiceKeyHandler) getClientIP(c *gin.Context) string {
+	if ip := c.GetHeader("X-Forwarded-For"); ip != "" {
+		return strings.TrimSpace(strings.Split(ip, ",")[0])
+	}
+	if ip := c.GetHeader("X-Real-IP"); ip != "" {
+		return strings.TrimSpace(ip)
+	}
+	return c.ClientIP()
+}
+
+// validateAndNormalizeIPAllowlist 校验并规范化 IP 白名单（空/`"[]"`=不限制）
+func validateAndNormalizeIPAllowlist(input string) (string, error) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" || trimmed == "[]" {
+		return "", nil
+	}
+	var list []string
+	if err := json.Unmarshal([]byte(trimmed), &list); err != nil {
+		return "", err
+	}
+	if len(list) == 0 {
+		return "", nil
+	}
+	normalized := make([]string, 0, len(list))
+	for _, raw := range list {
+		entry := strings.TrimSpace(raw)
+		if entry == "" {
+			continue
+		}
+		if net.ParseIP(entry) == nil {
+			if _, _, err := net.ParseCIDR(entry); err != nil {
+				return "", &invalidIPError{entry: entry}
+			}
+		}
+		normalized = append(normalized, entry)
+	}
+	b, err := json.Marshal(normalized)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+type invalidIPError struct{ entry string }
+
+func (e *invalidIPError) Error() string { return "invalid ip/cidr entry: " + e.entry }
+
 // Create POST /api/v1/service-keys
-// 仅部门负责人（dept_admin）或平台 admin 可创建。
-// 明文 key 仅此次返回，落库存 hash+加密串。
 func (h *ServiceKeyHandler) Create(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
 
 	var req struct {
-		DeptID  string `json:"dept_id" binding:"required"`
-		Name    string `json:"name" binding:"required"`
-		Purpose string `json:"purpose"`
+		DeptID      string `json:"dept_id" binding:"required"`
+		Name        string `json:"name" binding:"required"`
+		Purpose     string `json:"purpose"`
+		IPAllowlist string `json:"ip_allowlist"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	// RBAC 校验：只能为自己管辖的部门创建
 	if !actor.IsGlobal && !actor.HasDept(req.DeptID) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "无权为该部门创建 Service Key"})
 		return
 	}
 
+	normalized, err := validateAndNormalizeIPAllowlist(req.IPAllowlist)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	actorID, _ := uuid.Parse(c.GetString("user_id"))
-	k, plainKey, err := h.keySvc.CreateServiceKey(c.Request.Context(), actorID, req.DeptID, req.Name, req.Purpose)
+	k, plainKey, err := h.keySvc.CreateServiceKey(c.Request.Context(), actorID, req.DeptID, req.Name, req.Purpose, normalized)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
+	h.recordAudit(c, audit.Input{
+		UserID:       actorID,
+		UserName:     c.GetString("user_name"),
+		Action:       audit.ActionServiceKeyCreate,
+		ResourceType: audit.ResourceServiceKey,
+		ResourceID:   k.ID.String(),
+		ResourceName: k.Name,
+		DeptID:       k.DeptID,
+		DeptName:     k.DeptName,
+		ClientIP:     h.getClientIP(c),
+		UserAgent:    c.GetHeader("User-Agent"),
+		Details: map[string]any{
+			"purpose":      k.Purpose,
+			"masked_key":   k.KeyPrefix + "****" + k.KeyHint,
+			"ip_allowlist": normalized,
+		},
+	})
+
 	c.JSON(http.StatusCreated, gin.H{
-		"id":         k.ID,
-		"key":        plainKey, // 明文仅此一次
-		"key_type":   k.KeyType,
-		"masked_key": k.KeyPrefix + "****" + k.KeyHint,
-		"dept_id":    k.DeptID,
-		"dept_name":  k.DeptName,
-		"purpose":    k.Purpose,
-		"created_by": k.CreatedBy,
+		"id":           k.ID,
+		"key":          plainKey,
+		"key_type":     k.KeyType,
+		"masked_key":   k.KeyPrefix + "****" + k.KeyHint,
+		"dept_id":      k.DeptID,
+		"dept_name":    k.DeptName,
+		"purpose":      k.Purpose,
+		"ip_allowlist": k.IPAllowlist,
+		"created_by":   k.CreatedBy,
 	})
 }
 
 // List GET /api/v1/service-keys?dept_id=xxx
-// 列出 Service Key（不含明文）。
-// - admin/studio_admin：dept_id 可选，不传时列出所有可见范围的 Key
-// - dept_admin：dept_id 可选，不传时使用 JWT user_dept_id
 func (h *ServiceKeyHandler) List(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
 
 	deptID := c.Query("dept_id")
 
-	// 非全局管理员：用 actor.DeptIDs 限制可见范围
-	// allowedDepts 为 nil 时表示不加 dept 过滤（全局 admin）
 	var allowedDepts []string
 	if !actor.IsGlobal {
 		allowedDepts = actor.DeptIDs
@@ -81,7 +155,6 @@ func (h *ServiceKeyHandler) List(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"items": []struct{}{}, "total": 0, "page": 1, "page_size": 20})
 			return
 		}
-		// 明确指定 dept_id 时，校验是否在允许范围内
 		if deptID != "" {
 			found := false
 			for _, d := range allowedDepts {
@@ -119,7 +192,6 @@ func (h *ServiceKeyHandler) List(c *gin.Context) {
 }
 
 // Toggle PATCH /api/v1/service-keys/:id/status
-// 启用或停用 Service Key（部门负责人或 admin）。
 func (h *ServiceKeyHandler) Toggle(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
@@ -156,11 +228,115 @@ func (h *ServiceKeyHandler) Toggle(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	actorID, _ := uuid.Parse(c.GetString("user_id"))
+	h.recordAudit(c, audit.Input{
+		UserID:       actorID,
+		UserName:     c.GetString("user_name"),
+		Action:       audit.ActionServiceKeyToggle,
+		ResourceType: audit.ResourceServiceKey,
+		ResourceID:   k.ID.String(),
+		ResourceName: k.Name,
+		DeptID:       k.DeptID,
+		DeptName:     k.DeptName,
+		ClientIP:     h.getClientIP(c),
+		UserAgent:    c.GetHeader("User-Agent"),
+		Details:      map[string]any{"enabled": req.Enabled},
+	})
+
 	c.JSON(http.StatusOK, gin.H{"ok": true, "enabled": req.Enabled})
 }
 
+// UpdateIPAllowlist PATCH /api/v1/service-keys/:id/ip-allowlist
+func (h *ServiceKeyHandler) UpdateIPAllowlist(c *gin.Context) {
+	h.rbac.BuildAndInjectActor(c)
+	actor := rbac.GetActor(c)
+
+	keyID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
+		return
+	}
+
+	var req struct {
+		IPAllowlist any `json:"ip_allowlist"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	var raw string
+	switch v := req.IPAllowlist.(type) {
+	case string:
+		raw = v
+	case []any:
+		list := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); !ok {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "ip_allowlist array must contain only strings"})
+				return
+			} else {
+				list = append(list, s)
+			}
+		}
+		b, _ := json.Marshal(list)
+		raw = string(b)
+	case nil:
+		raw = ""
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ip_allowlist must be string or array"})
+		return
+	}
+
+	normalized, err := validateAndNormalizeIPAllowlist(raw)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	k, findErr := h.keySvc.FindServiceKey(c.Request.Context(), keyID)
+	if findErr != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "service key not found"})
+		return
+	}
+	if !actor.IsGlobal && !actor.HasDept(k.DeptID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作该 Service Key"})
+		return
+	}
+
+	oldAllowlist := k.IPAllowlist
+	if err := h.keySvc.UpdateIPAllowlist(c.Request.Context(), keyID, normalized); err != nil {
+		if err == service.ErrKeyNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "service key not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	actorID, _ := uuid.Parse(c.GetString("user_id"))
+	h.recordAudit(c, audit.Input{
+		UserID:       actorID,
+		UserName:     c.GetString("user_name"),
+		Action:       audit.ActionServiceKeyIPChanged,
+		ResourceType: audit.ResourceServiceKey,
+		ResourceID:   k.ID.String(),
+		ResourceName: k.Name,
+		DeptID:       k.DeptID,
+		DeptName:     k.DeptName,
+		ClientIP:     h.getClientIP(c),
+		UserAgent:    c.GetHeader("User-Agent"),
+		Details: map[string]any{
+			"old_ip_allowlist": oldAllowlist,
+			"new_ip_allowlist": normalized,
+		},
+	})
+
+	c.JSON(http.StatusOK, gin.H{"ok": true, "ip_allowlist": normalized})
+}
+
 // Delete DELETE /api/v1/service-keys/:id
-// 吊销 Service Key（部门负责人或 admin）。
 func (h *ServiceKeyHandler) Delete(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
@@ -171,7 +347,6 @@ func (h *ServiceKeyHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	// 先取 key 的归属部门，再做 RBAC 校验
 	k, findErr := h.keySvc.FindServiceKey(c.Request.Context(), keyID)
 	if findErr != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "service key not found"})
@@ -190,5 +365,32 @@ func (h *ServiceKeyHandler) Delete(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	actorID, _ := uuid.Parse(c.GetString("user_id"))
+	h.recordAudit(c, audit.Input{
+		UserID:       actorID,
+		UserName:     c.GetString("user_name"),
+		Action:       audit.ActionServiceKeyDelete,
+		ResourceType: audit.ResourceServiceKey,
+		ResourceID:   k.ID.String(),
+		ResourceName: k.Name,
+		DeptID:       k.DeptID,
+		DeptName:     k.DeptName,
+		ClientIP:     h.getClientIP(c),
+		UserAgent:    c.GetHeader("User-Agent"),
+		Details: map[string]any{
+			"masked_key": k.KeyPrefix + "****" + k.KeyHint,
+			"purpose":    k.Purpose,
+		},
+	})
+
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// recordAudit 内部辅助：通过接口写审计，自动标记跳过全局中间件重复记录
+func (h *ServiceKeyHandler) recordAudit(c *gin.Context, in audit.Input) {
+	if h.recorder != nil {
+		h.recorder.Record(in)
+	}
+	audit.MarkRecorded(c)
 }

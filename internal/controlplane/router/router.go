@@ -140,6 +140,10 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	budgetSvc.SetRedis(rdb)
 	budgetAlertSvc := service.NewBudgetAlertService(budgetRepo, budgetAlertRepo, nil)
 	budgetAlertSvc.SetRedis(rdb)
+	// v0.8: 审计日志（仅管理面写操作落库）
+	auditRepo := repository.NewAuditLogRepo(db)
+	auditSvc := service.NewAuditLogService(auditRepo)
+
 	// v0.7: 上线默认预算初始化（异步，不阻塞启动）
 	// 默认额度：部门日常 500 USD/月，部门程序服务 200 USD/月，工作室 2000 USD/月
 	// 运维可通过 PUT /api/v1/budgets 按域调整
@@ -276,6 +280,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	// 管理接口组（JWT 认证）
 	adminGroup := r.Group("/api/v1")
 	adminGroup.Use(middleware.JWTAuth())
+	adminGroup.Use(middleware.AuditMiddleware(auditSvc))
 	{
 		// 渠道定义（Registry）
 		adminGroup.GET("/provider-definitions", defHandler.ListDefinitions)
@@ -463,6 +468,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 	// v0.7: Service Key 管理路由
 	serviceKeyHandler := handler.NewServiceKeyHandler(keySvc, orgContainer.RBAC)
+	serviceKeyHandler.SetAuditRecorder(auditSvc)
+	auditHandler := handler.NewAuditLogHandler(auditSvc, orgContainer.RBAC)
 	// v0.7: 预算管理路由
 	budgetHandler := handler.NewBudgetHandler(budgetSvc, orgContainer.RBAC)
 	budgetHandler.SetAlertService(budgetAlertSvc)
@@ -476,7 +483,10 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.POST("/service-keys", guard(rbac.PermServiceKeyCreate), serviceKeyHandler.Create)
 		adminGroup.GET("/service-keys", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.List)
 		adminGroup.PATCH("/service-keys/:id/status", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.Toggle)
+		adminGroup.PATCH("/service-keys/:id/ip-allowlist", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.UpdateIPAllowlist)
 		adminGroup.DELETE("/service-keys/:id", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.Delete)
+		// v0.8: 审计日志查询（仅管理面可查）
+		adminGroup.GET("/audit-logs", guard(rbac.PermAuditViewScoped), auditHandler.List)
 		// 预算管理（管理面）
 		adminGroup.GET("/budgets", guard(rbac.PermBudgetViewScoped), budgetHandler.List)
 		adminGroup.PUT("/budgets", guard(rbac.PermBudgetSet), budgetHandler.Set)

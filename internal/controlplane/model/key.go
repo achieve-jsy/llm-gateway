@@ -34,6 +34,8 @@ type ApiKey struct {
 	KeyType   string     `gorm:"type:varchar(16);not null;default:'personal';index:idx_api_keys_type" json:"key_type"`
 	Purpose   string     `gorm:"type:varchar(128);not null;default:''" json:"purpose,omitempty"`
 	CreatedBy *uuid.UUID `gorm:"type:uuid" json:"created_by,omitempty"`
+	// v0.8: IP 白名单（JSON 数组字符串，如 `["1.2.3.4","10.0.0.0/8"]`；空字符串或 "[]" = 不限制）
+	IPAllowlist string `gorm:"type:text;not null;default:''" json:"ip_allowlist,omitempty"`
 	CreatedAt       time.Time  `gorm:"not null;autoCreateTime" json:"created_at"`
 	UpdatedAt       time.Time  `gorm:"not null;autoUpdateTime" json:"updated_at"`
 	LastUsedAt      *time.Time `gorm:"type:timestamp with time zone" json:"last_used_at,omitempty"`

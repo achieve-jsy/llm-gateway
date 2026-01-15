@@ -50,6 +50,18 @@ func AuthMiddleware(authClient *infra.AuthClient) gin.HandlerFunc {
 				return
 			}
 
+			// v0.8: IP 白名单校验（仅 sk- 路径生效）
+			// 白名单为空（旧 Key / 未配置）时视为不限制，保持向后兼容。
+			if !IsIPAllowed(ExtractClientIP(c.GetHeader("X-Forwarded-For"), c.GetHeader("X-Real-IP"), c.Request.RemoteAddr), resp.Data.IPAllowlist) {
+				slog.WarnContext(c.Request.Context(), "auth: ip allowlist rejected",
+					"key_name", resp.Data.KeyName,
+					"client_ip", ExtractClientIP(c.GetHeader("X-Forwarded-For"), c.GetHeader("X-Real-IP"), c.Request.RemoteAddr))
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+					"error": gin.H{"type": "authentication_error", "message": "client IP not in allowlist", "code": "ip_not_allowed"},
+				})
+				return
+			}
+
 			// log_enabled: nil（旧缓存无此字段）时默认 true，保持原有行为
 			logEnabled := resp.Data.LogEnabled == nil || *resp.Data.LogEnabled
 			slog.DebugContext(c.Request.Context(), "auth: key verified",

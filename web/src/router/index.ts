@@ -131,6 +131,18 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Service Key', requiresManager: true }
   },
   {
+    path: '/admin/audit-logs',
+    name: 'AuditLogs',
+    component: () => import('@/views/admin/AuditLogPage.vue'),
+    meta: { title: '审计日志', requiresManager: true }
+  },
+  {
+    path: '/admin/audit-logs',
+    name: 'AuditLogs',
+    component: () => import('@/views/admin/AuditLogPage.vue'),
+    meta: { title: '审计日志', requiresManager: true }
+  },
+  {
     path: '/admin/group-entitlements',
     name: 'GroupEntitlements',
     redirect: '/admin/groups',

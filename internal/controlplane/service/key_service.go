@@ -68,6 +68,8 @@ type VerifyResult struct {
 	// v0.7: Key 类型（personal/service）与预算链（scope 列表，不含实时 used）。
 	KeyType     string        `json:"key_type,omitempty"`
 	BudgetChain []BudgetScope `json:"budget_chain,omitempty"`
+	// v0.8: IP 白名单（JSON 数组字符串）
+	IPAllowlist string `json:"ip_allowlist,omitempty"`
 }
 
 // BudgetScope 预算链中单层 scope 的标识与元数据（不含实时 used，used 实时从 Redis 读）。
@@ -508,6 +510,7 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 		LogEnabled:      k.LogEnabled,
 		KeyType:         keyType,
 		BudgetChain:     budgetChain,
+		IPAllowlist:     k.IPAllowlist,
 		User: VerifyResultUser{
 			UserID:       k.UserID,
 			Name:         k.UserName,
@@ -545,24 +548,26 @@ func parseDeptID(s string) *uuid.UUID {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ServiceKeyItem Service Key 列表项（不含明文 key）。
+// ServiceKeyItem Service Key 列表项（不含明文 key）。
 type ServiceKeyItem struct {
-	ID         uuid.UUID  `json:"id"`
-	Name       string     `json:"name"`
-	MaskedKey  string     `json:"masked_key"`
-	KeyType    string     `json:"key_type"`
-	Purpose    string     `json:"purpose"`
-	DeptID     string     `json:"dept_id"`
-	DeptName   string     `json:"dept_name"`
-	Enabled    bool       `json:"enabled"`
-	CreatedBy  *uuid.UUID `json:"created_by,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	ID          uuid.UUID  `json:"id"`
+	Name        string     `json:"name"`
+	MaskedKey   string     `json:"masked_key"`
+	KeyType     string     `json:"key_type"`
+	Purpose     string     `json:"purpose"`
+	DeptID      string     `json:"dept_id"`
+	DeptName    string     `json:"dept_name"`
+	Enabled     bool       `json:"enabled"`
+	IPAllowlist string     `json:"ip_allowlist,omitempty"`
+	CreatedBy   *uuid.UUID `json:"created_by,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
 }
 
 // CreateServiceKey 创建 Service Key（仅部门负责人）。
 // actorID：操作人 user_id（部门负责人）；deptID：归属部门 SSO dept_id。
 // actor 权限校验由 handler 层完成（actor.HasDept(deptID) 或 IsGlobal）。
-func (s *KeyService) CreateServiceKey(ctx context.Context, actorID uuid.UUID, deptID, name, purpose string) (*model.ApiKey, string, error) {
+func (s *KeyService) CreateServiceKey(ctx context.Context, actorID uuid.UUID, deptID, name, purpose, ipAllowlist string) (*model.ApiKey, string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return nil, "", fmt.Errorf("generate random key: %w", err)
@@ -597,6 +602,8 @@ func (s *KeyService) CreateServiceKey(ctx context.Context, actorID uuid.UUID, de
 		DeptName:   deptInfo.DeptName,
 		StudioID:   deptInfo.StudioID,
 		StudioName: deptInfo.StudioName,
+		// v0.8: IP 白名单
+		IPAllowlist: ipAllowlist,
 		// 创建者信息（审计用）
 		UserName: info.UserName,
 	}
@@ -639,17 +646,18 @@ func toServiceKeyItems(keys []model.ApiKey) []ServiceKeyItem {
 	items := make([]ServiceKeyItem, 0, len(keys))
 	for _, k := range keys {
 		items = append(items, ServiceKeyItem{
-			ID:         k.ID,
-			Name:       k.Name,
-			MaskedKey:  k.KeyPrefix + "****" + k.KeyHint,
-			KeyType:    k.KeyType,
-			Purpose:    k.Purpose,
-			DeptID:     k.DeptID,
-			DeptName:   k.DeptName,
-			Enabled:    k.Enabled,
-			CreatedBy:  k.CreatedBy,
-			CreatedAt:  k.CreatedAt,
-			LastUsedAt: k.LastUsedAt,
+			ID:          k.ID,
+			Name:        k.Name,
+			MaskedKey:   k.KeyPrefix + "****" + k.KeyHint,
+			KeyType:     k.KeyType,
+			Purpose:     k.Purpose,
+			DeptID:      k.DeptID,
+			DeptName:    k.DeptName,
+			Enabled:     k.Enabled,
+			IPAllowlist: k.IPAllowlist,
+			CreatedBy:   k.CreatedBy,
+			CreatedAt:   k.CreatedAt,
+			LastUsedAt:  k.LastUsedAt,
 		})
 	}
 	return items
@@ -698,6 +706,24 @@ func (s *KeyService) FindServiceKey(ctx context.Context, keyID uuid.UUID) (*mode
 		return nil, ErrKeyNotFound
 	}
 	return k, nil
+}
+
+// UpdateIPAllowlist 更新 Service Key 的 IP 白名单。
+// allowlistJSON 必须是合法 JSON 数组字符串（如 `["1.2.3.4","10.0.0.0/8"]`）或空字符串。
+// 权限校验由 handler 层完成。
+func (s *KeyService) UpdateIPAllowlist(ctx context.Context, keyID uuid.UUID, allowlistJSON string) error {
+	k, err := s.repo.FindByID(keyID)
+	if err != nil || k.KeyType != model.KeyTypeService {
+		return ErrKeyNotFound
+	}
+	if err := s.repo.UpdateIPAllowlist(keyID, allowlistJSON); err != nil {
+		return fmt.Errorf("update ip allowlist: %w", err)
+	}
+	if s.publisher != nil {
+		s.publisher.InvalidateKeyCache(k.KeyHash)
+		s.publisher.Publish(event.KeyUpdated, "api_key", keyID)
+	}
+	return nil
 }
 
 // buildBudgetChain 根据 key 类型构造预算链（各层 scope + 已配额度）。

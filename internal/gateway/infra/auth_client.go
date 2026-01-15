@@ -53,7 +53,8 @@ type VerifyKeyResp struct {
 		KeyName         string `json:"key_name,omitempty"`
 		AccessAllGroups bool   `json:"access_all_groups"`
 		BypassOrgCheck  bool   `json:"bypass_org_check"`
-		LogEnabled      *bool  `json:"log_enabled,omitempty"` // nil = 字段缺失（旧缓存），默认 true
+		LogEnabled      *bool  `json:"log_enabled,omitempty"`   // nil = 字段缺失（旧缓存），默认 true
+		IPAllowlist     string `json:"ip_allowlist,omitempty"` // v0.8: IP 白名单（JSON 数组字符串；空=不限制）
 		// v0.7: 可用模型组快照 + Key 类型 + 预算链
 		UsableGroups []string             `json:"usable_groups,omitempty"`
 		KeyType      string               `json:"key_type,omitempty"`

@@ -46,6 +46,10 @@ const (
 	PermServiceKeyCreate Permission = "service_key:create" // 创建 Service Key（仅部门负责人）
 	PermServiceKeyRevoke Permission = "service_key:revoke" // 吊销 Service Key
 
+	// ── v0.8 审计日志 ────────────────────────────────────────────────────────
+	PermAuditViewAll    Permission = "audit:view:all"    // 查看全公司审计日志（admin）
+	PermAuditViewScoped Permission = "audit:view:scoped" // 查看自己管辖范围审计日志（dept_admin/studio_admin）
+
 	// ── v0.7 扩容审批 ────────────────────────────────────────────────────────
 	PermExpansionRequest Permission = "expansion:request" // 发起扩容申请（dept_admin）
 	PermExpansionApprove Permission = "expansion:approve" // 审批扩容申请（studio_admin/admin）

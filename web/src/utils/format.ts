@@ -142,7 +142,27 @@ export function budgetRecoveryHint(dimension: 'daily' | 'weekly' | 'monthly'): s
   const hints: Record<string, string> = {
     daily: '明天 00:00 自动恢复',
     weekly: '下周一 00:00 自动恢复',
-    monthly: '下月 1 号自动恢复，或申请扩容',
+    monthly: '下月 1 号 00:00 自动恢复，或申请扩容',
   }
   return hints[dimension] || ''
+}
+
+/**
+ * 格式化 ISO 时间字符串
+ * @param isoString ISO 8601 时间字符串
+ * @returns 格式化后的本地时间字符串，如 "2026-06-23 15:30:00"
+ */
+export function formatDate(isoString: string): string {
+  if (!isoString) return '—'
+  const date = new Date(isoString)
+  if (isNaN(date.getTime())) return '—'
+
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const seconds = String(date.getSeconds()).padStart(2, '0')
+
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 }

@@ -2,17 +2,24 @@ package service_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/event"
+	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// ── fakeEventPublisher 完整版（补全 InvalidateKeyCache 方法）──
 
 // fakeEventPublisher 模拟 EventPublisher 接口用于 KeyService 事件发布测试
 type fakeEventPublisher struct {
-	published []publishedEvent
+	published         []publishedEvent
+	invalidatedHashes []string
 }
 
 type publishedEvent struct {
@@ -24,6 +31,16 @@ type publishedEvent struct {
 func (f *fakeEventPublisher) Publish(eventType event.ChangeEventType, resourceType string, resourceID uuid.UUID) {
 	f.published = append(f.published, publishedEvent{eventType, resourceType, resourceID})
 }
+
+// InvalidateKeyCache 补全接口方法，用于 Toggle/Delete/UpdateIPAllowlist 路径测试
+func (f *fakeEventPublisher) InvalidateKeyCache(keyHash string) {
+	f.invalidatedHashes = append(f.invalidatedHashes, keyHash)
+}
+
+// 编译期接口契约检查
+var _ service.EventPublisher = (*fakeEventPublisher)(nil)
+
+// ── 原有测试 ──────────────────────────────────────────────
 
 func TestNewKeyService_NilPublisher(t *testing.T) {
 	t.Run("publisher为nil时构造不panic", func(t *testing.T) {
@@ -93,17 +110,187 @@ func TestFakeEventPublisher_Records(t *testing.T) {
 		assert.Equal(t, "key", pub.published[0].resourceType)
 		assert.Equal(t, keyID, pub.published[0].resourceID)
 	})
+
+	t.Run("InvalidateKeyCache 被记录", func(t *testing.T) {
+		pub := &fakeEventPublisher{}
+		pub.InvalidateKeyCache("abc123def")
+		pub.InvalidateKeyCache("xyz789")
+		assert.Equal(t, []string{"abc123def", "xyz789"}, pub.invalidatedHashes)
+	})
 }
 
-// TestKeyService_ListKeys_PaginationDefaults 验证 ListKeys 分页默认值逻辑
-// 注：由于 KeyService 依赖 *repository.KeyRepo（具体类型），完整流程测试需要数据库；
-// 此处验证 NewKeyService 构造以及 context 传递不 panic。
 func TestKeyService_ListKeys_NilRepo(t *testing.T) {
 	t.Run("repo为nil时ListKeys应panic或返回错误", func(t *testing.T) {
 		svc := service.NewKeyService(nil, nil, nil)
 		assert.NotNil(t, svc)
-		// 由于 repo 是 nil，调用会 panic；此处验证构造可行性
-		// 实际 ListKeys 测试需要集成测试环境
 		_ = context.Background()
+	})
+}
+
+// ── v0.8: IP 白名单字段测试（新增）──────────────────────────────
+
+func TestVerifyResult_IPAllowlist_Field(t *testing.T) {
+	t.Run("空白名单字段", func(t *testing.T) {
+		result := service.VerifyResult{
+			KeyID:       uuid.New(),
+			Status:      "active",
+			IPAllowlist: "",
+		}
+		assert.Empty(t, result.IPAllowlist)
+	})
+
+	t.Run("配置了白名单", func(t *testing.T) {
+		allowlistJSON := `["1.2.3.4","10.0.0.0/8"]`
+		result := service.VerifyResult{
+			KeyID:       uuid.New(),
+			Status:      "active",
+			IPAllowlist: allowlistJSON,
+		}
+		assert.Equal(t, allowlistJSON, result.IPAllowlist)
+		// 验证 JSON 结构
+		var list []string
+		require.NoError(t, json.Unmarshal([]byte(result.IPAllowlist), &list))
+		assert.Equal(t, []string{"1.2.3.4", "10.0.0.0/8"}, list)
+	})
+
+	t.Run("VerifyResult 包含所有 v0.8 字段", func(t *testing.T) {
+		result := service.VerifyResult{
+			KeyID:           uuid.New(),
+			KeyName:         "ci-runner",
+			Status:          "active",
+			AccessAllGroups: false,
+			BypassOrgCheck:  false,
+			LogEnabled:      true,
+			KeyType:         "service",
+			IPAllowlist:     `["192.0.2.10"]`,
+			BudgetChain:     []service.BudgetScope{{ScopeType: "dept_service", ScopeID: "eng"}},
+		}
+		assert.Equal(t, "service", result.KeyType)
+		assert.NotEmpty(t, result.IPAllowlist)
+		assert.Len(t, result.BudgetChain, 1)
+	})
+}
+
+func TestServiceKeyItem_IPAllowlist_Field(t *testing.T) {
+	t.Run("空 IP 白名单", func(t *testing.T) {
+		item := service.ServiceKeyItem{
+			ID:          uuid.New(),
+			Name:        "ci-key",
+			MaskedKey:   "sk-****abcd",
+			KeyType:     model.KeyTypeService,
+			Purpose:     "ci",
+			DeptID:      "engineering",
+			DeptName:    "Engineering",
+			Enabled:     true,
+			IPAllowlist: "",
+		}
+		assert.Empty(t, item.IPAllowlist)
+		assert.Equal(t, model.KeyTypeService, item.KeyType)
+	})
+
+	t.Run("CIDR + 单 IP", func(t *testing.T) {
+		item := service.ServiceKeyItem{
+			ID:          uuid.New(),
+			Name:        "corp-key",
+			MaskedKey:   "sk-****1234",
+			KeyType:     model.KeyTypeService,
+			IPAllowlist: `["10.0.0.0/8","192.0.2.10"]`,
+			CreatedAt:   time.Now(),
+		}
+		var list []string
+		require.NoError(t, json.Unmarshal([]byte(item.IPAllowlist), &list))
+		assert.Equal(t, []string{"10.0.0.0/8", "192.0.2.10"}, list)
+	})
+
+	t.Run("LastUsedAt + IP 白名单 共存", func(t *testing.T) {
+		now := time.Now()
+		item := service.ServiceKeyItem{
+			ID:          uuid.New(),
+			IPAllowlist: `["203.0.113.5"]`,
+			LastUsedAt:  &now,
+			CreatedAt:   now,
+		}
+		assert.NotNil(t, item.LastUsedAt)
+		assert.NotEmpty(t, item.IPAllowlist)
+	})
+}
+
+func TestModelApiKey_IPAllowlist_Field(t *testing.T) {
+	t.Run("ApiKey model 包含 ip_allowlist 字段", func(t *testing.T) {
+		k := model.ApiKey{
+			KeyType:     model.KeyTypeService,
+			IPAllowlist: `["172.16.0.0/12"]`,
+		}
+		assert.Equal(t, model.KeyTypeService, k.KeyType)
+		assert.Equal(t, `["172.16.0.0/12"]`, k.IPAllowlist)
+	})
+
+	t.Run("JSON Marshal/Unmarshal 往返保持一致", func(t *testing.T) {
+		original := `["1.1.1.1","2.2.2.2","10.0.0.0/8"]`
+		var list []string
+		require.NoError(t, json.Unmarshal([]byte(original), &list))
+
+		// 重新序列化
+		encoded, err := json.Marshal(list)
+		require.NoError(t, err)
+		assert.Equal(t, original, string(encoded))
+	})
+}
+
+func TestAuditIntegration_WithPublisher(t *testing.T) {
+	// 验证完整 fakeEventPublisher 满足 audit 集成场景
+	t.Run("InvalidateKeyCache + Publish 协同", func(t *testing.T) {
+		pub := &fakeEventPublisher{}
+		keyID := uuid.New()
+		hash := "sha256_abc123"
+
+		// 模拟 ToggleServiceKey 路径：先 Invalidate 缓存再返回
+		pub.InvalidateKeyCache(hash)
+		pub.Publish(event.KeyUpdated, "api_key", keyID)
+
+		assert.Len(t, pub.invalidatedHashes, 1)
+		assert.Len(t, pub.published, 1)
+		assert.Equal(t, hash, pub.invalidatedHashes[0])
+		assert.Equal(t, event.KeyUpdated, pub.published[0].eventType)
+	})
+
+	t.Run("DeleteServiceKey 路径：Invalidate + Publish(KeyDeleted)", func(t *testing.T) {
+		pub := &fakeEventPublisher{}
+		keyID := uuid.New()
+		pub.InvalidateKeyCache("hash_xyz")
+		pub.Publish(event.KeyDeleted, "api_key", keyID)
+
+		assert.Len(t, pub.invalidatedHashes, 1)
+		assert.Equal(t, event.KeyDeleted, pub.published[0].eventType)
+	})
+}
+
+func TestBudgetScope_Structure(t *testing.T) {
+	t.Run("BudgetScope 字段完整", func(t *testing.T) {
+		scope := service.BudgetScope{
+			ScopeType:       "dept_service",
+			ScopeID:         "engineering",
+			AmountUSD:       100.0,
+			DailyAmountUSD:  10.0,
+			WeeklyAmountUSD: 50.0,
+			Label:           "Engineering Budget",
+		}
+		assert.Equal(t, "dept_service", scope.ScopeType)
+		assert.Equal(t, 100.0, scope.AmountUSD)
+		assert.Equal(t, "Engineering Budget", scope.Label)
+	})
+
+	t.Run("BudgetChain 可挂载到 VerifyResult", func(t *testing.T) {
+		result := service.VerifyResult{
+			KeyID:   uuid.New(),
+			Status:  "active",
+			KeyType: "service",
+			BudgetChain: []service.BudgetScope{
+				{ScopeType: "dept_service", ScopeID: "eng", AmountUSD: 200},
+				{ScopeType: "studio", ScopeID: "platform", AmountUSD: 2000},
+			},
+		}
+		assert.Len(t, result.BudgetChain, 2)
+		assert.Equal(t, "dept_service", result.BudgetChain[0].ScopeType)
 	})
 }

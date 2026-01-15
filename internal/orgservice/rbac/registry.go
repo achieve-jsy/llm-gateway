@@ -70,6 +70,12 @@ var Registry = map[Permission]PolicyEntry{
 	PermServiceKeyCreate: {ScopeManage},
 	PermServiceKeyRevoke: {ScopeManage},
 
+	// ── v0.8 审计日志 ────────────────────────────────────────────────────────
+	// 查看全公司审计：仅 admin
+	PermAuditViewAll: {ScopeGlobal},
+	// 查看自己管辖范围审计：任意管理角色
+	PermAuditViewScoped: {ScopeManage},
+
 	// ── v0.7 扩容审批 ────────────────────────────────────────────────────────
 	// 发起扩容申请：任意管理角色
 	PermExpansionRequest: {ScopeManage},

@@ -94,14 +94,14 @@ func (r *BudgetAlertRepo) FindOwnersByBudgetScope(scopeType, scopeID string) ([]
 		`, scopeID).Scan(&extra).Error; err == nil {
 			rows = append(rows, extra...)
 		}
-		// 再查该部门所属工作室的 studio_admin
+		// 再查该部门所属工作室的 studio_admin（scopeID 可能是 UUID 也可能是部门名 dept_id）
 		var studioID string
 		r.db.Raw(`
 			SELECT dsm.studio_id FROM departments d
 			JOIN dept_studio_map dsm ON dsm.dept_id = d.dept_id
-			WHERE d.id::text = ?
+			WHERE d.id::text = ? OR d.dept_id = ?
 			LIMIT 1
-		`, scopeID).Scan(&studioID)
+		`, scopeID, scopeID).Scan(&studioID)
 		if studioID != "" {
 			var extra2 []AlertOwnerRow
 			if err := r.db.Raw(`

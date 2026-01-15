@@ -1,6 +1,7 @@
 <template>
   <div class="notification-bell" @click="togglePanel" ref="bellRef">
-    <el-badge :value="totalUnread" :hidden="totalUnread === 0" :max="99">
+    <el-badge :value="totalUnread" :hidden="totalUnread === 0" :max="99"
+      :color="notifUnreadCount > 0 ? '#F57C00' : undefined">
       <el-icon :size="20"><Bell /></el-icon>
     </el-badge>
     <el-popover
@@ -12,42 +13,38 @@
     >
       <template #reference><span></span></template>
       <div class="notification-panel" @click.stop>
+        <!-- 标题行：左侧来源 tab，右侧操作 -->
         <div class="panel-header">
-          <span class="panel-title">消息中心</span>
+          <div class="panel-source-tabs">
+            <button
+              class="source-tab"
+              :class="{ active: activeSource === 'announcements' }"
+              @click="switchSource('announcements')"
+            >
+              公告
+              <span v-if="annUnreadCount > 0" class="source-badge">{{ annUnreadCount }}</span>
+            </button>
+            <button
+              class="source-tab"
+              :class="{ active: activeSource === 'notifications' }"
+              @click="switchSource('notifications')"
+            >
+              通知
+              <span v-if="notifUnreadCount > 0" class="source-badge source-badge--warn">{{ notifUnreadCount }}</span>
+            </button>
+          </div>
           <div class="panel-header-actions">
-            <el-button v-if="totalUnread > 0" text size="small" type="primary" @click="handleReadAll">全部已读</el-button>
+            <el-button v-if="currentUnreadCount > 0" text size="small" type="primary" @click="handleReadAll">全部已读</el-button>
             <el-button v-if="activeSource === 'announcements'" text size="small" @click="handleViewAll">查看全部</el-button>
           </div>
         </div>
 
-        <!-- 一级 tab：公告 / 通知 -->
-        <div class="panel-tab-bar">
-          <button
-            class="tab-btn"
-            :class="{ active: activeSource === 'announcements' }"
-            @click="switchSource('announcements')"
-          >
-            公告
-            <span v-if="annUnreadCount > 0" class="tab-badge">{{ annUnreadCount }}</span>
+        <!-- 未读 / 已读 pill 切换 -->
+        <div class="panel-tab-pill">
+          <button class="pill-btn" :class="{ active: activeTab === 'unread' }" @click="activeTab = 'unread'">
+            未读<span v-if="currentUnreadCount > 0" class="pill-count">{{ currentUnreadCount }}</span>
           </button>
-          <button
-            class="tab-btn"
-            :class="{ active: activeSource === 'notifications' }"
-            @click="switchSource('notifications')"
-          >
-            通知
-            <span v-if="notifUnreadCount > 0" class="tab-badge tab-badge--alert">{{ notifUnreadCount }}</span>
-          </button>
-        </div>
-
-        <!-- 二级 tab：未读 / 已读 -->
-        <div class="panel-subtab-bar">
-          <button class="subtab-btn" :class="{ active: activeTab === 'unread' }" @click="activeTab = 'unread'">
-            未读
-          </button>
-          <button class="subtab-btn" :class="{ active: activeTab === 'history' }" @click="activeTab = 'history'">
-            已读
-          </button>
+          <button class="pill-btn" :class="{ active: activeTab === 'history' }" @click="activeTab = 'history'">已读</button>
         </div>
 
         <!-- 公告列表 -->
@@ -202,6 +199,9 @@ const notifHistoryItems = ref<Notification[]>([])
 
 // ── 面板状态 ────────────────────────────────────────────────────────────────
 const totalUnread = computed(() => annUnreadCount.value + notifUnreadCount.value)
+const currentUnreadCount = computed(() =>
+  activeSource.value === 'announcements' ? annUnreadCount.value : notifUnreadCount.value
+)
 const panelVisible = ref(false)
 const activeSource = ref<'announcements' | 'notifications'>('announcements')
 const activeTab = ref<'unread' | 'history'>('unread')
@@ -315,12 +315,18 @@ function switchSource(src: 'announcements' | 'notifications') {
   if (src === 'announcements' && annHistoryItems.value.length === 0) loadAnnHistory()
 }
 
-function togglePanel() {
+async function togglePanel() {
   if (!panelVisible.value) {
-    loadAnnUnread()
-    loadNotifUnread()
-    if (activeSource.value === 'announcements') loadAnnHistory()
-    else loadNotifHistory()
+    // 先并行拉取两侧未读数，再决定默认展示哪个 tab
+    await Promise.all([loadAnnUnread(), loadNotifUnread()])
+    if (notifUnreadCount.value > 0) {
+      activeSource.value = 'notifications'
+      loadNotifHistory()
+    } else {
+      activeSource.value = 'announcements'
+      loadAnnHistory()
+    }
+    activeTab.value = 'unread'
   }
   panelVisible.value = !panelVisible.value
 }
@@ -347,12 +353,9 @@ defineExpose({ refresh })
 </script>
 
 <style>
-.el-popover .panel-title { color: #1a1a1a !important; }
-.el-popover .item-title   { color: #1a1a1a !important; }
-.el-popover .tab-btn      { color: #64748b; }
-.el-popover .tab-btn.active { color: #1F8A3B !important; }
-.el-popover .subtab-btn   { color: #94a3b8; }
-.el-popover .subtab-btn.active { color: #1F8A3B !important; }
+.el-popover .item-title { color: #1a1a1a !important; }
+.el-popover .source-tab { color: #64748b; }
+.el-popover .source-tab.active { color: #1F8A3B !important; }
 </style>
 
 <style scoped>
@@ -367,73 +370,140 @@ defineExpose({ refresh })
 .notification-bell:hover { color: var(--el-text-color-primary); }
 .notification-bell :deep(.el-badge) { display: flex; align-items: center; }
 
-/* ── 面板 ────────────── */
-.notification-panel { display: flex; flex-direction: column; }
+/* ── 面板整体 ─────────────────── */
+.notification-panel { display: flex; flex-direction: column; gap: 0; }
+
+/* ── 标题行：来源 tab + 操作按钮 ── */
 .panel-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 0 0 10px; border-bottom: 1px solid rgba(0,0,0,0.06);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0 0;
+  margin-bottom: 0;
 }
-.panel-title { font-size: 15px; font-weight: 700; color: #1a1a1a; }
-.panel-header-actions { display: flex; gap: 2px; }
 
-/* ── 一级 tab：公告/通知 ────── */
-.panel-tab-bar {
-  display: flex; border-bottom: 1px solid rgba(0,0,0,0.06); margin-bottom: 0;
+.panel-source-tabs {
+  display: flex;
+  gap: 2px;
+  background: rgba(0,0,0,0.04);
+  border-radius: 8px;
+  padding: 3px;
 }
-.tab-btn {
-  flex: 1; padding: 8px 0; border: none; background: none;
-  font-size: 13px; color: #94a3b8; cursor: pointer; position: relative;
-  transition: color 0.15s; display: flex; align-items: center; justify-content: center; gap: 4px;
-}
-.tab-btn.active { color: #1F8A3B; font-weight: 600; }
-.tab-btn.active::after {
-  content: ''; position: absolute; bottom: -1px; left: 25%; right: 25%;
-  height: 2px; background: #1F8A3B; border-radius: 1px;
-}
-.tab-btn:hover { color: #1F8A3B; }
 
-.tab-badge {
-  background: #36B34E; color: #fff;
-  font-size: 10px; font-weight: 700; line-height: 1;
-  padding: 2px 5px; border-radius: 8px; min-width: 16px; text-align: center;
+.source-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 14px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
 }
-.tab-badge--alert { background: #F57C00; }
+.source-tab.active {
+  background: #fff;
+  color: #1F8A3B;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+.source-tab:hover:not(.active) { color: #475569; }
 
-/* ── 二级 tab：未读/已读 ────── */
-.panel-subtab-bar {
-  display: flex; gap: 0; padding: 4px 0 2px;
-  border-bottom: 1px solid rgba(0,0,0,0.04); margin-bottom: 4px;
+.source-badge {
+  background: #36B34E;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 8px;
+  min-width: 16px;
+  text-align: center;
 }
-.subtab-btn {
-  flex: 1; padding: 5px 0; border: none; background: none;
-  font-size: 12px; color: #94a3b8; cursor: pointer; position: relative; transition: color 0.15s;
-}
-.subtab-btn.active { color: #1F8A3B; font-weight: 600; }
-.subtab-btn.active::after {
-  content: ''; position: absolute; bottom: -2px; left: 30%; right: 30%;
-  height: 1.5px; background: #1F8A3B; border-radius: 1px;
-}
-.subtab-btn:hover { color: #1F8A3B; }
+.source-badge--warn { background: #F57C00; }
 
-/* ── 列表 ────────────────── */
+.panel-header-actions { display: flex; gap: 2px; flex-shrink: 0; }
+
+/* ── 未读/已读 pill ───────────── */
+.panel-tab-pill {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid rgba(0,0,0,0.07);
+  margin-top: 10px;
+}
+.pill-btn {
+  flex: 1;
+  padding: 7px 0;
+  border: none;
+  background: none;
+  font-size: 12px;
+  color: #94a3b8;
+  cursor: pointer;
+  position: relative;
+  transition: color 0.15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+.pill-btn.active {
+  color: #1F8A3B;
+  font-weight: 600;
+}
+.pill-btn.active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 20%;
+  right: 20%;
+  height: 2px;
+  background: #1F8A3B;
+  border-radius: 1px;
+}
+.pill-btn:hover:not(.active) { color: #475569; }
+
+.pill-count {
+  background: rgba(54,179,78,0.15);
+  color: #1F8A3B;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 8px;
+  min-width: 16px;
+  text-align: center;
+}
+
+/* ── 列表 ────────────────────── */
 .panel-list {
-  flex: 1; overflow-y: auto; display: flex; flex-direction: column; max-height: 360px;
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  max-height: 340px;
 }
 .panel-list::-webkit-scrollbar { width: 3px; }
 .panel-list::-webkit-scrollbar-thumb { background: rgba(54,179,78,0.2); border-radius: 2px; }
 
-/* ── 条目 ────────────────── */
+/* ── 条目 ────────────────────── */
 .notification-item {
-  display: flex; gap: 10px; padding: 12px 4px;
-  border-bottom: 1px solid rgba(0,0,0,0.05); cursor: pointer;
+  display: flex;
+  gap: 10px;
+  padding: 11px 2px;
+  border-bottom: 1px solid rgba(0,0,0,0.05);
+  cursor: pointer;
   transition: background 0.15s;
 }
 .notification-item:last-child { border-bottom: none; }
-.notification-item:hover { background: rgba(54,179,78,0.04); }
-.notification-item.history-item { opacity: 0.7; }
+.notification-item:hover { background: rgba(54,179,78,0.04); border-radius: 6px; }
+.notification-item.history-item { opacity: 0.65; }
 
 .item-dot {
-  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; margin-top: 5px;
+  width: 7px; height: 7px; border-radius: 50%;
+  flex-shrink: 0; margin-top: 5px;
 }
 .dot--info     { background: #36B34E; box-shadow: 0 0 0 2px rgba(54,179,78,0.15); }
 .dot--warning  { background: #F57C00; box-shadow: 0 0 0 2px rgba(245,124,0,0.15); }
@@ -449,19 +519,24 @@ defineExpose({ refresh })
 .item-time { font-size: 11px; color: #94a3b8; flex-shrink: 0; }
 
 .item-preview {
-  font-size: 12px; color: #64748b; margin-top: 3px; line-height: 1.5;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
+  font-size: 12px; color: #64748b;
+  margin-top: 3px; line-height: 1.5;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  cursor: pointer;
 }
 
 .item-expanded {
   margin-top: 8px; border-radius: 10px; overflow: hidden;
   background: rgba(255,255,255,0.7); backdrop-filter: blur(16px);
-  border: 1px solid rgba(54,179,78,0.18); box-shadow: 0 2px 12px rgba(54,179,78,0.08);
+  border: 1px solid rgba(54,179,78,0.18);
+  box-shadow: 0 2px 12px rgba(54,179,78,0.08);
 }
 .item-expanded.history-expanded {
   border-color: rgba(0,0,0,0.07); box-shadow: none; background: rgba(255,255,255,0.5);
 }
-.item-expanded-body { padding: 10px 12px; max-height: 180px; overflow-y: auto; }
+.item-expanded-body {
+  padding: 10px 12px; max-height: 180px; overflow-y: auto;
+}
 .item-expanded-body::-webkit-scrollbar { width: 3px; }
 .item-expanded-body::-webkit-scrollbar-thumb { background: rgba(54,179,78,0.2); border-radius: 2px; }
 
@@ -469,12 +544,16 @@ defineExpose({ refresh })
 .item-full-content :deep(p)  { margin: 0 0 0.4em; }
 .item-full-content :deep(strong) { font-weight: 700; color: #1a1a1a; }
 .item-full-content :deep(code) { background: rgba(0,0,0,0.06); padding: 1px 4px; border-radius: 3px; font-size: 11px; }
-.item-full-content :deep(h1), .item-full-content :deep(h2), .item-full-content :deep(h3) { color: #1a1a1a; margin: 0.5em 0 0.25em; font-size: 13px; }
-.item-full-content :deep(ul), .item-full-content :deep(ol) { padding-left: 1.2em; margin: 0.25em 0; }
+.item-full-content :deep(h1),
+.item-full-content :deep(h2),
+.item-full-content :deep(h3) { color: #1a1a1a; margin: 0.5em 0 0.25em; font-size: 13px; }
+.item-full-content :deep(ul),
+.item-full-content :deep(ol) { padding-left: 1.2em; margin: 0.25em 0; }
 
 .item-actions {
   display: flex; justify-content: flex-end; align-items: center; gap: 4px;
   padding: 5px 8px; border-top: 1px solid rgba(54,179,78,0.08);
 }
-.panel-empty { padding: 20px 0; }
+
+.panel-empty { padding: 24px 0; }
 </style>

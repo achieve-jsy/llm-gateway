@@ -997,17 +997,17 @@ import type { Notification } from '@/types/notification'
 
 export async function getUnreadNotifications(): Promise<Notification[]> {
   const res = await http.get<ApiResponse<Notification[]>>('/api/v1/notifications/unread', { _silent: true } as any)
-  return res.data || []
+  return res.data.data || []
 }
 
 export async function getUnreadNotificationCount(): Promise<number> {
   const res = await http.get<{ count: number }>('/api/v1/notifications/unread/count', { _silent: true } as any)
-  return res.count || 0
+  return res.data.count || 0
 }
 
 export async function getNotificationHistory(): Promise<Notification[]> {
   const res = await http.get<ApiResponse<Notification[]>>('/api/v1/notifications/history', { _silent: true } as any)
-  return res.data || []
+  return res.data.data || []
 }
 
 export async function markNotificationRead(id: string): Promise<void> {

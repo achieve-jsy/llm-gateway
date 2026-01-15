@@ -1,4 +1,4 @@
-.PHONY: build test lint swagger dev clean
+.PHONY: build test lint swagger dev clean remove-bg
 
 # 使用 bash 以支持 trap / kill 0 等特性
 SHELL := /bin/bash
@@ -57,6 +57,14 @@ dev-all:
 # ─── 清理 ────────────────────────────────────────────────────────────────────────
 clean:
 	rm -rf bin/ api/swagger/docs/
+
+# ─── 图片处理 ─────────────────────────────────────────────────────────────────────
+# 去除 web/public/images/mascot/ 下PNG图片的白色背景，生成带透明通道的RGBA PNG
+remove-bg:
+	@echo "🖼  去除吉祥物图片白色背景..."
+	@python3 scripts/remove_bg.py || python3.11 scripts/remove_bg.py || \
+		( echo "❌ 需要 Python3 + Pillow，请先运行: pip install Pillow" && exit 1 )
+	@echo "✅ 完成"
 
 # ─── Atlas 迁移 ───────────────────────────────────────────────────────────────────
 .PHONY: atlas-diff atlas-apply atlas-status

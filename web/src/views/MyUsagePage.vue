@@ -20,6 +20,35 @@
     </div>
 
     <!-- ═══════════════════════════════════════════
+         施小救の性格档案
+    ═══════════════════════════════════════════ -->
+    <div v-if="statsTotal && !statsLoading" class="mu-personality-card" :data-tag="currentTag.id">
+      <div class="mu-personality-inner">
+        <div class="mu-personality-mascot">
+          <img
+            :src="currentTag.image"
+            :alt="currentTag.label"
+            loading="lazy"
+            class="mu-personality-img"
+          />
+        </div>
+        <div class="mu-personality-info">
+          <div class="mu-personality-badge">施小救の性格档案</div>
+          <h3 class="mu-personality-label">{{ currentTag.emoji }} {{ currentTag.label }}</h3>
+          <p class="mu-personality-story">{{ currentTag.story }}</p>
+          <div class="mu-personality-actions">
+            <el-button
+              type="primary"
+              size="small"
+              :loading="shareLoading"
+              @click="shareTag"
+            >分享我的标签</el-button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════
          筛选栏
     ═══════════════════════════════════════════ -->
     <div class="mu-filter">
@@ -941,6 +970,263 @@ const inputOutputRatio = computed(() => {
   return `1:${ratio.toFixed(1)}`
 })
 
+// ── 性格标签 ──
+interface PersonalityTag {
+  id: string
+  emoji: string
+  label: string
+  image: string
+  story: string
+  shareText: string
+}
+
+const SITE_DAILY_MEDIAN = 10 // 全站日均调用中位数估算值
+
+const uniqueModelCount = computed(() => modelStatsRows.value.length)
+
+const topModelInfo = computed(() => {
+  if (!modelStatsRows.value.length) return { model: '', pct: 0 }
+  const total = modelStatsRows.value.reduce((s, r) => s + (r.req_count || 0), 0)
+  const top = [...modelStatsRows.value].sort((a, b) => (b.req_count || 0) - (a.req_count || 0))[0]
+  return {
+    model: top?.model || '',
+    pct: total > 0 ? Math.round((top?.req_count || 0) / total * 100) : 0,
+  }
+})
+
+const highReasoningPct = computed(() => {
+  if (!logRows.value.length) return 0
+  const highCount = logRows.value.filter(r => r.reasoning_effort === 'high').length
+  return Math.round(highCount / logRows.value.length * 100)
+})
+
+const inputOutputRatioNum = computed(() => {
+  const t = statsTotal.value
+  if (!t) return 0
+  const input = Math.max((t.prompt_tokens || 0) - (t.cached_tokens || 0), 1)
+  const output = t.completion_tokens || 0
+  return output > 0 ? output / input : 0
+})
+
+const savedCostEstimate = computed(() => {
+  const t = statsTotal.value
+  if (!t || !t.prompt_tokens || !t.cached_tokens) return 0
+  return (t.est_cost_usd || 0) * (t.cached_tokens / t.prompt_tokens) * 0.5
+})
+
+const userPercentile = computed(() => {
+  const calls = dailyAvgCalls.value
+  if (calls >= 200) return 99
+  if (calls >= 100) return 95
+  if (calls >= 50) return 90
+  if (calls >= 20) return 75
+  if (calls >= 10) return 60
+  return 50
+})
+
+const currentTag = computed<PersonalityTag>(() => {
+  const dailyCalls = dailyAvgCalls.value
+  const cacheHit = cacheHitPct.value
+  const ioRatio = inputOutputRatioNum.value
+  const peakH = peakHour.value.hour
+  const modelCount = uniqueModelCount.value
+  const topM = topModelInfo.value
+  const highReason = highReasoningPct.value
+  const totalReq = statsTotal.value?.req_count || 0
+  const days = rangeDays.value
+
+  if (dailyCalls >= SITE_DAILY_MEDIAN * 2.5) {
+    return {
+      id: 'volwang', emoji: '⚡', label: '卷王本王',
+      image: '/images/mascot/volwang.png',
+      story: `你最近${days}天日均调用${Math.round(dailyCalls)}次，超过全站${userPercentile.value}%的同事`,
+      shareText: `我是AiMeter卷王本王，日均${Math.round(dailyCalls)}次调用，谁与争锋？`,
+    }
+  }
+  if (cacheHit >= 25) {
+    return {
+      id: 'shengqian', emoji: '💎', label: '省钱天才',
+      image: '/images/mascot/shengqian.png',
+      story: `你的缓存命中率达到${cacheHit}%，相当于省了${fmtCny(savedCostEstimate.value)}`,
+      shareText: `缓存命中率${cacheHit}%，AiMeter省钱天才非我莫属。`,
+    }
+  }
+  if (ioRatio >= 4) {
+    return {
+      id: 'xiaolv', emoji: '🎯', label: '效率怪物',
+      image: '/images/mascot/xiaolv.png',
+      story: `你的输入输出比为1:${ioRatio.toFixed(1)}，用最少的prompt产出最多的结果`,
+      shareText: `1:${ioRatio.toFixed(1)}的输入输出比，效率怪物的prompt从不多写一个字。`,
+    }
+  }
+  if (peakH >= 22 || peakH <= 4) {
+    return {
+      id: 'shenye', emoji: '🌙', label: '深夜哲学家',
+      image: '/images/mascot/shenye.png',
+      story: `你最活跃的时间段是${peakH}点，夜色是你最好的创作搭档`,
+      shareText: `凌晨${peakH}点的AiMeter是我的主场，深夜哲学家在此。`,
+    }
+  }
+  if (peakH >= 6 && peakH <= 9) {
+    return {
+      id: 'chenxing', emoji: '🌅', label: '晨型打工人',
+      image: '/images/mascot/chenxing.png',
+      story: `你每天${peakH}点就开始调用，效率满满地迎接每一天`,
+      shareText: `每天早上${peakH}点准时开干，晨型打工人的自我修养。`,
+    }
+  }
+  if (modelCount >= 5) {
+    return {
+      id: 'jiyou', emoji: '🦄', label: '模型集邮癖',
+      image: '/images/mascot/jiyou.png',
+      story: `你用过${modelCount}种不同模型，是最博爱的探索者`,
+      shareText: `我用过${modelCount}种模型！集邮癖的快乐你不懂。`,
+    }
+  }
+  if (topM.pct >= 85) {
+    return {
+      id: 'zhuanyi', emoji: '💕', label: '专一战士',
+      image: '/images/mascot/zhuanyi.png',
+      story: `你对${topM.model}的爱高达${topM.pct}%，真爱无疑`,
+      shareText: `${topM.model}就是我的唯一，${topM.pct}%的调用都是它，专一战士！`,
+    }
+  }
+  if (highReason > 30) {
+    return {
+      id: 'sikao', emoji: '🧠', label: '深度思考家',
+      image: '/images/mascot/sikao.png',
+      story: `你有${highReason}%的调用使用了深度推理模式，思考从不停歇`,
+      shareText: `${highReason}%的调用都是深度推理，思考家的大脑永不停歇。`,
+    }
+  }
+  return {
+    id: 'default', emoji: '🌟', label: '萌新探索者',
+    image: '/images/mascot/default.png',
+    story: `你已使用AiMeter ${days}天，累计调用${totalReq}次，继续探索无限可能！`,
+    shareText: `萌新探索者，正在解锁AiMeter的无限可能。`,
+  }
+})
+
+// ── 分享卡片 ──
+const shareLoading = ref(false)
+
+function wrapCanvasText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  maxWidth: number,
+  lineHeight: number,
+): void {
+  const chars = [...text]
+  let line = ''
+  let currentY = y
+  for (let i = 0; i < chars.length; i++) {
+    const testLine = line + chars[i]
+    if (ctx.measureText(testLine).width > maxWidth && i > 0) {
+      ctx.fillText(line, x, currentY)
+      line = chars[i]
+      currentY += lineHeight
+    } else {
+      line = testLine
+    }
+  }
+  ctx.fillText(line, x, currentY)
+}
+
+async function shareTag() {
+  shareLoading.value = true
+  try {
+    const tag = currentTag.value
+    const canvas = document.createElement('canvas')
+    canvas.width = 800
+    canvas.height = 500
+    const ctx = canvas.getContext('2d')!
+
+    const tagGradients: Record<string, [string, string]> = {
+      volwang:  ['#fef9c3', '#fde68a'],
+      shengqian:['#d1fae5', '#a7f3d0'],
+      xiaolv:   ['#ede9fe', '#ddd6fe'],
+      shenye:   ['#1e1b4b', '#312e81'],
+      chenxing: ['#fff7ed', '#fed7aa'],
+      jiyou:    ['#fdf4ff', '#f5d0fe'],
+      zhuanyi:  ['#fff1f2', '#fecdd3'],
+      sikao:    ['#eff6ff', '#bfdbfe'],
+      default:  ['#f0f9ff', '#e0f2fe'],
+    }
+    const [c1, c2] = tagGradients[tag.id] || tagGradients.default
+    const isDarkTag = tag.id === 'shenye'
+
+    const grad = ctx.createLinearGradient(0, 0, 800, 500)
+    grad.addColorStop(0, c1)
+    grad.addColorStop(1, c2)
+    ctx.fillStyle = grad
+    ctx.fillRect(0, 0, 800, 500)
+
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    await new Promise<void>((resolve) => {
+      img.onload = () => resolve()
+      img.onerror = () => resolve()
+      img.src = tag.image
+    })
+    if (img.complete && img.naturalWidth > 0) {
+      // multiply 合成模式使白色像素在浅色背景上视觉透明
+      const prevOp = ctx.globalCompositeOperation
+      ctx.globalCompositeOperation = isDarkTag ? 'screen' : 'multiply'
+      ctx.drawImage(img, 20, 40, 380, 380)
+      ctx.globalCompositeOperation = prevOp
+    }
+
+    const textColor = isDarkTag ? '#e2e8f0' : '#1f2937'
+    const subColor  = isDarkTag ? '#94a3b8' : '#6b7280'
+    const textX = 440
+
+    ctx.font = '14px Arial'
+    ctx.fillStyle = isDarkTag ? '#64748b' : '#94a3b8'
+    ctx.fillText('AiMeter · 我的使用档案', textX, 60)
+
+    ctx.font = 'bold 56px Arial'
+    ctx.fillStyle = textColor
+    ctx.fillText(tag.emoji, textX, 140)
+
+    ctx.font = 'bold 34px Arial'
+    ctx.fillStyle = textColor
+    ctx.fillText(tag.label, textX, 185)
+
+    ctx.font = '20px Arial'
+    ctx.fillStyle = subColor
+    wrapCanvasText(ctx, tag.story, textX, 230, 330, 32)
+
+    ctx.strokeStyle = isDarkTag ? '#334155' : '#e5e7eb'
+    ctx.lineWidth = 1
+    ctx.beginPath(); ctx.moveTo(textX, 340); ctx.lineTo(790, 340); ctx.stroke()
+
+    ctx.font = '15px Arial'
+    ctx.fillStyle = isDarkTag ? '#475569' : '#9ca3af'
+    ctx.fillText('扫描二维码 / 访问 aimeter.app', textX, 375)
+
+    ctx.font = '13px Arial'
+    ctx.fillStyle = isDarkTag ? '#334155' : '#cbd5e1'
+    ctx.fillText('by AiMeter', textX, 460)
+
+    canvas.toBlob((blob) => {
+      if (!blob) { ElMessage.error('生成分享图失败'); return }
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `施小救-${tag.label}.png`
+      link.click()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      ElMessage.success('分享卡片已下载')
+    }, 'image/png')
+  } catch (e) {
+    ElMessage.error('生成分享图失败')
+  } finally {
+    shareLoading.value = false
+  }
+}
+
 // ── Heatmap ──
 const heatmapData = computed(() => {
   const buckets = Array(24).fill(0)
@@ -1563,6 +1849,106 @@ if (typeof MutationObserver !== 'undefined') {
   min-height: 100%; box-sizing: border-box;
   display: flex; flex-direction: column; gap: 14px;
 }
+
+/* ── 性格档案卡片 ── */
+.mu-personality-card {
+  position: relative; overflow: hidden;
+  border-radius: 16px; border: 1px solid var(--mu-border);
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  padding: 0;
+  transition: box-shadow .25s ease;
+}
+.mu-personality-card:hover { box-shadow: 0 8px 28px rgba(0,0,0,.1); }
+
+/* 按标签 ID 设置渐变色 */
+.mu-personality-card[data-tag="volwang"]   { background: linear-gradient(135deg, #fef9c3, #fde68a); border-color: #fbbf24; }
+.mu-personality-card[data-tag="shengqian"] { background: linear-gradient(135deg, #d1fae5, #a7f3d0); border-color: #34d399; }
+.mu-personality-card[data-tag="xiaolv"]    { background: linear-gradient(135deg, #ede9fe, #ddd6fe); border-color: #a78bfa; }
+.mu-personality-card[data-tag="shenye"]    { background: linear-gradient(135deg, #1e1b4b, #312e81); border-color: #4f46e5; }
+.mu-personality-card[data-tag="chenxing"]  { background: linear-gradient(135deg, #fff7ed, #fed7aa); border-color: #fb923c; }
+.mu-personality-card[data-tag="jiyou"]     { background: linear-gradient(135deg, #fdf4ff, #f5d0fe); border-color: #e879f9; }
+.mu-personality-card[data-tag="zhuanyi"]   { background: linear-gradient(135deg, #fff1f2, #fecdd3); border-color: #fb7185; }
+.mu-personality-card[data-tag="sikao"]     { background: linear-gradient(135deg, #eff6ff, #bfdbfe); border-color: #60a5fa; }
+.mu-personality-card[data-tag="default"]   { background: linear-gradient(135deg, #f0f9ff, #e0f2fe); border-color: #38bdf8; }
+
+/* 深夜哲学家深色主题下字色翻转 */
+.mu-personality-card[data-tag="shenye"] .mu-personality-badge { color: #818cf8; background: rgba(99,102,241,.15); border-color: rgba(99,102,241,.3); }
+.mu-personality-card[data-tag="shenye"] .mu-personality-label { color: #e2e8f0; }
+.mu-personality-card[data-tag="shenye"] .mu-personality-story { color: #94a3b8; }
+
+.mu-personality-inner {
+  display: flex; align-items: center; gap: 0;
+}
+
+.mu-personality-mascot {
+  flex-shrink: 0; width: 240px; height: 240px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
+}
+
+.mu-personality-img {
+  width: 100%; height: 100%;
+  object-fit: contain;
+  /* 白色背景图片在浅色卡片上用 multiply 混合模式视觉去白 */
+  mix-blend-mode: multiply;
+  border-radius: 8px;
+  transition: transform .3s ease;
+}
+.mu-personality-card[data-tag="shenye"] .mu-personality-img {
+  mix-blend-mode: screen;
+}
+.mu-personality-mascot:hover .mu-personality-img { transform: scale(1.06); }
+
+.mu-personality-info {
+  flex: 1; min-width: 0; padding: 24px 28px 24px 8px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+
+.mu-personality-badge {
+  display: inline-flex; align-items: center;
+  font-size: 11px; font-weight: 600; letter-spacing: .04em;
+  color: var(--el-color-primary); background: var(--el-color-primary-light-9);
+  border: 1px solid var(--el-color-primary-light-7);
+  border-radius: 999px; padding: 3px 12px;
+  width: fit-content;
+}
+
+.mu-personality-label {
+  margin: 0; font-size: 26px; font-weight: 800;
+  color: var(--el-text-color-primary); line-height: 1.2;
+}
+
+.mu-personality-story {
+  margin: 0; font-size: 14px; color: var(--el-text-color-regular);
+  line-height: 1.7; max-width: 480px;
+}
+
+.mu-personality-actions { margin-top: 4px; }
+
+@media (max-width: 768px) {
+  .mu-personality-inner { flex-direction: column; align-items: flex-start; }
+  .mu-personality-mascot { width: 160px; height: 160px; }
+  .mu-personality-info { padding: 0 16px 20px; }
+  .mu-personality-label { font-size: 22px; }
+}
+@media (max-width: 480px) {
+  .mu-personality-mascot { width: 120px; height: 120px; }
+  .mu-personality-label { font-size: 18px; }
+  .mu-personality-story { font-size: 13px; }
+}
+
+/* 暗色模式：浅色主题卡片降低亮度 */
+html.dark .mu-personality-card[data-tag="volwang"]   { background: linear-gradient(135deg, #451a03, #78350f); border-color: #b45309; }
+html.dark .mu-personality-card[data-tag="shengqian"] { background: linear-gradient(135deg, #052e16, #14532d); border-color: #15803d; }
+html.dark .mu-personality-card[data-tag="xiaolv"]    { background: linear-gradient(135deg, #2e1065, #4c1d95); border-color: #7c3aed; }
+html.dark .mu-personality-card[data-tag="chenxing"]  { background: linear-gradient(135deg, #431407, #7c2d12); border-color: #c2410c; }
+html.dark .mu-personality-card[data-tag="jiyou"]     { background: linear-gradient(135deg, #3b0764, #701a75); border-color: #a21caf; }
+html.dark .mu-personality-card[data-tag="zhuanyi"]   { background: linear-gradient(135deg, #4c0519, #881337); border-color: #be123c; }
+html.dark .mu-personality-card[data-tag="sikao"]     { background: linear-gradient(135deg, #1e3a5f, #1d4ed8); border-color: #3b82f6; }
+html.dark .mu-personality-card[data-tag="default"]   { background: linear-gradient(135deg, #0c1a2e, #0c4a6e); border-color: #0284c7; }
+html.dark .mu-personality-badge { color: var(--el-color-primary-light-3); background: rgba(99,102,241,.12); border-color: rgba(99,102,241,.25); }
+html.dark .mu-personality-label { color: var(--el-text-color-primary); }
+html.dark .mu-personality-story { color: var(--el-text-color-regular); }
 
 /* ── 页头 ── */
 .mu-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }

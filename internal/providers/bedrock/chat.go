@@ -176,11 +176,11 @@ func convertMessages(messages []core.Message) ([]brtypes.SystemContentBlock, []b
 		}
 		switch msg.Role {
 		case "system", "developer":
-			text := core.ExtractTextContent(msg.Content)
-			if text == "" {
+			sysBlocks := convertSystemContentBlocks(msg.Content)
+			if len(sysBlocks) == 0 {
 				continue
 			}
-			system = append(system, &brtypes.SystemContentBlockMemberText{Value: text})
+			system = append(system, sysBlocks...)
 		case "tool":
 			block, err := convertToolResultMessage(msg)
 			if err != nil {
@@ -210,6 +210,43 @@ func convertMessages(messages []core.Message) ([]brtypes.SystemContentBlock, []b
 
 var imageDownloadClient = &http.Client{Timeout: 30 * time.Second}
 
+// hasCacheControl reports whether a ContentPart carries cache_control in its ExtraFields.
+// OpenCode and Claude Code attach {"type":"ephemeral"} to mark prompt-cache boundaries.
+func hasCacheControl(part core.ContentPart) bool {
+	return part.ExtraFields.Lookup("cache_control") != nil
+}
+
+// convertSystemContentBlocks converts a system message content value into
+// Bedrock SystemContentBlock slice, inserting a CachePoint after any text
+// block that carries a cache_control marker.
+func convertSystemContentBlocks(content any) []brtypes.SystemContentBlock {
+	parts, ok := core.NormalizeContentParts(content)
+	if !ok {
+		text := core.ExtractTextContent(content)
+		if text == "" {
+			return nil
+		}
+		return []brtypes.SystemContentBlock{&brtypes.SystemContentBlockMemberText{Value: text}}
+	}
+
+	blocks := make([]brtypes.SystemContentBlock, 0, len(parts)*2)
+	for _, part := range parts {
+		if part.Type != "text" && part.Type != "input_text" {
+			continue
+		}
+		if part.Text == "" {
+			continue
+		}
+		blocks = append(blocks, &brtypes.SystemContentBlockMemberText{Value: part.Text})
+		if hasCacheControl(part) {
+			blocks = append(blocks, &brtypes.SystemContentBlockMemberCachePoint{
+				Value: brtypes.CachePointBlock{Type: brtypes.CachePointTypeDefault},
+			})
+		}
+	}
+	return blocks
+}
+
 func convertUserContentBlocks(content any) ([]brtypes.ContentBlock, error) {
 	parts, ok := core.NormalizeContentParts(content)
 	if !ok {
@@ -220,12 +257,17 @@ func convertUserContentBlocks(content any) ([]brtypes.ContentBlock, error) {
 		return []brtypes.ContentBlock{&brtypes.ContentBlockMemberText{Value: text}}, nil
 	}
 
-	blocks := make([]brtypes.ContentBlock, 0, len(parts))
+	blocks := make([]brtypes.ContentBlock, 0, len(parts)*2)
 	for _, part := range parts {
 		switch part.Type {
 		case "text", "input_text":
 			if part.Text != "" {
 				blocks = append(blocks, &brtypes.ContentBlockMemberText{Value: part.Text})
+				if hasCacheControl(part) {
+					blocks = append(blocks, &brtypes.ContentBlockMemberCachePoint{
+						Value: brtypes.CachePointBlock{Type: brtypes.CachePointTypeDefault},
+					})
+				}
 			}
 		case "image_url", "input_image":
 			if part.ImageURL == nil || part.ImageURL.URL == "" {
@@ -236,6 +278,11 @@ func convertUserContentBlocks(content any) ([]brtypes.ContentBlock, error) {
 				return nil, err
 			}
 			blocks = append(blocks, &brtypes.ContentBlockMemberImage{Value: *imgBlock})
+			if hasCacheControl(part) {
+				blocks = append(blocks, &brtypes.ContentBlockMemberCachePoint{
+					Value: brtypes.CachePointBlock{Type: brtypes.CachePointTypeDefault},
+				})
+			}
 		}
 	}
 	if len(blocks) == 0 {

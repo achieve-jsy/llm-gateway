@@ -71,13 +71,13 @@ func UsageCollector(collector *gwobs.Collector, traceWriter *gwobs.TraceWriter, 
 			event.DurationMs = int64(totalMs)
 			collector.Emit(event)
 
-			// ── v0.7 预算核销 + 告警触发（postHook，异步） ──
-			// 仅当 BudgetCheckMiddleware 做了预扣（context 中有 budget_keys）
-			// 且未被 passthrough 豁免（budget_skipped 未设置）时才触发
+			// ── v0.9 预算累加 + 告警触发（postHook，事后记账模式） ──
+			// 仅当 Reserve() 做了检查（context 中有 budget_keys）
+			// 且 Redis 检查未因不可用而跳过时触发
 			if postHook != nil && event.EstCostUSD > 0 {
-				_, hasPreReserve := c.Get("budget_keys")
-				_, wasSkipped := c.Get("budget_skipped")
-				if hasPreReserve && !wasSkipped {
+				_, hasChecked := c.Get(CtxKeyBudgetKeys)
+				_, wasSkipped := c.Get(CtxKeyBudgetSkipped)
+				if hasChecked && !wasSkipped {
 					postHook(c, event.EstCostUSD, c.Writer.Status())
 				}
 			}

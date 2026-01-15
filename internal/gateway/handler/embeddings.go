@@ -68,15 +68,14 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 
 	c.Set("model", req.Model)
 
-	// v0.7: 预算预扣（embeddings 仅输入 tokens，无 max_tokens）
+	// v0.9: 预算检查（事后记账模式）
 	if h.budgetDeps != nil {
-		promptChars := estimateEmbeddingInputChars(&req)
-		if _, err := middleware.Reserve(c, h.budgetDeps, req.Model, 0, promptChars); err != nil {
+		if _, err := middleware.Reserve(c, h.budgetDeps); err != nil {
 			if be, ok := err.(*middleware.BudgetExceededError); ok {
 				be.WriteHTTPResponse(c)
 				return
 			}
-			slog.Warn("embeddings: budget reserve failed", "model", req.Model, "error", err)
+			slog.Warn("embeddings: budget check failed", "model", req.Model, "error", err)
 		}
 	}
 

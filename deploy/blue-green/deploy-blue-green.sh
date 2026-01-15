@@ -91,7 +91,7 @@ health_check() {
     for i in $(seq 1 "$HEALTH_RETRIES"); do
         # 用 curl 发 GET 探活：宿主机上的 GNU wget --spider 会发 HEAD，
         # 而 gin 的 /health、/healthz 仅注册 GET，HEAD 会 404 导致误判不健康。
-        if curl -fsS -o /dev/null --max-time 5 "http://localhost:${gw_port}/health" && \
+        if curl -fsS -o /dev/null --max-time 5 "http://localhost:${gw_port}/ready" && \
            curl -fsS -o /dev/null --max-time 5 "http://localhost:${cp_port}/healthz"; then
             log "${color} is healthy (attempt ${i}/${HEALTH_RETRIES})"
             return 0

@@ -31,6 +31,18 @@ func (t *PricingTable) Resolve(modelKey string) (core.ModelPricing, bool) {
 	return p, ok
 }
 
+// GetModelPricing 实现 middleware.PricingResolver 接口，供 budget pre-deduction 使用。
+// 查不到时返回 nil，调用方自行降级到 FallbackPricingResolver。
+func (t *PricingTable) GetModelPricing(model string) *core.ModelPricing {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	p, ok := t.data[model]
+	if !ok || (p.InputPerMtok == nil && p.OutputPerMtok == nil) {
+		return nil
+	}
+	return &p
+}
+
 // GetAll 返回全量价表的副本
 func (t *PricingTable) GetAll() map[string]core.ModelPricing {
 	t.mu.RLock()

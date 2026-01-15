@@ -84,19 +84,14 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 	originalModel := req.Model
 	c.Set("model", req.Model)
 
-	// v0.7: 预算预扣（基于解析 body 后的 model + max_tokens + prompt 估算）
+	// v0.9: 预算检查（事后记账模式，只检查已累计用量，不估算本次成本）
 	if h.budgetDeps != nil {
-		promptChars := estimateChatPromptChars(&req)
-		maxTokens := 0
-		if req.MaxTokens != nil {
-			maxTokens = *req.MaxTokens
-		}
-		if _, err := middleware.Reserve(c, h.budgetDeps, req.Model, maxTokens, promptChars); err != nil {
+		if _, err := middleware.Reserve(c, h.budgetDeps); err != nil {
 			if be, ok := err.(*middleware.BudgetExceededError); ok {
 				be.WriteHTTPResponse(c)
 				return
 			}
-			slog.Warn("chat: budget reserve failed", "model", req.Model, "error", err)
+			slog.Warn("chat: budget check failed", "model", req.Model, "error", err)
 		}
 	}
 

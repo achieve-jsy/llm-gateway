@@ -62,15 +62,14 @@ func (h *MessagesHandler) HandleMessages(c *gin.Context) {
 
 	c.Set("model", anthReq.Model)
 
-	// v0.7: 预算预扣
+	// v0.9: 预算检查（事后记账模式）
 	if h.budgetDeps != nil {
-		promptChars := estimateAnthropicPromptChars(&anthReq)
-		if _, err := middleware.Reserve(c, h.budgetDeps, anthReq.Model, anthReq.MaxTokens, promptChars); err != nil {
+		if _, err := middleware.Reserve(c, h.budgetDeps); err != nil {
 			if be, ok := err.(*middleware.BudgetExceededError); ok {
 				c.AbortWithStatusJSON(http.StatusPaymentRequired, be.ToJSON())
 				return
 			}
-			slog.Warn("messages: budget reserve failed", "model", anthReq.Model, "error", err)
+			slog.Warn("messages: budget check failed", "model", anthReq.Model, "error", err)
 		}
 	}
 

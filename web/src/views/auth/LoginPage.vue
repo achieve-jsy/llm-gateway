@@ -33,7 +33,7 @@ const features = [
   { title: '统一管理', desc: '畅行所有系统' },
 ]
 
-function redirectToSSO() {
+function redirectToDaqun() {
   window.location.href = '/api/v1/auth/oidc/login'
 }
 
@@ -138,8 +138,8 @@ async function handleDevLogin() {
         </svg>
       </div>
 
-      <!-- SSO 登录主按钮 -->
-      <button type="button" class="sso-btn" @click="redirectToSSO">SSO 登录</button>
+      <!-- 大群登录主按钮 -->
+      <button type="button" class="sso-btn" @click="redirectToDaqun">大群登录</button>
 
       <!-- 特性 -->
       <ul class="card-features">

@@ -85,38 +85,51 @@
       </el-tabs>
     </div>
 
-    <el-dialog v-model="addStudioDialogVisible" title="授权工作室" width="400px" center @close="resetAddStudio">
+    <el-dialog v-model="addStudioDialogVisible" title="授权工作室" width="440px" center @close="resetAddStudio">
       <el-form label-width="60px" style="margin-top: 8px">
         <el-form-item label="工作室">
-          <el-select v-model="newStudioId" placeholder="选择工作室" style="width: 100%" filterable>
+          <el-select
+            v-model="newStudioIds"
+            placeholder="可多选，一次授权多个工作室"
+            style="width: 100%"
+            filterable
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
+          >
             <el-option
               v-for="s in availableStudios"
               :key="s.id"
               :label="s.name"
               :value="s.id"
-              :disabled="isStudioAlreadyGranted(s.id)"
             />
           </el-select>
         </el-form-item>
       </el-form>
+      <div v-if="newStudioIds.length" class="batch-hint">
+        将为 <strong>{{ newStudioIds.length }}</strong> 个工作室授权该模型组
+      </div>
       <template #footer>
         <div style="display: flex; gap: 12px; justify-content: flex-end">
           <el-button @click="addStudioDialogVisible = false">取消</el-button>
-          <el-button type="primary" :disabled="!newStudioId" :loading="granting" @click="handleGrantStudio">
-            确定授权
+          <el-button type="primary" :disabled="!newStudioIds.length" :loading="granting" @click="handleGrantStudio">
+            确定授权{{ newStudioIds.length > 1 ? ` (${newStudioIds.length})` : '' }}
           </el-button>
         </div>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="addDeptDialogVisible" title="开通部门" width="400px" center @close="resetAddDept">
+    <el-dialog v-model="addDeptDialogVisible" title="开通部门" width="440px" center @close="resetAddDept">
       <el-form label-width="60px" style="margin-top: 8px">
         <el-form-item label="部门">
           <el-select
-            v-model="newDeptId"
-            placeholder="选择部门"
+            v-model="newDeptIds"
+            placeholder="可多选，一次开通多个部门"
             style="width: 100%"
             filterable
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
             :disabled="props.actorRole === 'dept_admin' && !!props.restrictDeptId"
           >
             <el-option
@@ -124,16 +137,18 @@
               :key="d.dept_id"
               :label="d.dept_name"
               :value="d.dept_id"
-              :disabled="isDeptAlreadyGranted(d.dept_id)"
             />
           </el-select>
         </el-form-item>
       </el-form>
+      <div v-if="newDeptIds.length > 1" class="batch-hint">
+        将开通 <strong>{{ newDeptIds.length }}</strong> 个部门
+      </div>
       <template #footer>
         <div style="display: flex; gap: 12px; justify-content: flex-end">
           <el-button @click="addDeptDialogVisible = false">取消</el-button>
-          <el-button type="primary" :disabled="!newDeptId" :loading="granting" @click="handleGrantDept">
-            确定开通
+          <el-button type="primary" :disabled="!newDeptIds.length" :loading="granting" @click="handleGrantDept">
+            确定开通{{ newDeptIds.length > 1 ? ` (${newDeptIds.length})` : '' }}
           </el-button>
         </div>
       </template>
@@ -184,11 +199,11 @@ const allStudios = ref<Studio[]>([])
 const allDepts = ref<OrgDepartment[]>([])
 
 const addStudioDialogVisible = ref(false)
-const newStudioId = ref('')
+const newStudioIds = ref<string[]>([])
 const granting = ref(false)
 
 const addDeptDialogVisible = ref(false)
-const newDeptId = ref('')
+const newDeptIds = ref<string[]>([])
 const selectedStudioForDept = ref('')
 
 // studio Tab 仅 admin 可见（spec 3.7 / 3.8：studio_admin/dept_admin 打开抽屉不应看到工作室授权 Tab）
@@ -228,12 +243,6 @@ const filteredDeptEntitlements = computed(() => {
     })
   }
   return rows
-})
-
-const deptStudioHint = computed(() => {
-  if (!newDeptId.value) return '-'
-  const dept = allDepts.value.find(d => d.dept_id === newDeptId.value)
-  return dept?.studio_name || dept?.studio_id || '-'
 })
 
 function handleDrawerClose() {
@@ -282,26 +291,32 @@ watch(() => props.visible, (val) => {
 
 function openAddStudio() {
   addStudioDialogVisible.value = true
-  newStudioId.value = ''
+  newStudioIds.value = []
 }
 
 function resetAddStudio() {
-  newStudioId.value = ''
-}
-
-function isStudioAlreadyGranted(studioId: string) {
-  return studioEntitlements.value.some(e => e.scope_id === studioId && e.enabled)
+  newStudioIds.value = []
 }
 
 async function handleGrantStudio() {
-  if (!props.groupId || !newStudioId.value) return
+  if (!props.groupId || !newStudioIds.value.length) return
   granting.value = true
+  const gid = props.groupId
   try {
-    await groupsApi.grantEntitlement(props.groupId, {
-      scope_type: 'studio',
-      scope_id: newStudioId.value,
-    })
-    ElMessage.success('已授权工作室')
+    const results = await Promise.allSettled(
+      newStudioIds.value.map(id =>
+        groupsApi.grantEntitlement(gid, { scope_type: 'studio', scope_id: id })
+      )
+    )
+    const ok = results.filter(r => r.status === 'fulfilled').length
+    const failed = results.length - ok
+    if (failed === 0) {
+      ElMessage.success(`已授权 ${ok} 个工作室`)
+    } else if (ok > 0) {
+      ElMessage.warning(`成功 ${ok} 个，失败 ${failed} 个`)
+    } else {
+      ElMessage.error('授权失败')
+    }
     addStudioDialogVisible.value = false
     await loadData()
   } catch {
@@ -326,31 +341,37 @@ function openAddDept() {
   if (!props.groupId || !selectedStudioForDept.value) return
   addDeptDialogVisible.value = true
   // dept_admin 锁定本部门，自动选中且禁止修改（spec 5.9：dept_admin 不能开通其他部门）
-  newDeptId.value =
-    props.actorRole === 'dept_admin' && props.restrictDeptId ? props.restrictDeptId : ''
+  newDeptIds.value =
+    props.actorRole === 'dept_admin' && props.restrictDeptId ? [props.restrictDeptId] : []
 }
 
 function resetAddDept() {
-  newDeptId.value = ''
-}
-
-function isDeptAlreadyGranted(deptId: string) {
-  return deptEntitlements.value.some(e => e.scope_id === deptId && e.enabled)
+  newDeptIds.value = []
 }
 
 function onStudioFilterChange() {
-  newDeptId.value = ''
+  newDeptIds.value = []
 }
 
 async function handleGrantDept() {
-  if (!props.groupId || !newDeptId.value) return
+  if (!props.groupId || !newDeptIds.value.length) return
   granting.value = true
+  const gid = props.groupId
   try {
-    await groupsApi.grantEntitlement(props.groupId, {
-      scope_type: 'dept',
-      scope_id: newDeptId.value,
-    })
-    ElMessage.success('已开通部门')
+    const results = await Promise.allSettled(
+      newDeptIds.value.map(id =>
+        groupsApi.grantEntitlement(gid, { scope_type: 'dept', scope_id: id })
+      )
+    )
+    const ok = results.filter(r => r.status === 'fulfilled').length
+    const failed = results.length - ok
+    if (failed === 0) {
+      ElMessage.success(`已开通 ${ok} 个部门`)
+    } else if (ok > 0) {
+      ElMessage.warning(`成功 ${ok} 个，失败 ${failed} 个`)
+    } else {
+      ElMessage.error('开通失败')
+    }
     addDeptDialogVisible.value = false
     await loadData()
   } catch {
@@ -398,5 +419,19 @@ function formatDate(value: string) {
 .dept-studio-name {
   color: var(--el-text-color-secondary);
   font-size: 13px;
+}
+
+.batch-hint {
+  margin-top: -8px;
+  padding: 8px 12px;
+  background: var(--el-color-primary-light-9);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+}
+
+.batch-hint strong {
+  color: var(--el-color-primary);
+  font-weight: 600;
 }
 </style>

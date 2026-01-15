@@ -13,6 +13,7 @@
 | [configuration.md](configuration.md) | 配置体系、参数注入 (YAML/env/CI Variables)、本地开发注入 | 否 |
 | [observability.md](observability.md) | 日志、指标、链路追踪规范 | 否 |
 | [guardrails.md](guardrails.md) | 项目防护栏铁律（架构/数据库/配置/质量/流程） | 否 |
+| [frontend-design-guidelines.md](frontend-design-guidelines.md) | 前端 UI/UX 设计规范（Vue3 + Element Plus），含设计 token、三态、危险操作确认、动作密度等 | 否 |
 | [opencode-models-discovery.md](opencode-models-discovery.md) | OpenCode 模型发现插件架构 | 是 |
 
 ## 约定

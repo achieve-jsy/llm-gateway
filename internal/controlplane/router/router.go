@@ -410,6 +410,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		// 用量与成本查询
 		usageSvc := obssvc.NewRollupService(db)
 		usageH := obshandler.NewUsageHandler(usageSvc, db)
+		usageH.SetRedis(rdb)
 		adminGroup.GET("/usage/logs", usageH.Logs)
 		adminGroup.GET("/usage/logs/:request_id/trace", usageH.Trace)
 		adminGroup.GET("/usage/options", usageH.Options)
@@ -418,6 +419,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		// 个人用量查询（按登录用户 user_id 隔离）
 		adminGroup.GET("/my/keys", keyHandler.MyKeys)
 		adminGroup.GET("/my/usage", usageH.MyQuery)
+		adminGroup.GET("/my/usage/percentiles", usageH.MyPercentiles)
 		adminGroup.GET("/my/usage/logs", usageH.MyLogs)
 		adminGroup.GET("/my/usage/logs/:request_id/trace", usageH.Trace)
 	}

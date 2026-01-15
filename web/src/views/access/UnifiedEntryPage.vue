@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, reactive } from 'vue'
 import http from '@/services/http'
+import { usageApi, type UsagePercentiles } from '@/api/usage'
 import { useAuthStore } from '@/stores/auth'
 import { getPublicSettings } from '@/services/control-plane'
 import { copyToClipboard } from '@/utils/clipboard'
@@ -42,6 +43,13 @@ const total = ref<Total | null>(null)
 const dayRows = ref<Row[]>([])
 const modelRows = ref<Row[]>([])
 const hourRows = ref<Row[]>([])
+const percentiles = ref<UsagePercentiles>({
+  p90_daily_avg_calls: 500,
+  p90_cache_hit_pct: 60,
+  p90_output_ratio: 0.5,
+  p90_unique_models: 10,
+  p90_reasoning_share: 0.3,
+})
 
 const RANGE_DAYS = 30
 const usdToCny = ref(7.2)
@@ -101,6 +109,15 @@ async function load() {
   animateTo('cost', totalCostCny.value, 1000, 2)
 }
 
+async function loadPercentiles() {
+  try {
+    const res = await usageApi.getPercentiles()
+    percentiles.value = { ...percentiles.value, ...res.data.data }
+  } catch {
+    console.warn('Failed to load usage percentiles, using defaults')
+  }
+}
+
 onMounted(async () => {
   try {
     const res = await getPublicSettings()
@@ -108,6 +125,7 @@ onMounted(async () => {
     displayUrl.value = buildUrl(apiBaseUrl.value)
     if (res.data.pricing_usd_to_cny_rate) usdToCny.value = res.data.pricing_usd_to_cny_rate
   } catch { /* noop */ }
+  await loadPercentiles()
   await load()
 })
 
@@ -163,6 +181,7 @@ const composition = computed(() => {
 
 // token 按模型分布
 const PALETTE = ['#36B34E', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899', '#06b6d4']
+const modelDim = ref<'token' | 'cost'>('token')
 const modelDist = computed(() => {
   const rows = modelRows.value.map(r => ({
     model: r.model || '未知',
@@ -171,6 +190,16 @@ const modelDist = computed(() => {
   const sum = rows.reduce((s, r) => s + r.tokens, 0) || 1
   return rows.slice(0, 6).map((r, i) => ({
     ...r, pct: Math.round(r.tokens / sum * 100), color: PALETTE[i % PALETTE.length],
+  }))
+})
+const costDist = computed(() => {
+  const rows = modelRows.value.map(r => ({
+    model: r.model || '未知',
+    costCny: (r.est_cost_usd || 0) * usdToCny.value,
+  })).filter(r => r.costCny > 0).sort((a, b) => b.costCny - a.costCny)
+  const sum = rows.reduce((s, r) => s + r.costCny, 0) || 1
+  return rows.slice(0, 6).map((r, i) => ({
+    ...r, pct: Math.round(r.costCny / sum * 100), color: PALETTE[i % PALETTE.length],
   }))
 })
 const topModel = computed(() => modelDist.value[0]?.model || '—')
@@ -220,10 +249,20 @@ interface MascotTag {
 }
 
 // 派生：日均调用、不同模型数、top1 模型占比、缓存可省金额
-const dailyAvgCalls = computed(() => Math.round((total.value?.req_count || 0) / RANGE_DAYS))
-const uniqueModelCount = computed(() => modelDist.value.length)
+const dailyAvgCalls = computed(() => {
+  const totalCalls = total.value?.req_count || 0
+  const activeDayCount = dayRows.value.length || 1
+  return Math.round(totalCalls / activeDayCount)
+})
+const uniqueModelCount = computed(() => {
+  const models = new Set(modelRows.value.map(r => r.model).filter(Boolean))
+  return models.size
+})
 const topModelPct = computed(() => modelDist.value[0]?.pct || 0)
 const cacheHitPct = computed(() => Math.round(cacheRate.value * 100))
+const fmtThreshold = (n: number, digits = 0) => n.toLocaleString('zh-CN', { maximumFractionDigits: digits })
+const fmtPctThreshold = (n: number) => fmtThreshold(n, 1)
+const fmtShareThreshold = (n: number) => fmtThreshold(n * 100, 1)
 // 缓存命中部分按命中 token 折算节省（粗略：命中 token 占 prompt 的比例 × 花费）
 const savedCny = computed(() => {
   const cached = total.value?.cached_tokens || 0
@@ -247,34 +286,34 @@ const mascot = computed<MascotTag>(() => {
     }
   }
 
-  // 1. ⚡ 卷王本王：日均调用 ≥ 50
-  if (dailyAvgCalls.value >= 50) {
+  // 1. ⚡ 卷王本王：日均调用达到全站 P90
+  if (dailyAvgCalls.value >= percentiles.value.p90_daily_avg_calls) {
     return {
       id: 'volwang', emoji: '⚡', label: '卷王本王',
       image: '/images/mascot/volwang.png',
-      trigger: '日均调用 ≥ 50 次',
+      trigger: `日均调用 ≥ ${fmtThreshold(percentiles.value.p90_daily_avg_calls)} 次`,
       story: `近 30 天日均调用 ${dailyAvgCalls.value} 次，累计 ${fmtNum(total.value?.req_count)} 次，火箭都追不上你。`,
       shareText: `我是 AiMeter 卷王本王，日均 ${dailyAvgCalls.value} 次调用，谁与争锋？`,
     }
   }
 
-  // 2. 💎 省钱天才：缓存命中率 ≥ 25%
-  if (cacheHitPct.value >= 25) {
+  // 2. 💎 省钱天才：缓存命中率达到全站 P90
+  if (cacheHitPct.value >= percentiles.value.p90_cache_hit_pct) {
     return {
       id: 'shengqian', emoji: '💎', label: '省钱天才',
       image: '/images/mascot/shengqian.png',
-      trigger: '缓存命中率 ≥ 25%',
+      trigger: `缓存命中率 ≥ ${fmtPctThreshold(percentiles.value.p90_cache_hit_pct)}%`,
       story: `缓存命中率高达 ${cacheHitPct.value}%${savedCny.value > 0.01 ? `，相当于省了约 ¥${fmtCny(savedCny.value)}` : ''}，过日子哥就是专业。`,
       shareText: `缓存命中率 ${cacheHitPct.value}%，AiMeter 省钱天才非我莫属。`,
     }
   }
 
-  // 3. 🎯 效率怪物：输入输出比 ≥ 4:1（输出远大于输入）
-  if (outRatio.value >= 4) {
+  // 3. 🎯 效率怪物：输出输入比达到全站 P90
+  if (outRatio.value >= percentiles.value.p90_output_ratio) {
     return {
       id: 'xiaolv', emoji: '🎯', label: '效率怪物',
       image: '/images/mascot/xiaolv.png',
-      trigger: '输入输出比 ≥ 1:4',
+      trigger: `输入输出比 ≥ 1:${fmtThreshold(percentiles.value.p90_output_ratio, 2)}`,
       story: `你的输入输出比为 1:${outRatio.value.toFixed(1)}，一发飞镖正中靶心，prompt 从不多写一字。`,
       shareText: `1:${outRatio.value.toFixed(1)} 的输入输出比，效率怪物的 prompt 从不多写一个字。`,
     }
@@ -302,12 +341,12 @@ const mascot = computed<MascotTag>(() => {
     }
   }
 
-  // 6. 🦄 模型集邮癖：使用过 ≥ 5 种模型
-  if (uniqueModelCount.value >= 5) {
+  // 6. 🦄 模型集邮癖：使用模型数达到全站 P90
+  if (uniqueModelCount.value >= percentiles.value.p90_unique_models) {
     return {
       id: 'jiyou', emoji: '🦄', label: '模型集邮癖',
       image: '/images/mascot/jiyou.png',
-      trigger: '使用过 ≥ 5 种模型',
+      trigger: `使用过 ≥ ${fmtThreshold(percentiles.value.p90_unique_models, 1)} 种模型`,
       story: `你用过 ${uniqueModelCount.value} 种不同模型，伸手就抓各家泡泡，是全站最博爱的探索者。`,
       shareText: `我用过 ${uniqueModelCount.value} 种模型！集邮癖的快乐你不懂。`,
     }
@@ -324,13 +363,13 @@ const mascot = computed<MascotTag>(() => {
     }
   }
 
-  // 8. 🤔 深度思考家：推理 token 占比 ≥ 30%
-  if (reasoningShare.value >= 0.3) {
+  // 8. 🤔 深度思考家：推理 token 占比达到全站 P90
+  if (reasoningShare.value >= percentiles.value.p90_reasoning_share) {
     const pct = Math.round(reasoningShare.value * 100)
     return {
       id: 'sikao', emoji: '🤔', label: '深度思考家',
       image: '/images/mascot/sikao.png',
-      trigger: '推理 token 占比 ≥ 30%',
+      trigger: `推理 token 占比 ≥ ${fmtShareThreshold(percentiles.value.p90_reasoning_share)}%`,
       story: `你有 ${pct}% 的输出来自深度推理，盘腿冥想头顶灯泡常亮，大脑永不停歇。`,
       shareText: `${pct}% 的输出都是深度推理，思考家的大脑永不停歇。`,
     }
@@ -526,13 +565,17 @@ const fmtCny = (n: number) => n < 0.01 && n > 0 ? '<0.01' : n.toLocaleString('zh
         </div>
       </section>
 
-      <!-- token 按模型分布 -->
+      <!-- 模型分布：Token + 花费 -->
       <section class="pd-card pd-models">
         <div class="pd-card__hd">
-          <h3 class="pd-card__title">你的 Token 都喂给了谁</h3>
-          <span class="pd-card__hint">按 token 占比 · 看你最爱用哪些模型</span>
+          <h3 class="pd-card__title">你的钱和 Token 都去了哪</h3>
+          <span class="pd-card__hint">双维度 · 看你最爱用哪些模型</span>
         </div>
-        <div class="pd-models__list">
+        <div class="pd-dim-tabs">
+          <button type="button" :class="{ active: modelDim === 'token' }" @click="modelDim = 'token'">Token 分布</button>
+          <button type="button" :class="{ active: modelDim === 'cost' }" @click="modelDim = 'cost'">花费分布</button>
+        </div>
+        <div v-if="modelDim === 'token'" class="pd-models__list">
           <div v-for="(m, i) in modelDist" :key="m.model" class="pd-mrow">
             <span class="pd-mrow__rank" :style="{ background: m.color }">{{ i + 1 }}</span>
             <span class="pd-mrow__name" :title="m.model">{{ m.model }}</span>
@@ -541,6 +584,17 @@ const fmtCny = (n: number) => n < 0.01 && n > 0 ? '<0.01' : n.toLocaleString('zh
             </div>
             <span class="pd-mrow__pct">{{ m.pct }}%</span>
             <span class="pd-mrow__tok">{{ fmtTokens(m.tokens) }}</span>
+          </div>
+        </div>
+        <div v-else class="pd-models__list">
+          <div v-for="(m, i) in costDist" :key="m.model" class="pd-mrow">
+            <span class="pd-mrow__rank" :style="{ background: m.color }">{{ i + 1 }}</span>
+            <span class="pd-mrow__name" :title="m.model">{{ m.model }}</span>
+            <div class="pd-mrow__track">
+              <div class="pd-mrow__fill" :style="{ width: m.pct + '%', background: m.color }" />
+            </div>
+            <span class="pd-mrow__pct">{{ m.pct }}%</span>
+            <span class="pd-mrow__tok">¥{{ fmtCny(m.costCny) }}</span>
           </div>
         </div>
       </section>
@@ -704,6 +758,16 @@ const fmtCny = (n: number) => n < 0.01 && n > 0 ? '<0.01' : n.toLocaleString('zh
 .pd-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 
 /* ── 模型分布 ── */
+.pd-dim-tabs { display: flex; gap: 8px; margin-bottom: 8px; }
+.pd-dim-tabs button {
+  padding: 4px 12px; border: 1px solid var(--el-border-color-lighter);
+  border-radius: 14px; background: transparent; color: var(--el-text-color-secondary);
+  font-size: 12px; cursor: pointer; transition: all .2s;
+}
+.pd-dim-tabs button.active {
+  background: var(--pd-brand, var(--el-color-primary));
+  color: #fff; border-color: var(--pd-brand, var(--el-color-primary));
+}
 .pd-models__list { display: flex; flex-direction: column; gap: 10px; }
 .pd-mrow { display: flex; align-items: center; gap: 10px; }
 .pd-mrow__rank { width: 20px; height: 20px; border-radius: 6px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; }

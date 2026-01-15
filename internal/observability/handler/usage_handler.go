@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
 	obsmodel "github.com/example/llm-gateway/internal/observability/model"
@@ -73,6 +75,7 @@ type DashboardResponse struct {
 type UsageHandler struct {
 	svc *service.RollupService
 	db  *gorm.DB
+	rdb *redis.Client
 }
 
 // NewUsageHandler 创建 UsageHandler
@@ -82,6 +85,11 @@ func NewUsageHandler(svc *service.RollupService, db ...*gorm.DB) *UsageHandler {
 		h.db = db[0]
 	}
 	return h
+}
+
+// SetRedis 注入可选 Redis 缓存，用于全站百分位等低频统计。
+func (h *UsageHandler) SetRedis(rdb *redis.Client) {
+	h.rdb = rdb
 }
 
 // Trace GET /api/v1/usage/logs/:request_id/trace — 单条请求完整 trace
@@ -209,6 +217,78 @@ func (h *UsageHandler) MyQuery(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+// UsagePercentilesResponse 全站用户近 30 天 P90 阈值。
+type UsagePercentilesResponse struct {
+	P90DailyAvgCalls  float64   `json:"p90_daily_avg_calls" gorm:"column:p90_daily_avg_calls"`
+	P90CacheHitPct    float64   `json:"p90_cache_hit_pct" gorm:"column:p90_cache_hit_pct"`
+	P90OutputRatio    float64   `json:"p90_output_ratio" gorm:"column:p90_output_ratio"`
+	P90UniqueModels   float64   `json:"p90_unique_models" gorm:"column:p90_unique_models"`
+	P90ReasoningShare float64   `json:"p90_reasoning_share" gorm:"column:p90_reasoning_share"`
+	CalculatedAt      time.Time `json:"calculated_at" gorm:"-"`
+}
+
+// MyPercentiles GET /api/v1/my/usage/percentiles — 全站用户近 30 天 P90 标签阈值。
+func (h *UsageHandler) MyPercentiles(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db not configured"})
+		return
+	}
+
+	const cacheKey = "usage:percentiles:p90:30d"
+	if h.rdb != nil {
+		if raw, err := h.rdb.Get(c.Request.Context(), cacheKey).Bytes(); err == nil {
+			var cached UsagePercentilesResponse
+			if err := json.Unmarshal(raw, &cached); err == nil {
+				c.JSON(http.StatusOK, gin.H{"data": cached})
+				return
+			}
+		}
+	}
+
+	var resp UsagePercentilesResponse
+	rawSQL := `
+		WITH user_stats AS (
+			SELECT
+				user_id,
+				SUM(req_count)::float / COUNT(DISTINCT stat_date) AS daily_avg,
+				CASE WHEN SUM(prompt_tokens) > 0
+					THEN (SUM(cached_tokens)::float / SUM(prompt_tokens)) * 100
+					ELSE 0 END AS cache_pct,
+				CASE WHEN SUM(prompt_tokens - cached_tokens) > 0
+					THEN SUM(completion_tokens)::float / SUM(prompt_tokens - cached_tokens)
+					ELSE 0 END AS out_ratio,
+				COUNT(DISTINCT model) AS model_cnt,
+				CASE WHEN SUM(completion_tokens) > 0
+					THEN SUM(reasoning_tokens)::float / SUM(completion_tokens)
+					ELSE 0 END AS reasoning_share
+			FROM usage_daily
+			WHERE stat_date >= CURRENT_DATE - INTERVAL '30 days'
+			GROUP BY user_id
+			HAVING SUM(req_count) > 0
+		)
+		SELECT
+			COALESCE(ROUND((PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY daily_avg))::numeric, 0), 0)::float AS p90_daily_avg_calls,
+			COALESCE(ROUND((PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY cache_pct))::numeric, 1), 0)::float AS p90_cache_hit_pct,
+			COALESCE(ROUND((PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY out_ratio))::numeric, 2), 0)::float AS p90_output_ratio,
+			COALESCE(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY model_cnt), 0)::float AS p90_unique_models,
+			COALESCE(ROUND((PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY reasoning_share))::numeric, 3), 0)::float AS p90_reasoning_share
+		FROM user_stats
+	`
+	if err := h.db.WithContext(c.Request.Context()).Raw(rawSQL).Scan(&resp).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query percentiles failed", "details": err.Error()})
+		return
+	}
+	resp.CalculatedAt = time.Now()
+
+	if h.rdb != nil {
+		if raw, err := json.Marshal(resp); err == nil {
+			_ = h.rdb.Set(c.Request.Context(), cacheKey, raw, time.Hour).Err()
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": resp})
 }
 
 // MyLogs GET /api/v1/my/usage/logs — 当前登录用户的调用明细（user_id 隔离）

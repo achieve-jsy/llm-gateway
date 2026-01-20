@@ -143,15 +143,7 @@
               <span class="scope-dot" :style="{ background: SCOPE_TYPE_COLORS['company'] }" />
               公司预算池
             </span>
-            <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
-              <el-tag type="info" size="small">下发率 {{ Math.round(companyAllocRatio * 100) }}%</el-tag>
-              <el-button size="small" type="primary" plain style="padding:2px 8px;height:22px;font-size:11px" @click="openCompanyBudgetDialog">调整</el-button>
-              <el-tooltip content="Redis 数据丢失后，从 call_logs 重算当月/周/日用量并写回" placement="top">
-                <el-button circle size="small" :loading="rebuildLoading" class="kpi-rebuild-btn" @click="rebuildCounters">
-                  <el-icon v-if="!rebuildLoading"><Refresh /></el-icon>
-                </el-button>
-              </el-tooltip>
-            </div>
+            <el-tag type="info" size="small">下发率 {{ Math.round(companyAllocRatio * 100) }}%</el-tag>
           </div>
           <strong>{{ companyPoolItem ? displayAmount(companyPoolItem.amount_usd) : '—' }}</strong>
           <div class="kpi-pool-usage">
@@ -179,6 +171,12 @@
               <span class="kpi-sub-limit-slash">/</span>
               <span class="kpi-sub-limit-amount">{{ displayAmount(companyPoolItem.daily_amount_usd) }}</span>
             </div>
+          </div>
+          <div class="kpi-pool-actions">
+            <el-button size="small" type="primary" plain @click="openCompanyBudgetDialog">调整</el-button>
+            <el-tooltip content="Redis 数据丢失后，从 call_logs 重算当月/周/日用量并写回" placement="top">
+              <el-button size="small" :loading="rebuildLoading" @click="rebuildCounters">重建计数器</el-button>
+            </el-tooltip>
           </div>
         </div>
 
@@ -1095,7 +1093,6 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
 import { getBudgetContext, getBudgetList, rebuildBudgetCounters, setBudget } from '@/services/control-plane'
 import http from '@/services/http'
 import { useAuthStore } from '@/stores/auth'
@@ -1982,17 +1979,10 @@ onMounted(load)
   flex-direction: column;
   gap: 3px;
 }
-.kpi-rebuild-btn {
-  width: 22px !important;
-  height: 22px !important;
-  font-size: 12px;
-  color: var(--el-text-color-secondary) !important;
-  border-color: var(--el-border-color) !important;
-  background: transparent !important;
-}
-.kpi-rebuild-btn:hover {
-  color: var(--el-color-primary) !important;
-  border-color: var(--el-color-primary) !important;
+.kpi-pool-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
 }
 .kpi-sub-limit-row {
   display: flex;

@@ -212,7 +212,7 @@
                 <template #default="{ row }">
                   <el-button v-if="canEdit" link type="primary" size="small" @click="openDrawer(row)">调额</el-button>
                   <el-button v-else link type="primary" size="small" @click="goExpansion(row)">申请</el-button>
-                  <el-button link type="info" size="small" @click="goToDept(row.scope_id)">成员预算</el-button>
+                  <el-button link type="info" size="small" @click="openDeptMemberDrawer(row)">成员预算</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -289,6 +289,37 @@
       </template>
     </el-drawer>
 
+    <!-- 嵌套抽屉：部门成员预算（工作室视图下钻） -->
+    <el-drawer
+      v-model="deptMemberDrawerVisible"
+      direction="rtl"
+      size="480px"
+      append-to-body
+      :destroy-on-close="true"
+      class="dept-member-drawer"
+    >
+      <template #header>
+        <div class="dept-drawer-header">
+          <el-button link class="dept-drawer-back" @click="deptMemberDrawerVisible = false">
+            <el-icon><ArrowLeft /></el-icon>
+            {{ title }}
+          </el-button>
+          <div class="dept-drawer-title-row">
+            <span class="dept-drawer-title">{{ deptMemberDrawerLabel }}</span>
+            <span class="dept-drawer-sub">成员预算配置</span>
+          </div>
+        </div>
+      </template>
+      <BudgetScopePanel
+        v-if="deptMemberDrawerScopeId"
+        scope-type="dept"
+        :scope-id="deptMemberDrawerScopeId"
+        :title="deptMemberDrawerLabel"
+        :can-edit="canEdit"
+        :can-edit-self="canEdit"
+      />
+    </el-drawer>
+
     <!-- 添加成员配额弹窗 -->
     <el-dialog v-model="memberDialogVisible" title="设置成员单独额度" width="460px" :close-on-click-modal="false">
       <el-form label-width="80px">
@@ -335,12 +366,14 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowLeft } from '@element-plus/icons-vue'
 import { getBudgetList, setBudgetBatch, deleteMemberBudget } from '@/services/control-plane'
 import type { BudgetItem, BudgetSetPayload, BudgetView } from '@/types/budget'
 import { SCOPE_TYPE_COLORS, SCOPE_TYPE_LABELS } from '@/types/budget'
 import { formatUSD } from '@/utils/format'
 import { useOrgStore } from '@/stores/org'
 import type { DeptMember } from '@/stores/org'
+import BudgetScopePanel from './BudgetScopePanel.vue'
 
 const props = defineProps<{
   scopeType: 'studio' | 'dept'
@@ -643,12 +676,15 @@ function goExpansion(item: BudgetItem) {
   })
 }
 
-/** 工作室视图：跳转到指定部门的预算详情（成员配额管理） */
-function goToDept(deptScopeId: string) {
-  router.push({
-    path: '/admin/org',
-    query: { scope_type: 'dept', scope_id: deptScopeId },
-  })
+// ─── 工作室视图：嵌套抽屉下钻到部门成员预算 ─────────────────────────────────
+const deptMemberDrawerVisible = ref(false)
+const deptMemberDrawerScopeId = ref('')
+const deptMemberDrawerLabel = ref('')
+
+function openDeptMemberDrawer(row: BudgetItem) {
+  deptMemberDrawerScopeId.value = row.scope_id
+  deptMemberDrawerLabel.value = row.label || row.scope_id
+  deptMemberDrawerVisible.value = true
 }
 
 function displayAmount(value: number) {
@@ -770,5 +806,39 @@ watch(() => [props.scopeType, props.scopeId, props.childScopeIds?.join(',')], lo
   .budget-summary { flex-direction: column; }
   .summary-numbers { width: 100%; }
   .pool-grid { grid-template-columns: 1fr; }
+}
+
+/* 嵌套部门成员抽屉 header */
+.dept-drawer-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+.dept-drawer-back {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  padding: 0;
+  height: auto;
+}
+.dept-drawer-back:hover {
+  color: var(--el-color-primary);
+}
+.dept-drawer-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.dept-drawer-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+}
+.dept-drawer-sub {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 </style>

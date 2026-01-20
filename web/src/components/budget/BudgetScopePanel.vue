@@ -328,6 +328,7 @@
       direction="rtl"
       size="560px"
       append-to-body
+      :modal="false"
       :destroy-on-close="true"
       class="dept-member-drawer"
     >

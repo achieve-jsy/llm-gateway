@@ -1092,7 +1092,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { getBudgetContext, getBudgetList, rebuildBudgetCounters, setBudget } from '@/services/control-plane'
 import http from '@/services/http'
 import { useAuthStore } from '@/stores/auth'
@@ -1650,6 +1650,15 @@ function openMemberQuota(member: BudgetItem) {
 const rebuildLoading = ref(false)
 
 async function rebuildCounters() {
+  try {
+    await ElMessageBox.confirm(
+      '将从 call_logs 重新统计当月/周/日用量并写回 Redis。仅在数据异常时使用，正常情况无需操作。',
+      '重建预算计数器',
+      { confirmButtonText: '确认重建', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    return
+  }
   rebuildLoading.value = true
   try {
     const result = await rebuildBudgetCounters()

@@ -21,15 +21,22 @@
       </div>
     </div>
 
-    <!-- compact 模式：轻量摘要行（已用 / 总额 + 进度 + 刷新） -->
-    <div v-if="compact && scopeType === 'dept'" class="compact-summary">
-      <div class="compact-summary-left">
-        <span class="compact-used">{{ formatUSD(totalUsed, { compact: true }) }}</span>
-        <span class="compact-sep">/</span>
-        <span class="compact-total">{{ formatUSD(totalAmount, { compact: true }) }}</span>
-        <el-tag :type="statusType(totalRatio)" size="small" style="margin-left:6px">{{ statusText(totalRatio) }}</el-tag>
-      </div>
-      <el-button :loading="loading" link size="small" @click="load">刷新</el-button>
+    <!-- compact 模式：仅显示部门日常池一行状态，聚焦成员配额 -->
+    <div v-if="compact && scopeType === 'dept'" class="compact-pool-status">
+      <template v-for="pool in deptPools" :key="pool.scope_type">
+        <div v-if="pool.scope_type === 'dept_daily'" class="compact-pool-row">
+          <span class="compact-pool-label">成员日常预算池</span>
+          <span class="compact-pool-amount">{{ formatUSD(pool.used_usd || 0, { compact: true }) }} / {{ displayAmount(pool.amount_usd) }}</span>
+          <el-progress
+            style="width:80px; flex-shrink:0"
+            :percentage="Math.min(Math.round((pool.used_ratio || 0) * 100), 100)"
+            :stroke-width="4"
+            :color="progressColor(pool.used_ratio || 0)"
+            :show-text="false"
+          />
+          <el-tag :type="statusType(pool.used_ratio || 0)" size="small">{{ statusText(pool.used_ratio || 0) }}</el-tag>
+        </div>
+      </template>
     </div>
 
     <div v-if="!compact" class="budget-toolbar">
@@ -69,36 +76,13 @@
       </div>
     </div>
 
-    <!-- compact 池行：单列紧凑 -->
-    <div v-if="scopeType === 'dept' && compact" class="pool-rows">
-      <div v-for="pool in deptPools" :key="pool.scope_type" class="pool-row-item">
-        <div class="pool-row-left">
-          <span class="pool-row-dot" :style="{ background: SCOPE_TYPE_COLORS[pool.scope_type] }" />
-          <span class="pool-row-label">{{ SCOPE_TYPE_LABELS[pool.scope_type] }}</span>
-          <el-tag :type="statusType(pool.used_ratio || 0)" size="small">{{ statusText(pool.used_ratio || 0) }}</el-tag>
-        </div>
-        <div class="pool-row-right">
-          <span class="pool-row-amount">{{ formatUSD(pool.used_usd || 0, { compact: true }) }} / {{ displayAmount(pool.amount_usd) }}</span>
-          <el-progress
-            style="width:100px; flex-shrink:0"
-            :percentage="Math.min(Math.round((pool.used_ratio || 0) * 100), 100)"
-            :stroke-width="5"
-            :color="progressColor(pool.used_ratio || 0)"
-            :show-text="false"
-          />
-          <el-button v-if="canEdit" link type="primary" size="small" @click="openDrawer(pool)">调额</el-button>
-          <el-button v-else link type="primary" size="small" @click="goExpansion(pool)">申请</el-button>
-        </div>
-      </div>
-    </div>
-
     <template v-if="scopeType === 'dept'">
       <div class="member-quota-header">
         <div>
-          <span class="member-quota-title">成员单独额度</span>
+          <span class="member-quota-title">{{ compact ? '成员配额' : '成员单独额度' }}</span>
           <span class="member-quota-count">{{ allocationRows.length }} 人</span>
         </div>
-        <el-button v-if="canEdit" :size="compact ? 'small' : 'small'" type="primary" :plain="!compact" :link="compact" @click="openMemberDrawer">
+        <el-button v-if="canEdit" size="small" type="primary" :plain="!compact" :link="compact" @click="openMemberDrawer">
           {{ compact ? '+ 新增' : '+ 设置额度' }}
         </el-button>
       </div>
@@ -127,7 +111,7 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="月额度" width="120" align="right">
+      <el-table-column label="月额度" width="100" align="right">
         <template #default="{ row }">
           <span v-if="row.isDefaultPool" class="muted">—</span>
           <template v-else>{{ displayAmount(row.amount_usd) }}</template>
@@ -139,15 +123,15 @@
           <template v-else>{{ displayAmount(row.weekly_amount_usd) }}</template>
         </template>
       </el-table-column>
-      <el-table-column label="日额度" width="110" align="right">
+      <el-table-column v-if="!compact" label="日额度" width="110" align="right">
         <template #default="{ row }">
           <span v-if="row.isDefaultPool" class="muted">—</span>
           <template v-else>{{ displayAmount(row.daily_amount_usd) }}</template>
         </template>
       </el-table-column>
-      <el-table-column label="已用 / 使用率" min-width="180">
+      <el-table-column label="已用 / 使用率" :min-width="compact ? 140 : 180">
         <template #default="{ row }">
-          <div v-if="row.isDefaultPool" class="muted" style="font-size:12px;">共享计费，无单独统计</div>
+          <div v-if="row.isDefaultPool" class="muted" style="font-size:12px;">共享预算池</div>
           <div v-else class="usage-cell">
             <span>{{ formatUSD(row.used_usd || 0, { compact: true }) }}</span>
             <el-progress
@@ -158,19 +142,19 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="状态" width="80" align="center">
+      <el-table-column v-if="!compact" label="状态" width="80" align="center">
         <template #default="{ row }">
           <el-tag v-if="!row.isDefaultPool" :type="statusType(row.used_ratio || 0)" size="small">{{ statusText(row.used_ratio || 0) }}</el-tag>
           <span v-else class="muted">—</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="140" fixed="right" align="center">
+      <el-table-column label="操作" :width="compact ? 100 : 140" fixed="right" align="center">
         <template #default="{ row }">
           <template v-if="canEdit">
             <el-button v-if="row.isDefaultPool" link type="primary" size="small" @click="openDrawerForMember(row)">设置额度</el-button>
             <template v-else>
               <el-button link type="primary" size="small" @click="openDrawer(row)">调额</el-button>
-              <el-button link type="danger" size="small" @click="resetToPool(row)">还原</el-button>
+              <el-button v-if="!compact" link type="danger" size="small" @click="resetToPool(row)">还原</el-button>
             </template>
           </template>
           <template v-else>
@@ -853,80 +837,27 @@ watch(() => [props.scopeType, props.scopeId, props.childScopeIds?.join(',')], lo
 .is-compact {
   gap: 12px;
 }
-/* 轻量摘要行 */
-.compact-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
+/* compact 模式：仅日常池状态一行 */
+.compact-pool-status {
+  padding: 8px 12px;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;
   background: var(--el-fill-color-light);
 }
-.compact-summary-left {
-  display: flex;
-  align-items: baseline;
-  gap: 4px;
-}
-.compact-used {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--el-text-color-primary);
-}
-.compact-sep {
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
-}
-.compact-total {
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
-}
-/* 单列池行 */
-.pool-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.pool-row-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-  background: var(--el-fill-color-blank);
-  gap: 12px;
-}
-.pool-row-left {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  flex: 0 0 auto;
-}
-.pool-row-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 99px;
-  flex-shrink: 0;
-}
-.pool-row-label {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-  white-space: nowrap;
-}
-.pool-row-right {
+.compact-pool-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  flex: 1;
-  min-width: 0;
-  justify-content: flex-end;
 }
-.pool-row-amount {
+.compact-pool-label {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+  white-space: nowrap;
+}
+.compact-pool-amount {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
   white-space: nowrap;
 }
 

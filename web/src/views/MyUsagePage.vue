@@ -1505,8 +1505,8 @@ const timelineStages = computed(() => {
   // 流式：TTFB = 上游请求发出→响应头，TTFT_delta = 响应头→首个 content token
   const ttfbDur       = ttfbMs != null ? Math.max(0, ttfbMs) : null
   const ttftDeltaDur  = (ttftMs != null && ttfbMs != null)
-    ? Math.max(0, ttftMs - ttfbMs)
-    : (ttftMs != null ? Math.max(0, ttftMs) : null)
+    ? (ttftMs - ttfbMs > 0 ? ttftMs - ttfbMs : null)
+    : (ttftMs != null && ttftMs > 0 ? ttftMs : null)
 
   // 流式返回耗时：从首 token 到结束
   const streamReturnDur = (isStream && ttftMs != null && routeMs != null && total != null)

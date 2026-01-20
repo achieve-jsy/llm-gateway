@@ -1731,8 +1731,8 @@ const timelineStages = computed(() => {
     : (routeMs != null ? Math.max(0, routeMs) : null)
   const ttfbDur      = ttfbMs != null ? Math.max(0, ttfbMs) : null
   const ttftDeltaDur = ttftMs != null && ttfbMs != null
-    ? Math.max(0, ttftMs - ttfbMs)
-    : (ttftMs != null ? Math.max(0, ttftMs) : null)
+    ? (ttftMs - ttfbMs > 0 ? ttftMs - ttfbMs : null)
+    : (ttftMs != null && ttftMs > 0 ? ttftMs : null)
   const streamReturnDur = isStream && ttftMs != null && routeMs != null && total != null
     ? Math.max(0, total - routeMs - ttftMs) : null
   const upstreamDur = !isStream && routeMs != null && total != null

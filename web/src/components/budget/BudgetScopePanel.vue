@@ -148,13 +148,24 @@
           <span v-else class="muted">—</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" :width="compact ? 100 : 140" fixed="right" align="center">
+      <el-table-column label="操作" :width="compact ? 120 : 140" fixed="right" align="center">
         <template #default="{ row }">
           <template v-if="canEdit">
             <el-button v-if="row.isDefaultPool" link type="primary" size="small" @click="openDrawerForMember(row)">设置额度</el-button>
+            <template v-else-if="compact">
+              <el-button link type="primary" size="small" @click="openDrawer(row)">调额</el-button>
+              <el-dropdown size="small" trigger="click" @command="(cmd: string) => cmd === 'reset' && resetToPool(row)">
+                <el-button link size="small" style="padding:0 2px">⋯</el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="reset" class="dropdown-danger">还原为共享池</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </template>
             <template v-else>
               <el-button link type="primary" size="small" @click="openDrawer(row)">调额</el-button>
-              <el-button v-if="!compact" link type="danger" size="small" @click="resetToPool(row)">还原</el-button>
+              <el-button link type="danger" size="small" @click="resetToPool(row)">还原</el-button>
             </template>
           </template>
           <template v-else>
@@ -859,6 +870,10 @@ watch(() => [props.scopeType, props.scopeId, props.childScopeIds?.join(',')], lo
   font-weight: 600;
   color: var(--el-text-color-primary);
   white-space: nowrap;
+}
+
+:deep(.dropdown-danger) {
+  color: var(--el-color-danger) !important;
 }
 
 /* 嵌套部门成员抽屉 header */

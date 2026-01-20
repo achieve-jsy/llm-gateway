@@ -133,7 +133,7 @@
           <template v-else>{{ displayAmount(row.amount_usd) }}</template>
         </template>
       </el-table-column>
-      <el-table-column label="周额度" width="110" align="right">
+      <el-table-column v-if="!compact" label="周额度" width="110" align="right">
         <template #default="{ row }">
           <span v-if="row.isDefaultPool" class="muted">—</span>
           <template v-else>{{ displayAmount(row.weekly_amount_usd) }}</template>
@@ -331,7 +331,7 @@
     <el-drawer
       v-model="deptMemberDrawerVisible"
       direction="rtl"
-      size="480px"
+      size="560px"
       append-to-body
       :destroy-on-close="true"
       class="dept-member-drawer"

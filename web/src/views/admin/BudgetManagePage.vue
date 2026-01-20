@@ -146,9 +146,6 @@
             <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
               <el-tag type="info" size="small">下发率 {{ Math.round(companyAllocRatio * 100) }}%</el-tag>
               <el-button size="small" type="primary" plain style="padding:2px 8px;height:22px;font-size:11px" @click="openCompanyBudgetDialog">调整</el-button>
-              <el-tooltip content="Redis 数据丢失后，从 call_logs 重算当月/周/日用量并写回" placement="top">
-                <el-button size="small" type="warning" plain style="padding:2px 8px;height:22px;font-size:11px" :loading="rebuildLoading" @click="rebuildCounters">重建计数器</el-button>
-              </el-tooltip>
             </div>
           </div>
           <strong>{{ companyPoolItem ? displayAmount(companyPoolItem.amount_usd) : '—' }}</strong>
@@ -177,8 +174,13 @@
               <span class="kpi-sub-limit-slash">/</span>
               <span class="kpi-sub-limit-amount">{{ displayAmount(companyPoolItem.daily_amount_usd) }}</span>
             </div>
-      </div>
-    </div>
+          </div>
+          <div class="kpi-pool-footer">
+            <el-tooltip content="Redis 数据丢失后，从 call_logs 重算当月/周/日用量并写回" placement="top">
+              <el-button link size="small" type="warning" :loading="rebuildLoading" @click="rebuildCounters">重建计数器</el-button>
+            </el-tooltip>
+          </div>
+        </div>
 
         <!-- 未下发余量 -->
         <div class="kpi" :class="{ 'kpi-pool--warning': companyUnallocated === 0 && companyAllocated > 0 }">
@@ -1951,6 +1953,8 @@ onMounted(load)
   align-items: center;
   gap: 5px;
   margin-bottom: 0;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .kpi-pool--warning {
   border-color: var(--el-color-warning-light-5);
@@ -1976,6 +1980,13 @@ onMounted(load)
   display: flex;
   flex-direction: column;
   gap: 3px;
+}
+.kpi-pool-footer {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid var(--el-border-color-lighter);
+  padding-top: 6px;
 }
 .kpi-sub-limit-row {
   display: flex;

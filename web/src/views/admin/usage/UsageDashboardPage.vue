@@ -433,391 +433,28 @@
     </div>
 
     <!-- ══ 调用明细 ══ -->
-    <div class="ud-section">
-      <div class="ud-section__header">
-        <span class="ud-section__title">调用明细</span>
-        <span class="ud-section__count">共 {{ logsTotal }} 条</span>
-      </div>
-      <div class="ud-table-wrap" v-loading="logsLoading">
-        <el-table :data="logRows" size="small" :header-cell-style="TABLE_HEADER" style="width:100%;cursor:pointer" @row-click="openTrace">
+    <UsageRecordTable
+      :rows="logRows"
+      :loading="logsLoading"
+      :total="logsTotal"
+      :page="logsPage"
+      :page-size="logsPageSize"
+      :show-key="true"
+      :show-user="true"
+      user-label="成员"
+      :show-studio="authStore.effectiveRole === 'admin'"
+      :show-dept="authStore.effectiveRole === 'admin' || authStore.effectiveRole === 'studio_admin'"
+      show-source="ip-only"
+      :sortable-columns="['duration_ms', 'est_cost_usd', 'ts']"
+      :page-sizes="[20, 50, 100]"
+      :currency="currency"
+      :trace-endpoint="fetchTrace"
+      trace-meta-mode="full"
+      @update:page="(p) => { logsPage = p; loadLogs() }"
+      @update:page-size="(s) => { logsPageSize = s; logsPage = 1; loadLogs() }"
+    />
 
-          <!-- Key 名称 -->
-          <el-table-column label="Key 名称" min-width="120" fixed="left">
-            <template #default="{ row }">
-              <span class="ud-key-name">{{ row.key_name || '—' }}</span>
-            </template>
-          </el-table-column>
 
-          <!-- 成员 -->
-          <el-table-column label="成员" min-width="110" fixed="left">
-            <template #default="{ row }">
-              <span class="ud-member-name">{{ row.user_name || '—' }}</span>
-            </template>
-          </el-table-column>
-
-          <!-- 工作室（仅 admin 可见） -->
-          <el-table-column
-            v-if="authStore.effectiveRole === 'admin'"
-            label="工作室" min-width="110" fixed="left"
-          >
-            <template #default="{ row }">
-              <span class="ud-studio-name">{{ row.studio_name || '—' }}</span>
-            </template>
-          </el-table-column>
-
-          <!-- 部门（admin / studio_admin 可见） -->
-          <el-table-column
-            v-if="authStore.effectiveRole === 'admin' || authStore.effectiveRole === 'studio_admin'"
-            label="部门" min-width="110" fixed="left"
-          >
-            <template #default="{ row }">
-              <span class="ud-dept-name">{{ row.dept_name || '—' }}</span>
-            </template>
-          </el-table-column>
-
-          <!-- 模型 / 路由 -->
-          <el-table-column prop="model" label="模型 / 路由" min-width="160">
-            <template #default="{ row }">
-              <div class="ud-model-cell">
-                <span class="ud-model-name">{{ row.model || '—' }}</span>
-                <div v-if="row.routed_model && row.routed_model !== row.model" class="ud-model-routed">
-                  <span class="ud-arrow">↳</span>
-                  <span class="ud-model-name ud-model-name--muted">{{ row.routed_model }}</span>
-                </div>
-              </div>
-            </template>
-          </el-table-column>
-
-          <!-- 类型 -->
-          <el-table-column label="类型" min-width="70" align="center">
-            <template #default="{ row }">
-              <el-tag v-if="row.stream" type="primary" size="small" effect="plain">流式</el-tag>
-              <el-tag v-else size="small" effect="plain">同步</el-tag>
-            </template>
-          </el-table-column>
-
-          <!-- Token 用量 -->
-          <el-table-column label="Token 用量" min-width="200">
-            <template #default="{ row }">
-              <div class="ud-token-row">
-                <span class="ud-token-item ud-token-item--in" title="输入">
-                  <el-icon class="ud-token-icon"><Bottom /></el-icon>{{ fmtTokens(row.prompt_tokens) }}
-                </span>
-                <span class="ud-token-item ud-token-item--out" title="输出">
-                  <el-icon class="ud-token-icon"><Top /></el-icon>{{ fmtTokens(row.completion_tokens) }}
-                </span>
-                <span v-if="row.cached_tokens" class="ud-token-item ud-token-item--cache" title="缓存">
-                  <el-icon class="ud-token-icon"><Finished /></el-icon>{{ fmtTokens(row.cached_tokens) }}
-                </span>
-                <el-tooltip placement="top" :show-after="120" popper-class="ud-tt-popper">
-                  <template #content>
-                    <div class="ud-tt">
-                      <div class="ud-tt__title">Token 明细</div>
-                      <div class="ud-tt__row"><span>输入（含缓存）</span><b>{{ fmtNum(row.prompt_tokens) }}</b></div>
-                      <div class="ud-tt__row"><span>输出</span><b>{{ fmtNum(row.completion_tokens) }}</b></div>
-                      <div class="ud-tt__row" v-if="row.reasoning_tokens"><span class="ud-tt__sub">└ 推理</span><b class="c-purple">{{ fmtNum(row.reasoning_tokens) }}</b></div>
-                      <div class="ud-tt__sep"></div>
-                      <div class="ud-tt__group">缓存</div>
-                      <div class="ud-tt__row"><span>缓存命中（读）</span><b :class="row.cached_tokens ? 'c-cyan' : ''">{{ fmtNum(row.cached_tokens) }}</b></div>
-                      <div class="ud-tt__row"><span>缓存写入</span><b :class="row.cache_write_tokens ? 'c-amber' : ''">{{ fmtNum(row.cache_write_tokens) }}</b></div>
-                      <div class="ud-tt__row"><span class="ud-tt__sub">未缓存输入</span><b>{{ fmtNum(Math.max((row.prompt_tokens||0) - (row.cached_tokens||0) - (row.cache_write_tokens||0), 0)) }}</b></div>
-                      <div class="ud-tt__sep"></div>
-                      <div class="ud-tt__row"><span>总计</span><b class="c-blue">{{ fmtNum(row.total_tokens) }}</b></div>
-                    </div>
-                  </template>
-                  <span class="ud-info"><el-icon><InfoFilled /></el-icon></span>
-                </el-tooltip>
-              </div>
-            </template>
-          </el-table-column>
-
-          <!-- 状态 -->
-          <el-table-column prop="status" label="状态" min-width="70" align="center">
-            <template #default="{ row }">
-              <el-tag :type="row.status === 200 ? 'success' : 'danger'" size="small" effect="dark">{{ row.status || '—' }}</el-tag>
-            </template>
-          </el-table-column>
-
-          <!-- TTFT -->
-          <el-table-column prop="first_token_ms" label="TTFT" min-width="70" align="right">
-            <template #default="{ row }">
-              <span v-if="row.first_token_ms != null" class="ud-duration">{{ fmtDuration(row.first_token_ms) }}</span>
-              <span v-else class="ud-dash">—</span>
-            </template>
-          </el-table-column>
-
-          <!-- 耗时 -->
-          <el-table-column prop="duration_ms" label="耗时" min-width="70" align="right" sortable>
-            <template #default="{ row }">
-              <span class="ud-duration">{{ fmtDuration(row.duration_ms) }}</span>
-            </template>
-          </el-table-column>
-
-          <!-- 标记 -->
-          <el-table-column label="标记" min-width="90" align="center">
-            <template #default="{ row }">
-              <div class="ud-flags">
-                <el-tag v-if="row.reasoning_effort" :type="reasoningType(row.reasoning_effort)" size="small" effect="plain" class="ud-tag--effort">{{ row.reasoning_effort }}</el-tag>
-                <el-tag v-if="row.failover_used" type="warning" size="small" effect="plain">切换</el-tag>
-                <el-tag v-if="row.usage_missing" type="info" size="small" effect="plain">无Usage</el-tag>
-              </div>
-            </template>
-          </el-table-column>
-
-          <!-- 费用 -->
-          <el-table-column prop="est_cost_usd" label="费用" min-width="140" align="right" sortable>
-            <template #default="{ row }">
-              <div class="ud-cost-cell">
-                <span class="ud-cost" :class="logCostColor(row.est_cost_usd)">{{ fmtCost(row.est_cost_usd) }}</span>
-                <el-tooltip placement="left" :show-after="120" popper-class="ud-tt-popper">
-                  <template #content>
-                    <div class="ud-tt">
-                      <div class="ud-tt__title">成本明细 ({{ currency }})</div>
-                      <template v-if="(row.input_price_snapshot ?? 0) > 0 || (row.output_price_snapshot ?? 0) > 0">
-                        <div class="ud-tt__group">单价 / 1M tokens</div>
-                        <div class="ud-tt__row"><span>输入单价</span><b>{{ fmtPrice(row.input_price_snapshot) }}</b></div>
-                        <div class="ud-tt__row"><span>输出单价</span><b>{{ fmtPrice(row.output_price_snapshot) }}</b></div>
-                        <div class="ud-tt__sep"></div>
-                      </template>
-                      <div class="ud-tt__group">费用</div>
-                      <div class="ud-tt__row">
-                        <span>输入<span class="ud-tt__sub" v-if="row.prompt_tokens"> ×{{ fmtNum(Math.max((row.prompt_tokens||0) - (row.cached_tokens||0) - (row.cache_write_tokens||0), 0)) }}</span></span>
-                        <b>{{ fmtCost6(row.input_cost_usd) }}</b>
-                      </div>
-                      <div class="ud-tt__row">
-                        <span>输出<span class="ud-tt__sub" v-if="row.completion_tokens"> ×{{ fmtNum(row.completion_tokens) }}</span></span>
-                        <b>{{ fmtCost6(row.output_cost_usd) }}</b>
-                      </div>
-                      <div class="ud-tt__sep"></div>
-                      <div class="ud-tt__group">缓存</div>
-                      <div class="ud-tt__row">
-                        <span>缓存读取<span class="ud-tt__sub" v-if="row.cached_tokens"> ×{{ fmtNum(row.cached_tokens) }}</span></span>
-                        <b :class="(row.cache_read_cost_usd || 0) > 0 ? 'c-cyan' : ''">{{ fmtCost6(row.cache_read_cost_usd) }}</b>
-                      </div>
-                      <div class="ud-tt__sep"></div>
-                      <div class="ud-tt__row"><span>合计</span><b class="c-green">{{ fmtCost(row.est_cost_usd) }}</b></div>
-                    </div>
-                  </template>
-                  <span class="ud-info"><el-icon><InfoFilled /></el-icon></span>
-                </el-tooltip>
-              </div>
-            </template>
-          </el-table-column>
-
-          <!-- 来源 -->
-          <el-table-column label="来源" min-width="160">
-            <template #default="{ row }">
-              <div class="ud-source">
-                <span v-if="row.ip_address" class="ud-ip">{{ row.ip_address }}</span>
-                <span v-else class="ud-dash">—</span>
-              </div>
-            </template>
-          </el-table-column>
-
-          <!-- 时间 -->
-          <el-table-column prop="ts" label="时间" min-width="155" sortable>
-            <template #default="{ row }">
-              <span class="ud-time">{{ fmtDateTime(row.ts) }}</span>
-            </template>
-          </el-table-column>
-
-          </el-table>
-
-        <div v-if="!logsLoading && logRows.length === 0" class="ud-empty-block">
-          <el-icon size="40" color="#c0c4cc"><List /></el-icon>
-          <p>暂无调用记录</p>
-        </div>
-
-        <div v-if="logsTotal > 0" class="ud-pagination">
-          <el-pagination
-            v-model:current-page="logsPage"
-            v-model:page-size="logsPageSize"
-            :page-sizes="[20, 50, 100]"
-            :total="logsTotal"
-            layout="total, sizes, prev, pager, next"
-            small
-            @size-change="reloadLogs"
-            @current-change="loadLogs"
-          />
-        </div>
-      </div>
-    </div>
-
-    <!-- ══ Trace Drawer ══ -->
-    <el-drawer v-model="traceVisible" title="" size="780px" direction="rtl" :before-close="closeTrace" class="ud-trace-drawer">
-      <template #header>
-        <div class="ud-trace-header">
-          <span class="ud-trace-title">请求详情</span>
-          <span class="ud-trace-id">{{ traceRow?.request_id }}</span>
-        </div>
-      </template>
-
-      <div v-if="traceLoading" class="ud-trace-loading"><el-icon class="is-loading" size="32"><Loading /></el-icon></div>
-      <div v-else-if="traceData || traceRow" class="ud-trace-body">
-
-        <!-- ── 概要条 ── -->
-        <div class="ud-trace-meta">
-          <el-tag type="info" size="small" effect="plain">{{ traceRow?.model }}</el-tag>
-          <el-tag :type="(traceRow?.status || 0) === 200 ? 'success' : 'danger'" size="small" effect="dark">{{ traceRow?.status }}</el-tag>
-          <el-tag v-if="traceRow?.stream" type="primary" size="small" effect="plain">流式</el-tag>
-          <el-tooltip v-if="traceRow?.failover_used" content="首选模型失败，已自动切换到备用模型" placement="top">
-            <el-tag type="warning" size="small" effect="light" class="ud-tag-failover">
-              <el-icon style="vertical-align:-2px;margin-right:2px"><SwitchButton /></el-icon>故障转移
-            </el-tag>
-          </el-tooltip>
-          <span class="ud-trace-time">{{ fmtDateTime(traceRow?.ts) }}</span>
-          <span class="ud-trace-dur">{{ fmtDuration(traceRow?.duration_ms) }}</span>
-        </div>
-
-        <!-- ── 时间线 ── -->
-        <div class="ud-timeline">
-          <div v-for="stage in timelineStages" :key="stage.key"
-               :class="['ud-tl-node', stage.status,
-                        { 'ud-tl-node--total': stage.key === 'done',
-                          'ud-tl-node--failover': stage.key === 'failover' }]">
-            <div class="ud-tl-dot">
-              <el-icon v-if="stage.key === 'failover'"><SwitchButton /></el-icon>
-              <el-icon v-else-if="stage.status === 'ok'"><SuccessFilled /></el-icon>
-              <el-icon v-else-if="stage.status === 'error'"><CircleCloseFilled /></el-icon>
-              <el-icon v-else><Loading /></el-icon>
-            </div>
-            <div class="ud-tl-label">
-              <el-tooltip v-if="stage.desc" :content="stage.desc" placement="top">
-                <span class="ud-tl-label-text">{{ stage.label }}</span>
-              </el-tooltip>
-              <span v-else class="ud-tl-label-text">{{ stage.label }}</span>
-              <span v-if="stage.key === 'done'" class="ud-tl-measured">实测</span>
-            </div>
-            <div class="ud-tl-ms" v-if="stage.ms != null">
-              {{ stage.ms }}ms
-              <el-tooltip v-if="stage.note" :content="stage.note" placement="top">
-                <el-icon class="ud-tl-warn"><WarningFilled /></el-icon>
-              </el-tooltip>
-            </div>
-            <div class="ud-tl-ms" v-else-if="stage.key === 'failover'">
-              <span class="ud-tl-failover-hint">已切换</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- ── Tabs ── -->
-        <el-tabs v-model="traceTab" class="ud-trace-tabs">
-          <!-- 调用信息 -->
-          <el-tab-pane label="调用信息" name="meta">
-            <div class="ud-meta-grid">
-              <div class="ud-meta-section">
-                <div class="ud-meta-heading">调用者</div>
-                <div class="ud-meta-row"><span>Key</span><span>{{ traceRow?.key_name || traceRow?.key_id || '—' }}</span></div>
-                <div class="ud-meta-row"><span>用户</span><span>{{ traceRow?.user_name || '—' }}</span></div>
-                <div class="ud-meta-row"><span>部门</span><span>{{ traceRow?.dept_name || traceRow?.dept_id || '—' }}</span></div>
-                <div class="ud-meta-row"><span>工作室</span><span>{{ traceRow?.studio_name || '—' }}</span></div>
-                <div class="ud-meta-row"><span>IP</span><code>{{ traceRow?.ip_address || '—' }}</code></div>
-                <div class="ud-meta-row ud-meta-row--wrap"><span>UA</span><code class="ud-meta-ua">{{ traceRow?.user_agent || '—' }}</code></div>
-              </div>
-              <div class="ud-meta-section">
-                <div class="ud-meta-heading">路由</div>
-                <div class="ud-meta-row"><span>请求模型</span><code>{{ traceRow?.model }}</code></div>
-                <div class="ud-meta-row"><span>实际模型</span><code>{{ traceRow?.routed_model || '—' }}</code></div>
-                <div class="ud-meta-row"><span>渠道</span><el-tag size="small" type="info" effect="plain">{{ traceRow?.provider || '—' }}</el-tag></div>
-                <div class="ud-meta-row"><span>分组</span><code>{{ traceRow?.group_name || '—' }}</code></div>
-                <div class="ud-meta-row"><span>故障转移</span>
-                  <el-tag size="small" :type="traceRow?.failover_used ? 'warning' : 'success'" effect="plain">{{ traceRow?.failover_used ? '是' : '否' }}</el-tag>
-                </div>
-                <div class="ud-meta-row"><span>流式</span>
-                  <el-tag size="small" :type="traceRow?.stream ? 'primary' : ''" effect="plain">{{ traceRow?.stream ? '是' : '否' }}</el-tag>
-                </div>
-              </div>
-              <div class="ud-meta-section">
-                <div class="ud-meta-heading">Token 用量</div>
-                <div class="ud-meta-row"><span>输入</span><b>{{ fmtNum(traceRow?.prompt_tokens) }}</b></div>
-                <div class="ud-meta-row"><span>缓存命中</span><b class="c-cyan">{{ fmtNum(traceRow?.cached_tokens) }}</b></div>
-                <div class="ud-meta-row"><span>缓存写入</span><b class="c-amber">{{ fmtNum(traceRow?.cache_write_tokens) }}</b></div>
-                <div class="ud-meta-row"><span>输出</span><b>{{ fmtNum(traceRow?.completion_tokens) }}</b></div>
-                <div class="ud-meta-row" v-if="(traceRow?.reasoning_tokens || 0) > 0">
-                  <span>推理</span><b class="c-purple">{{ fmtNum(traceRow?.reasoning_tokens) }}</b>
-                </div>
-                <div class="ud-meta-row ud-meta-sep"><span>合计</span><b class="c-blue">{{ fmtNum(traceRow?.total_tokens) }}</b></div>
-                <div class="ud-meta-row" v-if="traceRow?.usage_missing">
-                  <span></span><el-tag size="small" type="warning">用量缺失</el-tag>
-                </div>
-              </div>
-              <div class="ud-meta-section">
-                <div class="ud-meta-heading">费用 ({{ currency }})</div>
-                <div class="ud-meta-row" v-if="(traceRow?.input_price_snapshot || 0) > 0 || (traceRow?.output_price_snapshot || 0) > 0">
-                  <span>输入单价/1M</span><b>{{ fmtPrice(traceRow?.input_price_snapshot) }}</b>
-                </div>
-                <div class="ud-meta-row" v-if="(traceRow?.input_price_snapshot || 0) > 0 || (traceRow?.output_price_snapshot || 0) > 0">
-                  <span>输出单价/1M</span><b>{{ fmtPrice(traceRow?.output_price_snapshot) }}</b>
-                </div>
-                <div class="ud-meta-row"><span>输入费用</span><b>{{ fmtCost(traceRow?.input_cost_usd) }}</b></div>
-                <div class="ud-meta-row"><span>输出费用</span><b>{{ fmtCost(traceRow?.output_cost_usd) }}</b></div>
-                <div class="ud-meta-row" v-if="(traceRow?.cache_read_cost_usd || 0) > 0">
-                  <span>缓存读取</span><b class="c-cyan">{{ fmtCost(traceRow?.cache_read_cost_usd) }}</b>
-                </div>
-                <div class="ud-meta-row ud-meta-sep"><span>合计</span><b class="c-green">{{ fmtCost(traceRow?.est_cost_usd) }}</b></div>
-              </div>
-            </div>
-          </el-tab-pane>
-
-          <!-- 提示词 -->
-          <el-tab-pane label="提示词" name="prompt">
-            <div v-if="traceMessages.length" class="ud-msgs">
-              <div v-for="(msg, i) in traceMessages" :key="i" :class="['ud-msg', `ud-msg--${msg.role}`]">
-                <span class="ud-msg-role">{{ msg.role }}</span>
-                <pre class="ud-msg-content">{{ typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2) }}</pre>
-              </div>
-            </div>
-            <div v-else class="ud-trace-empty">无提示词数据</div>
-          </el-tab-pane>
-
-          <!-- 响应 -->
-          <el-tab-pane name="response">
-            <template #label>
-              响应
-              <el-tag v-if="traceIsStream" size="small" type="info" style="margin-left:4px;vertical-align:middle">Stream</el-tag>
-            </template>
-            <div v-if="traceResponseText" class="ud-msgs">
-              <div class="ud-msg ud-msg--assistant">
-                <span class="ud-msg-role">assistant</span>
-                <pre class="ud-msg-content">{{ traceResponseText }}</pre>
-              </div>
-            </div>
-            <div v-else-if="traceData?.response_body" class="ud-json-view">
-              <pre>{{ JSON.stringify(traceData.response_body, null, 2) }}</pre>
-            </div>
-            <div v-else class="ud-trace-empty">无响应数据</div>
-          </el-tab-pane>
-
-          <!-- 原始请求 -->
-          <el-tab-pane label="原始请求" name="raw_req">
-            <div v-if="traceData?.request_body" class="ud-json-view">
-              <pre>{{ JSON.stringify(traceData.request_body, null, 2) }}</pre>
-            </div>
-            <div v-else class="ud-trace-empty">无原始请求数据</div>
-          </el-tab-pane>
-
-          <!-- 请求头 -->
-          <el-tab-pane label="请求头" name="headers">
-            <div v-if="traceData?.request_headers && Object.keys(traceData.request_headers).length > 0" class="ud-headers-table">
-              <div v-for="(val, key) in traceData.request_headers" :key="key" class="ud-header-row">
-                <span class="ud-header-key">{{ key }}</span>
-                <span class="ud-header-val">{{ val }}</span>
-              </div>
-            </div>
-            <div v-else class="ud-trace-empty">无请求头数据</div>
-          </el-tab-pane>
-
-          <!-- 错误 -->
-          <el-tab-pane v-if="traceData?.error_message || (traceRow?.status || 0) >= 400" label="错误" name="error">
-            <div class="ud-error-block">
-              <div v-if="traceData?.error_code" class="ud-error-code">{{ traceData.error_code }}</div>
-              <pre class="ud-error-msg">{{ traceData?.error_message || `HTTP ${traceRow?.status}` }}</pre>
-            </div>
-          </el-tab-pane>
-        </el-tabs>
-      </div>
-      <div v-else class="ud-trace-empty">暂无 trace 数据</div>
-    </el-drawer>
 
   </div>
 </template>
@@ -827,9 +464,10 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Chart, registerables } from 'chart.js'
 import {
   Refresh, DataLine, Money, User, ArrowRight, ArrowUp, ArrowDown,
-  Bottom, Top, List, Search, InfoFilled, Finished,
-  Loading, SuccessFilled, CircleCloseFilled, WarningFilled, SwitchButton,
+  List, Search, WarningFilled,
 } from '@element-plus/icons-vue'
+import UsageRecordTable from '@/components/usage/UsageRecordTable.vue'
+import type { TraceData } from '@/components/usage/UsageRecordTable.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useOrgStore } from '@/stores/org'
 import { useRoute } from 'vue-router'
@@ -850,13 +488,6 @@ const authStore = useAuthStore()
 const orgStore  = useOrgStore()
 const route     = useRoute()
 
-const TABLE_HEADER = {
-  background: 'var(--el-fill-color-light)',
-  fontWeight: '600',
-  color: 'var(--el-text-color-secondary)',
-  fontSize: '12px',
-  borderBottom: '1px solid var(--el-border-color-light)',
-}
 
 // ── 日期 ──────────────────────────────────────────────────────
 const fmt = (d: Date) => d.toISOString().split('T')[0]
@@ -1558,16 +1189,6 @@ const logsTotal    = ref(0)
 const logsPage     = ref(1)
 const logsPageSize = ref(50)
 
-const logMaxCost = computed(() => Math.max(...logRows.value.map(r => r.est_cost_usd || 0), 0.0001))
-const logCostColor = (v: number) =>
-  v > logMaxCost.value * 0.7 ? 'c-red fw6' : v > logMaxCost.value * 0.3 ? 'c-orange fw6' : 'c-green'
-
-const reasoningType = (effort?: string) => {
-  if (!effort) return ''
-  if (effort === 'high') return 'danger'
-  if (effort === 'medium') return 'warning'
-  return 'info'
-}
 
 async function loadLogs() {
   logsLoading.value = true
@@ -1656,118 +1277,11 @@ function loadAll() {
   loadBudget()
 }
 
-// ── Trace Drawer ──────────────────────────────────────────────
-interface TraceData {
-  stage_auth_ms?: number; stage_route_ms?: number; stage_upstream_ms?: number
-  stage_ttfb_ms?: number; stage_ttft_ms?: number; stage_total_ms?: number
-  request_headers?: Record<string, string>
-  request_body?: any; response_body?: any
-  error_code?: string; error_message?: string
+// ── Trace Endpoint ────────────────────────────────────────────
+async function fetchTrace(requestId: string): Promise<TraceData> {
+  const res = await http.get(`/api/v1/usage/logs/${requestId}/trace`, { _silent: true } as any)
+  return res.data
 }
-
-const traceVisible = ref(false)
-const traceLoading = ref(false)
-const traceRow     = ref<any | null>(null)
-const traceData    = ref<TraceData | null>(null)
-const traceTab     = ref('meta')
-
-async function openTrace(row: any) {
-  traceRow.value  = row
-  traceData.value = null
-  traceTab.value  = 'prompt'
-  traceVisible.value = true
-  traceLoading.value = true
-  try {
-    const r = await http.get(`/api/v1/usage/logs/${row.request_id}/trace`, { _silent: true } as any)
-    traceData.value = r.data
-  } catch {
-    traceData.value = null
-    traceTab.value = 'meta'
-  } finally {
-    traceLoading.value = false
-  }
-}
-
-function closeTrace() { traceVisible.value = false }
-
-const traceMessages = computed(() => {
-  const body = traceData.value?.request_body
-  if (!body) return []
-  return (body as any).messages || []
-})
-
-const traceResponseText = computed(() => {
-  const body = traceData.value?.response_body
-  if (!body) return ''
-  const choices = (body as any).choices
-  if (Array.isArray(choices) && choices.length > 0) {
-    return choices[0]?.message?.content ?? choices[0]?.delta?.content ?? ''
-  }
-  return ''
-})
-
-const traceIsStream = computed(() => !!(traceData.value?.response_body as any)?.stream)
-
-const timelineStages = computed(() => {
-  const td  = traceData.value
-  const row = traceRow.value
-  if (!row) return []
-
-  const authMs  = td?.stage_auth_ms     ?? row.stage_auth_ms     ?? null
-  const routeMs = td?.stage_route_ms    ?? row.stage_route_ms    ?? null
-  const ttfbMs  = td?.stage_ttfb_ms     ?? row.stage_ttfb_ms     ?? null
-  const ttftMs  = td?.stage_ttft_ms     ?? row.first_token_ms    ?? null
-  const total   = row.duration_ms       ?? td?.stage_total_ms    ?? null
-
-  const isStream   = !!row.stream
-  const isFailover = !!row.failover_used
-  const isError    = (row.status ?? 200) >= 400
-  const errorInAuth  = isError && authMs  == null && routeMs == null
-  const errorInRoute = isError && routeMs == null && authMs  != null
-
-  const authDur  = authMs  != null ? Math.max(0, authMs) : null
-  const routeDur = routeMs != null && authMs != null
-    ? Math.max(0, routeMs - authMs)
-    : (routeMs != null ? Math.max(0, routeMs) : null)
-  const ttfbDur      = ttfbMs != null ? Math.max(0, ttfbMs) : null
-  const ttftDeltaDur = ttftMs != null && ttfbMs != null
-    ? (ttftMs - ttfbMs > 0 ? ttftMs - ttfbMs : null)
-    : (ttftMs != null && ttftMs > 0 ? ttftMs : null)
-  const streamReturnDur = isStream && ttftMs != null && routeMs != null && total != null
-    ? Math.max(0, total - routeMs - ttftMs) : null
-  const upstreamDur = !isStream && routeMs != null && total != null
-    ? Math.max(0, total - routeMs) : null
-
-  type Status = 'ok' | 'error' | 'skip'
-  const stages: { key: string; label: string; ms: number | null; status: Status; note?: string; desc?: string }[] = []
-
-  stages.push({ key: 'auth', label: '鉴权', desc: '请求到达 → API Key 验证完成',
-    ms: authDur, status: authMs != null ? 'ok' : (errorInAuth ? 'error' : 'skip') })
-  stages.push({ key: 'route', label: '路由', desc: '鉴权完成 → 模型组调度 + 选定上游渠道',
-    ms: routeDur,
-    status: errorInRoute ? 'error' : routeMs != null ? 'ok' : 'skip',
-    note: routeMs != null && authMs != null && routeMs < authMs ? '计时异常' : undefined })
-  if (isFailover) {
-    stages.push({ key: 'failover', label: '故障转移',
-      desc: `首选模型调用失败，自动切换到备用模型重试（实际路由至 ${row.routed_model || '备用模型'}）`,
-      ms: null, status: 'ok' })
-  }
-  if (isStream) {
-    stages.push({ key: 'ttfb', label: 'TTFB', desc: '上游请求发出 → 收到 HTTP 响应头',
-      ms: ttfbDur, status: isError ? 'error' : ttfbDur != null ? 'ok' : 'skip' })
-    stages.push({ key: 'ttft', label: 'TTFT',
-      desc: ttfbMs != null ? '收到响应头 → 首个 content token' : '上游请求发出 → 首个 content token',
-      ms: ttftDeltaDur, status: isError ? 'error' : ttftDeltaDur != null ? 'ok' : 'skip' })
-    stages.push({ key: 'stream', label: '流式返回', desc: '首个 token → 流式输出完成',
-      ms: streamReturnDur, status: isError ? 'error' : streamReturnDur != null ? 'ok' : 'skip' })
-  } else {
-    stages.push({ key: 'upstream', label: '上游响应', desc: '上游请求发出 → 收到完整响应',
-      ms: upstreamDur, status: isError ? 'error' : upstreamDur != null ? 'ok' : 'skip' })
-  }
-  stages.push({ key: 'done', label: '总耗时', ms: total, status: isError ? 'error' : 'ok' })
-
-  return stages.filter(s => s.status !== 'skip' || s.key === 'done')
-})
 
 // ── 格式化 ────────────────────────────────────────────────────
 const fmtNum = (n?: number | null) => (n ?? 0).toLocaleString()

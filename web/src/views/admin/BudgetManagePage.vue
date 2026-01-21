@@ -143,13 +143,7 @@
               <span class="scope-dot" :style="{ background: SCOPE_TYPE_COLORS['company'] }" />
               公司预算池
             </span>
-            <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
-              <el-tag type="info" size="small">下发率 {{ Math.round(companyAllocRatio * 100) }}%</el-tag>
-              <el-button size="small" type="primary" plain style="padding:2px 8px;height:22px;font-size:11px" @click="openCompanyBudgetDialog">调整</el-button>
-              <el-tooltip content="Redis 数据丢失后，从 call_logs 重算当月/周/日用量并写回" placement="top">
-                <el-button size="small" type="warning" plain style="padding:2px 8px;height:22px;font-size:11px" :loading="rebuildLoading" @click="rebuildCounters">重建计数器</el-button>
-              </el-tooltip>
-            </div>
+            <el-tag type="info" size="small">下发率 {{ Math.round(companyAllocRatio * 100) }}%</el-tag>
           </div>
           <strong>{{ companyPoolItem ? displayAmount(companyPoolItem.amount_usd) : '—' }}</strong>
           <div class="kpi-pool-usage">
@@ -177,8 +171,14 @@
               <span class="kpi-sub-limit-slash">/</span>
               <span class="kpi-sub-limit-amount">{{ displayAmount(companyPoolItem.daily_amount_usd) }}</span>
             </div>
-      </div>
-    </div>
+          </div>
+          <div class="kpi-pool-actions">
+            <el-button size="small" type="primary" plain @click="openCompanyBudgetDialog">调整</el-button>
+            <el-tooltip content="Redis 数据丢失后，从 call_logs 重算当月/周/日用量并写回" placement="top">
+              <el-button size="small" :loading="rebuildLoading" @click="rebuildCounters">重建计数器</el-button>
+            </el-tooltip>
+          </div>
+        </div>
 
         <!-- 未下发余量 -->
         <div class="kpi" :class="{ 'kpi-pool--warning': companyUnallocated === 0 && companyAllocated > 0 }">
@@ -1092,7 +1092,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { getBudgetContext, getBudgetList, rebuildBudgetCounters, setBudget } from '@/services/control-plane'
 import http from '@/services/http'
 import { useAuthStore } from '@/stores/auth'
@@ -1650,6 +1650,15 @@ function openMemberQuota(member: BudgetItem) {
 const rebuildLoading = ref(false)
 
 async function rebuildCounters() {
+  try {
+    await ElMessageBox.confirm(
+      '将从 call_logs 重新统计当月/周/日用量并写回 Redis。仅在数据异常时使用，正常情况无需操作。',
+      '重建预算计数器',
+      { confirmButtonText: '确认重建', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    return
+  }
   rebuildLoading.value = true
   try {
     const result = await rebuildBudgetCounters()
@@ -1951,6 +1960,8 @@ onMounted(load)
   align-items: center;
   gap: 5px;
   margin-bottom: 0;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .kpi-pool--warning {
   border-color: var(--el-color-warning-light-5);
@@ -1976,6 +1987,11 @@ onMounted(load)
   display: flex;
   flex-direction: column;
   gap: 3px;
+}
+.kpi-pool-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
 }
 .kpi-sub-limit-row {
   display: flex;

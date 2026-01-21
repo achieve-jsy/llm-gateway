@@ -1,6 +1,7 @@
 <template>
-  <div class="budget-scope-panel">
-    <div class="budget-summary">
+  <div class="budget-scope-panel" :class="{ 'is-compact': compact }">
+    <!-- 完整 summary：非 compact 模式显示 -->
+    <div v-if="!compact" class="budget-summary">
       <div class="summary-main">
         <div class="summary-eyebrow">{{ scopeType === 'studio' ? '工作室预算' : '部门预算' }}</div>
         <div class="summary-title">{{ title }}</div>
@@ -20,7 +21,25 @@
       </div>
     </div>
 
-    <div class="budget-toolbar">
+    <!-- compact 模式：仅显示部门日常池一行状态，聚焦成员配额 -->
+    <div v-if="compact && scopeType === 'dept'" class="compact-pool-status">
+      <template v-for="pool in deptPools" :key="pool.scope_type">
+        <div v-if="pool.scope_type === 'dept_daily'" class="compact-pool-row">
+          <span class="compact-pool-label">成员日常预算池</span>
+          <span class="compact-pool-amount">{{ formatUSD(pool.used_usd || 0, { compact: true }) }} / {{ displayAmount(pool.amount_usd) }}</span>
+          <el-progress
+            style="width:80px; flex-shrink:0"
+            :percentage="Math.min(Math.round((pool.used_ratio || 0) * 100), 100)"
+            :stroke-width="4"
+            :color="progressColor(pool.used_ratio || 0)"
+            :show-text="false"
+          />
+          <el-tag :type="statusType(pool.used_ratio || 0)" size="small">{{ statusText(pool.used_ratio || 0) }}</el-tag>
+        </div>
+      </template>
+    </div>
+
+    <div v-if="!compact" class="budget-toolbar">
       <div>
         <h3>{{ tableTitle }}</h3>
         <p>{{ tableDesc }}</p>
@@ -29,7 +48,8 @@
       <el-button v-if="scopeType !== 'studio'" :loading="loading" size="small" @click="load">刷新</el-button>
     </div>
 
-    <div v-if="scopeType === 'dept'" class="pool-grid">
+    <!-- 完整池卡片：非 compact -->
+    <div v-if="scopeType === 'dept' && !compact" class="pool-grid">
       <div v-for="pool in deptPools" :key="pool.scope_type" class="pool-card">
         <div class="pool-head">
           <div>
@@ -59,10 +79,12 @@
     <template v-if="scopeType === 'dept'">
       <div class="member-quota-header">
         <div>
-          <span class="member-quota-title">成员单独额度</span>
+          <span class="member-quota-title">{{ compact ? '成员配额' : '成员单独额度' }}</span>
           <span class="member-quota-count">{{ allocationRows.length }} 人</span>
         </div>
-        <el-button v-if="canEdit" size="small" type="primary" plain @click="openMemberDrawer">+ 设置额度</el-button>
+        <el-button v-if="canEdit" size="small" type="primary" :plain="!compact" :link="compact" @click="openMemberDrawer">
+          {{ compact ? '+ 新增' : '+ 设置额度' }}
+        </el-button>
       </div>
       <el-table
         v-loading="loading"
@@ -89,27 +111,27 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="月额度" width="120" align="right">
+      <el-table-column label="月额度" width="100" align="right">
         <template #default="{ row }">
           <span v-if="row.isDefaultPool" class="muted">—</span>
           <template v-else>{{ displayAmount(row.amount_usd) }}</template>
         </template>
       </el-table-column>
-      <el-table-column label="周额度" width="110" align="right">
+      <el-table-column v-if="!compact" label="周额度" width="110" align="right">
         <template #default="{ row }">
           <span v-if="row.isDefaultPool" class="muted">—</span>
           <template v-else>{{ displayAmount(row.weekly_amount_usd) }}</template>
         </template>
       </el-table-column>
-      <el-table-column label="日额度" width="110" align="right">
+      <el-table-column v-if="!compact" label="日额度" width="110" align="right">
         <template #default="{ row }">
           <span v-if="row.isDefaultPool" class="muted">—</span>
           <template v-else>{{ displayAmount(row.daily_amount_usd) }}</template>
         </template>
       </el-table-column>
-      <el-table-column label="已用 / 使用率" min-width="180">
+      <el-table-column label="已用 / 使用率" :min-width="compact ? 140 : 180">
         <template #default="{ row }">
-          <div v-if="row.isDefaultPool" class="muted" style="font-size:12px;">共享计费，无单独统计</div>
+          <div v-if="row.isDefaultPool" class="muted" style="font-size:12px;">共享预算池</div>
           <div v-else class="usage-cell">
             <span>{{ formatUSD(row.used_usd || 0, { compact: true }) }}</span>
             <el-progress
@@ -120,16 +142,27 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="状态" width="80" align="center">
+      <el-table-column v-if="!compact" label="状态" width="80" align="center">
         <template #default="{ row }">
           <el-tag v-if="!row.isDefaultPool" :type="statusType(row.used_ratio || 0)" size="small">{{ statusText(row.used_ratio || 0) }}</el-tag>
           <span v-else class="muted">—</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="140" fixed="right" align="center">
+      <el-table-column label="操作" :width="compact ? 120 : 140" fixed="right" align="center">
         <template #default="{ row }">
           <template v-if="canEdit">
             <el-button v-if="row.isDefaultPool" link type="primary" size="small" @click="openDrawerForMember(row)">设置额度</el-button>
+            <template v-else-if="compact">
+              <el-button link type="primary" size="small" @click="openDrawer(row)">调额</el-button>
+              <el-dropdown size="small" trigger="click" @command="(cmd: string) => cmd === 'reset' && resetToPool(row)">
+                <el-button link size="small" style="padding:0 2px">⋯</el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="reset" class="dropdown-danger">还原为共享池</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </template>
             <template v-else>
               <el-button link type="primary" size="small" @click="openDrawer(row)">调额</el-button>
               <el-button link type="danger" size="small" @click="resetToPool(row)">还原</el-button>
@@ -212,7 +245,7 @@
                 <template #default="{ row }">
                   <el-button v-if="canEdit" link type="primary" size="small" @click="openDrawer(row)">调额</el-button>
                   <el-button v-else link type="primary" size="small" @click="goExpansion(row)">申请</el-button>
-                  <el-button link type="info" size="small" @click="goToDept(row.scope_id)">成员预算</el-button>
+                  <el-button link type="info" size="small" @click="openDeptMemberDrawer(row)">成员预算</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -289,6 +322,38 @@
       </template>
     </el-drawer>
 
+    <!-- 嵌套抽屉：部门成员预算（工作室视图下钻） -->
+    <el-drawer
+      v-model="deptMemberDrawerVisible"
+      direction="rtl"
+      size="560px"
+      append-to-body
+      :destroy-on-close="true"
+      class="dept-member-drawer"
+    >
+      <template #header>
+        <div class="dept-drawer-header">
+          <el-button link class="dept-drawer-back" @click="deptMemberDrawerVisible = false">
+            <el-icon><ArrowLeft /></el-icon>
+            {{ title }}
+          </el-button>
+          <div class="dept-drawer-title-row">
+            <span class="dept-drawer-title">{{ deptMemberDrawerLabel }}</span>
+            <span class="dept-drawer-sub">成员预算配置</span>
+          </div>
+        </div>
+      </template>
+      <BudgetScopePanel
+        v-if="deptMemberDrawerScopeId"
+        scope-type="dept"
+        :scope-id="deptMemberDrawerScopeId"
+        :title="deptMemberDrawerLabel"
+        :can-edit="canEdit"
+        :can-edit-self="canEdit"
+        compact
+      />
+    </el-drawer>
+
     <!-- 添加成员配额弹窗 -->
     <el-dialog v-model="memberDialogVisible" title="设置成员单独额度" width="460px" :close-on-click-modal="false">
       <el-form label-width="80px">
@@ -335,12 +400,14 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowLeft } from '@element-plus/icons-vue'
 import { getBudgetList, setBudgetBatch, deleteMemberBudget } from '@/services/control-plane'
 import type { BudgetItem, BudgetSetPayload, BudgetView } from '@/types/budget'
 import { SCOPE_TYPE_COLORS, SCOPE_TYPE_LABELS } from '@/types/budget'
 import { formatUSD } from '@/utils/format'
 import { useOrgStore } from '@/stores/org'
 import type { DeptMember } from '@/stores/org'
+import BudgetScopePanel from './BudgetScopePanel.vue'
 
 const props = defineProps<{
   scopeType: 'studio' | 'dept'
@@ -352,6 +419,8 @@ const props = defineProps<{
    *  不传时与 canEdit 保持一致。
    *  用于区分"admin 可直接改工作室上限"与"studio_admin 只能申请扩容"。 */
   canEditSelf?: boolean
+  /** 紧凑模式：用于嵌套抽屉场景，隐藏顶部 summary，池卡片改为单列行内样式 */
+  compact?: boolean
 }>()
 
 const router = useRouter()
@@ -643,12 +712,15 @@ function goExpansion(item: BudgetItem) {
   })
 }
 
-/** 工作室视图：跳转到指定部门的预算详情（成员配额管理） */
-function goToDept(deptScopeId: string) {
-  router.push({
-    path: '/admin/org',
-    query: { scope_type: 'dept', scope_id: deptScopeId },
-  })
+// ─── 工作室视图：嵌套抽屉下钻到部门成员预算 ─────────────────────────────────
+const deptMemberDrawerVisible = ref(false)
+const deptMemberDrawerScopeId = ref('')
+const deptMemberDrawerLabel = ref('')
+
+function openDeptMemberDrawer(row: BudgetItem) {
+  deptMemberDrawerScopeId.value = row.scope_id
+  deptMemberDrawerLabel.value = row.label || row.scope_id
+  deptMemberDrawerVisible.value = true
 }
 
 function displayAmount(value: number) {
@@ -770,5 +842,71 @@ watch(() => [props.scopeType, props.scopeId, props.childScopeIds?.join(',')], lo
   .budget-summary { flex-direction: column; }
   .summary-numbers { width: 100%; }
   .pool-grid { grid-template-columns: 1fr; }
+}
+
+/* ── compact 模式 ─────────────────────────────────────────────────────────── */
+.is-compact {
+  gap: 12px;
+}
+/* compact 模式：仅日常池状态一行 */
+.compact-pool-status {
+  padding: 8px 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: var(--el-fill-color-light);
+}
+.compact-pool-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.compact-pool-label {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+}
+.compact-pool-amount {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  white-space: nowrap;
+}
+
+:deep(.dropdown-danger) {
+  color: var(--el-color-danger) !important;
+}
+
+/* 嵌套部门成员抽屉 header */
+.dept-drawer-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+.dept-drawer-back {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  padding: 0;
+  height: auto;
+}
+.dept-drawer-back:hover {
+  color: var(--el-color-primary);
+}
+.dept-drawer-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.dept-drawer-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+}
+.dept-drawer-sub {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 </style>

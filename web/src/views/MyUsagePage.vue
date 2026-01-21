@@ -426,7 +426,7 @@ import {
   Close, Grid, Cpu, ArrowDown
 } from '@element-plus/icons-vue'
 import UsageRecordTable from '@/components/usage/UsageRecordTable.vue'
-import type { LogRow, TraceData } from '@/components/usage/UsageRecordTable.vue'
+import type { LogRow, TraceData } from '@/components/usage/UsageTraceDrawer.vue'
 import {
   Chart, LineController, DoughnutController, BarController, CategoryScale, LinearScale,
   LineElement, PointElement, ArcElement, BarElement,
@@ -1139,7 +1139,7 @@ watch(analysisOpen, (open) => {
 
 // ── Trace ──
 async function fetchTrace(requestId: string): Promise<TraceData> {
-  const res = await http.get(`/api/v1/my/usage/logs/${requestId}/trace`)
+  const res = await http.get(`/api/v1/my/usage/logs/${requestId}/trace`, { _silent: true } as any)
   return res.data
 }
 

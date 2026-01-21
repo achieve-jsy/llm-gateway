@@ -454,8 +454,6 @@
       @update:page-size="(s) => { logsPageSize = s; logsPage = 1; loadLogs() }"
     />
 
-
-
   </div>
 </template>
 
@@ -467,7 +465,7 @@ import {
   List, Search, WarningFilled,
 } from '@element-plus/icons-vue'
 import UsageRecordTable from '@/components/usage/UsageRecordTable.vue'
-import type { TraceData } from '@/components/usage/UsageRecordTable.vue'
+import type { TraceData } from '@/components/usage/UsageTraceDrawer.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useOrgStore } from '@/stores/org'
 import { useRoute } from 'vue-router'

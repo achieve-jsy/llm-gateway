@@ -1219,6 +1219,609 @@ atlas schema diff --env dev --from "file://atlas-migrations" --to "env://url"
 # 3. 如果输出 "Schemas are synced, no changes to be made" 则一致
 ```
 
+### 场景 5: 孤儿迁移记录修复 (Orphaned Migration Cleanup)
+
+**问题**: `atlas_schema_revisions` 表中有记录，但对应的 `.sql` 文件已从目录中删除（或被重命名），导致 Atlas 报 "missing migration" 错误。
+
+**典型触发场景**:
+- 合并后改时间戳（违反 §0.8）
+- revert 已 apply 的分支
+- 手工删除迁移文件
+- 多人合并时某人的迁移被冲突覆盖
+
+**Atlas 行为**:
+- 老版本 (v0.x): 可能直接 apply 新迁移，不报错
+- 新版本 (v1.x+): 报 `missing migration file: <version>`
+
+**诊断命令**:
+
+```sql
+-- 1. 查看所有已 apply 的迁移
+SELECT version, description, applied_at, success 
+FROM atlas_schema_revisions 
+ORDER BY version DESC 
+LIMIT 20;
+
+-- 2. 找出孤儿记录（在 DB 但不在目录）
+SELECT version 
+FROM atlas_schema_revisions 
+WHERE version NOT IN (
+    '20260609082623', '20260610120000', '20260611000000', -- ... 列出目录里所有的
+    '20260622180321', '20260623010000', '20260624010000'
+);
+
+-- 3. 简化版：用脚本自动检测
+```
+
+**自动检测脚本**:
+
+```bash
+#!/bin/bash
+# detect-orphans.sh - 检测孤儿迁移记录
+
+# 获取目录中所有迁移时间戳
+DIR_VERSIONS=$(ls atlas-migrations/*.sql 2>/dev/null | grep -v atlas.sum | sed 's/.*\///' | sed 's/_.*//' | tr '\n' ',' | sed 's/,$//')
+
+echo "目录中的迁移: $DIR_VERSIONS"
+
+# 连接数据库查询
+psql "$DATABASE_URL" << EOF
+SELECT 
+    version,
+    description,
+    applied_at,
+    CASE WHEN version IN ($DIR_VERSIONS) THEN '✅ 正常' ELSE '❌ 孤儿' END as status
+FROM atlas_schema_revisions
+ORDER BY version DESC;
+EOF
+```
+
+**修复方案选择**:
+
+```bash
+# 决策流程
+1. 确认孤儿版本对应的 SQL 是否已真正执行？
+   ↓
+   ├─ 是 (表已建好、字段已加) → 路径 A: 清理孤儿记录
+   ├─ 否 (SQL 从未执行)       → 路径 B: 恢复 SQL 文件
+   └─ 不确定                  → 路径 C: 安全修复（IF NOT EXISTS + 清理）
+```
+
+**路径 A: 清理孤儿记录（推荐）**
+
+```sql
+-- A.1. 先确认 schema 已正确
+\dt+ audit_logs
+\d api_keys  -- 检查 ip_allowlist 字段是否存在
+
+-- A.2. 清理孤儿记录（示例：版本 20260623010000）
+-- 先备份
+CREATE TABLE atlas_schema_revisions_backup AS 
+SELECT * FROM atlas_schema_revisions;
+
+-- 删除孤儿
+DELETE FROM atlas_schema_revisions 
+WHERE version = '20260623010000';
+
+-- 验证
+SELECT version FROM atlas_schema_revisions 
+ORDER BY version DESC LIMIT 5;
+```
+
+```bash
+# A.3. 重新生成 atlas.sum
+atlas migrate hash --env local
+
+# A.4. 验证
+atlas migrate status --env dev
+# 应该显示 "Migration directory is in sync with the database"
+```
+
+**路径 B: 恢复 SQL 文件**
+
+```bash
+# B.1. 从 git 历史找回文件
+git log --all --full-history -- "atlas-migrations/20260623010000*"
+# 找到对应的 commit hash
+
+# B.2. 恢复文件
+git checkout <commit-hash> -- atlas-migrations/20260623010000_xxx.sql
+
+# B.3. 重新计算 hash
+atlas migrate hash --env local
+
+# B.4. 验证
+atlas migrate validate --env local
+```
+
+**路径 C: 安全修复（IF NOT EXISTS + 清理）**
+
+适用于：不确定 schema 状态，想确保修复后任何环境都能应用。
+
+```bash
+# C.1. 创建新的幂等迁移文件（合并所有变更）
+cat > atlas-migrations/20260624010000_fix_orphaned_safe.sql << 'EOF'
+-- 安全修复：使用 IF NOT EXISTS 确保幂等
+
+CREATE TABLE IF NOT EXISTS "audit_logs" (
+    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "user_id" UUID NOT NULL,
+    "action" VARCHAR(64) NOT NULL,
+    "resource_type" VARCHAR(64) NOT NULL,
+    "resource_id" VARCHAR(255) NOT NULL,
+    "ip_address" INET,
+    "metadata" JSONB,
+    "created_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+ALTER TABLE "api_keys" 
+ADD COLUMN IF NOT EXISTS "ip_allowlist" TEXT NOT NULL DEFAULT '';
+EOF
+
+# C.2. 清理孤儿记录
+psql "$DATABASE_URL" << EOF
+DELETE FROM atlas_schema_revisions 
+WHERE version = '20260623010000' AND success = false;
+-- 或更保守：只删失败的
+-- DELETE FROM atlas_schema_revisions WHERE version = '20260623010000';
+EOF
+
+# C.3. 重新 hash
+atlas migrate hash --env local
+
+# C.4. 验证
+atlas migrate validate --env local
+```
+
+**预防措施**:
+- 严格遵守 §0.8（迁移不可变原则）
+- 使用 §2.5 pre-commit hook 阻止提交
+- 使用 §6.5 CI automation 阻止合并
+
+**生产环境修复流程**:
+
+```bash
+#!/bin/bash
+# production-fix-orphan.sh
+
+set -e
+
+PROD_DB="postgresql://user:pass@prod-db:5432/llm_gateway"
+
+echo "⚠️ 即将修复生产环境孤儿记录，请确认已备份"
+read -p "继续? [y/N] " -n 1 -r
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then echo "已取消" && exit 1; fi
+
+# 备份
+psql "$PROD_DB" -c "CREATE TABLE atlas_schema_revisions_backup_$(date +%Y%m%d_%H%M%S) AS SELECT * FROM atlas_schema_revisions;"
+
+# 诊断
+psql "$PROD_DB" -c "SELECT version, description, applied_at FROM atlas_schema_revisions ORDER BY version DESC LIMIT 10;"
+
+# 清理（根据实际情况修改版本号）
+psql "$PROD_DB" -c "DELETE FROM atlas_schema_revisions WHERE version = '20260623010000';"
+
+echo "✅ 孤儿记录已清理"
+echo "📋 下一步：部署包含 atlas.sum 修复的 commit"
+```
+
+### 场景 6: Hotfix 跨分支同步
+
+**问题**: 紧急 Hotfix 同时部署到 test/staging/prod，但三个环境的迁移历史不一致。
+
+**典型场景**:
+```
+time ──────────────────────────────────────────────────►
+main:   ──M1──M2──M3────────────────────────M4(hotfix)──►
+test:   ──M1──M2──M5──M6──M7────────────M4(hotfix)──►
+staging:──M1──M2──M5──M6──────────────M4(hotfix)──►
+```
+
+main 上没有 M5-M7，直接合并 hotfix 分支时会出现时间戳乱序。
+
+**修复流程**:
+
+```bash
+# 1. 确认 hotfix 迁移的时间戳
+ls atlas-migrations/*_hotfix_*.sql
+
+# 2. 检查每个环境的最新时间戳
+for env in test staging main; do
+  LATEST=$(git ls-tree -r origin/$env atlas-migrations/ | awk '{print $4}' | sort | tail -1)
+  echo "$env: $LATEST"
+done
+
+# 3. 如果 hotfix 时间戳晚于所有环境 → 直接合并 ✅
+# 4. 如果 hotfix 时间戳早于某个环境 → 需要特殊处理
+
+# 4.1 方案 A: 重命名 hotfix 文件（如果还没 apply 到任何环境）
+git mv atlas-migrations/20260620_hotfix.sql \
+       atlas-migrations/20260625_hotfix.sql
+atlas migrate hash --env local
+atlas migrate status --env test  # 验证 test 环境还没 apply
+# 确认显示 "pending" 才能重命名
+
+# 4.2 方案 B: 如果 hotfix 已 apply 到某些环境
+# 使用 IF NOT EXISTS 确保幂等
+echo "-- Hotfix: 添加紧急字段" > atlas-migrations/20260625_hotfix.sql
+cat >> atlas-migrations/20260625_hotfix.sql << 'EOF'
+ALTER TABLE "api_keys" 
+ADD COLUMN IF NOT EXISTS "rate_limit" INTEGER DEFAULT 0;
+EOF
+atlas migrate hash --env local
+
+# 对于已 apply 的环境，Atlas 会跳过（因为有记录）
+# 对于未 apply 的环境，Atlas 会执行（IF NOT EXISTS 保证安全）
+```
+
+**Hotfix 提交模板**:
+
+```bash
+# hotfix commit message
+git commit -m "hotfix(db): 紧急修复 [问题描述]
+
+问题：[具体问题]
+修复：[修复措施]
+影响：[影响范围]
+
+跨环境部署:
+- ✅ test: 时间戳晚于最新迁移
+- ⚠️ staging: 时间戳早于 M5，使用 IF NOT EXISTS
+- ✅ main: 无冲突，直接 apply
+
+Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>"
+```
+
+### 场景 7: 长周期分支合并冲突
+
+**问题**: Feature 分支开发数月，期间 main 已合并多个迁移，合并时时间戳早于 main 最新版本。
+
+**典型时间线**:
+
+```
+time ──────────────────────────────────────────────────►
+main:    ──M1──M2──M3──M4──M5──M6──M7──M8──M9──M10──►
+feature: ──M1──M2──F1(feature migration, 时间戳早于 M5)──►
+```
+
+F1 的时间戳早于 M5-M10，直接合并会报 "out of order"。
+
+**修复流程**:
+
+```bash
+# 1. 确认 feature 迁移的时间戳
+ls atlas-migrations/*_[feature_name]*.sql
+
+# 2. 确认 main 最新时间戳
+LATEST=$(git ls-tree -r origin/main atlas-migrations/ | awk '{print $4}' | sort | tail -1)
+echo "Main latest: $LATEST"
+
+# 3. 检查 feature 迁移是否已 apply 到任何环境
+for env in test staging main; do
+  echo "=== $env ==="
+  psql "$DATABASE_URL_$env" -c "
+    SELECT version, applied_at, success 
+    FROM atlas_schema_revisions 
+    WHERE version = '<feature_version>';"
+done
+
+# 4. 根据 apply 状态选择策略
+
+# 4.1 方案 A: 未 apply 到任何环境（最干净）
+# 直接重命名
+git mv atlas-migrations/20260601_feature.sql \
+       atlas-migrations/20260615_feature.sql  # 晚于 M10
+atlas migrate hash --env local
+atlas migrate validate --env local
+
+# 4.2 方案 B: 已 apply 到某些环境（复杂）
+
+# 4.2.1 确认已 apply 环境的 schema 状态
+psql "$DATABASE_URL_test" -c "\dt+ feature_table"
+# 确认表已存在
+
+# 4.2.2 创建新的幂等迁移（合并 feature 的所有变更）
+cat > atlas-migrations/20260615_feature_merged.sql << 'EOF'
+-- 合并 feature 分支所有迁移，使用 IF NOT EXISTS 确保幂等
+
+-- 来自 20260601_feature_part1.sql
+CREATE TABLE IF NOT EXISTS "feature_configs" (
+    "id" SERIAL PRIMARY KEY,
+    "name" VARCHAR(100) NOT NULL,
+    "value" JSONB NOT NULL
+);
+
+-- 来自 20260605_feature_part2.sql  
+ALTER TABLE "users" 
+ADD COLUMN IF NOT EXISTS "feature_flags" JSONB DEFAULT '{}';
+
+-- 来自 20260610_feature_part3.sql
+CREATE INDEX IF NOT EXISTS "idx_feature_configs_name" 
+ON "feature_configs" ("name");
+EOF
+
+# 4.2.3 清理已 apply 环境的旧记录
+psql "$DATABASE_URL_test" << EOF
+DELETE FROM atlas_schema_revisions 
+WHERE version IN ('20260601_feature_part1', '20260605_feature_part2', '20260610_feature_part3');
+EOF
+
+# 4.2.4 删除旧文件
+rm atlas-migrations/20260601_feature_part1.sql
+rm atlas-migrations/20260605_feature_part2.sql
+rm atlas-migrations/20260610_feature_part3.sql
+
+# 4.2.5 重新 hash
+atlas migrate hash --env local
+atlas migrate validate --env local
+```
+
+**合并策略对比**:
+
+| 策略 | 适用条件 | Git 复杂度 | DB 复杂度 | 风险 |
+|------|----------|-----------|----------|------|
+| 重命名 | 未 apply | 低 | 低 | 低 |
+| 合并 + IF NOT EXISTS | 已 apply | 中 | 中 | 中 |
+| 保留 + 清理孤儿 | 已 apply | 高 | 高 | 高 |
+
+**预防措施**:
+- 定期 rebase feature 分支到最新 main（每周至少一次）
+- 生成迁移前先查 main 最新时间戳（§0.6）
+- 使用 §6.5 CI automation 在 MR 时自动检测
+
+### 场景 8: 生产环境紧急回滚
+
+**问题**: 生产迁移后发现问题，需要快速回滚，但 Atlas 不支持自动 down migration。
+
+**紧急回滚流程**:
+
+```bash
+#!/bin/bash
+# emergency-rollback.sh - 生产环境紧急回滚
+
+set -e
+
+PROD_DB="postgresql://user:pass@prod-db:5432/llm_gateway"
+VERSION_TO_ROLLBACK="20260615010000"  # 要回滚的迁移版本
+
+echo "⚠️ 即将回滚生产环境迁移: $VERSION_TO_ROLLBACK"
+echo "确认信息:"
+psql "$PROD_DB" -c "SELECT version, description, applied_at FROM atlas_schema_revisions WHERE version = '$VERSION_TO_ROLLBACK';"
+
+read -p "继续回滚? [y/N] " -n 1 -r
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then echo "已取消" && exit 1; fi
+
+# 1. 应用回滚（根据具体情况调整 SQL）
+cat << 'EOF' | psql "$PROD_DB"
+-- 回滚 20260615010000_add_audit_logs
+
+-- 1. 删除新建的表
+DROP TABLE IF EXISTS "audit_logs" CASCADE;
+
+-- 2. 删除新建的字段
+ALTER TABLE "api_keys" 
+DROP COLUMN IF EXISTS "ip_allowlist";
+
+-- 3. 清理迁移记录
+DELETE FROM atlas_schema_revisions 
+WHERE version = '20260615010000';
+EOF
+
+echo "✅ 回滚完成"
+echo "📋 下一步：删除迁移文件并提交"
+```
+
+```bash
+# 删除迁移文件
+rm atlas-migrations/20260615010000_add_audit_logs.sql
+
+# 重新 hash
+atlas migrate hash --env local
+
+# 提交
+git add -A
+git commit -m "revert(db): 回滚 20260615010000 迁移
+
+原因: [具体问题]
+影响: [影响范围]
+修复: 已清理相关表和字段"
+
+git push origin main
+```
+
+**回滚策略决策树**:
+
+```bash
+# 决策流程
+1. 迁移是否已 apply 到生产？
+   ↓
+   ├─ 否 → 直接删除文件
+   └─ 是 → 继续问
+
+2. 迁移创建了新表？
+   ↓
+   ├─ 是 → DROP TABLE IF EXISTS
+   └─ 否 → 继续问
+
+3. 迁移添加了新字段？
+   ↓
+   ├─ 是 → ALTER TABLE DROP COLUMN IF EXISTS
+   └─ 否 → 继续问
+
+4. 迁移修改了现有 schema？
+   ↓
+   ├─ 是 → 需要手动逆向（例如加回删除的字段）
+   └─ 否 → 仅清理迁移记录
+
+5. 是否需要保留数据？
+   ↓
+   ├─ 否 → 直接 DROP
+   └─ 是 → 先备份再 DROP
+```
+
+**回滚前检查清单**:
+
+- [ ] 确认问题无法通过修复迁移解决（必须回滚）
+- [ ] 备份相关表和字段
+- [ ] 确认回滚 SQL 的幂等性（IF EXISTS）
+- [ ] 测试回滚 SQL 在 staging 环境
+- [ ] 通知团队回滚计划
+- [ ] 准备回滚后的代码修复方案
+
+### 场景 9: 跨环境不一致性修复
+
+**问题**: 不同环境的 schema 状态不一致（test 有表但 staging 没有，或字段类型不同）。
+
+**典型症状**:
+
+```bash
+# test 环境
+\dt+ audit_logs  # 存在
+# staging 环境
+\dt+ audit_logs  # 不存在
+
+# 或字段类型不同
+# test:  ip_allowlist TEXT
+# staging: ip_allowlist VARCHAR(255)
+```
+
+**诊断流程**:
+
+```bash
+#!/bin/bash
+# cross-env-check.sh - 跨环境一致性检查
+
+ENVS=("test" "staging" "main")
+TABLES=("audit_logs" "api_keys")
+
+for table in "${TABLES[@]}"; do
+  echo "=== 检查表: $table ==="
+  for env in "${ENVS[@]}"; do
+    DB_URL=$(eval echo "\$DATABASE_URL_${env^^}")
+    echo "--- $env ---"
+    psql "$DB_URL" -c "\d $table" 2>&1 | head -20
+    echo ""
+  done
+done
+```
+
+**修复方案**:
+
+**方案 A: 统一到最新状态（推荐）**
+
+```sql
+-- 假设 test 是最新状态，staging 缺少 audit_logs 表
+
+-- 1. 在 staging 创建缺失的表
+CREATE TABLE IF NOT EXISTS "audit_logs" (
+    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    -- ... 其他字段
+);
+
+-- 2. 清理或更新迁移记录
+-- 如果迁移已记录但表不存在（孤儿）
+DELETE FROM atlas_schema_revisions 
+WHERE version = '20260615010000';
+
+-- 如果迁移未记录但表已存在（不一致）
+-- 不执行任何操作，让 Atlas 在下次 apply 时自动跳过（IF NOT EXISTS）
+```
+
+**方案 B: 创建修复迁移**
+
+```sql
+-- 20260620010000_fix_cross_env_inconsistency.sql
+-- 跨环境一致性修复（幂等）
+
+-- 1. 确保所有环境都有 audit_logs 表
+CREATE TABLE IF NOT EXISTS "audit_logs" (
+    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "user_id" UUID NOT NULL,
+    "action" VARCHAR(64) NOT NULL,
+    "resource_type" VARCHAR(64) NOT NULL,
+    "resource_id" VARCHAR(255) NOT NULL,
+    "ip_address" INET,
+    "metadata" JSONB,
+    "created_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 2. 统一 ip_allowlist 字段类型为 TEXT
+-- 注意：ALTER COLUMN TYPE 可能需要重建索引
+DO $$ 
+BEGIN
+    -- 检查字段是否存在且类型不是 TEXT
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'api_keys' 
+          AND column_name = 'ip_allowlist'
+          AND data_type != 'text'
+    ) THEN
+        -- 先删除相关索引（如果有）
+        EXECUTE 'DROP INDEX IF EXISTS idx_api_keys_ip_allowlist';
+        
+        -- 修改类型
+        EXECUTE 'ALTER TABLE "api_keys" ALTER COLUMN "ip_allowlist" TYPE TEXT';
+        
+        -- 重建索引（如果需要）
+        -- EXECUTE 'CREATE INDEX idx_api_keys_ip_allowlist ON "api_keys" USING GIN (ip_allowlist)';
+    END IF;
+END $$;
+
+-- 3. 确保所有环境都有必要的索引
+CREATE INDEX IF NOT EXISTS "idx_audit_logs_created_at" 
+ON "audit_logs" ("created_at");
+```
+
+```bash
+# 重新 hash
+atlas migrate hash --env local
+
+# 验证所有环境
+for env in test staging main; do
+  echo "=== $env ==="
+  atlas migrate status --env $env
+done
+```
+
+**方案 C: 强制同步（危险）**
+
+```bash
+#!/bin/bash
+# force-sync.sh - 强制同步所有环境到代码状态
+# ⚠️ 危险：可能删除生产数据
+
+set -e
+
+# 1. 备份所有环境
+for env in test staging main; do
+  DB_URL=$(eval echo "\$DATABASE_URL_${env^^}")
+  echo "备份 $env..."
+  pg_dump "$DB_URL" > "backup_${env}_$(date +%Y%m%d_%H%M%S).sql"
+done
+
+# 2. 清理所有迁移记录（危险！）
+for env in test staging main; do
+  DB_URL=$(eval echo "\$DATABASE_URL_${env^^}")
+  echo "清理 $env 迁移记录..."
+  psql "$DB_URL" -c "TRUNCATE TABLE atlas_schema_revisions;"
+done
+
+# 3. 应用所有迁移
+for env in test staging main; do
+  echo "应用迁移到 $env..."
+  atlas migrate apply --env $env
+done
+
+echo "✅ 所有环境已同步"
+echo "⚠️ 请检查备份文件确保数据安全"
+```
+
+**预防措施**:
+- 严格按环境顺序部署（test → staging → main）
+- 使用 §6.5 CI automation 确保每次部署都跑迁移
+- 定期运行 `atlas migrate status --env <env>` 检查状态
+- 使用 §4.5 跨环境同步检查脚本
+
 ## 9. 团队协作规范
 
 ### Pull Request 检查清单

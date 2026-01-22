@@ -229,22 +229,6 @@ migrate-test:
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
         set -e
         chmod +x /tmp/atlas-migrate/atlas
-        # 诊断 atlas_schema_revisions 表状态
-        echo '=== Current atlas_schema_revisions ==='
-        psql '${DATABASE_URL}' -c \"SELECT version, description, type, applied, exec_time, operator_version FROM atlas_schema_revisions ORDER BY version;\" 2>&1 || echo 'Failed to query revisions'
-        # 修复 atlas 迁移乱序：补登记缺失的 migration records，使 revisions 表与目录一致
-        # 这是 Atlas 官方推荐的方式，幂等且安全（不执行任何 SQL）
-        psql '${DATABASE_URL}' -v ON_ERROR_STOP=1 <<'REPAIR_EOF'
-          -- 补登记通知表（20260622015606）
-          INSERT INTO atlas_schema_revisions (version, description, type, applied, exec_time, hash, operator_version)
-          SELECT '20260622015606', 'create_notifications_table', 2, 0, 0, 'placeholder', 'community'
-          WHERE NOT EXISTS (SELECT 1 FROM atlas_schema_revisions WHERE version = '20260622015606');
-
-          -- 补登记 auto_strategy（20260622180321）
-          INSERT INTO atlas_schema_revisions (version, description, type, applied, exec_time, hash, operator_version)
-          SELECT '20260622180321', 'add_auto_strategy_and_complexity_tier', 2, 0, 0, 'placeholder', 'community'
-          WHERE NOT EXISTS (SELECT 1 FROM atlas_schema_revisions WHERE version = '20260622180321');
-REPAIR_EOF
         /tmp/atlas-migrate/atlas migrate apply --dir 'file:///tmp/atlas-migrate/atlas-migrations' --url '${DATABASE_URL}' --baseline '${ATLAS_BASELINE}'
         rm -rf /tmp/atlas-migrate
       "

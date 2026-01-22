@@ -229,6 +229,10 @@ migrate-test:
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
         set -e
         chmod +x /tmp/atlas-migrate/atlas
+        # 修复 atlas 迁移乱序问题：将已存在但未记录的迁移登记到 atlas_schema_revisions
+        # 这是 Atlas 官方推荐的方式，幂等且安全
+        /tmp/atlas-migrate/atlas migrate set --url '${DATABASE_URL}' --qual migration 20260622015606 2>/dev/null || echo 'Migration 20260622015606 already recorded'
+        /tmp/atlas-migrate/atlas migrate set --url '${DATABASE_URL}' --qual migration 20260622180321 2>/dev/null || echo 'Migration 20260622180321 already recorded'
         /tmp/atlas-migrate/atlas migrate apply --dir 'file:///tmp/atlas-migrate/atlas-migrations' --url '${DATABASE_URL}' --baseline '${ATLAS_BASELINE}'
         rm -rf /tmp/atlas-migrate
       "

@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/example/llm-gateway/internal/core"
 )
 
 type Router struct {
@@ -14,6 +16,7 @@ type Router struct {
 	healthStore *HealthStore
 	counters    map[string]uint64
 	countersMu  sync.Mutex
+	classifier  *ComplexityClassifier
 }
 
 func NewRouter(rt *RouteTable, hs *HealthStore) *Router {
@@ -21,10 +24,11 @@ func NewRouter(rt *RouteTable, hs *HealthStore) *Router {
 		routeTable:  rt,
 		healthStore: hs,
 		counters:    make(map[string]uint64),
+		classifier:  NewComplexityClassifier(),
 	}
 }
 
-func (r *Router) Route(groupName string) (*RouteDecision, error) {
+func (r *Router) Route(groupName string, req *core.ChatRequest) (*RouteDecision, error) {
 	start := time.Now()
 
 	group := r.routeTable.Get(groupName)
@@ -42,12 +46,32 @@ func (r *Router) Route(groupName string) (*RouteDecision, error) {
 	}
 
 	slog.Debug("router: healthy models", "group", groupName, "healthy", len(healthyModels))
-	entry, err := r.selectEntry(group.Strategy, groupName, healthyModels)
+
+	if group.Strategy == StrategyAuto {
+		entry, meta, err := r.routeAutoWithMeta(healthyModels, req)
+		if err != nil {
+			return nil, err
+		}
+		decision := buildDecision(group, entry, start)
+		if meta != nil {
+			decision.ComplexityTier = meta.Tier
+			decision.ComplexityScore = meta.Score
+			decision.ReasoningMarkers = meta.ReasoningMarkers
+			decision.BiasUpApplied = meta.BiasUp
+		}
+		return decision, nil
+	}
+
+	entry, err := r.selectEntry(group.Strategy, groupName, healthyModels, req)
 	if err != nil {
 		return nil, err
 	}
 
-	decision := &RouteDecision{
+	return buildDecision(group, entry, start), nil
+}
+
+func buildDecision(group *GroupRoutingConfig, entry *ModelRoutingEntry, start time.Time) *RouteDecision {
+	return &RouteDecision{
 		GroupName:      group.GroupName,
 		Strategy:       group.Strategy,
 		ModelID:        strconv.FormatUint(uint64(entry.ModelID), 10),
@@ -59,13 +83,12 @@ func (r *Router) Route(groupName string) (*RouteDecision, error) {
 		Credential:     entry.Credential,
 		DecisionTimeUs: time.Since(start).Microseconds(),
 	}
-	return decision, nil
 }
 
-func (r *Router) SelectByStrategy(strategy RoutingStrategy, groupName string, healthyModels []*ModelRoutingEntry) (*RouteDecision, error) {
+func (r *Router) SelectByStrategy(strategy RoutingStrategy, groupName string, healthyModels []*ModelRoutingEntry, req *core.ChatRequest) (*RouteDecision, error) {
 	start := time.Now()
 
-	entry, err := r.selectEntry(strategy, groupName, healthyModels)
+	entry, err := r.selectEntry(strategy, groupName, healthyModels, req)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +108,7 @@ func (r *Router) SelectByStrategy(strategy RoutingStrategy, groupName string, he
 	return decision, nil
 }
 
-func (r *Router) selectEntry(strategy RoutingStrategy, groupName string, healthyModels []*ModelRoutingEntry) (*ModelRoutingEntry, error) {
+func (r *Router) selectEntry(strategy RoutingStrategy, groupName string, healthyModels []*ModelRoutingEntry, req *core.ChatRequest) (*ModelRoutingEntry, error) {
 	switch strategy {
 	case StrategyRoundRobin:
 		return r.routeRoundRobin(groupName, healthyModels)
@@ -93,6 +116,8 @@ func (r *Router) selectEntry(strategy RoutingStrategy, groupName string, healthy
 		return r.routePriority(groupName, healthyModels)
 	case StrategyWeighted:
 		return r.routeWeighted(healthyModels)
+	case StrategyAuto:
+		return r.routeAuto(healthyModels, req)
 	default:
 		return nil, fmt.Errorf("unknown strategy: %s", strategy)
 	}
@@ -156,4 +181,72 @@ func (r *Router) routeWeighted(healthyModels []*ModelRoutingEntry) (*ModelRoutin
 	}
 
 	return healthyModels[0], nil
+}
+
+// AutoMeta 记录 auto 策略本次路由的分类元信息
+type AutoMeta struct {
+	Tier             string
+	Score            float64
+	ReasoningMarkers int
+	BiasUp           bool
+}
+
+// routeAutoWithMeta 按难度分档路由，返回选中的候选 + 审计元信息。
+func (r *Router) routeAutoWithMeta(healthyModels []*ModelRoutingEntry, req *core.ChatRequest) (*ModelRoutingEntry, *AutoMeta, error) {
+	if len(healthyModels) == 0 {
+		return nil, nil, ErrNoAvailableModel
+	}
+	if len(healthyModels) == 1 {
+		return healthyModels[0], &AutoMeta{Tier: "single", Score: 0}, nil
+	}
+
+	result := r.classifier.Classify(req)
+	targetTier := result.Tier
+	biasUp := false
+
+	candidates := filterByTier(healthyModels, targetTier)
+
+	cur := targetTier
+	for len(candidates) == 0 {
+		next := upgradeTier(cur)
+		if next == cur {
+			break
+		}
+		cur = next
+		candidates = filterByTier(healthyModels, cur)
+		biasUp = true
+	}
+
+	if len(candidates) == 0 {
+		candidates = healthyModels
+		biasUp = true
+	}
+
+	selected, err := r.routeWeighted(candidates)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	slog.Info("auto routed",
+		"tier", result.Tier,
+		"score", fmt.Sprintf("%.3f", result.Score),
+		"markers", result.ReasoningMarkers,
+		"bias_up", biasUp,
+		"hard_floor", result.HardFloor,
+		"pool_size", len(candidates),
+		"detail", result.Detail,
+	)
+
+	return selected, &AutoMeta{
+		Tier:             string(result.Tier),
+		Score:            result.Score,
+		ReasoningMarkers: result.ReasoningMarkers,
+		BiasUp:           biasUp,
+	}, nil
+}
+
+// routeAuto 是 routeAutoWithMeta 的薄包装，供 selectEntry 使用。
+func (r *Router) routeAuto(healthyModels []*ModelRoutingEntry, req *core.ChatRequest) (*ModelRoutingEntry, error) {
+	entry, _, err := r.routeAutoWithMeta(healthyModels, req)
+	return entry, err
 }

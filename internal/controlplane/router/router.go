@@ -140,10 +140,25 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	budgetSvc.SetRedis(rdb)
 	budgetAlertSvc := service.NewBudgetAlertService(budgetRepo, budgetAlertRepo, nil)
 	budgetAlertSvc.SetRedis(rdb)
+	notificationRepo := repository.NewNotificationRepo(db)
+	budgetAlertSvc.SetNotificationRepo(notificationRepo)
 	// v0.8: 审计日志（仅管理面写操作落库）
 	auditRepo := repository.NewAuditLogRepo(db)
 	auditSvc := service.NewAuditLogService(auditRepo)
 
+	// 动态 Webhook notifier：按 settings 中的 webhook_enabled/webhook_url/webhook_secret 构建；
+	// 若未启用则 notifier 为 nil，仅发站内信。
+	go func() {
+		cfg, err := settingsSvc.GetSystemSettings(context.Background())
+		if err != nil {
+			slog.Warn("budget_alert: failed to load webhook settings", "error", err)
+			return
+		}
+		if cfg.WebhookEnabled && cfg.WebhookURL != "" {
+			budgetAlertSvc.SetNotifier(service.NewWebhookSender(cfg.WebhookURL, cfg.WebhookSecret))
+			slog.Info("budget_alert: webhook notifier initialized", "url", cfg.WebhookURL)
+		}
+	}()
 	// v0.7: 上线默认预算初始化（异步，不阻塞启动）
 	// 默认额度：部门日常 500 USD/月，部门程序服务 200 USD/月，工作室 2000 USD/月
 	// 运维可通过 PUT /api/v1/budgets 按域调整
@@ -195,6 +210,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	testHandler := handler.NewTestHandler(providerRepo, modelRepo)
 	modelTagHandler := handler.NewModelTagHandler(modelTagRepo)
 	announcementHandler := handler.NewAnnouncementHandler(announcementRepo)
+	notificationHandler := handler.NewNotificationHandler(notificationRepo)
 	healthCheckHandler := handler.NewHealthCheckHandler(healthCheckSvc)
 	modelCheckHandler := handler.NewModelCheckHandler(modelRepo, providerRepo, healthCheckRepo)
 	syncSvc := service.NewSyncService(providerRepo, modelRepo, publisher)
@@ -411,6 +427,13 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/announcements/unread", announcementHandler.GetUnread)
 		adminGroup.GET("/announcements/unread/count", announcementHandler.GetUnreadCount)
 		adminGroup.GET("/announcements/history", announcementHandler.GetReadHistory)
+
+		// 站内通知（系统自动触发，如预算告警）
+		adminGroup.GET("/notifications/unread", notificationHandler.GetUnread)
+		adminGroup.GET("/notifications/unread/count", notificationHandler.GetUnreadCount)
+		adminGroup.GET("/notifications/history", notificationHandler.GetHistory)
+		adminGroup.POST("/notifications/:id/read", notificationHandler.MarkRead)
+		adminGroup.POST("/notifications/read-all", notificationHandler.MarkAllRead)
 
 		// 用量与成本查询
 		usageSvc := obssvc.NewRollupService(db)

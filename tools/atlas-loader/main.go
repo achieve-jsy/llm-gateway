@@ -41,6 +41,8 @@ func main() {
 		// v0.7 扩容审批
 		&cpmmodel.ExpansionRequest{},
 		&cpmmodel.ExpansionApprovalStep{},
+		// 站内通知（独立于公告）
+		&cpmmodel.Notification{},
 		// v0.8 审计日志
 		&cpmmodel.AuditLog{},
 

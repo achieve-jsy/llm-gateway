@@ -86,6 +86,7 @@ const STRATEGY_LABEL: Record<string, string> = {
   round_robin: '轮询',
   priority: '优先级',
   weighted: '加权',
+  auto: '自动',
 }
 
 const MODE_LABEL: Record<string, string> = {
@@ -296,6 +297,7 @@ function formatPrice(n: number): string {
 .badge-round_robin { color: #2471a3; background: rgba(36, 113, 163, 0.08); border-color: rgba(36, 113, 163, 0.2); }
 .badge-priority { color: #7d3c98; background: rgba(125, 60, 152, 0.08); border-color: rgba(125, 60, 152, 0.2); }
 .badge-weighted { color: #ca6f1e; background: rgba(202, 111, 30, 0.08); border-color: rgba(202, 111, 30, 0.2); }
+.badge-auto { color: #148f77; background: rgba(26, 188, 156, 0.08); border-color: rgba(26, 188, 156, 0.2); }
 
 .gc-models {
   font-size: 11px;
@@ -357,4 +359,5 @@ function formatPrice(n: number): string {
 :global(html.dark) .badge-round_robin { color: #5dade2; background: rgba(52, 152, 219, 0.1); border-color: rgba(52, 152, 219, 0.22); }
 :global(html.dark) .badge-priority { color: #bb8fce; background: rgba(155, 89, 182, 0.1); border-color: rgba(155, 89, 182, 0.22); }
 :global(html.dark) .badge-weighted { color: #f0b27a; background: rgba(230, 126, 34, 0.1); border-color: rgba(230, 126, 34, 0.22); }
+:global(html.dark) .badge-auto { color: #76d7c4; background: rgba(26, 188, 156, 0.1); border-color: rgba(26, 188, 156, 0.22); }
 </style>

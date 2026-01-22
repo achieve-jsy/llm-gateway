@@ -73,7 +73,7 @@ func (h *ResponsesHandler) Handle(c *gin.Context) {
 
 	// 若请求的是模型组名，通过 group dispatcher 解析到实际 provider 模型
 	if h.groupDispatch != nil {
-		decision, err := h.groupDispatch.Dispatch(c, req.Model)
+		decision, err := h.groupDispatch.Dispatch(c, req.Model, nil)
 		if err != nil {
 			if ue, ok := err.(*model.UnifiedError); ok {
 				respondError(c, ue)
@@ -132,7 +132,7 @@ func (h *ResponsesHandler) handleNonStream(c *gin.Context, baseCtx context.Conte
 		if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
 			failedID = dc.RoutedModelID
 		}
-		if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID); fErr == nil {
+		if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID, nil); fErr == nil {
 			req.Model = decision.ModelName
 			req.Provider = decision.ChannelType
 			c.Set("failover_used", true)
@@ -179,7 +179,7 @@ func (h *ResponsesHandler) handleStream(c *gin.Context, baseCtx context.Context,
 			if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
 				failedID = dc.RoutedModelID
 			}
-			if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID); fErr == nil {
+			if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID, nil); fErr == nil {
 				req.Model = decision.ModelName
 				req.Provider = decision.ChannelType
 				c.Set("failover_used", true)

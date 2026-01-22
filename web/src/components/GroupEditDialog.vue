@@ -36,8 +36,13 @@
           <el-radio value="round_robin">轮询</el-radio>
           <el-radio value="priority">优先级</el-radio>
           <el-radio value="weighted">加权</el-radio>
+          <el-radio value="auto">自动（难度分档）</el-radio>
         </el-radio-group>
       </el-form-item>
+
+      <div v-if="formData.strategy === 'auto'" class="strategy-hint">
+        按请求难度自动将任务路由到不同档位的模型。请在每个模型后指定它属于哪个复杂度档位。
+      </div>
 
       <el-divider content-position="left">故障切换配置</el-divider>
 
@@ -121,6 +126,20 @@
                   @update:model-value="(val: number | undefined) => updateModelWeight(index, val ?? 1)"
                 />
               </template>
+              <template v-if="formData.strategy === 'auto'">
+                <el-select
+                  :model-value="item.complexity_tier ?? 'MEDIUM'"
+                  size="small"
+                  style="width: 160px"
+                  placeholder="复杂度档位"
+                  @update:model-value="(val: string) => updateModelTier(index, val)"
+                >
+                  <el-option label="简单 (SIMPLE)" value="SIMPLE" />
+                  <el-option label="中等 (MEDIUM)" value="MEDIUM" />
+                  <el-option label="复杂 (COMPLEX)" value="COMPLEX" />
+                  <el-option label="推理 (REASONING)" value="REASONING" />
+                </el-select>
+              </template>
               <el-button
                 text
                 type="danger"
@@ -160,7 +179,7 @@ import { ref, computed, watch } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { groupsApi, type FailoverDefaults } from '@/api/groups'
-import type { GroupListItem, Strategy, CreateGroupRequest } from '@/types/group'
+import type { GroupListItem, Strategy, ComplexityTier, CreateGroupRequest } from '@/types/group'
 import ModelGroupSelector from '@/components/ModelGroupSelector.vue'
 
 interface ModelItem {
@@ -168,6 +187,7 @@ interface ModelItem {
   model_name: string
   priority: number | null
   weight: number | null
+  complexity_tier?: ComplexityTier
 }
 
 interface FormState {
@@ -283,6 +303,7 @@ async function loadGroupModels(groupId: number) {
       model_name: m.model_name,
       priority: m.priority,
       weight: m.weight,
+      complexity_tier: m.complexity_tier,
     }))
   } catch {
     modelList.value = []
@@ -292,15 +313,18 @@ async function loadGroupModels(groupId: number) {
 function handleStrategyChange() {
   if (!isEdit.value) return
   if (formData.value.strategy !== originalStrategy.value && modelList.value.length > 0) {
+    const oldLabel = originalStrategy.value === 'priority' ? '优先级' : originalStrategy.value === 'weighted' ? '权重' : originalStrategy.value === 'auto' ? '复杂度档位' : '轮询顺序'
     ElMessageBox.confirm(
-      `切换负载策略后，已关联模型的${originalStrategy.value === 'priority' ? '优先级' : originalStrategy.value === 'weighted' ? '权重' : '轮询顺序'}配置将丢失，确定切换吗？`,
+      `切换负载策略后，已关联模型的${oldLabel}配置将丢失，确定切换吗？`,
       '切换策略确认',
       { confirmButtonText: '确定切换', cancelButtonText: '取消', type: 'warning' }
     ).then(() => {
+      const toAuto = formData.value.strategy === 'auto'
       modelList.value = modelList.value.map(m => ({
         ...m,
         priority: null,
         weight: null,
+        complexity_tier: toAuto ? 'MEDIUM' : undefined,
       }))
       originalStrategy.value = formData.value.strategy
     }).catch(() => {
@@ -317,7 +341,12 @@ function removeModel(index: number) {
 
 function handleSelectorConfirm(selected: ModelItem[]) {
   const existing = new Set(modelList.value.map(m => m.model_id))
-  const newItems = selected.filter(s => !existing.has(s.model_id))
+  const newItems = selected.filter(s => !existing.has(s.model_id)).map(s => ({
+    ...s,
+    complexity_tier: formData.value.strategy === 'auto'
+      ? (s.complexity_tier ?? 'MEDIUM')
+      : undefined,
+  }))
   if (newItems.length > 0) {
     modelList.value = [...modelList.value, ...newItems]
   }
@@ -333,6 +362,12 @@ function updateModelPriority(index: number, val: number) {
 function updateModelWeight(index: number, val: number) {
   modelList.value = modelList.value.map((m, i) =>
     i === index ? { ...m, weight: val } : m
+  )
+}
+
+function updateModelTier(index: number, val: string) {
+  modelList.value = modelList.value.map((m, i) =>
+    i === index ? { ...m, complexity_tier: val as ComplexityTier } : m
   )
 }
 
@@ -354,7 +389,24 @@ async function handleSubmit() {
       timeout_seconds: formData.value.timeout_seconds,
     }
 
-if (isEdit.value && props.group) {
+    const buildModelParams = () => {
+      const priorities: Record<string, number> = {}
+      const weights: Record<string, number> = {}
+      const tiers: Record<string, ComplexityTier> = {}
+      for (const m of modelList.value) {
+        if (m.priority != null) priorities[m.model_id] = m.priority
+        if (m.weight != null) weights[m.model_id] = m.weight
+        if (m.complexity_tier) tiers[m.model_id] = m.complexity_tier
+      }
+      return {
+        model_ids: modelList.value.map(m => m.model_id),
+        priorities: Object.keys(priorities).length > 0 ? priorities : undefined,
+        weights: Object.keys(weights).length > 0 ? weights : undefined,
+        complexity_tiers: Object.keys(tiers).length > 0 ? tiers : undefined,
+      }
+    }
+
+    if (isEdit.value && props.group) {
       await groupsApi.updateGroup(props.group.id, payload)
 
       const res = await groupsApi.listGroupModels(props.group.id)
@@ -365,17 +417,7 @@ if (isEdit.value && props.group) {
       }
 
       if (modelList.value.length > 0) {
-        const priorities: Record<string, number> = {}
-        const weights: Record<string, number> = {}
-        for (const m of modelList.value) {
-          if (m.priority != null) priorities[m.model_id] = m.priority
-          if (m.weight != null) weights[m.model_id] = m.weight
-        }
-        await groupsApi.addModelsToGroup(props.group.id, {
-          model_ids: modelList.value.map(m => m.model_id),
-          priorities: Object.keys(priorities).length > 0 ? priorities : undefined,
-          weights: Object.keys(weights).length > 0 ? weights : undefined,
-        })
+        await groupsApi.addModelsToGroup(props.group.id, buildModelParams())
       }
       ElMessage.success('更新成功')
     } else {
@@ -383,17 +425,7 @@ if (isEdit.value && props.group) {
       const groupId = res.data.data.id
 
       if (modelList.value.length > 0) {
-        const priorities: Record<string, number> = {}
-        const weights: Record<string, number> = {}
-        for (const m of modelList.value) {
-          if (m.priority != null) priorities[m.model_id] = m.priority
-          if (m.weight != null) weights[m.model_id] = m.weight
-        }
-        await groupsApi.addModelsToGroup(groupId, {
-          model_ids: modelList.value.map(m => m.model_id),
-          priorities: Object.keys(priorities).length > 0 ? priorities : undefined,
-          weights: Object.keys(weights).length > 0 ? weights : undefined,
-        })
+        await groupsApi.addModelsToGroup(groupId, buildModelParams())
       }
       ElMessage.success('创建成功')
     }
@@ -445,6 +477,13 @@ if (isEdit.value && props.group) {
   margin-left: 8px;
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+
+.strategy-hint {
+  margin: -8px 0 16px 100px;
+  font-size: 12px;
+  color: var(--el-color-primary);
+  line-height: 1.4;
 }
 
 @media (max-width: 768px) {

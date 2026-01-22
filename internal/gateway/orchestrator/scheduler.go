@@ -3,14 +3,14 @@ package orchestrator
 import (
 	"time"
 
+	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
 )
 
 type Scheduler interface {
-	Route(groupName string) (*scheduler.RouteDecision, error)
-	Failover(groupName, failedModelID string) (*scheduler.RouteDecision, error)
-	// FailoverExcluding 排除多个已尝试模型后选出下一个候选（多轮 failover 使用）。
-	FailoverExcluding(groupName string, excludeIDs []string) (*scheduler.RouteDecision, error)
+	Route(groupName string, req *core.ChatRequest) (*scheduler.RouteDecision, error)
+	Failover(groupName, failedModelID string, req *core.ChatRequest) (*scheduler.RouteDecision, error)
+	FailoverExcluding(groupName string, excludeIDs []string, req *core.ChatRequest) (*scheduler.RouteDecision, error)
 	GetGroupConfig(groupName string) *scheduler.GroupRoutingConfig
 	NotifyFailure(modelID string)
 	// SetCooldown 为指定模型设置 429 冷却期。

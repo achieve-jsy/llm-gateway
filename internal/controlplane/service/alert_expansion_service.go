@@ -12,12 +12,34 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 依赖接口（供测试注入 fake）
+// ─────────────────────────────────────────────────────────────────────────────
+
+// budgetAllocReader 仅需从 BudgetRepo 读取额度，用最小接口。
+type budgetAllocReader interface {
+	GetAllocation(scopeType, scopeID string) (*model.BudgetAllocation, error)
+}
+
+// alertRecordStore 告警去重表操作接口。
+type alertRecordStore interface {
+	ExistsForPeriod(scopeType, scopeID, period string, threshold int) bool
+	Create(a *model.BudgetAlertRecord) error
+	FindOwnersByBudgetScope(scopeType, scopeID string) ([]repository.AlertOwnerRow, error)
+}
+
+// notificationWriter 站内通知写入接口（独立于公告）。
+type notificationWriter interface {
+	Create(n *model.Notification) error
+}
+
 // BudgetAlertService 处理告警触发（阈值+去重）与通知发送。
 type BudgetAlertService struct {
-	budgetRepo *repository.BudgetRepo
-	alertRepo  *repository.BudgetAlertRepo
-	rdb        *redis.Client
-	// notifier 可选：webhook 发送（nil = 仅站内）
+	budgetRepo       budgetAllocReader
+	alertRepo        alertRecordStore
+	notificationRepo notificationWriter
+	rdb              *redis.Client
+	// notifier 可选：webhook 发送（nil = 仅站内通知）
 	notifier WebhookNotifier
 }
 
@@ -26,12 +48,31 @@ func (s *BudgetAlertService) SetRedis(rdb *redis.Client) {
 	s.rdb = rdb
 }
 
+// SetNotificationRepo 注入站内通知 repo。
+func (s *BudgetAlertService) SetNotificationRepo(repo notificationWriter) {
+	s.notificationRepo = repo
+}
+
+// SetNotifier 注入 Webhook 通知器（由调用方按 settings 动态构建）。
+func (s *BudgetAlertService) SetNotifier(n WebhookNotifier) {
+	s.notifier = n
+}
+
 // WebhookNotifier 飞书/webhook 通知接口（由 settings_service 实现）。
 type WebhookNotifier interface {
 	SendText(ctx context.Context, text string) error
 }
 
 func NewBudgetAlertService(budgetRepo *repository.BudgetRepo, alertRepo *repository.BudgetAlertRepo, notifier WebhookNotifier) *BudgetAlertService {
+	return &BudgetAlertService{
+		budgetRepo: budgetRepo,
+		alertRepo:  alertRepo,
+		notifier:   notifier,
+	}
+}
+
+// NewBudgetAlertServiceForTest 供测试注入自定义 fake 实现，不对外暴露接口类型。
+func NewBudgetAlertServiceForTest(budgetRepo budgetAllocReader, alertRepo alertRecordStore, notifier WebhookNotifier) *BudgetAlertService {
 	return &BudgetAlertService{
 		budgetRepo: budgetRepo,
 		alertRepo:  alertRepo,
@@ -80,9 +121,14 @@ func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, sc
 			slog.Error("budget_alert: failed to create alert record", "error", err)
 			continue
 		}
-		// 发通知（降级：webhook 失败不阻断，仅记录）
+
 		msg := fmt.Sprintf("【预算告警】%s(%s) 本月用量已达 %d%%（$%.2f / $%.2f），请关注并考虑扩容",
 			scopeType, scopeID, threshold, usedUSD, alloc.AmountUSD)
+
+		// 站内通知：给每个负责人各写一条 notification 记录
+		s.sendInAppNotifications(ctx, scopeType, scopeID, threshold, usedUSD, alloc.AmountUSD)
+
+		// Webhook 降级：失败不阻断，仅记录
 		if s.notifier != nil {
 			if err := s.notifier.SendText(ctx, msg); err != nil {
 				slog.Warn("budget_alert: webhook notify failed", "error", err)
@@ -91,6 +137,61 @@ func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, sc
 		slog.Info("budget_alert: sent", "scope_type", scopeType, "scope_id", scopeID,
 			"threshold", threshold, "ratio", ratio)
 	}
+}
+
+// sendInAppNotifications 向每个负责人各写一条 Notification 记录。
+func (s *BudgetAlertService) sendInAppNotifications(ctx context.Context, scopeType, scopeID string, threshold int, usedUSD, amountUSD float64) {
+	if s.notificationRepo == nil {
+		return
+	}
+
+	level := model.NotificationLevelWarning
+	if threshold >= 100 {
+		level = model.NotificationLevelCritical
+	}
+
+	title := fmt.Sprintf("预算告警：%s 用量已达 %d%%", scopeType, threshold)
+	content := fmt.Sprintf(
+		"**%s**（ID: %s）本月预算用量已达 **%d%%**（$%.2f / $%.2f USD），请及时关注并考虑扩容申请。\n\n"+
+			"- 已用：$%.2f USD\n"+
+			"- 总额：$%.2f USD\n"+
+			"- 告警档位：%d%%\n\n"+
+			"> 告警不等于拦截，预算真正用尽时才会触发拦截。",
+		scopeType, scopeID, threshold, usedUSD, amountUSD,
+		usedUSD, amountUSD, threshold,
+	)
+
+	owners, err := s.alertRepo.FindOwnersByBudgetScope(scopeType, scopeID)
+	if err != nil {
+		slog.Warn("budget_alert: failed to find owners", "error", err)
+		return
+	}
+
+	sent := 0
+	for _, owner := range owners {
+		ownerUUID, err := uuid.Parse(owner.UserID)
+		if err != nil {
+			continue
+		}
+		n := &model.Notification{
+			UserID:  ownerUUID,
+			Type:    model.NotificationTypeBudgetAlert,
+			Level:   level,
+			Title:   title,
+			Content: content,
+			RefType: "budget_scope",
+			RefID:   scopeType + ":" + scopeID,
+		}
+		if err := s.notificationRepo.Create(n); err != nil {
+			slog.Warn("budget_alert: failed to create notification",
+				"user_id", owner.UserID, "error", err)
+			continue
+		}
+		sent++
+	}
+	slog.Info("budget_alert: in-app notifications sent",
+		"scope_type", scopeType, "scope_id", scopeID,
+		"threshold", threshold, "sent", sent)
 }
 
 // readUsedFromRedis 从 Redis 读取已用量（与 budget_service.readUsedFromRedis 同源）。

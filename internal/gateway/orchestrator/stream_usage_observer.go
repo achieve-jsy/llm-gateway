@@ -168,10 +168,17 @@ func (o *streamUsageObserver) OnStreamClose() {
 	if !o.firstTokenAt.IsZero() {
 		if ms := int(o.firstTokenAt.Sub(o.start).Milliseconds()); ms > 0 {
 			o.gc.Set("first_token_ms", ms)
+		} else {
+			// ms <= 0 极罕见（首 token 与 start 几乎同时），用 TTFB 兜底
+			if v, ok := o.gc.Get("t_ttfb_ms"); ok {
+				if ttfb, ok := v.(int); ok && ttfb > 0 {
+					o.gc.Set("first_token_ms", ttfb)
+				}
+			}
 		}
-	} else if o.contentBuf.Len() > 0 || o.reasoningBuf.Len() > 0 {
-		// 兜底：observer 解析到了文本内容但没有记录首 token 时间
-		// （格式兼容问题导致 firstTokenAt 未被设置），用 t_ttfb_ms 作为 fallback
+	} else {
+		// firstTokenAt 未设置：tool_use / 全空 content / 格式兼容问题等场景
+		// 用 t_ttfb_ms 作为 TTFT 兜底，保证流式请求该字段不为 null
 		if v, ok := o.gc.Get("t_ttfb_ms"); ok {
 			if ms, ok := v.(int); ok && ms > 0 {
 				o.gc.Set("first_token_ms", ms)

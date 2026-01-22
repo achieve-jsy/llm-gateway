@@ -546,12 +546,14 @@ function formatPct(rate: number): string {
 function strategyLabel(s: string): string {
   if (s === 'priority') return '优先级'
   if (s === 'weighted') return '加权'
+  if (s === 'auto') return '自动'
   return '轮询'
 }
 
-function strategyTagType(s: string): 'success' | 'warning' | 'info' {
+function strategyTagType(s: string): 'success' | 'warning' | 'info' | 'primary' {
   if (s === 'priority') return 'success'
   if (s === 'weighted') return 'warning'
+  if (s === 'auto') return 'primary'
   return 'info'
 }
 

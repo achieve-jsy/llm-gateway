@@ -202,16 +202,18 @@ const STRATEGY_MAP: Record<Strategy, string> = {
   round_robin: '轮询',
   priority: '优先级',
   weighted: '加权',
+  auto: '自动',
 }
 
 function strategyLabel(strategy: Strategy): string {
   return STRATEGY_MAP[strategy] || strategy
 }
 
-function strategyTagType(strategy: Strategy): '' | 'success' | 'warning' {
+function strategyTagType(strategy: Strategy): '' | 'success' | 'warning' | 'primary' {
   if (strategy === 'round_robin') return ''
   if (strategy === 'priority') return 'success'
   if (strategy === 'weighted') return 'warning'
+  if (strategy === 'auto') return 'primary'
   return ''
 }
 

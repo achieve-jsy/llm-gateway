@@ -107,7 +107,7 @@ func (d *ProtocolDispatcher) resolveGroup(c *gin.Context, req *core.ChatRequest)
 	if d.group == nil {
 		return nil
 	}
-	decision, err := d.group.Dispatch(c, req.Model)
+	decision, err := d.group.Dispatch(c, req.Model, req)
 	if err != nil {
 		return err
 	}
@@ -134,7 +134,7 @@ func (d *ProtocolDispatcher) chatWithFailover(
 		"error", primaryErr.Error(),
 	)
 
-	decision, err := d.group.HandleFailover(c, originalModel, failedID)
+	decision, err := d.group.HandleFailover(c, originalModel, failedID, req)
 	if err != nil {
 		slog.Error("dispatcher: no failover target",
 			"request_id", c.GetString("request_id"),
@@ -188,7 +188,7 @@ func (d *ProtocolDispatcher) streamWithFailover(
 		"error", primaryErr.Error(),
 	)
 
-	decision, err := d.group.HandleFailover(c, originalModel, failedID)
+	decision, err := d.group.HandleFailover(c, originalModel, failedID, req)
 	if err != nil {
 		slog.Error("dispatcher: no stream failover target",
 			"request_id", c.GetString("request_id"),

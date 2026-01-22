@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync/atomic"
 	"time"
+
+	"github.com/example/llm-gateway/internal/core"
 )
 
 type Scheduler struct {
@@ -60,17 +62,17 @@ func (s *Scheduler) Start(ctx context.Context) {
 	}()
 }
 
-func (s *Scheduler) Route(groupName string) (*RouteDecision, error) {
-	return s.router.Route(groupName)
+func (s *Scheduler) Route(groupName string, req *core.ChatRequest) (*RouteDecision, error) {
+	return s.router.Route(groupName, req)
 }
 
-func (s *Scheduler) Failover(groupName, failedModelID string) (*RouteDecision, error) {
-	return s.failoverHandler.Failover(groupName, failedModelID)
+func (s *Scheduler) Failover(groupName, failedModelID string, req *core.ChatRequest) (*RouteDecision, error) {
+	return s.failoverHandler.Failover(groupName, failedModelID, req)
 }
 
 // FailoverExcluding 排除多个已失败模型后选出下一个候选（多轮 failover 使用）。
-func (s *Scheduler) FailoverExcluding(groupName string, excludeIDs []string) (*RouteDecision, error) {
-	return s.failoverHandler.FailoverExcluding(groupName, excludeIDs)
+func (s *Scheduler) FailoverExcluding(groupName string, excludeIDs []string, req *core.ChatRequest) (*RouteDecision, error) {
+	return s.failoverHandler.FailoverExcluding(groupName, excludeIDs, req)
 }
 
 // SetCooldown 为指定模型设置 429 冷却期，冷却期内不会被路由选中。

@@ -283,16 +283,25 @@ watch(() => authStore.deptStatus, (s) => {
   }
 })
 
+const notificationBellRef = ref<{ refresh: () => void } | null>(null)
+let bellRefreshTimer: ReturnType<typeof setInterval> | null = null
+
+const handleResize = () => { isMobile.value = window.innerWidth < 768; if (!isMobile.value) showMobileSidebar.value = false }
+
 onMounted(() => {
   settingsStore.loadPublicSettings()
   checkPopupAnnouncements()
   checkBudgetAlert()
-  const handleResize = () => { isMobile.value = window.innerWidth < 768; if (!isMobile.value) showMobileSidebar.value = false }
   window.addEventListener('resize', handleResize)
+  // 每 30s 刷新一次铃铛未读数（含告警定向推送）
+  bellRefreshTimer = setInterval(() => {
+    if (authStore.isLoggedIn) notificationBellRef.value?.refresh()
+  }, 30000)
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
+  if (bellRefreshTimer) clearInterval(bellRefreshTimer)
 })
 
 watch(() => authStore.isLoggedIn, (loggedIn) => {

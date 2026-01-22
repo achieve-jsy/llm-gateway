@@ -222,6 +222,7 @@ const STRATEGY_LABEL: Record<string, string> = {
   round_robin: '轮询',
   priority: '优先级',
   weighted: '加权',
+  auto: '自动',
 }
 
 const MODE_LABEL: Record<string, string> = {
@@ -694,6 +695,7 @@ onMounted(() => { load() })
 .gc-s-round_robin .gc-stripe { background: linear-gradient(90deg, #3498DB, #76C5F0); }
 .gc-s-priority    .gc-stripe { background: linear-gradient(90deg, #9B59B6, #C39BD3); }
 .gc-s-weighted    .gc-stripe { background: linear-gradient(90deg, #E67E22, #F0A96A); }
+.gc-s-auto        .gc-stripe { background: linear-gradient(90deg, #1ABC9C, #76D7C4); }
 
 .gc-body {
   padding: 16px 18px 18px;
@@ -853,6 +855,7 @@ onMounted(() => { load() })
 .badge-round_robin { color: #2471A3; background: rgba(36,113,163,0.08);   border-color: rgba(36,113,163,0.2); }
 .badge-priority    { color: #7D3C98; background: rgba(125,60,152,0.08);   border-color: rgba(125,60,152,0.2); }
 .badge-weighted    { color: #CA6F1E; background: rgba(202,111,30,0.08);   border-color: rgba(202,111,30,0.2); }
+.badge-auto        { color: #148F77; background: rgba(26,188,156,0.08);   border-color: rgba(26,188,156,0.2); }
 
 .gc-models {
   font-size: 11px;
@@ -968,6 +971,7 @@ onMounted(() => { load() })
 :global(html.dark) .badge-round_robin { color: #5DADE2; background: rgba(52,152,219,0.1); border-color: rgba(52,152,219,0.22); }
 :global(html.dark) .badge-priority    { color: #BB8FCE; background: rgba(155,89,182,0.1); border-color: rgba(155,89,182,0.22); }
 :global(html.dark) .badge-weighted    { color: #F0B27A; background: rgba(230,126,34,0.1); border-color: rgba(230,126,34,0.22); }
+:global(html.dark) .badge-auto        { color: #76D7C4; background: rgba(26,188,156,0.1); border-color: rgba(26,188,156,0.22); }
 
 :global(html.dark) .mds-empty {
   background: #091514;

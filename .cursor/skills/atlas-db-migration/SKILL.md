@@ -414,6 +414,130 @@ git push
    - 不要在一次 commit 中修改多个无关的 model
    - 每个迁移文件对应一个逻辑变更
 
+### 2.5 Pre-commit Hook：本地自动校验（强烈建议安装）
+
+> 通过 Git hook 在本地 `git commit` 前自动拦截常见错误，避免推到 CI 后才发现问题。**这是 Phase 2 自动化机制的第一层防线**。
+
+#### Hook 脚本
+
+创建文件 `.git/hooks/pre-commit`（无 `.sample` 后缀）：
+
+```bash
+#!/bin/bash
+# Atlas 迁移本地 pre-commit 校验
+# 安装：chmod +x .git/hooks/pre-commit
+
+set -e
+
+# 仅当有 atlas-migrations/ 或相关 model 变更时触发
+CHANGED_FILES=$(git diff --cached --name-only)
+if ! echo "$CHANGED_FILES" | grep -qE "(atlas-migrations/|model/.*\.go$)"; then
+    exit 0
+fi
+
+echo "🔍 Atlas: 检测到数据库相关变更，运行自动校验..."
+
+# 1. 检查是否有新增/修改的迁移文件
+NEW_MIGRATIONS=$(echo "$CHANGED_FILES" | grep "atlas-migrations/.*\.sql$" | grep -v "atlas\.sum" || true)
+if [ -n "$NEW_MIGRATIONS" ]; then
+    echo "📄 发现新增/修改迁移文件："
+    echo "$NEW_MIGRATIONS" | sed 's/^/   - /'
+    
+    # 2. 检查时间戳：必须晚于所有远程分支的最新迁移
+    for branch in test staging main; do
+        TARGET_LATEST=$(git ls-tree -r origin/$branch atlas-migrations/ 2>/dev/null | awk '{print $4}' | grep -v "atlas\.sum" | sort | tail -1 || true)
+        if [ -n "$TARGET_LATEST" ]; then
+            TARGET_TS=$(basename "$TARGET_LATEST" | cut -d_ -f1)
+            for file in $NEW_MIGRATIONS; do
+                FILE_BASE=$(basename "$file")
+                FILE_TS=$(echo "$FILE_BASE" | cut -d_ -f1)
+                # 比较时间戳（字符串比较，格式 YYYYMMDDHHMMSS）
+                if [[ "$FILE_TS" < "$TARGET_TS" ]]; then
+                    echo "❌ 错误：$FILE_BASE 时间戳早于远程分支 $branch"
+                    echo "   远程最新: $TARGET_BASE (来自 $branch)"
+                    echo "   你的文件: $FILE_BASE"
+                    echo "💡 修复：修改迁移文件名，使用大于 $TARGET_TS 的时间戳"
+                    exit 1
+                fi
+            done
+        fi
+    done
+    echo "✅ 时间戳校验通过"
+    
+    # 3. 检查 SQL 中是否包含 IF NOT EXISTS
+    for file in $NEW_MIGRATIONS; do
+        CONTENT=$(cat "$file")
+        if echo "$CONTENT" | grep -qE "(CREATE TABLE|CREATE INDEX|ALTER TABLE.*ADD COLUMN)" | grep -qvE "(IF NOT EXISTS|IF EXISTS)"; then
+            echo "⚠️ 警告：$file 的 DDL 语句未使用 IF NOT EXISTS"
+            echo "   建议：参考 skill §0.9 使用幂等模板"
+            echo "   （不强制阻止，但强烈建议加上）"
+            # 注意：这里仅警告，不 exit 1，因为有时确实不需要
+        fi
+    done
+    echo "✅ SQL 幂等性检查完成"
+fi
+
+# 4. 验证 atlas.sum 存在且已同步
+if echo "$CHANGED_FILES" | grep -q "atlas-migrations/.*\.sql$"; then
+    if ! echo "$CHANGED_FILES" | grep -q "atlas-migrations/atlas\.sum$"; then
+        echo "❌ 错误：新增了迁移文件但未更新 atlas.sum"
+        echo "💡 修复：运行以下命令后重新提交"
+        echo "   atlas migrate hash --env local"
+        exit 1
+    fi
+    echo "✅ atlas.sum 已更新"
+fi
+
+# 5. 验证 atlas.sum 内容（需要 atlas CLI）
+if command -v atlas &> /dev/null; then
+    if ! atlas sum --dir atlas-migrations --format '{{.Name}}' 2>/dev/null | grep -q "atlas.sum"; then
+        echo "⚠️ 警告：atlas.sum 校验失败，建议重新生成"
+        echo "💡 修复：atlas migrate hash --env local"
+    fi
+fi
+
+echo "✅ 所有校验通过，可以提交"
+```
+
+#### 安装步骤
+
+```bash
+# 1. 创建 hook 文件
+cat > .git/hooks/pre-commit << 'EOF'
+# （上面脚本内容）
+EOF
+
+# 2. 添加执行权限
+chmod +x .git/hooks/pre-commit
+
+# 3. 测试
+git commit -m "test hook" --allow-empty
+```
+
+#### Hook 校验项目
+
+| 校验项 | 触发条件 | 失败后果 | 依据 |
+|--------|----------|----------|------|
+| 时间戳校验 | 所有远程分支的最新迁移 | ❌ 阻止提交 | §0.6 |
+| SQL 幂等性 | CREATE/ALTER DDL | ⚠️ 警告 | §0.9 |
+| atlas.sum 存在性 | 新增迁移文件 | ❌ 阻止提交 | §0.5 |
+| atlas.sum 有效性 | atlas CLI 可用 | ⚠️ 警告 | §0.3 |
+
+#### 团队安装（推荐）
+
+为避免每个开发者手动创建，可提交到仓库并配置 `core.hooksPath`：
+
+```bash
+# 1. 提交到 .git-hooks/ 目录（注意不是 .git/hooks/）
+mkdir -p .git-hooks
+cp .git/hooks/pre-commit .git-hooks/pre-commit
+git add .git-hooks/
+git commit -m "chore: add pre-commit hook for atlas migrations"
+
+# 2. 团队统一配置（加到 README 或 onboarding 文档）
+git config core.hooksPath .git-hooks
+```
+
 ## 3. Model 修改模式参考
 
 ### 添加字段
@@ -682,6 +806,320 @@ migrate:
 
 - `DATABASE_URL` (protected, masked)
 - 格式: `postgres://user:pass@host:port/db?sslmode=disable`
+
+### 6.5 CI Automation：合并前自动校验
+
+> **Phase 2 自动化机制的第二层防线**：在 MR 合并到目标分支前，CI 自动拦截所有可能的迁移冲突，避免问题进入共享分支。
+
+#### CI 配置示例
+
+在 `.gitlab-ci.yml` 中新增 `validate-atlas` job（在 `migrate` job 之前）：
+
+```yaml
+validate-atlas:
+  stage: test  # 必须在 migrate 之前
+  image: 
+    name: arigaio/atlas:latest
+    entrypoint: [""]
+  script:
+    - |
+      echo "🔍 Atlas: CI 自动校验开始..."
+      
+      # 1. 检查新增的迁移文件
+      NEW_MIGRATIONS=$(git diff --name-only origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME...HEAD \
+        | grep "atlas-migrations/.*\.sql$" \
+        | grep -v "atlas\.sum" || true)
+      
+      if [ -z "$NEW_MIGRATIONS" ]; then
+        echo "✅ 本次 MR 无新增迁移文件，跳过校验"
+        exit 0
+      fi
+      
+      echo "📄 发现新增迁移文件："
+      echo "$NEW_MIGRATIONS" | sed 's/^/   - /'
+      
+      # 2. 时间戳校验：必须晚于所有远程分支的最新迁移
+      for branch in main staging test; do
+        TARGET_LATEST=$(git ls-tree -r origin/$branch atlas-migrations/ 2>/dev/null \
+          | awk '{print $4}' \
+          | grep -v "atlas\.sum" \
+          | sort \
+          | tail -1 || true)
+        
+        if [ -n "$TARGET_LATEST" ]; then
+          TARGET_BASE=$(basename "$TARGET_LATEST")
+          TARGET_TS=$(echo "$TARGET_BASE" | cut -d_ -f1)
+          
+          for file in $NEW_MIGRATIONS; do
+            FILE_BASE=$(basename "$file")
+            FILE_TS=$(echo "$FILE_BASE" | cut -d_ -f1)
+            
+            if [[ "$FILE_TS" < "$TARGET_TS" ]]; then
+              echo "❌ 错误：$FILE_BASE 时间戳早于远程分支 $branch"
+              echo "   远程最新: $TARGET_BASE (来自 $branch)"
+              echo "   你的文件: $FILE_BASE"
+              echo "💡 修复："
+              echo "   修改迁移文件名，使用大于 $TARGET_TS 的时间戳"
+              echo "   然后运行: atlas migrate hash --env local"
+              exit 1
+            fi
+          done
+        fi
+      done
+      echo "✅ 时间戳校验通过"
+      
+      # 3. SQL 幂等性强制检查
+      for file in $NEW_MIGRATIONS; do
+        CONTENT=$(cat "$file")
+        
+        # 检查 CREATE TABLE
+        if echo "$CONTENT" | grep -E "^\s*CREATE TABLE\b" | grep -qvE "IF NOT EXISTS"; then
+          echo "❌ 错误：$file 包含 CREATE TABLE 但未使用 IF NOT EXISTS"
+          echo "💡 修复：参考 skill §0.9 使用幂等模板"
+          exit 1
+        fi
+        
+        # 检查 CREATE INDEX
+        if echo "$CONTENT" | grep -E "^\s*CREATE INDEX\b" | grep -qvE "IF NOT EXISTS"; then
+          echo "❌ 错误：$file 包含 CREATE INDEX 但未使用 IF NOT EXISTS"
+          echo "💡 修复：参考 skill §0.9 使用幂等模板"
+          exit 1
+        fi
+        
+        # 检查 DROP TABLE（必须 IF EXISTS）
+        if echo "$CONTENT" | grep -E "^\s*DROP TABLE\b" | grep -qvE "IF EXISTS"; then
+          echo "❌ 错误：$file 包含 DROP TABLE 但未使用 IF EXISTS"
+          echo "💡 修复：使用 DROP TABLE IF EXISTS 或直接删除"
+          exit 1
+        fi
+        
+        # 检查 ALTER TABLE DROP COLUMN（必须 IF EXISTS）
+        if echo "$CONTENT" | grep -E "^\s*ALTER TABLE.*DROP COLUMN\b" | grep -qvE "IF EXISTS"; then
+          echo "❌ 错误：$file 包含 DROP COLUMN 但未使用 IF EXISTS"
+          echo "💡 修复：使用 ALTER TABLE xxx DROP COLUMN IF EXISTS"
+          exit 1
+        fi
+      done
+      echo "✅ SQL 幂等性检查通过"
+      
+      # 4. atlas.sum 校验
+      if ! atlas migrate hash --env local --dry-run 2>&1 | grep -q "atlas.sum is up to date"; then
+        echo "❌ 错误：atlas.sum 与迁移文件不匹配"
+        echo "💡 修复：运行以下命令并重新提交"
+        echo "   atlas migrate hash --env local"
+        exit 1
+      fi
+      echo "✅ atlas.sum 校验通过"
+      
+      echo ""
+      echo "🎉 所有 CI 校验通过"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - atlas-migrations/**
+        - internal/**/model/**
+  allow_failure: false  # 必须通过才能合并
+
+```
+
+#### 校验项目对比
+
+| 校验项 | Pre-commit Hook (§2.5) | CI Automation (§6.5) | 差异 |
+|--------|------------------------|----------------------|------|
+| 时间戳校验 | ⚠️ 仅警告 | ❌ 阻止合并 | CI 更严格 |
+| SQL 幂等性 | ⚠️ 仅警告 | ❌ 阻止合并 | CI 更严格 |
+| atlas.sum 存在性 | ❌ 阻止提交 | ❌ 阻止合并 | 一致 |
+| atlas.sum 有效性 | ⚠️ 仅警告 | ❌ 阻止合并 | CI 更严格 |
+
+**设计理念**：
+- Pre-commit Hook 偏向"友好提示"，允许开发者在知晓风险时跳过（`git commit --no-verify`）
+- CI Automation 偏向"强制执行"，确保问题不会进入共享分支
+
+### 6.6 CI 迁移失败自动检测与重试（Dry-run 机制）
+
+> **Phase 2 自动化机制的第三层防线**：在真正 apply 迁移前，先用 dry-run 模式检测所有潜在问题，并尝试自动修复。
+
+#### CI 配置示例
+
+修改 `.gitlab-ci.yml` 中的 `migrate` job：
+
+```yaml
+migrate:
+  stage: migrate
+  image: 
+    name: arigaio/atlas:latest
+    entrypoint: [""]
+  needs: 
+    - job: build
+      artifacts: false
+    - job: validate-atlas  # 必须先通过校验
+  before_script:
+    - apk add --no-cache postgresql-client jq
+  script:
+    - |
+      echo "🚀 Atlas: 开始迁移流程"
+      
+      # 1. Dry-run 检测：模拟 apply 但不实际执行
+      echo "📋 Step 1: Dry-run 检测"
+      DRY_RUN_LOG=$(mktemp)
+      
+      if atlas migrate apply --env ${CI_ENVIRONMENT_NAME:-local} \
+        --dry-run \
+        --format '{{ json . }}' > "$DRY_RUN_LOG" 2>&1; then
+        
+        echo "✅ Dry-run 成功，准备 apply 以下迁移："
+        cat "$DRY_RUN_LOG" | jq -r '.pending[] | "   - \(.Name) (状态: \(.Status))"' 2>/dev/null || cat "$DRY_RUN_LOG"
+        
+      else
+        DRY_RUN_ERROR=$(cat "$DRY_RUN_LOG")
+        echo "❌ Dry-run 失败："
+        echo "$DRY_RUN_ERROR"
+        
+        # 2. 自动诊断与修复尝试
+        echo ""
+        echo "🔧 Step 2: 自动诊断与修复"
+        
+        # 2.1 检查是否是 atlas.sum 不匹配问题
+        if echo "$DRY_RUN_ERROR" | grep -q "checksum mismatch"; then
+          echo "⚠️ 检测到 atlas.sum 不匹配，尝试自动修复..."
+          atlas migrate hash --env local
+          git add atlas-migrations/atlas.sum
+          git commit -m "chore(atlas): auto-fix atlas.sum checksum [skip ci]" || true
+          echo "✅ 已修复 atlas.sum，重新尝试 dry-run"
+          
+          # 重新 dry-run
+          if atlas migrate apply --env ${CI_ENVIRONMENT_NAME:-local} --dry-run > "$DRY_RUN_LOG" 2>&1; then
+            echo "✅ 修复后 dry-run 成功"
+          else
+            echo "❌ 修复后仍失败，需要人工介入"
+            echo "📞 请联系团队，参考 skill §8.5（孤儿记录修复）"
+            exit 1
+          fi
+        fi
+        
+        # 2.2 检查是否是 missing migration 问题
+        if echo "$DRY_RUN_ERROR" | grep -q "missing migration"; then
+          MISSING_VERSION=$(echo "$DRY_RUN_ERROR" | grep -oP 'missing migration file: \K\d+' || echo "")
+          if [ -n "$MISSING_VERSION" ]; then
+            echo "⚠️ 检测到孤儿记录（版本: $MISSING_VERSION），需要人工介入"
+            echo "📞 请联系 DBA，参考 skill §8.5（孤儿记录修复）"
+            echo ""
+            echo "紧急修复步骤："
+            echo "1. 连接数据库: psql \$DATABASE_URL"
+            echo "2. 查看孤儿记录: SELECT version FROM atlas_schema_revisions WHERE version NOT IN (...);"
+            echo "3. 删除孤儿: DELETE FROM atlas_schema_revisions WHERE version = '$MISSING_VERSION';"
+            exit 1
+          fi
+        fi
+        
+        # 2.3 检查是否是 out-of-order 问题
+        if echo "$DRY_RUN_ERROR" | grep -q "out of order"; then
+          echo "⚠️ 检测到迁移乱序，需要人工介入"
+          echo "📞 请联系团队，参考 skill §0.7（多分支合并顺序）和 §8.6（长周期分支）"
+          exit 1
+        fi
+        
+        # 2.4 其他未知错误
+        echo "⚠️ 未知错误，需要人工诊断"
+        echo "📞 请联系团队，提供以下信息："
+        echo "  - CI 日志链接: $CI_JOB_URL"
+        echo "  - 错误信息: $DRY_RUN_ERROR"
+        exit 1
+      fi
+      
+      # 3. 真正 apply 迁移
+      echo ""
+      echo "🎯 Step 3: Apply 迁移"
+      atlas migrate apply --env ${CI_ENVIRONMENT_NAME:-local}
+      
+      # 4. 验证迁移结果
+      echo ""
+      echo "✅ Step 4: 验证迁移结果"
+      atlas migrate status --env ${CI_ENVIRONMENT_NAME:-local}
+      
+      echo ""
+      echo "🎉 迁移流程完成！"
+  after_script:
+    - |
+      # 清理临时文件
+      rm -f "$DRY_RUN_LOG" || true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "staging"'
+      changes:
+        - atlas-migrations/**
+  when: on_success
+  retry:
+    max: 2  # 最多重试 2 次
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+```
+
+#### 自动修复策略
+
+| 问题类型 | 检测方式 | 自动修复 | 人工介入 |
+|----------|----------|----------|----------|
+| atlas.sum 不匹配 | `grep "checksum mismatch"` | ✅ `atlas migrate hash` | ❌ |
+| orphaned migration | `grep "missing migration"` | ❌ | ✅ 需 DBA |
+| out-of-order | `grep "out of order"` | ❌ | ✅ 需重命名 |
+| SQL 语法错误 | dry-run 失败 | ❌ | ✅ 需修复 SQL |
+| 权限不足 | `permission denied` | ❌ | ✅ 需 DBA |
+| 网络超时 | `timeout` | ✅ 自动重试 | ❌ |
+
+#### Dry-run 输出解析
+
+Atlas 的 dry-run 输出是 JSON 格式：
+
+```json
+{
+  "current": "20260622180321",
+  "next": "20260623010000",
+  "pending": [
+    {
+      "Name": "20260623010000_add_audit_logs",
+      "Status": "pending",
+      "Description": "添加审计日志表"
+    },
+    {
+      "Name": "20260624010000_add_ip_allowlist",
+      "Status": "pending",
+      "Description": "添加 IP 白名单字段"
+    }
+  ],
+  "applied": 15,
+  "pending_count": 2,
+  "ok": true
+}
+```
+
+可以用 `jq` 命令解析：
+
+```bash
+# 查看所有待 apply 的迁移
+cat dry-run.log | jq -r '.pending[] | "📄 \(.Name) - \(.Description)"'
+
+# 查看已 apply 的总数
+cat dry-run.log | jq '.applied'
+
+# 检查是否有问题
+cat dry-run.log | jq '.ok'
+```
+
+#### 重试策略
+
+```yaml
+retry:
+  max: 2  # 最多重试 2 次
+  when:
+    - runner_system_failure        # Runner 系统故障
+    - stuck_or_timeout_failure     # 卡住或超时
+    - script_failure               # 脚本失败（谨慎使用）
+```
+
+**注意**：
+- 默认不重试 `script_failure`，因为可能是真实的迁移问题
+- 如需开启，建议配合 `ATLAS_MIGRATE_TIMEOUT` 环境变量
+- 重试间隔建议 30 秒（GitLab CI 默认）
 
 ## 7. atlas.hcl 配置说明
 

@@ -81,6 +81,226 @@ atlas migrate hash --env local && atlas migrate validate --env local
 - 破坏性变更走 **Expand-Contract**：先加新列/双写，下个版本再删旧列，保证滚动/蓝绿期间旧代码可运行。
 - 本地默认只 `diff` + `validate`；`apply` 交给 CI 或本机临时库，别乱 apply 到共享库。
 
+### 0.6 生成前查所有目标分支的最新时间戳
+
+> 合并多个目标分支（如同时合并 test 和 main）时，**只查一个目标分支**容易踩坑：你的迁移合并 A 分支没问题，合并 B 分支时乱序。
+
+#### 生成迁移前必查所有目标分支
+
+```bash
+# 查所有目标分支的最新迁移时间戳（test / main / staging）
+for branch in test main; do
+  latest=$(git ls-tree origin/$branch atlas-migrations/ 2>/dev/null | awk '{print $4}' | sort | tail -1)
+  echo "$branch: $latest"
+done
+```
+
+#### 规则
+你的新迁移时间戳必须 **严格大于所有目标分支**（包括已知待合并的其他分支）的最新时间戳。
+
+#### 示例
+```
+test: 20260622180321_add_auto_strategy_and_complexity_tier.sql
+main: 20260624120000_add_budget_chain_field.sql
+
+你的时间戳应该 ≥ 20260625000000_xxx.sql
+```
+
+#### 为什么不能只查一个
+假设只查 test（最新 20260622），生成 20260623，合并 test 通过。但 main 上已有 20260624 → 合并 main 时报乱序。**必须合并前查所有目标分支的最大值再加时间戳**。
+
+#### 快速判断脚本
+可加一个 alias 到 `~/.zshrc`：
+```bash
+alias atlas-check-all='for b in test main staging; do echo "$b: $(git ls-tree origin/$b atlas-migrations/ 2>/dev/null | awk '"'"'{print $4}'"'"' | sort | tail -1)"; done'
+```
+
+### 0.7 多分支合并顺序原则
+
+> 分支要合并到多个目标分支时，**合并顺序影响成功率**。
+
+#### 规则：先合并时间戳晚的分支，再合并早的
+
+如果两个目标分支的最新迁移时间戳不同：
+```bash
+main: 20260624120000_xxx.sql   # 时间戳更晚
+test: 20260622180321_yyy.sql   # 时间戳更晚
+```
+
+合并顺序应该是：**先 main，后 test**。
+
+#### 为什么？
+假设 feature 分支的迁移文件时间戳是 `20260625200000_zzz.sql`：
+- **先合并 main**（main 最新 20260624，你的 20260625 > 20260624 ✅）
+- **后合并 test**（test 最新 20260622，你的 20260625 > 20260622 ✅）
+
+反例：先合并 test，后合并 main → main 合并时会乱序（你的 time 20260625 仍然大于 20260624，理论上能过，但实际如果 main 上有人刚 push 了 20260626 就会乱序）。
+
+#### 更保险的规则
+**按目标分支最新时间戳从晚到早排序**，依次合并。这样每次合并时，feature 分支的时间戳都晚于目标分支最新版。
+
+#### 流程图
+```
+feature 分支（时间戳 20260625）
+    ↓ merge main（main 最新 20260624）→ ✅ 通过
+    ↓ merge test（test 最新 20260622）→ ✅ 通过
+```
+
+### 0.8 迁移不可变原则（关键铁律）
+
+> 迁移文件**一旦 commit 到任何分支，就不应该再改**（包括文件名、时间戳、SQL 内容）。
+
+#### 为什么？
+- 同一个迁移可能被 apply 到多个 DB（test / staging / prod）
+- 改时间戳后 Git 认为是新文件
+- 旧文件在 DB 成了**孤儿记录**（`atlas_schema_revisions` 有记录但目录没文件）
+- 新文件会被重新 apply 一次
+- 跨环境同步时出问题
+
+#### 典型踩坑场景
+1. **合并后改时间戳**：feature 分支 `20260623` 已合并 test 并 apply → DB 有 20260623 记录 → 你改成 `20260624` 重新提交 → DB 有 20260623 孤儿 + 20260624 重复
+2. **多人合并时时间戳撞车**：Dev A 用 `20260625`，Dev B 也用 `20260625`，各自合并 → 后合并的人产生孤儿
+
+#### 正确做法
+- **生成前**：按 §0.6 查所有目标分支，取最大时间戳 +1 天
+- **生成后**：一旦 commit 到远端，**绝不修改文件名或时间戳**
+- **必须调整**时：见 §8 高级场景的「回滚迁移」流程
+
+#### 例外（仅本地开发时）
+迁移**只在你本地 feature 分支**，还没 push 到任何共享分支，且还没 apply 到任何真实 DB → 此时可以自由改时间戳。
+
+### 0.9 迁移 SQL 幂等性强制模板
+
+> **所有手写 SQL（非 Atlas 自动生成的）必须使用幂等形式**，确保跨环境 DB 状态不一致时也能 apply 成功。
+
+#### 为什么需要幂等？
+| 场景 | 没 IF NOT EXISTS | 有 IF NOT EXISTS |
+|------|-----------------|------------------|
+| test DB 有表，main DB 没表 | main 报错「表已存在」 | ✅ 都正常 apply |
+| 孤儿记录清理后重 apply | 报错「已存在」 | ✅ 跳过不冲突 |
+| 部署回滚后再部署 | 报错「已存在」 | ✅ 跳过不冲突 |
+
+#### 标准模板（强制使用）
+
+```sql
+-- 新建表（必须用 IF NOT EXISTS）
+CREATE TABLE IF NOT EXISTS "audit_logs" (
+  "id"          uuid          NOT NULL DEFAULT gen_random_uuid(),
+  "created_at"  timestamptz   NOT NULL DEFAULT now(),
+  "action"      varchar(64)   NOT NULL,
+  PRIMARY KEY ("id")
+);
+
+-- 新建索引（必须用 IF NOT EXISTS）
+CREATE INDEX IF NOT EXISTS "idx_audit_logs_created_at" 
+  ON "audit_logs" ("created_at");
+
+-- 新建唯一约束（必须用 IF NOT EXISTS + 条件索引）
+CREATE UNIQUE INDEX IF NOT EXISTS "uniq_user_email" 
+  ON "users" ("email") WHERE "deleted_at" IS NULL;
+
+-- 加字段（必须用 IF NOT EXISTS）
+ALTER TABLE "api_keys"
+  ADD COLUMN IF NOT EXISTS "ip_allowlist" text NOT NULL DEFAULT '';
+
+-- 改字段类型（PostgreSQL 不支持 IF NOT EXISTS，需要 DO $$ 块）
+DO $$ 
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                 WHERE table_name = 'users' AND column_name = 'name') THEN
+    ALTER TABLE "users" ALTER COLUMN "name" TYPE character varying(500);
+  END IF;
+END $$;
+
+-- 加约束（必须用 IF NOT EXISTS）
+ALTER TABLE "api_keys"
+  ADD CONSTRAINT IF NOT EXISTS "chk_key_type_valid"
+  CHECK (key_type IN ('personal', 'service'));
+
+-- 删字段（生产慎用，必须用 IF EXISTS）
+ALTER TABLE "providers"
+  DROP COLUMN IF EXISTS "deprecated_field";
+
+-- 删索引（必须用 IF EXISTS）
+DROP INDEX IF EXISTS "idx_old_index";
+```
+
+#### 检查清单（提交前必查）
+
+- [ ] 所有 `CREATE TABLE` 后有 `IF NOT EXISTS`
+- [ ] 所有 `CREATE INDEX` 后有 `IF NOT EXISTS`
+- [ ] 所有 `ALTER TABLE ADD COLUMN` 后有 `IF NOT EXISTS`
+- [ ] 所有 `DROP COLUMN` / `DROP INDEX` / `DROP TABLE` 后有 `IF EXISTS`
+- [ ] 没有裸的破坏性 DDL（除非明确是 §8.3 回滚迁移）
+
+#### Atlas 自动生成 vs 手写
+- **Atlas 自动生成的 SQL**：假设线性历史，**不加 IF NOT EXISTS**，靠 `atlas_schema_revisions` 记录保证只 apply 一次
+- **手写 SQL**：必须加 IF NOT EXISTS，因为可能因各种原因被重复 apply
+
+### 0.10 无 Docker 环境应急方案
+
+> 当 `make atlas-diff` 因 Docker 不可用（`Unable to find image 'postgres:16'` 或 `docker-credential-desktop not found`）报错时，用此应急方案。
+
+#### 触发场景
+- 本地 Docker Desktop 未启动
+- Docker 凭证配置损坏（`~/.docker/config.json` 中 `credsStore` 项有问题）
+- 无权限访问 Docker（CI 环境中）
+- 离线或弱网环境下拉取镜像失败
+
+#### 应急流程
+
+##### 1. 手写 SQL（必须用 §0.9 模板）
+
+直接手写 SQL，但**必须严格使用 IF NOT EXISTS 模板**保证幂等。
+
+```bash
+# 创建迁移文件
+touch atlas-migrations/$(date +%Y%m%d%H%M%S)_[动词]_[表名]_[描述].sql
+# 例：touch atlas-migrations/20260625100000_add_audit_logs_table.sql
+```
+
+##### 2. 重算校验和（不需要 Docker）
+
+```bash
+atlas migrate hash --env local
+```
+
+##### 3. 人工审查 SQL（代替自动 diff 的审查）
+
+- 确认无意外 DROP
+- 确认类型/默认值/约束正确
+- **确认全部加 IF NOT EXISTS**
+- 确认与 GORM model 的字段一一对应
+
+##### 4. 提交三件套（同 §0.5）
+
+```bash
+git add internal/.../xxx.go atlas-migrations/
+git commit -m "feat(db): add audit_logs table (no-docker emergency)"
+```
+
+#### 事后必须做的
+一旦 Docker 可用，用 `atlas migrate validate --env local` 重新校验一次。如果校验失败，按 §0.4 流程重生成。
+
+#### Docker 修复命令
+常见 Docker 凭证问题的修复：
+```bash
+# 检查 ~/.docker/config.json
+cat ~/.docker/config.json
+# 如果 credsStore 项是 "desktop" 且 Docker Desktop 未安装/未启动：
+# 方案 A：启动 Docker Desktop
+# 方案 B：临时删除 credsStore 项（会影响 Docker Hub 登录）
+#   sed -i.bak '/"credsStore"/d' ~/.docker/config.json
+```
+
+#### 何时用 vs 何时不用
+| 场景 | 推荐做法 |
+|------|---------|
+| Docker 正常启动 | ❌ 不用应急方案，走标准 §0.3 流程 |
+| Docker 暂时故障（重启可恢复） | 修 Docker，不用应急方案 |
+| Docker 长期不可用（无权限/离线） | ✅ 用应急方案，事后补 validate |
+| CI 环境 Docker 不可用 | ⚠️ 优先修 CI 环境；应急方案是最后手段 |
+
 ## 1. 架构概览
 
 ### 核心组件

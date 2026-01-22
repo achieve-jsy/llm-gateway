@@ -41,6 +41,11 @@
             <el-table-column label="厂商" prop="provider_name" width="120" />
             <el-table-column label="权重" prop="weight" width="80" align="center" />
             <el-table-column label="优先级" prop="priority" width="80" align="center" />
+            <el-table-column label="复杂度档位" prop="complexity_tier" width="110" align="center">
+              <template #default="scope">
+                <el-tag v-if="scope.row.complexity_tier" size="small">{{ scope.row.complexity_tier }}</el-tag>
+              </template>
+            </el-table-column>
           </el-table>
         </div>
       </el-tab-pane>
@@ -154,7 +159,7 @@ const studioEntitlements = computed(() => entitlements.value.filter(e => e.scope
 const deptEntitlements = computed(() => entitlements.value.filter(e => e.scope_type === 'dept'))
 
 function strategyLabel(s: string): string {
-  const map: Record<string, string> = { round_robin: '轮询', priority: '优先级', weighted: '加权' }
+  const map: Record<string, string> = { round_robin: '轮询', priority: '优先级', weighted: '加权', auto: '自动' }
   return map[s] || s
 }
 

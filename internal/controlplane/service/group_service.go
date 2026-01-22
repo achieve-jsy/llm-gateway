@@ -58,7 +58,7 @@ func (s *GroupService) GetFailoverDefaults() FailoverDefaults {
 type CreateGroupRequest struct {
 	Name                    string `json:"name" binding:"required,max=64"`
 	Description             string `json:"description"`
-	Strategy                string `json:"strategy" binding:"required,oneof=round_robin priority weighted"`
+	Strategy                string `json:"strategy" binding:"required,oneof=round_robin priority weighted auto"`
 	MaxSwitches             *int   `json:"max_switches"`
 	SameModelRetries        *int   `json:"same_model_retries"`
 	FailoverCooldownSeconds *int   `json:"failover_cooldown_seconds"`
@@ -68,7 +68,7 @@ type CreateGroupRequest struct {
 type UpdateGroupRequest struct {
 	Name                    *string `json:"name"`
 	Description             *string `json:"description"`
-	Strategy                *string `json:"strategy" binding:"omitempty,oneof=round_robin priority weighted"`
+	Strategy                *string `json:"strategy" binding:"omitempty,oneof=round_robin priority weighted auto"`
 	Enabled                 *bool   `json:"enabled"`
 	MaxSwitches             *int    `json:"max_switches"`
 	SameModelRetries        *int    `json:"same_model_retries"`
@@ -224,7 +224,7 @@ func (s *GroupService) List(search string, page, pageSize int) ([]model.Group, i
 	return s.repo.List(search, page, pageSize)
 }
 
-func (s *GroupService) AddModelsToGroup(groupID uint, modelIDs []uuid.UUID, priorities map[uuid.UUID]int, weights map[uuid.UUID]int) error {
+func (s *GroupService) AddModelsToGroup(groupID uint, modelIDs []uuid.UUID, priorities map[uuid.UUID]int, weights map[uuid.UUID]int, tiers map[uuid.UUID]string) error {
 	if _, err := s.repo.FindByID(groupID); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrGroupNotFound
@@ -244,6 +244,9 @@ func (s *GroupService) AddModelsToGroup(groupID uint, modelIDs []uuid.UUID, prio
 		if w, ok := weights[modelID]; ok {
 			v := w
 			gm.Weight = &v
+		}
+		if t, ok := tiers[modelID]; ok {
+			gm.ComplexityTier = t
 		}
 
 		if err := s.repo.AddModelToGroup(groupID, gm); err != nil {

@@ -25,14 +25,15 @@ type CPGroupData struct {
 
 // CPModelData 控制面返回的组内模型数据
 type CPModelData struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	ProviderID   string `json:"provider_id"`
-	ProviderType string `json:"provider_type"`
-	ProviderName string `json:"provider_name"`
-	Endpoint     string `json:"endpoint"`
-	Priority     *int   `json:"priority"`
-	Weight       *int   `json:"weight"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	ProviderID     string `json:"provider_id"`
+	ProviderType   string `json:"provider_type"`
+	ProviderName   string `json:"provider_name"`
+	Endpoint       string `json:"endpoint"`
+	Priority       *int   `json:"priority"`
+	Weight         *int   `json:"weight"`
+	ComplexityTier string `json:"complexity_tier"`
 }
 
 // GroupConfig 模型组配置
@@ -47,15 +48,16 @@ type GroupConfig struct {
 
 // GroupModel 组内模型关联
 type GroupModel struct {
-	ID           uint   `json:"id"`
-	GroupID      uint   `json:"group_id"`
-	ModelID      uint   `json:"model_id"`
-	ModelName    string `json:"model_name"`
-	ChannelType  string `json:"channel_type"`
-	ProviderName string `json:"provider_name"`
-	Endpoint     string `json:"endpoint"`
-	Priority     *int   `json:"priority"`
-	Weight       *int   `json:"weight"`
+	ID             uint   `json:"id"`
+	GroupID        uint   `json:"group_id"`
+	ModelID        uint   `json:"model_id"`
+	ModelName      string `json:"model_name"`
+	ChannelType    string `json:"channel_type"`
+	ProviderName   string `json:"provider_name"`
+	Endpoint       string `json:"endpoint"`
+	Priority       *int   `json:"priority"`
+	Weight         *int   `json:"weight"`
+	ComplexityTier string `json:"complexity_tier"`
 }
 
 // GroupRoutingConfig 内存中的组路由配置
@@ -70,15 +72,16 @@ type GroupRoutingConfig struct {
 
 // ModelRoutingEntry 组内模型路由条目
 type ModelRoutingEntry struct {
-	ModelID      uint   `json:"model_id"`
-	ModelName    string `json:"model_name"`
-	ChannelID    uint   `json:"channel_id"`
-	ChannelType  string `json:"channel_type"`
-	ProviderName string `json:"provider_name"`
-	Endpoint     string `json:"endpoint"`
-	Credential   string `json:"credential"`
-	Priority     int    `json:"priority"`
-	Weight       int    `json:"weight"`
+	ModelID        uint   `json:"model_id"`
+	ModelName      string `json:"model_name"`
+	ChannelID      uint   `json:"channel_id"`
+	ChannelType    string `json:"channel_type"`
+	ProviderName   string `json:"provider_name"`
+	Endpoint       string `json:"endpoint"`
+	Credential     string `json:"credential"`
+	Priority       int    `json:"priority"`
+	Weight         int    `json:"weight"`
+	ComplexityTier string `json:"complexity_tier"`
 }
 
 // ChannelEndpoint 渠道连接端点信息

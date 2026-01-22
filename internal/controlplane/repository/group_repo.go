@@ -95,6 +95,9 @@ func (r *GroupRepo) AddModelToGroup(groupID uint, gm *model.GroupModel) error {
 		if gm.Weight != nil {
 			updates["weight"] = *gm.Weight
 		}
+		if gm.ComplexityTier != "" {
+			updates["complexity_tier"] = gm.ComplexityTier
+		}
 		if len(updates) > 0 {
 			return r.db.Model(&existing).Updates(updates).Error
 		}

@@ -43,7 +43,7 @@
           <span class="model-label">{{ model.provider?.name ? model.provider.name + ': ' : '' }}{{ model.name }}</span>
           <el-tag size="small" type="info" class="model-type-tag">{{ model.model_type }}</el-tag>
         </el-checkbox>
-        <div v-if="checkedIds.includes(model.id) && props.strategy !== 'round_robin'" class="model-param">
+        <div v-if="checkedIds.includes(model.id) && props.strategy !== 'round_robin' && props.strategy !== 'auto'" class="model-param">
           <template v-if="props.strategy === 'priority'">
             <span class="param-label">优先级</span>
             <el-input-number

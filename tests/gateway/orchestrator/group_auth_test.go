@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/binding"
 	"github.com/example/llm-gateway/internal/gateway/cache"
 	"github.com/example/llm-gateway/internal/gateway/model"
@@ -23,15 +24,15 @@ type fakeScheduler struct {
 	err      error
 }
 
-func (f *fakeScheduler) Route(_ string) (*scheduler.RouteDecision, error) {
+func (f *fakeScheduler) Route(_ string, _ *core.ChatRequest) (*scheduler.RouteDecision, error) {
 	return f.decision, f.err
 }
 
-func (f *fakeScheduler) Failover(_, _ string) (*scheduler.RouteDecision, error) {
+func (f *fakeScheduler) Failover(_, _ string, _ *core.ChatRequest) (*scheduler.RouteDecision, error) {
 	return nil, model.ErrNoOtherModelAvailable
 }
 
-func (f *fakeScheduler) FailoverExcluding(_ string, _ []string) (*scheduler.RouteDecision, error) {
+func (f *fakeScheduler) FailoverExcluding(_ string, _ []string, _ *core.ChatRequest) (*scheduler.RouteDecision, error) {
 	return nil, model.ErrNoOtherModelAvailable
 }
 
@@ -190,7 +191,7 @@ func TestDispatch_UsableGroupsCeiling(t *testing.T) {
 
 			d := setupDispatcher(testGroups, bindURL)
 			c, _ := makeContext(tt.identity)
-			decision, err := d.Dispatch(c, tt.modelName)
+			decision, err := d.Dispatch(c, tt.modelName, nil)
 
 			if tt.wantErr != nil {
 				require.Error(t, err, "期望返回错误: %v", tt.wantErr)

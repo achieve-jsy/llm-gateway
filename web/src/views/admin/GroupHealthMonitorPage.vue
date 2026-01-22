@@ -259,14 +259,16 @@ function strategyLabel(strategy: string): string {
     case 'round_robin': return '轮询'
     case 'priority': return '优先级'
     case 'weighted': return '加权'
+    case 'auto': return '自动'
     default: return strategy || '轮询'
   }
 }
 
-function strategyTagType(strategy: string): 'info' | 'success' | 'warning' {
+function strategyTagType(strategy: string): 'info' | 'success' | 'warning' | 'primary' {
   switch (strategy) {
     case 'priority': return 'success'
     case 'weighted': return 'warning'
+    case 'auto': return 'primary'
     default: return 'info'
   }
 }

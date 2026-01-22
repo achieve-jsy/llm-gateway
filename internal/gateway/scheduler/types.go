@@ -7,12 +7,13 @@ const (
 	StrategyRoundRobin RoutingStrategy = "round_robin"
 	StrategyPriority   RoutingStrategy = "priority"
 	StrategyWeighted   RoutingStrategy = "weighted"
+	StrategyAuto       RoutingStrategy = "auto"
 )
 
 // Valid 校验策略值是否合法
 func (s RoutingStrategy) Valid() bool {
 	switch s {
-	case StrategyRoundRobin, StrategyPriority, StrategyWeighted:
+	case StrategyRoundRobin, StrategyPriority, StrategyWeighted, StrategyAuto:
 		return true
 	}
 	return false
@@ -38,4 +39,9 @@ type RouteDecision struct {
 	Endpoint       string          `json:"endpoint"`
 	Credential     string          `json:"credential"`
 	DecisionTimeUs int64           `json:"decision_time_us"`
+	// auto 审计字段（仅 strategy=auto 时填充）
+	ComplexityTier   string  `json:"complexity_tier,omitempty"`
+	ComplexityScore  float64 `json:"complexity_score,omitempty"`
+	ReasoningMarkers int     `json:"reasoning_markers,omitempty"`
+	BiasUpApplied    bool    `json:"bias_up_applied,omitempty"`
 }

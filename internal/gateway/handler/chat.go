@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
+	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/gin-gonic/gin"
 )
 
@@ -99,7 +101,7 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 	}
 
 	if h.groupDispatch != nil {
-		decision, err := h.groupDispatch.Dispatch(c, req.Model)
+		decision, err := h.groupDispatch.Dispatch(c, req.Model, &req)
 		if err != nil {
 			h.respondGroupError(c, err)
 			return
@@ -110,6 +112,10 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 			// 选择 scheduler 指定的 provider，避免路由歧义。
 			if decision.ProviderName != "" {
 				req.Provider = decision.ProviderName
+			}
+			if decision.Strategy == scheduler.StrategyAuto && decision.ComplexityTier != "" {
+				c.Header("X-Auto-Tier", decision.ComplexityTier)
+				c.Header("X-Auto-Score", fmt.Sprintf("%.2f", decision.ComplexityScore))
 			}
 		}
 	}
@@ -189,7 +195,7 @@ func (h *ChatHandler) handleNonStream(c *gin.Context, baseCtx context.Context, r
 			h.groupDispatch.SetCooldown(failedID, defaultCooldownDuration)
 		}
 
-		decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID)
+		decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID, req)
 		if fErr != nil {
 			slog.Error("failover: no available target",
 				"request_id", c.GetString("request_id"),
@@ -274,7 +280,7 @@ func (h *ChatHandler) handleStream(c *gin.Context, baseCtx context.Context, req 
 			h.groupDispatch.SetCooldown(failedID, defaultCooldownDuration)
 		}
 
-		decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID)
+		decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID, req)
 		if fErr != nil {
 			slog.Error("failover: no available target (stream)",
 				"request_id", c.GetString("request_id"),

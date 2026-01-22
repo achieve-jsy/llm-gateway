@@ -226,7 +226,7 @@ const pendingAccessAll = ref<boolean | null>(null)
 const keyCache = useKeyCacheStore()
 
 function strategyLabel(strategy: string): string {
-  const map: Record<string, string> = { round_robin: '轮询', priority: '优先级', weighted: '加权' }
+  const map: Record<string, string> = { round_robin: '轮询', priority: '优先级', weighted: '加权', auto: '自动' }
   return map[strategy] || strategy
 }
 

@@ -1,4 +1,6 @@
-export type Strategy = 'round_robin' | 'priority' | 'weighted'
+export type Strategy = 'round_robin' | 'priority' | 'weighted' | 'auto'
+
+export type ComplexityTier = 'SIMPLE' | 'MEDIUM' | 'COMPLEX' | 'REASONING'
 
 export type OpenMode = 'public' | 'controlled'
 
@@ -32,6 +34,7 @@ export interface GroupModel {
   model_name: string
   priority: number | null
   weight: number | null
+  complexity_tier?: ComplexityTier
 }
 
 export interface GroupListItem extends Group {
@@ -59,10 +62,18 @@ export interface UpdateGroupRequest {
   timeout_seconds?: number
 }
 
+export interface AddModelToZoneRequest {
+  model_ids: string[]
+  priorities?: Record<string, number>
+  weights?: Record<string, number>
+  complexity_tiers?: Record<string, ComplexityTier>
+}
+
 export interface AddModelToGroupRequest {
   model_ids: string[]
   priorities?: Record<string, number>
   weights?: Record<string, number>
+  complexity_tiers?: Record<string, ComplexityTier>
 }
 
 export interface ModelOption {

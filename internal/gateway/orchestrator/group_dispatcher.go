@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/binding"
 	"github.com/example/llm-gateway/internal/gateway/cache"
 	"github.com/example/llm-gateway/internal/gateway/model"
@@ -37,7 +38,7 @@ func NewGroupAwareDispatcherWithBinding(sch Scheduler, nc *cache.GroupNameCache,
 	}
 }
 
-func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string) (*scheduler.RouteDecision, error) {
+func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string, req *core.ChatRequest) (*scheduler.RouteDecision, error) {
 	if !d.nameCache.IsGroupName(modelName) {
 		return nil, nil
 	}
@@ -83,7 +84,7 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string) (*sche
 		}
 	}
 
-	decision, err := d.scheduler.Route(modelName)
+	decision, err := d.scheduler.Route(modelName, req)
 	if err != nil {
 		slog.Error("group route failed",
 			"group_name", modelName,
@@ -117,7 +118,7 @@ func containsGroup(groups []string, target string) bool {
 	return false
 }
 
-func (d *GroupAwareDispatcher) HandleFailover(c *gin.Context, groupName, failedModelID string) (*scheduler.RouteDecision, error) {
+func (d *GroupAwareDispatcher) HandleFailover(c *gin.Context, groupName, failedModelID string, req *core.ChatRequest) (*scheduler.RouteDecision, error) {
 	dc := model.GetDispatchContext(c)
 
 	rounds := 0
@@ -136,7 +137,7 @@ func (d *GroupAwareDispatcher) HandleFailover(c *gin.Context, groupName, failedM
 		triedIDs = append(triedIDs, failedModelID)
 	}
 
-	decision, err := d.scheduler.FailoverExcluding(groupName, triedIDs)
+	decision, err := d.scheduler.FailoverExcluding(groupName, triedIDs, req)
 	if err != nil {
 		slog.Error("group failover failed",
 			"group_name", groupName,

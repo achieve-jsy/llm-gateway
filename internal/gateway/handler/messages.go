@@ -80,7 +80,7 @@ func (h *MessagesHandler) HandleMessages(c *gin.Context) {
 
 	// Group dispatch (model group resolution)
 	if h.groupDispatch != nil {
-		decision, err := h.groupDispatch.Dispatch(c, anthReq.Model)
+		decision, err := h.groupDispatch.Dispatch(c, anthReq.Model, req)
 		if err != nil {
 			h.respondAnthropicGroupError(c, err)
 			return
@@ -187,7 +187,7 @@ func (h *MessagesHandler) handleNonStream(c *gin.Context, baseCtx context.Contex
 			h.groupDispatch.SetCooldown(failedID, defaultCooldownDuration)
 		}
 
-		decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID)
+		decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID, req)
 		if fErr != nil {
 			slog.Error("messages failover: no available target",
 				"request_id", c.GetString("request_id"),
@@ -266,7 +266,7 @@ func (h *MessagesHandler) handleStream(c *gin.Context, baseCtx context.Context, 
 			h.groupDispatch.SetCooldown(failedID, defaultCooldownDuration)
 		}
 
-		decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID)
+		decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID, req)
 		if fErr != nil {
 			slog.Error("messages failover: no available target (stream)",
 				"request_id", c.GetString("request_id"),

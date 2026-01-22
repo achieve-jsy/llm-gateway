@@ -80,7 +80,7 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 	}
 
 	if h.groupDispatch != nil {
-		decision, err := h.groupDispatch.Dispatch(c, req.Model)
+		decision, err := h.groupDispatch.Dispatch(c, req.Model, nil)
 		if err != nil {
 			if ue, ok := err.(*model.UnifiedError); ok {
 				respondError(c, ue)

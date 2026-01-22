@@ -19,7 +19,7 @@ type GroupServiceInterface interface {
 	GetByID(id uint) (*model.Group, error)
 	Update(id uint, req service.UpdateGroupRequest) (*model.Group, error)
 	Delete(id uint) error
-	AddModelsToGroup(groupID uint, modelIDs []uuid.UUID, priorities map[uuid.UUID]int, weights map[uuid.UUID]int) error
+	AddModelsToGroup(groupID uint, modelIDs []uuid.UUID, priorities map[uuid.UUID]int, weights map[uuid.UUID]int, tiers map[uuid.UUID]string) error
 	ListGroupModels(groupID uint) ([]model.GroupModel, error)
 	RemoveModelFromGroup(groupID uint, modelID uuid.UUID) error
 	ListEnabledGroupsWithModels() ([]model.Group, error)
@@ -46,9 +46,10 @@ func NewGroupHandler(svc GroupServiceInterface, modelRepo ModelRepoInterface, pr
 }
 
 type addModelsRequest struct {
-	ModelIDs   []uuid.UUID       `json:"model_ids" binding:"required,min=1"`
-	Priorities map[uuid.UUID]int `json:"priorities,omitempty"`
-	Weights    map[uuid.UUID]int `json:"weights,omitempty"`
+	ModelIDs        []uuid.UUID         `json:"model_ids" binding:"required,min=1"`
+	Priorities      map[uuid.UUID]int   `json:"priorities,omitempty"`
+	Weights         map[uuid.UUID]int   `json:"weights,omitempty"`
+	ComplexityTiers map[uuid.UUID]string `json:"complexity_tiers,omitempty"`
 }
 
 func parseGroupID(c *gin.Context) (uint, error) {
@@ -261,7 +262,7 @@ func (h *GroupHandler) AddModels(c *gin.Context) {
 		return
 	}
 
-	if err := h.svc.AddModelsToGroup(id, req.ModelIDs, req.Priorities, req.Weights); err != nil {
+	if err := h.svc.AddModelsToGroup(id, req.ModelIDs, req.Priorities, req.Weights, req.ComplexityTiers); err != nil {
 		if errors.Is(err, service.ErrGroupNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": gin.H{"type": "not_found", "message": "group not found", "code": CodeGroupNotFound},
@@ -372,14 +373,15 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 	}
 
 	type modelInfo struct {
-		ID           uuid.UUID `json:"id"`
-		Name         string    `json:"name"`
-		ProviderID   uuid.UUID `json:"provider_id,omitempty"`
-		ProviderType string    `json:"provider_type,omitempty"`
-		ProviderName string    `json:"provider_name,omitempty"`
-		Endpoint     string    `json:"endpoint,omitempty"`
-		Priority     *int      `json:"priority"`
-		Weight       *int      `json:"weight"`
+		ID             uuid.UUID `json:"id"`
+		Name           string    `json:"name"`
+		ProviderID     uuid.UUID `json:"provider_id,omitempty"`
+		ProviderType   string    `json:"provider_type,omitempty"`
+		ProviderName   string    `json:"provider_name,omitempty"`
+		Endpoint       string    `json:"endpoint,omitempty"`
+		Priority       *int      `json:"priority"`
+		Weight         *int      `json:"weight"`
+		ComplexityTier string    `json:"complexity_tier"`
 	}
 
 	type groupInfo struct {
@@ -405,9 +407,10 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 		}
 		for _, gm := range g.Models {
 			mi := modelInfo{
-				ID:       gm.ModelID,
-				Priority: gm.Priority,
-				Weight:   gm.Weight,
+				ID:             gm.ModelID,
+				Priority:       gm.Priority,
+				Weight:         gm.Weight,
+				ComplexityTier: gm.ComplexityTier,
 			}
 			if h.modelRepo != nil {
 				m, err := h.modelRepo.GetByID(gm.ModelID)

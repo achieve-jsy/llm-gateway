@@ -133,14 +133,14 @@ func TestRoute_RoundRobin(t *testing.T) {
 			}
 
 			if tc.wantErr != nil {
-				_, err := router.Route(groupName)
+				_, err := router.Route(groupName, nil)
 				assert.ErrorIs(t, err, tc.wantErr)
 				return
 			}
 
 			var decisions []*scheduler.RouteDecision
 			for i := 0; i < tc.calls; i++ {
-				d, err := router.Route(groupName)
+				d, err := router.Route(groupName, nil)
 				require.NoError(t, err)
 				decisions = append(decisions, d)
 			}
@@ -230,7 +230,7 @@ func TestRoute_Priority(t *testing.T) {
 
 			var decisions []*scheduler.RouteDecision
 			for i := 0; i < tc.calls; i++ {
-				d, err := router.Route("prio-group")
+				d, err := router.Route("prio-group", nil)
 				require.NoError(t, err)
 				decisions = append(decisions, d)
 			}
@@ -321,7 +321,7 @@ func TestRoute_Weighted(t *testing.T) {
 
 			var decisions []*scheduler.RouteDecision
 			for i := 0; i < tc.calls; i++ {
-				d, err := router.Route("weighted-group")
+				d, err := router.Route("weighted-group", nil)
 				require.NoError(t, err)
 				decisions = append(decisions, d)
 			}
@@ -384,7 +384,7 @@ func TestSelectByStrategy(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			router, _, _ := newTestRouter()
-			d, err := router.SelectByStrategy(tc.strategy, "test-group", tc.models)
+			d, err := router.SelectByStrategy(tc.strategy, "test-group", tc.models, nil)
 			require.NoError(t, err)
 			tc.validate(t, d)
 		})

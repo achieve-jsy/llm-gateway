@@ -32,7 +32,7 @@ func TestProviderNamePropagation(t *testing.T) {
 	// Router.Route
 	hs := NewHealthStore(3, 3, 3, 30*time.Second)
 	router := NewRouter(rt, hs)
-	decision, err := router.Route("deepseek-v4-pro-official")
+	decision, err := router.Route("deepseek-v4-pro-official", nil)
 	if err != nil {
 		t.Fatalf("Route failed: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestProviderNamePropagation(t *testing.T) {
 	}
 
 	// 路由选择后 ProviderName 应该是被选中的那个
-	decision2, err := router.Route("test-group")
+	decision2, err := router.Route("test-group", nil)
 	if err != nil {
 		t.Fatalf("Route failed: %v", err)
 	}

@@ -188,10 +188,7 @@ func (h *ModelCheckHandler) checkModel(ctx context.Context, m *model.Model) *Mod
 	}
 
 	apiKey := cpservice.ExtractAPIKey(credJSON)
-	modelName := m.UpstreamModelID
-	if modelName == "" {
-		modelName = m.Name
-	}
+	modelName := m.UpstreamName()
 
 	// 发送检测请求（按模型类型选择探针接口）
 	success, skipped, responseTime, errMsg := cpservice.ProbeModelForward(ctx, provider.Endpoint, modelName, apiKey, m.ModelType)

@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/service"
@@ -419,7 +418,7 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 					if m.Enabled == nil || !*m.Enabled {
 						continue
 					}
-				mi.Name = upstreamModelName(m)
+				mi.Name = m.UpstreamName()
 				mi.ProviderID = m.ProviderID
 				providerEnabled := false
 				if h.providerRepo != nil {
@@ -446,16 +445,3 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": result})
 }
 
-// upstreamModelName 返回推送给 Gateway 的实际 model ID。
-// 优先使用 UpstreamModelID（明确指定的上游 ID），
-// 否则从 Name 中剥离 "{provider}/" 前缀（如 "bedrock/global.xxx" → "global.xxx"）。
-func upstreamModelName(m *model.Model) string {
-	if m.UpstreamModelID != "" {
-		return m.UpstreamModelID
-	}
-	name := m.Name
-	if idx := strings.Index(name, "/"); idx >= 0 {
-		return name[idx+1:]
-	}
-	return name
-}

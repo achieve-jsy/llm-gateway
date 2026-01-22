@@ -489,10 +489,7 @@ func (s *HealthCheckService) doModelForwardCheck(m *model.Model) (bool, int, str
 
 	apiKey := extractAPIKey(credJSON)
 
-	modelName := m.UpstreamModelID
-	if modelName == "" {
-		modelName = m.Name
-	}
+	modelName := m.UpstreamName()
 
 	success, skipped, elapsed, errMsg := ProbeModelForward(context.Background(), provider.Endpoint, modelName, apiKey, m.ModelType)
 	if skipped {
@@ -549,10 +546,7 @@ func (s *HealthCheckService) doBedrockModelCheck(provider *model.Provider, credJ
 
 	runtime := bedrockruntime.NewFromConfig(awsCfg, runtimeOpts...)
 
-	modelName := m.UpstreamModelID
-	if modelName == "" {
-		modelName = bedrockModelID(m.Name)
-	}
+	modelName := m.UpstreamName()
 
 	maxTokens := int32(1)
 	userMsg := "hi"
@@ -1118,10 +1112,7 @@ func (s *HealthCheckService) checkSingleModel(client *http.Client, m *model.Mode
 
 	apiKey := extractAPIKey(credJSON)
 
-	modelName := m.UpstreamModelID
-	if modelName == "" {
-		modelName = m.Name
-	}
+	modelName := m.UpstreamName()
 	success, skipped, elapsed, errMsg := ProbeModelForward(context.Background(), provider.Endpoint, modelName, apiKey, m.ModelType)
 	if skipped {
 		s.recordLog("model", m.ID, m.Name, provider.ID, provider.Name, true, elapsed, "skipped")

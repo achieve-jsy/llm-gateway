@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -56,4 +57,18 @@ ConsecutiveFailures         int        `gorm:"not null;default:0" json:"consecut
 
 func (Model) TableName() string {
 	return "models"
+}
+
+// UpstreamName 返回发送给上游 provider 的实际模型 ID。
+// 优先使用 UpstreamModelID（在管理后台明确指定的上游 ID）；
+// 若为空，则从 Name 中剥离 "{provider}/" 前缀（如 "ZHIPU/GLM-5.2" → "GLM-5.2"）。
+// 健康检测与 Gateway 路由都应通过此方法取名，确保二者行为一致。
+func (m *Model) UpstreamName() string {
+	if m.UpstreamModelID != "" {
+		return m.UpstreamModelID
+	}
+	if idx := strings.Index(m.Name, "/"); idx >= 0 {
+		return m.Name[idx+1:]
+	}
+	return m.Name
 }

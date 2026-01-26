@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/service"
@@ -447,15 +446,13 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 }
 
 // upstreamModelName 返回推送给 Gateway 的实际 model ID。
-// 优先使用 UpstreamModelID（明确指定的上游 ID），
-// 否则从 Name 中剥离 "{provider}/" 前缀（如 "bedrock/global.xxx" → "global.xxx"）。
+// 优先使用 UpstreamModelID（明确指定的上游 ID），否则直接使用 Name。
+// 注意：不再自动剥离 "{provider}/" 前缀。某些上游（如 ZHIPU）期望收到
+// 带前缀的完整模型名（"ZHIPU/GLM-5.2"）；需要剥前缀的 provider（如 Bedrock、
+// Anthropic）在各自的 adapter 中处理。
 func upstreamModelName(m *model.Model) string {
 	if m.UpstreamModelID != "" {
 		return m.UpstreamModelID
 	}
-	name := m.Name
-	if idx := strings.Index(name, "/"); idx >= 0 {
-		return name[idx+1:]
-	}
-	return name
+	return m.Name
 }

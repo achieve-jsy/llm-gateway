@@ -80,7 +80,10 @@ func buildProviderEntries(models []controlmodel.Model) ([]gatewaymodel.ProviderE
 			providerOrder = append(providerOrder, providerID)
 		}
 
-		entry.Models = append(entry.Models, bedrockModelID(m.Name))
+		// 保留完整模型名（含 "{provider}/" 前缀）。
+		// 某些上游（如 ZHIPU）期望收到带前缀的完整模型名；
+		// Bedrock 等需要剥前缀的 provider 在各自的 adapter 中处理。
+		entry.Models = append(entry.Models, m.Name)
 	}
 
 	entries := make([]gatewaymodel.ProviderEntry, 0, len(providerOrder))

@@ -371,6 +371,14 @@ func (h *Handler) mergeImportDept(ssDeptID, deptName string) *amodel.Department 
 	if err := h.db.Exec(`UPDATE dept_studio_map SET dept_id = ? WHERE dept_id = ?`, ssDeptID, oldDeptID).Error; err != nil {
 		slog.Warn("failed to update dept_studio_map dept_id", "old", oldDeptID, "new", ssDeptID, "error", err)
 	}
+	// 同步 budget_allocations 的 scope_id：部门预算记录与 dept_id 保持一致，
+	// 否则额度管理 UI 和网关执行都无法通过真实 dept_id 找到已有记录。
+	if err := h.db.Exec(
+		`UPDATE budget_allocations SET scope_id = ? WHERE scope_id = ? AND scope_type IN ('dept_daily','dept_service')`,
+		ssDeptID, oldDeptID,
+	).Error; err != nil {
+		slog.Warn("failed to update budget_allocations scope_id", "old", oldDeptID, "new", ssDeptID, "error", err)
+	}
 
 	dept, err := h.deptRepo.FindByDeptID(ssDeptID)
 	if err != nil {

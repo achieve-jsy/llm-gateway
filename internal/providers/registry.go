@@ -194,6 +194,13 @@ func (r *ModelRegistry) GetProvider(model string) core.Provider {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	// Fast path: direct flat map lookup. This correctly handles model IDs
+	// containing "/" (e.g. "ZHIPU/GLM-5.2", "/data/model-FP8") which
+	// splitModelSelector would mis-parse as provider/model separators.
+	if info, ok := r.models[model]; ok {
+		return info.Provider
+	}
+
 	providerName, modelID := splitModelSelector(model)
 	if providerName != "" {
 		if providerModels, ok := r.modelsByProvider[providerName]; ok {
@@ -218,6 +225,11 @@ func (r *ModelRegistry) GetProvider(model string) core.Provider {
 func (r *ModelRegistry) GetModel(model string) *ModelInfo {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
+	// Fast path: direct flat map lookup for model IDs containing "/".
+	if info, ok := r.models[model]; ok {
+		return info
+	}
 
 	providerName, modelID := splitModelSelector(model)
 	if providerName != "" {
@@ -352,6 +364,11 @@ func (r *ModelRegistry) GetProviderType(model string) string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	// Fast path: direct flat map lookup for model IDs containing "/".
+	if info, ok := r.models[model]; ok {
+		return info.ProviderType
+	}
+
 	providerName, modelID := splitModelSelector(model)
 	if providerName != "" {
 		if providerModels, ok := r.modelsByProvider[providerName]; ok {
@@ -376,6 +393,11 @@ func (r *ModelRegistry) GetProviderType(model string) string {
 func (r *ModelRegistry) GetProviderName(model string) string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
+	// Fast path: direct flat map lookup for model IDs containing "/".
+	if info, ok := r.models[model]; ok {
+		return strings.TrimSpace(info.ProviderName)
+	}
 
 	providerName, modelID := splitModelSelector(model)
 	if providerName != "" {

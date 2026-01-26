@@ -332,14 +332,31 @@ func buildAnthropicMessageContent(msg core.Message) (any, error) {
 	return blocks, nil
 }
 
+// stripAnthropicPrefix 从模型名中剥离 "anthropic/" 前缀（大小写不敏感）。
+// 例如 "ANTHROPIC/claude-sonnet-4-6" → "claude-sonnet-4-6"
+// 如果不带前缀或前缀不匹配，返回原名。
+func stripAnthropicPrefix(model string) string {
+	if idx := strings.Index(model, "/"); idx > 0 {
+		prefix := model[:idx]
+		if strings.EqualFold(prefix, "anthropic") {
+			return model[idx+1:]
+		}
+	}
+	return model
+}
+
 // convertToAnthropicRequest converts core.ChatRequest to Anthropic format.
 func convertToAnthropicRequest(req *core.ChatRequest) (*anthropicRequest, error) {
 	if req == nil {
 		return nil, core.NewInvalidRequestError("anthropic chat request is required", nil)
 	}
 
+	// 兼容路由表传递的 "{provider}/" 前缀格式（如 "ANTHROPIC/claude-sonnet-4-6"）。
+	// Anthropic API 只需要 model ID 部分。
+	modelName := stripAnthropicPrefix(req.Model)
+
 	anthropicReq := &anthropicRequest{
-		Model:         req.Model,
+		Model:         modelName,
 		Messages:      make([]anthropicMessage, 0, len(req.Messages)),
 		Temperature:   req.Temperature,
 		Stream:        req.Stream,
@@ -353,7 +370,7 @@ func convertToAnthropicRequest(req *core.ChatRequest) (*anthropicRequest, error)
 	}
 
 	if req.Reasoning != nil && req.Reasoning.Effort != "" {
-		applyReasoning(anthropicReq, req.Model, req.Reasoning.Effort)
+		applyReasoning(anthropicReq, modelName, req.Reasoning.Effort)
 	}
 
 	tools, err := convertOpenAIToolsToAnthropic(req.Tools)

@@ -64,6 +64,9 @@ type converseParts struct {
 // accept them; unsupported families will surface their own validation errors.
 func buildConverseParts(req *core.ChatRequest) (converseParts, error) {
 	model := strings.TrimSpace(req.Model)
+	// 兼容路由表传递的 "{provider}/" 前缀格式（如 "bedrock/global.xxx"）。
+	// AWS Bedrock Converse API 只需要 model ID 部分。
+	model = stripProviderPrefix(model, "bedrock")
 	if model == "" {
 		return converseParts{}, core.NewInvalidRequestError("bedrock chat request requires a model", nil)
 	}
@@ -725,4 +728,17 @@ func bedrockUsageExtras(u *brtypes.TokenUsage) map[string]any {
 		return nil
 	}
 	return out
+}
+
+// stripProviderPrefix 从模型名中剥离 "{provider}/" 前缀（大小写不敏感）。
+// 例如 "bedrock/global.anthropic.claude-opus-4-6-v1" → "global.anthropic.claude-opus-4-6-v1"
+// 如果不带前缀或前缀不匹配，返回原名。
+func stripProviderPrefix(model, provider string) string {
+	if idx := strings.Index(model, "/"); idx > 0 {
+		prefix := model[:idx]
+		if strings.EqualFold(prefix, provider) {
+			return model[idx+1:]
+		}
+	}
+	return model
 }

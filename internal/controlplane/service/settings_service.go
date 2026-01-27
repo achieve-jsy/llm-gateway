@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/example/llm-gateway/internal/controlplane/keyactivity"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 )
 
@@ -35,6 +36,19 @@ const (
 	SettingKeyStudioRPM = "studio_rpm"
 	SettingKeyDeptRPM   = "dept_rpm"
 	SettingKeyKeyRPM    = "key_rpm"
+
+	// Key 活动提醒（后台离线扫描，不碰 gateway 热路径）
+	SettingKeyKeyActivityEnabled         = "key_activity.enabled"
+	SettingKeyKeyActivityScanIntervalSec = "key_activity.scan_interval_sec"
+	SettingKeyKeyActivityIPAsSource      = "key_activity.ip_as_source"
+	SettingKeyKeyActivityDormantDays     = "key_activity.dormant_days"
+	SettingKeyKeyActivityEWMAAlpha       = "key_activity.ewma_alpha"
+	SettingKeyKeyActivityEWMAK           = "key_activity.ewma_k"
+	SettingKeyKeyActivityMinBaseline     = "key_activity.min_baseline"
+	SettingKeyKeyActivityMinDev          = "key_activity.min_dev"
+	SettingKeyKeyActivityBootstrapDays   = "key_activity.bootstrap_days"
+	SettingKeyKeyActivityBootstrapDone   = "key_activity.bootstrap_done"
+	SettingKeyKeyActivityScanCursor      = "key_activity.scan_cursor"
 )
 
 const (
@@ -47,6 +61,15 @@ const (
 	defaultFailoverCooldownSeconds      = 60
 	defaultSupplierName                 = "某公司"
 	defaultPricingUsdToCnyRate          = 7.2
+	defaultKAEnabled                    = false
+	defaultKAScanIntervalSec            = 60
+	defaultKAIPAsSource                 = true
+	defaultKADormantDays                = 30
+	defaultKAEWMAAlpha                  = 0.3
+	defaultKAEWMAK                      = 3.0
+	defaultKAMinBaseline                = 20.0
+	defaultKAMinDev                     = 5.0
+	defaultKABootstrapDays              = 90
 )
 
 type SettingsRepository interface {
@@ -77,6 +100,12 @@ func allSettingKeys() []string {
 		SettingKeySupplierName,
 		SettingKeyPricingUsdToCnyRate,
 		SettingKeyGlobalRPM, SettingKeyStudioRPM, SettingKeyDeptRPM, SettingKeyKeyRPM,
+		SettingKeyKeyActivityEnabled, SettingKeyKeyActivityScanIntervalSec,
+		SettingKeyKeyActivityIPAsSource, SettingKeyKeyActivityDormantDays,
+		SettingKeyKeyActivityEWMAAlpha, SettingKeyKeyActivityEWMAK,
+		SettingKeyKeyActivityMinBaseline, SettingKeyKeyActivityMinDev,
+		SettingKeyKeyActivityBootstrapDays,
+		SettingKeyKeyActivityBootstrapDone, SettingKeyKeyActivityScanCursor,
 	}
 }
 
@@ -95,6 +124,15 @@ func (s *SettingsService) ensureDefaults() {
 		SettingKeyDefaultFailoverCooldown:   fmt.Sprintf("%d", defaultFailoverCooldownSeconds),
 		SettingKeySupplierName:              defaultSupplierName,
 		SettingKeyPricingUsdToCnyRate:       fmt.Sprintf("%f", defaultPricingUsdToCnyRate),
+		SettingKeyKeyActivityEnabled:         fmt.Sprintf("%t", defaultKAEnabled),
+		SettingKeyKeyActivityScanIntervalSec: fmt.Sprintf("%d", defaultKAScanIntervalSec),
+		SettingKeyKeyActivityIPAsSource:      fmt.Sprintf("%t", defaultKAIPAsSource),
+		SettingKeyKeyActivityDormantDays:     fmt.Sprintf("%d", defaultKADormantDays),
+		SettingKeyKeyActivityEWMAAlpha:       fmt.Sprintf("%f", defaultKAEWMAAlpha),
+		SettingKeyKeyActivityEWMAK:           fmt.Sprintf("%f", defaultKAEWMAK),
+		SettingKeyKeyActivityMinBaseline:     fmt.Sprintf("%.0f", defaultKAMinBaseline),
+		SettingKeyKeyActivityMinDev:          fmt.Sprintf("%.0f", defaultKAMinDev),
+		SettingKeyKeyActivityBootstrapDays:   fmt.Sprintf("%d", defaultKABootstrapDays),
 	}
 	existing, _ := s.repo.GetMultiple(allSettingKeys())
 	for k, v := range defaults {
@@ -344,4 +382,27 @@ func (s *SettingsService) ExportAll(ctx context.Context) (map[string]string, err
 
 func (s *SettingsService) ImportSettings(ctx context.Context, settings map[string]string) error {
 	return s.repo.SetMultiple(settings)
+}
+
+// GetKeyActivityConfig 从 system_configs 解析 Key 活动提醒的全部配置
+func (s *SettingsService) GetKeyActivityConfig(ctx context.Context) *keyactivity.KeyActivityConfig {
+	enabled, _ := strconv.ParseBool(getStringSafe(s.repo, SettingKeyKeyActivityEnabled))
+	interval, _ := strconv.Atoi(getStringSafe(s.repo, SettingKeyKeyActivityScanIntervalSec))
+	ipAsSource, _ := strconv.ParseBool(getStringSafe(s.repo, SettingKeyKeyActivityIPAsSource))
+	dormantDays, _ := strconv.Atoi(getStringSafe(s.repo, SettingKeyKeyActivityDormantDays))
+	alpha, _ := strconv.ParseFloat(getStringSafe(s.repo, SettingKeyKeyActivityEWMAAlpha), 64)
+	k, _ := strconv.ParseFloat(getStringSafe(s.repo, SettingKeyKeyActivityEWMAK), 64)
+	minBaseline, _ := strconv.ParseFloat(getStringSafe(s.repo, SettingKeyKeyActivityMinBaseline), 64)
+	minDev, _ := strconv.ParseFloat(getStringSafe(s.repo, SettingKeyKeyActivityMinDev), 64)
+	bootstrapDays, _ := strconv.Atoi(getStringSafe(s.repo, SettingKeyKeyActivityBootstrapDays))
+	return &keyactivity.KeyActivityConfig{
+		Enabled: enabled, ScanIntervalSec: interval, IPAsSource: ipAsSource,
+		DormantDays: dormantDays, Alpha: alpha, K: k,
+		MinBaseline: minBaseline, MinDev: minDev, BootstrapDays: bootstrapDays,
+	}
+}
+
+func getStringSafe(repo SettingsRepository, key string) string {
+	v, _ := repo.GetValue(key)
+	return v
 }

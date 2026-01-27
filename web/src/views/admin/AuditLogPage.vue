@@ -295,9 +295,71 @@
           <div class="ua-content">{{ selectedLog.user_agent }}</div>
         </section>
 
+        <section v-if="parsedDetails && (parsedDetails.request_headers || parsedDetails.request_body || parsedDetails.response_body)" class="drawer-section">
+          <div class="section-title">HTTP 详情</div>
+
+          <div v-if="parsedDetails.request_headers" class="detail-sub-panel">
+            <div class="panel-label">请求头</div>
+            <dl class="kv-grid kv-grid-sm">
+              <div v-for="(val, key) in parsedDetails.request_headers" :key="key" class="kv-item">
+                <dt class="mono-text">{{ key }}</dt>
+                <dd class="mono-text">{{ val }}</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div v-if="parsedDetails.request_body" class="detail-sub-panel">
+            <div class="panel-label">
+              请求体
+              <el-button type="primary" link size="small" @click="copyText(parsedDetails!.request_body!)">
+                <el-icon><CopyDocument /> 复制</el-icon>
+              </el-button>
+            </div>
+            <pre class="details-json">{{ formatJson(parsedDetails.request_body) }}</pre>
+          </div>
+
+          <div v-if="parsedDetails.response_body" class="detail-sub-panel">
+            <div class="panel-label">
+              响应体
+              <el-tag :type="statusClass(selectedLog?.status_code || 200)" size="small">
+                {{ selectedLog?.status_code || parsedDetails.status_code }}
+              </el-tag>
+              <el-button type="primary" link size="small" @click="copyText(parsedDetails!.response_body!)">
+                <el-icon><CopyDocument /> 复制</el-icon>
+              </el-button>
+            </div>
+            <pre class="details-json">{{ formatJson(parsedDetails.response_body) }}</pre>
+          </div>
+        </section>
+
+        <section v-if="parsedDetails && parsedDetails.duration_ms != null" class="drawer-section">
+          <div class="section-title">请求信息</div>
+          <dl class="kv-grid">
+            <div class="kv-item">
+              <dt>耗时</dt>
+              <dd>{{ formatDuration(parsedDetails.duration_ms!) }}</dd>
+            </div>
+            <div v-if="parsedDetails.request_id" class="kv-item">
+              <dt>Request ID</dt>
+              <dd class="mono-text kv-copyable" @click="copyText(parsedDetails!.request_id!)">
+                {{ parsedDetails.request_id }}
+                <el-icon><CopyDocument /></el-icon>
+              </dd>
+            </div>
+            <div v-if="parsedDetails.referer" class="kv-item">
+              <dt>来源页面</dt>
+              <dd>{{ parsedDetails.referer }}</dd>
+            </div>
+            <div v-if="parsedDetails.content_type" class="kv-item">
+              <dt>Content-Type</dt>
+              <dd class="mono-text">{{ parsedDetails.content_type }}</dd>
+            </div>
+          </dl>
+        </section>
+
         <section v-if="selectedLog.details" class="drawer-section">
           <div class="section-title">
-            详细信息
+            原始数据
             <el-button
               type="primary"
               link
@@ -307,7 +369,7 @@
               <el-icon><CopyDocument /> 复制</el-icon>
             </el-button>
           </div>
-          <pre class="details-json">{{ formatJson(selectedLog.details) }}</pre>
+          <pre class="details-json details-json-raw">{{ formatJson(selectedLog.details) }}</pre>
         </section>
       </div>
 
@@ -335,7 +397,7 @@ import {
 } from '@element-plus/icons-vue'
 import { getAuditLogs } from '@/services/audit'
 import { AUDIT_ACTIONS, RESOURCE_TYPES } from '@/types/audit'
-import type { AuditLog, AuditLogQuery } from '@/types/audit'
+import type { AuditLog, AuditLogQuery, AuditDetail } from '@/types/audit'
 import { formatDate } from '@/utils/format'
 
 // 状态
@@ -375,6 +437,15 @@ const selectedLog = ref<AuditLog | null>(null)
 const drawerTitle = computed(() => {
   if (!selectedLog.value) return '操作详情'
   return `${actionLabel(selectedLog.value.action)} · ${selectedLog.value.user_name || '-'}`
+})
+
+const parsedDetails = computed((): AuditDetail | null => {
+  if (!selectedLog.value?.details) return null
+  try {
+    return JSON.parse(selectedLog.value.details) as AuditDetail
+  } catch {
+    return null
+  }
 })
 
 // 日期快捷
@@ -450,6 +521,28 @@ function formatJson(str: string): string {
   } catch {
     return str
   }
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms} ms`
+  if (ms < 60000) return `${(ms / 1000).toFixed(2)} s`
+  const min = Math.floor(ms / 60000)
+  const sec = Math.floor((ms % 60000) / 1000)
+  return `${min} 分 ${sec} 秒`
+}
+
+function sanitizeJSON(obj: unknown): unknown {
+  if (typeof obj !== 'object' || obj === null) return obj
+  if (Array.isArray(obj)) return obj.map(sanitizeJSON)
+  const result: Record<string, unknown> = {}
+  for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
+    if (/password|token|secret|api[_-]?key|authorization|cookie/i.test(key)) {
+      result[key] = '***'
+    } else {
+      result[key] = sanitizeJSON(val)
+    }
+  }
+  return result
 }
 
 function avatarChar(name: string | null | undefined): string {
@@ -1066,6 +1159,44 @@ onUnmounted(() => {
 
 .kv-copyable:hover .el-icon {
   opacity: 1;
+}
+
+.detail-sub-panel {
+  margin-top: 10px;
+}
+
+.panel-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-secondary, #64748B);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.kv-grid-sm {
+  grid-template-columns: 1fr;
+  gap: 6px 12px;
+}
+
+.kv-grid-sm .kv-item {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.kv-grid-sm .kv-item dt {
+  min-width: 120px;
+  flex-shrink: 0;
+}
+
+.details-json-raw {
+  max-height: 240px;
+  font-size: 11px;
+  opacity: 0.85;
 }
 
 .ua-content {

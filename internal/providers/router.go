@@ -264,11 +264,9 @@ func (r *Router) resolveProvider(ctx context.Context, model, providerHint string
 	// Fallback: model names containing "/" (e.g. "ZHIPU/GLM-5.2") produce
 	// qualified keys like "provider/ZHIPU/GLM-5.2" which don't match the
 	// registry key "ZHIPU/GLM-5.2". Try the raw model ID as fallback.
-	usedFallback := false
 	if p == nil && strings.Contains(selector.Model, "/") {
 		if fp := r.lookup.GetProvider(selector.Model); fp != nil {
 			p = fp
-			usedFallback = true
 		}
 	}
 
@@ -289,7 +287,6 @@ func (r *Router) resolveProvider(ctx context.Context, model, providerHint string
 			if p == nil && strings.Contains(selector.Model, "/") {
 				if fp := r.lookup.GetProvider(selector.Model); fp != nil {
 					p = fp
-					usedFallback = true
 				}
 			}
 		}

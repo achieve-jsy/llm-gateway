@@ -260,6 +260,16 @@ func (r *Router) resolveProvider(ctx context.Context, model, providerHint string
 
 	lookupModel := selector.QualifiedModel()
 	p := r.lookup.GetProvider(lookupModel)
+
+	// Fallback: model names containing "/" (e.g. "ZHIPU/GLM-5.2") produce
+	// qualified keys like "provider/ZHIPU/GLM-5.2" which don't match the
+	// registry key "ZHIPU/GLM-5.2". Try the raw model ID as fallback.
+	if p == nil && strings.Contains(selector.Model, "/") {
+		if fp := r.lookup.GetProvider(selector.Model); fp != nil {
+			p = fp
+		}
+	}
+
 	if p == nil && !refreshed {
 		var refreshErr error
 		refreshed, refreshErr = r.refreshProviderModelsForRequest(ctx, requested)
@@ -273,8 +283,15 @@ func (r *Router) resolveProvider(ctx context.Context, model, providerHint string
 			}
 			lookupModel = selector.QualifiedModel()
 			p = r.lookup.GetProvider(lookupModel)
+			// Re-apply fallback after refresh
+			if p == nil && strings.Contains(selector.Model, "/") {
+				if fp := r.lookup.GetProvider(selector.Model); fp != nil {
+					p = fp
+				}
+			}
 		}
 	}
+
 	if p == nil {
 		return nil, core.ModelSelector{}, core.NewNotFoundError("model not found: " + lookupModel)
 	}

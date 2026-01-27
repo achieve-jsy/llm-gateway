@@ -435,27 +435,48 @@
     <!-- ══ 用户排行 ══ -->
     <div class="ud-section">
       <div class="ud-section__header">
-        <span class="ud-section__title">👤 用户排行</span>
+        <span class="ud-section__title">用户排行</span>
         <span class="ud-section__hint">{{ dateRange[0] }} ~ {{ dateRange[1] }}</span>
+      </div>
+
+      <!-- 管辖范围提示条 -->
+      <div v-if="userScopeInfo" class="ud-rank-scope-banner">
+        <el-icon size="13"><InfoFilled /></el-icon>
+        <span>当前展示 <strong>{{ userScopeInfo.name }}</strong> 的用户排行</span>
+        <el-button link size="small" type="primary" style="margin-left:auto" @click="breadcrumbs = []; loadAll()">
+          查看全部
+        </el-button>
       </div>
 
       <!-- KPI 卡片 -->
       <div class="ud-user-kpi-row" v-loading="userRankLoading">
-        <div class="ud-user-kpi-card">
-          <p class="ud-user-kpi__label">活跃用户</p>
-          <p class="ud-user-kpi__value">{{ userRankSummary?.total_users ?? 0 }}</p>
+        <div class="ud-user-kpi-card ud-user-kpi-card--blue">
+          <div class="ud-user-kpi__icon"><el-icon size="18"><User /></el-icon></div>
+          <div class="ud-user-kpi__content">
+            <p class="ud-user-kpi__label">活跃用户</p>
+            <p class="ud-user-kpi__value">{{ userRankSummary?.total_users ?? 0 }}</p>
+          </div>
         </div>
-        <div class="ud-user-kpi-card">
-          <p class="ud-user-kpi__label">人均费用</p>
-          <p class="ud-user-kpi__value">{{ userAvgCost }}</p>
+        <div class="ud-user-kpi-card ud-user-kpi-card--green">
+          <div class="ud-user-kpi__icon"><el-icon size="18"><Money /></el-icon></div>
+          <div class="ud-user-kpi__content">
+            <p class="ud-user-kpi__label">人均费用</p>
+            <p class="ud-user-kpi__value">{{ userAvgCost }}</p>
+          </div>
         </div>
-        <div class="ud-user-kpi-card">
-          <p class="ud-user-kpi__label">人均 Token</p>
-          <p class="ud-user-kpi__value">{{ userAvgTokens }}</p>
+        <div class="ud-user-kpi-card ud-user-kpi-card--purple">
+          <div class="ud-user-kpi__icon"><el-icon size="18"><DataLine /></el-icon></div>
+          <div class="ud-user-kpi__content">
+            <p class="ud-user-kpi__label">人均 Token</p>
+            <p class="ud-user-kpi__value">{{ userAvgTokens }}</p>
+          </div>
         </div>
-        <div class="ud-user-kpi-card">
-          <p class="ud-user-kpi__label">人均调用</p>
-          <p class="ud-user-kpi__value">{{ userAvgCalls }}</p>
+        <div class="ud-user-kpi-card ud-user-kpi-card--amber">
+          <div class="ud-user-kpi__icon"><el-icon size="18"><List /></el-icon></div>
+          <div class="ud-user-kpi__content">
+            <p class="ud-user-kpi__label">人均调用</p>
+            <p class="ud-user-kpi__value">{{ userAvgCalls }}</p>
+          </div>
         </div>
       </div>
 
@@ -464,7 +485,12 @@
         <!-- 费用占比环形图 -->
         <div class="ud-chart-wrap ud-chart-wrap--user" v-loading="userRankLoading">
           <canvas ref="userRankCanvasRef" class="ud-model-canvas" />
-          <div v-if="!userRankLoading && userRankRows.length === 0" class="ud-chart-empty">暂无数据</div>
+          <div v-if="!userRankLoading && userRankRows.length === 0" class="ud-chart-empty">
+            <div class="ud-chart-empty-inner">
+              <el-icon size="32" style="color:var(--ud-faint)"><User /></el-icon>
+              <p>暂无用户数据</p>
+            </div>
+          </div>
         </div>
 
         <!-- 排行表格 -->
@@ -492,9 +518,9 @@
                 <td class="col-rank">
                   <span :class="['ud-rank-num', i < 3 ? `ud-rank-num--top${i+1}` : '']">{{ i + 1 }}</span>
                 </td>
-                <td>{{ row.user_name || row.user_id.slice(0, 8) }}</td>
-                <td>{{ row.dept_name || '—' }}</td>
-                <td class="col-num c-green fw6">{{ fmtCost(row.est_cost_usd) }}</td>
+                <td class="ud-user-name-cell">{{ row.user_name || row.user_id.slice(0, 8) }}</td>
+                <td class="ud-dept-cell">{{ row.dept_name || '—' }}</td>
+                <td class="col-num ud-cost-val">{{ fmtCost(row.est_cost_usd) }}</td>
                 <td class="col-num">{{ fmtTokens(row.total_tokens) }}</td>
                 <td class="col-num">{{ fmtNum(row.call_count) }}</td>
                 <td class="col-num" :class="{ 'ud-error-text': row.error_count > 0 }">{{ row.error_count }}</td>
@@ -518,7 +544,12 @@
                 </td>
               </tr>
               <tr v-if="!userRankLoading && userRankRows.length === 0">
-                <td colspan="9" class="ud-empty">暂无数据</td>
+                <td colspan="9">
+                  <div class="ud-empty-block" style="padding:32px">
+                    <el-icon size="28" style="color:var(--ud-faint)"><User /></el-icon>
+                    <p>暂无用户数据</p>
+                  </div>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -556,7 +587,7 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Chart, registerables } from 'chart.js'
 import {
   Refresh, DataLine, Money, User, ArrowRight, ArrowUp, ArrowDown,
-  List, Search, WarningFilled,
+  List, Search, WarningFilled, InfoFilled,
 } from '@element-plus/icons-vue'
 import UsageRecordTable from '@/components/usage/UsageRecordTable.vue'
 import type { TraceData } from '@/components/usage/UsageTraceDrawer.vue'
@@ -667,6 +698,25 @@ const rankPage = ref(1)
 const rankPageSize = 20
 const rankTotal = ref(0)
 const breadcrumbs = ref<Array<{ scope: string; id: string; name: string }>>([])
+
+// 根据当前面包屑最末层 scope 返回对应 API 参数（dept_id / studio_id / user_id）
+function scopeParams(): Record<string, string> {
+  const last = breadcrumbs.value[breadcrumbs.value.length - 1]
+  if (!last?.id) return {}
+  if (last.scope === 'user')   return { user_id: last.id }
+  if (last.scope === 'dept')   return { dept_id: last.id }
+  if (last.scope === 'studio') return { studio_id: last.id }
+  return {}
+}
+
+// 当面包屑处于 dept/studio 层时，用户排行显示范围提示
+const userScopeInfo = computed(() => {
+  const last = breadcrumbs.value[breadcrumbs.value.length - 1]
+  if (!last?.id) return null
+  if (last.scope === 'dept')   return { type: 'dept',   name: last.name }
+  if (last.scope === 'studio') return { type: 'studio', name: last.name }
+  return null
+})
 
 const currentScope = computed(() => {
   if (breadcrumbs.value.length > 0)
@@ -945,8 +995,7 @@ async function loadTrend() {
   trendLoading.value = true
   try {
     const trendParams: Record<string, any> = { start: dateRange.value[0], end: dateRange.value[1] }
-    const last = breadcrumbs.value[breadcrumbs.value.length - 1]
-    if (last?.scope === 'user' && last?.id) trendParams.user_id = last.id
+    Object.assign(trendParams, scopeParams())
     if (filterModel.value) trendParams.model_name = filterModel.value
     if (filterStatus.value) trendParams.status = filterStatus.value
 
@@ -1125,8 +1174,7 @@ async function loadModels() {
   modelsLoading.value = true
   try {
     const modelParams: Record<string, any> = { start: dateRange.value[0], end: dateRange.value[1] }
-    const last = breadcrumbs.value[breadcrumbs.value.length - 1]
-    if (last?.scope === 'user' && last?.id) modelParams.user_id = last.id
+    Object.assign(modelParams, scopeParams())
     if (filterStatus.value) modelParams.status = filterStatus.value
     const res = await http.get('/api/v1/usage/dashboard/models', { params: modelParams })
     modelsData.value = res.data?.rows ?? []
@@ -1292,10 +1340,14 @@ async function loadLogs() {
       page:  logsPage.value,
       page_size: logsPageSize.value,
     }
-    // 当面包屑下钻到具体用户时，精确按 user_id 过滤（优先于姓名搜索）
-    const last = breadcrumbs.value[breadcrumbs.value.length - 1]
-    if (last?.scope === 'user' && last?.id) {
-      params.user_id = last.id
+    // 当面包屑下钻时，按 scope 类型传递对应过滤参数
+    const sp = scopeParams()
+    if (sp.user_id) {
+      params.user_id = sp.user_id
+    } else if (sp.dept_id) {
+      params.dept_id = sp.dept_id
+    } else if (sp.studio_id) {
+      params.studio_id = sp.studio_id
     } else {
       if (filterUserName.value) params.user_name = filterUserName.value
     }
@@ -1394,11 +1446,13 @@ const userAvgCalls = computed(() => {
 async function loadUserRanking() {
   userRankLoading.value = true
   try {
+    const sp = scopeParams()
     const params: Record<string, any> = {
       from: dateRange.value[0],
       to:   dateRange.value[1],
       page: 1,
       page_size: 50,
+      ...sp,
     }
     const res = await http.get('/api/v1/usage/dashboard/users', { params })
     userRankRows.value    = res.data?.rows ?? []
@@ -1408,6 +1462,7 @@ async function loadUserRanking() {
       from:  dateRange.value[0],
       to:    dateRange.value[1],
       top_n: 3,
+      ...sp,
     }
     const topResp = await http.get('/api/v1/usage/dashboard/user-top-models', { params: topParams })
     userTopModels.value = topResp.data?.models ?? {}
@@ -1843,6 +1898,11 @@ watch(currency, async () => {
   display: flex; align-items: center; justify-content: center;
   color: var(--ud-faint); font-size: 13px;
 }
+.ud-chart-empty-inner {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  color: var(--ud-faint); font-size: 13px;
+}
+.ud-chart-empty-inner p { margin: 0; }
 
 /* ── 两列布局 ── */
 .ud-main-row {
@@ -2109,28 +2169,60 @@ watch(currency, async () => {
 .ud-empty-block p { margin-top: 12px; font-size: 14px; }
 
 /* ── 用户排行 ── */
+.ud-rank-scope-banner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 20px;
+  background: var(--el-color-primary-light-9);
+  border-bottom: 1px solid var(--el-color-primary-light-7);
+  font-size: 13px; color: var(--el-color-primary);
+}
+.ud-rank-scope-banner strong { color: var(--el-color-primary-dark-2, #1a6fd4); }
+
 .ud-user-kpi-row {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  padding: 16px 20px;
+  gap: 0;
   border-bottom: 1px solid var(--ud-border);
 }
 @media (max-width: 900px) { .ud-user-kpi-row { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 540px) { .ud-user-kpi-row { grid-template-columns: 1fr; } }
 
 .ud-user-kpi-card {
-  background: var(--el-fill-color-light);
-  border-radius: 10px;
-  padding: 14px 16px;
-  text-align: center;
+  display: flex; align-items: center; gap: 12px;
+  padding: 16px 20px;
+  border-right: 1px solid var(--ud-border);
+  position: relative; overflow: hidden;
 }
+.ud-user-kpi-card:last-child { border-right: none; }
+.ud-user-kpi-card::before {
+  content: ''; position: absolute; top: 0; left: 0;
+  width: 3px; height: 100%;
+}
+.ud-user-kpi-card--blue::before   { background: #409eff; }
+.ud-user-kpi-card--green::before  { background: #67c23a; }
+.ud-user-kpi-card--purple::before { background: #8B5CF6; }
+.ud-user-kpi-card--amber::before  { background: #e6a23c; }
+
+.ud-user-kpi__icon {
+  width: 36px; height: 36px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.ud-user-kpi-card--blue   .ud-user-kpi__icon { background: rgba(64,158,255,0.12);  color: #409eff; }
+.ud-user-kpi-card--green  .ud-user-kpi__icon { background: rgba(103,194,58,0.12);  color: #67c23a; }
+.ud-user-kpi-card--purple .ud-user-kpi__icon { background: rgba(139,92,246,0.12);  color: #8B5CF6; }
+.ud-user-kpi-card--amber  .ud-user-kpi__icon { background: rgba(230,162,60,0.12);  color: #e6a23c; }
+
+.ud-user-kpi__content { flex: 1; min-width: 0; }
 .ud-user-kpi__label {
-  margin: 0; font-size: 12px; color: var(--ud-muted);
+  margin: 0; font-size: 11px; color: var(--ud-muted);
+  text-transform: uppercase; letter-spacing: .03em;
 }
 .ud-user-kpi__value {
-  margin: 6px 0 0; font-size: 26px; font-weight: 700;
+  margin: 4px 0 0; font-size: 22px; font-weight: 700;
   color: var(--el-text-color-primary);
+  font-family: var(--ud-mono);
+  line-height: 1.2;
 }
 
 .ud-user-main-row {
@@ -2147,6 +2239,9 @@ watch(currency, async () => {
 
 .ud-row-error-bg { background: rgba(245, 108, 108, 0.05); }
 .ud-error-text { color: var(--el-color-danger); font-weight: 600; }
+.ud-cost-val { color: #48a014; font-weight: 600; }
+.ud-user-name-cell { font-weight: 500; color: var(--el-text-color-primary); }
+.ud-dept-cell { font-size: 12px; color: var(--ud-muted); }
 
 .ud-top-model-tags { display: flex; flex-wrap: wrap; gap: 4px; }
 .ud-top-model-tag { max-width: 220px; }

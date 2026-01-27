@@ -732,6 +732,8 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 	statusStr    := c.Query("status")   // "success" | "error" | ""
 	filterUserID := c.Query("user_id")  // 查看特定成员时传入（精确）
 	filterUser   := c.Query("user_name") // 成员姓名模糊搜索
+	filterDeptID := c.Query("dept_id")   // 按部门筛选
+	filterStudioID := c.Query("studio_id") // 按工作室筛选
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
 	if page < 1 {
@@ -757,6 +759,12 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 	}
 	if filterUser != "" {
 		base = base.Where("user_name ILIKE ?", "%"+filterUser+"%")
+	}
+	if filterDeptID != "" {
+		base = base.Where("dept_id = ?", filterDeptID)
+	}
+	if filterStudioID != "" {
+		base = base.Where("studio_id = ?", filterStudioID)
 	}
 	if modelName != "" {
 		base = base.Where("model ILIKE ?", "%"+modelName+"%")

@@ -232,7 +232,7 @@ func (h *Handler) Callback(c *gin.Context) {
 		return
 	}
 
-	refreshToken, err := GenerateRefreshToken(h.config.JWTSecret, user.ID.String(), user.Role)
+	refreshToken, err := GenerateRefreshToken(h.config.JWTSecret, user.ID.String(), user.Role, userInfo.Name, userInfo.Email, userInfo.Passport)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "failed to generate token", "code": "token_generation_failed"}})
 		return
@@ -457,8 +457,13 @@ func (h *Handler) Refresh(c *gin.Context) {
 
 	// Refresh 时重新查库获取最新的 dept/studio 信息，
 	// 避免 org 变动后 token 里的 studio_id 仍为旧值导致 OrgCheck 403。
+	name, email, passport := claims.Name, claims.Email, claims.Passport
 	deptID, deptName, studioID, studioName := claims.DeptID, claims.DeptName, claims.StudioID, claims.StudioName
 	if claims.UserID != "" {
+		// 从 users 表刷新 name/email/sub（SSO 用户）；dev_users 用户回退到 claims
+		if freshName, freshEmail, freshPassport := h.userIdentityInfo(c.Request.Context(), claims.UserID); freshName != "" {
+			name, email, passport = freshName, freshEmail, freshPassport
+		}
 		if freshStudioID, freshStudioName := h.deptStudioInfo(claims.DeptID); freshStudioID != "" {
 			studioID = freshStudioID
 			studioName = freshStudioName
@@ -475,12 +480,12 @@ func (h *Handler) Refresh(c *gin.Context) {
 		}
 	}
 
-	accessToken, err := GenerateAccessToken(h.config.JWTSecret, h.config.AccessTokenTTL, claims.UserID, deptID, deptName, studioID, studioName, claims.Email, claims.Name, claims.Passport, claims.Role)
+	accessToken, err := GenerateAccessToken(h.config.JWTSecret, h.config.AccessTokenTTL, claims.UserID, deptID, deptName, studioID, studioName, email, name, passport, claims.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "token generation failed", "code": "internal"}})
 		return
 	}
-	refreshToken, err := GenerateRefreshToken(h.config.JWTSecret, claims.UserID, claims.Role)
+	refreshToken, err := GenerateRefreshToken(h.config.JWTSecret, claims.UserID, claims.Role, name, email, passport)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "token generation failed", "code": "internal"}})
 		return
@@ -542,6 +547,37 @@ func (h *Handler) deptStudioInfo(ehrDeptID string) (studioID, studioName string)
 		LIMIT 1
 	`, ehrDeptID).Scan(&row)
 	return row.StudioID, row.StudioName
+}
+
+// userIdentityInfo 通过 user_id 查询用户的 name、email、sub（passport）。
+// 优先查 users 表（SSO 用户），未命中则查 dev_users 表（dev 用户）。
+// 用于 Refresh Token 时刷新 JWT 里的身份信息。
+func (h *Handler) userIdentityInfo(ctx context.Context, userID string) (name, email, passport string) {
+	var row struct {
+		Name  string `gorm:"column:name"`
+		Email string `gorm:"column:email"`
+		Sub   string `gorm:"column:sub"`
+	}
+	h.db.WithContext(ctx).Raw(`
+		SELECT COALESCE(name, '') AS name, COALESCE(email, '') AS email, COALESCE(sub, '') AS sub
+		FROM users
+		WHERE id::text = ?
+		LIMIT 1
+	`, userID).Scan(&row)
+	if row.Name != "" {
+		return row.Name, row.Email, row.Sub
+	}
+	// dev_users fallback
+	var devRow struct {
+		Username string `gorm:"column:username"`
+	}
+	h.db.WithContext(ctx).Raw(`
+		SELECT username FROM dev_users WHERE id::text = ? LIMIT 1
+	`, userID).Scan(&devRow)
+	if devRow.Username != "" {
+		return devRow.Username, devRow.Username + "@admin.local", userID
+	}
+	return "", "", ""
 }
 
 // userDeptInfo 通过 user_id 查询用户最新的 SSO dept_id 和 dept_name。

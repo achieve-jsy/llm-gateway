@@ -296,7 +296,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	// 管理接口组（JWT 认证）
 	adminGroup := r.Group("/api/v1")
 	adminGroup.Use(middleware.JWTAuth())
-	adminGroup.Use(middleware.AuditMiddleware(auditSvc))
+	adminGroup.Use(middleware.AuditMiddleware(auditSvc, db))
 	{
 		// 渠道定义（Registry）
 		adminGroup.GET("/provider-definitions", defHandler.ListDefinitions)

@@ -144,7 +144,7 @@ func TestAuditLogService_RecordAndList(t *testing.T) {
 
 	// 查询
 	var uid uuid.UUID = testUserID
-	items, total, err := svc.List(0, 10, &uid, "", "", "", nil, nil)
+	items, total, err := svc.List(0, 10, &uid, "", "", "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -185,13 +185,13 @@ func TestAuditLogService_ListClampsLimit(t *testing.T) {
 	svc := NewAuditLogService(repository.NewAuditLogRepo(db))
 
 	// limit=0 应自动兜底为 20
-	_, _, err = svc.List(0, 0, nil, "", "", "", nil, nil)
+	_, _, err = svc.List(0, 0, nil, "", "", "", nil, nil, nil)
 	if err != nil {
 		t.Errorf("List with limit=0 should not error: %v", err)
 	}
 
 	// limit=-5 应兜底
-	_, _, err = svc.List(-5, -10, nil, "", "", "", nil, nil)
+	_, _, err = svc.List(-5, -10, nil, "", "", "", nil, nil, nil)
 	if err != nil {
 		t.Errorf("List with negative limit should not error: %v", err)
 	}

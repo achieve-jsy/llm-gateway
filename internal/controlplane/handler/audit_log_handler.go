@@ -29,15 +29,21 @@ func (h *AuditLogHandler) List(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
 
-	// 非全局管理员只能查自己管辖部门的日志（dept_id 必传）
 	deptID := c.Query("dept_id")
-	if !actor.IsGlobal && deptID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "非全局管理员必须指定 dept_id"})
-		return
-	}
-	if !actor.IsGlobal && deptID != "" && !actor.HasDept(deptID) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "无权查看该部门的审计日志"})
-		return
+	var deptIDs []string
+	if !actor.IsGlobal {
+		if deptID != "" {
+			if !actor.HasDept(deptID) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "无权查看该部门的审计日志"})
+				return
+			}
+		} else {
+			deptIDs = actor.DeptIDs
+			if len(deptIDs) == 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "您没有被授权查看任何部门的审计日志"})
+				return
+			}
+		}
 	}
 
 	page := 1
@@ -75,7 +81,7 @@ func (h *AuditLogHandler) List(c *gin.Context) {
 	}
 
 	offset := (page - 1) * pageSize
-	items, total, err := h.auditSvc.List(offset, pageSize, userID, action, resourceType, deptID, from, to)
+	items, total, err := h.auditSvc.List(offset, pageSize, userID, action, resourceType, deptID, deptIDs, from, to)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

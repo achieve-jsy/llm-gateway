@@ -199,6 +199,7 @@ import {
 } from '@element-plus/icons-vue'
 import { useSettingsStore } from '@/stores/settings'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
+import { fmtDateTime, fmtDuration } from '@/utils/time'
 
 export interface LogRow {
   request_id: string; ts: string; key_id: string; key_name?: string
@@ -283,15 +284,6 @@ const fmtPrice = (n?: number | null) => {
   return sym + (Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(4).replace(/0+$/, '').replace(/\.$/, ''))
 }
 
-const fmtDateTime = (s?: string) => {
-  if (!s) return '—'
-  return s.replace('T', ' ').replace(/\.\d+Z$/, '').replace('Z', '').substring(0, 19)
-}
-
-const fmtDuration = (ms?: number) => {
-  if (!ms && ms !== 0) return '—'
-  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(2)}s`
-}
 
 const maskKey = (k?: string) => !k ? '—' : k.length > 14 ? k.slice(0, 6) + '···' + k.slice(-4) : k
 

@@ -472,6 +472,7 @@ import { useRoute } from 'vue-router'
 import http from '@/services/http'
 import { useSettingsStore } from '@/stores/settings'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
+import { fmtDateTime, fmtDuration } from '@/utils/time'
 
 Chart.register(...registerables)
 
@@ -1311,12 +1312,6 @@ const fmtPrice = (n?: number | null) => {
   if (n === 0) return `${sym}0`
   const v = convertCost(n, cc.value)
   return sym + (Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(4).replace(/0+$/, '').replace(/\.$/, ''))
-}
-const fmtDateTime = (s?: string) =>
-  s ? s.replace('T', ' ').replace(/\.\d+Z$/, '').slice(0, 19) : '—'
-const fmtDuration = (ms?: number | null) => {
-  if (ms == null) return '—'
-  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(2)}s`
 }
 const barPct = (v: number, max: number) => !max || !v ? 0 : Math.round(v / max * 100)
 const fmtJSON = (v: any): string => {

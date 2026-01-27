@@ -438,6 +438,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
 import { isDark } from '@/composables/useTheme'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
+import { fmtDateTime, fmtDate, fmtDuration } from '@/utils/time'
 
 Chart.register(
   LineController, DoughnutController, BarController,
@@ -747,17 +748,6 @@ const fmtTokens = (n?: number | null) => {
   if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M'
   if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K'
   return String(n)
-}
-const fmtDate = (s?: string) => s ? s.split('T')[0] : '—'
-const fmtDateTime = (s?: string) => {
-  if (!s) return '—'
-  const d = new Date(s)
-  if (isNaN(d.getTime())) return s.replace('T', ' ').replace(/\.\d+Z?$/, '').substring(0, 19)
-  return d.toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' }).replace('T', ' ')
-}
-const fmtDuration = (ms?: number) => {
-  if (!ms && ms !== 0) return '—'
-  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(2)}s`
 }
 const maskKey = (k?: string) => !k ? '—' : k.length > 14 ? k.slice(0, 6) + '···' + k.slice(-4) : k
 function keyLabel(keyId: string, keyName: string): string {

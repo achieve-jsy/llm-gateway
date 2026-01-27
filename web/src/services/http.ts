@@ -1,6 +1,7 @@
 import axios from 'axios'
 import type { AxiosInstance, InternalAxiosRequestConfig, AxiosResponse } from 'axios'
 import { ElMessage } from 'element-plus'
+import { refreshOnce } from './tokenRefresh'
 
 /** BE 机器码 → 用户友好中文提示映射 */
 export const ERROR_MESSAGES: Record<string, string> = {
@@ -29,7 +30,7 @@ export function resolveErrorMessage(error: unknown): string | null {
   return code ? (ERROR_MESSAGES[code] ?? null) : null
 }
 
-/** 独立 axios 实例，用于刷新 token（不经过拦截器，避免循环） */
+/** 独立 axios 实例，保留备用（刷新逻辑已统一收拢到 refreshOnce，此实例不再承担刷新职责） */
 const refreshClient = axios.create({
   timeout: 10000,
   headers: { 'Content-Type': 'application/json' },
@@ -62,29 +63,12 @@ function isAuthEndpoint(url: string): boolean {
   return url.startsWith('/auth/') || url.startsWith('/api/v1/me')
 }
 
-/** 并发刷新锁：避免多个 401 请求同时触发刷新 */
-let refreshPromise: Promise<string | null> | null = null
-
 function clearAuthAndRedirect(message: string) {
   localStorage.removeItem('access_token')
   localStorage.removeItem('refresh_token')
   ElMessage.error(message)
   if (window.location.pathname !== '/login') {
     window.location.href = '/login'
-  }
-}
-
-async function tryRefreshToken(): Promise<string | null> {
-  const refreshToken = localStorage.getItem('refresh_token')
-  if (!refreshToken) return null
-  try {
-    const res = await refreshClient.post('/auth/refresh', { refresh_token: refreshToken })
-    const data = res.data
-    localStorage.setItem('access_token', data.accessToken)
-    localStorage.setItem('refresh_token', data.refreshToken)
-    return data.accessToken
-  } catch {
-    return null
   }
 }
 
@@ -101,13 +85,10 @@ http.interceptors.response.use(
     const message = friendlyMsg ?? backendMessage ?? error.message ?? '请求失败'
     const config = error.config as InternalAxiosRequestConfig & { _retrying?: boolean; _silent?: boolean }
 
-    // 全局 401 处理：先尝试 refresh token 续期，失败后再清 token 跳登录
+    // 全局 401 处理：通过共享锁 refreshOnce 续期，避免多路并发双重消耗 RT
     if (status === 401 && !isAuthEndpoint(requestUrl) && !config._retrying) {
-      if (!refreshPromise) {
-        refreshPromise = tryRefreshToken()
-      }
-      const newToken = await refreshPromise
-      refreshPromise = null
+      const pair = await refreshOnce()
+      const newToken = pair?.accessToken ?? null
 
       if (newToken) {
         config._retrying = true

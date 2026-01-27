@@ -358,6 +358,7 @@
             @change="loadStats" @click.stop>
             <el-radio-button value="day">按天</el-radio-button>
             <el-radio-button value="model">按模型</el-radio-button>
+            <el-radio-button value="key">按 Key</el-radio-button>
           </el-radio-group>
           <span class="mu-toggle-btn">{{ modelDetailOpen ? '收起 ▲' : '展开 ▼' }}</span>
         </div>
@@ -370,6 +371,13 @@
           </el-table-column>
           <el-table-column v-if="groupBy==='model'" prop="model" label="模型" min-width="160" sortable>
             <template #default="{ row }"><span class="mu-model-name">{{ row.model || '—' }}</span></template>
+          </el-table-column>
+          <el-table-column v-if="groupBy==='key'" prop="key_name" label="Key 名称" min-width="180" sortable>
+            <template #default="{ row }">
+              <span v-if="row.key_name">{{ row.key_name }}</span>
+              <span v-else-if="row.key_id && row.key_id !== 'unknown'" class="mu-muted-text">{{ row.key_id.slice(0, 8) }}…</span>
+              <span v-else class="mu-muted-text">未知 Key</span>
+            </template>
           </el-table-column>
           <el-table-column prop="req_count" label="调用" min-width="80" align="right" sortable>
             <template #default="{ row }">{{ fmtNum(row.req_count) }}</template>
@@ -438,6 +446,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
 import { isDark } from '@/composables/useTheme'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
+import { fmtDateTime, fmtDate, fmtDuration } from '@/utils/time'
 
 Chart.register(
   LineController, DoughnutController, BarController,
@@ -491,6 +500,7 @@ function chartTheme() {
 // ── Types ──
 interface StatsRow {
   stat_date?: string; model?: string
+  key_id?: string; key_name?: string
   req_count: number; success_count?: number
   prompt_tokens: number; cached_tokens: number; completion_tokens: number
   reasoning_tokens?: number; est_cost_usd: number
@@ -747,17 +757,6 @@ const fmtTokens = (n?: number | null) => {
   if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M'
   if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K'
   return String(n)
-}
-const fmtDate = (s?: string) => s ? s.split('T')[0] : '—'
-const fmtDateTime = (s?: string) => {
-  if (!s) return '—'
-  const d = new Date(s)
-  if (isNaN(d.getTime())) return s.replace('T', ' ').replace(/\.\d+Z?$/, '').substring(0, 19)
-  return d.toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' }).replace('T', ' ')
-}
-const fmtDuration = (ms?: number) => {
-  if (!ms && ms !== 0) return '—'
-  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(2)}s`
 }
 const maskKey = (k?: string) => !k ? '—' : k.length > 14 ? k.slice(0, 6) + '···' + k.slice(-4) : k
 function keyLabel(keyId: string, keyName: string): string {

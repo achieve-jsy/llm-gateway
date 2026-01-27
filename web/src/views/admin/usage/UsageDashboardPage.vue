@@ -432,6 +432,100 @@
 
     </div>
 
+    <!-- ══ 用户排行 ══ -->
+    <div class="ud-section">
+      <div class="ud-section__header">
+        <span class="ud-section__title">👤 用户排行</span>
+        <span class="ud-section__hint">{{ dateRange[0] }} ~ {{ dateRange[1] }}</span>
+      </div>
+
+      <!-- KPI 卡片 -->
+      <div class="ud-user-kpi-row" v-loading="userRankLoading">
+        <div class="ud-user-kpi-card">
+          <p class="ud-user-kpi__label">活跃用户</p>
+          <p class="ud-user-kpi__value">{{ userRankSummary?.total_users ?? 0 }}</p>
+        </div>
+        <div class="ud-user-kpi-card">
+          <p class="ud-user-kpi__label">人均费用</p>
+          <p class="ud-user-kpi__value">{{ userAvgCost }}</p>
+        </div>
+        <div class="ud-user-kpi-card">
+          <p class="ud-user-kpi__label">人均 Token</p>
+          <p class="ud-user-kpi__value">{{ userAvgTokens }}</p>
+        </div>
+        <div class="ud-user-kpi-card">
+          <p class="ud-user-kpi__label">人均调用</p>
+          <p class="ud-user-kpi__value">{{ userAvgCalls }}</p>
+        </div>
+      </div>
+
+      <!-- 环形图 + 排行表格 -->
+      <div class="ud-user-main-row">
+        <!-- 费用占比环形图 -->
+        <div class="ud-chart-wrap ud-chart-wrap--user" v-loading="userRankLoading">
+          <canvas ref="userRankCanvasRef" class="ud-model-canvas" />
+          <div v-if="!userRankLoading && userRankRows.length === 0" class="ud-chart-empty">暂无数据</div>
+        </div>
+
+        <!-- 排行表格 -->
+        <div class="ud-user-table-wrap" v-loading="userRankLoading">
+          <table class="ud-rank-table">
+            <thead>
+              <tr>
+                <th class="col-rank">#</th>
+                <th>用户</th>
+                <th>部门</th>
+                <th class="col-num">费用</th>
+                <th class="col-num">Token</th>
+                <th class="col-num">调用</th>
+                <th class="col-num">错误</th>
+                <th class="col-num">模型数</th>
+                <th>Top3 模型</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="(row, i) in userRankRows"
+                :key="row.user_id"
+                :class="{ 'ud-row-error-bg': row.error_count > 0 }"
+              >
+                <td class="col-rank">
+                  <span :class="['ud-rank-num', i < 3 ? `ud-rank-num--top${i+1}` : '']">{{ i + 1 }}</span>
+                </td>
+                <td>{{ row.user_name || row.user_id.slice(0, 8) }}</td>
+                <td>{{ row.dept_name || '—' }}</td>
+                <td class="col-num c-green fw6">{{ fmtCost(row.est_cost_usd) }}</td>
+                <td class="col-num">{{ fmtTokens(row.total_tokens) }}</td>
+                <td class="col-num">{{ fmtNum(row.call_count) }}</td>
+                <td class="col-num" :class="{ 'ud-error-text': row.error_count > 0 }">{{ row.error_count }}</td>
+                <td class="col-num">{{ row.model_count }}</td>
+                <td>
+                  <div class="ud-top-model-tags">
+                    <el-tag
+                      v-for="(m, mi) in (userTopModels[row.user_id] ?? []).slice(0, 3)"
+                      :key="m.model"
+                      :type="mi === 0 ? '' : mi === 1 ? 'success' : 'warning'"
+                      size="small"
+                      class="ud-top-model-tag"
+                      effect="light"
+                    >
+                      {{ m.model.length > 18 ? m.model.slice(0, 16) + '…' : m.model }}
+                      <span v-if="row.est_cost_usd > 0" class="ud-model-pct">
+                        ({{ ((m.est_cost_usd / row.est_cost_usd) * 100).toFixed(0) }}%)
+                      </span>
+                    </el-tag>
+                  </div>
+                </td>
+              </tr>
+              <tr v-if="!userRankLoading && userRankRows.length === 0">
+                <td colspan="9" class="ud-empty">暂无数据</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <!-- ══ 调用明细 ══ -->
     <UsageRecordTable
       :rows="logRows"
@@ -472,6 +566,7 @@ import { useRoute } from 'vue-router'
 import http from '@/services/http'
 import { useSettingsStore } from '@/stores/settings'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
+import { fmtDateTime, fmtDuration } from '@/utils/time'
 
 Chart.register(...registerables)
 
@@ -1266,11 +1361,147 @@ function onUserNameClear() {
   reloadLogs()
 }
 
+// ── 用户排行 ──────────────────────────────────────────────────
+const userRankLoading   = ref(false)
+const userRankRows      = ref<any[]>([])
+const userRankSummary   = ref<any>(null)
+const userTopModels     = ref<Record<string, any[]>>({})
+const userRankCanvasRef = ref<HTMLCanvasElement | null>(null)
+let   userRankChartInst: Chart | null = null
+
+const USER_RANK_COLORS = [
+  '#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#8B5CF6', '#9ca3af',
+]
+
+const userAvgCost = computed(() => {
+  const s = userRankSummary.value
+  if (!s?.total_users || !s?.total_cost_usd) return '—'
+  return fmtCost(s.total_cost_usd / s.total_users)
+})
+
+const userAvgTokens = computed(() => {
+  const s = userRankSummary.value
+  if (!s?.total_users || !s?.total_tokens) return '—'
+  return fmtTokens(Math.round(s.total_tokens / s.total_users))
+})
+
+const userAvgCalls = computed(() => {
+  const s = userRankSummary.value
+  if (!s?.total_users || !s?.total_calls) return '—'
+  return Math.round(s.total_calls / s.total_users).toLocaleString()
+})
+
+async function loadUserRanking() {
+  userRankLoading.value = true
+  try {
+    const params: Record<string, any> = {
+      from: dateRange.value[0],
+      to:   dateRange.value[1],
+      page: 1,
+      page_size: 50,
+    }
+    const res = await http.get('/api/v1/usage/dashboard/users', { params })
+    userRankRows.value    = res.data?.rows ?? []
+    userRankSummary.value = res.data?.summary ?? null
+
+    const topParams: Record<string, any> = {
+      from:  dateRange.value[0],
+      to:    dateRange.value[1],
+      top_n: 3,
+    }
+    const topResp = await http.get('/api/v1/usage/dashboard/user-top-models', { params: topParams })
+    userTopModels.value = topResp.data?.models ?? {}
+  } catch {
+    userRankRows.value    = []
+    userRankSummary.value = null
+    userTopModels.value   = {}
+  } finally {
+    userRankLoading.value = false
+    await nextTick()
+    renderUserRankChart()
+  }
+}
+
+function renderUserRankChart() {
+  if (!userRankCanvasRef.value) return
+  userRankChartInst?.destroy()
+  const raw = userRankRows.value
+  if (!raw.length) return
+
+  const TOP_N = 5
+  type ChartEntry = { label: string; value: number }
+  let data: ChartEntry[]
+  if (raw.length > TOP_N) {
+    const top  = raw.slice(0, TOP_N)
+    const rest = raw.slice(TOP_N)
+    const restCost = rest.reduce((s: number, r: any) => s + (r.est_cost_usd ?? 0), 0)
+    data = [
+      ...top.map((r: any): ChartEntry => ({ label: r.user_name || r.user_id.slice(0, 8), value: r.est_cost_usd ?? 0 })),
+      { label: `其他 (${rest.length} 人)`, value: restCost },
+    ]
+  } else {
+    data = raw.map((r: any): ChartEntry => ({ label: r.user_name || r.user_id.slice(0, 8), value: r.est_cost_usd ?? 0 }))
+  }
+
+  const labels = data.map(d => d.label)
+  const values = data.map(d => d.value)
+  const colors = data.map((_: ChartEntry, i: number) =>
+    i < TOP_N ? USER_RANK_COLORS[i % USER_RANK_COLORS.length] : '#9ca3af'
+  )
+  const total = values.reduce((s: number, v: number) => s + v, 0)
+
+  userRankChartInst = new Chart(userRankCanvasRef.value, {
+    type: 'doughnut',
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        backgroundColor: colors,
+        borderColor: 'rgba(255,255,255,0.8)',
+        borderWidth: 2,
+        hoverOffset: 8,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'right',
+          labels: {
+            boxWidth: 12, padding: 10, font: { size: 11 },
+            generateLabels: (chart: any) => {
+              const meta = chart.getDatasetMeta(0)
+              return (chart.data.labels as string[]).map((label: string, i: number) => ({
+                text: label,
+                fillStyle: colors[i],
+                strokeStyle: colors[i],
+                hidden: meta.data[i]?.hidden,
+                index: i,
+              }))
+            },
+          },
+        },
+        tooltip: {
+          callbacks: {
+            label: (ctx: any) => {
+              const val = ctx.raw as number
+              const pct = total > 0 ? ((val / total) * 100).toFixed(1) : '0.0'
+              return ` ${fmtCost(val)} (${pct}%)`
+            },
+          },
+        },
+      },
+    },
+  } as any)
+}
+
 function loadAll() {
   logsPage.value = 1
   loadSummary()
   loadTrend()
   loadModels()
+  loadUserRanking()
   loadLogs()
   loadBudget()
 }
@@ -1312,12 +1543,6 @@ const fmtPrice = (n?: number | null) => {
   const v = convertCost(n, cc.value)
   return sym + (Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(4).replace(/0+$/, '').replace(/\.$/, ''))
 }
-const fmtDateTime = (s?: string) =>
-  s ? s.replace('T', ' ').replace(/\.\d+Z$/, '').slice(0, 19) : '—'
-const fmtDuration = (ms?: number | null) => {
-  if (ms == null) return '—'
-  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(2)}s`
-}
 const barPct = (v: number, max: number) => !max || !v ? 0 : Math.round(v / max * 100)
 const fmtJSON = (v: any): string => {
   if (v == null) return '(无数据)'
@@ -1344,12 +1569,14 @@ onMounted(() => {
 onUnmounted(() => {
   trendChartInst?.destroy()
   modelChartInst?.destroy()
+  userRankChartInst?.destroy()
 })
 
 watch(currency, async () => {
   await nextTick()
   renderTrendChart()
   renderModelChart()
+  renderUserRankChart()
 })
 </script>
 
@@ -1880,6 +2107,50 @@ watch(currency, async () => {
 /* ── 空状态 ── */
 .ud-empty-block { padding: 48px; text-align: center; color: var(--ud-faint); }
 .ud-empty-block p { margin-top: 12px; font-size: 14px; }
+
+/* ── 用户排行 ── */
+.ud-user-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--ud-border);
+}
+@media (max-width: 900px) { .ud-user-kpi-row { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 540px) { .ud-user-kpi-row { grid-template-columns: 1fr; } }
+
+.ud-user-kpi-card {
+  background: var(--el-fill-color-light);
+  border-radius: 10px;
+  padding: 14px 16px;
+  text-align: center;
+}
+.ud-user-kpi__label {
+  margin: 0; font-size: 12px; color: var(--ud-muted);
+}
+.ud-user-kpi__value {
+  margin: 6px 0 0; font-size: 26px; font-weight: 700;
+  color: var(--el-text-color-primary);
+}
+
+.ud-user-main-row {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 16px;
+  padding: 16px 20px;
+}
+@media (max-width: 960px) { .ud-user-main-row { grid-template-columns: 1fr; } }
+
+.ud-chart-wrap--user { height: 280px; }
+
+.ud-user-table-wrap { overflow-x: auto; }
+
+.ud-row-error-bg { background: rgba(245, 108, 108, 0.05); }
+.ud-error-text { color: var(--el-color-danger); font-weight: 600; }
+
+.ud-top-model-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.ud-top-model-tag { max-width: 220px; }
+.ud-model-pct { font-size: 10px; opacity: .7; margin-left: 2px; }
 
 /* ── 颜色工具 ── */
 .c-blue   { color: #409eff; }

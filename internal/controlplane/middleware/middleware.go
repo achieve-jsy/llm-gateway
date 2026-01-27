@@ -110,7 +110,11 @@ func JWTAuth() gin.HandlerFunc {
 			c.Set("user_role", role)
 		}
 		if deptID, ok := claims["dept_id"].(string); ok {
-			c.Set("user_dept_id", deptID)
+			c.Set("user_dept_id", deptID) // 保留旧 key，兼容 budget_handler 等已有读取
+			c.Set("dept_id", deptID)      // 供 AuditMiddleware 直接读取
+		}
+		if deptName, ok := claims["dept_name"].(string); ok {
+			c.Set("dept_name", deptName) // 供 AuditMiddleware 写入审计日志
 		}
 		if studioID, ok := claims["studio_id"].(string); ok {
 			c.Set("user_studio_id", studioID)

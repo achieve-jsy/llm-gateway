@@ -804,6 +804,250 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 	})
 }
 
+// UserRankRow 用户排行行
+type UserRankRow struct {
+	UserID           string  `json:"user_id"           gorm:"column:user_id"`
+	UserName         string  `json:"user_name"         gorm:"column:user_name"`
+	DeptName         string  `json:"dept_name"         gorm:"column:dept_name"`
+	TotalTokens      int64   `json:"total_tokens"      gorm:"column:total_tokens"`
+	PromptTokens     int64   `json:"prompt_tokens"     gorm:"column:prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens" gorm:"column:completion_tokens"`
+	EstCostUSD       float64 `json:"est_cost_usd"      gorm:"column:est_cost_usd"`
+	CallCount        int64   `json:"call_count"        gorm:"column:call_count"`
+	ErrorCount       int64   `json:"error_count"       gorm:"column:error_count"`
+	ModelCount       int     `json:"model_count"       gorm:"column:model_count"`
+}
+
+// UserRankSummary 用户排行汇总
+type UserRankSummary struct {
+	TotalUsers   int     `json:"total_users"`
+	TotalTokens  int64   `json:"total_tokens"`
+	TotalCostUSD float64 `json:"total_cost_usd"`
+	TotalCalls   int64   `json:"total_calls"`
+}
+
+// UserRankResponse 用户排行响应
+type UserRankResponse struct {
+	Summary    UserRankSummary `json:"summary"`
+	Rows       []UserRankRow   `json:"rows"`
+	Page       int             `json:"page"`
+	PageSize   int             `json:"page_size"`
+	TotalCount int64           `json:"total_count"`
+}
+
+// UserTopModelRow 用户 Top 模型行
+type UserTopModelRow struct {
+	Model       string  `json:"model"`
+	EstCostUSD  float64 `json:"est_cost_usd"`
+	CallCount   int64   `json:"call_count"`
+	TotalTokens int64   `json:"total_tokens"`
+}
+
+// parseDateRangeFromTo 解析 from/to 参数（支持 RFC3339 和 YYYY-MM-DD）
+func parseDateRangeFromTo(c *gin.Context) (from, to time.Time, ok bool) {
+	fromStr := c.Query("from")
+	toStr := c.Query("to")
+	if fromStr == "" || toStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "from and to are required"})
+		return
+	}
+	var err error
+	from, err = time.Parse(time.RFC3339, fromStr)
+	if err != nil {
+		from, err = time.Parse("2006-01-02", fromStr)
+	}
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid from date"})
+		return
+	}
+	to, err = time.Parse(time.RFC3339, toStr)
+	if err != nil {
+		to, err = time.Parse("2006-01-02", toStr)
+	}
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid to date"})
+		return
+	}
+	ok = true
+	return
+}
+
+// DashboardUsers GET /api/v1/usage/dashboard/users
+// 全局按用户聚合，返回用户排行（实时从 call_logs 聚合）
+func (h *UsageHandler) DashboardUsers(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db not configured"})
+		return
+	}
+
+	from, to, ok := parseDateRangeFromTo(c)
+	if !ok {
+		return
+	}
+	toExcl := to.Add(24 * time.Hour)
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+
+	studioID := c.Query("studio_id")
+	deptID   := c.Query("dept_id")
+	db       := h.db.WithContext(c.Request.Context())
+
+	// 全局汇总（不分页）
+	var sumRow struct {
+		TotalUsers  int64   `gorm:"column:total_users"`
+		TotalTokens int64   `gorm:"column:total_tokens"`
+		TotalCost   float64 `gorm:"column:total_cost"`
+		TotalCalls  int64   `gorm:"column:total_calls"`
+	}
+	_ = db.Raw(`
+		SELECT
+			COUNT(DISTINCT COALESCE(user_id, 'unknown')) AS total_users,
+			COALESCE(SUM(total_tokens), 0)              AS total_tokens,
+			COALESCE(SUM(est_cost_usd), 0)              AS total_cost,
+			COUNT(*)                                     AS total_calls
+		FROM call_logs
+		WHERE ts >= ? AND ts < ?
+			AND (? = '' OR studio_id = ?)
+			AND (? = '' OR dept_id = ?)
+	`, from, toExcl, studioID, studioID, deptID, deptID).Scan(&sumRow)
+
+	// 分页前总行数
+	var totalCount int64
+	_ = db.Raw(`
+		SELECT COUNT(*) FROM (
+			SELECT COALESCE(user_id, 'unknown')
+			FROM call_logs
+			WHERE ts >= ? AND ts < ?
+				AND (? = '' OR studio_id = ?)
+				AND (? = '' OR dept_id = ?)
+			GROUP BY COALESCE(user_id, 'unknown'), COALESCE(user_name, ''), COALESCE(dept_name, '')
+		) AS sub
+	`, from, toExcl, studioID, studioID, deptID, deptID).Scan(&totalCount)
+
+	// 分页数据
+	offset := (page - 1) * pageSize
+	var rows []UserRankRow
+	err := db.Raw(`
+		SELECT
+			COALESCE(user_id, 'unknown')    AS user_id,
+			COALESCE(user_name, '')          AS user_name,
+			COALESCE(dept_name, '')          AS dept_name,
+			COALESCE(SUM(total_tokens), 0)   AS total_tokens,
+			COALESCE(SUM(prompt_tokens), 0)  AS prompt_tokens,
+			COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+			COALESCE(SUM(est_cost_usd), 0)   AS est_cost_usd,
+			COUNT(*)                          AS call_count,
+			COUNT(*) FILTER (WHERE status != 200) AS error_count,
+			COUNT(DISTINCT model)             AS model_count
+		FROM call_logs
+		WHERE ts >= ? AND ts < ?
+			AND (? = '' OR studio_id = ?)
+			AND (? = '' OR dept_id = ?)
+		GROUP BY COALESCE(user_id, 'unknown'), COALESCE(user_name, ''), COALESCE(dept_name, '')
+		ORDER BY SUM(est_cost_usd) DESC
+		LIMIT ? OFFSET ?
+	`, from, toExcl, studioID, studioID, deptID, deptID, pageSize, offset).Scan(&rows).Error
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if rows == nil {
+		rows = []UserRankRow{}
+	}
+
+	c.JSON(http.StatusOK, UserRankResponse{
+		Summary: UserRankSummary{
+			TotalUsers:   int(sumRow.TotalUsers),
+			TotalTokens:  sumRow.TotalTokens,
+			TotalCostUSD: sumRow.TotalCost,
+			TotalCalls:   sumRow.TotalCalls,
+		},
+		Rows:       rows,
+		Page:       page,
+		PageSize:   pageSize,
+		TotalCount: totalCount,
+	})
+}
+
+// DashboardUserTopModels GET /api/v1/usage/dashboard/user-top-models
+// 批量返回每个用户的 Top N 常用模型（按费用降序）
+func (h *UsageHandler) DashboardUserTopModels(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db not configured"})
+		return
+	}
+
+	from, to, ok := parseDateRangeFromTo(c)
+	if !ok {
+		return
+	}
+	toExcl := to.Add(24 * time.Hour)
+
+	topN, _ := strconv.Atoi(c.DefaultQuery("top_n", "3"))
+	if topN < 1 || topN > 10 {
+		topN = 3
+	}
+
+	studioID := c.Query("studio_id")
+	deptID   := c.Query("dept_id")
+
+	type topModelRow struct {
+		UserID      string  `gorm:"column:user_id"`
+		Model       string  `gorm:"column:model"`
+		EstCostUSD  float64 `gorm:"column:est_cost_usd"`
+		CallCount   int64   `gorm:"column:call_count"`
+		TotalTokens int64   `gorm:"column:total_tokens"`
+	}
+
+	var rows []topModelRow
+	err := h.db.WithContext(c.Request.Context()).Raw(`
+		WITH ranked AS (
+			SELECT
+				COALESCE(user_id, 'unknown') AS user_id,
+				model,
+				COALESCE(SUM(est_cost_usd), 0)   AS est_cost_usd,
+				COUNT(*)                           AS call_count,
+				COALESCE(SUM(total_tokens), 0)    AS total_tokens,
+				ROW_NUMBER() OVER (
+					PARTITION BY COALESCE(user_id, 'unknown')
+					ORDER BY SUM(est_cost_usd) DESC
+				) AS rn
+			FROM call_logs
+			WHERE ts >= ? AND ts < ?
+				AND (? = '' OR studio_id = ?)
+				AND (? = '' OR dept_id = ?)
+			GROUP BY COALESCE(user_id, 'unknown'), model
+		)
+		SELECT user_id, model, est_cost_usd, call_count, total_tokens
+		FROM ranked
+		WHERE rn <= ?
+		ORDER BY user_id, rn
+	`, from, toExcl, studioID, studioID, deptID, deptID, topN).Scan(&rows).Error
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	result := make(map[string][]UserTopModelRow)
+	for _, r := range rows {
+		result[r.UserID] = append(result[r.UserID], UserTopModelRow{
+			Model:       r.Model,
+			EstCostUSD:  r.EstCostUSD,
+			CallCount:   r.CallCount,
+			TotalTokens: r.TotalTokens,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"models": result})
+}
+
 func toString(v interface{}) string {
 	if s, ok := v.(string); ok {
 		return s

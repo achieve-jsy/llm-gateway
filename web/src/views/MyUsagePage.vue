@@ -358,6 +358,7 @@
             @change="loadStats" @click.stop>
             <el-radio-button value="day">按天</el-radio-button>
             <el-radio-button value="model">按模型</el-radio-button>
+            <el-radio-button value="key">按 Key</el-radio-button>
           </el-radio-group>
           <span class="mu-toggle-btn">{{ modelDetailOpen ? '收起 ▲' : '展开 ▼' }}</span>
         </div>
@@ -370,6 +371,13 @@
           </el-table-column>
           <el-table-column v-if="groupBy==='model'" prop="model" label="模型" min-width="160" sortable>
             <template #default="{ row }"><span class="mu-model-name">{{ row.model || '—' }}</span></template>
+          </el-table-column>
+          <el-table-column v-if="groupBy==='key'" prop="key_name" label="Key 名称" min-width="180" sortable>
+            <template #default="{ row }">
+              <span v-if="row.key_name">{{ row.key_name }}</span>
+              <span v-else-if="row.key_id && row.key_id !== 'unknown'" class="mu-muted-text">{{ row.key_id.slice(0, 8) }}…</span>
+              <span v-else class="mu-muted-text">未知 Key</span>
+            </template>
           </el-table-column>
           <el-table-column prop="req_count" label="调用" min-width="80" align="right" sortable>
             <template #default="{ row }">{{ fmtNum(row.req_count) }}</template>
@@ -492,6 +500,7 @@ function chartTheme() {
 // ── Types ──
 interface StatsRow {
   stat_date?: string; model?: string
+  key_id?: string; key_name?: string
   req_count: number; success_count?: number
   prompt_tokens: number; cached_tokens: number; completion_tokens: number
   reasoning_tokens?: number; est_cost_usd: number

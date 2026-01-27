@@ -599,6 +599,8 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 type MyStatsRow struct {
 	StatDate         *string `json:"stat_date,omitempty"   gorm:"column:stat_date"`
 	Model            *string `json:"model,omitempty"       gorm:"column:model"`
+	KeyID            string  `json:"key_id"                gorm:"column:key_id"`
+	KeyName          string  `json:"key_name"              gorm:"column:key_name"`
 	ReqCount         int64   `json:"req_count"             gorm:"column:req_count"`
 	SuccessCount     int64   `json:"success_count"         gorm:"column:success_count"`
 	PromptTokens     int64   `json:"prompt_tokens"         gorm:"column:prompt_tokens"`
@@ -630,6 +632,12 @@ func (s *RollupService) QueryMyStats(ctx context.Context, params MyStatsQueryPar
 	case "model":
 		groupCol = "model"
 		selectCols = "model, COUNT(*) AS req_count, COUNT(*) FILTER (WHERE status = 200) AS success_count, " +
+			"SUM(prompt_tokens) AS prompt_tokens, SUM(cached_tokens) AS cached_tokens, " +
+			"SUM(completion_tokens) AS completion_tokens, SUM(est_cost_usd) AS est_cost_usd"
+	case "key":
+		groupCol = "COALESCE(key_id, 'unknown'), COALESCE(key_name, '')"
+		selectCols = "COALESCE(key_id, 'unknown') AS key_id, COALESCE(key_name, '') AS key_name, " +
+			"COUNT(*) AS req_count, COUNT(*) FILTER (WHERE status = 200) AS success_count, " +
 			"SUM(prompt_tokens) AS prompt_tokens, SUM(cached_tokens) AS cached_tokens, " +
 			"SUM(completion_tokens) AS completion_tokens, SUM(est_cost_usd) AS est_cost_usd"
 	case "hour":
@@ -664,7 +672,7 @@ func (s *RollupService) QueryMyStats(ctx context.Context, params MyStatsQueryPar
 
 	query = query.Group(groupCol).Order("est_cost_usd DESC")
 
-	timeGroupBy := params.GroupBy != "model"
+	timeGroupBy := params.GroupBy != "model" && params.GroupBy != "key"
 
 	var totalCount int64
 	if !timeGroupBy {

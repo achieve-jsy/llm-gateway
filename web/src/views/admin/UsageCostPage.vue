@@ -404,6 +404,7 @@ import http from '@/services/http'
 import { ElMessage } from 'element-plus'
 import { useSettingsStore } from '@/stores/settings'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
+import { fmtDateTime, fmtDate, fmtDuration } from '@/utils/time'
 
 Chart.register(
   BarController, LineController,
@@ -602,15 +603,6 @@ const fmtTokens = (n?: number | null) => {
   if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'
   if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K'
   return String(n)
-}
-const fmtDate = (s?: string) => s ? s.split('T')[0] : '—'
-const fmtDateTime = (s?: string) => {
-  if (!s) return '—'
-  return s.replace('T', ' ').replace(/\.\d+Z$/, '').replace('Z', '').substring(0, 19)
-}
-const fmtDuration = (ms?: number) => {
-  if (!ms && ms !== 0) return '—'
-  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(2)}s`
 }
 const maskKey = (k?: string) => !k ? '—' : k.length > 14 ? k.slice(0, 6) + '···' + k.slice(-4) : k
 

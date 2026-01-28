@@ -6,9 +6,7 @@
         <p class="page-desc">管理你的 Key{{ authStore.isManager ? '，审批团队成员的申请' : '' }}</p>
       </div>
       <div class="header-actions">
-        <el-button type="primary" @click="handleCreateClick">
-          {{ requiresApproval ? '申请创建 Key' : '创建 Key' }}
-        </el-button>
+        <el-button type="primary" @click="handleCreateClick">{{ requiresApproval ? '申请创建 Key' : '创建 Key' }}</el-button>
       </div>
     </div>
 
@@ -16,9 +14,15 @@
       本部门开启了 Key 创建审批，新 Key 需经部门负责人审批后才会生效。
     </el-alert>
 
+    <el-alert v-if="requiresApproval" type="info" :closable="false" show-icon style="margin-bottom:16px">
+      本部门开启了 Key 创建审批，新 Key 需经部门负责人审批后才会生效。
+    </el-alert>
+
+    <!-- 多 Tab：存在「我的申请」「审批管理」任一时展示 -->
+    <!-- 角色未加载完时保守渲染多 Tab 分支，避免首帧错位 -->
     <el-tabs v-if="hasMultiTab" v-model="activeTab" :key="tabsKey">
       <el-tab-pane label="我的密钥" name="keys">
-        <!-- # KEY TABLE START -->
+        <!-- key table -->
         <div class="key-table-wrap">
           <el-empty v-if="keys.length === 0 && !loading" description="暂无 API 密钥">
             <el-button type="primary" @click="handleCreateClick">{{ requiresApproval ? '申请创建第一个 Key' : '创建第一个 Key' }}</el-button>
@@ -53,11 +57,10 @@
         <div v-if="total > pageSize" class="pagination-wrapper">
           <el-pagination v-model:current-page="currentPage" :page-size="pageSize" :total="total" layout="prev, pager, next" @current-change="handlePageChange" />
         </div>
-        <!-- # KEY TABLE END -->
       </el-tab-pane>
 
       <el-tab-pane v-if="showMyApplicationsTab" name="my-applications">
-        <template #label>我的申请<el-badge v-if="myPendingCount > 0" :value="myPendingCount" type="warning" /></template>
+        <template #label>我的申请<el-badge v-if="myPendingCount>0" :value="myPendingCount" type="warning" /></template>
         <el-empty v-if="!myAppLoading && myApplications.length === 0" description="暂无申请记录" />
         <div v-else v-loading="myAppLoading" class="app-list">
           <div v-for="app in myApplications" :key="app.id" class="app-card" :class="'app-card--'+app.status">
@@ -134,7 +137,7 @@
       </el-tab-pane>
     </el-tabs>
 
-    <!-- # KEY TABLE SINGLE -->
+    <!-- 单 Tab：只展示「我的密钥」，无 Tabs 栏 -->
     <template v-else>
       <div class="key-table-wrap">
         <el-empty v-if="keys.length === 0 && !loading" description="暂无 API 密钥">
@@ -171,7 +174,6 @@
         <el-pagination v-model:current-page="currentPage" :page-size="pageSize" :total="total" layout="prev, pager, next" @current-change="handlePageChange" />
       </div>
     </template>
-    <!-- # KEY TABLE SINGLE END -->
 
     <KeyCreateDialog v-model="showCreateDialog" @success="onKeyCreated" />
     <KeyApplyDialog v-model="showApplyDialog" @submitted="onAppSubmitted" />
@@ -275,7 +277,13 @@ const rejectReason = ref('')
 const rejectingItem = ref<KeyRequest|null>(null)
 
 const showMyApplicationsTab = computed(() => requiresApproval.value && !authStore.isManager)
-const hasMultiTab = computed(() => showMyApplicationsTab.value || authStore.isManager)
+
+// ── 关键：角色未加载完时保守渲染多 Tab 分支 ──
+// 避免：首帧 single-tab 分支渲染后 isManager 才变 true 触发重渲染导致「审批管理」缺失
+const hasMultiTab = computed(() => {
+  if (authStore.effectiveRole === null) return true
+  return showMyApplicationsTab.value || authStore.isManager
+})
 const tabsKey = computed(() => 'keys-' + (showMyApplicationsTab.value ? 'app' : '') + (authStore.isManager ? '-approval' : ''))
 
 watch(showMyApplicationsTab, (v) => { if (!v && activeTab.value === 'my-applications') activeTab.value = 'keys' })
@@ -323,7 +331,8 @@ async function handleApprove(id: string) { try { await decideKeyRequest(id,'appr
 function openReject(item: KeyRequest) { rejectingItem.value = item; rejectReason.value = ''; showReject.value = true }
 async function confirmReject() { if(!rejectingItem.value||!rejectReason.value.trim()) return; try { await decideKeyRequest(rejectingItem.value.id,'reject',rejectReason.value.trim()); ElMessage.success('已驳回'); showReject.value = false; await Promise.all([loadPending(),loadHistory()]) } catch(e:any){ ElMessage.error(e?.response?.data?.error||'操作失败') } finally { rejectingItem.value = null } }
 
-onMounted(() => { loadKeys(); loadRequestSummary(); loadMyApplications(); loadRequiresApproval(); useSettingsStore().loadPublicSettings(); if(authStore.isManager){ loadPending(); loadPolicy() } })
+onMounted(() => { loadKeys(); loadRequestSummary(); loadMyApplications(); loadRequiresApproval(); loadPolicy(); useSettingsStore().loadPublicSettings(); if(authStore.isManager) loadPending() })
+watch(() => authStore.isManager, (v) => { if (v) loadPending() })
 </script>
 
 <style scoped>
@@ -332,6 +341,7 @@ onMounted(() => { loadKeys(); loadRequestSummary(); loadMyApplications(); loadRe
 .page-title { font-size: 22px; font-weight: 700; margin: 0; }
 .page-desc { font-size: 13px; color: var(--el-text-color-secondary); margin: 4px 0 0; }
 .header-actions { flex-shrink: 0; }
+.key-cell { display: flex; align-items: center; gap: 6px; }
 .key-masked { font-family: 'SF Mono',monospace; font-size: 13px; background: var(--el-fill-color-light); padding: 2px 10px; border-radius: 4px; color: var(--el-text-color-secondary); }
 .text-muted { color: var(--el-text-color-secondary); font-size: 13px; }
 .pagination-wrapper { display: flex; justify-content: flex-end; margin-top: 16px; }
@@ -354,15 +364,5 @@ onMounted(() => { loadKeys(); loadRequestSummary(); loadMyApplications(); loadRe
 .info-row { display: flex; gap: 6px; }
 .info-label { color: var(--el-text-color-secondary); flex-shrink: 0; min-width: 60px; }
 .app-comment { background: var(--el-fill-color-lighter); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
-.app-card-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
-.app-card-actions { display: flex; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--el-border-color-lighter); }
-.policy-card { border: 2px solid var(--el-border-color-lighter); border-radius: 10px; padding: 20px 24px; margin-bottom: 20px; background: var(--el-bg-color-page); }
-.policy-card--on { border-color: var(--el-color-warning); background: var(--el-color-warning-light-9); }
-.policy-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-.policy-title { font-size: 16px; font-weight: 600; margin: 0 0 4px; display: flex; align-items: center; }
-.policy-sub { font-size: 13px; color: var(--el-text-color-secondary); margin: 0; }
-.policy-sub b { color: var(--el-text-color-regular); }
-.policy-hint { font-size: 13px; color: var(--el-text-color-secondary); margin: 12px 0 0; line-height: 1.5; }
-.approval-sub { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-@media (max-width: 900px) { .page-header { flex-direction: column; align-items: flex-start; gap: 12px; } .key-table-wrap { overflow-x: auto; } .key-table-wrap :deep(.el-table) { min-width: 760px; } }
+.app-card-foot { flex-shrink: 0; }
 </style>

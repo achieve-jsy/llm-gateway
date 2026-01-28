@@ -14,10 +14,6 @@
       本部门开启了 Key 创建审批，新 Key 需经部门负责人审批后才会生效。
     </el-alert>
 
-    <el-alert v-if="requiresApproval" type="info" :closable="false" show-icon style="margin-bottom:16px">
-      本部门开启了 Key 创建审批，新 Key 需经部门负责人审批后才会生效。
-    </el-alert>
-
     <!-- 多 Tab：存在「我的申请」「审批管理」任一时展示 -->
     <!-- 角色未加载完时保守渲染多 Tab 分支，避免首帧错位 -->
     <el-tabs v-if="hasMultiTab" v-model="activeTab" :key="tabsKey">
@@ -62,20 +58,52 @@
       <el-tab-pane v-if="showMyApplicationsTab" name="my-applications">
         <template #label>我的申请<el-badge v-if="myPendingCount>0" :value="myPendingCount" type="warning" /></template>
         <el-empty v-if="!myAppLoading && myApplications.length === 0" description="暂无申请记录" />
-        <div v-else v-loading="myAppLoading" class="app-list">
-          <div v-for="app in myApplications" :key="app.id" class="app-card" :class="'app-card--'+app.status">
-            <div class="app-card-head">
-              <span class="app-key-name">{{ app.key_name }}</span>
-              <el-tag :type="STATUS_COLORS[app.status]" size="small">{{ STATUS_LABELS[app.status] }}</el-tag>
+        <div v-else v-loading="myAppLoading" class="my-app-list">
+          <div v-for="app in myApplications" :key="app.id" class="my-app-card">
+            <!-- 状态圆点 -->
+            <div class="my-app-status-dot" :class="'my-app-status-dot--'+app.status" />
+
+            <!-- 主内容区 -->
+            <div class="my-app-main">
+              <div class="my-app-title-row">
+                <span class="my-app-key-name">{{ app.key_name }}</span>
+                <el-tag class="my-app-status-tag" :type="STATUS_COLORS[app.status]" size="small" effect="light">
+                  {{ STATUS_LABELS[app.status] }}
+                </el-tag>
+              </div>
+              <div class="my-app-meta">
+                <span class="my-app-meta-item">
+                  <el-icon size="12"><Clock /></el-icon>
+                  {{ formatDate(app.created_at) }}
+                </span>
+                <span v-if="app.purpose" class="my-app-meta-sep">·</span>
+                <span v-if="app.purpose" class="my-app-meta-item">{{ app.purpose }}</span>
+                <span v-if="app.budget_monthly > 0" class="my-app-meta-sep">·</span>
+                <span v-if="app.budget_monthly > 0" class="my-app-meta-item">
+                  <strong>${{ app.budget_monthly }}</strong>/月
+                </span>
+              </div>
+              <!-- 审批备注 -->
+              <div v-if="app.approve_comment" class="my-app-comment">
+                <el-icon class="my-app-comment-icon" size="12"><ChatLineSquare /></el-icon>
+                <span class="my-app-comment-text">{{ app.approve_comment }}</span>
+              </div>
             </div>
-            <div class="app-card-body" v-if="app.purpose || app.budget_monthly">
-              <div class="info-row" v-if="app.purpose"><span class="info-label">用途</span><span>{{ app.purpose }}</span></div>
-              <div class="info-row" v-if="app.budget_monthly > 0"><span class="info-label">预算</span><span>${{ app.budget_monthly }}/月</span></div>
-              <div class="info-row" v-if="app.approve_comment"><span class="info-label">备注</span><span class="app-comment">{{ app.approve_comment }}</span></div>
-            </div>
-            <div class="app-card-foot">
-              <span class="text-muted">{{ formatDate(app.created_at) }}</span>
-              <el-button v-if="app.status === 'pending'" size="small" text type="danger" @click="handleCancelApp(app.id)">取消申请</el-button>
+
+            <!-- 操作按钮 -->
+            <div class="my-app-actions">
+              <el-popconfirm
+                v-if="app.status === 'pending'"
+                title="确定要取消这个申请吗？"
+                confirm-button-text="确认取消"
+                cancel-button-text="再想想"
+                width="220"
+                @confirm="handleCancelApp(app.id)"
+              >
+                <template #reference>
+                  <el-button size="small" text type="danger">取消</el-button>
+                </template>
+              </el-popconfirm>
             </div>
           </div>
         </div>
@@ -85,53 +113,119 @@
         <template #label>审批管理<el-badge v-if="pendingCount>0" :value="pendingCount" type="danger" /></template>
         <div v-if="currentDeptId" class="policy-card" :class="{ 'policy-card--on': deptPolicy === 'approval' }">
           <div class="policy-card-head">
-            <div>
-              <h3 class="policy-title">部门 Key 创建审批<el-tag v-if="deptPolicy==='approval'" size="small" type="warning" style="margin-left:6px">已开启</el-tag><el-tag v-else size="small" style="margin-left:6px">未开启</el-tag></h3>
-              <p class="policy-sub">部门：<b>{{ authStore.user?.departmentName || '未分配' }}</b></p>
+            <div class="policy-card-info">
+              <div class="policy-icon" :class="{ 'policy-icon--on': deptPolicy === 'approval' }">
+                <el-icon :size="22"><Key /></el-icon>
+              </div>
+              <div>
+                <h3 class="policy-title">
+                  部门 Key 创建审批
+                  <el-tag v-if="deptPolicy==='approval'" size="small" type="success" effect="dark">已开启</el-tag>
+                  <el-tag v-else size="small" effect="light">未开启</el-tag>
+                </h3>
+                <p class="policy-sub">
+                  <span class="policy-dept-label">适用范围：</span>
+                  <b>{{ authStore.user?.departmentName || '未分配部门' }}</b>
+                </p>
+              </div>
             </div>
-            <el-switch :model-value="deptPolicy==='approval'" :loading="policySaving" :disabled="policySaving" inline-prompt active-text="开" inactive-text="关" style="transform:scale(1.3)" @change="togglePolicy" />
+            <el-switch
+              :model-value="deptPolicy==='approval'"
+              :loading="policySaving"
+              :disabled="policySaving"
+              size="large"
+              inline-prompt
+              active-text="开"
+              inactive-text="关"
+              active-color="#409EFF"
+              @change="togglePolicy"
+            />
           </div>
-          <p class="policy-hint">开启后，本部门成员创建 Key 需先提交申请（可同时申请预算），由部门负责人审批通过后才会自动生成 Key。</p>
+          <p class="policy-hint">
+            <el-icon><InfoFilled /></el-icon>
+            开启后，本部门成员创建 Key 需先提交申请（可同时申请预算），由部门负责人审批通过后方可自动生成 Key
+          </p>
         </div>
+        <el-alert v-else type="warning" :closable="false" show-icon>
+          无法识别当前部门，无法配置审批策略
+        </el-alert>
         <div class="approval-sub">
           <el-radio-group v-model="approvalSub" size="small" @change="onApprovalSubChange">
             <el-radio-button label="pending">待审批<el-badge v-if="pendingCount>0" :value="pendingCount" type="danger" style="margin-left:4px" /></el-radio-button>
             <el-radio-button label="history">审批历史</el-radio-button>
           </el-radio-group>
         </div>
-        <div v-if="approvalSub==='pending'" v-loading="pendingLoading">
+        <div v-if="approvalSub==='pending'" v-loading="pendingLoading" class="pending-list">
           <el-empty v-if="!pendingItems.length" description="暂无待审批" />
-          <div v-else class="app-list">
-            <div v-for="item in pendingItems" :key="item.id" class="app-card app-card--pending">
-              <div class="app-card-head">
-                <div class="applicant-info">
-                  <el-avatar :size="36" :style="{ backgroundColor: avatarColor(item.requester_name) }">{{ (item.requester_name||'?').charAt(0) }}</el-avatar>
-                  <div><div class="applicant-name">{{ item.requester_name||'未知' }}</div><div v-if="item.dept_name" class="text-muted" style="font-size:12px">{{ item.dept_name }}</div></div>
+          <div v-else v-for="item in pendingItems" :key="item.id" class="pending-card">
+            <div class="pending-head">
+              <div class="pending-head-left">
+                <el-tag type="warning" size="small">待审批</el-tag>
+                <span class="pending-key-name">{{ item.key_name }}</span>
+                <span class="pending-applicant">{{ item.requester_name || '未知' }}</span>
+              </div>
+              <div class="pending-head-right">
+                <span class="pending-time">{{ formatDate(item.created_at) }}</span>
+                <div class="pending-actions">
+                  <el-popconfirm title="通过后自动创建 Key" @confirm="handleApprove(item.id)">
+                    <template #reference>
+                      <el-button type="success" size="small" text>通过</el-button>
+                    </template>
+                  </el-popconfirm>
+                  <el-button size="small" text type="danger" @click="openReject(item)">驳回</el-button>
                 </div>
-                <span class="text-muted">{{ formatDate(item.created_at) }}</span>
               </div>
-              <div class="app-card-body">
-                <div class="info-row"><span class="info-label">Key 名称</span><span>{{ item.key_name }}</span></div>
-                <div class="info-row" v-if="item.purpose"><span class="info-label">用途</span><span>{{ item.purpose }}</span></div>
-                <div class="info-row"><span class="info-label">预算</span><span>{{ item.budget_monthly>0 ? '$'+item.budget_monthly+'/月' : '无' }}</span></div>
-              </div>
-              <div class="app-card-actions">
-                <el-popconfirm title="通过后自动创建 Key" @confirm="handleApprove(item.id)"><template #reference><el-button type="success" size="small">通过</el-button></template></el-popconfirm>
-                <el-button size="small" type="danger" plain @click="openReject(item)">驳回</el-button>
-              </div>
+            </div>
+            <div class="pending-details">
+              <span v-if="item.purpose" class="pending-detail-item">
+                <el-icon class="pending-detail-icon"><User /></el-icon>
+                {{ item.purpose }}
+              </span>
+              <span v-if="item.budget_monthly > 0" class="pending-detail-item">
+                <el-icon class="pending-detail-icon"><Wallet /></el-icon>
+                <strong>${{ item.budget_monthly }}</strong>/月
+              </span>
+              <span v-if="item.dept_name" class="pending-detail-item">
+                <el-icon class="pending-detail-icon"><OfficeBuilding /></el-icon>
+                {{ item.dept_name }}
+              </span>
             </div>
           </div>
         </div>
-        <div v-if="approvalSub==='history'" v-loading="historyLoading">
+        <div v-if="approvalSub==='history'" v-loading="historyLoading" class="history-list">
           <el-empty v-if="!historyItems.length" description="暂无历史" />
-          <el-table v-else :data="historyItems" border stripe size="small">
-            <el-table-column label="申请人" width="110"><template #default="{row}">{{ row.requester_name||'未知' }}</template></el-table-column>
-            <el-table-column prop="key_name" label="Key 名称" width="140" />
-            <el-table-column label="申请时间" width="150"><template #default="{row}">{{ formatDate(row.created_at) }}</template></el-table-column>
-            <el-table-column label="处理时间" width="150"><template #default="{row}">{{ formatDate(row.updated_at) }}</template></el-table-column>
-            <el-table-column label="状态" width="90"><template #default="{row}"><el-tag :type="STATUS_COLORS[row.status]" size="small">{{ STATUS_LABELS[row.status] }}</el-tag></template></el-table-column>
-            <el-table-column label="预算" width="100"><template #default="{row}">{{ row.budget_monthly>0 ? '$'+row.budget_monthly+'/月' : '-' }}</template></el-table-column>
-            <el-table-column label="备注" min-width="140"><template #default="{row}">{{ row.approve_comment||'-' }}</template></el-table-column>
+          <el-table v-else :data="historyItems" size="small" :border="false" :stripe="true">
+            <el-table-column label="申请人" width="100" prop="requester_name">
+              <template #default="{row}">{{ row.requester_name || '未知' }}</template>
+            </el-table-column>
+            <el-table-column label="Key 名称" width="130" prop="key_name" />
+            <el-table-column label="预算" width="80">
+              <template #default="{row}">
+                <span v-if="row.budget_monthly > 0" class="budget-text">${{ row.budget_monthly }}/月</span>
+                <span v-else class="text-muted">-</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="申请时间" width="140">
+              <template #default="{row}">
+                <span class="time-text">{{ formatDate(row.created_at) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="处理时间" width="140">
+              <template #default="{row}">
+                <span class="time-text">{{ formatDate(row.updated_at) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="80">
+              <template #default="{row}">
+                <el-tag :type="STATUS_COLORS[row.status]" size="small">{{ STATUS_LABELS[row.status] }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="备注" min-width="120">
+              <template #default="{row}">
+                <span v-if="row.approve_comment" class="comment-text">{{ row.approve_comment }}</span>
+                <span v-else class="text-muted">-</span>
+              </template>
+            </el-table-column>
           </el-table>
         </div>
       </el-tab-pane>
@@ -208,6 +302,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Key, InfoFilled, ChatDotRound, Wallet, ChatLineSquare, User, OfficeBuilding } from '@element-plus/icons-vue'
 import {
   listKeys, disableKey, enableKey, deleteKey, resetKey, revealKey,
   updateKeyGroups, getAvailableGroups, toggleAccessAllGroups, toggleLogEnabled,
@@ -365,4 +460,343 @@ watch(() => authStore.isManager, (v) => { if (v) loadPending() })
 .info-label { color: var(--el-text-color-secondary); flex-shrink: 0; min-width: 60px; }
 .app-comment { background: var(--el-fill-color-lighter); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
 .app-card-foot { flex-shrink: 0; }
+
+/* ── 策略卡片 ── */
+.policy-card {
+  margin-bottom: 20px;
+  padding: 20px 24px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--el-bg-color) 0%, var(--el-fill-color-light) 100%);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+  transition: all 0.25s ease;
+}
+.policy-card--on {
+  border-color: var(--el-color-primary-light-3);
+  background: linear-gradient(135deg, var(--el-color-primary-light-9) 0%, var(--el-bg-color) 100%);
+  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.08);
+}
+.policy-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.policy-card-info {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1;
+  min-width: 0;
+}
+.policy-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: var(--el-fill-color);
+  color: var(--el-text-color-secondary);
+  flex-shrink: 0;
+  transition: all 0.25s ease;
+}
+.policy-icon--on {
+  background: var(--el-color-primary);
+  color: #fff;
+}
+.policy-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 4px 0;
+  color: var(--el-text-color-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.policy-sub {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  margin: 0;
+}
+.policy-dept-label {
+  color: var(--el-text-color-secondary);
+}
+.policy-sub b {
+  color: var(--el-text-color-primary);
+  font-weight: 500;
+}
+.policy-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--el-text-color-regular);
+  margin: 14px 0 0 0;
+  padding-top: 14px;
+  border-top: 1px dashed var(--el-border-color-lighter);
+}
+.policy-hint .el-icon {
+  flex-shrink: 0;
+  margin-top: 3px;
+  color: var(--el-color-info);
+}
+.my-app-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0;
+}
+
+.my-app-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.my-app-card:hover {
+  background: #fafafa;
+  border-color: #d1d5db;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.my-app-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.my-app-status-dot--pending {
+  background: var(--el-color-warning);
+  box-shadow: 0 0 0 3px rgba(230, 162, 60, 0.15);
+}
+
+.my-app-status-dot--approved {
+  background: var(--el-color-success);
+  box-shadow: 0 0 0 3px rgba(103, 194, 58, 0.15);
+}
+
+.my-app-status-dot--rejected {
+  background: var(--el-color-danger);
+  box-shadow: 0 0 0 3px rgba(245, 108, 108, 0.15);
+}
+
+.my-app-status-dot--cancelled {
+  background: #9ca3af;
+}
+
+.my-app-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.my-app-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.my-app-key-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.my-app-status-tag {
+  flex-shrink: 0;
+}
+
+.my-app-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.my-app-meta-item {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.my-app-meta-sep {
+  color: #d1d5db;
+}
+
+.my-app-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.my-app-time {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+/* 审批备注 */
+.my-app-comment {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid #f3f4f6;
+}
+
+.my-app-comment-icon {
+  color: #9ca3af;
+  flex-shrink: 0;
+}
+
+.my-app-comment-text {
+  color: var(--el-text-color-regular);
+  line-height: 1.4;
+}
+
+/* 审批管理 - 待审批卡片 */
+.pending-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0;
+  margin-top: 16px;
+}
+
+.pending-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.pending-card:hover {
+  background: #fefce8;
+  border-color: #fde047;
+  box-shadow: 0 1px 3px rgba(234, 179, 8, 0.08);
+}
+
+.pending-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #b45309;
+  flex-shrink: 0;
+}
+
+.pending-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.pending-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.pending-key-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-applicant {
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+  padding: 0 6px;
+  background: #f3f4f6;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.pending-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.pending-meta-item {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.pending-meta-sep {
+  color: #d1d5db;
+}
+
+.pending-meta-item strong {
+  color: var(--el-color-primary);
+  font-weight: 600;
+}
+
+.pending-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 审批管理 - 审批历史 */
+.history-list {
+  margin-top: 16px;
+}
+
+.budget-text {
+  color: var(--el-color-primary);
+  font-weight: 500;
+}
+
+.time-text {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.comment-text {
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+  line-height: 1.4;
+}
+
+:deep(.history-list .el-table) {
+  --el-table-border-color: #f3f4f6;
+}
+
+:deep(.history-list .el-table--small .el-table__cell) {
+  padding: 8px 0;
+}
+
+.text-muted {
+  color: #9ca3af;
+}
 </style>

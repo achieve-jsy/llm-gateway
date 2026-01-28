@@ -39,22 +39,76 @@ func NewKeyRequestHandler(
 	return &KeyRequestHandler{svc: svc, rbac: rbacChecker, userRepo: userRepo}
 }
 
-// CheckPolicy GET /api/v1/key-requests/policy?dept_id=xxx
-// 查询当前用户的 Key 创建策略（free/approval_required）。
-// 不传 dept_id 则使用 JWT claim 中的 dept_id（与 dept_policies.dept_id 同为 SSO varchar 格式）。
+func (h *KeyRequestHandler) actorName(c *gin.Context, userID uuid.UUID) string {
+	if name := c.GetString("user_name"); name != "" {
+		return name
+	}
+	return h.userDisplayName(userID)
+}
+
+func (h *KeyRequestHandler) userDisplayName(userID uuid.UUID) string {
+	if userID == uuid.Nil {
+		return ""
+	}
+	if u, err := h.userRepo.FindByID(userID); err == nil && u != nil && u.Name != "" {
+		return u.Name
+	}
+	return ""
+}
+
+// enrichApproverNames 列表回显：approver_name 为空时按 approver_id 查用户表补齐。
+func (h *KeyRequestHandler) enrichApproverNames(items []model.KeyRequest) {
+	if len(items) == 0 {
+		return
+	}
+	need := make([]uuid.UUID, 0)
+	seen := make(map[uuid.UUID]struct{})
+	for i := range items {
+		if items[i].ApproverName != "" || items[i].ApproverID == nil {
+			continue
+		}
+		id := *items[i].ApproverID
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		need = append(need, id)
+	}
+	if len(need) == 0 {
+		return
+	}
+	users, err := h.userRepo.FindByIDs(need)
+	if err != nil {
+		return
+	}
+	for i := range items {
+		if items[i].ApproverName != "" || items[i].ApproverID == nil {
+			continue
+		}
+		if u := users[*items[i].ApproverID]; u != nil && u.Name != "" {
+			items[i].ApproverName = u.Name
+		}
+	}
+}
+
+// CheckPolicy 查询当前用户是否需要走申请；负责人豁免时 requires_approval=false，policy 仍反映部门策略。
 func (h *KeyRequestHandler) CheckPolicy(c *gin.Context) {
+	h.rbac.BuildAndInjectActor(c)
+	actor := rbac.GetActor(c)
+
 	deptID := c.Query("dept_id")
 	if deptID == "" {
 		// 优先从 JWT claim 中取 SSO dept_id（string 格式，与 dept_policies.dept_id 一致）
 		deptID = c.GetString("dept_id")
 	}
-	requiresApproval, err := h.svc.RequiresApproval(c.Request.Context(), deptID)
+	deptRequiresApproval, err := h.svc.RequiresApproval(c.Request.Context(), deptID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	requiresApproval := deptRequiresApproval && !actor.IsManager()
 	policy := model.KeyCreationPolicyFree
-	if requiresApproval {
+	if deptRequiresApproval {
 		policy = model.KeyCreationPolicyApproval
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -124,27 +178,66 @@ func (h *KeyRequestHandler) Decide(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	// cancel 允许申请人本人操作；approve/reject 仅负责人（cancel 推荐走 /cancel 接口）
+	if req.Action != model.ExpansionActionCancel && !actor.IsManager() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "需要管理员权限"})
+		return
+	}
 
 	requestID := c.Param("id")
 	approverID, _ := uuid.Parse(c.GetString("user_id"))
+	approverName := h.actorName(c, approverID)
 
-	if err := h.svc.Decide(c.Request.Context(), requestID, approverID, approverID, req.Action, req.Comment, actor.IsGlobal, actor.DeptIDs); err != nil {
+	if err := h.svc.Decide(c.Request.Context(), requestID, approverID, approverName, approverID, req.Action, req.Comment, actor.IsGlobal, actor.DeptIDs); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// ListMine GET /api/v1/key-requests?status=pending
+// CancelMine POST /api/v1/key-requests/:id/cancel
+// 申请人取消自己的待审批 Key 申请（无需负责人权限）。
+func (h *KeyRequestHandler) CancelMine(c *gin.Context) {
+	requestID := c.Param("id")
+	userID, err := uuid.Parse(c.GetString("user_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
+		return
+	}
+	if err := h.svc.CancelMine(c.Request.Context(), requestID, userID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// ListMine GET /api/v1/key-requests?status=pending&page=1&page_size=20
 func (h *KeyRequestHandler) ListMine(c *gin.Context) {
 	userID := c.GetString("user_id")
 	status := c.Query("status")
-	items, err := h.svc.ListMine(c.Request.Context(), userID, status)
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	items, total, err := h.svc.ListMine(c.Request.Context(), userID, status, page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items})
+	if items == nil {
+		items = []model.KeyRequest{}
+	}
+	h.enrichApproverNames(items)
+	c.JSON(http.StatusOK, gin.H{
+		"items":     items,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
 }
 
 // ListPending GET /api/v1/key-requests/pending
@@ -158,12 +251,30 @@ func (h *KeyRequestHandler) ListPending(c *gin.Context) {
 	}
 
 	requesterName := c.Query("name")
-	items, err := h.svc.ListPending(c.Request.Context(), actor.IsGlobal, actor.DeptIDs, requesterName)
+	hasBudget := c.Query("has_budget") == "true"
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	items, total, err := h.svc.ListPending(c.Request.Context(), actor.IsGlobal, actor.DeptIDs, requesterName, hasBudget, page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items})
+	if items == nil {
+		items = []model.KeyRequest{}
+	}
+	h.enrichApproverNames(items)
+	c.JSON(http.StatusOK, gin.H{
+		"items":     items,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
 }
 
 // CountMine GET /api/v1/key-requests/summary
@@ -190,11 +301,14 @@ func (h *KeyRequestHandler) CountPendingForDept(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
 	if !actor.IsManager() {
-		c.JSON(http.StatusOK, gin.H{"data": gin.H{"count": 0}})
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{"count": 0, "budget_count": 0}})
 		return
 	}
-	count, _ := h.svc.CountPendingForDept(c.Request.Context(), actor.IsGlobal, actor.DeptIDs)
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{"count": count}})
+	count, budgetCount, _ := h.svc.CountPendingForDept(c.Request.Context(), actor.IsGlobal, actor.DeptIDs)
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"count":        count,
+		"budget_count": budgetCount,
+	}})
 }
 
 // ListHistory GET /api/v1/key-requests/history
@@ -213,12 +327,38 @@ func (h *KeyRequestHandler) ListHistory(c *gin.Context) {
 			limit = n
 		}
 	}
-	items, err := h.svc.ListHistoryForApprover(c.Request.Context(), actor.IsGlobal, actor.DeptIDs, limit)
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	// limit 兼容旧客户端：未传 page_size 时沿用 limit
+	if c.Query("page_size") == "" && c.Query("limit") != "" {
+		pageSize = limit
+	}
+	requesterName := c.Query("name")
+	status := c.Query("status")
+	if status != "" && status != model.KeyRequestStatusApproved && status != model.KeyRequestStatusRejected {
+		status = ""
+	}
+	items, total, err := h.svc.ListHistoryForApprover(c.Request.Context(), actor.IsGlobal, actor.DeptIDs, requesterName, status, page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{"items": items}})
+	if items == nil {
+		items = []model.KeyRequest{}
+	}
+	h.enrichApproverNames(items)
+	c.JSON(http.StatusOK, gin.H{
+		"items":     items,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
 }
 
 // GetDeptPolicy GET /api/v1/dept-policies/:dept_id/key-creation
@@ -259,10 +399,10 @@ func (h *KeyRequestHandler) SetDeptPolicy(c *gin.Context) {
 	}
 
 	updatedBy, _ := uuid.Parse(c.GetString("user_id"))
-	autoApproved, err := h.svc.SetDeptPolicy(c.Request.Context(), deptID, in.Policy, updatedBy)
+	result, err := h.svc.SetDeptPolicy(c.Request.Context(), deptID, in.Policy, updatedBy, h.actorName(c, updatedBy))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "auto_approved": autoApproved})
+	c.JSON(http.StatusOK, gin.H{"data": result})
 }

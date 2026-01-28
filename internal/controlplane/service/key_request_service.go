@@ -19,6 +19,38 @@ var (
 	ErrPolicyNotConfigured = errors.New("key creation policy not configured for department")
 )
 
+// keyRequestNotifier 站内通知写入（可选注入）。
+type keyRequestNotifier interface {
+	Create(n *model.Notification) error
+}
+
+// AutoApproveItemResult 单条待审批申请的自动通过结果。
+type AutoApproveItemResult struct {
+	RequestID     string  `json:"request_id"`
+	KeyName       string  `json:"key_name"`
+	RequesterName string  `json:"requester_name"`
+	BudgetMonthly float64 `json:"budget_monthly"`
+	Status        string  `json:"status"` // approved | failed
+	Error         string  `json:"error,omitempty"`
+	CreatedKeyID  string  `json:"created_key_id,omitempty"`
+	Notified      bool    `json:"notified"`
+}
+
+// AutoApproveResult 关闭审批时批量自动通过的汇总结果。
+type AutoApproveResult struct {
+	Total   int                     `json:"total"`
+	Success int                     `json:"success"`
+	Failed  int                     `json:"failed"`
+	Items   []AutoApproveItemResult `json:"items"`
+}
+
+// SetDeptPolicyResult 设置部门 Key 创建策略的返回。
+type SetDeptPolicyResult struct {
+	DeptID      string             `json:"dept_id"`
+	Policy      string             `json:"policy"`
+	AutoApprove *AutoApproveResult `json:"auto_approve,omitempty"`
+}
+
 // 供注入的 KeyService 接口（避免循环依赖具体 KeyService 结构体）。
 type KeyCreator interface {
 	CreateKey(ctx context.Context, userID uuid.UUID, name string, expiresAt *time.Time, groupIDs []uint) (*model.ApiKey, string, []BoundGroupItem, error)
@@ -27,11 +59,12 @@ type KeyCreator interface {
 
 // KeyRequestService Key 申请创建/审批/列表的核心业务逻辑。
 type KeyRequestService struct {
-	repo        *repository.KeyRequestRepo
-	policyRepo  *repository.DeptPolicyRepo
+	repo         *repository.KeyRequestRepo
+	policyRepo   *repository.DeptPolicyRepo
 	settingsRepo SettingsRepository
-	keyCreator  KeyCreator
-	budgetSvc   *BudgetService
+	keyCreator   KeyCreator
+	budgetSvc    *BudgetService
+	notifier     keyRequestNotifier
 }
 
 func NewKeyRequestService(
@@ -46,8 +79,11 @@ func NewKeyRequestService(
 	}
 }
 
-func (s *KeyRequestService) SetKeyCreator(creator KeyCreator) { s.keyCreator = creator }
+func (s *KeyRequestService) SetKeyCreator(creator KeyCreator)   { s.keyCreator = creator }
 func (s *KeyRequestService) SetBudgetService(bs *BudgetService) { s.budgetSvc = bs }
+func (s *KeyRequestService) SetNotificationRepo(n keyRequestNotifier) {
+	s.notifier = n
+}
 
 // RequiresApproval 查询某部门的 Key 创建策略：true = 需要审批，false = 自由创建。
 // 优先取部门负责人设置的策略；若未配置则回落 system_configs 全局默认值。
@@ -118,6 +154,7 @@ func (s *KeyRequestService) Decide(
 	ctx context.Context,
 	requestID string,
 	approverID uuid.UUID,
+	approverName string,
 	actorID uuid.UUID,
 	action string,
 	comment string,
@@ -149,12 +186,31 @@ func (s *KeyRequestService) Decide(
 		if err != nil {
 			return fmt.Errorf("执行审批后操作失败: %w", err)
 		}
-		return s.repo.Approve(requestID, approverID, createdKeyID, comment)
+		if err := s.repo.Approve(requestID, approverID, createdKeyID, approverName, comment); err != nil {
+			return err
+		}
+		s.notifyRequesterApproved(req, false)
+		return nil
 	}
 	if action == model.ExpansionActionReject {
-		return s.repo.Reject(requestID, approverID, comment)
+		return s.repo.Reject(requestID, approverID, approverName, comment)
 	}
 	return fmt.Errorf("invalid action: %s", action)
+}
+
+// CancelMine 申请人取消自己的待审批申请。
+func (s *KeyRequestService) CancelMine(ctx context.Context, requestID string, requesterID uuid.UUID) error {
+	req, err := s.repo.FindByID(requestID)
+	if err != nil {
+		return ErrKeyRequestNotFound
+	}
+	if req.RequesterID != requesterID {
+		return errors.New("只有申请人本人可以取消")
+	}
+	if req.Status != model.KeyRequestStatusPending {
+		return errors.New("只能取消审批中的申请")
+	}
+	return s.repo.Cancel(requestID)
 }
 
 // executeApproval 通过后自动创建 Key，并按 budget_monthly 写个人月预算。
@@ -205,20 +261,14 @@ func (s *KeyRequestService) canApprove(req *model.KeyRequest, isGlobal bool, dep
 	return false
 }
 
-// ListMine 查询当前用户发起的申请。
-func (s *KeyRequestService) ListMine(ctx context.Context, requesterID, status string) ([]model.KeyRequest, error) {
-	return s.repo.ListByRequester(requesterID, status)
+// ListMine 查询当前用户发起的申请（分页）。
+func (s *KeyRequestService) ListMine(ctx context.Context, requesterID, status string, page, pageSize int) ([]model.KeyRequest, int64, error) {
+	return s.repo.ListByRequesterPaged(requesterID, status, page, pageSize)
 }
 
-// ListPending 审批人查询待审批申请（按管辖部门过滤）。
-func (s *KeyRequestService) ListPending(ctx context.Context, isGlobal bool, deptIDs []string, requesterName string) ([]model.KeyRequest, error) {
-	if isGlobal {
-		return s.repo.ListPendingAll(requesterName)
-	}
-	if len(deptIDs) == 0 {
-		return nil, nil
-	}
-	return s.repo.ListPendingForDept(deptIDs, requesterName)
+// ListPending 审批人查询待审批申请（按管辖部门过滤，分页）。
+func (s *KeyRequestService) ListPending(ctx context.Context, isGlobal bool, deptIDs []string, requesterName string, hasBudget bool, page, pageSize int) ([]model.KeyRequest, int64, error) {
+	return s.repo.ListPendingPaged(isGlobal, deptIDs, requesterName, hasBudget, page, pageSize)
 }
 
 // CountMine 查询我的申请数量。
@@ -231,28 +281,22 @@ func (s *KeyRequestService) CountMine(ctx context.Context, requesterID string) (
 	return pending, approved, rejected, err3
 }
 
-// CountPendingForDept 统计某部门待审批的申请数量。
-func (s *KeyRequestService) CountPendingForDept(ctx context.Context, isGlobal bool, deptIDs []string) (int64, error) {
-	if isGlobal {
-		return s.repo.CountPendingForDept(deptIDs)
-	}
-	if len(deptIDs) == 0 {
-		return 0, nil
-	}
-	return s.repo.CountPendingForDept(deptIDs)
+// CountPendingForDept 统计管辖范围内待审批的申请数量。
+func (s *KeyRequestService) CountPendingForDept(ctx context.Context, isGlobal bool, deptIDs []string) (int64, int64, error) {
+	return s.repo.CountPendingScoped(isGlobal, deptIDs)
 }
 
-// ListHistoryForApprover 查询当前审批人已处理的申请。
-func (s *KeyRequestService) ListHistoryForApprover(ctx context.Context, isGlobal bool, deptIDs []string, limit int) ([]model.KeyRequest, error) {
-	return s.repo.ListHistoryForApprover(isGlobal, deptIDs, limit)
+// ListHistoryForApprover 查询当前审批人已处理的申请（分页）。
+func (s *KeyRequestService) ListHistoryForApprover(ctx context.Context, isGlobal bool, deptIDs []string, requesterName, status string, page, pageSize int) ([]model.KeyRequest, int64, error) {
+	return s.repo.ListHistoryPaged(isGlobal, deptIDs, requesterName, status, page, pageSize)
 }
 
 // SetDeptPolicy 设置部门 Key 创建策略。
 // 当策略从 approval 切换为 free 时，自动批量通过该部门所有 pending 申请。
-// 返回自动通过的申请数量。
-func (s *KeyRequestService) SetDeptPolicy(ctx context.Context, deptID, policyValue string, updatedBy uuid.UUID) (int, error) {
+func (s *KeyRequestService) SetDeptPolicy(ctx context.Context, deptID, policyValue string, updatedBy uuid.UUID, updatedByName string) (*SetDeptPolicyResult, error) {
+	result := &SetDeptPolicyResult{DeptID: deptID, Policy: policyValue}
 	if policyValue != model.KeyCreationPolicyFree && policyValue != model.KeyCreationPolicyApproval {
-		return 0, fmt.Errorf("invalid policy value: %s", policyValue)
+		return nil, fmt.Errorf("invalid policy value: %s", policyValue)
 	}
 
 	oldValue := model.KeyCreationPolicyFree
@@ -260,49 +304,93 @@ func (s *KeyRequestService) SetDeptPolicy(ctx context.Context, deptID, policyVal
 		oldValue = p.PolicyValue
 	}
 
-	autoApproved := 0
 	if oldValue == model.KeyCreationPolicyApproval && policyValue == model.KeyCreationPolicyFree {
-		n, err := s.BatchApprovePendingForDept(ctx, deptID, updatedBy)
+		autoResult, err := s.BatchApprovePendingForDept(ctx, deptID, updatedBy, updatedByName)
 		if err != nil {
 			slog.Warn("batch approve on policy downgrade failed", "dept_id", deptID, "error", err)
-		} else {
-			autoApproved = n
-			if n > 0 {
-				slog.Info("key request policy changed to free, auto-approved pending requests",
-					"dept_id", deptID, "count", n, "approver_id", updatedBy)
-			}
+		} else if autoResult != nil && autoResult.Total > 0 {
+			result.AutoApprove = autoResult
+			slog.Info("key request policy changed to free, auto-approved pending requests",
+				"dept_id", deptID, "success", autoResult.Success, "failed", autoResult.Failed, "approver_id", updatedBy)
 		}
 	}
 
 	if err := s.policyRepo.Upsert(deptID, model.DeptPolicyKeyCreationPolicy, policyValue, updatedBy); err != nil {
-		return autoApproved, fmt.Errorf("upsert dept policy: %w", err)
+		return result, fmt.Errorf("upsert dept policy: %w", err)
 	}
-	return autoApproved, nil
+	return result, nil
 }
 
 // BatchApprovePendingForDept 批量通过某部门所有 pending 的 Key 申请。
-// 单条失败不阻塞其余，仅记录日志。返回成功通过的条数。
-func (s *KeyRequestService) BatchApprovePendingForDept(ctx context.Context, deptID string, approverID uuid.UUID) (int, error) {
+// 单条失败不阻塞其余，返回逐条结果。成功项会向申请人发送站内通知。
+func (s *KeyRequestService) BatchApprovePendingForDept(ctx context.Context, deptID string, approverID uuid.UUID, approverName string) (*AutoApproveResult, error) {
 	reqs, err := s.repo.ListPendingByDept(deptID)
 	if err != nil {
-		return 0, fmt.Errorf("list pending requests: %w", err)
+		return nil, fmt.Errorf("list pending requests: %w", err)
 	}
-	approved := 0
+	out := &AutoApproveResult{
+		Total: len(reqs),
+		Items: make([]AutoApproveItemResult, 0, len(reqs)),
+	}
 	for _, req := range reqs {
+		item := AutoApproveItemResult{
+			RequestID:     req.ID.String(),
+			KeyName:       req.KeyName,
+			RequesterName: req.RequesterName,
+			BudgetMonthly: req.BudgetMonthly,
+		}
 		createdKeyID, err := s.executeApproval(ctx, &req, approverID)
 		if err != nil {
+			item.Status = "failed"
+			item.Error = err.Error()
+			out.Failed++
+			out.Items = append(out.Items, item)
 			slog.Warn("batch approve: create key failed, skipping",
 				"request_id", req.ID, "requester_id", req.RequesterID, "error", err)
 			continue
 		}
-		if err := s.repo.Approve(req.ID.String(), approverID, createdKeyID, "策略切换为free，自动通过"); err != nil {
+		if err := s.repo.Approve(req.ID.String(), approverID, createdKeyID, approverName, "部门已关闭 Key 审批，系统自动通过"); err != nil {
+			item.Status = "failed"
+			item.Error = err.Error()
+			out.Failed++
+			out.Items = append(out.Items, item)
 			slog.Warn("batch approve: update status failed",
 				"request_id", req.ID, "error", err)
 			continue
 		}
-		approved++
+		item.Status = "approved"
+		item.CreatedKeyID = createdKeyID.String()
+		item.Notified = s.notifyRequesterApproved(&req, true)
+		out.Success++
+		out.Items = append(out.Items, item)
 	}
-	return approved, nil
+	return out, nil
+}
+
+func (s *KeyRequestService) notifyRequesterApproved(req *model.KeyRequest, auto bool) bool {
+	if s.notifier == nil || req == nil {
+		return false
+	}
+	title := "Key 申请已通过"
+	content := fmt.Sprintf("你的 Key「%s」申请已通过，Key 已创建，可在「我的密钥」中查看。", req.KeyName)
+	if auto {
+		content = fmt.Sprintf("负责人已关闭 Key 审批，你的「%s」申请已自动通过，Key 已创建，可在「我的密钥」中查看。", req.KeyName)
+	}
+	n := &model.Notification{
+		UserID:  req.RequesterID,
+		Type:    model.NotificationTypeKeyRequestApproved,
+		Level:   model.NotificationLevelInfo,
+		Title:   title,
+		Content: content,
+		RefType: "key_request",
+		RefID:   req.ID.String(),
+	}
+	if err := s.notifier.Create(n); err != nil {
+		slog.Warn("key request: notify requester failed",
+			"request_id", req.ID, "requester_id", req.RequesterID, "error", err)
+		return false
+	}
+	return true
 }
 
 // GetDeptPolicy 查询部门 Key 创建策略；若未配置返回空字符串。

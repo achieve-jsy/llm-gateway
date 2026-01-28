@@ -1022,11 +1022,105 @@ export async function markAllNotificationsRead(): Promise<void> {
 
 // ─── Key 创建申请与审批 ──────────────────────────────────────────────────────
 
+/** 兼容新旧两种分页列表响应：{ items, total } 与 { data: { items } } */
+function parseKeyRequestPageResponse(
+  body: Record<string, unknown>,
+  defaultPageSize: number,
+): { items: KeyRequest[]; total: number; page: number; pageSize: number } {
+  const nested =
+    body.data != null && typeof body.data === 'object' && !Array.isArray(body.data)
+      ? (body.data as Record<string, unknown>)
+      : undefined
+  const rawItems = (Array.isArray(body.items) ? body.items : nested?.items) as KeyRequest[] | undefined
+  const items = rawItems || []
+  const totalRaw = body.total ?? nested?.total
+  const total = Number(totalRaw)
+  return {
+    items,
+    total: Number.isFinite(total) && total >= 0 ? total : items.length,
+    page: Number(body.page ?? nested?.page) || 1,
+    pageSize: Number(body.page_size ?? nested?.page_size) || defaultPageSize,
+  }
+}
+
+/** 若后端未分页（单页条数超过 pageSize），前端兜底截断，避免一次渲染全量 */
+function clampKeyRequestPageItems<T extends { items: unknown[]; total: number; page: number; pageSize: number }>(
+  result: T,
+  requestedPage: number,
+): T {
+  const page = requestedPage > 0 ? requestedPage : result.page
+  if (result.items.length <= result.pageSize) {
+    return { ...result, page }
+  }
+  const start = (page - 1) * result.pageSize
+  return {
+    ...result,
+    page,
+    items: result.items.slice(start, start + result.pageSize),
+    total: Math.max(result.total, result.items.length),
+  }
+}
+
+type KeyRequestListFilters = {
+  status?: string
+  name?: string
+  hasBudget?: boolean
+}
+
+function keyRequestMatchesName(item: KeyRequest, name: string): boolean {
+  const q = name.trim().toLowerCase()
+  if (!q) return true
+  return (item.requester_name || '').toLowerCase().includes(q)
+    || (item.key_name || '').toLowerCase().includes(q)
+}
+
+function keyRequestHasBudgetAmount(item: KeyRequest): boolean {
+  const n = Number(item.budget_monthly)
+  return Number.isFinite(n) && n > 0
+}
+
+function keyRequestMatchesFilters(item: KeyRequest, filters: KeyRequestListFilters): boolean {
+  if (filters.status && item.status !== filters.status) return false
+  if (filters.hasBudget && !keyRequestHasBudgetAmount(item)) return false
+  if (filters.name && !keyRequestMatchesName(item, filters.name)) return false
+  return true
+}
+
+/** 后端未应用筛选或未分页时，前端兜底过滤 + 分页 */
+function finalizeKeyRequestPageResponse(
+  parsed: { items: KeyRequest[]; total: number; page: number; pageSize: number },
+  requestedPage: number,
+  filters: KeyRequestListFilters,
+) {
+  const page = requestedPage > 0 ? requestedPage : parsed.page
+  const pageSize = parsed.pageSize
+  const hasFilters = !!(filters.status || filters.name?.trim() || filters.hasBudget)
+  if (!hasFilters) {
+    return clampKeyRequestPageItems(parsed, page)
+  }
+
+  const violatesFilter = parsed.items.some(i => !keyRequestMatchesFilters(i, filters))
+  const bulkDump = parsed.items.length > pageSize
+  if (!violatesFilter && !bulkDump) {
+    return clampKeyRequestPageItems(parsed, page)
+  }
+
+  const filtered = parsed.items.filter(i => keyRequestMatchesFilters(i, filters))
+  const start = (page - 1) * pageSize
+  return {
+    ...parsed,
+    items: filtered.slice(start, start + pageSize),
+    total: filtered.length,
+    page,
+  }
+}
+
 import type {
   KeyRequest,
   CreateKeyRequestPayload,
   KeyCreationPolicyInfo,
   KeyRequestSummary,
+  SetDeptKeyCreationPolicyResult,
 } from '@/types/key-request'
 
 /** 查询当前用户的 Key 创建策略（free/approval） */
@@ -1043,12 +1137,19 @@ export async function createKeyRequest(payload: CreateKeyRequestPayload): Promis
   return res.data.data
 }
 
-/** 查询我的 Key 申请列表 */
-export async function getMyKeyRequests(status?: string): Promise<KeyRequest[]> {
-  const params: Record<string, string> = {}
-  if (status) params.status = status
-  const res = await http.get<{ items: KeyRequest[] }>('/api/v1/key-requests', { params })
-  return res.data.items || []
+/** 查询我的 Key 申请列表（分页） */
+export async function getMyKeyRequests(opts?: {
+  status?: string
+  page?: number
+  pageSize?: number
+}): Promise<{ items: KeyRequest[]; total: number; page: number; pageSize: number }> {
+  const page = opts?.page ?? 1
+  const pageSize = opts?.pageSize ?? 20
+  const params: Record<string, string | number> = { page, page_size: pageSize }
+  if (opts?.status) params.status = opts.status
+  const res = await http.get<Record<string, unknown>>('/api/v1/key-requests', { params })
+  const parsed = parseKeyRequestPageResponse(res.data, pageSize)
+  return finalizeKeyRequestPageResponse(parsed, page, { status: opts?.status })
 }
 
 /** 查询我的申请数量统计 */
@@ -1057,29 +1158,92 @@ export async function getMyKeyRequestSummary(): Promise<KeyRequestSummary> {
   return res.data.data || { pending: 0, approved: 0, rejected: 0 }
 }
 
-/** 审批人查询待审批列表 */
-export async function getPendingKeyRequests(name?: string): Promise<KeyRequest[]> {
-  const params: Record<string, string> = {}
-  if (name) params.name = name
-  const res = await http.get<{ items: KeyRequest[] }>('/api/v1/key-requests/pending', { params })
-  return res.data.items || []
+/** 审批人查询待审批列表（分页） */
+export async function getPendingKeyRequests(opts?: {
+  name?: string
+  hasBudget?: boolean
+  page?: number
+  pageSize?: number
+}): Promise<{ items: KeyRequest[]; total: number; page: number; pageSize: number }> {
+  const page = opts?.page ?? 1
+  const pageSize = opts?.pageSize ?? 10
+  const params: Record<string, string | number> = { page, page_size: pageSize }
+  if (opts?.name) params.name = opts.name
+  if (opts?.hasBudget) params.has_budget = 'true'
+  const res = await http.get<Record<string, unknown>>('/api/v1/key-requests/pending', { params })
+  const parsed = parseKeyRequestPageResponse(res.data, pageSize)
+  return finalizeKeyRequestPageResponse(parsed, page, {
+    name: opts?.name,
+    hasBudget: opts?.hasBudget,
+  })
 }
 
-/** 查询待审批数量（审批人用） */
+export interface PendingKeyRequestCounts {
+  count: number
+  budgetCount: number
+}
+
+/** 查询待审批数量（审批人用，含预算待办数） */
+export async function getPendingKeyRequestCounts(): Promise<PendingKeyRequestCounts> {
+  const res = await http.get<{ data: { count: number; budget_count?: number } }>('/api/v1/key-requests/pending/count')
+  const data = res.data.data
+  const count = data?.count || 0
+  let budgetCount = data?.budget_count
+
+  // 旧版未返回 budget_count，或统计为 0 但仍有待办时，用列表接口兜底
+  if (count > 0 && (budgetCount == null || budgetCount === 0)) {
+    try {
+      const r = await getPendingKeyRequests({ page: 1, pageSize: 1, hasBudget: true })
+      if (r.total > 0) {
+        budgetCount = r.total
+      }
+    } catch {
+      if (budgetCount == null) budgetCount = 0
+    }
+  }
+
+  return {
+    count,
+    budgetCount: budgetCount ?? 0,
+  }
+}
+
+/** @deprecated 使用 getPendingKeyRequestCounts */
 export async function getPendingKeyRequestCount(): Promise<number> {
-  const res = await http.get<{ data: { count: number } }>('/api/v1/key-requests/pending/count')
-  return res.data.data?.count || 0
+  const r = await getPendingKeyRequestCounts()
+  return r.count
 }
 
-/** 审批 Key 申请（approve/reject/cancel） */
-export async function decideKeyRequest(requestId: string, action: 'approve' | 'reject' | 'cancel', comment?: string): Promise<void> {
+/** 申请人取消自己的 Key 申请 */
+export async function cancelKeyRequest(requestId: string): Promise<void> {
+  await http.post(`/api/v1/key-requests/${requestId}/cancel`)
+}
+
+/** 审批 Key 申请（approve/reject，负责人） */
+export async function decideKeyRequest(requestId: string, action: 'approve' | 'reject', comment?: string): Promise<void> {
   await http.post(`/api/v1/key-requests/${requestId}/decision`, { action, comment })
 }
 
-/** 审批人查询已处理的申请（approved/rejected） */
-export async function getKeyRequestHistory(limit = 50): Promise<KeyRequest[]> {
-  const res = await http.get<{ data: { items: KeyRequest[] } }>('/api/v1/key-requests/history', { params: { limit } })
-  return res.data.data?.items || []
+/** 审批人查询已处理的申请（分页） */
+export async function getKeyRequestHistory(opts?: {
+  name?: string
+  status?: 'approved' | 'rejected'
+  page?: number
+  pageSize?: number
+  /** @deprecated 兼容旧调用，等价于 pageSize */
+  limit?: number
+}): Promise<{ items: KeyRequest[]; total: number; page: number; pageSize: number }> {
+  const page = opts?.page ?? 1
+  const pageSize = opts?.pageSize ?? opts?.limit ?? 10
+  const params: Record<string, string | number> = { page, page_size: pageSize }
+  if (opts?.name) params.name = opts.name
+  if (opts?.status) params.status = opts.status
+  const res = await http.get<Record<string, unknown>>('/api/v1/key-requests/history', { params })
+  const parsed = parseKeyRequestPageResponse(res.data, pageSize)
+  return finalizeKeyRequestPageResponse(parsed, page, {
+    status: opts?.status,
+    name: opts?.name,
+  })
 }
 
 /** 查询某部门的 Key 创建策略 */
@@ -1088,7 +1252,14 @@ export async function getDeptKeyCreationPolicy(deptId: string): Promise<{ dept_i
   return res.data.data
 }
 
-/** 设置某部门的 Key 创建策略 */
-export async function setDeptKeyCreationPolicy(deptId: string, policy: 'free' | 'approval'): Promise<void> {
-  await http.put(`/api/v1/dept-policies/${deptId}/key-creation`, { policy })
+/** 设置某部门的 Key 创建策略（关闭审批时后端批量自动通过待办并返回明细） */
+export async function setDeptKeyCreationPolicy(
+  deptId: string,
+  policy: 'free' | 'approval',
+): Promise<SetDeptKeyCreationPolicyResult> {
+  const res = await http.put<{ data: SetDeptKeyCreationPolicyResult }>(
+    `/api/v1/dept-policies/${deptId}/key-creation`,
+    { policy },
+  )
+  return res.data.data
 }

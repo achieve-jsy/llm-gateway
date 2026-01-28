@@ -16,7 +16,7 @@ type Notification struct {
 	Title     string     `gorm:"type:varchar(200);not null" json:"title"`
 	Content   string     `gorm:"type:text;not null" json:"content"`
 	// 关联对象（可选），用于前端跳转
-	RefType   string     `gorm:"type:varchar(32);not null;default:''" json:"ref_type"` // budget_scope | expansion_request
+	RefType   string     `gorm:"type:varchar(32);not null;default:''" json:"ref_type"` // budget_scope | expansion_request | key_request
 	RefID     string     `gorm:"type:varchar(64);not null;default:''" json:"ref_id"`
 	IsRead    bool       `gorm:"not null;default:false;index:idx_notifications_user_unread" json:"is_read"`
 	ReadAt    *time.Time `gorm:"type:timestamptz" json:"read_at,omitempty"`
@@ -31,6 +31,7 @@ const (
 	NotificationTypeExpansionApproved    = "expansion_approved"
 	NotificationTypeExpansionRejected    = "expansion_rejected"
 	NotificationTypeKeyActivity          = "key_activity"
+	NotificationTypeKeyRequestApproved   = "key_request_approved"
 )
 
 // 通知级别常量（与 Announcement.Level 对齐）

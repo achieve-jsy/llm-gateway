@@ -187,6 +187,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	keyRequestSvc := service.NewKeyRequestService(keyRequestRepo, deptPolicyRepo, settingsRepo)
 	keyRequestSvc.SetKeyCreator(keySvc)
 	keyRequestSvc.SetBudgetService(budgetSvc)
+	keyRequestSvc.SetNotificationRepo(notificationRepo)
 
 	systemKeySvc := service.NewSystemKeyService(db)
 	// gateway.url 从 yaml 配置读取，环境变量 GATEWAY_URL 可覆盖
@@ -555,6 +556,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/key-requests/pending", guard(rbac.PermKeyRequestApprove), keyRequestHandler.ListPending)
 		adminGroup.GET("/key-requests/pending/count", guard(rbac.PermKeyRequestApprove), keyRequestHandler.CountPendingForDept)
 		adminGroup.GET("/key-requests/history", guard(rbac.PermKeyRequestApprove), keyRequestHandler.ListHistory)
+		adminGroup.POST("/key-requests/:id/cancel", keyRequestHandler.CancelMine)
 		adminGroup.POST("/key-requests/:id/decision", guard(rbac.PermKeyRequestApprove), keyRequestHandler.Decide)
 		// 部门 Key 创建策略配置
 		adminGroup.GET("/dept-policies/:dept_id/key-creation", keyRequestHandler.GetDeptPolicy)

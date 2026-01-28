@@ -56,6 +56,7 @@ type KeyRequest struct {
 	BudgetMonthly  float64    `gorm:"type:numeric(12,4);default:0" json:"budget_monthly"`
 	Status         string     `gorm:"type:varchar(16);not null;default:'pending';index" json:"status"`
 	ApproverID     *uuid.UUID `gorm:"type:uuid" json:"approver_id,omitempty"`
+	ApproverName   string     `gorm:"type:varchar(128)" json:"approver_name,omitempty"`
 	ApproveComment string     `gorm:"type:text" json:"approve_comment,omitempty"`
 	CreatedKeyID   *uuid.UUID `gorm:"type:uuid" json:"created_key_id,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`

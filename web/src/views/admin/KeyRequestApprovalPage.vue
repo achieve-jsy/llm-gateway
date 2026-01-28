@@ -3,12 +3,35 @@
     <header class="page-header">
       <div>
         <h1>Key 申请审批</h1>
-        <p class="page-desc">审批部门成员的 Key 创建申请；可在部门设置中开启/关闭 Key 创建审批。</p>
+        <p class="page-desc">审批 Key 创建申请。</p>
       </div>
       <div class="header-actions">
         <el-button @click="load" :loading="loading">刷新</el-button>
       </div>
     </header>
+
+    <div class="approval-summary approval-summary--three">
+      <div class="approval-stat approval-stat--warn">
+        <span class="approval-stat__value">{{ pendingCount }}</span>
+        <span class="approval-stat__label">待审批</span>
+      </div>
+      <div
+        class="approval-stat approval-stat--budget"
+        :class="{ 'is-active': pendingBudgetOnly, 'is-disabled': pendingBudgetCount <= 0 }"
+        :role="pendingBudgetCount > 0 ? 'button' : undefined"
+        :tabindex="pendingBudgetCount > 0 ? 0 : undefined"
+        :title="pendingBudgetCount > 0 ? '点击筛选含预算申请' : undefined"
+        @click="togglePendingBudgetOnly"
+        @keyup.enter="togglePendingBudgetOnly"
+      >
+        <span class="approval-stat__value">{{ pendingBudgetCount }}</span>
+        <span class="approval-stat__label">含预算待办</span>
+      </div>
+      <div class="approval-stat">
+        <span class="approval-stat__value">{{ historyDisplayTotal }}</span>
+        <span class="approval-stat__label">历史记录</span>
+      </div>
+    </div>
 
     <el-tabs v-model="tab">
       <!-- 待审批（仅负责人可见） -->
@@ -18,9 +41,32 @@
           <el-badge v-if="pendingCount > 0" :value="pendingCount" :max="99" class="tab-badge" />
         </template>
 
+        <div v-if="pendingCount > 0" class="key-request-filter-bar">
+          <el-check-tag
+            v-if="pendingBudgetOnly"
+            class="pending-budget-tag"
+            checked
+            @change="(v: boolean) => { if (!v) { pendingBudgetOnly = false; triggerPendingSearch() } }"
+          >
+            仅含预算
+          </el-check-tag>
+          <el-input
+            v-model="pendingNameFilter"
+            placeholder="搜索申请人或 Key 名称"
+            clearable
+            style="width: 260px"
+            @keyup.enter="triggerPendingSearch"
+            @clear="triggerPendingSearch"
+          >
+            <template #append>
+              <el-button :icon="Search" @click="triggerPendingSearch" />
+            </template>
+          </el-input>
+        </div>
+
         <el-empty v-if="!loading && pendingItems.length === 0" description="暂无待审批申请" />
 
-        <div v-else class="pending-list">
+        <div v-else v-loading="loading" class="pending-list">
           <div v-for="item in pendingItems" :key="item.id" class="req-card">
             <div class="req-head">
               <div>
@@ -39,9 +85,9 @@
                 <span class="req-label">用途说明：</span>
                 <span>{{ item.purpose }}</span>
               </div>
-              <div class="req-info-row" v-if="item.budget_monthly > 0">
+              <div class="req-info-row">
                 <span class="req-label">预算申请：</span>
-                <el-tag size="small" type="success">${{ item.budget_monthly }} /月</el-tag>
+                <KeyRequestBudgetTag :budget-monthly="item.budget_monthly" />
               </div>
               <div class="req-info-row" v-if="item.expires_at">
                 <span class="req-label">Key 有效期：</span>
@@ -52,8 +98,9 @@
 
             <div class="req-actions">
               <el-popconfirm
-                title="确认通过该申请？将自动创建 Key 并配置预算。"
+                :title="approveConfirmTitle(item)"
                 confirm-button-text="确认通过"
+                width="280"
                 @confirm="handleDecide(item.id, 'approve')"
               >
                 <template #reference>
@@ -64,19 +111,48 @@
               <el-button size="small" type="danger" plain @click="openRejectDialog(item)">驳回</el-button>
             </div>
           </div>
-
-          <div v-if="loading" v-for="i in 3" :key="i" class="req-card skeleton">
-            <div class="sk-line" style="width:40%; height:18px" />
-            <div class="sk-line" style="width:70%; height:14px; margin-top:8px" />
-          </div>
+        </div>
+        <div v-if="pendingTotal > 0" class="pagination-wrapper approval-pagination">
+          <el-pagination
+            v-model:current-page="pendingPage"
+            :page-size="pendingPageSize"
+            :total="pendingTotal"
+            :hide-on-single-page="false"
+            layout="total, prev, pager, next"
+            @current-change="load"
+          />
         </div>
       </el-tab-pane>
 
       <!-- 审批历史 -->
       <el-tab-pane name="history" label="审批历史">
-        <el-empty v-if="!loadingHistory && historyItems.length === 0" description="暂无审批记录" />
+        <div v-if="historyAllTotal > 0" class="key-request-filter-bar">
+          <el-input
+            v-model="historyNameFilter"
+            placeholder="搜索申请人或 Key 名称"
+            clearable
+            style="width: 260px"
+            @keyup.enter="triggerHistorySearch"
+            @clear="triggerHistorySearch"
+          >
+            <template #append>
+              <el-button :icon="Search" @click="triggerHistorySearch" />
+            </template>
+          </el-input>
+          <el-select
+            v-model="historyStatusFilter"
+            placeholder="审批结果"
+            clearable
+            style="width: 140px"
+          >
+            <el-option label="已通过" value="approved" />
+            <el-option label="已拒绝" value="rejected" />
+          </el-select>
+        </div>
 
-        <div v-else class="history-list">
+        <el-empty v-if="!loadingHistory && historyItems.length === 0 && historyTotal === 0" description="暂无审批记录" />
+
+        <div v-else v-loading="loadingHistory" class="history-list">
           <div
             v-for="item in historyItems"
             :key="item.id"
@@ -101,17 +177,31 @@
                 <span class="req-label">用途：</span>
                 <span>{{ item.purpose }}</span>
               </div>
-              <div class="req-info-row" v-if="item.budget_monthly > 0">
+              <div class="req-info-row">
                 <span class="req-label">预算申请：</span>
-                <span>${{ item.budget_monthly }} /月</span>
+                <KeyRequestBudgetTag :budget-monthly="item.budget_monthly" />
               </div>
               <div class="req-info-row" v-if="item.approve_comment">
                 <span class="req-label">审批备注：</span>
                 <span>{{ item.approve_comment }}</span>
               </div>
+              <div class="req-info-row">
+                <span class="req-label">审批人：</span>
+                <KeyRequestApproverCell :status="item.status" :approver-name="item.approver_name" />
+              </div>
               <div class="req-info-row text-muted">{{ formatDate(item.updated_at) }}</div>
             </div>
           </div>
+        </div>
+        <div v-if="historyDisplayTotal > 0" class="pagination-wrapper approval-pagination">
+          <el-pagination
+            v-model:current-page="historyPage"
+            :page-size="historyPageSize"
+            :total="historyDisplayTotal"
+            :hide-on-single-page="false"
+            layout="total, prev, pager, next"
+            @current-change="loadHistory"
+          />
         </div>
       </el-tab-pane>
     </el-tabs>
@@ -132,7 +222,7 @@
         </el-form-item>
         <el-form-item label="Key 创建策略">
           <el-radio-group
-            v-model="deptPolicy"
+            :model-value="deptPolicy"
             :disabled="policySaving"
             @change="handlePolicyChange"
           >
@@ -144,6 +234,13 @@
     </div>
 
     <!-- 驳回弹窗 -->
+    <KeyAutoApproveDialog
+      v-model="showAutoApproveDialog"
+      :loading="autoApproveLoading"
+      :pending-count="pendingCount"
+      :result="autoApproveResult"
+      @closed="autoApproveResult = null"
+    />
     <el-dialog v-model="showRejectDialog" title="驳回申请" width="400px" @closed="rejectComment = ''">
       <el-input v-model="rejectComment" type="textarea" :rows="3" placeholder="填写驳回理由（必填）" maxlength="500" show-word-limit />
       <template #footer>
@@ -155,18 +252,22 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, onMounted, watch, computed } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Search } from '@element-plus/icons-vue'
 import {
   getPendingKeyRequests,
-  getPendingKeyRequestCount,
+  getPendingKeyRequestCounts,
   getKeyRequestHistory,
   getDeptKeyCreationPolicy,
   setDeptKeyCreationPolicy,
   decideKeyRequest,
 } from '@/services/control-plane'
-import type { KeyRequest } from '@/types/key-request'
-import { KEY_REQUEST_STATUS_LABELS as STATUS_LABELS, KEY_REQUEST_STATUS_COLORS as STATUS_COLORS } from '@/types/key-request'
+import type { KeyRequest, KeyRequestAutoApproveResult } from '@/types/key-request'
+import { KEY_REQUEST_STATUS_LABELS as STATUS_LABELS, KEY_REQUEST_STATUS_COLORS as STATUS_COLORS, formatKeyRequestBudget, keyRequestHasBudget } from '@/types/key-request'
+import KeyAutoApproveDialog from '@/components/key/KeyAutoApproveDialog.vue'
+import KeyRequestBudgetTag from '@/components/key/KeyRequestBudgetTag.vue'
+import KeyRequestApproverCell from '@/components/key/KeyRequestApproverCell.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const authStore = useAuthStore()
@@ -175,7 +276,21 @@ const loading = ref(false)
 const loadingHistory = ref(false)
 const pendingItems = ref<KeyRequest[]>([])
 const pendingCount = ref(0)
+const pendingBudgetCount = ref(0)
+const pendingBudgetOnly = ref(false)
+const pendingPage = ref(1)
+const pendingTotal = ref(0)
+const pendingPageSize = 10
+const pendingNameFilter = ref('')
 const historyItems = ref<KeyRequest[]>([])
+const historyPage = ref(1)
+const historyTotal = ref(0)
+const historyAllTotal = ref(0)
+const historyPageSize = 10
+const historyNameFilter = ref('')
+const historyStatusFilter = ref<'approved' | 'rejected' | ''>('')
+let historyLoadSeq = 0
+let pendingLoadSeq = 0
 
 const showRejectDialog = ref(false)
 const rejectingItem = ref<KeyRequest | null>(null)
@@ -186,6 +301,13 @@ const deptPolicy = ref<'free' | 'approval'>('free')
 const policySaving = ref(false)
 const currentDeptId = ref('')
 
+const showAutoApproveDialog = ref(false)
+const autoApproveLoading = ref(false)
+const autoApproveResult = ref<KeyRequestAutoApproveResult | null>(null)
+
+const pendingDisplayTotal = computed(() => Math.max(pendingTotal.value, pendingCount.value))
+const historyDisplayTotal = computed(() => historyTotal.value)
+
 function formatDate(iso?: string): string {
   if (!iso) return '-'
   const d = new Date(iso)
@@ -193,33 +315,135 @@ function formatDate(iso?: string): string {
   return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-async function load() {
+function resolvePageArg(page: number | undefined, pageRef: { value: number }): number {
+  if (typeof page === 'number' && Number.isFinite(page) && page >= 1) {
+    pageRef.value = page
+  }
+  return pageRef.value
+}
+
+function triggerPendingSearch() {
+  pendingPage.value = 1
+  load()
+}
+
+function togglePendingBudgetOnly() {
+  if (pendingBudgetCount.value <= 0) return
+  pendingBudgetOnly.value = !pendingBudgetOnly.value
+  pendingPage.value = 1
+  load()
+}
+
+function triggerHistorySearch() {
+  historyPage.value = 1
+  loadHistory()
+}
+
+watch(historyStatusFilter, () => {
+  if (tab.value !== 'history') return
+  historyPage.value = 1
+  loadHistory()
+})
+
+let pendingNameDebounce: ReturnType<typeof setTimeout> | null = null
+watch(pendingNameFilter, () => {
+  if (tab.value !== 'pending') return
+  if (pendingNameDebounce) clearTimeout(pendingNameDebounce)
+  pendingNameDebounce = setTimeout(() => triggerPendingSearch(), 350)
+})
+
+let historyNameDebounce: ReturnType<typeof setTimeout> | null = null
+watch(historyNameFilter, () => {
+  if (tab.value !== 'history') return
+  if (historyNameDebounce) clearTimeout(historyNameDebounce)
+  historyNameDebounce = setTimeout(() => triggerHistorySearch(), 350)
+})
+
+function applyPendingCounts(counts: { count: number; budgetCount: number }) {
+  pendingCount.value = Number(counts.count) || 0
+  pendingBudgetCount.value = Number(counts.budgetCount) || 0
+  if (pendingBudgetOnly.value && pendingBudgetCount.value === 0) {
+    pendingBudgetOnly.value = false
+  }
+}
+
+async function refreshPendingCounts() {
+  try {
+    applyPendingCounts(await getPendingKeyRequestCounts())
+  } catch {
+    pendingCount.value = 0
+    pendingBudgetCount.value = 0
+  }
+}
+
+async function load(page?: number) {
+  const p = resolvePageArg(page, pendingPage)
+  const seq = ++pendingLoadSeq
   loading.value = true
   try {
-    const [items, count] = await Promise.all([
-      getPendingKeyRequests(),
-      getPendingKeyRequestCount(),
+    const [r, counts] = await Promise.all([
+      getPendingKeyRequests({
+        page: p,
+        pageSize: pendingPageSize,
+        name: pendingNameFilter.value.trim() || undefined,
+        hasBudget: pendingBudgetOnly.value || undefined,
+      }),
+      getPendingKeyRequestCounts(),
     ])
-    pendingItems.value = items
-    pendingCount.value = count
+    if (seq !== pendingLoadSeq) return
+    pendingItems.value = r.items
+    pendingTotal.value = Number(r.total) || 0
+    applyPendingCounts(counts)
   } catch {
+    if (seq !== pendingLoadSeq) return
     pendingItems.value = []
+    pendingTotal.value = 0
     pendingCount.value = 0
+    pendingBudgetCount.value = 0
   } finally {
-    loading.value = false
+    if (seq === pendingLoadSeq) {
+      loading.value = false
+    }
   }
 }
 
 // 查询审批人已处理的申请（approved / rejected）
-async function loadHistory() {
+async function loadHistory(page?: number) {
+  const p = resolvePageArg(page, historyPage)
+  const seq = ++historyLoadSeq
   loadingHistory.value = true
   try {
-    historyItems.value = await getKeyRequestHistory(50)
+    const r = await getKeyRequestHistory({
+      page: p,
+      pageSize: historyPageSize,
+      name: historyNameFilter.value.trim() || undefined,
+      status: historyStatusFilter.value || undefined,
+    })
+    if (seq !== historyLoadSeq) return
+    historyItems.value = r.items
+    historyTotal.value = Number(r.total) || 0
+    if (!historyNameFilter.value.trim() && !historyStatusFilter.value) {
+      historyAllTotal.value = historyTotal.value
+    }
   } catch {
+    if (seq !== historyLoadSeq) return
     historyItems.value = []
+    historyTotal.value = 0
+    if (!historyNameFilter.value.trim() && !historyStatusFilter.value) {
+      historyAllTotal.value = 0
+    }
   } finally {
-    loadingHistory.value = false
+    if (seq === historyLoadSeq) {
+      loadingHistory.value = false
+    }
   }
+}
+
+function approveConfirmTitle(item: KeyRequest): string {
+  if (keyRequestHasBudget(item.budget_monthly)) {
+    return `确认通过该申请？将自动创建 Key，并配置个人月预算 ${formatKeyRequestBudget(item.budget_monthly)}。`
+  }
+  return '确认通过该申请？将自动创建 Key（本次未申请预算）。'
 }
 
 async function handleDecide(id: string, action: 'approve') {
@@ -267,32 +491,140 @@ async function loadPolicy() {
   }
 }
 
+async function confirmDeptKeyPolicyChange(enabling: boolean, pending: number): Promise<boolean> {
+  const title = enabling ? '开启部门 Key 审批' : '关闭部门 Key 审批'
+  let message = enabling
+    ? '开启后，部门成员创建 Key 需先提交申请，由部门负责人审批通过后方可生成 Key。'
+    : '关闭后，部门成员可直接创建 Key，无需审批。'
+  if (!enabling && pending > 0) {
+    message += ` 当前有 ${pending} 条待审批申请，关闭后将自动通过并生成 Key。`
+  }
+  try {
+    await ElMessageBox.confirm(message, title, {
+      type: enabling ? 'info' : 'warning',
+      confirmButtonText: enabling ? '确认开启' : '确认关闭',
+      cancelButtonText: '取消',
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function handlePolicyChange(val: string | number | boolean) {
   if (!currentDeptId.value) {
     ElMessage.warning('当前用户未分配部门，无法设置部门策略')
     return
   }
+  const policy = val as 'free' | 'approval'
+  if (policy === deptPolicy.value) return
+  const enabling = policy === 'approval'
+  const ok = await confirmDeptKeyPolicyChange(enabling, pendingCount.value)
+  if (!ok) return
+
+  const isDisabling = policy === 'free'
+  deptPolicy.value = policy
   policySaving.value = true
+  if (isDisabling && pendingCount.value > 0) {
+    showAutoApproveDialog.value = true
+    autoApproveLoading.value = true
+    autoApproveResult.value = null
+  }
   try {
-    await setDeptKeyCreationPolicy(currentDeptId.value, val as 'free' | 'approval')
-    ElMessage.success('部门策略已更新')
+    const res = await setDeptKeyCreationPolicy(currentDeptId.value, policy)
+    if (res.auto_approve && res.auto_approve.total > 0) {
+      autoApproveResult.value = res.auto_approve
+      await Promise.all([load(), loadHistory()])
+    } else {
+      showAutoApproveDialog.value = false
+      ElMessage.success(isDisabling ? '已关闭部门 Key 审批' : '已开启部门 Key 审批')
+    }
   } catch (e: any) {
+    deptPolicy.value = policy === 'free' ? 'approval' : 'free'
+    showAutoApproveDialog.value = false
+    autoApproveResult.value = null
     ElMessage.error(e?.response?.data?.error || '更新失败')
   } finally {
     policySaving.value = false
+    autoApproveLoading.value = false
   }
 }
 
 watch(tab, (t) => {
-  if (t === 'pending') load()
-  else if (t === 'history') loadHistory()
+  if (t === 'pending') load(1)
+  else if (t === 'history') {
+    void Promise.all([refreshPendingCounts(), loadHistory(1)])
+  }
 })
 
-onMounted(() => { load(); loadHistory(); loadPolicy() })
+onMounted(() => {
+  void refreshPendingCounts()
+  load()
+  loadHistory()
+  loadPolicy()
+})
+watch(() => authStore.effectiveRole, (role) => {
+  if (!role || !['admin', 'studio_admin', 'dept_admin'].includes(role)) return
+  if (tab.value === 'pending') load()
+  else void Promise.all([refreshPendingCounts(), loadHistory()])
+})
 </script>
 
 <style scoped>
 .key-request-page { padding: 0; }
+.approval-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.approval-stat--budget.is-disabled {
+  cursor: default;
+}
+.approval-stat--budget.is-disabled:hover {
+  border-color: var(--el-border-color-lighter);
+}
+.approval-stat--budget.is-disabled .approval-stat__value {
+  color: var(--el-text-color-secondary);
+}
+.approval-stat--budget:not(.is-disabled) .approval-stat__value { color: var(--el-color-primary); }
+.approval-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+  background: var(--el-fill-color-blank);
+}
+.approval-stat__value {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.approval-stat__label {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.approval-stat--warn .approval-stat__value { color: var(--el-color-warning); }
+.approval-stat--budget {
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.approval-stat--budget:hover { border-color: var(--el-color-primary-light-5); }
+.approval-stat--budget.is-active {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+.approval-stat--budget .approval-stat__value { color: var(--el-color-primary); }
+.pending-budget-tag { margin-right: 4px; }
+.key-request-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+}
 .page-header {
   display: flex;
   align-items: flex-start;
@@ -307,6 +639,7 @@ onMounted(() => { load(); loadHistory(); loadPolicy() })
 }
 .page-desc { color: var(--el-text-color-secondary); font-size: 13px; margin: 0; }
 .tab-badge { margin-left: 4px; }
+.pagination-wrapper { display: flex; justify-content: flex-end; margin-top: 16px; }
 
 .pending-list,
 .mine-list {

@@ -87,4 +87,10 @@ var Registry = map[Permission]PolicyEntry{
 
 	// 下放/开通部门：studio_admin（自己工作室范围）或 admin（全局）
 	PermEntitlementGrantDept: {ScopeManage},
+
+	// ── feat/key-approval ──────────────────────────────────────────────────
+	// 审批 Key 申请：任意管理角色（service 层按 deptIDs 范围校验）
+	PermKeyRequestApprove: {ScopeManage},
+	// 设置部门 Key 创建策略：任意管理角色（service 层按 deptIDs 过滤）
+	PermKeyRequestSetPolicy: {ScopeManage},
 }

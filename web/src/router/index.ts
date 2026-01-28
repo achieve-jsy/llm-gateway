@@ -155,6 +155,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '扩容申请' }
   },
   {
+    path: '/admin/key-requests',
+    name: 'KeyRequests',
+    component: () => import('@/views/admin/KeyRequestApprovalPage.vue'),
+    meta: { title: 'Key 申请审批', requiresManager: true }
+  },
+  {
     path: '/admin/settings',
     name: 'Settings',
     component: () => import('@/views/admin/SettingsPage.vue'),

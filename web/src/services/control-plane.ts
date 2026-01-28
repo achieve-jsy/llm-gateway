@@ -1019,3 +1019,76 @@ export async function markNotificationRead(id: string): Promise<void> {
 export async function markAllNotificationsRead(): Promise<void> {
   await http.post('/api/v1/notifications/read-all', {}, { _silent: true } as any)
 }
+
+// ─── Key 创建申请与审批 ──────────────────────────────────────────────────────
+
+import type {
+  KeyRequest,
+  CreateKeyRequestPayload,
+  KeyCreationPolicyInfo,
+  KeyRequestSummary,
+} from '@/types/key-request'
+
+/** 查询当前用户的 Key 创建策略（free/approval） */
+export async function getKeyCreationPolicy(deptId?: string): Promise<KeyCreationPolicyInfo> {
+  const params: Record<string, string> = {}
+  if (deptId) params.dept_id = deptId
+  const res = await http.get<{ data: KeyCreationPolicyInfo }>('/api/v1/key-requests/policy', { params })
+  return res.data.data
+}
+
+/** 发起 Key 创建申请（可附带预算） */
+export async function createKeyRequest(payload: CreateKeyRequestPayload): Promise<KeyRequest> {
+  const res = await http.post<{ data: KeyRequest }>('/api/v1/key-requests', payload)
+  return res.data.data
+}
+
+/** 查询我的 Key 申请列表 */
+export async function getMyKeyRequests(status?: string): Promise<KeyRequest[]> {
+  const params: Record<string, string> = {}
+  if (status) params.status = status
+  const res = await http.get<{ items: KeyRequest[] }>('/api/v1/key-requests', { params })
+  return res.data.items || []
+}
+
+/** 查询我的申请数量统计 */
+export async function getMyKeyRequestSummary(): Promise<KeyRequestSummary> {
+  const res = await http.get<{ data: KeyRequestSummary }>('/api/v1/key-requests/summary')
+  return res.data.data || { pending: 0, approved: 0, rejected: 0 }
+}
+
+/** 审批人查询待审批列表 */
+export async function getPendingKeyRequests(name?: string): Promise<KeyRequest[]> {
+  const params: Record<string, string> = {}
+  if (name) params.name = name
+  const res = await http.get<{ items: KeyRequest[] }>('/api/v1/key-requests/pending', { params })
+  return res.data.items || []
+}
+
+/** 查询待审批数量（审批人用） */
+export async function getPendingKeyRequestCount(): Promise<number> {
+  const res = await http.get<{ data: { count: number } }>('/api/v1/key-requests/pending/count')
+  return res.data.data?.count || 0
+}
+
+/** 审批 Key 申请（approve/reject/cancel） */
+export async function decideKeyRequest(requestId: string, action: 'approve' | 'reject' | 'cancel', comment?: string): Promise<void> {
+  await http.post(`/api/v1/key-requests/${requestId}/decision`, { action, comment })
+}
+
+/** 审批人查询已处理的申请（approved/rejected） */
+export async function getKeyRequestHistory(limit = 50): Promise<KeyRequest[]> {
+  const res = await http.get<{ data: { items: KeyRequest[] } }>('/api/v1/key-requests/history', { params: { limit } })
+  return res.data.data?.items || []
+}
+
+/** 查询某部门的 Key 创建策略 */
+export async function getDeptKeyCreationPolicy(deptId: string): Promise<{ dept_id: string; key_creation_policy: string }> {
+  const res = await http.get<{ data: { dept_id: string; key_creation_policy: string } }>(`/api/v1/dept-policies/${deptId}/key-creation`)
+  return res.data.data
+}
+
+/** 设置某部门的 Key 创建策略 */
+export async function setDeptKeyCreationPolicy(deptId: string, policy: 'free' | 'approval'): Promise<void> {
+  await http.put(`/api/v1/dept-policies/${deptId}/key-creation`, { policy })
+}

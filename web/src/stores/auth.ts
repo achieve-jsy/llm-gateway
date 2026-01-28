@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { oidcCallback, refreshToken as refreshTokenApi, logout as logoutApi } from '@/services/auth'
+import { oidcCallback, logout as logoutApi } from '@/services/auth'
+import { refreshOnce } from '@/services/tokenRefresh'
 import type { User, DeptStatus } from '@/types/auth'
 
 // org 角色（来自 user_roles 表）
@@ -155,16 +156,16 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function refresh() {
-    const currentRefreshToken = localStorage.getItem('refresh_token')
-    if (!currentRefreshToken) throw new Error('no refresh token')
-    const data = await refreshTokenApi(currentRefreshToken)
-    accessToken.value = data.accessToken
-    refreshTokenValue.value = data.refreshToken
-    localStorage.setItem('access_token', data.accessToken)
-    localStorage.setItem('refresh_token', data.refreshToken)
-    const newClaims = parseJWT(data.accessToken)
+    // 通过共享锁 refreshOnce 刷新，与 http.ts 401 拦截器共用同一 Promise，
+    // 避免定时器和拦截器并发双重消耗 refresh_token。
+    const pair = await refreshOnce()
+    if (!pair) throw new Error('refresh failed')
+    accessToken.value = pair.accessToken
+    refreshTokenValue.value = pair.refreshToken
+    // localStorage 已由 refreshOnce 写入，此处只更新 store 内存状态
+    const newClaims = parseJWT(pair.accessToken)
     if (newClaims?.role) role.value = newClaims.role as UserRole
-    scheduleRefresh(data.accessToken, refresh)
+    scheduleRefresh(pair.accessToken, refresh)
     fetchOrgRoles()
   }
 

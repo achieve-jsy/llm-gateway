@@ -12,6 +12,7 @@ import (
 	cpconfig "github.com/example/llm-gateway/internal/controlplane/config"
 	"github.com/example/llm-gateway/internal/controlplane/event"
 	"github.com/example/llm-gateway/internal/controlplane/handler"
+	"github.com/example/llm-gateway/internal/controlplane/keyactivity"
 	"github.com/example/llm-gateway/internal/controlplane/middleware"
 	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
@@ -290,13 +291,26 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		}
 	}()
 
+	// Key 活动提醒：离线扫描器（不碰 gateway 热路径）
+	// 影子模式（enabled=false）：只写 key_activity_alert 表，不发通知；待观测命中分布合理后再开启通知
+	kaRepo := keyactivity.NewRepo(db)
+	kaNotif := keyactivity.NewStdNotifier(notificationRepo)
+	kaScanner := keyactivity.NewScanner(kaRepo, kaNotif, settingsSvc, kaRepo)
+	kaCron := keyactivity.NewCron(kaScanner, settingsSvc)
+	kaCron.Start(context.Background())
+	go func() {
+		if err := kaCron.RunOnce(context.Background()); err != nil {
+			slog.Warn("key_activity: initial scan failed", "error", err)
+		}
+	}()
+
 	// 内部调度器接口（X-Auth-Token 认证，在 handler 内自行校验）
 	r.GET("/api/v1/internal/groups", groupHandler.ListEnabledGroups)
 
 	// 管理接口组（JWT 认证）
 	adminGroup := r.Group("/api/v1")
 	adminGroup.Use(middleware.JWTAuth())
-	adminGroup.Use(middleware.AuditMiddleware(auditSvc))
+	adminGroup.Use(middleware.AuditMiddleware(auditSvc, db))
 	{
 		// 渠道定义（Registry）
 		adminGroup.GET("/provider-definitions", defHandler.ListDefinitions)

@@ -22,7 +22,7 @@ type Config struct {
 	JWTSecret string
 	// Frontend URL to redirect after login
 	FrontendURL string
-	// AccessTokenTTL is the lifetime of an access token (default 2h)
+	// AccessTokenTTL is the lifetime of an access token (default 8h)
 	AccessTokenTTL time.Duration
 }
 
@@ -41,7 +41,7 @@ func LoadConfig() *Config {
 		Scopes:         splitScopes(scopes),
 		JWTSecret:      getEnvOrDefault("JWT_SECRET", "change-me-in-production"),
 		FrontendURL:    getEnvOrDefault("FRONTEND_URL", "http://localhost:5173"),
-		AccessTokenTTL: getEnvDuration("JWT_ACCESS_TOKEN_TTL_MINUTES", 120),
+		AccessTokenTTL: getEnvDuration("JWT_ACCESS_TOKEN_TTL_MINUTES", 480),
 	}
 }
 

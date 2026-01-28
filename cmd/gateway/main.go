@@ -178,10 +178,15 @@ func main() {
 			defer sch.Shutdown()
 			slog.Info("scheduler started")
 
-			// 初始化模型组名称缓存
+			// 初始化模型组名称缓存：阻塞等待首次刷新成功，
+			// 避免 GroupNameCache 尚未就绪时让请求走 direct 路径误返回 404。
+			// 最多尝试 5 次 × 2s 间隔，控制面就绪后即可进入定期刷新循环。
 			nameCache = cache.NewGroupNameCache(internalToken)
+			if err := nameCache.RefreshWithRetry(ctx, controlPlaneURL, 5, 2*time.Second); err != nil {
+				slog.Error("group name cache failed to initialize, group requests may 404 until next refresh", "error", err)
+			}
 			go refreshGroupNameCache(ctx, nameCache, controlPlaneURL)
-			slog.Info("group name cache started")
+			slog.Info("group name cache started", "initialized", nameCache.IsInitialized())
 		}
 	}
 

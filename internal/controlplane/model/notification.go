@@ -30,6 +30,7 @@ const (
 	NotificationTypeBudgetAlert          = "budget_alert"
 	NotificationTypeExpansionApproved    = "expansion_approved"
 	NotificationTypeExpansionRejected    = "expansion_rejected"
+	NotificationTypeKeyActivity          = "key_activity"
 )
 
 // 通知级别常量（与 Announcement.Level 对齐）

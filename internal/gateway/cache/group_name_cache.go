@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -21,6 +22,7 @@ type GroupNameCache struct {
 	mu            sync.RWMutex
 	names         map[string]struct{}
 	internalToken string
+	initialized   atomic.Bool
 }
 
 func NewGroupNameCache(internalToken string) *GroupNameCache {
@@ -37,6 +39,10 @@ func (gc *GroupNameCache) IsGroupName(name string) bool {
 	return ok
 }
 
+func (gc *GroupNameCache) IsInitialized() bool {
+	return gc.initialized.Load()
+}
+
 func (gc *GroupNameCache) SetNames(groupNames []string) {
 	newNames := make(map[string]struct{}, len(groupNames))
 	for _, n := range groupNames {
@@ -47,6 +53,7 @@ func (gc *GroupNameCache) SetNames(groupNames []string) {
 	gc.mu.Lock()
 	gc.names = newNames
 	gc.mu.Unlock()
+	gc.initialized.Store(true)
 }
 
 func (gc *GroupNameCache) Refresh(ctx context.Context, controlPlaneURL string) error {
@@ -98,6 +105,31 @@ func (gc *GroupNameCache) Refresh(ctx context.Context, controlPlaneURL string) e
 	gc.mu.Lock()
 	gc.names = newNames
 	gc.mu.Unlock()
+	gc.initialized.Store(true)
 	slog.Info("group name cache refreshed", "count", len(newNames))
 	return nil
+}
+
+// RefreshWithRetry 在启动阶段阻塞调用，确保首次成功刷新（最多尝试 maxRetries 次，
+// 每次间隔 retryInterval），避免 GroupNameCache 尚未就绪时就让请求走 direct 路径误返回 404。
+// 调用方应在启动 HTTP 服务之前等待本方法返回。
+func (gc *GroupNameCache) RefreshWithRetry(ctx context.Context, controlPlaneURL string, maxRetries int, retryInterval time.Duration) error {
+	var lastErr error
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if err := gc.Refresh(ctx, controlPlaneURL); err != nil {
+			lastErr = err
+			slog.Warn("group name cache startup refresh failed",
+				"attempt", attempt, "max", maxRetries, "error", err)
+			if attempt < maxRetries {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(retryInterval):
+				}
+			}
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("group name cache failed to initialize after %d attempts: %w", maxRetries, lastErr)
 }

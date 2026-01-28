@@ -32,7 +32,7 @@ func (r *AuditLogRepo) CreateAsync(log *model.AuditLog) {
 }
 
 // List 分页查询审计日志
-func (r *AuditLogRepo) List(offset, limit int, userID *uuid.UUID, action, resourceType, deptID string, from, to *time.Time) ([]model.AuditLog, int64, error) {
+func (r *AuditLogRepo) List(offset, limit int, userID *uuid.UUID, action, resourceType, deptID string, deptIDs []string, from, to *time.Time) ([]model.AuditLog, int64, error) {
 	var logs []model.AuditLog
 	var total int64
 
@@ -48,6 +48,8 @@ func (r *AuditLogRepo) List(offset, limit int, userID *uuid.UUID, action, resour
 	}
 	if deptID != "" {
 		query = query.Where("dept_id = ?", deptID)
+	} else if len(deptIDs) > 0 {
+		query = query.Where("dept_id IN ?", deptIDs)
 	}
 	if from != nil {
 		query = query.Where("created_at >= ?", *from)

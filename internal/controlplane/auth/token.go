@@ -52,7 +52,7 @@ func GenerateAccessToken(secret string, ttl time.Duration, userID, deptID, deptN
 	return token.SignedString([]byte(secret))
 }
 
-func GenerateRefreshToken(secret, userID, role string) (string, error) {
+func GenerateRefreshToken(secret, userID, role, name, email, passport string) (string, error) {
 	now := time.Now()
 	claims := &UserClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -61,8 +61,11 @@ func GenerateRefreshToken(secret, userID, role string) (string, error) {
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(7 * 24 * time.Hour)),
 		},
-		UserID: userID,
-		Role:   role,
+		UserID:   userID,
+		Role:     role,
+		Name:     name,
+		Email:    email,
+		Passport: passport,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

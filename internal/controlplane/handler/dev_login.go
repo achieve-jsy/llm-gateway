@@ -85,7 +85,7 @@ func (h *DevLoginHandler) Login(c *gin.Context) {
 		return
 	}
 
-	refreshToken, err := auth.GenerateRefreshToken(h.jwtSecret, user.ID, user.Role)
+	refreshToken, err := auth.GenerateRefreshToken(h.jwtSecret, user.ID, user.Role, name, email, user.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "token generation failed"})
 		return

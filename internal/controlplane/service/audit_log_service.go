@@ -61,7 +61,7 @@ func (s *AuditLogService) Record(in audit.Input) {
 		StatusCode:   statusCode,
 		ClientIP:     sanitizeIP(in.ClientIP),
 		UserAgent:    truncate(in.UserAgent, 512),
-		Details:      truncate(details, 4096),
+		Details:      truncate(details, auditDetailsMaxLen),
 		CreatedAt:    ts,
 	}
 	if err := s.repo.Create(log); err != nil {
@@ -94,13 +94,16 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen]
 }
 
+// 审计详情截断上限（含 request/response body 等富文本）
+const auditDetailsMaxLen = 16384
+
 // List 分页查询审计日志（保留供 handler 调用；不属于 Recorder 接口）
-func (s *AuditLogService) List(offset, limit int, userID *uuid.UUID, action, resourceType, deptID string, from, to *time.Time) ([]model.AuditLog, int64, error) {
+func (s *AuditLogService) List(offset, limit int, userID *uuid.UUID, action, resourceType, deptID string, deptIDs []string, from, to *time.Time) ([]model.AuditLog, int64, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 20
 	}
 	if offset < 0 {
 		offset = 0
 	}
-	return s.repo.List(offset, limit, userID, action, resourceType, deptID, from, to)
+	return s.repo.List(offset, limit, userID, action, resourceType, deptID, deptIDs, from, to)
 }

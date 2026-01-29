@@ -1,10 +1,13 @@
 package middleware
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 
 	gwobs "github.com/example/llm-gateway/internal/gateway/observability"
 )
@@ -20,6 +23,11 @@ type PostCostHook func(c *gin.Context, realCostUSD float64, httpStatus int)
 // 仅对 LLM 调用路径（/v1/chat/completions, /v1/embeddings 等）生效
 // postHook：埋点提交后的可选回调，用于预算核销等业务；传 nil 则跳过
 func UsageCollector(collector *gwobs.Collector, traceWriter *gwobs.TraceWriter, postHook PostCostHook) gin.HandlerFunc {
+	return UsageCollectorWithRedis(collector, traceWriter, postHook, nil)
+}
+
+// UsageCollectorWithRedis 与 UsageCollector 功能一致，额外支持 Redis QPS/TPS 计数器
+func UsageCollectorWithRedis(collector *gwobs.Collector, traceWriter *gwobs.TraceWriter, postHook PostCostHook, rdb *redis.Client) gin.HandlerFunc {
 	tw := traceWriter
 
 	return func(c *gin.Context) {
@@ -70,6 +78,24 @@ func UsageCollector(collector *gwobs.Collector, traceWriter *gwobs.TraceWriter, 
 			event.Status = c.Writer.Status()
 			event.DurationMs = int64(totalMs)
 			collector.Emit(event)
+
+			// ── Redis QPS/TPS 计数器（用于运维看板实时指标） ──
+			if rdb != nil {
+				now := time.Now()
+				minuteKey := now.Format("200601021504") // YYYYMMDDHHMM
+
+				// QPS 计数（请求数）
+				qpsKey := fmt.Sprintf("ops:qps:%s", minuteKey)
+				rdb.Incr(context.Background(), qpsKey)
+				rdb.Expire(context.Background(), qpsKey, 10*time.Minute)
+
+				// TPS 计数（Token 数）
+				if event.TotalTokens > 0 {
+					tpsKey := fmt.Sprintf("ops:tps:%s", minuteKey)
+					rdb.IncrBy(context.Background(), tpsKey, int64(event.TotalTokens))
+					rdb.Expire(context.Background(), tpsKey, 10*time.Minute)
+				}
+			}
 
 			// ── v0.9 预算累加 + 告警触发（postHook，事后记账模式） ──
 			// 仅当 Reserve() 做了检查（context 中有 budget_keys）

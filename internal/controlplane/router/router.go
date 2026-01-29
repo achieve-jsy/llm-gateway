@@ -376,6 +376,16 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		performanceHandler := handler.NewPerformanceHandler(performanceSvc)
 		adminGroup.GET("/health/performance", performanceHandler.GetPerformance)
 
+		// 运维看板（Ops Dashboard）
+		systemMetricsCollector := service.NewSystemMetricsCollector(db, rdb)
+		systemMetricsCollector.Start(context.Background())
+		opsHandler := handler.NewOpsHandler(db, rdb, systemMetricsCollector)
+		adminGroup.GET("/ops/dashboard", opsHandler.GetDashboard)
+		adminGroup.GET("/ops/traffic-trend", opsHandler.GetTrafficTrend)
+		adminGroup.GET("/ops/error-trend", opsHandler.GetErrorTrend)
+		adminGroup.GET("/ops/latency-histogram", opsHandler.GetLatencyHistogram)
+		adminGroup.GET("/ops/error-distribution", opsHandler.GetErrorDistribution)
+
 		// 模型状态变更日志
 		adminGroup.GET("/model-status-logs", modelStatusLogHandler.ListModelStatusLogs)
 

@@ -21,10 +21,24 @@ var sensitiveHeaders = map[string]bool{
 	"x-api-key":     true,
 }
 
+// traceCapturePaths 需要采集请求正文的 LLM 调用路径（OpenAI + Anthropic + Responses + Embeddings）。
+var traceCapturePaths = map[string]struct{}{
+	"/v1/chat/completions":      {},
+	"/v1/messages":              {},
+	"/v1/messages/count_tokens": {},
+	"/v1/responses":             {},
+	"/v1/embeddings":            {},
+}
+
+func isTraceCapturePath(path string) bool {
+	_, ok := traceCapturePaths[path]
+	return ok
+}
+
 // TraceCapture 捕获请求头和请求体，注入 context 供 UsageCollector 使用。
-// 仅对 POST /v1/chat/completions 生效。
+// 对所有 LLM 调用路径（chat / messages / responses / embeddings）生效。
 //
-// 与 LiteLLM 对齐的 sanitize 策略（见 sanitizeChatRequestBody）：
+// 与 LiteLLM 对齐的 sanitize 策略（见 sanitizeJSONRequestBody）：
 //   - base64 data-URI 超过 64 字符时替换为大小占位符（不丢弃）
 //   - 每个文本字段超过 2048 字符时保留首尾 + 截断标记（JSON 结构始终合法）
 //
@@ -39,12 +53,7 @@ var sensitiveHeaders = map[string]bool{
 // 注意：本中间件注册在 AuthMiddleware 之后，log_enabled 此时已可读。
 func TraceCapture() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 只处理 POST /v1/chat/completions
-		if c.Request.Method != http.MethodPost {
-			c.Next()
-			return
-		}
-		if c.Request.URL.Path != "/v1/chat/completions" {
+		if c.Request.Method != http.MethodPost || !isTraceCapturePath(c.Request.URL.Path) {
 			c.Next()
 			return
 		}
@@ -69,12 +78,12 @@ func TraceCapture() gin.HandlerFunc {
 		}
 
 		// 读取完整请求体并恢复给 handler。
-		// sanitizeChatRequestBody 在此同步执行：io.ReadAll（内存拷贝）+ JSON 双序列化。
+		// sanitizeJSONRequestBody 在此同步执行：io.ReadAll（内存拷贝）+ JSON 双序列化。
 		// 对普通大小请求体（< 10KB）影响约 0.1–1ms，是可接受的。
 		// 更大的延迟优化已通过 KeyCache TTL 延长解决（key_cache.go）。
 		if body, err := io.ReadAll(c.Request.Body); err == nil && len(body) > 0 {
 			c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
-			c.Set("trace_req_body", sanitizeChatRequestBody(body))
+			c.Set("trace_req_body", sanitizeJSONRequestBody(body))
 		}
 
 		c.Next()
@@ -92,7 +101,7 @@ const maxBase64LenInTrace = 64
 // dataURIRe 匹配 data:mime;base64,<payload> 格式
 var dataURIRe = regexp.MustCompile(`data:([^;]+);base64,([A-Za-z0-9+/=]+)`)
 
-// sanitizeChatRequestBody 对 chat completion 请求体做两层 sanitize，与 LiteLLM 策略对齐：
+// sanitizeJSONRequestBody 对 JSON 请求体做两层 sanitize，与 LiteLLM 策略对齐：
 //
 //  1. base64 截断（对应 LiteLLM truncate_base64_in_messages）：
 //     messages content 中内嵌的 data-URI base64 payload 超过 maxBase64LenInTrace 字符时，
@@ -103,7 +112,7 @@ var dataURIRe = regexp.MustCompile(`data:([^;]+);base64,([A-Za-z0-9+/=]+)`)
 //     截断发生在字段值内部，JSON 结构始终合法。
 //
 // 非合法 JSON 或解析出错时原样返回，保证调用方始终拿到 []byte（不返回 nil）。
-func sanitizeChatRequestBody(raw []byte) []byte {
+func sanitizeJSONRequestBody(raw []byte) []byte {
 	var body map[string]any
 	if err := json.Unmarshal(raw, &body); err != nil {
 		// 非合法 JSON，原样返回；调用方的 json.Valid 会决定是否写库
@@ -117,6 +126,11 @@ func sanitizeChatRequestBody(raw []byte) []byte {
 		return raw
 	}
 	return b
+}
+
+// sanitizeChatRequestBody 保留旧名供测试引用。
+func sanitizeChatRequestBody(raw []byte) []byte {
+	return sanitizeJSONRequestBody(raw)
 }
 
 // sanitizeValue 递归处理 map/slice/string，原地修改 map 与 slice 中的值。

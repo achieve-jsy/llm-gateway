@@ -59,6 +59,7 @@ func (h *ResponsesHandler) Handle(c *gin.Context) {
 
 	c.Set("model", req.Model)
 	originalModel := req.Model
+	c.Set("stream", req.Stream)
 
 	// v0.9: 预算检查（事后记账模式）
 	if h.budgetDeps != nil {

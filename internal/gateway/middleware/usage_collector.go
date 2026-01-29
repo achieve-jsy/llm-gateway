@@ -154,8 +154,16 @@ func UsageCollector(collector *gwobs.Collector, traceWriter *gwobs.TraceWriter, 
 				}
 			}
 		} else {
-			// 非流式：直接从 orchestrator 写回的完整响应对象序列化
-			// 避免 responseBodyWriter buf 对非流式响应的重复内存占用
+			// 非流式：直接从 orchestrator / handler 写回的完整响应对象序列化
+			if respObj, ok := c.Get("resp_object"); ok {
+				if b, err := json.Marshal(respObj); err == nil {
+					te.ResponseBodyRaw = b
+				}
+			}
+		}
+
+		// 流式 observer 未拼接成功时，尝试 handler 登记的 resp_object（如错误响应）
+		if len(te.ResponseBodyRaw) == 0 {
 			if respObj, ok := c.Get("resp_object"); ok {
 				if b, err := json.Marshal(respObj); err == nil {
 					te.ResponseBodyRaw = b

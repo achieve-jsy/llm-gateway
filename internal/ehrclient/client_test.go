@@ -14,6 +14,7 @@ import (
 func testConfig(baseURL string) Config {
 	cfg := DefaultConfig()
 	cfg.BaseURL = baseURL
+	cfg.APIPrefix = prodAPIPrefix
 	cfg.Token = "test-token"
 	cfg.RateLimit = 0
 	return cfg
@@ -245,7 +246,7 @@ func TestClient_ContextCancel(t *testing.T) {
 func TestClient_ListCompanies_200(t *testing.T) {
 	t.Parallel()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/open-apis/resource/v1/companies" {
+		if r.URL.Path != "/open-apis/ehr-apic/resource/v1/companies" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		if r.URL.Query().Get("orgId") != "org-1" {
@@ -318,7 +319,7 @@ func TestClient_ListEmployees_200(t *testing.T) {
 func TestClient_ListEmployeesBatch_200(t *testing.T) {
 	t.Parallel()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/open-apis/resource/v1/employees/batch" {
+		if r.URL.Path != "/open-apis/ehr-apic/resource/v1/employees/batch" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		got := r.URL.Query().Get("employeeIds")

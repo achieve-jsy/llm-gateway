@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -479,11 +478,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 		// EHR 组织结构同步
 		ehrRepo := ehrsync.NewRepository(db)
-		ehrClient := ehrclient.NewClient(ehrclient.DefaultConfig())
-		// 从环境变量读取 token
-		if tok := os.Getenv("EHR_API_TOKEN"); tok != "" {
-			ehrClient.TokenManager().Replace(tok)
-		}
+		ehrClient := ehrclient.NewClient(ehrclient.ConfigFromEnv())
 		ehrCursor := ehrsync.NewCursorManager(rdb)
 		ehrRecorder := ehrsync.NewLogRecorder(ehrRepo)
 		orch := ehrsync.NewOrchestrator(ehrsync.OrchestratorDeps{

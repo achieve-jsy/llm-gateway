@@ -15,20 +15,11 @@ import (
 // Config EHR Client 配置
 type Config struct {
 	BaseURL    string
+	APIPrefix  string // 如 /open-apis/ehrapi（测试）或 /open-apis/ehr-apic（正式）
 	Token      string
 	Timeout    time.Duration
 	MaxRetries int
 	RateLimit  float64 // requests/sec, 0 表示不限流
-}
-
-// DefaultConfig 默认配置：10s 超时、3 次重试、100 QPS 限流
-func DefaultConfig() Config {
-	return Config{
-		BaseURL:    "https://open.example.com",
-		Timeout:    10 * time.Second,
-		MaxRetries: 3,
-		RateLimit:  100,
-	}
 }
 
 // Option 选项函数
@@ -166,7 +157,7 @@ func (c *Client) get(ctx context.Context, path string, params map[string]string,
 
 func (c *Client) ListOrganizations(ctx context.Context) (*ListOrganizationReply, error) {
 	var out ListOrganizationReply
-	if err := c.get(ctx, "/open-apis/resource/v1/organizations", nil, &out); err != nil {
+	if err := c.get(ctx, c.resourcePath("organizations"), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -174,7 +165,7 @@ func (c *Client) ListOrganizations(ctx context.Context) (*ListOrganizationReply,
 
 func (c *Client) ListCompanies(ctx context.Context, orgID string) (*ListCompanyReply, error) {
 	var out ListCompanyReply
-	if err := c.get(ctx, "/open-apis/resource/v1/companies", map[string]string{"orgId": orgID}, &out); err != nil {
+	if err := c.get(ctx, c.resourcePath("companies"), map[string]string{"orgId": orgID}, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -183,7 +174,7 @@ func (c *Client) ListCompanies(ctx context.Context, orgID string) (*ListCompanyR
 func (c *Client) ListDepartments(ctx context.Context, orgID string, deptIDs []string) (*ListDepartmentReply, error) {
 	params := map[string]string{"orgId": orgID}
 	var out ListDepartmentReply
-	if err := c.get(ctx, "/open-apis/resource/v1/departments", withSliceParam(params, "departmentIds", deptIDs), &out); err != nil {
+	if err := c.get(ctx, c.resourcePath("departments"), withSliceParam(params, "departmentIds", deptIDs), &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -192,7 +183,7 @@ func (c *Client) ListDepartments(ctx context.Context, orgID string, deptIDs []st
 func (c *Client) ListEmployees(ctx context.Context, orgID string, deptIDs []string) (*ListEmployeeReply, error) {
 	params := map[string]string{"orgId": orgID}
 	var out ListEmployeeReply
-	if err := c.get(ctx, "/open-apis/resource/v1/employees", withSliceParam(params, "departmentIds", deptIDs), &out); err != nil {
+	if err := c.get(ctx, c.resourcePath("employees"), withSliceParam(params, "departmentIds", deptIDs), &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -201,7 +192,7 @@ func (c *Client) ListEmployees(ctx context.Context, orgID string, deptIDs []stri
 func (c *Client) ListEmployeesBatch(ctx context.Context, orgID string, employeeIDs []string) (*ListEmployeeReply, error) {
 	params := map[string]string{"orgId": orgID}
 	var out ListEmployeeReply
-	if err := c.get(ctx, "/open-apis/resource/v1/employees/batch", withSliceParam(params, "employeeIds", employeeIDs), &out); err != nil {
+	if err := c.get(ctx, c.resourcePath("employees/batch"), withSliceParam(params, "employeeIds", employeeIDs), &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -209,7 +200,7 @@ func (c *Client) ListEmployeesBatch(ctx context.Context, orgID string, employeeI
 
 func (c *Client) ListPositions(ctx context.Context, orgID string) (*ListPositionReply, error) {
 	var out ListPositionReply
-	if err := c.get(ctx, "/open-apis/resource/v1/positions", map[string]string{"orgId": orgID}, &out); err != nil {
+	if err := c.get(ctx, c.resourcePath("positions"), map[string]string{"orgId": orgID}, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

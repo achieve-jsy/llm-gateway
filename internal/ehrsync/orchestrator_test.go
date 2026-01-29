@@ -60,15 +60,15 @@ func healthyHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case strings.HasPrefix(r.URL.Path, "/open-apis/resource/v1/organizations"):
+		case strings.HasPrefix(r.URL.Path, "/open-apis/ehr-apic/resource/v1/organizations"):
 			w.Write([]byte(`{"items":[{"orgId":"org-1","orgName":"Alpha Org","orgCode":"A","createDate":"2024-01-01","lastModifyDate":"2025-01-15 10:00:00"}]}`))
-		case strings.HasPrefix(r.URL.Path, "/open-apis/resource/v1/companies"):
+		case strings.HasPrefix(r.URL.Path, "/open-apis/ehr-apic/resource/v1/companies"):
 			w.Write([]byte(`{"items":[{"companyId":"c1","companyName":"AlphaCo","companyCode":"AC","parentId":"","lastModifyDate":"2025-01-15 10:00:00"}]}`))
-		case strings.HasPrefix(r.URL.Path, "/open-apis/resource/v1/departments"):
+		case strings.HasPrefix(r.URL.Path, "/open-apis/ehr-apic/resource/v1/departments"):
 			w.Write([]byte(`{"items":[{"departmentId":"d1","departmentName":"Engineering","departmentCode":"ENG","departmentType":1,"departmentTypeName":"Tech","parentId":"","lastModifyDate":"2025-01-15 10:00:00","leaderName":"","leaderPassport":"","leaderPersonId":"","leaderEmployeeId":"","managerName":"","managerPassport":"","managerPersonId":"","managerEmployeeId":"","hrBpName":"","hrBpEmployeeId":""}]}`))
-		case strings.HasPrefix(r.URL.Path, "/open-apis/resource/v1/employees"):
+		case strings.HasPrefix(r.URL.Path, "/open-apis/ehr-apic/resource/v1/employees"):
 			w.Write([]byte(`{"items":[{"employeeId":"e1","personId":"pid1","passport":"P001","appointName":"Alice","appointCode":"A1","office":"HQ","email":"alice@x.com","personStatus":1,"personType":0,"isDefault":true,"companyId":"c1","companyName":"AlphaCo","departmentId":"d1","departmentName":"Engineering","positionId":"pos1","positionName":"SWE","positionCategoryId":"cat1","managerEmployeeId":"","managerPersonId":"","managerPassport":"","managerName":"","personName":"Alice","groupENumber":"E001","gender":1,"joinDate":"2024-01-01","onBoardDate":"2024-01-02","location":"NYC","dismissDate":"","lastModifyDate":"2025-01-15 10:00:00"}]}`))
-		case strings.HasPrefix(r.URL.Path, "/open-apis/resource/v1/positions"):
+		case strings.HasPrefix(r.URL.Path, "/open-apis/ehr-apic/resource/v1/positions"):
 			w.Write([]byte(`{"items":[{"id":"pos1","name":"Software Engineer","type":1,"namePath":"Software Engineer","items":[]}]}`))
 		default:
 			http.NotFound(w, r)

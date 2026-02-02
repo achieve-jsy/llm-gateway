@@ -302,11 +302,10 @@ onMounted(() => {
 <style scoped>
 /* ====== 卡片容器 ====== */
 .ops-card {
-  background: var(--bg-surface);
+  background: var(--bg-card);
   border: 1px solid var(--border-default);
-  border-radius: 24px;
+  border-radius: var(--radius-3xl);
   padding: 24px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 /* ====== 卡片头部 ====== */
@@ -321,7 +320,7 @@ onMounted(() => {
 
 .ops-card-title {
   font-size: 15px;
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
   color: var(--text-primary);
   margin: 0;
 }
@@ -362,7 +361,7 @@ onMounted(() => {
 }
 
 .ops-stat-chip {
-  font-size: 11px;
+  font-size: var(--font-size-xxs);
   padding: 2px 10px;
   border-radius: 12px;
   background: var(--bg-subtle);
@@ -415,13 +414,13 @@ onMounted(() => {
 
 .ops-provider-name {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: var(--text-primary);
   line-height: 1.3;
 }
 
 .ops-provider-type {
-  font-size: 11px;
+  font-size: var(--font-size-xxs);
   color: var(--text-placeholder);
 }
 
@@ -442,7 +441,7 @@ onMounted(() => {
 /* ====== 速率限制徽章 ====== */
 .ops-rate-limit-badge {
   padding: 2px 10px !important;
-  font-size: 11px !important;
+  font-size: var(--font-size-xxs) !important;
   border-radius: 12px !important;
   flex-shrink: 0;
   animation: ops-pulse 2s ease-in-out infinite;
@@ -454,7 +453,7 @@ onMounted(() => {
 }
 
 .ops-rate-remaining {
-  font-size: 11px;
+  font-size: var(--font-size-xxs);
   color: var(--text-placeholder);
   white-space: nowrap;
   flex-shrink: 0;
@@ -463,7 +462,7 @@ onMounted(() => {
 
 .ops-rate-remaining--low {
   color: #f59e0b;
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 /* ====== 加载条 ====== */
@@ -484,7 +483,7 @@ onMounted(() => {
 
 /* ====== 数值文本 ====== */
 .ops-load-text {
-  font-size: 11px;
+  font-size: var(--font-size-xxs);
   color: var(--text-secondary);
   width: 36px;
   text-align: right;
@@ -494,7 +493,7 @@ onMounted(() => {
 
 .ops-active-count,
 .ops-queue-count {
-  font-size: 11px;
+  font-size: var(--font-size-xxs);
   color: var(--text-placeholder);
   width: 52px;
   flex-shrink: 0;
@@ -502,7 +501,7 @@ onMounted(() => {
 }
 
 .ops-error-count {
-  font-size: 11px;
+  font-size: var(--font-size-xxs);
   color: var(--text-placeholder);
   width: 52px;
   flex-shrink: 0;
@@ -511,7 +510,7 @@ onMounted(() => {
 
 .ops-error-count--has {
   color: #ef4444;
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 /* ====== User 视图表格 ====== */
@@ -529,7 +528,7 @@ onMounted(() => {
   text-align: left;
   padding: 8px 12px;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: var(--text-secondary);
   border-bottom: 1px solid var(--border-default);
   white-space: nowrap;
@@ -589,7 +588,7 @@ onMounted(() => {
     width: auto;
   }
   .ops-card {
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     padding: 16px;
   }
 }

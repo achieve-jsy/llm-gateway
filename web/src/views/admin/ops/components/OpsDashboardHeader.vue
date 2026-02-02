@@ -214,7 +214,7 @@
     <div class="ops-metrics-grid">
       <!-- 1. 请求总量 -->
       <div class="ops-metric-card">
-        <div class="ops-metric-label">
+        <div class="ops-metric-label ops-section-label">
           <el-tooltip content="选中时段内所有请求的总数量和消耗的总 Tokens" placement="top">
             <span>请求总量</span>
           </el-tooltip>
@@ -230,7 +230,7 @@
 
       <!-- 2. 成功率 (SLA) -->
       <div class="ops-metric-card">
-        <div class="ops-metric-label">
+        <div class="ops-metric-label ops-section-label">
           <el-tooltip content="SLA 成功率，计算口径为扣除 SLA 错误数后的请求成功率" placement="top">
             <span>成功率 (SLA)</span>
           </el-tooltip>
@@ -252,7 +252,7 @@
 
       <!-- 3. 错误统计 -->
       <div class="ops-metric-card">
-        <div class="ops-metric-label">
+        <div class="ops-metric-label ops-section-label">
           <el-tooltip content="请求错误 (4xx 客户端) 和上游错误 (5xx 网关/上游服务) 分类统计" placement="top">
             <span>错误统计</span>
           </el-tooltip>
@@ -272,7 +272,7 @@
 
       <!-- 4. 延迟 P99 -->
       <div class="ops-metric-card">
-        <div class="ops-metric-label">
+        <div class="ops-metric-label ops-section-label">
           <el-tooltip content="端到端请求延迟的 P99 百分位值，含网关处理 + 上游调用完整链路" placement="top">
             <span>延迟 P99</span>
           </el-tooltip>
@@ -289,7 +289,7 @@
 
       <!-- 5. 首字延迟 P99 (TTFT) -->
       <div class="ops-metric-card">
-        <div class="ops-metric-label">
+        <div class="ops-metric-label ops-section-label">
           <el-tooltip content="首 Token 延迟 (Time To First Token) 的 P99 百分位值，衡量流式响应首字节速度" placement="top">
             <span>首字延迟 P99</span>
           </el-tooltip>
@@ -306,7 +306,7 @@
 
       <!-- 6. 上游错误率 -->
       <div class="ops-metric-card">
-        <div class="ops-metric-label">
+        <div class="ops-metric-label ops-section-label">
           <el-tooltip content="上游服务端错误占比，含 5xx 返回；excl 429/529 为扣除限流后的真实错误量" placement="top">
             <span>上游错误率</span>
           </el-tooltip>
@@ -327,7 +327,7 @@
     <!-- System Metrics Bar -->
     <div class="ops-system-metrics">
       <div class="ops-system-item">
-        <div class="ops-system-label">
+        <div class="ops-system-label ops-section-label">
           <el-tooltip content="当前进程 CPU 使用率，基于 Go runtime 采样" placement="top">
             <span>CPU</span>
           </el-tooltip>
@@ -338,7 +338,7 @@
       </div>
 
       <div class="ops-system-item">
-        <div class="ops-system-label">
+        <div class="ops-system-label ops-section-label">
           <el-tooltip content="进程 RSS 内存使用，包含 HeapAlloc + 栈 + 系统占用" placement="top">
             <span>内存</span>
           </el-tooltip>
@@ -352,7 +352,7 @@
       </div>
 
       <div class="ops-system-item">
-        <div class="ops-system-label">
+        <div class="ops-system-label ops-section-label">
           <el-tooltip content="PostgreSQL 连接池活跃连接占比，接近上限时可能出现请求等待" placement="top">
             <span>DB 连接</span>
           </el-tooltip>
@@ -366,7 +366,7 @@
       </div>
 
       <div class="ops-system-item">
-        <div class="ops-system-label">
+        <div class="ops-system-label ops-section-label">
           <el-tooltip content="Redis 连接池使用率，过高可能导致获取连接超时" placement="top">
             <span>Redis 连接</span>
           </el-tooltip>
@@ -380,7 +380,7 @@
       </div>
 
       <div class="ops-system-item">
-        <div class="ops-system-label">
+        <div class="ops-system-label ops-section-label">
           <el-tooltip content="当前 Goroutine 数量，持续上涨可能存在泄漏风险" placement="top">
             <span>Goroutine</span>
           </el-tooltip>
@@ -391,7 +391,7 @@
       </div>
 
       <div class="ops-system-item">
-        <div class="ops-system-label">
+        <div class="ops-system-label ops-section-label">
           <el-tooltip content="后台定时任务状态，running 为正常运行，failed/errored 需要关注" placement="top">
             <span>Jobs</span>
           </el-tooltip>
@@ -933,14 +933,13 @@ const formatNumber = (num: number): string => {
 <style scoped>
 /* ============ 容器对齐 sub2api ============ */
 .ops-header-card {
-  background: var(--bg-surface);
+  background: var(--bg-card);
   border: 1px solid var(--border-default);
-  border-radius: 24px;
+  border-radius: var(--radius-3xl);
   padding: 24px;
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   transition: box-shadow 0.2s ease;
 }
 
@@ -967,7 +966,7 @@ const formatNumber = (num: number): string => {
   align-items: center;
   gap: var(--space-2);
   font-size: var(--font-size-section);
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
   color: var(--text-primary);
   margin: 0;
 }
@@ -1091,7 +1090,7 @@ const formatNumber = (num: number): string => {
 
 .ops-health-value {
   font-size: 32px;
-  font-weight: 700;
+  font-weight: var(--font-weight-black);
   line-height: 1;
   transition: color 0.6s ease;
 }
@@ -1189,7 +1188,7 @@ const formatNumber = (num: number): string => {
 
 .ops-realtime-value {
   font-size: 28px;
-  font-weight: 700;
+  font-weight: var(--font-weight-black);
   color: var(--text-primary);
   transition: color 0.3s ease;
 }
@@ -1271,7 +1270,10 @@ const formatNumber = (num: number): string => {
 }
 
 .ops-metric-label {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-xxs);
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
   color: var(--text-secondary);
   display: flex;
   align-items: center;
@@ -1280,8 +1282,9 @@ const formatNumber = (num: number): string => {
 
 .ops-metric-value {
   font-size: 24px;
-  font-weight: 700;
+  font-weight: var(--font-weight-black);
   color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
 }
 .ops-metric-value--danger {
   color: #ef4444;
@@ -1342,15 +1345,15 @@ const formatNumber = (num: number): string => {
 }
 
 .ops-latency-k {
-  font-size: 10px;
+  font-size: var(--font-size-xxs);
   color: var(--text-placeholder);
   line-height: 1;
 }
 
 .ops-latency-v {
-  font-size: 11px;
+  font-size: var(--font-size-xxs);
   color: var(--text-secondary);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   line-height: 1.2;
 }
 
@@ -1372,13 +1375,16 @@ const formatNumber = (num: number): string => {
 }
 
 .ops-system-label {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-xxs);
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
   color: var(--text-secondary);
 }
 
 .ops-system-value {
   font-size: 18px;
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   margin-top: 4px;
   transition: color 0.4s ease;
 }
@@ -1456,6 +1462,7 @@ const formatNumber = (num: number): string => {
   }
   .ops-header-card {
     padding: 16px;
+    border-radius: var(--radius-xl);
   }
   .ops-filter-select,
   .ops-time-select {

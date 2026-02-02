@@ -198,9 +198,9 @@ function formatTime(timestamp: string): string {
 
 <style scoped>
 .ops-chart-card {
-  background: var(--bg-surface);
+  background: var(--bg-card);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-3xl);
   padding: var(--space-6);
 }
 
@@ -218,7 +218,7 @@ function formatTime(timestamp: string): string {
   align-items: center;
   gap: var(--space-2);
   font-size: var(--font-size-sm);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: var(--text-primary);
   margin: 0;
   white-space: nowrap;

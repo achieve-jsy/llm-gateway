@@ -200,11 +200,11 @@ async function fetchData() {
   padding: 8px 10px;
   border-bottom: 1px solid var(--border-light, #e5e7eb);
   color: var(--text-secondary, #64748b);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   white-space: nowrap;
   position: sticky;
   top: 0;
-  background: var(--bg-surface, #fff);
+  background: var(--bg-card, #fff);
 }
 
 .ops-table td {
@@ -225,7 +225,7 @@ async function fetchData() {
 .ops-td-time {
   white-space: nowrap;
   color: var(--text-secondary, #64748b);
-  font-size: 11px;
+  font-size: var(--font-size-xxs);
 }
 
 .ops-td-msg {

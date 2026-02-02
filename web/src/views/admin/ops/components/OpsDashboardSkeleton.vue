@@ -76,9 +76,9 @@ defineProps<{
 }
 
 .ops-skeleton__header {
-  background: var(--bg-surface);
+  background: var(--bg-card);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-3xl);
   padding: var(--space-6);
   display: flex;
   flex-direction: column;
@@ -157,9 +157,9 @@ defineProps<{
 }
 
 .skeleton-chart-card {
-  background: var(--bg-surface);
+  background: var(--bg-card);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-3xl);
   padding: var(--space-6);
   display: flex;
   flex-direction: column;

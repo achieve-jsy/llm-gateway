@@ -292,9 +292,9 @@ async function cleanupLogs() {
 
 <style scoped>
 .ops-card {
-  background: var(--bg-surface);
+  background: var(--bg-card);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-3xl);
   padding: var(--space-4);
 }
 
@@ -307,7 +307,7 @@ async function cleanupLogs() {
 
 .ops-card-title {
   font-size: var(--font-size-sm);
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
   color: var(--text-primary);
   margin: 0;
 }
@@ -321,7 +321,7 @@ async function cleanupLogs() {
 }
 
 .ops-sink-chip {
-  font-size: 11px;
+  font-size: var(--font-size-xxs);
   padding: 2px 8px;
   border-radius: 10px;
   background: var(--bg-subtle);
@@ -372,7 +372,7 @@ async function cleanupLogs() {
 }
 
 .ops-config-label {
-  font-size: 11px;
+  font-size: var(--font-size-xxs);
   color: var(--text-placeholder);
 }
 
@@ -416,7 +416,7 @@ async function cleanupLogs() {
   padding: 8px 10px;
   border-bottom: 1px solid var(--border-light);
   color: var(--text-secondary);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   white-space: nowrap;
 }
 
@@ -439,8 +439,8 @@ async function cleanupLogs() {
 .ops-td-time {
   white-space: nowrap;
   color: var(--text-secondary);
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 11px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xxs);
 }
 
 .ops-td-msg {
@@ -448,8 +448,8 @@ async function cleanupLogs() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 11px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xxs);
 }
 
 .ops-expand-row td {
@@ -466,22 +466,22 @@ async function cleanupLogs() {
   gap: 16px;
   flex-wrap: wrap;
   margin-top: 8px;
-  font-size: 11px;
+  font-size: var(--font-size-xxs);
   color: var(--text-secondary);
 }
 
 .ops-pre {
-  background: var(--bg-card, var(--bg-surface));
+  background: var(--bg-card);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-base);
   padding: 8px 12px;
-  font-size: 11px;
+  font-size: var(--font-size-xxs);
   color: var(--text-secondary);
   overflow-x: auto;
   margin: 4px 0;
   white-space: pre-wrap;
   word-break: break-all;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-family: var(--font-family-mono);
 }
 
 .ops-card-empty {

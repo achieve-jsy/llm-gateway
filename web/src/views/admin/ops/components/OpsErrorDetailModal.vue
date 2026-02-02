@@ -221,9 +221,9 @@ async function markResolved() {
 }
 
 .ops-detail-label {
-  font-size: 11px;
+  font-size: var(--font-size-xxs);
   color: var(--text-placeholder, #94a3b8);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 .ops-detail-value {
@@ -232,8 +232,8 @@ async function markResolved() {
 }
 
 .ops-detail-item code {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 11px;
+font-family: var(--font-family-mono);
+  font-size: var(--font-size-xxs);
   background: var(--bg-subtle, #f8fafc);
   padding: 2px 6px;
   border-radius: 4px;
@@ -252,13 +252,13 @@ async function markResolved() {
   border: 1px solid var(--border-light, #e5e7eb);
   border-radius: var(--radius-base, 6px);
   padding: 10px 14px;
-  font-size: 11px;
+  font-size: var(--font-size-xxs);
   color: #ef4444;
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-all;
   margin: 0;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-family: var(--font-family-mono);
 }
 
 .ops-detail-actions {

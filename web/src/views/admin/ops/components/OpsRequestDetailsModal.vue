@@ -271,11 +271,11 @@ async function fetchData() {
   padding: 8px 10px;
   border-bottom: 1px solid var(--border-light, #e5e7eb);
   color: var(--text-secondary, #64748b);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   white-space: nowrap;
   position: sticky;
   top: 0;
-  background: var(--bg-surface, #fff);
+  background: var(--bg-card, #fff);
   z-index: 1;
 }
 
@@ -288,8 +288,8 @@ async function fetchData() {
 .ops-td-time {
   white-space: nowrap;
   color: var(--text-secondary, #64748b);
-  font-size: 11px;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: var(--font-size-xxs);
+  font-family: var(--font-family-mono);
 }
 
 .ops-td-dash {
@@ -297,8 +297,8 @@ async function fetchData() {
 }
 
 .ops-request-id {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 11px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xxs);
   color: #3b82f6;
   cursor: pointer;
   text-decoration: underline;

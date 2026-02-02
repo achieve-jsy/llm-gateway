@@ -242,9 +242,9 @@ async function handleDelete(rule: AlertRule) {
 
 <style scoped>
 .ops-card {
-  background: var(--bg-surface);
+  background: var(--bg-card);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-3xl);
   padding: var(--space-4);
 }
 
@@ -257,7 +257,7 @@ async function handleDelete(rule: AlertRule) {
 
 .ops-card-title {
   font-size: var(--font-size-sm);
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
   color: var(--text-primary);
   margin: 0;
 }
@@ -277,7 +277,7 @@ async function handleDelete(rule: AlertRule) {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border-light);
   color: var(--text-secondary);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   white-space: nowrap;
 }
 
@@ -288,8 +288,8 @@ async function handleDelete(rule: AlertRule) {
 }
 
 .ops-code {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 11px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xxs);
   background: var(--bg-subtle);
   padding: 2px 6px;
   border-radius: 4px;

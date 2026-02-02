@@ -491,7 +491,7 @@ onUnmounted(() => {
   gap: var(--space-2);
   background: var(--bg-card, #fff);
   padding: var(--space-2) var(--space-3);
-  border-radius: var(--border-radius);
+  border-radius: var(--radius-lg);
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
 }
 

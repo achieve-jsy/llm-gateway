@@ -146,9 +146,9 @@ async function fetchData() {
 
 <style scoped>
 .ops-card {
-  background: var(--bg-surface);
+  background: var(--bg-card);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-3xl);
   padding: var(--space-4);
 }
 
@@ -163,7 +163,7 @@ async function fetchData() {
 
 .ops-card-title {
   font-size: var(--font-size-sm);
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
   color: var(--text-primary);
   margin: 0;
 }
@@ -174,7 +174,7 @@ async function fetchData() {
 }
 
 .ops-stat-chip {
-  font-size: 11px;
+  font-size: var(--font-size-xxs);
   padding: 2px 8px;
   border-radius: 10px;
   background: var(--bg-subtle);
@@ -211,7 +211,7 @@ async function fetchData() {
   padding: 8px 10px;
   border-bottom: 1px solid var(--border-light);
   color: var(--text-secondary);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   white-space: nowrap;
   cursor: pointer;
   user-select: none;

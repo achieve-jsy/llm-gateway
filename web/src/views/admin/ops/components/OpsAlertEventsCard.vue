@@ -287,9 +287,9 @@ async function manualResolve() {
 
 <style scoped>
 .ops-card {
-  background: var(--bg-surface);
+  background: var(--bg-card);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-3xl);
   padding: var(--space-4);
 }
 
@@ -302,7 +302,7 @@ async function manualResolve() {
 
 .ops-card-title {
   font-size: var(--font-size-sm);
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
   color: var(--text-primary);
   margin: 0;
 }
@@ -333,7 +333,7 @@ async function manualResolve() {
   padding: 8px 10px;
   border-bottom: 1px solid var(--border-light);
   color: var(--text-secondary);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   white-space: nowrap;
 }
 
@@ -404,9 +404,9 @@ async function manualResolve() {
 }
 
 .ops-detail-label {
-  font-size: 11px;
+  font-size: var(--font-size-xxs);
   color: var(--text-placeholder);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 .ops-detail-section {

@@ -482,20 +482,21 @@ func (h *OpsHandler) GetLatencyHistogram(c *gin.Context) {
 	}
 
 	err := h.db.Raw(fmt.Sprintf(`
-		SELECT
-			CASE
-				WHEN duration_ms < 100 THEN '0-100ms'
-				WHEN duration_ms < 500 THEN '100-500ms'
-				WHEN duration_ms < 1000 THEN '500-1s'
-				WHEN duration_ms < 2000 THEN '1-2s'
-				WHEN duration_ms < 5000 THEN '2-5s'
-				ELSE '5s+'
-			END as latency_range,
-			COUNT(*)::bigint as count
-		FROM call_logs
-		WHERE ts > NOW() - INTERVAL '%s'
-		GROUP BY latency_range
-		ORDER BY
+		SELECT latency_range, count FROM (
+			SELECT
+				CASE
+					WHEN duration_ms < 100 THEN '0-100ms'
+					WHEN duration_ms < 500 THEN '100-500ms'
+					WHEN duration_ms < 1000 THEN '500-1s'
+					WHEN duration_ms < 2000 THEN '1-2s'
+					WHEN duration_ms < 5000 THEN '2-5s'
+					ELSE '5s+'
+				END as latency_range,
+				COUNT(*)::bigint as count
+			FROM call_logs
+			WHERE ts > NOW() - INTERVAL '%s'
+			GROUP BY latency_range
+		) sub ORDER BY
 			CASE latency_range
 				WHEN '0-100ms' THEN 1
 				WHEN '100-500ms' THEN 2
@@ -660,7 +661,7 @@ func (h *OpsHandler) ListRequests(c *gin.Context) {
 	`, where, sortCol, sortOrder)
 	allArgs := append(args, pageSize, offset)
 
-	var items []gin.H
+	items := make([]gin.H, 0)
 	rows, err := h.db.Raw(listQuery, allArgs...).Rows()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query requests"})
@@ -740,7 +741,7 @@ func (h *OpsHandler) ListRequestErrors(c *gin.Context) {
 	`, where)
 	allArgs := append(args, pageSize, offset)
 
-	var items []gin.H
+	items := make([]gin.H, 0)
 	rows, err := h.db.Raw(query, allArgs...).Rows()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query request errors"})
@@ -932,7 +933,7 @@ func (h *OpsHandler) ListUpstreamErrors(c *gin.Context) {
 	`, where)
 	allArgs := append(args, pageSize, offset)
 
-	var items []gin.H
+	items := make([]gin.H, 0)
 	rows, err := h.db.Raw(query, allArgs...).Rows()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query upstream errors"})
@@ -969,7 +970,7 @@ func (h *OpsHandler) GetConcurrencyStats(c *gin.Context) {
 		RequestCount int64   `json:"request_count"`
 	}
 
-	var providers []providerStat
+	providers := make([]providerStat, 0)
 
 	// 1. 从 Redis 获取各 provider 并发数
 	if h.rdb != nil {
@@ -1165,7 +1166,7 @@ func (h *OpsHandler) GetThroughputTrend(c *gin.Context) {
 
 	if topGroups > 0 {
 		// 按 top group 维度
-		var topNames []string
+		topNames := make([]string, 0)
 		h.db.Raw(fmt.Sprintf(`
 			SELECT group_name FROM call_logs
 			WHERE ts > NOW() - INTERVAL '%s' AND group_name != '' AND routed_via_group = true
@@ -1240,7 +1241,7 @@ func (h *OpsHandler) GetThroughputTrend(c *gin.Context) {
 // ListAlertRules 查询告警规则列表
 // GET /api/v1/ops/alert-rules
 func (h *OpsHandler) ListAlertRules(c *gin.Context) {
-	var rules []model.AlertRule
+	rules := make([]model.AlertRule, 0)
 	if err := h.db.Order("id DESC").Find(&rules).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list alert rules"})
 		return
@@ -1346,7 +1347,7 @@ func (h *OpsHandler) ListAlertEvents(c *gin.Context) {
 	}
 
 	args = append(args, limit)
-	var events []model.AlertEvent
+	events := make([]model.AlertEvent, 0)
 	query := fmt.Sprintf("SELECT * FROM alert_events %s ORDER BY fired_at DESC, id DESC LIMIT ?", where)
 	if err := h.db.Raw(query, args...).Scan(&events).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list alert events"})
@@ -1478,7 +1479,7 @@ func (h *OpsHandler) ListSystemLogs(c *gin.Context) {
 	`, where)
 	allArgs := append(args, pageSize, offset)
 
-	var items []model.SystemLog
+	items := make([]model.SystemLog, 0)
 	if err := h.db.Raw(query, allArgs...).Scan(&items).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query system logs"})
 		return
@@ -1614,7 +1615,7 @@ func (h *OpsHandler) GetTokenStats(c *gin.Context) {
 		limit = l
 	}
 
-	var items []TokenStatsItem
+	items := make([]TokenStatsItem, 0)
 	err := h.db.Raw(fmt.Sprintf(`
 		SELECT provider, model,
 			COUNT(*)::bigint as request_count,
@@ -1754,7 +1755,7 @@ func (h *OpsHandler) UpdateDashboardSettings(c *gin.Context) {
 // ListJobs 查询后台任务心跳列表
 // GET /api/v1/ops/jobs
 func (h *OpsHandler) ListJobs(c *gin.Context) {
-	var jobs []model.AlertJobHeartbeat
+	jobs := make([]model.AlertJobHeartbeat, 0)
 	if err := h.db.Order("name").Find(&jobs).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list jobs"})
 		return
@@ -1777,7 +1778,7 @@ type UserConcurrencyItem struct {
 // GetUserConcurrency 获取用户并发统计
 // GET /api/v1/ops/user-concurrency
 func (h *OpsHandler) GetUserConcurrency(c *gin.Context) {
-	var items []UserConcurrencyItem
+	items := make([]UserConcurrencyItem, 0)
 	err := h.db.Raw(`
 		SELECT
 			user_id,
@@ -1819,7 +1820,7 @@ type AccountAvailabilityItem struct {
 // GetAccountAvailability 获取各 Provider 的 rate limit 状态
 // GET /api/v1/ops/account-availability
 func (h *OpsHandler) GetAccountAvailability(c *gin.Context) {
-	var items []AccountAvailabilityItem
+	items := make([]AccountAvailabilityItem, 0)
 
 	if h.rdb == nil {
 		c.JSON(http.StatusOK, gin.H{"items": []AccountAvailabilityItem{}, "total": 0})
@@ -2065,7 +2066,7 @@ func (h *OpsHandler) GetRequestErrorCorrelation(c *gin.Context) {
 	requestID := c.Param("id")
 
 	// 查找同一 request_id 且 status >= 500 的上游错误记录
-	var items []ErrorCorrelationItem
+	items := make([]ErrorCorrelationItem, 0)
 	err := h.db.Raw(`
 		SELECT
 			provider,
@@ -2121,7 +2122,7 @@ type OpsGroupOption struct {
 // GetGroupOptions 获取模型组下拉列表
 // GET /api/v1/ops/groups
 func (h *OpsHandler) GetGroupOptions(c *gin.Context) {
-	var groups []OpsGroupOption
+	groups := make([]OpsGroupOption, 0)
 	err := h.db.Raw(`SELECT id, name FROM model_groups WHERE deleted_at IS NULL AND enabled = TRUE ORDER BY name`).Scan(&groups).Error
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query groups"})

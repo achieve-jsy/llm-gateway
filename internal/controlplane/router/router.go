@@ -380,6 +380,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		systemMetricsCollector := service.NewSystemMetricsCollector(db, rdb)
 		systemMetricsCollector.Start(context.Background())
 		opsHandler := handler.NewOpsHandler(db, rdb, systemMetricsCollector)
+		adminGroup.GET("/ops/groups", opsHandler.GetGroupOptions)
 		adminGroup.GET("/ops/dashboard", opsHandler.GetDashboard)
 		adminGroup.GET("/ops/traffic-trend", opsHandler.GetTrafficTrend)
 		adminGroup.GET("/ops/error-trend", opsHandler.GetErrorTrend)

@@ -477,7 +477,7 @@ func (h *OpsHandler) GetLatencyHistogram(c *gin.Context) {
 	interval := timeRangeToInterval(timeRange)
 
 	var rows []struct {
-		Range string `gorm:"column:range"`
+		Range string `gorm:"column:latency_range"`
 		Count int64  `gorm:"column:count"`
 	}
 
@@ -490,13 +490,13 @@ func (h *OpsHandler) GetLatencyHistogram(c *gin.Context) {
 				WHEN duration_ms < 2000 THEN '1-2s'
 				WHEN duration_ms < 5000 THEN '2-5s'
 				ELSE '5s+'
-			END as range,
+			END as latency_range,
 			COUNT(*)::bigint as count
 		FROM call_logs
 		WHERE ts > NOW() - INTERVAL '%s'
-		GROUP BY range
+		GROUP BY latency_range
 		ORDER BY
-			CASE range
+			CASE latency_range
 				WHEN '0-100ms' THEN 1
 				WHEN '100-500ms' THEN 2
 				WHEN '500-1s' THEN 3
@@ -1470,7 +1470,8 @@ func (h *OpsHandler) ListSystemLogs(c *gin.Context) {
 	offset := (page - 1) * pageSize
 	query := fmt.Sprintf(`
 		SELECT id, ts, level, component, message, request_id, client_request_id,
-			user_id, provider, model, "group", duration_ms, status, error_message, extra
+			user_id, provider, model, "group", duration_ms, status, error_message,
+			COALESCE(extra, '{}'::jsonb) as extra
 		FROM system_logs %s
 		ORDER BY ts DESC, id DESC
 		LIMIT ? OFFSET ?
@@ -2109,4 +2110,22 @@ type LatencyBreakdown struct {
 	UpstreamMs  int `json:"upstream_ms"`
 	ResponseMs  int `json:"response_ms"`
 	TTFTMs      int `json:"ttft_ms"`
+}
+
+// OpsGroupOption 模型组下拉选项
+type OpsGroupOption struct {
+	ID   uint   `json:"id"`
+	Name string `json:"name"`
+}
+
+// GetGroupOptions 获取模型组下拉列表
+// GET /api/v1/ops/groups
+func (h *OpsHandler) GetGroupOptions(c *gin.Context) {
+	var groups []OpsGroupOption
+	err := h.db.Raw(`SELECT id, name FROM model_groups WHERE deleted_at IS NULL AND enabled = TRUE ORDER BY name`).Scan(&groups).Error
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query groups"})
+		return
+	}
+	c.JSON(http.StatusOK, groups)
 }

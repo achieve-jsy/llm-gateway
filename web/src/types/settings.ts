@@ -15,6 +15,12 @@ export interface SystemSettings {
   webhook_url: string
   webhook_secret: string
   webhook_events: string
+  email_enabled: boolean
+  smtp_host: string
+  smtp_port: number
+  smtp_from: string
+  smtp_password: string
+  smtp_tls_skip_verify: boolean
   default_max_switches: number
   default_same_model_retries: number
   default_failover_cooldown_seconds: number

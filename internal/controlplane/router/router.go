@@ -17,6 +17,7 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/example/llm-gateway/internal/controlplane/service"
+	"github.com/example/llm-gateway/internal/notification"
 	obscron "github.com/example/llm-gateway/internal/observability/cron"
 	obshandler "github.com/example/llm-gateway/internal/observability/handler"
 	obssvc "github.com/example/llm-gateway/internal/observability/service"
@@ -147,18 +148,26 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	auditRepo := repository.NewAuditLogRepo(db)
 	auditSvc := service.NewAuditLogService(auditRepo)
 
-	// 动态 Webhook notifier：按 settings 中的 webhook_enabled/webhook_url/webhook_secret 构建；
-	// 若未启用则 notifier 为 nil，仅发站内信。
+	// 动态 notifier：按 settings 中的 webhook / email 配置构建；
+	// Dispatcher 统一负责写日志文件 + Webhook + 邮件三条通道。
 	go func() {
 		cfg, err := settingsSvc.GetSystemSettings(context.Background())
 		if err != nil {
-			slog.Warn("budget_alert: failed to load webhook settings", "error", err)
+			slog.Warn("budget_alert: failed to load notification settings", "error", err)
 			return
 		}
+
+		alertLogger := notification.NewAlertLogger("logs")
+
+		var webhookSender *service.WebhookSender
 		if cfg.WebhookEnabled && cfg.WebhookURL != "" {
-			budgetAlertSvc.SetNotifier(service.NewWebhookSender(cfg.WebhookURL, cfg.WebhookSecret))
+			webhookSender = service.NewWebhookSender(cfg.WebhookURL, cfg.WebhookSecret)
 			slog.Info("budget_alert: webhook notifier initialized", "url", cfg.WebhookURL)
 		}
+
+		dispatcher := notification.NewDispatcher(nil, alertLogger, webhookSender)
+		dispatcher.SetAuditRecorder(newEmailAuditAdapter(auditSvc))
+		budgetAlertSvc.SetNotifier(dispatcher)
 	}()
 	// v0.7: 上线默认预算初始化（异步，不阻塞启动）
 	// 默认额度：部门日常 500 USD/月，部门程序服务 200 USD/月，工作室 2000 USD/月
@@ -486,6 +495,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/settings", settingsHandler.GetSystemSettings)
 		adminGroup.PUT("/settings", settingsHandler.UpdateSettings)
 		adminGroup.POST("/settings/test-webhook", settingsHandler.TestWebhook)
+		adminGroup.POST("/settings/test-email", settingsHandler.TestEmail)
 		adminGroup.POST("/settings/export", settingsHandler.ExportSettings)
 		adminGroup.POST("/settings/import", settingsHandler.ImportSettings)
 

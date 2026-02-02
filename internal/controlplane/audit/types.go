@@ -73,6 +73,9 @@ const (
 	ActionHealthCheckRun         Action = "health_check.run"
 
 	ActionEmployeeImport         Action = "employee.import"
+
+	ActionEmailTest              Action = "email.send_test"
+	ActionEmailAlert             Action = "email.send_alert"
 )
 
 // ── 资源类型常量 ──────────────────────────────────────────────
@@ -90,6 +93,7 @@ const (
 	ResourceAnnouncement Resource = "announcement"
 	ResourceHealthCheck  Resource = "health_check"
 	ResourceEmployee     Resource = "employee"
+	ResourceEmail        Resource = "email"
 	ResourceUnknown      Resource = "unknown"
 )
 

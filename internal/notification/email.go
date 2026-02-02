@@ -3,6 +3,8 @@ package notification
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -98,6 +100,20 @@ func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
 	}
 }
 
+func isCertError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var hostnameErr x509.HostnameError
+	var unknownAuthErr x509.UnknownAuthorityError
+	var certInvalidErr x509.CertificateInvalidError
+	if errors.As(err, &hostnameErr) || errors.As(err, &unknownAuthErr) || errors.As(err, &certInvalidErr) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "x509:") || strings.Contains(msg, "tls: failed to verify")
+}
+
 func (e *EmailSender) dialAndSend(msg []byte, recipients []string) error {
 	addr := fmt.Sprintf("%s:%d", e.host, e.port)
 	plainAuth := smtp.PlainAuth("", e.from, e.password, e.host)
@@ -105,10 +121,26 @@ func (e *EmailSender) dialAndSend(msg []byte, recipients []string) error {
 
 	client, errTryStartTLS := e.dialSTARTTLS(addr)
 	if errTryStartTLS != nil {
+		if isCertError(errTryStartTLS) {
+			if e.skipVerify {
+				return fmt.Errorf("tls: certificate verification failed even with skip-verify enabled — cert may be expired or invalid: %w", errTryStartTLS)
+			}
+			return fmt.Errorf("tls: certificate verification failed — server cert CN does not match host %q. "+
+				"Enable smtp_tls_skip_verify in settings if this is expected (using internal cert). "+
+				"detail: %w", e.host, errTryStartTLS)
+		}
 		slog.Info("email: STARTTLS failed, fallback to direct TLS", "addr", addr, "error", errTryStartTLS)
 		var errDirect error
 		client, errDirect = e.dialDirectTLS(addr)
 		if errDirect != nil {
+			if isCertError(errDirect) {
+				if e.skipVerify {
+					return fmt.Errorf("tls: certificate verification failed even with skip-verify enabled — cert may be expired or invalid: %w", errDirect)
+				}
+				return fmt.Errorf("tls: certificate verification failed — server cert CN does not match host %q. "+
+					"Enable smtp_tls_skip_verify in settings if this is expected (using internal cert). "+
+					"detail: %w", e.host, errDirect)
+			}
 			return fmt.Errorf("tls dial %s (starttls=%v, direct=%v)", addr, errTryStartTLS, errDirect)
 		}
 	}

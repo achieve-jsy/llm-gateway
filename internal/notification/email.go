@@ -114,10 +114,21 @@ func isCertError(err error) bool {
 	return strings.Contains(msg, "x509:") || strings.Contains(msg, "tls: failed to verify")
 }
 
+func isNetError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "use of closed network connection") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "connection refused")
+}
+
 func (e *EmailSender) dialAndSend(msg []byte, recipients []string) error {
 	addr := fmt.Sprintf("%s:%d", e.host, e.port)
 	plainAuth := smtp.PlainAuth("", e.from, e.password, e.host)
-	loginAuth := &loginAuth{username: e.from, password: e.password}
+	loginA := &loginAuth{username: e.from, password: e.password}
 
 	client, errTryStartTLS := e.dialSTARTTLS(addr)
 	if errTryStartTLS != nil {
@@ -133,22 +144,30 @@ func (e *EmailSender) dialAndSend(msg []byte, recipients []string) error {
 		var errDirect error
 		client, errDirect = e.dialDirectTLS(addr)
 		if errDirect != nil {
-			if isCertError(errDirect) {
-				if e.skipVerify {
-					return fmt.Errorf("tls: certificate verification failed even with skip-verify enabled — cert may be expired or invalid: %w", errDirect)
-				}
-				return fmt.Errorf("tls: certificate verification failed — server cert CN does not match host %q. "+
-					"Enable smtp_tls_skip_verify in settings if this is expected (using internal cert). "+
-					"detail: %w", e.host, errDirect)
-			}
 			return fmt.Errorf("tls dial %s (starttls=%v, direct=%v)", addr, errTryStartTLS, errDirect)
+		}
+	}
+
+	if err := e.authenticate(client, plainAuth, loginA); err != nil {
+		if isNetError(err) {
+			client.Close()
+			slog.Info("email: STARTTLS conn lost during auth, retrying via direct TLS", "addr", addr)
+			var errDirect error
+			client, errDirect = e.dialDirectTLS(addr)
+			if errDirect != nil {
+				return fmt.Errorf("direct TLS retry failed: %w (original: %v)", errDirect, err)
+			}
+			if err2 := e.authenticate(client, plainAuth, loginA); err2 != nil {
+				client.Close()
+				return fmt.Errorf("smtp auth (direct TLS retry): %w", err2)
+			}
+		} else {
+			client.Close()
+			return fmt.Errorf("smtp auth: %w", err)
 		}
 	}
 	defer client.Close()
 
-	if err := e.authenticate(client, plainAuth, loginAuth); err != nil {
-		return fmt.Errorf("smtp auth: %w", err)
-	}
 	if err := client.Mail(e.from); err != nil {
 		return fmt.Errorf("smtp MAIL FROM: %w", err)
 	}
@@ -175,12 +194,20 @@ func (e *EmailSender) dialAndSend(msg []byte, recipients []string) error {
 }
 
 func (e *EmailSender) authenticate(client *smtp.Client, plainAuth smtp.Auth, loginAuth smtp.Auth) error {
+	slog.Info("email: attempting PLAIN auth", "host", e.host)
 	err := client.Auth(plainAuth)
 	if err == nil {
 		return nil
 	}
-	if strings.Contains(err.Error(), "Unrecognized authentication type") ||
-		strings.Contains(err.Error(), "504") {
+	errMsg := err.Error()
+	slog.Warn("email: PLAIN auth failed", "host", e.host, "error", errMsg)
+	if strings.Contains(errMsg, "use of closed network connection") ||
+		strings.Contains(errMsg, "connection reset") ||
+		strings.Contains(errMsg, "broken pipe") {
+		return fmt.Errorf("SMTP server closed connection during auth: %w", err)
+	}
+	if strings.Contains(errMsg, "Unrecognized authentication type") ||
+		strings.Contains(errMsg, "504") {
 		slog.Info("email: PLAIN auth not supported, trying LOGIN")
 		return client.Auth(loginAuth)
 	}
@@ -209,10 +236,6 @@ func (e *EmailSender) dialSTARTTLS(addr string) (*smtp.Client, error) {
 	if err := client.Hello(e.host); err != nil {
 		client.Close()
 		return nil, fmt.Errorf("smtp HELO: %w", err)
-	}
-	if ok, _ := client.Extension("STARTTLS"); !ok {
-		client.Close()
-		return nil, fmt.Errorf("server does not advertise STARTTLS")
 	}
 	cfg := &tls.Config{ServerName: e.host, MinVersion: tls.VersionTLS12, InsecureSkipVerify: e.skipVerify}
 	if err := client.StartTLS(cfg); err != nil {

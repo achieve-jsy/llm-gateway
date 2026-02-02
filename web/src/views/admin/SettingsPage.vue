@@ -267,6 +267,81 @@
         </div>
       </div>
 
+      <!-- 邮件通知 -->
+      <div v-show="activeTab === 'email'" class="settings-card">
+        <div class="card-header">
+          <div class="card-title-row">
+            <span class="card-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="22 6 12 13 2 6"/></svg>
+            </span>
+            <h3 class="card-title">邮件通知</h3>
+          </div>
+          <p class="card-desc">配置 SMTP 邮件通知，告警触发时自动发送邮件给相关负责人</p>
+        </div>
+
+        <div class="card-body">
+          <div class="form-group inline-toggle">
+            <label class="form-label">启用邮件通知</label>
+            <el-switch v-model="form.email_enabled" />
+          </div>
+
+          <div v-show="form.email_enabled" class="form-section">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">SMTP 服务器</label>
+                <el-input v-model="form.smtp_host" placeholder="smtp.example.com" class="form-input mono" />
+                <p class="form-hint">SMTP 服务器地址</p>
+              </div>
+              <div class="form-group">
+                <label class="form-label">SMTP 端口</label>
+                <el-input-number v-model="form.smtp_port" :min="1" :max="65535" :step="1" class="form-input-number" />
+                <p class="form-hint">常用：587（STARTTLS）、465（SSL/TLS）、25（不推荐）</p>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">发件人邮箱</label>
+                <el-input v-model="form.smtp_from" placeholder="noreply@example.com" class="form-input mono" />
+                <p class="form-hint">用于发送邮件的账号（SMTP 登录账号）</p>
+              </div>
+              <div class="form-group">
+                <label class="form-label">密码 / 授权码</label>
+                <el-input v-model="form.smtp_password" placeholder="留空则不修改已保存的密码" type="password" show-password class="form-input mono" />
+                <p class="form-hint">SMTP 登录密码或应用授权码，留空表示保留已保存的密码</p>
+              </div>
+            </div>
+
+            <div class="form-group inline-toggle">
+              <div>
+                <label class="form-label">跳过 TLS 证书校验</label>
+                <p class="form-hint" style="margin-top: 2px">仅在 SMTP 服务器使用自签名证书或非可信 CA 时开启</p>
+              </div>
+              <el-switch v-model="form.smtp_tls_skip_verify" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">发送测试邮件</label>
+              <div class="email-test-row">
+                <el-input
+                  v-model="testEmailInput"
+                  placeholder="填写测试邮箱，如 you@example.com"
+                  class="form-input mono email-test-input"
+                  @keyup.enter="handleTestEmail"
+                />
+                <el-button :loading="testingEmail" @click="handleTestEmail" style="white-space: nowrap">
+                  <template #icon>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                  </template>
+                  发送测试邮件
+                </el-button>
+              </div>
+              <p class="form-hint">测试邮件将发送到填写的邮箱，留空则发送到上方已配置的收件人</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- 故障默认配置 -->
       <div v-show="activeTab === 'failover'" class="settings-card">
         <div class="card-header">
@@ -428,6 +503,8 @@ import ImageUpload from '@/components/common/ImageUpload.vue'
 const settingsStore = useSettingsStore()
 const saving = ref(false)
 const testingWebhook = ref(false)
+const testingEmail = ref(false)
+const testEmailInput = ref('')
 const exporting = ref(false)
 const importing = ref(false)
 const importInputRef = ref<HTMLInputElement>()
@@ -439,6 +516,7 @@ const tabs = [
   { key: 'concurrency', label: '并发管控', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>' },
   { key: 'oidc', label: 'OIDC 配置', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>' },
   { key: 'webhook', label: 'Webhook', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>' },
+  { key: 'email', label: '邮件通知', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="22 6 12 13 2 6"/></svg>' },
   { key: 'failover', label: '故障默认配置', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>' },
   { key: 'pricing', label: '价格汇率', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>' },
   { key: 'data', label: '数据管理', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>' },
@@ -462,6 +540,12 @@ const form = reactive({
   webhook_url: '',
   webhook_secret: '',
   webhook_events: 'health_check_failed',
+  email_enabled: false,
+  smtp_host: 'mail.example.com',
+  smtp_port: 587,
+  smtp_from: 'llm-gateway@example.com',
+  smtp_password: '',
+  smtp_tls_skip_verify: false,
   default_max_switches: 2,
   default_same_model_retries: 1,
   default_failover_cooldown_seconds: 60,
@@ -486,6 +570,12 @@ const initialForm = reactive({
   webhook_url: '',
   webhook_secret: '',
   webhook_events: 'health_check_failed',
+  email_enabled: false,
+  smtp_host: 'mail.example.com',
+  smtp_port: 587,
+  smtp_from: 'llm-gateway@example.com',
+  smtp_password: '',
+  smtp_tls_skip_verify: false,
   default_max_switches: 2,
   default_same_model_retries: 1,
   default_failover_cooldown_seconds: 60,
@@ -524,6 +614,12 @@ const formChanged = computed(() => {
     form.webhook_url !== initialForm.webhook_url ||
     form.webhook_secret !== initialForm.webhook_secret ||
     form.webhook_events !== initialForm.webhook_events ||
+    form.email_enabled !== initialForm.email_enabled ||
+    form.smtp_host !== initialForm.smtp_host ||
+    form.smtp_port !== initialForm.smtp_port ||
+    form.smtp_from !== initialForm.smtp_from ||
+    form.smtp_password !== initialForm.smtp_password ||
+    form.smtp_tls_skip_verify !== initialForm.smtp_tls_skip_verify ||
     form.default_max_switches !== initialForm.default_max_switches ||
     form.default_same_model_retries !== initialForm.default_same_model_retries ||
     form.default_failover_cooldown_seconds !== initialForm.default_failover_cooldown_seconds ||
@@ -549,6 +645,12 @@ function setFormValues(source: typeof form) {
   form.webhook_url = source.webhook_url
   form.webhook_secret = source.webhook_secret
   form.webhook_events = source.webhook_events
+  form.email_enabled = source.email_enabled
+  form.smtp_host = source.smtp_host
+  form.smtp_port = source.smtp_port
+  form.smtp_from = source.smtp_from
+  form.smtp_password = source.smtp_password
+  form.smtp_tls_skip_verify = source.smtp_tls_skip_verify
   form.default_max_switches = source.default_max_switches
   form.default_same_model_retries = source.default_same_model_retries
   form.default_failover_cooldown_seconds = source.default_failover_cooldown_seconds
@@ -573,6 +675,12 @@ function captureInitial() {
   initialForm.webhook_url = form.webhook_url
   initialForm.webhook_secret = form.webhook_secret
   initialForm.webhook_events = form.webhook_events
+  initialForm.email_enabled = form.email_enabled
+  initialForm.smtp_host = form.smtp_host
+  initialForm.smtp_port = form.smtp_port
+  initialForm.smtp_from = form.smtp_from
+  initialForm.smtp_password = form.smtp_password
+  initialForm.smtp_tls_skip_verify = form.smtp_tls_skip_verify
   initialForm.default_max_switches = form.default_max_switches
   initialForm.default_same_model_retries = form.default_same_model_retries
   initialForm.default_failover_cooldown_seconds = form.default_failover_cooldown_seconds
@@ -598,6 +706,12 @@ onMounted(async () => {
     form.webhook_enabled = s.webhook_enabled ?? false
     form.webhook_url = s.webhook_url || ''
     form.webhook_events = s.webhook_events || 'health_check_failed'
+    form.email_enabled = s.email_enabled ?? false
+    form.smtp_host = s.smtp_host || 'mail.example.com'
+    form.smtp_port = s.smtp_port ?? 587
+    form.smtp_from = s.smtp_from || 'llm-gateway@example.com'
+    form.smtp_password = s.smtp_password || ''
+    form.smtp_tls_skip_verify = s.smtp_tls_skip_verify ?? false
     form.default_max_switches = s.default_max_switches ?? 2
     form.default_same_model_retries = s.default_same_model_retries ?? 1
     form.default_failover_cooldown_seconds = s.default_failover_cooldown_seconds ?? 60
@@ -631,6 +745,14 @@ function validateForm(): string | null {
       return 'Webhook URL 格式不正确，请输入以 http:// 或 https:// 开头的地址'
     }
   }
+  if (form.email_enabled) {
+    if (!form.smtp_host) {
+      return '启用邮件通知时请填写 SMTP 服务器地址'
+    }
+    if (!form.smtp_from) {
+      return '启用邮件通知时请填写发件人邮箱'
+    }
+  }
   return null
 }
 
@@ -660,6 +782,12 @@ async function handleSave() {
       webhook_url: form.webhook_url.trim(),
       webhook_secret: form.webhook_secret,
       webhook_events: form.webhook_events,
+      email_enabled: form.email_enabled,
+      smtp_host: form.smtp_host.trim(),
+      smtp_port: form.smtp_port,
+      smtp_from: form.smtp_from.trim(),
+      smtp_password: form.smtp_password,
+      smtp_tls_skip_verify: form.smtp_tls_skip_verify,
       default_max_switches: form.default_max_switches,
       default_same_model_retries: form.default_same_model_retries,
       default_failover_cooldown_seconds: form.default_failover_cooldown_seconds,
@@ -695,6 +823,39 @@ async function handleTestWebhook() {
     ElMessage.error('测试通知发送失败，请检查 URL 是否正确')
   } finally {
     testingWebhook.value = false
+  }
+}
+
+async function handleTestEmail() {
+  const email = testEmailInput.value.trim()
+  if (!email) {
+    ElMessage.warning('请填写测试邮箱地址')
+    return
+  }
+  if (!form.smtp_host) {
+    ElMessage.warning('请先填写 SMTP 服务器地址')
+    return
+  }
+  if (!form.smtp_from) {
+    ElMessage.warning('请先填写发件人邮箱')
+    return
+  }
+  testingEmail.value = true
+  try {
+    await settingsStore.testEmail({
+      email,
+      smtp_host: form.smtp_host.trim(),
+      smtp_port: form.smtp_port,
+      smtp_from: form.smtp_from.trim(),
+      smtp_password: form.smtp_password,
+      smtp_tls_skip_verify: form.smtp_tls_skip_verify,
+    })
+    ElMessage.success(`测试邮件已发送至 ${email}`)
+  } catch (err: any) {
+    const msg = err?.response?.data?.error?.message || err?.message || '请检查 SMTP 配置'
+    ElMessage.error(`发送失败: ${msg}`)
+  } finally {
+    testingEmail.value = false
   }
 }
 
@@ -1002,6 +1163,16 @@ async function handleImport(event: Event) {
 
 .hidden-input {
   display: none;
+}
+
+.email-test-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.email-test-input {
+  flex: 1;
 }
 
 .form-row {

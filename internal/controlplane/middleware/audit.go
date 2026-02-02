@@ -91,6 +91,7 @@ var auditRouteMap = map[string]routeAction{
 	// ── Settings ───────────────────────────────────────────────────
 	"PUT:/api/v1/settings":              {audit.ActionSettingsUpdate, audit.ResourceSettings},
 	"POST:/api/v1/settings/test-webhook": {audit.Action("settings.test_webhook"), audit.ResourceSettings},
+	"POST:/api/v1/settings/test-email":   {audit.ActionEmailTest, audit.ResourceSettings},
 	"POST:/api/v1/settings/export":       {audit.Action("settings.export"), audit.ResourceSettings},
 	"POST:/api/v1/settings/import":       {audit.Action("settings.import"), audit.ResourceSettings},
 

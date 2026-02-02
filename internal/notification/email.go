@@ -74,13 +74,36 @@ func (e *EmailSender) sendMail(ctx context.Context, text string, recipients []st
 	}
 }
 
+// loginAuth 实现 SASL LOGIN 认证机制，用于不支持 PLAIN 的 SMTP 服务器。
+type loginAuth struct {
+	username string
+	password string
+}
+
+func (a *loginAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
+	return "LOGIN", nil, nil
+}
+
+func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
+	if !more {
+		return nil, nil
+	}
+	switch strings.ToLower(string(fromServer)) {
+	case "username:":
+		return []byte(a.username), nil
+	case "password:":
+		return []byte(a.password), nil
+	default:
+		return nil, fmt.Errorf("unexpected server challenge: %q", string(fromServer))
+	}
+}
+
 func (e *EmailSender) dialAndSend(msg []byte, recipients []string) error {
 	addr := fmt.Sprintf("%s:%d", e.host, e.port)
-	auth := smtp.PlainAuth("", e.from, e.password, e.host)
+	plainAuth := smtp.PlainAuth("", e.from, e.password, e.host)
+	loginAuth := &loginAuth{username: e.from, password: e.password}
 
-	// 优先尝试 STARTTLS（端口 587/25，先明文连接后升级加密）；
-	// 失败再降级到直接 TLS（端口 465）。
-	client, errTryStartTLS := e.dialSTARTTLS(addr, auth)
+	client, errTryStartTLS := e.dialSTARTTLS(addr)
 	if errTryStartTLS != nil {
 		slog.Info("email: STARTTLS failed, fallback to direct TLS", "addr", addr, "error", errTryStartTLS)
 		var errDirect error
@@ -91,7 +114,7 @@ func (e *EmailSender) dialAndSend(msg []byte, recipients []string) error {
 	}
 	defer client.Close()
 
-	if err := client.Auth(auth); err != nil {
+	if err := e.authenticate(client, plainAuth, loginAuth); err != nil {
 		return fmt.Errorf("smtp auth: %w", err)
 	}
 	if err := client.Mail(e.from); err != nil {
@@ -119,6 +142,19 @@ func (e *EmailSender) dialAndSend(msg []byte, recipients []string) error {
 	return nil
 }
 
+func (e *EmailSender) authenticate(client *smtp.Client, plainAuth smtp.Auth, loginAuth smtp.Auth) error {
+	err := client.Auth(plainAuth)
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(err.Error(), "Unrecognized authentication type") ||
+		strings.Contains(err.Error(), "504") {
+		slog.Info("email: PLAIN auth not supported, trying LOGIN")
+		return client.Auth(loginAuth)
+	}
+	return err
+}
+
 func (e *EmailSender) dialDirectTLS(addr string) (*smtp.Client, error) {
 	cfg := &tls.Config{ServerName: e.host, MinVersion: tls.VersionTLS12, InsecureSkipVerify: e.skipVerify}
 	conn, err := tls.Dial("tcp", addr, cfg)
@@ -128,7 +164,7 @@ func (e *EmailSender) dialDirectTLS(addr string) (*smtp.Client, error) {
 	return smtp.NewClient(conn, e.host)
 }
 
-func (e *EmailSender) dialSTARTTLS(addr string, auth smtp.Auth) (*smtp.Client, error) {
+func (e *EmailSender) dialSTARTTLS(addr string) (*smtp.Client, error) {
 	conn, err := net.DialTimeout("tcp", addr, 8*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
@@ -151,7 +187,6 @@ func (e *EmailSender) dialSTARTTLS(addr string, auth smtp.Auth) (*smtp.Client, e
 		client.Close()
 		return nil, fmt.Errorf("STARTTLS: %w", err)
 	}
-	_ = auth
 	return client, nil
 }
 

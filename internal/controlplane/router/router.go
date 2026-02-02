@@ -166,6 +166,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		}
 
 		dispatcher := notification.NewDispatcher(nil, alertLogger, webhookSender)
+		dispatcher.SetAuditRecorder(newEmailAuditAdapter(auditSvc))
 		budgetAlertSvc.SetNotifier(dispatcher)
 	}()
 	// v0.7: 上线默认预算初始化（异步，不阻塞启动）

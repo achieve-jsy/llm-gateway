@@ -242,7 +242,16 @@ func (e *EmailSender) dialDirectTLS(addr string) (*smtp.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return smtp.NewClient(conn, e.host)
+	client, err := smtp.NewClient(conn, e.host)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("smtp client: %w", err)
+	}
+	if err := client.Hello(e.host); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("smtp HELO: %w", err)
+	}
+	return client, nil
 }
 
 func (e *EmailSender) dialSTARTTLS(addr string) (*smtp.Client, error) {

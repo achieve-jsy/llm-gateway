@@ -130,44 +130,66 @@ func (e *EmailSender) dialAndSend(msg []byte, recipients []string) error {
 	plainAuth := smtp.PlainAuth("", e.from, e.password, e.host)
 	loginA := &loginAuth{username: e.from, password: e.password}
 
-	client, errTryStartTLS := e.dialSTARTTLS(addr)
-	if errTryStartTLS != nil {
-		if isCertError(errTryStartTLS) {
-			if e.skipVerify {
-				return fmt.Errorf("tls: certificate verification failed even with skip-verify enabled — cert may be expired or invalid: %w", errTryStartTLS)
+	// Port 465 uses implicit TLS (direct TLS), try direct TLS first
+	// Port 587/25 use STARTTLS, try STARTTLS first
+	var client *smtp.Client
+	var err error
+
+	if e.port == 465 {
+		// Implicit TLS for port 465
+		slog.Info("email: using direct TLS for port 465", "addr", addr)
+		client, err = e.dialDirectTLS(addr)
+		if err != nil {
+			slog.Info("email: direct TLS failed, falling back to STARTTLS", "addr", addr, "error", err)
+			client, err = e.dialSTARTTLS(addr)
+			if err != nil {
+				return e.formatDialError(addr, err)
 			}
-			return fmt.Errorf("tls: certificate verification failed — server cert CN does not match host %q. "+
-				"Enable smtp_tls_skip_verify in settings if this is expected (using internal cert). "+
-				"detail: %w", e.host, errTryStartTLS)
 		}
-		slog.Info("email: STARTTLS failed, fallback to direct TLS", "addr", addr, "error", errTryStartTLS)
-		var errDirect error
-		client, errDirect = e.dialDirectTLS(addr)
-		if errDirect != nil {
-			return fmt.Errorf("tls dial %s (starttls=%v, direct=%v)", addr, errTryStartTLS, errDirect)
+	} else {
+		// STARTTLS for port 587/25
+		slog.Info("email: using STARTTLS for port", "addr", addr, "port", e.port)
+		client, err = e.dialSTARTTLS(addr)
+		if err != nil {
+			if isCertError(err) {
+				return e.formatCertError(err)
+			}
+		slog.Info("email: STARTTLS failed, falling back to direct TLS", "addr", addr, "error", err)
+		client, err = e.dialDirectTLS(addr)
+		if err != nil {
+			return e.formatDialError(addr, err)
+		}
 		}
 	}
 
+	return e.sendMailAfterDial(client, msg, recipients, plainAuth, loginA)
+}
+
+func (e *EmailSender) formatDialError(addr string, err error) error {
+	if isCertError(err) {
+		return e.formatCertError(err)
+	}
+	return fmt.Errorf("failed to connect to %s: %w", addr, err)
+}
+
+func (e *EmailSender) formatCertError(err error) error {
+	if e.skipVerify {
+		return fmt.Errorf("TLS certificate verification failed (skipVerify=true): %w", err)
+	}
+	return fmt.Errorf("TLS certificate verification failed (server cert does not match hostname). "+
+		"Check 'Enable SMTP TLS Skip Verify' in settings. Detail: %w", err)
+}
+
+func (e *EmailSender) sendMailAfterDial(client *smtp.Client, msg []byte, recipients []string, plainAuth, loginA smtp.Auth) error {
+	slog.Info("email: connection established, authenticating", "host", e.host, "port", e.port)
+
+	// Authenticate
 	if err := e.authenticate(client, plainAuth, loginA); err != nil {
-		if isNetError(err) {
-			client.Close()
-			slog.Info("email: STARTTLS conn lost during auth, retrying via direct TLS", "addr", addr)
-			var errDirect error
-			client, errDirect = e.dialDirectTLS(addr)
-			if errDirect != nil {
-				return fmt.Errorf("direct TLS retry failed: %w (original: %v)", errDirect, err)
-			}
-			if err2 := e.authenticate(client, plainAuth, loginA); err2 != nil {
-				client.Close()
-				return fmt.Errorf("smtp auth (direct TLS retry): %w", err2)
-			}
-		} else {
-			client.Close()
-			return fmt.Errorf("smtp auth: %w", err)
-		}
+		client.Close()
+		return fmt.Errorf("smtp auth: %w", err)
 	}
-	defer client.Close()
 
+	// Send mail
 	if err := client.Mail(e.from); err != nil {
 		return fmt.Errorf("smtp MAIL FROM: %w", err)
 	}

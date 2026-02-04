@@ -50,6 +50,52 @@ func timeRangeToInterval(tr string) string {
 	}
 }
 
+// bucketTruncExpr 返回用于 GROUP BY 时间分桶的 SQL 表达式
+func bucketTruncExpr(timeRange string) string {
+	switch timeRange {
+	case "5m":
+		return "date_trunc('minute', ts)"
+	case "30m":
+		return "to_timestamp(floor((extract('epoch' from ts)::numeric / 300)) * 300)"
+	case "6h":
+		return "to_timestamp(floor((extract('epoch' from ts)::numeric / 1800)) * 1800)"
+	case "24h":
+		return "date_trunc('hour', ts)"
+	default:
+		return "to_timestamp(floor((extract('epoch' from ts)::numeric / 300)) * 300)"
+	}
+}
+
+func bucketSeconds(timeRange string) float64 {
+	switch timeRange {
+	case "5m":
+		return 60
+	case "30m":
+		return 300
+	case "6h":
+		return 1800
+	case "24h":
+		return 3600
+	default:
+		return 300
+	}
+}
+
+func bucketName(timeRange string) string {
+	switch timeRange {
+	case "5m":
+		return "1 minute"
+	case "30m":
+		return "5 minutes"
+	case "6h":
+		return "30 minutes"
+	case "24h":
+		return "1 hour"
+	default:
+		return "5 minutes"
+	}
+}
+
 // OpsDashboardResponse 运维看板总览响应
 type OpsDashboardResponse struct {
 	Overview  OpsOverview `json:"overview"`
@@ -333,20 +379,8 @@ type TrafficTrendPoint struct {
 func (h *OpsHandler) GetTrafficTrend(c *gin.Context) {
 	timeRange := c.DefaultQuery("time_range", "1h")
 	interval := timeRangeToInterval(timeRange)
-
-	var bucketInterval string
-	switch timeRange {
-	case "5m":
-		bucketInterval = "1 minute"
-	case "30m":
-		bucketInterval = "5 minutes"
-	case "6h":
-		bucketInterval = "30 minutes"
-	case "24h":
-		bucketInterval = "1 hour"
-	default:
-		bucketInterval = "5 minutes"
-	}
+	truncExpr := bucketTruncExpr(timeRange)
+	sec := bucketSeconds(timeRange)
 
 	var rows []struct {
 		Timestamp    time.Time `gorm:"column:ts"`
@@ -356,40 +390,26 @@ func (h *OpsHandler) GetTrafficTrend(c *gin.Context) {
 
 	err := h.db.Raw(fmt.Sprintf(`
 		SELECT
-			date_trunc('%s', ts) as ts,
+			%s as ts,
 			COUNT(*)::bigint as request_count,
 			COALESCE(SUM(total_tokens), 0)::bigint as token_count
 		FROM call_logs
 		WHERE ts > NOW() - INTERVAL '%s'
-		GROUP BY date_trunc('%s', ts)
+		GROUP BY %s
 		ORDER BY ts
-	`, bucketInterval, interval, bucketInterval)).Scan(&rows).Error
+	`, truncExpr, interval, truncExpr)).Scan(&rows).Error
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query traffic trend"})
 		return
 	}
 
-	var bucketSeconds float64
-	switch bucketInterval {
-	case "1 minute":
-		bucketSeconds = 60
-	case "5 minutes":
-		bucketSeconds = 300
-	case "30 minutes":
-		bucketSeconds = 1800
-	case "1 hour":
-		bucketSeconds = 3600
-	default:
-		bucketSeconds = 300
-	}
-
 	points := make([]TrafficTrendPoint, 0, len(rows))
 	for _, row := range rows {
 		points = append(points, TrafficTrendPoint{
 			Timestamp:    row.Timestamp.Format(time.RFC3339),
-			QPS:          float64(row.RequestCount) / bucketSeconds,
-			TPS:          float64(row.TokenCount) / bucketSeconds,
+			QPS:          float64(row.RequestCount) / sec,
+			TPS:          float64(row.TokenCount) / sec,
 			RequestCount: row.RequestCount,
 			TokenCount:   row.TokenCount,
 		})
@@ -397,7 +417,7 @@ func (h *OpsHandler) GetTrafficTrend(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"points": points,
-		"bucket": bucketInterval,
+		"bucket": bucketName(timeRange),
 	})
 }
 
@@ -413,20 +433,7 @@ type ErrorTrendPoint struct {
 func (h *OpsHandler) GetErrorTrend(c *gin.Context) {
 	timeRange := c.DefaultQuery("time_range", "1h")
 	interval := timeRangeToInterval(timeRange)
-
-	var bucketInterval string
-	switch timeRange {
-	case "5m":
-		bucketInterval = "1 minute"
-	case "30m":
-		bucketInterval = "5 minutes"
-	case "6h":
-		bucketInterval = "30 minutes"
-	case "24h":
-		bucketInterval = "1 hour"
-	default:
-		bucketInterval = "5 minutes"
-	}
+	truncExpr := bucketTruncExpr(timeRange)
 
 	var rows []struct {
 		Timestamp      time.Time `gorm:"column:ts"`
@@ -437,15 +444,15 @@ func (h *OpsHandler) GetErrorTrend(c *gin.Context) {
 
 	err := h.db.Raw(fmt.Sprintf(`
 		SELECT
-			date_trunc('%s', ts) as ts,
+			%s as ts,
 			COUNT(*) FILTER (WHERE status >= 400 AND status < 500)::bigint as request_errors,
 			COUNT(*) FILTER (WHERE status >= 500)::bigint as upstream_errors,
 			COUNT(*) FILTER (WHERE status = 429)::bigint as business_errors
 		FROM call_logs
 		WHERE ts > NOW() - INTERVAL '%s'
-		GROUP BY date_trunc('%s', ts)
+		GROUP BY %s
 		ORDER BY ts
-	`, bucketInterval, interval, bucketInterval)).Scan(&rows).Error
+	`, truncExpr, interval, truncExpr)).Scan(&rows).Error
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query error trend"})
@@ -1042,20 +1049,7 @@ type SwitchRateTrendPoint struct {
 func (h *OpsHandler) GetSwitchRateTrend(c *gin.Context) {
 	timeRange := c.DefaultQuery("time_range", "1h")
 	interval := timeRangeToInterval(timeRange)
-
-	var bucketInterval string
-	switch timeRange {
-	case "5m":
-		bucketInterval = "1 minute"
-	case "30m":
-		bucketInterval = "5 minutes"
-	case "6h":
-		bucketInterval = "30 minutes"
-	case "24h":
-		bucketInterval = "1 hour"
-	default:
-		bucketInterval = "5 minutes"
-	}
+	truncExpr := bucketTruncExpr(timeRange)
 
 	var rows []struct {
 		Timestamp    time.Time `gorm:"column:ts"`
@@ -1065,14 +1059,14 @@ func (h *OpsHandler) GetSwitchRateTrend(c *gin.Context) {
 
 	err := h.db.Raw(fmt.Sprintf(`
 		SELECT
-			date_trunc('%s', ts) as ts,
+			%s as ts,
 			SUM(CASE WHEN failover_used THEN 1 ELSE 0 END)::bigint as switch_count,
 			COUNT(*)::bigint as request_count
 		FROM call_logs
 		WHERE ts > NOW() - INTERVAL '%s'
-		GROUP BY date_trunc('%s', ts)
+		GROUP BY %s
 		ORDER BY ts
-	`, bucketInterval, interval, bucketInterval)).Scan(&rows).Error
+	`, truncExpr, interval, truncExpr)).Scan(&rows).Error
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query switch rate trend"})
@@ -1111,25 +1105,11 @@ type ThroughputTrendPoint struct {
 func (h *OpsHandler) GetThroughputTrend(c *gin.Context) {
 	timeRange := c.DefaultQuery("time_range", "1h")
 	interval := timeRangeToInterval(timeRange)
+	truncExpr := bucketTruncExpr(timeRange)
 	byProvider := c.DefaultQuery("by_provider", "false")
 	topGroups, _ := strconv.Atoi(c.DefaultQuery("top_groups", "0"))
 
-	var bucketInterval string
-	switch timeRange {
-	case "5m":
-		bucketInterval = "1 minute"
-	case "30m":
-		bucketInterval = "5 minutes"
-	case "6h":
-		bucketInterval = "30 minutes"
-	case "24h":
-		bucketInterval = "1 hour"
-	default:
-		bucketInterval = "5 minutes"
-	}
-
 	if byProvider == "true" {
-		// 按 provider 维度
 		var rows []struct {
 			Timestamp    time.Time `gorm:"column:ts"`
 			Provider     string    `gorm:"column:provider"`
@@ -1139,16 +1119,16 @@ func (h *OpsHandler) GetThroughputTrend(c *gin.Context) {
 		}
 		err := h.db.Raw(fmt.Sprintf(`
 			SELECT
-				date_trunc('%s', ts) as ts,
+				%s as ts,
 				provider,
 				COUNT(*)::bigint as request_count,
 				COALESCE(SUM(total_tokens), 0)::bigint as token_count,
 				SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END)::bigint as error_count
 			FROM call_logs
 			WHERE ts > NOW() - INTERVAL '%s'
-			GROUP BY date_trunc('%s', ts), provider
+			GROUP BY %s, provider
 			ORDER BY ts
-		`, bucketInterval, interval, bucketInterval)).Scan(&rows).Error
+		`, truncExpr, interval, truncExpr)).Scan(&rows).Error
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query throughput by provider"})
 			return
@@ -1165,7 +1145,6 @@ func (h *OpsHandler) GetThroughputTrend(c *gin.Context) {
 	}
 
 	if topGroups > 0 {
-		// 按 top group 维度
 		topNames := make([]string, 0)
 		h.db.Raw(fmt.Sprintf(`
 			SELECT group_name FROM call_logs
@@ -1183,15 +1162,15 @@ func (h *OpsHandler) GetThroughputTrend(c *gin.Context) {
 		if len(topNames) > 0 {
 			h.db.Raw(fmt.Sprintf(`
 				SELECT
-					date_trunc('%s', ts) as ts, group_name,
+					%s as ts, group_name,
 					COUNT(*)::bigint as request_count,
 					COALESCE(SUM(total_tokens), 0)::bigint as token_count,
 					SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END)::bigint as error_count
 				FROM call_logs
 				WHERE ts > NOW() - INTERVAL '%s' AND group_name IN ?
-				GROUP BY date_trunc('%s', ts), group_name
+				GROUP BY %s, group_name
 				ORDER BY ts
-			`, bucketInterval, interval, bucketInterval), topNames).Scan(&rows)
+			`, truncExpr, interval, truncExpr), topNames).Scan(&rows)
 		}
 		points := make([]ThroughputTrendPoint, 0, len(rows))
 		for _, r := range rows {
@@ -1204,21 +1183,20 @@ func (h *OpsHandler) GetThroughputTrend(c *gin.Context) {
 		return
 	}
 
-	// 默认：全局总量趋势
 	var rows []struct {
 		Timestamp    time.Time `gorm:"column:ts"`
 		RequestCount int64     `gorm:"column:request_count"`
 		TokenCount   int64     `gorm:"column:token_count"`
 	}
 	err := h.db.Raw(fmt.Sprintf(`
-		SELECT date_trunc('%s', ts) as ts,
+		SELECT %s as ts,
 			COUNT(*)::bigint as request_count,
 			COALESCE(SUM(total_tokens), 0)::bigint as token_count
 		FROM call_logs
 		WHERE ts > NOW() - INTERVAL '%s'
-		GROUP BY date_trunc('%s', ts)
+		GROUP BY %s
 		ORDER BY ts
-	`, bucketInterval, interval, bucketInterval)).Scan(&rows).Error
+	`, truncExpr, interval, truncExpr)).Scan(&rows).Error
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query throughput trend"})
 		return

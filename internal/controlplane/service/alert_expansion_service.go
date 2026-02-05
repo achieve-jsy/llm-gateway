@@ -28,19 +28,14 @@ type alertRecordStore interface {
 	FindOwnersByBudgetScope(scopeType, scopeID string) ([]repository.AlertOwnerRow, error)
 }
 
-// notificationWriter 站内通知写入接口（独立于公告）。
-type notificationWriter interface {
-	Create(n *model.Notification) error
-}
-
 // BudgetAlertService 处理告警触发（阈值+去重）与通知发送。
 type BudgetAlertService struct {
 	budgetRepo       budgetAllocReader
 	alertRepo        alertRecordStore
-	notificationRepo notificationWriter
+	notifier         Notifier
 	rdb              *redis.Client
-	// notifier 可选：webhook 发送（nil = 仅站内通知）
-	notifier WebhookNotifier
+	// webhookNotifier 可选：webhook 发送（nil = 仅站内+邮件）
+	webhookNotifier WebhookNotifier
 }
 
 // SetRedis 注入 Redis 客户端，用于读取实时已用量。
@@ -48,14 +43,14 @@ func (s *BudgetAlertService) SetRedis(rdb *redis.Client) {
 	s.rdb = rdb
 }
 
-// SetNotificationRepo 注入站内通知 repo。
-func (s *BudgetAlertService) SetNotificationRepo(repo notificationWriter) {
-	s.notificationRepo = repo
+// SetNotifier 注入通用 Notifier（站内信+邮件等）。
+func (s *BudgetAlertService) SetNotifier(n Notifier) {
+	s.notifier = n
 }
 
-// SetNotifier 注入 Webhook 通知器（由调用方按 settings 动态构建）。
-func (s *BudgetAlertService) SetNotifier(n WebhookNotifier) {
-	s.notifier = n
+// SetWebhookNotifier 注入 Webhook 通知器（由调用方按 settings 动态构建）。
+func (s *BudgetAlertService) SetWebhookNotifier(n WebhookNotifier) {
+	s.webhookNotifier = n
 }
 
 // WebhookNotifier 飞书/webhook 通知接口（由 settings_service 实现）。
@@ -63,20 +58,20 @@ type WebhookNotifier interface {
 	SendText(ctx context.Context, text string) error
 }
 
-func NewBudgetAlertService(budgetRepo *repository.BudgetRepo, alertRepo *repository.BudgetAlertRepo, notifier WebhookNotifier) *BudgetAlertService {
+func NewBudgetAlertService(budgetRepo *repository.BudgetRepo, alertRepo *repository.BudgetAlertRepo, webhookNotifier WebhookNotifier) *BudgetAlertService {
 	return &BudgetAlertService{
-		budgetRepo: budgetRepo,
-		alertRepo:  alertRepo,
-		notifier:   notifier,
+		budgetRepo:      budgetRepo,
+		alertRepo:       alertRepo,
+		webhookNotifier: webhookNotifier,
 	}
 }
 
 // NewBudgetAlertServiceForTest 供测试注入自定义 fake 实现，不对外暴露接口类型。
-func NewBudgetAlertServiceForTest(budgetRepo budgetAllocReader, alertRepo alertRecordStore, notifier WebhookNotifier) *BudgetAlertService {
+func NewBudgetAlertServiceForTest(budgetRepo budgetAllocReader, alertRepo alertRecordStore, webhookNotifier WebhookNotifier) *BudgetAlertService {
 	return &BudgetAlertService{
-		budgetRepo: budgetRepo,
-		alertRepo:  alertRepo,
-		notifier:   notifier,
+		budgetRepo:      budgetRepo,
+		alertRepo:       alertRepo,
+		webhookNotifier: webhookNotifier,
 	}
 }
 
@@ -125,12 +120,12 @@ func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, sc
 		msg := fmt.Sprintf("【预算告警】%s(%s) 本月用量已达 %d%%（$%.2f / $%.2f），请关注并考虑扩容",
 			scopeType, scopeID, threshold, usedUSD, alloc.AmountUSD)
 
-		// 站内通知：给每个负责人各写一条 notification 记录
-		s.sendInAppNotifications(ctx, scopeType, scopeID, threshold, usedUSD, alloc.AmountUSD)
+		// 通道 1（解耦的 Notifier：站内信 + 邮件 + ...）
+		s.sendNotifications(ctx, scopeType, scopeID, threshold, usedUSD, alloc.AmountUSD)
 
-		// Webhook 降级：失败不阻断，仅记录
-		if s.notifier != nil {
-			if err := s.notifier.SendText(ctx, msg); err != nil {
+		// 通道 2（Webhook 降级：失败不阻断，仅记录）
+		if s.webhookNotifier != nil {
+			if err := s.webhookNotifier.SendText(ctx, msg); err != nil {
 				slog.Warn("budget_alert: webhook notify failed", "error", err)
 			}
 		}
@@ -139,9 +134,9 @@ func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, sc
 	}
 }
 
-// sendInAppNotifications 向每个负责人各写一条 Notification 记录。
-func (s *BudgetAlertService) sendInAppNotifications(ctx context.Context, scopeType, scopeID string, threshold int, usedUSD, amountUSD float64) {
-	if s.notificationRepo == nil {
+// sendNotifications 向每个负责人各发一条 Notification，由注入的 Notifier 决定走哪些通道。
+func (s *BudgetAlertService) sendNotifications(ctx context.Context, scopeType, scopeID string, threshold int, usedUSD, amountUSD float64) {
+	if s.notifier == nil {
 		return
 	}
 
@@ -182,14 +177,14 @@ func (s *BudgetAlertService) sendInAppNotifications(ctx context.Context, scopeTy
 			RefType: "budget_scope",
 			RefID:   scopeType + ":" + scopeID,
 		}
-		if err := s.notificationRepo.Create(n); err != nil {
-			slog.Warn("budget_alert: failed to create notification",
+		if err := s.notifier.Notify(ctx, n); err != nil {
+			slog.Warn("budget_alert: notify failed",
 				"user_id", owner.UserID, "error", err)
 			continue
 		}
 		sent++
 	}
-	slog.Info("budget_alert: in-app notifications sent",
+	slog.Info("budget_alert: notifications sent",
 		"scope_type", scopeType, "scope_id", scopeID,
 		"threshold", threshold, "sent", sent)
 }

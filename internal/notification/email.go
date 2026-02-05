@@ -34,26 +34,25 @@ func (e *EmailSender) SetSkipTLSVerify(v bool)              { e.skipVerify = v }
 func (e *EmailSender) UpdateRecipients(recipients []string) { e.recipients = recipients }
 
 func (e *EmailSender) SendText(ctx context.Context, text string) error {
-	if len(e.recipients) == 0 {
-		slog.Warn("email: no recipients configured, skipping")
-		return nil
-	}
-	return e.sendMail(ctx, text, e.recipients)
+	return e.sendWithSubject(ctx, "[LLM Gateway] 告警通知", text, e.recipients)
+}
+
+func (e *EmailSender) SendTextWithSubject(ctx context.Context, subject, text string) error {
+	return e.sendWithSubject(ctx, subject, text, e.recipients)
 }
 
 func (e *EmailSender) SendTextTo(ctx context.Context, text string, recipients []string) error {
-	if len(recipients) == 0 {
-		return nil
-	}
-	return e.sendMail(ctx, text, recipients)
+	return e.sendWithSubject(ctx, "[LLM Gateway] 告警通知", text, recipients)
 }
 
-func (e *EmailSender) sendMail(ctx context.Context, text string, recipients []string) error {
+func (e *EmailSender) sendWithSubject(ctx context.Context, subject, text string, recipients []string) error {
+	if len(recipients) == 0 {
+		slog.Warn("email: no recipients configured, skipping")
+		return nil
+	}
 	if e.host == "" || e.from == "" {
 		return fmt.Errorf("email: SMTP not configured: host=%q from=%q", e.host, e.from)
 	}
-
-	subject := "[LLM Gateway] 告警通知"
 
 	done := make(chan error, 1)
 	go func() {

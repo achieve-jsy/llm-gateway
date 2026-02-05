@@ -150,6 +150,13 @@ import { Search as SearchIcon } from '@element-plus/icons-vue'
 import { opsAPI } from '@/api/ops'
 import type { OpsSystemLog, OpsSystemLogSinkHealth, OpsRuntimeLogConfig } from '@/api/ops'
 
+const props = withDefaults(
+  defineProps<{
+    refreshToken?: number
+  }>(),
+  { refreshToken: 0 }
+)
+
 const loading = ref(false)
 const logs = ref<OpsSystemLog[]>([])
 const total = ref(0)
@@ -180,6 +187,12 @@ const filters = reactive({
 watch(filters, () => {
   page.value = 1
   fetchData()
+})
+
+watch(() => props.refreshToken, () => {
+  page.value = 1
+  fetchData()
+  fetchSinkHealth()
 })
 
 onMounted(async () => {

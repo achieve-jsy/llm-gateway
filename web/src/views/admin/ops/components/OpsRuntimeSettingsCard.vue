@@ -249,6 +249,12 @@ onMounted(loadSettings)
 </script>
 
 <style scoped>
+.ops-card {
+  background: var(--bg-card);
+  border-radius: var(--radius-3xl);
+  padding: var(--space-4);
+}
+
 .ops-card-header {
   display: flex;
   align-items: center;

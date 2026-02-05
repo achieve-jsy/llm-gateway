@@ -87,6 +87,13 @@ const viewMode = ref<'top' | 'paged'>('top')
 
 const summary = ref<{ total_requests: number; total_tokens: number } | null>(null)
 
+const props = withDefaults(
+  defineProps<{
+    refreshToken?: number
+  }>(),
+  { refreshToken: 0 }
+)
+
 const filters = reactive({
   timeRange: '1h',
   topN: 10,
@@ -101,6 +108,10 @@ watch(() => [filters.timeRange, filters.topN, viewMode.value], () => {
 
 watch(viewMode, () => {
   page.value = 1
+  fetchData()
+})
+
+watch(() => props.refreshToken, () => {
   fetchData()
 })
 

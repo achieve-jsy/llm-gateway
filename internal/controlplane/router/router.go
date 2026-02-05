@@ -437,6 +437,19 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		// 运维看板 v2：后台任务
 		adminGroup.GET("/ops/jobs", opsHandler.ListJobs)
 
+		// 运维看板 v3：邮件通知配置
+		adminGroup.GET("/ops/settings/email-notification", opsHandler.GetEmailNotificationConfig)
+		adminGroup.PUT("/ops/settings/email-notification", opsHandler.UpdateEmailNotificationConfig)
+		adminGroup.POST("/ops/settings/email-notification/test", opsHandler.SendTestAlertEmail)
+
+		// 运维看板 v3：告警运行时设置
+		adminGroup.GET("/ops/settings/alert-runtime", opsHandler.GetAlertRuntimeSettings)
+		adminGroup.PUT("/ops/settings/alert-runtime", opsHandler.UpdateAlertRuntimeSettings)
+
+		// 运维看板 v3：错误日志增强视图
+		adminGroup.GET("/ops/error-logs", opsHandler.ListErrorLogs)
+		adminGroup.PUT("/ops/error-logs/:id/resolve", opsHandler.ResolveErrorLog)
+
 		// 模型状态变更日志
 		adminGroup.GET("/model-status-logs", modelStatusLogHandler.ListModelStatusLogs)
 

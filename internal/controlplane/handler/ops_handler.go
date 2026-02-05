@@ -2108,3 +2108,342 @@ func (h *OpsHandler) GetGroupOptions(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, groups)
 }
+
+// =============================================================================
+// 邮件通知配置
+// =============================================================================
+
+const settingKeyEmailNotification = "ops_email_notification_config"
+
+// EmailNotificationConfig 邮件通知配置
+type EmailNotificationConfig struct {
+	Enabled          bool     `json:"enabled"`
+	AlertRecipients  []string `json:"alert_recipients"`
+	ReportRecipients []string `json:"report_recipients"`
+	MinSeverity      string   `json:"min_severity"`
+	IncludeResolved  bool     `json:"include_resolved"`
+	DailySummary     bool     `json:"daily_summary"`
+}
+
+func defaultEmailNotificationConfig() EmailNotificationConfig {
+	return EmailNotificationConfig{
+		Enabled:          false,
+		AlertRecipients:  []string{},
+		ReportRecipients: []string{},
+		MinSeverity:      "",
+		IncludeResolved:  false,
+		DailySummary:     false,
+	}
+}
+
+// GetEmailNotificationConfig 获取邮件通知配置
+// GET /api/v1/ops/settings/email-notification
+func (h *OpsHandler) GetEmailNotificationConfig(c *gin.Context) {
+	val, err := h.settingsRepo.GetValue(settingKeyEmailNotification)
+	if err != nil || val == "" {
+		c.JSON(http.StatusOK, defaultEmailNotificationConfig())
+		return
+	}
+
+	var cfg EmailNotificationConfig
+	if jsonErr := json.Unmarshal([]byte(val), &cfg); jsonErr != nil {
+		c.JSON(http.StatusOK, defaultEmailNotificationConfig())
+		return
+	}
+
+	if cfg.AlertRecipients == nil {
+		cfg.AlertRecipients = []string{}
+	}
+	if cfg.ReportRecipients == nil {
+		cfg.ReportRecipients = []string{}
+	}
+
+	c.JSON(http.StatusOK, cfg)
+}
+
+// UpdateEmailNotificationConfig 更新邮件通知配置
+// PUT /api/v1/ops/settings/email-notification
+func (h *OpsHandler) UpdateEmailNotificationConfig(c *gin.Context) {
+	var input EmailNotificationConfig
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if input.AlertRecipients == nil {
+		input.AlertRecipients = []string{}
+	}
+	if input.ReportRecipients == nil {
+		input.ReportRecipients = []string{}
+	}
+
+	data, _ := json.Marshal(input)
+	if err := h.settingsRepo.SetMultiple(map[string]string{
+		settingKeyEmailNotification: string(data),
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save email notification config"})
+		return
+	}
+
+	c.JSON(http.StatusOK, input)
+}
+
+// SendTestAlertEmail 发送测试告警邮件
+// POST /api/v1/ops/settings/email-notification/test
+func (h *OpsHandler) SendTestAlertEmail(c *gin.Context) {
+	var req struct {
+		Recipient string `json:"recipient" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "recipient is required"})
+		return
+	}
+
+	// TODO: 接入实际邮件发送（依赖 email_sender 模块）
+	c.JSON(http.StatusOK, gin.H{"sent": true, "recipient": req.Recipient, "message": "test email queued (email sender not yet wired)"})
+}
+
+// =============================================================================
+// 告警运行时设置
+// =============================================================================
+
+const settingKeyAlertRuntime = "ops_alert_runtime_settings"
+
+// AlertRuntimeSettings 告警运行时设置
+type AlertRuntimeSettings struct {
+	EvaluationInterval int                    `json:"evaluation_interval_seconds"`
+	Thresholds         AlertThresholdSettings `json:"thresholds"`
+	DistributedLock    DistributedLockConfig  `json:"distributed_lock"`
+}
+
+// AlertThresholdSettings 阈值覆写
+type AlertThresholdSettings struct {
+	SLAMin              *float64 `json:"sla_percent_min"`
+	TTFTP99Max          *float64 `json:"ttft_p99_ms_max"`
+	ReqErrorRateMax     *float64 `json:"request_error_rate_percent_max"`
+	UpstreamErrorRateMax *float64 `json:"upstream_error_rate_percent_max"`
+}
+
+// DistributedLockConfig 分布式锁配置
+type DistributedLockConfig struct {
+	Enabled    bool   `json:"enabled"`
+	Key        string `json:"key"`
+	TTLSeconds int    `json:"ttl_seconds"`
+}
+
+func defaultAlertRuntimeSettings() AlertRuntimeSettings {
+	sla := 99.0
+	ttft := 5000.0
+	reqErr := 5.0
+	upErr := 10.0
+	return AlertRuntimeSettings{
+		EvaluationInterval: 60,
+		Thresholds: AlertThresholdSettings{
+			SLAMin:               &sla,
+			TTFTP99Max:           &ttft,
+			ReqErrorRateMax:      &reqErr,
+			UpstreamErrorRateMax: &upErr,
+		},
+		DistributedLock: DistributedLockConfig{
+			Enabled:    false,
+			Key:        "ops:alert_eval_lock",
+			TTLSeconds: 30,
+		},
+	}
+}
+
+// GetAlertRuntimeSettings 获取告警运行时设置
+// GET /api/v1/ops/settings/alert-runtime
+func (h *OpsHandler) GetAlertRuntimeSettings(c *gin.Context) {
+	val, err := h.settingsRepo.GetValue(settingKeyAlertRuntime)
+	if err != nil || val == "" {
+		c.JSON(http.StatusOK, defaultAlertRuntimeSettings())
+		return
+	}
+
+	var settings AlertRuntimeSettings
+	if jsonErr := json.Unmarshal([]byte(val), &settings); jsonErr != nil {
+		c.JSON(http.StatusOK, defaultAlertRuntimeSettings())
+		return
+	}
+
+	if settings.EvaluationInterval <= 0 {
+		settings.EvaluationInterval = 60
+	}
+	if settings.DistributedLock.TTLSeconds <= 0 {
+		settings.DistributedLock.TTLSeconds = 30
+	}
+
+	c.JSON(http.StatusOK, settings)
+}
+
+// UpdateAlertRuntimeSettings 更新告警运行时设置
+// PUT /api/v1/ops/settings/alert-runtime
+func (h *OpsHandler) UpdateAlertRuntimeSettings(c *gin.Context) {
+	var input AlertRuntimeSettings
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if input.EvaluationInterval < 1 || input.EvaluationInterval > 86400 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "evaluation_interval_seconds must be 1~86400"})
+		return
+	}
+
+	if input.DistributedLock.Enabled {
+		if len(input.DistributedLock.Key) < 3 || !strings.HasPrefix(input.DistributedLock.Key, "ops:") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "distributed_lock.key must start with 'ops:' and length >= 3"})
+			return
+		}
+		if input.DistributedLock.TTLSeconds < 1 || input.DistributedLock.TTLSeconds > 86400 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "distributed_lock.ttl_seconds must be 1~86400"})
+			return
+		}
+	}
+
+	data, _ := json.Marshal(input)
+	if err := h.settingsRepo.SetMultiple(map[string]string{
+		settingKeyAlertRuntime: string(data),
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save alert runtime settings"})
+		return
+	}
+
+	c.JSON(http.StatusOK, input)
+}
+
+// =============================================================================
+// 错误日志（增强视图）
+// =============================================================================
+
+// ErrorLogEntry 增强版错误日志条目
+type ErrorLogEntry struct {
+	ID                   uint64  `gorm:"column:id" json:"id"`
+	Ts                   string  `gorm:"column:ts" json:"ts"`
+	Model                string  `gorm:"column:model" json:"model"`
+	Provider             string  `gorm:"column:provider" json:"provider"`
+	GroupName            string  `gorm:"column:group_name" json:"group_name"`
+	Status               *int    `gorm:"column:status" json:"status"`
+	ErrorMessage         string  `gorm:"column:error_message" json:"error_message"`
+	DurationMs           *int    `gorm:"column:duration_ms" json:"duration_ms"`
+	RequestID            *string `gorm:"column:request_id" json:"request_id"`
+	ClientRequestID      *string `gorm:"column:client_request_id" json:"client_request_id"`
+	Phase                string  `gorm:"column:phase" json:"phase"`
+	UserID               *string `gorm:"column:user_id" json:"user_id"`
+	UpstreamStatus       *int    `gorm:"column:upstream_status" json:"upstream_status"`
+	UpstreamErrorMessage *string `gorm:"column:upstream_error_message" json:"upstream_error_message"`
+	UpstreamEndpoint     *string `gorm:"column:upstream_endpoint" json:"upstream_endpoint"`
+	InboundEndpoint      *string `gorm:"column:inbound_endpoint" json:"inbound_endpoint"`
+	ApiKeyPrefix         *string `gorm:"column:api_key_prefix" json:"api_key_prefix"`
+	Resolved             bool    `gorm:"column:resolved" json:"resolved"`
+}
+
+// ListErrorLogs 查询错误日志（从 system_logs 表过滤 ERROR 级别）
+// GET /api/v1/ops/error-logs
+func (h *OpsHandler) ListErrorLogs(c *gin.Context) {
+	timeRange := c.DefaultQuery("time_range", "1h")
+	interval := timeRangeToInterval(timeRange)
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if pageSize <= 0 || pageSize > 200 {
+		pageSize = 20
+	}
+	if page <= 0 {
+		page = 1
+	}
+
+	phase := c.Query("phase")
+	statusStr := c.Query("status")
+	search := c.Query("search")
+	sortBy := c.DefaultQuery("sort_by", "ts")
+	sortOrder := c.DefaultQuery("sort_order", "desc")
+
+	if sortBy != "ts" && sortBy != "status" && sortBy != "duration_ms" {
+		sortBy = "ts"
+	}
+	if sortOrder != "asc" && sortOrder != "desc" {
+		sortOrder = "desc"
+	}
+
+	baseWhere := fmt.Sprintf(`level IN ('ERROR','WARN') AND ts >= NOW() - INTERVAL '%s'`, interval)
+
+	args := []interface{}{}
+	if phase != "" {
+		baseWhere += " AND component = ?"
+		args = append(args, phase)
+	}
+	if statusStr != "" {
+		if st, err := strconv.Atoi(statusStr); err == nil {
+			baseWhere += " AND status = ?"
+			args = append(args, st)
+		}
+	}
+	if search != "" {
+		baseWhere += " AND (model ILIKE ? OR provider ILIKE ? OR request_id = ? OR message ILIKE ?)"
+		like := "%" + search + "%"
+		args = append(args, like, like, search, like)
+	}
+
+	var total int64
+	countSQL := fmt.Sprintf(`SELECT COUNT(*) FROM system_logs WHERE %s`, baseWhere)
+	h.db.Raw(countSQL, args...).Scan(&total)
+
+	orderBy := fmt.Sprintf("ORDER BY %s %s, id DESC", sortBy, sortOrder)
+	offset := (page - 1) * pageSize
+
+	querySQL := fmt.Sprintf(`
+		SELECT
+			id, ts,
+			COALESCE(model,'') AS model,
+			COALESCE(provider,'') AS provider,
+			COALESCE("group",'') AS group_name,
+			status,
+			COALESCE(error_message,'') AS error_message,
+			duration_ms,
+			request_id, client_request_id,
+			component AS phase,
+			user_id
+		FROM system_logs
+		WHERE %s
+		%s
+		LIMIT %d OFFSET %d
+	`, baseWhere, orderBy, pageSize, offset)
+
+	items := make([]ErrorLogEntry, 0)
+	h.db.Raw(querySQL, args...).Scan(&items)
+
+	c.JSON(http.StatusOK, gin.H{
+		"items":     items,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
+}
+
+// ResolveErrorLog 标记/取消标记错误日志为已解决
+// PUT /api/v1/ops/error-logs/:id/resolve
+func (h *OpsHandler) ResolveErrorLog(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	var req struct {
+		Resolved bool `json:"resolved"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result := h.db.Exec(`UPDATE system_logs SET extra = COALESCE(extra,'{}')::jsonb || jsonb_build_object('resolved', $1::boolean) WHERE id = $2`, req.Resolved, id)
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"id": id, "resolved": req.Resolved})
+}

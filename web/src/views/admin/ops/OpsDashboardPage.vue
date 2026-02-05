@@ -75,16 +75,16 @@
       </div>
 
       <!-- Token Stats -->
-      <OpsTokenStatsCard v-if="settings?.show_token_stats" />
+      <OpsTokenStatsCard v-if="settings?.show_token_stats" :refresh-token="refreshToken" />
 
       <!-- Error Logs -->
-      <OpsErrorLogTable v-if="!isFullscreen" />
+      <OpsErrorLogTable v-if="!isFullscreen" :refresh-token="refreshToken" />
 
       <!-- Alert Events -->
-      <OpsAlertEventsCard v-if="settings?.show_alert_events" />
+      <OpsAlertEventsCard v-if="settings?.show_alert_events" :refresh-token="refreshToken" />
 
       <!-- System Logs -->
-      <OpsSystemLogTable v-if="!isFullscreen" />
+      <OpsSystemLogTable v-if="!isFullscreen" :refresh-token="refreshToken" />
 
       <!-- Modals & Dialogs (hidden in fullscreen) -->
       <template v-if="!isFullscreen">

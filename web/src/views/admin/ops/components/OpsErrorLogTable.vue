@@ -1,7 +1,16 @@
 <template>
-  <div class="ops-card">
+  <div class="ops-card" v-loading="loading">
     <div class="ops-card-header">
       <h3 class="ops-card-title">错误日志</h3>
+      <el-button
+        size="small"
+        :icon="Refresh"
+        :loading="loading"
+        circle
+        @click="fetchData()"
+        title="刷新"
+        class="ops-refresh-btn"
+      />
     </div>
 
     <!-- Filter Bar -->
@@ -140,11 +149,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Refresh } from '@element-plus/icons-vue'
 import { opsAPI } from '@/api/ops'
 import type { OpsErrorLogEntry } from '@/api/ops'
 import { formatDateTime, truncateMessage } from '../utils/opsFormatters'
+
+const props = withDefaults(
+  defineProps<{
+    refreshToken?: number
+  }>(),
+  { refreshToken: 0 }
+)
 
 const loading = ref(false)
 const items = ref<OpsErrorLogEntry[]>([])
@@ -249,9 +266,21 @@ async function toggleResolved(log: OpsErrorLogEntry) {
 }
 
 onMounted(() => fetchData(1))
+
+watch(() => props.refreshToken, () => {
+  currentPage.value = 1
+  fetchData()
+})
 </script>
 
 <style scoped>
+.ops-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-3xl);
+  padding: var(--space-4);
+}
+
 .ops-card-header {
   display: flex;
   align-items: center;
@@ -260,9 +289,15 @@ onMounted(() => fetchData(1))
 }
 
 .ops-card-title {
-  font-size: var(--font-size-section);
-  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
   color: var(--text-primary);
+  margin: 0;
+}
+
+.ops-refresh-btn {
+  width: 28px;
+  height: 28px;
 }
 
 .ops-filter-bar {

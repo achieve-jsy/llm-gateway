@@ -149,6 +149,13 @@ import { Refresh as RefreshIcon } from '@element-plus/icons-vue'
 import { opsAPI } from '@/api/ops'
 import type { AlertEvent, AlertEventStatus, OpsSeverity } from '@/api/ops'
 
+const props = withDefaults(
+  defineProps<{
+    refreshToken?: number
+  }>(),
+  { refreshToken: 0 }
+)
+
 const loading = ref(false)
 const loadingMore = ref(false)
 const events = ref<AlertEvent[]>([])
@@ -164,6 +171,12 @@ const filters = reactive({
 const PAGE_LIMIT = 20
 
 watch(filters, () => {
+  events.value = []
+  hasMore.value = false
+  fetchData()
+})
+
+watch(() => props.refreshToken, () => {
   events.value = []
   hasMore.value = false
   fetchData()

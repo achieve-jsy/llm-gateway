@@ -640,171 +640,184 @@ export interface OpsLatencyBreakdown {
 }
 
 // ============ API 方法 ============
+// http 响应拦截器返回完整 AxiosResponse，此处统一解包 .data 供调用方直接消费。
+
+const get = <T>(...args: Parameters<typeof http.get>) =>
+  (http.get as (...a: Parameters<typeof http.get>) => Promise<{ data: T }>)(...args).then(r => r.data as T)
+const post = <T>(...args: Parameters<typeof http.post>) =>
+  (http.post as (...a: Parameters<typeof http.post>) => Promise<{ data: T }>)(...args).then(r => r.data as T)
+const put = <T = void>(...args: Parameters<typeof http.put>) =>
+  (http.put as (...a: Parameters<typeof http.put>) => Promise<{ data: T }>)(...args).then(r => r.data as T)
+const del = (...args: Parameters<typeof http.delete>) =>
+  (http.delete as (...a: Parameters<typeof http.delete>) => Promise<unknown>)(...args)
 
 export const opsAPI = {
   // ---- Dashboard 核心 ----
   getDashboard: (timeRange: string = '1h') =>
-    http.get<OpsDashboardResponse>('/api/v1/ops/dashboard', { params: { time_range: timeRange } }),
+    get<OpsDashboardResponse>('/api/v1/ops/dashboard', { params: { time_range: timeRange } }),
 
   // ---- 实时流量摘要（按时间窗口，用于实时流量窗口切换） ----
   getRealtimeTrafficSummary: (window: string = '1min') =>
-    http.get<OpsRealtimeTrafficSummary>('/api/v1/ops/realtime-traffic/summary', { params: { window } }),
+    get<OpsRealtimeTrafficSummary>('/api/v1/ops/realtime-traffic/summary', { params: { window } }),
 
   // ---- 模型组下拉列表（运维过滤用） ----
   getGroupOptions: () =>
-    http.get<OpsGroupOption[]>('/api/v1/ops/groups'),
+    get<OpsGroupOption[]>('/api/v1/ops/groups'),
 
   getTrafficTrend: (timeRange: string = '1h') =>
-    http.get<{ points: OpsTrafficPoint[]; bucket: string }>('/api/v1/ops/traffic-trend', { params: { time_range: timeRange } }),
+    get<{ points: OpsTrafficPoint[]; bucket: string }>('/api/v1/ops/traffic-trend', { params: { time_range: timeRange } }),
 
   getThroughputTrend: (timeRange: string = '1h') =>
-    http.get<OpsThroughputTrendResponse>('/api/v1/ops/throughput-trend', { params: { time_range: timeRange } }),
+    get<OpsThroughputTrendResponse>('/api/v1/ops/throughput-trend', { params: { time_range: timeRange } }),
 
   getErrorTrend: (timeRange: string = '1h') =>
-    http.get<{ points: OpsErrorPoint[] }>('/api/v1/ops/error-trend', { params: { time_range: timeRange } }),
+    get<{ points: OpsErrorPoint[] }>('/api/v1/ops/error-trend', { params: { time_range: timeRange } }),
 
   getLatencyHistogram: (timeRange: string = '1h') =>
-    http.get<{ buckets: OpsLatencyBucket[]; total_requests: number }>('/api/v1/ops/latency-histogram', { params: { time_range: timeRange } }),
+    get<{ buckets: OpsLatencyBucket[]; total_requests: number }>('/api/v1/ops/latency-histogram', { params: { time_range: timeRange } }),
 
   getErrorDistribution: (timeRange: string = '1h') =>
-    http.get<{ distribution: OpsErrorDistributionItem[] }>('/api/v1/ops/error-distribution', { params: { time_range: timeRange } }),
+    get<{ distribution: OpsErrorDistributionItem[] }>('/api/v1/ops/error-distribution', { params: { time_range: timeRange } }),
 
   getSwitchRateTrend: (timeRange: string = '5h') =>
-    http.get<{ points: OpsSwitchRatePoint[] }>('/api/v1/ops/switch-rate-trend', { params: { time_range: timeRange } }),
+    get<{ points: OpsSwitchRatePoint[] }>('/api/v1/ops/switch-rate-trend', { params: { time_range: timeRange } }),
 
   // ---- 请求 / 错误详情 ----
   listRequests: (params: OpsRequestDetailsParams) =>
-    http.get<OpsRequestDetailsResponse>('/api/v1/ops/requests', { params }),
+    get<OpsRequestDetailsResponse>('/api/v1/ops/requests', { params }),
 
   listRequestErrors: (params: OpsErrorListParams) =>
-    http.get<OpsErrorListResponse>('/api/v1/ops/request-errors', { params }),
+    get<OpsErrorListResponse>('/api/v1/ops/request-errors', { params }),
 
   getRequestErrorDetail: (id: number) =>
-    http.get<OpsRequestDetail>(`/api/v1/ops/request-errors/${id}`),
+    get<OpsRequestDetail>(`/api/v1/ops/request-errors/${id}`),
 
   listUpstreamErrors: (params: OpsErrorListParams) =>
-    http.get<OpsErrorListResponse>('/api/v1/ops/upstream-errors', { params }),
+    get<OpsErrorListResponse>('/api/v1/ops/upstream-errors', { params }),
 
   getUpstreamErrorDetail: (id: number) =>
-    http.get<OpsUpstreamError>(`/api/v1/ops/upstream-errors/${id}`),
+    get<OpsUpstreamError>(`/api/v1/ops/upstream-errors/${id}`),
 
   updateRequestErrorResolved: (id: number, resolved: boolean) =>
-    http.put(`/api/v1/ops/request-errors/${id}/resolve`, { resolved }),
+    put(`/api/v1/ops/request-errors/${id}/resolve`, { resolved }),
 
   updateUpstreamErrorResolved: (id: number, resolved: boolean) =>
-    http.put(`/api/v1/ops/upstream-errors/${id}/resolve`, { resolved }),
+    put(`/api/v1/ops/upstream-errors/${id}/resolve`, { resolved }),
 
   // ---- 并发统计 ----
   getConcurrencyStats: () =>
-    http.get<OpsConcurrencyStatsResponse>('/api/v1/ops/concurrency'),
+    get<OpsConcurrencyStatsResponse>('/api/v1/ops/concurrency'),
 
   getUserConcurrency: () =>
-    http.get<OpsUserConcurrencyResponseNew>('/api/v1/ops/user-concurrency'),
+    get<OpsUserConcurrencyResponseNew>('/api/v1/ops/user-concurrency'),
 
   getAccountAvailability: () =>
-    http.get<OpsAccountAvailabilityResponse>('/api/v1/ops/account-availability'),
+    get<OpsAccountAvailabilityResponse>('/api/v1/ops/account-availability'),
+
+  getUserConcurrencyStats: () =>
+    get<OpsUserConcurrencyResponseNew>('/api/v1/ops/user-concurrency'),
 
   // ---- 实时流量窗口 ----
   getRealtimeTraffic: (params?: { window?: string; platform?: string; group_id?: number }) =>
-    http.get<OpsTraffic>('/api/v1/ops/realtime-traffic', { params }),
+    get<OpsTraffic>('/api/v1/ops/realtime-traffic', { params }),
 
   // ---- 告警 ----
   listAlertRules: () =>
-    http.get<AlertRule[]>('/api/v1/ops/alert-rules'),
+    get<AlertRule[]>('/api/v1/ops/alert-rules'),
 
   createAlertRule: (rule: Omit<AlertRule, 'id' | 'created_at' | 'updated_at'>) =>
-    http.post<AlertRule>('/api/v1/ops/alert-rules', rule),
+    post<AlertRule>('/api/v1/ops/alert-rules', rule),
 
   updateAlertRule: (id: number, rule: Partial<AlertRule>) =>
-    http.put<AlertRule>(`/api/v1/ops/alert-rules/${id}`, rule),
+    put<AlertRule>(`/api/v1/ops/alert-rules/${id}`, rule),
 
   deleteAlertRule: (id: number) =>
-    http.delete(`/api/v1/ops/alert-rules/${id}`),
+    del(`/api/v1/ops/alert-rules/${id}`),
 
   listAlertEvents: (query: AlertEventsQuery) =>
-    http.get<AlertEvent[]>('/api/v1/ops/alert-events', { params: query }),
+    get<AlertEvent[]>('/api/v1/ops/alert-events', { params: query }),
 
   getAlertEvent: (id: number) =>
-    http.get<AlertEvent>(`/api/v1/ops/alert-events/${id}`),
+    get<AlertEvent>(`/api/v1/ops/alert-events/${id}`),
 
   updateAlertEventStatus: (id: number, status: AlertEventStatus) =>
-    http.put(`/api/v1/ops/alert-events/${id}/status`, { status }),
+    put(`/api/v1/ops/alert-events/${id}/status`, { status }),
 
   createAlertSilence: (silence: AlertSilenceCreate) =>
-    http.post('/api/v1/ops/alert-silences', silence),
+    post<void>('/api/v1/ops/alert-silences', silence),
 
   // ---- 系统日志 ----
   listSystemLogs: (query: OpsSystemLogQuery) =>
-    http.get<OpsSystemLogResponse>('/api/v1/ops/system-logs', { params: query }),
+    get<OpsSystemLogResponse>('/api/v1/ops/system-logs', { params: query }),
 
   getSystemLogSinkHealth: () =>
-    http.get<OpsSystemLogSinkHealth>('/api/v1/ops/system-logs/health'),
+    get<OpsSystemLogSinkHealth>('/api/v1/ops/system-logs/health'),
 
   getRuntimeLogConfig: () =>
-    http.get<OpsRuntimeLogConfig>('/api/v1/ops/runtime/logging'),
+    get<OpsRuntimeLogConfig>('/api/v1/ops/runtime/logging'),
 
   updateRuntimeLogConfig: (config: Partial<OpsRuntimeLogConfig>) =>
-    http.put<OpsRuntimeLogConfig>('/api/v1/ops/runtime/logging', config),
+    put<OpsRuntimeLogConfig>('/api/v1/ops/runtime/logging', config),
 
   resetRuntimeLogConfig: () =>
-    http.post<OpsRuntimeLogConfig>('/api/v1/ops/runtime/logging/reset'),
+    post<OpsRuntimeLogConfig>('/api/v1/ops/runtime/logging/reset'),
 
   cleanupSystemLogs: (retention_days: number) =>
-    http.post<{ deleted: number }>('/api/v1/ops/system-logs/cleanup', { retention_days }),
+    post<{ deleted: number }>('/api/v1/ops/system-logs/cleanup', { retention_days }),
 
   // ---- Token 统计 ----
   getTokenStats: (params: OpsTokenStatsParams) =>
-    http.get<OpsTokenStatsResponse>('/api/v1/ops/token-stats', { params }),
+    get<OpsTokenStatsResponse>('/api/v1/ops/token-stats', { params }),
 
   // ---- 设置 ----
   getMetricThresholds: () =>
-    http.get<OpsMetricThresholds>('/api/v1/ops/settings/metric-thresholds'),
+    get<OpsMetricThresholds>('/api/v1/ops/settings/metric-thresholds'),
 
   updateMetricThresholds: (thresholds: Partial<OpsMetricThresholds>) =>
-    http.put<OpsMetricThresholds>('/api/v1/ops/settings/metric-thresholds', thresholds),
+    put<OpsMetricThresholds>('/api/v1/ops/settings/metric-thresholds', thresholds),
 
   getDashboardSettings: () =>
-    http.get<OpsDashboardSettings>('/api/v1/ops/settings/dashboard'),
+    get<OpsDashboardSettings>('/api/v1/ops/settings/dashboard'),
 
   updateDashboardSettings: (settings: Partial<OpsDashboardSettings>) =>
-    http.put<OpsDashboardSettings>('/api/v1/ops/settings/dashboard', settings),
+    put<OpsDashboardSettings>('/api/v1/ops/settings/dashboard', settings),
 
   // ---- Jobs ----
   listJobs: () =>
-    http.get<OpsJobHeartbeat[]>('/api/v1/ops/jobs'),
+    get<OpsJobHeartbeat[]>('/api/v1/ops/jobs'),
 
   // ---- 高级设置 ----
   getAdvancedSettings: () =>
-    http.get<OpsAdvancedSettings>('/api/v1/ops/settings/advanced'),
+    get<OpsAdvancedSettings>('/api/v1/ops/settings/advanced'),
 
   updateAdvancedSettings: (settings: Partial<OpsAdvancedSettings>) =>
-    http.put<OpsAdvancedSettings>('/api/v1/ops/settings/advanced', settings),
+    put<OpsAdvancedSettings>('/api/v1/ops/settings/advanced', settings),
 
   // ---- 请求错误关联 ----
   getRequestErrorCorrelation: (requestId: string) =>
-    http.get<OpsErrorCorrelationResponse>(`/api/v1/ops/request-errors/${requestId}/correlation`),
+    get<OpsErrorCorrelationResponse>(`/api/v1/ops/request-errors/${requestId}/correlation`),
 
   // ---- 邮件通知配置 ----
   getEmailNotificationConfig: () =>
-    http.get<EmailNotificationConfig>('/api/v1/ops/settings/email-notification'),
+    get<EmailNotificationConfig>('/api/v1/ops/settings/email-notification'),
 
   updateEmailNotificationConfig: (config: Partial<EmailNotificationConfig>) =>
-    http.put<EmailNotificationConfig>('/api/v1/ops/settings/email-notification', config),
+    put<EmailNotificationConfig>('/api/v1/ops/settings/email-notification', config),
 
   sendTestAlertEmail: (recipient: string) =>
-    http.post<{ sent: boolean }>('/api/v1/ops/settings/email-notification/test', { recipient }),
+    post<{ sent: boolean }>('/api/v1/ops/settings/email-notification/test', { recipient }),
 
   // ---- 告警运行时设置 ----
   getAlertRuntimeSettings: () =>
-    http.get<OpsAlertRuntimeSettings>('/api/v1/ops/settings/alert-runtime'),
+    get<OpsAlertRuntimeSettings>('/api/v1/ops/settings/alert-runtime'),
 
   updateAlertRuntimeSettings: (settings: Partial<OpsAlertRuntimeSettings>) =>
-    http.put<OpsAlertRuntimeSettings>('/api/v1/ops/settings/alert-runtime', settings),
+    put<OpsAlertRuntimeSettings>('/api/v1/ops/settings/alert-runtime', settings),
 
   // ---- 错误日志（增强视图） ----
   listErrorLogs: (params: OpsErrorLogQuery) =>
-    http.get<OpsErrorLogResponse>('/api/v1/ops/error-logs', { params }),
+    get<OpsErrorLogResponse>('/api/v1/ops/error-logs', { params }),
 
   resolveErrorLog: (id: number, resolved: boolean) =>
-    http.put(`/api/v1/ops/error-logs/${id}/resolve`, { resolved }),
+    put(`/api/v1/ops/error-logs/${id}/resolve`, { resolved }),
 }

@@ -143,7 +143,13 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	budgetAlertSvc := service.NewBudgetAlertService(budgetRepo, budgetAlertRepo, nil)
 	budgetAlertSvc.SetRedis(rdb)
 	notificationRepo := repository.NewNotificationRepo(db)
-	budgetAlertSvc.SetNotificationRepo(notificationRepo)
+	// 解耦的通知分发：MultiNotifier = 站内信 + 邮件
+	// 调用方只管构造 model.Notification，内部按已配置通道分发。
+	sharedNotifier := service.NewMultiNotifier(
+		service.NewDBNotifier(notificationRepo),
+		service.NewEmailNotifier(settingsRepo),
+	)
+	budgetAlertSvc.SetNotifier(sharedNotifier)
 	// v0.8: 审计日志（仅管理面写操作落库）
 	auditRepo := repository.NewAuditLogRepo(db)
 	auditSvc := service.NewAuditLogService(auditRepo)
@@ -167,7 +173,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 		dispatcher := notification.NewDispatcher(nil, alertLogger, webhookSender)
 		dispatcher.SetAuditRecorder(newEmailAuditAdapter(auditSvc))
-		budgetAlertSvc.SetNotifier(dispatcher)
+		budgetAlertSvc.SetWebhookNotifier(dispatcher)
 	}()
 	// v0.7: 上线默认预算初始化（异步，不阻塞启动）
 	// 默认额度：部门日常 500 USD/月，部门程序服务 200 USD/月，工作室 2000 USD/月
@@ -302,8 +308,10 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 	// Key 活动提醒：离线扫描器（不碰 gateway 热路径）
 	// 影子模式（enabled=false）：只写 key_activity_alert 表，不发通知；待观测命中分布合理后再开启通知
+	// 复用 sharedNotifier：keyactivity 的扁平签名通过适配器转换成 model.Notification 后分发
+	// 到站内信 + 邮件两条通道。
 	kaRepo := keyactivity.NewRepo(db)
-	kaNotif := keyactivity.NewStdNotifier(notificationRepo)
+	kaNotif := service.NewKeyActivityNotifierAdapter(sharedNotifier)
 	kaScanner := keyactivity.NewScanner(kaRepo, kaNotif, settingsSvc, kaRepo)
 	kaCron := keyactivity.NewCron(kaScanner, settingsSvc)
 	kaCron.Start(context.Background())

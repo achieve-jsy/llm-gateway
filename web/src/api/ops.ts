@@ -548,6 +548,81 @@ export interface OpsErrorCorrelationResponse {
   total: number
 }
 
+// ============ 邮件通知配置类型 ============
+
+export interface EmailNotificationConfig {
+  enabled: boolean
+  alert_recipients: string[]
+  report_recipients: string[]
+  min_severity: OpsSeverity | ''
+  include_resolved: boolean
+  daily_summary: boolean
+}
+
+// ============ 告警运行时设置类型 ============
+
+export interface OpsDistributedLockSettings {
+  enabled: boolean
+  key: string
+  ttl_seconds: number
+}
+
+export interface OpsAlertThresholds {
+  sla_percent_min?: number
+  ttft_p99_ms_max?: number
+  request_error_rate_percent_max?: number
+  upstream_error_rate_percent_max?: number
+}
+
+export interface OpsAlertRuntimeSettings {
+  evaluation_interval_seconds: number
+  thresholds: OpsAlertThresholds
+  distributed_lock: OpsDistributedLockSettings
+}
+
+// ============ 增强错误日志类型 ============
+
+export interface OpsErrorLogEntry {
+  id: number
+  ts: string
+  model: string
+  provider: string
+  group_name: string
+  status: number
+  error_message: string
+  duration_ms: number
+  request_id: string | null
+  client_request_id: string | null
+  phase: string
+  user_id: string | null
+  upstream_status: number | null
+  upstream_error_message: string | null
+  upstream_endpoint: string | null
+  inbound_endpoint: string | null
+  api_key_prefix: string | null
+  resolved: boolean
+}
+
+export interface OpsErrorLogQuery {
+  time_range: string
+  page?: number
+  page_size?: number
+  status?: number
+  provider?: string
+  group_id?: number
+  phase?: string
+  search?: string
+  sort_by?: string
+  sort_order?: 'asc' | 'desc'
+}
+
+export interface OpsErrorLogResponse {
+  items: OpsErrorLogEntry[]
+  total: number
+  page: number
+  page_size: number
+}
+
 // ============ 详情增强类型 ============
 
 export interface OpsUpstreamContext {
@@ -708,4 +783,28 @@ export const opsAPI = {
   // ---- 请求错误关联 ----
   getRequestErrorCorrelation: (requestId: string) =>
     http.get<OpsErrorCorrelationResponse>(`/api/v1/ops/request-errors/${requestId}/correlation`),
+
+  // ---- 邮件通知配置 ----
+  getEmailNotificationConfig: () =>
+    http.get<EmailNotificationConfig>('/api/v1/ops/settings/email-notification'),
+
+  updateEmailNotificationConfig: (config: Partial<EmailNotificationConfig>) =>
+    http.put<EmailNotificationConfig>('/api/v1/ops/settings/email-notification', config),
+
+  sendTestAlertEmail: (recipient: string) =>
+    http.post<{ sent: boolean }>('/api/v1/ops/settings/email-notification/test', { recipient }),
+
+  // ---- 告警运行时设置 ----
+  getAlertRuntimeSettings: () =>
+    http.get<OpsAlertRuntimeSettings>('/api/v1/ops/settings/alert-runtime'),
+
+  updateAlertRuntimeSettings: (settings: Partial<OpsAlertRuntimeSettings>) =>
+    http.put<OpsAlertRuntimeSettings>('/api/v1/ops/settings/alert-runtime', settings),
+
+  // ---- 错误日志（增强视图） ----
+  listErrorLogs: (params: OpsErrorLogQuery) =>
+    http.get<OpsErrorLogResponse>('/api/v1/ops/error-logs', { params }),
+
+  resolveErrorLog: (id: number, resolved: boolean) =>
+    http.put(`/api/v1/ops/error-logs/${id}/resolve`, { resolved }),
 }

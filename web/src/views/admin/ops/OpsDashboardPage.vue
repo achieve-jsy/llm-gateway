@@ -77,6 +77,9 @@
       <!-- Token Stats -->
       <OpsTokenStatsCard v-if="settings?.show_token_stats" />
 
+      <!-- Error Logs -->
+      <OpsErrorLogTable v-if="!isFullscreen" />
+
       <!-- Alert Events -->
       <OpsAlertEventsCard v-if="settings?.show_alert_events" />
 
@@ -89,6 +92,8 @@
           :show="showSettings"
           @close="showSettings = false"
           @saved="onSettingsSaved"
+          @open-email-notification="showEmailNotification = true"
+          @open-runtime-settings="showRuntimeSettings = true"
         />
 
         <el-dialog
@@ -120,6 +125,24 @@
           :time-range="timeRange"
           @update:show="showRequestDetails = $event"
         />
+
+        <el-dialog
+          v-model="showEmailNotification"
+          title="邮件通知配置"
+          width="680px"
+          destroy-on-close
+        >
+          <OpsEmailNotificationCard />
+        </el-dialog>
+
+        <el-dialog
+          v-model="showRuntimeSettings"
+          title="告警运行时设置"
+          width="720px"
+          destroy-on-close
+        >
+          <OpsRuntimeSettingsCard />
+        </el-dialog>
       </template>
     </template>
   </div>
@@ -170,6 +193,9 @@ import OpsSettingsDialog from './components/OpsSettingsDialog.vue'
 import OpsErrorDetailsModal from './components/OpsErrorDetailsModal.vue'
 import OpsErrorDetailModal from './components/OpsErrorDetailModal.vue'
 import OpsRequestDetailsModal from './components/OpsRequestDetailsModal.vue'
+import OpsEmailNotificationCard from './components/OpsEmailNotificationCard.vue'
+import OpsRuntimeSettingsCard from './components/OpsRuntimeSettingsCard.vue'
+import OpsErrorLogTable from './components/OpsErrorLogTable.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -217,6 +243,8 @@ const showSettings = ref(false)
 const showAlertRules = ref(false)
 const showErrorDetails = ref(false)
 const showRequestDetails = ref(false)
+const showEmailNotification = ref(false)
+const showRuntimeSettings = ref(false)
 const errorDetailsType = ref<'request' | 'upstream'>('request')
 const selectedErrorId = ref<number | null>(null)
 

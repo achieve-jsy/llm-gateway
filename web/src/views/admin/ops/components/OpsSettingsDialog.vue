@@ -35,6 +35,20 @@
           <el-option label="预聚合" value="preagg" />
         </el-select>
       </div>
+
+      <el-divider />
+
+      <div class="ops-settings-section">
+        <div class="ops-settings-label">高级设置</div>
+        <div class="ops-settings-links">
+          <el-button size="small" @click="$emit('openEmailNotification'); $emit('close')">
+            邮件通知配置
+          </el-button>
+          <el-button size="small" @click="$emit('openRuntimeSettings'); $emit('close')">
+            告警运行时设置
+          </el-button>
+        </div>
+      </div>
     </div>
 
     <template #footer>
@@ -57,6 +71,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   saved: [settings: OpsDashboardSettings]
+  openEmailNotification: []
+  openRuntimeSettings: []
 }>()
 
 const loading = ref(false)
@@ -127,5 +143,11 @@ async function handleSave() {
   display: flex;
   flex-wrap: wrap;
   gap: 16px;
+}
+
+.ops-settings-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 </style>

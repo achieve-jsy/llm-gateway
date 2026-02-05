@@ -128,41 +128,27 @@ func isNetError(err error) bool {
 func (e *EmailSender) dialAndSend(msg []byte, recipients []string) error {
 	addr := fmt.Sprintf("%s:%d", e.host, e.port)
 	plainAuth := smtp.PlainAuth("", e.from, e.password, e.host)
-	loginA := &loginAuth{username: e.from, password: e.password}
+	loginAuth := &loginAuth{username: e.from, password: e.password}
 
-	// Port 465 uses implicit TLS (direct TLS), try direct TLS first
-	// Port 587/25 use STARTTLS, try STARTTLS first
-	var client *smtp.Client
-	var err error
-
-	if e.port == 465 {
-		// Implicit TLS for port 465
-		slog.Info("email: using direct TLS for port 465", "addr", addr)
-		client, err = e.dialDirectTLS(addr)
-		if err != nil {
-			slog.Info("email: direct TLS failed, falling back to STARTTLS", "addr", addr, "error", err)
-			client, err = e.dialSTARTTLS(addr)
+	// Try LOGIN first (most common with enterprise SMTP servers)
+	client, err := e.tryAuth(addr, loginAuth, "LOGIN")
+	if err != nil {
+		loginErr := err.Error()
+		// If LOGIN is not supported (504), try PLAIN with reconnection
+		if strings.Contains(loginErr, "504") ||
+			strings.Contains(loginErr, "Unrecognized authentication") ||
+			strings.Contains(loginErr, "not supported") {
+			slog.Info("email: LOGIN not supported, falling back to PLAIN", "error", loginErr)
+			client, err = e.tryAuth(addr, plainAuth, "PLAIN")
 			if err != nil {
-				return e.formatDialError(addr, err)
+				return fmt.Errorf("smtp auth failed (tried LOGIN and PLAIN): %w", err)
 			}
-		}
-	} else {
-		// STARTTLS for port 587/25
-		slog.Info("email: using STARTTLS for port", "addr", addr, "port", e.port)
-		client, err = e.dialSTARTTLS(addr)
-		if err != nil {
-			if isCertError(err) {
-				return e.formatCertError(err)
-			}
-		slog.Info("email: STARTTLS failed, falling back to direct TLS", "addr", addr, "error", err)
-		client, err = e.dialDirectTLS(addr)
-		if err != nil {
-			return e.formatDialError(addr, err)
-		}
+		} else {
+			return fmt.Errorf("smtp auth failed: %w", err)
 		}
 	}
 
-	return e.sendMailAfterDial(client, msg, recipients, plainAuth, loginA)
+	return e.sendMailAfterDial(client, msg, recipients)
 }
 
 func (e *EmailSender) formatDialError(addr string, err error) error {
@@ -180,14 +166,27 @@ func (e *EmailSender) formatCertError(err error) error {
 		"Check 'Enable SMTP TLS Skip Verify' in settings. Detail: %w", err)
 }
 
-func (e *EmailSender) sendMailAfterDial(client *smtp.Client, msg []byte, recipients []string, plainAuth, loginA smtp.Auth) error {
-	slog.Info("email: connection established, authenticating", "host", e.host, "port", e.port)
-
-	// Authenticate
-	if err := e.authenticate(client, plainAuth, loginA); err != nil {
-		client.Close()
-		return fmt.Errorf("smtp auth: %w", err)
+// dial 建立 SMTP 连接：端口 465 用 implicit TLS，其他用 STARTTLS
+func (e *EmailSender) dial(addr string) (*smtp.Client, error) {
+	if e.port == 465 {
+		client, err := e.dialDirectTLS(addr)
+		if err != nil {
+			slog.Warn("email: direct TLS failed, trying STARTTLS", "error", err)
+			return e.dialSTARTTLS(addr)
+		}
+		return client, nil
 	}
+	client, err := e.dialSTARTTLS(addr)
+	if err != nil {
+		slog.Warn("email: STARTTLS failed, trying direct TLS", "error", err)
+		return e.dialDirectTLS(addr)
+	}
+	return client, nil
+}
+
+// sendMailAfterDial 在已认证的连接上发送邮件
+func (e *EmailSender) sendMailAfterDial(client *smtp.Client, msg []byte, recipients []string) error {
+	slog.Info("email: connection established, sending", "host", e.host, "port", e.port)
 
 	// Send mail
 	if err := client.Mail(e.from); err != nil {
@@ -215,25 +214,20 @@ func (e *EmailSender) sendMailAfterDial(client *smtp.Client, msg []byte, recipie
 	return nil
 }
 
-func (e *EmailSender) authenticate(client *smtp.Client, plainAuth smtp.Auth, loginAuth smtp.Auth) error {
-	slog.Info("email: attempting PLAIN auth", "host", e.host)
-	err := client.Auth(plainAuth)
-	if err == nil {
-		return nil
+// tryAuth 尝试一次 SMTP 认证，失败后返回 error。
+// 由调用方决定是否重连再试下一种机制。
+func (e *EmailSender) tryAuth(addr string, auth smtp.Auth, authName string) (*smtp.Client, error) {
+	slog.Info("email: attempting SMTP auth", "method", authName, "host", e.host, "port", e.port)
+	client, err := e.dial(addr)
+	if err != nil {
+		return nil, fmt.Errorf("dial failed: %w", err)
 	}
-	errMsg := err.Error()
-	slog.Warn("email: PLAIN auth failed", "host", e.host, "error", errMsg)
-	if strings.Contains(errMsg, "use of closed network connection") ||
-		strings.Contains(errMsg, "connection reset") ||
-		strings.Contains(errMsg, "broken pipe") {
-		return fmt.Errorf("SMTP server closed connection during auth: %w", err)
+	if err := client.Auth(auth); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("auth %s failed: %w", authName, err)
 	}
-	if strings.Contains(errMsg, "Unrecognized authentication type") ||
-		strings.Contains(errMsg, "504") {
-		slog.Info("email: PLAIN auth not supported, trying LOGIN")
-		return client.Auth(loginAuth)
-	}
-	return err
+	slog.Info("email: SMTP auth succeeded", "method", authName)
+	return client, nil
 }
 
 func (e *EmailSender) dialDirectTLS(addr string) (*smtp.Client, error) {

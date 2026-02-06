@@ -3,7 +3,7 @@
     <OpsDashboardSkeleton v-if="initialLoading" :fullscreen="isFullscreen" />
 
     <template v-else>
-      <!-- Dashboard Header -->
+      <!-- Dashboard Header (toolbar + health + metrics) -->
       <OpsDashboardHeader
         :overview="dashboardData"
         :loading="loading"
@@ -29,8 +29,8 @@
         @exit-fullscreen="isFullscreen = false"
       />
 
-      <!-- Row: Concurrency + Switch Rate + Throughput -->
-      <div class="ops-row-concurrency">
+      <!-- Row 1: Concurrency + Switch Rate + Traffic Trend (1:1:2) -->
+      <div class="ops-row-charts">
         <OpsConcurrencyCard
           v-if="settings?.show_concurrency_card"
           :refresh-token="refreshToken"
@@ -55,8 +55,24 @@
         />
       </div>
 
-      <!-- Row: Visual Analysis -->
-      <div class="ops-three-col">
+      <!-- No-traffic notice: visible when all trend data is empty -->
+      <div v-if="isIdle" class="ops-idle-notice">
+        <span class="ops-idle-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+        </span>
+        <span class="ops-idle-text">
+          当前系统处于<strong>空闲状态</strong>——所选时段内无 API 流量通过网关，趋势图表暂无数据可展示。
+          当有实际请求经过 gateway 时，流量趋势、错误趋势、延迟分布等图表将自动填充数据。
+          系统级指标（CPU / 内存 / Goroutine / DB 连接池 / Redis 连接池）已实时采集并显示在顶部状态栏。
+        </span>
+      </div>
+
+      <!-- Row 2: Latency Histogram + Error Distribution + Error Trend (1:1:1) -->
+      <div class="ops-row-visual">
         <OpsLatencyHistogram
           :buckets="latencyHistogramData"
           :total-requests="latencyTotalRequests"
@@ -74,16 +90,16 @@
         />
       </div>
 
-      <!-- Token Stats -->
+      <!-- Token Stats (full-width) -->
       <OpsTokenStatsCard v-if="settings?.show_token_stats" :refresh-token="refreshToken" />
 
-      <!-- Error Logs -->
+      <!-- Error Logs (full-width) -->
       <OpsErrorLogTable v-if="!isFullscreen" :refresh-token="refreshToken" />
 
-      <!-- Alert Events -->
+      <!-- Alert Events (full-width) -->
       <OpsAlertEventsCard v-if="settings?.show_alert_events" :refresh-token="refreshToken" />
 
-      <!-- System Logs -->
+      <!-- System Logs (full-width) -->
       <OpsSystemLogTable v-if="!isFullscreen" :refresh-token="refreshToken" />
 
       <!-- Modals & Dialogs (hidden in fullscreen) -->
@@ -253,6 +269,13 @@ let countdownTimer: number | null = null
 const REFRESH_INTERVAL = computed(() => (settings.value.auto_refresh_interval || 30) * 1000)
 
 const REFRESH_SECONDS = computed(() => settings.value.auto_refresh_interval || 30)
+
+// 判断当前是否处于"无流量"空闲态（dashboard 返回的流量/错误均为 0）
+const isIdle = computed(() => {
+  const ov = dashboardData.value
+  if (!ov) return true
+  return ov.traffic.total_requests === 0 && ov.traffic.current_qps === 0
+})
 
 // -- Fetchers --
 
@@ -486,27 +509,70 @@ onUnmounted(() => {
 .ops-page {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-6);
+  padding-bottom: 48px;
   min-height: 100%;
 }
 
 .ops-page--fullscreen {
-  padding: var(--space-4);
+  padding: var(--space-6);
   background: var(--bg-page, #f5f7fa);
   min-height: 100vh;
   overflow-y: auto;
 }
 
-.ops-row-concurrency {
+.ops-row-charts {
   display: grid;
   grid-template-columns: 1fr 1fr 2fr;
-  gap: var(--space-4);
+  gap: var(--space-6);
 }
 
-.ops-three-col {
+.ops-row-charts > * {
+  min-height: 360px;
+}
+
+.ops-row-visual {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: var(--space-4);
+  gap: var(--space-6);
+}
+
+.ops-idle-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  background: var(--el-color-info-light-9, #f0f9ff);
+  border: 1px solid var(--el-color-info-light-5, #bae6fd);
+  border-radius: var(--radius-lg);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+}
+
+.ops-idle-icon {
+  flex-shrink: 0;
+  color: var(--el-color-info, #0ea5e9);
+  margin-top: 2px;
+}
+
+.ops-idle-text strong {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+html.dark .ops-idle-notice {
+  background: linear-gradient(135deg, #0c1e2e 0%, #0f2b3d 100%);
+  border-color: #164e63;
+  color: #7dd3fc;
+}.ops-idle-icon {
+  flex-shrink: 0;
+  color: #0ea5e9;
+  margin-top: 2px;
+}
+
+.ops-idle-text strong {
+  font-weight: 600;
 }
 
 .ops-fullscreen-bar {
@@ -528,14 +594,14 @@ onUnmounted(() => {
 }
 
 @media (max-width: 1200px) {
-  .ops-row-concurrency {
+  .ops-row-charts {
     grid-template-columns: 1fr 1fr;
   }
 }
 
 @media (max-width: 900px) {
-  .ops-row-concurrency,
-  .ops-three-col {
+  .ops-row-charts,
+  .ops-row-visual {
     grid-template-columns: 1fr;
   }
 }

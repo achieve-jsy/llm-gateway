@@ -29,8 +29,8 @@
         @exit-fullscreen="isFullscreen = false"
       />
 
-      <!-- Row 1: Concurrency + Switch Rate + Traffic Trend (1:1:2) -->
-      <div class="ops-row-charts">
+      <!-- Row 1: Concurrency + Switch Rate (1:1, 对齐 sub2api lg:grid-cols-4 前两列) -->
+      <div class="ops-row-duo">
         <OpsConcurrencyCard
           v-if="settings?.show_concurrency_card"
           :refresh-token="refreshToken"
@@ -44,16 +44,18 @@
           :time-range="'5h'"
           :fullscreen="isFullscreen"
         />
-        <OpsTrafficTrendChart
-          :points="trafficTrendData"
-          :loading="loadingTrend"
-          :by-provider="throughputByProvider"
-          :top-groups="throughputTopGroups"
-          @select-provider="onSelectProvider"
-          @select-group="onSelectGroup"
-          @open-details="showRequestDetails = true"
-        />
       </div>
+
+      <!-- Row 2: Traffic Trend 单独一行全宽（对齐 sub2api lg:col-span-2 独占一行） -->
+      <OpsTrafficTrendChart
+        :points="trafficTrendData"
+        :loading="loadingTrend"
+        :by-provider="throughputByProvider"
+        :top-groups="throughputTopGroups"
+        @select-provider="onSelectProvider"
+        @select-group="onSelectGroup"
+        @open-details="showRequestDetails = true"
+      />
 
       <!-- No-traffic notice: visible when all trend data is empty -->
       <div v-if="isIdle" class="ops-idle-notice">
@@ -71,7 +73,7 @@
         </span>
       </div>
 
-      <!-- Row 2: Latency Histogram + Error Distribution + Error Trend (1:1:1) -->
+      <!-- Row 3: Latency Histogram + Error Distribution + Error Trend (1:1:1) -->
       <div class="ops-row-visual">
         <OpsLatencyHistogram
           :buckets="latencyHistogramData"
@@ -521,13 +523,13 @@ onUnmounted(() => {
   overflow-y: auto;
 }
 
-.ops-row-charts {
+.ops-row-duo {
   display: grid;
-  grid-template-columns: 1fr 1fr 2fr;
+  grid-template-columns: 1fr 1fr;
   gap: var(--space-6);
 }
 
-.ops-row-charts > * {
+.ops-row-duo > * {
   min-height: 360px;
 }
 
@@ -594,13 +596,13 @@ html.dark .ops-idle-notice {
 }
 
 @media (max-width: 1200px) {
-  .ops-row-charts {
-    grid-template-columns: 1fr 1fr;
+  .ops-row-duo {
+    grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 900px) {
-  .ops-row-charts,
+  .ops-row-duo,
   .ops-row-visual {
     grid-template-columns: 1fr;
   }

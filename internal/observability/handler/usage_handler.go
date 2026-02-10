@@ -202,14 +202,16 @@ func (h *UsageHandler) MyQuery(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	params := service.MyStatsQueryParams{
-		From:     from,
-		To:       to,
-		UserID:   userID,
-		GroupBy:  c.DefaultQuery("group_by", "day"),
-		Model:    c.Query("model_name"), // 前端传 model_name，与 Query 接口对齐
-		Status:   c.Query("status"),
-		Page:     page,
-		PageSize: pageSize,
+		From:      from,
+		To:        to,
+		UserID:    userID,
+		GroupBy:   c.DefaultQuery("group_by", "day"),
+		Model:     c.Query("model_name"), // 前端传 model_name，与 Query 接口对齐
+		KeyID:     c.Query("key_id"),
+		GroupName: c.Query("group_name"),
+		Status:    c.Query("status"),
+		Page:      page,
+		PageSize:  pageSize,
 	}
 	resp, err := h.svc.QueryMyStats(c.Request.Context(), params)
 	if err != nil {
@@ -326,20 +328,21 @@ func (h *UsageHandler) MyLogs(c *gin.Context) {
 }
 
 // parseDateRange 解析并校验日期范围参数
+// 支持两种格式：YYYY-MM-DD（天精度）和 YYYY-MM-DDTHH:MM / YYYY-MM-DD HH:MM（小时精度）
 func parseDateRange(c *gin.Context) (from, to time.Time, ok bool) {
 	fromStr := c.Query("from")
 	toStr := c.Query("to")
 	if fromStr == "" || toStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "from and to are required (YYYY-MM-DD)"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "from and to are required (YYYY-MM-DD or YYYY-MM-DDTHH:MM)"})
 		return
 	}
 	var err error
-	from, err = time.Parse("2006-01-02", fromStr)
+	from, err = parseDateTime(fromStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid from date"})
 		return
 	}
-	to, err = time.Parse("2006-01-02", toStr)
+	to, err = parseDateTime(toStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid to date"})
 		return
@@ -354,6 +357,23 @@ func parseDateRange(c *gin.Context) (from, to time.Time, ok bool) {
 	}
 	ok = true
 	return
+}
+
+// parseDateTime 尝试多种格式解析日期时间
+func parseDateTime(s string) (time.Time, error) {
+	// 尝试带时间的格式
+	for _, layout := range []string{
+		"2006-01-02T15:04",
+		"2006-01-02 15:04",
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:05",
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
+		}
+	}
+	// 回退到天精度
+	return time.Parse("2006-01-02", s)
 }
 
 // GetDashboard GET /api/v1/usage/dashboard

@@ -226,7 +226,14 @@ func (s *RollupService) queryFromCallLogs(ctx context.Context, params UsageDaily
 	query := s.db.WithContext(ctx).
 		Table("call_logs").
 		Select(selectCols).
-		Where("ts >= ? AND ts < ?", params.From, params.To.Add(24*time.Hour))
+		Where("ts >= ?", params.From)
+
+	// 天精度 +24h 包含整天；小时精度直接用
+	if params.To.Hour() == 0 && params.To.Minute() == 0 && params.To.Second() == 0 {
+		query = query.Where("ts < ?", params.To.Add(24*time.Hour))
+	} else {
+		query = query.Where("ts <= ?", params.To)
+	}
 
 	if params.ScopeKey != "" {
 		query = query.Where(params.ScopeKey)
@@ -448,14 +455,16 @@ type LogsQueryParams struct {
 
 // MyStatsQueryParams 个人统计查询参数（直接从 call_logs 聚合）
 type MyStatsQueryParams struct {
-	From     time.Time
-	To       time.Time
-	UserID   string
-	GroupBy  string // day / model
-	Model    string
-	Status   string // "success" | "error" | ""
-	Page     int
-	PageSize int
+	From      time.Time
+	To        time.Time
+	UserID    string
+	GroupBy   string // day / model / key / hour
+	Model     string
+	KeyID     string // 按 Key ID 筛选
+	GroupName string // 按模型组名筛选
+	Status    string // "success" | "error" | ""
+	Page      int
+	PageSize  int
 }
 
 // LogRow 明细记录行
@@ -522,7 +531,14 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 
 	query := s.db.WithContext(ctx).
 		Table("call_logs").
-		Where("ts >= ? AND ts < ?", params.From, params.To.Add(24*time.Hour))
+		Where("ts >= ?", params.From)
+
+	// 天精度 +24h 包含整天；小时精度直接用
+	if params.To.Hour() == 0 && params.To.Minute() == 0 && params.To.Second() == 0 {
+		query = query.Where("ts < ?", params.To.Add(24*time.Hour))
+	} else {
+		query = query.Where("ts <= ?", params.To)
+	}
 
 	if params.ScopeSQL != "" {
 		query = query.Where(params.ScopeSQL)
@@ -659,10 +675,23 @@ func (s *RollupService) QueryMyStats(ctx context.Context, params MyStatsQueryPar
 		Table("call_logs").
 		Select(selectCols).
 		Where("user_id = ?", params.UserID).
-		Where("ts >= ? AND ts < ?", params.From, params.To.Add(24*time.Hour))
+		Where("ts >= ?", params.From)
+
+	// 如果 To 时间是零点（天精度），则 +24h 包含整天；否则（小时精度）直接用
+	if params.To.Hour() == 0 && params.To.Minute() == 0 && params.To.Second() == 0 {
+		query = query.Where("ts < ?", params.To.Add(24*time.Hour))
+	} else {
+		query = query.Where("ts <= ?", params.To)
+	}
 
 	if params.Model != "" {
 		query = query.Where("model = ? OR routed_model = ? OR group_name = ?", params.Model, params.Model, params.Model)
+	}
+	if params.KeyID != "" {
+		query = query.Where("key_id = ?", params.KeyID)
+	}
+	if params.GroupName != "" {
+		query = query.Where("group_name = ?", params.GroupName)
 	}
 	if params.Status == "success" {
 		query = query.Where("status = 200")

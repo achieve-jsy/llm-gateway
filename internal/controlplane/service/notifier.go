@@ -111,8 +111,8 @@ func (e *EmailNotifier) lookupUserEmail(ctx context.Context, userID uuid.UUID) (
 
 func (e *EmailNotifier) sendAsync(sender *notification.EmailSender, n *model.Notification, recipients []string) {
 	subject := "[LLM Gateway] " + n.Title
-	body := fmt.Sprintf("%s\n\n类型: %s\n级别: %s\n时间: %v\n",
-		n.Content, n.Type, n.Level, n.CreatedAt)
+	body := fmt.Sprintf("%s\n\n时间: %s",
+		n.Content, n.CreatedAt.Format("2006-01-02 15:04"))
 	if err := sender.SendTextWithSubject(context.Background(), subject, body); err != nil {
 		slog.Warn("email_notifier: send failed",
 			"recipients", recipients, "type", n.Type, "error", err)

@@ -78,7 +78,32 @@ var sysLogComponents = []string{
 	"router", "middleware", "orchestrator",
 }
 
-var sysLogLevels = []string{"INFO", "WARN", "ERROR", "DEBUG"}
+var sysLogLevels = []string{"INFO", "WARN", "ERROR"}
+
+var sysLogTemplates = map[string][]string{
+	"INFO": {
+		"请求处理完成 duration=%dms",
+		"provider 健康检查通过",
+		"调度成功: provider=%s model=%s model",
+		"auth 验证通过 user=%s",
+		"批量写入完成 batch_size=%d",
+		"配置热更新生效",
+	},
+	"WARN": {
+		"provider 响应慢: %dms",
+		"限流触发: rate_limit_reset=%ds",
+		"连接池接近上限: %d/%d conn",
+		"重试 fallback: 第 %d 次尝试",
+		"fallback 切换到备用 provider",
+	},
+	"ERROR": {
+		"上游请求失败: %s",
+		"timeout after 30s: provider=%s",
+		"认证失败: invalid key",
+		"路由无可用模型: group=%s",
+		"连接断开: connection reset by peer",
+	},
+}
 
 func main() {
 	cleanFlag := flag.Bool("clean", false, "清理之前生成的种子数据")
@@ -380,39 +405,16 @@ func generateSystemLogs(db *gorm.DB, rng *rand.Rand, seedKeyPrefix string, hours
 	startTime := time.Now().Add(-time.Duration(hours) * time.Hour)
 	logs := make([]cpModel.SystemLog, 0, count)
 
-	msgTemplates := map[string][]string{
-		"INFO": {
-			"请求处理完成",
-			"provider 健康检查通过",
-			"调度成功: provider=%s model=%s",
-			"auth 验证通过 user=%s",
-			"批量写入完成: %d 条",
-			"配置热更新生效",
-		},
-		"WARN": {
-			"provider 响应慢: %dms",
-			"限流触发: rate_limit_reset=%d",
-			"连接池接近上限: %d/%d",
-			"重试 %s: 第 %d 次",
-			"fallback 切换到备用 provider",
-		},
-		"ERROR": {
-			"上游请求失败: %s",
-			"timeout after 30s: provider=%s",
-			"认证失败: invalid key",
-			"路由无可用模型: group=%s",
-			"连接断开: connection reset by peer",
-		},
-	}
-
 	for i := 0; i < count; i++ {
 		offsetSec := rng.Float64() * float64(hours) * 3600
 		ts := startTime.Add(time.Duration(offsetSec) * time.Second)
 		level := sysLogLevels[rng.Intn(len(sysLogLevels))]
 		component := sysLogComponents[rng.Intn(len(sysLogComponents))]
 
-		msgs := msgTemplates[level]
+		msgs := sysLogTemplates[level]
 		msg := msgs[rng.Intn(len(msgs))]
+		// sprintf 不匹配占位符时安全返回原字符串
+		msg = fmt.Sprintf(msg, rng.Intn(10000), rng.Intn(100), rng.Intn(100), rng.Intn(10))
 
 		user := userPool[rng.Intn(len(userPool))]
 		combo := defaultCombos[rng.Intn(len(defaultCombos))]

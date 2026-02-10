@@ -143,16 +143,18 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	budgetAlertSvc := service.NewBudgetAlertService(budgetRepo, budgetAlertRepo, nil)
 	budgetAlertSvc.SetRedis(rdb)
 	notificationRepo := repository.NewNotificationRepo(db)
-	// 解耦的通知分发：MultiNotifier = 站内信 + 邮件
-	// 调用方只管构造 model.Notification，内部按已配置通道分发。
-	sharedNotifier := service.NewMultiNotifier(
-		service.NewDBNotifier(notificationRepo),
-		service.NewEmailNotifier(settingsRepo),
-	)
-	budgetAlertSvc.SetNotifier(sharedNotifier)
 	// v0.8: 审计日志（仅管理面写操作落库）
 	auditRepo := repository.NewAuditLogRepo(db)
 	auditSvc := service.NewAuditLogService(auditRepo)
+	// 解耦的通知分发：MultiNotifier = 站内信 + 邮件
+	// 调用方只管构造 model.Notification，内部按已配置通道分发。
+	emailNotifier := service.NewEmailNotifier(settingsRepo)
+	emailNotifier.SetAuditRecorder(auditSvc)
+	sharedNotifier := service.NewMultiNotifier(
+		service.NewDBNotifier(notificationRepo),
+		emailNotifier,
+	)
+	budgetAlertSvc.SetNotifier(sharedNotifier)
 
 	// 动态 notifier：按 settings 中的 webhook / email 配置构建；
 	// Dispatcher 统一负责写日志文件 + Webhook + 邮件三条通道。

@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/example/llm-gateway/internal/notification"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -52,14 +52,15 @@ func (w *DBNotifier) Notify(_ context.Context, n *model.Notification) error {
 // EmailNotifier：邮件通道（按 ops 邮件通知配置发送给告警收件人）
 // ─────────────────────────────────────────────────────────────────────────────
 
-// EmailNotifier 读取 system_configs 中的邮件配置，按配置向告警收件人发送邮件。
+// EmailNotifier 读取 system_configs 中的邮件配置，按配置向告警接收人发送邮件。
 // 每次 Notify 重建 Sender，使运行时配置修改无需重启即生效。
 type EmailNotifier struct {
 	settingsRepo *repository.SettingsRepo
+	db           *gorm.DB
 }
 
 func NewEmailNotifier(repo *repository.SettingsRepo) *EmailNotifier {
-	return &EmailNotifier{settingsRepo: repo}
+	return &EmailNotifier{settingsRepo: repo, db: repo.DB()}
 }
 
 func (e *EmailNotifier) Notify(ctx context.Context, n *model.Notification) error {
@@ -81,7 +82,8 @@ func (e *EmailNotifier) Notify(ctx context.Context, n *model.Notification) error
 		return nil
 	}
 
-	recipients, _ := loadAlertRecipients(e.settingsRepo)
+	// 查询通知接收人的邮箱
+	recipients, _ := e.lookupUserEmail(ctx, n.UserID)
 	if len(recipients) == 0 {
 		return nil
 	}
@@ -91,9 +93,20 @@ func (e *EmailNotifier) Notify(ctx context.Context, n *model.Notification) error
 		sender.SetSkipTLSVerify(true)
 	}
 
-	// 异步发送，不阻塞告警评估链路
 	go e.sendAsync(sender, n, recipients)
 	return nil
+}
+
+func (e *EmailNotifier) lookupUserEmail(ctx context.Context, userID uuid.UUID) ([]string, error) {
+	var email string
+	err := e.db.Table("users").
+		Where("id = ?", userID).
+		Select("COALESCE(email, '')").
+		Take(&email).Error
+	if err != nil || email == "" {
+		return nil, nil
+	}
+	return []string{email}, nil
 }
 
 func (e *EmailNotifier) sendAsync(sender *notification.EmailSender, n *model.Notification, recipients []string) {
@@ -105,7 +118,7 @@ func (e *EmailNotifier) sendAsync(sender *notification.EmailSender, n *model.Not
 			"recipients", recipients, "type", n.Type, "error", err)
 		return
 	}
-	slog.Info("email_notifier: sent", "type", n.Type, "count", len(recipients))
+	slog.Info("email_notifier: sent", "type", n.Type, "recipient", recipients[0])
 }
 
 type smtpConfig struct {
@@ -134,33 +147,6 @@ func loadSMTPConfig(repo *repository.SettingsRepo) (*smtpConfig, error) {
 		port:       port,
 		skipVerify: strings.EqualFold(skipStr, "true"),
 	}, nil
-}
-
-// emailNotificationConfigDTO 与 ops_handler.EmailNotificationConfig 对齐的结构，
-// 仅做 JSON 反序列化使用，避免循环依赖。
-type emailNotificationConfigDTO struct {
-	AlertRecipients []string `json:"alert_recipients"`
-}
-
-func loadAlertRecipients(repo *repository.SettingsRepo) ([]string, error) {
-	// settingKeyEmailNotification 与 ops_handler 同名配置键保持一致
-	const settingKey = "ops_email_notification_config"
-	val, err := repo.GetValue(settingKey)
-	if err != nil || val == "" {
-		return nil, err
-	}
-	var cfg emailNotificationConfigDTO
-	if err := json.Unmarshal([]byte(val), &cfg); err != nil {
-		return nil, err
-	}
-	out := make([]string, 0, len(cfg.AlertRecipients))
-	for _, r := range cfg.AlertRecipients {
-		r = strings.TrimSpace(r)
-		if r != "" {
-			out = append(out, r)
-		}
-	}
-	return out, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

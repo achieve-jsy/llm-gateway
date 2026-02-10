@@ -197,12 +197,6 @@ function formatTime(timestamp: string): string {
 </script>
 
 <style scoped>
-.ops-chart-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-3xl);
-  padding: var(--space-6);
-}
 
 .ops-chart-header {
   display: flex;

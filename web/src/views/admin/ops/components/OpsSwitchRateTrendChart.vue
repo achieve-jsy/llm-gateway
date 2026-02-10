@@ -124,12 +124,6 @@ function formatTime(ts: string): string {
 </script>
 
 <style scoped>
-.ops-chart-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-3xl);
-  padding: var(--space-6);
-}
 
 .ops-chart-card--fullscreen {
   min-height: 100vh;

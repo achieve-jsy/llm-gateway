@@ -274,26 +274,8 @@ watch(() => props.refreshToken, () => {
 </script>
 
 <style scoped>
-.ops-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-3xl);
-  padding: var(--space-4);
-}
 
-.ops-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-4);
-}
 
-.ops-card-title {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-bold);
-  color: var(--text-primary);
-  margin: 0;
-}
 
 .ops-refresh-btn {
   width: 28px;

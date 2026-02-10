@@ -660,25 +660,36 @@ html.dark .el-menu {
 }
 
 /* ===================== Ops Dashboard 卡片范式 ===================== */
+/* 统一所有 ops 组件卡片样式（对齐 sub2api：p-6 rounded-3xl border ring-gray-900/5） */
 .ops-card {
   background: var(--bg-card);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-3xl);
   padding: var(--space-6);
-  box-shadow: var(--shadow-sm), 0 0 0 1px var(--ring-color);
-
-  html.dark & {
-    box-shadow: var(--shadow-sm), 0 0 0 1px var(--ring-dark-color);
-  }
 }
 
-.ops-card__title {
-  font-size: var(--font-size-section);
-  font-weight: var(--font-weight-semibold);
-  color: var(--text-primary);
-  margin-bottom: var(--space-4);
+.ops-card-header {
   display: flex;
+  justify-content: space-between;
   align-items: center;
+  margin-bottom: var(--space-4);
+  flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+.ops-card-title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  color: var(--text-primary);
+  margin: 0;
+}
+
+/* 图表卡样式（padding 略大以适应图表渲染） */
+.ops-chart-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-3xl);
+  padding: var(--space-6);
 }
 
 .ops-section-label {

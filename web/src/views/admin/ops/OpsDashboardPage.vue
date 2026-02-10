@@ -552,6 +552,12 @@ onUnmounted(() => {
   line-height: 1.6;
 }
 
+:global(html.dark) .ops-idle-notice {
+  background: linear-gradient(135deg, #0c1e2e 0%, #0f2b3d 100%);
+  border-color: #164e63;
+  color: #7dd3fc;
+}
+
 .ops-idle-icon {
   flex-shrink: 0;
   color: var(--el-color-info, #0ea5e9);
@@ -561,20 +567,6 @@ onUnmounted(() => {
 .ops-idle-text strong {
   font-weight: 600;
   color: var(--text-primary);
-}
-
-html.dark .ops-idle-notice {
-  background: linear-gradient(135deg, #0c1e2e 0%, #0f2b3d 100%);
-  border-color: #164e63;
-  color: #7dd3fc;
-}.ops-idle-icon {
-  flex-shrink: 0;
-  color: #0ea5e9;
-  margin-top: 2px;
-}
-
-.ops-idle-text strong {
-  font-weight: 600;
 }
 
 .ops-fullscreen-bar {

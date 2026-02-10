@@ -936,7 +936,7 @@ const formatNumber = (num: number): string => {
   background: var(--bg-card);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-3xl);
-  padding: 24px;
+  padding: var(--space-6);
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
@@ -1461,7 +1461,7 @@ const formatNumber = (num: number): string => {
     grid-template-columns: repeat(2, 1fr);
   }
   .ops-header-card {
-    padding: 16px;
+    padding: var(--space-4);
     border-radius: var(--radius-xl);
   }
   .ops-filter-select,

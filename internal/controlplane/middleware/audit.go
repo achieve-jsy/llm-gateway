@@ -402,10 +402,10 @@ func (w *responseBodyWriter) Write(b []byte) (int, error) {
 }
 
 // sanitizeBody 对请求/响应体进行脱敏处理
-var sensitiveKeys = map[string]bool{
-	"password": true, "secret": true, "token": true,
-	"authorization": true, "cookie": true,
-	"api_key": true, "apikey": true, "api-key": true,
+var sensitiveKeys = []string{
+	"password", "secret", "token",
+	"authorization", "cookie",
+	"api_key", "apikey",
 }
 
 func sanitizeBody(data []byte) string {
@@ -428,8 +428,12 @@ func sanitizeBody(data []byte) string {
 		return s
 	}
 	for k := range obj {
-		if sensitiveKeys[strings.ToLower(k)] {
-			obj[k] = "***"
+		kl := strings.ToLower(k)
+		for _, sk := range sensitiveKeys {
+			if strings.Contains(kl, sk) {
+				obj[k] = "***"
+				break
+			}
 		}
 	}
 	out, _ := json.Marshal(obj)

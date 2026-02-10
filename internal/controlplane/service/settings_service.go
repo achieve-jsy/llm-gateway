@@ -172,32 +172,38 @@ func (s *SettingsService) GetSystemSettings(ctx context.Context) (*model.SystemS
 		MaxConcurrencyPerKey:           intOrDefault(vals, SettingKeyMaxConcurrencyPerKey, defaultMaxConcurrencyPerKey),
 		OIDCIssuerURL:                  valOrDefault(vals, SettingKeyOIDCIssuerURL, ""),
 		OIDCClientID:                   valOrDefault(vals, SettingKeyOIDCClientID, ""),
-		OIDCClientSecret:               valOrDefault(vals, SettingKeyOIDCClientSecret, ""),
+		OIDCClientSecret:               maskSecret(valOrDefault(vals, SettingKeyOIDCClientSecret, "")),
 		OIDCRedirectURL:                valOrDefault(vals, SettingKeyOIDCRedirectURL, ""),
 		OIDCScopes:                     valOrDefault(vals, SettingKeyOIDCScopes, defaultOIDCScopes),
 		OIDCEnabled:                    boolOrDefault(vals, SettingKeyOIDCEnabled, false),
 		WebhookEnabled:                 boolOrDefault(vals, SettingKeyWebhookEnabled, false),
 		WebhookURL:                     valOrDefault(vals, SettingKeyWebhookURL, ""),
-		WebhookSecret:                  valOrDefault(vals, SettingKeyWebhookSecret, ""),
+		WebhookSecret:                  maskSecret(valOrDefault(vals, SettingKeyWebhookSecret, "")),
 		WebhookEvents:                  valOrDefault(vals, SettingKeyWebhookEvents, defaultWebhookEvents),
 		DefaultMaxSwitches:             intOrDefault(vals, SettingKeyDefaultMaxSwitches, defaultMaxSwitches),
 		DefaultSameModelRetries:        intOrDefault(vals, SettingKeyDefaultSameModelRetries, defaultSameModelRetries),
 		DefaultFailoverCooldownSeconds: intOrDefault(vals, SettingKeyDefaultFailoverCooldown, defaultFailoverCooldownSeconds),
 		SupplierName:                  valOrDefault(vals, SettingKeySupplierName, defaultSupplierName),
 		PricingUsdToCnyRate:           floatOrDefault(vals, SettingKeyPricingUsdToCnyRate, defaultPricingUsdToCnyRate),
-		// v0.7 分层限速（默认 0 = 不限）
 		GlobalRPM: intOrDefault(vals, SettingKeyGlobalRPM, 0),
 		StudioRPM: intOrDefault(vals, SettingKeyStudioRPM, 0),
 		DeptRPM:   intOrDefault(vals, SettingKeyDeptRPM, 0),
 		KeyRPM:    intOrDefault(vals, SettingKeyKeyRPM, 0),
-		// 邮件通知
 		EmailEnabled:      boolOrDefault(vals, SettingKeyEmailEnabled, false),
-		SMTPHost:          valOrDefault(vals, SettingKeySMTPHost, "mail.example.com"),
+		SMTPHost:          valOrDefault(vals, SettingKeySMTPHost, ""),
 		SMTPPort:          intOrDefault(vals, SettingKeySMTPPort, 587),
-		SMTPFrom:          valOrDefault(vals, SettingKeySMTPFrom, "llm-gateway@example.com"),
-		SMTPPassword:      valOrDefault(vals, SettingKeySMTPPassword, ""),
+		SMTPFrom:          valOrDefault(vals, SettingKeySMTPFrom, ""),
+		SMTPPassword:      maskSecret(valOrDefault(vals, SettingKeySMTPPassword, "")),
 		SMTPTLSSkipVerify: boolOrDefault(vals, SettingKeySMTPTLSSkipVerify, false),
 	}, nil
+}
+
+// maskSecret 脱敏密码/密钥：非空时返回 "••••••" 避免在 API 响应中泄露。
+func maskSecret(s string) string {
+	if s == "" {
+		return ""
+	}
+	return "••••••"
 }
 
 func (s *SettingsService) GetPublicSettings(ctx context.Context) (*model.PublicSettings, error) {

@@ -821,7 +821,67 @@ html.dark .el-menu {
   background-color: var(--bg-subtle);
 }
 
-/* ============ Ops 空状态 ============ */
+/* ============ Ops 严重级别 Tag（P0-P3） ============ */
+.ops-severity-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+.ops-severity-badge--P0 { background: var(--severity-P0-bg); color: var(--severity-P0); }
+.ops-severity-badge--P1 { background: var(--severity-P1-bg); color: var(--severity-P1); }
+.ops-severity-badge--P2 { background: var(--severity-P2-bg); color: var(--severity-P2); }
+.ops-severity-badge--P3 { background: var(--severity-P3-bg); color: var(--severity-P3); }
+
+/* ============ Ops 告警事件状态 ============ */
+.ops-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+}
+.ops-status-badge--firing         { background: var(--status-firing-bg);          color: var(--status-firing); }
+.ops-status-badge--resolved       { background: var(--status-resolved-bg);        color: var(--status-resolved); }
+.ops-status-badge--manual-resolved{ background: var(--status-manual-resolved-bg); color: var(--status-manual-resolved); }
+
+/* ============ Ops 日志级别 ============ */
+.ops-log-level {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  font-family: var(--font-mono);
+  letter-spacing: 0.03em;
+}
+.ops-log-level--DEBUG { background: var(--log-debug-bg); color: var(--log-debug); }
+.ops-log-level--INFO  { background: var(--log-info-bg);  color: var(--log-info); }
+.ops-log-level--WARN  { background: var(--log-warn-bg);  color: var(--log-warn); }
+.ops-log-level--ERROR { background: var(--log-error-bg); color: var(--log-error); }
+
+/* ============ Ops HTTP 状态码范围 ============ */
+.ops-http-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+  font-weight: var(--font-weight-medium);
+}
+.ops-http-status--2xx { background: var(--color-success-bg); color: var(--status-2xx); }
+.ops-http-status--4xx { background: var(--color-warning-bg); color: var(--status-4xx); }
+.ops-http-status--5xx { background: var(--color-danger-bg);  color: var(--status-5xx); }
 .ops-card-empty {
   display: flex;
   align-items: center;

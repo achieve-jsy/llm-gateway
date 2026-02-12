@@ -51,7 +51,7 @@
           >
             <td class="ops-td-time">{{ formatTime(evt.fired_at) }}</td>
             <td>
-              <el-tag size="small" :type="severityTagType(evt.severity)" effect="dark">
+              <el-tag size="small" :type="severityToTagType(evt.severity)" effect="dark">
                 {{ evt.severity }}
               </el-tag>
             </td>
@@ -59,8 +59,8 @@
             <td class="ops-td-title">{{ evt.title }}</td>
             <td class="ops-td-duration">{{ eventDuration(evt) }}</td>
             <td>
-              <el-tag size="small" :type="statusTagType(evt.status)" effect="plain">
-                {{ statusLabel(evt.status) }}
+              <el-tag size="small" :type="alertStatusToTagType(evt.status)" effect="plain">
+                {{ getAlertStatusLabel(evt.status) }}
               </el-tag>
             </td>
           </tr>
@@ -85,11 +85,11 @@
         <div class="ops-detail-grid">
           <div class="ops-detail-item">
             <span class="ops-detail-label">严重程度</span>
-            <el-tag :type="severityTagType(detailEvent.severity)" effect="dark">{{ detailEvent.severity }}</el-tag>
+            <el-tag :type="severityToTagType(detailEvent.severity)" effect="dark">{{ detailEvent.severity }}</el-tag>
           </div>
           <div class="ops-detail-item">
             <span class="ops-detail-label">状态</span>
-            <el-tag :type="statusTagType(detailEvent.status)" effect="plain">{{ statusLabel(detailEvent.status) }}</el-tag>
+            <el-tag :type="alertStatusToTagType(detailEvent.status)" effect="plain">{{ getAlertStatusLabel(detailEvent.status) }}</el-tag>
           </div>
           <div class="ops-detail-item">
             <span class="ops-detail-label">触发时间</span>
@@ -147,7 +147,14 @@ import { ref, reactive, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh as RefreshIcon } from '@element-plus/icons-vue'
 import { opsAPI } from '@/api/ops'
-import type { AlertEvent, AlertEventStatus, OpsSeverity } from '@/api/ops'
+import type { AlertEvent } from '@/api/ops'
+import {
+  severityToTagType,
+  alertStatusToTagType,
+  getAlertStatusLabel,
+  getSeverityBadgeClass,
+  getAlertStatusClass,
+} from '../utils/opsFormatters'
 
 const props = withDefaults(
   defineProps<{
@@ -185,26 +192,6 @@ watch(() => props.refreshToken, () => {
 onMounted(() => {
   fetchData()
 })
-
-function severityTagType(sev: OpsSeverity): 'danger' | 'warning' | 'info' {
-  if (sev === 'P0' || sev === 'P1') return 'danger'
-  if (sev === 'P2') return 'warning'
-  return 'info'
-}
-
-function statusTagType(st: AlertEventStatus): 'danger' | 'success' | 'info' {
-  if (st === 'firing') return 'danger'
-  return 'success'
-}
-
-function statusLabel(st: AlertEventStatus): string {
-  switch (st) {
-    case 'firing': return '告警中'
-    case 'resolved': return '已恢复'
-    case 'manual_resolved': return '手动恢复'
-    default: return st
-  }
-}
 
 function formatTime(ts: string): string {
   const d = new Date(ts)

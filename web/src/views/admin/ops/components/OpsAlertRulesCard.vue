@@ -23,7 +23,7 @@
             <td><code class="ops-code">{{ rule.metric_type }}</code></td>
             <td>{{ rule.operator }} {{ rule.threshold }}</td>
             <td>
-              <el-tag size="small" :type="severityTagType(rule.severity)" effect="dark">{{ rule.severity }}</el-tag>
+              <el-tag size="small" :type="severityToTagType(rule.severity)" effect="dark">{{ rule.severity }}</el-tag>
             </td>
             <td>
               <el-switch
@@ -134,6 +134,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { opsAPI } from '@/api/ops'
 import type { AlertRule, MetricType, Operator, OpsSeverity } from '@/api/ops'
+import { severityToTagType } from '../utils/opsFormatters'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -158,12 +159,6 @@ function defaultForm(): Omit<AlertRule, 'id' | 'created_at' | 'updated_at'> {
 }
 
 const form = ref<Omit<AlertRule, 'id' | 'created_at' | 'updated_at'>>(defaultForm())
-
-function severityTagType(sev: OpsSeverity): 'danger' | 'warning' | 'info' {
-  if (sev === 'P0' || sev === 'P1') return 'danger'
-  if (sev === 'P2') return 'warning'
-  return 'info'
-}
 
 async function fetchRules() {
   loading.value = true

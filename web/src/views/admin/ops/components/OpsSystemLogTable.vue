@@ -94,7 +94,7 @@
             <tr class="ops-table-row" @click="toggleExpand(log.id)">
               <td class="ops-td-time">{{ formatTime(log.ts) }}</td>
               <td>
-                <el-tag size="small" :type="levelTagType(log.level)" effect="dark" disable-transitions>
+                <el-tag size="small" :type="logLevelToTagType(log.level)" effect="dark" disable-transitions>
                   {{ log.level }}
                 </el-tag>
               </td>
@@ -149,6 +149,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search as SearchIcon } from '@element-plus/icons-vue'
 import { opsAPI } from '@/api/ops'
 import type { OpsSystemLog, OpsSystemLogSinkHealth, OpsRuntimeLogConfig } from '@/api/ops'
+import { logLevelToTagType } from '../utils/opsFormatters'
 
 const props = withDefaults(
   defineProps<{
@@ -198,16 +199,6 @@ watch(() => props.refreshToken, () => {
 onMounted(async () => {
   await Promise.all([fetchData(), fetchSinkHealth(), fetchLogConfig()])
 })
-
-function levelTagType(lv: string): 'info' | 'success' | 'warning' | 'danger' {
-  switch (lv) {
-    case 'DEBUG': return 'info'
-    case 'INFO': return 'success'
-    case 'WARN': return 'warning'
-    case 'ERROR': return 'danger'
-    default: return 'info'
-  }
-}
 
 function formatTime(ts: string): string {
   const d = new Date(ts)

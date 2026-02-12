@@ -108,6 +108,39 @@
   --chart-3: #F59E0B;
   --chart-4: #EF4444;
   --chart-5: #8B5CF6;
+
+  /* 严重程度色（告警规则 / 事件，P0 最危急） */
+  --severity-P0: #DC2626;        /* 紧急 - red */
+  --severity-P1: #F97316;        /* 严重 - orange */
+  --severity-P2: #EAB308;        /* 警告 - yellow */
+  --severity-P3: #3B82F6;        /* 提示 - blue */
+  --severity-P0-bg: #FEF2F2;
+  --severity-P1-bg: #FFF7ED;
+  --severity-P2-bg: #FEFCE8;
+  --severity-P3-bg: #EFF6FF;
+
+  /* 告警事件状态色 */
+  --status-firing: #DC2626;
+  --status-resolved: #059669;
+  --status-manual-resolved: #A855F7;
+  --status-firing-bg: #FEF2F2;
+  --status-resolved-bg: #ECFDF5;
+  --status-manual-resolved-bg: #FAF5FF;
+
+  /* 日志级别色（与语义色保持一致） */
+  --log-debug: #64748B;   /* 中性 slate */
+  --log-info: #059669;    /* success */
+  --log-warn: #D97706;    /* warning */
+  --log-error: #DC2626;   /* danger */
+  --log-debug-bg: #F1F5F9;
+  --log-info-bg: #ECFDF5;
+  --log-warn-bg: #FFFBEB;
+  --log-error-bg: #FEF2F2;
+
+  /* HTTP 状态码范围色（请求/上游错误表） */
+  --status-2xx: #059669;
+  --status-4xx: #D97706;
+  --status-5xx: #DC2626;
   --chart-6: #EC4899;
   --chart-7: #06B6D4;
   --chart-8: #F97316;
@@ -230,6 +263,23 @@ html.dark {
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
   --shadow-base: 0 2px 6px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 4px 6px rgba(0, 0, 0, 0.3);
+
+  /* 严重程度背景色（暗色模式） */
+  --severity-P0-bg: #7F1D1D;
+  --severity-P1-bg: #7C2D12;
+  --severity-P2-bg: #713F12;
+  --severity-P3-bg: #1E3A5F;
+
+  /* 告警事件状态背景色（暗色模式） */
+  --status-firing-bg: #7F1D1D;
+  --status-resolved-bg: #064E3B;
+  --status-manual-resolved-bg: #581C87;
+
+  /* 日志级别背景色（暗色模式） */
+  --log-debug-bg: #334155;
+  --log-info-bg: #064E3B;
+  --log-warn-bg: #78350F;
+  --log-error-bg: #7F1D1D;
 
   --el-bg-color-page: #0F172A;
   --el-bg-color: #1E293B;

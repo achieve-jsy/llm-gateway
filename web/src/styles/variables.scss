@@ -141,6 +141,17 @@
   --status-2xx: #059669;
   --status-4xx: #D97706;
   --status-5xx: #DC2626;
+
+  /* 健康状态三色（用于 SLA / CPU / 内存 / DB / Redis 等指标的阈值染色） */
+  /* 与 --color-success / warning / danger 近似但专用于指标阈值，语义更清晰 */
+  --health-ok:      #059669;   /* 健康 */
+  --health-warn:    #D97706;   /* 警告 */
+  --health-critical:#DC2626;   /* 严重 */
+  --health-idle:    #94A3B8;   /* 空闲（slate-400，与原设计一致） */
+
+  /* 强调色（图标 / 链接 / 高亮，蓝系） */
+  --accent: #2563EB;
+  --accent-light: #3B82F6;
   --chart-6: #EC4899;
   --chart-7: #06B6D4;
   --chart-8: #F97316;

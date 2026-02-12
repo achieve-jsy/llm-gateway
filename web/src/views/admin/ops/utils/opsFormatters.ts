@@ -161,3 +161,52 @@ export function logLevelToTagType(level: string): 'info' | 'success' | 'warning'
     default:      return 'info'
   }
 }
+
+/* ========== 健康阈值色（与 variables.scss --health-ok/warn/critical/idle 对齐） ========== */
+
+/** 健康色常量（与 CSS 变量同名同色值，便于 JS 端内联使用） */
+export const HEALTH_COLORS = {
+  OK:       '#059669',
+  WARN:     '#D97706',
+  CRITICAL: '#DC2626',
+  IDLE:     '#94A3B8',
+} as const
+
+/**
+ * 阈值染色：value 越低越好（如 CPU%、内存%、DB 使用率、goroutine 数）。
+ * - value <= warn 阈值 → OK
+ * - value <= critical 阈值 → WARN
+ * - 否则 → CRITICAL
+ */
+export function getThresholdColor(
+  value: number,
+  warnThreshold: number,
+  criticalThreshold: number,
+): string {
+  if (!Number.isFinite(value) || value <= warnThreshold) return HEALTH_COLORS.OK
+  if (value <= criticalThreshold) return HEALTH_COLORS.WARN
+  return HEALTH_COLORS.CRITICAL
+}
+
+/**
+ * 阈值染色：value 越高越好（如 SLA 成功率、健康评分）。
+ * - value >= okThreshold → OK
+ * - value >= warnThreshold → WARN
+ * - 否则 → CRITICAL
+ */
+export function getThresholdColorInverse(
+  value: number,
+  warnThreshold: number,
+  okThreshold: number,
+): string {
+  if (!Number.isFinite(value)) return HEALTH_COLORS.CRITICAL
+  if (value >= okThreshold) return HEALTH_COLORS.OK
+  if (value >= warnThreshold) return HEALTH_COLORS.WARN
+  return HEALTH_COLORS.CRITICAL
+}
+
+/** 健康评分（0-100）染色，支持 idle 状态 → 灰色 */
+export function getHealthScoreColor(score: number, isIdle = false): string {
+  if (isIdle) return HEALTH_COLORS.IDLE
+  return getThresholdColorInverse(score, 60, 90)
+}

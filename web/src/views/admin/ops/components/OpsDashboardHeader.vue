@@ -4,7 +4,7 @@
     <div class="ops-toolbar">
       <div class="ops-toolbar__left">
         <h1 class="ops-toolbar-title">
-          <el-icon color="#3b82f6"><DataBoard /></el-icon>
+          <el-icon class="ops-toolbar-icon"><DataBoard /></el-icon>
           运维监控
         </h1>
         <div class="ops-toolbar-status">
@@ -124,7 +124,7 @@
                 cx="64"
                 cy="64"
                 r="56"
-                :stroke="isIdle ? '#94a3b8' : healthColor"
+                :stroke="isIdle ? HEALTH_COLORS.IDLE : healthColor"
                 stroke-width="8"
                 fill="none"
                 :stroke-dasharray="circumference"
@@ -459,6 +459,12 @@ import {
 import { DataBoard, Refresh } from '@element-plus/icons-vue'
 import { opsAPI } from '@/api/ops'
 import type { OpsOverview, OpsJobHeartbeat, OpsGroupOption } from '@/api/ops'
+import {
+  getHealthScoreColor,
+  getThresholdColor,
+  getThresholdColorInverse,
+  HEALTH_COLORS,
+} from '../utils/opsFormatters'
 
 interface Props {
   overview: OpsOverview | null
@@ -649,12 +655,7 @@ const formatLastUpdated = (d: Date): string => {
 
 const healthScore = computed(() => props.overview?.health_score ?? 0)
 
-const healthColor = computed(() => {
-  if (isIdle.value) return '#94a3b8'
-  if (healthScore.value >= 90) return '#10b981'
-  if (healthScore.value >= 60) return '#f59e0b'
-  return '#ef4444'
-})
+const healthColor = computed(() => getHealthScoreColor(healthScore.value, isIdle.value))
 
 const circleBgColor = computed(() =>
   document.documentElement.classList.contains('dark') ? '#334155' : '#e5e7eb',
@@ -860,49 +861,32 @@ const upstreamErrorRate = computed(() =>
     : (errors.value.upstream_errors / traffic.value.total_requests) * 100,
 )
 
-const upstreamErrorColor = computed(() => {
-  if (upstreamErrorRate.value <= 1) return '#10b981'
-  if (upstreamErrorRate.value <= 5) return '#f59e0b'
-  return '#ef4444'
-})
+const upstreamErrorColor = computed(() =>
+  getThresholdColorInverse(upstreamErrorRate.value, 1, 5),
+)
 
 // ============ SLA / System Colors ============
+// 阈值染色统一使用 opsFormatters 的 helper，避免各处重复定义阈值/颜色。
 
-const slaColor = computed(() => {
-  if (sla.value.success_rate >= 0.99) return '#10b981'
-  if (sla.value.success_rate >= 0.95) return '#f59e0b'
-  return '#ef4444'
-})
+const slaColor = computed(() =>
+  getThresholdColorInverse(sla.value.success_rate * 100, 95, 99),
+)
 
-const cpuColor = computed(() => {
-  if (systemMetrics.value.cpu_usage_percent <= 70) return '#10b981'
-  if (systemMetrics.value.cpu_usage_percent <= 90) return '#f59e0b'
-  return '#ef4444'
-})
+const cpuColor = computed(() =>
+  getThresholdColor(systemMetrics.value.cpu_usage_percent, 70, 90),
+)
 
-const memoryColor = computed(() => {
-  if (systemMetrics.value.memory_usage_percent <= 80) return '#10b981'
-  if (systemMetrics.value.memory_usage_percent <= 90) return '#f59e0b'
-  return '#ef4444'
-})
+const memoryColor = computed(() =>
+  getThresholdColor(systemMetrics.value.memory_usage_percent, 80, 90),
+)
 
-const dbColor = computed(() => {
-  if (dbUsagePercent.value <= 70) return '#10b981'
-  if (dbUsagePercent.value <= 90) return '#f59e0b'
-  return '#ef4444'
-})
+const dbColor = computed(() => getThresholdColor(dbUsagePercent.value, 70, 90))
 
-const redisColor = computed(() => {
-  if (redisUsagePercent.value <= 70) return '#10b981'
-  if (redisUsagePercent.value <= 90) return '#f59e0b'
-  return '#ef4444'
-})
+const redisColor = computed(() => getThresholdColor(redisUsagePercent.value, 70, 90))
 
-const goroutineColor = computed(() => {
-  if (systemMetrics.value.goroutine_count <= 1000) return '#10b981'
-  if (systemMetrics.value.goroutine_count <= 2000) return '#f59e0b'
-  return '#ef4444'
-})
+const goroutineColor = computed(() =>
+  getThresholdColor(systemMetrics.value.goroutine_count, 1000, 2000),
+)
 
 // ============ Jobs ============
 
@@ -910,12 +894,14 @@ const jobsSummary = computed(() => {
   const jobs: OpsJobHeartbeat[] = props.overview?.jobs ?? []
   const failed = jobs.filter((j) => j.status === 'failed' || j.status === 'error').length
   const running = jobs.filter((j) => j.status === 'running').length
-  if (failed > 0) return { count: jobs.length, statusText: `${failed} failed`, color: '#ef4444' }
-  if (running > 0) return { count: jobs.length, statusText: `${running} running`, color: '#10b981' }
+  if (failed > 0)
+    return { count: jobs.length, statusText: `${failed} failed`, color: HEALTH_COLORS.CRITICAL }
+  if (running > 0)
+    return { count: jobs.length, statusText: `${running} running`, color: HEALTH_COLORS.OK }
   return {
     count: jobs.length,
     statusText: jobs.length ? `${jobs.length} 个` : '无数据',
-    color: '#94a3b8',
+    color: HEALTH_COLORS.IDLE,
   }
 })
 
@@ -971,6 +957,11 @@ const formatNumber = (num: number): string => {
   margin: 0;
 }
 
+/* 工具栏左侧图标（强调蓝） */
+.ops-toolbar-icon {
+  color: var(--accent-light);
+}
+
 .ops-toolbar-status {
   display: flex;
   align-items: center;
@@ -996,11 +987,11 @@ const formatNumber = (num: number): string => {
   background: var(--text-placeholder);
 }
 .ops-status-dot--ready {
-  background: #10b981;
+  background: var(--health-ok);
   box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
 }
 .ops-status-dot--idle {
-  background: #94a3b8;
+  background: var(--health-idle);
 }
 
 .ops-toolbar-divider {
@@ -1008,7 +999,7 @@ const formatNumber = (num: number): string => {
 }
 
 .ops-countdown {
-  color: #3b82f6;
+  color: var(--accent-light);
   font-weight: 500;
 }
 
@@ -1103,7 +1094,7 @@ const formatNumber = (num: number): string => {
 
 .ops-health-idle-label {
   font-size: var(--font-size-sm);
-  color: #94a3b8;
+  color: var(--health-idle);
   font-weight: 600;
 }
 
@@ -1125,7 +1116,7 @@ const formatNumber = (num: number): string => {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: #3b82f6;
+  background: var(--accent-light);
 }
 
 .ops-realtime-ping::before {
@@ -1133,16 +1124,16 @@ const formatNumber = (num: number): string => {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background: #3b82f6;
+  background: var(--accent-light);
   opacity: 0.75;
   animation: ping 1s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
 
 .ops-realtime-ping.paused {
-  background: #94a3b8;
+  background: var(--health-idle);
 }
 .ops-realtime-ping.paused::before {
-  background: #94a3b8;
+  background: var(--health-idle);
   animation: none;
 }
 
@@ -1163,14 +1154,14 @@ const formatNumber = (num: number): string => {
 .ops-realtime-idle-tag,
 .ops-realtime-window-tag {
   font-size: var(--font-size-xs);
-  color: #94a3b8;
+  color: var(--health-idle);
   background: var(--bg-subtle);
   padding: 1px 8px;
   border-radius: 10px;
   line-height: 1.5;
 }
 .ops-realtime-window-tag {
-  color: #3b82f6;
+  color: var(--accent-light);
   background: rgba(59, 130, 246, 0.1);
 }
 
@@ -1235,12 +1226,12 @@ const formatNumber = (num: number): string => {
   opacity: 0.6;
 }
 .ops-window-btn.is-active {
-  background: #3b82f6;
+  background: var(--accent-light);
   color: #ffffff;
-  border-color: #3b82f6;
+  border-color: var(--accent-light);
 }
 .ops-window-btn.is-active:hover:not(:disabled) {
-  background: #2563eb;
+  background: var(--accent);
   color: #ffffff;
 }
 .ops-window-refresh {
@@ -1287,7 +1278,7 @@ const formatNumber = (num: number): string => {
   font-variant-numeric: tabular-nums;
 }
 .ops-metric-value--danger {
-  color: #ef4444;
+  color: var(--health-critical);
 }
 
 .ops-metric-sub {
@@ -1531,15 +1522,15 @@ const formatNumber = (num: number): string => {
   line-height: 1.5;
 }
 .ops-diagnosis-badge--ok {
-  background: rgba(16, 185, 129, 0.12);
-  color: #10b981;
+  background: rgba(5, 150, 105, 0.12);
+  color: var(--health-ok);
 }
 .ops-diagnosis-badge--warning {
-  background: rgba(245, 158, 11, 0.12);
-  color: #f59e0b;
+  background: rgba(217, 119, 6, 0.12);
+  color: var(--health-warn);
 }
 .ops-diagnosis-badge--critical {
-  background: rgba(239, 68, 68, 0.12);
-  color: #ef4444;
+  background: rgba(220, 38, 38, 0.12);
+  color: var(--health-critical);
 }
 </style>

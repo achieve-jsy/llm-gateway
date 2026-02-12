@@ -174,45 +174,11 @@ function formatNumber(num: number): string {
 
 <style scoped>
 
-.ops-chart-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-4);
-  gap: var(--space-4);
-  flex-wrap: wrap;
-}
 
-.ops-chart-title {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  color: var(--text-primary);
-  margin: 0;
-  white-space: nowrap;
-}
 
-.ops-chart-icon { width: 16px; height: 16px; }
-.ops-chart-icon--orange { color: #f97316; }
 
-.ops-chart-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-}
 
-.ops-chart-sub {
-  font-size: var(--font-size-xs);
-  color: var(--text-secondary);
-}
 
-.ops-chart-btns {
-  display: flex;
-  gap: var(--space-2);
-}
 
 /* Top reason badge */
 .ops-top-reason {
@@ -252,24 +218,7 @@ function formatNumber(num: number): string {
   font-weight: 400;
 }
 
-.ops-chart-body {
-  height: 320px;
-}
 
 /* Empty state */
-.ops-chart-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-3);
-  height: 100%;
-  color: var(--text-placeholder);
-  font-size: var(--font-size-sm);
-}
 
-.ops-chart-empty-icon {
-  color: var(--text-placeholder);
-  opacity: 0.5;
-}
 </style>

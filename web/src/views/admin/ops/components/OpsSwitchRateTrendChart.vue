@@ -129,61 +129,15 @@ function formatTime(ts: string): string {
   min-height: 100vh;
 }
 
-.ops-chart-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-4);
-}
 
-.ops-chart-title {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  color: var(--text-primary);
-  margin: 0;
-}
 
-.ops-chart-icon {
-  width: 16px;
-  height: 16px;
-}
 
-.ops-chart-icon--teal {
-  color: #14b8a6;
-}
 
-.ops-chart-legend {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  font-size: var(--font-size-xs);
-  color: var(--text-secondary);
-}
 
-.ops-legend-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
 
-.ops-legend-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
 
 .ops-chart-body {
   height: 280px;
 }
 
-.ops-chart-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  color: var(--text-placeholder);
-}
 </style>

@@ -692,6 +692,97 @@ html.dark .el-menu {
   padding: var(--space-6);
 }
 
+/* ============ 图表头部 ============ */
+.ops-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-4);
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.ops-chart-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  margin: 0;
+  white-space: nowrap;
+}
+
+.ops-chart-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.ops-chart-btns {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* ============ 图表图例 ============ */
+.ops-chart-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+.ops-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ops-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+/* ============ 图表图标（颜色语义变体） ============ */
+.ops-chart-icon {
+  width: 16px;
+  height: 16px;
+}
+.ops-chart-icon--blue   { color: #3b82f6; }  /* 流量 / 主指标 */
+.ops-chart-icon--red    { color: #ef4444; }  /* 错误 / 上游错误 */
+.ops-chart-icon--purple { color: #8b5cf6; }  /* 延迟分布 */
+.ops-chart-icon--orange { color: #f97316; }  /* 错误分布 / 混合 */
+.ops-chart-icon--teal   { color: #14b8a6; }  /* 切换率 */
+
+/* ============ 图表内容区 ============ */
+.ops-chart-body {
+  height: 320px;
+}
+
+.ops-chart-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  height: 100%;
+  color: var(--text-placeholder);
+  font-size: var(--font-size-sm);
+}
+
+.ops-chart-empty-icon {
+  color: var(--text-placeholder);
+  opacity: 0.5;
+}
+
+.ops-chart-sub {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
 /* ============ Ops 过滤栏 ============ */
 .ops-filter-bar {
   display: flex;

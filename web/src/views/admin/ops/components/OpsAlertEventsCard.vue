@@ -290,9 +290,6 @@ async function manualResolve() {
 
 
 
-.ops-filter-select {
-  width: 140px;
-}
 
 .ops-events-list {
   overflow-x: auto;

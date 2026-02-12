@@ -386,37 +386,13 @@ async function cleanupLogs() {
 }
 
 
-.ops-table th {
-  text-align: left;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border-light);
-  color: var(--text-secondary);
-  font-weight: var(--font-weight-semibold);
-  white-space: nowrap;
-}
 
-.ops-table td {
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border-light);
-  color: var(--text-primary);
-  vertical-align: top;
-}
 
-.ops-table-row {
-  cursor: pointer;
-  transition: background 0.15s;
-}
 
 .ops-table-row:hover {
   background: var(--bg-subtle);
 }
 
-.ops-td-time {
-  white-space: nowrap;
-  color: var(--text-secondary);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xxs);
-}
 
 .ops-td-msg {
   max-width: 360px;
@@ -460,9 +436,4 @@ async function cleanupLogs() {
 }
 
 
-.ops-pagination {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: var(--space-3);
-}
 </style>

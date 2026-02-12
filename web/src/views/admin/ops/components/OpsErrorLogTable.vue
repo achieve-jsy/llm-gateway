@@ -296,17 +296,6 @@ watch(() => props.refreshToken, () => {
 }
 
 
-.ops-table thead th {
-  text-align: left;
-  padding: 6px 8px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-secondary);
-  border-bottom: 1px solid var(--border-default);
-  white-space: nowrap;
-}
 
 .ops-th-sortable {
   cursor: pointer;
@@ -317,11 +306,6 @@ watch(() => props.refreshToken, () => {
   color: var(--text-primary);
 }
 
-.ops-table tbody td {
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border-light);
-  vertical-align: middle;
-}
 
 .ops-table-row:hover {
   background: var(--bg-subtle);
@@ -331,11 +315,6 @@ watch(() => props.refreshToken, () => {
   opacity: 0.55;
 }
 
-.ops-td-time {
-  white-space: nowrap;
-  font-family: var(--font-family-mono);
-  color: var(--text-secondary);
-}
 
 .ops-td-mono {
   font-family: var(--font-family-mono);
@@ -359,9 +338,4 @@ watch(() => props.refreshToken, () => {
 }
 
 
-.ops-pagination {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: var(--space-3);
-}
 </style>

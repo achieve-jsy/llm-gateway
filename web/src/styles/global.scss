@@ -882,6 +882,67 @@ html.dark .el-menu {
 .ops-http-status--2xx { background: var(--color-success-bg); color: var(--status-2xx); }
 .ops-http-status--4xx { background: var(--color-warning-bg); color: var(--status-4xx); }
 .ops-http-status--5xx { background: var(--color-danger-bg);  color: var(--status-5xx); }
+
+/* ============ Ops 模态弹窗通用样式 ============ */
+.ops-modal-filters {
+  display: flex;
+  gap: 8px;
+  margin-bottom: var(--space-3, 12px);
+  flex-wrap: wrap;
+}
+
+.ops-modal-table {
+  overflow-x: auto;
+  max-height: 65vh;
+}
+
+.ops-modal-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 160px;
+  color: var(--text-placeholder, #94a3b8);
+  font-size: var(--font-size-sm);
+}
+
+/* 统一分页样式（模态弹窗 / 卡片 / 表格均可用） */
+.ops-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-3, 12px);
+}
+
+/* 模态弹窗内表格：粘性表头（用于长列表 modal） */
+.ops-modal-table .ops-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-card, #fff);
+  z-index: 1;
+}
+
+/* ============ Ops 过滤控件基础尺寸 ============ */
+/* 默认宽度：select 140px / input 180px，组件内可 scoped 覆盖 */
+.ops-filter-select { width: 140px; }
+.ops-filter-input  { width: 180px; }
+
+/* 尺寸变体（SM = 100/130px；NUM = 150px，用于数字输入） */
+.ops-filter-select-sm { width: 100px; }
+.ops-filter-select--sm { width: 100px; }
+.ops-filter-input-sm  { width: 130px; }
+.ops-filter-input--sm  { width: 130px; }
+.ops-filter-input-num { width: 150px; }
+
+/* ============ Ops 表格单元格通用类 ============ */
+.ops-td-time {
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xxs);
+  font-family: var(--font-family-mono);
+}
+
+.ops-td-dash {
+  color: var(--text-placeholder, #94a3b8);
+}
 .ops-card-empty {
   display: flex;
   align-items: center;

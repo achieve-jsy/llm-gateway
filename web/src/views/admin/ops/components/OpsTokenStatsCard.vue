@@ -173,13 +173,7 @@ async function fetchData() {
 }
 
 
-.ops-filter-select {
-  width: 140px;
-}
 
-.ops-filter-select-sm {
-  width: 100px;
-}
 
 .ops-table-wrap {
   overflow-x: auto;
@@ -208,9 +202,4 @@ async function fetchData() {
 }
 
 
-.ops-pagination {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: var(--space-3);
-}
 </style>

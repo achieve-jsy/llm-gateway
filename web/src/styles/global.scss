@@ -692,6 +692,54 @@ html.dark .el-menu {
   padding: var(--space-6);
 }
 
+/* ============ Ops 过滤栏 ============ */
+.ops-filter-bar {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  flex-wrap: wrap;
+}
+
+/* ============ Ops 表格 ============ */
+.ops-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-xs);
+}
+
+.ops-table thead th {
+  text-align: left;
+  padding: 8px 12px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-default);
+  white-space: nowrap;
+}
+
+.ops-table td {
+  padding: 8px 12px;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.ops-table-row {
+  transition: background-color 0.15s;
+}
+
+.ops-table-row:hover {
+  background-color: var(--bg-subtle);
+}
+
+/* ============ Ops 空状态 ============ */
+.ops-card-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8) var(--space-4);
+  color: var(--text-placeholder);
+  font-size: var(--font-size-sm);
+}
+
 .ops-section-label {
   font-size: var(--font-size-xxs);
   font-weight: var(--font-weight-bold);

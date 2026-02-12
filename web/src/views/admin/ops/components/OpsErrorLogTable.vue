@@ -282,12 +282,6 @@ watch(() => props.refreshToken, () => {
   height: 28px;
 }
 
-.ops-filter-bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin-bottom: var(--space-3);
-}
 
 .ops-filter-select {
   width: 140px;
@@ -301,11 +295,6 @@ watch(() => props.refreshToken, () => {
   overflow-x: auto;
 }
 
-.ops-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--font-size-xs);
-}
 
 .ops-table thead th {
   text-align: left;
@@ -369,12 +358,6 @@ watch(() => props.refreshToken, () => {
   vertical-align: middle;
 }
 
-.ops-card-empty {
-  padding: var(--space-8) 0;
-  text-align: center;
-  color: var(--text-placeholder);
-  font-size: var(--font-size-sm);
-}
 
 .ops-pagination {
   display: flex;

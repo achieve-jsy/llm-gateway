@@ -381,12 +381,6 @@ async function cleanupLogs() {
   padding: 0 12px 12px;
 }
 
-.ops-filter-bar {
-  display: flex;
-  gap: 8px;
-  margin-bottom: var(--space-3);
-  flex-wrap: wrap;
-}
 
 .ops-filter-select {
   width: 130px;
@@ -400,11 +394,6 @@ async function cleanupLogs() {
   overflow-x: auto;
 }
 
-.ops-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--font-size-xs);
-}
 
 .ops-table th {
   text-align: left;
@@ -479,14 +468,6 @@ async function cleanupLogs() {
   font-family: var(--font-family-mono);
 }
 
-.ops-card-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 120px;
-  color: var(--text-placeholder);
-  font-size: var(--font-size-xs);
-}
 
 .ops-pagination {
   display: flex;

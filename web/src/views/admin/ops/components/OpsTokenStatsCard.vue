@@ -172,12 +172,6 @@ async function fetchData() {
   color: var(--text-secondary);
 }
 
-.ops-filter-bar {
-  display: flex;
-  gap: 8px;
-  margin-bottom: var(--space-3);
-  flex-wrap: wrap;
-}
 
 .ops-filter-select {
   width: 140px;
@@ -191,11 +185,6 @@ async function fetchData() {
   overflow-x: auto;
 }
 
-.ops-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--font-size-xs);
-}
 
 .ops-table th {
   text-align: left;
@@ -218,14 +207,6 @@ async function fetchData() {
   color: var(--text-primary);
 }
 
-.ops-card-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 120px;
-  color: var(--text-placeholder);
-  font-size: var(--font-size-xs);
-}
 
 .ops-pagination {
   display: flex;

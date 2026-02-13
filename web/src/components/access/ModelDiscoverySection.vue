@@ -19,73 +19,32 @@
           @click="modeFilter = m"
         >{{ m === '' ? '全部' : (MODE_LABEL[m] ?? m) }}</button>
       </div>
-      <el-button
-        class="mds-advanced-toggle"
-        :class="{ active: showAdvanced || hasAdvancedChanges }"
-        @click="showAdvanced = !showAdvanced"
-      >
-        <el-icon><Filter /></el-icon>
-        <span>高级筛选</span>
-        <span v-if="activeFilterCount > 0" class="mds-filter-count">{{ activeFilterCount }}</span>
-      </el-button>
+      <el-select v-model="sortMode" size="default" class="mds-sort">
+        <el-option label="热门" value="hot" />
+        <el-option label="最快" value="fastest" />
+        <el-option label="名称" value="name" />
+        <el-option label="价格" value="price" />
+        <el-option label="上下文" value="context" />
+      </el-select>
       <button class="mds-refresh" @click="load" :disabled="loading">
         <el-icon :class="{ spinning: loading }"><Refresh /></el-icon>
       </button>
     </div>
 
-    <el-collapse-transition>
-      <div v-if="showAdvanced" class="advanced-filters">
-        <div class="filter-group">
-          <span class="filter-label">能力</span>
-          <div class="filter-controls filter-checks">
-            <el-checkbox v-model="advancedFilters.vision">视觉理解</el-checkbox>
-            <el-checkbox v-model="advancedFilters.functionCalling">工具调用</el-checkbox>
-            <el-checkbox v-model="advancedFilters.longContext">长上下文 (&gt;32K)</el-checkbox>
-          </div>
-        </div>
-
-        <div class="filter-group">
-          <span class="filter-label">价格</span>
-          <div class="filter-controls filter-price">
-            <el-input-number
-              v-model="advancedFilters.priceMin"
-              :min="0"
-              :step="0.1"
-              :precision="2"
-              :controls="false"
-              placeholder="最低"
-            />
-            <span class="filter-separator">至</span>
-            <el-input-number
-              v-model="advancedFilters.priceMax"
-              :min="0"
-              :step="0.1"
-              :precision="2"
-              :controls="false"
-              placeholder="最高"
-            />
-            <span class="filter-hint">/ 百万 tokens（输入输出均价）</span>
-          </div>
-        </div>
-
-        <div class="filter-group">
-          <span class="filter-label">排序</span>
-          <div class="filter-controls filter-sort">
-            <el-select v-model="advancedFilters.sortBy" class="filter-sort-select">
-              <el-option label="名称" value="name" />
-              <el-option label="价格" value="price" />
-              <el-option label="上下文长度" value="context" />
-            </el-select>
-            <el-button class="filter-sort-order" @click="advancedFilters.sortDesc = !advancedFilters.sortDesc">
-              {{ advancedFilters.sortDesc ? '降序' : '升序' }}
-            </el-button>
-            <el-button text size="small" :disabled="!hasAdvancedChanges" @click="resetAdvancedFilters">
-              重置高级筛选
-            </el-button>
-          </div>
-        </div>
-      </div>
-    </el-collapse-transition>
+    <!-- Chip filter row -->
+    <div class="chip-row">
+      <span class="chip-group-label">能力</span>
+      <button class="chip" :class="{ active: chipFilters.vision }" @click="chipFilters.vision = !chipFilters.vision">视觉理解</button>
+      <button class="chip" :class="{ active: chipFilters.functionCalling }" @click="chipFilters.functionCalling = !chipFilters.functionCalling">工具调用</button>
+      <button class="chip" :class="{ active: chipFilters.longContext }" @click="chipFilters.longContext = !chipFilters.longContext">长上下文</button>
+      <span class="chip-divider"></span>
+      <span class="chip-group-label">价格</span>
+      <button class="chip" :class="{ active: chipFilters.priceRange === 'free' }" @click="togglePriceChip('free')">免费</button>
+      <button class="chip" :class="{ active: chipFilters.priceRange === 'cheap' }" @click="togglePriceChip('cheap')">≤ $1</button>
+      <button class="chip" :class="{ active: chipFilters.priceRange === 'mid' }" @click="togglePriceChip('mid')">$1-$5</button>
+      <button class="chip" :class="{ active: chipFilters.priceRange === 'expensive' }" @click="togglePriceChip('expensive')">> $5</button>
+      <button v-if="hasAnyChipFilter" class="chip chip-clear" @click="clearChips">清除</button>
+    </div>
 
     <!-- ── 加载态 ────────────────────────────── -->
     <div v-if="loading" class="mds-grid">
@@ -131,15 +90,7 @@
           v-for="g in filteredGroups"
           :key="g.id"
           class="gc"
-          :class="`gc-s-${g.strategy}`"
-          @click="copyName(g)"
-          role="button"
-          :title="`点击复制：${g.name}`"
         >
-          <!-- 顶部彩色条 -->
-          <div class="gc-stripe"></div>
-
-          <!-- 主体 -->
           <div class="gc-body">
             <!-- 名称行 -->
             <div class="gc-name-row">
@@ -152,39 +103,46 @@
             <!-- 描述 -->
             <p class="gc-desc">{{ g.description || '暂无描述' }}</p>
 
-            <!-- 单价（每百万 tokens） -->
-            <div class="gc-price" v-if="caps[g.name] && (caps[g.name].input_price_per_million > 0 || caps[g.name].output_price_per_million > 0)">
-              <span class="gc-price__item">
-                <i class="gc-price__dot in" /> 输入
-                <b>{{ formatPrice(caps[g.name].input_price_per_million) }}</b>
+            <!-- Signal line: performance indicators -->
+            <div class="gc-signals" v-if="perfMap[g.name]">
+              <span class="gc-signal gc-signal-speed" :class="ttftSignalClass(perfMap[g.name].ttft_p50_ms)">
+                <svg width="12" height="12" viewBox="0 0 16 16"><path d="M13 2L3 14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M7 8L3 14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                {{ formatPerfMs(perfMap[g.name].ttft_p50_ms) }}
               </span>
-              <span class="gc-price__item">
-                <i class="gc-price__dot out" /> 输出
-                <b>{{ formatPrice(caps[g.name].output_price_per_million) }}</b>
+              <span class="gc-signal gc-signal-rate" :class="rateSignalClass(perfMap[g.name].success_rate)">
+                <svg width="12" height="12" viewBox="0 0 16 16"><path d="M13.5 4.5L6 12L2.5 8.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+                {{ (perfMap[g.name].success_rate * 100).toFixed(1) }}%
               </span>
-              <span class="gc-price__unit">/ 1M tokens</span>
             </div>
 
-            <!-- 底部：能力 + 元信息 -->
-            <div class="gc-foot">
-              <div class="gc-caps">
-                <template v-if="caps[g.name]">
-                  <span class="cap cap-mode">{{ (MODE_LABEL[caps[g.name].mode] ?? caps[g.name].mode) || 'chat' }}</span>
-                  <span class="cap cap-v" v-if="caps[g.name].supports_vision">视觉</span>
-                  <span class="cap cap-f" v-if="caps[g.name].supports_function_calling">工具</span>
-                  <span class="cap cap-c" v-if="caps[g.name].max_input_tokens > 0">
-                    {{ formatTokens(caps[g.name].max_input_tokens) }}
-                  </span>
-                </template>
-                <span class="cap cap-loading" v-else-if="capsLoading">—</span>
-              </div>
+            <!-- 价格（紧凑单行） -->
+            <div class="gc-price" v-if="caps[g.name] && (caps[g.name].input_price_per_million > 0 || caps[g.name].output_price_per_million > 0)">
+              <span>输入 <b>{{ formatPrice(caps[g.name].input_price_per_million) }}</b></span>
+              <span class="gc-price-sep">/</span>
+              <span>输出 <b>{{ formatPrice(caps[g.name].output_price_per_million) }}</b></span>
+              <span class="gc-price-unit">/1M</span>
+            </div>
 
-              <div class="gc-meta">
-                <span class="gc-badge" :class="`badge-${g.strategy}`">
-                  {{ STRATEGY_LABEL[g.strategy] ?? g.strategy }}
-                </span>
-                <span class="gc-models">{{ g.model_count ?? 0 }} 个模型</span>
-              </div>
+            <!-- 能力标签 -->
+            <div class="gc-caps">
+              <template v-if="caps[g.name]">
+                <span class="cap cap-mode">{{ MODE_LABEL[caps[g.name].mode] ?? caps[g.name].mode }}</span>
+                <span class="cap cap-v" v-if="caps[g.name].supports_vision">视觉</span>
+                <span class="cap cap-f" v-if="caps[g.name].supports_function_calling || caps[g.name].supports_tool_choice">工具</span>
+                <span class="cap cap-c" v-if="caps[g.name].max_input_tokens > 0">{{ formatTokens(caps[g.name].max_input_tokens) }}</span>
+              </template>
+            </div>
+
+            <!-- 操作按钮 -->
+            <div class="gc-actions">
+              <button class="gc-btn gc-btn-copy" @click.stop="copyName(g)">
+                <el-icon><CopyDocument /></el-icon>
+                <span>复制</span>
+              </button>
+              <button class="gc-btn gc-btn-try" @click.stop="tryModel(g)">
+                <span>试一试</span>
+                <el-icon><ArrowRight /></el-icon>
+              </button>
             </div>
           </div>
         </div>
@@ -208,15 +166,18 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, reactive } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   Search, CopyDocument, Check, Refresh,
-  CircleCloseFilled, Filter,
+  CircleCloseFilled, ArrowRight,
 } from '@element-plus/icons-vue'
 import { groupsApi } from '@/api/groups'
 import type { GroupListItem, GroupEntitlement } from '@/types/group'
 import type { GroupCapability } from '@/api/groups'
 import { copyToClipboard } from '@/utils/clipboard'
 import { useAuthStore } from '@/stores/auth'
+import { getPerformance } from '@/services/control-plane'
+import type { PerformanceItem } from '@/services/control-plane'
 
 const STRATEGY_LABEL: Record<string, string> = {
   round_robin: '轮询',
@@ -234,6 +195,7 @@ const MODE_LABEL: Record<string, string> = {
   audio_speech: '语音合成',
 }
 
+const router = useRouter()
 const groups = ref<GroupListItem[]>([])
 const caps = ref<Record<string, GroupCapability>>({})
 const loading = ref(false)
@@ -241,31 +203,19 @@ const capsLoading = ref(false)
 const error = ref('')
 const searchQuery = ref('')
 const modeFilter = ref('')
+const sortMode = ref('hot')
 const copiedId = ref<number | null>(null)
 const toastVisible = ref(false)
 const toastName = ref('')
+const perfMap = ref<Record<string, PerformanceItem>>({})
 let copyTimer: ReturnType<typeof setTimeout> | null = null
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
-type SortField = 'name' | 'price' | 'context'
-
-const showAdvanced = ref(false)
-const advancedFilters = reactive<{
-  vision: boolean
-  functionCalling: boolean
-  longContext: boolean
-  priceMin: number | undefined
-  priceMax: number | undefined
-  sortBy: SortField
-  sortDesc: boolean
-}>({
+const chipFilters = reactive({
   vision: false,
   functionCalling: false,
   longContext: false,
-  priceMin: undefined,
-  priceMax: undefined,
-  sortBy: 'name',
-  sortDesc: false,
+  priceRange: '' as '' | 'free' | 'cheap' | 'mid' | 'expensive',
 })
 
 const authStore = useAuthStore()
@@ -278,53 +228,34 @@ const allModes = computed(() => {
   return Array.from(s).sort()
 })
 
-const hasAdvancedFilters = computed(() => (
-  advancedFilters.vision ||
-  advancedFilters.functionCalling ||
-  advancedFilters.longContext ||
-  advancedFilters.priceMin !== undefined ||
-  advancedFilters.priceMax !== undefined
-))
-
-const activeFilterCount = computed(() => {
-  let count = 0
-  if (advancedFilters.vision) count += 1
-  if (advancedFilters.functionCalling) count += 1
-  if (advancedFilters.longContext) count += 1
-  if (advancedFilters.priceMin !== undefined || advancedFilters.priceMax !== undefined) count += 1
-  return count
-})
-
-const hasAdvancedChanges = computed(() => (
-  hasAdvancedFilters.value ||
-  advancedFilters.sortBy !== 'name' ||
-  advancedFilters.sortDesc
-))
+const hasAnyChipFilter = computed(() =>
+  chipFilters.vision || chipFilters.functionCalling || chipFilters.longContext || chipFilters.priceRange !== ''
+)
 
 // 判断模型组是否对当前用户可用
 function isGroupAvailable(group: GroupListItem): boolean {
   // 公开组始终可用
   if (group.open_mode === 'public') return true
-  
+
   // 受控组需要检查授权状态
   const role = authStore.effectiveRole
   const ents = entitlementsMap.value.get(group.id) || []
-  
+
   // admin 可以看到所有组
   if (role === 'admin') return true
-  
+
   // studio_admin: 检查工作室是否被授权
   if (role === 'studio_admin' && myStudioId.value) {
     return ents.some(e => e.scope_type === 'studio' && e.scope_id === myStudioId.value && e.enabled)
   }
-  
+
   // dept_admin: 检查本部门是否被开通
   if (role === 'dept_admin' && myDeptIds.value.length > 0) {
-    return myDeptIds.value.some(deptId => 
+    return myDeptIds.value.some(deptId =>
       ents.some(e => e.scope_type === 'dept' && e.scope_id === deptId && e.enabled)
     )
   }
-  
+
   // 普通用户：只能看到公开组（已在上面处理）
   return false
 }
@@ -334,29 +265,36 @@ const filteredGroups = computed(() => {
   if (modeFilter.value) list = list.filter(g => caps.value[g.name]?.mode === modeFilter.value)
   const q = searchQuery.value.toLowerCase().trim()
   if (q) list = list.filter(g => g.name.toLowerCase().includes(q) || (g.description || '').toLowerCase().includes(q))
-  if (advancedFilters.vision) {
+  if (chipFilters.vision) {
     list = list.filter(g => caps.value[g.name]?.supports_vision)
   }
-  if (advancedFilters.functionCalling) {
+  if (chipFilters.functionCalling) {
     list = list.filter(g => {
       const cap = caps.value[g.name]
       return cap?.supports_function_calling || cap?.supports_tool_choice
     })
   }
-  if (advancedFilters.longContext) {
+  if (chipFilters.longContext) {
     list = list.filter(g => (caps.value[g.name]?.max_input_tokens || 0) > 32_000)
   }
 
-  const hasPriceMin = advancedFilters.priceMin !== undefined
-  const hasPriceMax = advancedFilters.priceMax !== undefined
-  if (hasPriceMin || hasPriceMax) {
-    const priceMin = advancedFilters.priceMin ?? 0
-    const priceMax = advancedFilters.priceMax ?? Number.POSITIVE_INFINITY
+  if (chipFilters.priceRange) {
     list = list.filter(g => {
       const cap = caps.value[g.name]
       if (!cap) return true
       const avgPrice = getAveragePrice(cap)
-      return avgPrice >= priceMin && avgPrice <= priceMax
+      switch (chipFilters.priceRange) {
+        case 'free':
+          return cap.input_price_per_million <= 0 && cap.output_price_per_million <= 0
+        case 'cheap':
+          return avgPrice > 0 && avgPrice <= 1
+        case 'mid':
+          return avgPrice > 1 && avgPrice <= 5
+        case 'expensive':
+          return avgPrice > 5
+        default:
+          return true
+      }
     })
   }
 
@@ -383,35 +321,65 @@ function getAveragePrice(cap?: GroupCapability): number {
 }
 
 function compareGroups(a: GroupListItem, b: GroupListItem): number {
-  let result = 0
   const capA = caps.value[a.name]
   const capB = caps.value[b.name]
 
-  if (advancedFilters.sortBy === 'name') {
-    result = a.name.toLowerCase().localeCompare(b.name.toLowerCase())
-  } else if (advancedFilters.sortBy === 'price') {
-    result = getAveragePrice(capA) - getAveragePrice(capB)
-  } else {
-    result = (capA?.max_input_tokens || 0) - (capB?.max_input_tokens || 0)
+  if (sortMode.value === 'hot') {
+    const countA = perfMap.value[a.name]?.req_count || 0
+    const countB = perfMap.value[b.name]?.req_count || 0
+    return countB - countA
   }
-
-  return advancedFilters.sortDesc ? -result : result
+  if (sortMode.value === 'fastest') {
+    const ttftA = perfMap.value[a.name]?.ttft_p50_ms ?? Infinity
+    const ttftB = perfMap.value[b.name]?.ttft_p50_ms ?? Infinity
+    return ttftA - ttftB
+  }
+  if (sortMode.value === 'name') {
+    return a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+  }
+  if (sortMode.value === 'price') {
+    return getAveragePrice(capA) - getAveragePrice(capB)
+  }
+  // context
+  return (capA?.max_input_tokens || 0) - (capB?.max_input_tokens || 0)
 }
 
 function resetFilters() {
   searchQuery.value = ''
   modeFilter.value = ''
-  resetAdvancedFilters()
+  clearChips()
 }
 
-function resetAdvancedFilters() {
-  advancedFilters.vision = false
-  advancedFilters.functionCalling = false
-  advancedFilters.longContext = false
-  advancedFilters.priceMin = undefined
-  advancedFilters.priceMax = undefined
-  advancedFilters.sortBy = 'name'
-  advancedFilters.sortDesc = false
+function togglePriceChip(range: string) {
+  chipFilters.priceRange = chipFilters.priceRange === range ? '' : range
+}
+
+function clearChips() {
+  chipFilters.vision = false
+  chipFilters.functionCalling = false
+  chipFilters.longContext = false
+  chipFilters.priceRange = ''
+}
+
+function ttftSignalClass(ttft: number): string {
+  if (ttft <= 1200) return 'signal-good'
+  if (ttft <= 3000) return 'signal-warn'
+  return 'signal-danger'
+}
+
+function rateSignalClass(rate: number): string {
+  if (rate >= 0.99) return 'signal-good'
+  if (rate >= 0.95) return 'signal-warn'
+  return 'signal-danger'
+}
+
+function formatPerfMs(ms: number): string {
+  if (ms >= 1000) return (ms / 1000).toFixed(1) + 's'
+  return ms + 'ms'
+}
+
+function tryModel(g: GroupListItem) {
+  router.push({ path: '/admin/chat-playground', query: { model: g.name } })
 }
 
 function copyName(g: GroupListItem) {
@@ -433,17 +401,17 @@ async function load() {
   try {
     const res = await groupsApi.listGroups({ page_size: 200 })
     groups.value = res.data.data ?? []
-    
+
     // 获取用户角色和部门/工作室信息
     const role = authStore.effectiveRole
     if (role === 'studio_admin' || role === 'dept_admin') {
       // 从 orgRoles 提取部门/工作室 ID
       const deptRoles = authStore.orgRoles.filter(r => r.role === 'dept_admin' && r.scope_type === 'dept')
       myDeptIds.value = deptRoles.map(r => r.scope_id)
-      
+
       const studioRole = authStore.orgRoles.find(r => r.role === 'studio_admin' && r.scope_type === 'studio')
       myStudioId.value = studioRole?.scope_id || ''
-      
+
       // 获取所有模型组的授权记录
       const enabledGroups = groups.value.filter(g => g.enabled && g.open_mode === 'controlled')
       const entitlementPromises = enabledGroups.map(async g => {
@@ -454,7 +422,7 @@ async function load() {
           return { groupId: g.id, items: [] }
         }
       })
-      
+
       const entResults = await Promise.all(entitlementPromises)
       const newMap = new Map<number, GroupEntitlement[]>()
       for (const r of entResults) {
@@ -475,6 +443,15 @@ async function load() {
   } catch { /* noop */ } finally {
     capsLoading.value = false
   }
+  // After loading caps, also fetch performance data
+  try {
+    const perfResult = await getPerformance('1h', 'group', '', 200, 0)
+    const map: Record<string, PerformanceItem> = {}
+    for (const item of perfResult.items || []) {
+      map[item.name] = item
+    }
+    perfMap.value = map
+  } catch { /* performance data is optional */ }
 }
 
 onMounted(() => { load() })
@@ -489,7 +466,7 @@ onMounted(() => { load() })
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 18px;
+  margin-bottom: 10px;
   flex-wrap: wrap;
 }
 
@@ -525,6 +502,10 @@ onMounted(() => { load() })
   }
 }
 
+.mds-sort {
+  width: 110px;
+}
+
 .mds-refresh {
   width: 34px;
   height: 34px;
@@ -545,86 +526,72 @@ onMounted(() => { load() })
   .el-icon { font-size: 15px; }
 }
 
-.mds-advanced-toggle {
-  border-radius: 8px;
+.spinning { animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Chip filter row ─────────────────────── */
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  margin-bottom: 16px;
+}
+
+.chip-group-label {
+  font-size: 12px;
   font-weight: 600;
+  color: var(--el-text-color-secondary);
+  margin-right: 2px;
+}
+
+.chip-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--el-border-color-lighter);
+  margin: 0 4px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 999px;
+  border: 1px solid var(--el-border-color-lighter);
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+
+  &:hover {
+    border-color: #36B34E;
+    color: #36B34E;
+  }
 
   &.active {
-    color: var(--el-color-primary);
-    border-color: var(--el-color-primary-light-5);
-    background: var(--el-color-primary-light-9);
+    background: #36B34E;
+    border-color: #36B34E;
+    color: #FFFFFF;
   }
 }
 
-.mds-filter-count {
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: var(--el-color-primary);
-  color: var(--el-color-white);
-  font-size: 11px;
-  line-height: 18px;
-}
+.chip-clear {
+  background: transparent;
+  border: none;
+  color: #36B34E;
+  font-weight: 600;
 
-.advanced-filters {
-  margin: -6px 0 18px;
-  padding: 16px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 12px;
-  background: var(--el-fill-color-extra-light);
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+  &:hover {
+    text-decoration: underline;
+    background: transparent;
+  }
 }
-
-.filter-group {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.filter-label {
-  width: 52px;
-  flex-shrink: 0;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--el-text-color-regular);
-}
-
-.filter-controls {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  color: var(--el-text-color-secondary);
-}
-
-.filter-checks {
-  gap: 4px 18px;
-}
-
-.filter-price :deep(.el-input-number) {
-  width: 116px;
-}
-
-.filter-separator,
-.filter-hint {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-
-.filter-sort-select {
-  width: 140px;
-}
-
-.filter-sort-order {
-  min-width: 72px;
-}
-
-.spinning { animation: spin 0.8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── 计数 ─────────────────────────────────── */
 .mds-count {
@@ -636,7 +603,7 @@ onMounted(() => { load() })
 /* ── 网格 ─────────────────────────────────── */
 .mds-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(288px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 14px;
 }
 
@@ -645,7 +612,6 @@ onMounted(() => { load() })
   cursor: default !important;
   pointer-events: none;
   &:hover { transform: none !important; box-shadow: none !important; }
-  &:hover .gc-stripe { width: 0 !important; }
 }
 
 .sk-line {
@@ -673,7 +639,6 @@ onMounted(() => { load() })
   border: 1px solid #E8F0EF;
   border-radius: 14px;
   overflow: hidden;
-  cursor: pointer;
   transition: box-shadow 0.22s, transform 0.22s, border-color 0.22s;
   position: relative;
   display: flex;
@@ -685,17 +650,6 @@ onMounted(() => { load() })
   transform: translateY(-3px);
   border-color: #A8DAD7;
 }
-
-/* 顶部彩条 */
-.gc-stripe {
-  height: 3px;
-  background: #D8EEEC;
-  transition: width 0.3s;
-}
-.gc-s-round_robin .gc-stripe { background: linear-gradient(90deg, #3498DB, #76C5F0); }
-.gc-s-priority    .gc-stripe { background: linear-gradient(90deg, #9B59B6, #C39BD3); }
-.gc-s-weighted    .gc-stripe { background: linear-gradient(90deg, #E67E22, #F0A96A); }
-.gc-s-auto        .gc-stripe { background: linear-gradient(90deg, #1ABC9C, #76D7C4); }
 
 .gc-body {
   padding: 16px 18px 18px;
@@ -763,58 +717,65 @@ onMounted(() => { load() })
   flex: 1;
 }
 
-/* 单价 */
+/* Signal line */
+.gc-signals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 2px;
+}
+
+.gc-signal {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.gc-signal svg {
+  flex-shrink: 0;
+}
+
+.signal-good { color: #059669; }
+.signal-warn { color: #D97706; }
+.signal-danger { color: #DC2626; }
+
+/* 价格 */
 .gc-price {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 4px 12px;
-  padding: 7px 10px;
-  background: #F6FBFB;
-  border: 1px solid #E2F1F0;
-  border-radius: 8px;
-  font-size: 11.5px;
-  color: #6A8E8C;
-}
-.gc-price__item {
-  display: inline-flex;
-  align-items: center;
   gap: 4px;
-  b {
-    color: #0D4A47;
-    font-family: 'Fira Code', 'JetBrains Mono', monospace;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-  }
+  font-size: 13px;
+  color: #6A8E8C;
+  padding: 4px 0;
 }
-.gc-price__dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  display: inline-block;
-  &.in { background: #3498DB; }
-  &.out { background: #36B34E; }
+
+.gc-price b {
+  color: #0D4A47;
+  font-family: 'Fira Code', 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
-.gc-price__unit {
-  margin-left: auto;
-  font-size: 10.5px;
+
+.gc-price-sep {
+  color: #C0D6D4;
+  margin: 0 2px;
+}
+
+.gc-price-unit {
+  font-size: 11px;
   color: #A8C4C2;
 }
 
-/* 底部 */
-.gc-foot {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 2px;
-  flex-wrap: wrap;
-}
-
+/* 能力标签 */
 .gc-caps {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+  margin-top: 2px;
 }
 
 .cap {
@@ -833,33 +794,50 @@ onMounted(() => { load() })
 .cap-v       { color: #2471A3; background: rgba(36,113,163,0.08);   border-color: rgba(36,113,163,0.2); }
 .cap-f       { color: #7D3C98; background: rgba(125,60,152,0.07);   border-color: rgba(125,60,152,0.18); }
 .cap-c       { color: #8A9A98; background: #F5FAFA; border-color: #D8EEEC; font-variant-numeric: tabular-nums; }
-.cap-loading { color: #B0CCCB; background: transparent; border-color: transparent; }
 
-.gc-meta {
+/* 操作按钮 */
+.gc-actions {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 3px;
-  flex-shrink: 0;
+  gap: 8px;
+  margin-top: 6px;
 }
 
-.gc-badge {
-  font-size: 10.5px;
-  font-weight: 700;
-  padding: 2px 8px;
-  border-radius: 99px;
-  border: 1px solid;
+.gc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+  border: none;
   white-space: nowrap;
+  flex: 1;
 }
 
-.badge-round_robin { color: #2471A3; background: rgba(36,113,163,0.08);   border-color: rgba(36,113,163,0.2); }
-.badge-priority    { color: #7D3C98; background: rgba(125,60,152,0.08);   border-color: rgba(125,60,152,0.2); }
-.badge-weighted    { color: #CA6F1E; background: rgba(202,111,30,0.08);   border-color: rgba(202,111,30,0.2); }
-.badge-auto        { color: #148F77; background: rgba(26,188,156,0.08);   border-color: rgba(26,188,156,0.2); }
+.gc-btn-copy {
+  background: transparent;
+  border: 1px solid var(--el-border-color-lighter);
+  color: var(--el-text-color-secondary);
 
-.gc-models {
-  font-size: 11px;
-  color: #A8C4C2;
+  &:hover {
+    border-color: #36B34E;
+    color: #36B34E;
+    background: rgba(54,179,78,0.04);
+  }
+}
+
+.gc-btn-try {
+  background: #36B34E;
+  color: #FFFFFF;
+
+  &:hover {
+    background: #2D9A42;
+  }
 }
 
 /* ── 错误 / 空态 ─────────────────────────── */
@@ -926,22 +904,9 @@ onMounted(() => { load() })
   .mds-bar { flex-direction: column; align-items: stretch; }
   .mds-search { width: 100%; }
   .mds-filters { overflow-x: auto; }
-  .mds-advanced-toggle { width: 100%; justify-content: center; }
+  .mds-sort { width: 100%; }
   .mds-refresh { margin-left: 0; align-self: flex-end; }
-  .advanced-filters { margin-top: -4px; }
-  .filter-group { align-items: stretch; flex-direction: column; gap: 8px; }
-  .filter-label { width: auto; }
-  .filter-controls { align-items: stretch; flex-direction: column; }
-  .filter-checks { gap: 0; }
-  .filter-price :deep(.el-input-number),
-  .filter-sort-select,
-  .filter-sort-order {
-    width: 100%;
-  }
-  .filter-separator,
-  .filter-hint {
-    align-self: flex-start;
-  }
+  .chip-row { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 8px; }
   .mds-grid { grid-template-columns: 1fr; }
 }
 
@@ -958,20 +923,57 @@ onMounted(() => { load() })
 :global(html.dark) .gc-desc { color: #4A7A78; }
 :global(html.dark) .gc-copy-icon { background: #132322; border-color: #1F3A38; color: #3A7A78; }
 :global(html.dark) .gc-copy-icon.ok { background: rgba(14,163,113,0.12); border-color: #0EA371; color: #0EA371; }
-:global(html.dark) .gc-models { color: #2A5A58; }
-:global(html.dark) .gc-price { background: #0B1817; border-color: #1A3230; color: #4A7A78; }
-:global(html.dark) .gc-price__item b { color: #A0E0DC; }
-:global(html.dark) .gc-price__unit { color: #2A5A58; }
+
+:global(html.dark) .gc-price { color: #4A7A78; }
+:global(html.dark) .gc-price b { color: #A0E0DC; }
+:global(html.dark) .gc-price-unit { color: #2A5A58; }
+:global(html.dark) .gc-price-sep { color: #2A5A58; }
 
 :global(html.dark) .cap-mode { color: #5DC370; background: rgba(54,179,78,0.1); border-color: rgba(54,179,78,0.25); }
 :global(html.dark) .cap-v    { color: #5DADE2; background: rgba(52,152,219,0.1); border-color: rgba(52,152,219,0.22); }
 :global(html.dark) .cap-f    { color: #BB8FCE; background: rgba(155,89,182,0.1); border-color: rgba(155,89,182,0.22); }
 :global(html.dark) .cap-c    { color: #2A6A68; background: transparent; border-color: #1A3230; }
 
-:global(html.dark) .badge-round_robin { color: #5DADE2; background: rgba(52,152,219,0.1); border-color: rgba(52,152,219,0.22); }
-:global(html.dark) .badge-priority    { color: #BB8FCE; background: rgba(155,89,182,0.1); border-color: rgba(155,89,182,0.22); }
-:global(html.dark) .badge-weighted    { color: #F0B27A; background: rgba(230,126,34,0.1); border-color: rgba(230,126,34,0.22); }
-:global(html.dark) .badge-auto        { color: #76D7C4; background: rgba(26,188,156,0.1); border-color: rgba(26,188,156,0.22); }
+:global(html.dark) .gc-btn-copy {
+  background: transparent;
+  border-color: #1A3230;
+  color: #4A7A78;
+}
+:global(html.dark) .gc-btn-copy:hover {
+  border-color: #36B34E;
+  color: #36B34E;
+  background: rgba(54,179,78,0.08);
+}
+:global(html.dark) .gc-btn-try {
+  background: #36B34E;
+  color: #FFFFFF;
+}
+:global(html.dark) .gc-btn-try:hover {
+  background: #2D9A42;
+}
+
+:global(html.dark) .chip {
+  background: #0A1B1A;
+  border-color: #1A3230;
+  color: #6A8E8C;
+}
+:global(html.dark) .chip:hover {
+  border-color: #36B34E;
+  color: #36B34E;
+}
+:global(html.dark) .chip.active {
+  background: #36B34E;
+  border-color: #36B34E;
+  color: #FFFFFF;
+}
+:global(html.dark) .chip-clear {
+  background: transparent;
+  border: none;
+  color: #5DC370;
+}
+:global(html.dark) .chip-divider {
+  background: #1A3230;
+}
 
 :global(html.dark) .mds-empty {
   background: #091514;
@@ -987,4 +989,7 @@ onMounted(() => { load() })
   background: #0A1B1A;
   border-color: #1A3230;
 }
+:global(html.dark) .signal-good { color: #34D399; }
+:global(html.dark) .signal-warn { color: #FBBF24; }
+:global(html.dark) .signal-danger { color: #F87171; }
 </style>

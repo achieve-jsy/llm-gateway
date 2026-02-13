@@ -1,0 +1,1000 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Key Activity TDD 测试报告</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "PingFang SC", "Hiragino Sans GB", sans-serif;
+         background: #f5f5f5; color: #1a1a1a; padding: 32px; }
+  .container { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 1.6rem; margin-bottom: 4px; }
+  .subtitle { color: #666; font-size: 0.85rem; margin-bottom: 20px; }
+  .summary { display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
+  .stat { background: #fff; border-radius: 8px; padding: 14px 20px;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.06); min-width: 110px; }
+  .stat .label { font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat .value { font-size: 1.8rem; font-weight: 700; margin-top: 2px; }
+  .stat.pass .value { color: #22c55e; }
+  .stat.fail .value { color: #ef4444; }
+  .stat.skip .value { color: #f59e0b; }
+  .stat.total .value { color: #2563eb; }
+  .overall-badge {
+    display: inline-block; padding: 4px 14px; border-radius: 999px; color: #fff;
+    font-size: 0.85rem; font-weight: 600; margin-bottom: 20px;
+    background: #22c55e;
+  }
+  table { width: 100%; border-collapse: collapse; background: #fff;
+          border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+  th { background: #f9fafb; text-align: left; padding: 10px 14px; font-size: 0.8rem;
+       color: #666; border-bottom: 1px solid #eee; font-weight: 600; }
+  td { padding: 10px 14px; border-bottom: 1px solid #f0f0f0; font-size: 0.9rem; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #fafbfc; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px;
+           font-size: 0.78rem; font-weight: 600; text-transform: uppercase; }
+  .badge.pass { background: #dcfce7; color: #16a34a; }
+  .badge.fail { background: #fee2e2; color: #dc2626; }
+  .badge.skip { background: #fef3c7; color: #d97706; }
+  .elapsed { color: #888; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+  .test-name { font-family: "SF Mono", "Menlo", monospace; }
+  details { margin-top: 6px; }
+  details summary { font-size: 0.78rem; color: #888; cursor: pointer; }
+  pre { background: #f9fafb; border: 1px solid #eee; border-radius: 4px;
+        padding: 8px 10px; font-size: 0.78rem; overflow-x: auto;
+        color: #444; line-height: 1.5; max-height: 220px; overflow-y: auto;
+        margin-top: 6px; white-space: pre-wrap; word-break: break-all; }
+  .footer { margin-top: 24px; font-size: 0.78rem; color: #aaa; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Key Activity 测试报告</h1>
+  <div class="subtitle">2026-06-25 17:32:26 · 包: tests/controlplane/keyactivity · 总耗时: 0.06s</div>
+  <div class="overall-badge">PASS</div>
+  <div class="summary">
+    <div class="stat total"><div class="label">总数</div><div class="value">%!d(float64=0.064)</div></div>
+    <div class="stat pass"><div class="label">通过</div><div class="value">64</div></div>
+    <div class="stat fail"><div class="label">失败</div><div class="value">64</div></div>
+    <div class="stat skip"><div class="label">跳过</div><div class="value">0</div></div>
+  </div>
+  <table>
+    <thead>
+      <tr><th style="width:55%">测试名</th><th style="width:15%">状态</th><th style="width:15%">耗时</th><th>说明</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="test-name">
+          TestBootstrap_FullFlow
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestBootstrap_FullFlow
+2026/06/25 17:32:21 INFO key_activity: bootstrap starting bootstrap_days=90
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 1 - backfill source_seen
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 1 done rows_backfilled=3
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 2 - init EWMA baseline (14d)
+2026/06/25 17:32:21 INFO key_activity: EWMA baseline initialized keys_processed=2
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 2 done
+2026/06/25 17:32:21 INFO key_activity: bootstrap complete cursor=2026-06-25T17:32:21.064+08:00
+--- PASS: TestBootstrap_FullFlow (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">FullFlow</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestCron_StartAndCancel
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestCron_StartAndCancel
+2026/06/25 17:32:21 INFO key_activity_cron_started
+2026/06/25 17:32:21 INFO key_activity_cron_stopped
+--- PASS: TestCron_StartAndCancel (0.05s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.05s</td>
+        <td style="font-size:0.8rem;color:#555">StartAndCancel</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_IsEnabled_True
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_IsEnabled_True
+--- PASS: TestScanner_IsEnabled_True (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">IsEnabled True</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_E4_MinDevOverridesZero
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_E4_MinDevOverridesZero
+2026/06/25 17:32:21 INFO key_activity_scan rows=50 keys_touched=1 cursor_ts=2026-06-25T15:33:10+08:00 lag_sec=7151
+--- PASS: TestScanner_E4_MinDevOverridesZero (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">激增 MinDevOverridesZero</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestParseDormantDays_TableDriven/无效_JSON
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestParseDormantDays_TableDriven/无效_JSON
+--- PASS: TestParseDormantDays_TableDriven/无效_JSON (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">TableDriven/无效 JSON</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestParseSpikeDetail_TableDriven/只有_count
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestParseSpikeDetail_TableDriven/只有_count
+--- PASS: TestParseSpikeDetail_TableDriven/只有_count (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">TableDriven/只有 count</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_E2_SkipsEmptyKeyID
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_E2_SkipsEmptyKeyID
+2026/06/25 17:32:21 INFO key_activity_scan rows=1 keys_touched=0 cursor_ts=2026-06-24T17:32:21+08:00 lag_sec=86400
+--- PASS: TestScanner_E2_SkipsEmptyKeyID (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">首次使用 SkipsEmptyKeyID</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_E1_NewSource_CreatesAlert
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_E1_NewSource_CreatesAlert
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=new_source dedup=7e2ac80395f0eec0|10.0.0.2
+2026/06/25 17:32:21 INFO key_activity_scan rows=1 keys_touched=1 cursor_ts=2026-06-25T15:32:21+08:00 lag_sec=7200
+--- PASS: TestScanner_E1_NewSource_CreatesAlert (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">新来源 NewSource CreatesAlert</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_IPAsSourceFalse_SameUANewIPNoE1
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_IPAsSourceFalse_SameUANewIPNoE1
+2026/06/25 17:32:21 INFO key_activity_scan rows=1 keys_touched=1 cursor_ts=2026-06-25T15:32:21+08:00 lag_sec=7200
+--- PASS: TestScanner_IPAsSourceFalse_SameUANewIPNoE1 (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">IPAsSourceFalse SameUANewIPNo新来源</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestParseSpikeDetail_TableDriven/完整_JSON
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestParseSpikeDetail_TableDriven/完整_JSON
+--- PASS: TestParseSpikeDetail_TableDriven/完整_JSON (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">TableDriven/完整 JSON</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_InsertAlertError_ContinuesScanning
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_InsertAlertError_ContinuesScanning
+2026/06/25 17:32:21 WARN key_activity: insert_alert_failed key_id=test-key-001 event=first_use error="db write failed"
+2026/06/25 17:32:21 INFO key_activity_scan rows=1 keys_touched=1 cursor_ts=2026-06-25T15:32:21+08:00 lag_sec=7200
+--- PASS: TestScanner_InsertAlertError_ContinuesScanning (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">InsertAlertError ContinuesScanning</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_E2_FirstUse_CreatesAlert
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_E2_FirstUse_CreatesAlert
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=first_use dedup=first
+2026/06/25 17:32:21 INFO key_activity_scan rows=1 keys_touched=1 cursor_ts=2026-06-25T15:32:21+08:00 lag_sec=7200
+--- PASS: TestScanner_E2_FirstUse_CreatesAlert (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">首次使用 FirstUse CreatesAlert</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_E3_WakeupAfterDormantPeriod
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_E3_WakeupAfterDormantPeriod
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=wakeup dedup=2026-06-25
+2026/06/25 17:32:21 INFO key_activity_scan rows=1 keys_touched=1 cursor_ts=2026-06-25T15:32:21+08:00 lag_sec=7200
+--- PASS: TestScanner_E3_WakeupAfterDormantPeriod (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">唤醒 WakeupAfterDormantPeriod</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_E3_WithinDormantThreshold_NoAlert
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_E3_WithinDormantThreshold_NoAlert
+2026/06/25 17:32:21 INFO key_activity_scan rows=1 keys_touched=1 cursor_ts=2026-06-25T15:32:21+08:00 lag_sec=7200
+--- PASS: TestScanner_E3_WithinDormantThreshold_NoAlert (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">唤醒 WithinDormantThreshold NoAlert</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestParseDormantDays_TableDriven/零值
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestParseDormantDays_TableDriven/零值
+--- PASS: TestParseDormantDays_TableDriven/零值 (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">TableDriven/零值</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestParseDormantDays_TableDriven/空对象
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestParseDormantDays_TableDriven/空对象
+--- PASS: TestParseDormantDays_TableDriven/空对象 (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">TableDriven/空对象</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestParseDormantDays_TableDriven/空字符串
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestParseDormantDays_TableDriven/空字符串
+--- PASS: TestParseDormantDays_TableDriven/空字符串 (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">TableDriven/空字符串</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_ShadowMode_AlertWrittenButNoNotification
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_ShadowMode_AlertWrittenButNoNotification
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=first_use dedup=first
+2026/06/25 17:32:21 INFO key_activity_scan rows=1 keys_touched=1 cursor_ts=2026-06-25T15:32:21+08:00 lag_sec=7200
+--- PASS: TestScanner_ShadowMode_AlertWrittenButNoNotification (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">ShadowMode AlertWrittenButNoNotification</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_ShadowMode_E4_AlertButNoNotification
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_ShadowMode_E4_AlertButNoNotification
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=usage_spike dedup=2026-06-25-15
+2026/06/25 17:32:21 INFO key_activity_scan rows=100 keys_touched=1 cursor_ts=2026-06-25T15:34:00+08:00 lag_sec=7101
+--- PASS: TestScanner_ShadowMode_E4_AlertButNoNotification (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">ShadowMode 激增 AlertButNoNotification</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_IsEnabled_False
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_IsEnabled_False
+--- PASS: TestScanner_IsEnabled_False (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">IsEnabled False</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_E2_FirstUse_SeenRecordCreated
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_E2_FirstUse_SeenRecordCreated
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=first_use dedup=first
+2026/06/25 17:32:21 INFO key_activity_scan rows=1 keys_touched=1 cursor_ts=2026-06-25T15:32:21+08:00 lag_sec=7200
+--- PASS: TestScanner_E2_FirstUse_SeenRecordCreated (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">首次使用 FirstUse SeenRecordCreated</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_E2_UpdatesLastSeenAt
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_E2_UpdatesLastSeenAt
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=first_use dedup=first
+2026/06/25 17:32:21 INFO key_activity_scan rows=1 keys_touched=1 cursor_ts=2026-06-25T15:32:21+08:00 lag_sec=7200
+--- PASS: TestScanner_E2_UpdatesLastSeenAt (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">首次使用 UpdatesLastSeenAt</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_E4_CurrentHourExcluded
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_E4_CurrentHourExcluded
+2026/06/25 17:32:21 INFO key_activity_scan rows=200 keys_touched=1 cursor_ts=2026-06-25T17:35:40+08:00 lag_sec=-198
+--- PASS: TestScanner_E4_CurrentHourExcluded (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">激增 CurrentHourExcluded</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_E4_Dedup_SameHourTwice
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_E4_Dedup_SameHourTwice
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=usage_spike dedup=2026-06-25-15
+2026/06/25 17:32:21 INFO key_activity_scan rows=100 keys_touched=1 cursor_ts=2026-06-25T15:34:00+08:00 lag_sec=7101
+--- PASS: TestScanner_E4_Dedup_SameHourTwice (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">激增 Dedup SameHourTwice</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestParseSpikeDetail_TableDriven/空字符串
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestParseSpikeDetail_TableDriven/空字符串
+--- PASS: TestParseSpikeDetail_TableDriven/空字符串 (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">TableDriven/空字符串</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestParseSpikeDetail_TableDriven/无效_JSON
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestParseSpikeDetail_TableDriven/无效_JSON
+--- PASS: TestParseSpikeDetail_TableDriven/无效_JSON (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">TableDriven/无效 JSON</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_E3_NilLastSeenAt_NoAlert
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_E3_NilLastSeenAt_NoAlert
+2026/06/25 17:32:21 INFO key_activity_scan rows=1 keys_touched=1 cursor_ts=2026-06-25T15:32:21+08:00 lag_sec=7200
+--- PASS: TestScanner_E3_NilLastSeenAt_NoAlert (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">唤醒 NilLastSeenAt NoAlert</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_E4_Spike_TriggersAlert
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_E4_Spike_TriggersAlert
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=usage_spike dedup=2026-06-25-15
+2026/06/25 17:32:21 INFO key_activity_scan rows=100 keys_touched=1 cursor_ts=2026-06-25T15:34:00+08:00 lag_sec=7101
+--- PASS: TestScanner_E4_Spike_TriggersAlert (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">激增 Spike TriggersAlert</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_E4_BaselineNotReady_Skipped
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_E4_BaselineNotReady_Skipped
+2026/06/25 17:32:21 INFO key_activity_scan rows=200 keys_touched=1 cursor_ts=2026-06-25T15:35:40+08:00 lag_sec=7001
+--- PASS: TestScanner_E4_BaselineNotReady_Skipped (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">激增 BaselineNotReady Skipped</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestBootstrap_ContextCancelled
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestBootstrap_ContextCancelled
+2026/06/25 17:32:21 INFO key_activity: bootstrap starting bootstrap_days=90
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 1 - backfill source_seen
+--- PASS: TestBootstrap_ContextCancelled (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">ContextCancelled</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestFormatNotification_AllEventTypes/E2_首次使用
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestFormatNotification_AllEventTypes/E2_首次使用
+--- PASS: TestFormatNotification_AllEventTypes/E2_首次使用 (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">AllEventTypes/首次使用 首次使用</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestParseDormantDays_TableDriven
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestParseDormantDays_TableDriven
+--- PASS: TestParseDormantDays_TableDriven (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">TableDriven</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestBootstrap_CursorAdvanced
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestBootstrap_CursorAdvanced
+2026/06/25 17:32:21 INFO key_activity: bootstrap starting bootstrap_days=90
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 1 - backfill source_seen
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 1 done rows_backfilled=0
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 2 - init EWMA baseline (14d)
+2026/06/25 17:32:21 INFO key_activity: EWMA baseline initialized keys_processed=0
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 2 done
+2026/06/25 17:32:21 INFO key_activity: bootstrap complete cursor=2026-06-25T17:32:21.064+08:00
+--- PASS: TestBootstrap_CursorAdvanced (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">CursorAdvanced</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestParseDormantDays_TableDriven/正常_JSON
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestParseDormantDays_TableDriven/正常_JSON
+--- PASS: TestParseDormantDays_TableDriven/正常_JSON (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">TableDriven/正常 JSON</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_IsEnabled_NilConfig
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_IsEnabled_NilConfig
+--- PASS: TestScanner_IsEnabled_NilConfig (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">IsEnabled NilConfig</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_E4_NotTriggered_RegularUsage
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_E4_NotTriggered_RegularUsage
+2026/06/25 17:32:21 INFO key_activity_scan rows=50 keys_touched=1 cursor_ts=2026-06-25T15:33:10+08:00 lag_sec=7151
+--- PASS: TestScanner_E4_NotTriggered_RegularUsage (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">激增 NotTriggered RegularUsage</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestBootstrap_NoHistoricalData
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestBootstrap_NoHistoricalData
+2026/06/25 17:32:21 INFO key_activity: bootstrap starting bootstrap_days=90
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 1 - backfill source_seen
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 1 done rows_backfilled=0
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 2 - init EWMA baseline (14d)
+2026/06/25 17:32:21 INFO key_activity: EWMA baseline initialized keys_processed=0
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 2 done
+2026/06/25 17:32:21 INFO key_activity: bootstrap complete cursor=2026-06-25T17:32:21.064+08:00
+--- PASS: TestBootstrap_NoHistoricalData (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">NoHistoricalData</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_Dedup_SameNewSourceTwice
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_Dedup_SameNewSourceTwice
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=new_source dedup=4235227b51436ad8|10.0.0.2
+2026/06/25 17:32:21 INFO key_activity_scan rows=2 keys_touched=1 cursor_ts=2026-06-25T15:32:22+08:00 lag_sec=7199
+--- PASS: TestScanner_Dedup_SameNewSourceTwice (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">Dedup SameNewSourceTwice</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestFormatNotification_AllEventTypes/未知事件类型
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestFormatNotification_AllEventTypes/未知事件类型
+--- PASS: TestFormatNotification_AllEventTypes/未知事件类型 (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">AllEventTypes/未知事件类型</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_E2_MultipleUnknownKeys_OnlyTriggersOnce
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_E2_MultipleUnknownKeys_OnlyTriggersOnce
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=first_use dedup=first
+2026/06/25 17:32:21 INFO key_activity_scan rows=3 keys_touched=1 cursor_ts=2026-06-25T15:32:23+08:00 lag_sec=7198
+--- PASS: TestScanner_E2_MultipleUnknownKeys_OnlyTriggersOnce (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">首次使用 MultipleUnknownKeys OnlyTriggersOnce</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_IPAsSourceTrue_NewIPTriggersE1
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_IPAsSourceTrue_NewIPTriggersE1
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=new_source dedup=acd0a8313c8ccead|10.0.0.2
+2026/06/25 17:32:21 INFO key_activity_scan rows=1 keys_touched=1 cursor_ts=2026-06-25T15:32:21+08:00 lag_sec=7200
+--- PASS: TestScanner_IPAsSourceTrue_NewIPTriggersE1 (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">IPAsSourceTrue NewIPTriggers新来源</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_InvalidUserID_NotificationSkipped
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_InvalidUserID_NotificationSkipped
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=first_use dedup=first
+2026/06/25 17:32:21 WARN key_activity: invalid user_id, skip notification user_id=not-a-uuid key_id=test-key-001
+2026/06/25 17:32:21 INFO key_activity_scan rows=1 keys_touched=1 cursor_ts=2026-06-25T15:32:21+08:00 lag_sec=7200
+--- PASS: TestScanner_InvalidUserID_NotificationSkipped (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">InvalidUserID NotificationSkipped</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_FirstScanTriggersBootstrap
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_FirstScanTriggersBootstrap
+2026/06/25 17:32:21 INFO key_activity: bootstrap starting bootstrap_days=0
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 1 - backfill source_seen
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 1 done rows_backfilled=0
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 2 - init EWMA baseline (14d)
+2026/06/25 17:32:21 INFO key_activity: EWMA baseline initialized keys_processed=0
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 2 done
+2026/06/25 17:32:21 INFO key_activity: bootstrap complete cursor=2026-06-25T17:32:21.064+08:00
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=first_use dedup=first
+2026/06/25 17:32:21 INFO key_activity_scan rows=1 keys_touched=1 cursor_ts=2026-06-25T15:32:21+08:00 lag_sec=7200
+--- PASS: TestScanner_FirstScanTriggersBootstrap (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">FirstScanTriggersBootstrap</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestParseDormantDays_TableDriven/其他字段
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestParseDormantDays_TableDriven/其他字段
+--- PASS: TestParseDormantDays_TableDriven/其他字段 (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">TableDriven/其他字段</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestParseSpikeDetail_TableDriven
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestParseSpikeDetail_TableDriven
+--- PASS: TestParseSpikeDetail_TableDriven (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">TableDriven</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_Comprehensive_E2AndE4BothTrigger
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_Comprehensive_E2AndE4BothTrigger
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=first_use dedup=first
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=usage_spike dedup=2026-06-25-15
+2026/06/25 17:32:21 INFO key_activity_scan rows=100 keys_touched=1 cursor_ts=2026-06-25T15:34:00+08:00 lag_sec=7101
+--- PASS: TestScanner_Comprehensive_E2AndE4BothTrigger (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">Comprehensive 首次使用And激增BothTrigger</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_E1_KnownSource_NoAlert
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_E1_KnownSource_NoAlert
+2026/06/25 17:32:21 INFO key_activity_scan rows=1 keys_touched=1 cursor_ts=2026-06-25T15:32:21+08:00 lag_sec=7200
+--- PASS: TestScanner_E1_KnownSource_NoAlert (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">新来源 KnownSource NoAlert</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_Dedup_FirstUseAcrossTwoScans
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_Dedup_FirstUseAcrossTwoScans
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=first_use dedup=first
+2026/06/25 17:32:21 INFO key_activity_scan rows=2 keys_touched=1 cursor_ts=2026-06-25T16:32:21+08:00 lag_sec=3600
+--- PASS: TestScanner_Dedup_FirstUseAcrossTwoScans (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">Dedup FirstUseAcrossTwoScans</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_EmptyBatch_DoesNotCrashWithNilRepo
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_EmptyBatch_DoesNotCrashWithNilRepo
+--- PASS: TestScanner_EmptyBatch_DoesNotCrashWithNilRepo (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">EmptyBatch DoesNotCrashWithNilRepo</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_KeyLookupError_AlertsStillCreated
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_KeyLookupError_AlertsStillCreated
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=first_use dedup=first
+2026/06/25 17:32:21 INFO key_activity_scan rows=1 keys_touched=1 cursor_ts=2026-06-25T15:32:21+08:00 lag_sec=7200
+--- PASS: TestScanner_KeyLookupError_AlertsStillCreated (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">KeyLookupError AlertsStillCreated</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_MultipleKeys_IndependentAlerts
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_MultipleKeys_IndependentAlerts
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=first_use dedup=first
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-002 event=first_use dedup=first
+2026/06/25 17:32:21 INFO key_activity_scan rows=2 keys_touched=2 cursor_ts=2026-06-25T15:32:22+08:00 lag_sec=7199
+--- PASS: TestScanner_MultipleKeys_IndependentAlerts (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">MultipleKeys IndependentAlerts</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_Comprehensive_E1AndE3BothTrigger
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_Comprehensive_E1AndE3BothTrigger
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=new_source dedup=e5f82619ede7918a|10.0.0.2
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=wakeup dedup=2026-06-25
+2026/06/25 17:32:21 INFO key_activity_scan rows=1 keys_touched=1 cursor_ts=2026-06-25T15:32:21+08:00 lag_sec=7200
+--- PASS: TestScanner_Comprehensive_E1AndE3BothTrigger (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">Comprehensive 新来源And唤醒BothTrigger</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_E4_LowBaseline_Ignored
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_E4_LowBaseline_Ignored
+2026/06/25 17:32:21 INFO key_activity_scan rows=500 keys_touched=1 cursor_ts=2026-06-25T15:32:21+08:00 lag_sec=7199
+--- PASS: TestScanner_E4_LowBaseline_Ignored (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">激增 LowBaseline Ignored</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestFormatNotification_AllEventTypes/E1_新来源
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestFormatNotification_AllEventTypes/E1_新来源
+--- PASS: TestFormatNotification_AllEventTypes/E1_新来源 (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">AllEventTypes/新来源 新来源</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_EmptyBatch_NoSideEffects
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_EmptyBatch_NoSideEffects
+--- PASS: TestScanner_EmptyBatch_NoSideEffects (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">EmptyBatch NoSideEffects</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestFormatNotification_AllEventTypes
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestFormatNotification_AllEventTypes
+--- PASS: TestFormatNotification_AllEventTypes (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">AllEventTypes</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestFormatNotification_AllEventTypes/E3_唤醒
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestFormatNotification_AllEventTypes/E3_唤醒
+--- PASS: TestFormatNotification_AllEventTypes/E3_唤醒 (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">AllEventTypes/唤醒 唤醒</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestParseSpikeDetail_TableDriven/只有_mean
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestParseSpikeDetail_TableDriven/只有_mean
+--- PASS: TestParseSpikeDetail_TableDriven/只有_mean (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">TableDriven/只有 mean</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestEventLevel_AllTypes
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestEventLevel_AllTypes
+--- PASS: TestEventLevel_AllTypes (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">AllTypes</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestBootstrap_NoAlertsWritten
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestBootstrap_NoAlertsWritten
+2026/06/25 17:32:21 INFO key_activity: bootstrap starting bootstrap_days=90
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 1 - backfill source_seen
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 1 done rows_backfilled=1
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 2 - init EWMA baseline (14d)
+2026/06/25 17:32:21 INFO key_activity: EWMA baseline initialized keys_processed=0
+2026/06/25 17:32:21 INFO key_activity: bootstrap phase 2 done
+2026/06/25 17:32:21 INFO key_activity: bootstrap complete cursor=2026-06-25T17:32:21.064+08:00
+--- PASS: TestBootstrap_NoAlertsWritten (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">NoAlertsWritten</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestScanner_SecondScanSkipsBootstrap
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestScanner_SecondScanSkipsBootstrap
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=first_use dedup=first
+2026/06/25 17:32:21 INFO key_activity_scan rows=1 keys_touched=1 cursor_ts=2026-06-25T15:32:21+08:00 lag_sec=7200
+--- PASS: TestScanner_SecondScanSkipsBootstrap (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">SecondScanSkipsBootstrap</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestCron_RunOnce_DelegatesToScanner
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestCron_RunOnce_DelegatesToScanner
+--- PASS: TestCron_RunOnce_DelegatesToScanner (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">RunOnce DelegatesToScanner</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestCron_RunOnce_WithCallLogs
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestCron_RunOnce_WithCallLogs
+2026/06/25 17:32:21 INFO key_activity_alert key_id=test-key-001 event=first_use dedup=first
+2026/06/25 17:32:21 INFO key_activity_scan rows=1 keys_touched=1 cursor_ts=2026-06-25T15:32:21+08:00 lag_sec=7200
+--- PASS: TestCron_RunOnce_WithCallLogs (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">RunOnce WithCallLogs</td>
+      </tr>
+      <tr>
+        <td class="test-name">
+          TestFormatNotification_AllEventTypes/E4_激增
+          <details><summary>查看详细输出</summary>
+            <pre>=== RUN   TestFormatNotification_AllEventTypes/E4_激增
+--- PASS: TestFormatNotification_AllEventTypes/E4_激增 (0.00s)
+</pre>
+          </details>
+        </td>
+        <td><span class="badge pass">PASS</span></td>
+        <td class="elapsed">0.00s</td>
+        <td style="font-size:0.8rem;color:#555">AllEventTypes/激增 激增</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="footer">Generated by go test -json · LLM Gateway Key Activity TDD</div>
+</div>
+</body>
+</html>

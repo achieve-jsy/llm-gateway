@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { getPublicSettings as fetchPublicSettings, getSystemSettings as fetchSystemSettings, updateSystemSettings, testWebhook } from '@/services/control-plane'
+import { getPublicSettings as fetchPublicSettings, getSystemSettings as fetchSystemSettings, updateSystemSettings, testWebhook, testEmail } from '@/services/control-plane'
 import type { SystemSettings, PublicSettings } from '@/types/settings'
 
 function defaultPublicSettings(): PublicSettings {
@@ -14,6 +14,8 @@ function defaultSystemSettings(): SystemSettings {
     oidc_issuer_url: '', oidc_client_id: '', oidc_client_secret: '',
     oidc_redirect_url: '', oidc_scopes: 'openid profile email', oidc_enabled: false,
     webhook_enabled: false, webhook_url: '', webhook_secret: '', webhook_events: 'health_check_failed',
+    email_enabled: false, smtp_host: 'mail.example.com', smtp_port: 587,
+    smtp_from: 'llm-gateway@example.com', smtp_password: '', smtp_tls_skip_verify: false,
     default_max_switches: 2, default_same_model_retries: 1, default_failover_cooldown_seconds: 60,
     supplier_name: '某公司',
     pricing_usd_to_cny_rate: 7.2,
@@ -87,5 +89,6 @@ export const useSettingsStore = defineStore('settings', () => {
     getSiteName,
     getSiteLogo,
     testWebhook,
+    testEmail,
   }
 })

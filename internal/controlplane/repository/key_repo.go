@@ -42,7 +42,7 @@ func (r *KeyRepo) ListByUserID(userID uuid.UUID, offset, limit int) ([]model.Api
 	var keys []model.ApiKey
 	var total int64
 
-	query := r.db.Model(&model.ApiKey{}).Where("user_id = ?", userID)
+	query := r.db.Model(&model.ApiKey{}).Where("user_id = ? AND key_type = ?", userID, model.KeyTypePersonal)
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err

@@ -34,12 +34,12 @@
       <div class="mu-filter-divider" />
       <el-date-picker
         v-model="dateRange"
-        type="daterange"
+        type="datetimerange"
         range-separator="~"
-        start-placeholder="开始"
-        end-placeholder="结束"
-        value-format="YYYY-MM-DD"
-        format="MM/DD"
+        start-placeholder="开始时间"
+        end-placeholder="结束时间"
+        value-format="YYYY-MM-DD HH:mm"
+        format="MM/DD HH:mm"
         :shortcuts="dateShortcuts"
         class="mu-filter__date"
         size="small"
@@ -171,6 +171,61 @@
       @update:page="(p) => { logPage = p; loadLogs() }"
       @update:pageSize="(s) => { logPageSize = s; loadLogs() }"
     />
+
+    <!-- ═══════════════════════════════════════════
+         ②-B KEY 花费分布（默认折叠）
+    ═══════════════════════════════════════════ -->
+    <button
+      type="button"
+      class="mu-analysis-toggle"
+      :aria-expanded="keyDistOpen"
+      aria-controls="mu-key-dist-body"
+      @click="keyDistOpen = !keyDistOpen"
+    >
+      <span class="mu-analysis-toggle__title">🔑 KEY 花费分布</span>
+      <span class="mu-analysis-toggle__hint">{{ keyDistOpen ? '点击收起' : '查看各 Key 的花销占比' }}</span>
+      <el-icon class="mu-analysis-toggle__chev" :class="{ 'is-open': keyDistOpen }" aria-hidden="true"><ArrowDown /></el-icon>
+    </button>
+
+    <div v-if="keyDistOpen" id="mu-key-dist-body" class="mu-analysis-body">
+      <div v-if="keyDistLoading" v-loading="true" style="height: 200px;" />
+      <div v-else-if="!keyDistRows.length" class="mu-empty-state">当前筛选条件下暂无数据</div>
+      <template v-else>
+        <div class="mu-key-dist-grid">
+          <!-- KEY 花费分布 Doughnut -->
+          <div class="mu-chart-card">
+            <div class="mu-chart-card__header">
+              <span class="mu-chart-card__title">花费分布</span>
+              <span class="mu-chart-card__hint">点击扇形可筛选</span>
+            </div>
+            <div class="mu-chart-card__body mu-chart-card__body--doughnut">
+              <canvas ref="keyDistCanvas" />
+            </div>
+          </div>
+
+          <!-- KEY 花费排行 -->
+          <div class="mu-chart-card">
+            <div class="mu-chart-card__header">
+              <span class="mu-chart-card__title">花费排行</span>
+              <span class="mu-chart-card__hint">按总花费降序</span>
+            </div>
+            <div class="mu-rank-list-wrap">
+              <div v-for="(row, idx) in keyDistSorted" :key="row.key_id || idx" class="mu-rank-item">
+                <span class="mu-rank-idx" :class="['mu-rank-idx--' + (idx < 3 ? idx+1 : 'rest')]">{{ idx+1 }}</span>
+                <div class="mu-rank-info">
+                  <span class="mu-rank-model" :title="row.key_name || row.key_id">{{ row.key_name || maskKey(row.key_id) }}</span>
+                  <div class="mu-rank-bar-wrap">
+                    <div class="mu-rank-bar"
+                         :style="{ width: pct(row.est_cost_usd, maxKeyCost) + '%', background: rankBarColor(idx) }" />
+                  </div>
+                </div>
+                <span class="mu-rank-cost">{{ fmtPreciseCny(row.est_cost_usd) }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
 
     <!-- ═══════════════════════════════════════════
          ③ 习惯与深度分析（默认折叠，懒加载图表）
@@ -518,20 +573,42 @@ const fmtLocal = (d: Date) => {
   const day = String(d.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
 }
+const fmtLocalDateTime = (d: Date) => {
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const hour = String(d.getHours()).padStart(2, '0')
+  const minute = String(d.getMinutes()).padStart(2, '0')
+  return `${year}-${month}-${day} ${hour}:${minute}`
+}
 const parseLocalDate = (s: string) => {
-  const [y, m, d] = s.split('-').map(Number)
+  // 支持 "YYYY-MM-DD" 和 "YYYY-MM-DD HH:mm" 格式
+  const [datePart] = s.split(' ')
+  const [y, m, d] = datePart.split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
+const parseLocalDateTime = (s: string) => {
+  // 支持 "YYYY-MM-DD" 和 "YYYY-MM-DD HH:mm" 格式
+  const parts = s.split(' ')
+  const [y, m, d] = parts[0].split('-').map(Number)
+  if (parts[1]) {
+    const [h, mi] = parts[1].split(':').map(Number)
+    return new Date(y, m - 1, d, h, mi)
+  }
   return new Date(y, m - 1, d)
 }
 const initEnd = new Date()
 const initStart = new Date()
 initStart.setDate(initEnd.getDate() - 6)
-const dateRange = ref<[string, string]>([fmtLocal(initStart), fmtLocal(initEnd)])
+initStart.setHours(0, 0, 0, 0)
+initEnd.setHours(23, 59, 59, 999)
+const dateRange = ref<[string, string]>([fmtLocalDateTime(initStart), fmtLocalDateTime(initEnd)])
 const dateShortcuts = [
-  { text: '今天',     value: () => { const t = new Date(); const s = fmtLocal(t); return [s, s] as [string, string] } },
-  { text: '昨天',     value: () => { const d = new Date(); d.setDate(d.getDate() - 1); const s = fmtLocal(d); return [s, s] as [string, string] } },
-  { text: '最近 7 天', value: () => { const end = new Date(); const start = new Date(); start.setDate(end.getDate() - 6); return [fmtLocal(start), fmtLocal(end)] as [string, string] } },
-  { text: '最近 30 天', value: () => { const end = new Date(); const start = new Date(); start.setDate(end.getDate() - 29); return [fmtLocal(start), fmtLocal(end)] as [string, string] } },
-  { text: '本月',     value: () => { const end = new Date(); const start = new Date(end.getFullYear(), end.getMonth(), 1); return [fmtLocal(start), fmtLocal(end)] as [string, string] } },
+  { text: '今天',     value: () => { const t = new Date(); const s = new Date(t); s.setHours(0,0,0,0); return [fmtLocalDateTime(s), fmtLocalDateTime(t)] as [string, string] } },
+  { text: '昨天',     value: () => { const d = new Date(); d.setDate(d.getDate() - 1); d.setHours(0,0,0,0); const e = new Date(d); e.setHours(23,59,59,999); return [fmtLocalDateTime(d), fmtLocalDateTime(e)] as [string, string] } },
+  { text: '最近 7 天', value: () => { const end = new Date(); const start = new Date(); start.setDate(end.getDate() - 6); start.setHours(0,0,0,0); return [fmtLocalDateTime(start), fmtLocalDateTime(end)] as [string, string] } },
+  { text: '最近 30 天', value: () => { const end = new Date(); const start = new Date(); start.setDate(end.getDate() - 29); start.setHours(0,0,0,0); return [fmtLocalDateTime(start), fmtLocalDateTime(end)] as [string, string] } },
+  { text: '本月',     value: () => { const end = new Date(); const start = new Date(end.getFullYear(), end.getMonth(), 1); start.setHours(0,0,0,0); return [fmtLocalDateTime(start), fmtLocalDateTime(end)] as [string, string] } },
 ]
 const datePresets = [
   { label: '今天',   days: 0 },
@@ -546,7 +623,8 @@ function applyPreset(p: { label: string; days: number }) {
   const end = new Date()
   const start = new Date()
   start.setDate(end.getDate() - p.days)
-  dateRange.value = [fmtLocal(start), fmtLocal(end)]
+  start.setHours(0, 0, 0, 0)
+  dateRange.value = [fmtLocalDateTime(start), fmtLocalDateTime(end)]
   activePreset.value = p.label
   loadAll()
 }
@@ -563,6 +641,7 @@ const filterStatus    = ref('')
 const groupBy = ref('day')
 const modelDetailOpen = ref(false)
 const analysisOpen = ref(false)
+const keyDistOpen = ref(false)
 
 const activeFilterCount = computed(() =>
   [filterKeyId.value, filterModelName.value, filterGroupName.value, filterStatus.value].filter(Boolean).length
@@ -599,12 +678,19 @@ const logTotal = ref(0)
 const logPage = ref(1)
 const logPageSize = ref(50)
 
+// ── KEY 花费分布 ──
+const keyDistLoading = ref(false)
+const keyDistRows = ref<StatsRow[]>([])
+
 // ── Derived stats ──
 const rangeDays = computed(() => {
   const [from, to] = dateRange.value
   if (!from || !to) return 1
-  const diff = parseLocalDate(to).getTime() - parseLocalDate(from).getTime()
-  return Math.max(1, Math.round(diff / 86400000) + 1)
+  const fromDt = parseLocalDateTime(from)
+  const toDt = parseLocalDateTime(to)
+  const diff = toDt.getTime() - fromDt.getTime()
+  // 至少 1 天，小时精度下用小数
+  return Math.max(1, diff / 86400000)
 })
 
 const periodLabel = computed(() => {
@@ -613,15 +699,19 @@ const periodLabel = computed(() => {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
   const todayStr = fmtLocal(today)
-  if (from === to && from === todayStr) return '今日'
+  // 提取日期部分进行比较
+  const fromDate = from.split(' ')[0]
+  const toDate = to.split(' ')[0]
+  if (fromDate === toDate && fromDate === todayStr) return '今日'
   const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1)
-  if (from === to && from === fmtLocal(yesterday)) return '昨日'
+  if (fromDate === toDate && fromDate === fmtLocal(yesterday)) return '昨日'
   const monthStart = new Date(today.getFullYear(), today.getMonth(), 1)
-  if (from === fmtLocal(monthStart) && to === todayStr) return '本月'
+  if (fromDate === fmtLocal(monthStart) && toDate === todayStr) return '本月'
   const d7 = new Date(today); d7.setDate(d7.getDate() - 6)
-  if (from === fmtLocal(d7) && to === todayStr) return '近 7 天'
+  if (fromDate === fmtLocal(d7) && toDate === todayStr) return '近 7 天'
   const d30 = new Date(today); d30.setDate(d30.getDate() - 29)
-  if (from === fmtLocal(d30) && to === todayStr) return '近 30 天'
+  if (fromDate === fmtLocal(d30) && toDate === todayStr) return '近 30 天'
+  // 显示完整日期时间范围
   return `${from} ~ ${to}`
 })
 
@@ -708,6 +798,14 @@ const modelByCost = computed(() => {
 })
 const maxModelCost = computed(() => Math.max(...modelByCost.value.map(r => r.est_cost_usd || 0), 0.0001))
 
+// ── KEY 花费分布 ──
+const keyDistSorted = computed(() => {
+  return [...keyDistRows.value]
+    .sort((a, b) => (b.est_cost_usd || 0) - (a.est_cost_usd || 0))
+    .slice(0, 8)
+})
+const maxKeyCost = computed(() => Math.max(...keyDistSorted.value.map(r => r.est_cost_usd || 0), 0.0001))
+
 function rankBarColor(idx: number) {
   return RANK_COLORS[idx] || '#3b82f6'
 }
@@ -781,13 +879,13 @@ function buildStatsParams(groupByVal: string): Record<string, string> {
 async function loadPrevPeriodStats() {
   const [from, to] = dateRange.value
   if (!from || !to) return
-  const fromD = parseLocalDate(from); const toD = parseLocalDate(to)
-  const days = Math.round((toD.getTime() - fromD.getTime()) / 86400000) + 1
-  const prevEnd = new Date(fromD); prevEnd.setDate(prevEnd.getDate() - 1)
-  const prevStart = new Date(prevEnd); prevStart.setDate(prevStart.getDate() - (days - 1))
+  const fromD = parseLocalDateTime(from); const toD = parseLocalDateTime(to)
+  const diffMs = toD.getTime() - fromD.getTime()
+  const prevEnd = new Date(fromD.getTime() - 1) // 当前期间开始的前一毫秒
+  const prevStart = new Date(prevEnd.getTime() - diffMs)
   try {
     const params = buildStatsParams('day')
-    params.from = fmtLocal(prevStart); params.to = fmtLocal(prevEnd)
+    params.from = fmtLocalDateTime(prevStart); params.to = fmtLocalDateTime(prevEnd)
     const r = await http.get('/api/v1/my/usage', { params })
     prevPeriodTotal.value = r.data.total || null
   } catch { prevPeriodTotal.value = null }
@@ -874,15 +972,34 @@ function loadAll() {
   loadStats()
   loadLogs()
   loadAvgDuration()
+  if (keyDistOpen.value) loadKeyDist()
+}
+
+// ── Load KEY 花费分布 ──
+async function loadKeyDist() {
+  if (!dateRange.value?.[0]) return
+  keyDistLoading.value = true
+  try {
+    const r = await http.get('/api/v1/my/usage', { params: buildStatsParams('key') })
+    keyDistRows.value = r.data.rows || []
+    await nextTick()
+    renderKeyDist()
+  } catch (e: any) {
+    console.error('[my-usage] key dist load failed', e)
+  } finally {
+    keyDistLoading.value = false
+  }
 }
 
 // ── Charts ──
 const costTrendCanvas = ref<HTMLCanvasElement | null>(null)
 const distCanvas      = ref<HTMLCanvasElement | null>(null)
 const costPerMCanvas  = ref<HTMLCanvasElement | null>(null)
+const keyDistCanvas   = ref<HTMLCanvasElement | null>(null)
 let costTrendChart: Chart | null = null
 let distChart: Chart | null = null
 let costPerMChart: Chart | null = null
+let keyDistChart: Chart | null = null
 
 // Doughnut center plugin
 const doughnutCenterPlugin = {
@@ -1116,12 +1233,72 @@ function renderCostPerM() {
   })
 }
 
+function renderKeyDist() {
+  const canvas = keyDistCanvas.value
+  if (!canvas || !keyDistRows.value.length) return
+  keyDistChart?.destroy()
+
+  const colors = chartTheme()
+  const sorted = [...keyDistRows.value].sort((a, b) => b.est_cost_usd - a.est_cost_usd).slice(0, 8)
+  const labels = sorted.map(r => r.key_name || maskKey(r.key_id))
+  const data = sorted.map(r => toCny(r.est_cost_usd))
+  const total = data.reduce((a, b) => a + b, 0)
+  const palette = CHART_PALETTE.map(c => c + 'CC')
+
+  keyDistChart = new Chart(canvas, {
+    type: 'doughnut',
+    data: {
+      labels,
+      datasets: [{ data, backgroundColor: palette.slice(0, data.length), borderColor: CHART_PALETTE.slice(0, data.length), borderWidth: 1 }],
+    },
+    plugins: [doughnutCenterPlugin, segmentLabelPlugin],
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '62%',
+      onClick: (_evt: any, elements: any[]) => {
+        if (!elements.length || !keyDistChart) return
+        const idx = elements[0].index
+        const keyId = sorted[idx]?.key_id
+        if (!keyId) return
+        filterKeyId.value = keyId
+        loadAll()
+      },
+      plugins: {
+        legend: {
+          position: 'right',
+          labels: {
+            color: colors.textRegular, font: { size: 11 }, padding: 10, usePointStyle: true,
+            generateLabels(chart) {
+              const ds = chart.data.datasets[0]
+              return (chart.data.labels || []).map((label, i) => {
+                const value = (ds.data[i] as number) || 0
+                const pctV = total ? Math.round(value / total * 100) : 0
+                return { text: `${label} (${pctV}%)`, fillStyle: (ds.backgroundColor as string[])[i], strokeStyle: (ds.borderColor as string[])[i], lineWidth: 1, hidden: false, index: i, pointStyle: 'circle' }
+              })
+            },
+          },
+        },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const v = ctx.raw as number
+              return `${ctx.label}: ${currencySymbol(cc.value.currency)}${v.toFixed(4)} (${total ? Math.round(v / total * 100) : 0}%)`
+            },
+          },
+        },
+      },
+    },
+  })
+}
+
 function rerenderCharts() {
   if (dayStatsRows.value.length) renderCostTrend()
   if (analysisOpen.value && modelStatsRows.value.length) {
     renderDist()
     if (costPerMRows.value.length) renderCostPerM()
   }
+  if (keyDistOpen.value && keyDistRows.value.length) renderKeyDist()
 }
 
 watch(isDark, () => nextTick(() => rerenderCharts()))
@@ -1134,6 +1311,16 @@ watch(analysisOpen, (open) => {
     if (modelStatsRows.value.length) renderDist()
     if (costPerMRows.value.length) renderCostPerM()
   })
+})
+
+// 懒加载：首次展开「KEY 花费分布」时加载数据并渲染
+watch(keyDistOpen, (open) => {
+  if (!open) return
+  if (!keyDistRows.value.length) {
+    loadKeyDist()
+  } else {
+    nextTick(() => renderKeyDist())
+  }
 })
 
 // ── Trace ──
@@ -1358,6 +1545,11 @@ if (typeof MutationObserver !== 'undefined') {
   display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
 }
 @media (max-width: 900px) { .mu-model-pref-grid { grid-template-columns: 1fr; } }
+
+.mu-key-dist-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+}
+@media (max-width: 900px) { .mu-key-dist-grid { grid-template-columns: 1fr; } }
 
 /* 模型排行列表 */
 .mu-rank-list-wrap { padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; min-height: 200px; }

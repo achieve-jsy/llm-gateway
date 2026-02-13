@@ -77,7 +77,9 @@
   /* 中性色（数据区基底）*/
   --bg-page: #F8FAFC;
   --bg-surface: #FFFFFF;
+  --bg-card: #FFFFFF;
   --bg-subtle: #F1F5F9;
+  --bg-hover: #F9FAFB;
   --border-default: #E2E8F0;
   --border-light: #F1F5F9;
   --border-strong: #CBD5E1;
@@ -113,6 +115,8 @@
   /* 字体 */
   --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+  --font-family-mono: var(--font-mono);
+  --font-size-xxs: 10px;
   --font-size-base: 14px;
   --font-size-sm: 13px;
   --font-size-xs: 12px;
@@ -120,16 +124,30 @@
   --font-size-section: 16px;
   --font-size-display: 28px;
 
-  /* 圆角（从 12px 降至 8px — 更紧凑专业）*/
+  /* 圆角 */
   --radius-sm: 4px;
   --radius-base: 8px;
   --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-3xl: 24px;
   --radius-full: 999px;
 
   /* 阴影（中性灰，去除绿色调）*/
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
   --shadow-base: 0 2px 6px rgba(0, 0, 0, 0.08);
   --shadow-lg: 0 4px 6px rgba(0, 0, 0, 0.07), 0 2px 4px rgba(0, 0, 0, 0.06);
+
+  /* ring 色（卡片环线） */
+  --ring-color: rgba(17, 24, 39, 0.05);
+  --ring-dark-color: rgba(51, 65, 85, 0.5);
+
+  /* 字重 */
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --font-weight-extrabold: 800;
+  --font-weight-black: 900;
 
   /* 间距 */
   --space-1: 4px;
@@ -192,7 +210,9 @@
 html.dark {
   --bg-page: #0F172A;
   --bg-surface: #1E293B;
+  --bg-card: #1E293B;
   --bg-subtle: #263242;
+  --bg-hover: #263242;
   --border-default: #334155;
   --border-light: #1E293B;
   --border-strong: #475569;

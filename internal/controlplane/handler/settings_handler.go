@@ -3,9 +3,12 @@ package handler
 import (
 	"context"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/service"
+	"github.com/example/llm-gateway/internal/notification"
 	"github.com/gin-gonic/gin"
 )
 
@@ -123,6 +126,93 @@ func (h *SettingsHandler) TestWebhook(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "测试发送成功",
+	})
+}
+
+func (h *SettingsHandler) TestEmail(c *gin.Context) {
+	var req struct {
+		Email      string `json:"email"`
+		Host       string `json:"smtp_host"`
+		Port       int    `json:"smtp_port"`
+		From       string `json:"smtp_from"`
+		Password   string `json:"smtp_password"`
+		SkipVerify bool   `json:"smtp_tls_skip_verify"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{"message": "请求参数有误", "code": CodeBadRequest},
+		})
+		return
+	}
+
+	saved, _ := h.svc.GetSystemSettings(c.Request.Context())
+
+	host := req.Host
+	port := req.Port
+	from := req.From
+	password := req.Password
+	skipVerify := req.SkipVerify
+
+	if host == "" && saved != nil {
+		host = saved.SMTPHost
+		port = saved.SMTPPort
+		from = saved.SMTPFrom
+		if password == "" {
+			password = saved.SMTPPassword
+		}
+		if !req.SkipVerify {
+			skipVerify = saved.SMTPTLSSkipVerify
+		}
+	}
+
+	if host == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{"message": "请填写 SMTP 服务器地址", "code": CodeBadRequest},
+		})
+		return
+	}
+	if from == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{"message": "请填写发件人邮箱", "code": CodeBadRequest},
+		})
+		return
+	}
+	if password == "" && saved != nil {
+		password = saved.SMTPPassword
+	}
+	if password == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{"message": "请填写 SMTP 密码", "code": CodeBadRequest},
+		})
+		return
+	}
+	if port == 0 && saved != nil {
+		port = saved.SMTPPort
+	}
+	if port == 0 {
+		port = 587
+	}
+
+	email := strings.TrimSpace(req.Email)
+	if email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{"message": "请填写测试邮件地址", "code": CodeBadRequest},
+		})
+		return
+	}
+
+	recipients := []string{email}
+	sender := notification.NewEmailSender(host, port, from, password, recipients)
+	sender.SetSkipTLSVerify(skipVerify)
+	if err := sender.SendText(c.Request.Context(), "这是来自 LLM Gateway 的测试邮件。SMTP 配置验证成功。\n\n时间: "+time.Now().Format("2006-01-02 15:04:05")); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{"message": "测试邮件发送失败: " + err.Error(), "code": CodeInternalError},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "测试邮件已发送至 " + email,
 	})
 }
 

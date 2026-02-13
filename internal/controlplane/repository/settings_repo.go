@@ -55,3 +55,9 @@ func (r *SettingsRepo) GetAll() ([]model.SystemConfig, error) {
 	err := r.db.Order("key").Find(&cfgs).Error
 	return cfgs, err
 }
+
+// DB 暴露底层 gorm.DB，供其他服务查询轻量数据（如用户邮箱），
+// 避免大范围注入依赖。
+func (r *SettingsRepo) DB() *gorm.DB {
+	return r.db
+}

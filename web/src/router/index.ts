@@ -95,6 +95,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '模型性能看板' }
   },
   {
+    path: '/admin/ops',
+    name: 'OpsDashboard',
+    component: () => import('@/views/admin/ops/OpsDashboardPage.vue'),
+    meta: { title: '运维监控', requiresAdmin: true }
+  },
+  {
     path: '/admin/usage-cost',
     name: 'UsageCost',
     component: () => import('@/views/admin/UsageCostPage.vue'),

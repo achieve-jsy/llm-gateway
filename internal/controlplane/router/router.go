@@ -395,6 +395,80 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		performanceHandler := handler.NewPerformanceHandler(performanceSvc)
 		adminGroup.GET("/health/performance", performanceHandler.GetPerformance)
 
+		// 运维看板（Ops Dashboard）
+		systemMetricsCollector := service.NewSystemMetricsCollector(db, rdb)
+		systemMetricsCollector.Start(context.Background())
+		opsHandler := handler.NewOpsHandler(db, rdb, systemMetricsCollector)
+		adminGroup.GET("/ops/groups", opsHandler.GetGroupOptions)
+		adminGroup.GET("/ops/dashboard", opsHandler.GetDashboard)
+		adminGroup.GET("/ops/traffic-trend", opsHandler.GetTrafficTrend)
+		adminGroup.GET("/ops/error-trend", opsHandler.GetErrorTrend)
+		adminGroup.GET("/ops/latency-histogram", opsHandler.GetLatencyHistogram)
+		adminGroup.GET("/ops/error-distribution", opsHandler.GetErrorDistribution)
+
+		// 运维看板 v2：请求日志、错误分析、并发、趋势
+		adminGroup.GET("/ops/requests", opsHandler.ListRequests)
+		adminGroup.GET("/ops/request-errors", opsHandler.ListRequestErrors)
+		adminGroup.GET("/ops/request-errors/:id", opsHandler.GetRequestErrorDetail)
+		adminGroup.GET("/ops/upstream-errors", opsHandler.ListUpstreamErrors)
+		adminGroup.GET("/ops/concurrency", opsHandler.GetConcurrencyStats)
+		adminGroup.GET("/ops/switch-rate-trend", opsHandler.GetSwitchRateTrend)
+		adminGroup.GET("/ops/throughput-trend", opsHandler.GetThroughputTrend)
+
+		// 运维看板 v2：告警规则 / 事件 / 静默
+		adminGroup.GET("/ops/alert-rules", opsHandler.ListAlertRules)
+		adminGroup.POST("/ops/alert-rules", opsHandler.CreateAlertRule)
+		adminGroup.PUT("/ops/alert-rules/:id", opsHandler.UpdateAlertRule)
+		adminGroup.DELETE("/ops/alert-rules/:id", opsHandler.DeleteAlertRule)
+		adminGroup.GET("/ops/alert-events", opsHandler.ListAlertEvents)
+		adminGroup.GET("/ops/alert-events/:id", opsHandler.GetAlertEvent)
+		adminGroup.PUT("/ops/alert-events/:id/status", opsHandler.UpdateAlertEventStatus)
+		adminGroup.POST("/ops/alert-silences", opsHandler.CreateAlertSilence)
+
+		// 运维看板 v2：系统日志
+		adminGroup.GET("/ops/system-logs", opsHandler.ListSystemLogs)
+		adminGroup.GET("/ops/system-logs/health", opsHandler.GetSystemLogSinkHealth)
+		adminGroup.POST("/ops/system-logs/cleanup", opsHandler.CleanupSystemLogs)
+
+		// 运维看板 v2：运行时日志配置
+		adminGroup.GET("/ops/runtime/logging", opsHandler.GetRuntimeLogConfig)
+		adminGroup.PUT("/ops/runtime/logging", opsHandler.UpdateRuntimeLogConfig)
+		adminGroup.POST("/ops/runtime/logging/reset", opsHandler.ResetRuntimeLogConfig)
+
+		// 运维看板 v2：Token 统计
+		adminGroup.GET("/ops/token-stats", opsHandler.GetTokenStats)
+
+		// 运维看板 v2：阈值 & 看板设置
+		adminGroup.GET("/ops/settings/metric-thresholds", opsHandler.GetMetricThresholds)
+		adminGroup.PUT("/ops/settings/metric-thresholds", opsHandler.UpdateMetricThresholds)
+		adminGroup.GET("/ops/settings/dashboard", opsHandler.GetDashboardSettings)
+		adminGroup.PUT("/ops/settings/dashboard", opsHandler.UpdateDashboardSettings)
+		adminGroup.GET("/ops/settings/advanced", opsHandler.GetAdvancedSettings)
+		adminGroup.PUT("/ops/settings/advanced", opsHandler.UpdateAdvancedSettings)
+
+		// 运维看板 v2：用户并发 & 账户可用性 & 实时流量 & 请求错误关联
+		adminGroup.GET("/ops/user-concurrency", opsHandler.GetUserConcurrency)
+		adminGroup.GET("/ops/account-availability", opsHandler.GetAccountAvailability)
+		adminGroup.GET("/ops/realtime-traffic", opsHandler.GetRealtimeTraffic)
+		adminGroup.GET("/ops/request-errors/:id/correlation", opsHandler.GetRequestErrorCorrelation)
+		adminGroup.GET("/ops/upstream-errors/:id", opsHandler.GetUpstreamErrorDetail)
+
+		// 运维看板 v2：后台任务
+		adminGroup.GET("/ops/jobs", opsHandler.ListJobs)
+
+		// 运维看板 v3：邮件通知配置
+		adminGroup.GET("/ops/settings/email-notification", opsHandler.GetEmailNotificationConfig)
+		adminGroup.PUT("/ops/settings/email-notification", opsHandler.UpdateEmailNotificationConfig)
+		adminGroup.POST("/ops/settings/email-notification/test", opsHandler.SendTestAlertEmail)
+
+		// 运维看板 v3：告警运行时设置
+		adminGroup.GET("/ops/settings/alert-runtime", opsHandler.GetAlertRuntimeSettings)
+		adminGroup.PUT("/ops/settings/alert-runtime", opsHandler.UpdateAlertRuntimeSettings)
+
+		// 运维看板 v3：错误日志增强视图
+		adminGroup.GET("/ops/error-logs", opsHandler.ListErrorLogs)
+		adminGroup.PUT("/ops/error-logs/:id/resolve", opsHandler.ResolveErrorLog)
+
 		// 模型状态变更日志
 		adminGroup.GET("/model-status-logs", modelStatusLogHandler.ListModelStatusLogs)
 

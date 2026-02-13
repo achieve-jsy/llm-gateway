@@ -139,6 +139,9 @@ export const AUDIT_ACTIONS = [
   { value: 'user.follow_sso_department', label: '跟随 SSO 部门' },
   // 用户
   { value: 'user.login', label: '用户登录' },
+  // 邮件
+  { value: 'email.send_test', label: '邮件测试发送' },
+  { value: 'email.send_alert', label: '告警邮件发送' },
 ]
 
 // 资源类型常量
@@ -159,5 +162,6 @@ export const RESOURCE_TYPES = [
   { value: 'studio', label: '工作室' },
   { value: 'department', label: '部门' },
   { value: 'role', label: '角色' },
+  { value: 'email', label: '邮件' },
   { value: 'unknown', label: '其他' },
 ]

@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"strings"
-	"time"
 )
 
 type Dispatcher struct {
@@ -59,14 +58,6 @@ func (d *Dispatcher) SendAlert(ctx context.Context, alertType, source, text stri
 		}
 	}
 	return nil
-}
-
-func (d *Dispatcher) recordEmailSend(recipients []string, success bool, errMsg string, elapsedMs int64) {
-	if d.recorder == nil {
-		return
-	}
-	d.recorder.RecordEmailSend(recipients, success, errMsg)
-	_ = elapsedMs
 }
 
 func BuildRecipients(raw string) []string {

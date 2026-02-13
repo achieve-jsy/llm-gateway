@@ -40,6 +40,13 @@ type SystemSettings struct {
 	StudioRPM int `json:"studio_rpm"`
 	DeptRPM   int `json:"dept_rpm"`
 	KeyRPM    int `json:"key_rpm"`
+	// 邮件通知
+	EmailEnabled      bool   `json:"email_enabled"`
+	SMTPHost          string `json:"smtp_host"`
+	SMTPPort          int    `json:"smtp_port"`
+	SMTPFrom          string `json:"smtp_from"`
+	SMTPPassword      string `json:"smtp_password"`
+	SMTPTLSSkipVerify bool   `json:"smtp_tls_skip_verify"`
 }
 
 type PublicSettings struct {

@@ -674,6 +674,17 @@ export async function testWebhook(): Promise<void> {
   await http.post('/api/v1/settings/test-webhook')
 }
 
+export async function testEmail(payload: {
+  email: string
+  smtp_host: string
+  smtp_port: number
+  smtp_from: string
+  smtp_password: string
+  smtp_tls_skip_verify: boolean
+}): Promise<void> {
+  await http.post('/api/v1/settings/test-email', payload)
+}
+
 export async function exportSettings(): Promise<Record<string, string>> {
   const response = await http.post<{ code: number; data: Record<string, string> }>('/api/v1/settings/export')
   return response.data.data

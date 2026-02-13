@@ -248,24 +248,8 @@ onMounted(loadConfig)
 </script>
 
 <style scoped>
-.ops-card {
-  background: var(--bg-card);
-  border-radius: var(--radius-3xl);
-  padding: var(--space-4);
-}
 
-.ops-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-4);
-}
 
-.ops-card-title {
-  font-size: var(--font-size-section);
-  font-weight: var(--font-weight-semibold);
-  color: var(--text-primary);
-}
 
 .email-config-body {
   display: flex;

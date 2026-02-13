@@ -274,38 +274,14 @@ watch(() => props.refreshToken, () => {
 </script>
 
 <style scoped>
-.ops-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-3xl);
-  padding: var(--space-4);
-}
 
-.ops-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-4);
-}
 
-.ops-card-title {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-bold);
-  color: var(--text-primary);
-  margin: 0;
-}
 
 .ops-refresh-btn {
   width: 28px;
   height: 28px;
 }
 
-.ops-filter-bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin-bottom: var(--space-3);
-}
 
 .ops-filter-select {
   width: 140px;
@@ -319,23 +295,7 @@ watch(() => props.refreshToken, () => {
   overflow-x: auto;
 }
 
-.ops-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--font-size-xs);
-}
 
-.ops-table thead th {
-  text-align: left;
-  padding: 6px 8px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-secondary);
-  border-bottom: 1px solid var(--border-default);
-  white-space: nowrap;
-}
 
 .ops-th-sortable {
   cursor: pointer;
@@ -346,11 +306,6 @@ watch(() => props.refreshToken, () => {
   color: var(--text-primary);
 }
 
-.ops-table tbody td {
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border-light);
-  vertical-align: middle;
-}
 
 .ops-table-row:hover {
   background: var(--bg-subtle);
@@ -360,11 +315,6 @@ watch(() => props.refreshToken, () => {
   opacity: 0.55;
 }
 
-.ops-td-time {
-  white-space: nowrap;
-  font-family: var(--font-family-mono);
-  color: var(--text-secondary);
-}
 
 .ops-td-mono {
   font-family: var(--font-family-mono);
@@ -387,16 +337,5 @@ watch(() => props.refreshToken, () => {
   vertical-align: middle;
 }
 
-.ops-card-empty {
-  padding: var(--space-8) 0;
-  text-align: center;
-  color: var(--text-placeholder);
-  font-size: var(--font-size-sm);
-}
 
-.ops-pagination {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: var(--space-3);
-}
 </style>

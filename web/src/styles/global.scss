@@ -660,25 +660,296 @@ html.dark .el-menu {
 }
 
 /* ===================== Ops Dashboard 卡片范式 ===================== */
+/* 统一所有 ops 组件卡片样式（对齐 sub2api：p-6 rounded-3xl border ring-gray-900/5） */
 .ops-card {
   background: var(--bg-card);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-3xl);
   padding: var(--space-6);
-  box-shadow: var(--shadow-sm), 0 0 0 1px var(--ring-color);
-
-  html.dark & {
-    box-shadow: var(--shadow-sm), 0 0 0 1px var(--ring-dark-color);
-  }
 }
 
-.ops-card__title {
-  font-size: var(--font-size-section);
-  font-weight: var(--font-weight-semibold);
-  color: var(--text-primary);
+.ops-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: var(--space-4);
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.ops-card-title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  color: var(--text-primary);
+  margin: 0;
+}
+
+/* 图表卡样式（padding 略大以适应图表渲染） */
+.ops-chart-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-3xl);
+  padding: var(--space-6);
+}
+
+/* ============ 图表头部 ============ */
+.ops-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-4);
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.ops-chart-title {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  margin: 0;
+  white-space: nowrap;
+}
+
+.ops-chart-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.ops-chart-btns {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* ============ 图表图例 ============ */
+.ops-chart-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+.ops-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ops-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+/* ============ 图表图标（颜色语义变体） ============ */
+.ops-chart-icon {
+  width: 16px;
+  height: 16px;
+}
+.ops-chart-icon--blue   { color: #3b82f6; }  /* 流量 / 主指标 */
+.ops-chart-icon--red    { color: #ef4444; }  /* 错误 / 上游错误 */
+.ops-chart-icon--purple { color: #8b5cf6; }  /* 延迟分布 */
+.ops-chart-icon--orange { color: #f97316; }  /* 错误分布 / 混合 */
+.ops-chart-icon--teal   { color: #14b8a6; }  /* 切换率 */
+
+/* ============ 图表内容区 ============ */
+.ops-chart-body {
+  height: 320px;
+}
+
+.ops-chart-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  height: 100%;
+  color: var(--text-placeholder);
+  font-size: var(--font-size-sm);
+}
+
+.ops-chart-empty-icon {
+  color: var(--text-placeholder);
+  opacity: 0.5;
+}
+
+.ops-chart-sub {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+/* ============ Ops 过滤栏 ============ */
+.ops-filter-bar {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  flex-wrap: wrap;
+}
+
+/* ============ Ops 表格 ============ */
+.ops-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-xs);
+}
+
+.ops-table thead th {
+  text-align: left;
+  padding: 8px 12px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-default);
+  white-space: nowrap;
+}
+
+.ops-table td {
+  padding: 8px 12px;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.ops-table-row {
+  transition: background-color 0.15s;
+}
+
+.ops-table-row:hover {
+  background-color: var(--bg-subtle);
+}
+
+/* ============ Ops 严重级别 Tag（P0-P3） ============ */
+.ops-severity-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+.ops-severity-badge--P0 { background: var(--severity-P0-bg); color: var(--severity-P0); }
+.ops-severity-badge--P1 { background: var(--severity-P1-bg); color: var(--severity-P1); }
+.ops-severity-badge--P2 { background: var(--severity-P2-bg); color: var(--severity-P2); }
+.ops-severity-badge--P3 { background: var(--severity-P3-bg); color: var(--severity-P3); }
+
+/* ============ Ops 告警事件状态 ============ */
+.ops-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+}
+.ops-status-badge--firing         { background: var(--status-firing-bg);          color: var(--status-firing); }
+.ops-status-badge--resolved       { background: var(--status-resolved-bg);        color: var(--status-resolved); }
+.ops-status-badge--manual-resolved{ background: var(--status-manual-resolved-bg); color: var(--status-manual-resolved); }
+
+/* ============ Ops 日志级别 ============ */
+.ops-log-level {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  font-family: var(--font-mono);
+  letter-spacing: 0.03em;
+}
+.ops-log-level--DEBUG { background: var(--log-debug-bg); color: var(--log-debug); }
+.ops-log-level--INFO  { background: var(--log-info-bg);  color: var(--log-info); }
+.ops-log-level--WARN  { background: var(--log-warn-bg);  color: var(--log-warn); }
+.ops-log-level--ERROR { background: var(--log-error-bg); color: var(--log-error); }
+
+/* ============ Ops HTTP 状态码范围 ============ */
+.ops-http-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+  font-weight: var(--font-weight-medium);
+}
+.ops-http-status--2xx { background: var(--color-success-bg); color: var(--status-2xx); }
+.ops-http-status--4xx { background: var(--color-warning-bg); color: var(--status-4xx); }
+.ops-http-status--5xx { background: var(--color-danger-bg);  color: var(--status-5xx); }
+
+/* ============ Ops 模态弹窗通用样式 ============ */
+.ops-modal-filters {
+  display: flex;
+  gap: 8px;
+  margin-bottom: var(--space-3, 12px);
+  flex-wrap: wrap;
+}
+
+.ops-modal-table {
+  overflow-x: auto;
+  max-height: 65vh;
+}
+
+.ops-modal-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 160px;
+  color: var(--text-placeholder, #94a3b8);
+  font-size: var(--font-size-sm);
+}
+
+/* 统一分页样式（模态弹窗 / 卡片 / 表格均可用） */
+.ops-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-3, 12px);
+}
+
+/* 模态弹窗内表格：粘性表头（用于长列表 modal） */
+.ops-modal-table .ops-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-card, #fff);
+  z-index: 1;
+}
+
+/* ============ Ops 过滤控件基础尺寸 ============ */
+/* 默认宽度：select 140px / input 180px，组件内可 scoped 覆盖 */
+.ops-filter-select { width: 140px; }
+.ops-filter-input  { width: 180px; }
+
+/* 尺寸变体（SM = 100/130px；NUM = 150px，用于数字输入） */
+.ops-filter-select-sm { width: 100px; }
+.ops-filter-select--sm { width: 100px; }
+.ops-filter-input-sm  { width: 130px; }
+.ops-filter-input--sm  { width: 130px; }
+.ops-filter-input-num { width: 150px; }
+
+/* ============ Ops 表格单元格通用类 ============ */
+.ops-td-time {
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xxs);
+  font-family: var(--font-family-mono);
+}
+
+.ops-td-dash {
+  color: var(--text-placeholder, #94a3b8);
+}
+.ops-card-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8) var(--space-4);
+  color: var(--text-placeholder);
+  font-size: var(--font-size-sm);
 }
 
 .ops-section-label {

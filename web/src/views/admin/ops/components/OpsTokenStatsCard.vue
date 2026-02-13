@@ -156,28 +156,8 @@ async function fetchData() {
 </script>
 
 <style scoped>
-.ops-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-3xl);
-  padding: var(--space-4);
-}
 
-.ops-card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: var(--space-3);
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
 
-.ops-card-title {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-bold);
-  color: var(--text-primary);
-  margin: 0;
-}
 
 .ops-token-summary {
   display: flex;
@@ -192,30 +172,13 @@ async function fetchData() {
   color: var(--text-secondary);
 }
 
-.ops-filter-bar {
-  display: flex;
-  gap: 8px;
-  margin-bottom: var(--space-3);
-  flex-wrap: wrap;
-}
 
-.ops-filter-select {
-  width: 140px;
-}
 
-.ops-filter-select-sm {
-  width: 100px;
-}
 
 .ops-table-wrap {
   overflow-x: auto;
 }
 
-.ops-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--font-size-xs);
-}
 
 .ops-table th {
   text-align: left;
@@ -238,18 +201,5 @@ async function fetchData() {
   color: var(--text-primary);
 }
 
-.ops-card-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 120px;
-  color: var(--text-placeholder);
-  font-size: var(--font-size-xs);
-}
 
-.ops-pagination {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: var(--space-3);
-}
 </style>

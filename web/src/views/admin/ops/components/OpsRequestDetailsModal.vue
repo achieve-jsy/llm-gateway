@@ -220,28 +220,10 @@ async function fetchData() {
 </script>
 
 <style scoped>
-.ops-modal-filters {
-  display: flex;
-  gap: 8px;
-  margin-bottom: var(--space-3, 12px);
-  flex-wrap: wrap;
-}
 
-.ops-filter-select {
-  width: 130px;
-}
 
-.ops-filter-input {
-  width: 180px;
-}
 
-.ops-filter-input-sm {
-  width: 130px;
-}
 
-.ops-filter-input-num {
-  width: 150px;
-}
 
 .ops-sort-bar {
   display: flex;
@@ -255,46 +237,11 @@ async function fetchData() {
   color: var(--text-secondary, #64748b);
 }
 
-.ops-modal-table {
-  overflow-x: auto;
-  max-height: 65vh;
-}
 
-.ops-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--font-size-xs, 12px);
-}
 
-.ops-table th {
-  text-align: left;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border-light, #e5e7eb);
-  color: var(--text-secondary, #64748b);
-  font-weight: var(--font-weight-semibold);
-  white-space: nowrap;
-  position: sticky;
-  top: 0;
-  background: var(--bg-card, #fff);
-  z-index: 1;
-}
 
-.ops-table td {
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border-light, #e5e7eb);
-  color: var(--text-primary, #1e293b);
-}
 
-.ops-td-time {
-  white-space: nowrap;
-  color: var(--text-secondary, #64748b);
-  font-size: var(--font-size-xxs);
-  font-family: var(--font-family-mono);
-}
 
-.ops-td-dash {
-  color: var(--text-placeholder, #94a3b8);
-}
 
 .ops-request-id {
   font-family: var(--font-family-mono);
@@ -309,17 +256,5 @@ async function fetchData() {
   color: #2563eb;
 }
 
-.ops-modal-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 160px;
-  color: var(--text-placeholder, #94a3b8);
-}
 
-.ops-pagination {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: var(--space-3, 12px);
-}
 </style>

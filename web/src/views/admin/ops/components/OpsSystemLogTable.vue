@@ -94,7 +94,7 @@
             <tr class="ops-table-row" @click="toggleExpand(log.id)">
               <td class="ops-td-time">{{ formatTime(log.ts) }}</td>
               <td>
-                <el-tag size="small" :type="levelTagType(log.level)" effect="dark" disable-transitions>
+                <el-tag size="small" :type="logLevelToTagType(log.level)" effect="dark" disable-transitions>
                   {{ log.level }}
                 </el-tag>
               </td>
@@ -149,6 +149,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search as SearchIcon } from '@element-plus/icons-vue'
 import { opsAPI } from '@/api/ops'
 import type { OpsSystemLog, OpsSystemLogSinkHealth, OpsRuntimeLogConfig } from '@/api/ops'
+import { logLevelToTagType } from '../utils/opsFormatters'
 
 const props = withDefaults(
   defineProps<{
@@ -198,16 +199,6 @@ watch(() => props.refreshToken, () => {
 onMounted(async () => {
   await Promise.all([fetchData(), fetchSinkHealth(), fetchLogConfig()])
 })
-
-function levelTagType(lv: string): 'info' | 'success' | 'warning' | 'danger' {
-  switch (lv) {
-    case 'DEBUG': return 'info'
-    case 'INFO': return 'success'
-    case 'WARN': return 'warning'
-    case 'ERROR': return 'danger'
-    default: return 'info'
-  }
-}
 
 function formatTime(ts: string): string {
   const d = new Date(ts)
@@ -304,26 +295,8 @@ async function cleanupLogs() {
 </script>
 
 <style scoped>
-.ops-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-3xl);
-  padding: var(--space-4);
-}
 
-.ops-card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: var(--space-3);
-}
 
-.ops-card-title {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-bold);
-  color: var(--text-primary);
-  margin: 0;
-}
 
 .ops-sink-bar {
   display: flex;
@@ -399,12 +372,6 @@ async function cleanupLogs() {
   padding: 0 12px 12px;
 }
 
-.ops-filter-bar {
-  display: flex;
-  gap: 8px;
-  margin-bottom: var(--space-3);
-  flex-wrap: wrap;
-}
 
 .ops-filter-select {
   width: 130px;
@@ -418,43 +385,14 @@ async function cleanupLogs() {
   overflow-x: auto;
 }
 
-.ops-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--font-size-xs);
-}
 
-.ops-table th {
-  text-align: left;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border-light);
-  color: var(--text-secondary);
-  font-weight: var(--font-weight-semibold);
-  white-space: nowrap;
-}
 
-.ops-table td {
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border-light);
-  color: var(--text-primary);
-  vertical-align: top;
-}
 
-.ops-table-row {
-  cursor: pointer;
-  transition: background 0.15s;
-}
 
 .ops-table-row:hover {
   background: var(--bg-subtle);
 }
 
-.ops-td-time {
-  white-space: nowrap;
-  color: var(--text-secondary);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xxs);
-}
 
 .ops-td-msg {
   max-width: 360px;
@@ -497,18 +435,5 @@ async function cleanupLogs() {
   font-family: var(--font-family-mono);
 }
 
-.ops-card-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 120px;
-  color: var(--text-placeholder);
-  font-size: var(--font-size-xs);
-}
 
-.ops-pagination {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: var(--space-3);
-}
 </style>

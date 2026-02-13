@@ -301,29 +301,9 @@ onMounted(() => {
 
 <style scoped>
 /* ====== 卡片容器 ====== */
-.ops-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-3xl);
-  padding: 24px;
-}
 
 /* ====== 卡片头部 ====== */
-.ops-card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-  gap: 8px;
-}
 
-.ops-card-title {
-  font-size: 15px;
-  font-weight: var(--font-weight-bold);
-  color: var(--text-primary);
-  margin: 0;
-}
 
 .ops-header-right {
   display: flex;

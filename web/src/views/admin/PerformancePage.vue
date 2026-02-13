@@ -698,13 +698,16 @@ function pctClass(pct: number | null | undefined): string {
   width: 100%;
 }
 
-/* ── Outer card ── */
+/* ── Outer card — 确保卡片填满视口，避免底部大片留白 ── */
 .monitor-card-outer {
   border: 1px solid var(--border-default, #E2E8F0);
   border-radius: var(--radius-lg, 12px);
   background: var(--bg-surface, #fff);
   overflow: hidden;
   box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 220px);
 }
 
 /* ── Header ── */
@@ -860,12 +863,11 @@ function pctClass(pct: number | null | undefined): string {
   white-space: nowrap;
 }
 
-/* ── Card body ── */
-.card-body { padding: 12px 16px; }
+/* ── Card body — flex 填满剩余空间 ── */
+.card-body { padding: 12px 16px; flex: 1; display: flex; flex-direction: column; }
 
 .scroll-body {
-  max-height: calc(100vh - 280px);
-  min-height: 200px;
+  flex: 1;
   overflow-y: auto;
 }
 
@@ -1397,7 +1399,7 @@ function pctClass(pct: number | null | undefined): string {
     justify-content: space-between;
   }
   .search-input { flex: 1; width: auto; }
-  .scroll-body { max-height: calc(100vh - 240px); }
+  .scroll-body { min-height: 0; }
   .attn-header {
     flex-direction: column;
     gap: 4px;

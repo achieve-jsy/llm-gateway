@@ -1631,11 +1631,12 @@ watch(currency, async () => {
 }
 .ud-chart-empty-inner p { margin: 0; }
 
-/* ── 两列布局 ── */
+/* ── 两列布局 — align-items:start 防止短列被拉伸产生空白 ── */
 .ud-main-row {
   display: grid;
   grid-template-columns: 3fr 2fr;
   gap: 16px;
+  align-items: start;
 }
 @media (max-width: 960px) { .ud-main-row { grid-template-columns: 1fr; } }
 

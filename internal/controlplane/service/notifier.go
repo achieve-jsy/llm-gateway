@@ -99,11 +99,12 @@ func (e *EmailNotifier) Notify(ctx context.Context, n *model.Notification) error
 
 func (e *EmailNotifier) lookupUserEmail(ctx context.Context, userID uuid.UUID) ([]string, error) {
 	var email string
-	err := e.db.Table("users").
-		Where("id = ?", userID).
-		Select("COALESCE(email, '')").
-		Take(&email).Error
-	if err != nil || email == "" {
+	err := e.db.Raw("SELECT COALESCE(email, '') FROM users WHERE id = ?", userID).Scan(&email).Error
+	if err != nil {
+		slog.Warn("email_notifier: lookup email failed", "user_id", userID, "error", err)
+		return nil, nil
+	}
+	if email == "" || strings.Contains(email, "@dev.local") {
 		return nil, nil
 	}
 	return []string{email}, nil

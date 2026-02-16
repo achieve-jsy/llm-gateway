@@ -18,6 +18,7 @@ type SettingsServiceInterface interface {
 	UpdateSettings(ctx context.Context, settings *model.SystemSettings) error
 	ExportAll(ctx context.Context) (map[string]string, error)
 	ImportSettings(ctx context.Context, settings map[string]string) error
+	GetSMTPPassword(ctx context.Context) string
 }
 
 type SettingsHandler struct {
@@ -159,6 +160,12 @@ func (h *SettingsHandler) TestEmail(c *gin.Context) {
 		from = saved.SMTPFrom
 		if password == "" {
 			password = saved.SMTPPassword
+			// SMTPPassword 在 GetSystemSettings 中已脱敏，用原始值覆盖
+			if h.svc != nil {
+				if raw := h.svc.GetSMTPPassword(c.Request.Context()); raw != "" {
+					password = raw
+				}
+			}
 		}
 		if !req.SkipVerify {
 			skipVerify = saved.SMTPTLSSkipVerify
@@ -178,7 +185,7 @@ func (h *SettingsHandler) TestEmail(c *gin.Context) {
 		return
 	}
 	if password == "" && saved != nil {
-		password = saved.SMTPPassword
+		password = h.svc.GetSMTPPassword(c.Request.Context())
 	}
 	if password == "" {
 		c.JSON(http.StatusBadRequest, gin.H{

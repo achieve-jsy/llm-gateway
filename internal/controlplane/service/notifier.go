@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/example/llm-gateway/internal/controlplane/audit"
 	"github.com/example/llm-gateway/internal/controlplane/keyactivity"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
@@ -57,10 +58,15 @@ func (w *DBNotifier) Notify(_ context.Context, n *model.Notification) error {
 type EmailNotifier struct {
 	settingsRepo *repository.SettingsRepo
 	db           *gorm.DB
+	auditRecorder audit.Recorder
 }
 
 func NewEmailNotifier(repo *repository.SettingsRepo) *EmailNotifier {
 	return &EmailNotifier{settingsRepo: repo, db: repo.DB()}
+}
+
+func (e *EmailNotifier) SetAuditRecorder(r audit.Recorder) {
+	e.auditRecorder = r
 }
 
 func (e *EmailNotifier) Notify(ctx context.Context, n *model.Notification) error {
@@ -114,12 +120,36 @@ func (e *EmailNotifier) sendAsync(sender *notification.EmailSender, n *model.Not
 	subject := "[LLM Gateway] " + n.Title
 	body := fmt.Sprintf("%s\n\n时间: %s",
 		n.Content, n.CreatedAt.Format("2006-01-02 15:04"))
-	if err := sender.SendTextWithSubject(context.Background(), subject, body); err != nil {
+	err := sender.SendTextWithSubject(context.Background(), subject, body)
+	if err != nil {
 		slog.Warn("email_notifier: send failed",
 			"recipients", recipients, "type", n.Type, "error", err)
+		e.recordAudit(recipients, false, err.Error())
 		return
 	}
 	slog.Info("email_notifier: sent", "type", n.Type, "recipient", recipients[0])
+	e.recordAudit(recipients, true, "")
+}
+
+func (e *EmailNotifier) recordAudit(recipients []string, success bool, errMsg string) {
+	if e.auditRecorder == nil {
+		return
+	}
+	status := 200
+	if !success {
+		status = 500
+	}
+	e.auditRecorder.Record(audit.Input{
+		Action:       audit.ActionEmailAlert,
+		ResourceType: audit.ResourceEmail,
+		ResourceName: "告警邮件",
+		StatusCode:   status,
+		Details: map[string]any{
+			"recipients": strings.Join(recipients, ", "),
+			"success":    success,
+			"error":      errMsg,
+		},
+	})
 }
 
 type smtpConfig struct {

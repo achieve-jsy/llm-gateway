@@ -656,9 +656,9 @@ export const opsAPI = {
   getDashboard: (timeRange: string = '1h') =>
     get<OpsDashboardResponse>('/api/v1/ops/dashboard', { params: { time_range: timeRange } }),
 
-  // ---- 实时流量摘要（按时间窗口，用于实时流量窗口切换） ----
+  // 实时流量摘要（复用 /ops/realtime-traffic 路由，按 window 过滤）
   getRealtimeTrafficSummary: (window: string = '1min') =>
-    get<OpsRealtimeTrafficSummary>('/api/v1/ops/realtime-traffic/summary', { params: { window } }),
+    get<OpsRealtimeTrafficSummary>('/api/v1/ops/realtime-traffic', { params: { window } }),
 
   // ---- 模型组下拉列表（运维过滤用） ----
   getGroupOptions: () =>

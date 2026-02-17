@@ -838,10 +838,10 @@ const emptyTraffic = {
 
 const traffic = computed(() => props.overview?.traffic ?? emptyTraffic)
 
-const currentQPS = computed(() => realtimeQPS.value ?? traffic.value.current_qps)
-const currentTPS = computed(() => realtimeTPS.value ?? traffic.value.current_tps)
-const peakQPS = computed(() => traffic.value.peak_qps)
-const peakTPS = computed(() => traffic.value.peak_tps)
+const currentQPS = computed(() => realtimeQPS.value ?? traffic.value.current_qps ?? 0)
+const currentTPS = computed(() => realtimeTPS.value ?? traffic.value.current_tps ?? 0)
+const peakQPS = computed(() => traffic.value.peak_qps ?? 0)
+const peakTPS = computed(() => traffic.value.peak_tps ?? 0)
 
 // ============ Errors ============
 

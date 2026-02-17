@@ -57,13 +57,13 @@
               <template #prefix><el-icon><User /></el-icon></template>
             </el-input>
           </div>
-          <!-- 模型 -->
+          <!-- 模型：下拉选择 -->
           <div class="ud-filter-chip">
             <span class="ud-chip-label">模型</span>
-            <el-input v-model="filterModel" placeholder="搜索模型名" clearable size="small"
-              class="ud-chip-input" @change="loadAll" @clear="loadAll">
-              <template #prefix><el-icon><Search /></el-icon></template>
-            </el-input>
+            <el-select v-model="filterModel" placeholder="全部模型" clearable filterable size="small"
+              class="ud-chip-select" @change="loadAll" @clear="loadAll">
+              <el-option v-for="m in modelOptions" :key="m" :label="m" :value="m" />
+            </el-select>
           </div>
           <!-- 状态 -->
           <div class="ud-filter-chip">
@@ -144,70 +144,30 @@
           </div>
         </div>
       </div>
-      <!-- 成功率 -->
-      <div class="ud-kpi-card" :class="successRate >= 99 ? 'ud-kpi-card--green' : successRate >= 95 ? 'ud-kpi-card--amber' : 'ud-kpi-card--red'">
-        <div class="ud-kpi__icon"><el-icon size="20"><CircleCheck /></el-icon></div>
+
+      <!-- Token 消耗 -->
+      <div class="ud-kpi-card ud-kpi-card--cyan">
+        <div class="ud-kpi__icon"><el-icon size="20"><Coin /></el-icon></div>
         <div class="ud-kpi__body">
-          <p class="ud-kpi__label">成功率</p>
-          <p class="ud-kpi__value">{{ successRate.toFixed(1) }}%</p>
+          <p class="ud-kpi__label">Token 消耗</p>
+          <p class="ud-kpi__value">{{ summary?.total_tokens != null ? (summary.total_tokens >= 1000000 ? (summary.total_tokens/1000000).toFixed(2)+'M' : (summary.total_tokens/1000).toFixed(1)+'K') : '—' }}</p>
           <div class="ud-kpi__change-row">
-            <span class="ud-kpi__sub">失败 {{ fmtNum(summary?.error_count) }} 次</span>
-            <template v-if="successRateChange !== null">
-              <span :class="['ud-change-badge ud-change-badge--sm', successRateChange >= 0 ? 'ud-change--good' : 'ud-change--bad']">
-                <el-icon size="11"><component :is="successRateChange >= 0 ? ArrowUp : ArrowDown" /></el-icon>
-                {{ successRateChange >= 0 ? '+' : '' }}{{ successRateChange.toFixed(2) }}pp
-              </span>
-            </template>
+            <span class="ud-kpi__sub">输入 {{ fmtTokensShort(summary?.prompt_tokens) }} · 输出 {{ fmtTokensShort(summary?.completion_tokens) }}</span>
           </div>
         </div>
       </div>
-      <!-- 活跃成员 / 个人视角下换成 Token 消耗 -->
-      <div class="ud-kpi-card ud-kpi-card--purple">
-        <div class="ud-kpi__icon"><el-icon size="20"><component :is="currentScope === 'user' ? List : User" /></el-icon></div>
-        <template v-if="currentScope !== 'user'">
-          <div class="ud-kpi__body">
-            <p class="ud-kpi__label">活跃成员</p>
-            <p class="ud-kpi__value">{{ summary?.user_count ?? '—' }}</p>
-            <div class="ud-kpi__change-row">
-              <span class="ud-kpi__sub">均次成本 {{ avgCostPerCall }}</span>
-            </div>
-          </div>
-        </template>
-        <template v-else>
-          <div class="ud-kpi__body">
-            <p class="ud-kpi__label">Token 消耗</p>
-            <p class="ud-kpi__value">{{ summary?.total_tokens != null ? (summary.total_tokens >= 1000000 ? (summary.total_tokens/1000000).toFixed(2)+'M' : (summary.total_tokens/1000).toFixed(1)+'K') : '—' }}</p>
-            <div class="ud-kpi__change-row">
-              <span class="ud-kpi__sub">均次成本 {{ avgCostPerCall }}</span>
-            </div>
-          </div>
-        </template>
-      </div>
-      <!-- 异常概览 -->
-      <div
-        class="ud-kpi-card ud-kpi-card--anomaly"
-        :class="(summary?.error_count || 0) > 0 ? 'ud-kpi-card--red' : 'ud-kpi-card--amber'"
-        style="cursor:pointer"
-        title="点击筛选失败调用"
-        @click="filterToErrors"
-      >
-        <div class="ud-kpi__icon"><el-icon size="20"><WarningFilled /></el-icon></div>
+      <!-- 活跃成员 -->
+      <div v-if="currentScope !== 'user'" class="ud-kpi-card ud-kpi-card--purple">
+        <div class="ud-kpi__icon"><el-icon size="20"><User /></el-icon></div>
         <div class="ud-kpi__body">
-          <p class="ud-kpi__label">失败调用</p>
-          <p class="ud-kpi__value">{{ fmtNum(summary?.error_count) }}</p>
+          <p class="ud-kpi__label">活跃成员</p>
+          <p class="ud-kpi__value">{{ summary?.user_count ?? '—' }}</p>
           <div class="ud-kpi__change-row">
-            <el-tooltip v-if="anomalyStats.failover > 0" content="故障转移次数（本页）" placement="bottom" :show-after="300">
-              <span class="ud-anomaly-chip ud-anomaly-chip--warn">切换 {{ anomalyStats.failover }}</span>
-            </el-tooltip>
-            <el-tooltip v-if="anomalyStats.highLatency > 0" content="耗时 >10s 的高延迟调用（本页）" placement="bottom" :show-after="300">
-              <span class="ud-anomaly-chip ud-anomaly-chip--orange">慢 {{ anomalyStats.highLatency }}</span>
-            </el-tooltip>
-            <span v-if="anomalyStats.failover === 0 && anomalyStats.highLatency === 0" class="ud-kpi__sub">
-              {{ (summary?.error_count || 0) === 0 ? '运行正常' : '点击查看' }}
-            </span>
+            <span class="ud-kpi__sub">均次成本 {{ avgCostPerCall }}</span>
           </div>
         </div>
       </div>
+
     </div>
 
     <!-- ══ 趋势图 ══ -->
@@ -354,6 +314,7 @@
                     <span :class="['ud-sort-arrow', rankSort.field === 'tokens' && rankSort.order === 'desc' ? 'ud-sort-arrow--active' : '']">▼</span>
                   </span>
                 </th>
+                <th v-if="currentScope === 'user'" class="col-models">常用模型</th>
               </tr>
             </thead>
             <tbody>
@@ -388,9 +349,22 @@
                   </template>
                   <template v-else>{{ row.user_count ?? '—' }}</template>
                 </td>
+                <td v-if="currentScope === 'user'" class="col-models">
+                  <div class="ud-model-tags">
+                    <el-tooltip
+                      v-for="(m, mi) in getUserModels(row.id)"
+                      :key="mi"
+                      :content="`${m.model} · $${m.est_cost_usd.toFixed(2)}`"
+                      placement="top"
+                    >
+                      <span class="ud-model-tag">{{ shortModelName(m.model) }}</span>
+                    </el-tooltip>
+                    <span v-if="getUserModels(row.id).length === 0" class="ud-model-tag ud-model-tag--empty">—</span>
+                  </div>
+                </td>
               </tr>
               <tr v-if="!summaryLoading && displayedBreakdown.length === 0">
-                <td colspan="6" class="ud-empty">暂无数据</td>
+                <td :colspan="currentScope === 'user' ? 7 : 6" class="ud-empty">暂无数据</td>
               </tr>
             </tbody>
           </table>
@@ -430,6 +404,43 @@
         </div>
       </div>
 
+      <!-- 异常排行榜 -->
+      <div v-if="errorBreakdown.length > 0" class="ud-section ud-section--error">
+        <div class="ud-section__header">
+          <span class="ud-section__title ud-section__title--error">
+            <el-icon class="ud-error-icon"><WarningFilled /></el-icon>
+            异常排行
+          </span>
+          <span class="ud-section__hint">Top {{ errorBreakdown.length }} · 按错误次数降序</span>
+        </div>
+        <div class="ud-table-wrap">
+          <table class="ud-rank-table ud-error-table">
+            <thead>
+              <tr>
+                <th class="col-rank">#</th>
+                <th class="col-name">{{ currentScope === 'user' ? '成员' : currentScope === 'dept' ? '部门' : currentScope === 'studio' ? '工作室' : '公司' }}</th>
+                <th class="col-num">错误次数</th>
+                <th class="col-num">错误率</th>
+                <th class="col-num">总调用</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(row, i) in errorBreakdown" :key="'err-' + (row.id ?? i)">
+                <td class="col-rank">
+                  <span :class="['ud-rank-num', i < 3 ? `ud-rank-num--err${i+1}` : '']">{{ i + 1 }}</span>
+                </td>
+                <td class="col-name">
+                  <span class="ud-row-name">{{ row.name || row.id || '(未归属)' }}</span>
+                </td>
+                <td class="col-num c-red fw6">{{ fmtNum(row.error_count) }}</td>
+                <td class="col-num">{{ errorRate(row) }}</td>
+                <td class="col-num">{{ fmtNum(row.call_count) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
     </div>
 
     <!-- ══ 调用明细 ══ -->
@@ -461,8 +472,8 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Chart, registerables } from 'chart.js'
 import {
-  Refresh, DataLine, Money, User, ArrowRight, ArrowUp, ArrowDown,
-  List, Search, WarningFilled,
+  Refresh, DataLine, Money, Coin, User, ArrowRight, ArrowUp, ArrowDown,
+  Search, WarningFilled,
 } from '@element-plus/icons-vue'
 import UsageRecordTable from '@/components/usage/UsageRecordTable.vue'
 import type { TraceData } from '@/components/usage/UsageTraceDrawer.vue'
@@ -611,22 +622,7 @@ const avgCostPerCall = computed(() => {
   return fmtCost((s.cost_estimate || 0) / s.call_count)
 })
 
-const successRate = computed(() => {
-  const s = summary.value
-  if (!s?.call_count) return 100
-  return ((s.call_count - (s.error_count ?? 0)) / s.call_count) * 100
-})
 
-// ── 成功率环比 ────────────────────────────────────────────────
-const successRateChange = computed(() => {
-  const s = summary.value
-  if (!s?.prev_call_count) return null
-  const prevErrors = s.prev_error_count ?? 0
-  const prevRate = s.prev_call_count > 0
-    ? ((s.prev_call_count - prevErrors) / s.prev_call_count) * 100
-    : 100
-  return successRate.value - prevRate
-})
 
 // ── 预算 ─────────────────────────────────────────────────────
 const budgetContext = ref<any[]>([])
@@ -697,6 +693,20 @@ function toggleSort(field: 'cost' | 'calls' | 'tokens') {
   }
 }
 
+// ── 异常排行榜（纯前端复用 breakdown 数据）─────────────────
+const errorBreakdown = computed(() => {
+  return breakdown.value
+    .filter((r: any) => r.error_count > 0)
+    .sort((a: any, b: any) => b.error_count - a.error_count)
+    .slice(0, 10)
+})
+
+/** 计算错误率: error_count / call_count */
+function errorRate(row: any): string {
+  if (!row.call_count) return '—'
+  return ((row.error_count / row.call_count) * 100).toFixed(1) + '%'
+}
+
 // 环比
 const costChange = computed(() => {
   const curr = summary.value?.cost_estimate ?? 0
@@ -755,12 +765,50 @@ async function loadSummary() {
     summary.value = res.data?.summary ?? null
     breakdown.value = res.data?.breakdown ?? []
     rankTotal.value = res.data?.total ?? 0
+
+    // 用户级别时并行加载 Top3 模型标签
+    if (currentScope.value === 'user') {
+      loadUserTopModels()
+    } else {
+      userTopModels.value = {}
+    }
   } catch {
     summary.value = null
     breakdown.value = []
   } finally {
     summaryLoading.value = false
   }
+}
+
+// ── 用户 Top3 模型标签 ──────────────────────────────────────
+const userTopModels = ref<Record<string, { model: string; est_cost_usd: number }[]>>({})
+
+async function loadUserTopModels() {
+  try {
+    const last = breadcrumbs.value[breadcrumbs.value.length - 1]
+    const params: Record<string, any> = {
+      from: dateRange.value[0],
+      to: dateRange.value[1],
+      top_n: 3,
+    }
+    if (last?.id && last.scope === 'studio') params.studio_id = last.id
+    if (last?.id && last.scope === 'dept') params.dept_id = last.id
+    const res = await http.get('/api/v1/usage/dashboard/user-top-models', { params })
+    userTopModels.value = res.data?.models ?? {}
+  } catch {
+    userTopModels.value = {}
+  }
+}
+
+/** 获取某用户的 Top3 模型列表 */
+function getUserModels(userId: string): { model: string; est_cost_usd: number }[] {
+  return userTopModels.value[userId] ?? []
+}
+
+/** 缩短模型名: gpt-4o-2024-08-06 → gpt-4o */
+function shortModelName(name: string): string {
+  // 去掉日期后缀和版本号，保留核心名
+  return name.replace(/-\d{4}-\d{2}-\d{2}$/, '').replace(/-(mini|nano|flash|thinking)$/, ' $1')
 }
 
 function drillDown(row: any) {
@@ -1014,6 +1062,14 @@ function renderTrendChart() {
 // ── 模型分布图 ────────────────────────────────────────────────
 const modelsLoading = ref(false)
 const modelsData    = ref<any[]>([])
+
+/** 模型选项列表（从已加载的模型数据提取名称） */
+const modelOptions = computed(() => {
+  return modelsData.value
+    .map((m: any) => m.model)
+    .filter((name: string) => name && name.trim())
+    .sort((a: string, b: string) => a.localeCompare(b))
+})
 const modelCanvasRef = ref<HTMLCanvasElement | null>(null)
 let modelChartInst: Chart | null = null
 
@@ -1236,17 +1292,7 @@ function reloadLogs() {
   loadLogs()
 }
 
-// ── 异常聚合（本页统计） ─────────────────────────────────────
-const anomalyStats = computed(() => ({
-  failover:    logRows.value.filter(r => r.failover_used).length,
-  highLatency: logRows.value.filter(r => (r.duration_ms ?? 0) > 10000).length,
-}))
 
-function filterToErrors() {
-  filterStatus.value = 'error'
-  showFilters.value = true
-  loadAll()
-}
 
 async function onUserNameChange() {
   const last = breadcrumbs.value[breadcrumbs.value.length - 1]
@@ -1303,6 +1349,12 @@ const fmtTokens = (n?: number | null) => {
   if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B'
   if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'
   if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K'
+  return String(n)
+}
+const fmtTokensShort = (n?: number | null) => {
+  if (!n) return '0'
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M'
+  if (n >= 1e3) return (n / 1e3).toFixed(0) + 'K'
   return String(n)
 }
 const fmtCost = (v?: number | null): string => {
@@ -1515,6 +1567,7 @@ watch(currency, async () => {
 .ud-kpi-card--amber::before { background: #e6a23c; }
 .ud-kpi-card--red::before   { background: #f56c6c; }
 .ud-kpi-card--purple::before { background: #8B5CF6; }
+.ud-kpi-card--cyan::before { background: #06B6D4; }
 
 .ud-kpi__icon {
   width: 40px; height: 40px; border-radius: 10px;
@@ -1526,6 +1579,7 @@ watch(currency, async () => {
 .ud-kpi-card--amber  .ud-kpi__icon { background: rgba(230,162,60,0.12); color: #e6a23c; }
 .ud-kpi-card--red    .ud-kpi__icon { background: rgba(245,108,108,0.12); color: #f56c6c; }
 .ud-kpi-card--purple .ud-kpi__icon { background: rgba(139,92,246,0.12); color: #8B5CF6; }
+.ud-kpi-card--cyan .ud-kpi__icon { background: rgba(6,182,212,0.12); color: #06B6D4; }
 
 .ud-kpi__body { flex: 1; min-width: 0; }
 .ud-kpi__label { font-size: 12px; color: var(--ud-muted); margin: 0 0 4px; }
@@ -1586,15 +1640,6 @@ watch(currency, async () => {
 .ud-section__title { font-size: 14px; font-weight: 600; color: var(--el-text-color-primary); }
 .ud-section__count { font-size: 12px; color: var(--ud-muted); }
 .ud-section__hint  { font-size: 12px; color: var(--ud-faint); }
-
-/* 异常聚合卡片 chips */
-.ud-anomaly-chip {
-  display: inline-flex; align-items: center;
-  padding: 2px 8px; border-radius: 20px;
-  font-size: 11px; font-weight: 600; white-space: nowrap; cursor: default;
-}
-.ud-anomaly-chip--warn   { background: rgba(230,162,60,0.18); color: #b87112; }
-.ud-anomaly-chip--orange { background: rgba(245,108,108,0.18); color: #c0392b; }
 
 /* 趋势图头部双控件行 */
 .ud-trend-header-ctrls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -1762,6 +1807,36 @@ watch(currency, async () => {
 .col-rank { width: 40px; text-align: center; }
 .col-name { min-width: 120px; }
 .col-num  { text-align: right; white-space: nowrap; }
+.col-models { min-width: 180px; }
+
+/* ── 模型标签 ── */
+.ud-model-tags { display: flex; gap: 4px; flex-wrap: wrap; }
+.ud-model-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+  border: 1px solid var(--el-color-primary-light-7);
+  white-space: nowrap;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+  transition: background .15s, border-color .15s;
+}
+.ud-model-tag:hover {
+  background: var(--el-color-primary-light-8);
+  border-color: var(--el-color-primary-light-5);
+}
+.ud-model-tag--empty {
+  background: var(--el-fill-color);
+  color: var(--ud-faint);
+  border-color: transparent;
+}
 
 .ud-rank-num {
   display: inline-flex; align-items: center; justify-content: center;
@@ -1783,6 +1858,15 @@ watch(currency, async () => {
 .ud-bar-fill--cost { background: linear-gradient(90deg, #67c23a, #95d475); }
 .ud-bar-pct  { font-size: 12px; color: var(--ud-muted); white-space: nowrap; min-width: 36px; }
 .ud-empty    { padding: 32px; text-align: center; color: var(--ud-faint); }
+
+/* ── 异常排行榜 ── */
+.ud-section--error { border: 1px solid #fde2e2; }
+.ud-section__title--error { color: #f56c6c; display: flex; align-items: center; gap: 6px; }
+.ud-error-icon { color: #f56c6c; font-size: 16px; }
+.ud-error-table th { background: #fef0f0; }
+.ud-rank-num--err1 { background: #f56c6c; color: #fff; }
+.ud-rank-num--err2 { background: #f89898; color: #fff; }
+.ud-rank-num--err3 { background: #fab6b6; color: #7f1d1d; }
 
 /* ── 面包屑 ── */
 /* 个人视角提示条 */

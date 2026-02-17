@@ -94,7 +94,11 @@
       <LongTailAlerts
         :models-data="modelsData"
         :currency="currency"
+        :sort-by="ltSortBy"
+        :sort-order="ltSortOrder"
         @model-click="handleModelClick"
+        @update:sort-by="ltSortBy = $event"
+        @update:sort-order="ltSortOrder = $event"
       />
     </div>
     <!-- Phase B: User Detail Panel -->
@@ -216,6 +220,10 @@ const filterUserName = ref('')
 const filterModel    = ref('')
 const filterStatus   = ref('')
 const showFilters    = ref(true)
+
+// ── 长尾告警排序 ──
+const ltSortBy    = ref<'calls' | 'cost' | 'error_rate'>('calls')
+const ltSortOrder = ref<'asc' | 'desc'>('desc')
 
 const activeFilterCount = computed(() =>
   [filterUserName.value, filterModel.value, filterStatus.value].filter(Boolean).length

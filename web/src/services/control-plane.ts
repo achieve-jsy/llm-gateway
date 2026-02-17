@@ -807,7 +807,9 @@ export interface PerformanceMember {
   req_count: number
   p50_ms: number
   p95_ms: number
+  ttft_p50_ms: number
   success_rate: number
+  avg_tps: number
 }
 
 export interface PerformanceItem {
@@ -825,6 +827,7 @@ export interface PerformanceItem {
   pct_in_24h_p50?: number | null
   err_429: number
   err_5xx: number
+  avg_tps: number
   members?: PerformanceMember[]
 }
 

@@ -82,11 +82,23 @@
                     <span v-if="group.model_count" class="model-count">{{ group.model_count }} 个模型</span>
                     <template v-if="group.perf">
                       <span class="meta-sep">·</span>
-                      <span class="meta-metric" :class="rateClass(group.perf.success_rate)">
-                        {{ (group.perf.success_rate * 100).toFixed(1) }}%
-                      </span>
+                      <el-tooltip content="成功率" placement="top" :show-after="500">
+                        <span class="meta-metric" :class="rateClass(group.perf.success_rate)">
+                          {{ (group.perf.success_rate * 100).toFixed(1) }}%
+                        </span>
+                      </el-tooltip>
                       <span class="meta-sep">·</span>
-                      <span class="meta-metric">{{ group.perf.p50_ms.toFixed(0) }}ms</span>
+                      <el-tooltip content="首 Token 响应时间 (TTFT) P50" placement="top" :show-after="500">
+                        <span class="meta-metric">TTFT {{ group.perf.ttft_p50_ms.toFixed(0) }}ms</span>
+                      </el-tooltip>
+                      <span class="meta-sep">·</span>
+                      <el-tooltip content="总延迟 P50（从请求到响应完成）" placement="top" :show-after="500">
+                        <span class="meta-metric">延迟 {{ group.perf.p50_ms.toFixed(0) }}ms</span>
+                      </el-tooltip>
+                      <span v-if="group.perf.avg_tps > 0" class="meta-sep">·</span>
+                      <el-tooltip v-if="group.perf.avg_tps > 0" content="平均每秒输出 Token 数 (Tokens/s)" placement="top" :show-after="500">
+                        <span class="meta-metric tps-metric">{{ group.perf.avg_tps.toFixed(1) }} tok/s</span>
+                      </el-tooltip>
                       <span class="meta-metric-dim">{{ group.req_count }} 请求</span>
                     </template>
                   </div>
@@ -117,6 +129,10 @@
                       <span class="dm-label">首 Token P50 / P95</span>
                       <span class="dm-value">{{ formatMs(group.perf.ttft_p50_ms) }} / {{ formatMs(group.perf.ttft_p95_ms) }}</span>
                     </div>
+                    <div v-if="group.perf.avg_tps > 0" class="detail-metric">
+                      <span class="dm-label">输出速率</span>
+                      <span class="dm-value">{{ group.perf.avg_tps.toFixed(1) }} tokens/s</span>
+                    </div>
                     <div v-if="group.perf.pct_in_24h_p50 != null" class="detail-metric">
                       <span class="dm-label">24h 延迟水平</span>
                       <span class="dm-value" :class="pctClass(group.perf.pct_in_24h_p50)">
@@ -144,7 +160,7 @@
                         <div class="member-bar-fill" :style="{ width: (member.traffic_pct * 100).toFixed(0) + '%' }"></div>
                       </div>
                       <span class="member-traffic">{{ (member.traffic_pct * 100).toFixed(0) }}%</span>
-                      <span class="member-metrics">P50 {{ formatMs(member.p50_ms) }} · 成功率 {{ formatPct(member.success_rate) }}</span>
+                      <span class="member-metrics">TTFT {{ formatMs(member.ttft_p50_ms) }} · 延迟 {{ formatMs(member.p50_ms) }}<template v-if="member.avg_tps > 0"> · {{ member.avg_tps.toFixed(1) }} tok/s</template> · 成功率 {{ formatPct(member.success_rate) }}</span>
                     </div>
                   </div>
                 </div>
@@ -176,7 +192,11 @@
                       {{ formatPct(item.success_rate) }}
                     </span>
                     <span class="meta-sep">·</span>
-                    <span class="meta-metric">{{ formatMs(item.ttft_p50_ms) }}</span>
+                    <span class="meta-metric">TTFT {{ formatMs(item.ttft_p50_ms) }}</span>
+                    <span class="meta-sep">·</span>
+                    <span class="meta-metric">延迟 {{ formatMs(item.p50_ms) }}</span>
+                    <span v-if="item.avg_tps > 0" class="meta-sep">·</span>
+                    <span v-if="item.avg_tps > 0" class="meta-metric tps-metric">{{ item.avg_tps.toFixed(1) }} tok/s</span>
                   </div>
                 </div>
 
@@ -207,6 +227,10 @@
                     <div class="detail-metric">
                       <span class="dm-label">首 Token P50 / P95</span>
                       <span class="dm-value">{{ formatMs(item.ttft_p50_ms) }} / {{ formatMs(item.ttft_p95_ms) }}</span>
+                    </div>
+                    <div v-if="item.avg_tps > 0" class="detail-metric">
+                      <span class="dm-label">输出速率</span>
+                      <span class="dm-value">{{ item.avg_tps.toFixed(1) }} tokens/s</span>
                     </div>
                     <div v-if="item.pct_in_24h_p50 != null" class="detail-metric">
                       <span class="dm-label">24h 延迟水平</span>
@@ -341,6 +365,7 @@ interface DisplayItem {
   failover_count: number
   err_429: number
   err_5xx: number
+  avg_tps: number
   members?: any[]
 }
 
@@ -371,6 +396,7 @@ const displayItems = computed((): DisplayItem[] => {
           failover_count: perf.failover_count,
           err_429: perf.err_429,
           err_5xx: perf.err_5xx,
+          avg_tps: perf.avg_tps,
           members: perf.members
         }
       })
@@ -388,6 +414,7 @@ const displayItems = computed((): DisplayItem[] => {
       failover_count: item.failover_count,
       err_429: item.err_429,
       err_5xx: item.err_5xx,
+      avg_tps: item.avg_tps,
       members: item.members
     }))
   }
@@ -828,6 +855,7 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
 .meta-metric.rate-good { color: var(--perf-good); }
 .meta-metric.rate-fair { color: var(--perf-fair); }
 .meta-metric.rate-poor { color: var(--perf-poor); }
+.meta-metric.tps-metric { color: #6366f1; font-weight: 500; }
 .meta-metric-dim {
   font-size: 11px;
   color: var(--el-text-color-secondary);

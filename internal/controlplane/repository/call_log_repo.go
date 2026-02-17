@@ -28,6 +28,7 @@ type PerformanceGroupRow struct {
 	FailoverCount int     `gorm:"column:failover_count"`
 	Err429        int     `gorm:"column:err_429"`
 	Err5xx        int     `gorm:"column:err_5xx"`
+	AvgTps        float64 `gorm:"column:avg_tps"`
 	// model view specific
 	Model    string `gorm:"column:model"`
 	Provider string `gorm:"column:provider"`
@@ -42,6 +43,8 @@ type PerformanceMemberRow struct {
 	P50Ms       int     `gorm:"column:p50_ms"`
 	P95Ms       int     `gorm:"column:p95_ms"`
 	SuccessRate float64 `gorm:"column:success_rate"`
+	AvgTps      float64 `gorm:"column:avg_tps"`
+	TTFTP50Ms   int     `gorm:"column:ttft_p50_ms"`
 }
 
 // windowToInterval 将时间窗口参数转换为 PostgreSQL INTERVAL 字符串
@@ -49,8 +52,12 @@ func windowToInterval(window string) string {
 	switch window {
 	case "6h":
 		return "6 hours"
+	case "12h":
+		return "12 hours"
 	case "24h":
 		return "24 hours"
+	case "7d":
+		return "7 days"
 	default:
 		return "1 hour"
 	}
@@ -84,7 +91,11 @@ func (r *CallLogRepo) GetPerformanceStats(window, view, search string, offset, l
 				COALESCE((percentile_cont(0.95) WITHIN GROUP (ORDER BY COALESCE(first_token_ms, 0)))::int, 0) AS ttft_p95_ms,
 				SUM(CASE WHEN failover_used THEN 1 ELSE 0 END)::int AS failover_count,
 				SUM(CASE WHEN status = 429 THEN 1 ELSE 0 END)::int AS err_429,
-				SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END)::int AS err_5xx
+				SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END)::int AS err_5xx,
+				CASE WHEN SUM(GREATEST(duration_ms - COALESCE(first_token_ms, 0), 0)) > 0
+					THEN ROUND(SUM(completion_tokens)::numeric / (SUM(GREATEST(duration_ms - COALESCE(first_token_ms, 0), 0)) / 1000.0), 1)
+					ELSE 0
+				END AS avg_tps
 			FROM call_logs
 			WHERE ts > now() - INTERVAL '%s'
 				%s
@@ -117,7 +128,11 @@ func (r *CallLogRepo) GetPerformanceStats(window, view, search string, offset, l
 			COALESCE((percentile_cont(0.95) WITHIN GROUP (ORDER BY COALESCE(first_token_ms, 0)))::int, 0) AS ttft_p95_ms,
 			SUM(CASE WHEN failover_used THEN 1 ELSE 0 END)::int AS failover_count,
 			SUM(CASE WHEN status = 429 THEN 1 ELSE 0 END)::int AS err_429,
-			SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END)::int AS err_5xx
+			SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END)::int AS err_5xx,
+			CASE WHEN SUM(GREATEST(duration_ms - COALESCE(first_token_ms, 0), 0)) > 0
+				THEN ROUND(SUM(completion_tokens)::numeric / (SUM(GREATEST(duration_ms - COALESCE(first_token_ms, 0), 0)) / 1000.0), 1)
+				ELSE 0
+			END AS avg_tps
 		FROM call_logs
 		WHERE ts > now() - INTERVAL '%s'
 			AND routed_via_group = true
@@ -188,7 +203,12 @@ func (r *CallLogRepo) GetGroupMembers(window, groupName string) ([]PerformanceMe
 			(COUNT(*) * 1.0 / SUM(COUNT(*)) OVER ())::float AS traffic_pct,
 			COALESCE((percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms))::int, 0) AS p50_ms,
 			COALESCE((percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms))::int, 0) AS p95_ms,
-			(SUM(CASE WHEN status BETWEEN 200 AND 299 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*), 0))::float AS success_rate
+			(SUM(CASE WHEN status BETWEEN 200 AND 299 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*), 0))::float AS success_rate,
+			COALESCE((percentile_cont(0.5) WITHIN GROUP (ORDER BY COALESCE(first_token_ms, 0)))::int, 0) AS ttft_p50_ms,
+			CASE WHEN SUM(GREATEST(duration_ms - COALESCE(first_token_ms, 0), 0)) > 0
+				THEN ROUND(SUM(completion_tokens)::numeric / (SUM(GREATEST(duration_ms - COALESCE(first_token_ms, 0), 0)) / 1000.0), 1)
+				ELSE 0
+			END AS avg_tps
 		FROM call_logs
 		WHERE ts > now() - INTERVAL '%s'
 			AND routed_via_group = true

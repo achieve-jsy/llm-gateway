@@ -1,0 +1,7 @@
+-- NOTE: This migration is NOT perfectly reversible.
+-- The "dept:" prefix was a legacy format. Once cleaned, we cannot
+-- distinguish which records originally had the prefix.
+-- For rollback, check affected count before running UP:
+--   SELECT COUNT(*) FROM call_logs WHERE dept_id LIKE 'dept:%';
+--   SELECT COUNT(*) FROM usage_daily WHERE dept_id LIKE 'dept:%';
+-- No automated rollback is provided.

@@ -77,7 +77,7 @@ onMounted(async () => {
 .detail-back { margin-bottom: clamp(1rem, 2vw, 1.5rem); }
 
 .detail-article {
-  background: #fff;
+  background: var(--bg-surface);
   border: 1px solid var(--el-border-color-light);
   border-radius: clamp(0.75rem, 1.5vw, 1rem);
   padding: clamp(1.25rem, 3vw, 2.5rem);
@@ -99,13 +99,13 @@ onMounted(async () => {
   font-weight: 600;
 }
 
-.cat--system { background: #EAF7EC; color: #36B34E; }
+.cat--system { background: var(--color-success-bg); color: var(--brand-green); }
 .cat--feature { background: #EDE7F6; color: #5E35B1; }
-.cat--alert { background: #FFF3E0; color: #E65100; }
+.cat--alert { background: var(--color-warning-bg); color: var(--el-color-warning); }
 
-.level--info { background: #EAF7EC; color: #36B34E; }
-.level--warning { background: #FFF3E0; color: #E65100; }
-.level--critical { background: #FFEBEE; color: #C62828; }
+.level--info { background: var(--color-success-bg); color: var(--brand-green); }
+.level--warning { background: var(--color-warning-bg); color: var(--el-color-warning); }
+.level--critical { background: var(--color-danger-bg); color: var(--color-danger); }
 
 .detail-dot { color: var(--el-text-color-placeholder); }
 
@@ -117,7 +117,7 @@ onMounted(async () => {
 .detail-title {
   font-size: clamp(1.25rem, 3vw, 1.75rem);
   font-weight: 800;
-  color: #1a1a1a;
+  color: var(--text-primary);
   margin: 0 0 0.5rem 0;
   line-height: 1.4;
   word-break: break-word;

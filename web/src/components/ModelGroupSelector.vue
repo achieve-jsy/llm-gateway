@@ -287,11 +287,11 @@ function onConfirm() {
 
 @media (max-width: 768px) {
   :deep(.el-dialog) {
-    width: 95% !important;
-    max-width: 95vw !important;
+    width: 95%;
+    max-width: 95vw;
   }
   :deep(.el-dialog .el-dialog__body) {
-    padding: 12px !important;
+    padding: 12px;
   }
   .selector-item {
     flex-wrap: wrap;

@@ -676,9 +676,11 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		usageH2 := obshandler.NewUsageHandler(obssvc.NewRollupService(db), db)
 		adminGroup.GET("/usage/dashboard", guard(rbac.PermUsageViewScoped), usageH2.GetDashboard)
 		adminGroup.GET("/usage/dashboard/trend", guard(rbac.PermUsageViewScoped), usageH2.DashboardTrend)
-		adminGroup.GET("/usage/dashboard/models", guard(rbac.PermUsageViewScoped), usageH2.DashboardModels)
-		adminGroup.GET("/usage/dashboard/users", guard(rbac.PermUsageViewScoped), usageH2.DashboardUsers)
+		adminGroup.GET("/usage/dashboard/models", guard(rbac.PermUsageViewScoped), usageH2.DashboardModelsEnhanced)
+		adminGroup.GET("/usage/dashboard/users", guard(rbac.PermUsageViewScoped), usageH2.DashboardUsersEnhanced)
 		adminGroup.GET("/usage/dashboard/user-top-models", guard(rbac.PermUsageViewScoped), usageH2.DashboardUserTopModels)
+		adminGroup.GET("/usage/dashboard/user-detail", guard(rbac.PermUsageViewScoped), usageH2.DashboardUserDetail)
+		adminGroup.GET("/usage/dashboard/model-detail", guard(rbac.PermUsageViewScoped), usageH2.DashboardModelDetail)
 		adminGroup.GET("/usage/scoped/logs", guard(rbac.PermUsageViewScoped), usageH2.ScopedLogs)
 	}
 
@@ -723,7 +725,9 @@ func applyOIDCFromDB(cfg *auth.Config, settingsSvc *service.SettingsService) {
 		cfg.ClientID = settings.OIDCClientID
 	}
 	if settings.OIDCClientSecret != "" {
-		cfg.ClientSecret = settings.OIDCClientSecret
+		if raw := settingsSvc.GetOIDCClientSecret(ctx); raw != "" {
+			cfg.ClientSecret = raw
+		}
 	}
 	if settings.OIDCRedirectURL != "" {
 		cfg.RedirectURI = settings.OIDCRedirectURL

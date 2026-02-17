@@ -43,10 +43,6 @@
           <el-icon><Histogram /></el-icon>
           <template #title>模型组健康</template>
         </el-menu-item>
-        <el-menu-item index="/admin/performance">
-          <el-icon><TrendCharts /></el-icon>
-          <template #title>模型性能</template>
-        </el-menu-item>
         <el-menu-item v-if="authStore.isManager" index="/admin/expansion-requests">
           <el-icon><TrendCharts /></el-icon>
           <template #title>扩容申请</template>
@@ -161,7 +157,8 @@
         <AnnouncementBanner v-if="authStore.isLoggedIn" ref="bannerRef" />
         <NotificationBell v-if="authStore.isLoggedIn" ref="notificationBellRef" />
         <span class="theme-toggle" @click="toggleTheme" :title="isDark ? '切换到浅色模式' : '切换到深色模式'">
-          {{ isDark ? '☀️' : '🌙' }}
+          <Sunny v-if="isDark" class="theme-icon" />
+          <Moon v-else class="theme-icon" />
         </span>
         <el-dropdown v-if="authStore.isLoggedIn" trigger="click" @command="handleUserCommand">
           <div class="user-info">
@@ -216,7 +213,7 @@ import { onMounted, computed, ref, watch, onUnmounted } from 'vue'
 import { isDark, toggleTheme } from './composables/useTheme'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
-import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close, Menu, Wallet, Lock, TrendCharts, Document, DataBoard } from '@element-plus/icons-vue'
+import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close, Menu, Wallet, Lock, TrendCharts, Document, DataBoard, Sunny, Moon } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/common/NotificationBell.vue'
 import AnnouncementBanner from '@/components/common/AnnouncementBanner.vue'
 import AnnouncementPopup from '@/components/common/AnnouncementPopup.vue'

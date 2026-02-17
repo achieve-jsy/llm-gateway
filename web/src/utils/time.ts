@@ -29,3 +29,13 @@ export function fmtDuration(ms?: number | null): string {
   if (ms < 1000) return `${ms}ms`
   return `${(ms / 1000).toFixed(1)}s`
 }
+
+/**
+ * 格式化毫秒为紧凑时长（性能指标专用）
+ * ≥1000ms 显示为秒（如 "1.2s"），否则显示毫秒（如 "856ms"）
+ * 与 fmtDuration 逻辑一致，但不接受 null
+ */
+export function formatMs(ms: number): string {
+  if (ms >= 1000) return (ms / 1000).toFixed(1) + 's'
+  return ms + 'ms'
+}

@@ -97,7 +97,7 @@ defineExpose({ refresh: loadBanners })
 .ticker-icon { font-size: 13px; flex-shrink: 0; }
 
 .ticker-tag {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   padding: 1px 6px;
   border-radius: 3px;
@@ -105,9 +105,9 @@ defineExpose({ refresh: loadBanners })
   white-space: nowrap;
 }
 
-.tag--info    { background: rgba(54,179,78,0.12); color: #1F8A3B; }
-.tag--warning { background: rgba(245,124,0,0.12);  color: #E65100; }
-.tag--critical{ background: rgba(211,47,47,0.12);  color: #C62828; }
+.tag--info    { background: rgba(54,179,78,0.12); color: var(--brand-green-deep); }
+.tag--warning { background: rgba(245,124,0,0.12);  color: var(--el-color-warning); }
+.tag--critical{ background: rgba(211,47,47,0.12);  color: var(--color-danger); }
 
 .ticker-track-wrap {
   flex: 1;
@@ -148,7 +148,7 @@ defineExpose({ refresh: loadBanners })
 }
 
 .ticker-count {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--el-text-color-placeholder);
   min-width: 26px;
   text-align: center;

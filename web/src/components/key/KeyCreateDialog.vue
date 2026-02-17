@@ -230,8 +230,8 @@ onMounted(() => {
 
 @media (max-width: 768px) {
   :deep(.el-dialog) {
-    width: 95% !important;
-    max-width: 95vw !important;
+    width: 95%;
+    max-width: 95vw;
   }
   .key-display {
     flex-direction: column;

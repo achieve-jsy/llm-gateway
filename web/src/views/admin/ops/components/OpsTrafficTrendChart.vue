@@ -260,68 +260,14 @@ function formatNumber(num: number): string {
 </script>
 
 <style scoped>
-.ops-chart-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-3xl);
-  padding: var(--space-6);
-}
 
-.ops-chart-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-4);
-  gap: var(--space-4);
-  flex-wrap: wrap;
-}
 
-.ops-chart-title {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  color: var(--text-primary);
-  margin: 0;
-  white-space: nowrap;
-}
 
-.ops-chart-icon { width: 16px; height: 16px; }
-.ops-chart-icon--blue { color: #3b82f6; }
-.ops-chart-icon--red { color: #ef4444; }
-.ops-chart-icon--purple { color: #8b5cf6; }
-.ops-chart-icon--orange { color: #f97316; }
 
-.ops-chart-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-}
 
-.ops-chart-legend {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  font-size: var(--font-size-xs);
-  color: var(--text-secondary);
-}
 
-.ops-chart-btns {
-  display: flex;
-  gap: var(--space-2);
-}
 
-.ops-legend-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
 
-.ops-legend-dot {
-  width: 8px; height: 8px; border-radius: 50%;
-}
 
 .ops-group-chips {
   display: flex;
@@ -335,24 +281,7 @@ function formatNumber(num: number): string {
   transition: all 0.15s ease;
 }
 
-.ops-chart-body {
-  height: 320px;
-}
 
 /* Empty state */
-.ops-chart-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-3);
-  height: 100%;
-  color: var(--text-placeholder);
-  font-size: var(--font-size-sm);
-}
 
-.ops-chart-empty-icon {
-  color: var(--text-placeholder);
-  opacity: 0.5;
-}
 </style>

@@ -169,12 +169,6 @@ async function fetchData() {
 </script>
 
 <style scoped>
-.ops-modal-filters {
-  display: flex;
-  gap: 8px;
-  margin-bottom: var(--space-3, 12px);
-  flex-wrap: wrap;
-}
 
 .ops-filter-select {
   width: 140px;
@@ -184,49 +178,15 @@ async function fetchData() {
   width: 200px;
 }
 
-.ops-modal-table {
-  overflow-x: auto;
-  max-height: 60vh;
-}
 
-.ops-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--font-size-xs, 12px);
-}
 
-.ops-table th {
-  text-align: left;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border-light, #e5e7eb);
-  color: var(--text-secondary, #64748b);
-  font-weight: var(--font-weight-semibold);
-  white-space: nowrap;
-  position: sticky;
-  top: 0;
-  background: var(--bg-card, #fff);
-}
 
-.ops-table td {
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border-light, #e5e7eb);
-  color: var(--text-primary, #1e293b);
-}
 
-.ops-table-row {
-  cursor: pointer;
-  transition: background 0.15s;
-}
 
 .ops-table-row:hover {
   background: var(--bg-subtle, #f8fafc);
 }
 
-.ops-td-time {
-  white-space: nowrap;
-  color: var(--text-secondary, #64748b);
-  font-size: var(--font-size-xxs);
-}
 
 .ops-td-msg {
   max-width: 280px;
@@ -236,17 +196,5 @@ async function fetchData() {
   color: #ef4444;
 }
 
-.ops-modal-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 160px;
-  color: var(--text-placeholder, #94a3b8);
-}
 
-.ops-pagination {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: var(--space-3, 12px);
-}
 </style>

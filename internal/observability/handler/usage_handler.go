@@ -896,6 +896,14 @@ func parseDateRangeFromTo(c *gin.Context) (from, to time.Time, ok bool) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid to date"})
 		return
 	}
+	if from.After(to) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "from must not be after to"})
+		return
+	}
+	if to.Sub(from) > 90*24*time.Hour {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "date range must not exceed 90 days"})
+		return
+	}
 	ok = true
 	return
 }

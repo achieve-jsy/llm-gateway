@@ -62,7 +62,7 @@
               <span class="item-dot" :class="`dot--${item.level}`"></span>
               <div class="item-body">
                 <div class="item-header" @click="expandedId = expandedId === item.id ? '' : item.id">
-                  <span class="item-category-icon">{{ annCategoryIcon(item.category) }}</span>
+                  <component :is="annCategoryIcon(item.category)" class="item-category-icon" />
                   <span class="item-title">{{ item.title }}</span>
                   <span class="item-time">{{ relativeTime(item.published_at) }}</span>
                 </div>
@@ -93,7 +93,7 @@
             >
               <div class="item-body">
                 <div class="item-header">
-                  <span class="item-category-icon">{{ annCategoryIcon(item.category) }}</span>
+                  <component :is="annCategoryIcon(item.category)" class="item-category-icon" />
                   <span class="item-title">{{ item.title }}</span>
                   <span class="item-time">{{ relativeTime(item.published_at) }}</span>
                 </div>
@@ -125,7 +125,7 @@
               <span class="item-dot" :class="`dot--${item.level}`"></span>
               <div class="item-body">
                 <div class="item-header" @click="expandedId = expandedId === item.id ? '' : item.id">
-                  <span class="item-category-icon">{{ notifTypeIcon(item.type) }}</span>
+                  <component :is="notifTypeIcon(item.type)" class="item-category-icon" />
                   <span class="item-title">{{ item.title }}</span>
                   <span class="item-time">{{ relativeTime(item.created_at) }}</span>
                 </div>
@@ -155,7 +155,7 @@
             >
               <div class="item-body">
                 <div class="item-header">
-                  <span class="item-category-icon">{{ notifTypeIcon(item.type) }}</span>
+                  <component :is="notifTypeIcon(item.type)" class="item-category-icon" />
                   <span class="item-title">{{ item.title }}</span>
                   <span class="item-time">{{ relativeTime(item.created_at) }}</span>
                 </div>
@@ -176,7 +176,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { Bell } from '@element-plus/icons-vue'
+import { Bell, Setting, StarFilled, WarningFilled, CircleCheckFilled, CircleCloseFilled } from '@element-plus/icons-vue'
 import {
   getUnreadAnnouncements, getUnreadAnnouncementCount, getReadHistoryAnnouncements, markAnnouncementRead,
   getUnreadNotifications, getUnreadNotificationCount, getNotificationHistory, markNotificationRead, markAllNotificationsRead,
@@ -209,11 +209,12 @@ const expandedId = ref('')
 const bellRef = ref<HTMLElement>()
 
 // ── 图标 ─────────────────────────────────────────────────────────────────────
-const annCategoryIcons: Record<string, string> = { system: '🔧', feature: '✨', alert: '📣' }
-function annCategoryIcon(c: string) { return annCategoryIcons[c] || '📢' }
+import type { Component } from 'vue'
+const annCategoryIcons: Record<string, Component> = { system: Setting, feature: StarFilled, alert: Bell }
+function annCategoryIcon(c: string): Component { return annCategoryIcons[c] || Bell }
 
-const notifTypeIcons: Record<string, string> = { budget_alert: '⚠️', expansion_approved: '✅', expansion_rejected: '❌' }
-function notifTypeIcon(t: string) { return notifTypeIcons[t] || '🔔' }
+const notifTypeIcons: Record<string, Component> = { budget_alert: WarningFilled, expansion_approved: CircleCheckFilled, expansion_rejected: CircleCloseFilled }
+function notifTypeIcon(t: string): Component { return notifTypeIcons[t] || Bell }
 
 function truncate(text: string, max: number) { return text.length > max ? text.slice(0, max) + '...' : text }
 

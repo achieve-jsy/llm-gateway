@@ -89,11 +89,11 @@
                       </el-tooltip>
                       <span class="meta-sep">·</span>
                       <el-tooltip content="首 Token 响应时间 (TTFT) P50" placement="top" :show-after="500">
-                        <span class="meta-metric">TTFT {{ group.perf.ttft_p50_ms.toFixed(0) }}ms</span>
+                        <span class="meta-metric">TTFT {{ formatMs(group.perf.ttft_p50_ms) }}</span>
                       </el-tooltip>
                       <span class="meta-sep">·</span>
                       <el-tooltip content="总延迟 P50（从请求到响应完成）" placement="top" :show-after="500">
-                        <span class="meta-metric">延迟 {{ group.perf.p50_ms.toFixed(0) }}ms</span>
+                        <span class="meta-metric">延迟 {{ formatMs(group.perf.p50_ms) }}</span>
                       </el-tooltip>
                       <span v-if="group.perf.avg_tps > 0" class="meta-sep">·</span>
                       <el-tooltip v-if="group.perf.avg_tps > 0" content="平均每秒输出 Token 数 (Tokens/s)" placement="top" :show-after="500">
@@ -300,6 +300,7 @@ import HealthTimeline from '@/components/admin/HealthTimeline.vue'
 import { groupsApi } from '@/api/groups'
 import type { GroupEntitlement, GroupListItem } from '@/types/group'
 import { useAuthStore } from '@/stores/auth'
+import { formatMs } from '@/utils/time'
 
 const authStore = useAuthStore()
 
@@ -663,10 +664,7 @@ function strategyTagType(strategy: string): 'info' | 'success' | 'warning' | 'pr
   }
 }
 
-function formatMs(ms: number): string {
-  if (ms >= 1000) return (ms / 1000).toFixed(1) + 's'
-  return ms + 'ms'
-}
+
 
 function formatPct(rate: number): string { return (rate * 100).toFixed(1) + '%' }
 

@@ -263,6 +263,7 @@ function onPageChange(val: string) {
 import { groupsApi } from '@/api/groups'
 import type { GroupEntitlement, GroupListItem } from '@/types/group'
 import { useAuthStore } from '@/stores/auth'
+import { formatMs } from '@/utils/time'
 
 const authStore = useAuthStore()
 
@@ -554,10 +555,7 @@ onBeforeUnmount(() => {
   if (observer) { observer.disconnect(); observer = null }
 })
 
-function formatMs(ms: number): string {
-  if (ms >= 1000) return (ms / 1000).toFixed(1) + 's'
-  return ms + 'ms'
-}
+
 
 function formatPct(rate: number): string {
   return (rate * 100).toFixed(1) + '%'

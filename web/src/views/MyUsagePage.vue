@@ -15,7 +15,7 @@
           <el-radio-button value="CNY">¥ CNY</el-radio-button>
         </el-radio-group>
         <el-button :loading="statsLoading" :icon="Refresh" circle size="small" title="刷新" @click="loadAll" />
-        <el-button :icon="Download" size="small" :disabled="!logRows.length" @click="handleExport">导出 ({{ logRows.length }})</el-button>
+
       </div>
     </div>
 
@@ -151,25 +151,23 @@
     </div>
 
     <!-- ═══════════════════════════════════════════
-         ② 调用明细
+         ② 调用明细 (UsageLogSection 复合组件)
     ═══════════════════════════════════════════ -->
-    <UsageRecordTable
-      :rows="logRows"
-      :loading="logLoading"
-      :total="logTotal"
-      :page="logPage"
-      :pageSize="logPageSize"
-      :showKey="true"
-      :showGroup="true"
-      showSource="full"
-      :pageSizes="[20, 50, 100, 200]"
-      paginationLayout="total, sizes, prev, pager, next, jumper"
+    <UsageLogSection
+      ref="logSectionRef"
+      title="调用明细"
+      api-path="/api/v1/my/usage/logs"
+      trace-api-path="/api/v1/my/usage/logs"
+      :params="logParams"
       :currency="currency"
-      traceMetaMode="personal"
-      :traceEndpoint="fetchTrace"
-      :keyResolver="(row) => keyLabel(row.key_id, row.key_name || '')"
-      @update:page="(p) => { logPage = p; loadLogs() }"
-      @update:pageSize="(s) => { logPageSize = s; loadLogs() }"
+      export-prefix="my_logs"
+      :table-props="{
+        showKey: true,
+        showGroup: true,
+        showSource: 'full',
+        traceMetaMode: 'personal',
+        keyResolver: (row: any) => keyLabel(row.key_id, row.key_name || ''),
+      }"
     />
 
     <!-- ══ KEY 花费分布 ══ -->
@@ -277,11 +275,10 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import {
-  Refresh, Download, Histogram, Money, DataLine, Coin,
+  Refresh, Histogram, Money, DataLine, Coin,
   Close, Grid, Cpu, ArrowDown
 } from '@element-plus/icons-vue'
-import UsageRecordTable from '@/components/usage/UsageRecordTable.vue'
-import type { LogRow, TraceData } from '@/components/usage/UsageTraceDrawer.vue'
+import UsageLogSection from '@/components/usage/UsageLogSection.vue' 
 import {
   Chart, LineController, DoughnutController, BarController, CategoryScale, LinearScale,
   LineElement, PointElement, ArcElement, BarElement,
@@ -460,11 +457,20 @@ const dayStatsRows = ref<StatsRow[]>([])
 const modelStatsRows = ref<StatsRow[]>([])
 const prevPeriodTotal = ref<StatsTotal | null>(null)
 const avgDurationMs = ref<number | null>(null)
-const logLoading = ref(false)
-const logRows = ref<LogRow[]>([])
-const logTotal = ref(0)
-const logPage = ref(1)
-const logPageSize = ref(50)
+const logSectionRef = ref<InstanceType<typeof UsageLogSection> | null>(null)
+
+// ── Log 筛选参数（传给 UsageLogSection，变更时自动刷新） ──
+const logParams = computed(() => {
+  if (!dateRange.value?.[0]) return null
+  const p: Record<string, string | number> = {
+    from: dateRange.value[0], to: dateRange.value[1],
+  }
+  if (filterModelName.value) p.model_name = filterModelName.value
+  if (filterGroupName.value) p.group_name = filterGroupName.value
+  if (filterKeyId.value)     p.key_id     = filterKeyId.value
+  if (filterStatus.value)    p.status     = filterStatus.value
+  return p
+})
 
 // ── KEY 花费分布 ──
 const keyDistLoading = ref(false)
@@ -719,35 +725,12 @@ async function loadStats() {
   }
 }
 
-// ── Load logs ──
-async function loadLogs() {
-  if (!dateRange.value?.[0]) return
-  logLoading.value = true
-  try {
-    const params: Record<string, string | number> = {
-      from: dateRange.value[0], to: dateRange.value[1],
-      page: logPage.value, page_size: logPageSize.value,
-    }
-    if (filterModelName.value) params.model_name = filterModelName.value
-    if (filterGroupName.value) params.group_name = filterGroupName.value
-    if (filterKeyId.value)     params.key_id     = filterKeyId.value
-    if (filterStatus.value)    params.status     = filterStatus.value
-    const r = await http.get('/api/v1/my/usage/logs', { params })
-    logRows.value  = r.data.rows || []
-    logTotal.value = r.data.total || 0
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.details || '明细查询失败')
-  } finally {
-    logLoading.value = false
-  }
-}
-
 function loadAll() {
-  logPage.value = 1
   loadStats()
-  loadLogs()
   loadAvgDuration()
   loadKeyDist()
+  // UsageLogSection 通过 logParams watcher 自动加载，首次需手动触发
+  nextTick(() => logSectionRef.value?.refresh())
 }
 
 // ── Load KEY 花费分布 ──
@@ -1047,36 +1030,7 @@ function rerenderCharts() {
 watch(isDark, () => nextTick(() => rerenderCharts()))
 watch(currency, () => nextTick(() => rerenderCharts()))
 
-// ── Trace ──
-async function fetchTrace(requestId: string): Promise<TraceData> {
-  const res = await http.get(`/api/v1/my/usage/logs/${requestId}/trace`, { _silent: true } as any)
-  return res.data
-}
 
-// ── Export ──
-const EXPORT_COLUMNS: { key: string; label: string }[] = [
-  { key: 'request_id', label: '请求ID' }, { key: 'ts', label: '时间' },
-  { key: 'model', label: '模型' }, { key: 'key_id', label: 'Key' },
-  { key: 'status', label: '状态' }, { key: 'duration_ms', label: '耗时ms' },
-  { key: 'prompt_tokens', label: '输入Token' }, { key: 'completion_tokens', label: '输出Token' },
-  { key: 'cached_tokens', label: '缓存Token' }, { key: 'est_cost_usd', label: '成本' },
-]
-function csvEscape(v: unknown): string {
-  const s = v == null ? '' : String(v)
-  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`
-  return s
-}
-function handleExport() {
-  if (!logRows.value.length) return
-  const header = EXPORT_COLUMNS.map(c => csvEscape(c.label)).join(',')
-  const body = logRows.value.map(row => EXPORT_COLUMNS.map(c => csvEscape((row as any)[c.key])).join(',')).join('\n')
-  const blob = new Blob(['\ufeff' + [header, body].join('\n')], { type: 'text/csv;charset=utf-8;' })
-  Object.assign(document.createElement('a'), {
-    href: URL.createObjectURL(blob),
-    download: `my_logs_${currency.value}_${dateRange.value[0]}_${dateRange.value[1]}.csv`,
-  }).click()
-  ElMessage.success(`已导出 ${logRows.value.length} 条记录`)
-}
 
 let themeObserver: MutationObserver | null = null
 onUnmounted(() => {

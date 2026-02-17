@@ -408,26 +408,26 @@
 
     </div>
 
-    <!-- ══ 调用明细 ══ -->
-    <UsageRecordTable
-      :rows="logRows"
-      :loading="logsLoading"
-      :total="logsTotal"
-      :page="logsPage"
-      :page-size="logsPageSize"
-      :show-key="true"
-      :show-user="true"
-      user-label="成员"
-      :show-studio="authStore.effectiveRole === 'admin'"
-      :show-dept="authStore.effectiveRole === 'admin' || authStore.effectiveRole === 'studio_admin'"
-      show-source="ip-only"
-      :sortable-columns="['duration_ms', 'est_cost_usd', 'ts']"
-      :page-sizes="[20, 50, 100]"
+    <!-- ══ 调用明细 (UsageLogSection 复合组件) ══ -->
+    <UsageLogSection
+      ref="logSectionRef"
+      title="调用明细"
+      api-path="/api/v1/usage/scoped/logs"
+      trace-api-path="/api/v1/usage/logs"
+      :params="logParams"
       :currency="currency"
-      :trace-endpoint="fetchTrace"
-      trace-meta-mode="full"
-      @update:page="(p) => { logsPage = p; loadLogs() }"
-      @update:page-size="(s) => { logsPageSize = s; logsPage = 1; loadLogs() }"
+      export-prefix="scoped_logs"
+      :table-props="{
+        showKey: true,
+        showUser: true,
+        userLabel: '成员',
+        showStudio: authStore.effectiveRole === 'admin',
+        showDept: authStore.effectiveRole === 'admin' || authStore.effectiveRole === 'studio_admin',
+        showSource: 'ip-only',
+        sortableColumns: ['duration_ms', 'est_cost_usd', 'ts'],
+        pageSizes: [20, 50, 100],
+        traceMetaMode: 'full',
+      }"
     />
 
   </div>
@@ -440,8 +440,7 @@ import {
   Refresh, DataLine, Money, Coin, User, ArrowRight, ArrowUp, ArrowDown,
   Search, WarningFilled,
 } from '@element-plus/icons-vue'
-import UsageRecordTable from '@/components/usage/UsageRecordTable.vue'
-import type { TraceData } from '@/components/usage/UsageTraceDrawer.vue'
+import UsageLogSection from '@/components/usage/UsageLogSection.vue' 
 import { useAuthStore } from '@/stores/auth'
 import { useOrgStore } from '@/stores/org'
 import { useRoute } from 'vue-router'
@@ -1198,50 +1197,34 @@ function renderModelChart() {
   })
 }
 
-// ── 调用明细 ──────────────────────────────────────────────────
-const logsLoading  = ref(false)
-const logRows      = ref<any[]>([])
-const logsTotal    = ref(0)
-const logsPage     = ref(1)
-const logsPageSize = ref(50)
+// ── 调用明细 (UsageLogSection) ──────────────────────────────────
+const logSectionRef = ref<InstanceType<typeof UsageLogSection> | null>(null)
 
-
-async function loadLogs() {
-  logsLoading.value = true
-  try {
-    const params: Record<string, any> = {
-      start: dateRange.value[0],
-      end:   dateRange.value[1],
-      page:  logsPage.value,
-      page_size: logsPageSize.value,
-    }
-    // 当面包屑下钻时，按 scope 类型传递对应过滤参数
-    const sp = scopeParams()
-    if (sp.user_id) {
-      params.user_id = sp.user_id
-    } else if (sp.dept_id) {
-      params.dept_id = sp.dept_id
-    } else if (sp.studio_id) {
-      params.studio_id = sp.studio_id
-    } else {
-      if (filterUserName.value) params.user_name = filterUserName.value
-    }
-    if (filterModel.value)    params.model_name = filterModel.value
-    if (filterStatus.value)   params.status     = filterStatus.value
-    const res = await http.get('/api/v1/usage/scoped/logs', { params })
-    logRows.value  = res.data?.rows  ?? []
-    logsTotal.value = res.data?.total ?? 0
-  } catch {
-    logRows.value = []
-    logsTotal.value = 0
-  } finally {
-    logsLoading.value = false
+const logParams = computed(() => {
+  if (!dateRange.value?.[0]) return {}
+  const p: Record<string, any> = {
+    start: dateRange.value[0],
+    end:   dateRange.value[1],
   }
-}
+  // 面包屑下钻时按 scope 传参
+  const sp = scopeParams()
+  if (sp.user_id) {
+    p.user_id = sp.user_id
+  } else if (sp.dept_id) {
+    p.dept_id = sp.dept_id
+  } else if (sp.studio_id) {
+    p.studio_id = sp.studio_id
+  } else {
+    if (filterUserName.value) p.user_name = filterUserName.value
+  }
+  if (filterModel.value)  p.model_name = filterModel.value
+  if (filterStatus.value) p.status     = filterStatus.value
+  return p
+})
+
 
 function reloadLogs() {
-  logsPage.value = 1
-  loadLogs()
+  logSectionRef.value?.refresh()
 }
 
 
@@ -1280,19 +1263,14 @@ function onUserNameClear() {
 
 
 function loadAll() {
-  logsPage.value = 1
   loadSummary()
   loadTrend()
   loadModels()
-  loadLogs()
   loadBudget()
+  nextTick(() => logSectionRef.value?.refresh())
 }
 
-// ── Trace Endpoint ────────────────────────────────────────────
-async function fetchTrace(requestId: string): Promise<TraceData> {
-  const res = await http.get(`/api/v1/usage/logs/${requestId}/trace`, { _silent: true } as any)
-  return res.data
-}
+
 
 // ── 格式化 ────────────────────────────────────────────────────
 const fmtNum = (n?: number | null) => (n ?? 0).toLocaleString()

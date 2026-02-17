@@ -267,7 +267,8 @@ import {
 import { useSettingsStore } from '@/stores/settings'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
 import { fmtDateTime, fmtDuration } from '@/utils/time'
-import UsageTraceDrawer, { type LogRow, type TraceData } from './UsageTraceDrawer.vue'
+import UsageTraceDrawer from './UsageTraceDrawer.vue'
+import type { LogRow, TraceData } from '@/types/usage-log'
 
 const props = withDefaults(defineProps<{
   rows: LogRow[]

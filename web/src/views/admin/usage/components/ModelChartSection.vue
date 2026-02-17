@@ -7,16 +7,17 @@
           <button :class="['ud-trend-tab', { 'ud-trend-tab--active': props.modelMetric === 'cost' }]" @click="onSwitchMetric('cost')">成本</button>
           <button :class="['ud-trend-tab', { 'ud-trend-tab--active': props.modelMetric === 'calls' }]" @click="onSwitchMetric('calls')">调用量</button>
           <button :class="['ud-trend-tab', { 'ud-trend-tab--active': props.modelMetric === 'tokens' }]" @click="onSwitchMetric('tokens')">Token</button>
+          <button :class="['ud-trend-tab', { 'ud-trend-tab--active': props.modelMetric === 'error_rate' }]" @click="onSwitchMetric('error_rate')">错误率</button>
         </div>
         <div class="ud-trend-tabs">
           <button :class="['ud-trend-tab', { 'ud-trend-tab--active': props.modelChartType === 'bar' }]" @click="onSwitchChartType('bar')">柱状图</button>
           <button :class="['ud-trend-tab', { 'ud-trend-tab--active': props.modelChartType === 'doughnut' }]" @click="onSwitchChartType('doughnut')">饼图</button>
         </div>
-        <span class="ud-section__hint">Top {{ Math.min(props.modelsData.length, 6) }}{{ props.modelsData.length > 6 ? ` / 共 ${props.modelsData.length} 种` : '' }}</span>
+        <span class="ud-section__hint">Top {{ Math.min(props.modelsData.length, 6) }}{{ props.modelsData.length > 6 ? ` / 共 ${props.modelsData.length} 种` : '' }}<span v-if="hasLongTail" class="ud-longtail-legend"><span class="ud-longtail-dot"></span>长尾</span></span>
       </div>
     </div>
     <div class="ud-chart-wrap ud-chart-wrap--model" v-loading="props.loading">
-      <canvas ref="modelCanvasRef" class="ud-model-canvas" />
+      <canvas ref="modelCanvasRef" class="ud-model-canvas" @click="onCanvasClick" />
       <div v-if="!props.loading && props.modelsData.length === 0" class="ud-chart-empty">暂无数据</div>
     </div>
   </div>
@@ -47,6 +48,7 @@ const emit = defineEmits<{
   'update:modelChartType': [value: string]
   switchMetric: [value: string]
   switchChartType: [value: string]
+  'model-click': [modelName: string]
 }>()
 
 const settingsStore = useSettingsStore()
@@ -64,6 +66,10 @@ const MODEL_COLORS = [
   '#10B981', '#EF4444',
 ]
 
+const hasLongTail = computed(() =>
+  props.modelsData.some((d: any) => d.is_long_tail)
+)
+
 function onSwitchMetric(value: string) {
   emit('update:modelMetric', value)
   emit('switchMetric', value)
@@ -72,6 +78,23 @@ function onSwitchMetric(value: string) {
 function onSwitchChartType(value: string) {
   emit('update:modelChartType', value)
   emit('switchChartType', value)
+}
+
+/** Handle canvas click → detect which model bar/slice was clicked */
+function onCanvasClick(evt: MouseEvent) {
+  if (!modelChartInst) return
+  const elements = modelChartInst.getElementsAtEventForMode(
+    evt as any, 'nearest', { intersect: true }, false
+  )
+  if (elements.length > 0) {
+    const idx = elements[0].index
+    const raw = props.modelsData
+    const TOP_N = 6
+    // If index is the "其他" aggregate (last item beyond top N), ignore
+    if (raw.length > TOP_N && idx >= TOP_N) return
+    const item = raw[idx]
+    if (item?.model) emit('model-click', item.model)
+  }
 }
 
 // ── Formatting helpers ──────────────────────────────────────────
@@ -127,15 +150,22 @@ function renderModelChart() {
   const metricData = data.map(d =>
     metric === 'cost' ? (d.cost ?? 0)
     : metric === 'calls' ? (d.calls ?? 0)
-    : (d.total_tokens ?? 0)
+    : metric === 'tokens' ? (d.total_tokens ?? 0)
+    : (d.error_rate ?? 0)
   )
-  const metricLabel = metric === 'cost' ? `成本 (${cc.value.currency})` : metric === 'calls' ? '调用次数' : 'Token 消耗'
-  const total = metricData.reduce((s: number, v: number) => s + v, 0)
+  const metricLabel = metric === 'cost' ? `成本 (${cc.value.currency})`
+    : metric === 'calls' ? '调用次数'
+    : metric === 'tokens' ? 'Token 消耗'
+    : '错误率'
+  const total = metric === 'error_rate'
+    ? 0  // error_rate doesn't sum, so no percentage
+    : metricData.reduce((s: number, v: number) => s + v, 0)
 
   const fmtMetric = (v: number) =>
     metric === 'cost' ? fmtCost(v)
     : metric === 'calls' ? v.toLocaleString() + ' 次'
-    : fmtTokens(v)
+    : metric === 'tokens' ? fmtTokens(v)
+    : v.toFixed(1) + '%'
 
   if (props.modelChartType === 'doughnut') {
     modelChartInst = new Chart(modelCanvasRef.value, {
@@ -160,13 +190,21 @@ function renderModelChart() {
               boxWidth: 12, padding: 10, font: { size: 11 },
               generateLabels: (chart: any) => {
                 const meta = chart.getDatasetMeta(0)
-                return (chart.data.labels as string[]).map((label: string, i: number) => ({
-                  text: label,
-                  fillStyle: colors[i],
-                  strokeStyle: colors[i],
-                  hidden: meta.data[i]?.hidden,
-                  index: i,
-                }))
+                const ds = chart.data.datasets[0].data as number[]
+                const sum = ds.reduce((a: number, b: number) => a + b, 0)
+                return (chart.data.labels as string[]).map((label: string, i: number) => {
+                  const pct = sum > 0 ? ((ds[i] / sum) * 100).toFixed(1) : '0.0'
+                  // Show long-tail indicator for non-aggregate items
+                  const isLongTail = i < raw.length && raw[i]?.is_long_tail
+                  const prefix = isLongTail ? '● ' : ''
+                  return {
+                    text: prefix + label + ' (' + pct + '%)',
+                    fillStyle: colors[i],
+                    strokeStyle: colors[i],
+                    hidden: meta.data[i]?.hidden,
+                    index: i,
+                  }
+                })
               },
             },
           },
@@ -185,7 +223,35 @@ function renderModelChart() {
     return
   }
 
-  // 横向柱状图模式
+  // 横向柱状图模式 — 自定义插件：在柱子右侧绘制百分比标注
+  const pctLabelPlugin = {
+    id: 'pctLabels',
+    afterDatasetsDraw(chart: any) {
+      if (total <= 0 && metric !== 'error_rate') return
+      const { ctx } = chart
+      const meta = chart.getDatasetMeta(0)
+      ctx.save()
+      ctx.font = '11px system-ui, sans-serif'
+      ctx.textBaseline = 'middle'
+      meta.data.forEach((bar: any, i: number) => {
+        const val = metricData[i]
+        const pct = metric === 'error_rate'
+          ? val.toFixed(1) + '%'
+          : total > 0 ? ((val / total) * 100).toFixed(1) + '%' : ''
+        // Long-tail indicator
+        const isLongTail = i < raw.length && raw[i]?.is_long_tail
+        const suffix = isLongTail ? ' ●' : ''
+        const text = pct + suffix
+        const x = bar.x + 6
+        const y = bar.y
+        ctx.fillStyle = isLongTail ? '#e6a23c' : 'rgba(0,0,0,0.45)'
+        ctx.textAlign = 'left'
+        ctx.fillText(text, x, y)
+      })
+      ctx.restore()
+    },
+  }
+
   modelChartInst = new Chart(modelCanvasRef.value, {
     type: 'bar',
     data: {
@@ -198,10 +264,12 @@ function renderModelChart() {
         borderSkipped: false,
       }],
     },
-    options: {
+      plugins: [pctLabelPlugin],
+      options: {
       indexAxis: 'y' as const,
       responsive: true,
       maintainAspectRatio: false,
+      layout: { padding: { right: 60 } },
       plugins: {
         legend: { display: false },
         tooltip: {
@@ -222,12 +290,24 @@ function renderModelChart() {
             callback: (v: any) =>
               metric === 'cost' ? `${currencySymbol(cc.value.currency)}${convertCost(Number(v), cc.value).toFixed(2)}`
               : metric === 'calls' ? Number(v).toLocaleString()
-              : fmtTokens(Number(v)),
+              : metric === 'tokens' ? fmtTokens(Number(v))
+              : Number(v).toFixed(1) + '%',
           },
         },
         y: {
           grid: { display: false },
-          ticks: { font: { size: 11 } },
+          ticks: {
+            font: { size: 11 },
+            callback: (_v: any, idx: number) => {
+              const item = idx < raw.length ? raw[idx] : null
+              const prefix = item?.is_long_tail ? '● ' : ''
+              return prefix + (labels[idx] || '')
+            },
+            color: (_v: any, idx: number) => {
+              const item = idx < raw.length ? raw[idx] : null
+              return item?.is_long_tail ? '#e6a23c' : undefined
+            },
+          },
         },
       },
     },
@@ -292,5 +372,15 @@ onUnmounted(() => {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
   color: var(--ud-faint, var(--el-text-color-placeholder)); font-size: 13px;
+}
+
+/* 长尾模型图例 */
+.ud-longtail-legend {
+  display: inline-flex; align-items: center; gap: 3px;
+  margin-left: 8px; font-size: 11px; color: #e6a23c;
+}
+.ud-longtail-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #e6a23c; display: inline-block;
 }
 </style>

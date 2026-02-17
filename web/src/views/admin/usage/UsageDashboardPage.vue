@@ -71,6 +71,7 @@
         :total-cost="totalCost"
         :currency="currency"
         :user-top-models="userTopModels"
+        :enhanced-user-map="enhancedUserMap"
         v-model:rank-page="rankPage"
         v-model:rank-search="rankSearch"
         @drill-down="drillDown"
@@ -78,6 +79,7 @@
         @reset-to-top="resetToTop"
         @pop-to-level="popToLevel"
         @load-summary="loadSummary"
+        @user-click="handleUserClick"
       />
       <ModelChartSection
         :loading="modelsLoading"
@@ -87,8 +89,39 @@
         :currency="currency"
         @switch-metric="switchModelMetric"
         @switch-chart-type="switchModelChartType"
+        @model-click="handleModelClick"
+      />
+      <LongTailAlerts
+        :models-data="modelsData"
+        :currency="currency"
+        @model-click="handleModelClick"
       />
     </div>
+    <!-- Phase B: User Detail Panel -->
+    <Transition name="ud-slide">
+      <UserDetailPanel
+        v-if="userType"
+        :user-id="userType.id"
+        :user-name="panelUserName"
+        :dept-name="panelDeptName"
+        :date-range="dateRange"
+        :currency="currency"
+        @model-click="handleModelClickFromPanel"
+        @close="closePanel"
+      />
+    </Transition>
+    <!-- Phase B: Model Detail Panel -->
+    <Transition name="md-slide">
+      <ModelDetailPanel
+        v-if="modelType"
+        :model-name="modelType.id"
+        :date-range="dateRange"
+        :currency="currency"
+        :team-avg="teamAvg"
+        @user-click="handleUserClickFromModelPanel"
+        @close="closePanel"
+      />
+    </Transition>
     <UsageLogSection
       ref="logSectionRef"
       title="调用明细"
@@ -121,12 +154,18 @@ import TrendChartSection from './components/TrendChartSection.vue'
 import CostBreakdownSection from './components/CostBreakdownSection.vue'
 import RankingTable from './components/RankingTable.vue'
 import ModelChartSection from './components/ModelChartSection.vue'
+import LongTailAlerts from './components/LongTailAlerts.vue'
 import UsageLogSection from '@/components/usage/UsageLogSection.vue'
+import UserDetailPanel from './components/UserDetailPanel.vue'
+import ModelDetailPanel from './components/ModelDetailPanel.vue'
+import { usePanelManager } from '@/composables/usePanelManager'
 import { useAuthStore } from '@/stores/auth'
 import { useOrgStore } from '@/stores/org'
 import { useRoute } from 'vue-router'
 import http from '@/services/http'
 import { useSettingsStore } from '@/stores/settings'
+import { fetchUsersRanking } from '@/api/dashboard-enhanced'
+import type { UserRankRow } from '@/types/dashboard-enhanced'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
 
 const settingsStore = useSettingsStore()
@@ -135,6 +174,8 @@ const cc = computed(() => ({
   currency: currency.value,
   rate: settingsStore.publicSettings.pricing_usd_to_cny_rate || 7.2,
 }))
+
+const { activePanel, userType, modelType, closePanel, togglePanel, jumpToModel, jumpToUser } = usePanelManager()
 
 const authStore = useAuthStore()
 const orgStore  = useOrgStore()
@@ -396,6 +437,12 @@ async function loadSummary() {
     } else {
       userTopModels.value = {}
     }
+    // Phase B: 当展示用户列表时(dept scope)，并行获取增强数据
+    if (currentScope.value === 'dept') {
+      loadEnhancedUsers()
+    } else {
+      enhancedUserMap.value = {}
+    }
   } catch {
     summary.value = null
     breakdown.value = []
@@ -406,6 +453,7 @@ async function loadSummary() {
 
 // ── 用户 Top3 模型标签 ──────────────────────────────────────
 const userTopModels = ref<Record<string, { model: string; est_cost_usd: number }[]>>({})
+const enhancedUserMap = ref<Record<string, UserRankRow>>({})
 
 async function loadUserTopModels() {
   try {
@@ -421,6 +469,29 @@ async function loadUserTopModels() {
     userTopModels.value = res.data?.models ?? {}
   } catch {
     userTopModels.value = {}
+  }
+}
+
+async function loadEnhancedUsers() {
+  try {
+    const last = breadcrumbs.value[breadcrumbs.value.length - 1]
+    const params: any = {
+      from: dateRange.value[0],
+      to: dateRange.value[1],
+      page: rankPage.value,
+      page_size: rankPageSize,
+    }
+    if (last?.id && last.scope === 'dept') params.dept_id = last.id
+    if (last?.id && last.scope === 'studio') params.studio_id = last.id
+    if (filterModel.value) params.model_name = filterModel.value
+    const data = await fetchUsersRanking(params)
+    const map: Record<string, UserRankRow> = {}
+    for (const row of data.rows) {
+      map[row.user_id] = row
+    }
+    enhancedUserMap.value = map
+  } catch {
+    enhancedUserMap.value = {}
   }
 }
 
@@ -440,6 +511,54 @@ function drillDown(row: any) {
   rankPage.value = 1
   loadSummary()
 }
+
+// ── Phase B: 面板管理 ─────────────────────────────────────────
+function handleUserClick(row: any) {
+  const enhanced = enhancedUserMap.value[row.id]
+  const userName = enhanced?.user_name || row.name || row.id
+  const deptName = enhanced?.dept_name || ''
+  togglePanel('user', row.id, userName)
+}
+
+function handleModelClickFromPanel(modelName: string) {
+  jumpToModel(modelName)
+}
+
+function handleModelClick(modelName: string) {
+  togglePanel('model', modelName, modelName)
+}
+
+function handleUserClickFromModelPanel(userId: string, userName: string) {
+  jumpToUser(userId, userName)
+}
+
+const panelUserName = computed(() => {
+  if (!userType.value) return ''
+  const enhanced = enhancedUserMap.value[userType.value.id]
+  return enhanced?.user_name || userType.value.name
+})
+
+const panelDeptName = computed(() => {
+  if (!userType.value) return ''
+  const enhanced = enhancedUserMap.value[userType.value.id]
+  return enhanced?.dept_name || ''
+})
+
+const teamAvg = computed(() => {
+  const data = modelsData.value
+  if (!data.length) return undefined
+  const totalCalls = data.reduce((s, m) => s + (m.calls ?? 0), 0)
+  if (!totalCalls) return undefined
+  const weightedSuccess = data.reduce((s, m) => s + (m.calls ?? 0) * (m.success_rate ?? 95), 0)
+  const weightedDuration = data.reduce((s, m) => s + (m.calls ?? 0) * (m.avg_duration_ms ?? 3000), 0)
+  const totalTokens = data.reduce((s, m) => s + (m.total_tokens ?? 0), 0)
+  const totalCost = data.reduce((s, m) => s + (m.cost ?? 0), 0)
+  return {
+    success_rate: weightedSuccess / totalCalls,
+    avg_duration_ms: weightedDuration / totalCalls,
+    cost_per_1k_tokens: totalTokens > 0 ? (totalCost / (totalTokens / 1000)) : 0,
+  }
+})
 
 function popToLevel(idx: number) {
   breadcrumbs.value = breadcrumbs.value.slice(0, idx + 1)
@@ -880,6 +999,46 @@ defineExpose({ reloadLogs })
 .ud-error-block { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 16px; }
 .ud-error-code  { font-size: 11px; font-weight: 700; color: #dc2626; text-transform: uppercase; margin-bottom: 8px; }
 .ud-error-msg   { margin: 0; font-size: 12.5px; color: #7f1d1d; white-space: pre-wrap; word-break: break-word; }
+
+/* ── Phase B: Panel slide transition ── */
+.ud-slide-enter-active {
+  transition: all 0.3s ease-out;
+}
+.ud-slide-leave-active {
+  transition: all 0.2s ease-in;
+}
+.ud-slide-enter-from,
+.ud-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-12px);
+  max-height: 0;
+}
+.ud-slide-enter-to,
+.ud-slide-leave-from {
+  opacity: 1;
+  transform: translateY(0);
+  max-height: 2000px;
+}
+
+/* ── Phase B: Model Detail Panel slide transition ── */
+.md-slide-enter-active {
+  transition: all 0.3s ease-out;
+}
+.md-slide-leave-active {
+  transition: all 0.2s ease-in;
+}
+.md-slide-enter-from,
+.md-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-12px);
+  max-height: 0;
+}
+.md-slide-enter-to,
+.md-slide-leave-from {
+  opacity: 1;
+  transform: translateY(0);
+  max-height: 2000px;
+}
 </style>
 
 <!-- tooltip 内容 teleport 到 body，需要非 scoped 全局样式 -->

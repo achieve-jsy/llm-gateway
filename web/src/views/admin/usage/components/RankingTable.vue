@@ -67,6 +67,21 @@
                 <span :class="['ud-sort-arrow', rankSort.field === 'tokens' && rankSort.order === 'desc' ? 'ud-sort-arrow--active' : '']">▼</span>
               </span>
             </th>
+            <th v-if="isEnhancedUserView" class="col-num">
+              <el-tooltip content="相比上一期的成本变化" placement="top">
+                <span style="cursor:help;border-bottom:1px dashed currentColor">环比</span>
+              </el-tooltip>
+            </th>
+            <th v-if="isEnhancedUserView" class="col-num">
+              <el-tooltip content="每千 Token 的平均成本" placement="top">
+                <span style="cursor:help;border-bottom:1px dashed currentColor">千Token成本</span>
+              </el-tooltip>
+            </th>
+            <th v-if="isEnhancedUserView" class="col-num">
+              <el-tooltip content="调用失败率" placement="top">
+                <span style="cursor:help;border-bottom:1px dashed currentColor">错误率</span>
+              </el-tooltip>
+            </th>
             <th v-if="currentScope === 'user'" class="col-models">常用模型</th>
           </tr>
         </thead>
@@ -81,9 +96,10 @@
             </td>
             <td class="col-name">
               <span
-                :class="['ud-row-name', { drillable: canDrill }]"
-                @click="canDrill && $emit('drillDown', row)"
+                :class="['ud-row-name', { drillable: canDrill || isEnhancedUserView, 'ud-row-name--detail': isEnhancedUserView }]"
+                @click="isEnhancedUserView ? $emit('userClick', row) : (canDrill && $emit('drillDown', row))"
               >{{ row.name || row.id || '(未归属)' }}</span>
+              <el-icon v-if="isEnhancedUserView" class="ud-detail-hint"><View /></el-icon>
             </td>
             <td>
               <div class="ud-bar-wrap">
@@ -101,6 +117,21 @@
               </template>
               <template v-else>{{ row.user_count ?? '—' }}</template>
             </td>
+            <td v-if="isEnhancedUserView" class="col-num" :class="pctClass(getEnhanced(row)?.cost_change_pct)">
+              {{ fmtPct(getEnhanced(row)?.cost_change_pct) }}
+            </td>
+            <td v-if="isEnhancedUserView" class="col-num ud-mono">
+              <template v-if="getEnhanced(row)">
+                ${{ getEnhanced(row)!.cost_per_1k_tokens?.toFixed(4) ?? '—' }}
+              </template>
+              <template v-else>—</template>
+            </td>
+            <td v-if="isEnhancedUserView" class="col-num" :class="{ 'c-red': (getEnhanced(row)?.error_rate ?? 0) > 5 }">
+              <template v-if="getEnhanced(row)">
+                {{ getEnhanced(row)!.error_rate?.toFixed(1) ?? '—' }}%
+              </template>
+              <template v-else>—</template>
+            </td>
             <td v-if="currentScope === 'user'" class="col-models">
               <div class="ud-model-tags">
                 <el-tooltip
@@ -116,7 +147,7 @@
             </td>
           </tr>
           <tr v-if="!loading && displayedBreakdown.length === 0">
-            <td :colspan="currentScope === 'user' ? 7 : 6" class="ud-empty">暂无数据</td>
+            <td :colspan="isEnhancedUserView ? 10 : (currentScope === 'user' ? 7 : 6)" class="ud-empty">暂无数据</td>
           </tr>
         </tbody>
       </table>
@@ -136,8 +167,9 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Search, ArrowRight, User } from '@element-plus/icons-vue'
+import { Search, ArrowRight, User, View } from '@element-plus/icons-vue'
 import { useSettingsStore } from '@/stores/settings'
+import type { UserRankRow } from '@/types/dashboard-enhanced'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
 
 defineOptions({ name: 'RankingTable' })
@@ -158,6 +190,7 @@ const props = defineProps<{
   userTopModels: Record<string, any[]>
   rankPage: number
   rankSearch: string
+  enhancedUserMap?: Record<string, UserRankRow>
 }>()
 
 const emit = defineEmits<{
@@ -168,6 +201,7 @@ const emit = defineEmits<{
   loadSummary: []
   'update:rankPage': [value: number]
   'update:rankSearch': [value: string]
+  userClick: [row: any]
 }>()
 
 const settingsStore = useSettingsStore()
@@ -216,6 +250,28 @@ function shortModelName(name: string): string {
 function getUserModels(userId: string): { model: string; est_cost_usd: number }[] {
   return props.userTopModels[userId] ?? []
 }
+
+function getEnhanced(row: any): UserRankRow | undefined {
+  if (!props.enhancedUserMap || props.currentScope !== 'dept') return undefined
+  return props.enhancedUserMap[row.id]
+}
+
+function fmtPct(v: number | undefined | null): string {
+  if (v == null) return '—'
+  const sign = v > 0 ? '+' : ''
+  return `${sign}${v.toFixed(1)}%`
+}
+
+function pctClass(v: number | undefined | null, isCost = true): string {
+  if (v == null || v === 0) return 'ud-pct--neutral'
+  // For cost: increase is bad (red), decrease is good (green)
+  if (isCost) return v > 0 ? 'ud-pct--bad' : 'ud-pct--good'
+  return v > 0 ? 'ud-pct--up' : 'ud-pct--down'
+}
+
+const isEnhancedUserView = computed(() =>
+  props.currentScope === 'dept' && props.enhancedUserMap && Object.keys(props.enhancedUserMap).length > 0
+)
 </script>
 
 <style scoped>
@@ -284,6 +340,9 @@ function getUserModels(userId: string): { model: string; est_cost_usd: number }[
 .ud-row-name { color: var(--el-text-color-primary); }
 .ud-row-name.drillable { color: var(--el-color-primary); cursor: pointer; font-weight: 500; }
 .ud-row-name.drillable:hover { text-decoration: underline; }
+.ud-row-name--detail { color: var(--el-color-primary); cursor: pointer; font-weight: 500; }
+.ud-row-name--detail:hover { text-decoration: underline; }
+.ud-detail-hint { font-size: 13px; color: var(--el-color-primary); margin-left: 4px; vertical-align: middle; opacity: 0.6; }
 
 .ud-bar-wrap { display: flex; align-items: center; gap: 8px; min-width: 120px; }
 .ud-bar-bg   { flex: 1; height: 6px; border-radius: 3px; background: var(--el-fill-color); overflow: hidden; }
@@ -334,4 +393,12 @@ function getUserModels(userId: string): { model: string; est_cost_usd: number }[
   flex-wrap: wrap; gap: 6px;
 }
 .ud-section__title { font-size: 14px; font-weight: 600; color: var(--el-text-color-primary); }
+
+/* ── 增强列样式 ── */
+.ud-mono { font-family: var(--ud-mono, 'SFMono-Regular', ui-monospace, monospace); font-size: 12px; }
+.ud-pct--good { color: #67c23a; }
+.ud-pct--bad  { color: #f56c6c; }
+.ud-pct--neutral { color: var(--el-text-color-placeholder); }
+.ud-pct--up   { color: #67c23a; }
+.ud-pct--down { color: #f56c6c; }
 </style>

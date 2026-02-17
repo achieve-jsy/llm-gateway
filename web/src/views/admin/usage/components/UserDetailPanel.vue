@@ -258,6 +258,7 @@ function fmtTokens(n: number): string {
 
 // ── Data fetching ───────────────────────────────────────────────────
 async function loadData() {
+  if (loading.value) return
   if (!props.userId || !props.dateRange[0] || !props.dateRange[1]) return
   loading.value = true
   try {
@@ -269,8 +270,9 @@ async function loadData() {
     detail.value = res
     await nextTick()
     initCharts()
-  } catch {
+  } catch (e) {
     detail.value = null
+    console.warn('Failed to load user detail:', e)
   } finally {
     loading.value = false
   }
@@ -667,9 +669,9 @@ onBeforeUnmount(() => {
 }
 
 /* KPI color classes */
-.ud-kpi--green { color: #67c23a; }
-.ud-kpi--yellow { color: #e6a23c; }
-.ud-kpi--red { color: #f56c6c; }
+.ud-kpi--green { color: var(--el-color-success); }
+.ud-kpi--yellow { color: var(--el-color-warning); }
+.ud-kpi--red { color: var(--el-color-danger); }
 
 /* ── Section B2: Efficiency Metrics ── */
 .ud-panel__eff-row {

@@ -85,9 +85,10 @@ function getISOWeekLabel(date: Date): string {
   const d = new Date(date)
   d.setHours(0, 0, 0, 0)
   d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7)
-  const week1 = new Date(d.getFullYear(), 0, 4)
+  const year = d.getFullYear()
+  const week1 = new Date(year, 0, 4)
   const weekNum = 1 + Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7)
-  return `W${String(weekNum).padStart(2, '0')}`
+  return `${year}-W${String(weekNum).padStart(2, '0')}`
 }
 
 const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']

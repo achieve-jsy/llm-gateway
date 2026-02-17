@@ -59,6 +59,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { WarningFilled, ArrowRight } from '@element-plus/icons-vue'
+import { currencySymbol, type Currency } from '@/utils/currency'
 
 defineOptions({ name: 'LongTailAlerts' })
 
@@ -123,8 +124,9 @@ function getStatusClass(item: LongTailModel) {
 }
 
 function fmtCost(v: number) {
-  if (v < 0.01) return '< ¥0.01'
-  return `¥${v.toFixed(2)}`
+  const sym = currencySymbol((props.currency || 'CNY') as Currency)
+  if (v < 0.01) return `< ${sym}0.01`
+  return `${sym}${v.toFixed(2)}`
 }
 </script>
 
@@ -151,7 +153,7 @@ function fmtCost(v: number) {
 }
 
 .lt-header__icon {
-  color: #e6a23c;
+  color: var(--el-color-warning);
   display: flex;
   align-items: center;
 }
@@ -259,12 +261,12 @@ function fmtCost(v: number) {
   border-radius: 50%;
 }
 .lt-item__status--dead .lt-item__dot {
-  background: #f56c6c;
-  box-shadow: 0 0 4px rgba(245, 108, 108, 0.4);
+  background: var(--el-color-danger);
+  box-shadow: 0 0 4px var(--el-color-danger-light-5);
 }
 .lt-item__status--low .lt-item__dot {
-  background: #e6a23c;
-  box-shadow: 0 0 4px rgba(230, 162, 60, 0.3);
+  background: var(--el-color-warning);
+  box-shadow: 0 0 4px var(--el-color-warning-light-5);
 }
 
 .lt-item__info {

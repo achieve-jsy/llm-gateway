@@ -43,8 +43,6 @@
       v-model:trend-metric="trendMetric"
       v-model:trend-granularity="trendGranularity"
       :currency="currency"
-      @switch-metric="switchTrendMetric"
-      @switch-granularity="switchTrendGranularity"
     />
     <CostBreakdownSection
       :show="showCostBreakdown"
@@ -333,8 +331,9 @@ async function loadBudget() {
   try {
     const res = await http.get('/api/v1/budgets/context')
     budgetContext.value = res.data?.context ?? []
-  } catch {
+  } catch (e) {
     budgetContext.value = []
+    console.warn('Failed to load budget context:', e)
   }
 }
 
@@ -416,10 +415,7 @@ const callsChange = computed(() => {
   return ((curr - prev) / prev) * 100
 })
 
-function fmtChange(pct: number | null): string {
-  if (pct === null) return '—'
-  return `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`
-}
+
 
 const prevPeriodLabel = computed(() => {
   const [start, end] = dateRange.value
@@ -432,13 +428,7 @@ const prevPeriodLabel = computed(() => {
   return `上期：${f(prevStart)} ~ ${f(prevEnd)}（${days} 天）`
 })
 
-function changeClass(pct: number | null, costMode = false): string {
-  if (pct === null) return 'ud-change--neutral'
-  if (pct === 0) return 'ud-change--neutral'
-  const isUp = pct > 0
-  if (costMode) return isUp ? 'ud-change--bad' : 'ud-change--good'
-  return isUp ? 'ud-change--up' : 'ud-change--down'
-}
+
 
 async function loadSummary() {
   summaryLoading.value = true
@@ -470,9 +460,10 @@ async function loadSummary() {
     } else {
       enhancedUserMap.value = {}
     }
-  } catch {
+  } catch (e) {
     summary.value = null
     breakdown.value = []
+    console.warn('Failed to load summary:', e)
   } finally {
     summaryLoading.value = false
   }
@@ -494,8 +485,9 @@ async function loadUserTopModels() {
     if (last?.id && last.scope === 'dept') params.dept_id = last.id
     const res = await http.get('/api/v1/usage/dashboard/user-top-models', { params })
     userTopModels.value = res.data?.models ?? {}
-  } catch {
+  } catch (e) {
     userTopModels.value = {}
+    console.warn('Failed to load user top models:', e)
   }
 }
 
@@ -517,18 +509,13 @@ async function loadEnhancedUsers() {
       map[row.user_id] = row
     }
     enhancedUserMap.value = map
-  } catch {
+  } catch (e) {
     enhancedUserMap.value = {}
+    console.warn('Failed to load enhanced users:', e)
   }
 }
 
-function getUserModels(userId: string): { model: string; est_cost_usd: number }[] {
-  return userTopModels.value[userId] ?? []
-}
 
-function shortModelName(name: string): string {
-  return name.replace(/-\d{4}-\d{2}-\d{2}$/, '').replace(/-(mini|nano|flash|thinking)$/, ' $1')
-}
 
 function drillDown(row: any) {
   const next: Record<string, string> = { company: 'studio', studio: 'dept', dept: 'user' }
@@ -617,44 +604,6 @@ function autoSetGranularity() {
   else trendGranularity.value = 'day'
 }
 
-function switchTrendMetric(_m: any) { /* TrendChartSection handles rendering */ }
-function switchTrendGranularity(_g: any) { /* TrendChartSection handles rendering */ }
-
-function getISOWeekLabel(date: Date): string {
-  const d = new Date(date)
-  d.setHours(0, 0, 0, 0)
-  d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7)
-  const week1 = new Date(d.getFullYear(), 0, 4)
-  const weekNum = 1 + Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7)
-  return `W${String(weekNum).padStart(2, '0')}`
-}
-
-const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-
-function getMonthLabel(date: Date): string {
-  return `${MONTH_ABBR[date.getMonth()]} ${date.getFullYear()}`
-}
-
-function aggregateTrendData(data: any[], granularity: 'day' | 'week' | 'month'): any[] {
-  if (granularity === 'day' || !data.length) return data
-  const groups = new Map<string, any>()
-  for (const d of data) {
-    const dateStr = d.date
-    if (!dateStr) continue
-    const date = new Date(dateStr)
-    const key = granularity === 'week' ? getISOWeekLabel(date) : getMonthLabel(date)
-    if (!groups.has(key)) {
-      groups.set(key, { date: key, cost: 0, calls: 0, errors: 0, total_tokens: 0 })
-    }
-    const g = groups.get(key)!
-    g.cost         += d.cost         ?? 0
-    g.calls        += d.calls        ?? 0
-    g.errors       += d.errors       ?? 0
-    g.total_tokens += d.total_tokens ?? 0
-  }
-  return Array.from(groups.values())
-}
-
 async function loadTrend() {
   trendLoading.value = true
   try {
@@ -676,9 +625,10 @@ async function loadTrend() {
     ])
     trendData.value     = res.data?.rows     ?? []
     prevTrendData.value = prevRes.data?.rows ?? []
-  } catch {
+  } catch (e) {
     trendData.value     = []
     prevTrendData.value = []
+    console.warn('Failed to load trend data:', e)
   } finally {
     trendLoading.value = false
   }
@@ -710,8 +660,9 @@ async function loadModels() {
     if (filterStatus.value) modelParams.status = filterStatus.value
     const res = await http.get('/api/v1/usage/dashboard/models', { params: modelParams })
     modelsData.value = res.data?.rows ?? []
-  } catch {
+  } catch (e) {
     modelsData.value = []
+    console.warn('Failed to load models:', e)
   } finally {
     modelsLoading.value = false
   }
@@ -785,20 +736,6 @@ function loadAll() {
 }
 
 // ── 格式化 ────────────────────────────────────────────────────
-const fmtNum = (n?: number | null) => (n ?? 0).toLocaleString()
-const fmtTokens = (n?: number | null) => {
-  if (!n) return '0'
-  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B'
-  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'
-  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K'
-  return String(n)
-}
-const fmtTokensShort = (n?: number | null) => {
-  if (!n) return '0'
-  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M'
-  if (n >= 1e3) return (n / 1e3).toFixed(0) + 'K'
-  return String(n)
-}
 const fmtCost = (v?: number | null): string => {
   const n = convertCost(Number(v || 0), cc.value)
   const sym = currencySymbol(cc.value.currency)
@@ -810,7 +747,6 @@ const fmtCost = (v?: number | null): string => {
   else s = n.toFixed(8)
   return sym + s.replace(/(\.\d{2,}?)0+$/, '$1')
 }
-const barPct = (v: number, max: number) => !max || !v ? 0 : Math.round(v / max * 100)
 
 // ── Lifecycle ─────────────────────────────────────────────────
 

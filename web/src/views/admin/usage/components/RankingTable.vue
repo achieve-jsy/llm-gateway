@@ -376,10 +376,10 @@ const isEnhancedUserView = computed(() =>
 .ud-user-scope-banner {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 14px;
-  background: #ecf5ff; border: 1px solid #b3d8ff;
-  border-radius: 6px; font-size: 13px; color: #409eff;
+  background: var(--el-color-primary-light-9); border: 1px solid var(--el-color-primary-light-5);
+  border-radius: 6px; font-size: 13px; color: var(--el-color-primary);
 }
-.ud-user-scope-banner strong { color: #1a6fd4; }
+.ud-user-scope-banner strong { color: var(--el-color-primary-dark-2); }
 
 .ud-breadcrumb { display: flex; align-items: center; gap: 4px; font-size: 13px; flex-wrap: wrap; }
 .ud-bc-home { color: var(--el-color-primary); cursor: pointer; font-weight: 500; }

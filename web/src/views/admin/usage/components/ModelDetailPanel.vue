@@ -279,13 +279,6 @@ const otherUsersCount = computed(() => {
 })
 
 // ── Team average computed ───────────────────────────────────────────
-const modelCostPer1k = computed(() => {
-  if (!detail.value) return 0
-  const { est_cost_usd, total_tokens } = detail.value.summary
-  if (!total_tokens) return 0
-  return est_cost_usd / (total_tokens / 1000)
-})
-
 const vsSuccessRateClass = computed(() => {
   if (!props.teamAvg) return ''
   const rate = parseFloat(successRate.value)
@@ -324,7 +317,7 @@ const vsDurationText = computed(() => {
 
 const vsCostPer1kClass = computed(() => {
   if (!props.teamAvg) return ''
-  const v = modelCostPer1k.value
+  const v = costPer1kTokens.value
   const avg = props.teamAvg.cost_per_1k_tokens
   if (v <= avg * 0.8) return 'ud-model-vs-good'
   if (v >= avg * 1.2) return 'ud-model-vs-bad'
@@ -333,7 +326,7 @@ const vsCostPer1kClass = computed(() => {
 
 const vsCostPer1kText = computed(() => {
   if (!props.teamAvg) return ''
-  const v = modelCostPer1k.value
+  const v = costPer1kTokens.value
   const avg = props.teamAvg.cost_per_1k_tokens
   if (v <= avg * 0.8) return '✅ 低于平均'
   if (v >= avg * 1.2) return '⚠️ 高于平均'
@@ -374,6 +367,7 @@ function userCostPct(cost: number): number {
 
 // ── Data fetching ───────────────────────────────────────────────────
 async function loadData() {
+  if (loading.value) return
   if (!props.modelName || !props.dateRange[0] || !props.dateRange[1]) return
   loading.value = true
   try {
@@ -385,8 +379,9 @@ async function loadData() {
     detail.value = res
     await nextTick()
     initCharts()
-  } catch {
+  } catch (e) {
     detail.value = null
+    console.warn('Failed to load model detail:', e)
   } finally {
     loading.value = false
   }
@@ -672,9 +667,9 @@ onBeforeUnmount(() => {
 }
 
 /* KPI color classes */
-.ud-kpi--green { color: #67c23a; }
-.ud-kpi--yellow { color: #e6a23c; }
-.ud-kpi--red { color: #f56c6c; }
+.ud-kpi--green { color: var(--el-color-success); }
+.ud-kpi--yellow { color: var(--el-color-warning); }
+.ud-kpi--red { color: var(--el-color-danger); }
 
 /* ── Section C: vs Team Average Comparison Box ── */
 .ud-model-vs-box {
@@ -711,9 +706,9 @@ onBeforeUnmount(() => {
   font-weight: 500;
   white-space: nowrap;
 }
-.ud-model-vs-good { color: #67c23a; }
-.ud-model-vs-neutral { color: #909399; }
-.ud-model-vs-bad { color: #f56c6c; }
+.ud-model-vs-good { color: var(--el-color-success); }
+.ud-model-vs-neutral { color: var(--el-text-color-secondary); }
+.ud-model-vs-bad { color: var(--el-color-danger); }
 
 /* ── Section D: Daily Trend Chart (full width) ── */
 .ud-model-panel__trend-section {

@@ -1,5 +1,13 @@
 <template>
   <div class="group-health-monitor-page">
+    <!-- Page-level tabs for cross-navigation -->
+    <div class="page-tabs">
+      <el-radio-group v-model="activePage" size="default" @change="onPageChange">
+        <el-radio-button value="group-health">模型组健康</el-radio-button>
+        <el-radio-button value="performance">模型性能</el-radio-button>
+      </el-radio-group>
+    </div>
+
     <div class="monitor-card-outer">
       <div class="card-header">
         <h3 class="card-title">模型组健康监控</h3>
@@ -32,6 +40,7 @@
             v-for="group in groups"
             :key="group.group_name"
             class="monitor-item"
+            :class="{ 'no-traffic': !perfMap.get(group.group_name) }"
           >
             <div class="item-row">
               <div class="item-info">
@@ -63,6 +72,21 @@
               <div class="item-timeline">
                 <HealthTimeline :timeline="group.timeline" :lookback="lookback" />
               </div>
+              <div class="item-perf" v-if="perfMap.get(group.group_name)">
+                <div class="perf-rate">
+                  <span class="rate-value" :class="rateClass(perfMap.get(group.group_name)!.success_rate)">
+                    {{ (perfMap.get(group.group_name)!.success_rate * 100).toFixed(1) }}%
+                  </span>
+                  <span class="perf-label">成功率</span>
+                </div>
+                <div class="perf-ttft">
+                  <span class="ttft-value">{{ perfMap.get(group.group_name)!.p50_ms.toFixed(0) }}ms</span>
+                  <span class="perf-label">TTFT</span>
+                </div>
+              </div>
+              <div class="item-perf no-data" v-else>
+                <span class="no-data-text">无流量</span>
+              </div>
             </div>
           </div>
 
@@ -81,9 +105,21 @@
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
+import { useRouter } from 'vue-router'
 import { Refresh, Loading } from '@element-plus/icons-vue'
-import { getGroupHealthTimeline } from '@/services/control-plane'
-import type { GroupTimelineGroup } from '@/services/control-plane'
+import { getGroupHealthTimeline, getPerformance } from '@/services/control-plane'
+import type { GroupTimelineGroup, PerformanceItem } from '@/services/control-plane'
+
+const router = useRouter()
+
+// Page-level tab switching
+const activePage = ref('group-health')
+function onPageChange(val: string) {
+  if (val === 'performance') {
+    router.push('/admin/performance')
+  }
+  // else stay on current page
+}
 import HealthTimeline from '@/components/admin/HealthTimeline.vue'
 import { groupsApi } from '@/api/groups'
 import type { GroupEntitlement } from '@/types/group'
@@ -100,6 +136,9 @@ const total = ref(0)
 const lookback = ref('6h')
 const searchText = ref('')
 let timer: ReturnType<typeof setInterval> | null = null
+
+// 性能数据缓存：groupName -> PerformanceItem
+const perfMap = ref<Map<string, PerformanceItem>>(new Map())
 
 // 授权相关
 const entitlementsMap = ref<Map<string, GroupEntitlement[]>>(new Map())
@@ -227,7 +266,28 @@ async function loadEntitlements() {
 
 async function refreshData() {
   loading.value = true
-  try { await loadTimeline(true) } finally { loading.value = false }
+  try { 
+    await Promise.all([
+      loadTimeline(true),
+      loadPerformanceData()
+    ])
+  } finally { 
+    loading.value = false 
+  }
+}
+
+// 加载性能数据（成功率/TTFT）
+async function loadPerformanceData() {
+  try {
+    const result = await getPerformance(lookback.value, 'group', '', 200, 0)
+    const newMap = new Map<string, PerformanceItem>()
+    for (const item of result.items) {
+      newMap.set(item.name, item)
+    }
+    perfMap.value = newMap
+  } catch {
+    perfMap.value = new Map()
+  }
 }
 
 function onLookbackChange() {
@@ -252,6 +312,13 @@ function rateType(percent: number): 'success' | 'warning' | 'danger' {
   if (percent >= 95) return 'success'
   if (percent >= 80) return 'warning'
   return 'danger'
+}
+
+function rateClass(rate: number): string {
+  if (rate >= 0.95) return 'rate-excellent'
+  if (rate >= 0.80) return 'rate-good'
+  if (rate >= 0.50) return 'rate-fair'
+  return 'rate-poor'
 }
 
 function strategyLabel(strategy: string): string {
@@ -291,6 +358,36 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
 <style scoped>
 .group-health-monitor-page {
   width: 100%;
+}
+
+/* ── Page-level tabs ── */
+.page-tabs {
+  margin-bottom: 12px;
+}
+
+.page-tabs :deep(.el-radio-group) {
+  background: var(--bg-surface, #fff);
+  border-radius: 8px;
+  padding: 4px;
+  border: 1px solid var(--border-light, #F1F5F9);
+}
+
+.page-tabs :deep(.el-radio-button__inner) {
+  border: none !important;
+  border-radius: 6px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary, #64748B);
+  transition: all 0.2s;
+}
+
+.page-tabs :deep(.el-radio-button.is-active .el-radio-button__inner) {
+  background: var(--brand-green, #36B34E) !important;
+  color: #fff !important;
+  font-weight: 600;
 }
 
 /* Card */
@@ -377,10 +474,69 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
 /* Right: timeline */
 .item-timeline { flex: 1; min-width: 0; }
 
+/* Performance metrics column */
+.item-perf {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
+  width: 160px;
+}
+
+.perf-rate, .perf-ttft {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.rate-value {
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.rate-excellent { color: var(--perf-excellent, #059669); }
+.rate-good { color: var(--perf-good, #4F6CF6); }
+.rate-fair { color: var(--perf-fair, #D97706); }
+.rate-poor { color: var(--perf-poor, #DC2626); }
+
+.ttft-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.perf-label {
+  font-size: 10px;
+  color: var(--el-text-color-secondary);
+  font-weight: 500;
+}
+
+.item-perf.no-data {
+  justify-content: center;
+}
+
+.no-data-text {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+}
+
+/* No traffic state - dimmed */
+.monitor-item.no-traffic {
+  opacity: 0.6;
+}
+.monitor-item.no-traffic:hover {
+  opacity: 0.8;
+  border-color: var(--el-border-color-lighter);
+}
+
 /* ─── 平板 (768 ~ 1024) ─── */
 @media (max-width: 1024px) {
   .search-input { width: 140px; }
   .item-info { width: 220px; }
+  .item-perf { width: 140px; gap: 12px; }
 }
 
 /* ─── 窄屏 / 手机 (≤768) ─── */
@@ -394,8 +550,18 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
   .card-body { padding: 14px 12px; }
   .scroll-body { max-height: calc(100vh - 160px); }
 
-  .item-row { flex-direction: column; align-items: stretch; gap: 10px; }
+  .item-row { 
+    flex-direction: column; 
+    align-items: stretch; 
+    gap: 10px; 
+  }
   .item-info { min-width: 0; max-width: 100%; width: 100%; }
+  .item-perf { 
+    width: 100%; 
+    justify-content: center;
+    padding-top: 8px;
+    border-top: 1px solid var(--el-border-color-lighter);
+  }
   .monitor-item { padding: 12px; }
 
   .state-loading, .state-empty { padding: 24px 0; }

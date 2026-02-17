@@ -1,5 +1,13 @@
 <template>
   <div class="performance-page">
+    <!-- Page-level tabs for cross-navigation -->
+    <div class="page-tabs">
+      <el-radio-group v-model="activePage" size="default" @change="onPageChange">
+        <el-radio-button value="group-health">模型组健康</el-radio-button>
+        <el-radio-button value="performance">模型性能</el-radio-button>
+      </el-radio-group>
+    </div>
+
     <div class="monitor-card-outer">
       <div class="card-header">
         <div class="header-tabs">
@@ -237,9 +245,21 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
+import { useRouter } from 'vue-router'
 import { Refresh, Loading, ArrowDown, Search, InfoFilled, DataLine } from '@element-plus/icons-vue'
 import { getPerformance } from '@/services/control-plane'
 import type { PerformanceItem } from '@/services/control-plane'
+
+const router = useRouter()
+
+// Page-level tab switching
+const activePage = ref('performance')
+function onPageChange(val: string) {
+  if (val === 'group-health') {
+    router.push('/admin/group-health-monitor')
+  }
+  // else stay on current page
+}
 import { groupsApi } from '@/api/groups'
 import type { GroupEntitlement, GroupListItem } from '@/types/group'
 import { useAuthStore } from '@/stores/auth'
@@ -597,6 +617,36 @@ function pctClass(pct: number | null | undefined): string {
   width: 100%;
 }
 
+/* ── Page-level tabs ── */
+.page-tabs {
+  margin-bottom: 12px;
+}
+
+.page-tabs :deep(.el-radio-group) {
+  background: var(--bg-surface, #fff);
+  border-radius: 8px;
+  padding: 4px;
+  border: 1px solid var(--border-light, #F1F5F9);
+}
+
+.page-tabs :deep(.el-radio-button__inner) {
+  border: none !important;
+  border-radius: 6px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary, #64748B);
+  transition: all 0.2s;
+}
+
+.page-tabs :deep(.el-radio-button.is-active .el-radio-button__inner) {
+  background: var(--brand-green, #36B34E) !important;
+  color: #fff !important;
+  font-weight: 600;
+}
+
 /* ── Outer card ── */
 .monitor-card-outer {
   border: 1px solid var(--border-default, #E2E8F0);
@@ -698,70 +748,49 @@ function pctClass(pct: number | null | undefined): string {
   font-family: Georgia, 'Times New Roman', serif;
 }
 
-/* ── [4] Overview bar — no dividers, colored accent bottom ── */
+/* ── [4] Overview bar — compact horizontal ── */
 .overview-bar {
   display: flex;
-  align-items: stretch;
-  gap: 4px;
-  padding: 10px 16px;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--border-light, #F1F5F9);
   flex-wrap: wrap;
 }
 
 .overview-item {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  min-width: 72px;
-  padding: 8px 16px 10px;
-  border-radius: 8px;
-  position: relative;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 6px;
   transition: background 0.15s;
 }
 
-.overview-item::after {
-  content: '';
-  position: absolute;
-  bottom: 2px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 24px;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--border-default, #E2E8F0);
-  opacity: 0.5;
-}
-
 .overview-num {
-  font-size: 24px;
+  font-size: 18px;
   font-weight: 700;
-  line-height: 1.1;
+  line-height: 1;
   color: var(--text-primary, #0F172A);
   font-variant-numeric: tabular-nums;
 }
 
 .overview-label {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-secondary, #64748B);
-  margin-top: 3px;
   font-weight: 500;
 }
 
 .overview-item.is-excellent .overview-num { color: var(--perf-excellent); }
-.overview-item.is-excellent::after { background: var(--perf-excellent); opacity: 0.7; }
 .overview-item.is-excellent { background: var(--perf-excellent-bg); }
 
 .overview-item.is-good .overview-num { color: var(--perf-good); }
-.overview-item.is-good::after { background: var(--perf-good); opacity: 0.7; }
 .overview-item.is-good { background: var(--perf-good-bg); }
 
 .overview-item.is-fair .overview-num { color: var(--perf-fair); }
-.overview-item.is-fair::after { background: var(--perf-fair); opacity: 0.7; }
 .overview-item.is-fair { background: var(--perf-fair-bg); }
 
 .overview-item.is-poor .overview-num { color: var(--perf-poor); }
-.overview-item.is-poor::after { background: var(--perf-poor); opacity: 0.7; }
 .overview-item.is-poor { background: var(--perf-poor-bg); }
 
 /* ── Card body ── */
@@ -851,7 +880,7 @@ function pctClass(pct: number | null | undefined): string {
   gap: 6px;
 }
 
-/* ── [5] Perf row — enhanced hover ── */
+/* ── [5] Perf row — flex layout matching GroupHealthMonitor ── */
 .perf-row {
   border: 1px solid var(--border-light, #F1F5F9);
   border-left: 4px solid var(--border-default, #E2E8F0);
@@ -877,11 +906,10 @@ function pctClass(pct: number | null | undefined): string {
 }
 
 .perf-row-main {
-  display: grid;
-  grid-template-columns: 80px minmax(160px, 1.6fr) 88px minmax(140px, 1.2fr) 24px;
+  display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
+  gap: 16px;
+  padding: 12px 16px;
   cursor: pointer;
   user-select: none;
 }
@@ -891,6 +919,8 @@ function pctClass(pct: number | null | undefined): string {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-shrink: 0;
+  width: 70px;
 }
 
 .status-dot {
@@ -912,7 +942,10 @@ function pctClass(pct: number | null | undefined): string {
 .text-poor { color: var(--perf-poor); }
 
 /* ── Name cell ── */
-.name-cell { min-width: 0; }
+.name-cell { 
+  flex: 1;
+  min-width: 0;
+}
 
 .row-name {
   display: block;
@@ -945,12 +978,14 @@ function pctClass(pct: number | null | undefined): string {
   flex-direction: column;
   align-items: flex-end;
   text-align: right;
+  flex-shrink: 0;
+  width: 80px;
 }
 
 .rate-value {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
-  line-height: 1.1;
+  line-height: 1.2;
   font-variant-numeric: tabular-nums;
 }
 
@@ -961,14 +996,17 @@ function pctClass(pct: number | null | undefined): string {
   font-weight: 500;
 }
 
-/* ── [1] TTFT cell — inverted gauge ── */
-.ttft-cell { min-width: 0; }
+/* ── [1] TTFT cell ── */
+.ttft-cell { 
+  flex-shrink: 0;
+  width: 120px;
+}
 
 .ttft-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
 }
 
 .ttft-label {
@@ -985,15 +1023,15 @@ function pctClass(pct: number | null | undefined): string {
 }
 
 .ttft-track {
-  height: 5px;
-  border-radius: 3px;
+  height: 4px;
+  border-radius: 2px;
   background: var(--bg-subtle, #F1F5F9);
   overflow: hidden;
 }
 
 .ttft-fill {
   height: 100%;
-  border-radius: 3px;
+  border-radius: 2px;
   transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -1201,10 +1239,9 @@ function pctClass(pct: number | null | undefined): string {
 /* ── Responsive ── */
 @media (max-width: 1024px) {
   .search-input { width: 120px; }
-  .perf-row-main {
-    grid-template-columns: 72px minmax(120px, 1.4fr) 78px minmax(100px, 1fr) 24px;
-    gap: 8px;
-  }
+  .perf-row-main { gap: 12px; padding: 10px 12px; }
+  .name-cell { min-width: 120px; }
+  .ttft-cell { width: 100px; }
 }
 
 @media (max-width: 768px) {
@@ -1217,19 +1254,17 @@ function pctClass(pct: number | null | undefined): string {
   }
   .search-input { flex: 1; width: auto; }
   .scroll-body { max-height: calc(100vh - 240px); }
+  
   .perf-row-main {
-    grid-template-columns: 1fr auto;
-    grid-template-areas:
-      "status rate"
-      "name name"
-      "ttft ttft";
+    flex-wrap: wrap;
     gap: 8px;
   }
-  .status-cell { grid-area: status; }
-  .rate-cell { grid-area: rate; }
-  .name-cell { grid-area: name; }
-  .ttft-cell { grid-area: ttft; }
+  .status-cell { width: auto; }
+  .name-cell { flex: 1 1 60%; min-width: 0; }
+  .rate-cell { width: auto; }
+  .ttft-cell { width: 100%; }
   .expand-cell { display: none; }
+  
   .member-row {
     grid-template-columns: 1fr auto;
     grid-template-areas:
@@ -1244,8 +1279,10 @@ function pctClass(pct: number | null | undefined): string {
   .card-header { padding: 8px 10px; }
   .card-body { padding: 10px; }
   .info-strip { padding: 6px 10px; }
-  .overview-bar { padding: 8px 10px; }
-  .overview-item { min-width: 56px; padding: 6px 10px; }
+  .overview-bar { padding: 6px 10px; gap: 4px; }
+  .overview-item { padding: 3px 8px; }
+  .overview-num { font-size: 16px; }
+  .overview-label { font-size: 11px; }
 }
 
 /* ── Dark mode ── */

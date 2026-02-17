@@ -29,6 +29,7 @@ import { ref, computed, watch, onUnmounted, nextTick } from 'vue'
 import { Chart, registerables } from 'chart.js'
 import { useSettingsStore } from '@/stores/settings'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
+import { aggregateTrendData } from '@/utils/time'
 
 Chart.register(...registerables)
 
@@ -77,44 +78,6 @@ function onSwitchMetric(value: string) {
 function onSwitchGranularity(value: string) {
   emit('update:trendGranularity', value)
   emit('switchGranularity', value)
-}
-
-// ── Helper functions ────────────────────────────────────────────
-
-function getISOWeekLabel(date: Date): string {
-  const d = new Date(date)
-  d.setHours(0, 0, 0, 0)
-  d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7)
-  const year = d.getFullYear()
-  const week1 = new Date(year, 0, 4)
-  const weekNum = 1 + Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7)
-  return `${year}-W${String(weekNum).padStart(2, '0')}`
-}
-
-const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-
-function getMonthLabel(date: Date): string {
-  return `${MONTH_ABBR[date.getMonth()]} ${date.getFullYear()}`
-}
-
-function aggregateTrendData(data: any[], granularity: 'day' | 'week' | 'month'): any[] {
-  if (granularity === 'day' || !data.length) return data
-  const groups = new Map<string, any>()
-  for (const d of data) {
-    const dateStr = d.date
-    if (!dateStr) continue
-    const date = new Date(dateStr)
-    const key = granularity === 'week' ? getISOWeekLabel(date) : getMonthLabel(date)
-    if (!groups.has(key)) {
-      groups.set(key, { date: key, cost: 0, calls: 0, errors: 0, total_tokens: 0 })
-    }
-    const g = groups.get(key)!
-    g.cost         += d.cost         ?? 0
-    g.calls        += d.calls        ?? 0
-    g.errors       += d.errors       ?? 0
-    g.total_tokens += d.total_tokens ?? 0
-  }
-  return Array.from(groups.values())
 }
 
 // ── Formatting (adapted from parent) ────────────────────────────

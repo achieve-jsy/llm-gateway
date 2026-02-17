@@ -59,7 +59,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { WarningFilled, ArrowRight } from '@element-plus/icons-vue'
-import { currencySymbol, type Currency } from '@/utils/currency'
+import { currencySymbol, convertCost, type Currency } from '@/utils/currency'
+import { useSettingsStore } from '@/stores/settings'
 
 defineOptions({ name: 'LongTailAlerts' })
 
@@ -85,6 +86,12 @@ const emit = defineEmits<{
 }>()
 
 const collapsed = ref(true)
+const settingsStore = useSettingsStore()
+
+const cc = computed(() => ({
+  currency: (props.currency || 'CNY') as Currency,
+  rate: settingsStore.publicSettings.pricing_usd_to_cny_rate || 7.2,
+}))
 
 const longTailModels = computed(() =>
   props.modelsData.filter((m: any) => m.is_long_tail)
@@ -124,9 +131,10 @@ function getStatusClass(item: LongTailModel) {
 }
 
 function fmtCost(v: number) {
-  const sym = currencySymbol((props.currency || 'CNY') as Currency)
-  if (v < 0.01) return `< ${sym}0.01`
-  return `${sym}${v.toFixed(2)}`
+  const sym = currencySymbol(cc.value.currency)
+  const n = convertCost(v, cc.value)
+  if (n < 0.01) return `< ${sym}0.01`
+  return `${sym}${n.toFixed(2)}`
 }
 </script>
 

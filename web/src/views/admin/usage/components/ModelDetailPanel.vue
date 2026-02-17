@@ -366,9 +366,11 @@ function userCostPct(cost: number): number {
 }
 
 // ── Data fetching ───────────────────────────────────────────────────
+let loadVersion = 0
+
 async function loadData() {
-  if (loading.value) return
   if (!props.modelName || !props.dateRange[0] || !props.dateRange[1]) return
+  const ver = ++loadVersion
   loading.value = true
   try {
     const res = await fetchModelDetail({
@@ -376,14 +378,16 @@ async function loadData() {
       from: props.dateRange[0],
       to: props.dateRange[1],
     })
+    if (ver !== loadVersion) return // stale request
     detail.value = res
     await nextTick()
     initCharts()
   } catch (e) {
+    if (ver !== loadVersion) return
     detail.value = null
     console.warn('Failed to load model detail:', e)
   } finally {
-    loading.value = false
+    if (ver === loadVersion) loading.value = false
   }
 }
 

@@ -46,41 +46,35 @@
                 <span style="cursor:help;border-bottom:1px dashed currentColor">成本占比</span>
               </el-tooltip>
             </th>
-            <th class="col-num col-sortable" @click="$emit('toggleSort', 'cost')">
+            <th class="col-num col-sortable" :class="{ 'col-sortable--active': rankSort.field === 'cost' }" @click="$emit('toggleSort', 'cost')">
               成本 ({{ currency }})
-              <span class="ud-sort-arrows">
-                <span :class="['ud-sort-arrow', rankSort.field === 'cost' && rankSort.order === 'asc' ? 'ud-sort-arrow--active' : '']">▲</span>
-                <span :class="['ud-sort-arrow', rankSort.field === 'cost' && rankSort.order === 'desc' ? 'ud-sort-arrow--active' : '']">▼</span>
-              </span>
+              <SortIndicator field="cost" :active-field="rankSort.field" :order="rankSort.order" />
             </th>
-            <th class="col-num col-sortable" @click="$emit('toggleSort', 'calls')">
+            <th class="col-num col-sortable" :class="{ 'col-sortable--active': rankSort.field === 'calls' }" @click="$emit('toggleSort', 'calls')">
               调用次数
-              <span class="ud-sort-arrows">
-                <span :class="['ud-sort-arrow', rankSort.field === 'calls' && rankSort.order === 'asc' ? 'ud-sort-arrow--active' : '']">▲</span>
-                <span :class="['ud-sort-arrow', rankSort.field === 'calls' && rankSort.order === 'desc' ? 'ud-sort-arrow--active' : '']">▼</span>
-              </span>
+              <SortIndicator field="calls" :active-field="rankSort.field" :order="rankSort.order" />
             </th>
-            <th class="col-num col-sortable" @click="$emit('toggleSort', 'tokens')">
+            <th class="col-num col-sortable" :class="{ 'col-sortable--active': rankSort.field === 'tokens' }" @click="$emit('toggleSort', 'tokens')">
               {{ currentScope === 'user' ? 'Token 消耗' : '活跃用户' }}
-              <span class="ud-sort-arrows">
-                <span :class="['ud-sort-arrow', rankSort.field === 'tokens' && rankSort.order === 'asc' ? 'ud-sort-arrow--active' : '']">▲</span>
-                <span :class="['ud-sort-arrow', rankSort.field === 'tokens' && rankSort.order === 'desc' ? 'ud-sort-arrow--active' : '']">▼</span>
-              </span>
+              <SortIndicator field="tokens" :active-field="rankSort.field" :order="rankSort.order" />
             </th>
-            <th v-if="isEnhancedUserView" class="col-num">
+            <th v-if="isEnhancedUserView" class="col-num col-sortable" :class="{ 'col-sortable--active': rankSort.field === 'change' }" @click="$emit('toggleSort', 'change')">
               <el-tooltip content="相比上一期的成本变化" placement="top">
-                <span style="cursor:help;border-bottom:1px dashed currentColor">环比</span>
+                <span style="border-bottom:1px dashed currentColor">环比</span>
               </el-tooltip>
+              <SortIndicator field="change" :active-field="rankSort.field" :order="rankSort.order" />
             </th>
-            <th v-if="isEnhancedUserView" class="col-num">
+            <th v-if="isEnhancedUserView" class="col-num col-sortable" :class="{ 'col-sortable--active': rankSort.field === 'cpt' }" @click="$emit('toggleSort', 'cpt')">
               <el-tooltip content="每千 Token 的平均成本" placement="top">
-                <span style="cursor:help;border-bottom:1px dashed currentColor">千Token成本</span>
+                <span style="border-bottom:1px dashed currentColor">千Token成本</span>
               </el-tooltip>
+              <SortIndicator field="cpt" :active-field="rankSort.field" :order="rankSort.order" />
             </th>
-            <th v-if="isEnhancedUserView" class="col-num">
+            <th v-if="isEnhancedUserView" class="col-num col-sortable" :class="{ 'col-sortable--active': rankSort.field === 'err' }" @click="$emit('toggleSort', 'err')">
               <el-tooltip content="调用失败率" placement="top">
-                <span style="cursor:help;border-bottom:1px dashed currentColor">错误率</span>
+                <span style="border-bottom:1px dashed currentColor">错误率</span>
               </el-tooltip>
+              <SortIndicator field="err" :active-field="rankSort.field" :order="rankSort.order" />
             </th>
             <th v-if="currentScope === 'user'" class="col-models">常用模型</th>
           </tr>
@@ -165,6 +159,33 @@
   </div>
 </template>
 
+<script lang="ts">
+// SortIndicator must be registered in a non-setup <script> because
+// defineOptions() is hoisted and cannot reference locally-declared variables.
+import { defineComponent } from 'vue'
+
+const SortIndicator = defineComponent({
+  name: 'SortIndicator',
+  props: {
+    field: { type: String, required: true },
+    activeField: { type: String, required: true },
+    order: { type: String, default: '' },
+  },
+  template: `
+    <span class="sort-indicator">
+      <svg class="sort-chevron" :class="{ active: field === activeField && order === 'asc' }" viewBox="0 0 10 6" width="10" height="6" fill="none">
+        <path d="M1 5L5 1L9 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <svg class="sort-chevron" :class="{ active: field === activeField && order === 'desc' }" viewBox="0 0 10 6" width="10" height="6" fill="none">
+        <path d="M1 1L5 5L9 1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </span>
+  `,
+})
+
+export default { components: { SortIndicator } }
+</script>
+
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Search, ArrowRight, User, View } from '@element-plus/icons-vue'
@@ -184,7 +205,7 @@ const props = defineProps<{
   rankTitle: string
   rankTotal: number
   rankPageSize: number
-  rankSort: { field: string; order: string }
+  rankSort: { field: string; order: string } // SortField union from parent
   totalCost: number
   currency: Currency
   userTopModels: Record<string, any[]>
@@ -372,11 +393,37 @@ const isEnhancedUserView = computed(() =>
 .ud-section__title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .ud-rank-search { width: 140px; }
 
-.col-sortable { cursor: pointer; user-select: none; }
+.col-sortable {
+  cursor: pointer; user-select: none;
+  transition: color .2s, background .2s;
+}
 .col-sortable:hover { color: var(--el-color-primary); }
-.ud-sort-arrows { display: inline-flex; flex-direction: column; margin-left: 4px; vertical-align: middle; line-height: 1; gap: 0; }
-.ud-sort-arrow  { font-size: 8px; color: var(--el-border-color); line-height: 1; display: block; }
-.ud-sort-arrow--active { color: var(--el-color-primary); }
+
+/* Active sort column header: subtle tinted background */
+.col-sortable--active {
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+
+/* ── SortIndicator (SVG chevron pair) ── */
+.sort-indicator {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  margin-left: 4px;
+  vertical-align: middle;
+  gap: 1px;
+  line-height: 1;
+}
+.sort-chevron {
+  color: var(--el-border-color);
+  transition: color .2s, transform .2s;
+  flex-shrink: 0;
+}
+.sort-chevron.active {
+  color: var(--el-color-primary);
+  transform: scaleY(1.2);
+}
 
 /* ── 分页 ── */
 .ud-pagination { display: flex; justify-content: flex-end; padding: 8px 12px; }

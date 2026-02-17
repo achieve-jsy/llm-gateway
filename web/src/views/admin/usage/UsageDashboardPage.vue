@@ -346,7 +346,8 @@ const totalCostForBreakdown = computed(() =>
 )
 
 // ── 排行多维度排序 & 搜索 ─────────────────────────────────────
-const rankSort = ref<{ field: 'cost' | 'calls' | 'tokens'; order: 'asc' | 'desc' }>({ field: 'cost', order: 'desc' })
+type SortField = 'cost' | 'calls' | 'tokens' | 'change' | 'cpt' | 'err'
+const rankSort = ref<{ field: SortField; order: 'asc' | 'desc' }>({ field: 'cost', order: 'desc' })
 const rankSearch = ref('')
 
 const displayedBreakdown = computed(() => {
@@ -356,17 +357,35 @@ const displayedBreakdown = computed(() => {
     list = list.filter((r: any) => (r.name || r.id || '').toLowerCase().includes(q))
   }
   const { field, order } = rankSort.value
-  const key = field === 'cost' ? 'cost_estimate'
-    : field === 'calls' ? 'call_count'
-    : currentScope.value === 'user' ? 'total_tokens' : 'user_count'
-  list.sort((a: any, b: any) => {
-    const av = a[key] ?? 0, bv = b[key] ?? 0
-    return order === 'desc' ? bv - av : av - bv
-  })
+
+  // Enhanced fields: look up from enhancedUserMap
+  const enhancedFields: Record<string, string> = {
+    change: 'cost_change_pct',
+    cpt: 'cost_per_1k_tokens',
+    err: 'error_rate',
+  }
+
+  if (field in enhancedFields) {
+    const map = enhancedUserMap.value
+    const enhKey = enhancedFields[field]
+    list.sort((a: any, b: any) => {
+      const av = map[a.id]?.[enhKey] ?? -Infinity
+      const bv = map[b.id]?.[enhKey] ?? -Infinity
+      return order === 'desc' ? bv - av : av - bv
+    })
+  } else {
+    const key = field === 'cost' ? 'cost_estimate'
+      : field === 'calls' ? 'call_count'
+      : currentScope.value === 'user' ? 'total_tokens' : 'user_count'
+    list.sort((a: any, b: any) => {
+      const av = a[key] ?? 0, bv = b[key] ?? 0
+      return order === 'desc' ? bv - av : av - bv
+    })
+  }
   return list
 })
 
-function toggleSort(field: 'cost' | 'calls' | 'tokens') {
+function toggleSort(field: SortField) {
   if (rankSort.value.field === field) {
     rankSort.value = { field, order: rankSort.value.order === 'desc' ? 'asc' : 'desc' }
   } else {

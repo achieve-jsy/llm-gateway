@@ -73,7 +73,7 @@ const routes: RouteRecordRaw[] = [
     path: '/admin/chat-playground',
     name: 'ChatPlayground',
     component: () => import('@/views/admin/ChatPlaygroundPage.vue'),
-    meta: { title: '对话测试', requiresAdmin: true }
+    meta: { title: '对话测试' }
   },
   {
     path: '/admin/health-monitor',
@@ -91,7 +91,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/admin/performance',
     name: 'Performance',
-    component: () => import('@/views/admin/PerformancePage.vue'),
+    component: () => import('@/views/admin/GroupHealthMonitorPage.vue'),
     meta: { title: '模型性能看板' }
   },
   {

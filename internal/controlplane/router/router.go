@@ -723,7 +723,9 @@ func applyOIDCFromDB(cfg *auth.Config, settingsSvc *service.SettingsService) {
 		cfg.ClientID = settings.OIDCClientID
 	}
 	if settings.OIDCClientSecret != "" {
-		cfg.ClientSecret = settings.OIDCClientSecret
+		if raw := settingsSvc.GetOIDCClientSecret(ctx); raw != "" {
+			cfg.ClientSecret = raw
+		}
 	}
 	if settings.OIDCRedirectURL != "" {
 		cfg.RedirectURI = settings.OIDCRedirectURL

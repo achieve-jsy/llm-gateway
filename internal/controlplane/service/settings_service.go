@@ -297,6 +297,18 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, settings *model.Sy
 	return s.repo.SetMultiple(updates)
 }
 
+// GetSMTPPassword 返回原始 SMTP 密码（未脱敏），供测试邮件等内部场景使用。
+func (s *SettingsService) GetSMTPPassword(ctx context.Context) string {
+	pwd, _ := s.repo.GetValue(SettingKeySMTPPassword)
+	return pwd
+}
+
+// GetOIDCClientSecret 返回原始 OIDC Client Secret（未脱敏），供 OAuth 认证使用。
+func (s *SettingsService) GetOIDCClientSecret(ctx context.Context) string {
+	secret, _ := s.repo.GetValue(SettingKeyOIDCClientSecret)
+	return secret
+}
+
 func (s *SettingsService) GetGatewayRateLimitPerMinute(ctx context.Context) int {
 	v, err := s.repo.GetValue(SettingKeyRateLimitPerMin)
 	if err != nil {

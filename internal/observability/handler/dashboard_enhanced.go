@@ -11,6 +11,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// maxModelNameLength 模型名称最大长度阈值，用于过滤脏数据
+// 正常模型名称（如 gpt-4, claude-3-opus）通常不超过 64 字符，128 为安全阈值
+const maxModelNameLength = 128
+
 // ─── B1/B2/B3: DashboardUsers 增强 ─────────────────────────────────────────
 
 // DashboardUserRowEnhanced 增强版用户排行行（含 cost_ratio, cost_change_pct, cost_per_1k_tokens, error_rate, top_models, vs_avg）
@@ -377,7 +381,7 @@ func (h *UsageHandler) DashboardModelsEnhanced(c *gin.Context) {
 			COALESCE(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY duration_ms), 0) AS p90_duration_ms,
 			COALESCE(AVG(first_token_ms), 0) AS avg_first_token_ms`).
 		Where("ts::date BETWEEN ?::date AND ?::date", startStr, endStr).
-		Where("LENGTH(model) <= 128"). // 过滤脏数据：model 字段误填 prompt 内容的异常记录
+		Where("LENGTH(model) <= ?", maxModelNameLength). // 过滤脏数据：model 字段误填 prompt 内容的异常记录
 		Scopes(usagePol.QueryScope(actor))
 	if filterUserID != "" {
 		q = q.Where("user_id = ?", filterUserID)

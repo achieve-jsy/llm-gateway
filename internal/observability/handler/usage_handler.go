@@ -705,7 +705,7 @@ func (h *UsageHandler) DashboardModels(c *gin.Context) {
 			SUM(prompt_tokens + completion_tokens + reasoning_tokens) AS total_tokens,
 			SUM(est_cost_usd) AS cost`).
 		Where("ts::date BETWEEN ?::date AND ?::date", startStr, endStr).
-		Where("LENGTH(model) <= 128"). // 过滤脏数据：model 字段误填 prompt 内容的异常记录
+		Where("LENGTH(model) <= ?", maxModelNameLength). // 过滤脏数据：model 字段误填 prompt 内容的异常记录
 		Scopes(usagePol.QueryScope(actor))
 	if filterUserID != "" {
 		q = q.Where("user_id = ?", filterUserID)

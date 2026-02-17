@@ -434,7 +434,7 @@ function initTrendChart() {
           callbacks: {
             label(ctx) {
               const val = ctx.parsed.y
-              if (metric === 'cost') return `成本: ${fmtCost(val as number)}`
+              if (metric === 'cost') return `成本: ${sym.value}${(val as number).toFixed(2)}`
               if (metric === 'calls') return `调用: ${(val as number).toLocaleString()}`
               return `Token: ${fmtTokens(val as number)}`
             },

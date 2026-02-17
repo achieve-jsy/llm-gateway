@@ -159,7 +159,12 @@ function renderTrendChart() {
 
   const prevAggData = aggregateTrendData(props.prevTrendData ?? [], g)
   const hasPrev     = prevAggData.length > 0
-  const alignPrev   = (arr: number[]) => labels.map((_, i) => i < arr.length ? arr[i] : null)
+  const prevMap     = new Map(prevAggData.map(d => [d.date, d]))
+  const alignPrev   = (getField: (d: any) => number) =>
+    labels.map(label => {
+      const pd = prevMap.get(label)
+      return pd ? getField(pd) : null
+    })
 
   // 综合模式：成本（折线，左轴）+ 调用（柱，右轴）
   if (metric === 'all') {
@@ -216,9 +221,9 @@ function renderTrendChart() {
 
   // 单指标模式（带上期虚线对比）
   const metricCfg = {
-    cost:   { curr: costs,  prev: prevAggData.map(d => d.cost ?? 0),         color: '#67c23a', bgColor: 'rgba(103,194,58,0.25)', prevColor: 'rgba(103,194,58,0.5)', label: '成本 (' + cc.value.currency + ')',  fmtFn: (v: any) => fmtCost(v) },
-    calls:  { curr: calls,  prev: prevAggData.map(d => d.calls ?? 0),         color: '#409eff', bgColor: 'rgba(64,158,255,0.30)', prevColor: 'rgba(64,158,255,0.5)', label: '调用次数',    fmtFn: (v: any) => Number(v).toLocaleString() },
-    tokens: { curr: tokens, prev: prevAggData.map(d => d.total_tokens ?? 0), color: '#8b5cf6', bgColor: 'rgba(139,92,246,0.25)', prevColor: 'rgba(139,92,246,0.5)', label: 'Token 消耗',  fmtFn: (v: any) => fmtTokens(v) },
+    cost:   { curr: costs,  prev: alignPrev(d => d.cost ?? 0),         color: '#67c23a', bgColor: 'rgba(103,194,58,0.25)', prevColor: 'rgba(103,194,58,0.5)', label: '成本 (' + cc.value.currency + ')',  fmtFn: (v: any) => fmtCost(v) },
+    calls:  { curr: calls,  prev: alignPrev(d => d.calls ?? 0),         color: '#409eff', bgColor: 'rgba(64,158,255,0.30)', prevColor: 'rgba(64,158,255,0.5)', label: '调用次数',    fmtFn: (v: any) => Number(v).toLocaleString() },
+    tokens: { curr: tokens, prev: alignPrev(d => d.total_tokens ?? 0), color: '#8b5cf6', bgColor: 'rgba(139,92,246,0.25)', prevColor: 'rgba(139,92,246,0.5)', label: 'Token 消耗',  fmtFn: (v: any) => fmtTokens(v) },
   }[metric]!
 
   if (!metricCfg) {
@@ -238,7 +243,7 @@ function renderTrendChart() {
   if (hasPrev) {
     datasets.push({
       label: '上期 ' + metricCfg.label,
-      data: alignPrev(metricCfg.prev),
+      data: metricCfg.prev,
       borderColor: metricCfg.prevColor,
       backgroundColor: 'transparent',
       borderDash: [5, 5],

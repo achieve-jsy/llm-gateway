@@ -135,7 +135,10 @@ function renderModelChart() {
     const restCost   = rest.reduce((s: number, d: any) => s + (d.cost ?? 0), 0)
     const restCalls  = rest.reduce((s: number, d: any) => s + (d.calls ?? 0), 0)
     const restTokens = rest.reduce((s: number, d: any) => s + (d.total_tokens ?? 0), 0)
-    data = [...top, { model: `其他 (${rest.length} 种)`, cost: restCost, calls: restCalls, total_tokens: restTokens }]
+    const restErrorCount   = rest.reduce((s: number, d: any) => s + (d.error_count ?? 0), 0)
+    const restCallsTotal   = rest.reduce((s: number, d: any) => s + (d.calls ?? 0), 0)
+    const restErrorRate    = restCallsTotal > 0 ? (restErrorCount / restCallsTotal) * 100 : 0
+    data = [...top, { model: `其他 (${rest.length} 种)`, cost: restCost, calls: restCalls, total_tokens: restTokens, error_rate: restErrorRate }]
   } else {
     data = raw
   }

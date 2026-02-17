@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -85,19 +86,19 @@ func (s *RollupService) Run(ctx context.Context, day time.Time) error {
 	)
 
 	// ── 新增预聚合表写入 ──────────────────────────────────────────────
-	var lastErr error
+	var errs []error
 
 	// 模型维度预聚合（model_daily_stats）
 	if err := s.aggregateModelDailyStats(ctx, dayStart); err != nil {
-		lastErr = err
+		errs = append(errs, err)
 	}
 
 	// 用户维度预聚合（user_daily_stats）
 	if err := s.aggregateUserDailyStats(ctx, dayStart); err != nil {
-		lastErr = err
+		errs = append(errs, err)
 	}
 
-	return lastErr
+	return errors.Join(errs...)
 }
 
 // RunTodayAndYesterday 覆盖今天 + 昨天（跨零点延迟到达）
@@ -937,7 +938,7 @@ func (s *RollupService) aggregateUserDailyStats(ctx context.Context, date time.T
 			SUM(sub.req_count) AS req_count,
 			SUM(sub.success_count) AS success_count,
 			SUM(sub.error_count) AS error_count,
-			sub.model_count,
+			SUM(sub.model_count) AS model_count,
 			SUM(sub.prompt_tokens) AS prompt_tokens,
 			SUM(sub.cached_tokens) AS cached_tokens,
 			SUM(sub.completion_tokens) AS completion_tokens,
@@ -969,7 +970,7 @@ func (s *RollupService) aggregateUserDailyStats(ctx context.Context, date time.T
 					 COALESCE(d.dept_id, cl.dept_id, ''),
 					 EXTRACT(HOUR FROM cl.ts)
 		) sub
-		GROUP BY sub.user_id, sub.studio_id, sub.dept_id, sub.model_count
+		GROUP BY sub.user_id, sub.studio_id, sub.dept_id
 		ON CONFLICT (stat_date, user_id) DO UPDATE SET
 			studio_id = EXCLUDED.studio_id,
 			dept_id = EXCLUDED.dept_id,

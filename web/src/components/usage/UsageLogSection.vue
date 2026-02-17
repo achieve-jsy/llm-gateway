@@ -50,7 +50,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, type PropType } from 'vue'
+import { ref, computed, watch, onMounted, type PropType } from 'vue'
 import { Download } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import http from '@/services/http'
@@ -173,6 +173,11 @@ function refresh() {
 defineExpose({
   rows, total, page, pageSize,
   refresh, loadLogs,
+})
+
+// ── 首次挂载加载数据 ──
+onMounted(() => {
+  loadLogs()
 })
 
 // ── 监听 params 变更自动刷新（deep watch）──

@@ -27,6 +27,10 @@ type Group struct {
 	FailoverCooldownSeconds int            `gorm:"not null;default:60" json:"failover_cooldown_seconds"`
 	TimeoutSeconds          int            `gorm:"not null;default:0" json:"timeout_seconds"`
 	OpenMode                string         `gorm:"type:varchar(16);not null;default:'public';check:open_mode IN ('public','controlled')" json:"open_mode"`
+	IsCapabilityOverride    bool           `gorm:"not null;default:false" json:"is_capability_override"`
+	OverrideSupportsVision  bool           `gorm:"not null;default:false" json:"override_supports_vision"`
+	OverrideSupportsFC      bool           `gorm:"not null;default:false;column:override_supports_function_calling" json:"override_supports_function_calling"`
+	OverrideSupportsTC      bool           `gorm:"not null;default:false;column:override_supports_tool_choice" json:"override_supports_tool_choice"`
 	Models                  []GroupModel   `gorm:"foreignKey:GroupID" json:"models,omitempty"`
 }
 

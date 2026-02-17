@@ -521,6 +521,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.POST("/groups/:id/models", groupHandler.AddModels)
 		adminGroup.GET("/groups/:id/models", groupHandler.ListModels)
 		adminGroup.DELETE("/groups/:id/models/:model_id", groupHandler.RemoveModel)
+		adminGroup.POST("/groups/:id/reset-capability", groupHandler.ResetCapability)
 		adminGroup.POST("/groups/:id/check", groupCheckHandler.CheckOne)
 
 		// 系统设置

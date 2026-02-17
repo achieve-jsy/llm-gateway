@@ -303,6 +303,12 @@ func (s *SettingsService) GetSMTPPassword(ctx context.Context) string {
 	return pwd
 }
 
+// GetOIDCClientSecret 返回原始 OIDC Client Secret（未脱敏），供 OAuth 认证使用。
+func (s *SettingsService) GetOIDCClientSecret(ctx context.Context) string {
+	secret, _ := s.repo.GetValue(SettingKeyOIDCClientSecret)
+	return secret
+}
+
 func (s *SettingsService) GetGatewayRateLimitPerMinute(ctx context.Context) int {
 	v, err := s.repo.GetValue(SettingKeyRateLimitPerMin)
 	if err != nil {

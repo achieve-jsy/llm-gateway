@@ -125,7 +125,6 @@ function fmtTokens(n?: number | null) {
 
 function renderModelChart() {
   if (!modelCanvasRef.value) return
-  const ver = ++renderVersion
   modelChartInst?.destroy()
   modelChartInst = null
   const raw = props.modelsData
@@ -175,8 +174,6 @@ function renderModelChart() {
     : v.toFixed(1) + '%'
 
   if (props.modelChartType === 'doughnut') {
-    // Stale guard: a newer render was triggered before we got here
-    if (ver !== renderVersion || unmounted) return
     modelChartInst = new Chart(modelCanvasRef.value, {
       type: 'doughnut',
       data: {
@@ -261,8 +258,6 @@ function renderModelChart() {
     },
   }
 
-  // Stale guard: a newer render was triggered before we got here
-  if (ver !== renderVersion || unmounted) return
   modelChartInst = new Chart(modelCanvasRef.value, {
     type: 'bar',
     data: {
@@ -331,7 +326,12 @@ function renderModelChart() {
 watch(
   () => [props.modelsData, props.modelMetric, props.modelChartType, props.currency],
   async () => {
+    const ver = ++renderVersion
     await nextTick()
+    // Stale guard at watcher level: after nextTick, check if a newer render
+    // was queued. This is where the race actually happens — between the await
+    // and the sync renderModelChart() call.
+    if (ver !== renderVersion || unmounted) return
     renderModelChart()
   },
   { deep: true },

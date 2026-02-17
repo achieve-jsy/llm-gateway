@@ -679,6 +679,7 @@ async function loadModels() {
   try {
     const modelParams: Record<string, any> = { start: dateRange.value[0], end: dateRange.value[1] }
     Object.assign(modelParams, scopeParams())
+    if (filterModel.value)  modelParams.model_name = filterModel.value
     if (filterStatus.value) modelParams.status = filterStatus.value
     const res = await http.get('/api/v1/usage/dashboard/models', { params: modelParams })
     modelsData.value = res.data?.rows ?? []
@@ -1002,42 +1003,48 @@ defineExpose({ reloadLogs })
 
 /* ── Phase B: Panel slide transition ── */
 .ud-slide-enter-active {
-  transition: all 0.3s ease-out;
+  transition: opacity 0.35s cubic-bezier(0, 0, 0.2, 1),
+              transform 0.35s cubic-bezier(0, 0, 0.2, 1);
 }
 .ud-slide-leave-active {
-  transition: all 0.2s ease-in;
+  transition: opacity 0.2s cubic-bezier(0.4, 0, 1, 1),
+              transform 0.2s cubic-bezier(0.4, 0, 1, 1);
 }
-.ud-slide-enter-from,
+.ud-slide-enter-from {
+  opacity: 0;
+  transform: translateY(-16px) scale(0.98);
+}
 .ud-slide-leave-to {
   opacity: 0;
-  transform: translateY(-12px);
-  max-height: 0;
+  transform: translateY(-8px) scale(0.99);
 }
 .ud-slide-enter-to,
 .ud-slide-leave-from {
   opacity: 1;
-  transform: translateY(0);
-  max-height: 2000px;
+  transform: translateY(0) scale(1);
 }
 
 /* ── Phase B: Model Detail Panel slide transition ── */
 .md-slide-enter-active {
-  transition: all 0.3s ease-out;
+  transition: opacity 0.35s cubic-bezier(0, 0, 0.2, 1),
+              transform 0.35s cubic-bezier(0, 0, 0.2, 1);
 }
 .md-slide-leave-active {
-  transition: all 0.2s ease-in;
+  transition: opacity 0.2s cubic-bezier(0.4, 0, 1, 1),
+              transform 0.2s cubic-bezier(0.4, 0, 1, 1);
 }
-.md-slide-enter-from,
+.md-slide-enter-from {
+  opacity: 0;
+  transform: translateY(-16px) scale(0.98);
+}
 .md-slide-leave-to {
   opacity: 0;
-  transform: translateY(-12px);
-  max-height: 0;
+  transform: translateY(-8px) scale(0.99);
 }
 .md-slide-enter-to,
 .md-slide-leave-from {
   opacity: 1;
-  transform: translateY(0);
-  max-height: 2000px;
+  transform: translateY(0) scale(1);
 }
 </style>
 

@@ -53,6 +53,32 @@
       </div>
     </div>
 
+    <!-- Section B2: Efficiency Metrics Row -->
+    <div class="ud-panel__eff-row" v-if="detail">
+      <div class="ud-eff-item">
+        <span class="ud-eff-label">平均响应</span>
+        <span class="ud-eff-value" :class="avgDurationClass">
+          {{ fmtDuration(detail.summary.avg_duration_ms) }}
+        </span>
+      </div>
+      <div class="ud-eff-divider"></div>
+      <div class="ud-eff-item">
+        <span class="ud-eff-label">每次调用成本</span>
+        <span class="ud-eff-value">{{ fmtCostPerCall }}</span>
+      </div>
+      <div class="ud-eff-divider"></div>
+      <div class="ud-eff-item">
+        <span class="ud-eff-label">成功 / 失败</span>
+        <span class="ud-eff-value">
+          <span class="ud-kpi--green">{{ detail.summary.success_count.toLocaleString() }}</span>
+          <span class="ud-eff-sep">/</span>
+          <span :class="detail.summary.total_calls - detail.summary.success_count > 0 ? 'ud-kpi--red' : ''">
+            {{ (detail.summary.total_calls - detail.summary.success_count).toLocaleString() }}
+          </span>
+        </span>
+      </div>
+    </div>
+
     <!-- Loading state -->
     <div v-if="loading" class="ud-panel__loading">
       <el-icon class="is-loading" :size="24"><Loading /></el-icon>
@@ -98,6 +124,11 @@
     <div v-if="detail" class="ud-panel__hourly-section">
       <div class="ud-panel__chart-header">
         <span class="ud-panel__chart-title">小时分布</span>
+        <span class="ud-heat-legend">
+          <span class="ud-heat-legend__bar"></span>
+          <span class="ud-heat-legend__label">低</span>
+          <span class="ud-heat-legend__label">高</span>
+        </span>
       </div>
       <div class="ud-hourly-wrap">
         <canvas ref="hourlyCanvas"></canvas>
@@ -185,6 +216,25 @@ const errorRateClass = computed(() => {
   if (er <= 5) return 'ud-kpi--yellow'
   return 'ud-kpi--red'
 })
+
+const avgDurationClass = computed(() => {
+  if (!detail.value) return ''
+  const ms = detail.value.summary.avg_duration_ms
+  if (ms < 2000) return 'ud-kpi--green'
+  if (ms <= 5000) return 'ud-kpi--yellow'
+  return 'ud-kpi--red'
+})
+
+const fmtCostPerCall = computed(() => {
+  if (!detail.value || !detail.value.summary.total_calls) return `${sym.value}0.00`
+  const perCall = detail.value.summary.est_cost_usd / detail.value.summary.total_calls
+  return fmtCost(perCall)
+})
+
+function fmtDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  return `${(ms / 1000).toFixed(1)}s`
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────
 function fmtCost(usd: number): string {
@@ -415,6 +465,19 @@ function initHourlyChart() {
   const labels = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`)
   const data = Array.from({ length: 24 }, (_, i) => map.get(i) ?? 0)
 
+  // Heatmap coloring: map value intensity to HSL hue (210° blue → 20° orange-red)
+  const maxVal = Math.max(...data, 1)
+  const barColors = data.map(v => {
+    const ratio = v / maxVal
+    // Hue: 210 (cool blue) → 30 (warm orange) as ratio increases
+    const hue = 210 - ratio * 180
+    // Saturation: 60% → 85%
+    const sat = 60 + ratio * 25
+    // Lightness: 65% → 50%
+    const light = 65 - ratio * 15
+    return `hsl(${hue}, ${sat}%, ${light}%)`
+  })
+
   hourlyChart = new Chart(hourlyCanvas.value, {
     type: 'bar',
     data: {
@@ -422,7 +485,7 @@ function initHourlyChart() {
       datasets: [{
         label: '调用次数',
         data,
-        backgroundColor: '#409eff',
+        backgroundColor: barColors,
         borderRadius: 3,
         borderSkipped: false,
       }],
@@ -608,6 +671,45 @@ onBeforeUnmount(() => {
 .ud-kpi--yellow { color: #e6a23c; }
 .ud-kpi--red { color: #f56c6c; }
 
+/* ── Section B2: Efficiency Metrics ── */
+.ud-panel__eff-row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--ud-border);
+  background: var(--el-fill-color-blank, #fafbfc);
+}
+.ud-eff-item {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  justify-content: center;
+}
+.ud-eff-label {
+  font-size: 12px;
+  color: var(--ud-muted);
+  white-space: nowrap;
+}
+.ud-eff-value {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  font-variant-numeric: tabular-nums;
+}
+.ud-eff-sep {
+  color: var(--ud-muted);
+  margin: 0 2px;
+  font-weight: 400;
+}
+.ud-eff-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--ud-border);
+  flex-shrink: 0;
+}
+
 /* ── Section C: Two-column grid ── */
 .ud-panel__charts-grid {
   display: grid;
@@ -663,6 +765,23 @@ onBeforeUnmount(() => {
 }
 .ud-hourly-wrap {
   min-height: 180px;
+}
+/* Heat legend */
+.ud-heat-legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.ud-heat-legend__bar {
+  width: 60px;
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, hsl(210, 60%, 65%), hsl(120, 70%, 55%), hsl(30, 85%, 50%));
+}
+.ud-heat-legend__label {
+  font-size: 11px;
+  color: var(--ud-muted);
 }
 .ud-hourly-wrap canvas {
   max-width: 100%;

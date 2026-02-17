@@ -303,9 +303,10 @@ function renderModelChart() {
               const prefix = item?.is_long_tail ? '● ' : ''
               return prefix + (labels[idx] || '')
             },
-            color: (_v: any, idx: number) => {
+            color: (ctx: any) => {
+              const idx = ctx.index ?? 0
               const item = idx < raw.length ? raw[idx] : null
-              return item?.is_long_tail ? '#e6a23c' : undefined
+              return item?.is_long_tail ? '#e6a23c' : '#606266'
             },
           },
         },

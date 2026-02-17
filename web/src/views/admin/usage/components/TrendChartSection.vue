@@ -170,8 +170,8 @@ function renderTrendChart() {
         datasets: [
           {
             type: 'line' as const, label: '成本 (' + cc.value.currency + ')', data: costs,
-            yAxisID: 'yCost', borderColor: '#67c23a', backgroundColor: 'rgba(103,194,58,0.10)',
-            fill: true, tension: 0.35, pointRadius: showPoints ? 3 : 0, pointHoverRadius: 5, borderWidth: 2, order: 1,
+            yAxisID: 'yCost', borderColor: '#67c23a', backgroundColor: 'rgba(103,194,58,0.25)',
+            fill: true, tension: 0.35, pointRadius: showPoints ? 3 : 0, pointHoverRadius: 5, borderWidth: 3, order: 1,
           },
           {
             type: 'bar' as const, label: '调用次数', data: calls,
@@ -216,9 +216,9 @@ function renderTrendChart() {
 
   // 单指标模式（带上期虚线对比）
   const metricCfg = {
-    cost:   { curr: costs,  prev: prevAggData.map(d => d.cost ?? 0),         color: '#67c23a', bgColor: 'rgba(103,194,58,0.12)', prevColor: 'rgba(103,194,58,0.5)', label: '成本 (' + cc.value.currency + ')',  fmtFn: (v: any) => fmtCost(v) },
-    calls:  { curr: calls,  prev: prevAggData.map(d => d.calls ?? 0),         color: '#409eff', bgColor: 'rgba(64,158,255,0.15)', prevColor: 'rgba(64,158,255,0.5)', label: '调用次数',    fmtFn: (v: any) => Number(v).toLocaleString() },
-    tokens: { curr: tokens, prev: prevAggData.map(d => d.total_tokens ?? 0), color: '#8b5cf6', bgColor: 'rgba(139,92,246,0.12)', prevColor: 'rgba(139,92,246,0.5)', label: 'Token 消耗',  fmtFn: (v: any) => fmtTokens(v) },
+    cost:   { curr: costs,  prev: prevAggData.map(d => d.cost ?? 0),         color: '#67c23a', bgColor: 'rgba(103,194,58,0.25)', prevColor: 'rgba(103,194,58,0.5)', label: '成本 (' + cc.value.currency + ')',  fmtFn: (v: any) => fmtCost(v) },
+    calls:  { curr: calls,  prev: prevAggData.map(d => d.calls ?? 0),         color: '#409eff', bgColor: 'rgba(64,158,255,0.30)', prevColor: 'rgba(64,158,255,0.5)', label: '调用次数',    fmtFn: (v: any) => Number(v).toLocaleString() },
+    tokens: { curr: tokens, prev: prevAggData.map(d => d.total_tokens ?? 0), color: '#8b5cf6', bgColor: 'rgba(139,92,246,0.25)', prevColor: 'rgba(139,92,246,0.5)', label: 'Token 消耗',  fmtFn: (v: any) => fmtTokens(v) },
   }[metric]!
 
   if (!metricCfg) {
@@ -231,7 +231,7 @@ function renderTrendChart() {
       label: metricCfg.label, data: metricCfg.curr,
       borderColor: metricCfg.color, backgroundColor: metricCfg.bgColor,
       fill: true, tension: 0.35,
-      pointRadius: showPoints ? 3 : 0, pointHoverRadius: 5, borderWidth: 2, order: 1,
+      pointRadius: showPoints ? 4 : 0, pointHoverRadius: 6, borderWidth: 3, order: 1,
     },
   ]
 

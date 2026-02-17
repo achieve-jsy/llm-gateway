@@ -603,7 +603,7 @@ function resetToTop() {
 const trendLoading = ref(false)
 const trendData    = ref<any[]>([])
 const prevTrendData = ref<any[]>([])
-const trendMetric = ref<'overview' | 'cost' | 'calls' | 'tokens'>('overview')
+const trendMetric = ref<'all' | 'cost' | 'calls' | 'tokens'>('all')
 
 const trendGranularity = ref<'day' | 'week' | 'month'>('day')
 let granularityManuallySet = false

@@ -439,7 +439,7 @@ function initTrendChart() {
           callbacks: {
             label(ctx) {
               const val = ctx.parsed.y
-              if (metric === 'cost') return `成本: ${((val as number) / (cc.value.currency === 'CNY' ? cc.value.rate : 1)).toFixed(2)}`
+              if (metric === 'cost') return `成本: ${fmtCost(val as number)}`
               if (metric === 'calls') return `调用: ${(val as number).toLocaleString()}`
               return `Token: ${fmtTokens(val as number)}`
             },

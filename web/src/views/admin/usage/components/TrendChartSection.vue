@@ -190,7 +190,7 @@ function renderTrendChart() {
           yCost: {
             type: 'linear', position: 'left',
             grid: { color: 'rgba(0,0,0,0.05)' },
-            ticks: { font: { size: 11 }, callback: (v: any) => `${currencySymbol(cc.value.currency)}${convertCost(Number(v), cc.value).toFixed(2)}` },
+            ticks: { font: { size: 11 }, callback: (v: any) => fmtCost(Number(v)) },
           },
           yCalls: {
             type: 'linear', position: 'right',

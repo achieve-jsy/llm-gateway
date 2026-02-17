@@ -229,10 +229,13 @@ async function fetchData() {
       page: page.value,
       page_size: pageSize,
     })
-    logs.value = result.items
-    total.value = result.total
-  } catch {
-    ElMessage.error('加载日志失败')
+    logs.value = result.items ?? []
+    total.value = result.total ?? 0
+  } catch (err: any) {
+    // 静默降级：后端 500 时（如 system_logs 表未建立）展示空列表，不阻塞页面渲染
+    console.warn('[OpsSystemLogTable] 加载日志失败（已降级为空列表）:', err?.message || err)
+    logs.value = []
+    total.value = 0
   } finally {
     loading.value = false
   }

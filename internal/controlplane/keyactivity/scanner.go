@@ -292,6 +292,9 @@ func (s *Scanner) upsertSeen(row *CallLogRow, fp string) {
 
 func (s *Scanner) getKeyName(row *CallLogRow) string {
 	if row.KeyName != "" {
+		if uid, err := uuid.Parse(row.UserID); err == nil {
+			s.keyCache[row.KeyID] = keyInfo{name: row.KeyName, userID: uid}
+		}
 		return row.KeyName
 	}
 	if info, ok := s.keyCache[row.KeyID]; ok {

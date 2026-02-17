@@ -938,7 +938,9 @@ func (s *RollupService) aggregateUserDailyStats(ctx context.Context, date time.T
 			SUM(sub.req_count) AS req_count,
 			SUM(sub.success_count) AS success_count,
 			SUM(sub.error_count) AS error_count,
-			SUM(sub.model_count) AS model_count,
+			-- Fix: COUNT DISTINCT models across all hours (SUM would overcount
+			-- when the same model appears in multiple hour buckets)
+			cardinality(array_remove(array_agg(DISTINCT unnest(sub._models)), NULL)) AS model_count,
 			SUM(sub.prompt_tokens) AS prompt_tokens,
 			SUM(sub.cached_tokens) AS cached_tokens,
 			SUM(sub.completion_tokens) AS completion_tokens,
@@ -953,7 +955,7 @@ func (s *RollupService) aggregateUserDailyStats(ctx context.Context, date time.T
 				COUNT(*) AS req_count,
 				COUNT(*) FILTER (WHERE cl.status = 200) AS success_count,
 				COUNT(*) FILTER (WHERE cl.status != 200) AS error_count,
-				COUNT(DISTINCT cl.model) AS model_count,
+				array_agg(DISTINCT cl.model) AS _models,
 				COALESCE(SUM(cl.prompt_tokens), 0) AS prompt_tokens,
 				COALESCE(SUM(cl.cached_tokens), 0) AS cached_tokens,
 				COALESCE(SUM(cl.completion_tokens), 0) AS completion_tokens,

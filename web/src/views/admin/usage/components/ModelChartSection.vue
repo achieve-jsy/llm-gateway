@@ -59,6 +59,8 @@ const cc = computed(() => ({
 
 const modelCanvasRef = ref<HTMLCanvasElement | null>(null)
 let modelChartInst: Chart | null = null
+let renderVersion = 0
+let unmounted = false
 
 const MODEL_COLORS = [
   '#409eff', '#67c23a', '#e6a23c', '#f56c6c',
@@ -123,7 +125,9 @@ function fmtTokens(n?: number | null) {
 
 function renderModelChart() {
   if (!modelCanvasRef.value) return
+  const ver = ++renderVersion
   modelChartInst?.destroy()
+  modelChartInst = null
   const raw = props.modelsData
   if (!raw.length) return
 
@@ -171,6 +175,8 @@ function renderModelChart() {
     : v.toFixed(1) + '%'
 
   if (props.modelChartType === 'doughnut') {
+    // Stale guard: a newer render was triggered before we got here
+    if (ver !== renderVersion || unmounted) return
     modelChartInst = new Chart(modelCanvasRef.value, {
       type: 'doughnut',
       data: {
@@ -255,6 +261,8 @@ function renderModelChart() {
     },
   }
 
+  // Stale guard: a newer render was triggered before we got here
+  if (ver !== renderVersion || unmounted) return
   modelChartInst = new Chart(modelCanvasRef.value, {
     type: 'bar',
     data: {
@@ -330,6 +338,7 @@ watch(
 )
 
 onUnmounted(() => {
+  unmounted = true
   modelChartInst?.destroy()
 })
 </script>

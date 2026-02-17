@@ -176,18 +176,16 @@
                 <div
                   v-for="item in normalItems"
                   :key="item.name"
-                  class="normal-row"
-                  @click="toggleExpand(item.name)"
                 >
-                  <span class="normal-dot" :class="'dot-' + computeStatus(item).key"></span>
-                  <span class="normal-name">{{ item.name }}</span>
-                  <span class="normal-rate">{{ formatPct(item.success_rate) }}</span>
-                  <span class="normal-ttft">{{ formatMs(item.ttft_p50_ms) }}</span>
-                  <span class="normal-req">{{ item.req_count }}</span>
-                  <el-icon :size="12" class="chevron" :class="{ rotated: expandedGroups.has(item.name) }"><ArrowDown /></el-icon>
-                </div>
-                <!-- 正常项展开详情 -->
-                <div v-for="item in normalItems" :key="'detail-' + item.name">
+                  <div class="normal-row" @click="toggleExpand(item.name)">
+                    <span class="normal-dot" :class="'dot-' + computeStatus(item).key"></span>
+                    <span class="normal-name">{{ item.name }}</span>
+                    <span class="normal-rate">{{ formatPct(item.success_rate) }}</span>
+                    <span class="normal-ttft">{{ formatMs(item.ttft_p50_ms) }}</span>
+                    <span class="normal-req">{{ item.req_count }}</span>
+                    <el-icon :size="12" class="chevron" :class="{ rotated: expandedGroups.has(item.name) }"><ArrowDown /></el-icon>
+                  </div>
+                  <!-- 正常项展开详情 (inline with each item) -->
                   <transition name="slide">
                     <div v-if="expandedGroups.has(item.name)" class="perf-detail">
                       <div class="detail-metrics">
@@ -356,10 +354,11 @@ const normalItems = computed(() =>
 const healthScore = computed(() => {
   const items = sortedItems.value
   if (items.length === 0) return 100
-  let score = 100
   const c = statusCounts.value
-  score -= c.poor * 15
-  score -= c.fair * 5
+  const total = items.length
+  // Normalized: excellent/good = full score, fair = 2/3, poor = 0
+  // Scale so score is comparable regardless of item count.
+  const score = 100 - (c.poor * 100 + c.fair * 100 / 3) / total
   return Math.max(0, Math.min(100, Math.round(score)))
 })
 

@@ -1,15 +1,22 @@
 <template>
   <div class="group-health-monitor-page">
     <div class="monitor-card-outer">
-      <!-- Header: title + controls -->
+      <!-- Header: view toggle + controls -->
       <div class="card-header">
-        <h3 class="card-title">模型组监控</h3>
+        <div class="header-left">
+          <el-radio-group v-model="view" size="small" @change="onViewChange">
+            <el-radio-button value="group">模型组视角</el-radio-button>
+            <el-radio-button value="model">模型视角</el-radio-button>
+          </el-radio-group>
+        </div>
         <div class="header-actions">
-          <el-input v-model="searchText" placeholder="搜索模型组名称" size="small" clearable class="search-input" @keyup.enter="onSearch" @clear="onSearch" />
+          <el-input v-model="searchText" placeholder="搜索名称" size="small" clearable class="search-input" @keyup.enter="onSearch" @clear="onSearch" />
           <el-select v-model="sortBy" size="small" class="sort-select" @change="onSortChange">
-            <el-option label="按健康度" value="health" />
-            <el-option label="按成功率" value="success_rate" />
+            <el-option v-if="view === 'group'" label="按健康度" value="health" />
+            <el-option v-if="view === 'group'" label="按成功率" value="success_rate" />
+            <el-option v-if="view === 'model'" label="按稳定性" value="stability" />
             <el-option label="按首Token" value="ttft" />
+            <el-option v-if="view === 'model'" label="按延迟" value="latency" />
             <el-option label="按请求量" value="req_count" />
           </el-select>
           <span class="lookback-label">回溯：</span>
@@ -29,20 +36,22 @@
         <span class="info-icon-circle">i</span>
         <span>
           性能指标基于<strong>所选时间窗口（{{ lookbackLabel }}）</strong>内的真实请求统计。
-          窗口内无人调用的模型组没有性能数据，会单独列在下方「无流量」区，并非异常。
+          <template v-if="view === 'group'">
+            窗口内无人调用的模型组没有性能数据，会单独列在下方「无流量」区，并非异常。
+          </template>
           点击行可展开查看详细指标。
         </span>
       </div>
 
       <!-- Overview bar -->
-      <div v-if="!loadingMonitors && sortedGroups.length > 0" class="overview-bar">
+      <div v-if="!loadingMonitors && displayItems.length > 0" class="overview-bar">
         <div class="overview-item">
-          <span class="overview-num">{{ sortedGroups.length }}</span>
-          <span class="overview-label">有流量</span>
+          <span class="overview-num">{{ displayItems.length }}</span>
+          <span class="overview-label">有流量{{ view === 'group' ? '组' : '模型' }}</span>
         </div>
         <div class="overview-item is-excellent">
           <span class="overview-num">{{ statusCounts.excellent }}</span>
-          <span class="overview-label">健康</span>
+          <span class="overview-label">{{ view === 'group' ? '健康' : '稳定' }}</span>
         </div>
         <div class="overview-item is-good">
           <span class="overview-num">{{ statusCounts.good }}</span>
@@ -57,7 +66,7 @@
           <span class="overview-label">异常</span>
         </div>
         <div class="overview-item overview-spacer"></div>
-        <div class="overview-item">
+        <div v-if="view === 'group'" class="overview-item">
           <span class="overview-num" style="color: var(--el-text-color-secondary)">{{ zeroTrafficGroups.length }}</span>
           <span class="overview-label">无流量</span>
         </div>
@@ -65,147 +74,255 @@
 
       <!-- Main list -->
       <div ref="scrollBodyRef" class="card-body scroll-body" @scroll="onScroll">
-        <div v-if="loadingMonitors" class="state-loading">
+        <div v-if="loadingMonitors && displayItems.length === 0" class="state-loading">
           <el-icon class="is-loading" size="20"><Loading /></el-icon>
           <span>加载中...</span>
         </div>
 
-        <div v-else-if="sortedGroups.length === 0 && zeroTrafficGroups.length === 0" class="state-empty">
+        <div v-else-if="displayItems.length === 0 && (view === 'model' || zeroTrafficGroups.length === 0)" class="state-empty">
           <el-icon class="empty-icon" :size="40"><DataLine /></el-icon>
-          <p class="empty-title">暂无模型组健康监控数据</p>
-          <p class="sub">模型组下的模型尚未产生检测记录</p>
+          <p class="empty-title">暂无{{ view === 'group' ? '模型组' : '模型' }}性能数据</p>
+          <p class="sub">
+            <template v-if="view === 'group'">
+              模型组下的模型尚未产生检测记录
+            </template>
+            <template v-else>
+              所选时间窗口内没有模型调用记录
+            </template>
+          </p>
         </div>
 
         <div v-else class="monitor-list">
-          <div
-            v-for="group in sortedGroups"
-            :key="group.group_name"
-            class="monitor-item"
-            :class="[statusClass(group), { expanded: expandedGroups.has(group.group_name) }]"
-          >
-            <!-- Main row (clickable to expand) -->
-            <div class="item-row" @click="toggleExpand(group.group_name)">
-              <!-- Status indicator -->
-              <div class="status-cell">
-                <span class="status-dot" :class="'dot-' + computeStatus(group).key"></span>
-                <span class="status-text" :class="'text-' + computeStatus(group).key">
-                  {{ computeStatus(group).label }}
-                </span>
-              </div>
-
-              <!-- Group info -->
-              <div class="item-info">
-                <div class="info-line">
-                  <el-tooltip :content="group.group_name" :show-after="300">
-                    <el-tag class="format-badge" type="info" size="small" effect="plain">
-                      <span class="mono">{{ group.group_name }}</span>
-                    </el-tag>
-                  </el-tooltip>
-                  <el-tag
-                    v-if="group.total_checks > 0"
-                    :type="rateType(group.health_percent)"
-                    size="small"
-                    effect="dark"
-                  >
-                    {{ group.health_percent }}%
-                  </el-tag>
-                </div>
-                <div class="meta-line">
-                  <el-tag
-                    :type="strategyTagType(group.strategy)"
-                    size="small"
-                    effect="plain"
-                    class="strategy-tag"
-                  >{{ strategyLabel(group.strategy) }}</el-tag>
-                  <span class="model-count">{{ group.model_count }} 个模型</span>
-                  <span v-if="perfMap.get(group.group_name)" class="req-count">{{ perfMap.get(group.group_name)!.req_count }} 请求</span>
-                </div>
-              </div>
-
-              <!-- Timeline -->
-              <div class="item-timeline">
-                <HealthTimeline :timeline="group.timeline" :lookback="lookback" />
-              </div>
-
-              <!-- Performance metrics -->
-              <div class="item-perf" v-if="perfMap.get(group.group_name)">
-                <div class="perf-rate">
-                  <span class="rate-value" :class="rateClass(perfMap.get(group.group_name)!.success_rate)">
-                    {{ (perfMap.get(group.group_name)!.success_rate * 100).toFixed(1) }}%
+          <!-- Group view: show groups with timeline -->
+          <template v-if="view === 'group'">
+            <div
+              v-for="group in displayItems"
+              :key="group.name"
+              class="monitor-item"
+              :class="[getItemStatusClass(group), { expanded: expandedGroups.has(group.name) }]"
+            >
+              <!-- Main row (clickable to expand) -->
+              <div class="item-row" @click="toggleExpand(group.name)">
+                <!-- Status indicator -->
+                <div class="status-cell">
+                  <span class="status-dot" :class="'dot-' + computeStatus(group).key"></span>
+                  <span class="status-text" :class="'text-' + computeStatus(group).key">
+                    {{ computeStatus(group).label }}
                   </span>
-                  <span class="perf-label">成功率</span>
                 </div>
-                <div class="perf-ttft">
-                  <span class="ttft-value">{{ perfMap.get(group.group_name)!.p50_ms.toFixed(0) }}ms</span>
-                  <span class="perf-label">TTFT</span>
+
+                <!-- Group info -->
+                <div class="item-info">
+                  <div class="info-line">
+                    <el-tooltip :content="group.name" :show-after="300">
+                      <el-tag class="format-badge" type="info" size="small" effect="plain">
+                        <span class="mono">{{ group.name }}</span>
+                      </el-tag>
+                    </el-tooltip>
+                    <el-tag
+                      v-if="group.health_percent != null"
+                      :type="rateType(group.health_percent)"
+                      size="small"
+                      effect="dark"
+                    >
+                      {{ group.health_percent }}%
+                    </el-tag>
+                  </div>
+                  <div class="meta-line">
+                    <el-tag
+                      v-if="group.strategy"
+                      :type="strategyTagType(group.strategy)"
+                      size="small"
+                      effect="plain"
+                      class="strategy-tag"
+                    >{{ strategyLabel(group.strategy) }}</el-tag>
+                    <span v-if="group.model_count" class="model-count">{{ group.model_count }} 个模型</span>
+                    <span v-if="group.req_count" class="req-count">{{ group.req_count }} 请求</span>
+                  </div>
                 </div>
-              </div>
-              <div class="item-perf no-data" v-else>
-                <span class="no-data-text">无流量</span>
-              </div>
 
-              <!-- Expand arrow -->
-              <div class="expand-cell">
-                <el-icon :size="16" class="chevron" :class="{ rotated: expandedGroups.has(group.group_name) }">
-                  <ArrowDown />
-                </el-icon>
-              </div>
-            </div>
+                <!-- Timeline (only for group view with timeline data) -->
+                <div class="item-timeline" v-if="group.timeline">
+                  <HealthTimeline :timeline="group.timeline" :lookback="lookback" />
+                </div>
 
-            <!-- Expanded detail -->
-            <transition name="slide">
-              <div v-if="expandedGroups.has(group.group_name) && perfMap.get(group.group_name)" class="perf-detail">
-                <div class="detail-metrics">
-                  <div class="detail-metric">
-                    <span class="dm-label">总延迟 P50 / P95</span>
-                    <span class="dm-value">{{ formatMs(perfMap.get(group.group_name)!.p50_ms) }} / {{ formatMs(perfMap.get(group.group_name)!.p95_ms) }}</span>
-                  </div>
-                  <div class="detail-metric">
-                    <span class="dm-label">首 Token P50 / P95</span>
-                    <span class="dm-value">{{ formatMs(perfMap.get(group.group_name)!.ttft_p50_ms) }} / {{ formatMs(perfMap.get(group.group_name)!.ttft_p95_ms) }}</span>
-                  </div>
-                  <div v-if="perfMap.get(group.group_name)!.pct_in_24h_p50 != null" class="detail-metric">
-                    <span class="dm-label">24h 延迟水平</span>
-                    <span class="dm-value" :class="pctClass(perfMap.get(group.group_name)!.pct_in_24h_p50)">
-                      P{{ perfMap.get(group.group_name)!.pct_in_24h_p50 }}（{{ percentileLabel(perfMap.get(group.group_name)!.pct_in_24h_p50) }}）
+                <!-- Performance metrics -->
+                <div class="item-perf" v-if="group.perf">
+                  <div class="perf-rate">
+                    <span class="rate-value" :class="rateClass(group.perf.success_rate)">
+                      {{ (group.perf.success_rate * 100).toFixed(1) }}%
                     </span>
+                    <span class="perf-label">成功率</span>
                   </div>
-                  <div v-if="perfMap.get(group.group_name)!.failover_count > 0" class="detail-metric">
-                    <span class="dm-label">Failover 次数</span>
-                    <span class="dm-value is-warn">{{ perfMap.get(group.group_name)!.failover_count }}</span>
+                  <div class="perf-ttft">
+                    <span class="ttft-value">{{ group.perf.p50_ms.toFixed(0) }}ms</span>
+                    <span class="perf-label">TTFT</span>
                   </div>
-                  <div v-if="perfMap.get(group.group_name)!.err_429 > 0" class="detail-metric">
-                    <span class="dm-label">限流 (429)</span>
-                    <span class="dm-value is-warn">{{ perfMap.get(group.group_name)!.err_429 }}</span>
+                </div>
+                <div class="item-perf no-data" v-else>
+                  <span class="no-data-text">无流量</span>
+                </div>
+
+                <!-- Expand arrow -->
+                <div class="expand-cell">
+                  <el-icon :size="16" class="chevron" :class="{ rotated: expandedGroups.has(group.name) }">
+                    <ArrowDown />
+                  </el-icon>
+                </div>
+              </div>
+
+              <!-- Expanded detail -->
+              <transition name="slide">
+                <div v-if="expandedGroups.has(group.name) && group.perf" class="perf-detail">
+                  <div class="detail-metrics">
+                    <div class="detail-metric">
+                      <span class="dm-label">总延迟 P50 / P95</span>
+                      <span class="dm-value">{{ formatMs(group.perf.p50_ms) }} / {{ formatMs(group.perf.p95_ms) }}</span>
+                    </div>
+                    <div class="detail-metric">
+                      <span class="dm-label">首 Token P50 / P95</span>
+                      <span class="dm-value">{{ formatMs(group.perf.ttft_p50_ms) }} / {{ formatMs(group.perf.ttft_p95_ms) }}</span>
+                    </div>
+                    <div v-if="group.perf.pct_in_24h_p50 != null" class="detail-metric">
+                      <span class="dm-label">24h 延迟水平</span>
+                      <span class="dm-value" :class="pctClass(group.perf.pct_in_24h_p50)">
+                        P{{ group.perf.pct_in_24h_p50 }}（{{ percentileLabel(group.perf.pct_in_24h_p50) }}）
+                      </span>
+                    </div>
+                    <div v-if="group.perf.failover_count > 0" class="detail-metric">
+                      <span class="dm-label">Failover 次数</span>
+                      <span class="dm-value is-warn">{{ group.perf.failover_count }}</span>
+                    </div>
+                    <div v-if="group.perf.err_429 > 0" class="detail-metric">
+                      <span class="dm-label">限流 (429)</span>
+                      <span class="dm-value is-warn">{{ group.perf.err_429 }}</span>
+                    </div>
+                    <div v-if="group.perf.err_5xx > 0" class="detail-metric">
+                      <span class="dm-label">服务端错误 (5xx)</span>
+                      <span class="dm-value is-danger">{{ group.perf.err_5xx }}</span>
+                    </div>
                   </div>
-                  <div v-if="perfMap.get(group.group_name)!.err_5xx > 0" class="detail-metric">
-                    <span class="dm-label">服务端错误 (5xx)</span>
-                    <span class="dm-value is-danger">{{ perfMap.get(group.group_name)!.err_5xx }}</span>
+
+                  <div v-if="group.perf.members && group.perf.members.length > 0" class="members-list">
+                    <div class="members-title">组内模型流量</div>
+                    <div v-for="member in group.perf.members" :key="member.model_name + member.provider" class="member-row">
+                      <el-tag size="small" effect="plain">{{ member.model_name }}</el-tag>
+                      <div class="member-bar-track">
+                        <div class="member-bar-fill" :style="{ width: (member.traffic_pct * 100).toFixed(0) + '%' }"></div>
+                      </div>
+                      <span class="member-traffic">{{ (member.traffic_pct * 100).toFixed(0) }}%</span>
+                      <span class="member-metrics">P50 {{ formatMs(member.p50_ms) }} · 成功率 {{ formatPct(member.success_rate) }}</span>
+                    </div>
+                  </div>
+                </div>
+              </transition>
+            </div>
+          </template>
+
+          <!-- Model view: show individual models -->
+          <template v-else>
+            <div
+              v-for="item in displayItems"
+              :key="item.name"
+              class="monitor-item"
+              :class="[getItemStatusClass(item), { expanded: expandedGroups.has(item.name) }]"
+            >
+              <div class="item-row" @click="toggleExpand(item.name)">
+                <!-- Status indicator -->
+                <div class="status-cell">
+                  <span class="status-dot" :class="'dot-' + computeStatus(item).key"></span>
+                  <span class="status-text" :class="'text-' + computeStatus(item).key">
+                    {{ computeStatus(item).label }}
+                  </span>
+                </div>
+
+                <!-- Model info -->
+                <div class="item-info">
+                  <div class="info-line">
+                    <el-tooltip :content="item.name" :show-after="300">
+                      <span class="row-name">{{ item.name }}</span>
+                    </el-tooltip>
+                  </div>
+                  <div class="meta-line">
+                    <span v-if="item.used_by_groups" class="meta-text">{{ item.used_by_groups }} 组在用</span>
+                    <span class="meta-text">{{ item.req_count }} 请求</span>
                   </div>
                 </div>
 
-                <div v-if="perfMap.get(group.group_name)!.members && perfMap.get(group.group_name)!.members.length > 0" class="members-list">
-                  <div class="members-title">组内模型流量</div>
-                  <div v-for="member in perfMap.get(group.group_name)!.members" :key="member.model_name + member.provider" class="member-row">
-                    <el-tag size="small" effect="plain">{{ member.model_name }}</el-tag>
-                    <div class="member-bar-track">
-                      <div class="member-bar-fill" :style="{ width: (member.traffic_pct * 100).toFixed(0) + '%' }"></div>
-                    </div>
-                    <span class="member-traffic">{{ (member.traffic_pct * 100).toFixed(0) }}%</span>
-                    <span class="member-metrics">P50 {{ formatMs(member.p50_ms) }} · 成功率 {{ formatPct(member.success_rate) }}</span>
+                <!-- Rate cell -->
+                <div class="rate-cell">
+                  <span class="rate-value" :class="'text-' + computeStatus(item).key">
+                    {{ formatPct(item.success_rate) }}
+                  </span>
+                  <span class="rate-label">成功率</span>
+                </div>
+
+                <!-- TTFT bar -->
+                <div class="ttft-cell">
+                  <div class="ttft-head">
+                    <span class="ttft-label">首 Token</span>
+                    <span class="ttft-value">{{ formatMs(item.ttft_p50_ms) }}</span>
+                  </div>
+                  <div class="ttft-track">
+                    <div
+                      class="ttft-fill"
+                      :class="'fill-' + speedLevel(item.ttft_p50_ms)"
+                      :style="{ width: ttftBarWidth(item.ttft_p50_ms) }"
+                    ></div>
                   </div>
                 </div>
+
+                <!-- Expand arrow -->
+                <div class="expand-cell">
+                  <el-icon :size="16" class="chevron" :class="{ rotated: expandedGroups.has(item.name) }">
+                    <ArrowDown />
+                  </el-icon>
+                </div>
               </div>
-            </transition>
-          </div>
+
+              <!-- Expanded detail for model view -->
+              <transition name="slide">
+                <div v-if="expandedGroups.has(item.name)" class="perf-detail">
+                  <div class="detail-metrics">
+                    <div class="detail-metric">
+                      <span class="dm-label">总延迟 P50 / P95</span>
+                      <span class="dm-value">{{ formatMs(item.p50_ms) }} / {{ formatMs(item.p95_ms) }}</span>
+                    </div>
+                    <div class="detail-metric">
+                      <span class="dm-label">首 Token P50 / P95</span>
+                      <span class="dm-value">{{ formatMs(item.ttft_p50_ms) }} / {{ formatMs(item.ttft_p95_ms) }}</span>
+                    </div>
+                    <div v-if="item.pct_in_24h_p50 != null" class="detail-metric">
+                      <span class="dm-label">24h 延迟水平</span>
+                      <span class="dm-value" :class="pctClass(item.pct_in_24h_p50)">
+                        P{{ item.pct_in_24h_p50 }}（{{ percentileLabel(item.pct_in_24h_p50) }}）
+                      </span>
+                    </div>
+                    <div v-if="item.failover_count > 0" class="detail-metric">
+                      <span class="dm-label">Failover 次数</span>
+                      <span class="dm-value is-warn">{{ item.failover_count }}</span>
+                    </div>
+                    <div v-if="item.err_429 > 0" class="detail-metric">
+                      <span class="dm-label">限流 (429)</span>
+                      <span class="dm-value is-warn">{{ item.err_429 }}</span>
+                    </div>
+                    <div v-if="item.err_5xx > 0" class="detail-metric">
+                      <span class="dm-label">服务端错误 (5xx)</span>
+                      <span class="dm-value is-danger">{{ item.err_5xx }}</span>
+                    </div>
+                  </div>
+                </div>
+              </transition>
+            </div>
+          </template>
 
           <div v-if="loadingMore" class="state-loading" style="padding:12px 0">
             <el-icon class="is-loading" size="16"><Loading /></el-icon>
             <span style="font-size:12px">加载更多...</span>
           </div>
 
-          <!-- Zero traffic groups -->
-          <div v-if="zeroTrafficGroups.length > 0" class="zero-traffic">
+          <!-- Zero traffic groups (only in group view) -->
+          <div v-if="view === 'group' && zeroTrafficGroups.length > 0" class="zero-traffic">
             <div class="zero-header" @click="zeroExpanded = !zeroExpanded">
               <el-icon :size="14" class="chevron" :class="{ rotated: zeroExpanded }"><ArrowDown /></el-icon>
               <span>无流量模型组</span>
@@ -222,9 +339,9 @@
             </transition>
           </div>
 
-          <div v-if="sortedGroups.length > 0" class="state-end">
-            共 {{ sortedGroups.length }} 个有流量的模型组
-            <template v-if="zeroTrafficGroups.length > 0">
+          <div v-if="displayItems.length > 0" class="state-end">
+            共 {{ displayItems.length }} 个有流量的{{ view === 'group' ? '模型组' : '模型' }}
+            <template v-if="view === 'group' && zeroTrafficGroups.length > 0">
               ，{{ zeroTrafficGroups.length }} 个无流量
             </template>
           </div>
@@ -235,7 +352,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { Refresh, Loading, ArrowDown, DataLine } from '@element-plus/icons-vue'
 import { getGroupHealthTimeline, getPerformance } from '@/services/control-plane'
 import type { GroupTimelineGroup, PerformanceItem } from '@/services/control-plane'
@@ -246,19 +363,26 @@ import { useAuthStore } from '@/stores/auth'
 
 const authStore = useAuthStore()
 
-const PAGE_SIZE = 20
+const PAGE_SIZE = 50
 const loading = ref(false)
 const loadingMonitors = ref(false)
 const loadingMore = ref(false)
-const groups = shallowRef<GroupTimelineGroup[]>([])
+
+// View mode
+const view = ref<'group' | 'model'>('group')
+
+// Data stores
+const timelineGroups = shallowRef<GroupTimelineGroup[]>([])
+const perfItems = shallowRef<PerformanceItem[]>([])
 const total = ref(0)
+const rawLoaded = ref(0)
+const rawTotal = ref(0)
+
 const lookback = ref('6h')
 const searchText = ref('')
-const sortBy = ref<'health' | 'success_rate' | 'ttft' | 'req_count'>('health')
-let timer: ReturnType<typeof setInterval> | null = null
+const sortBy = ref<string>('health')
 
-// Performance data cache
-const perfMap = ref<Map<string, PerformanceItem>>(new Map())
+let timer: ReturnType<typeof setInterval> | null = null
 
 // Expand state
 const expandedGroups = ref<Set<string>>(new Set())
@@ -273,10 +397,88 @@ const openModeMap = ref<Map<string, string>>(new Map())
 const myDeptIds = ref<string[]>([])
 const myStudioId = ref('')
 
+// Scroll
+const scrollBodyRef = ref<HTMLElement | null>(null)
+
 // Lookback label
 const lookbackLabel = computed(() => {
   const map: Record<string, string> = { '1h': '1小时', '6h': '6小时', '12h': '12小时', '24h': '24小时', '7d': '7天' }
   return map[lookback.value] || lookback.value
+})
+
+// Unified display items
+interface DisplayItem {
+  name: string
+  strategy?: string
+  model_count?: number
+  health_percent?: number
+  req_count?: number
+  timeline?: any
+  perf?: PerformanceItem
+  // Model view specific
+  used_by_groups?: string
+  success_rate: number
+  p50_ms: number
+  p95_ms: number
+  ttft_p50_ms: number
+  ttft_p95_ms: number
+  pct_in_24h_p50?: number
+  failover_count: number
+  err_429: number
+  err_5xx: number
+  members?: any[]
+}
+
+const displayItems = computed((): DisplayItem[] => {
+  if (view.value === 'group') {
+    // Convert timeline groups to display items with perf data merged
+    const perfMap = new Map<string, PerformanceItem>()
+    for (const item of perfItems.value) {
+      perfMap.set(item.name, item)
+    }
+    
+    return timelineGroups.value
+      .filter(g => perfMap.has(g.group_name))
+      .map(g => {
+        const perf = perfMap.get(g.group_name)!
+        return {
+          name: g.group_name,
+          strategy: g.strategy,
+          model_count: g.model_count,
+          health_percent: g.health_percent,
+          req_count: perf.req_count,
+          timeline: g.timeline,
+          perf,
+          success_rate: perf.success_rate,
+          p50_ms: perf.p50_ms,
+          p95_ms: perf.p95_ms,
+          ttft_p50_ms: perf.ttft_p50_ms,
+          ttft_p95_ms: perf.ttft_p95_ms,
+          pct_in_24h_p50: perf.pct_in_24h_p50,
+          failover_count: perf.failover_count,
+          err_429: perf.err_429,
+          err_5xx: perf.err_5xx,
+          members: perf.members
+        }
+      })
+  } else {
+    // Model view: directly use perf items
+    return perfItems.value.map(item => ({
+      name: item.name,
+      req_count: item.req_count,
+      used_by_groups: item.used_by_groups,
+      success_rate: item.success_rate,
+      p50_ms: item.p50_ms,
+      p95_ms: item.p95_ms,
+      ttft_p50_ms: item.ttft_p50_ms,
+      ttft_p95_ms: item.ttft_p95_ms,
+      pct_in_24h_p50: item.pct_in_24h_p50,
+      failover_count: item.failover_count,
+      err_429: item.err_429,
+      err_5xx: item.err_5xx,
+      members: item.members
+    }))
+  }
 })
 
 // Status computation
@@ -285,71 +487,79 @@ interface StatusInfo {
   label: string
 }
 
-function computeStatus(group: GroupTimelineGroup): StatusInfo {
-  const perf = perfMap.value.get(group.group_name)
-  if (!perf) return { key: 'excellent', label: '无流量' }
+function computeStatus(item: DisplayItem): StatusInfo {
+  const sr = item.success_rate
+  const pct = item.pct_in_24h_p50
   
-  const sr = perf.success_rate
   if (sr < 0.85) return { key: 'poor', label: '异常' }
   if (sr < 0.95) return { key: 'fair', label: '波动' }
-  if (sr >= 0.99) return { key: 'excellent', label: '健康' }
-  return { key: 'good', label: '良好' }
+  
+  if (view.value === 'group') {
+    if (sr >= 0.99) return { key: 'excellent', label: '健康' }
+    return { key: 'good', label: '良好' }
+  } else {
+    if (sr >= 0.99 && (pct == null || pct <= 70)) return { key: 'excellent', label: '稳定' }
+    if (pct != null && pct > 85) return { key: 'fair', label: '偏慢' }
+    return { key: 'good', label: '良好' }
+  }
 }
 
-function statusClass(group: GroupTimelineGroup): string {
-  const perf = perfMap.value.get(group.group_name)
-  if (!perf) return 'no-traffic'
-  return 'status-' + computeStatus(group).key
+function getItemStatusClass(item: DisplayItem): string {
+  if (!item.perf && view.value === 'group') return 'no-traffic'
+  return 'status-' + computeStatus(item).key
 }
 
 const statusCounts = computed(() => {
   const c = { excellent: 0, good: 0, fair: 0, poor: 0 }
-  for (const g of sortedGroups.value) {
-    const status = computeStatus(g)
-    if (status.key !== 'excellent' || perfMap.value.has(g.group_name)) {
+  for (const item of displayItems.value) {
+    const status = computeStatus(item)
+    if (status.key !== 'excellent' || (view.value === 'model' || item.perf)) {
       c[status.key]++
     }
   }
   return c
 })
 
-// Sorted groups
-const sortedGroups = computed(() => {
-  const arr = [...groups.value].filter(g => perfMap.value.has(g.group_name))
-  const perf = perfMap.value
+// Sorted display items
+const sortedDisplayItems = computed(() => {
+  const arr = [...displayItems.value]
   
   switch (sortBy.value) {
     case 'health':
-      arr.sort((a, b) => b.health_percent - a.health_percent)
+      arr.sort((a, b) => (b.health_percent || 0) - (a.health_percent || 0))
       break
     case 'success_rate':
+    case 'stability':
       arr.sort((a, b) => {
-        const pa = perf.get(a.group_name)
-        const pb = perf.get(b.group_name)
-        return (pb?.success_rate || 0) - (pa?.success_rate || 0)
+        const ra = statusRank[computeStatus(a).key]
+        const rb = statusRank[computeStatus(b).key]
+        if (ra !== rb) return ra - rb
+        if (b.success_rate !== a.success_rate) return b.success_rate - a.success_rate
+        return (a.ttft_p50_ms || 0) - (b.ttft_p50_ms || 0)
       })
       break
     case 'ttft':
-      arr.sort((a, b) => {
-        const pa = perf.get(a.group_name)
-        const pb = perf.get(b.group_name)
-        return (pa?.p50_ms || 0) - (pb?.p50_ms || 0)
-      })
+      arr.sort((a, b) => (a.ttft_p50_ms || 0) - (b.ttft_p50_ms || 0))
+      break
+    case 'latency':
+      arr.sort((a, b) => (a.p50_ms || 0) - (b.p50_ms || 0))
       break
     case 'req_count':
-      arr.sort((a, b) => {
-        const pa = perf.get(a.group_name)
-        const pb = perf.get(b.group_name)
-        return (pb?.req_count || 0) - (pa?.req_count || 0)
-      })
+      arr.sort((a, b) => (b.req_count || 0) - (a.req_count || 0))
       break
   }
   return arr
 })
 
-// Zero traffic groups
+const statusRank: Record<StatusInfo['key'], number> = { excellent: 0, good: 1, fair: 2, poor: 3 }
+
+// Use sorted items for display
+const finalDisplayItems = computed(() => sortedDisplayItems.value)
+
+// Zero traffic groups (only in group view)
 const zeroTrafficGroups = computed(() => {
-  const trafficNames = new Set(groups.value.map(g => g.group_name))
+  if (view.value !== 'group') return []
+  const trafficNames = new Set(timelineGroups.value.map(g => g.group_name))
   const role = authStore.effectiveRole
   return allGroups.value
     .filter(g => g.enabled && !trafficNames.has(g.name))
@@ -378,14 +588,15 @@ function isGroupAvailable(groupName: string): boolean {
   return false
 }
 
-async function loadTimeline(reset: boolean = true) {
+// Data loading
+async function loadTimelineData(reset: boolean = true) {
   if (reset) {
     loadingMonitors.value = true
   } else {
     loadingMore.value = true
   }
   try {
-    const offset = reset ? 0 : groups.value.length
+    const offset = reset ? 0 : timelineGroups.value.length
     const result = await getGroupHealthTimeline(lookback.value, searchText.value, offset, PAGE_SIZE)
     
     let filteredGroups = result.groups
@@ -399,16 +610,51 @@ async function loadTimeline(reset: boolean = true) {
     }
     
     if (reset) {
-      groups.value = filteredGroups
+      timelineGroups.value = filteredGroups
     } else {
-      groups.value = [...groups.value, ...filteredGroups]
+      timelineGroups.value = [...timelineGroups.value, ...filteredGroups]
     }
     total.value = result.total
   } catch {
-    if (reset) groups.value = []
+    if (reset) timelineGroups.value = []
   } finally {
     loadingMonitors.value = false
     loadingMore.value = false
+  }
+}
+
+async function loadPerformanceData(reset: boolean = true) {
+  if (reset) {
+    rawLoaded.value = 0
+    rawTotal.value = 0
+  }
+  
+  try {
+    const viewType = view.value
+    const result = await getPerformance(lookback.value, viewType, searchText.value, PAGE_SIZE, rawLoaded.value)
+    
+    let filteredItems = result.items || []
+    const role = authStore.effectiveRole
+    if (role !== 'admin' && role !== null && viewType === 'group') {
+      filteredItems = filteredItems.filter(item => isGroupAvailable(item.name))
+    }
+    
+    if (reset) {
+      perfItems.value = filteredItems
+    } else {
+      perfItems.value = [...perfItems.value, ...filteredItems]
+    }
+    
+    rawTotal.value = result.total ?? result.items.length
+    rawLoaded.value += result.items.length
+    total.value = rawTotal.value
+  } catch {
+    if (reset) {
+      perfItems.value = []
+      rawTotal.value = 0
+      rawLoaded.value = 0
+      total.value = 0
+    }
   }
 }
 
@@ -416,11 +662,11 @@ async function loadEntitlements() {
   const role = authStore.effectiveRole
   try {
     const res = await groupsApi.listGroups({ page_size: 200 })
-    const allGroupsList = res.data.data ?? []
-    allGroups.value = allGroupsList
+    const groups = res.data.data ?? []
+    allGroups.value = groups
 
     const newOpenModeMap = new Map<string, string>()
-    for (const g of allGroupsList) {
+    for (const g of groups) {
       newOpenModeMap.set(g.name, g.open_mode)
     }
     openModeMap.value = newOpenModeMap
@@ -431,7 +677,7 @@ async function loadEntitlements() {
       const studioRole = authStore.orgRoles.find(r => r.role === 'studio_admin' && r.scope_type === 'studio')
       myStudioId.value = studioRole?.scope_id || ''
 
-      const controlledGroups = allGroupsList.filter(g => g.open_mode === 'controlled' && g.enabled)
+      const controlledGroups = groups.filter(g => g.open_mode === 'controlled' && g.enabled)
       const entitlementPromises = controlledGroups.map(async g => {
         try {
           const entRes = await groupsApi.listEntitlements(g.id)
@@ -454,19 +700,6 @@ async function loadEntitlements() {
   }
 }
 
-async function loadPerformanceData() {
-  try {
-    const result = await getPerformance(lookback.value, 'group', '', 200, 0)
-    const newMap = new Map<string, PerformanceItem>()
-    for (const item of result.items) {
-      newMap.set(item.name, item)
-    }
-    perfMap.value = newMap
-  } catch {
-    perfMap.value = new Map()
-  }
-}
-
 async function loadGroupsForZeroTraffic() {
   try {
     const res = await groupsApi.listGroups({ page_size: 200 })
@@ -478,15 +711,29 @@ async function loadGroupsForZeroTraffic() {
 
 async function refreshData() {
   loading.value = true
-  try { 
-    await Promise.all([
-      loadTimeline(true),
-      loadPerformanceData(),
-      loadGroupsForZeroTraffic()
-    ])
-  } finally { 
-    loading.value = false 
+  try {
+    if (view.value === 'group') {
+      await Promise.all([
+        loadTimelineData(true),
+        loadPerformanceData(true),
+        loadGroupsForZeroTraffic()
+      ])
+    } else {
+      await loadPerformanceData(true)
+    }
+  } finally {
+    loading.value = false
   }
+}
+
+function onViewChange() {
+  // Reset sort when changing view
+  if (view.value === 'group') {
+    sortBy.value = 'health'
+  } else {
+    sortBy.value = 'stability'
+  }
+  refreshData()
 }
 
 function onLookbackChange() {
@@ -494,7 +741,7 @@ function onLookbackChange() {
 }
 
 function onSearch() {
-  loadTimeline(true)
+  refreshData()
 }
 
 function onSortChange() {
@@ -504,10 +751,21 @@ function onSortChange() {
 function onScroll(e: Event) {
   const el = e.target as HTMLElement
   if (loadingMore.value) return
-  if (groups.value.length >= total.value) return
+  if (rawLoaded.value >= rawTotal.value) return
   const { scrollTop, scrollHeight, clientHeight } = el
-  if (scrollHeight - scrollTop - clientHeight < 60) {
-    loadTimeline(false)
+  if (scrollHeight - scrollTop - clientHeight < 100) {
+    loadMore()
+  }
+}
+
+async function loadMore() {
+  if (loadingMore.value || rawLoaded.value >= rawTotal.value) return
+  
+  if (view.value === 'group') {
+    await loadTimelineData(false)
+    await loadPerformanceData(false)
+  } else {
+    await loadPerformanceData(false)
   }
 }
 
@@ -574,6 +832,19 @@ function pctClass(pct: number | null | undefined): string {
   return 'is-very-slow'
 }
 
+function ttftBarWidth(ttft: number): string {
+  const maxMs = 5000
+  const clamped = Math.min(ttft, maxMs)
+  const pct = Math.max(4, Math.round(((maxMs - clamped) / maxMs) * 100))
+  return pct + '%'
+}
+
+function speedLevel(ttft: number): 'fast' | 'mid' | 'slow' {
+  if (ttft <= 1200) return 'fast'
+  if (ttft <= 3500) return 'mid'
+  return 'slow'
+}
+
 onMounted(() => {
   const role = authStore.effectiveRole
   if (role !== 'admin' && role !== null) {
@@ -584,11 +855,16 @@ onMounted(() => {
     refreshData()
   }
   timer = setInterval(() => {
-    loadTimeline(true)
-    loadPerformanceData()
+    refreshData()
   }, 60000)
 })
-onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
+
+onBeforeUnmount(() => {
+  if (timer) {
+    clearInterval(timer)
+    timer = null
+  }
+})
 </script>
 
 <style scoped>
@@ -608,43 +884,60 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
   --perf-poor-light: #FECACA;
 }
 
-/* Card */
-.monitor-card-outer {
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 12px;
-  background: var(--el-bg-color);
+/* Page root: fill viewport */
+.group-health-monitor-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
 }
 
-/* Header */
+.monitor-card-outer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Header: view toggle + controls */
 .card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 20px;
+  padding: 8px 14px;
   border-bottom: 1px solid var(--el-border-color-lighter);
   flex-wrap: wrap;
   gap: 8px;
+  flex-shrink: 0;
 }
-.card-title { font-size: 15px; font-weight: 600; margin: 0; color: var(--el-text-color-primary); white-space: nowrap; }
-.header-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.header-left { flex-shrink: 0; }
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .lookback-label { font-size: 12px; color: var(--el-text-color-secondary); }
 .lookback-select { width: 90px; }
-.sort-select { width: 100px; }
-.search-input { width: 160px; }
+.sort-select { width: 110px; }
+.search-input { width: 150px; }
 
 /* Info strip */
 .info-strip {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 16px;
+  gap: 8px;
+  padding: 6px 14px;
   background: var(--bg-subtle, #F1F5F9);
   border-bottom: 1px solid var(--border-light, #F1F5F9);
   font-size: 12px;
   color: var(--text-secondary, #64748B);
   line-height: 1.5;
+  flex-shrink: 0;
 }
 .info-strip strong { color: var(--text-primary, #0F172A); font-weight: 600; }
 .info-icon-circle {
@@ -668,9 +961,10 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 8px 16px;
+  padding: 5px 12px;
   border-bottom: 1px solid var(--border-light, #F1F5F9);
   flex-wrap: wrap;
+  flex-shrink: 0;
 }
 .overview-item {
   display: flex;
@@ -703,11 +997,11 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
 .overview-spacer { flex: 1; }
 
 /* Body */
-.card-body { padding: 16px 20px; }
+.card-body { padding: 8px 14px; }
 .scroll-body {
-  max-height: calc(100vh - 240px);
-  min-height: 200px;
+  flex: 1;
   overflow-y: auto;
+  min-height: 0;
 }
 .scroll-body::-webkit-scrollbar { width: 5px; }
 .scroll-body::-webkit-scrollbar-track { background: transparent; }
@@ -728,7 +1022,7 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
 .state-end { text-align: center; padding: 12px 0 4px; font-size: 12px; color: var(--el-text-color-secondary); }
 
 /* Monitor items */
-.monitor-list { display: flex; flex-direction: column; gap: 8px; }
+.monitor-list { display: flex; flex-direction: column; gap: 4px; }
 
 .monitor-item {
   border: 1px solid var(--el-border-color-lighter);
@@ -765,8 +1059,8 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
 .item-row {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 12px 16px;
+  gap: 12px;
+  padding: 8px 12px;
   cursor: pointer;
   user-select: none;
 }
@@ -802,11 +1096,25 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
 .format-badge :deep(.el-tag__content) { overflow: hidden; }
 .mono { font-family: monospace; font-size: 11px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+.row-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #0F172A);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .meta-line {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 4px;
+  margin-top: 3px;
+}
+.meta-text {
+  font-size: 11px;
+  color: var(--text-secondary, #64748B);
 }
 .strategy-tag { flex-shrink: 0; }
 .model-count, .req-count {
@@ -864,6 +1172,58 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
   color: var(--el-text-color-placeholder);
 }
 
+/* Rate cell (model view) */
+.rate-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+  flex-shrink: 0;
+  width: 80px;
+}
+.rate-cell .rate-value {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.rate-label {
+  font-size: 10px;
+  color: var(--text-secondary, #64748B);
+  margin-top: 1px;
+  font-weight: 500;
+}
+
+/* TTFT cell (model view) */
+.ttft-cell {
+  flex-shrink: 0;
+  width: 120px;
+}
+.ttft-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 3px;
+}
+.ttft-label {
+  font-size: 10px;
+  color: var(--text-secondary, #64748B);
+  font-weight: 500;
+}
+.ttft-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-subtle, #F1F5F9);
+  overflow: hidden;
+}
+.ttft-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.fill-fast { background: var(--perf-excellent); }
+.fill-mid { background: var(--perf-fair); }
+.fill-slow { background: var(--perf-poor); }
+
 /* Expand cell */
 .expand-cell {
   flex-shrink: 0;
@@ -880,31 +1240,35 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
 
 /* Expanded detail */
 .perf-detail {
-  padding: 16px 20px;
+  padding: 10px 14px;
   border-top: 1px solid var(--el-border-color-lighter);
   background: var(--bg-subtle, #FAFAFA);
 }
 
 .detail-metrics {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 12px 24px;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px 12px;
 }
 
 .detail-metric {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
+  padding: 5px 8px;
+  background: var(--bg-surface, #fff);
+  border-radius: 6px;
+  border: 1px solid var(--border-light, #F1F5F9);
 }
 
 .dm-label {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--el-text-color-secondary);
   font-weight: 500;
 }
 
 .dm-value {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--el-text-color-primary);
   font-variant-numeric: tabular-nums;
@@ -919,8 +1283,8 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
 
 /* Members list */
 .members-list {
-  margin-top: 16px;
-  padding-top: 16px;
+  margin-top: 12px;
+  padding-top: 12px;
   border-top: 1px solid var(--el-border-color-lighter);
 }
 
@@ -928,14 +1292,14 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
   font-size: 12px;
   font-weight: 600;
   color: var(--el-text-color-secondary);
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .member-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 0;
+  padding: 5px 0;
 }
 
 .member-bar-track {
@@ -969,7 +1333,7 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
 
 /* Zero traffic section */
 .zero-traffic {
-  margin-top: 16px;
+  margin-top: 8px;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;
   overflow: hidden;
@@ -978,8 +1342,8 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
 .zero-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 16px;
+  gap: 6px;
+  padding: 6px 12px;
   background: var(--bg-subtle, #FAFAFA);
   cursor: pointer;
   font-size: 13px;
@@ -1000,19 +1364,19 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
 .zero-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  padding: 12px 16px;
+  gap: 6px;
+  padding: 8px 12px;
   border-top: 1px solid var(--el-border-color-lighter);
 }
 
 .zero-chip {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
+  gap: 4px;
+  padding: 3px 8px;
   background: var(--el-fill-color);
   border-radius: 4px;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--el-text-color-regular);
 }
 
@@ -1046,15 +1410,15 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
   .search-input { width: 130px; }
   .item-timeline { max-width: 150px; }
   .item-perf { width: 120px; gap: 12px; }
+  .ttft-cell { width: 100px; }
 }
 
 @media (max-width: 768px) {
   .card-header { flex-direction: column; align-items: stretch; }
   .header-actions { justify-content: space-between; flex-wrap: wrap; }
   .search-input { flex: 1; width: 100%; }
-  .card-title { font-size: 14px; }
   
-  .card-body { padding: 12px; }
+  .card-body { padding: 8px 12px; }
   .scroll-body { max-height: calc(100vh - 200px); }
   
   .item-row { 
@@ -1072,7 +1436,7 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
     order: 2;
   }
   .expand-cell { order: 1; }
-  .monitor-item { padding: 10px; }
+  .ttft-cell { width: 100%; order: 4; }
   
   .state-loading, .state-empty { padding: 24px 0; }
 }
@@ -1084,11 +1448,10 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
   .sort-select { width: 100%; }
   .search-input { width: 100%; }
   
-  .card-header { padding: 10px 12px; }
-  .card-body { padding: 10px 8px; }
+  .card-header { padding: 8px 12px; }
+  .card-body { padding: 8px; }
   .monitor-item { border-radius: 6px; }
-  .monitor-list { gap: 6px; }
-  .card-title { font-size: 13px; }
+  .monitor-list { gap: 5px; }
   
   .detail-metrics { grid-template-columns: 1fr; }
 }

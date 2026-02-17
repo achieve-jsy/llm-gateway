@@ -912,6 +912,7 @@ function renderTrendChart() {
   // 综合模式：成本（折线，左轴）+ 调用（柱，右轴）
   if (metric === 'overview') {
     trendChartInst = new Chart(trendCanvasRef.value, {
+      type: 'bar',
       data: {
         labels,
         datasets: [
@@ -1495,7 +1496,7 @@ watch(currency, async () => {
 .ud-kpi-row {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  gap: 14px;
+  gap: 10px;
 }
 @media (max-width: 1200px) { .ud-kpi-row { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 900px)  { .ud-kpi-row { grid-template-columns: repeat(2, 1fr); } }
@@ -1504,14 +1505,14 @@ watch(currency, async () => {
 .ud-kpi-card {
   background: var(--ud-surface);
   border: 1px solid var(--ud-border);
-  border-radius: 14px;
-  padding: 14px 16px 12px;
-  display: flex; align-items: flex-start; gap: 12px;
+  border-radius: 12px;
+  padding: 10px 14px 8px;
+  display: flex; align-items: flex-start; gap: 10px;
   position: relative; overflow: hidden;
 }
 .ud-kpi-card::before {
   content: ''; position: absolute; top: 0; left: 0;
-  width: 4px; height: 100%; border-radius: 14px 0 0 14px;
+  width: 4px; height: 100%; border-radius: 12px 0 0 12px;
 }
 .ud-kpi-card--green::before { background: #67c23a; }
 .ud-kpi-card--blue::before  { background: #409eff; }
@@ -1585,8 +1586,8 @@ watch(currency, async () => {
 /* ── Section 通用 ── */
 .ud-section__header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 16px 8px; border-bottom: 1px solid var(--ud-border);
-  flex-wrap: wrap; gap: 8px;
+  padding: 8px 14px 6px; border-bottom: 1px solid var(--ud-border);
+  flex-wrap: wrap; gap: 6px;
 }
 .ud-section__title { font-size: 14px; font-weight: 600; color: var(--el-text-color-primary); }
 .ud-section__count { font-size: 12px; color: var(--ud-muted); }
@@ -1609,11 +1610,11 @@ watch(currency, async () => {
 
 /* ── 趋势图 ── */
 .ud-chart-wrap {
-  padding: 12px 16px;
-  height: 220px;
+  padding: 10px 14px;
+  height: 280px;
   position: relative;
 }
-.ud-chart-wrap--model { height: 240px; }
+.ud-chart-wrap--model { height: 300px; }
 .ud-trend-canvas { width: 100% !important; height: 100% !important; }
 .ud-model-canvas { width: 100% !important; height: 100% !important; }
 .ud-chart-empty {
@@ -1851,11 +1852,11 @@ watch(currency, async () => {
 
 .ud-breakdown-budgets {
   border-right: 1px solid var(--ud-border);
-  padding: 12px 16px;
-  display: flex; flex-direction: column; gap: 10px;
+  padding: 10px 14px;
+  display: flex; flex-direction: column; gap: 8px;
 }
 .ud-breakdown-top5 {
-  padding: 12px 16px;
+  padding: 10px 14px;
 }
 .ud-breakdown-heading {
   font-size: 12px; font-weight: 600; color: var(--ud-muted);

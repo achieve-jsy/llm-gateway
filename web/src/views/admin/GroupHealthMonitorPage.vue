@@ -1,7 +1,7 @@
 <template>
   <div class="group-health-monitor-page">
     <div class="monitor-card-outer">
-      <!-- Header: view toggle + controls -->
+      <!-- Header: title + controls -->
       <div class="card-header">
         <div class="header-left">
           <el-radio-group v-model="view" size="small" @change="onViewChange">
@@ -31,47 +31,6 @@
         </div>
       </div>
 
-      <!-- Info strip -->
-      <div class="info-strip">
-        <span class="info-icon-circle">i</span>
-        <span>
-          性能指标基于<strong>所选时间窗口（{{ lookbackLabel }}）</strong>内的真实请求统计。
-          <template v-if="view === 'group'">
-            窗口内无人调用的模型组没有性能数据，会单独列在下方「无流量」区，并非异常。
-          </template>
-          点击行可展开查看详细指标。
-        </span>
-      </div>
-
-      <!-- Overview bar -->
-      <div v-if="!loadingMonitors && displayItems.length > 0" class="overview-bar">
-        <div class="overview-item">
-          <span class="overview-num">{{ displayItems.length }}</span>
-          <span class="overview-label">有流量{{ view === 'group' ? '组' : '模型' }}</span>
-        </div>
-        <div class="overview-item is-excellent">
-          <span class="overview-num">{{ statusCounts.excellent }}</span>
-          <span class="overview-label">{{ view === 'group' ? '健康' : '稳定' }}</span>
-        </div>
-        <div class="overview-item is-good">
-          <span class="overview-num">{{ statusCounts.good }}</span>
-          <span class="overview-label">良好</span>
-        </div>
-        <div class="overview-item is-fair">
-          <span class="overview-num">{{ statusCounts.fair }}</span>
-          <span class="overview-label">波动</span>
-        </div>
-        <div class="overview-item is-poor">
-          <span class="overview-num">{{ statusCounts.poor }}</span>
-          <span class="overview-label">异常</span>
-        </div>
-        <div class="overview-item overview-spacer"></div>
-        <div v-if="view === 'group'" class="overview-item">
-          <span class="overview-num" style="color: var(--el-text-color-secondary)">{{ zeroTrafficGroups.length }}</span>
-          <span class="overview-label">无流量</span>
-        </div>
-      </div>
-
       <!-- Main list -->
       <div ref="scrollBodyRef" class="card-body scroll-body" @scroll="onScroll">
         <div v-if="loadingMonitors && displayItems.length === 0" class="state-loading">
@@ -80,38 +39,25 @@
         </div>
 
         <div v-else-if="displayItems.length === 0 && (view === 'model' || zeroTrafficGroups.length === 0)" class="state-empty">
-          <el-icon class="empty-icon" :size="40"><DataLine /></el-icon>
-          <p class="empty-title">暂无{{ view === 'group' ? '模型组' : '模型' }}性能数据</p>
+          <p>暂无{{ view === 'group' ? '模型组' : '模型' }}性能数据</p>
           <p class="sub">
-            <template v-if="view === 'group'">
-              模型组下的模型尚未产生检测记录
-            </template>
-            <template v-else>
-              所选时间窗口内没有模型调用记录
-            </template>
+            <template v-if="view === 'group'">模型组下的模型尚未产生检测记录</template>
+            <template v-else>所选时间窗口内没有模型调用记录</template>
           </p>
         </div>
 
         <div v-else class="monitor-list">
-          <!-- Group view: show groups with timeline -->
+          <!-- Group view -->
           <template v-if="view === 'group'">
             <div
-              v-for="group in displayItems"
+              v-for="group in finalDisplayItems"
               :key="group.name"
               class="monitor-item"
               :class="[getItemStatusClass(group), { expanded: expandedGroups.has(group.name) }]"
+              @click="toggleExpand(group.name)"
             >
-              <!-- Main row (clickable to expand) -->
-              <div class="item-row" @click="toggleExpand(group.name)">
-                <!-- Status indicator -->
-                <div class="status-cell">
-                  <span class="status-dot" :class="'dot-' + computeStatus(group).key"></span>
-                  <span class="status-text" :class="'text-' + computeStatus(group).key">
-                    {{ computeStatus(group).label }}
-                  </span>
-                </div>
-
-                <!-- Group info -->
+              <div class="item-row">
+                <!-- Left: info -->
                 <div class="item-info">
                   <div class="info-line">
                     <el-tooltip :content="group.name" :show-after="300">
@@ -119,14 +65,11 @@
                         <span class="mono">{{ group.name }}</span>
                       </el-tag>
                     </el-tooltip>
-                    <el-tag
+                    <span
                       v-if="group.health_percent != null"
-                      :type="rateType(group.health_percent)"
-                      size="small"
-                      effect="dark"
-                    >
-                      {{ group.health_percent }}%
-                    </el-tag>
+                      class="health-pct"
+                      :class="rateClass(group.health_percent / 100)"
+                    >{{ group.health_percent }}%</span>
                   </div>
                   <div class="meta-line">
                     <el-tag
@@ -137,37 +80,24 @@
                       class="strategy-tag"
                     >{{ strategyLabel(group.strategy) }}</el-tag>
                     <span v-if="group.model_count" class="model-count">{{ group.model_count }} 个模型</span>
-                    <span v-if="group.req_count" class="req-count">{{ group.req_count }} 请求</span>
+                    <template v-if="group.perf">
+                      <span class="meta-sep">·</span>
+                      <span class="meta-metric" :class="rateClass(group.perf.success_rate)">
+                        {{ (group.perf.success_rate * 100).toFixed(1) }}%
+                      </span>
+                      <span class="meta-sep">·</span>
+                      <span class="meta-metric">{{ group.perf.p50_ms.toFixed(0) }}ms</span>
+                      <span class="meta-metric-dim">{{ group.req_count }} 请求</span>
+                    </template>
                   </div>
                 </div>
 
-                <!-- Timeline (only for group view with timeline data) -->
+                <!-- Right: timeline (wide!) -->
                 <div class="item-timeline" v-if="group.timeline">
                   <HealthTimeline :timeline="group.timeline" :lookback="lookback" />
                 </div>
-
-                <!-- Performance metrics -->
-                <div class="item-perf" v-if="group.perf">
-                  <div class="perf-rate">
-                    <span class="rate-value" :class="rateClass(group.perf.success_rate)">
-                      {{ (group.perf.success_rate * 100).toFixed(1) }}%
-                    </span>
-                    <span class="perf-label">成功率</span>
-                  </div>
-                  <div class="perf-ttft">
-                    <span class="ttft-value">{{ group.perf.p50_ms.toFixed(0) }}ms</span>
-                    <span class="perf-label">TTFT</span>
-                  </div>
-                </div>
-                <div class="item-perf no-data" v-else>
-                  <span class="no-data-text">无流量</span>
-                </div>
-
-                <!-- Expand arrow -->
-                <div class="expand-cell">
-                  <el-icon :size="16" class="chevron" :class="{ rotated: expandedGroups.has(group.name) }">
-                    <ArrowDown />
-                  </el-icon>
+                <div class="item-timeline no-timeline" v-else>
+                  <span class="no-data-text">无检测数据</span>
                 </div>
               </div>
 
@@ -175,6 +105,10 @@
               <transition name="slide">
                 <div v-if="expandedGroups.has(group.name) && group.perf" class="perf-detail">
                   <div class="detail-metrics">
+                    <div class="detail-metric">
+                      <span class="dm-label">成功率</span>
+                      <span class="dm-value" :class="rateClass(group.perf.success_rate)">{{ (group.perf.success_rate * 100).toFixed(1) }}%</span>
+                    </div>
                     <div class="detail-metric">
                       <span class="dm-label">总延迟 P50 / P95</span>
                       <span class="dm-value">{{ formatMs(group.perf.p50_ms) }} / {{ formatMs(group.perf.p95_ms) }}</span>
@@ -202,7 +136,6 @@
                       <span class="dm-value is-danger">{{ group.perf.err_5xx }}</span>
                     </div>
                   </div>
-
                   <div v-if="group.perf.members && group.perf.members.length > 0" class="members-list">
                     <div class="members-title">组内模型流量</div>
                     <div v-for="member in group.perf.members" :key="member.model_name + member.provider" class="member-row">
@@ -219,24 +152,16 @@
             </div>
           </template>
 
-          <!-- Model view: show individual models -->
+          <!-- Model view -->
           <template v-else>
             <div
-              v-for="item in displayItems"
+              v-for="item in finalDisplayItems"
               :key="item.name"
               class="monitor-item"
               :class="[getItemStatusClass(item), { expanded: expandedGroups.has(item.name) }]"
+              @click="toggleExpand(item.name)"
             >
-              <div class="item-row" @click="toggleExpand(item.name)">
-                <!-- Status indicator -->
-                <div class="status-cell">
-                  <span class="status-dot" :class="'dot-' + computeStatus(item).key"></span>
-                  <span class="status-text" :class="'text-' + computeStatus(item).key">
-                    {{ computeStatus(item).label }}
-                  </span>
-                </div>
-
-                <!-- Model info -->
+              <div class="item-row">
                 <div class="item-info">
                   <div class="info-line">
                     <el-tooltip :content="item.name" :show-after="300">
@@ -246,23 +171,17 @@
                   <div class="meta-line">
                     <span v-if="item.used_by_groups" class="meta-text">{{ item.used_by_groups }} 组在用</span>
                     <span class="meta-text">{{ item.req_count }} 请求</span>
+                    <span class="meta-sep">·</span>
+                    <span class="meta-metric" :class="rateClass(item.success_rate)">
+                      {{ formatPct(item.success_rate) }}
+                    </span>
+                    <span class="meta-sep">·</span>
+                    <span class="meta-metric">{{ formatMs(item.ttft_p50_ms) }}</span>
                   </div>
                 </div>
 
-                <!-- Rate cell -->
-                <div class="rate-cell">
-                  <span class="rate-value" :class="'text-' + computeStatus(item).key">
-                    {{ formatPct(item.success_rate) }}
-                  </span>
-                  <span class="rate-label">成功率</span>
-                </div>
-
-                <!-- TTFT bar -->
-                <div class="ttft-cell">
-                  <div class="ttft-head">
-                    <span class="ttft-label">首 Token</span>
-                    <span class="ttft-value">{{ formatMs(item.ttft_p50_ms) }}</span>
-                  </div>
+                <!-- TTFT bar (model view only) -->
+                <div class="ttft-bar-wrap">
                   <div class="ttft-track">
                     <div
                       class="ttft-fill"
@@ -271,19 +190,16 @@
                     ></div>
                   </div>
                 </div>
-
-                <!-- Expand arrow -->
-                <div class="expand-cell">
-                  <el-icon :size="16" class="chevron" :class="{ rotated: expandedGroups.has(item.name) }">
-                    <ArrowDown />
-                  </el-icon>
-                </div>
               </div>
 
               <!-- Expanded detail for model view -->
               <transition name="slide">
                 <div v-if="expandedGroups.has(item.name)" class="perf-detail">
                   <div class="detail-metrics">
+                    <div class="detail-metric">
+                      <span class="dm-label">成功率</span>
+                      <span class="dm-value" :class="rateClass(item.success_rate)">{{ formatPct(item.success_rate) }}</span>
+                    </div>
                     <div class="detail-metric">
                       <span class="dm-label">总延迟 P50 / P95</span>
                       <span class="dm-value">{{ formatMs(item.p50_ms) }} / {{ formatMs(item.p95_ms) }}</span>
@@ -321,13 +237,13 @@
             <span style="font-size:12px">加载更多...</span>
           </div>
 
-          <!-- Zero traffic groups (only in group view) -->
+          <!-- Zero traffic groups -->
           <div v-if="view === 'group' && zeroTrafficGroups.length > 0" class="zero-traffic">
-            <div class="zero-header" @click="zeroExpanded = !zeroExpanded">
+            <div class="zero-header" @click.stop="zeroExpanded = !zeroExpanded">
               <el-icon :size="14" class="chevron" :class="{ rotated: zeroExpanded }"><ArrowDown /></el-icon>
               <span>无流量模型组</span>
               <el-tag size="small" type="info" effect="plain" round>{{ zeroTrafficGroups.length }}</el-tag>
-              <span class="zero-hint">所选 {{ lookbackLabel }} 窗口内无请求，因此没有性能指标</span>
+              <span class="zero-hint">所选 {{ lookbackLabel }} 窗口内无请求</span>
             </div>
             <transition name="slide">
               <div v-if="zeroExpanded" class="zero-grid">
@@ -339,8 +255,8 @@
             </transition>
           </div>
 
-          <div v-if="displayItems.length > 0" class="state-end">
-            共 {{ displayItems.length }} 个有流量的{{ view === 'group' ? '模型组' : '模型' }}
+          <div v-if="finalDisplayItems.length > 0" class="state-end">
+            共 {{ finalDisplayItems.length }} 个有流量的{{ view === 'group' ? '模型组' : '模型' }}
             <template v-if="view === 'group' && zeroTrafficGroups.length > 0">
               ，{{ zeroTrafficGroups.length }} 个无流量
             </template>
@@ -352,8 +268,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import { Refresh, Loading, ArrowDown, DataLine } from '@element-plus/icons-vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
+import { Refresh, Loading, ArrowDown } from '@element-plus/icons-vue'
 import { getGroupHealthTimeline, getPerformance } from '@/services/control-plane'
 import type { GroupTimelineGroup, PerformanceItem } from '@/services/control-plane'
 import HealthTimeline from '@/components/admin/HealthTimeline.vue'
@@ -415,7 +331,6 @@ interface DisplayItem {
   req_count?: number
   timeline?: any
   perf?: PerformanceItem
-  // Model view specific
   used_by_groups?: string
   success_rate: number
   p50_ms: number
@@ -431,12 +346,10 @@ interface DisplayItem {
 
 const displayItems = computed((): DisplayItem[] => {
   if (view.value === 'group') {
-    // Convert timeline groups to display items with perf data merged
     const perfMap = new Map<string, PerformanceItem>()
     for (const item of perfItems.value) {
       perfMap.set(item.name, item)
     }
-    
     return timelineGroups.value
       .filter(g => perfMap.has(g.group_name))
       .map(g => {
@@ -462,7 +375,6 @@ const displayItems = computed((): DisplayItem[] => {
         }
       })
   } else {
-    // Model view: directly use perf items
     return perfItems.value.map(item => ({
       name: item.name,
       req_count: item.req_count,
@@ -490,10 +402,8 @@ interface StatusInfo {
 function computeStatus(item: DisplayItem): StatusInfo {
   const sr = item.success_rate
   const pct = item.pct_in_24h_p50
-  
   if (sr < 0.85) return { key: 'poor', label: '异常' }
   if (sr < 0.95) return { key: 'fair', label: '波动' }
-  
   if (view.value === 'group') {
     if (sr >= 0.99) return { key: 'excellent', label: '健康' }
     return { key: 'good', label: '良好' }
@@ -509,21 +419,11 @@ function getItemStatusClass(item: DisplayItem): string {
   return 'status-' + computeStatus(item).key
 }
 
-const statusCounts = computed(() => {
-  const c = { excellent: 0, good: 0, fair: 0, poor: 0 }
-  for (const item of displayItems.value) {
-    const status = computeStatus(item)
-    if (status.key !== 'excellent' || (view.value === 'model' || item.perf)) {
-      c[status.key]++
-    }
-  }
-  return c
-})
+const statusRank: Record<StatusInfo['key'], number> = { excellent: 0, good: 1, fair: 2, poor: 3 }
 
 // Sorted display items
-const sortedDisplayItems = computed(() => {
+const finalDisplayItems = computed(() => {
   const arr = [...displayItems.value]
-  
   switch (sortBy.value) {
     case 'health':
       arr.sort((a, b) => (b.health_percent || 0) - (a.health_percent || 0))
@@ -551,12 +451,7 @@ const sortedDisplayItems = computed(() => {
   return arr
 })
 
-const statusRank: Record<StatusInfo['key'], number> = { excellent: 0, good: 1, fair: 2, poor: 3 }
-
-// Use sorted items for display
-const finalDisplayItems = computed(() => sortedDisplayItems.value)
-
-// Zero traffic groups (only in group view)
+// Zero traffic groups
 const zeroTrafficGroups = computed(() => {
   if (view.value !== 'group') return []
   const trafficNames = new Set(timelineGroups.value.map(g => g.group_name))
@@ -571,7 +466,6 @@ const zeroTrafficGroups = computed(() => {
     .sort((a, b) => a.name.localeCompare(b.name))
 })
 
-// Check if group is available to current user
 function isGroupAvailable(groupName: string): boolean {
   const role = authStore.effectiveRole
   if (role === 'admin') return true
@@ -590,30 +484,18 @@ function isGroupAvailable(groupName: string): boolean {
 
 // Data loading
 async function loadTimelineData(reset: boolean = true) {
-  if (reset) {
-    loadingMonitors.value = true
-  } else {
-    loadingMore.value = true
-  }
+  if (reset) { loadingMonitors.value = true } else { loadingMore.value = true }
   try {
     const offset = reset ? 0 : timelineGroups.value.length
     const result = await getGroupHealthTimeline(lookback.value, searchText.value, offset, PAGE_SIZE)
-    
     let filteredGroups = result.groups
-    
     const role = authStore.effectiveRole
     if (role !== 'admin' && role !== null) {
-      if (reset) {
-        await loadEntitlements()
-      }
+      if (reset) await loadEntitlements()
       filteredGroups = result.groups.filter(g => isGroupAvailable(g.group_name))
     }
-    
-    if (reset) {
-      timelineGroups.value = filteredGroups
-    } else {
-      timelineGroups.value = [...timelineGroups.value, ...filteredGroups]
-    }
+    if (reset) { timelineGroups.value = filteredGroups }
+    else { timelineGroups.value = [...timelineGroups.value, ...filteredGroups] }
     total.value = result.total
   } catch {
     if (reset) timelineGroups.value = []
@@ -624,37 +506,22 @@ async function loadTimelineData(reset: boolean = true) {
 }
 
 async function loadPerformanceData(reset: boolean = true) {
-  if (reset) {
-    rawLoaded.value = 0
-    rawTotal.value = 0
-  }
-  
+  if (reset) { rawLoaded.value = 0; rawTotal.value = 0 }
   try {
     const viewType = view.value
     const result = await getPerformance(lookback.value, viewType, searchText.value, PAGE_SIZE, rawLoaded.value)
-    
     let filteredItems = result.items || []
     const role = authStore.effectiveRole
     if (role !== 'admin' && role !== null && viewType === 'group') {
       filteredItems = filteredItems.filter(item => isGroupAvailable(item.name))
     }
-    
-    if (reset) {
-      perfItems.value = filteredItems
-    } else {
-      perfItems.value = [...perfItems.value, ...filteredItems]
-    }
-    
+    if (reset) { perfItems.value = filteredItems }
+    else { perfItems.value = [...perfItems.value, ...filteredItems] }
     rawTotal.value = result.total ?? result.items.length
     rawLoaded.value += result.items.length
     total.value = rawTotal.value
   } catch {
-    if (reset) {
-      perfItems.value = []
-      rawTotal.value = 0
-      rawLoaded.value = 0
-      total.value = 0
-    }
+    if (reset) { perfItems.value = []; rawTotal.value = 0; rawLoaded.value = 0; total.value = 0 }
   }
 }
 
@@ -664,34 +531,24 @@ async function loadEntitlements() {
     const res = await groupsApi.listGroups({ page_size: 200 })
     const groups = res.data.data ?? []
     allGroups.value = groups
-
     const newOpenModeMap = new Map<string, string>()
-    for (const g of groups) {
-      newOpenModeMap.set(g.name, g.open_mode)
-    }
+    for (const g of groups) { newOpenModeMap.set(g.name, g.open_mode) }
     openModeMap.value = newOpenModeMap
-
     if (role === 'studio_admin' || role === 'dept_admin') {
       const deptRoles = authStore.orgRoles.filter(r => r.role === 'dept_admin' && r.scope_type === 'dept')
       myDeptIds.value = deptRoles.map(r => r.scope_id)
       const studioRole = authStore.orgRoles.find(r => r.role === 'studio_admin' && r.scope_type === 'studio')
       myStudioId.value = studioRole?.scope_id || ''
-
       const controlledGroups = groups.filter(g => g.open_mode === 'controlled' && g.enabled)
       const entitlementPromises = controlledGroups.map(async g => {
         try {
           const entRes = await groupsApi.listEntitlements(g.id)
           return { groupName: g.name, items: entRes.data.data?.items || [] }
-        } catch {
-          return { groupName: g.name, items: [] }
-        }
+        } catch { return { groupName: g.name, items: [] } }
       })
-
       const entResults = await Promise.all(entitlementPromises)
       const newMap = new Map<string, GroupEntitlement[]>()
-      for (const r of entResults) {
-        newMap.set(r.groupName, r.items)
-      }
+      for (const r of entResults) { newMap.set(r.groupName, r.items) }
       entitlementsMap.value = newMap
     }
   } catch {
@@ -704,69 +561,41 @@ async function loadGroupsForZeroTraffic() {
   try {
     const res = await groupsApi.listGroups({ page_size: 200 })
     allGroups.value = res.data.data ?? []
-  } catch {
-    allGroups.value = []
-  }
+  } catch { allGroups.value = [] }
 }
 
 async function refreshData() {
   loading.value = true
   try {
     if (view.value === 'group') {
-      await Promise.all([
-        loadTimelineData(true),
-        loadPerformanceData(true),
-        loadGroupsForZeroTraffic()
-      ])
+      await Promise.all([loadTimelineData(true), loadPerformanceData(true), loadGroupsForZeroTraffic()])
     } else {
       await loadPerformanceData(true)
     }
-  } finally {
-    loading.value = false
-  }
+  } finally { loading.value = false }
 }
 
 function onViewChange() {
-  // Reset sort when changing view
-  if (view.value === 'group') {
-    sortBy.value = 'health'
-  } else {
-    sortBy.value = 'stability'
-  }
+  sortBy.value = view.value === 'group' ? 'health' : 'stability'
   refreshData()
 }
 
-function onLookbackChange() {
-  refreshData()
-}
-
-function onSearch() {
-  refreshData()
-}
-
-function onSortChange() {
-  // Sorting is computed, no need to reload
-}
+function onLookbackChange() { refreshData() }
+function onSearch() { refreshData() }
+function onSortChange() { /* sorting is computed */ }
 
 function onScroll(e: Event) {
   const el = e.target as HTMLElement
   if (loadingMore.value) return
   if (rawLoaded.value >= rawTotal.value) return
   const { scrollTop, scrollHeight, clientHeight } = el
-  if (scrollHeight - scrollTop - clientHeight < 100) {
-    loadMore()
-  }
+  if (scrollHeight - scrollTop - clientHeight < 100) { loadMore() }
 }
 
 async function loadMore() {
   if (loadingMore.value || rawLoaded.value >= rawTotal.value) return
-  
-  if (view.value === 'group') {
-    await loadTimelineData(false)
-    await loadPerformanceData(false)
-  } else {
-    await loadPerformanceData(false)
-  }
+  if (view.value === 'group') { await loadTimelineData(false); await loadPerformanceData(false) }
+  else { await loadPerformanceData(false) }
 }
 
 function toggleExpand(name: string) {
@@ -812,9 +641,7 @@ function formatMs(ms: number): string {
   return ms + 'ms'
 }
 
-function formatPct(rate: number): string {
-  return (rate * 100).toFixed(1) + '%'
-}
+function formatPct(rate: number): string { return (rate * 100).toFixed(1) + '%' }
 
 function percentileLabel(pct: number | null | undefined): string | null {
   if (pct == null) return null
@@ -848,48 +675,26 @@ function speedLevel(ttft: number): 'fast' | 'mid' | 'slow' {
 onMounted(() => {
   const role = authStore.effectiveRole
   if (role !== 'admin' && role !== null) {
-    loadEntitlements().then(() => {
-      refreshData()
-    })
-  } else {
-    refreshData()
-  }
-  timer = setInterval(() => {
-    refreshData()
-  }, 60000)
+    loadEntitlements().then(() => { refreshData() })
+  } else { refreshData() }
+  timer = setInterval(() => { refreshData() }, 60000)
 })
 
-onBeforeUnmount(() => {
-  if (timer) {
-    clearInterval(timer)
-    timer = null
-  }
-})
+onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
 </script>
 
 <style scoped>
 .group-health-monitor-page {
   width: 100%;
-  --perf-excellent: #059669;
-  --perf-excellent-bg: #ECFDF5;
-  --perf-excellent-light: #D1FAE5;
-  --perf-good: #4F6BF6;
-  --perf-good-bg: #EEF0FF;
-  --perf-good-light: #DDE1FF;
-  --perf-fair: #D97706;
-  --perf-fair-bg: #FFFBEB;
-  --perf-fair-light: #FEF3C7;
-  --perf-poor: #DC2626;
-  --perf-poor-bg: #FEF2F2;
-  --perf-poor-light: #FECACA;
-}
-
-/* Page root: fill viewport */
-.group-health-monitor-page {
   height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* Single-hue green gradient based on brand #36B34E */
+  --perf-excellent: #36B34E;
+  --perf-good: rgba(54, 179, 78, 0.55);
+  --perf-fair: rgba(54, 179, 78, 0.25);
+  --perf-poor: #D97706;
 }
 
 .monitor-card-outer {
@@ -900,129 +705,46 @@ onBeforeUnmount(() => {
   min-height: 0;
 }
 
-/* Header: view toggle + controls */
+/* ── Header ── */
 .card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 14px;
+  padding: 12px 20px;
   border-bottom: 1px solid var(--el-border-color-lighter);
   flex-wrap: wrap;
   gap: 8px;
   flex-shrink: 0;
 }
-
 .header-left { flex-shrink: 0; }
-
-.header-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
+.header-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .lookback-label { font-size: 12px; color: var(--el-text-color-secondary); }
-.lookback-select { width: 90px; }
+.lookback-select { width: 100px; }
 .sort-select { width: 110px; }
-.search-input { width: 150px; }
+.search-input { width: 160px; }
 
-/* Info strip */
-.info-strip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
-  background: var(--bg-subtle, #F1F5F9);
-  border-bottom: 1px solid var(--border-light, #F1F5F9);
-  font-size: 12px;
-  color: var(--text-secondary, #64748B);
-  line-height: 1.5;
-  flex-shrink: 0;
-}
-.info-strip strong { color: var(--text-primary, #0F172A); font-weight: 600; }
-.info-icon-circle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--border-default, #E2E8F0);
-  color: var(--text-secondary, #64748B);
-  font-size: 11px;
-  font-weight: 700;
-  font-style: italic;
-  flex-shrink: 0;
-  font-family: Georgia, 'Times New Roman', serif;
-}
-
-/* Overview bar */
-.overview-bar {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 5px 12px;
-  border-bottom: 1px solid var(--border-light, #F1F5F9);
-  flex-wrap: wrap;
-  flex-shrink: 0;
-}
-.overview-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  border-radius: 6px;
-  transition: background 0.15s;
-}
-.overview-num {
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1;
-  color: var(--text-primary, #0F172A);
-  font-variant-numeric: tabular-nums;
-}
-.overview-label {
-  font-size: 12px;
-  color: var(--text-secondary, #64748B);
-  font-weight: 500;
-}
-.overview-item.is-excellent .overview-num { color: var(--perf-excellent); }
-.overview-item.is-excellent { background: var(--perf-excellent-bg); }
-.overview-item.is-good .overview-num { color: var(--perf-good); }
-.overview-item.is-good { background: var(--perf-good-bg); }
-.overview-item.is-fair .overview-num { color: var(--perf-fair); }
-.overview-item.is-fair { background: var(--perf-fair-bg); }
-.overview-item.is-poor .overview-num { color: var(--perf-poor); }
-.overview-item.is-poor { background: var(--perf-poor-bg); }
-.overview-spacer { flex: 1; }
-
-/* Body */
-.card-body { padding: 8px 14px; }
-.scroll-body {
-  flex: 1;
-  overflow-y: auto;
-  min-height: 0;
-}
+/* ── Body ── */
+.card-body { padding: 16px 20px; }
+.scroll-body { flex: 1; overflow-y: auto; min-height: 0; }
 .scroll-body::-webkit-scrollbar { width: 5px; }
 .scroll-body::-webkit-scrollbar-track { background: transparent; }
 .scroll-body::-webkit-scrollbar-thumb { background: var(--el-border-color); border-radius: 3px; }
 
-/* States */
+/* ── States ── */
 .state-loading {
   display: flex; align-items: center; justify-content: center;
   gap: 8px; padding: 40px 0; color: var(--el-text-color-secondary);
 }
 .state-empty {
   display: flex; flex-direction: column; align-items: center;
-  padding: 48px 20px; color: var(--el-text-color-secondary); text-align: center;
+  padding: 40px 0; color: var(--el-text-color-secondary); text-align: center;
 }
-.empty-icon { color: var(--el-text-color-placeholder); margin-bottom: 12px; }
-.empty-title { font-size: 15px; font-weight: 600; color: var(--el-text-color-primary); margin: 0; }
+.state-empty p { margin: 0; }
 .state-empty .sub { font-size: 12px; margin-top: 6px; max-width: 420px; line-height: 1.6; }
 .state-end { text-align: center; padding: 12px 0 4px; font-size: 12px; color: var(--el-text-color-secondary); }
 
-/* Monitor items */
-.monitor-list { display: flex; flex-direction: column; gap: 4px; }
+/* ── Monitor list ── */
+.monitor-list { display: flex; flex-direction: column; gap: 10px; }
 
 .monitor-item {
   border: 1px solid var(--el-border-color-lighter);
@@ -1030,77 +752,54 @@ onBeforeUnmount(() => {
   border-radius: 8px;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   background: var(--el-bg-color);
+  cursor: pointer;
 }
-
 .monitor-item.status-excellent { border-left-color: var(--perf-excellent); }
 .monitor-item.status-good { border-left-color: var(--perf-good); }
 .monitor-item.status-fair { border-left-color: var(--perf-fair); }
 .monitor-item.status-poor { border-left-color: var(--perf-poor); }
-
 .monitor-item:hover {
-  border-left-width: 5px;
+  border-color: var(--el-color-primary-light-5);
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.07);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
 }
+.monitor-item.expanded { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06); }
+.monitor-item.no-traffic { opacity: 0.55; border-left-color: var(--el-border-color-lighter); }
+.monitor-item.no-traffic:hover { opacity: 0.75; }
 
-.monitor-item.expanded {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-}
-
-.monitor-item.no-traffic {
-  opacity: 0.6;
-  border-left-color: var(--el-border-color-lighter);
-}
-.monitor-item.no-traffic:hover {
-  opacity: 0.8;
-  border-color: var(--el-border-color-lighter);
-}
-
+/* ── Item row: info (fixed) + timeline (flex: 1, wide!) ── */
 .item-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 8px 12px;
-  cursor: pointer;
+  gap: 20px;
+  padding: 14px 16px;
   user-select: none;
 }
 
-/* Status cell */
-.status-cell {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  width: 60px;
-}
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.dot-excellent { background: var(--perf-excellent); box-shadow: 0 0 0 3px var(--perf-excellent-light); }
-.dot-good { background: var(--perf-good); box-shadow: 0 0 0 3px var(--perf-good-light); }
-.dot-fair { background: var(--perf-fair); box-shadow: 0 0 0 3px var(--perf-fair-light); }
-.dot-poor { background: var(--perf-poor); box-shadow: 0 0 0 3px var(--perf-poor-light); }
-.status-text { font-size: 12px; font-weight: 600; }
-.text-excellent { color: var(--perf-excellent); }
-.text-good { color: var(--perf-good); }
-.text-fair { color: var(--perf-fair); }
-.text-poor { color: var(--perf-poor); }
-
-/* Left: info */
-.item-info { flex: 1; min-width: 0; }
+/* Left: info — fixed width like the original */
+.item-info { flex-shrink: 0; width: 280px; }
 .info-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .format-badge { cursor: default; max-width: 180px; overflow: hidden; min-width: 0; }
 .format-badge :deep(.el-tag__content) { overflow: hidden; }
 .mono { font-family: monospace; font-size: 11px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Health percentage — text-only, uses brand green gradient */
+.health-pct {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.health-pct.rate-excellent { color: var(--perf-excellent); }
+.health-pct.rate-good { color: var(--perf-good); }
+.health-pct.rate-fair { color: var(--perf-fair); }
+.health-pct.rate-poor { color: var(--perf-poor); }
+
 .row-name {
   display: block;
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-primary, #0F172A);
+  color: var(--el-text-color-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1110,170 +809,90 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 3px;
+  margin-top: 4px;
+  flex-wrap: wrap;
 }
-.meta-text {
-  font-size: 11px;
-  color: var(--text-secondary, #64748B);
-}
+.meta-text { font-size: 11px; color: var(--el-text-color-secondary); }
 .strategy-tag { flex-shrink: 0; }
-.model-count, .req-count {
+.model-count { font-size: 12px; color: var(--el-text-color-secondary); }
+
+/* Inline metrics in meta-line */
+.meta-sep { font-size: 10px; color: var(--el-text-color-placeholder); }
+.meta-metric {
   font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-
-/* Timeline */
-.item-timeline { flex: 1; min-width: 120px; max-width: 200px; }
-
-/* Performance metrics column */
-.item-perf {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-shrink: 0;
-  width: 140px;
-}
-
-.perf-rate, .perf-ttft {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-}
-
-.rate-value {
-  font-size: 14px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-.rate-excellent { color: var(--perf-excellent, #059669); }
-.rate-good { color: var(--perf-good, #4F6CF6); }
-.rate-fair { color: var(--perf-fair, #D97706); }
-.rate-poor { color: var(--perf-poor, #DC2626); }
-
-.ttft-value {
-  font-size: 13px;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
   color: var(--el-text-color-primary);
+}
+.meta-metric.rate-excellent { color: var(--perf-excellent); }
+.meta-metric.rate-good { color: var(--perf-good); }
+.meta-metric.rate-fair { color: var(--perf-fair); }
+.meta-metric.rate-poor { color: var(--perf-poor); }
+.meta-metric-dim {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
   font-variant-numeric: tabular-nums;
 }
 
-.perf-label {
-  font-size: 10px;
-  color: var(--el-text-color-secondary);
-  font-weight: 500;
-}
+/* Right: timeline — flex: 1, NO max-width, wide and spacious! */
+.item-timeline { flex: 1; min-width: 0; }
 
-.item-perf.no-data {
+.no-timeline {
+  display: flex;
+  align-items: center;
   justify-content: center;
 }
-.no-data-text {
-  font-size: 12px;
-  color: var(--el-text-color-placeholder);
-}
+.no-data-text { font-size: 12px; color: var(--el-text-color-placeholder); }
 
-/* Rate cell (model view) */
-.rate-cell {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  text-align: right;
-  flex-shrink: 0;
-  width: 80px;
-}
-.rate-cell .rate-value {
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 1.2;
-}
-.rate-label {
-  font-size: 10px;
-  color: var(--text-secondary, #64748B);
-  margin-top: 1px;
-  font-weight: 500;
-}
-
-/* TTFT cell (model view) */
-.ttft-cell {
-  flex-shrink: 0;
-  width: 120px;
-}
-.ttft-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: 3px;
-}
-.ttft-label {
-  font-size: 10px;
-  color: var(--text-secondary, #64748B);
-  font-weight: 500;
+/* TTFT bar (model view) */
+.ttft-bar-wrap {
+  flex: 1;
+  min-width: 80px;
 }
 .ttft-track {
-  height: 4px;
-  border-radius: 2px;
-  background: var(--bg-subtle, #F1F5F9);
+  height: 6px;
+  border-radius: 3px;
+  background: var(--el-fill-color-light, #F1F5F9);
   overflow: hidden;
 }
 .ttft-fill {
   height: 100%;
-  border-radius: 2px;
+  border-radius: 3px;
   transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .fill-fast { background: var(--perf-excellent); }
 .fill-mid { background: var(--perf-fair); }
 .fill-slow { background: var(--perf-poor); }
 
-/* Expand cell */
-.expand-cell {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-}
-.chevron {
-  transition: transform 0.2s;
-  color: var(--el-text-color-secondary);
-}
-.chevron.rotated {
-  transform: rotate(180deg);
-}
-
-/* Expanded detail */
+/* ── Expanded detail ── */
 .perf-detail {
-  padding: 10px 14px;
+  padding: 12px 16px;
   border-top: 1px solid var(--el-border-color-lighter);
-  background: var(--bg-subtle, #FAFAFA);
+  background: var(--el-fill-color-lighter, #FAFAFA);
 }
-
 .detail-metrics {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 8px 12px;
 }
-
 .detail-metric {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 5px 8px;
-  background: var(--bg-surface, #fff);
+  padding: 6px 10px;
+  background: var(--el-bg-color);
   border-radius: 6px;
-  border: 1px solid var(--border-light, #F1F5F9);
+  border: 1px solid var(--el-border-color-lighter);
 }
-
-.dm-label {
-  font-size: 10px;
-  color: var(--el-text-color-secondary);
-  font-weight: 500;
-}
-
+.dm-label { font-size: 11px; color: var(--el-text-color-secondary); font-weight: 500; }
 .dm-value {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--el-text-color-primary);
+  font-size: 13px; font-weight: 600; color: var(--el-text-color-primary);
   font-variant-numeric: tabular-nums;
 }
-
+.dm-value.rate-excellent { color: var(--perf-excellent); }
+.dm-value.rate-good { color: var(--perf-good); }
+.dm-value.rate-fair { color: var(--perf-fair); }
+.dm-value.rate-poor { color: var(--perf-poor); }
 .dm-value.is-warn { color: var(--perf-fair); }
 .dm-value.is-danger { color: var(--perf-poor); }
 .dm-value.is-fast { color: var(--perf-excellent); }
@@ -1282,162 +901,57 @@ onBeforeUnmount(() => {
 .dm-value.is-very-slow { color: var(--perf-poor); }
 
 /* Members list */
-.members-list {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--el-border-color-lighter);
-}
+.members-list { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--el-border-color-lighter); }
+.members-title { font-size: 12px; font-weight: 600; color: var(--el-text-color-secondary); margin-bottom: 8px; }
+.member-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; }
+.member-bar-track { flex: 1; height: 6px; background: var(--el-fill-color); border-radius: 3px; overflow: hidden; }
+.member-bar-fill { height: 100%; background: linear-gradient(90deg, var(--perf-excellent), var(--perf-good)); border-radius: 3px; transition: width 0.3s; }
+.member-traffic { font-size: 12px; font-weight: 600; color: var(--el-text-color-primary); min-width: 36px; text-align: right; }
+.member-metrics { font-size: 11px; color: var(--el-text-color-secondary); white-space: nowrap; }
 
-.members-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--el-text-color-secondary);
-  margin-bottom: 8px;
-}
-
-.member-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 5px 0;
-}
-
-.member-bar-track {
-  flex: 1;
-  height: 6px;
-  background: var(--el-fill-color);
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.member-bar-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--perf-excellent), var(--perf-good));
-  border-radius: 3px;
-  transition: width 0.3s;
-}
-
-.member-traffic {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-  min-width: 36px;
-  text-align: right;
-}
-
-.member-metrics {
-  font-size: 11px;
-  color: var(--el-text-color-secondary);
-  white-space: nowrap;
-}
-
-/* Zero traffic section */
+/* ── Zero traffic ── */
 .zero-traffic {
   margin-top: 8px;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;
   overflow: hidden;
 }
-
 .zero-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  background: var(--bg-subtle, #FAFAFA);
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--el-text-color-regular);
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 12px;
+  background: var(--el-fill-color-lighter, #FAFAFA);
+  cursor: pointer; font-size: 13px; color: var(--el-text-color-regular);
   transition: background 0.15s;
 }
+.zero-header:hover { background: var(--el-fill-color); }
+.zero-hint { font-size: 11px; color: var(--el-text-color-secondary); margin-left: auto; }
+.zero-grid { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--el-border-color-lighter); }
+.zero-chip { display: flex; align-items: center; gap: 4px; padding: 3px 8px; background: var(--el-fill-color); border-radius: 4px; font-size: 11px; color: var(--el-text-color-regular); }
+.zero-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--el-text-color-placeholder); }
+.zero-name { font-family: monospace; font-size: 11px; }
 
-.zero-header:hover {
-  background: var(--el-fill-color);
-}
-
-.zero-hint {
-  font-size: 11px;
-  color: var(--el-text-color-secondary);
-  margin-left: auto;
-}
-
-.zero-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 8px 12px;
-  border-top: 1px solid var(--el-border-color-lighter);
-}
-
-.zero-chip {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  background: var(--el-fill-color);
-  border-radius: 4px;
-  font-size: 11px;
-  color: var(--el-text-color-regular);
-}
-
-.zero-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--el-text-color-placeholder);
-}
-
-.zero-name {
-  font-family: monospace;
-  font-size: 11px;
-}
+/* Chevron */
+.chevron { transition: transform 0.2s; color: var(--el-text-color-secondary); }
+.chevron.rotated { transform: rotate(180deg); }
 
 /* Slide transition */
-.slide-enter-active, .slide-leave-active {
-  transition: all 0.2s ease;
-}
-.slide-enter-from, .slide-leave-to {
-  opacity: 0;
-  max-height: 0;
-}
-.slide-enter-to, .slide-leave-from {
-  opacity: 1;
-  max-height: 500px;
-}
+.slide-enter-active, .slide-leave-active { transition: all 0.2s ease; }
+.slide-enter-from, .slide-leave-to { opacity: 0; max-height: 0; }
+.slide-enter-to, .slide-leave-from { opacity: 1; max-height: 500px; }
 
-/* Responsive */
+/* ── Responsive ── */
 @media (max-width: 1024px) {
-  .search-input { width: 130px; }
-  .item-timeline { max-width: 150px; }
-  .item-perf { width: 120px; gap: 12px; }
-  .ttft-cell { width: 100px; }
+  .search-input { width: 140px; }
+  .item-info { width: 240px; }
 }
 
 @media (max-width: 768px) {
   .card-header { flex-direction: column; align-items: stretch; }
   .header-actions { justify-content: space-between; flex-wrap: wrap; }
   .search-input { flex: 1; width: 100%; }
-  
-  .card-body { padding: 8px 12px; }
-  .scroll-body { max-height: calc(100vh - 200px); }
-  
-  .item-row { 
-    flex-wrap: wrap;
-    gap: 10px;
-  }
-  .item-info { min-width: 0; flex: 1; }
-  .item-timeline { 
-    width: 100%; 
-    max-width: 100%;
-    order: 3;
-  }
-  .item-perf { 
-    width: auto;
-    order: 2;
-  }
-  .expand-cell { order: 1; }
-  .ttft-cell { width: 100%; order: 4; }
-  
+  .card-body { padding: 12px; }
+  .item-row { flex-direction: column; align-items: stretch; gap: 10px; }
+  .item-info { width: 100%; }
   .state-loading, .state-empty { padding: 24px 0; }
 }
 
@@ -1447,12 +961,9 @@ onBeforeUnmount(() => {
   .lookback-select { width: 100%; }
   .sort-select { width: 100%; }
   .search-input { width: 100%; }
-  
-  .card-header { padding: 8px 12px; }
-  .card-body { padding: 8px; }
+  .card-header { padding: 10px 12px; }
+  .card-body { padding: 10px 8px; }
   .monitor-item { border-radius: 6px; }
-  .monitor-list { gap: 5px; }
-  
   .detail-metrics { grid-template-columns: 1fr; }
 }
 </style>

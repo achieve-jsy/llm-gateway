@@ -619,7 +619,7 @@ function pctClass(pct: number | null | undefined): string {
 
 /* ── Page-level tabs ── */
 .page-tabs {
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .page-tabs :deep(.el-radio-group) {
@@ -753,7 +753,7 @@ function pctClass(pct: number | null | undefined): string {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 8px 16px;
+  padding: 6px 12px;
   border-bottom: 1px solid var(--border-light, #F1F5F9);
   flex-wrap: wrap;
 }
@@ -794,11 +794,11 @@ function pctClass(pct: number | null | undefined): string {
 .overview-item.is-poor { background: var(--perf-poor-bg); }
 
 /* ── Card body ── */
-.card-body { padding: 12px 16px; }
+.card-body { padding: 6px 12px 10px; }
 
 .scroll-body {
-  max-height: calc(100vh - 280px);
-  min-height: 200px;
+  max-height: calc(100vh - 220px);
+  min-height: 120px;
   overflow-y: auto;
 }
 

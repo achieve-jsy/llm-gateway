@@ -43,10 +43,6 @@
           <el-icon><Histogram /></el-icon>
           <template #title>模型组健康</template>
         </el-menu-item>
-        <el-menu-item index="/admin/performance">
-          <el-icon><TrendCharts /></el-icon>
-          <template #title>模型性能</template>
-        </el-menu-item>
         <el-menu-item v-if="authStore.isManager" index="/admin/expansion-requests">
           <el-icon><TrendCharts /></el-icon>
           <template #title>扩容申请</template>

@@ -91,7 +91,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/admin/performance',
     name: 'Performance',
-    component: () => import('@/views/admin/PerformancePage.vue'),
+    component: () => import('@/views/admin/GroupHealthMonitorPage.vue'),
     meta: { title: '模型性能看板' }
   },
   {

@@ -404,42 +404,7 @@
         </div>
       </div>
 
-      <!-- 异常排行榜 -->
-      <div v-if="errorBreakdown.length > 0" class="ud-section ud-section--error">
-        <div class="ud-section__header">
-          <span class="ud-section__title ud-section__title--error">
-            <el-icon class="ud-error-icon"><WarningFilled /></el-icon>
-            异常排行
-          </span>
-          <span class="ud-section__hint">Top {{ errorBreakdown.length }} · 按错误次数降序</span>
-        </div>
-        <div class="ud-table-wrap">
-          <table class="ud-rank-table ud-error-table">
-            <thead>
-              <tr>
-                <th class="col-rank">#</th>
-                <th class="col-name">{{ currentScope === 'user' ? '成员' : currentScope === 'dept' ? '部门' : currentScope === 'studio' ? '工作室' : '公司' }}</th>
-                <th class="col-num">错误次数</th>
-                <th class="col-num">错误率</th>
-                <th class="col-num">总调用</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(row, i) in errorBreakdown" :key="'err-' + (row.id ?? i)">
-                <td class="col-rank">
-                  <span :class="['ud-rank-num', i < 3 ? `ud-rank-num--err${i+1}` : '']">{{ i + 1 }}</span>
-                </td>
-                <td class="col-name">
-                  <span class="ud-row-name">{{ row.name || row.id || '(未归属)' }}</span>
-                </td>
-                <td class="col-num c-red fw6">{{ fmtNum(row.error_count) }}</td>
-                <td class="col-num">{{ errorRate(row) }}</td>
-                <td class="col-num">{{ fmtNum(row.call_count) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
+
 
     </div>
 
@@ -691,20 +656,6 @@ function toggleSort(field: 'cost' | 'calls' | 'tokens') {
   } else {
     rankSort.value = { field, order: 'desc' }
   }
-}
-
-// ── 异常排行榜（纯前端复用 breakdown 数据）─────────────────
-const errorBreakdown = computed(() => {
-  return breakdown.value
-    .filter((r: any) => r.error_count > 0)
-    .sort((a: any, b: any) => b.error_count - a.error_count)
-    .slice(0, 10)
-})
-
-/** 计算错误率: error_count / call_count */
-function errorRate(row: any): string {
-  if (!row.call_count) return '—'
-  return ((row.error_count / row.call_count) * 100).toFixed(1) + '%'
 }
 
 // 环比
@@ -1434,7 +1385,7 @@ watch(currency, async () => {
   --ud-mono: 'SFMono-Regular', ui-monospace, 'JetBrains Mono', Consolas, monospace;
 
   min-height: 100%; box-sizing: border-box;
-  display: flex; flex-direction: column; gap: 16px;
+  display: flex; flex-direction: column; gap: 10px;
 }
 
 /* ── 页头 ── */
@@ -1467,7 +1418,7 @@ watch(currency, async () => {
 .ud-filter { display: flex; flex-direction: column; overflow: hidden; }
 
 .ud-filter-row {
-  display: flex; align-items: center; gap: 10px; padding: 12px 20px;
+  display: flex; align-items: center; gap: 10px; padding: 10px 16px;
   flex-wrap: wrap;
 }
 .ud-filter-row--date { border-bottom: 1px solid var(--ud-border); }
@@ -1554,8 +1505,8 @@ watch(currency, async () => {
   background: var(--ud-surface);
   border: 1px solid var(--ud-border);
   border-radius: 14px;
-  padding: 18px 20px 16px;
-  display: flex; align-items: flex-start; gap: 14px;
+  padding: 14px 16px 12px;
+  display: flex; align-items: flex-start; gap: 12px;
   position: relative; overflow: hidden;
 }
 .ud-kpi-card::before {
@@ -1583,7 +1534,7 @@ watch(currency, async () => {
 
 .ud-kpi__body { flex: 1; min-width: 0; }
 .ud-kpi__label { font-size: 12px; color: var(--ud-muted); margin: 0 0 4px; }
-.ud-kpi__value { font-size: 24px; font-weight: 700; margin: 0 0 6px; color: var(--el-text-color-primary); line-height: 1.2; }
+.ud-kpi__value { font-size: 22px; font-weight: 700; margin: 0 0 4px; color: var(--el-text-color-primary); line-height: 1.2; }
 .ud-kpi__foot  { display: flex; align-items: center; gap: 6px; font-size: 12px; margin: 0; }
 .ud-kpi__vs    { color: var(--ud-faint); }
 .ud-kpi__sub   { color: var(--ud-muted); }
@@ -1634,7 +1585,7 @@ watch(currency, async () => {
 /* ── Section 通用 ── */
 .ud-section__header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 20px 12px; border-bottom: 1px solid var(--ud-border);
+  padding: 10px 16px 8px; border-bottom: 1px solid var(--ud-border);
   flex-wrap: wrap; gap: 8px;
 }
 .ud-section__title { font-size: 14px; font-weight: 600; color: var(--el-text-color-primary); }
@@ -1658,11 +1609,11 @@ watch(currency, async () => {
 
 /* ── 趋势图 ── */
 .ud-chart-wrap {
-  padding: 16px 20px;
-  height: 260px;
+  padding: 12px 16px;
+  height: 220px;
   position: relative;
 }
-.ud-chart-wrap--model { height: 280px; }
+.ud-chart-wrap--model { height: 240px; }
 .ud-trend-canvas { width: 100% !important; height: 100% !important; }
 .ud-model-canvas { width: 100% !important; height: 100% !important; }
 .ud-chart-empty {
@@ -1680,7 +1631,7 @@ watch(currency, async () => {
 .ud-main-row {
   display: grid;
   grid-template-columns: 3fr 2fr;
-  gap: 16px;
+  gap: 12px;
 }
 @media (max-width: 960px) { .ud-main-row { grid-template-columns: 1fr; } }
 
@@ -1794,12 +1745,12 @@ watch(currency, async () => {
 }
 .ud-rank-table thead tr { border-bottom: 1px solid var(--ud-border); }
 .ud-rank-table th {
-  padding: 10px 14px; text-align: left;
+  padding: 8px 12px; text-align: left;
   font-weight: 600; font-size: 12px;
   color: var(--ud-muted); white-space: nowrap;
   background: var(--el-fill-color-light);
 }
-.ud-rank-table td { padding: 10px 14px; border-bottom: 1px solid var(--ud-border); }
+.ud-rank-table td { padding: 8px 12px; border-bottom: 1px solid var(--ud-border); }
 .ud-rank-table tbody tr:last-child td { border-bottom: none; }
 .ud-rank-table tbody tr:hover td { background: var(--el-fill-color-extra-light); }
 .ud-rank-drillable td { cursor: pointer; }
@@ -1859,15 +1810,6 @@ watch(currency, async () => {
 .ud-bar-pct  { font-size: 12px; color: var(--ud-muted); white-space: nowrap; min-width: 36px; }
 .ud-empty    { padding: 32px; text-align: center; color: var(--ud-faint); }
 
-/* ── 异常排行榜 ── */
-.ud-section--error { border: 1px solid #fde2e2; }
-.ud-section__title--error { color: #f56c6c; display: flex; align-items: center; gap: 6px; }
-.ud-error-icon { color: #f56c6c; font-size: 16px; }
-.ud-error-table th { background: #fef0f0; }
-.ud-rank-num--err1 { background: #f56c6c; color: #fff; }
-.ud-rank-num--err2 { background: #f89898; color: #fff; }
-.ud-rank-num--err3 { background: #fab6b6; color: #7f1d1d; }
-
 /* ── 面包屑 ── */
 /* 个人视角提示条 */
 .ud-user-scope-banner {
@@ -1909,11 +1851,11 @@ watch(currency, async () => {
 
 .ud-breakdown-budgets {
   border-right: 1px solid var(--ud-border);
-  padding: 16px 20px;
-  display: flex; flex-direction: column; gap: 14px;
+  padding: 12px 16px;
+  display: flex; flex-direction: column; gap: 10px;
 }
 .ud-breakdown-top5 {
-  padding: 16px 20px;
+  padding: 12px 16px;
 }
 .ud-breakdown-heading {
   font-size: 12px; font-weight: 600; color: var(--ud-muted);
@@ -1938,7 +1880,7 @@ watch(currency, async () => {
 .ud-top5-pct  { font-size: 11px; color: var(--ud-muted); min-width: 36px; text-align: right; }
 
 /* ── 分页 ── */
-.ud-pagination { display: flex; justify-content: flex-end; padding: 12px 16px; }
+.ud-pagination { display: flex; justify-content: flex-end; padding: 8px 12px; }
 
 /* ── 调用明细列样式 ── */
 .ud-key-name    { font-size: 13px; font-weight: 600; color: var(--el-text-color-primary); }

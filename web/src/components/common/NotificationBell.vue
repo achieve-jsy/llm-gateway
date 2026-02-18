@@ -63,7 +63,7 @@
               <span class="item-dot" :class="`dot--${item.level}`"></span>
               <div class="item-body">
                 <div class="item-header" @click="expandedId = expandedId === item.id ? '' : item.id">
-                  <component :is="annCategoryIcon(item.category)" class="item-category-icon" />
+                  <el-icon class="item-category-icon"><component :is="annCategoryIcon(item.category)" /></el-icon>
                   <span class="item-title">{{ item.title }}</span>
                   <span class="item-time">{{ relativeTime(item.published_at) }}</span>
                 </div>
@@ -95,7 +95,7 @@
             >
               <div class="item-body">
                 <div class="item-header">
-                  <component :is="annCategoryIcon(item.category)" class="item-category-icon" />
+                  <el-icon class="item-category-icon"><component :is="annCategoryIcon(item.category)" /></el-icon>
                   <span class="item-title">{{ item.title }}</span>
                   <span class="item-time">{{ relativeTime(item.published_at) }}</span>
                 </div>
@@ -128,7 +128,7 @@
               <span class="item-dot" :class="`dot--${item.level}`"></span>
               <div class="item-body">
                 <div class="item-header" @click="expandedId = expandedId === item.id ? '' : item.id">
-                  <component :is="notifTypeIcon(item.type)" class="item-category-icon" />
+                  <el-icon class="item-category-icon"><component :is="notifTypeIcon(item.type)" /></el-icon>
                   <span class="item-title">{{ item.title }}</span>
                   <span class="item-time">{{ relativeTime(item.created_at) }}</span>
                 </div>
@@ -159,7 +159,7 @@
             >
               <div class="item-body">
                 <div class="item-header">
-                  <component :is="notifTypeIcon(item.type)" class="item-category-icon" />
+                  <el-icon class="item-category-icon"><component :is="notifTypeIcon(item.type)" /></el-icon>
                   <span class="item-title">{{ item.title }}</span>
                   <span class="item-time">{{ relativeTime(item.created_at) }}</span>
                 </div>
@@ -373,6 +373,11 @@ defineExpose({ refresh })
 .el-popover .empty-text {
   font-size: 12px;
   color: #c0c4cc;
+}
+/* 条目分类图标：用 el-icon 包裹后再约束尺寸，避免 teleport 后裸 svg 被撑大 */
+.el-popover .item-category-icon {
+  font-size: 12px;
+  flex-shrink: 0;
 }
 </style>
 

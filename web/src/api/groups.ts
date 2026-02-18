@@ -32,6 +32,7 @@ export interface GroupCapability {
   // 单价：USD per 1,000,000 tokens；0 表示缺价。
   input_price_per_million: number
   output_price_per_million: number
+  is_capability_override: boolean
 }
 
 export const groupsApi = {
@@ -100,5 +101,9 @@ export const groupsApi = {
 
   revokeEntitlement(groupId: number, entitlementId: string) {
     return http.delete(`/api/v1/groups/${groupId}/entitlements/${entitlementId}`)
+  },
+
+  resetCapability(groupId: number) {
+    return http.post<ApiResponse<Group>>(`/api/v1/groups/${groupId}/reset-capability`)
   },
 }

@@ -27,6 +27,7 @@ type GroupModelInfo struct {
 	// 单模型组即为精确值；0 表示缺价（成员未绑定 catalog 或未配置 manual 价）。
 	InputPricePerMillion  float64 `json:"input_price_per_million"`
 	OutputPricePerMillion float64 `json:"output_price_per_million"`
+	IsCapabilityOverride  bool    `json:"is_capability_override"`
 }
 
 // GroupInfoRepo 抽象按需查询启用模型组（含成员）的能力。
@@ -75,11 +76,13 @@ func (s *ModelInfoService) GetGroupModelInfo(names []string) (map[string]GroupMo
 	}
 	refs := make([]groupRef, 0, len(groups))
 	idSet := make(map[uuid.UUID]struct{})
+	groupsByName := make(map[string]*model.Group, len(groups))
 	for i := range groups {
 		g := &groups[i]
 		if g.Name == "" {
 			continue
 		}
+		groupsByName[g.Name] = g
 		if len(wanted) > 0 {
 			if _, ok := wanted[g.Name]; !ok {
 				continue
@@ -110,7 +113,11 @@ func (s *ModelInfoService) GetGroupModelInfo(names []string) (map[string]GroupMo
 				members = append(members, m)
 			}
 		}
-		result[ref.name] = aggregateGroupModelInfo(members)
+		info := aggregateGroupModelInfo(members)
+		if g, ok := groupsByName[ref.name]; ok && g.IsCapabilityOverride {
+			info = applyGroupOverride(info, g)
+		}
+		result[ref.name] = info
 	}
 	return result, nil
 }
@@ -229,4 +236,12 @@ func memberOutputPrice(m *model.Model) float64 {
 		return m.Catalog.OutputPricePerMillion
 	}
 	return 0
+}
+
+func applyGroupOverride(info GroupModelInfo, g *model.Group) GroupModelInfo {
+	info.SupportsVision = g.OverrideSupportsVision
+	info.SupportsFunctionCalling = g.OverrideSupportsFC
+	info.SupportsToolChoice = g.OverrideSupportsTC
+	info.IsCapabilityOverride = true
+	return info
 }

@@ -361,6 +361,19 @@ defineExpose({ refresh })
 .el-popover .item-title { color: var(--text-primary); }
 .el-popover .source-tab { color: var(--text-secondary); }
 .el-popover .source-tab.active { color: var(--brand-green-deep); }
+/* panel-empty / empty-text 必须放在非 scoped 块，因为 el-popover teleport 到 body 后 scoped 属性丢失 */
+.el-popover .panel-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px 0;
+}
+.el-popover .empty-text {
+  font-size: 12px;
+  color: #c0c4cc;
+}
 </style>
 
 <style scoped>

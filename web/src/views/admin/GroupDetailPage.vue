@@ -109,6 +109,58 @@
           </div>
         </div>
       </el-tab-pane>
+
+      <!-- Tab 4: 能力设置 -->
+      <el-tab-pane label="能力设置" name="capability">
+        <div class="capability-section">
+          <div class="cap-header">
+            <div>
+              <div class="cap-title">手动覆盖聚合能力</div>
+              <div class="cap-desc">默认从成员 Catalog 自动聚合；开启后完全由管理员手动设定，不再随 Catalog 变化</div>
+            </div>
+            <div class="cap-actions">
+              <el-switch
+                v-model="capForm.is_capability_override"
+                active-text="手动"
+                inactive-text="自动"
+                @change="onCapToggle"
+              />
+            </div>
+          </div>
+
+          <template v-if="capForm.is_capability_override">
+            <el-form :model="capForm" label-width="180px" size="small" class="cap-form">
+              <el-form-item label="图像输入 (Vision)">
+                <el-switch v-model="capForm.override_supports_vision" />
+              </el-form-item>
+              <el-form-item label="工具调用 (Function Calling)">
+                <el-switch v-model="capForm.override_supports_function_calling" />
+              </el-form-item>
+              <el-form-item label="Tool Choice">
+                <el-switch v-model="capForm.override_supports_tool_choice" />
+              </el-form-item>
+            </el-form>
+
+            <div class="cap-btn-row">
+              <el-button type="primary" :loading="capSaving" @click="saveCapability">保存</el-button>
+              <el-popconfirm title="确定重置回自动聚合？手动设定的值将被清除" @confirm="resetCapability">
+                <template #reference>
+                  <el-button :loading="capSaving">重置为自动</el-button>
+                </template>
+              </el-popconfirm>
+            </div>
+          </template>
+
+          <div v-else class="cap-auto-hint">
+            <span>当前为自动聚合模式，能力字段由组内成员 Catalog 计算得出。</span>
+            <template v-if="capAggregated">
+              <el-tag v-if="capAggregated.supports_vision" type="success" size="small" effect="light">图像输入</el-tag>
+              <el-tag v-if="capAggregated.supports_function_calling" type="warning" size="small" effect="light">工具调用</el-tag>
+              <el-tag v-if="capAggregated.supports_tool_choice" type="warning" size="small" effect="plain">tool_choice</el-tag>
+            </template>
+          </div>
+        </div>
+      </el-tab-pane>
     </el-tabs>
 
     <!-- 授权弹窗 -->
@@ -135,6 +187,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, InfoFilled } from '@element-plus/icons-vue'
 import { groupsApi } from '@/api/groups'
+import type { GroupCapability } from '@/api/groups'
 import { getGroupEntitlements, grantEntitlement, revokeEntitlement, setGroupOpenMode } from '@/services/control-plane'
 import type { GroupEntitlement } from '@/types/entitlement'
 
@@ -142,7 +195,7 @@ const route = useRoute()
 const router = useRouter()
 const groupId = computed(() => Number(route.params.id))
 
-const activeTab = ref('info')
+const activeTab = ref((route.query.tab as string) || 'info')
 const pageLoading = ref(false)
 const modelsLoading = ref(false)
 const modeSwitching = ref(false)
@@ -158,9 +211,38 @@ const isPublic = ref(false)
 const studioEntitlements = computed(() => entitlements.value.filter(e => e.scope_type === 'studio'))
 const deptEntitlements = computed(() => entitlements.value.filter(e => e.scope_type === 'dept'))
 
+const capForm = ref({
+  is_capability_override: false,
+  override_supports_vision: false,
+  override_supports_function_calling: false,
+  override_supports_tool_choice: false,
+})
+const capSaving = ref(false)
+const capAggregated = ref<GroupCapability | null>(null)
+
 function strategyLabel(s: string): string {
   const map: Record<string, string> = { round_robin: '轮询', priority: '优先级', weighted: '加权', auto: '自动' }
   return map[s] || s
+}
+
+async function loadCapabilities() {
+  try {
+    const res = await groupsApi.getGroupCapabilities([group.value?.name || ''])
+    const data = (res.data as any)?.data || res.data
+    capAggregated.value = data?.[group.value?.name || ''] || null
+  } catch {
+    capAggregated.value = null
+  }
+}
+
+function syncCapFormFromGroup(g: any) {
+  if (!g) return
+  capForm.value = {
+    is_capability_override: !!g.is_capability_override,
+    override_supports_vision: !!g.override_supports_vision,
+    override_supports_function_calling: !!g.override_supports_function_calling,
+    override_supports_tool_choice: !!g.override_supports_tool_choice,
+  }
 }
 
 async function loadGroup() {
@@ -169,6 +251,7 @@ async function loadGroup() {
     const res = await groupsApi.getGroup(groupId.value)
     group.value = res.data?.data || res.data
     isPublic.value = (group.value?.open_mode || 'controlled') === 'public'
+    syncCapFormFromGroup(group.value)
   } catch { group.value = null }
   finally { pageLoading.value = false }
 }
@@ -224,9 +307,49 @@ async function handleRevoke(row: GroupEntitlement) {
   } catch (e: any) { ElMessage.error(e?.message || '撤销失败') }
 }
 
+function onCapToggle(val: boolean | string | number) {
+  if (!val) {
+    capForm.value.is_capability_override = false
+    capForm.value = { ...capForm.value, is_capability_override: false }
+  }
+}
+
+async function saveCapability() {
+  capSaving.value = true
+  try {
+    const res = await groupsApi.updateGroup(groupId.value, {
+      is_capability_override: capForm.value.is_capability_override,
+      override_supports_vision: capForm.value.override_supports_vision,
+      override_supports_function_calling: capForm.value.override_supports_function_calling,
+      override_supports_tool_choice: capForm.value.override_supports_tool_choice,
+    })
+    group.value = { ...group.value, ...(res.data as any)?.data }
+    ElMessage.success('能力设置已保存')
+    await loadCapabilities()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '保存失败')
+  } finally { capSaving.value = false }
+}
+
+async function resetCapability() {
+  capSaving.value = true
+  try {
+    const res = await groupsApi.resetCapability(groupId.value)
+    const updated = (res.data as any)?.data
+    if (updated) {
+      group.value = { ...group.value, ...updated }
+      syncCapFormFromGroup(group.value)
+    }
+    ElMessage.success('已重置为自动聚合')
+    await loadCapabilities()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '重置失败')
+  } finally { capSaving.value = false }
+}
+
 onMounted(async () => {
   await loadGroup()
-  await Promise.all([loadModels(), loadEntitlements()])
+  await Promise.all([loadModels(), loadEntitlements(), loadCapabilities()])
 })
 </script>
 
@@ -247,4 +370,12 @@ onMounted(async () => {
 .entitle-block { }
 .entitle-block-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: 14px; font-weight: 500; color: var(--el-text-color-regular); }
 .public-hint { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--el-text-color-secondary); padding: 12px 16px; background: var(--el-fill-color-light); border-radius: 8px; }
+
+.capability-section { display: flex; flex-direction: column; gap: 20px; padding-top: 16px; }
+.cap-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border: 1px solid var(--el-border-color-light); border-radius: 10px; }
+.cap-title { font-weight: 600; font-size: 14px; color: var(--el-text-color-primary); }
+.cap-desc { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 2px; }
+.cap-form { padding: 12px 16px; border: 1px solid var(--el-border-color-lighter); border-radius: 8px; }
+.cap-btn-row { display: flex; gap: 8px; padding: 0 4px; }
+.cap-auto-hint { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 13px; color: var(--el-text-color-secondary); padding: 12px 16px; background: var(--el-fill-color-light); border-radius: 8px; }
 </style>

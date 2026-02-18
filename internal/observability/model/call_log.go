@@ -10,6 +10,7 @@ type CallLog struct {
 	TS                  time.Time `gorm:"not null;index:idx_call_logs_ts"                               json:"ts"`
 	KeyID               string    `gorm:"type:text;index:idx_call_logs_key_ts,composite:key_ts"         json:"key_id"`
 	KeyName             string    `gorm:"type:varchar(128)"                                             json:"key_name,omitempty"`
+	KeyType             string    `gorm:"type:varchar(16);not null;default:personal;index:idx_call_logs_key_type" json:"key_type"`
 	UserID              string    `gorm:"type:text"                                                     json:"user_id"`
 	UserName            string    `gorm:"type:varchar(128)"                                             json:"user_name,omitempty"`
 	DeptID              string    `gorm:"type:text;index:idx_call_logs_dept_ts,composite:dept_ts"       json:"dept_id"`

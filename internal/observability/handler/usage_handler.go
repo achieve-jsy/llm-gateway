@@ -170,6 +170,7 @@ func (h *UsageHandler) Logs(c *gin.Context) {
 		To:        to,
 		KeyID:     c.Query("key_id"),
 		KeyName:   c.Query("key_name"),
+		KeyType:   c.Query("key_type"),
 		UserName:  c.Query("user_name"),
 		DeptName:  c.Query("dept_name"),
 		StudioID:  c.Query("studio_id"),
@@ -312,6 +313,7 @@ func (h *UsageHandler) MyLogs(c *gin.Context) {
 		UserID:    userID,
 		KeyID:     c.Query("key_id"),
 		KeyName:   c.Query("key_name"),
+		KeyType:   c.Query("key_type"),
 		UserName:  c.Query("user_name"),
 		ModelName: c.Query("model_name"),
 		GroupName: c.Query("group_name"),
@@ -755,6 +757,7 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 	filterUser   := c.Query("user_name") // 成员姓名模糊搜索
 	filterDeptID := c.Query("dept_id")   // 按部门筛选
 	filterStudioID := c.Query("studio_id") // 按工作室筛选
+	filterKeyType  := c.Query("key_type")   // personal | service
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
 	if page < 1 {
@@ -787,6 +790,9 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 	if filterStudioID != "" {
 		base = base.Where("studio_id = ?", filterStudioID)
 	}
+	if filterKeyType != "" {
+		base = base.Where("COALESCE(NULLIF(key_type, ''), 'personal') = ?", filterKeyType)
+	}
 	if modelName != "" {
 		base = base.Where("model ILIKE ?", "%"+modelName+"%")
 	}
@@ -805,7 +811,7 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 	}
 
 	cols := `request_id, ts,
-		key_id, key_name, user_id, user_name, dept_id, dept_name, studio_id, studio_name,
+		key_id, key_name, key_type, user_id, user_name, dept_id, dept_name, studio_id, studio_name,
 		model, routed_model, group_name, provider,
 		prompt_tokens, cached_tokens, cache_write_tokens,
 		completion_tokens, reasoning_tokens, total_tokens,

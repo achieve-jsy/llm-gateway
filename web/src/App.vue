@@ -497,4 +497,27 @@ function onPopupAllRead() {
 }
 @keyframes badge-pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--el-text-color-regular);
+  transition: all 0.25s ease;
+  margin-right: 8px;
+}
+
+.theme-toggle:hover {
+  background-color: var(--el-fill-color);
+  color: var(--el-color-primary);
+}
+
+.theme-icon {
+  width: 18px;
+  height: 18px;
+}
+
 </style>

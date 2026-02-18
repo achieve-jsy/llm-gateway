@@ -57,6 +57,10 @@ const (
 	// ── 模型组授权 ──────────────────────────────────────────────────────────────
 	PermEntitlementManage   Permission = "entitlement:manage"    // 平台管理员：设开放模式 + 授权工作室
 	PermEntitlementGrantDept Permission = "entitlement:grant_dept" // 工作室负责人：下放/开通部门
+
+	// ── feat/key-approval: Key 创建申请与审批 ──────────────────────────────────
+	PermKeyRequestApprove     Permission = "key_request:approve"      // 部门负责人审批 Key 申请
+	PermKeyRequestSetPolicy   Permission = "key_request:set_policy"   // 设置部门 Key 创建策略（dept_admin / admin）
 )
 
 // ScopeConstraint 权限的范围约束级别（从宽到严）

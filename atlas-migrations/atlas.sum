@@ -1,4 +1,4 @@
-h1:N7Oct2YQZ1BXMBtFVsWXYnjm7E1BvyvxMhBLxkyJVYE=
+h1:yxube5ZlwBq3oywUJRtSWvgxGDArsp9BFeniEyNXvxY=
 20260609082623_baseline.sql h1:EypMLzQ+lwKOXInv3+ZdRYfRjDkE8V0LWKJ+7Ul6hMY=
 20260610120000_add_model_status.sql h1:dsiXmqu5v1ClJQJFnN8Ilphj0UtIN0I6bpvUW43i294=
 20260611000000_add_users_login_status.sql h1:IdW/XoVpwI/HIG0nsz+cLsWwQfoIhguaFU3LWMwelMY=
@@ -13,3 +13,5 @@ h1:N7Oct2YQZ1BXMBtFVsWXYnjm7E1BvyvxMhBLxkyJVYE=
 20260624020000_create_notifications_table.sql h1:d6+LqBJ1rYfyYsrdgCSiQeQ/FqMp66UEqDgYd4nklEE=
 20260624030000_add_auto_strategy_and_complexity_tier.sql h1:S3JtOU5atLq4L1YKF38pT3oEnlBFnuukq7WW/2gKeig=
 20260624040000_add_key_activity_tables.sql h1:HJLpRtJHkbPBhCMKu09tzC7RGoTs0DEp1sZR6VAHPFs=
+20260626130742_add_key_approval.sql h1:Dzizmrr0jrBHeI+Sxtf8VV9MYIdCSOabE79pLFqH1ZQ=
+20260629120000_add_key_requests_approver_name.sql h1:pjLZNlxOrjSqUwoeRKgvKyU10Xa5iSJeqm4uaIIXyDQ=

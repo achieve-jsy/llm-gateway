@@ -12,6 +12,7 @@
       v-model:filter-user-name="filterUserName"
       v-model:filter-model="filterModel"
       v-model:filter-status="filterStatus"
+      v-model:filter-key-type="filterKeyType"
       v-model:show-filters="showFilters"
       :date-presets="datePresets"
       :model-options="modelOptions"
@@ -134,6 +135,7 @@
       export-prefix="scoped_logs"
       :table-props="{
         showKey: true,
+        showKeyType: authStore.effectiveRole !== 'user',
         showUser: true,
         userLabel: '成员',
         showStudio: authStore.effectiveRole === 'admin',
@@ -217,6 +219,7 @@ function onDateChange() {
 const filterUserName = ref('')
 const filterModel    = ref('')
 const filterStatus   = ref('')
+const filterKeyType  = ref('')
 const showFilters    = ref(true)
 
 // ── 长尾告警排序 ──
@@ -224,13 +227,14 @@ const ltSortBy    = ref<'calls' | 'cost' | 'error_rate'>('calls')
 const ltSortOrder = ref<'asc' | 'desc'>('desc')
 
 const activeFilterCount = computed(() =>
-  [filterUserName.value, filterModel.value, filterStatus.value].filter(Boolean).length
+  [filterUserName.value, filterModel.value, filterStatus.value, filterKeyType.value].filter(Boolean).length
 )
 
 function clearFilters() {
   filterUserName.value = ''
   filterModel.value    = ''
   filterStatus.value   = ''
+  filterKeyType.value  = ''
   if (breadcrumbs.value[breadcrumbs.value.length - 1]?.scope === 'user') {
     breadcrumbs.value = []
   }
@@ -690,6 +694,7 @@ const logParams = computed(() => {
   }
   if (filterModel.value)  p.model_name = filterModel.value
   if (filterStatus.value) p.status     = filterStatus.value
+  if (filterKeyType.value) p.key_type  = filterKeyType.value
   return p
 })
 

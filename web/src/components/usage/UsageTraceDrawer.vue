@@ -76,6 +76,7 @@
             <div v-if="metaMode !== 'personal'" class="up-meta-section">
               <div class="up-meta-heading">调用者</div>
               <div class="up-meta-row"><span>Key</span><span>{{ row?.key_name || maskKey(row?.key_id || '') }}</span></div>
+              <div v-if="row?.key_type" class="up-meta-row"><span>Key 类型</span><span>{{ keyTypeLabel(row.key_type) }}</span></div>
               <div class="up-meta-row"><span>用户</span><span>{{ row?.user_name || '—' }}</span></div>
               <div class="up-meta-row"><span>部门</span><span>{{ row?.dept_name || row?.dept_id || '—' }}</span></div>
               <div class="up-meta-row"><span>IP</span><code>{{ row?.ip_address || '—' }}</code></div>
@@ -243,6 +244,12 @@ watch(() => props.traceLoading, (loading) => {
 
 // ── Formatters ──
 const fmtNum = (n?: number | null) => n?.toLocaleString() ?? '0'
+
+const keyTypeLabel = (t?: string) => {
+  if (t === 'service') return '程序 Key'
+  if (t === 'personal') return '个人 Key'
+  return t || '—'
+}
 
 const fmtCost = (v?: number | null): string => {
   const n = convertCost(Number(v || 0), cc.value)

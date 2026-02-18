@@ -121,6 +121,17 @@
             </el-input>
           </div>
 
+          <!-- Key 类型 -->
+          <div class="up-filter-group">
+            <span class="up-filter-label">Key 类型</span>
+            <el-select v-model="filterKeyType" placeholder="全部" clearable size="small"
+              class="up-filter__status" @change="loadAll" @clear="loadAll">
+              <el-option label="全部" value="" />
+              <el-option label="个人 Key" value="personal" />
+              <el-option label="程序 Key" value="service" />
+            </el-select>
+          </div>
+
           <!-- 用户关键词 -->
           <div class="up-filter-group">
             <span class="up-filter-label">用户</span>
@@ -367,6 +378,7 @@
       export-prefix="usage_logs"
       :table-props="{
         showKey: true,
+        showKeyType: true,
         showUser: true,
         showDept: true,
         showStudio: true,
@@ -481,6 +493,7 @@ function onDateChange() {
 const filterModel  = ref('') // 已废弃，保留避免其他引用报错
 const filterKeyId    = ref('')
 const filterKeyName  = ref('')
+const filterKeyType  = ref('')
 const filterUserName = ref('')
 const filterDeptName = ref('')
 const filterStudioId = ref('')
@@ -492,7 +505,7 @@ const showMoreFilters = ref(false)
 
 const activeFilterCount = computed(() =>
   [filterModelName.value, filterGroupName.value,
-   filterKeyName.value, filterUserName.value, filterDeptName.value,
+   filterKeyName.value, filterKeyType.value, filterUserName.value, filterDeptName.value,
    filterStudioId.value, filterProvider.value, filterStatus.value]
     .filter(Boolean).length
 )
@@ -501,6 +514,7 @@ function clearFilters() {
   filterModelName.value = ''
   filterGroupName.value = ''
   filterKeyName.value   = ''
+  filterKeyType.value   = ''
   filterUserName.value  = ''
   filterKeyId.value     = ''
   filterDeptName.value    = ''
@@ -547,6 +561,7 @@ const logParams = computed(() => {
   if (filterStudioId.value)  p.studio_id  = filterStudioId.value
   if (filterProvider.value)  p.provider   = filterProvider.value
   if (filterStatus.value)    p.status     = filterStatus.value
+  if (filterKeyType.value)   p.key_type   = filterKeyType.value
   return p
 })
 

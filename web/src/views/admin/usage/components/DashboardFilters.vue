@@ -60,6 +60,16 @@
             </el-option>
           </el-select>
         </div>
+        <!-- Key 类型 -->
+        <div v-if="effectiveRole !== 'user'" class="ud-filter-chip">
+          <span class="ud-chip-label">Key 类型</span>
+          <el-select v-model="filterKeyType" placeholder="全部" clearable size="small"
+            class="ud-chip-select" @change="$emit('loadAll')" @clear="$emit('loadAll')">
+            <el-option label="全部" value="" />
+            <el-option label="个人 Key" value="personal" />
+            <el-option label="程序 Key" value="service" />
+          </el-select>
+        </div>
         <el-button v-if="activeFilterCount > 0" link size="small" type="warning" @click="$emit('clearFilters')">
           清空 {{ activeFilterCount }} 个筛选
         </el-button>
@@ -85,6 +95,7 @@ const activePreset = defineModel<string>('activePreset', { required: true })
 const filterUserName = defineModel<string>('filterUserName', { required: true })
 const filterModel = defineModel<string>('filterModel', { required: true })
 const filterStatus = defineModel<string>('filterStatus', { required: true })
+const filterKeyType = defineModel<string>('filterKeyType', { required: true })
 const showFilters = defineModel<boolean>('showFilters', { required: true })
 
 defineEmits<{

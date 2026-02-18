@@ -16,6 +16,14 @@
           </template>
         </el-table-column>
 
+        <el-table-column v-if="showKeyType" prop="key_type" label="Key 类型" min-width="88" align="center" :fixed="showKey ? 'left' : false">
+          <template #default="{ row }">
+            <el-tag v-if="row.key_type === 'service'" type="warning" size="small" effect="plain">程序</el-tag>
+            <el-tag v-else-if="row.key_type === 'personal'" type="info" size="small" effect="plain">个人</el-tag>
+            <span v-else class="urt-dash">—</span>
+          </template>
+        </el-table-column>
+
         <!-- 用户 -->
         <el-table-column v-if="showUser" prop="user_name" :label="userLabel ?? '用户'" min-width="90" :fixed="showKey ? 'left' : false">
           <template #default="{ row }">
@@ -279,6 +287,7 @@ const props = withDefaults(defineProps<{
 
   // 列可见性
   showKey?: boolean
+  showKeyType?: boolean
   showUser?: boolean
   showDept?: boolean
   showStudio?: boolean
@@ -306,6 +315,7 @@ const props = withDefaults(defineProps<{
   traceMetaMode?: 'full' | 'personal'
 }>(), {
   showKey: false,
+  showKeyType: false,
   showUser: false,
   showDept: false,
   showStudio: false,

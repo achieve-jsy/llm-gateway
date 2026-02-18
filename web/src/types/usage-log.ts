@@ -10,6 +10,7 @@ export interface LogRow {
   ts: string
   key_id: string
   key_name?: string
+  key_type?: 'personal' | 'service'
   user_id: string
   user_name?: string
   dept_id: string

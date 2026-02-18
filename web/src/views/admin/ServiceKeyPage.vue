@@ -63,6 +63,24 @@
         </template>
       </el-table-column>
 
+      <el-table-column label="模型组" min-width="180">
+        <template #default="{ row }">
+          <el-tag v-if="row.accessAllGroups" size="small" type="success" round>全部可用组</el-tag>
+          <template v-else-if="row.boundGroups?.length">
+            <el-tag
+              v-for="g in row.boundGroups"
+              :key="g.id"
+              size="small"
+              type="info"
+              round
+              class="group-tag"
+            >{{ g.name }}</el-tag>
+          </template>
+          <span v-else class="text-placeholder">未配置</span>
+          <el-button link type="primary" size="small" @click="openGroupDialog(row)">编辑</el-button>
+        </template>
+      </el-table-column>
+
       <el-table-column label="IP 白名单" min-width="140">
         <template #default="{ row }">
           <span v-if="row.ipAllowlist && row.ipAllowlist.length > 0" class="ip-allowlist-tags">
@@ -208,6 +226,28 @@
         <el-form-item label="用途标签" prop="purpose">
           <el-input v-model="createForm.purpose" placeholder="例如：recommend-svc" maxlength="40" />
         </el-form-item>
+        <el-form-item label="模型组">
+          <el-select
+            v-model="createForm.groupIds"
+            multiple
+            filterable
+            placeholder="选择可用的模型组"
+            style="width: 100%"
+            :loading="groupsLoading"
+          >
+            <el-option :key="'__all__'" label="全部可用组（部门授权内）" :value="ALL_GROUPS_SENTINEL" />
+            <el-option
+              v-for="g in availableGroups"
+              :key="g.id"
+              :label="g.name"
+              :value="g.id"
+              :disabled="createForm.accessAllGroups"
+            />
+          </el-select>
+          <div class="form-hint">
+            {{ createForm.accessAllGroups ? '可使用部门授权范围内的全部模型组' : '不选则 Key 暂无可调用模型' }}
+          </div>
+        </el-form-item>
         <el-form-item label="IP 白名单（可选）">
           <div class="ip-create-input-row">
             <el-input
@@ -234,6 +274,60 @@
       <template #footer>
         <el-button @click="createDialogVisible = false">取消</el-button>
         <el-button type="primary" class="brand-btn" :loading="creating" @click="handleCreate">创建</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 模型组编辑对话框 -->
+    <el-dialog
+      v-model="groupDialogVisible"
+      title="编辑模型组权限"
+      width="520px"
+      :close-on-click-modal="false"
+      destroy-on-close
+      @open="loadGroupDialogData"
+    >
+      <div v-if="editGroupKey">
+        <el-alert
+          :title="`Service Key：${editGroupKey.name}`"
+          type="info"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px"
+        />
+        <div v-if="editGroupKey.accessAllGroups" class="group-all-hint">当前为「全部可用组」模式</div>
+        <div v-else-if="editGroupKey.boundGroups?.length" class="bound-tags">
+          <el-tag
+            v-for="g in editGroupKey.boundGroups"
+            :key="g.id"
+            closable
+            size="large"
+            type="info"
+            @close="removeGroup(g)"
+          >{{ g.name }}</el-tag>
+        </div>
+        <div v-else class="text-placeholder" style="margin-bottom: 8px">暂未绑定模型组</div>
+        <el-select
+          v-model="addGroupIds"
+          multiple
+          filterable
+          placeholder="添加模型组"
+          style="width: 100%; margin-top: 8px"
+          :loading="groupLoading"
+          :disabled="pendingAccessAll === true"
+          @change="handleAddGroupChange"
+        >
+          <el-option key="__all__" label="全部可用组（部门授权内）" value="__all__" />
+          <el-option
+            v-for="g in availableAddGroups"
+            :key="g.id"
+            :label="g.name"
+            :value="g.id"
+          />
+        </el-select>
+      </div>
+      <template #footer>
+        <el-button @click="groupDialogVisible = false">取消</el-button>
+        <el-button type="primary" class="brand-btn" :loading="groupSaving" @click="saveGroupChanges">保存</el-button>
       </template>
     </el-dialog>
 
@@ -332,15 +426,26 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, InfoFilled, DocumentCopy, Edit } from '@element-plus/icons-vue'
 import { updateServiceKeyIPAllowlist } from '@/services/audit'
 
-import { listServiceKeys, createServiceKey, toggleServiceKey, deleteServiceKey } from '@/services/control-plane'
+import {
+  listServiceKeys,
+  createServiceKey,
+  toggleServiceKey,
+  deleteServiceKey,
+  getAvailableGroups,
+  updateServiceKeyGroups,
+  toggleServiceKeyAccessAllGroups,
+} from '@/services/control-plane'
 import type { ServiceKeyItem, CreateServiceKeyResponse } from '@/types/service-key'
+import type { AvailableGroup, BoundGroupInfo } from '@/types/api-key'
 import { useAuthStore } from '@/stores/auth'
 import { useOrgStore } from '@/stores/org'
+
+const ALL_GROUPS_SENTINEL = -1
 
 const authStore = useAuthStore()
 const orgStore = useOrgStore()
@@ -361,6 +466,31 @@ const createForm = reactive({
   name: '',
   purpose: '',
   ipAllowlist: [] as string[],
+  groupIds: [] as number[],
+  accessAllGroups: false,
+})
+
+const groupsLoading = ref(false)
+const availableGroups = ref<AvailableGroup[]>([])
+
+const groupDialogVisible = ref(false)
+const editGroupKey = ref<ServiceKeyItem | null>(null)
+const groupLoading = ref(false)
+const groupSaving = ref(false)
+const availableAddGroups = ref<AvailableGroup[]>([])
+const addGroupIds = ref<number[]>([])
+const removedGroupIds = ref<number[]>([])
+const pendingAccessAll = ref<boolean | null>(null)
+
+watch(() => createForm.groupIds, (val) => {
+  if (val.includes(ALL_GROUPS_SENTINEL)) {
+    if (val.length > 1) {
+      createForm.groupIds = [ALL_GROUPS_SENTINEL]
+    }
+    createForm.accessAllGroups = true
+  } else {
+    createForm.accessAllGroups = false
+  }
 })
 
 const createRules: FormRules = {
@@ -505,9 +635,92 @@ function openCreateDialog() {
   createForm.name = ''
   createForm.purpose = ''
   createForm.ipAllowlist = []
+  createForm.groupIds = []
+  createForm.accessAllGroups = false
   ipCreateInput.value = ''
+  loadAvailableGroups()
   createDialogVisible.value = true
   setTimeout(() => createFormRef.value?.clearValidate(), 80)
+}
+
+async function loadAvailableGroups() {
+  groupsLoading.value = true
+  try {
+    const resp = await getAvailableGroups()
+    availableGroups.value = resp.data.groups || []
+  } catch {
+    ElMessage.error('加载模型组失败')
+  } finally {
+    groupsLoading.value = false
+  }
+}
+
+function openGroupDialog(row: ServiceKeyItem) {
+  editGroupKey.value = {
+    ...row,
+    boundGroups: [...(row.boundGroups || [])],
+  }
+  addGroupIds.value = []
+  removedGroupIds.value = []
+  pendingAccessAll.value = null
+  groupDialogVisible.value = true
+}
+
+async function loadGroupDialogData() {
+  groupLoading.value = true
+  try {
+    const resp = await getAvailableGroups()
+    const all = resp.data.groups || []
+    const bound = new Set((editGroupKey.value?.boundGroups || []).map((g) => g.id))
+    availableAddGroups.value = all.filter((g) => !bound.has(g.id))
+  } catch {
+    ElMessage.error('加载模型组失败')
+  } finally {
+    groupLoading.value = false
+  }
+}
+
+function removeGroup(g: BoundGroupInfo) {
+  if (!editGroupKey.value) return
+  editGroupKey.value.boundGroups = (editGroupKey.value.boundGroups || []).filter((x) => x.id !== g.id)
+  removedGroupIds.value.push(g.id)
+  addGroupIds.value = addGroupIds.value.filter((id) => id !== g.id)
+}
+
+function handleAddGroupChange(vals: (string | number)[]) {
+  if (vals.includes('__all__')) {
+    addGroupIds.value = []
+    pendingAccessAll.value = true
+    if (editGroupKey.value) {
+      for (const g of editGroupKey.value.boundGroups || []) {
+        removedGroupIds.value.push(g.id)
+      }
+      editGroupKey.value.boundGroups = []
+      editGroupKey.value.accessAllGroups = true
+    }
+  }
+}
+
+async function saveGroupChanges() {
+  if (!editGroupKey.value) return
+  groupSaving.value = true
+  try {
+    if (pendingAccessAll.value !== null) {
+      await toggleServiceKeyAccessAllGroups(editGroupKey.value.id, pendingAccessAll.value)
+    }
+    const add = addGroupIds.value.filter((v): v is number => typeof v === 'number')
+    const remove = removedGroupIds.value
+    if (add.length > 0 || remove.length > 0) {
+      await updateServiceKeyGroups(editGroupKey.value.id, add, remove)
+    }
+    ElMessage.success('模型组权限已更新')
+    groupDialogVisible.value = false
+    await loadKeys()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error || e?.message || '更新失败')
+  } finally {
+    groupSaving.value = false
+  }
 }
 
 async function handleCreate() {
@@ -522,7 +735,13 @@ async function handleCreate() {
       createForm.deptId.trim(),
       createForm.name.trim(),
       createForm.purpose.trim(),
-      createForm.ipAllowlist.length > 0 ? createForm.ipAllowlist : undefined
+      {
+        ipAllowlist: createForm.ipAllowlist.length > 0 ? createForm.ipAllowlist : undefined,
+        accessAllGroups: createForm.accessAllGroups || undefined,
+        groupIds: !createForm.accessAllGroups && createForm.groupIds.length > 0
+          ? createForm.groupIds
+          : undefined,
+      }
     )
     newKeyPlainText.value = resp.key
     const dept = orgStore.departments.find(d => d.dept_id === resp.dept_id)
@@ -921,5 +1140,29 @@ html.dark .key-reveal-card {
 
 .ip-tag-text {
   font-size: 12px;
+}
+
+.form-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-top: 4px;
+}
+
+.group-tag {
+  margin-right: 4px;
+  margin-bottom: 2px;
+}
+
+.bound-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.group-all-hint {
+  font-size: 13px;
+  color: var(--el-color-success);
+  margin-bottom: 8px;
 }
 </style>

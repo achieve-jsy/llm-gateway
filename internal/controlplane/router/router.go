@@ -624,6 +624,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/service-keys", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.List)
 		adminGroup.PATCH("/service-keys/:id/status", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.Toggle)
 		adminGroup.PATCH("/service-keys/:id/ip-allowlist", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.UpdateIPAllowlist)
+		adminGroup.POST("/service-keys/:id/groups", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.UpdateGroups)
+		adminGroup.POST("/service-keys/:id/access-all-groups", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.ToggleAccessAllGroups)
 		adminGroup.DELETE("/service-keys/:id", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.Delete)
 		// v0.8: 审计日志查询（仅管理面可查）
 		adminGroup.GET("/audit-logs", guard(rbac.PermAuditViewScoped), auditHandler.List)

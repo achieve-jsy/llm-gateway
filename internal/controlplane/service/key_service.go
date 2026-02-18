@@ -520,10 +520,10 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 			StudioName:   k.StudioName,
 		},
 	}
-	if s.entitlementSvc != nil && k.DeptID != "" {
+	if s.entitlementSvc != nil {
 		if usableGroups, err := s.entitlementSvc.ComputeUsableGroups(ctx, k.DeptID, k.StudioID); err == nil {
 			result.UsableGroups = usableGroups
-		} else {
+		} else if k.DeptID != "" {
 			slog.Warn("verify-key: failed to compute usable_groups, fallback to empty",
 				"key_id", k.ID, "dept_id", k.DeptID, "error", err)
 		}
@@ -550,27 +550,29 @@ func parseDeptID(s string) *uuid.UUID {
 // ServiceKeyItem Service Key 列表项（不含明文 key）。
 // ServiceKeyItem Service Key 列表项（不含明文 key）。
 type ServiceKeyItem struct {
-	ID          uuid.UUID  `json:"id"`
-	Name        string     `json:"name"`
-	MaskedKey   string     `json:"masked_key"`
-	KeyType     string     `json:"key_type"`
-	Purpose     string     `json:"purpose"`
-	DeptID      string     `json:"dept_id"`
-	DeptName    string     `json:"dept_name"`
-	Enabled     bool       `json:"enabled"`
-	IPAllowlist string     `json:"ip_allowlist,omitempty"`
-	CreatedBy   *uuid.UUID `json:"created_by,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
+	ID              uuid.UUID  `json:"id"`
+	Name            string     `json:"name"`
+	MaskedKey       string     `json:"masked_key"`
+	KeyType         string     `json:"key_type"`
+	Purpose         string     `json:"purpose"`
+	DeptID          string     `json:"dept_id"`
+	DeptName        string     `json:"dept_name"`
+	Enabled         bool       `json:"enabled"`
+	AccessAllGroups bool       `json:"access_all_groups"`
+	BoundGroups     []BoundGroupItem `json:"bound_groups,omitempty"`
+	IPAllowlist     string     `json:"ip_allowlist,omitempty"`
+	CreatedBy       *uuid.UUID `json:"created_by,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
 }
 
 // CreateServiceKey 创建 Service Key（仅部门负责人）。
 // actorID：操作人 user_id（部门负责人）；deptID：归属部门 SSO dept_id。
-// actor 权限校验由 handler 层完成（actor.HasDept(deptID) 或 IsGlobal）。
-func (s *KeyService) CreateServiceKey(ctx context.Context, actorID uuid.UUID, deptID, name, purpose, ipAllowlist string) (*model.ApiKey, string, error) {
+// groupIDs 非空时绑定指定模型组；accessAllGroups=true 表示可用 usable_groups 全集（与个人 Key 一致）。
+func (s *KeyService) CreateServiceKey(ctx context.Context, actorID uuid.UUID, deptID, name, purpose, ipAllowlist string, groupIDs []uint, accessAllGroups bool) (*model.ApiKey, string, []BoundGroupItem, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
-		return nil, "", fmt.Errorf("generate random key: %w", err)
+		return nil, "", nil, fmt.Errorf("generate random key: %w", err)
 	}
 	keyStr := "sk-" + hex.EncodeToString(raw)
 	keyHint := keyStr[len(keyStr)-4:]
@@ -578,7 +580,7 @@ func (s *KeyService) CreateServiceKey(ctx context.Context, actorID uuid.UUID, de
 	keyHash := hex.EncodeToString(hash[:])
 	encryptedKey, err := crypto.Encrypt(keyStr)
 	if err != nil {
-		return nil, "", fmt.Errorf("encrypt key: %w", err)
+		return nil, "", nil, fmt.Errorf("encrypt key: %w", err)
 	}
 
 	// 取部门/工作室名称（通过 actorID 找 userDeptInfo，再用 deptID 覆盖）
@@ -609,12 +611,36 @@ func (s *KeyService) CreateServiceKey(ctx context.Context, actorID uuid.UUID, de
 	}
 
 	if err := s.repo.Create(k); err != nil {
-		return nil, "", fmt.Errorf("create service key: %w", err)
+		return nil, "", nil, fmt.Errorf("create service key: %w", err)
 	}
+
+	if accessAllGroups {
+		if err := s.repo.UpdateAccessAllGroups(k.ID, true); err != nil {
+			slog.Warn("create service key: set access_all_groups failed", "key_id", k.ID, "error", err)
+		} else {
+			k.AccessAllGroups = true
+		}
+	} else if len(groupIDs) > 0 && s.keyGroupSvc != nil {
+		if err := s.keyGroupSvc.BindGroups(ctx, nil, k.ID, groupIDs); err != nil {
+			slog.Warn("create service key: bind groups failed", "key_id", k.ID, "error", err)
+		}
+	}
+
+	var boundGroups []BoundGroupItem
+	if s.keyGroupSvc != nil {
+		groups, err := s.keyGroupSvc.GetKeyGroups(ctx, k.ID)
+		if err != nil {
+			slog.Warn("create service key: get key groups failed", "key_id", k.ID, "error", err)
+		} else {
+			boundGroups = groups
+		}
+	}
+
 	if s.publisher != nil {
 		s.publisher.Publish(event.KeyCreated, "api_key", k.ID)
+		s.publisher.InvalidateKeyCache(k.KeyHash)
 	}
-	return k, keyStr, nil
+	return k, keyStr, boundGroups, nil
 }
 
 // ListServiceKeys 列出某部门的所有 Service Key（不含明文）。
@@ -623,7 +649,7 @@ func (s *KeyService) ListServiceKeys(ctx context.Context, deptID string) ([]Serv
 	if err != nil {
 		return nil, err
 	}
-	return toServiceKeyItems(keys), nil
+	return toServiceKeyItems(ctx, s, keys), nil
 }
 
 // ListServiceKeysPaged 分页列出 Service Key。
@@ -639,28 +665,79 @@ func (s *KeyService) ListServiceKeysPaged(ctx context.Context, deptID string, al
 	if err != nil {
 		return nil, 0, err
 	}
-	return toServiceKeyItems(keys), total, nil
+	return toServiceKeyItems(ctx, s, keys), total, nil
 }
 
-func toServiceKeyItems(keys []model.ApiKey) []ServiceKeyItem {
+func toServiceKeyItems(ctx context.Context, svc *KeyService, keys []model.ApiKey) []ServiceKeyItem {
 	items := make([]ServiceKeyItem, 0, len(keys))
 	for _, k := range keys {
+		var boundGroups []BoundGroupItem
+		if svc.keyGroupSvc != nil {
+			groups, err := svc.keyGroupSvc.GetKeyGroups(ctx, k.ID)
+			if err != nil {
+				slog.Warn("list service keys: get key groups failed", "key_id", k.ID, "error", err)
+			} else {
+				boundGroups = groups
+			}
+		}
 		items = append(items, ServiceKeyItem{
-			ID:          k.ID,
-			Name:        k.Name,
-			MaskedKey:   k.KeyPrefix + "****" + k.KeyHint,
-			KeyType:     k.KeyType,
-			Purpose:     k.Purpose,
-			DeptID:      k.DeptID,
-			DeptName:    k.DeptName,
-			Enabled:     k.Enabled,
-			IPAllowlist: k.IPAllowlist,
-			CreatedBy:   k.CreatedBy,
-			CreatedAt:   k.CreatedAt,
-			LastUsedAt:  k.LastUsedAt,
+			ID:              k.ID,
+			Name:            k.Name,
+			MaskedKey:       k.KeyPrefix + "****" + k.KeyHint,
+			KeyType:         k.KeyType,
+			Purpose:         k.Purpose,
+			DeptID:          k.DeptID,
+			DeptName:        k.DeptName,
+			Enabled:         k.Enabled,
+			AccessAllGroups: k.AccessAllGroups,
+			BoundGroups:     boundGroups,
+			IPAllowlist:     k.IPAllowlist,
+			CreatedBy:       k.CreatedBy,
+			CreatedAt:       k.CreatedAt,
+			LastUsedAt:      k.LastUsedAt,
 		})
 	}
 	return items
+}
+
+// UpdateServiceKeyGroups 更新 Service Key 的模型组绑定。
+func (s *KeyService) UpdateServiceKeyGroups(ctx context.Context, keyID uuid.UUID, add, remove []uint) ([]BoundGroupItem, error) {
+	k, err := s.repo.FindByID(keyID)
+	if err != nil || k.KeyType != model.KeyTypeService {
+		return nil, ErrKeyNotFound
+	}
+	if k.AccessAllGroups {
+		return nil, fmt.Errorf("access_all_groups enabled, disable it before binding specific groups")
+	}
+	if s.keyGroupSvc == nil {
+		return nil, fmt.Errorf("key group service not available")
+	}
+	groups, err := s.keyGroupSvc.UpdateBindings(ctx, keyID, add, remove)
+	if err != nil {
+		return nil, err
+	}
+	if s.publisher != nil {
+		s.publisher.InvalidateKeyCache(k.KeyHash)
+		s.publisher.Publish(event.KeyUpdated, "api_key", keyID)
+	}
+	return groups, nil
+}
+
+// UpdateServiceKeyAccessAllGroups 切换 Service Key 的 access_all_groups。
+func (s *KeyService) UpdateServiceKeyAccessAllGroups(ctx context.Context, keyID uuid.UUID, value bool) (*model.ApiKey, error) {
+	k, err := s.repo.FindByID(keyID)
+	if err != nil || k.KeyType != model.KeyTypeService {
+		return nil, ErrKeyNotFound
+	}
+	if err := s.repo.UpdateAccessAllGroups(keyID, value); err != nil {
+		return nil, fmt.Errorf("update access_all_groups: %w", err)
+	}
+	k.AccessAllGroups = value
+	if s.publisher != nil {
+		s.publisher.InvalidateKeyCache(k.KeyHash)
+		s.publisher.Publish(event.KeyUpdated, "api_key", keyID)
+	}
+	return k, nil
 }
 
 // DeleteServiceKey 吊销 Service Key（部门负责人或 admin）。

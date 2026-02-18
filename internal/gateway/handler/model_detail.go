@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/example/llm-gateway/internal/gateway/authz"
 	"github.com/example/llm-gateway/internal/gateway/binding"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/gin-gonic/gin"
@@ -120,29 +121,13 @@ func (h *ModelDetailHandler) Handle(c *gin.Context) {
 
 // hasAccess 检查用户是否有权访问指定模型组。
 func (h *ModelDetailHandler) hasAccess(c *gin.Context, id *model.UserIdentity, modelID string) bool {
-	// 万能权限 key
-	if id.AccessAllGroups {
-		names, err := h.client.ListAllGroups(c.Request.Context())
-		if err != nil {
-			slog.Error("model detail: failed to list all groups", "key_id", id.KeyID, "error", err)
-			return false
-		}
-		for _, name := range names {
-			if name == modelID {
-				return true
-			}
-		}
-		return false
-	}
-
-	// 绑定权限 key
-	groups, err := h.client.GetKeyGroups(c.Request.Context(), id.KeyID)
+	names, err := authz.ResolveVisibleGroupNames(c.Request.Context(), id, h.client)
 	if err != nil {
-		slog.Warn("model detail: failed to get key groups", "key_id", id.KeyID, "error", err)
+		slog.Warn("model detail: failed to resolve visible groups", "key_id", id.KeyID, "error", err)
 		return false
 	}
-	for _, g := range groups {
-		if g.Enabled && g.Name == modelID {
+	for _, name := range names {
+		if name == modelID {
 			return true
 		}
 	}

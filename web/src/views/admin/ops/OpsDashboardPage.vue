@@ -276,7 +276,8 @@ const REFRESH_SECONDS = computed(() => settings.value.auto_refresh_interval || 3
 const isIdle = computed(() => {
   const ov = dashboardData.value
   if (!ov) return true
-  return ov.traffic.total_requests === 0 && ov.traffic.current_qps === 0
+  // 防御性兜底：后端不完整响应（traffic 缺失）视为空闲，不抛 TypeError
+  return (ov.traffic?.total_requests ?? 0) === 0 && (ov.traffic?.current_qps ?? 0) === 0
 })
 
 // -- Fetchers --

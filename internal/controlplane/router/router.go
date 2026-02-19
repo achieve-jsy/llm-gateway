@@ -28,9 +28,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
-
-	"github.com/example/llm-gateway/internal/ehrclient"
-	"github.com/example/llm-gateway/internal/ehrsync"
 )
 
 // Setup 初始化 Gin 路由和中间件链
@@ -570,38 +567,6 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/my/usage/percentiles", usageH.MyPercentiles)
 		adminGroup.GET("/my/usage/logs", usageH.MyLogs)
 		adminGroup.GET("/my/usage/logs/:request_id/trace", usageH.Trace)
-
-		// EHR 组织结构同步
-		ehrRepo := ehrsync.NewRepository(db)
-		ehrClient := ehrclient.NewClient(ehrclient.ConfigFromEnv())
-		ehrCursor := ehrsync.NewCursorManager(rdb)
-		ehrRecorder := ehrsync.NewLogRecorder(ehrRepo)
-		orch := ehrsync.NewOrchestrator(ehrsync.OrchestratorDeps{
-			Client:    ehrClient,
-			Repo:      ehrRepo,
-			Cursor:    ehrCursor,
-			Recorder:  ehrRecorder,
-			Log:       slog.Default(),
-			BatchSize: 200,
-		})
-		scheduler := ehrsync.NewScheduler(orch, rdb, slog.Default())
-		if err := scheduler.Start(ehrsync.DefaultSchedulerConfig()); err != nil {
-			slog.Warn("failed to start EHR scheduler", "error", err)
-		}
-		ehrHandler := handler.NewEhrSyncHandler(db, ehrRepo, scheduler)
-		adminGroup.GET("/ehr/organizations", ehrHandler.ListOrganizations)
-		adminGroup.GET("/ehr/departments", ehrHandler.ListDepartments)
-		adminGroup.GET("/ehr/employees", ehrHandler.ListEmployees)
-		adminGroup.GET("/ehr/status", ehrHandler.GetStatus)
-		adminGroup.POST("/ehr/sync", ehrHandler.TriggerSync)
-		adminGroup.POST("/ehr/override", ehrHandler.SetOverride)
-		adminGroup.DELETE("/ehr/override/:entity/:org_id/:entity_id", ehrHandler.ReleaseOverride)
-		adminGroup.GET("/ehr/overrides", ehrHandler.ListOverrides)
-		adminGroup.GET("/ehr/logs/executions", ehrHandler.ListExecutionLogs)
-		adminGroup.GET("/ehr/logs/changes", ehrHandler.ListChangeLogs)
-		adminGroup.GET("/ehr/logs/errors", ehrHandler.ListErrorLogs)
-		adminGroup.GET("/ehr/logs/diffs", ehrHandler.ListDiffReports)
-		adminGroup.GET("/ehr/logs/skips", ehrHandler.ListSkipLogs)
 	}
 
 	// 内部接口组（内部 Token 认证）

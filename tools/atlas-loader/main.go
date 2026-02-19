@@ -46,20 +46,6 @@ func main() {
 		// v0.8 审计日志
 		&cpmmodel.AuditLog{},
 
-		// EHR 组织同步：5 实体表
-		&cpmmodel.EhrOrganization{},
-		&cpmmodel.EhrCompany{},
-		&cpmmodel.EhrDepartment{},
-		&cpmmodel.EhrEmployee{},
-		&cpmmodel.EhrPosition{},
-		// EHR 同步观测：6 日志表
-		&cpmmodel.EhrSyncExecutionLog{},
-		&cpmmodel.EhrSyncChangeLog{},
-		&cpmmodel.EhrSyncErrorLog{},
-		&cpmmodel.EhrSyncDiffReport{},
-		&cpmmodel.EhrSyncSkipLog{},
-		&cpmmodel.EhrSyncStatSnapshot{},
-
 		// auth/model (3 个表)
 		&authmodel.Department{},
 		&authmodel.DevUser{},

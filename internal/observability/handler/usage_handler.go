@@ -547,6 +547,8 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 		FROM call_logs cl
 		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = cl.dept_id
 		WHERE cl.ts::date BETWEEN ?::date AND ?::date
+			AND cl.user_id != ''
+			AND (` + obsmodel.WhereExcludeServiceKeyLogsCL + `)
 		` + whereClause
 	_ = db.Raw(userCountSQL, queryArgs...).Scan(&userCountRow).Error
 	summary.UserCount = userCountRow.Count
@@ -957,6 +959,7 @@ func (h *UsageHandler) DashboardUsers(c *gin.Context) {
 			COUNT(*)                                     AS total_calls
 		FROM call_logs
 		WHERE ts >= ? AND ts < ?
+			AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
 			AND (? = '' OR studio_id = ?)
 			AND (? = '' OR dept_id = ?)
 	`, from, toExcl, studioID, studioID, deptID, deptID).Scan(&sumRow)
@@ -968,6 +971,7 @@ func (h *UsageHandler) DashboardUsers(c *gin.Context) {
 			SELECT COALESCE(user_id, 'unknown')
 			FROM call_logs
 			WHERE ts >= ? AND ts < ?
+				AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
 				AND (? = '' OR studio_id = ?)
 				AND (? = '' OR dept_id = ?)
 			GROUP BY COALESCE(user_id, 'unknown'), COALESCE(user_name, ''), COALESCE(dept_name, '')
@@ -991,6 +995,7 @@ func (h *UsageHandler) DashboardUsers(c *gin.Context) {
 			COUNT(DISTINCT model)             AS model_count
 		FROM call_logs
 		WHERE ts >= ? AND ts < ?
+			AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
 			AND (? = '' OR studio_id = ?)
 			AND (? = '' OR dept_id = ?)
 		GROUP BY COALESCE(user_id, 'unknown'), COALESCE(user_name, ''), COALESCE(dept_name, '')
@@ -1064,6 +1069,7 @@ func (h *UsageHandler) DashboardUserTopModels(c *gin.Context) {
 				) AS rn
 			FROM call_logs
 			WHERE ts >= ? AND ts < ?
+				AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
 				AND (? = '' OR studio_id = ?)
 				AND (? = '' OR dept_id = ?)
 			GROUP BY COALESCE(user_id, 'unknown'), model

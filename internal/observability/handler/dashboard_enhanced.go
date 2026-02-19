@@ -8,6 +8,7 @@ import (
 
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
 	"github.com/example/llm-gateway/internal/orgservice/rbac/policy"
+	obsmodel "github.com/example/llm-gateway/internal/observability/model"
 	"github.com/gin-gonic/gin"
 )
 
@@ -99,6 +100,7 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 			COUNT(DISTINCT ts::date)                     AS active_days
 		FROM call_logs
 		WHERE ts >= ? AND ts < ?
+			AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
 			AND (? = '' OR studio_id = ?)
 			AND (? = '' OR dept_id = ?)
 			AND (? = '' OR model ILIKE ?)
@@ -122,6 +124,7 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 		_ = db.Raw(`
 			SELECT COUNT(*) FROM call_logs
 			WHERE ts >= ? AND ts < ? AND status != 200
+				AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
 				AND (? = '' OR studio_id = ?)
 				AND (? = '' OR dept_id = ?)
 				AND (? = '' OR model ILIKE ?)
@@ -136,6 +139,7 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 			SELECT COALESCE(user_id, 'unknown')
 			FROM call_logs
 			WHERE ts >= ? AND ts < ?
+				AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
 				AND (? = '' OR studio_id = ?)
 				AND (? = '' OR dept_id = ?)
 				AND (? = '' OR model ILIKE ?)
@@ -172,6 +176,7 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 			COUNT(DISTINCT model)             AS model_count
 		FROM call_logs
 		WHERE ts >= ? AND ts < ?
+			AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
 			AND (? = '' OR studio_id = ?)
 			AND (? = '' OR dept_id = ?)
 			AND (? = '' OR model ILIKE ?)
@@ -198,6 +203,7 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 				COALESCE(SUM(est_cost_usd), 0) AS est_cost_usd
 			FROM call_logs
 			WHERE ts >= ? AND ts < ?
+				AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
 				AND (? = '' OR studio_id = ?)
 				AND (? = '' OR dept_id = ?)
 				AND (? = '' OR model ILIKE ?)
@@ -233,6 +239,7 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 					) AS rn
 				FROM call_logs
 				WHERE ts >= ? AND ts < ?
+					AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
 					AND (? = '' OR studio_id = ?)
 					AND (? = '' OR dept_id = ?)
 					AND (? = '' OR model ILIKE ?)
@@ -663,6 +670,7 @@ func (h *UsageHandler) DashboardModelDetail(c *gin.Context) {
 			COALESCE(SUM(total_tokens), 0) AS tokens
 		FROM call_logs
 		WHERE ts >= ? AND ts < ? AND model = ?
+			AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
 		GROUP BY COALESCE(user_id, 'unknown'), COALESCE(user_name, ''), COALESCE(dept_name, '')
 		ORDER BY cost DESC
 		LIMIT 20

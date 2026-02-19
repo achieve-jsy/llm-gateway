@@ -27,7 +27,7 @@
         <!-- 用户 -->
         <el-table-column v-if="showUser" prop="user_name" :label="userLabel ?? '用户'" min-width="90" :fixed="showKey ? 'left' : false">
           <template #default="{ row }">
-            <span v-if="row.user_name" class="urt-name">{{ row.user_name }}</span>
+            <span v-if="row.key_type !== 'service' && row.user_name" class="urt-name">{{ row.user_name }}</span>
             <span v-else class="urt-dash">—</span>
           </template>
         </el-table-column>

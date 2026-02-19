@@ -294,7 +294,14 @@
           :closable="false"
           style="margin-bottom: 12px"
         />
-        <div v-if="editGroupKey.accessAllGroups" class="group-all-hint">当前为「全部可用组」模式</div>
+        <el-tag
+          v-if="editGroupKey.accessAllGroups || pendingAccessAll === true"
+          size="large"
+          type="success"
+          closable
+          class="group-all-tag"
+          @close="handleAccessAll(false)"
+        >全部可用组（部门授权内）</el-tag>
         <div v-else-if="editGroupKey.boundGroups?.length" class="bound-tags">
           <el-tag
             v-for="g in editGroupKey.boundGroups"
@@ -313,15 +320,15 @@
           placeholder="添加模型组"
           style="width: 100%; margin-top: 8px"
           :loading="groupLoading"
-          :disabled="pendingAccessAll === true"
           @change="handleAddGroupChange"
         >
-          <el-option key="__all__" label="全部可用组（部门授权内）" value="__all__" />
+          <el-option :key="'__all__'" label="全部可用组（部门授权内）" :value="ALL_GROUPS_SENTINEL" />
           <el-option
             v-for="g in availableAddGroups"
             :key="g.id"
             :label="g.name"
             :value="g.id"
+            :disabled="editGroupKey.accessAllGroups || pendingAccessAll === true"
           />
         </el-select>
       </div>
@@ -447,6 +454,10 @@ import { useOrgStore } from '@/stores/org'
 
 const ALL_GROUPS_SENTINEL = -1
 
+function isRealGroupId(v: number | typeof ALL_GROUPS_SENTINEL): v is number {
+  return typeof v === 'number' && v !== ALL_GROUPS_SENTINEL
+}
+
 const authStore = useAuthStore()
 const orgStore = useOrgStore()
 
@@ -478,9 +489,10 @@ const editGroupKey = ref<ServiceKeyItem | null>(null)
 const groupLoading = ref(false)
 const groupSaving = ref(false)
 const availableAddGroups = ref<AvailableGroup[]>([])
-const addGroupIds = ref<number[]>([])
+const addGroupIds = ref<(number | typeof ALL_GROUPS_SENTINEL)[]>([])
 const removedGroupIds = ref<number[]>([])
 const pendingAccessAll = ref<boolean | null>(null)
+const initialAccessAllGroups = ref(false)
 
 watch(() => createForm.groupIds, (val) => {
   if (val.includes(ALL_GROUPS_SENTINEL)) {
@@ -655,12 +667,18 @@ async function loadAvailableGroups() {
   }
 }
 
+function wantsAllGroupsMode(): boolean {
+  return addGroupIds.value.includes(ALL_GROUPS_SENTINEL)
+    && addGroupIds.value.filter(isRealGroupId).length === 0
+}
+
 function openGroupDialog(row: ServiceKeyItem) {
   editGroupKey.value = {
     ...row,
     boundGroups: [...(row.boundGroups || [])],
   }
-  addGroupIds.value = []
+  initialAccessAllGroups.value = row.accessAllGroups
+  addGroupIds.value = row.accessAllGroups ? [ALL_GROUPS_SENTINEL] : []
   removedGroupIds.value = []
   pendingAccessAll.value = null
   groupDialogVisible.value = true
@@ -687,31 +705,74 @@ function removeGroup(g: BoundGroupInfo) {
   addGroupIds.value = addGroupIds.value.filter((id) => id !== g.id)
 }
 
-function handleAddGroupChange(vals: (string | number)[]) {
-  if (vals.includes('__all__')) {
-    addGroupIds.value = []
-    pendingAccessAll.value = true
-    if (editGroupKey.value) {
-      for (const g of editGroupKey.value.boundGroups || []) {
+function handleAccessAll(value: boolean) {
+  if (!editGroupKey.value) return
+  pendingAccessAll.value = value
+  editGroupKey.value.accessAllGroups = value
+  if (value) {
+    addGroupIds.value = [ALL_GROUPS_SENTINEL]
+    for (const g of editGroupKey.value.boundGroups || []) {
+      if (!removedGroupIds.value.includes(g.id)) {
         removedGroupIds.value.push(g.id)
       }
-      editGroupKey.value.boundGroups = []
-      editGroupKey.value.accessAllGroups = true
     }
+    editGroupKey.value.boundGroups = []
+  } else {
+    addGroupIds.value = addGroupIds.value.filter(isRealGroupId)
   }
+}
+
+function handleAddGroupChange(vals: (number | typeof ALL_GROUPS_SENTINEL)[]) {
+  if (!editGroupKey.value) return
+
+  if (vals.includes(ALL_GROUPS_SENTINEL)) {
+    if (vals.length > 1) {
+      addGroupIds.value = [ALL_GROUPS_SENTINEL]
+    }
+    pendingAccessAll.value = true
+    for (const g of editGroupKey.value.boundGroups || []) {
+      if (!removedGroupIds.value.includes(g.id)) {
+        removedGroupIds.value.push(g.id)
+      }
+    }
+    editGroupKey.value.boundGroups = []
+    editGroupKey.value.accessAllGroups = true
+    return
+  }
+
+  const wasAllMode = pendingAccessAll.value === true || editGroupKey.value.accessAllGroups
+  if (wasAllMode) {
+    pendingAccessAll.value = false
+    editGroupKey.value.accessAllGroups = false
+  }
+  addGroupIds.value = vals.filter(isRealGroupId)
 }
 
 async function saveGroupChanges() {
   if (!editGroupKey.value) return
+  const keyId = editGroupKey.value.id
+  const add = addGroupIds.value.filter(isRealGroupId)
+  const remove = removedGroupIds.value
+  const targetAll = wantsAllGroupsMode()
+
   groupSaving.value = true
   try {
-    if (pendingAccessAll.value !== null) {
-      await toggleServiceKeyAccessAllGroups(editGroupKey.value.id, pendingAccessAll.value)
-    }
-    const add = addGroupIds.value.filter((v): v is number => typeof v === 'number')
-    const remove = removedGroupIds.value
-    if (add.length > 0 || remove.length > 0) {
-      await updateServiceKeyGroups(editGroupKey.value.id, add, remove)
+    if (targetAll) {
+      // 先清绑定（此时 access_all 仍为 false），再开启全部可用组
+      if (remove.length > 0 && !initialAccessAllGroups.value) {
+        await updateServiceKeyGroups(keyId, [], remove)
+      }
+      if (!initialAccessAllGroups.value) {
+        await toggleServiceKeyAccessAllGroups(keyId, true)
+      }
+    } else {
+      // 绑具体组前必须先关闭 access_all_groups
+      if (initialAccessAllGroups.value || pendingAccessAll.value === false) {
+        await toggleServiceKeyAccessAllGroups(keyId, false)
+      }
+      if (add.length > 0 || remove.length > 0) {
+        await updateServiceKeyGroups(keyId, add, remove)
+      }
     }
     ElMessage.success('模型组权限已更新')
     groupDialogVisible.value = false
@@ -739,7 +800,7 @@ async function handleCreate() {
         ipAllowlist: createForm.ipAllowlist.length > 0 ? createForm.ipAllowlist : undefined,
         accessAllGroups: createForm.accessAllGroups || undefined,
         groupIds: !createForm.accessAllGroups && createForm.groupIds.length > 0
-          ? createForm.groupIds
+          ? createForm.groupIds.filter(isRealGroupId)
           : undefined,
       }
     )
@@ -1157,6 +1218,10 @@ html.dark .key-reveal-card {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  margin-bottom: 8px;
+}
+
+.group-all-tag {
   margin-bottom: 8px;
 }
 

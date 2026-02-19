@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/example/llm-gateway/internal/gateway/observability"
+	obsmodel "github.com/example/llm-gateway/internal/observability/model"
 )
 
 func TestCollector_NewUsageEvent_KeyType(t *testing.T) {
@@ -38,4 +39,24 @@ func TestCollector_NewUsageEvent_KeyType(t *testing.T) {
 			assert.Equal(t, tt.want, ev.KeyType)
 		})
 	}
+}
+
+func TestSanitizeCallLogForWrite_ServiceKeyClearsUser(t *testing.T) {
+	cl := obsmodel.CallLog{
+		KeyType:  obsmodel.KeyTypeService,
+		UserID:   "user-1",
+		UserName: "admin",
+	}
+	observability.SanitizeCallLogForWrite(&cl)
+	assert.Empty(t, cl.UserID)
+	assert.Empty(t, cl.UserName)
+
+	cl2 := obsmodel.CallLog{
+		KeyType:  obsmodel.KeyTypePersonal,
+		UserID:   "user-1",
+		UserName: "alice",
+	}
+	observability.SanitizeCallLogForWrite(&cl2)
+	assert.Equal(t, "user-1", cl2.UserID)
+	assert.Equal(t, "alice", cl2.UserName)
 }

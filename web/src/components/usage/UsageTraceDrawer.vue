@@ -77,7 +77,7 @@
               <div class="up-meta-heading">调用者</div>
               <div class="up-meta-row"><span>Key</span><span>{{ row?.key_name || maskKey(row?.key_id || '') }}</span></div>
               <div v-if="row?.key_type" class="up-meta-row"><span>Key 类型</span><span>{{ keyTypeLabel(row.key_type) }}</span></div>
-              <div class="up-meta-row"><span>用户</span><span>{{ row?.user_name || '—' }}</span></div>
+              <div class="up-meta-row"><span>用户</span><span>{{ row?.key_type === 'service' ? '—' : (row?.user_name || '—') }}</span></div>
               <div class="up-meta-row"><span>部门</span><span>{{ row?.dept_name || row?.dept_id || '—' }}</span></div>
               <div class="up-meta-row"><span>IP</span><code>{{ row?.ip_address || '—' }}</code></div>
               <div class="up-meta-row up-meta-row--wrap"><span>UA</span><code class="up-meta-ua">{{ row?.user_agent || '—' }}</code></div>

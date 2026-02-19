@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/example/llm-gateway/internal/core"
+	obsmodel "github.com/example/llm-gateway/internal/observability/model"
 	"github.com/example/llm-gateway/internal/gateway/observability/model"
 	"github.com/example/llm-gateway/internal/gateway/observability/repository"
 )
@@ -183,10 +184,18 @@ func getString(ctx *gin.Context, key string) string {
 }
 
 func normalizeKeyType(keyType string) string {
-	if keyType == "service" {
-		return "service"
+	if keyType == obsmodel.KeyTypeService {
+		return obsmodel.KeyTypeService
 	}
-	return "personal"
+	return obsmodel.KeyTypePersonal
+}
+
+// SanitizeCallLogForWrite 写入前规范化：Service Key 调用不归因到具体用户。
+func SanitizeCallLogForWrite(cl *obsmodel.CallLog) {
+	if normalizeKeyType(cl.KeyType) == obsmodel.KeyTypeService {
+		cl.UserID = ""
+		cl.UserName = ""
+	}
 }
 
 func getInt(ctx *gin.Context, key string) int {
@@ -372,31 +381,33 @@ func (w *BatchWriter) fillMissingIdentity(ctx context.Context, batch []model.Cal
 	}
 
 	for i := range batch {
-		if batch[i].UserName == "" || batch[i].DeptID == "" || batch[i].DeptName == "" || batch[i].StudioID == "" || batch[i].KeyType == "" {
-			if info, ok := infoMap[batch[i].KeyID]; ok {
-				if batch[i].KeyType == "" {
-					batch[i].KeyType = normalizeKeyType(info.KeyType)
-				}
-				if batch[i].UserName == "" {
-					batch[i].UserName = info.UserName
-				}
-				if batch[i].DeptID == "" {
-					batch[i].DeptID = info.DeptID
-				}
-				if batch[i].DeptName == "" {
-					batch[i].DeptName = info.DeptName
-				}
-				if batch[i].StudioID == "" {
-					batch[i].StudioID = info.StudioID
-				}
-				if batch[i].StudioName == "" {
-					batch[i].StudioName = info.StudioName
-				}
-				if batch[i].KeyName == "" {
-					batch[i].KeyName = info.KeyName
-				}
+		if info, ok := infoMap[batch[i].KeyID]; ok {
+			if batch[i].KeyType == "" {
+				batch[i].KeyType = normalizeKeyType(info.KeyType)
+			}
+			if normalizeKeyType(batch[i].KeyType) == obsmodel.KeyTypeService {
+				batch[i].UserID = ""
+				batch[i].UserName = ""
+			} else if batch[i].UserName == "" {
+				batch[i].UserName = info.UserName
+			}
+			if batch[i].DeptID == "" {
+				batch[i].DeptID = info.DeptID
+			}
+			if batch[i].DeptName == "" {
+				batch[i].DeptName = info.DeptName
+			}
+			if batch[i].StudioID == "" {
+				batch[i].StudioID = info.StudioID
+			}
+			if batch[i].StudioName == "" {
+				batch[i].StudioName = info.StudioName
+			}
+			if batch[i].KeyName == "" {
+				batch[i].KeyName = info.KeyName
 			}
 		}
+		SanitizeCallLogForWrite(&batch[i])
 	}
 }
 
@@ -445,5 +456,6 @@ func eventToCallLog(e UsageEvent) model.CallLog {
 		CacheReadCostUSD:    e.CacheReadCostUSD,
 		EstCostUSD:          e.EstCostUSD,
 	}
+	SanitizeCallLogForWrite(&cl)
 	return cl
 }

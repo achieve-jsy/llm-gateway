@@ -53,3 +53,14 @@ type CallLog struct {
 func (CallLog) TableName() string {
 	return "call_logs"
 }
+
+const (
+	KeyTypePersonal = "personal"
+	KeyTypeService  = "service"
+)
+
+// WhereExcludeServiceKeyLogs 用于用户维度聚合 SQL，排除程序 Service Key 调用。
+const WhereExcludeServiceKeyLogs = `COALESCE(NULLIF(key_type, ''), 'personal') != 'service'`
+
+// WhereExcludeServiceKeyLogsCL 带 call_logs 表别名 cl。
+const WhereExcludeServiceKeyLogsCL = `COALESCE(NULLIF(cl.key_type, ''), 'personal') != 'service'`

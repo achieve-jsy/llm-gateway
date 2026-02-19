@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/example/llm-gateway/internal/gateway/observability/model"
+	obsmodel "github.com/example/llm-gateway/internal/observability/model"
 )
 
 // RollupService 按天聚合服务
@@ -973,6 +974,7 @@ func (s *RollupService) aggregateUserDailyStats(ctx context.Context, date time.T
 			LEFT JOIN departments d ON (d.dept_id = cl.dept_id OR d.id::text = cl.dept_id)
 			LEFT JOIN dept_studio_map dsm ON dsm.dept_id = COALESCE(d.dept_id, cl.dept_id)
 			WHERE cl.ts::date = ?::date
+				AND (`+obsmodel.WhereExcludeServiceKeyLogsCL+`)
 			GROUP BY COALESCE(cl.user_id, 'unknown'),
 					 COALESCE(dsm.studio_id::text, ''),
 					 COALESCE(d.dept_id, cl.dept_id, ''),

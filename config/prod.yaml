@@ -10,7 +10,7 @@ redis:
   db: 2
 
 database:
-  url: "postgres://llm_gateway:CHANGE_ME_PASSWORD@192.0.2.10:5432/llm_gateway_prod?sslmode=disable"
+  url: "postgres://llm_gateway:CHANGE_ME_PASSWORD@192.0.2.10:5433/llm_gateway_prod?sslmode=disable"
 
 otlp:
   endpoint: "localhost:4317"

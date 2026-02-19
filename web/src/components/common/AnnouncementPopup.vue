@@ -103,7 +103,7 @@ onMounted(async () => {
   width: 100%;
   max-width: 560px;
   max-height: 90vh;
-  background: #fff;
+  background: var(--bg-surface);
   border-radius: 20px;
   box-shadow: 0 24px 64px rgba(0,0,0,0.14), 0 0 0 1px rgba(0,0,0,0.06);
   overflow: hidden;
@@ -117,13 +117,13 @@ onMounted(async () => {
   align-items: center;
   gap: 10px;
   padding: 20px 22px;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--bg-subtle);
 }
 
 .header-dot {
   width: 8px; height: 8px;
   border-radius: 50%;
-  background: #36B34E;
+  background: var(--brand-green);
   flex-shrink: 0;
   box-shadow: 0 0 0 3px rgba(54,179,78,0.15);
   animation: pulse 2s ease-in-out infinite;
@@ -136,9 +136,9 @@ onMounted(async () => {
 
 .header-title {
   flex: 1;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 700;
-  color: #1a1a1a;
+  color: var(--text-primary);
 }
 
 .header-close {
@@ -146,13 +146,13 @@ onMounted(async () => {
   border: none;
   background: none;
   border-radius: 6px;
-  color: #94a3b8;
+  color: var(--text-placeholder);
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   transition: all 0.15s;
   flex-shrink: 0;
 }
-.header-close:hover { background: #f1f5f9; color: #475569; }
+.header-close:hover { background: var(--bg-subtle); color: var(--text-secondary); }
 
 /* ── 列表 ──────────── */
 .panel-items {
@@ -161,7 +161,7 @@ onMounted(async () => {
   min-height: 0;
 }
 .panel-items::-webkit-scrollbar { width: 3px; }
-.panel-items::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 2px; }
+.panel-items::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 2px; }
 
 .item {
   display: flex;
@@ -173,7 +173,7 @@ onMounted(async () => {
   border-bottom: 1px solid #f8fafc;
 }
 .item:last-child { border-bottom: none; }
-.item:hover { background: #F6FEF8; }
+.item:hover { background: var(--el-color-primary-light-9); }
 
 .item-left { flex-shrink: 0; }
 .item-icon { font-size: 22px; line-height: 1; }
@@ -183,7 +183,7 @@ onMounted(async () => {
 .item-title {
   font-size: 14px;
   font-weight: 700;
-  color: #1a1a1a;
+  color: var(--text-primary);
   line-height: 1.4;
   margin-bottom: 4px;
   overflow: hidden;
@@ -193,7 +193,7 @@ onMounted(async () => {
 
 .item-preview {
   font-size: 13px;
-  color: #64748b;
+  color: var(--text-secondary);
   line-height: 1.5;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -208,18 +208,18 @@ onMounted(async () => {
   flex-shrink: 0;
 }
 
-.item-time { font-size: 11px; color: #94a3b8; white-space: nowrap; }
+.item-time { font-size: 12px; color: var(--text-placeholder); white-space: nowrap; }
 
-.item-arrow { color: #cbd5e1; transition: all 0.15s; }
-.item:hover .item-arrow { color: #36B34E; transform: translateX(2px); }
+.item-arrow { color: var(--border-strong); transition: all 0.15s; }
+.item:hover .item-arrow { color: var(--brand-green); transform: translateX(2px); }
 
 /* ── 底部 ──────────── */
 .panel-footer {
   display: flex;
   gap: 10px;
   padding: 16px 20px;
-  border-top: 1px solid #f1f5f9;
-  background: #fafafa;
+  border-top: 1px solid var(--bg-subtle);
+  background: var(--bg-page);
 }
 
 .btn-ghost, .btn-solid {
@@ -234,17 +234,17 @@ onMounted(async () => {
 }
 
 .btn-ghost {
-  background: #f1f5f9;
-  color: #64748b;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
 }
-.btn-ghost:hover { background: #e2e8f0; }
+.btn-ghost:hover { background: var(--border-default); }
 
 .btn-solid {
-  background: #1F8A3B;
-  color: #fff;
+  background: var(--brand-green-deep);
+  color: var(--bg-surface);
   box-shadow: 0 2px 6px rgba(31,138,59,0.25);
 }
-.btn-solid:hover { background: #1A7A37; box-shadow: 0 3px 10px rgba(31,138,59,0.35); }
+.btn-solid:hover { background: var(--brand-green-deep); box-shadow: 0 3px 10px rgba(31,138,59,0.35); }
 
 /* ── 动画 ──────────── */
 .popup-enter-active { transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); }
@@ -254,7 +254,7 @@ onMounted(async () => {
 
 @media (max-width: 768px) {
   .panel {
-    max-width: 95vw !important;
+    max-width: 95vw;
     border-radius: 16px;
   }
   .item {

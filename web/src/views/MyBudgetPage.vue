@@ -802,7 +802,7 @@ onUnmounted(() => { historyObserver?.disconnect() })
   flex-shrink: 0;
 }
 .mb-badge {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--el-color-primary);
   background: var(--el-color-primary-light-9);
@@ -822,7 +822,7 @@ onUnmounted(() => { historyObserver?.disconnect() })
   color: var(--el-text-color-secondary);
 }
 .mb-no-budget__icon { font-size: 48px; color: var(--el-color-primary-light-5); margin-bottom: 8px; }
-.mb-no-budget p { margin: 0; font-size: 15px; font-weight: 600; color: var(--el-text-color-primary); }
+.mb-no-budget p { margin: 0; font-size: 16px; font-weight: 600; color: var(--el-text-color-primary); }
 .mb-no-budget span { font-size: 13px; max-width: 320px; line-height: 1.7; }
 .mb-muted { font-size: 12px; color: var(--el-text-color-placeholder); }
 
@@ -887,7 +887,7 @@ onUnmounted(() => { historyObserver?.disconnect() })
 }
 .mb-panel-head h2 {
   margin: 0;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
@@ -901,19 +901,19 @@ onUnmounted(() => { historyObserver?.disconnect() })
 /* ─────────────── Status tags ─────────────── */
 .mb-tag {
   display: inline-block;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   padding: 3px 9px;
   border-radius: 999px;
   line-height: 1.6;
 }
-.mb-tag--success  { background: #e6f9f1; color: #0a6640; }
-.mb-tag--warning  { background: #fff8e1; color: #8a5a00; }
-.mb-tag--danger   { background: #fff0f0; color: #c0392b; }
-.mb-tag--pending  { background: #eef2ff; color: #4338ca; }
-.mb-tag--approved { background: #e6f9f1; color: #0a6640; }
-.mb-tag--rejected { background: #fff0f0; color: #c0392b; }
-.mb-tag--cancelled { background: #f3f4f6; color: #6b7280; }
+.mb-tag--success  { background: var(--color-success-bg); color: var(--color-success); }
+.mb-tag--warning  { background: var(--color-warning-bg); color: var(--color-warning); }
+.mb-tag--danger   { background: var(--color-danger-bg); color: var(--color-danger); }
+.mb-tag--pending  { background: var(--color-info-bg); color: var(--color-info); }
+.mb-tag--approved { background: var(--color-success-bg); color: var(--color-success); }
+.mb-tag--rejected { background: var(--color-danger-bg); color: var(--color-danger); }
+.mb-tag--cancelled { background: var(--bg-subtle); color: var(--text-secondary); }
 .mb-tag--sm { font-size: 10px; padding: 2px 7px; }
 
 /* ─────────────── Shared pool notice ─────────────── */
@@ -944,7 +944,7 @@ onUnmounted(() => { historyObserver?.disconnect() })
   color: var(--el-color-info-dark-2);
 }
 .mb-shared-pool-desc {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--el-text-color-secondary);
   line-height: 1.6;
 }
@@ -1011,7 +1011,7 @@ onUnmounted(() => { historyObserver?.disconnect() })
 }
 .mb-period-item:last-child { border-bottom: 0; }
 .mb-period-name { color: var(--el-text-color-regular); font-size: 13px; }
-.mb-period-value { font-size: 15px; font-weight: 700; color: var(--el-text-color-primary); }
+.mb-period-value { font-size: 16px; font-weight: 700; color: var(--el-text-color-primary); }
 .mb-period-reset { font-size: 12px; color: var(--el-text-color-placeholder); white-space: nowrap; }
 
 /* ─────────────── Monthly Analysis ─────────────── */
@@ -1036,7 +1036,7 @@ onUnmounted(() => { historyObserver?.disconnect() })
   margin-bottom: 5px;
 }
 .mb-monthly-label { font-size: 12px; color: var(--el-text-color-regular); }
-.mb-monthly-sub { font-size: 11px; color: var(--el-text-color-placeholder); }
+.mb-monthly-sub { font-size: 12px; color: var(--el-text-color-placeholder); }
 .mb-monthly-track {
   height: 4px;
   background: var(--el-border-color-lighter);
@@ -1060,11 +1060,11 @@ onUnmounted(() => { historyObserver?.disconnect() })
   flex-direction: column;
   gap: 2px;
   padding: 8px 10px;
-  background: #fff;
+  background: var(--bg-surface);
   border-radius: 8px;
   border: 1px solid var(--el-border-color-lighter);
 }
-.mb-monthly-stat span { font-size: 11px; color: var(--el-text-color-placeholder); }
+.mb-monthly-stat span { font-size: 12px; color: var(--el-text-color-placeholder); }
 .mb-monthly-stat strong { font-size: 13px; font-weight: 700; color: var(--el-text-color-primary); }
 .mb-monthly-stat strong.is-over { color: var(--el-color-danger); }
 .mb-monthly-stat strong.mb-monthly-na { font-weight: 400; color: var(--el-text-color-placeholder); font-size: 12px; }
@@ -1168,12 +1168,12 @@ onUnmounted(() => { historyObserver?.disconnect() })
   border-left: 3px solid var(--el-color-primary);
 }
 .mb-active-request.is-approved {
-  background: #f0faf5;
-  border-left: 3px solid #10b981;
+  background: var(--color-success-bg);
+  border-left: 3px solid var(--color-success);
 }
 .mb-active-request.is-rejected {
-  background: #fff8f8;
-  border-left: 3px solid #ef4444;
+  background: var(--color-danger-bg);
+  border-left: 3px solid var(--color-danger);
 }
 .mb-active-request.is-cancelled {
   background: var(--el-fill-color-light);
@@ -1222,7 +1222,7 @@ onUnmounted(() => { historyObserver?.disconnect() })
   align-items: center;
   justify-content: space-between;
   padding: 10px 18px 6px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--el-text-color-placeholder);
   letter-spacing: .04em;
@@ -1250,7 +1250,7 @@ onUnmounted(() => { historyObserver?.disconnect() })
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   background: var(--el-fill-color);
   color: var(--el-text-color-placeholder);
@@ -1258,7 +1258,7 @@ onUnmounted(() => { historyObserver?.disconnect() })
 }
 .mb-step.is-done .mb-step-node {
   background: var(--el-color-primary);
-  color: #fff;
+  color: var(--bg-surface);
   border-color: var(--el-color-primary);
 }
 .mb-step.is-active .mb-step-node {
@@ -1274,17 +1274,17 @@ onUnmounted(() => { historyObserver?.disconnect() })
   background: var(--el-color-primary);
 }
 .mb-step.is-rejected .mb-step-node {
-  background: #fff0f0;
-  color: #c24141;
-  border-color: #fcc;
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  border-color: var(--color-danger-bg);
 }
 .mb-step > span {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--el-text-color-placeholder);
 }
 .mb-step.is-done > span,
 .mb-step.is-active > span { color: var(--el-text-color-primary); font-weight: 600; }
-.mb-step.is-rejected > span { color: #c24141; }
+.mb-step.is-rejected > span { color: var(--color-danger); }
 .mb-step-line {
   flex: 1;
   height: 1.5px;
@@ -1304,7 +1304,7 @@ onUnmounted(() => { historyObserver?.disconnect() })
 }
 .mb-history-item:last-child { border-bottom: 0; }
 .mb-history-amount { flex: 1; font-size: 13px; font-weight: 600; color: var(--el-text-color-primary); }
-.mb-history-total { font-weight: 400; font-size: 11px; color: var(--el-text-color-placeholder); }
+.mb-history-total { font-weight: 400; font-size: 12px; color: var(--el-text-color-placeholder); }
 .mb-history-scroll {
   max-height: 220px;
   overflow-y: auto;
@@ -1330,7 +1330,7 @@ onUnmounted(() => { historyObserver?.disconnect() })
   background: var(--el-fill-color-light);
 }
 .mb-dialog-summary span { display: block; font-size: 12px; color: var(--el-text-color-secondary); margin-bottom: 6px; }
-.mb-dialog-summary strong { font-size: 18px; color: var(--el-text-color-primary); }
+.mb-dialog-summary strong { font-size: 20px; color: var(--el-text-color-primary); }
 
 /* ─────────────── Responsive ─────────────── */
 
@@ -1373,7 +1373,7 @@ onUnmounted(() => { historyObserver?.disconnect() })
   .mb { padding: 12px; }
   .mb-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; }
   .mb-kpi { padding: 10px 12px; }
-  .mb-kpi strong { font-size: 18px; }
+  .mb-kpi strong { font-size: 20px; }
 
   /* 月度分析：→1列 */
   .mb-monthly-stats { grid-template-columns: 1fr; }

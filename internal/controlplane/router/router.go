@@ -17,6 +17,7 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/example/llm-gateway/internal/controlplane/service"
+	"github.com/example/llm-gateway/internal/notification"
 	obscron "github.com/example/llm-gateway/internal/observability/cron"
 	obshandler "github.com/example/llm-gateway/internal/observability/handler"
 	obssvc "github.com/example/llm-gateway/internal/observability/service"
@@ -145,23 +146,39 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	budgetAlertSvc := service.NewBudgetAlertService(budgetRepo, budgetAlertRepo, nil)
 	budgetAlertSvc.SetRedis(rdb)
 	notificationRepo := repository.NewNotificationRepo(db)
-	budgetAlertSvc.SetNotificationRepo(notificationRepo)
 	// v0.8: 审计日志（仅管理面写操作落库）
 	auditRepo := repository.NewAuditLogRepo(db)
 	auditSvc := service.NewAuditLogService(auditRepo)
+	// 解耦的通知分发：MultiNotifier = 站内信 + 邮件
+	// 调用方只管构造 model.Notification，内部按已配置通道分发。
+	emailNotifier := service.NewEmailNotifier(settingsRepo)
+	emailNotifier.SetAuditRecorder(auditSvc)
+	sharedNotifier := service.NewMultiNotifier(
+		service.NewDBNotifier(notificationRepo),
+		emailNotifier,
+	)
+	budgetAlertSvc.SetNotifier(sharedNotifier)
 
-	// 动态 Webhook notifier：按 settings 中的 webhook_enabled/webhook_url/webhook_secret 构建；
-	// 若未启用则 notifier 为 nil，仅发站内信。
+	// 动态 notifier：按 settings 中的 webhook / email 配置构建；
+	// Dispatcher 统一负责写日志文件 + Webhook + 邮件三条通道。
 	go func() {
 		cfg, err := settingsSvc.GetSystemSettings(context.Background())
 		if err != nil {
-			slog.Warn("budget_alert: failed to load webhook settings", "error", err)
+			slog.Warn("budget_alert: failed to load notification settings", "error", err)
 			return
 		}
+
+		alertLogger := notification.NewAlertLogger("logs")
+
+		var webhookSender *service.WebhookSender
 		if cfg.WebhookEnabled && cfg.WebhookURL != "" {
-			budgetAlertSvc.SetNotifier(service.NewWebhookSender(cfg.WebhookURL, cfg.WebhookSecret))
+			webhookSender = service.NewWebhookSender(cfg.WebhookURL, cfg.WebhookSecret)
 			slog.Info("budget_alert: webhook notifier initialized", "url", cfg.WebhookURL)
 		}
+
+		dispatcher := notification.NewDispatcher(nil, alertLogger, webhookSender)
+		dispatcher.SetAuditRecorder(newEmailAuditAdapter(auditSvc))
+		budgetAlertSvc.SetWebhookNotifier(dispatcher)
 	}()
 	// v0.7: 上线默认预算初始化（异步，不阻塞启动）
 	// 默认额度：部门日常 500 USD/月，部门程序服务 200 USD/月，工作室 2000 USD/月
@@ -304,8 +321,10 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 	// Key 活动提醒：离线扫描器（不碰 gateway 热路径）
 	// 影子模式（enabled=false）：只写 key_activity_alert 表，不发通知；待观测命中分布合理后再开启通知
+	// 复用 sharedNotifier：keyactivity 的扁平签名通过适配器转换成 model.Notification 后分发
+	// 到站内信 + 邮件两条通道。
 	kaRepo := keyactivity.NewRepo(db)
-	kaNotif := keyactivity.NewStdNotifier(notificationRepo)
+	kaNotif := service.NewKeyActivityNotifierAdapter(sharedNotifier)
 	kaScanner := keyactivity.NewScanner(kaRepo, kaNotif, settingsSvc, kaRepo)
 	kaCron := keyactivity.NewCron(kaScanner, settingsSvc)
 	kaCron.Start(context.Background())
@@ -387,6 +406,80 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		performanceHandler := handler.NewPerformanceHandler(performanceSvc)
 		adminGroup.GET("/health/performance", performanceHandler.GetPerformance)
 
+		// 运维看板（Ops Dashboard）
+		systemMetricsCollector := service.NewSystemMetricsCollector(db, rdb)
+		systemMetricsCollector.Start(context.Background())
+		opsHandler := handler.NewOpsHandler(db, rdb, systemMetricsCollector)
+		adminGroup.GET("/ops/groups", opsHandler.GetGroupOptions)
+		adminGroup.GET("/ops/dashboard", opsHandler.GetDashboard)
+		adminGroup.GET("/ops/traffic-trend", opsHandler.GetTrafficTrend)
+		adminGroup.GET("/ops/error-trend", opsHandler.GetErrorTrend)
+		adminGroup.GET("/ops/latency-histogram", opsHandler.GetLatencyHistogram)
+		adminGroup.GET("/ops/error-distribution", opsHandler.GetErrorDistribution)
+
+		// 运维看板 v2：请求日志、错误分析、并发、趋势
+		adminGroup.GET("/ops/requests", opsHandler.ListRequests)
+		adminGroup.GET("/ops/request-errors", opsHandler.ListRequestErrors)
+		adminGroup.GET("/ops/request-errors/:id", opsHandler.GetRequestErrorDetail)
+		adminGroup.GET("/ops/upstream-errors", opsHandler.ListUpstreamErrors)
+		adminGroup.GET("/ops/concurrency", opsHandler.GetConcurrencyStats)
+		adminGroup.GET("/ops/switch-rate-trend", opsHandler.GetSwitchRateTrend)
+		adminGroup.GET("/ops/throughput-trend", opsHandler.GetThroughputTrend)
+
+		// 运维看板 v2：告警规则 / 事件 / 静默
+		adminGroup.GET("/ops/alert-rules", opsHandler.ListAlertRules)
+		adminGroup.POST("/ops/alert-rules", opsHandler.CreateAlertRule)
+		adminGroup.PUT("/ops/alert-rules/:id", opsHandler.UpdateAlertRule)
+		adminGroup.DELETE("/ops/alert-rules/:id", opsHandler.DeleteAlertRule)
+		adminGroup.GET("/ops/alert-events", opsHandler.ListAlertEvents)
+		adminGroup.GET("/ops/alert-events/:id", opsHandler.GetAlertEvent)
+		adminGroup.PUT("/ops/alert-events/:id/status", opsHandler.UpdateAlertEventStatus)
+		adminGroup.POST("/ops/alert-silences", opsHandler.CreateAlertSilence)
+
+		// 运维看板 v2：系统日志
+		adminGroup.GET("/ops/system-logs", opsHandler.ListSystemLogs)
+		adminGroup.GET("/ops/system-logs/health", opsHandler.GetSystemLogSinkHealth)
+		adminGroup.POST("/ops/system-logs/cleanup", opsHandler.CleanupSystemLogs)
+
+		// 运维看板 v2：运行时日志配置
+		adminGroup.GET("/ops/runtime/logging", opsHandler.GetRuntimeLogConfig)
+		adminGroup.PUT("/ops/runtime/logging", opsHandler.UpdateRuntimeLogConfig)
+		adminGroup.POST("/ops/runtime/logging/reset", opsHandler.ResetRuntimeLogConfig)
+
+		// 运维看板 v2：Token 统计
+		adminGroup.GET("/ops/token-stats", opsHandler.GetTokenStats)
+
+		// 运维看板 v2：阈值 & 看板设置
+		adminGroup.GET("/ops/settings/metric-thresholds", opsHandler.GetMetricThresholds)
+		adminGroup.PUT("/ops/settings/metric-thresholds", opsHandler.UpdateMetricThresholds)
+		adminGroup.GET("/ops/settings/dashboard", opsHandler.GetDashboardSettings)
+		adminGroup.PUT("/ops/settings/dashboard", opsHandler.UpdateDashboardSettings)
+		adminGroup.GET("/ops/settings/advanced", opsHandler.GetAdvancedSettings)
+		adminGroup.PUT("/ops/settings/advanced", opsHandler.UpdateAdvancedSettings)
+
+		// 运维看板 v2：用户并发 & 账户可用性 & 实时流量 & 请求错误关联
+		adminGroup.GET("/ops/user-concurrency", opsHandler.GetUserConcurrency)
+		adminGroup.GET("/ops/account-availability", opsHandler.GetAccountAvailability)
+		adminGroup.GET("/ops/realtime-traffic", opsHandler.GetRealtimeTraffic)
+		adminGroup.GET("/ops/request-errors/:id/correlation", opsHandler.GetRequestErrorCorrelation)
+		adminGroup.GET("/ops/upstream-errors/:id", opsHandler.GetUpstreamErrorDetail)
+
+		// 运维看板 v2：后台任务
+		adminGroup.GET("/ops/jobs", opsHandler.ListJobs)
+
+		// 运维看板 v3：邮件通知配置
+		adminGroup.GET("/ops/settings/email-notification", opsHandler.GetEmailNotificationConfig)
+		adminGroup.PUT("/ops/settings/email-notification", opsHandler.UpdateEmailNotificationConfig)
+		adminGroup.POST("/ops/settings/email-notification/test", opsHandler.SendTestAlertEmail)
+
+		// 运维看板 v3：告警运行时设置
+		adminGroup.GET("/ops/settings/alert-runtime", opsHandler.GetAlertRuntimeSettings)
+		adminGroup.PUT("/ops/settings/alert-runtime", opsHandler.UpdateAlertRuntimeSettings)
+
+		// 运维看板 v3：错误日志增强视图
+		adminGroup.GET("/ops/error-logs", opsHandler.ListErrorLogs)
+		adminGroup.PUT("/ops/error-logs/:id/resolve", opsHandler.ResolveErrorLog)
+
 		// 模型状态变更日志
 		adminGroup.GET("/model-status-logs", modelStatusLogHandler.ListModelStatusLogs)
 
@@ -431,12 +524,14 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.POST("/groups/:id/models", groupHandler.AddModels)
 		adminGroup.GET("/groups/:id/models", groupHandler.ListModels)
 		adminGroup.DELETE("/groups/:id/models/:model_id", groupHandler.RemoveModel)
+		adminGroup.POST("/groups/:id/reset-capability", groupHandler.ResetCapability)
 		adminGroup.POST("/groups/:id/check", groupCheckHandler.CheckOne)
 
 		// 系统设置
 		adminGroup.GET("/settings", settingsHandler.GetSystemSettings)
 		adminGroup.PUT("/settings", settingsHandler.UpdateSettings)
 		adminGroup.POST("/settings/test-webhook", settingsHandler.TestWebhook)
+		adminGroup.POST("/settings/test-email", settingsHandler.TestEmail)
 		adminGroup.POST("/settings/export", settingsHandler.ExportSettings)
 		adminGroup.POST("/settings/import", settingsHandler.ImportSettings)
 
@@ -564,6 +659,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/service-keys", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.List)
 		adminGroup.PATCH("/service-keys/:id/status", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.Toggle)
 		adminGroup.PATCH("/service-keys/:id/ip-allowlist", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.UpdateIPAllowlist)
+		adminGroup.POST("/service-keys/:id/groups", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.UpdateGroups)
+		adminGroup.POST("/service-keys/:id/access-all-groups", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.ToggleAccessAllGroups)
 		adminGroup.DELETE("/service-keys/:id", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.Delete)
 		// v0.8: 审计日志查询（仅管理面可查）
 		adminGroup.GET("/audit-logs", guard(rbac.PermAuditViewScoped), auditHandler.List)
@@ -640,9 +737,11 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		usageH2 := obshandler.NewUsageHandler(obssvc.NewRollupService(db), db)
 		adminGroup.GET("/usage/dashboard", guard(rbac.PermUsageViewScoped), usageH2.GetDashboard)
 		adminGroup.GET("/usage/dashboard/trend", guard(rbac.PermUsageViewScoped), usageH2.DashboardTrend)
-		adminGroup.GET("/usage/dashboard/models", guard(rbac.PermUsageViewScoped), usageH2.DashboardModels)
-		adminGroup.GET("/usage/dashboard/users", guard(rbac.PermUsageViewScoped), usageH2.DashboardUsers)
+		adminGroup.GET("/usage/dashboard/models", guard(rbac.PermUsageViewScoped), usageH2.DashboardModelsEnhanced)
+		adminGroup.GET("/usage/dashboard/users", guard(rbac.PermUsageViewScoped), usageH2.DashboardUsersEnhanced)
 		adminGroup.GET("/usage/dashboard/user-top-models", guard(rbac.PermUsageViewScoped), usageH2.DashboardUserTopModels)
+		adminGroup.GET("/usage/dashboard/user-detail", guard(rbac.PermUsageViewScoped), usageH2.DashboardUserDetail)
+		adminGroup.GET("/usage/dashboard/model-detail", guard(rbac.PermUsageViewScoped), usageH2.DashboardModelDetail)
 		adminGroup.GET("/usage/scoped/logs", guard(rbac.PermUsageViewScoped), usageH2.ScopedLogs)
 	}
 
@@ -687,7 +786,9 @@ func applyOIDCFromDB(cfg *auth.Config, settingsSvc *service.SettingsService) {
 		cfg.ClientID = settings.OIDCClientID
 	}
 	if settings.OIDCClientSecret != "" {
-		cfg.ClientSecret = settings.OIDCClientSecret
+		if raw := settingsSvc.GetOIDCClientSecret(ctx); raw != "" {
+			cfg.ClientSecret = raw
+		}
 	}
 	if settings.OIDCRedirectURL != "" {
 		cfg.RedirectURI = settings.OIDCRedirectURL

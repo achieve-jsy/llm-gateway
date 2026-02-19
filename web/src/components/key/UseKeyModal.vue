@@ -401,11 +401,11 @@ function resetState() {
 
 @media (max-width: 768px) {
   :deep(.el-dialog) {
-    width: 95% !important;
-    max-width: 95vw !important;
+    width: 95%;
+    max-width: 95vw;
   }
   :deep(.el-dialog .el-dialog__body) {
-    padding: 14px !important;
+    padding: 14px;
   }
   :deep(.el-tabs__nav) {
     overflow-x: auto;

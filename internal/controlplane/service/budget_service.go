@@ -436,10 +436,9 @@ func (s *BudgetService) RebuildCounters(ctx context.Context, db *gorm.DB) (*Rebu
 		// ── dept（区分 personal/service key）────────────────────────────────
 		var deptRows []callCostRow
 		if err := db.WithContext(ctx).Table("call_logs cl").
-			Select("cl.dept_id AS scope_id, COALESCE(ak.key_type, 'personal') AS key_type, COALESCE(SUM(cl.est_cost_usd), 0) AS cost_usd").
-			Joins("LEFT JOIN api_keys ak ON ak.id::text = cl.key_id").
+			Select("cl.dept_id AS scope_id, COALESCE(NULLIF(cl.key_type, ''), 'personal') AS key_type, COALESCE(SUM(cl.est_cost_usd), 0) AS cost_usd").
 			Where("cl.ts >= ? AND cl.dept_id != '' AND cl.status = 200", p.since).
-			Group("cl.dept_id, ak.key_type").
+			Group("cl.dept_id, cl.key_type").
 			Scan(&deptRows).Error; err != nil {
 			slog.Warn("rebuild: query dept rows failed", "period", p.period, "err", err)
 		}
@@ -459,8 +458,7 @@ func (s *BudgetService) RebuildCounters(ctx context.Context, db *gorm.DB) (*Rebu
 		var memberRows []callCostRow
 		if err := db.WithContext(ctx).Table("call_logs cl").
 			Select("cl.user_id AS scope_id, '' AS key_type, COALESCE(SUM(cl.est_cost_usd), 0) AS cost_usd").
-			Joins("LEFT JOIN api_keys ak ON ak.id::text = cl.key_id").
-			Where("cl.ts >= ? AND cl.user_id != '' AND cl.status = 200 AND (ak.key_type IS NULL OR ak.key_type != ?)", p.since, model.KeyTypeService).
+			Where("cl.ts >= ? AND cl.user_id != '' AND cl.status = 200 AND COALESCE(NULLIF(cl.key_type, ''), 'personal') != ?", p.since, model.KeyTypeService).
 			Group("cl.user_id").
 			Scan(&memberRows).Error; err != nil {
 			slog.Warn("rebuild: query member rows failed", "period", p.period, "err", err)

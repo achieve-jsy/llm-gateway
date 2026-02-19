@@ -15,7 +15,7 @@
           <el-radio-button value="CNY">¥ CNY</el-radio-button>
         </el-radio-group>
         <el-button :loading="statsLoading" :icon="Refresh" circle size="small" title="刷新" @click="loadAll" />
-        <el-button :icon="Download" size="small" :disabled="!logRows.length" @click="handleExport">导出</el-button>
+
       </div>
     </div>
 
@@ -119,6 +119,17 @@
               class="up-filter__key" @change="loadAll" @clear="loadAll">
               <template #prefix><el-icon><Search /></el-icon></template>
             </el-input>
+          </div>
+
+          <!-- Key 类型 -->
+          <div class="up-filter-group">
+            <span class="up-filter-label">Key 类型</span>
+            <el-select v-model="filterKeyType" placeholder="全部" clearable size="small"
+              class="up-filter__status" @change="loadAll" @clear="loadAll">
+              <el-option label="全部" value="" />
+              <el-option label="个人 Key" value="personal" />
+              <el-option label="程序 Key" value="service" />
+            </el-select>
           </div>
 
           <!-- 用户关键词 -->
@@ -355,34 +366,29 @@
     </div>
 
     <!-- ═══════════════════════════════════════════
-         调用明细表
+         调用明细 (UsageLogSection 复合组件)
     ═══════════════════════════════════════════ -->
-    <div class="up-section">
-      <div class="up-section__header">
-        <span class="up-section__title">调用明细</span>
-        <span class="up-section__count">共 {{ logTotal }} 条</span>
-      </div>
-      <UsageRecordTable
-        :rows="logRows"
-        :loading="logLoading"
-        :total="logTotal"
-        :page="logPage"
-        :page-size="logPageSize"
-        :currency="currency"
-        show-key
-        show-user
-        show-dept
-        show-studio
-        show-group
-        show-provider
-        show-source="full"
-        :sortable-columns="['duration_ms', 'est_cost_usd', 'ts']"
-        :trace-endpoint="fetchTrace"
-        :key-resolver="(row) => keyLabel(row.key_id, row.key_name ?? '')"
-        @update:page="(p) => { logPage = p; loadLogs() }"
-        @update:page-size="(s) => { logPageSize = s; loadLogs() }"
-      />
-    </div>
+    <UsageLogSection
+      ref="logSectionRef"
+      title="调用明细"
+      api-path="/api/v1/usage-logs"
+      trace-api-path="/api/v1/usage/logs"
+      :params="logParams"
+      :currency="currency"
+      export-prefix="usage_logs"
+      :table-props="{
+        showKey: true,
+        showKeyType: true,
+        showUser: true,
+        showDept: true,
+        showStudio: true,
+        showGroup: true,
+        showProvider: true,
+        showSource: 'full',
+        sortableColumns: ['duration_ms', 'est_cost_usd', 'ts'],
+        keyResolver: (row: any) => keyLabel(row.key_id, row.key_name ?? ''),
+      }"
+    />
 
   </div>
 </template>
@@ -390,12 +396,11 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
 import {
-  Refresh, Download, Search, Histogram, Money, DataLine, Coin,
+  Refresh, Search, Histogram, Money, DataLine, Coin,
   MagicStick, WarningFilled,
   ArrowDown, ArrowUp
 } from '@element-plus/icons-vue'
-import UsageRecordTable from '@/components/usage/UsageRecordTable.vue'
-import type { LogRow, TraceData } from '@/components/usage/UsageTraceDrawer.vue'
+import UsageLogSection from '@/components/usage/UsageLogSection.vue' 
 import {
   Chart, BarController, LineController, CategoryScale, LinearScale, BarElement, LineElement,
   PointElement, Tooltip, Legend, Filler
@@ -488,6 +493,7 @@ function onDateChange() {
 const filterModel  = ref('') // 已废弃，保留避免其他引用报错
 const filterKeyId    = ref('')
 const filterKeyName  = ref('')
+const filterKeyType  = ref('')
 const filterUserName = ref('')
 const filterDeptName = ref('')
 const filterStudioId = ref('')
@@ -499,7 +505,7 @@ const showMoreFilters = ref(false)
 
 const activeFilterCount = computed(() =>
   [filterModelName.value, filterGroupName.value,
-   filterKeyName.value, filterUserName.value, filterDeptName.value,
+   filterKeyName.value, filterKeyType.value, filterUserName.value, filterDeptName.value,
    filterStudioId.value, filterProvider.value, filterStatus.value]
     .filter(Boolean).length
 )
@@ -508,6 +514,7 @@ function clearFilters() {
   filterModelName.value = ''
   filterGroupName.value = ''
   filterKeyName.value   = ''
+  filterKeyType.value   = ''
   filterUserName.value  = ''
   filterKeyId.value     = ''
   filterDeptName.value    = ''
@@ -537,12 +544,26 @@ const statsTotal = ref<StatsTotal | null>(null)
 const chartMetric = ref<'tokens' | 'reqs' | 'cost'>('tokens')
 const distMetric = ref<'reqs' | 'tokens'>('reqs')
 
-// ── Logs state ──
-const logLoading = ref(false)
-const logRows = ref<LogRow[]>([])
-const logTotal = ref(0)
-const logPage = ref(1)
-const logPageSize = ref(50)
+// ── Logs (UsageLogSection) ──
+const logSectionRef = ref<InstanceType<typeof UsageLogSection> | null>(null)
+
+const logParams = computed(() => {
+  if (!dateRange.value?.[0]) return {}
+  const p: Record<string, string | number> = {
+    from: dateRange.value[0], to: dateRange.value[1],
+  }
+  if (filterModelName.value) p.model_name = filterModelName.value
+  if (filterGroupName.value) p.group_name = filterGroupName.value
+  if (filterKeyId.value)     p.key_id     = filterKeyId.value
+  if (filterKeyName.value)   p.key_name   = filterKeyName.value
+  if (filterUserName.value)  p.user_name  = filterUserName.value
+  if (filterDeptName.value)  p.dept_name  = filterDeptName.value
+  if (filterStudioId.value)  p.studio_id  = filterStudioId.value
+  if (filterProvider.value)  p.provider   = filterProvider.value
+  if (filterStatus.value)    p.status     = filterStatus.value
+  if (filterKeyType.value)   p.key_type   = filterKeyType.value
+  return p
+})
 
 // ── Derived stats ──
 const successRate = computed(() => {
@@ -690,44 +711,12 @@ async function loadStats(resetPage = true) {
   }
 }
 
-async function loadLogs() {
-  if (!dateRange.value?.[0]) return
-  logLoading.value = true
-  try {
-    const params: Record<string, string | number> = {
-      from: dateRange.value[0], to: dateRange.value[1],
-      page: logPage.value, page_size: logPageSize.value,
-    }
-    if (filterModelName.value) params.model_name = filterModelName.value
-    if (filterGroupName.value) params.group_name = filterGroupName.value
-    if (filterKeyId.value)     params.key_id     = filterKeyId.value
-    if (filterKeyName.value)   params.key_name   = filterKeyName.value
-    if (filterUserName.value)  params.user_name  = filterUserName.value
-    if (filterDeptName.value)    params.dept_name  = filterDeptName.value
-    if (filterStudioId.value)  params.studio_id  = filterStudioId.value
-    if (filterProvider.value)  params.provider   = filterProvider.value
-    if (filterStatus.value)    params.status     = filterStatus.value
-    const r = await http.get('/api/v1/usage-logs', { params })
-    logRows.value = r.data.rows || []
-    logTotal.value = r.data.total || 0
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.details || '明细查询失败')
-  } finally {
-    logLoading.value = false
-  }
-}
-
 function loadAll() {
-  logPage.value = 1
   loadStats()
-  loadLogs()
+  nextTick(() => logSectionRef.value?.refresh())
 }
 
-// ── Trace 接入 ──
-async function fetchTrace(requestId: string): Promise<TraceData> {
-  const r = await http.get(`/api/v1/usage/logs/${requestId}/trace`, { _silent: true } as any)
-  return r.data
-}
+
 
 // ── Charts ──
 const trendCanvas = ref<HTMLCanvasElement | null>(null)
@@ -840,14 +829,7 @@ function renderDist() {
   })
 }
 
-// ── Export ──
-function handleExport() {
-  if (!logRows.value.length) return
-  const keys = Object.keys(logRows.value[0] || {})
-  const csv = [keys.join(','), ...logRows.value.map(r => keys.map(k => JSON.stringify((r as any)[k] ?? '')).join(','))].join('\n')
-  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' })
-  Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `logs_${currency.value}_${dateRange.value[0]}_${dateRange.value[1]}.csv` }).click()
-}
+
 
 watch(distMetric, () => { if (statsRows.value.length) renderDist() })
 watch(currency, async () => { await nextTick(); if (statsRows.value.length) { renderTrend(); renderDist() } })

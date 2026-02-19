@@ -24,6 +24,7 @@ type GroupServiceInterface interface {
 	ListEnabledGroupsWithModels() ([]model.Group, error)
 	CountGroupModels(groupID uint) int
 	GetFailoverDefaults() service.FailoverDefaults
+	ResetCapability(id uint) (*model.Group, error)
 }
 
 type GroupHandler struct {
@@ -117,6 +118,7 @@ func (h *GroupHandler) List(c *gin.Context) {
 		FailoverCooldownSeconds int    `json:"failover_cooldown_seconds"`
 		ModelCount              int    `json:"model_count"`
 		OpenMode                string `json:"open_mode"`
+		IsCapabilityOverride    bool   `json:"is_capability_override"`
 		CreatedAt               string `json:"created_at"`
 		UpdatedAt               string `json:"updated_at"`
 	}
@@ -135,6 +137,7 @@ func (h *GroupHandler) List(c *gin.Context) {
 			FailoverCooldownSeconds: g.FailoverCooldownSeconds,
 			ModelCount:              count,
 			OpenMode:                g.OpenMode,
+			IsCapabilityOverride:    g.IsCapabilityOverride,
 			CreatedAt:               g.CreatedAt.Format("2006-01-02T15:04:05Z"),
 			UpdatedAt:               g.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 		}
@@ -345,6 +348,38 @@ func (h *GroupHandler) GetDefaults(c *gin.Context) {
 			"failover_cooldown_seconds": d.CooldownSeconds,
 		},
 	})
+}
+
+func (h *GroupHandler) ResetCapability(c *gin.Context) {
+	id, err := parseGroupID(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{"type": "invalid_request", "message": "invalid group id", "code": CodeBadRequest},
+		})
+		return
+	}
+
+	group, err := h.svc.ResetCapability(id)
+	if err != nil {
+		if errors.Is(err, service.ErrGroupNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": gin.H{"type": "not_found", "message": "group not found", "code": CodeGroupNotFound},
+			})
+			return
+		}
+		if errors.Is(err, service.ErrGroupDeleted) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": gin.H{"type": "invalid_request", "message": "group has been deleted", "code": CodeBadRequest},
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{"type": "internal_error", "message": err.Error(), "code": CodeInternalError},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": group})
 }
 
 func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {

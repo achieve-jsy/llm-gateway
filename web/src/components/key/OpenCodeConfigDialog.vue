@@ -437,7 +437,7 @@ onUnmounted(stopPolling)
   color: var(--el-text-color-placeholder);
   margin: 0;
 }
-.error-msg { color: var(--el-color-danger) !important; }
+.error-msg { color: var(--el-color-danger); }
 
 .spin-icon {
   color: var(--el-color-primary);
@@ -454,8 +454,8 @@ onUnmounted(stopPolling)
 
 @media (max-width: 768px) {
   :deep(.el-dialog) {
-    width: 95% !important;
-    max-width: 95vw !important;
+    width: 95%;
+    max-width: 95vw;
   }
   .config-row {
     flex-wrap: wrap;

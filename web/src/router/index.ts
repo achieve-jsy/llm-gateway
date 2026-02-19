@@ -69,11 +69,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/admin/CatalogSyncPage.vue'),
     meta: { title: 'Catalog 同步', requiresAdmin: true }
   },
+  // 对话测试对所有登录用户开放（模型广场"试一试"入口）
   {
     path: '/admin/chat-playground',
     name: 'ChatPlayground',
     component: () => import('@/views/admin/ChatPlaygroundPage.vue'),
-    meta: { title: '对话测试', requiresAdmin: true }
+    meta: { title: '对话测试' }
   },
   {
     path: '/admin/health-monitor',
@@ -91,8 +92,14 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/admin/performance',
     name: 'Performance',
-    component: () => import('@/views/admin/PerformancePage.vue'),
+    component: () => import('@/views/admin/GroupHealthMonitorPage.vue'),
     meta: { title: '模型性能看板' }
+  },
+  {
+    path: '/admin/ops',
+    name: 'OpsDashboard',
+    component: () => import('@/views/admin/ops/OpsDashboardPage.vue'),
+    meta: { title: '运维监控', requiresAdmin: true }
   },
   {
     path: '/admin/usage-cost',

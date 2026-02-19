@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/example/llm-gateway/internal/gateway/observability/model"
+	obsmodel "github.com/example/llm-gateway/internal/observability/model"
 )
 
 // RollupService 按天聚合服务
@@ -84,7 +86,20 @@ func (s *RollupService) Run(ctx context.Context, day time.Time) error {
 		"rows_affected", result.RowsAffected,
 	)
 
-	return nil
+	// ── 新增预聚合表写入 ──────────────────────────────────────────────
+	var errs []error
+
+	// 模型维度预聚合（model_daily_stats）
+	if err := s.aggregateModelDailyStats(ctx, dayStart); err != nil {
+		errs = append(errs, err)
+	}
+
+	// 用户维度预聚合（user_daily_stats）
+	if err := s.aggregateUserDailyStats(ctx, dayStart); err != nil {
+		errs = append(errs, err)
+	}
+
+	return errors.Join(errs...)
 }
 
 // RunTodayAndYesterday 覆盖今天 + 昨天（跨零点延迟到达）
@@ -111,8 +126,8 @@ type UsageDailyQueryParams struct {
 	UserName  string // 用户名关键词搜索（ILIKE）
 	DeptName  string // 部门筛选（call_logs 中存 dept_name，用 dept_name 过滤）
 	StudioID  string
-	ModelName  string // 精确/前缀匹配模型名（model / routed_model）
-	GroupName  string // 模型组名搜索（group_name，仅 call_logs 路径）
+	ModelName string // 精确/前缀匹配模型名（model / routed_model）
+	GroupName string // 模型组名搜索（group_name，仅 call_logs 路径）
 	Provider  string // 渠道过滤（仅 call_logs 路径）
 	Status    string // "success" | "error" | ""（仅 call_logs 路径）
 	TopN      int    // 已废弃，保留兼容；非时间维度分页由 Page/PageSize 控制
@@ -226,7 +241,14 @@ func (s *RollupService) queryFromCallLogs(ctx context.Context, params UsageDaily
 	query := s.db.WithContext(ctx).
 		Table("call_logs").
 		Select(selectCols).
-		Where("ts >= ? AND ts < ?", params.From, params.To.Add(24*time.Hour))
+		Where("ts >= ?", params.From)
+
+	// 天精度 +24h 包含整天；小时精度直接用
+	if params.To.Hour() == 0 && params.To.Minute() == 0 && params.To.Second() == 0 {
+		query = query.Where("ts < ?", params.To.Add(24*time.Hour))
+	} else {
+		query = query.Where("ts <= ?", params.To)
+	}
 
 	if params.ScopeKey != "" {
 		query = query.Where(params.ScopeKey)
@@ -413,11 +435,11 @@ func InsertDailyUpsert(ctx context.Context, db *gorm.DB, row model.UsageDaily) e
 		Where("stat_date = ? AND key_id = ? AND dept_id = ? AND studio_id = ? AND model = ?",
 			row.StatDate, row.KeyID, row.DeptID, row.StudioID, row.Model).
 		Assign(map[string]interface{}{
-			"user_id":           row.UserID,
-			"req_count":         row.ReqCount,
-			"success_count":     row.SuccessCount,
-			"prompt_tokens":     row.PromptTokens,
-			"cached_tokens":     row.CachedTokens,
+			"user_id":            row.UserID,
+			"req_count":          row.ReqCount,
+			"success_count":      row.SuccessCount,
+			"prompt_tokens":      row.PromptTokens,
+			"cached_tokens":      row.CachedTokens,
 			"cache_write_tokens": row.CacheWriteTokens,
 			"completion_tokens":  row.CompletionTokens,
 			"reasoning_tokens":   row.ReasoningTokens,
@@ -432,12 +454,13 @@ type LogsQueryParams struct {
 	To        time.Time
 	KeyID     string
 	KeyName   string // 关键词模糊搜索
+	KeyType   string // personal | service
 	UserID    string
 	UserName  string // 用户名关键词搜索（ILIKE）
 	DeptName  string // 部门筛选
 	StudioID  string
-	ModelName  string // 模型名搜索
-	GroupName  string // 模型组名搜索
+	ModelName string // 模型名搜索
+	GroupName string // 模型组名搜索
 	Provider  string
 	Status    string // "success" | "error" | ""
 	Page      int
@@ -448,55 +471,58 @@ type LogsQueryParams struct {
 
 // MyStatsQueryParams 个人统计查询参数（直接从 call_logs 聚合）
 type MyStatsQueryParams struct {
-	From     time.Time
-	To       time.Time
-	UserID   string
-	GroupBy  string // day / model
-	Model    string
-	Status   string // "success" | "error" | ""
-	Page     int
-	PageSize int
+	From      time.Time
+	To        time.Time
+	UserID    string
+	GroupBy   string // day / model / key / hour
+	Model     string
+	KeyID     string // 按 Key ID 筛选
+	GroupName string // 按模型组名筛选
+	Status    string // "success" | "error" | ""
+	Page      int
+	PageSize  int
 }
 
 // LogRow 明细记录行
 type LogRow struct {
-	RequestID        string   `json:"request_id"          gorm:"column:request_id"`
-	TS               string   `json:"ts"                  gorm:"column:ts"`
-	KeyID            string   `json:"key_id"              gorm:"column:key_id"`
-	KeyName          string   `json:"key_name"            gorm:"column:key_name"`
-	UserID           string   `json:"user_id"             gorm:"column:user_id"`
-	UserName         string   `json:"user_name"           gorm:"column:user_name"`
-	DeptID           string   `json:"dept_id"             gorm:"column:dept_id"`
-	DeptName         string   `json:"dept_name"           gorm:"column:dept_name"`
-	StudioName       string   `json:"studio_name"         gorm:"column:studio_name"`
-	Model            string   `json:"model"               gorm:"column:model"`
-	RoutedModel      string   `json:"routed_model"        gorm:"column:routed_model"`
-	GroupName        string   `json:"group_name"          gorm:"column:group_name"`
-	Provider         string   `json:"provider"            gorm:"column:provider"`
-	PromptTokens     int      `json:"prompt_tokens"       gorm:"column:prompt_tokens"`
-	CachedTokens     int      `json:"cached_tokens"       gorm:"column:cached_tokens"`
-	CacheWriteTokens int      `json:"cache_write_tokens"  gorm:"column:cache_write_tokens"`
-	CompletionTokens int      `json:"completion_tokens"   gorm:"column:completion_tokens"`
-	ReasoningTokens  int      `json:"reasoning_tokens"    gorm:"column:reasoning_tokens"`
-	TotalTokens      int      `json:"total_tokens"        gorm:"column:total_tokens"`
-	Status           int      `json:"status"              gorm:"column:status"`
-	UpstreamStatus   int      `json:"upstream_status"     gorm:"column:upstream_status"`
-	DurationMs       int      `json:"duration_ms"         gorm:"column:duration_ms"`
-	FirstTokenMs     *int     `json:"first_token_ms"      gorm:"column:first_token_ms"`
-	StageTTFBMs      *int     `json:"stage_ttfb_ms"       gorm:"column:stage_ttfb_ms"`
-	StageAuthMs      *int16   `json:"stage_auth_ms"       gorm:"column:stage_auth_ms"`
-	StageRouteMs     *int16   `json:"stage_route_ms"      gorm:"column:stage_route_ms"`
-	StageUpstreamMs  *int16   `json:"stage_upstream_ms"   gorm:"column:stage_upstream_ms"`
-	Stream           bool     `json:"stream"              gorm:"column:stream"`
-	FailoverUsed     bool     `json:"failover_used"       gorm:"column:failover_used"`
-	UsageMissing     bool     `json:"usage_missing"       gorm:"column:usage_missing"`
-	ReasoningEffort  string   `json:"reasoning_effort"    gorm:"column:reasoning_effort"`
-	UserAgent        string   `json:"user_agent"          gorm:"column:user_agent"`
-	IPAddress        string   `json:"ip_address"          gorm:"column:ip_address"`
-	InputCostUSD        float64  `json:"input_cost_usd"        gorm:"column:input_cost_usd"`
-	OutputCostUSD       float64  `json:"output_cost_usd"       gorm:"column:output_cost_usd"`
-	CacheReadCostUSD    float64  `json:"cache_read_cost_usd"   gorm:"column:cache_read_cost_usd"`
-	EstCostUSD          float64  `json:"est_cost_usd"          gorm:"column:est_cost_usd"`
+	RequestID           string          `json:"request_id"          gorm:"column:request_id"`
+	TS                  string          `json:"ts"                  gorm:"column:ts"`
+	KeyID               string          `json:"key_id"              gorm:"column:key_id"`
+	KeyName             string          `json:"key_name"            gorm:"column:key_name"`
+	KeyType             string          `json:"key_type"            gorm:"column:key_type"`
+	UserID              string          `json:"user_id"             gorm:"column:user_id"`
+	UserName            string          `json:"user_name"           gorm:"column:user_name"`
+	DeptID              string          `json:"dept_id"             gorm:"column:dept_id"`
+	DeptName            string          `json:"dept_name"           gorm:"column:dept_name"`
+	StudioName          string          `json:"studio_name"         gorm:"column:studio_name"`
+	Model               string          `json:"model"               gorm:"column:model"`
+	RoutedModel         string          `json:"routed_model"        gorm:"column:routed_model"`
+	GroupName           string          `json:"group_name"          gorm:"column:group_name"`
+	Provider            string          `json:"provider"            gorm:"column:provider"`
+	PromptTokens        int             `json:"prompt_tokens"       gorm:"column:prompt_tokens"`
+	CachedTokens        int             `json:"cached_tokens"       gorm:"column:cached_tokens"`
+	CacheWriteTokens    int             `json:"cache_write_tokens"  gorm:"column:cache_write_tokens"`
+	CompletionTokens    int             `json:"completion_tokens"   gorm:"column:completion_tokens"`
+	ReasoningTokens     int             `json:"reasoning_tokens"    gorm:"column:reasoning_tokens"`
+	TotalTokens         int             `json:"total_tokens"        gorm:"column:total_tokens"`
+	Status              int             `json:"status"              gorm:"column:status"`
+	UpstreamStatus      int             `json:"upstream_status"     gorm:"column:upstream_status"`
+	DurationMs          int             `json:"duration_ms"         gorm:"column:duration_ms"`
+	FirstTokenMs        *int            `json:"first_token_ms"      gorm:"column:first_token_ms"`
+	StageTTFBMs         *int            `json:"stage_ttfb_ms"       gorm:"column:stage_ttfb_ms"`
+	StageAuthMs         *int16          `json:"stage_auth_ms"       gorm:"column:stage_auth_ms"`
+	StageRouteMs        *int16          `json:"stage_route_ms"      gorm:"column:stage_route_ms"`
+	StageUpstreamMs     *int16          `json:"stage_upstream_ms"   gorm:"column:stage_upstream_ms"`
+	Stream              bool            `json:"stream"              gorm:"column:stream"`
+	FailoverUsed        bool            `json:"failover_used"       gorm:"column:failover_used"`
+	UsageMissing        bool            `json:"usage_missing"       gorm:"column:usage_missing"`
+	ReasoningEffort     string          `json:"reasoning_effort"    gorm:"column:reasoning_effort"`
+	UserAgent           string          `json:"user_agent"          gorm:"column:user_agent"`
+	IPAddress           string          `json:"ip_address"          gorm:"column:ip_address"`
+	InputCostUSD        float64         `json:"input_cost_usd"        gorm:"column:input_cost_usd"`
+	OutputCostUSD       float64         `json:"output_cost_usd"       gorm:"column:output_cost_usd"`
+	CacheReadCostUSD    float64         `json:"cache_read_cost_usd"   gorm:"column:cache_read_cost_usd"`
+	EstCostUSD          float64         `json:"est_cost_usd"          gorm:"column:est_cost_usd"`
 	InputPriceSnapshot  *float64        `json:"input_price_snapshot"  gorm:"column:input_price_snapshot"`
 	OutputPriceSnapshot *float64        `json:"output_price_snapshot" gorm:"column:output_price_snapshot"`
 	RequestBody         *datatypes.JSON `json:"request_body,omitempty"  gorm:"column:request_body"`
@@ -522,7 +548,14 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 
 	query := s.db.WithContext(ctx).
 		Table("call_logs").
-		Where("ts >= ? AND ts < ?", params.From, params.To.Add(24*time.Hour))
+		Where("ts >= ?", params.From)
+
+	// 天精度 +24h 包含整天；小时精度直接用
+	if params.To.Hour() == 0 && params.To.Minute() == 0 && params.To.Second() == 0 {
+		query = query.Where("ts < ?", params.To.Add(24*time.Hour))
+	} else {
+		query = query.Where("ts <= ?", params.To)
+	}
 
 	if params.ScopeSQL != "" {
 		query = query.Where(params.ScopeSQL)
@@ -535,6 +568,9 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 	}
 	if params.KeyName != "" {
 		query = query.Where("key_name ILIKE ?", "%"+params.KeyName+"%")
+	}
+	if params.KeyType != "" {
+		query = query.Where("COALESCE(NULLIF(key_type, ''), 'personal') = ?", params.KeyType)
 	}
 	if params.UserName != "" {
 		query = query.Where("user_name ILIKE ?", "%"+params.UserName+"%")
@@ -573,6 +609,7 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 	offset := (params.Page - 1) * params.PageSize
 	if err := query.
 		Select("request_id, ts, key_id, COALESCE(key_name, '') AS key_name, " +
+			"COALESCE(NULLIF(key_type, ''), 'personal') AS key_type, " +
 			"user_id, user_name, dept_id, dept_name, studio_name, " +
 			"model, routed_model, group_name, provider, " +
 			"prompt_tokens, cached_tokens, cache_write_tokens, completion_tokens, reasoning_tokens, total_tokens, " +
@@ -595,6 +632,7 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 
 	return &LogsResponse{Rows: rows, Total: total, Page: params.Page, PageSize: params.PageSize}, nil
 }
+
 // MyStatsRow 个人统计结果行
 type MyStatsRow struct {
 	StatDate         *string `json:"stat_date,omitempty"   gorm:"column:stat_date"`
@@ -659,10 +697,23 @@ func (s *RollupService) QueryMyStats(ctx context.Context, params MyStatsQueryPar
 		Table("call_logs").
 		Select(selectCols).
 		Where("user_id = ?", params.UserID).
-		Where("ts >= ? AND ts < ?", params.From, params.To.Add(24*time.Hour))
+		Where("ts >= ?", params.From)
+
+	// 如果 To 时间是零点（天精度），则 +24h 包含整天；否则（小时精度）直接用
+	if params.To.Hour() == 0 && params.To.Minute() == 0 && params.To.Second() == 0 {
+		query = query.Where("ts < ?", params.To.Add(24*time.Hour))
+	} else {
+		query = query.Where("ts <= ?", params.To)
+	}
 
 	if params.Model != "" {
 		query = query.Where("model = ? OR routed_model = ? OR group_name = ?", params.Model, params.Model, params.Model)
+	}
+	if params.KeyID != "" {
+		query = query.Where("key_id = ?", params.KeyID)
+	}
+	if params.GroupName != "" {
+		query = query.Where("group_name = ?", params.GroupName)
 	}
 	if params.Status == "success" {
 		query = query.Where("status = 200")
@@ -806,4 +857,149 @@ func isTableNotExistError(err error) bool {
 	return strings.Contains(msg, "does not exist") ||
 		strings.Contains(msg, "no such table") ||
 		strings.Contains(msg, "table") && strings.Contains(msg, "not found")
+}
+
+// aggregateModelDailyStats 聚合模型维度每日统计（写入 model_daily_stats 预聚合表）
+// PK: (stat_date, model, studio_id) — 同模型跨工作室分行
+func (s *RollupService) aggregateModelDailyStats(ctx context.Context, date time.Time) error {
+	db := s.db.WithContext(ctx)
+	statDate := date.Truncate(24 * time.Hour)
+
+	sql := `
+		INSERT INTO model_daily_stats (
+			stat_date, model, studio_id,
+			req_count, success_count, user_count, dept_count, active_days,
+			prompt_tokens, cached_tokens, cache_write_tokens,
+			completion_tokens, reasoning_tokens, est_cost_usd,
+			avg_duration_ms, p50_duration_ms, p90_duration_ms, avg_first_token_ms
+		)
+		SELECT
+			?::date AS stat_date,
+			cl.model,
+			COALESCE(dsm.studio_id::text, '') AS studio_id,
+			COUNT(*) AS req_count,
+			COUNT(*) FILTER (WHERE cl.status = 200) AS success_count,
+			COUNT(DISTINCT cl.user_id) AS user_count,
+			COUNT(DISTINCT cl.dept_id) AS dept_count,
+			CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END AS active_days,
+			COALESCE(SUM(cl.prompt_tokens), 0) AS prompt_tokens,
+			COALESCE(SUM(cl.cached_tokens), 0) AS cached_tokens,
+			COALESCE(SUM(cl.cache_write_tokens), 0) AS cache_write_tokens,
+			COALESCE(SUM(cl.completion_tokens), 0) AS completion_tokens,
+			COALESCE(SUM(cl.reasoning_tokens), 0) AS reasoning_tokens,
+			COALESCE(SUM(cl.est_cost_usd), 0) AS est_cost_usd,
+			COALESCE(AVG(cl.duration_ms), 0)::int AS avg_duration_ms,
+			COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY cl.duration_ms), 0)::int AS p50_duration_ms,
+			COALESCE(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY cl.duration_ms), 0)::int AS p90_duration_ms,
+			COALESCE(AVG(cl.first_token_ms), 0)::int AS avg_first_token_ms
+		FROM call_logs cl
+		LEFT JOIN departments d ON (d.dept_id = cl.dept_id OR d.id::text = cl.dept_id)
+		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = COALESCE(d.dept_id, cl.dept_id)
+		WHERE cl.ts::date = ?::date
+		  AND cl.model IS NOT NULL AND cl.model != ''
+		GROUP BY cl.model, COALESCE(dsm.studio_id::text, '')
+		ON CONFLICT (stat_date, model, studio_id) DO UPDATE SET
+			req_count = EXCLUDED.req_count,
+			success_count = EXCLUDED.success_count,
+			user_count = EXCLUDED.user_count,
+			dept_count = EXCLUDED.dept_count,
+			active_days = EXCLUDED.active_days,
+			prompt_tokens = EXCLUDED.prompt_tokens,
+			cached_tokens = EXCLUDED.cached_tokens,
+			cache_write_tokens = EXCLUDED.cache_write_tokens,
+			completion_tokens = EXCLUDED.completion_tokens,
+			reasoning_tokens = EXCLUDED.reasoning_tokens,
+			est_cost_usd = EXCLUDED.est_cost_usd,
+			avg_duration_ms = EXCLUDED.avg_duration_ms,
+			p50_duration_ms = EXCLUDED.p50_duration_ms,
+			p90_duration_ms = EXCLUDED.p90_duration_ms,
+			avg_first_token_ms = EXCLUDED.avg_first_token_ms
+	`
+
+	if err := db.Exec(sql, statDate, statDate).Error; err != nil {
+		slog.Error("model_daily_stats_aggregate_failed", "date", statDate, "error", err)
+		return err
+	}
+	slog.Info("model_daily_stats_aggregated", "date", statDate)
+	return nil
+}
+
+// aggregateUserDailyStats 聚合用户维度每日统计（写入 user_daily_stats 预聚合表）
+// PK: (stat_date, user_id) — 一个用户只属于一个部门，studio/dept 通过 JOIN 获取
+func (s *RollupService) aggregateUserDailyStats(ctx context.Context, date time.Time) error {
+	db := s.db.WithContext(ctx)
+	statDate := date.Truncate(24 * time.Hour)
+
+	sql := `
+		INSERT INTO user_daily_stats (
+			stat_date, user_id, studio_id, dept_id,
+			req_count, success_count, error_count, model_count,
+			prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens,
+			est_cost_usd, hourly_distribution
+		)
+		SELECT
+			?::date AS stat_date,
+			sub.user_id,
+			sub.studio_id,
+			sub.dept_id,
+			SUM(sub.req_count) AS req_count,
+			SUM(sub.success_count) AS success_count,
+			SUM(sub.error_count) AS error_count,
+			-- Fix: COUNT DISTINCT models across all hours without overcounting.
+			-- Unnest per-hour model arrays, deduplicate across all hours, then count.
+			cardinality(array_agg(DISTINCT unnest(sub.model_list))) AS model_count,
+			SUM(sub.prompt_tokens) AS prompt_tokens,
+			SUM(sub.cached_tokens) AS cached_tokens,
+			SUM(sub.completion_tokens) AS completion_tokens,
+			SUM(sub.reasoning_tokens) AS reasoning_tokens,
+			SUM(sub.est_cost_usd) AS est_cost_usd,
+			jsonb_object_agg(sub.hour_key, sub.hour_count) AS hourly_distribution
+		FROM (
+			SELECT
+				COALESCE(cl.user_id, 'unknown') AS user_id,
+				COALESCE(dsm.studio_id::text, '') AS studio_id,
+				COALESCE(d.dept_id, cl.dept_id, '') AS dept_id,
+				COUNT(*) AS req_count,
+				COUNT(*) FILTER (WHERE cl.status = 200) AS success_count,
+				COUNT(*) FILTER (WHERE cl.status != 200) AS error_count,
+				array_agg(DISTINCT cl.model) AS model_list,
+				COALESCE(SUM(cl.prompt_tokens), 0) AS prompt_tokens,
+				COALESCE(SUM(cl.cached_tokens), 0) AS cached_tokens,
+				COALESCE(SUM(cl.completion_tokens), 0) AS completion_tokens,
+				COALESCE(SUM(cl.reasoning_tokens), 0) AS reasoning_tokens,
+				COALESCE(SUM(cl.est_cost_usd), 0) AS est_cost_usd,
+				EXTRACT(HOUR FROM cl.ts)::text AS hour_key,
+				COUNT(*) AS hour_count
+			FROM call_logs cl
+			LEFT JOIN departments d ON (d.dept_id = cl.dept_id OR d.id::text = cl.dept_id)
+			LEFT JOIN dept_studio_map dsm ON dsm.dept_id = COALESCE(d.dept_id, cl.dept_id)
+			WHERE cl.ts::date = ?::date
+				AND (`+obsmodel.WhereExcludeServiceKeyLogsCL+`)
+			GROUP BY COALESCE(cl.user_id, 'unknown'),
+					 COALESCE(dsm.studio_id::text, ''),
+					 COALESCE(d.dept_id, cl.dept_id, ''),
+					 EXTRACT(HOUR FROM cl.ts)
+		) sub
+		GROUP BY sub.user_id, sub.studio_id, sub.dept_id
+		ON CONFLICT (stat_date, user_id) DO UPDATE SET
+			studio_id = EXCLUDED.studio_id,
+			dept_id = EXCLUDED.dept_id,
+			req_count = EXCLUDED.req_count,
+			success_count = EXCLUDED.success_count,
+			error_count = EXCLUDED.error_count,
+			model_count = EXCLUDED.model_count,
+			prompt_tokens = EXCLUDED.prompt_tokens,
+			cached_tokens = EXCLUDED.cached_tokens,
+			completion_tokens = EXCLUDED.completion_tokens,
+			reasoning_tokens = EXCLUDED.reasoning_tokens,
+			est_cost_usd = EXCLUDED.est_cost_usd,
+			hourly_distribution = EXCLUDED.hourly_distribution
+	`
+
+	if err := db.Exec(sql, statDate, statDate).Error; err != nil {
+		slog.Error("user_daily_stats_aggregate_failed", "date", statDate, "error", err)
+		return err
+	}
+	slog.Info("user_daily_stats_aggregated", "date", statDate)
+	return nil
 }

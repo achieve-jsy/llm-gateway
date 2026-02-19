@@ -97,9 +97,9 @@ onMounted(async () => {
 }
 
 .modal-item:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
-.modal-item.level--warning { border-left-color: #F57C00; }
-.modal-item.level--critical { border-left-color: #D32F2F; background: #FFF5F5; }
-.modal-item.is-expanded { background: #fff; }
+.modal-item.level--warning { border-left-color: var(--color-warning); }
+.modal-item.level--critical { border-left-color: var(--color-danger); background: var(--color-danger-bg); }
+.modal-item.is-expanded { background: var(--bg-surface); }
 
 .modal-item-header {
   display: flex;
@@ -148,8 +148,8 @@ onMounted(async () => {
 
 @media (max-width: 768px) {
   :deep(.el-dialog) {
-    width: 95% !important;
-    max-width: 95vw !important;
+    width: 95%;
+    max-width: 95vw;
   }
   .modal-item-header {
     flex-wrap: wrap;

@@ -51,7 +51,8 @@
         <template v-if="activeSource === 'announcements'">
           <div class="panel-list" v-show="activeTab === 'unread'">
             <div v-if="annUnreadItems.length === 0" class="panel-empty">
-              <el-empty description="暂无未读公告" :image-size="50" />
+              <el-icon :size="28" color="var(--text-placeholder)"><Bell /></el-icon>
+              <span class="empty-text">暂无未读公告</span>
             </div>
             <div
               v-for="item in annUnreadItems"
@@ -62,7 +63,7 @@
               <span class="item-dot" :class="`dot--${item.level}`"></span>
               <div class="item-body">
                 <div class="item-header" @click="expandedId = expandedId === item.id ? '' : item.id">
-                  <span class="item-category-icon">{{ annCategoryIcon(item.category) }}</span>
+                  <el-icon class="item-category-icon"><component :is="annCategoryIcon(item.category)" /></el-icon>
                   <span class="item-title">{{ item.title }}</span>
                   <span class="item-time">{{ relativeTime(item.published_at) }}</span>
                 </div>
@@ -83,7 +84,8 @@
           </div>
           <div class="panel-list" v-show="activeTab === 'history'">
             <div v-if="annHistoryItems.length === 0" class="panel-empty">
-              <el-empty description="暂无已读公告" :image-size="50" />
+              <el-icon :size="28" color="var(--text-placeholder)"><Bell /></el-icon>
+              <span class="empty-text">暂无已读公告</span>
             </div>
             <div
               v-for="item in annHistoryItems"
@@ -93,7 +95,7 @@
             >
               <div class="item-body">
                 <div class="item-header">
-                  <span class="item-category-icon">{{ annCategoryIcon(item.category) }}</span>
+                  <el-icon class="item-category-icon"><component :is="annCategoryIcon(item.category)" /></el-icon>
                   <span class="item-title">{{ item.title }}</span>
                   <span class="item-time">{{ relativeTime(item.published_at) }}</span>
                 </div>
@@ -114,7 +116,8 @@
         <template v-else>
           <div class="panel-list" v-show="activeTab === 'unread'">
             <div v-if="notifUnreadItems.length === 0" class="panel-empty">
-              <el-empty description="暂无未读通知" :image-size="50" />
+              <el-icon :size="28" color="var(--text-placeholder)"><Bell /></el-icon>
+              <span class="empty-text">暂无未读通知</span>
             </div>
             <div
               v-for="item in notifUnreadItems"
@@ -125,7 +128,7 @@
               <span class="item-dot" :class="`dot--${item.level}`"></span>
               <div class="item-body">
                 <div class="item-header" @click="expandedId = expandedId === item.id ? '' : item.id">
-                  <span class="item-category-icon">{{ notifTypeIcon(item.type) }}</span>
+                  <el-icon class="item-category-icon"><component :is="notifTypeIcon(item.type)" /></el-icon>
                   <span class="item-title">{{ item.title }}</span>
                   <span class="item-time">{{ relativeTime(item.created_at) }}</span>
                 </div>
@@ -145,7 +148,8 @@
           </div>
           <div class="panel-list" v-show="activeTab === 'history'">
             <div v-if="notifHistoryItems.length === 0" class="panel-empty">
-              <el-empty description="暂无已读通知" :image-size="50" />
+              <el-icon :size="28" color="var(--text-placeholder)"><Bell /></el-icon>
+              <span class="empty-text">暂无已读通知</span>
             </div>
             <div
               v-for="item in notifHistoryItems"
@@ -155,7 +159,7 @@
             >
               <div class="item-body">
                 <div class="item-header">
-                  <span class="item-category-icon">{{ notifTypeIcon(item.type) }}</span>
+                  <el-icon class="item-category-icon"><component :is="notifTypeIcon(item.type)" /></el-icon>
                   <span class="item-title">{{ item.title }}</span>
                   <span class="item-time">{{ relativeTime(item.created_at) }}</span>
                 </div>
@@ -176,7 +180,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { Bell } from '@element-plus/icons-vue'
+import { Bell, Setting, StarFilled, WarningFilled, CircleCheckFilled, CircleCloseFilled } from '@element-plus/icons-vue'
 import {
   getUnreadAnnouncements, getUnreadAnnouncementCount, getReadHistoryAnnouncements, markAnnouncementRead,
   getUnreadNotifications, getUnreadNotificationCount, getNotificationHistory, markNotificationRead, markAllNotificationsRead,
@@ -209,11 +213,12 @@ const expandedId = ref('')
 const bellRef = ref<HTMLElement>()
 
 // ── 图标 ─────────────────────────────────────────────────────────────────────
-const annCategoryIcons: Record<string, string> = { system: '🔧', feature: '✨', alert: '📣' }
-function annCategoryIcon(c: string) { return annCategoryIcons[c] || '📢' }
+import type { Component } from 'vue'
+const annCategoryIcons: Record<string, Component> = { system: Setting, feature: StarFilled, alert: Bell }
+function annCategoryIcon(c: string): Component { return annCategoryIcons[c] || Bell }
 
-const notifTypeIcons: Record<string, string> = { budget_alert: '⚠️', expansion_approved: '✅', expansion_rejected: '❌' }
-function notifTypeIcon(t: string) { return notifTypeIcons[t] || '🔔' }
+const notifTypeIcons: Record<string, Component> = { budget_alert: WarningFilled, expansion_approved: CircleCheckFilled, expansion_rejected: CircleCloseFilled }
+function notifTypeIcon(t: string): Component { return notifTypeIcons[t] || Bell }
 
 function truncate(text: string, max: number) { return text.length > max ? text.slice(0, max) + '...' : text }
 
@@ -353,9 +358,27 @@ defineExpose({ refresh })
 </script>
 
 <style>
-.el-popover .item-title { color: #1a1a1a !important; }
-.el-popover .source-tab { color: #64748b; }
-.el-popover .source-tab.active { color: #1F8A3B !important; }
+.el-popover .item-title { color: var(--text-primary); }
+.el-popover .source-tab { color: var(--text-secondary); }
+.el-popover .source-tab.active { color: var(--brand-green-deep); }
+/* panel-empty / empty-text 必须放在非 scoped 块，因为 el-popover teleport 到 body 后 scoped 属性丢失 */
+.el-popover .panel-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px 0;
+}
+.el-popover .empty-text {
+  font-size: 12px;
+  color: #c0c4cc;
+}
+/* 条目分类图标：用 el-icon 包裹后再约束尺寸，避免 teleport 后裸 svg 被撑大 */
+.el-popover .item-category-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
 </style>
 
 <style scoped>
@@ -400,22 +423,22 @@ defineExpose({ refresh })
   border-radius: 6px;
   font-size: 13px;
   font-weight: 500;
-  color: #94a3b8;
+  color: var(--text-placeholder);
   cursor: pointer;
   transition: all 0.15s;
   white-space: nowrap;
 }
 .source-tab.active {
-  background: #fff;
-  color: #1F8A3B;
+  background: var(--bg-surface);
+  color: var(--brand-green-deep);
   font-weight: 600;
   box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
-.source-tab:hover:not(.active) { color: #475569; }
+.source-tab:hover:not(.active) { color: var(--text-secondary); }
 
 .source-badge {
-  background: #36B34E;
-  color: #fff;
+  background: var(--brand-green);
+  color: var(--bg-surface);
   font-size: 10px;
   font-weight: 700;
   line-height: 1;
@@ -424,7 +447,7 @@ defineExpose({ refresh })
   min-width: 16px;
   text-align: center;
 }
-.source-badge--warn { background: #F57C00; }
+.source-badge--warn { background: var(--color-warning); }
 
 .panel-header-actions { display: flex; gap: 2px; flex-shrink: 0; }
 
@@ -441,7 +464,7 @@ defineExpose({ refresh })
   border: none;
   background: none;
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--text-placeholder);
   cursor: pointer;
   position: relative;
   transition: color 0.15s;
@@ -451,7 +474,7 @@ defineExpose({ refresh })
   gap: 4px;
 }
 .pill-btn.active {
-  color: #1F8A3B;
+  color: var(--brand-green-deep);
   font-weight: 600;
 }
 .pill-btn.active::after {
@@ -461,14 +484,14 @@ defineExpose({ refresh })
   left: 20%;
   right: 20%;
   height: 2px;
-  background: #1F8A3B;
+  background: var(--brand-green-deep);
   border-radius: 1px;
 }
-.pill-btn:hover:not(.active) { color: #475569; }
+.pill-btn:hover:not(.active) { color: var(--text-secondary); }
 
 .pill-count {
   background: rgba(54,179,78,0.15);
-  color: #1F8A3B;
+  color: var(--brand-green-deep);
   font-size: 10px;
   font-weight: 700;
   padding: 1px 5px;
@@ -505,21 +528,21 @@ defineExpose({ refresh })
   width: 7px; height: 7px; border-radius: 50%;
   flex-shrink: 0; margin-top: 5px;
 }
-.dot--info     { background: #36B34E; box-shadow: 0 0 0 2px rgba(54,179,78,0.15); }
-.dot--warning  { background: #F57C00; box-shadow: 0 0 0 2px rgba(245,124,0,0.15); }
-.dot--critical { background: #D32F2F; box-shadow: 0 0 0 2px rgba(211,47,47,0.15); }
+.dot--info     { background: var(--brand-green); box-shadow: 0 0 0 2px rgba(54,179,78,0.15); }
+.dot--warning  { background: var(--color-warning); box-shadow: 0 0 0 2px rgba(245,124,0,0.15); }
+.dot--critical { background: var(--color-danger); box-shadow: 0 0 0 2px rgba(211,47,47,0.15); }
 
 .item-body { flex: 1; min-width: 0; }
 .item-header { display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .item-category-icon { font-size: 12px; flex-shrink: 0; }
 .item-title {
-  font-size: 13px; font-weight: 600; color: #1a1a1a;
+  font-size: 13px; font-weight: 600; color: var(--text-primary);
   flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.item-time { font-size: 11px; color: #94a3b8; flex-shrink: 0; }
+.item-time { font-size: 12px; color: var(--text-placeholder); flex-shrink: 0; }
 
 .item-preview {
-  font-size: 12px; color: #64748b;
+  font-size: 12px; color: var(--text-secondary);
   margin-top: 3px; line-height: 1.5;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   cursor: pointer;
@@ -540,13 +563,13 @@ defineExpose({ refresh })
 .item-expanded-body::-webkit-scrollbar { width: 3px; }
 .item-expanded-body::-webkit-scrollbar-thumb { background: rgba(54,179,78,0.2); border-radius: 2px; }
 
-.item-full-content { font-size: 12px; color: #334155; line-height: 1.7; }
+.item-full-content { font-size: 12px; color: var(--text-regular); line-height: 1.7; }
 .item-full-content :deep(p)  { margin: 0 0 0.4em; }
-.item-full-content :deep(strong) { font-weight: 700; color: #1a1a1a; }
-.item-full-content :deep(code) { background: rgba(0,0,0,0.06); padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+.item-full-content :deep(strong) { font-weight: 700; color: var(--text-primary); }
+.item-full-content :deep(code) { background: rgba(0,0,0,0.06); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
 .item-full-content :deep(h1),
 .item-full-content :deep(h2),
-.item-full-content :deep(h3) { color: #1a1a1a; margin: 0.5em 0 0.25em; font-size: 13px; }
+.item-full-content :deep(h3) { color: var(--text-primary); margin: 0.5em 0 0.25em; font-size: 13px; }
 .item-full-content :deep(ul),
 .item-full-content :deep(ol) { padding-left: 1.2em; margin: 0.25em 0; }
 
@@ -555,5 +578,16 @@ defineExpose({ refresh })
   padding: 5px 8px; border-top: 1px solid rgba(54,179,78,0.08);
 }
 
-.panel-empty { padding: 24px 0; }
+.panel-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px 0;
+}
+.empty-text {
+  font-size: 12px;
+  color: var(--text-placeholder);
+}
 </style>

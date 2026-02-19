@@ -422,9 +422,9 @@ async function handleDevLogin() {
   overflow: hidden;
 }
 .dev-login-btn {
-  background: linear-gradient(135deg, var(--login-green-light) 0%, var(--login-green-deep) 100%) !important;
-  border-color: var(--login-green) !important;
-  color: #fff !important;
+  background: linear-gradient(135deg, var(--login-green-light) 0%, var(--login-green-deep) 100%);
+  border-color: var(--login-green);
+  color: #fff;
 }
 .dev-login-btn:hover {
   filter: brightness(1.04);

@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/example/llm-gateway/internal/gateway/authz"
 	"github.com/example/llm-gateway/internal/gateway/binding"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/gin-gonic/gin"
@@ -95,37 +96,10 @@ func (h *ModelInfoHandler) resolveGroupNames(c *gin.Context) []string {
 		return nil
 	}
 
-	if len(id.UsableGroups) > 0 {
-		if id.AccessAllGroups {
-			return id.UsableGroups
-		}
-		groups, err := h.client.GetKeyGroups(c.Request.Context(), id.KeyID)
-		if err != nil {
-			slog.Warn("model info: failed to get key groups", "key_id", id.KeyID, "error", err)
-			return nil
-		}
-		return intersectStrings(id.UsableGroups, boundGroupNames(groups))
-	}
-
-	if id.AccessAllGroups {
-		names, err := h.client.ListAllGroups(c.Request.Context())
-		if err != nil {
-			slog.Error("model info: failed to list all groups", "key_id", id.KeyID, "error", err)
-			return nil
-		}
-		return names
-	}
-
-	groups, err := h.client.GetKeyGroups(c.Request.Context(), id.KeyID)
+	names, err := authz.ResolveVisibleGroupNames(c.Request.Context(), id, h.client)
 	if err != nil {
-		slog.Warn("model info: failed to get key groups", "key_id", id.KeyID, "error", err)
+		slog.Warn("model info: failed to resolve visible groups", "key_id", id.KeyID, "error", err)
 		return nil
-	}
-	names := make([]string, 0, len(groups))
-	for _, g := range groups {
-		if g.Enabled && g.Name != "" {
-			names = append(names, g.Name)
-		}
 	}
 	return names
 }

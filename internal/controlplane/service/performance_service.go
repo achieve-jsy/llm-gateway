@@ -28,7 +28,9 @@ type PerformanceMember struct {
 	ReqCount    int     `json:"req_count"`
 	P50Ms       int     `json:"p50_ms"`
 	P95Ms       int     `json:"p95_ms"`
+	TTFTP50Ms   int     `json:"ttft_p50_ms"`
 	SuccessRate float64 `json:"success_rate"`
+	AvgTps      float64 `json:"avg_tps"`
 }
 
 // PerformanceItem 性能看板单项数据
@@ -47,6 +49,7 @@ type PerformanceItem struct {
 	PctIn24hP50   *int                `json:"pct_in_24h_p50,omitempty"`
 	Err429        int                 `json:"err_429"`
 	Err5xx        int                 `json:"err_5xx"`
+	AvgTps        float64             `json:"avg_tps"`
 	Members       []PerformanceMember `json:"members,omitempty"`
 }
 
@@ -84,6 +87,7 @@ func (s *PerformanceService) GetPerformance(window, view, search string, limit, 
 			FailoverCount: row.FailoverCount,
 			Err429:        row.Err429,
 			Err5xx:        row.Err5xx,
+			AvgTps:        row.AvgTps,
 		}
 		items = append(items, item)
 	}
@@ -154,7 +158,9 @@ func (s *PerformanceService) enrichGroupView(items []PerformanceItem, window str
 					ReqCount:    m.ReqCount,
 					P50Ms:       m.P50Ms,
 					P95Ms:       m.P95Ms,
+					TTFTP50Ms:   m.TTFTP50Ms,
 					SuccessRate: m.SuccessRate,
+					AvgTps:      m.AvgTps,
 				})
 			}
 			items[i].Members = memberList

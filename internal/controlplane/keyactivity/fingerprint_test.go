@@ -69,12 +69,12 @@ func TestUAFingerprintVersionsMerged(t *testing.T) {
 
 func TestSourceFP(t *testing.T) {
 	fp1 := SourceFP("curl/8.0", "10.0.0.1", true)
-	if !strings.Contains(fp1, "|10.0.0.1") {
-		t.Errorf("ipAsSource=true should include |ip: got %q", fp1)
+	if fp1 != "10.0.0.1" {
+		t.Errorf("SourceFP should be just IP: got %q", fp1)
 	}
 	fp2 := SourceFP("curl/8.0", "", true)
-	if strings.Contains(fp2, "|") {
-		t.Errorf("empty ip should not produce separator: got %q", fp2)
+	if len(fp2) != 16 {
+		t.Errorf("empty ip should fallback to UA fingerprint (16 hex chars): got %q (len=%d)", fp2, len(fp2))
 	}
 	fp3 := SourceFP("curl/8.0", "10.0.0.1", false)
 	if strings.Contains(fp3, "|") {

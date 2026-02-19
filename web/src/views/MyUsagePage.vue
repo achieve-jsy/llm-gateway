@@ -15,7 +15,7 @@
           <el-radio-button value="CNY">¥ CNY</el-radio-button>
         </el-radio-group>
         <el-button :loading="statsLoading" :icon="Refresh" circle size="small" title="刷新" @click="loadAll" />
-        <el-button :icon="Download" size="small" :disabled="!logRows.length" @click="handleExport">导出 ({{ logRows.length }})</el-button>
+
       </div>
     </div>
 
@@ -34,12 +34,12 @@
       <div class="mu-filter-divider" />
       <el-date-picker
         v-model="dateRange"
-        type="daterange"
+        type="datetimerange"
         range-separator="~"
-        start-placeholder="开始"
-        end-placeholder="结束"
-        value-format="YYYY-MM-DD"
-        format="MM/DD"
+        start-placeholder="开始时间"
+        end-placeholder="结束时间"
+        value-format="YYYY-MM-DD HH:mm"
+        format="MM/DD HH:mm"
         :shortcuts="dateShortcuts"
         class="mu-filter__date"
         size="small"
@@ -72,9 +72,9 @@
     </div>
 
     <!-- ═══════════════════════════════════════════
-         Section 2: 💰 花费总览
+         Section 2: 花费总览
     ═══════════════════════════════════════════ -->
-    <div class="mu-sec-label">💰 花费总览</div>
+    <div class="mu-sec-label"><el-icon class="mu-sec-icon"><Money /></el-icon> 花费总览</div>
 
     <div class="mu-stats" v-loading="statsLoading">
       <!-- 总花费 -->
@@ -151,277 +151,123 @@
     </div>
 
     <!-- ═══════════════════════════════════════════
-         ② 调用明细
+         ② 调用明细 (UsageLogSection 复合组件)
     ═══════════════════════════════════════════ -->
-    <UsageRecordTable
-      :rows="logRows"
-      :loading="logLoading"
-      :total="logTotal"
-      :page="logPage"
-      :pageSize="logPageSize"
-      :showKey="true"
-      :showGroup="true"
-      showSource="full"
-      :pageSizes="[20, 50, 100, 200]"
-      paginationLayout="total, sizes, prev, pager, next, jumper"
+    <UsageLogSection
+      ref="logSectionRef"
+      title="调用明细"
+      api-path="/api/v1/my/usage/logs"
+      trace-api-path="/api/v1/my/usage/logs"
+      :params="logParams"
       :currency="currency"
-      traceMetaMode="personal"
-      :traceEndpoint="fetchTrace"
-      :keyResolver="(row) => keyLabel(row.key_id, row.key_name || '')"
-      @update:page="(p) => { logPage = p; loadLogs() }"
-      @update:pageSize="(s) => { logPageSize = s; loadLogs() }"
+      export-prefix="my_logs"
+      :table-props="{
+        showKey: true,
+        showKeyType: true,
+        showGroup: true,
+        showSource: 'full',
+        traceMetaMode: 'personal',
+        keyResolver: (row: any) => keyLabel(row.key_id, row.key_name || ''),
+      }"
     />
 
-    <!-- ═══════════════════════════════════════════
-         ③ 习惯与深度分析（默认折叠，懒加载图表）
-    ═══════════════════════════════════════════ -->
-    <button
-      type="button"
-      class="mu-analysis-toggle"
-      :aria-expanded="analysisOpen"
-      aria-controls="mu-analysis-body"
-      @click="analysisOpen = !analysisOpen"
-    >
-      <span class="mu-analysis-toggle__title">📊 习惯与深度分析</span>
-      <span class="mu-analysis-toggle__hint">{{ analysisOpen ? '点击收起' : '模型偏好 · 时段分布 · 效率洞察' }}</span>
-      <el-icon class="mu-analysis-toggle__chev" :class="{ 'is-open': analysisOpen }" aria-hidden="true"><ArrowDown /></el-icon>
-    </button>
-
-    <div v-if="analysisOpen" id="mu-analysis-body" class="mu-analysis-body">
-
-    <!-- ═══════════════════════════════════════════
-         模型偏好
-    ═══════════════════════════════════════════ -->
-    <template v-if="modelStatsRows.length">
-      <div class="mu-sec-label">🤖 模型偏好</div>
-      <div class="mu-model-pref-grid">
-        <!-- 模型请求分布 Doughnut -->
+    <!-- ══ KEY 花费分布 ══ -->
+    <div class="mu-sec-label">KEY 花费分布</div>
+    <div v-loading="keyDistLoading">
+      <div v-if="!keyDistLoading && !keyDistRows.length" class="mu-empty-state">当前筛选条件下暂无 KEY 数据</div>
+      <div v-else class="mu-key-dist-grid">
         <div class="mu-chart-card">
           <div class="mu-chart-card__header">
-            <span class="mu-chart-card__title">请求分布</span>
+            <span class="mu-chart-card__title">花费分布</span>
             <span class="mu-chart-card__hint">点击扇形可筛选</span>
           </div>
           <div class="mu-chart-card__body mu-chart-card__body--doughnut">
-            <canvas ref="distCanvas" />
+            <canvas ref="keyDistCanvas" />
           </div>
         </div>
-
-        <!-- 模型花费排行 -->
         <div class="mu-chart-card">
           <div class="mu-chart-card__header">
             <span class="mu-chart-card__title">花费排行</span>
             <span class="mu-chart-card__hint">按总花费降序</span>
           </div>
           <div class="mu-rank-list-wrap">
-            <div v-for="(row, idx) in modelByCost" :key="row.model || idx" class="mu-rank-item">
+            <div v-for="(row, idx) in keyDistSorted" :key="row.key_id || idx" class="mu-rank-item">
               <span class="mu-rank-idx" :class="['mu-rank-idx--' + (idx < 3 ? idx+1 : 'rest')]">{{ idx+1 }}</span>
               <div class="mu-rank-info">
-                <span class="mu-rank-model" :title="row.model">{{ row.model || '未知' }}</span>
+                <span class="mu-rank-model" :title="row.key_name || row.key_id">{{ row.key_name || maskKey(row.key_id) }}</span>
                 <div class="mu-rank-bar-wrap">
                   <div class="mu-rank-bar"
-                       :style="{ width: pct(row.est_cost_usd, maxModelCost) + '%', background: rankBarColor(idx) }" />
+                       :style="{ width: pct(row.est_cost_usd, maxKeyCost) + '%', background: rankBarColor(idx) }" />
                 </div>
               </div>
               <span class="mu-rank-cost">{{ fmtPreciseCny(row.est_cost_usd) }}</span>
             </div>
-            <div v-if="!modelByCost.length" class="mu-rank-empty">暂无数据</div>
           </div>
         </div>
       </div>
+    </div>
 
-      <!-- 性价比对比 bar chart -->
-      <div v-if="costPerMRows.length" class="mu-chart-card">
+    <!-- ══ 模型分析 ══ -->
+    <div class="mu-sec-label">
+      模型分析
+      <div class="mu-dim-switch">
+        <button :class="{ 'mu-dim-switch__btn--active': modelDistDimension === 'cost' }" @click="switchModelDistDimension('cost')">金额</button>
+        <button :class="{ 'mu-dim-switch__btn--active': modelDistDimension === 'calls' }" @click="switchModelDistDimension('calls')">调用量</button>
+        <button :class="{ 'mu-dim-switch__btn--active': modelDistDimension === 'tokens' }" @click="switchModelDistDimension('tokens')">Token</button>
+      </div>
+    </div>
+    <div class="mu-model-pref-grid" v-loading="statsLoading">
+      <div class="mu-chart-card">
         <div class="mu-chart-card__header">
-          <span class="mu-chart-card__title">性价比对比</span>
-          <span class="mu-chart-card__hint">每百万 Token 花费 ({{ currency }})，越低越划算</span>
+          <span class="mu-chart-card__title">模型分布</span>
+          <span class="mu-chart-card__hint">点击扇形可筛选</span>
         </div>
-        <div class="mu-chart-card__body" :style="{ height: Math.max(180, costPerMRows.length * 36 + 30) + 'px' }">
-          <canvas ref="costPerMCanvas" />
-        </div>
-      </div>
-    </template>
-
-    <!-- ═══════════════════════════════════════════
-         Section 4: 📅 时间习惯
-    ═══════════════════════════════════════════ -->
-    <template v-if="hourStatsRows.length || dayStatsRows.length">
-      <div class="mu-sec-label">📅 时间习惯</div>
-      <div class="mu-time-grid">
-        <!-- 24 小时活跃热力图 -->
-        <div class="mu-chart-card">
-          <div class="mu-chart-card__header">
-            <span class="mu-chart-card__title">24 小时活跃分布</span>
-            <span class="mu-chart-card__hint" v-if="peakHour.count > 0">峰值 {{ peakHour.hour }}:00 · {{ fmtNum(peakHour.count) }} 次</span>
-          </div>
-          <div class="mu-heatmap-body">
-            <div class="mu-heatmap-grid">
-              <el-tooltip
-                v-for="cell in heatmapData" :key="cell.hour"
-                :content="`${cell.hour}:00–${cell.hour+1}:00  ${fmtNum(cell.count)} 次调用`"
-                placement="top"
-                :show-after="80"
-              >
-                <div class="mu-heatmap-cell"
-                     :style="{ background: `rgba(59,130,246,${Math.max(cell.opacity, cell.count > 0 ? 0.12 : 0.04)})`, outline: cell.hour === peakHour.hour && peakHour.count > 0 ? '2px solid rgba(59,130,246,0.6)' : 'none' }" />
-              </el-tooltip>
-            </div>
-            <div class="mu-heatmap-labels">
-              <span v-for="cell in heatmapData" :key="cell.hour" class="mu-heatmap-label">
-                {{ cell.hour % 6 === 0 ? cell.hour : '' }}
-              </span>
-            </div>
-            <div v-if="!hourStatsRows.length" class="mu-heatmap-empty">当前筛选条件下暂无小时级数据</div>
-          </div>
-        </div>
-
-        <!-- 工作日 vs 周末 -->
-        <div class="mu-chart-card">
-          <div class="mu-chart-card__header">
-            <span class="mu-chart-card__title">工作日 vs 周末</span>
-          </div>
-          <div class="mu-daytype-body">
-            <div class="mu-daytype-col">
-              <div class="mu-daytype-label">🗓 工作日</div>
-              <div class="mu-daytype-val">{{ fmtNum(weekdayVsWeekend.weekday.calls) }}</div>
-              <div class="mu-daytype-sub">次调用</div>
-              <div class="mu-daytype-avg">日均 {{ fmtNum(Math.round(weekdayVsWeekend.weekday.avgCalls)) }} 次</div>
-              <div class="mu-daytype-cost">{{ fmtCny(weekdayVsWeekend.weekday.cost) }}</div>
-              <div class="mu-daytype-days">{{ weekdayVsWeekend.weekday.days }} 天</div>
-            </div>
-            <div class="mu-daytype-divider" />
-            <div class="mu-daytype-col">
-              <div class="mu-daytype-label">🏖 周末</div>
-              <div class="mu-daytype-val">{{ fmtNum(weekdayVsWeekend.weekend.calls) }}</div>
-              <div class="mu-daytype-sub">次调用</div>
-              <div class="mu-daytype-avg">日均 {{ fmtNum(Math.round(weekdayVsWeekend.weekend.avgCalls)) }} 次</div>
-              <div class="mu-daytype-cost">{{ fmtCny(weekdayVsWeekend.weekend.cost) }}</div>
-              <div class="mu-daytype-days">{{ weekdayVsWeekend.weekend.days }} 天</div>
-            </div>
-          </div>
-          <div class="mu-daytype-bar-row" v-if="weekdayVsWeekend.weekday.calls + weekdayVsWeekend.weekend.calls > 0">
-            <div class="mu-daytype-bar-wd" :style="{ flex: weekdayVsWeekend.weekday.calls || 0.01 }" />
-            <div class="mu-daytype-bar-we" :style="{ flex: weekdayVsWeekend.weekend.calls || 0.01 }" />
-          </div>
+        <div class="mu-chart-card__body mu-chart-card__body--doughnut">
+          <canvas ref="distCanvas" />
         </div>
       </div>
-    </template>
-
-    <!-- ═══════════════════════════════════════════
-         Section 5: ⚡ 效率洞察
-    ═══════════════════════════════════════════ -->
-    <div class="mu-sec-label">⚡ 效率洞察</div>
-    <div class="mu-efficiency-grid" v-loading="statsLoading">
-      <!-- 平均响应时间 -->
-      <div class="mu-eff-card">
-        <div class="mu-eff-card__icon" style="color: #3b82f6;">⏱</div>
-        <div class="mu-eff-card__body">
-          <div class="mu-eff-card__label">平均响应时间</div>
-          <div class="mu-eff-card__value">{{ avgDurationMs != null ? fmtDuration(avgDurationMs) : '—' }}</div>
-          <div class="mu-eff-card__desc">端到端总耗时均值（近 200 条）</div>
+      <div class="mu-chart-card">
+        <div class="mu-chart-card__header">
+          <span class="mu-chart-card__title">模型排行</span>
+          <span class="mu-chart-card__hint">按{{ modelDistDimension === 'cost' ? '花费' : modelDistDimension === 'calls' ? '调用量' : 'Token' }}降序</span>
         </div>
-      </div>
-
-      <!-- 缓存命中率 -->
-      <div class="mu-eff-card">
-        <div class="mu-eff-card__icon" style="color: #10b981;">💾</div>
-        <div class="mu-eff-card__body">
-          <div class="mu-eff-card__label">缓存命中率</div>
-          <div class="mu-eff-card__value">{{ cacheHitPct }}<span class="mu-eff-unit">%</span></div>
-          <div class="mu-eff-cache-bar">
-            <div class="mu-eff-cache-fill" :style="{ width: cacheHitPct + '%' }" />
+        <div class="mu-rank-list-wrap">
+          <div v-for="(row, idx) in modelRankByDimension" :key="row.model || idx" class="mu-rank-item">
+            <span class="mu-rank-idx" :class="['mu-rank-idx--' + (idx < 3 ? idx+1 : 'rest')]">{{ idx+1 }}</span>
+            <div class="mu-rank-info">
+              <span class="mu-rank-model" :title="row.model">{{ row.model || '未知' }}</span>
+              <div class="mu-rank-bar-wrap">
+                <div class="mu-rank-bar"
+                     :style="{ width: pct(modelRankValue(row), maxModelRankValue) + '%', background: rankBarColor(idx) }" />
+              </div>
+            </div>
+            <span class="mu-rank-cost">{{ modelDistDimension === 'cost' ? fmtPreciseCny(row.est_cost_usd) : modelDistDimension === 'calls' ? fmtNum(row.req_count) : fmtTokens(modelRankTokenValue(row)) }}</span>
           </div>
-          <div class="mu-eff-card__desc">命中 {{ fmtTokens(statsTotal?.cached_tokens) }} / 输入 {{ fmtTokens(statsTotal?.prompt_tokens) }}</div>
-        </div>
-      </div>
-
-      <!-- 输入输出比 -->
-      <div class="mu-eff-card">
-        <div class="mu-eff-card__icon" style="color: #8b5cf6;">⇄</div>
-        <div class="mu-eff-card__body">
-          <div class="mu-eff-card__label">输入输出比</div>
-          <div class="mu-eff-card__value">{{ inputOutputRatio }}</div>
-          <div class="mu-eff-card__desc">
-            净输入 {{ fmtTokens(netInputTokens) }} → 输出 {{ fmtTokens(statsTotal?.completion_tokens) }}
-          </div>
+          <div v-if="!modelRankByDimension.length" class="mu-rank-empty">暂无数据</div>
         </div>
       </div>
     </div>
 
-    <!-- ═══════════════════════════════════════════
-         Section 6: 📋 模型明细（可折叠）
-    ═══════════════════════════════════════════ -->
-    <div class="mu-section">
-      <div class="mu-section__header mu-section-toggle" @click="modelDetailOpen = !modelDetailOpen">
-        <span class="mu-section__title">📋 模型明细</span>
-        <div class="mu-toggle-row">
-          <el-radio-group v-if="modelDetailOpen" v-model="groupBy" size="small"
-            @change="loadStats" @click.stop>
-            <el-radio-button value="day">按天</el-radio-button>
-            <el-radio-button value="model">按模型</el-radio-button>
-            <el-radio-button value="key">按 Key</el-radio-button>
-          </el-radio-group>
-          <span class="mu-toggle-btn">{{ modelDetailOpen ? '收起 ▲' : '展开 ▼' }}</span>
+    <!-- ══ 效率指标 ══ -->
+    <div class="mu-eff-bar" v-loading="statsLoading">
+      <div class="mu-eff-bar__item">
+        <span class="mu-eff-bar__label">响应时间</span>
+        <span class="mu-eff-bar__value">{{ avgDurationMs != null ? fmtDuration(avgDurationMs) : '—' }}</span>
+      </div>
+      <div class="mu-eff-bar__sep" />
+      <div class="mu-eff-bar__item">
+        <span class="mu-eff-bar__label">缓存命中</span>
+        <span class="mu-eff-bar__value">{{ cacheHitPct }}%</span>
+        <div class="mu-eff-bar__track">
+          <div class="mu-eff-bar__fill mu-eff-bar__fill--green" :style="{ width: cacheHitPct + '%' }" />
         </div>
       </div>
-      <div v-show="modelDetailOpen" class="mu-table-wrap" v-loading="statsLoading">
-        <el-table :data="statsRows" size="small" :header-cell-style="TABLE_HEADER" style="width:100%"
-          :default-sort="{ prop: 'est_cost_usd', order: 'descending' }">
-          <el-table-column v-if="groupBy==='day'" prop="stat_date" label="日期" min-width="110" sortable>
-            <template #default="{ row }">{{ fmtDate(row.stat_date) }}</template>
-          </el-table-column>
-          <el-table-column v-if="groupBy==='model'" prop="model" label="模型" min-width="160" sortable>
-            <template #default="{ row }"><span class="mu-model-name">{{ row.model || '—' }}</span></template>
-          </el-table-column>
-          <el-table-column v-if="groupBy==='key'" prop="key_name" label="Key 名称" min-width="180" sortable>
-            <template #default="{ row }">
-              <span v-if="row.key_name">{{ row.key_name }}</span>
-              <span v-else-if="row.key_id && row.key_id !== 'unknown'" class="mu-muted-text">{{ row.key_id.slice(0, 8) }}…</span>
-              <span v-else class="mu-muted-text">未知 Key</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="req_count" label="调用" min-width="80" align="right" sortable>
-            <template #default="{ row }">{{ fmtNum(row.req_count) }}</template>
-          </el-table-column>
-          <el-table-column prop="prompt_tokens" label="输入 Token" min-width="110" align="right" sortable>
-            <template #default="{ row }">
-              <div class="mu-bar-cell">
-                <span>{{ fmtTokens(row.prompt_tokens) }}</span>
-                <div class="mu-minibar"><div class="mu-minibar__fill mu-minibar__fill--blue" :style="{ width: pct(row.prompt_tokens, maxPrompt) + '%' }" /></div>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column prop="cached_tokens" label="缓存命中" min-width="100" align="right" sortable>
-            <template #default="{ row }">
-              <span class="c-cyan">{{ fmtTokens(row.cached_tokens) }}</span>
-              <span class="mu-pct" v-if="row.prompt_tokens">{{ Math.round(row.cached_tokens / row.prompt_tokens * 100) }}%</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="completion_tokens" label="输出 Token" min-width="110" align="right" sortable>
-            <template #default="{ row }">
-              <div class="mu-bar-cell">
-                <span>{{ fmtTokens(row.completion_tokens) }}</span>
-                <div class="mu-minibar"><div class="mu-minibar__fill mu-minibar__fill--green" :style="{ width: pct(row.completion_tokens, maxCompletion) + '%' }" /></div>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column prop="est_cost_usd" label="估算花费" min-width="110" align="right" sortable>
-            <template #default="{ row }">
-              <div class="mu-bar-cell">
-                <span :class="costColor(row.est_cost_usd)">{{ fmtPreciseCny(row.est_cost_usd) }}</span>
-                <div class="mu-minibar"><div class="mu-minibar__fill mu-minibar__fill--red" :style="{ width: pct(row.est_cost_usd, maxCost) + '%' }" /></div>
-              </div>
-            </template>
-          </el-table-column>
-        </el-table>
-        <div v-if="!statsLoading && !statsRows.length" class="mu-empty">
-          <el-icon size="48" color="var(--el-text-color-placeholder)"><Histogram /></el-icon>
-          <p>暂无汇总数据</p>
-        </div>
+      <div class="mu-eff-bar__sep" />
+      <div class="mu-eff-bar__item">
+        <span class="mu-eff-bar__label">输入输出比</span>
+        <span class="mu-eff-bar__value">{{ inputOutputRatio }}</span>
       </div>
     </div>
-
-    </div>
-    <!-- /③ 习惯与深度分析 -->
 
 
   </div>
@@ -430,11 +276,10 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import {
-  Refresh, Download, Histogram, Money, DataLine, Coin,
+  Refresh, Histogram, Money, DataLine, Coin,
   Close, Grid, Cpu, ArrowDown
 } from '@element-plus/icons-vue'
-import UsageRecordTable from '@/components/usage/UsageRecordTable.vue'
-import type { LogRow, TraceData } from '@/components/usage/UsageTraceDrawer.vue'
+import UsageLogSection from '@/components/usage/UsageLogSection.vue' 
 import {
   Chart, LineController, DoughnutController, BarController, CategoryScale, LinearScale,
   LineElement, PointElement, ArcElement, BarElement,
@@ -518,20 +363,42 @@ const fmtLocal = (d: Date) => {
   const day = String(d.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
 }
+const fmtLocalDateTime = (d: Date) => {
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const hour = String(d.getHours()).padStart(2, '0')
+  const minute = String(d.getMinutes()).padStart(2, '0')
+  return `${year}-${month}-${day} ${hour}:${minute}`
+}
 const parseLocalDate = (s: string) => {
-  const [y, m, d] = s.split('-').map(Number)
+  // 支持 "YYYY-MM-DD" 和 "YYYY-MM-DD HH:mm" 格式
+  const [datePart] = s.split(' ')
+  const [y, m, d] = datePart.split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
+const parseLocalDateTime = (s: string) => {
+  // 支持 "YYYY-MM-DD" 和 "YYYY-MM-DD HH:mm" 格式
+  const parts = s.split(' ')
+  const [y, m, d] = parts[0].split('-').map(Number)
+  if (parts[1]) {
+    const [h, mi] = parts[1].split(':').map(Number)
+    return new Date(y, m - 1, d, h, mi)
+  }
   return new Date(y, m - 1, d)
 }
 const initEnd = new Date()
 const initStart = new Date()
 initStart.setDate(initEnd.getDate() - 6)
-const dateRange = ref<[string, string]>([fmtLocal(initStart), fmtLocal(initEnd)])
+initStart.setHours(0, 0, 0, 0)
+initEnd.setHours(23, 59, 59, 999)
+const dateRange = ref<[string, string]>([fmtLocalDateTime(initStart), fmtLocalDateTime(initEnd)])
 const dateShortcuts = [
-  { text: '今天',     value: () => { const t = new Date(); const s = fmtLocal(t); return [s, s] as [string, string] } },
-  { text: '昨天',     value: () => { const d = new Date(); d.setDate(d.getDate() - 1); const s = fmtLocal(d); return [s, s] as [string, string] } },
-  { text: '最近 7 天', value: () => { const end = new Date(); const start = new Date(); start.setDate(end.getDate() - 6); return [fmtLocal(start), fmtLocal(end)] as [string, string] } },
-  { text: '最近 30 天', value: () => { const end = new Date(); const start = new Date(); start.setDate(end.getDate() - 29); return [fmtLocal(start), fmtLocal(end)] as [string, string] } },
-  { text: '本月',     value: () => { const end = new Date(); const start = new Date(end.getFullYear(), end.getMonth(), 1); return [fmtLocal(start), fmtLocal(end)] as [string, string] } },
+  { text: '今天',     value: () => { const t = new Date(); const s = new Date(t); s.setHours(0,0,0,0); return [fmtLocalDateTime(s), fmtLocalDateTime(t)] as [string, string] } },
+  { text: '昨天',     value: () => { const d = new Date(); d.setDate(d.getDate() - 1); d.setHours(0,0,0,0); const e = new Date(d); e.setHours(23,59,59,999); return [fmtLocalDateTime(d), fmtLocalDateTime(e)] as [string, string] } },
+  { text: '最近 7 天', value: () => { const end = new Date(); const start = new Date(); start.setDate(end.getDate() - 6); start.setHours(0,0,0,0); return [fmtLocalDateTime(start), fmtLocalDateTime(end)] as [string, string] } },
+  { text: '最近 30 天', value: () => { const end = new Date(); const start = new Date(); start.setDate(end.getDate() - 29); start.setHours(0,0,0,0); return [fmtLocalDateTime(start), fmtLocalDateTime(end)] as [string, string] } },
+  { text: '本月',     value: () => { const end = new Date(); const start = new Date(end.getFullYear(), end.getMonth(), 1); start.setHours(0,0,0,0); return [fmtLocalDateTime(start), fmtLocalDateTime(end)] as [string, string] } },
 ]
 const datePresets = [
   { label: '今天',   days: 0 },
@@ -546,7 +413,8 @@ function applyPreset(p: { label: string; days: number }) {
   const end = new Date()
   const start = new Date()
   start.setDate(end.getDate() - p.days)
-  dateRange.value = [fmtLocal(start), fmtLocal(end)]
+  start.setHours(0, 0, 0, 0)
+  dateRange.value = [fmtLocalDateTime(start), fmtLocalDateTime(end)]
   activePreset.value = p.label
   loadAll()
 }
@@ -561,8 +429,6 @@ const filterModelName = ref('')
 const filterGroupName = ref('')
 const filterStatus    = ref('')
 const groupBy = ref('day')
-const modelDetailOpen = ref(false)
-const analysisOpen = ref(false)
 
 const activeFilterCount = computed(() =>
   [filterKeyId.value, filterModelName.value, filterGroupName.value, filterStatus.value].filter(Boolean).length
@@ -590,21 +456,36 @@ const statsRows = ref<StatsRow[]>([])
 const statsTotal = ref<StatsTotal | null>(null)
 const dayStatsRows = ref<StatsRow[]>([])
 const modelStatsRows = ref<StatsRow[]>([])
-const hourStatsRows = ref<StatsRow[]>([])
 const prevPeriodTotal = ref<StatsTotal | null>(null)
 const avgDurationMs = ref<number | null>(null)
-const logLoading = ref(false)
-const logRows = ref<LogRow[]>([])
-const logTotal = ref(0)
-const logPage = ref(1)
-const logPageSize = ref(50)
+const logSectionRef = ref<InstanceType<typeof UsageLogSection> | null>(null)
+
+// ── Log 筛选参数（传给 UsageLogSection，变更时自动刷新） ──
+const logParams = computed(() => {
+  if (!dateRange.value?.[0]) return null
+  const p: Record<string, string | number> = {
+    from: dateRange.value[0], to: dateRange.value[1],
+  }
+  if (filterModelName.value) p.model_name = filterModelName.value
+  if (filterGroupName.value) p.group_name = filterGroupName.value
+  if (filterKeyId.value)     p.key_id     = filterKeyId.value
+  if (filterStatus.value)    p.status     = filterStatus.value
+  return p
+})
+
+// ── KEY 花费分布 ──
+const keyDistLoading = ref(false)
+const keyDistRows = ref<StatsRow[]>([])
 
 // ── Derived stats ──
 const rangeDays = computed(() => {
   const [from, to] = dateRange.value
   if (!from || !to) return 1
-  const diff = parseLocalDate(to).getTime() - parseLocalDate(from).getTime()
-  return Math.max(1, Math.round(diff / 86400000) + 1)
+  const fromDt = parseLocalDateTime(from)
+  const toDt = parseLocalDateTime(to)
+  const diff = toDt.getTime() - fromDt.getTime()
+  // 至少 1 天，小时精度下用小数
+  return Math.max(1, diff / 86400000)
 })
 
 const periodLabel = computed(() => {
@@ -613,15 +494,19 @@ const periodLabel = computed(() => {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
   const todayStr = fmtLocal(today)
-  if (from === to && from === todayStr) return '今日'
+  // 提取日期部分进行比较
+  const fromDate = from.split(' ')[0]
+  const toDate = to.split(' ')[0]
+  if (fromDate === toDate && fromDate === todayStr) return '今日'
   const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1)
-  if (from === to && from === fmtLocal(yesterday)) return '昨日'
+  if (fromDate === toDate && fromDate === fmtLocal(yesterday)) return '昨日'
   const monthStart = new Date(today.getFullYear(), today.getMonth(), 1)
-  if (from === fmtLocal(monthStart) && to === todayStr) return '本月'
+  if (fromDate === fmtLocal(monthStart) && toDate === todayStr) return '本月'
   const d7 = new Date(today); d7.setDate(d7.getDate() - 6)
-  if (from === fmtLocal(d7) && to === todayStr) return '近 7 天'
+  if (fromDate === fmtLocal(d7) && toDate === todayStr) return '近 7 天'
   const d30 = new Date(today); d30.setDate(d30.getDate() - 29)
-  if (from === fmtLocal(d30) && to === todayStr) return '近 30 天'
+  if (fromDate === fmtLocal(d30) && toDate === todayStr) return '近 30 天'
+  // 显示完整日期时间范围
   return `${from} ~ ${to}`
 })
 
@@ -661,43 +546,45 @@ const inputOutputRatio = computed(() => {
   return `1:${ratio.toFixed(1)}`
 })
 
-// ── Heatmap ──
-const heatmapData = computed(() => {
-  const buckets = Array(24).fill(0)
-  for (const row of hourStatsRows.value) {
-    const match = (row.stat_date || '').match(/[T ](\d{2})/)
-    if (match) {
-      const hour = parseInt(match[1])
-      if (hour >= 0 && hour < 24) buckets[hour] += row.req_count || 0
-    }
+// ── Model dimension switcher ──
+const modelDistDimension = ref<'cost' | 'calls' | 'tokens'>('cost')
+
+function switchModelDistDimension(dim: 'cost' | 'calls' | 'tokens') {
+  modelDistDimension.value = dim
+  nextTick(() => renderDist())
+}
+
+const modelRankByDimension = computed(() => {
+  const rows = [...modelStatsRows.value]
+  const dim = modelDistDimension.value
+  if (dim === 'cost') {
+    return rows.sort((a, b) => (b.est_cost_usd || 0) - (a.est_cost_usd || 0)).slice(0, 8)
+  } else if (dim === 'calls') {
+    return rows.sort((a, b) => (b.req_count || 0) - (a.req_count || 0)).slice(0, 8)
+  } else {
+    return rows.sort((a, b) => {
+      const ta = (a.prompt_tokens || 0) + (a.completion_tokens || 0)
+      const tb = (b.prompt_tokens || 0) + (b.completion_tokens || 0)
+      return tb - ta
+    }).slice(0, 8)
   }
-  const max = Math.max(...buckets, 1)
-  return buckets.map((count, hour) => ({ hour, count, opacity: count / max }))
 })
 
-const peakHour = computed(() => {
-  if (!heatmapData.value.length) return { hour: 0, count: 0 }
-  return heatmapData.value.reduce((a, b) => b.count > a.count ? b : a, { hour: 0, count: 0 })
-})
+const modelRankValue = (row: StatsRow) => {
+  const dim = modelDistDimension.value
+  if (dim === 'cost') return row.est_cost_usd || 0
+  if (dim === 'calls') return row.req_count || 0
+  return (row.prompt_tokens || 0) + (row.completion_tokens || 0)
+}
 
-// ── Weekday vs Weekend ──
-const weekdayVsWeekend = computed(() => {
-  let wdCalls = 0, weCalls = 0, wdCost = 0, weCost = 0, wdDays = 0, weDays = 0
-  for (const row of dayStatsRows.value) {
-    if (!row.stat_date) continue
-    const dateStr = row.stat_date.split('T')[0]
-    const d = parseLocalDate(dateStr)
-    const dow = d.getDay()
-    if (dow === 0 || dow === 6) {
-      weCalls += row.req_count || 0; weCost += row.est_cost_usd || 0; weDays++
-    } else {
-      wdCalls += row.req_count || 0; wdCost += row.est_cost_usd || 0; wdDays++
-    }
-  }
-  return {
-    weekday: { calls: wdCalls, cost: wdCost, days: wdDays, avgCalls: wdDays ? wdCalls / wdDays : 0 },
-    weekend: { calls: weCalls, cost: weCost, days: weDays, avgCalls: weDays ? weCalls / weDays : 0 },
-  }
+const modelRankTokenValue = (row: StatsRow) => {
+  return (row.prompt_tokens || 0) + (row.completion_tokens || 0)
+}
+
+const maxModelRankValue = computed(() => {
+  const rows = modelRankByDimension.value
+  if (!rows.length) return 0.0001
+  return Math.max(...rows.map(r => modelRankValue(r)), 0.0001)
 })
 
 // ── Model ranking ──
@@ -708,22 +595,19 @@ const modelByCost = computed(() => {
 })
 const maxModelCost = computed(() => Math.max(...modelByCost.value.map(r => r.est_cost_usd || 0), 0.0001))
 
+// ── KEY 花费分布 ──
+const keyDistSorted = computed(() => {
+  return [...keyDistRows.value]
+    .sort((a, b) => (b.est_cost_usd || 0) - (a.est_cost_usd || 0))
+    .slice(0, 8)
+})
+const maxKeyCost = computed(() => Math.max(...keyDistSorted.value.map(r => r.est_cost_usd || 0), 0.0001))
+
 function rankBarColor(idx: number) {
   return RANK_COLORS[idx] || '#3b82f6'
 }
 
 // ── Cost per M tokens ──
-const costPerMRows = computed(() => {
-  return [...modelStatsRows.value]
-    .map(r => {
-      const total = (r.prompt_tokens || 0) + (r.completion_tokens || 0)
-      return { ...r, cpm: total ? (r.est_cost_usd || 0) / total * 1e6 : 0 }
-    })
-    .filter(r => r.cpm > 0)
-    .sort((a, b) => b.cpm - a.cpm)
-    .slice(0, 8)
-})
-
 // ── Table bar helpers ──
 const maxPrompt     = computed(() => Math.max(...statsRows.value.map(r => r.prompt_tokens || 0), 1))
 const maxCompletion = computed(() => Math.max(...statsRows.value.map(r => r.completion_tokens || 0), 1))
@@ -781,13 +665,13 @@ function buildStatsParams(groupByVal: string): Record<string, string> {
 async function loadPrevPeriodStats() {
   const [from, to] = dateRange.value
   if (!from || !to) return
-  const fromD = parseLocalDate(from); const toD = parseLocalDate(to)
-  const days = Math.round((toD.getTime() - fromD.getTime()) / 86400000) + 1
-  const prevEnd = new Date(fromD); prevEnd.setDate(prevEnd.getDate() - 1)
-  const prevStart = new Date(prevEnd); prevStart.setDate(prevStart.getDate() - (days - 1))
+  const fromD = parseLocalDateTime(from); const toD = parseLocalDateTime(to)
+  const diffMs = toD.getTime() - fromD.getTime()
+  const prevEnd = new Date(fromD.getTime() - 1) // 当前期间开始的前一毫秒
+  const prevStart = new Date(prevEnd.getTime() - diffMs)
   try {
     const params = buildStatsParams('day')
-    params.from = fmtLocal(prevStart); params.to = fmtLocal(prevEnd)
+    params.from = fmtLocalDateTime(prevStart); params.to = fmtLocalDateTime(prevEnd)
     const r = await http.get('/api/v1/my/usage', { params })
     prevPeriodTotal.value = r.data.total || null
   } catch { prevPeriodTotal.value = null }
@@ -817,17 +701,15 @@ async function loadStats() {
   if (!dateRange.value?.[0]) return
   statsLoading.value = true
   try {
-    const [tableRes, dayRes, modelRes, hourRes] = await Promise.all([
+    const [tableRes, dayRes, modelRes] = await Promise.all([
       http.get('/api/v1/my/usage', { params: buildStatsParams(groupBy.value) }),
       http.get('/api/v1/my/usage', { params: buildStatsParams('day') }),
       http.get('/api/v1/my/usage', { params: buildStatsParams('model') }),
-      http.get('/api/v1/my/usage', { params: buildStatsParams('hour') }),
     ])
     statsRows.value      = tableRes.data.rows || []
     statsTotal.value     = tableRes.data.total || null
     dayStatsRows.value   = dayRes.data.rows || []
     modelStatsRows.value = modelRes.data.rows || []
-    hourStatsRows.value  = hourRes.data.rows || []
     await loadPrevPeriodStats()
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.details || e?.response?.data?.error || '用量查询失败')
@@ -837,52 +719,44 @@ async function loadStats() {
   await nextTick()
   try {
     renderCostTrend()
-    if (analysisOpen.value) {
-      renderDist()
-      renderCostPerM()
-    }
+    renderDist()
+    renderKeyDist()
   } catch (e) {
     console.error('[my-usage] chart render failed', e)
   }
 }
 
-// ── Load logs ──
-async function loadLogs() {
-  if (!dateRange.value?.[0]) return
-  logLoading.value = true
-  try {
-    const params: Record<string, string | number> = {
-      from: dateRange.value[0], to: dateRange.value[1],
-      page: logPage.value, page_size: logPageSize.value,
-    }
-    if (filterModelName.value) params.model_name = filterModelName.value
-    if (filterGroupName.value) params.group_name = filterGroupName.value
-    if (filterKeyId.value)     params.key_id     = filterKeyId.value
-    if (filterStatus.value)    params.status     = filterStatus.value
-    const r = await http.get('/api/v1/my/usage/logs', { params })
-    logRows.value  = r.data.rows || []
-    logTotal.value = r.data.total || 0
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.details || '明细查询失败')
-  } finally {
-    logLoading.value = false
-  }
+function loadAll() {
+  loadStats()
+  loadAvgDuration()
+  loadKeyDist()
+  // UsageLogSection 通过 logParams watcher 自动加载，首次需手动触发
+  nextTick(() => logSectionRef.value?.refresh())
 }
 
-function loadAll() {
-  logPage.value = 1
-  loadStats()
-  loadLogs()
-  loadAvgDuration()
+// ── Load KEY 花费分布 ──
+async function loadKeyDist() {
+  if (!dateRange.value?.[0]) return
+  keyDistLoading.value = true
+  try {
+    const r = await http.get('/api/v1/my/usage', { params: buildStatsParams('key') })
+    keyDistRows.value = r.data.rows || []
+    await nextTick()
+    renderKeyDist()
+  } catch (e: any) {
+    console.error('[my-usage] key dist load failed', e)
+  } finally {
+    keyDistLoading.value = false
+  }
 }
 
 // ── Charts ──
 const costTrendCanvas = ref<HTMLCanvasElement | null>(null)
 const distCanvas      = ref<HTMLCanvasElement | null>(null)
-const costPerMCanvas  = ref<HTMLCanvasElement | null>(null)
+const keyDistCanvas   = ref<HTMLCanvasElement | null>(null)
 let costTrendChart: Chart | null = null
 let distChart: Chart | null = null
-let costPerMChart: Chart | null = null
+let keyDistChart: Chart | null = null
 
 // Doughnut center plugin
 const doughnutCenterPlugin = {
@@ -1015,9 +889,28 @@ function renderDist() {
   distChart?.destroy()
 
   const colors = chartTheme()
-  const sorted = [...modelStatsRows.value].sort((a, b) => b.req_count - a.req_count).slice(0, 8)
+  const dim = modelDistDimension.value
+  
+  // Sort and slice based on dimension
+  let sorted: StatsRow[]
+  if (dim === 'cost') {
+    sorted = [...modelStatsRows.value].sort((a, b) => (b.est_cost_usd || 0) - (a.est_cost_usd || 0)).slice(0, 8)
+  } else if (dim === 'calls') {
+    sorted = [...modelStatsRows.value].sort((a, b) => (b.req_count || 0) - (a.req_count || 0)).slice(0, 8)
+  } else {
+    sorted = [...modelStatsRows.value].sort((a, b) => {
+      const ta = (a.prompt_tokens || 0) + (a.completion_tokens || 0)
+      const tb = (b.prompt_tokens || 0) + (b.completion_tokens || 0)
+      return tb - ta
+    }).slice(0, 8)
+  }
+  
   const labels = sorted.map(r => r.model || '未知')
-  const data = sorted.map(r => r.req_count)
+  const data = sorted.map(r => {
+    if (dim === 'cost') return toCny(r.est_cost_usd || 0)
+    if (dim === 'calls') return r.req_count || 0
+    return (r.prompt_tokens || 0) + (r.completion_tokens || 0)
+  })
   const total = data.reduce((a, b) => a + b, 0)
   const palette = CHART_PALETTE.map(c => c + 'CC')
 
@@ -1059,7 +952,9 @@ function renderDist() {
           callbacks: {
             label: ctx => {
               const v = ctx.raw as number
-              return `${ctx.label}: ${fmtNum(v)} 次 (${total ? Math.round(v / total * 100) : 0}%)`
+              const unit = dim === 'cost' ? currencySymbol(cc.value.currency) : dim === 'calls' ? ' 次' : ' tokens'
+              const formatted = dim === 'cost' ? Number(v).toFixed(2) : fmtNum(v)
+              return `${ctx.label}: ${formatted}${unit} (${total ? Math.round(v / total * 100) : 0}%)`
             },
           },
         },
@@ -1068,48 +963,59 @@ function renderDist() {
   })
 }
 
-function renderCostPerM() {
-  const canvas = costPerMCanvas.value
-  const rows = costPerMRows.value
-  if (!canvas || !rows.length) return
-  costPerMChart?.destroy()
+function renderKeyDist() {
+  const canvas = keyDistCanvas.value
+  if (!canvas || !keyDistRows.value.length) return
+  keyDistChart?.destroy()
 
   const colors = chartTheme()
+  const sorted = [...keyDistRows.value].sort((a, b) => b.est_cost_usd - a.est_cost_usd).slice(0, 8)
+  const labels = sorted.map(r => r.key_name || maskKey(r.key_id))
+  const data = sorted.map(r => toCny(r.est_cost_usd))
+  const total = data.reduce((a, b) => a + b, 0)
+  const palette = CHART_PALETTE.map(c => c + 'CC')
 
-  costPerMChart = new Chart(canvas, {
-    type: 'bar',
+  keyDistChart = new Chart(canvas, {
+    type: 'doughnut',
     data: {
-      labels: rows.map(r => r.model || '未知'),
-      datasets: [{
-        label: `每百万 Token 花费 (${currency.value})`,
-        data: rows.map(r => toCny(r.cpm)),
-        backgroundColor: CHART_PALETTE.map(c => c + 'CC'),
-        borderColor: CHART_PALETTE,
-        borderWidth: 0,
-        borderRadius: 4,
-        maxBarThickness: 24,
-      }],
+      labels,
+      datasets: [{ data, backgroundColor: palette.slice(0, data.length), borderColor: CHART_PALETTE.slice(0, data.length), borderWidth: 1 }],
     },
+    plugins: [doughnutCenterPlugin, segmentLabelPlugin],
     options: {
-      indexAxis: 'y',
       responsive: true,
       maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: { label: ctx => `${currencySymbol(cc.value.currency)}${Number(ctx.raw as number).toFixed(4)} / M tokens` },
-        },
+      cutout: '62%',
+      onClick: (_evt: any, elements: any[]) => {
+        if (!elements.length || !keyDistChart) return
+        const idx = elements[0].index
+        const keyId = sorted[idx]?.key_id
+        if (!keyId) return
+        filterKeyId.value = keyId
+        loadAll()
       },
-      scales: {
-        x: {
-          grid: { color: colors.grid },
-          border: { display: false },
-          ticks: { color: colors.textSecondary, font: { size: 10 }, callback: (v: any) => `${currencySymbol(cc.value.currency)}${Number(v).toFixed(2)}` },
+      plugins: {
+        legend: {
+          position: 'right',
+          labels: {
+            color: colors.textRegular, font: { size: 11 }, padding: 10, usePointStyle: true,
+            generateLabels(chart) {
+              const ds = chart.data.datasets[0]
+              return (chart.data.labels || []).map((label, i) => {
+                const value = (ds.data[i] as number) || 0
+                const pctV = total ? Math.round(value / total * 100) : 0
+                return { text: `${label} (${pctV}%)`, fillStyle: (ds.backgroundColor as string[])[i], strokeStyle: (ds.borderColor as string[])[i], lineWidth: 1, hidden: false, index: i, pointStyle: 'circle' }
+              })
+            },
+          },
         },
-        y: {
-          grid: { display: false },
-          border: { display: false },
-          ticks: { color: colors.textRegular, font: { size: 11 } },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const v = ctx.raw as number
+              return `${ctx.label}: ${currencySymbol(cc.value.currency)}${v.toFixed(4)} (${total ? Math.round(v / total * 100) : 0}%)`
+            },
+          },
         },
       },
     },
@@ -1118,60 +1024,20 @@ function renderCostPerM() {
 
 function rerenderCharts() {
   if (dayStatsRows.value.length) renderCostTrend()
-  if (analysisOpen.value && modelStatsRows.value.length) {
-    renderDist()
-    if (costPerMRows.value.length) renderCostPerM()
-  }
+  if (modelStatsRows.value.length) renderDist()
+  if (keyDistRows.value.length) renderKeyDist()
 }
 
 watch(isDark, () => nextTick(() => rerenderCharts()))
 watch(currency, () => nextTick(() => rerenderCharts()))
 
-// 懒加载：首次展开「习惯与深度分析」时再渲染该区图表
-watch(analysisOpen, (open) => {
-  if (!open) return
-  nextTick(() => {
-    if (modelStatsRows.value.length) renderDist()
-    if (costPerMRows.value.length) renderCostPerM()
-  })
-})
 
-// ── Trace ──
-async function fetchTrace(requestId: string): Promise<TraceData> {
-  const res = await http.get(`/api/v1/my/usage/logs/${requestId}/trace`, { _silent: true } as any)
-  return res.data
-}
-
-// ── Export ──
-const EXPORT_COLUMNS: { key: string; label: string }[] = [
-  { key: 'request_id', label: '请求ID' }, { key: 'ts', label: '时间' },
-  { key: 'model', label: '模型' }, { key: 'key_id', label: 'Key' },
-  { key: 'status', label: '状态' }, { key: 'duration_ms', label: '耗时ms' },
-  { key: 'prompt_tokens', label: '输入Token' }, { key: 'completion_tokens', label: '输出Token' },
-  { key: 'cached_tokens', label: '缓存Token' }, { key: 'est_cost_usd', label: '成本' },
-]
-function csvEscape(v: unknown): string {
-  const s = v == null ? '' : String(v)
-  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`
-  return s
-}
-function handleExport() {
-  if (!logRows.value.length) return
-  const header = EXPORT_COLUMNS.map(c => csvEscape(c.label)).join(',')
-  const body = logRows.value.map(row => EXPORT_COLUMNS.map(c => csvEscape((row as any)[c.key])).join(',')).join('\n')
-  const blob = new Blob(['\ufeff' + [header, body].join('\n')], { type: 'text/csv;charset=utf-8;' })
-  Object.assign(document.createElement('a'), {
-    href: URL.createObjectURL(blob),
-    download: `my_logs_${currency.value}_${dateRange.value[0]}_${dateRange.value[1]}.csv`,
-  }).click()
-  ElMessage.success(`已导出 ${logRows.value.length} 条记录`)
-}
 
 let themeObserver: MutationObserver | null = null
 onUnmounted(() => {
   costTrendChart?.destroy()
   distChart?.destroy()
-  costPerMChart?.destroy()
+  keyDistChart?.destroy()
   themeObserver?.disconnect()
 })
 
@@ -1225,7 +1091,7 @@ if (typeof MutationObserver !== 'undefined') {
 }
 
 /* ── 卡片通用 ── */
-.mu-filter, .mu-stat-card, .mu-chart-card, .mu-section, .mu-eff-card {
+.mu-filter, .mu-stat-card, .mu-chart-card, .mu-section {
   background: var(--mu-surface);
   border: 1px solid var(--mu-border);
   border-radius: 12px;
@@ -1266,21 +1132,47 @@ if (typeof MutationObserver !== 'undefined') {
   padding: 2px 0 0;
   margin-top: 4px;
 }
-
-/* ── ③ 习惯与深度分析 折叠区 ── */
-.mu-analysis-toggle {
-  display: flex; align-items: center; gap: 10px; width: 100%;
-  padding: 12px 16px; cursor: pointer; text-align: left;
-  background: var(--mu-surface); border: 1px solid var(--mu-border); border-radius: 12px;
-  transition: border-color .15s ease, background-color .15s ease;
+.mu-sec-icon {
+  font-size: 16px;
+  color: var(--el-color-primary);
 }
-.mu-analysis-toggle:hover { border-color: var(--el-color-primary-light-5); background: var(--el-fill-color-extra-light); }
-.mu-analysis-toggle:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; }
-.mu-analysis-toggle__title { font-size: 14px; font-weight: 700; color: var(--el-text-color-primary); flex-shrink: 0; }
-.mu-analysis-toggle__hint { font-size: 12px; color: var(--mu-muted); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mu-analysis-toggle__chev { color: var(--mu-muted); transition: transform .2s ease; flex-shrink: 0; }
-.mu-analysis-toggle__chev.is-open { transform: rotate(180deg); }
-.mu-analysis-body { display: flex; flex-direction: column; gap: 14px; }
+
+/* ── 维度切换器 ── */
+.mu-dim-switch {
+  display: inline-flex; align-items: center; gap: 2px;
+  background: var(--el-fill-color-light); border-radius: 8px; padding: 2px;
+  margin-left: 12px;
+}
+.mu-dim-switch button {
+  padding: 3px 12px; border: none; border-radius: 6px;
+  font-size: 11px; font-weight: 500; cursor: pointer;
+  color: var(--mu-muted); background: transparent;
+  transition: all .15s ease; white-space: nowrap; line-height: 1.6;
+}
+.mu-dim-switch button:hover { color: var(--el-text-color-primary); }
+.mu-dim-switch__btn--active {
+  color: #fff !important; background: var(--el-color-primary);
+  box-shadow: 0 1px 3px rgba(0,0,0,.12);
+}
+
+/* ── 空态（KEY分布） ── */
+.mu-empty-state {
+  text-align: center; padding: 32px 16px;
+  font-size: 13px; color: var(--mu-faint);
+}
+
+/* ── Dashboard grid ── */
+.mu-dashboard-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.mu-dashboard-grid > .mu-cost-trend-card {
+  grid-column: 1 / -1;
+}
+@media (max-width: 900px) {
+  .mu-dashboard-grid { grid-template-columns: 1fr; }
+}
 
 /* ── KPI 卡片 ── */
 .mu-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
@@ -1359,6 +1251,11 @@ if (typeof MutationObserver !== 'undefined') {
 }
 @media (max-width: 900px) { .mu-model-pref-grid { grid-template-columns: 1fr; } }
 
+.mu-key-dist-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+}
+@media (max-width: 900px) { .mu-key-dist-grid { grid-template-columns: 1fr; } }
+
 /* 模型排行列表 */
 .mu-rank-list-wrap { padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; min-height: 200px; }
 .mu-rank-item { display: flex; align-items: center; gap: 10px; }
@@ -1381,92 +1278,31 @@ if (typeof MutationObserver !== 'undefined') {
 .mu-rank-cost { font-size: 12px; font-weight: 600; color: var(--mu-cost); white-space: nowrap; font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .mu-rank-empty { font-size: 13px; color: var(--mu-faint); text-align: center; padding: 24px 0; }
 
-/* ── Section 4: 时间习惯 ── */
-.mu-time-grid {
-  display: grid; grid-template-columns: 3fr 2fr; gap: 12px;
-}
-@media (max-width: 900px) { .mu-time-grid { grid-template-columns: 1fr; } }
 
-/* 24h 热力图 */
-.mu-heatmap-body { padding: 16px; }
-.mu-heatmap-grid {
-  display: grid; grid-template-columns: repeat(24, 1fr); gap: 4px;
-}
-.mu-heatmap-cell {
-  aspect-ratio: 1; border-radius: 4px; cursor: default;
-  min-height: 18px; transition: transform .1s;
-}
-.mu-heatmap-cell:hover { transform: scale(1.15); }
-.mu-heatmap-labels {
-  display: grid; grid-template-columns: repeat(24, 1fr); gap: 4px;
-  margin-top: 4px;
-}
-.mu-heatmap-label {
-  font-size: 9px; color: var(--mu-faint); text-align: center; line-height: 1.4;
-}
-.mu-heatmap-empty { text-align: center; font-size: 12px; color: var(--mu-faint); padding: 24px 0 8px; }
 
-/* 工作日 vs 周末 */
-.mu-daytype-body {
-  display: flex; align-items: stretch; gap: 0;
-  padding: 20px 16px; flex: 1;
+/* ── 效率指标条 (compact) ── */
+.mu-eff-bar {
+  display: flex; align-items: center; gap: 0;
+  padding: 10px 16px;
+  background: var(--mu-surface);
+  border: 1px solid var(--mu-border); border-radius: 12px;
 }
-.mu-daytype-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
-.mu-daytype-divider { width: 1px; background: var(--mu-border); margin: 0 16px; flex-shrink: 0; }
-.mu-daytype-label { font-size: 14px; font-weight: 700; color: var(--el-text-color-primary); }
-.mu-daytype-val { font-size: 28px; font-weight: 700; color: var(--el-text-color-primary); font-variant-numeric: tabular-nums; line-height: 1.2; }
-.mu-daytype-sub { font-size: 12px; color: var(--mu-muted); }
-.mu-daytype-avg { font-size: 11px; color: var(--el-color-primary); font-weight: 600; }
-.mu-daytype-cost { font-size: 13px; font-weight: 600; color: var(--mu-cost); }
-.mu-daytype-days { font-size: 11px; color: var(--mu-faint); }
-.mu-daytype-bar-row {
-  display: flex; padding: 0 16px 14px; gap: 3px; align-items: center;
+.mu-eff-bar__item {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 4px 12px; position: relative;
 }
-.mu-daytype-bar-wd {
-  height: 8px; border-radius: 4px; background: var(--mu-input);
-  min-width: 4px; transition: flex .4s ease;
-}
-.mu-daytype-bar-we {
-  height: 8px; border-radius: 4px; background: #8b5cf6;
-  min-width: 4px; transition: flex .4s ease;
-}
-
-/* ── Section 5: 效率洞察 ── */
-.mu-efficiency-grid {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
-}
-@media (max-width: 900px) { .mu-efficiency-grid { grid-template-columns: 1fr 1fr; } }
-@media (max-width: 560px)  { .mu-efficiency-grid { grid-template-columns: 1fr; } }
-
-.mu-eff-card {
-  padding: 18px; display: flex; align-items: flex-start; gap: 14px;
-  transition: box-shadow .2s ease;
-}
-.mu-eff-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,.06); }
-.mu-eff-card__icon { font-size: 28px; flex-shrink: 0; line-height: 1; margin-top: 2px; }
-.mu-eff-card__body { flex: 1; min-width: 0; }
-.mu-eff-card__label { font-size: 12px; color: var(--mu-muted); margin-bottom: 4px; }
-.mu-eff-card__value { font-size: 26px; font-weight: 700; color: var(--el-text-color-primary); line-height: 1.2; font-variant-numeric: tabular-nums; }
-.mu-eff-unit { font-size: 16px; font-weight: 600; margin-left: 1px; }
-.mu-eff-card__desc { font-size: 11px; color: var(--mu-faint); margin-top: 4px; line-height: 1.5; }
-
-/* 缓存命中率进度条 */
-.mu-eff-cache-bar {
-  height: 5px; background: var(--el-fill-color); border-radius: 999px; overflow: hidden; margin: 6px 0 4px;
-}
-.mu-eff-cache-fill {
-  height: 100%; border-radius: 999px;
-  background: linear-gradient(90deg, #10b981, #06b6d4);
-  transition: width .5s ease;
-}
+.mu-eff-bar__label { font-size: 11px; color: var(--mu-muted); white-space: nowrap; }
+.mu-eff-bar__value { font-size: 16px; font-weight: 700; color: var(--el-text-color-primary); font-variant-numeric: tabular-nums; }
+.mu-eff-bar__sep { width: 1px; height: 32px; background: var(--mu-border); flex-shrink: 0; }
+.mu-eff-bar__track { width: 60px; height: 4px; background: var(--el-fill-color); border-radius: 999px; overflow: hidden; margin-top: 2px; }
+.mu-eff-bar__fill { height: 100%; border-radius: 999px; transition: width .4s ease; }
+.mu-eff-bar__fill--green { background: linear-gradient(90deg, #10b981, #06b6d4); }
 
 /* ── Section 6: 模型明细 (collapsible) ── */
 .mu-section { overflow: hidden; }
-.mu-section-toggle { cursor: pointer; user-select: none; }
-.mu-section-toggle:hover { background: var(--el-fill-color-extra-light); }
+
 .mu-section__header { padding: 12px 16px; border-bottom: 1px solid var(--mu-border); }
-.mu-toggle-row { display: flex; align-items: center; gap: 12px; }
-.mu-toggle-btn { font-size: 12px; color: var(--mu-muted); white-space: nowrap; }
+
 .mu-section__count { font-size: 12px; color: var(--mu-muted); }
 
 /* ── 表格 ── */
@@ -1570,9 +1406,10 @@ if (typeof MutationObserver !== 'undefined') {
   .mu-filter__clear { width: 100%; }
   .mu-filter-divider { display: none; }
   .mu-stats { grid-template-columns: repeat(2, 1fr); }
-  .mu-model-pref-grid,
-  .mu-time-grid { grid-template-columns: 1fr; }
-  .mu-efficiency-grid { grid-template-columns: 1fr; }
+  .mu-model-pref-grid { grid-template-columns: 1fr; }
+  .mu-eff-bar { flex-wrap: wrap; gap: 8px; }
+  .mu-eff-bar__sep { display: none; }
+  .mu-eff-bar__item { flex: 1 1 40%; }
   .mu-table-wrap { overflow-x: auto; }
   .mu-table-wrap :deep(.el-table) { min-width: 700px; }
   .mu-section__header { flex-direction: column; align-items: flex-start; gap: 8px; }
@@ -1591,7 +1428,7 @@ if (typeof MutationObserver !== 'undefined') {
   .mu-stats { grid-template-columns: 1fr; }
   .mu-stat-card__value { font-size: 20px; }
   .mu-preset-btn { font-size: 11px; padding: 3px 8px; }
-  .mu-heatmap-cell { min-height: 14px; }
+
 }
 
 /* ── 尊重用户的减少动态偏好 ── */
@@ -1601,7 +1438,7 @@ if (typeof MutationObserver !== 'undefined') {
     animation-duration: .01ms !important;
   }
   .mu-stat-card:hover { transform: none; }
-  .mu-heatmap-cell:hover { transform: none; }
+
 }
 </style>
 

@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/example/llm-gateway/internal/core"
+	obsmodel "github.com/example/llm-gateway/internal/observability/model"
 	"github.com/example/llm-gateway/internal/gateway/observability/model"
 	"github.com/example/llm-gateway/internal/gateway/observability/repository"
 )
@@ -55,6 +56,7 @@ func (c *Collector) NewUsageEvent(ctx *gin.Context) UsageEvent {
 		Timestamp:       now,
 		KeyID:           getString(ctx, "key_id"),
 		KeyName:         getString(ctx, "key_name"),
+		KeyType:         normalizeKeyType(getString(ctx, "key_type")),
 		UserID:          getString(ctx, "user_id"),
 		UserName:        getString(ctx, "user_name"),
 		DeptID:          getString(ctx, "dept_id"),
@@ -179,6 +181,21 @@ func getString(ctx *gin.Context, key string) string {
 		}
 	}
 	return ""
+}
+
+func normalizeKeyType(keyType string) string {
+	if keyType == obsmodel.KeyTypeService {
+		return obsmodel.KeyTypeService
+	}
+	return obsmodel.KeyTypePersonal
+}
+
+// SanitizeCallLogForWrite 写入前规范化：Service Key 调用不归因到具体用户。
+func SanitizeCallLogForWrite(cl *obsmodel.CallLog) {
+	if normalizeKeyType(cl.KeyType) == obsmodel.KeyTypeService {
+		cl.UserID = ""
+		cl.UserName = ""
+	}
 }
 
 func getInt(ctx *gin.Context, key string) int {
@@ -308,7 +325,7 @@ func (w *BatchWriter) fillMissingIdentity(ctx context.Context, batch []model.Cal
 	// 收集需要补查的 key_id（去重）：任意 org 字段为空均触发
 	needed := make(map[string]struct{})
 	for i := range batch {
-		if (batch[i].UserName == "" || batch[i].DeptID == "" || batch[i].DeptName == "" || batch[i].StudioID == "") && batch[i].KeyID != "" {
+		if (batch[i].UserName == "" || batch[i].DeptID == "" || batch[i].DeptName == "" || batch[i].StudioID == "" || batch[i].KeyType == "") && batch[i].KeyID != "" {
 			needed[batch[i].KeyID] = struct{}{}
 		}
 	}
@@ -324,6 +341,7 @@ func (w *BatchWriter) fillMissingIdentity(ctx context.Context, batch []model.Cal
 	type keyInfo struct {
 		ID         string `gorm:"column:id"`
 		KeyName    string `gorm:"column:key_name"`
+		KeyType    string `gorm:"column:key_type"`
 		UserName   string `gorm:"column:user_name"`
 		DeptID     string `gorm:"column:dept_id"`
 		DeptName   string `gorm:"column:dept_name"`
@@ -335,6 +353,7 @@ func (w *BatchWriter) fillMissingIdentity(ctx context.Context, batch []model.Cal
 	// OIDC users 找不到时再从 dev_users（本地账号）兜底取 username。
 	if err := w.db.WithContext(ctx).Raw(`
 		SELECT ak.id::text, ak.name AS key_name,
+		       COALESCE(NULLIF(ak.key_type, ''), 'personal') AS key_type,
 		       COALESCE(
 		           NULLIF(ak.user_name,''),
 		           u.name,
@@ -362,28 +381,33 @@ func (w *BatchWriter) fillMissingIdentity(ctx context.Context, batch []model.Cal
 	}
 
 	for i := range batch {
-		if batch[i].UserName == "" || batch[i].DeptID == "" || batch[i].DeptName == "" || batch[i].StudioID == "" {
-			if info, ok := infoMap[batch[i].KeyID]; ok {
-				if batch[i].UserName == "" {
-					batch[i].UserName = info.UserName
-				}
-				if batch[i].DeptID == "" {
-					batch[i].DeptID = info.DeptID
-				}
-				if batch[i].DeptName == "" {
-					batch[i].DeptName = info.DeptName
-				}
-				if batch[i].StudioID == "" {
-					batch[i].StudioID = info.StudioID
-				}
-				if batch[i].StudioName == "" {
-					batch[i].StudioName = info.StudioName
-				}
-				if batch[i].KeyName == "" {
-					batch[i].KeyName = info.KeyName
-				}
+		if info, ok := infoMap[batch[i].KeyID]; ok {
+			if batch[i].KeyType == "" {
+				batch[i].KeyType = normalizeKeyType(info.KeyType)
+			}
+			if normalizeKeyType(batch[i].KeyType) == obsmodel.KeyTypeService {
+				batch[i].UserID = ""
+				batch[i].UserName = ""
+			} else if batch[i].UserName == "" {
+				batch[i].UserName = info.UserName
+			}
+			if batch[i].DeptID == "" {
+				batch[i].DeptID = info.DeptID
+			}
+			if batch[i].DeptName == "" {
+				batch[i].DeptName = info.DeptName
+			}
+			if batch[i].StudioID == "" {
+				batch[i].StudioID = info.StudioID
+			}
+			if batch[i].StudioName == "" {
+				batch[i].StudioName = info.StudioName
+			}
+			if batch[i].KeyName == "" {
+				batch[i].KeyName = info.KeyName
 			}
 		}
+		SanitizeCallLogForWrite(&batch[i])
 	}
 }
 
@@ -393,6 +417,7 @@ func eventToCallLog(e UsageEvent) model.CallLog {
 		TS:                  e.Timestamp,
 		KeyID:               e.KeyID,
 		KeyName:             e.KeyName,
+		KeyType:             normalizeKeyType(e.KeyType),
 		UserID:              e.UserID,
 		UserName:            e.UserName,
 		DeptID:              e.DeptID,
@@ -431,5 +456,6 @@ func eventToCallLog(e UsageEvent) model.CallLog {
 		CacheReadCostUSD:    e.CacheReadCostUSD,
 		EstCostUSD:          e.EstCostUSD,
 	}
+	SanitizeCallLogForWrite(&cl)
 	return cl
 }

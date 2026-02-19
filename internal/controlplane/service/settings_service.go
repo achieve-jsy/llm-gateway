@@ -49,6 +49,14 @@ const (
 	SettingKeyKeyActivityBootstrapDays   = "key_activity.bootstrap_days"
 	SettingKeyKeyActivityBootstrapDone   = "key_activity.bootstrap_done"
 	SettingKeyKeyActivityScanCursor      = "key_activity.scan_cursor"
+
+	// 邮件通知
+	SettingKeyEmailEnabled      = "email_enabled"
+	SettingKeySMTPHost          = "smtp_host"
+	SettingKeySMTPPort          = "smtp_port"
+	SettingKeySMTPFrom          = "smtp_from"
+	SettingKeySMTPPassword      = "smtp_password"
+	SettingKeySMTPTLSSkipVerify = "smtp_tls_skip_verify"
 )
 
 const (
@@ -106,6 +114,8 @@ func allSettingKeys() []string {
 		SettingKeyKeyActivityMinBaseline, SettingKeyKeyActivityMinDev,
 		SettingKeyKeyActivityBootstrapDays,
 		SettingKeyKeyActivityBootstrapDone, SettingKeyKeyActivityScanCursor,
+		SettingKeyEmailEnabled, SettingKeySMTPHost, SettingKeySMTPPort,
+		SettingKeySMTPFrom, SettingKeySMTPPassword, SettingKeySMTPTLSSkipVerify,
 	}
 }
 
@@ -133,6 +143,12 @@ func (s *SettingsService) ensureDefaults() {
 		SettingKeyKeyActivityMinBaseline:     fmt.Sprintf("%.0f", defaultKAMinBaseline),
 		SettingKeyKeyActivityMinDev:          fmt.Sprintf("%.0f", defaultKAMinDev),
 		SettingKeyKeyActivityBootstrapDays:   fmt.Sprintf("%d", defaultKABootstrapDays),
+		SettingKeyEmailEnabled:              "false",
+		SettingKeySMTPHost:                  "mail.example.com",
+		SettingKeySMTPPort:                  "587",
+		SettingKeySMTPFrom:                  "llm-gateway@example.com",
+		SettingKeySMTPPassword:      "JHk#7wt#3v)R@W2jP)",
+		SettingKeySMTPTLSSkipVerify: "false",
 	}
 	existing, _ := s.repo.GetMultiple(allSettingKeys())
 	for k, v := range defaults {
@@ -156,25 +172,38 @@ func (s *SettingsService) GetSystemSettings(ctx context.Context) (*model.SystemS
 		MaxConcurrencyPerKey:           intOrDefault(vals, SettingKeyMaxConcurrencyPerKey, defaultMaxConcurrencyPerKey),
 		OIDCIssuerURL:                  valOrDefault(vals, SettingKeyOIDCIssuerURL, ""),
 		OIDCClientID:                   valOrDefault(vals, SettingKeyOIDCClientID, ""),
-		OIDCClientSecret:               valOrDefault(vals, SettingKeyOIDCClientSecret, ""),
+		OIDCClientSecret:               maskSecret(valOrDefault(vals, SettingKeyOIDCClientSecret, "")),
 		OIDCRedirectURL:                valOrDefault(vals, SettingKeyOIDCRedirectURL, ""),
 		OIDCScopes:                     valOrDefault(vals, SettingKeyOIDCScopes, defaultOIDCScopes),
 		OIDCEnabled:                    boolOrDefault(vals, SettingKeyOIDCEnabled, false),
 		WebhookEnabled:                 boolOrDefault(vals, SettingKeyWebhookEnabled, false),
 		WebhookURL:                     valOrDefault(vals, SettingKeyWebhookURL, ""),
-		WebhookSecret:                  valOrDefault(vals, SettingKeyWebhookSecret, ""),
+		WebhookSecret:                  maskSecret(valOrDefault(vals, SettingKeyWebhookSecret, "")),
 		WebhookEvents:                  valOrDefault(vals, SettingKeyWebhookEvents, defaultWebhookEvents),
 		DefaultMaxSwitches:             intOrDefault(vals, SettingKeyDefaultMaxSwitches, defaultMaxSwitches),
 		DefaultSameModelRetries:        intOrDefault(vals, SettingKeyDefaultSameModelRetries, defaultSameModelRetries),
 		DefaultFailoverCooldownSeconds: intOrDefault(vals, SettingKeyDefaultFailoverCooldown, defaultFailoverCooldownSeconds),
 		SupplierName:                  valOrDefault(vals, SettingKeySupplierName, defaultSupplierName),
 		PricingUsdToCnyRate:           floatOrDefault(vals, SettingKeyPricingUsdToCnyRate, defaultPricingUsdToCnyRate),
-		// v0.7 分层限速（默认 0 = 不限）
 		GlobalRPM: intOrDefault(vals, SettingKeyGlobalRPM, 0),
 		StudioRPM: intOrDefault(vals, SettingKeyStudioRPM, 0),
 		DeptRPM:   intOrDefault(vals, SettingKeyDeptRPM, 0),
 		KeyRPM:    intOrDefault(vals, SettingKeyKeyRPM, 0),
+		EmailEnabled:      boolOrDefault(vals, SettingKeyEmailEnabled, false),
+		SMTPHost:          valOrDefault(vals, SettingKeySMTPHost, ""),
+		SMTPPort:          intOrDefault(vals, SettingKeySMTPPort, 587),
+		SMTPFrom:          valOrDefault(vals, SettingKeySMTPFrom, ""),
+		SMTPPassword:      maskSecret(valOrDefault(vals, SettingKeySMTPPassword, "")),
+		SMTPTLSSkipVerify: boolOrDefault(vals, SettingKeySMTPTLSSkipVerify, false),
 	}, nil
+}
+
+// maskSecret 脱敏密码/密钥：非空时返回 "••••••" 避免在 API 响应中泄露。
+func maskSecret(s string) string {
+	if s == "" {
+		return ""
+	}
+	return "••••••"
 }
 
 func (s *SettingsService) GetPublicSettings(ctx context.Context) (*model.PublicSettings, error) {
@@ -250,7 +279,34 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, settings *model.Sy
 	updates[SettingKeyStudioRPM] = fmt.Sprintf("%d", settings.StudioRPM)
 	updates[SettingKeyDeptRPM] = fmt.Sprintf("%d", settings.DeptRPM)
 	updates[SettingKeyKeyRPM] = fmt.Sprintf("%d", settings.KeyRPM)
+	// 邮件通知
+	updates[SettingKeyEmailEnabled] = fmt.Sprintf("%t", settings.EmailEnabled)
+	if settings.SMTPHost != "" {
+		updates[SettingKeySMTPHost] = settings.SMTPHost
+	}
+	if settings.SMTPPort > 0 {
+		updates[SettingKeySMTPPort] = fmt.Sprintf("%d", settings.SMTPPort)
+	}
+	if settings.SMTPFrom != "" {
+		updates[SettingKeySMTPFrom] = settings.SMTPFrom
+	}
+	if settings.SMTPPassword != "" {
+		updates[SettingKeySMTPPassword] = settings.SMTPPassword
+	}
+	updates[SettingKeySMTPTLSSkipVerify] = fmt.Sprintf("%t", settings.SMTPTLSSkipVerify)
 	return s.repo.SetMultiple(updates)
+}
+
+// GetSMTPPassword 返回原始 SMTP 密码（未脱敏），供测试邮件等内部场景使用。
+func (s *SettingsService) GetSMTPPassword(ctx context.Context) string {
+	pwd, _ := s.repo.GetValue(SettingKeySMTPPassword)
+	return pwd
+}
+
+// GetOIDCClientSecret 返回原始 OIDC Client Secret（未脱敏），供 OAuth 认证使用。
+func (s *SettingsService) GetOIDCClientSecret(ctx context.Context) string {
+	secret, _ := s.repo.GetValue(SettingKeyOIDCClientSecret)
+	return secret
 }
 
 func (s *SettingsService) GetGatewayRateLimitPerMinute(ctx context.Context) int {

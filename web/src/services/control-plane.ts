@@ -674,6 +674,17 @@ export async function testWebhook(): Promise<void> {
   await http.post('/api/v1/settings/test-webhook')
 }
 
+export async function testEmail(payload: {
+  email: string
+  smtp_host: string
+  smtp_port: number
+  smtp_from: string
+  smtp_password: string
+  smtp_tls_skip_verify: boolean
+}): Promise<void> {
+  await http.post('/api/v1/settings/test-email', payload)
+}
+
 export async function exportSettings(): Promise<Record<string, string>> {
   const response = await http.post<{ code: number; data: Record<string, string> }>('/api/v1/settings/export')
   return response.data.data
@@ -796,7 +807,9 @@ export interface PerformanceMember {
   req_count: number
   p50_ms: number
   p95_ms: number
+  ttft_p50_ms: number
   success_rate: number
+  avg_tps: number
 }
 
 export interface PerformanceItem {
@@ -814,6 +827,7 @@ export interface PerformanceItem {
   pct_in_24h_p50?: number | null
   err_429: number
   err_5xx: number
+  avg_tps: number
   members?: PerformanceMember[]
 }
 
@@ -932,13 +946,33 @@ export async function listServiceKeys(
 }
 
 /** 创建 Service Key（返回明文 key） */
-export async function createServiceKey(deptId: string, name: string, purpose: string, ipAllowlist?: string[]): Promise<CreateServiceKeyResponse> {
-  const payload: any = { dept_id: deptId, name, purpose }
-  if (ipAllowlist && ipAllowlist.length > 0) {
-    payload.ip_allowlist = JSON.stringify(ipAllowlist)
+export async function createServiceKey(
+  deptId: string,
+  name: string,
+  purpose: string,
+  options?: { ipAllowlist?: string[]; groupIds?: number[]; accessAllGroups?: boolean }
+): Promise<CreateServiceKeyResponse> {
+  const payload: Record<string, unknown> = { dept_id: deptId, name, purpose }
+  if (options?.ipAllowlist && options.ipAllowlist.length > 0) {
+    payload.ip_allowlist = JSON.stringify(options.ipAllowlist)
+  }
+  if (options?.accessAllGroups) {
+    payload.access_all_groups = true
+  } else if (options?.groupIds && options.groupIds.length > 0) {
+    payload.group_ids = options.groupIds
   }
   const res = await http.post<CreateServiceKeyResponse>('/api/v1/service-keys', payload)
   return res.data
+}
+
+/** 更新 Service Key 模型组绑定 */
+export async function updateServiceKeyGroups(keyId: string, add: number[], remove: number[]): Promise<void> {
+  await http.post(`/api/v1/service-keys/${keyId}/groups`, { add, remove })
+}
+
+/** 切换 Service Key 全部模型组（usable_groups 全集） */
+export async function toggleServiceKeyAccessAllGroups(keyId: string, value: boolean): Promise<void> {
+  await http.post(`/api/v1/service-keys/${keyId}/access-all-groups`, { access_all_groups: value })
 }
 
 /** 启用/停用 Service Key */

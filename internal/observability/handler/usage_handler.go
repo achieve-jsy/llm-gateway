@@ -170,6 +170,7 @@ func (h *UsageHandler) Logs(c *gin.Context) {
 		To:        to,
 		KeyID:     c.Query("key_id"),
 		KeyName:   c.Query("key_name"),
+		KeyType:   c.Query("key_type"),
 		UserName:  c.Query("user_name"),
 		DeptName:  c.Query("dept_name"),
 		StudioID:  c.Query("studio_id"),
@@ -202,14 +203,16 @@ func (h *UsageHandler) MyQuery(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	params := service.MyStatsQueryParams{
-		From:     from,
-		To:       to,
-		UserID:   userID,
-		GroupBy:  c.DefaultQuery("group_by", "day"),
-		Model:    c.Query("model_name"), // 前端传 model_name，与 Query 接口对齐
-		Status:   c.Query("status"),
-		Page:     page,
-		PageSize: pageSize,
+		From:      from,
+		To:        to,
+		UserID:    userID,
+		GroupBy:   c.DefaultQuery("group_by", "day"),
+		Model:     c.Query("model_name"), // 前端传 model_name，与 Query 接口对齐
+		KeyID:     c.Query("key_id"),
+		GroupName: c.Query("group_name"),
+		Status:    c.Query("status"),
+		Page:      page,
+		PageSize:  pageSize,
 	}
 	resp, err := h.svc.QueryMyStats(c.Request.Context(), params)
 	if err != nil {
@@ -310,6 +313,7 @@ func (h *UsageHandler) MyLogs(c *gin.Context) {
 		UserID:    userID,
 		KeyID:     c.Query("key_id"),
 		KeyName:   c.Query("key_name"),
+		KeyType:   c.Query("key_type"),
 		UserName:  c.Query("user_name"),
 		ModelName: c.Query("model_name"),
 		GroupName: c.Query("group_name"),
@@ -326,20 +330,21 @@ func (h *UsageHandler) MyLogs(c *gin.Context) {
 }
 
 // parseDateRange 解析并校验日期范围参数
+// 支持两种格式：YYYY-MM-DD（天精度）和 YYYY-MM-DDTHH:MM / YYYY-MM-DD HH:MM（小时精度）
 func parseDateRange(c *gin.Context) (from, to time.Time, ok bool) {
 	fromStr := c.Query("from")
 	toStr := c.Query("to")
 	if fromStr == "" || toStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "from and to are required (YYYY-MM-DD)"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "from and to are required (YYYY-MM-DD or YYYY-MM-DDTHH:MM)"})
 		return
 	}
 	var err error
-	from, err = time.Parse("2006-01-02", fromStr)
+	from, err = parseDateTime(fromStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid from date"})
 		return
 	}
-	to, err = time.Parse("2006-01-02", toStr)
+	to, err = parseDateTime(toStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid to date"})
 		return
@@ -354,6 +359,23 @@ func parseDateRange(c *gin.Context) (from, to time.Time, ok bool) {
 	}
 	ok = true
 	return
+}
+
+// parseDateTime 尝试多种格式解析日期时间
+func parseDateTime(s string) (time.Time, error) {
+	// 尝试带时间的格式
+	for _, layout := range []string{
+		"2006-01-02T15:04",
+		"2006-01-02 15:04",
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:05",
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
+		}
+	}
+	// 回退到天精度
+	return time.Parse("2006-01-02", s)
 }
 
 // GetDashboard GET /api/v1/usage/dashboard
@@ -525,6 +547,8 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 		FROM call_logs cl
 		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = cl.dept_id
 		WHERE cl.ts::date BETWEEN ?::date AND ?::date
+			AND cl.user_id != ''
+			AND (` + obsmodel.WhereExcludeServiceKeyLogsCL + `)
 		` + whereClause
 	_ = db.Raw(userCountSQL, queryArgs...).Scan(&userCountRow).Error
 	summary.UserCount = userCountRow.Count
@@ -685,6 +709,7 @@ func (h *UsageHandler) DashboardModels(c *gin.Context) {
 			SUM(prompt_tokens + completion_tokens + reasoning_tokens) AS total_tokens,
 			SUM(est_cost_usd) AS cost`).
 		Where("ts::date BETWEEN ?::date AND ?::date", startStr, endStr).
+		Where("LENGTH(model) <= 128"). // 过滤脏数据：model 字段误填 prompt 内容的异常记录
 		Scopes(usagePol.QueryScope(actor))
 	if filterUserID != "" {
 		q = q.Where("user_id = ?", filterUserID)
@@ -734,6 +759,7 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 	filterUser   := c.Query("user_name") // 成员姓名模糊搜索
 	filterDeptID := c.Query("dept_id")   // 按部门筛选
 	filterStudioID := c.Query("studio_id") // 按工作室筛选
+	filterKeyType  := c.Query("key_type")   // personal | service
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
 	if page < 1 {
@@ -766,6 +792,9 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 	if filterStudioID != "" {
 		base = base.Where("studio_id = ?", filterStudioID)
 	}
+	if filterKeyType != "" {
+		base = base.Where("COALESCE(NULLIF(key_type, ''), 'personal') = ?", filterKeyType)
+	}
 	if modelName != "" {
 		base = base.Where("model ILIKE ?", "%"+modelName+"%")
 	}
@@ -784,7 +813,7 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 	}
 
 	cols := `request_id, ts,
-		key_id, key_name, user_id, user_name, dept_id, dept_name, studio_id, studio_name,
+		key_id, key_name, key_type, user_id, user_name, dept_id, dept_name, studio_id, studio_name,
 		model, routed_model, group_name, provider,
 		prompt_tokens, cached_tokens, cache_write_tokens,
 		completion_tokens, reasoning_tokens, total_tokens,
@@ -876,6 +905,14 @@ func parseDateRangeFromTo(c *gin.Context) (from, to time.Time, ok bool) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid to date"})
 		return
 	}
+	if from.After(to) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "from must not be after to"})
+		return
+	}
+	if to.Sub(from) > 90*24*time.Hour {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "date range must not exceed 90 days"})
+		return
+	}
 	ok = true
 	return
 }
@@ -922,6 +959,7 @@ func (h *UsageHandler) DashboardUsers(c *gin.Context) {
 			COUNT(*)                                     AS total_calls
 		FROM call_logs
 		WHERE ts >= ? AND ts < ?
+			AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
 			AND (? = '' OR studio_id = ?)
 			AND (? = '' OR dept_id = ?)
 	`, from, toExcl, studioID, studioID, deptID, deptID).Scan(&sumRow)
@@ -933,6 +971,7 @@ func (h *UsageHandler) DashboardUsers(c *gin.Context) {
 			SELECT COALESCE(user_id, 'unknown')
 			FROM call_logs
 			WHERE ts >= ? AND ts < ?
+				AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
 				AND (? = '' OR studio_id = ?)
 				AND (? = '' OR dept_id = ?)
 			GROUP BY COALESCE(user_id, 'unknown'), COALESCE(user_name, ''), COALESCE(dept_name, '')
@@ -956,6 +995,7 @@ func (h *UsageHandler) DashboardUsers(c *gin.Context) {
 			COUNT(DISTINCT model)             AS model_count
 		FROM call_logs
 		WHERE ts >= ? AND ts < ?
+			AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
 			AND (? = '' OR studio_id = ?)
 			AND (? = '' OR dept_id = ?)
 		GROUP BY COALESCE(user_id, 'unknown'), COALESCE(user_name, ''), COALESCE(dept_name, '')
@@ -1029,6 +1069,7 @@ func (h *UsageHandler) DashboardUserTopModels(c *gin.Context) {
 				) AS rn
 			FROM call_logs
 			WHERE ts >= ? AND ts < ?
+				AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
 				AND (? = '' OR studio_id = ?)
 				AND (? = '' OR dept_id = ?)
 			GROUP BY COALESCE(user_id, 'unknown'), model

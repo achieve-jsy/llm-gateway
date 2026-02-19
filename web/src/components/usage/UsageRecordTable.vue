@@ -16,10 +16,18 @@
           </template>
         </el-table-column>
 
+        <el-table-column v-if="showKeyType" prop="key_type" label="Key 类型" min-width="88" align="center" :fixed="showKey ? 'left' : false">
+          <template #default="{ row }">
+            <el-tag v-if="row.key_type === 'service'" type="warning" size="small" effect="plain">程序</el-tag>
+            <el-tag v-else-if="row.key_type === 'personal'" type="info" size="small" effect="plain">个人</el-tag>
+            <span v-else class="urt-dash">—</span>
+          </template>
+        </el-table-column>
+
         <!-- 用户 -->
         <el-table-column v-if="showUser" prop="user_name" :label="userLabel ?? '用户'" min-width="90" :fixed="showKey ? 'left' : false">
           <template #default="{ row }">
-            <span v-if="row.user_name" class="urt-name">{{ row.user_name }}</span>
+            <span v-if="row.key_type !== 'service' && row.user_name" class="urt-name">{{ row.user_name }}</span>
             <span v-else class="urt-dash">—</span>
           </template>
         </el-table-column>
@@ -267,7 +275,8 @@ import {
 import { useSettingsStore } from '@/stores/settings'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
 import { fmtDateTime, fmtDuration } from '@/utils/time'
-import UsageTraceDrawer, { type LogRow, type TraceData } from './UsageTraceDrawer.vue'
+import UsageTraceDrawer from './UsageTraceDrawer.vue'
+import type { LogRow, TraceData } from '@/types/usage-log'
 
 const props = withDefaults(defineProps<{
   rows: LogRow[]
@@ -278,6 +287,7 @@ const props = withDefaults(defineProps<{
 
   // 列可见性
   showKey?: boolean
+  showKeyType?: boolean
   showUser?: boolean
   showDept?: boolean
   showStudio?: boolean
@@ -305,6 +315,7 @@ const props = withDefaults(defineProps<{
   traceMetaMode?: 'full' | 'personal'
 }>(), {
   showKey: false,
+  showKeyType: false,
   showUser: false,
   showDept: false,
   showStudio: false,
@@ -456,16 +467,16 @@ const reasoningType = (effort?: string) => {
   box-shadow: 6px 0 12px -6px rgba(0, 0, 0, .12);
 }
 .urt-table-wrap :deep(.urt-col--wrap) {
-  white-space: normal !important; word-break: break-all !important;
-  overflow: visible !important; text-overflow: clip !important;
+  white-space: normal; word-break: break-all;
+  overflow: visible; text-overflow: clip;
 }
 
 /* ── 名称 / 占位 ── */
 .urt-name     { font-size: 12px; color: var(--el-text-color-regular); font-weight: 500; }
 .urt-dash     { color: var(--urt-faint); }
-.urt-mono     { font-family: var(--urt-mono); font-size: 11px; color: var(--urt-muted); }
+.urt-mono     { font-family: var(--urt-mono); font-size: 12px; color: var(--urt-muted); }
 .urt-mono--sm { font-size: 10px; }
-.urt-provider { font-size: 11px; color: var(--urt-muted); }
+.urt-provider { font-size: 12px; color: var(--urt-muted); }
 
 /* ── 模型格 ── */
 .urt-model-name         { font-size: 13px; font-weight: 500; color: var(--el-text-color-regular); }
@@ -477,7 +488,7 @@ const reasoningType = (effort?: string) => {
 /* ── Token 用量 ── */
 .urt-token-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .urt-token-item {
-  display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 600;
   padding: 1px 7px; border-radius: 999px;
 }
 .urt-token-item--in     { color: var(--urt-input);  background: color-mix(in srgb, var(--urt-input) 12%, transparent); }
@@ -506,11 +517,11 @@ const reasoningType = (effort?: string) => {
   cursor: help; transition: background .15s ease, color .15s ease, transform .15s ease;
 }
 .urt-info:hover { background: var(--el-color-primary-light-9); color: var(--el-color-primary); transform: scale(1.08); }
-.urt-info .el-icon { font-size: 11px; }
+.urt-info .el-icon { font-size: 12px; }
 
 /* ── 来源格 ── */
 .urt-source { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.urt-ua     { display: block; font-size: 11px; color: var(--urt-muted); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
+.urt-ua     { display: block; font-size: 12px; color: var(--urt-muted); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
 .urt-ip     { font-family: var(--urt-mono); font-size: 10px; color: var(--urt-faint); }
 
 /* ── 空态 ── */
@@ -534,14 +545,14 @@ const reasoningType = (effort?: string) => {
 <!-- Global styles: tooltip poppers teleport outside component shadow -->
 <style>
 .urt-tt-popper.el-popper {
-  background: #1f2937 !important;
+  background: var(--text-primary) !important;
   border: 1px solid #374151 !important;
   border-radius: 10px !important;
   box-shadow: 0 12px 32px rgba(0, 0, 0, .35) !important;
   padding: 10px 12px !important;
 }
 .urt-tt-popper.el-popper .el-popper__arrow::before {
-  background: #1f2937 !important;
+  background: var(--text-primary) !important;
   border: 1px solid #374151 !important;
 }
 
@@ -553,18 +564,18 @@ const reasoningType = (effort?: string) => {
 }
 .urt-tt__title {
   font-weight: 700; font-size: 12px; margin-bottom: 7px;
-  color: #e5e7eb; border-bottom: 1px solid #374151; padding-bottom: 5px; letter-spacing: .2px;
+  color: var(--text-placeholder); border-bottom: 1px solid #374151; padding-bottom: 5px; letter-spacing: .2px;
 }
 .urt-tt__row {
-  display: flex; justify-content: space-between; gap: 18px; align-items: center; color: #9ca3af;
+  display: flex; justify-content: space-between; gap: 18px; align-items: center; color: var(--text-placeholder);
 }
-.urt-tt__sub   { color: #6b7280; padding-left: 2px; }
+.urt-tt__sub   { color: var(--text-secondary); padding-left: 2px; }
 .urt-tt__group {
   margin: 6px 0 3px; font-size: 10px; font-weight: 600; letter-spacing: 0.5px;
   text-transform: uppercase; color: #38bdf8; padding-left: 6px;
   border-left: 2px solid rgba(56, 189, 248, 0.4);
 }
-.urt-tt__row b          { color: #f9fafb; font-weight: 600; }
+.urt-tt__row b          { color: var(--bg-surface); font-weight: 600; }
 .urt-tt__row b.c-cyan   { color: #38bdf8; }
 .urt-tt__row b.c-amber  { color: #fbbf24; }
 .urt-tt__row b.c-purple { color: #a78bfa; }

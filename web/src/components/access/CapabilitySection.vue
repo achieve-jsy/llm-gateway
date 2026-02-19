@@ -1,7 +1,7 @@
 <template>
   <section class="capability-section">
     <h3 class="section-title">
-      <span class="title-icon">✨</span>
+      <MagicStick class="title-icon" />
       支持能力
     </h3>
     <div class="capability-grid">
@@ -22,7 +22,7 @@
     </div>
 
     <h3 class="section-title exclude-title">
-      <span class="title-icon">🚫</span>
+      <CircleClose class="title-icon" />
       暂不支持
     </h3>
     <div class="exclude-list">
@@ -39,7 +39,7 @@
 </template>
 
 <script setup lang="ts">
-import { CircleClose } from '@element-plus/icons-vue'
+import { CircleClose, MagicStick } from '@element-plus/icons-vue'
 import config from '@/assets/capability.json'
 </script>
 

@@ -39,28 +39,17 @@
         </span>
       </div>
 
-      <!-- 概览统计 -->
-      <div v-if="!loading && sortedItems.length > 0" class="overview-bar">
-        <div class="overview-item">
-          <span class="overview-num">{{ statusCounts.total }}</span>
-          <span class="overview-label">有流量{{ view === 'group' ? '组' : '模型' }}</span>
+      <!-- L1 健康摘要 → 替换旧 overview-bar -->
+      <div v-if="!loading && sortedItems.length > 0" class="health-summary">
+        <div class="health-text">
+          <span class="health-ok">{{ statusCounts.excellent + statusCounts.good }} 正常</span>
+          <span v-if="statusCounts.fair > 0" class="health-warn">· {{ statusCounts.fair }} 波动</span>
+          <span v-if="statusCounts.poor > 0" class="health-danger">· {{ statusCounts.poor }} 异常</span>
         </div>
-        <div class="overview-item is-excellent">
-          <span class="overview-num">{{ statusCounts.excellent }}</span>
-          <span class="overview-label">稳定</span>
+        <div class="health-bar-wrap">
+          <div class="health-bar" :style="{ width: healthScore + '%' }" :class="healthBarClass"></div>
         </div>
-        <div class="overview-item is-good">
-          <span class="overview-num">{{ statusCounts.good }}</span>
-          <span class="overview-label">良好</span>
-        </div>
-        <div class="overview-item is-fair">
-          <span class="overview-num">{{ statusCounts.fair }}</span>
-          <span class="overview-label">波动</span>
-        </div>
-        <div class="overview-item is-poor">
-          <span class="overview-num">{{ statusCounts.poor }}</span>
-          <span class="overview-label">异常</span>
-        </div>
+        <span class="health-score">健康度 {{ healthScore }}</span>
       </div>
 
       <div ref="scrollBodyRef" class="card-body scroll-body">
@@ -83,153 +72,202 @@
           </div>
         </div>
 
-        <div v-else class="card-grid">
-          <div
-            v-for="item in sortedItems"
-            :key="item.name"
-            class="perf-row"
-            :class="['status-' + computeStatus(item).key, { expanded: expandedGroups.has(item.name) }]"
-          >
-            <div class="perf-row-main" @click="toggleExpand(item.name)">
-              <!-- 状态指示 -->
-              <div class="status-cell">
-                <span class="status-dot" :class="'dot-' + computeStatus(item).key"></span>
-                <span class="status-text" :class="'text-' + computeStatus(item).key">
-                  {{ computeStatus(item).label }}
-                </span>
-              </div>
-
-              <!-- 名称区 -->
-              <div class="name-cell">
-                <el-tooltip :content="item.name" :show-after="400" :disabled="item.name.length < 24">
-                  <span class="row-name">{{ item.name }}</span>
-                </el-tooltip>
-                <div class="name-tags">
-                  <el-tag v-if="view === 'group' && item.strategy"
-                    :type="strategyTagType(item.strategy)" size="small" effect="plain" class="mini-tag">
-                    {{ strategyLabel(item.strategy) }}
-                  </el-tag>
-                  <span v-if="view === 'group' && item.model_count" class="meta-text">
-                    {{ item.model_count }} 模型
-                  </span>
-                  <span v-if="view === 'model' && item.used_by_groups" class="meta-text">
-                    {{ item.used_by_groups }} 组在用
-                  </span>
-                  <span class="meta-text">{{ item.req_count }} 请求</span>
+        <!-- L2 浏览层：关注区 + 正常区 -->
+        <template v-else>
+          <!-- 关注区：poor + fair 卡片 -->
+          <div v-if="attentionItems.length > 0" class="attention-section">
+            <div class="section-label">
+              <span class="section-icon">⚠</span>
+              <span>需要关注</span>
+              <span class="section-count">{{ attentionItems.length }}</span>
+            </div>
+            <div
+              v-for="item in attentionItems"
+              :key="item.name"
+              class="attention-card"
+              :class="'card-' + computeStatus(item).key"
+              @click="toggleExpand(item.name)"
+            >
+              <div class="attn-accent"></div>
+              <div class="attn-body">
+                <div class="attn-header">
+                  <div class="attn-name-line">
+                    <el-tooltip :content="item.name" :show-after="400" :disabled="item.name.length < 24">
+                      <span class="attn-name">{{ item.name }}</span>
+                    </el-tooltip>
+                    <div class="attn-tags">
+                      <el-tag v-if="view === 'group' && item.strategy"
+                        :type="strategyTagType(item.strategy)" size="small" effect="plain" class="mini-tag">
+                        {{ strategyLabel(item.strategy) }}
+                      </el-tag>
+                      <span v-if="view === 'group' && item.model_count" class="meta-text">
+                        {{ item.model_count }} 模型
+                      </span>
+                      <span v-if="view === 'model' && item.used_by_groups" class="meta-text">
+                        {{ item.used_by_groups }} 组在用
+                      </span>
+                    </div>
+                  </div>
+                  <div class="attn-signals">
+                    <span class="signal signal-rate" :class="rateClass(item.success_rate)">{{ formatPct(item.success_rate) }}</span>
+                    <span class="signal signal-ttft" :class="ttftClass(item.ttft_p50_ms)">{{ formatMs(item.ttft_p50_ms) }}</span>
+                    <span class="attn-req">{{ item.req_count }} 请求</span>
+                  </div>
                 </div>
-              </div>
+                <div class="attn-summary">{{ generateSummary(item) }}</div>
+                <!-- 展开详情 -->
+                <transition name="slide">
+                  <div v-if="expandedGroups.has(item.name)" class="perf-detail">
+                    <div class="detail-metrics">
+                      <div class="detail-metric">
+                        <span class="dm-label">总延迟 P50 / P95</span>
+                        <span class="dm-value">{{ formatMs(item.p50_ms) }} / {{ formatMs(item.p95_ms) }}</span>
+                      </div>
+                      <div class="detail-metric">
+                        <span class="dm-label">首 Token P50 / P95</span>
+                        <span class="dm-value">{{ formatMs(item.ttft_p50_ms) }} / {{ formatMs(item.ttft_p95_ms) }}</span>
+                      </div>
+                      <div v-if="item.pct_in_24h_p50 != null" class="detail-metric">
+                        <span class="dm-label">24h 延迟水平</span>
+                        <span class="dm-value" :class="pctClass(item.pct_in_24h_p50)">
+                          P{{ item.pct_in_24h_p50 }}（{{ percentileLabel(item.pct_in_24h_p50) }}）
+                        </span>
+                      </div>
+                      <div v-if="item.failover_count > 0" class="detail-metric">
+                        <span class="dm-label">Failover 次数</span>
+                        <span class="dm-value is-warn">{{ item.failover_count }}</span>
+                      </div>
+                      <div v-if="item.err_429 > 0" class="detail-metric">
+                        <span class="dm-label">限流 (429)</span>
+                        <span class="dm-value is-warn">{{ item.err_429 }}</span>
+                      </div>
+                      <div v-if="item.err_5xx > 0" class="detail-metric">
+                        <span class="dm-label">服务端错误 (5xx)</span>
+                        <span class="dm-value is-danger">{{ item.err_5xx }}</span>
+                      </div>
+                    </div>
 
-              <!-- 成功率 -->
-              <div class="rate-cell">
-                <span class="rate-value" :class="'text-' + computeStatus(item).key">
-                  {{ formatPct(item.success_rate) }}
-                </span>
-                <span class="rate-label">成功率</span>
-              </div>
-
-              <!-- 首 Token 横向条 -->
-              <div class="ttft-cell">
-                <div class="ttft-head">
-                  <span class="ttft-label">首 Token</span>
-                  <span class="ttft-value">{{ formatMs(item.ttft_p50_ms) }}</span>
-                </div>
-                <div class="ttft-track">
-                  <div
-                    class="ttft-fill"
-                    :class="'fill-' + speedLevel(item.ttft_p50_ms)"
-                    :style="{ width: ttftBarWidth(item.ttft_p50_ms) }"
-                  ></div>
-                </div>
-              </div>
-
-              <!-- 展开箭头 -->
-              <div class="expand-cell">
-                <el-icon :size="16" class="chevron">
-                  <ArrowDown />
-                </el-icon>
+                    <div v-if="view === 'group' && item.members && item.members.length > 0" class="members-list">
+                      <div class="members-title">组内模型流量</div>
+                      <div v-for="member in item.members" :key="member.model_name + member.provider" class="member-row">
+                        <el-tag size="small" effect="plain">{{ member.model_name }}</el-tag>
+                        <div class="member-bar-track">
+                          <div class="member-bar-fill" :style="{ width: (member.traffic_pct * 100).toFixed(0) + '%' }"></div>
+                        </div>
+                        <span class="member-traffic">{{ (member.traffic_pct * 100).toFixed(0) }}%</span>
+                        <span class="member-metrics">P50 {{ formatMs(member.p50_ms) }} · 成功率 {{ formatPct(member.success_rate) }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </transition>
               </div>
             </div>
+          </div>
 
-            <!-- 详情（默认隐藏） -->
+          <!-- 正常区：excellent + good 紧凑行 -->
+          <div v-if="normalItems.length > 0" class="normal-section">
+            <div class="section-label section-normal" @click="normalCollapsed = !normalCollapsed">
+              <span>{{ normalCollapsed ? '正常' : '正常运行' }}</span>
+              <span class="section-count">{{ normalItems.length }}</span>
+              <el-icon :size="12" class="chevron" :class="{ rotated: !normalCollapsed }"><ArrowDown /></el-icon>
+            </div>
             <transition name="slide">
-              <div v-if="expandedGroups.has(item.name)" class="perf-detail">
-                <div class="detail-metrics">
-                  <div class="detail-metric">
-                    <span class="dm-label">总延迟 P50 / P95</span>
-                    <span class="dm-value">{{ formatMs(item.p50_ms) }} / {{ formatMs(item.p95_ms) }}</span>
+              <div v-if="!normalCollapsed" class="normal-list">
+                <div
+                  v-for="item in normalItems"
+                  :key="item.name"
+                >
+                  <div class="normal-row" @click="toggleExpand(item.name)">
+                    <span class="normal-dot" :class="'dot-' + computeStatus(item).key"></span>
+                    <span class="normal-name">{{ item.name }}</span>
+                    <span class="normal-rate">{{ formatPct(item.success_rate) }}</span>
+                    <span class="normal-ttft">{{ formatMs(item.ttft_p50_ms) }}</span>
+                    <span class="normal-req">{{ item.req_count }}</span>
+                    <el-icon :size="12" class="chevron" :class="{ rotated: expandedGroups.has(item.name) }"><ArrowDown /></el-icon>
                   </div>
-                  <div class="detail-metric">
-                    <span class="dm-label">首 Token P50 / P95</span>
-                    <span class="dm-value">{{ formatMs(item.ttft_p50_ms) }} / {{ formatMs(item.ttft_p95_ms) }}</span>
-                  </div>
-                  <div v-if="item.pct_in_24h_p50 != null" class="detail-metric">
-                    <span class="dm-label">24h 延迟水平</span>
-                    <span class="dm-value" :class="pctClass(item.pct_in_24h_p50)">
-                      P{{ item.pct_in_24h_p50 }}（{{ percentileLabel(item.pct_in_24h_p50) }}）
-                    </span>
-                  </div>
-                  <div v-if="item.failover_count > 0" class="detail-metric">
-                    <span class="dm-label">Failover 次数</span>
-                    <span class="dm-value is-warn">{{ item.failover_count }}</span>
-                  </div>
-                  <div v-if="item.err_429 > 0" class="detail-metric">
-                    <span class="dm-label">限流 (429)</span>
-                    <span class="dm-value is-warn">{{ item.err_429 }}</span>
-                  </div>
-                  <div v-if="item.err_5xx > 0" class="detail-metric">
-                    <span class="dm-label">服务端错误 (5xx)</span>
-                    <span class="dm-value is-danger">{{ item.err_5xx }}</span>
-                  </div>
-                </div>
+                  <!-- 正常项展开详情 (inline with each item) -->
+                  <transition name="slide">
+                    <div v-if="expandedGroups.has(item.name)" class="perf-detail">
+                      <div class="detail-metrics">
+                        <div class="detail-metric">
+                          <span class="dm-label">总延迟 P50 / P95</span>
+                          <span class="dm-value">{{ formatMs(item.p50_ms) }} / {{ formatMs(item.p95_ms) }}</span>
+                        </div>
+                        <div class="detail-metric">
+                          <span class="dm-label">首 Token P50 / P95</span>
+                          <span class="dm-value">{{ formatMs(item.ttft_p50_ms) }} / {{ formatMs(item.ttft_p95_ms) }}</span>
+                        </div>
+                        <div v-if="item.pct_in_24h_p50 != null" class="detail-metric">
+                          <span class="dm-label">24h 延迟水平</span>
+                          <span class="dm-value" :class="pctClass(item.pct_in_24h_p50)">
+                            P{{ item.pct_in_24h_p50 }}（{{ percentileLabel(item.pct_in_24h_p50) }}）
+                          </span>
+                        </div>
+                        <div v-if="item.failover_count > 0" class="detail-metric">
+                          <span class="dm-label">Failover 次数</span>
+                          <span class="dm-value is-warn">{{ item.failover_count }}</span>
+                        </div>
+                        <div v-if="item.err_429 > 0" class="detail-metric">
+                          <span class="dm-label">限流 (429)</span>
+                          <span class="dm-value is-warn">{{ item.err_429 }}</span>
+                        </div>
+                        <div v-if="item.err_5xx > 0" class="detail-metric">
+                          <span class="dm-label">服务端错误 (5xx)</span>
+                          <span class="dm-value is-danger">{{ item.err_5xx }}</span>
+                        </div>
+                      </div>
 
-                <div v-if="view === 'group' && item.members && item.members.length > 0" class="members-list">
-                  <div class="members-title">组内模型流量</div>
-                  <div v-for="member in item.members" :key="member.model_name + member.provider" class="member-row">
-                    <el-tag size="small" effect="plain">{{ member.model_name }}</el-tag>
-                    <div class="member-bar-track">
-                      <div class="member-bar-fill" :style="{ width: (member.traffic_pct * 100).toFixed(0) + '%' }"></div>
+                      <div v-if="view === 'group' && item.members && item.members.length > 0" class="members-list">
+                        <div class="members-title">组内模型流量</div>
+                        <div v-for="member in item.members" :key="member.model_name + member.provider" class="member-row">
+                          <el-tag size="small" effect="plain">{{ member.model_name }}</el-tag>
+                          <div class="member-bar-track">
+                            <div class="member-bar-fill" :style="{ width: (member.traffic_pct * 100).toFixed(0) + '%' }"></div>
+                          </div>
+                          <span class="member-traffic">{{ (member.traffic_pct * 100).toFixed(0) }}%</span>
+                          <span class="member-metrics">P50 {{ formatMs(member.p50_ms) }} · 成功率 {{ formatPct(member.success_rate) }}</span>
+                        </div>
+                      </div>
                     </div>
-                    <span class="member-traffic">{{ (member.traffic_pct * 100).toFixed(0) }}%</span>
-                    <span class="member-metrics">P50 {{ formatMs(member.p50_ms) }} · 成功率 {{ formatPct(member.success_rate) }}</span>
-                  </div>
+                  </transition>
                 </div>
               </div>
             </transition>
           </div>
-        </div>
 
-        <!-- 滚动哨兵：进入可视区触发加载更多 -->
-        <div ref="sentinelRef" class="scroll-sentinel"></div>
+          <!-- 滚动哨兵：进入可视区触发加载更多 -->
+          <div ref="sentinelRef" class="scroll-sentinel"></div>
 
-        <div v-if="loadingMore" class="state-load-more">
-          <el-icon class="is-loading" size="16"><Loading /></el-icon>
-          <span>加载更多...</span>
-        </div>
-
-        <!-- 无流量模型组 -->
-        <div v-if="view === 'group' && zeroTrafficGroups.length > 0" class="zero-traffic">
-          <div class="zero-header" @click="zeroExpanded = !zeroExpanded">
-            <el-icon :size="14" class="chevron" :class="{ rotated: zeroExpanded }"><ArrowDown /></el-icon>
-            <span>无流量模型组</span>
-            <el-tag size="small" type="info" effect="plain" round>{{ zeroTrafficGroups.length }}</el-tag>
-            <span class="zero-hint">所选 {{ windowVal }} 窗口内无请求，因此没有性能指标</span>
+          <div v-if="loadingMore" class="state-load-more">
+            <el-icon class="is-loading" size="16"><Loading /></el-icon>
+            <span>加载更多...</span>
           </div>
-          <transition name="slide">
-            <div v-if="zeroExpanded" class="zero-grid">
-              <div v-for="g in zeroTrafficGroups" :key="g.name" class="zero-chip">
-                <span class="zero-dot"></span>
-                <span class="zero-name">{{ g.name }}</span>
-              </div>
-            </div>
-          </transition>
-        </div>
 
-        <div v-if="sortedItems.length > 0" class="state-end">
-          共 {{ sortedItems.length }} 个有流量的{{ view === 'group' ? '模型组' : '模型' }}
-          <template v-if="view === 'group' && zeroTrafficGroups.length > 0">
-            ，{{ zeroTrafficGroups.length }} 个无流量
-          </template>
-        </div>
+          <!-- 无流量模型组 -->
+          <div v-if="view === 'group' && zeroTrafficGroups.length > 0" class="zero-traffic">
+            <div class="zero-header" @click="zeroExpanded = !zeroExpanded">
+              <el-icon :size="14" class="chevron" :class="{ rotated: zeroExpanded }"><ArrowDown /></el-icon>
+              <span>无流量模型组</span>
+              <el-tag size="small" type="info" effect="plain" round>{{ zeroTrafficGroups.length }}</el-tag>
+              <span class="zero-hint">所选 {{ windowVal }} 窗口内无请求，因此没有性能指标</span>
+            </div>
+            <transition name="slide">
+              <div v-if="zeroExpanded" class="zero-grid">
+                <div v-for="g in zeroTrafficGroups" :key="g.name" class="zero-chip">
+                  <span class="zero-dot"></span>
+                  <span class="zero-name">{{ g.name }}</span>
+                </div>
+              </div>
+            </transition>
+          </div>
+
+          <div v-if="sortedItems.length > 0" class="state-end">
+            共 {{ sortedItems.length }} 个有流量的{{ view === 'group' ? '模型组' : '模型' }}
+            <template v-if="view === 'group' && zeroTrafficGroups.length > 0">
+              ，{{ zeroTrafficGroups.length }} 个无流量
+            </template>
+          </div>
+        </template>
       </div>
     </div>
   </div>
@@ -302,6 +340,68 @@ const statusCounts = computed(() => {
   }
   return c
 })
+
+// ─── 新计算属性 & 辅助函数 ──────────────────────────────────────────────
+
+const attentionItems = computed(() =>
+  sortedItems.value.filter(it => computeStatus(it).key === 'poor' || computeStatus(it).key === 'fair')
+)
+
+const normalItems = computed(() =>
+  sortedItems.value.filter(it => computeStatus(it).key === 'excellent' || computeStatus(it).key === 'good')
+)
+
+const healthScore = computed(() => {
+  const items = sortedItems.value
+  if (items.length === 0) return 100
+  const c = statusCounts.value
+  const total = items.length
+  // Normalized: excellent/good = full score, fair = 2/3, poor = 0
+  // Scale so score is comparable regardless of item count.
+  const score = 100 - (c.poor * 100 + c.fair * 100 / 3) / total
+  return Math.max(0, Math.min(100, Math.round(score)))
+})
+
+const healthBarClass = computed(() => {
+  const s = healthScore.value
+  if (s >= 90) return 'bar-good'
+  if (s >= 70) return 'bar-warn'
+  return 'bar-danger'
+})
+
+const normalCollapsed = ref(true)
+
+function generateSummary(item: PerformanceItem): string {
+  const parts: string[] = []
+  if (item.err_5xx > 0) parts.push(`5xx 错误 ${item.err_5xx} 次`)
+  if (item.err_429 > 0) parts.push(`限流 ${item.err_429} 次`)
+  if (item.failover_count > 0) parts.push(`Failover ${item.failover_count} 次`)
+  const status = computeStatus(item)
+  if (status.key === 'poor') {
+    parts.push(`成功率仅 ${formatPct(item.success_rate)}`)
+  }
+  if (item.ttft_p50_ms > 3000) {
+    parts.push(`首 Token ${formatMs(item.ttft_p50_ms)} 偏慢`)
+  }
+  if (item.pct_in_24h_p50 != null && item.pct_in_24h_p50 > 85) {
+    parts.push(`延迟处于 24h 高位 (P${item.pct_in_24h_p50})`)
+  }
+  return parts.length > 0 ? parts.join('，') : '指标轻微波动，持续观察中'
+}
+
+function rateClass(rate: number): string {
+  if (rate >= 0.99) return 'rate-good'
+  if (rate >= 0.95) return 'rate-warn'
+  return 'rate-danger'
+}
+
+function ttftClass(ttft: number): string {
+  if (ttft <= 1200) return 'ttft-good'
+  if (ttft <= 3000) return 'ttft-warn'
+  return 'ttft-danger'
+}
+
+// ─── 原排序 & 辅助（保持不变） ────────────────────────────────────────────
 
 const statusRank: Record<StatusInfo['key'], number> = { excellent: 0, good: 1, fair: 2, poor: 3 }
 
@@ -576,7 +676,7 @@ function pctClass(pct: number | null | undefined): string {
 
 <style scoped>
 /* ═══════════════════════════════════════════════════════
-   PerformancePage — Polished UI (7-item optimization)
+   PerformancePage — 3-Layer Design (health-summary + attention-cards + normal-list)
    Design tokens from variables.scss + local overrides
    ═══════════════════════════════════════════════════════ */
 
@@ -597,13 +697,16 @@ function pctClass(pct: number | null | undefined): string {
   width: 100%;
 }
 
-/* ── Outer card ── */
+/* ── Outer card — 确保卡片填满视口，避免底部大片留白 ── */
 .monitor-card-outer {
   border: 1px solid var(--border-default, #E2E8F0);
   border-radius: var(--radius-lg, 12px);
   background: var(--bg-surface, #fff);
   overflow: hidden;
   box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 220px);
 }
 
 /* ── Header ── */
@@ -639,10 +742,10 @@ function pctClass(pct: number | null | undefined): string {
 }
 
 .time-range-wrap :deep(.el-radio-button__inner) {
-  border: none !important;
-  border-radius: 6px !important;
-  background: transparent !important;
-  box-shadow: none !important;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
   padding: 4px 14px;
   font-size: 12px;
   font-weight: 500;
@@ -651,14 +754,14 @@ function pctClass(pct: number | null | undefined): string {
 }
 
 .time-range-wrap :deep(.el-radio-button__original-radio:focus-visible + .el-radio-button__inner) {
-  box-shadow: 0 0 0 2px var(--color-info, #2563EB) !important;
+  box-shadow: 0 0 0 2px var(--color-info, #2563EB);
 }
 
 .time-range-wrap :deep(.el-radio-button.is-active .el-radio-button__inner) {
-  background: var(--bg-surface, #fff) !important;
-  color: var(--text-primary, #0F172A) !important;
+  background: var(--bg-surface, #fff);
+  color: var(--text-primary, #0F172A);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1) !important;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 
 .search-input { width: 150px; }
@@ -698,78 +801,72 @@ function pctClass(pct: number | null | undefined): string {
   font-family: Georgia, 'Times New Roman', serif;
 }
 
-/* ── [4] Overview bar — no dividers, colored accent bottom ── */
-.overview-bar {
+/* ── L1 健康摘要 strip ── */
+.health-summary {
   display: flex;
-  align-items: stretch;
-  gap: 4px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border-light, #F1F5F9);
-  flex-wrap: wrap;
-}
-
-.overview-item {
-  display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  min-width: 72px;
-  padding: 8px 16px 10px;
-  border-radius: 8px;
-  position: relative;
-  transition: background 0.15s;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--bg-subtle, #F8FAFC);
+  border-bottom: 1px solid var(--border-light, #F1F5F9);
+  font-size: 12px;
 }
 
-.overview-item::after {
-  content: '';
-  position: absolute;
-  bottom: 2px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 24px;
-  height: 3px;
-  border-radius: 2px;
+.health-text {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.health-ok {
+  color: var(--perf-excellent);
+  font-weight: 600;
+}
+
+.health-warn {
+  color: var(--perf-fair);
+  font-weight: 600;
+}
+
+.health-danger {
+  color: var(--perf-poor);
+  font-weight: 600;
+}
+
+.health-bar-wrap {
+  flex: 1;
+  height: 4px;
   background: var(--border-default, #E2E8F0);
-  opacity: 0.5;
+  border-radius: 2px;
+  overflow: hidden;
+  min-width: 60px;
+  max-width: 200px;
 }
 
-.overview-num {
-  font-size: 24px;
+.health-bar {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1), background 0.3s;
+}
+
+.health-bar.bar-good { background: var(--perf-excellent); }
+.health-bar.bar-warn { background: var(--perf-fair); }
+.health-bar.bar-danger { background: var(--perf-poor); }
+
+.health-score {
+  font-size: 12px;
   font-weight: 700;
-  line-height: 1.1;
   color: var(--text-primary, #0F172A);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.overview-label {
-  font-size: 11px;
-  color: var(--text-secondary, #64748B);
-  margin-top: 3px;
-  font-weight: 500;
-}
-
-.overview-item.is-excellent .overview-num { color: var(--perf-excellent); }
-.overview-item.is-excellent::after { background: var(--perf-excellent); opacity: 0.7; }
-.overview-item.is-excellent { background: var(--perf-excellent-bg); }
-
-.overview-item.is-good .overview-num { color: var(--perf-good); }
-.overview-item.is-good::after { background: var(--perf-good); opacity: 0.7; }
-.overview-item.is-good { background: var(--perf-good-bg); }
-
-.overview-item.is-fair .overview-num { color: var(--perf-fair); }
-.overview-item.is-fair::after { background: var(--perf-fair); opacity: 0.7; }
-.overview-item.is-fair { background: var(--perf-fair-bg); }
-
-.overview-item.is-poor .overview-num { color: var(--perf-poor); }
-.overview-item.is-poor::after { background: var(--perf-poor); opacity: 0.7; }
-.overview-item.is-poor { background: var(--perf-poor-bg); }
-
-/* ── Card body ── */
-.card-body { padding: 12px 16px; }
+/* ── Card body — flex 填满剩余空间 ── */
+.card-body { padding: 12px 16px; flex: 1; display: flex; flex-direction: column; }
 
 .scroll-body {
-  max-height: calc(100vh - 280px);
-  min-height: 200px;
+  flex: 1;
   overflow-y: auto;
 }
 
@@ -844,77 +941,90 @@ function pctClass(pct: number | null | undefined): string {
   color: var(--text-secondary);
 }
 
-/* ── Card grid ── */
-.card-grid {
+/* ── L2 关注区 ── */
+.attention-section {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  margin-bottom: 12px;
 }
 
-/* ── [5] Perf row — enhanced hover ── */
-.perf-row {
+.section-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary, #0F172A);
+  padding: 4px 0;
+  user-select: none;
+}
+
+.section-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.section-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--border-default, #E2E8F0);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary, #64748B);
+}
+
+/* ── Attention card ── */
+.attention-card {
+  display: flex;
   border: 1px solid var(--border-light, #F1F5F9);
-  border-left: 4px solid var(--border-default, #E2E8F0);
   border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   background: var(--bg-surface, #fff);
 }
 
-.perf-row.status-excellent { border-left-color: var(--perf-excellent); }
-.perf-row.status-good { border-left-color: var(--perf-good); }
-.perf-row.status-fair { border-left-color: var(--perf-fair); }
-.perf-row.status-poor { border-left-color: var(--perf-poor); }
-
-.perf-row:hover {
-  border-left-width: 5px;
-  transform: translateY(-1px);
+.attention-card:hover {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.07);
+  transform: translateY(-1px);
 }
 
-.perf-row.expanded {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-  border-color: var(--border-default, #E2E8F0);
-}
+.attention-card.card-poor { border-left-color: var(--perf-poor); }
+.attention-card.card-fair { border-left-color: var(--perf-fair); }
 
-.perf-row-main {
-  display: grid;
-  grid-template-columns: 80px minmax(160px, 1.6fr) 88px minmax(140px, 1.2fr) 24px;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  cursor: pointer;
-  user-select: none;
-}
-
-/* ── Status cell ── */
-.status-cell {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+.attn-accent {
+  width: 4px;
   flex-shrink: 0;
 }
 
-.dot-excellent { background: var(--perf-excellent); box-shadow: 0 0 0 3px var(--perf-excellent-light); }
-.dot-good { background: var(--perf-good); box-shadow: 0 0 0 3px var(--perf-good-light); }
-.dot-fair { background: var(--perf-fair); box-shadow: 0 0 0 3px var(--perf-fair-light); }
-.dot-poor { background: var(--perf-poor); box-shadow: 0 0 0 3px var(--perf-poor-light); }
+.card-poor .attn-accent { background: var(--perf-poor); }
+.card-fair .attn-accent { background: var(--perf-fair); }
 
-.status-text { font-size: 12px; font-weight: 600; }
-.text-excellent { color: var(--perf-excellent); }
-.text-good { color: var(--perf-good); }
-.text-fair { color: var(--perf-fair); }
-.text-poor { color: var(--perf-poor); }
+.attn-body {
+  flex: 1;
+  padding: 10px 12px;
+  min-width: 0;
+}
 
-/* ── Name cell ── */
-.name-cell { min-width: 0; }
+.attn-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
 
-.row-name {
+.attn-name-line {
+  min-width: 0;
+  flex: 1;
+}
+
+.attn-name {
   display: block;
   font-size: 13px;
   font-weight: 600;
@@ -924,7 +1034,7 @@ function pctClass(pct: number | null | undefined): string {
   white-space: nowrap;
 }
 
-.name-tags {
+.attn-tags {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -932,87 +1042,159 @@ function pctClass(pct: number | null | undefined): string {
   flex-wrap: wrap;
 }
 
-.mini-tag { flex-shrink: 0; }
+.attn-tags .mini-tag { flex-shrink: 0; }
 
-.meta-text {
+.attn-tags .meta-text {
   font-size: 11px;
   color: var(--text-secondary, #64748B);
 }
 
-/* ── [1] Rate cell ── */
-.rate-cell {
+.attn-signals {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.signal {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+
+.signal-rate.rate-good { background: var(--perf-excellent-light); color: var(--perf-excellent); }
+.signal-rate.rate-warn { background: var(--perf-fair-light); color: var(--perf-fair); }
+.signal-rate.rate-danger { background: var(--perf-poor-light); color: var(--perf-poor); }
+
+.signal-ttft.ttft-good { background: var(--perf-excellent-light); color: var(--perf-excellent); }
+.signal-ttft.ttft-warn { background: var(--perf-fair-light); color: var(--perf-fair); }
+.signal-ttft.ttft-danger { background: var(--perf-poor-light); color: var(--perf-poor); }
+
+.attn-req {
+  font-size: 11px;
+  color: var(--text-placeholder, #94A3B8);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.attn-summary {
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--text-secondary, #64748B);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── L2 正常区 ── */
+.normal-section {
+  margin-bottom: 8px;
+}
+
+.section-normal {
+  cursor: pointer;
+  transition: background 0.15s;
+  padding: 4px 6px;
+  border-radius: 6px;
+  margin: 0 -6px;
+}
+
+.section-normal:hover {
+  background: var(--bg-subtle, #F1F5F9);
+}
+
+.section-normal .chevron {
+  color: var(--text-placeholder, #94A3B8);
+  margin-left: auto;
+  transition: transform 0.25s ease;
+}
+
+.section-normal .chevron.rotated {
+  transform: rotate(180deg);
+}
+
+.normal-list {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.normal-row {
+  display: grid;
+  grid-template-columns: 20px 1fr 68px 60px 50px 16px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+  font-size: 12px;
+  user-select: none;
+}
+
+.normal-row:hover {
+  background: var(--bg-subtle, #F1F5F9);
+}
+
+.normal-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.normal-dot.dot-excellent { background: var(--perf-excellent); }
+.normal-dot.dot-good { background: var(--perf-good); }
+
+.normal-name {
+  font-weight: 500;
+  color: var(--text-primary, #0F172A);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.normal-rate {
+  font-weight: 600;
+  color: var(--perf-excellent);
+  font-variant-numeric: tabular-nums;
   text-align: right;
 }
 
-.rate-value {
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1.1;
-  font-variant-numeric: tabular-nums;
-}
+.normal-rate.dot-good { color: var(--perf-good); }
 
-.rate-label {
-  font-size: 10px;
+.normal-ttft {
   color: var(--text-secondary, #64748B);
-  margin-top: 1px;
-  font-weight: 500;
-}
-
-/* ── [1] TTFT cell — inverted gauge ── */
-.ttft-cell { min-width: 0; }
-
-.ttft-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: 4px;
-}
-
-.ttft-label {
-  font-size: 10px;
-  color: var(--text-secondary, #64748B);
-  font-weight: 500;
-}
-
-.ttft-value {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary, #0F172A);
   font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
-.ttft-track {
-  height: 5px;
-  border-radius: 3px;
-  background: var(--bg-subtle, #F1F5F9);
-  overflow: hidden;
-}
-
-.ttft-fill {
-  height: 100%;
-  border-radius: 3px;
-  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.fill-fast { background: var(--perf-excellent); }
-.fill-mid { background: var(--perf-fair); }
-.fill-slow { background: var(--perf-poor); }
-
-/* ── Expand chevron ── */
-.expand-cell {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.normal-req {
   color: var(--text-placeholder, #94A3B8);
+  font-size: 11px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
-.chevron { transition: transform 0.25s ease; }
-.perf-row.expanded .chevron { transform: rotate(180deg); }
+.normal-row .chevron {
+  color: var(--text-placeholder, #94A3B8);
+  transition: transform 0.25s ease;
+}
 
-/* ── Detail section ── */
+.normal-row .chevron.rotated {
+  transform: rotate(180deg);
+}
+
+/* ── Detail section (shared by attention cards + normal rows) ── */
 .perf-detail {
   border-top: 1px solid var(--border-light, #F1F5F9);
   padding: 10px 12px 12px;
@@ -1109,7 +1291,7 @@ function pctClass(pct: number | null | undefined): string {
   font-variant-numeric: tabular-nums;
 }
 
-/* ── [6] Zero traffic — solid border, refined ── */
+/* ── Zero traffic ── */
 .zero-traffic {
   margin-top: 12px;
   border: 1px solid var(--border-default, #E2E8F0);
@@ -1201,9 +1383,9 @@ function pctClass(pct: number | null | undefined): string {
 /* ── Responsive ── */
 @media (max-width: 1024px) {
   .search-input { width: 120px; }
-  .perf-row-main {
-    grid-template-columns: 72px minmax(120px, 1.4fr) 78px minmax(100px, 1fr) 24px;
-    gap: 8px;
+  .normal-row {
+    grid-template-columns: 20px 1fr 58px 50px 42px 16px;
+    gap: 6px;
   }
 }
 
@@ -1216,20 +1398,19 @@ function pctClass(pct: number | null | undefined): string {
     justify-content: space-between;
   }
   .search-input { flex: 1; width: auto; }
-  .scroll-body { max-height: calc(100vh - 240px); }
-  .perf-row-main {
-    grid-template-columns: 1fr auto;
-    grid-template-areas:
-      "status rate"
-      "name name"
-      "ttft ttft";
-    gap: 8px;
+  .scroll-body { min-height: 0; }
+  .attn-header {
+    flex-direction: column;
+    gap: 4px;
   }
-  .status-cell { grid-area: status; }
-  .rate-cell { grid-area: rate; }
-  .name-cell { grid-area: name; }
-  .ttft-cell { grid-area: ttft; }
-  .expand-cell { display: none; }
+  .attn-signals {
+    justify-content: flex-start;
+  }
+  .normal-row {
+    grid-template-columns: 16px 1fr 50px 42px 36px 16px;
+    gap: 4px;
+    font-size: 11px;
+  }
   .member-row {
     grid-template-columns: 1fr auto;
     grid-template-areas:
@@ -1244,8 +1425,15 @@ function pctClass(pct: number | null | undefined): string {
   .card-header { padding: 8px 10px; }
   .card-body { padding: 10px; }
   .info-strip { padding: 6px 10px; }
-  .overview-bar { padding: 8px 10px; }
-  .overview-item { min-width: 56px; padding: 6px 10px; }
+  .health-summary { padding: 6px 10px; gap: 8px; }
+  .health-bar-wrap { max-width: 120px; min-width: 40px; }
+  .health-score { font-size: 11px; }
+  .normal-row {
+    grid-template-columns: 12px 1fr 44px 36px 30px 14px;
+    gap: 3px;
+    font-size: 10px;
+    padding: 5px 6px;
+  }
 }
 
 /* ── Dark mode ── */
@@ -1255,25 +1443,45 @@ html.dark .monitor-card-outer {
 }
 
 html.dark .info-strip { background: var(--bg-subtle); }
+
+html.dark .health-summary {
+  background: var(--bg-subtle);
+}
+
 html.dark .perf-detail { background: var(--bg-subtle); }
+
 html.dark .zero-traffic { background: var(--bg-subtle); border-color: var(--border-default); }
 html.dark .zero-chip { background: var(--bg-surface); border-color: var(--border-default); }
 html.dark .detail-metric { background: var(--bg-surface); border-color: var(--border-default); }
 
-html.dark .perf-row:hover {
+html.dark .attention-card:hover {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
 }
 
-html.dark .overview-item.is-excellent { background: rgba(5, 150, 105, 0.12); }
-html.dark .overview-item.is-good { background: rgba(79, 107, 246, 0.12); }
-html.dark .overview-item.is-fair { background: rgba(217, 119, 6, 0.12); }
-html.dark .overview-item.is-poor { background: rgba(220, 38, 38, 0.12); }
+html.dark .normal-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+html.dark .section-normal:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
 
 html.dark .time-range-wrap {
   background: var(--bg-subtle);
 }
 html.dark .time-range-wrap :deep(.el-radio-button.is-active .el-radio-button__inner) {
-  background: var(--bg-surface) !important;
-  color: var(--text-primary) !important;
+  background: var(--bg-surface);
+  color: var(--text-primary);
 }
+
+html.dark .signal-rate.rate-good { background: rgba(5, 150, 105, 0.2); }
+html.dark .signal-rate.rate-warn { background: rgba(217, 119, 6, 0.2); }
+html.dark .signal-rate.rate-danger { background: rgba(220, 38, 38, 0.2); }
+
+html.dark .signal-ttft.ttft-good { background: rgba(5, 150, 105, 0.2); }
+html.dark .signal-ttft.ttft-warn { background: rgba(217, 119, 6, 0.2); }
+html.dark .signal-ttft.ttft-danger { background: rgba(220, 38, 38, 0.2); }
+
+html.dark .card-poor .attn-accent { background: #EF4444; }
+html.dark .card-fair .attn-accent { background: #F59E0B; }
 </style>

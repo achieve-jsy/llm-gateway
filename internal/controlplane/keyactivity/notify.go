@@ -7,33 +7,10 @@ import (
 	"log/slog"
 	"time"
 
-	cpmodel "github.com/example/llm-gateway/internal/controlplane/model"
-	notrepo "github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/google/uuid"
 )
 
 var shanghaiTz, _ = time.LoadLocation("Asia/Shanghai")
-
-// StdNotifier 真实 Notifier 实现：写 notifications 表
-type StdNotifier struct {
-	repo *notrepo.NotificationRepo
-}
-
-func NewStdNotifier(repo *notrepo.NotificationRepo) *StdNotifier {
-	return &StdNotifier{repo: repo}
-}
-
-func (n *StdNotifier) Notify(userUUID uuid.UUID, title, body, level, refType, refID string) error {
-	return n.repo.Create(&cpmodel.Notification{
-		UserID:  userUUID,
-		Type:    cpmodel.NotificationTypeKeyActivity,
-		Level:   level,
-		Title:   title,
-		Content: body,
-		RefType: refType,
-		RefID:   refID,
-	})
-}
 
 // emitAlert 写提醒记录 + 按需发送通知。
 // InsertAlert（唯一键去重）→ 若 RowsAffected=1 → 若 enabled → 发通知

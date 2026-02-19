@@ -77,6 +77,7 @@
         <el-table-column label="能力（聚合）" min-width="220">
           <template #default="{ row }">
             <div class="cap-cell">
+              <el-tag v-if="row.is_capability_override" type="danger" size="small" effect="dark" class="cap-override-tag">手动</el-tag>
               <template v-if="capabilities[row.name]">
                 <el-tag v-if="capabilities[row.name].supports_vision" type="success" size="small" effect="light">图像输入</el-tag>
                 <el-tag v-if="capabilities[row.name].supports_function_calling" type="warning" size="small" effect="light">工具调用</el-tag>
@@ -114,11 +115,7 @@
           <template #default="{ row }">
             <el-button text type="primary" size="small" @click="router.push(`/admin/groups/${row.id}`)">详情</el-button>
             <el-button text type="primary" size="small" @click="openEditDialog(row)">编辑</el-button>
-            <el-button
-              v-if="canManageEntitlements && row.open_mode === 'controlled'"
-              text type="primary" size="small"
-              @click="openEntitlementDialog(row)"
-            >授权</el-button>
+            <el-button text type="primary" size="small" @click="router.push(`/admin/groups/${row.id}?tab=capability`)">能力</el-button>
             <el-popconfirm
               title="确定删除该模型组？"
               confirm-button-text="确定"
@@ -385,6 +382,10 @@ onMounted(() => {
 .cap-empty {
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+
+.cap-override-tag {
+  margin-right: 4px;
 }
 
 .open-mode-tag {

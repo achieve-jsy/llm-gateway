@@ -1,6 +1,6 @@
 <template>
   <div v-if="bannerItems.length" class="ticker-wrap">
-    <span class="ticker-icon">{{ categoryIcon(current.category) }}</span>
+    <component :is="categoryIcon(current.category)" class="ticker-icon" />
     <span class="ticker-tag" :class="`tag--${current.level}`">{{ levelLabel(current.level) }}</span>
     <div class="ticker-track-wrap" @click="goDetail(current.id)">
       <div class="ticker-track" :class="{ paused: hovered }"
@@ -29,7 +29,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { Close, ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
+import { Close, ArrowLeft, ArrowRight, Setting, StarFilled, Bell } from '@element-plus/icons-vue'
 import { getUnreadAnnouncements, markAnnouncementRead } from '@/services/control-plane'
 import { markdownToPlainText } from '@/utils/markdown'
 import type { Announcement } from '@/types/announcement'
@@ -41,10 +41,11 @@ const hovered = ref(false)
 
 const current = computed(() => bannerItems.value[currentIndex.value] ?? bannerItems.value[0])
 
-const categoryIcons: Record<string, string> = { system: '🔧', feature: '✨', alert: '📣' }
+import type { Component } from 'vue'
+const categoryIcons: Record<string, Component> = { system: Setting, feature: StarFilled, alert: Bell }
 const levelLabels: Record<string, string> = { info: '公告', warning: '警告', critical: '紧急' }
 
-function categoryIcon(c: string) { return categoryIcons[c] || '📢' }
+function categoryIcon(c: string): Component { return categoryIcons[c] || Bell }
 function levelLabel(l: string) { return levelLabels[l] || '公告' }
 function truncate(text: string, max: number) { return text.length > max ? text.slice(0, max) + '...' : text }
 
@@ -96,7 +97,7 @@ defineExpose({ refresh: loadBanners })
 .ticker-icon { font-size: 13px; flex-shrink: 0; }
 
 .ticker-tag {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   padding: 1px 6px;
   border-radius: 3px;
@@ -104,9 +105,9 @@ defineExpose({ refresh: loadBanners })
   white-space: nowrap;
 }
 
-.tag--info    { background: rgba(54,179,78,0.12); color: #1F8A3B; }
-.tag--warning { background: rgba(245,124,0,0.12);  color: #E65100; }
-.tag--critical{ background: rgba(211,47,47,0.12);  color: #C62828; }
+.tag--info    { background: rgba(54,179,78,0.12); color: var(--brand-green-deep); }
+.tag--warning { background: rgba(245,124,0,0.12);  color: var(--el-color-warning); }
+.tag--critical{ background: rgba(211,47,47,0.12);  color: var(--color-danger); }
 
 .ticker-track-wrap {
   flex: 1;
@@ -147,7 +148,7 @@ defineExpose({ refresh: loadBanners })
 }
 
 .ticker-count {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--el-text-color-placeholder);
   min-width: 26px;
   text-align: center;

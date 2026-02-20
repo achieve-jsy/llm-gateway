@@ -7,6 +7,8 @@ import OpsDashboardHeader from '../OpsDashboardHeader.vue'
 vi.mock('@element-plus/icons-vue', () => ({
   DataBoard: { template: '<i />' },
   Refresh: { template: '<i />' },
+  VideoPause: { template: '<i />' },
+  VideoPlay: { template: '<i />' },
 }))
 
 // Mock opsAPI 让其返回空数据
@@ -15,6 +17,7 @@ vi.mock('@/api/ops', () => ({
     getRealtimeTrafficSummary: vi.fn().mockResolvedValue({ current_qps: 0, current_tps: 0, window: '1min' }),
     getGroupOptions: vi.fn().mockResolvedValue([]),
   },
+  subscribeQPS: vi.fn(() => vi.fn()),
 }))
 
 describe('OpsDashboardHeader', () => {
@@ -45,6 +48,8 @@ describe('OpsDashboardHeader', () => {
           platform: '',
           groupId: null,
           timeRange: '1h',
+          queryMode: 'auto',
+          loading: false,
           autoRefresh: true,
           autoRefreshCountdown: 30,
           lastUpdated: null,
@@ -136,6 +141,8 @@ describe('OpsDashboardHeader', () => {
           platform: '',
           groupId: null,
           timeRange: '1h',
+          queryMode: 'auto',
+          loading: false,
           autoRefresh: true,
           autoRefreshCountdown: 30,
           lastUpdated: null,

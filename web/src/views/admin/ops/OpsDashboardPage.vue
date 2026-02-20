@@ -10,6 +10,7 @@
         :platform="platform"
         :group-id="groupId"
         :time-range="timeRange"
+        :query-mode="queryMode"
         :auto-refresh="autoRefresh"
         :auto-refresh-countdown="countdown"
         :last-updated="lastUpdated"
@@ -19,7 +20,9 @@
         @update:time-range="timeRange = $event"
         @update:platform="platform = $event; groupId = null"
         @update:group="groupId = $event"
+        @update:query-mode="queryMode = $event"
         @update:custom-time-range="onCustomTimeRange"
+        @update:auto-refresh="autoRefresh = $event; if (autoRefresh) startAutoRefresh(); else stopAutoRefresh()"
         @refresh="fetchAllData"
         @open-request-details="showRequestDetails = true"
         @open-error-details="openErrorDetails"
@@ -29,8 +32,8 @@
         @exit-fullscreen="isFullscreen = false"
       />
 
-      <!-- Row 1: Concurrency + Switch Rate (1:1, 对齐 sub2api lg:grid-cols-4 前两列) -->
-      <div class="ops-row-duo">
+      <!-- Row 1: Concurrency + Switch Rate + Traffic Trend (1:1:2, 对齐 sub2api grid-cols-4) -->
+      <div class="ops-row-main">
         <OpsConcurrencyCard
           v-if="settings?.show_concurrency_card"
           :refresh-token="refreshToken"
@@ -44,18 +47,17 @@
           :time-range="'5h'"
           :fullscreen="isFullscreen"
         />
+        <OpsTrafficTrendChart
+          class="ops-row-span-2"
+          :points="trafficTrendData"
+          :loading="loadingTrend"
+          :by-provider="throughputByProvider"
+          :top-groups="throughputTopGroups"
+          @select-provider="onSelectProvider"
+          @select-group="onSelectGroup"
+          @open-details="showRequestDetails = true"
+        />
       </div>
-
-      <!-- Row 2: Traffic Trend 单独一行全宽（对齐 sub2api lg:col-span-2 独占一行） -->
-      <OpsTrafficTrendChart
-        :points="trafficTrendData"
-        :loading="loadingTrend"
-        :by-provider="throughputByProvider"
-        :top-groups="throughputTopGroups"
-        @select-provider="onSelectProvider"
-        @select-group="onSelectGroup"
-        @open-details="showRequestDetails = true"
-      />
 
       <!-- No-traffic notice: visible when all trend data is empty -->
       <div v-if="isIdle" class="ops-idle-notice">
@@ -73,7 +75,7 @@
         </span>
       </div>
 
-      <!-- Row 3: Latency Histogram + Error Distribution + Error Trend (1:1:1) -->
+      <!-- Row 2: Latency Histogram + Error Distribution + Error Trend (1:1:1) -->
       <div class="ops-row-visual">
         <OpsLatencyHistogram
           :buckets="latencyHistogramData"
@@ -174,6 +176,19 @@
       <el-option label="最近 6 小时" value="6h" />
       <el-option label="最近 24 小时" value="24h" />
     </el-select>
+
+    <el-tooltip :content="autoRefresh ? '暂停自动刷新' : '恢复自动刷新'" placement="bottom">
+      <el-button
+        size="small"
+        :icon="autoRefresh ? VideoPause : VideoPlay"
+        :type="autoRefresh ? '' : 'info'"
+        @click="autoRefresh = !autoRefresh; autoRefresh ? startAutoRefresh() : stopAutoRefresh()"
+        circle
+      />
+    </el-tooltip>
+
+    <span v-if="autoRefresh && countdown > 0" class="ops-fs-countdown">{{ countdown }}s</span>
+
     <el-button size="small" :icon="Refresh" :loading="loading" @click="fetchAllData" circle />
     <el-button size="small" @click="isFullscreen = false">退出全屏</el-button>
   </div>
@@ -182,7 +197,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import { opsAPI } from '@/api/ops'
 import type {
   OpsOverview,
@@ -241,6 +256,7 @@ const throughputTopGroups = ref<OpsThroughputByGroup[]>([])
 const timeRange = ref('1h')
 const platform = ref('')
 const groupId = ref<number | null>(null)
+const queryMode = ref('auto')
 const customStartTime = ref<string | null>(null)
 const customEndTime = ref<string | null>(null)
 const autoRefresh = ref(true)
@@ -283,14 +299,29 @@ const isIdle = computed(() => {
 // -- Fetchers --
 
 async function fetchAllData() {
-  await Promise.all([
-    fetchDashboard(),
-    fetchTrafficAndThroughput(),
-    fetchErrorTrendFn(),
+  loading.value = true
+
+  const remainingFetches: Promise<void>[] = [
     fetchLatencyHistogram(),
     fetchErrorDistribution(),
     fetchSwitchRate()
-  ])
+  ]
+
+  try {
+    const snap = await opsAPI.getSnapshotV2(timeRange.value)
+    dashboardData.value = snap.overview
+    trafficTrendData.value = snap.throughput_trend.points as any
+    errorTrendData.value = snap.error_trend.points as any
+  } catch {
+    await Promise.all([
+      fetchDashboard(),
+      fetchTrafficAndThroughput(),
+      fetchErrorTrendFn()
+    ])
+  }
+
+  await Promise.all(remainingFetches)
+  loading.value = false
   lastUpdated.value = new Date()
   refreshToken.value++
 }
@@ -524,14 +555,18 @@ onUnmounted(() => {
   overflow-y: auto;
 }
 
-.ops-row-duo {
+.ops-row-main {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 2fr;
   gap: var(--space-6);
 }
 
-.ops-row-duo > * {
+.ops-row-main > * {
   min-height: 360px;
+}
+
+.ops-row-span-2 {
+  grid-column: span 2;
 }
 
 .ops-row-visual {
@@ -578,10 +613,23 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  background: var(--bg-card, #fff);
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(8px);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-lg);
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
+}
+
+:global(html.dark) .ops-fullscreen-bar {
+  background: rgba(24, 24, 27, 0.85);
+}
+
+.ops-fs-countdown {
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+  min-width: 28px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .ops-time-select {
@@ -589,15 +637,21 @@ onUnmounted(() => {
 }
 
 @media (max-width: 1200px) {
-  .ops-row-duo {
-    grid-template-columns: 1fr;
+  .ops-row-main {
+    grid-template-columns: 1fr 1fr;
+  }
+  .ops-row-span-2 {
+    grid-column: span 2;
   }
 }
 
 @media (max-width: 900px) {
-  .ops-row-duo,
+  .ops-row-main,
   .ops-row-visual {
     grid-template-columns: 1fr;
+  }
+  .ops-row-span-2 {
+    grid-column: span 1;
   }
 }
 </style>

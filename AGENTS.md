@@ -137,6 +137,8 @@ cd tools/opencode-models-discovery && bun run build:bundle && bunx tsc --noEmit 
 
 - `README.md` — 快速开始与命令速查
 - `tests/README.md` — 测试原则、分层与文件组织
+- `docs/ops-dashboard-comparison-report.md` — sub2api vs sunny-canyon 运维看板对比分析
+- `docs/ops-dashboard-execution-plan.md` — 运维看板分步执行计划（7 phases）
 
 <!-- SPECKIT START -->
 ## 当前开发计划

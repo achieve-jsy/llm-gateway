@@ -13,19 +13,22 @@ import (
 
 // SystemMetrics 系统资源指标快照
 type SystemMetrics struct {
-	CPUUsagePercent    float64 `json:"cpu_usage_percent"`
-	MemoryUsedMB       float64 `json:"memory_used_mb"`
-	MemoryTotalMB      float64 `json:"memory_total_mb"`
-	MemoryUsagePercent float64 `json:"memory_usage_percent"`
-	GoroutineCount     int     `json:"goroutine_count"`
-	DBActiveCount      int     `json:"db_active_count"`
-	DBIdleCount        int     `json:"db_idle_count"`
-	DBWaitingCount     int64   `json:"db_waiting_count"`
-	DBMaxOpenConns     int     `json:"db_max_open_conns"`
-	RedisTotalConns    int     `json:"redis_total_conns"`
-	RedisIdleConns     int     `json:"redis_idle_conns"`
-	RedisPoolSize      int     `json:"redis_pool_size"`
-	CollectedAt        time.Time `json:"collected_at"`
+	CPUUsagePercent      float64 `json:"cpu_usage_percent"`
+	MemoryUsedMB         float64 `json:"memory_used_mb"`
+	MemoryTotalMB        float64 `json:"memory_total_mb"`
+	MemoryUsagePercent   float64 `json:"memory_usage_percent"`
+	GoroutineCount       int     `json:"goroutine_count"`
+	DBActiveCount        int     `json:"db_active_count"`
+	DBIdleCount          int     `json:"db_idle_count"`
+	DBWaitingCount       int64   `json:"db_waiting_count"`
+	DBMaxOpenConns       int     `json:"db_max_open_conns"`
+	RedisTotalConns      int     `json:"redis_total_conns"`
+	RedisIdleConns       int     `json:"redis_idle_conns"`
+	RedisPoolSize        int     `json:"redis_pool_size"`
+	ConcurrencyQueueDepth int    `json:"concurrency_queue_depth"`
+	DBOk                 bool    `json:"db_ok"`
+	RedisOk              bool    `json:"redis_ok"`
+	CollectedAt          time.Time `json:"collected_at"`
 }
 
 // SystemMetricsCollector 定期采集系统资源指标
@@ -106,38 +109,57 @@ func (c *SystemMetricsCollector) collect() {
 	var dbActive, dbIdle int
 	var dbWaiting int64
 	var dbMaxOpen int
+	dbOk := false
 	if err == nil {
 		stats := sqlDB.Stats()
 		dbActive = stats.InUse
 		dbIdle = stats.Idle
 		dbWaiting = stats.WaitCount
 		dbMaxOpen = stats.MaxOpenConnections
+		// 健康检查：SELECT 1
+		dbOk = sqlDB.PingContext(context.Background()) == nil
 	}
 
-	// Redis 连接池
+	// Redis 连接池 + 健康检查
 	var redisTotal, redisIdle, redisPool int
+	redisOk := false
 	if c.rdb != nil {
 		poolStats := c.rdb.PoolStats()
 		redisTotal = int(poolStats.TotalConns)
 		redisIdle = int(poolStats.IdleConns)
 		// go-redis PoolStats 没有 MaxConns 字段，使用 0 表示未知
 		redisPool = 0
+		redisOk = c.rdb.Ping(context.Background()).Err() == nil
+	}
+
+	// 并发队列深度：统计所有 provider 当前并发总数
+	queueDepth := 0
+	if c.rdb != nil {
+		iter := c.rdb.Scan(context.Background(), 0, "concurrency:provider:*", 100).Iterator()
+		for iter.Next(context.Background()) {
+			key := iter.Val()
+			val, _ := c.rdb.Get(context.Background(), key).Int()
+			queueDepth += val
+		}
 	}
 
 	snapshot := SystemMetrics{
-		CPUUsagePercent:    cpuPct,
-		MemoryUsedMB:       allocMB,
-		MemoryTotalMB:      sysMB,
-		MemoryUsagePercent: memPct,
-		GoroutineCount:     goroutines,
-		DBActiveCount:      dbActive,
-		DBIdleCount:        dbIdle,
-		DBWaitingCount:     dbWaiting,
-		DBMaxOpenConns:     dbMaxOpen,
-		RedisTotalConns:    redisTotal,
-		RedisIdleConns:    redisIdle,
-		RedisPoolSize:      redisPool,
-		CollectedAt:        time.Now(),
+		CPUUsagePercent:       cpuPct,
+		MemoryUsedMB:          allocMB,
+		MemoryTotalMB:         sysMB,
+		MemoryUsagePercent:    memPct,
+		GoroutineCount:        goroutines,
+		DBActiveCount:         dbActive,
+		DBIdleCount:           dbIdle,
+		DBWaitingCount:        dbWaiting,
+		DBMaxOpenConns:        dbMaxOpen,
+		RedisTotalConns:       redisTotal,
+		RedisIdleConns:        redisIdle,
+		RedisPoolSize:         redisPool,
+		ConcurrencyQueueDepth: queueDepth,
+		DBOk:                  dbOk,
+		RedisOk:               redisOk,
+		CollectedAt:           time.Now(),
 	}
 
 	c.mu.Lock()
@@ -155,5 +177,8 @@ func (c *SystemMetricsCollector) collect() {
 		"goroutines", goroutines,
 		"db_active", dbActive,
 		"redis_total", redisTotal,
+		"queue_depth", queueDepth,
+		"db_ok", dbOk,
+		"redis_ok", redisOk,
 	)
 }

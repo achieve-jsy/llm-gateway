@@ -16,6 +16,8 @@ vi.mock('@/api/ops', () => ({
   opsAPI: {
     getRealtimeTrafficSummary: vi.fn().mockResolvedValue({ current_qps: 0, current_tps: 0, window: '1min' }),
     getGroupOptions: vi.fn().mockResolvedValue([]),
+    listProviders: vi.fn().mockResolvedValue([]),
+    listModels: vi.fn().mockResolvedValue([]),
   },
   subscribeQPS: vi.fn(() => vi.fn()),
 }))
@@ -45,10 +47,10 @@ describe('OpsDashboardHeader', () => {
       const wrapper = mount(OpsDashboardHeader, {
         props: {
           overview: null,
-          platform: '',
           groupId: null,
+          provider: '',
+          model: '',
           timeRange: '1h',
-          queryMode: 'auto',
           loading: false,
           autoRefresh: true,
           autoRefreshCountdown: 30,
@@ -138,10 +140,10 @@ describe('OpsDashboardHeader', () => {
       const wrapper = mount(OpsDashboardHeader, {
         props: {
           overview: partialOverview as any,
-          platform: '',
           groupId: null,
+          provider: '',
+          model: '',
           timeRange: '1h',
-          queryMode: 'auto',
           loading: false,
           autoRefresh: true,
           autoRefreshCountdown: 30,

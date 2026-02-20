@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -104,12 +105,13 @@ type OpsDashboardResponse struct {
 
 // OpsOverview 总览数据
 type OpsOverview struct {
-	HealthScore   int                      `json:"health_score"`
-	SystemMetrics *service.SystemMetrics   `json:"system_metrics"`
-	Traffic       OpsTraffic               `json:"traffic"`
-	SLA           OpsSLA                   `json:"sla"`
-	Latency       OpsLatency               `json:"latency"`
-	Errors        OpsErrors                `json:"errors"`
+	HealthScore   int                        `json:"health_score"`
+	SystemMetrics *service.SystemMetrics     `json:"system_metrics"`
+	Traffic       OpsTraffic                 `json:"traffic"`
+	SLA           OpsSLA                     `json:"sla"`
+	Latency       OpsLatency                 `json:"latency"`
+	Errors        OpsErrors                  `json:"errors"`
+	Jobs          []model.AlertJobHeartbeat  `json:"jobs"`
 }
 
 // OpsTraffic 流量指标
@@ -149,29 +151,72 @@ type OpsLatency struct {
 
 // OpsErrors 错误指标
 type OpsErrors struct {
-	RequestErrors  int64 `json:"request_errors"`
-	UpstreamErrors int64 `json:"upstream_errors"`
-	BusinessErrors int64 `json:"business_errors"`
+	RequestErrors               int64 `json:"request_errors"`
+	UpstreamErrors              int64 `json:"upstream_errors"`
+	BusinessErrors              int64 `json:"business_errors"`
+	UpstreamErrorsExcl429_529   int64 `json:"upstream_errors_excl_429_529"`
+	RateLimit429_529            int64 `json:"rate_limit_429_529"`
 }
 
-// GetDashboard 获取运维看板总览
-func (h *OpsHandler) GetDashboard(c *gin.Context) {
-	timeRange := c.DefaultQuery("time_range", "1h")
-	interval := timeRangeToInterval(timeRange)
+// OpsFilter 运维看板通用过滤参数
+type OpsFilter struct {
+	TimeRange string
+	GroupID   string // 模型组 ID
+	Provider  string // 提供商名称
+	Model     string // 模型名称
+}
+
+// buildFilterClause 根据 OpsFilter 生成 SQL WHERE 子句（AND $1 AND $2 AND $3）和参数
+func (h *OpsHandler) buildFilterClause(ctx context.Context, filter OpsFilter, timeInterval string) (string, []interface{}) {
+	clause := "ts > NOW() - INTERVAL '" + timeInterval + "'"
+	var args []interface{}
+
+	if filter.GroupID != "" {
+		// call_logs 没有 group_id 列, 只有 group_name. 需要从 model_groups 查询
+		var groupName string
+		if err := h.db.WithContext(ctx).Raw(
+			"SELECT name FROM model_groups WHERE id = ?", filter.GroupID,
+		).Scan(&groupName).Error; err == nil && groupName != "" {
+			clause += " AND group_name = ?"
+			args = append(args, groupName)
+		}
+	}
+	if filter.Provider != "" {
+		clause += " AND provider = ?"
+		args = append(args, filter.Provider)
+	}
+	if filter.Model != "" {
+		clause += " AND model = ?"
+		args = append(args, filter.Model)
+	}
+	return clause, args
+}
+
+// buildOpsOverview 构造完整运维看板概览数据（供 GetDashboard 和 GetSnapshotV2 共用）
+func (h *OpsHandler) buildOpsOverview(ctx context.Context, timeRange string) (OpsOverview, error) {
+	return h.buildOpsOverviewWithFilter(ctx, OpsFilter{TimeRange: timeRange})
+}
+
+// buildOpsOverviewWithFilter 带过滤条件的概览数据构造
+func (h *OpsHandler) buildOpsOverviewWithFilter(ctx context.Context, filter OpsFilter) (OpsOverview, error) {
+	interval := timeRangeToInterval(filter.TimeRange)
+	whereClause, args := h.buildFilterClause(ctx, filter, interval)
 
 	// 1. 流量统计
 	var traffic struct {
-		TotalRequests  int64   `gorm:"column:total_requests"`
-		TotalTokens    int64   `gorm:"column:total_tokens"`
-		SuccessCount   int64   `gorm:"column:success_count"`
-		RequestErrors  int64   `gorm:"column:request_errors"`
-		UpstreamErrors int64   `gorm:"column:upstream_errors"`
-		BusinessErrors int64   `gorm:"column:business_errors"`
-		DurationAvgMs  float64 `gorm:"column:duration_avg_ms"`
-		TTFTAvgMs      float64 `gorm:"column:ttft_avg_ms"`
+		TotalRequests             int64   `gorm:"column:total_requests"`
+		TotalTokens               int64   `gorm:"column:total_tokens"`
+		SuccessCount              int64   `gorm:"column:success_count"`
+		RequestErrors             int64   `gorm:"column:request_errors"`
+		UpstreamErrors            int64   `gorm:"column:upstream_errors"`
+		BusinessErrors            int64   `gorm:"column:business_errors"`
+		UpstreamErrorsExcl429_529 int64   `gorm:"column:upstream_errors_excl_429_529"`
+		RateLimit429_529          int64   `gorm:"column:rate_limit_429_529"`
+		DurationAvgMs             float64 `gorm:"column:duration_avg_ms"`
+		TTFTAvgMs                 float64 `gorm:"column:ttft_avg_ms"`
 	}
 
-	err := h.db.Raw(fmt.Sprintf(`
+	sql := fmt.Sprintf(`
 		SELECT
 			COUNT(*)::bigint as total_requests,
 			COALESCE(SUM(total_tokens), 0)::bigint as total_tokens,
@@ -179,15 +224,15 @@ func (h *OpsHandler) GetDashboard(c *gin.Context) {
 			COUNT(*) FILTER (WHERE status >= 400 AND status < 500)::bigint as request_errors,
 			COUNT(*) FILTER (WHERE status >= 500)::bigint as upstream_errors,
 			COUNT(*) FILTER (WHERE status = 429)::bigint as business_errors,
+			COUNT(*) FILTER (WHERE status >= 500 AND status != 529)::bigint as upstream_errors_excl_429_529,
+			COUNT(*) FILTER (WHERE status IN (429, 529))::bigint as rate_limit_429_529,
 			COALESCE(AVG(duration_ms), 0)::float as duration_avg_ms,
 			COALESCE(AVG(first_token_ms), 0)::float as ttft_avg_ms
 		FROM call_logs
-		WHERE ts > NOW() - INTERVAL '%s'
-	`, interval)).Scan(&traffic).Error
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query traffic stats"})
-		return
+		WHERE %s
+	`, whereClause)
+	if err := h.db.Raw(sql, args...).Scan(&traffic).Error; err != nil {
+		return OpsOverview{}, fmt.Errorf("traffic: %w", err)
 	}
 
 	// 2. 延迟百分位
@@ -204,7 +249,7 @@ func (h *OpsHandler) GetDashboard(c *gin.Context) {
 		TTFTMaxMs     int `gorm:"column:ttft_max"`
 	}
 
-	err = h.db.Raw(fmt.Sprintf(`
+	latencySQL := fmt.Sprintf(`
 		SELECT
 			COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_ms), 0)::int as duration_p50,
 			COALESCE(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY duration_ms), 0)::int as duration_p90,
@@ -217,34 +262,25 @@ func (h *OpsHandler) GetDashboard(c *gin.Context) {
 			COALESCE(PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY COALESCE(first_token_ms, 0)), 0)::int as ttft_p99,
 			COALESCE(MAX(COALESCE(first_token_ms, 0)), 0)::int as ttft_max
 		FROM call_logs
-		WHERE ts > NOW() - INTERVAL '%s'
-	`, interval)).Scan(&latency).Error
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query latency percentiles"})
-		return
+		WHERE %s
+	`, whereClause)
+	if err := h.db.Raw(latencySQL, args...).Scan(&latency).Error; err != nil {
+		return OpsOverview{}, fmt.Errorf("latency: %w", err)
 	}
 
-	// 3. 实时 QPS/TPS（从 Redis 获取最近 1 分钟）
-	now := time.Now()
-	minuteKey := now.Format("200601021504")
-	currentQPS := 0.0
-	currentTPS := 0.0
-
+	// 3. 实时 QPS/TPS（Redis 最近 1 分钟）
+	currentQPS, currentTPS := 0.0, 0.0
 	if h.rdb != nil {
-		qpsKey := fmt.Sprintf("ops:qps:%s", minuteKey)
-		tpsKey := fmt.Sprintf("ops:tps:%s", minuteKey)
-
-		qpsCount, _ := h.rdb.Get(c.Request.Context(), qpsKey).Int64()
-		tpsCount, _ := h.rdb.Get(c.Request.Context(), tpsKey).Int64()
-
-		currentQPS = float64(qpsCount) / 60.0
-		currentTPS = float64(tpsCount) / 60.0
+		minKey := time.Now().Format("200601021504")
+		qpsC, _ := h.rdb.Get(ctx, "ops:qps:"+minKey).Int64()
+		tpsC, _ := h.rdb.Get(ctx, "ops:tps:"+minKey).Int64()
+		currentQPS = float64(qpsC) / 60.0
+		currentTPS = float64(tpsC) / 60.0
 	}
 
-	// 4. 计算平均 QPS/TPS 和峰值
+	// 4. 平均 + 峰值 QPS/TPS
 	var windowSeconds float64
-	switch timeRange {
+	switch filter.TimeRange {
 	case "5m":
 		windowSeconds = 300
 	case "30m":
@@ -256,20 +292,32 @@ func (h *OpsHandler) GetDashboard(c *gin.Context) {
 	default:
 		windowSeconds = 3600
 	}
-
 	avgQPS := float64(traffic.TotalRequests) / windowSeconds
 	avgTPS := float64(traffic.TotalTokens) / windowSeconds
 
-	peakQPS := currentQPS * 1.5
-	if peakQPS < avgQPS*1.5 {
-		peakQPS = avgQPS * 1.5
+	peakQPS, peakTPS := 0.0, 0.0
+	if h.rdb != nil {
+		for iter := h.rdb.Scan(ctx, 0, "ops:qps:*", 100).Iterator(); iter.Next(ctx); {
+			val, _ := h.rdb.Get(ctx, iter.Val()).Int64()
+			if q := float64(val) / 60.0; q > peakQPS {
+				peakQPS = q
+			}
+		}
+		for iter := h.rdb.Scan(ctx, 0, "ops:tps:*", 100).Iterator(); iter.Next(ctx); {
+			val, _ := h.rdb.Get(ctx, iter.Val()).Int64()
+			if t := float64(val) / 60.0; t > peakTPS {
+				peakTPS = t
+			}
+		}
 	}
-	peakTPS := currentTPS * 1.5
-	if peakTPS < avgTPS*1.5 {
-		peakTPS = avgTPS * 1.5
+	if peakQPS < currentQPS {
+		peakQPS = currentQPS
+	}
+	if peakTPS < currentTPS {
+		peakTPS = currentTPS
 	}
 
-	// 5. SLA 计算
+	// 5. SLA
 	successRate := 0.0
 	errorRate := 0.0
 	if traffic.TotalRequests > 0 {
@@ -281,49 +329,70 @@ func (h *OpsHandler) GetDashboard(c *gin.Context) {
 	sm := h.metricsCollector.Get()
 	healthScore := calculateHealthScore(successRate, sm.MemoryUsagePercent, sm.CPUUsagePercent, sm.GoroutineCount)
 
-	resp := OpsDashboardResponse{
-		Overview: OpsOverview{
-			HealthScore:   healthScore,
-			SystemMetrics: &sm,
-			Traffic: OpsTraffic{
-				TotalRequests: traffic.TotalRequests,
-				TotalTokens:   traffic.TotalTokens,
-				AvgQPS:        avgQPS,
-				AvgTPS:        avgTPS,
-				CurrentQPS:    currentQPS,
-				CurrentTPS:    currentTPS,
-				PeakQPS:       peakQPS,
-				PeakTPS:       peakTPS,
-			},
-			SLA: OpsSLA{
-				SuccessRate:   successRate,
-				ErrorRate:     errorRate,
-				SLAErrorCount: traffic.TotalRequests - traffic.SuccessCount,
-			},
-			Latency: OpsLatency{
-				DurationP50Ms: latency.DurationP50Ms,
-				DurationP90Ms: latency.DurationP90Ms,
-				DurationP95Ms: latency.DurationP95Ms,
-				DurationP99Ms: latency.DurationP99Ms,
-				DurationAvgMs: int(traffic.DurationAvgMs),
-				DurationMaxMs: latency.DurationMaxMs,
-				TTFTP50Ms:     latency.TTFTP50Ms,
-				TTFTP90Ms:     latency.TTFTP90Ms,
-				TTFTP95Ms:     latency.TTFTP95Ms,
-				TTFTP99Ms:     latency.TTFTP99Ms,
-				TTFTAvgMs:     int(traffic.TTFTAvgMs),
-				TTFTMaxMs:     latency.TTFTMaxMs,
-			},
-			Errors: OpsErrors{
-				RequestErrors:  traffic.RequestErrors,
-				UpstreamErrors: traffic.UpstreamErrors,
-				BusinessErrors: traffic.BusinessErrors,
-			},
-		},
-		Timestamp: time.Now(),
-	}
+	// 7. 后台任务心跳
+	jobs := make([]model.AlertJobHeartbeat, 0)
+	h.db.Order("name").Limit(10).Find(&jobs)
 
-	c.JSON(http.StatusOK, resp)
+	return OpsOverview{
+		HealthScore:   healthScore,
+		SystemMetrics: &sm,
+		Traffic: OpsTraffic{
+			TotalRequests: traffic.TotalRequests,
+			TotalTokens:   traffic.TotalTokens,
+			AvgQPS:        avgQPS,
+			AvgTPS:        avgTPS,
+			CurrentQPS:    currentQPS,
+			CurrentTPS:    currentTPS,
+			PeakQPS:       peakQPS,
+			PeakTPS:       peakTPS,
+		},
+		SLA: OpsSLA{
+			SuccessRate:   successRate,
+			ErrorRate:     errorRate,
+			SLAErrorCount: traffic.TotalRequests - traffic.SuccessCount,
+		},
+		Latency: OpsLatency{
+			DurationP50Ms: latency.DurationP50Ms,
+			DurationP90Ms: latency.DurationP90Ms,
+			DurationP95Ms: latency.DurationP95Ms,
+			DurationP99Ms: latency.DurationP99Ms,
+			DurationAvgMs: int(traffic.DurationAvgMs),
+			DurationMaxMs: latency.DurationMaxMs,
+			TTFTP50Ms:     latency.TTFTP50Ms,
+			TTFTP90Ms:     latency.TTFTP90Ms,
+			TTFTP95Ms:     latency.TTFTP95Ms,
+			TTFTP99Ms:     latency.TTFTP99Ms,
+			TTFTAvgMs:     int(traffic.TTFTAvgMs),
+			TTFTMaxMs:     latency.TTFTMaxMs,
+		},
+		Errors: OpsErrors{
+			RequestErrors:             traffic.RequestErrors,
+			UpstreamErrors:            traffic.UpstreamErrors,
+			BusinessErrors:            traffic.BusinessErrors,
+			UpstreamErrorsExcl429_529: traffic.UpstreamErrorsExcl429_529,
+			RateLimit429_529:          traffic.RateLimit429_529,
+		},
+		Jobs: jobs,
+	}, nil
+}
+
+// GetDashboard 获取运维看板总览
+func (h *OpsHandler) GetDashboard(c *gin.Context) {
+	filter := OpsFilter{
+		TimeRange: c.DefaultQuery("time_range", "1h"),
+		GroupID:   c.Query("group_id"),
+		Provider:  c.Query("provider"),
+		Model:     c.Query("model"),
+	}
+	ov, err := h.buildOpsOverviewWithFilter(c.Request.Context(), filter)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, OpsDashboardResponse{
+		Overview:  ov,
+		Timestamp: time.Now(),
+	})
 }
 
 // calculateHealthScore 计算健康评分 (0-100)
@@ -973,6 +1042,8 @@ func (h *OpsHandler) GetConcurrencyStats(c *gin.Context) {
 	type providerStat struct {
 		Provider     string  `json:"provider"`
 		Active       int64   `json:"active"`
+		MaxCapacity  int64   `json:"max_capacity"`
+		WaitingQueue int64   `json:"waiting_queue"`
 		ErrorRate    float64 `json:"error_rate"`
 		RequestCount int64   `json:"request_count"`
 	}
@@ -987,9 +1058,28 @@ func (h *OpsHandler) GetConcurrencyStats(c *gin.Context) {
 			parts := strings.Split(key, ":")
 			if len(parts) == 3 {
 				val, _ := h.rdb.Get(c.Request.Context(), key).Int64()
+
+				maxCap := int64(0)
+				waiting := int64(0)
+				rateKey := fmt.Sprintf("ratelimit:provider:%s", parts[2])
+				rateJSON, rateErr := h.rdb.Get(c.Request.Context(), rateKey).Result()
+				if rateErr == nil {
+					var rl struct {
+						MaxCapacity int64 `json:"max_capacity"`
+					}
+					if json.Unmarshal([]byte(rateJSON), &rl) == nil && rl.MaxCapacity > 0 {
+						maxCap = rl.MaxCapacity
+						if val > maxCap {
+							waiting = val - maxCap
+						}
+					}
+				}
+
 				providers = append(providers, providerStat{
-					Provider: parts[2],
-					Active:   val,
+					Provider:     parts[2],
+					Active:       val,
+					MaxCapacity:  maxCap,
+					WaitingQueue: waiting,
 				})
 			}
 		}
@@ -2110,6 +2200,53 @@ func (h *OpsHandler) GetGroupOptions(c *gin.Context) {
 	c.JSON(http.StatusOK, groups)
 }
 
+// OpsProviderOption Provider 选项
+type OpsProviderOption struct {
+	Name string `json:"name"`
+}
+
+// ListProviders 获取所有 providers 列表（去重）
+// GET /api/v1/ops/providers
+func (h *OpsHandler) ListProviders(c *gin.Context) {
+	providers := make([]OpsProviderOption, 0)
+	err := h.db.Raw(`
+		SELECT DISTINCT provider as name 
+		FROM call_logs 
+		WHERE ts > NOW() - INTERVAL '7 days'
+		ORDER BY provider
+	`).Scan(&providers).Error
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query providers"})
+		return
+	}
+	c.JSON(http.StatusOK, providers)
+}
+
+// OpsModelOption Model 选项（按使用量排序）
+type OpsModelOption struct {
+	Name       string `json:"name"`
+	TotalCalls int64  `json:"total_calls"`
+}
+
+// ListModels 获取所有 models 列表（按使用量排序，最多 50 个）
+// GET /api/v1/ops/models
+func (h *OpsHandler) ListModels(c *gin.Context) {
+	models := make([]OpsModelOption, 0)
+	err := h.db.Raw(`
+		SELECT model as name, COUNT(*) as total_calls
+		FROM call_logs 
+		WHERE ts > NOW() - INTERVAL '7 days'
+		GROUP BY model
+		ORDER BY total_calls DESC
+		LIMIT 50
+	`).Scan(&models).Error
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query models"})
+		return
+	}
+	c.JSON(http.StatusOK, models)
+}
+
 // =============================================================================
 // 邮件通知配置
 // =============================================================================
@@ -2447,4 +2584,121 @@ func (h *OpsHandler) ResolveErrorLog(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"id": id, "resolved": req.Resolved})
+}
+
+func (h *OpsHandler) ResolveRequestError(c *gin.Context) {
+	h.resolveErrorLog(c, "request_error")
+}
+
+func (h *OpsHandler) ResolveUpstreamError(c *gin.Context) {
+	h.resolveErrorLog(c, "upstream_error")
+}
+
+func (h *OpsHandler) resolveErrorLog(c *gin.Context, logType string) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	var req struct {
+		Resolved bool `json:"resolved"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result := h.db.Exec(
+		`UPDATE system_logs SET extra = COALESCE(extra,'{}')::jsonb || jsonb_build_object('resolved', $1::boolean) WHERE id = $2`,
+		req.Resolved, id,
+	)
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"id": id, "type": logType, "resolved": req.Resolved})
+}
+
+// GetSnapshotV2 聚合响应：overview + throughput_trend + error_trend
+// GET /api/v1/ops/dashboard/snapshot-v2
+func (h *OpsHandler) GetSnapshotV2(c *gin.Context) {
+	filter := OpsFilter{
+		TimeRange: c.DefaultQuery("time_range", "1h"),
+		GroupID:   c.Query("group_id"),
+		Provider:  c.Query("provider"),
+		Model:     c.Query("model"),
+	}
+
+	// overview 与 GetDashboard 完全共用同一构建函数，保证字段结构一致
+	ov, err := h.buildOpsOverviewWithFilter(c.Request.Context(), filter)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// throughput trend
+	interval := timeRangeToInterval(filter.TimeRange)
+	truncExpr := bucketTruncExpr(filter.TimeRange)
+	whereClause, args := h.buildFilterClause(c.Request.Context(), filter, interval)
+
+	var throughputRows []struct {
+		Timestamp    time.Time `gorm:"column:ts" json:"timestamp"`
+		RequestCount int64     `gorm:"column:request_count" json:"request_count"`
+		TokenCount   int64     `gorm:"column:token_count" json:"token_count"`
+	}
+	h.db.Raw(fmt.Sprintf(`
+		SELECT %s as ts, COUNT(*)::bigint as request_count, COALESCE(SUM(total_tokens), 0)::bigint as token_count
+		FROM call_logs WHERE %s
+		GROUP BY %s ORDER BY ts
+	`, truncExpr, whereClause, truncExpr), args...).Scan(&throughputRows)
+
+	throughputPoints := make([]gin.H, 0, len(throughputRows))
+	for _, r := range throughputRows {
+		throughputPoints = append(throughputPoints, gin.H{
+			"timestamp":     r.Timestamp.Format(time.RFC3339),
+			"request_count": r.RequestCount,
+			"token_count":   r.TokenCount,
+		})
+	}
+
+	// error trend
+	var errorRows []struct {
+		Timestamp      time.Time `gorm:"column:ts" json:"timestamp"`
+		RequestErrors  int64     `gorm:"column:request_errors" json:"request_errors"`
+		UpstreamErrors int64     `gorm:"column:upstream_errors" json:"upstream_errors"`
+		BusinessErrors int64     `gorm:"column:business_errors" json:"business_errors"`
+	}
+	h.db.Raw(fmt.Sprintf(`
+		SELECT %s as ts,
+			COUNT(*) FILTER (WHERE status >= 400 AND status < 500)::bigint as request_errors,
+			COUNT(*) FILTER (WHERE status >= 500)::bigint as upstream_errors,
+			COUNT(*) FILTER (WHERE status = 429)::bigint as business_errors
+		FROM call_logs WHERE %s
+		GROUP BY %s ORDER BY ts
+	`, truncExpr, whereClause, truncExpr), args...).Scan(&errorRows)
+
+	errorPoints := make([]gin.H, 0, len(errorRows))
+	for _, r := range errorRows {
+		errorPoints = append(errorPoints, gin.H{
+			"timestamp":       r.Timestamp.Format(time.RFC3339),
+			"request_errors":  r.RequestErrors,
+			"upstream_errors": r.UpstreamErrors,
+			"business_errors": r.BusinessErrors,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"generated_at": time.Now(),
+		"overview":     ov,
+		"throughput_trend": gin.H{
+			"points":    throughputPoints,
+			"dimension": "time",
+		},
+		"error_trend": gin.H{
+			"points": errorPoints,
+		},
+	})
 }

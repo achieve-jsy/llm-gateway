@@ -723,7 +723,7 @@ watch(
 
 const isIdle = computed(() => {
   if (!props.overview) return true
-  return props.overview.traffic.current_qps === 0 && props.overview.sla.error_rate === 0
+  return (props.overview.traffic?.current_qps ?? 0) === 0 && (props.overview.sla?.error_rate ?? 0) === 0
 })
 
 const statusLabel = computed(() => {

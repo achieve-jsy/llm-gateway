@@ -45,9 +45,9 @@
           >
             <el-option
               v-for="p in providerOptions"
-              :key="p"
-              :label="p"
-              :value="p"
+              :key="p.name"
+              :label="p.name"
+              :value="p.name"
             />
           </el-select>
 
@@ -62,9 +62,9 @@
           >
             <el-option
               v-for="m in modelOptions"
-              :key="m"
-              :label="m"
-              :value="m"
+              :key="m.name"
+              :label="m.name"
+              :value="m.name"
             />
           </el-select>
 
@@ -601,7 +601,7 @@ const loadGroupOptions = async () => {
   }
 }
 
-const providerOptions = ref<string[]>([])
+const providerOptions = ref<OpsProviderItem[]>([])
 const providersLoading = ref(false)
 
 const loadProviderOptions = async () => {
@@ -617,7 +617,7 @@ const loadProviderOptions = async () => {
   }
 }
 
-const modelOptions = ref<string[]>([])
+const modelOptions = ref<OpsModelItem[]>([])
 const modelsLoading = ref(false)
 
 const loadModelOptions = async () => {

@@ -167,13 +167,19 @@ type OpsFilter struct {
 }
 
 // buildFilterClause 根据 OpsFilter 生成 SQL WHERE 子句（AND $1 AND $2 AND $3）和参数
-func buildFilterClause(filter OpsFilter, timeInterval string) (string, []interface{}) {
+func (h *OpsHandler) buildFilterClause(ctx context.Context, filter OpsFilter, timeInterval string) (string, []interface{}) {
 	clause := "ts > NOW() - INTERVAL '" + timeInterval + "'"
 	var args []interface{}
 
 	if filter.GroupID != "" {
-		clause += " AND group_id = ?"
-		args = append(args, filter.GroupID)
+		// call_logs 没有 group_id 列, 只有 group_name. 需要从 model_groups 查询
+		var groupName string
+		if err := h.db.WithContext(ctx).Raw(
+			"SELECT name FROM model_groups WHERE id = ?", filter.GroupID,
+		).Scan(&groupName).Error; err == nil && groupName != "" {
+			clause += " AND group_name = ?"
+			args = append(args, groupName)
+		}
 	}
 	if filter.Provider != "" {
 		clause += " AND provider = ?"
@@ -194,7 +200,7 @@ func (h *OpsHandler) buildOpsOverview(ctx context.Context, timeRange string) (Op
 // buildOpsOverviewWithFilter 带过滤条件的概览数据构造
 func (h *OpsHandler) buildOpsOverviewWithFilter(ctx context.Context, filter OpsFilter) (OpsOverview, error) {
 	interval := timeRangeToInterval(filter.TimeRange)
-	whereClause, args := buildFilterClause(filter, interval)
+	whereClause, args := h.buildFilterClause(ctx, filter, interval)
 
 	// 1. 流量统计
 	var traffic struct {
@@ -2635,7 +2641,7 @@ func (h *OpsHandler) GetSnapshotV2(c *gin.Context) {
 	// throughput trend
 	interval := timeRangeToInterval(filter.TimeRange)
 	truncExpr := bucketTruncExpr(filter.TimeRange)
-	whereClause, args := buildFilterClause(filter, interval)
+	whereClause, args := h.buildFilterClause(c.Request.Context(), filter, interval)
 
 	var throughputRows []struct {
 		Timestamp    time.Time `gorm:"column:ts" json:"timestamp"`

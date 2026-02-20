@@ -830,10 +830,20 @@ func (h *OpsHandler) ListRequestErrors(c *gin.Context) {
 		var status, durationMs, upstreamStatus int
 		rows.Scan(&requestID, &ts, &modelName, &groupName, &provider, &status, &durationMs,
 			&upstreamStatus, &ipAddress)
+		// B05/WP3: 列表项以 request_id 作为唯一标识。同时回填 id=request_id，
+		// 兼容前端 :key="item.id" / open-detail(item.id)（detail 端点按
+		// WHERE request_id = ? 查询，故 id=request_id 即可正确打开详情）。
 		items = append(items, gin.H{
-			"request_id": requestID, "ts": ts, "model": modelName,
-			"group_name": groupName, "provider": provider, "status": status,
-			"duration_ms": durationMs, "upstream_status": upstreamStatus, "ip_address": ipAddress,
+			"id":              requestID,
+			"request_id":      requestID,
+			"ts":              ts,
+			"model":           modelName,
+			"group_name":      groupName,
+			"provider":        provider,
+			"status":          status,
+			"duration_ms":     durationMs,
+			"upstream_status": upstreamStatus,
+			"ip_address":      ipAddress,
 		})
 	}
 
@@ -1022,10 +1032,18 @@ func (h *OpsHandler) ListUpstreamErrors(c *gin.Context) {
 		var status, durationMs, upstreamStatus int
 		rows.Scan(&requestID, &ts, &modelName, &groupName, &provider, &status, &durationMs,
 			&upstreamStatus, &ipAddress)
+		// B05/WP3: 同 ListRequestErrors，列表项 id=request_id 兼容前端 :key/open-detail。
 		items = append(items, gin.H{
-			"request_id": requestID, "ts": ts, "model": modelName,
-			"group_name": groupName, "provider": provider, "status": status,
-			"duration_ms": durationMs, "upstream_status": upstreamStatus, "ip_address": ipAddress,
+			"id":              requestID,
+			"request_id":      requestID,
+			"ts":              ts,
+			"model":           modelName,
+			"group_name":      groupName,
+			"provider":        provider,
+			"status":          status,
+			"duration_ms":     durationMs,
+			"upstream_status": upstreamStatus,
+			"ip_address":      ipAddress,
 		})
 	}
 
@@ -1038,14 +1056,42 @@ func (h *OpsHandler) ListUpstreamErrors(c *gin.Context) {
 
 // GetConcurrencyStats 获取各 provider 并发状态
 // GET /api/v1/ops/concurrency
+//
+// 响应 shape 对齐前端 OpsConcurrencyStatsResponse 契约（B03/WP2）：
+//   - 每项 provider 字段名/结构与前端 OpsProviderConcurrency 一致：
+//     provider_id / provider_name / status / current_load / max_capacity /
+//     active_requests / waiting_queue / is_rate_limited / rate_limit_remaining /
+//     rate_limit_reset_seconds / error_count_5min / last_error_at /
+//     last_error_message / provider_type。
+//   - 响应补充聚合项：rate_limited_providers / error_providers /
+//     total_active_requests / total_waiting_queue。
+//
+// 数据源说明（不造假）：
+//   - active / max_capacity / waiting_queue 来自 Redis（concurrency:provider:* 与
+//     ratelimit:provider:*）。
+//   - error_count_5min 由 call_logs 最近 5 分钟错误数推算（error_rate * request_count
+//     取整）；无 call_logs 时为 0。
+//   - is_rate_limited / rate_limit_remaining / rate_limit_reset_seconds：当前无独立
+//     数据源，返回 false / 0 + TODO(WP8)（需接 Redis writer/account 维度）。
+//   - group / account 三级并发(参考仓 OpsConcurrencyStatsResponse.platform/group/
+//     account)本端点无数据源，留待 WP8 接 Redis 并发 writer 后补，此处仅返回 provider 维度。
+//   - last_error_at / last_error_message / provider_type：无数据源，返回空/null + TODO。
 func (h *OpsHandler) GetConcurrencyStats(c *gin.Context) {
 	type providerStat struct {
-		Provider     string  `json:"provider"`
-		Active       int64   `json:"active"`
-		MaxCapacity  int64   `json:"max_capacity"`
-		WaitingQueue int64   `json:"waiting_queue"`
-		ErrorRate    float64 `json:"error_rate"`
-		RequestCount int64   `json:"request_count"`
+		ProviderID            string  `json:"provider_id"`
+		ProviderName          string  `json:"provider_name"`
+		ProviderType          string  `json:"provider_type"`
+		Status                string  `json:"status"`
+		CurrentLoad           float64 `json:"current_load"`
+		MaxCapacity           int64   `json:"max_capacity"`
+		ActiveRequests        int64   `json:"active_requests"`
+		WaitingQueue          int64   `json:"waiting_queue"`
+		IsRateLimited         bool    `json:"is_rate_limited"`
+		RateLimitRemaining    int     `json:"rate_limit_remaining"`
+		RateLimitResetSeconds int     `json:"rate_limit_reset_seconds"`
+		ErrorCount5Min        int64   `json:"error_count_5min"`
+		LastErrorAt           *string `json:"last_error_at"`
+		LastErrorMessage      *string `json:"last_error_message"`
 	}
 
 	providers := make([]providerStat, 0)
@@ -1060,7 +1106,6 @@ func (h *OpsHandler) GetConcurrencyStats(c *gin.Context) {
 				val, _ := h.rdb.Get(c.Request.Context(), key).Int64()
 
 				maxCap := int64(0)
-				waiting := int64(0)
 				rateKey := fmt.Sprintf("ratelimit:provider:%s", parts[2])
 				rateJSON, rateErr := h.rdb.Get(c.Request.Context(), rateKey).Result()
 				if rateErr == nil {
@@ -1069,23 +1114,45 @@ func (h *OpsHandler) GetConcurrencyStats(c *gin.Context) {
 					}
 					if json.Unmarshal([]byte(rateJSON), &rl) == nil && rl.MaxCapacity > 0 {
 						maxCap = rl.MaxCapacity
-						if val > maxCap {
-							waiting = val - maxCap
-						}
 					}
 				}
 
+				waiting := int64(0)
+				if maxCap > 0 && val > maxCap {
+					waiting = val - maxCap
+				}
+
+				// current_load = active / max_capacity * 100（max 为 0 时记 0，不造数）
+				currentLoad := 0.0
+				if maxCap > 0 {
+					currentLoad = float64(val) / float64(maxCap) * 100.0
+				}
+
+				// status 推算：负载 > 90% 视为 overloaded，其余 available。
+				// is_rate_limited 暂无独立数据源 → false（TODO WP8 接 account 维度）。
+				status := "available"
+				if currentLoad >= 90.0 {
+					status = "overloaded"
+				}
+
 				providers = append(providers, providerStat{
-					Provider:     parts[2],
-					Active:       val,
-					MaxCapacity:  maxCap,
-					WaitingQueue: waiting,
+					ProviderID:     parts[2],
+					ProviderName:   parts[2],
+					MaxCapacity:    maxCap,
+					ActiveRequests: val,
+					WaitingQueue:   waiting,
+					CurrentLoad:    currentLoad,
+					Status:         status,
+					// IsRateLimited / RateLimitRemaining / RateLimitResetSeconds:
+					// 默认 false/0，TODO(WP8) 接真实 rate-limit writer。
 				})
 			}
 		}
 	}
 
 	// 2. 从 call_logs 获取最近的错误率（最近 5 分钟）
+	//    注意：含 Postgres 方言（::float/::bigint/INTERVAL），SQLite 上不跑；
+	//    生产 Postgres 可用。错误统计缺失时 error_count_5min 保持 0（不造假）。
 	var errorStats []struct {
 		Provider     string  `gorm:"column:provider"`
 		ErrorRate    float64 `gorm:"column:error_rate"`
@@ -1100,7 +1167,6 @@ func (h *OpsHandler) GetConcurrencyStats(c *gin.Context) {
 		GROUP BY provider
 	`).Scan(&errorStats)
 
-	// 合并数据
 	errMap := make(map[string]struct {
 		ErrorRate    float64
 		RequestCount int64
@@ -1112,17 +1178,31 @@ func (h *OpsHandler) GetConcurrencyStats(c *gin.Context) {
 		}{es.ErrorRate, es.RequestCount}
 	}
 
+	// 聚合计数
+	var rateLimitedProviders, errorProviders, totalActive, totalWaiting int64
 	for i := range providers {
-		if es, ok := errMap[providers[i].Provider]; ok {
-			providers[i].ErrorRate = es.ErrorRate
-			providers[i].RequestCount = es.RequestCount
+		if es, ok := errMap[providers[i].ProviderID]; ok {
+			// error_count_5min ≈ error_rate * request_count（取整，真实推算非编造）
+			providers[i].ErrorCount5Min = int64(es.ErrorRate * float64(es.RequestCount))
 		}
+		if providers[i].IsRateLimited {
+			rateLimitedProviders++
+		}
+		if providers[i].ErrorCount5Min > 0 {
+			errorProviders++
+		}
+		totalActive += providers[i].ActiveRequests
+		totalWaiting += providers[i].WaitingQueue
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"providers":           providers,
-		"total_providers":     len(providers),
-		"available_providers": len(providers),
+		"providers":               providers,
+		"total_providers":         len(providers),
+		"available_providers":     len(providers) - int(rateLimitedProviders),
+		"rate_limited_providers":  rateLimitedProviders,
+		"error_providers":         errorProviders,
+		"total_active_requests":   totalActive,
+		"total_waiting_queue":     totalWaiting,
 	})
 }
 
@@ -2665,14 +2745,35 @@ func (h *OpsHandler) ResolveErrorLog(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"id": id, "resolved": req.Resolved})
 }
 
+// ResolveRequestError 标记请求错误为已解决
+// PUT /api/v1/ops/request-errors/:id/resolve
+//
+// B05/WP3 降级方案：request-errors / upstream-errors 来源于 call_logs，主键是
+// request_id（字符串），无数字 id；而 resolveErrorLog 用 strconv.ParseUint(id)
+// 匹配 system_logs.id —— 对这两类 resolve 根本不可用（id 不是数字，且表也不对）。
+// 完整方案需新建 error_resolve_states 表（WP11），本次不做。此处返回 409 明确
+// 语义，前端对该类按钮禁用并提示"请用错误日志视图"。
 func (h *OpsHandler) ResolveRequestError(c *gin.Context) {
-	h.resolveErrorLog(c, "request_error")
+	c.JSON(http.StatusConflict, gin.H{
+		"error": "request-errors resolve not supported in-place; use the error-logs view",
+		"hint":  "该类错误（来自 call_logs）不支持就地标记，请用错误日志视图操作",
+	})
 }
 
+// ResolveUpstreamError 标记上游错误为已解决
+// PUT /api/v1/ops/upstream-errors/:id/resolve
+// （同 ResolveRequestError 降级方案，返回 409）
 func (h *OpsHandler) ResolveUpstreamError(c *gin.Context) {
-	h.resolveErrorLog(c, "upstream_error")
+	c.JSON(http.StatusConflict, gin.H{
+		"error": "upstream-errors resolve not supported in-place; use the error-logs view",
+		"hint":  "该类错误（来自 call_logs）不支持就地标记，请用错误日志视图操作",
+	})
 }
 
+// resolveErrorLog 仅供 error-logs 视图使用：error-logs 本身查 system_logs，
+// 主键是数字 id，故 ParseUint + UPDATE system_logs 可用。
+// 注意：SQL 含 ::jsonb 方言，SQLite 上不可跑（error-logs resolve 测试在真
+// Postgres 或 dialect-aware 后补，见 WP3/WP11）。
 func (h *OpsHandler) resolveErrorLog(c *gin.Context, logType string) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 64)

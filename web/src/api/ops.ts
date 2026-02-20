@@ -276,7 +276,8 @@ export interface OpsErrorListResponse {
 // ============ 并发统计类型 ============
 
 export interface OpsProviderConcurrency {
-  provider_id: number
+  // B03/WP2: provider_id 为 provider 名称字符串（后端无数字 id）。对齐后端契约。
+  provider_id: string
   provider_name: string
   provider_type: string
   status: 'available' | 'rate_limited' | 'overloaded' | 'error' | 'unavailable'

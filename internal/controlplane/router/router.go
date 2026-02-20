@@ -381,6 +381,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		systemMetricsCollector.Start(context.Background())
 		opsHandler := handler.NewOpsHandler(db, rdb, systemMetricsCollector)
 		adminGroup.GET("/ops/groups", opsHandler.GetGroupOptions)
+		adminGroup.GET("/ops/providers", opsHandler.ListProviders)
+		adminGroup.GET("/ops/models", opsHandler.ListModels)
 		adminGroup.GET("/ops/dashboard", opsHandler.GetDashboard)
 		adminGroup.GET("/ops/dashboard/snapshot-v2", opsHandler.GetSnapshotV2)
 		adminGroup.GET("/ops/traffic-trend", opsHandler.GetTrafficTrend)

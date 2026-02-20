@@ -42,9 +42,9 @@
         <tbody>
           <tr
             v-for="item in items"
-            :key="item.id"
+            :key="item.request_id || item.id"
             class="ops-table-row"
-            @click="$emit('open-detail', item.id)"
+            @click="$emit('open-detail', item.request_id || item.id)"
           >
             <td class="ops-td-time">{{ formatTime(item.ts) }}</td>
             <td>
@@ -90,7 +90,8 @@ const props = defineProps<{
 
 defineEmits<{
   'update:show': [val: boolean]
-  'open-detail': [id: number]
+  // B05/WP3: open-detail 携带 request_id（字符串），detail 端点按 request_id 查。
+  'open-detail': [id: string]
 }>()
 
 const titleText = ref(props.errorType === 'request' ? '请求错误列表' : '上游错误列表')

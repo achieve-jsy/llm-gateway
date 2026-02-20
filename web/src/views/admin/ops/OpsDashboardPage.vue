@@ -279,7 +279,8 @@ const showRequestDetails = ref(false)
 const showEmailNotification = ref(false)
 const showRuntimeSettings = ref(false)
 const errorDetailsType = ref<'request' | 'upstream'>('request')
-const selectedErrorId = ref<number | null>(null)
+// B05/WP3: selectedErrorId 为 request_id（字符串）
+const selectedErrorId = ref<string | null>(null)
 
 let refreshTimer: number | null = null
 let countdownTimer: number | null = null
@@ -454,7 +455,7 @@ function openErrorDetails(type: 'request' | 'upstream') {
   showErrorDetails.value = true
 }
 
-function openErrorDetail(id: number) {
+function openErrorDetail(id: string) {
   selectedErrorId.value = id
 }
 

@@ -48,7 +48,7 @@ func TestListJobs_WithData(t *testing.T) {
 	assert.Equal(t, "config_sync", resp.Items[2].Name)
 }
 
-// TestGetSystemLogSinkHealth_Success 健康检查应返回 200 且包含关键字段
+// TestGetSystemLogSinkHealth_Success 健康检查应返回 200 且包含前端契约字段（B06/WP2）
 func TestGetSystemLogSinkHealth_Success(t *testing.T) {
 	r, _, _ := setupOpsHandler(t)
 	w := doRequest(r, "GET", "/ops/system-logs/health")
@@ -56,10 +56,21 @@ func TestGetSystemLogSinkHealth_Success(t *testing.T) {
 
 	var resp map[string]interface{}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "healthy", resp["status"])
+	// 前端 OpsSystemLogSinkHealth 契约字段（缺一即前端 .toFixed(2) 等会变 undefined 崩）
+	assert.Contains(t, resp, "queue_depth")
+	assert.Contains(t, resp, "queue_capacity")
+	assert.Contains(t, resp, "dropped")
+	assert.Contains(t, resp, "write_failures")
+	assert.Contains(t, resp, "avg_write_delay_ms")
+	assert.Contains(t, resp, "status")
+	// 不再硬编码 "healthy" stub；无 writer 接入时为真实降级态。
+	assert.NotEqual(t, "healthy", resp["status"], "sink-health must not fake 'healthy' (B06)")
+	// 兼容字段仍保留
 	assert.Contains(t, resp, "pending_count")
 	assert.Contains(t, resp, "dropped_count")
 	assert.Contains(t, resp, "writer_enabled")
+	// avg_write_delay_ms 为数值，前端 .toFixed(2) 不再崩
+	assert.IsType(t, float64(0.0), resp["avg_write_delay_ms"])
 }
 
 // TestSystemLogsCRUD_CreateAndQuery 创建日志后直接通过 GORM 查询验证数据完整性

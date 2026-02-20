@@ -1558,26 +1558,81 @@ func (h *OpsHandler) ListSystemLogs(c *gin.Context) {
 
 // GetSystemLogSinkHealth 获取日志接入健康状态
 // GET /api/v1/ops/system-logs/health
+//
+// 字段对齐前端 OpsSystemLogSinkHealth 契约（B06/WP2）：
+// queue_depth / queue_capacity / dropped / write_failures / avg_write_delay_ms /
+// status（+ 保留 pending_count / dropped_count / writer_enabled 兼容旧读取）。
+//
+// 不再硬编码 "healthy" stub。真实可达信息：
+//   - writer_enabled: 当前无异步 sink writer 接入 → false（TODO WP7 接真 sink）。
+//   - queue_depth / pending_count: 从 Redis 日志缓冲 key 估算（logbuf:* 计数），
+//     无则 0。
+//   - dropped / dropped_count: 无计数源 → 0 + TODO(WP7)。
+//   - write_failures / avg_write_delay_ms: 无指标源 → 0（前端 .toFixed(2) 不再崩）。
+//   - status: 无 writer → "degraded"（真实，不编造 healthy）。
 func (h *OpsHandler) GetSystemLogSinkHealth(c *gin.Context) {
+	queueDepth := int64(0)
+	if h.rdb != nil {
+		// 估算挂起日志条数：扫描 logbuf:* 计数（若 writer 未启用，这里通常为 0）。
+		// 用 SCAN 限量，避免大 key 阻塞。
+		iter := h.rdb.Scan(c.Request.Context(), 0, "logbuf:*", 200).Iterator()
+		for iter.Next(c.Request.Context()) {
+			queueDepth++
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"status":           "healthy",
-		"writer_enabled":   true,
-		"recent_errors":    0,
-		"last_write_at":    time.Now().Format(time.RFC3339),
-		"pending_count":    0,
-		"dropped_count":    0,
+		// 前端契约字段（B06）
+		"queue_depth":       queueDepth,
+		"queue_capacity":    0, // TODO(WP7): 接真 sink 后填真实容量
+		"dropped":           0, // TODO(WP7): 接真 sink 的 dropped 计数
+		"write_failures":    0, // TODO(WP7): 接真 sink 的写入失败计数
+		"avg_write_delay_ms": 0.0,
+		"status":            "degraded", // writer 未接入，真实降级态
+		// 兼容字段（旧读取 / 既有测试）
+		"writer_enabled":  false,
+		"recent_errors":   0,
+		"last_write_at":   nil,
+		"pending_count":   queueDepth,
+		"dropped_count":   0,
 	})
 }
 
 // CleanupSystemLogs 清理过期系统日志
 // POST /api/v1/ops/system-logs/cleanup
+//
+// 入参兼容（B06/WP2）：优先读 body JSON {retention_days}，回退 query ?days=。
+// 前端 cleanupSystemLogs 发 body，旧客户端可能发 query，两者皆可。
 func (h *OpsHandler) CleanupSystemLogs(c *gin.Context) {
 	days := 30
-	if d, err := strconv.Atoi(c.DefaultQuery("days", "30")); err == nil && d > 0 {
+
+	// 1. 优先 body JSON {retention_days}（或兼容 days）
+	if c.Request.Body != nil && c.ContentType() == "application/json" {
+		var body struct {
+			RetentionDays *int `json:"retention_days"`
+			Days          *int `json:"days"` // 兼容
+		}
+		if err := c.ShouldBindJSON(&body); err == nil {
+			if body.RetentionDays != nil && *body.RetentionDays > 0 {
+				days = *body.RetentionDays
+			} else if body.Days != nil && *body.Days > 0 {
+				days = *body.Days
+			}
+		}
+	}
+
+	// 2. 回退 query ?days=
+	if d, err := strconv.Atoi(c.DefaultQuery("days", "")); err == nil && d > 0 {
 		days = d
 	}
 
-	result := h.db.Exec(fmt.Sprintf("DELETE FROM system_logs WHERE ts < NOW() - INTERVAL '%d days'", days))
+	// DELETE 兼容 SQLite / Postgres：PG 用 NOW() - INTERVAL，SQLite 用
+	// datetime('now','-N days')。方言由 db.Dialector.Name() 判定。
+	deleteSQL := fmt.Sprintf("DELETE FROM system_logs WHERE ts < NOW() - INTERVAL '%d days'", days)
+	if h.db.Dialector.Name() == "sqlite" {
+		deleteSQL = fmt.Sprintf("DELETE FROM system_logs WHERE ts < datetime('now','-%d days')", days)
+	}
+	result := h.db.Exec(deleteSQL)
 	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to cleanup logs"})
 		return
@@ -1592,14 +1647,24 @@ func (h *OpsHandler) CleanupSystemLogs(c *gin.Context) {
 const settingKeyRuntimeLogConfig = "ops_runtime_log_config"
 
 // defaultLogConfig 默认运行时日志配置
+// 字段对齐前端 OpsRuntimeLogConfig 契约（B06/WP2）：补 retention_days /
+// enable_caller / enable_stacktrace / stacktrace_level / sampling_initial /
+// sampling_thereafter；保留既有 level / slow_request_ms / sample_rate /
+// log_request_body / log_response_body / max_body_bytes。
 func defaultLogConfig() gin.H {
 	return gin.H{
-		"level":              "info",
-		"slow_request_ms":    5000,
-		"sample_rate":        1.0,
-		"log_request_body":   false,
-		"log_response_body":  false,
-		"max_body_bytes":     2048,
+		"level":                "info",
+		"slow_request_ms":      5000,
+		"sample_rate":          1.0,
+		"log_request_body":     false,
+		"log_response_body":    false,
+		"max_body_bytes":       2048,
+		"retention_days":       30,
+		"enable_caller":        true,
+		"enable_stacktrace":    false,
+		"stacktrace_level":     "error",
+		"sampling_initial":     5,
+		"sampling_thereafter":  200,
 	}
 }
 

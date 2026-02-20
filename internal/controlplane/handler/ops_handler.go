@@ -1727,12 +1727,26 @@ func defaultMetricThresholds() gin.H {
 }
 
 // defaultDashboardSettings 默认看板设置
+// 字段对齐前端 OpsDashboardSettings 契约（B02/WP2）：除原有基础项外，
+// 补 show_concurrency_card / show_switch_rate_chart / show_token_stats /
+// show_alert_events / show_system_metrics 等"卡片可见性"开关（默认 true），
+// 以及 auto_refresh_interval / default_query_mode。UpdateDashboardSettings
+// 用 gin.H 反序列化可接住任意子集，缺失字段在 Get 时由本函数补默认。
 func defaultDashboardSettings() gin.H {
 	return gin.H{
-		"default_time_range":  "1h",
-		"refresh_interval":    30,
+		// 基础项（既有）
+		"default_time_range": "1h",
+		"refresh_interval":   30,
 		"show_system_metrics": true,
-		"compact_mode":        false,
+		"compact_mode":       false,
+		// 卡片可见性开关（B02：前端 v-if 读这些字段，缺失会导致卡片消失）
+		"show_concurrency_card":   true,
+		"show_switch_rate_chart":  true,
+		"show_token_stats":        true,
+		"show_alert_events":       true,
+		// 自动刷新与查询模式（前端 OpsDashboardSettings 期望字段）
+		"auto_refresh_interval": 30,
+		"default_query_mode":    "auto",
 	}
 }
 

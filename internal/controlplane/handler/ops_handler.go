@@ -1823,10 +1823,41 @@ type TokenStatsItem struct {
 func (h *OpsHandler) GetTokenStats(c *gin.Context) {
 	timeRange := c.DefaultQuery("time_range", "24h")
 	interval := timeRangeToInterval(timeRange)
-	limit := 50
-	if l, err := strconv.Atoi(c.DefaultQuery("limit", "50")); err == nil && l > 0 && l <= 200 {
-		limit = l
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if pageSize <= 0 || pageSize > 200 {
+		pageSize = 20
 	}
+	if page <= 0 {
+		page = 1
+	}
+	sortBy := c.DefaultQuery("sort_by", "total_tokens")
+	sortOrder := c.DefaultQuery("sort_order", "desc")
+	// 白名单防止 SQL 注入
+	allowedSort := map[string]bool{
+		"total_tokens": true, "request_count": true, "prompt_tokens": true,
+		"completion_tokens": true, "avg_duration_ms": true, "provider": true, "model": true,
+	}
+	if !allowedSort[sortBy] {
+		sortBy = "total_tokens"
+	}
+	if sortOrder != "asc" && sortOrder != "desc" {
+		sortOrder = "desc"
+	}
+	offset := (page - 1) * pageSize
+
+	// 总计（B09/WP2：前端 OpsTokenStatsCard 期望 total/total_requests/total_tokens）
+	var total int64
+	var totalRequests, totalTokens int64
+	h.db.Raw(fmt.Sprintf(`
+		SELECT COUNT(*)::bigint, COALESCE(SUM(request_count),0)::bigint, COALESCE(SUM(total_tokens),0)::bigint
+		FROM (
+			SELECT COUNT(*)::bigint as request_count, COALESCE(SUM(total_tokens),0)::bigint as total_tokens
+			FROM call_logs
+			WHERE ts > NOW() - INTERVAL '%s'
+			GROUP BY provider, model
+		) sub
+	`, interval)).Row().Scan(&total, &totalRequests, &totalTokens)
 
 	items := make([]TokenStatsItem, 0)
 	err := h.db.Raw(fmt.Sprintf(`
@@ -1839,15 +1870,22 @@ func (h *OpsHandler) GetTokenStats(c *gin.Context) {
 		FROM call_logs
 		WHERE ts > NOW() - INTERVAL '%s'
 		GROUP BY provider, model
-		ORDER BY total_tokens DESC
-		LIMIT ?
-	`, interval), limit).Scan(&items).Error
+		ORDER BY %s %s
+		LIMIT %d OFFSET %d
+	`, interval, sortBy, sortOrder, pageSize, offset)).Scan(&items).Error
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query token stats"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items})
+	c.JSON(http.StatusOK, gin.H{
+		"items":          items,
+		"total":          total,
+		"total_requests": totalRequests,
+		"total_tokens":   totalTokens,
+		"page":           page,
+		"page_size":      pageSize,
+	})
 }
 
 // =============================================================================
@@ -2636,6 +2674,24 @@ type ErrorLogEntry struct {
 	Resolved             bool    `gorm:"column:resolved" json:"resolved"`
 }
 
+// parseResolvedFromExtra 从 system_logs.extra JSON 列提取 resolved 字段。
+// 便携实现（不依赖 ::jsonb），兼容 PG+SQLite。
+func parseResolvedFromExtra(raw []byte) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var extra map[string]interface{}
+	if err := json.Unmarshal(raw, &extra); err != nil {
+		return false
+	}
+	if v, ok := extra["resolved"]; ok {
+		if b, ok := v.(bool); ok {
+			return b
+		}
+	}
+	return false
+}
+
 // ListErrorLogs 查询错误日志（从 system_logs 表过滤 ERROR 级别）
 // GET /api/v1/ops/error-logs
 func (h *OpsHandler) ListErrorLogs(c *gin.Context) {
@@ -2700,7 +2756,16 @@ func (h *OpsHandler) ListErrorLogs(c *gin.Context) {
 			duration_ms,
 			request_id, client_request_id,
 			component AS phase,
-			user_id
+			user_id,
+			-- B14/WP2: system_logs 不含 call_logs 的上游字段，这些列返回 NULL；
+			-- 前端 ErrorLogEntry 用 *int/*string 接收 NULL 不会崩。
+			-- 未来 WP11 可从 extra 反查（或写入时冗余存一份）。
+			NULL::int AS upstream_status,
+			NULL::text AS upstream_error_message,
+			NULL::text AS upstream_endpoint,
+			NULL::text AS inbound_endpoint,
+			NULL::text AS api_key_prefix,
+			extra
 		FROM system_logs
 		WHERE %s
 		%s
@@ -2708,7 +2773,28 @@ func (h *OpsHandler) ListErrorLogs(c *gin.Context) {
 	`, baseWhere, orderBy, pageSize, offset)
 
 	items := make([]ErrorLogEntry, 0)
-	h.db.Raw(querySQL, args...).Scan(&items)
+	// B14/WP2: 手工 Scan rows 以提取 extra JSON 中的 resolved 字段。
+	// 避免 ::jsonb 方言，兼容 PG+SQLite。
+	rows, err := h.db.Raw(querySQL, args...).Rows()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query error logs"})
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var e ErrorLogEntry
+		var extraRaw []byte
+		if scanErr := rows.Scan(
+			&e.ID, &e.Ts, &e.Model, &e.Provider, &e.GroupName,
+			&e.Status, &e.ErrorMessage, &e.DurationMs,
+			&e.RequestID, &e.ClientRequestID, &e.Phase, &e.UserID,
+			&e.UpstreamStatus, &e.UpstreamErrorMessage, &e.UpstreamEndpoint,
+			&e.InboundEndpoint, &e.ApiKeyPrefix, &extraRaw,
+		); scanErr == nil {
+			e.Resolved = parseResolvedFromExtra(extraRaw)
+			items = append(items, e)
+		}
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"items":     items,
@@ -2836,11 +2922,16 @@ func (h *OpsHandler) GetSnapshotV2(c *gin.Context) {
 	`, truncExpr, whereClause, truncExpr), args...).Scan(&throughputRows)
 
 	throughputPoints := make([]gin.H, 0, len(throughputRows))
+	sec := bucketSeconds(filter.TimeRange)
 	for _, r := range throughputRows {
 		throughputPoints = append(throughputPoints, gin.H{
 			"timestamp":     r.Timestamp.Format(time.RFC3339),
 			"request_count": r.RequestCount,
 			"token_count":   r.TokenCount,
+			// B10/WP2: 前端 OpsTrafficTrendChart 主加载路径从 snapshot-v2 读取
+			// qps/tps 字段（与 /ops/traffic-trend 算法一致：计数/桶秒数）。
+			"qps": float64(r.RequestCount) / sec,
+			"tps": float64(r.TokenCount) / sec,
 		})
 	}
 

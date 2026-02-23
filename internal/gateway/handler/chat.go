@@ -112,6 +112,8 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 			// 选择 scheduler 指定的 provider，避免路由歧义。
 			if decision.ProviderName != "" {
 				req.Provider = decision.ProviderName
+					// Track provider concurrency in Redis (WP8)
+					middleware.TrackProviderRequest(c, decision.ProviderName)
 			}
 			if decision.Strategy == scheduler.StrategyAuto && decision.ComplexityTier != "" {
 				c.Header("X-Auto-Tier", decision.ComplexityTier)
@@ -207,6 +209,8 @@ func (h *ChatHandler) handleNonStream(c *gin.Context, baseCtx context.Context, r
 
 		req.Model = decision.ModelName
 		req.Provider = decision.ProviderName
+			// Track provider concurrency for failover target (WP8)
+			middleware.TrackProviderRequest(c, decision.ProviderName)
 		c.Set("failover_used", true)
 		slog.Info("failover: switching",
 			"request_id", c.GetString("request_id"),
@@ -292,6 +296,8 @@ func (h *ChatHandler) handleStream(c *gin.Context, baseCtx context.Context, req 
 
 		req.Model = decision.ModelName
 		req.Provider = decision.ProviderName
+			// Track provider concurrency for failover target (WP8)
+			middleware.TrackProviderRequest(c, decision.ProviderName)
 		c.Set("failover_used", true)
 		slog.Info("failover: switching (stream)",
 			"request_id", c.GetString("request_id"),

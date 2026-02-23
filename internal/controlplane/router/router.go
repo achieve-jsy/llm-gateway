@@ -406,6 +406,12 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		// 运维看板（Ops Dashboard）
 		systemMetricsCollector := service.NewSystemMetricsCollector(db, rdb)
 		systemMetricsCollector.Start(context.Background())
+
+		// 系统日志异步写入器（供 sink-health 读取真实状态）
+		sysLogWriter := service.NewSystemLogWriter(db)
+		sysLogWriter.Start()
+		service.SetSystemLogWriter(sysLogWriter)
+
 		opsHandler := handler.NewOpsHandler(db, rdb, systemMetricsCollector)
 		adminGroup.GET("/ops/groups", opsHandler.GetGroupOptions)
 		adminGroup.GET("/ops/providers", opsHandler.ListProviders)

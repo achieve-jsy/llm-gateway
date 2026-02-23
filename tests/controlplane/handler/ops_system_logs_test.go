@@ -63,6 +63,11 @@ func TestGetSystemLogSinkHealth_Success(t *testing.T) {
 	assert.Contains(t, resp, "write_failures")
 	assert.Contains(t, resp, "avg_write_delay_ms")
 	assert.Contains(t, resp, "status")
+	// WP7: 无 global SystemLogWriter 时返回 degraded + writer_enabled=false
+	assert.Equal(t, "degraded", resp["status"])
+	assert.Equal(t, false, resp["writer_enabled"])
+	assert.Contains(t, resp, "pending_count")
+	assert.Contains(t, resp, "dropped_count")
 	// 不再硬编码 "healthy" stub；无 writer 接入时为真实降级态。
 	assert.NotEqual(t, "healthy", resp["status"], "sink-health must not fake 'healthy' (B06)")
 	// 兼容字段仍保留

@@ -910,8 +910,11 @@ func (h *OpsHandler) ListRequestErrors(c *gin.Context) {
 	for rows.Next() {
 		var requestID, ts, modelName, groupName, provider, ipAddress string
 		var status, durationMs, upstreamStatus int
-		rows.Scan(&requestID, &ts, &modelName, &groupName, &provider, &status, &durationMs,
-			&upstreamStatus, &ipAddress)
+		if scanErr := rows.Scan(&requestID, &ts, &modelName, &groupName, &provider, &status, &durationMs,
+			&upstreamStatus, &ipAddress); scanErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to scan request error row"})
+			return
+		}
 		// B05/WP3: 列表项以 request_id 作为唯一标识。同时回填 id=request_id，
 		// 兼容前端 :key="item.id" / open-detail(item.id)（detail 端点按
 		// WHERE request_id = ? 查询，故 id=request_id 即可正确打开详情）。
@@ -1140,8 +1143,11 @@ func (h *OpsHandler) ListUpstreamErrors(c *gin.Context) {
 	for rows.Next() {
 		var requestID, ts, modelName, groupName, provider, ipAddress string
 		var status, durationMs, upstreamStatus int
-		rows.Scan(&requestID, &ts, &modelName, &groupName, &provider, &status, &durationMs,
-			&upstreamStatus, &ipAddress)
+		if scanErr := rows.Scan(&requestID, &ts, &modelName, &groupName, &provider, &status, &durationMs,
+			&upstreamStatus, &ipAddress); scanErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to scan request error row"})
+			return
+		}
 		// B05/WP3: 同 ListRequestErrors，列表项 id=request_id 兼容前端 :key/open-detail。
 		items = append(items, gin.H{
 			"id":              requestID,
@@ -2877,7 +2883,10 @@ func (h *OpsHandler) ListErrorLogs(c *gin.Context) {
 
 	var total int64
 	countSQL := fmt.Sprintf(`SELECT COUNT(*) FROM system_logs WHERE %s`, baseWhere)
-	h.db.Raw(countSQL, args...).Scan(&total)
+	if err := h.db.Raw(countSQL, args...).Scan(&total).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to count error logs"})
+		return
+	}
 
 	orderBy := fmt.Sprintf("ORDER BY %s %s, id DESC", sortBy, sortOrder)
 	offset := (page - 1) * pageSize

@@ -72,7 +72,7 @@
         <el-option label="control-plane" value="control-plane" />
       </el-select>
       <el-input v-model="filters.request_id" size="small" class="ops-filter-input" clearable placeholder="request_id" />
-      <el-input v-model="filters.search" size="small" class="ops-filter-input" clearable placeholder="搜索" :icon="SearchIcon" @keyup.enter="fetchData" />
+      <el-input v-model="filters.search" size="small" class="ops-filter-input" clearable placeholder="搜索" :icon="SearchIcon" @keyup.enter="fetchData(1)" @input="onSearchInput" />
     </div>
 
     <!-- Log Table -->
@@ -144,7 +144,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch, onMounted } from 'vue'
+import { ref, reactive, watch, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search as SearchIcon } from '@element-plus/icons-vue'
 import { opsAPI } from '@/api/ops'
@@ -185,7 +185,22 @@ const filters = reactive({
   search: '',
 })
 
-watch(filters, () => {
+let searchDebounce: ReturnType<typeof setTimeout> | null = null
+
+function onSearchInput() {
+  if (searchDebounce) clearTimeout(searchDebounce)
+  searchDebounce = setTimeout(() => {
+    page.value = 1
+    fetchData()
+  }, 300)
+}
+
+onUnmounted(() => {
+  if (searchDebounce) clearTimeout(searchDebounce)
+})
+
+// 非搜索字段变化时立即触发（搜索字段由 debounce 单独处理）。
+watch([() => filters.timeRange, () => filters.level, () => filters.component, () => filters.request_id], () => {
   page.value = 1
   fetchData()
 })
@@ -217,7 +232,8 @@ function toggleExpand(id: number) {
   expandedId.value = expandedId.value === id ? null : id
 }
 
-async function fetchData() {
+async function fetchData(p?: number) {
+  if (p != null) page.value = p
   loading.value = true
   try {
     const result = await opsAPI.listSystemLogs({

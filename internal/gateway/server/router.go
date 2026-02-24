@@ -20,6 +20,7 @@ import (
 	gwobs "github.com/example/llm-gateway/internal/gateway/observability"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/example/llm-gateway/internal/gateway/provider"
+	"github.com/example/llm-gateway/internal/gateway/quota"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/example/llm-gateway/internal/providers"
 	"github.com/gin-gonic/gin"
@@ -134,30 +135,19 @@ func Setup(
 	r.GET("/ready", healthHandler.Ready)
 
 	// 加载并发管控配置
-	guard := loadGatewayGuard(controlPlaneURL)
-
-	// v0.7: 设置加载器（30s 轮询，供 guard 和分层限速共用）
-	settingsCache := newSettingsCache(controlPlaneURL)
-	go settingsCache.StartPolling(30 * time.Second)
+	// v0.15: 四层配额体系 — 初始化 QuotaConfigLoader + QuotaMiddleware
+	// 替换旧的 GatewayGuard + LayeredRateLimiter
+	quotaHolder := quota.NewSnapshotHolder()
+	quotaStore := quota.NewRedisStore(rdb)
+	quotaLoader := quota.NewConfigLoader(rdb, quotaHolder)
+	if rdb != nil {
+		quotaLoader.StartPolling(30 * time.Second)
+	}
+	quotaMW := quota.NewMiddleware(quotaHolder, quotaStore)
 
 	// OpenAI 兼容接口（需 API Key 认证）
 	v1 := r.Group("/v1")
 	v1.Use(middleware.AuthMiddleware(authClient))
-	v1.Use(guard.Handler())
-	// v0.7: 分层限速（③关 dept/studio 层，Redis 滑动窗口）
-	// 每 30s 从 settings 缓存读取各层 RPM；默认 0 = 不限。
-	v1.Use(middleware.LayeredRateLimiter(rdb, func(c *gin.Context) middleware.RateLimitConfig {
-		s := settingsCache.Get()
-		if s == nil {
-			return middleware.RateLimitConfig{}
-		}
-		return middleware.RateLimitConfig{
-			GlobalRPM: s.GlobalRPM,
-			StudioRPM: s.StudioRPM,
-			DeptRPM:   s.DeptRPM,
-			KeyRPM:    s.KeyRPM,
-		}
-	}))
 	// 请求/响应正文捕获（供 trace 记录使用）
 	v1.Use(middleware.TraceCapture())
 	// 埋点采集中间件放在 OrgCheck 之前，确保 403 拦截的调用也能写入 call_logs
@@ -182,16 +172,16 @@ func Setup(
 		v1.GET("/health/models", modelsHandler.HandleLegacy)
 
 		// Chat completions
-		v1.POST("/chat/completions", chatHandler.Handle)
+		v1.POST("/chat/completions", quotaMW.Handler(), chatHandler.Handle)
 
 		// Embeddings (new)
-		v1.POST("/embeddings", embeddingsHandler.Handle)
+		v1.POST("/embeddings", quotaMW.Handler(), embeddingsHandler.Handle)
 
 		// Responses API — OpenAI Agent SDK 核心依赖
-		v1.POST("/responses", responsesHandler.Handle)
+		v1.POST("/responses", quotaMW.Handler(), responsesHandler.Handle)
 
 		// Anthropic Messages API
-		v1.POST("/messages", messagesHandler.HandleMessages)
+		v1.POST("/messages", quotaMW.Handler(), messagesHandler.HandleMessages)
 		v1.POST("/messages/count_tokens", messagesHandler.HandleCountTokens)
 
 		// Provider passthrough: /v1/p/:provider/*path

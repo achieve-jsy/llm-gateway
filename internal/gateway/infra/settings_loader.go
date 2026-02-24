@@ -18,6 +18,11 @@ type GatewaySettings struct {
 	StudioRPM int `json:"studio_rpm,omitempty"`
 	DeptRPM   int `json:"dept_rpm,omitempty"`
 	KeyRPM    int `json:"key_rpm,omitempty"`
+	// v0.15 四层配额体系（双主体默认）
+	DefaultUserRPM            int `json:"default_user_rpm,omitempty"`
+	DefaultUserMaxConcurrency int `json:"default_user_max_concurrency,omitempty"`
+	DefaultServiceKeyRPM            int `json:"default_service_key_rpm,omitempty"`
+	DefaultServiceKeyMaxConcurrency int `json:"default_service_key_max_concurrency,omitempty"`
 }
 
 type publicSettingsResponse struct {

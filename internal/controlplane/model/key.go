@@ -36,6 +36,10 @@ type ApiKey struct {
 	CreatedBy *uuid.UUID `gorm:"type:uuid" json:"created_by,omitempty"`
 	// v0.8: IP 白名单（JSON 数组字符串，如 `["1.2.3.4","10.0.0.0/8"]`；空字符串或 "[]" = 不限制）
 	IPAllowlist string `gorm:"type:text;not null;default:''" json:"ip_allowlist,omitempty"`
+	// 四层配额体系（Phase 1）
+	// Service Key 主体配额（key_type=service）；NULL = 继承 default_service_key
+	QuotaRPM            *int `gorm:"column:quota_rpm" json:"quota_rpm,omitempty"`
+	QuotaMaxConcurrency *int `gorm:"column:quota_max_concurrency" json:"quota_max_concurrency,omitempty"`
 	CreatedAt       time.Time  `gorm:"not null;autoCreateTime" json:"created_at"`
 	UpdatedAt       time.Time  `gorm:"not null;autoUpdateTime" json:"updated_at"`
 	LastUsedAt      *time.Time `gorm:"type:timestamp with time zone" json:"last_used_at,omitempty"`

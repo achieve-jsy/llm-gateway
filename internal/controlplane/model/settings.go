@@ -40,6 +40,13 @@ type SystemSettings struct {
 	StudioRPM int `json:"studio_rpm"`
 	DeptRPM   int `json:"dept_rpm"`
 	KeyRPM    int `json:"key_rpm"`
+	// v0.15 四层配额体系（双主体默认）
+	// 用户默认：default_user（60 RPM / 10 并发）
+	DefaultUserRPM            int `json:"default_user_rpm"`
+	DefaultUserMaxConcurrency int `json:"default_user_max_concurrency"`
+	// Service Key 默认：default_service_key（120 RPM / 20 并发）
+	DefaultServiceKeyRPM            int `json:"default_service_key_rpm"`
+	DefaultServiceKeyMaxConcurrency int `json:"default_service_key_max_concurrency"`
 	// 邮件通知
 	EmailEnabled      bool   `json:"email_enabled"`
 	SMTPHost          string `json:"smtp_host"`

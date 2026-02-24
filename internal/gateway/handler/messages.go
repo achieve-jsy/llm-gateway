@@ -14,6 +14,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
+	"github.com/example/llm-gateway/internal/gateway/quota"
 	"github.com/gin-gonic/gin"
 )
 
@@ -25,6 +26,7 @@ type MessagesHandler struct {
 	orchestrator  ChatOrchestratorInterface
 	groupDispatch *orchestrator.GroupAwareDispatcher
 	budgetDeps    *middleware.BudgetDeps
+	quotaGate     *quota.ModelQuotaGate // v0.15: 模型层配额检查
 }
 
 // NewMessagesHandler creates a MessagesHandler.
@@ -40,6 +42,11 @@ func NewMessagesHandlerWithGroup(orch ChatOrchestratorInterface, gd *orchestrato
 // SetBudgetDeps 注入预算依赖（router setup 时调用一次）
 func (h *MessagesHandler) SetBudgetDeps(deps *middleware.BudgetDeps) {
 	h.budgetDeps = deps
+}
+
+// SetModelQuotaGate 注入模型配额检查器（router setup 时调用一次）
+func (h *MessagesHandler) SetModelQuotaGate(gate *quota.ModelQuotaGate) {
+	h.quotaGate = gate
 }
 
 // Handle processes POST /v1/messages requests.
@@ -87,6 +94,17 @@ func (h *MessagesHandler) HandleMessages(c *gin.Context) {
 		}
 		if decision != nil {
 			req.Model = decision.ModelName
+		}
+	}
+
+	// v0.15: 模型层配额检查（路由选定具体 model 之后、转发上游之前）
+	if h.quotaGate != nil {
+		subjectType, _ := c.Get("quota_subject_type")
+		subjectID, _ := c.Get("quota_subject_id")
+		if subjectType != nil && subjectID != nil {
+			if err := h.quotaGate.BeforeUpstream(c, subjectType.(string), subjectID.(string), req.Model); err != nil {
+				return // 已在 middleware 中写入 429 响应
+			}
 		}
 	}
 

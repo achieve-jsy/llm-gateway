@@ -14,6 +14,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
+	"github.com/example/llm-gateway/internal/gateway/quota"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/gin-gonic/gin"
 )
@@ -40,6 +41,7 @@ type ChatHandler struct {
 	orchestrator  ChatOrchestratorInterface
 	groupDispatch *orchestrator.GroupAwareDispatcher
 	budgetDeps    *middleware.BudgetDeps // v0.7: 预算预扣依赖（nil 表示跳过预算校验）
+	quotaGate     *quota.ModelQuotaGate  // v0.15: 模型层配额检查（nil 表示跳过）
 }
 
 // NewChatHandler 创建 ChatHandler 实例
@@ -55,6 +57,11 @@ func NewChatHandlerWithGroup(orch ChatOrchestratorInterface, gd *orchestrator.Gr
 // SetBudgetDeps 注入预算依赖（router setup 时调用一次）
 func (h *ChatHandler) SetBudgetDeps(deps *middleware.BudgetDeps) {
 	h.budgetDeps = deps
+}
+
+// SetModelQuotaGate 注入模型配额检查器（router setup 时调用一次）
+func (h *ChatHandler) SetModelQuotaGate(gate *quota.ModelQuotaGate) {
+	h.quotaGate = gate
 }
 
 // Handle 处理 POST /v1/chat/completions 请求
@@ -116,6 +123,19 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 			if decision.Strategy == scheduler.StrategyAuto && decision.ComplexityTier != "" {
 				c.Header("X-Auto-Tier", decision.ComplexityTier)
 				c.Header("X-Auto-Score", fmt.Sprintf("%.2f", decision.ComplexityScore))
+			}
+			
+			// v0.15: 模型层配额检查（在路由选定具体 model 之后、转发上游之前）
+			if h.quotaGate != nil {
+				subjectType, _ := c.Get("quota_subject_type")
+				subjectID, _ := c.Get("quota_subject_id")
+				if st, ok := subjectType.(string); ok {
+					if si, ok := subjectID.(string); ok {
+						if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelID); err != nil {
+							return // BeforeUpstream 已写入 429 响应
+						}
+					}
+				}
 			}
 		}
 	}
@@ -406,4 +426,3 @@ func estimateChatPromptChars(req *core.ChatRequest) int {
 	}
 	return total
 }
-

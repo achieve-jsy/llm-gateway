@@ -145,6 +145,13 @@ func Setup(
 	}
 	quotaMW := quota.NewMiddleware(quotaHolder, quotaStore)
 
+	// v0.15: 模型层配额检查（路由选定具体 model 之后、转发上游之前）
+	modelQuotaGate := quota.NewModelQuotaGate(quotaHolder, quotaStore)
+	chatHandler.SetModelQuotaGate(modelQuotaGate)
+	embeddingsHandler.SetModelQuotaGate(modelQuotaGate)
+	messagesHandler.SetModelQuotaGate(modelQuotaGate)
+	responsesHandler.SetModelQuotaGate(modelQuotaGate)
+
 	// OpenAI 兼容接口（需 API Key 认证）
 	v1 := r.Group("/v1")
 	v1.Use(middleware.AuthMiddleware(authClient))

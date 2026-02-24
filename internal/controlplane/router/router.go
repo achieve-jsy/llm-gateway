@@ -443,7 +443,20 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		sysLogWriter.Start()
 		service.SetSystemLogWriter(sysLogWriter)
 
+		// 日志清理 cron（Redis leader lock 保证单实例）
+		opsCleanup := service.NewOpsCleanupService(db, rdb)
+		// 从 AdvancedSettings 加载保留天数配置
+		if val, err := settingsRepo.GetValue("ops_advanced_settings"); err == nil && val != "" {
+			opsCleanup.LoadRetentionFromSettings(val)
+		}
+		opsCleanup.Start(context.Background())
+
 		opsHandler := handler.NewOpsHandler(db, rdb, systemMetricsCollector)
+
+			// WP9: 邮件服务 + 定时报表服务
+			emailSvc := service.NewEmailService()
+			scheduledReportSvc := service.NewScheduledReportService(db, rdb, emailSvc)
+			scheduledReportSvc.Start()
 		adminGroup.GET("/ops/groups", opsHandler.GetGroupOptions)
 		adminGroup.GET("/ops/providers", opsHandler.ListProviders)
 		adminGroup.GET("/ops/models", opsHandler.ListModels)

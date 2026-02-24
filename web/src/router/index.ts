@@ -126,6 +126,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '我的预算' }
   },
   {
+    path: '/my/quota',
+    name: 'MyQuota',
+    component: () => import('@/views/MyQuotaPage.vue'),
+    meta: { title: '我的配额' }
+  },
+  {
     path: '/admin/budget',
     name: 'BudgetManage',
     component: () => import('@/views/admin/BudgetManagePage.vue'),

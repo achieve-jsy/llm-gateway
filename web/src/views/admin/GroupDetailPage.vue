@@ -160,10 +160,80 @@
             </template>
           </div>
         </div>
-      </el-tab-pane>
-    </el-tabs>
+     </el-tab-pane>
+   </el-tabs>
 
-    <!-- 授权弹窗 -->
+    <!-- 配额设置 Tab -->
+    <el-tab-pane label="配额设置" name="quota">
+      <div class="quota-section">
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 20px"
+        >
+          <template #title>
+            配额说明：设置此模型组的请求频率和并发限制。留空表示不限制，0 表示继承全局默认值。
+          </template>
+        </el-alert>
+
+        <el-form :model="quotaForm" label-width="180px" size="default">
+          <el-form-item label="每分钟请求数 (RPM)">
+            <el-input-number
+              v-model="quotaForm.rpm"
+              :min="0"
+              :max="10000"
+              :step="10"
+              placeholder="不限制"
+              controls-position="right"
+              style="width: 200px"
+            />
+            <span class="quota-hint">0 = 不限制，留空 = 继承默认</span>
+          </el-form-item>
+
+          <el-form-item label="最大并发数">
+            <el-input-number
+              v-model="quotaForm.max_concurrency"
+              :min="0"
+              :max="1000"
+              :step="1"
+              placeholder="不限制"
+              controls-position="right"
+              style="width: 200px"
+            />
+            <span class="quota-hint">0 = 不限制，留空 = 继承默认</span>
+          </el-form-item>
+
+          <el-form-item v-if="quotaEffective">
+            <el-descriptions :column="2" border size="small">
+              <el-descriptions-item label="当前生效 RPM">
+                {{ quotaEffective.rpm === 0 ? '不限制' : quotaEffective.rpm }}
+                <el-tag size="small" type="info" style="margin-left: 8px">
+                  {{ quotaEffective.source === 'override' ? '自定义' : '继承默认' }}
+                </el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="当前生效并发">
+                {{ quotaEffective.max_concurrency === 0 ? '不限制' : quotaEffective.max_concurrency }}
+                <el-tag size="small" type="info" style="margin-left: 8px">
+                  {{ quotaEffective.source === 'override' ? '自定义' : '继承默认' }}
+                </el-tag>
+              </el-descriptions-item>
+            </el-descriptions>
+          </el-form-item>
+        </el-form>
+
+        <div style="margin-top: 20px">
+          <el-button type="primary" :loading="quotaSaving" @click="saveQuota">保存配额</el-button>
+          <el-popconfirm title="确定清除配额设置？将恢复为继承全局默认值" @confirm="clearQuota">
+            <template #reference>
+              <el-button :loading="quotaSaving">清除设置</el-button>
+            </template>
+          </el-popconfirm>
+        </div>
+      </div>
+    </el-tab-pane>
+
+   <!-- 授权弹窗 -->
     <el-dialog v-model="grantVisible" title="添加授权" width="380px">
       <el-form label-width="80px">
         <el-form-item label="类型">
@@ -190,6 +260,8 @@ import { groupsApi } from '@/api/groups'
 import type { GroupCapability } from '@/api/groups'
 import { getGroupEntitlements, grantEntitlement, revokeEntitlement, setGroupOpenMode } from '@/services/control-plane'
 import type { GroupEntitlement } from '@/types/entitlement'
+import { getGroupQuota, setGroupQuota } from '@/api/quota'
+import type { QuotaEffective } from '@/api/quota'
 
 const route = useRoute()
 const router = useRouter()
@@ -219,6 +291,54 @@ const capForm = ref({
 })
 const capSaving = ref(false)
 const capAggregated = ref<GroupCapability | null>(null)
+
+// ─── 配额设置 ───
+const quotaForm = ref({ rpm: null as number | null, max_concurrency: null as number | null })
+const quotaSaving = ref(false)
+const quotaEffective = ref<QuotaEffective | null>(null)
+
+async function loadQuota() {
+  try {
+    const res = await getGroupQuota(String(groupId.value))
+    const data = (res as any)?.data
+    if (data) {
+      quotaEffective.value = data
+      // 如果是 override，填入表单；否则留空
+      if (data.source === 'override') {
+        quotaForm.value.rpm = data.rpm
+        quotaForm.value.max_concurrency = data.max_concurrency
+      }
+    }
+  } catch (e: any) {
+    // 404 = 未配置，忽略
+  }
+}
+
+async function saveQuota() {
+  quotaSaving.value = true
+  try {
+    await setGroupQuota(String(groupId.value), {
+      rpm: quotaForm.value.rpm,
+      max_concurrency: quotaForm.value.max_concurrency,
+    })
+    ElMessage.success('配额已保存')
+    await loadQuota()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '配额保存失败')
+  } finally { quotaSaving.value = false }
+}
+
+async function clearQuota() {
+  quotaSaving.value = true
+  try {
+    await setGroupQuota(String(groupId.value), { rpm: null, max_concurrency: null })
+    quotaForm.value = { rpm: null, max_concurrency: null }
+    ElMessage.success('已清除，恢复为不限制')
+    await loadQuota()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '清除失败')
+  } finally { quotaSaving.value = false }
+}
 
 function strategyLabel(s: string): string {
   const map: Record<string, string> = { round_robin: '轮询', priority: '优先级', weighted: '加权', auto: '自动' }
@@ -349,7 +469,7 @@ async function resetCapability() {
 
 onMounted(async () => {
   await loadGroup()
-  await Promise.all([loadModels(), loadEntitlements(), loadCapabilities()])
+  await Promise.all([loadModels(), loadEntitlements(), loadCapabilities(), loadQuota()])
 })
 </script>
 
@@ -378,4 +498,6 @@ onMounted(async () => {
 .cap-form { padding: 12px 16px; border: 1px solid var(--el-border-color-lighter); border-radius: 8px; }
 .cap-btn-row { display: flex; gap: 8px; padding: 0 4px; }
 .cap-auto-hint { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 13px; color: var(--el-text-color-secondary); padding: 12px 16px; background: var(--el-fill-color-light); border-radius: 8px; }
+.quota-section { padding-top: 16px; }
+.quota-hint { margin-left: 12px; font-size: 12px; color: var(--el-text-color-secondary); }
 </style>

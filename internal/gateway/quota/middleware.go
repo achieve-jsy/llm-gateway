@@ -6,6 +6,8 @@ import (
 
 	"github.com/example/llm-gateway/internal/core/quota"
 	gwmodel "github.com/example/llm-gateway/internal/gateway/model"
+	"time"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -50,6 +52,16 @@ func (m *QuotaMiddleware) Handler() gin.HandlerFunc {
 
 		subjectType, subjectID := ResolveSubject(id)
 		snap := m.holder.Get()
+
+		// 豁免检查：如果主体在豁免列表中，跳过全部配额检查
+		if snap != nil {
+			for _, ex := range snap.Exemptions {
+				if ex.SubjectType == subjectType && ex.SubjectID == subjectID && ex.ExpiresAt.After(time.Now()) {
+					c.Next()
+					return
+				}
+			}
+		}
 
 		// 模型组名 = 请求中的 model 参数（即组名）
 		groupName := extractModelParam(c)

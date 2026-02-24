@@ -8,6 +8,7 @@ import (
 	"time"
 
 	authmodel "github.com/example/llm-gateway/internal/auth/model"
+	corequota "github.com/example/llm-gateway/internal/core/quota"
 	cpmodel "github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/redis/go-redis/v9"
@@ -286,6 +287,15 @@ func (s *QuotaService) buildSnapshot(ctx context.Context) (*QuotaSnapshotData, e
 	for _, m := range models {
 		snap.Models[m.ID.String()] = QuotaEntry{RPM: m.QuotaRPM, MaxConcurrency: m.QuotaMaxConcurrency}
 	}
+	// 加载当前生效的豁免
+	var exemptions []corequota.QuotaExemption
+	s.db.WithContext(ctx).Where("expires_at > ?", time.Now()).Find(&exemptions)
+	snap.Exemptions = make([]QuotaExemptionEntry, 0, len(exemptions))
+	for _, e := range exemptions {
+		snap.Exemptions = append(snap.Exemptions, QuotaExemptionEntry{
+			SubjectType: e.SubjectType, SubjectID: e.SubjectID, Reason: e.Reason, ExpiresAt: e.ExpiresAt,
+		})
+	}
 	return snap, nil
 }
 
@@ -326,7 +336,7 @@ type QuotaSnapshotData struct {
 	ServiceKeys map[string]QuotaEntry `json:"service_keys"`
 	Groups      map[string]QuotaEntry `json:"groups"`
 	Models      map[string]QuotaEntry `json:"models"`
-	Exemptions  []QuotaExemption      `json:"exemptions,omitempty"`
+	Exemptions  []QuotaExemptionEntry      `json:"exemptions,omitempty"`
 	UpdatedAt   time.Time             `json:"updated_at"`
 }
 
@@ -335,7 +345,7 @@ type QuotaEntry struct {
 	MaxConcurrency *int `json:"max_concurrency,omitempty"`
 }
 
-type QuotaExemption struct {
+type QuotaExemptionEntry struct {
 	SubjectType string    `json:"subject_type"`
 	SubjectID   string    `json:"subject_id"`
 	Reason      string    `json:"reason"`

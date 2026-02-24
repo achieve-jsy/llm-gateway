@@ -680,6 +680,12 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	adminGroup.GET("/models/:id/quota", guard(rbac.PermQuotaModelSet), quotaHandler.GetModelQuota)
 	// 我的配额（所有登录用户只读）
 	r.GET("/api/v1/me/quota", middleware.JWTAuth(), quotaHandler.GetMyQuota)
+	// 紧急豁免（admin only）
+	quotaExemptionSvc := service.NewQuotaExemptionService(db, rdb)
+	quotaExemptionHandler := handler.NewQuotaExemptionHandler(quotaExemptionSvc)
+	adminGroup.POST("/quota/exemptions", guard(rbac.PermQuotaDefaultSet), quotaExemptionHandler.Create)
+	adminGroup.DELETE("/quota/exemptions/:id", guard(rbac.PermQuotaDefaultSet), quotaExemptionHandler.Revoke)
+	adminGroup.GET("/quota/exemptions", guard(rbac.PermQuotaViewScoped), quotaExemptionHandler.List)
 	// 内部 snapshot（gateway 拉取）
 	internalGroup.GET("/quota/snapshot", func(c *gin.Context) {
 		snap, err := quotaSvc.GetQuotaSnapshot(c.Request.Context())

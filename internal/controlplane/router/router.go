@@ -666,6 +666,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	// v0.15 四层配额体系
 	quotaSvc := service.NewQuotaService(db, rdb)
 	quotaHandler := handler.NewQuotaHandler(quotaSvc)
+	quotaHandler.SetAuditRecorder(auditSvc)
 	// 用户配额（管理员设置，ScopeManage = dept_admin/studio_admin/admin 按管辖范围）
 	adminGroup.PATCH("/users/:id/quota", guard(rbac.PermQuotaUserSet), quotaHandler.SetUserQuota)
 	adminGroup.GET("/users/:id/quota", guard(rbac.PermQuotaUserSet), quotaHandler.GetUserQuota)
@@ -683,6 +684,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	// 紧急豁免（admin only）
 	quotaExemptionSvc := service.NewQuotaExemptionService(db, rdb)
 	quotaExemptionHandler := handler.NewQuotaExemptionHandler(quotaExemptionSvc)
+	quotaExemptionHandler.SetAuditRecorder(auditSvc)
 	adminGroup.POST("/quota/exemptions", guard(rbac.PermQuotaDefaultSet), quotaExemptionHandler.Create)
 	adminGroup.DELETE("/quota/exemptions/:id", guard(rbac.PermQuotaDefaultSet), quotaExemptionHandler.Revoke)
 	adminGroup.GET("/quota/exemptions", guard(rbac.PermQuotaViewScoped), quotaExemptionHandler.List)

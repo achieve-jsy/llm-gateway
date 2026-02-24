@@ -4,17 +4,23 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/example/llm-gateway/internal/controlplane/audit"
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
 type QuotaExemptionHandler struct {
-	svc *service.QuotaExemptionService
+	svc     *service.QuotaExemptionService
+	auditor auditRecorder
 }
 
 func NewQuotaExemptionHandler(svc *service.QuotaExemptionService) *QuotaExemptionHandler {
 	return &QuotaExemptionHandler{svc: svc}
+}
+
+func (h *QuotaExemptionHandler) SetAuditRecorder(r auditRecorder) {
+	h.auditor = r
 }
 
 type createExemptionRequest struct {
@@ -51,6 +57,18 @@ func (h *QuotaExemptionHandler) Create(c *gin.Context) {
 		return
 	}
 
+	if h.auditor != nil {
+		uid, _ := c.Get("user_id")
+		uname, _ := c.Get("user_name")
+		uidStr, _ := uid.(string)
+		unameStr, _ := uname.(string)
+		uidUUID, _ := uuid.Parse(uidStr)
+		h.auditor.Record(audit.Input{
+			UserID: uidUUID, UserName: unameStr,
+			Action: audit.ActionQuotaExemptionCreate, ResourceType: audit.ResourceQuota,
+			ResourceID: exemption.ID.String(), ClientIP: c.ClientIP(),
+		})
+	}
 	c.JSON(http.StatusCreated, gin.H{"code": 0, "data": exemption})
 }
 
@@ -74,6 +92,18 @@ func (h *QuotaExemptionHandler) Revoke(c *gin.Context) {
 		return
 	}
 
+	if h.auditor != nil {
+		uid, _ := c.Get("user_id")
+		uname, _ := c.Get("user_name")
+		uidStr, _ := uid.(string)
+		unameStr, _ := uname.(string)
+		uidUUID, _ := uuid.Parse(uidStr)
+		h.auditor.Record(audit.Input{
+			UserID: uidUUID, UserName: unameStr,
+			Action: audit.ActionQuotaExemptionRevoke, ResourceType: audit.ResourceQuota,
+			ResourceID: id.String(), ClientIP: c.ClientIP(),
+		})
+	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "豁免已撤销"})
 }
 

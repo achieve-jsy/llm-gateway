@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/example/llm-gateway/internal/controlplane/audit"
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // QuotaServiceInterface 配额服务接口
@@ -23,11 +25,21 @@ type QuotaServiceInterface interface {
 
 // QuotaHandler 配额管理 HTTP 处理器
 type QuotaHandler struct {
-	svc *service.QuotaService
+	svc    *service.QuotaService
+	auditor auditRecorder
+}
+
+type auditRecorder interface {
+	Record(in audit.Input)
 }
 
 func NewQuotaHandler(svc *service.QuotaService) *QuotaHandler {
 	return &QuotaHandler{svc: svc}
+}
+
+// SetAuditRecorder 注入审计日志记录器
+func (h *QuotaHandler) SetAuditRecorder(r auditRecorder) {
+	h.auditor = r
 }
 
 // QuotaPatchRequest PATCH /api/v1/.../quota 请求体
@@ -51,6 +63,7 @@ func (h *QuotaHandler) SetUserQuota(c *gin.Context) {
 		})
 		return
 	}
+	h.recordAudit(c, audit.ActionQuotaUserUpdate, audit.ResourceUser, userID)
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "用户配额已更新"})
 }
 
@@ -81,6 +94,7 @@ func (h *QuotaHandler) SetServiceKeyQuota(c *gin.Context) {
 		})
 		return
 	}
+	h.recordAudit(c, audit.ActionQuotaServiceKeyUpdate, audit.ResourceServiceKey, keyID)
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "Service Key 配额已更新"})
 }
 
@@ -117,6 +131,7 @@ func (h *QuotaHandler) SetGroupQuota(c *gin.Context) {
 		})
 		return
 	}
+	h.recordAudit(c, audit.ActionQuotaGroupUpdate, audit.ResourceGroup, c.Param("id"))
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "模型组配额已更新"})
 }
 
@@ -153,6 +168,7 @@ func (h *QuotaHandler) SetModelQuota(c *gin.Context) {
 		})
 		return
 	}
+	h.recordAudit(c, audit.ActionQuotaModelUpdate, audit.ResourceModel, modelID)
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "模型配额已更新"})
 }
 
@@ -191,4 +207,24 @@ func (h *QuotaHandler) GetMyQuota(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "data": eff})
+}
+
+
+func (h *QuotaHandler) recordAudit(c *gin.Context, action audit.Action, resourceType audit.Resource, resourceID string) {
+	if h.auditor == nil {
+		return
+	}
+	userID, _ := c.Get("user_id")
+	userName, _ := c.Get("user_name")
+	uid, _ := userID.(string)
+	uname, _ := userName.(string)
+	uidUUID, _ := uuid.Parse(uid)
+	h.auditor.Record(audit.Input{
+		UserID:       uidUUID,
+		UserName:     uname,
+		Action:       action,
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
+		ClientIP:     c.ClientIP(),
+	})
 }

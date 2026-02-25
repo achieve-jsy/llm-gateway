@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/example/llm-gateway/internal/core"
@@ -257,40 +256,6 @@ func makePassthroughHandler(router *providers.Router) gin.HandlerFunc {
 	}
 }
 
-func loadGatewayGuard(controlPlaneURL string) *middleware.GatewayGuard {
-	settings, err := infra.LoadGatewaySettings(controlPlaneURL)
-	if err != nil {
-		slog.Warn("[guard] failed to load gateway settings from control-plane, using defaults",
-			"error", err,
-			"default_rate_limit", 60,
-			"default_max_concurrency", 10,
-		)
-		settings = &infra.GatewaySettings{RateLimitPerMinute: 60, MaxConcurrencyPerKey: 10}
-	}
-
-	guard := middleware.NewGatewayGuard(settings.RateLimitPerMinute, settings.MaxConcurrencyPerKey)
-	guard.StartCleanup(2 * time.Minute)
-
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
-			updated, err := infra.LoadGatewaySettings(controlPlaneURL)
-			if err != nil {
-				continue
-			}
-			guard.UpdateLimits(updated.RateLimitPerMinute, updated.MaxConcurrencyPerKey)
-		}
-	}()
-
-	slog.Info("[guard] gateway guard initialized",
-		"rate_limit_per_min", settings.RateLimitPerMinute,
-		"max_concurrency", settings.MaxConcurrencyPerKey,
-	)
-	return guard
-}
-
-// buildBudgetPostHook 构造预算累加 + 告警触发 hook。
 // hook 在 usage_collector 埋点后调用，异步执行 Redis 累加和控制面告警触发。
 //
 // v0.9 事后记账模式：
@@ -377,42 +342,3 @@ func triggerBudgetAlert(chain []struct {
 	}
 }
 
-// settingsCache 是 GatewaySettings 的内存缓存，后台定时器定期从控制面刷新。
-// 供 guard（key 级 RPM）和 LayeredRateLimiter（分层 RPM）共用，避免每次请求都打 HTTP。
-type settingsCache struct {
-	mu              sync.RWMutex
-	current         *infra.GatewaySettings
-	controlPlaneURL string
-}
-
-func newSettingsCache(controlPlaneURL string) *settingsCache {
-	sc := &settingsCache{controlPlaneURL: controlPlaneURL}
-	// 初始同步加载一次（失败则保持 nil，由 guard 的默认值兜底）
-	if s, err := infra.LoadGatewaySettings(controlPlaneURL); err == nil {
-		sc.current = s
-	}
-	return sc
-}
-
-// StartPolling 后台每 interval 拉取最新 settings。
-func (sc *settingsCache) StartPolling(interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for range ticker.C {
-		s, err := infra.LoadGatewaySettings(sc.controlPlaneURL)
-		if err != nil {
-			slog.Debug("settings cache: poll failed", "error", err)
-			continue
-		}
-		sc.mu.Lock()
-		sc.current = s
-		sc.mu.Unlock()
-	}
-}
-
-// Get 返回最新的 settings（可能为 nil）。
-func (sc *settingsCache) Get() *infra.GatewaySettings {
-	sc.mu.RLock()
-	defer sc.mu.RUnlock()
-	return sc.current
-}

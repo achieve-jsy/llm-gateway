@@ -42,13 +42,19 @@ func (h *QuotaExemptionHandler) Create(c *gin.Context) {
 
 	userID, _ := c.Get("user_id")
 	uid, _ := userID.(string)
+	userName, _ := c.Get("user_name")
+	uname, _ := userName.(string)
+	// 用 user_name 作为 created_by，方便列表展示（UUID 在 users 表中查不到时无法解析）
+	if uname == "" {
+		uname = uid
+	}
 
 	exemption, err := h.svc.CreateExemption(c.Request.Context(), service.CreateExemptionRequest{
 		SubjectType: req.SubjectType,
 		SubjectID:   req.SubjectID,
 		Reason:      req.Reason,
 		ExpiresAt:   req.ExpiresAt,
-		CreatedBy:   uid,
+		CreatedBy:   uname,
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{

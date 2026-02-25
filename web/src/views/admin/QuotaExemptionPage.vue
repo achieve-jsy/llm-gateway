@@ -72,11 +72,7 @@
         </template>
       </el-table-column>
 
-      <el-table-column label="创建人" width="120" show-overflow-tooltip>
-        <template #default="{ row }">
-          {{ row.created_by_name || row.created_by }}
-        </template>
-      </el-table-column>
+      <el-table-column label="创建人" width="120" prop="created_by" show-overflow-tooltip />
 
       <el-table-column label="创建时间" width="170">
         <template #default="{ row }">

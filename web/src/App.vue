@@ -28,6 +28,10 @@
           <el-icon><DataLine /></el-icon>
           <template #title>我的用量</template>
         </el-menu-item>
+        <el-menu-item index="/my/quota">
+          <el-icon><Timer /></el-icon>
+          <template #title>我的配额</template>
+        </el-menu-item>
         <el-menu-item index="/model-square">
           <el-icon><Collection /></el-icon>
           <template #title>模型广场</template>
@@ -140,6 +144,10 @@
             <el-icon><Bell /></el-icon>
             <template #title>公告管理</template>
           </el-menu-item>
+          <el-menu-item index="/admin/quota-exemptions">
+            <el-icon><CircleClose /></el-icon>
+            <template #title>配额豁免</template>
+          </el-menu-item>
         </template>
       </el-menu>
     </aside>
@@ -213,7 +221,7 @@ import { onMounted, computed, ref, watch, onUnmounted } from 'vue'
 import { isDark, toggleTheme } from './composables/useTheme'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
-import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close, Menu, Wallet, Lock, TrendCharts, Document, DataBoard, Sunny, Moon } from '@element-plus/icons-vue'
+import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close, Menu, Wallet, Lock, TrendCharts, Document, DataBoard, Sunny, Moon, Timer, CircleClose } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/common/NotificationBell.vue'
 import AnnouncementBanner from '@/components/common/AnnouncementBanner.vue'
 import AnnouncementPopup from '@/components/common/AnnouncementPopup.vue'

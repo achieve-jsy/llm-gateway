@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	cpcron "github.com/example/llm-gateway/internal/controlplane/cron"
 	authrepo "github.com/example/llm-gateway/internal/auth/repository"
 	"github.com/example/llm-gateway/internal/controlplane/auth"
 	cpconfig "github.com/example/llm-gateway/internal/controlplane/config"
@@ -688,6 +689,17 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	adminGroup.POST("/quota/exemptions", guard(rbac.PermQuotaDefaultSet), quotaExemptionHandler.Create)
 	adminGroup.DELETE("/quota/exemptions/:id", guard(rbac.PermQuotaDefaultSet), quotaExemptionHandler.Revoke)
 	adminGroup.GET("/quota/exemptions", guard(rbac.PermQuotaViewScoped), quotaExemptionHandler.List)
+	// 过期豁免清理定时任务（每小时一次）
+	exemptionCleanupCron := cpcron.NewExemptionCleanupCron(quotaExemptionSvc)
+	exemptionCleanupCron.Start(context.Background())
+	go func() {
+		if count, err := exemptionCleanupCron.RunOnce(context.Background()); err != nil {
+			slog.Warn("exemption cleanup: initial run failed", "error", err)
+		} else if count > 0 {
+			slog.Info("exemption cleanup: initial run completed", "cleaned", count)
+		}
+	}()
+
 	// 内部 snapshot（gateway 拉取）
 	internalGroup.GET("/quota/snapshot", func(c *gin.Context) {
 		snap, err := quotaSvc.GetQuotaSnapshot(c.Request.Context())

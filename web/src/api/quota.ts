@@ -56,3 +56,33 @@ export async function setModelQuota(modelId: string, data: QuotaPatchRequest) {
 export async function getMyQuota() {
   return http.get('/api/v1/me/quota')
 }
+
+// ── 配额豁免 ─────────────────────────────────────────────
+export interface QuotaExemption {
+  id: string
+  subject_type: 'user' | 'service_key'
+  subject_id: string
+  reason: string
+  expires_at: string
+  created_by: string
+  created_at: string
+}
+
+export interface QuotaExemptionCreateRequest {
+  subject_type: 'user' | 'service_key'
+  subject_id: string
+  reason: string
+  expires_at: string
+}
+
+export async function listQuotaExemptions() {
+  return http.get('/api/v1/quota/exemptions')
+}
+
+export async function createQuotaExemption(data: QuotaExemptionCreateRequest) {
+  return http.post('/api/v1/quota/exemptions', data)
+}
+
+export async function deleteQuotaExemption(id: string) {
+  return http.delete(`/api/v1/quota/exemptions/${id}`)
+}

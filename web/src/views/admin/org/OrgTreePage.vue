@@ -339,9 +339,13 @@
                 <el-table-column label="归集时间" width="100" prop="joined_at" />
                 <el-table-column
                   v-if="isGlobalAdmin || myStudioIds.includes(selectedDeptParentStudio?.id ?? '')"
-                  label="操作" width="130" align="center"
+                  label="操作" width="180" align="center"
                 >
                   <template #default="{ row }">
+                    <el-button
+                      link type="primary" size="small"
+                      @click.stop="openUserQuotaDialog(row)"
+                    >配额</el-button>
                     <el-button
                       link type="primary" size="small"
                       @click.stop="openChangeDeptDialog(row)"
@@ -965,6 +969,13 @@
 
     </template>
   </el-drawer>
+
+  <!-- ═══ 用户配额编辑对话框 ════════════════════════════════════════════════════ -->
+  <UserQuotaDialog
+    v-model:visible="userQuotaDialogVisible"
+    :user="userQuotaTarget"
+    @saved="onUserQuotaSaved"
+  />
 </template>
 
 <script setup lang="ts">
@@ -983,6 +994,7 @@ import type { Studio, OrgDepartment, ImportDiff, EmployeeImportPreviewRow, Emplo
 import http from '@/services/http'
 import { useRoute, useRouter } from 'vue-router'
 import BudgetScopePanel from '@/components/budget/BudgetScopePanel.vue'
+import UserQuotaDialog from '@/components/UserQuotaDialog.vue'
 
 const orgStore  = useOrgStore()
 const authStore = useAuthStore()
@@ -1792,6 +1804,19 @@ function goToMemberDashboard() {
     },
   })
   memberDrawerVisible.value = false
+}
+
+// ─── 用户配额编辑 ────────────────────────────────────────────────────────────────
+const userQuotaDialogVisible = ref(false)
+const userQuotaTarget = ref<{ id: string; name: string; email: string } | null>(null)
+
+function openUserQuotaDialog(member: DeptMember) {
+  userQuotaTarget.value = { id: member.id, name: member.name, email: member.email }
+  userQuotaDialogVisible.value = true
+}
+
+function onUserQuotaSaved() {
+  // 配额保存后无需刷新成员列表，对话框内部管理
 }
 </script>
 

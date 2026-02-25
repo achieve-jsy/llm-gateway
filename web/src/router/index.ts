@@ -186,6 +186,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '公告管理', requiresAdmin: true }
   },
   {
+    path: '/admin/quota-exemptions',
+    name: 'QuotaExemptions',
+    component: () => import('@/views/admin/QuotaExemptionPage.vue'),
+    meta: { title: '配额豁免', requiresAdmin: true }
+  },
+  {
     path: '/admin/model-status-logs',
     name: 'ModelStatusLogs',
     component: () => import('@/views/admin/ModelStatusLogPage.vue'),

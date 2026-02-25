@@ -141,6 +141,7 @@ func Setup(
 	quotaLoader := quota.NewConfigLoader(rdb, quotaHolder)
 	if rdb != nil {
 		quotaLoader.StartPolling(30 * time.Second)
+		quotaLoader.SubscribeToChanges(context.Background())
 	}
 	quotaMW := quota.NewMiddleware(quotaHolder, quotaStore)
 

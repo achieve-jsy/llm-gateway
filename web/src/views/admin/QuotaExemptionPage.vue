@@ -343,7 +343,7 @@ async function loadExemptions() {
   try {
     const res = await listQuotaExemptions()
     const data = (res as any)?.data
-    allExemptions.value = data?.exemptions || []
+    allExemptions.value = data?.data || []
   } catch (e: any) {
     loadError.value = e?.response?.data?.error || e?.message || '未知错误'
     allExemptions.value = []

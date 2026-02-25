@@ -118,17 +118,53 @@
         label-width="100px"
       >
         <el-form-item label="主体类型" prop="subject_type">
-          <el-select v-model="createForm.subject_type" placeholder="选择主体类型" style="width: 100%">
+          <el-select v-model="createForm.subject_type" placeholder="选择主体类型" style="width: 100%" @change="onTypeChange">
             <el-option label="用户" value="user" />
             <el-option label="Service Key" value="service_key" />
           </el-select>
         </el-form-item>
-        <el-form-item label="主体 ID" prop="subject_id">
-          <el-input
+        <el-form-item :label="createForm.subject_type === 'user' ? '选择用户' : '选择 Service Key'" prop="subject_id">
+          <!-- 用户搜索 -->
+          <el-select
+            v-if="createForm.subject_type === 'user'"
             v-model="createForm.subject_id"
-            :placeholder="createForm.subject_type === 'user' ? '输入用户 ID' : '输入 Service Key ID'"
-            maxlength="100"
-          />
+            filterable
+            remote
+            :remote-method="searchUser"
+            :loading="userSearchLoading"
+            placeholder="输入姓名或邮箱搜索"
+            style="width: 100%"
+            @change="onSubjectChange"
+          >
+            <el-option
+              v-for="u in userSearchResults"
+              :key="u.id"
+              :label="`${u.name}（${u.email}）`"
+              :value="u.id"
+            />
+          </el-select>
+          <!-- Service Key 搜索 -->
+          <el-select
+            v-else
+            v-model="createForm.subject_id"
+            filterable
+            remote
+            :remote-method="searchServiceKey"
+            :loading="skSearchLoading"
+            placeholder="输入名称搜索"
+            style="width: 100%"
+            @change="onSubjectChange"
+          >
+            <el-option
+              v-for="sk in skSearchResults"
+              :key="sk.id"
+              :label="`${sk.name}（${sk.deptName}）`"
+              :value="sk.id"
+            />
+          </el-select>
+          <div v-if="selectedSubjectLabel" class="form-hint">
+            已选择：{{ selectedSubjectLabel }}
+          </div>
         </el-form-item>
         <el-form-item label="豁免原因" prop="reason">
           <el-input
@@ -161,7 +197,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import {
@@ -170,6 +206,12 @@ import {
   deleteQuotaExemption,
 } from '@/api/quota'
 import type { QuotaExemption } from '@/api/quota'
+import { useOrgStore } from '@/stores/org'
+import type { UserSearchResult } from '@/stores/org'
+import { listServiceKeys } from '@/services/control-plane'
+import type { ServiceKeyItem } from '@/types/service-key'
+
+const orgStore = useOrgStore()
 
 const loading = ref(false)
 const loadError = ref('')
@@ -194,14 +236,79 @@ const createForm = reactive({
 const createRules: FormRules = {
   subject_type: [{ required: true, message: '请选择主体类型', trigger: 'change' }],
   subject_id: [
-    { required: true, message: '请输入主体 ID', trigger: 'blur' },
-    { max: 100, message: '主体 ID 不超过 100 个字符', trigger: 'blur' },
+    { required: true, message: '请选择主体', trigger: 'change' },
   ],
   reason: [
     { required: true, message: '请输入豁免原因', trigger: 'blur' },
     { max: 500, message: '原因不超过 500 个字符', trigger: 'blur' },
   ],
   expires_at: [{ required: true, message: '请选择过期时间', trigger: 'change' }],
+}
+
+// ── 用户远程搜索 ──────────────────────────────────────────
+const userSearchLoading = ref(false)
+const userSearchResults = ref<UserSearchResult[]>([])
+
+async function searchUser(keyword: string) {
+  if (!keyword.trim()) {
+    userSearchResults.value = []
+    return
+  }
+  userSearchLoading.value = true
+  try {
+    userSearchResults.value = await orgStore.searchUsers(keyword, 20)
+  } catch {
+    userSearchResults.value = []
+  } finally {
+    userSearchLoading.value = false
+  }
+}
+
+// ── Service Key 远程搜索 ──────────────────────────────────
+const skSearchLoading = ref(false)
+const skSearchResults = ref<ServiceKeyItem[]>([])
+
+async function searchServiceKey(keyword: string) {
+  if (!keyword.trim()) {
+    skSearchResults.value = []
+    return
+  }
+  skSearchLoading.value = true
+  try {
+    // 后端无 keyword 搜索，先拉全量再前端过滤
+    const res = await listServiceKeys('', 1, 100)
+    const kw = keyword.toLowerCase()
+    skSearchResults.value = res.items.filter(
+      sk => sk.name.toLowerCase().includes(kw) || sk.deptName?.toLowerCase().includes(kw)
+    )
+  } catch {
+    skSearchResults.value = []
+  } finally {
+    skSearchLoading.value = false
+  }
+}
+
+// ── 已选主体展示标签 ─────────────────────────────────────
+const selectedSubjectLabel = computed(() => {
+  if (!createForm.subject_id) return ''
+  if (createForm.subject_type === 'user') {
+    const u = userSearchResults.value.find(x => x.id === createForm.subject_id)
+    return u ? `${u.name}（${u.email}）` : createForm.subject_id
+  } else {
+    const sk = skSearchResults.value.find(x => x.id === createForm.subject_id)
+    return sk ? `${sk.name}（${sk.deptName}）` : createForm.subject_id
+  }
+})
+
+function onSubjectChange() {
+  createFormRef.value?.clearValidate('subject_id')
+}
+
+function onTypeChange() {
+  createForm.subject_id = ''
+  userSearchResults.value = []
+  skSearchResults.value = []
+  createFormRef.value?.clearValidate('subject_id')
 }
 
 function formatTime(iso: string): string {
@@ -250,6 +357,8 @@ function openCreateDialog() {
   createForm.subject_id = ''
   createForm.reason = ''
   createForm.expires_at = ''
+  userSearchResults.value = []
+  skSearchResults.value = []
   createDialogVisible.value = true
   setTimeout(() => createFormRef.value?.clearValidate(), 80)
 }

@@ -62,9 +62,11 @@ export interface QuotaExemption {
   id: string
   subject_type: 'user' | 'service_key'
   subject_id: string
+  subject_name: string
   reason: string
   expires_at: string
   created_by: string
+  created_by_name: string
   created_at: string
 }
 

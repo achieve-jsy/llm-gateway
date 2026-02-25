@@ -109,7 +109,7 @@ func (h *QuotaExemptionHandler) Revoke(c *gin.Context) {
 
 // List GET /api/v1/quota/exemptions
 func (h *QuotaExemptionHandler) List(c *gin.Context) {
-	exemptions, err := h.svc.ListActiveExemptions(c.Request.Context())
+	exemptions, err := h.svc.ListActiveExemptionsWithNames(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{"type": "internal_error", "message": "获取豁免列表失败", "code": CodeInternalError},

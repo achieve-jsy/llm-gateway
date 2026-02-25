@@ -39,17 +39,12 @@
       class="exemption-table"
       row-key="id"
     >
-      <el-table-column label="主体类型" width="130" align="center">
+      <el-table-column label="主体" min-width="200" show-overflow-tooltip>
         <template #default="{ row }">
-          <el-tag :type="row.subject_type === 'user' ? 'primary' : 'warning'" size="small" round>
-            {{ row.subject_type === 'user' ? '用户' : 'Service Key' }}
+          <span>{{ row.subject_name || row.subject_id }}</span>
+          <el-tag :type="row.subject_type === 'user' ? 'primary' : 'warning'" size="small" round style="margin-left: 8px">
+            {{ row.subject_type === 'user' ? '用户' : 'SK' }}
           </el-tag>
-        </template>
-      </el-table-column>
-
-      <el-table-column label="主体 ID" min-width="200" show-overflow-tooltip>
-        <template #default="{ row }">
-          <code class="mono-id">{{ row.subject_id }}</code>
         </template>
       </el-table-column>
 
@@ -77,7 +72,11 @@
         </template>
       </el-table-column>
 
-      <el-table-column label="创建人" width="120" prop="created_by" show-overflow-tooltip />
+      <el-table-column label="创建人" width="120" show-overflow-tooltip>
+        <template #default="{ row }">
+          {{ row.created_by_name || row.created_by }}
+        </template>
+      </el-table-column>
 
       <el-table-column label="创建时间" width="170">
         <template #default="{ row }">

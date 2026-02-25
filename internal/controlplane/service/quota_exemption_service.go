@@ -182,6 +182,87 @@ func (s *QuotaExemptionService) refreshSnapshotAsync() {
 	slog.Info("quota snapshot updated with exemptions", "count", len(exemptions))
 }
 
+// QuotaExemptionListItem 豁免列表项（含解析后的名称）
+type QuotaExemptionListItem struct {
+	quota.QuotaExemption
+	SubjectName   string `json:"subject_name"`    // 用户姓名 或 Service Key 名称
+	CreatedByName string `json:"created_by_name"` // 创建人姓名
+}
+
+// ListActiveExemptionsWithNames 列出当前生效的豁免，并解析主体名称和创建人名称
+func (s *QuotaExemptionService) ListActiveExemptionsWithNames(ctx context.Context) ([]QuotaExemptionListItem, error) {
+	exemptions, err := s.ListActiveExemptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(exemptions) == 0 {
+		return []QuotaExemptionListItem{}, nil
+	}
+
+	// 收集用户 ID 和 key ID
+	userIDs := make(map[string]bool)
+	keyIDs := make(map[string]bool)
+	for _, e := range exemptions {
+		if e.SubjectType == "user" {
+			userIDs[e.SubjectID] = true
+		} else if e.SubjectType == "service_key" {
+			keyIDs[e.SubjectID] = true
+		}
+		userIDs[e.CreatedBy] = true
+	}
+
+	// 批量查询用户名称
+	userNames := make(map[string]string)
+	if len(userIDs) > 0 {
+		ids := make([]string, 0, len(userIDs))
+		for id := range userIDs {
+			ids = append(ids, id)
+		}
+		type userNameRow struct {
+			ID   string
+			Name string
+		}
+		var rows []userNameRow
+		_ = s.db.WithContext(ctx).Table("users").Select("id, name").Where("id IN ?", ids).Find(&rows).Error
+		for _, r := range rows {
+			userNames[r.ID] = r.Name
+		}
+	}
+
+	// 批量查询 Service Key 名称
+	keyNames := make(map[string]string)
+	if len(keyIDs) > 0 {
+		ids := make([]string, 0, len(keyIDs))
+		for id := range keyIDs {
+			ids = append(ids, id)
+		}
+		type keyNameRow struct {
+			ID   string
+			Name string
+		}
+		var rows []keyNameRow
+		_ = s.db.WithContext(ctx).Table("api_keys").Select("id, name").Where("id IN ?", ids).Find(&rows).Error
+		for _, r := range rows {
+			keyNames[r.ID] = r.Name
+		}
+	}
+
+	// 组装结果
+	items := make([]QuotaExemptionListItem, 0, len(exemptions))
+	for _, e := range exemptions {
+		item := QuotaExemptionListItem{QuotaExemption: e}
+		if e.SubjectType == "user" {
+			item.SubjectName = userNames[e.SubjectID]
+		} else {
+			item.SubjectName = keyNames[e.SubjectID]
+		}
+		item.CreatedByName = userNames[e.CreatedBy]
+		items = append(items, item)
+	}
+
+	return items, nil
+}
+
 // CreateExemptionRequest 创建豁免请求
 type CreateExemptionRequest struct {
 	SubjectType string    `json:"subject_type"` // user | service_key

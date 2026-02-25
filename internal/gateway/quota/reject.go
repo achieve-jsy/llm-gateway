@@ -33,6 +33,9 @@ func WriteQuotaRejected(c *gin.Context, v quota.QuotaViolation) {
 		"quota_limit", v.Limit,
 	)
 
+	// Prometheus 指标
+	RecordRejection(c.Request.Context(), v.Layer, v.Gate, v.SubjectType)
+
 	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
 		"error": gin.H{
 			"type":                errorType(v.Gate),

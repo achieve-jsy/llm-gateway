@@ -8,4 +8,5 @@ CREATE TABLE IF NOT EXISTS quota_exemptions (
     created_at   TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_quota_exemptions_active ON quota_exemptions (subject_type, subject_id) WHERE expires_at > now();
+-- 查询活跃豁免时使用 (subject_type, subject_id, expires_at) 覆盖
+CREATE INDEX idx_quota_exemptions_active ON quota_exemptions (subject_type, subject_id, expires_at);

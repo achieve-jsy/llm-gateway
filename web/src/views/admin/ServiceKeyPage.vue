@@ -432,72 +432,15 @@
     </el-dialog>
 
     <!-- 配额编辑对话框 -->
-    <el-dialog
-      v-model="quotaDialogVisible"
-      title="编辑 Service Key 配额"
-      width="500px"
-      :close-on-click-modal="false"
-      destroy-on-close
-    >
-      <div v-if="quotaEditingKey" class="quota-edit-body">
-        <el-alert
-          :title="`Service Key：${quotaEditingKey.name}`"
-          type="info"
-          show-icon
-          :closable="false"
-          style="margin-bottom: 16px"
-        />
-        <el-form label-width="160px" label-position="top">
-          <el-form-item label="每分钟请求数 (RPM)">
-            <el-input-number
-              v-model="quotaForm.rpm"
-              :min="0"
-              :max="10000"
-              :step="10"
-              controls-position="right"
-              style="width: 100%"
-            />
-            <span class="quota-hint">0 = 不限制，留空 = 继承默认 ({{ quotaEffective?.default_rpm ?? 120 }})</span>
-          </el-form-item>
-          <el-form-item label="最大并发数">
-            <el-input-number
-              v-model="quotaForm.max_concurrency"
-              :min="0"
-              :max="1000"
-              :step="1"
-              controls-position="right"
-              style="width: 100%"
-            />
-            <span class="quota-hint">0 = 不限制，留空 = 继承默认 ({{ quotaEffective?.default_max_concurrency ?? 20 }})</span>
-          </el-form-item>
-        </el-form>
-        <div v-if="quotaEffective" class="quota-effective">
-          <div class="quota-effective-title">当前生效配额</div>
-          <div class="quota-effective-grid">
-            <div class="quota-effective-item">
-              <span class="label">RPM：</span>
-              <span class="value">{{ quotaEffective.rpm === 0 ? '不限制' : quotaEffective.rpm }}</span>
-              <el-tag size="small" :type="quotaEffective.source === 'override' ? 'success' : 'info'" style="margin-left: 6px">
-                {{ quotaEffective.source === 'override' ? '自定义' : '继承默认' }}
-              </el-tag>
-            </div>
-            <div class="quota-effective-item">
-              <span class="label">并发：</span>
-              <span class="value">{{ quotaEffective.max_concurrency === 0 ? '不限制' : quotaEffective.max_concurrency }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-      <template #footer>
-        <el-button @click="quotaDialogVisible = false">取消</el-button>
-        <el-popconfirm title="清除配额设置？将恢复为继承默认值" @confirm="clearQuota">
-          <template #reference>
-            <el-button>清除设置</el-button>
-          </template>
-        </el-popconfirm>
-        <el-button type="primary" :loading="quotaSaving" @click="saveQuota">保存</el-button>
-      </template>
-    </el-dialog>
+    <QuotaEditDialog
+      v-model:visible="quotaDialogVisible"
+      subject-type="service_key"
+      :subject-id="quotaSubjectId"
+      :subject-label="quotaSubjectLabel"
+      :default-rpm="120"
+      :default-concurrency="20"
+      @saved="onQuotaSaved"
+    />
   </div>
 </template>
 
@@ -506,8 +449,7 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, InfoFilled, DocumentCopy, Edit } from '@element-plus/icons-vue'
 import { updateServiceKeyIPAllowlist } from '@/services/audit'
-import { getServiceKeyQuota, setServiceKeyQuota } from '@/api/quota'
-import type { QuotaEffective } from '@/api/quota'
+import QuotaEditDialog from '@/components/QuotaEditDialog.vue'
 
 import {
   listServiceKeys,
@@ -627,55 +569,17 @@ const ipCreateInput = ref('')
 
 // ── 配额编辑 ──────────────────────────────────────────────
 const quotaDialogVisible = ref(false)
-const quotaEditingKey = ref<ServiceKeyItem | null>(null)
-const quotaForm = ref<{ rpm: number | null; max_concurrency: number | null }>({ rpm: null, max_concurrency: null })
-const quotaSaving = ref(false)
-const quotaEffective = ref<QuotaEffective | null>(null)
+const quotaSubjectId = ref('')
+const quotaSubjectLabel = ref('')
 
-async function openQuotaDialog(row: ServiceKeyItem) {
-  quotaEditingKey.value = row
-  quotaForm.value = { rpm: null, max_concurrency: null }
-  quotaEffective.value = null
+function openQuotaDialog(row: ServiceKeyItem) {
+  quotaSubjectId.value = row.id
+  quotaSubjectLabel.value = `Service Key：${row.name}`
   quotaDialogVisible.value = true
-  try {
-    const res = await getServiceKeyQuota(row.id)
-    const data = (res as any)?.data
-    if (data) {
-      quotaEffective.value = data
-      if (data.source === 'override') {
-        quotaForm.value.rpm = data.rpm
-        quotaForm.value.max_concurrency = data.max_concurrency
-      }
-    }
-  } catch { /* ignore */ }
 }
 
-async function saveQuota() {
-  if (!quotaEditingKey.value) return
-  quotaSaving.value = true
-  try {
-    await setServiceKeyQuota(quotaEditingKey.value.id, {
-      rpm: quotaForm.value.rpm,
-      max_concurrency: quotaForm.value.max_concurrency,
-    })
-    ElMessage.success('配额已保存')
-    await openQuotaDialog(quotaEditingKey.value)
-  } catch (e: any) {
-    ElMessage.error(e?.message || '配额保存失败')
-  } finally { quotaSaving.value = false }
-}
-
-async function clearQuota() {
-  if (!quotaEditingKey.value) return
-  quotaSaving.value = true
-  try {
-    await setServiceKeyQuota(quotaEditingKey.value.id, { rpm: null, max_concurrency: null })
-    quotaForm.value = { rpm: null, max_concurrency: null }
-    ElMessage.success('已清除，恢复为继承默认')
-    await openQuotaDialog(quotaEditingKey.value)
-  } catch (e: any) {
-    ElMessage.error(e?.message || '清除失败')
-  } finally { quotaSaving.value = false }
+function onQuotaSaved() {
+  // 配额保存后无需刷新列表
 }
 
 function openIPAllowlistDialog(row: ServiceKeyItem) {
@@ -1355,13 +1259,4 @@ html.dark .key-reveal-card {
   margin-bottom: 8px;
 }
 
-/* Quota dialog styles */
-.quota-edit-body { padding: 0 4px; }
-.quota-hint { display: block; font-size: 12px; color: var(--el-text-color-secondary); margin-top: 4px; }
-.quota-effective { margin-top: 16px; padding: 12px; background: var(--el-fill-color-light); border-radius: 8px; }
-.quota-effective-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--el-text-color-primary); }
-.quota-effective-grid { display: flex; gap: 24px; }
-.quota-effective-item { font-size: 13px; }
-.quota-effective-item .label { color: var(--el-text-color-secondary); }
-.quota-effective-item .value { font-weight: 600; color: var(--el-text-color-primary); }
 </style>

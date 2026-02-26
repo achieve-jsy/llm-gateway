@@ -21,26 +21,56 @@
               <div class="quota-item">
                 <div class="quota-label">每分钟请求数 (RPM)</div>
                 <div class="quota-value">
-                  {{ quota.rpm === 0 ? '不限制' : quota.rpm }}
+                  {{ quota.effective.rpm === 0 ? '不限制' : quota.effective.rpm }}
                 </div>
                 <div class="quota-source">
-                  <el-tag :type="sourceTagType(quota.source)" size="small" effect="light">
-                    {{ sourceLabel(quota.source) }}
+                  <el-tag :type="sourceTagType(quota.effective.source)" size="small" effect="light">
+                    {{ sourceLabel(quota.effective.source) }}
                   </el-tag>
                 </div>
               </div>
               <div class="quota-item">
                 <div class="quota-label">最大并发数</div>
                 <div class="quota-value">
-                  {{ quota.max_concurrency === 0 ? '不限制' : quota.max_concurrency }}
+                  {{ quota.effective.max_concurrency === 0 ? '不限制' : quota.effective.max_concurrency }}
                 </div>
                 <div class="quota-source">
-                  <el-tag :type="sourceTagType(quota.source)" size="small" effect="light">
-                    {{ sourceLabel(quota.source) }}
+                  <el-tag :type="sourceTagType(quota.effective.source)" size="small" effect="light">
+                    {{ sourceLabel(quota.effective.source) }}
                   </el-tag>
                 </div>
               </div>
             </div>
+
+            <!-- 当前使用量 -->
+            <div class="usage-section">
+              <h4 class="usage-title">当前使用量</h4>
+              <div class="usage-grid">
+                <div class="usage-item">
+                  <div class="usage-label">
+                    当前 RPM: {{ quota.current_usage.rpm }}
+                    <span v-if="quota.effective.rpm > 0"> / {{ quota.effective.rpm }}</span>
+                  </div>
+                  <el-progress
+                    :percentage="rpmPercentage"
+                    :stroke-width="16"
+                    :color="getProgressColor(rpmPercentage)"
+                  />
+                </div>
+                <div class="usage-item">
+                  <div class="usage-label">
+                    当前并发: {{ quota.current_usage.max_concurrency }}
+                    <span v-if="quota.effective.max_concurrency > 0"> / {{ quota.effective.max_concurrency }}</span>
+                  </div>
+                  <el-progress
+                    :percentage="concPercentage"
+                    :stroke-width="16"
+                    :color="getProgressColor(concPercentage)"
+                  />
+                </div>
+              </div>
+            </div>
+
             <div class="quota-info">
               <el-alert
                 type="info"
@@ -48,14 +78,14 @@
                 show-icon
               >
                 <template #title>
-                  <span v-if="quota.source === 'default_user'">
-                    当前使用全局默认配额（用户默认：{{ quota.default_rpm ?? '-' }} RPM / {{ quota.default_max_concurrency ?? '-' }} 并发）。管理员可为您单独调整。
+                  <span v-if="quota.effective.source === 'default_user'">
+                    当前使用全局默认配额（用户默认：{{ quota.effective.default_rpm ?? '-' }} RPM / {{ quota.effective.default_max_concurrency ?? '-' }} 并发）。管理员可为您单独调整。
                   </span>
-                  <span v-else-if="quota.source === 'override'">
+                  <span v-else-if="quota.effective.source === 'override'">
                     管理员已为您配置专属配额。
                   </span>
                   <span v-else>
-                    配额来源：{{ sourceLabel(quota.source) }}
+                    配额来源：{{ sourceLabel(quota.effective.source) }}
                   </span>
                 </template>
               </el-alert>
@@ -73,19 +103,51 @@
       </template>
 
       <div v-else-if="!loading" class="state-empty">
-        <p>无法加载配额信息</p>
+        <el-result icon="warning" title="无法加载配额信息" sub-title="请检查网络后重试">
+          <template #extra>
+            <el-button type="primary" @click="loadQuota">重新加载</el-button>
+          </template>
+        </el-result>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { getMyQuota } from '@/api/quota'
-import type { QuotaEffective } from '@/api/quota'
+import type { MyQuotaResponse } from '@/api/quota'
 
 const loading = ref(false)
-const quota = ref<QuotaEffective | null>(null)
+const quota = ref<MyQuotaResponse | null>(null)
+
+const rpmPercentage = computed(() => {
+  if (!quota.value || quota.value.effective.rpm === 0) return 0
+  return Math.min(100, Math.round((quota.value.current_usage.rpm / quota.value.effective.rpm) * 100))
+})
+
+const concPercentage = computed(() => {
+  if (!quota.value || quota.value.effective.max_concurrency === 0) return 0
+  return Math.min(100, Math.round((quota.value.current_usage.max_concurrency / quota.value.effective.max_concurrency) * 100))
+})
+
+function getProgressColor(percentage: number): string {
+  if (percentage > 80) return '#f56c6c'  // 红色
+  if (percentage > 60) return '#e6a23c'  // 黄色
+  return '#67c23a'  // 绿色
+}
+
+async function loadQuota() {
+  loading.value = true
+  try {
+    const res = await getMyQuota()
+    quota.value = (res as any)?.data || null
+  } catch {
+    quota.value = null
+  } finally {
+    loading.value = false
+  }
+}
 
 function sourceLabel(source: string): string {
   const map: Record<string, string> = {
@@ -97,23 +159,17 @@ function sourceLabel(source: string): string {
   return map[source] || source
 }
 
-function sourceTagType(source: string): '' | 'success' | 'warning' | 'info' {
-  if (source === 'override') return 'success'
-  if (source === 'unset') return 'info'
-  return ''
+function sourceTagType(source: string): string {
+  switch (source) {
+    case 'override': return 'success'      // 绿色
+    case 'default_user': return ''         // 蓝色（默认）
+    case 'default_service_key': return ''   // 蓝色（默认）
+    case 'unset': return 'info'            // 灰色
+    default: return 'info'
+  }
 }
 
-onMounted(async () => {
-  loading.value = true
-  try {
-    const res = await getMyQuota()
-    quota.value = (res as any)?.data || null
-  } catch {
-    quota.value = null
-  } finally {
-    loading.value = false
-  }
-})
+onMounted(loadQuota)
 </script>
 
 <style scoped>
@@ -168,7 +224,7 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 20px;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
 }
 .quota-item {
   padding: 16px;
@@ -190,8 +246,35 @@ onMounted(async () => {
 .quota-source {
   font-size: 12px;
 }
+.usage-section {
+  margin-top: 20px;
+  padding: 16px;
+  background: var(--el-fill-color-lighter);
+  border-radius: 8px;
+}
+.usage-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 16px;
+  color: var(--el-text-color-primary);
+}
+.usage-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.usage-item {
+  padding: 12px;
+  background: #fff;
+  border-radius: 6px;
+}
+.usage-label {
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+  margin-bottom: 8px;
+}
 .quota-info {
-  margin-top: 8px;
+  margin-top: 16px;
 }
 .quota-note {
   margin-top: 16px;
@@ -200,5 +283,11 @@ onMounted(async () => {
   text-align: center;
   padding: 60px;
   color: var(--el-text-color-secondary);
+}
+
+@media (max-width: 480px) {
+  .quota-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

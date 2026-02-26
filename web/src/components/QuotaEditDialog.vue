@@ -1,21 +1,21 @@
 <template>
   <el-dialog
     :model-value="visible"
-    title="编辑用户配额"
+    :title="dialogTitle"
     width="500px"
     :close-on-click-modal="false"
     destroy-on-close
     @update:model-value="$emit('update:visible', $event)"
   >
-    <div v-if="user" class="quota-edit-body">
+    <div class="quota-edit-body">
       <el-alert
-        :title="`用户：${user.name}（${user.email}）`"
+        :title="subjectLabel"
         type="info"
         show-icon
         :closable="false"
         style="margin-bottom: 16px"
       />
-      <el-form label-width="160px" label-position="top">
+      <el-form label-position="top">
         <el-form-item label="每分钟请求数 (RPM)">
           <el-input-number
             v-model="form.rpm"
@@ -25,7 +25,7 @@
             controls-position="right"
             style="width: 100%"
           />
-          <span class="quota-hint">0 = 不限制，留空 = 继承默认 ({{ effective?.default_rpm ?? 60 }})</span>
+          <span class="quota-hint">0 = 不限制，留空 = 继承默认 ({{ effective?.default_rpm ?? defaultRpm }})</span>
         </el-form-item>
         <el-form-item label="最大并发数">
           <el-input-number
@@ -36,7 +36,7 @@
             controls-position="right"
             style="width: 100%"
           />
-          <span class="quota-hint">0 = 不限制，留空 = 继承默认 ({{ effective?.default_max_concurrency ?? 10 }})</span>
+          <span class="quota-hint">0 = 不限制，留空 = 继承默认 ({{ effective?.default_max_concurrency ?? defaultConcurrency }})</span>
         </el-form-item>
       </el-form>
       <div v-if="effective" class="quota-effective">
@@ -47,10 +47,10 @@
             <span class="value">{{ effective.rpm === 0 ? '不限制' : effective.rpm }}</span>
             <el-tag
               size="small"
-              :type="effective.source === 'override' ? 'success' : 'info'"
+              :type="sourceTagInfo.type"
               style="margin-left: 6px"
             >
-              {{ effective.source === 'override' ? '自定义' : '未设置' }}
+              {{ sourceTagInfo.label }}
             </el-tag>
           </div>
           <div class="quota-effective-item">
@@ -60,7 +60,7 @@
         </div>
       </div>
       <div class="quota-defaults-hint">
-        用户默认 60 RPM / 10 并发
+        默认 {{ defaultRpm }} RPM / {{ defaultConcurrency }} 并发
       </div>
     </div>
     <template #footer>
@@ -76,26 +76,44 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getUserQuota, setUserQuota } from '@/api/quota'
+import {
+  getUserQuota, setUserQuota,
+  getServiceKeyQuota, setServiceKeyQuota,
+  getModelQuota, setModelQuota,
+  getGroupQuota, setGroupQuota,
+} from '@/api/quota'
 import type { QuotaEffective } from '@/api/quota'
 
-interface UserInfo {
-  id: string
-  name: string
-  email: string
+interface Props {
+  visible: boolean
+  subjectType: 'user' | 'service_key' | 'model' | 'group'
+  subjectId: string
+  subjectLabel: string
+  defaultRpm?: number
+  defaultConcurrency?: number
 }
 
-const props = defineProps<{
-  visible: boolean
-  user: UserInfo | null
-}>()
+const props = withDefaults(defineProps<Props>(), {
+  defaultRpm: 60,
+  defaultConcurrency: 10,
+})
 
 const emit = defineEmits<{
   'update:visible': [value: boolean]
   'saved': []
 }>()
+
+function getQuotaApi(subjectType: string) {
+  switch (subjectType) {
+    case 'user': return { get: getUserQuota, set: setUserQuota }
+    case 'service_key': return { get: getServiceKeyQuota, set: setServiceKeyQuota }
+    case 'model': return { get: getModelQuota, set: setModelQuota }
+    case 'group': return { get: getGroupQuota, set: setGroupQuota }
+    default: return { get: getUserQuota, set: setUserQuota }
+  }
+}
 
 const form = ref<{ rpm: number | null; max_concurrency: number | null }>({
   rpm: null,
@@ -104,14 +122,36 @@ const form = ref<{ rpm: number | null; max_concurrency: number | null }>({
 const saving = ref(false)
 const effective = ref<QuotaEffective | null>(null)
 
+const dialogTitle = computed(() => {
+  switch (props.subjectType) {
+    case 'user': return '编辑用户配额'
+    case 'service_key': return '编辑 Service Key 配额'
+    case 'model': return '编辑模型配额'
+    case 'group': return '编辑模型组配额'
+    default: return '编辑配额'
+  }
+})
+
+const sourceTagInfo = computed(() => {
+  const source = effective.value?.source
+  switch (source) {
+    case 'override': return { label: '自定义', type: 'success' as const }
+    case 'default_user': return { label: '用户默认', type: 'info' as const }
+    case 'default_service_key': return { label: 'SK默认', type: 'info' as const }
+    case 'unset': return { label: '未设置', type: 'info' as const }
+    default: return { label: '未设置', type: 'info' as const }
+  }
+})
+
 watch(
   () => props.visible,
   async (v) => {
-    if (v && props.user) {
+    if (v && props.subjectId) {
       form.value = { rpm: null, max_concurrency: null }
       effective.value = null
       try {
-        const res = await getUserQuota(props.user.id)
+        const api = getQuotaApi(props.subjectType)
+        const res = await api.get(props.subjectId)
         const data = (res as any)?.data
         if (data) {
           effective.value = data
@@ -126,20 +166,33 @@ watch(
 )
 
 async function saveQuota() {
-  if (!props.user) return
+  if (!props.subjectId) return
+  // Client-side validation
+  if (form.value.rpm !== null && form.value.rpm < 0) {
+    ElMessage.error('RPM 不能小于 0')
+    return
+  }
+  if (form.value.max_concurrency !== null && form.value.max_concurrency < 0) {
+    ElMessage.error('最大并发数不能小于 0')
+    return
+  }
   saving.value = true
   try {
-    await setUserQuota(props.user.id, {
+    const api = getQuotaApi(props.subjectType)
+    await api.set(props.subjectId, {
       rpm: form.value.rpm,
       max_concurrency: form.value.max_concurrency,
     })
     ElMessage.success('配额已保存')
-    // reload effective
-    const res = await getUserQuota(props.user.id)
-    effective.value = (res as any)?.data || null
-    if (effective.value?.source === 'override') {
-      form.value.rpm = effective.value.rpm
-      form.value.max_concurrency = effective.value.max_concurrency
+    // Reload effective
+    const res = await api.get(props.subjectId)
+    const data = (res as any)?.data
+    if (data) {
+      effective.value = data
+      if (data.source === 'override') {
+        form.value.rpm = data.rpm
+        form.value.max_concurrency = data.max_concurrency
+      }
     }
     emit('saved')
   } catch (e: any) {
@@ -150,13 +203,14 @@ async function saveQuota() {
 }
 
 async function clearQuota() {
-  if (!props.user) return
+  if (!props.subjectId) return
   saving.value = true
   try {
-    await setUserQuota(props.user.id, { rpm: null, max_concurrency: null })
+    const api = getQuotaApi(props.subjectType)
+    await api.set(props.subjectId, { rpm: null, max_concurrency: null })
     form.value = { rpm: null, max_concurrency: null }
     ElMessage.success('已清除，恢复为继承默认')
-    const res = await getUserQuota(props.user.id)
+    const res = await api.get(props.subjectId)
     effective.value = (res as any)?.data || null
     emit('saved')
   } catch (e: any) {

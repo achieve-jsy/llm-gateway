@@ -272,72 +272,15 @@
     />
 
     <!-- 模型配额编辑对话框 -->
-    <el-dialog
-      v-model="quotaDialogVisible"
-      title="编辑模型配额"
-      width="500px"
-      :close-on-click-modal="false"
-      destroy-on-close
-    >
-      <div v-if="quotaEditingModel" class="quota-edit-body">
-        <el-alert
-          :title="`模型：${quotaEditingModel.name}`"
-          type="info"
-          show-icon
-          :closable="false"
-          style="margin-bottom: 16px"
-        />
-        <el-form label-width="160px" label-position="top">
-          <el-form-item label="每分钟请求数 (RPM)">
-            <el-input-number
-              v-model="quotaForm.rpm"
-              :min="0"
-              :max="10000"
-              :step="10"
-              controls-position="right"
-              style="width: 100%"
-            />
-            <span class="quota-hint">0 = 不限制，留空 = 继承默认</span>
-          </el-form-item>
-          <el-form-item label="最大并发数">
-            <el-input-number
-              v-model="quotaForm.max_concurrency"
-              :min="0"
-              :max="1000"
-              :step="1"
-              controls-position="right"
-              style="width: 100%"
-            />
-            <span class="quota-hint">0 = 不限制，留空 = 继承默认</span>
-          </el-form-item>
-        </el-form>
-        <div v-if="quotaEffective" class="quota-effective">
-          <div class="quota-effective-title">当前生效配额</div>
-          <div class="quota-effective-grid">
-            <div class="quota-effective-item">
-              <span class="label">RPM：</span>
-              <span class="value">{{ quotaEffective.rpm === 0 ? '不限制' : quotaEffective.rpm }}</span>
-              <el-tag size="small" :type="quotaEffective.source === 'override' ? 'success' : 'info'" style="margin-left: 6px">
-                {{ quotaEffective.source === 'override' ? '自定义' : '未设置' }}
-              </el-tag>
-            </div>
-            <div class="quota-effective-item">
-              <span class="label">并发：</span>
-              <span class="value">{{ quotaEffective.max_concurrency === 0 ? '不限制' : quotaEffective.max_concurrency }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-      <template #footer>
-        <el-button @click="quotaDialogVisible = false">取消</el-button>
-        <el-popconfirm title="清除配额设置？将恢复为继承默认值" @confirm="clearQuota">
-          <template #reference>
-            <el-button>清除设置</el-button>
-          </template>
-        </el-popconfirm>
-        <el-button type="primary" :loading="quotaSaving" @click="saveQuota">保存</el-button>
-      </template>
-    </el-dialog>
+    <QuotaEditDialog
+      v-model:visible="quotaDialogVisible"
+      subject-type="model"
+      :subject-id="quotaSubjectId"
+      :subject-label="quotaSubjectLabel"
+      :default-rpm="60"
+      :default-concurrency="10"
+      @saved="onQuotaSaved"
+    />
   </div>
 </template>
 
@@ -354,8 +297,7 @@ import type { ResettableOverrideField } from '@/types/catalog'
 import ModelDialog from '@/components/admin/ModelDialog.vue'
 import BatchTagDialog from '@/components/admin/BatchTagDialog.vue'
 import ModelCheckSettingsDialog from '@/components/admin/ModelCheckSettingsDialog.vue'
-import { getModelQuota, setModelQuota } from '@/api/quota'
-import type { QuotaEffective } from '@/api/quota'
+import QuotaEditDialog from '@/components/QuotaEditDialog.vue'
 
 const router = useRouter()
 
@@ -383,55 +325,17 @@ const checkingModelId = ref('')
 
 // ── 配额编辑 ──────────────────────────────────────────────
 const quotaDialogVisible = ref(false)
-const quotaEditingModel = ref<Model | null>(null)
-const quotaForm = ref<{ rpm: number | null; max_concurrency: number | null }>({ rpm: null, max_concurrency: null })
-const quotaSaving = ref(false)
-const quotaEffective = ref<QuotaEffective | null>(null)
+const quotaSubjectId = ref('')
+const quotaSubjectLabel = ref('')
 
-async function openQuotaDialog(row: Model) {
-  quotaEditingModel.value = row
-  quotaForm.value = { rpm: null, max_concurrency: null }
-  quotaEffective.value = null
+function openQuotaDialog(row: Model) {
+  quotaSubjectId.value = row.id
+  quotaSubjectLabel.value = `模型：${row.name}`
   quotaDialogVisible.value = true
-  try {
-    const res = await getModelQuota(row.id)
-    const data = (res as any)?.data
-    if (data) {
-      quotaEffective.value = data
-      if (data.source === 'override') {
-        quotaForm.value.rpm = data.rpm
-        quotaForm.value.max_concurrency = data.max_concurrency
-      }
-    }
-  } catch { /* ignore */ }
 }
 
-async function saveQuota() {
-  if (!quotaEditingModel.value) return
-  quotaSaving.value = true
-  try {
-    await setModelQuota(quotaEditingModel.value.id, {
-      rpm: quotaForm.value.rpm,
-      max_concurrency: quotaForm.value.max_concurrency,
-    })
-    ElMessage.success('配额已保存')
-    await openQuotaDialog(quotaEditingModel.value)
-  } catch (e: any) {
-    ElMessage.error(e?.message || '配额保存失败')
-  } finally { quotaSaving.value = false }
-}
-
-async function clearQuota() {
-  if (!quotaEditingModel.value) return
-  quotaSaving.value = true
-  try {
-    await setModelQuota(quotaEditingModel.value.id, { rpm: null, max_concurrency: null })
-    quotaForm.value = { rpm: null, max_concurrency: null }
-    ElMessage.success('已清除，恢复为继承默认')
-    await openQuotaDialog(quotaEditingModel.value)
-  } catch (e: any) {
-    ElMessage.error(e?.message || '清除失败')
-  } finally { quotaSaving.value = false }
+function onQuotaSaved() {
+  // 配额保存后无需刷新列表
 }
 
 function normalizeEnabledFilter(value: string | null | undefined): boolean | undefined {
@@ -877,14 +781,4 @@ onMounted(() => {
     font-size: 10px;
   }
 }
-/* Quota dialog styles */
-.quota-edit-body { padding: 0 4px; }
-.quota-hint { display: block; font-size: 12px; color: var(--el-text-color-secondary); margin-top: 4px; }
-.quota-effective { margin-top: 16px; padding: 12px; background: var(--el-fill-color-light); border-radius: 8px; }
-.quota-effective-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--el-text-color-primary); }
-.quota-effective-grid { display: flex; gap: 24px; }
-.quota-effective-item { font-size: 13px; }
-.quota-effective-item .label { color: var(--el-text-color-secondary); }
-.quota-effective-item .value { font-weight: 600; color: var(--el-text-color-primary); }
-</style>
 </style>

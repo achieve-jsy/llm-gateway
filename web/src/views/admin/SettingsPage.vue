@@ -1548,7 +1548,7 @@ async function handleImport(event: Event) {
 .quota-section {
   margin-bottom: 24px;
   padding-bottom: 24px;
-  border-bottom: 1px solid #e4e7ed;
+  border-bottom: 1px solid var(--el-border-color-light);
 }
 .quota-section:last-of-type {
   border-bottom: none;
@@ -1558,12 +1558,12 @@ async function handleImport(event: Event) {
 .quota-section-title {
   font-size: 14px;
   font-weight: 600;
-  color: #303133;
+  color: var(--el-text-color-primary);
   margin: 0 0 4px 0;
 }
 .quota-section-desc {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   margin: 0 0 16px 0;
 }
 .form-note {
@@ -1572,15 +1572,15 @@ async function handleImport(event: Event) {
   gap: 8px;
   margin-top: 20px;
   padding: 12px;
-  background: #f4f4f5;
+  background: var(--el-fill-color-lighter);
   border-radius: 6px;
   font-size: 12px;
-  color: #606266;
+  color: var(--el-text-color-regular);
   line-height: 1.5;
 }
 .form-note svg {
   flex-shrink: 0;
   margin-top: 2px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
 }
 </style>

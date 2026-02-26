@@ -111,8 +111,9 @@
             {{ formatDateTime(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="280" align="center">
+        <el-table-column label="操作" width="340" align="center">
           <template #default="{ row }">
+            <el-button v-if="canManageEntitlements" text type="primary" size="small" @click="openQuotaDialog(row)">配额</el-button>
             <el-button text type="primary" size="small" @click="router.push(`/admin/groups/${row.id}`)">详情</el-button>
             <el-button text type="primary" size="small" @click="openEditDialog(row)">编辑</el-button>
             <el-button text type="primary" size="small" @click="router.push(`/admin/groups/${row.id}?tab=capability`)">能力</el-button>
@@ -156,6 +157,16 @@
       :group-name="entitlementGroup?.name ?? ''"
       @closed="entitlementGroup = null"
     />
+
+    <QuotaEditDialog
+      v-model:visible="quotaDialogVisible"
+      subject-type="group"
+      :subject-id="quotaSubjectId"
+      :subject-label="quotaSubjectLabel"
+      :default-rpm="0"
+      :default-concurrency="0"
+      @saved="onQuotaSaved"
+    />
   </div>
 </template>
 
@@ -168,6 +179,7 @@ import type { GroupCapability } from '@/api/groups'
 import type { GroupListItem, Strategy, OpenMode } from '@/types/group'
 import GroupEditDialog from '@/components/GroupEditDialog.vue'
 import GroupEntitlementDialog from '@/components/GroupEntitlementDialog.vue'
+import QuotaEditDialog from '@/components/QuotaEditDialog.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const authStore = useAuthStore()
@@ -187,6 +199,10 @@ const editingGroup = ref<GroupListItem | null>(null)
 
 const entitlementDialogVisible = ref(false)
 const entitlementGroup = ref<GroupListItem | null>(null)
+
+const quotaDialogVisible = ref(false)
+const quotaSubjectId = ref('')
+const quotaSubjectLabel = ref('')
 
 const canManageEntitlements = computed(() => authStore.isAdmin)
 
@@ -323,6 +339,16 @@ async function handleToggleOpenMode(row: GroupListItem) {
 function openEntitlementDialog(row: GroupListItem) {
   entitlementGroup.value = row
   entitlementDialogVisible.value = true
+}
+
+function openQuotaDialog(group: GroupListItem) {
+  quotaSubjectId.value = String(group.id)
+  quotaSubjectLabel.value = `模型组：${group.name}`
+  quotaDialogVisible.value = true
+}
+
+function onQuotaSaved() {
+  loadGroups()
 }
 
 function onDialogSaved() {

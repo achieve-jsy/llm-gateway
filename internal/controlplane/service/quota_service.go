@@ -352,6 +352,38 @@ type QuotaExemptionEntry struct {
 	ExpiresAt   time.Time `json:"expires_at"`
 }
 
+// QuotaCurrentUsage 当前使用量
+type QuotaCurrentUsage struct {
+	RPM            int `json:"rpm"`
+	MaxConcurrency int `json:"max_concurrency"`
+}
+
+// GetUserCurrentUsage 查询用户当前 RPM 和并发使用量
+func (s *QuotaService) GetUserCurrentUsage(ctx context.Context, userID string) (*QuotaCurrentUsage, error) {
+	if s.rdb == nil {
+		return &QuotaCurrentUsage{}, nil
+	}
+	rpmKey := fmt.Sprintf("quota:rpm:user:%s", userID)
+	concKey := fmt.Sprintf("quota:conc:user:%s", userID)
+
+	rpmVal, err := s.rdb.ZCard(ctx, rpmKey).Result()
+	if err != nil {
+		slog.Warn("quota usage: ZCARD failed", "key", rpmKey, "error", err)
+	}
+	concStr, err := s.rdb.Get(ctx, concKey).Result()
+	if err != nil && err != redis.Nil {
+		slog.Warn("quota usage: GET failed", "key", concKey, "error", err)
+	}
+	concVal := 0
+	if concStr != "" {
+		fmt.Sscanf(concStr, "%d", &concVal)
+	}
+	return &QuotaCurrentUsage{
+		RPM:            int(rpmVal),
+		MaxConcurrency: concVal,
+	}, nil
+}
+
 // GetQuotaSnapshot 获取当前 quota snapshot（供 gateway 拉取）
 func (s *QuotaService) GetQuotaSnapshot(ctx context.Context) (*QuotaSnapshotData, error) {
 	return s.buildSnapshot(ctx)

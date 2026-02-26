@@ -971,9 +971,13 @@
   </el-drawer>
 
   <!-- ═══ 用户配额编辑对话框 ════════════════════════════════════════════════════ -->
-  <UserQuotaDialog
+  <QuotaEditDialog
     v-model:visible="userQuotaDialogVisible"
-    :user="userQuotaTarget"
+    subject-type="user"
+    :subject-id="userQuotaSubjectId"
+    :subject-label="userQuotaSubjectLabel"
+    :default-rpm="60"
+    :default-concurrency="10"
     @saved="onUserQuotaSaved"
   />
 </template>
@@ -994,7 +998,7 @@ import type { Studio, OrgDepartment, ImportDiff, EmployeeImportPreviewRow, Emplo
 import http from '@/services/http'
 import { useRoute, useRouter } from 'vue-router'
 import BudgetScopePanel from '@/components/budget/BudgetScopePanel.vue'
-import UserQuotaDialog from '@/components/UserQuotaDialog.vue'
+import QuotaEditDialog from '@/components/QuotaEditDialog.vue'
 
 const orgStore  = useOrgStore()
 const authStore = useAuthStore()
@@ -1808,10 +1812,12 @@ function goToMemberDashboard() {
 
 // ─── 用户配额编辑 ────────────────────────────────────────────────────────────────
 const userQuotaDialogVisible = ref(false)
-const userQuotaTarget = ref<{ id: string; name: string; email: string } | null>(null)
+const userQuotaSubjectId = ref('')
+const userQuotaSubjectLabel = ref('')
 
 function openUserQuotaDialog(member: DeptMember) {
-  userQuotaTarget.value = { id: member.id, name: member.name, email: member.email }
+  userQuotaSubjectId.value = member.id
+  userQuotaSubjectLabel.value = `用户：${member.name}（${member.email}）`
   userQuotaDialogVisible.value = true
 }
 

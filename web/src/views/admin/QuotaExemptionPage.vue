@@ -26,8 +26,45 @@
       </template>
     </el-result>
 
+    <template v-else>
+    <!-- 搜索筛选工具栏 -->
+    <div class="filter-toolbar">
+      <el-input
+        v-model="searchKeyword"
+        placeholder="搜索主体名称"
+        clearable
+        class="filter-search"
+        @input="debouncedSearch"
+      >
+        <template #prefix>
+          <el-icon><Search /></el-icon>
+        </template>
+      </el-input>
+      <el-select
+        v-model="filterType"
+        placeholder="主体类型"
+        clearable
+        class="filter-select"
+        @change="onFilterChange"
+      >
+        <el-option label="用户" value="user" />
+        <el-option label="Service Key" value="service_key" />
+      </el-select>
+      <el-select
+        v-model="filterStatus"
+        placeholder="状态"
+        clearable
+        class="filter-select"
+        @change="onFilterChange"
+      >
+        <el-option label="生效中" value="active" />
+        <el-option label="即将过期" value="expiring_soon" />
+        <el-option label="已过期" value="expired" />
+      </el-select>
+    </div>
+
     <el-empty
-      v-else-if="!loading && exemptions.length === 0 && !loadError"
+      v-if="!loading && exemptions.length === 0 && !loadError"
       description="暂无配额豁免，点击右上角创建"
     />
 
@@ -106,6 +143,7 @@
       class="exemption-pagination"
       @current-change="handlePageChange"
     />
+    </template>
 
     <!-- 创建豁免对话框 -->
     <el-dialog
@@ -187,8 +225,8 @@
             type="datetime"
             placeholder="选择过期时间"
             style="width: 100%"
-            :disabled-date="(date: Date) => date.getTime() < Date.now() - 86400000"
-            value-format="YYYY-MM-DDTHH:mm:ssZ"
+            :disabled-date="(date: Date) => date.getTime() < Date.now()"
+            value-format="YYYY-MM-DDTHH:mm:ss"
           />
           <div class="form-hint">豁免到期后自动失效，恢复配额限制</div>
         </el-form-item>
@@ -204,7 +242,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, Search } from '@element-plus/icons-vue'
 import {
   listQuotaExemptions,
   createQuotaExemption,
@@ -224,6 +262,12 @@ const allExemptions = ref<QuotaExemption[]>([])
 const currentPage = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
+
+// 搜索筛选状态
+const searchKeyword = ref('')
+const filterType = ref('')
+const filterStatus = ref('')
+let searchTimer: ReturnType<typeof setTimeout> | null = null
 
 // 后端已过滤只返回未过期的豁免
 const exemptions = computed(() => allExemptions.value)
@@ -347,7 +391,13 @@ async function loadExemptions() {
   loading.value = true
   loadError.value = ''
   try {
-    const res = await listQuotaExemptions(currentPage.value, pageSize.value)
+    const res = await listQuotaExemptions({
+      page: currentPage.value,
+      page_size: pageSize.value,
+      keyword: searchKeyword.value || undefined,
+      subject_type: filterType.value || undefined,
+      status: filterStatus.value || undefined
+    })
     const body = (res as any)?.data
     if (body && typeof body === 'object' && 'total' in body) {
       allExemptions.value = body.data || []
@@ -374,6 +424,19 @@ function handlePageChange(page: number) {
   loadExemptions()
 }
 
+function debouncedSearch() {
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    currentPage.value = 1
+    loadExemptions()
+  }, 300)
+}
+
+function onFilterChange() {
+  currentPage.value = 1
+  loadExemptions()
+}
+
 function openCreateDialog() {
   createForm.subject_type = 'user'
   createForm.subject_id = ''
@@ -393,11 +456,12 @@ async function handleCreate() {
 
   creating.value = true
   try {
+    const expiresAt = new Date(createForm.expires_at).toISOString()
     await createQuotaExemption({
       subject_type: createForm.subject_type,
       subject_id: createForm.subject_id.trim(),
       reason: createForm.reason.trim(),
-      expires_at: createForm.expires_at,
+      expires_at: expiresAt,
     })
     ElMessage.success('豁免已创建')
     createDialogVisible.value = false
@@ -480,6 +544,22 @@ onMounted(() => {
 .brand-btn.is-loading {
   background-color: #7fc8c4;
   border-color: #7fc8c4;
+}
+
+.filter-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.filter-search {
+  width: 240px;
+}
+
+.filter-select {
+  width: 160px;
 }
 
 .skeleton-wrap {

@@ -120,7 +120,16 @@ func (h *QuotaExemptionHandler) List(c *gin.Context) {
 		pageSize = 20
 	}
 
-	exemptions, total, err := h.svc.ListActiveExemptionsWithNames(c.Request.Context(), page, pageSize)
+	// 解析搜索和筛选参数
+	keyword := c.Query("keyword")
+	subjectType := c.Query("subject_type")
+	status := c.Query("status")
+
+	exemptions, total, err := h.svc.ListActiveExemptionsWithNames(c.Request.Context(), page, pageSize, service.ListExemptionFilter{
+		Keyword:     keyword,
+		SubjectType: subjectType,
+		Status:      status,
+	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{"type": "internal_error", "message": "获取豁免列表失败", "code": CodeInternalError},

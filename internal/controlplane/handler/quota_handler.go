@@ -206,7 +206,20 @@ func (h *QuotaHandler) GetMyQuota(c *gin.Context) {
 		})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 0, "data": eff})
+	usage, err := h.svc.GetUserCurrentUsage(c.Request.Context(), uid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{"type": "internal_error", "message": "获取使用量失败", "code": CodeInternalError},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code": 0,
+		"data": gin.H{
+			"effective":     eff,
+			"current_usage": usage,
+		},
+	})
 }
 
 

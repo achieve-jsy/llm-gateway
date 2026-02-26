@@ -31,7 +31,13 @@ func (s *QuotaExemptionService) CreateExemption(ctx context.Context, req CreateE
 	if req.SubjectID == "" {
 		return nil, fmt.Errorf("subject_id is required")
 	}
-	if req.ExpiresAt.Before(time.Now()) {
+	now := time.Now().UTC()
+	if req.ExpiresAt.UTC().Before(now) {
+		slog.Warn("expires_at rejected as past",
+			"expires_at_utc", req.ExpiresAt.UTC(),
+			"now_utc", now,
+			"expires_at_raw", req.ExpiresAt,
+		)
 		return nil, fmt.Errorf("expires_at must be in the future")
 	}
 	if req.CreatedBy == "" {
@@ -89,7 +95,7 @@ func (s *QuotaExemptionService) RevokeExemption(ctx context.Context, exemptionID
 // ListActiveExemptions 列出所有当前生效的豁免
 func (s *QuotaExemptionService) ListActiveExemptions(ctx context.Context) ([]quota.QuotaExemption, error) {
 	var exemptions []quota.QuotaExemption
-	if err := s.db.WithContext(ctx).Where("expires_at > ?", time.Now()).Find(&exemptions).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("expires_at > ?", time.Now().UTC()).Find(&exemptions).Error; err != nil {
 		return nil, fmt.Errorf("list exemptions: %w", err)
 	}
 	return exemptions, nil
@@ -112,14 +118,14 @@ func (s *QuotaExemptionService) ListAllExemptions(ctx context.Context, limit int
 func (s *QuotaExemptionService) IsExempt(ctx context.Context, subjectType, subjectID string) bool {
 	var count int64
 	s.db.WithContext(ctx).Model(&quota.QuotaExemption{}).
-		Where("subject_type = ? AND subject_id = ? AND expires_at > ?", subjectType, subjectID, time.Now()).
+		Where("subject_type = ? AND subject_id = ? AND expires_at > ?", subjectType, subjectID, time.Now().UTC()).
 		Count(&count)
 	return count > 0
 }
 
 // CleanupExpired 清理过期豁免（可由定时任务调用）
 func (s *QuotaExemptionService) CleanupExpired(ctx context.Context) (int64, error) {
-	result := s.db.WithContext(ctx).Where("expires_at <= ?", time.Now()).Delete(&quota.QuotaExemption{})
+	result := s.db.WithContext(ctx).Where("expires_at <= ?", time.Now().UTC()).Delete(&quota.QuotaExemption{})
 	if result.Error != nil {
 		return 0, fmt.Errorf("cleanup expired exemptions: %w", result.Error)
 	}
@@ -189,9 +195,17 @@ type QuotaExemptionListItem struct {
 	CreatedByName string `json:"created_by_name"` // 创建人姓名
 }
 
-// ListActiveExemptionsWithNames 列出当前生效的豁免，并解析主体名称和创建人名称
+// ListExemptionFilter 豁免列表筛选条件
+type ListExemptionFilter struct {
+	Keyword     string // 按主体名称模糊搜索
+	SubjectType string // 按类型筛选：user / service_key
+	Status      string // 按状态筛选：active / expiring_soon / expired
+}
+
+// ListActiveExemptionsWithNames 列出豁免，并解析主体名称和创建人名称
 // 支持分页：page 从 1 开始，pageSize 默认 20
-func (s *QuotaExemptionService) ListActiveExemptionsWithNames(ctx context.Context, page, pageSize int) ([]QuotaExemptionListItem, int64, error) {
+// 支持搜索和筛选：keyword / subject_type / status
+func (s *QuotaExemptionService) ListActiveExemptionsWithNames(ctx context.Context, page, pageSize int, filter ListExemptionFilter) ([]QuotaExemptionListItem, int64, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -199,9 +213,74 @@ func (s *QuotaExemptionService) ListActiveExemptionsWithNames(ctx context.Contex
 		pageSize = 20
 	}
 
+	now := time.Now().UTC()
+
+	// ── 关键词搜索：从 users / api_keys 表中模糊匹配名称，收集匹配的 subject ID ──
+	var matchedUserIDs []string
+	var matchedKeyIDs []string
+	if filter.Keyword != "" {
+		kw := "%" + filter.Keyword + "%"
+		type idRow struct {
+			ID string
+		}
+		// 搜索用户名
+		var userRows []idRow
+		_ = s.db.WithContext(ctx).Table("users").
+			Select("CAST(id AS TEXT) AS id").
+			Where("name ILIKE ?", kw).
+			Find(&userRows).Error
+		for _, r := range userRows {
+			matchedUserIDs = append(matchedUserIDs, r.ID)
+		}
+		// 搜索 Service Key 名
+		var keyRows []idRow
+		_ = s.db.WithContext(ctx).Table("api_keys").
+			Select("CAST(id AS TEXT) AS id").
+			Where("name ILIKE ?", kw).
+			Find(&keyRows).Error
+		for _, r := range keyRows {
+			matchedKeyIDs = append(matchedKeyIDs, r.ID)
+		}
+		// 关键词无匹配 → 直接返回空
+		if len(matchedUserIDs) == 0 && len(matchedKeyIDs) == 0 {
+			return []QuotaExemptionListItem{}, 0, nil
+		}
+	}
+
+	// ── 构建基础查询 ──
+	baseQuery := s.db.WithContext(ctx).Model(&quota.QuotaExemption{})
+
+	// 状态筛选
+	switch filter.Status {
+	case "active":
+		baseQuery = baseQuery.Where("expires_at > ?", now)
+	case "expiring_soon":
+		baseQuery = baseQuery.Where("expires_at > ? AND expires_at <= ?", now, now.Add(24*time.Hour))
+	case "expired":
+		baseQuery = baseQuery.Where("expires_at <= ?", now)
+	}
+
+	// 类型筛选
+	if filter.SubjectType == "user" || filter.SubjectType == "service_key" {
+		baseQuery = baseQuery.Where("subject_type = ?", filter.SubjectType)
+	}
+
+	// 关键词筛选
+	if filter.Keyword != "" {
+		if len(matchedUserIDs) > 0 && len(matchedKeyIDs) > 0 {
+			baseQuery = baseQuery.Where(
+				"(subject_type = 'user' AND subject_id IN ?) OR (subject_type = 'service_key' AND subject_id IN ?)",
+				matchedUserIDs, matchedKeyIDs,
+			)
+		} else if len(matchedUserIDs) > 0 {
+			baseQuery = baseQuery.Where("subject_type = 'user' AND subject_id IN ?", matchedUserIDs)
+		} else if len(matchedKeyIDs) > 0 {
+			baseQuery = baseQuery.Where("subject_type = 'service_key' AND subject_id IN ?", matchedKeyIDs)
+		}
+	}
+
 	// 先查总数
 	var total int64
-	baseQuery := s.db.WithContext(ctx).Model(&quota.QuotaExemption{}).Where("expires_at > ?", time.Now())
 	if err := baseQuery.Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("count exemptions: %w", err)
 	}
@@ -233,47 +312,47 @@ func (s *QuotaExemptionService) ListActiveExemptionsWithNames(ctx context.Contex
 		}
 	}
 
-	// 批量查询用户名称（users.id 是 uuid，需要用 id::text 与 string 比较）
-	userNames := make(map[string]string)
-	if len(userIDs) > 0 {
-		ids := make([]string, 0, len(userIDs))
-		for id := range userIDs {
-			ids = append(ids, id)
+		// 批量查询用户名称（users.id 是 uuid，需要 CAST 为 text 与 string 比较）
+		userNames := make(map[string]string)
+		if len(userIDs) > 0 {
+			ids := make([]string, 0, len(userIDs))
+			for id := range userIDs {
+				ids = append(ids, id)
+			}
+			type userNameRow struct {
+				ID   string
+				Name string
+			}
+			var rows []userNameRow
+			_ = s.db.WithContext(ctx).Table("users").
+				Select("CAST(id AS TEXT) AS id, name").
+				Where("CAST(id AS TEXT) IN ?", ids).
+				Find(&rows).Error
+			for _, r := range rows {
+				userNames[r.ID] = r.Name
+			}
 		}
-		type userNameRow struct {
-			ID   string
-			Name string
-		}
-		var rows []userNameRow
-		_ = s.db.WithContext(ctx).Table("users").
-			Select("id::text AS id, name").
-			Where("id::text IN ?", ids).
-			Find(&rows).Error
-		for _, r := range rows {
-			userNames[r.ID] = r.Name
-		}
-	}
 
-	// 批量查询 Service Key 名称（api_keys.id 是 uuid，需要用 id::text 与 string 比较）
-	keyNames := make(map[string]string)
-	if len(keyIDs) > 0 {
-		ids := make([]string, 0, len(keyIDs))
-		for id := range keyIDs {
-			ids = append(ids, id)
+		// 批量查询 Service Key 名称（api_keys.id 是 uuid，需要 CAST 为 text 与 string 比较）
+		keyNames := make(map[string]string)
+		if len(keyIDs) > 0 {
+			ids := make([]string, 0, len(keyIDs))
+			for id := range keyIDs {
+				ids = append(ids, id)
+			}
+			type keyNameRow struct {
+				ID   string
+				Name string
+			}
+			var rows []keyNameRow
+			_ = s.db.WithContext(ctx).Table("api_keys").
+				Select("CAST(id AS TEXT) AS id, name").
+				Where("CAST(id AS TEXT) IN ?", ids).
+				Find(&rows).Error
+			for _, r := range rows {
+				keyNames[r.ID] = r.Name
+			}
 		}
-		type keyNameRow struct {
-			ID   string
-			Name string
-		}
-		var rows []keyNameRow
-		_ = s.db.WithContext(ctx).Table("api_keys").
-			Select("id::text AS id, name").
-			Where("id::text IN ?", ids).
-			Find(&rows).Error
-		for _, r := range rows {
-			keyNames[r.ID] = r.Name
-		}
-	}
 
 	// 组装结果
 	items := make([]QuotaExemptionListItem, 0, len(exemptions))

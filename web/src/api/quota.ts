@@ -11,6 +11,16 @@ export interface QuotaEffective {
   default_max_concurrency?: number
 }
 
+export interface QuotaCurrentUsage {
+  rpm: number
+  max_concurrency: number
+}
+
+export interface MyQuotaResponse {
+  effective: QuotaEffective
+  current_usage: QuotaCurrentUsage
+}
+
 export interface QuotaPatchRequest {
   rpm: number | null
   max_concurrency: number | null
@@ -77,8 +87,21 @@ export interface QuotaExemptionCreateRequest {
   expires_at: string
 }
 
-export async function listQuotaExemptions(page = 1, pageSize = 20) {
-  return http.get(`/api/v1/quota/exemptions?page=${page}&page_size=${pageSize}`)
+export interface ListExemptionsParams {
+  page?: number
+  pageSize?: number
+  keyword?: string
+  subject_type?: string
+  status?: string
+}
+
+export async function listQuotaExemptions(params: ListExemptionsParams = {}) {
+  const { page = 1, pageSize = 20, keyword, subject_type, status } = params
+  let url = `/api/v1/quota/exemptions?page=${page}&page_size=${pageSize}`
+  if (keyword) url += `&keyword=${encodeURIComponent(keyword)}`
+  if (subject_type) url += `&subject_type=${encodeURIComponent(subject_type)}`
+  if (status) url += `&status=${encodeURIComponent(status)}`
+  return http.get(url)
 }
 
 export async function createQuotaExemption(data: QuotaExemptionCreateRequest) {

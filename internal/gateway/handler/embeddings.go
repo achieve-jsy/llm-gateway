@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/example/llm-gateway/internal/core"
+	gatewayerrors "github.com/example/llm-gateway/internal/errors"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
@@ -63,13 +64,7 @@ func NewEmbeddingsHandlerWithGroup(orch EmbeddingsOrchestratorInterface, gd *orc
 func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 	var req core.EmbeddingRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": gin.H{
-				"type":    "invalid_request",
-				"message": err.Error(),
-				"code":    "invalid_request_body",
-			},
-		})
+		gatewayerrors.WriteError(c, "request_body_invalid", gatewayerrors.WithMessage(err.Error()))
 		return
 	}
 

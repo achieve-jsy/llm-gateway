@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/example/llm-gateway/internal/core"
+	gatewayerrors "github.com/example/llm-gateway/internal/errors"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
@@ -83,13 +84,7 @@ func (h *ChatHandler) SetModelQuotaGate(gate *quota.ModelQuotaGate) {
 func (h *ChatHandler) Handle(c *gin.Context) {
 	var req core.ChatRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": gin.H{
-				"type":    "invalid_request",
-				"message": err.Error(),
-				"code":    "invalid_request_body",
-			},
-		})
+		gatewayerrors.WriteError(c, "request_body_invalid", gatewayerrors.WithMessage(err.Error()))
 		return
 	}
 
@@ -396,8 +391,13 @@ func (h *ChatHandler) respondGroupError(c *gin.Context, err error) {
 	respondError(c, model.ErrInternal)
 }
 
-// respondError 返回统一错误响应 JSON
+// respondError 返回统一错误响应 JSON。
+// 当 X-Error-Format: passthrough 请求头存在时，直接透传上游错误，不做归一化。
 func respondError(c *gin.Context, ue *model.UnifiedError) {
+	if IsPassthroughMode(c) {
+		writePassthroughError(c, ue.HTTPStatus, string(ue.Type), ue.Message)
+		return
+	}
 	body := gin.H{
 		"error": gin.H{
 			"type":    ue.Type,

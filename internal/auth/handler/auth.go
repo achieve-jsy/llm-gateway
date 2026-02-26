@@ -118,12 +118,12 @@ func (h *AuthHandler) DevLogin(c *gin.Context) {
 	// handlers (e.g. GetMyQuota) can look up the user by JWT user_id.
 	user, err := h.users.UpsertUserAndDept(devUser.Username, devUser.Username, devUser.Username+"@dev.local", devUser.Role, "", "")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "failed to create user session", "code": "internal"}})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "failed to create user session", "code": "internal_error"}})
 		return
 	}
 	access, refresh, err := h.token.SignTokenPair(user.ID.String(), user.Role)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "sign failed", "code": "internal"}})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "sign failed", "code": "internal_error"}})
 		return
 	}
 	c.JSON(http.StatusOK, dto.LoginResponse{AccessToken: access, RefreshToken: refresh, User: dto.UserInfo{ID: user.ID.String(), Name: devUser.Username}, Role: user.Role})

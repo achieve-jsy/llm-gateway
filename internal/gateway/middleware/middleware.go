@@ -195,7 +195,7 @@ func ErrorHandler() gin.HandlerFunc {
 					"error": gin.H{
 						"type":    "internal_error",
 						"message": "internal server error",
-						"code":    "internal",
+						"code":    "internal_error",
 					},
 				})
 			}

@@ -3,14 +3,15 @@ package quota
 import (
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strconv"
 
 	"github.com/example/llm-gateway/internal/core/quota"
+	gatewayerrors "github.com/example/llm-gateway/internal/errors"
 	"github.com/gin-gonic/gin"
 )
 
 // WriteQuotaRejected 统一构造 429 响应与结构化日志。
+// v0.16: 使用 errors.WriteError 统一渲染，替代手写 gin.H。
 func WriteQuotaRejected(c *gin.Context, v quota.QuotaViolation) {
 	retryAfter := 60 // 默认 60s
 	if v.Gate == "concurrency" {
@@ -23,9 +24,10 @@ func WriteQuotaRejected(c *gin.Context, v quota.QuotaViolation) {
 	c.Header("X-RateLimit-Reset", strconv.Itoa(retryAfter))
 
 	msg := formatQuotaMessage(v)
+	code := errorCode(v.Gate)
 
 	slog.Warn("quota rejected",
-		"error_code", errorCodes[v.Gate],
+		"error_code", code,
 		"quota_layer", v.Layer,
 		"quota_gate", v.Gate,
 		"quota_subject_type", v.SubjectType,
@@ -36,31 +38,17 @@ func WriteQuotaRejected(c *gin.Context, v quota.QuotaViolation) {
 	// Prometheus 指标
 	RecordRejection(c.Request.Context(), v.Layer, v.Gate, v.SubjectType)
 
-	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
-		"error": gin.H{
-			"type":                errorType(v.Gate),
-			"code":                errorCode(v.Gate),
-			"message":             msg,
-			"param":               v.Layer,
+	gatewayerrors.WriteError(c, code,
+		gatewayerrors.WithMessage(msg),
+		gatewayerrors.WithRetryAfter(retryAfter),
+		gatewayerrors.WithDetails(map[string]any{
 			"gate":                v.Gate,
 			"layer":               v.Layer,
 			"subject_type":        v.SubjectType,
 			"limit":               v.Limit,
 			"retry_after_seconds": retryAfter,
-		},
-	})
-}
-
-var errorCodes = map[string]string{
-	"rpm":         "QUOTA_RPM_REJECTED",
-	"concurrency": "QUOTA_CONCURRENCY_REJECTED",
-}
-
-func errorType(gate string) string {
-	if gate == "concurrency" {
-		return "concurrency_limit"
-	}
-	return "rate_limit_error"
+		}),
+	)
 }
 
 func errorCode(gate string) string {

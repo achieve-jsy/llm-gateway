@@ -14,7 +14,7 @@ func Recovery() gin.HandlerFunc {
 				requestID, _ := c.Get("request_id")
 				slog.Error("panic recovered", "request_id", requestID, "error", r)
 				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-					"error": gin.H{"type": "internal_error", "message": "internal server error", "code": "internal"},
+					"error": gin.H{"type": "internal_error", "message": "internal server error", "code": "internal_error"},
 				})
 			}
 		}()

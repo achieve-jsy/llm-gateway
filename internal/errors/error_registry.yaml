@@ -1,0 +1,606 @@
+# 声明式 Provider 错误映射规则
+# 映射优先级: structured → keywords → http_status → fallback
+#
+# 每个 provider 的规则基于真实文档/源码, 标注信息来源 URL.
+# 格式: provider.structured[].field — 从 provider 错误响应 JSON 中提取字段路径.
+#       provider.structured[].mapping — 字段值 → 网关统一错误码.
+#       provider.keywords — 从 error.message 字符串中匹配的关键词.
+#       provider.http_status_overrides — 覆盖 defaults.http_status 的特殊映射.
+#
+# 网关统一错误码 (canonical error codes):
+#   provider_rate_limited     — 上游限流 (429)
+#   provider_overloaded       — 上游过载 (529 / 503)
+#   provider_auth_error       — 上游认证失败 (401/403)
+#   provider_bad_request      — 上游请求格式错误 (400)
+#   provider_insufficient_quota — 上游额度不足 (402 / 429 quota)
+#   provider_not_found        — 上游资源不存在 (404)
+#   provider_timeout          — 上游超时 (408/504)
+#   content_policy_violation  — 内容安全策略拦截
+#   context_window_exceeded   — 上下文窗口超限
+#   upstream_error            — 上游内部错误 (500)
+#   upstream_unavailable      — 上游服务不可用 (503)
+#   upstream_timeout          — 上游响应超时 (504)
+#   provider_error            — 兜底上游错误
+
+providers:
+  # ============================================================================
+  # OpenAI — Chat Completions API
+  # ref: https://developers.openai.com/api/docs/guides/error-codes
+  # ref: https://github.com/openai/openai-openapi
+  # JSON structure: {"error": {"type": "...", "message": "...", "param": "...", "code": "..."}}
+  # ============================================================================
+  openai:
+    structured:
+      - field: error.type
+        ref: "https://developers.openai.com/api/docs/guides/error-codes"
+        mapping:
+          invalid_request_error: provider_bad_request
+          authentication_error: provider_auth_error
+          permission_denied_error: provider_auth_error
+          not_found_error: provider_not_found
+          rate_limit_error: provider_rate_limited
+          rate_limit_exceeded: provider_rate_limited
+          insufficient_quota: provider_insufficient_quota
+          server_error: upstream_error
+          content_filter: content_policy_violation
+          context_length_exceeded: context_window_exceeded
+    keywords:
+      - pattern: "context_length_exceeded"
+        code: context_window_exceeded
+      - pattern: "maximum context length"
+        code: context_window_exceeded
+      - pattern: "token limit"
+        code: context_window_exceeded
+      - pattern: "exceeded your current quota"
+        code: provider_insufficient_quota
+      - pattern: "insufficient_quota"
+        code: provider_insufficient_quota
+      - pattern: "content_policy_violation"
+        code: content_policy_violation
+      - pattern: "content filter"
+        code: content_policy_violation
+      - pattern: "slow down"
+        code: provider_rate_limited
+      - pattern: "rate limit"
+        code: provider_rate_limited
+      - pattern: "engine is currently overloaded"
+        code: provider_overloaded
+      - pattern: "incorrect api key"
+        code: provider_auth_error
+      - pattern: "invalid api key"
+        code: provider_auth_error
+      - pattern: "ip not authorized"
+        code: provider_auth_error
+      - pattern: "country, region, or territory not supported"
+        code: provider_auth_error
+    # OpenAI uses standard HTTP status codes; no overrides needed.
+
+  # ============================================================================
+  # Anthropic — Messages API
+  # ref: https://platform.claude.com/docs/en/api/errors
+  # JSON structure: {"type": "error", "error": {"type": "...", "message": "..."}, "request_id": "..."}
+  # Note: Top-level "type" is always "error"; the error.type field is nested inside error.
+  # ============================================================================
+  anthropic:
+    structured:
+      - field: error.error.type
+        ref: "https://platform.claude.com/docs/en/api/errors"
+        mapping:
+          invalid_request_error: provider_bad_request
+          authentication_error: provider_auth_error
+          billing_error: provider_insufficient_quota
+          permission_error: provider_auth_error
+          not_found_error: provider_not_found
+          request_too_large: provider_bad_request
+          rate_limit_error: provider_rate_limited
+          api_error: upstream_error
+          timeout_error: upstream_timeout
+          overloaded_error: provider_overloaded
+    keywords:
+      - pattern: "credit balance is too low"
+        code: provider_insufficient_quota
+      - pattern: "prompt is too long"
+        code: context_window_exceeded
+      - pattern: "prefilling assistant messages is not supported"
+        code: provider_bad_request
+      - pattern: "thinking blocks cannot be modified"
+        code: provider_bad_request
+      - pattern: "outbound web identity federation is disabled"
+        code: provider_auth_error
+    http_status_overrides:
+      529: provider_overloaded  # Anthropic-specific overloaded status
+      402: provider_insufficient_quota
+
+  # ============================================================================
+  # Azure OpenAI — Chat Completions API
+  # ref: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference
+  # ref: https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/content-filter
+  # JSON structure: {"error": {"type": "...", "message": "...", "param": "...", "inner_error": {"code": "...", "content_filter_results": {...}}}}
+  # Key difference from OpenAI: inner_error.code for content filtering (ResponsibleAIPolicyViolation)
+  # ============================================================================
+  azure:
+    structured:
+      - field: error.type
+        ref: "https://learn.microsoft.com/en-us/azure/ai-services/openai/reference"
+        mapping:
+          invalid_request_error: provider_bad_request
+          authentication_error: provider_auth_error
+          permission_denied_error: provider_auth_error
+          not_found_error: provider_not_found
+          rate_limit_error: provider_rate_limited
+          rate_limit_exceeded: provider_rate_limited
+          insufficient_quota: provider_insufficient_quota
+          server_error: upstream_error
+          content_filter: content_policy_violation
+          context_length_exceeded: context_window_exceeded
+      - field: error.inner_error.code
+        ref: "https://learn.microsoft.com/en-us/azure/ai-services/openai/reference"
+        mapping:
+          ResponsibleAIPolicyViolation: content_policy_violation
+    keywords:
+      - pattern: "content_filter"
+        code: content_policy_violation
+      - pattern: "content filter"
+        code: content_policy_violation
+      - pattern: "ResponsibleAIPolicyViolation"
+        code: content_policy_violation
+      - pattern: "exceeded token limit"
+        code: context_window_exceeded
+      - pattern: "rate limit"
+        code: provider_rate_limited
+      - pattern: "quota"
+        code: provider_insufficient_quota
+      - pattern: "invalid api key"
+        code: provider_auth_error
+      - pattern: "azure subscription"
+        code: provider_auth_error
+    # Azure uses standard HTTP status codes.
+    # Azure 429 is used both for rate limiting and quota exhaustion.
+
+  # ============================================================================
+  # AWS Bedrock — Converse / InvokeModel API
+  # ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+  # ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/CommonErrors.html
+  # Error format: AWS SDK exceptions (not JSON body). Exception names are the key identifier.
+  # Bedrock has custom mapAWSError in internal/providers/bedrock/bedrock.go
+  # ============================================================================
+  bedrock:
+    # Bedrock errors are AWS SDK exception types, not JSON fields.
+    # We map by exception name (extracted from err.Error() / ErrorCode()).
+    structured:
+      - field: exception_name
+        ref: "https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html"
+        mapping:
+          AccessDeniedException: provider_auth_error
+          InternalServerException: upstream_error
+          ModelErrorException: upstream_error
+          ModelNotReadyException: provider_overloaded
+          ModelTimeoutException: upstream_timeout
+          ResourceNotFoundException: provider_not_found
+          ServiceUnavailableException: upstream_unavailable
+          ThrottlingException: provider_rate_limited
+          ValidationException: provider_bad_request
+    keywords:
+      - pattern: "ThrottlingException"
+        code: provider_rate_limited
+      - pattern: "ValidationException"
+        code: provider_bad_request
+      - pattern: "ServiceUnavailableException"
+        code: upstream_unavailable
+      - pattern: "ModelTimeoutException"
+        code: upstream_timeout
+      - pattern: "ModelNotReadyException"
+        code: provider_overloaded
+      - pattern: "AccessDeniedException"
+        code: provider_auth_error
+      - pattern: "ExpiredTokenException"
+        code: provider_auth_error
+      - pattern: "UnrecognizedClientException"
+        code: provider_auth_error
+      - pattern: "OptInRequired"
+        code: provider_auth_error
+      - pattern: "context window"
+        code: context_window_exceeded
+      - pattern: "content filter"
+        code: content_policy_violation
+    http_status_overrides:
+      424: upstream_error  # ModelErrorException — model processing failure
+      408: upstream_timeout  # ModelTimeoutException
+
+  # ============================================================================
+  # Google Vertex AI / Gemini — generateContent API
+  # ref: https://ai.google.dev/gemini-api/docs/troubleshooting
+  # ref: https://cloud.google.com/apis/design/errors
+  # JSON structure: {"error": {"code": 429, "message": "...", "status": "RESOURCE_EXHAUSTED"}}
+  # Google uses standard google.rpc.Status format: error.code (int), error.status (string), error.message (string)
+  # ============================================================================
+  gemini:
+    structured:
+      - field: error.status
+        ref: "https://ai.google.dev/gemini-api/docs/troubleshooting"
+        mapping:
+          INVALID_ARGUMENT: provider_bad_request
+          FAILED_PRECONDITION: provider_bad_request
+          PERMISSION_DENIED: provider_auth_error
+          NOT_FOUND: provider_not_found
+          RESOURCE_EXHAUSTED: provider_rate_limited
+          CANCELLED: provider_bad_request
+          INTERNAL: upstream_error
+          UNAVAILABLE: upstream_unavailable
+          DEADLINE_EXCEEDED: upstream_timeout
+    keywords:
+      - pattern: "API key was reported as leaked"
+        code: provider_auth_error
+      - pattern: "API key not valid"
+        code: provider_auth_error
+      - pattern: "safety"
+        code: content_policy_violation
+      - pattern: "BlockedReason"
+        code: content_policy_violation
+      - pattern: "token limit"
+        code: context_window_exceeded
+      - pattern: "maximum context length"
+        code: context_window_exceeded
+      - pattern: "resource has been exhausted"
+        code: provider_rate_limited
+      - pattern: "quota"
+        code: provider_insufficient_quota
+    http_status_overrides:
+      499: provider_bad_request  # CANCELLED — client canceled request
+
+  # ============================================================================
+  # Vertex AI — wraps Gemini provider, same error format
+  # ref: https://cloud.google.com/vertex-ai/docs/reference/rest/v1/Error
+  # JSON structure: same google.rpc.Status format as Gemini
+  # ============================================================================
+  vertex:
+    # Inherits Gemini error format (same google.rpc.Status).
+    structured:
+      - field: error.status
+        ref: "https://cloud.google.com/vertex-ai/docs/reference/rest/v1/Error"
+        mapping:
+          INVALID_ARGUMENT: provider_bad_request
+          FAILED_PRECONDITION: provider_bad_request
+          PERMISSION_DENIED: provider_auth_error
+          NOT_FOUND: provider_not_found
+          RESOURCE_EXHAUSTED: provider_rate_limited
+          CANCELLED: provider_bad_request
+          INTERNAL: upstream_error
+          UNAVAILABLE: upstream_unavailable
+          DEADLINE_EXCEEDED: upstream_timeout
+    keywords:
+      - pattern: "API key"
+        code: provider_auth_error
+      - pattern: "authentication"
+        code: provider_auth_error
+      - pattern: "safety"
+        code: content_policy_violation
+      - pattern: "token limit"
+        code: context_window_exceeded
+      - pattern: "resource has been exhausted"
+        code: provider_rate_limited
+      - pattern: "quota"
+        code: provider_insufficient_quota
+    http_status_overrides:
+      499: provider_bad_request
+
+  # ============================================================================
+  # DeepSeek — OpenAI-compatible API
+  # ref: https://api-docs.deepseek.com/quick_start/error_codes
+  # JSON structure: OpenAI-compatible {"error": {"type": "...", "message": "...", "code": "..."}}
+  # TODO: verify exact JSON error response structure — docs only show HTTP status + code name table
+  # ============================================================================
+  deepseek:
+    # DeepSeek is OpenAI-compatible but uses some unique HTTP status codes.
+    # Exact error.type values are not documented; using OpenAI-compatible defaults.
+    structured:
+      - field: error.type
+        ref: "https://api-docs.deepseek.com/quick_start/error_codes"
+        mapping:
+          invalid_request_error: provider_bad_request
+          authentication_error: provider_auth_error
+          rate_limit_error: provider_rate_limited
+          insufficient_quota: provider_insufficient_quota
+          server_error: upstream_error
+    keywords:
+      - pattern: "invalid format"
+        code: provider_bad_request
+      - pattern: "invalid parameters"
+        code: provider_bad_request
+      - pattern: "authentication fails"
+        code: provider_auth_error
+      - pattern: "insufficient balance"
+        code: provider_insufficient_quota
+      - pattern: "rate limit reached"
+        code: provider_rate_limited
+      - pattern: "server error"
+        code: upstream_error
+      - pattern: "server overloaded"
+        code: provider_overloaded
+    http_status_overrides:
+      402: provider_insufficient_quota  # DeepSeek-specific: insufficient balance
+      422: provider_bad_request  # Invalid parameters
+
+  # ============================================================================
+  # DashScope / 阿里云百炼 (Bailian) — OpenAI-compatible API
+  # ref: https://help.aliyun.com/zh/model-studio/error-codes
+  # JSON structure: uses code (int) and message (string), NOT OpenAI-compatible error.type
+  # Note: error codes are numeric (100000-200006), not structured strings.
+  # TODO: verify exact JSON response structure (docs show code+message table, not JSON schema)
+  # ============================================================================
+  bailian:
+    # DashScope uses numeric error codes (code field), not error.type.
+    structured:
+      - field: error.code
+        ref: "https://help.aliyun.com/zh/model-studio/error-codes"
+        mapping:
+          "100000": upstream_error           # 系统异常
+          "100001": provider_auth_error      # 用户未登录
+          "100002": provider_rate_limited    # 限流
+          "100004": provider_bad_request     # 参数缺失
+          "100005": provider_bad_request     # 参数非法
+          "100006": provider_auth_error      # 权限不足
+          "100007": provider_auth_error      # 租户信息不存在
+          "100008": content_policy_violation # 请求内容安全拦截
+          "100009": content_policy_violation # 响应内容安全拦截
+          "100010": content_policy_violation # 响应内容未通过自定义策略
+          "100011": provider_insufficient_quota # 无可用额度
+          "100012": provider_bad_request     # 应用ID不合法
+          "100013": upstream_timeout         # 请求调用超时
+          "100016": provider_auth_error      # API令牌认证失败
+          "100019": provider_not_found       # 模型不存在
+          "100020": upstream_unavailable     # 模型暂时无法提供服务
+          "100023": content_policy_violation # 内容未通过安全策略
+          "100201": provider_bad_request     # 请求Body不是JSON格式
+          "100202": provider_bad_request     # 请求头的媒体类型不匹配
+          "200001": upstream_error           # 大模型调用失败
+          "200002": provider_rate_limited    # 大模型请求用量受限
+          "200004": upstream_timeout         # 大模型调用超时
+          "200005": upstream_error           # 大模型返回数据处理异常
+          "200006": provider_bad_request     # 大模型请求参数异常
+    keywords:
+      - pattern: "系统异常"
+        code: upstream_error
+      - pattern: "未登录"
+        code: provider_auth_error
+      - pattern: "限流"
+        code: provider_rate_limited
+      - pattern: "参数缺失"
+        code: provider_bad_request
+      - pattern: "参数非法"
+        code: provider_bad_request
+      - pattern: "权限不足"
+        code: provider_auth_error
+      - pattern: "安全拦截"
+        code: content_policy_violation
+      - pattern: "无可用额度"
+        code: provider_insufficient_quota
+      - pattern: "认证失败"
+        code: provider_auth_error
+      - pattern: "模型不存在"
+        code: provider_not_found
+      - pattern: "模型暂时无法提供服务"
+        code: upstream_unavailable
+      - pattern: "大模型调用失败"
+        code: upstream_error
+      - pattern: "调用超时"
+        code: upstream_timeout
+      - pattern: "请求用量受限"
+        code: provider_rate_limited
+    # HTTP status codes not explicitly documented for DashScope.
+    # TODO: verify HTTP status codes used by DashScope error responses.
+
+  # ============================================================================
+  # Groq — OpenAI-compatible API
+  # ref: https://console.groq.com/docs/errors
+  # JSON structure: OpenAI-compatible {"error": {"type": "...", "message": "..."}}
+  # Uses OpenAI-compatible error types.
+  # ============================================================================
+  groq:
+    # OpenAI-compatible error format.
+    structured:
+      - field: error.type
+        ref: "https://console.groq.com/docs/errors"
+        mapping:
+          invalid_request_error: provider_bad_request
+          authentication_error: provider_auth_error
+          rate_limit_error: provider_rate_limited
+          server_error: upstream_error
+    keywords:
+      - pattern: "rate limit"
+        code: provider_rate_limited
+      - pattern: "invalid api key"
+        code: provider_auth_error
+      - pattern: "token limit"
+        code: context_window_exceeded
+
+  # ============================================================================
+  # xAI (Grok) — OpenAI-compatible API
+  # ref: https://docs.x.ai/docs/api-reference
+  # JSON structure: OpenAI-compatible {"error": {"type": "...", "message": "..."}}
+  # TODO: verify exact error types from xAI docs
+  # ============================================================================
+  xai:
+    # OpenAI-compatible error format.
+    structured:
+      - field: error.type
+        ref: "https://docs.x.ai/docs/api-reference"
+        mapping:
+          invalid_request_error: provider_bad_request
+          authentication_error: provider_auth_error
+          rate_limit_error: provider_rate_limited
+          server_error: upstream_error
+    keywords:
+      - pattern: "rate limit"
+        code: provider_rate_limited
+      - pattern: "api key"
+        code: provider_auth_error
+
+  # ============================================================================
+  # OpenRouter — OpenAI-compatible wrapper API
+  # ref: https://openrouter.ai/docs/api-reference/errors
+  # JSON structure: OpenAI-compatible with metadata.raw for upstream provider errors
+  # Note: OpenRouter wraps other providers; error.metadata.raw contains upstream error string.
+  # ============================================================================
+  openrouter:
+    # OpenAI-compatible error format. OpenRouter also provides metadata.raw for upstream errors.
+    structured:
+      - field: error.type
+        ref: "https://openrouter.ai/docs/api-reference/errors"
+        mapping:
+          invalid_request_error: provider_bad_request
+          authentication_error: provider_auth_error
+          rate_limit_error: provider_rate_limited
+          server_error: upstream_error
+    keywords:
+      - pattern: "rate limit"
+        code: provider_rate_limited
+      - pattern: "api key"
+        code: provider_auth_error
+      - pattern: "provider returned"
+        code: upstream_error
+      - pattern: "credit"
+        code: provider_insufficient_quota
+
+  # ============================================================================
+  # LiteLLM — OpenAI-compatible proxy
+  # ref: https://docs.litellm.ai/docs/exception_mapping
+  # JSON structure: OpenAI-compatible
+  # ============================================================================
+  litellm:
+    structured:
+      - field: error.type
+        ref: "https://docs.litellm.ai/docs/exception_mapping"
+        mapping:
+          invalid_request_error: provider_bad_request
+          authentication_error: provider_auth_error
+          rate_limit_error: provider_rate_limited
+          server_error: upstream_error
+    keywords:
+      - pattern: "rate limit"
+        code: provider_rate_limited
+      - pattern: "api key"
+        code: provider_auth_error
+      - pattern: "budget"
+        code: provider_insufficient_quota
+
+  # ============================================================================
+  # Ollama — OpenAI-compatible local API
+  # ref: https://github.com/ollama/ollama/blob/main/docs/openai.md
+  # JSON structure: OpenAI-compatible
+  # ============================================================================
+  ollama:
+    structured:
+      - field: error.type
+        mapping:
+          invalid_request_error: provider_bad_request
+          authentication_error: provider_auth_error
+          server_error: upstream_error
+    keywords:
+      - pattern: "not found"
+        code: provider_not_found
+      - pattern: "model not found"
+        code: provider_not_found
+      - pattern: "connect"
+        code: upstream_unavailable
+
+  # ============================================================================
+  # vLLM — OpenAI-compatible server
+  # ref: https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html
+  # JSON structure: OpenAI-compatible
+  # ============================================================================
+  vllm:
+    structured:
+      - field: error.type
+        mapping:
+          invalid_request_error: provider_bad_request
+          authentication_error: provider_auth_error
+          server_error: upstream_error
+    keywords:
+      - pattern: "rate limit"
+        code: provider_rate_limited
+      - pattern: "token limit"
+        code: context_window_exceeded
+
+  # ============================================================================
+  # MiniMax — OpenAI-compatible API
+  # ref: https://platform.minimaxi.com/document/ChatCompletion
+  # JSON structure: OpenAI-compatible
+  # TODO: verify exact error types from MiniMax docs
+  # ============================================================================
+  minimax:
+    structured:
+      - field: error.type
+        mapping:
+          invalid_request_error: provider_bad_request
+          authentication_error: provider_auth_error
+          rate_limit_error: provider_rate_limited
+          server_error: upstream_error
+    keywords:
+      - pattern: "rate limit"
+        code: provider_rate_limited
+      - pattern: "api key"
+        code: provider_auth_error
+
+  # ============================================================================
+  # Oracle — OpenAI-compatible API (OCI Generative AI)
+  # ref: https://docs.oracle.com/en-us/iaas/Content/generative-ai/error-codes.htm
+  # JSON structure: OpenAI-compatible
+  # TODO: verify exact error types from Oracle docs
+  # ============================================================================
+  oracle:
+    structured:
+      - field: error.type
+        mapping:
+          invalid_request_error: provider_bad_request
+          authentication_error: provider_auth_error
+          rate_limit_error: provider_rate_limited
+          server_error: upstream_error
+    keywords:
+      - pattern: "rate limit"
+        code: provider_rate_limited
+      - pattern: "auth"
+        code: provider_auth_error
+
+  # ============================================================================
+  # Z.ai — OpenAI-compatible API
+  # ref: https://open.platform.z.ai/api
+  # JSON structure: OpenAI-compatible
+  # TODO: verify exact error types from Z.ai docs
+  # ============================================================================
+  zai:
+    structured:
+      - field: error.type
+        mapping:
+          invalid_request_error: provider_bad_request
+          authentication_error: provider_auth_error
+          rate_limit_error: provider_rate_limited
+          server_error: upstream_error
+    keywords:
+      - pattern: "rate limit"
+        code: provider_rate_limited
+      - pattern: "api key"
+        code: provider_auth_error
+
+# ==============================================================================
+# 全局兜底规则 (不依赖 provider)
+# 当 provider 没有 structured / keywords 匹配时, 按 HTTP status 映射.
+# ==============================================================================
+defaults:
+  http_status:
+    400: provider_bad_request
+    401: provider_auth_error
+    402: provider_insufficient_quota
+    403: provider_auth_error
+    404: provider_not_found
+    408: upstream_timeout
+    413: provider_bad_request
+    422: provider_bad_request
+    424: upstream_error
+    429: provider_rate_limited
+    500: upstream_error
+    502: upstream_error
+    503: upstream_unavailable
+    504: upstream_timeout
+    529: provider_overloaded
+  fallback: provider_error

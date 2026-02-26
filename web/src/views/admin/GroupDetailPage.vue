@@ -177,6 +177,28 @@
           </template>
         </el-alert>
 
+        <div v-if="groupQuota" class="quota-current">
+          <div class="quota-current-title">当前生效配额</div>
+          <div class="quota-current-grid">
+            <div class="quota-current-item">
+              <span class="label">RPM：</span>
+              <span class="value">{{ groupQuota.rpm === 0 ? '不限制' : groupQuota.rpm }}</span>
+              <el-tag
+                size="small"
+                :type="groupQuota.source === 'override' ? 'success' : 'info'"
+                style="margin-left: 6px"
+              >
+                {{ groupQuota.source === 'override' ? '自定义' : '继承默认' }}
+              </el-tag>
+            </div>
+            <div class="quota-current-item">
+              <span class="label">并发：</span>
+              <span class="value">{{ groupQuota.max_concurrency === 0 ? '不限制' : groupQuota.max_concurrency }}</span>
+            </div>
+          </div>
+        </div>
+        <div v-else class="quota-current quota-current-empty">配额数据加载中…</div>
+
         <el-button type="primary" @click="openQuotaDialog">编辑配额</el-button>
       </div>
     </el-tab-pane>
@@ -220,7 +242,8 @@ import type { GroupCapability } from '@/api/groups'
 import { getGroupEntitlements, grantEntitlement, revokeEntitlement, setGroupOpenMode } from '@/services/control-plane'
 import type { GroupEntitlement } from '@/types/entitlement'
 import QuotaEditDialog from '@/components/QuotaEditDialog.vue'
-import { QUOTA_DEFAULTS } from '@/api/quota'
+import { QUOTA_DEFAULTS, getGroupQuota } from '@/api/quota'
+import type { QuotaEffective } from '@/api/quota'
 
 const route = useRoute()
 const router = useRouter()
@@ -255,6 +278,18 @@ const capAggregated = ref<GroupCapability | null>(null)
 const quotaDialogVisible = ref(false)
 const quotaSubjectId = ref('')
 const quotaSubjectLabel = ref('')
+const groupQuota = ref<QuotaEffective | null>(null)
+
+// 后端响应为 { code:0, data:{...} }，真实对象在 res.data.data
+async function loadGroupQuota() {
+  if (!groupId.value) return
+  try {
+    const res = await getGroupQuota(String(groupId.value))
+    groupQuota.value = (res as any)?.data?.data ?? null
+  } catch {
+    groupQuota.value = null
+  }
+}
 
 function openQuotaDialog() {
   quotaSubjectId.value = String(groupId.value)
@@ -263,7 +298,8 @@ function openQuotaDialog() {
 }
 
 function onQuotaSaved() {
-  // 配额保存后无需刷新其他数据
+  // 刷新当前配额，使「配额设置」Tab 即时回显
+  loadGroupQuota()
 }
 
 function strategyLabel(s: string): string {
@@ -395,7 +431,7 @@ async function resetCapability() {
 
 onMounted(async () => {
   await loadGroup()
-  await Promise.all([loadModels(), loadEntitlements(), loadCapabilities(), loadQuota()])
+  await Promise.all([loadModels(), loadEntitlements(), loadCapabilities(), loadGroupQuota()])
 })
 </script>
 
@@ -426,4 +462,11 @@ onMounted(async () => {
 .cap-auto-hint { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 13px; color: var(--el-text-color-secondary); padding: 12px 16px; background: var(--el-fill-color-light); border-radius: 8px; }
 .quota-section { padding-top: 16px; }
 .quota-hint { margin-left: 12px; font-size: 12px; color: var(--el-text-color-secondary); }
+.quota-current { margin-bottom: 16px; padding: 12px 16px; background: var(--el-fill-color-light); border-radius: 8px; }
+.quota-current-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--el-text-color-primary); }
+.quota-current-grid { display: flex; gap: 24px; }
+.quota-current-item { font-size: 13px; display: flex; align-items: center; }
+.quota-current-item .label { color: var(--el-text-color-secondary); }
+.quota-current-item .value { font-weight: 600; color: var(--el-text-color-primary); margin-left: 4px; }
+.quota-current-empty { font-size: 13px; color: var(--el-text-color-placeholder); }
 </style>

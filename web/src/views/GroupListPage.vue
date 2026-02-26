@@ -111,6 +111,18 @@
             {{ formatDateTime(row.created_at) }}
           </template>
         </el-table-column>
+        <el-table-column label="配额" width="150" align="center">
+          <template #default="{ row }">
+            <span v-if="groupQuotaMap[row.id]" class="quota-cell">
+              <template v-if="groupQuotaMap[row.id]!.source === 'override'">
+                {{ groupQuotaMap[row.id]!.rpm === 0 ? '不限' : groupQuotaMap[row.id]!.rpm }} RPM /
+                {{ groupQuotaMap[row.id]!.max_concurrency === 0 ? '不限' : groupQuotaMap[row.id]!.max_concurrency }} 并发
+              </template>
+              <span v-else class="text-placeholder">继承默认</span>
+            </span>
+            <span v-else class="text-placeholder">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="340" align="center">
           <template #default="{ row }">
             <el-button v-if="canManageEntitlements" text type="primary" size="small" @click="openQuotaDialog(row)">配额</el-button>
@@ -180,7 +192,8 @@ import type { GroupListItem, Strategy, OpenMode } from '@/types/group'
 import GroupEditDialog from '@/components/GroupEditDialog.vue'
 import GroupEntitlementDialog from '@/components/GroupEntitlementDialog.vue'
 import QuotaEditDialog from '@/components/QuotaEditDialog.vue'
-import { QUOTA_DEFAULTS } from '@/api/quota'
+import { QUOTA_DEFAULTS, getGroupQuota } from '@/api/quota'
+import type { QuotaEffective } from '@/api/quota'
 import { useAuthStore } from '@/stores/auth'
 
 const authStore = useAuthStore()
@@ -204,6 +217,7 @@ const entitlementGroup = ref<GroupListItem | null>(null)
 const quotaDialogVisible = ref(false)
 const quotaSubjectId = ref('')
 const quotaSubjectLabel = ref('')
+const groupQuotaMap = ref<Record<string, QuotaEffective>>({})
 
 const canManageEntitlements = computed(() => authStore.isAdmin)
 
@@ -268,6 +282,8 @@ async function loadGroups() {
     })
     groups.value = res.data.data
     total.value = res.data.total
+    // 并行加载模型组配额，供列表「配额」列回显
+    loadGroupsQuotas(res.data.data)
     loadCapabilities()
   } catch {
     error.value = true
@@ -348,8 +364,27 @@ function openQuotaDialog(group: GroupListItem) {
   quotaDialogVisible.value = true
 }
 
+// 后端响应为 { code:0, data:{...} }，真实对象在 res.data.data
+async function loadGroupQuota(groupId: string | number) {
+  if (!groupId) return
+  try {
+    const res = await getGroupQuota(String(groupId))
+    const data = (res as any)?.data?.data
+    if (data) groupQuotaMap.value[String(groupId)] = data
+  } catch {
+    // 404 或错误：不填充，列显示占位符
+  }
+}
+
+async function loadGroupsQuotas(items: GroupListItem[]) {
+  await Promise.all(items.map(g => loadGroupQuota(g.id)))
+}
+
 function onQuotaSaved() {
-  loadGroups()
+  // 刷新该行配额，使列表列即时回显
+  if (quotaSubjectId.value) {
+    loadGroupQuota(quotaSubjectId.value)
+  }
 }
 
 function onDialogSaved() {
@@ -366,6 +401,9 @@ onMounted(() => {
 .group-page {
   padding: 0;
 }
+
+.quota-cell { font-size: 13px; }
+.text-placeholder { color: var(--el-text-color-placeholder); font-size: 13px; }
 
 .page-header {
   display: flex;

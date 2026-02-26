@@ -28,7 +28,7 @@
           <el-icon><DataLine /></el-icon>
           <template #title>我的用量</template>
         </el-menu-item>
-        <el-menu-item index="/my/quota">
+        <el-menu-item index="/my/budget?tab=quota">
           <el-icon><Timer /></el-icon>
           <template #title>我的配额</template>
         </el-menu-item>
@@ -235,7 +235,14 @@ const settingsStore = useSettingsStore()
 const isCollapsed = ref(localStorage.getItem('sidebar-collapsed') === 'true')
 const isMobile = ref(window.innerWidth < 768)
 const showMobileSidebar = ref(false)
-const activeMenu = ref(route.path)
+// 配额已并入预算页（tab 切换）：在 /my/budget 上按 ?tab=quota 区分菜单高亮
+function resolveActiveMenu(r: { path: string; query: { tab?: string } }): string {
+  if (r.path === '/my/budget') {
+    return r.query.tab === 'quota' ? '/my/budget?tab=quota' : '/my/budget'
+  }
+  return r.path
+}
+const activeMenu = ref(resolveActiveMenu(route))
 const showPopup = ref(false)
 const budgetAlert = ref(false)
 
@@ -250,7 +257,12 @@ async function checkBudgetAlert() {
 }
 
 watch(() => route.path, (newPath) => {
-  activeMenu.value = newPath
+  activeMenu.value = resolveActiveMenu(route)
+})
+
+// 预算页内 tab 切换时，按 ?tab=quota 让「我的配额」菜单项高亮，否则高亮「我的预算」
+watch(() => route.query.tab, () => {
+  activeMenu.value = resolveActiveMenu(route)
 })
 
 const sidebarLogoSrc = computed(() => {

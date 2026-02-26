@@ -360,7 +360,8 @@ function onQuotaSaved() {
 async function loadQuotaForModel(modelId: string) {
   try {
     const res = await getModelQuota(modelId)
-    const data = (res as any)?.data
+    // 后端响应为 { code:0, data:{...} }，真实对象在 res.data.data
+    const data = (res as any)?.data?.data
     if (data) {
       quotaMap.value[modelId] = data
     }

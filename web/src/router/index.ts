@@ -125,11 +125,10 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/MyBudgetPage.vue'),
     meta: { title: '我的预算' }
   },
+  // 「我的配额」已并入「我的预算」页面（配额 tab），旧路由重定向以兼容书签/导航
   {
     path: '/my/quota',
-    name: 'MyQuota',
-    component: () => import('@/views/MyQuotaPage.vue'),
-    meta: { title: '我的配额' }
+    redirect: '/my/budget?tab=quota'
   },
   {
     path: '/admin/budget',

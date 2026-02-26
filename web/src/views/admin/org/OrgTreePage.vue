@@ -337,6 +337,18 @@
                   </template>
                 </el-table-column>
                 <el-table-column label="归集时间" width="100" prop="joined_at" />
+                <el-table-column label="配额" width="150" align="center">
+                  <template #default="{ row }">
+                    <span v-if="userQuotaMap[row.id]" class="quota-cell">
+                      <template v-if="userQuotaMap[row.id]!.source === 'override'">
+                        {{ userQuotaMap[row.id]!.rpm === 0 ? '不限' : userQuotaMap[row.id]!.rpm }} RPM /
+                        {{ userQuotaMap[row.id]!.max_concurrency === 0 ? '不限' : userQuotaMap[row.id]!.max_concurrency }} 并发
+                      </template>
+                      <span v-else class="text-placeholder">继承默认</span>
+                    </span>
+                    <span v-else class="text-placeholder">—</span>
+                  </template>
+                </el-table-column>
                 <el-table-column
                   v-if="isGlobalAdmin || myStudioIds.includes(selectedDeptParentStudio?.id ?? '')"
                   label="操作" width="180" align="center"
@@ -999,7 +1011,8 @@ import http from '@/services/http'
 import { useRoute, useRouter } from 'vue-router'
 import BudgetScopePanel from '@/components/budget/BudgetScopePanel.vue'
 import QuotaEditDialog from '@/components/QuotaEditDialog.vue'
-import { QUOTA_DEFAULTS } from '@/api/quota'
+import { QUOTA_DEFAULTS, getUserQuota } from '@/api/quota'
+import type { QuotaEffective } from '@/api/quota'
 
 const orgStore  = useOrgStore()
 const authStore = useAuthStore()
@@ -1255,6 +1268,8 @@ async function loadDeptMembers(page = 1) {
     const res = await orgStore.fetchDeptMembers(selectedDept.value.dept_id, page, deptMembersPageSize)
     deptMembers.value = res.members
     deptMembersTotal.value = res.total
+    // 并行加载成员配额，供列表「配额」列回显
+    loadDeptMembersQuotas(res.members)
   } catch {
     // 错误由 http 拦截器统一处理
   } finally {
@@ -1815,6 +1830,7 @@ function goToMemberDashboard() {
 const userQuotaDialogVisible = ref(false)
 const userQuotaSubjectId = ref('')
 const userQuotaSubjectLabel = ref('')
+const userQuotaMap = ref<Record<string, QuotaEffective>>({})
 
 function openUserQuotaDialog(member: DeptMember) {
   userQuotaSubjectId.value = member.id
@@ -1822,8 +1838,27 @@ function openUserQuotaDialog(member: DeptMember) {
   userQuotaDialogVisible.value = true
 }
 
+// 后端响应为 { code:0, data:{...} }，真实对象在 res.data.data
+async function loadUserQuota(userId: string) {
+  if (!userId) return
+  try {
+    const res = await getUserQuota(userId)
+    const data = (res as any)?.data?.data
+    if (data) userQuotaMap.value[userId] = data
+  } catch {
+    // 404 或错误：不填充，列显示占位符
+  }
+}
+
+async function loadDeptMembersQuotas(members: DeptMember[]) {
+  await Promise.all(members.map(m => loadUserQuota(m.id)))
+}
+
 function onUserQuotaSaved() {
-  // 配额保存后无需刷新成员列表，对话框内部管理
+  // 配额保存后刷新该用户的配额，使列表列即时回显
+  if (userQuotaSubjectId.value) {
+    loadUserQuota(userQuotaSubjectId.value)
+  }
 }
 </script>
 
@@ -1836,6 +1871,9 @@ function onUserQuotaSaved() {
   overflow: hidden;
   background: var(--el-bg-color-page);
 }
+
+.quota-cell { font-size: 13px; }
+.text-placeholder { color: var(--el-text-color-placeholder); font-size: 13px; }
 
 /* ─── 左侧树面板 ────────────────────────────────────────────────────────────── */
 .tree-panel {

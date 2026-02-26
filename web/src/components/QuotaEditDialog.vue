@@ -123,6 +123,11 @@ const form = ref<{ rpm: number | null; max_concurrency: number | null }>({
 const saving = ref(false)
 const effective = ref<QuotaEffective | null>(null)
 
+// 后端响应为 { code:0, data:{...} }，axios 再包一层 → 真实对象在 res.data.data
+function unwrap<T = any>(res: any): T | null {
+  return (res?.data?.data ?? res?.data ?? null) as T | null
+}
+
 const dialogTitle = computed(() => {
   switch (props.subjectType) {
     case 'user': return '编辑用户配额'
@@ -153,7 +158,7 @@ watch(
       try {
         const api = getQuotaApi(props.subjectType)
         const res = await api.get(props.subjectId)
-        const data = (res as any)?.data
+        const data = unwrap<QuotaEffective>(res)
         if (data) {
           effective.value = data
           if (data.source === 'override') {
@@ -190,7 +195,7 @@ async function saveQuota() {
     ElMessage.success('配额已保存')
     // Reload effective
     const res = await api.get(props.subjectId)
-    const data = (res as any)?.data
+    const data = unwrap<QuotaEffective>(res)
     if (data) {
       effective.value = data
       if (data.source === 'override') {
@@ -215,7 +220,7 @@ async function clearQuota() {
     form.value = { rpm: null, max_concurrency: null }
     ElMessage.success('已清除，恢复为继承默认')
     const res = await api.get(props.subjectId)
-    effective.value = (res as any)?.data || null
+    effective.value = unwrap<QuotaEffective>(res) || null
     emit('saved')
   } catch (e: any) {
     ElMessage.error(e?.message || '清除失败')

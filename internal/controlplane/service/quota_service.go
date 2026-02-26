@@ -100,11 +100,10 @@ func (s *QuotaService) SetServiceKeyQuota(ctx context.Context, keyID string, rpm
 // GetServiceKeyEffectiveQuota 获取 Service Key 有效配额
 func (s *QuotaService) GetServiceKeyEffectiveQuota(ctx context.Context, keyID string) (*QuotaEffective, error) {
 	var key cpmodel.ApiKey
-	if err := s.db.WithContext(ctx).Where("id = ?", keyID).First(&key).Error; err != nil {
-		return nil, fmt.Errorf("find key: %w", err)
-	}
-	if key.KeyType != cpmodel.KeyTypeService {
-		return nil, fmt.Errorf("key is not a service key")
+	if err := s.db.WithContext(ctx).Model(&cpmodel.ApiKey{}).
+		Where("id = ? AND key_type = ?", keyID, cpmodel.KeyTypeService).
+		First(&key).Error; err != nil {
+		return nil, fmt.Errorf("find service key: %w", err)
 	}
 	settings, err := s.getSettings(ctx)
 	if err != nil {

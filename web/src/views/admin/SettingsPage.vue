@@ -540,6 +540,7 @@ import { reactive, ref, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useSettingsStore } from '@/stores/settings'
 import { exportSettings, importSettings } from '@/services/control-plane'
+import { QUOTA_DEFAULTS } from '@/api/quota'
 import ImageUpload from '@/components/common/ImageUpload.vue'
 
 const settingsStore = useSettingsStore()
@@ -570,12 +571,14 @@ const form = reactive({
   site_subtitle: '',
   api_base_url: '',
   supplier_name: '某公司',
-	rate_limit_per_minute: 60,
-	max_concurrency_per_key: 10,
-	default_user_rpm: 60,
-	default_user_max_concurrency: 10,
-	default_service_key_rpm: 120,
-	default_service_key_max_concurrency: 20,
+  // Legacy fields: kept for backward compatibility with backend config schema,
+  // not displayed in UI. Use default_user_rpm / default_service_key_rpm instead.
+  rate_limit_per_minute: QUOTA_DEFAULTS.user.rpm,
+  max_concurrency_per_key: QUOTA_DEFAULTS.user.max_concurrency,
+  default_user_rpm: QUOTA_DEFAULTS.user.rpm,
+  default_user_max_concurrency: QUOTA_DEFAULTS.user.max_concurrency,
+  default_service_key_rpm: QUOTA_DEFAULTS.service_key.rpm,
+  default_service_key_max_concurrency: QUOTA_DEFAULTS.service_key.max_concurrency,
 	oidc_issuer_url: '',
 	oidc_client_id: '',
 	oidc_client_secret: '',
@@ -604,12 +607,14 @@ const initialForm = reactive({
   site_subtitle: '',
   api_base_url: '',
   supplier_name: '某公司',
-	rate_limit_per_minute: 60,
-	max_concurrency_per_key: 10,
-	default_user_rpm: 60,
-	default_user_max_concurrency: 10,
-	default_service_key_rpm: 120,
-	default_service_key_max_concurrency: 20,
+  // Legacy fields: kept for backward compatibility with backend config schema,
+  // not displayed in UI. Use default_user_rpm / default_service_key_rpm instead.
+  rate_limit_per_minute: QUOTA_DEFAULTS.user.rpm,
+  max_concurrency_per_key: QUOTA_DEFAULTS.user.max_concurrency,
+  default_user_rpm: QUOTA_DEFAULTS.user.rpm,
+  default_user_max_concurrency: QUOTA_DEFAULTS.user.max_concurrency,
+  default_service_key_rpm: QUOTA_DEFAULTS.service_key.rpm,
+  default_service_key_max_concurrency: QUOTA_DEFAULTS.service_key.max_concurrency,
 	oidc_issuer_url: '',
 	oidc_client_id: '',
 	oidc_client_secret: '',

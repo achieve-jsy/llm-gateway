@@ -531,8 +531,9 @@ func TestGetMyQuota(t *testing.T) {
 	var resp map[string]interface{}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	data := resp["data"].(map[string]interface{})
-	assert.Equal(t, float64(150), data["rpm"])
-	assert.Equal(t, "override", data["source"])
+	eff := data["effective"].(map[string]interface{})
+	assert.Equal(t, float64(150), eff["rpm"])
+	assert.Equal(t, "override", eff["source"])
 }
 
 func TestSetQuota_InvalidValue(t *testing.T) {

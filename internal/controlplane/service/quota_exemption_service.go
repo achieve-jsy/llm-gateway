@@ -250,14 +250,16 @@ func (s *QuotaExemptionService) ListActiveExemptionsWithNames(ctx context.Contex
 	// ── 构建基础查询 ──
 	baseQuery := s.db.WithContext(ctx).Model(&quota.QuotaExemption{})
 
-	// 状态筛选
+	// 状态筛选：未指定时默认只返回 active（与方法名语义一致）
 	switch filter.Status {
-	case "active":
+	case "active", "":
 		baseQuery = baseQuery.Where("expires_at > ?", now)
 	case "expiring_soon":
 		baseQuery = baseQuery.Where("expires_at > ? AND expires_at <= ?", now, now.Add(24*time.Hour))
 	case "expired":
 		baseQuery = baseQuery.Where("expires_at <= ?", now)
+	case "all":
+		// 显式传 "all" 时不过滤
 	}
 
 	// 类型筛选

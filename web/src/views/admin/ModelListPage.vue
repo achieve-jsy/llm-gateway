@@ -208,6 +208,19 @@
         </template>
       </el-table-column>
 
+      <el-table-column label="配额" width="180">
+        <template #default="{ row }">
+          <span v-if="quotaMap[row.id]" class="quota-cell">
+            <template v-if="quotaMap[row.id]!.source === 'override'">
+              {{ quotaMap[row.id]!.rpm === 0 ? '不限' : quotaMap[row.id]!.rpm }} RPM /
+              {{ quotaMap[row.id]!.max_concurrency === 0 ? '不限' : quotaMap[row.id]!.max_concurrency }} 并发
+            </template>
+            <span v-else class="text-placeholder">继承默认</span>
+          </span>
+          <span v-else class="text-placeholder">—</span>
+        </template>
+      </el-table-column>
+
       <el-table-column label="操作" width="280" align="center">
         <template #default="{ row }">
           <el-button text type="primary" size="small" @click="openEditDialog(row)">编辑</el-button>
@@ -277,8 +290,8 @@
       subject-type="model"
       :subject-id="quotaSubjectId"
       :subject-label="quotaSubjectLabel"
-      :default-rpm="60"
-      :default-concurrency="10"
+      :default-rpm="QUOTA_DEFAULTS.model.rpm"
+      :default-concurrency="QUOTA_DEFAULTS.model.max_concurrency"
       @saved="onQuotaSaved"
     />
   </div>
@@ -298,6 +311,8 @@ import ModelDialog from '@/components/admin/ModelDialog.vue'
 import BatchTagDialog from '@/components/admin/BatchTagDialog.vue'
 import ModelCheckSettingsDialog from '@/components/admin/ModelCheckSettingsDialog.vue'
 import QuotaEditDialog from '@/components/QuotaEditDialog.vue'
+import { QUOTA_DEFAULTS, getModelQuota } from '@/api/quota'
+import type { QuotaEffective } from '@/api/quota'
 
 const router = useRouter()
 
@@ -327,6 +342,7 @@ const checkingModelId = ref('')
 const quotaDialogVisible = ref(false)
 const quotaSubjectId = ref('')
 const quotaSubjectLabel = ref('')
+const quotaMap = ref<Record<string, QuotaEffective>>({})
 
 function openQuotaDialog(row: Model) {
   quotaSubjectId.value = row.id
@@ -335,7 +351,26 @@ function openQuotaDialog(row: Model) {
 }
 
 function onQuotaSaved() {
-  // 配额保存后无需刷新列表
+  // 配额保存后刷新配额数据
+  if (quotaSubjectId.value) {
+    loadQuotaForModel(quotaSubjectId.value)
+  }
+}
+
+async function loadQuotaForModel(modelId: string) {
+  try {
+    const res = await getModelQuota(modelId)
+    const data = (res as any)?.data
+    if (data) {
+      quotaMap.value[modelId] = data
+    }
+  } catch {
+    // 404 or error — leave empty
+  }
+}
+
+async function loadQuotaForModels(items: Model[]) {
+  await Promise.all(items.map(item => loadQuotaForModel(item.id)))
 }
 
 function normalizeEnabledFilter(value: string | null | undefined): boolean | undefined {
@@ -367,6 +402,8 @@ async function loadModels() {
     })
     models.value = result.data
     total.value = result.total
+    // 并行加载配额信息
+    loadQuotaForModels(result.data)
     await loadModelTags()
   } catch {
     ElMessage.error('加载模型列表失败')

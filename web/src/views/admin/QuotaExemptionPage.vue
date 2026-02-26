@@ -269,7 +269,7 @@ const filterType = ref('')
 const filterStatus = ref('')
 let searchTimer: ReturnType<typeof setTimeout> | null = null
 
-// 后端已过滤只返回未过期的豁免
+// 后端支持 status=active/expiring_soon/expired 筛选，注意 expired 记录可能被定时清理任务删除
 const exemptions = computed(() => allExemptions.value)
 
 const createDialogVisible = ref(false)

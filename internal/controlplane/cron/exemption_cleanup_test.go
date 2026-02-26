@@ -88,9 +88,10 @@ func TestRunOnce_CleansExpiredOnly(t *testing.T) {
 	svc := service.NewQuotaExemptionService(db, rdb)
 	cron := NewExemptionCleanupCron(svc)
 
-	now := time.Now()
+	now := time.Now().UTC()
 
 	// Create 3 exemptions: 2 expired, 1 active
+	// Use .UTC() so stored text matches the UTC comparison in CleanupExpired.
 	createExemption(t, db, "user", "expired-1", now.Add(-2*time.Hour))  // expired 2h ago
 	createExemption(t, db, "user", "expired-2", now.Add(-30*time.Minute)) // expired 30m ago
 	createExemption(t, db, "user", "active-1", now.Add(2*time.Hour))      // expires in 2h

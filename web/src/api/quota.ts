@@ -1,5 +1,13 @@
 import http from '@/services/http'
 
+// 各主体类型默认配额常量（与后端保持一致）
+export const QUOTA_DEFAULTS = {
+  user: { rpm: 60, max_concurrency: 10 },
+  service_key: { rpm: 120, max_concurrency: 20 },
+  group: { rpm: 0, max_concurrency: 0 },
+  model: { rpm: 0, max_concurrency: 0 },
+} as const
+
 // 配额 API 响应类型
 export interface QuotaEffective {
   rpm: number

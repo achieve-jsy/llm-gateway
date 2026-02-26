@@ -976,8 +976,8 @@
     subject-type="user"
     :subject-id="userQuotaSubjectId"
     :subject-label="userQuotaSubjectLabel"
-    :default-rpm="60"
-    :default-concurrency="10"
+    :default-rpm="QUOTA_DEFAULTS.user.rpm"
+    :default-concurrency="QUOTA_DEFAULTS.user.max_concurrency"
     @saved="onUserQuotaSaved"
   />
 </template>
@@ -999,6 +999,7 @@ import http from '@/services/http'
 import { useRoute, useRouter } from 'vue-router'
 import BudgetScopePanel from '@/components/budget/BudgetScopePanel.vue'
 import QuotaEditDialog from '@/components/QuotaEditDialog.vue'
+import { QUOTA_DEFAULTS } from '@/api/quota'
 
 const orgStore  = useOrgStore()
 const authStore = useAuthStore()

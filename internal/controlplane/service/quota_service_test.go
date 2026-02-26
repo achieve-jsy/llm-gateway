@@ -1,0 +1,552 @@
+package service_test
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/alicebob/miniredis/v2"
+	authmodel "github.com/example/llm-gateway/internal/auth/model"
+	cpmodel "github.com/example/llm-gateway/internal/controlplane/model"
+	"github.com/example/llm-gateway/internal/controlplane/service"
+	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+)
+
+// setupQuotaServiceTestDB creates SQLite in-memory DB for quota service tests
+func setupQuotaServiceTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+
+	// users table
+	require.NoError(t, db.Exec(`CREATE TABLE users (
+		id TEXT PRIMARY KEY,
+		sub TEXT NOT NULL,
+		dept_id TEXT,
+		name TEXT NOT NULL,
+		email TEXT NOT NULL,
+		source TEXT NOT NULL DEFAULT 'oidc',
+		role TEXT NOT NULL DEFAULT 'user',
+		employee_id TEXT DEFAULT '',
+		job_family TEXT DEFAULT '',
+		job_category TEXT DEFAULT '',
+		job_title TEXT DEFAULT '',
+		dept_source TEXT NOT NULL DEFAULT 'sso',
+		dept_updated_by TEXT DEFAULT '',
+		dept_updated_at DATETIME,
+		login_status TEXT NOT NULL DEFAULT 'active',
+		quota_rpm INTEGER,
+		quota_max_concurrency INTEGER,
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL
+	)`).Error)
+
+	// api_keys table
+	require.NoError(t, db.Exec(`CREATE TABLE api_keys (
+		id TEXT PRIMARY KEY,
+		user_id TEXT NOT NULL,
+		name TEXT NOT NULL,
+		key_hash TEXT NOT NULL,
+		encrypted_key TEXT NOT NULL DEFAULT '',
+		key_prefix TEXT NOT NULL DEFAULT 'sk-',
+		key_hint TEXT NOT NULL DEFAULT '',
+		enabled INTEGER NOT NULL DEFAULT 1,
+		log_enabled INTEGER NOT NULL DEFAULT 1,
+		access_all_groups INTEGER NOT NULL DEFAULT 0,
+		bypass_org_check INTEGER NOT NULL DEFAULT 0,
+		user_name TEXT DEFAULT '',
+		dept_id TEXT DEFAULT '',
+		dept_name TEXT DEFAULT '',
+		studio_id TEXT DEFAULT '',
+		studio_name TEXT DEFAULT '',
+		key_type TEXT NOT NULL DEFAULT 'personal',
+		purpose TEXT NOT NULL DEFAULT '',
+		created_by TEXT,
+		ip_allowlist TEXT NOT NULL DEFAULT '',
+		quota_rpm INTEGER,
+		quota_max_concurrency INTEGER,
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL,
+		last_used_at DATETIME,
+		expires_at DATETIME
+	)`).Error)
+
+	// model_groups table
+	require.NoError(t, db.Exec(`CREATE TABLE model_groups (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		created_at DATETIME,
+		updated_at DATETIME,
+		deleted_at DATETIME,
+		name TEXT NOT NULL,
+		description TEXT DEFAULT '',
+		strategy TEXT NOT NULL DEFAULT 'round_robin',
+		enabled INTEGER NOT NULL DEFAULT 1,
+		max_switches INTEGER NOT NULL DEFAULT 2,
+		same_model_retries INTEGER NOT NULL DEFAULT 1,
+		failover_cooldown_seconds INTEGER NOT NULL DEFAULT 60,
+		timeout_seconds INTEGER NOT NULL DEFAULT 0,
+		open_mode TEXT NOT NULL DEFAULT 'public',
+		is_capability_override INTEGER NOT NULL DEFAULT 0,
+		override_supports_vision INTEGER NOT NULL DEFAULT 0,
+		override_supports_function_calling INTEGER NOT NULL DEFAULT 0,
+		override_supports_tool_choice INTEGER NOT NULL DEFAULT 0,
+		quota_rpm INTEGER,
+		quota_max_concurrency INTEGER
+	)`).Error)
+
+	// providers table
+	require.NoError(t, db.Exec(`CREATE TABLE providers (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		definition_id TEXT DEFAULT '',
+		type TEXT NOT NULL DEFAULT '',
+		endpoint TEXT NOT NULL DEFAULT '',
+		encrypted_credentials TEXT NOT NULL DEFAULT '',
+		enabled INTEGER NOT NULL DEFAULT 1,
+		weight INTEGER NOT NULL DEFAULT 1,
+		priority INTEGER NOT NULL DEFAULT 0,
+		status INTEGER NOT NULL DEFAULT 1,
+		test_model TEXT DEFAULT '',
+		response_time INTEGER DEFAULT 0,
+		balance REAL DEFAULT 0,
+		remark TEXT DEFAULT '',
+		max_retries INTEGER NOT NULL DEFAULT 3,
+		timeout INTEGER NOT NULL DEFAULT 30,
+		tag TEXT DEFAULT '',
+		consecutive_failures INTEGER NOT NULL DEFAULT 0,
+		last_check_error TEXT DEFAULT '',
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL
+	)`).Error)
+
+	// models table
+	require.NoError(t, db.Exec(`CREATE TABLE models (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		provider_id TEXT NOT NULL,
+		model_type TEXT NOT NULL DEFAULT 'chat',
+		enabled INTEGER NOT NULL DEFAULT 1,
+		status INTEGER NOT NULL DEFAULT 1,
+		upstream_model_id TEXT DEFAULT '',
+		description TEXT DEFAULT '',
+		context_length INTEGER DEFAULT 0,
+		max_output_tokens INTEGER DEFAULT 0,
+		input_price REAL DEFAULT 0,
+		output_price REAL DEFAULT 0,
+		price_mode TEXT NOT NULL DEFAULT 'catalog',
+		weight INTEGER NOT NULL DEFAULT 1,
+		catalog_id TEXT,
+		ctx_overridden INTEGER NOT NULL DEFAULT 0,
+		max_output_overridden INTEGER NOT NULL DEFAULT 0,
+		quota_rpm INTEGER,
+		quota_max_concurrency INTEGER,
+		consecutive_failures INTEGER NOT NULL DEFAULT 0,
+		consecutive_recovery_successes INTEGER NOT NULL DEFAULT 0,
+		last_check_error TEXT DEFAULT '',
+		response_time INTEGER DEFAULT 0,
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL
+	)`).Error)
+
+	// system_configs table
+	require.NoError(t, db.Exec(`CREATE TABLE system_configs (
+		"key" TEXT PRIMARY KEY,
+		value TEXT DEFAULT '',
+		encrypted INTEGER NOT NULL DEFAULT 0,
+		description TEXT DEFAULT '',
+		created_at TEXT DEFAULT '',
+		updated_at TEXT DEFAULT ''
+	)`).Error)
+
+	// quota_exemptions table
+	require.NoError(t, db.Exec(`CREATE TABLE quota_exemptions (
+		id TEXT PRIMARY KEY,
+		subject_type TEXT NOT NULL,
+		subject_id TEXT NOT NULL,
+		reason TEXT,
+		expires_at DATETIME NOT NULL,
+		created_by TEXT NOT NULL,
+		created_at DATETIME NOT NULL
+	)`).Error)
+
+	// Seed default quota settings
+	now := time.Now().UTC().Format(time.RFC3339)
+	defaults := []cpmodel.SystemConfig{
+		{Key: "quota_default_user_rpm", Value: "60", CreatedAt: now, UpdatedAt: now},
+		{Key: "quota_default_user_max_concurrency", Value: "10", CreatedAt: now, UpdatedAt: now},
+		{Key: "quota_default_service_key_rpm", Value: "120", CreatedAt: now, UpdatedAt: now},
+		{Key: "quota_default_service_key_max_concurrency", Value: "20", CreatedAt: now, UpdatedAt: now},
+	}
+	require.NoError(t, db.Create(&defaults).Error)
+
+	return db
+}
+
+func setupQuotaServiceMiniredis(t *testing.T) (*redis.Client, func()) {
+	t.Helper()
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	return rdb, func() {
+		rdb.Close()
+		mr.Close()
+	}
+}
+
+// TestSetUserQuota_Success verifies setting user quota updates DB correctly
+func TestSetUserQuota_Success(t *testing.T) {
+	db := setupQuotaServiceTestDB(t)
+	rdb, cleanup := setupQuotaServiceMiniredis(t)
+	defer cleanup()
+
+	svc := service.NewQuotaService(db, rdb)
+
+	// Create test user
+	userID := uuid.New()
+	user := authmodel.User{
+		ID:    userID,
+		Sub:   "test-user",
+		Name:  "Test User",
+		Email: "test@example.com",
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	// Set quota
+	rpm := 100
+	maxConc := 20
+	err := svc.SetUserQuota(context.Background(), userID.String(), &rpm, &maxConc)
+	require.NoError(t, err)
+
+	// Wait for async snapshot refresh
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify DB
+	var updatedUser authmodel.User
+	require.NoError(t, db.First(&updatedUser, "id = ?", userID).Error)
+	require.NotNil(t, updatedUser.QuotaRPM)
+	assert.Equal(t, 100, *updatedUser.QuotaRPM)
+	require.NotNil(t, updatedUser.QuotaMaxConcurrency)
+	assert.Equal(t, 20, *updatedUser.QuotaMaxConcurrency)
+}
+
+// TestSetUserQuota_NilValues verifies nil values clear the override (restore inheritance)
+func TestSetUserQuota_NilValues(t *testing.T) {
+	db := setupQuotaServiceTestDB(t)
+	rdb, cleanup := setupQuotaServiceMiniredis(t)
+	defer cleanup()
+
+	svc := service.NewQuotaService(db, rdb)
+
+	// Create user with quota
+	userID := uuid.New()
+	rpm := 100
+	maxConc := 20
+	user := authmodel.User{
+		ID:                  userID,
+		Sub:                 "test-user",
+		Name:                "Test User",
+		Email:               "test@example.com",
+		QuotaRPM:            &rpm,
+		QuotaMaxConcurrency: &maxConc,
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	// Clear quota (set to nil)
+	err := svc.SetUserQuota(context.Background(), userID.String(), nil, nil)
+	require.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify DB is NULL
+	var updatedUser authmodel.User
+	require.NoError(t, db.First(&updatedUser, "id = ?", userID).Error)
+	assert.Nil(t, updatedUser.QuotaRPM)
+	assert.Nil(t, updatedUser.QuotaMaxConcurrency)
+}
+
+// TestSetUserQuota_ZeroValues verifies 0 means unlimited (explicitly set, not NULL)
+func TestSetUserQuota_ZeroValues(t *testing.T) {
+	db := setupQuotaServiceTestDB(t)
+	rdb, cleanup := setupQuotaServiceMiniredis(t)
+	defer cleanup()
+
+	svc := service.NewQuotaService(db, rdb)
+
+	userID := uuid.New()
+	user := authmodel.User{
+		ID:    userID,
+		Sub:   "test-user",
+		Name:  "Test User",
+		Email: "test@example.com",
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	// Set to 0 (unlimited)
+	rpm := 0
+	maxConc := 0
+	err := svc.SetUserQuota(context.Background(), userID.String(), &rpm, &maxConc)
+	require.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify DB has 0 (not NULL)
+	var updatedUser authmodel.User
+	require.NoError(t, db.First(&updatedUser, "id = ?", userID).Error)
+	require.NotNil(t, updatedUser.QuotaRPM)
+	assert.Equal(t, 0, *updatedUser.QuotaRPM)
+	require.NotNil(t, updatedUser.QuotaMaxConcurrency)
+	assert.Equal(t, 0, *updatedUser.QuotaMaxConcurrency)
+}
+
+// TestSetUserQuota_NegativeRejected verifies negative values are rejected
+func TestSetUserQuota_NegativeRejected(t *testing.T) {
+	db := setupQuotaServiceTestDB(t)
+	rdb, cleanup := setupQuotaServiceMiniredis(t)
+	defer cleanup()
+
+	svc := service.NewQuotaService(db, rdb)
+
+	userID := uuid.New()
+	user := authmodel.User{
+		ID:    userID,
+		Sub:   "test-user",
+		Name:  "Test User",
+		Email: "test@example.com",
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	// Try negative RPM
+	rpm := -10
+	err := svc.SetUserQuota(context.Background(), userID.String(), &rpm, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "quota_rpm must be >= 0")
+
+	// Try negative concurrency
+	maxConc := -5
+	err = svc.SetUserQuota(context.Background(), userID.String(), nil, &maxConc)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "quota_max_concurrency must be >= 0")
+}
+
+// TestGetUserEffectiveQuota_Override verifies override source is returned
+func TestGetUserEffectiveQuota_Override(t *testing.T) {
+	db := setupQuotaServiceTestDB(t)
+	rdb, cleanup := setupQuotaServiceMiniredis(t)
+	defer cleanup()
+
+	svc := service.NewQuotaService(db, rdb)
+
+	userID := uuid.New()
+	rpm := 150
+	maxConc := 30
+	user := authmodel.User{
+		ID:                  userID,
+		Sub:                 "test-user",
+		Name:                "Test User",
+		Email:               "test@example.com",
+		QuotaRPM:            &rpm,
+		QuotaMaxConcurrency: &maxConc,
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	effective, err := svc.GetUserEffectiveQuota(context.Background(), userID.String())
+	require.NoError(t, err)
+	require.NotNil(t, effective)
+
+	assert.Equal(t, 150, effective.RPM)
+	assert.Equal(t, 30, effective.MaxConcurrency)
+	assert.Equal(t, "override", effective.Source)
+	assert.Equal(t, "user", effective.SubjectType)
+	assert.Equal(t, userID, effective.SubjectID)
+	// Defaults should still be reported
+	assert.Equal(t, 60, effective.DefaultRPM)
+	assert.Equal(t, 10, effective.DefaultMaxConc)
+}
+
+// TestGetUserEffectiveQuota_Default verifies default_user source when no override
+func TestGetUserEffectiveQuota_Default(t *testing.T) {
+	db := setupQuotaServiceTestDB(t)
+	rdb, cleanup := setupQuotaServiceMiniredis(t)
+	defer cleanup()
+
+	svc := service.NewQuotaService(db, rdb)
+
+	userID := uuid.New()
+	user := authmodel.User{
+		ID:    userID,
+		Sub:   "test-user",
+		Name:  "Test User",
+		Email: "test@example.com",
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	effective, err := svc.GetUserEffectiveQuota(context.Background(), userID.String())
+	require.NoError(t, err)
+	require.NotNil(t, effective)
+
+	assert.Equal(t, 60, effective.RPM)
+	assert.Equal(t, 10, effective.MaxConcurrency)
+	assert.Equal(t, "default_user", effective.Source)
+}
+
+// TestGetUserEffectiveQuota_Fallback verifies fallback when system settings missing
+func TestGetUserEffectiveQuota_Fallback(t *testing.T) {
+	db := setupQuotaServiceTestDB(t)
+	rdb, cleanup := setupQuotaServiceMiniredis(t)
+	defer cleanup()
+
+	// Delete system settings to force fallback
+	db.Exec("DELETE FROM system_configs")
+
+	svc := service.NewQuotaService(db, rdb)
+
+	userID := uuid.New()
+	user := authmodel.User{
+		ID:    userID,
+		Sub:   "test-user",
+		Name:  "Test User",
+		Email: "test@example.com",
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	effective, err := svc.GetUserEffectiveQuota(context.Background(), userID.String())
+	require.NoError(t, err)
+	require.NotNil(t, effective)
+
+	// Should use hardcoded defaults from SettingsService
+	assert.Equal(t, 60, effective.RPM)
+	assert.Equal(t, 10, effective.MaxConcurrency)
+	assert.Equal(t, "default_user", effective.Source)
+}
+
+// TestSetServiceKeyQuota_ValidateKeyType verifies only service keys can have quota set
+func TestSetServiceKeyQuota_ValidateKeyType(t *testing.T) {
+	db := setupQuotaServiceTestDB(t)
+	rdb, cleanup := setupQuotaServiceMiniredis(t)
+	defer cleanup()
+
+	svc := service.NewQuotaService(db, rdb)
+
+	// Create personal key
+	personalKeyID := uuid.New()
+	userID := uuid.New()
+	personalKey := cpmodel.ApiKey{
+		ID:           personalKeyID,
+		UserID:       userID,
+		Name:         "personal-key",
+		KeyType:      cpmodel.KeyTypePersonal,
+		KeyHash:      "hash1",
+		EncryptedKey: "enc1",
+		KeyHint:      "test",
+	}
+	require.NoError(t, db.Create(&personalKey).Error)
+
+	// Try to set quota on personal key - should fail (RowsAffected = 0)
+	rpm := 100
+	err := svc.SetServiceKeyQuota(context.Background(), personalKeyID.String(), &rpm, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "service key not found")
+
+	// Create service key
+	serviceKeyID := uuid.New()
+	serviceKey := cpmodel.ApiKey{
+		ID:           serviceKeyID,
+		UserID:       userID,
+		Name:         "service-key",
+		KeyType:      cpmodel.KeyTypeService,
+		KeyHash:      "hash2",
+		EncryptedKey: "enc2",
+		KeyHint:      "test",
+	}
+	require.NoError(t, db.Create(&serviceKey).Error)
+
+	// Set quota on service key - should succeed
+	err = svc.SetServiceKeyQuota(context.Background(), serviceKeyID.String(), &rpm, nil)
+	require.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+
+	var updatedKey cpmodel.ApiKey
+	require.NoError(t, db.First(&updatedKey, "id = ?", serviceKeyID).Error)
+	require.NotNil(t, updatedKey.QuotaRPM)
+	assert.Equal(t, 100, *updatedKey.QuotaRPM)
+}
+
+// TestSetGroupQuota_Success verifies setting group quota
+func TestSetGroupQuota_Success(t *testing.T) {
+	db := setupQuotaServiceTestDB(t)
+	rdb, cleanup := setupQuotaServiceMiniredis(t)
+	defer cleanup()
+
+	svc := service.NewQuotaService(db, rdb)
+
+	group := cpmodel.Group{
+		Name:     "test-group",
+		Strategy: "round_robin",
+		Enabled:  true,
+	}
+	require.NoError(t, db.Create(&group).Error)
+
+	rpm := 50
+	maxConc := 10
+	err := svc.SetGroupQuota(context.Background(), group.ID, &rpm, &maxConc)
+	require.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+
+	var updatedGroup cpmodel.Group
+	require.NoError(t, db.First(&updatedGroup, "id = ?", group.ID).Error)
+	require.NotNil(t, updatedGroup.QuotaRPM)
+	assert.Equal(t, 50, *updatedGroup.QuotaRPM)
+	require.NotNil(t, updatedGroup.QuotaMaxConcurrency)
+	assert.Equal(t, 10, *updatedGroup.QuotaMaxConcurrency)
+}
+
+// TestSetModelQuota_Success verifies setting model quota
+func TestSetModelQuota_Success(t *testing.T) {
+	db := setupQuotaServiceTestDB(t)
+	rdb, cleanup := setupQuotaServiceMiniredis(t)
+	defer cleanup()
+
+	svc := service.NewQuotaService(db, rdb)
+
+	provider := cpmodel.Provider{
+		ID:     uuid.New(),
+		Name:   "test-provider",
+		Status: 1,
+	}
+	require.NoError(t, db.Create(&provider).Error)
+
+	modelID := uuid.New()
+	enabled := true
+	model := cpmodel.Model{
+		ID:         modelID,
+		Name:       "test-model",
+		ProviderID: provider.ID,
+		Enabled:    &enabled,
+	}
+	require.NoError(t, db.Create(&model).Error)
+
+	rpm := 30
+	maxConc := 5
+	err := svc.SetModelQuota(context.Background(), modelID.String(), &rpm, &maxConc)
+	require.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+
+	var updatedModel cpmodel.Model
+	require.NoError(t, db.First(&updatedModel, "id = ?", modelID).Error)
+	require.NotNil(t, updatedModel.QuotaRPM)
+	assert.Equal(t, 30, *updatedModel.QuotaRPM)
+	require.NotNil(t, updatedModel.QuotaMaxConcurrency)
+	assert.Equal(t, 5, *updatedModel.QuotaMaxConcurrency)
+}

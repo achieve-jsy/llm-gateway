@@ -163,8 +163,8 @@
       subject-type="group"
       :subject-id="quotaSubjectId"
       :subject-label="quotaSubjectLabel"
-      :default-rpm="0"
-      :default-concurrency="0"
+      :default-rpm="QUOTA_DEFAULTS.group.rpm"
+      :default-concurrency="QUOTA_DEFAULTS.group.max_concurrency"
       @saved="onQuotaSaved"
     />
   </div>
@@ -180,6 +180,7 @@ import type { GroupListItem, Strategy, OpenMode } from '@/types/group'
 import GroupEditDialog from '@/components/GroupEditDialog.vue'
 import GroupEntitlementDialog from '@/components/GroupEntitlementDialog.vue'
 import QuotaEditDialog from '@/components/QuotaEditDialog.vue'
+import { QUOTA_DEFAULTS } from '@/api/quota'
 import { useAuthStore } from '@/stores/auth'
 
 const authStore = useAuthStore()

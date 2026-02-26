@@ -83,6 +83,7 @@ import {
   getServiceKeyQuota, setServiceKeyQuota,
   getModelQuota, setModelQuota,
   getGroupQuota, setGroupQuota,
+  QUOTA_DEFAULTS,
 } from '@/api/quota'
 import type { QuotaEffective } from '@/api/quota'
 
@@ -96,8 +97,8 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  defaultRpm: 60,
-  defaultConcurrency: 10,
+  defaultRpm: QUOTA_DEFAULTS.user.rpm,
+  defaultConcurrency: QUOTA_DEFAULTS.user.max_concurrency,
 })
 
 const emit = defineEmits<{
@@ -160,7 +161,10 @@ watch(
             form.value.max_concurrency = data.max_concurrency
           }
         }
-      } catch { /* ignore */ }
+      } catch (e) {
+        console.warn('load quota failed:', e)
+        ElMessage.warning('加载配额失败，请稍后重试')
+      }
     }
   },
 )

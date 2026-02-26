@@ -3,6 +3,7 @@ package quota
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
@@ -125,5 +126,76 @@ func TestConcurrencyKey(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("ConcurrencyKey(%s,%s,%s,%s) = %s, want %s", tt.subjectType, tt.subjectID, tt.layer, tt.resourceID, got, tt.expected)
 		}
+	}
+}
+
+func TestCheckRPM_WindowExpiry_FastForward(t *testing.T) {
+	mr, store := setupMiniRedis(t)
+	key := "test:rpm:window"
+
+	// Fill up to limit (5 requests)
+	for i := 0; i < 5; i++ {
+		err := store.CheckRPM(context.Background(), key, 5)
+		if err != nil {
+			t.Fatalf("request %d should pass, got %v", i+1, err)
+		}
+	}
+
+	// 6th request should fail (at limit)
+	err := store.CheckRPM(context.Background(), key, 5)
+	if err == nil {
+		t.Fatal("6th request should fail (at limit)")
+	}
+
+	// Fast-forward time by 61 seconds (window is 60s)
+	mr.FastForward(61 * time.Second)
+
+	// After window expires, request should pass again
+	err = store.CheckRPM(context.Background(), key, 5)
+	if err != nil {
+		t.Errorf("after window expiry, request should pass, got %v", err)
+	}
+}
+
+func TestCheckRPM_RedisDown_FailOpen(t *testing.T) {
+	mr, store := setupMiniRedis(t)
+
+	// Close miniredis to simulate Redis failure
+	mr.Close()
+
+	// RPM check should fail-open (allow request)
+	err := store.CheckRPM(context.Background(), "test:key", 10)
+	if err != nil {
+		t.Errorf("Redis down should fail-open (pass), got error: %v", err)
+	}
+}
+
+func TestAcquireConcurrency_RedisDown_FailOpen(t *testing.T) {
+	mr, store := setupMiniRedis(t)
+
+	// Close miniredis to simulate Redis failure
+	mr.Close()
+
+	// Concurrency acquire should fail-open (allow request)
+	err := store.AcquireConcurrency(context.Background(), "test:conc", 5)
+	if err != nil {
+		t.Errorf("Redis down should fail-open (pass), got error: %v", err)
+	}
+}
+
+func TestAcquireConcurrency_TTL(t *testing.T) {
+	_, store := setupMiniRedis(t)
+	key := "test:conc:ttl"
+
+	// Acquire concurrency slot
+	err := store.AcquireConcurrency(context.Background(), key, 10)
+	if err != nil {
+		t.Fatalf("acquire should pass, got %v", err)
+	}
+
+	// Verify key has TTL set (30 minutes)
+	ttl := store.rdb.TTL(context.Background(), key).Val()
+	if ttl <= 0 || ttl > 31*time.Minute {
+		t.Errorf("expected TTL ~30min, got %v", ttl)
 	}
 }

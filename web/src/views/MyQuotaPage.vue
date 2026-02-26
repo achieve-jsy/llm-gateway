@@ -52,10 +52,12 @@
                     <span v-if="quota.effective.rpm > 0"> / {{ quota.effective.rpm }}</span>
                   </div>
                   <el-progress
+                    v-if="quota.effective.rpm > 0"
                     :percentage="rpmPercentage"
                     :stroke-width="16"
                     :color="getProgressColor(rpmPercentage)"
                   />
+                  <span v-else class="usage-unlimited">不限制</span>
                 </div>
                 <div class="usage-item">
                   <div class="usage-label">
@@ -63,10 +65,12 @@
                     <span v-if="quota.effective.max_concurrency > 0"> / {{ quota.effective.max_concurrency }}</span>
                   </div>
                   <el-progress
+                    v-if="quota.effective.max_concurrency > 0"
                     :percentage="concPercentage"
                     :stroke-width="16"
                     :color="getProgressColor(concPercentage)"
                   />
+                  <span v-else class="usage-unlimited">不限制</span>
                 </div>
               </div>
             </div>
@@ -99,6 +103,16 @@
               <strong>配额</strong>（RPM/并发，超限返回 429）与<strong>预算</strong>（费用/Token 额度，超限返回 402）是两个独立体系，互不影响。
             </template>
           </el-alert>
+        </div>
+
+        <div class="quota-actions">
+          <router-link to="/admin/expansion-requests">
+            <el-button type="primary" plain>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: -2px; margin-right: 4px"><path d="M12 5v14M5 12h14"/></svg>
+              申请扩容
+            </el-button>
+          </router-link>
+          <span class="quota-actions-hint">如果当前配额无法满足需求，可以提交扩容申请</span>
         </div>
       </template>
 
@@ -273,11 +287,28 @@ onMounted(loadQuota)
   color: var(--el-text-color-regular);
   margin-bottom: 8px;
 }
+.usage-unlimited {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-color-success);
+  margin-top: 4px;
+}
 .quota-info {
   margin-top: 16px;
 }
 .quota-note {
   margin-top: 16px;
+}
+.quota-actions {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.quota-actions-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 .state-empty {
   text-align: center;

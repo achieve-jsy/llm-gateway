@@ -1,7 +1,10 @@
 package quota
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"log/slog"
 
 	"github.com/example/llm-gateway/internal/core/quota"
@@ -131,6 +134,14 @@ func (m *QuotaMiddleware) Handler() gin.HandlerFunc {
 		c.Next()
 
 		// 释放并发（含流式：在 flush 完成后的 defer）
+		// 注意：ModelQuotaGate.BeforeUpstream 可能在 c.Next() 内向 context 的
+		// quota_release_tokens 追加 model 层令牌。append 在容量不足时返回新切片，
+		// 局部 tokens 变量拿不到，故必须从 context 回读最终列表，否则 model 并发槽泄漏。
+		if final, ok := c.Get("quota_release_tokens"); ok {
+			if t, ok := final.([]releaseToken); ok {
+				tokens = t
+			}
+		}
 		m.releaseAll(tokens)
 	}
 }
@@ -144,17 +155,50 @@ func (m *QuotaMiddleware) releaseAll(tokens []releaseToken) {
 }
 
 // extractModelParam 从请求中提取模型组名（request body 中的 model 字段）。
-// 在 auth middleware 之后，request body 已经被解析过一次。
-// 这里尝试从 gin context 获取（需要 TraceCapture 或 body parser 设置）。
+//
+// 配额中间件注册在 TraceCapture 之后（router.go:159 TraceCapture → :171 OrgCheck → 路由内 quotaMW），
+// 故优先复用 TraceCapture 已捕获并恢复 body 后存入 context 的 trace_req_body（[]byte，已 sanitize，
+// 但 model 字段是短字符串不会被截断）。trace_req_body 可能因 log_enabled=false 而未设置，
+// 此时回退自行读取 c.Request.Body 并恢复（NopCloser），保证 handler 仍能读到完整 body。
+// 兜底再读 query 参数 ?model=。
 func extractModelParam(c *gin.Context) string {
-	// 优先从已解析的 body 获取
+	// 1) 兼容旧约定：显式 set 的 request_model
 	if v, ok := c.Get("request_model"); ok {
-		if m, ok := v.(string); ok {
+		if m, ok := v.(string); ok && m != "" {
 			return m
 		}
 	}
-	// 回退：从 query 参数获取
+	// 2) 复用 TraceCapture 已捕获的 trace_req_body（已恢复给 handler，读它不影响后续）
+	if v, ok := c.Get("trace_req_body"); ok {
+		if raw, ok := v.([]byte); ok && len(raw) > 0 {
+			if m := modelFromJSON(raw); m != "" {
+				return m
+			}
+		}
+	}
+	// 3) 自行读取并恢复 body
+	if c.Request != nil && c.Request.Body != nil {
+		if body, err := io.ReadAll(c.Request.Body); err == nil {
+			c.Request.Body = io.NopCloser(bytes.NewReader(body))
+			if m := modelFromJSON(body); m != "" {
+				return m
+			}
+		}
+	}
+	// 4) 兜底：query 参数
 	return c.Query("model")
+}
+
+// modelFromJSON 从请求体 JSON 中提取顶层 "model" 字段（短字符串，O(1) 解析）。
+// 仅取顶层字段，避免解析整个大 body；非法 JSON 返回空。
+func modelFromJSON(body []byte) string {
+	var p struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &p); err != nil {
+		return ""
+	}
+	return p.Model
 }
 
 // ModelQuotaGate 模型层配额检查（在路由选定具体 model 之后调用）。

@@ -43,13 +43,21 @@ func (h *QuotaExemptionHandler) Create(c *gin.Context) {
 
 	userID, _ := c.Get("user_id")
 	uid, _ := userID.(string)
+	// 创建人优先存显示名称（JWT 里的 user_name），便于列表直接回显人名；
+	// 兜底用 user_id（旧逻辑）。dev-login 账号不在 users 表，存 UUID 会解析失败显示 UUID。
+	userName, _ := c.Get("user_name")
+	uname, _ := userName.(string)
+	createdBy := uname
+	if createdBy == "" {
+		createdBy = uid
+	}
 
 	exemption, err := h.svc.CreateExemption(c.Request.Context(), service.CreateExemptionRequest{
 		SubjectType: req.SubjectType,
 		SubjectID:   req.SubjectID,
 		Reason:      req.Reason,
 		ExpiresAt:   req.ExpiresAt,
-		CreatedBy:   uid,
+		CreatedBy:   createdBy,
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{

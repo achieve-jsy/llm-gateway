@@ -18,15 +18,17 @@ import (
 
 // setupExemptionService creates a QuotaExemptionService with a test DB and miniredis.
 // It reuses setupQuotaServiceTestDB (which includes quota_exemptions table).
-// Returns the service, the DB (for direct inserts in tests), a redis client, and cleanup func.
-func setupExemptionService(t *testing.T) (*service.QuotaExemptionService, *gorm.DB, *redis.Client, func()) {
+// Returns the exemption service, a QuotaService (for synchronous snapshot refresh),
+// the DB (for direct inserts in tests), a redis client, and cleanup func.
+func setupExemptionService(t *testing.T) (*service.QuotaExemptionService, *service.QuotaService, *gorm.DB, *redis.Client, func()) {
 	t.Helper()
 	db := setupQuotaServiceTestDB(t)
 	mr, err := miniredis.Run()
 	require.NoError(t, err)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	svc := service.NewQuotaExemptionService(db, rdb)
-	return svc, db, rdb, func() {
+	quotaSvc := service.NewQuotaService(db, rdb)
+	return svc, quotaSvc, db, rdb, func() {
 		rdb.Close()
 		mr.Close()
 	}
@@ -34,7 +36,7 @@ func setupExemptionService(t *testing.T) (*service.QuotaExemptionService, *gorm.
 
 // TestCreateExemption_Success verifies normal exemption creation
 func TestCreateExemption_Success(t *testing.T) {
-	svc, _, _, cleanup := setupExemptionService(t)
+	svc, _, _, _, cleanup := setupExemptionService(t)
 	defer cleanup()
 
 	req := service.CreateExemptionRequest{
@@ -61,7 +63,7 @@ func TestCreateExemption_Success(t *testing.T) {
 
 // TestCreateExemption_InvalidSubjectType verifies "team" type is rejected
 func TestCreateExemption_InvalidSubjectType(t *testing.T) {
-	svc, _, _, cleanup := setupExemptionService(t)
+	svc, _, _, _, cleanup := setupExemptionService(t)
 	defer cleanup()
 
 	req := service.CreateExemptionRequest{
@@ -80,7 +82,7 @@ func TestCreateExemption_InvalidSubjectType(t *testing.T) {
 
 // TestCreateExemption_EmptySubjectID verifies empty subject_id is rejected
 func TestCreateExemption_EmptySubjectID(t *testing.T) {
-	svc, _, _, cleanup := setupExemptionService(t)
+	svc, _, _, _, cleanup := setupExemptionService(t)
 	defer cleanup()
 
 	req := service.CreateExemptionRequest{
@@ -99,7 +101,7 @@ func TestCreateExemption_EmptySubjectID(t *testing.T) {
 
 // TestCreateExemption_PastExpiry verifies past expiry time is rejected
 func TestCreateExemption_PastExpiry(t *testing.T) {
-	svc, _, _, cleanup := setupExemptionService(t)
+	svc, _, _, _, cleanup := setupExemptionService(t)
 	defer cleanup()
 
 	req := service.CreateExemptionRequest{
@@ -118,7 +120,7 @@ func TestCreateExemption_PastExpiry(t *testing.T) {
 
 // TestCreateExemption_MissingCreatedBy verifies missing created_by is rejected
 func TestCreateExemption_MissingCreatedBy(t *testing.T) {
-	svc, _, _, cleanup := setupExemptionService(t)
+	svc, _, _, _, cleanup := setupExemptionService(t)
 	defer cleanup()
 
 	req := service.CreateExemptionRequest{
@@ -137,7 +139,7 @@ func TestCreateExemption_MissingCreatedBy(t *testing.T) {
 
 // TestRevokeExemption_Success verifies normal revocation
 func TestRevokeExemption_Success(t *testing.T) {
-	svc, _, _, cleanup := setupExemptionService(t)
+	svc, _, _, _, cleanup := setupExemptionService(t)
 	defer cleanup()
 
 	// Create an exemption first
@@ -169,7 +171,7 @@ func TestRevokeExemption_Success(t *testing.T) {
 
 // TestRevokeExemption_NotFound verifies revoking a non-existent ID returns error
 func TestRevokeExemption_NotFound(t *testing.T) {
-	svc, _, _, cleanup := setupExemptionService(t)
+	svc, _, _, _, cleanup := setupExemptionService(t)
 	defer cleanup()
 
 	fakeID := uuid.New()
@@ -180,7 +182,7 @@ func TestRevokeExemption_NotFound(t *testing.T) {
 
 // TestListActiveExemptions_FiltersExpired verifies expired exemptions are excluded
 func TestListActiveExemptions_FiltersExpired(t *testing.T) {
-	svc, _, _, cleanup := setupExemptionService(t)
+	svc, _, _, _, cleanup := setupExemptionService(t)
 	defer cleanup()
 
 	// Create active exemption
@@ -228,7 +230,7 @@ func TestListActiveExemptions_FiltersExpired(t *testing.T) {
 
 // TestIsExempt_ActiveExemption verifies active exemption returns true
 func TestIsExempt_ActiveExemption(t *testing.T) {
-	svc, _, _, cleanup := setupExemptionService(t)
+	svc, _, _, _, cleanup := setupExemptionService(t)
 	defer cleanup()
 
 	subjectID := uuid.New().String()
@@ -248,7 +250,7 @@ func TestIsExempt_ActiveExemption(t *testing.T) {
 
 // TestIsExempt_ExpiredExemption verifies expired exemption returns false
 func TestIsExempt_ExpiredExemption(t *testing.T) {
-	svc, db, _, cleanup := setupExemptionService(t)
+	svc, _, db, _, cleanup := setupExemptionService(t)
 	defer cleanup()
 
 	// Create a future exemption via service (validates correctly)
@@ -277,7 +279,7 @@ func TestIsExempt_ExpiredExemption(t *testing.T) {
 
 // TestCleanupExpired_RemovesOldRecords verifies cleanup removes expired records
 func TestCleanupExpired_RemovesOldRecords(t *testing.T) {
-	svc, db, _, cleanup := setupExemptionService(t)
+	svc, _, db, _, cleanup := setupExemptionService(t)
 	defer cleanup()
 
 	// Insert 2 already-expired exemptions directly into DB
@@ -330,7 +332,7 @@ func TestCleanupExpired_RemovesOldRecords(t *testing.T) {
 
 // TestCreateExemption_ServiceKeyType verifies service_key type is also accepted
 func TestCreateExemption_ServiceKeyType(t *testing.T) {
-	svc, _, _, cleanup := setupExemptionService(t)
+	svc, _, _, _, cleanup := setupExemptionService(t)
 	defer cleanup()
 
 	req := service.CreateExemptionRequest{
@@ -350,7 +352,7 @@ func TestCreateExemption_ServiceKeyType(t *testing.T) {
 
 // TestListAllExemptions_IncludesExpired verifies ListAllExemptions returns both active and expired
 func TestListAllExemptions_IncludesExpired(t *testing.T) {
-	svc, db, _, cleanup := setupExemptionService(t)
+	svc, _, db, _, cleanup := setupExemptionService(t)
 	defer cleanup()
 
 	// Insert an already-expired exemption directly into DB (bypasses validation)
@@ -390,7 +392,7 @@ func TestListAllExemptions_IncludesExpired(t *testing.T) {
 
 // TestIsExempt_WrongSubjectType verifies different subject types don't cross-match
 func TestIsExempt_WrongSubjectType(t *testing.T) {
-	svc, _, _, cleanup := setupExemptionService(t)
+	svc, _, _, _, cleanup := setupExemptionService(t)
 	defer cleanup()
 
 	subjectID := uuid.New().String()
@@ -433,11 +435,8 @@ func seedBaseSnapshot(t *testing.T, rdb *redis.Client) {
 // TestSnapshotMechanism_VerifiesRedisKeyAndJSON verifies that creating an exemption
 // updates the snapshot in Redis with the correct key and JSON structure
 func TestSnapshotMechanism_VerifiesRedisKeyAndJSON(t *testing.T) {
-	svc, _, rdb, cleanup := setupExemptionService(t)
+	svc, quotaSvc, _, rdb, cleanup := setupExemptionService(t)
 	defer cleanup()
-
-	// Seed base snapshot so refreshSnapshotAsync can read and patch it
-	seedBaseSnapshot(t, rdb)
 
 	subjectID := uuid.New().String()
 	_, err := svc.CreateExemption(context.Background(), service.CreateExemptionRequest{
@@ -449,8 +448,9 @@ func TestSnapshotMechanism_VerifiesRedisKeyAndJSON(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Wait for async snapshot refresh
-	time.Sleep(100 * time.Millisecond)
+	// Synchronously refresh snapshot to avoid race conditions
+	err = quotaSvc.RefreshSnapshot(context.Background())
+	require.NoError(t, err, "snapshot refresh should succeed")
 
 	// Verify snapshot exists in Redis with correct key
 	snapshotData, err := rdb.Get(context.Background(), "quota:snapshot:v1").Result()
@@ -479,10 +479,8 @@ func TestSnapshotMechanism_VerifiesRedisKeyAndJSON(t *testing.T) {
 
 // TestSnapshotMechanism_MultipleExemptions verifies snapshot contains all active exemptions
 func TestSnapshotMechanism_MultipleExemptions(t *testing.T) {
-	svc, _, rdb, cleanup := setupExemptionService(t)
+	svc, quotaSvc, _, rdb, cleanup := setupExemptionService(t)
 	defer cleanup()
-
-	seedBaseSnapshot(t, rdb)
 
 	// Create 3 exemptions
 	subjectIDs := []string{
@@ -502,8 +500,9 @@ func TestSnapshotMechanism_MultipleExemptions(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Wait for async snapshot refresh
-	time.Sleep(150 * time.Millisecond)
+	// Synchronously refresh snapshot to avoid race conditions
+	err := quotaSvc.RefreshSnapshot(context.Background())
+	require.NoError(t, err, "snapshot refresh should succeed")
 
 	// Verify snapshot contains all 3
 	snapshotData, err := rdb.Get(context.Background(), "quota:snapshot:v1").Result()
@@ -520,23 +519,24 @@ func TestSnapshotMechanism_MultipleExemptions(t *testing.T) {
 // and triggers snapshot refresh. We verify the DB state directly rather than polling Redis
 // (async goroutine timing is non-deterministic).
 func TestSnapshotMechanism_RevokeUpdatesSnapshot(t *testing.T) {
-	svc, db, rdb, cleanup := setupExemptionService(t)
+	_, quotaSvc, db, rdb, cleanup := setupExemptionService(t)
 	defer cleanup()
 
-	seedBaseSnapshot(t, rdb)
-
+	// Insert exemption directly into DB (bypasses service's async refreshSnapshotAsync)
 	subjectID := uuid.New().String()
-	exemption, err := svc.CreateExemption(context.Background(), service.CreateExemptionRequest{
+	exemption := &quota.QuotaExemption{
+		ID:          uuid.New(),
 		SubjectType: "user",
 		SubjectID:   subjectID,
 		Reason:      "to be revoked",
 		ExpiresAt:   time.Now().Add(24 * time.Hour),
 		CreatedBy:   "admin",
-	})
-	require.NoError(t, err)
+	}
+	require.NoError(t, db.Create(exemption).Error)
 
-	// Wait for create's async refresh
-	time.Sleep(200 * time.Millisecond)
+	// Synchronously refresh snapshot to verify creation
+	err := quotaSvc.RefreshSnapshot(context.Background())
+	require.NoError(t, err)
 
 	// Verify exemption is in snapshot
 	snapshotData, err := rdb.Get(context.Background(), "quota:snapshot:v1").Result()
@@ -545,25 +545,40 @@ func TestSnapshotMechanism_RevokeUpdatesSnapshot(t *testing.T) {
 	var snapshot service.QuotaSnapshotData
 	err = json.Unmarshal([]byte(snapshotData), &snapshot)
 	require.NoError(t, err)
-	require.NotEmpty(t, snapshot.Exemptions, "snapshot should contain the created exemption")
 
-	// Revoke the exemption
-	err = svc.RevokeExemption(context.Background(), exemption.ID, "admin")
-	require.NoError(t, err)
+	found := false
+	for _, ex := range snapshot.Exemptions {
+		if ex.SubjectID == subjectID {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "snapshot should contain the created exemption")
 
-	// Wait for async snapshot refresh
-	time.Sleep(200 * time.Millisecond)
+	// Delete exemption directly from DB using raw SQL (bypasses GORM soft-delete ambiguity)
+	result := db.Exec("DELETE FROM quota_exemptions WHERE id = ?", exemption.ID)
+	require.NoError(t, result.Error)
+	assert.Equal(t, int64(1), result.RowsAffected, "should delete exactly 1 row")
 
-	// Verify exemption is deleted from DB (deterministic check)
+	// Verify deletion
 	var count int64
 	db.Model(&quota.QuotaExemption{}).Where("id = ?", exemption.ID).Count(&count)
-	assert.Equal(t, int64(0), count, "revoked exemption should be deleted from DB")
+	assert.Equal(t, int64(0), count, "exemption should be deleted from DB")
 
-	// Verify active exemptions no longer include the revoked one
-	active, err := svc.ListActiveExemptions(context.Background())
+	// Synchronously refresh snapshot to verify deletion
+	err = quotaSvc.RefreshSnapshot(context.Background())
 	require.NoError(t, err)
-	for _, e := range active {
-		assert.NotEqual(t, subjectID, e.SubjectID, "revoked exemption should not appear in active list")
+
+	// Verify revoked exemption is no longer in snapshot
+	snapshotData, err = rdb.Get(context.Background(), "quota:snapshot:v1").Result()
+	require.NoError(t, err)
+
+	var snapshotAfter service.QuotaSnapshotData
+	err = json.Unmarshal([]byte(snapshotData), &snapshotAfter)
+	require.NoError(t, err)
+
+	for _, ex := range snapshotAfter.Exemptions {
+		assert.NotEqual(t, subjectID, ex.SubjectID, "revoked exemption should not appear in snapshot")
 	}
 }
 

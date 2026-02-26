@@ -325,6 +325,7 @@ func (s *QuotaExemptionService) ListActiveExemptionsWithNames(ctx context.Contex
 				ID   string
 				Name string
 			}
+			// 先查 users 表（SSO 真实用户）
 			var rows []userNameRow
 			_ = s.db.WithContext(ctx).Table("users").
 				Select("CAST(id AS TEXT) AS id, name").
@@ -332,6 +333,24 @@ func (s *QuotaExemptionService) ListActiveExemptionsWithNames(ctx context.Contex
 				Find(&rows).Error
 			for _, r := range rows {
 				userNames[r.ID] = r.Name
+			}
+			// 兜底查 dev_users（dev-login 创建的记录 user_id 是 dev_users.id，不在 users 表），
+			// 用 username 作显示名，避免列表回显 UUID
+			var missingIDs []string
+			for _, id := range ids {
+				if _, ok := userNames[id]; !ok {
+					missingIDs = append(missingIDs, id)
+				}
+			}
+			if len(missingIDs) > 0 {
+				var devRows []userNameRow
+				_ = s.db.WithContext(ctx).Table("dev_users").
+					Select("CAST(id AS TEXT) AS id, username AS name").
+					Where("CAST(id AS TEXT) IN ?", missingIDs).
+					Find(&devRows).Error
+				for _, r := range devRows {
+					userNames[r.ID] = r.Name
+				}
 			}
 		}
 

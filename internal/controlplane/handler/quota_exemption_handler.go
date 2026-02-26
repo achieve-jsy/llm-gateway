@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/audit"
@@ -42,19 +43,13 @@ func (h *QuotaExemptionHandler) Create(c *gin.Context) {
 
 	userID, _ := c.Get("user_id")
 	uid, _ := userID.(string)
-	userName, _ := c.Get("user_name")
-	uname, _ := userName.(string)
-	// 用 user_name 作为 created_by，方便列表展示（UUID 在 users 表中查不到时无法解析）
-	if uname == "" {
-		uname = uid
-	}
 
 	exemption, err := h.svc.CreateExemption(c.Request.Context(), service.CreateExemptionRequest{
 		SubjectType: req.SubjectType,
 		SubjectID:   req.SubjectID,
 		Reason:      req.Reason,
 		ExpiresAt:   req.ExpiresAt,
-		CreatedBy:   uname,
+		CreatedBy:   uid,
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -115,7 +110,17 @@ func (h *QuotaExemptionHandler) Revoke(c *gin.Context) {
 
 // List GET /api/v1/quota/exemptions
 func (h *QuotaExemptionHandler) List(c *gin.Context) {
-	exemptions, err := h.svc.ListActiveExemptionsWithNames(c.Request.Context())
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+
+	exemptions, total, err := h.svc.ListActiveExemptionsWithNames(c.Request.Context(), page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{"type": "internal_error", "message": "获取豁免列表失败", "code": CodeInternalError},
@@ -123,5 +128,11 @@ func (h *QuotaExemptionHandler) List(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"code": 0, "data": exemptions})
+	c.JSON(http.StatusOK, gin.H{
+		"code":      0,
+		"data":      exemptions,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
 }

@@ -190,16 +190,35 @@ type QuotaExemptionListItem struct {
 }
 
 // ListActiveExemptionsWithNames 列出当前生效的豁免，并解析主体名称和创建人名称
-func (s *QuotaExemptionService) ListActiveExemptionsWithNames(ctx context.Context) ([]QuotaExemptionListItem, error) {
-	exemptions, err := s.ListActiveExemptions(ctx)
-	if err != nil {
-		return nil, err
+// 支持分页：page 从 1 开始，pageSize 默认 20
+func (s *QuotaExemptionService) ListActiveExemptionsWithNames(ctx context.Context, page, pageSize int) ([]QuotaExemptionListItem, int64, error) {
+	if page < 1 {
+		page = 1
 	}
-	if len(exemptions) == 0 {
-		return []QuotaExemptionListItem{}, nil
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+
+	// 先查总数
+	var total int64
+	baseQuery := s.db.WithContext(ctx).Model(&quota.QuotaExemption{}).Where("expires_at > ?", time.Now())
+	if err := baseQuery.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count exemptions: %w", err)
+	}
+	if total == 0 {
+		return []QuotaExemptionListItem{}, 0, nil
+	}
+
+	// 分页查询
+	offset := (page - 1) * pageSize
+	var exemptions []quota.QuotaExemption
+	if err := baseQuery.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&exemptions).Error; err != nil {
+		return nil, 0, fmt.Errorf("list exemptions: %w", err)
 	}
 
 	// 收集用户 ID 和 key ID
+	// SubjectID 总是 UUID 字符串
+	// CreatedBy 可能是 UUID（新记录）或显示名称（旧记录），需要兼容
 	userIDs := make(map[string]bool)
 	keyIDs := make(map[string]bool)
 	for _, e := range exemptions {
@@ -208,10 +227,13 @@ func (s *QuotaExemptionService) ListActiveExemptionsWithNames(ctx context.Contex
 		} else if e.SubjectType == "service_key" {
 			keyIDs[e.SubjectID] = true
 		}
-		userIDs[e.CreatedBy] = true
+		// 尝试将 CreatedBy 解析为 UUID，若是则加入 userIDs 批量查询
+		if _, err := uuid.Parse(e.CreatedBy); err == nil {
+			userIDs[e.CreatedBy] = true
+		}
 	}
 
-	// 批量查询用户名称
+	// 批量查询用户名称（users.id 是 uuid，需要用 id::text 与 string 比较）
 	userNames := make(map[string]string)
 	if len(userIDs) > 0 {
 		ids := make([]string, 0, len(userIDs))
@@ -223,13 +245,16 @@ func (s *QuotaExemptionService) ListActiveExemptionsWithNames(ctx context.Contex
 			Name string
 		}
 		var rows []userNameRow
-		_ = s.db.WithContext(ctx).Table("users").Select("id, name").Where("id IN ?", ids).Find(&rows).Error
+		_ = s.db.WithContext(ctx).Table("users").
+			Select("id::text AS id, name").
+			Where("id::text IN ?", ids).
+			Find(&rows).Error
 		for _, r := range rows {
 			userNames[r.ID] = r.Name
 		}
 	}
 
-	// 批量查询 Service Key 名称
+	// 批量查询 Service Key 名称（api_keys.id 是 uuid，需要用 id::text 与 string 比较）
 	keyNames := make(map[string]string)
 	if len(keyIDs) > 0 {
 		ids := make([]string, 0, len(keyIDs))
@@ -241,7 +266,10 @@ func (s *QuotaExemptionService) ListActiveExemptionsWithNames(ctx context.Contex
 			Name string
 		}
 		var rows []keyNameRow
-		_ = s.db.WithContext(ctx).Table("api_keys").Select("id, name").Where("id IN ?", ids).Find(&rows).Error
+		_ = s.db.WithContext(ctx).Table("api_keys").
+			Select("id::text AS id, name").
+			Where("id::text IN ?", ids).
+			Find(&rows).Error
 		for _, r := range rows {
 			keyNames[r.ID] = r.Name
 		}
@@ -256,11 +284,16 @@ func (s *QuotaExemptionService) ListActiveExemptionsWithNames(ctx context.Contex
 		} else {
 			item.SubjectName = keyNames[e.SubjectID]
 		}
-		item.CreatedByName = userNames[e.CreatedBy]
+		// CreatedBy 兼容：新记录存 UUID（查表解析），旧记录存显示名称（直接使用）
+		if name, ok := userNames[e.CreatedBy]; ok {
+			item.CreatedByName = name
+		} else {
+			item.CreatedByName = e.CreatedBy
+		}
 		items = append(items, item)
 	}
 
-	return items, nil
+	return items, total, nil
 }
 
 // CreateExemptionRequest 创建豁免请求

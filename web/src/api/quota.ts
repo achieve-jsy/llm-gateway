@@ -77,8 +77,8 @@ export interface QuotaExemptionCreateRequest {
   expires_at: string
 }
 
-export async function listQuotaExemptions() {
-  return http.get('/api/v1/quota/exemptions')
+export async function listQuotaExemptions(page = 1, pageSize = 20) {
+  return http.get(`/api/v1/quota/exemptions?page=${page}&page_size=${pageSize}`)
 }
 
 export async function createQuotaExemption(data: QuotaExemptionCreateRequest) {

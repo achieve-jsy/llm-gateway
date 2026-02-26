@@ -72,7 +72,7 @@
         </template>
       </el-table-column>
 
-      <el-table-column label="创建人" width="120" prop="created_by" show-overflow-tooltip />
+      <el-table-column label="创建人" width="120" prop="created_by_name" show-overflow-tooltip />
 
       <el-table-column label="创建时间" width="170">
         <template #default="{ row }">
@@ -96,6 +96,16 @@
         </template>
       </el-table-column>
     </el-table>
+
+    <el-pagination
+      v-if="total > pageSize"
+      v-model:current-page="currentPage"
+      :page-size="pageSize"
+      :total="total"
+      layout="total, prev, pager, next, jumper"
+      class="exemption-pagination"
+      @current-change="handlePageChange"
+    />
 
     <!-- 创建豁免对话框 -->
     <el-dialog
@@ -211,11 +221,12 @@ const orgStore = useOrgStore()
 const loading = ref(false)
 const loadError = ref('')
 const allExemptions = ref<QuotaExemption[]>([])
+const currentPage = ref(1)
+const pageSize = ref(20)
+const total = ref(0)
 
-// 自动过滤：只显示未过期的豁免
-const exemptions = computed(() =>
-  allExemptions.value.filter(e => !isExpired(e.expires_at))
-)
+// 后端已过滤只返回未过期的豁免
+const exemptions = computed(() => allExemptions.value)
 
 const createDialogVisible = ref(false)
 const creating = ref(false)
@@ -336,15 +347,31 @@ async function loadExemptions() {
   loading.value = true
   loadError.value = ''
   try {
-    const res = await listQuotaExemptions()
-    const data = (res as any)?.data
-    allExemptions.value = data?.data || []
+    const res = await listQuotaExemptions(currentPage.value, pageSize.value)
+    const body = (res as any)?.data
+    if (body && typeof body === 'object' && 'total' in body) {
+      allExemptions.value = body.data || []
+      total.value = body.total || 0
+    } else if (Array.isArray(body)) {
+      // fallback for old array response
+      allExemptions.value = body
+      total.value = body.length
+    } else {
+      allExemptions.value = []
+      total.value = 0
+    }
   } catch (e: any) {
     loadError.value = e?.response?.data?.error || e?.message || '未知错误'
     allExemptions.value = []
+    total.value = 0
   } finally {
     loading.value = false
   }
+}
+
+function handlePageChange(page: number) {
+  currentPage.value = page
+  loadExemptions()
 }
 
 function openCreateDialog() {
@@ -374,6 +401,7 @@ async function handleCreate() {
     })
     ElMessage.success('豁免已创建')
     createDialogVisible.value = false
+    currentPage.value = 1
     await loadExemptions()
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.error || e?.message || '创建失败')
@@ -461,6 +489,12 @@ onMounted(() => {
 .exemption-table {
   border-radius: 12px;
   overflow: hidden;
+}
+
+.exemption-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
 }
 
 .mono-id {

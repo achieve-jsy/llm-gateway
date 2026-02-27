@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -52,6 +53,18 @@ func (s *QuotaService) SetUserQuota(ctx context.Context, userID string, rpm, max
 func (s *QuotaService) GetUserEffectiveQuota(ctx context.Context, userID string) (*QuotaEffective, error) {
 	var user authmodel.User
 	if err := s.db.WithContext(ctx).Where("id = ?", userID).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// 用户不在 users 表里（如 admin 等平台角色），返回默认配额
+			settings, settingsErr := s.getSettings(ctx)
+			if settingsErr != nil {
+				return nil, settingsErr
+			}
+			return &QuotaEffective{
+				RPM: settings.DefaultUserRPM, MaxConcurrency: settings.DefaultUserMaxConcurrency,
+				Source: "default_user", SubjectType: "user", SubjectID: userID,
+				DefaultRPM: settings.DefaultUserRPM, DefaultMaxConc: settings.DefaultUserMaxConcurrency,
+			}, nil
+		}
 		return nil, fmt.Errorf("find user: %w", err)
 	}
 	settings, err := s.getSettings(ctx)

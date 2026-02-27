@@ -357,14 +357,20 @@ const quotaPanelRef = ref<InstanceType<typeof MyQuotaPanel> | null>(null)
 
 function onTabChange(name: string | number) {
   const tab = name === 'quota' ? 'quota' : 'budget'
-  // 同步到 URL query，移除冗余的 budget 默认值
-  router.replace({ query: tab === 'budget' ? {} : { tab } })
+  const query = { ...route.query }
+  if (tab === 'budget') delete query.tab
+  else query.tab = tab
+  router.replace({ query })
 }
 
 async function refreshActiveTab() {
   if (activeTab.value === 'quota') {
-    // 配额面板懒加载：切到配额 tab 后组件才挂载，刷新前确保已加载
-    await quotaPanelRef.value?.loadQuota()
+    loading.value = true
+    try {
+      await quotaPanelRef.value?.loadQuota()
+    } finally {
+      loading.value = false
+    }
     return
   }
   await loadAll()

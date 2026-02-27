@@ -249,7 +249,9 @@ func (s *QuotaService) refreshSnapshot(ctx context.Context) error {
 	if err := s.rdb.Set(ctx, QuotaSnapshotKey, data, 0).Err(); err != nil {
 		return fmt.Errorf("set quota snapshot: %w", err)
 	}
-	s.rdb.Publish(ctx, "config:change", "quota_snapshot_updated")
+	if err := s.rdb.Publish(ctx, "config:change", "quota_snapshot_updated").Err(); err != nil {
+		slog.Warn("quota snapshot publish failed", "error", err)
+	}
 	slog.Info("quota snapshot refreshed")
 	return nil
 }
@@ -280,28 +282,38 @@ func (s *QuotaService) buildSnapshot(ctx context.Context) (*QuotaSnapshotData, e
 		UpdatedAt:   time.Now().UTC(),
 	}
 	var users []authmodel.User
-	s.db.WithContext(ctx).Where("quota_rpm IS NOT NULL OR quota_max_concurrency IS NOT NULL").Find(&users)
+	if err := s.db.WithContext(ctx).Where("quota_rpm IS NOT NULL OR quota_max_concurrency IS NOT NULL").Find(&users).Error; err != nil {
+		return nil, fmt.Errorf("load user quota overrides: %w", err)
+	}
 	for _, u := range users {
 		snap.Users[u.ID.String()] = QuotaEntry{RPM: u.QuotaRPM, MaxConcurrency: u.QuotaMaxConcurrency}
 	}
 	var keys []cpmodel.ApiKey
-	s.db.WithContext(ctx).Where("key_type = ? AND (quota_rpm IS NOT NULL OR quota_max_concurrency IS NOT NULL)", cpmodel.KeyTypeService).Find(&keys)
+	if err := s.db.WithContext(ctx).Where("key_type = ? AND (quota_rpm IS NOT NULL OR quota_max_concurrency IS NOT NULL)", cpmodel.KeyTypeService).Find(&keys).Error; err != nil {
+		return nil, fmt.Errorf("load key quota overrides: %w", err)
+	}
 	for _, k := range keys {
 		snap.ServiceKeys[k.ID.String()] = QuotaEntry{RPM: k.QuotaRPM, MaxConcurrency: k.QuotaMaxConcurrency}
 	}
 	var groups []cpmodel.Group
-	s.db.WithContext(ctx).Where("quota_rpm IS NOT NULL OR quota_max_concurrency IS NOT NULL").Find(&groups)
+	if err := s.db.WithContext(ctx).Where("quota_rpm IS NOT NULL OR quota_max_concurrency IS NOT NULL").Find(&groups).Error; err != nil {
+		return nil, fmt.Errorf("load group quota overrides: %w", err)
+	}
 	for _, g := range groups {
 		snap.Groups[g.Name] = QuotaEntry{RPM: g.QuotaRPM, MaxConcurrency: g.QuotaMaxConcurrency}
 	}
 	var models []cpmodel.Model
-	s.db.WithContext(ctx).Where("quota_rpm IS NOT NULL OR quota_max_concurrency IS NOT NULL").Find(&models)
+	if err := s.db.WithContext(ctx).Where("quota_rpm IS NOT NULL OR quota_max_concurrency IS NOT NULL").Find(&models).Error; err != nil {
+		return nil, fmt.Errorf("load model quota overrides: %w", err)
+	}
 	for _, m := range models {
 		snap.Models[m.ID.String()] = QuotaEntry{RPM: m.QuotaRPM, MaxConcurrency: m.QuotaMaxConcurrency}
 	}
 	// 加载当前生效的豁免
 	var exemptions []corequota.QuotaExemption
-	s.db.WithContext(ctx).Where("expires_at > ?", time.Now()).Find(&exemptions)
+	if err := s.db.WithContext(ctx).Where("expires_at > ?", time.Now()).Find(&exemptions).Error; err != nil {
+		return nil, fmt.Errorf("load exemptions: %w", err)
+	}
 	snap.Exemptions = make([]QuotaExemptionEntry, 0, len(exemptions))
 	for _, e := range exemptions {
 		snap.Exemptions = append(snap.Exemptions, QuotaExemptionEntry{

@@ -28,10 +28,6 @@
           <el-icon><DataLine /></el-icon>
           <template #title>我的用量</template>
         </el-menu-item>
-        <el-menu-item index="/my/budget?tab=quota">
-          <el-icon><Timer /></el-icon>
-          <template #title>我的配额</template>
-        </el-menu-item>
         <el-menu-item index="/model-square">
           <el-icon><Collection /></el-icon>
           <template #title>模型广场</template>
@@ -221,7 +217,7 @@ import { onMounted, computed, ref, watch, onUnmounted } from 'vue'
 import { isDark, toggleTheme } from './composables/useTheme'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
-import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close, Menu, Wallet, Lock, TrendCharts, Document, DataBoard, Sunny, Moon, Timer, CircleClose } from '@element-plus/icons-vue'
+import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close, Menu, Wallet, Lock, TrendCharts, Document, DataBoard, Sunny, Moon, CircleClose } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/common/NotificationBell.vue'
 import AnnouncementBanner from '@/components/common/AnnouncementBanner.vue'
 import AnnouncementPopup from '@/components/common/AnnouncementPopup.vue'
@@ -235,14 +231,8 @@ const settingsStore = useSettingsStore()
 const isCollapsed = ref(localStorage.getItem('sidebar-collapsed') === 'true')
 const isMobile = ref(window.innerWidth < 768)
 const showMobileSidebar = ref(false)
-// 配额已并入预算页（tab 切换）：在 /my/budget 上按 ?tab=quota 区分菜单高亮
-function resolveActiveMenu(r: { path: string; query: { tab?: string } }): string {
-  if (r.path === '/my/budget') {
-    return r.query.tab === 'quota' ? '/my/budget?tab=quota' : '/my/budget'
-  }
-  return r.path
-}
-const activeMenu = ref(resolveActiveMenu(route))
+// 配额已并入预算页：/my/budget 统一高亮
+const activeMenu = ref(route.path)
 const showPopup = ref(false)
 const budgetAlert = ref(false)
 
@@ -257,12 +247,7 @@ async function checkBudgetAlert() {
 }
 
 watch(() => route.path, (newPath) => {
-  activeMenu.value = resolveActiveMenu(route)
-})
-
-// 预算页内 tab 切换时，按 ?tab=quota 让「我的配额」菜单项高亮，否则高亮「我的预算」
-watch(() => route.query.tab, () => {
-  activeMenu.value = resolveActiveMenu(route)
+  activeMenu.value = newPath
 })
 
 const sidebarLogoSrc = computed(() => {

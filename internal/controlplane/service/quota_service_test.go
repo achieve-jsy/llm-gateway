@@ -428,6 +428,29 @@ func TestGetUserEffectiveQuota_Fallback(t *testing.T) {
 	assert.Equal(t, "default_user", effective.Source)
 }
 
+// TestGetUserEffectiveQuota_UserNotFound verifies admin/non-sso users not in users table
+// get default quota instead of error (regression test for admin 500 bug).
+func TestGetUserEffectiveQuota_UserNotFound(t *testing.T) {
+	db := setupQuotaServiceTestDB(t)
+	rdb, cleanup := setupQuotaServiceMiniredis(t)
+	defer cleanup()
+
+	svc := service.NewQuotaService(db, rdb)
+
+	// User never inserted into users table — simulations admin / platform user
+	userID := uuid.New()
+
+	effective, err := svc.GetUserEffectiveQuota(context.Background(), userID.String())
+	require.NoError(t, err) // must NOT return error
+	require.NotNil(t, effective)
+
+	assert.Equal(t, 60, effective.RPM)
+	assert.Equal(t, 10, effective.MaxConcurrency)
+	assert.Equal(t, "default_user", effective.Source)
+	assert.Equal(t, "user", effective.SubjectType)
+	assert.Equal(t, userID.String(), effective.SubjectID)
+}
+
 // TestSetServiceKeyQuota_ValidateKeyType verifies only service keys can have quota set
 func TestSetServiceKeyQuota_ValidateKeyType(t *testing.T) {
 	db := setupQuotaServiceTestDB(t)

@@ -25,9 +25,10 @@
         <div class="mq-kpi">
           <span>综合使用率</span>
           <strong :class="{ 'is-danger': maxRatio >= 80, 'is-warning': maxRatio >= 60 && maxRatio < 80 }">
-            {{ maxRatio === 0 ? '—' : maxRatio + '%' }}
+            <template v-if="!hasQuotaLimit">不限制</template>
+            <template v-else>{{ maxRatio }}%</template>
           </strong>
-          <em>RPM / 并发较高者</em>
+          <em>取 RPM / 并发较高者</em>
         </div>
       </section>
 
@@ -92,14 +93,14 @@
                 transform="rotate(-90 32 32)"
               />
             </svg>
-            <span v-if="ringPercentage > 0">{{ ringPercentage }}%</span>
+            <span v-if="hasQuotaLimit">{{ ringPercentage }}%</span>
             <span v-else class="mq-ring-na">不限制</span>
           </div>
         </div>
         <!-- 环形副标注：使「综合压力」语义更显性 -->
         <div class="mq-ring-caption">
-          <span v-if="ringPercentage > 0">综合使用率 {{ ringPercentage }}%，取 RPM / 并发较高者</span>
-          <span v-else>当前无有效配额约束，综合使用率不适用</span>
+          <template v-if="hasQuotaLimit">综合使用率 {{ ringPercentage }}%，取 RPM / 并发较高者</template>
+          <template v-else>当前无有效配额约束，综合使用率不适用</template>
         </div>
 
         <!-- period-rows 式指标行：当前使用量，带状态药丸 -->
@@ -203,10 +204,16 @@ const concPercentage = computed(() => {
   return Math.min(100, Math.round((quota.value.current_usage.max_concurrency / quota.value.effective.max_concurrency) * 100))
 })
 
-// 综合使用率：取 RPM / 并发较高者；均为不限制（0）时返回 0（KPI 展示为 —）
+// 综合使用率：取 RPM / 并发较高者
 const maxRatio = computed(() => {
   if (!quota.value) return 0
   return Math.max(rpmPercentage.value, concPercentage.value)
+})
+
+// 是否有配额约束（至少一项有限制）
+const hasQuotaLimit = computed(() => {
+  if (!quota.value) return false
+  return quota.value.effective.rpm > 0 || quota.value.effective.max_concurrency > 0
 })
 
 // 仪表盘读数：取有限项中使用率最高者，作为整体压力指示；均为不限制（0）时返回 0

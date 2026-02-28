@@ -21,8 +21,10 @@ type ErrorCode struct {
 	Fallback bool
 }
 
-// Registry is the centralized map of all known error codes.
-var Registry = map[string]ErrorCode{
+// registry is the centralized map of all known error codes.
+// It is unexported to prevent concurrent read/write from external packages.
+// Use Lookup() for thread-safe read access.
+var registry = map[string]ErrorCode{
 	// ── Request validation errors ───────────────────────────────────────────
 	"request_missing_model": {
 		Code:       "request_missing_model",
@@ -198,4 +200,21 @@ var Registry = map[string]ErrorCode{
 		HTTPStatus: http.StatusBadGateway,
 		Message:    "所有上游服务均已失败",
 	},
+}
+
+// Lookup returns the ErrorCode for the given code string.
+// If the code is not found, it returns the "internal_error" fallback.
+// This is safe for concurrent use as the registry is never mutated after init.
+func Lookup(code string) ErrorCode {
+	ec, ok := registry[code]
+	if !ok {
+		return registry["internal_error"]
+	}
+	return ec
+}
+
+// Has reports whether the given code string is registered.
+func Has(code string) bool {
+	_, ok := registry[code]
+	return ok
 }

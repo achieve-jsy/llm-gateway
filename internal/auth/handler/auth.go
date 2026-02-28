@@ -105,6 +105,10 @@ func (h *AuthHandler) DevLogin(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": gin.H{"type": "authentication_error", "message": "dev login not available", "code": "forbidden"}})
 		return
 	}
+	if h.users == nil || h.token == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"type": "service_unavailable", "message": "auth dependencies unavailable", "code": "service_unavailable"}})
+		return
+	}
 	devUser, err := h.dev.FindByUsername(req.Username)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "invalid credentials"})

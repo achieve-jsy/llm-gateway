@@ -85,6 +85,9 @@ func (h *MessagesHandler) HandleMessages(c *gin.Context) {
 
 	originalModel := anthReq.Model
 
+	// 记录路由选定的模型 ID，用于模型层配额检查。
+	routedModelID := anthReq.Model
+
 	// Group dispatch (model group resolution)
 	if h.groupDispatch != nil {
 		decision, err := h.groupDispatch.Dispatch(c, anthReq.Model, req)
@@ -94,16 +97,20 @@ func (h *MessagesHandler) HandleMessages(c *gin.Context) {
 		}
 		if decision != nil {
 			req.Model = decision.ModelName
+			routedModelID = decision.ModelID
 		}
 	}
 
 	// v0.15: 模型层配额检查（路由选定具体 model 之后、转发上游之前）
+	// 使用 routed_model_id（UUID）而非 model name，确保配额配置与路由表一致。
 	if h.quotaGate != nil {
 		subjectType, _ := c.Get("quota_subject_type")
 		subjectID, _ := c.Get("quota_subject_id")
-		if subjectType != nil && subjectID != nil {
-			if err := h.quotaGate.BeforeUpstream(c, subjectType.(string), subjectID.(string), req.Model); err != nil {
-				return // 已在 middleware 中写入 429 响应
+		if st, ok := subjectType.(string); ok {
+			if si, ok := subjectID.(string); ok {
+				if err := h.quotaGate.BeforeUpstream(c, st, si, routedModelID); err != nil {
+					return // 已在 middleware 中写入 429 响应
+				}
 			}
 		}
 	}
@@ -222,6 +229,20 @@ func (h *MessagesHandler) handleNonStream(c *gin.Context, baseCtx context.Contex
 		req.Model = decision.ModelName
 		req.Provider = decision.ProviderName
 		c.Set("failover_used", true)
+
+		// v0.15: failover 模型也需要经过模型层配额检查
+		if h.quotaGate != nil {
+			subjectType, _ := c.Get("quota_subject_type")
+			subjectID, _ := c.Get("quota_subject_id")
+			if st, ok := subjectType.(string); ok {
+				if si, ok := subjectID.(string); ok {
+					if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelID); err != nil {
+						return // BeforeUpstream 已写入 429 响应
+					}
+				}
+			}
+		}
+
 		slog.Info("messages failover: switching",
 			"request_id", c.GetString("request_id"),
 			"group", originalModel,
@@ -301,6 +322,20 @@ func (h *MessagesHandler) handleStream(c *gin.Context, baseCtx context.Context, 
 		req.Model = decision.ModelName
 		req.Provider = decision.ProviderName
 		c.Set("failover_used", true)
+
+		// v0.15: failover 模型也需要经过模型层配额检查
+		if h.quotaGate != nil {
+			subjectType, _ := c.Get("quota_subject_type")
+			subjectID, _ := c.Get("quota_subject_id")
+			if st, ok := subjectType.(string); ok {
+				if si, ok := subjectID.(string); ok {
+					if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelID); err != nil {
+						return // BeforeUpstream 已写入 429 响应
+					}
+				}
+			}
+		}
+
 		slog.Info("messages failover: switching (stream)",
 			"request_id", c.GetString("request_id"),
 			"group", originalModel,

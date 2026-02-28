@@ -41,7 +41,8 @@ func MapProviderError(err error) *model.UnifiedError {
 		body := formatErrorBody(gwErr)
 
 		code, _ := gatewayerrors.MapProviderError(provider, status, body, nil)
-		if ec, ok := gatewayerrors.Registry[code]; ok {
+		if gatewayerrors.Has(code) {
+			ec := gatewayerrors.Lookup(code)
 			// 构建 UnifiedError，保留原始错误信息
 			msg := ec.Message
 			if gwErr.Message != "" {

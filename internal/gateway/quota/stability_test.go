@@ -99,8 +99,8 @@ func setupMiddlewareTestFastFail(t *testing.T) (*miniredis.Miniredis, *QuotaMidd
 func emptySnapshot() *quota.QuotaSnapshot {
 	return &quota.QuotaSnapshot{
 		Version:           1,
-		DefaultUser:       quota.LayerLimits{RPM: 1000, MaxConcurrency: 1000},
-		DefaultServiceKey: quota.LayerLimits{RPM: 1000, MaxConcurrency: 1000},
+		DefaultUserRPM: 1000, DefaultUserMaxConcurrency: 1000,
+		DefaultServiceKeyRPM: 1000, DefaultServiceKeyMaxConcurrency: 1000,
 		Users:             map[string]quota.LayerLimits{},
 		ServiceKeys:       map[string]quota.LayerLimits{},
 		Groups:            map[string]quota.LayerLimits{},
@@ -159,7 +159,7 @@ func rpmCount(t *testing.T, rdb *redis.Client, key string) int64 {
 func TestStability_RPM_RejectThenWindowRecovery(t *testing.T) {
 	mr, mw, holder := setupMiddlewareTest(t)
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 3, MaxConcurrency: 0},
+		DefaultUserRPM: 3, DefaultUserMaxConcurrency: 0,
 		Users:       map[string]quota.LayerLimits{},
 		Groups:      map[string]quota.LayerLimits{},
 		Models:      map[string]quota.LayerLimits{},
@@ -259,7 +259,7 @@ func TestStability_Concurrency_OverRelease_NeverNegative(t *testing.T) {
 func TestStability_Middleware_Concurrency_ReleaseMidFlight(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 0, MaxConcurrency: 1},
+		DefaultUserRPM: 0, DefaultUserMaxConcurrency: 1,
 		Users:       map[string]quota.LayerLimits{},
 		Groups:      map[string]quota.LayerLimits{},
 		Models:      map[string]quota.LayerLimits{},
@@ -312,8 +312,8 @@ func TestStability_FourLayers_IndependentCounting(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	gate := &ModelQuotaGate{holder: holder, store: mw.store}
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser:       quota.LayerLimits{RPM: 100, MaxConcurrency: 100},
-		DefaultServiceKey: quota.LayerLimits{RPM: 100, MaxConcurrency: 100},
+		DefaultUserRPM: 100, DefaultUserMaxConcurrency: 100,
+		DefaultServiceKeyRPM: 100, DefaultServiceKeyMaxConcurrency: 100,
 		Users:             map[string]quota.LayerLimits{},
 		ServiceKeys:       map[string]quota.LayerLimits{"sk-1": {RPM: 2, MaxConcurrency: 0}},
 		Groups:            map[string]quota.LayerLimits{"gpt-4": {RPM: 2, MaxConcurrency: 0}},
@@ -371,7 +371,7 @@ func TestStability_FourLayers_IndependentCounting(t *testing.T) {
 func TestStability_FourLayers_ServiceKeySubject_Independent(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultServiceKey: quota.LayerLimits{RPM: 100, MaxConcurrency: 100},
+		DefaultServiceKeyRPM: 100, DefaultServiceKeyMaxConcurrency: 100,
 		ServiceKeys:       map[string]quota.LayerLimits{"sk-A": {RPM: 1, MaxConcurrency: 0}},
 		Groups:            map[string]quota.LayerLimits{},
 		Models:            map[string]quota.LayerLimits{},
@@ -414,7 +414,7 @@ func TestStability_ModelConcurrencyToken_Released(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	gate := &ModelQuotaGate{holder: holder, store: mw.store}
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 0, MaxConcurrency: 0},
+		DefaultUserRPM: 0, DefaultUserMaxConcurrency: 0,
 		Users:       map[string]quota.LayerLimits{},
 		Groups:      map[string]quota.LayerLimits{},
 		Models:      map[string]quota.LayerLimits{"m-uuid": {RPM: 0, MaxConcurrency: 2}},
@@ -457,7 +457,7 @@ func TestStability_FourLayers_HappyPath_WithinLimits(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	gate := &ModelQuotaGate{holder: holder, store: mw.store}
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 0, MaxConcurrency: 0},
+		DefaultUserRPM: 0, DefaultUserMaxConcurrency: 0,
 		Users:       map[string]quota.LayerLimits{},
 		Groups:      map[string]quota.LayerLimits{"gpt-4": {RPM: 0, MaxConcurrency: 2}},
 		Models:      map[string]quota.LayerLimits{"m-uuid": {RPM: 0, MaxConcurrency: 2}},
@@ -494,7 +494,7 @@ func TestStability_FourLayers_HappyPath_WithinLimits(t *testing.T) {
 func TestStability_Exemption_DoesNotTouchCounters(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 1, MaxConcurrency: 1},
+		DefaultUserRPM: 1, DefaultUserMaxConcurrency: 1,
 		Users:       map[string]quota.LayerLimits{},
 		Groups:      map[string]quota.LayerLimits{},
 		Models:      map[string]quota.LayerLimits{},
@@ -534,7 +534,7 @@ func TestStability_Exemption_DoesNotTouchCounters(t *testing.T) {
 func TestStability_FailOpen_RedisDown_ConcurrentAndRelease(t *testing.T) {
 	mr, mw, holder := setupMiddlewareTestFastFail(t)
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 1, MaxConcurrency: 1},
+		DefaultUserRPM: 1, DefaultUserMaxConcurrency: 1,
 		Users:       map[string]quota.LayerLimits{},
 		Groups:      map[string]quota.LayerLimits{},
 		Models:      map[string]quota.LayerLimits{},
@@ -582,7 +582,7 @@ func TestStability_SnapshotHotUpdate_ImmediateEffect(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	// 初始宽松：RPM=1000
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 1000, MaxConcurrency: 0},
+		DefaultUserRPM: 1000, DefaultUserMaxConcurrency: 0,
 		Users:       map[string]quota.LayerLimits{},
 		Groups:      map[string]quota.LayerLimits{},
 		Models:      map[string]quota.LayerLimits{},
@@ -597,7 +597,7 @@ func TestStability_SnapshotHotUpdate_ImmediateEffect(t *testing.T) {
 
 	// 热替换为严格：RPM=1（已用 1 → 下一个应即拒）
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 1, MaxConcurrency: 0},
+		DefaultUserRPM: 1, DefaultUserMaxConcurrency: 0,
 		Users:       map[string]quota.LayerLimits{},
 		Groups:      map[string]quota.LayerLimits{},
 		Models:      map[string]quota.LayerLimits{},
@@ -623,7 +623,7 @@ func TestStability_SnapshotHolder_ConcurrentReadWriteRace(t *testing.T) {
 			defer wg.Done()
 			for !stop.Load() {
 				if s := holder.Get(); s != nil {
-					_ = s.DefaultUser.RPM
+					_ = s.DefaultUserRPM
 				}
 			}
 		}()
@@ -634,7 +634,7 @@ func TestStability_SnapshotHolder_ConcurrentReadWriteRace(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 2000; i++ {
 			s := emptySnapshot()
-			s.DefaultUser.RPM = 1 + (i % 50)
+			s.DefaultUserRPM = 1 + (i % 50)
 			holder.Set(s)
 		}
 		stop.Store(true)
@@ -677,8 +677,8 @@ func TestStability_LimitZero_vs_MissingInherit(t *testing.T) {
 	// 缺省继承非对称（resolver 层，纯函数）：
 	// subject 缺省 → default（继承，非 0）
 	snap := &quota.QuotaSnapshot{
-		DefaultUser:       quota.LayerLimits{RPM: 42, MaxConcurrency: 7},
-		DefaultServiceKey: quota.LayerLimits{RPM: 99, MaxConcurrency: 11},
+		DefaultUserRPM: 42, DefaultUserMaxConcurrency: 7,
+		DefaultServiceKeyRPM: 99, DefaultServiceKeyMaxConcurrency: 11,
 		Users:             map[string]quota.LayerLimits{},
 		Groups:            map[string]quota.LayerLimits{},
 		Models:            map[string]quota.LayerLimits{},
@@ -805,7 +805,7 @@ func TestStability_Store_RedisDown_NoPanic(t *testing.T) {
 func TestStability_GroupLayer_ParsesModelFromBody(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 100, MaxConcurrency: 100},
+		DefaultUserRPM: 100, DefaultUserMaxConcurrency: 100,
 		Users:       map[string]quota.LayerLimits{},
 		Groups:      map[string]quota.LayerLimits{"gpt-4": {RPM: 2, MaxConcurrency: 0}},
 		Models:      map[string]quota.LayerLimits{},

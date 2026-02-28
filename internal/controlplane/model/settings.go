@@ -70,4 +70,9 @@ type PublicSettings struct {
 	StudioRPM             int     `json:"studio_rpm"`
 	DeptRPM               int     `json:"dept_rpm"`
 	KeyRPM                int     `json:"key_rpm"`
+	// v0.15 四层配额体系（双主体默认）
+	DefaultUserRPM            int `json:"default_user_rpm"`
+	DefaultUserMaxConcurrency int `json:"default_user_max_concurrency"`
+	DefaultServiceKeyRPM            int `json:"default_service_key_rpm"`
+	DefaultServiceKeyMaxConcurrency int `json:"default_service_key_max_concurrency"`
 }

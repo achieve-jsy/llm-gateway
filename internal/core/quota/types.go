@@ -14,10 +14,13 @@ type LayerLimits struct {
 }
 
 // QuotaSnapshot 四层配额快照，由控制面发布到 Redis，gateway 热加载。
+// JSON 字段名与控制面 QuotaSnapshotData 严格一致，确保反序列化正确。
 type QuotaSnapshot struct {
-	Version           int                    `json:"version"`
-	DefaultUser       LayerLimits            `json:"default_user"`
-	DefaultServiceKey LayerLimits            `json:"default_service_key"`
+	Version                        int                    `json:"version"`
+	DefaultUserRPM                 int                    `json:"default_user_rpm"`
+	DefaultUserMaxConcurrency      int                    `json:"default_user_max_concurrency"`
+	DefaultServiceKeyRPM           int                    `json:"default_service_key_rpm"`
+	DefaultServiceKeyMaxConcurrency int                   `json:"default_service_key_max_concurrency"`
 	Users             map[string]LayerLimits `json:"users"`        // userUUID
 	ServiceKeys       map[string]LayerLimits `json:"service_keys"` // keyUUID
 	Groups            map[string]LayerLimits `json:"groups"`       // group name
@@ -47,8 +50,14 @@ type QuotaExemption struct {
 
 func (QuotaExemption) TableName() string { return "quota_exemptions" }
 
-// FallbackDefaultUser 快照未就绪时用户默认配额
-var FallbackDefaultUser = LayerLimits{RPM: 60, MaxConcurrency: 10}
+// fallbackDefaultUser 快照未就绪时用户默认配额
+var fallbackDefaultUser = LayerLimits{RPM: 60, MaxConcurrency: 10}
 
-// FallbackDefaultServiceKey 快照未就绪时 Service Key 默认配额
-var FallbackDefaultServiceKey = LayerLimits{RPM: 120, MaxConcurrency: 20}
+// fallbackDefaultServiceKey 快照未就绪时 Service Key 默认配额
+var fallbackDefaultServiceKey = LayerLimits{RPM: 120, MaxConcurrency: 20}
+
+// FallbackDefaultUser returns the default user LayerLimits used when no snapshot is available.
+func FallbackDefaultUser() LayerLimits { return fallbackDefaultUser }
+
+// FallbackDefaultServiceKey returns the default service-key LayerLimits used when no snapshot is available.
+func FallbackDefaultServiceKey() LayerLimits { return fallbackDefaultServiceKey }

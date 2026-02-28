@@ -40,13 +40,13 @@ func (l *ConfigLoader) Load(ctx context.Context) error {
 		slog.Debug("quota: debounce skip, loaded recently")
 		return nil
 	}
-	l.lastLoadAt.Store(now)
 
 	if l.rdb == nil {
 		return fmt.Errorf("redis client is nil")
 	}
 	raw, err := l.rdb.Get(ctx, QuotaSnapshotKey).Result()
 	if err != nil {
+		// 失败时不消耗防抖窗口，下次调用可以立即重试
 		if err == redis.Nil {
 			slog.Debug("quota: no snapshot in redis, using fallback")
 			return nil
@@ -59,16 +59,19 @@ func (l *ConfigLoader) Load(ctx context.Context) error {
 		return fmt.Errorf("unmarshal quota snapshot: %w", err)
 	}
 
+	// 成功后再更新 lastLoadAt，确保失败不消耗防抖窗口
+	l.lastLoadAt.Store(now)
+
 	l.holder.Set(&snap)
 	slog.Debug("quota: snapshot loaded", "version", snap.Version)
 	return nil
 }
 
-// StartPolling 后台 reconcile 轮询（30s 间隔）。
-func (l *ConfigLoader) StartPolling(interval time.Duration) {
+// StartPolling 后台 reconcile 轮询（接受 context 控制 goroutine 生命周期）。
+func (l *ConfigLoader) StartPolling(ctx context.Context, interval time.Duration) {
 	// 初始加载
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := l.Load(ctx); err != nil {
+	loadCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	if err := l.Load(loadCtx); err != nil {
 		slog.Warn("quota: initial snapshot load failed, using fallback", "error", err)
 	}
 	cancel()
@@ -76,45 +79,71 @@ func (l *ConfigLoader) StartPolling(interval time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		for range ticker.C {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if err := l.Load(ctx); err != nil {
-				slog.Debug("quota: reconcile load failed", "error", err)
+		for {
+			select {
+			case <-ctx.Done():
+				slog.Info("quota: polling stopped")
+				return
+			case <-ticker.C:
+				loadCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				if err := l.Load(loadCtx); err != nil {
+					slog.Debug("quota: reconcile load failed", "error", err)
+				}
+				cancel()
 			}
-			cancel()
 		}
 	}()
 }
 
 // SubscribeToChanges 订阅 Redis config:change 通道，收到 quota_snapshot_updated
 // 事件时立即调用 Load 刷新配额快照，使变更在 1 秒内生效（替代等待 30s 轮询）。
+// 内置重连循环：Pub/Sub 断线时自动重连。
 func (l *ConfigLoader) SubscribeToChanges(ctx context.Context) {
 	go func() {
-		pubsub := l.rdb.Subscribe(ctx, infra.ConfigChangeChannel)
-		defer pubsub.Close()
-
-		slog.Info("quota: config change subscriber started", "channel", infra.ConfigChangeChannel)
-
-		ch := pubsub.Channel()
 		for {
 			select {
 			case <-ctx.Done():
 				slog.Info("quota: config change subscriber stopped")
 				return
-			case msg, ok := <-ch:
-				if !ok {
+			default:
+			}
+
+			pubsub := l.rdb.Subscribe(ctx, infra.ConfigChangeChannel)
+			slog.Info("quota: config change subscriber started", "channel", infra.ConfigChangeChannel)
+
+			ch := pubsub.Channel()
+		recvLoop:
+			for {
+				select {
+				case <-ctx.Done():
+					pubsub.Close()
+					slog.Info("quota: config change subscriber stopped")
 					return
+				case msg, ok := <-ch:
+					if !ok {
+						// channel 关闭（断线），退出内层循环触发重连
+						pubsub.Close()
+						break recvLoop
+					}
+					// 只响应 quota_snapshot_updated 事件，忽略其他 config:change 消息
+					if !strings.Contains(msg.Payload, "quota_snapshot_updated") {
+						continue
+					}
+					slog.Debug("quota: snapshot update event received, reloading", "payload", msg.Payload)
+					loadCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+					if err := l.Load(loadCtx); err != nil {
+						slog.Warn("quota: pub/sub triggered load failed", "error", err)
+					}
+					cancel()
 				}
-				// 只响应 quota_snapshot_updated 事件，忽略其他 config:change 消息
-				if !strings.Contains(msg.Payload, "quota_snapshot_updated") {
-					continue
-				}
-				slog.Debug("quota: snapshot update event received, reloading", "payload", msg.Payload)
-				loadCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				if err := l.Load(loadCtx); err != nil {
-					slog.Warn("quota: pub/sub triggered load failed", "error", err)
-				}
-				cancel()
+			}
+
+			// 重连前等待 1 秒，避免快速重连循环
+			slog.Warn("quota: pub/sub disconnected, reconnecting in 1s")
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(1 * time.Second):
 			}
 		}
 	}()

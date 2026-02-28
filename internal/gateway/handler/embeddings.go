@@ -81,6 +81,9 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 		}
 	}
 
+	// 记录路由选定的模型 ID，用于模型层配额检查。
+	routedModelID := req.Model
+
 	if h.groupDispatch != nil {
 		decision, err := h.groupDispatch.Dispatch(c, req.Model, nil)
 		if err != nil {
@@ -96,16 +99,20 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 			if decision.ProviderName != "" {
 				req.Provider = decision.ProviderName
 			}
+			routedModelID = decision.ModelID
 		}
 	}
 
 	// v0.15: 模型层配额检查（路由选定具体 model 之后、转发上游之前）
+	// 使用 routed_model_id（UUID）而非 model name，确保配额配置与路由表一致。
 	if h.quotaGate != nil {
 		subjectType, _ := c.Get("quota_subject_type")
 		subjectID, _ := c.Get("quota_subject_id")
-		if subjectType != nil && subjectID != nil {
-			if err := h.quotaGate.BeforeUpstream(c, subjectType.(string), subjectID.(string), req.Model); err != nil {
-				return // 已在 middleware 中写入 429 响应
+		if st, ok := subjectType.(string); ok {
+			if si, ok := subjectID.(string); ok {
+				if err := h.quotaGate.BeforeUpstream(c, st, si, routedModelID); err != nil {
+					return // 已在 middleware 中写入 429 响应
+				}
 			}
 		}
 	}

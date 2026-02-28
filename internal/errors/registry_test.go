@@ -8,7 +8,7 @@ import (
 // TestAllCodesHaveValidType ensures every registered error code has a
 // non-empty ErrorType.
 func TestAllCodesHaveValidType(t *testing.T) {
-	for code, ec := range Registry {
+	for code, ec := range registry {
 		if ec.Type == "" {
 			t.Errorf("error code %q has empty Type", code)
 		}
@@ -18,7 +18,7 @@ func TestAllCodesHaveValidType(t *testing.T) {
 // TestAllCodesHaveValidHTTPStatus ensures every registered error code has a
 // recognizable HTTP status code (4xx or 5xx).
 func TestAllCodesHaveValidHTTPStatus(t *testing.T) {
-	for code, ec := range Registry {
+	for code, ec := range registry {
 		if ec.HTTPStatus < 400 || ec.HTTPStatus >= 600 {
 			t.Errorf("error code %q has unexpected HTTPStatus %d (expected 4xx or 5xx)", code, ec.HTTPStatus)
 		}
@@ -43,7 +43,7 @@ func TestTypeStatusCorrespondence(t *testing.T) {
 	// so they share the same range.
 	apiErrorRange := [2]int{500, 599}
 
-	for code, ec := range Registry {
+	for code, ec := range registry {
 		// Upstream/provider errors may use any 4xx/5xx status since they
 		// proxy the upstream's error code.
 		if isUpstreamCode(code) {
@@ -73,7 +73,7 @@ func TestTypeStatusCorrespondence(t *testing.T) {
 // TestFallbackCodesHaveReasonableStatus ensures that codes marked as Fallback
 // have an HTTP status that makes sense for a retryable error.
 func TestFallbackCodesHaveReasonableStatus(t *testing.T) {
-	for code, ec := range Registry {
+	for code, ec := range registry {
 		if !ec.Fallback {
 			continue
 		}
@@ -93,7 +93,7 @@ func TestFallbackCodesAreMarkedCorrectly(t *testing.T) {
 		"context_window_exceeded":  true,
 	}
 
-	for code, ec := range Registry {
+	for code, ec := range registry {
 		expected, exists := expectedFallback[code]
 		if !exists {
 			if ec.Fallback {
@@ -107,10 +107,10 @@ func TestFallbackCodesAreMarkedCorrectly(t *testing.T) {
 	}
 }
 
-// TestNoDuplicateCodes ensures the Registry has no duplicate Code values.
+// TestNoDuplicateCodes ensures the registry has no duplicate Code values.
 func TestNoDuplicateCodes(t *testing.T) {
 	seen := make(map[string]string) // Code -> first key
-	for key, ec := range Registry {
+	for key, ec := range registry {
 		if firstKey, exists := seen[ec.Code]; exists {
 			t.Errorf("duplicate Code %q: keys %q and %q", ec.Code, firstKey, key)
 		}
@@ -121,16 +121,16 @@ func TestNoDuplicateCodes(t *testing.T) {
 // TestAllCodesHaveMessage ensures every registered error code has a non-empty
 // default message.
 func TestAllCodesHaveMessage(t *testing.T) {
-	for code, ec := range Registry {
+	for code, ec := range registry {
 		if ec.Message == "" {
 			t.Errorf("error code %q has empty Message", code)
 		}
 	}
 }
 
-// TestAllCodesMatchRegistryKey ensures the Code field matches the registry key.
-func TestAllCodesMatchRegistryKey(t *testing.T) {
-	for key, ec := range Registry {
+// TestAllCodesMatchregistryKey ensures the Code field matches the registry key.
+func TestAllCodesMatchregistryKey(t *testing.T) {
+	for key, ec := range registry {
 		if key != ec.Code {
 			t.Errorf("registry key %q does not match Code field %q", key, ec.Code)
 		}
@@ -140,8 +140,8 @@ func TestAllCodesMatchRegistryKey(t *testing.T) {
 // TestRegistrySize verifies the expected number of error codes.
 func TestRegistrySize(t *testing.T) {
 	expected := 26
-	if len(Registry) != expected {
-		t.Errorf("Registry has %d codes, expected %d", len(Registry), expected)
+	if len(registry) != expected {
+		t.Errorf("registry has %d codes, expected %d", len(registry), expected)
 	}
 }
 
@@ -149,7 +149,7 @@ func TestRegistrySize(t *testing.T) {
 // Upstream provider rate limit codes are excluded: they use 502 because
 // the gateway proxies the error upstream.
 func TestRateLimitCodesHave429(t *testing.T) {
-	for code, ec := range Registry {
+	for code, ec := range registry {
 		if isUpstreamCode(code) {
 			continue
 		}
@@ -162,7 +162,7 @@ func TestRateLimitCodesHave429(t *testing.T) {
 // TestAuthenticationCodesHave401 ensures authentication codes return HTTP 401
 // or 403 (for permission denied). Upstream provider auth codes are excluded.
 func TestAuthenticationCodesHave401(t *testing.T) {
-	for code, ec := range Registry {
+	for code, ec := range registry {
 		if isUpstreamCode(code) {
 			continue
 		}
@@ -191,7 +191,7 @@ func isUpstreamCode(code string) bool {
 }
 
 // TestBuiltinCodesExist verifies that the most critical error codes are
-// present in the Registry.
+// present in the registry.
 func TestBuiltinCodesExist(t *testing.T) {
 	required := []string{
 		"request_missing_model",
@@ -223,8 +223,8 @@ func TestBuiltinCodesExist(t *testing.T) {
 	}
 
 	for _, code := range required {
-		if _, ok := Registry[code]; !ok {
-			t.Errorf("required error code %q is missing from Registry", code)
+		if _, ok := registry[code]; !ok {
+			t.Errorf("required error code %q is missing from registry", code)
 		}
 	}
 }

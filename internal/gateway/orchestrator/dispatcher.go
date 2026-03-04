@@ -60,7 +60,7 @@ func (d *ProtocolDispatcher) Chat(c *gin.Context, req *core.ChatRequest) (*core.
 	}
 
 	// 若未走 group routing（没有改变 model），直接返回错误
-	if d.group == nil || req.Model == originalModel {
+	if d.group == nil || !c.GetBool("routed_via_group") {
 		return nil, err
 	}
 
@@ -94,7 +94,7 @@ func (d *ProtocolDispatcher) OpenStream(c *gin.Context, req *core.ChatRequest) (
 		return stream, nil
 	}
 
-	if d.group == nil || req.Model == originalModel {
+	if d.group == nil || !c.GetBool("routed_via_group") {
 		return nil, err
 	}
 

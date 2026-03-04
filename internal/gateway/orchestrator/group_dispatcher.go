@@ -13,9 +13,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// maxFailoverRounds 最大 failover 轮次（不含 primary）。
-// 例如值为 3 时，primary + 最多 3 次 failover = 最多 4 次上游调用。
-const maxFailoverRounds = 3
+// maxFailoverRounds 已移除。failover 轮次由 triedIDs 自然收束：
+// 每轮失败的模型加入排除列表，全部模型试过后 FailoverExcluding 返回 ErrNoOtherModel。
 
 type GroupAwareDispatcher struct {
 	scheduler    Scheduler
@@ -95,10 +94,6 @@ func (d *GroupAwareDispatcher) HandleFailover(c *gin.Context, groupName, failedM
 	if dc != nil {
 		rounds = dc.FailoverRounds
 		triedIDs = dc.TriedModelIDs
-	}
-
-	if rounds >= maxFailoverRounds {
-		return nil, model.ErrNoOtherModelAvailable
 	}
 
 	// 将本轮失败的模型加入已尝试列表（去重）

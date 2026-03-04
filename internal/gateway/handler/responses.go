@@ -146,7 +146,7 @@ func (h *ResponsesHandler) handleNonStream(c *gin.Context, baseCtx context.Conte
 	}
 
 	// failover（仅在通过 group routing 时尝试）
-	if h.groupDispatch != nil && req.Model != originalModel {
+	if h.groupDispatch != nil && c.GetBool("routed_via_group") {
 		failedID := req.Model
 		if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
 			failedID = dc.RoutedModelID
@@ -193,7 +193,7 @@ func (h *ResponsesHandler) handleStream(c *gin.Context, baseCtx context.Context,
 
 	if err != nil {
 		// failover（仅在通过 group routing 时尝试）
-		if h.groupDispatch != nil && req.Model != originalModel {
+		if h.groupDispatch != nil && c.GetBool("routed_via_group") {
 			failedID := req.Model
 			if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
 				failedID = dc.RoutedModelID

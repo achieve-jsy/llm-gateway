@@ -375,8 +375,7 @@
           stripe
           size="small"
           :empty-text="'暂无部门预算数据'"
-          :row-class-name="({ row }: { row: StudioDeptRow }) =>
-            row.maxRatio >= 1 ? 'row-danger' : row.maxRatio >= 0.8 ? 'row-warning' : ''"
+          :row-class-name="deptRowClassName"
         >
           <!-- 部门名 + 整体状态 -->
           <el-table-column label="部门" min-width="160">
@@ -1842,6 +1841,10 @@ const deptMemberDrawerVisible = ref(false)
 const deptMemberDrawerDept = ref<StudioDeptRow | null>(null)
 const deptMemberDrawerLoading = ref(false)
 const deptMemberDrawerMembers = ref<BudgetItem[]>([])
+
+function deptRowClassName({ row }: { row: StudioDeptRow }): string {
+  return row.maxRatio >= 1 ? 'row-danger' : row.maxRatio >= 0.8 ? 'row-warning' : ''
+}
 
 async function openDeptMemberDrawer(deptRow: StudioDeptRow) {
   deptMemberDrawerDept.value = deptRow

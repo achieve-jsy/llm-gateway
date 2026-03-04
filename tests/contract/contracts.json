@@ -75,5 +75,137 @@
         "response_row_fields_ref": "log_row_fields"
       }
     ]
+  },
+  "quota": {
+    "base_prefix": "/api/v1",
+    "auth": {
+      "admin": "Bearer <jwt>",
+      "jwt": "Bearer <jwt>"
+    },
+    "quota_effective_fields": [
+      "rpm", "max_concurrency", "source", "subject_type", "subject_id",
+      "default_rpm", "default_max_concurrency"
+    ],
+    "source_enum": ["default_user", "default_service_key", "override", "unset"],
+    "routes": [
+      {
+        "method": "PATCH",
+        "path": "/api/v1/users/:id/quota",
+        "auth": "admin (quota:user:set)",
+        "handler": "QuotaHandler.SetUserQuota",
+        "request_body": {
+          "rpm": "int | null (0=unlimited, null=inherit default)",
+          "max_concurrency": "int | null (0=unlimited, null=inherit default)"
+        },
+        "response_status": [200, 400, 500],
+        "response_fields": ["code", "message"]
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/users/:id/quota",
+        "auth": "admin (quota:user:set)",
+        "handler": "QuotaHandler.GetUserQuota",
+        "response_status": [200, 404],
+        "response_fields_ref": "quota_effective_fields"
+      },
+      {
+        "method": "PATCH",
+        "path": "/api/v1/keys/:id/quota",
+        "auth": "admin (quota:service_key:set)",
+        "handler": "QuotaHandler.SetServiceKeyQuota",
+        "request_body": {
+          "rpm": "int | null",
+          "max_concurrency": "int | null"
+        },
+        "response_status": [200, 400, 500],
+        "response_fields": ["code", "message"]
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/keys/:id/quota",
+        "auth": "admin (quota:service_key:set)",
+        "handler": "QuotaHandler.GetServiceKeyQuota",
+        "response_status": [200, 404],
+        "response_fields_ref": "quota_effective_fields"
+      },
+      {
+        "method": "PATCH",
+        "path": "/api/v1/groups/:id/quota",
+        "auth": "admin (quota:group:set)",
+        "handler": "QuotaHandler.SetGroupQuota",
+        "request_body": {
+          "rpm": "int | null",
+          "max_concurrency": "int | null"
+        },
+        "response_status": [200, 400, 500],
+        "response_fields": ["code", "message"]
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/groups/:id/quota",
+        "auth": "admin (quota:group:set)",
+        "handler": "QuotaHandler.GetGroupQuota",
+        "response_status": [200, 404],
+        "response_fields_ref": "quota_effective_fields"
+      },
+      {
+        "method": "PATCH",
+        "path": "/api/v1/models/:id/quota",
+        "auth": "admin (quota:model:set)",
+        "handler": "QuotaHandler.SetModelQuota",
+        "request_body": {
+          "rpm": "int | null",
+          "max_concurrency": "int | null"
+        },
+        "response_status": [200, 400, 500],
+        "response_fields": ["code", "message"]
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/models/:id/quota",
+        "auth": "admin (quota:model:set)",
+        "handler": "QuotaHandler.GetModelQuota",
+        "response_status": [200, 404],
+        "response_fields_ref": "quota_effective_fields"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/me/quota",
+        "auth": "jwt",
+        "handler": "QuotaHandler.GetMyQuota",
+        "response_status": [200, 401, 500],
+        "response_fields_ref": "quota_effective_fields"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/quota/exemptions",
+        "auth": "admin (quota:default:set)",
+        "handler": "QuotaExemptionHandler.Create",
+        "request_body": {
+          "subject_type": "user | service_key",
+          "subject_id": "string (required)",
+          "reason": "string (optional)",
+          "expires_at": "RFC3339 timestamp (required)"
+        },
+        "response_status": [201, 400],
+        "response_fields": ["code", "data"]
+      },
+      {
+        "method": "DELETE",
+        "path": "/api/v1/quota/exemptions/:id",
+        "auth": "admin (quota:default:set)",
+        "handler": "QuotaExemptionHandler.Revoke",
+        "response_status": [200, 404],
+        "response_fields": ["code", "message"]
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/quota/exemptions",
+        "auth": "admin (quota:view:scoped)",
+        "handler": "QuotaExemptionHandler.List",
+        "response_status": [200, 500],
+        "response_fields": ["code", "data"]
+      }
+    ]
   }
 }

@@ -36,6 +36,11 @@ const (
 	SettingKeyStudioRPM = "studio_rpm"
 	SettingKeyDeptRPM   = "dept_rpm"
 	SettingKeyKeyRPM    = "key_rpm"
+	// v0.15 四层配额体系（双主体默认）
+	SettingKeyDefaultUserRPM            = "quota_default_user_rpm"
+	SettingKeyDefaultUserMaxConcurrency = "quota_default_user_max_concurrency"
+	SettingKeyDefaultServiceKeyRPM            = "quota_default_service_key_rpm"
+	SettingKeyDefaultServiceKeyMaxConcurrency = "quota_default_service_key_max_concurrency"
 
 	// Key 活动提醒（后台离线扫描，不碰 gateway 热路径）
 	SettingKeyKeyActivityEnabled         = "key_activity.enabled"
@@ -62,6 +67,11 @@ const (
 const (
 	defaultRateLimitPerMin              = 60
 	defaultMaxConcurrencyPerKey         = 10
+	// v0.15 四层配额默认
+	defaultUserRPM                      = 60
+	defaultUserMaxConcurrency           = 10
+	defaultServiceKeyRPM                = 120
+	defaultServiceKeyMaxConcurrency     = 20
 	defaultOIDCScopes                   = "openid profile email"
 	defaultWebhookEvents                = "health_check_failed"
 	defaultMaxSwitches                  = 2
@@ -107,8 +117,10 @@ func allSettingKeys() []string {
 		SettingKeyDefaultMaxSwitches, SettingKeyDefaultSameModelRetries, SettingKeyDefaultFailoverCooldown,
 		SettingKeySupplierName,
 		SettingKeyPricingUsdToCnyRate,
-		SettingKeyGlobalRPM, SettingKeyStudioRPM, SettingKeyDeptRPM, SettingKeyKeyRPM,
-		SettingKeyKeyActivityEnabled, SettingKeyKeyActivityScanIntervalSec,
+	SettingKeyGlobalRPM, SettingKeyStudioRPM, SettingKeyDeptRPM, SettingKeyKeyRPM,
+		SettingKeyDefaultUserRPM, SettingKeyDefaultUserMaxConcurrency,
+		SettingKeyDefaultServiceKeyRPM, SettingKeyDefaultServiceKeyMaxConcurrency,
+	SettingKeyKeyActivityEnabled, SettingKeyKeyActivityScanIntervalSec,
 		SettingKeyKeyActivityIPAsSource, SettingKeyKeyActivityDormantDays,
 		SettingKeyKeyActivityEWMAAlpha, SettingKeyKeyActivityEWMAK,
 		SettingKeyKeyActivityMinBaseline, SettingKeyKeyActivityMinDev,
@@ -133,8 +145,13 @@ func (s *SettingsService) ensureDefaults() {
 		SettingKeyDefaultSameModelRetries:   fmt.Sprintf("%d", defaultSameModelRetries),
 		SettingKeyDefaultFailoverCooldown:   fmt.Sprintf("%d", defaultFailoverCooldownSeconds),
 		SettingKeySupplierName:              defaultSupplierName,
-		SettingKeyPricingUsdToCnyRate:       fmt.Sprintf("%f", defaultPricingUsdToCnyRate),
-		SettingKeyKeyActivityEnabled:         fmt.Sprintf("%t", defaultKAEnabled),
+	SettingKeyPricingUsdToCnyRate:       fmt.Sprintf("%f", defaultPricingUsdToCnyRate),
+		// v0.15 四层配额默认
+		SettingKeyDefaultUserRPM:            fmt.Sprintf("%d", defaultUserRPM),
+		SettingKeyDefaultUserMaxConcurrency: fmt.Sprintf("%d", defaultUserMaxConcurrency),
+		SettingKeyDefaultServiceKeyRPM:            fmt.Sprintf("%d", defaultServiceKeyRPM),
+		SettingKeyDefaultServiceKeyMaxConcurrency: fmt.Sprintf("%d", defaultServiceKeyMaxConcurrency),
+	SettingKeyKeyActivityEnabled:         fmt.Sprintf("%t", defaultKAEnabled),
 		SettingKeyKeyActivityScanIntervalSec: fmt.Sprintf("%d", defaultKAScanIntervalSec),
 		SettingKeyKeyActivityIPAsSource:      fmt.Sprintf("%t", defaultKAIPAsSource),
 		SettingKeyKeyActivityDormantDays:     fmt.Sprintf("%d", defaultKADormantDays),
@@ -188,8 +205,12 @@ func (s *SettingsService) GetSystemSettings(ctx context.Context) (*model.SystemS
 		GlobalRPM: intOrDefault(vals, SettingKeyGlobalRPM, 0),
 		StudioRPM: intOrDefault(vals, SettingKeyStudioRPM, 0),
 		DeptRPM:   intOrDefault(vals, SettingKeyDeptRPM, 0),
-		KeyRPM:    intOrDefault(vals, SettingKeyKeyRPM, 0),
-		EmailEnabled:      boolOrDefault(vals, SettingKeyEmailEnabled, false),
+	KeyRPM:    intOrDefault(vals, SettingKeyKeyRPM, 0),
+		DefaultUserRPM:                      intOrDefault(vals, SettingKeyDefaultUserRPM, defaultUserRPM),
+		DefaultUserMaxConcurrency:           intOrDefault(vals, SettingKeyDefaultUserMaxConcurrency, defaultUserMaxConcurrency),
+		DefaultServiceKeyRPM:                intOrDefault(vals, SettingKeyDefaultServiceKeyRPM, defaultServiceKeyRPM),
+		DefaultServiceKeyMaxConcurrency:     intOrDefault(vals, SettingKeyDefaultServiceKeyMaxConcurrency, defaultServiceKeyMaxConcurrency),
+	EmailEnabled:      boolOrDefault(vals, SettingKeyEmailEnabled, false),
 		SMTPHost:          valOrDefault(vals, SettingKeySMTPHost, ""),
 		SMTPPort:          intOrDefault(vals, SettingKeySMTPPort, 587),
 		SMTPFrom:          valOrDefault(vals, SettingKeySMTPFrom, ""),
@@ -212,7 +233,9 @@ func (s *SettingsService) GetPublicSettings(ctx context.Context) (*model.PublicS
 		SettingKeyRateLimitPerMin, SettingKeyMaxConcurrencyPerKey,
 		SettingKeySupplierName,
 		SettingKeyPricingUsdToCnyRate,
-		SettingKeyGlobalRPM, SettingKeyStudioRPM, SettingKeyDeptRPM, SettingKeyKeyRPM,
+	SettingKeyGlobalRPM, SettingKeyStudioRPM, SettingKeyDeptRPM, SettingKeyKeyRPM,
+		SettingKeyDefaultUserRPM, SettingKeyDefaultUserMaxConcurrency,
+		SettingKeyDefaultServiceKeyRPM, SettingKeyDefaultServiceKeyMaxConcurrency,
 	})
 	if err != nil {
 		return nil, err
@@ -229,7 +252,11 @@ func (s *SettingsService) GetPublicSettings(ctx context.Context) (*model.PublicS
 		GlobalRPM:             intOrDefault(vals, SettingKeyGlobalRPM, 0),
 		StudioRPM:             intOrDefault(vals, SettingKeyStudioRPM, 0),
 		DeptRPM:               intOrDefault(vals, SettingKeyDeptRPM, 0),
-		KeyRPM:                intOrDefault(vals, SettingKeyKeyRPM, 0),
+	KeyRPM:                intOrDefault(vals, SettingKeyKeyRPM, 0),
+		DefaultUserRPM:                      intOrDefault(vals, SettingKeyDefaultUserRPM, defaultUserRPM),
+		DefaultUserMaxConcurrency:           intOrDefault(vals, SettingKeyDefaultUserMaxConcurrency, defaultUserMaxConcurrency),
+		DefaultServiceKeyRPM:                intOrDefault(vals, SettingKeyDefaultServiceKeyRPM, defaultServiceKeyRPM),
+		DefaultServiceKeyMaxConcurrency:     intOrDefault(vals, SettingKeyDefaultServiceKeyMaxConcurrency, defaultServiceKeyMaxConcurrency),
 	}, nil
 }
 
@@ -279,6 +306,11 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, settings *model.Sy
 	updates[SettingKeyStudioRPM] = fmt.Sprintf("%d", settings.StudioRPM)
 	updates[SettingKeyDeptRPM] = fmt.Sprintf("%d", settings.DeptRPM)
 	updates[SettingKeyKeyRPM] = fmt.Sprintf("%d", settings.KeyRPM)
+	// v0.15 四层配额：双主体默认，0 = 不限，始终写入
+	updates[SettingKeyDefaultUserRPM] = fmt.Sprintf("%d", settings.DefaultUserRPM)
+	updates[SettingKeyDefaultUserMaxConcurrency] = fmt.Sprintf("%d", settings.DefaultUserMaxConcurrency)
+	updates[SettingKeyDefaultServiceKeyRPM] = fmt.Sprintf("%d", settings.DefaultServiceKeyRPM)
+	updates[SettingKeyDefaultServiceKeyMaxConcurrency] = fmt.Sprintf("%d", settings.DefaultServiceKeyMaxConcurrency)
 	// 邮件通知
 	updates[SettingKeyEmailEnabled] = fmt.Sprintf("%t", settings.EmailEnabled)
 	if settings.SMTPHost != "" {

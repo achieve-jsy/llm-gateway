@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	cpcron "github.com/example/llm-gateway/internal/controlplane/cron"
 	authrepo "github.com/example/llm-gateway/internal/auth/repository"
 	"github.com/example/llm-gateway/internal/controlplane/auth"
 	cpconfig "github.com/example/llm-gateway/internal/controlplane/config"
@@ -733,9 +734,55 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	// 员工自助查询预算（JWTAuth 即可，不需要 admin）
 	r.GET("/api/v1/my/budget", middleware.JWTAuth(), budgetHandler.MyBudget)
 
-	// WebSocket 端点（浏览器 WS 不支持 Authorization header，由 handler 内部验证）
+// WebSocket 端点（浏览器 WS 不支持 Authorization header，由 handler 内部验证）
 	wsHandler := handler.NewOpsWSHandler(rdb)
 	r.GET("/api/v1/ops/ws/qps", wsHandler.HandleQPSWebSocket)
+
+	// v0.15 四层配额体系
+	quotaSvc := service.NewQuotaService(db, rdb)
+	quotaHandler := handler.NewQuotaHandler(quotaSvc)
+	quotaHandler.SetAuditRecorder(auditSvc)
+	// 用户配额（管理员设置，ScopeManage = dept_admin/studio_admin/admin 按管辖范围）
+	adminGroup.PATCH("/users/:id/quota", guard(rbac.PermQuotaUserSet), quotaHandler.SetUserQuota)
+	adminGroup.GET("/users/:id/quota", guard(rbac.PermQuotaUserSet), quotaHandler.GetUserQuota)
+	// Service Key 配额
+	adminGroup.PATCH("/keys/:id/quota", guard(rbac.PermQuotaServiceKeySet), quotaHandler.SetServiceKeyQuota)
+	adminGroup.GET("/keys/:id/quota", guard(rbac.PermQuotaServiceKeySet), quotaHandler.GetServiceKeyQuota)
+	// 模型组配额（仅 admin）
+	adminGroup.PATCH("/groups/:id/quota", guard(rbac.PermQuotaGroupSet), quotaHandler.SetGroupQuota)
+	adminGroup.GET("/groups/:id/quota", guard(rbac.PermQuotaGroupSet), quotaHandler.GetGroupQuota)
+	// 模型配额（仅 admin）
+	adminGroup.PATCH("/models/:id/quota", guard(rbac.PermQuotaModelSet), quotaHandler.SetModelQuota)
+	adminGroup.GET("/models/:id/quota", guard(rbac.PermQuotaModelSet), quotaHandler.GetModelQuota)
+	// 我的配额（所有登录用户只读）
+	r.GET("/api/v1/me/quota", middleware.JWTAuth(), quotaHandler.GetMyQuota)
+	// 紧急豁免（admin only）
+	quotaExemptionSvc := service.NewQuotaExemptionService(db, rdb)
+	quotaExemptionHandler := handler.NewQuotaExemptionHandler(quotaExemptionSvc)
+	quotaExemptionHandler.SetAuditRecorder(auditSvc)
+	adminGroup.POST("/quota/exemptions", guard(rbac.PermQuotaDefaultSet), quotaExemptionHandler.Create)
+	adminGroup.DELETE("/quota/exemptions/:id", guard(rbac.PermQuotaDefaultSet), quotaExemptionHandler.Revoke)
+	adminGroup.GET("/quota/exemptions", guard(rbac.PermQuotaViewScoped), quotaExemptionHandler.List)
+	// 过期豁免清理定时任务（每小时一次）
+	exemptionCleanupCron := cpcron.NewExemptionCleanupCron(quotaExemptionSvc)
+	exemptionCleanupCron.Start(context.Background())
+	go func() {
+		if count, err := exemptionCleanupCron.RunOnce(context.Background()); err != nil {
+			slog.Warn("exemption cleanup: initial run failed", "error", err)
+		} else if count > 0 {
+			slog.Info("exemption cleanup: initial run completed", "cleaned", count)
+		}
+	}()
+
+	// 内部 snapshot（gateway 拉取）
+	internalGroup.GET("/quota/snapshot", func(c *gin.Context) {
+		snap, err := quotaSvc.GetQuotaSnapshot(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, snap)
+	})
 
 	// 管理接口（JWTAuth 已在 adminGroup 上）
 	orgGroup := adminGroup.Group("/org")

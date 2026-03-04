@@ -153,8 +153,22 @@
         </template>
       </el-table-column>
 
+      <el-table-column label="配额" width="180">
+        <template #default="{ row }">
+          <span v-if="quotaMap[row.id]" class="quota-cell">
+            <template v-if="quotaMap[row.id]!.source === 'override'">
+              {{ quotaMap[row.id]!.rpm === 0 ? '不限' : quotaMap[row.id]!.rpm }} RPM /
+              {{ quotaMap[row.id]!.max_concurrency === 0 ? '不限' : quotaMap[row.id]!.max_concurrency }} 并发
+            </template>
+            <span v-else class="text-placeholder">继承默认</span>
+          </span>
+          <span v-else class="text-placeholder">—</span>
+        </template>
+      </el-table-column>
+
       <el-table-column label="操作" width="120" align="center" fixed="right">
         <template #default="{ row }">
+          <el-button type="primary" link size="small" @click="openQuotaDialog(row)">配额</el-button>
           <el-popconfirm
             title="确定吊销此 Service Key？吊销后不可恢复"
             confirm-button-text="吊销"
@@ -429,6 +443,17 @@
         <el-button type="primary" class="brand-btn" :loading="ipSaving" @click="saveIPAllowlist">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 配额编辑对话框 -->
+    <QuotaEditDialog
+      v-model:visible="quotaDialogVisible"
+      subject-type="service_key"
+      :subject-id="quotaSubjectId"
+      :subject-label="quotaSubjectLabel"
+      :default-rpm="QUOTA_DEFAULTS.service_key.rpm"
+      :default-concurrency="QUOTA_DEFAULTS.service_key.max_concurrency"
+      @saved="onQuotaSaved"
+    />
   </div>
 </template>
 
@@ -437,6 +462,9 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, InfoFilled, DocumentCopy, Edit } from '@element-plus/icons-vue'
 import { updateServiceKeyIPAllowlist } from '@/services/audit'
+import QuotaEditDialog from '@/components/QuotaEditDialog.vue'
+import { QUOTA_DEFAULTS, getServiceKeyQuota } from '@/api/quota'
+import type { QuotaEffective } from '@/api/quota'
 
 import {
   listServiceKeys,
@@ -554,6 +582,42 @@ const ipSaving = ref(false)
 // 创建对话框里的 IP 输入临时值
 const ipCreateInput = ref('')
 
+// ── 配额编辑 ──────────────────────────────────────────────
+const quotaDialogVisible = ref(false)
+const quotaSubjectId = ref('')
+const quotaSubjectLabel = ref('')
+const quotaMap = ref<Record<string, QuotaEffective>>({})
+
+function openQuotaDialog(row: ServiceKeyItem) {
+  quotaSubjectId.value = row.id
+  quotaSubjectLabel.value = `Service Key：${row.name}`
+  quotaDialogVisible.value = true
+}
+
+function onQuotaSaved() {
+  // 配额保存后刷新配额数据
+  if (quotaSubjectId.value) {
+    loadQuotaForKey(quotaSubjectId.value)
+  }
+}
+
+async function loadQuotaForKey(keyId: string) {
+  try {
+    const res = await getServiceKeyQuota(keyId)
+    // 后端响应为 { code:0, data:{...} }，真实对象在 res.data.data
+    const data = (res as any)?.data?.data
+    if (data) {
+      quotaMap.value[keyId] = data
+    }
+  } catch {
+    // 404 or error — leave empty
+  }
+}
+
+async function loadQuotaForKeys(items: ServiceKeyItem[]) {
+  await Promise.all(items.map(item => loadQuotaForKey(item.id)))
+}
+
 function openIPAllowlistDialog(row: ServiceKeyItem) {
   ipEditingKey.value = row
   ipEditList.value = row.ipAllowlist ? [...row.ipAllowlist] : []
@@ -612,6 +676,8 @@ async function loadKeys() {
     const res = await listServiceKeys(filterDeptId.value, currentPage.value, pageSize.value)
     keys.value = res.items
     total.value = res.total
+    // 并行加载配额信息
+    loadQuotaForKeys(res.items)
   } catch (e: any) {
     loadError.value = e?.response?.data?.error?.message || e?.message || '未知错误'
     keys.value = []
@@ -1230,4 +1296,5 @@ html.dark .key-reveal-card {
   color: var(--el-color-success);
   margin-bottom: 8px;
 }
+
 </style>

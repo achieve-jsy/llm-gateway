@@ -105,6 +105,10 @@ func (h *AuthHandler) DevLogin(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": gin.H{"type": "authentication_error", "message": "dev login not available", "code": "forbidden"}})
 		return
 	}
+	if h.users == nil || h.token == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"type": "service_unavailable", "message": "auth dependencies unavailable", "code": "service_unavailable"}})
+		return
+	}
 	devUser, err := h.dev.FindByUsername(req.Username)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "invalid credentials"})
@@ -114,10 +118,17 @@ func (h *AuthHandler) DevLogin(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "invalid credentials"})
 		return
 	}
-	access, refresh, err := h.token.SignTokenPair(devUser.ID.String(), devUser.Role)
+	// Upsert a corresponding row in the users table so that downstream
+	// handlers (e.g. GetMyQuota) can look up the user by JWT user_id.
+	user, err := h.users.UpsertUserAndDept(devUser.Username, devUser.Username, devUser.Username+"@dev.local", devUser.Role, "", "")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "sign failed", "code": "internal"}})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "failed to create user session", "code": "internal_error"}})
 		return
 	}
-	c.JSON(http.StatusOK, dto.LoginResponse{AccessToken: access, RefreshToken: refresh, User: dto.UserInfo{ID: devUser.ID.String(), Name: devUser.Username}, Role: devUser.Role})
+	access, refresh, err := h.token.SignTokenPair(user.ID.String(), user.Role)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "sign failed", "code": "internal_error"}})
+		return
+	}
+	c.JSON(http.StatusOK, dto.LoginResponse{AccessToken: access, RefreshToken: refresh, User: dto.UserInfo{ID: user.ID.String(), Name: devUser.Username}, Role: user.Role})
 }

@@ -42,7 +42,11 @@ Enabled                    *bool      `gorm:"not null;default:true;index:idx_mod
 	CatalogID           *uuid.UUID `gorm:"type:uuid;index:idx_models_catalog_id" json:"catalog_id,omitempty"`
 	CtxOverridden       bool       `gorm:"not null;default:false" json:"ctx_overridden"`
 	MaxOutputOverridden bool       `gorm:"not null;default:false" json:"max_output_overridden"`
-ConsecutiveFailures         int        `gorm:"not null;default:0" json:"consecutive_failures"`
+	// 四层配额体系（Phase 1）
+	// NULL = 不限，运行时按主体独立计数
+	QuotaRPM            *int `gorm:"column:quota_rpm" json:"quota_rpm,omitempty"`
+	QuotaMaxConcurrency *int `gorm:"column:quota_max_concurrency" json:"quota_max_concurrency,omitempty"`
+	ConsecutiveFailures         int        `gorm:"not null;default:0" json:"consecutive_failures"`
 	ConsecutiveRecoverySuccesses int        `gorm:"not null;default:0" json:"consecutive_recovery_successes"`
 	LastCheckError              string     `gorm:"type:varchar(500);default:''" json:"last_check_error"`
 	ResponseTime        int        `gorm:"default:0" json:"response_time"`

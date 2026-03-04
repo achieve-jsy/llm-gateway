@@ -14,6 +14,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
+	"github.com/example/llm-gateway/internal/gateway/quota"
 	"github.com/gin-gonic/gin"
 )
 
@@ -25,6 +26,7 @@ type MessagesHandler struct {
 	orchestrator  ChatOrchestratorInterface
 	groupDispatch *orchestrator.GroupAwareDispatcher
 	budgetDeps    *middleware.BudgetDeps
+	quotaGate     *quota.ModelQuotaGate // v0.15: 模型层配额检查
 }
 
 // NewMessagesHandler creates a MessagesHandler.
@@ -42,21 +44,26 @@ func (h *MessagesHandler) SetBudgetDeps(deps *middleware.BudgetDeps) {
 	h.budgetDeps = deps
 }
 
+// SetModelQuotaGate 注入模型配额检查器（router setup 时调用一次）
+func (h *MessagesHandler) SetModelQuotaGate(gate *quota.ModelQuotaGate) {
+	h.quotaGate = gate
+}
+
 // Handle processes POST /v1/messages requests.
 func (h *MessagesHandler) HandleMessages(c *gin.Context) {
 	var anthReq core.AnthropicMessagesRequest
 	if err := c.ShouldBindJSON(&anthReq); err != nil {
-		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", err.Error())
+		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "invalid_request_body", err.Error())
 		return
 	}
 
 	if anthReq.Model == "" {
-		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "model is required")
+		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "model_required", "model is required")
 		return
 	}
 
 	if len(anthReq.Messages) == 0 {
-		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "messages is required and must not be empty")
+		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "messages_required", "messages is required and must not be empty")
 		return
 	}
 
@@ -78,6 +85,9 @@ func (h *MessagesHandler) HandleMessages(c *gin.Context) {
 
 	originalModel := anthReq.Model
 
+	// 记录路由选定的模型 ID，用于模型层配额检查。
+	routedModelID := anthReq.Model
+
 	// Group dispatch (model group resolution)
 	if h.groupDispatch != nil {
 		decision, err := h.groupDispatch.Dispatch(c, anthReq.Model, req)
@@ -87,6 +97,21 @@ func (h *MessagesHandler) HandleMessages(c *gin.Context) {
 		}
 		if decision != nil {
 			req.Model = decision.ModelName
+			routedModelID = decision.ModelID
+		}
+	}
+
+	// v0.15: 模型层配额检查（路由选定具体 model 之后、转发上游之前）
+	// 使用 routed_model_id（UUID）而非 model name，确保配额配置与路由表一致。
+	if h.quotaGate != nil {
+		subjectType, _ := c.Get("quota_subject_type")
+		subjectID, _ := c.Get("quota_subject_id")
+		if st, ok := subjectType.(string); ok {
+			if si, ok := subjectID.(string); ok {
+				if err := h.quotaGate.BeforeUpstream(c, st, si, routedModelID); err != nil {
+					return // 已在 middleware 中写入 429 响应
+				}
+			}
 		}
 	}
 
@@ -204,6 +229,20 @@ func (h *MessagesHandler) handleNonStream(c *gin.Context, baseCtx context.Contex
 		req.Model = decision.ModelName
 		req.Provider = decision.ProviderName
 		c.Set("failover_used", true)
+
+		// v0.15: failover 模型也需要经过模型层配额检查
+		if h.quotaGate != nil {
+			subjectType, _ := c.Get("quota_subject_type")
+			subjectID, _ := c.Get("quota_subject_id")
+			if st, ok := subjectType.(string); ok {
+				if si, ok := subjectID.(string); ok {
+					if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelID); err != nil {
+						return // BeforeUpstream 已写入 429 响应
+					}
+				}
+			}
+		}
+
 		slog.Info("messages failover: switching",
 			"request_id", c.GetString("request_id"),
 			"group", originalModel,
@@ -283,6 +322,20 @@ func (h *MessagesHandler) handleStream(c *gin.Context, baseCtx context.Context, 
 		req.Model = decision.ModelName
 		req.Provider = decision.ProviderName
 		c.Set("failover_used", true)
+
+		// v0.15: failover 模型也需要经过模型层配额检查
+		if h.quotaGate != nil {
+			subjectType, _ := c.Get("quota_subject_type")
+			subjectID, _ := c.Get("quota_subject_id")
+			if st, ok := subjectType.(string); ok {
+				if si, ok := subjectID.(string); ok {
+					if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelID); err != nil {
+						return // BeforeUpstream 已写入 429 响应
+					}
+				}
+			}
+		}
+
 		slog.Info("messages failover: switching (stream)",
 			"request_id", c.GetString("request_id"),
 			"group", originalModel,
@@ -304,7 +357,7 @@ func (h *MessagesHandler) handleStream(c *gin.Context, baseCtx context.Context, 
 func (h *MessagesHandler) HandleCountTokens(c *gin.Context) {
 	var anthReq core.AnthropicMessagesRequest
 	if err := c.ShouldBindJSON(&anthReq); err != nil {
-		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", err.Error())
+		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "invalid_request_body", err.Error())
 		return
 	}
 
@@ -340,13 +393,20 @@ func (h *MessagesHandler) HandleCountTokens(c *gin.Context) {
 // ──────────────────────────────────────────────
 
 // respondAnthropicError sends an error in Anthropic format.
-func (h *MessagesHandler) respondAnthropicError(c *gin.Context, httpStatus int, errType string, message string) {
+func (h *MessagesHandler) respondAnthropicError(c *gin.Context, httpStatus int, errType string, code string, message string) {
+	if IsPassthroughMode(c) {
+		writePassthroughError(c, httpStatus, errType, message)
+		return
+	}
 	body := gin.H{
 		"type": "error",
 		"error": gin.H{
 			"type":    errType,
 			"message": message,
 		},
+	}
+	if code != "" {
+		body["error"].(gin.H)["code"] = code
 	}
 	middleware.SetTraceResponseObject(c, body)
 	c.JSON(httpStatus, body)
@@ -355,33 +415,33 @@ func (h *MessagesHandler) respondAnthropicError(c *gin.Context, httpStatus int, 
 // respondAnthropicGroupError handles group dispatch errors.
 func (h *MessagesHandler) respondAnthropicGroupError(c *gin.Context, err error) {
 	if err == model.ErrGroupNotFound {
-		h.respondAnthropicError(c, http.StatusNotFound, "not_found_error", err.Error())
+		h.respondAnthropicError(c, http.StatusNotFound, "not_found_error", "model_group_not_found", err.Error())
 		return
 	}
 	if err == model.ErrNoAvailableModel {
-		h.respondAnthropicError(c, http.StatusServiceUnavailable, "overloaded_error", "No available model for this group")
+		h.respondAnthropicError(c, http.StatusServiceUnavailable, "overloaded_error", "model_unavailable", "No available model for this group")
 		return
 	}
 	if err == model.ErrNoOtherModelAvailable {
-		h.respondAnthropicError(c, http.StatusServiceUnavailable, "overloaded_error", "No other model available for failover")
+		h.respondAnthropicError(c, http.StatusServiceUnavailable, "overloaded_error", "model_unavailable", "No other model available for failover")
 		return
 	}
 	if ue, ok := err.(*model.UnifiedError); ok {
 		anthType := mapAnthropicErrorType(ue.Type)
-		h.respondAnthropicError(c, ue.HTTPStatus, anthType, ue.Message)
+		h.respondAnthropicError(c, ue.HTTPStatus, anthType, ue.Code, ue.Message)
 		return
 	}
-	h.respondAnthropicError(c, http.StatusInternalServerError, "internal_error", err.Error())
+	h.respondAnthropicError(c, http.StatusInternalServerError, "internal_error", "internal_error", err.Error())
 }
 
 // respondAnthropicUnifiedError converts a UnifiedError to Anthropic format.
 func (h *MessagesHandler) respondAnthropicUnifiedError(c *gin.Context, err error) {
 	if ue, ok := err.(*model.UnifiedError); ok {
 		anthType := mapAnthropicErrorType(ue.Type)
-		h.respondAnthropicError(c, ue.HTTPStatus, anthType, ue.Message)
+		h.respondAnthropicError(c, ue.HTTPStatus, anthType, ue.Code, ue.Message)
 		return
 	}
-	h.respondAnthropicError(c, http.StatusInternalServerError, "internal_error", err.Error())
+	h.respondAnthropicError(c, http.StatusInternalServerError, "internal_error", "internal_error", err.Error())
 }
 
 // mapAnthropicErrorType maps gateway error types to Anthropic error types.

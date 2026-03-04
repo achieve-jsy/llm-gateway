@@ -2,14 +2,16 @@ package errormap
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"strings"
 
+	"github.com/example/llm-gateway/internal/core"
+	gatewayerrors "github.com/example/llm-gateway/internal/errors"
 	"github.com/example/llm-gateway/internal/gateway/model"
 )
 
 // MapProviderError 将 provider 返回的原始错误映射为统一错误
-// 按错误内容分为三类：输入错误(400)、不可用(404/503)、临时失败(502/504)
+// 使用新的 errors.MapProviderError 声明式映射引擎替代旧的字符串匹配。
 func MapProviderError(err error) *model.UnifiedError {
 	if err == nil {
 		return nil
@@ -21,13 +23,8 @@ func MapProviderError(err error) *model.UnifiedError {
 		return ue
 	}
 
-	msg := strings.ToLower(err.Error())
-
-	// 超时检测：context 超时 / 上游明确返回 504 / 错误消息含 timeout
-	if errors.Is(err, context.DeadlineExceeded) ||
-		strings.Contains(msg, "504") ||
-		strings.Contains(msg, "gateway timeout") ||
-		strings.Contains(msg, "timeout") {
+	// 超时检测：context 超时
+	if errors.Is(err, context.DeadlineExceeded) {
 		return model.ErrProviderTimeout
 	}
 
@@ -36,26 +33,41 @@ func MapProviderError(err error) *model.UnifiedError {
 		return model.NewUnifiedError(model.ErrorTypeTempFailure, "request_canceled", "request was canceled by client", 499)
 	}
 
-	// 输入类错误 (400)
-	if strings.Contains(msg, "invalid") || strings.Contains(msg, "bad request") || strings.Contains(msg, "400") {
-		return model.NewUnifiedError(model.ErrorTypeInvalidRequest, "invalid_request_body", err.Error(), 400)
+	// 尝试从 GatewayError 提取 provider/status/body 信息，走声明式映射
+	var gwErr *core.GatewayError
+	if errors.As(err, &gwErr) {
+		provider := gwErr.Provider
+		status := gwErr.StatusCode
+		body := formatErrorBody(gwErr)
+
+		code, _ := gatewayerrors.MapProviderError(provider, status, body, nil)
+		if gatewayerrors.Has(code) {
+			ec := gatewayerrors.Lookup(code)
+			// 构建 UnifiedError，保留原始错误信息
+			msg := ec.Message
+			if gwErr.Message != "" {
+				msg = gwErr.Message
+			}
+			return &model.UnifiedError{
+				Type:       model.ErrorType(ec.Type),
+				Code:       ec.Code,
+				Message:    msg,
+				HTTPStatus: ec.HTTPStatus,
+			}
+		}
 	}
 
-	// 模型不存在 (404)
-	if strings.Contains(msg, "not found") || strings.Contains(msg, "404") {
-		return model.NewUnifiedError(model.ErrorTypeModelNotFound, "unknown_model", err.Error(), 404)
-	}
-
-	// 模型不可用 (503)
-	if strings.Contains(msg, "unavailable") || strings.Contains(msg, "503") {
-		return model.NewUnifiedError(model.ErrorTypeModelUnavail, "model_unavailable", err.Error(), 503)
-	}
-
-	// 认证错误 (401)
-	if strings.Contains(msg, "unauthorized") || strings.Contains(msg, "401") || strings.Contains(msg, "authentication") {
-		return model.ErrUnauthorized
-	}
-
-	// 默认归类为临时失败 (502)
+	// Fallback: 返回通用上游错误
 	return model.ErrProviderError
+}
+
+// formatErrorBody 构造一个适合关键词匹配的 JSON body。
+func formatErrorBody(gwErr *core.GatewayError) []byte {
+	body, _ := json.Marshal(map[string]any{
+		"error": map[string]any{
+			"message": gwErr.Message,
+			"type":    gwErr.Type,
+		},
+	})
+	return body
 }

@@ -82,7 +82,7 @@ func TestChatHandler_Handle(t *testing.T) {
 			orch:        &fakeChatOrchestrator{},
 			wantCode:    http.StatusBadRequest,
 			wantErr:     true,
-			wantErrCode: "invalid_request_body",
+			wantErrCode: "request_body_invalid",
 		},
 		{
 			name:        "Orchestrator返回UnifiedError",
@@ -104,7 +104,7 @@ func TestChatHandler_Handle(t *testing.T) {
 			},
 			wantCode:    http.StatusInternalServerError,
 			wantErr:     true,
-			wantErrCode: "internal",
+			wantErrCode: "internal_error",
 		},
 		{
 			name:        "请求体model字段缺失",

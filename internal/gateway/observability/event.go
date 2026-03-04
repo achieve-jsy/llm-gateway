@@ -35,6 +35,9 @@ type UsageEvent struct {
 	TotalTokens      int
 	UsageMissing     bool
 
+	// Rerank 用量
+	SearchUnits float64 // Cohere 按 search_units 计费，默认 1
+
 	// 状态与耗时
 	Status          int
 	UpstreamStatus  int
@@ -48,6 +51,7 @@ type UsageEvent struct {
 	FailoverUsed    bool
 
 	// 请求元信息
+	InboundEndpoint string // 入站端点路径，如 /v1/chat/completions
 	ReasoningEffort string // low / medium / high
 	UserAgent       string
 	IPAddress       string

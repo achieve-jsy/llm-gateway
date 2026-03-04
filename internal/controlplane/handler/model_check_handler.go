@@ -90,8 +90,8 @@ func (h *ModelCheckHandler) CheckAll(c *gin.Context) {
 
 	for i := range models {
 		m := &models[i]
-		// 跳过 embedding 类型（无法用 chat/completions 检测）
-		if strings.Contains(strings.ToLower(m.ModelType), "embed") {
+		// 跳过 embedding/rerank 类型（Phase 1：暂不纳入批量检测，CheckOne 可通过 probeRerank/probeEmbedding 单独检测）
+		if strings.Contains(strings.ToLower(m.ModelType), "embed") || strings.ToLower(m.ModelType) == "rerank" {
 			continue
 		}
 

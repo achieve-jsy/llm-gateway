@@ -262,6 +262,14 @@ func (p *Provider) Embeddings(ctx context.Context, req *core.EmbeddingRequest) (
 	return &resp, nil
 }
 
+func (p *Provider) Rerank(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
+	return nil, core.NewInvalidRequestErrorWithStatus(
+		http.StatusNotImplemented,
+		"rerank is not supported by this provider",
+		nil,
+	).WithCode("unsupported_operation")
+}
+
 // CreateBatch creates a native xAI batch job.
 func (p *Provider) CreateBatch(ctx context.Context, req *core.BatchRequest) (*core.BatchResponse, error) {
 	var resp core.BatchResponse

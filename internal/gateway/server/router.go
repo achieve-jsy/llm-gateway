@@ -91,6 +91,13 @@ func Setup(
 		embeddingsHandler = handler.NewEmbeddingsHandler(orch)
 	}
 
+	var rerankHandler *handler.RerankHandler
+	if groupDispatch != nil {
+		rerankHandler = handler.NewRerankHandlerWithGroup(orch, groupDispatch)
+	} else {
+		rerankHandler = handler.NewRerankHandler(orch)
+	}
+
 	var messagesHandler *handler.MessagesHandler
 	if groupDispatch != nil {
 		messagesHandler = handler.NewMessagesHandlerWithGroup(orch, groupDispatch)
@@ -127,6 +134,7 @@ func Setup(
 	}
 	chatHandler.SetBudgetDeps(budgetDeps)
 	embeddingsHandler.SetBudgetDeps(budgetDeps)
+	rerankHandler.SetBudgetDeps(budgetDeps)
 	messagesHandler.SetBudgetDeps(budgetDeps)
 	responsesHandler.SetBudgetDeps(budgetDeps)
 
@@ -149,6 +157,7 @@ func Setup(
 	modelQuotaGate := quota.NewModelQuotaGate(quotaHolder, quotaStore)
 	chatHandler.SetModelQuotaGate(modelQuotaGate)
 	embeddingsHandler.SetModelQuotaGate(modelQuotaGate)
+	rerankHandler.SetModelQuotaGate(modelQuotaGate)
 	messagesHandler.SetModelQuotaGate(modelQuotaGate)
 	responsesHandler.SetModelQuotaGate(modelQuotaGate)
 
@@ -186,6 +195,9 @@ func Setup(
 
 		// Embeddings (new)
 		v1.POST("/embeddings", quotaMW.Handler(), embeddingsHandler.Handle)
+
+		// Rerank
+			v1.POST("/rerank", quotaMW.Handler(), rerankHandler.Handle)
 
 		// Responses API — OpenAI Agent SDK 核心依赖
 		v1.POST("/responses", quotaMW.Handler(), responsesHandler.Handle)

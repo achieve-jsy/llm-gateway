@@ -133,6 +133,14 @@ func (c *Collector) NewUsageEvent(ctx *gin.Context) UsageEvent {
 			}
 			event.TotalTokens = u.TotalTokens
 			event.UsageMissing = false
+			event.SearchUnits = func() float64 {
+				if v, ok := ctx.Get("search_units"); ok {
+					if su, ok := v.(float64); ok {
+						return su
+					}
+				}
+				return 1.0 // 默认 1 search_unit
+			}()
 		}
 	}
 
@@ -222,6 +230,17 @@ func (e *UsageEvent) EstimateCost(pricing PricingResolver) {
 	p, ok := pricing.Resolve(modelKey)
 	if !ok {
 		e.UsageMissing = true
+		return
+	}
+
+	// Rerank 成本计算路径：按 search_units 计费
+	if e.SearchUnits > 0 && p.RerankPerSearchUnit != nil {
+		unitPrice := *p.RerankPerSearchUnit
+		e.EstCostUSD = e.SearchUnits * unitPrice
+		e.InputPriceSnapshot = unitPrice
+		e.OutputPriceSnapshot = 0
+		e.InputCostUSD = e.EstCostUSD
+		e.OutputCostUSD = 0
 		return
 	}
 

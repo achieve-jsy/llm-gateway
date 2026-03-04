@@ -187,7 +187,7 @@ import { Search, Connection } from '@element-plus/icons-vue'
 import { confirmSync, checkModels } from '@/services/control-plane'
 import type { SyncResult, SyncModelItem, ModelAvailabilityItem } from '@/types/sync'
 
-type ModelType = 'chat' | 'embedding' | 'vision' | 'tts' | 'asr' | 'image' | 'speech' | 'ocr' | 'omni' | 'live-translate' | 'coder' | 'math' | 'think'
+type ModelType = 'chat' | 'embedding' | 'rerank' | 'vision' | 'tts' | 'asr' | 'image' | 'speech' | 'ocr' | 'omni' | 'live-translate' | 'coder' | 'math' | 'think'
 
 interface ModelListItem extends SyncModelItem {
   status: 'added' | 'existing' | 'removed'
@@ -196,6 +196,7 @@ interface ModelListItem extends SyncModelItem {
 const TYPE_LABELS: Record<ModelType, string> = {
   chat: '',
   embedding: 'Embedding',
+  rerank: 'Rerank',
   vision: 'Vision',
   tts: 'TTS',
   asr: 'ASR',
@@ -212,6 +213,7 @@ const TYPE_LABELS: Record<ModelType, string> = {
 const TYPE_TAG_MAP: Record<ModelType, string> = {
   chat: '',
   embedding: 'info',
+  rerank: 'info',
   vision: 'warning',
   tts: '',
   asr: 'info',
@@ -280,6 +282,7 @@ const checkingBtnText = computed(() => {
 
 function getModelType(modelId: string): ModelType {
   const lower = modelId.toLowerCase()
+  if (lower.includes('rerank')) return 'rerank'
   if (lower.includes('embed')) return 'embedding'
   if (lower.includes('tts')) return 'tts'
   if (lower.includes('asr')) return 'asr'

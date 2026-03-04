@@ -23,6 +23,7 @@ const (
 	OperationResponses           Operation = "responses"
 	OperationConversations       Operation = "conversations"
 	OperationEmbeddings          Operation = "embeddings"
+	OperationRerank              Operation = "rerank"
 	OperationBatches             Operation = "batches"
 	OperationFiles               Operation = "files"
 	OperationProviderPassthrough Operation = "provider_passthrough"
@@ -87,6 +88,13 @@ func describeEndpointPath(path string) EndpointDescriptor {
 			Dialect:          "openai_compat",
 			Operation:        OperationEmbeddings,
 		}
+	case path == "/v1/rerank":
+		return EndpointDescriptor{
+			ModelInteraction: true,
+			IngressManaged:   true,
+			Dialect:          "openai_compat",
+			Operation:        OperationRerank,
+		}
 	case path == "/v1/messages" || path == "/v1/messages/count_tokens":
 		// Anthropic Messages dialect. It is translated to the canonical chat
 		// type at ingress and runs through the chat-completions pipeline, so it
@@ -128,7 +136,7 @@ func bodyModeForEndpoint(method, path string, operation Operation) BodyMode {
 	path = normalizeEndpointPath(path)
 
 	switch operation {
-	case OperationChatCompletions, OperationEmbeddings:
+	case OperationChatCompletions, OperationEmbeddings, OperationRerank:
 		return BodyModeJSON
 	case OperationResponses:
 		if method == http.MethodPost && (path == "/v1/responses" || path == "/v1/responses/input_tokens" || path == "/v1/responses/compact") {

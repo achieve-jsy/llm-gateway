@@ -192,6 +192,7 @@ type OpsFilter struct {
 	KeyID         string // gap#10: API Key ID
 	Account       string // gap#10: 账户名(对应 provider)
 	MaxDurationMs string // gap#10: 最大耗时过滤(duration_ms <= ?)
+	Endpoint     string // 入站端点路径，如 /v1/chat/completions, /v1/embeddings, /v1/rerank
 }
 
 // buildFilterClause 根据 OpsFilter 生成 SQL WHERE 子句和参数。
@@ -242,6 +243,10 @@ func (h *OpsHandler) buildFilterClause(ctx context.Context, filter OpsFilter, ti
 	if filter.MaxDurationMs != "" {
 		clause += " AND duration_ms <= ?"
 		args = append(args, filter.MaxDurationMs)
+	}
+	if filter.Endpoint != "" {
+		clause += " AND inbound_endpoint = ?"
+		args = append(args, filter.Endpoint)
 	}
 	return clause, args
 }

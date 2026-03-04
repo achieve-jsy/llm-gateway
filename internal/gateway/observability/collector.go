@@ -76,6 +76,7 @@ func (c *Collector) NewUsageEvent(ctx *gin.Context) UsageEvent {
 			b, _ := v.(bool)
 			return b
 		}(),
+		InboundEndpoint: ctx.Request.URL.Path,
 		UserAgent:       ctx.Request.UserAgent(),
 		IPAddress:       ctx.ClientIP(),
 		Status:          getInt(ctx, "status"),
@@ -468,6 +469,7 @@ func eventToCallLog(e UsageEvent) model.CallLog {
 		ReasoningEffort:     e.ReasoningEffort,
 		UserAgent:           e.UserAgent,
 		IPAddress:           e.IPAddress,
+			InboundEndpoint:     e.InboundEndpoint,
 		InputPriceSnapshot:  &e.InputPriceSnapshot,
 		OutputPriceSnapshot: &e.OutputPriceSnapshot,
 		InputCostUSD:        e.InputCostUSD,

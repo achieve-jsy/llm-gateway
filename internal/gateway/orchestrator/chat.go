@@ -205,6 +205,20 @@ func (o *ChatOrchestrator) Rerank(ctx context.Context, req *core.RerankRequest) 
 	)
 	start := time.Now()
 
+	// 阶段计时：上游开始前，记录 route 完成时间和 upstream 开始时间
+	if gc := ginContextFrom(ctx); gc != nil {
+		if reqStart, ok := gc.Get("start_time"); ok {
+			if t, ok := reqStart.(time.Time); ok && !t.IsZero() {
+				elapsed := time.Since(t).Milliseconds()
+				if elapsed >= 0 && elapsed <= 32767 {
+					ms := int16(elapsed)
+					gc.Set("t_route_ms", ms)
+					gc.Set("t_upstream_ms", ms)
+				}
+			}
+		}
+	}
+
 	resp, err := router.Rerank(ctx, req)
 	if err != nil {
 		span.RecordError(err)
@@ -252,4 +266,111 @@ func (o *ChatOrchestrator) Rerank(ctx context.Context, req *core.RerankRequest) 
 	)
 
 	return resp, nil
+}
+
+// Embeddings executes an embeddings request through the Router.
+func (o *ChatOrchestrator) Embeddings(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
+	tracer := otel.Tracer("llm-gateway/orchestrator")
+
+	router := o.routerSnapshot()
+	if router == nil || router.ModelCount() == 0 {
+		return nil, model.ErrModelNotFound
+	}
+
+	ctx, span := tracer.Start(ctx, "upstream.embeddings",
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			attribute.String("llm.model", req.Model),
+			attribute.Int("llm.input_chars", embeddingInputChars(req)),
+		),
+	)
+	defer span.End()
+
+	slog.DebugContext(ctx, "upstream_embedding_start", "model", req.Model)
+	start := time.Now()
+
+	// 阶段计时：上游开始前，记录 route 完成时间和 upstream 开始时间
+	if gc := ginContextFrom(ctx); gc != nil {
+		if reqStart, ok := gc.Get("start_time"); ok {
+			if t, ok := reqStart.(time.Time); ok && !t.IsZero() {
+				elapsed := time.Since(t).Milliseconds()
+				if elapsed >= 0 && elapsed <= 32767 {
+					ms := int16(elapsed)
+					gc.Set("t_route_ms", ms)
+					gc.Set("t_upstream_ms", ms)
+				}
+			}
+		}
+	}
+
+	resp, err := router.Embeddings(ctx, req)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		slog.Error("upstream_embedding_error",
+			"model", req.Model,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"error", err.Error(),
+		)
+		if gc := ginContextFrom(ctx); gc != nil {
+			gc.Set("error_message", err.Error())
+		}
+		return nil, errormap.MapProviderError(err)
+	}
+
+	span.SetAttributes(
+		attribute.Int("llm.usage.prompt_tokens", resp.Usage.PromptTokens),
+		attribute.Int("llm.usage.total_tokens", resp.Usage.TotalTokens),
+	)
+	span.SetStatus(codes.Ok, "")
+
+	if gc := ginContextFrom(ctx); gc != nil {
+		if resp.Model != "" {
+			if _, exists := gc.Get("routed_model"); !exists {
+				gc.Set("routed_model", resp.Model)
+			}
+		}
+		if _, exists := gc.Get("provider"); !exists {
+			if name := router.GetProviderName(req.Model); name != "" {
+				gc.Set("provider", name)
+			} else if resp.Provider != "" {
+				gc.Set("provider", resp.Provider)
+			}
+		}
+		gc.Set("usage", resp.Usage)
+		gc.Set("stream", false)
+		gc.Set("resp_object", resp)
+	}
+
+	slog.DebugContext(ctx, "upstream_embedding_done",
+		"model", req.Model,
+		"duration_ms", time.Since(start).Milliseconds(),
+		"prompt_tokens", resp.Usage.PromptTokens,
+		"total_tokens", resp.Usage.TotalTokens,
+	)
+
+	return resp, nil
+}
+
+// embeddingInputChars 估算 embedding 请求的输入字符数，用于 span 属性。
+func embeddingInputChars(req *core.EmbeddingRequest) int {
+	if req == nil {
+		return 0
+	}
+	total := 0
+	switch v := req.Input.(type) {
+	case string:
+		total += len(v)
+	case []string:
+		for _, s := range v {
+			total += len(s)
+		}
+	case []any:
+		for _, s := range v {
+			if str, ok := s.(string); ok {
+				total += len(str)
+			}
+		}
+	}
+	return total
 }

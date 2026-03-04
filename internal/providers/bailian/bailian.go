@@ -98,8 +98,84 @@ func (p *Provider) Embeddings(ctx context.Context, req *core.EmbeddingRequest) (
 }
 
 // Rerank sends a rerank request to Bailian.
+// bailianRerankReq 阿里百炼原生 rerank 请求格式
+type bailianRerankReq struct {
+	Model      string                  `json:"model"`
+	Input      bailianRerankInput      `json:"input"`
+	Parameters bailianRerankParameters `json:"parameters,omitempty"`
+}
+
+type bailianRerankInput struct {
+	Query     string   `json:"query"`
+	Documents []string `json:"documents"`
+}
+
+type bailianRerankParameters struct {
+	TopN int `json:"top_n,omitempty"`
+}
+
+type bailianRerankResp struct {
+	Output struct {
+		Results []bailianRerankResult `json:"results"`
+	} `json:"output"`
+	Usage struct {
+		TotalTokens int `json:"total_tokens"`
+	} `json:"usage"`
+}
+
+type bailianRerankResult struct {
+	Index          int     `json:"index"`
+	RelevanceScore float64 `json:"relevance_score"`
+}
+
+// Rerank 使用阿里百炼原生 rerank API（/api/v1/services/rerank/text-rerank/text-rerank）
 func (p *Provider) Rerank(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
-	return p.compatible.Rerank(ctx, req)
+	if req == nil {
+		return nil, core.NewInvalidRequestError("rerank request is required", nil)
+	}
+
+	topN := 10
+	if req.TopN != nil && *req.TopN > 0 {
+		topN = *req.TopN
+	}
+
+	bailianReq := bailianRerankReq{
+		Model: req.Model,
+		Input: bailianRerankInput{
+			Query:     req.Query,
+			Documents: req.Documents,
+		},
+		Parameters: bailianRerankParameters{TopN: topN},
+	}
+
+	var bailianResp bailianRerankResp
+	err := p.compatible.Do(ctx, llmclient.Request{
+		Method:   http.MethodPost,
+		Endpoint: "/api/v1/services/rerank/text-rerank/text-rerank",
+		Body:     bailianReq,
+	}, &bailianResp)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]core.RerankResult, len(bailianResp.Output.Results))
+	for i, r := range bailianResp.Output.Results {
+		results[i] = core.RerankResult{
+			Index:          r.Index,
+			RelevanceScore: r.RelevanceScore,
+		}
+		if req.ReturnDocuments != nil && *req.ReturnDocuments && r.Index < len(req.Documents) {
+			results[i].Document = &core.RerankDocument{Text: req.Documents[r.Index]}
+		}
+	}
+
+	return &core.RerankResponse{
+		Model:   req.Model,
+		Results: results,
+		Usage: core.RerankUsage{
+			TotalTokens: bailianResp.Usage.TotalTokens,
+		},
+	}, nil
 }
 
 // Passthrough routes an opaque provider-native request to Bailian.

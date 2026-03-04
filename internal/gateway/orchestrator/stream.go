@@ -144,37 +144,3 @@ func (s *cancelOnCloseStream) Close() error {
 	s.cancel()
 	return s.ReadCloser.Close()
 }
-
-// EmbeddingRequest executes an embeddings request through the Router.
-func (o *ChatOrchestrator) Embeddings(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
-	router := o.routerSnapshot()
-	if router == nil || router.ModelCount() == 0 {
-		return nil, model.ErrModelNotFound
-	}
-
-	slog.DebugContext(ctx, "upstream_embedding_start", "model", req.Model)
-	start := time.Now()
-
-	resp, err := router.Embeddings(ctx, req)
-	if err != nil {
-		slog.Error("upstream_embedding_error",
-			"model", req.Model,
-			"duration_ms", time.Since(start).Milliseconds(),
-			"error", err.Error(),
-		)
-		return nil, errormap.MapProviderError(err)
-	}
-
-	slog.DebugContext(ctx, "upstream_embedding_done",
-		"model", req.Model,
-		"duration_ms", time.Since(start).Milliseconds(),
-	)
-
-	if gc := ginContextFrom(ctx); gc != nil {
-		gc.Set("stream", false)
-		gc.Set("usage", resp.Usage)
-		gc.Set("resp_object", resp)
-	}
-
-	return resp, nil
-}

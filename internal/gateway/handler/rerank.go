@@ -82,6 +82,12 @@ func (h *RerankHandler) Handle(c *gin.Context) {
 		return
 	}
 
+	// 校验 query 非空
+	if req.Query == "" {
+		gatewayerrors.WriteError(c, "request_body_invalid", gatewayerrors.WithMessage("query field is required"))
+		return
+	}
+
 	// 校验 documents 非空
 	if len(req.Documents) == 0 {
 		gatewayerrors.WriteError(c, "request_body_invalid", gatewayerrors.WithMessage("documents field is required and must not be empty"))

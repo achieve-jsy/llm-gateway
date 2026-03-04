@@ -68,6 +68,28 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 		return
 	}
 
+	// 校验 model 非空
+	if req.Model == "" {
+		gatewayerrors.WriteError(c, "request_missing_model")
+		return
+	}
+
+	// 校验 input 非空
+	if req.Input == nil {
+		gatewayerrors.WriteError(c, "request_body_invalid", gatewayerrors.WithMessage("input field is required and must not be empty"))
+		return
+	}
+
+	// 校验 input 类型：必须是 string 或 []string
+	if _, ok := req.Input.(string); !ok {
+		if _, ok2 := req.Input.([]interface{}); ok2 {
+			// []interface{} 是 JSON 反序列化后的数组类型，允许
+		} else {
+			gatewayerrors.WriteError(c, "request_body_invalid", gatewayerrors.WithMessage("input must be a string or array of strings"))
+			return
+		}
+	}
+
 	c.Set("model", req.Model)
 
 	// v0.9: 预算检查（事后记账模式）

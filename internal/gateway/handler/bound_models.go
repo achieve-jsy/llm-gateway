@@ -41,24 +41,38 @@ func (h *BoundModelsHandler) Handle(c *gin.Context) {
 		return
 	}
 
+	// Fetch model_type (mode) for each group from control-plane.
+	modelInfo, err := h.client.GetGroupModelInfo(c.Request.Context(), names)
+	if err != nil {
+		// Non-fatal: degrade gracefully — return models without model_type.
+		slog.Warn("bound models: failed to fetch group model info", "key_id", id.KeyID, "error", err)
+		modelInfo = nil
+	}
+
 	c.JSON(http.StatusOK, core.ModelsResponse{
 		Object: "list",
-		Data:   stringSliceToModels(names, time.Now().Unix()),
+		Data:   stringSliceToModels(names, modelInfo, time.Now().Unix()),
 	})
 }
 
-func stringSliceToModels(names []string, now int64) []core.Model {
+func stringSliceToModels(names []string, info map[string]binding.GroupModelInfo, now int64) []core.Model {
 	items := make([]core.Model, 0, len(names))
 	for _, name := range names {
 		if name == "" {
 			continue
 		}
-		items = append(items, core.Model{
+		m := core.Model{
 			ID:      name,
 			Object:  "model",
 			Created: now,
 			OwnedBy: "organization",
-		})
+		}
+		if gi, ok := info[name]; ok && gi.Mode != "" {
+			m.Metadata = &core.ModelMetadata{
+				Modes: []string{gi.Mode},
+			}
+		}
+		items = append(items, m)
 	}
 	return items
 }

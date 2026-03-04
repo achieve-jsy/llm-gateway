@@ -121,7 +121,7 @@ var registry = map[string]ErrorCode{
 	"provider_not_found": {
 		Code:       "provider_not_found",
 		Type:       ErrorTypeNotFound,
-		HTTPStatus: http.StatusBadGateway,
+		HTTPStatus: http.StatusNotFound,
 		Message:    "上游服务未找到资源",
 	},
 	"provider_rate_limited": {

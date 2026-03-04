@@ -7,9 +7,8 @@
       <OpsDashboardHeader
         :overview="dashboardData"
         :loading="loading"
+        :platform="platform"
         :group-id="groupId"
-        :provider="provider"
-        :model="model"
         :time-range="timeRange"
         :auto-refresh="autoRefresh"
         :auto-refresh-countdown="countdown"
@@ -18,11 +17,9 @@
         :custom-start-time="customStartTime"
         :custom-end-time="customEndTime"
         @update:time-range="timeRange = $event"
+        @update:platform="platform = $event; groupId = null"
         @update:group="groupId = $event"
-        @update:provider="provider = $event"
-        @update:model="model = $event"
         @update:custom-time-range="onCustomTimeRange"
-        @update:auto-refresh="autoRefresh = $event; if (autoRefresh) startAutoRefresh(); else stopAutoRefresh()"
         @refresh="fetchAllData"
         @open-request-details="showRequestDetails = true"
         @open-error-details="openErrorDetails"
@@ -32,11 +29,12 @@
         @exit-fullscreen="isFullscreen = false"
       />
 
-      <!-- Row 1: Concurrency + Switch Rate + Traffic Trend (1:1:2, 对齐 sub2api grid-cols-4) -->
-      <div class="ops-row-main">
+      <!-- Row 1: Concurrency + Switch Rate (1:1, 对齐 sub2api lg:grid-cols-4 前两列) -->
+      <div class="ops-row-duo">
         <OpsConcurrencyCard
           v-if="settings?.show_concurrency_card"
           :refresh-token="refreshToken"
+          :platform-filter="platform"
           :group-id-filter="groupId"
         />
         <OpsSwitchRateTrendChart
@@ -46,17 +44,18 @@
           :time-range="'5h'"
           :fullscreen="isFullscreen"
         />
-        <OpsTrafficTrendChart
-          class="ops-row-span-2"
-          :points="trafficTrendData"
-          :loading="loadingTrend"
-          :by-provider="throughputByProvider"
-          :top-groups="throughputTopGroups"
-          @select-provider="onSelectProvider"
-          @select-group="onSelectGroup"
-          @open-details="showRequestDetails = true"
-        />
       </div>
+
+      <!-- Row 2: Traffic Trend 单独一行全宽（对齐 sub2api lg:col-span-2 独占一行） -->
+      <OpsTrafficTrendChart
+        :points="trafficTrendData"
+        :loading="loadingTrend"
+        :by-provider="throughputByProvider"
+        :top-groups="throughputTopGroups"
+        @select-provider="onSelectProvider"
+        @select-group="onSelectGroup"
+        @open-details="showRequestDetails = true"
+      />
 
       <!-- No-traffic notice: visible when all trend data is empty -->
       <div v-if="isIdle" class="ops-idle-notice">
@@ -74,7 +73,7 @@
         </span>
       </div>
 
-      <!-- Row 2: Latency Histogram + Error Distribution + Error Trend (1:1:1) -->
+      <!-- Row 3: Latency Histogram + Error Distribution + Error Trend (1:1:1) -->
       <div class="ops-row-visual">
         <OpsLatencyHistogram
           :buckets="latencyHistogramData"
@@ -175,19 +174,6 @@
       <el-option label="最近 6 小时" value="6h" />
       <el-option label="最近 24 小时" value="24h" />
     </el-select>
-
-    <el-tooltip :content="autoRefresh ? '暂停自动刷新' : '恢复自动刷新'" placement="bottom">
-      <el-button
-        size="small"
-        :icon="autoRefresh ? VideoPause : VideoPlay"
-        :type="autoRefresh ? '' : 'info'"
-        @click="autoRefresh = !autoRefresh; autoRefresh ? startAutoRefresh() : stopAutoRefresh()"
-        circle
-      />
-    </el-tooltip>
-
-    <span v-if="autoRefresh && countdown > 0" class="ops-fs-countdown">{{ countdown }}s</span>
-
     <el-button size="small" :icon="Refresh" :loading="loading" @click="fetchAllData" circle />
     <el-button size="small" @click="isFullscreen = false">退出全屏</el-button>
   </div>
@@ -196,7 +182,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Refresh, VideoPause, VideoPlay } from '@element-plus/icons-vue'
+import { Refresh } from '@element-plus/icons-vue'
 import { opsAPI } from '@/api/ops'
 import type {
   OpsOverview,
@@ -253,9 +239,8 @@ const throughputByProvider = ref<OpsThroughputByProvider[]>([])
 const throughputTopGroups = ref<OpsThroughputByGroup[]>([])
 
 const timeRange = ref('1h')
+const platform = ref('')
 const groupId = ref<number | null>(null)
-const provider = ref<string>('')
-const model = ref<string>('')
 const customStartTime = ref<string | null>(null)
 const customEndTime = ref<string | null>(null)
 const autoRefresh = ref(true)
@@ -279,8 +264,7 @@ const showRequestDetails = ref(false)
 const showEmailNotification = ref(false)
 const showRuntimeSettings = ref(false)
 const errorDetailsType = ref<'request' | 'upstream'>('request')
-// B05/WP3: selectedErrorId 为 request_id（字符串）
-const selectedErrorId = ref<string | null>(null)
+const selectedErrorId = ref<number | null>(null)
 
 let refreshTimer: number | null = null
 let countdownTimer: number | null = null
@@ -296,43 +280,17 @@ const isIdle = computed(() => {
   return (ov.traffic?.total_requests ?? 0) === 0 && (ov.traffic?.current_qps ?? 0) === 0
 })
 
-// -- Filter Helpers --
-
-function buildFilter(extraTimeRange?: string): { time_range?: string; group_id?: number; provider?: string; model?: string } {
-  const filter: { time_range?: string; group_id?: number; provider?: string; model?: string } = {}
-  filter.time_range = extraTimeRange || timeRange.value
-  if (groupId.value != null) filter.group_id = groupId.value
-  if (provider.value) filter.provider = provider.value
-  if (model.value) filter.model = model.value
-  return filter
-}
-
 // -- Fetchers --
 
 async function fetchAllData() {
-  loading.value = true
-
-  const remainingFetches: Promise<void>[] = [
+  await Promise.all([
+    fetchDashboard(),
+    fetchTrafficAndThroughput(),
+    fetchErrorTrendFn(),
     fetchLatencyHistogram(),
     fetchErrorDistribution(),
     fetchSwitchRate()
-  ]
-
-  try {
-    const snap = await opsAPI.getSnapshotV2(buildFilter())
-    dashboardData.value = snap.overview
-    trafficTrendData.value = snap.throughput_trend.points as any
-    errorTrendData.value = snap.error_trend.points as any
-  } catch {
-    await Promise.all([
-      fetchDashboard(),
-      fetchTrafficAndThroughput(),
-      fetchErrorTrendFn()
-    ])
-  }
-
-  await Promise.all(remainingFetches)
-  loading.value = false
+  ])
   lastUpdated.value = new Date()
   refreshToken.value++
 }
@@ -340,7 +298,7 @@ async function fetchAllData() {
 async function fetchDashboard() {
   loading.value = true
   try {
-    const response = await opsAPI.getDashboard(buildFilter())
+    const response = await opsAPI.getDashboard(timeRange.value)
     dashboardData.value = response.overview
   } catch (error) {
     console.error('Failed to fetch dashboard:', error)
@@ -353,8 +311,8 @@ async function fetchTrafficAndThroughput() {
   loadingTrend.value = true
   try {
     const [trendResp, throughputResp] = await Promise.all([
-      opsAPI.getTrafficTrend(buildFilter()),
-      opsAPI.getThroughputTrend(buildFilter()).catch(() => null)
+      opsAPI.getTrafficTrend(timeRange.value),
+      opsAPI.getThroughputTrend(timeRange.value).catch(() => null)
     ])
     trafficTrendData.value = trendResp.points
     if (throughputResp) {
@@ -371,7 +329,7 @@ async function fetchTrafficAndThroughput() {
 async function fetchErrorTrendFn() {
   loadingErrorTrend.value = true
   try {
-    const response = await opsAPI.getErrorTrend(buildFilter())
+    const response = await opsAPI.getErrorTrend(timeRange.value)
     errorTrendData.value = response.points
   } catch (error) {
     console.error('Failed to fetch error trend:', error)
@@ -383,7 +341,7 @@ async function fetchErrorTrendFn() {
 async function fetchLatencyHistogram() {
   loadingLatency.value = true
   try {
-    const response = await opsAPI.getLatencyHistogram(buildFilter())
+    const response = await opsAPI.getLatencyHistogram(timeRange.value)
     latencyHistogramData.value = response.buckets
     latencyTotalRequests.value = response.total_requests
   } catch (error) {
@@ -396,7 +354,7 @@ async function fetchLatencyHistogram() {
 async function fetchErrorDistribution() {
   loadingErrorDistribution.value = true
   try {
-    const response = await opsAPI.getErrorDistribution(buildFilter())
+    const response = await opsAPI.getErrorDistribution(timeRange.value)
     errorDistributionData.value = response.distribution
   } catch (error) {
     console.error('Failed to fetch error distribution:', error)
@@ -408,7 +366,7 @@ async function fetchErrorDistribution() {
 async function fetchSwitchRate() {
   loadingSwitchRate.value = true
   try {
-    const response = await opsAPI.getSwitchRateTrend(buildFilter('5h'))
+    const response = await opsAPI.getSwitchRateTrend('5h')
     switchRatePoints.value = response.points
   } catch (error) {
     console.error('Failed to fetch switch rate trend:', error)
@@ -442,8 +400,9 @@ function onCustomTimeRange(range: { start: string; end: string }) {
   timeRange.value = 'custom'
 }
 
-function onSelectProvider(providerName: string) {
-  provider.value = providerName
+function onSelectProvider(providerId: number) {
+  // TODO: Implement platform filter based on providerId
+  console.log('Selected provider:', providerId)
 }
 
 function onSelectGroup(groupIdVal: number) {
@@ -455,7 +414,7 @@ function openErrorDetails(type: 'request' | 'upstream') {
   showErrorDetails.value = true
 }
 
-function openErrorDetail(id: string) {
+function openErrorDetail(id: number) {
   selectedErrorId.value = id
 }
 
@@ -565,18 +524,14 @@ onUnmounted(() => {
   overflow-y: auto;
 }
 
-.ops-row-main {
+.ops-row-duo {
   display: grid;
-  grid-template-columns: 1fr 1fr 2fr;
+  grid-template-columns: 1fr 1fr;
   gap: var(--space-6);
 }
 
-.ops-row-main > * {
+.ops-row-duo > * {
   min-height: 360px;
-}
-
-.ops-row-span-2 {
-  grid-column: span 2;
 }
 
 .ops-row-visual {
@@ -623,23 +578,10 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(8px);
+  background: var(--bg-card, #fff);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-lg);
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
-}
-
-:global(html.dark) .ops-fullscreen-bar {
-  background: rgba(24, 24, 27, 0.85);
-}
-
-.ops-fs-countdown {
-  font-size: 12px;
-  color: var(--text-secondary, #888);
-  min-width: 28px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
 }
 
 .ops-time-select {
@@ -647,21 +589,15 @@ onUnmounted(() => {
 }
 
 @media (max-width: 1200px) {
-  .ops-row-main {
-    grid-template-columns: 1fr 1fr;
-  }
-  .ops-row-span-2 {
-    grid-column: span 2;
+  .ops-row-duo {
+    grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 900px) {
-  .ops-row-main,
+  .ops-row-duo,
   .ops-row-visual {
     grid-template-columns: 1fr;
-  }
-  .ops-row-span-2 {
-    grid-column: span 1;
   }
 }
 </style>

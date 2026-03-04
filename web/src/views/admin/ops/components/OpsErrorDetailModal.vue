@@ -113,30 +113,16 @@
         </div>
 
         <div class="ops-detail-actions">
-          <!-- B05b/WP3 降级方案：request/upstream 错误（来自 call_logs）不支持
-               就地标记已解决（后端 resolve 返回 409）。完整方案需 WP11 新建
-               error_resolve_states 表。此处禁用按钮 + 提示用户用错误日志视图。 -->
-          <template v-if="errorType === 'request' || errorType === 'upstream'">
-            <el-tooltip
-              content="该类错误不支持就地标记，请用错误日志视图操作"
-              placement="top"
-            >
-              <el-button type="success" size="small" disabled>标记已解决</el-button>
-            </el-tooltip>
-            <span class="ops-resolve-hint">该类错误不支持就地标记</span>
-          </template>
-          <template v-else>
-            <el-button
-              v-if="!isResolved"
-              type="success"
-              size="small"
-              :loading="resolving"
-              @click="markResolved"
-            >
-              标记已解决
-            </el-button>
-            <el-tag v-else type="success" effect="plain">已解决</el-tag>
-          </template>
+          <el-button
+            v-if="!isResolved"
+            type="success"
+            size="small"
+            :loading="resolving"
+            @click="markResolved"
+          >
+            标记已解决
+          </el-button>
+          <el-tag v-else type="success" effect="plain">已解决</el-tag>
         </div>
       </template>
       <div v-else-if="!loading" class="ops-error-empty">
@@ -154,8 +140,7 @@ import { opsAPI } from '@/api/ops'
 
 const props = defineProps<{
   show: boolean
-  // B05/WP3: errorId 为 request_id（字符串），call_logs 主键非数字。
-  errorId: string
+  errorId: number
   errorType: 'request' | 'upstream'
 }>()
 
@@ -201,12 +186,6 @@ async function fetchDetail() {
 }
 
 async function markResolved() {
-  // B05b/WP3 降级方案：request/upstream 错误的 resolve 已在后端返回 409，
-  // 按钮已禁用，此函数仅作保留路径；若被调用则提示不支持。
-  if (props.errorType === 'request' || props.errorType === 'upstream') {
-    ElMessage.warning('该类错误不支持就地标记，请用错误日志视图操作')
-    return
-  }
   resolving.value = true
   try {
     if (props.errorType === 'request') {
@@ -294,12 +273,6 @@ font-family: var(--font-family-mono);
   align-items: center;
   justify-content: center;
   height: 120px;
-  color: var(--text-placeholder, #94a3b8);
-}
-
-/* B05b: 降级提示文本 */
-.ops-resolve-hint {
-  font-size: var(--font-size-xxs, 11px);
   color: var(--text-placeholder, #94a3b8);
 }
 </style>

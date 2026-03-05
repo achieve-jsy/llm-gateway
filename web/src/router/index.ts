@@ -77,18 +77,6 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '对话测试' }
   },
   {
-    path: '/admin/embedding-playground',
-    name: 'EmbeddingPlayground',
-    component: () => import('@/views/admin/EmbeddingPlaygroundPage.vue'),
-    meta: { title: 'Embedding 测试', requiresAdmin: true }
-  },
-  {
-    path: '/admin/rerank-playground',
-    name: 'RerankPlayground',
-    component: () => import('@/views/admin/RerankPlaygroundPage.vue'),
-    meta: { title: 'Rerank 测试', requiresAdmin: true }
-  },
-  {
     path: '/admin/health-monitor',
     name: 'HealthMonitor',
     component: () => import('@/views/admin/HealthMonitorPage.vue'),

@@ -51,7 +51,8 @@
         <template v-if="activeSource === 'announcements'">
           <div class="panel-list" v-show="activeTab === 'unread'">
             <div v-if="annUnreadItems.length === 0" class="panel-empty">
-              <el-empty description="暂无未读公告" :image-size="50" />
+              <el-icon :size="28" color="var(--text-placeholder)"><Bell /></el-icon>
+              <span class="empty-text">暂无未读公告</span>
             </div>
             <div
               v-for="item in annUnreadItems"
@@ -83,7 +84,8 @@
           </div>
           <div class="panel-list" v-show="activeTab === 'history'">
             <div v-if="annHistoryItems.length === 0" class="panel-empty">
-              <el-empty description="暂无已读公告" :image-size="50" />
+              <el-icon :size="28" color="var(--text-placeholder)"><Bell /></el-icon>
+              <span class="empty-text">暂无已读公告</span>
             </div>
             <div
               v-for="item in annHistoryItems"
@@ -114,7 +116,8 @@
         <template v-else>
           <div class="panel-list" v-show="activeTab === 'unread'">
             <div v-if="notifUnreadItems.length === 0" class="panel-empty">
-              <el-empty description="暂无未读通知" :image-size="50" />
+              <el-icon :size="28" color="var(--text-placeholder)"><Bell /></el-icon>
+              <span class="empty-text">暂无未读通知</span>
             </div>
             <div
               v-for="item in notifUnreadItems"
@@ -145,7 +148,8 @@
           </div>
           <div class="panel-list" v-show="activeTab === 'history'">
             <div v-if="notifHistoryItems.length === 0" class="panel-empty">
-              <el-empty description="暂无已读通知" :image-size="50" />
+              <el-icon :size="28" color="var(--text-placeholder)"><Bell /></el-icon>
+              <span class="empty-text">暂无已读通知</span>
             </div>
             <div
               v-for="item in notifHistoryItems"
@@ -556,5 +560,16 @@ defineExpose({ refresh })
   padding: 5px 8px; border-top: 1px solid rgba(54,179,78,0.08);
 }
 
-.panel-empty { padding: 24px 0; }
+.panel-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px 0;
+}
+.empty-text {
+  font-size: 12px;
+  color: var(--text-placeholder);
+}
 </style>

@@ -370,6 +370,13 @@ html:not(.dark) {
   .el-table__row:hover > td {
     background-color: var(--bg-subtle) !important;
   }
+
+  /* 预算 Tag 列：禁用单元格默认省略号（列宽较窄时「已申请预算 $X/月」会被截成 …） */
+  td.key-request-budget-col .cell {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: nowrap;
+  }
 }
 
 html.dark .el-table {

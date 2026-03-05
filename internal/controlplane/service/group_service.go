@@ -74,6 +74,11 @@ type UpdateGroupRequest struct {
 	SameModelRetries        *int    `json:"same_model_retries"`
 	FailoverCooldownSeconds *int    `json:"failover_cooldown_seconds"`
 	TimeoutSeconds          *int    `json:"timeout_seconds"`
+
+	IsCapabilityOverride   *bool `json:"is_capability_override"`
+	OverrideSupportsVision *bool `json:"override_supports_vision"`
+	OverrideSupportsFC     *bool `json:"override_supports_function_calling"`
+	OverrideSupportsTC     *bool `json:"override_supports_tool_choice"`
 }
 
 func (s *GroupService) Create(req CreateGroupRequest) (*model.Group, error) {
@@ -178,6 +183,19 @@ func (s *GroupService) Update(id uint, req UpdateGroupRequest) (*model.Group, er
 	}
 	if req.TimeoutSeconds != nil {
 		group.TimeoutSeconds = *req.TimeoutSeconds
+	}
+
+	if req.IsCapabilityOverride != nil {
+		group.IsCapabilityOverride = *req.IsCapabilityOverride
+	}
+	if req.OverrideSupportsVision != nil {
+		group.OverrideSupportsVision = *req.OverrideSupportsVision
+	}
+	if req.OverrideSupportsFC != nil {
+		group.OverrideSupportsFC = *req.OverrideSupportsFC
+	}
+	if req.OverrideSupportsTC != nil {
+		group.OverrideSupportsTC = *req.OverrideSupportsTC
 	}
 
 	if err := s.repo.Update(group); err != nil {
@@ -297,4 +315,27 @@ func (s *GroupService) CountGroupModels(groupID uint) int {
 		return 0
 	}
 	return int(count)
+}
+
+func (s *GroupService) ResetCapability(id uint) (*model.Group, error) {
+	group, err := s.repo.FindByID(id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrGroupNotFound
+		}
+		return nil, fmt.Errorf("find group: %w", err)
+	}
+	if group.DeletedAt.Valid {
+		return nil, ErrGroupDeleted
+	}
+
+	group.IsCapabilityOverride = false
+	group.OverrideSupportsVision = false
+	group.OverrideSupportsFC = false
+	group.OverrideSupportsTC = false
+
+	if err := s.repo.Update(group); err != nil {
+		return nil, fmt.Errorf("update group: %w", err)
+	}
+	return group, nil
 }

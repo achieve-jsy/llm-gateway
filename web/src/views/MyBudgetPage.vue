@@ -42,6 +42,17 @@
         </div>
       </section>
 
+      <el-alert
+        v-if="pendingKeyBudgetActivities.length > 0"
+        type="info"
+        :closable="false"
+        show-icon
+        class="mb-pending-key-alert"
+      >
+        有 {{ pendingKeyBudgetActivities.length }} 笔 Key 预算申请审批中，通过后月额度将更新。
+        <el-button link type="primary" @click="goKeyRequestDetail">查看申请</el-button>
+      </el-alert>
+
       <!-- 主工作区 -->
       <section class="mb-grid">
         <!-- 左：额度详情 -->
@@ -144,12 +155,12 @@
           </div>
         </div>
 
-        <!-- 右：扩容申请 -->
+        <!-- 右：额度相关申请 -->
         <div class="mb-panel">
           <div class="mb-panel-head">
             <div>
-              <h2>扩容申请</h2>
-              <p v-if="!authStore.isManager">个人额度提升申请</p>
+              <h2>额度相关申请</h2>
+              <p v-if="!authStore.isManager">扩容与 Key 创建附带的预算申请</p>
               <p v-else>额度直接调整</p>
             </div>
             <!-- 普通用户才显示新建申请按钮 -->
@@ -182,78 +193,82 @@
           <div v-if="requestLoading" v-loading="true" class="mb-inner-loading" />
 
           <!-- 空状态 -->
-          <div v-else-if="myRequests.length === 0" class="mb-empty">
+          <div v-else-if="activityTimeline.length === 0" class="mb-empty">
             <div class="mb-empty-icon">↑</div>
-            <p>尚未发起过扩容申请</p>
-            <span>额度不足时，点击右上角「新建申请」可提升个人配额，由部门负责人审批。</span>
+            <p>暂无额度相关申请</p>
+            <span>可通过「新建申请」提升配额，或在创建 Key 时一并申请月预算。</span>
           </div>
 
           <template v-else>
-            <!-- 最新申请：审批中 → 突出显示 + 取消入口 -->
-            <div v-if="latestRequest" class="mb-active-request" :class="`is-${latestRequest.status}`">
+            <!-- 重点展示：优先 pending，否则最新一条 -->
+            <div v-if="featuredActivity" class="mb-active-request" :class="`is-${featuredActivity.status}`">
               <div class="mb-active-header">
                 <div class="mb-active-meta">
-                  <span :class="`mb-tag mb-tag--${latestRequest.status}`">{{ statusLabel(latestRequest.status) }}</span>
-                  <strong class="mb-active-amount">{{ formatUSD(latestRequest.requested_amount) }} {{ PERIOD_SUFFIX[latestRequest.period_type || 'monthly'] }}</strong>
+                  <span class="mb-kind-tag">{{ activityTypeLabel(featuredActivity) }}</span>
+                  <span :class="`mb-tag mb-tag--${featuredActivity.status}`">{{ activityStatusLabel(featuredActivity) }}</span>
+                  <strong class="mb-active-amount">{{ activityAmountLabel(featuredActivity) }}</strong>
                 </div>
                 <div class="mb-active-actions">
-                  <span class="mb-muted">{{ formatDateTime(latestRequest.created_at) }}</span>
+                  <span class="mb-muted">{{ formatDateTime(featuredActivity.createdAt) }}</span>
                   <el-button
-                    v-if="latestRequest.status === 'pending'"
+                    v-if="featuredActivity.status === 'pending'"
                     size="small" type="danger" plain
-                    :loading="cancellingId === latestRequest.id"
-                    @click="cancelRequest(latestRequest.id)"
+                    :loading="cancellingId === activityCancelId(featuredActivity)"
+                    @click="cancelActivity(featuredActivity)"
                   >取消</el-button>
                   <el-button
-                    v-else-if="latestRequest.status !== 'pending'"
+                    v-else-if="featuredActivity.kind === 'expansion'"
                     size="small" @click="openExpansion"
                   >重新申请</el-button>
+                  <el-button
+                    v-else-if="featuredActivity.kind === 'key_budget'"
+                    size="small" link type="primary"
+                    @click="goKeyRequestDetail"
+                  >查看 Key 申请</el-button>
                 </div>
               </div>
 
-              <p v-if="latestRequest.reason" class="mb-active-reason">{{ latestRequest.reason }}</p>
+              <p v-if="activitySubtitle(featuredActivity)" class="mb-active-reason">{{ activitySubtitle(featuredActivity) }}</p>
 
-              <!-- 步进器 -->
               <div class="mb-steps">
                 <div class="mb-step is-done">
                   <div class="mb-step-node">✓</div>
                   <span>提交</span>
                 </div>
-                <div class="mb-step-line" :class="{ 'is-done': latestRequest.status !== 'pending' }" />
+                <div class="mb-step-line" :class="{ 'is-done': featuredActivity.status !== 'pending' }" />
                 <div class="mb-step" :class="{
-                  'is-active': latestRequest.status === 'pending',
-                  'is-done': latestRequest.status === 'approved',
-                  'is-rejected': latestRequest.status === 'rejected'
+                  'is-active': featuredActivity.status === 'pending',
+                  'is-done': featuredActivity.status === 'approved',
+                  'is-rejected': featuredActivity.status === 'rejected'
                 }">
-                  <div class="mb-step-node">{{ latestRequest.status === 'approved' ? '✓' : latestRequest.status === 'rejected' ? '✕' : '' }}</div>
+                  <div class="mb-step-node">{{ featuredActivity.status === 'approved' ? '✓' : featuredActivity.status === 'rejected' ? '✕' : '' }}</div>
                   <span>审批</span>
                 </div>
-                <div class="mb-step-line" :class="{ 'is-done': latestRequest.status === 'approved' }" />
+                <div class="mb-step-line" :class="{ 'is-done': featuredActivity.status === 'approved' }" />
                 <div class="mb-step" :class="{
-                  'is-done': latestRequest.status === 'approved',
-                  'is-rejected': latestRequest.status === 'rejected'
+                  'is-done': featuredActivity.status === 'approved',
+                  'is-rejected': featuredActivity.status === 'rejected'
                 }">
-                  <div class="mb-step-node">{{ latestRequest.status === 'approved' ? '✓' : latestRequest.status === 'rejected' ? '✕' : '' }}</div>
-                  <span>{{ latestRequest.status === 'rejected' ? '驳回' : '生效' }}</span>
+                  <div class="mb-step-node">{{ featuredActivity.status === 'approved' ? '✓' : featuredActivity.status === 'rejected' ? '✕' : '' }}</div>
+                  <span>{{ featuredActivity.status === 'rejected' ? '驳回' : '生效' }}</span>
                 </div>
               </div>
 
-              <div class="mb-active-note">{{ requestProgressText(latestRequest) }}</div>
+              <div class="mb-active-note">{{ activityProgressText(featuredActivity) }}</div>
             </div>
 
-            <!-- 历史记录 -->
-            <div v-if="historyRequests.length > 0" class="mb-history">
+            <div v-if="historyActivities.length > 0" class="mb-history">
               <div class="mb-history-header">
                 <span>历史记录</span>
-                <span class="mb-history-total">共 {{ historyRequests.length }} 条</span>
+                <span class="mb-history-total">共 {{ historyActivities.length }} 条</span>
               </div>
               <div ref="historyScrollRef" class="mb-history-scroll">
                 <div v-for="item in visibleHistory" :key="item.id" class="mb-history-item">
-                  <span :class="`mb-tag mb-tag--${item.status} mb-tag--sm`">{{ statusLabel(item.status) }}</span>
-                  <span class="mb-history-amount">{{ formatUSD(item.requested_amount) }} {{ PERIOD_SUFFIX[(item.period_type as ExpansionPeriod) || 'monthly'] }}</span>
-                  <span class="mb-muted">{{ formatDateTime(item.created_at) }}</span>
+                  <span class="mb-kind-tag mb-kind-tag--sm">{{ activityTypeLabel(item) }}</span>
+                  <span :class="`mb-tag mb-tag--${item.status} mb-tag--sm`">{{ activityStatusLabel(item) }}</span>
+                  <span class="mb-history-amount">{{ activityHistoryLabel(item) }}</span>
+                  <span class="mb-muted">{{ formatDateTime(item.createdAt) }}</span>
                 </div>
-                <!-- 滚动到底部触发加载更多 -->
                 <div ref="historySentinelRef" class="mb-history-sentinel" />
               </div>
             </div>
@@ -301,17 +316,33 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Refresh, Setting } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { createExpansionRequest, decideExpansion, getMyBudget, getMyExpansionRequests } from '@/services/control-plane'
+import { createExpansionRequest, decideExpansion, getMyBudget, getMyExpansionRequests, getMyKeyRequests, cancelKeyRequest } from '@/services/control-plane'
 import { useAuthStore } from '@/stores/auth'
 import type { BudgetChainItem } from '@/types/budget'
 import type { ExpansionPeriod, ExpansionRequest, ExpansionStatus } from '@/types/expansion'
 import { PERIOD_LABELS, PERIOD_SUFFIX, STATUS_COLORS, STATUS_LABELS } from '@/types/expansion'
+import type { KeyRequest, KeyRequestStatus } from '@/types/key-request'
+import { KEY_REQUEST_STATUS_LABELS, formatKeyRequestBudget, keyRequestHasBudget } from '@/types/key-request'
+
+type BudgetActivityKind = 'expansion' | 'key_budget'
+type BudgetActivityStatus = ExpansionStatus | KeyRequestStatus
+
+interface BudgetActivity {
+  id: string
+  kind: BudgetActivityKind
+  status: BudgetActivityStatus
+  createdAt: string
+  sortTime: number
+  expansion?: ExpansionRequest
+  keyRequest?: KeyRequest
+}
 
 const router = useRouter()
 const authStore = useAuthStore()
 
 const chain = ref<BudgetChainItem[]>([])
 const myRequests = ref<ExpansionRequest[]>([])
+const keyBudgetRequests = ref<KeyRequest[]>([])
 const loading = ref(false)
 const requestLoading = ref(false)
 const expansionVisible = ref(false)
@@ -384,15 +415,61 @@ const projectedOver = computed(() => {
   return projectedTotal.value > limit
 })
 const latestRequest = computed(() => myRequests.value[0])
+
+function toActivityFromExpansion(r: ExpansionRequest): BudgetActivity {
+  return {
+    id: `expansion:${r.id}`,
+    kind: 'expansion',
+    status: r.status,
+    createdAt: r.created_at,
+    sortTime: new Date(r.created_at).getTime() || 0,
+    expansion: r,
+  }
+}
+
+function toActivityFromKeyRequest(r: KeyRequest): BudgetActivity {
+  return {
+    id: `key:${r.id}`,
+    kind: 'key_budget',
+    status: r.status,
+    createdAt: r.created_at,
+    sortTime: new Date(r.created_at).getTime() || 0,
+    keyRequest: r,
+  }
+}
+
+const activityTimeline = computed(() => {
+  const items: BudgetActivity[] = [
+    ...myRequests.value.map(toActivityFromExpansion),
+    ...keyBudgetRequests.value.map(toActivityFromKeyRequest),
+  ]
+  return items.sort((a, b) => b.sortTime - a.sortTime)
+})
+
+const featuredActivity = computed(() => {
+  const list = activityTimeline.value
+  if (!list.length) return null
+  return list.find(a => a.status === 'pending') || list[0]
+})
+
+const historyActivities = computed(() => {
+  const featured = featuredActivity.value
+  if (!featured) return []
+  return activityTimeline.value.filter(a => a.id !== featured.id)
+})
+
+const pendingKeyBudgetActivities = computed(() =>
+  activityTimeline.value.filter(a => a.kind === 'key_budget' && a.status === 'pending'),
+)
+
 const HISTORY_PAGE_SIZE = 5
 const historyPage = ref(1)
 const historyScrollRef = ref<HTMLElement | null>(null)
 const historySentinelRef = ref<HTMLElement | null>(null)
 let historyObserver: IntersectionObserver | null = null
 
-const historyRequests = computed(() => myRequests.value.slice(1))
-const visibleHistory = computed(() => historyRequests.value.slice(0, historyPage.value * HISTORY_PAGE_SIZE))
-const hasMoreHistory = computed(() => visibleHistory.value.length < historyRequests.value.length)
+const visibleHistory = computed(() => historyActivities.value.slice(0, historyPage.value * HISTORY_PAGE_SIZE))
+const hasMoreHistory = computed(() => visibleHistory.value.length < historyActivities.value.length)
 
 function setupHistoryObserver() {
   if (historyObserver) {
@@ -412,7 +489,7 @@ function setupHistoryObserver() {
 }
 
 // 数据刷新后重置分页并重启 observer
-watch(historyRequests, () => {
+watch(historyActivities, () => {
   historyPage.value = 1
 }, { flush: 'post' })
 
@@ -441,9 +518,15 @@ async function loadBudget() {
 async function loadRequests() {
   requestLoading.value = true
   try {
-    myRequests.value = await getMyExpansionRequests()
+    const [expansions, keyRes] = await Promise.all([
+      getMyExpansionRequests(),
+      getMyKeyRequests({ page: 1, pageSize: 50 }),
+    ])
+    myRequests.value = expansions
+    keyBudgetRequests.value = keyRes.items.filter(i => keyRequestHasBudget(i.budget_monthly))
   } catch {
     myRequests.value = []
+    keyBudgetRequests.value = []
   } finally {
     requestLoading.value = false
   }
@@ -561,6 +644,99 @@ function formatDateTime(value: string): string {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
+function goKeyRequestDetail() {
+  router.push({ path: '/keys', query: { tab: 'my-applications' } })
+}
+
+function activityTypeLabel(a: BudgetActivity) {
+  return a.kind === 'expansion' ? '扩容' : 'Key 预算'
+}
+
+function activityStatusLabel(a: BudgetActivity) {
+  if (a.kind === 'expansion') return statusLabel(a.status as ExpansionStatus)
+  return KEY_REQUEST_STATUS_LABELS[a.status as KeyRequestStatus] || a.status
+}
+
+function activityAmountLabel(a: BudgetActivity) {
+  if (a.kind === 'expansion' && a.expansion) {
+    return `${formatUSD(a.expansion.requested_amount)} ${PERIOD_SUFFIX[a.expansion.period_type || 'monthly']}`
+  }
+  if (a.kind === 'key_budget' && a.keyRequest) {
+    return formatKeyRequestBudget(a.keyRequest.budget_monthly)
+  }
+  return ''
+}
+
+function activityHistoryLabel(a: BudgetActivity) {
+  const amount = activityAmountLabel(a)
+  if (a.kind === 'key_budget' && a.keyRequest?.key_name) {
+    return `${amount} · ${a.keyRequest.key_name}`
+  }
+  return amount
+}
+
+function activitySubtitle(a: BudgetActivity) {
+  if (a.kind === 'key_budget' && a.keyRequest) {
+    return `Key：${a.keyRequest.key_name}`
+  }
+  if (a.kind === 'expansion' && a.expansion?.reason) {
+    return a.expansion.reason
+  }
+  return ''
+}
+
+function activityProgressText(a: BudgetActivity) {
+  if (a.kind === 'expansion' && a.expansion) {
+    return requestProgressText(a.expansion)
+  }
+  const kr = a.keyRequest
+  if (!kr) return ''
+  if (kr.status === 'pending') {
+    return `等待审批，通过后月额度将设为 ${formatKeyRequestBudget(kr.budget_monthly)}`
+  }
+  if (kr.status === 'approved') {
+    return `已通过，个人月额度已设为 ${formatKeyRequestBudget(kr.budget_monthly)}`
+  }
+  if (kr.status === 'rejected') {
+    return kr.approve_comment ? `已驳回：${kr.approve_comment}` : '申请已驳回'
+  }
+  if (kr.status === 'cancelled') return '申请已取消'
+  return KEY_REQUEST_STATUS_LABELS[kr.status]
+}
+
+function activityCancelId(a: BudgetActivity) {
+  if (a.kind === 'expansion' && a.expansion) return a.expansion.id
+  if (a.kind === 'key_budget' && a.keyRequest) return a.keyRequest.id
+  return ''
+}
+
+async function cancelActivity(a: BudgetActivity) {
+  if (a.kind === 'expansion' && a.expansion) {
+    await cancelRequest(a.expansion.id)
+    return
+  }
+  if (a.kind === 'key_budget' && a.keyRequest) {
+    await cancelKeyRequestActivity(a.keyRequest.id)
+  }
+}
+
+async function cancelKeyRequestActivity(id: string) {
+  cancellingId.value = id
+  const req = keyBudgetRequests.value.find(r => r.id === id)
+  const prev = req?.status
+  if (req) req.status = 'cancelled'
+  try {
+    await cancelKeyRequest(id)
+    ElMessage.success('申请已取消')
+    await loadRequests()
+  } catch (e: any) {
+    if (req && prev) req.status = prev
+    ElMessage.error(e?.response?.data?.error || '取消失败')
+  } finally {
+    cancellingId.value = null
+  }
+}
+
 async function cancelRequest(id: string) {
   cancellingId.value = id
   // 乐观更新：立刻把本地状态改为 cancelled，hasPendingRequest 即时变 false，"新建申请"立即可点
@@ -650,7 +826,6 @@ onUnmounted(() => { historyObserver?.disconnect() })
 .mb-no-budget span { font-size: 13px; max-width: 320px; line-height: 1.7; }
 .mb-muted { font-size: 12px; color: var(--el-text-color-placeholder); }
 
-/* ─────────────── KPI strip ─────────────── */
 .mb-kpi-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -962,6 +1137,26 @@ onUnmounted(() => { historyObserver?.disconnect() })
 }
 .mb-empty p { margin: 0 0 6px; font-size: 14px; font-weight: 600; color: var(--el-text-color-primary); }
 .mb-empty span { font-size: 12px; line-height: 1.7; max-width: 260px; }
+
+.mb-pending-key-alert {
+  margin: 0;
+}
+
+.mb-kind-tag {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  border: 1px solid var(--el-color-primary-light-7);
+  border-radius: 4px;
+  padding: 2px 6px;
+  flex-shrink: 0;
+}
+.mb-kind-tag--sm {
+  font-size: 9px;
+  padding: 1px 5px;
+}
 
 /* ─────────────── Active request card ─────────────── */
 .mb-active-request {

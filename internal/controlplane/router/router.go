@@ -198,6 +198,14 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	expansionSvc.SetBudgetService(budgetSvc)
 	expansionUserRepo := authrepo.NewUserRepository(db)
 
+	// feat/key-approval: Key 创建申请 + 部门策略审批
+	deptPolicyRepo := repository.NewDeptPolicyRepo(db)
+	keyRequestRepo := repository.NewKeyRequestRepo(db)
+	keyRequestSvc := service.NewKeyRequestService(keyRequestRepo, deptPolicyRepo, settingsRepo)
+	keyRequestSvc.SetKeyCreator(keySvc)
+	keyRequestSvc.SetBudgetService(budgetSvc)
+	keyRequestSvc.SetNotificationRepo(notificationRepo)
+
 	systemKeySvc := service.NewSystemKeyService(db)
 	// gateway.url 从 yaml 配置读取，环境变量 GATEWAY_URL 可覆盖
 	groupCheckSvc := service.NewGroupCheckService(groupRepo, healthCheckRepo, systemKeySvc, cfg.Gateway.URL)
@@ -513,6 +521,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.POST("/groups/:id/models", groupHandler.AddModels)
 		adminGroup.GET("/groups/:id/models", groupHandler.ListModels)
 		adminGroup.DELETE("/groups/:id/models/:model_id", groupHandler.RemoveModel)
+		adminGroup.POST("/groups/:id/reset-capability", groupHandler.ResetCapability)
 		adminGroup.POST("/groups/:id/check", groupCheckHandler.CheckOne)
 
 		// 系统设置
@@ -632,6 +641,21 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.POST("/expansion-requests/:id/decision", expansionHandler.Decide)
 		adminGroup.GET("/expansion-requests/:id/steps", expansionHandler.ListSteps)
 		adminGroup.POST("/expansion-requests/batch-decision", guard(rbac.PermExpansionRequest), expansionHandler.BatchDecide)
+
+		// feat/key-approval: Key 创建申请 + 审批
+		keyRequestHandler := handler.NewKeyRequestHandler(keyRequestSvc, orgContainer.RBAC, expansionUserRepo)
+		adminGroup.GET("/key-requests/policy", keyRequestHandler.CheckPolicy)
+		adminGroup.POST("/key-requests", keyRequestHandler.Create)
+		adminGroup.GET("/key-requests", keyRequestHandler.ListMine)
+		adminGroup.GET("/key-requests/summary", keyRequestHandler.CountMine)
+		adminGroup.GET("/key-requests/pending", guard(rbac.PermKeyRequestApprove), keyRequestHandler.ListPending)
+		adminGroup.GET("/key-requests/pending/count", guard(rbac.PermKeyRequestApprove), keyRequestHandler.CountPendingForDept)
+		adminGroup.GET("/key-requests/history", guard(rbac.PermKeyRequestApprove), keyRequestHandler.ListHistory)
+		adminGroup.POST("/key-requests/:id/cancel", keyRequestHandler.CancelMine)
+		adminGroup.POST("/key-requests/:id/decision", guard(rbac.PermKeyRequestApprove), keyRequestHandler.Decide)
+		// 部门 Key 创建策略配置
+		adminGroup.GET("/dept-policies/:dept_id/key-creation", keyRequestHandler.GetDeptPolicy)
+		adminGroup.PUT("/dept-policies/:dept_id/key-creation", guard(rbac.PermKeyRequestSetPolicy), keyRequestHandler.SetDeptPolicy)
 	}
 
 	// 员工自助查询预算（JWTAuth 即可，不需要 admin）

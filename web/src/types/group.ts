@@ -17,6 +17,10 @@ export interface Group {
   model_count?: number
   models?: GroupModel[]
   open_mode: OpenMode
+  is_capability_override: boolean
+  override_supports_vision: boolean
+  override_supports_function_calling: boolean
+  override_supports_tool_choice: boolean
   created_at: string
   updated_at: string
 }
@@ -60,6 +64,10 @@ export interface UpdateGroupRequest {
   same_model_retries?: number
   failover_cooldown_seconds?: number
   timeout_seconds?: number
+  is_capability_override?: boolean
+  override_supports_vision?: boolean
+  override_supports_function_calling?: boolean
+  override_supports_tool_choice?: boolean
 }
 
 export interface AddModelToZoneRequest {

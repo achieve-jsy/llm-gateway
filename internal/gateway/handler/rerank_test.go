@@ -227,3 +227,57 @@ func TestRerankHandlerMissingDocumentsField(t *testing.T) {
 	// Empty documents defaults to len==0, which triggers the empty-documents check
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
+
+func TestRerankHandlerEmptyQuery(t *testing.T) {
+	reqBody := `{"model":"test-model","query":"","documents":["doc1","doc2"]}`
+
+	mock := &mockRerankOrchestrator{
+		rerankFn: func(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
+			t.Fatal("orchestrator should not be called for empty query")
+			return nil, nil
+		},
+	}
+
+	handler := NewRerankHandler(mock)
+	c, w := setupRerankTest(reqBody)
+
+	handler.Handle(c)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestRerankHandlerTopNZero(t *testing.T) {
+	reqBody := `{"model":"test-model","query":"what is AI?","documents":["doc1","doc2"],"top_n":0}`
+
+	mock := &mockRerankOrchestrator{
+		rerankFn: func(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
+			t.Fatal("orchestrator should not be called for top_n=0")
+			return nil, nil
+		},
+	}
+
+	handler := NewRerankHandler(mock)
+	c, w := setupRerankTest(reqBody)
+
+	handler.Handle(c)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestRerankHandlerEmptyModel(t *testing.T) {
+	reqBody := `{"model":"","query":"what is AI?","documents":["doc1","doc2"]}`
+
+	mock := &mockRerankOrchestrator{
+		rerankFn: func(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
+			t.Fatal("orchestrator should not be called for empty model")
+			return nil, nil
+		},
+	}
+
+	handler := NewRerankHandler(mock)
+	c, w := setupRerankTest(reqBody)
+
+	handler.Handle(c)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}

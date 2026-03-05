@@ -80,10 +80,19 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 		return
 	}
 
+	// 校验 input 不能是空字符串
+	if s, ok := req.Input.(string); ok && s == "" {
+		gatewayerrors.WriteError(c, "request_body_invalid", gatewayerrors.WithMessage("input must not be an empty string"))
+		return
+	}
+
 	// 校验 input 类型：必须是 string 或 []string
 	if _, ok := req.Input.(string); !ok {
-		if _, ok2 := req.Input.([]interface{}); ok2 {
-			// []interface{} 是 JSON 反序列化后的数组类型，允许
+		if arr, ok2 := req.Input.([]interface{}); ok2 {
+			if len(arr) == 0 {
+				gatewayerrors.WriteError(c, "request_body_invalid", gatewayerrors.WithMessage("input array must not be empty"))
+				return
+			}
 		} else {
 			gatewayerrors.WriteError(c, "request_body_invalid", gatewayerrors.WithMessage("input must be a string or array of strings"))
 			return
@@ -109,11 +118,7 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 	if h.groupDispatch != nil {
 		decision, err := h.groupDispatch.Dispatch(c, req.Model, nil)
 		if err != nil {
-			if ue, ok := err.(*model.UnifiedError); ok {
-				respondError(c, ue)
-				return
-			}
-			respondError(c, model.ErrInternal)
+			respondGroupError(c, err)
 			return
 		}
 		if decision != nil {
@@ -139,6 +144,7 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 		}
 	}
 
+	// 调用上游（不做 failover，失败直接返回错误）
 	resp, err := h.orchestrator.Embeddings(orchestrator.WithGinContext(c.Request.Context(), c), &req)
 	if err != nil {
 		if ue, ok := err.(*model.UnifiedError); ok {
@@ -159,29 +165,4 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 	c.Set("resp_object", resp)
 
 	c.JSON(http.StatusOK, resp)
-}
-
-// estimateEmbeddingInputChars 估算 embedding 请求的输入字符数。
-// EmbeddingRequest.Input 可能是 string 或 []string，统一累加字符数。
-func estimateEmbeddingInputChars(req *core.EmbeddingRequest) int {
-	if req == nil {
-		return 0
-	}
-	total := 0
-	switch v := req.Input.(type) {
-	case string:
-		total += len(v)
-	case []string:
-		for _, s := range v {
-			total += len(s)
-		}
-	case []any:
-		// 兼容 JSON 里的 array of strings
-		for _, s := range v {
-			if str, ok := s.(string); ok {
-				total += len(str)
-			}
-		}
-	}
-	return total
 }

@@ -105,7 +105,7 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 	if h.groupDispatch != nil {
 		decision, err := h.groupDispatch.Dispatch(c, req.Model, &req)
 		if err != nil {
-			h.respondGroupError(c, err)
+			respondGroupError(c, err)
 			return
 		}
 		if decision != nil {
@@ -400,7 +400,8 @@ func (w *cancelOnClose) Close() error {
 	return w.ReadCloser.Close()
 }
 
-func (h *ChatHandler) respondGroupError(c *gin.Context, err error) {
+// respondGroupError 将组调度错误映射为合适的 HTTP 错误响应。
+func respondGroupError(c *gin.Context, err error) {
 	if err == model.ErrGroupNotFound {
 		respondError(c, &model.UnifiedError{
 			Type:       model.ErrorTypeModelNotFound,

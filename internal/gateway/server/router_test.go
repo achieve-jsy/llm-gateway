@@ -64,6 +64,11 @@ func TestSetup_EmbeddingsRoute_Registered(t *testing.T) {
 	assertRouteExists(t, r.Routes(), "POST", "/v1/embeddings")
 }
 
+func TestSetup_RerankRoute_Registered(t *testing.T) {
+	r := buildTestRouter()
+	assertRouteExists(t, r.Routes(), "POST", "/v1/rerank")
+}
+
 func TestSetup_AllExpectedRoutes_Registered(t *testing.T) {
 	r := buildTestRouter()
 	routes := r.Routes()
@@ -73,6 +78,7 @@ func TestSetup_AllExpectedRoutes_Registered(t *testing.T) {
 		{"GET", "/ready"},
 		{"POST", "/v1/chat/completions"},
 		{"POST", "/v1/embeddings"},
+		{"POST", "/v1/rerank"},
 		{"GET", "/v1/models"},
 	}
 	for _, w := range want {
@@ -135,6 +141,19 @@ func TestSetup_Embeddings_WithoutAuth_Returns401(t *testing.T) {
 
 	req, _ := http.NewRequest("POST", srv.URL+"/v1/embeddings",
 		strings.NewReader(`{"model":"text-embedding-ada-002","input":"test"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
+func TestSetup_Rerank_WithoutAuth_Returns401(t *testing.T) {
+	srv := httptest.NewServer(buildTestRouter())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("POST", srv.URL+"/v1/rerank",
+		strings.NewReader(`{"model":"rerank-v1","query":"test","documents":["a","b"]}`))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)

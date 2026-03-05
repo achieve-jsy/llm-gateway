@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 
 	"github.com/example/llm-gateway/internal/core"
 	gatewayerrors "github.com/example/llm-gateway/internal/errors"
@@ -25,12 +26,26 @@ func MapProviderError(err error) *model.UnifiedError {
 
 	// 超时检测：context 超时
 	if errors.Is(err, context.DeadlineExceeded) {
-		return model.ErrProviderTimeout
+		return &model.UnifiedError{
+			Type: model.ErrorTypeTempFailure, Code: "provider_timeout",
+			Message:    "upstream provider did not respond in time",
+			HTTPStatus: http.StatusGatewayTimeout,
+			Upstream: &gatewayerrors.UpstreamInfo{
+				Body: err.Error(),
+			},
+		}
 	}
 
 	// 上下文取消
 	if errors.Is(err, context.Canceled) {
-		return model.NewUnifiedError(model.ErrorTypeTempFailure, "request_canceled", "request was canceled by client", 499)
+		return &model.UnifiedError{
+			Type: model.ErrorTypeTempFailure, Code: "request_canceled",
+			Message:    "request was canceled by client",
+			HTTPStatus: 499,
+			Upstream: &gatewayerrors.UpstreamInfo{
+				Body: err.Error(),
+			},
+		}
 	}
 
 	// 尝试从 GatewayError 提取 provider/status/body 信息，走声明式映射
@@ -40,7 +55,7 @@ func MapProviderError(err error) *model.UnifiedError {
 		status := gwErr.StatusCode
 		body := formatErrorBody(gwErr)
 
-		code, _ := gatewayerrors.MapProviderError(provider, status, body, nil)
+		code, upstream := gatewayerrors.MapProviderError(provider, status, body, nil)
 		if gatewayerrors.Has(code) {
 			ec := gatewayerrors.Lookup(code)
 			// 构建 UnifiedError，保留原始错误信息
@@ -53,6 +68,7 @@ func MapProviderError(err error) *model.UnifiedError {
 				Code:       ec.Code,
 				Message:    msg,
 				HTTPStatus: ec.HTTPStatus,
+				Upstream:   &upstream,
 			}
 		}
 	}

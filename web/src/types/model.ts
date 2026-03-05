@@ -8,8 +8,29 @@ export interface ModelInfo {
   created: number
   /** 归属渠道/所有者 */
   owned_by: string
-  /** 模型类型：chat 或 embedding */
-  type?: 'chat' | 'embedding'
+  /** 模型类型：chat、embedding 或 rerank */
+  type?: 'chat' | 'embedding' | 'rerank'
+  /** 元数据（能力信息，如 modes、context_window 等） */
+  metadata?: ModelMetadata
+}
+
+/** 模型元数据（来自 /v1/models 响应的 metadata 字段） */
+export interface ModelMetadata {
+  display_name?: string
+  description?: string
+  family?: string
+  modes?: string[]
+  categories?: ModelCategory[]
+  tags?: string[]
+  context_window?: number
+  max_output_tokens?: number
+  capabilities?: Record<string, boolean>
+}
+
+/** 模型分类 */
+export interface ModelCategory {
+  id: string
+  name: string
 }
 
 /** /v1/models 接口响应 */

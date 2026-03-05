@@ -156,7 +156,7 @@
 
       <el-divider content-position="left">参数配置</el-divider>
 
-      <el-form-item label="上下文长度">
+      <el-form-item label="上下文长度" v-if="formData.model_type === 'chat'">
         <el-input-number
           v-model="formData.context_length"
           :min="0"
@@ -167,7 +167,7 @@
         <span class="form-hint inline">tokens</span>
       </el-form-item>
 
-      <el-form-item label="最大输出">
+      <el-form-item label="最大输出" v-if="formData.model_type === 'chat'">
         <el-input-number
           v-model="formData.max_output_tokens"
           :min="0"

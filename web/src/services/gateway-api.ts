@@ -1,6 +1,6 @@
 import http from './http'
 import axios from 'axios'
-import type { ModelInfo, ModelsResponse } from '@/types/model'
+import type { ModelInfo, ModelMetadata, ModelsResponse } from '@/types/model'
 
 // ===================== 模型 =====================
 
@@ -35,7 +35,9 @@ export interface MeModelItem {
   consecutive_failures: number
   last_check_error: string
   response_time: number
+  metadata?: ModelMetadata
 }
+
 
 export interface MeModelsResponse {
   object: string

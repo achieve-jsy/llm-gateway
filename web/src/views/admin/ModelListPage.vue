@@ -108,6 +108,16 @@
         </template>
       </el-table-column>
 
+      <el-table-column label="类型" width="90" align="center">
+        <template #default="{ row }">
+          <el-tag
+            size="small"
+            :type="modelTypeTagType(row.model_type)"
+            effect="plain"
+          >{{ MODEL_TYPE_LABEL[row.model_type] ?? row.model_type }}</el-tag>
+        </template>
+      </el-table-column>
+
       <el-table-column label="标签" min-width="160">
         <template #default="{ row }">
           <template v-if="modelTagsMap[row.id]?.length">
@@ -132,18 +142,21 @@
 
       <el-table-column label="上下文" width="180" align="center">
         <template #default="{ row }">
-          <span v-if="row.context_length">{{ formatTokenCount(row.context_length) }}</span>
-          <span v-else class="text-muted">-</span>
-          <template v-if="row.ctx_overridden">
-            <el-tag type="warning" size="small" class="override-badge">已脱离目录</el-tag>
-            <el-button
-              text
-              type="primary"
-              size="small"
-              class="restore-btn"
-              @click="handleResetOverride(row, 'context_length')"
-            >🔗 恢复跟随目录</el-button>
+          <template v-if="row.model_type === 'chat'">
+            <span v-if="row.context_length">{{ formatTokenCount(row.context_length) }}</span>
+            <span v-else class="text-muted">-</span>
+            <template v-if="row.ctx_overridden">
+              <el-tag type="warning" size="small" class="override-badge">已脱离目录</el-tag>
+              <el-button
+                text
+                type="primary"
+                size="small"
+                class="restore-btn"
+                @click="handleResetOverride(row, 'context_length')"
+              >🔗 恢复跟随目录</el-button>
+            </template>
           </template>
+          <span v-else class="text-muted">-</span>
         </template>
       </el-table-column>
 
@@ -323,6 +336,19 @@ import { QUOTA_DEFAULTS, getModelQuota } from '@/api/quota'
 import type { QuotaEffective } from '@/api/quota'
 
 const router = useRouter()
+
+const MODEL_TYPE_LABEL: Record<string, string> = {
+  chat: 'Chat',
+  embedding: 'Embedding',
+  rerank: 'Rerank',
+}
+
+function modelTypeTagType(type: string): 'primary' | 'success' | 'warning' | 'info' | 'danger' {
+  if (type === 'chat') return 'primary'
+  if (type === 'embedding') return 'success'
+  if (type === 'rerank') return 'warning'
+  return 'info'
+}
 
 // const allModels = ref<Model[]>([]) // 已改为后端分页，不再使用
 const models = ref<Model[]>([])

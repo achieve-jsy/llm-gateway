@@ -47,6 +47,8 @@ export interface LogRow {
   est_cost_usd: number
   input_price_snapshot?: number | null
   output_price_snapshot?: number | null
+  /** 调用的端点路径，如 /v1/chat/completions, /v1/embeddings, /v1/rerank */
+  inbound_endpoint?: string
 }
 
 export interface TraceData {

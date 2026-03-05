@@ -110,6 +110,17 @@
             </el-select>
           </div>
 
+          <!-- 端点 -->
+          <div class="up-filter-group">
+            <span class="up-filter-label">端点</span>
+            <el-select v-model="filterEndpoint" placeholder="全部" clearable size="small"
+              class="up-filter__endpoint" @change="loadAll" @clear="loadAll">
+              <el-option label="Chat" value="/v1/chat/completions" />
+              <el-option label="Embedding" value="/v1/embeddings" />
+              <el-option label="Rerank" value="/v1/rerank" />
+            </el-select>
+          </div>
+
           <div class="up-filter-sep" />
 
           <!-- Key 关键词 -->
@@ -501,10 +512,11 @@ const filterProvider = ref('')
 const filterStatus   = ref('')
 const filterModelName = ref('')
 const filterGroupName = ref('')
+const filterEndpoint  = ref('')
 const showMoreFilters = ref(false)
 
 const activeFilterCount = computed(() =>
-  [filterModelName.value, filterGroupName.value,
+  [filterModelName.value, filterGroupName.value, filterEndpoint.value,
    filterKeyName.value, filterKeyType.value, filterUserName.value, filterDeptName.value,
    filterStudioId.value, filterProvider.value, filterStatus.value]
     .filter(Boolean).length
@@ -521,6 +533,7 @@ function clearFilters() {
   filterStudioId.value  = ''
   filterProvider.value  = ''
   filterStatus.value    = ''
+  filterEndpoint.value  = ''
   loadAll()
 }
 const groupBy = ref('day')
@@ -562,6 +575,7 @@ const logParams = computed(() => {
   if (filterProvider.value)  p.provider   = filterProvider.value
   if (filterStatus.value)    p.status     = filterStatus.value
   if (filterKeyType.value)   p.key_type   = filterKeyType.value
+  if (filterEndpoint.value)  p.endpoint   = filterEndpoint.value
   return p
 })
 
@@ -691,6 +705,7 @@ async function loadStats(resetPage = true) {
     if (filterStudioId.value)  params.studio_id  = filterStudioId.value
     if (filterProvider.value)  params.provider   = filterProvider.value
     if (filterStatus.value)    params.status     = filterStatus.value
+    if (filterEndpoint.value) params.endpoint   = filterEndpoint.value
     const r = await http.get('/api/v1/usage', { params })
     statsRows.value       = r.data.rows || []
     statsTotal.value      = r.data.total || null

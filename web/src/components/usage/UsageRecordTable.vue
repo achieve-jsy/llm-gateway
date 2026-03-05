@@ -86,6 +86,19 @@
           </template>
         </el-table-column>
 
+        <!-- 端点 -->
+        <el-table-column label="端点" min-width="90" align="center">
+          <template #default="{ row }">
+            <el-tag
+              v-if="endpointLabel(row.inbound_endpoint)"
+              size="small"
+              :type="endpointTagType(row.inbound_endpoint)"
+              effect="plain"
+            >{{ endpointLabel(row.inbound_endpoint) }}</el-tag>
+            <span v-else class="text-muted">-</span>
+          </template>
+        </el-table-column>
+
         <!-- Token 用量 -->
         <el-table-column label="Token 用量" min-width="210">
           <template #default="{ row }">
@@ -363,6 +376,26 @@ async function openTrace(row: LogRow) {
   } finally {
     traceLoading.value = false
   }
+}
+
+// ── 端点标签 ──
+const ENDPOINT_LABEL: Record<string, string> = {
+  '/v1/chat/completions': 'Chat',
+  '/v1/embeddings': 'Embedding',
+  '/v1/rerank': 'Rerank',
+}
+
+function endpointLabel(path?: string): string {
+  if (!path) return ''
+  return ENDPOINT_LABEL[path] || ''
+}
+
+function endpointTagType(path?: string): 'primary' | 'success' | 'warning' | '' {
+  if (!path) return ''
+  if (path === '/v1/chat/completions') return 'primary'
+  if (path === '/v1/embeddings') return 'success'
+  if (path === '/v1/rerank') return 'warning'
+  return ''
 }
 
 // ── Key 解析 ──

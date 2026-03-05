@@ -65,6 +65,12 @@
         <el-option value="success"><span class="mu-dot mu-dot--ok" /> 成功</el-option>
         <el-option value="error"><span class="mu-dot mu-dot--err" /> 失败</el-option>
       </el-select>
+      <el-select v-model="filterEndpoint" placeholder="端点" clearable size="small"
+        class="mu-filter__endpoint" @change="loadAll" @clear="loadAll">
+        <el-option label="Chat" value="/v1/chat/completions" />
+        <el-option label="Embedding" value="/v1/embeddings" />
+        <el-option label="Rerank" value="/v1/rerank" />
+      </el-select>
       <el-button v-if="activeFilterCount > 0" size="small" plain type="warning"
         :icon="Close" @click="clearFilters" class="mu-filter__clear">
         清空 {{ activeFilterCount }}
@@ -428,13 +434,14 @@ const filterKeyId     = ref('')
 const filterModelName = ref('')
 const filterGroupName = ref('')
 const filterStatus    = ref('')
+const filterEndpoint  = ref('')
 const groupBy = ref('day')
 
 const activeFilterCount = computed(() =>
-  [filterKeyId.value, filterModelName.value, filterGroupName.value, filterStatus.value].filter(Boolean).length
+  [filterKeyId.value, filterModelName.value, filterGroupName.value, filterStatus.value, filterEndpoint.value].filter(Boolean).length
 )
 function clearFilters() {
-  filterKeyId.value = filterModelName.value = filterGroupName.value = filterStatus.value = ''
+  filterKeyId.value = filterModelName.value = filterGroupName.value = filterStatus.value = filterEndpoint.value = ''
   loadAll()
 }
 
@@ -470,6 +477,7 @@ const logParams = computed(() => {
   if (filterGroupName.value) p.group_name = filterGroupName.value
   if (filterKeyId.value)     p.key_id     = filterKeyId.value
   if (filterStatus.value)    p.status     = filterStatus.value
+  if (filterEndpoint.value) p.endpoint   = filterEndpoint.value
   return p
 })
 

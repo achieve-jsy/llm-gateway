@@ -342,18 +342,30 @@
       <!-- 5. 首字延迟 P99 (TTFT) -->
       <div class="ops-metric-card">
         <div class="ops-metric-label ops-section-label">
-          <el-tooltip content="首 Token 延迟 (Time To First Token) 的 P99 百分位值，衡量流式响应首字节速度" placement="top">
+          <el-tooltip content="首 Token 延迟 (Time To First Token) 的 P99 百分位值，衡量流式响应首字节速度。Embedding/Rerank 无此指标" placement="top">
             <span>首字延迟 P99</span>
           </el-tooltip>
         </div>
-        <div class="ops-metric-value">{{ latency.ttft_p99_ms }}ms</div>
-        <div class="ops-latency-grid">
-          <div class="ops-latency-cell"><span class="ops-latency-k">P95</span><span class="ops-latency-v">{{ latency.ttft_p95_ms }}</span></div>
-          <div class="ops-latency-cell"><span class="ops-latency-k">P90</span><span class="ops-latency-v">{{ latency.ttft_p90_ms }}</span></div>
-          <div class="ops-latency-cell"><span class="ops-latency-k">P50</span><span class="ops-latency-v">{{ latency.ttft_p50_ms }}</span></div>
-          <div class="ops-latency-cell"><span class="ops-latency-k">Avg</span><span class="ops-latency-v">{{ latency.ttft_avg_ms }}</span></div>
-          <div class="ops-latency-cell"><span class="ops-latency-k">Max</span><span class="ops-latency-v">{{ latency.ttft_max_ms }}</span></div>
-        </div>
+        <template v-if="isNonChatEndpoint">
+          <div class="ops-metric-value">-</div>
+          <div class="ops-latency-grid">
+            <div class="ops-latency-cell"><span class="ops-latency-k">P95</span><span class="ops-latency-v">-</span></div>
+            <div class="ops-latency-cell"><span class="ops-latency-k">P90</span><span class="ops-latency-v">-</span></div>
+            <div class="ops-latency-cell"><span class="ops-latency-k">P50</span><span class="ops-latency-v">-</span></div>
+            <div class="ops-latency-cell"><span class="ops-latency-k">Avg</span><span class="ops-latency-v">-</span></div>
+            <div class="ops-latency-cell"><span class="ops-latency-k">Max</span><span class="ops-latency-v">-</span></div>
+          </div>
+        </template>
+        <template v-else>
+          <div class="ops-metric-value">{{ latency.ttft_p99_ms }}ms</div>
+          <div class="ops-latency-grid">
+            <div class="ops-latency-cell"><span class="ops-latency-k">P95</span><span class="ops-latency-v">{{ latency.ttft_p95_ms }}</span></div>
+            <div class="ops-latency-cell"><span class="ops-latency-k">P90</span><span class="ops-latency-v">{{ latency.ttft_p90_ms }}</span></div>
+            <div class="ops-latency-cell"><span class="ops-latency-k">P50</span><span class="ops-latency-v">{{ latency.ttft_p50_ms }}</span></div>
+            <div class="ops-latency-cell"><span class="ops-latency-k">Avg</span><span class="ops-latency-v">{{ latency.ttft_avg_ms }}</span></div>
+            <div class="ops-latency-cell"><span class="ops-latency-k">Max</span><span class="ops-latency-v">{{ latency.ttft_max_ms }}</span></div>
+          </div>
+        </template>
       </div>
 
       <!-- 6. 上游错误率 -->
@@ -796,6 +808,11 @@ const statusLabel = computed(() => {
 })
 
 const countdown = computed(() => props.autoRefreshCountdown)
+
+/** 当前筛选的是 Embedding 或 Rerank（非 Chat 端点），TTFT 无意义 */
+const isNonChatEndpoint = computed(() => {
+  return props.endpoint === '/v1/embeddings' || props.endpoint === '/v1/rerank'
+})
 
 const formatLastUpdated = (d: Date): string => {
   return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`

@@ -413,6 +413,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		opsHandler := handler.NewOpsHandler(db, rdb, systemMetricsCollector)
 		adminGroup.GET("/ops/groups", opsHandler.GetGroupOptions)
 		adminGroup.GET("/ops/dashboard", opsHandler.GetDashboard)
+		adminGroup.GET("/ops/dashboard/snapshot-v2", opsHandler.GetSnapshotV2)
 		adminGroup.GET("/ops/traffic-trend", opsHandler.GetTrafficTrend)
 		adminGroup.GET("/ops/error-trend", opsHandler.GetErrorTrend)
 		adminGroup.GET("/ops/latency-histogram", opsHandler.GetLatencyHistogram)
@@ -480,6 +481,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		// 运维看板 v3：错误日志增强视图
 		adminGroup.GET("/ops/error-logs", opsHandler.ListErrorLogs)
 		adminGroup.PUT("/ops/error-logs/:id/resolve", opsHandler.ResolveErrorLog)
+		adminGroup.PUT("/ops/request-errors/:id/resolve", opsHandler.ResolveRequestError)
+		adminGroup.PUT("/ops/upstream-errors/:id/resolve", opsHandler.ResolveUpstreamError)
 
 		// 模型状态变更日志
 		adminGroup.GET("/model-status-logs", modelStatusLogHandler.ListModelStatusLogs)
@@ -700,6 +703,10 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 	// 员工自助查询预算（JWTAuth 即可，不需要 admin）
 	r.GET("/api/v1/my/budget", middleware.JWTAuth(), budgetHandler.MyBudget)
+
+	// WebSocket 端点（浏览器 WS 不支持 Authorization header，由 handler 内部验证）
+	wsHandler := handler.NewOpsWSHandler(rdb)
+	r.GET("/api/v1/ops/ws/qps", wsHandler.HandleQPSWebSocket)
 
 	// 管理接口（JWTAuth 已在 adminGroup 上）
 	orgGroup := adminGroup.Group("/org")

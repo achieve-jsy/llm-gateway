@@ -12,6 +12,8 @@ vi.mock('vue-router', () => ({
 vi.mock('@element-plus/icons-vue', () => ({
   Refresh: { template: '<i />' },
   DataBoard: { template: '<i />' },
+  VideoPause: { template: '<i />' },
+  VideoPlay: { template: '<i />' },
 }))
 
 vi.mock('@/api/ops', () => ({
@@ -24,6 +26,7 @@ vi.mock('@/api/ops', () => ({
           memory_usage_percent: 0, goroutine_count: 0, db_active_count: 0,
           db_idle_count: 0, db_waiting_count: 0, db_max_open_conns: 0,
           redis_total_conns: 0, redis_idle_conns: 0, redis_pool_size: 0,
+          concurrency_queue_depth: 0, db_ok: true, redis_ok: true,
           collected_at: '',
         },
         // 故意省略 traffic / sla / latency / errors 字段，模拟后端不完整响应
@@ -34,6 +37,34 @@ vi.mock('@/api/ops', () => ({
         jobs: [],
       },
       timestamp: '2026-06-30T00:00:00Z',
+    }),
+    getSnapshotV2: vi.fn().mockResolvedValue({
+      generated_at: '2026-06-30T00:00:00Z',
+      overview: {
+        health_score: 50,
+        total_requests: 0,
+        total_tokens: 0,
+        success_rate: 1,
+        request_errors: 0,
+        upstream_errors: 0,
+        business_errors: 0,
+        duration_avg_ms: 0,
+        system_metrics: {
+          cpu_usage_percent: 0, memory_used_mb: 0, memory_total_mb: 0,
+          memory_usage_percent: 0, goroutine_count: 0, db_active_count: 0,
+          db_idle_count: 0, db_waiting_count: 0, db_max_open_conns: 0,
+          redis_total_conns: 0, redis_idle_conns: 0, redis_pool_size: 0,
+          concurrency_queue_depth: 0, db_ok: true, redis_ok: true,
+          collected_at: '',
+        },
+        traffic: { total_requests: 0, total_tokens: 0, avg_qps: 0, avg_tps: 0, current_qps: 0, current_tps: 0, peak_qps: 0, peak_tps: 0 },
+        sla: { success_rate: 1, error_rate: 0, sla_error_count: 0 },
+        latency: {},
+        errors: { upstream_errors: 0, request_errors: 0, business_errors: 0 },
+        jobs: [],
+      },
+      throughput_trend: { points: [], dimension: 'time' },
+      error_trend: { points: [] },
     }),
     getDashboardSettings: vi.fn().mockResolvedValue({
       auto_refresh_interval: 30, show_alert_events: false,

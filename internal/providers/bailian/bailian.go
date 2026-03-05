@@ -16,6 +16,9 @@ import (
 // defaultBaseURL is the DashScope OpenAI-compatible endpoint.
 const defaultBaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
+// nativeBaseURL is the DashScope native API endpoint (used for services not available in compatible mode, e.g. text-rerank).
+const nativeBaseURL = "https://dashscope.aliyuncs.com"
+
 // Registration provides factory registration for the Bailian provider.
 var Registration = providers.Registration{
 	Type: "bailian",
@@ -27,18 +30,31 @@ var Registration = providers.Registration{
 
 // Provider implements the core.Provider interface for Bailian (DashScope).
 type Provider struct {
-	compatible *openai.CompatibleProvider
+	compatible   *openai.CompatibleProvider
+	nativeClient *llmclient.Client
 }
 
 // New creates a new Bailian provider.
 func New(cfg providers.ProviderConfig, opts providers.ProviderOptions) core.Provider {
 	baseURL := providers.ResolveBaseURL(cfg.BaseURL, defaultBaseURL)
+	compatible := openai.NewCompatibleProvider(cfg.APIKey, opts, openai.CompatibleProviderConfig{
+		ProviderName: "bailian",
+		BaseURL:      baseURL,
+		SetHeaders:   setHeaders,
+	})
 	return &Provider{
-		compatible: openai.NewCompatibleProvider(cfg.APIKey, opts, openai.CompatibleProviderConfig{
-			ProviderName: "bailian",
-			BaseURL:      baseURL,
-			SetHeaders:   setHeaders,
-		}),
+		compatible:   compatible,
+		nativeClient: llmclient.New(nativeClientConfig(), nativeHeaderSetter(cfg.APIKey)),
+	}
+}
+
+func nativeClientConfig() llmclient.Config {
+	return llmclient.DefaultConfig("bailian-native", nativeBaseURL)
+}
+
+func nativeHeaderSetter(apiKey string) llmclient.HeaderSetter {
+	return func(req *http.Request) {
+		setHeaders(req, apiKey)
 	}
 }
 
@@ -52,6 +68,7 @@ func NewWithHTTPClient(apiKey string, baseURL string, httpClient *http.Client, h
 			BaseURL:      resolvedBaseURL,
 			SetHeaders:   setHeaders,
 		}),
+		nativeClient: llmclient.NewWithHTTPClient(httpClient, nativeClientConfig(), nativeHeaderSetter(apiKey)),
 	}
 }
 
@@ -149,7 +166,7 @@ func (p *Provider) Rerank(ctx context.Context, req *core.RerankRequest) (*core.R
 	}
 
 	var bailianResp bailianRerankResp
-	err := p.compatible.Do(ctx, llmclient.Request{
+	err := p.nativeClient.Do(ctx, llmclient.Request{
 		Method:   http.MethodPost,
 		Endpoint: "/api/v1/services/rerank/text-rerank/text-rerank",
 		Body:     bailianReq,

@@ -93,4 +93,20 @@ var Registry = map[Permission]PolicyEntry{
 	PermKeyRequestApprove: {ScopeManage},
 	// 设置部门 Key 创建策略：任意管理角色（service 层按 deptIDs 过滤）
 	PermKeyRequestSetPolicy: {ScopeManage},
+
+	// ── v0.15 四层配额体系 ──────────────────────────────────────────────────
+	// 全局默认（两套）：仅 admin
+	PermQuotaDefaultSet: {ScopeGlobal},
+	// 用户配额：任意管理角色（service 层校验 dept 范围）
+	PermQuotaUserSet: {ScopeManage},
+	// Service Key 配额：任意管理角色（service 层按 Key.dept_id 校验）
+	PermQuotaServiceKeySet: {ScopeManage},
+	// 模型组配额：仅 admin
+	PermQuotaGroupSet: {ScopeGlobal},
+	// 模型配额：仅 admin
+	PermQuotaModelSet: {ScopeGlobal},
+	// 查看管辖范围配额：任意管理角色
+	PermQuotaViewScoped: {ScopeManage},
+	// 查看全公司配额：仅 admin
+	PermQuotaViewAll: {ScopeGlobal},
 }

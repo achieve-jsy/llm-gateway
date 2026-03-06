@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/example/llm-gateway/internal/core"
+	gatewayerrors "github.com/example/llm-gateway/internal/errors"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
+	"github.com/example/llm-gateway/internal/gateway/quota"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/gin-gonic/gin"
 )
@@ -40,6 +42,7 @@ type ChatHandler struct {
 	orchestrator  ChatOrchestratorInterface
 	groupDispatch *orchestrator.GroupAwareDispatcher
 	budgetDeps    *middleware.BudgetDeps // v0.7: 预算预扣依赖（nil 表示跳过预算校验）
+	quotaGate     *quota.ModelQuotaGate  // v0.15: 模型层配额检查（nil 表示跳过）
 }
 
 // NewChatHandler 创建 ChatHandler 实例
@@ -55,6 +58,11 @@ func NewChatHandlerWithGroup(orch ChatOrchestratorInterface, gd *orchestrator.Gr
 // SetBudgetDeps 注入预算依赖（router setup 时调用一次）
 func (h *ChatHandler) SetBudgetDeps(deps *middleware.BudgetDeps) {
 	h.budgetDeps = deps
+}
+
+// SetModelQuotaGate 注入模型配额检查器（router setup 时调用一次）
+func (h *ChatHandler) SetModelQuotaGate(gate *quota.ModelQuotaGate) {
+	h.quotaGate = gate
 }
 
 // Handle 处理 POST /v1/chat/completions 请求
@@ -76,13 +84,7 @@ func (h *ChatHandler) SetBudgetDeps(deps *middleware.BudgetDeps) {
 func (h *ChatHandler) Handle(c *gin.Context) {
 	var req core.ChatRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": gin.H{
-				"type":    "invalid_request",
-				"message": err.Error(),
-				"code":    "invalid_request_body",
-			},
-		})
+		gatewayerrors.WriteError(c, "request_body_invalid", gatewayerrors.WithMessage(err.Error()))
 		return
 	}
 
@@ -116,6 +118,19 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 			if decision.Strategy == scheduler.StrategyAuto && decision.ComplexityTier != "" {
 				c.Header("X-Auto-Tier", decision.ComplexityTier)
 				c.Header("X-Auto-Score", fmt.Sprintf("%.2f", decision.ComplexityScore))
+			}
+			
+			// v0.15: 模型层配额检查（在路由选定具体 model 之后、转发上游之前）
+			if h.quotaGate != nil {
+				subjectType, _ := c.Get("quota_subject_type")
+				subjectID, _ := c.Get("quota_subject_id")
+				if st, ok := subjectType.(string); ok {
+					if si, ok := subjectID.(string); ok {
+						if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelID); err != nil {
+							return // BeforeUpstream 已写入 429 响应
+						}
+					}
+				}
 			}
 		}
 	}
@@ -376,15 +391,22 @@ func (h *ChatHandler) respondGroupError(c *gin.Context, err error) {
 	respondError(c, model.ErrInternal)
 }
 
-// respondError 返回统一错误响应 JSON
+// respondError 返回统一错误响应 JSON。
+// 当 X-Error-Format: passthrough 请求头存在时，直接透传上游错误，不做归一化。
 func respondError(c *gin.Context, ue *model.UnifiedError) {
-	c.JSON(ue.HTTPStatus, gin.H{
+	if IsPassthroughMode(c) {
+		writePassthroughError(c, ue.HTTPStatus, string(ue.Type), ue.Message)
+		return
+	}
+	body := gin.H{
 		"error": gin.H{
 			"type":    ue.Type,
 			"code":    ue.Code,
 			"message": ue.Message,
 		},
-	})
+	}
+	middleware.SetTraceResponseObject(c, body)
+	c.JSON(ue.HTTPStatus, body)
 }
 
 // estimateChatPromptChars 粗略估算 ChatRequest 的 prompt 字符数，用于预算预扣。
@@ -404,4 +426,3 @@ func estimateChatPromptChars(req *core.ChatRequest) int {
 	}
 	return total
 }
-

@@ -22,6 +22,7 @@ export const DEFAULT_EXPORT_COLUMNS: ExportColumn[] = [
   { key: 'ts', label: '时间' },
   { key: 'model', label: '模型' },
   { key: 'key_name', label: 'Key' },
+  { key: 'key_type', label: 'Key类型' },
   { key: 'user_name', label: '用户' },
   { key: 'status', label: '状态' },
   { key: 'duration_ms', label: '耗时(ms)' },

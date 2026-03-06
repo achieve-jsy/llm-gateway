@@ -76,7 +76,8 @@
             <div v-if="metaMode !== 'personal'" class="up-meta-section">
               <div class="up-meta-heading">调用者</div>
               <div class="up-meta-row"><span>Key</span><span>{{ row?.key_name || maskKey(row?.key_id || '') }}</span></div>
-              <div class="up-meta-row"><span>用户</span><span>{{ row?.user_name || '—' }}</span></div>
+              <div v-if="row?.key_type" class="up-meta-row"><span>Key 类型</span><span>{{ keyTypeLabel(row.key_type) }}</span></div>
+              <div class="up-meta-row"><span>用户</span><span>{{ row?.key_type === 'service' ? '—' : (row?.user_name || '—') }}</span></div>
               <div class="up-meta-row"><span>部门</span><span>{{ row?.dept_name || row?.dept_id || '—' }}</span></div>
               <div class="up-meta-row"><span>IP</span><code>{{ row?.ip_address || '—' }}</code></div>
               <div class="up-meta-row up-meta-row--wrap"><span>UA</span><code class="up-meta-ua">{{ row?.user_agent || '—' }}</code></div>
@@ -136,8 +137,11 @@
           <div v-if="traceMessages.length" class="up-msgs">
             <div v-for="(msg, i) in traceMessages" :key="i" :class="['up-msg', `up-msg--${msg.role}`]">
               <span class="up-msg-role">{{ msg.role }}</span>
-              <pre class="up-msg-content">{{ typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2) }}</pre>
+              <pre class="up-msg-content">{{ msg.content || '（空）' }}</pre>
             </div>
+          </div>
+          <div v-else-if="traceData?.request_body" class="up-json-view">
+            <pre>{{ JSON.stringify(traceData.request_body, null, 2) }}</pre>
           </div>
           <div v-else class="up-trace-empty">无提示词数据</div>
         </el-tab-pane>
@@ -152,6 +156,12 @@
             <div class="up-msg up-msg--assistant">
               <span class="up-msg-role">assistant</span>
               <pre class="up-msg-content">{{ traceResponseText }}</pre>
+            </div>
+          </div>
+          <div v-else-if="traceResponseFallback" class="up-msgs">
+            <div class="up-msg up-msg--assistant">
+              <span class="up-msg-role">assistant</span>
+              <pre class="up-msg-content up-msg-content--muted">{{ traceResponseFallback }}</pre>
             </div>
           </div>
           <div v-else-if="traceData?.response_body" class="up-json-view">
@@ -200,6 +210,11 @@ import {
 import { useSettingsStore } from '@/stores/settings'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
 import { fmtDateTime, fmtDuration } from '@/utils/time'
+import {
+  extractTraceMessages,
+  extractTraceResponseText,
+  isTraceStreamResponse,
+} from '@/utils/trace-body'
 import type { LogRow, TraceData } from '@/types/usage-log'
 
 export type { LogRow, TraceData } from '@/types/usage-log'
@@ -244,6 +259,12 @@ watch(() => props.traceLoading, (loading) => {
 // ── Formatters ──
 const fmtNum = (n?: number | null) => n?.toLocaleString() ?? '0'
 
+const keyTypeLabel = (t?: string) => {
+  if (t === 'service') return '程序 Key'
+  if (t === 'personal') return '个人 Key'
+  return t || '—'
+}
+
 const fmtCost = (v?: number | null): string => {
   const n = convertCost(Number(v || 0), cc.value)
   const sym = currencySymbol(cc.value.currency)
@@ -268,23 +289,28 @@ const fmtPrice = (n?: number | null) => {
 const maskKey = (k?: string) => !k ? '—' : k.length > 14 ? k.slice(0, 6) + '···' + k.slice(-4) : k
 
 // ── Trace computeds ──
-const traceMessages = computed(() => {
-  const body = props.traceData?.request_body
-  if (!body) return []
-  return (body as any).messages || []
-})
+const traceMessages = computed(() => extractTraceMessages(props.traceData?.request_body))
 
-const traceResponseText = computed(() => {
+const traceResponseText = computed(() => extractTraceResponseText(props.traceData?.response_body))
+
+/** 有 response 但正文块为空（如仅 reasoning token）时的说明 */
+const traceResponseFallback = computed(() => {
   const body = props.traceData?.response_body
-  if (!body) return ''
-  const choices = (body as any).choices
-  if (Array.isArray(choices) && choices.length > 0) {
-    return choices[0]?.message?.content ?? choices[0]?.delta?.content ?? ''
+  if (!body || typeof body !== 'object') return ''
+  const b = body as Record<string, unknown>
+  if (extractTraceResponseText(body)) return ''
+  const usage = b.usage as Record<string, unknown> | undefined
+  if (usage && (usage.reasoning_tokens || usage.output_tokens_details)) {
+    const details = usage.output_tokens_details as Record<string, unknown> | undefined
+    const reasoning = details?.reasoning_tokens ?? usage.reasoning_tokens
+    if (reasoning) return `（模型返回无可见文本，含 ${reasoning} reasoning tokens）`
   }
   return ''
 })
 
-const traceIsStream = computed(() => !!(props.traceData?.response_body as any)?.stream)
+const traceIsStream = computed(() =>
+  isTraceStreamResponse(props.traceData?.response_body) || !!props.row?.stream,
+)
 
 const timelineStages = computed(() => {
   const td = props.traceData
@@ -461,6 +487,7 @@ const timelineStages = computed(() => {
   white-space: pre-wrap; word-break: break-word; overflow-x: auto; -webkit-overflow-scrolling: touch;
   font-family: var(--up-mono); background: var(--el-bg-color); max-height: 400px; overflow-y: auto;
 }
+.up-msg-content--muted { color: var(--el-text-color-secondary); font-style: italic; }
 
 /* ── JSON view ── */
 .up-json-view {

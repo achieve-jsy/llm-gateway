@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/example/llm-gateway/internal/core"
@@ -20,6 +19,7 @@ import (
 	gwobs "github.com/example/llm-gateway/internal/gateway/observability"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/example/llm-gateway/internal/gateway/provider"
+	"github.com/example/llm-gateway/internal/gateway/quota"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/example/llm-gateway/internal/providers"
 	"github.com/gin-gonic/gin"
@@ -134,30 +134,27 @@ func Setup(
 	r.GET("/ready", healthHandler.Ready)
 
 	// 加载并发管控配置
-	guard := loadGatewayGuard(controlPlaneURL)
+	// v0.15: 四层配额体系 — 初始化 QuotaConfigLoader + QuotaMiddleware
+	// 替换旧的 GatewayGuard + LayeredRateLimiter
+	quotaHolder := quota.NewSnapshotHolder()
+	quotaStore := quota.NewRedisStore(rdb)
+	quotaLoader := quota.NewConfigLoader(rdb, quotaHolder)
+	if rdb != nil {
+		quotaLoader.StartPolling(30 * time.Second)
+		quotaLoader.SubscribeToChanges(context.Background())
+	}
+	quotaMW := quota.NewMiddleware(quotaHolder, quotaStore)
 
-	// v0.7: 设置加载器（30s 轮询，供 guard 和分层限速共用）
-	settingsCache := newSettingsCache(controlPlaneURL)
-	go settingsCache.StartPolling(30 * time.Second)
+	// v0.15: 模型层配额检查（路由选定具体 model 之后、转发上游之前）
+	modelQuotaGate := quota.NewModelQuotaGate(quotaHolder, quotaStore)
+	chatHandler.SetModelQuotaGate(modelQuotaGate)
+	embeddingsHandler.SetModelQuotaGate(modelQuotaGate)
+	messagesHandler.SetModelQuotaGate(modelQuotaGate)
+	responsesHandler.SetModelQuotaGate(modelQuotaGate)
 
 	// OpenAI 兼容接口（需 API Key 认证）
 	v1 := r.Group("/v1")
 	v1.Use(middleware.AuthMiddleware(authClient))
-	v1.Use(guard.Handler())
-	// v0.7: 分层限速（③关 dept/studio 层，Redis 滑动窗口）
-	// 每 30s 从 settings 缓存读取各层 RPM；默认 0 = 不限。
-	v1.Use(middleware.LayeredRateLimiter(rdb, func(c *gin.Context) middleware.RateLimitConfig {
-		s := settingsCache.Get()
-		if s == nil {
-			return middleware.RateLimitConfig{}
-		}
-		return middleware.RateLimitConfig{
-			GlobalRPM: s.GlobalRPM,
-			StudioRPM: s.StudioRPM,
-			DeptRPM:   s.DeptRPM,
-			KeyRPM:    s.KeyRPM,
-		}
-	}))
 	// 请求/响应正文捕获（供 trace 记录使用）
 	v1.Use(middleware.TraceCapture())
 	// 埋点采集中间件放在 OrgCheck 之前，确保 403 拦截的调用也能写入 call_logs
@@ -182,16 +179,16 @@ func Setup(
 		v1.GET("/health/models", modelsHandler.HandleLegacy)
 
 		// Chat completions
-		v1.POST("/chat/completions", chatHandler.Handle)
+		v1.POST("/chat/completions", quotaMW.Handler(), chatHandler.Handle)
 
 		// Embeddings (new)
-		v1.POST("/embeddings", embeddingsHandler.Handle)
+		v1.POST("/embeddings", quotaMW.Handler(), embeddingsHandler.Handle)
 
 		// Responses API — OpenAI Agent SDK 核心依赖
-		v1.POST("/responses", responsesHandler.Handle)
+		v1.POST("/responses", quotaMW.Handler(), responsesHandler.Handle)
 
 		// Anthropic Messages API
-		v1.POST("/messages", messagesHandler.HandleMessages)
+		v1.POST("/messages", quotaMW.Handler(), messagesHandler.HandleMessages)
 		v1.POST("/messages/count_tokens", messagesHandler.HandleCountTokens)
 
 		// Provider passthrough: /v1/p/:provider/*path
@@ -260,40 +257,6 @@ func makePassthroughHandler(router *providers.Router) gin.HandlerFunc {
 	}
 }
 
-func loadGatewayGuard(controlPlaneURL string) *middleware.GatewayGuard {
-	settings, err := infra.LoadGatewaySettings(controlPlaneURL)
-	if err != nil {
-		slog.Warn("[guard] failed to load gateway settings from control-plane, using defaults",
-			"error", err,
-			"default_rate_limit", 60,
-			"default_max_concurrency", 10,
-		)
-		settings = &infra.GatewaySettings{RateLimitPerMinute: 60, MaxConcurrencyPerKey: 10}
-	}
-
-	guard := middleware.NewGatewayGuard(settings.RateLimitPerMinute, settings.MaxConcurrencyPerKey)
-	guard.StartCleanup(2 * time.Minute)
-
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
-			updated, err := infra.LoadGatewaySettings(controlPlaneURL)
-			if err != nil {
-				continue
-			}
-			guard.UpdateLimits(updated.RateLimitPerMinute, updated.MaxConcurrencyPerKey)
-		}
-	}()
-
-	slog.Info("[guard] gateway guard initialized",
-		"rate_limit_per_min", settings.RateLimitPerMinute,
-		"max_concurrency", settings.MaxConcurrencyPerKey,
-	)
-	return guard
-}
-
-// buildBudgetPostHook 构造预算累加 + 告警触发 hook。
 // hook 在 usage_collector 埋点后调用，异步执行 Redis 累加和控制面告警触发。
 //
 // v0.9 事后记账模式：
@@ -380,42 +343,3 @@ func triggerBudgetAlert(chain []struct {
 	}
 }
 
-// settingsCache 是 GatewaySettings 的内存缓存，后台定时器定期从控制面刷新。
-// 供 guard（key 级 RPM）和 LayeredRateLimiter（分层 RPM）共用，避免每次请求都打 HTTP。
-type settingsCache struct {
-	mu              sync.RWMutex
-	current         *infra.GatewaySettings
-	controlPlaneURL string
-}
-
-func newSettingsCache(controlPlaneURL string) *settingsCache {
-	sc := &settingsCache{controlPlaneURL: controlPlaneURL}
-	// 初始同步加载一次（失败则保持 nil，由 guard 的默认值兜底）
-	if s, err := infra.LoadGatewaySettings(controlPlaneURL); err == nil {
-		sc.current = s
-	}
-	return sc
-}
-
-// StartPolling 后台每 interval 拉取最新 settings。
-func (sc *settingsCache) StartPolling(interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for range ticker.C {
-		s, err := infra.LoadGatewaySettings(sc.controlPlaneURL)
-		if err != nil {
-			slog.Debug("settings cache: poll failed", "error", err)
-			continue
-		}
-		sc.mu.Lock()
-		sc.current = s
-		sc.mu.Unlock()
-	}
-}
-
-// Get 返回最新的 settings（可能为 nil）。
-func (sc *settingsCache) Get() *infra.GatewaySettings {
-	sc.mu.RLock()
-	defer sc.mu.RUnlock()
-	return sc.current
-}

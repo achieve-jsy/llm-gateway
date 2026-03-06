@@ -85,6 +85,11 @@ func AuthMiddleware(authClient *infra.AuthClient) gin.HandlerFunc {
 			c.Set("identity", identity)
 			c.Set("key_id", identity.KeyID)
 			c.Set("key_name", resp.Data.KeyName)
+			keyType := resp.Data.KeyType
+			if keyType == "" {
+				keyType = "personal"
+			}
+			c.Set("key_type", keyType)
 			c.Set("log_enabled", logEnabled)
 			c.Set("user_id", identity.UserID)
 			c.Set("user_name", resp.Data.User.Name)

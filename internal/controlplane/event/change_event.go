@@ -29,6 +29,8 @@ const (
 	EntitlementGranted ChangeEventType = "entitlement_granted"
 	EntitlementRevoked ChangeEventType = "entitlement_revoked"
 	OpenModeChanged    ChangeEventType = "open_mode_changed"
+	// v0.15 四层配额体系
+	QuotaConfigChanged ChangeEventType = "quota_config_changed"
 )
 
 // ChangeEvent 配置变更事件

@@ -1856,6 +1856,7 @@ func (h *OpsHandler) GetUserConcurrency(c *gin.Context) {
 		FROM call_logs
 		WHERE ts > NOW() - INTERVAL '5 minutes'
 			AND user_id != ''
+			AND COALESCE(NULLIF(key_type, ''), 'personal') != 'service'
 		GROUP BY user_id
 		ORDER BY request_count DESC
 		LIMIT 50

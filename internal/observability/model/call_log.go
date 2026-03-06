@@ -10,6 +10,7 @@ type CallLog struct {
 	TS                  time.Time `gorm:"not null;index:idx_call_logs_ts"                               json:"ts"`
 	KeyID               string    `gorm:"type:text;index:idx_call_logs_key_ts,composite:key_ts"         json:"key_id"`
 	KeyName             string    `gorm:"type:varchar(128)"                                             json:"key_name,omitempty"`
+	KeyType             string    `gorm:"type:varchar(16);not null;default:personal;index:idx_call_logs_key_type" json:"key_type"`
 	UserID              string    `gorm:"type:text"                                                     json:"user_id"`
 	UserName            string    `gorm:"type:varchar(128)"                                             json:"user_name,omitempty"`
 	DeptID              string    `gorm:"type:text;index:idx_call_logs_dept_ts,composite:dept_ts"       json:"dept_id"`
@@ -52,3 +53,14 @@ type CallLog struct {
 func (CallLog) TableName() string {
 	return "call_logs"
 }
+
+const (
+	KeyTypePersonal = "personal"
+	KeyTypeService  = "service"
+)
+
+// WhereExcludeServiceKeyLogs 用于用户维度聚合 SQL，排除程序 Service Key 调用。
+const WhereExcludeServiceKeyLogs = `COALESCE(NULLIF(key_type, ''), 'personal') != 'service'`
+
+// WhereExcludeServiceKeyLogsCL 带 call_logs 表别名 cl。
+const WhereExcludeServiceKeyLogsCL = `COALESCE(NULLIF(cl.key_type, ''), 'personal') != 'service'`

@@ -1,6 +1,8 @@
 
 // v0.7 Service Key 类型
 
+import type { BoundGroupInfo } from '@/types/api-key'
+
 export type ServiceKeyType = 'service'
 
 export interface RawServiceKeyItem {
@@ -12,6 +14,8 @@ export interface RawServiceKeyItem {
   dept_id: string
   dept_name: string
   enabled: boolean
+  access_all_groups?: boolean
+  bound_groups?: { id: number; name: string }[]
   ip_allowlist?: string
   created_by?: string
   created_at: string
@@ -27,6 +31,8 @@ export interface ServiceKeyItem {
   deptId: string
   deptName: string
   enabled: boolean
+  accessAllGroups: boolean
+  boundGroups: BoundGroupInfo[]
   ipAllowlist?: string[]
   createdBy?: string
   createdAt: string
@@ -41,6 +47,8 @@ export interface CreateServiceKeyResponse {
   dept_id: string
   dept_name: string
   purpose: string
+  access_all_groups?: boolean
+  bound_groups?: { id: number; name: string }[]
   ip_allowlist?: string
   created_by: string
 }
@@ -67,6 +75,8 @@ export function mapServiceKey(item: RawServiceKeyItem): ServiceKeyItem {
     deptId: item.dept_id,
     deptName: item.dept_name,
     enabled: item.enabled,
+    accessAllGroups: item.access_all_groups || false,
+    boundGroups: (item.bound_groups || []).map((g) => ({ id: g.id, name: g.name })),
     ipAllowlist,
     createdBy: item.created_by,
     createdAt: item.created_at,

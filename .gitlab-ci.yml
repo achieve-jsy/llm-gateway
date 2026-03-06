@@ -169,7 +169,7 @@ build-web-prod:
 # ═══════════════════════════════════════════════════════════════════════════════
 # MIGRATE — 数据库迁移（在发布之前自动执行）
 #
-# prod：库地址 192.0.2.10:5432 对 Runner 可路由，直接在 Runner 内执行 atlas。
+# prod：库在 192.0.2.10:5433（与 PROD_DATABASE_URL 同库，config/prod.yaml 用 postgres:// 供 Atlas），Runner 内直连执行。
 # test：库在测试主机本机（docker-compose host 网络，应用走 127.0.0.1:5432），
 #       Runner 无法直连 127.0.0.1，故改为 SSH 到测试主机本机执行迁移。
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -195,7 +195,7 @@ migrate-prod:
       export DATABASE_URL=$(grep -A1 ^database: config/prod.yaml | tail -1 | cut -d'"' -f2)
       echo "Migrating database (prod)..."
       atlas migrate hash --dir "file://atlas-migrations"
-      atlas migrate apply --dir "file://atlas-migrations" --url "$DATABASE_URL" --baseline "$ATLAS_BASELINE"
+      atlas migrate apply --dir "file://atlas-migrations" --url "$DATABASE_URL" --baseline "$ATLAS_BASELINE" --revisions-schema atlas_schema_revisions
   rules:
     # 与 deploy-prod 一致：仅在打 tag 时触发、手动执行（部署前先手动跑迁移）
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/

@@ -189,6 +189,15 @@ func UsageCollectorWithRedis(collector *gwobs.Collector, traceWriter *gwobs.Trac
 			}
 		}
 
+		// 流式 observer 未拼接成功时，尝试 handler 登记的 resp_object（如错误响应）
+		if len(te.ResponseBodyRaw) == 0 {
+			if respObj, ok := c.Get("resp_object"); ok {
+				if b, err := json.Marshal(respObj); err == nil {
+					te.ResponseBodyRaw = b
+				}
+			}
+		}
+
 		// 错误信息
 		if v, ok := c.Get("error_message"); ok {
 			if msg, ok := v.(string); ok && msg != "" {

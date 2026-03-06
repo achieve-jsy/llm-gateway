@@ -65,7 +65,16 @@ func (o *ChatOrchestrator) Responses(ctx context.Context, req *core.ResponsesReq
 			gc.Set("prompt_tokens", resp.Usage.InputTokens)
 			gc.Set("completion_tokens", resp.Usage.OutputTokens)
 			gc.Set("stream", false)
+			gc.Set("usage", core.Usage{
+				PromptTokens:     resp.Usage.InputTokens,
+				CompletionTokens: resp.Usage.OutputTokens,
+				TotalTokens:      resp.Usage.TotalTokens,
+			})
+			gc.Set("resp_object", resp)
 		}
+	} else if gc := ginContextFrom(ctx); gc != nil {
+		gc.Set("stream", false)
+		gc.Set("resp_object", resp)
 	}
 	span.SetStatus(codes.Ok, "")
 

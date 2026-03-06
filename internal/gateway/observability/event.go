@@ -11,6 +11,7 @@ type UsageEvent struct {
 	// 身份维度（快照）
 	KeyID      string
 	KeyName    string
+	KeyType    string // personal | service，与 api_keys.key_type 对齐
 	UserID     string
 	UserName   string
 	DeptID     string

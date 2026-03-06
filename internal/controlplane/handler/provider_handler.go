@@ -63,7 +63,7 @@ func (h *ProviderHandler) CreateProvider(c *gin.Context) {
 			"error": gin.H{
 				"type":    "internal_error",
 				"message": err.Error(),
-				"code":    "internal",
+				"code":    "internal_error",
 			},
 		})
 		return

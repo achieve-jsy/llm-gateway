@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/example/llm-gateway/internal/gateway/observability/model"
+	obsmodel "github.com/example/llm-gateway/internal/observability/model"
 )
 
 // RollupService 按天聚合服务
@@ -453,6 +454,7 @@ type LogsQueryParams struct {
 	To        time.Time
 	KeyID     string
 	KeyName   string // 关键词模糊搜索
+	KeyType   string // personal | service
 	UserID    string
 	UserName  string // 用户名关键词搜索（ILIKE）
 	DeptName  string // 部门筛选
@@ -487,6 +489,7 @@ type LogRow struct {
 	TS                  string          `json:"ts"                  gorm:"column:ts"`
 	KeyID               string          `json:"key_id"              gorm:"column:key_id"`
 	KeyName             string          `json:"key_name"            gorm:"column:key_name"`
+	KeyType             string          `json:"key_type"            gorm:"column:key_type"`
 	UserID              string          `json:"user_id"             gorm:"column:user_id"`
 	UserName            string          `json:"user_name"           gorm:"column:user_name"`
 	DeptID              string          `json:"dept_id"             gorm:"column:dept_id"`
@@ -566,6 +569,9 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 	if params.KeyName != "" {
 		query = query.Where("key_name ILIKE ?", "%"+params.KeyName+"%")
 	}
+	if params.KeyType != "" {
+		query = query.Where("COALESCE(NULLIF(key_type, ''), 'personal') = ?", params.KeyType)
+	}
 	if params.UserName != "" {
 		query = query.Where("user_name ILIKE ?", "%"+params.UserName+"%")
 	}
@@ -603,6 +609,7 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 	offset := (params.Page - 1) * params.PageSize
 	if err := query.
 		Select("request_id, ts, key_id, COALESCE(key_name, '') AS key_name, " +
+			"COALESCE(NULLIF(key_type, ''), 'personal') AS key_type, " +
 			"user_id, user_name, dept_id, dept_name, studio_name, " +
 			"model, routed_model, group_name, provider, " +
 			"prompt_tokens, cached_tokens, cache_write_tokens, completion_tokens, reasoning_tokens, total_tokens, " +
@@ -967,6 +974,7 @@ func (s *RollupService) aggregateUserDailyStats(ctx context.Context, date time.T
 			LEFT JOIN departments d ON (d.dept_id = cl.dept_id OR d.id::text = cl.dept_id)
 			LEFT JOIN dept_studio_map dsm ON dsm.dept_id = COALESCE(d.dept_id, cl.dept_id)
 			WHERE cl.ts::date = ?::date
+				AND (`+obsmodel.WhereExcludeServiceKeyLogsCL+`)
 			GROUP BY COALESCE(cl.user_id, 'unknown'),
 					 COALESCE(dsm.studio_id::text, ''),
 					 COALESCE(d.dept_id, cl.dept_id, ''),

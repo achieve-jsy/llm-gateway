@@ -160,10 +160,61 @@
             </template>
           </div>
         </div>
-      </el-tab-pane>
-    </el-tabs>
+     </el-tab-pane>
+   </el-tabs>
 
-    <!-- 授权弹窗 -->
+    <!-- 配额设置 Tab -->
+    <el-tab-pane label="配额设置" name="quota">
+      <div class="quota-section">
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 20px"
+        >
+          <template #title>
+            配额说明：设置此模型组的请求频率和并发限制。0 = 不限制，留空 = 继承默认值。
+          </template>
+        </el-alert>
+
+        <div v-if="groupQuota" class="quota-current">
+          <div class="quota-current-title">当前生效配额</div>
+          <div class="quota-current-grid">
+            <div class="quota-current-item">
+              <span class="label">RPM：</span>
+              <span class="value">{{ groupQuota.rpm === 0 ? '不限制' : groupQuota.rpm }}</span>
+              <el-tag
+                size="small"
+                :type="groupQuota.source === 'override' ? 'success' : 'info'"
+                style="margin-left: 6px"
+              >
+                {{ groupQuota.source === 'override' ? '自定义' : '继承默认' }}
+              </el-tag>
+            </div>
+            <div class="quota-current-item">
+              <span class="label">并发：</span>
+              <span class="value">{{ groupQuota.max_concurrency === 0 ? '不限制' : groupQuota.max_concurrency }}</span>
+            </div>
+          </div>
+        </div>
+        <div v-else class="quota-current quota-current-empty">配额数据加载中…</div>
+
+        <el-button type="primary" @click="openQuotaDialog">编辑配额</el-button>
+      </div>
+    </el-tab-pane>
+
+    <!-- 配额编辑弹窗 -->
+    <QuotaEditDialog
+      v-model:visible="quotaDialogVisible"
+      subject-type="group"
+      :subject-id="quotaSubjectId"
+      :subject-label="quotaSubjectLabel"
+      :default-rpm="QUOTA_DEFAULTS.group.rpm"
+      :default-concurrency="QUOTA_DEFAULTS.group.max_concurrency"
+      @saved="onQuotaSaved"
+    />
+
+   <!-- 授权弹窗 -->
     <el-dialog v-model="grantVisible" title="添加授权" width="380px">
       <el-form label-width="80px">
         <el-form-item label="类型">
@@ -190,6 +241,9 @@ import { groupsApi } from '@/api/groups'
 import type { GroupCapability } from '@/api/groups'
 import { getGroupEntitlements, grantEntitlement, revokeEntitlement, setGroupOpenMode } from '@/services/control-plane'
 import type { GroupEntitlement } from '@/types/entitlement'
+import QuotaEditDialog from '@/components/QuotaEditDialog.vue'
+import { QUOTA_DEFAULTS, getGroupQuota } from '@/api/quota'
+import type { QuotaEffective } from '@/api/quota'
 
 const route = useRoute()
 const router = useRouter()
@@ -219,6 +273,34 @@ const capForm = ref({
 })
 const capSaving = ref(false)
 const capAggregated = ref<GroupCapability | null>(null)
+
+// ─── 配额设置 ───
+const quotaDialogVisible = ref(false)
+const quotaSubjectId = ref('')
+const quotaSubjectLabel = ref('')
+const groupQuota = ref<QuotaEffective | null>(null)
+
+// 后端响应为 { code:0, data:{...} }，真实对象在 res.data.data
+async function loadGroupQuota() {
+  if (!groupId.value) return
+  try {
+    const res = await getGroupQuota(String(groupId.value))
+    groupQuota.value = (res as any)?.data?.data ?? null
+  } catch {
+    groupQuota.value = null
+  }
+}
+
+function openQuotaDialog() {
+  quotaSubjectId.value = String(groupId.value)
+  quotaSubjectLabel.value = `模型组：${group.value?.name || groupId.value}`
+  quotaDialogVisible.value = true
+}
+
+function onQuotaSaved() {
+  // 刷新当前配额，使「配额设置」Tab 即时回显
+  loadGroupQuota()
+}
 
 function strategyLabel(s: string): string {
   const map: Record<string, string> = { round_robin: '轮询', priority: '优先级', weighted: '加权', auto: '自动' }
@@ -349,7 +431,7 @@ async function resetCapability() {
 
 onMounted(async () => {
   await loadGroup()
-  await Promise.all([loadModels(), loadEntitlements(), loadCapabilities()])
+  await Promise.all([loadModels(), loadEntitlements(), loadCapabilities(), loadGroupQuota()])
 })
 </script>
 
@@ -378,4 +460,13 @@ onMounted(async () => {
 .cap-form { padding: 12px 16px; border: 1px solid var(--el-border-color-lighter); border-radius: 8px; }
 .cap-btn-row { display: flex; gap: 8px; padding: 0 4px; }
 .cap-auto-hint { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 13px; color: var(--el-text-color-secondary); padding: 12px 16px; background: var(--el-fill-color-light); border-radius: 8px; }
+.quota-section { padding-top: 16px; }
+.quota-hint { margin-left: 12px; font-size: 12px; color: var(--el-text-color-secondary); }
+.quota-current { margin-bottom: 16px; padding: 12px 16px; background: var(--el-fill-color-light); border-radius: 8px; }
+.quota-current-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--el-text-color-primary); }
+.quota-current-grid { display: flex; gap: 24px; }
+.quota-current-item { font-size: 13px; display: flex; align-items: center; }
+.quota-current-item .label { color: var(--el-text-color-secondary); }
+.quota-current-item .value { font-weight: 600; color: var(--el-text-color-primary); margin-left: 4px; }
+.quota-current-empty { font-size: 13px; color: var(--el-text-color-placeholder); }
 </style>

@@ -125,47 +125,89 @@
         </div>
       </div>
 
-      <!-- 并发管控 -->
-      <div v-show="activeTab === 'concurrency'" class="settings-card">
-        <div class="card-header">
-          <div class="card-title-row">
-            <span class="card-icon">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-            </span>
-            <h3 class="card-title">并发管控</h3>
-          </div>
-          <p class="card-desc">控制 API 请求频率与并发数，防止资源过载，0 表示不限制</p>
-        </div>
+     <!-- 并发管控 -->
+     <div v-show="activeTab === 'concurrency'" class="settings-card">
+       <div class="card-header">
+         <div class="card-title-row">
+           <span class="card-icon">
+             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+           </span>
+           <h3 class="card-title">并发管控</h3>
+         </div>
+         <p class="card-desc">控制 API 请求频率与并发数，防止资源过载，0 表示不限制</p>
+       </div>
 
         <div class="card-body">
-          <div class="form-row form-row-3col">
-            <div class="form-group">
-              <label class="form-label">每分钟请求上限</label>
-              <el-input-number
-                v-model="form.rate_limit_per_minute"
-                :min="0"
-                :max="10000"
-                :step="10"
-                class="form-input-number"
-              />
-              <p class="form-hint">每个 API Key 每分钟最大请求数</p>
-            </div>
-            <div class="form-group">
-              <label class="form-label">单 Key 最大并发</label>
-              <el-input-number
-                v-model="form.max_concurrency_per_key"
-                :min="0"
-                :max="1000"
-                :step="1"
-                class="form-input-number"
-              />
-              <p class="form-hint">同一 Key 同时处理的最大请求数</p>
+          <div class="quota-section">
+            <h4 class="quota-section-title">用户默认配额 (Personal Key)</h4>
+            <p class="quota-section-desc">适用于所有使用个人 API Key 的用户</p>
+            <div class="form-row form-row-3col">
+              <div class="form-group">
+                <label class="form-label">每分钟请求上限 (RPM)</label>
+                <el-input-number
+                  v-model="form.default_user_rpm"
+                  :min="0"
+                  :max="10000"
+                  :step="10"
+                  class="form-input-number"
+                />
+                <p class="form-hint">每个用户每分钟最大请求数，0 表示不限制</p>
+              </div>
+              <div class="form-group">
+                <label class="form-label">最大并发数</label>
+                <el-input-number
+                  v-model="form.default_user_max_concurrency"
+                  :min="0"
+                  :max="1000"
+                  :step="1"
+                  class="form-input-number"
+                />
+                <p class="form-hint">每个用户同时处理的最大请求数，0 表示不限制</p>
+              </div>
             </div>
           </div>
-        </div>
-      </div>
 
-      <!-- OIDC 配置 -->
+          <div class="quota-section">
+            <h4 class="quota-section-title">Service Key 默认配额</h4>
+            <p class="quota-section-desc">适用于所有使用 Service Key 的应用程序</p>
+            <div class="form-row form-row-3col">
+              <div class="form-group">
+                <label class="form-label">每分钟请求上限 (RPM)</label>
+                <el-input-number
+                  v-model="form.default_service_key_rpm"
+                  :min="0"
+                  :max="10000"
+                  :step="10"
+                  class="form-input-number"
+                />
+                <p class="form-hint">每个 Service Key 每分钟最大请求数，0 表示不限制</p>
+              </div>
+              <div class="form-group">
+                <label class="form-label">最大并发数</label>
+                <el-input-number
+                  v-model="form.default_service_key_max_concurrency"
+                  :min="0"
+                  :max="1000"
+                  :step="1"
+                  class="form-input-number"
+                />
+                <p class="form-hint">每个 Service Key 同时处理的最大请求数，0 表示不限制</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-note">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="16" x2="12" y2="12"/>
+              <line x1="12" y1="8" x2="12.01" y2="8"/>
+            </svg>
+            <span>全局默认配额适用于未单独配置的用户或 Service Key。管理员可以在用户详情、Service Key 详情、模型组详情或模型详情页面设置覆盖配额。</span>
+          </div>
+        </div>
+     </div>
+
+     <!-- OIDC 配置 -->
       <div v-show="activeTab === 'oidc'" class="settings-card">
         <div class="card-header">
           <div class="card-title-row">
@@ -498,6 +540,7 @@ import { reactive, ref, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useSettingsStore } from '@/stores/settings'
 import { exportSettings, importSettings } from '@/services/control-plane'
+import { QUOTA_DEFAULTS } from '@/api/quota'
 import ImageUpload from '@/components/common/ImageUpload.vue'
 
 const settingsStore = useSettingsStore()
@@ -528,11 +571,17 @@ const form = reactive({
   site_subtitle: '',
   api_base_url: '',
   supplier_name: '某公司',
-  rate_limit_per_minute: 60,
-  max_concurrency_per_key: 10,
-  oidc_issuer_url: '',
-  oidc_client_id: '',
-  oidc_client_secret: '',
+  // Legacy fields: kept for backward compatibility with backend config schema,
+  // not displayed in UI. Use default_user_rpm / default_service_key_rpm instead.
+  rate_limit_per_minute: QUOTA_DEFAULTS.user.rpm,
+  max_concurrency_per_key: QUOTA_DEFAULTS.user.max_concurrency,
+  default_user_rpm: QUOTA_DEFAULTS.user.rpm,
+  default_user_max_concurrency: QUOTA_DEFAULTS.user.max_concurrency,
+  default_service_key_rpm: QUOTA_DEFAULTS.service_key.rpm,
+  default_service_key_max_concurrency: QUOTA_DEFAULTS.service_key.max_concurrency,
+	oidc_issuer_url: '',
+	oidc_client_id: '',
+	oidc_client_secret: '',
   oidc_redirect_url: '',
   oidc_scopes: 'openid profile email',
   oidc_enabled: false,
@@ -558,28 +607,34 @@ const initialForm = reactive({
   site_subtitle: '',
   api_base_url: '',
   supplier_name: '某公司',
-  rate_limit_per_minute: 60,
-  max_concurrency_per_key: 10,
-  oidc_issuer_url: '',
-  oidc_client_id: '',
-  oidc_client_secret: '',
-  oidc_redirect_url: '',
-  oidc_scopes: 'openid profile email',
-  oidc_enabled: false,
-  webhook_enabled: false,
-  webhook_url: '',
-  webhook_secret: '',
-  webhook_events: 'health_check_failed',
-  email_enabled: false,
-  smtp_host: 'mail.example.com',
-  smtp_port: 587,
-  smtp_from: 'llm-gateway@example.com',
-  smtp_password: '',
-  smtp_tls_skip_verify: false,
-  default_max_switches: 2,
-  default_same_model_retries: 1,
-  default_failover_cooldown_seconds: 60,
-  pricing_usd_to_cny_rate: 7.2,
+  // Legacy fields: kept for backward compatibility with backend config schema,
+  // not displayed in UI. Use default_user_rpm / default_service_key_rpm instead.
+  rate_limit_per_minute: QUOTA_DEFAULTS.user.rpm,
+  max_concurrency_per_key: QUOTA_DEFAULTS.user.max_concurrency,
+  default_user_rpm: QUOTA_DEFAULTS.user.rpm,
+  default_user_max_concurrency: QUOTA_DEFAULTS.user.max_concurrency,
+  default_service_key_rpm: QUOTA_DEFAULTS.service_key.rpm,
+  default_service_key_max_concurrency: QUOTA_DEFAULTS.service_key.max_concurrency,
+	oidc_issuer_url: '',
+	oidc_client_id: '',
+	oidc_client_secret: '',
+	oidc_redirect_url: '',
+	oidc_scopes: 'openid profile email',
+	oidc_enabled: false,
+	webhook_enabled: false,
+	webhook_url: '',
+	webhook_secret: '',
+	webhook_events: 'health_check_failed',
+	email_enabled: false,
+	smtp_host: 'mail.example.com',
+	smtp_port: 587,
+	smtp_from: 'llm-gateway@example.com',
+	smtp_password: '',
+	smtp_tls_skip_verify: false,
+	default_max_switches: 2,
+	default_same_model_retries: 1,
+	default_failover_cooldown_seconds: 60,
+	pricing_usd_to_cny_rate: 7.2,
 })
 
 const previewCny = computed(() => (form.pricing_usd_to_cny_rate || 0).toFixed(4).replace(/0+$/, '').replace(/\.$/, ''))
@@ -604,6 +659,10 @@ const formChanged = computed(() => {
     form.supplier_name !== initialForm.supplier_name ||
     form.rate_limit_per_minute !== initialForm.rate_limit_per_minute ||
     form.max_concurrency_per_key !== initialForm.max_concurrency_per_key ||
+    form.default_user_rpm !== initialForm.default_user_rpm ||
+    form.default_user_max_concurrency !== initialForm.default_user_max_concurrency ||
+    form.default_service_key_rpm !== initialForm.default_service_key_rpm ||
+    form.default_service_key_max_concurrency !== initialForm.default_service_key_max_concurrency ||
     form.oidc_issuer_url !== initialForm.oidc_issuer_url ||
     form.oidc_client_id !== initialForm.oidc_client_id ||
     form.oidc_client_secret !== initialForm.oidc_client_secret ||
@@ -635,6 +694,10 @@ function setFormValues(source: typeof form) {
   form.supplier_name = source.supplier_name
   form.rate_limit_per_minute = source.rate_limit_per_minute
   form.max_concurrency_per_key = source.max_concurrency_per_key
+  form.default_user_rpm = source.default_user_rpm
+  form.default_user_max_concurrency = source.default_user_max_concurrency
+  form.default_service_key_rpm = source.default_service_key_rpm
+  form.default_service_key_max_concurrency = source.default_service_key_max_concurrency
   form.oidc_issuer_url = source.oidc_issuer_url
   form.oidc_client_id = source.oidc_client_id
   form.oidc_client_secret = source.oidc_client_secret
@@ -665,6 +728,10 @@ function captureInitial() {
   initialForm.supplier_name = form.supplier_name
   initialForm.rate_limit_per_minute = form.rate_limit_per_minute
   initialForm.max_concurrency_per_key = form.max_concurrency_per_key
+  initialForm.default_user_rpm = form.default_user_rpm
+  initialForm.default_user_max_concurrency = form.default_user_max_concurrency
+  initialForm.default_service_key_rpm = form.default_service_key_rpm
+  initialForm.default_service_key_max_concurrency = form.default_service_key_max_concurrency
   initialForm.oidc_issuer_url = form.oidc_issuer_url
   initialForm.oidc_client_id = form.oidc_client_id
   initialForm.oidc_client_secret = form.oidc_client_secret
@@ -698,6 +765,10 @@ onMounted(async () => {
     form.supplier_name = s.supplier_name || '某公司'
     form.rate_limit_per_minute = s.rate_limit_per_minute ?? 60
     form.max_concurrency_per_key = s.max_concurrency_per_key ?? 10
+    form.default_user_rpm = s.default_user_rpm ?? 60
+    form.default_user_max_concurrency = s.default_user_max_concurrency ?? 10
+    form.default_service_key_rpm = s.default_service_key_rpm ?? 120
+    form.default_service_key_max_concurrency = s.default_service_key_max_concurrency ?? 20
     form.oidc_issuer_url = s.oidc_issuer_url || ''
     form.oidc_client_id = s.oidc_client_id || ''
     form.oidc_redirect_url = s.oidc_redirect_url || ''
@@ -770,9 +841,13 @@ async function handleSave() {
       site_subtitle: form.site_subtitle.trim(),
       api_base_url: form.api_base_url.trim(),
       supplier_name: form.supplier_name.trim(),
-      rate_limit_per_minute: form.rate_limit_per_minute,
-      max_concurrency_per_key: form.max_concurrency_per_key,
-      oidc_issuer_url: form.oidc_issuer_url.trim(),
+     rate_limit_per_minute: form.rate_limit_per_minute,
+     max_concurrency_per_key: form.max_concurrency_per_key,
+      default_user_rpm: form.default_user_rpm,
+      default_user_max_concurrency: form.default_user_max_concurrency,
+      default_service_key_rpm: form.default_service_key_rpm,
+      default_service_key_max_concurrency: form.default_service_key_max_concurrency,
+     oidc_issuer_url: form.oidc_issuer_url.trim(),
       oidc_client_id: form.oidc_client_id.trim(),
       oidc_client_secret: form.oidc_client_secret,
       oidc_redirect_url: form.oidc_redirect_url.trim(),
@@ -1472,5 +1547,45 @@ async function handleImport(event: Event) {
     justify-content: center;
     font-size: 12px;
   }
+}
+
+/* Quota sections */
+.quota-section {
+  margin-bottom: 24px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--el-border-color-light);
+}
+.quota-section:last-of-type {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+.quota-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  margin: 0 0 4px 0;
+}
+.quota-section-desc {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin: 0 0 16px 0;
+}
+.form-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 20px;
+  padding: 12px;
+  background: var(--el-fill-color-lighter);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+  line-height: 1.5;
+}
+.form-note svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--el-text-color-secondary);
 }
 </style>

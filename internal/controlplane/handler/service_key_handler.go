@@ -83,10 +83,12 @@ func (h *ServiceKeyHandler) Create(c *gin.Context) {
 	actor := rbac.GetActor(c)
 
 	var req struct {
-		DeptID      string `json:"dept_id" binding:"required"`
-		Name        string `json:"name" binding:"required"`
-		Purpose     string `json:"purpose"`
-		IPAllowlist string `json:"ip_allowlist"`
+		DeptID          string `json:"dept_id" binding:"required"`
+		Name            string `json:"name" binding:"required"`
+		Purpose         string `json:"purpose"`
+		IPAllowlist     string `json:"ip_allowlist"`
+		GroupIDs        []uint `json:"group_ids,omitempty"`
+		AccessAllGroups bool   `json:"access_all_groups,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -104,7 +106,7 @@ func (h *ServiceKeyHandler) Create(c *gin.Context) {
 	}
 
 	actorID, _ := uuid.Parse(c.GetString("user_id"))
-	k, plainKey, err := h.keySvc.CreateServiceKey(c.Request.Context(), actorID, req.DeptID, req.Name, req.Purpose, normalized)
+	k, plainKey, boundGroups, err := h.keySvc.CreateServiceKey(c.Request.Context(), actorID, req.DeptID, req.Name, req.Purpose, normalized, req.GroupIDs, req.AccessAllGroups)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -129,15 +131,17 @@ func (h *ServiceKeyHandler) Create(c *gin.Context) {
 	})
 
 	c.JSON(http.StatusCreated, gin.H{
-		"id":           k.ID,
-		"key":          plainKey,
-		"key_type":     k.KeyType,
-		"masked_key":   k.KeyPrefix + "****" + k.KeyHint,
-		"dept_id":      k.DeptID,
-		"dept_name":    k.DeptName,
-		"purpose":      k.Purpose,
-		"ip_allowlist": k.IPAllowlist,
-		"created_by":   k.CreatedBy,
+		"id":                k.ID,
+		"key":               plainKey,
+		"key_type":          k.KeyType,
+		"masked_key":        k.KeyPrefix + "****" + k.KeyHint,
+		"dept_id":           k.DeptID,
+		"dept_name":         k.DeptName,
+		"purpose":           k.Purpose,
+		"ip_allowlist":      k.IPAllowlist,
+		"access_all_groups": k.AccessAllGroups,
+		"bound_groups":      boundGroups,
+		"created_by":        k.CreatedBy,
 	})
 }
 
@@ -385,6 +389,81 @@ func (h *ServiceKeyHandler) Delete(c *gin.Context) {
 	})
 
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (h *ServiceKeyHandler) assertServiceKeyAccess(c *gin.Context, keyID uuid.UUID) error {
+	h.rbac.BuildAndInjectActor(c)
+	actor := rbac.GetActor(c)
+
+	k, findErr := h.keySvc.FindServiceKey(c.Request.Context(), keyID)
+	if findErr != nil {
+		return findErr
+	}
+	if !actor.IsGlobal && !actor.HasDept(k.DeptID) {
+		return service.ErrKeyNotFound
+	}
+	return nil
+}
+
+// UpdateGroups POST /api/v1/service-keys/:id/groups
+func (h *ServiceKeyHandler) UpdateGroups(c *gin.Context) {
+	keyID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
+		return
+	}
+	if err := h.assertServiceKeyAccess(c, keyID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "service key not found"})
+		return
+	}
+
+	var req struct {
+		Add    []uint `json:"add,omitempty"`
+		Remove []uint `json:"remove,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if len(req.Add) == 0 && len(req.Remove) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "add or remove is required"})
+		return
+	}
+
+	groups, err := h.keySvc.UpdateServiceKeyGroups(c.Request.Context(), keyID, req.Add, req.Remove)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"key_id": keyID, "bound_groups": groups}})
+}
+
+// ToggleAccessAllGroups POST /api/v1/service-keys/:id/access-all-groups
+func (h *ServiceKeyHandler) ToggleAccessAllGroups(c *gin.Context) {
+	keyID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
+		return
+	}
+	if err := h.assertServiceKeyAccess(c, keyID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "service key not found"})
+		return
+	}
+
+	var req struct {
+		AccessAllGroups bool `json:"access_all_groups"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	k, err := h.keySvc.UpdateServiceKeyAccessAllGroups(c.Request.Context(), keyID, req.AccessAllGroups)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "service key not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"id": k.ID, "access_all_groups": k.AccessAllGroups}})
 }
 
 // recordAudit 内部辅助：通过接口写审计，自动标记跳过全局中间件重复记录

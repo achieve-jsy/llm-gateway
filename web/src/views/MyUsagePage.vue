@@ -163,6 +163,7 @@
       export-prefix="my_logs"
       :table-props="{
         showKey: true,
+        showKeyType: true,
         showGroup: true,
         showSource: 'full',
         traceMetaMode: 'personal',

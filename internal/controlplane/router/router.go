@@ -4,10 +4,10 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
+	cpcron "github.com/example/llm-gateway/internal/controlplane/cron"
 	authrepo "github.com/example/llm-gateway/internal/auth/repository"
 	"github.com/example/llm-gateway/internal/controlplane/auth"
 	cpconfig "github.com/example/llm-gateway/internal/controlplane/config"
@@ -29,9 +29,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
-
-	"github.com/example/llm-gateway/internal/ehrclient"
-	"github.com/example/llm-gateway/internal/ehrsync"
 )
 
 // Setup 初始化 Gin 路由和中间件链
@@ -412,10 +409,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		systemMetricsCollector.Start(context.Background())
 		opsHandler := handler.NewOpsHandler(db, rdb, systemMetricsCollector)
 		adminGroup.GET("/ops/groups", opsHandler.GetGroupOptions)
-		adminGroup.GET("/ops/providers", opsHandler.ListProviders)
-		adminGroup.GET("/ops/models", opsHandler.ListModels)
 		adminGroup.GET("/ops/dashboard", opsHandler.GetDashboard)
-		adminGroup.GET("/ops/dashboard/snapshot-v2", opsHandler.GetSnapshotV2)
 		adminGroup.GET("/ops/traffic-trend", opsHandler.GetTrafficTrend)
 		adminGroup.GET("/ops/error-trend", opsHandler.GetErrorTrend)
 		adminGroup.GET("/ops/latency-histogram", opsHandler.GetLatencyHistogram)
@@ -483,8 +477,6 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		// 运维看板 v3：错误日志增强视图
 		adminGroup.GET("/ops/error-logs", opsHandler.ListErrorLogs)
 		adminGroup.PUT("/ops/error-logs/:id/resolve", opsHandler.ResolveErrorLog)
-		adminGroup.PUT("/ops/request-errors/:id/resolve", opsHandler.ResolveRequestError)
-		adminGroup.PUT("/ops/upstream-errors/:id/resolve", opsHandler.ResolveUpstreamError)
 
 		// 模型状态变更日志
 		adminGroup.GET("/model-status-logs", modelStatusLogHandler.ListModelStatusLogs)
@@ -576,46 +568,6 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/my/usage/percentiles", usageH.MyPercentiles)
 		adminGroup.GET("/my/usage/logs", usageH.MyLogs)
 		adminGroup.GET("/my/usage/logs/:request_id/trace", usageH.Trace)
-
-		// EHR 组织结构同步
-		ehrRepo := ehrsync.NewRepository(db)
-		ehrCfg := ehrclient.DefaultConfig()
-		// 从环境变量读取 base URL 和 token
-		if baseURL := os.Getenv("EHR_BASE_URL"); baseURL != "" {
-			ehrCfg.BaseURL = baseURL
-		}
-		ehrClient := ehrclient.NewClient(ehrCfg)
-		if tok := os.Getenv("EHR_API_TOKEN"); tok != "" {
-			ehrClient.TokenManager().Replace(tok)
-		}
-		ehrCursor := ehrsync.NewCursorManager(rdb)
-		ehrRecorder := ehrsync.NewLogRecorder(ehrRepo)
-		orch := ehrsync.NewOrchestrator(ehrsync.OrchestratorDeps{
-			Client:    ehrClient,
-			Repo:      ehrRepo,
-			Cursor:    ehrCursor,
-			Recorder:  ehrRecorder,
-			Log:       slog.Default(),
-			BatchSize: 200,
-		})
-		scheduler := ehrsync.NewScheduler(orch, rdb, slog.Default())
-		if err := scheduler.Start(ehrsync.DefaultSchedulerConfig()); err != nil {
-			slog.Warn("failed to start EHR scheduler", "error", err)
-		}
-		ehrHandler := handler.NewEhrSyncHandler(db, ehrRepo, scheduler)
-		adminGroup.GET("/ehr/organizations", ehrHandler.ListOrganizations)
-		adminGroup.GET("/ehr/departments", ehrHandler.ListDepartments)
-		adminGroup.GET("/ehr/employees", ehrHandler.ListEmployees)
-		adminGroup.GET("/ehr/status", ehrHandler.GetStatus)
-		adminGroup.POST("/ehr/sync", ehrHandler.TriggerSync)
-		adminGroup.POST("/ehr/override", ehrHandler.SetOverride)
-		adminGroup.DELETE("/ehr/override/:entity/:org_id/:entity_id", ehrHandler.ReleaseOverride)
-		adminGroup.GET("/ehr/overrides", ehrHandler.ListOverrides)
-		adminGroup.GET("/ehr/logs/executions", ehrHandler.ListExecutionLogs)
-		adminGroup.GET("/ehr/logs/changes", ehrHandler.ListChangeLogs)
-		adminGroup.GET("/ehr/logs/errors", ehrHandler.ListErrorLogs)
-		adminGroup.GET("/ehr/logs/diffs", ehrHandler.ListDiffReports)
-		adminGroup.GET("/ehr/logs/skips", ehrHandler.ListSkipLogs)
 	}
 
 	// 内部接口组（内部 Token 认证）
@@ -673,6 +625,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/service-keys", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.List)
 		adminGroup.PATCH("/service-keys/:id/status", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.Toggle)
 		adminGroup.PATCH("/service-keys/:id/ip-allowlist", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.UpdateIPAllowlist)
+		adminGroup.POST("/service-keys/:id/groups", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.UpdateGroups)
+		adminGroup.POST("/service-keys/:id/access-all-groups", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.ToggleAccessAllGroups)
 		adminGroup.DELETE("/service-keys/:id", guard(rbac.PermServiceKeyRevoke), serviceKeyHandler.Delete)
 		// v0.8: 审计日志查询（仅管理面可查）
 		adminGroup.GET("/audit-logs", guard(rbac.PermAuditViewScoped), auditHandler.List)
@@ -710,9 +664,51 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	// 员工自助查询预算（JWTAuth 即可，不需要 admin）
 	r.GET("/api/v1/my/budget", middleware.JWTAuth(), budgetHandler.MyBudget)
 
-	// WebSocket 端点（浏览器 WS 不支持 Authorization header，由 handler 内部验证）
-	wsHandler := handler.NewOpsWSHandler(rdb)
-	r.GET("/api/v1/ops/ws/qps", wsHandler.HandleQPSWebSocket)
+	// v0.15 四层配额体系
+	quotaSvc := service.NewQuotaService(db, rdb)
+	quotaHandler := handler.NewQuotaHandler(quotaSvc)
+	quotaHandler.SetAuditRecorder(auditSvc)
+	// 用户配额（管理员设置，ScopeManage = dept_admin/studio_admin/admin 按管辖范围）
+	adminGroup.PATCH("/users/:id/quota", guard(rbac.PermQuotaUserSet), quotaHandler.SetUserQuota)
+	adminGroup.GET("/users/:id/quota", guard(rbac.PermQuotaUserSet), quotaHandler.GetUserQuota)
+	// Service Key 配额
+	adminGroup.PATCH("/keys/:id/quota", guard(rbac.PermQuotaServiceKeySet), quotaHandler.SetServiceKeyQuota)
+	adminGroup.GET("/keys/:id/quota", guard(rbac.PermQuotaServiceKeySet), quotaHandler.GetServiceKeyQuota)
+	// 模型组配额（仅 admin）
+	adminGroup.PATCH("/groups/:id/quota", guard(rbac.PermQuotaGroupSet), quotaHandler.SetGroupQuota)
+	adminGroup.GET("/groups/:id/quota", guard(rbac.PermQuotaGroupSet), quotaHandler.GetGroupQuota)
+	// 模型配额（仅 admin）
+	adminGroup.PATCH("/models/:id/quota", guard(rbac.PermQuotaModelSet), quotaHandler.SetModelQuota)
+	adminGroup.GET("/models/:id/quota", guard(rbac.PermQuotaModelSet), quotaHandler.GetModelQuota)
+	// 我的配额（所有登录用户只读）
+	r.GET("/api/v1/me/quota", middleware.JWTAuth(), quotaHandler.GetMyQuota)
+	// 紧急豁免（admin only）
+	quotaExemptionSvc := service.NewQuotaExemptionService(db, rdb)
+	quotaExemptionHandler := handler.NewQuotaExemptionHandler(quotaExemptionSvc)
+	quotaExemptionHandler.SetAuditRecorder(auditSvc)
+	adminGroup.POST("/quota/exemptions", guard(rbac.PermQuotaDefaultSet), quotaExemptionHandler.Create)
+	adminGroup.DELETE("/quota/exemptions/:id", guard(rbac.PermQuotaDefaultSet), quotaExemptionHandler.Revoke)
+	adminGroup.GET("/quota/exemptions", guard(rbac.PermQuotaViewScoped), quotaExemptionHandler.List)
+	// 过期豁免清理定时任务（每小时一次）
+	exemptionCleanupCron := cpcron.NewExemptionCleanupCron(quotaExemptionSvc)
+	exemptionCleanupCron.Start(context.Background())
+	go func() {
+		if count, err := exemptionCleanupCron.RunOnce(context.Background()); err != nil {
+			slog.Warn("exemption cleanup: initial run failed", "error", err)
+		} else if count > 0 {
+			slog.Info("exemption cleanup: initial run completed", "cleaned", count)
+		}
+	}()
+
+	// 内部 snapshot（gateway 拉取）
+	internalGroup.GET("/quota/snapshot", func(c *gin.Context) {
+		snap, err := quotaSvc.GetQuotaSnapshot(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, snap)
+	})
 
 	// 管理接口（JWTAuth 已在 adminGroup 上）
 	orgGroup := adminGroup.Group("/org")

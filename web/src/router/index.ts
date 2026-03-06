@@ -131,6 +131,11 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/MyBudgetPage.vue'),
     meta: { title: '我的预算' }
   },
+  // 「我的配额」已并入「我的预算」页面（配额 tab），旧路由重定向以兼容书签/导航
+  {
+    path: '/my/quota',
+    redirect: '/my/budget?tab=quota'
+  },
   {
     path: '/admin/budget',
     name: 'BudgetManage',
@@ -184,6 +189,12 @@ const routes: RouteRecordRaw[] = [
     name: 'AnnouncementList',
     component: () => import('@/views/admin/AnnouncementListPage.vue'),
     meta: { title: '公告管理', requiresAdmin: true }
+  },
+  {
+    path: '/admin/quota-exemptions',
+    name: 'QuotaExemptions',
+    component: () => import('@/views/admin/QuotaExemptionPage.vue'),
+    meta: { title: '配额豁免', requiresAdmin: true }
   },
   {
     path: '/admin/model-status-logs',

@@ -6,9 +6,11 @@ import (
 	"net/http"
 
 	"github.com/example/llm-gateway/internal/core"
+	gatewayerrors "github.com/example/llm-gateway/internal/errors"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
+	"github.com/example/llm-gateway/internal/gateway/quota"
 	"github.com/gin-gonic/gin"
 )
 
@@ -22,6 +24,7 @@ type EmbeddingsHandler struct {
 	orchestrator  EmbeddingsOrchestratorInterface
 	groupDispatch *orchestrator.GroupAwareDispatcher
 	budgetDeps    *middleware.BudgetDeps
+	quotaGate     *quota.ModelQuotaGate // v0.15: 模型层配额检查
 }
 
 // NewEmbeddingsHandler creates a new EmbeddingsHandler.
@@ -32,6 +35,11 @@ func NewEmbeddingsHandler(orch EmbeddingsOrchestratorInterface) *EmbeddingsHandl
 // SetBudgetDeps 注入预算依赖（router setup 时调用一次）
 func (h *EmbeddingsHandler) SetBudgetDeps(deps *middleware.BudgetDeps) {
 	h.budgetDeps = deps
+}
+
+// SetModelQuotaGate 注入模型配额检查器（router setup 时调用一次）
+func (h *EmbeddingsHandler) SetModelQuotaGate(gate *quota.ModelQuotaGate) {
+	h.quotaGate = gate
 }
 
 // NewEmbeddingsHandlerWithGroup creates a new EmbeddingsHandler with group dispatch.
@@ -56,13 +64,7 @@ func NewEmbeddingsHandlerWithGroup(orch EmbeddingsOrchestratorInterface, gd *orc
 func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 	var req core.EmbeddingRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": gin.H{
-				"type":    "invalid_request",
-				"message": err.Error(),
-				"code":    "invalid_request_body",
-			},
-		})
+		gatewayerrors.WriteError(c, "request_body_invalid", gatewayerrors.WithMessage(err.Error()))
 		return
 	}
 
@@ -97,7 +99,18 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 		}
 	}
 
-	resp, err := h.orchestrator.Embeddings(c.Request.Context(), &req)
+	// v0.15: 模型层配额检查（路由选定具体 model 之后、转发上游之前）
+	if h.quotaGate != nil {
+		subjectType, _ := c.Get("quota_subject_type")
+		subjectID, _ := c.Get("quota_subject_id")
+		if subjectType != nil && subjectID != nil {
+			if err := h.quotaGate.BeforeUpstream(c, subjectType.(string), subjectID.(string), req.Model); err != nil {
+				return // 已在 middleware 中写入 429 响应
+			}
+		}
+	}
+
+	resp, err := h.orchestrator.Embeddings(orchestrator.WithGinContext(c.Request.Context(), c), &req)
 	if err != nil {
 		if ue, ok := err.(*model.UnifiedError); ok {
 			respondError(c, ue)
@@ -114,6 +127,7 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 		TotalTokens:  resp.Usage.TotalTokens,
 	})
 	c.Set("stream", false)
+	c.Set("resp_object", resp)
 
 	c.JSON(http.StatusOK, resp)
 }

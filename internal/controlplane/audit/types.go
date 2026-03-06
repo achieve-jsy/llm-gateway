@@ -76,6 +76,15 @@ const (
 
 	ActionEmailTest              Action = "email.send_test"
 	ActionEmailAlert             Action = "email.send_alert"
+
+	// v0.15 配额审计
+	ActionQuotaDefaultUpdate     Action = "quota.default.update"
+	ActionQuotaUserUpdate        Action = "quota.user.update"
+	ActionQuotaServiceKeyUpdate  Action = "quota.service_key.update"
+	ActionQuotaGroupUpdate       Action = "quota.group.update"
+	ActionQuotaModelUpdate       Action = "quota.model.update"
+	ActionQuotaExemptionCreate   Action = "quota.exemption.create"
+	ActionQuotaExemptionRevoke   Action = "quota.exemption.revoke"
 )
 
 // ── 资源类型常量 ──────────────────────────────────────────────
@@ -94,6 +103,7 @@ const (
 	ResourceHealthCheck  Resource = "health_check"
 	ResourceEmployee     Resource = "employee"
 	ResourceEmail        Resource = "email"
+	ResourceQuota        Resource = "quota"
 	ResourceUnknown      Resource = "unknown"
 )
 

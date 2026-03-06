@@ -1,0 +1,211 @@
+{
+  "$comment": "FE↔BE 接口契约（增量维护）。历史全量契约曾移除；本文件按功能模块逐步补回。",
+  "observability": {
+    "base_prefix": "/api/v1",
+    "auth": {
+      "admin": "Bearer <jwt>",
+      "scoped": "Bearer <jwt> + RBAC PermUsageViewScoped"
+    },
+    "log_row_fields": [
+      "request_id", "ts",
+      "key_id", "key_name", "key_type",
+      "user_id", "user_name", "dept_id", "dept_name", "studio_id", "studio_name",
+      "model", "routed_model", "group_name", "provider",
+      "prompt_tokens", "cached_tokens", "cache_write_tokens",
+      "completion_tokens", "reasoning_tokens", "total_tokens",
+      "status", "duration_ms", "first_token_ms",
+      "est_cost_usd", "input_cost_usd", "output_cost_usd", "cache_read_cost_usd",
+      "input_price_snapshot", "output_price_snapshot",
+      "stage_auth_ms", "stage_route_ms", "stage_upstream_ms", "stage_ttfb_ms",
+      "stream", "failover_used", "usage_missing", "reasoning_effort",
+      "ip_address", "user_agent"
+    ],
+    "key_type_enum": ["personal", "service"],
+  "routes": [
+      {
+        "method": "GET",
+        "path": "/api/v1/usage/logs",
+        "auth": "admin",
+        "handler": "UsageHandler.Logs",
+        "query_params_optional": [
+          "from", "to", "page", "page_size",
+          "key_id", "key_name", "key_type",
+          "user_name", "dept_name", "studio_id",
+          "model_name", "group_name", "provider", "status"
+        ],
+        "query_param_notes": {
+          "key_type": "personal | service；筛选 Key 类型（call_logs 写入时快照）",
+          "status": "success | error"
+        },
+        "response_status": [200, 401, 500],
+        "response_fields": ["rows", "total", "page", "page_size"],
+        "response_row_fields_ref": "log_row_fields"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/usage-logs",
+        "auth": "admin",
+        "handler": "UsageHandler.Logs",
+        "$comment": "与 /usage/logs 等价别名"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/my/usage/logs",
+        "auth": "jwt",
+        "handler": "UsageHandler.MyLogs",
+        "query_params_optional": [
+          "from", "to", "page", "page_size",
+          "key_id", "key_name", "key_type",
+          "user_name", "model_name", "group_name", "status"
+        ],
+        "response_fields": ["rows", "total", "page", "page_size"],
+        "response_row_fields_ref": "log_row_fields"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/usage/scoped/logs",
+        "auth": "scoped",
+        "handler": "UsageHandler.ScopedLogs",
+        "query_params_optional": [
+          "start", "end", "page", "page_size",
+          "user_id", "user_name", "dept_id", "studio_id",
+          "model_name", "status", "key_type"
+        ],
+        "response_fields": ["rows", "total", "page", "page_size"],
+        "response_row_fields_ref": "log_row_fields"
+      }
+    ]
+  },
+  "quota": {
+    "base_prefix": "/api/v1",
+    "auth": {
+      "admin": "Bearer <jwt>",
+      "jwt": "Bearer <jwt>"
+    },
+    "quota_effective_fields": [
+      "rpm", "max_concurrency", "source", "subject_type", "subject_id",
+      "default_rpm", "default_max_concurrency"
+    ],
+    "source_enum": ["default_user", "default_service_key", "override", "unset"],
+    "routes": [
+      {
+        "method": "PATCH",
+        "path": "/api/v1/users/:id/quota",
+        "auth": "admin (quota:user:set)",
+        "handler": "QuotaHandler.SetUserQuota",
+        "request_body": {
+          "rpm": "int | null (0=unlimited, null=inherit default)",
+          "max_concurrency": "int | null (0=unlimited, null=inherit default)"
+        },
+        "response_status": [200, 400, 500],
+        "response_fields": ["code", "message"]
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/users/:id/quota",
+        "auth": "admin (quota:user:set)",
+        "handler": "QuotaHandler.GetUserQuota",
+        "response_status": [200, 404],
+        "response_fields_ref": "quota_effective_fields"
+      },
+      {
+        "method": "PATCH",
+        "path": "/api/v1/keys/:id/quota",
+        "auth": "admin (quota:service_key:set)",
+        "handler": "QuotaHandler.SetServiceKeyQuota",
+        "request_body": {
+          "rpm": "int | null",
+          "max_concurrency": "int | null"
+        },
+        "response_status": [200, 400, 500],
+        "response_fields": ["code", "message"]
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/keys/:id/quota",
+        "auth": "admin (quota:service_key:set)",
+        "handler": "QuotaHandler.GetServiceKeyQuota",
+        "response_status": [200, 404],
+        "response_fields_ref": "quota_effective_fields"
+      },
+      {
+        "method": "PATCH",
+        "path": "/api/v1/groups/:id/quota",
+        "auth": "admin (quota:group:set)",
+        "handler": "QuotaHandler.SetGroupQuota",
+        "request_body": {
+          "rpm": "int | null",
+          "max_concurrency": "int | null"
+        },
+        "response_status": [200, 400, 500],
+        "response_fields": ["code", "message"]
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/groups/:id/quota",
+        "auth": "admin (quota:group:set)",
+        "handler": "QuotaHandler.GetGroupQuota",
+        "response_status": [200, 404],
+        "response_fields_ref": "quota_effective_fields"
+      },
+      {
+        "method": "PATCH",
+        "path": "/api/v1/models/:id/quota",
+        "auth": "admin (quota:model:set)",
+        "handler": "QuotaHandler.SetModelQuota",
+        "request_body": {
+          "rpm": "int | null",
+          "max_concurrency": "int | null"
+        },
+        "response_status": [200, 400, 500],
+        "response_fields": ["code", "message"]
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/models/:id/quota",
+        "auth": "admin (quota:model:set)",
+        "handler": "QuotaHandler.GetModelQuota",
+        "response_status": [200, 404],
+        "response_fields_ref": "quota_effective_fields"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/me/quota",
+        "auth": "jwt",
+        "handler": "QuotaHandler.GetMyQuota",
+        "response_status": [200, 401, 500],
+        "response_fields_ref": "quota_effective_fields"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/quota/exemptions",
+        "auth": "admin (quota:default:set)",
+        "handler": "QuotaExemptionHandler.Create",
+        "request_body": {
+          "subject_type": "user | service_key",
+          "subject_id": "string (required)",
+          "reason": "string (optional)",
+          "expires_at": "RFC3339 timestamp (required)"
+        },
+        "response_status": [201, 400],
+        "response_fields": ["code", "data"]
+      },
+      {
+        "method": "DELETE",
+        "path": "/api/v1/quota/exemptions/:id",
+        "auth": "admin (quota:default:set)",
+        "handler": "QuotaExemptionHandler.Revoke",
+        "response_status": [200, 404],
+        "response_fields": ["code", "message"]
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/quota/exemptions",
+        "auth": "admin (quota:view:scoped)",
+        "handler": "QuotaExemptionHandler.List",
+        "response_status": [200, 500],
+        "response_fields": ["code", "data"]
+      }
+    ]
+  }
+}

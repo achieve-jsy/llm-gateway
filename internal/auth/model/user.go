@@ -25,6 +25,10 @@ type User struct {
 	DeptUpdatedAt *time.Time `gorm:"type:timestamptz" json:"dept_updated_at,omitempty"`
 	// 登录状态：active（已登录）/ pending（花名册导入，尚未 SSO 登录）
 	LoginStatus   string     `gorm:"type:varchar(16);not null;default:active" json:"login_status"`
+	// 四层配额体系（Phase 1）
+	// NULL = 继承全局默认 default_user；0 = 显式不限
+	QuotaRPM            *int `gorm:"column:quota_rpm" json:"quota_rpm,omitempty"`
+	QuotaMaxConcurrency *int `gorm:"column:quota_max_concurrency" json:"quota_max_concurrency,omitempty"`
 	CreatedAt     time.Time  `gorm:"not null;autoCreateTime" json:"created_at"`
 	UpdatedAt     time.Time  `gorm:"not null;autoUpdateTime" json:"updated_at"`
 }

@@ -69,7 +69,7 @@ var (
 		Message: "auth service temporarily unavailable", HTTPStatus: http.StatusServiceUnavailable,
 	}
 	ErrInternal = &UnifiedError{
-		Type: ErrorTypeInternal, Code: "internal",
+		Type: ErrorTypeInternal, Code: "internal_error",
 		Message: "internal server error", HTTPStatus: http.StatusInternalServerError,
 	}
 	ErrModelGroupUnavailable = &UnifiedError{

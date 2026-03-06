@@ -156,7 +156,7 @@ func (h *Handler) Login(c *gin.Context) {
 	}
 	state := generateState()
 	if err := h.rdb.Set(c.Request.Context(), "oidc:state:"+state, "1", 5*time.Minute).Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "failed to save state", "code": "internal"}})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "failed to save state", "code": "internal_error"}})
 		return
 	}
 	url := h.oauthConfig.AuthCodeURL(state, oauth2.AccessTypeOffline)
@@ -482,12 +482,12 @@ func (h *Handler) Refresh(c *gin.Context) {
 
 	accessToken, err := GenerateAccessToken(h.config.JWTSecret, h.config.AccessTokenTTL, claims.UserID, deptID, deptName, studioID, studioName, email, name, passport, claims.Role)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "token generation failed", "code": "internal"}})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "token generation failed", "code": "internal_error"}})
 		return
 	}
 	refreshToken, err := GenerateRefreshToken(h.config.JWTSecret, claims.UserID, claims.Role, name, email, passport)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "token generation failed", "code": "internal"}})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "token generation failed", "code": "internal_error"}})
 		return
 	}
 	h.rdb.SAdd(c.Request.Context(), "token:blacklist", claims.ID)

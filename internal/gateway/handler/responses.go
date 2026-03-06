@@ -12,6 +12,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
+	"github.com/example/llm-gateway/internal/gateway/quota"
 	"github.com/gin-gonic/gin"
 )
 
@@ -20,6 +21,7 @@ type ResponsesHandler struct {
 	orchestrator  ResponsesOrchestratorInterface
 	groupDispatch *orchestrator.GroupAwareDispatcher
 	budgetDeps    *middleware.BudgetDeps
+	quotaGate     *quota.ModelQuotaGate // v0.15: 模型层配额检查
 }
 
 // ResponsesOrchestratorInterface 编排器抽象，handler 仅依赖必要方法。
@@ -43,6 +45,11 @@ func (h *ResponsesHandler) SetBudgetDeps(deps *middleware.BudgetDeps) {
 	h.budgetDeps = deps
 }
 
+// SetModelQuotaGate 注入模型配额检查器（router setup 时调用一次）
+func (h *ResponsesHandler) SetModelQuotaGate(gate *quota.ModelQuotaGate) {
+	h.quotaGate = gate
+}
+
 // Handle 处理 POST /v1/responses 请求
 func (h *ResponsesHandler) Handle(c *gin.Context) {
 	var req core.ResponsesRequest
@@ -59,6 +66,7 @@ func (h *ResponsesHandler) Handle(c *gin.Context) {
 
 	c.Set("model", req.Model)
 	originalModel := req.Model
+	c.Set("stream", req.Stream)
 
 	// v0.9: 预算检查（事后记账模式）
 	if h.budgetDeps != nil {
@@ -87,6 +95,17 @@ func (h *ResponsesHandler) Handle(c *gin.Context) {
 		if decision != nil {
 			req.Model = decision.ModelName
 			req.Provider = decision.ChannelType
+		}
+	}
+
+	// v0.15: 模型层配额检查（路由选定具体 model 之后、转发上游之前）
+	if h.quotaGate != nil {
+		subjectType, _ := c.Get("quota_subject_type")
+		subjectID, _ := c.Get("quota_subject_id")
+		if subjectType != nil && subjectID != nil {
+			if err := h.quotaGate.BeforeUpstream(c, subjectType.(string), subjectID.(string), req.Model); err != nil {
+				return // 已在 middleware 中写入 429 响应
+			}
 		}
 	}
 

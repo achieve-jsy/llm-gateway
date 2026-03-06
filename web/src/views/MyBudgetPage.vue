@@ -5,9 +5,11 @@
         <h2 class="mb-title">我的预算</h2>
         <span class="mb-badge">{{ authStore.userName || '个人' }}</span>
       </div>
-      <el-button :loading="loading" :icon="Refresh" circle size="small" @click="loadAll" />
+      <el-button :loading="loading" :icon="Refresh" circle size="small" @click="refreshActiveTab" />
     </header>
 
+    <el-tabs v-model="activeTab" class="mb-tabs" @tab-change="onTabChange">
+      <el-tab-pane label="我的预算" name="budget">
     <div v-if="loading && !chain.length" v-loading="true" class="mb-loading" />
     <div v-else-if="!chain.length" class="mb-no-budget">
       <template v-if="authStore.isAdmin">
@@ -278,6 +280,12 @@
       </section>
 
     </template>
+      </el-tab-pane>
+
+      <el-tab-pane label="我的配额" name="quota" lazy>
+        <MyQuotaPanel ref="quotaPanelRef" />
+      </el-tab-pane>
+    </el-tabs>
 
     <el-dialog v-model="expansionVisible" title="申请提升个人额度" width="520px">
       <el-form label-position="top">
@@ -313,7 +321,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { Refresh, Setting } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { createExpansionRequest, decideExpansion, getMyBudget, getMyExpansionRequests, getMyKeyRequests, cancelKeyRequest } from '@/services/control-plane'
@@ -323,6 +331,7 @@ import type { ExpansionPeriod, ExpansionRequest, ExpansionStatus } from '@/types
 import { PERIOD_LABELS, PERIOD_SUFFIX, STATUS_COLORS, STATUS_LABELS } from '@/types/expansion'
 import type { KeyRequest, KeyRequestStatus } from '@/types/key-request'
 import { KEY_REQUEST_STATUS_LABELS, formatKeyRequestBudget, keyRequestHasBudget } from '@/types/key-request'
+import MyQuotaPanel from '@/components/budget/MyQuotaPanel.vue'
 
 type BudgetActivityKind = 'expansion' | 'key_budget'
 type BudgetActivityStatus = ExpansionStatus | KeyRequestStatus
@@ -338,7 +347,28 @@ interface BudgetActivity {
 }
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
+
+// Tab 切换：默认「我的预算」，支持 ?tab=quota 直达配额；切 tab 同步到 URL（书签/刷新可恢复）
+type BudgetTabName = 'budget' | 'quota'
+const activeTab = ref<BudgetTabName>(route.query.tab === 'quota' ? 'quota' : 'budget')
+const quotaPanelRef = ref<InstanceType<typeof MyQuotaPanel> | null>(null)
+
+function onTabChange(name: string | number) {
+  const tab = name === 'quota' ? 'quota' : 'budget'
+  // 同步到 URL query，移除冗余的 budget 默认值
+  router.replace({ query: tab === 'budget' ? {} : { tab } })
+}
+
+async function refreshActiveTab() {
+  if (activeTab.value === 'quota') {
+    // 配额面板懒加载：切到配额 tab 后组件才挂载，刷新前确保已加载
+    await quotaPanelRef.value?.loadQuota()
+    return
+  }
+  await loadAll()
+}
 
 const chain = ref<BudgetChainItem[]>([])
 const myRequests = ref<ExpansionRequest[]>([])
@@ -774,6 +804,15 @@ onUnmounted(() => { historyObserver?.disconnect() })
   flex-direction: column;
   gap: 18px;
   padding: 28px 32px;
+}
+
+/* ─────────────── Tabs ─────────────── */
+.mb-tabs {
+  /* tab 头部贴近页面头部，pane 内容沿用 .mb 的间距 */
+  --el-tabs-header-height: 40px;
+}
+.mb-tabs :deep(.el-tabs__content) {
+  padding-top: 4px;
 }
 
 /* ─────────────── Header ─────────────── */

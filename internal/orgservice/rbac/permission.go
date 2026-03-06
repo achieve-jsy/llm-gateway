@@ -61,6 +61,15 @@ const (
 	// ── feat/key-approval: Key 创建申请与审批 ──────────────────────────────────
 	PermKeyRequestApprove     Permission = "key_request:approve"      // 部门负责人审批 Key 申请
 	PermKeyRequestSetPolicy   Permission = "key_request:set_policy"   // 设置部门 Key 创建策略（dept_admin / admin）
+
+	// ── v0.15 四层配额体系 ──────────────────────────────────────────────────
+	PermQuotaDefaultSet    Permission = "quota:default:set"      // 修改两套全局默认（admin）
+	PermQuotaUserSet       Permission = "quota:user:set"         // 设置用户配额（service 层校验 dept 范围）
+	PermQuotaServiceKeySet Permission = "quota:service_key:set"  // 设置 Service Key 配额（按 Key.dept_id 校验）
+	PermQuotaGroupSet      Permission = "quota:group:set"        // 设置模型组配额（admin）
+	PermQuotaModelSet      Permission = "quota:model:set"        // 设置模型配额（admin）
+	PermQuotaViewScoped    Permission = "quota:view:scoped"      // 查看管辖范围内配额
+	PermQuotaViewAll       Permission = "quota:view:all"         // 查看全公司配额（admin）
 )
 
 // ScopeConstraint 权限的范围约束级别（从宽到严）

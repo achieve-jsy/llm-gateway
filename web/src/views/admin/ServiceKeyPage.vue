@@ -63,6 +63,24 @@
         </template>
       </el-table-column>
 
+      <el-table-column label="模型组" min-width="180">
+        <template #default="{ row }">
+          <el-tag v-if="row.accessAllGroups" size="small" type="success" round>全部可用组</el-tag>
+          <template v-else-if="row.boundGroups?.length">
+            <el-tag
+              v-for="g in row.boundGroups"
+              :key="g.id"
+              size="small"
+              type="info"
+              round
+              class="group-tag"
+            >{{ g.name }}</el-tag>
+          </template>
+          <span v-else class="text-placeholder">未配置</span>
+          <el-button link type="primary" size="small" @click="openGroupDialog(row)">编辑</el-button>
+        </template>
+      </el-table-column>
+
       <el-table-column label="IP 白名单" min-width="140">
         <template #default="{ row }">
           <span v-if="row.ipAllowlist && row.ipAllowlist.length > 0" class="ip-allowlist-tags">
@@ -135,8 +153,22 @@
         </template>
       </el-table-column>
 
+      <el-table-column label="配额" width="180">
+        <template #default="{ row }">
+          <span v-if="quotaMap[row.id]" class="quota-cell">
+            <template v-if="quotaMap[row.id]!.source === 'override'">
+              {{ quotaMap[row.id]!.rpm === 0 ? '不限' : quotaMap[row.id]!.rpm }} RPM /
+              {{ quotaMap[row.id]!.max_concurrency === 0 ? '不限' : quotaMap[row.id]!.max_concurrency }} 并发
+            </template>
+            <span v-else class="text-placeholder">继承默认</span>
+          </span>
+          <span v-else class="text-placeholder">—</span>
+        </template>
+      </el-table-column>
+
       <el-table-column label="操作" width="120" align="center" fixed="right">
         <template #default="{ row }">
+          <el-button type="primary" link size="small" @click="openQuotaDialog(row)">配额</el-button>
           <el-popconfirm
             title="确定吊销此 Service Key？吊销后不可恢复"
             confirm-button-text="吊销"
@@ -208,6 +240,28 @@
         <el-form-item label="用途标签" prop="purpose">
           <el-input v-model="createForm.purpose" placeholder="例如：recommend-svc" maxlength="40" />
         </el-form-item>
+        <el-form-item label="模型组">
+          <el-select
+            v-model="createForm.groupIds"
+            multiple
+            filterable
+            placeholder="选择可用的模型组"
+            style="width: 100%"
+            :loading="groupsLoading"
+          >
+            <el-option :key="'__all__'" label="全部可用组（部门授权内）" :value="ALL_GROUPS_SENTINEL" />
+            <el-option
+              v-for="g in availableGroups"
+              :key="g.id"
+              :label="g.name"
+              :value="g.id"
+              :disabled="createForm.accessAllGroups"
+            />
+          </el-select>
+          <div class="form-hint">
+            {{ createForm.accessAllGroups ? '可使用部门授权范围内的全部模型组' : '不选则 Key 暂无可调用模型' }}
+          </div>
+        </el-form-item>
         <el-form-item label="IP 白名单（可选）">
           <div class="ip-create-input-row">
             <el-input
@@ -234,6 +288,67 @@
       <template #footer>
         <el-button @click="createDialogVisible = false">取消</el-button>
         <el-button type="primary" class="brand-btn" :loading="creating" @click="handleCreate">创建</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 模型组编辑对话框 -->
+    <el-dialog
+      v-model="groupDialogVisible"
+      title="编辑模型组权限"
+      width="520px"
+      :close-on-click-modal="false"
+      destroy-on-close
+      @open="loadGroupDialogData"
+    >
+      <div v-if="editGroupKey">
+        <el-alert
+          :title="`Service Key：${editGroupKey.name}`"
+          type="info"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px"
+        />
+        <el-tag
+          v-if="editGroupKey.accessAllGroups || pendingAccessAll === true"
+          size="large"
+          type="success"
+          closable
+          class="group-all-tag"
+          @close="handleAccessAll(false)"
+        >全部可用组（部门授权内）</el-tag>
+        <div v-else-if="editGroupKey.boundGroups?.length" class="bound-tags">
+          <el-tag
+            v-for="g in editGroupKey.boundGroups"
+            :key="g.id"
+            closable
+            size="large"
+            type="info"
+            @close="removeGroup(g)"
+          >{{ g.name }}</el-tag>
+        </div>
+        <div v-else class="text-placeholder" style="margin-bottom: 8px">暂未绑定模型组</div>
+        <el-select
+          v-model="addGroupIds"
+          multiple
+          filterable
+          placeholder="添加模型组"
+          style="width: 100%; margin-top: 8px"
+          :loading="groupLoading"
+          @change="handleAddGroupChange"
+        >
+          <el-option :key="'__all__'" label="全部可用组（部门授权内）" :value="ALL_GROUPS_SENTINEL" />
+          <el-option
+            v-for="g in availableAddGroups"
+            :key="g.id"
+            :label="g.name"
+            :value="g.id"
+            :disabled="editGroupKey.accessAllGroups || pendingAccessAll === true"
+          />
+        </el-select>
+      </div>
+      <template #footer>
+        <el-button @click="groupDialogVisible = false">取消</el-button>
+        <el-button type="primary" class="brand-btn" :loading="groupSaving" @click="saveGroupChanges">保存</el-button>
       </template>
     </el-dialog>
 
@@ -328,19 +443,48 @@
         <el-button type="primary" class="brand-btn" :loading="ipSaving" @click="saveIPAllowlist">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 配额编辑对话框 -->
+    <QuotaEditDialog
+      v-model:visible="quotaDialogVisible"
+      subject-type="service_key"
+      :subject-id="quotaSubjectId"
+      :subject-label="quotaSubjectLabel"
+      :default-rpm="QUOTA_DEFAULTS.service_key.rpm"
+      :default-concurrency="QUOTA_DEFAULTS.service_key.max_concurrency"
+      @saved="onQuotaSaved"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, InfoFilled, DocumentCopy, Edit } from '@element-plus/icons-vue'
 import { updateServiceKeyIPAllowlist } from '@/services/audit'
+import QuotaEditDialog from '@/components/QuotaEditDialog.vue'
+import { QUOTA_DEFAULTS, getServiceKeyQuota } from '@/api/quota'
+import type { QuotaEffective } from '@/api/quota'
 
-import { listServiceKeys, createServiceKey, toggleServiceKey, deleteServiceKey } from '@/services/control-plane'
+import {
+  listServiceKeys,
+  createServiceKey,
+  toggleServiceKey,
+  deleteServiceKey,
+  getAvailableGroups,
+  updateServiceKeyGroups,
+  toggleServiceKeyAccessAllGroups,
+} from '@/services/control-plane'
 import type { ServiceKeyItem, CreateServiceKeyResponse } from '@/types/service-key'
+import type { AvailableGroup, BoundGroupInfo } from '@/types/api-key'
 import { useAuthStore } from '@/stores/auth'
 import { useOrgStore } from '@/stores/org'
+
+const ALL_GROUPS_SENTINEL = -1
+
+function isRealGroupId(v: number | typeof ALL_GROUPS_SENTINEL): v is number {
+  return typeof v === 'number' && v !== ALL_GROUPS_SENTINEL
+}
 
 const authStore = useAuthStore()
 const orgStore = useOrgStore()
@@ -361,6 +505,32 @@ const createForm = reactive({
   name: '',
   purpose: '',
   ipAllowlist: [] as string[],
+  groupIds: [] as number[],
+  accessAllGroups: false,
+})
+
+const groupsLoading = ref(false)
+const availableGroups = ref<AvailableGroup[]>([])
+
+const groupDialogVisible = ref(false)
+const editGroupKey = ref<ServiceKeyItem | null>(null)
+const groupLoading = ref(false)
+const groupSaving = ref(false)
+const availableAddGroups = ref<AvailableGroup[]>([])
+const addGroupIds = ref<(number | typeof ALL_GROUPS_SENTINEL)[]>([])
+const removedGroupIds = ref<number[]>([])
+const pendingAccessAll = ref<boolean | null>(null)
+const initialAccessAllGroups = ref(false)
+
+watch(() => createForm.groupIds, (val) => {
+  if (val.includes(ALL_GROUPS_SENTINEL)) {
+    if (val.length > 1) {
+      createForm.groupIds = [ALL_GROUPS_SENTINEL]
+    }
+    createForm.accessAllGroups = true
+  } else {
+    createForm.accessAllGroups = false
+  }
 })
 
 const createRules: FormRules = {
@@ -411,6 +581,42 @@ const ipSaving = ref(false)
 
 // 创建对话框里的 IP 输入临时值
 const ipCreateInput = ref('')
+
+// ── 配额编辑 ──────────────────────────────────────────────
+const quotaDialogVisible = ref(false)
+const quotaSubjectId = ref('')
+const quotaSubjectLabel = ref('')
+const quotaMap = ref<Record<string, QuotaEffective>>({})
+
+function openQuotaDialog(row: ServiceKeyItem) {
+  quotaSubjectId.value = row.id
+  quotaSubjectLabel.value = `Service Key：${row.name}`
+  quotaDialogVisible.value = true
+}
+
+function onQuotaSaved() {
+  // 配额保存后刷新配额数据
+  if (quotaSubjectId.value) {
+    loadQuotaForKey(quotaSubjectId.value)
+  }
+}
+
+async function loadQuotaForKey(keyId: string) {
+  try {
+    const res = await getServiceKeyQuota(keyId)
+    // 后端响应为 { code:0, data:{...} }，真实对象在 res.data.data
+    const data = (res as any)?.data?.data
+    if (data) {
+      quotaMap.value[keyId] = data
+    }
+  } catch {
+    // 404 or error — leave empty
+  }
+}
+
+async function loadQuotaForKeys(items: ServiceKeyItem[]) {
+  await Promise.all(items.map(item => loadQuotaForKey(item.id)))
+}
 
 function openIPAllowlistDialog(row: ServiceKeyItem) {
   ipEditingKey.value = row
@@ -470,6 +676,8 @@ async function loadKeys() {
     const res = await listServiceKeys(filterDeptId.value, currentPage.value, pageSize.value)
     keys.value = res.items
     total.value = res.total
+    // 并行加载配额信息
+    loadQuotaForKeys(res.items)
   } catch (e: any) {
     loadError.value = e?.response?.data?.error?.message || e?.message || '未知错误'
     keys.value = []
@@ -505,9 +713,141 @@ function openCreateDialog() {
   createForm.name = ''
   createForm.purpose = ''
   createForm.ipAllowlist = []
+  createForm.groupIds = []
+  createForm.accessAllGroups = false
   ipCreateInput.value = ''
+  loadAvailableGroups()
   createDialogVisible.value = true
   setTimeout(() => createFormRef.value?.clearValidate(), 80)
+}
+
+async function loadAvailableGroups() {
+  groupsLoading.value = true
+  try {
+    const resp = await getAvailableGroups()
+    availableGroups.value = resp.data.groups || []
+  } catch {
+    ElMessage.error('加载模型组失败')
+  } finally {
+    groupsLoading.value = false
+  }
+}
+
+function wantsAllGroupsMode(): boolean {
+  return addGroupIds.value.includes(ALL_GROUPS_SENTINEL)
+    && addGroupIds.value.filter(isRealGroupId).length === 0
+}
+
+function openGroupDialog(row: ServiceKeyItem) {
+  editGroupKey.value = {
+    ...row,
+    boundGroups: [...(row.boundGroups || [])],
+  }
+  initialAccessAllGroups.value = row.accessAllGroups
+  addGroupIds.value = row.accessAllGroups ? [ALL_GROUPS_SENTINEL] : []
+  removedGroupIds.value = []
+  pendingAccessAll.value = null
+  groupDialogVisible.value = true
+}
+
+async function loadGroupDialogData() {
+  groupLoading.value = true
+  try {
+    const resp = await getAvailableGroups()
+    const all = resp.data.groups || []
+    const bound = new Set((editGroupKey.value?.boundGroups || []).map((g) => g.id))
+    availableAddGroups.value = all.filter((g) => !bound.has(g.id))
+  } catch {
+    ElMessage.error('加载模型组失败')
+  } finally {
+    groupLoading.value = false
+  }
+}
+
+function removeGroup(g: BoundGroupInfo) {
+  if (!editGroupKey.value) return
+  editGroupKey.value.boundGroups = (editGroupKey.value.boundGroups || []).filter((x) => x.id !== g.id)
+  removedGroupIds.value.push(g.id)
+  addGroupIds.value = addGroupIds.value.filter((id) => id !== g.id)
+}
+
+function handleAccessAll(value: boolean) {
+  if (!editGroupKey.value) return
+  pendingAccessAll.value = value
+  editGroupKey.value.accessAllGroups = value
+  if (value) {
+    addGroupIds.value = [ALL_GROUPS_SENTINEL]
+    for (const g of editGroupKey.value.boundGroups || []) {
+      if (!removedGroupIds.value.includes(g.id)) {
+        removedGroupIds.value.push(g.id)
+      }
+    }
+    editGroupKey.value.boundGroups = []
+  } else {
+    addGroupIds.value = addGroupIds.value.filter(isRealGroupId)
+  }
+}
+
+function handleAddGroupChange(vals: (number | typeof ALL_GROUPS_SENTINEL)[]) {
+  if (!editGroupKey.value) return
+
+  if (vals.includes(ALL_GROUPS_SENTINEL)) {
+    if (vals.length > 1) {
+      addGroupIds.value = [ALL_GROUPS_SENTINEL]
+    }
+    pendingAccessAll.value = true
+    for (const g of editGroupKey.value.boundGroups || []) {
+      if (!removedGroupIds.value.includes(g.id)) {
+        removedGroupIds.value.push(g.id)
+      }
+    }
+    editGroupKey.value.boundGroups = []
+    editGroupKey.value.accessAllGroups = true
+    return
+  }
+
+  const wasAllMode = pendingAccessAll.value === true || editGroupKey.value.accessAllGroups
+  if (wasAllMode) {
+    pendingAccessAll.value = false
+    editGroupKey.value.accessAllGroups = false
+  }
+  addGroupIds.value = vals.filter(isRealGroupId)
+}
+
+async function saveGroupChanges() {
+  if (!editGroupKey.value) return
+  const keyId = editGroupKey.value.id
+  const add = addGroupIds.value.filter(isRealGroupId)
+  const remove = removedGroupIds.value
+  const targetAll = wantsAllGroupsMode()
+
+  groupSaving.value = true
+  try {
+    if (targetAll) {
+      // 先清绑定（此时 access_all 仍为 false），再开启全部可用组
+      if (remove.length > 0 && !initialAccessAllGroups.value) {
+        await updateServiceKeyGroups(keyId, [], remove)
+      }
+      if (!initialAccessAllGroups.value) {
+        await toggleServiceKeyAccessAllGroups(keyId, true)
+      }
+    } else {
+      // 绑具体组前必须先关闭 access_all_groups
+      if (initialAccessAllGroups.value || pendingAccessAll.value === false) {
+        await toggleServiceKeyAccessAllGroups(keyId, false)
+      }
+      if (add.length > 0 || remove.length > 0) {
+        await updateServiceKeyGroups(keyId, add, remove)
+      }
+    }
+    ElMessage.success('模型组权限已更新')
+    groupDialogVisible.value = false
+    await loadKeys()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error || e?.message || '更新失败')
+  } finally {
+    groupSaving.value = false
+  }
 }
 
 async function handleCreate() {
@@ -522,7 +862,13 @@ async function handleCreate() {
       createForm.deptId.trim(),
       createForm.name.trim(),
       createForm.purpose.trim(),
-      createForm.ipAllowlist.length > 0 ? createForm.ipAllowlist : undefined
+      {
+        ipAllowlist: createForm.ipAllowlist.length > 0 ? createForm.ipAllowlist : undefined,
+        accessAllGroups: createForm.accessAllGroups || undefined,
+        groupIds: !createForm.accessAllGroups && createForm.groupIds.length > 0
+          ? createForm.groupIds.filter(isRealGroupId)
+          : undefined,
+      }
     )
     newKeyPlainText.value = resp.key
     const dept = orgStore.departments.find(d => d.dept_id === resp.dept_id)
@@ -922,4 +1268,33 @@ html.dark .key-reveal-card {
 .ip-tag-text {
   font-size: 12px;
 }
+
+.form-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-top: 4px;
+}
+
+.group-tag {
+  margin-right: 4px;
+  margin-bottom: 2px;
+}
+
+.bound-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.group-all-tag {
+  margin-bottom: 8px;
+}
+
+.group-all-hint {
+  font-size: 13px;
+  color: var(--el-color-success);
+  margin-bottom: 8px;
+}
+
 </style>

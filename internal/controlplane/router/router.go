@@ -664,6 +664,10 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	// 员工自助查询预算（JWTAuth 即可，不需要 admin）
 	r.GET("/api/v1/my/budget", middleware.JWTAuth(), budgetHandler.MyBudget)
 
+	// WebSocket 端点（浏览器 WS 不支持 Authorization header，由 handler 内部验证）
+	wsHandler := handler.NewOpsWSHandler(rdb)
+	r.GET("/api/v1/ops/ws/qps", wsHandler.HandleQPSWebSocket)
+
 	// v0.15 四层配额体系
 	quotaSvc := service.NewQuotaService(db, rdb)
 	quotaHandler := handler.NewQuotaHandler(quotaSvc)

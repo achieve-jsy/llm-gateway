@@ -84,6 +84,22 @@ export interface OpsGroupOption {
   name: string
 }
 
+export interface OpsProviderItem {
+  name: string
+}
+
+export interface OpsModelItem {
+  name: string
+  total_calls: number
+}
+
+export interface OpsFilterParams {
+  time_range?: string
+  group_id?: number
+  provider?: string
+  model?: string
+}
+
 export interface OpsSLA {
   success_rate: number
   error_rate: number
@@ -656,16 +672,16 @@ const del = (...args: Parameters<typeof http.delete>) =>
 
 export const opsAPI = {
   // ---- Dashboard 核心 ----
-  getDashboard: (timeRange: string = '1h') =>
-    get<OpsDashboardResponse>('/api/v1/ops/dashboard', { params: { time_range: timeRange } }),
+  getDashboard: (filter: OpsFilterParams) =>
+    get<OpsDashboardResponse>('/api/v1/ops/dashboard', { params: filter }),
 
-  getSnapshotV2: (timeRange: string = '1h') =>
+  getSnapshotV2: (filter: OpsFilterParams) =>
     get<{
       generated_at: string
       overview: OpsOverview & { total_tokens: number }
       throughput_trend: { points: OpsTrafficPoint[]; dimension: string }
       error_trend: { points: OpsErrorPoint[] }
-    }>('/api/v1/ops/dashboard/snapshot-v2', { params: { time_range: timeRange } }),
+    }>('/api/v1/ops/dashboard/snapshot-v2', { params: filter }),
 
   // 实时流量摘要（复用 /ops/realtime-traffic 路由，按 window 过滤）
   getRealtimeTrafficSummary: (window: string = '1min') =>
@@ -674,24 +690,30 @@ export const opsAPI = {
   // ---- 模型组下拉列表（运维过滤用） ----
   getGroupOptions: () =>
     get<OpsGroupOption[]>('/api/v1/ops/groups'),
+  
+  listProviders: () =>
+    get<OpsProviderItem[]>('/api/v1/ops/providers'),
+  
+  listModels: () =>
+    get<OpsModelItem[]>('/api/v1/ops/models'),
 
-  getTrafficTrend: (timeRange: string = '1h') =>
-    get<{ points: OpsTrafficPoint[]; bucket: string }>('/api/v1/ops/traffic-trend', { params: { time_range: timeRange } }),
+  getTrafficTrend: (filter: OpsFilterParams) =>
+    get<{ points: OpsTrafficPoint[]; bucket: string }>('/api/v1/ops/traffic-trend', { params: filter }),
 
-  getThroughputTrend: (timeRange: string = '1h') =>
-    get<OpsThroughputTrendResponse>('/api/v1/ops/throughput-trend', { params: { time_range: timeRange } }),
+  getThroughputTrend: (filter: OpsFilterParams) =>
+    get<OpsThroughputTrendResponse>('/api/v1/ops/throughput-trend', { params: filter }),
 
-  getErrorTrend: (timeRange: string = '1h') =>
-    get<{ points: OpsErrorPoint[] }>('/api/v1/ops/error-trend', { params: { time_range: timeRange } }),
+  getErrorTrend: (filter: OpsFilterParams) =>
+    get<{ points: OpsErrorPoint[] }>('/api/v1/ops/error-trend', { params: filter }),
 
-  getLatencyHistogram: (timeRange: string = '1h') =>
-    get<{ buckets: OpsLatencyBucket[]; total_requests: number }>('/api/v1/ops/latency-histogram', { params: { time_range: timeRange } }),
+  getLatencyHistogram: (filter: OpsFilterParams) =>
+    get<{ buckets: OpsLatencyBucket[]; total_requests: number }>('/api/v1/ops/latency-histogram', { params: filter }),
 
-  getErrorDistribution: (timeRange: string = '1h') =>
-    get<{ distribution: OpsErrorDistributionItem[] }>('/api/v1/ops/error-distribution', { params: { time_range: timeRange } }),
+  getErrorDistribution: (filter: OpsFilterParams) =>
+    get<{ distribution: OpsErrorDistributionItem[] }>('/api/v1/ops/error-distribution', { params: filter }),
 
-  getSwitchRateTrend: (timeRange: string = '5h') =>
-    get<{ points: OpsSwitchRatePoint[] }>('/api/v1/ops/switch-rate-trend', { params: { time_range: timeRange } }),
+  getSwitchRateTrend: (filter: OpsFilterParams) =>
+    get<{ points: OpsSwitchRatePoint[] }>('/api/v1/ops/switch-rate-trend', { params: filter }),
 
   // ---- 请求 / 错误详情 ----
   listRequests: (params: OpsRequestDetailsParams) =>

@@ -35,17 +35,37 @@
       <div class="ops-toolbar__right">
         <div class="ops-filters">
           <el-select
-            :model-value="platform"
-            placeholder="Platform"
+            :model-value="provider"
+            placeholder="Provider"
             size="small"
             class="ops-filter-select"
-            @update:model-value="onPlatformChange"
+            clearable
+            :loading="providersLoading"
+            @update:model-value="onProviderChange"
           >
-            <el-option label="全部平台" value="" />
-            <el-option label="OpenAI" value="openai" />
-            <el-option label="Anthropic" value="anthropic" />
-            <el-option label="Gemini" value="gemini" />
-            <el-option label="其他" value="other" />
+            <el-option
+              v-for="p in providerOptions"
+              :key="p"
+              :label="p"
+              :value="p"
+            />
+          </el-select>
+
+          <el-select
+            :model-value="model"
+            placeholder="Model"
+            size="small"
+            class="ops-filter-select"
+            clearable
+            :loading="modelsLoading"
+            @update:model-value="onModelChange"
+          >
+            <el-option
+              v-for="m in modelOptions"
+              :key="m"
+              :label="m"
+              :value="m"
+            />
           </el-select>
 
           <el-select
@@ -78,18 +98,6 @@
               :label="opt.label"
               :value="opt.value"
             />
-          </el-select>
-
-          <el-select
-            :model-value="queryMode"
-            size="small"
-            class="ops-filter-select"
-            style="width: 110px"
-            @update:model-value="(v: string) => emit('update:query-mode', v)"
-          >
-            <el-option label="自动" value="auto" />
-            <el-option label="原始数据" value="raw" />
-            <el-option label="预聚合" value="preagg" />
           </el-select>
         </div>
 
@@ -531,10 +539,10 @@ import {
 
 interface Props {
   overview: OpsOverview | null
-  platform: string
   groupId: number | null
+  provider: string
+  model: string
   timeRange: string
-  queryMode: string
   loading: boolean
   lastUpdated: Date | null
   autoRefresh: boolean
@@ -546,10 +554,10 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   overview: null,
-  platform: '',
   groupId: null,
+  provider: '',
+  model: '',
   timeRange: '1h',
-  queryMode: 'auto',
   loading: false,
   lastUpdated: null,
   autoRefresh: false,
@@ -561,9 +569,9 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   (e: 'update:time-range', value: string): void
-  (e: 'update:platform', value: string): void
   (e: 'update:group', value: number | null): void
-  (e: 'update:query-mode', value: string): void
+  (e: 'update:provider', value: string): void
+  (e: 'update:model', value: string): void
   (e: 'update:custom-time-range', value: { start: string; end: string }): void
   (e: 'update:auto-refresh', value: boolean): void
   (e: 'refresh'): void
@@ -593,8 +601,42 @@ const loadGroupOptions = async () => {
   }
 }
 
+const providerOptions = ref<string[]>([])
+const providersLoading = ref(false)
+
+const loadProviderOptions = async () => {
+  providersLoading.value = true
+  try {
+    const list = await opsAPI.listProviders()
+    providerOptions.value = list ?? []
+  } catch (err) {
+    console.error('Failed to load provider options:', err)
+    providerOptions.value = []
+  } finally {
+    providersLoading.value = false
+  }
+}
+
+const modelOptions = ref<string[]>([])
+const modelsLoading = ref(false)
+
+const loadModelOptions = async () => {
+  modelsLoading.value = true
+  try {
+    const list = await opsAPI.listModels()
+    modelOptions.value = list ?? []
+  } catch (err) {
+    console.error('Failed to load model options:', err)
+    modelOptions.value = []
+  } finally {
+    modelsLoading.value = false
+  }
+}
+
 onMounted(() => {
   loadGroupOptions()
+  loadProviderOptions()
+  loadModelOptions()
   try {
     wsUnsubscribe.value = subscribeQPS(
       (msg) => {
@@ -614,16 +656,16 @@ onUnmounted(() => {
   wsUnsubscribe.value?.()
 })
 
-const onPlatformChange = (value: string) => {
-  emit('update:platform', value)
-  // 平台切换时清空 groupId（由父组件响应 update:platform 后更新 groupId）
-  if (props.groupId !== null) {
-    emit('update:group', null)
-  }
-}
-
 const onGroupChange = (value: number | null) => {
   emit('update:group', value ?? null)
+}
+
+const onProviderChange = (value: string) => {
+  emit('update:provider', value)
+}
+
+const onModelChange = (value: string) => {
+  emit('update:model', value)
 }
 
 // ============ Time Range ============

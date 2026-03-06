@@ -7,10 +7,10 @@
       <OpsDashboardHeader
         :overview="dashboardData"
         :loading="loading"
-        :platform="platform"
         :group-id="groupId"
+        :provider="provider"
+        :model="model"
         :time-range="timeRange"
-        :query-mode="queryMode"
         :auto-refresh="autoRefresh"
         :auto-refresh-countdown="countdown"
         :last-updated="lastUpdated"
@@ -18,9 +18,9 @@
         :custom-start-time="customStartTime"
         :custom-end-time="customEndTime"
         @update:time-range="timeRange = $event"
-        @update:platform="platform = $event; groupId = null"
         @update:group="groupId = $event"
-        @update:query-mode="queryMode = $event"
+        @update:provider="provider = $event"
+        @update:model="model = $event"
         @update:custom-time-range="onCustomTimeRange"
         @update:auto-refresh="autoRefresh = $event; if (autoRefresh) startAutoRefresh(); else stopAutoRefresh()"
         @refresh="fetchAllData"
@@ -37,7 +37,6 @@
         <OpsConcurrencyCard
           v-if="settings?.show_concurrency_card"
           :refresh-token="refreshToken"
-          :platform-filter="platform"
           :group-id-filter="groupId"
         />
         <OpsSwitchRateTrendChart
@@ -254,9 +253,9 @@ const throughputByProvider = ref<OpsThroughputByProvider[]>([])
 const throughputTopGroups = ref<OpsThroughputByGroup[]>([])
 
 const timeRange = ref('1h')
-const platform = ref('')
 const groupId = ref<number | null>(null)
-const queryMode = ref('auto')
+const provider = ref<string>('')
+const model = ref<string>('')
 const customStartTime = ref<string | null>(null)
 const customEndTime = ref<string | null>(null)
 const autoRefresh = ref(true)
@@ -296,6 +295,17 @@ const isIdle = computed(() => {
   return (ov.traffic?.total_requests ?? 0) === 0 && (ov.traffic?.current_qps ?? 0) === 0
 })
 
+// -- Filter Helpers --
+
+function buildFilter(extraTimeRange?: string): { time_range?: string; group_id?: number; provider?: string; model?: string } {
+  const filter: { time_range?: string; group_id?: number; provider?: string; model?: string } = {}
+  filter.time_range = extraTimeRange || timeRange.value
+  if (groupId.value != null) filter.group_id = groupId.value
+  if (provider.value) filter.provider = provider.value
+  if (model.value) filter.model = model.value
+  return filter
+}
+
 // -- Fetchers --
 
 async function fetchAllData() {
@@ -308,7 +318,7 @@ async function fetchAllData() {
   ]
 
   try {
-    const snap = await opsAPI.getSnapshotV2(timeRange.value)
+    const snap = await opsAPI.getSnapshotV2(buildFilter())
     dashboardData.value = snap.overview
     trafficTrendData.value = snap.throughput_trend.points as any
     errorTrendData.value = snap.error_trend.points as any
@@ -329,7 +339,7 @@ async function fetchAllData() {
 async function fetchDashboard() {
   loading.value = true
   try {
-    const response = await opsAPI.getDashboard(timeRange.value)
+    const response = await opsAPI.getDashboard(buildFilter())
     dashboardData.value = response.overview
   } catch (error) {
     console.error('Failed to fetch dashboard:', error)
@@ -342,8 +352,8 @@ async function fetchTrafficAndThroughput() {
   loadingTrend.value = true
   try {
     const [trendResp, throughputResp] = await Promise.all([
-      opsAPI.getTrafficTrend(timeRange.value),
-      opsAPI.getThroughputTrend(timeRange.value).catch(() => null)
+      opsAPI.getTrafficTrend(buildFilter()),
+      opsAPI.getThroughputTrend(buildFilter()).catch(() => null)
     ])
     trafficTrendData.value = trendResp.points
     if (throughputResp) {
@@ -360,7 +370,7 @@ async function fetchTrafficAndThroughput() {
 async function fetchErrorTrendFn() {
   loadingErrorTrend.value = true
   try {
-    const response = await opsAPI.getErrorTrend(timeRange.value)
+    const response = await opsAPI.getErrorTrend(buildFilter())
     errorTrendData.value = response.points
   } catch (error) {
     console.error('Failed to fetch error trend:', error)
@@ -372,7 +382,7 @@ async function fetchErrorTrendFn() {
 async function fetchLatencyHistogram() {
   loadingLatency.value = true
   try {
-    const response = await opsAPI.getLatencyHistogram(timeRange.value)
+    const response = await opsAPI.getLatencyHistogram(buildFilter())
     latencyHistogramData.value = response.buckets
     latencyTotalRequests.value = response.total_requests
   } catch (error) {
@@ -385,7 +395,7 @@ async function fetchLatencyHistogram() {
 async function fetchErrorDistribution() {
   loadingErrorDistribution.value = true
   try {
-    const response = await opsAPI.getErrorDistribution(timeRange.value)
+    const response = await opsAPI.getErrorDistribution(buildFilter())
     errorDistributionData.value = response.distribution
   } catch (error) {
     console.error('Failed to fetch error distribution:', error)
@@ -397,7 +407,7 @@ async function fetchErrorDistribution() {
 async function fetchSwitchRate() {
   loadingSwitchRate.value = true
   try {
-    const response = await opsAPI.getSwitchRateTrend('5h')
+    const response = await opsAPI.getSwitchRateTrend(buildFilter('5h'))
     switchRatePoints.value = response.points
   } catch (error) {
     console.error('Failed to fetch switch rate trend:', error)
@@ -431,9 +441,8 @@ function onCustomTimeRange(range: { start: string; end: string }) {
   timeRange.value = 'custom'
 }
 
-function onSelectProvider(providerId: number) {
-  // TODO: Implement platform filter based on providerId
-  console.log('Selected provider:', providerId)
+function onSelectProvider(providerName: string) {
+  provider.value = providerName
 }
 
 function onSelectGroup(groupIdVal: number) {

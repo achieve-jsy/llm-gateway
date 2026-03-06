@@ -81,36 +81,48 @@ type ListEmployeeReply struct {
 }
 
 type Employee struct {
-	EmployeeID         string          `json:"employeeId"`
-	PersonID           string          `json:"personId"`
-	Passport           string          `json:"passport"`
-	AppointName        string          `json:"appointName"`
-	AppointCode        string          `json:"appointCode"`
-	Office             string          `json:"office"`
-	Email              string          `json:"email"`
-	PersonStatus       int32           `json:"personStatus"`
-	PersonType         int32           `json:"personType"`
-	IsDefault          bool            `json:"isDefault"`
-	CompanyID          string          `json:"companyId"`
-	CompanyName        string          `json:"companyName"`
-	DepartmentID       string          `json:"departmentId"`
-	DepartmentName     string          `json:"departmentName"`
-	Ranks              []EmployeeRank  `json:"ranks"`
-	PositionID         string          `json:"positionId"`
-	PositionName       string          `json:"positionName"`
-	PositionCategoryID string          `json:"positionCategoryId"`
-	ManagerEmployeeID  string          `json:"managerEmployeeId"`
-	ManagerPersonID    string          `json:"managerPersonId"`
-	ManagerPassport    string          `json:"managerPassport"`
-	ManagerName        string          `json:"managerName"`
-	PersonName         string          `json:"personName"`
-	GroupENumber       string          `json:"groupENumber"`
-	Gender             int32           `json:"gender"`
-	JoinDate           string          `json:"joinDate"`
-	OnBoardDate        string          `json:"onBoardDate"`
-	Location           string          `json:"location"`
-	DismissDate        string          `json:"dismissDate"`
-	LastModifyDate     string          `json:"lastModifyDate"`
+	EmployeeID          string         `json:"employeeId"`
+	PersonID            string         `json:"personId"`
+	Passport            string         `json:"passport"`
+	AppointName         string         `json:"appointName"`
+	AppointCode         string         `json:"appointCode"`
+	Office              string         `json:"office"`
+	Email               string         `json:"email"`
+	PersonStatus        int32          `json:"personStatus"`
+	PersonType          int32          `json:"personType"`
+	IsDefault           bool           `json:"isDefault"`
+	CompanyID           string         `json:"companyId"`
+	CompanyName         string         `json:"companyName"`
+	DepartmentID        string         `json:"departmentId"`
+	DepartmentName      string         `json:"departmentName"`
+	Ranks               []EmployeeRank `json:"ranks"`
+	PositionID          string         `json:"positionId"`
+	PositionName        string         `json:"positionName"`
+	PositionCategoryID  string         `json:"positionCategoryId"`
+	ManagerEmployeeID   string         `json:"managerEmployeeId"`
+	ManagerPersonID     string         `json:"managerPersonId"`
+	ManagerPassport     string         `json:"managerPassport"`
+	ManagerName         string         `json:"managerName"`
+	PersonName          string         `json:"personName"`
+	GroupENumber        string         `json:"groupENumber"`
+	Gender              int32          `json:"gender"`
+	JoinDate            string         `json:"joinDate"`
+	OnBoardDate         string         `json:"onBoardDate"`
+	Location            string         `json:"location"`
+	DismissDate         string         `json:"dismissDate"`
+	LastModifyDate      string         `json:"lastModifyDate"`
+	Birthday            string         `json:"birthday"`
+	Mobile              string         `json:"mobile"`
+	IdCardType          string         `json:"idCardType"`
+	IdCard              string         `json:"idCard"`
+	BankCardNum         string         `json:"bankCardNum"`
+	Bank                string         `json:"bank"`
+	ContractCompanyId   string         `json:"contractCompanyId"`
+	ContractCompanyName string         `json:"contractCompanyName"`
+	ContractType        string         `json:"contractType"`
+	ContractBeginDate   string         `json:"contractBeginDate"`
+	ContractEndDate     string         `json:"contractEndDate"`
+	DismissOperationDate string        `json:"dismissOperationDate"`
 }
 
 type EmployeeRank struct {
@@ -130,4 +142,37 @@ type PositionNode struct {
 	Type     int32          `json:"type"`
 	NamePath string         `json:"namePath"`
 	Items    []PositionNode `json:"items"`
+}
+
+type ListEmployeeSubordinatesReply struct {
+	Items []Employee `json:"items"`
+}
+
+type ListEmployeeSupervisorsReply struct {
+	Items []Employee `json:"items"`
+}
+
+type ListWorkLocationReply struct {
+	Items []Location `json:"items"`
+}
+
+type Location struct {
+	ID   int32  `json:"id"`
+	Code string `json:"code"`
+	Name string `json:"name"`
+}
+
+type ListRanksReply struct {
+	Items []RanksType `json:"items"`
+}
+
+type RanksType struct {
+	RanksTypeName string  `json:"ranksTypeName"`
+	RanksType     int32   `json:"ranksType"`
+	List          []Ranks `json:"list"`
+}
+
+type Ranks struct {
+	RanksID   string `json:"ranksId"`
+	RanksName string `json:"ranksName"`
 }

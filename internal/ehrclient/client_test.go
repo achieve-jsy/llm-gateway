@@ -245,7 +245,7 @@ func TestClient_ContextCancel(t *testing.T) {
 func TestClient_ListCompanies_200(t *testing.T) {
 	t.Parallel()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/open-apis/resource/v1/companies" {
+		if r.URL.Path != "/resource/v1/companies" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		if r.URL.Query().Get("orgId") != "org-1" {
@@ -318,7 +318,7 @@ func TestClient_ListEmployees_200(t *testing.T) {
 func TestClient_ListEmployeesBatch_200(t *testing.T) {
 	t.Parallel()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/open-apis/resource/v1/employees/batch" {
+		if r.URL.Path != "/resource/v1/employees/batch" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		got := r.URL.Query().Get("employeeIds")
@@ -369,6 +369,129 @@ func TestClient_ListPositions_200(t *testing.T) {
 	}
 	if resp.Items[0].Items[0].ID != "p2" || resp.Items[0].Items[0].Name != "Child" {
 		t.Fatalf("unexpected nested item: %+v", resp.Items[0].Items[0])
+	}
+}
+
+func TestClient_ListEmployeesByPassports_200(t *testing.T) {
+	t.Parallel()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/resource/v1/employees/batch" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		got := r.URL.Query().Get("passports")
+		if got != "P001,P002" {
+			t.Fatalf("expected passports=P001,P002, got %s", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"items":[{"employeeId":"e1","passport":"P001"},{"employeeId":"e2","passport":"P002"}]}`))
+	}))
+	defer ts.Close()
+
+	c := NewClient(testConfig(ts.URL))
+	resp, err := c.ListEmployeesByPassports(context.Background(), "org-1", []string{"P001", "P002"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(resp.Items))
+	}
+}
+
+func TestClient_ListEmployeeSubordinates_200(t *testing.T) {
+	t.Parallel()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/resource/v1/employees/subordinates" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("orgId") != "org-1" {
+			t.Fatalf("expected orgId=org-1, got %s", r.URL.Query().Get("orgId"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"items":[{"employeeId":"e2","appointName":"Sub"}]}`))
+	}))
+	defer ts.Close()
+
+	c := NewClient(testConfig(ts.URL))
+	resp, err := c.ListEmployeeSubordinates(context.Background(), "org-1", "e1", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Items) != 1 || resp.Items[0].EmployeeID != "e2" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+}
+
+func TestClient_ListEmployeeSupervisors_200(t *testing.T) {
+	t.Parallel()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/resource/v1/employees/supervisors" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"items":[{"employeeId":"e0","appointName":"Boss"}]}`))
+	}))
+	defer ts.Close()
+
+	c := NewClient(testConfig(ts.URL))
+	resp, err := c.ListEmployeeSupervisors(context.Background(), "org-1", "e1", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Items) != 1 || resp.Items[0].EmployeeID != "e0" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+}
+
+func TestClient_ListWorkLocations_200(t *testing.T) {
+	t.Parallel()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/resource/v1/locations" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"items":[{"id":1,"code":"SH","name":"上海"},{"id":2,"code":"BJ","name":"北京"}]}`))
+	}))
+	defer ts.Close()
+
+	c := NewClient(testConfig(ts.URL))
+	resp, err := c.ListWorkLocations(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Items) != 2 || resp.Items[0].Code != "SH" || resp.Items[1].Name != "北京" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+}
+
+func TestClient_ListRanks_200(t *testing.T) {
+	t.Parallel()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/resource/v1/ranks" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("orgId") != "org-1" {
+			t.Fatalf("expected orgId=org-1, got %s", r.URL.Query().Get("orgId"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"items":[{"ranksTypeName":"专业职级","ranksType":0,"list":[{"ranksId":"r1","ranksName":"P1"}]},{"ranksTypeName":"管理职级","ranksType":1,"list":[]}]}`))
+	}))
+	defer ts.Close()
+
+	c := NewClient(testConfig(ts.URL))
+	resp, err := c.ListRanks(context.Background(), "org-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(resp.Items))
+	}
+	if resp.Items[0].RanksTypeName != "专业职级" || len(resp.Items[0].List) != 1 {
+		t.Fatalf("unexpected item[0]: %+v", resp.Items[0])
 	}
 }
 

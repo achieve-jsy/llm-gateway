@@ -22,9 +22,10 @@ type Config struct {
 }
 
 // DefaultConfig 默认配置：10s 超时、3 次重试、100 QPS 限流
+// 默认 BaseURL 为接口中心线上地址；测试环境请改用 https://open.test.daqun.chat.com/open-apis/ehrapi
 func DefaultConfig() Config {
 	return Config{
-		BaseURL:    "https://open.example.com",
+		BaseURL:    "https://open.example.com/open-apis/ehr-apic",
 		Timeout:    10 * time.Second,
 		MaxRetries: 3,
 		RateLimit:  100,
@@ -166,7 +167,7 @@ func (c *Client) get(ctx context.Context, path string, params map[string]string,
 
 func (c *Client) ListOrganizations(ctx context.Context) (*ListOrganizationReply, error) {
 	var out ListOrganizationReply
-	if err := c.get(ctx, "/open-apis/resource/v1/organizations", nil, &out); err != nil {
+	if err := c.get(ctx, "/resource/v1/organizations", nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -174,7 +175,7 @@ func (c *Client) ListOrganizations(ctx context.Context) (*ListOrganizationReply,
 
 func (c *Client) ListCompanies(ctx context.Context, orgID string) (*ListCompanyReply, error) {
 	var out ListCompanyReply
-	if err := c.get(ctx, "/open-apis/resource/v1/companies", map[string]string{"orgId": orgID}, &out); err != nil {
+	if err := c.get(ctx, "/resource/v1/companies", map[string]string{"orgId": orgID}, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -183,7 +184,7 @@ func (c *Client) ListCompanies(ctx context.Context, orgID string) (*ListCompanyR
 func (c *Client) ListDepartments(ctx context.Context, orgID string, deptIDs []string) (*ListDepartmentReply, error) {
 	params := map[string]string{"orgId": orgID}
 	var out ListDepartmentReply
-	if err := c.get(ctx, "/open-apis/resource/v1/departments", withSliceParam(params, "departmentIds", deptIDs), &out); err != nil {
+	if err := c.get(ctx, "/resource/v1/departments", withSliceParam(params, "departmentIds", deptIDs), &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -192,7 +193,7 @@ func (c *Client) ListDepartments(ctx context.Context, orgID string, deptIDs []st
 func (c *Client) ListEmployees(ctx context.Context, orgID string, deptIDs []string) (*ListEmployeeReply, error) {
 	params := map[string]string{"orgId": orgID}
 	var out ListEmployeeReply
-	if err := c.get(ctx, "/open-apis/resource/v1/employees", withSliceParam(params, "departmentIds", deptIDs), &out); err != nil {
+	if err := c.get(ctx, "/resource/v1/employees", withSliceParam(params, "departmentIds", deptIDs), &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -201,7 +202,7 @@ func (c *Client) ListEmployees(ctx context.Context, orgID string, deptIDs []stri
 func (c *Client) ListEmployeesBatch(ctx context.Context, orgID string, employeeIDs []string) (*ListEmployeeReply, error) {
 	params := map[string]string{"orgId": orgID}
 	var out ListEmployeeReply
-	if err := c.get(ctx, "/open-apis/resource/v1/employees/batch", withSliceParam(params, "employeeIds", employeeIDs), &out); err != nil {
+	if err := c.get(ctx, "/resource/v1/employees/batch", withSliceParam(params, "employeeIds", employeeIDs), &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -209,7 +210,55 @@ func (c *Client) ListEmployeesBatch(ctx context.Context, orgID string, employeeI
 
 func (c *Client) ListPositions(ctx context.Context, orgID string) (*ListPositionReply, error) {
 	var out ListPositionReply
-	if err := c.get(ctx, "/open-apis/resource/v1/positions", map[string]string{"orgId": orgID}, &out); err != nil {
+	if err := c.get(ctx, "/resource/v1/positions", map[string]string{"orgId": orgID}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListEmployeesByPassports 通过 passports 批量获取员工（兼容 passport 查询场景）
+func (c *Client) ListEmployeesByPassports(ctx context.Context, orgID string, passports []string) (*ListEmployeeReply, error) {
+	params := map[string]string{"orgId": orgID}
+	var out ListEmployeeReply
+	if err := c.get(ctx, "/resource/v1/employees/batch", withSliceParam(params, "passports", passports), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListEmployeeSubordinates 获取指定员工的汇报下级
+func (c *Client) ListEmployeeSubordinates(ctx context.Context, orgID, employeeID, passport string) (*ListEmployeeSubordinatesReply, error) {
+	params := map[string]string{"orgId": orgID, "employeeId": employeeID, "passport": passport}
+	var out ListEmployeeSubordinatesReply
+	if err := c.get(ctx, "/resource/v1/employees/subordinates", params, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListEmployeeSupervisors 获取指定员工的汇报上级
+func (c *Client) ListEmployeeSupervisors(ctx context.Context, orgID, employeeID, passport string) (*ListEmployeeSupervisorsReply, error) {
+	params := map[string]string{"orgId": orgID, "employeeId": employeeID, "passport": passport}
+	var out ListEmployeeSupervisorsReply
+	if err := c.get(ctx, "/resource/v1/employees/supervisors", params, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListWorkLocations 获取工作地点列表
+func (c *Client) ListWorkLocations(ctx context.Context) (*ListWorkLocationReply, error) {
+	var out ListWorkLocationReply
+	if err := c.get(ctx, "/resource/v1/locations", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListRanks 获取指定组织的职级体系
+func (c *Client) ListRanks(ctx context.Context, orgID string) (*ListRanksReply, error) {
+	var out ListRanksReply
+	if err := c.get(ctx, "/resource/v1/ranks", map[string]string{"orgId": orgID}, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

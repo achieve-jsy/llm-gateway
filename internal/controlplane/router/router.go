@@ -577,8 +577,12 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 		// EHR 组织结构同步
 		ehrRepo := ehrsync.NewRepository(db)
-		ehrClient := ehrclient.NewClient(ehrclient.DefaultConfig())
-		// 从环境变量读取 token
+		ehrCfg := ehrclient.DefaultConfig()
+		// 从环境变量读取 base URL 和 token
+		if baseURL := os.Getenv("EHR_BASE_URL"); baseURL != "" {
+			ehrCfg.BaseURL = baseURL
+		}
+		ehrClient := ehrclient.NewClient(ehrCfg)
 		if tok := os.Getenv("EHR_API_TOKEN"); tok != "" {
 			ehrClient.TokenManager().Replace(tok)
 		}

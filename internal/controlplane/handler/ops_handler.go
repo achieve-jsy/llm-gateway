@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -157,26 +158,25 @@ type OpsErrors struct {
 	RateLimit429_529            int64 `json:"rate_limit_429_529"`
 }
 
-// GetDashboard 获取运维看板总览
-func (h *OpsHandler) GetDashboard(c *gin.Context) {
-	timeRange := c.DefaultQuery("time_range", "1h")
+// buildOpsOverview 构造完整运维看板概览数据（供 GetDashboard 和 GetSnapshotV2 共用）
+func (h *OpsHandler) buildOpsOverview(ctx context.Context, timeRange string) (OpsOverview, error) {
 	interval := timeRangeToInterval(timeRange)
 
 	// 1. 流量统计
 	var traffic struct {
-		TotalRequests              int64   `gorm:"column:total_requests"`
-		TotalTokens                int64   `gorm:"column:total_tokens"`
-		SuccessCount               int64   `gorm:"column:success_count"`
-		RequestErrors              int64   `gorm:"column:request_errors"`
-		UpstreamErrors             int64   `gorm:"column:upstream_errors"`
-		BusinessErrors             int64   `gorm:"column:business_errors"`
-		UpstreamErrorsExcl429_529  int64   `gorm:"column:upstream_errors_excl_429_529"`
-		RateLimit429_529           int64   `gorm:"column:rate_limit_429_529"`
-		DurationAvgMs              float64 `gorm:"column:duration_avg_ms"`
-		TTFTAvgMs                  float64 `gorm:"column:ttft_avg_ms"`
+		TotalRequests             int64   `gorm:"column:total_requests"`
+		TotalTokens               int64   `gorm:"column:total_tokens"`
+		SuccessCount              int64   `gorm:"column:success_count"`
+		RequestErrors             int64   `gorm:"column:request_errors"`
+		UpstreamErrors            int64   `gorm:"column:upstream_errors"`
+		BusinessErrors            int64   `gorm:"column:business_errors"`
+		UpstreamErrorsExcl429_529 int64   `gorm:"column:upstream_errors_excl_429_529"`
+		RateLimit429_529          int64   `gorm:"column:rate_limit_429_529"`
+		DurationAvgMs             float64 `gorm:"column:duration_avg_ms"`
+		TTFTAvgMs                 float64 `gorm:"column:ttft_avg_ms"`
 	}
 
-	err := h.db.Raw(fmt.Sprintf(`
+	if err := h.db.Raw(fmt.Sprintf(`
 		SELECT
 			COUNT(*)::bigint as total_requests,
 			COALESCE(SUM(total_tokens), 0)::bigint as total_tokens,
@@ -190,11 +190,8 @@ func (h *OpsHandler) GetDashboard(c *gin.Context) {
 			COALESCE(AVG(first_token_ms), 0)::float as ttft_avg_ms
 		FROM call_logs
 		WHERE ts > NOW() - INTERVAL '%s'
-	`, interval)).Scan(&traffic).Error
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query traffic stats"})
-		return
+	`, interval)).Scan(&traffic).Error; err != nil {
+		return OpsOverview{}, fmt.Errorf("traffic: %w", err)
 	}
 
 	// 2. 延迟百分位
@@ -211,7 +208,7 @@ func (h *OpsHandler) GetDashboard(c *gin.Context) {
 		TTFTMaxMs     int `gorm:"column:ttft_max"`
 	}
 
-	err = h.db.Raw(fmt.Sprintf(`
+	if err := h.db.Raw(fmt.Sprintf(`
 		SELECT
 			COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_ms), 0)::int as duration_p50,
 			COALESCE(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY duration_ms), 0)::int as duration_p90,
@@ -225,31 +222,21 @@ func (h *OpsHandler) GetDashboard(c *gin.Context) {
 			COALESCE(MAX(COALESCE(first_token_ms, 0)), 0)::int as ttft_max
 		FROM call_logs
 		WHERE ts > NOW() - INTERVAL '%s'
-	`, interval)).Scan(&latency).Error
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query latency percentiles"})
-		return
+	`, interval)).Scan(&latency).Error; err != nil {
+		return OpsOverview{}, fmt.Errorf("latency: %w", err)
 	}
 
-	// 3. 实时 QPS/TPS（从 Redis 获取最近 1 分钟）
-	now := time.Now()
-	minuteKey := now.Format("200601021504")
-	currentQPS := 0.0
-	currentTPS := 0.0
-
+	// 3. 实时 QPS/TPS（Redis 最近 1 分钟）
+	currentQPS, currentTPS := 0.0, 0.0
 	if h.rdb != nil {
-		qpsKey := fmt.Sprintf("ops:qps:%s", minuteKey)
-		tpsKey := fmt.Sprintf("ops:tps:%s", minuteKey)
-
-		qpsCount, _ := h.rdb.Get(c.Request.Context(), qpsKey).Int64()
-		tpsCount, _ := h.rdb.Get(c.Request.Context(), tpsKey).Int64()
-
-		currentQPS = float64(qpsCount) / 60.0
-		currentTPS = float64(tpsCount) / 60.0
+		minKey := time.Now().Format("200601021504")
+		qpsC, _ := h.rdb.Get(ctx, "ops:qps:"+minKey).Int64()
+		tpsC, _ := h.rdb.Get(ctx, "ops:tps:"+minKey).Int64()
+		currentQPS = float64(qpsC) / 60.0
+		currentTPS = float64(tpsC) / 60.0
 	}
 
-	// 4. 计算平均 QPS/TPS 和峰值
+	// 4. 平均 + 峰值 QPS/TPS
 	var windowSeconds float64
 	switch timeRange {
 	case "5m":
@@ -263,34 +250,24 @@ func (h *OpsHandler) GetDashboard(c *gin.Context) {
 	default:
 		windowSeconds = 3600
 	}
-
 	avgQPS := float64(traffic.TotalRequests) / windowSeconds
 	avgTPS := float64(traffic.TotalTokens) / windowSeconds
 
-	// 峰值 QPS/TPS：从 Redis ops:qps:/ops:tps: 近 10 分钟的 key 中取最大值
-	peakQPS := 0.0
-	peakTPS := 0.0
+	peakQPS, peakTPS := 0.0, 0.0
 	if h.rdb != nil {
-		iter := h.rdb.Scan(c.Request.Context(), 0, "ops:qps:*", 100).Iterator()
-		for iter.Next(c.Request.Context()) {
-			key := iter.Val()
-			val, _ := h.rdb.Get(c.Request.Context(), key).Int64()
-			qps := float64(val) / 60.0
-			if qps > peakQPS {
-				peakQPS = qps
+		for iter := h.rdb.Scan(ctx, 0, "ops:qps:*", 100).Iterator(); iter.Next(ctx); {
+			val, _ := h.rdb.Get(ctx, iter.Val()).Int64()
+			if q := float64(val) / 60.0; q > peakQPS {
+				peakQPS = q
 			}
 		}
-		iter2 := h.rdb.Scan(c.Request.Context(), 0, "ops:tps:*", 100).Iterator()
-		for iter2.Next(c.Request.Context()) {
-			key := iter2.Val()
-			val, _ := h.rdb.Get(c.Request.Context(), key).Int64()
-			tps := float64(val) / 60.0
-			if tps > peakTPS {
-				peakTPS = tps
+		for iter := h.rdb.Scan(ctx, 0, "ops:tps:*", 100).Iterator(); iter.Next(ctx); {
+			val, _ := h.rdb.Get(ctx, iter.Val()).Int64()
+			if t := float64(val) / 60.0; t > peakTPS {
+				peakTPS = t
 			}
 		}
 	}
-	// 兜底：若 Redis 取到的 peak 小于当前值，使用当前值
 	if peakQPS < currentQPS {
 		peakQPS = currentQPS
 	}
@@ -298,7 +275,7 @@ func (h *OpsHandler) GetDashboard(c *gin.Context) {
 		peakTPS = currentTPS
 	}
 
-	// 5. SLA 计算
+	// 5. SLA
 	successRate := 0.0
 	errorRate := 0.0
 	if traffic.TotalRequests > 0 {
@@ -314,52 +291,61 @@ func (h *OpsHandler) GetDashboard(c *gin.Context) {
 	jobs := make([]model.AlertJobHeartbeat, 0)
 	h.db.Order("name").Limit(10).Find(&jobs)
 
-	resp := OpsDashboardResponse{
-		Overview: OpsOverview{
-			HealthScore:   healthScore,
-			SystemMetrics: &sm,
-			Traffic: OpsTraffic{
-				TotalRequests: traffic.TotalRequests,
-				TotalTokens:   traffic.TotalTokens,
-				AvgQPS:        avgQPS,
-				AvgTPS:        avgTPS,
-				CurrentQPS:    currentQPS,
-				CurrentTPS:    currentTPS,
-				PeakQPS:       peakQPS,
-				PeakTPS:       peakTPS,
-			},
-			SLA: OpsSLA{
-				SuccessRate:   successRate,
-				ErrorRate:     errorRate,
-				SLAErrorCount: traffic.TotalRequests - traffic.SuccessCount,
-			},
-			Latency: OpsLatency{
-				DurationP50Ms: latency.DurationP50Ms,
-				DurationP90Ms: latency.DurationP90Ms,
-				DurationP95Ms: latency.DurationP95Ms,
-				DurationP99Ms: latency.DurationP99Ms,
-				DurationAvgMs: int(traffic.DurationAvgMs),
-				DurationMaxMs: latency.DurationMaxMs,
-				TTFTP50Ms:     latency.TTFTP50Ms,
-				TTFTP90Ms:     latency.TTFTP90Ms,
-				TTFTP95Ms:     latency.TTFTP95Ms,
-				TTFTP99Ms:     latency.TTFTP99Ms,
-				TTFTAvgMs:     int(traffic.TTFTAvgMs),
-				TTFTMaxMs:     latency.TTFTMaxMs,
-			},
-			Errors: OpsErrors{
-				RequestErrors:             traffic.RequestErrors,
-				UpstreamErrors:            traffic.UpstreamErrors,
-				BusinessErrors:            traffic.BusinessErrors,
-				UpstreamErrorsExcl429_529: traffic.UpstreamErrorsExcl429_529,
-				RateLimit429_529:          traffic.RateLimit429_529,
-			},
-			Jobs: jobs,
+	return OpsOverview{
+		HealthScore:   healthScore,
+		SystemMetrics: &sm,
+		Traffic: OpsTraffic{
+			TotalRequests: traffic.TotalRequests,
+			TotalTokens:   traffic.TotalTokens,
+			AvgQPS:        avgQPS,
+			AvgTPS:        avgTPS,
+			CurrentQPS:    currentQPS,
+			CurrentTPS:    currentTPS,
+			PeakQPS:       peakQPS,
+			PeakTPS:       peakTPS,
 		},
-		Timestamp: time.Now(),
-	}
+		SLA: OpsSLA{
+			SuccessRate:   successRate,
+			ErrorRate:     errorRate,
+			SLAErrorCount: traffic.TotalRequests - traffic.SuccessCount,
+		},
+		Latency: OpsLatency{
+			DurationP50Ms: latency.DurationP50Ms,
+			DurationP90Ms: latency.DurationP90Ms,
+			DurationP95Ms: latency.DurationP95Ms,
+			DurationP99Ms: latency.DurationP99Ms,
+			DurationAvgMs: int(traffic.DurationAvgMs),
+			DurationMaxMs: latency.DurationMaxMs,
+			TTFTP50Ms:     latency.TTFTP50Ms,
+			TTFTP90Ms:     latency.TTFTP90Ms,
+			TTFTP95Ms:     latency.TTFTP95Ms,
+			TTFTP99Ms:     latency.TTFTP99Ms,
+			TTFTAvgMs:     int(traffic.TTFTAvgMs),
+			TTFTMaxMs:     latency.TTFTMaxMs,
+		},
+		Errors: OpsErrors{
+			RequestErrors:             traffic.RequestErrors,
+			UpstreamErrors:            traffic.UpstreamErrors,
+			BusinessErrors:            traffic.BusinessErrors,
+			UpstreamErrorsExcl429_529: traffic.UpstreamErrorsExcl429_529,
+			RateLimit429_529:          traffic.RateLimit429_529,
+		},
+		Jobs: jobs,
+	}, nil
+}
 
-	c.JSON(http.StatusOK, resp)
+// GetDashboard 获取运维看板总览
+func (h *OpsHandler) GetDashboard(c *gin.Context) {
+	timeRange := c.DefaultQuery("time_range", "1h")
+	ov, err := h.buildOpsOverview(c.Request.Context(), timeRange)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, OpsDashboardResponse{
+		Overview:  ov,
+		Timestamp: time.Now(),
+	})
 }
 
 // calculateHealthScore 计算健康评分 (0-100)
@@ -2545,29 +2531,17 @@ func (h *OpsHandler) resolveErrorLog(c *gin.Context, logType string) {
 // GET /api/v1/ops/dashboard/snapshot-v2
 func (h *OpsHandler) GetSnapshotV2(c *gin.Context) {
 	timeRange := c.DefaultQuery("time_range", "1h")
-	interval := timeRangeToInterval(timeRange)
-	truncExpr := bucketTruncExpr(timeRange)
 
-	var overview struct {
-		TotalRequests int64   `gorm:"column:total_requests"`
-		TotalTokens   int64   `gorm:"column:total_tokens"`
-		SuccessCount  int64   `gorm:"column:success_count"`
-		RequestErrors int64   `gorm:"column:request_errors"`
-		UpstreamErrors int64  `gorm:"column:upstream_errors"`
-		BusinessErrors int64  `gorm:"column:business_errors"`
-		DurationAvgMs  float64 `gorm:"column:duration_avg_ms"`
+	// overview 与 GetDashboard 完全共用同一构建函数，保证字段结构一致
+	ov, err := h.buildOpsOverview(c.Request.Context(), timeRange)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
 
-	h.db.Raw(fmt.Sprintf(`
-		SELECT COUNT(*)::bigint as total_requests,
-			COALESCE(SUM(total_tokens), 0)::bigint as total_tokens,
-			COUNT(*) FILTER (WHERE status = 200)::bigint as success_count,
-			COUNT(*) FILTER (WHERE status >= 400 AND status < 500)::bigint as request_errors,
-			COUNT(*) FILTER (WHERE status >= 500)::bigint as upstream_errors,
-			COUNT(*) FILTER (WHERE status = 429)::bigint as business_errors,
-			COALESCE(AVG(duration_ms), 0)::float as duration_avg_ms
-		FROM call_logs WHERE ts > NOW() - INTERVAL '%s'
-	`, interval)).Scan(&overview)
+	// throughput trend
+	interval := timeRangeToInterval(timeRange)
+	truncExpr := bucketTruncExpr(timeRange)
 
 	var throughputRows []struct {
 		Timestamp    time.Time `gorm:"column:ts" json:"timestamp"`
@@ -2580,6 +2554,16 @@ func (h *OpsHandler) GetSnapshotV2(c *gin.Context) {
 		GROUP BY %s ORDER BY ts
 	`, truncExpr, interval, truncExpr)).Scan(&throughputRows)
 
+	throughputPoints := make([]gin.H, 0, len(throughputRows))
+	for _, r := range throughputRows {
+		throughputPoints = append(throughputPoints, gin.H{
+			"timestamp":     r.Timestamp.Format(time.RFC3339),
+			"request_count": r.RequestCount,
+			"token_count":   r.TokenCount,
+		})
+	}
+
+	// error trend
 	var errorRows []struct {
 		Timestamp      time.Time `gorm:"column:ts" json:"timestamp"`
 		RequestErrors  int64     `gorm:"column:request_errors" json:"request_errors"`
@@ -2595,23 +2579,6 @@ func (h *OpsHandler) GetSnapshotV2(c *gin.Context) {
 		GROUP BY %s ORDER BY ts
 	`, truncExpr, interval, truncExpr)).Scan(&errorRows)
 
-	successRate := 0.0
-	if overview.TotalRequests > 0 {
-		successRate = float64(overview.SuccessCount) / float64(overview.TotalRequests)
-	}
-
-	sm := h.metricsCollector.Get()
-	healthScore := calculateHealthScore(successRate, sm.MemoryUsagePercent, sm.CPUUsagePercent, sm.GoroutineCount)
-
-	throughputPoints := make([]gin.H, 0, len(throughputRows))
-	for _, r := range throughputRows {
-		throughputPoints = append(throughputPoints, gin.H{
-			"timestamp":     r.Timestamp.Format(time.RFC3339),
-			"request_count": r.RequestCount,
-			"token_count":   r.TokenCount,
-		})
-	}
-
 	errorPoints := make([]gin.H, 0, len(errorRows))
 	for _, r := range errorRows {
 		errorPoints = append(errorPoints, gin.H{
@@ -2624,17 +2591,7 @@ func (h *OpsHandler) GetSnapshotV2(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"generated_at": time.Now(),
-		"overview": gin.H{
-			"health_score":   healthScore,
-			"total_requests": overview.TotalRequests,
-			"total_tokens":   overview.TotalTokens,
-			"success_rate":   successRate,
-			"request_errors": overview.RequestErrors,
-			"upstream_errors": overview.UpstreamErrors,
-			"business_errors": overview.BusinessErrors,
-			"duration_avg_ms": int(overview.DurationAvgMs),
-			"system_metrics":  sm,
-		},
+		"overview":     ov,
 		"throughput_trend": gin.H{
 			"points":    throughputPoints,
 			"dimension": "time",

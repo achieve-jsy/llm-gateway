@@ -276,7 +276,8 @@ export interface OpsErrorListResponse {
 // ============ 并发统计类型 ============
 
 export interface OpsProviderConcurrency {
-  provider_id: number
+  // B03/WP2: provider_id 为 provider 名称字符串（后端无数字 id）。对齐后端契约。
+  provider_id: string
   provider_name: string
   provider_type: string
   status: 'available' | 'rate_limited' | 'overloaded' | 'error' | 'unavailable'
@@ -719,22 +720,27 @@ export const opsAPI = {
   listRequests: (params: OpsRequestDetailsParams) =>
     get<OpsRequestDetailsResponse>('/api/v1/ops/requests', { params }),
 
+  // B05/WP3: 列表项与 detail 端点均以 request_id（字符串）为标识，
+  // call_logs 无数字 id。id 参数类型由 number 改为 string。
   listRequestErrors: (params: OpsErrorListParams) =>
     get<OpsErrorListResponse>('/api/v1/ops/request-errors', { params }),
 
-  getRequestErrorDetail: (id: number) =>
+  getRequestErrorDetail: (id: string) =>
     get<OpsRequestDetail>(`/api/v1/ops/request-errors/${id}`),
 
   listUpstreamErrors: (params: OpsErrorListParams) =>
     get<OpsErrorListResponse>('/api/v1/ops/upstream-errors', { params }),
 
-  getUpstreamErrorDetail: (id: number) =>
+  getUpstreamErrorDetail: (id: string) =>
     get<OpsUpstreamError>(`/api/v1/ops/upstream-errors/${id}`),
 
-  updateRequestErrorResolved: (id: number, resolved: boolean) =>
+  // B05/WP3 降级方案：request/upstream 错误的 resolve 后端返回 409（不支持就地标记），
+  // 前端在 OpsErrorDetailModal 中对该类按钮禁用 + 提示，不再调用此方法。
+  // 保留接口以便未来 WP11 接 error_resolve_states 表后启用。
+  updateRequestErrorResolved: (id: string, resolved: boolean) =>
     put(`/api/v1/ops/request-errors/${id}/resolve`, { resolved }),
 
-  updateUpstreamErrorResolved: (id: number, resolved: boolean) =>
+  updateUpstreamErrorResolved: (id: string, resolved: boolean) =>
     put(`/api/v1/ops/upstream-errors/${id}/resolve`, { resolved }),
 
   // ---- 并发统计 ----

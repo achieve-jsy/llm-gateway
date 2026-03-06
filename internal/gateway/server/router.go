@@ -166,6 +166,9 @@ func Setup(
 		}
 		v1.Use(middleware.UsageCollector(collector[0], traceWriterOpt, budgetHook))
 	}
+		// Provider 并发/限流追踪（写入 Redis 供运维看板读取）
+		// 必须在 UsageCollector 之后，确保 provider 信息已由 orchestrator 写入 context
+		v1.Use(middleware.ProviderTracker(rdb))
 	// 组织归集状态检查：pending_studio 员工调用模型时返回 403
 	// 注意：必须在 UsageCollector 之后，403 才能被记录到调用明细
 	v1.Use(middleware.OrgCheckMiddleware())

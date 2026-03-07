@@ -6,10 +6,11 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"strings"
+	"time"
 
 	"github.com/example/llm-gateway/internal/core/quota"
 	gwmodel "github.com/example/llm-gateway/internal/gateway/model"
-	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -36,7 +37,7 @@ func (m *QuotaMiddleware) Handler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 系统探针 key（__system_ 前缀）豁免
 		if v, ok := c.Get("key_name"); ok {
-			if name, ok := v.(string); ok && len(name) >= 9 && name[:9] == "__system_" {
+			if name, ok := v.(string); ok && strings.HasPrefix(name, "__system_") {
 				c.Next()
 				return
 			}
@@ -94,22 +95,12 @@ func (m *QuotaMiddleware) Handler() gin.HandlerFunc {
 		}
 
 		// 逐层检查并 acquire
+		// 先检查并发再检查 RPM：RPM 检查会写入 ZADD（不可回滚），
+		// 并发失败时尚未写入 RPM 条目，不会产生滑动窗口"泄漏"。
 		tokens := []releaseToken{}
 		ctx := c.Request.Context()
 
 		for _, l := range layers {
-			// RPM 检查
-			if err := m.store.CheckRPM(ctx, l.rpmKey, l.limits.RPM); err != nil {
-				m.releaseAll(tokens)
-				WriteQuotaRejected(c, quota.QuotaViolation{
-					SubjectType: subjectType,
-					SubjectID:   subjectID,
-					Layer:       l.layer,
-					Gate:        "rpm",
-					Limit:       l.limits.RPM,
-				})
-				return
-			}
 			// 并发 acquire
 			if err := m.store.AcquireConcurrency(ctx, l.concKey, l.limits.MaxConcurrency); err != nil {
 				m.releaseAll(tokens)
@@ -123,6 +114,20 @@ func (m *QuotaMiddleware) Handler() gin.HandlerFunc {
 				return
 			}
 			tokens = append(tokens, releaseToken{key: l.concKey})
+
+			// RPM 检查
+			if err := m.store.CheckRPM(ctx, l.rpmKey, l.limits.RPM); err != nil {
+				// RPM 失败需要回滚已获取的并发许可
+				m.releaseAll(tokens)
+				WriteQuotaRejected(c, quota.QuotaViolation{
+					SubjectType: subjectType,
+					SubjectID:   subjectID,
+					Layer:       l.layer,
+					Gate:        "rpm",
+					Limit:       l.limits.RPM,
+				})
+				return
+			}
 		}
 
 		// 存储 tokens 供后续释放（handler 完成后）
@@ -147,8 +152,10 @@ func (m *QuotaMiddleware) Handler() gin.HandlerFunc {
 }
 
 // releaseAll 逆序释放所有并发令牌。
+// 使用 5s 超时避免 Redis 不可用时阻塞 goroutine 退出。
 func (m *QuotaMiddleware) releaseAll(tokens []releaseToken) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	for i := len(tokens) - 1; i >= 0; i-- {
 		m.store.ReleaseConcurrency(ctx, tokens[i].key)
 	}
@@ -222,18 +229,8 @@ func (g *ModelQuotaGate) BeforeUpstream(c *gin.Context, subjectType, subjectID, 
 	rpmKey := RPMKey(subjectType, subjectID, "model", modelUUID)
 	concKey := ConcurrencyKey(subjectType, subjectID, "model", modelUUID)
 
-	// RPM 检查
-	if err := g.store.CheckRPM(ctx, rpmKey, limits.RPM); err != nil {
-		WriteQuotaRejected(c, quota.QuotaViolation{
-			SubjectType: subjectType,
-			SubjectID:   subjectID,
-			Layer:       "model",
-			Gate:        "rpm",
-			Limit:       limits.RPM,
-		})
-		return err
-	}
-
+	// 先检查并发再检查 RPM，与 QuotaMiddleware 保持一致的顺序：
+	// RPM 检查写入 ZADD 不可回滚，并发失败时不应产生 RPM 条目泄漏。
 	// 并发 acquire
 	if err := g.store.AcquireConcurrency(ctx, concKey, limits.MaxConcurrency); err != nil {
 		WriteQuotaRejected(c, quota.QuotaViolation{
@@ -242,6 +239,20 @@ func (g *ModelQuotaGate) BeforeUpstream(c *gin.Context, subjectType, subjectID, 
 			Layer:       "model",
 			Gate:        "concurrency",
 			Limit:       limits.MaxConcurrency,
+		})
+		return err
+	}
+
+	// RPM 检查
+	if err := g.store.CheckRPM(ctx, rpmKey, limits.RPM); err != nil {
+		// RPM 失败需要回滚已获取的并发许可
+		g.store.ReleaseConcurrency(ctx, concKey)
+		WriteQuotaRejected(c, quota.QuotaViolation{
+			SubjectType: subjectType,
+			SubjectID:   subjectID,
+			Layer:       "model",
+			Gate:        "rpm",
+			Limit:       limits.RPM,
 		})
 		return err
 	}

@@ -84,10 +84,7 @@ func WithRetryAfter(seconds int) ErrorOption {
 //
 // If the code is not found in the Registry, it falls back to "internal_error".
 func WriteError(c *gin.Context, code string, opts ...ErrorOption) {
-	ec, ok := Registry[code]
-	if !ok {
-		ec = Registry["internal_error"]
-	}
+	ec := Lookup(code)
 
 	o := buildOptions(opts...)
 

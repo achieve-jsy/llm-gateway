@@ -14,10 +14,7 @@ import (
 // It sends an "error" event with the error payload, followed by a "[DONE]"
 // sentinel to signal the end of the stream.
 func WriteSSEError(c *gin.Context, code string, opts ...ErrorOption) {
-	ec, ok := Registry[code]
-	if !ok {
-		ec = Registry["internal_error"]
-	}
+	ec := Lookup(code)
 
 	o := buildOptions(opts...)
 

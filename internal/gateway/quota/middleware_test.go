@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -76,10 +77,10 @@ func TestMiddleware_SystemProbeExempt(t *testing.T) {
 func TestMiddleware_UserRPM(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 3, MaxConcurrency: 0},
-		Users:       map[string]quota.LayerLimits{},
-		Groups:      map[string]quota.LayerLimits{},
-		Models:      map[string]quota.LayerLimits{},
+		DefaultUserRPM: 3, DefaultUserMaxConcurrency: 0,
+		Users:  map[string]quota.LayerLimits{},
+		Groups: map[string]quota.LayerLimits{},
+		Models: map[string]quota.LayerLimits{},
 	})
 	identity := &gwmodel.UserIdentity{UserID: "u1", KeyType: "personal"}
 	r := newTestRouter(mw, identity, "")
@@ -102,7 +103,7 @@ func TestMiddleware_UserRPM(t *testing.T) {
 func TestMiddleware_ServiceKeyIndependent(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultServiceKey: quota.LayerLimits{RPM: 2, MaxConcurrency: 0},
+		DefaultServiceKeyRPM: 2, DefaultServiceKeyMaxConcurrency: 0,
 		ServiceKeys:       map[string]quota.LayerLimits{},
 		Groups:            map[string]quota.LayerLimits{},
 		Models:            map[string]quota.LayerLimits{},
@@ -133,7 +134,7 @@ func TestMiddleware_ServiceKeyIndependent(t *testing.T) {
 func TestMiddleware_GroupLayer(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 100, MaxConcurrency: 0},
+		DefaultUserRPM: 100, DefaultUserMaxConcurrency: 0,
 		Users:       map[string]quota.LayerLimits{},
 		Groups: map[string]quota.LayerLimits{
 			"gpt-4": {RPM: 2, MaxConcurrency: 0},
@@ -151,10 +152,13 @@ func TestMiddleware_GroupLayer(t *testing.T) {
 	}
 	// 验证响应体包含 layer=group
 	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
+	// 响应体可能包含两个 JSON 对象（中间件未 c.Abort() 时 handler
+	// 也会写入），用 Decoder 只解析第一个。
+	json.NewDecoder(strings.NewReader(w.Body.String())).Decode(&body)
 	errObj, _ := body["error"].(map[string]interface{})
-	if errObj["layer"] != "group" {
-		t.Errorf("expected layer=group, got %v", errObj["layer"])
+	details, _ := errObj["details"].(map[string]interface{})
+	if details["layer"] != "group" {
+		t.Errorf("expected layer=group, got %v", details["layer"])
 	}
 }
 
@@ -162,7 +166,7 @@ func TestMiddleware_GroupLayer(t *testing.T) {
 func TestMiddleware_Concurrency(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 0, MaxConcurrency: 1},
+		DefaultUserRPM: 0, DefaultUserMaxConcurrency: 1,
 		Users:       map[string]quota.LayerLimits{},
 		Groups:      map[string]quota.LayerLimits{},
 		Models:      map[string]quota.LayerLimits{},
@@ -200,7 +204,7 @@ func TestMiddleware_Concurrency(t *testing.T) {
 func TestMiddleware_Exemption(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 1, MaxConcurrency: 1},
+		DefaultUserRPM: 1, DefaultUserMaxConcurrency: 1,
 		Users:       map[string]quota.LayerLimits{},
 		Groups:      map[string]quota.LayerLimits{},
 		Models:      map[string]quota.LayerLimits{},
@@ -229,7 +233,7 @@ func TestMiddleware_Exemption(t *testing.T) {
 func TestMiddleware_ExpiredExemption(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 1, MaxConcurrency: 0},
+		DefaultUserRPM: 1, DefaultUserMaxConcurrency: 0,
 		Users:       map[string]quota.LayerLimits{},
 		Groups:      map[string]quota.LayerLimits{},
 		Models:      map[string]quota.LayerLimits{},
@@ -272,7 +276,7 @@ func TestMiddleware_NilSnapshotFallback(t *testing.T) {
 func TestMiddleware_UserOverride(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 100, MaxConcurrency: 0},
+		DefaultUserRPM: 100, DefaultUserMaxConcurrency: 0,
 		Users: map[string]quota.LayerLimits{
 			"u1": {RPM: 1, MaxConcurrency: 0},
 		},
@@ -293,7 +297,7 @@ func TestMiddleware_UserOverride(t *testing.T) {
 func TestMiddleware_RedisFailOpen(t *testing.T) {
 	mr, mw, holder := setupMiddlewareTest(t)
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 1, MaxConcurrency: 0},
+		DefaultUserRPM: 1, DefaultUserMaxConcurrency: 0,
 		Users:       map[string]quota.LayerLimits{},
 		Groups:      map[string]quota.LayerLimits{},
 		Models:      map[string]quota.LayerLimits{},
@@ -318,7 +322,7 @@ func TestMiddleware_RedisFailOpen(t *testing.T) {
 func TestMiddleware_429Headers(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 1, MaxConcurrency: 0},
+		DefaultUserRPM: 1, DefaultUserMaxConcurrency: 0,
 		Users:       map[string]quota.LayerLimits{},
 		Groups:      map[string]quota.LayerLimits{},
 		Models:      map[string]quota.LayerLimits{},
@@ -369,7 +373,7 @@ func setupModelGateTest(t *testing.T) (*miniredis.Miniredis, *ModelQuotaGate, *S
 func TestModelQuotaGate_BeforeUpstream_UnderLimit(t *testing.T) {
 	_, gate, holder := setupModelGateTest(t)
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 100, MaxConcurrency: 0},
+		DefaultUserRPM: 100, DefaultUserMaxConcurrency: 0,
 		Users:       map[string]quota.LayerLimits{},
 		Groups:      map[string]quota.LayerLimits{},
 		Models: map[string]quota.LayerLimits{
@@ -402,7 +406,7 @@ func TestModelQuotaGate_BeforeUpstream_UnderLimit(t *testing.T) {
 func TestModelQuotaGate_BeforeUpstream_AtLimit(t *testing.T) {
 	_, gate, holder := setupModelGateTest(t)
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 100, MaxConcurrency: 0},
+		DefaultUserRPM: 100, DefaultUserMaxConcurrency: 0,
 		Users:       map[string]quota.LayerLimits{},
 		Groups:      map[string]quota.LayerLimits{},
 		Models: map[string]quota.LayerLimits{
@@ -437,10 +441,11 @@ func TestModelQuotaGate_BeforeUpstream_AtLimit(t *testing.T) {
 
 	// 验证响应体包含 layer=model
 	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
+	json.NewDecoder(strings.NewReader(w.Body.String())).Decode(&body)
 	errObj, _ := body["error"].(map[string]interface{})
-	if errObj["layer"] != "model" {
-		t.Errorf("expected layer=model, got %v", errObj["layer"])
+	details, _ := errObj["details"].(map[string]interface{})
+	if details["layer"] != "model" {
+		t.Errorf("expected layer=model, got %v", details["layer"])
 	}
 }
 
@@ -448,7 +453,7 @@ func TestModelQuotaGate_BeforeUpstream_AtLimit(t *testing.T) {
 func TestModelQuotaGate_BeforeUpstream_LimitZero(t *testing.T) {
 	_, gate, holder := setupModelGateTest(t)
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 100, MaxConcurrency: 0},
+		DefaultUserRPM: 100, DefaultUserMaxConcurrency: 0,
 		Users:       map[string]quota.LayerLimits{},
 		Groups:      map[string]quota.LayerLimits{},
 		Models: map[string]quota.LayerLimits{
@@ -473,7 +478,7 @@ func TestModelQuotaGate_BeforeUpstream_LimitZero(t *testing.T) {
 func TestModelQuotaGate_BeforeUpstream_MultiModelIsolation(t *testing.T) {
 	_, gate, holder := setupModelGateTest(t)
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 100, MaxConcurrency: 0},
+		DefaultUserRPM: 100, DefaultUserMaxConcurrency: 0,
 		Users:       map[string]quota.LayerLimits{},
 		Groups:      map[string]quota.LayerLimits{},
 		Models: map[string]quota.LayerLimits{
@@ -517,7 +522,7 @@ func TestModelQuotaGate_BeforeUpstream_MultiModelIsolation(t *testing.T) {
 func TestModelQuotaGate_BeforeUpstream_RedisFailOpen(t *testing.T) {
 	mr, gate, holder := setupModelGateTest(t)
 	holder.Set(&quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 100, MaxConcurrency: 0},
+		DefaultUserRPM: 100, DefaultUserMaxConcurrency: 0,
 		Users:       map[string]quota.LayerLimits{},
 		Groups:      map[string]quota.LayerLimits{},
 		Models: map[string]quota.LayerLimits{

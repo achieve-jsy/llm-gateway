@@ -34,6 +34,35 @@ redis.call('PEXPIRE', key, window + 1000)
 return 1
 `)
 
+// concurrencyAcquireScript 原子并发获取 Lua。
+// KEYS[1]：并发键；ARGV[1]：限额；ARGV[2]：TTL 兜底(秒)
+// 返回：1=通过；0=超限
+var concurrencyAcquireScript = redis.NewScript(`
+local key = KEYS[1]
+local limit = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[2])
+local val = redis.call('INCR', key)
+if val > limit then
+  redis.call('DECR', key)
+  return 0
+end
+redis.call('EXPIRE', key, ttl)
+return 1
+`)
+
+// concurrencyReleaseScript 原子并发释放 Lua。
+// KEYS[1]：并发键
+// 返回：DECR 后的值；若 <=0 则 DEL key 后再返回 0
+var concurrencyReleaseScript = redis.NewScript(`
+local key = KEYS[1]
+local val = redis.call('DECR', key)
+if val <= 0 then
+  redis.call('DEL', key)
+  return 0
+end
+return val
+`)
+
 // RedisStore 配额 Redis 存储层：RPM 滑动窗口 + 并发 INCR/DECR。
 type RedisStore struct {
 	rdb *redis.Client
@@ -53,7 +82,9 @@ func (s *RedisStore) CheckRPM(ctx context.Context, key string, limit int) error 
 	now := time.Now().UnixMilli()
 	result, err := rpmCheckScript.Run(ctx, s.rdb, []string{key}, now, rpmWindowMS, limit).Int64()
 	if err != nil {
+		// Redis fail-open：记录日志和 metric，放行请求
 		slog.Warn("quota: redis rpm check error, fail-open", "key", key, "error", err)
+		RecordFailOpen(ctx, "rpm")
 		return nil // fail-open
 	}
 	if result == 0 {
@@ -62,37 +93,30 @@ func (s *RedisStore) CheckRPM(ctx context.Context, key string, limit int) error 
 	return nil
 }
 
-// AcquireConcurrency 获取并发许可。
+// AcquireConcurrency 获取并发许可（Lua 原子操作，避免 INCR->check->DECR 竞态）。
 // 返回 nil=通过，非 nil=超限。
 func (s *RedisStore) AcquireConcurrency(ctx context.Context, key string, limit int) error {
 	if limit <= 0 {
 		return nil // 0 = 不限
 	}
-	val, err := s.rdb.Incr(ctx, key).Result()
+	result, err := concurrencyAcquireScript.Run(ctx, s.rdb, []string{key}, limit, int64(concurrencyKeyTTL.Seconds())).Int64()
 	if err != nil {
+		// Redis fail-open：记录日志和 metric，放行请求
 		slog.Warn("quota: redis concurrency acquire error, fail-open", "key", key, "error", err)
+		RecordFailOpen(ctx, "concurrency")
 		return nil // fail-open
 	}
-	if val > int64(limit) {
-		// 超限：回滚
-		s.rdb.Decr(ctx, key)
+	if result == 0 {
 		return fmt.Errorf("concurrency_exceeded")
 	}
-	// 设置 TTL 兜底
-	s.rdb.Expire(ctx, key, concurrencyKeyTTL)
 	return nil
 }
 
-// ReleaseConcurrency 释放并发许可。
+// ReleaseConcurrency 释放并发许可（Lua 原子操作，避免双重释放导致 counter 负数）。
 func (s *RedisStore) ReleaseConcurrency(ctx context.Context, key string) {
-	val, err := s.rdb.Decr(ctx, key).Result()
+	_, err := concurrencyReleaseScript.Run(ctx, s.rdb, []string{key}).Result()
 	if err != nil {
 		slog.Warn("quota: redis concurrency release error", "key", key, "error", err)
-		return
-	}
-	if val <= 0 {
-		// 清理已归零的键
-		s.rdb.Del(ctx, key)
 	}
 }
 

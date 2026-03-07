@@ -140,7 +140,7 @@ func Setup(
 	quotaStore := quota.NewRedisStore(rdb)
 	quotaLoader := quota.NewConfigLoader(rdb, quotaHolder)
 	if rdb != nil {
-		quotaLoader.StartPolling(30 * time.Second)
+		quotaLoader.StartPolling(context.Background(), 30*time.Second)
 		quotaLoader.SubscribeToChanges(context.Background())
 	}
 	quotaMW := quota.NewMiddleware(quotaHolder, quotaStore)

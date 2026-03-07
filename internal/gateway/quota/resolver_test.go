@@ -45,8 +45,8 @@ func TestResolveSubjectLimits_NilSnapshot_ServiceKey(t *testing.T) {
 
 func TestResolveSubjectLimits_UserDefault(t *testing.T) {
 	snap := &quota.QuotaSnapshot{
-		DefaultUser:       quota.LayerLimits{RPM: 30, MaxConcurrency: 5},
-		DefaultServiceKey: quota.LayerLimits{RPM: 60, MaxConcurrency: 10},
+		DefaultUserRPM: 30, DefaultUserMaxConcurrency: 5,
+		DefaultServiceKeyRPM: 60, DefaultServiceKeyMaxConcurrency: 10,
 		Users:             map[string]quota.LayerLimits{},
 	}
 	r := ResolveSubjectLimits(snap, "user", "user-123")
@@ -57,7 +57,7 @@ func TestResolveSubjectLimits_UserDefault(t *testing.T) {
 
 func TestResolveSubjectLimits_UserOverride(t *testing.T) {
 	snap := &quota.QuotaSnapshot{
-		DefaultUser: quota.LayerLimits{RPM: 30, MaxConcurrency: 5},
+		DefaultUserRPM: 30, DefaultUserMaxConcurrency: 5,
 		Users: map[string]quota.LayerLimits{
 			"user-123": {RPM: 100, MaxConcurrency: 20},
 		},
@@ -70,7 +70,7 @@ func TestResolveSubjectLimits_UserOverride(t *testing.T) {
 
 func TestResolveSubjectLimits_ServiceKeyOverride(t *testing.T) {
 	snap := &quota.QuotaSnapshot{
-		DefaultServiceKey: quota.LayerLimits{RPM: 120, MaxConcurrency: 20},
+		DefaultServiceKeyRPM: 120, DefaultServiceKeyMaxConcurrency: 20,
 		ServiceKeys: map[string]quota.LayerLimits{
 			"key-456": {RPM: 50, MaxConcurrency: 5},
 		},
@@ -83,7 +83,7 @@ func TestResolveSubjectLimits_ServiceKeyOverride(t *testing.T) {
 
 func TestResolveSubjectLimits_ServiceKeyDefault(t *testing.T) {
 	snap := &quota.QuotaSnapshot{
-		DefaultServiceKey: quota.LayerLimits{RPM: 120, MaxConcurrency: 20},
+		DefaultServiceKeyRPM: 120, DefaultServiceKeyMaxConcurrency: 20,
 		ServiceKeys:       map[string]quota.LayerLimits{},
 	}
 	r := ResolveSubjectLimits(snap, "service_key", "key-unknown")
@@ -148,12 +148,12 @@ func TestSnapshotHolder_SetAndGet(t *testing.T) {
 
 	snap := &quota.QuotaSnapshot{
 		Version:     1,
-		DefaultUser: quota.LayerLimits{RPM: 60, MaxConcurrency: 10},
+		DefaultUserRPM: 60, DefaultUserMaxConcurrency: 10,
 	}
 	h.Set(snap)
 
 	got := h.Get()
-	if got == nil || got.Version != 1 || got.DefaultUser.RPM != 60 {
+	if got == nil || got.Version != 1 || got.DefaultUserRPM != 60 {
 		t.Errorf("unexpected snapshot: %+v", got)
 	}
 

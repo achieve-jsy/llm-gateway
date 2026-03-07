@@ -18,14 +18,14 @@ func TestModel_UpstreamName(t *testing.T) {
 			want:            "GLM-5.2-FP8",
 		},
 		{
-			name:      "剥离 provider/ 前缀",
+			name:      "Name 含 provider/ 前缀时保留前缀",
 			modelName: "ZHIPU/GLM-5.2",
-			want:      "GLM-5.2",
+			want:      "ZHIPU/GLM-5.2",
 		},
 		{
-			name:      "bedrock 前缀剥离",
+			name:      "bedrock 前缀保留",
 			modelName: "bedrock/global.anthropic.claude-opus-4-6-v1",
-			want:      "global.anthropic.claude-opus-4-6-v1",
+			want:      "bedrock/global.anthropic.claude-opus-4-6-v1",
 		},
 		{
 			name:      "无前缀直接返回",
@@ -41,7 +41,7 @@ func TestModel_UpstreamName(t *testing.T) {
 			name:            "UpstreamModelID 为空字符串时走 Name",
 			modelName:       "ZHIPU/GLM-5.2",
 			upstreamModelID: "",
-			want:            "GLM-5.2",
+			want:            "ZHIPU/GLM-5.2",
 		},
 	}
 

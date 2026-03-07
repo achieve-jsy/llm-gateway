@@ -54,9 +54,11 @@ type EffectiveResult struct {
 func ResolveSubjectLimits(snap *quota.QuotaSnapshot, subjectType, subjectID string) EffectiveResult {
 	if snap == nil {
 		if subjectType == "service_key" {
-			return EffectiveResult{RPM: quota.FallbackDefaultServiceKey.RPM, MaxConcurrency: quota.FallbackDefaultServiceKey.MaxConcurrency, Source: "default_service_key"}
+			f := quota.FallbackDefaultServiceKey()
+			return EffectiveResult{RPM: f.RPM, MaxConcurrency: f.MaxConcurrency, Source: "default_service_key"}
 		}
-		return EffectiveResult{RPM: quota.FallbackDefaultUser.RPM, MaxConcurrency: quota.FallbackDefaultUser.MaxConcurrency, Source: "default_user"}
+		f := quota.FallbackDefaultUser()
+		return EffectiveResult{RPM: f.RPM, MaxConcurrency: f.MaxConcurrency, Source: "default_user"}
 	}
 
 	switch subjectType {
@@ -64,12 +66,12 @@ func ResolveSubjectLimits(snap *quota.QuotaSnapshot, subjectType, subjectID stri
 		if lim, ok := snap.ServiceKeys[subjectID]; ok {
 			return EffectiveResult{RPM: lim.RPM, MaxConcurrency: lim.MaxConcurrency, Source: "override"}
 		}
-		return EffectiveResult{RPM: snap.DefaultServiceKey.RPM, MaxConcurrency: snap.DefaultServiceKey.MaxConcurrency, Source: "default_service_key"}
+		return EffectiveResult{RPM: snap.DefaultServiceKeyRPM, MaxConcurrency: snap.DefaultServiceKeyMaxConcurrency, Source: "default_service_key"}
 	default: // user
 		if lim, ok := snap.Users[subjectID]; ok {
 			return EffectiveResult{RPM: lim.RPM, MaxConcurrency: lim.MaxConcurrency, Source: "override"}
 		}
-		return EffectiveResult{RPM: snap.DefaultUser.RPM, MaxConcurrency: snap.DefaultUser.MaxConcurrency, Source: "default_user"}
+		return EffectiveResult{RPM: snap.DefaultUserRPM, MaxConcurrency: snap.DefaultUserMaxConcurrency, Source: "default_user"}
 	}
 }
 

@@ -46,7 +46,7 @@ func TestLoad_Debounce(t *testing.T) {
 	loader := NewConfigLoader(rdb, holder)
 
 	// Write a v1 snapshot
-	writeSnapshot(t, rdb, &quota.QuotaSnapshot{Version: 1, DefaultUser: quota.LayerLimits{RPM: 60, MaxConcurrency: 10}})
+	writeSnapshot(t, rdb, &quota.QuotaSnapshot{Version: 1, DefaultUserRPM: 60, DefaultUserMaxConcurrency: 10})
 
 	// First load should succeed and populate holder
 	if err := loader.Load(context.Background()); err != nil {
@@ -58,7 +58,7 @@ func TestLoad_Debounce(t *testing.T) {
 	}
 
 	// Write a v2 snapshot to Redis
-	writeSnapshot(t, rdb, &quota.QuotaSnapshot{Version: 2, DefaultUser: quota.LayerLimits{RPM: 100, MaxConcurrency: 20}})
+	writeSnapshot(t, rdb, &quota.QuotaSnapshot{Version: 2, DefaultUserRPM: 100, DefaultUserMaxConcurrency: 20})
 
 	// Second load within 1s should be debounced — holder still has v1
 	if err := loader.Load(context.Background()); err != nil {
@@ -106,7 +106,7 @@ func TestSubscribeToChanges_QuotaEvent(t *testing.T) {
 	loader := NewConfigLoader(rdb, holder)
 
 	// Write initial v1 snapshot
-	writeSnapshot(t, rdb, &quota.QuotaSnapshot{Version: 1, DefaultUser: quota.LayerLimits{RPM: 60, MaxConcurrency: 10}})
+	writeSnapshot(t, rdb, &quota.QuotaSnapshot{Version: 1, DefaultUserRPM: 60, DefaultUserMaxConcurrency: 10})
 
 	// Initial load
 	if err := loader.Load(context.Background()); err != nil {
@@ -125,7 +125,7 @@ func TestSubscribeToChanges_QuotaEvent(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Write v2 snapshot and publish quota event
-	writeSnapshot(t, rdb, &quota.QuotaSnapshot{Version: 2, DefaultUser: quota.LayerLimits{RPM: 100, MaxConcurrency: 20}})
+	writeSnapshot(t, rdb, &quota.QuotaSnapshot{Version: 2, DefaultUserRPM: 100, DefaultUserMaxConcurrency: 20})
 
 	// Reset debounce so the pub/sub triggered load isn't skipped
 	loader.lastLoadAt.Store(0)

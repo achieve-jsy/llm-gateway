@@ -121,7 +121,7 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 				c.Header("X-Auto-Tier", decision.ComplexityTier)
 				c.Header("X-Auto-Score", fmt.Sprintf("%.2f", decision.ComplexityScore))
 			}
-			
+
 			// v0.15: 模型层配额检查（在路由选定具体 model 之后、转发上游之前）
 			if h.quotaGate != nil {
 				subjectType, _ := c.Get("quota_subject_type")
@@ -227,6 +227,20 @@ func (h *ChatHandler) handleNonStream(c *gin.Context, baseCtx context.Context, r
 			// Track provider concurrency for failover target (WP8)
 			middleware.TrackProviderRequest(c, decision.ProviderName)
 		c.Set("failover_used", true)
+
+		// v0.15: failover 模型也需要经过模型层配额检查
+		if h.quotaGate != nil {
+			subjectType, _ := c.Get("quota_subject_type")
+			subjectID, _ := c.Get("quota_subject_id")
+			if st, ok := subjectType.(string); ok {
+				if si, ok := subjectID.(string); ok {
+					if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelID); err != nil {
+						return // BeforeUpstream 已写入 429 响应
+					}
+				}
+			}
+		}
+
 		slog.Info("failover: switching",
 			"request_id", c.GetString("request_id"),
 			"group", originalModel,
@@ -314,6 +328,20 @@ func (h *ChatHandler) handleStream(c *gin.Context, baseCtx context.Context, req 
 			// Track provider concurrency for failover target (WP8)
 			middleware.TrackProviderRequest(c, decision.ProviderName)
 		c.Set("failover_used", true)
+
+		// v0.15: failover 模型也需要经过模型层配额检查
+		if h.quotaGate != nil {
+			subjectType, _ := c.Get("quota_subject_type")
+			subjectID, _ := c.Get("quota_subject_id")
+			if st, ok := subjectType.(string); ok {
+				if si, ok := subjectID.(string); ok {
+					if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelID); err != nil {
+						return // BeforeUpstream 已写入 429 响应
+					}
+				}
+			}
+		}
+
 		slog.Info("failover: switching (stream)",
 			"request_id", c.GetString("request_id"),
 			"group", originalModel,

@@ -234,6 +234,8 @@ func (s *SettingsService) GetPublicSettings(ctx context.Context) (*model.PublicS
 		SettingKeySupplierName,
 		SettingKeyPricingUsdToCnyRate,
 	SettingKeyGlobalRPM, SettingKeyStudioRPM, SettingKeyDeptRPM, SettingKeyKeyRPM,
+		SettingKeyDefaultUserRPM, SettingKeyDefaultUserMaxConcurrency,
+		SettingKeyDefaultServiceKeyRPM, SettingKeyDefaultServiceKeyMaxConcurrency,
 	})
 	if err != nil {
 		return nil, err
@@ -251,6 +253,10 @@ func (s *SettingsService) GetPublicSettings(ctx context.Context) (*model.PublicS
 		StudioRPM:             intOrDefault(vals, SettingKeyStudioRPM, 0),
 		DeptRPM:               intOrDefault(vals, SettingKeyDeptRPM, 0),
 	KeyRPM:                intOrDefault(vals, SettingKeyKeyRPM, 0),
+		DefaultUserRPM:                      intOrDefault(vals, SettingKeyDefaultUserRPM, defaultUserRPM),
+		DefaultUserMaxConcurrency:           intOrDefault(vals, SettingKeyDefaultUserMaxConcurrency, defaultUserMaxConcurrency),
+		DefaultServiceKeyRPM:                intOrDefault(vals, SettingKeyDefaultServiceKeyRPM, defaultServiceKeyRPM),
+		DefaultServiceKeyMaxConcurrency:     intOrDefault(vals, SettingKeyDefaultServiceKeyMaxConcurrency, defaultServiceKeyMaxConcurrency),
 	}, nil
 }
 

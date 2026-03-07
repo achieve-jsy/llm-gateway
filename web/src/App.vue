@@ -236,7 +236,13 @@ const isCollapsed = ref(localStorage.getItem('sidebar-collapsed') === 'true')
 const isMobile = ref(window.innerWidth < 768)
 const showMobileSidebar = ref(false)
 // 配额已并入预算页：/my/budget 统一高亮
-const activeMenu = ref(route.path)
+function resolveActiveMenu(r: { path: string; query: { tab?: string } }): string {
+  if (r.path === '/my/budget') {
+    return r.query.tab === 'quota' ? '/my/budget?tab=quota' : '/my/budget'
+  }
+  return r.path
+}
+const activeMenu = ref(resolveActiveMenu(route))
 const showPopup = ref(false)
 const budgetAlert = ref(false)
 
@@ -252,6 +258,11 @@ async function checkBudgetAlert() {
 
 watch(() => route.path, (newPath) => {
   activeMenu.value = newPath
+})
+
+// 预算页内 tab 切换时，按 ?tab=quota 让「我的预算」菜单项高亮
+watch(() => route.query.tab, () => {
+  activeMenu.value = resolveActiveMenu(route)
 })
 
 const sidebarLogoSrc = computed(() => {
@@ -320,7 +331,7 @@ watch(() => authStore.isLoggedIn, (loggedIn) => {
 
 function handleMenuSelect(index: string) {
   if (isMobile.value) showMobileSidebar.value = false
-  if (index && index !== route.path) {
+  if (index && index !== resolveActiveMenu(route)) {
     router.push(index)
   }
 }

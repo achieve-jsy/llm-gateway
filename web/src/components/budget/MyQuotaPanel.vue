@@ -236,9 +236,9 @@ async function loadQuota() {
   loading.value = true
   try {
     const res = await getMyQuota()
-    // 后端响应为 { code:0, data:{ effective, current_usage } }，真实对象在 res.data.data
-    quota.value = (res as any)?.data?.data || null
-  } catch {
+    quota.value = res.data?.data || null
+  } catch (err) {
+    console.error('[MyQuotaPanel] Failed to load quota:', err)
     quota.value = null
   } finally {
     loading.value = false

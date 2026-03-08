@@ -147,6 +147,11 @@ func (h *ChannelMonitorHandler) Create(c *gin.Context) {
 	}
 
 	_, userName := extractOperator(c)
+	intervalSeconds := req.IntervalSeconds
+	if intervalSeconds == 0 {
+		intervalSeconds = 60 // default
+	}
+
 	params := service.ChannelMonitorCreateParams{
 		Name:             req.Name,
 		Provider:         req.Provider,
@@ -157,7 +162,7 @@ func (h *ChannelMonitorHandler) Create(c *gin.Context) {
 		ExtraModels:      req.ExtraModels,
 		GroupName:        req.GroupName,
 		Enabled:          req.Enabled,
-		IntervalSeconds:  req.IntervalSeconds,
+		IntervalSeconds:  intervalSeconds,
 		CreatedBy:        userName,
 		TemplateID:       req.TemplateID,
 		ExtraHeaders:     req.ExtraHeaders,

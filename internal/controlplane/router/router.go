@@ -459,7 +459,10 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 			scheduledReportSvc := service.NewScheduledReportService(db, rdb, emailSvc)
 			scheduledReportSvc.Start()
 		adminGroup.GET("/ops/groups", opsHandler.GetGroupOptions)
+		adminGroup.GET("/ops/providers", opsHandler.ListProviders)
+		adminGroup.GET("/ops/models", opsHandler.ListModels)
 		adminGroup.GET("/ops/dashboard", opsHandler.GetDashboard)
+		adminGroup.GET("/ops/dashboard/snapshot-v2", opsHandler.GetSnapshotV2)
 		adminGroup.GET("/ops/traffic-trend", opsHandler.GetTrafficTrend)
 		adminGroup.GET("/ops/error-trend", opsHandler.GetErrorTrend)
 		adminGroup.GET("/ops/latency-histogram", opsHandler.GetLatencyHistogram)
@@ -511,6 +514,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/ops/realtime-traffic", opsHandler.GetRealtimeTraffic)
 		adminGroup.GET("/ops/request-errors/:id/correlation", opsHandler.GetRequestErrorCorrelation)
 		adminGroup.GET("/ops/upstream-errors/:id", opsHandler.GetUpstreamErrorDetail)
+		adminGroup.PUT("/ops/request-errors/:id/resolve", opsHandler.ResolveRequestError)
+		adminGroup.PUT("/ops/upstream-errors/:id/resolve", opsHandler.ResolveUpstreamError)
 
 		// 运维看板 v2：后台任务
 		adminGroup.GET("/ops/jobs", opsHandler.ListJobs)

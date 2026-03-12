@@ -53,3 +53,5 @@ deploy/blue-green/upstream-active.conf
 .DS_Store
 **/.DS_Store
 tools/atlas-loader/atlas-loader
+vendor/
+quota.test

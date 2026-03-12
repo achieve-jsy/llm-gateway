@@ -35,17 +35,37 @@
       <div class="ops-toolbar__right">
         <div class="ops-filters">
           <el-select
-            :model-value="platform"
-            placeholder="Platform"
+            :model-value="provider"
+            placeholder="Provider"
             size="small"
             class="ops-filter-select"
-            @update:model-value="onPlatformChange"
+            clearable
+            :loading="providersLoading"
+            @update:model-value="onProviderChange"
           >
-            <el-option label="全部平台" value="" />
-            <el-option label="OpenAI" value="openai" />
-            <el-option label="Anthropic" value="anthropic" />
-            <el-option label="Gemini" value="gemini" />
-            <el-option label="其他" value="other" />
+            <el-option
+              v-for="p in providerOptions"
+              :key="p.name"
+              :label="p.name"
+              :value="p.name"
+            />
+          </el-select>
+
+          <el-select
+            :model-value="model"
+            placeholder="Model"
+            size="small"
+            class="ops-filter-select"
+            clearable
+            :loading="modelsLoading"
+            @update:model-value="onModelChange"
+          >
+            <el-option
+              v-for="m in modelOptions"
+              :key="m.name"
+              :label="m.name"
+              :value="m.name"
+            />
           </el-select>
 
           <el-select
@@ -80,6 +100,18 @@
             />
           </el-select>
         </div>
+
+        <el-tooltip
+          :content="autoRefresh ? '暂停自动刷新' : '恢复自动刷新'"
+          placement="top"
+        >
+          <el-button
+            size="small"
+            :icon="autoRefresh ? VideoPause : VideoPlay"
+            :type="autoRefresh ? '' : 'info'"
+            @click="emit('update:auto-refresh', !autoRefresh)"
+          />
+        </el-tooltip>
 
         <el-button
           size="small"
@@ -167,6 +199,12 @@
         <div class="ops-realtime-header">
           <span class="ops-realtime-ping" :class="{ paused: isIdle }"></span>
           <span class="ops-realtime-label">实时流量</span>
+          <span
+            v-if="wsStatus"
+            class="ops-ws-dot"
+            :class="`ops-ws-dot--${wsStatus}`"
+            :title="`WS: ${wsStatus}`"
+          />
           <span v-if="isIdle" class="ops-realtime-idle-tag">空闲中</span>
           <span v-else-if="realtimeWindow" class="ops-realtime-window-tag">
             {{ realtimeWindow }}
@@ -401,6 +439,39 @@
         </div>
         <div class="ops-system-sub">{{ jobsSummary.statusText }}</div>
       </div>
+
+      <div class="ops-system-item">
+        <div class="ops-system-label ops-section-label">
+          <el-tooltip content="当前排队中的并发请求总数，>0 说明有请求在等待资源" placement="top">
+            <span>并发队列</span>
+          </el-tooltip>
+        </div>
+        <div class="ops-system-value" :style="{ color: queueDepthColor }">
+          {{ systemMetrics.concurrency_queue_depth }}
+        </div>
+      </div>
+
+      <div class="ops-system-item">
+        <div class="ops-system-label ops-section-label">
+          <el-tooltip content="PostgreSQL 连接是否正常，SELECT 1 探测" placement="top">
+            <span>DB 健康</span>
+          </el-tooltip>
+        </div>
+        <div class="ops-system-value">
+          <span :class="systemMetrics.db_ok ? 'ops-health-dot--ok' : 'ops-health-dot--bad'" class="ops-health-dot"></span>
+        </div>
+      </div>
+
+      <div class="ops-system-item">
+        <div class="ops-system-label ops-section-label">
+          <el-tooltip content="Redis 连接是否正常，PING 探测" placement="top">
+            <span>Redis 健康</span>
+          </el-tooltip>
+        </div>
+        <div class="ops-system-value">
+          <span :class="systemMetrics.redis_ok ? 'ops-health-dot--ok' : 'ops-health-dot--bad'" class="ops-health-dot"></span>
+        </div>
+      </div>
     </div>
 
     <!-- Custom Time Range Dialog -->
@@ -444,7 +515,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, watch } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import {
   ElIcon,
   ElButton,
@@ -456,8 +527,8 @@ import {
   ElDialog,
   ElDatePicker,
 } from 'element-plus'
-import { DataBoard, Refresh } from '@element-plus/icons-vue'
-import { opsAPI } from '@/api/ops'
+import { DataBoard, Refresh, VideoPause, VideoPlay } from '@element-plus/icons-vue'
+import { opsAPI, subscribeQPS } from '@/api/ops'
 import type { OpsOverview, OpsJobHeartbeat, OpsGroupOption } from '@/api/ops'
 import {
   getHealthScoreColor,
@@ -468,8 +539,9 @@ import {
 
 interface Props {
   overview: OpsOverview | null
-  platform: string
   groupId: number | null
+  provider: string
+  model: string
   timeRange: string
   loading: boolean
   lastUpdated: Date | null
@@ -482,8 +554,9 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   overview: null,
-  platform: '',
   groupId: null,
+  provider: '',
+  model: '',
   timeRange: '1h',
   loading: false,
   lastUpdated: null,
@@ -496,9 +569,11 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   (e: 'update:time-range', value: string): void
-  (e: 'update:platform', value: string): void
   (e: 'update:group', value: number | null): void
+  (e: 'update:provider', value: string): void
+  (e: 'update:model', value: string): void
   (e: 'update:custom-time-range', value: { start: string; end: string }): void
+  (e: 'update:auto-refresh', value: boolean): void
   (e: 'refresh'): void
   (e: 'open-request-details'): void
   (e: 'open-error-details', type: 'request' | 'upstream'): void
@@ -526,18 +601,71 @@ const loadGroupOptions = async () => {
   }
 }
 
-onMounted(loadGroupOptions)
+const providerOptions = ref<OpsProviderItem[]>([])
+const providersLoading = ref(false)
 
-const onPlatformChange = (value: string) => {
-  emit('update:platform', value)
-  // 平台切换时清空 groupId（由父组件响应 update:platform 后更新 groupId）
-  if (props.groupId !== null) {
-    emit('update:group', null)
+const loadProviderOptions = async () => {
+  providersLoading.value = true
+  try {
+    const list = await opsAPI.listProviders()
+    providerOptions.value = list ?? []
+  } catch (err) {
+    console.error('Failed to load provider options:', err)
+    providerOptions.value = []
+  } finally {
+    providersLoading.value = false
   }
 }
 
+const modelOptions = ref<OpsModelItem[]>([])
+const modelsLoading = ref(false)
+
+const loadModelOptions = async () => {
+  modelsLoading.value = true
+  try {
+    const list = await opsAPI.listModels()
+    modelOptions.value = list ?? []
+  } catch (err) {
+    console.error('Failed to load model options:', err)
+    modelOptions.value = []
+  } finally {
+    modelsLoading.value = false
+  }
+}
+
+onMounted(() => {
+  loadGroupOptions()
+  loadProviderOptions()
+  loadModelOptions()
+  try {
+    wsUnsubscribe.value = subscribeQPS(
+      (msg) => {
+        realtimeQPS.value = msg.qps
+        realtimeTPS.value = msg.tps
+      },
+      { onStatusChange: (s) => { wsStatus.value = s } },
+    )
+  } catch {
+    // WebSocket 不可用（如测试环境），静默忽略
+  }
+})
+
+const wsUnsubscribe = ref<(() => void) | null>(null)
+
+onUnmounted(() => {
+  wsUnsubscribe.value?.()
+})
+
 const onGroupChange = (value: number | null) => {
   emit('update:group', value ?? null)
+}
+
+const onProviderChange = (value: string) => {
+  emit('update:provider', value)
+}
+
+const onModelChange = (value: string) => {
+  emit('update:model', value)
 }
 
 // ============ Time Range ============
@@ -598,6 +726,7 @@ const realtimeWindow = ref<string>('1min')
 const loadingRealtime = ref(false)
 const realtimeQPS = ref<number | null>(null)
 const realtimeTPS = ref<number | null>(null)
+const wsStatus = ref<'connecting' | 'connected' | 'reconnecting' | 'offline' | 'closed' | null>(null)
 
 const onRealtimeWindowClick = async (w: string) => {
   realtimeWindow.value = w
@@ -636,7 +765,7 @@ watch(
 
 const isIdle = computed(() => {
   if (!props.overview) return true
-  return props.overview.traffic.current_qps === 0 && props.overview.sla.error_rate === 0
+  return (props.overview.traffic?.current_qps ?? 0) === 0 && (props.overview.sla?.error_rate ?? 0) === 0
 })
 
 const statusLabel = computed(() => {
@@ -906,6 +1035,15 @@ const jobsSummary = computed(() => {
 })
 
 const jobsColor = computed(() => jobsSummary.value.color)
+
+// ============ Concurrency Queue Depth ============
+
+const queueDepthColor = computed(() => {
+  const depth = systemMetrics.value.concurrency_queue_depth
+  if (depth > 10) return HEALTH_COLORS.CRITICAL
+  if (depth > 0) return HEALTH_COLORS.WARNING
+  return HEALTH_COLORS.OK
+})
 
 // ============ Utils ============
 
@@ -1351,7 +1489,7 @@ const formatNumber = (num: number): string => {
 /* ============ 系统指标条 ============ */
 .ops-system-metrics {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
   gap: var(--space-4);
 }
 
@@ -1384,6 +1522,54 @@ const formatNumber = (num: number): string => {
   font-size: var(--font-size-xs);
   color: var(--text-placeholder);
   margin-top: 2px;
+}
+
+/* ============ Health Dot (DB/Redis) ============ */
+.ops-health-dot {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  margin-top: 4px;
+}
+.ops-health-dot--ok {
+  background: var(--el-color-success, #67c23a);
+  box-shadow: 0 0 6px rgba(103, 194, 58, 0.6);
+}
+.ops-health-dot--bad {
+  background: var(--el-color-danger, #f56c6c);
+  box-shadow: 0 0 6px rgba(245, 108, 108, 0.6);
+  animation: ops-pulse 1.5s ease-in-out infinite;
+}
+
+/* ============ WebSocket Status Dot ============ */
+.ops-ws-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: 4px;
+}
+.ops-ws-dot--connected {
+  background: var(--el-color-success, #67c23a);
+  animation: ops-blink 2s ease-in-out infinite;
+}
+.ops-ws-dot--connecting,
+.ops-ws-dot--reconnecting {
+  background: var(--el-color-warning, #e6a23c);
+  animation: ops-blink 1s ease-in-out infinite;
+}
+.ops-ws-dot--offline,
+.ops-ws-dot--closed {
+  background: var(--text-placeholder, #c0c4cc);
+}
+@keyframes ops-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+@keyframes ops-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
 /* ============ Custom Time Range Dialog ============ */

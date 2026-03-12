@@ -43,6 +43,9 @@ export interface OpsSystemMetrics {
   redis_total_conns: number
   redis_idle_conns: number
   redis_pool_size: number
+  concurrency_queue_depth: number
+  db_ok: boolean
+  redis_ok: boolean
   collected_at: string
 }
 
@@ -79,6 +82,22 @@ export interface OpsRealtimeTrafficSummary {
 export interface OpsGroupOption {
   id: number
   name: string
+}
+
+export interface OpsProviderItem {
+  name: string
+}
+
+export interface OpsModelItem {
+  name: string
+  total_calls: number
+}
+
+export interface OpsFilterParams {
+  time_range?: string
+  group_id?: number
+  provider?: string
+  model?: string
 }
 
 export interface OpsSLA {
@@ -257,7 +276,8 @@ export interface OpsErrorListResponse {
 // ============ 并发统计类型 ============
 
 export interface OpsProviderConcurrency {
-  provider_id: number
+  // B03/WP2: provider_id 为 provider 名称字符串（后端无数字 id）。对齐后端契约。
+  provider_id: string
   provider_name: string
   provider_type: string
   status: 'available' | 'rate_limited' | 'overloaded' | 'error' | 'unavailable'
@@ -653,8 +673,16 @@ const del = (...args: Parameters<typeof http.delete>) =>
 
 export const opsAPI = {
   // ---- Dashboard 核心 ----
-  getDashboard: (timeRange: string = '1h') =>
-    get<OpsDashboardResponse>('/api/v1/ops/dashboard', { params: { time_range: timeRange } }),
+  getDashboard: (filter: OpsFilterParams) =>
+    get<OpsDashboardResponse>('/api/v1/ops/dashboard', { params: filter }),
+
+  getSnapshotV2: (filter: OpsFilterParams) =>
+    get<{
+      generated_at: string
+      overview: OpsOverview & { total_tokens: number }
+      throughput_trend: { points: OpsTrafficPoint[]; dimension: string }
+      error_trend: { points: OpsErrorPoint[] }
+    }>('/api/v1/ops/dashboard/snapshot-v2', { params: filter }),
 
   // 实时流量摘要（复用 /ops/realtime-traffic 路由，按 window 过滤）
   getRealtimeTrafficSummary: (window: string = '1min') =>
@@ -663,45 +691,56 @@ export const opsAPI = {
   // ---- 模型组下拉列表（运维过滤用） ----
   getGroupOptions: () =>
     get<OpsGroupOption[]>('/api/v1/ops/groups'),
+  
+  listProviders: () =>
+    get<OpsProviderItem[]>('/api/v1/ops/providers'),
+  
+  listModels: () =>
+    get<OpsModelItem[]>('/api/v1/ops/models'),
 
-  getTrafficTrend: (timeRange: string = '1h') =>
-    get<{ points: OpsTrafficPoint[]; bucket: string }>('/api/v1/ops/traffic-trend', { params: { time_range: timeRange } }),
+  getTrafficTrend: (filter: OpsFilterParams) =>
+    get<{ points: OpsTrafficPoint[]; bucket: string }>('/api/v1/ops/traffic-trend', { params: filter }),
 
-  getThroughputTrend: (timeRange: string = '1h') =>
-    get<OpsThroughputTrendResponse>('/api/v1/ops/throughput-trend', { params: { time_range: timeRange } }),
+  getThroughputTrend: (filter: OpsFilterParams) =>
+    get<OpsThroughputTrendResponse>('/api/v1/ops/throughput-trend', { params: filter }),
 
-  getErrorTrend: (timeRange: string = '1h') =>
-    get<{ points: OpsErrorPoint[] }>('/api/v1/ops/error-trend', { params: { time_range: timeRange } }),
+  getErrorTrend: (filter: OpsFilterParams) =>
+    get<{ points: OpsErrorPoint[] }>('/api/v1/ops/error-trend', { params: filter }),
 
-  getLatencyHistogram: (timeRange: string = '1h') =>
-    get<{ buckets: OpsLatencyBucket[]; total_requests: number }>('/api/v1/ops/latency-histogram', { params: { time_range: timeRange } }),
+  getLatencyHistogram: (filter: OpsFilterParams) =>
+    get<{ buckets: OpsLatencyBucket[]; total_requests: number }>('/api/v1/ops/latency-histogram', { params: filter }),
 
-  getErrorDistribution: (timeRange: string = '1h') =>
-    get<{ distribution: OpsErrorDistributionItem[] }>('/api/v1/ops/error-distribution', { params: { time_range: timeRange } }),
+  getErrorDistribution: (filter: OpsFilterParams) =>
+    get<{ distribution: OpsErrorDistributionItem[] }>('/api/v1/ops/error-distribution', { params: filter }),
 
-  getSwitchRateTrend: (timeRange: string = '5h') =>
-    get<{ points: OpsSwitchRatePoint[] }>('/api/v1/ops/switch-rate-trend', { params: { time_range: timeRange } }),
+  getSwitchRateTrend: (filter: OpsFilterParams) =>
+    get<{ points: OpsSwitchRatePoint[] }>('/api/v1/ops/switch-rate-trend', { params: filter }),
 
   // ---- 请求 / 错误详情 ----
   listRequests: (params: OpsRequestDetailsParams) =>
     get<OpsRequestDetailsResponse>('/api/v1/ops/requests', { params }),
 
+  // B05/WP3: 列表项与 detail 端点均以 request_id（字符串）为标识，
+  // call_logs 无数字 id。id 参数类型由 number 改为 string。
   listRequestErrors: (params: OpsErrorListParams) =>
     get<OpsErrorListResponse>('/api/v1/ops/request-errors', { params }),
 
-  getRequestErrorDetail: (id: number) =>
+  getRequestErrorDetail: (id: string) =>
     get<OpsRequestDetail>(`/api/v1/ops/request-errors/${id}`),
 
   listUpstreamErrors: (params: OpsErrorListParams) =>
     get<OpsErrorListResponse>('/api/v1/ops/upstream-errors', { params }),
 
-  getUpstreamErrorDetail: (id: number) =>
+  getUpstreamErrorDetail: (id: string) =>
     get<OpsUpstreamError>(`/api/v1/ops/upstream-errors/${id}`),
 
-  updateRequestErrorResolved: (id: number, resolved: boolean) =>
+  // B05/WP3 降级方案：request/upstream 错误的 resolve 后端返回 409（不支持就地标记），
+  // 前端在 OpsErrorDetailModal 中对该类按钮禁用 + 提示，不再调用此方法。
+  // 保留接口以便未来 WP11 接 error_resolve_states 表后启用。
+  updateRequestErrorResolved: (id: string, resolved: boolean) =>
     put(`/api/v1/ops/request-errors/${id}/resolve`, { resolved }),
 
-  updateUpstreamErrorResolved: (id: number, resolved: boolean) =>
+  updateUpstreamErrorResolved: (id: string, resolved: boolean) =>
     put(`/api/v1/ops/upstream-errors/${id}/resolve`, { resolved }),
 
   // ---- 并发统计 ----
@@ -820,4 +859,140 @@ export const opsAPI = {
 
   resolveErrorLog: (id: number, resolved: boolean) =>
     put(`/api/v1/ops/error-logs/${id}/resolve`, { resolved }),
+}
+
+// ============ WebSocket 实时 QPS 推送 ============
+
+export type OpsWSStatus = 'connecting' | 'connected' | 'reconnecting' | 'offline' | 'closed'
+
+export interface OpsQPSMessage {
+  qps: number
+  tps: number
+  timestamp: string
+  sample: number
+}
+
+export interface SubscribeQPSOptions {
+  onStatusChange?: (status: OpsWSStatus) => void
+  onMessage?: (msg: OpsQPSMessage) => void
+  onReconnect?: (attempt: number, delayMs: number) => void
+  maxReconnectAttempts?: number
+  staleTimeoutMs?: number
+}
+
+export function subscribeQPS(
+  onMessage: (msg: OpsQPSMessage) => void,
+  options: SubscribeQPSOptions = {},
+): () => void {
+  let ws: WebSocket | null = null
+  let reconnectAttempts = 0
+  const maxAttempts = options.maxReconnectAttempts ?? 20
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let staleTimer: ReturnType<typeof setTimeout> | null = null
+  let lastMessageAt = 0
+  const staleTimeout = options.staleTimeoutMs ?? 120_000
+  let shouldReconnect = true
+
+  const setStatus = (status: OpsWSStatus) => options.onStatusChange?.(status)
+
+  const clearTimers = () => {
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+    if (staleTimer) { clearTimeout(staleTimer); staleTimer = null }
+  }
+
+  const scheduleReconnect = () => {
+    if (!shouldReconnect || reconnectAttempts >= maxAttempts) return
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setStatus('offline')
+      return
+    }
+    const base = 1000
+    const max = 30_000
+    const delay = Math.min(base * Math.pow(2, reconnectAttempts), max) + Math.floor(Math.random() * 250)
+    reconnectTimer = setTimeout(() => {
+      reconnectAttempts++
+      options.onReconnect?.(reconnectAttempts, delay)
+      connect()
+    }, delay)
+  }
+
+  const checkStale = () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !lastMessageAt) return
+    if (Date.now() - lastMessageAt > staleTimeout) {
+      ws.close()
+    }
+  }
+
+  const startStaleCheck = () => {
+    if (staleTimer) clearTimeout(staleTimer)
+    staleTimer = setTimeout(() => {
+      checkStale()
+      startStaleCheck()
+    }, 30_000)
+  }
+
+  const connect = () => {
+    if (!shouldReconnect || (ws && ws.readyState === WebSocket.OPEN)) return
+
+    setStatus(reconnectAttempts > 0 ? 'reconnecting' : 'connecting')
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const wsURL = `${protocol}//${window.location.host}/api/v1/ops/ws/qps`
+
+    const token = localStorage.getItem('token') ?? ''
+    const protocols: string[] = ['ops-admin']
+    if (token) protocols.push(`jwt.${token}`)
+
+    ws = new WebSocket(wsURL, protocols)
+
+    ws.onopen = () => {
+      reconnectAttempts = 0
+      lastMessageAt = Date.now()
+      setStatus('connected')
+      startStaleCheck()
+    }
+
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data) as OpsQPSMessage
+        lastMessageAt = Date.now()
+        onMessage(msg)
+      } catch {
+        // ignore parse errors
+      }
+    }
+
+    ws.onerror = () => { /* onClose will fire */ }
+
+    ws.onclose = (event) => {
+      clearTimers()
+      ws = null
+      if (!shouldReconnect) {
+        setStatus('closed')
+        return
+      }
+      scheduleReconnect()
+    }
+  }
+
+  const handleOnline = () => { if (shouldReconnect) connect() }
+  const handleOffline = () => { setStatus('offline') }
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+  }
+
+  connect()
+
+  return () => {
+    shouldReconnect = false
+    clearTimers()
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+    if (ws) { ws.close(); ws = null }
+    setStatus('closed')
+  }
 }

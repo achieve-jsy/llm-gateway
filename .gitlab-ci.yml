@@ -280,6 +280,7 @@ migrate-test:
 # ═══════════════════════════════════════════════════════════════════════════════
 deploy-app-test:
   stage: deploy
+  needs: ["build-go-test", "migrate-test"]
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   timeout: 15m
@@ -366,6 +367,7 @@ rollback-test:
 
 deploy-web-test:
   stage: deploy
+  needs: ["build-web-test"]
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   script:
@@ -398,6 +400,7 @@ deploy-app-test-fast:
   needs:
     - job: build-go-test
       optional: true
+    - migrate-test
   script:
     - |
       SSH_OPTS="-o StrictHostKeyChecking=no"
@@ -602,6 +605,7 @@ deploy-web-prod:
 # ═══════════════════════════════════════════════════════════════════════════════
 verify-test:
   stage: verify
+  needs: ["deploy-app-test", "deploy-web-test"]
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   script:

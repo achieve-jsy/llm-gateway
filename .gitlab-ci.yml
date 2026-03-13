@@ -1,6 +1,5 @@
 stages:
   - build
-  - migrate
   - deploy
   - verify
 
@@ -206,7 +205,8 @@ build-web-prod:
 #       Runner 无法直连 127.0.0.1，故改为 SSH 到测试主机本机执行迁移。
 # ═══════════════════════════════════════════════════════════════════════════════
 migrate-prod:
-  stage: migrate
+  stage: deploy
+  needs: ["build-go-prod"]
   image: alpine:3.21
   tags: [docker]
   cache:
@@ -507,6 +507,7 @@ deploy-app-test-fast:
 # ═══════════════════════════════════════════════════════════════════════════════
 deploy-prod:
   stage: deploy
+  needs: ["migrate-prod"]
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   # 预算：preflight(~2m) + DRAIN_TIMEOUT(600s) + STOP_TIMEOUT(120s) ≈ 14m，留足余量。
@@ -583,6 +584,7 @@ rollback-prod:
 
 deploy-web-prod:
   stage: deploy
+  needs: ["build-web-prod"]
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   variables:

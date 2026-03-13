@@ -89,7 +89,6 @@ builder-image:
 build-go-test:
   stage: build
   image: docker:24
-  pull_policy: if-not-present
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
@@ -131,7 +130,6 @@ build-go-test:
 build-web-test:
   stage: build
   image: node:20-alpine
-  pull_policy: if-not-present
   tags: [docker]
   retry:
     max: 2
@@ -168,7 +166,6 @@ build-web-test:
 build-go-prod:
   stage: build
   image: docker:24
-  pull_policy: if-not-present
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
@@ -207,7 +204,6 @@ build-go-prod:
 build-web-prod:
   stage: build
   image: node:20-alpine
-  pull_policy: if-not-present
   tags: [docker]
   retry:
     max: 2
@@ -274,8 +270,6 @@ migrate-test:
   stage: migrate
   needs: []
   image: ${REGISTRY}/deploy-tools:latest
-  pull_policy: if-not-present
-  pull_policy: if-not-present
   tags: [deploy]
   cache:
     key: atlas-bin
@@ -326,7 +320,6 @@ deploy-app-test:
   stage: deploy
   needs: ["build-go-test", "migrate-test"]
   image: ${REGISTRY}/deploy-tools:latest
-  pull_policy: if-not-present
   tags: [deploy]
   timeout: 15m
   script:
@@ -381,7 +374,6 @@ deploy-app-test:
 rollback-test:
   stage: deploy
   image: ${REGISTRY}/deploy-tools:latest
-  pull_policy: if-not-present
   tags: [deploy]
   timeout: 15m
   script:
@@ -418,7 +410,6 @@ deploy-web-test:
   stage: deploy
   needs: ["build-web-test"]
   image: ${REGISTRY}/deploy-tools:latest
-  pull_policy: if-not-present
   tags: [deploy]
   script:
     - |
@@ -562,7 +553,6 @@ deploy-prod:
   stage: deploy
   needs: ["migrate-prod"]
   image: ${REGISTRY}/deploy-tools:latest
-  pull_policy: if-not-present
   tags: [deploy]
   # 预算：preflight(~2m) + DRAIN_TIMEOUT(600s) + STOP_TIMEOUT(120s) ≈ 14m，留足余量。
   # 旧值 20m 与「drain 600 + stop 600」相等，旧 gateway 停得慢时必超时（部署其实已成功）。
@@ -614,7 +604,6 @@ deploy-prod:
 rollback-prod:
   stage: deploy
   image: ${REGISTRY}/deploy-tools:latest
-  pull_policy: if-not-present
   tags: [deploy]
   # 预算：DRAIN_TIMEOUT(600s) + STOP_TIMEOUT(120s) + preflight ≈ 13m，留足余量。
   timeout: 20m
@@ -641,7 +630,6 @@ deploy-web-prod:
   stage: deploy
   needs: ["build-web-prod"]
   image: ${REGISTRY}/deploy-tools:latest
-  pull_policy: if-not-present
   tags: [deploy]
   variables:
     WEB_DIR: "/data/web/aimeter/dist"
@@ -665,7 +653,6 @@ verify-test:
   stage: deploy
   needs: ["deploy-app-test", "deploy-web-test"]
   image: ${REGISTRY}/deploy-tools:latest
-  pull_policy: if-not-present
   tags: [deploy]
   script:
     - |

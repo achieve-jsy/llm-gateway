@@ -9,5 +9,5 @@ CREATE TABLE IF NOT EXISTS alert_silences (
   created_by VARCHAR(255) DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX idx_alert_silences_rule_id ON alert_silences(rule_id);
-CREATE INDEX idx_alert_silences_until ON alert_silences(until);
+CREATE INDEX IF NOT EXISTS idx_alert_silences_rule_id ON alert_silences(rule_id);
+CREATE INDEX IF NOT EXISTS idx_alert_silences_until ON alert_silences(until);

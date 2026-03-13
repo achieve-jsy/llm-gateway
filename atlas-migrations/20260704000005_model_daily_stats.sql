@@ -20,5 +20,5 @@ CREATE TABLE IF NOT EXISTS model_daily_stats (
     PRIMARY KEY (stat_date, model, studio_id)
 );
 
-CREATE INDEX idx_model_daily_stats_model ON model_daily_stats(model);
-CREATE INDEX idx_model_daily_stats_date ON model_daily_stats(stat_date);
+CREATE INDEX IF NOT EXISTS idx_model_daily_stats_model ON model_daily_stats(model);
+CREATE INDEX IF NOT EXISTS idx_model_daily_stats_date ON model_daily_stats(stat_date);

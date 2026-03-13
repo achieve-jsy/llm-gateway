@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS user_daily_stats (
     PRIMARY KEY (stat_date, user_id)
 );
 
-CREATE INDEX idx_user_daily_stats_user ON user_daily_stats(user_id);
-CREATE INDEX idx_user_daily_stats_date ON user_daily_stats(stat_date);
-CREATE INDEX idx_user_daily_stats_dept ON user_daily_stats(dept_id);
-CREATE INDEX idx_user_daily_stats_studio ON user_daily_stats(studio_id);
+CREATE INDEX IF NOT EXISTS idx_user_daily_stats_user ON user_daily_stats(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_daily_stats_date ON user_daily_stats(stat_date);
+CREATE INDEX IF NOT EXISTS idx_user_daily_stats_dept ON user_daily_stats(dept_id);
+CREATE INDEX IF NOT EXISTS idx_user_daily_stats_studio ON user_daily_stats(studio_id);

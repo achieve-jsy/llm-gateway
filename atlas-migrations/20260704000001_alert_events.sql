@@ -13,6 +13,6 @@ CREATE TABLE IF NOT EXISTS alert_events (
   email_sent BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_alert_events_fired_at ON alert_events(fired_at DESC);
-CREATE INDEX IF NOT EXISTS idx_alert_events_rule_id ON alert_events(rule_id);
-CREATE INDEX IF NOT EXISTS idx_alert_events_status ON alert_events(status);
+CREATE INDEX IF NOT EXISTS IF NOT EXISTS idx_alert_events_fired_at ON alert_events(fired_at DESC);
+CREATE INDEX IF NOT EXISTS IF NOT EXISTS idx_alert_events_rule_id ON alert_events(rule_id);
+CREATE INDEX IF NOT EXISTS IF NOT EXISTS idx_alert_events_status ON alert_events(status);

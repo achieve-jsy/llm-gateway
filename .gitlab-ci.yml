@@ -61,9 +61,9 @@ workflow:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# BUILD — 测试
+# BUILD — Builder 基础镜像（go.mod/go.sum 变更时自动重建）
 # ═══════════════════════════════════════════════════════════════════════════════
-build-go-test:
+builder-image:
   stage: build
   image: docker:24
   tags: [docker]
@@ -71,8 +71,34 @@ build-go-test:
     DOCKER_HOST: "unix:///var/run/docker.sock"
     DOCKER_BUILDKIT: "1"
   script:
+    - docker build -f deploy/docker/builder.Dockerfile -t ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}-builder:latest .
+    - docker push ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}-builder:latest
+  rules:
+    - if: $CI_COMMIT_BRANCH == "test"
+      changes:
+        - "go.mod"
+        - "go.sum"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+      changes:
+        - "go.mod"
+        - "go.sum"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BUILD — 测试
+# ═══════════════════════════════════════════════════════════════════════════════
+build-go-test:
+  stage: build
+  image: docker:24
+  pull_policy: if-not-present
+  tags: [docker]
+  variables:
+    DOCKER_HOST: "unix:///var/run/docker.sock"
+    DOCKER_BUILDKIT: "1"
+  script:
     - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
-    # 统一构建：一个 builder stage 编译 gateway + control-plane，第二次构建命中 Go build cache
+    # 拉取预构建 builder 镜像（含 Go module cache + build cache），加速编译
+    - docker pull ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}-builder:latest 2>/dev/null || true
+    # 统一构建：一个 builder stage 编译 gateway + control-plane + gateway-all
     - |
       docker pull ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache 2>/dev/null || true
       docker build \
@@ -105,6 +131,7 @@ build-go-test:
 build-web-test:
   stage: build
   image: node:20-alpine
+  pull_policy: if-not-present
   tags: [docker]
   retry:
     max: 2
@@ -141,6 +168,7 @@ build-web-test:
 build-go-prod:
   stage: build
   image: docker:24
+  pull_policy: if-not-present
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
@@ -148,7 +176,9 @@ build-go-prod:
   before_script:
     - export IMAGE_TAG="${CI_COMMIT_TAG}"
   script:
-    # 统一构建：一个 builder stage 编译 gateway + control-plane，第二次构建命中 Go build cache
+    # 拉取预构建 builder 镜像（含 Go module cache + build cache），加速编译
+    - docker pull ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}-builder:latest 2>/dev/null || true
+    # 统一构建：一个 builder stage 编译 gateway + control-plane + gateway-all
     - |
       docker pull ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache 2>/dev/null || true
       docker build \
@@ -177,6 +207,7 @@ build-go-prod:
 build-web-prod:
   stage: build
   image: node:20-alpine
+  pull_policy: if-not-present
   tags: [docker]
   retry:
     max: 2
@@ -243,6 +274,8 @@ migrate-test:
   stage: migrate
   needs: []
   image: ${REGISTRY}/deploy-tools:latest
+  pull_policy: if-not-present
+  pull_policy: if-not-present
   tags: [deploy]
   cache:
     key: atlas-bin
@@ -293,6 +326,7 @@ deploy-app-test:
   stage: deploy
   needs: ["build-go-test", "migrate-test"]
   image: ${REGISTRY}/deploy-tools:latest
+  pull_policy: if-not-present
   tags: [deploy]
   timeout: 15m
   script:
@@ -347,6 +381,7 @@ deploy-app-test:
 rollback-test:
   stage: deploy
   image: ${REGISTRY}/deploy-tools:latest
+  pull_policy: if-not-present
   tags: [deploy]
   timeout: 15m
   script:
@@ -383,6 +418,7 @@ deploy-web-test:
   stage: deploy
   needs: ["build-web-test"]
   image: ${REGISTRY}/deploy-tools:latest
+  pull_policy: if-not-present
   tags: [deploy]
   script:
     - |
@@ -526,6 +562,7 @@ deploy-prod:
   stage: deploy
   needs: ["migrate-prod"]
   image: ${REGISTRY}/deploy-tools:latest
+  pull_policy: if-not-present
   tags: [deploy]
   # 预算：preflight(~2m) + DRAIN_TIMEOUT(600s) + STOP_TIMEOUT(120s) ≈ 14m，留足余量。
   # 旧值 20m 与「drain 600 + stop 600」相等，旧 gateway 停得慢时必超时（部署其实已成功）。
@@ -577,6 +614,7 @@ deploy-prod:
 rollback-prod:
   stage: deploy
   image: ${REGISTRY}/deploy-tools:latest
+  pull_policy: if-not-present
   tags: [deploy]
   # 预算：DRAIN_TIMEOUT(600s) + STOP_TIMEOUT(120s) + preflight ≈ 13m，留足余量。
   timeout: 20m
@@ -603,6 +641,7 @@ deploy-web-prod:
   stage: deploy
   needs: ["build-web-prod"]
   image: ${REGISTRY}/deploy-tools:latest
+  pull_policy: if-not-present
   tags: [deploy]
   variables:
     WEB_DIR: "/data/web/aimeter/dist"
@@ -626,6 +665,7 @@ verify-test:
   stage: deploy
   needs: ["deploy-app-test", "deploy-web-test"]
   image: ${REGISTRY}/deploy-tools:latest
+  pull_policy: if-not-present
   tags: [deploy]
   script:
     - |

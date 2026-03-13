@@ -168,8 +168,8 @@ func (h *ChatHandler) streamTimeout(originalModel string) time.Duration {
 // handleNonStream 处理普通（非流式）请求。
 //
 // 每轮上游调用都从 baseCtx 派生独立超时 context（完整预算），确保 failover
-// 轮次不受前一轮超时消耗的影响。多轮 failover 由 HandleFailover 内部的
-// DispatchContext 控制上限（最多 maxFailoverRounds 轮）。
+// 轮次不受前一轮超时消耗的影响。failover 轮次由 triedIDs 自然收束：
+// 每轮失败的模型加入排除列表，全部模型试过后 HandleFailover 返回错误。
 func (h *ChatHandler) handleNonStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, originalModel string) {
 	timeout := h.nonStreamTimeout(originalModel)
 	var lastErr error
@@ -189,7 +189,7 @@ func (h *ChatHandler) handleNonStream(c *gin.Context, baseCtx context.Context, r
 		lastErr = err
 
 		// 不触发 failover 的条件：无 groupDispatch、未路由到组、错误类型不可 failover
-		if h.groupDispatch == nil || req.Model == originalModel || !shouldTriggerFailover(err) {
+		if h.groupDispatch == nil || !c.GetBool("routed_via_group") || !shouldTriggerFailover(err) {
 			break
 		}
 
@@ -291,7 +291,7 @@ func (h *ChatHandler) handleStream(c *gin.Context, baseCtx context.Context, req 
 		}
 		lastErr = err
 
-		if h.groupDispatch == nil || req.Model == originalModel || !shouldTriggerFailover(err) {
+		if h.groupDispatch == nil || !c.GetBool("routed_via_group") || !shouldTriggerFailover(err) {
 			break
 		}
 

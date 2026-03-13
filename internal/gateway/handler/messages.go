@@ -195,7 +195,7 @@ func (h *MessagesHandler) handleNonStream(c *gin.Context, baseCtx context.Contex
 		}
 		lastErr = err
 
-		if h.groupDispatch == nil || req.Model == originalModel || !shouldTriggerFailover(err) {
+		if h.groupDispatch == nil || !c.GetBool("routed_via_group") || !shouldTriggerFailover(err) {
 			break
 		}
 
@@ -288,7 +288,7 @@ func (h *MessagesHandler) handleStream(c *gin.Context, baseCtx context.Context, 
 		}
 		lastErr = err
 
-		if h.groupDispatch == nil || req.Model == originalModel || !shouldTriggerFailover(err) {
+		if h.groupDispatch == nil || !c.GetBool("routed_via_group") || !shouldTriggerFailover(err) {
 			break
 		}
 

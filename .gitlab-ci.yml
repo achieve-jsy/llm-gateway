@@ -98,6 +98,9 @@ build-go-test:
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
       changes: *go-changes
+    - if: $CI_COMMIT_BRANCH == "test"
+      when: manual
+      allow_failure: true
 
 build-web-test:
   stage: build
@@ -128,6 +131,9 @@ build-web-test:
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
       changes: *web-changes
+    - if: $CI_COMMIT_BRANCH == "test"
+      when: manual
+      allow_failure: true
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # BUILD — 生产
@@ -275,6 +281,10 @@ migrate-test:
     - if: $CI_COMMIT_BRANCH == "test"
       changes: *infra-changes
       when: on_success
+    - if: $CI_COMMIT_BRANCH == "test"
+      when: manual
+      allow_failure: true
+      when: on_success
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DEPLOY — 测试 (192.0.2.10)
@@ -329,6 +339,9 @@ deploy-app-test:
     - if: $CI_COMMIT_BRANCH == "test"
       changes: *infra-changes
       when: on_success
+    - if: $CI_COMMIT_BRANCH == "test"
+      when: manual
+      allow_failure: true
 
 # 测试环境回滚（切回上一个颜色，要求对端仍在运行；手动触发）
 rollback-test:
@@ -391,6 +404,9 @@ deploy-web-test:
     - if: $CI_COMMIT_BRANCH == "test"
       changes: *infra-changes
       when: on_success
+    - if: $CI_COMMIT_BRANCH == "test"
+      when: manual
+      allow_failure: true
 
 # 快速部署（测试环境）：跳过 Docker 构建/推送/拉取，直接编译 Go 二进制 → SCP → 替换容器内文件
 deploy-app-test-fast:
@@ -637,3 +653,6 @@ verify-test:
       changes: *go-changes
     - if: $CI_COMMIT_BRANCH == "test"
       changes: *infra-changes
+    - if: $CI_COMMIT_BRANCH == "test"
+      when: manual
+      allow_failure: true

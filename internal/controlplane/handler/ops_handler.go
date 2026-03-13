@@ -160,16 +160,31 @@ type OpsErrors struct {
 
 // OpsFilter 运维看板通用过滤参数
 type OpsFilter struct {
-	TimeRange string
-	GroupID   string // 模型组 ID
-	Provider  string // 提供商名称
-	Model     string // 模型名称
+	TimeRange     string
+	Start         string // B12: 自定义时间范围起始(ISO 8601)
+	End           string // B12: 自定义时间范围结束(ISO 8601)
+	GroupID       string // 模型组 ID
+	Provider      string // 提供商名称
+	Model         string // 模型名称
+	UserID        string // gap#10: 用户 ID
+	KeyID         string // gap#10: API Key ID
+	Account       string // gap#10: 账户名(对应 provider)
+	MaxDurationMs string // gap#10: 最大耗时过滤(duration_ms <= ?)
 }
 
-// buildFilterClause 根据 OpsFilter 生成 SQL WHERE 子句（AND $1 AND $2 AND $3）和参数
+// buildFilterClause 根据 OpsFilter 生成 SQL WHERE 子句和参数。
+// B12/WP4: 支持自定义时间范围(Start/End),使用 BETWEEN 替代相对时间。
 func (h *OpsHandler) buildFilterClause(ctx context.Context, filter OpsFilter, timeInterval string) (string, []interface{}) {
-	clause := "ts > NOW() - INTERVAL '" + timeInterval + "'"
+	var clause string
 	var args []interface{}
+
+	// B12: 自定义时间范围优先(Custom)
+	if filter.TimeRange == "custom" && filter.Start != "" && filter.End != "" {
+		clause = "ts BETWEEN ? AND ?"
+		args = append(args, filter.Start, filter.End)
+	} else {
+		clause = "ts > NOW() - INTERVAL '" + timeInterval + "'"
+	}
 
 	if filter.GroupID != "" {
 		// call_logs 没有 group_id 列, 只有 group_name. 需要从 model_groups 查询
@@ -188,6 +203,27 @@ func (h *OpsHandler) buildFilterClause(ctx context.Context, filter OpsFilter, ti
 	if filter.Model != "" {
 		clause += " AND model = ?"
 		args = append(args, filter.Model)
+	}
+	// gap#10: 补 user/api-key/account/max_duration 过滤维度
+	if filter.UserID != "" {
+		clause += " AND user_id = ?"
+		args = append(args, filter.UserID)
+	}
+	if filter.KeyID != "" {
+		clause += " AND key_id = ?"
+		args = append(args, filter.KeyID)
+	}
+	if filter.Account != "" {
+		// Account 是 provider 列的别名筛选；当 Provider 同时设置时，
+		// Account 优先（避免 SQL 出现两个 provider = ? 导致数据恒为 0）。
+		if filter.Provider == "" {
+			clause += " AND provider = ?"
+			args = append(args, filter.Account)
+		}
+	}
+	if filter.MaxDurationMs != "" {
+		clause += " AND duration_ms <= ?"
+		args = append(args, filter.MaxDurationMs)
 	}
 	return clause, args
 }
@@ -699,9 +735,15 @@ func (h *OpsHandler) ListRequests(c *gin.Context) {
 		where += " AND provider = ?"
 		args = append(args, provider)
 	}
-	if groupName := c.Query("group_id"); groupName != "" {
-		where += " AND group_name = ?"
-		args = append(args, groupName)
+	if groupID := c.Query("group_id"); groupID != "" {
+		// group_id 是 model_groups 主键，需要解析为 group_name 列值
+		var groupName string
+		if err := h.db.Raw(
+			"SELECT name FROM model_groups WHERE id = ?", groupID,
+		).Scan(&groupName).Error; err == nil && groupName != "" {
+			where += " AND group_name = ?"
+			args = append(args, groupName)
+		}
 	}
 	if modelFilter := c.Query("model"); modelFilter != "" {
 		where += " AND model = ?"
@@ -2138,8 +2180,14 @@ func (h *OpsHandler) GetRealtimeTraffic(c *gin.Context) {
 		args = append(args, platform)
 	}
 	if groupID != "" {
-		where += " AND group_name = ?"
-		args = append(args, groupID)
+		// group_id 是 model_groups 主键，需要解析为 group_name 列值
+		var groupName string
+		if err := h.db.Raw(
+			"SELECT name FROM model_groups WHERE id = ?", groupID,
+		).Scan(&groupName).Error; err == nil && groupName != "" {
+			where += " AND group_name = ?"
+			args = append(args, groupName)
+		}
 	}
 
 	var traffic struct {

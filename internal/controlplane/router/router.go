@@ -408,6 +408,10 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		systemMetricsCollector := service.NewSystemMetricsCollector(db, rdb)
 		systemMetricsCollector.Start(context.Background())
 		opsHandler := handler.NewOpsHandler(db, rdb, systemMetricsCollector)
+
+		// 告警评估器（定时评估告警规则并触发告警事件）
+		alertEvaluator := service.NewAlertEvaluator(db, rdb, settingsRepo)
+		alertEvaluator.Start(context.Background())
 		adminGroup.GET("/ops/groups", opsHandler.GetGroupOptions)
 		adminGroup.GET("/ops/providers", opsHandler.ListProviders)
 		adminGroup.GET("/ops/models", opsHandler.ListModels)

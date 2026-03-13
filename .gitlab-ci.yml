@@ -1,7 +1,7 @@
 stages:
   - build
+  - migrate
   - deploy
-  - verify
 
 variables:
   REGISTRY: "192.0.2.10:5000"
@@ -205,7 +205,7 @@ build-web-prod:
 #       Runner 无法直连 127.0.0.1，故改为 SSH 到测试主机本机执行迁移。
 # ═══════════════════════════════════════════════════════════════════════════════
 migrate-prod:
-  stage: deploy
+  stage: migrate
   needs: ["build-go-prod"]
   image: alpine:3.21
   tags: [docker]
@@ -234,7 +234,8 @@ migrate-prod:
       when: manual
 
 migrate-test:
-  stage: build
+  stage: migrate
+  needs: []
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   cache:
@@ -606,7 +607,7 @@ deploy-web-prod:
 # VERIFY — 测试
 # ═══════════════════════════════════════════════════════════════════════════════
 verify-test:
-  stage: verify
+  stage: deploy
   needs: ["deploy-app-test", "deploy-web-test"]
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]

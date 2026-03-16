@@ -2,6 +2,7 @@ stages:
   - build
   - migrate
   - deploy
+  - verify
 
 variables:
   REGISTRY: "192.0.2.10:5000"
@@ -98,12 +99,21 @@ build-go-test:
     DOCKER_BUILDKIT: "1"
   script:
     - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
-    # 拉取预构建 builder 镜像（含 Go module cache + build cache），加速编译
-    - docker pull ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}-builder:latest 2>/dev/null || true
+    # 拉取预构建 builder 镜像（如果存在则传给 docker build 加速编译）
+    - |
+      BUILDER_IMAGE="${REGISTRY_LOCAL}/${GATEWAY_IMAGE}-builder:latest"
+      if docker pull "$BUILDER_IMAGE" 2>/dev/null; then
+        BUILDER_ARG="--build-arg BUILDER_IMAGE=$BUILDER_IMAGE"
+        echo "Using cached builder image: $BUILDER_IMAGE"
+      else
+        BUILDER_ARG=""
+        echo "Builder image not found, using default golang:1.26-alpine"
+      fi
     # 统一构建：一个 builder stage 编译 gateway + control-plane + gateway-all
     - |
       docker pull ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache 2>/dev/null || true
       docker build \
+        $BUILDER_ARG \
         --cache-from ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache \
         --cache-to type=inline \
         --build-arg APP_ENV=test \
@@ -176,12 +186,21 @@ build-go-prod:
   before_script:
     - export IMAGE_TAG="${CI_COMMIT_TAG}"
   script:
-    # 拉取预构建 builder 镜像（含 Go module cache + build cache），加速编译
-    - docker pull ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}-builder:latest 2>/dev/null || true
+    # 拉取预构建 builder 镜像（如果存在则传给 docker build 加速编译）
+    - |
+      BUILDER_IMAGE="${REGISTRY_LOCAL}/${GATEWAY_IMAGE}-builder:latest"
+      if docker pull "$BUILDER_IMAGE" 2>/dev/null; then
+        BUILDER_ARG="--build-arg BUILDER_IMAGE=$BUILDER_IMAGE"
+        echo "Using cached builder image: $BUILDER_IMAGE"
+      else
+        BUILDER_ARG=""
+        echo "Builder image not found, using default golang:1.26-alpine"
+      fi
     # 统一构建：一个 builder stage 编译 gateway + control-plane + gateway-all
     - |
       docker pull ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache 2>/dev/null || true
       docker build \
+        $BUILDER_ARG \
         --cache-from ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache \
         --cache-to type=inline \
         --build-arg APP_ENV=prod \
@@ -653,7 +672,7 @@ deploy-web-prod:
 # VERIFY — 测试
 # ═══════════════════════════════════════════════════════════════════════════════
 verify-test:
-  stage: deploy
+  stage: verify
   needs: ["deploy-app-test", "deploy-web-test"]
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]

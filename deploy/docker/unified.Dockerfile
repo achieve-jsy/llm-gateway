@@ -10,15 +10,19 @@
 # ─── Stage 1: 统一 Builder（编译 gateway + control-plane + gateway-all）──────────
 # 使用预构建的 builder 镜像，内含 Go module cache + build cache
 # 依赖包已预编译为 .a 文件，日常构建只编译项目源码，秒级完成
-FROM ${BUILDER_IMAGE:-192.0.2.10:5000/llm-gateway-builder:latest} AS builder
+ARG BUILDER_IMAGE=192.0.2.10:5000/golang:1.26-alpine
+FROM ${BUILDER_IMAGE} AS builder
 
+RUN apk add --no-cache git ca-certificates
 ENV GOPROXY=https://goproxy.cn,direct
 ENV GONOSUMCHECK=*
 
 WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
-RUN --mount=type=cache,target=/root/.cache/go-build \
-    --mount=type=cache,target=/go/pkg/mod \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/gateway ./cmd/gateway && \
     CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/control-plane ./cmd/control-plane && \
     CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/gateway-all ./cmd/gateway-all

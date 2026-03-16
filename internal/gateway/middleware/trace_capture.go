@@ -21,13 +21,14 @@ var sensitiveHeaders = map[string]bool{
 	"x-api-key":     true,
 }
 
-// traceCapturePaths 需要采集请求正文的 LLM 调用路径（OpenAI + Anthropic + Responses + Embeddings）。
+// traceCapturePaths 需要采集请求正文的 LLM 调用路径（OpenAI + Anthropic + Responses + Embeddings + Rerank）。
 var traceCapturePaths = map[string]struct{}{
 	"/v1/chat/completions":      {},
 	"/v1/messages":              {},
 	"/v1/messages/count_tokens": {},
 	"/v1/responses":             {},
 	"/v1/embeddings":            {},
+	"/v1/rerank":                {},
 }
 
 func isTraceCapturePath(path string) bool {

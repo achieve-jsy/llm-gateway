@@ -35,6 +35,7 @@ import (
 	providersazure "github.com/example/llm-gateway/internal/providers/azure"
 	providersbailian "github.com/example/llm-gateway/internal/providers/bailian"
 	providersbedrock "github.com/example/llm-gateway/internal/providers/bedrock"
+	providerscohere "github.com/example/llm-gateway/internal/providers/cohere"
 	providersdeepseek "github.com/example/llm-gateway/internal/providers/deepseek"
 	providersgemini "github.com/example/llm-gateway/internal/providers/gemini"
 	providersgroq "github.com/example/llm-gateway/internal/providers/groq"
@@ -288,6 +289,7 @@ func buildProviderFactory() *providers.ProviderFactory {
 		New:       providersbailian.New,
 		Discovery: providersbailian.Registration.Discovery,
 	})
+	factory.Add(providerscohere.Registration)
 	factory.Add(providersdeepseek.Registration)
 	factory.Add(providersgemini.Registration)
 	factory.Add(providersgroq.Registration)
@@ -413,3 +415,4 @@ func resolveLogLevel(s string) slog.Level {
 		return slog.LevelInfo
 	}
 }
+// test: fast deploy pipeline speed test 19:24:54

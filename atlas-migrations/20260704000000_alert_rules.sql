@@ -1,0 +1,17 @@
+CREATE TABLE IF NOT EXISTS alert_rules (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  metric_type VARCHAR(100) NOT NULL,
+  operator VARCHAR(10) NOT NULL,
+  threshold DOUBLE PRECISION NOT NULL,
+  window_minutes INTEGER NOT NULL DEFAULT 1,
+  sustained_minutes INTEGER NOT NULL DEFAULT 2,
+  severity VARCHAR(10) NOT NULL DEFAULT 'P1',
+  cooldown_minutes INTEGER NOT NULL DEFAULT 10,
+  notify_email BOOLEAN NOT NULL DEFAULT true,
+  filters JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

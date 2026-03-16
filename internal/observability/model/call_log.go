@@ -48,6 +48,7 @@ type CallLog struct {
 	OutputCostUSD       float64   `gorm:"type:decimal(18,8);not null;default:0"                         json:"output_cost_usd"`
 	CacheReadCostUSD    float64   `gorm:"type:decimal(18,8);not null;default:0"                         json:"cache_read_cost_usd"`
 	EstCostUSD          float64   `gorm:"type:decimal(18,6);not null;default:0"                         json:"est_cost_usd"`
+	InboundEndpoint     string    `gorm:"type:varchar(128)"                                             json:"inbound_endpoint"`
 }
 
 func (CallLog) TableName() string {

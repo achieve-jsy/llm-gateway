@@ -236,6 +236,14 @@ func (p *Provider) Embeddings(ctx context.Context, req *core.EmbeddingRequest) (
 	return openAIEmbeddingResponse(req, &resp)
 }
 
+func (p *Provider) Rerank(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
+	return nil, core.NewInvalidRequestErrorWithStatus(
+		http.StatusNotImplemented,
+		"rerank is not supported by this provider",
+		nil,
+	).WithCode("unsupported_operation")
+}
+
 type vertexEmbeddingPredictRequest struct {
 	Instances  []vertexEmbeddingInstance `json:"instances"`
 	Parameters map[string]any            `json:"parameters,omitempty"`

@@ -190,6 +190,7 @@ const MODE_LABEL: Record<string, string> = {
   chat: '对话',
   completion: '补全',
   embedding: '向量',
+  rerank: '重排序',
   image_generation: '图像生成',
   audio_transcription: '语音转写',
   audio_speech: '语音合成',

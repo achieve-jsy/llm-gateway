@@ -347,7 +347,7 @@ func requiredCategoryForOperation(op core.Operation) core.ModelCategory {
 	switch op {
 	case core.OperationChatCompletions, core.OperationResponses:
 		return core.CategoryTextGeneration
-	case core.OperationEmbeddings:
+	case core.OperationEmbeddings, core.OperationRerank:
 		return core.CategoryEmbedding
 	default:
 		return ""

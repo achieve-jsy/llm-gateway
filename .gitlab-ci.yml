@@ -88,10 +88,10 @@ build-gateway-test:
       docker push ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG}
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
+    - if: $CI_COMMIT_BRANCH == "staging"
       changes: *go-changes
-    - if: $CI_COMMIT_BRANCH == "test"
-      when: manual
-      allow_failure: true
+    - if: $CI_COMMIT_BRANCH == "main"
+      changes: *go-changes
 
 build-control-plane-test:
   stage: build
@@ -114,10 +114,10 @@ build-control-plane-test:
       docker push ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
+    - if: $CI_COMMIT_BRANCH == "staging"
       changes: *go-changes
-    - if: $CI_COMMIT_BRANCH == "test"
-      when: manual
-      allow_failure: true
+    - if: $CI_COMMIT_BRANCH == "main"
+      changes: *go-changes
 
 build-web-test:
   stage: build
@@ -147,10 +147,10 @@ build-web-test:
     expire_in: 2 hours
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
+    - if: $CI_COMMIT_BRANCH == "staging"
       changes: *web-changes
-    - if: $CI_COMMIT_BRANCH == "test"
-      when: manual
-      allow_failure: true
+    - if: $CI_COMMIT_BRANCH == "main"
+      changes: *web-changes
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # BUILD — 生产
@@ -304,16 +304,8 @@ migrate-test:
         rm -rf /tmp/atlas-migrate
       "
   rules:
-    # 与 deploy-app-test 一致：仅在 test 分支、且有实质变更时才迁移
+    # 仅在 test 分支触发迁移
     - if: $CI_COMMIT_BRANCH == "test"
-      changes: *go-changes
-      when: on_success
-    - if: $CI_COMMIT_BRANCH == "test"
-      changes: *infra-changes
-      when: on_success
-    - if: $CI_COMMIT_BRANCH == "test"
-      when: manual
-      allow_failure: true
       when: on_success
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -364,14 +356,9 @@ deploy-app-test:
   dependencies: []
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
-      changes: *go-changes
       when: on_success
     - if: $CI_COMMIT_BRANCH == "test"
-      changes: *infra-changes
       when: on_success
-    - if: $CI_COMMIT_BRANCH == "test"
-      when: manual
-      allow_failure: true
 
 # 测试环境回滚（切回上一个颜色，要求对端仍在运行；手动触发）
 rollback-test:
@@ -429,14 +416,9 @@ deploy-web-test:
     - build-web-test
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
-      changes: *web-changes
       when: on_success
     - if: $CI_COMMIT_BRANCH == "test"
-      changes: *infra-changes
       when: on_success
-    - if: $CI_COMMIT_BRANCH == "test"
-      when: manual
-      allow_failure: true
 
 # 快速部署（测试环境）：跳过 Docker 构建/推送/拉取，直接编译 Go 二进制 → SCP → 替换容器内文件
 deploy-app-test-fast:
@@ -545,7 +527,6 @@ deploy-app-test-fast:
   dependencies: []
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
-      changes: *go-changes
       when: manual
       allow_failure: true
 
@@ -682,9 +663,3 @@ verify-test:
   dependencies: []
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
-      changes: *go-changes
-    - if: $CI_COMMIT_BRANCH == "test"
-      changes: *infra-changes
-    - if: $CI_COMMIT_BRANCH == "test"
-      when: manual
-      allow_failure: true

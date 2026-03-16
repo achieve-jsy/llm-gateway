@@ -8,10 +8,7 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ─── Stage 1: 统一 Builder（编译 gateway + control-plane + gateway-all）──────────
-# 使用预构建的 builder 镜像，内含 Go module cache + build cache
-# 依赖包已预编译为 .a 文件，日常构建只编译项目源码，秒级完成
-ARG BUILDER_IMAGE=192.0.2.10:5000/golang:1.26-alpine
-FROM ${BUILDER_IMAGE} AS builder
+FROM 192.0.2.10:5000/golang:1.26-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates
 ENV GOPROXY=https://goproxy.cn,direct

@@ -430,16 +430,18 @@ func respondGroupError(c *gin.Context, err error) {
 // 当 X-Error-Format: passthrough 请求头存在时，直接透传上游错误，不做归一化。
 func respondError(c *gin.Context, ue *model.UnifiedError) {
 	if IsPassthroughMode(c) {
-		writePassthroughError(c, ue.HTTPStatus, string(ue.Type), ue.Message)
+		writePassthroughError(c, ue.HTTPStatus, string(ue.Type), ue.Code, ue.Message)
 		return
 	}
-	body := gin.H{
-		"error": gin.H{
-			"type":    ue.Type,
-			"code":    ue.Code,
-			"message": ue.Message,
-		},
+	errObj := gin.H{
+		"type":    ue.Type,
+		"code":    ue.Code,
+		"message": ue.Message,
 	}
+	if ue.Upstream != nil {
+		errObj["upstream"] = ue.Upstream
+	}
+	body := gin.H{"error": errObj}
 	middleware.SetTraceResponseObject(c, body)
 	c.JSON(ue.HTTPStatus, body)
 }

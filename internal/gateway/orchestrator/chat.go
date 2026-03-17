@@ -129,9 +129,11 @@ func (o *ChatOrchestrator) Chat(ctx context.Context, req *core.ChatRequest) (*co
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		slog.Error("upstream_call_error",
-			"model", req.Model,
-			"duration_ms", elapsed.Milliseconds(),
-			"error", err.Error(),
+			append([]any{
+				"model", req.Model,
+				"duration_ms", elapsed.Milliseconds(),
+				"error", err.Error(),
+			}, extractUpstreamErrorAttrs(err)...)...,
 		)
 		if gc := ginContextFrom(ctx); gc != nil {
 			gc.Set("error_message", err.Error())

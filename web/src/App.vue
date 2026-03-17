@@ -128,6 +128,10 @@
             <el-icon><Refresh /></el-icon>
             <template #title>Catalog 同步</template>
           </el-menu-item>
+          <el-menu-item index="/admin/ehr-sync">
+            <el-icon><OfficeBuilding /></el-icon>
+            <template #title>组织数据同步</template>
+          </el-menu-item>
           <el-menu-item index="/admin/chat-playground">
             <el-icon><ChatDotRound /></el-icon>
             <template #title>对话测试</template>

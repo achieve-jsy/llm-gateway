@@ -8,7 +8,6 @@
 # 用法:
 #   ./deploy-blue-green.sh                    # 部署到非活跃颜色
 #   ./deploy-blue-green.sh --rollback         # 回滚到上一个颜色（要求对端仍在运行）
-#   ./deploy-blue-green.sh --skip-start       # 跳过启动步骤，直接健康检查+切换+停旧（容器已由外部启动）
 #
 # 可用环境变量（带默认值，生产默认行为不变）：
 #   NGINX_UPSTREAM   nginx 活跃 upstream 文件路径   (默认 /opt/llm-gateway/upstream-active.conf)
@@ -32,8 +31,8 @@ UPSTREAM_DIR="${DEPLOY_DIR}"
 NGINX_UPSTREAM="${NGINX_UPSTREAM:-/opt/llm-gateway/upstream-active.conf}"
 DRAIN_TIMEOUT="${DRAIN_TIMEOUT:-600}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-600}"
-HEALTH_RETRIES="${HEALTH_RETRIES:-15}"
-HEALTH_INTERVAL="${HEALTH_INTERVAL:-2}"
+HEALTH_RETRIES="${HEALTH_RETRIES:-30}"
+HEALTH_INTERVAL="${HEALTH_INTERVAL:-3}"
 LEGACY_CONTAINERS="${LEGACY_CONTAINERS:-llm-gw-gateway llm-gw-control-plane}"
 
 # ─── 工具函数 ──────────────────────────────────────────────────────────────────
@@ -153,13 +152,9 @@ save_state() {
 
 main() {
     local rollback=false
-    local skip_start=false
-    for arg in "$@"; do
-        case "$arg" in
-            --rollback) rollback=true ;;
-            --skip-start) skip_start=true ;;
-        esac
-    done
+    if [ "${1:-}" = "--rollback" ]; then
+        rollback=true
+    fi
 
     local active target
     active=$(get_active_color)
@@ -185,12 +180,8 @@ main() {
     fi
 
     # ─── 正常部署：始终「先起新、再停旧」 ───────────────────────────────────────
-    if [ "$skip_start" = true ]; then
-        log "SKIP-START: containers already started externally, skipping start_env for ${target}"
-    else
-        # 1. 启动目标环境（新版本）
-        start_env "$target"
-    fi
+    # 1. 启动目标环境（新版本）
+    start_env "$target"
 
     # 2. 等待健康；失败则不动当前在跑的环境（旧栈/active 仍在服务），直接退出
     if ! health_check "$target"; then

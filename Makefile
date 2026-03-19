@@ -17,9 +17,6 @@ build-gateway:
 build-cp:
 	go build -o $(CP_BIN) ./cmd/control-plane
 
-build-all:
-	go build -mod=vendor -ldflags="-s -w" -o bin/gateway-all ./cmd/gateway-all
-
 # ─── 测试 ────────────────────────────────────────────────────────────────────────
 test:
 	@if find tests -name '*_test.go' | grep -q .; then \

@@ -34,6 +34,26 @@ variables:
   - "atlas-migrations/**/*"
   - ".gitlab-ci.yml"
 
+# Go 后端变更（触发 gateway + control-plane 构建）
+.go-changes: &go-changes
+  - "internal/**/*"
+  - "cmd/**/*"
+  - "go.mod"
+  - "go.sum"
+  - "config/**/*"
+  - "deploy/docker/**/*"
+
+# 前端变更（触发 web 构建）
+.web-changes: &web-changes
+  - "web/**/*"
+
+# 基础设施变更（触发部署 + 迁移 + 验证）
+.infra-changes: &infra-changes
+  - "deploy/blue-green/**/*"
+  - "docker-compose.yml"
+  - "atlas-migrations/**/*"
+  - ".gitlab-ci.yml"
+
 workflow:
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
@@ -53,11 +73,27 @@ build-gateway-test:
     DOCKER_BUILDKIT: "1"
   script:
     - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
-    - docker build --build-arg APP_ENV=test -f deploy/docker/gateway.Dockerfile -t ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} .
-    - docker push ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG}
+    - |
+      docker pull ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache 2>/dev/null || true
+      docker build \
+        --cache-from ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache \
+        --cache-to type=inline \
+        --build-arg APP_ENV=test \
+        --target gateway-runtime \
+        -f deploy/docker/unified.Dockerfile \
+        -t ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} \
+        .
+      docker tag ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache
+      docker push ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache
+      docker push ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG}
+      docker tag ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
+      docker push ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
-      changes: *test-significant-changes
+    - if: $CI_COMMIT_BRANCH == "staging"
+      changes: *go-changes
+    - if: $CI_COMMIT_BRANCH == "main"
+      changes: *go-changes
 
 build-control-plane-test:
   stage: build
@@ -68,11 +104,24 @@ build-control-plane-test:
     DOCKER_BUILDKIT: "1"
   script:
     - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
-    - docker build --build-arg APP_ENV=test -f deploy/docker/control-plane.Dockerfile -t ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} .
-    - docker push ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
+    - |
+      docker pull ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache 2>/dev/null || true
+      docker build \
+        --cache-from ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache \
+        --build-arg APP_ENV=test \
+        --target cp-runtime \
+        -f deploy/docker/unified.Dockerfile \
+        -t ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} \
+        .
+      docker push ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
+      docker tag ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
+      docker push ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
-      changes: *test-significant-changes
+    - if: $CI_COMMIT_BRANCH == "staging"
+      changes: *go-changes
+    - if: $CI_COMMIT_BRANCH == "main"
+      changes: *go-changes
 
 build-web-test:
   stage: build
@@ -102,7 +151,10 @@ build-web-test:
     expire_in: 2 hours
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
-      changes: *test-significant-changes
+    - if: $CI_COMMIT_BRANCH == "staging"
+      changes: *web-changes
+    - if: $CI_COMMIT_BRANCH == "main"
+      changes: *web-changes
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # BUILD — 生产
@@ -117,8 +169,21 @@ build-gateway-prod:
   before_script:
     - export IMAGE_TAG="${CI_COMMIT_TAG}"
   script:
-    - docker build --build-arg APP_ENV=prod -f deploy/docker/gateway.Dockerfile -t ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} .
-    - docker push ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG}
+    - |
+      docker pull ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache 2>/dev/null || true
+      docker build \
+        --cache-from ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache \
+        --cache-to type=inline \
+        --build-arg APP_ENV=prod \
+        --target gateway-runtime \
+        -f deploy/docker/unified.Dockerfile \
+        -t ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} \
+        .
+      docker tag ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache
+      docker push ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache
+      docker push ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG}
+      docker tag ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
+      docker push ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
@@ -132,8 +197,18 @@ build-control-plane-prod:
   before_script:
     - export IMAGE_TAG="${CI_COMMIT_TAG}"
   script:
-    - docker build --build-arg APP_ENV=prod -f deploy/docker/control-plane.Dockerfile -t ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} .
-    - docker push ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
+    - |
+      docker pull ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache 2>/dev/null || true
+      docker build \
+        --cache-from ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache \
+        --build-arg APP_ENV=prod \
+        --target cp-runtime \
+        -f deploy/docker/unified.Dockerfile \
+        -t ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} \
+        .
+      docker push ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
+      docker tag ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
+      docker push ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
@@ -175,6 +250,7 @@ build-web-prod:
 # ═══════════════════════════════════════════════════════════════════════════════
 migrate-prod:
   stage: migrate
+  needs: ["build-gateway-prod"]
   image: alpine:3.21
   tags: [docker]
   cache:
@@ -203,6 +279,7 @@ migrate-prod:
 
 migrate-test:
   stage: migrate
+  needs: []
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   cache:
@@ -235,9 +312,8 @@ migrate-test:
         rm -rf /tmp/atlas-migrate
       "
   rules:
-    # 与 deploy-app-test 一致：仅在 test 分支、且有实质变更时才迁移
+    # 仅在 test 分支触发迁移
     - if: $CI_COMMIT_BRANCH == "test"
-      changes: *test-significant-changes
       when: on_success
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -245,6 +321,7 @@ migrate-test:
 # ═══════════════════════════════════════════════════════════════════════════════
 deploy-app-test:
   stage: deploy
+  needs: ["build-gateway-test", "build-control-plane-test", "migrate-test"]
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   timeout: 15m
@@ -287,7 +364,8 @@ deploy-app-test:
   dependencies: []
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
-      changes: *test-significant-changes
+      when: on_success
+    - if: $CI_COMMIT_BRANCH == "test"
       when: on_success
 
 # 测试环境回滚（切回上一个颜色，要求对端仍在运行；手动触发）
@@ -328,6 +406,7 @@ rollback-test:
 
 deploy-web-test:
   stage: deploy
+  needs: ["build-web-test"]
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   script:
@@ -345,8 +424,119 @@ deploy-web-test:
     - build-web-test
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
-      changes: *test-significant-changes
       when: on_success
+    - if: $CI_COMMIT_BRANCH == "test"
+      when: on_success
+
+# 快速部署（测试环境）：跳过 Docker 构建/推送/拉取，直接编译 Go 二进制 → SCP → 替换容器内文件
+deploy-app-test-fast:
+  stage: deploy
+  image: golang:1.26-alpine
+  tags: [docker]
+  timeout: 10m
+  needs:
+    - job: build-gateway-test
+      optional: true
+    - job: build-control-plane-test
+      optional: true
+    - migrate-test
+  script:
+    - |
+      SSH_OPTS="-o StrictHostKeyChecking=no"
+      IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
+      echo "=== Fast Deploy: compile + SCP binary directly to ${TEST_HOST} ==="
+
+      # 1. 编译 Go 二进制（静态链接，不需要 Docker）
+      apk add --no-cache git ca-certificates
+      CGO_ENABLED=0 go build -mod=vendor -ldflags="-s -w" -o /tmp/gateway ./cmd/gateway
+      CGO_ENABLED=0 go build -mod=vendor -ldflags="-s -w" -o /tmp/control-plane ./cmd/control-plane
+
+      # 2. 同步蓝绿部署文件
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "mkdir -p ${TEST_PATH}"
+      scp ${SSH_OPTS} -r deploy/blue-green/* ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/
+
+      # 3. 确定目标颜色（当前非活跃的颜色）
+      TARGET_COLOR=$(ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
+        cd ${TEST_PATH}
+        if [ -f .active-color ]; then
+          case \$(cat .active-color) in
+            blue) echo green ;;
+            green) echo blue ;;
+          esac
+        else
+          echo green
+        fi
+      ")
+      echo "=== Target color: ${TARGET_COLOR} ==="
+
+      # 4. 启动目标环境（使用现有镜像，后面替换二进制）
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
+        set -e
+        cd ${TEST_PATH}
+        export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=test
+        export NGINX_UPSTREAM=${TEST_PATH}/upstream-active.conf
+        export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30
+        export DATABASE_URL='${TEST_DATABASE_URL}'
+        export REDIS_ADDR='${TEST_REDIS_ADDR}' REDIS_PASSWORD='${TEST_REDIS_PASSWORD}'
+        export REDIS_DB='${TEST_REDIS_DB}'
+        export JWT_SECRET='${TEST_JWT_SECRET}'
+        export INTERNAL_AUTH_TOKEN='${TEST_INTERNAL_TOKEN}'
+        export ENCRYPTION_KEY='${TEST_ENCRYPTION_KEY}'
+        export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
+        export OAUTH_REDIRECT_URI='http://192.0.2.10:9080/auth/callback'
+        export FRONTEND_URL='http://192.0.2.10:9080'
+        docker compose -f docker-compose.${TARGET_COLOR}.yml -p llm-${TARGET_COLOR} up -d --remove-orphans
+      "
+
+      # 5. 等待容器启动
+      sleep 5
+
+      # 6. SCP 二进制文件到目标主机，直接 docker cp 进容器
+      scp ${SSH_OPTS} /tmp/gateway ${TEST_USER}@${TEST_HOST}:/tmp/gateway-new
+      scp ${SSH_OPTS} /tmp/control-plane ${TEST_USER}@${TEST_HOST}:/tmp/control-plane-new
+
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
+        set -e
+        docker cp /tmp/gateway-new llm-${TARGET_COLOR}-gateway-1:/usr/local/bin/gateway
+        docker cp /tmp/control-plane-new llm-${TARGET_COLOR}-control-plane-1:/usr/local/bin/control-plane
+        rm -f /tmp/gateway-new /tmp/control-plane-new
+      "
+
+      # 7. 重启容器（加载新二进制）
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
+        set -e
+        cd ${TEST_PATH}
+        docker compose -f docker-compose.${TARGET_COLOR}.yml -p llm-${TARGET_COLOR} restart
+      "
+
+      # 8. 执行蓝绿切换（健康检查 + nginx 切换 + 停旧环境）
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
+        set -e
+        cd ${TEST_PATH}
+        export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=test
+        export NGINX_UPSTREAM=${TEST_PATH}/upstream-active.conf
+        export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30
+        export LEGACY_CONTAINERS='llm-gw-gateway llm-gw-control-plane'
+        export DATABASE_URL='${TEST_DATABASE_URL}'
+        export REDIS_ADDR='${TEST_REDIS_ADDR}' REDIS_PASSWORD='${TEST_REDIS_PASSWORD}'
+        export REDIS_DB='${TEST_REDIS_DB}'
+        export JWT_SECRET='${TEST_JWT_SECRET}'
+        export INTERNAL_AUTH_TOKEN='${TEST_INTERNAL_TOKEN}'
+        export ENCRYPTION_KEY='${TEST_ENCRYPTION_KEY}'
+        export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
+        export OAUTH_REDIRECT_URI='http://192.0.2.10:9080/auth/callback'
+        export FRONTEND_URL='http://192.0.2.10:9080'
+        # 直接执行 nginx 切换 + 停旧（跳过启动，因为容器已启动）
+        bash deploy-blue-green.sh --skip-start
+      "
+  environment:
+    name: test
+    url: http://192.0.2.10:9080
+  dependencies: []
+  rules:
+    - if: $CI_COMMIT_BRANCH == "test"
+      when: manual
+      allow_failure: true
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DEPLOY — 生产 蓝绿部署 (192.0.2.10)
@@ -355,6 +545,7 @@ deploy-web-test:
 # ═══════════════════════════════════════════════════════════════════════════════
 deploy-prod:
   stage: deploy
+  needs: ["migrate-prod"]
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   # 预算：preflight(~2m) + DRAIN_TIMEOUT(600s) + STOP_TIMEOUT(120s) ≈ 14m，留足余量。
@@ -431,6 +622,7 @@ rollback-prod:
 
 deploy-web-prod:
   stage: deploy
+  needs: ["build-web-prod"]
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   variables:
@@ -453,12 +645,12 @@ deploy-web-prod:
 # ═══════════════════════════════════════════════════════════════════════════════
 verify-test:
   stage: verify
+  needs: ["deploy-app-test", "deploy-web-test"]
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   script:
     - |
-      SSH_OPTS="-o StrictHostKeyChecking=no"
-      sleep 10
+      SSH_OPTS="-o StrictHostKeyChecking=no -o ControlMaster=auto -o ControlPath=/tmp/ssh-control-%r@%h:%p -o ControlPersist=60"
       # 蓝绿感知：按当前活跃颜色校验对应端口
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
         cd ${TEST_PATH}
@@ -479,4 +671,3 @@ verify-test:
   dependencies: []
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
-      changes: *test-significant-changes

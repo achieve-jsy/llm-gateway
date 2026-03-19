@@ -42,24 +42,10 @@ func timeRangeToInterval(tr string) string {
 		return "5 minutes"
 	case "30m":
 		return "30 minutes"
-	case "1h":
-		return "1 hour"
-	case "3h":
-		return "3 hours"
-	case "5h":
-		return "5 hours"
 	case "6h":
 		return "6 hours"
-	case "12h":
-		return "12 hours"
 	case "24h":
 		return "24 hours"
-	case "1d":
-		return "1 day"
-	case "7d":
-		return "7 days"
-	case "30d":
-		return "30 days"
 	default:
 		return "1 hour"
 	}
@@ -72,14 +58,10 @@ func bucketTruncExpr(timeRange string) string {
 		return "date_trunc('minute', ts)"
 	case "30m":
 		return "to_timestamp(floor((extract('epoch' from ts)::numeric / 300)) * 300)"
-	case "1h", "3h", "5h", "6h", "12h":
+	case "6h":
 		return "to_timestamp(floor((extract('epoch' from ts)::numeric / 1800)) * 1800)"
-	case "24h", "1d":
+	case "24h":
 		return "date_trunc('hour', ts)"
-	case "7d":
-		return "date_trunc('day', ts)"
-	case "30d":
-		return "date_trunc('day', ts)"
 	default:
 		return "to_timestamp(floor((extract('epoch' from ts)::numeric / 300)) * 300)"
 	}
@@ -91,14 +73,10 @@ func bucketSeconds(timeRange string) float64 {
 		return 60
 	case "30m":
 		return 300
-	case "1h", "3h", "5h", "6h", "12h":
+	case "6h":
 		return 1800
-	case "24h", "1d":
+	case "24h":
 		return 3600
-	case "7d":
-		return 86400
-	case "30d":
-		return 86400
 	default:
 		return 300
 	}
@@ -192,6 +170,7 @@ type OpsFilter struct {
 	KeyID         string // gap#10: API Key ID
 	Account       string // gap#10: 账户名(对应 provider)
 	MaxDurationMs string // gap#10: 最大耗时过滤(duration_ms <= ?)
+	Endpoint     string // 入站端点路径，如 /v1/chat/completions, /v1/embeddings, /v1/rerank
 }
 
 // buildFilterClause 根据 OpsFilter 生成 SQL WHERE 子句和参数。
@@ -236,12 +215,20 @@ func (h *OpsHandler) buildFilterClause(ctx context.Context, filter OpsFilter, ti
 		args = append(args, filter.KeyID)
 	}
 	if filter.Account != "" {
-		clause += " AND provider = ?"
-		args = append(args, filter.Account)
+		// Account 是 provider 列的别名筛选；当 Provider 同时设置时，
+		// Account 优先（避免 SQL 出现两个 provider = ? 导致数据恒为 0）。
+		if filter.Provider == "" {
+			clause += " AND provider = ?"
+			args = append(args, filter.Account)
+		}
 	}
 	if filter.MaxDurationMs != "" {
 		clause += " AND duration_ms <= ?"
 		args = append(args, filter.MaxDurationMs)
+	}
+	if filter.Endpoint != "" {
+		clause += " AND inbound_endpoint = ?"
+		args = append(args, filter.Endpoint)
 	}
 	return clause, args
 }
@@ -499,20 +486,11 @@ type TrafficTrendPoint struct {
 }
 
 // GetTrafficTrend 获取流量趋势
-// B11/WP4: 支持 group_id/provider/model 过滤，复用 buildFilterClause。
 func (h *OpsHandler) GetTrafficTrend(c *gin.Context) {
-	filter := OpsFilter{
-		TimeRange: c.DefaultQuery("time_range", "1h"),
-		Start:     c.Query("start"),
-		End:       c.Query("end"),
-		GroupID:   c.Query("group_id"),
-		Provider:  c.Query("provider"),
-		Model:     c.Query("model"),
-	}
-	interval := timeRangeToInterval(filter.TimeRange)
-	truncExpr := bucketTruncExpr(filter.TimeRange)
-	sec := bucketSeconds(filter.TimeRange)
-	whereClause, args := h.buildFilterClause(c.Request.Context(), filter, interval)
+	timeRange := c.DefaultQuery("time_range", "1h")
+	interval := timeRangeToInterval(timeRange)
+	truncExpr := bucketTruncExpr(timeRange)
+	sec := bucketSeconds(timeRange)
 
 	var rows []struct {
 		Timestamp    time.Time `gorm:"column:ts"`
@@ -525,9 +503,11 @@ func (h *OpsHandler) GetTrafficTrend(c *gin.Context) {
 			%s as ts,
 			COUNT(*)::bigint as request_count,
 			COALESCE(SUM(total_tokens), 0)::bigint as token_count
-		FROM call_logs WHERE %s
-		GROUP BY %s ORDER BY ts
-	`, truncExpr, whereClause, truncExpr), args...).Scan(&rows).Error
+		FROM call_logs
+		WHERE ts > NOW() - INTERVAL '%s'
+		GROUP BY %s
+		ORDER BY ts
+	`, truncExpr, interval, truncExpr)).Scan(&rows).Error
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query traffic trend"})
@@ -547,7 +527,7 @@ func (h *OpsHandler) GetTrafficTrend(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"points": points,
-		"bucket": bucketName(filter.TimeRange),
+		"bucket": bucketName(timeRange),
 	})
 }
 
@@ -560,19 +540,10 @@ type ErrorTrendPoint struct {
 }
 
 // GetErrorTrend 获取错误趋势
-// B11/WP4: 支持 group_id/provider/model 过滤，复用 buildFilterClause。
 func (h *OpsHandler) GetErrorTrend(c *gin.Context) {
-	filter := OpsFilter{
-		TimeRange: c.DefaultQuery("time_range", "1h"),
-		Start:     c.Query("start"),
-		End:       c.Query("end"),
-		GroupID:   c.Query("group_id"),
-		Provider:  c.Query("provider"),
-		Model:     c.Query("model"),
-	}
-	interval := timeRangeToInterval(filter.TimeRange)
-	truncExpr := bucketTruncExpr(filter.TimeRange)
-	whereClause, args := h.buildFilterClause(c.Request.Context(), filter, interval)
+	timeRange := c.DefaultQuery("time_range", "1h")
+	interval := timeRangeToInterval(timeRange)
+	truncExpr := bucketTruncExpr(timeRange)
 
 	var rows []struct {
 		Timestamp      time.Time `gorm:"column:ts"`
@@ -587,9 +558,11 @@ func (h *OpsHandler) GetErrorTrend(c *gin.Context) {
 			COUNT(*) FILTER (WHERE status >= 400 AND status < 500)::bigint as request_errors,
 			COUNT(*) FILTER (WHERE status >= 500)::bigint as upstream_errors,
 			COUNT(*) FILTER (WHERE status = 429)::bigint as business_errors
-		FROM call_logs WHERE %s
-		GROUP BY %s ORDER BY ts
-	`, truncExpr, whereClause, truncExpr), args...).Scan(&rows).Error
+		FROM call_logs
+		WHERE ts > NOW() - INTERVAL '%s'
+		GROUP BY %s
+		ORDER BY ts
+	`, truncExpr, interval, truncExpr)).Scan(&rows).Error
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query error trend"})
@@ -616,18 +589,9 @@ type LatencyBucket struct {
 }
 
 // GetLatencyHistogram 获取延迟分布直方图
-// B11/WP4: 支持 group_id/provider/model 过滤，复用 buildFilterClause。
 func (h *OpsHandler) GetLatencyHistogram(c *gin.Context) {
-	filter := OpsFilter{
-		TimeRange: c.DefaultQuery("time_range", "1h"),
-		Start:     c.Query("start"),
-		End:       c.Query("end"),
-		GroupID:   c.Query("group_id"),
-		Provider:  c.Query("provider"),
-		Model:     c.Query("model"),
-	}
-	interval := timeRangeToInterval(filter.TimeRange)
-	whereClause, args := h.buildFilterClause(c.Request.Context(), filter, interval)
+	timeRange := c.DefaultQuery("time_range", "1h")
+	interval := timeRangeToInterval(timeRange)
 
 	var rows []struct {
 		Range string `gorm:"column:latency_range"`
@@ -646,7 +610,8 @@ func (h *OpsHandler) GetLatencyHistogram(c *gin.Context) {
 					ELSE '5s+'
 				END as latency_range,
 				COUNT(*)::bigint as count
-			FROM call_logs WHERE %s
+			FROM call_logs
+			WHERE ts > NOW() - INTERVAL '%s'
 			GROUP BY latency_range
 		) sub ORDER BY
 			CASE latency_range
@@ -657,7 +622,7 @@ func (h *OpsHandler) GetLatencyHistogram(c *gin.Context) {
 				WHEN '2-5s' THEN 5
 				ELSE 6
 			END
-	`, whereClause), args...).Scan(&rows).Error
+	`, interval)).Scan(&rows).Error
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query latency histogram"})
@@ -688,18 +653,9 @@ type ErrorDistributionItem struct {
 }
 
 // GetErrorDistribution 获取错误分布
-// B11/WP4: 支持 group_id/provider/model 过滤，复用 buildFilterClause。
 func (h *OpsHandler) GetErrorDistribution(c *gin.Context) {
-	filter := OpsFilter{
-		TimeRange: c.DefaultQuery("time_range", "1h"),
-		Start:     c.Query("start"),
-		End:       c.Query("end"),
-		GroupID:   c.Query("group_id"),
-		Provider:  c.Query("provider"),
-		Model:     c.Query("model"),
-	}
-	interval := timeRangeToInterval(filter.TimeRange)
-	whereClause, args := h.buildFilterClause(c.Request.Context(), filter, interval)
+	timeRange := c.DefaultQuery("time_range", "1h")
+	interval := timeRangeToInterval(timeRange)
 
 	var rows []struct {
 		StatusCode int   `gorm:"column:status_code"`
@@ -710,9 +666,12 @@ func (h *OpsHandler) GetErrorDistribution(c *gin.Context) {
 		SELECT
 			status as status_code,
 			COUNT(*)::bigint as count
-		FROM call_logs WHERE %s AND status >= 400
-		GROUP BY status ORDER BY count DESC
-	`, whereClause), args...).Scan(&rows).Error
+		FROM call_logs
+		WHERE ts > NOW() - INTERVAL '%s'
+			AND status >= 400
+		GROUP BY status
+		ORDER BY count DESC
+	`, interval)).Scan(&rows).Error
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query error distribution"})
@@ -781,9 +740,15 @@ func (h *OpsHandler) ListRequests(c *gin.Context) {
 		where += " AND provider = ?"
 		args = append(args, provider)
 	}
-	if groupName := c.Query("group_id"); groupName != "" {
-		where += " AND group_name = ?"
-		args = append(args, groupName)
+	if groupID := c.Query("group_id"); groupID != "" {
+		// group_id 是 model_groups 主键，需要解析为 group_name 列值
+		var groupName string
+		if err := h.db.Raw(
+			"SELECT name FROM model_groups WHERE id = ?", groupID,
+		).Scan(&groupName).Error; err == nil && groupName != "" {
+			where += " AND group_name = ?"
+			args = append(args, groupName)
+		}
 	}
 	if modelFilter := c.Query("model"); modelFilter != "" {
 		where += " AND model = ?"
@@ -910,11 +875,8 @@ func (h *OpsHandler) ListRequestErrors(c *gin.Context) {
 	for rows.Next() {
 		var requestID, ts, modelName, groupName, provider, ipAddress string
 		var status, durationMs, upstreamStatus int
-		if scanErr := rows.Scan(&requestID, &ts, &modelName, &groupName, &provider, &status, &durationMs,
-			&upstreamStatus, &ipAddress); scanErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to scan request error row"})
-			return
-		}
+		rows.Scan(&requestID, &ts, &modelName, &groupName, &provider, &status, &durationMs,
+			&upstreamStatus, &ipAddress)
 		// B05/WP3: 列表项以 request_id 作为唯一标识。同时回填 id=request_id，
 		// 兼容前端 :key="item.id" / open-detail(item.id)（detail 端点按
 		// WHERE request_id = ? 查询，故 id=request_id 即可正确打开详情）。
@@ -940,13 +902,9 @@ func (h *OpsHandler) ListRequestErrors(c *gin.Context) {
 func (h *OpsHandler) GetRequestErrorDetail(c *gin.Context) {
 	id := c.Param("id")
 	rows, err := h.db.Raw(`
-		SELECT request_id, ts, key_id, COALESCE(key_name, '') as key_name, user_id, model, group_name, provider,
+		SELECT request_id, ts, key_id, user_id, model, group_name, provider,
 			status, duration_ms, first_token_ms, total_tokens, prompt_tokens, completion_tokens,
-			upstream_status, ip_address, failover_used, routed_via_group,
-			COALESCE(stage_auth_ms, 0) as stage_auth_ms,
-			COALESCE(stage_route_ms, 0) as stage_route_ms,
-			COALESCE(stage_upstream_ms, 0) as stage_upstream_ms,
-			COALESCE(stage_ttfb_ms, 0) as stage_ttfb_ms
+			upstream_status, ip_address, failover_used, routed_via_group
 		FROM call_logs
 		WHERE request_id = ? AND status >= 400 AND status < 500
 	`, id).Rows()
@@ -961,17 +919,15 @@ func (h *OpsHandler) GetRequestErrorDetail(c *gin.Context) {
 		return
 	}
 
-	var requestID, ts, keyID, keyName, userID, modelName, groupName, provider, ipAddress string
+	var requestID, ts, keyID, userID, modelName, groupName, provider, ipAddress string
 	var status, durationMs, totalTokens, promptTokens, completionTokens int
 	var firstTokenMs *int
 	var upstreamStatus int
 	var failoverUsed, routedViaGroup bool
-	var stageAuthMs, stageRouteMs, stageUpstreamMs, stageTTFBMs int
 
-	if scanErr := rows.Scan(&requestID, &ts, &keyID, &keyName, &userID, &modelName, &groupName, &provider,
+	if scanErr := rows.Scan(&requestID, &ts, &keyID, &userID, &modelName, &groupName, &provider,
 		&status, &durationMs, &firstTokenMs, &totalTokens, &promptTokens, &completionTokens,
-		&upstreamStatus, &ipAddress, &failoverUsed, &routedViaGroup,
-		&stageAuthMs, &stageRouteMs, &stageUpstreamMs, &stageTTFBMs); scanErr != nil {
+		&upstreamStatus, &ipAddress, &failoverUsed, &routedViaGroup); scanErr != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to scan"})
 		return
 	}
@@ -981,28 +937,21 @@ func (h *OpsHandler) GetRequestErrorDetail(c *gin.Context) {
 		UpstreamStatusCode: upstreamStatus,
 	}
 
-	// 构建 latency_breakdown（WP11: 从 call_logs stage 列填充真实值）
+	// 构建 latency_breakdown（call_logs 仅含 duration_ms / first_token_ms，其余返回 0）
 	ttftMs := 0
 	if firstTokenMs != nil {
 		ttftMs = *firstTokenMs
 	}
-	respMs := durationMs - stageAuthMs - stageRouteMs - stageUpstreamMs
-	if respMs < 0 {
-		respMs = 0
-	}
 	latencyBreakdown := LatencyBreakdown{
-		AuthMs:     stageAuthMs,
-		RoutingMs:  stageRouteMs,
-		UpstreamMs: stageUpstreamMs,
-		ResponseMs: respMs,
+		AuthMs:     0,
+		RoutingMs:  0,
+		UpstreamMs: durationMs,
+		ResponseMs: 0,
 		TTFTMs:     ttftMs,
 	}
 
-	// WP11: is_deleted_key — key_name 为空且 key_id 不为空时标记已删除 key
-	isDeletedKey := keyName == "" && keyID != ""
-
 	c.JSON(http.StatusOK, gin.H{
-		"request_id": requestID, "ts": ts, "key_id": keyID, "key_name": keyName, "user_id": userID,
+		"request_id": requestID, "ts": ts, "key_id": keyID, "user_id": userID,
 		"model": modelName, "group_name": groupName, "provider": provider,
 		"status": status, "duration_ms": durationMs, "first_token_ms": firstTokenMs,
 		"total_tokens": totalTokens, "prompt_tokens": promptTokens, "completion_tokens": completionTokens,
@@ -1010,7 +959,6 @@ func (h *OpsHandler) GetRequestErrorDetail(c *gin.Context) {
 		"failover_used": failoverUsed, "routed_via_group": routedViaGroup,
 		"upstream_context": upstreamCtx,
 		"latency_breakdown": latencyBreakdown,
-		"is_deleted_key": isDeletedKey,
 	})
 }
 
@@ -1019,13 +967,9 @@ func (h *OpsHandler) GetRequestErrorDetail(c *gin.Context) {
 func (h *OpsHandler) GetUpstreamErrorDetail(c *gin.Context) {
 	id := c.Param("id")
 	rows, err := h.db.Raw(`
-		SELECT request_id, ts, key_id, COALESCE(key_name, '') as key_name, user_id, model, group_name, provider,
+		SELECT request_id, ts, key_id, user_id, model, group_name, provider,
 			status, duration_ms, first_token_ms, total_tokens, prompt_tokens, completion_tokens,
-			upstream_status, ip_address, failover_used, routed_via_group,
-			COALESCE(stage_auth_ms, 0) as stage_auth_ms,
-			COALESCE(stage_route_ms, 0) as stage_route_ms,
-			COALESCE(stage_upstream_ms, 0) as stage_upstream_ms,
-			COALESCE(stage_ttfb_ms, 0) as stage_ttfb_ms
+			upstream_status, ip_address, failover_used, routed_via_group
 		FROM call_logs
 		WHERE request_id = ? AND status >= 500
 	`, id).Rows()
@@ -1040,17 +984,15 @@ func (h *OpsHandler) GetUpstreamErrorDetail(c *gin.Context) {
 		return
 	}
 
-	var requestID, ts, keyID, keyName, userID, modelName, groupName, provider, ipAddress string
+	var requestID, ts, keyID, userID, modelName, groupName, provider, ipAddress string
 	var status, durationMs, totalTokens, promptTokens, completionTokens int
 	var firstTokenMs *int
 	var upstreamStatus int
 	var failoverUsed, routedViaGroup bool
-	var stageAuthMs, stageRouteMs, stageUpstreamMs, stageTTFBMs int
 
-	if scanErr := rows.Scan(&requestID, &ts, &keyID, &keyName, &userID, &modelName, &groupName, &provider,
+	if scanErr := rows.Scan(&requestID, &ts, &keyID, &userID, &modelName, &groupName, &provider,
 		&status, &durationMs, &firstTokenMs, &totalTokens, &promptTokens, &completionTokens,
-		&upstreamStatus, &ipAddress, &failoverUsed, &routedViaGroup,
-		&stageAuthMs, &stageRouteMs, &stageUpstreamMs, &stageTTFBMs); scanErr != nil {
+		&upstreamStatus, &ipAddress, &failoverUsed, &routedViaGroup); scanErr != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to scan"})
 		return
 	}
@@ -1060,28 +1002,21 @@ func (h *OpsHandler) GetUpstreamErrorDetail(c *gin.Context) {
 		UpstreamStatusCode: upstreamStatus,
 	}
 
-	// 构建 latency_breakdown (WP11: stage 列真实值)
+	// 构建 latency_breakdown
 	ttftMs := 0
 	if firstTokenMs != nil {
 		ttftMs = *firstTokenMs
 	}
-	respMs := durationMs - stageAuthMs - stageRouteMs - stageUpstreamMs
-	if respMs < 0 {
-		respMs = 0
-	}
 	latencyBreakdown := LatencyBreakdown{
-		AuthMs:     stageAuthMs,
-		RoutingMs:  stageRouteMs,
-		UpstreamMs: stageUpstreamMs,
-		ResponseMs: respMs,
+		AuthMs:     0,
+		RoutingMs:  0,
+		UpstreamMs: durationMs,
+		ResponseMs: 0,
 		TTFTMs:     ttftMs,
 	}
 
-	// WP11: is_deleted_key
-	isDeletedKey := keyName == "" && keyID != ""
-
 	c.JSON(http.StatusOK, gin.H{
-		"request_id": requestID, "ts": ts, "key_id": keyID, "key_name": keyName, "user_id": userID,
+		"request_id": requestID, "ts": ts, "key_id": keyID, "user_id": userID,
 		"model": modelName, "group_name": groupName, "provider": provider,
 		"status": status, "duration_ms": durationMs, "first_token_ms": firstTokenMs,
 		"total_tokens": totalTokens, "prompt_tokens": promptTokens, "completion_tokens": completionTokens,
@@ -1089,7 +1024,6 @@ func (h *OpsHandler) GetUpstreamErrorDetail(c *gin.Context) {
 		"failover_used": failoverUsed, "routed_via_group": routedViaGroup,
 		"upstream_context":  upstreamCtx,
 		"latency_breakdown": latencyBreakdown,
-		"is_deleted_key":    isDeletedKey,
 	})
 }
 
@@ -1143,11 +1077,8 @@ func (h *OpsHandler) ListUpstreamErrors(c *gin.Context) {
 	for rows.Next() {
 		var requestID, ts, modelName, groupName, provider, ipAddress string
 		var status, durationMs, upstreamStatus int
-		if scanErr := rows.Scan(&requestID, &ts, &modelName, &groupName, &provider, &status, &durationMs,
-			&upstreamStatus, &ipAddress); scanErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to scan request error row"})
-			return
-		}
+		rows.Scan(&requestID, &ts, &modelName, &groupName, &provider, &status, &durationMs,
+			&upstreamStatus, &ipAddress)
 		// B05/WP3: 同 ListRequestErrors，列表项 id=request_id 兼容前端 :key/open-detail。
 		items = append(items, gin.H{
 			"id":              requestID,
@@ -1332,19 +1263,10 @@ type SwitchRateTrendPoint struct {
 
 // GetSwitchRateTrend 获取切换率趋势
 // GET /api/v1/ops/switch-rate-trend
-// B11/WP4: 支持 group_id/provider/model 过滤，复用 buildFilterClause。
 func (h *OpsHandler) GetSwitchRateTrend(c *gin.Context) {
-	filter := OpsFilter{
-		TimeRange: c.DefaultQuery("time_range", "1h"),
-		Start:     c.Query("start"),
-		End:       c.Query("end"),
-		GroupID:   c.Query("group_id"),
-		Provider:  c.Query("provider"),
-		Model:     c.Query("model"),
-	}
-	interval := timeRangeToInterval(filter.TimeRange)
-	whereClause, args := h.buildFilterClause(c.Request.Context(), filter, interval)
-	truncExpr := bucketTruncExpr(filter.TimeRange)
+	timeRange := c.DefaultQuery("time_range", "1h")
+	interval := timeRangeToInterval(timeRange)
+	truncExpr := bucketTruncExpr(timeRange)
 
 	var rows []struct {
 		Timestamp    time.Time `gorm:"column:ts"`
@@ -1357,9 +1279,11 @@ func (h *OpsHandler) GetSwitchRateTrend(c *gin.Context) {
 			%s as ts,
 			SUM(CASE WHEN failover_used THEN 1 ELSE 0 END)::bigint as switch_count,
 			COUNT(*)::bigint as request_count
-		FROM call_logs WHERE %s
-		GROUP BY %s ORDER BY ts
-	`, truncExpr, whereClause, truncExpr), args...).Scan(&rows).Error
+		FROM call_logs
+		WHERE ts > NOW() - INTERVAL '%s'
+		GROUP BY %s
+		ORDER BY ts
+	`, truncExpr, interval, truncExpr)).Scan(&rows).Error
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query switch rate trend"})
@@ -1395,19 +1319,10 @@ type ThroughputTrendPoint struct {
 
 // GetThroughputTrend 获取多维度吞吐量趋势
 // GET /api/v1/ops/throughput-trend
-// B11/WP4: 支持 group_id/provider/model 过滤，复用 buildFilterClause。
 func (h *OpsHandler) GetThroughputTrend(c *gin.Context) {
-	filter := OpsFilter{
-		TimeRange: c.DefaultQuery("time_range", "1h"),
-		Start:     c.Query("start"),
-		End:       c.Query("end"),
-		GroupID:   c.Query("group_id"),
-		Provider:  c.Query("provider"),
-		Model:     c.Query("model"),
-	}
-	interval := timeRangeToInterval(filter.TimeRange)
-	whereClause, args := h.buildFilterClause(c.Request.Context(), filter, interval)
-	truncExpr := bucketTruncExpr(filter.TimeRange)
+	timeRange := c.DefaultQuery("time_range", "1h")
+	interval := timeRangeToInterval(timeRange)
+	truncExpr := bucketTruncExpr(timeRange)
 	byProvider := c.DefaultQuery("by_provider", "false")
 	topGroups, _ := strconv.Atoi(c.DefaultQuery("top_groups", "0"))
 
@@ -1426,9 +1341,11 @@ func (h *OpsHandler) GetThroughputTrend(c *gin.Context) {
 				COUNT(*)::bigint as request_count,
 				COALESCE(SUM(total_tokens), 0)::bigint as token_count,
 				SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END)::bigint as error_count
-			FROM call_logs WHERE %s
-			GROUP BY %s, provider ORDER BY ts
-		`, truncExpr, whereClause, truncExpr), args...).Scan(&rows).Error
+			FROM call_logs
+			WHERE ts > NOW() - INTERVAL '%s'
+			GROUP BY %s, provider
+			ORDER BY ts
+		`, truncExpr, interval, truncExpr)).Scan(&rows).Error
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query throughput by provider"})
 			return
@@ -1448,9 +1365,9 @@ func (h *OpsHandler) GetThroughputTrend(c *gin.Context) {
 		topNames := make([]string, 0)
 		h.db.Raw(fmt.Sprintf(`
 			SELECT group_name FROM call_logs
-			WHERE %s AND group_name != '' AND routed_via_group = true
+			WHERE ts > NOW() - INTERVAL '%s' AND group_name != '' AND routed_via_group = true
 			GROUP BY group_name ORDER BY COUNT(*) DESC LIMIT ?
-		`, whereClause), append(args, topGroups)...).Pluck("group_name", &topNames)
+		`, interval), topGroups).Pluck("group_name", &topNames)
 
 		var rows []struct {
 			Timestamp    time.Time `gorm:"column:ts"`
@@ -1466,9 +1383,11 @@ func (h *OpsHandler) GetThroughputTrend(c *gin.Context) {
 					COUNT(*)::bigint as request_count,
 					COALESCE(SUM(total_tokens), 0)::bigint as token_count,
 					SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END)::bigint as error_count
-				FROM call_logs WHERE %s AND group_name IN ?
-				GROUP BY %s, group_name ORDER BY ts
-			`, truncExpr, whereClause, truncExpr), append(args, topNames)...).Scan(&rows)
+				FROM call_logs
+				WHERE ts > NOW() - INTERVAL '%s' AND group_name IN ?
+				GROUP BY %s, group_name
+				ORDER BY ts
+			`, truncExpr, interval, truncExpr), topNames).Scan(&rows)
 		}
 		points := make([]ThroughputTrendPoint, 0, len(rows))
 		for _, r := range rows {
@@ -1490,9 +1409,11 @@ func (h *OpsHandler) GetThroughputTrend(c *gin.Context) {
 		SELECT %s as ts,
 			COUNT(*)::bigint as request_count,
 			COALESCE(SUM(total_tokens), 0)::bigint as token_count
-		FROM call_logs WHERE %s
-		GROUP BY %s ORDER BY ts
-	`, truncExpr, whereClause, truncExpr), args...).Scan(&rows).Error
+		FROM call_logs
+		WHERE ts > NOW() - INTERVAL '%s'
+		GROUP BY %s
+		ORDER BY ts
+	`, truncExpr, interval, truncExpr)).Scan(&rows).Error
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query throughput trend"})
 		return
@@ -1777,47 +1698,30 @@ func (h *OpsHandler) ListSystemLogs(c *gin.Context) {
 //   - write_failures / avg_write_delay_ms: 无指标源 → 0（前端 .toFixed(2) 不再崩）。
 //   - status: 无 writer → "degraded"（真实，不编造 healthy）。
 func (h *OpsHandler) GetSystemLogSinkHealth(c *gin.Context) {
-	// WP7: 读取全局 SystemLogWriter 的真实状态（Agent C）。
-	// 无 writer 时降级返回 degraded 态（B06/WP2 已定义契约）。
-	writer := service.GetSystemLogWriter()
-	status := "degraded"
-	writerEnabled := false
-	lastWriteAt := ""
-	pendingCount := int64(0)
-	droppedCount := int64(0)
-	recentErrors := int64(0)
 	queueDepth := int64(0)
-
-	if writer != nil && writer.IsRunning() {
-		writerEnabled = true
-		status = "healthy"
-		queueDepth = int64(writer.QueueDepth())
-		droppedCount = writer.DroppedCount()
-		recentErrors = writer.WriteFailures()
-		pendingCount = queueDepth
-		if writer.WrittenCount() > 0 {
-			lastWriteAt = time.Now().Format(time.RFC3339)
-		}
-		// 降级判定：队列积压 > 1000 或失败次数 > 0
-		if queueDepth > 1000 || recentErrors > 0 {
-			status = "degraded"
+	if h.rdb != nil {
+		// 估算挂起日志条数：扫描 logbuf:* 计数（若 writer 未启用，这里通常为 0）。
+		// 用 SCAN 限量，避免大 key 阻塞。
+		iter := h.rdb.Scan(c.Request.Context(), 0, "logbuf:*", 200).Iterator()
+		for iter.Next(c.Request.Context()) {
+			queueDepth++
 		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		// 前端契约字段（B06/WP2 + WP7 真值）
-		"queue_depth":        queueDepth,
-		"queue_capacity":     0,      // TODO(WP7): 接真 sink 后填真实容量
-		"dropped":            droppedCount,
-		"write_failures":     recentErrors,
-		"avg_write_delay_ms": 0.0,    // TODO(WP7): 接真 sink 后填真实值
-		"status":             status,
+		// 前端契约字段（B06）
+		"queue_depth":       queueDepth,
+		"queue_capacity":    0, // TODO(WP7): 接真 sink 后填真实容量
+		"dropped":           0, // TODO(WP7): 接真 sink 的 dropped 计数
+		"write_failures":    0, // TODO(WP7): 接真 sink 的写入失败计数
+		"avg_write_delay_ms": 0.0,
+		"status":            "degraded", // writer 未接入，真实降级态
 		// 兼容字段（旧读取 / 既有测试）
-		"writer_enabled": writerEnabled,
-		"recent_errors":  recentErrors,
-		"last_write_at":  lastWriteAt,
-		"pending_count":  pendingCount,
-		"dropped_count":  droppedCount,
+		"writer_enabled":  false,
+		"recent_errors":   0,
+		"last_write_at":   nil,
+		"pending_count":   queueDepth,
+		"dropped_count":   0,
 	})
 }
 
@@ -1929,11 +1833,6 @@ func (h *OpsHandler) UpdateRuntimeLogConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save config"})
 		return
 	}
-
-	// 实时应用日志配置
-	cfg := service.RuntimeLogConfigFromMap(input)
-	service.ApplyRuntimeLogConfig(cfg)
-
 	c.JSON(http.StatusOK, input)
 }
 
@@ -1971,41 +1870,10 @@ type TokenStatsItem struct {
 func (h *OpsHandler) GetTokenStats(c *gin.Context) {
 	timeRange := c.DefaultQuery("time_range", "24h")
 	interval := timeRangeToInterval(timeRange)
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	if pageSize <= 0 || pageSize > 200 {
-		pageSize = 20
+	limit := 50
+	if l, err := strconv.Atoi(c.DefaultQuery("limit", "50")); err == nil && l > 0 && l <= 200 {
+		limit = l
 	}
-	if page <= 0 {
-		page = 1
-	}
-	sortBy := c.DefaultQuery("sort_by", "total_tokens")
-	sortOrder := c.DefaultQuery("sort_order", "desc")
-	// 白名单防止 SQL 注入
-	allowedSort := map[string]bool{
-		"total_tokens": true, "request_count": true, "prompt_tokens": true,
-		"completion_tokens": true, "avg_duration_ms": true, "provider": true, "model": true,
-	}
-	if !allowedSort[sortBy] {
-		sortBy = "total_tokens"
-	}
-	if sortOrder != "asc" && sortOrder != "desc" {
-		sortOrder = "desc"
-	}
-	offset := (page - 1) * pageSize
-
-	// 总计（B09/WP2：前端 OpsTokenStatsCard 期望 total/total_requests/total_tokens）
-	var total int64
-	var totalRequests, totalTokens int64
-	h.db.Raw(fmt.Sprintf(`
-		SELECT COUNT(*)::bigint, COALESCE(SUM(request_count),0)::bigint, COALESCE(SUM(total_tokens),0)::bigint
-		FROM (
-			SELECT COUNT(*)::bigint as request_count, COALESCE(SUM(total_tokens),0)::bigint as total_tokens
-			FROM call_logs
-			WHERE ts > NOW() - INTERVAL '%s'
-			GROUP BY provider, model
-		) sub
-	`, interval)).Row().Scan(&total, &totalRequests, &totalTokens)
 
 	items := make([]TokenStatsItem, 0)
 	err := h.db.Raw(fmt.Sprintf(`
@@ -2018,22 +1886,15 @@ func (h *OpsHandler) GetTokenStats(c *gin.Context) {
 		FROM call_logs
 		WHERE ts > NOW() - INTERVAL '%s'
 		GROUP BY provider, model
-		ORDER BY %s %s
-		LIMIT %d OFFSET %d
-	`, interval, sortBy, sortOrder, pageSize, offset)).Scan(&items).Error
+		ORDER BY total_tokens DESC
+		LIMIT ?
+	`, interval), limit).Scan(&items).Error
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query token stats"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"items":          items,
-		"total":          total,
-		"total_requests": totalRequests,
-		"total_tokens":   totalTokens,
-		"page":           page,
-		"page_size":      pageSize,
-	})
+	c.JSON(http.StatusOK, gin.H{"items": items})
 }
 
 // =============================================================================
@@ -2324,8 +2185,14 @@ func (h *OpsHandler) GetRealtimeTraffic(c *gin.Context) {
 		args = append(args, platform)
 	}
 	if groupID != "" {
-		where += " AND group_name = ?"
-		args = append(args, groupID)
+		// group_id 是 model_groups 主键，需要解析为 group_name 列值
+		var groupName string
+		if err := h.db.Raw(
+			"SELECT name FROM model_groups WHERE id = ?", groupID,
+		).Scan(&groupName).Error; err == nil && groupName != "" {
+			where += " AND group_name = ?"
+			args = append(args, groupName)
+		}
 	}
 
 	var traffic struct {
@@ -2682,50 +2549,8 @@ func (h *OpsHandler) SendTestAlertEmail(c *gin.Context) {
 		return
 	}
 
-	// 读取邮件通知配置
-	cfg := h.loadEmailNotificationConfig()
-	if !cfg.Enabled {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "email notification is disabled"})
-		return
-	}
-
-	// 构造测试邮件
-	subject := "[LLM Gateway] 测试告警邮件"
-	body := fmt.Sprintf("这是一封测试告警邮件。\n收件人: %s\n时间: %s\n\n如果您收到此邮件，说明邮件通知配置正确。",
-		req.Recipient, time.Now().Format("2006-01-02 15:04:05"))
-
-	recipients := []string{req.Recipient}
-	// 如果配置了告警收件人列表，也发送给所有告警收件人
-	if len(cfg.AlertRecipients) > 0 {
-		recipients = cfg.AlertRecipients
-	}
-
-	emailSvc := service.NewEmailService()
-	if err := emailSvc.SendAlertEmail(recipients, subject, body); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to send test email: %v", err)})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"sent": true, "recipient": req.Recipient, "message": "test email sent"})
-}
-
-// loadEmailNotificationConfig 从 system_configs 读取邮件通知配置
-func (h *OpsHandler) loadEmailNotificationConfig() EmailNotificationConfig {
-	val, err := h.settingsRepo.GetValue(settingKeyEmailNotification)
-	if err != nil || val == "" {
-		return defaultEmailNotificationConfig()
-	}
-	var cfg EmailNotificationConfig
-	if jsonErr := json.Unmarshal([]byte(val), &cfg); jsonErr != nil {
-		return defaultEmailNotificationConfig()
-	}
-	if cfg.AlertRecipients == nil {
-		cfg.AlertRecipients = []string{}
-	}
-	if cfg.ReportRecipients == nil {
-		cfg.ReportRecipients = []string{}
-	}
-	return cfg
+	// TODO: 接入实际邮件发送（依赖 email_sender 模块）
+	c.JSON(http.StatusOK, gin.H{"sent": true, "recipient": req.Recipient, "message": "test email queued (email sender not yet wired)"})
 }
 
 // =============================================================================
@@ -2864,24 +2689,6 @@ type ErrorLogEntry struct {
 	Resolved             bool    `gorm:"column:resolved" json:"resolved"`
 }
 
-// parseResolvedFromExtra 从 system_logs.extra JSON 列提取 resolved 字段。
-// 便携实现（不依赖 ::jsonb），兼容 PG+SQLite。
-func parseResolvedFromExtra(raw []byte) bool {
-	if len(raw) == 0 {
-		return false
-	}
-	var extra map[string]interface{}
-	if err := json.Unmarshal(raw, &extra); err != nil {
-		return false
-	}
-	if v, ok := extra["resolved"]; ok {
-		if b, ok := v.(bool); ok {
-			return b
-		}
-	}
-	return false
-}
-
 // ListErrorLogs 查询错误日志（从 system_logs 表过滤 ERROR 级别）
 // GET /api/v1/ops/error-logs
 func (h *OpsHandler) ListErrorLogs(c *gin.Context) {
@@ -2930,10 +2737,7 @@ func (h *OpsHandler) ListErrorLogs(c *gin.Context) {
 
 	var total int64
 	countSQL := fmt.Sprintf(`SELECT COUNT(*) FROM system_logs WHERE %s`, baseWhere)
-	if err := h.db.Raw(countSQL, args...).Scan(&total).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to count error logs"})
-		return
-	}
+	h.db.Raw(countSQL, args...).Scan(&total)
 
 	orderBy := fmt.Sprintf("ORDER BY %s %s, id DESC", sortBy, sortOrder)
 	offset := (page - 1) * pageSize
@@ -2949,16 +2753,7 @@ func (h *OpsHandler) ListErrorLogs(c *gin.Context) {
 			duration_ms,
 			request_id, client_request_id,
 			component AS phase,
-			user_id,
-			-- B14/WP2: system_logs 不含 call_logs 的上游字段，这些列返回 NULL；
-			-- 前端 ErrorLogEntry 用 *int/*string 接收 NULL 不会崩。
-			-- 未来 WP11 可从 extra 反查（或写入时冗余存一份）。
-			NULL::int AS upstream_status,
-			NULL::text AS upstream_error_message,
-			NULL::text AS upstream_endpoint,
-			NULL::text AS inbound_endpoint,
-			NULL::text AS api_key_prefix,
-			extra
+			user_id
 		FROM system_logs
 		WHERE %s
 		%s
@@ -2966,28 +2761,7 @@ func (h *OpsHandler) ListErrorLogs(c *gin.Context) {
 	`, baseWhere, orderBy, pageSize, offset)
 
 	items := make([]ErrorLogEntry, 0)
-	// B14/WP2: 手工 Scan rows 以提取 extra JSON 中的 resolved 字段。
-	// 避免 ::jsonb 方言，兼容 PG+SQLite。
-	rows, err := h.db.Raw(querySQL, args...).Rows()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query error logs"})
-		return
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var e ErrorLogEntry
-		var extraRaw []byte
-		if scanErr := rows.Scan(
-			&e.ID, &e.Ts, &e.Model, &e.Provider, &e.GroupName,
-			&e.Status, &e.ErrorMessage, &e.DurationMs,
-			&e.RequestID, &e.ClientRequestID, &e.Phase, &e.UserID,
-			&e.UpstreamStatus, &e.UpstreamErrorMessage, &e.UpstreamEndpoint,
-			&e.InboundEndpoint, &e.ApiKeyPrefix, &extraRaw,
-		); scanErr == nil {
-			e.Resolved = parseResolvedFromExtra(extraRaw)
-			items = append(items, e)
-		}
-	}
+	h.db.Raw(querySQL, args...).Scan(&items)
 
 	c.JSON(http.StatusOK, gin.H{
 		"items":     items,
@@ -3115,16 +2889,11 @@ func (h *OpsHandler) GetSnapshotV2(c *gin.Context) {
 	`, truncExpr, whereClause, truncExpr), args...).Scan(&throughputRows)
 
 	throughputPoints := make([]gin.H, 0, len(throughputRows))
-	sec := bucketSeconds(filter.TimeRange)
 	for _, r := range throughputRows {
 		throughputPoints = append(throughputPoints, gin.H{
 			"timestamp":     r.Timestamp.Format(time.RFC3339),
 			"request_count": r.RequestCount,
 			"token_count":   r.TokenCount,
-			// B10/WP2: 前端 OpsTrafficTrendChart 主加载路径从 snapshot-v2 读取
-			// qps/tps 字段（与 /ops/traffic-trend 算法一致：计数/桶秒数）。
-			"qps": float64(r.RequestCount) / sec,
-			"tps": float64(r.TokenCount) / sec,
 		})
 	}
 

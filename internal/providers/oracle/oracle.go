@@ -74,6 +74,10 @@ func (p *Provider) Embeddings(_ context.Context, _ *core.EmbeddingRequest) (*cor
 	return nil, core.NewInvalidRequestError("oracle does not support embeddings", nil)
 }
 
+func (p *Provider) Rerank(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
+	return p.compat.Rerank(ctx, req)
+}
+
 func setHeaders(req *http.Request, apiKey string) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 }

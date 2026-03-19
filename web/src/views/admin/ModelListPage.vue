@@ -89,6 +89,14 @@
       </div>
     </div>
 
+    <!-- 模型类型筛选 Tab -->
+    <el-tabs v-model="filterModelType" @tab-change="handleModelTypeChange" class="model-type-tabs">
+      <el-tab-pane label="全部" name="" />
+      <el-tab-pane label="Chat" name="chat" />
+      <el-tab-pane label="Embedding" name="embedding" />
+      <el-tab-pane label="Rerank" name="rerank" />
+    </el-tabs>
+
     <!-- 模型列表表格 -->
     <el-table :data="filteredModels" border stripe @selection-change="handleSelectionChange">
       <el-table-column type="selection" width="45" />
@@ -329,6 +337,8 @@ const currentPage = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
 
+const filterModelType = ref('')
+
 const dialogVisible = ref(false)
 const editingModel = ref<Model | null>(null)
 
@@ -400,6 +410,7 @@ async function loadModels() {
       pageSize: pageSize.value,
       name: filterName.value,
       enabled: normalizeEnabledFilter(filterEnabled.value),
+      model_type: filterModelType.value || undefined,
     })
     models.value = result.data
     total.value = result.total
@@ -450,6 +461,12 @@ async function loadAllTags() {
 
 /** 渠道筛选/能力筛选变化 */
 function handleFilterChange() {
+  currentPage.value = 1
+  loadModels()
+}
+
+/** 模型类型筛选 Tab 切换 */
+function handleModelTypeChange() {
   currentPage.value = 1
   loadModels()
 }
@@ -712,6 +729,10 @@ onMounted(() => {
 
 .text-muted {
   color: var(--el-text-color-secondary);
+}
+
+.model-type-tabs {
+  margin-bottom: 16px;
 }
 
 .pagination-wrapper {

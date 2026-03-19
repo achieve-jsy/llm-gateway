@@ -25,6 +25,9 @@ type Provider interface {
 
 	// Embeddings sends an embeddings request to the provider
 	Embeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error)
+
+	// Rerank sends a rerank request to the provider
+	Rerank(ctx context.Context, req *RerankRequest) (*RerankResponse, error)
 }
 
 // NativeBatchProvider is implemented by providers that support native discounted batching.

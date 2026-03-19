@@ -325,6 +325,25 @@ func (p *CompatibleProvider) Embeddings(ctx context.Context, req *core.Embedding
 	return &resp, nil
 }
 
+func (p *CompatibleProvider) Rerank(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
+	if req == nil {
+		return nil, core.NewInvalidRequestError("rerank request is required", nil)
+	}
+	var resp core.RerankResponse
+	err := p.Do(ctx, llmclient.Request{
+		Method:   http.MethodPost,
+		Endpoint: "/rerank",
+		Body:     req,
+	}, &resp)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Model == "" {
+		resp.Model = req.Model
+	}
+	return &resp, nil
+}
+
 func (p *CompatibleProvider) Passthrough(ctx context.Context, req *core.PassthroughRequest) (*core.PassthroughResponse, error) {
 	if req == nil {
 		return nil, core.NewInvalidRequestError("passthrough request is required", nil)

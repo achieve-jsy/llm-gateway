@@ -6,8 +6,10 @@ package bailian
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/llmclient"
@@ -107,8 +109,209 @@ func (p *Provider) StreamResponses(ctx context.Context, req *core.ResponsesReque
 }
 
 // Embeddings sends an embeddings request to Bailian.
+// 先用原生 text-embedding API，失败时 fallback 到多模态 embedding API。
 func (p *Provider) Embeddings(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
-	return p.compatible.Embeddings(ctx, req)
+	if req == nil {
+		return nil, core.NewInvalidRequestError("embedding request is required", nil)
+	}
+
+	// 1. 尝试原生 text-embedding API
+	resp, err := p.nativeEmbeddings(ctx, req)
+	if err == nil {
+		return resp, nil
+	}
+
+	// 2. 如果 model_not_supported，尝试多模态 embedding API
+	if isModelNotSupported(err) {
+		return p.multimodalEmbeddings(ctx, req)
+	}
+
+	return nil, err
+}
+
+// ─── 原生 text-embedding API ──────────────────────────────────────────────
+
+type bailianTextEmbeddingReq struct {
+	Model      string                       `json:"model"`
+	Input      bailianTextEmbeddingInput    `json:"input"`
+	Parameters bailianTextEmbeddingParams   `json:"parameters,omitempty"`
+}
+
+type bailianTextEmbeddingInput struct {
+	Texts []string `json:"texts"`
+}
+
+type bailianTextEmbeddingParams struct {
+	TextType string `json:"text_type,omitempty"` // "query" or "document"
+}
+
+type bailianTextEmbeddingResp struct {
+	Output struct {
+		Embeddings []bailianTextEmbeddingItem `json:"embeddings"`
+	} `json:"output"`
+	Usage struct {
+		TotalTokens int `json:"total_tokens"`
+	} `json:"usage"`
+}
+
+type bailianTextEmbeddingItem struct {
+	Embedding []float64 `json:"embedding"`
+	TextIndex int       `json:"text_index"`
+}
+
+func (p *Provider) nativeEmbeddings(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
+	texts := embeddingInputToStrings(req.Input)
+	if len(texts) == 0 {
+		return nil, core.NewInvalidRequestError("input must be a non-empty string or array of strings", nil)
+	}
+
+	bailianReq := bailianTextEmbeddingReq{
+		Model: req.Model,
+		Input: bailianTextEmbeddingInput{Texts: texts},
+	}
+	if req.EncodingFormat != "" && req.EncodingFormat != "float" {
+		// 原生 API 只支持 float，base64 暂不支持
+	}
+
+	var bailianResp bailianTextEmbeddingResp
+	err := p.nativeClient.Do(ctx, llmclient.Request{
+		Method:   http.MethodPost,
+		Endpoint: "/api/v1/services/embeddings/text-embedding/text-embedding",
+		Body:     bailianReq,
+	}, &bailianResp)
+	if err != nil {
+		return nil, err
+	}
+
+	data := make([]core.EmbeddingData, len(bailianResp.Output.Embeddings))
+	for i, e := range bailianResp.Output.Embeddings {
+		b, _ := json.Marshal(e.Embedding)
+		data[i] = core.EmbeddingData{
+			Object:    "embedding",
+			Embedding: b,
+			Index:     e.TextIndex,
+		}
+	}
+
+	return &core.EmbeddingResponse{
+		Object: "list",
+		Data:   data,
+		Model:  req.Model,
+		Usage: core.EmbeddingUsage{
+			PromptTokens: bailianResp.Usage.TotalTokens,
+			TotalTokens:  bailianResp.Usage.TotalTokens,
+		},
+	}, nil
+}
+
+// ─── 多模态 embedding API (qwen3-vl-embedding 等) ─────────────────────────
+
+type bailianMultimodalEmbeddingReq struct {
+	Model string                            `json:"model"`
+	Input bailianMultimodalEmbeddingInput   `json:"input"`
+}
+
+type bailianMultimodalEmbeddingInput struct {
+	Contents []bailianMultimodalContent `json:"contents"`
+}
+
+type bailianMultimodalContent struct {
+	Text string `json:"text,omitempty"`
+}
+
+type bailianMultimodalEmbeddingResp struct {
+	Output struct {
+		Embeddings []bailianMultimodalEmbeddingItem `json:"embeddings"`
+	} `json:"output"`
+	Usage struct {
+		TotalTokens int `json:"total_tokens"`
+	} `json:"usage"`
+}
+
+type bailianMultimodalEmbeddingItem struct {
+	Embedding []float64 `json:"embedding"`
+	Index     int       `json:"index"`
+}
+
+func (p *Provider) multimodalEmbeddings(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
+	texts := embeddingInputToStrings(req.Input)
+	if len(texts) == 0 {
+		return nil, core.NewInvalidRequestError("input must be a non-empty string or array of strings", nil)
+	}
+
+	contents := make([]bailianMultimodalContent, len(texts))
+	for i, t := range texts {
+		contents[i] = bailianMultimodalContent{Text: t}
+	}
+
+	bailianReq := bailianMultimodalEmbeddingReq{
+		Model: req.Model,
+		Input: bailianMultimodalEmbeddingInput{Contents: contents},
+	}
+
+	var bailianResp bailianMultimodalEmbeddingResp
+	err := p.nativeClient.Do(ctx, llmclient.Request{
+		Method:   http.MethodPost,
+		Endpoint: "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding",
+		Body:     bailianReq,
+	}, &bailianResp)
+	if err != nil {
+		return nil, err
+	}
+
+	data := make([]core.EmbeddingData, len(bailianResp.Output.Embeddings))
+	for i, e := range bailianResp.Output.Embeddings {
+		b, _ := json.Marshal(e.Embedding)
+		data[i] = core.EmbeddingData{
+			Object:    "embedding",
+			Embedding: b,
+			Index:     e.Index,
+		}
+	}
+
+	return &core.EmbeddingResponse{
+		Object: "list",
+		Data:   data,
+		Model:  req.Model,
+		Usage: core.EmbeddingUsage{
+			PromptTokens: bailianResp.Usage.TotalTokens,
+			TotalTokens:  bailianResp.Usage.TotalTokens,
+		},
+	}, nil
+}
+
+// embeddingInputToStrings 将 core.EmbeddingRequest.Input 转换为 []string。
+func embeddingInputToStrings(input any) []string {
+	switch v := input.(type) {
+	case string:
+		if v == "" {
+			return nil
+		}
+		return []string{v}
+	case []string:
+		return v
+	case []interface{}:
+		result := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+// isModelNotSupported 判断错误是否为模型不支持。
+func isModelNotSupported(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "model_not_supported") ||
+		strings.Contains(msg, "ModelNotSupported") ||
+		strings.Contains(msg, "unsupported model")
 }
 
 // ─── 百炼原生 Rerank 请求/响应格式 ────────────────────────────────────────

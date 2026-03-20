@@ -79,8 +79,8 @@ build-gateway-test:
         --cache-from ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache \
         --cache-to type=inline \
         --build-arg APP_ENV=test \
-        --target gateway-runtime \
-        -f deploy/docker/unified.Dockerfile \
+
+        -f deploy/docker/gateway.Dockerfile \
         -t ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} \
         .
       docker tag ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache
@@ -109,8 +109,8 @@ build-control-plane-test:
       docker build \
         --cache-from ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache \
         --build-arg APP_ENV=test \
-        --target cp-runtime \
-        -f deploy/docker/unified.Dockerfile \
+
+        -f deploy/docker/control-plane.Dockerfile \
         -t ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} \
         .
       docker push ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
@@ -175,8 +175,8 @@ build-gateway-prod:
         --cache-from ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache \
         --cache-to type=inline \
         --build-arg APP_ENV=prod \
-        --target gateway-runtime \
-        -f deploy/docker/unified.Dockerfile \
+
+        -f deploy/docker/gateway.Dockerfile \
         -t ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} \
         .
       docker tag ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache
@@ -202,8 +202,8 @@ build-control-plane-prod:
       docker build \
         --cache-from ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache \
         --build-arg APP_ENV=prod \
-        --target cp-runtime \
-        -f deploy/docker/unified.Dockerfile \
+
+        -f deploy/docker/control-plane.Dockerfile \
         -t ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} \
         .
       docker push ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}

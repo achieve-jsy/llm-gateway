@@ -69,12 +69,6 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/admin/CatalogSyncPage.vue'),
     meta: { title: 'Catalog 同步', requiresAdmin: true }
   },
-  {
-    path: '/admin/ehr-sync',
-    name: 'EhrSync',
-    component: () => import('@/views/admin/EhrSyncPage.vue'),
-    meta: { title: '组织数据同步', requiresAdmin: true }
-  },
   // 对话测试对所有登录用户开放（模型广场"试一试"入口）
   {
     path: '/admin/chat-playground',

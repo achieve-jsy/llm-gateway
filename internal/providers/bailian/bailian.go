@@ -1,7 +1,7 @@
 // Package bailian provides Alibaba DashScope (百炼) API integration for the LLM gateway.
-// Bailian uses the DashScope OpenAI-compatible endpoint for Chat/Embeddings,
-// and the compatible-api endpoint for Rerank (DashScope 兼容模式没有 /rerank,
-// 但 /compatible-api/v1/reranks 支持标准 Cohere/Jina 格式).
+// Chat/Embeddings 走 OpenAI 兼容模式，Rerank 走原生 API。
+// 兼容 API (/compatible-api/v1/reranks) 只支持 qwen3-rerank，不支持 gte-rerank-v2、
+// qwen3-vl-rerank 等，原生 API 全支持。
 package bailian
 
 import (
@@ -18,10 +18,9 @@ import (
 // defaultBaseURL is the DashScope OpenAI-compatible endpoint (Chat/Embeddings).
 const defaultBaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
-// rerankBaseURL is the DashScope compatible-api endpoint for Rerank.
-// DashScope puts rerank under /compatible-api/v1 instead of /compatible-mode/v1,
-// per LiteLLM's approach: https://github.com/BerriAI/litellm
-const rerankBaseURL = "https://dashscope.aliyuncs.com/compatible-api/v1"
+// nativeBaseURL is the DashScope native API endpoint for Rerank.
+// 兼容 API 模型覆盖不全，原生 API 支持所有 rerank 模型。
+const nativeBaseURL = "https://dashscope.aliyuncs.com"
 
 // Registration provides factory registration for the Bailian provider.
 var Registration = providers.Registration{
@@ -34,8 +33,8 @@ var Registration = providers.Registration{
 
 // Provider implements the core.Provider interface for Bailian (DashScope).
 type Provider struct {
-	compatible  *openai.CompatibleProvider
-	rerankClient *llmclient.Client // 独立的 rerank client，base URL 指向 compatible-api
+	compatible   *openai.CompatibleProvider
+	nativeClient *llmclient.Client // 原生 API client，用于 Rerank
 }
 
 // New creates a new Bailian provider.
@@ -48,15 +47,15 @@ func New(cfg providers.ProviderConfig, opts providers.ProviderOptions) core.Prov
 	})
 	return &Provider{
 		compatible:   compatible,
-		rerankClient: llmclient.New(rerankClientConfig(), rerankHeaderSetter(cfg.APIKey)),
+		nativeClient: llmclient.New(nativeClientConfig(), nativeHeaderSetter(cfg.APIKey)),
 	}
 }
 
-func rerankClientConfig() llmclient.Config {
-	return llmclient.DefaultConfig("bailian-rerank", rerankBaseURL)
+func nativeClientConfig() llmclient.Config {
+	return llmclient.DefaultConfig("bailian-native", nativeBaseURL)
 }
 
-func rerankHeaderSetter(apiKey string) llmclient.HeaderSetter {
+func nativeHeaderSetter(apiKey string) llmclient.HeaderSetter {
 	return func(req *http.Request) {
 		setHeaders(req, apiKey)
 	}
@@ -71,13 +70,8 @@ func NewWithHTTPClient(apiKey string, baseURL string, httpClient *http.Client, h
 			BaseURL:      resolvedBaseURL,
 			SetHeaders:   setHeaders,
 		}),
-		rerankClient: llmclient.NewWithHTTPClient(httpClient, rerankClientConfig(), rerankHeaderSetter(apiKey)),
+		nativeClient: llmclient.NewWithHTTPClient(httpClient, nativeClientConfig(), nativeHeaderSetter(apiKey)),
 	}
-}
-
-// SetBaseURL allows configuring a custom base URL for the provider.
-func (p *Provider) SetBaseURL(url string) {
-	p.compatible.SetBaseURL(url)
 }
 
 func setHeaders(req *http.Request, apiKey string) {
@@ -102,12 +96,12 @@ func (p *Provider) ListModels(ctx context.Context) (*core.ModelsResponse, error)
 	return p.compatible.ListModels(ctx)
 }
 
-// Responses sends a Responses API request to Bailian using chat-completions translation.
+// Responses sends a Responses API request to Bailian.
 func (p *Provider) Responses(ctx context.Context, req *core.ResponsesRequest) (*core.ResponsesResponse, error) {
 	return providers.ResponsesViaChat(ctx, p, req)
 }
 
-// StreamResponses streams a Responses API request to Bailian using chat-completions translation.
+// StreamResponses streams a Responses API request to Bailian.
 func (p *Provider) StreamResponses(ctx context.Context, req *core.ResponsesRequest) (io.ReadCloser, error) {
 	return providers.StreamResponsesViaChat(ctx, p, req, "bailian")
 }
@@ -117,26 +111,88 @@ func (p *Provider) Embeddings(ctx context.Context, req *core.EmbeddingRequest) (
 	return p.compatible.Embeddings(ctx, req)
 }
 
-// Rerank sends a rerank request to Bailian using the compatible-api endpoint.
-// DashScope 兼容模式 /compatible-mode/v1 没有 /rerank 端点，
-// 但 /compatible-api/v1/reranks 支持标准 Cohere/Jina 格式。
+// ─── 百炼原生 Rerank 请求/响应格式 ────────────────────────────────────────
+// 兼容 API 只支持 qwen3-rerank，原生 API 支持所有 rerank 模型
+// (qwen3-rerank, gte-rerank-v2, qwen3-vl-rerank 等)。
+
+type bailianRerankReq struct {
+	Model      string                  `json:"model"`
+	Input      bailianRerankInput      `json:"input"`
+	Parameters bailianRerankParameters `json:"parameters,omitempty"`
+}
+
+type bailianRerankInput struct {
+	Query     string   `json:"query"`
+	Documents []string `json:"documents"`
+}
+
+type bailianRerankParameters struct {
+	TopN int `json:"top_n,omitempty"`
+}
+
+type bailianRerankResp struct {
+	Output struct {
+		Results []bailianRerankResult `json:"results"`
+	} `json:"output"`
+	Usage struct {
+		TotalTokens int `json:"total_tokens"`
+	} `json:"usage"`
+}
+
+type bailianRerankResult struct {
+	Index          int     `json:"index"`
+	RelevanceScore float64 `json:"relevance_score"`
+}
+
+// Rerank 使用百炼原生 API (/api/v1/services/rerank/text-rerank/text-rerank)。
+// 兼容 API 模型覆盖不全，原生 API 支持所有 rerank 模型。
 func (p *Provider) Rerank(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
 	if req == nil {
 		return nil, core.NewInvalidRequestError("rerank request is required", nil)
 	}
-	var resp core.RerankResponse
-	err := p.rerankClient.Do(ctx, llmclient.Request{
+
+	topN := 10
+	if req.TopN != nil && *req.TopN > 0 {
+		topN = *req.TopN
+	}
+
+	bailianReq := bailianRerankReq{
+		Model: req.Model,
+		Input: bailianRerankInput{
+			Query:     req.Query,
+			Documents: req.Documents,
+		},
+		Parameters: bailianRerankParameters{TopN: topN},
+	}
+
+	var bailianResp bailianRerankResp
+	err := p.nativeClient.Do(ctx, llmclient.Request{
 		Method:   http.MethodPost,
-		Endpoint: "/reranks",
-		Body:     req,
-	}, &resp)
+		Endpoint: "/api/v1/services/rerank/text-rerank/text-rerank",
+		Body:     bailianReq,
+	}, &bailianResp)
 	if err != nil {
 		return nil, err
 	}
-	if resp.Model == "" {
-		resp.Model = req.Model
+
+	results := make([]core.RerankResult, len(bailianResp.Output.Results))
+	for i, r := range bailianResp.Output.Results {
+		results[i] = core.RerankResult{
+			Index:          r.Index,
+			RelevanceScore: r.RelevanceScore,
+		}
+		if req.ReturnDocuments != nil && *req.ReturnDocuments && r.Index < len(req.Documents) {
+			results[i].Document = &core.RerankDocument{Text: req.Documents[r.Index]}
+		}
 	}
-	return &resp, nil
+
+	return &core.RerankResponse{
+		Model:   req.Model,
+		Results: results,
+		Usage: core.RerankUsage{
+			TotalTokens: bailianResp.Usage.TotalTokens,
+		},
+	}, nil
 }
 
 // Passthrough routes an opaque provider-native request to Bailian.

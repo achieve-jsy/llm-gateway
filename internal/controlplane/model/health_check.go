@@ -19,13 +19,9 @@ type HealthCheckConfig struct {
 	TimeoutSeconds   int       `gorm:"not null;default:15" json:"timeout_seconds"`
 
 	// 模型检测独立配置（与渠道检测解耦）
-	ModelCheckEnabled          bool `gorm:"not null;default:true" json:"model_check_enabled"`
-	ModelCheckIntervalSeconds  int  `gorm:"not null;default:300" json:"model_check_interval_seconds"`
-	ModelCheckFailureThreshold int  `gorm:"not null;default:3" json:"model_check_failure_threshold"`
-
-	// 模型组检测独立配置（与模型检测解耦）
-	GroupCheckEnabled         bool `gorm:"not null;default:true" json:"group_check_enabled"`
-	GroupCheckIntervalSeconds int  `gorm:"not null;default:300" json:"group_check_interval_seconds"`
+ModelCheckEnabled           bool `gorm:"not null;default:true" json:"model_check_enabled"`
+	ModelCheckIntervalSeconds   int  `gorm:"not null;default:300" json:"model_check_interval_seconds"`
+	ModelCheckFailureThreshold  int  `gorm:"not null;default:3" json:"model_check_failure_threshold"`
 
 	ModelRecoveryEnabled          bool `gorm:"not null;default:true" json:"model_recovery_enabled"`
 	ModelRecoverySuccessThreshold int  `gorm:"not null;default:2" json:"model_recovery_success_threshold"`

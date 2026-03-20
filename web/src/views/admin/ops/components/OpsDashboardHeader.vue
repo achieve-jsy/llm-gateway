@@ -69,20 +69,6 @@
           </el-select>
 
           <el-select
-            :model-value="endpoint"
-            placeholder="操作类型"
-            clearable
-            size="small"
-            style="width: 130px"
-            @update:model-value="onEndpointChange"
-          >
-            <el-option label="全部" value="" />
-            <el-option label="Chat" value="/v1/chat/completions" />
-            <el-option label="Embedding" value="/v1/embeddings" />
-            <el-option label="Rerank" value="/v1/rerank" />
-          </el-select>
-
-          <el-select
             :model-value="groupId"
             placeholder="Group"
             size="small"
@@ -556,7 +542,6 @@ interface Props {
   groupId: number | null
   provider: string
   model: string
-  endpoint: string
   timeRange: string
   loading: boolean
   lastUpdated: Date | null
@@ -572,7 +557,6 @@ const props = withDefaults(defineProps<Props>(), {
   groupId: null,
   provider: '',
   model: '',
-  endpoint: '',
   timeRange: '1h',
   loading: false,
   lastUpdated: null,
@@ -588,7 +572,6 @@ const emit = defineEmits<{
   (e: 'update:group', value: number | null): void
   (e: 'update:provider', value: string): void
   (e: 'update:model', value: string): void
-  (e: 'update:endpoint', value: string): void
   (e: 'update:custom-time-range', value: { start: string; end: string }): void
   (e: 'update:auto-refresh', value: boolean): void
   (e: 'refresh'): void
@@ -683,10 +666,6 @@ const onProviderChange = (value: string) => {
 
 const onModelChange = (value: string) => {
   emit('update:model', value)
-}
-
-const onEndpointChange = (value: string) => {
-  emit('update:endpoint', value)
 }
 
 // ============ Time Range ============

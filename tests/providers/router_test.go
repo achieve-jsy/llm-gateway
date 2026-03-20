@@ -40,9 +40,6 @@ func (f *fakeProvider) StreamResponses(_ context.Context, _ *core.ResponsesReque
 func (f *fakeProvider) Embeddings(_ context.Context, _ *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
 	return nil, nil
 }
-func (f *fakeProvider) Rerank(_ context.Context, _ *core.RerankRequest) (*core.RerankResponse, error) {
-	return nil, nil
-}
 
 // ---------------------------------------------------------------------------
 // fakeLookup — 模拟 core.ModelLookup，控制模型→Provider 的映射关系

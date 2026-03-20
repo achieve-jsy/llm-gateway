@@ -48,11 +48,9 @@ func (o *ChatOrchestrator) Responses(ctx context.Context, req *core.ResponsesReq
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		slog.Error("upstream_responses_error",
-			append([]any{
-				"model", req.Model,
-				"duration_ms", elapsed.Milliseconds(),
-				"error", err.Error(),
-			}, extractUpstreamErrorAttrs(err)...)...,
+			"model", req.Model,
+			"duration_ms", elapsed.Milliseconds(),
+			"error", err.Error(),
 		)
 		return nil, errormap.MapProviderError(err)
 	}
@@ -123,11 +121,9 @@ func (o *ChatOrchestrator) ResponsesStream(ctx context.Context, req *core.Respon
 		span.End()
 		cancel()
 		slog.Error("upstream_responses_stream_error",
-			append([]any{
-				"model", req.Model,
-				"duration_ms", elapsed.Milliseconds(),
-				"error", err.Error(),
-			}, extractUpstreamErrorAttrs(err)...)...,
+			"model", req.Model,
+			"duration_ms", elapsed.Milliseconds(),
+			"error", err.Error(),
 		)
 		return nil, errormap.MapProviderError(err)
 	}

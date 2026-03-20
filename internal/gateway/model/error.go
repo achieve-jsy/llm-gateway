@@ -1,10 +1,6 @@
 package model
 
-import (
-	"net/http"
-
-	gatewayerrors "github.com/example/llm-gateway/internal/errors"
-)
+import "net/http"
 
 // ErrorType 统一错误类型
 type ErrorType string
@@ -20,11 +16,10 @@ const (
 
 // UnifiedError 统一错误结构
 type UnifiedError struct {
-	Type       ErrorType                  `json:"type"`
-	Code       string                     `json:"code"`
-	Message    string                     `json:"message"`
-	HTTPStatus int                        `json:"-"`
-	Upstream   *gatewayerrors.UpstreamInfo `json:"upstream,omitempty"`
+	Type       ErrorType `json:"type"`
+	Code       string    `json:"code"`
+	Message    string    `json:"message"`
+	HTTPStatus int       `json:"-"`
 }
 
 func (e *UnifiedError) Error() string {

@@ -147,10 +147,6 @@ export interface HealthCheckConfig {
   model_check_interval_minutes: number
   model_check_interval_seconds: number
   model_check_failure_threshold: number
-  // 模型组检测独立配置
-  group_check_enabled: boolean
-  group_check_interval_minutes: number
-  group_check_interval_seconds: number
   // 模型自动恢复配置
   model_recovery_enabled: boolean
   model_recovery_success_threshold: number

@@ -1,1 +1,0 @@
-ALTER TABLE call_logs DROP COLUMN IF EXISTS inbound_endpoint;

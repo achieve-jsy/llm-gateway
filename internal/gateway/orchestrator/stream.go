@@ -75,11 +75,9 @@ func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest
 		span.SetStatus(codes.Error, err.Error())
 		span.End()
 		slog.Error("upstream_stream_error",
-			append([]any{
-				"model", req.Model,
-				"duration_ms", elapsed.Milliseconds(),
-				"error", err.Error(),
-			}, extractUpstreamErrorAttrs(err)...)...,
+			"model", req.Model,
+			"duration_ms", elapsed.Milliseconds(),
+			"error", err.Error(),
 		)
 		if gc := ginContextFrom(ctx); gc != nil {
 			gc.Set("error_message", err.Error())

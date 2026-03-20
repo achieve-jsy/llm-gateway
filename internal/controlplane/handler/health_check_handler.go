@@ -40,12 +40,6 @@ func (h *HealthCheckHandler) GetConfig(c *gin.Context) {
 		modelCheckFailureThreshold = 3
 	}
 
-	// 模型组检测独立配置：使用默认值兜底
-	groupCheckIntervalSeconds := config.GroupCheckIntervalSeconds
-	if groupCheckIntervalSeconds <= 0 {
-		groupCheckIntervalSeconds = 300
-	}
-
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
 		"interval_minutes":               config.IntervalSeconds / 60,
 		"interval_seconds":               config.IntervalSeconds,
@@ -62,9 +56,6 @@ func (h *HealthCheckHandler) GetConfig(c *gin.Context) {
 		"model_check_failure_threshold":  modelCheckFailureThreshold,
 		"model_recovery_enabled":         config.ModelRecoveryEnabled,
 		"model_recovery_success_threshold": config.ModelRecoverySuccessThreshold,
-		"group_check_enabled":            config.GroupCheckEnabled,
-		"group_check_interval_minutes":   groupCheckIntervalSeconds / 60,
-		"group_check_interval_seconds":   groupCheckIntervalSeconds,
 	}})
 }
 
@@ -87,11 +78,6 @@ func (h *HealthCheckHandler) UpdateConfig(c *gin.Context) {
 		ModelCheckIntervalMinutes  *int  `json:"model_check_interval_minutes"`
 		ModelCheckIntervalSeconds  *int  `json:"model_check_interval_seconds"`
 		ModelCheckFailureThreshold *int  `json:"model_check_failure_threshold"`
-
-		// 模型组检测独立配置
-		GroupCheckEnabled        *bool `json:"group_check_enabled"`
-		GroupCheckIntervalMinutes *int  `json:"group_check_interval_minutes"`
-		GroupCheckIntervalSeconds *int  `json:"group_check_interval_seconds"`
 
 		// 模型自动恢复配置
 		ModelRecoveryEnabled          *bool `json:"model_recovery_enabled"`
@@ -153,34 +139,12 @@ func (h *HealthCheckHandler) UpdateConfig(c *gin.Context) {
 		config.ModelCheckFailureThreshold = *input.ModelCheckFailureThreshold
 	}
 
-	// 模型组检测独立配置
-	if input.GroupCheckEnabled != nil {
-		config.GroupCheckEnabled = *input.GroupCheckEnabled
-	}
-	if input.GroupCheckIntervalSeconds != nil {
-		config.GroupCheckIntervalSeconds = *input.GroupCheckIntervalSeconds
-	}
-	if input.GroupCheckIntervalMinutes != nil {
-		config.GroupCheckIntervalSeconds = *input.GroupCheckIntervalMinutes * 60
-	}
-
 	// 模型自动恢复配置
 	if input.ModelRecoveryEnabled != nil {
 		config.ModelRecoveryEnabled = *input.ModelRecoveryEnabled
 	}
 	if input.ModelRecoverySuccessThreshold != nil {
 		config.ModelRecoverySuccessThreshold = *input.ModelRecoverySuccessThreshold
-	}
-
-	// 最小间隔校验：不低于 60 秒
-	if config.IntervalSeconds < 60 {
-		config.IntervalSeconds = 60
-	}
-	if config.ModelCheckIntervalSeconds < 60 {
-		config.ModelCheckIntervalSeconds = 60
-	}
-	if config.GroupCheckIntervalSeconds < 60 {
-		config.GroupCheckIntervalSeconds = 60
 	}
 
 	if err := h.svc.UpdateConfig(config); err != nil {
@@ -200,10 +164,6 @@ func (h *HealthCheckHandler) UpdateConfig(c *gin.Context) {
 	if modelCheckFailureThreshold <= 0 {
 		modelCheckFailureThreshold = 3
 	}
-	groupCheckIntervalSeconds := config.GroupCheckIntervalSeconds
-	if groupCheckIntervalSeconds <= 0 {
-		groupCheckIntervalSeconds = 300
-	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
 		"interval_minutes":               config.IntervalSeconds / 60,
 		"interval_seconds":               config.IntervalSeconds,
@@ -220,9 +180,6 @@ func (h *HealthCheckHandler) UpdateConfig(c *gin.Context) {
 		"model_check_failure_threshold":  modelCheckFailureThreshold,
 		"model_recovery_enabled":         config.ModelRecoveryEnabled,
 		"model_recovery_success_threshold": config.ModelRecoverySuccessThreshold,
-		"group_check_enabled":            config.GroupCheckEnabled,
-		"group_check_interval_minutes":   groupCheckIntervalSeconds / 60,
-		"group_check_interval_seconds":   groupCheckIntervalSeconds,
 	}})
 }
 

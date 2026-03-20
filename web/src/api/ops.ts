@@ -98,7 +98,6 @@ export interface OpsFilterParams {
   group_id?: number
   provider?: string
   model?: string
-  endpoint?: string
 }
 
 export interface OpsSLA {

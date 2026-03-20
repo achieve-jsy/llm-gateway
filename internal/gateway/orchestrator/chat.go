@@ -30,7 +30,6 @@ type routerProvider interface {
 	ChatCompletion(ctx context.Context, req *core.ChatRequest) (*core.ChatResponse, error)
 	ListModels(ctx context.Context) (*core.ModelsResponse, error)
 	Embeddings(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error)
-	Rerank(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error)
 	ModelCount() int
 }
 
@@ -129,11 +128,9 @@ func (o *ChatOrchestrator) Chat(ctx context.Context, req *core.ChatRequest) (*co
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		slog.Error("upstream_call_error",
-			append([]any{
-				"model", req.Model,
-				"duration_ms", elapsed.Milliseconds(),
-				"error", err.Error(),
-			}, extractUpstreamErrorAttrs(err)...)...,
+			"model", req.Model,
+			"duration_ms", elapsed.Milliseconds(),
+			"error", err.Error(),
 		)
 		if gc := ginContextFrom(ctx); gc != nil {
 			gc.Set("error_message", err.Error())
@@ -178,79 +175,6 @@ func (o *ChatOrchestrator) Chat(ctx context.Context, req *core.ChatRequest) (*co
 		"prompt_tokens", resp.Usage.PromptTokens,
 		"completion_tokens", resp.Usage.CompletionTokens,
 		"total_tokens", resp.Usage.TotalTokens,
-	)
-
-	return resp, nil
-}
-
-// Rerank executes a rerank request through the Router.
-func (o *ChatOrchestrator) Rerank(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
-	tracer := otel.Tracer("llm-gateway/orchestrator")
-
-	router := o.routerSnapshot()
-	if router == nil || router.ModelCount() == 0 {
-		return nil, model.ErrModelNotFound
-	}
-
-	ctx, span := tracer.Start(ctx, "upstream.rerank",
-		trace.WithSpanKind(trace.SpanKindClient),
-		trace.WithAttributes(
-			attribute.String("llm.model", req.Model),
-			attribute.Int("llm.documents_count", len(req.Documents)),
-		),
-	)
-	defer span.End()
-
-	slog.DebugContext(ctx, "upstream_rerank_start",
-		"model", req.Model,
-		"documents_count", len(req.Documents),
-	)
-	start := time.Now()
-
-	resp, err := router.Rerank(ctx, req)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		slog.Error("upstream_rerank_error",
-			"model", req.Model,
-			"duration_ms", time.Since(start).Milliseconds(),
-			"error", err.Error(),
-		)
-		if gc := ginContextFrom(ctx); gc != nil {
-			gc.Set("error_message", err.Error())
-		}
-		return nil, errormap.MapProviderError(err)
-	}
-
-	span.SetAttributes(
-		attribute.Int("llm.usage.total_tokens", resp.Usage.TotalTokens),
-		attribute.Int("llm.results_count", len(resp.Results)),
-	)
-	span.SetStatus(codes.Ok, "")
-
-	if gc := ginContextFrom(ctx); gc != nil {
-		if resp.Model != "" {
-			if _, exists := gc.Get("routed_model"); !exists {
-				gc.Set("routed_model", resp.Model)
-			}
-		}
-		if _, exists := gc.Get("provider"); !exists {
-			if name := router.GetProviderName(req.Model); name != "" {
-				gc.Set("provider", name)
-			} else if resp.Provider != "" {
-				gc.Set("provider", resp.Provider)
-			}
-		}
-		gc.Set("usage", resp.Usage)
-		gc.Set("stream", false)
-		gc.Set("resp_object", resp)
-	}
-
-	slog.DebugContext(ctx, "upstream_rerank_done",
-		"model", req.Model,
-		"duration_ms", time.Since(start).Milliseconds(),
-		"total_tokens", resp.Usage.TotalTokens,
-		"results_count", len(resp.Results),
 	)
 
 	return resp, nil

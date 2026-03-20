@@ -256,7 +256,6 @@ type ModelPricing struct {
 	PerCharacterInput      *float64           `json:"per_character_input,omitempty" yaml:"per_character_input,omitempty"`
 	PerRequest             *float64           `json:"per_request,omitempty" yaml:"per_request,omitempty"`
 	PerPage                *float64           `json:"per_page,omitempty" yaml:"per_page,omitempty"`
-	RerankPerSearchUnit    *float64           `json:"rerank_per_search_unit,omitempty" yaml:"rerank_per_search_unit,omitempty"`
 	Tiers                  []ModelPricingTier `json:"tiers,omitempty" yaml:"tiers,omitempty"`
 }
 
@@ -296,7 +295,6 @@ func (p *ModelPricing) FieldSources(source string) map[string]string {
 	add("per_character_input", p.PerCharacterInput)
 	add("per_request", p.PerRequest)
 	add("per_page", p.PerPage)
-	add("rerank_per_search_unit", p.RerankPerSearchUnit)
 	if len(p.Tiers) > 0 {
 		out["tiers"] = source
 	}
@@ -371,7 +369,6 @@ func (p *ModelPricing) Clone() *ModelPricing {
 	out.PerCharacterInput = cloneFloatPtr(p.PerCharacterInput)
 	out.PerRequest = cloneFloatPtr(p.PerRequest)
 	out.PerPage = cloneFloatPtr(p.PerPage)
-	out.RerankPerSearchUnit = cloneFloatPtr(p.RerankPerSearchUnit)
 	if len(p.Tiers) > 0 {
 		tiers := make([]ModelPricingTier, len(p.Tiers))
 		for i, t := range p.Tiers {
@@ -487,51 +484,4 @@ type EmbeddingData struct {
 type EmbeddingUsage struct {
 	PromptTokens int `json:"prompt_tokens"`
 	TotalTokens  int `json:"total_tokens"`
-}
-
-// RerankRequest represents a reranking request.
-type RerankRequest struct {
-	Model           string            `json:"model"`
-	Provider        string            `json:"provider,omitempty"` // Gateway routing hint; stripped before upstream execution.
-	Query           string            `json:"query"`
-	Documents       []string          `json:"documents"`
-	TopN            *int              `json:"top_n,omitempty"`
-	ReturnDocuments *bool             `json:"return_documents,omitempty"`
-	MaxChunksPerDoc *int              `json:"max_chunks_per_doc,omitempty"`
-	ExtraFields     UnknownJSONFields `json:"-" swaggerignore:"true"`
-}
-
-func (r *RerankRequest) semanticSelector() (string, string) {
-	if r == nil {
-		return "", ""
-	}
-	return r.Model, r.Provider
-}
-
-// RerankResponse represents a reranking response.
-type RerankResponse struct {
-	ID          string            `json:"id"`
-	Model       string            `json:"model"`
-	Provider    string            `json:"provider"`
-	Results     []RerankResult    `json:"results"`
-	Usage       RerankUsage       `json:"usage"`
-	ExtraFields UnknownJSONFields `json:"-" swaggerignore:"true"`
-}
-
-// RerankResult represents a single reranking result.
-type RerankResult struct {
-	Index          int             `json:"index"`
-	Document       *RerankDocument `json:"document,omitempty"`
-	RelevanceScore float64         `json:"relevance_score"`
-}
-
-// RerankDocument represents a document returned in a reranking result.
-type RerankDocument struct {
-	Text string `json:"text"`
-}
-
-// RerankUsage represents token and search usage information for reranking.
-type RerankUsage struct {
-	TotalTokens int     `json:"total_tokens"`
-	SearchUnits float64 `json:"search_units,omitempty"`
 }

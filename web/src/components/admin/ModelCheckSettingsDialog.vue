@@ -2,13 +2,12 @@
   <el-dialog
     :model-value="visible"
     title="⚙️ 模型检测设置"
-    width="520px"
+    width="480px"
     :close-on-click-modal="false"
     @close="emit('close')"
   >
-    <el-form ref="formRef" :model="form" :rules="rules" label-width="130px">
-      <!-- ===== 模型检测 ===== -->
-      <el-form-item label="启用模型检测">
+    <el-form ref="formRef" :model="form" :rules="rules" label-width="120px">
+      <el-form-item label="启用自动检测">
         <el-switch v-model="form.model_check_enabled" />
       </el-form-item>
       <el-form-item>
@@ -17,12 +16,8 @@
         </span>
       </el-form-item>
 
-      <el-form-item label="模型检测间隔" prop="model_check_interval_minutes">
-        <el-select
-          v-model="form.model_check_interval_minutes"
-          style="width: 100%"
-          :disabled="form.model_check_interval_custom"
-        >
+      <el-form-item label="检测间隔" prop="model_check_interval_minutes">
+        <el-select v-model="form.model_check_interval_minutes" style="width: 100%">
           <el-option
             v-for="opt in intervalOptions"
             :key="opt.value"
@@ -30,25 +25,6 @@
             :value="opt.value"
           />
         </el-select>
-      </el-form-item>
-      <el-form-item label="  自定义间隔">
-        <el-switch
-          v-model="form.model_check_interval_custom"
-          active-text="自定义"
-          inactive-text="预设"
-          style="--el-switch-on-color: var(--el-color-warning)"
-        />
-        <el-input-number
-          v-if="form.model_check_interval_custom"
-          v-model="form.model_check_interval_minutes"
-          :min="1"
-          :max="1440"
-          style="margin-left: 8px; width: 120px"
-        />
-        <span
-          v-if="form.model_check_interval_custom"
-          style="margin-left: 4px; color: var(--el-text-color-secondary); font-size: 12px"
-        >分钟</span>
       </el-form-item>
 
       <el-form-item label="失败阈值" prop="model_check_failure_threshold">
@@ -80,60 +56,11 @@
         </span>
       </el-form-item>
 
-      <!-- ===== 模型组检测 ===== -->
-      <el-divider style="margin: 16px 0"><span style="font-size: 12px; color: var(--el-text-color-secondary)">模型组检测</span></el-divider>
-
-      <el-form-item label="启用模型组检测">
-        <el-switch v-model="form.group_check_enabled" />
-      </el-form-item>
-      <el-form-item>
-        <span style="color: var(--el-text-color-secondary); font-size: 12px">
-          开启后，系统按照设定间隔通过 Gateway 发送真实请求检测每个模型组的端到端可用性
-        </span>
-      </el-form-item>
-
-      <el-form-item label="模型组检测间隔" prop="group_check_interval_minutes">
-        <el-select
-          v-model="form.group_check_interval_minutes"
-          style="width: 100%"
-          :disabled="form.group_check_interval_custom"
-        >
-          <el-option
-            v-for="opt in intervalOptions"
-            :key="opt.value"
-            :label="opt.label"
-            :value="opt.value"
-          />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="  自定义间隔">
-        <el-switch
-          v-model="form.group_check_interval_custom"
-          active-text="自定义"
-          inactive-text="预设"
-          style="--el-switch-on-color: var(--el-color-warning)"
-        />
-        <el-input-number
-          v-if="form.group_check_interval_custom"
-          v-model="form.group_check_interval_minutes"
-          :min="1"
-          :max="1440"
-          style="margin-left: 8px; width: 120px"
-        />
-        <span
-          v-if="form.group_check_interval_custom"
-          style="margin-left: 4px; color: var(--el-text-color-secondary); font-size: 12px"
-        >分钟</span>
-      </el-form-item>
-
       <el-divider style="margin: 16px 0" />
 
       <el-form-item label=" ">
         <el-button plain :loading="checking" @click="handleCheckNow">
           ▶ 立即检测所有模型
-        </el-button>
-        <el-button plain :loading="checkingGroups" @click="handleCheckGroupsNow" style="margin-left: 8px">
-          ▶ 立即检测所有模型组
         </el-button>
       </el-form-item>
 
@@ -144,13 +71,6 @@
           <template v-if="autoReenabledCount > 0">（含 {{ autoReenabledCount }} 个自动恢复）</template>
           &nbsp;/&nbsp;失败 {{ checkResult.failed }}
           <template v-if="autoDisabledCount > 0">（含 {{ autoDisabledCount }} 个自动禁用）</template>
-        </span>
-      </el-form-item>
-
-      <el-form-item v-if="groupCheckResult" label=" ">
-        <span class="check-result-text">
-          模型组检测：共 {{ groupCheckResult.total }} 个 &nbsp;|&nbsp;
-          成功 {{ groupCheckResult.success }} &nbsp;/&nbsp;失败 {{ groupCheckResult.failed }}
         </span>
       </el-form-item>
 
@@ -173,7 +93,6 @@ import {
   getHealthCheckConfig,
   updateHealthCheckConfig,
   checkAllModels,
-  checkAllGroups,
 } from '@/services/control-plane'
 import type { ModelCheckAllResult } from '@/services/control-plane'
 
@@ -181,7 +100,6 @@ const props = defineProps<{ visible: boolean }>()
 const emit = defineEmits<{ close: []; saved: [] }>()
 
 const intervalOptions = [
-  { label: '每 3 分钟', value: 3 },
   { label: '每 5 分钟', value: 5 },
   { label: '每 10 分钟', value: 10 },
   { label: '每 30 分钟', value: 30 },
@@ -194,26 +112,19 @@ const rules = reactive<FormRules>({
   model_check_interval_minutes: [{ required: true, message: '请选择检测间隔', trigger: 'change' }],
   model_check_failure_threshold: [{ required: true, message: '请设置失败阈值', trigger: 'blur' }],
   model_recovery_success_threshold: [{ required: true, message: '请设置恢复阈值', trigger: 'blur' }],
-  group_check_interval_minutes: [{ required: true, message: '请选择组检测间隔', trigger: 'change' }],
 })
 
 const form = ref({
   model_check_enabled: true,
   model_check_interval_minutes: 5,
-  model_check_interval_custom: false,
   model_check_failure_threshold: 3,
   model_recovery_enabled: false,
   model_recovery_success_threshold: 3,
-  group_check_enabled: true,
-  group_check_interval_minutes: 5,
-  group_check_interval_custom: false,
 })
 
 const saving = ref(false)
 const checking = ref(false)
-const checkingGroups = ref(false)
 const checkResult = ref<ModelCheckAllResult | null>(null)
-const groupCheckResult = ref<{ total: number; success: number; failed: number } | null>(null)
 
 const autoDisabledCount = computed(() => {
   if (!checkResult.value) return 0
@@ -250,18 +161,13 @@ watch(
   async (val) => {
     if (val) {
       checkResult.value = null
-      groupCheckResult.value = null
       try {
         const config = await getHealthCheckConfig()
         form.value.model_check_enabled = config.model_check_enabled ?? true
         form.value.model_check_interval_minutes = config.model_check_interval_minutes || 5
-        form.value.model_check_interval_custom = !intervalOptions.some(o => o.value === form.value.model_check_interval_minutes)
         form.value.model_check_failure_threshold = config.model_check_failure_threshold || 3
         form.value.model_recovery_enabled = config.model_recovery_enabled ?? false
         form.value.model_recovery_success_threshold = config.model_recovery_success_threshold || 3
-        form.value.group_check_enabled = config.group_check_enabled ?? true
-        form.value.group_check_interval_minutes = config.group_check_interval_minutes || 5
-        form.value.group_check_interval_custom = !intervalOptions.some(o => o.value === form.value.group_check_interval_minutes)
       } catch {
         ElMessage.error('加载检测配置失败')
       }
@@ -281,8 +187,6 @@ async function handleSave() {
       model_check_failure_threshold: form.value.model_check_failure_threshold,
       model_recovery_enabled: form.value.model_recovery_enabled,
       model_recovery_success_threshold: form.value.model_recovery_success_threshold,
-      group_check_enabled: form.value.group_check_enabled,
-      group_check_interval_minutes: form.value.group_check_interval_minutes,
     })
     ElMessage.success('模型检测设置已保存')
     emit('saved')
@@ -306,6 +210,7 @@ async function handleCheckNow() {
     } else {
       ElMessage.success(`检测完成：全部 ${result.success} 个模型正常${reenabledCount > 0 ? `，${reenabledCount} 个已自动恢复` : ''}`)
     }
+    // 有模型状态变更（自动恢复/禁用），通知父页面刷新列表
     if (reenabledCount > 0 || disabledCount > 0) {
       emit('saved')
     }
@@ -313,24 +218,6 @@ async function handleCheckNow() {
     ElMessage.error('检测请求异常')
   } finally {
     checking.value = false
-  }
-}
-
-/** 立即检测所有模型组 */
-async function handleCheckGroupsNow() {
-  checkingGroups.value = true
-  try {
-    const result = await checkAllGroups()
-    groupCheckResult.value = result
-    if (result.failed > 0) {
-      ElMessage.warning(`模型组检测完成：成功 ${result.success}，失败 ${result.failed}`)
-    } else {
-      ElMessage.success(`模型组检测完成：全部 ${result.success} 个模型组正常`)
-    }
-  } catch {
-    ElMessage.error('模型组检测请求异常')
-  } finally {
-    checkingGroups.value = false
   }
 }
 </script>

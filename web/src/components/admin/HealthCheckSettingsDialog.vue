@@ -12,11 +12,7 @@
       </el-form-item>
 
       <el-form-item label="检测间隔" prop="interval_minutes">
-        <el-select
-          v-model="form.interval_minutes"
-          style="width: 100%"
-          :disabled="form.interval_custom"
-        >
+        <el-select v-model="form.interval_minutes" style="width: 100%">
           <el-option
             v-for="opt in intervalOptions"
             :key="opt.value"
@@ -24,25 +20,6 @@
             :value="opt.value"
           />
         </el-select>
-      </el-form-item>
-      <el-form-item label="  自定义间隔">
-        <el-switch
-          v-model="form.interval_custom"
-          active-text="自定义"
-          inactive-text="预设"
-          style="--el-switch-on-color: var(--el-color-warning)"
-        />
-        <el-input-number
-          v-if="form.interval_custom"
-          v-model="form.interval_minutes"
-          :min="1"
-          :max="1440"
-          style="margin-left: 8px; width: 120px"
-        />
-        <span
-          v-if="form.interval_custom"
-          style="margin-left: 4px; color: var(--el-text-color-secondary); font-size: 12px"
-        >分钟</span>
       </el-form-item>
 
       <el-form-item label="检测模式" prop="check_mode">
@@ -103,7 +80,6 @@ const emit = defineEmits<{ close: []; saved: [] }>()
 
 const intervalOptions = [
   { label: '每 1 分钟', value: 1 },
-  { label: '每 3 分钟', value: 3 },
   { label: '每 5 分钟', value: 5 },
   { label: '每 10 分钟', value: 10 },
   { label: '每 30 分钟', value: 30 },
@@ -127,7 +103,6 @@ const rules = reactive<FormRules>({
 const form = ref({
   enabled: true,
   interval_minutes: 5,
-  interval_custom: false,
   check_mode: 'connectivity',
   max_failures: 3,
 })
@@ -146,7 +121,6 @@ watch(
         const config = await getHealthCheckConfig()
         form.value.enabled = config.enabled
         form.value.interval_minutes = config.interval_minutes
-        form.value.interval_custom = !intervalOptions.some(o => o.value === form.value.interval_minutes)
         form.value.max_failures = config.max_failures
         // 从 check_providers/check_models 映射到 check_mode
         if (config.check_providers && config.check_models) {

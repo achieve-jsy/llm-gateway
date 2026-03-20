@@ -198,14 +198,6 @@ func (p *Provider) Embeddings(_ context.Context, _ *core.EmbeddingRequest) (*cor
 	return nil, core.NewInvalidRequestError("deepseek does not support embeddings", nil)
 }
 
-func (p *Provider) Rerank(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
-	return nil, core.NewInvalidRequestErrorWithStatus(
-		http.StatusNotImplemented,
-		"rerank is not supported by this provider",
-		nil,
-	).WithCode("unsupported_operation")
-}
-
 // Passthrough forwards a raw request to DeepSeek without any transformation,
 // enabling direct access to provider-native endpoints such as /beta/completions
 // (FIM) that GOModel does not expose as first-class typed operations.

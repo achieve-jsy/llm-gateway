@@ -80,7 +80,6 @@
         >
           <el-option label="Chat（对话）" value="chat" />
           <el-option label="Embedding（向量）" value="embedding" />
-          <el-option label="Rerank（重排序）" value="rerank" />
         </el-select>
       </el-form-item>
 
@@ -323,7 +322,7 @@ interface FormState {
   name: string
   upstream_model_id: string
   provider_id: string
-  model_type: 'chat' | 'embedding' | 'rerank'
+  model_type: 'chat' | 'embedding'
   description: string
   context_length: number
   max_output_tokens: number
@@ -392,7 +391,7 @@ watch(
         name: val.name,
         upstream_model_id: val.upstream_model_id || '',
         provider_id: val.provider_id,
-        model_type: (val.model_type as 'chat' | 'embedding' | 'rerank') || 'chat',
+        model_type: (val.model_type as 'chat' | 'embedding') || 'chat',
         description: val.description || '',
         context_length: val.context_length || 0,
         max_output_tokens: val.max_output_tokens || 0,

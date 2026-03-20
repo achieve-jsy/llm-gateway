@@ -686,14 +686,6 @@ func (p *Provider) Embeddings(ctx context.Context, req *core.EmbeddingRequest) (
 	return &resp, nil
 }
 
-func (p *Provider) Rerank(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
-	return nil, core.NewInvalidRequestErrorWithStatus(
-		http.StatusNotImplemented,
-		"rerank is not supported by this provider",
-		nil,
-	).WithCode("unsupported_operation")
-}
-
 // StreamResponses returns a raw response body for streaming Responses API (caller must close)
 func (p *Provider) StreamResponses(ctx context.Context, req *core.ResponsesRequest) (io.ReadCloser, error) {
 	if err := p.ready(); err != nil {

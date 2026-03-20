@@ -10,7 +10,6 @@
         :group-id="groupId"
         :provider="provider"
         :model="model"
-        :endpoint="endpoint"
         :time-range="timeRange"
         :auto-refresh="autoRefresh"
         :auto-refresh-countdown="countdown"
@@ -22,7 +21,6 @@
         @update:group="groupId = $event"
         @update:provider="provider = $event"
         @update:model="model = $event"
-        @update:endpoint="endpoint = $event"
         @update:custom-time-range="onCustomTimeRange"
         @update:auto-refresh="autoRefresh = $event; if (autoRefresh) startAutoRefresh(); else stopAutoRefresh()"
         @refresh="fetchAllData"
@@ -258,7 +256,6 @@ const timeRange = ref('1h')
 const groupId = ref<number | null>(null)
 const provider = ref<string>('')
 const model = ref<string>('')
-const endpoint = ref<string>('')
 const customStartTime = ref<string | null>(null)
 const customEndTime = ref<string | null>(null)
 const autoRefresh = ref(true)
@@ -301,13 +298,12 @@ const isIdle = computed(() => {
 
 // -- Filter Helpers --
 
-function buildFilter(extraTimeRange?: string): { time_range?: string; group_id?: number; provider?: string; model?: string; endpoint?: string } {
-  const filter: { time_range?: string; group_id?: number; provider?: string; model?: string; endpoint?: string } = {}
+function buildFilter(extraTimeRange?: string): { time_range?: string; group_id?: number; provider?: string; model?: string } {
+  const filter: { time_range?: string; group_id?: number; provider?: string; model?: string } = {}
   filter.time_range = extraTimeRange || timeRange.value
   if (groupId.value != null) filter.group_id = groupId.value
   if (provider.value) filter.provider = provider.value
   if (model.value) filter.model = model.value
-  if (endpoint.value) filter.endpoint = endpoint.value
   return filter
 }
 

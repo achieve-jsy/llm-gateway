@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/example/llm-gateway/internal/core"
-	gatewayerrors "github.com/example/llm-gateway/internal/errors"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
@@ -54,17 +53,17 @@ func (h *MessagesHandler) SetModelQuotaGate(gate *quota.ModelQuotaGate) {
 func (h *MessagesHandler) HandleMessages(c *gin.Context) {
 	var anthReq core.AnthropicMessagesRequest
 	if err := c.ShouldBindJSON(&anthReq); err != nil {
-		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "invalid_request_body", err.Error(), nil)
+		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "invalid_request_body", err.Error())
 		return
 	}
 
 	if anthReq.Model == "" {
-		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "model_required", "model is required", nil)
+		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "model_required", "model is required")
 		return
 	}
 
 	if len(anthReq.Messages) == 0 {
-		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "messages_required", "messages is required and must not be empty", nil)
+		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "messages_required", "messages is required and must not be empty")
 		return
 	}
 
@@ -358,7 +357,7 @@ func (h *MessagesHandler) handleStream(c *gin.Context, baseCtx context.Context, 
 func (h *MessagesHandler) HandleCountTokens(c *gin.Context) {
 	var anthReq core.AnthropicMessagesRequest
 	if err := c.ShouldBindJSON(&anthReq); err != nil {
-		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "invalid_request_body", err.Error(), nil)
+		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "invalid_request_body", err.Error())
 		return
 	}
 
@@ -394,9 +393,9 @@ func (h *MessagesHandler) HandleCountTokens(c *gin.Context) {
 // ──────────────────────────────────────────────
 
 // respondAnthropicError sends an error in Anthropic format.
-func (h *MessagesHandler) respondAnthropicError(c *gin.Context, httpStatus int, errType string, code string, message string, upstream *gatewayerrors.UpstreamInfo) {
+func (h *MessagesHandler) respondAnthropicError(c *gin.Context, httpStatus int, errType string, code string, message string) {
 	if IsPassthroughMode(c) {
-		writePassthroughError(c, httpStatus, errType, code, message)
+		writePassthroughError(c, httpStatus, errType, message)
 		return
 	}
 	body := gin.H{
@@ -409,9 +408,6 @@ func (h *MessagesHandler) respondAnthropicError(c *gin.Context, httpStatus int, 
 	if code != "" {
 		body["error"].(gin.H)["code"] = code
 	}
-	if upstream != nil {
-		body["error"].(gin.H)["upstream"] = upstream
-	}
 	middleware.SetTraceResponseObject(c, body)
 	c.JSON(httpStatus, body)
 }
@@ -419,33 +415,33 @@ func (h *MessagesHandler) respondAnthropicError(c *gin.Context, httpStatus int, 
 // respondAnthropicGroupError handles group dispatch errors.
 func (h *MessagesHandler) respondAnthropicGroupError(c *gin.Context, err error) {
 	if err == model.ErrGroupNotFound {
-		h.respondAnthropicError(c, http.StatusNotFound, "not_found_error", "model_group_not_found", err.Error(), nil)
+		h.respondAnthropicError(c, http.StatusNotFound, "not_found_error", "model_group_not_found", err.Error())
 		return
 	}
 	if err == model.ErrNoAvailableModel {
-		h.respondAnthropicError(c, http.StatusServiceUnavailable, "overloaded_error", "model_unavailable", "No available model for this group", nil)
+		h.respondAnthropicError(c, http.StatusServiceUnavailable, "overloaded_error", "model_unavailable", "No available model for this group")
 		return
 	}
 	if err == model.ErrNoOtherModelAvailable {
-		h.respondAnthropicError(c, http.StatusServiceUnavailable, "overloaded_error", "model_unavailable", "No other model available for failover", nil)
+		h.respondAnthropicError(c, http.StatusServiceUnavailable, "overloaded_error", "model_unavailable", "No other model available for failover")
 		return
 	}
 	if ue, ok := err.(*model.UnifiedError); ok {
 		anthType := mapAnthropicErrorType(ue.Type)
-		h.respondAnthropicError(c, ue.HTTPStatus, anthType, ue.Code, ue.Message, ue.Upstream)
+		h.respondAnthropicError(c, ue.HTTPStatus, anthType, ue.Code, ue.Message)
 		return
 	}
-	h.respondAnthropicError(c, http.StatusInternalServerError, "internal_error", "internal_error", err.Error(), nil)
+	h.respondAnthropicError(c, http.StatusInternalServerError, "internal_error", "internal_error", err.Error())
 }
 
 // respondAnthropicUnifiedError converts a UnifiedError to Anthropic format.
 func (h *MessagesHandler) respondAnthropicUnifiedError(c *gin.Context, err error) {
 	if ue, ok := err.(*model.UnifiedError); ok {
 		anthType := mapAnthropicErrorType(ue.Type)
-		h.respondAnthropicError(c, ue.HTTPStatus, anthType, ue.Code, ue.Message, ue.Upstream)
+		h.respondAnthropicError(c, ue.HTTPStatus, anthType, ue.Code, ue.Message)
 		return
 	}
-	h.respondAnthropicError(c, http.StatusInternalServerError, "internal_error", "internal_error", err.Error(), nil)
+	h.respondAnthropicError(c, http.StatusInternalServerError, "internal_error", "internal_error", err.Error())
 }
 
 // mapAnthropicErrorType maps gateway error types to Anthropic error types.

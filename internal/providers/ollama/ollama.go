@@ -218,14 +218,6 @@ func (p *Provider) Embeddings(ctx context.Context, req *core.EmbeddingRequest) (
 	}, nil
 }
 
-func (p *Provider) Rerank(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
-	return nil, core.NewInvalidRequestErrorWithStatus(
-		http.StatusNotImplemented,
-		"rerank is not supported by this provider",
-		nil,
-	).WithCode("unsupported_operation")
-}
-
 // CreateBatch returns unsupported because Ollama has no native discounted batch API.
 func (p *Provider) CreateBatch(_ context.Context, _ *core.BatchRequest) (*core.BatchResponse, error) {
 	return nil, core.NewInvalidRequestError("ollama does not support native discounted batch processing", nil)

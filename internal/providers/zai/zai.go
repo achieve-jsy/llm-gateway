@@ -92,11 +92,6 @@ func (p *Provider) Embeddings(ctx context.Context, req *core.EmbeddingRequest) (
 	return p.compatible.Embeddings(ctx, req)
 }
 
-// Rerank sends a rerank request to Z.ai.
-func (p *Provider) Rerank(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
-	return p.compatible.Rerank(ctx, req)
-}
-
 // Passthrough routes an opaque provider-native request to Z.ai.
 func (p *Provider) Passthrough(ctx context.Context, req *core.PassthroughRequest) (*core.PassthroughResponse, error) {
 	return p.compatible.Passthrough(ctx, req)

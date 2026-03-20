@@ -15,7 +15,7 @@ func IsPassthroughMode(c *gin.Context) bool {
 
 // writePassthroughError writes an upstream error response as-is from GatewayError fields,
 // bypassing the gateway's canonical error normalization.
-func writePassthroughError(c *gin.Context, status int, errType string, code string, message string) {
+func writePassthroughError(c *gin.Context, status int, errType string, message string) {
 	// Check for stashed upstream headers from proxy handling.
 	if h, ok := c.Get("passthrough_headers"); ok {
 		if headers, ok := h.(map[string]string); ok {
@@ -27,7 +27,6 @@ func writePassthroughError(c *gin.Context, status int, errType string, code stri
 	c.JSON(status, gin.H{
 		"error": gin.H{
 			"type":    errType,
-			"code":    code,
 			"message": message,
 		},
 	})

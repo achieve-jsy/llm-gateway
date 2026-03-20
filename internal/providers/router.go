@@ -564,6 +564,10 @@ func stampProvider[T any](resp T, providerType string) T {
 		if typed != nil {
 			typed.Provider = providerType
 		}
+	case *core.RerankResponse:
+		if typed != nil {
+			typed.Provider = providerType
+		}
 	}
 	return resp
 }
@@ -591,6 +595,13 @@ func forwardEmbeddingRequest(req *core.EmbeddingRequest, selector core.ModelSele
 	return &forwardReq
 }
 
+func forwardRerankRequest(req *core.RerankRequest, selector core.ModelSelector) *core.RerankRequest {
+	forwardReq := *req
+	forwardReq.Model = selector.Model
+	forwardReq.Provider = ""
+	return &forwardReq
+}
+
 func callChatCompletion(ctx context.Context, provider core.Provider, req *core.ChatRequest) (*core.ChatResponse, error) {
 	return provider.ChatCompletion(ctx, req)
 }
@@ -601,6 +612,10 @@ func callResponses(ctx context.Context, provider core.Provider, req *core.Respon
 
 func callEmbeddings(ctx context.Context, provider core.Provider, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
 	return provider.Embeddings(ctx, req)
+}
+
+func callRerank(ctx context.Context, provider core.Provider, req *core.RerankRequest) (*core.RerankResponse, error) {
+	return provider.Rerank(ctx, req)
 }
 
 // Supports returns true if any provider supports the given model.
@@ -716,6 +731,20 @@ func (r *Router) Embeddings(ctx context.Context, req *core.EmbeddingRequest) (*c
 			return forwardEmbeddingRequest(req, selector)
 		},
 		callEmbeddings,
+	)
+}
+
+// Rerank routes the rerank request to the appropriate provider.
+func (r *Router) Rerank(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
+	return routeStampedModelResponse(
+		r,
+		ctx,
+		req.Model,
+		req.Provider,
+		func(selector core.ModelSelector) *core.RerankRequest {
+			return forwardRerankRequest(req, selector)
+		},
+		callRerank,
 	)
 }
 

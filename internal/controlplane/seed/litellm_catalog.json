@@ -10068,6 +10068,39 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "cohere-rerank-english-v3.0": {
+        "input_cost_per_query": 0.002,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "cohere",
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "max_query_tokens": 2048,
+        "max_tokens": 4096,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0
+    },
+    "cohere-rerank-multilingual-v3.0": {
+        "input_cost_per_query": 0.002,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "cohere",
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "max_query_tokens": 2048,
+        "max_tokens": 4096,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0
+    },
+    "cohere-rerank-v3.5": {
+        "input_cost_per_query": 0.002,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "cohere",
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "max_query_tokens": 2048,
+        "max_tokens": 4096,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0
+    },
     "cohere.command-light-text-v14": {
         "input_cost_per_token": 3e-07,
         "litellm_provider": "bedrock",
@@ -34420,6 +34453,26 @@
         "max_output_tokens": 32000,
         "max_query_tokens": 32000,
         "max_tokens": 32000,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0
+    },
+    "voyage-rerank-2": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "voyage",
+        "max_input_tokens": 16000,
+        "max_output_tokens": 16000,
+        "max_query_tokens": 16000,
+        "max_tokens": 16000,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0
+    },
+    "voyage-rerank-2-lite": {
+        "input_cost_per_token": 2e-08,
+        "litellm_provider": "voyage",
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8000,
+        "max_query_tokens": 8000,
+        "max_tokens": 8000,
         "mode": "rerank",
         "output_cost_per_token": 0.0
     },

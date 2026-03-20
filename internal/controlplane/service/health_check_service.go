@@ -108,13 +108,16 @@ func (s *HealthCheckService) UpdateConfig(config *model.HealthCheckConfig) error
 	if err := s.healthRepo.UpdateConfig(config); err != nil {
 		return err
 	}
-	// 重启调度器（provider + model）
+	// 重启调度器（provider + model + group）
 	s.Stop()
 	if config.Enabled {
 		s.Start()
 	}
 	if config.Enabled && config.ModelCheckEnabled {
 		s.startModelCheckBackground(context.Background(), config)
+	}
+	if config.Enabled && config.GroupCheckEnabled {
+		s.startGroupCheckBackground(context.Background(), config)
 	}
 	return nil
 }
@@ -1463,16 +1466,17 @@ func paginateGroupTimelineResult(full *GroupTimelineResult, offset int, limit in
 	return &GroupTimelineResult{Lookback: full.Lookback, Total: total, Groups: full.Groups[offset:end]}
 }
 
-// startGroupCheckBackground 启动模型组检测独立后台定时器（与模型检测间隔相同）
+// startGroupCheckBackground 启动模型组检测独立后台定时器（使用独立间隔配置）
 func (s *HealthCheckService) startGroupCheckBackground(ctx context.Context, config *model.HealthCheckConfig) {
 	if s.groupCheckSvc == nil {
 		return
 	}
-	if !config.ModelCheckEnabled {
+	if !config.GroupCheckEnabled {
+		slog.Info("group check background disabled (group_check_enabled=false)")
 		return
 	}
 
-	intervalSec := config.ModelCheckIntervalSeconds
+	intervalSec := config.GroupCheckIntervalSeconds
 	if intervalSec <= 0 {
 		intervalSec = 300
 	}
@@ -1512,10 +1516,11 @@ func (s *HealthCheckService) startGroupCheckBackground(ctx context.Context, conf
 				return
 			case <-ticker.C:
 				cfg, err := s.healthRepo.GetConfig()
-				if err != nil || !cfg.ModelCheckEnabled {
+				if err != nil || !cfg.GroupCheckEnabled {
 					s.mu.Lock()
 					s.groupCheckRunning = false
 					s.mu.Unlock()
+					slog.Info("group check background stopping (disabled in config)")
 					return
 				}
 				s.runBackgroundGroupCheck(groupCtx)

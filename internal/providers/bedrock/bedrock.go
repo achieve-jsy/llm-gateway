@@ -299,6 +299,14 @@ func (p *Provider) Embeddings(_ context.Context, _ *core.EmbeddingRequest) (*cor
 	return nil, core.NewInvalidRequestError("bedrock embeddings are not yet supported by gomodel", nil)
 }
 
+func (p *Provider) Rerank(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
+	return nil, core.NewInvalidRequestErrorWithStatus(
+		http.StatusNotImplemented,
+		"rerank is not supported by this provider",
+		nil,
+	).WithCode("unsupported_operation")
+}
+
 // Responses adapts the OpenAI Responses API onto Converse via the shared chat
 // bridge.
 func (p *Provider) Responses(ctx context.Context, req *core.ResponsesRequest) (*core.ResponsesResponse, error) {

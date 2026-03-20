@@ -273,6 +273,9 @@ func fetchUpstreamModels(endpoint, apiKey string) ([]upstreamModel, error) {
 // inferModelType 从模型名推断类型
 func inferModelType(name string) string {
 	lower := strings.ToLower(name)
+	if strings.Contains(lower, "rerank") {
+		return "rerank"
+	}
 	if strings.Contains(lower, "embed") {
 		return "embedding"
 	}

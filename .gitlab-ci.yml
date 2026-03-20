@@ -79,7 +79,6 @@ build-gateway-test:
         --cache-from ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache \
         --cache-to type=inline \
         --build-arg APP_ENV=test \
-
         -f deploy/docker/gateway.Dockerfile \
         -t ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} \
         .
@@ -109,7 +108,6 @@ build-control-plane-test:
       docker build \
         --cache-from ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache \
         --build-arg APP_ENV=test \
-
         -f deploy/docker/control-plane.Dockerfile \
         -t ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} \
         .
@@ -175,7 +173,6 @@ build-gateway-prod:
         --cache-from ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache \
         --cache-to type=inline \
         --build-arg APP_ENV=prod \
-
         -f deploy/docker/gateway.Dockerfile \
         -t ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} \
         .
@@ -202,7 +199,6 @@ build-control-plane-prod:
       docker build \
         --cache-from ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache \
         --build-arg APP_ENV=prod \
-
         -f deploy/docker/control-plane.Dockerfile \
         -t ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} \
         .

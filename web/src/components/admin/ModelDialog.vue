@@ -188,7 +188,7 @@
         </span>
       </el-form-item>
 
-      <el-form-item label="输入价格" v-if="formData.model_type !== 'rerank'">
+      <el-form-item label="输入价格">
         <el-input-number
           v-model="formData.input_price"
           :min="0"
@@ -200,7 +200,7 @@
         <span class="form-hint inline">USD / 百万 tokens</span>
       </el-form-item>
 
-      <el-form-item label="输出价格" v-if="formData.model_type === 'chat'">
+      <el-form-item label="输出价格">
         <el-input-number
           v-model="formData.output_price"
           :min="0"

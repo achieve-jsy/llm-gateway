@@ -121,12 +121,9 @@ func (p *Provider) Embeddings(ctx context.Context, req *core.EmbeddingRequest) (
 		return resp, nil
 	}
 
-	// 2. 如果 model_not_supported，尝试多模态 embedding API
-	if isModelNotSupported(err) {
-		return p.multimodalEmbeddings(ctx, req)
-	}
-
-	return nil, err
+	// 2. text-embedding API 失败，fallback 到多模态 embedding API
+	// （qwen3-vl-embedding 等模型不支持 text-embedding 格式）
+	return p.multimodalEmbeddings(ctx, req)
 }
 
 // ─── 原生 text-embedding API ──────────────────────────────────────────────

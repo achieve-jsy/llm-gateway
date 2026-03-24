@@ -94,6 +94,7 @@
       <el-tab-pane label="全部" name="" />
       <el-tab-pane label="Chat" name="chat" />
       <el-tab-pane label="Embedding" name="embedding" />
+      <el-tab-pane label="Embedding-VL" name="embedding_vl" />
       <el-tab-pane label="Rerank" name="rerank" />
     </el-tabs>
 
@@ -340,12 +341,14 @@ const router = useRouter()
 const MODEL_TYPE_LABEL: Record<string, string> = {
   chat: 'Chat',
   embedding: 'Embedding',
+  embedding_vl: 'Embedding-VL',
   rerank: 'Rerank',
 }
 
 function modelTypeTagType(type: string): 'primary' | 'success' | 'warning' | 'info' | 'danger' {
   if (type === 'chat') return 'primary'
   if (type === 'embedding') return 'success'
+  if (type === 'embedding_vl') return 'info'
   if (type === 'rerank') return 'warning'
   return 'info'
 }

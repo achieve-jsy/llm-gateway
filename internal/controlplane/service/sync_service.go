@@ -277,6 +277,10 @@ func inferModelType(name string) string {
 		return "rerank"
 	}
 	if strings.Contains(lower, "embed") {
+		// 多模态 embedding 模型（如 qwen3-vl-embedding）
+		if strings.Contains(lower, "vl") || strings.Contains(lower, "multimodal") || strings.Contains(lower, "vision") {
+			return "embedding_vl"
+		}
 		return "embedding"
 	}
 	return "chat"

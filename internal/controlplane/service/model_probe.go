@@ -20,6 +20,9 @@ func ProbeModelForward(ctx context.Context, endpoint, modelName, apiKey, modelTy
 	lower := strings.ToLower(strings.TrimSpace(modelType))
 
 	switch {
+	case lower == "embedding_vl":
+		return probeEmbeddingVL(ctx, endpoint, modelName, apiKey)
+
 	case strings.Contains(lower, "embed"):
 		return probeEmbedding(ctx, endpoint, modelName, apiKey)
 
@@ -86,12 +89,29 @@ func probeChatCompletion(ctx context.Context, endpoint, modelName, apiKey string
 // ─── Embedding 探针 ────────────────────────────────────────────────────────
 
 // probeEmbedding 探测 embedding 模型可用性。
-// DashScope 兼容模式不支持部分 embedding 模型，需要用原生 API 探针。
+// DashScope 兼容模式不支持，需要用原生 text-embedding API 探针。
 func probeEmbedding(ctx context.Context, endpoint, modelName, apiKey string) (bool, bool, int, string) {
 	if isDashScope(endpoint) {
-		return probeDashScopeEmbedding(ctx, modelName, apiKey)
+		return probeDashScopeTextEmbedding(ctx, modelName, apiKey)
 	}
 
+	embEndpoint := strings.TrimRight(endpoint, "/") + "/embeddings"
+	req := map[string]interface{}{"model": modelName, "input": "test"}
+	success, elapsed, errMsg := doProbeRequest(ctx, embEndpoint, apiKey, req, false)
+	if success {
+		return true, false, elapsed, ""
+	}
+	return false, false, elapsed, errMsg
+}
+
+// probeEmbeddingVL 探测多模态 embedding 模型可用性（qwen3-vl-embedding 等）。
+// DashScope 需要走原生 multimodal-embedding API。
+func probeEmbeddingVL(ctx context.Context, endpoint, modelName, apiKey string) (bool, bool, int, string) {
+	if isDashScope(endpoint) {
+		return probeDashScopeMultimodalEmbedding(ctx, modelName, apiKey)
+	}
+
+	// 通用渠道：多模态 embedding 走标准 /embeddings 端点
 	embEndpoint := strings.TrimRight(endpoint, "/") + "/embeddings"
 	req := map[string]interface{}{"model": modelName, "input": "test"}
 	success, elapsed, errMsg := doProbeRequest(ctx, embEndpoint, apiKey, req, false)
@@ -146,10 +166,9 @@ func isDashScope(endpoint string) bool {
 	return strings.Contains(endpoint, "dashscope.aliyuncs.com")
 }
 
-// probeDashScopeEmbedding 先尝试 text-embedding API，失败则尝试多模态 embedding API。
-func probeDashScopeEmbedding(ctx context.Context, modelName, apiKey string) (bool, bool, int, string) {
-	// 1. text-embedding（text-embedding-v4 等）
-	success, elapsed, _ := doProbeRequest(ctx,
+// probeDashScopeTextEmbedding 使用原生 text-embedding API 探测。
+func probeDashScopeTextEmbedding(ctx context.Context, modelName, apiKey string) (bool, bool, int, string) {
+	success, elapsed, errMsg := doProbeRequest(ctx,
 		dashScopeNativeBase+"/api/v1/services/embeddings/text-embedding/text-embedding",
 		apiKey,
 		map[string]interface{}{
@@ -159,9 +178,12 @@ func probeDashScopeEmbedding(ctx context.Context, modelName, apiKey string) (boo
 	if success {
 		return true, false, elapsed, ""
 	}
+	return false, false, elapsed, errMsg
+}
 
-	// 2. multimodal-embedding（qwen3-vl-embedding 等）
-	success, elapsed, _ = doProbeRequest(ctx,
+// probeDashScopeMultimodalEmbedding 使用多模态 embedding API 探测。
+func probeDashScopeMultimodalEmbedding(ctx context.Context, modelName, apiKey string) (bool, bool, int, string) {
+	success, elapsed, errMsg := doProbeRequest(ctx,
 		dashScopeNativeBase+"/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding",
 		apiKey,
 		map[string]interface{}{
@@ -171,8 +193,7 @@ func probeDashScopeEmbedding(ctx context.Context, modelName, apiKey string) (boo
 	if success {
 		return true, false, elapsed, ""
 	}
-
-	return false, false, 0, "dashscope: both text and multimodal embedding probes failed"
+	return false, false, elapsed, errMsg
 }
 
 // probeDashScopeRerank 使用原生 rerank API 探测。

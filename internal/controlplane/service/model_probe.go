@@ -30,16 +30,15 @@ func ProbeModelForward(ctx context.Context, endpoint, modelName, apiKey, modelTy
 		return probeRerank(ctx, endpoint, modelName, apiKey)
 
 	case lower == "audio_transcription" || lower == "audio_speech" || lower == "audio":
-		// 音频类模型需要上传文件，无法用轻量探针，直接跳过
 		return false, true, 0, "audio model: skipped"
 
 	default:
-		// chat / completion / reasoning / 未知类型 → 走 /chat/completions
 		return probeChatCompletion(ctx, endpoint, modelName, apiKey)
 	}
 }
 
-// probeChatCompletion POST /chat/completions，适用于 chat/reasoning 模型
+// ─── 通用探针：Chat / Completion / Reasoning ──────────────────────────────
+
 func probeChatCompletion(ctx context.Context, endpoint, modelName, apiKey string) (bool, bool, int, string) {
 	chatEndpoint := strings.TrimRight(endpoint, "/") + "/chat/completions"
 
@@ -57,7 +56,6 @@ func probeChatCompletion(ctx context.Context, endpoint, modelName, apiKey string
 
 	lower := strings.ToLower(errMsg)
 
-	// Qwen thinking 类模型要求 enable_thinking=true
 	if strings.Contains(lower, "enable_thinking") && strings.Contains(lower, "true") {
 		thinkingReq := cloneProbeRequest(baseReq)
 		thinkingReq["enable_thinking"] = true
@@ -68,7 +66,6 @@ func probeChatCompletion(ctx context.Context, endpoint, modelName, apiKey string
 		return false, false, t, thinkingErr
 	}
 
-	// 某些模型仅支持 stream 模式
 	if strings.Contains(lower, "only support stream mode") || strings.Contains(lower, "stream mode") {
 		streamReq := cloneProbeRequest(baseReq)
 		streamReq["stream"] = true
@@ -79,7 +76,6 @@ func probeChatCompletion(ctx context.Context, endpoint, modelName, apiKey string
 		return false, false, t, streamErr
 	}
 
-	// 不兼容错误 → skipped
 	if isIncompatibleProbeError(lower) {
 		return false, true, elapsed, errMsg
 	}
@@ -87,15 +83,17 @@ func probeChatCompletion(ctx context.Context, endpoint, modelName, apiKey string
 	return false, false, elapsed, errMsg
 }
 
-// probeEmbedding POST /embeddings，适用于 embedding 模型
-func probeEmbedding(ctx context.Context, endpoint, modelName, apiKey string) (bool, bool, int, string) {
-	embEndpoint := strings.TrimRight(endpoint, "/") + "/embeddings"
+// ─── Embedding 探针 ────────────────────────────────────────────────────────
 
-	req := map[string]interface{}{
-		"model": modelName,
-		"input": "test",
+// probeEmbedding 探测 embedding 模型可用性。
+// DashScope 兼容模式不支持部分 embedding 模型，需要用原生 API 探针。
+func probeEmbedding(ctx context.Context, endpoint, modelName, apiKey string) (bool, bool, int, string) {
+	if isDashScope(endpoint) {
+		return probeDashScopeEmbedding(ctx, modelName, apiKey)
 	}
 
+	embEndpoint := strings.TrimRight(endpoint, "/") + "/embeddings"
+	req := map[string]interface{}{"model": modelName, "input": "test"}
 	success, elapsed, errMsg := doProbeRequest(ctx, embEndpoint, apiKey, req, false)
 	if success {
 		return true, false, elapsed, ""
@@ -103,17 +101,34 @@ func probeEmbedding(ctx context.Context, endpoint, modelName, apiKey string) (bo
 	return false, false, elapsed, errMsg
 }
 
-// probeImageGeneration POST /images/generations，适用于图像生成模型
-func probeImageGeneration(ctx context.Context, endpoint, modelName, apiKey string) (bool, bool, int, string) {
-	imgEndpoint := strings.TrimRight(endpoint, "/") + "/images/generations"
+// ─── Rerank 探针 ──────────────────────────────────────────────────────────
 
-	req := map[string]interface{}{
-		"model":  modelName,
-		"prompt": "a cat",
-		"n":      1,
-		"size":   "256x256",
+// probeRerank 探测 rerank 模型可用性。
+// DashScope 兼容模式没有 /rerank 端点，需要用原生 API 探针。
+func probeRerank(ctx context.Context, endpoint, modelName, apiKey string) (bool, bool, int, string) {
+	if isDashScope(endpoint) {
+		return probeDashScopeRerank(ctx, modelName, apiKey)
 	}
 
+	rerankEndpoint := strings.TrimRight(endpoint, "/") + "/rerank"
+	req := map[string]interface{}{
+		"model":     modelName,
+		"query":     "test",
+		"documents": []string{"hello world"},
+		"top_n":     1,
+	}
+	success, elapsed, errMsg := doProbeRequest(ctx, rerankEndpoint, apiKey, req, false)
+	if success {
+		return true, false, elapsed, ""
+	}
+	return false, false, elapsed, errMsg
+}
+
+// ─── 图像生成探针 ──────────────────────────────────────────────────────────
+
+func probeImageGeneration(ctx context.Context, endpoint, modelName, apiKey string) (bool, bool, int, string) {
+	imgEndpoint := strings.TrimRight(endpoint, "/") + "/images/generations"
+	req := map[string]interface{}{"model": modelName, "prompt": "a cat", "n": 1, "size": "256x256"}
 	success, elapsed, errMsg := doProbeRequest(ctx, imgEndpoint, apiKey, req, false)
 	if success {
 		return true, false, elapsed, ""
@@ -121,23 +136,65 @@ func probeImageGeneration(ctx context.Context, endpoint, modelName, apiKey strin
 	return false, false, elapsed, errMsg
 }
 
-// probeRerank POST /rerank，适用于重排序模型
-func probeRerank(ctx context.Context, endpoint, modelName, apiKey string) (bool, bool, int, string) {
-	rerankEndpoint := strings.TrimRight(endpoint, "/") + "/rerank"
+// ─── DashScope 原生 API 探针 ──────────────────────────────────────────────
+// DashScope 兼容模式不支持 rerank 和部分 embedding 模型，
+// 需要走原生 API 进行健康检测。
 
-	req := map[string]interface{}{
-		"model":     modelName,
-		"query":     "test",
-		"documents": []string{"hello world"},
-		"top_n":     1,
+const dashScopeNativeBase = "https://dashscope.aliyuncs.com"
+
+func isDashScope(endpoint string) bool {
+	return strings.Contains(endpoint, "dashscope.aliyuncs.com")
+}
+
+// probeDashScopeEmbedding 先尝试 text-embedding API，失败则尝试多模态 embedding API。
+func probeDashScopeEmbedding(ctx context.Context, modelName, apiKey string) (bool, bool, int, string) {
+	// 1. text-embedding（text-embedding-v4 等）
+	success, elapsed, _ := doProbeRequest(ctx,
+		dashScopeNativeBase+"/api/v1/services/embeddings/text-embedding/text-embedding",
+		apiKey,
+		map[string]interface{}{
+			"model": modelName,
+			"input": map[string]interface{}{"texts": []string{"test"}},
+		}, false)
+	if success {
+		return true, false, elapsed, ""
 	}
 
-	success, elapsed, errMsg := doProbeRequest(ctx, rerankEndpoint, apiKey, req, false)
+	// 2. multimodal-embedding（qwen3-vl-embedding 等）
+	success, elapsed, _ = doProbeRequest(ctx,
+		dashScopeNativeBase+"/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding",
+		apiKey,
+		map[string]interface{}{
+			"model": modelName,
+			"input": map[string]interface{}{"contents": []map[string]interface{}{{"text": "test"}}},
+		}, false)
+	if success {
+		return true, false, elapsed, ""
+	}
+
+	return false, false, 0, "dashscope: both text and multimodal embedding probes failed"
+}
+
+// probeDashScopeRerank 使用原生 rerank API 探测。
+func probeDashScopeRerank(ctx context.Context, modelName, apiKey string) (bool, bool, int, string) {
+	success, elapsed, errMsg := doProbeRequest(ctx,
+		dashScopeNativeBase+"/api/v1/services/rerank/text-rerank/text-rerank",
+		apiKey,
+		map[string]interface{}{
+			"model": modelName,
+			"input": map[string]interface{}{
+				"query":     "test",
+				"documents": []string{"hello world"},
+			},
+			"parameters": map[string]interface{}{"top_n": 1},
+		}, false)
 	if success {
 		return true, false, elapsed, ""
 	}
 	return false, false, elapsed, errMsg
 }
+
+// ─── 通用 HTTP 请求 ───────────────────────────────────────────────────────
 
 func cloneProbeRequest(src map[string]interface{}) map[string]interface{} {
 	dst := make(map[string]interface{}, len(src))
@@ -169,7 +226,6 @@ func doProbeRequest(ctx context.Context, endpoint, apiKey string, payload map[st
 
 	respBody, _ := io.ReadAll(resp.Body)
 
-	// 非 2xx 明确失败
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return false, elapsed, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, truncateProbeString(string(respBody), 200))
 	}
@@ -181,8 +237,6 @@ func doProbeRequest(ctx context.Context, endpoint, apiKey string, payload map[st
 		return true, elapsed, ""
 	}
 
-	// HTTP 2xx 即成功，不检查响应内容格式
-	// reasoning/thinking 模型 choices 为空也算通过，参考 GoModel 设计
 	return true, elapsed, ""
 }
 

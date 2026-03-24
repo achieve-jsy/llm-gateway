@@ -172,7 +172,7 @@ func (s *SyncService) ConfirmSync(providerID uuid.UUID, input ConfirmSyncInput) 
 		toCreate = append(toCreate, &model.Model{
 			Name:       name,
 			ProviderID: providerID,
-			ModelType:  inferModelType(name),
+			ModelType:  InferModelType(name),
 			Enabled:    &enabled,
 		})
 	}
@@ -270,8 +270,8 @@ func fetchUpstreamModels(endpoint, apiKey string) ([]upstreamModel, error) {
 	return result.Data, nil
 }
 
-// inferModelType 从模型名推断类型
-func inferModelType(name string) string {
+// InferModelType 从模型名推断类型
+func InferModelType(name string) string {
 	lower := strings.ToLower(name)
 	if strings.Contains(lower, "rerank") {
 		return "rerank"

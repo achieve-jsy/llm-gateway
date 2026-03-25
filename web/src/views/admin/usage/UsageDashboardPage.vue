@@ -511,6 +511,7 @@ async function loadEnhancedUsers() {
     if (last?.id && last.scope === 'dept') params.dept_id = last.id
     if (last?.id && last.scope === 'studio') params.studio_id = last.id
     if (filterModel.value) params.model_name = filterModel.value
+    if (filterEndpoint.value) params.endpoint = filterEndpoint.value
     const data = await fetchUsersRanking(params)
     const map: Record<string, UserRankRow> = {}
     for (const row of data.rows) {
@@ -619,6 +620,7 @@ async function loadTrend() {
     Object.assign(trendParams, scopeParams())
     if (filterModel.value) trendParams.model_name = filterModel.value
     if (filterStatus.value) trendParams.status = filterStatus.value
+    if (filterEndpoint.value) trendParams.endpoint = filterEndpoint.value
 
     const [start, end] = dateRange.value
     const s = new Date(start), e = new Date(end)
@@ -666,6 +668,7 @@ async function loadModels() {
     Object.assign(modelParams, scopeParams())
     if (filterModel.value)  modelParams.model_name = filterModel.value
     if (filterStatus.value) modelParams.status = filterStatus.value
+    if (filterEndpoint.value) modelParams.endpoint = filterEndpoint.value
     const res = await http.get('/api/v1/usage/dashboard/models', { params: modelParams })
     modelsData.value = res.data?.rows ?? []
   } catch (e) {
@@ -699,6 +702,7 @@ const logParams = computed(() => {
   if (filterModel.value)  p.model_name = filterModel.value
   if (filterStatus.value) p.status     = filterStatus.value
   if (filterKeyType.value) p.key_type  = filterKeyType.value
+  if (filterEndpoint.value) p.endpoint = filterEndpoint.value
   return p
 })
 

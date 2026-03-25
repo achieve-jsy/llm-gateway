@@ -666,6 +666,7 @@ function buildStatsParams(groupByVal: string): Record<string, string> {
   if (filterGroupName.value) params.group_name = filterGroupName.value
   if (filterKeyId.value)     params.key_id     = filterKeyId.value
   if (filterStatus.value)    params.status     = filterStatus.value
+  if (filterEndpoint.value) params.endpoint   = filterEndpoint.value
   return params
 }
 
@@ -696,6 +697,7 @@ async function loadAvgDuration() {
     if (filterGroupName.value) params.group_name = filterGroupName.value
     if (filterKeyId.value)     params.key_id     = filterKeyId.value
     if (filterStatus.value)    params.status     = filterStatus.value
+    if (filterEndpoint.value) params.endpoint   = filterEndpoint.value
     const r = await http.get('/api/v1/my/usage/logs', { params, _silent: true } as any)
     const rows: LogRow[] = r.data.rows || []
     avgDurationMs.value = rows.length

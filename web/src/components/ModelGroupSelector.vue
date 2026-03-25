@@ -29,7 +29,7 @@
       <el-empty description="暂无可用模型" />
     </div>
 
-    <div v-else class="selector-list">
+    <div v-else class="selector-list" ref="listRef" @scroll="handleScroll">
       <div
         v-for="model in visibleModels"
         :key="model.id"
@@ -70,6 +70,12 @@
           </template>
         </div>
       </div>
+      <div v-if="loadingMore" class="loading-more">
+        <el-skeleton :rows="2" animated />
+      </div>
+      <div v-else-if="!hasMore && allModels.length > 0" class="no-more">
+        <el-divider>已加载全部模型</el-divider>
+      </div>
     </div>
 
     <template #footer>
@@ -108,10 +114,17 @@ const emit = defineEmits<{
 
 const allModels = ref<ModelOption[]>([])
 const loading = ref(false)
+const loadingMore = ref(false)
 const filterName = ref('')
 const checkedIds = ref<string[]>([])
 const priorities = ref<Record<string, number>>({})
 const weights = ref<Record<string, number>>({})
+const listRef = ref<HTMLDivElement>()
+
+// 分页状态
+const currentPage = ref(1)
+const pageSize = 50
+const hasMore = ref(true)
 
 const visibleModels = computed(() => {
   let list = allModels.value
@@ -129,6 +142,15 @@ const checkedVisibleCount = computed(() =>
   checkedIds.value.filter(id => visibleModels.value.some(m => m.id === id)).length
 )
 
+// 搜索防抖
+let searchTimer: ReturnType<typeof setTimeout> | null = null
+watch(filterName, () => {
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    resetAndLoad()
+  }, 300)
+})
+
 watch(
   () => props.visible,
   (val) => {
@@ -137,20 +159,61 @@ watch(
       checkedIds.value = []
       priorities.value = {}
       weights.value = {}
-      loadModels()
+      resetAndLoad()
     }
   }
 )
 
-async function loadModels() {
-  loading.value = true
+function resetAndLoad() {
+  allModels.value = []
+  currentPage.value = 1
+  hasMore.value = true
+  loadMoreModels()
+}
+
+async function loadMoreModels() {
+  if (loading.value || loadingMore.value || !hasMore.value) return
+
+  const isFirstLoad = currentPage.value === 1
+  if (isFirstLoad) {
+    loading.value = true
+  } else {
+    loadingMore.value = true
+  }
+
   try {
-    const res = await groupsApi.listAllModels({ page_size: 9999 })
-    allModels.value = res.data.data || []
+    const res = await groupsApi.listAllModels({
+      page: currentPage.value,
+      page_size: pageSize
+    })
+    const newModels = res.data.data || []
+
+    // 追加新模型，避免重复
+    const existingIds = new Set(allModels.value.map(m => m.id))
+    const uniqueNewModels = newModels.filter(m => !existingIds.has(m.id))
+    allModels.value = [...allModels.value, ...uniqueNewModels]
+
+    // 判断是否还有更多
+    hasMore.value = newModels.length >= pageSize
+    currentPage.value++
   } catch {
     ElMessage.error('加载模型列表失败')
   } finally {
     loading.value = false
+    loadingMore.value = false
+  }
+}
+
+// 滚动监听
+function handleScroll(e: Event) {
+  const target = e.target as HTMLDivElement
+  const scrollTop = target.scrollTop
+  const scrollHeight = target.scrollHeight
+  const clientHeight = target.clientHeight
+
+  // 距离底部 100px 时加载更多
+  if (scrollHeight - scrollTop - clientHeight < 100 && hasMore.value && !loadingMore.value) {
+    loadMoreModels()
   }
 }
 
@@ -283,6 +346,18 @@ function onConfirm() {
   font-size: 12px;
   color: var(--el-text-color-secondary);
   white-space: nowrap;
+}
+
+.loading-more {
+  padding: 12px 0;
+}
+
+.no-more {
+  padding: 8px 0;
+  :deep(.el-divider__text) {
+    font-size: 12px;
+    color: var(--el-text-color-placeholder);
+  }
 }
 
 @media (max-width: 768px) {

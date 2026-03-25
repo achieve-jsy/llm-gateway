@@ -130,6 +130,7 @@ type UsageDailyQueryParams struct {
 	GroupName string // 模型组名搜索（group_name，仅 call_logs 路径）
 	Provider  string // 渠道过滤（仅 call_logs 路径）
 	Status    string // "success" | "error" | ""（仅 call_logs 路径）
+	Endpoint  string // 入口端点过滤（inbound_endpoint，仅 call_logs 路径）
 	TopN      int    // 已废弃，保留兼容；非时间维度分页由 Page/PageSize 控制
 	Page      int    // 非时间维度分页页码，从 1 开始；0 表示不分页（返回全量，仅内部使用）
 	PageSize  int    // 非时间维度每页行数，0 时使用默认值 20
@@ -199,6 +200,9 @@ func (s *RollupService) queryFromUsageDaily(ctx context.Context, params UsageDai
 	}
 	if params.ModelName != "" {
 		query = query.Where("model ILIKE ?", "%"+params.ModelName+"%")
+	}
+	if params.Endpoint != "" {
+		query = query.Where("inbound_endpoint = ?", params.Endpoint)
 	}
 
 	query = query.Group(groupCols).Order("est_cost_usd DESC")
@@ -276,6 +280,9 @@ func (s *RollupService) queryFromCallLogs(ctx context.Context, params UsageDaily
 	}
 	if params.Provider != "" {
 		query = query.Where("provider = ?", params.Provider)
+	}
+	if params.Endpoint != "" {
+		query = query.Where("inbound_endpoint = ?", params.Endpoint)
 	}
 	switch params.Status {
 	case "success":
@@ -463,6 +470,7 @@ type LogsQueryParams struct {
 	GroupName string // 模型组名搜索
 	Provider  string
 	Status    string // "success" | "error" | ""
+	Endpoint  string // 入口端点过滤（inbound_endpoint）
 	Page      int
 	PageSize  int
 	// 鉴权注入
@@ -479,6 +487,7 @@ type MyStatsQueryParams struct {
 	KeyID     string // 按 Key ID 筛选
 	GroupName string // 按模型组名筛选
 	Status    string // "success" | "error" | ""
+	Endpoint  string // 入口端点过滤（inbound_endpoint）
 	Page      int
 	PageSize  int
 }
@@ -589,6 +598,9 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 	}
 	if params.Provider != "" {
 		query = query.Where("provider = ?", params.Provider)
+	}
+	if params.Endpoint != "" {
+		query = query.Where("inbound_endpoint = ?", params.Endpoint)
 	}
 	switch params.Status {
 	case "success":
@@ -714,6 +726,9 @@ func (s *RollupService) QueryMyStats(ctx context.Context, params MyStatsQueryPar
 	}
 	if params.GroupName != "" {
 		query = query.Where("group_name = ?", params.GroupName)
+	}
+	if params.Endpoint != "" {
+		query = query.Where("inbound_endpoint = ?", params.Endpoint)
 	}
 	if params.Status == "success" {
 		query = query.Where("status = 200")

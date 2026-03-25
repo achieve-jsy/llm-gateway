@@ -136,6 +136,7 @@ func (h *UsageHandler) Query(c *gin.Context) {
 		GroupName: c.Query("group_name"),
 		Provider:  c.Query("provider"),
 		Status:    c.Query("status"),
+		Endpoint:  c.Query("endpoint"),
 		Page:      page,
 		PageSize:  pageSize,
 	}
@@ -178,6 +179,7 @@ func (h *UsageHandler) Logs(c *gin.Context) {
 		GroupName: c.Query("group_name"),
 		Provider:  c.Query("provider"),
 		Status:    c.Query("status"),
+		Endpoint:  c.Query("endpoint"),
 		Page:      page,
 		PageSize:  pageSize,
 	}
@@ -211,6 +213,7 @@ func (h *UsageHandler) MyQuery(c *gin.Context) {
 		KeyID:     c.Query("key_id"),
 		GroupName: c.Query("group_name"),
 		Status:    c.Query("status"),
+		Endpoint:  c.Query("endpoint"),
 		Page:      page,
 		PageSize:  pageSize,
 	}
@@ -318,6 +321,7 @@ func (h *UsageHandler) MyLogs(c *gin.Context) {
 		ModelName: c.Query("model_name"),
 		GroupName: c.Query("group_name"),
 		Status:    c.Query("status"),
+		Endpoint:  c.Query("endpoint"),
 		Page:      page,
 		PageSize:  pageSize,
 	}
@@ -401,6 +405,7 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 	endStr := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
 	modelName   := c.Query("model_name")
 	filterStatus := c.Query("status")
+	filterEndpoint := c.Query("endpoint")
 
 	// 用 Actor 替代手动查 user_roles 的 getEffectiveRole
 	// Guard(PermUsageViewScoped) middleware 已在路由层注入 Actor
@@ -479,6 +484,10 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 		whereClause += " AND cl.status = 200"
 	} else if filterStatus == "error" {
 		whereClause += " AND cl.status != 200"
+	}
+	if filterEndpoint != "" {
+		whereClause += " AND cl.inbound_endpoint = ?"
+		args = append(args, filterEndpoint)
 	}
 
 	// studio_admin 钻取 dept scope 时，额外加工作室限制保障数据安全
@@ -657,6 +666,9 @@ func (h *UsageHandler) DashboardTrend(c *gin.Context) {
 	} else if filterStatus == "error" {
 		q = q.Where("status != 200")
 	}
+	if endpoint := c.Query("endpoint"); endpoint != "" {
+		q = q.Where("inbound_endpoint = ?", endpoint)
+	}
 	if err := q.Group("ts::date").
 		Order("ts::date ASC").
 		Scan(&rows).Error; err != nil {
@@ -718,6 +730,9 @@ func (h *UsageHandler) DashboardModels(c *gin.Context) {
 		q = q.Where("status = 200")
 	} else if filterStatus == "error" {
 		q = q.Where("status != 200")
+	}
+	if endpoint := c.Query("endpoint"); endpoint != "" {
+		q = q.Where("inbound_endpoint = ?", endpoint)
 	}
 	if err := q.Group("model").
 		Order("cost DESC").
@@ -797,6 +812,9 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 	}
 	if modelName != "" {
 		base = base.Where("model ILIKE ?", "%"+modelName+"%")
+	}
+	if endpoint := c.Query("endpoint"); endpoint != "" {
+		base = base.Where("inbound_endpoint = ?", endpoint)
 	}
 	switch statusStr {
 	case "success":

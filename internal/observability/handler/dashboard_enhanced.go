@@ -76,6 +76,7 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 	studioID := c.Query("studio_id")
 	deptID := c.Query("dept_id")
 	modelName := c.Query("model_name") // B8: 全局 model_name 筛选
+	endpoint := c.Query("endpoint")
 	db := h.db.WithContext(c.Request.Context())
 
 	// ── 环比期间计算（B10 修复）───────────────────────────────────────
@@ -104,7 +105,8 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 			AND (? = '' OR studio_id = ?)
 			AND (? = '' OR dept_id = ?)
 			AND (? = '' OR model ILIKE ?)
-	`, from, toExcl, studioID, studioID, deptID, deptID, modelName, "%"+modelName+"%").Scan(&sumRow)
+			AND (? = '' OR inbound_endpoint = ?)
+	`, from, toExcl, studioID, studioID, deptID, deptID, modelName, "%"+modelName+"%", endpoint, endpoint).Scan(&sumRow)
 
 	avgCostPerCall := 0.0
 	if sumRow.TotalCalls > 0 {
@@ -128,7 +130,8 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 				AND (? = '' OR studio_id = ?)
 				AND (? = '' OR dept_id = ?)
 				AND (? = '' OR model ILIKE ?)
-		`, from, toExcl, studioID, studioID, deptID, deptID, modelName, "%"+modelName+"%").Scan(&totalErrors)
+				AND (? = '' OR inbound_endpoint = ?)
+		`, from, toExcl, studioID, studioID, deptID, deptID, modelName, "%"+modelName+"%", endpoint, endpoint).Scan(&totalErrors)
 		avgErrorRate = float64(totalErrors) / float64(sumRow.TotalCalls) * 100.0
 	}
 
@@ -143,9 +146,10 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 				AND (? = '' OR studio_id = ?)
 				AND (? = '' OR dept_id = ?)
 				AND (? = '' OR model ILIKE ?)
+				AND (? = '' OR inbound_endpoint = ?)
 			GROUP BY COALESCE(user_id, 'unknown'), COALESCE(user_name, ''), COALESCE(dept_name, '')
 		) AS sub
-	`, from, toExcl, studioID, studioID, deptID, deptID, modelName, "%"+modelName+"%").Scan(&totalCount)
+	`, from, toExcl, studioID, studioID, deptID, deptID, modelName, "%"+modelName+"%", endpoint, endpoint).Scan(&totalCount)
 
 	// ── 当期分页数据 ─────────────────────────────────────────────
 	offset := (page - 1) * pageSize
@@ -180,10 +184,11 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 			AND (? = '' OR studio_id = ?)
 			AND (? = '' OR dept_id = ?)
 			AND (? = '' OR model ILIKE ?)
+			AND (? = '' OR inbound_endpoint = ?)
 		GROUP BY COALESCE(user_id, 'unknown'), COALESCE(user_name, ''), COALESCE(dept_name, '')
 		ORDER BY SUM(est_cost_usd) DESC
 		LIMIT ? OFFSET ?
-	`, from, toExcl, studioID, studioID, deptID, deptID, modelName, "%"+modelName+"%", pageSize, offset).Scan(&rawRows).Error
+	`, from, toExcl, studioID, studioID, deptID, deptID, modelName, "%"+modelName+"%", endpoint, endpoint, pageSize, offset).Scan(&rawRows).Error
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -207,8 +212,9 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 				AND (? = '' OR studio_id = ?)
 				AND (? = '' OR dept_id = ?)
 				AND (? = '' OR model ILIKE ?)
+				AND (? = '' OR inbound_endpoint = ?)
 			GROUP BY COALESCE(user_id, 'unknown')
-		`, prevFrom, prevToExcl, studioID, studioID, deptID, deptID, modelName, "%"+modelName+"%").Scan(&prevRows)
+		`, prevFrom, prevToExcl, studioID, studioID, deptID, deptID, modelName, "%"+modelName+"%", endpoint, endpoint).Scan(&prevRows)
 		for _, pr := range prevRows {
 			prevCostMap[pr.UserID] = pr.EstCostUSD
 		}
@@ -243,12 +249,13 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 					AND (? = '' OR studio_id = ?)
 					AND (? = '' OR dept_id = ?)
 					AND (? = '' OR model ILIKE ?)
+					AND (? = '' OR inbound_endpoint = ?)
 				GROUP BY COALESCE(user_id, 'unknown'), model
 			)
 			SELECT user_id, model, est_cost_usd, call_count, total_tokens
 			FROM ranked WHERE rn <= 3
 			ORDER BY user_id, rn
-		`, from, toExcl, studioID, studioID, deptID, deptID, modelName, "%"+modelName+"%").Scan(&topRows)
+		`, from, toExcl, studioID, studioID, deptID, deptID, modelName, "%"+modelName+"%", endpoint, endpoint).Scan(&topRows)
 		for _, tr := range topRows {
 			topModelsMap[tr.UserID] = append(topModelsMap[tr.UserID], UserTopModelRow{
 				Model:       tr.Model,
@@ -394,6 +401,9 @@ func (h *UsageHandler) DashboardModelsEnhanced(c *gin.Context) {
 	} else if filterStatus == "error" {
 		q = q.Where("status != 200")
 	}
+	if endpoint := c.Query("endpoint"); endpoint != "" {
+		q = q.Where("inbound_endpoint = ?", endpoint)
+	}
 
 	var rawRows []rawModelRow
 	if err := q.Group("model").
@@ -465,6 +475,8 @@ func (h *UsageHandler) DashboardUserDetail(c *gin.Context) {
 		return
 	}
 
+	endpoint := c.Query("endpoint")
+
 	from, to, ok := parseDateRangeFromTo(c)
 	if !ok {
 		return
@@ -496,7 +508,8 @@ func (h *UsageHandler) DashboardUserDetail(c *gin.Context) {
 			END AS error_rate
 		FROM call_logs
 		WHERE ts >= ? AND ts < ? AND COALESCE(user_id, 'unknown') = ?
-	`, from, toExcl, userID).Scan(&summary)
+			AND (? = '' OR inbound_endpoint = ?)
+	`, from, toExcl, userID, endpoint, endpoint).Scan(&summary)
 
 	// 每日趋势
 	type trendPoint struct {
@@ -514,9 +527,10 @@ func (h *UsageHandler) DashboardUserDetail(c *gin.Context) {
 			COALESCE(SUM(total_tokens), 0) AS tokens
 		FROM call_logs
 		WHERE ts >= ? AND ts < ? AND COALESCE(user_id, 'unknown') = ?
+			AND (? = '' OR inbound_endpoint = ?)
 		GROUP BY ts::date
 		ORDER BY ts::date ASC
-	`, from, toExcl, userID).Scan(&trend)
+	`, from, toExcl, userID, endpoint, endpoint).Scan(&trend)
 
 	// 模型分布
 	type modelDist struct {
@@ -534,9 +548,10 @@ func (h *UsageHandler) DashboardUserDetail(c *gin.Context) {
 			COALESCE(SUM(total_tokens), 0) AS tokens
 		FROM call_logs
 		WHERE ts >= ? AND ts < ? AND COALESCE(user_id, 'unknown') = ?
+			AND (? = '' OR inbound_endpoint = ?)
 		GROUP BY model
 		ORDER BY cost DESC
-	`, from, toExcl, userID).Scan(&models)
+	`, from, toExcl, userID, endpoint, endpoint).Scan(&models)
 
 	// 小时分布
 	type hourlyDist struct {
@@ -550,9 +565,10 @@ func (h *UsageHandler) DashboardUserDetail(c *gin.Context) {
 			COUNT(*) AS calls
 		FROM call_logs
 		WHERE ts >= ? AND ts < ? AND COALESCE(user_id, 'unknown') = ?
+			AND (? = '' OR inbound_endpoint = ?)
 		GROUP BY EXTRACT(HOUR FROM ts)
 		ORDER BY hour ASC
-	`, from, toExcl, userID).Scan(&hourly)
+	`, from, toExcl, userID, endpoint, endpoint).Scan(&hourly)
 
 	if trend == nil {
 		trend = []trendPoint{}
@@ -587,6 +603,8 @@ func (h *UsageHandler) DashboardModelDetail(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "model is required"})
 		return
 	}
+
+	endpoint := c.Query("endpoint")
 
 	from, to, ok := parseDateRangeFromTo(c)
 	if !ok {
@@ -628,7 +646,8 @@ func (h *UsageHandler) DashboardModelDetail(c *gin.Context) {
 			END AS error_rate
 		FROM call_logs
 		WHERE ts >= ? AND ts < ? AND model = ?
-	`, from, toExcl, modelName).Scan(&summary)
+			AND (? = '' OR inbound_endpoint = ?)
+	`, from, toExcl, modelName, endpoint, endpoint).Scan(&summary)
 
 	// 每日趋势
 	type trendPoint struct {
@@ -646,9 +665,10 @@ func (h *UsageHandler) DashboardModelDetail(c *gin.Context) {
 			COALESCE(SUM(total_tokens), 0) AS tokens
 		FROM call_logs
 		WHERE ts >= ? AND ts < ? AND model = ?
+			AND (? = '' OR inbound_endpoint = ?)
 		GROUP BY ts::date
 		ORDER BY ts::date ASC
-	`, from, toExcl, modelName).Scan(&trend)
+	`, from, toExcl, modelName, endpoint, endpoint).Scan(&trend)
 
 	// 用户分布（Top 20）
 	type userDist struct {
@@ -670,11 +690,12 @@ func (h *UsageHandler) DashboardModelDetail(c *gin.Context) {
 			COALESCE(SUM(total_tokens), 0) AS tokens
 		FROM call_logs
 		WHERE ts >= ? AND ts < ? AND model = ?
+			AND (? = '' OR inbound_endpoint = ?)
 			AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
 		GROUP BY COALESCE(user_id, 'unknown'), COALESCE(user_name, ''), COALESCE(dept_name, '')
 		ORDER BY cost DESC
 		LIMIT 20
-	`, from, toExcl, modelName).Scan(&users)
+	`, from, toExcl, modelName, endpoint, endpoint).Scan(&users)
 
 	// 按 scope 过滤（只保留当前用户可见的用户分布）
 	_ = usagePol

@@ -1014,6 +1014,7 @@ loadAll()
 .up-filter__user     { width: 130px; }
 .up-filter__dept     { width: 130px; }
 .up-filter__studio   { width: 130px; }
+.up-filter__endpoint { width: 130px; }
 
 /* 状态选项着色 */
 .up-status-opt { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
@@ -1249,7 +1250,8 @@ loadAll()
   .up-filter__key,
   .up-filter__user,
   .up-filter__dept,
-  .up-filter__studio {
+  .up-filter__studio,
+  .up-filter__endpoint {
     width: 100% !important;
   }
 

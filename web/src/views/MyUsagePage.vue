@@ -1127,6 +1127,7 @@ if (typeof MutationObserver !== 'undefined') {
 .mu-filter__chip { width: 130px; flex-shrink: 0; }
 .mu-filter__chip--key { width: 140px; }
 .mu-filter__status { width: 92px; flex-shrink: 0; }
+.mu-filter__endpoint { width: 130px; flex-shrink: 0; }
 .mu-filter__clear { flex-shrink: 0; }
 .mu-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
 .mu-dot--ok  { background: #67c23a; }
@@ -1412,7 +1413,8 @@ if (typeof MutationObserver !== 'undefined') {
   .mu-filter__date,
   .mu-filter__chip,
   .mu-filter__chip--key,
-  .mu-filter__status { width: 100% !important; }
+  .mu-filter__status,
+  .mu-filter__endpoint { width: 100% !important; }
   .mu-filter__clear { width: 100%; }
   .mu-filter-divider { display: none; }
   .mu-stats { grid-template-columns: repeat(2, 1fr); }

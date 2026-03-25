@@ -209,7 +209,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 	systemKeySvc := service.NewSystemKeyService(db)
 	// gateway.url 从 yaml 配置读取，环境变量 GATEWAY_URL 可覆盖
-	groupCheckSvc := service.NewGroupCheckService(groupRepo, healthCheckRepo, systemKeySvc, cfg.Gateway.URL)
+	groupCheckSvc := service.NewGroupCheckService(groupRepo, modelRepo, healthCheckRepo, systemKeySvc, cfg.Gateway.URL)
 	groupCheckHandler := handler.NewGroupCheckHandler(groupCheckSvc)
 	healthCheckSvc.SetGroupCheckService(groupCheckSvc)
 

@@ -38,6 +38,7 @@ type GroupCheckAllResult struct {
 // GroupCheckService 模型组健康检测服务
 type GroupCheckService struct {
 	groupRepo    *repository.GroupRepo
+	modelRepo    *repository.ModelRepo
 	healthRepo   *repository.HealthCheckRepo
 	systemKeySvc *SystemKeyService
 	mu           sync.Mutex
@@ -50,6 +51,7 @@ type GroupCheckService struct {
 // gatewayURL 为空时自动从环境变量 GATEWAY_URL / GATEWAY_PORT 读取，最终兜底 http://localhost:8080
 func NewGroupCheckService(
 	groupRepo *repository.GroupRepo,
+	modelRepo *repository.ModelRepo,
 	healthRepo *repository.HealthCheckRepo,
 	systemKeySvc *SystemKeyService,
 	gatewayURL string,
@@ -66,6 +68,7 @@ func NewGroupCheckService(
 	}
 	return &GroupCheckService{
 		groupRepo:    groupRepo,
+		modelRepo:    modelRepo,
 		healthRepo:   healthRepo,
 		systemKeySvc: systemKeySvc,
 		gatewayURL:   strings.TrimRight(gatewayURL, "/"),
@@ -91,6 +94,9 @@ func (s *GroupCheckService) getProbeKey(ctx context.Context) (string, error) {
 func (s *GroupCheckService) CheckOne(ctx context.Context, g *model.Group) *GroupCheckResult {
 	cr := &GroupCheckResult{GroupID: g.ID, GroupName: g.Name}
 
+	// 获取组内第一个模型的类型
+	modelType := s.getGroupModelType(g)
+
 	apiKey, err := s.getProbeKey(ctx)
 	if err != nil {
 		cr.Error = "获取探针 key 失败: " + err.Error()
@@ -98,7 +104,7 @@ func (s *GroupCheckService) CheckOne(ctx context.Context, g *model.Group) *Group
 		return cr
 	}
 
-	success, elapsed, errMsg := s.probeGroup(ctx, g.Name, apiKey)
+	success, elapsed, errMsg := s.probeGroup(ctx, g.Name, apiKey, modelType)
 	cr.ResponseTime = elapsed
 
 	if success {
@@ -167,21 +173,16 @@ func (s *GroupCheckService) CheckOneByID(ctx context.Context, id uint) (*GroupCh
 }
 
 // probeGroupOnce 向 Gateway 发送一次非流式探针请求，验证端到端推理链路可用性。
+// 根据 modelType 构建不同格式的请求：chat/embedding/rerank。
 // 超时 60s：全量并发后消除了排队延迟，60s 足够覆盖上游高峰时段的推理耗时。
-func (s *GroupCheckService) probeGroupOnce(ctx context.Context, groupName, apiKey string) (bool, int, string) {
-	endpoint := s.gatewayURL + "/v1/chat/completions"
-
-	payload := map[string]interface{}{
-		"model":      groupName,
-		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
-		"max_tokens": 5,
-	}
+func (s *GroupCheckService) probeGroupOnce(ctx context.Context, groupName, apiKey, modelType string) (bool, int, string) {
+	endpoint, payload := s.buildProbeRequest(groupName, modelType)
 	body, _ := json.Marshal(payload)
 
 	probeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	req, _ := http.NewRequestWithContext(probeCtx, http.MethodPost, endpoint, bytes.NewReader(body))
+	req, _ := http.NewRequestWithContext(probeCtx, http.MethodPost, s.gatewayURL+endpoint, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
@@ -205,10 +206,61 @@ func (s *GroupCheckService) probeGroupOnce(ctx context.Context, groupName, apiKe
 	return true, elapsed, ""
 }
 
-// probeGroup 向 Gateway POST /v1/chat/completions，model 字段填组名。
+// getGroupModelType 获取组内第一个启用模型的类型，默认为 chat
+func (s *GroupCheckService) getGroupModelType(g *model.Group) string {
+	groupModels, err := s.groupRepo.ListGroupModels(g.ID)
+	if err != nil || len(groupModels) == 0 {
+		return "chat"
+	}
+
+	// 获取模型 ID 列表
+	modelIDs := make([]uuid.UUID, 0, len(groupModels))
+	for _, gm := range groupModels {
+		modelIDs = append(modelIDs, gm.ModelID)
+	}
+
+	// 批量获取模型详情
+	models, err := s.modelRepo.GetByIDs(modelIDs)
+	if err != nil {
+		return "chat"
+	}
+
+	for _, m := range models {
+		if m != nil && m.Enabled != nil && *m.Enabled {
+			return m.ModelType
+		}
+	}
+	return "chat"
+}
+
+// buildProbeRequest 根据模型类型构建探针请求的端点和请求体
+func (s *GroupCheckService) buildProbeRequest(modelName, modelType string) (string, map[string]interface{}) {
+	switch modelType {
+	case "embedding":
+		return "/v1/embeddings", map[string]interface{}{
+			"model": modelName,
+			"input": "健康检查测试文本",
+		}
+	case "rerank":
+		return "/v1/rerank", map[string]interface{}{
+			"model":     modelName,
+			"query":     "健康检查查询",
+			"documents": []string{"文档1", "文档2"},
+		}
+	default: // chat 或其他类型
+		return "/v1/chat/completions", map[string]interface{}{
+			"model":      modelName,
+			"messages":   []map[string]string{{"role": "user", "content": "健康检查"}},
+			"max_tokens": 10,
+		}
+	}
+}
+
+// probeGroup 向 Gateway 发送探针请求，model 字段填组名。
+// 根据 modelType 选择正确的端点和请求格式（chat/embedding/rerank）。
 // 失败后自动重试最多 probeMaxRetries 次（含首次共 probeMaxRetries+1 次机会），
 // 全部失败才返回错误，避免偶发超时或抖动被误判为健康异常。
-func (s *GroupCheckService) probeGroup(ctx context.Context, groupName, apiKey string) (bool, int, string) {
+func (s *GroupCheckService) probeGroup(ctx context.Context, groupName, apiKey, modelType string) (bool, int, string) {
 	const probeMaxRetries = 1 // 失败后最多重试次数（流式 TTFB 很快，1 次重试即可）
 
 	var (
@@ -222,7 +274,7 @@ func (s *GroupCheckService) probeGroup(ctx context.Context, groupName, apiKey st
 			return false, lastElapsed, fmt.Sprintf("context canceled before attempt %d", attempt+1)
 		}
 
-		ok, elapsed, errMsg := s.probeGroupOnce(ctx, groupName, apiKey)
+		ok, elapsed, errMsg := s.probeGroupOnce(ctx, groupName, apiKey, modelType)
 		lastElapsed = elapsed
 		lastErr = errMsg
 

@@ -123,6 +123,7 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 		}
 		if decision != nil {
 			req.Model = decision.ModelName
+			req.ModelType = decision.ModelType
 			if decision.ProviderName != "" {
 				req.Provider = decision.ProviderName
 			}

@@ -58,6 +58,7 @@ func (rt *RouteTable) ReplaceAll(config *ControlPlaneConfig) {
 		groupModels[m.GroupID] = append(groupModels[m.GroupID], &ModelRoutingEntry{
 			ModelID:        m.ModelID,
 			ModelName:      m.ModelName,
+			ModelType:      m.ModelType,
 			ChannelType:    m.ChannelType,
 			ProviderName:   m.ProviderName,
 			Endpoint:       m.Endpoint,

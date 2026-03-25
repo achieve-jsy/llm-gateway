@@ -33,6 +33,7 @@ type RouteDecision struct {
 	Strategy       RoutingStrategy `json:"strategy"`
 	ModelID        string          `json:"model_id"`
 	ModelName      string          `json:"model_name"`
+	ModelType      string          `json:"model_type"`
 	ChannelID      string          `json:"channel_id"`
 	ChannelType    string          `json:"channel_type"`
 	ProviderName   string          `json:"provider_name"`

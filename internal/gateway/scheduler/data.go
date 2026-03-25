@@ -27,6 +27,7 @@ type CPGroupData struct {
 type CPModelData struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`
+	ModelType      string `json:"model_type"`
 	ProviderID     string `json:"provider_id"`
 	ProviderType   string `json:"provider_type"`
 	ProviderName   string `json:"provider_name"`
@@ -52,6 +53,7 @@ type GroupModel struct {
 	GroupID        uint   `json:"group_id"`
 	ModelID        uint   `json:"model_id"`
 	ModelName      string `json:"model_name"`
+	ModelType      string `json:"model_type"`
 	ChannelType    string `json:"channel_type"`
 	ProviderName   string `json:"provider_name"`
 	Endpoint       string `json:"endpoint"`
@@ -74,6 +76,7 @@ type GroupRoutingConfig struct {
 type ModelRoutingEntry struct {
 	ModelID        uint   `json:"model_id"`
 	ModelName      string `json:"model_name"`
+	ModelType      string `json:"model_type"`
 	ChannelID      uint   `json:"channel_id"`
 	ChannelType    string `json:"channel_type"`
 	ProviderName   string `json:"provider_name"`

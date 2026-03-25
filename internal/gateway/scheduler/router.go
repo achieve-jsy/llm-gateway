@@ -76,6 +76,7 @@ func buildDecision(group *GroupRoutingConfig, entry *ModelRoutingEntry, start ti
 		Strategy:       group.Strategy,
 		ModelID:        strconv.FormatUint(uint64(entry.ModelID), 10),
 		ModelName:      entry.ModelName,
+		ModelType:      entry.ModelType,
 		ChannelID:      strconv.FormatUint(uint64(entry.ChannelID), 10),
 		ChannelType:    entry.ChannelType,
 		ProviderName:   entry.ProviderName,

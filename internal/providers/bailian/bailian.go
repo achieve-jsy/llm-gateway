@@ -109,21 +109,26 @@ func (p *Provider) StreamResponses(ctx context.Context, req *core.ResponsesReque
 }
 
 // Embeddings sends an embeddings request to Bailian.
-// 先用原生 text-embedding API，失败时 fallback 到多模态 embedding API。
+// 根据 model_type 精确路由：embedding_vl → multimodal API，embedding → text-embedding API。
 func (p *Provider) Embeddings(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
 	if req == nil {
 		return nil, core.NewInvalidRequestError("embedding request is required", nil)
 	}
 
-	// 1. 尝试原生 text-embedding API
-	resp, err := p.nativeEmbeddings(ctx, req)
-	if err == nil {
-		return resp, nil
+	// 精确路由：根据 model_type 选择 API
+	switch req.ModelType {
+	case "embedding_vl":
+		return p.multimodalEmbeddings(ctx, req)
+	case "embedding":
+		return p.nativeEmbeddings(ctx, req)
+	default:
+		// 向后兼容：model_type 为空时，先试 text-embedding，失败再试 multimodal
+		resp, err := p.nativeEmbeddings(ctx, req)
+		if err == nil {
+			return resp, nil
+		}
+		return p.multimodalEmbeddings(ctx, req)
 	}
-
-	// 2. text-embedding API 失败，fallback 到多模态 embedding API
-	// （qwen3-vl-embedding 等模型不支持 text-embedding 格式）
-	return p.multimodalEmbeddings(ctx, req)
 }
 
 // ─── 原生 text-embedding API ──────────────────────────────────────────────

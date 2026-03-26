@@ -543,6 +543,11 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/ops/video-tasks", videoTaskHandler.List)
 		adminGroup.GET("/ops/video-tasks/:id", videoTaskHandler.Get)
 
+		// 视频任务管理
+		adminGroup.GET("/video/tasks", videoTaskHandler.List)
+		adminGroup.GET("/video/tasks/:id", videoTaskHandler.Get)
+		adminGroup.GET("/video/tasks/stats", videoTaskHandler.Stats)
+
 		// 模型状态变更日志
 		adminGroup.GET("/model-status-logs", modelStatusLogHandler.ListModelStatusLogs)
 

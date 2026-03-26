@@ -1,4 +1,4 @@
-h1:Ydkgcmwj1eCrUG9QxBU1K2h9w0dDIsRmugBxFtL+0aE=
+h1:vXJrM3CZgbrFte7bWoBKEkXa7M3vdKvBebZtE/mvxDQ=
 20260609082623_baseline.sql h1:EypMLzQ+lwKOXInv3+ZdRYfRjDkE8V0LWKJ+7Ul6hMY=
 20260610120000_add_model_status.sql h1:dsiXmqu5v1ClJQJFnN8Ilphj0UtIN0I6bpvUW43i294=
 20260611000000_add_users_login_status.sql h1:IdW/XoVpwI/HIG0nsz+cLsWwQfoIhguaFU3LWMwelMY=
@@ -26,4 +26,4 @@ h1:Ydkgcmwj1eCrUG9QxBU1K2h9w0dDIsRmugBxFtL+0aE=
 20260706000000_health_check_group_config.sql h1:iUsE6w0RsvvMs9aUJCUUQglxEI/FgEIMa5s37OaUGCg=
 20260707000000_bailian_adapter.sql h1:RYZ72MAy0Z67lUGbAp6nObZDmD1r6T8nAb1LBHRTDww=
 20260707000001_add_call_logs_inbound_endpoint.sql h1:BDsuuezFhv+33Sybln74p76p5yoq40RI7sxsf+HwZs4=
-20260709000000_seedance_provider_definitions.sql h1:7TZQQ4osyYRAelNBnVF7xvHXZKON3l9dJ/M/ZMLkym4=
+20260709000000_seedance_provider_definitions.sql h1:LNMCeMU9VrgvVeQ7Fy/0ubCsnYwEnS7ACMKAp9G3Ti0=

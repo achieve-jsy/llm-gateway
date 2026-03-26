@@ -49,6 +49,8 @@ import (
 	providersvllm "github.com/example/llm-gateway/internal/providers/vllm"
 	providersxai "github.com/example/llm-gateway/internal/providers/xai"
 	providerszai "github.com/example/llm-gateway/internal/providers/zai"
+	seedancerelay "github.com/example/llm-gateway/internal/providers/seedance/relay"
+	seedancevolcengine "github.com/example/llm-gateway/internal/providers/seedance/volcengine"
 
 	"github.com/redis/go-redis/v9"
 
@@ -317,6 +319,8 @@ func buildProviderFactory() *providers.ProviderFactory {
 	factory.Add(providersvllm.Registration)
 	factory.Add(providersxai.Registration)
 	factory.Add(providerszai.Registration)
+	factory.Add(seedancerelay.Registration)
+	factory.Add(seedancevolcengine.Registration)
 
 	return factory
 }

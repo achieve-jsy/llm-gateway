@@ -22,6 +22,8 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/quota"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/example/llm-gateway/internal/providers"
+	seedancerelay "github.com/example/llm-gateway/internal/providers/seedance/relay"
+	seedancevolcengine "github.com/example/llm-gateway/internal/providers/seedance/volcengine"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	swaggerFiles "github.com/swaggo/files"
@@ -162,6 +164,10 @@ func Setup(
 	responsesHandler.SetModelQuotaGate(modelQuotaGate)
 
 	// OpenAI 兼容接口（需 API Key 认证）
+	// 初始化视频适配器
+	relayAdapter := seedancerelay.NewAdapter("seedance-relay", "http://115.190.78.58:8000", "placeholder-api-key")
+	volcengineAdapter := seedancevolcengine.NewAdapter("seedance-volcengine", "https://ark.cn-beijing.volces.com", "placeholder-ak", "placeholder-sk", "cn-beijing")
+
 	v1 := r.Group("/v1")
 	v1.Use(middleware.AuthMiddleware(authClient))
 	// 请求/响应正文捕获（供 trace 记录使用）
@@ -210,6 +216,15 @@ func Setup(
 		// v0.7: 默认关闭，仅白名单 Key（access_all_groups=true 的管理员 Key）可用；
 		// 普通 Key 一律 403，白名单 Key 透传但不计入预算（豁免），记日志。
 		v1.Any("/p/:provider/*path", middleware.PassthroughGuard(), makePassthroughHandler(router))
+
+		// 视频生成
+		videoHandler := handler.NewVideoHandler(relayAdapter, volcengineAdapter)
+		v1.POST("/contents/generations/tasks", videoHandler.CreateTask)
+		v1.GET("/contents/generations/tasks/:task_id", videoHandler.GetTask)
+
+		// 素材库
+		assetHandler := handler.NewAssetHandler(relayAdapter, volcengineAdapter)
+		v1.POST("/assets/:action", assetHandler.Handle)
 	}
 
 	// Claude Code telemetry stub — returns 200 to prevent client-side 404 errors.

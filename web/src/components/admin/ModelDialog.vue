@@ -82,6 +82,7 @@
           <el-option label="Embedding（向量）" value="embedding" />
           <el-option label="Embedding-VL（多模态向量）" value="embedding_vl" />
           <el-option label="Rerank（重排序）" value="rerank" />
+          <el-option label="🎬 Video（视频生成）" value="video" />
         </el-select>
       </el-form-item>
 

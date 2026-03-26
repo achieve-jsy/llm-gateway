@@ -9,7 +9,7 @@ export interface ModelInfo {
   /** 归属渠道/所有者 */
   owned_by: string
   /** 模型类型：chat、embedding、embedding_vl 或 rerank */
-  type?: 'chat' | 'embedding' | 'embedding_vl' | 'rerank'
+  type?: 'chat' | 'embedding' | 'embedding_vl' | 'rerank' | 'video'
   /** 元数据（能力信息，如 modes、context_window 等） */
   metadata?: ModelMetadata
 }

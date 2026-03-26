@@ -383,6 +383,7 @@ const ENDPOINT_LABEL: Record<string, string> = {
   '/v1/chat/completions': 'Chat',
   '/v1/embeddings': 'Embedding',
   '/v1/rerank': 'Rerank',
+  '/v1/contents/generations/tasks': 'Video',
 }
 
 function endpointLabel(path?: string): string {
@@ -390,11 +391,12 @@ function endpointLabel(path?: string): string {
   return ENDPOINT_LABEL[path] || ''
 }
 
-function endpointTagType(path?: string): 'primary' | 'success' | 'warning' | '' {
+function endpointTagType(path?: string): 'primary' | 'success' | 'warning' | 'info' | '' {
   if (!path) return ''
   if (path === '/v1/chat/completions') return 'primary'
   if (path === '/v1/embeddings') return 'success'
   if (path === '/v1/rerank') return 'warning'
+  if (path === '/v1/contents/generations/tasks') return 'info'
   return ''
 }
 

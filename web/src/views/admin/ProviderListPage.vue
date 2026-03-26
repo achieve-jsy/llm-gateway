@@ -18,6 +18,7 @@
           class="toolbar-field toolbar-field-sm"
           @change="handleFilterChange"
         >
+          <!-- 选项由后端 ProviderDefinition 动态加载，Seedance 类型（如 seedance-text2video）会自动出现 -->
           <el-option
             v-for="def in definitions"
             :key="def.id"

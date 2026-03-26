@@ -236,7 +236,7 @@ func (s *GroupCheckService) getGroupModelType(g *model.Group) string {
 // buildProbeRequest 根据模型类型构建探针请求的端点和请求体
 func (s *GroupCheckService) buildProbeRequest(modelName, modelType string) (string, map[string]interface{}) {
 	switch modelType {
-	case "embedding":
+	case "embedding", "embedding_vl":
 		return "/v1/embeddings", map[string]interface{}{
 			"model": modelName,
 			"input": "健康检查测试文本",

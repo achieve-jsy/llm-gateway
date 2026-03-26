@@ -270,12 +270,19 @@
 
     <!-- 内嵌 Trace Drawer -->
     <UsageTraceDrawer
+      v-if="!showVideoDetail"
       v-model="traceVisible"
       :row="traceRow"
       :trace-data="traceData"
       :trace-loading="traceLoading"
       :currency="currency"
       :meta-mode="traceMetaMode"
+    />
+    <!-- 视频任务详情 -->
+    <VideoTaskDetail
+      v-else
+      v-model="videoDetailVisible"
+      :task="videoTaskData"
     />
   </div>
 </template>
@@ -287,6 +294,9 @@ import {
 } from '@element-plus/icons-vue'
 import { useSettingsStore } from '@/stores/settings'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
+import type { LogRow, TraceData } from '@/types/usage-log'
+import UsageTraceDrawer from '@/components/usage/UsageTraceDrawer.vue'
+import VideoTaskDetail from '@/components/usage/VideoTaskDetail.vue'
 import { fmtDateTime, fmtDuration } from '@/utils/time'
 import UsageTraceDrawer from './UsageTraceDrawer.vue'
 import type { LogRow, TraceData } from '@/types/usage-log'
@@ -364,7 +374,29 @@ const traceLoading  = ref(false)
 const traceRow      = ref<LogRow | null>(null)
 const traceData     = ref<TraceData | null>(null)
 
+// ── Video 详情状态 ──
+const videoDetailVisible = ref(false)
+const videoTaskData = ref<any>(null)
+
+const showVideoDetail = computed(() => {
+  return traceRow.value?.inbound_endpoint === '/v1/contents/generations/tasks'
+})
+
 async function openTrace(row: LogRow) {
+  // Video 任务使用独立详情组件
+  if (row.inbound_endpoint === '/v1/contents/generations/tasks') {
+    videoTaskData.value = {
+      task_id: row.request_id,
+      model: row.model,
+      provider_name: row.provider,
+      status: row.status >= 200 && row.status < 300 ? 'succeeded' : 'failed',
+      created_at: row.ts,
+      duration_ms: row.duration_ms,
+    }
+    videoDetailVisible.value = true
+    return
+  }
+
   traceRow.value  = row
   traceData.value = null
   traceVisible.value = true

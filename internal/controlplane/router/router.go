@@ -454,6 +454,11 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 		opsHandler := handler.NewOpsHandler(db, rdb, systemMetricsCollector)
 
+		// 视频任务管理
+		videoTaskRepo := repository.NewVideoTaskRepo(db)
+		videoTaskSvc := service.NewVideoTaskService(videoTaskRepo)
+		videoTaskHandler := handler.NewVideoTaskHandler(videoTaskSvc)
+
 			// WP9: 邮件服务 + 定时报表服务
 			emailSvc := service.NewEmailService()
 			scheduledReportSvc := service.NewScheduledReportService(db, rdb, emailSvc)
@@ -532,6 +537,11 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.PUT("/ops/error-logs/:id/resolve", opsHandler.ResolveErrorLog)
 		adminGroup.PUT("/ops/request-errors/:id/resolve", opsHandler.ResolveRequestError)
 		adminGroup.PUT("/ops/upstream-errors/:id/resolve", opsHandler.ResolveUpstreamError)
+
+		// 视频任务统计（Ops Dashboard 视频指标卡片）
+		adminGroup.GET("/ops/video-tasks/stats", videoTaskHandler.Stats)
+		adminGroup.GET("/ops/video-tasks", videoTaskHandler.List)
+		adminGroup.GET("/ops/video-tasks/:id", videoTaskHandler.Get)
 
 		// 模型状态变更日志
 		adminGroup.GET("/model-status-logs", modelStatusLogHandler.ListModelStatusLogs)

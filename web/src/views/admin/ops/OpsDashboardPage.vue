@@ -98,6 +98,29 @@
       <!-- Token Stats (full-width) -->
       <OpsTokenStatsCard v-if="settings?.show_token_stats" :refresh-token="refreshToken" />
 
+      <!-- Video Task Stats (full-width) -->
+      <el-card v-if="settings?.show_token_stats" class="ops-card" shadow="never">
+        <template #header>
+          <div class="ops-card-header">
+            <span class="ops-card-title">🎬 视频任务</span>
+          </div>
+        </template>
+        <div style="display:flex;gap:32px">
+          <div style="text-align:center">
+            <div style="font-size:12px;color:var(--text-secondary)">生成中</div>
+            <div style="font-size:28px;font-weight:800;font-family:var(--font-mono);color:var(--color-video)">--</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:12px;color:var(--text-secondary)">排队中</div>
+            <div style="font-size:28px;font-weight:800;font-family:var(--font-mono)">--</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:12px;color:var(--text-secondary)">平均耗时</div>
+            <div style="font-size:28px;font-weight:800;font-family:var(--font-mono)">--</div>
+          </div>
+        </div>
+      </el-card>
+
       <!-- Error Logs (full-width) -->
       <OpsErrorLogTable v-if="!isFullscreen" :refresh-token="refreshToken" />
 

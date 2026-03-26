@@ -672,6 +672,18 @@ const put = <T = void>(...args: Parameters<typeof http.put>) =>
 const del = (...args: Parameters<typeof http.delete>) =>
   (http.delete as (...a: Parameters<typeof http.delete>) => Promise<unknown>)(...args)
 
+
+// ============ 视频任务统计类型 ============
+
+export interface OpsVideoTaskStats {
+  total: number
+  submitted: number
+  running: number
+  succeeded: number
+  failed: number
+  avg_duration_seconds: number
+}
+
 export const opsAPI = {
   // ---- Dashboard 核心 ----
   getDashboard: (filter: OpsFilterParams) =>
@@ -860,6 +872,10 @@ export const opsAPI = {
 
   resolveErrorLog: (id: number, resolved: boolean) =>
     put(`/api/v1/ops/error-logs/${id}/resolve`, { resolved }),
+
+  // ---- 视频任务统计 ----
+  getVideoTaskStats: () =>
+    get<{ data: OpsVideoTaskStats }>('/api/v1/ops/video-tasks/stats').then(r => r.data),
 }
 
 // ============ WebSocket 实时 QPS 推送 ============

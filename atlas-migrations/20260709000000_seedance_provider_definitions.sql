@@ -1,7 +1,6 @@
 -- Seedance Provider Definition 注册
--- 用于测试环境注册 Seedance 视频生成 Provider
+-- 注册 seedance 视频生成 Provider 定义
 
--- 注册 seedance-relay (第三方中转)
 INSERT INTO provider_definitions (
     id, display_name, adapter, base_url,
     credential_schema, description, builtin, enabled,
@@ -28,7 +27,6 @@ INSERT INTO provider_definitions (
     default_models = EXCLUDED.default_models,
     updated_at = NOW();
 
--- 注册 seedance-volcengine (火山引擎官方)
 INSERT INTO provider_definitions (
     id, display_name, adapter, base_url,
     credential_schema, description, builtin, enabled,

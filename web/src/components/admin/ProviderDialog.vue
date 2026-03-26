@@ -122,6 +122,7 @@
             </template>
 
             <!-- 其他渠道类型：通用 schema 渲染 -->
+            <!-- Seedance 类型（如 seedance-text2video）通过 credential_schema 定义 api_key 字段，自动在此渲染 -->
             <template v-else>
               <el-form-item
                 v-for="(field, key) in selectedDef.credential_schema"

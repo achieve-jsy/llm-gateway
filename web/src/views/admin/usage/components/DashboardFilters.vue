@@ -71,7 +71,7 @@
           </el-select>
         </div>
         <!-- 端点 -->
-        <div class="ud-filter-chip">
+        <div v-if="!hideEndpoint" class="ud-filter-chip">
           <span class="ud-chip-label">端点</span>
           <el-select v-model="filterEndpoint" placeholder="全部" clearable size="small"
             class="ud-chip-select" @change="$emit('loadAll')" @clear="$emit('loadAll')">
@@ -79,7 +79,6 @@
             <el-option label="Chat" value="/v1/chat/completions" />
             <el-option label="Embedding" value="/v1/embeddings" />
             <el-option label="Rerank" value="/v1/rerank" />
-            <el-option label="Video" value="/v1/contents/generations/tasks" />
           </el-select>
         </div>
         <el-button v-if="activeFilterCount > 0" link size="small" type="warning" @click="$emit('clearFilters')">
@@ -100,6 +99,7 @@ defineProps<{
   modelOptions: string[]
   effectiveRole: string
   activeFilterCount: number
+  hideEndpoint?: boolean
 }>()
 
 const dateRange = defineModel<[string, string]>('dateRange', { required: true })

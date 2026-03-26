@@ -65,17 +65,28 @@
         <el-option value="success"><span class="mu-dot mu-dot--ok" /> 成功</el-option>
         <el-option value="error"><span class="mu-dot mu-dot--err" /> 失败</el-option>
       </el-select>
-      <el-select v-model="filterEndpoint" placeholder="端点" clearable size="small"
+      <!-- endpoint filter hidden – replaced by type tabs -->
+      <!-- <el-select v-model="filterEndpoint" placeholder="端点" clearable size="small"
         class="mu-filter__endpoint" @change="loadAll" @clear="loadAll">
         <el-option label="Chat" value="/v1/chat/completions" />
         <el-option label="Embedding" value="/v1/embeddings" />
         <el-option label="Rerank" value="/v1/rerank" />
         <el-option label="Video" value="/v1/contents/generations/tasks" />
-      </el-select>
+      </el-select> -->
       <el-button v-if="activeFilterCount > 0" size="small" plain type="warning"
         :icon="Close" @click="clearFilters" class="mu-filter__clear">
         清空 {{ activeFilterCount }}
       </el-button>
+    </div>
+
+    <!-- Type Tabs -->
+    <div class="usage-type-tabs">
+      <el-radio-group v-model="activeTab" size="default" @change="onTabChange">
+        <el-radio-button value="chat">Chat</el-radio-button>
+        <el-radio-button value="embedding">Embedding</el-radio-button>
+        <el-radio-button value="rerank">Rerank</el-radio-button>
+        <el-radio-button value="video">Video</el-radio-button>
+      </el-radio-group>
     </div>
 
     <!-- ═══════════════════════════════════════════
@@ -436,6 +447,19 @@ const filterModelName = ref('')
 const filterGroupName = ref('')
 const filterStatus    = ref('')
 const filterEndpoint  = ref('')
+const activeTab = ref('chat')
+
+function onTabChange(value: string | number | boolean) {
+  const endpointMap: Record<string, string> = {
+    chat: '/v1/chat/completions',
+    embedding: '/v1/embeddings',
+    rerank: '/v1/rerank',
+    video: '/v1/contents/generations/tasks',
+  }
+  filterEndpoint.value = endpointMap[value as string] || ''
+  loadAll()
+}
+
 const groupBy = ref('day')
 
 const activeFilterCount = computed(() =>

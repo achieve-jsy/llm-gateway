@@ -110,18 +110,6 @@
             </el-select>
           </div>
 
-          <!-- 端点 -->
-          <div class="up-filter-group">
-            <span class="up-filter-label">端点</span>
-            <el-select v-model="filterEndpoint" placeholder="全部" clearable size="small"
-              class="up-filter__endpoint" @change="loadAll" @clear="loadAll">
-              <el-option label="Chat" value="/v1/chat/completions" />
-              <el-option label="Embedding" value="/v1/embeddings" />
-              <el-option label="Rerank" value="/v1/rerank" />
-              <el-option label="Video" value="/v1/contents/generations/tasks" />
-            </el-select>
-          </div>
-
           <div class="up-filter-sep" />
 
           <!-- Key 关键词 -->
@@ -172,6 +160,16 @@
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- Type Tabs -->
+    <div class="usage-type-tabs">
+      <el-radio-group v-model="activeTab" size="default" @change="onTabChange">
+        <el-radio-button value="chat">Chat</el-radio-button>
+        <el-radio-button value="embedding">Embedding</el-radio-button>
+        <el-radio-button value="rerank">Rerank</el-radio-button>
+        <el-radio-button value="video">Video</el-radio-button>
+      </el-radio-group>
     </div>
 
     <!-- ═══════════════════════════════════════════
@@ -514,10 +512,22 @@ const filterStatus   = ref('')
 const filterModelName = ref('')
 const filterGroupName = ref('')
 const filterEndpoint  = ref('')
+const activeTab = ref('chat')
 const showMoreFilters = ref(false)
 
+function onTabChange(value: string | number | boolean) {
+  const endpointMap: Record<string, string> = {
+    chat: '/v1/chat/completions',
+    embedding: '/v1/embeddings',
+    rerank: '/v1/rerank',
+    video: '/v1/contents/generations/tasks',
+  }
+  filterEndpoint.value = endpointMap[value as string] || ''
+  loadAll()
+}
+
 const activeFilterCount = computed(() =>
-  [filterModelName.value, filterGroupName.value, filterEndpoint.value,
+  [filterModelName.value, filterGroupName.value,
    filterKeyName.value, filterKeyType.value, filterUserName.value, filterDeptName.value,
    filterStudioId.value, filterProvider.value, filterStatus.value]
     .filter(Boolean).length

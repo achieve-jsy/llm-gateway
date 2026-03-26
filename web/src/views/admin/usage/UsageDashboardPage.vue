@@ -6,6 +6,15 @@
       :loading="summaryLoading || logsLoading"
       @refresh="loadAll"
     />
+    <!-- Type Tabs -->
+    <div class="usage-type-tabs">
+      <el-radio-group v-model="activeTab" size="default" @change="onTabChange">
+        <el-radio-button value="chat">Chat</el-radio-button>
+        <el-radio-button value="embedding">Embedding</el-radio-button>
+        <el-radio-button value="rerank">Rerank</el-radio-button>
+        <el-radio-button value="video">Video</el-radio-button>
+      </el-radio-group>
+    </div>
     <DashboardFilters
       v-model:date-range="dateRange"
       v-model:active-preset="activePreset"
@@ -19,6 +28,7 @@
       :model-options="modelOptions"
       :effective-role="authStore.effectiveRole"
       :active-filter-count="activeFilterCount"
+      :hide-endpoint="true"
       @apply-preset="applyPreset"
       @date-change="onDateChange"
       @user-name-change="onUserNameChange"
@@ -222,6 +232,18 @@ const filterModel    = ref('')
 const filterStatus   = ref('')
 const filterKeyType  = ref('')
 const filterEndpoint = ref('')
+const activeTab = ref('chat')
+
+function onTabChange(value: string | number | boolean) {
+  const endpointMap: Record<string, string> = {
+    chat: '/v1/chat/completions',
+    embedding: '/v1/embeddings',
+    rerank: '/v1/rerank',
+    video: '/v1/contents/generations/tasks',
+  }
+  filterEndpoint.value = endpointMap[value as string] || ''
+  loadAll()
+}
 const showFilters    = ref(true)
 
 // ── 长尾告警排序 ──

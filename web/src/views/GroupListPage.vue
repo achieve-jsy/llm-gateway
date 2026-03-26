@@ -35,7 +35,10 @@
         <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip />
         <el-table-column label="策略" width="120" align="center">
           <template #default="{ row }">
-            <el-tag :type="strategyTagType(row.strategy)" size="small">
+            <template v-if="(row as any).model_type === 'video'">
+              <el-tag type="warning" size="small">Video</el-tag>
+            </template>
+            <el-tag v-else :type="strategyTagType(row.strategy)" size="small">
               {{ strategyLabel(row.strategy) }}
             </el-tag>
           </template>

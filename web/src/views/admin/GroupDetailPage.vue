@@ -11,7 +11,8 @@
       </div>
       <div class="header-meta" v-if="group">
         <el-tag :type="group.enabled ? 'success' : 'info'" size="small">{{ group.enabled ? '启用' : '禁用' }}</el-tag>
-        <el-tag type="info" size="small">{{ strategyLabel(group.strategy) }}</el-tag>
+        <el-tag v-if="group.model_type === 'video'" type="warning" size="small">Video</el-tag>
+        <el-tag v-else type="info" size="small">{{ strategyLabel(group.strategy) }}</el-tag>
       </div>
     </div>
 
@@ -26,7 +27,7 @@
       <el-tab-pane label="基本信息" name="info">
         <el-descriptions :column="2" border size="small" class="info-desc">
           <el-descriptions-item label="名称">{{ group.name }}</el-descriptions-item>
-          <el-descriptions-item label="策略">{{ strategyLabel(group.strategy) }}</el-descriptions-item>
+          <el-descriptions-item label="策略">{{ group?.model_type === 'video' ? '—' : strategyLabel(group.strategy) }}</el-descriptions-item>
           <el-descriptions-item label="模型数量">{{ group.model_count }}</el-descriptions-item>
           <el-descriptions-item label="状态">{{ group.enabled ? '启用' : '禁用' }}</el-descriptions-item>
           <el-descriptions-item label="创建时间" :span="2">{{ group.created_at }}</el-descriptions-item>
@@ -39,9 +40,9 @@
           <el-table :data="models" stripe size="small" empty-text="暂无模型成员">
             <el-table-column label="模型名称" prop="model_name" min-width="200" />
             <el-table-column label="厂商" prop="provider_name" width="120" />
-            <el-table-column label="权重" prop="weight" width="80" align="center" />
-            <el-table-column label="优先级" prop="priority" width="80" align="center" />
-            <el-table-column label="复杂度档位" prop="complexity_tier" width="110" align="center">
+            <el-table-column label="权重" prop="weight" width="80" align="center" v-if="group?.model_type !== 'video'" />
+            <el-table-column label="优先级" prop="priority" width="80" align="center" v-if="group?.model_type !== 'video'" />
+            <el-table-column label="复杂度档位" prop="complexity_tier" width="110" align="center" v-if="group?.model_type !== 'video'">
               <template #default="scope">
                 <el-tag v-if="scope.row.complexity_tier" size="small">{{ scope.row.complexity_tier }}</el-tag>
               </template>

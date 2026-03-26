@@ -28,6 +28,13 @@ type GroupModelInfo struct {
 	InputPricePerMillion  float64 `json:"input_price_per_million"`
 	OutputPricePerMillion float64 `json:"output_price_per_million"`
 	IsCapabilityOverride  bool    `json:"is_capability_override"`
+
+	// ── 视频模型专用字段（seedance） ──────────────────────────────────────
+	// 当 mode == "video" 时由 seedance 适配器填充；非视频模型保持零值。
+	VideoSupportedActions    []string `json:"video_supported_actions,omitempty"`    // 文生视频 / 图生视频 / 多模态参考
+	VideoSupportedResolutions []string `json:"video_supported_resolutions,omitempty"` // 720p / 1080p
+	VideoMaxDurationSeconds   int      `json:"video_max_duration_seconds,omitempty"`
+	VideoAPIEndpoint          string   `json:"video_api_endpoint,omitempty"` // POST /v1/contents/generations/tasks
 }
 
 // GroupInfoRepo 抽象按需查询启用模型组（含成员）的能力。

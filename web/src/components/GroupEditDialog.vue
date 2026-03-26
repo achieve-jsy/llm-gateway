@@ -31,68 +31,77 @@
         />
       </el-form-item>
 
-      <el-form-item label="负载策略" prop="strategy">
-        <el-radio-group v-model="formData.strategy" @change="handleStrategyChange">
-          <el-radio value="round_robin">轮询</el-radio>
-          <el-radio value="priority">优先级</el-radio>
-          <el-radio value="weighted">加权</el-radio>
-          <el-radio value="auto">自动（难度分档）</el-radio>
-        </el-radio-group>
+      <el-form-item label="类型" prop="model_type">
+        <el-select v-model="formData.model_type" placeholder="请选择模型组类型" @change="handleTypeChange">
+          <el-option label="Chat（对话）" value="chat" />
+          <el-option label="Video（视频生成）" value="video" />
+        </el-select>
       </el-form-item>
 
-      <div v-if="formData.strategy === 'auto'" class="strategy-hint">
-        按请求难度自动将任务路由到不同档位的模型。请在每个模型后指定它属于哪个复杂度档位。
-      </div>
+      <template v-if="formData.model_type !== 'video'">
+        <el-form-item label="负载策略" prop="strategy">
+          <el-radio-group v-model="formData.strategy" @change="handleStrategyChange">
+            <el-radio value="round_robin">轮询</el-radio>
+            <el-radio value="priority">优先级</el-radio>
+            <el-radio value="weighted">加权</el-radio>
+            <el-radio value="auto">自动（难度分档）</el-radio>
+          </el-radio-group>
+        </el-form-item>
 
-      <el-divider content-position="left">故障切换配置</el-divider>
+        <div v-if="formData.strategy === 'auto'" class="strategy-hint">
+          按请求难度自动将任务路由到不同档位的模型。请在每个模型后指定它属于哪个复杂度档位。
+        </div>
 
-      <div v-if="globalDefaults" class="global-defaults-hint">
-        全局默认：最大切换 <strong>{{ globalDefaults.max_switches }}</strong> 次，同模型重试 <strong>{{ globalDefaults.same_model_retries }}</strong> 次，冷却 <strong>{{ globalDefaults.failover_cooldown_seconds }}</strong> 秒
-      </div>
+        <el-divider content-position="left">故障切换配置</el-divider>
 
-      <el-form-item label="最大切换次数">
-        <el-input-number
-          v-model="formData.max_switches"
-          :min="1"
-          :max="10"
-          size="small"
-          controls-position="right"
-        />
-        <span class="form-item-tip">同次请求最多切换几个模型后再报错</span>
-      </el-form-item>
+        <div v-if="globalDefaults" class="global-defaults-hint">
+          全局默认：最大切换 <strong>{{ globalDefaults.max_switches }}</strong> 次，同模型重试 <strong>{{ globalDefaults.same_model_retries }}</strong> 次，冷却 <strong>{{ globalDefaults.failover_cooldown_seconds }}</strong> 秒
+        </div>
 
-      <el-form-item label="同模型重试">
-        <el-input-number
-          v-model="formData.same_model_retries"
-          :min="0"
-          :max="5"
-          size="small"
-          controls-position="right"
-        />
-        <span class="form-item-tip">同一模型失败后重试几次再换下一个</span>
-      </el-form-item>
+        <el-form-item label="最大切换次数">
+          <el-input-number
+            v-model="formData.max_switches"
+            :min="1"
+            :max="10"
+            size="small"
+            controls-position="right"
+          />
+          <span class="form-item-tip">同次请求最多切换几个模型后再报错</span>
+        </el-form-item>
 
-      <el-form-item label="冷却时间(秒)">
-        <el-input-number
-          v-model="formData.failover_cooldown_seconds"
-          :min="10"
-          :max="600"
-          size="small"
-          controls-position="right"
-        />
-        <span class="form-item-tip">模型被切换后多久不再参与路由</span>
-      </el-form-item>
+        <el-form-item label="同模型重试">
+          <el-input-number
+            v-model="formData.same_model_retries"
+            :min="0"
+            :max="5"
+            size="small"
+            controls-position="right"
+          />
+          <span class="form-item-tip">同一模型失败后重试几次再换下一个</span>
+        </el-form-item>
 
-      <el-form-item label="请求超时(秒)">
-        <el-input-number
-          v-model="formData.timeout_seconds"
-          :min="0"
-          :max="600"
-          size="small"
-          controls-position="right"
-        />
-        <span class="form-item-tip">0 = 使用系统默认（非流式 30s / 流式 300s）；每轮上游调用独立计时，failover 不受上一轮影响</span>
-      </el-form-item>
+        <el-form-item label="冷却时间(秒)">
+          <el-input-number
+            v-model="formData.failover_cooldown_seconds"
+            :min="10"
+            :max="600"
+            size="small"
+            controls-position="right"
+          />
+          <span class="form-item-tip">模型被切换后多久不再参与路由</span>
+        </el-form-item>
+
+        <el-form-item label="请求超时(秒)">
+          <el-input-number
+            v-model="formData.timeout_seconds"
+            :min="0"
+            :max="600"
+            size="small"
+            controls-position="right"
+          />
+          <span class="form-item-tip">0 = 使用系统默认（非流式 30s / 流式 300s）；每轮上游调用独立计时，failover 不受上一轮影响</span>
+        </el-form-item>
+      </template>
 
       <el-form-item label="关联模型">
         <div class="model-list-section">
@@ -102,7 +111,7 @@
           <div v-else class="model-items">
             <div v-for="(item, index) in modelList" :key="item.model_id" class="model-item">
               <span class="model-item-name">{{ item.model_name }}</span>
-              <template v-if="formData.strategy === 'priority'">
+              <template v-if="formData.model_type !== 'video' && formData.strategy === 'priority'">
                 <el-input-number
                   :model-value="item.priority ?? 0"
                   :min="0"
@@ -114,7 +123,7 @@
                   @update:model-value="(val: number | undefined) => updateModelPriority(index, val ?? 0)"
                 />
               </template>
-              <template v-if="formData.strategy === 'weighted'">
+              <template v-if="formData.model_type !== 'video' && formData.strategy === 'weighted'">
                 <el-input-number
                   :model-value="item.weight ?? 1"
                   :min="1"
@@ -126,7 +135,7 @@
                   @update:model-value="(val: number | undefined) => updateModelWeight(index, val ?? 1)"
                 />
               </template>
-              <template v-if="formData.strategy === 'auto'">
+              <template v-if="formData.model_type !== 'video' && formData.strategy === 'auto'">
                 <el-select
                   :model-value="item.complexity_tier ?? 'MEDIUM'"
                   size="small"
@@ -150,9 +159,15 @@
               </el-button>
             </div>
           </div>
-          <el-button style="margin-top: 8px" size="small" @click="selectorVisible = true">
+          <el-button
+            style="margin-top: 8px"
+            size="small"
+            :disabled="formData.model_type === 'video' && modelList.length >= 1"
+            @click="selectorVisible = true"
+          >
             添加模型
           </el-button>
+          <span v-if="formData.model_type === 'video' && modelList.length >= 1" class="form-item-tip">Video 类型仅支持关联一个模型</span>
         </div>
       </el-form-item>
     </el-form>
@@ -193,6 +208,7 @@ interface ModelItem {
 interface FormState {
   name: string
   description: string
+  model_type: string
   strategy: Strategy
   max_switches: number
   same_model_retries: number
@@ -221,6 +237,7 @@ const isEdit = computed(() => !!props.group)
 const formData = ref<FormState>({
   name: '',
   description: '',
+  model_type: 'chat',
   strategy: 'round_robin',
   max_switches: 2,
   same_model_retries: 1,
@@ -247,6 +264,7 @@ watch(
       formData.value = {
         name: val.name,
         description: val.description || '',
+        model_type: (val as any).model_type || 'chat',
         strategy: val.strategy,
         max_switches: val.max_switches ?? 2,
         same_model_retries: val.same_model_retries ?? 1,
@@ -259,6 +277,7 @@ watch(
       formData.value = {
         name: '',
         description: '',
+        model_type: 'chat',
         strategy: 'round_robin',
         max_switches: globalDefaults.value?.max_switches ?? 2,
         same_model_retries: globalDefaults.value?.same_model_retries ?? 1,
@@ -307,6 +326,17 @@ async function loadGroupModels(groupId: number) {
     }))
   } catch {
     modelList.value = []
+  }
+}
+
+function handleTypeChange(val: string) {
+  if (val === 'video') {
+    // Reset strategy to round_robin and clear model list for video type
+    formData.value.strategy = 'round_robin'
+    originalStrategy.value = 'round_robin'
+    if (modelList.value.length > 1) {
+      modelList.value = modelList.value.slice(0, 1)
+    }
   }
 }
 
@@ -383,6 +413,7 @@ async function handleSubmit() {
       name: formData.value.name,
       description: formData.value.description,
       strategy: formData.value.strategy,
+      model_type: formData.value.model_type,
       max_switches: formData.value.max_switches,
       same_model_retries: formData.value.same_model_retries,
       failover_cooldown_seconds: formData.value.failover_cooldown_seconds,

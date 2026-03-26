@@ -63,17 +63,27 @@ func (r *VideoTaskRepo) UpdateStatus(taskID, status string) error {
 
 // Stats 统计
 func (r *VideoTaskRepo) Stats() (map[string]interface{}, error) {
-	var total, succeeded, running, failed int64
+	var total, submitted, running, succeeded, failed int64
+	var avgDurationSeconds float64
 
 	r.db.Model(&model.VideoTask{}).Count(&total)
-	r.db.Model(&model.VideoTask{}).Where("status = ?", "succeeded").Count(&succeeded)
+	r.db.Model(&model.VideoTask{}).Where("status = ?", "submitted").Count(&submitted)
 	r.db.Model(&model.VideoTask{}).Where("status = ?", "running").Count(&running)
+	r.db.Model(&model.VideoTask{}).Where("status = ?", "succeeded").Count(&succeeded)
 	r.db.Model(&model.VideoTask{}).Where("status = ?", "failed").Count(&failed)
 
+	// 计算已成功任务的平均耗时（秒）
+	r.db.Model(&model.VideoTask{}).
+		Where("status = ? AND updated_at > created_at", "succeeded").
+		Select("COALESCE(AVG(EXTRACT(EPOCH FROM (updated_at - created_at))), 0)").
+		Scan(&avgDurationSeconds)
+
 	return map[string]interface{}{
-		"total":     total,
-		"succeeded": succeeded,
-		"running":   running,
-		"failed":    failed,
+		"total":               total,
+		"submitted":           submitted,
+		"running":             running,
+		"succeeded":           succeeded,
+		"failed":              failed,
+		"avg_duration_seconds": avgDurationSeconds,
 	}, nil
 }

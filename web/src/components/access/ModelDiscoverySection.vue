@@ -103,6 +103,29 @@
             <!-- 描述 -->
             <p class="gc-desc">{{ g.description || '暂无描述' }}</p>
 
+            <!-- 视频模型专属信息 -->
+            <div class="gc-video-detail" v-if="caps[g.name]?.mode === 'video'">
+              <div class="gc-video-endpoint">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                <code>{{ caps[g.name].video_api_endpoint || 'POST /v1/contents/generations/tasks' }}</code>
+              </div>
+              <div class="gc-video-tags" v-if="caps[g.name].video_supported_actions?.length">
+                <span class="video-tag" v-for="act in caps[g.name].video_supported_actions" :key="act">
+                  {{ act === 'text_to_video' ? '文生视频' : act === 'image_to_video' ? '图生视频' : act === 'multimodal_reference' ? '多模态参考' : act }}
+                </span>
+              </div>
+              <div class="gc-video-specs" v-if="caps[g.name].video_supported_resolutions?.length || caps[g.name].video_max_duration_seconds">
+                <span class="video-spec" v-if="caps[g.name].video_supported_resolutions?.length">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="3" width="20" height="14" rx="2"/><polygon points="10,8 16,12 10,16"/></svg>
+                  {{ caps[g.name].video_supported_resolutions?.join(' / ') }}
+                </span>
+                <span class="video-spec" v-if="caps[g.name].video_max_duration_seconds">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12,6 12,12 16,14"/></svg>
+                  {{ formatVideoDuration(caps[g.name].video_max_duration_seconds) }}
+                </span>
+              </div>
+            </div>
+
             <!-- Signal line: performance indicators -->
             <div class="gc-signals" v-if="perfMap[g.name]">
               <span class="gc-signal gc-signal-speed" :class="ttftSignalClass(perfMap[g.name].ttft_p50_ms)">
@@ -195,6 +218,7 @@ const MODE_LABEL: Record<string, string> = {
   image_generation: '图像生成',
   audio_transcription: '语音转写',
   audio_speech: '语音合成',
+  video: '视频生成',
 }
 
 const router = useRouter()
@@ -378,6 +402,16 @@ function rateSignalClass(rate: number): string {
 function formatPerfMs(ms: number): string {
   if (ms >= 1000) return (ms / 1000).toFixed(1) + 's'
   return ms + 'ms'
+}
+
+function formatVideoDuration(sec: number): string {
+  if (sec <= 0) return ''
+  if (sec >= 60) {
+    const min = Math.floor(sec / 60)
+    const s = sec % 60
+    return s > 0 ? `最长 ${min}分${s}秒` : `最长 ${min}分钟`
+  }
+  return `最长 ${sec}秒`
 }
 
 function tryModel(g: GroupListItem) {
@@ -796,6 +830,107 @@ onMounted(() => { load() })
 .cap-v       { color: #2471A3; background: rgba(36,113,163,0.08);   border-color: rgba(36,113,163,0.2); }
 .cap-f       { color: #7D3C98; background: rgba(125,60,152,0.07);   border-color: rgba(125,60,152,0.18); }
 .cap-c       { color: #8A9A98; background: #F5FAFA; border-color: #D8EEEC; font-variant-numeric: tabular-nums; }
+
+/* ── 视频模型专属卡片样式 ──────────────────── */
+.gc-video-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: rgba(124, 58, 237, 0.04);
+  border: 1px solid rgba(124, 58, 237, 0.12);
+  border-radius: 8px;
+  margin-top: 2px;
+}
+
+.gc-video-endpoint {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #7C3AED;
+  font-size: 11px;
+
+  svg {
+    flex-shrink: 0;
+    color: #8B5CF6;
+  }
+
+  code {
+    font-family: 'Fira Code', 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: #6D28D9;
+    background: rgba(124, 58, 237, 0.06);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+}
+
+.gc-video-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.video-tag {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: rgba(124, 58, 237, 0.08);
+  color: #7C3AED;
+  border: 1px solid rgba(124, 58, 237, 0.18);
+}
+
+.gc-video-specs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.video-spec {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: #6D6D7A;
+  font-weight: 500;
+
+  svg {
+    flex-shrink: 0;
+    color: #8B8B9A;
+  }
+}
+
+:global(html.dark) .gc-video-detail {
+  background: rgba(139, 92, 246, 0.06);
+  border-color: rgba(139, 92, 246, 0.15);
+}
+
+:global(html.dark) .gc-video-endpoint {
+  color: #A78BFA;
+
+  svg { color: #A78BFA; }
+
+  code {
+    color: #C4B5FD;
+    background: rgba(139, 92, 246, 0.1);
+  }
+}
+
+:global(html.dark) .video-tag {
+  background: rgba(139, 92, 246, 0.1);
+  color: #A78BFA;
+  border-color: rgba(139, 92, 246, 0.2);
+}
+
+:global(html.dark) .video-spec {
+  color: #9D9DAD;
+
+  svg { color: #A0A0B0; }
+}
 
 /* 操作按钮 */
 .gc-actions {

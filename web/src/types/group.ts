@@ -9,6 +9,7 @@ export interface Group {
   name: string
   description: string
   strategy: Strategy
+  model_type: string
   enabled: boolean
   max_switches: number
   same_model_retries: number
@@ -49,6 +50,7 @@ export interface CreateGroupRequest {
   name: string
   description: string
   strategy: Strategy
+  model_type?: string
   max_switches?: number
   same_model_retries?: number
   failover_cooldown_seconds?: number
@@ -59,6 +61,7 @@ export interface UpdateGroupRequest {
   name?: string
   description?: string
   strategy?: Strategy
+  model_type?: string
   enabled?: boolean
   max_switches?: number
   same_model_retries?: number

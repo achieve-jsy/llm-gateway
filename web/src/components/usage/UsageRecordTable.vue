@@ -82,7 +82,7 @@
         <el-table-column label="类型" min-width="70" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.stream" type="primary" size="small" effect="plain">流式</el-tag>
-            <el-tag v-else type="" size="small" effect="plain">同步</el-tag>
+            <el-tag v-else type="info" size="small" effect="plain">同步</el-tag>
           </template>
         </el-table-column>
 
@@ -298,8 +298,6 @@ import type { LogRow, TraceData } from '@/types/usage-log'
 import UsageTraceDrawer from '@/components/usage/UsageTraceDrawer.vue'
 import VideoTaskDetail from '@/components/usage/VideoTaskDetail.vue'
 import { fmtDateTime, fmtDuration } from '@/utils/time'
-import UsageTraceDrawer from './UsageTraceDrawer.vue'
-import type { LogRow, TraceData } from '@/types/usage-log'
 
 const props = withDefaults(defineProps<{
   rows: LogRow[]

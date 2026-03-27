@@ -264,6 +264,7 @@ func Setup(
 		videoHandler := handler.NewVideoHandler(relayAdapter, volcengineAdapter,
 			handler.WithTaskStore(videoTaskStore),
 			handler.WithModelResolver(modelResolver),
+			handler.WithGroupDispatcher(groupDispatch),
 		)
 		videoHandlerReg := videoHandler.AdapterRegistry()
 		videoHandlerReg.Swap(relayAdapter, volcengineAdapter, adapters.relayName, adapters.volcName)

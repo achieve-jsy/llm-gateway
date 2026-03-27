@@ -10,7 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/core/video"
+	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/gin-gonic/gin"
 )
 
@@ -22,6 +24,11 @@ type ModelResolver func(model string) string
 
 // ProviderNameResolver resolves a provider type to a display name.
 type ProviderNameResolver func(providerType string) string
+
+// VideoGroupDispatcher 将模型组名解析为上游成员（与 chat/embeddings 共用 GroupAwareDispatcher）。
+type VideoGroupDispatcher interface {
+	Dispatch(c *gin.Context, modelName string, req *core.ChatRequest) (*scheduler.RouteDecision, error)
+}
 
 // VideoTaskRecord 创建任务时写入持久化层的完整字段。
 type VideoTaskRecord struct {
@@ -268,6 +275,7 @@ type VideoHandler struct {
 	adapterReg    *VideoAdapterRegistry
 	modelResolver ModelResolver
 	nameResolver  ProviderNameResolver
+	groupDispatch VideoGroupDispatcher
 	taskStore     VideoTaskStore
 }
 
@@ -295,6 +303,11 @@ func WithProviderNameResolver(r ProviderNameResolver) VideoHandlerOption {
 // WithTaskStore sets the video task persistence store.
 func WithTaskStore(s VideoTaskStore) VideoHandlerOption {
 	return func(h *VideoHandler) { h.taskStore = s }
+}
+
+// WithGroupDispatcher 注入模型组调度（组名 → 上游模型 ID / 渠道类型）。
+func WithGroupDispatcher(d VideoGroupDispatcher) VideoHandlerOption {
+	return func(h *VideoHandler) { h.groupDispatch = d }
 }
 
 // NewVideoHandler 创建视频 Handler
@@ -351,13 +364,42 @@ func (h *VideoHandler) CreateTask(c *gin.Context) {
 		return
 	}
 
-	providerType := h.resolveProviderType(req.Model)
-	providerName := h.resolveProviderName(providerType)
-	adapter := h.adapterReg.Get(providerType)
+	originalModel := strings.TrimSpace(req.Model)
+	upstreamModel := originalModel
 
-	// 供 UsageCollector / call_logs 使用
-	c.Set("model", req.Model)
+	providerType := h.resolveProviderType(originalModel)
+	providerName := h.resolveProviderName(providerType)
+
+	// 组名 → 上游模型 ID（与 chat/embeddings 一致）；非组名时 decision=nil，原样透传
+	if h.groupDispatch != nil && originalModel != "" {
+		decision, err := h.groupDispatch.Dispatch(c, originalModel, nil)
+		if err != nil {
+			respondGroupError(c, err)
+			return
+		}
+		if decision != nil {
+			if name := strings.TrimSpace(decision.ModelName); name != "" {
+				upstreamModel = name
+			}
+			if ct := strings.TrimSpace(decision.ChannelType); ct != "" {
+				providerType = ct
+			}
+			if pn := strings.TrimSpace(decision.ProviderName); pn != "" {
+				providerName = pn
+			}
+			body, err = rewriteVideoBodyModel(body, upstreamModel)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+				return
+			}
+		}
+	}
+
+	// 供 UsageCollector / call_logs 使用：对外模型名保留组名
+	c.Set("model", originalModel)
 	c.Set("provider", providerName)
+
+	adapter := h.adapterReg.Get(providerType)
 
 	taskID, err := adapter.CreateTask(c.Request.Context(), body)
 	if err != nil {
@@ -373,7 +415,7 @@ func (h *VideoHandler) CreateTask(c *gin.Context) {
 			APIKeyType:   c.GetString("key_type"),
 			UserID:       c.GetString("user_id"),
 			UserName:     c.GetString("user_name"),
-			Model:        req.Model,
+			Model:        originalModel,
 			ProviderName: providerName,
 			ProviderType: providerType,
 			Status:       "submitted",
@@ -387,6 +429,20 @@ func (h *VideoHandler) CreateTask(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"id": taskID})
+}
+
+// rewriteVideoBodyModel 将请求体中的 model 字段替换为上游模型 ID，其余字段原样保留。
+func rewriteVideoBodyModel(body []byte, upstreamModel string) ([]byte, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+	modelJSON, err := json.Marshal(upstreamModel)
+	if err != nil {
+		return nil, err
+	}
+	raw["model"] = modelJSON
+	return json.Marshal(raw)
 }
 
 // GetTask 查询任务状态

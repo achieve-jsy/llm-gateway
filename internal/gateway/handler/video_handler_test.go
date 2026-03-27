@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/example/llm-gateway/internal/core"
+	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/gin-gonic/gin"
 )
 
@@ -202,6 +204,78 @@ func TestVideoHandler_CreateTask_RequestPassthrough(t *testing.T) {
 	}
 	if original["ratio"] != captured["ratio"] {
 		t.Errorf("ratio mismatch: expected '%v', got '%v'", original["ratio"], captured["ratio"])
+	}
+}
+
+// stubVideoGroupDispatch 模拟组调度：把组名解析为上游模型 ID。
+type stubVideoGroupDispatch struct {
+	decision *scheduler.RouteDecision
+	err      error
+	seen     string
+}
+
+func (s *stubVideoGroupDispatch) Dispatch(c *gin.Context, modelName string, req *core.ChatRequest) (*scheduler.RouteDecision, error) {
+	s.seen = modelName
+	return s.decision, s.err
+}
+
+func TestVideoHandler_CreateTask_RewritesGroupModelToUpstream(t *testing.T) {
+	var capturedBody json.RawMessage
+	capturingMock := &capturingVideoProvider{
+		mockVideoProvider: &mockVideoProvider{createTaskID: "cgt-rewritten"},
+		capturedBody:      &capturedBody,
+	}
+	stub := &stubVideoGroupDispatch{
+		decision: &scheduler.RouteDecision{
+			ModelName:    "doubao-seedance-2-0-260128",
+			ChannelType:  "seedance-relay",
+			ProviderName: "景汐-测试E2E",
+		},
+	}
+	handler := NewVideoHandler(capturingMock, capturingMock, WithGroupDispatcher(stub))
+
+	router := setupTestRouter()
+	router.POST("/contents/generations/tasks", handler.CreateTask)
+
+	body := `{"model":"seedance-video-test","content":[{"type":"text","text":"一只猫"}],"resolution":"720p","ratio":"16:9","duration":5}`
+	req, _ := http.NewRequest("POST", "/contents/generations/tasks", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if stub.seen != "seedance-video-test" {
+		t.Fatalf("dispatch seen=%q want seedance-video-test", stub.seen)
+	}
+	var captured map[string]interface{}
+	if err := json.Unmarshal(capturedBody, &captured); err != nil {
+		t.Fatalf("unmarshal captured: %v", err)
+	}
+	if captured["model"] != "doubao-seedance-2-0-260128" {
+		t.Fatalf("upstream body model=%v want doubao-seedance-2-0-260128", captured["model"])
+	}
+	if captured["resolution"] != "720p" {
+		t.Fatalf("resolution should be preserved, got %v", captured["resolution"])
+	}
+}
+
+func TestRewriteVideoBodyModel(t *testing.T) {
+	in := []byte(`{"model":"seedance-video-test","resolution":"720p","duration":5}`)
+	out, err := rewriteVideoBodyModel(in, "doubao-seedance-2-0-260128")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["model"] != "doubao-seedance-2-0-260128" {
+		t.Fatalf("model=%v", m["model"])
+	}
+	if m["resolution"] != "720p" || m["duration"] != float64(5) {
+		t.Fatalf("other fields corrupted: %v", m)
 	}
 }
 

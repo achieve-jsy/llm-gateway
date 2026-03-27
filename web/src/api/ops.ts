@@ -511,6 +511,7 @@ export interface OpsDashboardSettings {
   auto_refresh_interval: number
   show_alert_events: boolean
   show_token_stats: boolean
+  show_video_stats: boolean
   show_concurrency_card: boolean
   show_switch_rate_chart: boolean
   default_query_mode: OpsQueryMode

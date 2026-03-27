@@ -49,6 +49,10 @@ export interface LogRow {
   output_price_snapshot?: number | null
   /** 调用的端点路径，如 /v1/chat/completions, /v1/embeddings, /v1/rerank */
   inbound_endpoint?: string
+  /** 原始请求体（列表 API 自 call_traces JOIN，用于 rerank 文档数等） */
+  request_body?: unknown
+  /** Rerank：documents 数组长度（后端 SQL 提取，优先于解析 request_body） */
+  documents_count?: number | null
 }
 
 export interface TraceData {

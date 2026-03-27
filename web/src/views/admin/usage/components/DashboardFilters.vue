@@ -30,8 +30,8 @@
     </div>
     <Transition name="ud-filter-collapse">
       <div v-show="showFilters" class="ud-filter-row ud-filter-row--dims">
-        <!-- 成员姓名：非普通用户可见 -->
-        <div v-if="effectiveRole !== 'user'" class="ud-filter-chip">
+        <!-- 成员姓名：非普通用户可见（Embedding/Rerank 精简筛选隐藏） -->
+        <div v-if="!compact && effectiveRole !== 'user'" class="ud-filter-chip">
           <span class="ud-chip-label">成员</span>
           <el-input v-model="filterUserName" placeholder="姓名搜索" clearable size="small"
             class="ud-chip-input" @change="$emit('userNameChange')" @clear="$emit('userNameClear')">
@@ -60,8 +60,8 @@
             </el-option>
           </el-select>
         </div>
-        <!-- Key 类型 -->
-        <div v-if="effectiveRole !== 'user'" class="ud-filter-chip">
+        <!-- Key 类型（Embedding/Rerank 精简筛选隐藏） -->
+        <div v-if="!compact && effectiveRole !== 'user'" class="ud-filter-chip">
           <span class="ud-chip-label">Key 类型</span>
           <el-select v-model="filterKeyType" placeholder="全部" clearable size="small"
             class="ud-chip-select" @change="$emit('loadAll')" @clear="$emit('loadAll')">
@@ -100,6 +100,8 @@ defineProps<{
   effectiveRole: string
   activeFilterCount: number
   hideEndpoint?: boolean
+  /** Embedding/Rerank：仅保留模型/状态等精简筛选 */
+  compact?: boolean
 }>()
 
 const dateRange = defineModel<[string, string]>('dateRange', { required: true })

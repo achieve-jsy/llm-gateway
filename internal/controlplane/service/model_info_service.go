@@ -30,11 +30,13 @@ type GroupModelInfo struct {
 	IsCapabilityOverride  bool    `json:"is_capability_override"`
 
 	// ── 视频模型专用字段（seedance） ──────────────────────────────────────
-	// 当 mode == "video" 时由 seedance 适配器填充；非视频模型保持零值。
-	VideoSupportedActions    []string `json:"video_supported_actions,omitempty"`    // 文生视频 / 图生视频 / 多模态参考
-	VideoSupportedResolutions []string `json:"video_supported_resolutions,omitempty"` // 720p / 1080p
-	VideoMaxDurationSeconds   int      `json:"video_max_duration_seconds,omitempty"`
-	VideoAPIEndpoint          string   `json:"video_api_endpoint,omitempty"` // POST /v1/contents/generations/tasks
+	// 当 mode == "video" 时从成员模型参数聚合；非视频模型保持零值。
+	VideoSupportedActions      []string `json:"video_supported_actions,omitempty"`
+	VideoSupportedResolutions  []string `json:"video_supported_resolutions,omitempty"`
+	VideoSupportedAspectRatios []string `json:"video_supported_aspect_ratios,omitempty"`
+	VideoMinDurationSeconds    int      `json:"video_min_duration_seconds,omitempty"`
+	VideoMaxDurationSeconds    int      `json:"video_max_duration_seconds,omitempty"`
+	VideoAPIEndpoint           string   `json:"video_api_endpoint,omitempty"` // POST /v1/contents/generations/tasks
 }
 
 // GroupInfoRepo 抽象按需查询启用模型组（含成员）的能力。
@@ -192,7 +194,62 @@ func aggregateGroupModelInfo(members []*model.Model) GroupModelInfo {
 	if info.Mode == "" {
 		info.Mode = firstMode
 	}
+	if info.Mode == "video" {
+		aggregateVideoCaps(&info, members)
+	}
 	return info
+}
+
+// aggregateVideoCaps 视频能力保守聚合：分辨率/宽高比/场景取交集，时长取最窄区间。
+func aggregateVideoCaps(info *GroupModelInfo, members []*model.Model) {
+	if info == nil || len(members) == 0 {
+		return
+	}
+	info.VideoAPIEndpoint = "POST /v1/contents/generations/tasks"
+
+	var res, ratios, actions []string
+	minDur, maxDur := 0, 0
+	for i, m := range members {
+		if i == 0 {
+			res = append([]string{}, m.VideoSupportedResolutions...)
+			ratios = append([]string{}, m.VideoSupportedAspectRatios...)
+			actions = append([]string{}, m.VideoSupportedActions...)
+			minDur = m.VideoMinDurationSeconds
+			maxDur = m.VideoMaxDurationSeconds
+			continue
+		}
+		res = intersectStrings(res, m.VideoSupportedResolutions)
+		ratios = intersectStrings(ratios, m.VideoSupportedAspectRatios)
+		actions = intersectStrings(actions, m.VideoSupportedActions)
+		if m.VideoMinDurationSeconds > minDur {
+			minDur = m.VideoMinDurationSeconds
+		}
+		if m.VideoMaxDurationSeconds > 0 && (maxDur == 0 || m.VideoMaxDurationSeconds < maxDur) {
+			maxDur = m.VideoMaxDurationSeconds
+		}
+	}
+	info.VideoSupportedResolutions = res
+	info.VideoSupportedAspectRatios = ratios
+	info.VideoSupportedActions = actions
+	info.VideoMinDurationSeconds = minDur
+	info.VideoMaxDurationSeconds = maxDur
+}
+
+func intersectStrings(a, b []string) []string {
+	if len(a) == 0 || len(b) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(b))
+	for _, s := range b {
+		set[s] = struct{}{}
+	}
+	out := make([]string, 0, len(a))
+	for _, s := range a {
+		if _, ok := set[s]; ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func memberMode(m *model.Model) string {

@@ -42,6 +42,12 @@ Enabled                    *bool      `gorm:"not null;default:true;index:idx_mod
 	CatalogID           *uuid.UUID `gorm:"type:uuid;index:idx_models_catalog_id" json:"catalog_id,omitempty"`
 	CtxOverridden       bool       `gorm:"not null;default:false" json:"ctx_overridden"`
 	MaxOutputOverridden bool       `gorm:"not null;default:false" json:"max_output_overridden"`
+	// 视频模型参数（model_type=video 时使用；JSON 数组字符串）
+	VideoSupportedResolutions  []string `gorm:"type:jsonb;not null;default:'[]';serializer:json" json:"video_supported_resolutions,omitempty"`
+	VideoSupportedAspectRatios []string `gorm:"type:jsonb;not null;default:'[]';serializer:json" json:"video_supported_aspect_ratios,omitempty"`
+	VideoMinDurationSeconds    int      `gorm:"not null;default:0" json:"video_min_duration_seconds,omitempty"`
+	VideoMaxDurationSeconds    int      `gorm:"not null;default:0" json:"video_max_duration_seconds,omitempty"`
+	VideoSupportedActions      []string `gorm:"type:jsonb;not null;default:'[]';serializer:json" json:"video_supported_actions,omitempty"`
 	// 四层配额体系（Phase 1）
 	// NULL = 不限，运行时按主体独立计数
 	QuotaRPM            *int `gorm:"column:quota_rpm" json:"quota_rpm,omitempty"`

@@ -99,27 +99,7 @@
       <OpsTokenStatsCard v-if="settings?.show_token_stats" :refresh-token="refreshToken" />
 
       <!-- Video Task Stats (full-width) -->
-      <el-card v-if="settings?.show_token_stats" class="ops-card" shadow="never">
-        <template #header>
-          <div class="ops-card-header">
-            <span class="ops-card-title">🎬 视频任务</span>
-          </div>
-        </template>
-        <div style="display:flex;gap:32px">
-          <div style="text-align:center">
-            <div style="font-size:12px;color:var(--text-secondary)">生成中</div>
-            <div style="font-size:28px;font-weight:800;font-family:var(--font-mono);color:var(--color-video)">--</div>
-          </div>
-          <div style="text-align:center">
-            <div style="font-size:12px;color:var(--text-secondary)">排队中</div>
-            <div style="font-size:28px;font-weight:800;font-family:var(--font-mono)">--</div>
-          </div>
-          <div style="text-align:center">
-            <div style="font-size:12px;color:var(--text-secondary)">平均耗时</div>
-            <div style="font-size:28px;font-weight:800;font-family:var(--font-mono)">--</div>
-          </div>
-        </div>
-      </el-card>
+      <OpsVideoTaskStatsCard v-if="settings?.show_video_stats" :refresh-token="refreshToken" />
 
       <!-- Error Logs (full-width) -->
       <OpsErrorLogTable v-if="!isFullscreen" :refresh-token="refreshToken" />
@@ -246,6 +226,7 @@ import OpsAlertEventsCard from './components/OpsAlertEventsCard.vue'
 import OpsAlertRulesCard from './components/OpsAlertRulesCard.vue'
 import OpsSystemLogTable from './components/OpsSystemLogTable.vue'
 import OpsTokenStatsCard from './components/OpsTokenStatsCard.vue'
+import OpsVideoTaskStatsCard from './components/OpsVideoTaskStatsCard.vue'
 import OpsSettingsDialog from './components/OpsSettingsDialog.vue'
 import OpsErrorDetailsModal from './components/OpsErrorDetailsModal.vue'
 import OpsErrorDetailModal from './components/OpsErrorDetailModal.vue'
@@ -293,6 +274,7 @@ const settings = ref<OpsDashboardSettings>({
   auto_refresh_interval: 30,
   show_alert_events: true,
   show_token_stats: true,
+  show_video_stats: true,
   show_concurrency_card: true,
   show_switch_rate_chart: true,
   default_query_mode: 'auto'

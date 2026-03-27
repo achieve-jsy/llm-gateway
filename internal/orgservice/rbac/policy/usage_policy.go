@@ -57,14 +57,15 @@ func (p UsagePolicy) QueryScope(actor rbac.Actor) func(*gorm.DB) *gorm.DB {
 		if actor.IsGlobal {
 			return db
 		}
+		// 使用 call_logs. 前缀：ScopedLogs 等会 LEFT JOIN call_traces，避免列歧义
 		if len(actor.StudioIDs) > 0 {
-			return db.Where("studio_id IN ?", actor.StudioIDs)
+			return db.Where("call_logs.studio_id IN ?", actor.StudioIDs)
 		}
 		if len(actor.DeptIDs) > 0 {
 			// dept_id 可能为空（历史数据）或 SSO EhrDeptID 或 departments.id UUID
-			return db.Where(`dept_id IN ? OR dept_id IN (SELECT id::text FROM departments WHERE dept_id IN ?) OR user_id IN (SELECT u2.id::text FROM users u2 JOIN departments d2 ON d2.id = u2.dept_id WHERE d2.dept_id IN ?)`, actor.DeptIDs, actor.DeptIDs, actor.DeptIDs)
+			return db.Where(`call_logs.dept_id IN ? OR call_logs.dept_id IN (SELECT id::text FROM departments WHERE dept_id IN ?) OR call_logs.user_id IN (SELECT u2.id::text FROM users u2 JOIN departments d2 ON d2.id = u2.dept_id WHERE d2.dept_id IN ?)`, actor.DeptIDs, actor.DeptIDs, actor.DeptIDs)
 		}
-		return db.Where("user_id = ?", actor.UserID)
+		return db.Where("call_logs.user_id = ?", actor.UserID)
 	}
 }
 

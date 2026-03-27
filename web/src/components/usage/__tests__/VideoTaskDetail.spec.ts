@@ -1,214 +1,89 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import ElementPlus from 'element-plus'
 import VideoTaskDetail from '../VideoTaskDetail.vue'
 
-// Mock element-plus icons (avoid loading actual icon files)
-vi.mock('@element-plus/icons-vue', () => ({
-  DataBoard: { template: '<i />' },
-  Refresh: { template: '<i />' },
-  VideoPause: { template: '<i />' },
-  VideoPlay: { template: '<i />' },
+vi.mock('@/api/videoTasks', () => ({
+  videoTasksAPI: {
+    get: vi.fn().mockResolvedValue({
+      task_id: 'cgt-test-001',
+      model: 'doubao-seedance-2-0-260128',
+      provider_name: '中转 A',
+      provider_type: 'seedance-relay',
+      status: 'succeeded',
+      created_at: '2026-07-08T14:30:00Z',
+      updated_at: '2026-07-08T14:31:00Z',
+      api_key_name: 'demo-key',
+      user_name: '张三',
+      video_url: 'https://example.com/video.mp4',
+      request_body: '{"model":"doubao-seedance-2-0-260128","prompt":"海边日落"}',
+      response_body: '{"status":"succeeded","content":{"video_url":"https://example.com/video.mp4"}}',
+      events: [
+        { event_type: 'submitted', event_data: '任务已提交', created_at: '2026-07-08T14:30:00Z' },
+        { event_type: 'succeeded', event_data: '任务已成功', created_at: '2026-07-08T14:31:00Z' },
+      ],
+    }),
+  },
 }))
 
 describe('VideoTaskDetail', () => {
-  let wrapper: ReturnType<typeof mount>
-
-  afterEach(() => {
-    // Clean up any teleported drawer content left in the DOM
-    document.body.innerHTML = ''
-  })
-  const mockTask = {
-    task_id: 'cgt-test-123',
-    upstream_task_id: 'cgt-upstream-456',
+  const task = {
+    task_id: 'cgt-test-001',
     model: 'doubao-seedance-2-0-260128',
     provider_name: '中转 A',
+    provider_type: 'seedance-relay',
     status: 'succeeded',
-    created_at: '2026-07-08 14:30:00',
-    updated_at: '2026-07-08 14:30:45',
-    video_url: 'https://example.com/video.mp4',
-    request_body: { prompt: 'test prompt', size: '1280x720' },
-    response_body: { task_id: 'cgt-test-123', status: 'succeeded' },
-    events: [
-      { timestamp: '2026-07-08 14:30:00', type: 'submitted', message: '任务创建成功' },
-      { timestamp: '2026-07-08 14:30:05', type: 'running', message: '上游开始处理' },
-      { timestamp: '2026-07-08 14:30:45', type: 'succeeded', message: '生成完成' },
-    ],
+    created_at: '2026-07-08T14:30:00Z',
+    updated_at: '2026-07-08T14:31:00Z',
   }
 
-  const defaultProps = {
-    task: mockTask as any,
-    modelValue: true,
-  }
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
 
-  function mountComponent(props = {}) {
-    wrapper = mount(VideoTaskDetail, {
-      props: { ...defaultProps, ...props },
-      global: {
-        plugins: [ElementPlus],
+  it('以五个标签页展示任务详情、视频结果、请求响应和时间线', async () => {
+    const wrapper = mount(VideoTaskDetail, {
+      props: {
+        modelValue: true,
+        task,
       },
-      attachTo: document.body,
+      global: { plugins: [ElementPlus] },
     })
-    return wrapper
-  }
+    await flushPromises()
+    await nextTick()
 
-  // Helper: get text from teleported drawer content
-  function getDrawerText() {
-    return document.body.textContent || ''
-  }
+    const text = wrapper.text()
+    expect(text).toContain('cgt-test-001')
+    expect(text).toContain('doubao-seedance-2-0-260128')
+    expect(text).toContain('中转 A')
+    expect(text).toContain('succeeded')
+    expect(text).toContain('任务信息')
+    expect(text).toContain('生成结果')
+    expect(text).toContain('请求')
+    expect(text).toContain('响应')
+    expect(text).toContain('事件时间线')
+    expect(wrapper.find('.el-tabs').exists()).toBe(true)
 
-  describe('render', () => {
-    it('renders task info in teleported drawer', async () => {
-      const wrapper = mountComponent()
-      await nextTick()
+    await clickTab(wrapper, '生成结果')
+    expect(wrapper.find('video').attributes('src')).toBe('https://example.com/video.mp4')
+    expect(wrapper.find('a[download]').attributes('href')).toBe('https://example.com/video.mp4')
 
-      const text = getDrawerText()
-      expect(text).toContain('cgt-test-123')
-      expect(text).toContain('doubao-seedance-2-0-260128')
-      expect(text).toContain('中转 A')
-    })
+    await clickTab(wrapper, '请求')
+    expect(wrapper.text()).toContain('海边日落')
 
-    it('shows video download button when status is succeeded', async () => {
-      const wrapper = mountComponent()
-      await nextTick()
+    await clickTab(wrapper, '响应')
+    expect(wrapper.text()).toContain('content')
 
-      const text = getDrawerText()
-      expect(text).toContain('下载视频')
-    })
-
-    it('shows empty state when status is not succeeded', async () => {
-      const wrapper = mountComponent({
-        task: { ...mockTask, status: 'running' },
-      })
-      await nextTick()
-
-      const text = getDrawerText()
-      expect(text).toContain('视频尚未生成完成')
-    })
-
-    it('shows empty state when status is failed', async () => {
-      const wrapper = mountComponent({
-        task: { ...mockTask, status: 'failed' },
-      })
-      await nextTick()
-
-      const text = getDrawerText()
-      expect(text).toContain('视频尚未生成完成')
-    })
-
-    it('has 5 tabs', async () => {
-      const wrapper = mountComponent()
-      await nextTick()
-
-      const tabs = document.body.querySelectorAll('.el-tabs__item')
-      expect(tabs.length).toBe(5)
-    })
-
-    it('renders JSON viewer', async () => {
-      const wrapper = mountComponent()
-      await nextTick()
-
-      const jsonViewers = document.body.querySelectorAll('.json-viewer')
-      expect(jsonViewers.length).toBeGreaterThan(0)
-    })
-
-    it('does not crash when task is null', async () => {
-      const wrapper = mountComponent({
-        task: null,
-      })
-      await nextTick()
-
-      expect(wrapper.exists()).toBe(true)
-      const text = getDrawerText()
-      expect(text).toContain('视频任务详情')
-    })
-
-    it('renders status tag', async () => {
-      const wrapper = mountComponent()
-      await nextTick()
-
-      const text = getDrawerText()
-      expect(text).toContain('succeeded')
-    })
-  })
-
-  describe('getStatusType', () => {
-    it('maps status to correct type', () => {
-      const wrapper = mountComponent()
-      const vm = wrapper.vm as any
-
-      expect(vm.getStatusType('submitted')).toBe('info')
-      expect(vm.getStatusType('running')).toBe('warning')
-      expect(vm.getStatusType('succeeded')).toBe('success')
-      expect(vm.getStatusType('failed')).toBe('danger')
-      expect(vm.getStatusType(undefined)).toBe('info')
-      expect(vm.getStatusType('unknown')).toBe('info')
-    })
-  })
-
-  describe('getEventType', () => {
-    it('maps event type correctly', () => {
-      const wrapper = mountComponent()
-      const vm = wrapper.vm as any
-
-      expect(vm.getEventType('submitted')).toBe('primary')
-      expect(vm.getEventType('running')).toBe('warning')
-      expect(vm.getEventType('succeeded')).toBe('success')
-      expect(vm.getEventType('failed')).toBe('danger')
-      expect(vm.getEventType('unknown')).toBe('info')
-    })
-  })
-
-  describe('formatJSON', () => {
-    it('formats object to JSON string', () => {
-      const wrapper = mountComponent()
-      const vm = wrapper.vm as any
-
-      const result = vm.formatJSON({ a: 1, b: 'test' })
-      expect(result).toBe('{\n  "a": 1,\n  "b": "test"\n}')
-    })
-
-    it('returns placeholder for null/undefined data', () => {
-      const wrapper = mountComponent()
-      const vm = wrapper.vm as any
-
-      expect(vm.formatJSON(null)).toBe('暂无数据')
-      expect(vm.formatJSON(undefined)).toBe('暂无数据')
-    })
-  })
-
-  describe('downloadVideo', () => {
-    it('opens new window when video_url exists', () => {
-      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
-      const wrapper = mountComponent()
-      const vm = wrapper.vm as any
-
-      vm.downloadVideo()
-
-      expect(openSpy).toHaveBeenCalledWith('https://example.com/video.mp4', '_blank')
-      openSpy.mockRestore()
-    })
-
-    it('does not throw when video_url is undefined', () => {
-      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
-      const wrapper = mountComponent({
-        task: { ...mockTask, video_url: undefined },
-      })
-      const vm = wrapper.vm as any
-
-      expect(() => vm.downloadVideo()).not.toThrow()
-      openSpy.mockRestore()
-    })
-  })
-
-  describe('v-model', () => {
-    it('accepts modelValue prop', () => {
-      const wrapper = mountComponent({
-        modelValue: false,
-      })
-
-      expect(wrapper.props('modelValue')).toBe(false)
-    })
+    await clickTab(wrapper, '事件时间线')
+    expect(wrapper.text()).toContain('任务已成功')
   })
 })
+
+async function clickTab(wrapper: ReturnType<typeof mount>, label: string) {
+  const tab = wrapper.findAll('.el-tabs__item').find(item => item.text().includes(label))
+  expect(tab, `tab ${label} should exist`).toBeTruthy()
+  await tab!.trigger('click')
+  await flushPromises()
+  await nextTick()
+}

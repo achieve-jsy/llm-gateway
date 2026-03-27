@@ -36,10 +36,12 @@ export interface GroupCapability {
 
   // ── 视频模型专用字段（seedance） ──────────────────────────────────────
   // 当 mode == "video" 时由后端填充；非视频模型为 undefined。
-  video_supported_actions?: string[]      // 文生视频 / 图生视频 / 多模态参考
-  video_supported_resolutions?: string[]  // 720p / 1080p
+  video_supported_actions?: string[]
+  video_supported_resolutions?: string[]
+  video_supported_aspect_ratios?: string[]
+  video_min_duration_seconds?: number
   video_max_duration_seconds?: number
-  video_api_endpoint?: string             // POST /v1/contents/generations/tasks
+  video_api_endpoint?: string
 }
 
 export const groupsApi = {

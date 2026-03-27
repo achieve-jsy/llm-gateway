@@ -790,61 +790,69 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 	actor := rbac.GetActor(c)
 	usagePol := policy.UsagePolicy{}
 
+	// 列名加 call_logs. 前缀：后续 LEFT JOIN call_traces 时避免 ts 歧义
 	base := db.Table("call_logs").
-		Where("ts::date BETWEEN ? AND ?", startStr, endStr).
+		Where("call_logs.ts::date BETWEEN ? AND ?", startStr, endStr).
 		Scopes(usagePol.QueryScope(actor))
 
 	// 可选过滤条件
 	if filterUserID != "" {
-		base = base.Where("user_id = ?", filterUserID)
+		base = base.Where("call_logs.user_id = ?", filterUserID)
 	}
 	if filterUser != "" {
-		base = base.Where("user_name ILIKE ?", "%"+filterUser+"%")
+		base = base.Where("call_logs.user_name ILIKE ?", "%"+filterUser+"%")
 	}
 	if filterDeptID != "" {
-		base = base.Where("dept_id = ?", filterDeptID)
+		base = base.Where("call_logs.dept_id = ?", filterDeptID)
 	}
 	if filterStudioID != "" {
-		base = base.Where("studio_id = ?", filterStudioID)
+		base = base.Where("call_logs.studio_id = ?", filterStudioID)
 	}
 	if filterKeyType != "" {
-		base = base.Where("COALESCE(NULLIF(key_type, ''), 'personal') = ?", filterKeyType)
+		base = base.Where("COALESCE(NULLIF(call_logs.key_type, ''), 'personal') = ?", filterKeyType)
 	}
 	if modelName != "" {
-		base = base.Where("model ILIKE ?", "%"+modelName+"%")
+		base = base.Where("call_logs.model ILIKE ?", "%"+modelName+"%")
 	}
 	if endpoint := c.Query("endpoint"); endpoint != "" {
-		base = base.Where("inbound_endpoint = ?", endpoint)
+		base = base.Where("call_logs.inbound_endpoint = ?", endpoint)
 	}
 	switch statusStr {
 	case "success":
-		base = base.Where("status = 200")
+		base = base.Where("call_logs.status = 200")
 	case "error":
-		base = base.Where("status <> 200")
+		base = base.Where("call_logs.status <> 200")
 	}
 
-	// Count
+	// Count（在 JOIN 前统计，避免 call_traces 放大行数）
 	var total int64
 	if err := base.Count(&total).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	cols := `request_id, ts,
-		key_id, key_name, key_type, user_id, user_name, dept_id, dept_name, studio_id, studio_name,
-		model, routed_model, group_name, provider,
-		prompt_tokens, cached_tokens, cache_write_tokens,
-		completion_tokens, reasoning_tokens, total_tokens,
-		status, duration_ms, first_token_ms,
-		est_cost_usd, input_cost_usd, output_cost_usd, cache_read_cost_usd,
-		input_price_snapshot, output_price_snapshot,
-		stage_auth_ms, stage_route_ms, stage_upstream_ms, stage_ttfb_ms,
-		stream, failover_used, usage_missing, reasoning_effort,
-		ip_address, user_agent, request_body, response_body`
+	// request_body 在 call_traces；列表 LEFT JOIN 供 Rerank 文档数等展示
+	cols := `call_logs.request_id, call_logs.ts,
+		call_logs.key_id, call_logs.key_name, call_logs.key_type, call_logs.user_id, call_logs.user_name,
+		call_logs.dept_id, call_logs.dept_name, call_logs.studio_id, call_logs.studio_name,
+		call_logs.model, call_logs.routed_model, call_logs.group_name, call_logs.provider,
+		call_logs.prompt_tokens, call_logs.cached_tokens, call_logs.cache_write_tokens,
+		call_logs.completion_tokens, call_logs.reasoning_tokens, call_logs.total_tokens,
+		call_logs.status, call_logs.duration_ms, call_logs.first_token_ms,
+		call_logs.est_cost_usd, call_logs.input_cost_usd, call_logs.output_cost_usd, call_logs.cache_read_cost_usd,
+		call_logs.input_price_snapshot, call_logs.output_price_snapshot,
+		call_logs.stage_auth_ms, call_logs.stage_route_ms, call_logs.stage_upstream_ms, call_logs.stage_ttfb_ms,
+		call_logs.stream, call_logs.failover_used, call_logs.usage_missing, call_logs.reasoning_effort,
+		call_logs.ip_address, call_logs.user_agent,
+		ct.request_body AS request_body, ct.response_body AS response_body,
+		CASE WHEN jsonb_typeof(ct.request_body->'documents') = 'array'
+			THEN jsonb_array_length(ct.request_body->'documents') ELSE NULL END AS documents_count`
 
 	var rows []map[string]interface{}
-	if err := base.Select(cols).
-		Order("ts DESC").
+	if err := base.
+		Joins("LEFT JOIN call_traces ct ON ct.request_id = call_logs.request_id").
+		Select(cols).
+		Order("call_logs.ts DESC").
 		Limit(pageSize).Offset((page - 1) * pageSize).
 		Find(&rows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

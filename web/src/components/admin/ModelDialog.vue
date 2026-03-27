@@ -180,6 +180,37 @@
         <span class="form-hint inline">tokens</span>
       </el-form-item>
 
+      <template v-if="formData.model_type === 'video'">
+        <el-form-item label="分辨率">
+          <el-select v-model="formData.video_supported_resolutions" multiple placeholder="多选" style="width: 100%">
+            <el-option v-for="r in VIDEO_RESOLUTIONS" :key="r" :label="r" :value="r" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="宽高比">
+          <el-select v-model="formData.video_supported_aspect_ratios" multiple placeholder="多选" style="width: 100%">
+            <el-option v-for="r in VIDEO_ASPECT_RATIOS" :key="r" :label="r" :value="r" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="时长范围（秒）">
+          <div class="duration-range">
+            <el-input-number v-model="formData.video_min_duration_seconds" :min="1" :max="600" />
+            <span class="form-hint inline">~</span>
+            <el-input-number v-model="formData.video_max_duration_seconds" :min="1" :max="600" />
+          </div>
+          <div class="form-hint">常见 Seedance 范围为 4～15 秒</div>
+        </el-form-item>
+        <el-form-item label="支持场景">
+          <el-select v-model="formData.video_supported_actions" multiple placeholder="多选" style="width: 100%">
+            <el-option
+              v-for="a in VIDEO_ACTIONS"
+              :key="a.value"
+              :label="a.label"
+              :value="a.value"
+            />
+          </el-select>
+        </el-form-item>
+      </template>
+
       <el-form-item label="价格模式">
         <el-radio-group v-model="formData.price_mode">
           <el-radio value="catalog">跟随目录价格</el-radio>
@@ -321,11 +352,20 @@ import type { Provider } from '@/types/provider'
 import type { ModelTag } from '@/types/model-tag'
 import type { ModelCatalog } from '@/types/catalog'
 
+const VIDEO_RESOLUTIONS = ['720p', '480p', '1080p', '4K'] as const
+const VIDEO_ASPECT_RATIOS = ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9', 'adaptive'] as const
+const VIDEO_ACTIONS = [
+  { value: 'text_to_video', label: '文生视频' },
+  { value: 'image_to_video', label: '图生视频' },
+  { value: 'multimodal_reference', label: '多模态参考' },
+  { value: 'web_search', label: '联网搜索' },
+] as const
+
 interface FormState {
   name: string
   upstream_model_id: string
   provider_id: string
-  model_type: 'chat' | 'embedding' | 'embedding_vl' | 'rerank'
+  model_type: 'chat' | 'embedding' | 'embedding_vl' | 'rerank' | 'video'
   description: string
   context_length: number
   max_output_tokens: number
@@ -333,6 +373,11 @@ interface FormState {
   input_price: number
   output_price: number
   weight: number
+  video_supported_resolutions: string[]
+  video_supported_aspect_ratios: string[]
+  video_min_duration_seconds: number
+  video_max_duration_seconds: number
+  video_supported_actions: string[]
 }
 
 const props = defineProps<{
@@ -381,7 +426,12 @@ const formData = ref<FormState>({
   price_mode: 'catalog',
   input_price: 0,
   output_price: 0,
-  weight: 1
+  weight: 1,
+  video_supported_resolutions: ['720p', '480p'],
+  video_supported_aspect_ratios: ['16:9', '9:16', '1:1'],
+  video_min_duration_seconds: 4,
+  video_max_duration_seconds: 15,
+  video_supported_actions: ['text_to_video', 'image_to_video', 'multimodal_reference'],
 })
 
 /** 监听 model 变化，回填表单 */
@@ -394,14 +444,19 @@ watch(
         name: val.name,
         upstream_model_id: val.upstream_model_id || '',
         provider_id: val.provider_id,
-        model_type: (val.model_type as 'chat' | 'embedding' | 'rerank') || 'chat',
+        model_type: (val.model_type as FormState['model_type']) || 'chat',
         description: val.description || '',
         context_length: val.context_length || 0,
         max_output_tokens: val.max_output_tokens || 0,
         price_mode: val.price_mode || 'catalog',
         input_price: val.input_price || 0,
         output_price: val.output_price || 0,
-        weight: val.weight || 1
+        weight: val.weight || 1,
+        video_supported_resolutions: val.video_supported_resolutions || ['720p', '480p'],
+        video_supported_aspect_ratios: val.video_supported_aspect_ratios || ['16:9', '9:16', '1:1'],
+        video_min_duration_seconds: val.video_min_duration_seconds || 4,
+        video_max_duration_seconds: val.video_max_duration_seconds || 15,
+        video_supported_actions: val.video_supported_actions || ['text_to_video', 'image_to_video', 'multimodal_reference'],
       }
       try {
         const tags = await getModelTagsForModel(val.id)
@@ -418,9 +473,15 @@ watch(
         description: '',
         context_length: 0,
         max_output_tokens: 0,
+        price_mode: 'catalog',
         input_price: 0,
         output_price: 0,
-        weight: 1
+        weight: 1,
+        video_supported_resolutions: ['720p', '480p'],
+        video_supported_aspect_ratios: ['16:9', '9:16', '1:1'],
+        video_min_duration_seconds: 4,
+        video_max_duration_seconds: 15,
+        video_supported_actions: ['text_to_video', 'image_to_video', 'multimodal_reference'],
       }
       selectedTagIds.value = []
     }
@@ -710,7 +771,14 @@ async function handleSubmit() {
       price_mode: formData.value.price_mode,
       input_price: formData.value.price_mode === 'manual' ? (formData.value.input_price || undefined) : undefined,
       output_price: formData.value.price_mode === 'manual' ? (formData.value.output_price || undefined) : undefined,
-      weight: formData.value.weight
+      weight: formData.value.weight,
+    }
+    if (formData.value.model_type === 'video') {
+      payload.video_supported_resolutions = formData.value.video_supported_resolutions
+      payload.video_supported_aspect_ratios = formData.value.video_supported_aspect_ratios
+      payload.video_min_duration_seconds = formData.value.video_min_duration_seconds
+      payload.video_max_duration_seconds = formData.value.video_max_duration_seconds
+      payload.video_supported_actions = formData.value.video_supported_actions
     }
 
     let modelId: string
@@ -755,6 +823,12 @@ async function handleSubmit() {
 .form-hint.inline {
   margin-top: 0;
   margin-left: 8px;
+}
+
+.duration-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .el-divider {

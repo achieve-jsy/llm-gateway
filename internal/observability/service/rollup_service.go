@@ -536,6 +536,8 @@ type LogRow struct {
 	OutputPriceSnapshot *float64        `json:"output_price_snapshot" gorm:"column:output_price_snapshot"`
 	RequestBody         *datatypes.JSON `json:"request_body,omitempty"  gorm:"column:request_body"`
 	ResponseBody        *datatypes.JSON `json:"response_body,omitempty" gorm:"column:response_body"`
+	// DocumentsCount 来自 call_traces.request_body.documents 数组长度（Rerank）
+	DocumentsCount *int `json:"documents_count,omitempty" gorm:"column:documents_count"`
 }
 
 // LogsResponse 明细查询响应
@@ -555,58 +557,59 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 		params.PageSize = 50
 	}
 
+	// 列名加 call_logs. 前缀：后续 LEFT JOIN call_traces 时避免 ts/request_id 歧义
 	query := s.db.WithContext(ctx).
 		Table("call_logs").
-		Where("ts >= ?", params.From)
+		Where("call_logs.ts >= ?", params.From)
 
 	// 天精度 +24h 包含整天；小时精度直接用
 	if params.To.Hour() == 0 && params.To.Minute() == 0 && params.To.Second() == 0 {
-		query = query.Where("ts < ?", params.To.Add(24*time.Hour))
+		query = query.Where("call_logs.ts < ?", params.To.Add(24*time.Hour))
 	} else {
-		query = query.Where("ts <= ?", params.To)
+		query = query.Where("call_logs.ts <= ?", params.To)
 	}
 
 	if params.ScopeSQL != "" {
 		query = query.Where(params.ScopeSQL)
 	}
 	if params.UserID != "" {
-		query = query.Where("user_id = ?", params.UserID)
+		query = query.Where("call_logs.user_id = ?", params.UserID)
 	}
 	if params.KeyID != "" {
-		query = query.Where("key_id = ?", params.KeyID)
+		query = query.Where("call_logs.key_id = ?", params.KeyID)
 	}
 	if params.KeyName != "" {
-		query = query.Where("key_name ILIKE ?", "%"+params.KeyName+"%")
+		query = query.Where("call_logs.key_name ILIKE ?", "%"+params.KeyName+"%")
 	}
 	if params.KeyType != "" {
-		query = query.Where("COALESCE(NULLIF(key_type, ''), 'personal') = ?", params.KeyType)
+		query = query.Where("COALESCE(NULLIF(call_logs.key_type, ''), 'personal') = ?", params.KeyType)
 	}
 	if params.UserName != "" {
-		query = query.Where("user_name ILIKE ?", "%"+params.UserName+"%")
+		query = query.Where("call_logs.user_name ILIKE ?", "%"+params.UserName+"%")
 	}
 	if params.DeptName != "" {
-		query = query.Where("dept_name = ?", params.DeptName)
+		query = query.Where("call_logs.dept_name = ?", params.DeptName)
 	}
 	if params.StudioID != "" {
-		query = query.Where("studio_id = ?", params.StudioID)
+		query = query.Where("call_logs.studio_id = ?", params.StudioID)
 	}
 	if params.ModelName != "" {
-		query = query.Where("(model ILIKE ? OR routed_model ILIKE ?)", "%"+params.ModelName+"%", "%"+params.ModelName+"%")
+		query = query.Where("(call_logs.model ILIKE ? OR call_logs.routed_model ILIKE ?)", "%"+params.ModelName+"%", "%"+params.ModelName+"%")
 	}
 	if params.GroupName != "" {
-		query = query.Where("group_name ILIKE ?", "%"+params.GroupName+"%")
+		query = query.Where("call_logs.group_name ILIKE ?", "%"+params.GroupName+"%")
 	}
 	if params.Provider != "" {
-		query = query.Where("provider = ?", params.Provider)
+		query = query.Where("call_logs.provider = ?", params.Provider)
 	}
 	if params.Endpoint != "" {
-		query = query.Where("inbound_endpoint = ?", params.Endpoint)
+		query = query.Where("call_logs.inbound_endpoint = ?", params.Endpoint)
 	}
 	switch params.Status {
 	case "success":
-		query = query.Where("status = 200")
+		query = query.Where("call_logs.status = 200")
 	case "error":
-		query = query.Where("status != 200")
+		query = query.Where("call_logs.status != 200")
 	}
 
 	var total int64
@@ -619,20 +622,24 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 
 	var rows []LogRow
 	offset := (params.Page - 1) * params.PageSize
+	// request_body / response_body 在 call_traces；列表 LEFT JOIN 供 Rerank 文档数等展示
 	if err := query.
-		Select("request_id, ts, key_id, COALESCE(key_name, '') AS key_name, " +
-			"COALESCE(NULLIF(key_type, ''), 'personal') AS key_type, " +
-			"user_id, user_name, dept_id, dept_name, studio_name, " +
-			"model, routed_model, group_name, provider, " +
-			"prompt_tokens, cached_tokens, cache_write_tokens, completion_tokens, reasoning_tokens, total_tokens, " +
-			"status, upstream_status, duration_ms, first_token_ms, " +
-			"stage_ttfb_ms, stage_auth_ms, stage_route_ms, stage_upstream_ms, " +
-			"stream, failover_used, usage_missing, " +
-			"reasoning_effort, user_agent, ip_address, " +
-			"input_cost_usd, output_cost_usd, cache_read_cost_usd, est_cost_usd, " +
-			"input_price_snapshot, output_price_snapshot, " +
-			"request_body, response_body").
-		Order("ts DESC").
+		Select("call_logs.request_id, call_logs.ts, call_logs.key_id, COALESCE(call_logs.key_name, '') AS key_name, " +
+			"COALESCE(NULLIF(call_logs.key_type, ''), 'personal') AS key_type, " +
+			"call_logs.user_id, call_logs.user_name, call_logs.dept_id, call_logs.dept_name, call_logs.studio_name, " +
+			"call_logs.model, call_logs.routed_model, call_logs.group_name, call_logs.provider, " +
+			"call_logs.prompt_tokens, call_logs.cached_tokens, call_logs.cache_write_tokens, call_logs.completion_tokens, call_logs.reasoning_tokens, call_logs.total_tokens, " +
+			"call_logs.status, call_logs.upstream_status, call_logs.duration_ms, call_logs.first_token_ms, " +
+			"call_logs.stage_ttfb_ms, call_logs.stage_auth_ms, call_logs.stage_route_ms, call_logs.stage_upstream_ms, " +
+			"call_logs.stream, call_logs.failover_used, call_logs.usage_missing, " +
+			"call_logs.reasoning_effort, call_logs.user_agent, call_logs.ip_address, " +
+			"call_logs.input_cost_usd, call_logs.output_cost_usd, call_logs.cache_read_cost_usd, call_logs.est_cost_usd, " +
+			"call_logs.input_price_snapshot, call_logs.output_price_snapshot, " +
+			"ct.request_body AS request_body, ct.response_body AS response_body, " +
+			"CASE WHEN jsonb_typeof(ct.request_body->'documents') = 'array' " +
+			"THEN jsonb_array_length(ct.request_body->'documents') ELSE NULL END AS documents_count").
+		Joins("LEFT JOIN call_traces ct ON ct.request_id = call_logs.request_id").
+		Order("call_logs.ts DESC").
 		Offset(offset).
 		Limit(params.PageSize).
 		Find(&rows).Error; err != nil {

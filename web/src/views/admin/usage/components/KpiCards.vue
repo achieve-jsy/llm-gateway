@@ -1,7 +1,7 @@
 <template>
-  <div class="ud-kpi-row" v-loading="loading">
-    <!-- 总成本 -->
-    <div class="ud-kpi-card ud-kpi-card--green">
+  <div :class="['ud-kpi-row', { 'ud-kpi-row--compact': isCompactMode }]" v-loading="loading">
+    <!-- 总成本（Chat 模式） -->
+    <div v-if="!isCompactMode" class="ud-kpi-card ud-kpi-card--green">
       <div class="ud-kpi__icon"><el-icon size="20"><Money /></el-icon></div>
       <div class="ud-kpi__body">
         <p class="ud-kpi__label">总成本</p>
@@ -61,15 +61,34 @@
     <div class="ud-kpi-card ud-kpi-card--cyan">
       <div class="ud-kpi__icon"><el-icon size="20"><Coin /></el-icon></div>
       <div class="ud-kpi__body">
-        <p class="ud-kpi__label">Token 消耗</p>
-        <p class="ud-kpi__value">{{ summary?.total_tokens != null ? (summary.total_tokens >= 1000000 ? (summary.total_tokens/1000000).toFixed(2)+'M' : (summary.total_tokens/1000).toFixed(1)+'K') : '—' }}</p>
+        <p class="ud-kpi__label">{{ isCompactMode && endpointType === 'embedding' ? '输入 Token' : 'Token 消耗' }}</p>
+        <p class="ud-kpi__value">{{ tokenDisplayValue }}</p>
         <div class="ud-kpi__change-row">
-          <span class="ud-kpi__sub">输入 {{ fmtTokensShort(summary?.prompt_tokens) }} · 输出 {{ fmtTokensShort(summary?.completion_tokens) }}</span>
+          <span v-if="isCompactMode && endpointType === 'embedding'" class="ud-kpi__sub">
+            合计 {{ fmtTokensShort(summary?.total_tokens) }}
+          </span>
+          <span v-else-if="!isCompactMode" class="ud-kpi__sub">
+            输入 {{ fmtTokensShort(summary?.prompt_tokens) }} · 输出 {{ fmtTokensShort(summary?.completion_tokens) }}
+          </span>
+          <span v-else class="ud-kpi__sub">Rerank 按文档计费</span>
         </div>
       </div>
     </div>
-    <!-- 活跃成员 -->
-    <div v-if="currentScope !== 'user'" class="ud-kpi-card ud-kpi-card--purple">
+
+    <!-- 成功率（Embedding / Rerank） -->
+    <div v-if="isCompactMode" class="ud-kpi-card ud-kpi-card--amber">
+      <div class="ud-kpi__icon"><el-icon size="20"><CircleCheck /></el-icon></div>
+      <div class="ud-kpi__body">
+        <p class="ud-kpi__label">成功率</p>
+        <p class="ud-kpi__value">{{ successRateDisplay }}</p>
+        <div class="ud-kpi__change-row">
+          <span class="ud-kpi__sub">失败 {{ fmtNum(summary?.error_count) }} 次</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 活跃成员（Chat 模式） -->
+    <div v-if="!isCompactMode && currentScope !== 'user'" class="ud-kpi-card ud-kpi-card--purple">
       <div class="ud-kpi__icon"><el-icon size="20"><User /></el-icon></div>
       <div class="ud-kpi__body">
         <p class="ud-kpi__label">活跃成员</p>
@@ -84,9 +103,10 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Money, DataLine, Coin, User, ArrowUp, ArrowDown } from '@element-plus/icons-vue'
+import { Money, DataLine, Coin, User, ArrowUp, ArrowDown, CircleCheck } from '@element-plus/icons-vue'
 import { type Currency, convertCost, currencySymbol } from '@/utils/currency'
 import { useSettingsStore } from '@/stores/settings'
+import type { UsageEndpointType } from '@/utils/usage-endpoint'
 
 defineOptions({ name: 'KpiCards' })
 
@@ -101,7 +121,30 @@ const props = defineProps<{
   budgetLevel: string
   currentScope: string
   avgCostPerCall: string
+  endpointType?: UsageEndpointType
 }>()
+
+const isCompactMode = computed(() =>
+  props.endpointType === 'embedding' || props.endpointType === 'rerank',
+)
+
+const tokenDisplayValue = computed(() => {
+  const s = props.summary
+  if (!s) return '—'
+  if (isCompactMode.value && props.endpointType === 'embedding') {
+    const n = s.prompt_tokens ?? s.total_tokens ?? 0
+    return fmtTokensShort(n)
+  }
+  if (s.total_tokens == null) return '—'
+  if (s.total_tokens >= 1000000) return (s.total_tokens / 1000000).toFixed(2) + 'M'
+  return (s.total_tokens / 1000).toFixed(1) + 'K'
+})
+
+const successRateDisplay = computed(() => {
+  const rate = props.summary?.success_rate
+  if (rate == null || Number.isNaN(rate)) return '—'
+  return `${rate.toFixed(1)}%`
+})
 
 const settingsStore = useSettingsStore()
 
@@ -155,6 +198,9 @@ function changeClass(pct: number | null, costMode = false): string {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   gap: 10px;
+}
+.ud-kpi-row--compact {
+  grid-template-columns: repeat(3, 1fr);
 }
 @media (max-width: 1200px) { .ud-kpi-row { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 900px)  { .ud-kpi-row { grid-template-columns: repeat(2, 1fr); } }

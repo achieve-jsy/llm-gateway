@@ -7,16 +7,97 @@
         size="small"
         :header-cell-style="TABLE_HEADER"
         style="width:100%;cursor:pointer"
-        @row-click="openTrace"
+        @row-click="onRowClick"
       >
+        <!-- Embedding / Rerank 精简列 -->
+        <template v-if="isCompactMode">
+          <el-table-column
+            prop="ts"
+            label="时间"
+            min-width="155"
+            :sortable="sortableColumns?.includes('ts') || false"
+          >
+            <template #default="{ row }">
+              <span class="urt-time">{{ fmtDateTime(row.ts) }}</span>
+            </template>
+          </el-table-column>
+
+          <el-table-column prop="model" label="模型" min-width="160">
+            <template #default="{ row }">
+              <div class="urt-model-cell">
+                <span class="urt-model-name">{{ row.model || '—' }}</span>
+                <div v-if="showRoutedModel(row)" class="urt-model-routed">
+                  <span class="urt-arrow">↳</span>
+                  <span class="urt-model-name urt-model-name--muted">{{ row.routed_model }}</span>
+                </div>
+              </div>
+            </template>
+          </el-table-column>
+
+          <el-table-column v-if="effectiveShowProvider" prop="provider" label="渠道" min-width="90">
+            <template #default="{ row }">
+              <span v-if="row.provider" class="urt-provider">{{ row.provider }}</span>
+              <span v-else class="urt-dash">—</span>
+            </template>
+          </el-table-column>
+
+          <el-table-column
+            v-if="endpointType === 'embedding'"
+            label="输入 Token"
+            min-width="110"
+            align="right"
+          >
+            <template #default="{ row }">
+              <span class="urt-token-item urt-token-item--in urt-token-item--plain">{{ fmtTokens(row.prompt_tokens) }}</span>
+            </template>
+          </el-table-column>
+
+          <el-table-column
+            v-if="endpointType === 'rerank'"
+            label="文档数"
+            min-width="80"
+            align="center"
+          >
+            <template #default="{ row }">
+              <span class="urt-doc-count">{{ fmtDocCount(row) }}</span>
+            </template>
+          </el-table-column>
+
+          <el-table-column
+            prop="duration_ms"
+            label="延迟"
+            min-width="70"
+            align="right"
+            :sortable="sortableColumns?.includes('duration_ms') || false"
+          >
+            <template #default="{ row }">
+              <span class="urt-duration">{{ fmtDuration(row.duration_ms) }}</span>
+            </template>
+          </el-table-column>
+
+          <el-table-column prop="status" label="状态" min-width="70" align="center">
+            <template #default="{ row }">
+              <el-tag :type="row.status === 200 ? 'success' : 'danger'" size="small" effect="dark">{{ row.status || '—' }}</el-tag>
+            </template>
+          </el-table-column>
+
+          <el-table-column label="详情" min-width="64" align="center" fixed="right">
+            <template #default="{ row }">
+              <el-button link type="primary" size="small" @click.stop="openTrace(row)">详情</el-button>
+            </template>
+          </el-table-column>
+        </template>
+
+        <!-- Chat 完整列 -->
+        <template v-else>
         <!-- Key（showKey 时显示，fixed=left） -->
-        <el-table-column v-if="showKey" prop="key_name" label="Key" min-width="110" fixed="left">
+        <el-table-column v-if="effectiveShowKey" prop="key_name" label="Key" min-width="110" fixed="left">
           <template #default="{ row }">
             <span class="urt-name">{{ resolveKey(row) }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column v-if="showKeyType" prop="key_type" label="Key 类型" min-width="88" align="center" :fixed="showKey ? 'left' : false">
+        <el-table-column v-if="effectiveShowKeyType" prop="key_type" label="Key 类型" min-width="88" align="center" :fixed="effectiveShowKey ? 'left' : false">
           <template #default="{ row }">
             <el-tag v-if="row.key_type === 'service'" type="warning" size="small" effect="plain">程序</el-tag>
             <el-tag v-else-if="row.key_type === 'personal'" type="info" size="small" effect="plain">个人</el-tag>
@@ -25,7 +106,7 @@
         </el-table-column>
 
         <!-- 用户 -->
-        <el-table-column v-if="showUser" prop="user_name" :label="userLabel ?? '用户'" min-width="90" :fixed="showKey ? 'left' : false">
+        <el-table-column v-if="effectiveShowUser" prop="user_name" :label="userLabel ?? '用户'" min-width="90" :fixed="effectiveShowKey ? 'left' : false">
           <template #default="{ row }">
             <span v-if="row.key_type !== 'service' && row.user_name" class="urt-name">{{ row.user_name }}</span>
             <span v-else class="urt-dash">—</span>
@@ -71,7 +152,7 @@
         </el-table-column>
 
         <!-- 渠道 -->
-        <el-table-column v-if="showProvider" prop="provider" label="渠道" min-width="90">
+        <el-table-column v-if="effectiveShowProvider" prop="provider" label="渠道" min-width="90">
           <template #default="{ row }">
             <span v-if="row.provider" class="urt-provider">{{ row.provider }}</span>
             <span v-else class="urt-dash">—</span>
@@ -176,8 +257,9 @@
           </template>
         </el-table-column>
 
-        <!-- 费用 -->
+        <!-- 费用（Chat 模式） -->
         <el-table-column
+          v-if="effectiveShowCost"
           prop="est_cost_usd"
           label="费用"
           min-width="140"
@@ -246,6 +328,7 @@
             <span class="urt-time">{{ fmtDateTime(row.ts) }}</span>
           </template>
         </el-table-column>
+        </template>
       </el-table>
 
       <div v-if="!loading && !rows.length" class="urt-empty">
@@ -277,6 +360,7 @@
       :trace-loading="traceLoading"
       :currency="currency"
       :meta-mode="traceMetaMode"
+      :endpoint-type="traceDrawerEndpointType"
     />
     <!-- 视频任务详情 -->
     <VideoTaskDetail
@@ -295,6 +379,8 @@ import {
 import { useSettingsStore } from '@/stores/settings'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
 import type { LogRow, TraceData } from '@/types/usage-log'
+import type { UsageEndpointType } from '@/utils/usage-endpoint'
+import { resolveRerankDocumentsCount, endpointPathToType } from '@/utils/usage-endpoint'
 import UsageTraceDrawer from '@/components/usage/UsageTraceDrawer.vue'
 import VideoTaskDetail from '@/components/usage/VideoTaskDetail.vue'
 import { fmtDateTime, fmtDuration } from '@/utils/time'
@@ -334,6 +420,9 @@ const props = withDefaults(defineProps<{
 
   // Trace Drawer 模式
   traceMetaMode?: 'full' | 'personal'
+
+  /** 当前 Tab 端点类型，控制列布局 */
+  endpointType?: UsageEndpointType
 }>(), {
   showKey: false,
   showKeyType: false,
@@ -345,6 +434,23 @@ const props = withDefaults(defineProps<{
   showSource: false,
   currency: 'USD',
   traceMetaMode: 'full',
+  endpointType: 'chat',
+})
+
+const isCompactMode = computed(() =>
+  props.endpointType === 'embedding' || props.endpointType === 'rerank',
+)
+
+// 精简模式下隐藏 Key/费用等 Chat 专属列
+const effectiveShowKey = computed(() => !isCompactMode.value && props.showKey)
+const effectiveShowKeyType = computed(() => !isCompactMode.value && props.showKeyType)
+const effectiveShowUser = computed(() => !isCompactMode.value && props.showUser)
+const effectiveShowProvider = computed(() => props.showProvider || isCompactMode.value)
+const effectiveShowCost = computed(() => !isCompactMode.value)
+
+const traceDrawerEndpointType = computed((): UsageEndpointType => {
+  if (props.endpointType === 'embedding' || props.endpointType === 'rerank') return props.endpointType
+  return endpointPathToType(traceRow.value?.inbound_endpoint) || 'chat'
 })
 
 const emit = defineEmits<{
@@ -381,15 +487,15 @@ const showVideoDetail = computed(() => {
 })
 
 async function openTrace(row: LogRow) {
-  // Video 任务使用独立详情组件
+  // Video：优先用 call_logs 扩展字段中的上游 task_id；否则回退 request_id（可能查不到）
   if (row.inbound_endpoint === '/v1/contents/generations/tasks') {
+    const anyRow = row as LogRow & { task_id?: string; upstream_task_id?: string }
     videoTaskData.value = {
-      task_id: row.request_id,
+      task_id: anyRow.task_id || anyRow.upstream_task_id || row.request_id,
       model: row.model,
       provider_name: row.provider,
-      status: row.status >= 200 && row.status < 300 ? 'succeeded' : 'failed',
+      status: row.status >= 200 && row.status < 300 ? 'submitted' : 'failed',
       created_at: row.ts,
-      duration_ms: row.duration_ms,
     }
     videoDetailVisible.value = true
     return
@@ -406,6 +512,16 @@ async function openTrace(row: LogRow) {
   } finally {
     traceLoading.value = false
   }
+}
+
+function onRowClick(row: LogRow) {
+  if (isCompactMode.value) return
+  openTrace(row)
+}
+
+function fmtDocCount(row: LogRow): string {
+  const n = resolveRerankDocumentsCount(row)
+  return n != null ? String(n) : '—'
 }
 
 // ── 端点标签 ──
@@ -560,7 +676,9 @@ const reasoningType = (effort?: string) => {
 .urt-token-item--out    { color: var(--urt-output); background: color-mix(in srgb, var(--urt-output) 12%, transparent); }
 .urt-token-item--cache  { color: var(--urt-cache);  background: color-mix(in srgb, var(--urt-cache) 14%, transparent); }
 .urt-token-item--reason { color: var(--urt-reason); background: color-mix(in srgb, var(--urt-reason) 12%, transparent); }
+.urt-token-item--plain  { padding: 0; background: none; font-variant-numeric: tabular-nums; }
 .urt-token-icon         { font-size: 10px; }
+.urt-doc-count          { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--urt-ink); }
 
 /* ── 标记 ── */
 .urt-flags       { display: flex; flex-wrap: wrap; gap: 3px; justify-content: center; }

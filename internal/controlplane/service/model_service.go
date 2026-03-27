@@ -94,7 +94,7 @@ func (s *ModelService) publishEvent(eventType event.ChangeEventType, resourceTyp
 type CreateModelInput struct {
 	Name            string   `json:"name" binding:"required,max=200"`
 	ProviderID      string   `json:"provider_id" binding:"required,uuid"`
-	ModelType       string   `json:"model_type" binding:"required,oneof=chat embedding embedding_vl rerank"`
+	ModelType       string   `json:"model_type" binding:"required,oneof=chat embedding embedding_vl rerank video"`
 	UpstreamModelID string   `json:"upstream_model_id" binding:"omitempty,max=200"`
 	Description     string   `json:"description" binding:"omitempty,max=500"`
 	ContextLength   *int     `json:"context_length" binding:"omitempty,min=0,max=10000000"`
@@ -103,6 +103,12 @@ type CreateModelInput struct {
 	OutputPrice     *float64 `json:"output_price" binding:"omitempty,min=0"`
 	PriceMode       string   `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
 	Weight          *int     `json:"weight" binding:"omitempty,min=0,max=9999"`
+	// 视频模型参数
+	VideoSupportedResolutions  []string `json:"video_supported_resolutions"`
+	VideoSupportedAspectRatios []string `json:"video_supported_aspect_ratios"`
+	VideoMinDurationSeconds    *int     `json:"video_min_duration_seconds" binding:"omitempty,min=0,max=600"`
+	VideoMaxDurationSeconds    *int     `json:"video_max_duration_seconds" binding:"omitempty,min=0,max=600"`
+	VideoSupportedActions      []string `json:"video_supported_actions"`
 }
 
 // CreateModel 注册模型（T030）
@@ -158,6 +164,8 @@ func (s *ModelService) CreateModel(input CreateModelInput) (*model.Model, error)
 	} else {
 		m.Weight = 1
 	}
+	applyVideoParams(m, input.VideoSupportedResolutions, input.VideoSupportedAspectRatios,
+		input.VideoMinDurationSeconds, input.VideoMaxDurationSeconds, input.VideoSupportedActions)
 
 	if err := s.modelRepo.Create(m); err != nil {
 		return nil, fmt.Errorf("create model: %w", err)
@@ -210,7 +218,7 @@ func (s *ModelService) GetModel(id uuid.UUID) (*model.Model, error) {
 type UpdateModelInput struct {
 	Name            string   `json:"name" binding:"omitempty,max=200"`
 	ProviderID      string   `json:"provider_id" binding:"omitempty,uuid"`
-	ModelType       string   `json:"model_type" binding:"omitempty,oneof=chat embedding rerank"`
+	ModelType       string   `json:"model_type" binding:"omitempty,oneof=chat embedding embedding_vl rerank video"`
 	Enabled         *bool    `json:"enabled"`
 	UpstreamModelID *string  `json:"upstream_model_id" binding:"omitempty,max=200"`
 	Description     *string  `json:"description" binding:"omitempty,max=500"`
@@ -220,6 +228,11 @@ type UpdateModelInput struct {
 	OutputPrice     *float64 `json:"output_price" binding:"omitempty,min=0"`
 	PriceMode       string   `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
 	Weight          *int     `json:"weight" binding:"omitempty,min=0,max=9999"`
+	VideoSupportedResolutions  []string `json:"video_supported_resolutions"`
+	VideoSupportedAspectRatios []string `json:"video_supported_aspect_ratios"`
+	VideoMinDurationSeconds    *int     `json:"video_min_duration_seconds" binding:"omitempty,min=0,max=600"`
+	VideoMaxDurationSeconds    *int     `json:"video_max_duration_seconds" binding:"omitempty,min=0,max=600"`
+	VideoSupportedActions      []string `json:"video_supported_actions"`
 }
 
 // UpdateModel 更新模型（T032）
@@ -299,6 +312,8 @@ func (s *ModelService) UpdateModel(id uuid.UUID, input UpdateModelInput) (*model
 	if input.Weight != nil {
 		m.Weight = *input.Weight
 	}
+	applyVideoParams(m, input.VideoSupportedResolutions, input.VideoSupportedAspectRatios,
+		input.VideoMinDurationSeconds, input.VideoMaxDurationSeconds, input.VideoSupportedActions)
 
 	if err := s.modelRepo.Update(m); err != nil {
 		return nil, fmt.Errorf("update model: %w", err)
@@ -307,6 +322,40 @@ func (s *ModelService) UpdateModel(id uuid.UUID, input UpdateModelInput) (*model
 	s.publishEvent(event.ModelUpdated, "model", m.ID)
 
 	return m, nil
+}
+
+func applyVideoParams(
+	m *model.Model,
+	resolutions, aspectRatios []string,
+	minDur, maxDur *int,
+	actions []string,
+) {
+	if m == nil {
+		return
+	}
+	if resolutions != nil {
+		m.VideoSupportedResolutions = resolutions
+	}
+	if aspectRatios != nil {
+		m.VideoSupportedAspectRatios = aspectRatios
+	}
+	if minDur != nil {
+		m.VideoMinDurationSeconds = *minDur
+	}
+	if maxDur != nil {
+		m.VideoMaxDurationSeconds = *maxDur
+	}
+	if actions != nil {
+		m.VideoSupportedActions = actions
+	}
+	if m.ModelType != "video" {
+		// 非视频类型清空，避免脏数据
+		m.VideoSupportedResolutions = nil
+		m.VideoSupportedAspectRatios = nil
+		m.VideoMinDurationSeconds = 0
+		m.VideoMaxDurationSeconds = 0
+		m.VideoSupportedActions = nil
+	}
 }
 
 // CreateModelFromCatalog 从 catalog 复制一份快照建出 model。

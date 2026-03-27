@@ -23,7 +23,8 @@
       <div class="up-trace-meta">
         <el-tag type="info" size="small" effect="plain">{{ row?.model }}</el-tag>
         <el-tag :type="(row?.status || 0) === 200 ? 'success' : 'danger'" size="small" effect="dark">{{ row?.status }}</el-tag>
-        <el-tag v-if="row?.stream" type="primary" size="small" effect="plain">流式</el-tag>
+        <el-tag v-if="row?.stream && !isNonChatEndpoint" type="primary" size="small" effect="plain">流式</el-tag>
+        <el-tag v-if="traceEndpointLabel" size="small" :type="traceEndpointTagType" effect="plain">{{ traceEndpointLabel }}</el-tag>
         <el-tooltip v-if="row?.failover_used" content="首选模型失败，已自动切换到备用模型" placement="top">
           <el-tag type="warning" size="small" effect="light" class="up-tag-failover">
             <el-icon style="vertical-align:-2px;margin-right:2px"><SwitchButton /></el-icon>故障转移
@@ -98,23 +99,28 @@
                 <el-tag size="small" :type="row?.stream ? 'primary' : ''" effect="plain">{{ row?.stream ? '是' : '否' }}</el-tag>
               </div>
             </div>
-            <!-- Token 用量 -->
+            <!-- Token / 用量 -->
             <div class="up-meta-section">
-              <div class="up-meta-heading">Token 用量</div>
-              <div class="up-meta-row"><span>输入</span><b>{{ fmtNum(row?.prompt_tokens) }}</b></div>
-              <div class="up-meta-row"><span>缓存命中</span><b class="c-cyan">{{ fmtNum(row?.cached_tokens) }}</b></div>
-              <div class="up-meta-row"><span>缓存写入</span><b class="c-amber">{{ fmtNum(row?.cache_write_tokens) }}</b></div>
-              <div class="up-meta-row"><span>输出</span><b>{{ fmtNum(row?.completion_tokens) }}</b></div>
-              <div class="up-meta-row" v-if="(row?.reasoning_tokens || 0) > 0">
-                <span>推理</span><b class="c-purple">{{ fmtNum(row?.reasoning_tokens) }}</b>
-              </div>
+              <div class="up-meta-heading">{{ usageSectionTitle }}</div>
+              <template v-if="traceEndpointType === 'rerank'">
+                <div class="up-meta-row"><span>文档数</span><b>{{ rerankDocCount ?? '—' }}</b></div>
+              </template>
+              <div class="up-meta-row"><span>{{ traceEndpointType === 'embedding' ? '输入 Token' : '输入' }}</span><b>{{ fmtNum(row?.prompt_tokens) }}</b></div>
+              <template v-if="traceEndpointType === 'chat'">
+                <div class="up-meta-row"><span>缓存命中</span><b class="c-cyan">{{ fmtNum(row?.cached_tokens) }}</b></div>
+                <div class="up-meta-row"><span>缓存写入</span><b class="c-amber">{{ fmtNum(row?.cache_write_tokens) }}</b></div>
+                <div class="up-meta-row"><span>输出</span><b>{{ fmtNum(row?.completion_tokens) }}</b></div>
+                <div class="up-meta-row" v-if="(row?.reasoning_tokens || 0) > 0">
+                  <span>推理</span><b class="c-purple">{{ fmtNum(row?.reasoning_tokens) }}</b>
+                </div>
+              </template>
               <div class="up-meta-row up-meta-sep"><span>合计</span><b class="c-blue">{{ fmtNum(row?.total_tokens) }}</b></div>
               <div class="up-meta-row" v-if="row?.usage_missing">
                 <span></span><el-tag size="small" type="warning">用量缺失</el-tag>
               </div>
             </div>
-            <!-- 费用 -->
-            <div class="up-meta-section">
+            <!-- 费用（Chat 优先展示） -->
+            <div v-if="traceEndpointType === 'chat'" class="up-meta-section">
               <div class="up-meta-heading">费用 ({{ currency ?? 'USD' }})</div>
               <div class="up-meta-row" v-if="(row?.input_price_snapshot || 0) > 0 || (row?.output_price_snapshot || 0) > 0">
                 <span>输入单价/1M</span><b>{{ fmtPrice(row?.input_price_snapshot) }}</b>
@@ -132,8 +138,8 @@
           </div>
         </el-tab-pane>
 
-        <!-- 提示词 -->
-        <el-tab-pane label="提示词" name="prompt">
+        <!-- 提示词 / 请求 -->
+        <el-tab-pane :label="requestTabLabel" name="prompt">
           <div v-if="traceMessages.length" class="up-msgs">
             <div v-for="(msg, i) in traceMessages" :key="i" :class="['up-msg', `up-msg--${msg.role}`]">
               <span class="up-msg-role">{{ msg.role }}</span>
@@ -215,6 +221,12 @@ import {
   extractTraceResponseText,
   isTraceStreamResponse,
 } from '@/utils/trace-body'
+import {
+  endpointPathToType,
+  parseRerankDocumentsCount,
+  resolveRerankDocumentsCount,
+  type UsageEndpointType,
+} from '@/utils/usage-endpoint'
 import type { LogRow, TraceData } from '@/types/usage-log'
 
 export type { LogRow, TraceData } from '@/types/usage-log'
@@ -226,9 +238,12 @@ const props = withDefaults(defineProps<{
   traceLoading: boolean
   currency?: Currency
   metaMode?: 'full' | 'personal'
+  /** Tab 上下文端点类型（row.inbound_endpoint 缺失时回退） */
+  endpointType?: UsageEndpointType
 }>(), {
   currency: 'USD',
   metaMode: 'full',
+  endpointType: '',
 })
 
 const emit = defineEmits<{
@@ -248,8 +263,51 @@ const visible = computed({
 
 const traceTab = ref('prompt')
 
+const traceEndpointType = computed((): UsageEndpointType => {
+  const fromRow = endpointPathToType(props.row?.inbound_endpoint)
+  if (fromRow) return fromRow
+  if (props.endpointType === 'embedding' || props.endpointType === 'rerank') return props.endpointType
+  return 'chat'
+})
+
+const isNonChatEndpoint = computed(() =>
+  traceEndpointType.value === 'embedding' || traceEndpointType.value === 'rerank',
+)
+
+const traceEndpointLabel = computed(() => {
+  const map: Record<string, string> = {
+    embedding: 'Embedding',
+    rerank: 'Rerank',
+  }
+  return map[traceEndpointType.value] || ''
+})
+
+const traceEndpointTagType = computed(() => {
+  if (traceEndpointType.value === 'embedding') return 'success'
+  if (traceEndpointType.value === 'rerank') return 'warning'
+  return 'info'
+})
+
+const usageSectionTitle = computed(() => {
+  if (traceEndpointType.value === 'embedding') return 'Embedding 用量'
+  if (traceEndpointType.value === 'rerank') return 'Rerank 请求'
+  return 'Token 用量'
+})
+
+const requestTabLabel = computed(() => {
+  if (traceEndpointType.value === 'embedding') return '输入'
+  if (traceEndpointType.value === 'rerank') return '请求'
+  return '提示词'
+})
+
+const rerankDocCount = computed(() => {
+  const fromRow = resolveRerankDocumentsCount(props.row ?? {})
+  if (fromRow != null) return fromRow
+  return parseRerankDocumentsCount(props.traceData?.request_body)
+})
+
 watch(() => props.modelValue, (val) => {
-  if (val) traceTab.value = 'prompt'
+  if (val) traceTab.value = isNonChatEndpoint.value ? 'meta' : 'prompt'
 })
 
 watch(() => props.traceLoading, (loading) => {
@@ -323,7 +381,7 @@ const timelineStages = computed(() => {
   const ttftMs  = td?.stage_ttft_ms  ?? row.first_token_ms ?? null
   const total   = row.duration_ms    ?? td?.stage_total_ms ?? null
 
-  const isStream   = !!row.stream
+  const isStream   = !!row.stream && !isNonChatEndpoint.value
   const isFailover = !!row.failover_used
   const isError    = (row.status ?? 200) >= 400
   const errorInAuth  = isError && authMs  == null && routeMs == null

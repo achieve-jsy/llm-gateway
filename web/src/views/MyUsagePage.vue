@@ -89,12 +89,44 @@
       </el-radio-group>
     </div>
 
+    <template v-if="activeTab === 'video'">
+      <VideoKpiCards
+        :refresh-token="videoRefreshToken"
+        :start="videoDateStart"
+        :end="videoDateEnd"
+        :model-name="filterModelName"
+        mine
+      />
+      <VideoTrendChart
+        :refresh-token="videoRefreshToken"
+        :start="videoDateStart"
+        :end="videoDateEnd"
+        :model-name="filterModelName"
+        mine
+      />
+      <VideoDistributionCharts
+        :refresh-token="videoRefreshToken"
+        :start="videoDateStart"
+        :end="videoDateEnd"
+        :model-name="filterModelName"
+        mine
+      />
+      <VideoTaskTable :refresh-token="videoRefreshToken" mine />
+    </template>
+    <template v-else>
+
+
     <!-- ═══════════════════════════════════════════
-         Section 2: 花费总览
+         Section 2: 统计总览
     ═══════════════════════════════════════════ -->
-    <div class="mu-sec-label"><el-icon class="mu-sec-icon"><Money /></el-icon> 花费总览</div>
+    <div class="mu-sec-label">
+      <el-icon class="mu-sec-icon"><Money v-if="!isCompactUsageTab" /><DataLine v-else /></el-icon>
+      {{ isCompactUsageTab ? '调用总览' : '花费总览' }}
+    </div>
 
     <div class="mu-stats" v-loading="statsLoading">
+      <!-- Chat：花费导向 -->
+      <template v-if="!isCompactUsageTab">
       <!-- 总花费 -->
       <div class="mu-stat-card">
         <div class="mu-stat-card__icon mu-stat-card__icon--amber">
@@ -155,13 +187,56 @@
           </p>
         </div>
       </div>
+      </template>
+
+      <!-- Embedding / Rerank：调用导向 -->
+      <template v-else>
+        <div class="mu-stat-card">
+          <div class="mu-stat-card__icon mu-stat-card__icon--green">
+            <el-icon size="22"><Histogram /></el-icon>
+          </div>
+          <div class="mu-stat-card__body">
+            <p class="mu-stat-card__label">总请求数</p>
+            <p class="mu-stat-card__value">{{ fmtNum(statsTotal?.req_count) }}</p>
+            <p class="mu-stat-card__sub">
+              日均 <span class="c-green">{{ fmtNum(Math.round(dailyAvgCalls)) }}</span> 次
+            </p>
+          </div>
+        </div>
+
+        <div class="mu-stat-card">
+          <div class="mu-stat-card__icon mu-stat-card__icon--amber">
+            <el-icon size="22"><CircleCheck /></el-icon>
+          </div>
+          <div class="mu-stat-card__body">
+            <p class="mu-stat-card__label">成功率</p>
+            <p class="mu-stat-card__value">{{ mySuccessRate }}%</p>
+            <p class="mu-stat-card__sub">
+              失败 <span class="c-orange">{{ myErrorCount }}</span> 次
+            </p>
+          </div>
+        </div>
+
+        <div v-if="activeTab === 'embedding'" class="mu-stat-card">
+          <div class="mu-stat-card__icon mu-stat-card__icon--cyan">
+            <el-icon size="22"><Coin /></el-icon>
+          </div>
+          <div class="mu-stat-card__body">
+            <p class="mu-stat-card__label">输入 Token</p>
+            <p class="mu-stat-card__value">{{ fmtTokens(statsTotal?.prompt_tokens) }}</p>
+            <p class="mu-stat-card__sub">
+              合计 <span class="c-blue">{{ fmtTokens(totalTokens) }}</span>
+            </p>
+          </div>
+        </div>
+      </template>
     </div>
 
-    <!-- 每日花费趋势 -->
+    <!-- 每日花费趋势（仅 Chat） / 请求趋势（Embedding·Rerank） -->
     <div v-if="dayStatsRows.length" class="mu-chart-card mu-cost-trend-card">
       <div class="mu-chart-card__header">
-        <span class="mu-chart-card__title">每日花费趋势</span>
-        <span class="mu-chart-card__hint">¥ CNY · 点击图例可切换</span>
+        <span class="mu-chart-card__title">{{ isCompactUsageTab ? '请求趋势' : '每日花费趋势' }}</span>
+        <span v-if="!isCompactUsageTab" class="mu-chart-card__hint">¥ CNY · 点击图例可切换</span>
       </div>
       <div class="mu-chart-card__body mu-chart-card__body--trend">
         <canvas ref="costTrendCanvas" />
@@ -179,17 +254,11 @@
       :params="logParams"
       :currency="currency"
       export-prefix="my_logs"
-      :table-props="{
-        showKey: true,
-        showKeyType: true,
-        showGroup: true,
-        showSource: 'full',
-        traceMetaMode: 'personal',
-        keyResolver: (row: any) => keyLabel(row.key_id, row.key_name || ''),
-      }"
+      :table-props="logTableProps"
     />
 
-    <!-- ══ KEY 花费分布 ══ -->
+    <!-- ══ KEY 花费分布（仅 Chat） ══ -->
+    <template v-if="!isCompactUsageTab">
     <div class="mu-sec-label">KEY 花费分布</div>
     <div v-loading="keyDistLoading">
       <div v-if="!keyDistLoading && !keyDistRows.length" class="mu-empty-state">当前筛选条件下暂无 KEY 数据</div>
@@ -224,6 +293,7 @@
         </div>
       </div>
     </div>
+    </template>
 
     <!-- ══ 模型分析 ══ -->
     <div class="mu-sec-label">
@@ -288,16 +358,22 @@
     </div>
 
 
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import {
-  Refresh, Histogram, Money, DataLine, Coin,
+  Refresh, Histogram, Money, DataLine, Coin, CircleCheck,
   Close, Grid, Cpu, ArrowDown
 } from '@element-plus/icons-vue'
-import UsageLogSection from '@/components/usage/UsageLogSection.vue' 
+import type { UsageEndpointType } from '@/utils/usage-endpoint'
+import UsageLogSection from '@/components/usage/UsageLogSection.vue'
+import VideoKpiCards from '@/components/usage/VideoKpiCards.vue'
+import VideoTrendChart from '@/components/usage/VideoTrendChart.vue'
+import VideoDistributionCharts from '@/components/usage/VideoDistributionCharts.vue'
+import VideoTaskTable from '@/components/usage/VideoTaskTable.vue'
 import {
   Chart, LineController, DoughnutController, BarController, CategoryScale, LinearScale,
   LineElement, PointElement, ArcElement, BarElement,
@@ -411,6 +487,8 @@ initStart.setDate(initEnd.getDate() - 6)
 initStart.setHours(0, 0, 0, 0)
 initEnd.setHours(23, 59, 59, 999)
 const dateRange = ref<[string, string]>([fmtLocalDateTime(initStart), fmtLocalDateTime(initEnd)])
+const videoDateStart = computed(() => dateRange.value?.[0]?.slice(0, 10) || '')
+const videoDateEnd = computed(() => dateRange.value?.[1]?.slice(0, 10) || '')
 const dateShortcuts = [
   { text: '今天',     value: () => { const t = new Date(); const s = new Date(t); s.setHours(0,0,0,0); return [fmtLocalDateTime(s), fmtLocalDateTime(t)] as [string, string] } },
   { text: '昨天',     value: () => { const d = new Date(); d.setDate(d.getDate() - 1); d.setHours(0,0,0,0); const e = new Date(d); e.setHours(23,59,59,999); return [fmtLocalDateTime(d), fmtLocalDateTime(e)] as [string, string] } },
@@ -449,6 +527,40 @@ const filterStatus    = ref('')
 const filterEndpoint  = ref('')
 const activeTab = ref('chat')
 
+const isCompactUsageTab = computed(() =>
+  activeTab.value === 'embedding' || activeTab.value === 'rerank',
+)
+
+const logEndpointType = computed((): UsageEndpointType => {
+  if (activeTab.value === 'embedding' || activeTab.value === 'rerank') return activeTab.value
+  return 'chat'
+})
+
+const logTableProps = computed(() => ({
+  showKey: !isCompactUsageTab.value,
+  showKeyType: !isCompactUsageTab.value,
+  showGroup: !isCompactUsageTab.value,
+  showProvider: true,
+  showSource: isCompactUsageTab.value ? false : 'full',
+  traceMetaMode: 'personal' as const,
+  endpointType: logEndpointType.value,
+  keyResolver: (row: any) => keyLabel(row.key_id, row.key_name || ''),
+}))
+
+const mySuccessRate = computed(() => {
+  const t = statsTotal.value
+  if (!t?.req_count) return 100
+  return Math.round((t.success_count ?? t.req_count) / t.req_count * 100)
+})
+
+const myErrorCount = computed(() => {
+  const t = statsTotal.value
+  if (!t?.req_count) return 0
+  return t.req_count - (t.success_count ?? t.req_count)
+})
+
+const videoRefreshToken = ref(0)
+
 function onTabChange(value: string | number | boolean) {
   const endpointMap: Record<string, string> = {
     chat: '/v1/chat/completions',
@@ -457,6 +569,10 @@ function onTabChange(value: string | number | boolean) {
     video: '/v1/contents/generations/tasks',
   }
   filterEndpoint.value = endpointMap[value as string] || ''
+  if (value === 'video') {
+    videoRefreshToken.value++
+    return
+  }
   loadAll()
 }
 
@@ -762,6 +878,10 @@ async function loadStats() {
 }
 
 function loadAll() {
+  if (activeTab.value === 'video') {
+    videoRefreshToken.value++
+    return
+  }
   loadStats()
   loadAvgDuration()
   loadKeyDist()
@@ -845,12 +965,22 @@ function renderCostTrend() {
   const colors = chartTheme()
   const sorted = [...dayStatsRows.value].sort((a, b) => (a.stat_date || '').localeCompare(b.stat_date || ''))
   const labels = sorted.map(r => fmtDate(r.stat_date))
+  const compact = isCompactUsageTab.value
 
-  costTrendChart = new Chart(canvas, {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [
+  // Embedding/Rerank：仅请求量；Chat：花费 + 调用
+  const datasets = compact
+    ? [{
+        label: '请求次数',
+        data: sorted.map(r => r.req_count),
+        borderColor: isDark.value ? '#60a5fa' : '#3b82f6',
+        backgroundColor: isDark.value ? 'rgba(96,165,250,0.15)' : 'rgba(59,130,246,0.12)',
+        borderWidth: 2,
+        fill: true,
+        tension: 0.4,
+        pointRadius: sorted.length > 20 ? 0 : 3,
+        pointHoverRadius: 5,
+      }]
+    : [
         {
           label: `花费 (${currency.value})`,
           data: sorted.map(r => toCny(r.est_cost_usd)),
@@ -875,8 +1005,11 @@ function renderCostTrend() {
           pointHoverRadius: 4,
           borderDash: [4, 3],
         } as any,
-      ],
-    },
+      ]
+
+  costTrendChart = new Chart(canvas, {
+    type: 'line',
+    data: { labels, datasets },
     options: {
       responsive: true,
       maintainAspectRatio: false,
@@ -889,6 +1022,7 @@ function renderCostTrend() {
         tooltip: {
           callbacks: {
             label: ctx => {
+              if (compact) return `请求: ${fmtNum(ctx.raw as number)} 次`
               if (ctx.datasetIndex === 0) return `花费: ${currencySymbol(cc.value.currency)}${Number(ctx.raw as number).toFixed(2)}`
               return `调用: ${fmtNum(ctx.raw as number)} 次`
             },
@@ -905,14 +1039,22 @@ function renderCostTrend() {
           type: 'linear', position: 'left',
           grid: { color: colors.grid },
           border: { display: false },
-          ticks: { color: colors.textSecondary, font: { size: 10 }, callback: (v: any) => `${currencySymbol(cc.value.currency)}${Number(v).toFixed(2)}` },
+          ticks: {
+            color: colors.textSecondary,
+            font: { size: 10 },
+            callback: (v: any) => compact
+              ? fmtNum(v as number)
+              : `${currencySymbol(cc.value.currency)}${Number(v).toFixed(2)}`,
+          },
         },
-        y1: {
-          type: 'linear', position: 'right',
-          grid: { drawOnChartArea: false },
-          border: { display: false },
-          ticks: { color: colors.textSecondary, font: { size: 10 }, callback: (v: any) => fmtNum(v as number) },
-        },
+        ...(compact ? {} : {
+          y1: {
+            type: 'linear', position: 'right',
+            grid: { drawOnChartArea: false },
+            border: { display: false },
+            ticks: { color: colors.textSecondary, font: { size: 10 }, callback: (v: any) => fmtNum(v as number) },
+          },
+        }),
       },
     },
   } as any)

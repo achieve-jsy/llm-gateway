@@ -407,5 +407,45 @@ describe('UsageRecordTable', () => {
 
       expect(wrapper.text()).not.toContain('中转 A')
     })
+
+    it('embedding 精简模式启用 compact 列布局', () => {
+      const wrapper = mountComponent({
+        endpointType: 'embedding',
+        rows: [{
+          ...mockRows[1],
+          inbound_endpoint: '/v1/embeddings',
+          prompt_tokens: 512,
+          request_body: { input: 'hello' },
+        }],
+        total: 1,
+        showKey: true,
+        showProvider: true,
+      })
+      const vm = wrapper.vm as any
+
+      expect(vm.isCompactMode).toBe(true)
+      expect(vm.effectiveShowKey).toBe(false)
+      expect(vm.effectiveShowCost).toBe(false)
+      expect(vm.fmtDocCount({ request_body: { documents: ['a'] } })).toBe('1')
+    })
+
+    it('rerank 精简模式解析文档数', () => {
+      const wrapper = mountComponent({
+        endpointType: 'rerank',
+        rows: [{
+          ...mockRows[1],
+          inbound_endpoint: '/v1/rerank',
+          request_body: { query: 'q', documents: ['a', 'b', 'c'] },
+        }],
+        total: 1,
+        showProvider: true,
+      })
+      const vm = wrapper.vm as any
+
+      expect(vm.isCompactMode).toBe(true)
+      expect(vm.fmtDocCount({ request_body: { documents: ['a', 'b'] } })).toBe('2')
+      expect(vm.fmtDocCount({ request_body: {} })).toBe('—')
+      expect(vm.fmtDocCount({ documents_count: 5, request_body: {} })).toBe('5')
+    })
   })
 })

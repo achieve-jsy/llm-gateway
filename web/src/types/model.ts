@@ -75,6 +75,12 @@ export interface Model {
   max_output_overridden?: boolean
   /** 嵌套展开的 catalog 快照（GET /models 时由后端 join 返回） */
   catalog?: import('./catalog').ModelCatalog | null
+  /** 视频模型参数 */
+  video_supported_resolutions?: string[]
+  video_supported_aspect_ratios?: string[]
+  video_min_duration_seconds?: number
+  video_max_duration_seconds?: number
+  video_supported_actions?: string[]
 }
 
 /** 创建/编辑模型的请求体 */
@@ -91,4 +97,9 @@ export interface ModelPayload {
   input_price?: number
   output_price?: number
   weight?: number
+  video_supported_resolutions?: string[]
+  video_supported_aspect_ratios?: string[]
+  video_min_duration_seconds?: number
+  video_max_duration_seconds?: number
+  video_supported_actions?: string[]
 }

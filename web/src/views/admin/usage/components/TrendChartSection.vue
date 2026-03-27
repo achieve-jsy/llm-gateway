@@ -1,9 +1,9 @@
 <template>
   <div class="ud-section">
     <div class="ud-section__header">
-      <span class="ud-section__title">调用趋势</span>
+      <span class="ud-section__title">{{ props.compact ? '请求趋势' : '调用趋势' }}</span>
       <div class="ud-trend-header-ctrls">
-        <div class="ud-trend-tabs">
+        <div v-if="!props.compact" class="ud-trend-tabs">
           <button
             v-for="m in trendMetrics" :key="m.value"
             :class="['ud-trend-tab', { 'ud-trend-tab--active': props.trendMetric === m.value }]"
@@ -40,11 +40,14 @@ export interface TrendChartSectionProps {
   trendMetric: string
   trendGranularity: string
   currency?: Currency
+  /** Embedding/Rerank：仅请求量趋势，隐藏成本/综合切换 */
+  compact?: boolean
 }
 
 const props = withDefaults(defineProps<TrendChartSectionProps>(), {
   prevTrendData: () => [],
   currency: 'CNY',
+  compact: false,
 })
 
 const emit = defineEmits<{
@@ -118,7 +121,8 @@ function renderTrendChart() {
   const errors     = data.map(d => d.errors ?? 0)
   const tokens     = data.map(d => d.total_tokens ?? 0)
   const showPoints = data.length <= 31
-  const metric     = props.trendMetric
+  // compact（Embedding/Rerank）固定请求量趋势，避免仍渲染成本综合图
+  const metric     = props.compact ? 'calls' : props.trendMetric
 
   const prevAggData = aggregateTrendData(props.prevTrendData ?? [], g)
   const hasPrev     = prevAggData.length > 0
@@ -239,7 +243,7 @@ function renderTrendChart() {
 // ── Watchers & lifecycle ───────────────────────────────────────
 
 watch(
-  () => [props.trendData, props.prevTrendData, props.trendMetric, props.trendGranularity, props.currency],
+  () => [props.trendData, props.prevTrendData, props.trendMetric, props.trendGranularity, props.currency, props.compact],
   async () => {
     await nextTick()
     renderTrendChart()

@@ -9,18 +9,25 @@ type VideoTaskService struct {
 	repo *repository.VideoTaskRepo
 }
 
+type VideoTaskUpdateFields struct {
+	Status       string
+	VideoURL     string
+	ResponseBody string
+	ErrorMessage string
+}
+
 func NewVideoTaskService(repo *repository.VideoTaskRepo) *VideoTaskService {
 	return &VideoTaskService{repo: repo}
 }
 
-func (s *VideoTaskService) List(page, pageSize int, providerName, modelName, status string) ([]model.VideoTask, int64, error) {
+func (s *VideoTaskService) List(page, pageSize int, providerName, modelName, status, userID string) ([]model.VideoTask, int64, error) {
 	if page < 1 {
 		page = 1
 	}
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 20
 	}
-	return s.repo.List(page, pageSize, providerName, modelName, status)
+	return s.repo.List(page, pageSize, providerName, modelName, status, userID)
 }
 
 func (s *VideoTaskService) GetByID(taskID string) (*model.VideoTask, error) {
@@ -35,6 +42,27 @@ func (s *VideoTaskService) UpdateStatus(taskID, status string) error {
 	return s.repo.UpdateStatus(taskID, status)
 }
 
-func (s *VideoTaskService) Stats() (map[string]interface{}, error) {
-	return s.repo.Stats()
+func (s *VideoTaskService) Update(taskID string, fields VideoTaskUpdateFields) error {
+	return s.repo.UpdateFields(taskID, repository.VideoTaskUpdateFields{
+		Status:       fields.Status,
+		VideoURL:     fields.VideoURL,
+		ResponseBody: fields.ResponseBody,
+		ErrorMessage: fields.ErrorMessage,
+	})
+}
+
+func (s *VideoTaskService) GetProviderType(taskID string) (string, error) {
+	return s.repo.GetProviderType(taskID)
+}
+
+func (s *VideoTaskService) Stats(start, end, userID, providerName, modelName string) (map[string]interface{}, error) {
+	return s.repo.Stats(start, end, userID, providerName, modelName)
+}
+
+func (s *VideoTaskService) StatsTrend(start, end, userID, providerName, modelName string) ([]repository.TrendRow, error) {
+	return s.repo.StatsTrend(start, end, userID, providerName, modelName)
+}
+
+func (s *VideoTaskService) StatsDistribution(start, end, userID, providerName, modelName string) (repository.DistributionRows, error) {
+	return s.repo.StatsDistribution(start, end, userID, providerName, modelName)
 }

@@ -45,6 +45,9 @@ func main() {
 		&cpmmodel.Notification{},
 		// v0.8 审计日志
 		&cpmmodel.AuditLog{},
+		// Seedance 视频任务记录
+		&cpmmodel.VideoTask{},
+		&cpmmodel.VideoTaskEvent{},
 
 		// auth/model (3 个表)
 		&authmodel.Department{},

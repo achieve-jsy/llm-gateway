@@ -22,6 +22,7 @@
         <div class="ops-settings-checkboxes">
           <el-checkbox v-model="form.show_alert_events">告警事件</el-checkbox>
           <el-checkbox v-model="form.show_token_stats">Token 统计</el-checkbox>
+          <el-checkbox v-model="form.show_video_stats">视频任务</el-checkbox>
           <el-checkbox v-model="form.show_concurrency_card">并发卡片</el-checkbox>
           <el-checkbox v-model="form.show_switch_rate_chart">切换率趋势</el-checkbox>
         </div>
@@ -82,6 +83,7 @@ const form = ref<OpsDashboardSettings>({
   auto_refresh_interval: 30,
   show_alert_events: true,
   show_token_stats: true,
+  show_video_stats: true,
   show_concurrency_card: true,
   show_switch_rate_chart: true,
   default_query_mode: 'auto' as OpsQueryMode,

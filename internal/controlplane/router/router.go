@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	cpcron "github.com/example/llm-gateway/internal/controlplane/cron"
 	authrepo "github.com/example/llm-gateway/internal/auth/repository"
 	"github.com/example/llm-gateway/internal/controlplane/auth"
 	cpconfig "github.com/example/llm-gateway/internal/controlplane/config"
+	cpcron "github.com/example/llm-gateway/internal/controlplane/cron"
 	"github.com/example/llm-gateway/internal/controlplane/event"
 	"github.com/example/llm-gateway/internal/controlplane/handler"
 	"github.com/example/llm-gateway/internal/controlplane/keyactivity"
@@ -366,6 +366,11 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	r.GET("/api/v1/public/channel-monitors", channelMonitorUserHandler.ListPublic)
 	r.GET("/api/v1/public/channel-monitors/:id/status", channelMonitorUserHandler.GetStatus)
 
+	// 视频任务服务（admin + internal 共用）
+	videoTaskRepo := repository.NewVideoTaskRepo(db)
+	videoTaskSvc := service.NewVideoTaskService(videoTaskRepo)
+	videoTaskHandler := handler.NewVideoTaskHandler(videoTaskSvc)
+
 	// 管理接口组（JWT 认证）
 	adminGroup := r.Group("/api/v1")
 	adminGroup.Use(middleware.JWTAuth())
@@ -454,15 +459,10 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 		opsHandler := handler.NewOpsHandler(db, rdb, systemMetricsCollector)
 
-		// 视频任务管理
-		videoTaskRepo := repository.NewVideoTaskRepo(db)
-		videoTaskSvc := service.NewVideoTaskService(videoTaskRepo)
-		videoTaskHandler := handler.NewVideoTaskHandler(videoTaskSvc)
-
-			// WP9: 邮件服务 + 定时报表服务
-			emailSvc := service.NewEmailService()
-			scheduledReportSvc := service.NewScheduledReportService(db, rdb, emailSvc)
-			scheduledReportSvc.Start()
+		// WP9: 邮件服务 + 定时报表服务
+		emailSvc := service.NewEmailService()
+		scheduledReportSvc := service.NewScheduledReportService(db, rdb, emailSvc)
+		scheduledReportSvc.Start()
 		adminGroup.GET("/ops/groups", opsHandler.GetGroupOptions)
 		adminGroup.GET("/ops/providers", opsHandler.ListProviders)
 		adminGroup.GET("/ops/models", opsHandler.ListModels)
@@ -544,9 +544,11 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/ops/video-tasks/:id", videoTaskHandler.Get)
 
 		// 视频任务管理
+		adminGroup.GET("/video/tasks/stats/trend", videoTaskHandler.StatsTrend)
+		adminGroup.GET("/video/tasks/stats/distribution", videoTaskHandler.StatsDistribution)
+		adminGroup.GET("/video/tasks/stats", videoTaskHandler.Stats)
 		adminGroup.GET("/video/tasks", videoTaskHandler.List)
 		adminGroup.GET("/video/tasks/:id", videoTaskHandler.Get)
-		adminGroup.GET("/video/tasks/stats", videoTaskHandler.Stats)
 
 		// 模型状态变更日志
 		adminGroup.GET("/model-status-logs", modelStatusLogHandler.ListModelStatusLogs)
@@ -638,6 +640,10 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/my/usage/percentiles", usageH.MyPercentiles)
 		adminGroup.GET("/my/usage/logs", usageH.MyLogs)
 		adminGroup.GET("/my/usage/logs/:request_id/trace", usageH.Trace)
+		adminGroup.GET("/my/video/tasks/stats/trend", videoTaskHandler.MyStatsTrend)
+		adminGroup.GET("/my/video/tasks/stats/distribution", videoTaskHandler.MyStatsDistribution)
+		adminGroup.GET("/my/video/tasks/stats", videoTaskHandler.MyStats)
+		adminGroup.GET("/my/video/tasks", videoTaskHandler.MyList)
 	}
 
 	// 内部接口组（内部 Token 认证）
@@ -687,6 +693,11 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	budgetHandler.SetDB(db)
 	// 注册内部告警触发端点（供 gateway 调用）
 	internalGroup.POST("/budget/evaluate-alert", budgetHandler.EvaluateAlert)
+	// 视频任务写入/查询（供 gateway 调用）
+	internalGroup.POST("/video/tasks", videoTaskHandler.InternalCreate)
+	internalGroup.PATCH("/video/tasks/:id", videoTaskHandler.InternalUpdate)
+	internalGroup.PATCH("/video/tasks/:id/status", videoTaskHandler.InternalUpdateStatus)
+	internalGroup.GET("/video/tasks/:id/provider-type", videoTaskHandler.InternalGetProviderType)
 	// v0.7: 扩容审批路由
 	expansionHandler := handler.NewExpansionHandler(expansionSvc, orgContainer.RBAC, expansionUserRepo)
 	{
@@ -730,26 +741,26 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/dept-policies/:dept_id/key-creation", keyRequestHandler.GetDeptPolicy)
 		adminGroup.PUT("/dept-policies/:dept_id/key-creation", guard(rbac.PermKeyRequestSetPolicy), keyRequestHandler.SetDeptPolicy)
 
-			// Channel Monitor 管理路由
-			adminGroup.GET("/channel-monitors", channelMonitorHandler.List)
-			adminGroup.POST("/channel-monitors", channelMonitorHandler.Create)
-			adminGroup.GET("/channel-monitors/:id", channelMonitorHandler.Get)
-			adminGroup.PUT("/channel-monitors/:id", channelMonitorHandler.Update)
-			adminGroup.DELETE("/channel-monitors/:id", channelMonitorHandler.Delete)
-			adminGroup.POST("/channel-monitors/:id/run", channelMonitorHandler.RunCheck)
-			adminGroup.GET("/channel-monitors/:id/history", channelMonitorHandler.GetHistory)
-			// Channel Monitor 请求模板
-			adminGroup.GET("/channel-monitor-templates", channelMonitorHandler.ListTemplates)
-			adminGroup.POST("/channel-monitor-templates", channelMonitorHandler.CreateTemplate)
-			adminGroup.GET("/channel-monitor-templates/:id", channelMonitorHandler.GetTemplate)
-			adminGroup.PUT("/channel-monitor-templates/:id", channelMonitorHandler.UpdateTemplate)
-			adminGroup.DELETE("/channel-monitor-templates/:id", channelMonitorHandler.DeleteTemplate)
-		}
+		// Channel Monitor 管理路由
+		adminGroup.GET("/channel-monitors", channelMonitorHandler.List)
+		adminGroup.POST("/channel-monitors", channelMonitorHandler.Create)
+		adminGroup.GET("/channel-monitors/:id", channelMonitorHandler.Get)
+		adminGroup.PUT("/channel-monitors/:id", channelMonitorHandler.Update)
+		adminGroup.DELETE("/channel-monitors/:id", channelMonitorHandler.Delete)
+		adminGroup.POST("/channel-monitors/:id/run", channelMonitorHandler.RunCheck)
+		adminGroup.GET("/channel-monitors/:id/history", channelMonitorHandler.GetHistory)
+		// Channel Monitor 请求模板
+		adminGroup.GET("/channel-monitor-templates", channelMonitorHandler.ListTemplates)
+		adminGroup.POST("/channel-monitor-templates", channelMonitorHandler.CreateTemplate)
+		adminGroup.GET("/channel-monitor-templates/:id", channelMonitorHandler.GetTemplate)
+		adminGroup.PUT("/channel-monitor-templates/:id", channelMonitorHandler.UpdateTemplate)
+		adminGroup.DELETE("/channel-monitor-templates/:id", channelMonitorHandler.DeleteTemplate)
+	}
 
 	// 员工自助查询预算（JWTAuth 即可，不需要 admin）
 	r.GET("/api/v1/my/budget", middleware.JWTAuth(), budgetHandler.MyBudget)
 
-// WebSocket 端点（浏览器 WS 不支持 Authorization header，由 handler 内部验证）
+	// WebSocket 端点（浏览器 WS 不支持 Authorization header，由 handler 内部验证）
 	wsHandler := handler.NewOpsWSHandler(rdb)
 	r.GET("/api/v1/ops/ws/qps", wsHandler.HandleQPSWebSocket)
 

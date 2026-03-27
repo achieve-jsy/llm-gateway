@@ -4,7 +4,7 @@
       v-model:currency="currency"
       :scope-label="scopeLabel"
       :loading="summaryLoading || logsLoading"
-      @refresh="loadAll"
+      @refresh="activeTab === 'video' ? (videoRefreshToken++) : loadAll()"
     />
     <!-- Type Tabs -->
     <div class="usage-type-tabs">
@@ -15,148 +15,159 @@
         <el-radio-button value="video">Video</el-radio-button>
       </el-radio-group>
     </div>
-    <DashboardFilters
-      v-model:date-range="dateRange"
-      v-model:active-preset="activePreset"
-      v-model:filter-user-name="filterUserName"
-      v-model:filter-model="filterModel"
-      v-model:filter-status="filterStatus"
-      v-model:filter-key-type="filterKeyType"
-      v-model:filter-endpoint="filterEndpoint"
-      v-model:show-filters="showFilters"
-      :date-presets="datePresets"
-      :model-options="modelOptions"
-      :effective-role="authStore.effectiveRole"
-      :active-filter-count="activeFilterCount"
-      :hide-endpoint="true"
-      @apply-preset="applyPreset"
-      @date-change="onDateChange"
-      @user-name-change="onUserNameChange"
-      @user-name-clear="onUserNameClear"
-      @load-all="loadAll"
-      @clear-filters="clearFilters"
-    />
-    <KpiCards
-      :summary="summary"
-      :loading="summaryLoading"
-      :currency="currency"
-      :cost-change="costChange"
-      :calls-change="callsChange"
-      :prev-period-label="prevPeriodLabel"
-      :current-budget="currentBudget"
-      :budget-level="budgetLevel"
-      :current-scope="currentScope"
-      :avg-cost-per-call="avgCostPerCall"
-    />
-    <TrendChartSection
-      :loading="trendLoading"
-      :trend-data="trendData"
-      :prev-trend-data="prevTrendData"
-      v-model:trend-metric="trendMetric"
-      v-model:trend-granularity="trendGranularity"
-      :currency="currency"
-    />
-    <CostBreakdownSection
-      :show="showCostBreakdown"
-      :current-scope="currentScope"
-      :date-range="dateRange"
-      :budget-pool-items="budgetPoolItems"
-      :top5-breakdown="top5Breakdown"
-      :top5-max="top5Max"
-      :total-cost="totalCostForBreakdown"
-      :currency="currency"
-    />
-    <div class="ud-main-row">
-      <RankingTable
+    <template v-if="activeTab === 'video'">
+      <div class="ud-video-filter">
+        <el-date-picker
+          v-model="dateRange"
+          type="daterange"
+          range-separator="至"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+          value-format="YYYY-MM-DD"
+          size="small"
+          @change="videoRefreshToken++"
+        />
+      </div>
+      <VideoKpiCards :refresh-token="videoRefreshToken" :start="videoDateStart" :end="videoDateEnd" :model-name="filterModel" />
+      <VideoTrendChart :refresh-token="videoRefreshToken" :start="videoDateStart" :end="videoDateEnd" :model-name="filterModel" />
+      <VideoDistributionCharts :refresh-token="videoRefreshToken" :start="videoDateStart" :end="videoDateEnd" :model-name="filterModel" />
+      <VideoTaskTable :refresh-token="videoRefreshToken" />
+    </template>
+    <template v-else>
+      <DashboardFilters
+        v-model:date-range="dateRange"
+        v-model:active-preset="activePreset"
+        v-model:filter-user-name="filterUserName"
+        v-model:filter-model="filterModel"
+        v-model:filter-status="filterStatus"
+        v-model:filter-key-type="filterKeyType"
+        v-model:filter-endpoint="filterEndpoint"
+        v-model:show-filters="showFilters"
+        :date-presets="datePresets"
+        :model-options="modelOptions"
+        :effective-role="authStore.effectiveRole"
+        :active-filter-count="activeFilterCount"
+        :hide-endpoint="true"
+        :compact="isCompactUsageTab"
+        @apply-preset="applyPreset"
+        @date-change="onDateChange"
+        @user-name-change="onUserNameChange"
+        @user-name-clear="onUserNameClear"
+        @load-all="loadAll"
+        @clear-filters="clearFilters"
+      />
+      <KpiCards
+        :summary="summary"
         :loading="summaryLoading"
-        :displayed-breakdown="displayedBreakdown"
+        :currency="currency"
+        :cost-change="costChange"
+        :calls-change="callsChange"
+        :prev-period-label="prevPeriodLabel"
+        :current-budget="currentBudget"
+        :budget-level="budgetLevel"
         :current-scope="currentScope"
-        :can-drill="canDrill"
-        :breadcrumbs="breadcrumbs"
-        :top-label="topLabel"
-        :rank-title="rankTitle"
-        :rank-total="rankTotal"
-        :rank-page-size="rankPageSize"
-        :rank-sort="rankSort"
-        :total-cost="totalCost"
-        :currency="currency"
-        :user-top-models="userTopModels"
-        :enhanced-user-map="enhancedUserMap"
-        v-model:rank-page="rankPage"
-        v-model:rank-search="rankSearch"
-        @drill-down="drillDown"
-        @toggle-sort="toggleSort"
-        @reset-to-top="resetToTop"
-        @pop-to-level="popToLevel"
-        @load-summary="loadSummary"
-        @user-click="handleUserClick"
+        :avg-cost-per-call="avgCostPerCall"
+        :endpoint-type="logEndpointType"
       />
-      <ModelChartSection
-        :loading="modelsLoading"
-        :models-data="modelsData"
-        v-model:model-metric="modelMetric"
-        v-model:model-chart-type="modelChartType"
+      <TrendChartSection
+        :loading="trendLoading"
+        :trend-data="trendData"
+        :prev-trend-data="isCompactUsageTab ? [] : prevTrendData"
+        v-model:trend-metric="trendMetric"
+        v-model:trend-granularity="trendGranularity"
         :currency="currency"
-        @switch-metric="switchModelMetric"
-        @switch-chart-type="switchModelChartType"
-        @model-click="handleModelClick"
+        :compact="isCompactUsageTab"
       />
-      <LongTailAlerts
-        :models-data="modelsData"
-        :currency="currency"
-        :sort-by="ltSortBy"
-        :sort-order="ltSortOrder"
-        @model-click="handleModelClick"
-        @update:sort-by="ltSortBy = $event"
-        @update:sort-order="ltSortOrder = $event"
-      />
-    </div>
-    <!-- Phase B: User Detail Panel -->
-    <Transition name="ud-slide">
-      <UserDetailPanel
-        v-if="userType"
-        :user-id="userType.id"
-        :user-name="panelUserName"
-        :dept-name="panelDeptName"
+      <CostBreakdownSection
+        v-if="!isCompactUsageTab"
+        :show="showCostBreakdown"
+        :current-scope="currentScope"
         :date-range="dateRange"
+        :budget-pool-items="budgetPoolItems"
+        :top5-breakdown="top5Breakdown"
+        :top5-max="top5Max"
+        :total-cost="totalCostForBreakdown"
         :currency="currency"
-        @model-click="handleModelClickFromPanel"
-        @close="closePanel"
       />
-    </Transition>
-    <!-- Phase B: Model Detail Panel -->
-    <Transition name="md-slide">
-      <ModelDetailPanel
-        v-if="modelType"
-        :model-name="modelType.id"
-        :date-range="dateRange"
+      <div v-if="!isCompactUsageTab" class="ud-main-row">
+        <RankingTable
+          :loading="summaryLoading"
+          :displayed-breakdown="displayedBreakdown"
+          :current-scope="currentScope"
+          :can-drill="canDrill"
+          :breadcrumbs="breadcrumbs"
+          :top-label="topLabel"
+          :rank-title="rankTitle"
+          :rank-total="rankTotal"
+          :rank-page-size="rankPageSize"
+          :rank-sort="rankSort"
+          :total-cost="totalCost"
+          :currency="currency"
+          :user-top-models="userTopModels"
+          :enhanced-user-map="enhancedUserMap"
+          v-model:rank-page="rankPage"
+          v-model:rank-search="rankSearch"
+          @drill-down="drillDown"
+          @toggle-sort="toggleSort"
+          @reset-to-top="resetToTop"
+          @pop-to-level="popToLevel"
+          @load-summary="loadSummary"
+          @user-click="handleUserClick"
+        />
+        <ModelChartSection
+          :loading="modelsLoading"
+          :models-data="modelsData"
+          v-model:model-metric="modelMetric"
+          v-model:model-chart-type="modelChartType"
+          :currency="currency"
+          @switch-metric="switchModelMetric"
+          @switch-chart-type="switchModelChartType"
+          @model-click="handleModelClick"
+        />
+        <LongTailAlerts
+          :models-data="modelsData"
+          :currency="currency"
+          :sort-by="ltSortBy"
+          :sort-order="ltSortOrder"
+          @model-click="handleModelClick"
+          @update:sort-by="ltSortBy = $event"
+          @update:sort-order="ltSortOrder = $event"
+        />
+      </div>
+      <Transition name="ud-slide">
+        <UserDetailPanel
+          v-if="!isCompactUsageTab && userType"
+          :user-id="userType.id"
+          :user-name="panelUserName"
+          :dept-name="panelDeptName"
+          :date-range="dateRange"
+          :currency="currency"
+          @model-click="handleModelClickFromPanel"
+          @close="closePanel"
+        />
+      </Transition>
+      <Transition name="md-slide">
+        <ModelDetailPanel
+          v-if="!isCompactUsageTab && modelType"
+          :model-name="modelType.id"
+          :date-range="dateRange"
+          :currency="currency"
+          :team-avg="teamAvg"
+          @user-click="handleUserClickFromModelPanel"
+          @close="closePanel"
+        />
+      </Transition>
+      <UsageLogSection
+        ref="logSectionRef"
+        title="调用明细"
+        api-path="/api/v1/usage/scoped/logs"
+        trace-api-path="/api/v1/usage/logs"
+        :params="logParams"
         :currency="currency"
-        :team-avg="teamAvg"
-        @user-click="handleUserClickFromModelPanel"
-        @close="closePanel"
+        export-prefix="scoped_logs"
+        :table-props="logTableProps"
       />
-    </Transition>
-    <UsageLogSection
-      ref="logSectionRef"
-      title="调用明细"
-      api-path="/api/v1/usage/scoped/logs"
-      trace-api-path="/api/v1/usage/logs"
-      :params="logParams"
-      :currency="currency"
-      export-prefix="scoped_logs"
-      :table-props="{
-        showKey: true,
-        showKeyType: authStore.effectiveRole !== 'user',
-        showUser: true,
-        userLabel: '成员',
-        showStudio: authStore.effectiveRole === 'admin',
-        showDept: authStore.effectiveRole === 'admin' || authStore.effectiveRole === 'studio_admin',
-        showSource: 'ip-only',
-        sortableColumns: ['duration_ms', 'est_cost_usd', 'ts'],
-        pageSizes: [20, 50, 100],
-        traceMetaMode: 'full',
-      }"
-    />
+    </template>
   </div>
 </template>
 
@@ -171,6 +182,10 @@ import RankingTable from './components/RankingTable.vue'
 import ModelChartSection from './components/ModelChartSection.vue'
 import LongTailAlerts from './components/LongTailAlerts.vue'
 import UsageLogSection from '@/components/usage/UsageLogSection.vue'
+import VideoKpiCards from '@/components/usage/VideoKpiCards.vue'
+import VideoTrendChart from '@/components/usage/VideoTrendChart.vue'
+import VideoDistributionCharts from '@/components/usage/VideoDistributionCharts.vue'
+import VideoTaskTable from '@/components/usage/VideoTaskTable.vue'
 import UserDetailPanel from './components/UserDetailPanel.vue'
 import ModelDetailPanel from './components/ModelDetailPanel.vue'
 import { usePanelManager } from '@/composables/usePanelManager'
@@ -182,6 +197,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { fetchUsersRanking } from '@/api/dashboard-enhanced'
 import type { UserRankRow } from '@/types/dashboard-enhanced'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
+import type { UsageEndpointType } from '@/utils/usage-endpoint'
 
 const settingsStore = useSettingsStore()
 const currency = ref<Currency>('CNY')
@@ -203,6 +219,8 @@ const daysAgo = (n: number) => { const d = new Date(today); d.setDate(d.getDate(
 
 const dateRange = ref<[string, string]>([fmt(daysAgo(29)), fmt(today)])
 const activePreset = ref('近30天')
+const videoDateStart = computed(() => dateRange.value?.[0] || '')
+const videoDateEnd = computed(() => dateRange.value?.[1] || '')
 
 const datePresets = [
   { label: '今天',   days: 0 },
@@ -233,6 +251,31 @@ const filterStatus   = ref('')
 const filterKeyType  = ref('')
 const filterEndpoint = ref('')
 const activeTab = ref('chat')
+const videoRefreshToken = ref(0)
+
+const logEndpointType = computed((): UsageEndpointType => {
+  if (activeTab.value === 'embedding' || activeTab.value === 'rerank') return activeTab.value
+  return 'chat'
+})
+
+const isCompactUsageTab = computed(() =>
+  activeTab.value === 'embedding' || activeTab.value === 'rerank',
+)
+
+const logTableProps = computed(() => ({
+  showKey: !isCompactUsageTab.value,
+  showKeyType: !isCompactUsageTab.value && authStore.effectiveRole !== 'user',
+  showUser: !isCompactUsageTab.value,
+  userLabel: '成员',
+  showStudio: !isCompactUsageTab.value && authStore.effectiveRole === 'admin',
+  showDept: !isCompactUsageTab.value && (authStore.effectiveRole === 'admin' || authStore.effectiveRole === 'studio_admin'),
+  showProvider: true,
+  showSource: isCompactUsageTab.value ? false : 'ip-only',
+  sortableColumns: ['duration_ms', 'est_cost_usd', 'ts'] as const,
+  pageSizes: [20, 50, 100],
+  traceMetaMode: 'full' as const,
+  endpointType: logEndpointType.value,
+}))
 
 function onTabChange(value: string | number | boolean) {
   const endpointMap: Record<string, string> = {
@@ -242,6 +285,18 @@ function onTabChange(value: string | number | boolean) {
     video: '/v1/contents/generations/tasks',
   }
   filterEndpoint.value = endpointMap[value as string] || ''
+  if (value === 'video') {
+    videoRefreshToken.value++
+    return
+  }
+  // Embedding/Rerank：原型仅展示请求量趋势，强制 calls 并收起 Chat 成本区
+  if (value === 'embedding' || value === 'rerank') {
+    trendMetric.value = 'calls'
+    modelMetric.value = 'calls'
+    closePanel()
+  } else if (trendMetric.value === 'calls' && value === 'chat') {
+    trendMetric.value = 'all'
+  }
   loadAll()
 }
 const showFilters    = ref(true)
@@ -250,9 +305,12 @@ const showFilters    = ref(true)
 const ltSortBy    = ref<'calls' | 'cost' | 'error_rate'>('calls')
 const ltSortOrder = ref<'asc' | 'desc'>('desc')
 
-const activeFilterCount = computed(() =>
-  [filterUserName.value, filterModel.value, filterStatus.value, filterKeyType.value, filterEndpoint.value].filter(Boolean).length
-)
+const activeFilterCount = computed(() => {
+  const dims = isCompactUsageTab.value
+    ? [filterModel.value, filterStatus.value]
+    : [filterUserName.value, filterModel.value, filterStatus.value, filterKeyType.value, filterEndpoint.value]
+  return dims.filter(Boolean).length
+})
 
 function clearFilters() {
   filterUserName.value = ''
@@ -842,6 +900,12 @@ defineExpose({ reloadLogs })
   gap: 12px;
 }
 @media (max-width: 960px) { .ud-main-row { grid-template-columns: 1fr; } }
+
+.ud-video-filter {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
 
 /* ── 调用明细列样式 ── */
 .ud-key-name    { font-size: 13px; font-weight: 600; color: var(--el-text-color-primary); }

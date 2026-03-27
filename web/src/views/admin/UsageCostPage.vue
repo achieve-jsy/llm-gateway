@@ -172,6 +172,33 @@
       </el-radio-group>
     </div>
 
+    <template v-if="activeTab === 'video'">
+      <VideoKpiCards
+        :refresh-token="videoRefreshToken"
+        :start="videoDateStart"
+        :end="videoDateEnd"
+        :provider-name="filterProvider"
+        :model-name="filterModelName"
+      />
+      <VideoTrendChart
+        :refresh-token="videoRefreshToken"
+        :start="videoDateStart"
+        :end="videoDateEnd"
+        :provider-name="filterProvider"
+        :model-name="filterModelName"
+      />
+      <VideoDistributionCharts
+        :refresh-token="videoRefreshToken"
+        :start="videoDateStart"
+        :end="videoDateEnd"
+        :provider-name="filterProvider"
+        :model-name="filterModelName"
+      />
+      <VideoTaskTable :refresh-token="videoRefreshToken" />
+    </template>
+    <template v-else>
+
+
     <!-- ═══════════════════════════════════════════
          统计卡片（sub2api 风格）
     ═══════════════════════════════════════════ -->
@@ -190,6 +217,20 @@
         </div>
       </div>
 
+      <div v-if="isCompactUsageTab && activeTab === 'embedding'" class="up-stat-card">
+        <div class="up-stat-card__icon up-stat-card__icon--amber">
+          <el-icon size="22"><Coin /></el-icon>
+        </div>
+        <div class="up-stat-card__body">
+          <p class="up-stat-card__label">输入 Token</p>
+          <p class="up-stat-card__value">{{ fmtTokens(statsTotal?.prompt_tokens) }}</p>
+          <p class="up-stat-card__sub">
+            合计 <span class="c-blue">{{ fmtTokens((statsTotal?.prompt_tokens ?? 0) + (statsTotal?.completion_tokens ?? 0)) }}</span>
+          </p>
+        </div>
+      </div>
+
+      <template v-if="!isCompactUsageTab">
       <div class="up-stat-card">
         <div class="up-stat-card__icon up-stat-card__icon--amber">
           <el-icon size="22"><Coin /></el-icon>
@@ -232,6 +273,7 @@
           </p>
         </div>
       </div>
+      </template>
     </div>
 
     <!-- ═══════════════════════════════════════════
@@ -241,8 +283,8 @@
       <!-- 趋势 / Token 分布图 -->
       <div class="up-chart-card">
         <div class="up-chart-card__header">
-          <span class="up-chart-card__title">Token 趋势</span>
-          <el-radio-group v-model="chartMetric" size="small" @change="renderTrend">
+          <span class="up-chart-card__title">{{ isCompactUsageTab ? '请求趋势' : 'Token 趋势' }}</span>
+          <el-radio-group v-if="!isCompactUsageTab" v-model="chartMetric" size="small" @change="renderTrend">
             <el-radio-button value="tokens">Token</el-radio-button>
             <el-radio-button value="reqs">调用</el-radio-button>
             <el-radio-button value="cost">成本</el-radio-button>
@@ -253,11 +295,11 @@
         </div>
       </div>
 
-      <!-- 模型分布图 -->
+      <!-- 模型分布图（Embedding/Rerank 精简：仅调用量） -->
       <div class="up-chart-card">
         <div class="up-chart-card__header">
           <span class="up-chart-card__title">Top 模型</span>
-          <el-radio-group v-model="distMetric" size="small" @change="renderDist">
+          <el-radio-group v-if="!isCompactUsageTab" v-model="distMetric" size="small" @change="renderDist">
             <el-radio-button value="reqs">调用量</el-radio-button>
             <el-radio-button value="tokens">Token</el-radio-button>
           </el-radio-group>
@@ -386,20 +428,10 @@
       :params="logParams"
       :currency="currency"
       export-prefix="usage_logs"
-      :table-props="{
-        showKey: true,
-        showKeyType: true,
-        showUser: true,
-        showDept: true,
-        showStudio: true,
-        showGroup: true,
-        showProvider: true,
-        showSource: 'full',
-        sortableColumns: ['duration_ms', 'est_cost_usd', 'ts'],
-        keyResolver: (row: any) => keyLabel(row.key_id, row.key_name ?? ''),
-      }"
+      :table-props="logTableProps"
     />
 
+    </template>
   </div>
 </template>
 
@@ -410,7 +442,11 @@ import {
   MagicStick, WarningFilled,
   ArrowDown, ArrowUp
 } from '@element-plus/icons-vue'
-import UsageLogSection from '@/components/usage/UsageLogSection.vue' 
+import UsageLogSection from '@/components/usage/UsageLogSection.vue'
+import VideoKpiCards from '@/components/usage/VideoKpiCards.vue'
+import VideoTrendChart from '@/components/usage/VideoTrendChart.vue'
+import VideoDistributionCharts from '@/components/usage/VideoDistributionCharts.vue'
+import VideoTaskTable from '@/components/usage/VideoTaskTable.vue'
 import {
   Chart, BarController, LineController, CategoryScale, LinearScale, BarElement, LineElement,
   PointElement, Tooltip, Legend, Filler
@@ -419,6 +455,7 @@ import http from '@/services/http'
 import { ElMessage } from 'element-plus'
 import { useSettingsStore } from '@/stores/settings'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
+import type { UsageEndpointType } from '@/utils/usage-endpoint'
 import { fmtDateTime, fmtDate, fmtDuration } from '@/utils/time'
 
 Chart.register(
@@ -467,6 +504,8 @@ const fmt = (d: Date) => d.toISOString().split('T')[0]
 const today = new Date()
 const daysAgo = (n: number) => { const d = new Date(today); d.setDate(d.getDate() - n); return d }
 const dateRange = ref<[string, string]>([fmt(daysAgo(6)), fmt(today)])
+const videoDateStart = computed(() => dateRange.value?.[0] || '')
+const videoDateEnd = computed(() => dateRange.value?.[1] || '')
 const dateShortcuts = [
   { text: '今天',       value: () => [fmt(today), fmt(today)] },
   { text: '昨天',       value: () => { const d = fmt(daysAgo(1)); return [d, d] } },
@@ -515,6 +554,31 @@ const filterEndpoint  = ref('')
 const activeTab = ref('chat')
 const showMoreFilters = ref(false)
 
+const isCompactUsageTab = computed(() =>
+  activeTab.value === 'embedding' || activeTab.value === 'rerank',
+)
+
+const logEndpointType = computed((): UsageEndpointType => {
+  if (activeTab.value === 'embedding' || activeTab.value === 'rerank') return activeTab.value
+  return 'chat'
+})
+
+const logTableProps = computed(() => ({
+  showKey: !isCompactUsageTab.value,
+  showKeyType: !isCompactUsageTab.value,
+  showUser: !isCompactUsageTab.value,
+  showDept: !isCompactUsageTab.value,
+  showStudio: !isCompactUsageTab.value,
+  showGroup: !isCompactUsageTab.value,
+  showProvider: true,
+  showSource: isCompactUsageTab.value ? false : 'full',
+  sortableColumns: ['duration_ms', 'est_cost_usd', 'ts'] as const,
+  endpointType: logEndpointType.value,
+  keyResolver: (row: any) => keyLabel(row.key_id, row.key_name ?? ''),
+}))
+
+const videoRefreshToken = ref(0)
+
 function onTabChange(value: string | number | boolean) {
   const endpointMap: Record<string, string> = {
     chat: '/v1/chat/completions',
@@ -523,6 +587,16 @@ function onTabChange(value: string | number | boolean) {
     video: '/v1/contents/generations/tasks',
   }
   filterEndpoint.value = endpointMap[value as string] || ''
+  if (value === 'video') {
+    videoRefreshToken.value++
+    return
+  }
+  if (value === 'embedding' || value === 'rerank') {
+    chartMetric.value = 'reqs'
+    distMetric.value = 'reqs'
+  } else if (value === 'chat' && chartMetric.value === 'reqs') {
+    chartMetric.value = 'tokens'
+  }
   loadAll()
 }
 
@@ -738,6 +812,10 @@ async function loadStats(resetPage = true) {
 }
 
 function loadAll() {
+  if (activeTab.value === 'video') {
+    videoRefreshToken.value++
+    return
+  }
   loadStats()
   nextTick(() => logSectionRef.value?.refresh())
 }

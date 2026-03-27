@@ -1,0 +1,1251 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLM Gateway - 集成演示</title>
+<style>
+/* ===== Design Tokens ===== */
+:root {
+  --brand-green:#36B34E;--brand-green-light:#5DC370;--brand-green-deep:#2A9C4B;--brand-green-text:#1F8A3B;
+  --bg-page:#F8FAFC;--bg-surface:#fff;--bg-card:#fff;--bg-subtle:#F1F5F9;--bg-hover:#F9FAFB;
+  --border-default:#E2E8F0;--border-light:#F1F5F9;--border-strong:#CBD5E1;
+  --text-primary:#0F172A;--text-regular:#334155;--text-secondary:#64748B;--text-placeholder:#94A3B8;
+  --color-success:#059669;--color-warning:#D97706;--color-danger:#DC2626;--color-info:#2563EB;
+  --color-success-bg:#ECFDF5;--color-warning-bg:#FFFBEB;--color-danger-bg:#FEF2F2;--color-info-bg:#EFF6FF;
+  --color-video:#8B5CF6;--color-video-bg:#F5F3FF;
+  --font:'Inter',-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif;
+  --mono:'JetBrains Mono','SF Mono',Consolas,monospace;
+  --r-sm:4px;--r-base:8px;--r-lg:12px;--r-xl:16px;--r-3xl:24px;
+  --shadow-sm:0 1px 2px rgba(0,0,0,.05);--shadow-base:0 2px 6px rgba(0,0,0,.08);
+  --shadow-lg:0 4px 6px rgba(0,0,0,.07),0 2px 4px rgba(0,0,0,.06);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+:focus-visible{outline:2px solid var(--color-info);outline-offset:2px;border-radius:2px}
+.btn:focus-visible,.nav-item:focus-visible,.tab:focus-visible,.d-tab:focus-visible,
+.pager-btn:focus-visible,.dlg-close:focus-visible,.btn-icon:focus-visible,
+.btn-text:focus-visible,.sw:focus-visible,.tag-add:focus-visible,
+.input:focus-visible,.select:focus-visible{outline:2px solid var(--color-info);outline-offset:2px}
+body{font-family:var(--font);font-size:14px;color:var(--text-regular);background:var(--bg-page);-webkit-font-smoothing:antialiased;height:100vh;overflow:hidden} body.dialog-open{overflow:hidden}
+
+/* ===== Layout ===== */
+.app{display:flex;height:100vh}
+.sidebar{width:216px;background:var(--bg-surface);border-right:1px solid var(--border-default);display:flex;flex-direction:column;flex-shrink:0;transition:width .3s cubic-bezier(0.4, 0, 0.2, 1)}
+.sidebar-hd{height:52px;display:flex;align-items:center;padding:0 18px;gap:10px;font-size:18px;font-weight:800;color:var(--text-primary);border-bottom:1px solid var(--border-default);letter-spacing:.5px}
+.logo{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,var(--brand-green),var(--brand-green-deep));display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;font-weight:900}
+.sidebar-nav{flex:1;padding:10px 8px;overflow-y:auto}
+.nav-group{font-size:11px;font-weight:700;color:#64748B;letter-spacing:1.5px;text-transform:uppercase;padding:8px 12px 4px;margin-top:4px}
+.nav-sep{margin:4px 12px;border-top:1px dashed var(--border-default)}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:var(--r-base);font-size:13px;font-weight:500;color:var(--text-secondary);cursor:pointer;transition:background-color .15s,color .15s,border-color .15s,box-shadow .15s;margin-bottom:1px;position:relative}
+.nav-item:hover{background:var(--bg-subtle);color:var(--text-primary)}
+.nav-item.active{background:#1F8A3B;color:#fff;box-shadow:var(--shadow-sm)}
+.nav-item .ni{font-size:15px;width:20px;text-align:center;flex-shrink:0}
+.nav-new{position:absolute;right:8px;font-size:9px;font-weight:800;background:var(--color-video);color:#fff;padding:1px 5px;border-radius:3px;letter-spacing:.5px}
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.topbar{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 24px;border-bottom:1px solid var(--border-default);background:var(--bg-surface);flex-shrink:0}
+.topbar-title{font-size:16px;font-weight:700;color:var(--text-primary)}
+.topbar-right{display:flex;gap:8px;align-items:center}
+.content{flex:1;overflow-y:auto;padding:20px 24px}
+
+/* ===== Components ===== */
+.pg-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+.pg-title{font-size:20px;font-weight:700;color:var(--text-primary)}
+.pg-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.btn{padding:8px 16px;border-radius:var(--r-base);font-size:14px;font-weight:500;border:none;cursor:pointer;transition:background-color .15s,color .15s,border-color .15s,box-shadow .15s;display:inline-flex;align-items:center;gap:6px}
+.btn:active{transform:scale(.97)}.btn-sm{padding:5px 12px;font-size:12px}
+.btn-primary{background:#1F8A3B;color:#fff;box-shadow:var(--shadow-sm)}.btn-primary:hover{background:var(--brand-green-light)}
+.btn-default{background:var(--bg-surface);color:var(--text-regular);border:1px solid var(--border-default)}.btn-default:hover{border-color:var(--border-strong)}
+.btn-text{background:none;color:var(--color-info);padding:4px 8px;font-size:13px;font-weight:500;border:none;cursor:pointer}.btn-text:hover{background:var(--bg-subtle)}
+.btn-text.danger{color:var(--color-danger)}
+.btn-icon{width:32px;height:32px;border-radius:var(--r-base);background:none;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;color:var(--text-secondary)}.btn-icon:hover{background:var(--bg-subtle)}
+.input{width:100%;padding:7px 12px;border:1px solid var(--border-default);border-radius:6px;font-size:14px;color:var(--text-primary);background:var(--bg-surface);transition:border-color .2s,box-shadow .2s;font-family:var(--font)}
+.input:focus{outline:none;border-color:var(--color-info);box-shadow:0 0 0 2px rgba(37,99,235,.1)}
+.input::placeholder{color:var(--text-placeholder)}
+.input[disabled]{background:var(--bg-subtle);color:var(--text-placeholder);cursor:not-allowed}
+.select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748B' d='M6 9L1 4h10z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:32px;cursor:pointer}
+.textarea{resize:vertical;min-height:60px;font-family:var(--font);line-height:1.5}
+.input-num{width:148px;text-align:center}
+.mono{font-family:var(--mono);font-size:13px}
+
+/* Tags */
+.tag{display:inline-flex;align-items:center;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;letter-spacing:.3px;white-space:nowrap}
+.tag-success{background:var(--color-success-bg);color:#047857}
+.tag-warning{background:var(--color-warning-bg);color:#B45309}
+.tag-danger{background:var(--color-danger-bg);color:#B91C1C}
+.tag-info{background:var(--color-info-bg);color:#1D4ED8}
+.tag-video{background:var(--color-video-bg);color:#6D28D9}
+.tag-neutral{background:var(--bg-subtle);color:#475569}
+
+/* Table */
+.tbl-wrap{background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--r-base);overflow:hidden}
+table{width:100%;border-collapse:collapse}
+th{background:var(--bg-subtle);padding:10px 14px;text-align:left;font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border-default)}
+td{padding:11px 14px;font-size:13px;border-bottom:1px solid var(--border-light)}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:var(--bg-hover)}
+.hl td{background:#faf5ff!important}
+.hl:hover td{background:#f3e8ff!important}
+
+/* Tabs */
+.tabs{display:flex;border-bottom:1px solid var(--border-default);margin-bottom:16px}
+.tab{padding:10px 18px;font-size:13px;font-weight:500;color:var(--text-secondary);background:none;border:none;border-bottom:3px solid transparent;cursor:pointer;margin-bottom:-1px;transition:background-color .15s,color .15s,border-color .15s,box-shadow .15s}
+.tab:hover{color:var(--text-primary)}
+.tab.active{color:var(--brand-green);border-bottom-color:var(--brand-green);font-weight:600}
+.tab.video-tab{color:var(--color-video)}
+.tab.video-tab.active{color:var(--color-video);border-bottom-color:var(--color-video)}
+
+/* Card */
+.card{background:var(--bg-card);border:1px solid var(--border-default);border-radius:var(--r-base);padding:20px;margin-bottom:16px}
+.card-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border-light)}
+.card-title{font-size:14px;font-weight:700;color:var(--text-primary);display:flex;align-items:center;gap:8px}
+
+/* Stats */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px}
+.stat{background:var(--bg-card);border:1px solid var(--border-default);border-radius:var(--r-base);padding:16px}
+.stat-label{font-size:12px;color:var(--text-secondary);font-weight:600;margin-bottom:4px}
+.stat-value{font-size:24px;font-weight:800;color:var(--text-primary);font-family:var(--mono);font-variant-numeric:tabular-nums}
+.stat-sub{font-size:11px;color:var(--text-secondary);margin-top:4px}
+.stat.video{border-left:3px solid var(--color-video)}
+
+/* Callout */
+.callout{padding:10px 14px;border-radius:6px;font-size:12px;line-height:1.6;margin-bottom:16px;display:flex;gap:8px}
+.callout-info{background:var(--color-info-bg);color:#1e40af;border-left:3px solid var(--color-info)}
+.callout-video{background:var(--color-video-bg);color:#6d28d9;border-left:3px solid var(--color-video)}
+.callout-warn{background:var(--color-warning-bg);color:#92400e;border-left:3px solid var(--color-warning)}
+.callout-ok{background:var(--color-success-bg);color:#065f46;border-left:3px solid var(--color-success)}
+
+/* Config block */
+.cfg{background:var(--bg-subtle);border-radius:var(--r-base);padding:16px;margin-bottom:16px}
+.cfg-title{font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:12px;display:flex;align-items:center;gap:6px}
+
+/* JSON editor */
+.json{font-family:var(--mono);font-size:12px;line-height:1.5;background:#1e293b;color:#e2e8f0;padding:12px 14px;border-radius:6px;min-height:60px;white-space:pre;border:none;width:100%;resize:vertical}
+
+/* Form */
+.fi{margin-bottom:18px;display:flex;align-items:flex-start}.fi:last-child{margin-bottom:0}
+.fl{width:110px;min-width:110px;font-size:13px;font-weight:500;color:var(--text-regular);line-height:32px;padding-right:12px}
+.fl .req{color:var(--color-danger);margin-right:2px}
+.fc{flex:1}
+.hint{font-size:12px;color:#64748B;margin-top:4px;line-height:1.5}
+.hint.inline{display:inline;margin-left:8px}
+.divider{margin:20px 0 16px;border-top:1px dashed var(--border-default);position:relative}
+.divider-text{position:absolute;top:-9px;left:0;font-size:13px;color:var(--text-secondary);background:var(--bg-surface);padding-right:12px}
+
+/* Dialog */
+.overlay{display:none;position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:1000;align-items:center;justify-content:center;backdrop-filter:blur(2px)}
+.overlay.open{display:flex}
+.dlg{background:var(--bg-surface);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);width:640px;max-width:95vw;max-height:88vh;overflow:hidden;display:flex;flex-direction:column}
+.dlg.wide{width:720px}
+.dlg-hd{padding:18px 20px 14px;border-bottom:1px solid var(--border-default);display:flex;justify-content:space-between;align-items:center;background:var(--bg-surface)}
+.dlg-title{font-size:18px;font-weight:700;color:var(--text-primary);letter-spacing:.5px}
+.dlg-close{width:28px;height:28px;border-radius:6px;border:none;background:none;font-size:18px;color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center}.dlg-close:hover{background:var(--bg-subtle)}
+.dlg-bd{padding:18px 20px;overflow-y:auto;flex:1;overscroll-behavior:contain}
+.dlg-ft{padding:10px 20px 18px;border-top:1px solid var(--border-default);display:flex;justify-content:flex-end;gap:8px}
+
+/* Dialog Tabs */
+.d-tabs{display:flex;border-bottom:1px solid var(--border-default);margin-bottom:16px}
+.d-tab{padding:10px 18px;font-size:14px;font-weight:500;color:var(--text-secondary);background:none;border:none;border-bottom:3px solid transparent;cursor:pointer;margin-bottom:-1px;transition:background-color .15s,color .15s,border-color .15s,box-shadow .15s}
+.d-tab:hover{color:var(--text-primary)}
+.d-tab.active{color:var(--brand-green);border-bottom-color:var(--brand-green);font-weight:700}
+.d-pane{display:none}.d-pane.active{display:block}
+
+/* Radio */
+.radio-group{display:flex;gap:16px;line-height:32px}
+.radio{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px}
+.radio input{accent-color:var(--brand-green)}
+
+/* Checkbox */
+.chk-group{display:flex;gap:8px;flex-wrap:wrap}
+.chk{display:flex;align-items:center;gap:4px;cursor:pointer;font-size:13px}
+.chk input{accent-color:var(--brand-green)}
+
+/* Switch */
+.sw{width:40px;height:20px;border-radius:10px;background:#CBD5E1;position:relative;cursor:pointer;transition:background .2s;display:inline-block;vertical-align:middle}
+.sw.on{background:var(--color-success)}
+.sw::after{content:'';position:absolute;width:16px;height:16px;border-radius:50%;background:#fff;top:2px;left:2px;transition:transform .2s;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+.sw.on::after{transform:translateX(20px)}
+
+/* Tag input */
+.tag-wrap{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-height:32px;padding:4px 6px;border:1px solid var(--border-default);border-radius:6px;transition:border-color .2s}
+.tag-wrap:focus-within{border-color:var(--brand-green)}
+.tag-add{border:1px dashed var(--border-default);background:transparent;color:var(--text-secondary);font-size:12px;padding:2px 8px;border-radius:4px;cursor:pointer}.tag-add:hover{border-color:var(--brand-green);color:var(--brand-green)}
+
+/* Pagination */
+.pager{display:flex;justify-content:flex-end;align-items:center;margin-top:16px;gap:4px}
+.pager-info{font-size:13px;color:var(--text-secondary);margin-right:auto}
+.pager-btn{padding:5px 10px;border:1px solid var(--border-default);border-radius:4px;background:var(--bg-surface);cursor:pointer;font-size:13px;color:var(--text-regular)}.pager-btn:hover{border-color:var(--brand-green);color:var(--brand-green)}
+.pager-btn.active{background:#1F8A3B;color:#fff;border-color:var(--brand-green)}
+
+/* Health */
+.h-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
+.h-dot.ok{background:var(--color-success)}.h-dot.warn{background:var(--color-warning)}.h-dot.err{background:var(--color-danger)}
+
+/* Provider card */
+.prov-card{border:1px solid var(--border-default);border-radius:var(--r-base);padding:16px;margin-bottom:12px;transition:background-color .15s,color .15s,border-color .15s,box-shadow .15s}
+.prov-card:hover{border-color:var(--border-strong);box-shadow:var(--shadow-sm)}
+.prov-hd{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px}
+.prov-name{font-size:14px;font-weight:700;color:var(--text-primary)}
+.prov-url{font-size:12px;color:var(--text-secondary);font-family:var(--mono);margin-top:2px}
+
+/* Chart placeholder */
+.chart-ph{height:200px;background:var(--bg-subtle);border-radius:var(--r-base);display:flex;align-items:center;justify-content:center;color:var(--text-placeholder);font-size:13px;border:1px dashed var(--border-default)}
+
+/* Usage pane */
+.usage-pane{display:none}.usage-pane.active{display:block}
+
+/* Page transition */
+.page{display:none;animation:fadeIn .2s ease}.page.active{display:block}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+
+/* Utility classes */
+.text-secondary { color: var(--text-secondary); }
+.text-placeholder { color: var(--text-placeholder); }
+.text-video { color: var(--color-video); }
+.clickable { cursor: pointer; }
+.clickable:hover { color: var(--brand-green); }
+.detail-label { font-size: 11px; color: var(--text-secondary); font-weight: 600; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
+/* Scrollbar */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:3px}::-webkit-scrollbar-thumb:hover{background:#94A3B8}
+
+/* Responsive */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-page: #0F172A; --bg-surface: #1E293B; --bg-card: #1E293B;
+    --bg-subtle: #263242; --bg-hover: #263242;
+    --border-default: #334155; --border-light: #1E293B; --border-strong: #475569;
+    --text-primary: #F1F5F9; --text-regular: #CBD5E1; --text-secondary: #94A3B8; --text-placeholder: #475569;
+    --brand-green: #5DC370; --brand-green-light: #84D293;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,.3); --shadow-base: 0 2px 8px rgba(0,0,0,.4); --shadow-lg: 0 4px 12px rgba(0,0,0,.5);
+  }
+  .json { background: #0F172A; border: 1px solid var(--border-default); }
+  .overlay { background: rgba(0,0,0,.7); }
+  .input[disabled] { background: var(--bg-subtle); }
+}
+@media(max-width:768px){
+  .sidebar{width:64px}
+  .sidebar .nav-group,.sidebar .nav-sep,.sidebar .nav-item span:not(.ni):not(.nav-new){display:none}
+  .sidebar-hd span{display:none}.sidebar-hd{justify-content:center;padding:0}
+  .content{padding:16px}
+  .fi{flex-direction:column}.fl{width:100%;line-height:1.5;margin-bottom:4px}
+  .dlg{width:95%!important}
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+<!-- ===== SIDEBAR ===== -->
+<aside class="sidebar">
+  <div class="sidebar-hd"><div class="logo">G</div><span>Gateway</span></div>
+  <nav class="sidebar-nav">
+    <div class="nav-group">概览</div>
+    <div class="nav-item active" data-page="providers"><span class="ni">🌐</span><span>渠道管理</span></div>
+    <div class="nav-item" data-page="models"><span class="ni">🤖</span><span>模型管理</span></div>
+    <div class="nav-item" data-page="groups"><span class="ni">📦</span><span>模型组</span></div>
+    <div class="nav-item" data-page="keys"><span class="ni">🔑</span><span>API Keys</span></div>
+    <div class="nav-sep"></div>
+    <div class="nav-group">监控运维</div>
+    <div class="nav-item" data-page="usage"><span class="ni">📈</span><span>用量看板</span></div>
+    <div class="nav-item" data-page="ops"><span class="ni">🔧</span><span>运维监控</span></div>
+    <div class="nav-sep"></div>
+    <div class="nav-group">用户侧</div>
+    <div class="nav-item" data-page="square"><span class="ni">🏪</span><span>模型广场</span></div>
+  </nav>
+</aside>
+
+<!-- ===== MAIN ===== -->
+<div class="main">
+<header class="topbar">
+  <span class="topbar-title" id="pageTitle">渠道管理</span>
+  <div class="topbar-right">
+    <button class="btn-icon" title="刷新">🔄</button>
+    <button class="btn-icon" title="通知">🔔</button>
+    <button class="btn-icon" title="管理员">👤</button>
+  </div>
+</header>
+
+<div class="content">
+
+<!-- ==================== P1: 渠道管理 ==================== -->
+<div class="page active" id="pg-providers">
+  <div class="pg-hd">
+    <h1 class="pg-title">渠道管理</h1>
+    <div class="pg-actions">
+      <input class="input" placeholder="搜索名称..." style="width:140px">
+      <select class="input select" style="width:140px"><option>按类型筛选</option><option>OpenAI</option><option>Anthropic</option><option>Azure</option><option style="color:var(--color-video);font-weight:600">🎬 Seedance 中转</option><option style="color:var(--color-video);font-weight:600">🎬 Seedance 官方</option></select>
+      <button class="btn btn-primary" onclick="openDlg('dlgProvider')">+ 新建渠道</button>
+    </div>
+  </div>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>名称</th><th>类型</th><th>Endpoint</th><th>凭证</th><th>状态</th><th>优先级</th><th>模型数</th><th>操作</th></tr></thead>
+    <tbody>
+      <tr><td><strong>OpenAI 官方</strong></td><td><span class="tag tag-info">OpenAI</span></td><td class="mono" style="color:var(--text-secondary)">api.openai.com</td><td class="mono" style="color:var(--text-secondary)">sk-...aB3f</td><td><span class="tag tag-success">启用</span></td><td>10</td><td>5</td><td><button class="btn-text" onclick="openDlg('dlgProviderEdit')">编辑</button><button class="btn-text" onclick="alert('同步成功！已更新模型列表')">同步</button><button class="btn-text danger" onclick="if(confirm('确定删除该渠道？关联的模型也将被删除。')){alert('删除成功！')}">删除</button></td></tr>
+      <tr><td><strong>Anthropic 官方</strong></td><td><span class="tag tag-info">Anthropic</span></td><td class="mono" style="color:var(--text-secondary)">api.anthropic.com</td><td class="mono" style="color:var(--text-secondary)">sk-ant-...x9K</td><td><span class="tag tag-success">启用</span></td><td>20</td><td>3</td><td><button class="btn-text">编辑</button><button class="btn-text" onclick="alert('同步成功！已更新模型列表')">同步</button><button class="btn-text danger" onclick="if(confirm('确定删除该渠道？关联的模型也将被删除。')){alert('删除成功！')}">删除</button></td></tr>
+      <tr><td><strong>Bedrock 官方</strong></td><td><span class="tag tag-info">Bedrock</span></td><td class="mono" style="color:var(--text-secondary)">bedrock-runtime.us-east-1.amazonaws.com</td><td class="mono" style="color:var(--text-secondary)">AKIA...QZ7X</td><td><span class="tag tag-success">启用</span></td><td>15</td><td>4</td><td><button class="btn-text">编辑</button><button class="btn-text" onclick="alert('同步成功！已更新模型列表')">同步</button><button class="btn-text danger" onclick="if(confirm('确定删除该渠道？关联的模型也将被删除。')){alert('删除成功！')}">删除</button></td></tr>
+      <!-- Seedance 渠道 NEW -->
+      <tr class="hl"><td><strong>中转 A</strong></td><td><span class="tag tag-video">🎬 Seedance 中转</span></td><td class="mono" style="color:var(--text-secondary)">115.190.78.58:8000</td><td class="mono" style="color:var(--text-secondary)">Bearer ***</td><td><span class="tag tag-success">启用</span></td><td>5</td><td>2</td><td><button class="btn-text" onclick="openDlg('dlgProviderEdit')">编辑</button><button class="btn-text" onclick="alert('同步成功！已更新模型列表')">同步</button><button class="btn-text danger" onclick="if(confirm('确定删除该渠道？关联的模型也将被删除。')){alert('删除成功！')}">删除</button></td></tr>
+      <tr style="display:none" class="empty-row"><td colspan="8" style="text-align:center;padding:40px;color:var(--text-placeholder)">暂无数据</td></tr>
+      <tr class="hl"><td><strong>火山官方</strong></td><td><span class="tag tag-video">🎬 Seedance 官方</span></td><td class="mono" style="color:var(--text-secondary)">ark.cn-beijing.volces.com</td><td class="mono" style="color:var(--text-secondary)">AK/SK ***</td><td><span class="tag tag-warning">待配置</span></td><td>10</td><td>0</td><td><button class="btn-text">编辑</button><button class="btn-text" onclick="alert('同步成功！已更新模型列表')">同步</button><button class="btn-text danger" onclick="if(confirm('确定删除该渠道？关联的模型也将被删除。')){alert('删除成功！')}">删除</button></td></tr>
+    </tbody>
+  </table></div>
+  <div class="pager"><span class="pager-info">共 5 条</span><button class="pager-btn active">1</button></div>
+</div>
+
+<!-- ==================== P2: 模型管理 ==================== -->
+<div class="page" id="pg-models">
+  <div class="pg-hd">
+    <h1 class="pg-title">模型管理</h1>
+    <div class="pg-actions">
+      <input class="input" placeholder="搜索模型ID..." style="width:160px">
+      <select class="input select" style="width:130px"><option>按渠道筛选</option></select>
+      <select class="input select" style="width:100px"><option>按状态</option></select>
+      <button class="btn btn-primary" onclick="openDlg('dlgModel')">+ 注册模型</button>
+    </div>
+  </div>
+  <div class="tabs">
+    <button class="tab active" onclick="tabSwitch(this)">全部 (24)</button>
+    <button class="tab" onclick="tabSwitch(this)">Chat (18)</button>
+    <button class="tab" onclick="tabSwitch(this)">Embedding (3)</button>
+    <button class="tab" onclick="tabSwitch(this)">Rerank (1)</button>
+    <button class="tab video-tab" onclick="tabSwitch(this)">Video (2) <span class="tag tag-video" style="margin-left:4px;font-size:9px">NEW</span></button>
+  </div>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th style="width:30px"><input type="checkbox"></th><th>上游模型ID</th><th>归属渠道</th><th>类型</th><th>标签</th><th>上下文</th><th>状态</th><th>操作</th></tr></thead>
+    <tbody>
+      <tr><td><input type="checkbox"></td><td class="mono">gpt-4o</td><td>OpenAI 官方</td><td><span class="tag tag-info">Chat</span></td><td><span class="tag tag-neutral">主力</span></td><td>128K</td><td><span class="tag tag-success">启用</span></td><td><button class="btn-text" onclick="openDlg('dlgModelEdit')">编辑</button><button class="btn-text danger" onclick="if(confirm('确定删除该模型？')){alert('删除成功！')}">删除</button></td></tr>
+      <tr><td><input type="checkbox"></td><td class="mono">claude-3-5-sonnet</td><td>Anthropic 官方</td><td><span class="tag tag-info">Chat</span></td><td><span class="tag tag-neutral">主力</span></td><td>200K</td><td><span class="tag tag-success">启用</span></td><td><button class="btn-text">编辑</button><button class="btn-text danger" onclick="if(confirm('确定删除该模型？')){alert('删除成功！')}">删除</button></td></tr>
+      <tr><td><input type="checkbox"></td><td class="mono">text-embedding-3-large</td><td>OpenAI 官方</td><td><span class="tag tag-success">Embedding</span></td><td>-</td><td>8K</td><td><span class="tag tag-success">启用</span></td><td><button class="btn-text">编辑</button><button class="btn-text danger" onclick="if(confirm('确定删除该模型？')){alert('删除成功！')}">删除</button></td></tr>
+      <tr><td><input type="checkbox"></td><td class="mono">bge-reranker-v2-m3</td><td>Bedrock 官方</td><td><span class="tag tag-warning">Rerank</span></td><td>-</td><td>8K</td><td><span class="tag tag-success">启用</span></td><td><button class="btn-text">编辑</button><button class="btn-text danger" onclick="if(confirm('确定删除该模型？')){alert('删除成功！')}">删除</button></td></tr>
+      <!-- Video models NEW -->
+      <tr class="hl"><td><input type="checkbox"></td><td class="mono">doubao-seedance-2-0-260128</td><td>中转 A</td><td><span class="tag tag-video">🎬 Video</span></td><td><span class="tag tag-video">视频生成</span></td><td style="color:var(--text-placeholder)">-</td><td><span class="tag tag-success">启用</span></td><td><button class="btn-text" onclick="openDlg('dlgModelEdit')">编辑</button><button class="btn-text danger" onclick="if(confirm('确定删除该模型？')){alert('删除成功！')}">删除</button></td></tr>
+      <tr style="display:none" class="empty-row"><td colspan="8" style="text-align:center;padding:40px;color:var(--text-placeholder)">暂无数据</td></tr>
+      <tr class="hl"><td><input type="checkbox"></td><td class="mono">doubao-seedance-2-0-fast-260128</td><td>中转 A</td><td><span class="tag tag-video">🎬 Video</span></td><td><span class="tag tag-video">视频生成</span> <span class="tag tag-warning">快速</span></td><td style="color:var(--text-placeholder)">-</td><td><span class="tag tag-success">启用</span></td><td><button class="btn-text">编辑</button><button class="btn-text danger" onclick="if(confirm('确定删除该模型？')){alert('删除成功！')}">删除</button></td></tr>
+    </tbody>
+  </table></div>
+  <div class="pager"><span class="pager-info">共 24 条</span><button class="pager-btn active">1</button><button class="pager-btn">2</button><button class="pager-btn">3</button></div>
+</div>
+
+<!-- ==================== P3: 模型组 ==================== -->
+<div class="page" id="pg-groups">
+  <div class="pg-hd"><h1 class="pg-title">模型组</h1><div class="pg-actions"><button class="btn btn-primary" onclick="openDlg('dlgGroup')">+ 新建模型组</button></div></div>
+  <div class="callout callout-video">🎬 <div>视频模型组不需要负载策略，一个模型绑定一个渠道，创建任务后固定渠道查询。</div></div>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>名称</th><th>策略</th><th>模型数</th><th>状态</th><th>类型</th><th>操作</th></tr></thead>
+    <tbody>
+      <tr><td><strong>gpt-4o-group</strong></td><td>加权轮询</td><td>3</td><td><span class="tag tag-success">启用</span></td><td><span class="tag tag-info">Chat</span></td><td><button class="btn-text" onclick="alert('详情功能开发中...')">详情</button><button class="btn-text danger" onclick="if(confirm('确定删除该模型组？')){alert('删除成功！')}">删除</button></td></tr>
+      <tr><td><strong>embedding-group</strong></td><td>优先级</td><td>2</td><td><span class="tag tag-success">启用</span></td><td><span class="tag tag-success">Embedding</span></td><td><button class="btn-text" onclick="alert('详情功能开发中...')">详情</button><button class="btn-text danger" onclick="if(confirm('确定删除该模型组？')){alert('删除成功！')}">删除</button></td></tr>
+      <tr style="display:none" class="empty-row"><td colspan="6" style="text-align:center;padding:40px;color:var(--text-placeholder)">暂无数据</td></tr>
+      <tr class="hl"><td><strong>seedance-2.0</strong><div style="font-size:11px;color:var(--color-video)">直连，无策略</div></td><td><span style="color:var(--text-placeholder)">—</span></td><td>1</td><td><span class="tag tag-success">启用</span></td><td><span class="tag tag-video">🎬 Video</span></td><td><button class="btn-text" onclick="openDlg('dlgGroupDetail')">详情</button><button class="btn-text danger" onclick="if(confirm('确定删除该模型组？')){alert('删除成功！')}">删除</button></td></tr>
+    </tbody>
+  </table></div>
+  <div class="card" style="margin-top:16px">
+    <div class="card-hd"><span class="card-title">📦 seedance-2.0 成员</span><button class="btn btn-default btn-sm" onclick="alert('Video 模型组只能关联一个模型')">+ 添加</button></div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>模型</th><th>渠道</th><th>操作</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">doubao-seedance-2-0-260128</td><td>中转 A</td><td><button class="btn-text danger">移除</button></td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout callout-video" style="margin-top:12px">
+      🎬 <div>Video 模型组不需要权重和优先级。一个模型绑定一个渠道，创建任务后固定渠道查询。</div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== P4: API Keys ==================== -->
+<div class="page" id="pg-keys">
+  <div class="pg-hd"><h1 class="pg-title">API Keys</h1><div class="pg-actions"><button class="btn btn-primary" onclick="alert('新建 Key 功能开发中...')">+ 新建 Key</button></div></div>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>名称</th><th>Key</th><th>授权模型组</th><th>状态</th><th>操作</th></tr></thead>
+    <tbody>
+      <tr><td><strong>前端应用 Key</strong></td><td class="mono" style="color:var(--text-secondary)">sk-gw-...aB3f</td><td><span class="tag tag-info">gpt-4o-group</span> <span class="tag tag-video" style="margin-left:4px">seedance-2.0</span></td><td><span class="tag tag-success">启用</span></td><td><button class="btn-text">编辑</button><button class="btn-text danger" onclick="if(confirm('确定吊销该 Key？下游服务将立即无法使用。')){alert('吊销成功！')}">吊销</button></td></tr>
+      <tr style="display:none" class="empty-row"><td colspan="5" style="text-align:center;padding:40px;color:var(--text-placeholder)">暂无数据</td></tr>
+      <tr><td><strong>后台服务 Key</strong></td><td class="mono" style="color:var(--text-secondary)">sk-gw-...xK9m</td><td><span class="tag tag-neutral">全部模型</span></td><td><span class="tag tag-success">启用</span></td><td><button class="btn-text">编辑</button><button class="btn-text danger" onclick="if(confirm('确定吊销该 Key？下游服务将立即无法使用。')){alert('吊销成功！')}">吊销</button></td></tr>
+    </tbody>
+  </table></div>
+</div>
+
+<!-- ==================== P5: 用量看板 ==================== -->
+<div class="page" id="pg-usage">
+  <div class="pg-hd"><h1 class="pg-title">用量看板</h1><div class="pg-actions"><select class="input select" style="width:130px"><option>最近 7 天</option></select></div></div>
+
+  <!-- ===== Type Tabs ===== -->
+  <div class="callout callout-info" style="margin-bottom:12px">💡 切换 Tab 即切换端点，无需额外筛选。Chat/Embedding/Rerank/Video 各有独立的筛选器和指标。</div>
+  <div class="tabs" style="margin-bottom:20px">
+    <button class="tab active" onclick="usageTab(this,'chat')">💬 Chat</button>
+    <button class="tab" onclick="usageTab(this,'embedding')">🧮 Embedding（含多模态）</button>
+    <button class="tab" onclick="usageTab(this,'rerank')">📊 Rerank</button>
+    <button class="tab video-tab" onclick="usageTab(this,'video')">🎬 Video</button>
+  </div>
+
+  <!-- ===== Chat 面板 ===== -->
+  <div class="usage-pane active" id="up-chat">
+    <!-- Chat 筛选器 -->
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+      <span style="font-size:12px;color:var(--text-secondary);font-weight:600">筛选:</span>
+      <input class="input" placeholder="成员姓名" style="width:120px">
+      <select class="input select" style="width:130px"><option>全部模型</option></select>
+      <select class="input select" style="width:100px"><option>全部状态</option><option>成功</option><option>错误</option></select>
+      <select class="input select" style="width:110px"><option>全部 Key 类型</option><option>个人 Key</option><option>程序 Key</option></select>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="stat-label">总请求数</div><div class="stat-value">42,100</div><div class="stat-sub">↑ 8.3% vs 上周</div></div>
+      <div class="stat"><div class="stat-label">Token 消耗</div><div class="stat-value">12.5M</div><div class="stat-sub">输入 8.2M · 输出 4.3M</div></div>
+      <div class="stat"><div class="stat-label">成功率</div><div class="stat-value">99.8%</div><div class="stat-sub">↑ 0.1%</div></div>
+      <div class="stat"><div class="stat-label">平均延迟</div><div class="stat-value">320ms</div><div class="stat-sub">P95: 580ms</div></div>
+    </div>
+    <div class="card"><div class="card-hd"><span class="card-title">📈 请求趋势</span></div><div class="chart-ph">📊 折线图：请求量 / Token 消耗 双 Y 轴</div></div>
+    <div class="card"><div class="card-hd"><span class="card-title">📊 按模型分布</span></div><div class="chart-ph">📊 柱状图：各模型请求量排名</div></div>
+    <div class="card" style="margin-top:20px">
+      <div class="card-hd"><span class="card-title">📋 使用记录</span></div>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>时间</th><th>Key</th><th>用户</th><th>模型</th><th>渠道</th><th>Token</th><th>延迟</th><th>状态</th><th>详情</th></tr></thead>
+        <tbody>
+          <tr><td class="mono" style="color:var(--text-secondary)">14:30:05</td><td>sk-gw-...aB3f</td><td>张三</td><td class="mono">gpt-4o</td><td>OpenAI 官方</td><td class="mono">输入 1.2K · 输出 856</td><td class="mono">320ms</td><td><span class="tag tag-success">200</span></td><td><button class="btn-text btn-sm" onclick="openDlg('dlgChatDetail')">查看</button></td></tr>
+          <tr><td class="mono" style="color:var(--text-secondary)">14:28:30</td><td>sk-gw-...xK9m</td><td>李四</td><td class="mono">claude-3-5-sonnet</td><td>Anthropic</td><td class="mono">输入 3.5K · 输出 1.2K</td><td class="mono">185ms</td><td><span class="tag tag-success">200</span></td><td><button class="btn-text btn-sm" onclick="openDlg('dlgChatDetail')">查看</button></td></tr>
+        </tbody>
+      </table></div>
+      <div class="pager"><span class="pager-info">共 1,234 条</span><button class="pager-btn active">1</button><button class="pager-btn">2</button><button class="pager-btn">3</button></div>
+    </div>
+  </div>
+
+  <!-- ===== Embedding 面板 ===== -->
+  <div class="usage-pane" id="up-embedding">
+    <!-- Embedding 筛选器（简化） -->
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+      <span style="font-size:12px;color:var(--text-secondary);font-weight:600">筛选:</span>
+      <select class="input select" style="width:130px"><option>全部模型</option></select>
+      <select class="input select" style="width:130px"><option>全部渠道</option></select>
+      <select class="input select" style="width:100px"><option>全部状态</option><option>成功</option><option>错误</option></select>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="stat-label">总请求数</div><div class="stat-value">8,540</div><div class="stat-sub">↑ 5.2% vs 上周</div></div>
+      <div class="stat"><div class="stat-label">Token 消耗</div><div class="stat-value">3.2M</div><div class="stat-sub">输入 3.2M · 输出 0</div></div>
+      <div class="stat"><div class="stat-label">成功率</div><div class="stat-value">99.9%</div><div class="stat-sub">↑ 0.05%</div></div>
+      <div class="stat"><div class="stat-label">平均延迟</div><div class="stat-value">85ms</div><div class="stat-sub">P95: 150ms</div></div>
+    </div>
+    <div class="card"><div class="card-hd"><span class="card-title">📈 请求趋势</span></div><div class="chart-ph">📊 折线图：请求量趋势</div></div>
+    <div class="card" style="margin-top:20px">
+      <div class="card-hd"><span class="card-title">📋 使用记录</span></div>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>时间</th><th>模型</th><th>渠道</th><th>输入 Token</th><th>延迟</th><th>状态</th><th>详情</th></tr></thead>
+        <tbody>
+          <tr><td class="mono" style="color:var(--text-secondary)">14:29:30</td><td class="mono">text-embedding-3-large</td><td>OpenAI 官方</td><td class="mono">512</td><td class="mono">85ms</td><td><span class="tag tag-success">200</span></td><td><button class="btn-text btn-sm" onclick="openDlg('dlgEmbeddingDetail')">查看</button></td></tr>
+          <tr><td class="mono" style="color:var(--text-secondary)">14:25:00</td><td class="mono">clip-vit-base-patch32</td><td>中转 A</td><td class="mono">1.2K</td><td class="mono">150ms</td><td><span class="tag tag-success">200</span></td><td><button class="btn-text btn-sm" onclick="openDlg('dlgEmbeddingDetail')">查看</button></td></tr>
+        </tbody>
+      </table></div>
+      <div class="pager"><span class="pager-info">共 456 条</span><button class="pager-btn active">1</button></div>
+    </div>
+  </div>
+
+  <!-- ===== Rerank 面板 ===== -->
+  <div class="usage-pane" id="up-rerank">
+    <!-- Rerank 筛选器（简化） -->
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+      <span style="font-size:12px;color:var(--text-secondary);font-weight:600">筛选:</span>
+      <select class="input select" style="width:130px"><option>全部模型</option></select>
+      <select class="input select" style="width:130px"><option>全部渠道</option></select>
+      <select class="input select" style="width:100px"><option>全部状态</option><option>成功</option><option>错误</option></select>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="stat-label">总请求数</div><div class="stat-value">2,340</div><div class="stat-sub">↑ 12.1% vs 上周</div></div>
+      <div class="stat"><div class="stat-label">Token 消耗</div><div class="stat-value">1.1M</div><div class="stat-sub">输入 1.1M · 输出 0</div></div>
+      <div class="stat"><div class="stat-label">成功率</div><div class="stat-value">99.7%</div><div class="stat-sub">-</div></div>
+      <div class="stat"><div class="stat-label">平均延迟</div><div class="stat-value">120ms</div><div class="stat-sub">P95: 200ms</div></div>
+    </div>
+    <div class="card"><div class="card-hd"><span class="card-title">📈 请求趋势</span></div><div class="chart-ph">📊 折线图：请求量趋势</div></div>
+    <div class="card" style="margin-top:20px">
+      <div class="card-hd"><span class="card-title">📋 使用记录</span></div>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>时间</th><th>模型</th><th>渠道</th><th>文档数</th><th>延迟</th><th>状态</th><th>详情</th></tr></thead>
+        <tbody>
+          <tr><td class="mono" style="color:var(--text-secondary)">14:28:50</td><td class="mono">bge-reranker-v2-m3</td><td>Bedrock 官方</td><td class="mono">5</td><td class="mono">120ms</td><td><span class="tag tag-success">200</span></td><td><button class="btn-text btn-sm" onclick="openDlg('dlgRerankDetail')">查看</button></td></tr>
+        </tbody>
+      </table></div>
+      <div class="pager"><span class="pager-info">共 89 条</span><button class="pager-btn active">1</button></div>
+    </div>
+  </div>
+
+  <!-- ===== Video 面板 ===== -->
+  <div class="usage-pane" id="up-video">
+    <!-- Video 筛选器（任务状态，非 HTTP 状态） -->
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+      <span style="font-size:12px;color:var(--text-secondary);font-weight:600">筛选:</span>
+      <select class="input select" style="width:130px"><option>全部模型</option></select>
+      <select class="input select" style="width:130px"><option>全部渠道</option></select>
+      <select class="input select" style="width:120px"><option>全部状态</option><option style="color:var(--color-success)">succeeded</option><option style="color:var(--color-warning)">running</option><option style="color:var(--color-danger)">failed</option></select>
+    </div>
+    <div class="stats">
+      <div class="stat video"><div class="stat-label" style="color:var(--color-video)">🎬 任务总数</div><div class="stat-value" style="color:var(--color-video)">3,578</div><div class="stat-sub">↑ 15.2% vs 上周</div></div>
+      <div class="stat"><div class="stat-label">成功率</div><div class="stat-value">98.2%</div><div class="stat-sub">成功 3,512 · 失败 43</div></div>
+      <div class="stat"><div class="stat-label">平均生成耗时</div><div class="stat-value">45s</div><div class="stat-sub">P95: 2min 30s</div></div>
+      <div class="stat"><div class="stat-label">进行中</div><div class="stat-value">23</div><div class="stat-sub">排队中: 8</div></div>
+    </div>
+    <div class="card"><div class="card-hd"><span class="card-title">📈 任务趋势</span></div><div class="chart-ph">📊 折线图：每日任务数 / 成功率</div></div>
+    <div class="card">
+      <div class="card-hd"><span class="card-title">📊 任务分布</span></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+        <div>
+          <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">按上游</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><div style="width:60%;height:8px;background:var(--color-video);border-radius:4px"></div><span style="font-size:12px">中转 A — 60%</span></div>
+          <div style="display:flex;align-items:center;gap:8px"><div style="width:40%;height:8px;background:var(--color-info);border-radius:4px"></div><span style="font-size:12px">火山官方 — 40%</span></div>
+        </div>
+        <div>
+          <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">按状态</div>
+          <div style="margin-bottom:4px"><span class="tag tag-success">succeeded</span> 3,512</div>
+          <div style="margin-bottom:4px"><span class="tag tag-warning">running</span> 23</div>
+          <div><span class="tag tag-danger">failed</span> 43</div>
+        </div>
+      </div>
+    </div>
+    <div class="card"><div class="card-hd"><span class="card-title">📊 按模型分布</span></div><div class="chart-ph">📊 柱状图：各视频模型任务量排名</div></div>
+    <div class="card" style="margin-top:20px">
+      <div class="card-hd"><span class="card-title">📋 任务记录</span></div>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>时间</th><th>任务 ID</th><th>模型</th><th>渠道</th><th>状态</th><th>生成耗时</th><th>详情</th></tr></thead>
+        <tbody>
+          <tr><td class="mono" style="color:var(--text-secondary)">14:30:00</td><td class="mono" style="color:var(--color-video);cursor:pointer">gw-cgt-001</td><td class="mono">seedance-2.0</td><td>中转 A</td><td><span class="tag tag-success">succeeded</span></td><td class="mono">45s</td><td><button class="btn-text btn-sm" onclick="openDlg('dlgTaskDetail')">查看</button></td></tr>
+          <tr><td class="mono" style="color:var(--text-secondary)">14:28:00</td><td class="mono" style="color:var(--color-video);cursor:pointer">gw-cgt-002</td><td class="mono">seedance-2.0</td><td>中转 A</td><td><span class="tag tag-warning">running</span></td><td class="mono" style="color:var(--text-placeholder)">进行中...</td><td><button class="btn-text btn-sm" onclick="openDlg('dlgTaskDetail')">查看</button></td></tr>
+          <tr><td class="mono" style="color:var(--text-secondary)">14:25:00</td><td class="mono" style="color:var(--color-video);cursor:pointer">gw-cgt-003</td><td class="mono">seedance-2.0-fast</td><td>火山官方</td><td><span class="tag tag-danger">failed</span></td><td class="mono">12s</td><td><button class="btn-text btn-sm" onclick="openDlg('dlgTaskDetail')">查看</button></td></tr>
+        </tbody>
+      </table></div>
+      <div class="pager"><span class="pager-info">共 3,578 条</span><button class="pager-btn active">1</button><button class="pager-btn">2</button><button class="pager-btn">3</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== P6: 运维监控 ==================== -->
+<div class="page" id="pg-ops">
+  <div class="pg-hd"><h1 class="pg-title">运维监控</h1><div class="pg-actions"><select class="input select" style="width:130px"><option>最近 1 小时</option></select></div></div>
+  <div class="card">
+    <div class="card-hd"><span class="card-title">🌐 上游健康状态</span></div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>上游</th><th>类型</th><th>健康</th><th>成功率</th><th>延迟 P95</th><th>QPS</th></tr></thead>
+      <tbody>
+        <tr><td><strong>OpenAI 官方</strong></td><td><span class="tag tag-info">OpenAI</span></td><td><span class="h-dot ok"></span>正常</td><td>99.8%</td><td class="mono">320ms</td><td class="mono">45</td></tr>
+        <tr><td><strong>Anthropic 官方</strong></td><td><span class="tag tag-info">Anthropic</span></td><td><span class="h-dot ok"></span>正常</td><td>99.5%</td><td class="mono">280ms</td><td class="mono">23</td></tr>
+        <tr class="hl"><td><strong>中转 A</strong><div style="font-size:11px;color:var(--text-placeholder)">115.190.78.58:8000</div></td><td><span class="tag tag-video">🎬 Seedance 中转</span></td><td><span class="h-dot ok"></span>正常</td><td>98.2%</td><td class="mono">1.8s</td><td class="mono">12</td></tr>
+        <tr class="hl"><td><strong>火山官方</strong><div style="font-size:11px;color:var(--text-placeholder)">ark.cn-beijing.volces.com</div></td><td><span class="tag tag-video">🎬 Seedance 官方</span></td><td><span class="h-dot warn"></span>延迟高</td><td>97.1%</td><td class="mono">3.2s</td><td class="mono">8</td></tr>
+      </tbody>
+    </table></div>
+  </div>
+  <div class="card">
+    <div class="card-hd"><span class="card-title">🎬 视频任务实时</span></div>
+    <div class="stats" style="margin-bottom:0">
+      <div class="stat"><div class="stat-label">排队中</div><div class="stat-value">23</div></div>
+      <div class="stat"><div class="stat-label">生成中</div><div class="stat-value">8</div></div>
+      <div class="stat"><div class="stat-label">平均生成耗时</div><div class="stat-value">45s</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== P7: 模型广场 ==================== -->
+<div class="page" id="pg-square">
+  <div class="pg-hd">
+    <h1 class="pg-title">模型广场</h1>
+    <div class="pg-actions"><div style="font-size:12px;color:var(--text-secondary)">Base URL: <code class="mono" style="background:var(--bg-subtle);padding:2px 8px;border-radius:4px">https://gateway.example.com/v1</code> <button class="btn btn-default btn-sm" style="margin-left:8px" onclick="navigator.clipboard.writeText('https://gateway.example.com/v1').then(()=>alert('已复制到剪贴板'))">📋 复制</button></div></div>
+  </div>
+  <div class="tabs">
+    <button class="tab active" onclick="tabSwitch(this)">全部</button>
+    <button class="tab" onclick="tabSwitch(this)">对话</button>
+    <button class="tab" onclick="tabSwitch(this)">向量</button>
+    <button class="tab video-tab" onclick="tabSwitch(this)">视频生成 <span class="tag tag-video" style="margin-left:4px;font-size:9px">NEW</span></button>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px">
+    <div class="card" style="margin:0"><div style="display:flex;justify-content:space-between;align-items:start"><div><div style="font-size:15px;font-weight:700;color:var(--text-primary)">gpt-4o-group</div><div style="font-size:12px;color:var(--text-secondary);margin-top:4px">GPT-4o 多渠道路由</div></div><span class="tag tag-info">Chat</span></div><div style="font-size:12px;color:var(--text-secondary);margin-top:12px">模型数: 3 · 策略: 加权轮询</div></div>
+    <div class="card" style="margin:0"><div style="display:flex;justify-content:space-between;align-items:start"><div><div style="font-size:15px;font-weight:700;color:var(--text-primary)">embedding-group</div><div style="font-size:12px;color:var(--text-secondary);margin-top:4px">向量模型组</div></div><span class="tag tag-success">Embedding</span></div><div style="font-size:12px;color:var(--text-secondary);margin-top:12px">模型数: 2 · 策略: 优先级</div></div>
+    <div class="card" style="margin:0;border-color:var(--color-video);border-width:2px"><div style="display:flex;justify-content:space-between;align-items:start"><div><div style="font-size:15px;font-weight:700;color:var(--text-primary)">🎬 seedance-2.0</div><div style="font-size:12px;color:var(--text-secondary);margin-top:4px">Seedance 视频生成</div></div><span class="tag tag-video">Video</span></div><div style="font-size:12px;color:var(--text-secondary);margin-top:12px">模型数: 1</div><div style="margin-top:12px;padding-top:12px;border-top:1px dashed var(--border-default);display:flex;gap:4px;flex-wrap:wrap"><span class="tag tag-neutral">文生视频</span><span class="tag tag-neutral">图生视频</span><span class="tag tag-neutral">多模态参考</span></div><div style="margin-top:10px"><div style="font-size:11px;color:var(--text-placeholder)">调用:</div><code class="mono" style="font-size:11px;background:var(--bg-subtle);padding:4px 8px;border-radius:4px;display:block;margin-top:4px">POST /v1/contents/generations/tasks</code></div></div>
+  </div>
+</div>
+
+</div><!-- /content -->
+</div><!-- /main -->
+</div><!-- /app -->
+
+<!-- ============================================================ -->
+<!-- DIALOG: 新建渠道                                               -->
+<!-- ============================================================ -->
+<div class="overlay" id="dlgProvider">
+<div class="dlg wide">
+  <div class="dlg-hd"><span class="dlg-title">新建渠道</span><button class="dlg-close" onclick="closeDlg('dlgProvider')" aria-label="关闭">×</button></div>
+  <div class="dlg-bd">
+    <div class="d-tabs" id="newProvTabs">
+      <button class="d-tab active" data-pane="np-basic" onclick="dtab(this)">基本信息</button>
+      <button class="d-tab" data-pane="np-cred" onclick="dtab(this)">凭证</button>
+      <button class="d-tab" data-pane="np-advanced" onclick="dtab(this)">高级设置</button>
+    </div>
+    <div class="d-pane active" id="np-basic">
+      <div class="fi"><label class="fl" for="np-name"><span class="req">*</span>名称</label><div class="fc"><input id="np-name" class="input" placeholder="请输入渠道名称（全局唯一）" value="中转 A"></div></div>
+      <div class="fi"><label class="fl" for="np-type"><span class="req">*</span>渠道类型</label><div class="fc"><select id="np-type" class="input select" onchange="toggleSeedanceFields(this)"><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="azure">Azure OpenAI</option><option value="bedrock">Bedrock</option><option value="gemini">Gemini</option><option value="separator">—</option><option value="seedance-relay" selected style="color:var(--color-video);font-weight:700">🎬 Seedance 中转</option><option value="seedance-volcengine" style="color:var(--color-video);font-weight:700">🎬 Seedance 官方</option></select><div class="hint">Seedance 中转：第三方代理，Bearer Token 认证；Seedance 官方：直连火山方舟，AK/SK 签名</div></div></div>
+      <div class="fi"><label class="fl" for="np-endpoint"><span class="req">*</span>Endpoint</label><div class="fc"><input id="np-endpoint" class="input mono" value="http://115.190.78.58:8000" placeholder="https://..."><div class="hint">上游服务地址，支持 HTTP 和 HTTPS</div></div></div>
+    </div>
+    <div class="d-pane" id="np-cred">
+      <div class="fi"><label class="fl">认证方式</label><div class="fc"><div class="radio-group"><label class="radio"><input type="radio" name="auth" checked>Bearer Token</label><label class="radio"><input type="radio" name="auth">X-API-Key</label><label class="radio"><input type="radio" name="auth">AK/SK 签名</label></div><div class="hint">Seedance 中转：Bearer Token 或 X-API-Key；Seedance 官方：AK/SK 签名</div></div></div>
+      <div class="fi bearer-field"><label class="fl"><span class="req">*</span>API Key</label><div class="fc"><input class="input" type="password" placeholder="请输入上游 API Key"></div></div>
+      <div class="fi aksk-field" style="display:none">
+        <label class="fl">Access Key</label>
+        <div class="fc"><input class="input" placeholder="火山引擎 Access Key"></div>
+      </div>
+      <div class="fi aksk-field" style="display:none">
+        <label class="fl">Secret Key</label>
+        <div class="fc"><input class="input" type="password" placeholder="火山引擎 Secret Key"></div>
+      </div>
+    </div>
+    <div class="d-pane" id="np-advanced">
+      <div class="fi"><label class="fl">优先级</label><div class="fc"><input type="number" class="input input-num" value="5" min="0"><span class="hint inline">数值越大优先级越高</span></div></div>
+      <div class="fi"><label class="fl">权重</label><div class="fc"><input type="number" class="input input-num" value="1" min="0"><span class="hint inline">负载均衡权重</span></div></div>
+      <div class="fi"><label class="fl">超时(秒)</label><div class="fc"><input type="number" class="input input-num" value="30" min="1"><div class="hint">视频生成耗时较长，建议 30-60 秒</div></div></div>
+      <div class="fi"><label class="fl">最大重试</label><div class="fc"><input type="number" class="input input-num" value="2" min="0"></div></div>
+      <div class="fi"><label class="fl">测试模型</label><div class="fc"><input class="input" value="doubao-seedance-2-0-260128"></div></div>
+      <div class="fi"><label class="fl">标签</label><div class="fc"><div class="tag-wrap"><span class="tag tag-video">视频生成</span><span class="tag tag-info">中转</span><button class="tag-add">+ 添加</button></div></div></div>
+      <div class="fi"><label class="fl">备注</label><div class="fc"><textarea class="input textarea" rows="2" placeholder="备注信息">第三方中转，积分制计费，从生产服务器可达</textarea></div></div>
+    </div>
+  </div>
+  <div class="dlg-ft"><button class="btn btn-default" onclick="closeDlg('dlgProvider')">取消</button><button class="btn btn-primary" onclick="alert('渠道创建成功！');closeDlg('dlgProvider')">确定</button></div>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- DIALOG: 编辑渠道                                               -->
+<!-- ============================================================ -->
+<div class="overlay" id="dlgProviderEdit">
+<div class="dlg wide">
+  <div class="dlg-hd"><span class="dlg-title">编辑渠道（当前仅演示 Seedance 渠道）</span><button class="dlg-close" onclick="closeDlg('dlgProviderEdit')" aria-label="关闭">×</button></div>
+  <div class="dlg-bd">
+    <div class="callout callout-ok">✅ 该渠道已通过连通性测试，延迟 26ms</div>
+    <div class="d-tabs" id="editProvTabs">
+      <button class="d-tab active" data-pane="ep-basic" onclick="dtab(this)">基本信息</button>
+      <button class="d-tab" data-pane="ep-cred" onclick="dtab(this)">凭证</button>
+      <button class="d-tab" data-pane="ep-advanced" onclick="dtab(this)">高级设置</button>
+    </div>
+    <div class="d-pane active" id="ep-basic">
+      <div class="fi"><label class="fl"><span class="req">*</span>名称</label><div class="fc"><input class="input" value="中转 A"></div></div>
+      <div class="fi"><label class="fl"><span class="req">*</span>渠道类型</label><div class="fc"><select class="input select" disabled id="editProvType"><option value="seedance-relay" selected>🎬 Seedance 中转</option></select><div class="hint">渠道类型创建后不可修改</div></div></div>
+      <div class="fi"><label class="fl"><span class="req">*</span>Endpoint</label><div class="fc"><input class="input mono" value="http://115.190.78.58:8000"></div></div>
+    </div>
+    <div class="d-pane" id="ep-cred">
+      <div class="callout callout-warn">⚠️ 凭证已配置。清空并填入新值可更新，不修改则留空。</div>
+      <div class="fi"><label class="fl">认证方式</label><div class="fc"><div class="radio-group"><label class="radio"><input type="radio" name="auth2" checked>Bearer Token</label><label class="radio"><input type="radio" name="auth2">X-API-Key</label><label class="radio"><input type="radio" name="auth2">AK/SK 签名</label></div></div></div>
+      <div class="fi"><label class="fl">API Key</label><div class="fc"><input class="input" value="sk-relay-****-aB3f" style="color:var(--text-placeholder)"><div class="hint">已配置，清空后输入新值可更新</div></div></div>
+    </div>
+    <div class="d-pane" id="ep-advanced">
+      <div class="fi"><label class="fl">优先级</label><div class="fc"><input type="number" class="input input-num" value="5"><span class="hint inline">数值越大优先级越高</span></div></div>
+      <div class="fi"><label class="fl">权重</label><div class="fc"><input type="number" class="input input-num" value="1"></div></div>
+      <div class="fi"><label class="fl">超时(秒)</label><div class="fc"><input type="number" class="input input-num" value="30"></div></div>
+      <div class="fi"><label class="fl">最大重试</label><div class="fc"><input type="number" class="input input-num" value="2"></div></div>
+      <div class="fi"><label class="fl">标签</label><div class="fc"><div class="tag-wrap"><span class="tag tag-video">视频生成</span><span class="tag tag-info">中转</span><button class="tag-add">+ 添加</button></div></div></div>
+      <div class="fi"><label class="fl">备注</label><div class="fc"><textarea class="input textarea" rows="2">第三方中转，积分制计费</textarea></div></div>
+    </div>
+  </div>
+  <div class="dlg-ft"><button class="btn btn-default" onclick="closeDlg('dlgProviderEdit')">取消</button><button class="btn btn-primary" onclick="alert('渠道更新成功！');closeDlg('dlgProviderEdit')">确定</button></div>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- DIALOG: 注册模型                                               -->
+<!-- ============================================================ -->
+<div class="overlay" id="dlgModel">
+<div class="dlg">
+  <div class="dlg-hd"><span class="dlg-title">注册模型</span><button class="dlg-close" onclick="closeDlg('dlgModel')" aria-label="关闭">×</button></div>
+  <div class="dlg-bd">
+    <div class="fi"><label class="fl"><span class="req">*</span>上游模型ID</label><div class="fc"><input class="input mono" value="doubao-seedance-2-0-260128" placeholder="如 gpt-4o"></div></div>
+    <div class="fi"><label class="fl">模型名称</label><div class="fc"><input class="input" value="seedance-2.0" placeholder="留空则使用上游模型ID"><div class="hint">网关对外暴露的模型名</div></div></div>
+    <div class="fi"><label class="fl"><span class="req">*</span>归属渠道</label><div class="fc"><select class="input select"><option>OpenAI 官方</option><option>Anthropic 官方</option><option selected>中转 A (Seedance)</option><option>火山官方 (Seedance)</option></select></div></div>
+    <div class="fi"><label class="fl"><span class="req">*</span>模型类型</label><div class="fc"><select class="input select" id="modelTypeSelect" onchange="toggleVideoParams(this.value)"><option value="chat">Chat（对话）</option><option value="embedding">Embedding（向量）</option><option value="embedding_vl">Embedding-VL（多模态向量）</option><option value="rerank">Rerank（重排序）</option><option value="video" selected style="color:var(--color-video);font-weight:700">🎬 Video（视频生成）</option></select></div></div>
+    <div class="fi"><label class="fl">模型标签</label><div class="fc"><select class="input select"><option selected>视频生成</option><option>高质量</option><option>快速</option></select></div></div>
+    <div class="fi"><label class="fl">描述</label><div class="fc"><textarea class="input textarea" rows="2" placeholder="模型描述（可选）">豆包 Seedance 2.0，最高画质</textarea></div></div>
+
+    <div id="videoParams">
+      <div class="divider"><span class="divider-text">参数配置</span></div>
+      <div class="fi"><label class="fl">分辨率</label><div class="fc"><div class="chk-group"><label class="chk"><input type="checkbox" checked> 720p</label><label class="chk"><input type="checkbox" checked> 480p</label><label class="chk"><input type="checkbox"> 1080p</label><label class="chk"><input type="checkbox"> 4K</label></div></div></div>
+      <div class="fi"><label class="fl">宽高比</label><div class="fc"><div class="chk-group"><label class="chk"><input type="checkbox" checked> 16:9</label><label class="chk"><input type="checkbox" checked> 9:16</label><label class="chk"><input type="checkbox" checked> 1:1</label><label class="chk"><input type="checkbox" checked> 4:3</label><label class="chk"><input type="checkbox" checked> 3:4</label><label class="chk"><input type="checkbox" checked> 21:9</label><label class="chk"><input type="checkbox" checked> adaptive</label></div></div></div>
+      <div class="fi"><label class="fl">时长范围</label><div class="fc"><div style="display:flex;align-items:center;gap:8px"><input type="number" class="input input-num" value="4" style="width:80px" min="1"><span style="color:var(--text-secondary)">~</span><input type="number" class="input input-num" value="15" style="width:80px" min="1"><span class="hint inline">秒（-1=模型自选）</span></div></div></div>
+      <div class="fi"><label class="fl">支持场景</label><div class="fc"><div class="chk-group"><label class="chk"><input type="checkbox" checked> 文生视频</label><label class="chk"><input type="checkbox" checked> 图生视频</label><label class="chk"><input type="checkbox" checked> 多模态参考</label><label class="chk"><input type="checkbox" checked> 联网搜索</label></div></div></div>
+    </div>
+  </div>
+  <div class="dlg-ft"><button class="btn btn-default" onclick="closeDlg('dlgModel')">取消</button><button class="btn btn-primary" onclick="alert('模型注册成功！');closeDlg('dlgModel')">确定</button></div>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- DIALOG: 编辑模型                                               -->
+<!-- ============================================================ -->
+<div class="overlay" id="dlgModelEdit">
+<div class="dlg">
+  <div class="dlg-hd"><span class="dlg-title">编辑模型（当前仅演示视频模型）</span><button class="dlg-close" onclick="closeDlg('dlgModelEdit')" aria-label="关闭">×</button></div>
+  <div class="dlg-bd">
+    <div class="fi"><label class="fl"><span class="req">*</span>上游模型ID</label><div class="fc"><input class="input mono" value="doubao-seedance-2-0-260128" disabled style="background:var(--bg-subtle)"><div class="hint">模型 ID 创建后不可修改</div></div></div>
+    <div class="fi"><label class="fl">模型名称</label><div class="fc"><input class="input" value="seedance-2.0"></div></div>
+    <div class="fi"><label class="fl"><span class="req">*</span>归属渠道</label><div class="fc"><select class="input select"><option selected>中转 A (Seedance)</option></select></div></div>
+    <div class="fi"><label class="fl"><span class="req">*</span>模型类型</label><div class="fc"><select class="input select"><option value="video" selected style="color:var(--color-video);font-weight:700">🎬 Video（视频生成）</option></select></div></div>
+    <div class="fi"><label class="fl">状态</label><div class="fc"><div class="sw on" onclick="this.classList.toggle('on')"></div><span class="hint inline">启用 / 停用</span></div></div>
+    <div class="fi"><label class="fl">描述</label><div class="fc"><textarea class="input textarea" rows="2">豆包 Seedance 2.0，最高画质</textarea></div></div>
+
+    <div id="editVideoParams">
+      <div class="divider"><span class="divider-text">参数配置</span></div>
+      <div class="fi"><label class="fl">分辨率</label><div class="fc"><div class="chk-group"><label class="chk"><input type="checkbox" checked> 720p</label><label class="chk"><input type="checkbox" checked> 480p</label><label class="chk"><input type="checkbox"> 1080p</label><label class="chk"><input type="checkbox"> 4K</label></div></div></div>
+      <div class="fi"><label class="fl">宽高比</label><div class="fc"><div class="chk-group"><label class="chk"><input type="checkbox" checked> 16:9</label><label class="chk"><input type="checkbox" checked> 9:16</label><label class="chk"><input type="checkbox" checked> 1:1</label><label class="chk"><input type="checkbox" checked> 4:3</label><label class="chk"><input type="checkbox" checked> 3:4</label><label class="chk"><input type="checkbox" checked> 21:9</label><label class="chk"><input type="checkbox" checked> adaptive</label></div></div></div>
+      <div class="fi"><label class="fl">时长范围</label><div class="fc"><div style="display:flex;align-items:center;gap:8px"><input type="number" class="input input-num" value="4" style="width:80px"><span>~</span><input type="number" class="input input-num" value="15" style="width:80px"></div></div></div>
+      <div class="fi"><label class="fl">支持场景</label><div class="fc"><div class="chk-group"><label class="chk"><input type="checkbox" checked> 文生视频</label><label class="chk"><input type="checkbox" checked> 图生视频</label><label class="chk"><input type="checkbox" checked> 多模态参考</label><label class="chk"><input type="checkbox" checked> 联网搜索</label></div></div></div>
+    </div>
+  </div>
+  <div class="dlg-ft"><button class="btn btn-default" onclick="closeDlg('dlgModelEdit')">取消</button><button class="btn btn-primary" onclick="alert('模型更新成功！');closeDlg('dlgModelEdit')">确定</button></div>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- DIALOG: Embedding 调用详情                                      -->
+<!-- ============================================================ -->
+<div class="overlay" id="dlgEmbeddingDetail">
+<div class="dlg wide">
+  <div class="dlg-hd"><span class="dlg-title">🧮 Embedding 调用详情</span><button class="dlg-close" onclick="closeDlg('dlgEmbeddingDetail')" aria-label="关闭">×</button></div>
+  <div class="dlg-bd">
+    <div class="d-tabs">
+      <button class="d-tab active" data-pane="ed-info" onclick="dtab(this)">调用信息</button>
+      <button class="d-tab" data-pane="ed-request" onclick="dtab(this)">请求</button>
+      <button class="d-tab" data-pane="ed-response" onclick="dtab(this)">响应</button>
+    </div>
+    <div class="d-pane active" id="ed-info">
+      <div class="cfg">
+        <div class="cfg-title">📋 基本信息</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+          <div><div class="detail-label">模型</div><div class="mono" style="font-weight:600">text-embedding-3-large</div></div>
+          <div><div class="detail-label">渠道</div><div>OpenAI 官方</div></div>
+          <div><div class="detail-label">状态</div><span class="tag tag-success">200 OK</span></div>
+          <div><div class="detail-label">延迟</div><div class="mono">85ms</div></div>
+          <div><div class="detail-label">Tokens</div><div class="mono">输入 512</div></div>
+          <div><div class="detail-label">时间</div><div style="font-size:13px">2026-07-09 14:29:30</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="d-pane" id="ed-request">
+      <div class="cfg">
+        <div class="cfg-title">📤 输入文本</div>
+        <div style="margin-bottom:12px"><span class="tag tag-info">2 条文本</span></div>
+        <div class="mono" style="background:var(--bg-default);padding:12px;border-radius:6px;font-size:13px;line-height:1.8">
+          <div style="margin-bottom:8px"><strong>1.</strong> 什么是机器学习？</div>
+          <div><strong>2.</strong> Machine learning is a subset of artificial intelligence.</div>
+        </div>
+      </div>
+    </div>
+    <div class="d-pane" id="ed-response">
+      <div class="cfg" style="margin-bottom:16px">
+        <div class="cfg-title">📥 向量摘要</div>
+        <div style="font-size:14px;margin-bottom:8px">2 条文本 · 每条约 3072 维</div>
+        <details style="margin-top:8px">
+          <summary style="cursor:pointer;font-size:13px;color:var(--text-secondary)">查看完整 JSON</summary>
+          <textarea class="json" readonly style="margin-top:8px">{
+  "object": "list",
+  "data": [
+    {"object": "embedding", "index": 0, "embedding": [0.0123, -0.0456, 0.0789, ...]},
+    {"object": "embedding", "index": 1, "embedding": [-0.0234, 0.0567, -0.0890, ...]}
+  ],
+  "model": "text-embedding-3-large",
+  "usage": {"prompt_tokens": 12, "total_tokens": 12}
+}</textarea>
+        </details>
+      </div>
+    </div>
+  </div>
+  <div class="dlg-ft"><button class="btn btn-default" onclick="closeDlg('dlgEmbeddingDetail')">关闭</button></div>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- DIALOG: Chat 调用详情                                          -->
+<!-- ============================================================ -->
+<div class="overlay" id="dlgChatDetail">
+<div class="dlg wide">
+  <div class="dlg-hd"><span class="dlg-title">💬 Chat 调用详情</span><button class="dlg-close" onclick="closeDlg('dlgChatDetail')" aria-label="关闭">×</button></div>
+  <div class="dlg-bd">
+    <div class="d-tabs">
+      <button class="d-tab active" data-pane="cd-info" onclick="dtab(this)">调用信息</button>
+      <button class="d-tab" data-pane="cd-prompt" onclick="dtab(this)">提示词</button>
+      <button class="d-tab" data-pane="cd-response" onclick="dtab(this)">响应</button>
+      <button class="d-tab" data-pane="cd-request" onclick="dtab(this)">原始请求</button>
+      <button class="d-tab" data-pane="cd-headers" onclick="dtab(this)">请求头</button>
+    </div>
+    <div class="d-pane active" id="cd-info">
+      <div class="cfg">
+        <div class="cfg-title">📋 基本信息</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div><div class="detail-label">模型</div><div class="mono" style="font-weight:600">gpt-4o</div></div>
+          <div><div class="detail-label">渠道</div><span class="tag tag-info">OpenAI 官方</span></div>
+          <div><div class="detail-label">状态</div><span class="tag tag-success">200 OK</span></div>
+          <div><div class="detail-label">延迟</div><div class="mono">320ms</div></div>
+          <div><div class="detail-label">Tokens</div><div style="font-size:13px">输入 1,280 · 输出 856</div></div>
+          <div><div class="detail-label">时间</div><div style="font-size:13px">2026-07-09 14:30:05</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="d-pane" id="cd-prompt">
+      <div class="cfg" style="margin-bottom:16px">
+        <div style="margin-bottom:8px"><span class="tag tag-warning">system</span></div>
+        <pre class="mono" style="background:var(--bg-default);padding:12px;border-radius:6px;white-space:pre-wrap;font-size:13px;margin:0">You are a helpful assistant.</pre>
+      </div>
+      <div class="cfg" style="margin-bottom:16px">
+        <div style="margin-bottom:8px"><span class="tag tag-info">user</span></div>
+        <pre class="mono" style="background:var(--bg-default);padding:12px;border-radius:6px;white-space:pre-wrap;font-size:13px;margin:0">解释一下什么是机器学习</pre>
+      </div>
+    </div>
+    <div class="d-pane" id="cd-response">
+      <div class="cfg">
+        <div style="margin-bottom:8px"><span class="tag tag-success">assistant</span></div>
+        <pre class="mono" style="background:var(--bg-default);padding:12px;border-radius:6px;white-space:pre-wrap;font-size:13px;margin:0">机器学习是人工智能的一个分支，它使计算机能够从数据中学习并做出决策，而无需明确的编程。机器学习算法通过分析数据中的模式来构建模型，并使用这些模型进行预测或决策。</pre>
+      </div>
+    </div>
+    <div class="d-pane" id="cd-request">
+      <div class="cfg">
+        <textarea class="json" readonly>{
+  "model": "gpt-4o",
+  "messages": [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "解释一下什么是机器学习"}
+  ],
+  "max_tokens": 1024,
+  "temperature": 0.7
+}</textarea>
+      </div>
+    </div>
+    <div class="d-pane" id="cd-headers">
+      <div class="cfg">
+        <div class="mono" style="font-size:13px;line-height:2">
+          <strong>Authorization:</strong> Bearer sk-...aB3f<br>
+          <strong>Content-Type:</strong> application/json<br>
+          <strong>X-Request-Id:</strong> req-abc123xyz<br>
+          <strong>User-Agent:</strong> OpenAI/NodeJS 4.0.0
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="dlg-ft"><button class="btn btn-default" onclick="closeDlg('dlgChatDetail')">关闭</button></div>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- DIALOG: Rerank 调用详情                                         -->
+<!-- ============================================================ -->
+<div class="overlay" id="dlgRerankDetail">
+<div class="dlg wide">
+  <div class="dlg-hd"><span class="dlg-title">📊 Rerank 调用详情</span><button class="dlg-close" onclick="closeDlg('dlgRerankDetail')" aria-label="关闭">×</button></div>
+  <div class="dlg-bd">
+    <div class="d-tabs">
+      <button class="d-tab active" data-pane="rd-info" onclick="dtab(this)">调用信息</button>
+      <button class="d-tab" data-pane="rd-request" onclick="dtab(this)">请求</button>
+      <button class="d-tab" data-pane="rd-response" onclick="dtab(this)">响应</button>
+    </div>
+    <div class="d-pane active" id="rd-info">
+      <div class="cfg">
+        <div class="cfg-title">📋 基本信息</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div><div class="detail-label">模型</div><div class="mono" style="font-weight:600">bge-reranker-v2-m3</div></div>
+          <div><div class="detail-label">渠道</div><div>Bedrock 官方</div></div>
+          <div><div class="detail-label">状态</div><span class="tag tag-success">200 OK</span></div>
+          <div><div class="detail-label">延迟</div><div class="mono">120ms</div></div>
+          <div><div class="detail-label">文档数量</div><div class="mono">5</div></div>
+          <div><div class="detail-label">时间</div><div style="font-size:13px">2026-07-09 14:28:50</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="d-pane" id="rd-request">
+      <div class="cfg" style="margin-bottom:16px">
+        <div class="cfg-title">📤 查询</div>
+        <pre class="mono" style="background:var(--bg-default);padding:12px;border-radius:6px;white-space:pre-wrap;font-size:13px;margin:0">什么是机器学习？</pre>
+      </div>
+      <div class="cfg">
+        <div class="cfg-title">📤 待排序文档 <span class="tag tag-info">5 条</span></div>
+        <div class="mono" style="background:var(--bg-default);padding:12px;border-radius:6px;font-size:13px;line-height:1.8">
+          <div style="margin-bottom:8px;display:flex;gap:12px;align-items:flex-start">
+            <strong style="flex-shrink:0">1.</strong>
+            <span style="flex:1">机器学习是人工智能的一个分支，专注于从数据中学习模式。</span>
+            <span class="tag tag-success" style="flex-shrink:0">relevance: 0.95</span>
+          </div>
+          <div style="margin-bottom:8px;display:flex;gap:12px;align-items:flex-start">
+            <strong style="flex-shrink:0">2.</strong>
+            <span style="flex:1">深度学习是机器学习的一个子集，使用多层神经网络。</span>
+            <span class="tag tag-success" style="flex-shrink:0">relevance: 0.87</span>
+          </div>
+          <div style="margin-bottom:8px;display:flex;gap:12px;align-items:flex-start">
+            <strong style="flex-shrink:0">3.</strong>
+            <span style="flex:1">自然语言处理是AI的重要应用领域，涉及文本理解与生成。</span>
+            <span class="tag tag-warning" style="flex-shrink:0">relevance: 0.72</span>
+          </div>
+          <div style="margin-bottom:8px;display:flex;gap:12px;align-items:flex-start">
+            <strong style="flex-shrink:0">4.</strong>
+            <span style="flex:1">计算机视觉主要研究图像识别、目标检测等任务。</span>
+            <span class="tag" style="flex-shrink:0">relevance: 0.45</span>
+          </div>
+          <div style="display:flex;gap:12px;align-items:flex-start">
+            <strong style="flex-shrink:0">5.</strong>
+            <span style="flex:1">强化学习通过与环境交互来学习最优策略。</span>
+            <span class="tag" style="flex-shrink:0">relevance: 0.31</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="d-pane" id="rd-response">
+      <div class="cfg">
+        <div class="cfg-title">📥 排序结果</div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;align-items:center;gap:12px">
+            <span class="mono" style="flex-shrink:0;width:24px;text-align:right;font-weight:600">#1</span>
+            <span style="flex-shrink:0;width:60px;font-size:12px;color:var(--text-secondary)">doc[0]</span>
+            <span style="flex:1;background:var(--bg-default);border-radius:4px;height:20px;position:relative;overflow:hidden">
+              <span style="position:absolute;inset:0;background:var(--color-success);width:95%;border-radius:4px;opacity:0.7"></span>
+            </span>
+            <span class="mono" style="flex-shrink:0;width:36px;text-align:right;font-size:13px;font-weight:600">0.95</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px">
+            <span class="mono" style="flex-shrink:0;width:24px;text-align:right;font-weight:600">#2</span>
+            <span style="flex-shrink:0;width:60px;font-size:12px;color:var(--text-secondary)">doc[1]</span>
+            <span style="flex:1;background:var(--bg-default);border-radius:4px;height:20px;position:relative;overflow:hidden">
+              <span style="position:absolute;inset:0;background:var(--color-success);width:87%;border-radius:4px;opacity:0.7"></span>
+            </span>
+            <span class="mono" style="flex-shrink:0;width:36px;text-align:right;font-size:13px;font-weight:600">0.87</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px">
+            <span class="mono" style="flex-shrink:0;width:24px;text-align:right;font-weight:600">#3</span>
+            <span style="flex-shrink:0;width:60px;font-size:12px;color:var(--text-secondary)">doc[2]</span>
+            <span style="flex:1;background:var(--bg-default);border-radius:4px;height:20px;position:relative;overflow:hidden">
+              <span style="position:absolute;inset:0;background:var(--color-warning);width:72%;border-radius:4px;opacity:0.7"></span>
+            </span>
+            <span class="mono" style="flex-shrink:0;width:36px;text-align:right;font-size:13px;font-weight:600">0.72</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px">
+            <span class="mono" style="flex-shrink:0;width:24px;text-align:right;font-weight:600">#4</span>
+            <span style="flex-shrink:0;width:60px;font-size:12px;color:var(--text-secondary)">doc[4]</span>
+            <span style="flex:1;background:var(--bg-default);border-radius:4px;height:20px;position:relative;overflow:hidden">
+              <span style="position:absolute;inset:0;background:var(--color-info);width:45%;border-radius:4px;opacity:0.5"></span>
+            </span>
+            <span class="mono" style="flex-shrink:0;width:36px;text-align:right;font-size:13px;font-weight:600">0.45</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px">
+            <span class="mono" style="flex-shrink:0;width:24px;text-align:right;font-weight:600">#5</span>
+            <span style="flex-shrink:0;width:60px;font-size:12px;color:var(--text-secondary)">doc[3]</span>
+            <span style="flex:1;background:var(--bg-default);border-radius:4px;height:20px;position:relative;overflow:hidden">
+              <span style="position:absolute;inset:0;background:var(--color-info);width:31%;border-radius:4px;opacity:0.5"></span>
+            </span>
+            <span class="mono" style="flex-shrink:0;width:36px;text-align:right;font-size:13px;font-weight:600">0.31</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="dlg-ft"><button class="btn btn-default" onclick="closeDlg('dlgRerankDetail')">关闭</button></div>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- DIALOG: 视频任务详情                                            -->
+<!-- ============================================================ -->
+<div class="overlay" id="dlgTaskDetail">
+<div class="dlg wide">
+  <div class="dlg-hd"><span class="dlg-title">🎬 视频任务详情</span><button class="dlg-close" onclick="closeDlg('dlgTaskDetail')" aria-label="关闭">×</button></div>
+  <div class="dlg-bd">
+    <div class="d-tabs">
+      <button class="d-tab active" data-pane="vd-info" onclick="dtab(this)">任务信息</button>
+      <button class="d-tab" data-pane="vd-result" onclick="dtab(this)">生成结果</button>
+      <button class="d-tab" data-pane="vd-request" onclick="dtab(this)">请求</button>
+      <button class="d-tab" data-pane="vd-response" onclick="dtab(this)">响应</button>
+      <button class="d-tab" data-pane="vd-timeline" onclick="dtab(this)">事件时间线</button>
+    </div>
+    <div class="d-pane active" id="vd-info">
+      <div class="cfg">
+        <div class="cfg-title">📋 基本信息</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div><div class="detail-label">网关任务 ID</div><div class="mono" style="font-weight:600">gw-cgt-20260708-001</div></div>
+          <div><div class="detail-label">上游任务 ID</div><div class="mono">cgt-20260708143000-aaa</div></div>
+          <div><div class="detail-label">状态</div><span class="tag tag-success">✓ succeeded</span></div>
+          <div><div class="detail-label">上游</div><span class="tag tag-video">中转 A</span></div>
+          <div><div class="detail-label">模型</div><div class="mono">doubao-seedance-2-0-260128</div></div>
+          <div><div class="detail-label">分辨率</div><div class="mono">720p</div></div>
+          <div><div class="detail-label">时长</div><div class="mono">5s</div></div>
+          <div><div class="detail-label">创建时间</div><div style="font-size:13px">2026-07-08 14:30:00</div></div>
+          <div><div class="detail-label">完成时间</div><div style="font-size:13px">2026-07-08 14:30:45</div></div>
+          <div><div class="detail-label">生成耗时</div><div class="mono">45s</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="d-pane" id="vd-result">
+      <div class="cfg">
+        <div class="cfg-title">🎥 生成结果</div>
+        <div style="background:#1e293b;border-radius:8px;padding:40px;text-align:center;color:var(--text-placeholder)"><div style="font-size:32px;margin-bottom:8px">▶️</div><div style="font-size:13px">视频预览区域</div><div style="margin-top:12px"><a href="#" style="color:var(--color-info);font-size:12px;text-decoration:none" onclick="alert('下载功能开发中...');return false">📥 下载视频 (24h 有效)</a></div></div>
+      </div>
+    </div>
+    <div class="d-pane" id="vd-request">
+      <div class="cfg">
+        <div class="cfg-title">📤 请求</div><textarea class="json" readonly>{
+  "model": "doubao-seedance-2-0-260128",
+  "content": [
+    {"type": "text", "text": "一只白色小猫坐在窗边"},
+    {"type": "image_url", "image_url": {"url": "asset://Asset-xxx"}, "role": "first_frame"}
+  ],
+  "resolution": "720p", "ratio": "16:9", "duration": 5
+}</textarea>
+      </div>
+    </div>
+    <div class="d-pane" id="vd-response">
+      <div class="cfg">
+        <div class="cfg-title">📥 响应</div><textarea class="json" readonly>{
+  "id": "cgt-20260708143000-aaa",
+  "status": "succeeded",
+  "content": {"video_url": "https://cdn.example.com/video-xxx.mp4"},
+  "created_at": 1720456800, "updated_at": 1720456845
+}</textarea>
+      </div>
+    </div>
+    <div class="d-pane" id="vd-timeline">
+      <div class="cfg">
+        <div class="cfg-title">📋 事件时间线</div>
+        <table class="data-table"><thead><tr><th>时间</th><th>事件</th><th>详情</th></tr></thead><tbody>
+          <tr><td class="mono" style="font-size:12px;color:var(--text-secondary)">14:30:00</td><td><span class="tag tag-info">submitted</span></td><td style="font-size:12px">任务创建，路由到中转 A</td></tr>
+          <tr><td class="mono" style="font-size:12px;color:var(--text-secondary)">14:30:05</td><td><span class="tag tag-warning">running</span></td><td style="font-size:12px">上游开始处理</td></tr>
+          <tr><td class="mono" style="font-size:12px;color:var(--text-secondary)">14:30:45</td><td><span class="tag tag-success">succeeded</span></td><td style="font-size:12px">生成完成，耗时 45s</td></tr>
+        </tbody></table>
+      </div>
+    </div>
+  </div>
+  <div class="dlg-ft"><button class="btn btn-default" onclick="closeDlg('dlgTaskDetail')">关闭</button></div>
+</div>
+</div>
+
+<!-- DIALOG: 新建模型组 -->
+<div class="overlay" id="dlgGroup">
+<div class="dlg">
+  <div class="dlg-hd"><span class="dlg-title">创建模型组</span><button class="dlg-close" onclick="closeDlg('dlgGroup')" aria-label="关闭">×</button></div>
+  <div class="dlg-bd">
+    <div class="fi"><label class="fl"><span class="req">*</span>名称</label><div class="fc"><input class="input" placeholder="请输入模型组名称" value="seedance-2.0" maxlength="64"></div></div>
+    <div class="fi"><label class="fl"><span class="req">*</span>类型</label><div class="fc">
+      <select class="input select" id="groupType" onchange="toggleGroupType(this.value)">
+        <option value="chat">Chat（对话）</option>
+        <option value="video" selected style="color:var(--color-video);font-weight:700">🎬 Video（视频生成）</option>
+      </select>
+      <div class="hint">Video 模型组只需要关联一个模型，不需要负载策略和故障切换</div>
+    </div></div>
+    <div class="fi"><label class="fl">描述</label><div class="fc"><textarea class="input textarea" rows="3" placeholder="模型组描述（可选）">Seedance 视频生成</textarea></div></div>
+
+    <!-- Chat 类型显示 -->
+    <div id="chatGroupFields" style="display:none">
+      <div class="fi"><label class="fl"><span class="req">*</span>负载策略</label><div class="fc">
+        <div class="radio-group">
+          <label class="radio"><input type="radio" name="strategy" value="round_robin"> 轮询</label>
+          <label class="radio"><input type="radio" name="strategy" value="priority" checked> 优先级</label>
+          <label class="radio"><input type="radio" name="strategy" value="weighted"> 加权</label>
+          <label class="radio"><input type="radio" name="strategy" value="auto"> 自动</label>
+        </div>
+      </div></div>
+      <div class="divider"><span class="divider-text">故障切换配置</span></div>
+      <div class="fi"><label class="fl">最大切换</label><div class="fc"><input type="number" class="input input-num" value="2" min="1"><span class="hint inline">次</span></div></div>
+      <div class="fi"><label class="fl">同模型重试</label><div class="fc"><input type="number" class="input input-num" value="1" min="0"><span class="hint inline">次</span></div></div>
+      <div class="fi"><label class="fl">冷却时间</label><div class="fc"><input type="number" class="input input-num" value="60" min="10"><span class="hint inline">秒</span></div></div>
+    </div>
+
+    <div class="divider"><span class="divider-text">关联模型</span></div>
+    <div class="fi"><label class="fl">已选模型</label><div class="fc">
+      <div style="display:flex;flex-direction:column;gap:6px" id="modelList">
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 10px;background:var(--bg-subtle);border-radius:6px">
+          <span style="flex:1;font-size:13px;color:var(--text-primary)">doubao-seedance-2-0-260128</span>
+          <span style="font-size:12px;color:var(--text-secondary)">中转 A</span>
+          <button class="btn-text danger">移除</button>
+        </div>
+      </div>
+      <button class="btn btn-sm btn-default" style="margin-top:8px" id="addModelBtn" onclick="if(document.getElementById('groupType').value==='video'){alert('Video 模型组只能关联一个模型')}else{alert('添加模型功能开发中...')}">+ 添加模型</button>
+    </div></div>
+        </div>
+  <div class="dlg-ft"><button class="btn btn-default" onclick="closeDlg('dlgGroup')">取消</button><button class="btn btn-primary" onclick="alert('模型组创建成功！');closeDlg('dlgGroup')">确定</button></div>
+</div>
+</div>
+
+<!-- DIALOG: 模型组详情 -->
+<div class="overlay" id="dlgGroupDetail">
+<div class="dlg wide">
+  <div class="dlg-hd"><span class="dlg-title">seedance-2.0 — 模型组详情</span><button class="dlg-close" onclick="closeDlg('dlgGroupDetail')" aria-label="关闭">×</button></div>
+  <div class="dlg-bd">
+    <div class="d-tabs">
+      <button class="d-tab active" data-pane="gd-info" onclick="dtab(this)">基本信息</button>
+      <button class="d-tab" data-pane="gd-models" onclick="dtab(this)">模型成员</button>
+      <button class="d-tab" data-pane="gd-auth" onclick="dtab(this)">授权管理</button>
+    </div>
+    <div class="d-pane active" id="gd-info">
+      <div class="cfg" style="margin-bottom:16px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div><div style="font-size:11px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">名称</div><div style="font-weight:600">seedance-2.0</div></div>
+          <div><div style="font-size:11px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">类型</div><span class="tag tag-video">🎬 Video</span></div>
+          <div><div style="font-size:11px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">模型数量</div><div>1</div></div>
+          <div><div style="font-size:11px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">状态</div><span class="tag tag-success">启用</span></div>
+          <div><div style="font-size:11px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">策略</div><div style="color:var(--text-placeholder)">—（视频不需要）</div></div>
+          <div><div style="font-size:11px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">创建时间</div><div style="font-size:13px">2026-07-08 14:00:00</div></div>
+        </div>
+      </div>
+      <div class="callout callout-video">
+        🎬 <div>Video 模型组不需要负载策略和故障切换。一个模型绑定一个渠道，创建任务后固定渠道查询。</div>
+      </div>
+    </div>
+    <div class="d-pane" id="gd-models">
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>模型名称</th><th>厂商</th><th>操作</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">doubao-seedance-2-0-260128</td><td>中转 A</td><td><button class="btn-text danger">移除</button></td></tr>
+        </tbody>
+      </table></div>
+      <div class="callout callout-video" style="margin-top:12px">
+        🎬 <div>Video 模型组只能关联一个模型，不支持权重和优先级。</div>
+      </div>
+    </div>
+    <div class="d-pane" id="gd-auth">
+      <div class="fi"><label class="fl">开放模式</label><div class="fc">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div class="sw on" onclick="this.classList.toggle('on')"></div>
+          <span style="font-size:13px">公开：所有部门默认可用</span>
+        </div>
+      </div></div>
+      <div class="divider"><span class="divider-text">工作室授权</span></div>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>工作室 ID</th><th>添加时间</th><th>操作</th></tr></thead>
+        <tbody>
+          <tr><td>studio-001</td><td>2026-07-08 14:00:00</td><td><button class="btn-text danger">撤销</button></td></tr>
+        </tbody>
+      </table></div>
+    </div>
+  </div>
+  <div class="dlg-ft"><button class="btn btn-default" onclick="closeDlg('dlgGroupDetail')">关闭</button></div>
+</div>
+</div>
+
+<script>
+// ===== Page navigation =====
+const titles = {providers:'渠道管理',models:'模型管理',groups:'模型组',keys:'API Keys',usage:'用量看板',ops:'运维监控',square:'模型广场'};
+document.querySelectorAll('.nav-item[data-page]').forEach(item => {
+  item.addEventListener('click', () => {
+    const pg = item.dataset.page;
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    item.classList.add('active');
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    const pageEl = document.getElementById('pg-' + pg);
+    if (pageEl) pageEl.classList.add('active');
+    document.getElementById('pageTitle').textContent = titles[pg] || pg;
+  });
+});
+
+// ===== Tab switching =====
+function tabSwitch(el) {
+  el.parentElement.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+}
+
+// ===== Dialog tab switching =====
+function dtab(btn) {
+  const dlg = btn.closest('.dlg');
+  const paneId = btn.dataset.pane;
+
+  // 如果点击的是隐藏的 tab，忽略
+  if (btn.style.display === 'none') return;
+
+  dlg.querySelectorAll('.d-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+
+  // 通过 data-pane 找到对应的 pane
+  if (paneId) {
+    dlg.querySelectorAll('.d-pane').forEach(p => p.classList.remove('active'));
+    const pane = document.getElementById(paneId);
+    if (pane) pane.classList.add('active');
+  } else {
+    // fallback: 索引匹配
+    const idx = Array.from(dlg.querySelectorAll('.d-tab')).indexOf(btn);
+    const panes = dlg.querySelectorAll('.d-pane');
+    if (panes[idx]) {
+      panes.forEach(p => p.classList.remove('active'));
+      panes[idx].classList.add('active');
+    }
+  }
+}
+
+// ===== Toggle Seedance fields based on provider type =====
+	function toggleSeedanceFields(select) {
+	  const isRelay = select.value === 'seedance-relay';
+	  const isVolc = select.value === 'seedance-volcengine';
+	  const isSeedance = isRelay || isVolc;
+
+	  // Toggle credential fields
+	  document.querySelectorAll('.aksk-field').forEach(f => f.style.display = isVolc ? '' : 'none');
+	  document.querySelectorAll('.bearer-field').forEach(f => f.style.display = isRelay ? '' : 'none');
+	}
+
+// ===== Dialog open/close =====
+function openDlg(id) {
+  const dlg = document.getElementById(id);
+  if (!dlg) return;
+  dlg.classList.add('open');
+  document.body.classList.add('dialog-open');
+
+  // 打开新建渠道对话框时，根据当前选择的渠道类型初始化
+  if (id === 'dlgProvider') {
+    const typeSelect = document.querySelector('#dlgProvider select[onchange*="toggleSeedanceFields"]');
+    if (typeSelect) {
+      toggleSeedanceFields(typeSelect);
+    }
+  }
+
+  // 打开模型注册对话框时，同步视频参数显示
+  if (id === 'dlgModel') {
+    const typeSelect = document.getElementById('modelTypeSelect');
+    if (typeSelect) toggleVideoParams(typeSelect.value);
+  }
+}
+function closeDlg(id) {
+  const dlg = document.getElementById(id);
+  if (!dlg) return;
+  dlg.classList.remove('open');
+  document.body.classList.remove('dialog-open');
+}
+
+// Close on overlay click
+document.querySelectorAll('.overlay').forEach(o => {
+  o.addEventListener('click', e => { if (e.target === o) o.classList.remove('open'); document.body.classList.remove('dialog-open'); });
+});
+
+// ESC to close
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    const activeEl = document.activeElement;
+    if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT')) {
+      return;
+    }
+    const openDialogs = document.querySelectorAll('.overlay.open');
+    if (openDialogs.length > 0) {
+      openDialogs[openDialogs.length - 1].classList.remove('open'); document.body.classList.remove('dialog-open');
+    }
+  }
+});
+
+// ===== Toggle video params in model dialog =====
+function toggleVideoParams(type) {
+  const vp = document.getElementById('videoParams');
+  if (vp) vp.style.display = (type === 'video') ? 'block' : 'none';
+}
+
+// Init: video params visible (model type defaults to Video)
+document.addEventListener('DOMContentLoaded', () => {
+  const vp = document.getElementById('videoParams');
+  if (vp) vp.style.display = 'block';
+});
+
+// ===== Toggle group type fields =====
+function toggleGroupType(type) {
+  const chatFields = document.getElementById('chatGroupFields');
+  if (chatFields) chatFields.style.display = type === 'video' ? 'none' : 'block';
+}
+// ===== Usage tab switching =====
+function usageTab(btn, type) {
+  btn.parentElement.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('.usage-pane').forEach(p => p.classList.remove('active'));
+  document.getElementById('up-' + type).classList.add('active');
+}
+</script>
+</body>
+</html>

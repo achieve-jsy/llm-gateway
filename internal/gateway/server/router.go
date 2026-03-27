@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/example/llm-gateway/internal/configsync"
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/binding"
 	"github.com/example/llm-gateway/internal/gateway/cache"
@@ -164,9 +165,41 @@ func Setup(
 	responsesHandler.SetModelQuotaGate(modelQuotaGate)
 
 	// OpenAI 兼容接口（需 API Key 认证）
-	// 初始化视频适配器
-	relayAdapter := seedancerelay.NewAdapter("seedance-relay", "http://115.190.78.58:8000", "placeholder-api-key")
-	volcengineAdapter := seedancevolcengine.NewAdapter("seedance-volcengine", "https://ark.cn-beijing.volces.com", "placeholder-ak", "placeholder-sk", "cn-beijing")
+	// 初始化视频适配器（从 Redis Provider Snapshot 读取真实凭证）
+	var relayAdapter *seedancerelay.Adapter
+	var volcengineAdapter *seedancevolcengine.Adapter
+
+	if rdb != nil {
+		if snapshot, err := configsync.LoadProviderSnapshot(context.Background(), rdb); err == nil {
+			// 查找 seedance-relay 配置
+			if entry := findProviderByType(snapshot.Entries, "seedance-relay"); entry != nil {
+				slog.Info("loading seedance-relay adapter from provider config", "endpoint", entry.Endpoint)
+				relayAdapter = seedancerelay.NewAdapter(entry.Name, entry.Endpoint, entry.Credentials)
+			}
+			// 查找 seedance-volcengine 配置
+			if entry := findProviderByType(snapshot.Entries, "seedance-volcengine"); entry != nil {
+				slog.Info("loading seedance-volcengine adapter from provider config", "endpoint", entry.Endpoint)
+				ak, sk, region := parseVolcengineCredentials(entry.Credentials)
+				if ak == "" || sk == "" {
+					slog.Warn("seedance-volcengine credentials incomplete, using placeholder")
+					ak, sk = "placeholder-ak", "placeholder-sk"
+				}
+				volcengineAdapter = seedancevolcengine.NewAdapter(entry.Name, entry.Endpoint, ak, sk, region)
+			}
+		} else {
+			slog.Warn("failed to load provider snapshot for video adapters", "error", err)
+		}
+	}
+
+	// 如果未找到配置，使用默认值（仅用于测试环境）
+	if relayAdapter == nil {
+		slog.Warn("seedance-relay adapter not configured, using placeholder credentials")
+		relayAdapter = seedancerelay.NewAdapter("seedance-relay", "http://115.190.78.58:8000", "placeholder-api-key")
+	}
+	if volcengineAdapter == nil {
+		slog.Warn("seedance-volcengine adapter not configured, using placeholder credentials")
+		volcengineAdapter = seedancevolcengine.NewAdapter("seedance-volcengine", "https://ark.cn-beijing.volces.com", "placeholder-ak", "placeholder-sk", "cn-beijing")
+	}
 
 	v1 := r.Group("/v1")
 	v1.Use(middleware.AuthMiddleware(authClient))
@@ -217,8 +250,59 @@ func Setup(
 		// 普通 Key 一律 403，白名单 Key 透传但不计入预算（豁免），记日志。
 		v1.Any("/p/:provider/*path", middleware.PassthroughGuard(), makePassthroughHandler(router))
 
-		// 视频生成
-		videoHandler := handler.NewVideoHandler(relayAdapter, volcengineAdapter)
+		// 视频生成：Redis 热缓存 + 控制面 PG 权威存储
+		var redisStore *handler.RedisVideoTaskStore
+		if rdb != nil {
+			hsetFn := func(ctx context.Context, key string, values ...interface{}) error {
+				return rdb.HSet(ctx, key, values...).Err()
+			}
+			hgetFn := func(ctx context.Context, key, field string) (string, error) {
+				return rdb.HGet(ctx, key, field).Result()
+			}
+			expireFn := func(ctx context.Context, key string, expiration time.Duration) error {
+				return rdb.Expire(ctx, key, expiration).Err()
+			}
+			redisStore = handler.NewRedisVideoTaskStore(hsetFn, hgetFn, expireFn, 30*24*time.Hour)
+		}
+
+		var videoTaskStore handler.VideoTaskStore
+		if controlPlaneURL != "" && internalToken != "" {
+			cpClient := infra.NewVideoTaskClient(controlPlaneURL, internalToken)
+			cpAdapter := &handler.CPVideoTaskStoreAdapter{Client: cpClient}
+			videoTaskStore = handler.NewCompositeVideoTaskStore(redisStore, cpAdapter)
+		} else if redisStore != nil {
+			videoTaskStore = redisStore
+		}
+
+		var modelResolver handler.ModelResolver
+		if routerGetter != nil {
+			modelResolver = func(model string) string {
+				if r := routerGetter(); r != nil {
+					return r.GetProviderType(model)
+				}
+				return ""
+			}
+		}
+
+		nameResolver := func(providerType string) string {
+			switch providerType {
+			case "seedance-volcengine":
+				if volcengineAdapter != nil {
+					return volcengineAdapter.Name()
+				}
+			default:
+				if relayAdapter != nil {
+					return relayAdapter.Name()
+				}
+			}
+			return providerType
+		}
+
+		videoHandler := handler.NewVideoHandler(relayAdapter, volcengineAdapter,
+			handler.WithTaskStore(videoTaskStore),
+			handler.WithModelResolver(modelResolver),
+			handler.WithProviderNameResolver(nameResolver),
+		)
 		v1.POST("/contents/generations/tasks", videoHandler.CreateTask)
 		v1.GET("/contents/generations/tasks/:task_id", videoHandler.GetTask)
 
@@ -233,6 +317,41 @@ func Setup(
 	})
 
 	return r
+}
+
+// findProviderByType 从 ProviderEntry 列表中按 Type 查找
+func findProviderByType(entries []gwmodel.ProviderEntry, providerType string) *gwmodel.ProviderEntry {
+	for i := range entries {
+		if entries[i].Type == providerType {
+			return &entries[i]
+		}
+	}
+	return nil
+}
+
+// parseVolcengineCredentials 解析火山引擎 JSON 凭证
+// 格式: {"access_key":"...","secret_key":"...","region":"..."}
+type volcengineCredentials struct {
+	AccessKey string `json:"access_key"`
+	SecretKey string `json:"secret_key"`
+	Region    string `json:"region"`
+}
+
+func parseVolcengineCredentials(credJSON string) (ak, sk, region string) {
+	region = "cn-beijing" // 默认值
+	var creds volcengineCredentials
+	if err := json.Unmarshal([]byte(credJSON), &creds); err == nil {
+		if creds.AccessKey != "" {
+			ak = creds.AccessKey
+		}
+		if creds.SecretKey != "" {
+			sk = creds.SecretKey
+		}
+		if creds.Region != "" {
+			region = creds.Region
+		}
+	}
+	return
 }
 
 // makePassthroughHandler returns a Gin handler that proxies requests to

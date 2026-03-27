@@ -17,14 +17,22 @@
         <el-tab-pane label="任务信息" name="info">
           <el-descriptions :column="1" border size="small">
             <el-descriptions-item label="任务 ID">{{ task?.task_id || '—' }}</el-descriptions-item>
-            <el-descriptions-item label="模型">{{ task?.model || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="模型组">{{ display.groupName || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="模型">{{ display.modelName || '—' }}</el-descriptions-item>
             <el-descriptions-item label="渠道">{{ task?.provider_name || '—' }}</el-descriptions-item>
             <el-descriptions-item label="渠道类型">{{ task?.provider_type || '—' }}</el-descriptions-item>
             <el-descriptions-item label="状态">
               <el-tag :type="getStatusType(task?.status)" size="small">{{ task?.status || '—' }}</el-tag>
             </el-descriptions-item>
-            <el-descriptions-item label="Key">{{ task?.api_key_name || task?.api_key_id || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="Key">{{ resolveKeyLabel(task || {}) }}</el-descriptions-item>
             <el-descriptions-item label="用户">{{ task?.user_name || task?.user_id || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="提示词">
+              <div v-if="display.prompt" class="prompt-text">{{ display.prompt }}</div>
+              <span v-else>—</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="分辨率">{{ display.resolution || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="宽高比">{{ display.ratio || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="时长">{{ display.duration || '—' }}</el-descriptions-item>
             <el-descriptions-item label="创建时间">{{ fmtDateTime(task?.created_at) }}</el-descriptions-item>
             <el-descriptions-item label="更新时间">{{ fmtDateTime(task?.updated_at) }}</el-descriptions-item>
             <el-descriptions-item label="生成耗时">{{ formatGenDuration(task) }}</el-descriptions-item>
@@ -80,6 +88,7 @@
 import { computed, ref, watch } from 'vue'
 import { videoTasksAPI, type VideoTask, type VideoTaskEvent } from '@/api/videoTasks'
 import { fmtDateTime } from '@/utils/time'
+import { resolveKeyLabel, resolveVideoDisplay } from '@/utils/videoTaskDisplay'
 
 const props = defineProps<{
   task: VideoTask | null
@@ -107,6 +116,8 @@ watch(visible, (v) => {
 }, { immediate: true })
 
 const canPreviewVideo = computed(() => task.value?.status === 'succeeded' && !!task.value?.video_url)
+
+const display = computed(() => resolveVideoDisplay(task.value || {}))
 
 const requestJSON = computed(() => formatJSON(task.value?.request_body, '暂无请求内容'))
 const responseJSON = computed(() => formatJSON(task.value?.response_body, '暂无响应内容'))
@@ -259,6 +270,12 @@ function formatEventTitle(type: string): string {
   margin-top: 4px;
   color: var(--el-text-color-secondary);
   word-break: break-word;
+}
+.prompt-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+  color: var(--el-text-color-primary);
 }
 .error-text {
   color: var(--el-color-danger);

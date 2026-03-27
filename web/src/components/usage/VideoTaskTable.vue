@@ -38,7 +38,18 @@
         <template #default="{ row }">{{ fmtDateTime(row.created_at) }}</template>
       </el-table-column>
       <el-table-column label="任务 ID" prop="task_id" min-width="180" show-overflow-tooltip />
-      <el-table-column label="模型" prop="model" min-width="160" show-overflow-tooltip />
+      <el-table-column label="Key" min-width="110" show-overflow-tooltip>
+        <template #default="{ row }">{{ resolveKeyLabel(row) }}</template>
+      </el-table-column>
+      <el-table-column v-if="!mine" label="用户" min-width="100" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.user_name || '—' }}</template>
+      </el-table-column>
+      <el-table-column label="模型组" min-width="140" show-overflow-tooltip>
+        <template #default="{ row }">{{ resolveGroupAndModel(row).groupName || '—' }}</template>
+      </el-table-column>
+      <el-table-column label="模型" min-width="180" show-overflow-tooltip>
+        <template #default="{ row }">{{ resolveGroupAndModel(row).modelName || '—' }}</template>
+      </el-table-column>
       <el-table-column label="渠道" prop="provider_name" min-width="120" show-overflow-tooltip />
       <el-table-column label="状态" width="120">
         <template #default="{ row }">
@@ -77,6 +88,7 @@ import { onMounted, ref, watch } from 'vue'
 import { videoTasksAPI, type VideoTask } from '@/api/videoTasks'
 import VideoTaskDetail from '@/components/usage/VideoTaskDetail.vue'
 import { fmtDateTime } from '@/utils/time'
+import { resolveGroupAndModel, resolveKeyLabel } from '@/utils/videoTaskDisplay'
 
 const props = withDefaults(defineProps<{
   refreshToken?: number

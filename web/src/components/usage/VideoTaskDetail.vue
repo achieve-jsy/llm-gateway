@@ -25,8 +25,8 @@
             </el-descriptions-item>
             <el-descriptions-item label="Key">{{ task?.api_key_name || task?.api_key_id || '—' }}</el-descriptions-item>
             <el-descriptions-item label="用户">{{ task?.user_name || task?.user_id || '—' }}</el-descriptions-item>
-            <el-descriptions-item label="创建时间">{{ task?.created_at || '—' }}</el-descriptions-item>
-            <el-descriptions-item label="更新时间">{{ task?.updated_at || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="创建时间">{{ fmtDateTime(task?.created_at) }}</el-descriptions-item>
+            <el-descriptions-item label="更新时间">{{ fmtDateTime(task?.updated_at) }}</el-descriptions-item>
             <el-descriptions-item label="生成耗时">{{ formatGenDuration(task) }}</el-descriptions-item>
             <el-descriptions-item v-if="task?.error_message" label="错误信息">
               <span class="error-text">{{ task.error_message }}</span>
@@ -63,7 +63,7 @@
             <el-timeline-item
               v-for="(item, idx) in timelineItems"
               :key="`${item.created_at}-${idx}`"
-              :timestamp="item.created_at"
+              :timestamp="fmtDateTime(item.created_at)"
             >
               <div class="timeline-title">{{ item.title }}</div>
               <div v-if="item.detail" class="timeline-detail">{{ item.detail }}</div>
@@ -79,6 +79,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { videoTasksAPI, type VideoTask, type VideoTaskEvent } from '@/api/videoTasks'
+import { fmtDateTime } from '@/utils/time'
 
 const props = defineProps<{
   task: VideoTask | null
@@ -172,9 +173,15 @@ function formatJSON(raw: string | undefined, emptyText: string): string {
 }
 
 function eventToTimelineItem(event: VideoTaskEvent) {
+  const title = formatEventTitle(event.event_type)
+  const detail = (event.event_data || '').trim()
+  const redundant =
+    !detail ||
+    detail === title ||
+    /^状态更新为\s+\w+$/u.test(detail)
   return {
-    title: formatEventTitle(event.event_type),
-    detail: event.event_data || '',
+    title,
+    detail: redundant ? '' : detail,
     created_at: event.created_at,
   }
 }

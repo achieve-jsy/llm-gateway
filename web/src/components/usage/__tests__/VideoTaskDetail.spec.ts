@@ -77,6 +77,25 @@ describe('VideoTaskDetail', () => {
 
     await clickTab(wrapper, '事件时间线')
     expect(wrapper.text()).toContain('任务已成功')
+    // 时间线时间戳应为北京时间，而非原始 ISO
+    expect(wrapper.text()).toContain('2026-07-08 22:30:00')
+    expect(wrapper.text()).not.toContain('2026-07-08T14:30:00Z')
+  })
+
+  it('任务信息页创建/更新时间使用北京时间格式', async () => {
+    const wrapper = mount(VideoTaskDetail, {
+      props: {
+        modelValue: true,
+        task,
+      },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('2026-07-08 22:30:00')
+    expect(wrapper.text()).toContain('2026-07-08 22:31:00')
+    expect(wrapper.text()).not.toContain('2026-07-08T14:30:00Z')
   })
 })
 

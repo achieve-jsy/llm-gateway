@@ -77,7 +77,7 @@ export const groupsApi = {
     return http.delete(`/api/v1/groups/${groupId}/models/${modelId}`)
   },
 
-  listAllModels(params?: { page?: number; page_size?: number }) {
+  listAllModels(params?: { page?: number; page_size?: number; model_type?: string }) {
     return http.get<ApiResponse<ModelOption[]>>('/api/v1/models', { params })
   },
 

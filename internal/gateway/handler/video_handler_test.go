@@ -420,3 +420,18 @@ func TestAssetHandler_Handle_EmptyBody(t *testing.T) {
 		t.Logf("status: %d (handler passes raw body through)", w.Code)
 	}
 }
+func TestVideoAdapterRegistry_Swap(t *testing.T) {
+	old := &mockVideoProvider{createTaskID: "old"}
+	neu := &mockVideoProvider{createTaskID: "new"}
+	reg := NewVideoAdapterRegistry(old, nil)
+	if got := reg.Get("seedance-relay"); got != old {
+		t.Fatalf("expected old adapter")
+	}
+	reg.Swap(neu, nil, "景汐-新", "")
+	if got := reg.Get("seedance-relay"); got != neu {
+		t.Fatalf("expected swapped adapter")
+	}
+	if name := reg.ProviderName("seedance-relay"); name != "景汐-新" {
+		t.Fatalf("expected new name, got %q", name)
+	}
+}

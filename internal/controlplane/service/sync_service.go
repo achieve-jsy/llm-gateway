@@ -220,7 +220,7 @@ func (s *SyncService) publishEvent(eventType event.ChangeEventType, resourceType
 
 // isUnsupportedAdapter 判断渠道定义是否支持 /models 接口
 func isUnsupportedAdapter(definitionID string) bool {
-	unsupported := []string{"anthropic", "bedrock"}
+	unsupported := []string{"anthropic", "bedrock", "seedance-relay", "seedance-volcengine"}
 	for _, u := range unsupported {
 		if definitionID == u {
 			return true

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/example/llm-gateway/internal/core/video"
@@ -57,19 +58,74 @@ type VideoTaskStore interface {
 // ---------------------------------------------------------------------------
 
 // VideoAdapterRegistry maps provider type strings to VideoProvider instances.
+// Swap 支持配置热更新：改渠道后无需重启 gateway。
 type VideoAdapterRegistry struct {
+	mu         sync.RWMutex
 	relay      video.VideoProvider
 	volcengine video.VideoProvider
+	relayName  string
+	volcName   string
 }
 
 // NewVideoAdapterRegistry creates a registry with the given adapters.
 func NewVideoAdapterRegistry(relay, volcengine video.VideoProvider) *VideoAdapterRegistry {
-	return &VideoAdapterRegistry{relay: relay, volcengine: volcengine}
+	return &VideoAdapterRegistry{
+		relay:      relay,
+		volcengine: volcengine,
+		relayName:  "seedance-relay",
+		volcName:   "seedance-volcengine",
+	}
+}
+
+// Swap 原子替换适配器与展示名（由 Provider snapshot 热加载调用）。
+func (r *VideoAdapterRegistry) Swap(relay, volcengine video.VideoProvider, relayName, volcName string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if relay != nil {
+		r.relay = relay
+	}
+	if volcengine != nil {
+		r.volcengine = volcengine
+	}
+	if relayName != "" {
+		r.relayName = relayName
+	}
+	if volcName != "" {
+		r.volcName = volcName
+	}
+}
+
+// ProviderName 返回渠道展示名（热更新后立即生效）。
+func (r *VideoAdapterRegistry) ProviderName(providerType string) string {
+	if r == nil {
+		return providerType
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	switch providerType {
+	case "seedance-volcengine":
+		if r.volcName != "" {
+			return r.volcName
+		}
+	default:
+		if r.relayName != "" {
+			return r.relayName
+		}
+	}
+	return providerType
 }
 
 // Get returns the adapter for the given provider type.
 // Falls back to relay if the type is unknown.
 func (r *VideoAdapterRegistry) Get(providerType string) video.VideoProvider {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	switch providerType {
 	case "seedance-volcengine":
 		if r.volcengine != nil {
@@ -209,12 +265,18 @@ func (s *CompositeVideoTaskStore) Update(ctx context.Context, taskID string, upd
 
 // VideoHandler 视频生成 Handler
 type VideoHandler struct {
-	relayAdapter      video.VideoProvider
-	volcengineAdapter video.VideoProvider
-	adapterReg        *VideoAdapterRegistry
-	modelResolver     ModelResolver
-	nameResolver      ProviderNameResolver
-	taskStore         VideoTaskStore
+	adapterReg    *VideoAdapterRegistry
+	modelResolver ModelResolver
+	nameResolver  ProviderNameResolver
+	taskStore     VideoTaskStore
+}
+
+// AdapterRegistry 返回适配器注册表（供热加载 Swap）。
+func (h *VideoHandler) AdapterRegistry() *VideoAdapterRegistry {
+	if h == nil {
+		return nil
+	}
+	return h.adapterReg
 }
 
 // VideoHandlerOption is a functional option for VideoHandler.
@@ -238,9 +300,7 @@ func WithTaskStore(s VideoTaskStore) VideoHandlerOption {
 // NewVideoHandler 创建视频 Handler
 func NewVideoHandler(relayAdapter, volcengineAdapter video.VideoProvider, opts ...VideoHandlerOption) *VideoHandler {
 	h := &VideoHandler{
-		relayAdapter:      relayAdapter,
-		volcengineAdapter: volcengineAdapter,
-		adapterReg:        NewVideoAdapterRegistry(relayAdapter, volcengineAdapter),
+		adapterReg: NewVideoAdapterRegistry(relayAdapter, volcengineAdapter),
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -264,6 +324,11 @@ func (h *VideoHandler) resolveProviderType(model string) string {
 func (h *VideoHandler) resolveProviderName(providerType string) string {
 	if h.nameResolver != nil {
 		if name := h.nameResolver(providerType); name != "" {
+			return name
+		}
+	}
+	if h.adapterReg != nil {
+		if name := h.adapterReg.ProviderName(providerType); name != "" {
 			return name
 		}
 	}
@@ -328,13 +393,13 @@ func (h *VideoHandler) CreateTask(c *gin.Context) {
 func (h *VideoHandler) GetTask(c *gin.Context) {
 	taskID := c.Param("task_id")
 
-	adapter := h.relayAdapter
+	providerType := "seedance-relay"
 	if h.taskStore != nil {
-		providerType, err := h.taskStore.LookupProviderType(c.Request.Context(), taskID)
-		if err == nil && providerType != "" {
-			adapter = h.adapterReg.Get(providerType)
+		if pt, err := h.taskStore.LookupProviderType(c.Request.Context(), taskID); err == nil && pt != "" {
+			providerType = pt
 		}
 	}
+	adapter := h.adapterReg.Get(providerType)
 
 	result, err := adapter.GetTask(c.Request.Context(), taskID)
 	if err != nil {

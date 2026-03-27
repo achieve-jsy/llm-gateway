@@ -6,6 +6,13 @@ import (
 	"github.com/google/uuid"
 )
 
+// Provider 状态（与 models.status 语义对齐）
+const (
+	ProviderStatusEnabled          = 1 // 启用
+	ProviderStatusManuallyDisabled = 2 // 手动禁用
+	ProviderStatusAutoDisabled     = 3 // 自动禁用（健康检测触发）
+)
+
 // Provider 渠道配置实体
 type Provider struct {
 	ID                   uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`

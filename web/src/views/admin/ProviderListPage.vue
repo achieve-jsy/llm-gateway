@@ -162,9 +162,18 @@
         </template>
       </el-table-column>
 
-      <el-table-column label="操作" width="200" align="center">
+      <el-table-column label="操作" width="260" align="center">
         <template #default="{ row }">
           <el-button text type="primary" size="small" @click="openEditDialog(row)">编辑</el-button>
+          <el-button
+            text
+            type="primary"
+            size="small"
+            :loading="testingId === row.id"
+            @click="handleTest(row)"
+          >
+            测试
+          </el-button>
           <el-button
             text
             type="primary"
@@ -232,6 +241,7 @@ import {
   deleteProvider,
   updateProvider,
   syncModels,
+  testProvider,
 } from '@/services/control-plane'
 import { resolveErrorMessage } from '@/services/http'
 import type { Provider, ProviderDefinition } from '@/types/provider'
@@ -258,6 +268,7 @@ const syncProviderId = ref('')
 const syncProviderName = ref('')
 const syncResult = ref<SyncResult | null>(null)
 const syncingId = ref('')
+const testingId = ref('')
 
 /** 从分页结果中提取标签选项（消除重复 fetch 全量渠道的 N+1） */
 function extractTagOptionsFromProviders(list: Provider[]) {
@@ -341,6 +352,24 @@ function handleFilterChange() {
   applyFilter()
 }
 
+
+/** 测试渠道连通性（与定时健康检查同源探针） */
+async function handleTest(row: Provider) {
+  testingId.value = row.id
+  try {
+    const result = await testProvider(row.id, false)
+    if (result.success) {
+      const scope = result.message ? `（${result.message}）` : ''
+      ElMessage.success(`连通成功 ${result.response_time}ms${scope}`)
+    } else {
+      ElMessage.error(result.error || result.message || '连通失败')
+    }
+  } catch (e: any) {
+    ElMessage.error(resolveErrorMessage(e) || '测试失败')
+  } finally {
+    testingId.value = ''
+  }
+}
 
 /** 同步模型 */
 async function handleSync(row: Provider) {

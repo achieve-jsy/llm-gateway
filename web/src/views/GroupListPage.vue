@@ -33,10 +33,17 @@
     <template v-else>
       <div class="group-table-wrap"><el-table :data="groups" border stripe>
         <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip />
+        <el-table-column label="类型" width="120" align="center">
+          <template #default="{ row }">
+            <el-tag :type="modelTypeTagType((row as any).model_type)" size="small">
+              {{ modelTypeLabel((row as any).model_type) }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="策略" width="120" align="center">
           <template #default="{ row }">
             <template v-if="(row as any).model_type === 'video'">
-              <el-tag type="warning" size="small">Video</el-tag>
+              <span style="color: var(--el-text-color-placeholder)">—</span>
             </template>
             <el-tag v-else :type="strategyTagType(row.strategy)" size="small">
               {{ strategyLabel(row.strategy) }}
@@ -246,6 +253,34 @@ function strategyTagType(strategy: Strategy): '' | 'success' | 'warning' | 'prim
   if (strategy === 'weighted') return 'warning'
   if (strategy === 'auto') return 'primary'
   return ''
+}
+
+const MODEL_TYPE_LABEL: Record<string, string> = {
+  chat: 'Chat',
+  embedding: 'Embedding',
+  embedding_vl: 'Embedding VL',
+  rerank: 'Rerank',
+  video: 'Video',
+}
+
+function modelTypeLabel(t?: string): string {
+  if (!t) return 'Chat'
+  return MODEL_TYPE_LABEL[t] || t
+}
+
+function modelTypeTagType(t?: string): '' | 'success' | 'warning' | 'info' | 'danger' | 'primary' {
+  switch (t) {
+    case 'embedding':
+    case 'embedding_vl':
+      return 'success'
+    case 'rerank':
+      return 'warning'
+    case 'video':
+      return 'danger'
+    case 'chat':
+    default:
+      return 'info'
+  }
 }
 
 function formatTokens(n: number): string {

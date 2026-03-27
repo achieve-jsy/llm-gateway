@@ -58,6 +58,7 @@ func (s *GroupService) GetFailoverDefaults() FailoverDefaults {
 type CreateGroupRequest struct {
 	Name                    string `json:"name" binding:"required,max=64"`
 	Description             string `json:"description"`
+	ModelType               string `json:"model_type" binding:"omitempty,oneof=chat embedding embedding_vl rerank video"`
 	Strategy                string `json:"strategy" binding:"required,oneof=round_robin priority weighted auto"`
 	MaxSwitches             *int   `json:"max_switches"`
 	SameModelRetries        *int   `json:"same_model_retries"`
@@ -68,6 +69,7 @@ type CreateGroupRequest struct {
 type UpdateGroupRequest struct {
 	Name                    *string `json:"name"`
 	Description             *string `json:"description"`
+	ModelType               *string `json:"model_type" binding:"omitempty,oneof=chat embedding embedding_vl rerank video"`
 	Strategy                *string `json:"strategy" binding:"omitempty,oneof=round_robin priority weighted auto"`
 	Enabled                 *bool   `json:"enabled"`
 	MaxSwitches             *int    `json:"max_switches"`
@@ -98,10 +100,21 @@ func (s *GroupService) Create(req CreateGroupRequest) (*model.Group, error) {
 		return nil, ErrGroupNameExists
 	}
 
+	modelType := strings.TrimSpace(req.ModelType)
+	if modelType == "" {
+		modelType = "chat"
+	}
+	// Video 组固定单渠道路由，策略强制 round_robin（前端也会隐藏策略配置）
+	strategy := req.Strategy
+	if modelType == "video" {
+		strategy = "round_robin"
+	}
+
 	group := &model.Group{
 		Name:                    req.Name,
 		Description:             req.Description,
-		Strategy:                req.Strategy,
+		ModelType:               modelType,
+		Strategy:                strategy,
 		Enabled:                 true,
 		MaxSwitches:             s.failoverDefaults.MaxSwitches,
 		SameModelRetries:        s.failoverDefaults.SameModelRetries,
@@ -164,7 +177,18 @@ func (s *GroupService) Update(id uint, req UpdateGroupRequest) (*model.Group, er
 		group.Description = *req.Description
 	}
 
-	if req.Strategy != nil {
+	if req.ModelType != nil {
+		mt := strings.TrimSpace(*req.ModelType)
+		if mt == "" {
+			mt = "chat"
+		}
+		group.ModelType = mt
+		if mt == "video" {
+			group.Strategy = "round_robin"
+		}
+	}
+
+	if req.Strategy != nil && group.ModelType != "video" {
 		group.Strategy = *req.Strategy
 	}
 

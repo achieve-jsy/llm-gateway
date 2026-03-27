@@ -162,14 +162,34 @@ func (h *ModelCheckHandler) checkModel(ctx context.Context, m *model.Model) *Mod
 		return cr
 	}
 
-	// Bedrock 等非 OpenAI 兼容的 provider 走健康检测服务的专用路径
+	// 非 OpenAI 兼容：按 definition_id 分发（禁止 seedance-relay 走 Bedrock Converse）
 	if cpservice.IsNonOpenAICompatible(provider.DefinitionID) {
-		success, responseTime, errMsg := cpservice.DoBedrockModelCheckPublic(provider, credJSON, m)
+		var success bool
+		var responseTime int
+		var errMsg string
+		switch provider.DefinitionID {
+		case "bedrock":
+			success, responseTime, errMsg = cpservice.DoBedrockModelCheckPublic(provider, credJSON, m)
+		case "seedance-relay":
+			apiKey := cpservice.ExtractAPIKey(credJSON)
+			res := cpservice.ProbeSeedanceRelayConnectivity(ctx, provider.Endpoint, apiKey)
+			success, responseTime, errMsg = res.Success, res.ResponseTime, res.Message
+		case "seedance-volcengine":
+			ak, sk, region := cpservice.ParseSeedanceVolcCredentials(credJSON)
+			if ak == "" || sk == "" {
+				success, responseTime, errMsg = false, 0, "seedance-volcengine: missing access_key/secret_key"
+			} else {
+				res := cpservice.ProbeSeedanceVolcengineConnectivity(ctx, provider.Endpoint, ak, sk, region)
+				success, responseTime, errMsg = res.Success, res.ResponseTime, res.Message
+			}
+		default:
+			success, responseTime, errMsg = true, 0, "skipped: unsupported provider type for auto-check"
+		}
 		cr.ResponseTime = responseTime
 		if success {
 			cr.Success = true
 			h.modelRepo.ResetModelFailures(m.ID)
-			h.modelRepo.UpdateModelCheckResult(m.ID, responseTime, "")
+			h.modelRepo.UpdateModelCheckResult(m.ID, responseTime, errMsg)
 			if shouldAutoReenableModel(m, h.getModelFailureThreshold()) {
 				enabled := true
 				h.modelRepo.UpdateEnabled(m.ID, &enabled)

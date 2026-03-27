@@ -156,6 +156,16 @@ func (r *ProviderRepo) ResetFailures(id uuid.UUID) error {
 func (r *ProviderRepo) AutoDisable(id uuid.UUID) error {
 	return r.db.Model(&model.Provider{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"enabled": false,
-		"status":  3,
+		"status":  model.ProviderStatusAutoDisabled,
+	}).Error
+}
+
+// AutoEnable 自动恢复渠道（健康检测成功后）：enabled=true、status=1、清零失败计数
+func (r *ProviderRepo) AutoEnable(id uuid.UUID) error {
+	return r.db.Model(&model.Provider{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"enabled":               true,
+		"status":                model.ProviderStatusEnabled,
+		"consecutive_failures":  0,
+		"last_check_error":      "",
 	}).Error
 }

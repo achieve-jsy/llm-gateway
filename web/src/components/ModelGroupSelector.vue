@@ -104,6 +104,8 @@ const props = defineProps<{
   visible: boolean
   strategy: Strategy
   existingModelIds: string[]
+  /** 按模型组类型筛选可选模型（chat/embedding/…） */
+  modelType?: string
 }>()
 
 const emit = defineEmits<{
@@ -164,6 +166,13 @@ watch(
   }
 )
 
+watch(
+  () => props.modelType,
+  () => {
+    if (props.visible) resetAndLoad()
+  },
+)
+
 function resetAndLoad() {
   allModels.value = []
   currentPage.value = 1
@@ -184,7 +193,8 @@ async function loadMoreModels() {
   try {
     const res = await groupsApi.listAllModels({
       page: currentPage.value,
-      page_size: pageSize
+      page_size: pageSize,
+      model_type: props.modelType || undefined,
     })
     const newModels = res.data.data || []
 

@@ -20,6 +20,8 @@ type Group struct {
 	DeletedAt               gorm.DeletedAt `gorm:"index" json:"-"`
 	Name                    string         `gorm:"type:varchar(64);uniqueIndex:uniq_model_groups_name,where:deleted_at IS NULL;not null" json:"name"`
 	Description             string         `gorm:"type:text" json:"description"`
+	// ModelType 组类型：chat / embedding / embedding_vl / rerank / video（与 models.model_type 对齐）
+	ModelType               string         `gorm:"type:varchar(50);not null;default:chat;index" json:"model_type"`
 	Strategy                string         `gorm:"type:varchar(32);not null;default:round_robin;check:strategy IN ('round_robin','priority','weighted','auto')" json:"strategy"`
 	Enabled                 bool           `gorm:"not null;default:true;index:idx_model_groups_enabled,where:enabled = TRUE AND deleted_at IS NULL" json:"enabled"`
 	MaxSwitches             int            `gorm:"not null;default:2" json:"max_switches"`

@@ -34,8 +34,14 @@
       <el-form-item label="类型" prop="model_type">
         <el-select v-model="formData.model_type" placeholder="请选择模型组类型" @change="handleTypeChange">
           <el-option label="Chat（对话）" value="chat" />
+          <el-option label="Embedding（向量）" value="embedding" />
+          <el-option label="Embedding VL（多模态向量）" value="embedding_vl" />
+          <el-option label="Rerank（重排序）" value="rerank" />
           <el-option label="Video（视频生成）" value="video" />
         </el-select>
+        <div class="form-item-tip" style="margin-left:0;margin-top:4px;display:block">
+          关联模型将按此类型筛选；Video 仅支持单模型且无负载策略
+        </div>
       </el-form-item>
 
       <template v-if="formData.model_type !== 'video'">
@@ -182,6 +188,7 @@
     <ModelGroupSelector
       v-model:visible="selectorVisible"
       :strategy="formData.strategy"
+      :model-type="formData.model_type"
       :existing-model-ids="modelList.map(m => m.model_id)"
       @close="selectorVisible = false"
       @confirm="handleSelectorConfirm"
@@ -248,12 +255,15 @@ const formData = ref<FormState>({
 const modelList = ref<ModelItem[]>([])
 
 const originalStrategy = ref<Strategy>('round_robin')
+/** 切换类型确认用：取消时回退 */
+const prevModelType = ref('chat')
 
 const rules: FormRules = {
   name: [
     { required: true, message: '请输入模型组名称', trigger: 'blur' },
     { max: 64, message: '名称不能超过 64 个字符', trigger: 'blur' },
   ],
+  model_type: [{ required: true, message: '请选择模型组类型', trigger: 'change' }],
   strategy: [{ required: true, message: '请选择负载策略', trigger: 'change' }],
 }
 
@@ -261,16 +271,18 @@ watch(
   () => props.group,
   async (val) => {
     if (val) {
+      const mt = (val as any).model_type || 'chat'
       formData.value = {
         name: val.name,
         description: val.description || '',
-        model_type: (val as any).model_type || 'chat',
+        model_type: mt,
         strategy: val.strategy,
         max_switches: val.max_switches ?? 2,
         same_model_retries: val.same_model_retries ?? 1,
         failover_cooldown_seconds: val.failover_cooldown_seconds ?? 60,
         timeout_seconds: val.timeout_seconds ?? 0,
       }
+      prevModelType.value = mt
       originalStrategy.value = val.strategy
       await loadGroupModels(val.id)
     } else {
@@ -284,6 +296,7 @@ watch(
         failover_cooldown_seconds: globalDefaults.value?.failover_cooldown_seconds ?? 60,
         timeout_seconds: 0,
       }
+      prevModelType.value = 'chat'
       originalStrategy.value = 'round_robin'
       modelList.value = []
     }
@@ -330,14 +343,29 @@ async function loadGroupModels(groupId: number) {
 }
 
 function handleTypeChange(val: string) {
-  if (val === 'video') {
-    // Reset strategy to round_robin and clear model list for video type
-    formData.value.strategy = 'round_robin'
-    originalStrategy.value = 'round_robin'
-    if (modelList.value.length > 1) {
-      modelList.value = modelList.value.slice(0, 1)
+  const applyType = (next: string) => {
+    prevModelType.value = next
+    if (next === 'video') {
+      formData.value.strategy = 'round_robin'
+      originalStrategy.value = 'round_robin'
     }
   }
+
+  if (modelList.value.length === 0) {
+    applyType(val)
+    return
+  }
+
+  ElMessageBox.confirm(
+    '切换模型组类型后，已关联的模型将被清空（需按新类型重新选择），确定切换吗？',
+    '切换类型确认',
+    { confirmButtonText: '确定切换', cancelButtonText: '取消', type: 'warning' },
+  ).then(() => {
+    modelList.value = []
+    applyType(val)
+  }).catch(() => {
+    formData.value.model_type = prevModelType.value
+  })
 }
 
 function handleStrategyChange() {

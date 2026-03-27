@@ -113,8 +113,11 @@ func main() {
 	internalToken := cfg.Provider.InternalToken
 
 	// ProviderLoader bridges control-plane entries → GoModel Router.
-	providerLoader := loader.NewProviderLoader(factory, func(r *providers.Router) {
-		state.MarkLoadSuccess("reload", r.ModelCount(), 0)
+	var reloadSeedance func(entries []gatewaymodel.ProviderEntry)
+	providerLoader := loader.NewProviderLoader(factory, func(_ *providers.Router, entries []gatewaymodel.ProviderEntry) {
+		if reloadSeedance != nil {
+			reloadSeedance(entries)
+		}
 	})
 
 	// Load providers: try Redis snapshot first, then control-plane HTTP.
@@ -142,7 +145,12 @@ func main() {
 		return nil, fmt.Errorf("no config source available")
 	}
 
-	subscriber := infra.NewSubscriber(rdb, providerLoader.HandleChangeEvent(fetchEntries))
+	subscriber := infra.NewSubscriber(rdb, func(ev infra.ChangeEvent) {
+		providerLoader.HandleChangeEvent(fetchEntries)(ev)
+		if r := providerLoader.Router(); r != nil {
+			state.MarkLoadSuccess("reload", r.ModelCount(), ev.SnapshotVersion)
+		}
+	})
 	subscriber.AddCallback(keyCache.HandleChangeEvent)
 
 	// 创建 binding client（热路径：模型组权限校验），在 main 层管理生命周期
@@ -260,7 +268,12 @@ func main() {
 
 	// Initialize router (inject dependencies). We always use the router obtained
 	// from the ProviderLoader – which is atomically swapped on config changes.
-	r := server.Setup(providerLoader.Router, icache, state, authClient, controlPlaneURL, internalToken, sch, nameCache, collector, traceWriter, bindClient, rdb)
+	// Seedance 视频/素材适配器同样挂到 config:change，改渠道后无需重启。
+	r := server.Setup(providerLoader.Router, icache, state, authClient, controlPlaneURL, internalToken, sch, nameCache, collector, traceWriter, bindClient, rdb,
+		func(reload func(entries []gatewaymodel.ProviderEntry)) {
+			reloadSeedance = reload
+		},
+	)
 
 	// Register auth routes
 	r.GET("/.well-known/jwks.json", authJWKSHandler.GetJWKS)

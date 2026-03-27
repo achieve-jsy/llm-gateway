@@ -35,7 +35,11 @@ type CheckResult struct {
 	Success      bool      `json:"success"`
 	ResponseTime int       `json:"response_time"` // 毫秒
 	Error        string    `json:"error,omitempty"`
-	AutoDisabled bool      `json:"auto_disabled"` // 本次是否触发了自动禁用
+	// Message 成功时的语义说明（如景汐：仅连通+鉴权，非视频创建）
+	Message      string `json:"message,omitempty"`
+	AutoDisabled bool   `json:"auto_disabled"` // 本次是否触发了自动禁用
+	// AutoReenabled 本次是否因检测成功自动恢复（此前 status=3）
+	AutoReenabled bool `json:"auto_reenabled,omitempty"`
 }
 
 // CheckAllResult 批量检测汇总结果
@@ -370,8 +374,8 @@ func (s *HealthCheckService) runBackgroundModelCheck() {
 				success++
 				mu.Unlock()
 				s.modelRepo.ResetModelFailures(mod.ID)
-				s.modelRepo.UpdateModelCheckResult(mod.ID, elapsed, "")
-				s.recordLog("model", mod.ID, mod.Name, mod.Provider.ID, mod.Provider.Name, true, elapsed, "")
+				s.modelRepo.UpdateModelCheckResult(mod.ID, elapsed, errMsg)
+				s.recordLog("model", mod.ID, mod.Name, mod.Provider.ID, mod.Provider.Name, true, elapsed, errMsg)
 
 				// 恢复逻辑：自动禁用的模型检测成功时处理恢复条件
 				if mod.Status == model.ModelStatusAutoDisabled && recoveryEnabled {
@@ -485,9 +489,25 @@ func (s *HealthCheckService) doModelForwardCheck(m *model.Model) (bool, int, str
 		return false, 0, "解密凭证失败"
 	}
 
-	// Bedrock 模型用 AWS SDK Converse API 检测（而非 /chat/completions）
+	// 非 OpenAI 兼容：按 definition_id 分发（禁止一律走 Bedrock）
 	if isNonOpenAICompatible(provider.DefinitionID) {
-		return s.doBedrockModelCheck(provider, credJSON, m)
+		switch provider.DefinitionID {
+		case "bedrock":
+			return s.doBedrockModelCheck(provider, credJSON, m)
+		case "seedance-relay":
+			apiKey := extractAPIKey(credJSON)
+			res := ProbeSeedanceRelayConnectivity(context.Background(), provider.Endpoint, apiKey)
+			return res.Success, res.ResponseTime, res.Message
+		case "seedance-volcengine":
+			ak, sk, region := parseSeedanceVolcCredentials(credJSON)
+			if ak == "" || sk == "" {
+				return false, 0, "seedance-volcengine: missing access_key/secret_key"
+			}
+			res := ProbeSeedanceVolcengineConnectivity(context.Background(), provider.Endpoint, ak, sk, region)
+			return res.Success, res.ResponseTime, res.Message
+		default:
+			return true, 0, "skipped: unsupported provider type for auto-check"
+		}
 	}
 
 	apiKey := extractAPIKey(credJSON)
@@ -624,7 +644,8 @@ func (s *HealthCheckService) CheckAll(ctx context.Context) *CheckAllResult {
 
 	for i := range providers {
 		p := &providers[i]
-		if !p.Enabled {
+		// 启用渠道正常检测；自动禁用 (status=3) 的渠道继续检测以便自动恢复；手动禁用跳过
+		if !p.Enabled && p.Status != model.ProviderStatusAutoDisabled {
 			continue
 		}
 		mu.Lock()
@@ -695,8 +716,7 @@ func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provi
 		if checkMode == "connectivity" {
 			cr.Success = true
 			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, elapsed, "")
-			s.providerRepo.UpdateResponseTime(provider.ID, elapsed)
-			s.providerRepo.ResetFailures(provider.ID)
+			s.finalizeProviderSuccess(provider, cr)
 			return cr
 		}
 	}
@@ -714,8 +734,7 @@ func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provi
 			if errMsg == "no model to test, skipped" {
 				cr.Success = true
 				s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, errMsg)
-				s.providerRepo.UpdateResponseTime(provider.ID, cr.ResponseTime)
-				s.providerRepo.ResetFailures(provider.ID)
+				s.finalizeProviderSuccess(provider, cr)
 				return cr
 			}
 			cr.Error = errMsg
@@ -728,15 +747,16 @@ func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provi
 	// 全部通过
 	cr.Success = true
 	s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, "")
-	s.providerRepo.UpdateResponseTime(provider.ID, cr.ResponseTime)
-	s.providerRepo.ResetFailures(provider.ID)
+	s.finalizeProviderSuccess(provider, cr)
 	return cr
 }
 
-// isNonOpenAICompatible 返回该 definition_id 是否为非 OpenAI 兼容协议
+// isNonOpenAICompatible 返回该 definition_id 是否为非 OpenAI 兼容协议。
+// 注意：仅为「不要走 GET /models / chat 通用路径」的标记；调用方必须再按 definition_id 分发，
+// 禁止把 seedance-relay 等误送进 Bedrock SDK。
 func isNonOpenAICompatible(definitionID string) bool {
 	switch definitionID {
-	case "bedrock":
+	case "bedrock", "seedance-relay", "seedance-volcengine":
 		return true
 	}
 	return false
@@ -748,11 +768,152 @@ func (s *HealthCheckService) checkNonOpenAIProvider(ctx context.Context, provide
 	switch provider.DefinitionID {
 	case "bedrock":
 		return s.checkBedrockProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
+	case "seedance-relay":
+		return s.checkSeedanceRelayProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
+	case "seedance-volcengine":
+		return s.checkSeedanceVolcengineProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
 	default:
 		cr.Success = true // 未知类型跳过，不计失败
 		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, 0, "skipped: unsupported provider type for auto-check")
 		return cr
 	}
+}
+
+// checkSeedanceRelayProvider 景汐中转健康检测（与管理面「测试连接」共用 ProbeSeedanceRelayConnectivity）。
+//
+// 连通性：GET .../tasks/__gateway_health_probe__ —— 仅验证网络可达 + Bearer 鉴权（+ 非 5xx）。
+// 转发：本期 skip（不创建视频任务，不消耗生成额度）。
+func (s *HealthCheckService) checkSeedanceRelayProvider(ctx context.Context, provider *model.Provider, credJSON string, checkMode string, maxFailures int, cr *CheckResult) *CheckResult {
+	apiKey := extractAPIKey(credJSON)
+
+	if checkMode == "connectivity" || checkMode == "both" {
+		res := ProbeSeedanceRelayConnectivity(ctx, provider.Endpoint, apiKey)
+		cr.ResponseTime = res.ResponseTime
+		if !res.Success {
+			cr.Error = res.Message
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
+			s.handleProviderFailure(provider.ID, maxFailures, cr)
+			return cr
+		}
+		if checkMode == "connectivity" {
+			cr.Success = true
+			cr.Message = res.Message
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, res.ResponseTime, res.Message)
+			s.finalizeProviderSuccess(provider, cr)
+			return cr
+		}
+		// both：连通已通过，继续转发段（skip）
+		cr.Message = res.Message
+		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, res.ResponseTime, res.Message)
+	}
+
+	if checkMode == "model_forward" || checkMode == "both" {
+		skipMsg := "skipped: seedance-relay probe is connectivity+auth only (no video create)"
+		if checkMode == "model_forward" {
+			// 仅转发模式：仍跑一次连通+鉴权探针（与「检测=探测」一致），不做视频创建
+			res := ProbeSeedanceRelayConnectivity(ctx, provider.Endpoint, apiKey)
+			cr.ResponseTime = res.ResponseTime
+			if !res.Success {
+				cr.Error = res.Message
+				s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
+				s.handleProviderFailure(provider.ID, maxFailures, cr)
+				return cr
+			}
+			cr.Success = true
+			cr.Message = res.Message + "; " + skipMsg
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, res.ResponseTime, cr.Message)
+			s.finalizeProviderSuccess(provider, cr)
+			return cr
+		}
+		// both：连通已成功，转发 skip 记成功
+		cr.Success = true
+		if cr.Message != "" {
+			cr.Message = cr.Message + "; " + skipMsg
+		} else {
+			cr.Message = skipMsg
+		}
+		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, cr.Message)
+		s.finalizeProviderSuccess(provider, cr)
+		return cr
+	}
+
+	cr.Success = true
+	if cr.Message == "" {
+		cr.Message = "ok: connectivity+auth only"
+	}
+	s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, cr.Message)
+	s.finalizeProviderSuccess(provider, cr)
+	return cr
+}
+
+// checkSeedanceVolcengineProvider 官方 Seedance 健康检测（HMAC 连通+鉴权，不创建视频）。
+func (s *HealthCheckService) checkSeedanceVolcengineProvider(ctx context.Context, provider *model.Provider, credJSON string, checkMode string, maxFailures int, cr *CheckResult) *CheckResult {
+	ak, sk, region := parseSeedanceVolcCredentials(credJSON)
+	if ak == "" || sk == "" {
+		cr.Error = "seedance-volcengine: missing access_key/secret_key"
+		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, 0, cr.Error)
+		s.handleProviderFailure(provider.ID, maxFailures, cr)
+		return cr
+	}
+
+	runProbe := func() SeedanceRelayProbeResult {
+		return ProbeSeedanceVolcengineConnectivity(ctx, provider.Endpoint, ak, sk, region)
+	}
+	skipMsg := "skipped: seedance-volcengine probe is connectivity+auth only (no video create)"
+
+	if checkMode == "connectivity" || checkMode == "both" {
+		res := runProbe()
+		cr.ResponseTime = res.ResponseTime
+		if !res.Success {
+			cr.Error = res.Message
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
+			s.handleProviderFailure(provider.ID, maxFailures, cr)
+			return cr
+		}
+		cr.Message = res.Message
+		if checkMode == "connectivity" {
+			cr.Success = true
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, res.ResponseTime, res.Message)
+			s.finalizeProviderSuccess(provider, cr)
+			return cr
+		}
+		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, res.ResponseTime, res.Message)
+	}
+
+	if checkMode == "model_forward" || checkMode == "both" {
+		if checkMode == "model_forward" {
+			res := runProbe()
+			cr.ResponseTime = res.ResponseTime
+			if !res.Success {
+				cr.Error = res.Message
+				s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
+				s.handleProviderFailure(provider.ID, maxFailures, cr)
+				return cr
+			}
+			cr.Success = true
+			cr.Message = res.Message + "; " + skipMsg
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, res.ResponseTime, cr.Message)
+			s.finalizeProviderSuccess(provider, cr)
+			return cr
+		}
+		cr.Success = true
+		if cr.Message != "" {
+			cr.Message = cr.Message + "; " + skipMsg
+		} else {
+			cr.Message = skipMsg
+		}
+		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, cr.Message)
+		s.finalizeProviderSuccess(provider, cr)
+		return cr
+	}
+
+	cr.Success = true
+	if cr.Message == "" {
+		cr.Message = "ok: connectivity+auth only"
+	}
+	s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, cr.Message)
+	s.finalizeProviderSuccess(provider, cr)
+	return cr
 }
 
 // checkBedrockProvider 使用 AWS SDK 对 Bedrock 做健康检测。
@@ -833,8 +994,8 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 		}
 
 		_ = out // model count available at out.ModelSummaries if needed
-		s.providerRepo.UpdateResponseTime(provider.ID, elapsed)
-		s.providerRepo.ResetFailures(provider.ID)
+		cr.ResponseTime = elapsed
+		s.finalizeProviderSuccess(provider, cr)
 
 		if checkMode == "connectivity" {
 			cr.Success = true
@@ -893,8 +1054,7 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 
 	cr.Success = true
 	s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, "")
-	s.providerRepo.UpdateResponseTime(provider.ID, cr.ResponseTime)
-	s.providerRepo.ResetFailures(provider.ID)
+	s.finalizeProviderSuccess(provider, cr)
 	return cr
 }
 
@@ -1009,6 +1169,29 @@ func (s *HealthCheckService) CheckOneByID(ctx context.Context, id uuid.UUID) (*C
 	}
 
 	return s.CheckOne(ctx, provider, maxFailures, checkMode), nil
+}
+
+// finalizeProviderSuccess 渠道检测成功收尾：更新耗时、清失败计数；
+// 若此前被自动禁用（status=3）则立即恢复并刷新 snapshot（连通探针较稳，一次成功即可恢复）。
+func (s *HealthCheckService) finalizeProviderSuccess(provider *model.Provider, cr *CheckResult) {
+	s.providerRepo.UpdateResponseTime(provider.ID, cr.ResponseTime)
+	s.providerRepo.ResetFailures(provider.ID)
+	if provider.Status != model.ProviderStatusAutoDisabled {
+		return
+	}
+	if err := s.providerRepo.AutoEnable(provider.ID); err != nil {
+		slog.Error("provider auto-recovery: failed to re-enable",
+			"provider_id", provider.ID, "error", err)
+		return
+	}
+	cr.AutoReenabled = true
+	provider.Enabled = true
+	provider.Status = model.ProviderStatusEnabled
+	slog.Warn("provider auto-recovery: re-enabled after successful health check",
+		"provider_id", provider.ID, "provider_name", provider.Name)
+	if s.snapshotter != nil {
+		go s.snapshotter.RefreshAvailableSnapshot(context.Background())
+	}
 }
 
 // handleProviderFailure 处理渠道失败（递增计数，可能自动禁用）

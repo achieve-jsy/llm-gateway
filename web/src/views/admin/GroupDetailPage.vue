@@ -11,8 +11,8 @@
       </div>
       <div class="header-meta" v-if="group">
         <el-tag :type="group.enabled ? 'success' : 'info'" size="small">{{ group.enabled ? '启用' : '禁用' }}</el-tag>
-        <el-tag v-if="group.model_type === 'video'" type="warning" size="small">Video</el-tag>
-        <el-tag v-else type="info" size="small">{{ strategyLabel(group.strategy) }}</el-tag>
+        <el-tag :type="modelTypeTagType(group.model_type)" size="small">{{ modelTypeLabel(group.model_type) }}</el-tag>
+        <el-tag v-if="group.model_type !== 'video'" type="info" size="small">{{ strategyLabel(group.strategy) }}</el-tag>
       </div>
     </div>
 
@@ -27,6 +27,7 @@
       <el-tab-pane label="基本信息" name="info">
         <el-descriptions :column="2" border size="small" class="info-desc">
           <el-descriptions-item label="名称">{{ group.name }}</el-descriptions-item>
+          <el-descriptions-item label="类型">{{ modelTypeLabel(group.model_type) }}</el-descriptions-item>
           <el-descriptions-item label="策略">{{ group?.model_type === 'video' ? '—' : strategyLabel(group.strategy) }}</el-descriptions-item>
           <el-descriptions-item label="模型数量">{{ group.model_count }}</el-descriptions-item>
           <el-descriptions-item label="状态">{{ group.enabled ? '启用' : '禁用' }}</el-descriptions-item>
@@ -306,6 +307,32 @@ function onQuotaSaved() {
 function strategyLabel(s: string): string {
   const map: Record<string, string> = { round_robin: '轮询', priority: '优先级', weighted: '加权', auto: '自动' }
   return map[s] || s
+}
+
+function modelTypeLabel(t?: string): string {
+  const map: Record<string, string> = {
+    chat: 'Chat',
+    embedding: 'Embedding',
+    embedding_vl: 'Embedding VL',
+    rerank: 'Rerank',
+    video: 'Video',
+  }
+  if (!t) return 'Chat'
+  return map[t] || t
+}
+
+function modelTypeTagType(t?: string): '' | 'success' | 'warning' | 'info' | 'danger' {
+  switch (t) {
+    case 'embedding':
+    case 'embedding_vl':
+      return 'success'
+    case 'rerank':
+      return 'warning'
+    case 'video':
+      return 'danger'
+    default:
+      return 'info'
+  }
 }
 
 async function loadCapabilities() {

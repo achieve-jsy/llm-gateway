@@ -82,6 +82,8 @@ export interface TestProviderResult {
   status_code?: number
   model_count?: number
   error?: string
+  /** 成功时的语义说明（如景汐：仅连通+鉴权，非视频创建） */
+  message?: string
   // 转发测试结果
   chat_success?: boolean
   chat_response_time?: number
@@ -107,7 +109,11 @@ export interface CheckResult {
   success: boolean
   response_time: number
   error?: string
+  /** 成功时的语义说明（如景汐连通+鉴权） */
+  message?: string
   auto_disabled: boolean
+  /** 本次是否因检测成功自动恢复（此前被健康检查自动禁用） */
+  auto_reenabled?: boolean
 }
 
 /** 批量检测汇总结果 */

@@ -35,6 +35,10 @@ func ProbeModelForward(ctx context.Context, endpoint, modelName, apiKey, modelTy
 	case lower == "audio_transcription" || lower == "audio_speech" || lower == "audio":
 		return false, true, 0, "audio model: skipped"
 
+	case lower == "video" || lower == "video_generation":
+		// 视频模型不走 /chat/completions；seedance-relay 请用渠道级 ProbeSeedanceRelayConnectivity
+		return false, true, 0, "video model: skipped (use seedance-relay connectivity+auth probe)"
+
 	default:
 		return probeChatCompletion(ctx, endpoint, modelName, apiKey)
 	}

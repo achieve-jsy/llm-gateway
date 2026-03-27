@@ -378,7 +378,7 @@ func TestProviderLoader_HandleChangeEvent_FetchError(t *testing.T) {
 func TestProviderLoader_OnReloadCallback(t *testing.T) {
 	// 测试目的：Build 成功后通过 HandleChangeEvent 触发时，onReload 回调应被调用
 	var reloadedRouter *providers.Router
-	onReload := func(router *providers.Router) {
+	onReload := func(router *providers.Router, _ []gatewaymodel.ProviderEntry) {
 		reloadedRouter = router
 	}
 

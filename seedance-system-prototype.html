@@ -276,7 +276,7 @@ tbody tr:hover td{background:var(--bg-hover)}
     <h1 class="pg-title">渠道管理</h1>
     <div class="pg-actions">
       <input class="input" placeholder="搜索名称..." style="width:140px">
-      <select class="input select" style="width:140px"><option>按类型筛选</option><option>OpenAI</option><option>Anthropic</option><option>Azure</option><option style="color:var(--color-video);font-weight:600">🎬 Seedance 中转</option><option style="color:var(--color-video);font-weight:600">🎬 Seedance 官方</option></select>
+      <select class="input select" style="width:140px"><option>按类型筛选</option><option>OpenAI</option><option>Anthropic</option><option>Azure</option><option style="color:var(--color-video);font-weight:600">🎬 景汐</option><option style="color:var(--color-video);font-weight:600">🎬 Seedance 官方</option></select>
       <button class="btn btn-primary" onclick="openDlg('dlgProvider')">+ 新建渠道</button>
     </div>
   </div>
@@ -287,7 +287,7 @@ tbody tr:hover td{background:var(--bg-hover)}
       <tr><td><strong>Anthropic 官方</strong></td><td><span class="tag tag-info">Anthropic</span></td><td class="mono" style="color:var(--text-secondary)">api.anthropic.com</td><td class="mono" style="color:var(--text-secondary)">sk-ant-...x9K</td><td><span class="tag tag-success">启用</span></td><td>20</td><td>3</td><td><button class="btn-text">编辑</button><button class="btn-text" onclick="alert('同步成功！已更新模型列表')">同步</button><button class="btn-text danger" onclick="if(confirm('确定删除该渠道？关联的模型也将被删除。')){alert('删除成功！')}">删除</button></td></tr>
       <tr><td><strong>Bedrock 官方</strong></td><td><span class="tag tag-info">Bedrock</span></td><td class="mono" style="color:var(--text-secondary)">bedrock-runtime.us-east-1.amazonaws.com</td><td class="mono" style="color:var(--text-secondary)">AKIA...QZ7X</td><td><span class="tag tag-success">启用</span></td><td>15</td><td>4</td><td><button class="btn-text">编辑</button><button class="btn-text" onclick="alert('同步成功！已更新模型列表')">同步</button><button class="btn-text danger" onclick="if(confirm('确定删除该渠道？关联的模型也将被删除。')){alert('删除成功！')}">删除</button></td></tr>
       <!-- Seedance 渠道 NEW -->
-      <tr class="hl"><td><strong>中转 A</strong></td><td><span class="tag tag-video">🎬 Seedance 中转</span></td><td class="mono" style="color:var(--text-secondary)">115.190.78.58:8000</td><td class="mono" style="color:var(--text-secondary)">Bearer ***</td><td><span class="tag tag-success">启用</span></td><td>5</td><td>2</td><td><button class="btn-text" onclick="openDlg('dlgProviderEdit')">编辑</button><button class="btn-text" onclick="alert('同步成功！已更新模型列表')">同步</button><button class="btn-text danger" onclick="if(confirm('确定删除该渠道？关联的模型也将被删除。')){alert('删除成功！')}">删除</button></td></tr>
+      <tr class="hl"><td><strong>景汐</strong></td><td><span class="tag tag-video">🎬 景汐</span></td><td class="mono" style="color:var(--text-secondary)">115.190.78.58:8000</td><td class="mono" style="color:var(--text-secondary)">Bearer ***</td><td><span class="tag tag-success">启用</span></td><td>5</td><td>2</td><td><button class="btn-text" onclick="openDlg('dlgProviderEdit')">编辑</button><button class="btn-text" onclick="alert('同步成功！已更新模型列表')">同步</button><button class="btn-text danger" onclick="if(confirm('确定删除该渠道？关联的模型也将被删除。')){alert('删除成功！')}">删除</button></td></tr>
       <tr style="display:none" class="empty-row"><td colspan="8" style="text-align:center;padding:40px;color:var(--text-placeholder)">暂无数据</td></tr>
       <tr class="hl"><td><strong>火山官方</strong></td><td><span class="tag tag-video">🎬 Seedance 官方</span></td><td class="mono" style="color:var(--text-secondary)">ark.cn-beijing.volces.com</td><td class="mono" style="color:var(--text-secondary)">AK/SK ***</td><td><span class="tag tag-warning">待配置</span></td><td>10</td><td>0</td><td><button class="btn-text">编辑</button><button class="btn-text" onclick="alert('同步成功！已更新模型列表')">同步</button><button class="btn-text danger" onclick="if(confirm('确定删除该渠道？关联的模型也将被删除。')){alert('删除成功！')}">删除</button></td></tr>
     </tbody>
@@ -528,7 +528,7 @@ tbody tr:hover td{background:var(--bg-hover)}
       <tbody>
         <tr><td><strong>OpenAI 官方</strong></td><td><span class="tag tag-info">OpenAI</span></td><td><span class="h-dot ok"></span>正常</td><td>99.8%</td><td class="mono">320ms</td><td class="mono">45</td></tr>
         <tr><td><strong>Anthropic 官方</strong></td><td><span class="tag tag-info">Anthropic</span></td><td><span class="h-dot ok"></span>正常</td><td>99.5%</td><td class="mono">280ms</td><td class="mono">23</td></tr>
-        <tr class="hl"><td><strong>中转 A</strong><div style="font-size:11px;color:var(--text-placeholder)">115.190.78.58:8000</div></td><td><span class="tag tag-video">🎬 Seedance 中转</span></td><td><span class="h-dot ok"></span>正常</td><td>98.2%</td><td class="mono">1.8s</td><td class="mono">12</td></tr>
+        <tr class="hl"><td><strong>景汐</strong><div style="font-size:11px;color:var(--text-placeholder)">115.190.78.58:8000</div></td><td><span class="tag tag-video">🎬 景汐</span></td><td><span class="h-dot ok"></span>正常</td><td>98.2%</td><td class="mono">1.8s</td><td class="mono">12</td></tr>
         <tr class="hl"><td><strong>火山官方</strong><div style="font-size:11px;color:var(--text-placeholder)">ark.cn-beijing.volces.com</div></td><td><span class="tag tag-video">🎬 Seedance 官方</span></td><td><span class="h-dot warn"></span>延迟高</td><td>97.1%</td><td class="mono">3.2s</td><td class="mono">8</td></tr>
       </tbody>
     </table></div>
@@ -580,11 +580,11 @@ tbody tr:hover td{background:var(--bg-hover)}
     </div>
     <div class="d-pane active" id="np-basic">
       <div class="fi"><label class="fl" for="np-name"><span class="req">*</span>名称</label><div class="fc"><input id="np-name" class="input" placeholder="请输入渠道名称（全局唯一）" value="中转 A"></div></div>
-      <div class="fi"><label class="fl" for="np-type"><span class="req">*</span>渠道类型</label><div class="fc"><select id="np-type" class="input select" onchange="toggleSeedanceFields(this)"><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="azure">Azure OpenAI</option><option value="bedrock">Bedrock</option><option value="gemini">Gemini</option><option value="separator">—</option><option value="seedance-relay" selected style="color:var(--color-video);font-weight:700">🎬 Seedance 中转</option><option value="seedance-volcengine" style="color:var(--color-video);font-weight:700">🎬 Seedance 官方</option></select><div class="hint">Seedance 中转：第三方代理，Bearer Token 认证；Seedance 官方：直连火山方舟，AK/SK 签名</div></div></div>
+      <div class="fi"><label class="fl" for="np-type"><span class="req">*</span>渠道类型</label><div class="fc"><select id="np-type" class="input select" onchange="toggleSeedanceFields(this)"><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="azure">Azure OpenAI</option><option value="bedrock">Bedrock</option><option value="gemini">Gemini</option><option value="separator">—</option><option value="seedance-relay" selected style="color:var(--color-video);font-weight:700">🎬 景汐</option><option value="seedance-volcengine" style="color:var(--color-video);font-weight:700">🎬 Seedance 官方</option></select><div class="hint">景汐：Seedance 三方中转，Bearer Token 认证；Seedance 官方：直连火山方舟，AK/SK 签名</div></div></div>
       <div class="fi"><label class="fl" for="np-endpoint"><span class="req">*</span>Endpoint</label><div class="fc"><input id="np-endpoint" class="input mono" value="http://115.190.78.58:8000" placeholder="https://..."><div class="hint">上游服务地址，支持 HTTP 和 HTTPS</div></div></div>
     </div>
     <div class="d-pane" id="np-cred">
-      <div class="fi"><label class="fl">认证方式</label><div class="fc"><div class="radio-group"><label class="radio"><input type="radio" name="auth" checked>Bearer Token</label><label class="radio"><input type="radio" name="auth">X-API-Key</label><label class="radio"><input type="radio" name="auth">AK/SK 签名</label></div><div class="hint">Seedance 中转：Bearer Token 或 X-API-Key；Seedance 官方：AK/SK 签名</div></div></div>
+      <div class="fi"><label class="fl">认证方式</label><div class="fc"><div class="radio-group"><label class="radio"><input type="radio" name="auth" checked>Bearer Token</label><label class="radio"><input type="radio" name="auth">X-API-Key</label><label class="radio"><input type="radio" name="auth">AK/SK 签名</label></div><div class="hint">景汐：Bearer Token 或 X-API-Key；Seedance 官方：AK/SK 签名</div></div></div>
       <div class="fi bearer-field"><label class="fl"><span class="req">*</span>API Key</label><div class="fc"><input class="input" type="password" placeholder="请输入上游 API Key"></div></div>
       <div class="fi aksk-field" style="display:none">
         <label class="fl">Access Key</label>
@@ -624,7 +624,7 @@ tbody tr:hover td{background:var(--bg-hover)}
     </div>
     <div class="d-pane active" id="ep-basic">
       <div class="fi"><label class="fl"><span class="req">*</span>名称</label><div class="fc"><input class="input" value="中转 A"></div></div>
-      <div class="fi"><label class="fl"><span class="req">*</span>渠道类型</label><div class="fc"><select class="input select" disabled id="editProvType"><option value="seedance-relay" selected>🎬 Seedance 中转</option></select><div class="hint">渠道类型创建后不可修改</div></div></div>
+      <div class="fi"><label class="fl"><span class="req">*</span>渠道类型</label><div class="fc"><select class="input select" disabled id="editProvType"><option value="seedance-relay" selected>🎬 景汐</option></select><div class="hint">渠道类型创建后不可修改</div></div></div>
       <div class="fi"><label class="fl"><span class="req">*</span>Endpoint</label><div class="fc"><input class="input mono" value="http://115.190.78.58:8000"></div></div>
     </div>
     <div class="d-pane" id="ep-cred">

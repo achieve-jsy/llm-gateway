@@ -25,6 +25,7 @@ type GroupCheckResult struct {
 	Success      bool   `json:"success"`
 	ResponseTime int    `json:"response_time"`
 	Error        string `json:"error,omitempty"`
+	Message      string `json:"message,omitempty"` // 成功时的语义说明（如 video skip）
 }
 
 // GroupCheckAllResult 批量组检测汇总
@@ -94,8 +95,21 @@ func (s *GroupCheckService) getProbeKey(ctx context.Context) (string, error) {
 func (s *GroupCheckService) CheckOne(ctx context.Context, g *model.Group) *GroupCheckResult {
 	cr := &GroupCheckResult{GroupID: g.ID, GroupName: g.Name}
 
-	// 获取组内第一个模型的类型
-	modelType := s.getGroupModelType(g)
+	// 优先用组上声明的 model_type，否则取组内首个启用模型类型
+	modelType := strings.TrimSpace(g.ModelType)
+	if modelType == "" {
+		modelType = s.getGroupModelType(g)
+	}
+
+	// 视频组不走 /v1/chat/completions：无轻量「不建视频」的组级探针，跳过且不计失败。
+	// 景汐连通+鉴权请用渠道级 ProbeSeedanceRelayConnectivity。
+	if isVideoGroupModelType(modelType) {
+		cr.Success = true
+		skipMsg := "skipped: video group has no chat probe (use provider connectivity+auth; not video create)"
+		cr.Message = skipMsg
+		s.recordLog(g, true, 0, skipMsg)
+		return cr
+	}
 
 	apiKey, err := s.getProbeKey(ctx)
 	if err != nil {
@@ -116,6 +130,12 @@ func (s *GroupCheckService) CheckOne(ctx context.Context, g *model.Group) *Group
 	}
 
 	return cr
+}
+
+// isVideoGroupModelType 判断组类型是否为视频（不应打 chat/embeddings 探针）
+func isVideoGroupModelType(modelType string) bool {
+	lower := strings.ToLower(strings.TrimSpace(modelType))
+	return lower == "video" || lower == "video_generation"
 }
 
 // CheckAll 并发检测所有启用的模型组

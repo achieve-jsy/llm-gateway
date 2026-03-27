@@ -211,48 +211,51 @@
         </el-form-item>
       </template>
 
-      <el-form-item label="价格模式">
-        <el-radio-group v-model="formData.price_mode">
-          <el-radio value="catalog">跟随目录价格</el-radio>
-          <el-radio value="manual">手动指定</el-radio>
-        </el-radio-group>
-        <span v-if="formData.price_mode === 'catalog'" class="form-hint inline" style="margin-left:8px">
-          实时读取 Catalog 价格，无需手动维护
-        </span>
-      </el-form-item>
+      <!-- Video：按任务计费且单渠道固定路由，不展示 Token 价格 / 负载权重（对齐原型） -->
+      <template v-if="formData.model_type !== 'video'">
+        <el-form-item label="价格模式">
+          <el-radio-group v-model="formData.price_mode">
+            <el-radio value="catalog">跟随目录价格</el-radio>
+            <el-radio value="manual">手动指定</el-radio>
+          </el-radio-group>
+          <span v-if="formData.price_mode === 'catalog'" class="form-hint inline" style="margin-left:8px">
+            实时读取 Catalog 价格，无需手动维护
+          </span>
+        </el-form-item>
 
-      <el-form-item label="输入价格">
-        <el-input-number
-          v-model="formData.input_price"
-          :min="0"
-          :precision="6"
-          :step="0.1"
-          :disabled="formData.price_mode === 'catalog'"
-          class="metric-input"
-        />
-        <span class="form-hint inline">USD / 百万 tokens</span>
-      </el-form-item>
+        <el-form-item label="输入价格">
+          <el-input-number
+            v-model="formData.input_price"
+            :min="0"
+            :precision="6"
+            :step="0.1"
+            :disabled="formData.price_mode === 'catalog'"
+            class="metric-input"
+          />
+          <span class="form-hint inline">USD / 百万 tokens</span>
+        </el-form-item>
 
-      <el-form-item label="输出价格">
-        <el-input-number
-          v-model="formData.output_price"
-          :min="0"
-          :precision="6"
-          :step="0.1"
-          :disabled="formData.price_mode === 'catalog'"
-          class="metric-input"
-        />
-        <span class="form-hint inline">USD / 百万 tokens</span>
-      </el-form-item>
+        <el-form-item label="输出价格">
+          <el-input-number
+            v-model="formData.output_price"
+            :min="0"
+            :precision="6"
+            :step="0.1"
+            :disabled="formData.price_mode === 'catalog'"
+            class="metric-input"
+          />
+          <span class="form-hint inline">USD / 百万 tokens</span>
+        </el-form-item>
 
-      <el-form-item label="权重">
-        <el-input-number
-          v-model="formData.weight"
-          :min="0"
-          :max="9999"
-          class="metric-input"
-        />
-      </el-form-item>
+        <el-form-item label="权重">
+          <el-input-number
+            v-model="formData.weight"
+            :min="0"
+            :max="9999"
+            class="metric-input"
+          />
+        </el-form-item>
+      </template>
     </el-form>
 
     <template #footer>
@@ -760,20 +763,22 @@ async function handleSubmit() {
 
   submitting.value = true
   try {
+    const isVideo = formData.value.model_type === 'video'
     const payload: ModelPayload = {
       name: formData.value.name,
       provider_id: formData.value.provider_id,
       model_type: formData.value.model_type,
       upstream_model_id: formData.value.upstream_model_id || undefined,
       description: formData.value.description || undefined,
-      context_length: formData.value.context_length || undefined,
-      max_output_tokens: formData.value.max_output_tokens || undefined,
-      price_mode: formData.value.price_mode,
-      input_price: formData.value.price_mode === 'manual' ? (formData.value.input_price || undefined) : undefined,
-      output_price: formData.value.price_mode === 'manual' ? (formData.value.output_price || undefined) : undefined,
-      weight: formData.value.weight,
+      context_length: isVideo ? undefined : (formData.value.context_length || undefined),
+      max_output_tokens: isVideo ? undefined : (formData.value.max_output_tokens || undefined),
+      // Video 本期不计费、无负载权重；保留默认 weight=1 满足后端字段，不提交 Token 价
+      price_mode: isVideo ? 'manual' : formData.value.price_mode,
+      input_price: isVideo ? undefined : (formData.value.price_mode === 'manual' ? (formData.value.input_price || undefined) : undefined),
+      output_price: isVideo ? undefined : (formData.value.price_mode === 'manual' ? (formData.value.output_price || undefined) : undefined),
+      weight: isVideo ? 1 : formData.value.weight,
     }
-    if (formData.value.model_type === 'video') {
+    if (isVideo) {
       payload.video_supported_resolutions = formData.value.video_supported_resolutions
       payload.video_supported_aspect_ratios = formData.value.video_supported_aspect_ratios
       payload.video_min_duration_seconds = formData.value.video_min_duration_seconds

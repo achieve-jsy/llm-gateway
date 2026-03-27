@@ -3,13 +3,16 @@ package handler
 import (
 	"io"
 	"net/http"
+	"sync"
 
 	"github.com/example/llm-gateway/internal/core/video"
 	"github.com/gin-gonic/gin"
 )
 
 // AssetAdapterRegistry maps provider type strings to AssetProvider instances.
+// Swap 支持配置热更新。
 type AssetAdapterRegistry struct {
+	mu         sync.RWMutex
 	relay      video.AssetProvider
 	volcengine video.AssetProvider
 }
@@ -19,8 +22,28 @@ func NewAssetAdapterRegistry(relay, volcengine video.AssetProvider) *AssetAdapte
 	return &AssetAdapterRegistry{relay: relay, volcengine: volcengine}
 }
 
+// Swap 原子替换素材适配器。
+func (r *AssetAdapterRegistry) Swap(relay, volcengine video.AssetProvider) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if relay != nil {
+		r.relay = relay
+	}
+	if volcengine != nil {
+		r.volcengine = volcengine
+	}
+}
+
 // Get returns the adapter for the given provider type.
 func (r *AssetAdapterRegistry) Get(providerType string) video.AssetProvider {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	switch providerType {
 	case "seedance-volcengine":
 		if r.volcengine != nil {
@@ -39,10 +62,16 @@ func (r *AssetAdapterRegistry) Get(providerType string) video.AssetProvider {
 
 // AssetHandler 素材库 Handler
 type AssetHandler struct {
-	relayAdapter      video.AssetProvider
-	volcengineAdapter video.AssetProvider
-	adapterReg        *AssetAdapterRegistry
-	providerType      string
+	adapterReg   *AssetAdapterRegistry
+	providerType string
+}
+
+// AdapterRegistry 返回适配器注册表（供热加载 Swap）。
+func (h *AssetHandler) AdapterRegistry() *AssetAdapterRegistry {
+	if h == nil {
+		return nil
+	}
+	return h.adapterReg
 }
 
 // AssetHandlerOption is a functional option for AssetHandler.
@@ -56,10 +85,8 @@ func WithAssetProviderType(pt string) AssetHandlerOption {
 // NewAssetHandler 创建素材 Handler
 func NewAssetHandler(relayAdapter, volcengineAdapter video.AssetProvider, opts ...AssetHandlerOption) *AssetHandler {
 	h := &AssetHandler{
-		relayAdapter:      relayAdapter,
-		volcengineAdapter: volcengineAdapter,
-		adapterReg:        NewAssetAdapterRegistry(relayAdapter, volcengineAdapter),
-		providerType:      "seedance-relay",
+		adapterReg:   NewAssetAdapterRegistry(relayAdapter, volcengineAdapter),
+		providerType: "seedance-relay",
 	}
 	for _, opt := range opts {
 		opt(h)

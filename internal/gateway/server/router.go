@@ -23,8 +23,6 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/quota"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/example/llm-gateway/internal/providers"
-	seedancerelay "github.com/example/llm-gateway/internal/providers/seedance/relay"
-	seedancevolcengine "github.com/example/llm-gateway/internal/providers/seedance/volcengine"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	swaggerFiles "github.com/swaggo/files"
@@ -38,6 +36,8 @@ type redisClient = *redis.Client
 // routerGetter 在每次请求时被调用以获取最新的 Router（支持热更新）。
 // state tracks load status.
 // bindClient 为可选参数（nil 时不启用模型组权限校验）。
+// onSeedanceReloadReady 若非 nil，会收到「按 snapshot entries 热替换视频/素材适配器」的回调，
+// 供 main 挂到 config:change，避免改渠道后必须重启 gateway。
 func Setup(
 	routerGetter func() *providers.Router,
 	routerCache *infra.Cache,
@@ -49,7 +49,8 @@ func Setup(
 	collectorOpt *gwobs.Collector,
 	traceWriterOpt *gwobs.TraceWriter,
 	bindClient *binding.Client,
-	rdb redisClient, // v0.7: Redis client 用于预算计数中间件（nil = 禁用）
+	rdb redisClient,
+	onSeedanceReloadReady ...func(reload func(entries []gwmodel.ProviderEntry)),
 ) *gin.Engine {
 	var collector []*gwobs.Collector
 	if collectorOpt != nil {
@@ -165,41 +166,17 @@ func Setup(
 	responsesHandler.SetModelQuotaGate(modelQuotaGate)
 
 	// OpenAI 兼容接口（需 API Key 认证）
-	// 初始化视频适配器（从 Redis Provider Snapshot 读取真实凭证）
-	var relayAdapter *seedancerelay.Adapter
-	var volcengineAdapter *seedancevolcengine.Adapter
-
+	// 初始化视频适配器（从 Redis Provider Snapshot 读取真实凭证；支持热更新）
+	var initialEntries []gwmodel.ProviderEntry
 	if rdb != nil {
 		if snapshot, err := configsync.LoadProviderSnapshot(context.Background(), rdb); err == nil {
-			// 查找 seedance-relay 配置
-			if entry := findProviderByType(snapshot.Entries, "seedance-relay"); entry != nil {
-				slog.Info("loading seedance-relay adapter from provider config", "endpoint", entry.Endpoint)
-				relayAdapter = seedancerelay.NewAdapter(entry.Name, entry.Endpoint, entry.Credentials)
-			}
-			// 查找 seedance-volcengine 配置
-			if entry := findProviderByType(snapshot.Entries, "seedance-volcengine"); entry != nil {
-				slog.Info("loading seedance-volcengine adapter from provider config", "endpoint", entry.Endpoint)
-				ak, sk, region := parseVolcengineCredentials(entry.Credentials)
-				if ak == "" || sk == "" {
-					slog.Warn("seedance-volcengine credentials incomplete, using placeholder")
-					ak, sk = "placeholder-ak", "placeholder-sk"
-				}
-				volcengineAdapter = seedancevolcengine.NewAdapter(entry.Name, entry.Endpoint, ak, sk, region)
-			}
+			initialEntries = snapshot.Entries
 		} else {
 			slog.Warn("failed to load provider snapshot for video adapters", "error", err)
 		}
 	}
-
-	// 如果未找到配置，使用默认值（仅用于测试环境）
-	if relayAdapter == nil {
-		slog.Warn("seedance-relay adapter not configured, using placeholder credentials")
-		relayAdapter = seedancerelay.NewAdapter("seedance-relay", "http://115.190.78.58:8000", "placeholder-api-key")
-	}
-	if volcengineAdapter == nil {
-		slog.Warn("seedance-volcengine adapter not configured, using placeholder credentials")
-		volcengineAdapter = seedancevolcengine.NewAdapter("seedance-volcengine", "https://ark.cn-beijing.volces.com", "placeholder-ak", "placeholder-sk", "cn-beijing")
-	}
+	adapters := buildSeedanceAdapters(initialEntries)
+	relayAdapter, volcengineAdapter := adapters.asVideoProviders()
 
 	v1 := r.Group("/v1")
 	v1.Use(middleware.AuthMiddleware(authClient))
@@ -284,30 +261,36 @@ func Setup(
 			}
 		}
 
-		nameResolver := func(providerType string) string {
-			switch providerType {
-			case "seedance-volcengine":
-				if volcengineAdapter != nil {
-					return volcengineAdapter.Name()
-				}
-			default:
-				if relayAdapter != nil {
-					return relayAdapter.Name()
-				}
-			}
-			return providerType
-		}
-
 		videoHandler := handler.NewVideoHandler(relayAdapter, volcengineAdapter,
 			handler.WithTaskStore(videoTaskStore),
 			handler.WithModelResolver(modelResolver),
-			handler.WithProviderNameResolver(nameResolver),
 		)
+		videoHandlerReg := videoHandler.AdapterRegistry()
+		videoHandlerReg.Swap(relayAdapter, volcengineAdapter, adapters.relayName, adapters.volcName)
+
 		v1.POST("/contents/generations/tasks", videoHandler.CreateTask)
 		v1.GET("/contents/generations/tasks/:task_id", videoHandler.GetTask)
 
 		// 素材库
-		assetHandler := handler.NewAssetHandler(relayAdapter, volcengineAdapter)
+		assetRelay, assetVolc := adapters.asAssetProviders()
+		assetHandler := handler.NewAssetHandler(assetRelay, assetVolc)
+		assetHandlerReg := assetHandler.AdapterRegistry()
+
+		reloadSeedance := func(entries []gwmodel.ProviderEntry) {
+			next := buildSeedanceAdapters(entries)
+			rv, vv := next.asVideoProviders()
+			ra, va := next.asAssetProviders()
+			videoHandlerReg.Swap(rv, vv, next.relayName, next.volcName)
+			assetHandlerReg.Swap(ra, va)
+			slog.Info("seedance adapters hot-reloaded",
+				"relay", next.relayName,
+				"volcengine", next.volcName,
+			)
+		}
+		if len(onSeedanceReloadReady) > 0 && onSeedanceReloadReady[0] != nil {
+			onSeedanceReloadReady[0](reloadSeedance)
+		}
+
 		v1.POST("/assets/:action", assetHandler.Handle)
 	}
 
@@ -317,41 +300,6 @@ func Setup(
 	})
 
 	return r
-}
-
-// findProviderByType 从 ProviderEntry 列表中按 Type 查找
-func findProviderByType(entries []gwmodel.ProviderEntry, providerType string) *gwmodel.ProviderEntry {
-	for i := range entries {
-		if entries[i].Type == providerType {
-			return &entries[i]
-		}
-	}
-	return nil
-}
-
-// parseVolcengineCredentials 解析火山引擎 JSON 凭证
-// 格式: {"access_key":"...","secret_key":"...","region":"..."}
-type volcengineCredentials struct {
-	AccessKey string `json:"access_key"`
-	SecretKey string `json:"secret_key"`
-	Region    string `json:"region"`
-}
-
-func parseVolcengineCredentials(credJSON string) (ak, sk, region string) {
-	region = "cn-beijing" // 默认值
-	var creds volcengineCredentials
-	if err := json.Unmarshal([]byte(credJSON), &creds); err == nil {
-		if creds.AccessKey != "" {
-			ak = creds.AccessKey
-		}
-		if creds.SecretKey != "" {
-			sk = creds.SecretKey
-		}
-		if creds.Region != "" {
-			region = creds.Region
-		}
-	}
-	return
 }
 
 // makePassthroughHandler returns a Gin handler that proxies requests to

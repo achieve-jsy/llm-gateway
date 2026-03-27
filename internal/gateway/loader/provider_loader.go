@@ -21,13 +21,14 @@ import (
 type ProviderLoader struct {
 	factory  *providers.ProviderFactory
 	current  atomic.Value // stores *providers.Router
-	onReload func(router *providers.Router)
+	onReload func(router *providers.Router, entries []gatewaymodel.ProviderEntry)
 }
 
 // NewProviderLoader creates a ProviderLoader backed by the given factory.
 // onReload is called (in the same goroutine as the event) whenever the router
 // is atomically replaced due to a config change. May be nil.
-func NewProviderLoader(factory *providers.ProviderFactory, onReload func(router *providers.Router)) *ProviderLoader {
+// entries 一并下发，便于视频/素材适配器与 chat router 同步热更新。
+func NewProviderLoader(factory *providers.ProviderFactory, onReload func(router *providers.Router, entries []gatewaymodel.ProviderEntry)) *ProviderLoader {
 	return &ProviderLoader{
 		factory:  factory,
 		onReload: onReload,
@@ -122,6 +123,9 @@ func (l *ProviderLoader) Build(entries []gatewaymodel.ProviderEntry) (*providers
 		"provider_count", registry.ProviderCount(),
 		"model_count", registry.ModelCount(),
 	)
+	if l.onReload != nil {
+		l.onReload(router, entries)
+	}
 	return router, nil
 }
 
@@ -147,10 +151,7 @@ func (l *ProviderLoader) HandleChangeEvent(fetchEntries func() ([]gatewaymodel.P
 			slog.Error("loader: failed to rebuild router on config change", "error", err)
 			return
 		}
-
-		if l.onReload != nil {
-			l.onReload(router)
-		}
+		_ = router // onReload already invoked inside Build
 	}
 }
 

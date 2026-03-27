@@ -20,16 +20,12 @@ import (
 	"github.com/aws/smithy-go/auth/bearer"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
+	cpservice "github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
-// nonOpenAICompatibleAdapters 是使用非 OpenAI 兼容协议的 definition_id 集合。
-// 这些 provider 无法通过 GET /models 或 POST /chat/completions 做通用检测，
-// 需要走各自的专属检测路径（参考 GoModel AvailabilityChecker 设计）。
-var nonOpenAICompatibleAdapters = map[string]bool{
-	"bedrock": true,
-}
+// 非 OpenAI 兼容请使用 cpservice.IsNonOpenAICompatible，避免与 service 双 map 漂移。
 
 // TestProviderRepo TestHandler 依赖的 ProviderRepo 子集
 type TestProviderRepo interface {
@@ -65,6 +61,8 @@ type testResult struct {
 	StatusCode   int    `json:"status_code,omitempty"`
 	ModelCount   int    `json:"model_count,omitempty"`
 	Error        string `json:"error,omitempty"`
+	// Message 成功时的语义说明（如景汐：仅连通+鉴权，非视频创建）
+	Message string `json:"message,omitempty"`
 	// 转发测试结果
 	ChatSuccess      *bool  `json:"chat_success,omitempty"`
 	ChatResponseTime int    `json:"chat_response_time,omitempty"`
@@ -106,8 +104,8 @@ func (h *TestHandler) TestProvider(c *gin.Context) {
 		return
 	}
 
-	// 非 OpenAI 兼容 provider 走专属检测路径
-	if nonOpenAICompatibleAdapters[provider.DefinitionID] {
+	// 非 OpenAI 兼容 provider 走专属检测路径（与定时健康检查同源判定）
+	if cpservice.IsNonOpenAICompatible(provider.DefinitionID) {
 		result := h.testNonOpenAIProvider(provider, credJSON, input.TestChat)
 		c.JSON(http.StatusOK, gin.H{"data": result})
 		return
@@ -200,12 +198,65 @@ func (h *TestHandler) testNonOpenAIProvider(provider *model.Provider, credJSON s
 	switch provider.DefinitionID {
 	case "bedrock":
 		return h.testBedrock(provider, credJSON, testChat)
+	case "seedance-relay":
+		return h.testSeedanceRelay(provider, credJSON, testChat)
+	case "seedance-volcengine":
+		return h.testSeedanceVolcengine(provider, credJSON, testChat)
 	default:
 		return testResult{
-			Success: false,
-			Error:   fmt.Sprintf("provider type '%s' 暂不支持自动检测", provider.DefinitionID),
+			Success: true,
+			Message: fmt.Sprintf("provider type '%s' 暂不支持自动检测（已跳过）", provider.DefinitionID),
 		}
 	}
+}
+
+// testSeedanceRelay 与定时健康检查共用 ProbeSeedanceRelayConnectivity。
+// 仅验证连通+鉴权，不创建视频；test_chat 对景汐无意义，返回 skipped 说明。
+func (h *TestHandler) testSeedanceRelay(provider *model.Provider, credJSON string, testChat bool) testResult {
+	apiKey := extractAPIKey(credJSON)
+	res := cpservice.ProbeSeedanceRelayConnectivity(context.Background(), provider.Endpoint, apiKey)
+	out := testResult{
+		Success:      res.Success,
+		ResponseTime: res.ResponseTime,
+		StatusCode:   res.StatusCode,
+		Message:      res.Message,
+	}
+	if !res.Success {
+		out.Error = res.Message
+		out.Message = ""
+		return out
+	}
+	_ = h.providerRepo.UpdateResponseTime(provider.ID, res.ResponseTime)
+	if testChat {
+		// 不设 chat_success=true，避免前端误读为「转发测试通过」
+		out.ChatError = "skipped: seedance-relay probe is connectivity+auth only (no video create)"
+	}
+	return out
+}
+
+// testSeedanceVolcengine 与定时健康检查共用 ProbeSeedanceVolcengineConnectivity。
+func (h *TestHandler) testSeedanceVolcengine(provider *model.Provider, credJSON string, testChat bool) testResult {
+	ak, sk, region := cpservice.ParseSeedanceVolcCredentials(credJSON)
+	if ak == "" || sk == "" {
+		return testResult{Success: false, Error: "seedance-volcengine: missing access_key/secret_key"}
+	}
+	res := cpservice.ProbeSeedanceVolcengineConnectivity(context.Background(), provider.Endpoint, ak, sk, region)
+	out := testResult{
+		Success:      res.Success,
+		ResponseTime: res.ResponseTime,
+		StatusCode:   res.StatusCode,
+		Message:      res.Message,
+	}
+	if !res.Success {
+		out.Error = res.Message
+		out.Message = ""
+		return out
+	}
+	_ = h.providerRepo.UpdateResponseTime(provider.ID, res.ResponseTime)
+	if testChat {
+		out.ChatError = "skipped: seedance-volcengine probe is connectivity+auth only (no video create)"
+	}
+	return out
 }
 
 // testBedrock 使用 AWS SDK 验证 Bedrock 连通性和可用性。

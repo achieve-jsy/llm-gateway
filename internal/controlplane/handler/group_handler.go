@@ -111,6 +111,7 @@ func (h *GroupHandler) List(c *gin.Context) {
 		ID                      uint   `json:"id"`
 		Name                    string `json:"name"`
 		Description             string `json:"description"`
+		ModelType               string `json:"model_type"`
 		Strategy                string `json:"strategy"`
 		Enabled                 bool   `json:"enabled"`
 		MaxSwitches             int    `json:"max_switches"`
@@ -126,10 +127,15 @@ func (h *GroupHandler) List(c *gin.Context) {
 	items := make([]groupWithCount, len(groups))
 	for i, g := range groups {
 		count := h.svc.CountGroupModels(g.ID)
+		mt := g.ModelType
+		if mt == "" {
+			mt = "chat"
+		}
 		items[i] = groupWithCount{
 			ID:                      g.ID,
 			Name:                    g.Name,
 			Description:             g.Description,
+			ModelType:               mt,
 			Strategy:                g.Strategy,
 			Enabled:                 g.Enabled,
 			MaxSwitches:             g.MaxSwitches,

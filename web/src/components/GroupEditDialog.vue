@@ -267,23 +267,44 @@ const rules: FormRules = {
   strategy: [{ required: true, message: '请选择负载策略', trigger: 'change' }],
 }
 
+function applyGroupToForm(g: {
+  name: string
+  description?: string
+  model_type?: string
+  strategy: Strategy
+  max_switches?: number
+  same_model_retries?: number
+  failover_cooldown_seconds?: number
+  timeout_seconds?: number
+}) {
+  const mt = g.model_type || 'chat'
+  formData.value = {
+    name: g.name,
+    description: g.description || '',
+    model_type: mt,
+    strategy: mt === 'video' ? 'round_robin' : g.strategy,
+    max_switches: g.max_switches ?? 2,
+    same_model_retries: g.same_model_retries ?? 1,
+    failover_cooldown_seconds: g.failover_cooldown_seconds ?? 60,
+    timeout_seconds: g.timeout_seconds ?? 0,
+  }
+  prevModelType.value = mt
+  originalStrategy.value = formData.value.strategy
+}
+
 watch(
   () => props.group,
   async (val) => {
     if (val) {
-      const mt = (val as any).model_type || 'chat'
-      formData.value = {
-        name: val.name,
-        description: val.description || '',
-        model_type: mt,
-        strategy: val.strategy,
-        max_switches: val.max_switches ?? 2,
-        same_model_retries: val.same_model_retries ?? 1,
-        failover_cooldown_seconds: val.failover_cooldown_seconds ?? 60,
-        timeout_seconds: val.timeout_seconds ?? 0,
+      // 列表项可能缺 model_type 等字段，编辑时拉详情保证表单与库一致
+      applyGroupToForm(val as any)
+      try {
+        const res = await groupsApi.getGroup(val.id)
+        const full = res.data.data
+        if (full) applyGroupToForm(full)
+      } catch {
+        // 详情失败时沿用列表行数据
       }
-      prevModelType.value = mt
-      originalStrategy.value = val.strategy
       await loadGroupModels(val.id)
     } else {
       formData.value = {

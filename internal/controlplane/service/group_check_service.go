@@ -241,7 +241,7 @@ func (s *GroupCheckService) buildProbeRequest(modelName, modelType string) (stri
 			"model": modelName,
 			"input": "健康检查测试文本",
 		}
-	case "rerank":
+	case "rerank", "rerank_vl":
 		return "/v1/rerank", map[string]interface{}{
 			"model":     modelName,
 			"query":     "健康检查查询",

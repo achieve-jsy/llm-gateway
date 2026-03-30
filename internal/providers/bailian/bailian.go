@@ -738,8 +738,8 @@ type bailianRerankReq struct {
 }
 
 type bailianRerankInput struct {
-	Query     string   `json:"query"`
-	Documents []string `json:"documents"`
+	Query     any   `json:"query"`
+	Documents []any `json:"documents"`
 }
 
 type bailianRerankParameters struct {
@@ -806,8 +806,14 @@ func (p *Provider) Rerank(ctx context.Context, req *core.RerankRequest) (*core.R
 			Index:          r.Index,
 			RelevanceScore: r.RelevanceScore,
 		}
-		if req.ReturnDocuments != nil && *req.ReturnDocuments && r.Index < len(req.Documents) {
-			results[i].Document = &core.RerankDocument{Text: req.Documents[r.Index]}
+		if req.ReturnDocuments != nil && *req.ReturnDocuments && r.Index >= 0 && r.Index < len(req.Documents) {
+			if text, ok := req.Documents[r.Index].(string); ok {
+				results[i].Document = &core.RerankDocument{Text: text}
+			} else if m, ok := req.Documents[r.Index].(map[string]any); ok {
+				if t, ok := m["text"].(string); ok {
+					results[i].Document = &core.RerankDocument{Text: t}
+				}
+			}
 		}
 	}
 

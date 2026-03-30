@@ -29,7 +29,7 @@ func ProbeModelForward(ctx context.Context, endpoint, modelName, apiKey, modelTy
 	case lower == "image_generation" || lower == "image":
 		return probeImageGeneration(ctx, endpoint, modelName, apiKey)
 
-	case lower == "rerank":
+	case lower == "rerank" || lower == "rerank_vl":
 		return probeRerank(ctx, endpoint, modelName, apiKey)
 
 	case lower == "audio_transcription" || lower == "audio_speech" || lower == "audio":

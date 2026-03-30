@@ -22,7 +22,7 @@ func TestRerankRequestUnmarshalJSON(t *testing.T) {
 			want: RerankRequest{
 				Model:     "bge-reranker-v2-m3",
 				Query:     "What is the capital of France?",
-				Documents: []string{"Paris is the capital of France.", "London is the capital of the UK."},
+				Documents: []any{"Paris is the capital of France.", "London is the capital of the UK."},
 			},
 		},
 		{
@@ -37,7 +37,7 @@ func TestRerankRequestUnmarshalJSON(t *testing.T) {
 				Model:     "bge-reranker-v2-m3",
 				Provider:  "zhipu",
 				Query:     "What is the capital of France?",
-				Documents: []string{"Paris is the capital of France."},
+				Documents: []any{"Paris is the capital of France."},
 			},
 		},
 		{
@@ -53,7 +53,7 @@ func TestRerankRequestUnmarshalJSON(t *testing.T) {
 			want: RerankRequest{
 				Model:           "bge-reranker-v2-m3",
 				Query:           "test query",
-				Documents:       []string{"doc1", "doc2"},
+				Documents: []any{"doc1", "doc2"},
 				TopN:            intPtr(5),
 				ReturnDocuments: boolPtr(true),
 				MaxChunksPerDoc: intPtr(3),
@@ -71,7 +71,7 @@ func TestRerankRequestUnmarshalJSON(t *testing.T) {
 			want: RerankRequest{
 				Model:     "bge-reranker-v2-m3",
 				Query:     "test query",
-				Documents: []string{"doc1"},
+				Documents: []any{"doc1"},
 				ExtraFields: UnknownJSONFields{
 					raw: json.RawMessage(`{"another_field":42,"custom_field":"custom_value"}`),
 				},
@@ -87,7 +87,7 @@ func TestRerankRequestUnmarshalJSON(t *testing.T) {
 			want: RerankRequest{
 				Model:     "bge-reranker-v2-m3",
 				Query:     "test query",
-				Documents: []string{},
+				Documents: []any{},
 			},
 		},
 		{
@@ -158,7 +158,7 @@ func TestRerankRequestMarshalJSON(t *testing.T) {
 			req: RerankRequest{
 				Model:     "bge-reranker-v2-m3",
 				Query:     "What is the capital of France?",
-				Documents: []string{"Paris is the capital of France.", "London is the capital of the UK."},
+				Documents: []any{"Paris is the capital of France.", "London is the capital of the UK."},
 			},
 			want: `{"model":"bge-reranker-v2-m3","query":"What is the capital of France?","documents":["Paris is the capital of France.","London is the capital of the UK."]}`,
 		},
@@ -168,7 +168,7 @@ func TestRerankRequestMarshalJSON(t *testing.T) {
 				Model:     "bge-reranker-v2-m3",
 				Provider:  "zhipu",
 				Query:     "test query",
-				Documents: []string{"doc1"},
+				Documents: []any{"doc1"},
 			},
 			want: `{"model":"bge-reranker-v2-m3","provider":"zhipu","query":"test query","documents":["doc1"]}`,
 		},
@@ -177,7 +177,7 @@ func TestRerankRequestMarshalJSON(t *testing.T) {
 			req: RerankRequest{
 				Model:           "bge-reranker-v2-m3",
 				Query:           "test query",
-				Documents:       []string{"doc1", "doc2"},
+				Documents: []any{"doc1", "doc2"},
 				TopN:            intPtr(5),
 				ReturnDocuments: boolPtr(true),
 				MaxChunksPerDoc: intPtr(3),
@@ -189,7 +189,7 @@ func TestRerankRequestMarshalJSON(t *testing.T) {
 			req: RerankRequest{
 				Model:       "bge-reranker-v2-m3",
 				Query:       "test query",
-				Documents:   []string{"doc1"},
+				Documents: []any{"doc1"},
 				ExtraFields: UnknownJSONFields{raw: json.RawMessage(`{"custom_field":"custom_value"}`)},
 			},
 			want: `{"model":"bge-reranker-v2-m3","query":"test query","documents":["doc1"],"custom_field":"custom_value"}`,
@@ -315,7 +315,7 @@ func TestRerankRequestOptionalFields(t *testing.T) {
 		req := RerankRequest{
 			Model:           "bge-reranker-v2-m3",
 			Query:           "test",
-			Documents:       []string{"doc1", "doc2", "doc3"},
+			Documents: []any{"doc1", "doc2", "doc3"},
 			TopN:            intPtr(2),
 			ReturnDocuments: boolPtr(false),
 			MaxChunksPerDoc: intPtr(1),
@@ -346,7 +346,7 @@ func TestRerankRequestOptionalFields(t *testing.T) {
 		req := RerankRequest{
 			Model:     "bge-reranker-v2-m3",
 			Query:     "test",
-			Documents: []string{"doc1"},
+			Documents: []any{"doc1"},
 		}
 
 		data, err := json.Marshal(req)
@@ -371,7 +371,7 @@ func TestRerankRequestOptionalFields(t *testing.T) {
 		req := RerankRequest{
 			Model:     "bge-reranker-v2-m3",
 			Query:     "test",
-			Documents: []string{"doc1"},
+			Documents: []any{"doc1"},
 			TopN:      intPtr(0),
 		}
 

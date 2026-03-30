@@ -796,7 +796,7 @@ func TestRerank_Basic(t *testing.T) {
 		require.NoError(t, json.Unmarshal(body, &req))
 		assert.Equal(t, "gte-rerank-v2", req.Model)
 		assert.Equal(t, "search query", req.Input.Query)
-		assert.Equal(t, []string{"doc1", "doc2", "doc3"}, req.Input.Documents)
+		assert.Equal(t, []any{"doc1", "doc2", "doc3"}, req.Input.Documents)
 		assert.Equal(t, 5, req.Parameters.TopN)
 
 		resp := bailianRerankResp{
@@ -819,7 +819,7 @@ func TestRerank_Basic(t *testing.T) {
 	resp, err := provider.Rerank(context.Background(), &core.RerankRequest{
 		Model:     "gte-rerank-v2",
 		Query:     "search query",
-		Documents: []string{"doc1", "doc2", "doc3"},
+		Documents: []any{"doc1", "doc2", "doc3"},
 		TopN:      &topN,
 	})
 
@@ -832,6 +832,60 @@ func TestRerank_Basic(t *testing.T) {
 	assert.Equal(t, 0, resp.Results[1].Index)
 	assert.Equal(t, 1, resp.Results[2].Index)
 	assert.Equal(t, 20, resp.Usage.TotalTokens)
+}
+
+func TestRerank_VLObjectBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/services/rerank/text-rerank/text-rerank", r.URL.Path)
+
+		body, _ := io.ReadAll(r.Body)
+		var req bailianRerankReq
+		require.NoError(t, json.Unmarshal(body, &req))
+		assert.Equal(t, "qwen3-vl-rerank", req.Model)
+
+		query, ok := req.Input.Query.(map[string]any)
+		require.True(t, ok, "query should be object")
+		assert.Equal(t, "https://example.com/q.png", query["image"])
+
+		require.Len(t, req.Input.Documents, 2)
+		doc0, ok := req.Input.Documents[0].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "a cat", doc0["text"])
+		doc1, ok := req.Input.Documents[1].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "https://example.com/d.mp4", doc1["video"])
+
+		resp := bailianRerankResp{
+			Usage: struct {
+				TotalTokens int `json:"total_tokens"`
+			}{TotalTokens: 42},
+		}
+		resp.Output.Results = []bailianRerankResult{
+			{Index: 0, RelevanceScore: 0.9},
+			{Index: 1, RelevanceScore: 0.2},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(t, server.URL)
+	topN := 2
+	resp, err := provider.Rerank(context.Background(), &core.RerankRequest{
+		Model: "qwen3-vl-rerank",
+		Query: map[string]any{"image": "https://example.com/q.png"},
+		Documents: []any{
+			map[string]any{"text": "a cat"},
+			map[string]any{"video": "https://example.com/d.mp4"},
+		},
+		TopN: &topN,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Len(t, resp.Results, 2)
+	assert.Equal(t, 0, resp.Results[0].Index)
+	assert.Equal(t, 42, resp.Usage.TotalTokens)
 }
 
 func TestRerank_WithReturnDocuments(t *testing.T) {
@@ -855,7 +909,7 @@ func TestRerank_WithReturnDocuments(t *testing.T) {
 	resp, err := provider.Rerank(context.Background(), &core.RerankRequest{
 		Model:           "gte-rerank-v2",
 		Query:           "query",
-		Documents:       []string{"first doc", "second doc"},
+		Documents: []any{"first doc", "second doc"},
 		ReturnDocuments: &returnDocs,
 	})
 
@@ -890,7 +944,7 @@ func TestRerank_WithoutReturnDocuments(t *testing.T) {
 	resp, err := provider.Rerank(context.Background(), &core.RerankRequest{
 		Model:     "gte-rerank-v2",
 		Query:     "query",
-		Documents: []string{"doc1"},
+		Documents: []any{"doc1"},
 	})
 
 	require.NoError(t, err)
@@ -928,7 +982,7 @@ func TestRerank_DefaultTopN(t *testing.T) {
 	resp, err := provider.Rerank(context.Background(), &core.RerankRequest{
 		Model:     "gte-rerank-v2",
 		Query:     "query",
-		Documents: []string{"doc1"},
+		Documents: []any{"doc1"},
 		// TopN not set → defaults to 10
 	})
 
@@ -947,7 +1001,7 @@ func TestRerank_ServerError(t *testing.T) {
 	_, err := provider.Rerank(context.Background(), &core.RerankRequest{
 		Model:     "gte-rerank-v2",
 		Query:     "query",
-		Documents: []string{"doc1"},
+		Documents: []any{"doc1"},
 	})
 	require.Error(t, err)
 }
@@ -1653,7 +1707,7 @@ func TestRerank_1000Documents(t *testing.T) {
 
 	provider := newTestProvider(t, server.URL)
 
-	docs := make([]string, 1000)
+	docs := make([]any, 1000)
 	for i := 0; i < 1000; i++ {
 		docs[i] = fmt.Sprintf("document-%d", i)
 	}
@@ -2135,7 +2189,7 @@ func TestRerank_WithInstruct(t *testing.T) {
 	resp, err := provider.Rerank(context.Background(), &core.RerankRequest{
 		Model:     "gte-rerank-v2",
 		Query:     "query",
-		Documents: []string{"doc1"},
+		Documents: []any{"doc1"},
 		ExtraFields: core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
 			"instruct": json.RawMessage(`"Prioritize recent documents"`),
 		}),

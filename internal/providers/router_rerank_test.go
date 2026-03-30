@@ -187,7 +187,7 @@ func TestRouterRerankSuccess(t *testing.T) {
 	req := &core.RerankRequest{
 		Model:     "rerank-model",
 		Query:     "What is the capital of France?",
-		Documents: []string{"Paris is the capital of France.", "London is the capital of England."},
+		Documents: []any{"Paris is the capital of France.", "London is the capital of England."},
 	}
 
 	resp, err := router.Rerank(context.Background(), req)
@@ -226,7 +226,7 @@ func TestRouterRerankProviderHint(t *testing.T) {
 		Model:     "rerank-model",
 		Provider:  "openai", // 内部路由 hint，应被剥离
 		Query:     "test query",
-		Documents: []string{"doc1", "doc2"},
+		Documents: []any{"doc1", "doc2"},
 	}
 
 	resp, err := router.Rerank(context.Background(), req)
@@ -261,7 +261,7 @@ func TestRouterRerankModelNotFound(t *testing.T) {
 	req := &core.RerankRequest{
 		Model:     "nonexistent-model",
 		Query:     "test",
-		Documents: []string{"doc1"},
+		Documents: []any{"doc1"},
 	}
 
 	resp, err := router.Rerank(context.Background(), req)
@@ -294,7 +294,7 @@ func TestRouterRerankStampProvider(t *testing.T) {
 	req := &core.RerankRequest{
 		Model:     "rerank-model",
 		Query:     "test",
-		Documents: []string{"doc1"},
+		Documents: []any{"doc1"},
 	}
 
 	resp, err := router.Rerank(context.Background(), req)
@@ -314,7 +314,7 @@ func TestRouterRerankEmptyRegistry(t *testing.T) {
 	req := &core.RerankRequest{
 		Model:     "rerank-model",
 		Query:     "test",
-		Documents: []string{"doc1"},
+		Documents: []any{"doc1"},
 	}
 
 	resp, err := router.Rerank(context.Background(), req)

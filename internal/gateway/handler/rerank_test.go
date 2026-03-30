@@ -93,7 +93,7 @@ func TestRerankHandlerEmptyDocuments(t *testing.T) {
 
 func TestRerankHandlerExceedDocuments(t *testing.T) {
 	// Create 1001 documents (exceeds maxDocuments = 1000)
-	docs := make([]string, 1001)
+	docs := make([]any, 1001)
 	for i := range docs {
 		docs[i] = "doc"
 	}
@@ -277,6 +277,89 @@ func TestRerankHandlerEmptyModel(t *testing.T) {
 	handler := NewRerankHandler(mock)
 	c, w := setupRerankTest(reqBody)
 
+	handler.Handle(c)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestValidateRerankQueryAndDocuments(t *testing.T) {
+	assert.NoError(t, validateRerankQuery("hello"))
+	assert.NoError(t, validateRerankQuery(map[string]any{"image": "https://example.com/q.png"}))
+	assert.Error(t, validateRerankQuery(""))
+	assert.Error(t, validateRerankQuery(map[string]any{"video": "https://example.com/q.mp4"}))
+	assert.Error(t, validateRerankQuery(map[string]any{"text": "a", "image": "b"}))
+	assert.Error(t, validateRerankQuery(123))
+
+	assert.NoError(t, validateRerankDocuments([]any{"doc1", map[string]any{"image": "https://example.com/d.png"}}))
+	assert.NoError(t, validateRerankDocuments([]any{map[string]any{"video": "https://example.com/d.mp4"}}))
+	assert.Error(t, validateRerankDocuments(nil))
+	assert.Error(t, validateRerankDocuments([]any{""}))
+	assert.Error(t, validateRerankDocuments([]any{map[string]any{}}))
+}
+
+func TestIsMultimodalRerankInput(t *testing.T) {
+	assert.False(t, isMultimodalRerankInput("q", []any{"d"}))
+	assert.False(t, isMultimodalRerankInput(map[string]any{"text": "q"}, []any{map[string]any{"text": "d"}}))
+	assert.True(t, isMultimodalRerankInput(map[string]any{"image": "https://x"}, []any{"d"}))
+	assert.True(t, isMultimodalRerankInput("q", []any{map[string]any{"video": "https://x"}}))
+}
+
+func TestRerankHandlerMultimodalRequiresRerankVL(t *testing.T) {
+	reqBody := `{"model":"gte-rerank-v2","query":{"image":"https://example.com/q.png"},"documents":["doc1"]}`
+
+	called := false
+	mock := &mockRerankOrchestrator{
+		rerankFn: func(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
+			called = true
+			return nil, nil
+		},
+	}
+
+	handler := NewRerankHandler(mock)
+	c, w := setupRerankTest(reqBody)
+	handler.Handle(c)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.False(t, called)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	errObj, ok := resp["error"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "model_capability_mismatch", errObj["code"])
+}
+
+func TestRerankHandlerTextObjectAllowedWithoutRerankVL(t *testing.T) {
+	reqBody := `{"model":"gte-rerank-v2","query":{"text":"what is AI?"},"documents":[{"text":"doc1"}]}`
+
+	mock := &mockRerankOrchestrator{
+		rerankFn: func(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
+			return &core.RerankResponse{
+				Model:   "gte-rerank-v2",
+				Results: []core.RerankResult{{Index: 0, RelevanceScore: 0.9}},
+			}, nil
+		},
+	}
+
+	handler := NewRerankHandler(mock)
+	c, w := setupRerankTest(reqBody)
+	handler.Handle(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestRerankHandlerInvalidMultimodalShape(t *testing.T) {
+	reqBody := `{"model":"qwen3-vl-rerank","query":{"image":"https://x","text":"y"},"documents":["doc1"]}`
+
+	mock := &mockRerankOrchestrator{
+		rerankFn: func(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
+			t.Fatal("orchestrator should not be called")
+			return nil, nil
+		},
+	}
+
+	handler := NewRerankHandler(mock)
+	c, w := setupRerankTest(reqBody)
 	handler.Handle(c)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)

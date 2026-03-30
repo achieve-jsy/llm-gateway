@@ -10,6 +10,16 @@
       </div>
     </div>
 
+    <!-- Base URL 复制条 -->
+    <div class="base-url-bar">
+      <span class="base-url-bar__prefix">Base URL</span>
+      <span class="base-url-bar__value">{{ displayBaseUrl }}</span>
+      <button class="base-url-bar__btn" :class="{ ok: urlCopied }" @click="copyBaseUrl">
+        <el-icon><component :is="urlCopied ? Check : CopyDocument" /></el-icon>
+        {{ urlCopied ? '已复制' : '复制' }}
+      </button>
+    </div>
+
     <el-alert
       v-if="needsApplyToCreate"
       type="info"
@@ -552,7 +562,7 @@ import { ref, onMounted, computed, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { LocationQuery } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Key, Search } from '@element-plus/icons-vue'
+import { Key, Search, CopyDocument, Check } from '@element-plus/icons-vue'
 import {
   listKeys, disableKey, enableKey, deleteKey, resetKey, revealKey,
   updateKeyGroups, getAvailableGroups, toggleAccessAllGroups, toggleLogEnabled,
@@ -607,6 +617,21 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const keyCache = useKeyCacheStore()
+const settingsStore = useSettingsStore()
+
+/* ── Base URL 复制条 ── */
+const urlCopied = ref(false)
+let urlCopyTimer: ReturnType<typeof setTimeout> | null = null
+const displayBaseUrl = computed(() => {
+  const base = settingsStore.getBaseUrl()
+  return base.endsWith('/v1') ? base : base.replace(/\/+$/, '') + '/v1'
+})
+function copyBaseUrl() {
+  copyToClipboard(displayBaseUrl.value)
+  urlCopied.value = true
+  if (urlCopyTimer) clearTimeout(urlCopyTimer)
+  urlCopyTimer = setTimeout(() => { urlCopied.value = false }, 2200)
+}
 const tabPrefsHydrated = ref(false)
 let skipTabRouteSync = false
 const activeTab = ref<KeyListTab>(parseTabFromQuery(route.query))
@@ -1463,5 +1488,71 @@ watch(() => authStore.effectiveRole, (role) => {
   font-size: 12px;
   color: var(--el-text-color-regular);
   line-height: 1.4;
+}
+
+/* ── Base URL 复制条 ── */
+.base-url-bar {
+  display: flex;
+  align-items: center;
+  background: var(--el-fill-color-blank);
+  border: 1.5px solid #C8E4E2;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(54,179,78,0.06);
+  max-width: 100%;
+  margin-bottom: 16px;
+}
+.base-url-bar__prefix {
+  padding: 0 12px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #36B34E;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  border-right: 1px solid #D8EEEC;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  background: rgba(54,179,78,0.04);
+}
+.base-url-bar__value {
+  flex: 1;
+  padding: 0 14px;
+  font-family: 'Fira Code', 'JetBrains Mono', monospace;
+  font-size: 13px;
+  color: #1A5C58;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: all;
+}
+.base-url-bar__btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 16px;
+  height: 40px;
+  background: #36B34E;
+  border: none;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+  .el-icon { font-size: 14px; }
+  &:hover { background: #229A94; }
+  &.ok { background: #0EA371; }
+  &:focus-visible { outline: 2px solid #36B34E; outline-offset: 2px; }
+}
+
+:global(html.dark) .base-url-bar { border-color: #1F5230; background: #0A1B1A; box-shadow: none; }
+:global(html.dark) .base-url-bar__prefix { background: rgba(54,179,78,0.07); border-color: #1F5230; }
+:global(html.dark) .base-url-bar__value { color: #6CD083; }
+
+@media (max-width: 768px) {
+  .base-url-bar { width: 100%; }
 }
 </style>

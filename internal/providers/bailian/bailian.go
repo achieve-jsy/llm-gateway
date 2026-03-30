@@ -135,10 +135,10 @@ func (p *Provider) Embeddings(ctx context.Context, req *core.EmbeddingRequest) (
 // ─── 原生 text-embedding API ──────────────────────────────────────────────
 
 const (
-	// maxEmbeddingBatchChars 单次原生 embedding 请求的最大字符数。
-	// 百炼原生 API 对请求体大小有限制，超过约 10KB 会返回 "url error"。
-	// 这里保守设置为 6000 字符，确保 17 段长 HTML 文本不会超限。
-	maxEmbeddingBatchChars = 6000
+	// maxEmbeddingBatchSize 单次原生 embedding 请求的最大文本条数。
+	// 百炼 text-embedding-v4 官方文档限制最多 10 条/次。
+	// 参考: https://help.aliyun.com/zh/model-studio/text-embedding-api
+	maxEmbeddingBatchSize = 10
 )
 
 type bailianTextEmbeddingReq struct {
@@ -176,7 +176,7 @@ func (p *Provider) nativeEmbeddings(ctx context.Context, req *core.EmbeddingRequ
 	}
 
 	// 大输入分批处理，避免单次请求体超过百炼 API 限制
-	batches := splitTextsForEmbedding(texts, maxEmbeddingBatchChars)
+	batches := splitTextsByCount(texts, maxEmbeddingBatchSize)
 	if len(batches) == 1 {
 		return p.doNativeEmbedding(ctx, req.Model, batches[0])
 	}
@@ -273,26 +273,16 @@ func (p *Provider) doNativeEmbedding(ctx context.Context, model string, texts []
 	}, nil
 }
 
-// splitTextsForEmbedding 将文本切片数组按字符数分批次，每批不超过 maxChars 字符。
-// 保持原始索引以便后续合并结果。
-func splitTextsForEmbedding(texts []string, maxChars int) [][]string {
+// splitTextsByCount 将文本切片数组按条数分批次，每批不超过 maxSize 条。
+// 百炼 text-embedding-v4 官方限制最多 10 条/次。
+func splitTextsByCount(texts []string, maxSize int) [][]string {
 	var batches [][]string
-	var currentBatch []string
-	currentChars := 0
-
-	for _, t := range texts {
-		chars := len([]rune(t))
-		// 如果当前文本加上去会超限，而且当前批次非空，就开新批次
-		if currentChars+chars > maxChars && len(currentBatch) > 0 {
-			batches = append(batches, currentBatch)
-			currentBatch = nil
-			currentChars = 0
+	for i := 0; i < len(texts); i += maxSize {
+		end := i + maxSize
+		if end > len(texts) {
+			end = len(texts)
 		}
-		currentBatch = append(currentBatch, t)
-		currentChars += chars
-	}
-	if len(currentBatch) > 0 {
-		batches = append(batches, currentBatch)
+		batches = append(batches, texts[i:end])
 	}
 	return batches
 }
@@ -333,7 +323,7 @@ func (p *Provider) multimodalEmbeddings(ctx context.Context, req *core.Embedding
 	}
 
 	// 大输入分批处理，避免单次请求体超过百炼 API 限制
-	batches := splitTextsForEmbedding(texts, maxEmbeddingBatchChars)
+	batches := splitTextsByCount(texts, maxEmbeddingBatchSize)
 	if len(batches) == 1 {
 		return p.doMultimodalEmbedding(ctx, req.Model, batches[0], 0)
 	}

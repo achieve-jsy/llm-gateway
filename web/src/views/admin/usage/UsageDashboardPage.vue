@@ -6,56 +6,68 @@
       :loading="summaryLoading || logsLoading"
       @refresh="activeTab === 'video' ? (videoRefreshToken++) : loadAll()"
     />
-    <!-- Type Tabs -->
-    <div class="usage-type-tabs">
-      <el-radio-group v-model="activeTab" size="default" @change="onTabChange">
-        <el-radio-button value="chat">Chat</el-radio-button>
-        <el-radio-button value="embedding">Embedding</el-radio-button>
-        <el-radio-button value="rerank">Rerank</el-radio-button>
-        <el-radio-button value="video">Video</el-radio-button>
-      </el-radio-group>
-    </div>
+    <UsageFilterBar
+      page-role="dashboard"
+      :capability="(activeTab as any)"
+      :date-presets="datePresets"
+      v-model:date-range="dateRange"
+      v-model:active-preset="activePreset"
+      v-model:model-name="filterModel"
+      v-model:status="filterStatus"
+      v-model:key-type="filterKeyType"
+      v-model:user-name="filterUserName"
+      v-model:provider="filterProvider"
+      :model-options="modelOptions"
+      :provider-options="providerOptions"
+      :active-count="activeFilterCount"
+      @apply-preset="applyPreset"
+      @change="onFilterChange"
+      @date-change="onDateChange"
+      @clear="clearFilters"
+    >
+      <template #tabs>
+        <div class="usage-type-tabs">
+          <el-radio-group v-model="activeTab" size="default" @change="onTabChange">
+            <el-radio-button value="chat">Chat</el-radio-button>
+            <el-radio-button value="embedding">Embedding</el-radio-button>
+            <el-radio-button value="rerank">Rerank</el-radio-button>
+            <el-radio-button value="video">Video</el-radio-button>
+          </el-radio-group>
+        </div>
+      </template>
+    </UsageFilterBar>
+
     <template v-if="activeTab === 'video'">
-      <div class="ud-video-filter">
-        <el-date-picker
-          v-model="dateRange"
-          type="daterange"
-          range-separator="至"
-          start-placeholder="开始日期"
-          end-placeholder="结束日期"
-          value-format="YYYY-MM-DD"
-          size="small"
-          @change="videoRefreshToken++"
-        />
-      </div>
-      <VideoKpiCards :refresh-token="videoRefreshToken" :start="videoDateStart" :end="videoDateEnd" :model-name="filterModel" />
-      <VideoTrendChart :refresh-token="videoRefreshToken" :start="videoDateStart" :end="videoDateEnd" :model-name="filterModel" />
-      <VideoDistributionCharts :refresh-token="videoRefreshToken" :start="videoDateStart" :end="videoDateEnd" :model-name="filterModel" />
-      <VideoTaskTable :refresh-token="videoRefreshToken" />
+      <VideoKpiCards
+        :refresh-token="videoRefreshToken"
+        :start="videoDateStart"
+        :end="videoDateEnd"
+        :model-name="videoModelParam"
+        :provider-name="filterProvider || undefined"
+      />
+      <VideoTrendChart
+        :refresh-token="videoRefreshToken"
+        :start="videoDateStart"
+        :end="videoDateEnd"
+        :model-name="videoModelParam"
+        :provider-name="filterProvider || undefined"
+      />
+      <VideoDistributionCharts
+        :refresh-token="videoRefreshToken"
+        :start="videoDateStart"
+        :end="videoDateEnd"
+        :model-name="videoModelParam"
+        :provider-name="filterProvider || undefined"
+      />
+      <VideoTaskTable
+        :refresh-token="videoRefreshToken"
+        controlled
+        :status="filterStatus"
+        :model-name="videoModelParam"
+        :provider-name="filterProvider"
+      />
     </template>
     <template v-else>
-      <DashboardFilters
-        v-model:date-range="dateRange"
-        v-model:active-preset="activePreset"
-        v-model:filter-user-name="filterUserName"
-        v-model:filter-model="filterModel"
-        v-model:filter-status="filterStatus"
-        v-model:filter-key-type="filterKeyType"
-        v-model:filter-endpoint="filterEndpoint"
-        v-model:show-filters="showFilters"
-        :date-presets="datePresets"
-        :model-options="modelOptions"
-        :effective-role="authStore.effectiveRole"
-        :active-filter-count="activeFilterCount"
-        :hide-endpoint="true"
-        :compact="isCompactUsageTab"
-        @apply-preset="applyPreset"
-        @date-change="onDateChange"
-        @user-name-change="onUserNameChange"
-        @user-name-clear="onUserNameClear"
-        @load-all="loadAll"
-        @clear-filters="clearFilters"
-      />
       <KpiCards
         :summary="summary"
         :loading="summaryLoading"
@@ -174,7 +186,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import DashboardHeader from './components/DashboardHeader.vue'
-import DashboardFilters from './components/DashboardFilters.vue'
 import KpiCards from './components/KpiCards.vue'
 import TrendChartSection from './components/TrendChartSection.vue'
 import CostBreakdownSection from './components/CostBreakdownSection.vue'
@@ -182,6 +193,7 @@ import RankingTable from './components/RankingTable.vue'
 import ModelChartSection from './components/ModelChartSection.vue'
 import LongTailAlerts from './components/LongTailAlerts.vue'
 import UsageLogSection from '@/components/usage/UsageLogSection.vue'
+import UsageFilterBar from '@/components/usage/UsageFilterBar.vue'
 import VideoKpiCards from '@/components/usage/VideoKpiCards.vue'
 import VideoTrendChart from '@/components/usage/VideoTrendChart.vue'
 import VideoDistributionCharts from '@/components/usage/VideoDistributionCharts.vue'
@@ -198,6 +210,11 @@ import { fetchUsersRanking } from '@/api/dashboard-enhanced'
 import type { UserRankRow } from '@/types/dashboard-enhanced'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
 import type { UsageEndpointType } from '@/utils/usage-endpoint'
+import {
+  countActiveFilters,
+  isStatusCompatible,
+  videoModelNameParam,
+} from '@/utils/usageFilterConfig'
 
 const settingsStore = useSettingsStore()
 const currency = ref<Currency>('CNY')
@@ -234,14 +251,14 @@ function applyPreset(p: { label: string; days: number }) {
   activePreset.value = p.label
   granularityManuallySet = false
   autoSetGranularity()
-  loadAll()
+  bumpVideoOrLoadAll()
 }
 
 function onDateChange() {
   activePreset.value = ''
   granularityManuallySet = false
   autoSetGranularity()
-  loadAll()
+  bumpVideoOrLoadAll()
 }
 
 // ── 筛选 ──────────────────────────────────────────────────────
@@ -250,8 +267,13 @@ const filterModel    = ref('')
 const filterStatus   = ref('')
 const filterKeyType  = ref('')
 const filterEndpoint = ref('')
+const filterProvider = ref('')
+const providerOptions = ref<string[]>([])
 const activeTab = ref('chat')
 const videoRefreshToken = ref(0)
+const videoModelParam = computed(() =>
+  videoModelNameParam(undefined, filterModel.value),
+)
 
 const logEndpointType = computed((): UsageEndpointType => {
   if (activeTab.value === 'embedding' || activeTab.value === 'rerank') return activeTab.value
@@ -277,40 +299,63 @@ const logTableProps = computed(() => ({
   endpointType: logEndpointType.value,
 }))
 
+function bumpVideoOrLoadAll() {
+  if (activeTab.value === 'video') {
+    videoRefreshToken.value++
+    return
+  }
+  loadAll()
+}
+
+function onFilterChange() {
+  if (filterUserName.value) {
+    onUserNameChange()
+    return
+  }
+  bumpVideoOrLoadAll()
+}
+
 function onTabChange(value: string | number | boolean) {
+  const tab = String(value)
   const endpointMap: Record<string, string> = {
     chat: '/v1/chat/completions',
     embedding: '/v1/embeddings',
     rerank: '/v1/rerank',
     video: '/v1/contents/generations/tasks',
   }
-  filterEndpoint.value = endpointMap[value as string] || ''
-  if (value === 'video') {
+  filterEndpoint.value = endpointMap[tab] || ''
+  if (!isStatusCompatible(tab as any, filterStatus.value)) {
+    filterStatus.value = ''
+  }
+  if (tab !== 'video') filterProvider.value = ''
+  if (tab === 'video') {
     videoRefreshToken.value++
     return
   }
   // Embedding/Rerank：原型仅展示请求量趋势，强制 calls 并收起 Chat 成本区
-  if (value === 'embedding' || value === 'rerank') {
+  if (tab === 'embedding' || tab === 'rerank') {
     trendMetric.value = 'calls'
     modelMetric.value = 'calls'
     closePanel()
-  } else if (trendMetric.value === 'calls' && value === 'chat') {
+  } else if (trendMetric.value === 'calls' && tab === 'chat') {
     trendMetric.value = 'all'
   }
   loadAll()
 }
-const showFilters    = ref(true)
 
 // ── 长尾告警排序 ──
 const ltSortBy    = ref<'calls' | 'cost' | 'error_rate'>('calls')
 const ltSortOrder = ref<'asc' | 'desc'>('desc')
 
-const activeFilterCount = computed(() => {
-  const dims = isCompactUsageTab.value
-    ? [filterModel.value, filterStatus.value]
-    : [filterUserName.value, filterModel.value, filterStatus.value, filterKeyType.value, filterEndpoint.value]
-  return dims.filter(Boolean).length
-})
+const activeFilterCount = computed(() =>
+  countActiveFilters('dashboard', activeTab.value as any, {
+    userName: filterUserName.value,
+    modelName: filterModel.value,
+    status: filterStatus.value,
+    keyType: filterKeyType.value,
+    provider: filterProvider.value,
+  }),
+)
 
 function clearFilters() {
   filterUserName.value = ''
@@ -318,10 +363,18 @@ function clearFilters() {
   filterStatus.value   = ''
   filterKeyType.value  = ''
   filterEndpoint.value = ''
+  filterProvider.value = ''
   if (breadcrumbs.value[breadcrumbs.value.length - 1]?.scope === 'user') {
     breadcrumbs.value = []
   }
-  loadAll()
+  bumpVideoOrLoadAll()
+}
+
+async function loadProviderOptions() {
+  try {
+    const r = await http.get('/api/v1/usage/options')
+    providerOptions.value = r.data.providers || []
+  } catch { /* ignore */ }
 }
 
 // ── 角色 / 范围标签 ──────────────────────────────────────────
@@ -852,6 +905,7 @@ onMounted(() => {
   if (start && end) {
     dateRange.value = [String(start), String(end)]
   }
+  loadProviderOptions()
   loadAll()
 })
 

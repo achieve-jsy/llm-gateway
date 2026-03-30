@@ -14,7 +14,7 @@
           <el-radio-button value="USD">$ USD</el-radio-button>
           <el-radio-button value="CNY">¥ CNY</el-radio-button>
         </el-radio-group>
-        <el-button :loading="statsLoading" :icon="Refresh" circle size="small" title="刷新" @click="loadAll" />
+        <el-button :loading="statsLoading" :icon="Refresh" circle size="small" title="刷新" @click="bumpVideoOrLoadAll" />
 
       </div>
     </div>
@@ -22,179 +22,71 @@
     <!-- ═══════════════════════════════════════════
          筛选栏
     ═══════════════════════════════════════════ -->
-    <div class="up-filter">
-      <!-- 主筛选行：时间 -->
-      <div class="up-filter-main">
-        <!-- 快捷天数 -->
-        <div class="up-presets">
-          <button
-            v-for="p in datePresets" :key="p.label"
-            class="up-preset-btn"
-            :class="{ 'up-preset-btn--active': activePreset === p.label }"
-            @click="applyPreset(p)"
-          >{{ p.label }}</button>
+    <UsageFilterBar
+      page-role="cost"
+      :capability="(activeTab as any)"
+      :date-presets="datePresets"
+      v-model:date-range="dateRange"
+      v-model:active-preset="activePreset"
+      v-model:group-name="filterGroupName"
+      v-model:model-name="filterModelName"
+      v-model:key-name="filterKeyName"
+      v-model:key-type="filterKeyType"
+      v-model:status="filterStatus"
+      v-model:provider="filterProvider"
+      v-model:user-name="filterUserName"
+      v-model:dept-name="filterDeptName"
+      v-model:studio-id="filterStudioId"
+      :provider-options="providerOptions"
+      :dept-options="deptOptions"
+      :studio-options="studioOptions"
+      :active-count="activeFilterCount"
+      @apply-preset="applyPreset"
+      @change="onFilterChange"
+      @date-change="onDateChange"
+      @clear="clearFilters"
+    >
+      <template #tabs>
+        <div class="usage-type-tabs">
+          <el-radio-group v-model="activeTab" size="default" @change="onTabChange">
+            <el-radio-button value="chat">Chat</el-radio-button>
+            <el-radio-button value="embedding">Embedding</el-radio-button>
+            <el-radio-button value="rerank">Rerank</el-radio-button>
+            <el-radio-button value="video">Video</el-radio-button>
+          </el-radio-group>
         </div>
-
-        <div class="up-filter-divider" />
-
-        <el-date-picker
-          v-model="dateRange"
-          type="daterange"
-          range-separator="至"
-          start-placeholder="开始日期"
-          end-placeholder="结束日期"
-          value-format="YYYY-MM-DD"
-          format="MM/DD"
-          :shortcuts="dateShortcuts"
-          class="up-filter__date"
-          size="default"
-          @change="onDateChange"
-        />
-        <div class="up-filter-active" v-if="activeFilterCount > 0">
-          <el-tag size="small" type="warning" effect="dark" round>
-            {{ activeFilterCount }} 个过滤条件
-          </el-tag>
-          <el-button link size="small" class="up-filter-clear" @click="clearFilters">
-            清空
-          </el-button>
-        </div>
-      </div>
-
-      <!-- 次筛选行：各维度 -->
-      <div class="up-filter-dims">
-        <!-- 模型组（始终可见） -->
-        <div class="up-filter-group">
-          <span class="up-filter-label">模型组</span>
-          <el-input v-model="filterGroupName" placeholder="搜索模型组" clearable size="small"
-            class="up-filter__group" @change="loadAll" @clear="loadAll">
-            <template #prefix><el-icon><Search /></el-icon></template>
-          </el-input>
-        </div>
-
-        <!-- 模型名（始终可见） -->
-        <div class="up-filter-group">
-          <span class="up-filter-label">模型名</span>
-          <el-input v-model="filterModelName" placeholder="搜索模型名" clearable size="small"
-            class="up-filter__model" @change="loadAll" @clear="loadAll">
-            <template #prefix><el-icon><Search /></el-icon></template>
-          </el-input>
-        </div>
-
-        <!-- 更多筛选按钮（仅移动端显示） -->
-        <el-button class="up-more-filters-btn" link size="small" @click="showMoreFilters = !showMoreFilters">
-          <el-icon><ArrowDown v-if="!showMoreFilters" /><ArrowUp v-else /></el-icon>
-          {{ showMoreFilters ? '收起筛选' : '更多筛选' }}
-        </el-button>
-
-        <!-- 更多筛选（桌面端始终可见，移动端可折叠） -->
-        <div class="up-filter-dims-extra" :class="{ 'up-filter-dims-extra--open': showMoreFilters }">
-          <div class="up-filter-sep" />
-
-          <!-- 渠道 -->
-          <div class="up-filter-group">
-            <span class="up-filter-label">渠道</span>
-            <el-select v-model="filterProvider" placeholder="全部" clearable size="small"
-              class="up-filter__provider" filterable @change="loadAll" @clear="loadAll">
-              <el-option v-for="p in providerOptions" :key="p" :label="p" :value="p" />
-            </el-select>
-          </div>
-
-          <!-- 状态 -->
-          <div class="up-filter-group">
-            <span class="up-filter-label">状态</span>
-            <el-select v-model="filterStatus" placeholder="全部" clearable size="small"
-              class="up-filter__status" @change="loadAll" @clear="loadAll">
-              <el-option label="全部" value="" />
-              <el-option value="success"><span class="up-status-opt up-status-opt--ok">成功</span></el-option>
-              <el-option value="error"><span class="up-status-opt up-status-opt--err">失败</span></el-option>
-            </el-select>
-          </div>
-
-          <div class="up-filter-sep" />
-
-          <!-- Key 关键词 -->
-          <div class="up-filter-group">
-            <span class="up-filter-label">Key</span>
-            <el-input v-model="filterKeyName" placeholder="搜索 Key 名称" clearable size="small"
-              class="up-filter__key" @change="loadAll" @clear="loadAll">
-              <template #prefix><el-icon><Search /></el-icon></template>
-            </el-input>
-          </div>
-
-          <!-- Key 类型 -->
-          <div class="up-filter-group">
-            <span class="up-filter-label">Key 类型</span>
-            <el-select v-model="filterKeyType" placeholder="全部" clearable size="small"
-              class="up-filter__status" @change="loadAll" @clear="loadAll">
-              <el-option label="全部" value="" />
-              <el-option label="个人 Key" value="personal" />
-              <el-option label="程序 Key" value="service" />
-            </el-select>
-          </div>
-
-          <!-- 用户关键词 -->
-          <div class="up-filter-group">
-            <span class="up-filter-label">用户</span>
-            <el-input v-model="filterUserName" placeholder="搜索用户名" clearable size="small"
-              class="up-filter__user" @change="loadAll" @clear="loadAll">
-              <template #prefix><el-icon><Search /></el-icon></template>
-            </el-input>
-          </div>
-
-          <!-- 部门下拉 -->
-          <div class="up-filter-group">
-            <span class="up-filter-label">部门</span>
-            <el-select v-model="filterDeptName" placeholder="全部" clearable size="small"
-              class="up-filter__dept" filterable @change="loadAll" @clear="loadAll">
-              <el-option v-for="d in deptOptions" :key="d.value" :label="d.label" :value="d.value" />
-            </el-select>
-          </div>
-
-          <!-- 事业部（预留，暂无数据） -->
-          <div class="up-filter-group">
-            <span class="up-filter-label">事业部</span>
-            <el-select v-model="filterStudioId" placeholder="全部" clearable size="small"
-              class="up-filter__studio" filterable @change="loadAll" @clear="loadAll">
-              <el-option v-for="s in studioOptions" :key="s.value" :label="s.label" :value="s.value" />
-            </el-select>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Type Tabs -->
-    <div class="usage-type-tabs">
-      <el-radio-group v-model="activeTab" size="default" @change="onTabChange">
-        <el-radio-button value="chat">Chat</el-radio-button>
-        <el-radio-button value="embedding">Embedding</el-radio-button>
-        <el-radio-button value="rerank">Rerank</el-radio-button>
-        <el-radio-button value="video">Video</el-radio-button>
-      </el-radio-group>
-    </div>
+      </template>
+    </UsageFilterBar>
 
     <template v-if="activeTab === 'video'">
       <VideoKpiCards
         :refresh-token="videoRefreshToken"
         :start="videoDateStart"
         :end="videoDateEnd"
-        :provider-name="filterProvider"
-        :model-name="filterModelName"
+        :provider-name="filterProvider || undefined"
+        :model-name="videoModelParam"
       />
       <VideoTrendChart
         :refresh-token="videoRefreshToken"
         :start="videoDateStart"
         :end="videoDateEnd"
-        :provider-name="filterProvider"
-        :model-name="filterModelName"
+        :provider-name="filterProvider || undefined"
+        :model-name="videoModelParam"
       />
       <VideoDistributionCharts
         :refresh-token="videoRefreshToken"
         :start="videoDateStart"
         :end="videoDateEnd"
-        :provider-name="filterProvider"
-        :model-name="filterModelName"
+        :provider-name="filterProvider || undefined"
+        :model-name="videoModelParam"
       />
-      <VideoTaskTable :refresh-token="videoRefreshToken" />
+      <VideoTaskTable
+        :refresh-token="videoRefreshToken"
+        controlled
+        :status="filterStatus"
+        :model-name="videoModelParam"
+        :provider-name="filterProvider"
+      />
     </template>
     <template v-else>
 
@@ -438,11 +330,11 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
 import {
-  Refresh, Search, Histogram, Money, DataLine, Coin,
+  Refresh, Histogram, Money, DataLine, Coin,
   MagicStick, WarningFilled,
-  ArrowDown, ArrowUp
 } from '@element-plus/icons-vue'
 import UsageLogSection from '@/components/usage/UsageLogSection.vue'
+import UsageFilterBar from '@/components/usage/UsageFilterBar.vue'
 import VideoKpiCards from '@/components/usage/VideoKpiCards.vue'
 import VideoTrendChart from '@/components/usage/VideoTrendChart.vue'
 import VideoDistributionCharts from '@/components/usage/VideoDistributionCharts.vue'
@@ -457,6 +349,11 @@ import { useSettingsStore } from '@/stores/settings'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
 import type { UsageEndpointType } from '@/utils/usage-endpoint'
 import { fmtDateTime, fmtDate, fmtDuration } from '@/utils/time'
+import {
+  countActiveFilters,
+  isStatusCompatible,
+  videoModelNameParam,
+} from '@/utils/usageFilterConfig'
 
 Chart.register(
   BarController, LineController,
@@ -530,16 +427,15 @@ function applyPreset(p: { label: string; days: number }) {
   start.setDate(end.getDate() - p.days)
   dateRange.value = [fmt(start), fmt(end)]
   activePreset.value = p.label
-  loadAll()
+  bumpVideoOrLoadAll()
 }
 
 function onDateChange() {
   activePreset.value = ''
-  loadAll()
+  bumpVideoOrLoadAll()
 }
 
 // ── Filters ──
-const filterModel  = ref('') // 已废弃，保留避免其他引用报错
 const filterKeyId    = ref('')
 const filterKeyName  = ref('')
 const filterKeyType  = ref('')
@@ -552,7 +448,6 @@ const filterModelName = ref('')
 const filterGroupName = ref('')
 const filterEndpoint  = ref('')
 const activeTab = ref('chat')
-const showMoreFilters = ref(false)
 
 const isCompactUsageTab = computed(() =>
   activeTab.value === 'embedding' || activeTab.value === 'rerank',
@@ -578,33 +473,59 @@ const logTableProps = computed(() => ({
 }))
 
 const videoRefreshToken = ref(0)
+const videoModelParam = computed(() =>
+  videoModelNameParam(filterGroupName.value, filterModelName.value),
+)
+
+function bumpVideoOrLoadAll() {
+  if (activeTab.value === 'video') {
+    videoRefreshToken.value++
+    return
+  }
+  loadAll()
+}
+
+function onFilterChange() {
+  bumpVideoOrLoadAll()
+}
 
 function onTabChange(value: string | number | boolean) {
+  const tab = String(value)
   const endpointMap: Record<string, string> = {
     chat: '/v1/chat/completions',
     embedding: '/v1/embeddings',
     rerank: '/v1/rerank',
     video: '/v1/contents/generations/tasks',
   }
-  filterEndpoint.value = endpointMap[value as string] || ''
-  if (value === 'video') {
+  filterEndpoint.value = endpointMap[tab] || ''
+  if (!isStatusCompatible(tab as any, filterStatus.value)) {
+    filterStatus.value = ''
+  }
+  if (tab === 'video') {
     videoRefreshToken.value++
     return
   }
-  if (value === 'embedding' || value === 'rerank') {
+  if (tab === 'embedding' || tab === 'rerank') {
     chartMetric.value = 'reqs'
     distMetric.value = 'reqs'
-  } else if (value === 'chat' && chartMetric.value === 'reqs') {
+  } else if (tab === 'chat' && chartMetric.value === 'reqs') {
     chartMetric.value = 'tokens'
   }
   loadAll()
 }
 
 const activeFilterCount = computed(() =>
-  [filterModelName.value, filterGroupName.value,
-   filterKeyName.value, filterKeyType.value, filterUserName.value, filterDeptName.value,
-   filterStudioId.value, filterProvider.value, filterStatus.value]
-    .filter(Boolean).length
+  countActiveFilters('cost', activeTab.value as any, {
+    groupName: filterGroupName.value,
+    modelName: filterModelName.value,
+    keyName: filterKeyName.value,
+    keyType: filterKeyType.value,
+    userName: filterUserName.value,
+    deptName: filterDeptName.value,
+    studioId: filterStudioId.value,
+    provider: filterProvider.value,
+    status: filterStatus.value,
+  }),
 )
 
 function clearFilters() {
@@ -619,7 +540,7 @@ function clearFilters() {
   filterProvider.value  = ''
   filterStatus.value    = ''
   filterEndpoint.value  = ''
-  loadAll()
+  bumpVideoOrLoadAll()
 }
 const groupBy = ref('day')
 

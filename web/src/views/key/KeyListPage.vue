@@ -6,7 +6,6 @@
         <p class="page-desc">管理你的 Key{{ authStore.isManager ? '，审批团队成员的申请' : '' }}</p>
       </div>
       <div class="header-actions">
-        <el-button type="primary" @click="handleCreateClick">{{ createKeyButtonLabel }}</el-button>
         <div class="base-url-box">
           <span class="base-url-box__prefix">BASE URL</span>
           <span class="base-url-box__value">{{ displayBaseUrl }}</span>
@@ -15,6 +14,7 @@
             {{ urlCopied ? '已复制' : '复制' }}
           </button>
         </div>
+        <el-button type="primary" @click="handleCreateClick">{{ createKeyButtonLabel }}</el-button>
       </div>
     </div>
 
@@ -1181,7 +1181,7 @@ watch(() => authStore.effectiveRole, (role) => {
 .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
 .page-title { font-size: 22px; font-weight: 700; margin: 0; }
 .page-desc { font-size: 13px; color: var(--el-text-color-secondary); margin: 4px 0 0; }
-.header-actions { flex-shrink: 0; }
+.header-actions { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
 .key-cell { display: flex; align-items: center; gap: 6px; }
 .key-masked { font-family: 'SF Mono',monospace; font-size: 13px; background: var(--el-fill-color-light); padding: 2px 10px; border-radius: 4px; color: var(--el-text-color-secondary); }
 .text-muted { color: var(--el-text-color-secondary); font-size: 13px; }

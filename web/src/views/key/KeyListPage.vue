@@ -4,20 +4,18 @@
       <div>
         <h2 class="page-title">API 密钥</h2>
         <p class="page-desc">管理你的 Key{{ authStore.isManager ? '，审批团队成员的申请' : '' }}</p>
+        <div class="base-url-inline">
+          <span class="base-url-inline__label">Base URL</span>
+          <code class="base-url-inline__value">{{ displayBaseUrl }}</code>
+          <button class="base-url-inline__btn" :class="{ ok: urlCopied }" @click="copyBaseUrl">
+            <el-icon><component :is="urlCopied ? Check : CopyDocument" /></el-icon>
+            {{ urlCopied ? '已复制' : '复制' }}
+          </button>
+        </div>
       </div>
       <div class="header-actions">
         <el-button type="primary" @click="handleCreateClick">{{ createKeyButtonLabel }}</el-button>
       </div>
-    </div>
-
-    <!-- Base URL 复制条 -->
-    <div class="base-url-bar">
-      <span class="base-url-bar__prefix">Base URL</span>
-      <span class="base-url-bar__value">{{ displayBaseUrl }}</span>
-      <button class="base-url-bar__btn" :class="{ ok: urlCopied }" @click="copyBaseUrl">
-        <el-icon><component :is="urlCopied ? Check : CopyDocument" /></el-icon>
-        {{ urlCopied ? '已复制' : '复制' }}
-      </button>
     </div>
 
     <el-alert
@@ -1490,69 +1488,49 @@ watch(() => authStore.effectiveRole, (role) => {
   line-height: 1.4;
 }
 
-/* ── Base URL 复制条 ── */
-.base-url-bar {
-  display: flex;
+/* ── Base URL inline 组件 ── */
+.base-url-inline {
+  display: inline-flex;
   align-items: center;
-  background: var(--el-fill-color-blank);
-  border: 1.5px solid #C8E4E2;
-  border-radius: 10px;
-  overflow: hidden;
-  box-shadow: 0 2px 8px rgba(54,179,78,0.06);
-  max-width: 100%;
-  margin-bottom: 16px;
-}
-.base-url-bar__prefix {
-  padding: 0 12px;
-  font-size: 11px;
-  font-weight: 700;
-  color: #36B34E;
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
-  border-right: 1px solid #D8EEEC;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  white-space: nowrap;
-  background: rgba(54,179,78,0.04);
-}
-.base-url-bar__value {
-  flex: 1;
-  padding: 0 14px;
-  font-family: 'Fira Code', 'JetBrains Mono', monospace;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 6px 12px;
+  background: #f5f7fa;
+  border-radius: 6px;
   font-size: 13px;
-  color: #1A5C58;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+.base-url-inline__label {
+  color: #909399;
+  font-weight: 500;
+}
+.base-url-inline__value {
+  font-family: 'Fira Code', 'JetBrains Mono', monospace;
+  color: #303133;
+  font-size: 13px;
   user-select: all;
 }
-.base-url-bar__btn {
-  display: flex;
+.base-url-inline__btn {
+  display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 0 16px;
-  height: 40px;
+  gap: 4px;
+  padding: 4px 10px;
+  margin-left: 4px;
   background: #36B34E;
   border: none;
+  border-radius: 4px;
   color: #fff;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
-  transition: background 0.15s;
-  white-space: nowrap;
-  .el-icon { font-size: 14px; }
+  transition: all 0.15s;
   &:hover { background: #229A94; }
   &.ok { background: #0EA371; }
-  &:focus-visible { outline: 2px solid #36B34E; outline-offset: 2px; }
+  .el-icon { font-size: 13px; }
 }
 
-:global(html.dark) .base-url-bar { border-color: #1F5230; background: #0A1B1A; box-shadow: none; }
-:global(html.dark) .base-url-bar__prefix { background: rgba(54,179,78,0.07); border-color: #1F5230; }
-:global(html.dark) .base-url-bar__value { color: #6CD083; }
-
-@media (max-width: 768px) {
-  .base-url-bar { width: 100%; }
+:global(html.dark) .base-url-inline {
+  background: #1a1a1a;
+  .base-url-inline__label { color: #a3a3a3; }
+  .base-url-inline__value { color: #e5e5e5; }
 }
 </style>

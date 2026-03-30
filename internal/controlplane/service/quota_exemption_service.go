@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/example/llm-gateway/internal/controlplane/event"
 	"github.com/example/llm-gateway/internal/core/quota"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -184,7 +185,13 @@ func (s *QuotaExemptionService) refreshSnapshotAsync() {
 		return
 	}
 
-	s.rdb.Publish(ctx, "config:change", "quota_snapshot_updated")
+	ev := event.NewChangeEvent(event.QuotaSnapshotUpdated, "quota", uuid.Nil, 0)
+	payload, err := json.Marshal(ev)
+	if err != nil {
+		slog.Warn("quota snapshot event marshal failed", "error", err)
+	} else if err := s.rdb.Publish(ctx, "config:change", string(payload)).Err(); err != nil {
+		slog.Warn("quota snapshot publish failed", "error", err)
+	}
 	slog.Info("quota snapshot updated with exemptions", "count", len(exemptions))
 }
 

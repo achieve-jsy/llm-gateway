@@ -9,9 +9,11 @@ import (
 	"time"
 
 	authmodel "github.com/example/llm-gateway/internal/auth/model"
+	"github.com/example/llm-gateway/internal/controlplane/event"
 	cpmodel "github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	corequota "github.com/example/llm-gateway/internal/core/quota"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -289,7 +291,13 @@ func (s *QuotaService) refreshSnapshot(ctx context.Context) error {
 	if err := s.rdb.Set(ctx, QuotaSnapshotKey, data, 0).Err(); err != nil {
 		return fmt.Errorf("set quota snapshot: %w", err)
 	}
-	if err := s.rdb.Publish(ctx, "config:change", "quota_snapshot_updated").Err(); err != nil {
+	// 必须发 JSON ChangeEvent：gateway provider 订阅器会 json.Unmarshal；
+	// 裸字符串会刷 ERROR，且配额 ConfigLoader 也约定识别 type=quota_snapshot_updated。
+	ev := event.NewChangeEvent(event.QuotaSnapshotUpdated, "quota", uuid.Nil, 0)
+	payload, err := json.Marshal(ev)
+	if err != nil {
+		slog.Warn("quota snapshot event marshal failed", "error", err)
+	} else if err := s.rdb.Publish(ctx, "config:change", string(payload)).Err(); err != nil {
 		slog.Warn("quota snapshot publish failed", "error", err)
 	}
 	slog.Info("quota snapshot refreshed")

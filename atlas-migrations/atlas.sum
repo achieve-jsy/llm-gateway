@@ -1,4 +1,4 @@
-h1:KQHH6DrTj0Cb5ZxBl1dVhak4QIkoJQl2ApPtZ5HOD/8=
+h1:lFflbbHbPTGw8C44ZPDxsPYZlVODGBo1GKYOcHLKi0k=
 20260609082623_baseline.sql h1:EypMLzQ+lwKOXInv3+ZdRYfRjDkE8V0LWKJ+7Ul6hMY=
 20260610120000_add_model_status.sql h1:dsiXmqu5v1ClJQJFnN8Ilphj0UtIN0I6bpvUW43i294=
 20260611000000_add_users_login_status.sql h1:IdW/XoVpwI/HIG0nsz+cLsWwQfoIhguaFU3LWMwelMY=
@@ -32,3 +32,4 @@ h1:KQHH6DrTj0Cb5ZxBl1dVhak4QIkoJQl2ApPtZ5HOD/8=
 20260710040000_add_models_video_params.sql h1:SYF8n8rzqp9ZtrwUJOtYfj7flcPoEc3pdfxknA5bfUw=
 20260710050000_add_model_groups_model_type.sql h1:EB6YgL6TrSHzUj0w/8/gyzsJouMy3loMd4qBjnXBZTw=
 20260710120000_rename_seedance_relay_display_name.sql h1:+VTEM+rYPz8YZS7oaGwBXVQX/h3dRBbmYnLKA+yW5YE=
+20260714172000_create_quota_exemptions_table.sql h1:EjEIbzJF2ncDPa+QBOKOw7Qal622DeyOTomalSn8TOk=

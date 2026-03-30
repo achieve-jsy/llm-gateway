@@ -10,6 +10,7 @@ import (
 	// 加载全部 GORM model 包
 	authmodel "github.com/example/llm-gateway/internal/auth/model"
 	cpmmodel "github.com/example/llm-gateway/internal/controlplane/model"
+	corequota "github.com/example/llm-gateway/internal/core/quota"
 	obsrvmodel "github.com/example/llm-gateway/internal/observability/model"
 )
 
@@ -48,6 +49,8 @@ func main() {
 		// Seedance 视频任务记录
 		&cpmmodel.VideoTask{},
 		&cpmmodel.VideoTaskEvent{},
+		// 配额紧急豁免（原 migrations/058，补入 Atlas）
+		&corequota.QuotaExemption{},
 
 		// auth/model (3 个表)
 		&authmodel.Department{},

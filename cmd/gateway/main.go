@@ -146,6 +146,12 @@ func main() {
 	}
 
 	subscriber := infra.NewSubscriber(rdb, func(ev infra.ChangeEvent) {
+		// 配额快照事件由 quota.ConfigLoader 处理，这里只负责 provider 热更新。
+		if ev.ResourceType == "quota" ||
+			ev.Type == "quota_snapshot_updated" ||
+			ev.Type == "quota_config_changed" {
+			return
+		}
 		providerLoader.HandleChangeEvent(fetchEntries)(ev)
 		if r := providerLoader.Router(); r != nil {
 			state.MarkLoadSuccess("reload", r.ModelCount(), ev.SnapshotVersion)

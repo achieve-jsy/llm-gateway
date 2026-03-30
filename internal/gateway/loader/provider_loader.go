@@ -134,6 +134,13 @@ func (l *ProviderLoader) Build(entries []gatewaymodel.ProviderEntry) (*providers
 // configuration snapshot and rebuilds the router.
 func (l *ProviderLoader) HandleChangeEvent(fetchEntries func() ([]gatewaymodel.ProviderEntry, error)) infra.ChangeCallback {
 	return func(ev infra.ChangeEvent) {
+		// 配额快照刷新走独立 ConfigLoader，不应触发 provider Router 全量重建。
+		if ev.ResourceType == "quota" ||
+			ev.Type == "quota_snapshot_updated" ||
+			ev.Type == "quota_config_changed" {
+			return
+		}
+
 		slog.Info("loader: config change event received, rebuilding router",
 			"event_type", ev.Type,
 			"resource_type", ev.ResourceType,

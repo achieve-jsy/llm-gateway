@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -118,6 +119,23 @@ func (p *Provider) StreamResponses(ctx context.Context, req *core.ResponsesReque
 func (p *Provider) Embeddings(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
 	if req == nil {
 		return nil, core.NewInvalidRequestError("embedding request is required", nil)
+	}
+
+	// 调试日志
+	slog.Info("Embeddings: received request",
+		"model", req.Model,
+		"model_type", req.ModelType,
+		"input_type", fmt.Sprintf("%T", req.Input),
+		"input_value", req.Input)
+
+	// 输入包含图片/音频 → 必须走 multimodal API
+	isMultimodal := isMultimodalInput(req.Input)
+	slog.Info("Embeddings: multimodal check",
+		"is_multimodal", isMultimodal)
+
+	if isMultimodal {
+		slog.Info("Embeddings: routing to multimodal API")
+		return p.multimodalEmbeddings(ctx, req)
 	}
 
 	// 精确路由：根据 model_type 选择 API
@@ -363,6 +381,15 @@ func (p *Provider) multimodalEmbeddings(ctx context.Context, req *core.Embedding
 		return nil, core.NewInvalidRequestError("input must be a non-empty string, array of strings, or array of {text,image,audio} objects", nil)
 	}
 
+	// 智能模型切换：如果当前模型是文本模型，自动切换到多模态模型
+	if !isMultimodalCapableModel(req.Model) {
+		slog.Info("Auto-switching to multimodal model",
+			"original_model", req.Model,
+			"new_model", "qwen3-vl-embedding",
+			"reason", "multimodal input detected")
+		req.Model = "qwen3-vl-embedding"
+	}
+
 	params := extractMultimodalEmbeddingParams(req)
 
 	// 大输入分批处理，避免单次请求体超过百炼 API 限制
@@ -468,7 +495,47 @@ func (p *Provider) doMultimodalEmbedding(ctx context.Context, model string, cont
 	}, nil
 }
 
+// isMultimodalCapableModel 检查模型是否支持多模态输入
+func isMultimodalCapableModel(modelName string) bool {
+	// 百炼支持的多模态 embedding 模型
+	multimodalModels := map[string]bool{
+		"qwen3-vl-embedding": true,
+		// 未来可以添加更多多模态模型
+	}
+
+	// 检查是否是已知的多模态模型
+	if multimodalModels[modelName] {
+		return true
+	}
+
+	// 启发式检查：模型名包含 "vl" 通常是视觉语言模型
+	// 这是一个宽松的检查，确保未知模型也能被正确处理
+	return strings.Contains(strings.ToLower(modelName), "-vl-")
+}
+
 // parseMultimodalInputs 将 core.EmbeddingRequest.Input 解析为 []bailianMultimodalContent。
+// 支持三种格式：
+// isMultimodalInput 检查输入是否包含多模态内容（图片/音频）
+func isMultimodalInput(input any) bool {
+	if input == nil {
+		return false
+	}
+	if list, ok := input.([]interface{}); ok {
+		for _, item := range list {
+			if m, ok := item.(map[string]interface{}); ok {
+				if _, hasImage := m["image"]; hasImage {
+					return true
+				}
+				if _, hasAudio := m["audio"]; hasAudio {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// parseMultimodalInputs 将 core.EmbeddingRequest.Input 解析为多模态内容切片。
 // 支持三种格式：
 //   - string → [{Text: s}]
 //   - []string → [{Text: s}, ...]

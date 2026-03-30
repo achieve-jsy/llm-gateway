@@ -13,30 +13,93 @@ import (
 	"github.com/example/llm-gateway/internal/core/video"
 )
 
-// Adapter 火山引擎官方适配器
+// Adapter 火山引擎官方适配器。
+// 鉴权由 Creds.AuthType 决定：api_key → Bearer；aksk → HMAC。不做静默回退。
 type Adapter struct {
-	name    string
-	baseURL string
-	signer  *Signer
-	client  *http.Client
+	name     string
+	baseURL  string
+	authType AuthType
+	apiKey   string
+	signer   *Signer
+	client   *http.Client
 }
 
-// NewAdapter 创建官方适配器
+// NewAdapter 创建官方适配器（HMAC AK/SK）。
 func NewAdapter(name, baseURL, accessKey, secretKey, region string) *Adapter {
+	return NewAdapterFromCreds(name, baseURL, Creds{
+		AuthType:  AuthAKSK,
+		AccessKey: accessKey,
+		SecretKey: secretKey,
+		Region:    region,
+	})
+}
+
+// NewBearerAdapter 创建方舟 API Key（Bearer）适配器。
+func NewBearerAdapter(name, baseURL, apiKey string) *Adapter {
+	return NewAdapterFromCreds(name, baseURL, Creds{
+		AuthType: AuthAPIKey,
+		APIKey:   apiKey,
+		Region:   "cn-beijing",
+	})
+}
+
+// NewAdapterWithAuth 兼容旧调用：按字段推断 auth_type 后构建（有 api_key 则 Bearer）。
+func NewAdapterWithAuth(name, baseURL, apiKey, accessKey, secretKey, region string) *Adapter {
+	c := Creds{
+		APIKey:    apiKey,
+		AccessKey: accessKey,
+		SecretKey: secretKey,
+		Region:    region,
+	}
+	if strings.TrimSpace(apiKey) != "" {
+		c.AuthType = AuthAPIKey
+	} else {
+		c.AuthType = AuthAKSK
+	}
+	return NewAdapterFromCreds(name, baseURL, c)
+}
+
+// NewAdapterFromCreds 按显式/规范化后的 Creds 构建适配器。
+func NewAdapterFromCreds(name, baseURL string, cred Creds) *Adapter {
 	baseURL = strings.TrimSuffix(baseURL, "/")
-	return &Adapter{
-		name:    name,
-		baseURL: baseURL,
-		signer:  NewSigner(accessKey, secretKey, region),
+	cred = cred.Normalized()
+	a := &Adapter{
+		name:     name,
+		baseURL:  baseURL,
+		authType: cred.AuthType,
+		apiKey:   cred.APIKey,
 		client: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: 60 * time.Second,
 		},
 	}
+	if cred.AuthType == AuthAKSK && cred.AccessKey != "" && cred.SecretKey != "" {
+		a.signer = NewSigner(cred.AccessKey, cred.SecretKey, cred.Region)
+	}
+	return a
 }
 
 // Name 返回适配器名称
 func (a *Adapter) Name() string {
 	return a.name
+}
+
+func (a *Adapter) applyAuth(req *http.Request) error {
+	switch a.authType {
+	case AuthAPIKey:
+		if a.apiKey == "" {
+			return fmt.Errorf("seedance-volcengine: auth_type=api_key but api_key is empty")
+		}
+		req.Header.Set("Authorization", "Bearer "+a.apiKey)
+		return nil
+	case AuthAKSK:
+		if a.signer == nil {
+			return fmt.Errorf("seedance-volcengine: auth_type=aksk but access_key/secret_key incomplete")
+		}
+		a.signer.Sign(req)
+		return nil
+	default:
+		return fmt.Errorf("seedance-volcengine: missing or unsupported auth_type")
+	}
 }
 
 // CreateTask 创建视频任务
@@ -49,7 +112,9 @@ func (a *Adapter) CreateTask(ctx context.Context, req json.RawMessage) (string, 
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Host = strings.TrimPrefix(strings.TrimPrefix(a.baseURL, "https://"), "http://")
-	a.signer.Sign(httpReq)
+	if err := a.applyAuth(httpReq); err != nil {
+		return "", err
+	}
 
 	resp, err := a.client.Do(httpReq)
 	if err != nil {
@@ -85,7 +150,9 @@ func (a *Adapter) GetTask(ctx context.Context, taskID string) (json.RawMessage, 
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Host = strings.TrimPrefix(strings.TrimPrefix(a.baseURL, "https://"), "http://")
-	a.signer.Sign(httpReq)
+	if err := a.applyAuth(httpReq); err != nil {
+		return nil, err
+	}
 
 	resp, err := a.client.Do(httpReq)
 	if err != nil {
@@ -115,7 +182,9 @@ func (a *Adapter) DoAction(ctx context.Context, action string, req json.RawMessa
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Host = strings.TrimPrefix(strings.TrimPrefix(a.baseURL, "https://"), "http://")
-	a.signer.Sign(httpReq)
+	if err := a.applyAuth(httpReq); err != nil {
+		return nil, err
+	}
 
 	resp, err := a.client.Do(httpReq)
 	if err != nil {

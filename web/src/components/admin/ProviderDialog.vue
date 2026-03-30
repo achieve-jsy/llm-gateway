@@ -121,8 +121,61 @@
               </template>
             </template>
 
+            <!-- Seedance 官方：方舟 API Key / AK·SK 二选一 -->
+            <template v-else-if="selectedDef.id === 'seedance-volcengine'">
+              <el-form-item label="认证方式">
+                <el-radio-group v-model="volcAuthType">
+                  <el-radio value="api_key">方舟 API Key</el-radio>
+                  <el-radio value="aksk">AK / SK</el-radio>
+                </el-radio-group>
+                <div class="form-hint">
+                  <span v-if="volcAuthType === 'api_key'">
+                    在火山方舟控制台创建 API Key，调用 ark.cn-beijing.volces.com 时使用 Bearer 鉴权
+                  </span>
+                  <span v-else>
+                    使用 IAM Access Key / Secret Key，走 HMAC-SHA256 签名（不做 Bearer 回退）
+                  </span>
+                </div>
+              </el-form-item>
+
+              <template v-if="volcAuthType === 'api_key'">
+                <el-form-item label="API Key" prop="credentials_map.api_key" :rules="volcApiKeyRules">
+                  <el-input
+                    v-model="formData.credentials_map.api_key"
+                    :type="!isEdit ? 'password' : 'text'"
+                    :show-password="!isEdit"
+                    :placeholder="isEdit ? '已配置，清空后输入新值可更新' : '方舟 API Key（UUID 或 sk-...）'"
+                  />
+                </el-form-item>
+              </template>
+
+              <template v-else>
+                <el-form-item label="Access Key" prop="credentials_map.access_key" :rules="volcAkRules">
+                  <el-input
+                    v-model="formData.credentials_map.access_key"
+                    :placeholder="isEdit ? '已配置，清空后输入新值可更新' : 'AK...'"
+                  />
+                </el-form-item>
+                <el-form-item label="Secret Key" prop="credentials_map.secret_key" :rules="volcSkRules">
+                  <el-input
+                    v-model="formData.credentials_map.secret_key"
+                    :type="!isEdit ? 'password' : 'text'"
+                    :show-password="!isEdit"
+                    :placeholder="isEdit ? '已配置，清空后输入新值可更新' : 'SK...'"
+                  />
+                </el-form-item>
+                <el-form-item label="Region">
+                  <el-input
+                    v-model="formData.credentials_map.region"
+                    placeholder="cn-beijing"
+                  />
+                  <div class="form-hint">默认 cn-beijing</div>
+                </el-form-item>
+              </template>
+            </template>
+
             <!-- 其他渠道类型：通用 schema 渲染 -->
-            <!-- Seedance 类型（如 seedance-text2video）通过 credential_schema 定义 api_key 字段，自动在此渲染 -->
+            <!-- Seedance 中转等通过 credential_schema 定义 api_key 字段，自动在此渲染 -->
             <template v-else>
               <el-form-item
                 v-for="(field, key) in selectedDef.credential_schema"
@@ -318,6 +371,13 @@ const bedrockApiKeyRules = [{ required: true, message: '请输入 Bedrock API Ke
 const bedrockIamRules = [{ required: true, message: '请输入 Access Key ID', trigger: 'blur' }]
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─── Seedance 官方鉴权状态 ────────────────────────────────────────────────────
+const volcAuthType = ref<'api_key' | 'aksk'>('api_key')
+const volcApiKeyRules = [{ required: true, message: '请输入方舟 API Key', trigger: 'blur' }]
+const volcAkRules = [{ required: true, message: '请输入 Access Key', trigger: 'blur' }]
+const volcSkRules = [{ required: true, message: '请输入 Secret Key', trigger: 'blur' }]
+// ─────────────────────────────────────────────────────────────────────────────
+
 const isEdit = computed(() => !!props.provider)
 
 /** 当前选中的渠道定义 */
@@ -430,6 +490,21 @@ watch(
               bedrockAuthType.value = 'api_key'
               formData.value.credentials_map.api_key = parsed.api_key
             }
+          } else if (val.definition_id === 'seedance-volcengine') {
+            const auth = String(parsed.auth_type || '').toLowerCase()
+            if (auth === 'aksk' || auth === 'iam' || auth === 'hmac' || (!auth && parsed.access_key)) {
+              volcAuthType.value = 'aksk'
+              formData.value.credentials_map = {
+                access_key: parsed.access_key || '',
+                secret_key: parsed.secret_key || '',
+                region: parsed.region || 'cn-beijing'
+              }
+            } else {
+              volcAuthType.value = 'api_key'
+              formData.value.credentials_map = {
+                api_key: parsed.api_key || parsed.ark_api_key || ''
+              }
+            }
           } else {
             for (const key of Object.keys(selectedDef.value.credential_schema)) {
               formData.value.credentials_map[key] = parsed[key] || ''
@@ -440,6 +515,9 @@ watch(
           if (val.definition_id === 'bedrock') {
             bedrockAuthType.value = 'api_key'
             formData.value.credentials_map.api_key = val.credentials
+          } else if (val.definition_id === 'seedance-volcengine') {
+            volcAuthType.value = 'api_key'
+            formData.value.credentials_map = { api_key: val.credentials }
           } else {
             const firstKey = Object.keys(selectedDef.value.credential_schema)[0]
             if (firstKey) {
@@ -501,6 +579,10 @@ function handleDefinitionChange(defId: string) {
     // 重置 Bedrock 专属认证状态
     bedrockAuthType.value = 'api_key'
     bedrockIamForm.value = { access_key_id: '', secret_access_key: '', session_token: '' }
+    formData.value.credentials_map = { api_key: '' }
+  }
+  if (defId === 'seedance-volcengine') {
+    volcAuthType.value = 'api_key'
     formData.value.credentials_map = { api_key: '' }
   }
   if (defId === 'azure-openai') {
@@ -601,8 +683,27 @@ async function handleSubmit() {
       // api_key 方式：credentials_map.api_key 已直接绑定
     }
 
-    const credentialsJson = JSON.stringify(formData.value.credentials_map)
-    const hasCredentials = Object.values(formData.value.credentials_map).some(v => v !== '')
+    // Seedance 官方：按所选鉴权方式组装 credentials（含显式 auth_type）
+    let volcCredentials: Record<string, string> | null = null
+    if (formData.value.definition_id === 'seedance-volcengine') {
+      if (volcAuthType.value === 'api_key') {
+        volcCredentials = {
+          auth_type: 'api_key',
+          api_key: formData.value.credentials_map.api_key || ''
+        }
+      } else {
+        volcCredentials = {
+          auth_type: 'aksk',
+          access_key: formData.value.credentials_map.access_key || '',
+          secret_key: formData.value.credentials_map.secret_key || '',
+          region: formData.value.credentials_map.region || 'cn-beijing'
+        }
+      }
+    }
+
+    const credentialsSource = volcCredentials || formData.value.credentials_map
+    const credentialsJson = JSON.stringify(credentialsSource)
+    const hasCredentials = Object.values(credentialsSource).some(v => v !== '')
 
     // Bedrock: 根据 region 自动构造 endpoint
     let endpoint = formData.value.endpoint
@@ -629,15 +730,37 @@ async function handleSubmit() {
       let isCredentialModified = false
       try {
         const originalMasked = JSON.parse(maskedCredentials.value || '{}')
-        for (const [key, val] of Object.entries(formData.value.credentials_map)) {
-          if (val !== '' && val !== (originalMasked[key] || '')) {
+        if (formData.value.definition_id === 'seedance-volcengine' && volcCredentials) {
+          const origAuth = String(originalMasked.auth_type || '').toLowerCase()
+          const inferredOrig: 'api_key' | 'aksk' =
+            origAuth === 'aksk' || origAuth === 'iam' || origAuth === 'hmac' || (!origAuth && originalMasked.access_key)
+              ? 'aksk'
+              : 'api_key'
+          if (inferredOrig !== volcAuthType.value) {
             isCredentialModified = true
-            break
+          } else {
+            const secretKeys = volcAuthType.value === 'api_key'
+              ? ['api_key']
+              : ['access_key', 'secret_key', 'region']
+            for (const key of secretKeys) {
+              const val = volcCredentials[key] || ''
+              if (val !== '' && val !== (originalMasked[key] || '')) {
+                isCredentialModified = true
+                break
+              }
+            }
+          }
+        } else {
+          for (const [key, val] of Object.entries(formData.value.credentials_map)) {
+            if (val !== '' && val !== (originalMasked[key] || '')) {
+              isCredentialModified = true
+              break
+            }
           }
         }
       } catch {
         // 非 JSON 旧格式，任何非空输入都视为修改
-        isCredentialModified = Object.values(formData.value.credentials_map).some(v => v !== '')
+        isCredentialModified = Object.values(credentialsSource).some(v => v !== '')
       }
       if (!isCredentialModified) {
         delete (payload as any).credentials

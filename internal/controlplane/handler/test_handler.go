@@ -236,11 +236,11 @@ func (h *TestHandler) testSeedanceRelay(provider *model.Provider, credJSON strin
 
 // testSeedanceVolcengine 与定时健康检查共用 ProbeSeedanceVolcengineConnectivity。
 func (h *TestHandler) testSeedanceVolcengine(provider *model.Provider, credJSON string, testChat bool) testResult {
-	ak, sk, region := cpservice.ParseSeedanceVolcCredentials(credJSON)
-	if ak == "" || sk == "" {
-		return testResult{Success: false, Error: "seedance-volcengine: missing access_key/secret_key"}
+	cred := cpservice.ParseSeedanceVolcCreds(credJSON)
+	if !cred.HasAuth() {
+		return testResult{Success: false, Error: "seedance-volcengine: missing credentials for selected auth_type"}
 	}
-	res := cpservice.ProbeSeedanceVolcengineConnectivity(context.Background(), provider.Endpoint, ak, sk, region)
+	res := cpservice.ProbeSeedanceVolcengineConnectivityCreds(context.Background(), provider.Endpoint, cred)
 	out := testResult{
 		Success:      res.Success,
 		ResponseTime: res.ResponseTime,
@@ -518,10 +518,15 @@ func extractErrorMessage(body []byte) string {
 	return truncate(string(body), 150)
 }
 
-// extractAPIKey 从凭证 JSON 中提取 api_key 字段，若不是 JSON 则原样返回
+// extractAPIKey 从凭证 JSON 中提取 api_key 字段，若不是 JSON 则原样返回。
+// auth_type=aksk 时保留完整 JSON，避免丢失 AK/SK。
 func extractAPIKey(credentialJSON string) string {
 	var m map[string]string
 	if json.Unmarshal([]byte(credentialJSON), &m) == nil {
+		switch strings.ToLower(strings.TrimSpace(m["auth_type"])) {
+		case "aksk", "iam", "hmac":
+			return credentialJSON
+		}
 		if key, ok := m["api_key"]; ok && key != "" {
 			return key
 		}

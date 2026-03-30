@@ -175,11 +175,11 @@ func (h *ModelCheckHandler) checkModel(ctx context.Context, m *model.Model) *Mod
 			res := cpservice.ProbeSeedanceRelayConnectivity(ctx, provider.Endpoint, apiKey)
 			success, responseTime, errMsg = res.Success, res.ResponseTime, res.Message
 		case "seedance-volcengine":
-			ak, sk, region := cpservice.ParseSeedanceVolcCredentials(credJSON)
-			if ak == "" || sk == "" {
-				success, responseTime, errMsg = false, 0, "seedance-volcengine: missing access_key/secret_key"
+			cred := cpservice.ParseSeedanceVolcCreds(credJSON)
+			if !cred.HasAuth() {
+				success, responseTime, errMsg = false, 0, "seedance-volcengine: missing credentials for selected auth_type"
 			} else {
-				res := cpservice.ProbeSeedanceVolcengineConnectivity(ctx, provider.Endpoint, ak, sk, region)
+				res := cpservice.ProbeSeedanceVolcengineConnectivityCreds(ctx, provider.Endpoint, cred)
 				success, responseTime, errMsg = res.Success, res.ResponseTime, res.Message
 			}
 		default:

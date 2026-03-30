@@ -499,11 +499,11 @@ func (s *HealthCheckService) doModelForwardCheck(m *model.Model) (bool, int, str
 			res := ProbeSeedanceRelayConnectivity(context.Background(), provider.Endpoint, apiKey)
 			return res.Success, res.ResponseTime, res.Message
 		case "seedance-volcengine":
-			ak, sk, region := parseSeedanceVolcCredentials(credJSON)
-			if ak == "" || sk == "" {
-				return false, 0, "seedance-volcengine: missing access_key/secret_key"
+			cred := ParseSeedanceVolcCreds(credJSON)
+			if !cred.HasAuth() {
+				return false, 0, "seedance-volcengine: missing credentials for selected auth_type"
 			}
-			res := ProbeSeedanceVolcengineConnectivity(context.Background(), provider.Endpoint, ak, sk, region)
+			res := ProbeSeedanceVolcengineConnectivityCreds(context.Background(), provider.Endpoint, cred)
 			return res.Success, res.ResponseTime, res.Message
 		default:
 			return true, 0, "skipped: unsupported provider type for auto-check"
@@ -846,18 +846,18 @@ func (s *HealthCheckService) checkSeedanceRelayProvider(ctx context.Context, pro
 	return cr
 }
 
-// checkSeedanceVolcengineProvider 官方 Seedance 健康检测（HMAC 连通+鉴权，不创建视频）。
+// checkSeedanceVolcengineProvider 官方 Seedance 健康检测（Bearer/HMAC 连通+鉴权，不创建视频）。
 func (s *HealthCheckService) checkSeedanceVolcengineProvider(ctx context.Context, provider *model.Provider, credJSON string, checkMode string, maxFailures int, cr *CheckResult) *CheckResult {
-	ak, sk, region := parseSeedanceVolcCredentials(credJSON)
-	if ak == "" || sk == "" {
-		cr.Error = "seedance-volcengine: missing access_key/secret_key"
+	cred := ParseSeedanceVolcCreds(credJSON)
+	if !cred.HasAuth() {
+		cr.Error = "seedance-volcengine: missing credentials for selected auth_type"
 		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, 0, cr.Error)
 		s.handleProviderFailure(provider.ID, maxFailures, cr)
 		return cr
 	}
 
 	runProbe := func() SeedanceRelayProbeResult {
-		return ProbeSeedanceVolcengineConnectivity(ctx, provider.Endpoint, ak, sk, region)
+		return ProbeSeedanceVolcengineConnectivityCreds(ctx, provider.Endpoint, cred)
 	}
 	skipMsg := "skipped: seedance-volcengine probe is connectivity+auth only (no video create)"
 

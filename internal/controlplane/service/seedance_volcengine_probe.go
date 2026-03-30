@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,17 +11,31 @@ import (
 	seedancevolcengine "github.com/example/llm-gateway/internal/providers/seedance/volcengine"
 )
 
+// SeedanceVolcCreds 方舟官方渠道凭证（包装 volcengine.Creds，保持 CP 调用方类型稳定）。
+type SeedanceVolcCreds = seedancevolcengine.Creds
+
 // ProbeSeedanceVolcengineConnectivity 官方 Seedance（火山引擎）连通+鉴权探针。
 //
 // 请求：
 //
 //	GET {endpoint}/api/v3/contents/generations/tasks/__gateway_health_probe__
-//	（HMAC-SHA256 AK/SK 签名，不创建视频）
+//	（Bearer API Key 或 HMAC-SHA256 AK/SK，不创建视频）
 //
 // 判定与景汐中转一致：传输失败 / 401 / 403 / 5xx → 失败；其余（典型 404）→ 成功。
 func ProbeSeedanceVolcengineConnectivity(ctx context.Context, endpoint, accessKey, secretKey, region string) SeedanceRelayProbeResult {
-	if region == "" {
-		region = "cn-beijing"
+	return ProbeSeedanceVolcengineConnectivityCreds(ctx, endpoint, SeedanceVolcCreds{
+		AuthType:  seedancevolcengine.AuthAKSK,
+		AccessKey: accessKey,
+		SecretKey: secretKey,
+		Region:    region,
+	})
+}
+
+// ProbeSeedanceVolcengineConnectivityCreds 按 Creds.AuthType 严格鉴权的连通探针。
+func ProbeSeedanceVolcengineConnectivityCreds(ctx context.Context, endpoint string, cred SeedanceVolcCreds) SeedanceRelayProbeResult {
+	cred = cred.Normalized()
+	if cred.Region == "" {
+		cred.Region = "cn-beijing"
 	}
 	base := strings.TrimRight(endpoint, "/")
 	url := base + "/api/v3/contents/generations/tasks/" + seedanceRelayHealthProbeTaskID
@@ -45,7 +58,36 @@ func ProbeSeedanceVolcengineConnectivity(ctx context.Context, endpoint, accessKe
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Host = strings.TrimPrefix(strings.TrimPrefix(base, "https://"), "http://")
-	seedancevolcengine.NewSigner(accessKey, secretKey, region).Sign(req)
+
+	authMode := string(cred.AuthType)
+	switch cred.AuthType {
+	case seedancevolcengine.AuthAPIKey:
+		if cred.APIKey == "" {
+			return SeedanceRelayProbeResult{
+				Success:      false,
+				ResponseTime: int(time.Since(start).Milliseconds()),
+				Message:      "seedance-volcengine: auth_type=api_key but api_key is empty",
+			}
+		}
+		req.Header.Set("Authorization", "Bearer "+cred.APIKey)
+		authMode = "Bearer"
+	case seedancevolcengine.AuthAKSK:
+		if cred.AccessKey == "" || cred.SecretKey == "" {
+			return SeedanceRelayProbeResult{
+				Success:      false,
+				ResponseTime: int(time.Since(start).Milliseconds()),
+				Message:      "seedance-volcengine: auth_type=aksk but access_key/secret_key incomplete",
+			}
+		}
+		seedancevolcengine.NewSigner(cred.AccessKey, cred.SecretKey, cred.Region).Sign(req)
+		authMode = "HMAC"
+	default:
+		return SeedanceRelayProbeResult{
+			Success:      false,
+			ResponseTime: int(time.Since(start).Milliseconds()),
+			Message:      "seedance-volcengine: missing or unsupported auth_type",
+		}
+	}
 
 	resp, err := client.Do(req)
 	elapsed := int(time.Since(start).Milliseconds())
@@ -80,33 +122,18 @@ func ProbeSeedanceVolcengineConnectivity(ctx context.Context, endpoint, accessKe
 			Success:      true,
 			ResponseTime: elapsed,
 			StatusCode:   code,
-			Message:      "ok: connectivity+auth only (GET tasks/__gateway_health_probe__; HMAC; not video create)",
+			Message:      fmt.Sprintf("ok: connectivity+auth only (GET tasks/__gateway_health_probe__; %s; not video create)", authMode),
 		}
 	}
 }
 
-// ParseSeedanceVolcCredentials 从渠道凭证 JSON 解析 AK/SK/region。
+// ParseSeedanceVolcCredentials 从渠道凭证 JSON 解析 AK/SK/region（兼容旧调用）。
 func ParseSeedanceVolcCredentials(credJSON string) (accessKey, secretKey, region string) {
-	return parseSeedanceVolcCredentials(credJSON)
+	c := ParseSeedanceVolcCreds(credJSON)
+	return c.AccessKey, c.SecretKey, c.Region
 }
 
-// parseSeedanceVolcCredentials 从渠道凭证 JSON 解析 AK/SK/region。
-func parseSeedanceVolcCredentials(credJSON string) (accessKey, secretKey, region string) {
-	var m map[string]string
-	if err := json.Unmarshal([]byte(credJSON), &m); err != nil {
-		return "", "", "cn-beijing"
-	}
-	accessKey = firstNonEmpty(m["access_key"], m["access_key_id"], m["ak"])
-	secretKey = firstNonEmpty(m["secret_key"], m["secret_access_key"], m["sk"])
-	region = firstNonEmpty(m["region"], "cn-beijing")
-	return accessKey, secretKey, region
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
+// ParseSeedanceVolcCreds 解析方舟凭证（严格按 auth_type；无则推断）。
+func ParseSeedanceVolcCreds(credJSON string) SeedanceVolcCreds {
+	return seedancevolcengine.ParseCreds(credJSON)
 }

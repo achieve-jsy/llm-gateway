@@ -1,11 +1,10 @@
 package server
 
 import (
-	"encoding/json"
 	"log/slog"
 
-	gwmodel "github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/core/video"
+	gwmodel "github.com/example/llm-gateway/internal/gateway/model"
 	seedancerelay "github.com/example/llm-gateway/internal/providers/seedance/relay"
 	seedancevolcengine "github.com/example/llm-gateway/internal/providers/seedance/volcengine"
 )
@@ -30,12 +29,12 @@ func buildSeedanceAdapters(entries []gwmodel.ProviderEntry) seedanceAdapters {
 	}
 	if entry := findProviderByType(entries, "seedance-volcengine"); entry != nil {
 		slog.Info("loading seedance-volcengine adapter from provider config", "endpoint", entry.Endpoint, "name", entry.Name)
-		ak, sk, region := parseVolcengineCredentials(entry.Credentials)
-		if ak == "" || sk == "" {
-			slog.Warn("seedance-volcengine credentials incomplete, using placeholder")
-			ak, sk = "placeholder-ak", "placeholder-sk"
+		cred := seedancevolcengine.ParseCreds(entry.Credentials)
+		if !cred.HasAuth() {
+			slog.Warn("seedance-volcengine credentials incomplete, using placeholder", "auth_type", cred.AuthType)
+			cred = seedancevolcengine.Creds{AuthType: seedancevolcengine.AuthAPIKey, APIKey: "placeholder-api-key"}
 		}
-		out.volcengine = seedancevolcengine.NewAdapter(entry.Name, entry.Endpoint, ak, sk, region)
+		out.volcengine = seedancevolcengine.NewAdapterFromCreds(entry.Name, entry.Endpoint, cred)
 		out.volcName = entry.Name
 	}
 	if out.relay == nil {
@@ -44,7 +43,7 @@ func buildSeedanceAdapters(entries []gwmodel.ProviderEntry) seedanceAdapters {
 	}
 	if out.volcengine == nil {
 		slog.Warn("seedance-volcengine adapter not configured, using placeholder credentials")
-		out.volcengine = seedancevolcengine.NewAdapter("seedance-volcengine", "https://ark.cn-beijing.volces.com", "placeholder-ak", "placeholder-sk", "cn-beijing")
+		out.volcengine = seedancevolcengine.NewBearerAdapter("seedance-volcengine", "https://ark.cn-beijing.volces.com", "placeholder-api-key")
 	}
 	return out
 }
@@ -65,29 +64,4 @@ func findProviderByType(entries []gwmodel.ProviderEntry, providerType string) *g
 		}
 	}
 	return nil
-}
-
-// parseVolcengineCredentials 解析火山引擎 JSON 凭证
-// 格式: {"access_key":"...","secret_key":"...","region":"..."}
-type volcengineCredentials struct {
-	AccessKey string `json:"access_key"`
-	SecretKey string `json:"secret_key"`
-	Region    string `json:"region"`
-}
-
-func parseVolcengineCredentials(credJSON string) (ak, sk, region string) {
-	region = "cn-beijing" // 默认值
-	var creds volcengineCredentials
-	if err := json.Unmarshal([]byte(credJSON), &creds); err == nil {
-		if creds.AccessKey != "" {
-			ak = creds.AccessKey
-		}
-		if creds.SecretKey != "" {
-			sk = creds.SecretKey
-		}
-		if creds.Region != "" {
-			region = creds.Region
-		}
-	}
-	return
 }

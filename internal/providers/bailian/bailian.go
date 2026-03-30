@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/llmclient"
@@ -133,6 +134,13 @@ func (p *Provider) Embeddings(ctx context.Context, req *core.EmbeddingRequest) (
 
 // ─── 原生 text-embedding API ──────────────────────────────────────────────
 
+const (
+	// maxEmbeddingBatchChars 单次原生 embedding 请求的最大字符数。
+	// 百炼原生 API 对请求体大小有限制，超过约 10KB 会返回 "url error"。
+	// 这里保守设置为 6000 字符，确保 17 段长 HTML 文本不会超限。
+	maxEmbeddingBatchChars = 6000
+)
+
 type bailianTextEmbeddingReq struct {
 	Model      string                       `json:"model"`
 	Input      bailianTextEmbeddingInput    `json:"input"`
@@ -167,12 +175,71 @@ func (p *Provider) nativeEmbeddings(ctx context.Context, req *core.EmbeddingRequ
 		return nil, core.NewInvalidRequestError("input must be a non-empty string or array of strings", nil)
 	}
 
-	bailianReq := bailianTextEmbeddingReq{
-		Model: req.Model,
-		Input: bailianTextEmbeddingInput{Texts: texts},
+	// 大输入分批处理，避免单次请求体超过百炼 API 限制
+	batches := splitTextsForEmbedding(texts, maxEmbeddingBatchChars)
+	if len(batches) == 1 {
+		return p.doNativeEmbedding(ctx, req.Model, batches[0])
 	}
-	if req.EncodingFormat != "" && req.EncodingFormat != "float" {
-		// 原生 API 只支持 float，base64 暂不支持
+
+	// 多批次并发请求，合并结果
+	type batchResult struct {
+		data  []core.EmbeddingData
+		usage core.EmbeddingUsage
+	}
+	results := make([]batchResult, len(batches))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	var firstErr error
+
+	for i, batch := range batches {
+		wg.Add(1)
+		go func(idx int, b []string) {
+			defer wg.Done()
+			resp, err := p.doNativeEmbedding(ctx, req.Model, b)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				return
+			}
+			results[idx] = batchResult{
+				data:  resp.Data,
+				usage: resp.Usage,
+			}
+		}(i, batch)
+	}
+	wg.Wait()
+
+	if firstErr != nil {
+		return nil, firstErr
+	}
+
+	// 合并结果：按原始索引排序
+	allData := make([]core.EmbeddingData, 0, len(texts))
+	totalTokens := 0
+	for _, r := range results {
+		allData = append(allData, r.data...)
+		totalTokens += r.usage.TotalTokens
+	}
+
+	return &core.EmbeddingResponse{
+		Object: "list",
+		Data:   allData,
+		Model:  req.Model,
+		Usage: core.EmbeddingUsage{
+			PromptTokens: totalTokens,
+			TotalTokens:  totalTokens,
+		},
+	}, nil
+}
+
+// doNativeEmbedding 发送单个批次的 embedding 请求到原生 text-embedding API。
+func (p *Provider) doNativeEmbedding(ctx context.Context, model string, texts []string) (*core.EmbeddingResponse, error) {
+	bailianReq := bailianTextEmbeddingReq{
+		Model: model,
+		Input: bailianTextEmbeddingInput{Texts: texts},
 	}
 
 	var bailianResp bailianTextEmbeddingResp
@@ -198,12 +265,36 @@ func (p *Provider) nativeEmbeddings(ctx context.Context, req *core.EmbeddingRequ
 	return &core.EmbeddingResponse{
 		Object: "list",
 		Data:   data,
-		Model:  req.Model,
+		Model:  model,
 		Usage: core.EmbeddingUsage{
 			PromptTokens: bailianResp.Usage.TotalTokens,
 			TotalTokens:  bailianResp.Usage.TotalTokens,
 		},
 	}, nil
+}
+
+// splitTextsForEmbedding 将文本切片数组按字符数分批次，每批不超过 maxChars 字符。
+// 保持原始索引以便后续合并结果。
+func splitTextsForEmbedding(texts []string, maxChars int) [][]string {
+	var batches [][]string
+	var currentBatch []string
+	currentChars := 0
+
+	for _, t := range texts {
+		chars := len([]rune(t))
+		// 如果当前文本加上去会超限，而且当前批次非空，就开新批次
+		if currentChars+chars > maxChars && len(currentBatch) > 0 {
+			batches = append(batches, currentBatch)
+			currentBatch = nil
+			currentChars = 0
+		}
+		currentBatch = append(currentBatch, t)
+		currentChars += chars
+	}
+	if len(currentBatch) > 0 {
+		batches = append(batches, currentBatch)
+	}
+	return batches
 }
 
 // ─── 多模态 embedding API (qwen3-vl-embedding 等) ─────────────────────────
@@ -241,13 +332,77 @@ func (p *Provider) multimodalEmbeddings(ctx context.Context, req *core.Embedding
 		return nil, core.NewInvalidRequestError("input must be a non-empty string or array of strings", nil)
 	}
 
+	// 大输入分批处理，避免单次请求体超过百炼 API 限制
+	batches := splitTextsForEmbedding(texts, maxEmbeddingBatchChars)
+	if len(batches) == 1 {
+		return p.doMultimodalEmbedding(ctx, req.Model, batches[0], 0)
+	}
+
+	// 多批次并发请求，合并结果
+	type batchResult struct {
+		data  []core.EmbeddingData
+		usage core.EmbeddingUsage
+	}
+	results := make([]batchResult, len(batches))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	var firstErr error
+	offset := 0
+
+	for i, batch := range batches {
+		batchOffset := offset
+		offset += len(batch)
+		wg.Add(1)
+		go func(idx int, b []string, off int) {
+			defer wg.Done()
+			resp, err := p.doMultimodalEmbedding(ctx, req.Model, b, off)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				return
+			}
+			results[idx] = batchResult{
+				data:  resp.Data,
+				usage: resp.Usage,
+			}
+		}(i, batch, batchOffset)
+	}
+	wg.Wait()
+
+	if firstErr != nil {
+		return nil, firstErr
+	}
+
+	allData := make([]core.EmbeddingData, 0, len(texts))
+	totalTokens := 0
+	for _, r := range results {
+		allData = append(allData, r.data...)
+		totalTokens += r.usage.TotalTokens
+	}
+
+	return &core.EmbeddingResponse{
+		Object: "list",
+		Data:   allData,
+		Model:  req.Model,
+		Usage: core.EmbeddingUsage{
+			PromptTokens: totalTokens,
+			TotalTokens:  totalTokens,
+		},
+	}, nil
+}
+
+// doMultimodalEmbedding 发送单个批次的 embedding 请求到多模态 embedding API。
+func (p *Provider) doMultimodalEmbedding(ctx context.Context, model string, texts []string, indexOffset int) (*core.EmbeddingResponse, error) {
 	contents := make([]bailianMultimodalContent, len(texts))
 	for i, t := range texts {
 		contents[i] = bailianMultimodalContent{Text: t}
 	}
 
 	bailianReq := bailianMultimodalEmbeddingReq{
-		Model: req.Model,
+		Model: model,
 		Input: bailianMultimodalEmbeddingInput{Contents: contents},
 	}
 
@@ -267,14 +422,14 @@ func (p *Provider) multimodalEmbeddings(ctx context.Context, req *core.Embedding
 		data[i] = core.EmbeddingData{
 			Object:    "embedding",
 			Embedding: b,
-			Index:     e.Index,
+			Index:     indexOffset + e.Index,
 		}
 	}
 
 	return &core.EmbeddingResponse{
 		Object: "list",
 		Data:   data,
-		Model:  req.Model,
+		Model:  model,
 		Usage: core.EmbeddingUsage{
 			PromptTokens: bailianResp.Usage.TotalTokens,
 			TotalTokens:  bailianResp.Usage.TotalTokens,

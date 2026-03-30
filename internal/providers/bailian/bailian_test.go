@@ -47,6 +47,7 @@ func newTestProvider(t *testing.T, serverURL string) *Provider {
 	t.Helper()
 	return &Provider{
 		nativeClient: newTestNativeClient(t, serverURL),
+		embedSem:     make(chan struct{}, maxEmbeddingConcurrency),
 	}
 }
 
@@ -231,7 +232,7 @@ func TestIsModelNotSupported_EmptyError(t *testing.T) {
 
 func TestConstants(t *testing.T) {
 	assert.Equal(t, 10, maxEmbeddingBatchSize, "maxEmbeddingBatchSize should be 10 per Bailian docs")
-	assert.Equal(t, 3, maxEmbeddingConcurrency, "maxEmbeddingConcurrency should be 3 to avoid throttling")
+	assert.Equal(t, 10, maxEmbeddingConcurrency, "maxEmbeddingConcurrency should be 10 based on API limit of ~30 QPS")
 }
 
 // ─── Concurrent batch processing tests (logic) ─────────────────────────────
@@ -580,17 +581,17 @@ func TestNativeEmbeddings_MultipleBatches(t *testing.T) {
 }
 
 func TestNativeEmbeddings_EmptyInput(t *testing.T) {
-	provider := &Provider{}
+	provider := &Provider{embedSem: make(chan struct{}, maxEmbeddingConcurrency)}
 	_, err := provider.nativeEmbeddings(context.Background(), &core.EmbeddingRequest{
 		Model: "text-embedding-v4",
 		Input: "",
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "input must be a non-empty string or array of strings")
+	assert.Contains(t, err.Error(), "input must be a non-empty")
 }
 
 func TestNativeEmbeddings_NilInput(t *testing.T) {
-	provider := &Provider{}
+	provider := &Provider{embedSem: make(chan struct{}, maxEmbeddingConcurrency)}
 	_, err := provider.nativeEmbeddings(context.Background(), &core.EmbeddingRequest{
 		Model: "text-embedding-v4",
 		Input: nil,
@@ -750,13 +751,13 @@ func TestMultimodalEmbeddings_MultipleBatches(t *testing.T) {
 }
 
 func TestMultimodalEmbeddings_EmptyInput(t *testing.T) {
-	provider := &Provider{}
+	provider := &Provider{embedSem: make(chan struct{}, maxEmbeddingConcurrency)}
 	_, err := provider.multimodalEmbeddings(context.Background(), &core.EmbeddingRequest{
 		Model: "qwen3-vl-embedding",
 		Input: "",
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "input must be a non-empty string or array of strings")
+	assert.Contains(t, err.Error(), "input must be a non-empty")
 }
 
 // ─── Integration tests with httptest (Rerank) ───────────────────────────────
@@ -874,7 +875,7 @@ func TestRerank_WithoutReturnDocuments(t *testing.T) {
 }
 
 func TestRerank_NilRequest(t *testing.T) {
-	provider := &Provider{}
+	provider := &Provider{embedSem: make(chan struct{}, maxEmbeddingConcurrency)}
 	_, err := provider.Rerank(context.Background(), nil)
 	require.Error(t, err)
 }
@@ -930,7 +931,7 @@ func TestRerank_ServerError(t *testing.T) {
 // ─── Embeddings routing tests ───────────────────────────────────────────────
 
 func TestEmbeddings_NilRequest(t *testing.T) {
-	provider := &Provider{}
+	provider := &Provider{embedSem: make(chan struct{}, maxEmbeddingConcurrency)}
 	_, err := provider.Embeddings(context.Background(), nil)
 	require.Error(t, err)
 }
@@ -1425,6 +1426,476 @@ func TestRerank_1000Documents(t *testing.T) {
 	assert.InDelta(t, 0.99, resp.Results[0].RelevanceScore, 0.001)
 	assert.Equal(t, 999, resp.Results[2].Index)
 	assert.Equal(t, 5000, resp.Usage.TotalTokens)
+}
+
+// ─── P0: parseMultimodalInputs tests ────────────────────────────────────────
+
+func TestParseMultimodalInputs_String(t *testing.T) {
+	contents, err := parseMultimodalInputs("hello")
+	require.NoError(t, err)
+	require.Len(t, contents, 1)
+	assert.Equal(t, "hello", contents[0].Text)
+	assert.Empty(t, contents[0].Image)
+	assert.Empty(t, contents[0].Audio)
+	assert.Nil(t, contents[0].Factor)
+}
+
+func TestParseMultimodalInputs_EmptyString(t *testing.T) {
+	contents, err := parseMultimodalInputs("")
+	assert.NoError(t, err)
+	assert.Nil(t, contents)
+}
+
+func TestParseMultimodalInputs_StringArray(t *testing.T) {
+	contents, err := parseMultimodalInputs([]string{"hello", "world"})
+	require.NoError(t, err)
+	require.Len(t, contents, 2)
+	assert.Equal(t, "hello", contents[0].Text)
+	assert.Equal(t, "world", contents[1].Text)
+}
+
+func TestParseMultimodalInputs_ImageItem(t *testing.T) {
+	contents, err := parseMultimodalInputs([]interface{}{
+		map[string]interface{}{"image": "data:image/png;base64,iVBORw0KGgo="},
+	})
+	require.NoError(t, err)
+	require.Len(t, contents, 1)
+	assert.Empty(t, contents[0].Text)
+	assert.Equal(t, "data:image/png;base64,iVBORw0KGgo=", contents[0].Image)
+}
+
+func TestParseMultimodalInputs_AudioItem(t *testing.T) {
+	contents, err := parseMultimodalInputs([]interface{}{
+		map[string]interface{}{"audio": "https://example.com/audio.mp3"},
+	})
+	require.NoError(t, err)
+	require.Len(t, contents, 1)
+	assert.Empty(t, contents[0].Text)
+	assert.Equal(t, "https://example.com/audio.mp3", contents[0].Audio)
+}
+
+func TestParseMultimodalInputs_MixedItems(t *testing.T) {
+	contents, err := parseMultimodalInputs([]interface{}{
+		map[string]interface{}{"text": "describe this image", "factor": 1.0},
+		map[string]interface{}{"image": "https://example.com/img.jpg", "factor": 0.5},
+		map[string]interface{}{"audio": "https://example.com/audio.mp3"},
+	})
+	require.NoError(t, err)
+	require.Len(t, contents, 3)
+
+	assert.Equal(t, "describe this image", contents[0].Text)
+	assert.NotNil(t, contents[0].Factor)
+	assert.InDelta(t, 1.0, *contents[0].Factor, 0.001)
+
+	assert.Equal(t, "https://example.com/img.jpg", contents[1].Image)
+	assert.NotNil(t, contents[1].Factor)
+	assert.InDelta(t, 0.5, *contents[1].Factor, 0.001)
+
+	assert.Equal(t, "https://example.com/audio.mp3", contents[2].Audio)
+	assert.Nil(t, contents[2].Factor)
+}
+
+func TestParseMultimodalInputs_MixedStringsAndObjects(t *testing.T) {
+	contents, err := parseMultimodalInputs([]interface{}{
+		"plain string",
+		map[string]interface{}{"image": "https://img.jpg"},
+	})
+	require.NoError(t, err)
+	require.Len(t, contents, 2)
+	assert.Equal(t, "plain string", contents[0].Text)
+	assert.Equal(t, "https://img.jpg", contents[1].Image)
+}
+
+func TestParseMultimodalInputs_EmptyObject(t *testing.T) {
+	contents, err := parseMultimodalInputs([]interface{}{
+		map[string]interface{}{},
+	})
+	assert.Error(t, err)
+	assert.Nil(t, contents)
+	assert.Contains(t, err.Error(), "must have at least one of text/image/audio")
+}
+
+func TestParseMultimodalInputs_UnsupportedType(t *testing.T) {
+	contents, err := parseMultimodalInputs(42)
+	assert.Error(t, err)
+	assert.Nil(t, contents)
+	assert.Contains(t, err.Error(), "unsupported multimodal input type")
+}
+
+// ─── P0: splitMultimodalByCount tests ───────────────────────────────────────
+
+func TestSplitMultimodalByCount_Basic(t *testing.T) {
+	contents := []bailianMultimodalContent{
+		{Text: "a"}, {Text: "b"}, {Text: "c"}, {Text: "d"}, {Text: "e"},
+		{Text: "f"}, {Text: "g"}, {Text: "h"}, {Text: "i"}, {Text: "j"},
+		{Text: "k"},
+	}
+	batches := splitMultimodalByCount(contents, 10)
+	require.Len(t, batches, 2)
+	assert.Equal(t, 10, len(batches[0]))
+	assert.Equal(t, 1, len(batches[1]))
+}
+
+func TestSplitMultimodalByCount_Empty(t *testing.T) {
+	batches := splitMultimodalByCount([]bailianMultimodalContent{}, 10)
+	assert.Nil(t, batches)
+}
+
+// ─── P0: Multimodal embedding with image/audio integration tests ────────────
+
+func TestMultimodalEmbeddings_WithImageInput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding", r.URL.Path)
+
+		body, _ := io.ReadAll(r.Body)
+		var req bailianMultimodalEmbeddingReq
+		require.NoError(t, json.Unmarshal(body, &req))
+		assert.Equal(t, "qwen3-vl-embedding", req.Model)
+		require.Len(t, req.Input.Contents, 2)
+		assert.Equal(t, "describe this", req.Input.Contents[0].Text)
+		assert.Equal(t, "data:image/png;base64,xxx", req.Input.Contents[1].Image)
+
+		resp := bailianMultimodalEmbeddingResp{
+			Usage: struct {
+				TotalTokens int `json:"total_tokens"`
+			}{TotalTokens: 20},
+		}
+		resp.Output.Embeddings = []bailianMultimodalEmbeddingItem{
+			{Index: 0, Embedding: []float64{0.1, 0.2}},
+			{Index: 1, Embedding: []float64{0.3, 0.4}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(t, server.URL)
+	resp, err := provider.multimodalEmbeddings(context.Background(), &core.EmbeddingRequest{
+		Model: "qwen3-vl-embedding",
+		Input: []interface{}{
+			map[string]interface{}{"text": "describe this"},
+			map[string]interface{}{"image": "data:image/png;base64,xxx"},
+		},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, resp.Data, 2)
+	assert.Equal(t, 0, resp.Data[0].Index)
+	assert.Equal(t, 1, resp.Data[1].Index)
+}
+
+func TestMultimodalEmbeddings_WithFactor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req bailianMultimodalEmbeddingReq
+		require.NoError(t, json.Unmarshal(body, &req))
+		require.Len(t, req.Input.Contents, 1)
+		require.NotNil(t, req.Input.Contents[0].Factor)
+		assert.InDelta(t, 0.8, *req.Input.Contents[0].Factor, 0.001)
+
+		resp := bailianMultimodalEmbeddingResp{
+			Usage: struct {
+				TotalTokens int `json:"total_tokens"`
+			}{TotalTokens: 10},
+		}
+		resp.Output.Embeddings = []bailianMultimodalEmbeddingItem{
+			{Index: 0, Embedding: []float64{0.5}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(t, server.URL)
+	resp, err := provider.multimodalEmbeddings(context.Background(), &core.EmbeddingRequest{
+		Model: "qwen3-vl-embedding",
+		Input: []interface{}{
+			map[string]interface{}{"text": "hello", "factor": 0.8},
+		},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, resp.Data, 1)
+}
+
+// ─── P1: Text embedding params tests ────────────────────────────────────────
+
+func TestNativeEmbeddings_WithTextType(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req bailianTextEmbeddingReq
+		require.NoError(t, json.Unmarshal(body, &req))
+		require.NotNil(t, req.Parameters)
+		assert.Equal(t, "query", req.Parameters.TextType)
+
+		resp := bailianTextEmbeddingResp{
+			Usage: struct {
+				TotalTokens int `json:"total_tokens"`
+			}{TotalTokens: 5},
+		}
+		resp.Output.Embeddings = []bailianTextEmbeddingItem{
+			{TextIndex: 0, Embedding: []float64{0.1}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(t, server.URL)
+	resp, err := provider.nativeEmbeddings(context.Background(), &core.EmbeddingRequest{
+		Model:      "text-embedding-v4",
+		Input:      "search query",
+		ExtraFields: core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
+			"text_type": json.RawMessage(`"query"`),
+		}),
+	})
+
+	require.NoError(t, err)
+	require.Len(t, resp.Data, 1)
+}
+
+func TestNativeEmbeddings_WithDimension(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req bailianTextEmbeddingReq
+		require.NoError(t, json.Unmarshal(body, &req))
+		require.NotNil(t, req.Parameters)
+		require.NotNil(t, req.Parameters.Dimension)
+		assert.Equal(t, 1024, *req.Parameters.Dimension)
+
+		resp := bailianTextEmbeddingResp{
+			Usage: struct {
+				TotalTokens int `json:"total_tokens"`
+			}{TotalTokens: 5},
+		}
+		resp.Output.Embeddings = []bailianTextEmbeddingItem{
+			{TextIndex: 0, Embedding: []float64{0.1}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	dim := 1024
+	provider := newTestProvider(t, server.URL)
+	resp, err := provider.nativeEmbeddings(context.Background(), &core.EmbeddingRequest{
+		Model:      "text-embedding-v4",
+		Input:      "test",
+		Dimensions: &dim,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, resp.Data, 1)
+}
+
+func TestNativeEmbeddings_WithInstruct(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req bailianTextEmbeddingReq
+		require.NoError(t, json.Unmarshal(body, &req))
+		require.NotNil(t, req.Parameters)
+		assert.Equal(t, "Classify the sentiment", req.Parameters.Instruct)
+
+		resp := bailianTextEmbeddingResp{
+			Usage: struct {
+				TotalTokens int `json:"total_tokens"`
+			}{TotalTokens: 5},
+		}
+		resp.Output.Embeddings = []bailianTextEmbeddingItem{
+			{TextIndex: 0, Embedding: []float64{0.1}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(t, server.URL)
+	resp, err := provider.nativeEmbeddings(context.Background(), &core.EmbeddingRequest{
+		Model: "text-embedding-v4",
+		Input: "test",
+		ExtraFields: core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
+			"instruct": json.RawMessage(`"Classify the sentiment"`),
+		}),
+	})
+
+	require.NoError(t, err)
+	require.Len(t, resp.Data, 1)
+}
+
+func TestNativeEmbeddings_WithOutputType(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req bailianTextEmbeddingReq
+		require.NoError(t, json.Unmarshal(body, &req))
+		require.NotNil(t, req.Parameters)
+		assert.Equal(t, "dense&sparse", req.Parameters.OutputType)
+
+		resp := bailianTextEmbeddingResp{
+			Usage: struct {
+				TotalTokens int `json:"total_tokens"`
+			}{TotalTokens: 5},
+		}
+		resp.Output.Embeddings = []bailianTextEmbeddingItem{
+			{TextIndex: 0, Embedding: []float64{0.1}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(t, server.URL)
+	resp, err := provider.nativeEmbeddings(context.Background(), &core.EmbeddingRequest{
+		Model: "text-embedding-v4",
+		Input: "test",
+		ExtraFields: core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
+			"output_type": json.RawMessage(`"dense&sparse"`),
+		}),
+	})
+
+	require.NoError(t, err)
+	require.Len(t, resp.Data, 1)
+}
+
+func TestNativeEmbeddings_NoExtraParams(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req bailianTextEmbeddingReq
+		require.NoError(t, json.Unmarshal(body, &req))
+		// No extra params → Parameters should be nil (omitempty)
+		assert.Nil(t, req.Parameters)
+
+		resp := bailianTextEmbeddingResp{
+			Usage: struct {
+				TotalTokens int `json:"total_tokens"`
+			}{TotalTokens: 5},
+		}
+		resp.Output.Embeddings = []bailianTextEmbeddingItem{
+			{TextIndex: 0, Embedding: []float64{0.1}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(t, server.URL)
+	resp, err := provider.nativeEmbeddings(context.Background(), &core.EmbeddingRequest{
+		Model: "text-embedding-v4",
+		Input: "test",
+	})
+
+	require.NoError(t, err)
+	require.Len(t, resp.Data, 1)
+}
+
+// ─── P1: Multimodal embedding params tests ──────────────────────────────────
+
+func TestMultimodalEmbeddings_WithEnableFusion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req bailianMultimodalEmbeddingReq
+		require.NoError(t, json.Unmarshal(body, &req))
+		require.NotNil(t, req.Parameters)
+		require.NotNil(t, req.Parameters.EnableFusion)
+		assert.True(t, *req.Parameters.EnableFusion)
+
+		resp := bailianMultimodalEmbeddingResp{
+			Usage: struct {
+				TotalTokens int `json:"total_tokens"`
+			}{TotalTokens: 10},
+		}
+		resp.Output.Embeddings = []bailianMultimodalEmbeddingItem{
+			{Index: 0, Embedding: []float64{0.1}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(t, server.URL)
+	resp, err := provider.multimodalEmbeddings(context.Background(), &core.EmbeddingRequest{
+		Model: "qwen3-vl-embedding",
+		Input: "test",
+		ExtraFields: core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
+			"enable_fusion": json.RawMessage(`true`),
+		}),
+	})
+
+	require.NoError(t, err)
+	require.Len(t, resp.Data, 1)
+}
+
+func TestMultimodalEmbeddings_WithVideoParams(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req bailianMultimodalEmbeddingReq
+		require.NoError(t, json.Unmarshal(body, &req))
+		require.NotNil(t, req.Parameters)
+		require.NotNil(t, req.Parameters.FPS)
+		assert.InDelta(t, 0.5, *req.Parameters.FPS, 0.001)
+		require.NotNil(t, req.Parameters.MaxVideoFrames)
+		assert.Equal(t, 32, *req.Parameters.MaxVideoFrames)
+
+		resp := bailianMultimodalEmbeddingResp{
+			Usage: struct {
+				TotalTokens int `json:"total_tokens"`
+			}{TotalTokens: 10},
+		}
+		resp.Output.Embeddings = []bailianMultimodalEmbeddingItem{
+			{Index: 0, Embedding: []float64{0.1}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(t, server.URL)
+	resp, err := provider.multimodalEmbeddings(context.Background(), &core.EmbeddingRequest{
+		Model: "qwen3-vl-embedding",
+		Input: "test",
+		ExtraFields: core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
+			"fps":              json.RawMessage(`0.5`),
+			"max_video_frames": json.RawMessage(`32`),
+		}),
+	})
+
+	require.NoError(t, err)
+	require.Len(t, resp.Data, 1)
+}
+
+// ─── P1: Rerank with instruct test ──────────────────────────────────────────
+
+func TestRerank_WithInstruct(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req bailianRerankReq
+		require.NoError(t, json.Unmarshal(body, &req))
+		assert.Equal(t, "Prioritize recent documents", req.Parameters.Instruct)
+
+		resp := bailianRerankResp{
+			Usage: struct {
+				TotalTokens int `json:"total_tokens"`
+			}{TotalTokens: 10},
+		}
+		resp.Output.Results = []bailianRerankResult{
+			{Index: 0, RelevanceScore: 0.9},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(t, server.URL)
+	resp, err := provider.Rerank(context.Background(), &core.RerankRequest{
+		Model:     "gte-rerank-v2",
+		Query:     "query",
+		Documents: []string{"doc1"},
+		ExtraFields: core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
+			"instruct": json.RawMessage(`"Prioritize recent documents"`),
+		}),
+	})
+
+	require.NoError(t, err)
+	require.Len(t, resp.Results, 1)
 }
 
 // Ensure unused import is used

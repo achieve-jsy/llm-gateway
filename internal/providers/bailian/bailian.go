@@ -7,6 +7,7 @@ package bailian
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -38,6 +39,7 @@ var Registration = providers.Registration{
 type Provider struct {
 	compatible   *openai.CompatibleProvider
 	nativeClient *llmclient.Client // 原生 API client，用于 Rerank
+	embedSem     chan struct{}     // 全局 embedding 并发限流，所有请求共享
 }
 
 // New creates a new Bailian provider.
@@ -51,6 +53,7 @@ func New(cfg providers.ProviderConfig, opts providers.ProviderOptions) core.Prov
 	return &Provider{
 		compatible:   compatible,
 		nativeClient: llmclient.New(nativeClientConfig(), nativeHeaderSetter(cfg.APIKey)),
+		embedSem:     make(chan struct{}, maxEmbeddingConcurrency),
 	}
 }
 
@@ -74,6 +77,7 @@ func NewWithHTTPClient(apiKey string, baseURL string, httpClient *http.Client, h
 			SetHeaders:   setHeaders,
 		}),
 		nativeClient: llmclient.NewWithHTTPClient(httpClient, nativeClientConfig(), nativeHeaderSetter(apiKey)),
+		embedSem:     make(chan struct{}, maxEmbeddingConcurrency),
 	}
 }
 
@@ -140,15 +144,16 @@ const (
 	// 参考: https://help.aliyun.com/zh/model-studio/text-embedding-api
 	maxEmbeddingBatchSize = 10
 
-	// maxEmbeddingConcurrency 分批请求的最大并发数。
-	// 避免大量文本（如 1000 条）产生 100 个并发请求触发百炼限流。
-	maxEmbeddingConcurrency = 3
+	// maxEmbeddingConcurrency 分批请求的最大并发数（Provider 全局级别）。
+	// 百炼实测阈值约 30-35 QPS，取 10 留足安全边际。
+	// 所有并发请求共享此 semaphore，避免 100 个请求 × 各自 100 批 = 万级并发。
+	maxEmbeddingConcurrency = 10
 )
 
 type bailianTextEmbeddingReq struct {
-	Model      string                       `json:"model"`
-	Input      bailianTextEmbeddingInput    `json:"input"`
-	Parameters bailianTextEmbeddingParams   `json:"parameters,omitempty"`
+	Model      string                     `json:"model"`
+	Input      bailianTextEmbeddingInput  `json:"input"`
+	Parameters *bailianTextEmbeddingParams `json:"parameters,omitempty"`
 }
 
 type bailianTextEmbeddingInput struct {
@@ -156,7 +161,10 @@ type bailianTextEmbeddingInput struct {
 }
 
 type bailianTextEmbeddingParams struct {
-	TextType string `json:"text_type,omitempty"` // "query" or "document"
+	TextType   string `json:"text_type,omitempty"`   // "query" or "document"
+	Dimension  *int   `json:"dimension,omitempty"`   // 输出向量维度，仅 v3/v4 支持
+	OutputType string `json:"output_type,omitempty"` // "dense", "sparse", "dense&sparse"，仅 v3/v4
+	Instruct   string `json:"instruct,omitempty"`    // 自定义任务指令
 }
 
 type bailianTextEmbeddingResp struct {
@@ -179,10 +187,12 @@ func (p *Provider) nativeEmbeddings(ctx context.Context, req *core.EmbeddingRequ
 		return nil, core.NewInvalidRequestError("input must be a non-empty string or array of strings", nil)
 	}
 
+	params := extractTextEmbeddingParams(req)
+
 	// 大输入分批处理，避免单次请求体超过百炼 API 限制
 	batches := splitTextsByCount(texts, maxEmbeddingBatchSize)
 	if len(batches) == 1 {
-		return p.doNativeEmbedding(ctx, req.Model, batches[0], 0)
+		return p.doNativeEmbedding(ctx, req.Model, batches[0], 0, params)
 	}
 
 	// 多批次并发请求，合并结果（限流避免触发百炼限流）
@@ -194,7 +204,6 @@ func (p *Provider) nativeEmbeddings(ctx context.Context, req *core.EmbeddingRequ
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	var firstErr error
-	sem := make(chan struct{}, maxEmbeddingConcurrency)
 
 	offset := 0
 	for i, batch := range batches {
@@ -203,9 +212,9 @@ func (p *Provider) nativeEmbeddings(ctx context.Context, req *core.EmbeddingRequ
 		wg.Add(1)
 		go func(idx int, b []string, off int) {
 			defer wg.Done()
-			sem <- struct{}{}        // 限流
-			defer func() { <-sem }() // 释放
-			resp, err := p.doNativeEmbedding(ctx, req.Model, b, off)
+			p.embedSem <- struct{}{}        // 全局限流
+			defer func() { <-p.embedSem }() // 释放
+			resp, err := p.doNativeEmbedding(ctx, req.Model, b, off, params)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -247,10 +256,11 @@ func (p *Provider) nativeEmbeddings(ctx context.Context, req *core.EmbeddingRequ
 
 // doNativeEmbedding 发送单个批次的 embedding 请求到原生 text-embedding API。
 // indexOffset 用于修正分批后的索引，确保返回的 Index 与原始输入顺序一致。
-func (p *Provider) doNativeEmbedding(ctx context.Context, model string, texts []string, indexOffset int) (*core.EmbeddingResponse, error) {
+func (p *Provider) doNativeEmbedding(ctx context.Context, model string, texts []string, indexOffset int, params *bailianTextEmbeddingParams) (*core.EmbeddingResponse, error) {
 	bailianReq := bailianTextEmbeddingReq{
-		Model: model,
-		Input: bailianTextEmbeddingInput{Texts: texts},
+		Model:      model,
+		Input:      bailianTextEmbeddingInput{Texts: texts},
+		Parameters: params,
 	}
 
 	var bailianResp bailianTextEmbeddingResp
@@ -299,18 +309,35 @@ func splitTextsByCount(texts []string, maxSize int) [][]string {
 }
 
 // ─── 多模态 embedding API (qwen3-vl-embedding 等) ─────────────────────────
+// 参考 DashScope Python SDK: dashscope/embeddings/multimodal_embedding.py
 
 type bailianMultimodalEmbeddingReq struct {
-	Model string                            `json:"model"`
-	Input bailianMultimodalEmbeddingInput   `json:"input"`
+	Model      string                              `json:"model"`
+	Input      bailianMultimodalEmbeddingInput     `json:"input"`
+	Parameters *bailianMultimodalEmbeddingParams   `json:"parameters,omitempty"`
 }
 
 type bailianMultimodalEmbeddingInput struct {
 	Contents []bailianMultimodalContent `json:"contents"`
 }
 
+// bailianMultimodalContent 对齐 Python SDK 的 MultiModalEmbeddingItem* 类型。
+// 每个 item 至少包含 text/image/audio 之一，可选 factor 权重。
 type bailianMultimodalContent struct {
-	Text string `json:"text,omitempty"`
+	Text   string   `json:"text,omitempty"`
+	Image  string   `json:"image,omitempty"`  // URL 或 base64 编码的图片
+	Audio  string   `json:"audio,omitempty"`  // URL 或 base64 编码的音频
+	Factor *float64 `json:"factor,omitempty"` // 权重，默认 1.0
+}
+
+type bailianMultimodalEmbeddingParams struct {
+	Dimension      *int     `json:"dimension,omitempty"`
+	OutputType     string   `json:"output_type,omitempty"`    // "dense"
+	FPS            *float64 `json:"fps,omitempty"`            // 视频帧提取率 [0,1]
+	Instruct       string   `json:"instruct,omitempty"`       // 自定义任务指令
+	EnableFusion   *bool    `json:"enable_fusion,omitempty"`  // 仅 qwen3-vl-embedding，融合为单向量
+	ResLevel       *int     `json:"res_level,omitempty"`      // 分辨率层级 0/1/2/3
+	MaxVideoFrames *int     `json:"max_video_frames,omitempty"` // 最大视频采样帧数，最多 64
 }
 
 type bailianMultimodalEmbeddingResp struct {
@@ -328,15 +355,20 @@ type bailianMultimodalEmbeddingItem struct {
 }
 
 func (p *Provider) multimodalEmbeddings(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
-	texts := embeddingInputToStrings(req.Input)
-	if len(texts) == 0 {
-		return nil, core.NewInvalidRequestError("input must be a non-empty string or array of strings", nil)
+	contents, err := parseMultimodalInputs(req.Input)
+	if err != nil {
+		return nil, core.NewInvalidRequestError(err.Error(), nil)
+	}
+	if len(contents) == 0 {
+		return nil, core.NewInvalidRequestError("input must be a non-empty string, array of strings, or array of {text,image,audio} objects", nil)
 	}
 
+	params := extractMultimodalEmbeddingParams(req)
+
 	// 大输入分批处理，避免单次请求体超过百炼 API 限制
-	batches := splitTextsByCount(texts, maxEmbeddingBatchSize)
+	batches := splitMultimodalByCount(contents, maxEmbeddingBatchSize)
 	if len(batches) == 1 {
-		return p.doMultimodalEmbedding(ctx, req.Model, batches[0], 0)
+		return p.doMultimodalEmbedding(ctx, req.Model, batches[0], 0, params)
 	}
 
 	// 多批次并发请求，合并结果
@@ -348,18 +380,17 @@ func (p *Provider) multimodalEmbeddings(ctx context.Context, req *core.Embedding
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	var firstErr error
-	sem := make(chan struct{}, maxEmbeddingConcurrency)
-	offset := 0
 
+	offset := 0
 	for i, batch := range batches {
 		batchOffset := offset
 		offset += len(batch)
 		wg.Add(1)
-		go func(idx int, b []string, off int) {
+		go func(idx int, b []bailianMultimodalContent, off int) {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			resp, err := p.doMultimodalEmbedding(ctx, req.Model, b, off)
+			p.embedSem <- struct{}{}        // 全局限流
+			defer func() { <-p.embedSem }() // 释放
+			resp, err := p.doMultimodalEmbedding(ctx, req.Model, b, off, params)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -380,7 +411,7 @@ func (p *Provider) multimodalEmbeddings(ctx context.Context, req *core.Embedding
 		return nil, firstErr
 	}
 
-	allData := make([]core.EmbeddingData, 0, len(texts))
+	allData := make([]core.EmbeddingData, 0, len(contents))
 	totalTokens := 0
 	for _, r := range results {
 		allData = append(allData, r.data...)
@@ -399,15 +430,11 @@ func (p *Provider) multimodalEmbeddings(ctx context.Context, req *core.Embedding
 }
 
 // doMultimodalEmbedding 发送单个批次的 embedding 请求到多模态 embedding API。
-func (p *Provider) doMultimodalEmbedding(ctx context.Context, model string, texts []string, indexOffset int) (*core.EmbeddingResponse, error) {
-	contents := make([]bailianMultimodalContent, len(texts))
-	for i, t := range texts {
-		contents[i] = bailianMultimodalContent{Text: t}
-	}
-
+func (p *Provider) doMultimodalEmbedding(ctx context.Context, model string, contents []bailianMultimodalContent, indexOffset int, params *bailianMultimodalEmbeddingParams) (*core.EmbeddingResponse, error) {
 	bailianReq := bailianMultimodalEmbeddingReq{
-		Model: model,
-		Input: bailianMultimodalEmbeddingInput{Contents: contents},
+		Model:      model,
+		Input:      bailianMultimodalEmbeddingInput{Contents: contents},
+		Parameters: params,
 	}
 
 	var bailianResp bailianMultimodalEmbeddingResp
@@ -439,6 +466,200 @@ func (p *Provider) doMultimodalEmbedding(ctx context.Context, model string, text
 			TotalTokens:  bailianResp.Usage.TotalTokens,
 		},
 	}, nil
+}
+
+// parseMultimodalInputs 将 core.EmbeddingRequest.Input 解析为 []bailianMultimodalContent。
+// 支持三种格式：
+//   - string → [{Text: s}]
+//   - []string → [{Text: s}, ...]
+//   - []interface{} 其中每个元素是 map[string]interface{}，提取 text/image/audio/factor
+func parseMultimodalInputs(input any) ([]bailianMultimodalContent, error) {
+	switch v := input.(type) {
+	case string:
+		if v == "" {
+			return nil, nil
+		}
+		return []bailianMultimodalContent{{Text: v}}, nil
+	case []string:
+		contents := make([]bailianMultimodalContent, len(v))
+		for i, s := range v {
+			contents[i] = bailianMultimodalContent{Text: s}
+		}
+		return contents, nil
+	case []interface{}:
+		contents := make([]bailianMultimodalContent, 0, len(v))
+		for _, item := range v {
+			m, ok := item.(map[string]interface{})
+			if !ok {
+				// 可能是普通 string
+				if s, ok := item.(string); ok {
+					contents = append(contents, bailianMultimodalContent{Text: s})
+					continue
+				}
+				return nil, fmt.Errorf("unsupported multimodal input element type: %T", item)
+			}
+			c := bailianMultimodalContent{}
+			if text, ok := m["text"].(string); ok {
+				c.Text = text
+			}
+			if image, ok := m["image"].(string); ok {
+				c.Image = image
+			}
+			if audio, ok := m["audio"].(string); ok {
+				c.Audio = audio
+			}
+			if factor, ok := m["factor"].(float64); ok {
+				f := factor
+				c.Factor = &f
+			}
+			// 至少需要 text/image/audio 之一
+			if c.Text == "" && c.Image == "" && c.Audio == "" {
+				return nil, fmt.Errorf("multimodal content item must have at least one of text/image/audio")
+			}
+			contents = append(contents, c)
+		}
+		return contents, nil
+	default:
+		return nil, fmt.Errorf("unsupported multimodal input type: %T", input)
+	}
+}
+
+// splitMultimodalByCount 将多模态内容按条数分批次，每批不超过 maxSize 条。
+func splitMultimodalByCount(contents []bailianMultimodalContent, maxSize int) [][]bailianMultimodalContent {
+	var batches [][]bailianMultimodalContent
+	for i := 0; i < len(contents); i += maxSize {
+		end := i + maxSize
+		if end > len(contents) {
+			end = len(contents)
+		}
+		batches = append(batches, contents[i:end])
+	}
+	return batches
+}
+
+// extractTextEmbeddingParams 从 core.EmbeddingRequest 提取 text-embedding 参数。
+// 参数来源：Dimensions 是标准字段，其余从 ExtraFields 读取。
+func extractTextEmbeddingParams(req *core.EmbeddingRequest) *bailianTextEmbeddingParams {
+	params := &bailianTextEmbeddingParams{}
+	hasParams := false
+
+	if req.Dimensions != nil {
+		params.Dimension = req.Dimensions
+		hasParams = true
+	}
+
+	if v := req.ExtraFields.Lookup("text_type"); v != nil {
+		var s string
+		if json.Unmarshal(v, &s) == nil {
+			params.TextType = s
+			hasParams = true
+		}
+	}
+	if v := req.ExtraFields.Lookup("output_type"); v != nil {
+		var s string
+		if json.Unmarshal(v, &s) == nil {
+			params.OutputType = s
+			hasParams = true
+		}
+	}
+	if v := req.ExtraFields.Lookup("instruct"); v != nil {
+		var s string
+		if json.Unmarshal(v, &s) == nil {
+			params.Instruct = s
+			hasParams = true
+		}
+	}
+
+	if !hasParams {
+		return nil
+	}
+	return params
+}
+
+// extractMultimodalEmbeddingParams 从 core.EmbeddingRequest 提取 multimodal-embedding 参数。
+func extractMultimodalEmbeddingParams(req *core.EmbeddingRequest) *bailianMultimodalEmbeddingParams {
+	params := &bailianMultimodalEmbeddingParams{}
+	hasParams := false
+
+	if req.Dimensions != nil {
+		params.Dimension = req.Dimensions
+		hasParams = true
+	}
+
+	lookupString := func(key string) string {
+		v := req.ExtraFields.Lookup(key)
+		if v == nil {
+			return ""
+		}
+		var s string
+		if json.Unmarshal(v, &s) == nil {
+			return s
+		}
+		return ""
+	}
+	lookupFloat := func(key string) *float64 {
+		v := req.ExtraFields.Lookup(key)
+		if v == nil {
+			return nil
+		}
+		var f float64
+		if json.Unmarshal(v, &f) == nil {
+			return &f
+		}
+		return nil
+	}
+	lookupBool := func(key string) *bool {
+		v := req.ExtraFields.Lookup(key)
+		if v == nil {
+			return nil
+		}
+		var b bool
+		if json.Unmarshal(v, &b) == nil {
+			return &b
+		}
+		return nil
+	}
+	lookupInt := func(key string) *int {
+		v := req.ExtraFields.Lookup(key)
+		if v == nil {
+			return nil
+		}
+		var i int
+		if json.Unmarshal(v, &i) == nil {
+			return &i
+		}
+		return nil
+	}
+
+	if s := lookupString("output_type"); s != "" {
+		params.OutputType = s
+		hasParams = true
+	}
+	if s := lookupString("instruct"); s != "" {
+		params.Instruct = s
+		hasParams = true
+	}
+	if f := lookupFloat("fps"); f != nil {
+		params.FPS = f
+		hasParams = true
+	}
+	if b := lookupBool("enable_fusion"); b != nil {
+		params.EnableFusion = b
+		hasParams = true
+	}
+	if i := lookupInt("res_level"); i != nil {
+		params.ResLevel = i
+		hasParams = true
+	}
+	if i := lookupInt("max_video_frames"); i != nil {
+		params.MaxVideoFrames = i
+		hasParams = true
+	}
+
+	if !hasParams {
+		return nil
+	}
+	return params
 }
 
 // embeddingInputToStrings 将 core.EmbeddingRequest.Input 转换为 []string。
@@ -491,7 +712,8 @@ type bailianRerankInput struct {
 }
 
 type bailianRerankParameters struct {
-	TopN int `json:"top_n,omitempty"`
+	TopN     int    `json:"top_n,omitempty"`
+	Instruct string `json:"instruct,omitempty"` // 自定义任务指令
 }
 
 type bailianRerankResp struct {
@@ -520,13 +742,21 @@ func (p *Provider) Rerank(ctx context.Context, req *core.RerankRequest) (*core.R
 		topN = *req.TopN
 	}
 
+	params := bailianRerankParameters{TopN: topN}
+	if v := req.ExtraFields.Lookup("instruct"); v != nil {
+		var s string
+		if json.Unmarshal(v, &s) == nil {
+			params.Instruct = s
+		}
+	}
+
 	bailianReq := bailianRerankReq{
 		Model: req.Model,
 		Input: bailianRerankInput{
 			Query:     req.Query,
 			Documents: req.Documents,
 		},
-		Parameters: bailianRerankParameters{TopN: topN},
+		Parameters: params,
 	}
 
 	var bailianResp bailianRerankResp

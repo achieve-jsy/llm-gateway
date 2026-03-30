@@ -4,6 +4,14 @@
       <div>
         <h2 class="page-title">API 密钥</h2>
         <p class="page-desc">管理你的 Key{{ authStore.isManager ? '，审批团队成员的申请' : '' }}</p>
+        <div class="base-url-inline">
+          <span class="base-url-inline__label">Base URL</span>
+          <code class="base-url-inline__value">{{ displayBaseUrl }}</code>
+          <button class="base-url-inline__btn" :class="{ ok: urlCopied }" @click="copyBaseUrl">
+            <el-icon><component :is="urlCopied ? Check : CopyDocument" /></el-icon>
+            {{ urlCopied ? '已复制' : '复制' }}
+          </button>
+        </div>
       </div>
       <div class="header-actions">
         <el-button type="primary" @click="handleCreateClick">{{ createKeyButtonLabel }}</el-button>
@@ -552,7 +560,7 @@ import { ref, onMounted, computed, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { LocationQuery } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Key, Search } from '@element-plus/icons-vue'
+import { Key, Search, CopyDocument, Check } from '@element-plus/icons-vue'
 import {
   listKeys, disableKey, enableKey, deleteKey, resetKey, revealKey,
   updateKeyGroups, getAvailableGroups, toggleAccessAllGroups, toggleLogEnabled,
@@ -607,6 +615,21 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const keyCache = useKeyCacheStore()
+const settingsStore = useSettingsStore()
+
+/* ── Base URL 复制条 ── */
+const urlCopied = ref(false)
+let urlCopyTimer: ReturnType<typeof setTimeout> | null = null
+const displayBaseUrl = computed(() => {
+  const base = settingsStore.getBaseUrl()
+  return base.endsWith('/v1') ? base : base.replace(/\/+$/, '') + '/v1'
+})
+function copyBaseUrl() {
+  copyToClipboard(displayBaseUrl.value)
+  urlCopied.value = true
+  if (urlCopyTimer) clearTimeout(urlCopyTimer)
+  urlCopyTimer = setTimeout(() => { urlCopied.value = false }, 2200)
+}
 const tabPrefsHydrated = ref(false)
 let skipTabRouteSync = false
 const activeTab = ref<KeyListTab>(parseTabFromQuery(route.query))
@@ -1463,5 +1486,51 @@ watch(() => authStore.effectiveRole, (role) => {
   font-size: 12px;
   color: var(--el-text-color-regular);
   line-height: 1.4;
+}
+
+/* ── Base URL inline 组件 ── */
+.base-url-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 6px 12px;
+  background: #f5f7fa;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.base-url-inline__label {
+  color: #909399;
+  font-weight: 500;
+}
+.base-url-inline__value {
+  font-family: 'Fira Code', 'JetBrains Mono', monospace;
+  color: #303133;
+  font-size: 13px;
+  user-select: all;
+}
+.base-url-inline__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  margin-left: 4px;
+  background: #36B34E;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  &:hover { background: #229A94; }
+  &.ok { background: #0EA371; }
+  .el-icon { font-size: 13px; }
+}
+
+:global(html.dark) .base-url-inline {
+  background: #1a1a1a;
+  .base-url-inline__label { color: #a3a3a3; }
+  .base-url-inline__value { color: #e5e5e5; }
 }
 </style>

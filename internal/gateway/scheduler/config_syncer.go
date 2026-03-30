@@ -154,6 +154,7 @@ func (cs *ConfigSyncer) fetchConfig() (*ControlPlaneConfig, error) {
 					GroupID:        g.ID,
 					ModelID:        modelIdx,
 					ModelName:      m.Name,
+					ModelType:      m.ModelType,
 					ChannelType:    m.ProviderType,
 					ProviderName:   m.ProviderName,
 					Endpoint:       m.Endpoint,

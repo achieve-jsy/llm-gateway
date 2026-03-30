@@ -386,7 +386,10 @@ func TestResultMerging_AllSucceed(t *testing.T) {
 	batches := splitTextsByCount(texts, maxEmbeddingBatchSize)
 
 	type batchResult struct {
-		data   []struct{ text string; index int }
+		data []struct {
+			text  string
+			index int
+		}
 		tokens int
 	}
 
@@ -396,14 +399,23 @@ func TestResultMerging_AllSucceed(t *testing.T) {
 		batchOffset := offset
 		offset += len(batch)
 
-		data := make([]struct{ text string; index int }, len(batch))
+		data := make([]struct {
+			text  string
+			index int
+		}, len(batch))
 		for j, text := range batch {
-			data[j] = struct{ text string; index int }{text: text, index: batchOffset + j}
+			data[j] = struct {
+				text  string
+				index int
+			}{text: text, index: batchOffset + j}
 		}
 		results[i] = batchResult{data: data, tokens: len(batch) * 100}
 	}
 
-	allData := make([]struct{ text string; index int }, 0, len(texts))
+	allData := make([]struct {
+		text  string
+		index int
+	}, 0, len(texts))
 	totalTokens := 0
 	for _, r := range results {
 		allData = append(allData, r.data...)
@@ -425,7 +437,10 @@ func TestResultMerging_1000Texts(t *testing.T) {
 	require.Len(t, batches, 100)
 
 	type batchResult struct {
-		data   []struct{ text string; index int }
+		data []struct {
+			text  string
+			index int
+		}
 		tokens int
 	}
 
@@ -435,14 +450,23 @@ func TestResultMerging_1000Texts(t *testing.T) {
 		batchOffset := offset
 		offset += len(batch)
 
-		data := make([]struct{ text string; index int }, len(batch))
+		data := make([]struct {
+			text  string
+			index int
+		}, len(batch))
 		for j, text := range batch {
-			data[j] = struct{ text string; index int }{text: text, index: batchOffset + j}
+			data[j] = struct {
+				text  string
+				index int
+			}{text: text, index: batchOffset + j}
 		}
 		results[i] = batchResult{data: data, tokens: len(batch) * 100}
 	}
 
-	allData := make([]struct{ text string; index int }, 0, len(texts))
+	allData := make([]struct {
+		text  string
+		index int
+	}, 0, len(texts))
 	totalTokens := 0
 	for _, r := range results {
 		allData = append(allData, r.data...)
@@ -934,6 +958,229 @@ func TestEmbeddings_NilRequest(t *testing.T) {
 	provider := &Provider{embedSem: make(chan struct{}, maxEmbeddingConcurrency)}
 	_, err := provider.Embeddings(context.Background(), nil)
 	require.Error(t, err)
+}
+
+func TestEmbeddings_ModelTypeEmbeddingRoutesToNativeTextAPI(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/services/embeddings/text-embedding/text-embedding", r.URL.Path)
+
+		body, _ := io.ReadAll(r.Body)
+		var req bailianTextEmbeddingReq
+		require.NoError(t, json.Unmarshal(body, &req))
+		assert.Equal(t, "text-embedding-v4", req.Model)
+		assert.Equal(t, []string{"hello"}, req.Input.Texts)
+
+		resp := bailianTextEmbeddingResp{
+			Usage: struct {
+				TotalTokens int `json:"total_tokens"`
+			}{TotalTokens: 3},
+		}
+		resp.Output.Embeddings = []bailianTextEmbeddingItem{
+			{TextIndex: 0, Embedding: []float64{0.1}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(t, server.URL)
+	resp, err := provider.Embeddings(context.Background(), &core.EmbeddingRequest{
+		Model:     "text-embedding-v4",
+		ModelType: "embedding",
+		Input:     "hello",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, "text-embedding-v4", resp.Model)
+	require.Len(t, resp.Data, 1)
+}
+
+func TestEmbeddings_ModelTypeEmbeddingVLRoutesToMultimodalAPIWithoutModelRewrite(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding", r.URL.Path)
+
+		body, _ := io.ReadAll(r.Body)
+		var req bailianMultimodalEmbeddingReq
+		require.NoError(t, json.Unmarshal(body, &req))
+		assert.Equal(t, "custom-vl-embedding", req.Model)
+		require.Len(t, req.Input.Contents, 1)
+		assert.Equal(t, "https://example.com/image.png", req.Input.Contents[0].Image)
+
+		resp := bailianMultimodalEmbeddingResp{
+			Usage: struct {
+				TotalTokens int `json:"total_tokens"`
+			}{TotalTokens: 5},
+		}
+		resp.Output.Embeddings = []bailianMultimodalEmbeddingItem{
+			{Index: 0, Embedding: []float64{0.2}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(t, server.URL)
+	resp, err := provider.Embeddings(context.Background(), &core.EmbeddingRequest{
+		Model:     "custom-vl-embedding",
+		ModelType: "embedding_vl",
+		Input: []interface{}{
+			map[string]interface{}{"image": "https://example.com/image.png"},
+		},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, "custom-vl-embedding", resp.Model)
+	require.Len(t, resp.Data, 1)
+}
+
+func TestEmbeddings_ModelTypeEmbeddingRejectsMultimodalInputWithoutUpstreamCall(t *testing.T) {
+	var requestCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(t, server.URL)
+	req := &core.EmbeddingRequest{
+		Model:     "text-embedding-v4",
+		ModelType: "embedding",
+		Input: []interface{}{
+			map[string]interface{}{"image": "data:image/png;base64,AAA"},
+		},
+	}
+
+	_, err := provider.Embeddings(context.Background(), req)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "multimodal input requires an embedding_vl model")
+	assert.Equal(t, "text-embedding-v4", req.Model)
+	assert.Equal(t, 0, requestCount, "capability mismatch should not call upstream")
+}
+
+func TestEmbeddings_DefaultModelTypeTextInputRoutesToNativeTextAPI(t *testing.T) {
+	tests := []struct {
+		name      string
+		modelType string
+	}{
+		{name: "empty", modelType: ""},
+		{name: "unknown", modelType: "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var requestCount int
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requestCount++
+				assert.Equal(t, "/api/v1/services/embeddings/text-embedding/text-embedding", r.URL.Path)
+
+				body, _ := io.ReadAll(r.Body)
+				var req bailianTextEmbeddingReq
+				require.NoError(t, json.Unmarshal(body, &req))
+				assert.Equal(t, "custom-text-embedding", req.Model)
+				assert.Equal(t, []string{"hello"}, req.Input.Texts)
+
+				resp := bailianTextEmbeddingResp{
+					Usage: struct {
+						TotalTokens int `json:"total_tokens"`
+					}{TotalTokens: 3},
+				}
+				resp.Output.Embeddings = []bailianTextEmbeddingItem{
+					{TextIndex: 0, Embedding: []float64{0.1}},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(resp)
+			}))
+			defer server.Close()
+
+			provider := newTestProvider(t, server.URL)
+			resp, err := provider.Embeddings(context.Background(), &core.EmbeddingRequest{
+				Model:     "custom-text-embedding",
+				ModelType: tt.modelType,
+				Input:     "hello",
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+			assert.Equal(t, "custom-text-embedding", resp.Model)
+			assert.Equal(t, 1, requestCount, "text input should call native text API once")
+		})
+	}
+}
+
+func TestEmbeddings_DefaultModelTypeRejectsMultimodalInputWithoutUpstreamCall(t *testing.T) {
+	tests := []struct {
+		name      string
+		modelType string
+	}{
+		{name: "empty", modelType: ""},
+		{name: "unknown", modelType: "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var requestCount int
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requestCount++
+				w.WriteHeader(http.StatusInternalServerError)
+			}))
+			defer server.Close()
+
+			provider := newTestProvider(t, server.URL)
+			req := &core.EmbeddingRequest{
+				Model:     "text-embedding-v4",
+				ModelType: tt.modelType,
+				Input: []interface{}{
+					map[string]interface{}{"image": "data:image/png;base64,AAA"},
+				},
+			}
+
+			_, err := provider.Embeddings(context.Background(), req)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "multimodal input requires an embedding_vl model")
+			assert.Equal(t, "text-embedding-v4", req.Model)
+			assert.Equal(t, 0, requestCount, "missing or unknown model_type should reject multimodal input before upstream")
+		})
+	}
+}
+
+func TestMultimodalEmbeddings_DoesNotAutoSwitchModelName(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req bailianMultimodalEmbeddingReq
+		require.NoError(t, json.Unmarshal(body, &req))
+		assert.Equal(t, "text-embedding-v4", req.Model)
+
+		resp := bailianMultimodalEmbeddingResp{
+			Usage: struct {
+				TotalTokens int `json:"total_tokens"`
+			}{TotalTokens: 5},
+		}
+		resp.Output.Embeddings = []bailianMultimodalEmbeddingItem{
+			{Index: 0, Embedding: []float64{0.2}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(t, server.URL)
+	req := &core.EmbeddingRequest{
+		Model: "text-embedding-v4",
+		Input: []interface{}{
+			map[string]interface{}{"image": "https://example.com/image.png"},
+		},
+	}
+
+	resp, err := provider.multimodalEmbeddings(context.Background(), req)
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, "text-embedding-v4", req.Model)
+	assert.Equal(t, "text-embedding-v4", resp.Model)
 }
 
 // ─── Concurrency limit test ─────────────────────────────────────────────────
@@ -1643,8 +1890,8 @@ func TestNativeEmbeddings_WithTextType(t *testing.T) {
 
 	provider := newTestProvider(t, server.URL)
 	resp, err := provider.nativeEmbeddings(context.Background(), &core.EmbeddingRequest{
-		Model:      "text-embedding-v4",
-		Input:      "search query",
+		Model: "text-embedding-v4",
+		Input: "search query",
 		ExtraFields: core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
 			"text_type": json.RawMessage(`"query"`),
 		}),

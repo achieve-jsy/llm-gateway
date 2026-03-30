@@ -115,42 +115,33 @@ func (p *Provider) StreamResponses(ctx context.Context, req *core.ResponsesReque
 }
 
 // Embeddings sends an embeddings request to Bailian.
-// 根据 model_type 精确路由：embedding_vl → multimodal API，embedding → text-embedding API。
+// 根据 model_type 精确路由：embedding_vl → multimodal API，embedding/空或未知 → text-embedding API。
 func (p *Provider) Embeddings(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
 	if req == nil {
 		return nil, core.NewInvalidRequestError("embedding request is required", nil)
 	}
 
-	// 调试日志
+	isMultimodal := isMultimodalInput(req.Input)
 	slog.Info("Embeddings: received request",
 		"model", req.Model,
 		"model_type", req.ModelType,
 		"input_type", fmt.Sprintf("%T", req.Input),
-		"input_value", req.Input)
-
-	// 输入包含图片/音频 → 必须走 multimodal API
-	isMultimodal := isMultimodalInput(req.Input)
-	slog.Info("Embeddings: multimodal check",
 		"is_multimodal", isMultimodal)
-
-	if isMultimodal {
-		slog.Info("Embeddings: routing to multimodal API")
-		return p.multimodalEmbeddings(ctx, req)
-	}
 
 	// 精确路由：根据 model_type 选择 API
 	switch req.ModelType {
 	case "embedding_vl":
 		return p.multimodalEmbeddings(ctx, req)
 	case "embedding":
+		if isMultimodal {
+			return nil, core.NewInvalidRequestError("multimodal input requires an embedding_vl model", nil)
+		}
 		return p.nativeEmbeddings(ctx, req)
 	default:
-		// 向后兼容：model_type 为空时，先试 text-embedding，失败再试 multimodal
-		resp, err := p.nativeEmbeddings(ctx, req)
-		if err == nil {
-			return resp, nil
+		if isMultimodal {
+			return nil, core.NewInvalidRequestError("multimodal input requires an embedding_vl model", nil)
 		}
-		return p.multimodalEmbeddings(ctx, req)
+		return p.nativeEmbeddings(ctx, req)
 	}
 }
 
@@ -169,8 +160,8 @@ const (
 )
 
 type bailianTextEmbeddingReq struct {
-	Model      string                     `json:"model"`
-	Input      bailianTextEmbeddingInput  `json:"input"`
+	Model      string                      `json:"model"`
+	Input      bailianTextEmbeddingInput   `json:"input"`
 	Parameters *bailianTextEmbeddingParams `json:"parameters,omitempty"`
 }
 
@@ -330,9 +321,9 @@ func splitTextsByCount(texts []string, maxSize int) [][]string {
 // 参考 DashScope Python SDK: dashscope/embeddings/multimodal_embedding.py
 
 type bailianMultimodalEmbeddingReq struct {
-	Model      string                              `json:"model"`
-	Input      bailianMultimodalEmbeddingInput     `json:"input"`
-	Parameters *bailianMultimodalEmbeddingParams   `json:"parameters,omitempty"`
+	Model      string                            `json:"model"`
+	Input      bailianMultimodalEmbeddingInput   `json:"input"`
+	Parameters *bailianMultimodalEmbeddingParams `json:"parameters,omitempty"`
 }
 
 type bailianMultimodalEmbeddingInput struct {
@@ -350,11 +341,11 @@ type bailianMultimodalContent struct {
 
 type bailianMultimodalEmbeddingParams struct {
 	Dimension      *int     `json:"dimension,omitempty"`
-	OutputType     string   `json:"output_type,omitempty"`    // "dense"
-	FPS            *float64 `json:"fps,omitempty"`            // 视频帧提取率 [0,1]
-	Instruct       string   `json:"instruct,omitempty"`       // 自定义任务指令
-	EnableFusion   *bool    `json:"enable_fusion,omitempty"`  // 仅 qwen3-vl-embedding，融合为单向量
-	ResLevel       *int     `json:"res_level,omitempty"`      // 分辨率层级 0/1/2/3
+	OutputType     string   `json:"output_type,omitempty"`      // "dense"
+	FPS            *float64 `json:"fps,omitempty"`              // 视频帧提取率 [0,1]
+	Instruct       string   `json:"instruct,omitempty"`         // 自定义任务指令
+	EnableFusion   *bool    `json:"enable_fusion,omitempty"`    // 仅 qwen3-vl-embedding，融合为单向量
+	ResLevel       *int     `json:"res_level,omitempty"`        // 分辨率层级 0/1/2/3
 	MaxVideoFrames *int     `json:"max_video_frames,omitempty"` // 最大视频采样帧数，最多 64
 }
 
@@ -379,15 +370,6 @@ func (p *Provider) multimodalEmbeddings(ctx context.Context, req *core.Embedding
 	}
 	if len(contents) == 0 {
 		return nil, core.NewInvalidRequestError("input must be a non-empty string, array of strings, or array of {text,image,audio} objects", nil)
-	}
-
-	// 智能模型切换：如果当前模型是文本模型，自动切换到多模态模型
-	if !isMultimodalCapableModel(req.Model) {
-		slog.Info("Auto-switching to multimodal model",
-			"original_model", req.Model,
-			"new_model", "qwen3-vl-embedding",
-			"reason", "multimodal input detected")
-		req.Model = "qwen3-vl-embedding"
 	}
 
 	params := extractMultimodalEmbeddingParams(req)
@@ -493,24 +475,6 @@ func (p *Provider) doMultimodalEmbedding(ctx context.Context, model string, cont
 			TotalTokens:  bailianResp.Usage.TotalTokens,
 		},
 	}, nil
-}
-
-// isMultimodalCapableModel 检查模型是否支持多模态输入
-func isMultimodalCapableModel(modelName string) bool {
-	// 百炼支持的多模态 embedding 模型
-	multimodalModels := map[string]bool{
-		"qwen3-vl-embedding": true,
-		// 未来可以添加更多多模态模型
-	}
-
-	// 检查是否是已知的多模态模型
-	if multimodalModels[modelName] {
-		return true
-	}
-
-	// 启发式检查：模型名包含 "vl" 通常是视觉语言模型
-	// 这是一个宽松的检查，确保未知模型也能被正确处理
-	return strings.Contains(strings.ToLower(modelName), "-vl-")
 }
 
 // parseMultimodalInputs 将 core.EmbeddingRequest.Input 解析为 []bailianMultimodalContent。

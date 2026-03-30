@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -142,7 +143,15 @@ func TestMiddleware_GroupLayer(t *testing.T) {
 		Models: map[string]quota.LayerLimits{},
 	})
 	identity := &gwmodel.UserIdentity{UserID: "u1", KeyType: "personal"}
-	r := newTestRouter(mw, identity, "gpt-4")
+	handlerCalls := 0
+	r := gin.New()
+	r.POST("/v1/chat/completions", func(c *gin.Context) {
+		c.Set("identity", identity)
+		c.Set("request_model", "gpt-4")
+	}, mw.Handler(), func(c *gin.Context) {
+		handlerCalls++
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
 
 	doRequest(r)
 	doRequest(r)
@@ -150,11 +159,15 @@ func TestMiddleware_GroupLayer(t *testing.T) {
 	if w.Code != http.StatusTooManyRequests {
 		t.Errorf("group limit should reject after 2, got %d", w.Code)
 	}
-	// 验证响应体包含 layer=group
+	if handlerCalls != 2 {
+		t.Errorf("downstream handler should be called twice, got %d", handlerCalls)
+	}
+
+	// 验证响应体是单个合法 JSON 文档且包含 layer=group。
 	var body map[string]interface{}
-	// 响应体可能包含两个 JSON 对象（中间件未 c.Abort() 时 handler
-	// 也会写入），用 Decoder 只解析第一个。
-	json.NewDecoder(strings.NewReader(w.Body.String())).Decode(&body)
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response body should be one valid JSON document: %v; body=%q", err, w.Body.String())
+	}
 	errObj, _ := body["error"].(map[string]interface{})
 	details, _ := errObj["details"].(map[string]interface{})
 	if details["layer"] != "group" {
@@ -167,19 +180,26 @@ func TestMiddleware_Concurrency(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	holder.Set(&quota.QuotaSnapshot{
 		DefaultUserRPM: 0, DefaultUserMaxConcurrency: 1,
-		Users:       map[string]quota.LayerLimits{},
-		Groups:      map[string]quota.LayerLimits{},
-		Models:      map[string]quota.LayerLimits{},
+		Users:  map[string]quota.LayerLimits{},
+		Groups: map[string]quota.LayerLimits{},
+		Models: map[string]quota.LayerLimits{},
 	})
 	identity := &gwmodel.UserIdentity{UserID: "u1", KeyType: "personal"}
 
-	// 使用阻塞 handler 模拟并发占用
+	// 第一个请求阻塞以占用并发槽；如果被拒的第二个请求错误进入 handler，
+	// 它会直接返回，让测试快速报告调用次数/响应体错误，而不是永久死锁。
 	r := gin.New()
-	blockCh := make(chan struct{})
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstDone := make(chan *httptest.ResponseRecorder, 1)
+	var handlerCalls atomic.Int32
 	r.POST("/v1/chat/completions", func(c *gin.Context) {
 		c.Set("identity", identity)
 	}, mw.Handler(), func(c *gin.Context) {
-		<-blockCh // 阻塞直到释放
+		if handlerCalls.Add(1) == 1 {
+			close(firstEntered)
+			<-releaseFirst
+		}
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
@@ -188,16 +208,43 @@ func TestMiddleware_Concurrency(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
+		firstDone <- w
 	}()
-	time.Sleep(50 * time.Millisecond) // 等待第一个请求进入 handler
+	select {
+	case <-firstEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first request did not enter downstream handler")
+	}
+	firstReleased := false
+	defer func() {
+		if !firstReleased {
+			close(releaseFirst)
+		}
+	}()
 
 	// 第二个请求应被并发限制拒绝
 	w := doRequest(r)
 	if w.Code != http.StatusTooManyRequests {
 		t.Errorf("concurrent request should be rejected, got %d", w.Code)
 	}
+	if got := handlerCalls.Load(); got != 1 {
+		t.Errorf("rejected request should not enter downstream handler, got %d calls", got)
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response body should be one valid JSON document: %v; body=%q", err, w.Body.String())
+	}
 
-	close(blockCh) // 释放第一个请求
+	close(releaseFirst)
+	firstReleased = true
+	select {
+	case firstResponse := <-firstDone:
+		if firstResponse.Code != http.StatusOK {
+			t.Errorf("first request should complete successfully, got %d", firstResponse.Code)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first request did not finish after release")
+	}
 }
 
 // Test 6: 豁免跳过全部检查

@@ -392,7 +392,14 @@ func convertToAnthropicRequest(req *core.ChatRequest) (*anthropicRequest, error)
 		anthropicReq.ToolChoice = toolChoice
 	}
 
-	for _, msg := range req.Messages {
+	// Convert OpenAI messages to Anthropic format.
+	// Anthropic requires strict user/assistant alternation. Consecutive
+	// tool messages must be merged into a single user message — otherwise
+	// Anthropic rejects the request with:
+	//   "tool_use ids were found without tool_result blocks immediately after"
+	// Reference: LiteLLM does the same in anthropic_messages_pt().
+	for i := 0; i < len(req.Messages); i++ {
+		msg := req.Messages[i]
 		if msg.Role == "system" {
 			systemContent, err := buildAnthropicSystemContent(msg.Content)
 			if err != nil {
@@ -402,14 +409,34 @@ func convertToAnthropicRequest(req *core.ChatRequest) (*anthropicRequest, error)
 			continue
 		}
 
+		if msg.Role == "tool" {
+			// Merge consecutive tool messages into a single user message.
+			var mergedBlocks []anthropicContentBlock
+			for i < len(req.Messages) && req.Messages[i].Role == "tool" {
+				content, err := buildAnthropicMessageContent(req.Messages[i])
+				if err != nil {
+					return nil, normalizeAnthropicRequestError(err)
+				}
+				if blocks, ok := content.([]anthropicContentBlock); ok {
+					mergedBlocks = append(mergedBlocks, blocks...)
+				}
+				i++
+			}
+			// Back up one — the outer loop's i++ will advance past the
+			// last tool message.
+			i--
+			anthropicReq.Messages = append(anthropicReq.Messages, anthropicMessage{
+				Role:    "user",
+				Content: mergedBlocks,
+			})
+			continue
+		}
+
 		content, err := buildAnthropicMessageContent(msg)
 		if err != nil {
 			return nil, normalizeAnthropicRequestError(err)
 		}
 		role := msg.Role
-		if role == "tool" {
-			role = "user"
-		}
 		anthropicReq.Messages = append(anthropicReq.Messages, anthropicMessage{
 			Role:    role,
 			Content: content,

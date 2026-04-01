@@ -172,11 +172,31 @@ func (r *VideoTaskRepo) createEvent(taskID, eventType, eventData string) error {
 
 // GetProviderType 按 task_id 查 provider_type（供 gateway 查询路由）
 func (r *VideoTaskRepo) GetProviderType(taskID string) (string, error) {
-	var task model.VideoTask
-	if err := r.db.Select("provider_type").Where("task_id = ?", taskID).First(&task).Error; err != nil {
+	meta, err := r.GetTaskMeta(taskID)
+	if err != nil {
 		return "", err
 	}
-	return task.ProviderType, nil
+	return meta.ProviderType, nil
+}
+
+// VideoTaskMeta 供 gateway 路由与 call_logs 反查的最小字段集。
+type VideoTaskMeta struct {
+	Model        string
+	ProviderType string
+	ProviderName string
+}
+
+// GetTaskMeta 按 task_id 查 model + provider_type + provider_name。
+func (r *VideoTaskRepo) GetTaskMeta(taskID string) (*VideoTaskMeta, error) {
+	var task model.VideoTask
+	if err := r.db.Select("model", "provider_type", "provider_name").Where("task_id = ?", taskID).First(&task).Error; err != nil {
+		return nil, err
+	}
+	return &VideoTaskMeta{
+		Model:        task.Model,
+		ProviderType: task.ProviderType,
+		ProviderName: task.ProviderName,
+	}, nil
 }
 
 func (r *VideoTaskRepo) statsQuery(start, end, userID, providerName, modelName string) *gorm.DB {

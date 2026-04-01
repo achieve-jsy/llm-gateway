@@ -55,3 +55,18 @@ func (a *CPVideoTaskStoreAdapter) LookupProviderType(ctx context.Context, taskID
 	}
 	return a.Client.LookupProviderType(ctx, taskID)
 }
+
+func (a *CPVideoTaskStoreAdapter) LookupTaskMeta(ctx context.Context, taskID string) (*VideoTaskMeta, error) {
+	if a == nil || a.Client == nil {
+		return nil, nil
+	}
+	meta, err := a.Client.LookupTaskMeta(ctx, taskID)
+	if err != nil || meta == nil {
+		return nil, err
+	}
+	return &VideoTaskMeta{
+		Model:        meta.Model,
+		ProviderType: meta.ProviderType,
+		ProviderName: meta.ProviderName,
+	}, nil
+}

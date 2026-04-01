@@ -64,6 +64,7 @@ func (r *AssetAdapterRegistry) Get(providerType string) video.AssetProvider {
 type AssetHandler struct {
 	adapterReg   *AssetAdapterRegistry
 	providerType string
+	providerName string
 }
 
 // AdapterRegistry 返回适配器注册表（供热加载 Swap）。
@@ -82,6 +83,11 @@ func WithAssetProviderType(pt string) AssetHandlerOption {
 	return func(h *AssetHandler) { h.providerType = pt }
 }
 
+// WithAssetProviderName sets the display name written to call_logs.
+func WithAssetProviderName(name string) AssetHandlerOption {
+	return func(h *AssetHandler) { h.providerName = name }
+}
+
 // NewAssetHandler 创建素材 Handler
 func NewAssetHandler(relayAdapter, volcengineAdapter video.AssetProvider, opts ...AssetHandlerOption) *AssetHandler {
 	h := &AssetHandler{
@@ -94,6 +100,19 @@ func NewAssetHandler(relayAdapter, volcengineAdapter video.AssetProvider, opts .
 	return h
 }
 
+// SetRouting 更新默认渠道 type/展示名（热加载时调用）。
+func (h *AssetHandler) SetRouting(providerType, providerName string) {
+	if h == nil {
+		return
+	}
+	if providerType != "" {
+		h.providerType = providerType
+	}
+	if providerName != "" {
+		h.providerName = providerName
+	}
+}
+
 // Handle 统一入口，按 Action 分发
 func (h *AssetHandler) Handle(c *gin.Context) {
 	action := c.Param("action")
@@ -103,7 +122,19 @@ func (h *AssetHandler) Handle(c *gin.Context) {
 		return
 	}
 
-	adapter := h.adapterReg.Get(h.providerType)
+	providerType := h.providerType
+	if providerType == "" {
+		providerType = "seedance-relay"
+	}
+	providerName := h.providerName
+	if providerName == "" {
+		providerName = providerType
+	}
+	c.Set("model", "seedance-asset:"+action)
+	c.Set("provider", providerName)
+	c.Set("routed_model", providerType)
+
+	adapter := h.adapterReg.Get(providerType)
 	result, err := adapter.DoAction(c.Request.Context(), action, body)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})

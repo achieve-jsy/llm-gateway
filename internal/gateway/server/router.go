@@ -274,7 +274,10 @@ func Setup(
 
 		// 素材库
 		assetRelay, assetVolc := adapters.asAssetProviders()
-		assetHandler := handler.NewAssetHandler(assetRelay, assetVolc)
+		assetHandler := handler.NewAssetHandler(assetRelay, assetVolc,
+			handler.WithAssetProviderType("seedance-relay"),
+			handler.WithAssetProviderName(adapters.relayName),
+		)
 		assetHandlerReg := assetHandler.AdapterRegistry()
 
 		reloadSeedance := func(entries []gwmodel.ProviderEntry) {
@@ -283,6 +286,7 @@ func Setup(
 			ra, va := next.asAssetProviders()
 			videoHandlerReg.Swap(rv, vv, next.relayName, next.volcName)
 			assetHandlerReg.Swap(ra, va)
+			assetHandler.SetRouting("seedance-relay", next.relayName)
 			slog.Info("seedance adapters hot-reloaded",
 				"relay", next.relayName,
 				"volcengine", next.volcName,

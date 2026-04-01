@@ -117,35 +117,60 @@ func (c *VideoTaskClient) UpdateStatus(ctx context.Context, taskID, status strin
 	return c.Update(ctx, taskID, UpdateVideoTaskRequest{Status: status})
 }
 
+// VideoTaskMeta 任务路由与埋点反查结果。
+type VideoTaskMeta struct {
+	Model        string
+	ProviderType string
+	ProviderName string
+}
+
 // LookupProviderType 查询任务对应的 provider_type。
 func (c *VideoTaskClient) LookupProviderType(ctx context.Context, taskID string) (string, error) {
+	meta, err := c.LookupTaskMeta(ctx, taskID)
+	if err != nil {
+		return "", err
+	}
+	if meta == nil {
+		return "", nil
+	}
+	return meta.ProviderType, nil
+}
+
+// LookupTaskMeta 查询任务 model / provider_type / provider_name。
+func (c *VideoTaskClient) LookupTaskMeta(ctx context.Context, taskID string) (*VideoTaskMeta, error) {
 	if c == nil || c.baseURL == "" {
-		return "", fmt.Errorf("video task client not configured")
+		return nil, fmt.Errorf("video task client not configured")
 	}
 	u := fmt.Sprintf("%s/internal/v1/video/tasks/%s/provider-type", c.baseURL, url.PathEscape(taskID))
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	httpReq.Header.Set("X-Internal-Token", c.token)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
-		return "", nil
+		return nil, nil
 	}
 	if resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return "", fmt.Errorf("control-plane lookup provider type: status=%d body=%s", resp.StatusCode, string(b))
+		return nil, fmt.Errorf("control-plane lookup task meta: status=%d body=%s", resp.StatusCode, string(b))
 	}
 	var out struct {
 		ProviderType string `json:"provider_type"`
+		Model        string `json:"model"`
+		ProviderName string `json:"provider_name"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
+		return nil, err
 	}
-	return out.ProviderType, nil
+	return &VideoTaskMeta{
+		Model:        out.Model,
+		ProviderType: out.ProviderType,
+		ProviderName: out.ProviderName,
+	}, nil
 }

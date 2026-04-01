@@ -4,16 +4,17 @@ import "time"
 
 // SchedulerConfig 调度器配置
 type SchedulerConfig struct {
-	ControlPlaneURL        string        `json:"control_plane_url"`
-	InternalToken          string        `json:"internal_token"`
-	ConfigSyncInterval     time.Duration `json:"config_sync_interval"`
-	HealthProbeInterval    time.Duration `json:"health_probe_interval"`
-	MaxProbeConcurrency    int           `json:"max_probe_concurrency"`
-	FailureThreshold       int           `json:"failure_threshold"`
-	RecoverySuccessThreshold int         `json:"recovery_success_threshold"`
-	QuickFailWindow        time.Duration `json:"quick_fail_window"`
-	QuickFailThreshold     int           `json:"quick_fail_threshold"`
-	ChannelProbeTimeout    time.Duration `json:"channel_probe_timeout"`
+	ControlPlaneURL          string        `json:"control_plane_url"`
+	InternalToken            string        `json:"internal_token"`
+	RedisClient              interface{}   `json:"-"` // *redis.Client, avoid import cycle
+	ConfigSyncInterval       time.Duration `json:"config_sync_interval"`
+	HealthProbeInterval      time.Duration `json:"health_probe_interval"`
+	MaxProbeConcurrency      int           `json:"max_probe_concurrency"`
+	FailureThreshold         int           `json:"failure_threshold"`
+	RecoverySuccessThreshold int           `json:"recovery_success_threshold"`
+	QuickFailWindow          time.Duration `json:"quick_fail_window"`
+	QuickFailThreshold       int           `json:"quick_fail_threshold"`
+	ChannelProbeTimeout      time.Duration `json:"channel_probe_timeout"`
 }
 
 // DefaultConfig 返回默认配置

@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
@@ -52,6 +53,10 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string, req *c
 		}
 	}
 
+	// Extract session key BEFORE routing
+	sessionKey := scheduler.ExtractSessionKey(c, req)
+	req.SessionKey = sessionKey
+
 	decision, err := d.scheduler.Route(modelName, req)
 	if err != nil {
 		slog.Error("group route failed",
@@ -61,9 +66,15 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string, req *c
 		return nil, model.ErrNoAvailableModel
 	}
 
+	// Persist sticky mapping if enabled and not already used
+	if !decision.StickyUsed && sessionKey != "" {
+		d.scheduler.PersistSticky(c.Request.Context(), modelName, sessionKey, decision)
+	}
+
 	model.SetDispatchContext(c, &model.DispatchContext{
 		GroupName:     modelName,
 		RoutedModelID: decision.ModelID,
+		SessionKey:    sessionKey,
 	})
 
 	c.Set("group_name", modelName)
@@ -168,4 +179,23 @@ func (d *GroupAwareDispatcher) GetGroupTimeout(groupName string, defaultTimeout 
 		return time.Duration(cfg.TimeoutSeconds) * time.Second
 	}
 	return defaultTimeout
+}
+
+// UpdateSticky updates the sticky mapping when failover succeeds
+func (d *GroupAwareDispatcher) UpdateSticky(ctx context.Context, groupName, sessionKey, newModelID string) {
+	if sessionKey == "" {
+		return
+	}
+
+	d.scheduler.UpdateSticky(ctx, groupName, sessionKey, newModelID)
+
+	sessionKeyPrefix := sessionKey
+	if len(sessionKey) > 8 {
+		sessionKeyPrefix = sessionKey[:8] + "..."
+	}
+	slog.Info("sticky: updated after failover",
+		"group", groupName,
+		"session_key", sessionKeyPrefix,
+		"new_model_id", newModelID,
+	)
 }

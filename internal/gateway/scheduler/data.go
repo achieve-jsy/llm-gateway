@@ -14,13 +14,15 @@ type ControlPlaneConfig struct {
 
 // CPGroupData 控制面返回的组数据结构
 type CPGroupData struct {
-	ID             uint            `json:"id"`
-	Name           string          `json:"name"`
-	Strategy       RoutingStrategy `json:"strategy"`
-	Enabled        bool            `json:"enabled"`
-	Description    string          `json:"description"`
-	TimeoutSeconds int             `json:"timeout_seconds"`
-	Models         []CPModelData   `json:"models"`
+	ID               uint            `json:"id"`
+	Name             string          `json:"name"`
+	Strategy         RoutingStrategy `json:"strategy"`
+	Enabled          bool            `json:"enabled"`
+	Description      string          `json:"description"`
+	TimeoutSeconds   int             `json:"timeout_seconds"`
+	StickyEnabled    bool            `json:"sticky_enabled"`
+	StickyTTLSeconds int             `json:"sticky_ttl_seconds"`
+	Models           []CPModelData   `json:"models"`
 }
 
 // CPModelData 控制面返回的组内模型数据
@@ -39,12 +41,14 @@ type CPModelData struct {
 
 // GroupConfig 模型组配置
 type GroupConfig struct {
-	ID             uint            `json:"id"`
-	Name           string          `json:"name"`
-	Strategy       RoutingStrategy `json:"strategy"`
-	Enabled        bool            `json:"enabled"`
-	Description    string          `json:"description"`
-	TimeoutSeconds int             `json:"timeout_seconds"`
+	ID               uint            `json:"id"`
+	Name             string          `json:"name"`
+	Strategy         RoutingStrategy `json:"strategy"`
+	Enabled          bool            `json:"enabled"`
+	Description      string          `json:"description"`
+	TimeoutSeconds   int             `json:"timeout_seconds"`
+	StickyEnabled    bool            `json:"sticky_enabled"`
+	StickyTTLSeconds int             `json:"sticky_ttl_seconds"`
 }
 
 // GroupModel 组内模型关联
@@ -64,12 +68,14 @@ type GroupModel struct {
 
 // GroupRoutingConfig 内存中的组路由配置
 type GroupRoutingConfig struct {
-	GroupID        uint                 `json:"group_id"`
-	GroupName      string               `json:"group_name"`
-	Strategy       RoutingStrategy      `json:"strategy"`
-	Enabled        bool                 `json:"enabled"`
-	TimeoutSeconds int                  `json:"timeout_seconds"`
-	Models         []*ModelRoutingEntry `json:"models"`
+	GroupID          uint                 `json:"group_id"`
+	GroupName        string               `json:"group_name"`
+	Strategy         RoutingStrategy      `json:"strategy"`
+	Enabled          bool                 `json:"enabled"`
+	TimeoutSeconds   int                  `json:"timeout_seconds"`
+	StickyEnabled    bool                 `json:"sticky_enabled"`
+	StickyTTLSeconds int                  `json:"sticky_ttl_seconds"`
+	Models           []*ModelRoutingEntry `json:"models"`
 }
 
 // ModelRoutingEntry 组内模型路由条目

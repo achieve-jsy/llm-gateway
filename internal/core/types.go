@@ -32,6 +32,8 @@ type ChatRequest struct {
 	StreamOptions     *StreamOptions    `json:"stream_options,omitempty"`
 	Reasoning         *Reasoning        `json:"reasoning,omitempty"`
 	ExtraFields       UnknownJSONFields `json:"-" swaggerignore:"true"`
+	// SessionKey is extracted from conversation_id or KeyID hash for sticky routing (transient, not serialized)
+	SessionKey string `json:"-" swaggerignore:"true"`
 }
 
 func (r *ChatRequest) semanticSelector() (string, string) {

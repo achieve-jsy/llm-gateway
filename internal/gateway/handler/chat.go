@@ -228,6 +228,12 @@ func (h *ChatHandler) handleNonStream(c *gin.Context, baseCtx context.Context, r
 			middleware.TrackProviderRequest(c, decision.ProviderName)
 		c.Set("failover_used", true)
 
+		// Update sticky mapping after successful failover
+		dc := model.GetDispatchContext(c)
+		if dc != nil && dc.SessionKey != "" {
+			h.groupDispatch.UpdateSticky(c.Request.Context(), originalModel, dc.SessionKey, decision.ModelID)
+		}
+
 		// v0.15: failover 模型也需要经过模型层配额检查
 		if h.quotaGate != nil {
 			subjectType, _ := c.Get("quota_subject_type")
@@ -328,6 +334,12 @@ func (h *ChatHandler) handleStream(c *gin.Context, baseCtx context.Context, req 
 			// Track provider concurrency for failover target (WP8)
 			middleware.TrackProviderRequest(c, decision.ProviderName)
 		c.Set("failover_used", true)
+
+		// Update sticky mapping after successful failover
+		dc := model.GetDispatchContext(c)
+		if dc != nil && dc.SessionKey != "" {
+			h.groupDispatch.UpdateSticky(c.Request.Context(), originalModel, dc.SessionKey, decision.ModelID)
+		}
 
 		// v0.15: failover 模型也需要经过模型层配额检查
 		if h.quotaGate != nil {

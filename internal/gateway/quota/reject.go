@@ -25,6 +25,9 @@ func WriteQuotaRejected(c *gin.Context, v quota.QuotaViolation) {
 	msg := formatQuotaMessage(v)
 	code := errorCode(v.Gate)
 
+	// 所有配额拒绝统一终止 Gin handler 链，避免下游继续调用上游并追加响应。
+	c.Abort()
+
 	// 在 WriteError 之前设置限流响应头，避免 WriteError 内部的 c.JSON 提交后
 	// 再设置 header 无效。注意：不传 WithRetryAfter 给 WriteError，
 	// 因为 WriteError 内部使用 http.StatusText(retryAfter) 存在 bug，

@@ -25,7 +25,7 @@ func (p *Provider) StreamChatCompletion(ctx context.Context, req *core.ChatReque
 	if req == nil {
 		return nil, core.NewInvalidRequestError("bedrock chat request is required", nil)
 	}
-	parts, err := buildConverseParts(req)
+	parts, err := p.buildConverseParts(req)
 	if err != nil {
 		return nil, err
 	}

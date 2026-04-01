@@ -27,6 +27,10 @@ type ProviderConfig struct {
 	ServiceAccountJSONBase64 string
 	GCPScope                 string
 	Models                   []string
+	// ModelUpstreamIDs maps gateway model name to upstream provider model ID.
+	// When non-empty, providers should use the upstream ID when calling the API.
+	// Empty map entries or missing keys mean: use the gateway model name as-is.
+	ModelUpstreamIDs map[string]string
 	// ModelMetadataOverrides holds operator-supplied metadata keyed by raw model
 	// ID (as it appears in the provider's /models response). The registry merges
 	// these onto remote-registry metadata after enrichment; non-zero fields here

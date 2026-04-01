@@ -17,6 +17,7 @@ BEGIN
         'embedding'::character varying,
         'embedding_vl'::character varying,
         'rerank'::character varying,
+        'rerank_vl'::character varying,
         'video'::character varying
       ])::text[]));
   END IF;

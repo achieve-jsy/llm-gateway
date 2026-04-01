@@ -187,7 +187,7 @@ import { Search, Connection } from '@element-plus/icons-vue'
 import { confirmSync, checkModels } from '@/services/control-plane'
 import type { SyncResult, SyncModelItem, ModelAvailabilityItem } from '@/types/sync'
 
-type ModelType = 'chat' | 'embedding' | 'rerank' | 'vision' | 'tts' | 'asr' | 'image' | 'speech' | 'ocr' | 'omni' | 'live-translate' | 'coder' | 'math' | 'think'
+type ModelType = 'chat' | 'embedding' | 'embedding_vl' | 'rerank' | 'rerank_vl' | 'vision' | 'tts' | 'asr' | 'image' | 'speech' | 'ocr' | 'omni' | 'live-translate' | 'coder' | 'math' | 'think'
 
 interface ModelListItem extends SyncModelItem {
   status: 'added' | 'existing' | 'removed'
@@ -196,7 +196,9 @@ interface ModelListItem extends SyncModelItem {
 const TYPE_LABELS: Record<ModelType, string> = {
   chat: '',
   embedding: 'Embedding',
+  embedding_vl: 'Embedding-VL',
   rerank: 'Rerank',
+  rerank_vl: 'Rerank-VL',
   vision: 'Vision',
   tts: 'TTS',
   asr: 'ASR',
@@ -213,7 +215,9 @@ const TYPE_LABELS: Record<ModelType, string> = {
 const TYPE_TAG_MAP: Record<ModelType, string> = {
   chat: '',
   embedding: 'info',
+  embedding_vl: 'info',
   rerank: 'info',
+  rerank_vl: 'warning',
   vision: 'warning',
   tts: '',
   asr: 'info',
@@ -282,8 +286,14 @@ const checkingBtnText = computed(() => {
 
 function getModelType(modelId: string): ModelType {
   const lower = modelId.toLowerCase()
-  if (lower.includes('rerank')) return 'rerank'
-  if (lower.includes('embed')) return 'embedding'
+  if (lower.includes('rerank')) {
+    if (lower.includes('vl') || lower.includes('multimodal') || lower.includes('vision')) return 'rerank_vl'
+    return 'rerank'
+  }
+  if (lower.includes('embed')) {
+    if (lower.includes('vl') || lower.includes('multimodal') || lower.includes('vision')) return 'embedding_vl'
+    return 'embedding'
+  }
   if (lower.includes('tts')) return 'tts'
   if (lower.includes('asr')) return 'asr'
   if (lower.includes('image-') || lower.startsWith('wan') || lower.startsWith('z-image') || lower.includes('/image')) return 'image'

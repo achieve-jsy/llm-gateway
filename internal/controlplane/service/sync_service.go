@@ -274,6 +274,9 @@ func fetchUpstreamModels(endpoint, apiKey string) ([]upstreamModel, error) {
 func InferModelType(name string) string {
 	lower := strings.ToLower(name)
 	if strings.Contains(lower, "rerank") {
+		if strings.Contains(lower, "vl") || strings.Contains(lower, "multimodal") || strings.Contains(lower, "vision") {
+			return "rerank_vl"
+		}
 		return "rerank"
 	}
 	if strings.Contains(lower, "embed") {

@@ -491,11 +491,13 @@ type EmbeddingUsage struct {
 }
 
 // RerankRequest represents a reranking request.
+// Query / Documents 支持硅基流动式扩展：string 或单模态 object（{text|image|video}）。
 type RerankRequest struct {
 	Model           string            `json:"model"`
 	Provider        string            `json:"provider,omitempty"` // Gateway routing hint; stripped before upstream execution.
-	Query           string            `json:"query"`
-	Documents       []string          `json:"documents"`
+	ModelType       string            `json:"-"`                     // "rerank" or "rerank_vl"；调度后填充，不入 JSON
+	Query           any               `json:"query"`                 // string | {text|image}
+	Documents       []any             `json:"documents"`             // [](string | {text|image|video})
 	TopN            *int              `json:"top_n,omitempty"`
 	ReturnDocuments *bool             `json:"return_documents,omitempty"`
 	MaxChunksPerDoc *int              `json:"max_chunks_per_doc,omitempty"`

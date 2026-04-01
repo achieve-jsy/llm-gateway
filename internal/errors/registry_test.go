@@ -33,11 +33,11 @@ func TestAllCodesHaveValidHTTPStatus(t *testing.T) {
 // Non-upstream errors must have tighter type-to-status correspondence.
 func TestTypeStatusCorrespondence(t *testing.T) {
 	validRanges := map[ErrorType][2]int{
-		ErrorTypeInvalidRequest:    {400, 499},
-		ErrorTypeAuthentication:    {401, 401},
-		ErrorTypePermissionDenied:  {403, 403},
-		ErrorTypeNotFound:          {404, 404},
-		ErrorTypeRateLimit:         {429, 429},
+		ErrorTypeInvalidRequest:   {400, 499},
+		ErrorTypeAuthentication:   {401, 401},
+		ErrorTypePermissionDenied: {403, 403},
+		ErrorTypeNotFound:         {404, 404},
+		ErrorTypeRateLimit:        {429, 429},
 	}
 	// ErrorTypeAPI and ErrorTypeUpstream share the same string value "api_error",
 	// so they share the same range.
@@ -139,7 +139,7 @@ func TestAllCodesMatchregistryKey(t *testing.T) {
 
 // TestRegistrySize verifies the expected number of error codes.
 func TestRegistrySize(t *testing.T) {
-	expected := 26
+	expected := 27
 	if len(registry) != expected {
 		t.Errorf("registry has %d codes, expected %d", len(registry), expected)
 	}
@@ -206,6 +206,7 @@ func TestBuiltinCodesExist(t *testing.T) {
 		"model_not_found",
 		"model_group_not_found",
 		"model_unavailable",
+		"model_capability_mismatch",
 		"provider_bad_request",
 		"provider_auth_error",
 		"provider_not_found",

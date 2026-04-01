@@ -415,6 +415,7 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 	type modelInfo struct {
 		ID             uuid.UUID `json:"id"`
 		Name           string    `json:"name"`
+		ModelType      string    `json:"model_type,omitempty"`
 		ProviderID     uuid.UUID `json:"provider_id,omitempty"`
 		ProviderType   string    `json:"provider_type,omitempty"`
 		ProviderName   string    `json:"provider_name,omitempty"`
@@ -460,12 +461,16 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 						continue
 					}
 				mi.Name = m.UpstreamName()
+				mi.ModelType = m.ModelType
 				mi.ProviderID = m.ProviderID
 				providerEnabled := false
 				if h.providerRepo != nil {
 					p, err := h.providerRepo.GetByID(m.ProviderID)
 					if err == nil && p != nil && p.Enabled {
 						mi.ProviderType = p.DefinitionID
+						if mi.ProviderType == "" {
+							mi.ProviderType = p.Type
+						}
 						mi.ProviderName = p.Name
 						mi.Endpoint = p.Endpoint
 						providerEnabled = true

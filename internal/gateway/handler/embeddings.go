@@ -131,6 +131,13 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 		}
 	}
 
+	// 多模态 embedding input 只能路由到 embedding_vl 模型/组，避免错误写入文本向量空间。
+	if isMultimodalEmbeddingInput(req.Input) && req.ModelType != "embedding_vl" {
+		gatewayerrors.WriteError(c, "model_capability_mismatch",
+			gatewayerrors.WithMessage("多模态 embedding input 需要使用 embedding_vl 模型或模型组"))
+		return
+	}
+
 	// v0.15: 模型层配额检查（路由选定具体 model 之后、转发上游之前）
 	// 使用 routed_model_id（UUID）而非 model name，确保配额配置与路由表一致。
 	if h.quotaGate != nil {
@@ -166,4 +173,31 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 	c.Set("resp_object", resp)
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// isMultimodalEmbeddingInput 检查 input 是否包含图片/音频对象。
+func isMultimodalEmbeddingInput(input any) bool {
+	if input == nil {
+		return false
+	}
+	if list, ok := input.([]interface{}); ok {
+		for _, item := range list {
+			if m, ok := item.(map[string]interface{}); ok {
+				if _, hasImage := m["image"]; hasImage {
+					return true
+				}
+				if _, hasAudio := m["audio"]; hasAudio {
+					return true
+				}
+				// OpenAI 风格多模态 content：{type:"image_url", image_url:{url:...}}
+				if _, hasImageURL := m["image_url"]; hasImageURL {
+					return true
+				}
+				if t, _ := m["type"].(string); t == "image_url" || t == "input_audio" {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

@@ -215,6 +215,7 @@ const MODE_LABEL: Record<string, string> = {
   embedding: '向量',
   embedding_vl: '多模态向量',
   rerank: '重排序',
+  rerank_vl: '多模态重排序',
   image_generation: '图像生成',
   audio_transcription: '语音转写',
   audio_speech: '语音合成',

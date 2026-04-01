@@ -124,7 +124,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	// KeyOrgSyncer：org 变动后异步同步 api_keys org 字段并失效 KeyCache
 	keyOrgSyncer := service.NewKeyOrgSyncer(db, service.NewEventPublisherAdapter(publisher))
 
-	groupSvc := service.NewGroupService(groupRepo)
+	groupSvc := service.NewGroupService(groupRepo, modelRepo)
 	groupSvc.SetFailoverDefaults(
 		settingsSvc.GetDefaultMaxSwitches(context.Background()),
 		settingsSvc.GetDefaultSameModelRetries(context.Background()),

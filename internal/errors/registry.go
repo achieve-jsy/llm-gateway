@@ -104,6 +104,12 @@ var registry = map[string]ErrorCode{
 		HTTPStatus: http.StatusServiceUnavailable,
 		Message:    "请求的模型暂时不可用",
 	},
+	"model_capability_mismatch": {
+		Code:       "model_capability_mismatch",
+		Type:       ErrorTypeInvalidRequest,
+		HTTPStatus: http.StatusBadRequest,
+		Message:    "请求输入与模型能力不匹配",
+	},
 
 	// ── Upstream business errors (structured provider errors) ───────────────
 	"provider_bad_request": {

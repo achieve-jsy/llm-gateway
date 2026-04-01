@@ -57,7 +57,7 @@ func TestCompatibleProviderRerankSuccess(t *testing.T) {
 	resp, err := provider.Rerank(context.Background(), &core.RerankRequest{
 		Model:     "test-rerank-model",
 		Query:     "test query",
-		Documents: []string{"doc1", "doc2"},
+		Documents: []any{"doc1", "doc2"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -132,7 +132,7 @@ func TestCompatibleProviderRerankModelFallback(t *testing.T) {
 	resp, err := provider.Rerank(context.Background(), &core.RerankRequest{
 		Model:     requestModel,
 		Query:     "fallback test",
-		Documents: []string{"d1"},
+		Documents: []any{"d1"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

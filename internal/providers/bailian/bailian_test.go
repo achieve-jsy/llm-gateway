@@ -888,6 +888,62 @@ func TestRerank_VLObjectBody(t *testing.T) {
 	assert.Equal(t, 42, resp.Usage.TotalTokens)
 }
 
+func TestNormalizeBailianRerankDocuments_MixedStringAndObject(t *testing.T) {
+	docs := normalizeBailianRerankDocuments([]any{
+		"plain text",
+		map[string]any{"image": "https://example.com/d.png"},
+		map[string]any{"image_url": "https://example.com/e.png"},
+	})
+	require.Len(t, docs, 3)
+	assert.Equal(t, map[string]any{"text": "plain text"}, docs[0])
+	assert.Equal(t, map[string]any{"image": "https://example.com/d.png"}, docs[1])
+	assert.Equal(t, map[string]any{"image": "https://example.com/e.png"}, docs[2])
+}
+
+func TestNormalizeBailianRerankDocuments_AllStringsUnchanged(t *testing.T) {
+	in := []any{"a", "b"}
+	out := normalizeBailianRerankDocuments(in)
+	assert.Equal(t, in, out)
+}
+
+func TestRerank_MixedDocumentsNormalizedBeforeUpstream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req bailianRerankReq
+		require.NoError(t, json.Unmarshal(body, &req))
+		require.Len(t, req.Input.Documents, 2)
+		doc0, ok := req.Input.Documents[0].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "a dog", doc0["text"])
+		doc1, ok := req.Input.Documents[1].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "https://example.com/d.png", doc1["image"])
+		if req.Parameters.FPS != nil {
+			assert.InDelta(t, 1.0, *req.Parameters.FPS, 0.001)
+		}
+
+		resp := bailianRerankResp{}
+		resp.Output.Results = []bailianRerankResult{{Index: 0, RelevanceScore: 0.9}}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(t, server.URL)
+	fpsRaw, _ := json.Marshal(1.0)
+	resp, err := provider.Rerank(context.Background(), &core.RerankRequest{
+		Model: "qwen3-vl-rerank",
+		Query: map[string]any{"image": "https://example.com/q.png"},
+		Documents: []any{
+			"a dog",
+			map[string]any{"image": "https://example.com/d.png"},
+		},
+		ExtraFields: core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{"fps": fpsRaw}),
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.Results, 1)
+}
+
 func TestRerank_WithReturnDocuments(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := bailianRerankResp{

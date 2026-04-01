@@ -349,11 +349,12 @@ func TestRerankHandlerTextObjectAllowedWithoutRerankVL(t *testing.T) {
 }
 
 func TestRerankHandlerInvalidMultimodalShape(t *testing.T) {
+	// 双 key 会被兼容层收敛为单 key（优先 image）；无 group 时因 ModelType 空触发 capability mismatch
 	reqBody := `{"model":"qwen3-vl-rerank","query":{"image":"https://x","text":"y"},"documents":["doc1"]}`
 
 	mock := &mockRerankOrchestrator{
 		rerankFn: func(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
-			t.Fatal("orchestrator should not be called")
+			t.Fatal("orchestrator should not be called without rerank_vl ModelType")
 			return nil, nil
 		},
 	}
@@ -363,4 +364,53 @@ func TestRerankHandlerInvalidMultimodalShape(t *testing.T) {
 	handler.Handle(c)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	errObj, ok := resp["error"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "model_capability_mismatch", errObj["code"], "双 key 应先被整形，再因能力门禁失败，而非 shape 校验失败")
+}
+
+func TestRerankHandlerImageURLAlias(t *testing.T) {
+	reqBody := `{"model":"qwen3-vl-rerank","query":{"image_url":"https://example.com/q.png"},"documents":["doc1"]}`
+
+	mock := &mockRerankOrchestrator{
+		rerankFn: func(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
+			q, ok := req.Query.(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, "https://example.com/q.png", q["image"])
+			return &core.RerankResponse{
+				Model:   "qwen3-vl-rerank",
+				Results: []core.RerankResult{{Index: 0, RelevanceScore: 0.5}},
+			}, nil
+		},
+	}
+
+	handler := NewRerankHandler(mock)
+	c, w := setupRerankTest(reqBody)
+	handler.Handle(c)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code) // ModelType 空 → capability mismatch
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	errObj := resp["error"].(map[string]any)
+	assert.Equal(t, "model_capability_mismatch", errObj["code"])
+}
+
+func TestNormalizeRerankRequest(t *testing.T) {
+	req := &core.RerankRequest{
+		Query: []any{map[string]any{"image_url": "https://q", "text": "ignore"}},
+		Documents: []any{
+			"plain",
+			map[string]any{"image": "https://d", "text": "x"},
+		},
+	}
+	require.NoError(t, normalizeRerankRequest(req))
+	q := req.Query.(map[string]any)
+	assert.Equal(t, "https://q", q["image"])
+	assert.Equal(t, "plain", req.Documents[0])
+	d1 := req.Documents[1].(map[string]any)
+	assert.Equal(t, "https://d", d1["image"])
+	_, hasText := d1["text"]
+	assert.False(t, hasText)
 }

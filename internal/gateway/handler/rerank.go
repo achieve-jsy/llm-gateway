@@ -83,6 +83,12 @@ func (h *RerankHandler) Handle(c *gin.Context) {
 		return
 	}
 
+	// 兼容整形：image_url 别名、双 key 收敛、单元素 query 数组解包
+	if err := normalizeRerankRequest(&req); err != nil {
+		gatewayerrors.WriteError(c, "request_body_invalid", gatewayerrors.WithMessage(err.Error()))
+		return
+	}
+
 	if err := validateRerankQuery(req.Query); err != nil {
 		gatewayerrors.WriteError(c, "request_body_invalid", gatewayerrors.WithMessage(err.Error()))
 		return
@@ -166,6 +172,92 @@ func (h *RerankHandler) Handle(c *gin.Context) {
 	c.Set("resp_object", resp)
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// normalizeRerankRequest 在校验前做兼容整形，尽量对齐硅基流动常见写法。
+func normalizeRerankRequest(req *core.RerankRequest) error {
+	q, err := normalizeRerankPart(req.Query, false)
+	if err != nil {
+		return fmt.Errorf("query: %w", err)
+	}
+	req.Query = q
+
+	for i, doc := range req.Documents {
+		d, err := normalizeRerankPart(doc, true)
+		if err != nil {
+			return fmt.Errorf("documents[%d]: %w", i, err)
+		}
+		req.Documents[i] = d
+	}
+	return nil
+}
+
+// normalizeRerankPart：
+// - 单元素数组解包为元素本身
+// - image_url → image
+// - 多模态双/多 key 时按优先级收敛为单 key：image > video > text
+func normalizeRerankPart(v any, allowVideo bool) (any, error) {
+	switch x := v.(type) {
+	case nil:
+		return nil, nil
+	case string:
+		return x, nil
+	case []any:
+		if len(x) == 0 {
+			return nil, fmt.Errorf("empty array is not allowed")
+		}
+		if len(x) > 1 {
+			return nil, fmt.Errorf("array with multiple items is not supported; use a string or single-modality object")
+		}
+		return normalizeRerankPart(x[0], allowVideo)
+	case map[string]any:
+		return normalizeModalityObject(x, allowVideo)
+	default:
+		// json 数字等保持原样，交给后续校验报错
+		return v, nil
+	}
+}
+
+func normalizeModalityObject(m map[string]any, allowVideo bool) (map[string]any, error) {
+	out := make(map[string]any, len(m))
+	for k, raw := range m {
+		key := k
+		if key == "image_url" {
+			key = "image"
+		}
+		if existing, ok := out[key]; ok {
+			// 同名冲突时保留已有非空值
+			if s, ok := existing.(string); ok && strings.TrimSpace(s) != "" {
+				continue
+			}
+		}
+		out[key] = raw
+	}
+
+	priority := []string{"image", "video", "text"}
+	if !allowVideo {
+		priority = []string{"image", "text"}
+	}
+
+	var chosenKey string
+	var chosenVal string
+	for _, k := range priority {
+		raw, ok := out[k]
+		if !ok {
+			continue
+		}
+		s, ok := raw.(string)
+		if !ok || strings.TrimSpace(s) == "" {
+			continue
+		}
+		chosenKey, chosenVal = k, s
+		break
+	}
+	if chosenKey == "" {
+		// 没有可识别模态时原样返回，由校验给出明确错误
+		return out, nil
+	}
+	return map[string]any{chosenKey: chosenVal}, nil
 }
 
 // validateRerankQuery 校验 query：string 非空，或单键 {text|image}。

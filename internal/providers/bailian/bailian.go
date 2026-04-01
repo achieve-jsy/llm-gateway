@@ -743,8 +743,10 @@ type bailianRerankInput struct {
 }
 
 type bailianRerankParameters struct {
-	TopN     int    `json:"top_n,omitempty"`
-	Instruct string `json:"instruct,omitempty"` // 自定义任务指令
+	TopN            int      `json:"top_n,omitempty"`
+	Instruct        string   `json:"instruct,omitempty"` // 自定义任务指令
+	ReturnDocuments *bool    `json:"return_documents,omitempty"`
+	FPS             *float64 `json:"fps,omitempty"` // 视频抽帧，仅 VL rerank
 }
 
 type bailianRerankResp struct {
@@ -774,18 +776,30 @@ func (p *Provider) Rerank(ctx context.Context, req *core.RerankRequest) (*core.R
 	}
 
 	params := bailianRerankParameters{TopN: topN}
+	if req.ReturnDocuments != nil {
+		params.ReturnDocuments = req.ReturnDocuments
+	}
 	if v := req.ExtraFields.Lookup("instruct"); v != nil {
 		var s string
 		if json.Unmarshal(v, &s) == nil {
 			params.Instruct = s
 		}
 	}
+	if v := req.ExtraFields.Lookup("fps"); v != nil {
+		var f float64
+		if json.Unmarshal(v, &f) == nil && f > 0 {
+			params.FPS = &f
+		}
+	}
+
+	query := normalizeBailianRerankQuery(req.Query)
+	docs := normalizeBailianRerankDocuments(req.Documents)
 
 	bailianReq := bailianRerankReq{
 		Model: req.Model,
 		Input: bailianRerankInput{
-			Query:     req.Query,
-			Documents: req.Documents,
+			Query:     query,
+			Documents: docs,
 		},
 		Parameters: params,
 	}
@@ -824,6 +838,57 @@ func (p *Provider) Rerank(ctx context.Context, req *core.RerankRequest) (*core.R
 			TotalTokens: bailianResp.Usage.TotalTokens,
 		},
 	}, nil
+}
+
+// normalizeBailianRerankQuery 将 image_url 收敛为 image（防御性，handler 通常已处理）。
+func normalizeBailianRerankQuery(query any) any {
+	m, ok := query.(map[string]any)
+	if !ok {
+		return query
+	}
+	if _, hasImage := m["image"]; !hasImage {
+		if url, ok := m["image_url"].(string); ok && strings.TrimSpace(url) != "" {
+			return map[string]any{"image": url}
+		}
+	}
+	return query
+}
+
+// normalizeBailianRerankDocuments 兼容硅基流动式混排：
+// 当 documents 中出现任意 object 时，把裸 string 统一收成 {text}，避免百炼「类型不一致」。
+func normalizeBailianRerankDocuments(docs []any) []any {
+	if len(docs) == 0 {
+		return docs
+	}
+	hasObject := false
+	for _, d := range docs {
+		if _, ok := d.(map[string]any); ok {
+			hasObject = true
+			break
+		}
+	}
+	if !hasObject {
+		return docs
+	}
+
+	out := make([]any, len(docs))
+	for i, d := range docs {
+		switch v := d.(type) {
+		case string:
+			out[i] = map[string]any{"text": v}
+		case map[string]any:
+			m := v
+			if _, hasImage := m["image"]; !hasImage {
+				if url, ok := m["image_url"].(string); ok && strings.TrimSpace(url) != "" {
+					m = map[string]any{"image": url}
+				}
+			}
+			out[i] = m
+		default:
+			out[i] = d
+		}
+	}
+	return out
 }
 
 // Passthrough routes an opaque provider-native request to Bailian.

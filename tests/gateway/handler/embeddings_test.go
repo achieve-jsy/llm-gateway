@@ -13,6 +13,7 @@ import (
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/cache"
 	"github.com/example/llm-gateway/internal/gateway/handler"
+	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
@@ -62,6 +63,11 @@ func (f *fakeEmbeddingScheduler) GetGroupConfig(_ string) *scheduler.GroupRoutin
 func (f *fakeEmbeddingScheduler) NotifyFailure(_ string) {}
 
 func (f *fakeEmbeddingScheduler) SetCooldown(_ string, _ time.Duration) {}
+
+func (f *fakeEmbeddingScheduler) PersistSticky(_ context.Context, _, _ string, _ *scheduler.RouteDecision) {
+}
+
+func (f *fakeEmbeddingScheduler) UpdateSticky(_ context.Context, _, _, _ string) {}
 
 func newEmbeddingGroupDispatcher(groupName, modelName, modelType string) *orchestrator.GroupAwareDispatcher {
 	nc := cache.NewGroupNameCache("")
@@ -366,4 +372,42 @@ func TestEmbeddingsHandler_TextInputAllowsEmbeddingType(t *testing.T) {
 	require.NotNil(t, orch.lastReq)
 	assert.Equal(t, "embedding", orch.lastReq.ModelType)
 	assert.Equal(t, "text-embedding-v4", orch.lastReq.Model)
+}
+
+// TestEmbeddingsHandler_GroupDispatchNilChatRequestNoPanic
+// 复现生产 bug：EmbeddingsHandler 以 Dispatch(c, model, nil) 调组路由；
+// sticky 合入后若对 nil req 写 SessionKey 会 panic → ErrorHandler 返回 500。
+func TestEmbeddingsHandler_GroupDispatchNilChatRequestNoPanic(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	orch := &fakeEmbeddingsOrchestrator{
+		resp: &core.EmbeddingResponse{
+			Object: "list",
+			Model:  "text-embedding-v4",
+			Data: []core.EmbeddingData{{
+				Object:    "embedding",
+				Embedding: json.RawMessage(`[0.1,0.2,0.3]`),
+				Index:     0,
+			}},
+			Usage: core.EmbeddingUsage{PromptTokens: 1, TotalTokens: 1},
+		},
+	}
+	gd := newEmbeddingGroupDispatcher("text-embedding-v4", "text-embedding-v4", "embedding")
+
+	router := gin.New()
+	router.Use(middleware.ErrorHandler())
+	h := handler.NewEmbeddingsHandlerWithGroup(orch, gd)
+	router.POST("/v1/embeddings", h.Handle)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings",
+		strings.NewReader(`{"model":"text-embedding-v4","input":"健康检查测试文本"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	require.NotPanics(t, func() {
+		router.ServeHTTP(w, req)
+	})
+	assert.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	assert.NotContains(t, w.Body.String(), "internal_error")
+	require.Equal(t, 1, orch.calls)
 }

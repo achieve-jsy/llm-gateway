@@ -53,9 +53,13 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string, req *c
 		}
 	}
 
-	// Extract session key BEFORE routing
+	// Extract session key BEFORE routing。
+	// embeddings/rerank/responses 会传 req=nil（无 ChatRequest），必须空指针保护，
+	// 否则 req.SessionKey = ... 会直接 panic → HTTP 500。
 	sessionKey := scheduler.ExtractSessionKey(c, req)
-	req.SessionKey = sessionKey
+	if req != nil {
+		req.SessionKey = sessionKey
+	}
 
 	decision, err := d.scheduler.Route(modelName, req)
 	if err != nil {

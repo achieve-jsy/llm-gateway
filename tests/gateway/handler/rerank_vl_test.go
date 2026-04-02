@@ -12,6 +12,7 @@ import (
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/cache"
 	"github.com/example/llm-gateway/internal/gateway/handler"
+	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
@@ -60,6 +61,11 @@ func (f *fakeRerankScheduler) GetGroupConfig(_ string) *scheduler.GroupRoutingCo
 func (f *fakeRerankScheduler) NotifyFailure(_ string) {}
 
 func (f *fakeRerankScheduler) SetCooldown(_ string, _ time.Duration) {}
+
+func (f *fakeRerankScheduler) PersistSticky(_ context.Context, _, _ string, _ *scheduler.RouteDecision) {
+}
+
+func (f *fakeRerankScheduler) UpdateSticky(_ context.Context, _, _, _ string) {}
 
 func newRerankGroupDispatcher(groupName, modelName, modelType string) *orchestrator.GroupAwareDispatcher {
 	nc := cache.NewGroupNameCache("")
@@ -134,4 +140,35 @@ func TestRerankHandler_MultimodalAllowedForRerankVL(t *testing.T) {
 	require.NotNil(t, orch.lastReq)
 	assert.Equal(t, "rerank_vl", orch.lastReq.ModelType)
 	assert.Equal(t, "qwen3-vl-rerank", orch.lastReq.Model)
+}
+
+// TestRerankHandler_GroupDispatchNilChatRequestNoPanic
+// 与 embeddings 同因：RerankHandler 调 Dispatch(c, model, nil)，不得 panic→500。
+func TestRerankHandler_GroupDispatchNilChatRequestNoPanic(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	orch := &fakeRerankOrchestrator{
+		resp: &core.RerankResponse{
+			Model:   "gte-rerank-v2",
+			Results: []core.RerankResult{{Index: 0, RelevanceScore: 0.8}, {Index: 1, RelevanceScore: 0.2}},
+		},
+	}
+	gd := newRerankGroupDispatcher("gte-rerank-v2", "gte-rerank-v2", "rerank")
+
+	router := gin.New()
+	router.Use(middleware.ErrorHandler())
+	h := handler.NewRerankHandlerWithGroup(orch, gd)
+	router.POST("/v1/rerank", h.Handle)
+
+	body := `{"model":"gte-rerank-v2","query":"健康检查查询","documents":["文档1","文档2"]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/rerank", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	require.NotPanics(t, func() {
+		router.ServeHTTP(w, req)
+	})
+	assert.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	assert.NotContains(t, w.Body.String(), "internal_error")
+	require.Equal(t, 1, orch.calls)
 }

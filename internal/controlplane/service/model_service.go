@@ -349,12 +349,12 @@ func applyVideoParams(
 		m.VideoSupportedActions = actions
 	}
 	if m.ModelType != "video" {
-		// 非视频类型清空，避免脏数据
-		m.VideoSupportedResolutions = nil
-		m.VideoSupportedAspectRatios = nil
+		// 非视频类型清空，避免脏数据；用空切片而非 nil，防止 jsonb 序列化为空字符串
+		m.VideoSupportedResolutions = []string{}
+		m.VideoSupportedAspectRatios = []string{}
 		m.VideoMinDurationSeconds = 0
 		m.VideoMaxDurationSeconds = 0
-		m.VideoSupportedActions = nil
+		m.VideoSupportedActions = []string{}
 	}
 }
 

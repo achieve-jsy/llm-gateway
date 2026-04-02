@@ -55,8 +55,8 @@ func (r *Router) Route(groupName string, req *core.ChatRequest) (*RouteDecision,
 
 	slog.Debug("router: healthy models", "group", groupName, "healthy", len(healthyModels))
 
-	// NEW: Sticky routing layer (inject BEFORE strategy selection)
-	if group.StickyEnabled && r.stickyStore != nil && req.SessionKey != "" {
+	// Sticky routing（strategy 选择之前）。req 可能为 nil（embeddings/rerank 组路由）。
+	if group.StickyEnabled && r.stickyStore != nil && req != nil && req.SessionKey != "" {
 		if entry := r.trySticky(groupName, req.SessionKey, healthyModels); entry != nil {
 			decision := buildDecision(group, entry, start)
 			decision.StickyUsed = true

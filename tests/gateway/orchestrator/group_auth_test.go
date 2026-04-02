@@ -1,6 +1,7 @@
 package orchestrator_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -43,6 +44,11 @@ func (f *fakeScheduler) GetGroupConfig(_ string) *scheduler.GroupRoutingConfig {
 func (f *fakeScheduler) NotifyFailure(_ string) {}
 
 func (f *fakeScheduler) SetCooldown(_ string, _ time.Duration) {}
+
+func (f *fakeScheduler) PersistSticky(_ context.Context, _, _ string, _ *scheduler.RouteDecision) {
+}
+
+func (f *fakeScheduler) UpdateSticky(_ context.Context, _, _, _ string) {}
 
 // newBindingServer 创建模拟控制面 binding API 的 httptest.Server。
 // keyGroups 是 map[keyID] -> []BoundGroup，模拟不同 key 的绑定关系。
@@ -206,4 +212,25 @@ func TestDispatch_UsableGroupsCeiling(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDispatch_NilChatRequest 覆盖 embeddings/rerank 路径：Dispatch(c, group, nil)
+// 不得因 sticky SessionKey 赋值而 panic。
+func TestDispatch_NilChatRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	d := setupDispatcher([]string{"text-embedding-v4"}, "")
+	c, _ := makeContext(&model.UserIdentity{
+		KeyID:           "probe-key",
+		AccessAllGroups: true,
+		UsableGroups:    []string{"text-embedding-v4"},
+	})
+
+	require.NotPanics(t, func() {
+		decision, err := d.Dispatch(c, "text-embedding-v4", nil)
+		require.NoError(t, err)
+		require.NotNil(t, decision)
+		assert.Equal(t, "model-1", decision.ModelName)
+		assert.Equal(t, "text-embedding-v4", c.GetString("group_name"))
+	})
 }

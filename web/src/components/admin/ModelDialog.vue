@@ -17,7 +17,6 @@
         <el-input
           v-model="formData.name"
           placeholder="如 gpt-4o, qwen-turbo"
-          :disabled="isEdit"
           @input="onNameInput"
         />
         <!-- Catalog 联想填充建议下拉 -->

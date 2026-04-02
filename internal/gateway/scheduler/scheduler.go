@@ -27,6 +27,14 @@ func New(cfg SchedulerConfig) (*Scheduler, error) {
 	rt := NewRouteTable()
 	hs := NewHealthStore(cfg.FailureThreshold, cfg.RecoverySuccessThreshold, cfg.QuickFailThreshold, cfg.QuickFailWindow)
 	router := NewRouter(rt, hs)
+
+	// Wire sticky store if Redis client is available
+	if cfg.RedisClient != nil {
+		// RedisClient is interface{} to avoid import cycle, cast to *redis.Client
+		stickyStore := NewStickyStore(cfg.RedisClient)
+		router.SetStickyStore(stickyStore)
+	}
+
 	failoverHandler := NewFailoverHandler(rt, hs, router)
 	configSyncer := NewConfigSyncer(cfg.ControlPlaneURL, cfg.InternalToken, rt, hs, cfg.ConfigSyncInterval)
 	healthProber := NewHealthProber(hs, rt, cfg.HealthProbeInterval, cfg.MaxProbeConcurrency, cfg.ChannelProbeTimeout)
@@ -97,4 +105,42 @@ func (s *Scheduler) IsReady() bool {
 func (s *Scheduler) Shutdown() {
 	s.configSyncer.Stop()
 	s.healthProber.Stop()
+}
+
+// PersistSticky persists a sticky mapping after routing decision
+func (s *Scheduler) PersistSticky(ctx context.Context, groupName, sessionKey string, decision *RouteDecision) {
+	if s.router.stickyStore == nil {
+		return
+	}
+
+	group := s.router.routeTable.Get(groupName)
+	if group == nil || !group.StickyEnabled {
+		return
+	}
+
+	ttl := time.Duration(group.StickyTTLSeconds) * time.Second
+	if ttl <= 0 {
+		ttl = time.Hour // Default fallback
+	}
+
+	_ = s.router.stickyStore.Set(ctx, groupName, sessionKey, decision.ModelID, ttl)
+}
+
+// UpdateSticky updates a sticky mapping after failover
+func (s *Scheduler) UpdateSticky(ctx context.Context, groupName, sessionKey, newModelID string) {
+	if s.router.stickyStore == nil || sessionKey == "" {
+		return
+	}
+
+	group := s.router.routeTable.Get(groupName)
+	if group == nil || !group.StickyEnabled {
+		return
+	}
+
+	ttl := time.Duration(group.StickyTTLSeconds) * time.Second
+	if ttl <= 0 {
+		ttl = time.Hour
+	}
+
+	_ = s.router.stickyStore.Set(ctx, groupName, sessionKey, newModelID, ttl)
 }

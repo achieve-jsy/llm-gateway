@@ -52,6 +52,7 @@
             <el-radio-button value="chat">Chat</el-radio-button>
             <el-radio-button value="embedding">Embedding</el-radio-button>
             <el-radio-button value="rerank">Rerank</el-radio-button>
+            <el-radio-button value="rerank_vl">Rerank VL</el-radio-button>
             <el-radio-button value="video">Video</el-radio-button>
           </el-radio-group>
         </div>
@@ -450,11 +451,11 @@ const filterEndpoint  = ref('')
 const activeTab = ref('chat')
 
 const isCompactUsageTab = computed(() =>
-  activeTab.value === 'embedding' || activeTab.value === 'rerank',
+  activeTab.value === 'embedding' || activeTab.value === 'rerank' || activeTab.value === 'rerank_vl',
 )
 
 const logEndpointType = computed((): UsageEndpointType => {
-  if (activeTab.value === 'embedding' || activeTab.value === 'rerank') return activeTab.value
+  if (activeTab.value === 'embedding' || activeTab.value === 'rerank' || activeTab.value === 'rerank_vl') return activeTab.value
   return 'chat'
 })
 

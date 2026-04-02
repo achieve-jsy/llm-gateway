@@ -7,6 +7,7 @@ const ctxKeyDispatch = "dispatch"
 type DispatchContext struct {
 	GroupName      string
 	RoutedModelID  string
+	SessionKey     string   // Session key for sticky routing
 	// FailoverRounds 记录已发生的 failover 轮次（每次 HandleFailover 成功 +1）。
 	FailoverRounds int
 	// TriedModelIDs 记录本次请求中已失败并排除的模型 ID 列表（用于多轮 failover 去重）。

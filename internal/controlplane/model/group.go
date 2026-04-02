@@ -37,7 +37,10 @@ type Group struct {
 	// NULL = 不限，运行时按主体独立计数
 	QuotaRPM            *int `gorm:"column:quota_rpm" json:"quota_rpm,omitempty"`
 	QuotaMaxConcurrency *int `gorm:"column:quota_max_concurrency" json:"quota_max_concurrency,omitempty"`
-	Models                  []GroupModel   `gorm:"foreignKey:GroupID" json:"models,omitempty"`
+	// Session 粘性路由配置
+	StickyEnabled    bool `gorm:"not null;default:false" json:"sticky_enabled"`
+	StickyTTLSeconds int  `gorm:"not null;default:3600" json:"sticky_ttl_seconds"`
+	Models           []GroupModel `gorm:"foreignKey:GroupID" json:"models,omitempty"`
 }
 
 func (Group) TableName() string {

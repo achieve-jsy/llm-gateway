@@ -80,6 +80,7 @@
             <el-option label="Chat" value="/v1/chat/completions" />
             <el-option label="Embedding" value="/v1/embeddings" />
             <el-option label="Rerank" value="/v1/rerank" />
+            <el-option label="Rerank VL" value="/v1/rerank_vl" />
           </el-select>
 
           <el-select

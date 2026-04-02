@@ -426,25 +426,29 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 	}
 
 	type groupInfo struct {
-		ID             uint        `json:"id"`
-		Name           string      `json:"name"`
-		Description    string      `json:"description"`
-		Strategy       string      `json:"strategy"`
-		Enabled        bool        `json:"enabled"`
-		TimeoutSeconds int         `json:"timeout_seconds"`
-		Models         []modelInfo `json:"models"`
+		ID               uint        `json:"id"`
+		Name             string      `json:"name"`
+		Description      string      `json:"description"`
+		Strategy         string      `json:"strategy"`
+		Enabled          bool        `json:"enabled"`
+		TimeoutSeconds   int         `json:"timeout_seconds"`
+		StickyEnabled    bool        `json:"sticky_enabled"`
+		StickyTTLSeconds int         `json:"sticky_ttl_seconds"`
+		Models           []modelInfo `json:"models"`
 	}
 
 	result := make([]groupInfo, 0, len(groups))
 	for _, g := range groups {
 		gi := groupInfo{
-			ID:             g.ID,
-			Name:           g.Name,
-			Description:    g.Description,
-			Strategy:       g.Strategy,
-			Enabled:        g.Enabled,
-			TimeoutSeconds: g.TimeoutSeconds,
-			Models:         make([]modelInfo, 0, len(g.Models)),
+			ID:               g.ID,
+			Name:             g.Name,
+			Description:      g.Description,
+			Strategy:         g.Strategy,
+			Enabled:          g.Enabled,
+			TimeoutSeconds:   g.TimeoutSeconds,
+			StickyEnabled:    g.StickyEnabled,
+			StickyTTLSeconds: g.StickyTTLSeconds,
+			Models:           make([]modelInfo, 0, len(g.Models)),
 		}
 		for _, gm := range g.Models {
 			mi := modelInfo{

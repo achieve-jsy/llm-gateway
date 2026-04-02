@@ -1,11 +1,12 @@
 /** Usage 页面端点类型（与 activeTab 对齐） */
-export type UsageEndpointType = 'chat' | 'embedding' | 'rerank' | 'video' | ''
+export type UsageEndpointType = 'chat' | 'embedding' | 'rerank' | 'rerank_vl' | 'video' | ''
 
 /** inbound_endpoint 路径 → UsageEndpointType */
 export function endpointPathToType(path?: string): UsageEndpointType {
   if (path === '/v1/chat/completions') return 'chat'
   if (path === '/v1/embeddings') return 'embedding'
   if (path === '/v1/rerank') return 'rerank'
+  if (path === '/v1/rerank_vl') return 'rerank_vl'
   if (path === '/v1/contents/generations/tasks') return 'video'
   return ''
 }

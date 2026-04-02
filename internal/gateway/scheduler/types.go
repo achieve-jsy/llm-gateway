@@ -45,4 +45,6 @@ type RouteDecision struct {
 	ComplexityScore  float64 `json:"complexity_score,omitempty"`
 	ReasoningMarkers int     `json:"reasoning_markers,omitempty"`
 	BiasUpApplied    bool    `json:"bias_up_applied,omitempty"`
+	// sticky 审计字段
+	StickyUsed bool `json:"sticky_used,omitempty"`
 }

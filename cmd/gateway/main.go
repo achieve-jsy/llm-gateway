@@ -181,6 +181,7 @@ func main() {
 	if controlPlaneURL != "" {
 		schCfg := scheduler.DefaultConfig(controlPlaneURL)
 		schCfg.InternalToken = internalToken
+		schCfg.RedisClient = rdb
 		sch, err = scheduler.New(schCfg)
 		if err != nil {
 			slog.Warn("failed to create scheduler", "error", err)

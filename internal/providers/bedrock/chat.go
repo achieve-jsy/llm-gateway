@@ -30,7 +30,7 @@ func (p *Provider) ChatCompletion(ctx context.Context, req *core.ChatRequest) (*
 		return nil, core.NewInvalidRequestError("bedrock chat request is required", nil)
 	}
 
-	parts, err := buildConverseParts(req)
+	parts, err := p.buildConverseParts(req)
 	if err != nil {
 		return nil, err
 	}
@@ -62,13 +62,20 @@ type converseParts struct {
 // buildConverseParts translates a core.ChatRequest into the Bedrock Converse
 // shape. Tool definitions and tool_choice are forwarded only for models that
 // accept them; unsupported families will surface their own validation errors.
-func buildConverseParts(req *core.ChatRequest) (converseParts, error) {
+func (p *Provider) buildConverseParts(req *core.ChatRequest) (converseParts, error) {
 	model := strings.TrimSpace(req.Model)
 	// 兼容路由表传递的 "{provider}/" 前缀格式（如 "bedrock/global.xxx"）。
 	// AWS Bedrock Converse API 只需要 model ID 部分。
 	model = stripProviderPrefix(model, "bedrock")
 	if model == "" {
 		return converseParts{}, core.NewInvalidRequestError("bedrock chat request requires a model", nil)
+	}
+
+	// 优先使用 upstream_model_id（数据库配置的上游模型 ID）
+	if p.modelUpstreamIDs != nil {
+		if upstreamID, ok := p.modelUpstreamIDs[req.Model]; ok && upstreamID != "" {
+			model = upstreamID
+		}
 	}
 
 	system, messages, err := convertMessages(req.Messages)

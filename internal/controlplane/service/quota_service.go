@@ -9,9 +9,11 @@ import (
 	"time"
 
 	authmodel "github.com/example/llm-gateway/internal/auth/model"
-	corequota "github.com/example/llm-gateway/internal/core/quota"
+	"github.com/example/llm-gateway/internal/controlplane/event"
 	cpmodel "github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
+	corequota "github.com/example/llm-gateway/internal/core/quota"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -63,6 +65,7 @@ func (s *QuotaService) GetUserEffectiveQuota(ctx context.Context, userID string)
 				RPM: settings.DefaultUserRPM, MaxConcurrency: settings.DefaultUserMaxConcurrency,
 				Source: "default_user", SubjectType: "user", SubjectID: userID,
 				DefaultRPM: settings.DefaultUserRPM, DefaultMaxConc: settings.DefaultUserMaxConcurrency,
+				RPMSource: "default_user", MaxConcurrencySource: "default_user",
 			}, nil
 		}
 		return nil, fmt.Errorf("find user: %w", err)
@@ -86,6 +89,9 @@ func (s *QuotaService) GetUserEffectiveQuota(ctx context.Context, userID string)
 		RPM: rpm, MaxConcurrency: maxConc, Source: source,
 		SubjectType: "user", SubjectID: user.ID,
 		DefaultRPM: settings.DefaultUserRPM, DefaultMaxConc: settings.DefaultUserMaxConcurrency,
+		ConfiguredRPM: user.QuotaRPM, ConfiguredMaxConc: user.QuotaMaxConcurrency,
+		RPMSource:            quotaFieldSource(user.QuotaRPM, "default_user"),
+		MaxConcurrencySource: quotaFieldSource(user.QuotaMaxConcurrency, "default_user"),
 	}, nil
 }
 
@@ -137,6 +143,9 @@ func (s *QuotaService) GetServiceKeyEffectiveQuota(ctx context.Context, keyID st
 		RPM: rpm, MaxConcurrency: maxConc, Source: source,
 		SubjectType: "service_key", SubjectID: key.ID,
 		DefaultRPM: settings.DefaultServiceKeyRPM, DefaultMaxConc: settings.DefaultServiceKeyMaxConcurrency,
+		ConfiguredRPM: key.QuotaRPM, ConfiguredMaxConc: key.QuotaMaxConcurrency,
+		RPMSource:            quotaFieldSource(key.QuotaRPM, "default_service_key"),
+		MaxConcurrencySource: quotaFieldSource(key.QuotaMaxConcurrency, "default_service_key"),
 	}, nil
 }
 
@@ -181,6 +190,9 @@ func (s *QuotaService) GetGroupEffectiveQuota(ctx context.Context, groupID uint)
 	return &QuotaEffective{
 		RPM: rpm, MaxConcurrency: maxConc, Source: source,
 		SubjectType: "group", SubjectID: fmt.Sprintf("%d", groupID),
+		ConfiguredRPM: group.QuotaRPM, ConfiguredMaxConc: group.QuotaMaxConcurrency,
+		RPMSource:            quotaFieldSource(group.QuotaRPM, "unset"),
+		MaxConcurrencySource: quotaFieldSource(group.QuotaMaxConcurrency, "unset"),
 	}, nil
 }
 
@@ -225,12 +237,42 @@ func (s *QuotaService) GetModelEffectiveQuota(ctx context.Context, modelID strin
 	return &QuotaEffective{
 		RPM: rpm, MaxConcurrency: maxConc, Source: source,
 		SubjectType: "model", SubjectID: m.ID.String(),
+		ConfiguredRPM: m.QuotaRPM, ConfiguredMaxConc: m.QuotaMaxConcurrency,
+		RPMSource:            quotaFieldSource(m.QuotaRPM, "unset"),
+		MaxConcurrencySource: quotaFieldSource(m.QuotaMaxConcurrency, "unset"),
 	}, nil
 }
 
 // RefreshSnapshot 手动触发 snapshot 刷新（供外部调用）
 func (s *QuotaService) RefreshSnapshot(ctx context.Context) error {
 	return s.refreshSnapshot(ctx)
+}
+
+// StartSnapshotReconciler 同步执行首次刷新，并周期性从数据库重建配额快照。
+// 返回的通道会在 ctx 取消、协调器退出后关闭。
+func (s *QuotaService) StartSnapshotReconciler(ctx context.Context, interval time.Duration) <-chan struct{} {
+	done := make(chan struct{})
+	if err := s.refreshSnapshot(ctx); err != nil {
+		slog.Warn("initial quota snapshot refresh failed", "error", err)
+	}
+
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := s.refreshSnapshot(ctx); err != nil {
+					slog.Warn("periodic quota snapshot refresh failed", "error", err)
+				}
+			}
+		}
+	}()
+	return done
 }
 
 // refreshSnapshot 构建并发布 quota snapshot 到 Redis
@@ -249,7 +291,13 @@ func (s *QuotaService) refreshSnapshot(ctx context.Context) error {
 	if err := s.rdb.Set(ctx, QuotaSnapshotKey, data, 0).Err(); err != nil {
 		return fmt.Errorf("set quota snapshot: %w", err)
 	}
-	if err := s.rdb.Publish(ctx, "config:change", "quota_snapshot_updated").Err(); err != nil {
+	// 必须发 JSON ChangeEvent：gateway provider 订阅器会 json.Unmarshal；
+	// 裸字符串会刷 ERROR，且配额 ConfigLoader 也约定识别 type=quota_snapshot_updated。
+	ev := event.NewChangeEvent(event.QuotaSnapshotUpdated, "quota", uuid.Nil, 0)
+	payload, err := json.Marshal(ev)
+	if err != nil {
+		slog.Warn("quota snapshot event marshal failed", "error", err)
+	} else if err := s.rdb.Publish(ctx, "config:change", string(payload)).Err(); err != nil {
 		slog.Warn("quota snapshot publish failed", "error", err)
 	}
 	slog.Info("quota snapshot refreshed")
@@ -271,29 +319,39 @@ func (s *QuotaService) buildSnapshot(ctx context.Context) (*QuotaSnapshotData, e
 		return nil, err
 	}
 	snap := &QuotaSnapshotData{
-		DefaultUserRPM:            settings.DefaultUserRPM,
-		DefaultUserMaxConcurrency: settings.DefaultUserMaxConcurrency,
-		DefaultServiceKeyRPM:      settings.DefaultServiceKeyRPM,
+		DefaultUserRPM:                  settings.DefaultUserRPM,
+		DefaultUserMaxConcurrency:       settings.DefaultUserMaxConcurrency,
+		DefaultServiceKeyRPM:            settings.DefaultServiceKeyRPM,
 		DefaultServiceKeyMaxConcurrency: settings.DefaultServiceKeyMaxConcurrency,
-		Users:       make(map[string]QuotaEntry),
-		ServiceKeys: make(map[string]QuotaEntry),
-		Groups:      make(map[string]QuotaEntry),
-		Models:      make(map[string]QuotaEntry),
-		UpdatedAt:   time.Now().UTC(),
+		Users:                           make(map[string]QuotaEntry),
+		ServiceKeys:                     make(map[string]QuotaEntry),
+		Groups:                          make(map[string]QuotaEntry),
+		Models:                          make(map[string]QuotaEntry),
+		UpdatedAt:                       time.Now().UTC(),
 	}
 	var users []authmodel.User
 	if err := s.db.WithContext(ctx).Where("quota_rpm IS NOT NULL OR quota_max_concurrency IS NOT NULL").Find(&users).Error; err != nil {
 		return nil, fmt.Errorf("load user quota overrides: %w", err)
 	}
 	for _, u := range users {
-		snap.Users[u.ID.String()] = QuotaEntry{RPM: u.QuotaRPM, MaxConcurrency: u.QuotaMaxConcurrency}
+		snap.Users[u.ID.String()] = quotaEntryWithDefaults(
+			u.QuotaRPM,
+			u.QuotaMaxConcurrency,
+			settings.DefaultUserRPM,
+			settings.DefaultUserMaxConcurrency,
+		)
 	}
 	var keys []cpmodel.ApiKey
 	if err := s.db.WithContext(ctx).Where("key_type = ? AND (quota_rpm IS NOT NULL OR quota_max_concurrency IS NOT NULL)", cpmodel.KeyTypeService).Find(&keys).Error; err != nil {
 		return nil, fmt.Errorf("load key quota overrides: %w", err)
 	}
 	for _, k := range keys {
-		snap.ServiceKeys[k.ID.String()] = QuotaEntry{RPM: k.QuotaRPM, MaxConcurrency: k.QuotaMaxConcurrency}
+		snap.ServiceKeys[k.ID.String()] = quotaEntryWithDefaults(
+			k.QuotaRPM,
+			k.QuotaMaxConcurrency,
+			settings.DefaultServiceKeyRPM,
+			settings.DefaultServiceKeyMaxConcurrency,
+		)
 	}
 	var groups []cpmodel.Group
 	if err := s.db.WithContext(ctx).Where("quota_rpm IS NOT NULL OR quota_max_concurrency IS NOT NULL").Find(&groups).Error; err != nil {
@@ -323,6 +381,16 @@ func (s *QuotaService) buildSnapshot(ctx context.Context) (*QuotaSnapshotData, e
 	return snap, nil
 }
 
+func quotaEntryWithDefaults(rpm, maxConc *int, defaultRPM, defaultMaxConc int) QuotaEntry {
+	if rpm == nil {
+		rpm = &defaultRPM
+	}
+	if maxConc == nil {
+		maxConc = &defaultMaxConc
+	}
+	return QuotaEntry{RPM: rpm, MaxConcurrency: maxConc}
+}
+
 func (s *QuotaService) getSettings(ctx context.Context) (*cpmodel.SystemSettings, error) {
 	settingsRepo := repository.NewSettingsRepo(s.db)
 	svc := NewSettingsService(settingsRepo)
@@ -339,29 +407,40 @@ func validateQuotaValues(rpm, maxConc *int) error {
 	return nil
 }
 
+func quotaFieldSource(configured *int, inheritedSource string) string {
+	if configured != nil {
+		return "override"
+	}
+	return inheritedSource
+}
+
 // QuotaEffective 有效配额（含继承来源）
 type QuotaEffective struct {
-	RPM            int    `json:"rpm"`
-	MaxConcurrency int    `json:"max_concurrency"`
-	Source         string `json:"source"`
-	SubjectType    string `json:"subject_type"`
-	SubjectID      any    `json:"subject_id"`
-	DefaultRPM     int    `json:"default_rpm,omitempty"`
-	DefaultMaxConc int    `json:"default_max_concurrency,omitempty"`
+	RPM                  int    `json:"rpm"`
+	MaxConcurrency       int    `json:"max_concurrency"`
+	Source               string `json:"source"`
+	RPMSource            string `json:"rpm_source"`
+	MaxConcurrencySource string `json:"max_concurrency_source"`
+	SubjectType          string `json:"subject_type"`
+	SubjectID            any    `json:"subject_id"`
+	DefaultRPM           int    `json:"default_rpm,omitempty"`
+	DefaultMaxConc       int    `json:"default_max_concurrency,omitempty"`
+	ConfiguredRPM        *int   `json:"configured_rpm"`
+	ConfiguredMaxConc    *int   `json:"configured_max_concurrency"`
 }
 
 // QuotaSnapshotData Redis 中存储的 quota snapshot 结构
 type QuotaSnapshotData struct {
-	DefaultUserRPM                  int                    `json:"default_user_rpm"`
-	DefaultUserMaxConcurrency       int                    `json:"default_user_max_concurrency"`
-	DefaultServiceKeyRPM            int                    `json:"default_service_key_rpm"`
-	DefaultServiceKeyMaxConcurrency int                    `json:"default_service_key_max_concurrency"`
-	Users       map[string]QuotaEntry `json:"users"`
-	ServiceKeys map[string]QuotaEntry `json:"service_keys"`
-	Groups      map[string]QuotaEntry `json:"groups"`
-	Models      map[string]QuotaEntry `json:"models"`
-	Exemptions  []QuotaExemptionEntry      `json:"exemptions,omitempty"`
-	UpdatedAt   time.Time             `json:"updated_at"`
+	DefaultUserRPM                  int                   `json:"default_user_rpm"`
+	DefaultUserMaxConcurrency       int                   `json:"default_user_max_concurrency"`
+	DefaultServiceKeyRPM            int                   `json:"default_service_key_rpm"`
+	DefaultServiceKeyMaxConcurrency int                   `json:"default_service_key_max_concurrency"`
+	Users                           map[string]QuotaEntry `json:"users"`
+	ServiceKeys                     map[string]QuotaEntry `json:"service_keys"`
+	Groups                          map[string]QuotaEntry `json:"groups"`
+	Models                          map[string]QuotaEntry `json:"models"`
+	Exemptions                      []QuotaExemptionEntry `json:"exemptions,omitempty"`
+	UpdatedAt                       time.Time             `json:"updated_at"`
 }
 
 type QuotaEntry struct {

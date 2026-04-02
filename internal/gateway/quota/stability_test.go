@@ -347,9 +347,12 @@ func TestStability_FourLayers_IndependentCounting(t *testing.T) {
 		t.Fatalf("req 3 should be 429 (group or model hit), got %d", w.Code)
 	}
 	var body map[string]interface{}
-	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("req 3 response should be one valid JSON document: %v; body=%q", err, w.Body.String())
+	}
 	errObj, _ := body["error"].(map[string]interface{})
-	layer, _ := errObj["layer"].(string)
+	details, _ := errObj["details"].(map[string]interface{})
+	layer, _ := details["layer"].(string)
 	if layer != "group" {
 		t.Fatalf("req 3 should trip group layer (checked before model), got layer=%v", layer)
 	}
@@ -836,9 +839,12 @@ func TestStability_GroupLayer_ParsesModelFromBody(t *testing.T) {
 		t.Fatalf("req 3 should be 429 (group RPM hit), got %d (body=%s)", w.Code, w.Body.String())
 	}
 	var resp map[string]interface{}
-	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("req 3 response should be one valid JSON document: %v; body=%q", err, w.Body.String())
+	}
 	errObj, _ := resp["error"].(map[string]interface{})
-	layer, _ := errObj["layer"].(string)
+	details, _ := errObj["details"].(map[string]interface{})
+	layer, _ := details["layer"].(string)
 	if layer != "group" {
 		t.Fatalf("req 3 should trip group layer, got layer=%v (full=%v)", layer, errObj)
 	}

@@ -71,11 +71,26 @@ func (l *ProviderLoader) Build(entries []gatewaymodel.ProviderEntry) (*providers
 			continue
 		}
 
+		// 构建 model name → upstream ID 映射
+		modelUpstreamIDs := make(map[string]string)
+		models := entry.Models
+		if len(entry.ModelsV2) > 0 {
+			// 优先使用 ModelsV2（新版本，包含 upstream_model_id）
+			models = make([]string, 0, len(entry.ModelsV2))
+			for _, m := range entry.ModelsV2 {
+				models = append(models, m.Name)
+				if m.UpstreamModelID != "" {
+					modelUpstreamIDs[m.Name] = m.UpstreamModelID
+				}
+			}
+		}
+
 		cfg := providers.ProviderConfig{
-			Type:    entry.Type,
-			APIKey:  entry.Credentials,
-			BaseURL: entry.Endpoint,
-			Models:  entry.Models,
+			Type:             entry.Type,
+			APIKey:           entry.Credentials,
+			BaseURL:          entry.Endpoint,
+			Models:           models,
+			ModelUpstreamIDs: modelUpstreamIDs,
 			// Phase 1: 启用 HTTP 重试（3 次指数退避）和熔断器
 			Resilience: providers.ResilienceConfig{
 				Retry:          llmclientconfig.DefaultRetryConfig(),
@@ -134,6 +149,13 @@ func (l *ProviderLoader) Build(entries []gatewaymodel.ProviderEntry) (*providers
 // configuration snapshot and rebuilds the router.
 func (l *ProviderLoader) HandleChangeEvent(fetchEntries func() ([]gatewaymodel.ProviderEntry, error)) infra.ChangeCallback {
 	return func(ev infra.ChangeEvent) {
+		// 配额快照刷新走独立 ConfigLoader，不应触发 provider Router 全量重建。
+		if ev.ResourceType == "quota" ||
+			ev.Type == "quota_snapshot_updated" ||
+			ev.Type == "quota_config_changed" {
+			return
+		}
+
 		slog.Info("loader: config change event received, rebuilding router",
 			"event_type", ev.Type,
 			"resource_type", ev.ResourceType,

@@ -158,6 +158,9 @@ func messagesContainToolBlocks(messages []brtypes.Message) bool {
 }
 
 func convertMessages(messages []core.Message) ([]brtypes.SystemContentBlock, []brtypes.Message, error) {
+	// LiteLLM-style sanitization（始终开启）：补齐孤儿 tool_result、删除无效 tool、空 content 占位。
+	messages = core.SanitizeToolMessages(messages)
+
 	system := make([]brtypes.SystemContentBlock, 0)
 	out := make([]brtypes.Message, 0, len(messages))
 

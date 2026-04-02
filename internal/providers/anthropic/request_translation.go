@@ -392,14 +392,17 @@ func convertToAnthropicRequest(req *core.ChatRequest) (*anthropicRequest, error)
 		anthropicReq.ToolChoice = toolChoice
 	}
 
+	// LiteLLM-style sanitization（始终开启）：补齐孤儿 tool_result、删除无效 tool、空 content 占位。
+	messages := core.SanitizeToolMessages(req.Messages)
+
 	// Convert OpenAI messages to Anthropic format.
 	// Anthropic requires strict user/assistant alternation. Consecutive
 	// tool messages must be merged into a single user message — otherwise
 	// Anthropic rejects the request with:
 	//   "tool_use ids were found without tool_result blocks immediately after"
 	// Reference: LiteLLM does the same in anthropic_messages_pt().
-	for i := 0; i < len(req.Messages); i++ {
-		msg := req.Messages[i]
+	for i := 0; i < len(messages); i++ {
+		msg := messages[i]
 		if msg.Role == "system" {
 			systemContent, err := buildAnthropicSystemContent(msg.Content)
 			if err != nil {
@@ -412,8 +415,8 @@ func convertToAnthropicRequest(req *core.ChatRequest) (*anthropicRequest, error)
 		if msg.Role == "tool" {
 			// Merge consecutive tool messages into a single user message.
 			var mergedBlocks []anthropicContentBlock
-			for i < len(req.Messages) && req.Messages[i].Role == "tool" {
-				content, err := buildAnthropicMessageContent(req.Messages[i])
+			for i < len(messages) && messages[i].Role == "tool" {
+				content, err := buildAnthropicMessageContent(messages[i])
 				if err != nil {
 					return nil, normalizeAnthropicRequestError(err)
 				}

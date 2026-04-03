@@ -13,6 +13,7 @@ type ProviderEntry struct {
 	Type        string   `json:"type"`
 	Endpoint    string   `json:"endpoint"`
 	Credentials string   `json:"credentials"`
+	APIVersion  string   `json:"api_version,omitempty"`
 	Enabled     bool     `json:"enabled"`
 	Models      []string `json:"models"` // 保留以支持旧版本反序列化
 	ModelsV2    []ModelEntry `json:"models_v2,omitempty"` // 新版本字段，包含 upstream_model_id

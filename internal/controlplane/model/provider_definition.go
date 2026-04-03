@@ -23,6 +23,8 @@ type VendorOptions struct {
 	AuthHeader string `json:"auth_header,omitempty"`
 	// 是否需要 api_version 参数（Azure 专用）
 	RequiresAPIVersion bool `json:"requires_api_version,omitempty"`
+	// api_version 默认值（Azure 等厂商在 URL query 中追加的协议版本号，如 "2025-04-01-preview"）
+	APIVersion string `json:"api_version,omitempty"`
 	// 最后一个 chunk 是否含 usage 信息
 	StreamUsageInLastChunk bool `json:"stream_usage_in_last_chunk,omitempty"`
 	// 是否跳过空 choices 的 chunk（Azure/某些厂商会发送）

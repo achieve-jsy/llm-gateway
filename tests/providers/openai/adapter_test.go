@@ -519,3 +519,49 @@ func TestListModels_Object字段标准化(t *testing.T) {
 	require.Len(t, resp.Data, 1)
 	assert.Equal(t, "model", resp.Data[0].Object)
 }
+
+func TestChatCompletion_GPT5StripsOpenCodeReasoningAliases(t *testing.T) {
+	var gotBody map[string]any
+	fakeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-1", "object": "chat.completion", "model": "gpt-5.5",
+			"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": "ok"}, "finish_reason": "stop"}},
+		})
+	}))
+	defer fakeServer.Close()
+
+	raw := []byte(`{
+		"model":"gpt-5.5",
+		"messages":[{"role":"user","content":"hi"}],
+		"max_tokens":16,
+		"temperature":0.2,
+		"reasoningSummary":"auto",
+		"reasoning_summary":"detailed",
+		"reasoningEffort":"medium",
+		"reasoning":{"effort":"high"}
+	}`)
+	var req core.ChatRequest
+	require.NoError(t, json.Unmarshal(raw, &req))
+
+	p := newFakeProvider(t, fakeServer.URL)
+	_, err := p.ChatCompletion(context.Background(), &req)
+	require.NoError(t, err)
+
+	_, hasSummary := gotBody["reasoningSummary"]
+	_, hasSummarySnake := gotBody["reasoning_summary"]
+	_, hasCamelEffort := gotBody["reasoningEffort"]
+	_, hasNestedReasoning := gotBody["reasoning"]
+	_, hasTemp := gotBody["temperature"]
+	_, hasMaxTokens := gotBody["max_tokens"]
+	assert.False(t, hasSummary)
+	assert.False(t, hasSummarySnake)
+	assert.False(t, hasCamelEffort)
+	assert.False(t, hasNestedReasoning)
+	assert.False(t, hasTemp)
+	assert.False(t, hasMaxTokens)
+	assert.Equal(t, float64(16), gotBody["max_completion_tokens"])
+	// OpenCode camelCase / nested reasoning 归一到 Chat Completions 合法字段
+	assert.Equal(t, "medium", gotBody["reasoning_effort"])
+}

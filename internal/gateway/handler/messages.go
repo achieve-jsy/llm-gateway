@@ -99,6 +99,12 @@ func (h *MessagesHandler) HandleMessages(c *gin.Context) {
 		if decision != nil {
 			req.Model = decision.ModelName
 			routedModelID = decision.ModelID
+			// 传递 provider hint，确保 Router 在同名模型多渠道场景下
+			// 选择 scheduler 指定的渠道，避免走裸 model ID「先注册者赢」。
+			if decision.ProviderName != "" {
+				req.Provider = decision.ProviderName
+				middleware.TrackProviderRequest(c, decision.ProviderName)
+			}
 		}
 	}
 

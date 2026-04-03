@@ -1,10 +1,8 @@
 package azure
 
 import (
-	"context"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"github.com/example/llm-gateway/internal/core"
@@ -13,7 +11,9 @@ import (
 	"github.com/example/llm-gateway/internal/providers/openai"
 )
 
-const defaultAPIVersion = "2024-10-21"
+// Azure OpenAI v1：统一走 {resource}/openai/v1/*，不再兼容
+// /openai/deployments/{name}/... + 日期 api-version 的旧配法。
+// 可选 APIVersion（如 "preview"）才会追加 ?api-version=。
 
 var Registration = providers.Registration{
 	Type:                        "azure",
@@ -21,157 +21,56 @@ var Registration = providers.Registration{
 	PassthroughSemanticEnricher: openai.Registration.PassthroughSemanticEnricher,
 	Discovery: providers.DiscoveryConfig{
 		RequireBaseURL:     true,
-		SupportsAPIVersion: true,
+		SupportsAPIVersion: true, // 可选；默认不追加 dated version
 	},
 }
 
 type Provider struct {
 	*openai.CompatibleProvider
-	resourceProvider       *openai.CompatibleProvider
-	openAIResourceProvider *openai.CompatibleProvider
-	apiVersion             string
+	apiVersion string
 }
 
 func New(providerCfg providers.ProviderConfig, opts providers.ProviderOptions) core.Provider {
-	baseURL := providers.ResolveBaseURL(providerCfg.BaseURL, "https://example.invalid")
-	apiVersion := providers.ResolveAPIVersion(providerCfg.APIVersion, defaultAPIVersion)
+	root := NormalizeAzureResourceRoot(providers.ResolveBaseURL(providerCfg.BaseURL, "https://example.invalid"))
+	apiVersion := strings.TrimSpace(providerCfg.APIVersion)
 	p := &Provider{apiVersion: apiVersion}
 	clientCfg := openai.CompatibleProviderConfig{
 		ProviderName: "azure",
-		BaseURL:      baseURL,
+		BaseURL:      root + "/openai/v1",
 		SetHeaders:   setHeaders,
 	}
 	p.CompatibleProvider = openai.NewCompatibleProvider(providerCfg.APIKey, opts, clientCfg)
-	p.resourceProvider = openai.NewCompatibleProvider(providerCfg.APIKey, opts, clientCfg)
-	p.openAIResourceProvider = openai.NewCompatibleProvider(providerCfg.APIKey, opts, clientCfg)
 	p.SetRequestMutator(p.mutateRequest)
-	p.resourceProvider.SetRequestMutator(p.mutateRequest)
-	p.openAIResourceProvider.SetRequestMutator(p.mutateRequest)
-	p.SetBaseURL(baseURL)
+	p.SetBaseURL(root)
 	return p
 }
 
 func NewWithHTTPClient(apiKey string, httpClient *http.Client, hooks llmclient.Hooks) *Provider {
-	p := &Provider{apiVersion: defaultAPIVersion}
+	p := &Provider{}
 	cfg := openai.CompatibleProviderConfig{
 		ProviderName: "azure",
-		BaseURL:      "https://example.invalid",
+		BaseURL:      "https://example.invalid/openai/v1",
 		SetHeaders:   setHeaders,
 	}
 	p.CompatibleProvider = openai.NewCompatibleProviderWithHTTPClient(apiKey, httpClient, hooks, cfg)
-	p.resourceProvider = openai.NewCompatibleProviderWithHTTPClient(apiKey, httpClient, hooks, cfg)
-	p.openAIResourceProvider = openai.NewCompatibleProviderWithHTTPClient(apiKey, httpClient, hooks, cfg)
 	p.SetRequestMutator(p.mutateRequest)
-	p.resourceProvider.SetRequestMutator(p.mutateRequest)
-	p.openAIResourceProvider.SetRequestMutator(p.mutateRequest)
 	return p
 }
 
+// SetBaseURL 接受资源根或误填的旧 path，归一化后固定到 /openai/v1。
 func (p *Provider) SetBaseURL(baseURL string) {
-	resourceRoot := resourceRootBaseURL(baseURL)
-	p.CompatibleProvider.SetBaseURL(baseURL)
-	p.resourceProvider.SetBaseURL(resourceRoot)
-	p.openAIResourceProvider.SetBaseURL(resourceRoot + "/openai")
-}
-
-func (p *Provider) ListModels(ctx context.Context) (*core.ModelsResponse, error) {
-	var resp core.ModelsResponse
-	if err := p.resourceProvider.Do(ctx, llmclient.Request{
-		Method:   http.MethodGet,
-		Endpoint: "/openai/models",
-	}, &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-func (p *Provider) CreateBatch(ctx context.Context, req *core.BatchRequest) (*core.BatchResponse, error) {
-	if req == nil {
-		return nil, core.NewInvalidRequestError("batch request is required", nil)
-	}
-	var resp core.BatchResponse
-	if err := p.resourceProvider.Do(ctx, llmclient.Request{
-		Method:   http.MethodPost,
-		Endpoint: "/openai/batches",
-		Body:     req,
-	}, &resp); err != nil {
-		return nil, err
-	}
-	if resp.ProviderBatchID == "" {
-		resp.ProviderBatchID = resp.ID
-	}
-	return &resp, nil
-}
-
-func (p *Provider) GetBatch(ctx context.Context, id string) (*core.BatchResponse, error) {
-	var resp core.BatchResponse
-	if err := p.resourceProvider.Do(ctx, llmclient.Request{
-		Method:   http.MethodGet,
-		Endpoint: "/openai/batches/" + url.PathEscape(id),
-	}, &resp); err != nil {
-		return nil, err
-	}
-	if resp.ProviderBatchID == "" {
-		resp.ProviderBatchID = resp.ID
-	}
-	return &resp, nil
-}
-
-func (p *Provider) ListBatches(ctx context.Context, limit int, after string) (*core.BatchListResponse, error) {
-	values := url.Values{}
-	if limit > 0 {
-		values.Set("limit", strconv.Itoa(limit))
-	}
-	if after != "" {
-		values.Set("after", after)
-	}
-
-	endpoint := "/openai/batches"
-	if encoded := values.Encode(); encoded != "" {
-		endpoint += "?" + encoded
-	}
-
-	var resp core.BatchListResponse
-	if err := p.resourceProvider.Do(ctx, llmclient.Request{
-		Method:   http.MethodGet,
-		Endpoint: endpoint,
-	}, &resp); err != nil {
-		return nil, err
-	}
-	for i := range resp.Data {
-		if resp.Data[i].ProviderBatchID == "" {
-			resp.Data[i].ProviderBatchID = resp.Data[i].ID
-		}
-	}
-	return &resp, nil
-}
-
-func (p *Provider) CancelBatch(ctx context.Context, id string) (*core.BatchResponse, error) {
-	var resp core.BatchResponse
-	if err := p.resourceProvider.Do(ctx, llmclient.Request{
-		Method:   http.MethodPost,
-		Endpoint: "/openai/batches/" + url.PathEscape(id) + "/cancel",
-	}, &resp); err != nil {
-		return nil, err
-	}
-	if resp.ProviderBatchID == "" {
-		resp.ProviderBatchID = resp.ID
-	}
-	return &resp, nil
-}
-
-func (p *Provider) GetBatchResults(ctx context.Context, id string) (*core.BatchResultsResponse, error) {
-	return p.openAIResourceProvider.GetBatchResults(ctx, id)
+	root := NormalizeAzureResourceRoot(baseURL)
+	p.CompatibleProvider.SetBaseURL(root + "/openai/v1")
 }
 
 func (p *Provider) SetAPIVersion(version string) {
-	if version == "" {
-		return
-	}
-	p.apiVersion = version
+	p.apiVersion = strings.TrimSpace(version)
 }
 
 func (p *Provider) mutateRequest(req *llmclient.Request) {
+	if p.apiVersion == "" {
+		return
+	}
 	endpoint, err := url.Parse(req.Endpoint)
 	if err != nil {
 		return
@@ -201,24 +100,42 @@ func isValidClientRequestID(id string) bool {
 	return true
 }
 
-func resourceRootBaseURL(baseURL string) string {
-	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+// NormalizeAzureResourceRoot 将运营误填的完整 path / query 归一为资源根。
+// 例如：
+//   - https://xxx.openai.azure.com/openai/v1 → https://xxx.openai.azure.com
+//   - https://xxx.openai.azure.com/openai/deployments/gpt-5.5 → 资源根
+//   - https://xxx.openai.azure.com/openai/responses?api-version=... → 资源根
+func NormalizeAzureResourceRoot(baseURL string) string {
+	raw := strings.TrimSpace(baseURL)
+	if raw == "" {
+		return raw
+	}
+	parsed, err := url.Parse(raw)
 	if err != nil {
-		return strings.TrimRight(strings.TrimSpace(baseURL), "/")
+		return strings.TrimRight(raw, "/")
 	}
 
 	path := strings.TrimRight(parsed.Path, "/")
-	for _, marker := range []string{"/openai/deployments/", "/deployments/"} {
-		if idx := strings.Index(path, marker); idx >= 0 {
+	switch {
+	case strings.HasSuffix(path, "/openai/v1"):
+		path = strings.TrimSuffix(path, "/openai/v1")
+	case strings.Contains(path, "/openai/deployments/"):
+		if idx := strings.Index(path, "/openai/deployments/"); idx >= 0 {
 			path = path[:idx]
-			break
 		}
+	case strings.Contains(path, "/deployments/"):
+		if idx := strings.Index(path, "/deployments/"); idx >= 0 {
+			path = path[:idx]
+		}
+	case strings.HasSuffix(path, "/openai/responses"):
+		path = strings.TrimSuffix(path, "/openai/responses")
+	case strings.HasSuffix(path, "/openai"):
+		path = strings.TrimSuffix(path, "/openai")
 	}
 
 	parsed.Path = path
 	parsed.RawPath = ""
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
-
 	return strings.TrimRight(parsed.String(), "/")
 }

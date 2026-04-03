@@ -202,12 +202,51 @@ func (h *TestHandler) testNonOpenAIProvider(provider *model.Provider, credJSON s
 		return h.testSeedanceRelay(provider, credJSON, testChat)
 	case "seedance-volcengine":
 		return h.testSeedanceVolcengine(provider, credJSON, testChat)
+	case "azure":
+		return h.testAzure(provider, credJSON, testChat)
 	default:
 		return testResult{
 			Success: true,
 			Message: fmt.Sprintf("provider type '%s' 暂不支持自动检测（已跳过）", provider.DefinitionID),
 		}
 	}
+}
+
+// testAzure 与定时健康检查共用 Azure v1 探针。
+func (h *TestHandler) testAzure(provider *model.Provider, credJSON string, testChat bool) testResult {
+	apiKey := extractAPIKey(credJSON)
+	res := cpservice.ProbeAzureConnectivity(context.Background(), provider.Endpoint, apiKey)
+	out := testResult{
+		Success:      res.Success,
+		ResponseTime: res.ResponseTime,
+		StatusCode:   res.StatusCode,
+		Message:      res.Message,
+	}
+	if !res.Success {
+		out.Error = res.Message
+		out.Message = ""
+		return out
+	}
+	_ = h.providerRepo.UpdateResponseTime(provider.ID, res.ResponseTime)
+
+	if testChat {
+		testModel := provider.TestModel
+		if testModel == "" {
+			f := false
+			out.ChatSuccess = &f
+			out.ChatError = "未配置 test_model，跳过转发测试"
+			return out
+		}
+		chatRes := cpservice.ProbeAzureChat(context.Background(), provider.Endpoint, apiKey, testModel)
+		out.ChatModel = testModel
+		out.ChatResponseTime = chatRes.ResponseTime
+		ok := chatRes.Success
+		out.ChatSuccess = &ok
+		if !chatRes.Success {
+			out.ChatError = chatRes.Message
+		}
+	}
+	return out
 }
 
 // testSeedanceRelay 与定时健康检查共用 ProbeSeedanceRelayConnectivity。

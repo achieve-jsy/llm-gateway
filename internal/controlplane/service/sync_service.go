@@ -14,6 +14,7 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
+	"github.com/example/llm-gateway/internal/providers/azure"
 	"github.com/google/uuid"
 )
 
@@ -101,10 +102,16 @@ func (s *SyncService) SyncModels(providerID uuid.UUID) (*SyncResult, error) {
 
 	apiKey := extractAPIKey(credJSON)
 
-	// 调用厂商 GET /models
-	upstreamModels, err := fetchUpstreamModels(provider.Endpoint, apiKey)
-	if err != nil {
-		return nil, fmt.Errorf("upstream error: %v", err)
+	// 调用厂商 GET /models（Azure 走 /openai/v1 + api-key）
+	var upstreamModels []upstreamModel
+	var fetchErr error
+	if provider.DefinitionID == "azure" {
+		upstreamModels, fetchErr = fetchAzureUpstreamModels(provider.Endpoint, apiKey)
+	} else {
+		upstreamModels, fetchErr = fetchUpstreamModels(provider.Endpoint, apiKey)
+	}
+	if fetchErr != nil {
+		return nil, fmt.Errorf("upstream error: %v", fetchErr)
 	}
 
 	// 获取本地已注册模型
@@ -267,6 +274,41 @@ func fetchUpstreamModels(endpoint, apiKey string) ([]upstreamModel, error) {
 		return nil, fmt.Errorf("parse response: %v", err)
 	}
 
+	return result.Data, nil
+}
+
+// fetchAzureUpstreamModels Azure OpenAI v1：GET {root}/openai/v1/models + api-key。
+func fetchAzureUpstreamModels(endpoint, apiKey string) ([]upstreamModel, error) {
+	root := azure.NormalizeAzureResourceRoot(endpoint)
+	url := root + "/openai/v1/models"
+
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("api-key", apiKey)
+
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		Transport: &http.Transport{
+			Proxy: nil,
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Data []upstreamModel `json:"data"`
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("parse response: %v", err)
+	}
 	return result.Data, nil
 }
 

@@ -1,4 +1,4 @@
-h1:EfCeCfU2udQjAc4Sm+XkeMyIrTPxpT5ThEqM8l4NVQ8=
+h1:KJZ1Sy+QDvrBjEvts5DPL9E/5EhlYbYUQJI+WNhkEzk=
 20260609082623_baseline.sql h1:EypMLzQ+lwKOXInv3+ZdRYfRjDkE8V0LWKJ+7Ul6hMY=
 20260610120000_add_model_status.sql h1:dsiXmqu5v1ClJQJFnN8Ilphj0UtIN0I6bpvUW43i294=
 20260611000000_add_users_login_status.sql h1:IdW/XoVpwI/HIG0nsz+cLsWwQfoIhguaFU3LWMwelMY=
@@ -36,3 +36,5 @@ h1:EfCeCfU2udQjAc4Sm+XkeMyIrTPxpT5ThEqM8l4NVQ8=
 20260710200000_seedance_volcengine_auth_type_schema.sql h1:/28GJrnRFLSRHEyk3btIxr+VkChEAbOsToZJvDru6zA=
 20260713000000_add_sticky_to_groups.sql h1:GUWf56OYhChl0KGb9QE/V+Z29co+6VeKP1jjhCy816o=
 20260714172000_create_quota_exemptions_table.sql h1:dRCQTf0klyLbTSmUxJiWFtdDObkWNb6R1Xy4V3M36BI=
+20260714180000_azure_provider_definition.sql h1:ELhWPf54XljIQtJ1heK+Q4paOhodMlznwTUO/91bkz4=
+20260714233000_azure_openai_v1.sql h1:wkiZvsRut61jiib/5eTNRfPU/RQ6rl0UpIIE1+iyPV4=

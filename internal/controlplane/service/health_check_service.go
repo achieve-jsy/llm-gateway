@@ -505,6 +505,18 @@ func (s *HealthCheckService) doModelForwardCheck(m *model.Model) (bool, int, str
 			}
 			res := ProbeSeedanceVolcengineConnectivityCreds(context.Background(), provider.Endpoint, cred)
 			return res.Success, res.ResponseTime, res.Message
+		case "azure":
+			apiKey := extractAPIKey(credJSON)
+			testModel := m.UpstreamName()
+			if testModel == "" {
+				testModel = provider.TestModel
+			}
+			if testModel == "" {
+				res := ProbeAzureConnectivity(context.Background(), provider.Endpoint, apiKey)
+				return res.Success, res.ResponseTime, res.Message
+			}
+			res := ProbeAzureChat(context.Background(), provider.Endpoint, apiKey, testModel)
+			return res.Success, res.ResponseTime, res.Message
 		default:
 			return true, 0, "skipped: unsupported provider type for auto-check"
 		}
@@ -756,7 +768,7 @@ func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provi
 // 禁止把 seedance-relay 等误送进 Bedrock SDK。
 func isNonOpenAICompatible(definitionID string) bool {
 	switch definitionID {
-	case "bedrock", "seedance-relay", "seedance-volcengine":
+	case "bedrock", "seedance-relay", "seedance-volcengine", "azure":
 		return true
 	}
 	return false
@@ -772,11 +784,75 @@ func (s *HealthCheckService) checkNonOpenAIProvider(ctx context.Context, provide
 		return s.checkSeedanceRelayProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
 	case "seedance-volcengine":
 		return s.checkSeedanceVolcengineProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
+	case "azure":
+		return s.checkAzureProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
 	default:
 		cr.Success = true // 未知类型跳过，不计失败
 		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, 0, "skipped: unsupported provider type for auto-check")
 		return cr
 	}
+}
+
+// checkAzureProvider Azure OpenAI v1 健康检测（与管理面「测试连接」共用探针）。
+func (s *HealthCheckService) checkAzureProvider(ctx context.Context, provider *model.Provider, credJSON string, checkMode string, maxFailures int, cr *CheckResult) *CheckResult {
+	apiKey := extractAPIKey(credJSON)
+
+	if checkMode == "connectivity" || checkMode == "both" {
+		res := ProbeAzureConnectivity(ctx, provider.Endpoint, apiKey)
+		cr.ResponseTime = res.ResponseTime
+		if !res.Success {
+			cr.Error = res.Message
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
+			s.handleProviderFailure(provider.ID, maxFailures, cr)
+			return cr
+		}
+		if checkMode == "connectivity" {
+			cr.Success = true
+			cr.Message = res.Message
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, res.ResponseTime, res.Message)
+			s.finalizeProviderSuccess(provider, cr)
+			return cr
+		}
+		cr.Message = res.Message
+		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, res.ResponseTime, res.Message)
+	}
+
+	if checkMode == "model_forward" || checkMode == "both" {
+		testModel := provider.TestModel
+		if testModel == "" {
+			skipMsg := "skipped: azure forward requires test_model"
+			cr.Success = true
+			if cr.Message != "" {
+				cr.Message = cr.Message + "; " + skipMsg
+			} else {
+				cr.Message = skipMsg
+			}
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, skipMsg)
+			s.finalizeProviderSuccess(provider, cr)
+			return cr
+		}
+		res := ProbeAzureChat(ctx, provider.Endpoint, apiKey, testModel)
+		cr.ResponseTime = res.ResponseTime
+		if !res.Success {
+			cr.Error = res.Message
+			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
+			s.handleProviderFailure(provider.ID, maxFailures, cr)
+			return cr
+		}
+		cr.Success = true
+		if cr.Message != "" {
+			cr.Message = cr.Message + "; " + res.Message
+		} else {
+			cr.Message = res.Message
+		}
+		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, res.ResponseTime, res.Message)
+		s.finalizeProviderSuccess(provider, cr)
+		return cr
+	}
+
+	cr.Success = true
+	s.finalizeProviderSuccess(provider, cr)
+	return cr
 }
 
 // checkSeedanceRelayProvider 景汐中转健康检测（与管理面「测试连接」共用 ProbeSeedanceRelayConnectivity）。

@@ -91,7 +91,8 @@ func isOSeriesModel(model string) bool {
 
 func isGPT5Model(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
-	return m == "gpt-5" || strings.HasPrefix(m, "gpt-5-")
+	// 匹配 gpt-5、gpt-5-*（连字符）和 gpt-5.*（点号，如 gpt-5.5）
+	return m == "gpt-5" || strings.HasPrefix(m, "gpt-5-") || strings.HasPrefix(m, "gpt-5.")
 }
 
 // isReasoningChatModel reports whether the model follows OpenAI's reasoning

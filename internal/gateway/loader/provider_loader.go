@@ -89,6 +89,7 @@ func (l *ProviderLoader) Build(entries []gatewaymodel.ProviderEntry) (*providers
 			Type:             entry.Type,
 			APIKey:           entry.Credentials,
 			BaseURL:          entry.Endpoint,
+			APIVersion:       entry.APIVersion,
 			Models:           models,
 			ModelUpstreamIDs: modelUpstreamIDs,
 			// Phase 1: 启用 HTTP 重试（3 次指数退避）和熔断器

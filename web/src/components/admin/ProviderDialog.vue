@@ -223,10 +223,19 @@
             <div class="form-hint">AWS 区域，用于构造 Bedrock 端点地址</div>
           </el-form-item>
 
-          <!-- Azure OpenAI: API Version 设置 -->
+          <!-- Azure OpenAI: Endpoint 必须是资源根 -->
+          <el-form-item v-if="selectedDef?.id === 'azure'" label="说明">
+            <div class="form-hint">
+              Endpoint 只填资源根，例如 https://your-resource.openai.azure.com。
+              网关自动走 /openai/v1/chat/completions 与 /openai/v1/responses。
+              不要填写 /deployments/... 或 /responses?...。
+            </div>
+          </el-form-item>
+
+          <!-- 已废弃 azure-openai：保留字段以免旧数据编辑报错，但不再作为主路径 -->
           <el-form-item v-if="selectedDef?.id === 'azure-openai'" label="API Version">
-            <el-input v-model="formData.api_version" placeholder="2024-02-01" />
-            <div class="form-hint">Azure OpenAI API 版本号</div>
+            <el-input v-model="formData.api_version" placeholder="已废弃，请改用 Azure OpenAI (azure)" />
+            <div class="form-hint">该渠道类型已废弃，请改用 definition「Azure OpenAI」(azure) + /openai/v1</div>
           </el-form-item>
 
           <el-form-item label="超时(秒)">
@@ -639,6 +648,12 @@ function getCredentialFieldRules(field: CredentialFieldSchema) {
 const endpointValidator = (_rule: any, value: string, callback: any) => {
   if (!value) return callback(new Error('请输入 Endpoint'))
   if (!/^https?:\/\/.+/.test(value)) return callback(new Error('Endpoint 必须以 http:// 或 https:// 开头'))
+  if (formData.value.definition_id === 'azure') {
+    const lower = value.toLowerCase()
+    if (lower.includes('/deployments/') || lower.includes('/responses') || lower.includes('api-version=')) {
+      return callback(new Error('Azure 请只填资源根（不要含 /deployments、/responses 或 api-version）'))
+    }
+  }
   callback()
 }
 

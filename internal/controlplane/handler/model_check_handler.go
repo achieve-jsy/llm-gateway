@@ -182,6 +182,19 @@ func (h *ModelCheckHandler) checkModel(ctx context.Context, m *model.Model) *Mod
 				res := cpservice.ProbeSeedanceVolcengineConnectivityCreds(ctx, provider.Endpoint, cred)
 				success, responseTime, errMsg = res.Success, res.ResponseTime, res.Message
 			}
+		case "azure":
+			apiKey := cpservice.ExtractAPIKey(credJSON)
+			testModel := m.UpstreamName()
+			if testModel == "" {
+				testModel = provider.TestModel
+			}
+			if testModel == "" {
+				res := cpservice.ProbeAzureConnectivity(ctx, provider.Endpoint, apiKey)
+				success, responseTime, errMsg = res.Success, res.ResponseTime, res.Message
+			} else {
+				res := cpservice.ProbeAzureChat(ctx, provider.Endpoint, apiKey, testModel)
+				success, responseTime, errMsg = res.Success, res.ResponseTime, res.Message
+			}
 		default:
 			success, responseTime, errMsg = true, 0, "skipped: unsupported provider type for auto-check"
 		}

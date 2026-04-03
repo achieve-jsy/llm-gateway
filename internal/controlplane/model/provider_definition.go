@@ -17,13 +17,13 @@ type CredentialSchema map[string]CredentialField
 
 // VendorOptions 厂商差异化配置
 type VendorOptions struct {
-	// URL 构造模式：standard（baseURL+/chat/completions）/ azure（/openai/deployments/{model}/...）/ volcengine（含 model path）
+	// URL 构造模式：standard（baseURL+/chat/completions）/ azure_v1（base+/openai/v1/...）/ volcengine（含 model path）
 	URLPattern string `json:"url_pattern,omitempty"`
 	// 认证 Header 方式：bearer（Authorization: Bearer xxx）/ api-key（api-key: xxx）/ custom
 	AuthHeader string `json:"auth_header,omitempty"`
-	// 是否需要 api_version 参数（Azure 专用）
+	// 是否需要 api_version 查询参数（旧 Azure deployments）；azure_v1 为 false
 	RequiresAPIVersion bool `json:"requires_api_version,omitempty"`
-	// api_version 默认值（Azure 等厂商在 URL query 中追加的协议版本号，如 "2025-04-01-preview"）
+	// api_version 可选值（如 "preview"）；azure_v1 默认不追加 dated version
 	APIVersion string `json:"api_version,omitempty"`
 	// 最后一个 chunk 是否含 usage 信息
 	StreamUsageInLastChunk bool `json:"stream_usage_in_last_chunk,omitempty"`

@@ -203,3 +203,35 @@ func TestLiveAzureV1_ToolsWithoutReasoning_StaysChat(t *testing.T) {
 	require.NotEmpty(t, resp.Choices)
 	t.Logf("noBridge finish=%s tools=%d", resp.Choices[0].FinishReason, len(resp.Choices[0].Message.ToolCalls))
 }
+
+func TestLiveAzureV1_PlainChat(t *testing.T) {
+	p, model := newLiveAzure(t)
+	maxTok := 16
+	resp, err := p.ChatCompletion(context.Background(), &core.ChatRequest{
+		Model:     model,
+		Messages:  []core.Message{{Role: "user", Content: "Reply with exactly: PONG"}},
+		MaxTokens: &maxTok,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, resp.Choices)
+	t.Logf("plain finish=%s content=%q", resp.Choices[0].FinishReason, core.ExtractTextContent(resp.Choices[0].Message.Content))
+}
+
+func TestLiveAzureV1_SummaryOnlyWithTools_NoBridge(t *testing.T) {
+	p, model := newLiveAzure(t)
+	raw := []byte(`{
+		"model":"` + model + `",
+		"messages":[{"role":"user","content":"Call get_weather for Berlin."}],
+		"tools":[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],
+		"tool_choice":{"type":"function","function":{"name":"get_weather"}},
+		"reasoningSummary":"auto",
+		"max_tokens":48
+	}`)
+	var req core.ChatRequest
+	require.NoError(t, json.Unmarshal(raw, &req))
+	require.False(t, openai.ShouldBridgeChatToResponses(&req))
+	resp, err := p.ChatCompletion(context.Background(), &req)
+	require.NoError(t, err, "summary-only + tools should stay on Chat after dropping summary")
+	require.NotEmpty(t, resp.Choices)
+	t.Logf("summaryOnly finish=%s tools=%d", resp.Choices[0].FinishReason, len(resp.Choices[0].Message.ToolCalls))
+}

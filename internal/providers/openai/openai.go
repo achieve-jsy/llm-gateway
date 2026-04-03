@@ -104,6 +104,12 @@ func isReasoningChatModel(model string) bool {
 // adaptForReasoningChat rewrites a ChatRequest body for OpenAI reasoning chat
 // models, mapping max_tokens -> max_completion_tokens and dropping temperature
 // while preserving all unknown top-level JSON fields.
+//
+// 同时清洗 OpenCode / AI SDK 注入的 Chat Completions 非法字段：
+//   - reasoningSummary / reasoning_summary：仅 Responses / 部分官方 SDK 语义，Chat 会 400
+//   - reasoningEffort（camelCase）→ reasoning_effort
+//   - reasoning:{effort}（Responses 形态）→ reasoning_effort
+// 与 LiteLLM drop_params / OpenCode 兼容策略对齐。
 func adaptForReasoningChat(req *core.ChatRequest) (any, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -119,7 +125,30 @@ func adaptForReasoningChat(req *core.ChatRequest) (any, error) {
 		delete(raw, "max_tokens")
 	}
 	delete(raw, "temperature")
+	normalizeReasoningChatParams(raw)
 	return raw, nil
+}
+
+// normalizeReasoningChatParams 将 AI SDK / OpenCode 别名收敛为 Chat Completions 合法字段。
+func normalizeReasoningChatParams(raw map[string]json.RawMessage) {
+	// Chat Completions 不接受这些 summary 字段（Azure/OpenAI 均会 unknown_parameter）。
+	delete(raw, "reasoningSummary")
+	delete(raw, "reasoning_summary")
+
+	if _, has := raw["reasoning_effort"]; !has {
+		if effort, ok := raw["reasoningEffort"]; ok {
+			raw["reasoning_effort"] = effort
+		} else if nested, ok := raw["reasoning"]; ok {
+			var obj map[string]json.RawMessage
+			if json.Unmarshal(nested, &obj) == nil {
+				if effort, ok := obj["effort"]; ok {
+					raw["reasoning_effort"] = effort
+				}
+			}
+		}
+	}
+	delete(raw, "reasoningEffort")
+	delete(raw, "reasoning")
 }
 
 // chatRequestBody returns the appropriate request body for the model.

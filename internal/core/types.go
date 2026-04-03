@@ -14,8 +14,11 @@ type StreamOptions struct {
 // This is used with OpenAI's o-series models and other reasoning-capable models.
 type Reasoning struct {
 	// Effort controls how much reasoning effort the model should use.
-	// Valid values are "low", "medium", and "high".
+	// Valid values are "none", "minimal", "low", "medium", "high", and "xhigh".
 	Effort string `json:"effort,omitempty"`
+	// Summary requests a reasoning summary (Responses API). Chat Completions
+	// rejects this field; adapters must strip it or bridge to /responses.
+	Summary string `json:"summary,omitempty"`
 }
 
 // ChatRequest represents the incoming chat completion request

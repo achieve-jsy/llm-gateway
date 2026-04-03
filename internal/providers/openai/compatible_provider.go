@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -92,11 +93,31 @@ func (p *CompatibleProvider) ChatCompletion(ctx context.Context, req *core.ChatR
 	if req == nil {
 		return nil, core.NewInvalidRequestError("chat request is required", nil)
 	}
+	// LiteLLM 对齐：gpt-5.4+ + tools + reasoning_effort → 自动桥到 /responses
+	if ShouldBridgeChatToResponses(req) {
+		slog.InfoContext(ctx, "chat via responses bridge",
+			"provider", p.providerName,
+			"model", req.Model,
+			"protocol", core.UpstreamProtocolResponsesBridge,
+			"tools", len(req.Tools),
+		)
+		ctx = core.WithUpstreamProtocol(ctx, core.UpstreamProtocolResponsesBridge)
+		return providers.ChatViaResponses(ctx, p, req)
+	}
 	var resp core.ChatResponse
 	body, err := chatRequestBody(req)
 	if err != nil {
 		return nil, err
 	}
+	if p.providerName == "azure" {
+		body = sanitizeAzureChatBody(body)
+	}
+	slog.DebugContext(ctx, "chat completions upstream",
+		"provider", p.providerName,
+		"model", req.Model,
+		"protocol", core.UpstreamProtocolChat,
+	)
+	ctx = core.WithUpstreamProtocol(ctx, core.UpstreamProtocolChat)
 	err = p.Do(ctx, llmclient.Request{
 		Method:   http.MethodPost,
 		Endpoint: "/chat/completions",
@@ -116,10 +137,24 @@ func (p *CompatibleProvider) StreamChatCompletion(ctx context.Context, req *core
 		return nil, core.NewInvalidRequestError("chat request is required", nil)
 	}
 	streamReq := req.WithStreaming()
+	if ShouldBridgeChatToResponses(streamReq) {
+		slog.InfoContext(ctx, "stream chat via responses bridge",
+			"provider", p.providerName,
+			"model", streamReq.Model,
+			"protocol", core.UpstreamProtocolResponsesBridge,
+			"tools", len(streamReq.Tools),
+		)
+		ctx = core.WithUpstreamProtocol(ctx, core.UpstreamProtocolResponsesBridge)
+		return providers.StreamChatViaResponses(ctx, p, streamReq, p.providerName)
+	}
 	body, err := chatRequestBody(streamReq)
 	if err != nil {
 		return nil, err
 	}
+	if p.providerName == "azure" {
+		body = sanitizeAzureChatBody(body)
+	}
+	ctx = core.WithUpstreamProtocol(ctx, core.UpstreamProtocolChat)
 	return p.client.DoStream(ctx, p.prepareRequest(llmclient.Request{
 		Method:   http.MethodPost,
 		Endpoint: "/chat/completions",

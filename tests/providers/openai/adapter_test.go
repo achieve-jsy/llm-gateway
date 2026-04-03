@@ -523,6 +523,7 @@ func TestListModels_Object字段标准化(t *testing.T) {
 func TestChatCompletion_GPT5StripsOpenCodeReasoningAliases(t *testing.T) {
 	var gotBody map[string]any
 	fakeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/chat/completions", r.URL.Path)
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -564,4 +565,159 @@ func TestChatCompletion_GPT5StripsOpenCodeReasoningAliases(t *testing.T) {
 	assert.Equal(t, float64(16), gotBody["max_completion_tokens"])
 	// OpenCode camelCase / nested reasoning 归一到 Chat Completions 合法字段
 	assert.Equal(t, "medium", gotBody["reasoning_effort"])
+}
+
+func TestChatCompletion_GPT5ChatKeepsTemperature(t *testing.T) {
+	var gotBody map[string]any
+	fakeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/chat/completions", r.URL.Path)
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-chat", "object": "chat.completion", "model": "gpt-5-chat-latest",
+			"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": "ok"}, "finish_reason": "stop"}},
+		})
+	}))
+	defer fakeServer.Close()
+
+	temp := 0.4
+	req := &core.ChatRequest{
+		Model:       "gpt-5-chat-latest",
+		Messages:    []core.Message{{Role: "user", Content: "hi"}},
+		Temperature: &temp,
+	}
+	p := newFakeProvider(t, fakeServer.URL)
+	_, err := p.ChatCompletion(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, 0.4, gotBody["temperature"])
+	_, hasMaxCompletion := gotBody["max_completion_tokens"]
+	assert.False(t, hasMaxCompletion)
+}
+
+func TestChatCompletion_GPT55ToolsReasoningBridgesToResponses(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	fakeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "resp_abc", "object": "response", "model": "gpt-5.5", "status": "completed", "created_at": 1700000000,
+			"output": []map[string]any{{
+				"id": "fc_1", "type": "function_call", "status": "completed",
+				"call_id": "call_1", "name": "get_weather", "arguments": `{"city":"SF"}`,
+			}},
+			"usage": map[string]any{"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+		})
+	}))
+	defer fakeServer.Close()
+
+	raw := []byte(`{
+		"model":"gpt-5.5",
+		"messages":[
+			{"role":"system","content":"Be helpful."},
+			{"role":"user","content":"weather?"}
+		],
+		"tools":[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object"}}}],
+		"reasoning_effort":"medium",
+		"reasoningSummary":"auto",
+		"max_tokens":32
+	}`)
+	var req core.ChatRequest
+	require.NoError(t, json.Unmarshal(raw, &req))
+
+	p := newFakeProvider(t, fakeServer.URL)
+	resp, err := p.ChatCompletion(context.Background(), &req)
+	require.NoError(t, err)
+
+	assert.Equal(t, "/responses", gotPath)
+	assert.Equal(t, "Be helpful.", gotBody["instructions"])
+	assert.Equal(t, float64(32), gotBody["max_output_tokens"])
+	reasoning, _ := gotBody["reasoning"].(map[string]any)
+	require.NotNil(t, reasoning)
+	assert.Equal(t, "medium", reasoning["effort"])
+	assert.Equal(t, "auto", reasoning["summary"])
+	tools, _ := gotBody["tools"].([]any)
+	require.Len(t, tools, 1)
+	tool0, _ := tools[0].(map[string]any)
+	assert.Equal(t, "function", tool0["type"])
+	assert.Equal(t, "get_weather", tool0["name"])
+	_, hasNestedFunction := tool0["function"]
+	assert.False(t, hasNestedFunction)
+
+	require.NotNil(t, resp)
+	assert.Equal(t, "chat.completion", resp.Object)
+	assert.Equal(t, "tool_calls", resp.Choices[0].FinishReason)
+	require.Len(t, resp.Choices[0].Message.ToolCalls, 1)
+	assert.Equal(t, "get_weather", resp.Choices[0].Message.ToolCalls[0].Function.Name)
+	assert.Equal(t, 10, resp.Usage.PromptTokens)
+	assert.Equal(t, 5, resp.Usage.CompletionTokens)
+}
+
+func TestChatCompletion_GPT55ToolsWithoutReasoningStaysOnChat(t *testing.T) {
+	var gotPath string
+	fakeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-1", "object": "chat.completion", "model": "gpt-5.5",
+			"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": "ok"}, "finish_reason": "stop"}},
+		})
+	}))
+	defer fakeServer.Close()
+
+	req := &core.ChatRequest{
+		Model:    "gpt-5.5",
+		Messages: []core.Message{{Role: "user", Content: "hi"}},
+		Tools: []map[string]any{
+			{"type": "function", "function": map[string]any{"name": "ping"}},
+		},
+	}
+	p := newFakeProvider(t, fakeServer.URL)
+	_, err := p.ChatCompletion(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, "/chat/completions", gotPath)
+}
+
+func TestShouldBridgeChatToResponses(t *testing.T) {
+	assert.True(t, openai.ShouldBridgeChatToResponses(&core.ChatRequest{
+		Model: "gpt-5.5",
+		Tools: []map[string]any{{"type": "function"}},
+		Reasoning: &core.Reasoning{Effort: "low"},
+	}))
+	assert.True(t, openai.ShouldBridgeChatToResponses(&core.ChatRequest{
+		Model: "gpt-5.4-pro",
+		Tools: []map[string]any{{"type": "function"}},
+		ExtraFields: mustExtraFields(t, map[string]any{"reasoning_effort": "high"}),
+	}))
+	assert.False(t, openai.ShouldBridgeChatToResponses(&core.ChatRequest{
+		Model: "gpt-5.5",
+		Tools: []map[string]any{{"type": "function"}},
+	}))
+	assert.False(t, openai.ShouldBridgeChatToResponses(&core.ChatRequest{
+		Model:     "gpt-5.1",
+		Tools:     []map[string]any{{"type": "function"}},
+		Reasoning: &core.Reasoning{Effort: "medium"},
+	}))
+	assert.False(t, openai.ShouldBridgeChatToResponses(&core.ChatRequest{
+		Model:     "gpt-4o",
+		Tools:     []map[string]any{{"type": "function"}},
+		Reasoning: &core.Reasoning{Effort: "medium"},
+	}))
+}
+
+func mustExtraFields(t *testing.T, fields map[string]any) core.UnknownJSONFields {
+	t.Helper()
+	payload := map[string]any{
+		"model":    "x",
+		"messages": []map[string]any{},
+	}
+	for k, v := range fields {
+		payload[k] = v
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+	var out core.ChatRequest
+	require.NoError(t, json.Unmarshal(body, &out))
+	return out.ExtraFields
 }

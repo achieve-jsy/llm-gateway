@@ -111,11 +111,15 @@ func ProbeAzureChat(ctx context.Context, endpoint, apiKey, model string) AzurePr
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 	code := resp.StatusCode
 	if code < 200 || code >= 300 {
+		msg := fmt.Sprintf("azure chat probe: HTTP %d: %s", code, truncateStr(string(body), 200))
+		if strings.Contains(string(body), "DeploymentNotFound") {
+			msg += " — 请确认 upstream_model_id/test_model 等于 Azure 部署名（如 gpt-5.5），不要带 azure/ 前缀"
+		}
 		return AzureProbeResult{
 			Success:      false,
 			ResponseTime: elapsed,
 			StatusCode:   code,
-			Message:      fmt.Sprintf("azure chat probe: HTTP %d: %s", code, truncateStr(string(body), 200)),
+			Message:      msg,
 		}
 	}
 	return AzureProbeResult{

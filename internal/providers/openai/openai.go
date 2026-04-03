@@ -4,6 +4,7 @@ package openai
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/example/llm-gateway/internal/core"
@@ -79,26 +80,89 @@ func isValidClientRequestID(id string) bool {
 	return true
 }
 
+func normalizeModelName(model string) string {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if i := strings.LastIndex(m, "/"); i >= 0 {
+		m = m[i+1:]
+	}
+	return m
+}
+
 // isOSeriesModel reports whether the model is an OpenAI o-series model
 // (o1, o3, o4) that requires max_completion_tokens instead of max_tokens
 // and does not support the temperature parameter.
 func isOSeriesModel(model string) bool {
-	m := strings.ToLower(model)
+	m := normalizeModelName(model)
 	// Match o1, o3, o4 families (e.g. o3-mini, o4-mini, o3, o1-preview).
 	// Non-reasoning models like gpt-4o start with "gpt-", not "o".
 	return len(m) >= 2 && m[0] == 'o' && m[1] >= '0' && m[1] <= '9'
 }
 
+// isGPT5ChatModel reports gpt-5-chat* variants that are regular chat models
+// (support temperature, no reasoning_effort). Aligns with LiteLLM OpenAIGPT5Config.
+func isGPT5ChatModel(model string) bool {
+	return strings.HasPrefix(normalizeModelName(model), "gpt-5-chat")
+}
+
 func isGPT5Model(model string) bool {
-	m := strings.ToLower(strings.TrimSpace(model))
+	m := normalizeModelName(model)
+	if isGPT5ChatModel(m) {
+		return false
+	}
 	// 匹配 gpt-5、gpt-5-*（连字符）和 gpt-5.*（点号，如 gpt-5.5）
 	return m == "gpt-5" || strings.HasPrefix(m, "gpt-5-") || strings.HasPrefix(m, "gpt-5.")
+}
+
+// isGPT54PlusModel reports gpt-5.4 / gpt-5.5 / gpt-5.6…（含 -pro 等后缀）。
+// Aligns with LiteLLM OpenAIGPT5Config.is_model_gpt_5_4_plus_model.
+func isGPT54PlusModel(model string) bool {
+	m := normalizeModelName(model)
+	if !strings.HasPrefix(m, "gpt-5.") {
+		return false
+	}
+	version := strings.TrimPrefix(m, "gpt-5.")
+	if i := strings.IndexAny(version, ".-"); i >= 0 {
+		version = version[:i]
+	}
+	major, err := strconv.Atoi(version)
+	if err != nil {
+		return false
+	}
+	return major >= 4
 }
 
 // isReasoningChatModel reports whether the model follows OpenAI's reasoning
 // chat parameter rules for max_completion_tokens and temperature handling.
 func isReasoningChatModel(model string) bool {
 	return isOSeriesModel(model) || isGPT5Model(model)
+}
+
+// ShouldBridgeChatToResponses reports whether a Chat Completions request must
+// be routed through the Responses API, matching LiteLLM's auto-route rule:
+// OpenAI/Azure gpt-5.4+ with both tools and reasoning_effort.
+func ShouldBridgeChatToResponses(req *core.ChatRequest) bool {
+	if req == nil {
+		return false
+	}
+	if !isGPT54PlusModel(req.Model) {
+		return false
+	}
+	if len(req.Tools) == 0 {
+		return false
+	}
+	return hasChatReasoningEffort(req)
+}
+
+func hasChatReasoningEffort(req *core.ChatRequest) bool {
+	if req.Reasoning != nil && strings.TrimSpace(req.Reasoning.Effort) != "" {
+		return true
+	}
+	for _, key := range []string{"reasoning_effort", "reasoningEffort"} {
+		if raw := req.ExtraFields.Lookup(key); len(raw) > 0 && string(raw) != "null" {
+			return true
+		}
+	}
+	return false
 }
 
 // adaptForReasoningChat rewrites a ChatRequest body for OpenAI reasoning chat
@@ -109,6 +173,7 @@ func isReasoningChatModel(model string) bool {
 //   - reasoningSummary / reasoning_summary：仅 Responses / 部分官方 SDK 语义，Chat 会 400
 //   - reasoningEffort（camelCase）→ reasoning_effort
 //   - reasoning:{effort}（Responses 形态）→ reasoning_effort
+//   - reasoning_effort dict → string（Chat Completions 只接受 string）
 // 与 LiteLLM drop_params / OpenCode 兼容策略对齐。
 func adaptForReasoningChat(req *core.ChatRequest) (any, error) {
 	body, err := json.Marshal(req)
@@ -121,7 +186,9 @@ func adaptForReasoningChat(req *core.ChatRequest) (any, error) {
 		return nil, core.NewInvalidRequestError("failed to decode reasoning request payload: "+err.Error(), err)
 	}
 	if maxTokens, ok := raw["max_tokens"]; ok {
-		raw["max_completion_tokens"] = maxTokens
+		if _, has := raw["max_completion_tokens"]; !has {
+			raw["max_completion_tokens"] = maxTokens
+		}
 		delete(raw, "max_tokens")
 	}
 	delete(raw, "temperature")
@@ -149,6 +216,31 @@ func normalizeReasoningChatParams(raw map[string]json.RawMessage) {
 	}
 	delete(raw, "reasoningEffort")
 	delete(raw, "reasoning")
+
+	// Chat Completions 要求 reasoning_effort 为 string；dict 形态只保留 effort。
+	if effortRaw, ok := raw["reasoning_effort"]; ok {
+		if normalized := normalizeReasoningEffortJSON(effortRaw); normalized != nil {
+			raw["reasoning_effort"] = normalized
+		}
+	}
+}
+
+func normalizeReasoningEffortJSON(raw json.RawMessage) json.RawMessage {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return nil
+	}
+	if trimmed[0] == '"' {
+		return raw
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil {
+		return raw
+	}
+	if effort, ok := obj["effort"]; ok {
+		return effort
+	}
+	return nil
 }
 
 // chatRequestBody returns the appropriate request body for the model.

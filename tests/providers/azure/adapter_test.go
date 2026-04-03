@@ -148,3 +148,37 @@ func TestNormalizeAzureResourceRoot(t *testing.T) {
 		})
 	}
 }
+
+func TestChatCompletion_AzureSanitizesReasoningAliases(t *testing.T) {
+	var gotBody map[string]any
+	fakeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/openai/v1/chat/completions", r.URL.Path)
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-1", "object": "chat.completion", "model": "gpt-4o",
+			"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": "ok"}, "finish_reason": "stop"}},
+		})
+	}))
+	defer fakeServer.Close()
+
+	p := azure.New(providers.ProviderConfig{
+		APIKey:  "test-key",
+		BaseURL: fakeServer.URL,
+	}, providers.ProviderOptions{})
+
+	raw := []byte(`{
+		"model":"gpt-4o",
+		"messages":[{"role":"user","content":"hi"}],
+		"reasoningSummary":"auto",
+		"reasoningEffort":"low"
+	}`)
+	var req core.ChatRequest
+	require.NoError(t, json.Unmarshal(raw, &req))
+	_, err := p.ChatCompletion(context.Background(), &req)
+	require.NoError(t, err)
+	_, hasSummary := gotBody["reasoningSummary"]
+	_, hasEffortCamel := gotBody["reasoningEffort"]
+	assert.False(t, hasSummary)
+	assert.False(t, hasEffortCamel)
+}

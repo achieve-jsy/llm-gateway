@@ -228,7 +228,8 @@
             <div class="form-hint">
               Endpoint 只填资源根，例如 https://your-resource.openai.azure.com。
               网关自动走 /openai/v1/chat/completions 与 /openai/v1/responses。
-              不要填写 /deployments/... 或 /responses?...。
+              不要填写 /deployments/...、/openai/v1、/responses 或 ?api-version=。
+              注册模型时 upstream_model_id 必须等于 Azure <b>部署名</b>（如 gpt-5.5），不要填 azure/xxx 前缀。
             </div>
           </el-form-item>
 

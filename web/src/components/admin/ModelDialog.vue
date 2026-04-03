@@ -54,6 +54,13 @@
           v-model="formData.upstream_model_id"
           placeholder="留空则使用上游模型ID原样转发"
         />
+        <div
+          v-if="selectedProviderDefinitionId === 'azure'"
+          class="form-hint"
+          style="margin-top: 4px; color: var(--el-text-color-secondary); font-size: 12px;"
+        >
+          Azure 渠道：此处必须填 Azure <b>部署名</b>（如 gpt-5.5）。填写 azure/us/gpt-5.5 等前缀会导致 DeploymentNotFound。
+        </div>
       </el-form-item>
 
       <el-form-item label="归属渠道" prop="provider_id">
@@ -413,6 +420,10 @@ const applyingCatalog = ref(false)
 
 const isEdit = computed(() => !!props.model)
 const catalogLinked = computed(() => !!selectedCatalogId.value)
+const selectedProviderDefinitionId = computed(() => {
+  const p = props.providers.find((pr) => pr.id === formData.value.provider_id)
+  return (p as { definition_id?: string } | undefined)?.definition_id || ''
+})
 
 function formatCtxK(n: number): number {
   return Math.round(n / 1000)

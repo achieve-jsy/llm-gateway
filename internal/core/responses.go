@@ -108,13 +108,15 @@ type ResponsesResponse struct {
 // ResponsesOutputItem represents an item in the output array.
 type ResponsesOutputItem struct {
 	ID        string                 `json:"id"`
-	Type      string                 `json:"type"` // "message", "function_call", etc.
+	Type      string                 `json:"type"` // "message", "function_call", "reasoning", etc.
 	Role      string                 `json:"role,omitempty"`
 	Status    string                 `json:"status,omitempty"`
 	CallID    string                 `json:"call_id,omitempty"`
 	Name      string                 `json:"name,omitempty"`
 	Arguments string                 `json:"arguments,omitempty"`
 	Content   []ResponsesContentItem `json:"content,omitempty"`
+	// Summary holds reasoning summary parts (type="reasoning" items).
+	Summary []ResponsesContentItem `json:"summary,omitempty"`
 }
 
 // ResponsesContentItem represents a content item in the output.

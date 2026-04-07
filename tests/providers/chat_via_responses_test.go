@@ -216,3 +216,25 @@ func TestResponsesToChatStreamConverter_TextAndDone(t *testing.T) {
 	assert.Contains(t, text, `"prompt_tokens":1`)
 	assert.Contains(t, text, "data: [DONE]")
 }
+
+func TestResponsesToChatStreamConverter_PreservesCachedTokens(t *testing.T) {
+	upstream := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"ok"}`,
+		``,
+		`data: {"type":"response.completed","response":{"id":"resp_cache","model":"gpt-5.5","output":[{"type":"message"}],"usage":{"input_tokens":2000,"output_tokens":10,"total_tokens":2010,"input_tokens_details":{"cached_tokens":1800},"output_tokens_details":{"reasoning_tokens":4}}}}`,
+		``,
+	}, "\n")))
+
+	conv := providers.NewResponsesToChatStreamConverter(upstream, "gpt-5.5", true)
+	defer conv.Close()
+
+	body, err := io.ReadAll(conv)
+	require.NoError(t, err)
+	text := string(body)
+	assert.Contains(t, text, `"prompt_tokens":2000`)
+	assert.Contains(t, text, `"prompt_tokens_details"`)
+	assert.Contains(t, text, `"cached_tokens":1800`)
+	assert.Contains(t, text, `"completion_tokens_details"`)
+	assert.Contains(t, text, `"reasoning_tokens":4`)
+	assert.NotContains(t, text, `"input_tokens_details"`)
+}

@@ -264,24 +264,49 @@ func (c *ResponsesToChatStreamConverter) completedChunks(evt map[string]any) []j
 	if c.includeUsage {
 		if resp, ok := evt["response"].(map[string]any); ok {
 			if usage, ok := resp["usage"].(map[string]any); ok {
-				chatUsage := map[string]any{
-					"prompt_tokens":     usage["input_tokens"],
-					"completion_tokens": usage["output_tokens"],
-					"total_tokens":      usage["total_tokens"],
-				}
 				body, _ := json.Marshal(map[string]any{
 					"id":      c.chatID,
 					"object":  "chat.completion.chunk",
 					"created": c.created,
 					"model":   c.model,
 					"choices": []map[string]any{},
-					"usage":   chatUsage,
+					"usage":   chatUsageFromResponsesUsageMap(usage),
 				})
 				out = append(out, body)
 			}
 		}
 	}
 	return out
+}
+
+// chatUsageFromResponsesUsageMap 将 Responses usage 映射为 Chat Completions usage。
+// 必须透传 input_tokens_details.cached_tokens → prompt_tokens_details.cached_tokens，
+// 否则 Azure/OpenAI 流式桥接落库会永远显示缓存命中率为 0。
+func chatUsageFromResponsesUsageMap(usage map[string]any) map[string]any {
+	if usage == nil {
+		return map[string]any{}
+	}
+	chatUsage := map[string]any{
+		"prompt_tokens":     usage["input_tokens"],
+		"completion_tokens": usage["output_tokens"],
+		"total_tokens":      usage["total_tokens"],
+	}
+	if details := firstMap(usage, "input_tokens_details", "prompt_tokens_details"); details != nil {
+		chatUsage["prompt_tokens_details"] = details
+	}
+	if details := firstMap(usage, "output_tokens_details", "completion_tokens_details"); details != nil {
+		chatUsage["completion_tokens_details"] = details
+	}
+	return chatUsage
+}
+
+func firstMap(m map[string]any, keys ...string) map[string]any {
+	for _, k := range keys {
+		if v, ok := m[k].(map[string]any); ok && v != nil {
+			return v
+		}
+	}
+	return nil
 }
 
 func (c *ResponsesToChatStreamConverter) chunk(delta map[string]any, finishReason *string) json.RawMessage {

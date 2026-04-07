@@ -30,15 +30,15 @@
       <el-table-column prop="budget_count" label="预算引用" width="100" />
       <el-table-column prop="history_count" label="历史引用" width="100" />
       <el-table-column label="排序" width="110">
-        <template #default="{ $index }">
-          <el-button text aria-label="上移" :disabled="$index === 0" @click="move($index, -1)">↑</el-button>
-          <el-button text aria-label="下移" :disabled="$index === tiers.length - 1" @click="move($index, 1)">↓</el-button>
+        <template #default="{ row, $index }">
+          <el-button text aria-label="上移" :disabled="row.archived_at || $index === 0" @click="move($index, -1)">↑</el-button>
+          <el-button text aria-label="下移" :disabled="row.archived_at || $index === tiers.length - 1" @click="move($index, 1)">↓</el-button>
         </template>
       </el-table-column>
       <el-table-column label="操作" width="280" fixed="right">
         <template #default="{ row }">
-          <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-          <el-button link @click="openGroups(row)">关联模型组</el-button>
+          <el-button v-if="!row.archived_at" link type="primary" @click="openEdit(row)">编辑</el-button>
+          <el-button v-if="!row.archived_at && row.enabled" link @click="openGroups(row)">关联模型组</el-button>
           <el-button v-if="!row.archived_at" link :type="row.enabled ? 'warning' : 'success'" @click="toggle(row)">
             {{ row.enabled ? '停用' : '启用' }}
           </el-button>
@@ -70,7 +70,7 @@
           <el-option v-for="tier in activeTiers" :key="tier.id" :label="tier.name" :value="tier.id" />
         </el-select>
       </div>
-      <el-table :data="filteredGroups" max-height="360" @selection-change="selectedGroups = $event">
+      <el-table ref="groupTableRef" :data="filteredGroups" max-height="360" @selection-change="selectedGroups = $event">
         <el-table-column type="selection" width="48" />
         <el-table-column prop="name" label="模型组" />
         <el-table-column prop="model_tier_name" label="当前等级">
@@ -92,8 +92,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox, ElTable } from 'element-plus'
 import { groupsApi } from '@/api/groups'
 import {
   archiveModelTier, createModelTier, deleteModelTier, listModelTiers, reorderModelTiers,
@@ -112,6 +112,7 @@ const formVisible = ref(false)
 const groupsVisible = ref(false)
 const editing = ref<ModelTier | null>(null)
 const selectedTier = ref<ModelTier | null>(null)
+const groupTableRef = ref<InstanceType<typeof ElTable> | null>(null)
 const groupSearch = ref('')
 const groupTierFilter = ref('all')
 const reason = ref('')
@@ -176,11 +177,16 @@ async function remove(row: ModelTier) {
 async function openGroups(row: ModelTier) {
   selectedTier.value = row
   reason.value = ''
-  selectedGroups.value = []
   groupTierFilter.value = 'all'
   const response = await groupsApi.listGroups({ page: 1, page_size: 500 })
   groups.value = response.data.data
+  const preSelected = groups.value.filter(g => g.model_tier_id === row.id)
+  selectedGroups.value = preSelected
   groupsVisible.value = true
+  await nextTick()
+  if (groupTableRef.value) {
+    preSelected.forEach(g => groupTableRef.value!.toggleRowSelection(g, true))
+  }
 }
 async function saveGroups(clear = false) {
   if (!selectedTier.value) return

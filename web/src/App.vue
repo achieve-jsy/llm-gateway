@@ -309,8 +309,8 @@ onMounted(() => {
   settingsStore.loadPublicSettings()
   checkPopupAnnouncements()
   checkBudgetAlert()
+  if (authStore.isLoggedIn) loadAiWidget()
   window.addEventListener('resize', handleResize)
-  // 每 30s 刷新一次铃铛未读数（含告警定向推送）
   bellRefreshTimer = setInterval(() => {
     if (authStore.isLoggedIn) notificationBellRef.value?.refresh()
   }, 30000)
@@ -319,11 +319,36 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
   if (bellRefreshTimer) clearInterval(bellRefreshTimer)
+  removeAiWidget()
 })
 
 watch(() => authStore.isLoggedIn, (loggedIn) => {
-  if (loggedIn) checkPopupAnnouncements()
+  if (loggedIn) {
+    checkPopupAnnouncements()
+    loadAiWidget()
+  } else {
+    removeAiWidget()
+  }
 })
+
+const AI_WIDGET_ID = 'ks-ai-widget-script'
+const AI_WIDGET_HOST_ID = 'ks-widget-host'
+
+function loadAiWidget() {
+  if (document.getElementById(AI_WIDGET_ID)) return
+  const s = document.createElement('script')
+  s.id = AI_WIDGET_ID
+  s.src = 'http://192.0.2.10/widget.js'
+  s.dataset.token = 'ks_90981925f61594ab5e7138ac76a20a019a420cbdc7b2d16a9a5602e67be9ce6d'
+  s.dataset.project = 'f4d72fea-c48d-43c9-a0da-ddf56688577b'
+  s.dataset.primaryColor = '#36B34E'
+  document.body.appendChild(s)
+}
+
+function removeAiWidget() {
+  document.getElementById(AI_WIDGET_ID)?.remove()
+  document.getElementById(AI_WIDGET_HOST_ID)?.remove()
+}
 
 function handleMenuSelect(index: string) {
   if (isMobile.value) showMobileSidebar.value = false

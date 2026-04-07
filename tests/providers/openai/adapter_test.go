@@ -538,8 +538,6 @@ func TestChatCompletion_GPT5StripsOpenCodeReasoningAliases(t *testing.T) {
 		"messages":[{"role":"user","content":"hi"}],
 		"max_tokens":16,
 		"temperature":0.2,
-		"reasoningSummary":"auto",
-		"reasoning_summary":"detailed",
 		"reasoningEffort":"medium",
 		"reasoning":{"effort":"high"}
 	}`)
@@ -550,14 +548,10 @@ func TestChatCompletion_GPT5StripsOpenCodeReasoningAliases(t *testing.T) {
 	_, err := p.ChatCompletion(context.Background(), &req)
 	require.NoError(t, err)
 
-	_, hasSummary := gotBody["reasoningSummary"]
-	_, hasSummarySnake := gotBody["reasoning_summary"]
 	_, hasCamelEffort := gotBody["reasoningEffort"]
 	_, hasNestedReasoning := gotBody["reasoning"]
 	_, hasTemp := gotBody["temperature"]
 	_, hasMaxTokens := gotBody["max_tokens"]
-	assert.False(t, hasSummary)
-	assert.False(t, hasSummarySnake)
 	assert.False(t, hasCamelEffort)
 	assert.False(t, hasNestedReasoning)
 	assert.False(t, hasTemp)
@@ -689,6 +683,18 @@ func TestShouldBridgeChatToResponses(t *testing.T) {
 		Model: "gpt-5.4-pro",
 		Tools: []map[string]any{{"type": "function"}},
 		ExtraFields: mustExtraFields(t, map[string]any{"reasoning_effort": "high"}),
+	}))
+	// LiteLLM: effort + summary 即使无 tools 也桥接（Chat 拒绝 reasoningSummary）
+	assert.True(t, openai.ShouldBridgeChatToResponses(&core.ChatRequest{
+		Model: "gpt-5.5",
+		ExtraFields: mustExtraFields(t, map[string]any{
+			"reasoning_effort":  "low",
+			"reasoningSummary": "auto",
+		}),
+	}))
+	assert.True(t, openai.ShouldBridgeChatToResponses(&core.ChatRequest{
+		Model:     "gpt-5.1",
+		Reasoning: &core.Reasoning{Effort: "medium", Summary: "detailed"},
 	}))
 	assert.False(t, openai.ShouldBridgeChatToResponses(&core.ChatRequest{
 		Model: "gpt-5.5",

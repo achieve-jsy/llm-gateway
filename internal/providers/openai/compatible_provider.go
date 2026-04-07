@@ -193,6 +193,7 @@ func (p *CompatibleProvider) Responses(ctx context.Context, req *core.ResponsesR
 	if req == nil {
 		return nil, core.NewInvalidRequestError("responses request is required", nil)
 	}
+	providers.SanitizeResponsesRequest(req)
 	var resp core.ResponsesResponse
 	err := p.Do(ctx, llmclient.Request{
 		Method:   http.MethodPost,
@@ -212,6 +213,7 @@ func (p *CompatibleProvider) StreamResponses(ctx context.Context, req *core.Resp
 	if req == nil {
 		return nil, core.NewInvalidRequestError("responses request is required", nil)
 	}
+	providers.SanitizeResponsesRequest(req)
 	stream, err := p.client.DoStream(ctx, p.prepareRequest(llmclient.Request{
 		Method:   http.MethodPost,
 		Endpoint: "/responses",

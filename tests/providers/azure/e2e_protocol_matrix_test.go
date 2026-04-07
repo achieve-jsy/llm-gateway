@@ -94,6 +94,28 @@ func TestE2E_AzureProtocolMatrix_AllPathways(t *testing.T) {
 
 	t.Run("aliases_firewall_on_chat", func(t *testing.T) {
 		ctr.chat.Store(0)
+		ctr.responses.Store(0)
+		// 无 summary 时不桥接；Chat 路径清洗 camelCase effort
+		raw := []byte(`{
+			"model":"gpt-5.5",
+			"messages":[{"role":"user","content":"hi"}],
+			"reasoningEffort":"low"
+		}`)
+		var req core.ChatRequest
+		require.NoError(t, json.Unmarshal(raw, &req))
+		_, err := p.ChatCompletion(context.Background(), &req)
+		require.NoError(t, err)
+		body, _ := ctr.lastBody.Load().(map[string]any)
+		_, hasCamel := body["reasoningEffort"]
+		assert.False(t, hasCamel)
+		assert.Equal(t, "low", body["reasoning_effort"])
+		assert.Equal(t, int32(1), ctr.chat.Load())
+		assert.Equal(t, int32(0), ctr.responses.Load())
+	})
+
+	t.Run("summary_plus_effort_bridges_without_tools", func(t *testing.T) {
+		ctr.chat.Store(0)
+		ctr.responses.Store(0)
 		raw := []byte(`{
 			"model":"gpt-5.5",
 			"messages":[{"role":"user","content":"hi"}],
@@ -102,15 +124,19 @@ func TestE2E_AzureProtocolMatrix_AllPathways(t *testing.T) {
 		}`)
 		var req core.ChatRequest
 		require.NoError(t, json.Unmarshal(raw, &req))
+		require.True(t, openai.ShouldBridgeChatToResponses(&req))
 		_, err := p.ChatCompletion(context.Background(), &req)
 		require.NoError(t, err)
+		assert.Equal(t, int32(0), ctr.chat.Load())
+		assert.Equal(t, int32(1), ctr.responses.Load())
+		assert.Equal(t, "/openai/v1/responses", ctr.lastPath.Load())
 		body, _ := ctr.lastBody.Load().(map[string]any)
 		_, hasSummary := body["reasoningSummary"]
-		_, hasCamel := body["reasoningEffort"]
 		assert.False(t, hasSummary)
-		assert.False(t, hasCamel)
-		assert.Equal(t, "low", body["reasoning_effort"])
-		assert.Equal(t, int32(1), ctr.chat.Load())
+		r, _ := body["reasoning"].(map[string]any)
+		require.NotNil(t, r)
+		assert.Equal(t, "low", r["effort"])
+		assert.Equal(t, "auto", r["summary"])
 	})
 
 	t.Run("tools_plus_reasoning_bridges_openai_v1_responses", func(t *testing.T) {

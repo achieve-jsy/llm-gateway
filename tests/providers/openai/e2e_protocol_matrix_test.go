@@ -139,7 +139,7 @@ func TestE2E_ProtocolMatrix_AllPathways(t *testing.T) {
 			},
 		},
 		{
-			name: "aliases_no_tools_stay_chat",
+			name: "aliases_with_summary_bridge_without_tools",
 			req: mustChatReq(t, `{
 				"model":"gpt-5.5",
 				"messages":[{"role":"user","content":"hi"}],
@@ -147,13 +147,34 @@ func TestE2E_ProtocolMatrix_AllPathways(t *testing.T) {
 				"reasoningEffort":"low",
 				"temperature":0.2
 			}`),
-			wantChat:      1,
-			wantResponses: 0,
+			wantChat:      0,
+			wantResponses: 1,
+			wantBridge:    true,
 			assertBody: func(t *testing.T, body map[string]any) {
+				r, _ := body["reasoning"].(map[string]any)
+				require.NotNil(t, r)
+				assert.Equal(t, "low", r["effort"])
+				assert.Equal(t, "auto", r["summary"])
 				_, hasSummary := body["reasoningSummary"]
 				_, hasCamel := body["reasoningEffort"]
-				_, hasTemp := body["temperature"]
 				assert.False(t, hasSummary)
+				assert.False(t, hasCamel)
+			},
+		},
+		{
+			name: "effort_only_no_tools_stay_chat",
+			req: mustChatReq(t, `{
+				"model":"gpt-5.5",
+				"messages":[{"role":"user","content":"hi"}],
+				"reasoningEffort":"low",
+				"temperature":0.2
+			}`),
+			wantChat:      1,
+			wantResponses: 0,
+			wantBridge:    false,
+			assertBody: func(t *testing.T, body map[string]any) {
+				_, hasCamel := body["reasoningEffort"]
+				_, hasTemp := body["temperature"]
 				assert.False(t, hasCamel)
 				assert.False(t, hasTemp)
 				assert.Equal(t, "low", body["reasoning_effort"])

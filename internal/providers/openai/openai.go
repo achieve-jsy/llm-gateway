@@ -138,19 +138,30 @@ func isReasoningChatModel(model string) bool {
 }
 
 // ShouldBridgeChatToResponses reports whether a Chat Completions request must
-// be routed through the Responses API, matching LiteLLM's auto-route rule:
-// OpenAI/Azure gpt-5.4+ with both tools and reasoning_effort.
+// be routed through the Responses API, matching LiteLLM get_chat_completion_mode:
+//
+//	OpenAI/Azure GPT-5（非 search）且 reasoning_effort 存在，并且：
+//	  - 带 reasoning summary 别名，或
+//	  - gpt-5.4+ 且带 tools
 func ShouldBridgeChatToResponses(req *core.ChatRequest) bool {
 	if req == nil {
 		return false
 	}
-	if !isGPT54PlusModel(req.Model) {
+	if !isGPT5Model(req.Model) || isGPT5SearchModel(req.Model) {
 		return false
 	}
-	if len(req.Tools) == 0 {
+	if !hasChatReasoningEffort(req) {
 		return false
 	}
-	return hasChatReasoningEffort(req)
+	if hasChatReasoningSummary(req) {
+		return true
+	}
+	return isGPT54PlusModel(req.Model) && len(req.Tools) > 0
+}
+
+func isGPT5SearchModel(model string) bool {
+	m := strings.ToLower(normalizeModelName(model))
+	return strings.Contains(m, "gpt-5") && strings.Contains(m, "search")
 }
 
 func hasChatReasoningEffort(req *core.ChatRequest) bool {
@@ -158,6 +169,18 @@ func hasChatReasoningEffort(req *core.ChatRequest) bool {
 		return true
 	}
 	for _, key := range []string{"reasoning_effort", "reasoningEffort"} {
+		if raw := req.ExtraFields.Lookup(key); len(raw) > 0 && string(raw) != "null" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasChatReasoningSummary(req *core.ChatRequest) bool {
+	if req.Reasoning != nil && strings.TrimSpace(req.Reasoning.Summary) != "" {
+		return true
+	}
+	for _, key := range []string{"reasoningSummary", "reasoning_summary"} {
 		if raw := req.ExtraFields.Lookup(key); len(raw) > 0 && string(raw) != "null" {
 			return true
 		}

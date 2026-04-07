@@ -17,6 +17,11 @@ type ResponsesProvider interface {
 
 // ConvertChatRequestToResponses converts a Chat Completions request into a
 // Responses API request (LiteLLM Chat→Responses bridge direction).
+//
+// 参数映射对齐 LiteLLM
+// litellm/completion_extras/litellm_responses_transformation/transformation.py
+// 的 _map_optional_params_to_responses_api_request：白名单透传 + 显式 remap，
+// 不把 Chat-only 顶层字段原样丢给 /responses。
 func ConvertChatRequestToResponses(req *core.ChatRequest) (*core.ResponsesRequest, error) {
 	if req == nil {
 		return nil, core.NewInvalidRequestError("chat request is required", nil)
@@ -35,17 +40,22 @@ func ConvertChatRequestToResponses(req *core.ChatRequest) (*core.ResponsesReques
 		Tools:             normalizeChatToolsForResponses(req.Tools),
 		ToolChoice:        normalizeChatToolChoiceForResponses(req.ToolChoice),
 		ParallelToolCalls: req.ParallelToolCalls,
+		Temperature:       req.Temperature,
 		Stream:            req.Stream,
 		// Chat 的 stream_options.include_usage 在 Azure/OpenAI Responses 上会
 		// unknown_parameter；用量改从 response.completed 取回。
+		// LiteLLM 仅透传 include_obfuscation，见 applyLiteLLMChatOptionalParams。
 		StreamOptions: nil,
+		Metadata:      nil,
 		Reasoning:     buildResponsesReasoning(req),
-		ExtraFields:   stripChatOnlyExtraFields(req.ExtraFields),
 	}
 
 	if maxOut := resolveMaxOutputTokens(req); maxOut != nil {
 		respReq.MaxOutputTokens = maxOut
 	}
+
+	applyLiteLLMChatOptionalParams(req, respReq)
+	SanitizeResponsesRequest(respReq)
 
 	return respReq, nil
 }
@@ -313,41 +323,178 @@ func resolveMaxOutputTokens(req *core.ChatRequest) *int {
 	return nil
 }
 
-func stripChatOnlyExtraFields(fields core.UnknownJSONFields) core.UnknownJSONFields {
-	if fields.IsEmpty() {
-		return core.UnknownJSONFields{}
+// responsesAPIOptionalParamKeys 对齐 LiteLLM ResponsesAPIOptionalRequestParams
+// 中可透传到 /responses 的字段（已由 typed 字段承接的除外）。
+var responsesAPIOptionalParamKeys = map[string]struct{}{
+	"include":                {},
+	"store":                  {},
+	"background":             {},
+	"top_p":                  {},
+	"truncation":             {},
+	"user":                   {},
+	"service_tier":           {},
+	"safety_identifier":      {},
+	"prompt":                 {},
+	"max_tool_calls":         {},
+	"prompt_cache_key":       {},
+	"prompt_cache_retention": {},
+	"top_logprobs":           {},
+	"partial_images":         {},
+	"context_management":     {},
+	"previous_response_id":   {},
+	"text":                   {},
+}
+
+// applyLiteLLMChatOptionalParams 对齐 LiteLLM
+// _map_optional_params_to_responses_api_request：只映射已知字段，丢弃 Chat-only 噪音。
+func applyLiteLLMChatOptionalParams(req *core.ChatRequest, respReq *core.ResponsesRequest) {
+	if req == nil || respReq == nil {
+		return
 	}
-	// Round-trip through ResponsesRequest marshaling to recover the raw extra object.
-	body, err := json.Marshal(&core.ResponsesRequest{ExtraFields: fields})
+	applyResponsesOptionalExtras(req.ExtraFields, respReq)
+	if raw := req.ExtraFields.Lookup("web_search_options"); len(raw) > 0 && string(raw) != "null" {
+		tool := map[string]any{"type": "web_search"}
+		var opts map[string]any
+		if json.Unmarshal(raw, &opts) == nil {
+			for k, v := range opts {
+				tool[k] = v
+			}
+		}
+		respReq.Tools = append(respReq.Tools, tool)
+	}
+}
+
+func transformChatResponseFormatToTextFormat(raw json.RawMessage) map[string]any {
+	var rf map[string]any
+	if json.Unmarshal(raw, &rf) != nil || len(rf) == 0 {
+		return nil
+	}
+	formatType, _ := rf["type"].(string)
+	switch formatType {
+	case "json_schema":
+		js, _ := rf["json_schema"].(map[string]any)
+		if js == nil {
+			js = map[string]any{}
+		}
+		name, _ := js["name"].(string)
+		if name == "" {
+			name = "response_schema"
+		}
+		schema, _ := js["schema"].(map[string]any)
+		if schema == nil {
+			schema = map[string]any{}
+		}
+		strict, _ := js["strict"].(bool)
+		return map[string]any{
+			"type":   "json_schema",
+			"name":   name,
+			"schema": schema,
+			"strict": strict,
+		}
+	case "json_object":
+		return map[string]any{"type": "json_object"}
+	case "text":
+		return map[string]any{"type": "text"}
+	default:
+		return nil
+	}
+}
+
+func truncateUserRaw(raw json.RawMessage) json.RawMessage {
+	var user string
+	if json.Unmarshal(raw, &user) != nil {
+		return raw
+	}
+	if len(user) <= 64 {
+		return raw
+	}
+	encoded, err := json.Marshal(user[:64])
 	if err != nil {
-		return core.CloneUnknownJSONFields(fields)
+		return raw
 	}
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(body, &obj); err != nil {
-		return core.CloneUnknownJSONFields(fields)
+	return encoded
+}
+
+// SanitizeResponsesRequest 出站防火墙：把误入的 Chat Completions 顶层字段
+// 收敛为 Responses 合法形态（对齐 LiteLLM + OpenAI Responses 文档）。
+// 直连 /responses 与 Chat→Responses 桥接都会走这里。
+func SanitizeResponsesRequest(req *core.ResponsesRequest) {
+	if req == nil {
+		return
 	}
-	known := map[string]struct{}{
-		"model": {}, "provider": {}, "input": {}, "instructions": {},
-		"tools": {}, "tool_choice": {}, "parallel_tool_calls": {},
-		"temperature": {}, "max_output_tokens": {}, "stream": {},
-		"stream_options": {}, "metadata": {}, "reasoning": {},
+	// Chat Completions 的 stream_options.include_usage 对 Responses 非法。
+	req.StreamOptions = nil
+	applyResponsesOptionalExtras(req.ExtraFields, req)
+}
+
+// applyResponsesOptionalExtras 将 ExtraFields 收敛为 Responses 白名单字段，
+// 并完成 verbosity / response_format → text.* 的 LiteLLM/OpenAI 映射。
+func applyResponsesOptionalExtras(src core.UnknownJSONFields, respReq *core.ResponsesRequest) {
+	if respReq == nil {
+		return
 	}
-	extra := make(map[string]json.RawMessage)
-	for k, v := range obj {
-		if _, ok := known[k]; ok {
+
+	out := map[string]json.RawMessage{}
+	textObj := map[string]any{}
+
+	if raw := src.Lookup("text"); len(raw) > 0 && string(raw) != "null" {
+		_ = json.Unmarshal(raw, &textObj)
+	}
+	if raw := src.Lookup("response_format"); len(raw) > 0 && string(raw) != "null" {
+		if format := transformChatResponseFormatToTextFormat(raw); format != nil {
+			if _, has := textObj["format"]; !has {
+				textObj["format"] = format
+			}
+		}
+	}
+	if raw := src.Lookup("verbosity"); len(raw) > 0 && string(raw) != "null" {
+		if _, has := textObj["verbosity"]; !has {
+			var v any
+			if json.Unmarshal(raw, &v) == nil {
+				textObj["verbosity"] = v
+			}
+		}
+	}
+	if len(textObj) > 0 {
+		if encoded, err := json.Marshal(textObj); err == nil {
+			out["text"] = encoded
+		}
+	}
+
+	for key := range responsesAPIOptionalParamKeys {
+		if key == "text" {
 			continue
 		}
-		extra[k] = v
+		if raw := src.Lookup(key); len(raw) > 0 && string(raw) != "null" {
+			if key == "user" {
+				out[key] = truncateUserRaw(raw)
+				continue
+			}
+			out[key] = raw
+		}
 	}
-	for _, key := range []string{
-		"reasoning_effort", "reasoningEffort",
-		"reasoningSummary", "reasoning_summary",
-		"max_tokens", "max_completion_tokens",
-		"temperature",
-	} {
-		delete(extra, key)
+
+	if raw := src.Lookup("stream_options"); len(raw) > 0 && string(raw) != "null" {
+		var so map[string]any
+		if json.Unmarshal(raw, &so) == nil {
+			if obf, ok := so["include_obfuscation"]; ok {
+				if encoded, err := json.Marshal(map[string]any{"include_obfuscation": obf}); err == nil {
+					out["stream_options"] = encoded
+				}
+			}
+		}
 	}
-	return core.UnknownJSONFieldsFromMap(extra)
+
+	if raw := src.Lookup("metadata"); len(raw) > 0 && string(raw) != "null" && respReq.Metadata == nil {
+		var md map[string]string
+		if json.Unmarshal(raw, &md) == nil {
+			respReq.Metadata = md
+		} else {
+			out["metadata"] = raw
+		}
+	}
+
+	respReq.ExtraFields = core.UnknownJSONFieldsFromMap(out)
 }
 
 // ConvertResponsesResponseToChat converts a Responses API response back to Chat Completions shape.

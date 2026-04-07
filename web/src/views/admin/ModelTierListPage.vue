@@ -16,6 +16,7 @@
     />
 
     <el-table v-loading="loading" :data="tiers" row-key="id" empty-text="暂无模型等级">
+      <el-table-column prop="sort_order" label="序号" width="60" />
       <el-table-column label="等级" min-width="180">
         <template #default="{ row }">
           <span class="color-dot" :style="{ backgroundColor: row.color }" />

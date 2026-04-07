@@ -142,6 +142,14 @@ func (p *Provider) buildConverseParts(req *core.ChatRequest) (converseParts, err
 	}
 	parts.toolCfg = toolCfg
 
+	// Auto-inject CachePoints on tools and conversation history for prompt caching.
+	// Only activates when the client has NOT placed any explicit cache_control markers,
+	// so clients like Claude Code that manage their own cache boundaries are not disturbed.
+	if !hasCacheControlInMessages(req.Messages) {
+		injectToolCachePoint(parts.toolCfg)
+		injectConversationCachePoints(parts.messages)
+	}
+
 	return parts, nil
 }
 
@@ -155,6 +163,91 @@ func messagesContainToolBlocks(messages []brtypes.Message) bool {
 		}
 	}
 	return false
+}
+
+// hasCacheControlInMessages reports whether any message in the original core
+// request carries a cache_control marker. When a client (like Claude Code or
+// newer OpenCode) manages its own cache boundaries, we must not inject
+// additional auto-cache points that would interfere.
+func hasCacheControlInMessages(messages []core.Message) bool {
+	for _, msg := range messages {
+		parts, ok := core.NormalizeContentParts(msg.Content)
+		if !ok {
+			continue
+		}
+		for _, part := range parts {
+			if hasCacheControl(part) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// injectToolCachePoint appends a CachePoint to the tool configuration so that
+// tool definitions (which are identical across turns for the same session) are
+// cached by Bedrock. This is the single highest-ROI cache breakpoint: tool
+// definitions from coding agents routinely consume 5K–50K tokens per request.
+func injectToolCachePoint(toolCfg *brtypes.ToolConfiguration) {
+	if toolCfg == nil || len(toolCfg.Tools) == 0 {
+		return
+	}
+	toolCfg.Tools = append(toolCfg.Tools, &brtypes.ToolMemberCachePoint{
+		Value: brtypes.CachePointBlock{Type: brtypes.CachePointTypeDefault},
+	})
+}
+
+// conversationCacheMinMessages is the minimum number of messages required to
+// inject a conversation-history CachePoint. Short conversations (< 6 turns)
+// don't benefit from a second breakpoint because the system+tools prefix
+// already covers most of the prompt.
+const conversationCacheMinMessages = 6
+
+// injectConversationCachePoints inserts a CachePoint in the conversation
+// history at the boundary between stable (repeated) and dynamic (new) content.
+//
+// The placement strategy: put the breakpoint at ~2/3 back from the end.
+// For a 547-message conversation this caches ~365 messages (~250K tokens) that
+// are identical across turns, turning a 2% cache hit rate into ~65%.
+//
+// Bedrock requires the CachePoint to be attached to a user or assistant text
+// block, so we search backwards from the target index for a suitable anchor.
+func injectConversationCachePoints(messages []brtypes.Message) {
+	if len(messages) < conversationCacheMinMessages {
+		return
+	}
+
+	// Target: ~2/3 back from the end of the conversation.
+	targetIdx := len(messages) * 2 / 3
+	if targetIdx <= 0 {
+		targetIdx = 1
+	}
+
+	// Search backwards from target for a message with a text block we can anchor on.
+	for i := targetIdx; i >= 0; i-- {
+		if injectCachePointOnMessage(&messages[i]) {
+			return
+		}
+	}
+	// Fallback: search forward from target.
+	for i := targetIdx + 1; i < len(messages); i++ {
+		if injectCachePointOnMessage(&messages[i]) {
+			return
+		}
+	}
+}
+
+// injectCachePointOnMessage appends a CachePoint to the last content block of
+// the given message if it contains a Text, ToolUse, or ToolResult block.
+// Returns true if a CachePoint was successfully injected.
+func injectCachePointOnMessage(msg *brtypes.Message) bool {
+	if len(msg.Content) == 0 {
+		return false
+	}
+	msg.Content = append(msg.Content, &brtypes.ContentBlockMemberCachePoint{
+		Value: brtypes.CachePointBlock{Type: brtypes.CachePointTypeDefault},
+	})
+	return true
 }
 
 func convertMessages(messages []core.Message) ([]brtypes.SystemContentBlock, []brtypes.Message, error) {

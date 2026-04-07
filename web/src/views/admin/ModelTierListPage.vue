@@ -29,8 +29,7 @@
       <el-table-column prop="budget_count" label="预算引用" width="100" />
       <el-table-column prop="history_count" label="历史引用" width="100" />
       <el-table-column label="排序" width="110">
-        <template #default="{ row, $index }">
-          <span style="margin-right: 8px; font-size: 12px; color: var(--el-text-color-secondary)">{{ row.sort_order }}</span>
+        <template #default="{ $index }">
           <el-button text aria-label="上移" :disabled="$index === 0" @click="move($index, -1)">↑</el-button>
           <el-button text aria-label="下移" :disabled="$index === tiers.length - 1" @click="move($index, 1)">↓</el-button>
         </template>

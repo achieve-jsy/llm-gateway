@@ -57,7 +57,7 @@ func TestMessagesProtocol_CacheControl_EndToEnd(t *testing.T) {
 	// 网关调度后会改成上游 model id；此处直接用 Bedrock 可识别名
 	chatReq.Model = "global.anthropic.claude-sonnet-4-6"
 
-	parts, err := buildConverseParts(chatReq)
+	parts, err := (&Provider{}).buildConverseParts(chatReq)
 	if err != nil {
 		t.Fatalf("buildConverseParts: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestMessagesProtocol_NoClientCache_AutoInjectTools(t *testing.T) {
 	chatReq := core.AnthropicToChatRequest(&anthReq)
 	chatReq.Model = "global.anthropic.claude-sonnet-4-6"
 
-	parts, err := buildConverseParts(chatReq)
+	parts, err := (&Provider{}).buildConverseParts(chatReq)
 	if err != nil {
 		t.Fatalf("buildConverseParts: %v", err)
 	}

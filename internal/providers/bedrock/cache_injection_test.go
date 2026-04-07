@@ -230,7 +230,7 @@ func TestBuildConverseParts_AutoInject_WithoutClientCacheControl(t *testing.T) {
 		Tools:    makeTools(3),
 	}
 
-	parts, err := buildConverseParts(req)
+	parts, err := (&Provider{}).buildConverseParts(req)
 	if err != nil {
 		t.Fatalf("buildConverseParts: %v", err)
 	}
@@ -261,7 +261,7 @@ func TestBuildConverseParts_NoAutoInject_WithClientCacheControl(t *testing.T) {
 		Tools:    makeTools(3),
 	}
 
-	parts, err := buildConverseParts(req)
+	parts, err := (&Provider{}).buildConverseParts(req)
 	if err != nil {
 		t.Fatalf("buildConverseParts: %v", err)
 	}
@@ -327,7 +327,7 @@ func TestBuildConverseParts_MessagesProtocol_ToolResultCacheControl(t *testing.T
 		Tools: makeTools(2),
 	}
 
-	parts, err := buildConverseParts(req)
+	parts, err := (&Provider{}).buildConverseParts(req)
 	if err != nil {
 		t.Fatalf("buildConverseParts: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestBuildConverseParts_ExplicitToolCacheControl(t *testing.T) {
 		},
 		Tools: tools,
 	}
-	parts, err := buildConverseParts(req)
+	parts, err := (&Provider{}).buildConverseParts(req)
 	if err != nil {
 		t.Fatalf("buildConverseParts: %v", err)
 	}
@@ -377,7 +377,7 @@ func TestBuildConverseParts_ShortConversation_NoConversationCachePoint(t *testin
 		Tools:    makeTools(3),
 	}
 
-	parts, err := buildConverseParts(req)
+	parts, err := (&Provider{}).buildConverseParts(req)
 	if err != nil {
 		t.Fatalf("buildConverseParts: %v", err)
 	}
@@ -404,7 +404,7 @@ func TestBuildConverseParts_NoTools_NoToolCachePoint(t *testing.T) {
 		Messages: msgs,
 	}
 
-	parts, err := buildConverseParts(req)
+	parts, err := (&Provider{}).buildConverseParts(req)
 	if err != nil {
 		t.Fatalf("buildConverseParts: %v", err)
 	}

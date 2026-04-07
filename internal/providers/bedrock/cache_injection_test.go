@@ -104,6 +104,20 @@ func TestHasCacheControlInMessages_WithMarker(t *testing.T) {
 	}
 }
 
+func TestHasCacheControlInMessages_ToolResultExtraFields(t *testing.T) {
+	msgs := []core.Message{{
+		Role:       "tool",
+		ToolCallID: "t1",
+		Content:    "ok",
+		ExtraFields: core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
+			"cache_control": json.RawMessage(`{"type":"ephemeral"}`),
+		}),
+	}}
+	if !hasCacheControlInMessages(msgs) {
+		t.Error("expected Message.ExtraFields cache_control to be detected")
+	}
+}
+
 // ─── injectToolCachePoint ─────────────────────────────────────────────────
 
 func TestInjectToolCachePoint_NilConfig(t *testing.T) {
@@ -233,7 +247,8 @@ func TestBuildConverseParts_AutoInject_WithoutClientCacheControl(t *testing.T) {
 }
 
 func TestBuildConverseParts_NoAutoInject_WithClientCacheControl(t *testing.T) {
-	// Simulate a user like 刘思远: client manages its own cache_control
+	// 客户端自管 message 断点时：不注入 conversation CachePoint；
+	// 但 tools 未显式标记时仍自动注入 tool CachePoint（兼容 Claude Desktop 漏标 tools）。
 	msgs := []core.Message{
 		makeMessageWithCacheControl("system", "You are helpful."),
 		makeTextMessage("user", "hello"),
@@ -251,12 +266,100 @@ func TestBuildConverseParts_NoAutoInject_WithClientCacheControl(t *testing.T) {
 		t.Fatalf("buildConverseParts: %v", err)
 	}
 
-	// Should NOT auto-inject because client already has cache_control
-	if got := countToolCachePoints(parts.toolCfg); got != 0 {
-		t.Errorf("expected 0 auto tool CachePoints (client manages), got %d", got)
+	if got := countToolCachePoints(parts.toolCfg); got != 1 {
+		t.Errorf("expected 1 auto tool CachePoint when tools lack cache_control, got %d", got)
 	}
 	if got := countCachePoints(parts.messages); got != 0 {
-		t.Errorf("expected 0 auto conversation CachePoints (client manages), got %d", got)
+		t.Errorf("expected 0 auto conversation CachePoints (client manages messages), got %d", got)
+	}
+	// system 上的显式 cache_control 应落成 CachePoint
+	if got := countSystemCachePoints(parts.system); got != 1 {
+		t.Errorf("expected 1 system CachePoint from client marker, got %d", got)
+	}
+}
+
+func countSystemCachePoints(system []brtypes.SystemContentBlock) int {
+	n := 0
+	for _, b := range system {
+		if _, ok := b.(*brtypes.SystemContentBlockMemberCachePoint); ok {
+			n++
+		}
+	}
+	return n
+}
+
+func TestBuildConverseParts_MessagesProtocol_ToolResultCacheControl(t *testing.T) {
+	// 模拟 /v1/messages → AnthropicToChatRequest 后的形态：
+	// system ContentParts 带 cache_control；最后一条 tool 消息 ExtraFields 带 cache_control。
+	sysParts := []core.ContentPart{{
+		Type: "text",
+		Text: "You are Claude Code.",
+		ExtraFields: core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
+			"cache_control": json.RawMessage(`{"type":"ephemeral"}`),
+		}),
+	}}
+	toolMsg := core.Message{
+		Role:       "tool",
+		ToolCallID: "toolu_1",
+		Content:    `{"ok":true}`,
+		ExtraFields: core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
+			"cache_control": json.RawMessage(`{"type":"ephemeral"}`),
+		}),
+	}
+	req := &core.ChatRequest{
+		Model: "anthropic.claude-sonnet-4-6",
+		Messages: []core.Message{
+			{Role: "system", Content: sysParts},
+			{Role: "user", Content: "run"},
+			{
+				Role: "assistant",
+				ToolCalls: []core.ToolCall{{
+					ID:   "toolu_1",
+					Type: "function",
+					Function: core.FunctionCall{
+						Name:      "Bash",
+						Arguments: `{"command":"ls"}`,
+					},
+				}},
+			},
+			toolMsg,
+		},
+		Tools: makeTools(2),
+	}
+
+	parts, err := buildConverseParts(req)
+	if err != nil {
+		t.Fatalf("buildConverseParts: %v", err)
+	}
+	if got := countSystemCachePoints(parts.system); got != 1 {
+		t.Errorf("system CachePoint: got %d want 1", got)
+	}
+	if got := countCachePoints(parts.messages); got != 1 {
+		t.Errorf("message CachePoint from tool_result: got %d want 1", got)
+	}
+	if got := countToolCachePoints(parts.toolCfg); got != 1 {
+		t.Errorf("auto tool CachePoint: got %d want 1", got)
+	}
+}
+
+func TestBuildConverseParts_ExplicitToolCacheControl(t *testing.T) {
+	tools := makeTools(2)
+	tools[1]["cache_control"] = map[string]any{"type": "ephemeral"}
+	req := &core.ChatRequest{
+		Model: "anthropic.claude-sonnet-4-6",
+		Messages: []core.Message{
+			makeTextMessage("system", "sys"),
+			makeTextMessage("user", "hi"),
+		},
+		Tools: tools,
+	}
+	parts, err := buildConverseParts(req)
+	if err != nil {
+		t.Fatalf("buildConverseParts: %v", err)
+	}
+	// 显式 tool 断点 1 个；因已有 tools 级 cache_control，不再追加 auto
+	if got := countToolCachePoints(parts.toolCfg); got != 1 {
+		t.Errorf("tool CachePoints: got %d want 1", got)
 	}
 }
 

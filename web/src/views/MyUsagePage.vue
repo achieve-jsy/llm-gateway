@@ -340,8 +340,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import {
-  Refresh, Histogram, Money, DataLine, Coin, CircleCheck,
-  ArrowDown
+  Refresh, Histogram, Money, DataLine, Coin, CircleCheck
 } from '@element-plus/icons-vue'
 import type { UsageEndpointType } from '@/utils/usage-endpoint'
 import UsageLogSection from '@/components/usage/UsageLogSection.vue'
@@ -366,7 +365,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
 import { isDark } from '@/composables/useTheme'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
-import { fmtDateTime, fmtDate, fmtDuration } from '@/utils/time'
+import { fmtDate, fmtDuration } from '@/utils/time'
 
 Chart.register(
   LineController, DoughnutController, BarController,
@@ -376,14 +375,6 @@ Chart.register(
 
 const authStore = useAuthStore()
 const settingsStore = useSettingsStore()
-
-const TABLE_HEADER = {
-  background: 'var(--el-fill-color-light)',
-  fontWeight: '600',
-  color: 'var(--el-text-color-secondary)',
-  fontSize: '12px',
-  borderBottom: '1px solid var(--el-border-color-light)',
-}
 
 const CHART_PALETTE = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#f97316']
 const RANK_COLORS = ['#f59e0b', '#94a3b8', '#92400e', '#3b82f6', '#10b981', '#8b5cf6', '#06b6d4', '#ec4899']
@@ -395,10 +386,6 @@ const cc = computed(() => ({
 }))
 
 const toCny = (usd: number | undefined | null) => convertCost(usd ?? 0, cc.value)
-const toCnyFormatted = (usd: number | undefined | null) => {
-  const n = convertCost(usd ?? 0, cc.value)
-  return `${currencySymbol(cc.value.currency)}${n.toFixed(6)}`
-}
 const fmtCny = (usd: number | undefined | null) => {
   const n = convertCost(usd ?? 0, cc.value)
   const sym = currencySymbol(cc.value.currency)
@@ -446,12 +433,6 @@ const fmtLocalDateTime = (d: Date) => {
   const minute = String(d.getMinutes()).padStart(2, '0')
   return `${year}-${month}-${day} ${hour}:${minute}`
 }
-const parseLocalDate = (s: string) => {
-  // 支持 "YYYY-MM-DD" 和 "YYYY-MM-DD HH:mm" 格式
-  const [datePart] = s.split(' ')
-  const [y, m, d] = datePart.split('-').map(Number)
-  return new Date(y, m - 1, d)
-}
 const parseLocalDateTime = (s: string) => {
   // 支持 "YYYY-MM-DD" 和 "YYYY-MM-DD HH:mm" 格式
   const parts = s.split(' ')
@@ -470,13 +451,6 @@ initEnd.setHours(23, 59, 59, 999)
 const dateRange = ref<[string, string]>([fmtLocalDateTime(initStart), fmtLocalDateTime(initEnd)])
 const videoDateStart = computed(() => dateRange.value?.[0]?.slice(0, 10) || '')
 const videoDateEnd = computed(() => dateRange.value?.[1]?.slice(0, 10) || '')
-const dateShortcuts = [
-  { text: '今天',     value: () => { const t = new Date(); const s = new Date(t); s.setHours(0,0,0,0); return [fmtLocalDateTime(s), fmtLocalDateTime(t)] as [string, string] } },
-  { text: '昨天',     value: () => { const d = new Date(); d.setDate(d.getDate() - 1); d.setHours(0,0,0,0); const e = new Date(d); e.setHours(23,59,59,999); return [fmtLocalDateTime(d), fmtLocalDateTime(e)] as [string, string] } },
-  { text: '最近 7 天', value: () => { const end = new Date(); const start = new Date(); start.setDate(end.getDate() - 6); start.setHours(0,0,0,0); return [fmtLocalDateTime(start), fmtLocalDateTime(end)] as [string, string] } },
-  { text: '最近 30 天', value: () => { const end = new Date(); const start = new Date(); start.setDate(end.getDate() - 29); start.setHours(0,0,0,0); return [fmtLocalDateTime(start), fmtLocalDateTime(end)] as [string, string] } },
-  { text: '本月',     value: () => { const end = new Date(); const start = new Date(end.getFullYear(), end.getMonth(), 1); start.setHours(0,0,0,0); return [fmtLocalDateTime(start), fmtLocalDateTime(end)] as [string, string] } },
-]
 const datePresets = [
   { label: '今天',   days: 0 },
   { label: '近3天',  days: 2 },
@@ -693,11 +667,6 @@ const totalTokens = computed(() => {
   return (t?.prompt_tokens || 0) + (t?.completion_tokens || 0)
 })
 
-const netInputTokens = computed(() => {
-  const t = statsTotal.value
-  return Math.max((t?.prompt_tokens || 0) - (t?.cached_tokens || 0), 0)
-})
-
 const cacheHitPct = computed(() => {
   const t = statsTotal.value
   if (!t?.prompt_tokens) return 0
@@ -755,14 +724,6 @@ const maxModelRankValue = computed(() => {
   return Math.max(...rows.map(r => modelRankValue(r)), 0.0001)
 })
 
-// ── Model ranking ──
-const modelByCost = computed(() => {
-  return [...modelStatsRows.value]
-    .sort((a, b) => (b.est_cost_usd || 0) - (a.est_cost_usd || 0))
-    .slice(0, 8)
-})
-const maxModelCost = computed(() => Math.max(...modelByCost.value.map(r => r.est_cost_usd || 0), 0.0001))
-
 // ── KEY 花费分布 ──
 const keyDistSorted = computed(() => {
   return [...keyDistRows.value]
@@ -777,11 +738,7 @@ function rankBarColor(idx: number) {
 
 // ── Cost per M tokens ──
 // ── Table bar helpers ──
-const maxPrompt     = computed(() => Math.max(...statsRows.value.map(r => r.prompt_tokens || 0), 1))
-const maxCompletion = computed(() => Math.max(...statsRows.value.map(r => r.completion_tokens || 0), 1))
-const maxCost       = computed(() => Math.max(...statsRows.value.map(r => r.est_cost_usd || 0), 0.0001))
 const pct = (v: number, max: number) => Math.min(Math.round(v / max * 100), 100)
-const costColor = (v: number) => v > maxCost.value * 0.7 ? 'c-red fw6' : v > maxCost.value * 0.3 ? 'c-amber fw6' : 'c-green'
 
 // ── Formatters ──
 const fmtNum = (n?: number | null) => n?.toLocaleString() ?? '0'
@@ -795,13 +752,6 @@ const fmtPreciseCny = (v?: number | null): string => {
   else if (Math.abs(n) >= 0.0001) s = n.toFixed(6)
   else s = n.toFixed(8)
   return sym + s.replace(/(\.\d{2,}?)0+$/, '$1')
-}
-const fmtPrice = (n?: number | null) => {
-  const sym = currencySymbol(cc.value.currency)
-  if (n == null) return '—'
-  if (n === 0) return `${sym}0`
-  const v = convertCost(n, cc.value)
-  return sym + (Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(4).replace(/0+$/, '').replace(/\.$/, ''))
 }
 const fmtTokens = (n?: number | null) => {
   if (!n) return '0'
@@ -859,7 +809,7 @@ async function loadAvgDuration() {
     if (filterStatus.value)    params.status     = filterStatus.value
     if (filterEndpoint.value) params.endpoint   = filterEndpoint.value
     const r = await http.get('/api/v1/my/usage/logs', { params, _silent: true } as any)
-    const rows: LogRow[] = r.data.rows || []
+    const rows: Array<{ duration_ms?: number }> = r.data.rows || []
     avgDurationMs.value = rows.length
       ? Math.round(rows.reduce((s, row) => s + (row.duration_ms || 0), 0) / rows.length)
       : null
@@ -929,8 +879,8 @@ const costTrendCanvas = ref<HTMLCanvasElement | null>(null)
 const distCanvas      = ref<HTMLCanvasElement | null>(null)
 const keyDistCanvas   = ref<HTMLCanvasElement | null>(null)
 let costTrendChart: Chart | null = null
-let distChart: Chart | null = null
-let keyDistChart: Chart | null = null
+let distChart: Chart<'doughnut'> | null = null
+let keyDistChart: Chart<'doughnut'> | null = null
 
 // Doughnut center plugin
 const doughnutCenterPlugin = {
@@ -957,7 +907,7 @@ const doughnutCenterPlugin = {
 const segmentLabelPlugin = {
   id: 'segmentLabel',
   afterDraw(chart: Chart) {
-    if (chart.config.type !== 'doughnut') return
+    if (chart.getDatasetMeta(0).type !== 'doughnut') return
     const ds = chart.data.datasets[0]
     if (!ds?.data?.length) return
     const total = (ds.data as number[]).reduce((a, b) => a + b, 0)
@@ -1110,7 +1060,7 @@ function renderDist() {
   const total = data.reduce((a, b) => a + b, 0)
   const palette = CHART_PALETTE.map(c => c + 'CC')
 
-  distChart = new Chart(canvas, {
+  distChart = new Chart<'doughnut'>(canvas, {
     type: 'doughnut',
     data: {
       labels,
@@ -1171,7 +1121,7 @@ function renderKeyDist() {
   const total = data.reduce((a, b) => a + b, 0)
   const palette = CHART_PALETTE.map(c => c + 'CC')
 
-  keyDistChart = new Chart(canvas, {
+  keyDistChart = new Chart<'doughnut'>(canvas, {
     type: 'doughnut',
     data: {
       labels,

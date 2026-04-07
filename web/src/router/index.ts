@@ -137,6 +137,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '预算管理', requiresManager: true }
   },
   {
+    path: '/admin/model-tiers',
+    name: 'ModelTiers',
+    component: () => import('@/views/admin/ModelTierListPage.vue'),
+    meta: { title: '模型等级', requiresAdmin: true }
+  },
+  {
     path: '/admin/service-keys',
     name: 'ServiceKeys',
     component: () => import('@/views/admin/ServiceKeyPage.vue'),

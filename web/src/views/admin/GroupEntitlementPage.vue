@@ -194,9 +194,7 @@ import type {
 } from '@/types/entitlement'
 import type { GroupListItem } from '@/types/group'
 
-interface GroupRecord extends GroupListItem {
-  open_mode?: GroupOpenMode
-}
+type GroupRecord = GroupListItem
 
 const groups = ref<GroupRecord[]>([])
 const pageLoading = ref(false)
@@ -218,6 +216,7 @@ const grantForm = reactive<{ group_id: number; scope_type: EntitlementScopeType;
   scope_id: '',
 })
 const grantFormGroupName = ref('')
+const grantDialogScopeType = computed(() => grantForm.scope_type)
 
 const filteredGroups = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
@@ -238,7 +237,7 @@ async function loadGroups() {
   pageLoading.value = true
   try {
     const res = await groupsApi.listGroups({ page_size: 200 })
-    const items = res.data as GroupRecord[]
+    const items: GroupRecord[] = res.data.data
     groups.value = items
     for (const g of items) {
       openModeMap[g.id] = g.open_mode ?? 'public'

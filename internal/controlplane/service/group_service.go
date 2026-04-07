@@ -1,8 +1,10 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
@@ -25,9 +27,84 @@ type FailoverDefaults struct {
 }
 
 type GroupService struct {
-	repo             *repository.GroupRepo
-	modelRepo        *repository.ModelRepo
-	failoverDefaults *FailoverDefaults
+	repo              *repository.GroupRepo
+	modelRepo         *repository.ModelRepo
+	failoverDefaults  *FailoverDefaults
+	modelTierRepo     ModelTierRepository
+	snapshotPublisher BudgetConfigPublisher
+}
+
+func (s *GroupService) WithBudgetTierSnapshotPublisher(p BudgetConfigPublisher) *GroupService {
+	s.snapshotPublisher = p
+	return s
+}
+
+func (s *GroupService) WithModelTierRepo(repo ModelTierRepository) *GroupService {
+	s.modelTierRepo = repo
+	return s
+}
+
+func (s *GroupService) SetBudgetTier(ctx context.Context, groupID uint, tierID *uuid.UUID, reason string) error {
+	if strings.TrimSpace(reason) == "" {
+		return ErrReasonRequired
+	}
+	if err := s.validateBudgetTier(ctx, tierID); err != nil {
+		return err
+	}
+	if err := s.repo.SetBudgetTier(ctx, groupID, tierID); err != nil {
+		if errors.Is(err, repository.ErrGroupNotFound) {
+			return ErrGroupNotFound
+		}
+		return err
+	}
+	if s.snapshotPublisher != nil {
+		if err := s.snapshotPublisher.MarkDirtyAndPublish(ctx); err != nil {
+			slog.ErrorContext(ctx, "budget snapshot publish failed after group tier write",
+				"group_id", groupID, "error", err)
+			return fmt.Errorf("%w: %v", ErrBudgetConfigSyncPending, err)
+		}
+	}
+	return nil
+}
+
+func (s *GroupService) SetBudgetTierBatch(ctx context.Context, groupIDs []uint, tierID *uuid.UUID, reason string) error {
+	if strings.TrimSpace(reason) == "" {
+		return ErrReasonRequired
+	}
+	if err := s.validateBudgetTier(ctx, tierID); err != nil {
+		return err
+	}
+	if err := s.repo.SetBudgetTierBatch(ctx, groupIDs, tierID); err != nil {
+		if errors.Is(err, repository.ErrGroupNotFound) {
+			return ErrGroupNotFound
+		}
+		return err
+	}
+	if s.snapshotPublisher != nil {
+		if err := s.snapshotPublisher.MarkDirtyAndPublish(ctx); err != nil {
+			slog.ErrorContext(ctx, "budget snapshot publish failed after group tier batch write",
+				"group_ids", groupIDs, "error", err)
+			return fmt.Errorf("%w: %v", ErrBudgetConfigSyncPending, err)
+		}
+	}
+	return nil
+}
+
+func (s *GroupService) validateBudgetTier(ctx context.Context, tierID *uuid.UUID) error {
+	if tierID == nil {
+		return nil
+	}
+	if s.modelTierRepo == nil {
+		return ErrModelTierNotFound
+	}
+	tier, err := s.modelTierRepo.FindByID(ctx, *tierID)
+	if err != nil || tier == nil || tier.ArchivedAt != nil {
+		return ErrModelTierNotFound
+	}
+	if !tier.Enabled {
+		return ErrModelTierDisabled
+	}
+	return nil
 }
 
 func NewGroupService(repo *repository.GroupRepo, modelRepo *repository.ModelRepo) *GroupService {

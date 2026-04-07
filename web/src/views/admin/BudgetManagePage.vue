@@ -17,6 +17,34 @@
         </el-button>
     </div>
     </header>
+    <nav v-if="drillScopeType" class="budget-breadcrumbs" aria-label="预算层级导航">
+      <button type="button" @click="clearDrilldown">预算总览</button>
+      <template v-for="(crumb, index) in drillBreadcrumbs" :key="`${crumb.scopeType}:${crumb.scopeId}`">
+        <span aria-hidden="true">/</span>
+        <span v-if="index === drillBreadcrumbs.length - 1">{{ crumb.label }}</span>
+        <button v-else type="button" @click="navigateBreadcrumb(crumb)">{{ crumb.label }}</button>
+      </template>
+    </nav>
+
+    <el-tabs v-model="activeBudgetTab" aria-label="预算管理视图">
+      <el-tab-pane label="预算总览" name="overview" />
+      <el-tab-pane name="risks">
+        <template #label>风险事件 <el-badge v-if="riskCount" :value="riskCount" /></template>
+      </el-tab-pane>
+    </el-tabs>
+    <BudgetRiskEventsSection v-if="activeBudgetTab === 'risks'" @view-budget="showRiskBudget" />
+    <section v-if="activeBudgetTab === 'overview' && drillScopeType === 'member'" class="member-terminal-view">
+      <h2>{{ selectedMemberItem?.label || drillLabel || drillScopeId }}</h2>
+      <el-descriptions :column="3" border>
+        <el-descriptions-item label="月额度">{{ displayAmount(selectedMemberItem?.amount_usd ?? -1) }}</el-descriptions-item>
+        <el-descriptions-item label="周额度">{{ displayAmount(selectedMemberItem?.weekly_amount_usd ?? -1) }}</el-descriptions-item>
+        <el-descriptions-item label="日额度">{{ displayAmount(selectedMemberItem?.daily_amount_usd ?? -1) }}</el-descriptions-item>
+        <el-descriptions-item label="已用">{{ formatUSD(selectedMemberItem?.used_usd || 0) }}</el-descriptions-item>
+      </el-descriptions>
+      <el-button v-if="selectedMemberItem" type="primary" @click="openMemberQuota(selectedMemberItem)">调整成员额度</el-button>
+    </section>
+    <div v-show="activeBudgetTab === 'overview' && drillScopeType !== 'member'">
+    <BudgetTierLimitsPanel v-if="activeAllocationId" :allocation-id="activeAllocationId" />
 
     <!-- KPI 条：角色自适应列数 -->
     <section
@@ -314,7 +342,7 @@
           <el-table-column label="工作室" min-width="180">
             <template #default="{ row }">
               <div class="scope-cell">
-                <span class="scope-dot" :style="{ background: SCOPE_TYPE_COLORS[row.scope_type] }" />
+                <span class="scope-dot" :style="{ background: SCOPE_TYPE_COLORS[row.scope_type as BudgetScopeType] }" />
                 <span class="scope-name">{{ displayScopeName(row) }}</span>
               </div>
             </template>
@@ -448,7 +476,7 @@
           <!-- 操作 -->
           <el-table-column label="操作" width="152" align="center">
             <template #default="{ row }">
-              <el-button size="small" type="primary" plain @click="openDeptMemberDrawer(row)">查看成员</el-button>
+              <el-button size="small" type="primary" plain @click="navigateToDeptMembers(row)">查看成员</el-button>
               <el-button size="small" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: row.deptId, label: row.label })">配置</el-button>
             </template>
           </el-table-column>
@@ -659,9 +687,14 @@
               · 按近7天消耗降序
             </p>
         </div>
-          <el-button size="small" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: selectedDeptFilter || currentDeptId || '', label: selectedDeptFilter || currentDeptId || '' })">
-            配置配额
-          </el-button>
+          <div>
+            <el-button v-if="selectedBatchBudgets.length" size="small" type="primary" @click="batchWizardVisible = true">
+              批量调整（{{ selectedBatchBudgets.length }}）
+            </el-button>
+            <el-button size="small" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: selectedDeptFilter || currentDeptId || '', label: selectedDeptFilter || currentDeptId || '' })">
+              配置配额
+            </el-button>
+          </div>
         </div>
         <el-table
           v-loading="loading"
@@ -670,7 +703,9 @@
           stripe
           size="small"
           :empty-text="'暂无成员配额数据，请前往部门节点配置'"
+          @selection-change="selectedBatchBudgets = $event"
         >
+          <el-table-column type="selection" width="46" :selectable="(row: BudgetItem) => !!row.allocation_id" />
           <el-table-column label="成员" min-width="160">
             <template #default="{ row }">
               <div class="scope-cell">
@@ -733,236 +768,6 @@
       </div>
     </template>
   </div>
-
-  <!-- ── 下钻侧抽屉：工作室 → 部门 → 成员（admin 专用）──────────────────── -->
-  <el-drawer
-    v-model="drawerVisible"
-    direction="rtl"
-    size="480px"
-    :destroy-on-close="false"
-    class="drill-drawer"
-  >
-    <template #header>
-      <div class="drawer-header">
-        <div class="drawer-header-info">
-          <span class="drawer-header-title">{{ drawerStudio?.label ?? '工作室' }}</span>
-          <span class="drawer-header-sub">部门预算总览</span>
-        </div>
-        <el-button
-          size="small"
-          type="primary"
-          plain
-          @click="goOrgFromDrawer('studio', drawerStudio!.scope_id, drawerStudio?.label)"
-        >
-          配置预算 →
-        </el-button>
-      </div>
-    </template>
-
-    <!-- 加载中 -->
-    <div v-if="drawerLoading" v-loading="true" style="height:200px" />
-
-    <!-- 部门列表 -->
-    <div v-else class="drawer-dept-list">
-      <div v-if="!drawerDepts.length" class="drawer-empty">该工作室暂无部门预算数据</div>
-
-      <div
-        v-for="dept in drawerDepts"
-        :key="dept.deptId"
-        class="drawer-dept-item"
-      >
-        <!-- 部门行头 -->
-        <div class="drawer-dept-head" @click="toggleDeptMembers(dept)">
-          <div class="drawer-dept-left">
-            <span
-              class="risk-indicator"
-              :class="`risk-${budgetColorLevel(Math.max(dept.daily?.used_ratio || 0, dept.service?.used_ratio || 0))}`"
-            />
-            <span class="drawer-dept-name">{{ dept.label }}</span>
-          </div>
-          <div class="drawer-dept-right">
-            <span class="drawer-dept-total">
-              {{ displayAmount((dept.daily?.amount_usd || 0) + (dept.service?.amount_usd || 0)) }}
-            </span>
-            <el-button
-              link
-              size="small"
-              @click.stop="goOrgFromDrawer('dept', dept.deptId, dept.label)"
-            >
-              配置
-            </el-button>
-            <span class="drawer-expand-icon">{{ dept.expanded ? '▲' : '▼' }}</span>
-          </div>
-        </div>
-
-        <!-- 池详情（常显） -->
-        <div class="drawer-dept-pools">
-          <div v-if="dept.daily" class="drawer-pool-row">
-            <span class="scope-dot" :style="{ background: SCOPE_TYPE_COLORS['dept_daily'] }" />
-            <span class="drawer-pool-label">日常池</span>
-            <span class="drawer-pool-amount">{{ displayAmount(dept.daily.amount_usd) }}</span>
-            <el-progress
-              style="flex:1; min-width:60px"
-              :percentage="Math.min(Math.round((dept.daily.used_ratio || 0) * 100), 100)"
-              :stroke-width="4"
-              :color="riskColor(dept.daily.used_ratio || 0)"
-              :show-text="false"
-            />
-            <el-tag :type="budgetColorLevel(dept.daily.used_ratio || 0)" size="small">
-              {{ statusText(dept.daily.used_ratio || 0) }}
-            </el-tag>
-          </div>
-          <div v-if="dept.service" class="drawer-pool-row">
-            <span class="scope-dot" :style="{ background: SCOPE_TYPE_COLORS['dept_service'] }" />
-            <span class="drawer-pool-label">服务池</span>
-            <span class="drawer-pool-amount">{{ displayAmount(dept.service.amount_usd) }}</span>
-            <el-progress
-              style="flex:1; min-width:60px"
-              :percentage="Math.min(Math.round((dept.service.used_ratio || 0) * 100), 100)"
-              :stroke-width="4"
-              :color="riskColor(dept.service.used_ratio || 0)"
-              :show-text="false"
-            />
-            <el-tag :type="budgetColorLevel(dept.service.used_ratio || 0)" size="small">
-              {{ statusText(dept.service.used_ratio || 0) }}
-            </el-tag>
-          </div>
-        </div>
-
-        <!-- 成员展开区 -->
-        <div v-if="dept.expanded" class="drawer-members">
-          <div v-if="dept.membersLoading" v-loading="true" style="height:60px" />
-          <template v-else>
-            <div v-if="!dept.members.length" class="drawer-empty-sm">暂无单独配额成员</div>
-            <div
-              v-for="member in dept.members"
-              :key="member.scope_id"
-              class="drawer-member-row"
-            >
-              <span class="drawer-member-name">{{ member.label || member.scope_id }}</span>
-              <span class="drawer-member-amount">{{ displayAmount(member.amount_usd) }}</span>
-              <el-progress
-                style="flex:1; min-width:50px; max-width:90px"
-                :percentage="Math.min(Math.round((member.used_ratio || 0) * 100), 100)"
-                :stroke-width="3"
-                :color="riskColor(member.used_ratio || 0)"
-                :show-text="false"
-              />
-            </div>
-          </template>
-          <div class="drawer-member-footer">
-            <el-button
-              size="small"
-              link
-              type="primary"
-              @click="goOrgFromDrawer('dept', dept.deptId, dept.label)"
-            >
-              调整成员配额 →
-            </el-button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </el-drawer>
-
-  <!-- ── 成员配额抽屉（studio_admin 专用）──────────────────────────────────── -->
-  <el-drawer
-    v-model="deptMemberDrawerVisible"
-    direction="rtl"
-    size="440px"
-    :destroy-on-close="false"
-    class="drill-drawer"
-  >
-    <template #header>
-      <div class="drawer-header">
-        <div class="drawer-header-info">
-          <span class="drawer-header-title">{{ deptMemberDrawerDept?.label ?? '部门' }}</span>
-          <span class="drawer-header-sub">成员配额总览</span>
-        </div>
-        <el-button
-          v-if="deptMemberDrawerDept"
-          size="small"
-          type="primary"
-          plain
-          @click="goOrgFromDeptDrawer('dept', deptMemberDrawerDept.deptId, deptMemberDrawerDept.label)"
-        >
-          配置预算 →
-        </el-button>
-      </div>
-    </template>
-
-    <!-- 部门池摘要 -->
-    <div v-if="deptMemberDrawerDept" class="drawer-dept-summary">
-      <div v-if="deptMemberDrawerDept.daily" class="drawer-pool-row">
-        <span class="scope-dot" :style="{ background: SCOPE_TYPE_COLORS['dept_daily'] }" />
-        <span class="drawer-pool-label">日常池</span>
-        <span class="drawer-pool-amount">{{ displayAmount(deptMemberDrawerDept.daily.amount_usd) }}</span>
-        <el-progress
-          style="flex:1; min-width:60px"
-          :percentage="Math.min(Math.round((deptMemberDrawerDept.daily.used_ratio || 0) * 100), 100)"
-          :stroke-width="4"
-          :color="riskColor(deptMemberDrawerDept.daily.used_ratio || 0)"
-          :show-text="false"
-        />
-        <el-tag :type="budgetColorLevel(deptMemberDrawerDept.daily.used_ratio || 0)" size="small">
-          {{ statusText(deptMemberDrawerDept.daily.used_ratio || 0) }}
-        </el-tag>
-      </div>
-      <div v-if="deptMemberDrawerDept.service" class="drawer-pool-row">
-        <span class="scope-dot" :style="{ background: SCOPE_TYPE_COLORS['dept_service'] }" />
-        <span class="drawer-pool-label">服务池</span>
-        <span class="drawer-pool-amount">{{ displayAmount(deptMemberDrawerDept.service.amount_usd) }}</span>
-        <el-progress
-          style="flex:1; min-width:60px"
-          :percentage="Math.min(Math.round((deptMemberDrawerDept.service.used_ratio || 0) * 100), 100)"
-          :stroke-width="4"
-          :color="riskColor(deptMemberDrawerDept.service.used_ratio || 0)"
-          :show-text="false"
-        />
-        <el-tag :type="budgetColorLevel(deptMemberDrawerDept.service.used_ratio || 0)" size="small">
-          {{ statusText(deptMemberDrawerDept.service.used_ratio || 0) }}
-        </el-tag>
-      </div>
-    </div>
-
-    <div class="drawer-section-title">
-      单独配额成员
-      <span class="drawer-section-count">{{ deptMemberDrawerLoading ? '…' : deptMemberDrawerMembers.length }}</span>
-    </div>
-
-    <div v-if="deptMemberDrawerLoading" v-loading="true" style="height:120px" />
-
-    <div v-else class="drawer-dept-list">
-      <div v-if="!deptMemberDrawerMembers.length" class="drawer-empty">
-        该部门暂无单独配额成员，成员共享部门预算池
-      </div>
-      <div
-        v-for="member in deptMemberDrawerMembers"
-        :key="member.scope_id"
-        class="drawer-member-card"
-      >
-        <div class="drawer-member-card-head">
-          <span class="drawer-member-name">{{ member.label || member.scope_id }}</span>
-          <span class="drawer-member-amount">{{ displayAmount(member.amount_usd) }}</span>
-        </div>
-        <el-progress
-          :percentage="Math.min(Math.round((member.used_ratio || 0) * 100), 100)"
-          :stroke-width="5"
-          :color="riskColor(member.used_ratio || 0)"
-          :show-text="false"
-          style="margin-top:4px"
-        />
-        <div class="drawer-member-card-meta">
-          <el-tag :type="budgetColorLevel(member.used_ratio || 0)" size="small">
-            {{ statusText(member.used_ratio || 0) }}
-          </el-tag>
-          <span v-if="member.daily_amount_usd > 0" class="drawer-member-limits">
-            日限 {{ displayAmount(member.daily_amount_usd) }}
-          </span>
-        </div>
-      </div>
-    </div>
-  </el-drawer>
 
   <!-- ── 分配明细弹窗 ──────────────────────────────────────────────────────── -->
   <el-dialog
@@ -1061,6 +866,15 @@
         <el-input-number v-model="companyBudgetForm.daily" :min="-1" :precision="2" controls-position="right" style="width:100%" />
         <div style="font-size:11px;color:var(--el-text-color-placeholder);margin-top:3px">-1 表示不限</div>
       </el-form-item>
+      <el-form-item label="生效方式">
+        <el-radio-group v-model="companyBudgetForm.effectiveMode">
+          <el-radio value="immediate">立即生效</el-radio>
+          <el-radio value="next_period">下周期生效</el-radio>
+        </el-radio-group>
+      </el-form-item>
+      <el-form-item label="调整原因" required>
+        <el-input v-model="companyBudgetForm.reason" type="textarea" :rows="2" maxlength="200" show-word-limit />
+      </el-form-item>
     </el-form>
       <template #footer>
       <el-button @click="companyBudgetDialogVisible = false">取消</el-button>
@@ -1077,6 +891,7 @@
     :child-scope-ids="budgetDrawerChildIds"
     :can-edit="budgetDrawerCanEdit"
     :can-edit-self="budgetDrawerCanEditSelf"
+    @navigate="handleBudgetNavigate"
   />
 
   <!-- ── 成员配额快速编辑弹窗（dept_admin 专用）── -->
@@ -1086,19 +901,33 @@
     :can-edit="true"
     @refresh="load"
   />
+  <BudgetBatchAdjustWizard
+    v-if="drillScopeType !== 'member'"
+    v-model="batchWizardVisible"
+    :items="selectedBatchBudgets"
+    :tiers="batchModelTiers"
+    @applied="load"
+  />
+    </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getBudgetContext, getBudgetList, rebuildBudgetCounters, setBudget } from '@/services/control-plane'
+import { adjustBudget, getBudgetContext, getBudgetList, listModelTiers, previewBudgetAdjustment, rebuildBudgetCounters } from '@/services/control-plane'
+import { getBudgetRiskSummary } from '@/services/control-plane'
 import http from '@/services/http'
 import { useAuthStore } from '@/stores/auth'
 import type { BudgetContextItem, BudgetItem, BudgetScopeType, BudgetView } from '@/types/budget'
 import { SCOPE_TYPE_COLORS, SCOPE_TYPE_LABELS } from '@/types/budget'
+import type { BudgetRiskEvent } from '@/types/budget-risk'
+import BudgetRiskEventsSection from '@/components/budget/BudgetRiskEventsSection.vue'
+import BudgetTierLimitsPanel from '@/components/budget/BudgetTierLimitsPanel.vue'
 import { budgetColorLevel, formatUSD } from '@/utils/format'
 import BudgetEditDrawer from '@/components/budget/BudgetEditDrawer.vue'
+import BudgetBatchAdjustWizard from '@/components/budget/BudgetBatchAdjustWizard.vue'
+import type { ModelTier } from '@/types/model-tier'
 import MemberQuotaDialog from '@/components/budget/MemberQuotaDialog.vue'
 
 // ─── 类型扩展：enrichedMember = BudgetItem + 7天用量字段 ──────────────────────
@@ -1110,10 +939,93 @@ interface EnrichedMember extends BudgetItem {
 }
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
+const riskCount = ref(0)
+const activeBudgetTab = computed({
+  get: () => route.query.tab === 'risks' ? 'risks' : 'overview',
+  set: (tab: string) => router.replace({ query: { ...route.query, tab: tab === 'risks' ? 'risks' : undefined } }),
+})
+function showRiskBudget(event: BudgetRiskEvent) {
+  router.replace({ query: {
+    tab: undefined,
+    scope_type: event.scope_type,
+    scope_id: event.scope_id,
+  } })
+}
 const loading = ref(false)
 const items = ref<BudgetItem[]>([])
+const selectedBatchBudgets = ref<BudgetItem[]>([])
+const batchWizardVisible = ref(false)
+const batchModelTiers = ref<ModelTier[]>([])
+const selectedMemberItem = computed(() =>
+  drillScopeType.value === 'member'
+    ? items.value.find(item => item.scope_type === 'member' && item.scope_id === drillScopeId.value) || null
+    : null,
+)
+const activeAllocationId = computed(() => {
+  const scopeType = typeof route.query.scope_type === 'string' ? route.query.scope_type : undefined
+  const scopeID = typeof route.query.scope_id === 'string' ? route.query.scope_id : undefined
+  return items.value.find(item => (!scopeType || item.scope_type === scopeType) && (!scopeID || item.scope_id === scopeID))?.allocation_id || ''
+})
 const contextItems = ref<BudgetContextItem[]>([])
+const drillScopeType = computed(() => typeof route.query.scope_type === 'string' ? route.query.scope_type : '')
+const drillScopeId = computed(() => typeof route.query.scope_id === 'string' ? route.query.scope_id : '')
+const drillLabel = computed(() => typeof route.query.scope_label === 'string' ? route.query.scope_label : '')
+type DrillCrumb = { scopeType: 'studio' | 'dept' | 'member'; scopeId: string; label: string }
+const drillBreadcrumbs = computed<DrillCrumb[]>(() => {
+  const result: DrillCrumb[] = []
+  for (const scopeType of ['studio', 'dept', 'member'] as const) {
+    const scopeId = typeof route.query[`${scopeType}_id`] === 'string' ? String(route.query[`${scopeType}_id`]) : ''
+    if (!scopeId) continue
+    const label = typeof route.query[`${scopeType}_label`] === 'string'
+      ? String(route.query[`${scopeType}_label`])
+      : scopeId
+    result.push({ scopeType, scopeId, label })
+  }
+  if (!result.length && drillScopeType.value && drillScopeId.value) {
+    result.push({
+      scopeType: drillScopeType.value as DrillCrumb['scopeType'],
+      scopeId: drillScopeId.value,
+      label: drillLabel.value || drillScopeId.value,
+    })
+  }
+  return result
+})
+function drillTo(scopeType: 'studio' | 'dept' | 'member', scopeId: string, label?: string) {
+  const query = {
+    ...route.query,
+    tab: undefined,
+    scope_type: scopeType,
+    scope_id: scopeId,
+    scope_label: label || undefined,
+    [`${scopeType}_id`]: scopeId,
+    [`${scopeType}_label`]: label || undefined,
+  } as Record<string, any>
+  if (scopeType === 'studio') {
+    query.dept_id = query.dept_label = query.member_id = query.member_label = undefined
+  } else if (scopeType === 'dept') {
+    query.member_id = query.member_label = undefined
+  }
+  router.push({ query })
+}
+function navigateBreadcrumb(crumb: DrillCrumb) {
+  drillTo(crumb.scopeType, crumb.scopeId, crumb.label)
+}
+function clearDrilldown() {
+  router.push({ query: {
+    ...route.query,
+    scope_type: undefined,
+    scope_id: undefined,
+    scope_label: undefined,
+    studio_id: undefined,
+    studio_label: undefined,
+    dept_id: undefined,
+    dept_label: undefined,
+    member_id: undefined,
+    member_label: undefined,
+  } })
+}
 const memberUsage7d = ref<Map<string, number>>(new Map())
 
 // ─── 角色辅助 ─────────────────────────────────────────────────────────────────
@@ -1183,10 +1095,6 @@ const chainDistribution = computed<{ childLabel: string; allocated: number; pct:
   },
 )
 
-// 兼容旧模板引用（暂保留，不对外使用）
-const visibleContextItems = computed(() => (chainCurrentNode.value ? [chainCurrentNode.value] : []))
-const enrichedContextItems = visibleContextItems
-
 // 分配明细弹窗
 const showChainDetail = ref(false)
 interface ChainDetailRow {
@@ -1252,6 +1160,8 @@ const riskOptions = [
 
 // ─── 视图映射 ─────────────────────────────────────────────────────────────────
 const overviewView = computed<BudgetView>(() => {
+  if (drillScopeType.value === 'studio') return 'studio'
+  if (drillScopeType.value === 'dept' || drillScopeType.value === 'member') return 'department'
   if (auth.effectiveRole === 'admin') return 'company'
   if (auth.effectiveRole === 'studio_admin') return 'studio'
   return 'department'
@@ -1301,10 +1211,6 @@ const companyAllocRatio = computed(() => {
   return Math.min(companyAllocated.value / companyPoolItem.value.amount_usd, 1)
 })
 
-// dept_admin 专属 KPI
-const totalMemberBudget = computed(() =>
-  memberTableItems.value.reduce((sum, item) => sum + Math.max(item.amount_usd || 0, 0), 0),
-)
 const totalCost7d = computed(() => {
   let total = 0
   memberUsage7d.value.forEach(v => (total += v))
@@ -1500,24 +1406,15 @@ const riskMembers = computed(() =>
   ),
 )
 
-// ─── 范围分布 ─────────────────────────────────────────────────────────────────
-const scopeBreakdown = computed(() => {
-  const map = new Map<BudgetScopeType, { type: BudgetScopeType; amount: number; used: number }>()
-  for (const item of items.value) {
-    const row = map.get(item.scope_type) || { type: item.scope_type, amount: 0, used: 0 }
-    row.amount += Math.max(item.amount_usd || 0, 0)
-    row.used += item.used_usd || 0
-    map.set(item.scope_type, row)
-  }
-  return Array.from(map.values()).sort((a, b) => b.used - a.used)
-})
-
 // ─── 数据加载 ─────────────────────────────────────────────────────────────────
 async function load() {
   loading.value = true
   try {
+    const budgetRequest = drillScopeType.value === 'member'
+      ? getBudgetList('member', drillScopeId.value)
+      : getBudgetList(undefined, drillScopeId.value || undefined, overviewView.value)
     const [budgetItems, contexts] = await Promise.all([
-      getBudgetList(undefined, undefined, overviewView.value),
+      budgetRequest,
       getBudgetContext().catch(() => []),
     ])
     items.value = budgetItems
@@ -1590,14 +1487,6 @@ function statusText(ratio: number) {
   if (ratio >= 1) return '已超额'
   if (ratio >= 0.8) return '预警'
   return '正常'
-}
-
-// admin/studio_admin 表格行类名（风险竖条）
-function riskRowClass({ row }: { row: BudgetItem }) {
-  const ratio = row.used_ratio || 0
-  if (ratio >= 1) return 'row-danger'
-  if (ratio >= 0.8) return 'row-warning'
-  return ''
 }
 
 // dept_admin 成员表格行类名
@@ -1673,7 +1562,13 @@ async function rebuildCounters() {
 // ─── 公司预算池设置 ──────────────────────────────────────────────────────────
 const companyBudgetDialogVisible = ref(false)
 const companyBudgetSaving = ref(false)
-const companyBudgetForm = ref({ amount: 0, weekly: -1, daily: -1 })
+const companyBudgetForm = ref({
+  amount: 0,
+  weekly: -1,
+  daily: -1,
+  reason: '',
+  effectiveMode: 'immediate' as 'immediate' | 'next_period',
+})
 
 function openCompanyBudgetDialog() {
   const item = companyPoolItem.value
@@ -1681,20 +1576,60 @@ function openCompanyBudgetDialog() {
     amount: item ? item.amount_usd : 0,
     weekly: item ? item.weekly_amount_usd : -1,
     daily: item ? item.daily_amount_usd : -1,
+    reason: '',
+    effectiveMode: 'immediate',
   }
   companyBudgetDialogVisible.value = true
 }
 
 async function saveCompanyBudget() {
+  if (!companyBudgetForm.value.reason.trim()) {
+    ElMessage.warning('请填写调整原因')
+    return
+  }
   companyBudgetSaving.value = true
   try {
-    await setBudget({
+    const targets = [
+      { period_type: 'monthly' as const, value: companyBudgetForm.value.amount },
+      { period_type: 'weekly' as const, value: companyBudgetForm.value.weekly },
+      { period_type: 'daily' as const, value: companyBudgetForm.value.daily },
+    ].filter(item => item.value >= 0)
+    const previews = await Promise.all(targets.map(item => previewBudgetAdjustment({
       scope_type: 'company',
       scope_id: 'GLOBAL',
-      amount_usd: companyBudgetForm.value.amount,
-      weekly_amount_usd: companyBudgetForm.value.weekly,
-      daily_amount_usd: companyBudgetForm.value.daily,
-    })
+      period_type: item.period_type,
+      target_limit_usd: item.value.toFixed(6),
+      effective_mode: companyBudgetForm.value.effectiveMode,
+      reason: companyBudgetForm.value.reason.trim(),
+    })))
+    if (previews.some(item => item.stale)) {
+      ElMessage.warning('用量数据已过期，请刷新后重新预览')
+      return
+    }
+    if (previews.some(item => item.zero_block)) {
+      await ElMessageBox.confirm('$0 将阻断后续请求，是否继续？', '确认 $0 风险', { type: 'warning' })
+    }
+    if (previews.some(item => item.below_used)) {
+      await ElMessageBox.confirm('新额度低于当前已用量，是否继续？', '确认低于已用风险', { type: 'warning' })
+    }
+    if (previews.some(item => item.replaces_pending_schedule)) {
+      await ElMessageBox.confirm('本次调整将替换已有排期，是否继续？', '确认替换排期', { type: 'warning' })
+    }
+    if (!previews.some(item => item.zero_block || item.below_used || item.replaces_pending_schedule)) {
+      await ElMessageBox.confirm('预览完成，确认应用公司预算调整？', '确认预算调整', { type: 'info' })
+    }
+    await Promise.all(targets.map((item, index) => adjustBudget({
+      scope_type: 'company',
+      scope_id: 'GLOBAL',
+      period_type: item.period_type,
+      target_limit_usd: item.value.toFixed(6),
+      effective_mode: companyBudgetForm.value.effectiveMode,
+      reason: companyBudgetForm.value.reason.trim(),
+      confirm_zero_block: previews[index].zero_block,
+      confirm_below_used: previews[index].below_used,
+      confirm_replace_schedule: previews[index].replaces_pending_schedule,
+      preview_version: previews[index].preview_version,
+    })))
     ElMessage.success('公司预算池已更新')
     companyBudgetDialogVisible.value = false
     await load()
@@ -1752,121 +1687,50 @@ function goExpansion() {
   router.push('/admin/expansion-requests')
 }
 
-// 供分配明细弹窗、其他场景下钻使用
-function drillDown(scopeType: string, scopeId: string, label?: string) {
-  showChainDetail.value = false
-  openBudgetDrawer({ scope_type: scopeType, scope_id: scopeId, label })
+function openStudioDrawer(studio: BudgetItem) {
+  drillTo('studio', studio.scope_id, studio.label)
 }
-
-// ─── 下钻侧抽屉（admin 专用：工作室 → 部门 → 成员）──────────────────────────
-const drawerVisible = ref(false)
-const drawerStudio = ref<BudgetItem | null>(null)
-const drawerLoading = ref(false)
-
-// 部门行（来自 view=studio&scope_id=<studioId>）
-interface DrawerDeptRow {
-  deptId: string
-  label: string
-  daily: BudgetItem | null
-  service: BudgetItem | null
-  members: BudgetItem[]      // 展开后加载的成员配额
-  membersLoaded: boolean
-  membersLoading: boolean
-  expanded: boolean
-}
-const drawerDepts = ref<DrawerDeptRow[]>([])
-
-async function openStudioDrawer(studio: BudgetItem) {
-  drawerStudio.value = studio
-  drawerVisible.value = true
-  drawerDepts.value = []
-  drawerLoading.value = true
-  try {
-    const raw = await getBudgetList(undefined, studio.scope_id, 'studio')
-    // 按部门分组（dept_daily / dept_service）
-    const map = new Map<string, DrawerDeptRow>()
-    for (const item of raw) {
-      if (item.scope_type !== 'dept_daily' && item.scope_type !== 'dept_service') continue
-      const key = item.scope_id
-      if (!map.has(key)) {
-        map.set(key, {
-          deptId: key,
-          label: item.label || key,
-          daily: null,
-          service: null,
-          members: [],
-          membersLoaded: false,
-          membersLoading: false,
-          expanded: false,
-        })
-      }
-      const entry = map.get(key)!
-      if (item.scope_type === 'dept_daily') entry.daily = item
-      if (item.scope_type === 'dept_service') entry.service = item
-    }
-    drawerDepts.value = Array.from(map.values()).sort(
-      (a, b) =>
-        Math.max(b.daily?.used_ratio || 0, b.service?.used_ratio || 0) -
-        Math.max(a.daily?.used_ratio || 0, a.service?.used_ratio || 0),
-    )
-  } finally {
-    drawerLoading.value = false
-  }
-}
-
-async function toggleDeptMembers(row: DrawerDeptRow) {
-  if (row.expanded) {
-    row.expanded = false
-    return
-  }
-  row.expanded = true
-  if (row.membersLoaded) return
-  row.membersLoading = true
-  try {
-    const raw = await getBudgetList(undefined, row.deptId, 'department')
-    row.members = raw.filter(i => i.scope_type === 'member')
-    row.membersLoaded = true
-  } finally {
-    row.membersLoading = false
-  }
-}
-
-function goOrgFromDrawer(scopeType: string, scopeId: string, label?: string) {
-  drawerVisible.value = false
-  openBudgetDrawer({ scope_type: scopeType, scope_id: scopeId, label })
-}
-
-// ─── 成员配额抽屉（studio_admin 专用：部门 → 成员）──────────────────────────
-const deptMemberDrawerVisible = ref(false)
-const deptMemberDrawerDept = ref<StudioDeptRow | null>(null)
-const deptMemberDrawerLoading = ref(false)
-const deptMemberDrawerMembers = ref<BudgetItem[]>([])
 
 function deptRowClassName({ row }: { row: StudioDeptRow }): string {
   return row.maxRatio >= 1 ? 'row-danger' : row.maxRatio >= 0.8 ? 'row-warning' : ''
 }
 
-async function openDeptMemberDrawer(deptRow: StudioDeptRow) {
-  deptMemberDrawerDept.value = deptRow
-  deptMemberDrawerVisible.value = true
-  deptMemberDrawerMembers.value = []
-  deptMemberDrawerLoading.value = true
-  try {
-    const raw = await getBudgetList(undefined, deptRow.deptId, 'department')
-    deptMemberDrawerMembers.value = raw
-      .filter(i => i.scope_type === 'member')
-      .sort((a, b) => (b.amount_usd || 0) - (a.amount_usd || 0))
-  } finally {
-    deptMemberDrawerLoading.value = false
+function navigateToDeptMembers(deptRow: StudioDeptRow) {
+  drillTo('dept', deptRow.deptId, deptRow.label)
+}
+
+function handleBudgetNavigate(payload: { scopeType: 'dept' | 'member'; scopeId: string; label: string }) {
+  budgetDrawerVisible.value = false
+  if (payload.scopeType === 'dept' && budgetDrawerScopeType.value === 'studio') {
+    router.push({ query: {
+      ...route.query,
+      scope_type: 'dept', scope_id: payload.scopeId, scope_label: payload.label,
+      studio_id: budgetDrawerScopeId.value, studio_label: budgetDrawerTitle.value,
+      dept_id: payload.scopeId, dept_label: payload.label,
+      member_id: undefined, member_label: undefined,
+    } })
+    return
   }
+  if (payload.scopeType === 'member' && budgetDrawerScopeType.value === 'dept') {
+    router.push({ query: {
+      ...route.query,
+      scope_type: 'member', scope_id: payload.scopeId, scope_label: payload.label,
+      dept_id: budgetDrawerScopeId.value, dept_label: budgetDrawerTitle.value,
+      member_id: payload.scopeId, member_label: payload.label,
+    } })
+    return
+  }
+  drillTo(payload.scopeType, payload.scopeId, payload.label)
 }
 
-function goOrgFromDeptDrawer(scopeType: string, scopeId: string, label?: string) {
-  deptMemberDrawerVisible.value = false
-  openBudgetDrawer({ scope_type: scopeType, scope_id: scopeId, label })
-}
-
+watch(() => [route.query.scope_type, route.query.scope_id], () => load())
 onMounted(load)
+onMounted(async () => {
+  try { batchModelTiers.value = await listModelTiers(false) } catch { batchModelTiers.value = [] }
+})
+onMounted(async () => {
+  try { riskCount.value = (await getBudgetRiskSummary()).total } catch { riskCount.value = 0 }
+})
 </script>
 
 <style scoped>
@@ -2684,206 +2548,4 @@ onMounted(load)
   }
 }
 
-/* ── 下钻侧抽屉 ───────────────────────────────────────────────────────────── */
-.drawer-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  width: 100%;
-}
-.drawer-header-info {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.drawer-header-title {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--el-text-color-primary);
-}
-.drawer-header-sub {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-.drawer-dept-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 4px 0;
-}
-.drawer-empty {
-  text-align: center;
-  padding: 32px;
-  color: var(--el-text-color-placeholder);
-  font-size: 13px;
-}
-.drawer-empty-sm {
-  padding: 8px 0;
-  color: var(--el-text-color-placeholder);
-  font-size: 12px;
-  text-align: center;
-}
-.drawer-dept-item {
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 10px;
-  overflow: hidden;
-  background: var(--el-fill-color-blank);
-}
-.drawer-dept-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 10px 14px;
-  cursor: pointer;
-  user-select: none;
-  background: var(--el-fill-color-light);
-  transition: background 0.15s;
-}
-.drawer-dept-head:hover {
-  background: var(--el-fill-color);
-}
-.drawer-dept-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.drawer-dept-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.drawer-dept-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-.drawer-dept-total {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--el-text-color-primary);
-  font-variant-numeric: tabular-nums;
-}
-.drawer-expand-icon {
-  font-size: 10px;
-  color: var(--el-text-color-placeholder);
-}
-/* 池详情行 */
-.drawer-dept-pools {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px 14px;
-  border-top: 1px solid var(--el-border-color-lighter);
-}
-.drawer-pool-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.drawer-pool-label {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  width: 36px;
-  flex-shrink: 0;
-}
-.drawer-pool-amount {
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-  color: var(--el-text-color-primary);
-  width: 72px;
-  flex-shrink: 0;
-  text-align: right;
-}
-/* 成员展开区 */
-.drawer-members {
-  padding: 8px 14px 10px;
-  border-top: 1px dashed var(--el-border-color-lighter);
-  background: var(--el-fill-color-lighter);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.drawer-member-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.drawer-member-name {
-  font-size: 12px;
-  color: var(--el-text-color-regular);
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.drawer-member-amount {
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  color: var(--el-text-color-primary);
-  width: 64px;
-  text-align: right;
-  flex-shrink: 0;
-}
-.drawer-member-footer {
-  padding-top: 6px;
-  border-top: 1px solid var(--el-border-color-lighter);
-  text-align: right;
-}
-/* dept member drawer 专属 */
-.drawer-dept-summary {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 14px 16px;
-  background: var(--el-fill-color-light);
-  border-radius: 10px;
-  margin-bottom: 16px;
-}
-.drawer-section-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--el-text-color-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 10px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.drawer-section-count {
-  font-size: 11px;
-  padding: 1px 7px;
-  border-radius: 10px;
-  background: var(--el-fill-color);
-  color: var(--el-text-color-secondary);
-  font-weight: 400;
-}
-.drawer-member-card {
-  padding: 12px 14px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 10px;
-  background: var(--el-fill-color-blank);
-  margin-bottom: 8px;
-}
-.drawer-member-card-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 2px;
-}
-.drawer-member-card-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-}
-.drawer-member-limits {
-  font-size: 11px;
-  color: var(--el-text-color-placeholder);
-}
 </style>

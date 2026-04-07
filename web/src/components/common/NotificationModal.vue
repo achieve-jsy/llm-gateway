@@ -60,7 +60,6 @@ const levelIcons: Record<string, string> = { info: '📢', warning: '⚠️', cr
 function levelIcon(l: string) { return levelIcons[l] || '📢' }
 function formatTime(t: string | null) { return t ? new Date(t).toLocaleString('zh-CN') : '-' }
 function truncate(text: string, max: number) { return text.length > max ? text.slice(0, max) + '...' : text }
-}
 
 function toggleExpand(item: Announcement) {
   expandedId.value = expandedId.value === item.id ? '' : item.id

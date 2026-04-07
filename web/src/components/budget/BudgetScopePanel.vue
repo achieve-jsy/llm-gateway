@@ -150,6 +150,7 @@
       </el-table-column>
       <el-table-column label="操作" :width="compact ? 120 : 140" fixed="right" align="center">
         <template #default="{ row }">
+          <el-button v-if="!row.isDefaultPool" link type="info" size="small" @click="navigateToMember(row)">查看</el-button>
           <template v-if="canEdit">
             <el-button v-if="row.isDefaultPool" link type="primary" size="small" @click="openDrawerForMember(row)">设置额度</el-button>
             <template v-else-if="compact">
@@ -245,7 +246,7 @@
                 <template #default="{ row }">
                   <el-button v-if="canEdit" link type="primary" size="small" @click="openDrawer(row)">调额</el-button>
                   <el-button v-else link type="primary" size="small" @click="goExpansion(row)">申请</el-button>
-                  <el-button link type="info" size="small" @click="openDeptMemberDrawer(row)">成员预算</el-button>
+                  <el-button link type="info" size="small" @click="navigateToDept(row)">成员预算</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -313,6 +314,15 @@
           <el-form-item label="日额度（USD，-1 表示不限）">
             <el-input-number v-model="editForm.daily" :min="-1" :precision="2" controls-position="right" style="width:100%" />
           </el-form-item>
+          <el-form-item label="生效方式">
+            <el-radio-group v-model="editEffectiveMode">
+              <el-radio value="immediate">立即生效</el-radio>
+              <el-radio value="next_period">下周期生效</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="调整原因" required>
+            <el-input v-model="editReason" type="textarea" :rows="2" maxlength="200" />
+          </el-form-item>
         </el-form>
         <div class="drawer-hint">保存后预算配置立即生效；已有告警去重会随改额重置。</div>
       </div>
@@ -320,38 +330,6 @@
         <el-button @click="drawerVisible = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="save">保存</el-button>
       </template>
-    </el-drawer>
-
-    <!-- 嵌套抽屉：部门成员预算（工作室视图下钻） -->
-    <el-drawer
-      v-model="deptMemberDrawerVisible"
-      direction="rtl"
-      size="560px"
-      append-to-body
-      :destroy-on-close="true"
-      class="dept-member-drawer"
-    >
-      <template #header>
-        <div class="dept-drawer-header">
-          <el-button link class="dept-drawer-back" @click="deptMemberDrawerVisible = false">
-            <el-icon><ArrowLeft /></el-icon>
-            {{ title }}
-          </el-button>
-          <div class="dept-drawer-title-row">
-            <span class="dept-drawer-title">{{ deptMemberDrawerLabel }}</span>
-            <span class="dept-drawer-sub">成员预算配置</span>
-          </div>
-        </div>
-      </template>
-      <BudgetScopePanel
-        v-if="deptMemberDrawerScopeId"
-        scope-type="dept"
-        :scope-id="deptMemberDrawerScopeId"
-        :title="deptMemberDrawerLabel"
-        :can-edit="canEdit"
-        :can-edit-self="canEdit"
-        compact
-      />
     </el-drawer>
 
     <!-- 添加成员配额弹窗 -->
@@ -387,6 +365,9 @@
           <el-input-number v-model="memberForm.daily" :min="-1" :precision="2" controls-position="right" style="width:100%" />
           <div style="font-size:11px;color:var(--el-text-color-placeholder);margin-top:2px">-1 表示不限</div>
         </el-form-item>
+        <el-form-item label="调整原因" required>
+          <el-input v-model="memberReason" type="textarea" :rows="2" maxlength="200" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="memberDialogVisible = false">取消</el-button>
@@ -400,14 +381,12 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft } from '@element-plus/icons-vue'
-import { getBudgetList, setBudgetBatch, deleteMemberBudget } from '@/services/control-plane'
-import type { BudgetItem, BudgetSetPayload, BudgetView } from '@/types/budget'
+import { adjustBudget, deleteMemberBudget, getBudgetList, previewBudgetAdjustment } from '@/services/control-plane'
+import type { BudgetEffectiveMode, BudgetItem, BudgetView } from '@/types/budget'
 import { SCOPE_TYPE_COLORS, SCOPE_TYPE_LABELS } from '@/types/budget'
 import { formatUSD } from '@/utils/format'
 import { useOrgStore } from '@/stores/org'
 import type { DeptMember } from '@/stores/org'
-import BudgetScopePanel from './BudgetScopePanel.vue'
 
 const props = defineProps<{
   scopeType: 'studio' | 'dept'
@@ -422,6 +401,9 @@ const props = defineProps<{
   /** 紧凑模式：用于嵌套抽屉场景，隐藏顶部 summary，池卡片改为单列行内样式 */
   compact?: boolean
 }>()
+const emit = defineEmits<{
+  navigate: [payload: { scopeType: 'dept' | 'member'; scopeId: string; label: string }]
+}>()
 
 const router = useRouter()
 const loading = ref(false)
@@ -434,6 +416,8 @@ const drawerVisible = ref(false)
 const editingItem = ref<BudgetItem | null>(null)
 const saving = ref(false)
 const editForm = ref({ amount: 0, weekly: -1, daily: -1 })
+const editReason = ref('')
+const editEffectiveMode = ref<BudgetEffectiveMode>('immediate')
 const poolTab = ref('daily')
 
 // 成员配额
@@ -442,9 +426,11 @@ const memberSaving = ref(false)
 const memberSearchLoading = ref(false)
 const memberSearchResults = ref<Array<{ id: string; name: string; email?: string }>>([])
 const memberForm = ref({ userId: '', amount: 100, weekly: -1, daily: -1 })
+const memberReason = ref('')
 
 function openMemberDrawer() {
   memberForm.value = { userId: '', amount: 100, weekly: -1, daily: -1 }
+  memberReason.value = ''
   memberSearchResults.value = []
   memberDialogVisible.value = true
 }
@@ -461,16 +447,13 @@ async function searchMembers(keyword: string) {
 
 async function saveMemberQuota() {
   if (!memberForm.value.userId) { ElMessage.warning('请选择成员'); return }
+  if (!memberReason.value.trim()) { ElMessage.warning('请填写调整原因'); return }
   memberSaving.value = true
   try {
-    const payload: BudgetSetPayload = {
-      scope_type: 'member',
-      scope_id: memberForm.value.userId,
-      amount_usd: memberForm.value.amount,
-      weekly_amount_usd: memberForm.value.weekly,
-      daily_amount_usd: memberForm.value.daily,
-    }
-    await setBudgetBatch([payload])
+    await previewAndApplyScope(
+      'member', memberForm.value.userId, memberForm.value,
+      memberReason.value.trim(), 'immediate',
+    )
     ElMessage.success('成员配额已设置')
     memberDialogVisible.value = false
     await load()
@@ -546,33 +529,6 @@ const allocationRows = computed<MemberRow[]>(() => {
   })
 })
 
-// 工作室视图：按部门分组（同一 scope_id 的 dept_daily + dept_service 归为一组）
-interface DeptGroup {
-  deptId: string
-  deptName: string
-  pools: BudgetItem[]
-}
-const deptGroups = computed<DeptGroup[]>(() => {
-  if (props.scopeType !== 'studio') return []
-  const map = new Map<string, DeptGroup>()
-  for (const item of displayItems.value) {
-    if (item.scope_type !== 'dept_daily' && item.scope_type !== 'dept_service') continue
-    const existing = map.get(item.scope_id)
-    if (existing) {
-      existing.pools.push(item)
-    } else {
-      // 从 label 中提取部门名（label 格式通常为"部门名"或"部门名·xxx"）
-      const deptName = (item.label || item.scope_id).replace(/[·.].*$/, '')
-      map.set(item.scope_id, { deptId: item.scope_id, deptName, pools: [item] })
-    }
-  }
-  // 每组内按 dept_daily 在前、dept_service 在后排序
-  for (const group of map.values()) {
-    group.pools.sort((a, b) => (a.scope_type === 'dept_daily' ? -1 : 1))
-  }
-  return Array.from(map.values())
-})
-
 // 工作室视图分表：日常预算 / 服务预算
 const dailyRows = computed(() => displayItems.value.filter(i => i.scope_type === 'dept_daily'))
 const serviceRows = computed(() => displayItems.value.filter(i => i.scope_type === 'dept_service'))
@@ -590,6 +546,8 @@ const studioAllocPlaceholder = computed<BudgetItem>(() => studioAlloc.value ?? {
   daily_amount_usd: -1,
   used_usd: 0,
   used_ratio: 0,
+  period: '',
+  enabled: true,
 })
 
 function openStudioAllocDrawer() {
@@ -600,6 +558,8 @@ function openStudioAllocDrawer() {
     weekly: item.weekly_amount_usd,
     daily: item.daily_amount_usd,
   }
+  editReason.value = ''
+  editEffectiveMode.value = 'immediate'
   drawerVisible.value = true
 }
 
@@ -653,27 +613,78 @@ function openDrawer(item: BudgetItem) {
     weekly: item.weekly_amount_usd,
     daily: item.daily_amount_usd,
   }
+  editReason.value = ''
+  editEffectiveMode.value = 'immediate'
   drawerVisible.value = true
 }
 
 function openDrawerForMember(row: MemberRow) {
   editingItem.value = { ...row, amount_usd: 0, weekly_amount_usd: -1, daily_amount_usd: -1 }
   editForm.value = { amount: 0, weekly: -1, daily: -1 }
+  editReason.value = ''
+  editEffectiveMode.value = 'immediate'
   drawerVisible.value = true
+}
+
+async function previewAndApplyScope(
+  scopeType: BudgetItem['scope_type'],
+  scopeId: string,
+  values: { amount: number; weekly: number; daily: number },
+  reason: string,
+  effectiveMode: BudgetEffectiveMode,
+) {
+  const targets = [
+    { period_type: 'monthly' as const, value: values.amount },
+    { period_type: 'weekly' as const, value: values.weekly },
+    { period_type: 'daily' as const, value: values.daily },
+  ].filter(item => item.value >= 0)
+  const previews = await Promise.all(targets.map(item => previewBudgetAdjustment({
+    scope_type: scopeType,
+    scope_id: scopeId,
+    period_type: item.period_type,
+    target_limit_usd: item.value.toFixed(6),
+    effective_mode: effectiveMode,
+    reason,
+  })))
+  if (previews.some(item => item.stale)) {
+    ElMessage.warning('用量数据已过期，请刷新后重新预览')
+    return
+  }
+  if (previews.some(item => item.zero_block)) {
+    await ElMessageBox.confirm('$0 将阻断后续请求，是否继续？', '确认 $0 风险', { type: 'warning' })
+  }
+  if (previews.some(item => item.below_used)) {
+    await ElMessageBox.confirm('新额度低于当前已用量，是否继续？', '确认低于已用风险', { type: 'warning' })
+  }
+  if (previews.some(item => item.replaces_pending_schedule)) {
+    await ElMessageBox.confirm('本次调整将替换已有排期，是否继续？', '确认替换排期', { type: 'warning' })
+  }
+  if (!previews.some(item => item.zero_block || item.below_used || item.replaces_pending_schedule)) {
+    await ElMessageBox.confirm('预览完成，确认应用预算调整？', '确认预算调整', { type: 'info' })
+  }
+  await Promise.all(targets.map((item, index) => adjustBudget({
+    scope_type: scopeType,
+    scope_id: scopeId,
+    period_type: item.period_type,
+    target_limit_usd: item.value.toFixed(6),
+    effective_mode: effectiveMode,
+    reason,
+    confirm_zero_block: previews[index].zero_block,
+    confirm_below_used: previews[index].below_used,
+    confirm_replace_schedule: previews[index].replaces_pending_schedule,
+    preview_version: previews[index].preview_version,
+  })))
 }
 
 async function save() {
   if (!editingItem.value) return
+  if (!editReason.value.trim()) { ElMessage.warning('请填写调整原因'); return }
   saving.value = true
   try {
-    const payload: BudgetSetPayload = {
-      scope_type: editingItem.value.scope_type,
-      scope_id: editingItem.value.scope_id,
-      amount_usd: editForm.value.amount,
-      weekly_amount_usd: editForm.value.weekly,
-      daily_amount_usd: editForm.value.daily,
-    }
-    await setBudgetBatch([payload])
+    await previewAndApplyScope(
+      editingItem.value.scope_type, editingItem.value.scope_id, editForm.value,
+      editReason.value.trim(), editEffectiveMode.value,
+    )
     ElMessage.success('预算已更新')
     drawerVisible.value = false
     await load()
@@ -712,15 +723,12 @@ function goExpansion(item: BudgetItem) {
   })
 }
 
-// ─── 工作室视图：嵌套抽屉下钻到部门成员预算 ─────────────────────────────────
-const deptMemberDrawerVisible = ref(false)
-const deptMemberDrawerScopeId = ref('')
-const deptMemberDrawerLabel = ref('')
+function navigateToDept(row: BudgetItem) {
+  emit('navigate', { scopeType: 'dept', scopeId: row.scope_id, label: row.label || row.scope_id })
+}
 
-function openDeptMemberDrawer(row: BudgetItem) {
-  deptMemberDrawerScopeId.value = row.scope_id
-  deptMemberDrawerLabel.value = row.label || row.scope_id
-  deptMemberDrawerVisible.value = true
+function navigateToMember(row: BudgetItem) {
+  emit('navigate', { scopeType: 'member', scopeId: row.scope_id, label: row.label || row.scope_id })
 }
 
 function displayAmount(value: number) {

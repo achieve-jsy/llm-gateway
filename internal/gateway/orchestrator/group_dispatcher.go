@@ -7,6 +7,7 @@ import (
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/authz"
 	"github.com/example/llm-gateway/internal/gateway/binding"
+	"github.com/example/llm-gateway/internal/gateway/budget"
 	"github.com/example/llm-gateway/internal/gateway/cache"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
@@ -20,6 +21,7 @@ type GroupAwareDispatcher struct {
 	scheduler    Scheduler
 	nameCache    *cache.GroupNameCache
 	bindingCheck *binding.Client
+	tierResolver budget.TierResolver
 }
 
 func NewGroupAwareDispatcher(sch Scheduler, nc *cache.GroupNameCache) *GroupAwareDispatcher {
@@ -38,6 +40,20 @@ func NewGroupAwareDispatcherWithBinding(sch Scheduler, nc *cache.GroupNameCache,
 	}
 }
 
+func NewGroupAwareDispatcherWithBindingAndTier(
+	sch Scheduler,
+	nc *cache.GroupNameCache,
+	bindClient *binding.Client,
+	tierResolver budget.TierResolver,
+) *GroupAwareDispatcher {
+	return &GroupAwareDispatcher{
+		scheduler:    sch,
+		nameCache:    nc,
+		bindingCheck: bindClient,
+		tierResolver: tierResolver,
+	}
+}
+
 func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string, req *core.ChatRequest) (*scheduler.RouteDecision, error) {
 	if !d.nameCache.IsGroupName(modelName) {
 		return nil, nil
@@ -49,6 +65,12 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string, req *c
 			if err := authz.AuthorizeGroupAccess(c.Request.Context(), id, d.bindingCheck, modelName); err != nil {
 				return nil, err
 			}
+		}
+	}
+
+	if d.tierResolver != nil {
+		if tier, ok := d.tierResolver.Resolve(modelName); ok {
+			budget.SetTierContext(c, tier)
 		}
 	}
 

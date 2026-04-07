@@ -385,10 +385,6 @@ const mascot = computed<MascotTag>(() => {
   }
 })
 
-// 形象卡片：只取图片 + 数据故事（不展示名字/标签/emoji）
-const mascotImage = computed(() => mascot.value.image)
-const mascotStory = computed(() => mascot.value.story)
-
 const traits = computed<string[]>(() => {
   if (!hasData.value) return []
   const t: string[] = []

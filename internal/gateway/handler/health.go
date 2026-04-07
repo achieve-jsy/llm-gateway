@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/example/llm-gateway/internal/gateway/budget"
 	"github.com/example/llm-gateway/internal/gateway/provider"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/gin-gonic/gin"
@@ -17,6 +18,12 @@ type HealthHandler struct {
 	router    ModelsRouterInterface
 	state     *provider.RuntimeState
 	scheduler *scheduler.Scheduler
+	tierState *budget.SnapshotHolder
+}
+
+// SetBudgetSnapshotHolder 为就绪探针提供部署 preflight 所需的预算能力与当前模式。
+func (h *HealthHandler) SetBudgetSnapshotHolder(holder *budget.SnapshotHolder) {
+	h.tierState = holder
 }
 
 // NewHealthHandler 创建 HealthHandler
@@ -91,8 +98,25 @@ func (h *HealthHandler) Ready(c *gin.Context) {
 		return
 	}
 
+	capabilities := gin.H{
+		"tier_snapshot_schema": 1,
+		"redis_v2":             true,
+	}
+	if h.tierState != nil {
+		if snapshot := h.tierState.Get(); snapshot != nil {
+			capabilities["master_enabled"] = snapshot.MasterEnabled
+			capabilities["accounting_enabled"] = snapshot.AccountingEnabled
+			capabilities["positive_enforcement_enabled"] = snapshot.PositiveEnforcementEnabled
+			capabilities["zero_block_enabled"] = snapshot.ZeroBlockEnabled
+			capabilities["shadow_enabled"] = snapshot.ShadowEnabled
+			capabilities["v2_total_enforcement_enabled"] = snapshot.V2TotalEnforcementEnabled
+			capabilities["legacy_total_write_enabled"] = snapshot.LegacyTotalWriteEnabled
+			capabilities["snapshot_revision"] = snapshot.Revision
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"status": "ready",
+		"status":       "ready",
+		"capabilities": capabilities,
 		"checks": gin.H{
 			"redis":     "ok",
 			"registry":  "ok",

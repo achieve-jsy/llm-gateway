@@ -16,6 +16,8 @@ export interface Group {
   failover_cooldown_seconds: number
   timeout_seconds: number
   model_count?: number
+  model_tier_id?: string | null
+  model_tier_name?: string | null
   models?: GroupModel[]
   open_mode: OpenMode
   is_capability_override: boolean

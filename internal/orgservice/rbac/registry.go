@@ -5,10 +5,12 @@ package rbac
 // 只改这里就能调整「谁能做什么」，不需要动任何 handler 代码。
 //
 // ScopeConstraint 说明：
-//   ScopeAny     — 所有已登录用户
-//   ScopeManage  — dept_admin / studio_admin / admin
-//   ScopeStudio  — studio_admin（限自己工作室）或 admin（全局）
-//   ScopeGlobal  — 仅 admin
+//
+//	ScopeAny     — 所有已登录用户
+//	ScopeManage  — dept_admin / studio_admin / admin
+//	ScopeStudio  — studio_admin（限自己工作室）或 admin（全局）
+//	ScopeGlobal  — 仅 admin
+//
 // ──────────────────────────────────────────────────────────────────────────────
 var Registry = map[Permission]PolicyEntry{
 	// 组织结构查看：全员可见
@@ -63,7 +65,9 @@ var Registry = map[Permission]PolicyEntry{
 	// 查看自己管辖范围预算：任意管理角色
 	PermBudgetViewScoped: {ScopeManage},
 	// 设置预算（按管辖域过滤）：任意管理角色（service 层做数据范围校验）
-	PermBudgetSet: {ScopeManage},
+	PermBudgetSet:       {ScopeManage},
+	PermModelTierView:   {ScopeGlobal},
+	PermModelTierManage: {ScopeGlobal},
 
 	// ── v0.7 Service Key ────────────────────────────────────────────────────
 	// 创建/吊销 Service Key：任意管理角色（service 层校验只能操作自己部门）

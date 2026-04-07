@@ -8,7 +8,7 @@
       </div>
       <div class="page-actions">
         <el-button v-if="isAdmin" plain @click="router.push('/admin/org')">组织预算</el-button>
-        <el-button v-if="canCreateRequest" type="primary" @click="openCreateDialog()">
+        <el-button v-if="canCreateRequest" type="primary" @click="newCreateVisible = true">
           <el-icon style="margin-right:4px"><Plus /></el-icon>新建申请
         </el-button>
       </div>
@@ -67,12 +67,6 @@
             <p v-if="pendingDesc">{{ pendingDesc }}</p>
           </div>
           <div class="panel-head-actions">
-            <template v-if="selectedPending.length > 0">
-              <span class="batch-selected-hint">已选 {{ selectedPending.length }}</span>
-              <el-button size="small" type="primary" @click="batchApprove">批量批准</el-button>
-              <el-button size="small" plain @click="batchRejectVisible = true">批量驳回</el-button>
-              <el-button size="small" link @click="selectedPending = []">取消</el-button>
-            </template>
             <el-button :loading="pendingLoading" size="small" plain @click="loadPending">
               <el-icon><Refresh /></el-icon>
             </el-button>
@@ -90,13 +84,19 @@
         </div>
 
         <div ref="pendingScrollRef" v-loading="pendingLoading" class="pending-list">
+          <div class="pending-mobile-list">
+            <ExpansionMobileListItem
+              v-for="item in visiblePending"
+              :key="`mobile-${item.id}`"
+              :item="item"
+              @open="openDetail(item)"
+            />
+          </div>
           <article
             v-for="item in visiblePending"
             :key="item.id"
             class="approval-card"
-            :class="{ selected: selectedPending.includes(item.id) }"
           >
-            <el-checkbox v-model="item._checked" class="card-check" @change="toggleSelect(item)" />
 
             <!-- 左侧金额区 -->
             <div class="card-amount-block">
@@ -148,33 +148,8 @@
 
               <!-- 操作区 -->
               <div class="card-actions">
-                <el-popconfirm
-                  title="确认批准该申请？"
-                  confirm-button-text="批准"
-                  cancel-button-text="取消"
-                  @confirm="quickApprove(item)"
-                >
-                  <template #reference>
-                    <el-button
-                      size="small"
-                      :type="exceedsBudget(item) ? 'default' : 'primary'"
-                      :plain="exceedsBudget(item)"
-                    >
-                      <el-icon><Check /></el-icon> 批准
-                    </el-button>
-                  </template>
-                </el-popconfirm>
-                <el-button size="small" plain @click="openActionDialog(item, 'reject')">
-                  <el-icon><Close /></el-icon> 驳回
-                </el-button>
-                <el-button
-                  v-if="item.current_level === 'studio'"
-                  size="small"
-                  :type="exceedsBudget(item) ? 'warning' : 'default'"
-                  :plain="!exceedsBudget(item)"
-                  @click="openActionDialog(item, 'escalate')"
-                >上报平台</el-button>
                 <el-button size="small" link @click="showSteps(item)">审批流水</el-button>
+                <el-button size="small" type="primary" @click="openDetail(item)">查看并审批</el-button>
               </div>
             </div>
           </article>
@@ -411,6 +386,14 @@
         <el-empty v-else description="暂无审批记录" />
       </div>
     </el-dialog>
+    <ExpansionCreateForm
+      v-model="newCreateVisible"
+      :ordinary-user="!authStore.isManager"
+      :initial-scope-type="initialScopeType"
+      :initial-scope-id="initialScopeID"
+      @created="refreshAll"
+    />
+    <ExpansionApprovalDetail v-model="detailVisible" v-model:detail="selectedDetail" @changed="refreshAll" />
   </div>
 </template>
 
@@ -424,8 +407,6 @@ import {
   CircleCheck,
   CircleClose,
   Refresh,
-  Check,
-  Close,
   ArrowRight,
   DocumentAdd,
 } from '@element-plus/icons-vue'
@@ -441,14 +422,30 @@ import {
   getPendingExpansions,
   getExpansionSteps,
   getBudgetList,
+  getExpansionDetail,
+  reprecheckExpansion,
 } from '@/services/control-plane'
-import type { CreateExpansionPayload, ExpansionAction, ExpansionPeriod, ExpansionRequest } from '@/types/expansion'
-import { LEVEL_LABELS, PERIOD_LABELS, PERIOD_SUFFIX, STATUS_COLORS, STATUS_LABELS } from '@/types/expansion'
+import type { CreateExpansionPayload, ExpansionAction, ExpansionDetail, ExpansionPeriod, ExpansionRequest } from '@/types/expansion'
+import { PERIOD_LABELS, PERIOD_SUFFIX, STATUS_LABELS } from '@/types/expansion'
+import type { BudgetScopeType } from '@/types/budget'
+import ExpansionCreateForm from '@/components/expansion/ExpansionCreateForm.vue'
+import ExpansionApprovalDetail from '@/components/expansion/ExpansionApprovalDetail.vue'
+import ExpansionMobileListItem from '@/components/expansion/ExpansionMobileListItem.vue'
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const orgStore = useOrgStore()
+const newCreateVisible = ref(false)
+const detailVisible = ref(false)
+const selectedDetail = ref<ExpansionDetail | null>(null)
+const initialScopeType = computed(() => (typeof route.query.scope_type === 'string' ? route.query.scope_type : 'member') as BudgetScopeType)
+const initialScopeID = computed(() => typeof route.query.scope_id === 'string' ? route.query.scope_id : authStore.user?.id || '')
+async function openDetail(item: ExpansionRequest) {
+  selectedDetail.value = await getExpansionDetail(item.id)
+  detailVisible.value = true
+}
+async function refreshAll() { await Promise.all([loadMine(), canApprove.value ? loadPending() : Promise.resolve()]) }
 
 const mineList = ref<ExpansionRequest[]>([])
 const mineLoading = ref(false)
@@ -634,9 +631,15 @@ function toggleSelect(item: any) {
 async function batchApprove() {
   if (selectedPending.value.length === 0) return
   try {
-    const decisions = selectedPending.value.map(id => ({ id, action: 'approve', comment: '' }))
-    await batchDecideExpansion(decisions)
-    ElMessage.success(`${decisions.length} 项已批准`)
+    const decisions = selectedPending.value.flatMap((id) => {
+      const item = pendingList.value.find(row => row.id === id)
+      return item ? [{ id, action: 'approve', comment: '', precheck_version: item.precheck_version }] : []
+    })
+    const { results } = await batchDecideExpansion(decisions)
+    const stale = results.filter(item => item.next_action === 'reprecheck')
+    await Promise.all(stale.map(item => reprecheckExpansion(item.id)))
+    ElMessage.success(`${results.filter(item => item.ok).length} 项已批准`)
+    if (stale.length) ElMessage.warning(`${stale.length} 项数据已变化，已重新预检，请再次确认`)
     selectedPending.value = []
     await reloadLists()
   } catch (e: any) {
@@ -650,7 +653,10 @@ async function batchReject() {
     return
   }
   try {
-    const decisions = selectedPending.value.map(id => ({ id, action: 'reject', comment: batchRejectComment.value }))
+    const decisions = selectedPending.value.flatMap((id) => {
+      const item = pendingList.value.find(row => row.id === id)
+      return item ? [{ id, action: 'reject', comment: batchRejectComment.value, precheck_version: item.precheck_version }] : []
+    })
     await batchDecideExpansion(decisions)
     ElMessage.success(`${decisions.length} 项已驳回`)
     selectedPending.value = []
@@ -756,10 +762,16 @@ async function handleCreate() {
 
 async function quickApprove(item: ExpansionRequest) {
   try {
-    await decideExpansion(item.id, 'approve')
+    await decideExpansion(item.id, 'approve', item.precheck_version)
     ElMessage.success('已批准')
     await reloadLists()
   } catch (e: any) {
+    if (e?.response?.data?.next_action === 'reprecheck') {
+      await reprecheckExpansion(item.id)
+      ElMessage.warning('数据已变化，已重新预检，请再次确认')
+      await reloadLists()
+      return
+    }
     ElMessage.error(e?.message || '操作失败')
   }
 }
@@ -770,22 +782,34 @@ function openActionDialog(item: ExpansionRequest, action: ExpansionAction) {
   actionComment.value = ''
   actionVisible.value = true
 }
+void toggleSelect
+void batchApprove
+void quickApprove
+void openActionDialog
 
 async function handleAction() {
   if (!actionTarget.value) return
   actionLoading.value = true
   try {
-    await decideExpansion(actionTarget.value.id, actionType.value, actionComment.value || undefined)
+    await decideExpansion(actionTarget.value.id, actionType.value, actionTarget.value.precheck_version, actionComment.value || undefined)
     ElMessage.success(actionTitle.value + '成功')
     actionVisible.value = false
     await reloadLists()
+  } catch (e: any) {
+    if (e?.response?.data?.next_action === 'reprecheck' && actionTarget.value) {
+      await reprecheckExpansion(actionTarget.value.id)
+      ElMessage.warning('数据已变化，已重新预检，请再次确认')
+      await reloadLists()
+    } else {
+      ElMessage.error(e?.message || '操作失败')
+    }
   } finally {
     actionLoading.value = false
   }
 }
 
 async function handleCancel(row: ExpansionRequest) {
-  await decideExpansion(row.id, 'cancel')
+  await decideExpansion(row.id, 'cancel', row.precheck_version)
   ElMessage.success('已取消')
   await loadMine()
 }
@@ -1019,6 +1043,7 @@ watch(() => createForm.value.scope_type, (scopeType) => {
 }
 .pending-list::-webkit-scrollbar { width: 4px; }
 .pending-list::-webkit-scrollbar-thumb { background: var(--el-border-color); border-radius: 2px; }
+.pending-mobile-list { display: none; }
 .list-sentinel { height: 1px; flex-shrink: 0; }
 
 /* ── Approval card ── */
@@ -1297,6 +1322,8 @@ watch(() => createForm.value.scope_type, (scopeType) => {
   .kpi-content strong { font-size: 20px; }
   .approval-card { flex-wrap: wrap; }
   .card-amount-block { min-width: unset; width: 100%; flex-direction: row; justify-content: space-between; }
+  .pending-mobile-list { display: grid; gap: 10px; }
+  .pending-list > .approval-card { display: none; }
 }
 @media (max-width: 480px) {
   .expansion-center { padding: 12px; }

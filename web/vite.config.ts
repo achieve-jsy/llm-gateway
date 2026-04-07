@@ -2,6 +2,9 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
 
+const gatewayTarget = process.env.VITE_GATEWAY_TARGET || 'http://127.0.0.1:8080'
+const controlPlaneTarget = process.env.VITE_CONTROL_PLANE_TARGET || 'http://127.0.0.1:8081'
+
 export default defineConfig({
   plugins: [vue()],
   resolve: {
@@ -15,19 +18,19 @@ export default defineConfig({
     allowedHosts: 'all',
     proxy: {
       '/v1': {
-        target: 'http://127.0.0.1:8080',
+        target: gatewayTarget,
         changeOrigin: true
       },
       '/api/v1/auth': {
-        target: 'http://127.0.0.1:8081',
+        target: controlPlaneTarget,
         changeOrigin: true
       },
       '/api': {
-        target: 'http://127.0.0.1:8081',
+        target: controlPlaneTarget,
         changeOrigin: true
       },
       '/auth': {
-        target: 'http://127.0.0.1:8081',
+        target: controlPlaneTarget,
         changeOrigin: true,
         bypass(req) {
           if (req.url?.startsWith('/auth/callback') && req.method === 'GET') {

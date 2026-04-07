@@ -152,8 +152,6 @@ import {
   severityToTagType,
   alertStatusToTagType,
   getAlertStatusLabel,
-  getSeverityBadgeClass,
-  getAlertStatusClass,
 } from '../utils/opsFormatters'
 
 const props = withDefaults(

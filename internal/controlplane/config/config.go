@@ -18,6 +18,8 @@ type Config struct {
 	Auth         AuthConfig
 	JWT          JWTConfig
 	Gateway      GatewayConfig
+	Budget       BudgetConfig
+	BudgetTier   BudgetTierConfig
 }
 
 type ServerConfig struct {
@@ -57,6 +59,21 @@ type GatewayConfig struct {
 	URL string
 }
 
+type BudgetConfig struct {
+	Timezone  string
+	WeekStart string
+}
+
+type BudgetTierConfig struct {
+	MasterEnabled              bool
+	AccountingEnabled          bool
+	PositiveEnforcementEnabled bool
+	ZeroBlockEnabled           bool
+	ShadowEnabled              bool
+	V2TotalEnforcementEnabled  bool
+	LegacyTotalWriteEnabled    bool
+}
+
 // Load 加载配置：viper 读取 YAML + 环境变量覆盖
 //
 // 优先级（从高到低）：
@@ -79,6 +96,15 @@ func Load() *Config {
 	v.SetDefault("auth.token", "CHANGE_ME_INTERNAL_TOKEN")
 	v.SetDefault("jwt.secret", "CHANGE_ME_JWT_SECRET")
 	v.SetDefault("gateway.url", "http://localhost:8080")
+	v.SetDefault("budget_tier.master_enabled", false)
+	v.SetDefault("budget_tier.accounting_enabled", false)
+	v.SetDefault("budget_tier.positive_enforcement_enabled", false)
+	v.SetDefault("budget_tier.zero_block_enabled", false)
+	v.SetDefault("budget_tier.shadow_enabled", false)
+	v.SetDefault("budget_tier.v2_total_enforcement_enabled", false)
+	v.SetDefault("budget_tier.legacy_total_write_enabled", true)
+	v.SetDefault("budget.timezone", "Asia/Shanghai")
+	v.SetDefault("budget.week_start", "monday")
 
 	// 读取环境对应的 YAML
 	env := os.Getenv("APP_ENV")
@@ -137,6 +163,19 @@ func Load() *Config {
 		},
 		Gateway: GatewayConfig{
 			URL: v.GetString("gateway.url"),
+		},
+		Budget: BudgetConfig{
+			Timezone:  v.GetString("budget.timezone"),
+			WeekStart: v.GetString("budget.week_start"),
+		},
+		BudgetTier: BudgetTierConfig{
+			MasterEnabled:              v.GetBool("budget_tier.master_enabled"),
+			AccountingEnabled:          v.GetBool("budget_tier.accounting_enabled"),
+			PositiveEnforcementEnabled: v.GetBool("budget_tier.positive_enforcement_enabled"),
+			ZeroBlockEnabled:           v.GetBool("budget_tier.zero_block_enabled"),
+			ShadowEnabled:              v.GetBool("budget_tier.shadow_enabled"),
+			V2TotalEnforcementEnabled:  v.GetBool("budget_tier.v2_total_enforcement_enabled"),
+			LegacyTotalWriteEnabled:    v.GetBool("budget_tier.legacy_total_write_enabled"),
 		},
 	}
 }

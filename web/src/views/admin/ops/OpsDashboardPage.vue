@@ -199,7 +199,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, computed, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Refresh, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import { opsAPI } from '@/api/ops'
@@ -290,9 +290,7 @@ const errorDetailsType = ref<'request' | 'upstream'>('request')
 // B05/WP3: selectedErrorId 为 request_id（字符串）
 const selectedErrorId = ref<string | null>(null)
 
-let refreshTimer: number | null = null
 let countdownTimer: number | null = null
-const REFRESH_INTERVAL = computed(() => (settings.value.auto_refresh_interval || 30) * 1000)
 
 const REFRESH_SECONDS = computed(() => settings.value.auto_refresh_interval || 30)
 
@@ -451,8 +449,8 @@ function onCustomTimeRange(range: { start: string; end: string }) {
   timeRange.value = 'custom'
 }
 
-function onSelectProvider(providerName: string) {
-  provider.value = providerName
+function onSelectProvider(item: OpsThroughputByProvider) {
+  provider.value = item.provider_name
 }
 
 function onSelectGroup(groupIdVal: number) {
@@ -516,7 +514,7 @@ function syncFromRoute() {
 }
 
 function syncToRoute() {
-  const q: Record<string, string> = { ...route.query }
+  const q = { ...route.query }
   if (timeRange.value !== '1h') q.tr = timeRange.value
   else delete q.tr
   if (isFullscreen.value) q.fullscreen = '1'

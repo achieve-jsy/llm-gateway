@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"sync"
 )
 
 const maxPendingEventBytes = 256 * 1024
@@ -30,8 +31,9 @@ type ObservedSSEStream struct {
 	observers   []Observer
 	pending     []byte
 	discardTail []byte
-	closed      bool
 	discarding  bool
+	closeOnce   sync.Once
+	closeErr    error
 }
 
 // NewObservedSSEStream returns the original stream when there are no observers.
@@ -60,20 +62,17 @@ func (s *ObservedSSEStream) Read(p []byte) (n int, err error) {
 }
 
 func (s *ObservedSSEStream) Close() error {
-	if s.closed {
-		return nil
-	}
-	s.closed = true
-
-	if len(s.pending) > 0 {
-		s.processBufferedEvents(s.pending)
-		s.pending = nil
-	}
-
-	for _, observer := range s.observers {
-		observer.OnStreamClose()
-	}
-	return s.ReadCloser.Close()
+	s.closeOnce.Do(func() {
+		if len(s.pending) > 0 {
+			s.processBufferedEvents(s.pending)
+			s.pending = nil
+		}
+		for _, observer := range s.observers {
+			observer.OnStreamClose()
+		}
+		s.closeErr = s.ReadCloser.Close()
+	})
+	return s.closeErr
 }
 
 func (s *ObservedSSEStream) processChunk(data []byte) {

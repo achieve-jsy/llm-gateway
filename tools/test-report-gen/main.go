@@ -161,13 +161,13 @@ func main() {
 <body>
 <div class="container">
   <h1>Key Activity 测试报告</h1>
-  <div class="subtitle">%[3]s · 包: tests/controlplane/keyactivity · 总耗时: %.2fs</div>
+  <div class="subtitle">%[3]s · 包: tests/controlplane/keyactivity · 总耗时: %[4].2fs</div>
   <div class="overall-badge">%[1]s</div>
   <div class="summary">
-    <div class="stat total"><div class="label">总数</div><div class="value">%[4]d</div></div>
-    <div class="stat pass"><div class="label">通过</div><div class="value">%[5]d</div></div>
-    <div class="stat fail"><div class="label">失败</div><div class="value">%[6]d</div></div>
-    <div class="stat skip"><div class="label">跳过</div><div class="value">%[7]d</div></div>
+    <div class="stat total"><div class="label">总数</div><div class="value">%[5]d</div></div>
+    <div class="stat pass"><div class="label">通过</div><div class="value">%[6]d</div></div>
+    <div class="stat fail"><div class="label">失败</div><div class="value">%[7]d</div></div>
+    <div class="stat skip"><div class="label">跳过</div><div class="value">%[8]d</div></div>
   </div>
   <table>
     <thead>

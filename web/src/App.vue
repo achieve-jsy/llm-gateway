@@ -68,6 +68,10 @@
             <el-icon><Wallet /></el-icon>
             <template #title>预算管理</template>
           </el-menu-item>
+          <el-menu-item v-if="authStore.isAdmin" index="/admin/model-tiers">
+            <el-icon><PriceTag /></el-icon>
+            <template #title>模型等级</template>
+          </el-menu-item>
           <el-menu-item index="/admin/service-keys">
             <el-icon><Key /></el-icon>
             <template #title>Service Key</template>

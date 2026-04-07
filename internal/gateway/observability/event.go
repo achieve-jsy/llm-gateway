@@ -1,12 +1,23 @@
 package observability
 
-import "time"
+import (
+	"fmt"
+	"time"
+
+	"github.com/example/llm-gateway/internal/gateway/budget"
+	obsmodel "github.com/example/llm-gateway/internal/observability/model"
+	"github.com/google/uuid"
+)
 
 // UsageEvent 埋点事件数据契约
 // gateway-api 在每次调用完成后构造，异步投递到 Collector
 type UsageEvent struct {
-	RequestID string
-	Timestamp time.Time
+	RequestID               string
+	Timestamp               time.Time
+	BillableReserved        bool
+	BillableReservation     *budget.Reservation
+	PendingBudgetAccount    *budget.PendingAccount
+	BudgetAdmissionFailOpen bool
 
 	// 身份维度（快照）
 	KeyID      string
@@ -63,4 +74,48 @@ type UsageEvent struct {
 	OutputCostUSD       float64
 	CacheReadCostUSD    float64
 	EstCostUSD          float64
+
+	BudgetTierID                  string
+	BudgetTierNameSnapshot        string
+	BudgetTierAccountingEligible  bool
+	BudgetTierSnapshotRevision    int64
+	BudgetTierConstraintsSnapshot []obsmodel.BudgetTierConstraintSnapshot
+	BudgetBlockCode               *string
+	BudgetBlockDimension          *string
+	BudgetBlockScopeType          *string
+	BudgetBlockScopeID            *string
+	BudgetBlockPeriodType         *string
+}
+
+func (e UsageEvent) ToCallLog() (obsmodel.CallLog, error) {
+	var tierID *uuid.UUID
+	if e.BudgetTierID != "" {
+		parsed, err := uuid.Parse(e.BudgetTierID)
+		if err != nil {
+			return obsmodel.CallLog{}, fmt.Errorf("parse budget tier id: %w", err)
+		}
+		tierID = &parsed
+	}
+	return obsmodel.CallLog{
+		RequestID: e.RequestID, TS: e.Timestamp, KeyID: e.KeyID, KeyName: e.KeyName,
+		KeyType: normalizeKeyType(e.KeyType), UserID: e.UserID, UserName: e.UserName,
+		DeptID: e.DeptID, DeptName: e.DeptName, StudioID: e.StudioID, StudioName: e.StudioName,
+		Model: e.Model, RoutedModel: e.RoutedModel, GroupName: e.GroupName, Provider: e.Provider,
+		PromptTokens: e.PromptTokens, CachedTokens: e.CachedTokens, CacheWriteTokens: e.CacheWriteTokens,
+		CompletionTokens: e.CompletionTokens, ReasoningTokens: e.ReasoningTokens, TotalTokens: e.TotalTokens,
+		Status: e.Status, UpstreamStatus: e.UpstreamStatus, DurationMs: int(e.DurationMs),
+		FirstTokenMs: e.FirstTokenMs, StageTTFBMs: e.StageTTFBMs, StageAuthMs: e.StageAuthMs,
+		StageRouteMs: e.StageRouteMs, StageUpstreamMs: e.StageUpstreamMs, Stream: e.Stream,
+		FailoverUsed: e.FailoverUsed, RoutedViaGroup: e.RoutedViaGroup, UsageMissing: e.UsageMissing,
+		ReasoningEffort: e.ReasoningEffort, UserAgent: e.UserAgent, IPAddress: e.IPAddress,
+		InboundEndpoint: e.InboundEndpoint, InputPriceSnapshot: &e.InputPriceSnapshot,
+		OutputPriceSnapshot: &e.OutputPriceSnapshot, InputCostUSD: e.InputCostUSD,
+		OutputCostUSD: e.OutputCostUSD, CacheReadCostUSD: e.CacheReadCostUSD, EstCostUSD: e.EstCostUSD,
+		BudgetTierID: tierID, BudgetTierNameSnapshot: e.BudgetTierNameSnapshot,
+		BudgetTierAccountingEligible:  e.BudgetTierAccountingEligible,
+		BudgetTierConstraintsSnapshot: e.BudgetTierConstraintsSnapshot,
+		BudgetBlockCode:               e.BudgetBlockCode, BudgetBlockDimension: e.BudgetBlockDimension,
+		BudgetBlockScopeType: e.BudgetBlockScopeType, BudgetBlockScopeID: e.BudgetBlockScopeID,
+		BudgetBlockPeriodType: e.BudgetBlockPeriodType,
+	}, nil
 }

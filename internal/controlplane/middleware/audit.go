@@ -21,75 +21,77 @@ type routeAction struct {
 
 var auditRouteMap = map[string]routeAction{
 	// ── Providers ──────────────────────────────────────────────────
-	"POST:/api/v1/providers":                   {audit.ActionProviderCreate, audit.ResourceProvider},
-	"PUT:/api/v1/providers/:id":                {audit.ActionProviderUpdate, audit.ResourceProvider},
-	"PATCH:/api/v1/providers/:id/status":       {audit.ActionProviderToggle, audit.ResourceProvider},
-	"DELETE:/api/v1/providers/:id":             {audit.ActionProviderDelete, audit.ResourceProvider},
-	"POST:/api/v1/providers/:id/test":          {audit.ActionProviderTest, audit.ResourceProvider},
-	"POST:/api/v1/providers/:id/check":         {audit.ActionHealthCheckRun, audit.ResourceHealthCheck},
-	"POST:/api/v1/providers/:id/sync-models":          {audit.ActionProviderSyncModels, audit.ResourceProvider},
-	"POST:/api/v1/providers/:id/sync-models/confirm":  {audit.Action("provider.sync_models_confirm"), audit.ResourceProvider},
-	"POST:/api/v1/providers/:id/check-models":         {audit.ActionProviderSyncModels, audit.ResourceProvider},
-	"POST:/api/v1/providers/check-all":                {audit.ActionHealthCheckRun, audit.ResourceHealthCheck},
+	"POST:/api/v1/providers":                         {audit.ActionProviderCreate, audit.ResourceProvider},
+	"PUT:/api/v1/providers/:id":                      {audit.ActionProviderUpdate, audit.ResourceProvider},
+	"PATCH:/api/v1/providers/:id/status":             {audit.ActionProviderToggle, audit.ResourceProvider},
+	"DELETE:/api/v1/providers/:id":                   {audit.ActionProviderDelete, audit.ResourceProvider},
+	"POST:/api/v1/providers/:id/test":                {audit.ActionProviderTest, audit.ResourceProvider},
+	"POST:/api/v1/providers/:id/check":               {audit.ActionHealthCheckRun, audit.ResourceHealthCheck},
+	"POST:/api/v1/providers/:id/sync-models":         {audit.ActionProviderSyncModels, audit.ResourceProvider},
+	"POST:/api/v1/providers/:id/sync-models/confirm": {audit.Action("provider.sync_models_confirm"), audit.ResourceProvider},
+	"POST:/api/v1/providers/:id/check-models":        {audit.ActionProviderSyncModels, audit.ResourceProvider},
+	"POST:/api/v1/providers/check-all":               {audit.ActionHealthCheckRun, audit.ResourceHealthCheck},
 
 	// ── Models ─────────────────────────────────────────────────────
-	"POST:/api/v1/models":                          {audit.ActionModelCreate, audit.ResourceModel},
-	"PUT:/api/v1/models/:id":                       {audit.ActionModelUpdate, audit.ResourceModel},
-	"DELETE:/api/v1/models/:id":                    {audit.ActionModelDelete, audit.ResourceModel},
-	"DELETE:/api/v1/models/batch":                  {audit.ActionModelDelete, audit.ResourceModel},
-	"PATCH:/api/v1/models/batch-status":            {audit.ActionModelBatchUpdateStatus, audit.ResourceModel},
-	"PUT:/api/v1/models/batch-tags":                {audit.Action("model.tag.update"), audit.ResourceModel},
-	"POST:/api/v1/models/from-catalog":             {audit.ActionModelCreate, audit.ResourceModel},
-	"POST:/api/v1/models/batch-bind-catalog":       {audit.Action("model.bind_catalog"), audit.ResourceModel},
-	"POST:/api/v1/models/check-all":                {audit.Action("model.check"), audit.ResourceModel},
-	"POST:/api/v1/models/:id/check":                {audit.Action("model.check"), audit.ResourceModel},
-	"POST:/api/v1/models/:id/reset-override":       {audit.Action("model.reset_override"), audit.ResourceModel},
-	"POST:/api/v1/models/:id/bind-catalog":         {audit.Action("model.bind_catalog"), audit.ResourceModel},
-	"POST:/api/v1/models/:id/unbind-catalog":       {audit.Action("model.unbind_catalog"), audit.ResourceModel},
+	"POST:/api/v1/models":                    {audit.ActionModelCreate, audit.ResourceModel},
+	"PUT:/api/v1/models/:id":                 {audit.ActionModelUpdate, audit.ResourceModel},
+	"DELETE:/api/v1/models/:id":              {audit.ActionModelDelete, audit.ResourceModel},
+	"DELETE:/api/v1/models/batch":            {audit.ActionModelDelete, audit.ResourceModel},
+	"PATCH:/api/v1/models/batch-status":      {audit.ActionModelBatchUpdateStatus, audit.ResourceModel},
+	"PUT:/api/v1/models/batch-tags":          {audit.Action("model.tag.update"), audit.ResourceModel},
+	"POST:/api/v1/models/from-catalog":       {audit.ActionModelCreate, audit.ResourceModel},
+	"POST:/api/v1/models/batch-bind-catalog": {audit.Action("model.bind_catalog"), audit.ResourceModel},
+	"POST:/api/v1/models/check-all":          {audit.Action("model.check"), audit.ResourceModel},
+	"POST:/api/v1/models/:id/check":          {audit.Action("model.check"), audit.ResourceModel},
+	"POST:/api/v1/models/:id/reset-override": {audit.Action("model.reset_override"), audit.ResourceModel},
+	"POST:/api/v1/models/:id/bind-catalog":   {audit.Action("model.bind_catalog"), audit.ResourceModel},
+	"POST:/api/v1/models/:id/unbind-catalog": {audit.Action("model.unbind_catalog"), audit.ResourceModel},
 
 	// ── Model Tags ─────────────────────────────────────────────────
-	"POST:/api/v1/model-tags":            {audit.Action("tag.create"), audit.ResourceModel},
-	"PUT:/api/v1/model-tags/:id":         {audit.Action("tag.update"), audit.ResourceModel},
-	"DELETE:/api/v1/model-tags/:id":      {audit.Action("tag.delete"), audit.ResourceModel},
-	"PUT:/api/v1/models/:id/tags":        {audit.Action("model.tag.update"), audit.ResourceModel},
-	"POST:/api/v1/models/:id/tags":       {audit.Action("model.tag.update"), audit.ResourceModel},
+	"POST:/api/v1/model-tags":              {audit.Action("tag.create"), audit.ResourceModel},
+	"PUT:/api/v1/model-tags/:id":           {audit.Action("tag.update"), audit.ResourceModel},
+	"DELETE:/api/v1/model-tags/:id":        {audit.Action("tag.delete"), audit.ResourceModel},
+	"PUT:/api/v1/models/:id/tags":          {audit.Action("model.tag.update"), audit.ResourceModel},
+	"POST:/api/v1/models/:id/tags":         {audit.Action("model.tag.update"), audit.ResourceModel},
 	"POST:/api/v1/models/batch-tags/query": {audit.Action("model.tag.query"), audit.ResourceModel},
 
 	// ── Health Check ───────────────────────────────────────────────
-	"PUT:/api/v1/health-check/config":    {audit.ActionSettingsUpdate, audit.ResourceSettings},
-	"POST:/api/v1/health-check/run":      {audit.ActionHealthCheckRun, audit.ResourceHealthCheck},
+	"PUT:/api/v1/health-check/config": {audit.ActionSettingsUpdate, audit.ResourceSettings},
+	"POST:/api/v1/health-check/run":   {audit.ActionHealthCheckRun, audit.ResourceHealthCheck},
 
 	// ── Keys ───────────────────────────────────────────────────────
-	"POST:/api/v1/keys":                        {audit.ActionKeyCreate, audit.ResourceKey},
-	"PATCH:/api/v1/keys/:id/disable":           {audit.ActionKeyDisable, audit.ResourceKey},
-	"PATCH:/api/v1/keys/:id/enable":            {audit.ActionKeyEnable, audit.ResourceKey},
-	"DELETE:/api/v1/keys/:id":                  {audit.ActionKeyDelete, audit.ResourceKey},
-	"POST:/api/v1/keys/:id/reset":              {audit.ActionKeyReset, audit.ResourceKey},
-	"POST:/api/v1/keys/:id/reveal":             {audit.Action("key.reveal"), audit.ResourceKey},
-	"POST:/api/v1/keys/:id/groups":             {audit.ActionKeyBindGroups, audit.ResourceKey},
-	"POST:/api/v1/keys/:id/access-all-groups":  {audit.ActionKeyToggleAccessAll, audit.ResourceKey},
-	"PATCH:/api/v1/keys/:id/log-enabled":       {audit.ActionKeyToggleLog, audit.ResourceKey},
+	"POST:/api/v1/keys":                           {audit.ActionKeyCreate, audit.ResourceKey},
+	"PATCH:/api/v1/keys/:id/disable":              {audit.ActionKeyDisable, audit.ResourceKey},
+	"PATCH:/api/v1/keys/:id/enable":               {audit.ActionKeyEnable, audit.ResourceKey},
+	"DELETE:/api/v1/keys/:id":                     {audit.ActionKeyDelete, audit.ResourceKey},
+	"POST:/api/v1/keys/:id/reset":                 {audit.ActionKeyReset, audit.ResourceKey},
+	"POST:/api/v1/keys/:id/reveal":                {audit.Action("key.reveal"), audit.ResourceKey},
+	"POST:/api/v1/keys/:id/groups":                {audit.ActionKeyBindGroups, audit.ResourceKey},
+	"POST:/api/v1/keys/:id/access-all-groups":     {audit.ActionKeyToggleAccessAll, audit.ResourceKey},
+	"PATCH:/api/v1/keys/:id/log-enabled":          {audit.ActionKeyToggleLog, audit.ResourceKey},
 	"POST:/api/v1/keys/:id/opencode-config/token": {audit.Action("key.opencode_config"), audit.ResourceKey},
 
 	// ── Catalog ────────────────────────────────────────────────────
-	"POST:/api/v1/model-catalog/sync":        {audit.Action("catalog.sync"), audit.ResourceModel},
-	"POST:/api/v1/model-catalog/apply-diff":   {audit.Action("catalog.apply_diff"), audit.ResourceModel},
-	"POST:/api/v1/model-catalog/auto-bind":    {audit.Action("catalog.auto_bind"), audit.ResourceModel},
+	"POST:/api/v1/model-catalog/sync":       {audit.Action("catalog.sync"), audit.ResourceModel},
+	"POST:/api/v1/model-catalog/apply-diff": {audit.Action("catalog.apply_diff"), audit.ResourceModel},
+	"POST:/api/v1/model-catalog/auto-bind":  {audit.Action("catalog.auto_bind"), audit.ResourceModel},
 
 	// ── Groups ─────────────────────────────────────────────────────
-	"POST:/api/v1/groups/check-all":                    {audit.Action("group.check"), audit.ResourceGroup},
-	"POST:/api/v1/groups":                              {audit.ActionGroupCreate, audit.ResourceGroup},
-	"PUT:/api/v1/groups/:id":                           {audit.ActionGroupUpdate, audit.ResourceGroup},
-	"DELETE:/api/v1/groups/:id":                        {audit.ActionGroupDelete, audit.ResourceGroup},
-	"POST:/api/v1/groups/:id/models":                   {audit.ActionGroupAddModels, audit.ResourceGroup},
-	"DELETE:/api/v1/groups/:id/models/:model_id":       {audit.ActionGroupRemoveModel, audit.ResourceGroup},
-	"POST:/api/v1/groups/:id/check":                    {audit.Action("group.check"), audit.ResourceGroup},
-	"PUT:/api/v1/groups/:id/open-mode":                 {audit.ActionGroupEntitlementGrant, audit.ResourceGroup},
-	"POST:/api/v1/groups/:id/entitlements":             {audit.ActionGroupEntitlementGrant, audit.ResourceGroup},
-	"DELETE:/api/v1/groups/:id/entitlements/:eid":      {audit.ActionGroupEntitlementRevoke, audit.ResourceGroup},
+	"POST:/api/v1/groups/check-all":               {audit.Action("group.check"), audit.ResourceGroup},
+	"POST:/api/v1/groups":                         {audit.ActionGroupCreate, audit.ResourceGroup},
+	"PUT:/api/v1/groups/:id":                      {audit.ActionGroupUpdate, audit.ResourceGroup},
+	"DELETE:/api/v1/groups/:id":                   {audit.ActionGroupDelete, audit.ResourceGroup},
+	"POST:/api/v1/groups/:id/models":              {audit.ActionGroupAddModels, audit.ResourceGroup},
+	"DELETE:/api/v1/groups/:id/models/:model_id":  {audit.ActionGroupRemoveModel, audit.ResourceGroup},
+	"POST:/api/v1/groups/:id/check":               {audit.Action("group.check"), audit.ResourceGroup},
+	"PUT:/api/v1/groups/:id/open-mode":            {audit.ActionGroupEntitlementGrant, audit.ResourceGroup},
+	"POST:/api/v1/groups/:id/entitlements":        {audit.ActionGroupEntitlementGrant, audit.ResourceGroup},
+	"DELETE:/api/v1/groups/:id/entitlements/:eid": {audit.ActionGroupEntitlementRevoke, audit.ResourceGroup},
+	"PUT:/api/v1/groups/:id/budget-tier":          {audit.ActionModelTierUpdate, audit.ResourceGroup},
+	"PUT:/api/v1/groups/budget-tiers":             {audit.ActionModelTierUpdate, audit.ResourceGroup},
 
 	// ── Settings ───────────────────────────────────────────────────
-	"PUT:/api/v1/settings":              {audit.ActionSettingsUpdate, audit.ResourceSettings},
+	"PUT:/api/v1/settings":               {audit.ActionSettingsUpdate, audit.ResourceSettings},
 	"POST:/api/v1/settings/test-webhook": {audit.Action("settings.test_webhook"), audit.ResourceSettings},
 	"POST:/api/v1/settings/test-email":   {audit.ActionEmailTest, audit.ResourceSettings},
 	"POST:/api/v1/settings/export":       {audit.Action("settings.export"), audit.ResourceSettings},
@@ -104,42 +106,53 @@ var auditRouteMap = map[string]routeAction{
 	"POST:/api/v1/announcements/:id/read":     {audit.Action("announcement.read"), audit.ResourceAnnouncement},
 
 	// ── Notifications ──────────────────────────────────────────────
-	"POST:/api/v1/notifications/:id/read":         {audit.Action("notification.read"), audit.ResourceUser},
-	"POST:/api/v1/notifications/read-all":         {audit.Action("notification.read_all"), audit.ResourceUser},
+	"POST:/api/v1/notifications/:id/read": {audit.Action("notification.read"), audit.ResourceUser},
+	"POST:/api/v1/notifications/read-all": {audit.Action("notification.read_all"), audit.ResourceUser},
 
 	// ── Service Keys ───────────────────────────────────────────────
-	"POST:/api/v1/service-keys":                     {audit.ActionServiceKeyCreate, audit.ResourceServiceKey},
-	"PATCH:/api/v1/service-keys/:id/status":         {audit.ActionServiceKeyToggle, audit.ResourceServiceKey},
-	"PATCH:/api/v1/service-keys/:id/ip-allowlist":   {audit.ActionServiceKeyIPChanged, audit.ResourceServiceKey},
-	"DELETE:/api/v1/service-keys/:id":               {audit.ActionServiceKeyDelete, audit.ResourceServiceKey},
+	"POST:/api/v1/service-keys":                   {audit.ActionServiceKeyCreate, audit.ResourceServiceKey},
+	"PATCH:/api/v1/service-keys/:id/status":       {audit.ActionServiceKeyToggle, audit.ResourceServiceKey},
+	"PATCH:/api/v1/service-keys/:id/ip-allowlist": {audit.ActionServiceKeyIPChanged, audit.ResourceServiceKey},
+	"DELETE:/api/v1/service-keys/:id":             {audit.ActionServiceKeyDelete, audit.ResourceServiceKey},
 
 	// ── Budgets ────────────────────────────────────────────────────
-	"PUT:/api/v1/budgets":           {audit.ActionBudgetSet, audit.ResourceBudget},
-	"PUT:/api/v1/budgets/batch":     {audit.ActionBudgetSet, audit.ResourceBudget},
-	"DELETE:/api/v1/budgets":        {audit.ActionBudgetDelete, audit.ResourceBudget},
-	"POST:/api/v1/budget/rebuild-counters": {audit.ActionBudgetSet, audit.ResourceBudget},
+	"PUT:/api/v1/budgets":                            {audit.ActionBudgetSet, audit.ResourceBudget},
+	"PUT:/api/v1/budgets/batch":                      {audit.ActionBudgetSet, audit.ResourceBudget},
+	"DELETE:/api/v1/budgets":                         {audit.ActionBudgetDelete, audit.ResourceBudget},
+	"POST:/api/v1/budget/rebuild-counters":           {audit.ActionBudgetSet, audit.ResourceBudget},
+	"PUT:/api/v1/budgets/:allocation_id/tier-limits": {audit.ActionBudgetTierLimitSet, audit.ResourceBudget},
+	"POST:/api/v1/budgets/tier-limits/batch/apply":   {audit.ActionBudgetTierLimitSet, audit.ResourceBudget},
+	"POST:/api/v1/model-tiers":                       {audit.ActionModelTierCreate, audit.ResourceModelTier},
+	"PUT:/api/v1/model-tiers/:id":                    {audit.ActionModelTierUpdate, audit.ResourceModelTier},
+	"PATCH:/api/v1/model-tiers/:id/status":           {audit.ActionModelTierStatus, audit.ResourceModelTier},
+	"PATCH:/api/v1/model-tiers/:id/archive":          {audit.ActionModelTierArchive, audit.ResourceModelTier},
+	"DELETE:/api/v1/model-tiers/:id":                 {audit.ActionModelTierDelete, audit.ResourceModelTier},
+	"PUT:/api/v1/model-tiers/reorder":                {audit.ActionModelTierReorder, audit.ResourceModelTier},
 
 	// ── Expansion Requests ─────────────────────────────────────────
-	"POST:/api/v1/expansion-requests":                  {audit.ActionExpansionCreate, audit.ResourceExpansion},
-	"POST:/api/v1/expansion-requests/:id/decision":     {audit.ActionExpansionDecision, audit.ResourceExpansion},
-	"POST:/api/v1/expansion-requests/batch-decision":   {audit.ActionExpansionDecision, audit.ResourceExpansion},
+	"POST:/api/v1/expansion-requests":                {audit.ActionExpansionCreate, audit.ResourceExpansion},
+	"POST:/api/v1/expansion-requests/precheck":       {audit.ActionExpansionPrecheck, audit.ResourceExpansion},
+	"POST:/api/v1/expansion-requests/notify-owner":   {audit.ActionExpansionNotifyOwner, audit.ResourceExpansion},
+	"POST:/api/v1/expansion-requests/:id/reprecheck": {audit.ActionExpansionReprecheck, audit.ResourceExpansion},
+	"POST:/api/v1/expansion-requests/:id/decision":   {audit.ActionExpansionDecision, audit.ResourceExpansion},
+	"POST:/api/v1/expansion-requests/batch-decision": {audit.ActionExpansionDecision, audit.ResourceExpansion},
 
 	// ── Org: Studios ───────────────────────────────────────────────
-	"POST:/api/v1/org/studios":          {audit.Action("studio.create"), audit.Resource("studio")},
-	"DELETE:/api/v1/org/studios/:id":    {audit.Action("studio.delete"), audit.Resource("studio")},
+	"POST:/api/v1/org/studios":       {audit.Action("studio.create"), audit.Resource("studio")},
+	"DELETE:/api/v1/org/studios/:id": {audit.Action("studio.delete"), audit.Resource("studio")},
 
 	// ── Org: Departments ───────────────────────────────────────────
-	"PUT:/api/v1/org/departments/:id/studio":          {audit.Action("department.set_studio"), audit.Resource("department")},
-	"POST:/api/v1/org/dept-studio-map/import":         {audit.Action("department.import_mapping"), audit.Resource("department")},
+	"PUT:/api/v1/org/departments/:id/studio":  {audit.Action("department.set_studio"), audit.Resource("department")},
+	"POST:/api/v1/org/dept-studio-map/import": {audit.Action("department.import_mapping"), audit.Resource("department")},
 
 	// ── Org: Roles ─────────────────────────────────────────────────
-	"POST:/api/v1/org/roles/grant":    {audit.Action("role.grant"), audit.Resource("role")},
-	"POST:/api/v1/org/roles/revoke":   {audit.Action("role.revoke"), audit.Resource("role")},
+	"POST:/api/v1/org/roles/grant":  {audit.Action("role.grant"), audit.Resource("role")},
+	"POST:/api/v1/org/roles/revoke": {audit.Action("role.revoke"), audit.Resource("role")},
 
 	// ── Org: Employees ─────────────────────────────────────────────
-	"POST:/api/v1/org/employees/import":                {audit.ActionEmployeeImport, audit.ResourceEmployee},
-	"PUT:/api/v1/org/users/:id/department":             {audit.Action("user.change_department"), audit.ResourceUser},
-	"PUT:/api/v1/org/users/:id/department/follow-sso":  {audit.Action("user.follow_sso_department"), audit.ResourceUser},
+	"POST:/api/v1/org/employees/import":               {audit.ActionEmployeeImport, audit.ResourceEmployee},
+	"PUT:/api/v1/org/users/:id/department":            {audit.Action("user.change_department"), audit.ResourceUser},
+	"PUT:/api/v1/org/users/:id/department/follow-sso": {audit.Action("user.follow_sso_department"), audit.ResourceUser},
 }
 
 func lookupRouteAction(fullPath, method string) (action audit.Action, resource audit.Resource, ok bool) {
@@ -255,6 +268,9 @@ func AuditMiddleware(recorder audit.Recorder, db ...*gorm.DB) gin.HandlerFunc {
 			action = inferAction(method, path)
 			resourceType = audit.Resource(inferResourceType(path))
 		}
+		if override, ok := audit.GetActionOverride(c); ok {
+			action = override
+		}
 
 		if action == "" {
 			action = audit.Action(method + ":" + c.FullPath())
@@ -302,6 +318,25 @@ func AuditMiddleware(recorder audit.Recorder, db ...*gorm.DB) gin.HandlerFunc {
 		}
 		if rpBody := sanitizeBody(bw.body); rpBody != "" {
 			details["response_body"] = rpBody
+		}
+		if len(bodyBytes) > 0 && json.Valid(bodyBytes) {
+			var request map[string]any
+			if json.Unmarshal(bodyBytes, &request) == nil {
+				if reason, ok := request["reason"].(string); ok {
+					details["reason"] = reason
+				}
+			}
+		}
+		if reason := audit.GetReason(c); reason != "" {
+			details["reason"] = reason
+		}
+		if before, after := audit.GetBeforeAfter(c); before != nil || after != nil {
+			details["before"] = before
+			details["after"] = after
+		}
+		if scopeType, scopeID := audit.GetScope(c); scopeType != "" || scopeID != "" {
+			details["scope_type"] = scopeType
+			details["scope_id"] = scopeID
 		}
 
 		reqHdrs := make(map[string]string)
@@ -443,7 +478,6 @@ func sanitizeBody(data []byte) string {
 	}
 	return s
 }
-
 
 func extractClientIP(c *gin.Context) string {
 	if xff := c.GetHeader("X-Forwarded-For"); xff != "" {

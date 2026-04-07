@@ -159,13 +159,13 @@ const POLL_INTERVAL = 2000   // ms
 const POLL_TIMEOUT  = 120000 // ms — 2 分钟
 
 // ── OS 选项 ───────────────────────────────────────────────────────────────────
-const osList = [
+const osList: Array<{ value: 'mac' | 'windows'; label: string }> = [
   { value: 'mac',     label: 'macOS / Linux' },
   { value: 'windows', label: 'Windows (PowerShell)' },
 ]
 
 // 自动检测当前 OS
-const detectedOS = /Windows/.test(navigator.userAgent) ? 'windows' : 'mac'
+const detectedOS: 'mac' | 'windows' = /Windows/.test(navigator.userAgent) ? 'windows' : 'mac'
 const selectedOS = ref<'mac' | 'windows'>(detectedOS)
 
 // ── 状态 ──────────────────────────────────────────────────────────────────────

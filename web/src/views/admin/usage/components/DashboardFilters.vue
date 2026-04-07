@@ -90,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { User, ArrowUp, ArrowDown } from '@element-plus/icons-vue'
+import { User } from '@element-plus/icons-vue'
 
 defineOptions({ name: 'DashboardFilters' })
 

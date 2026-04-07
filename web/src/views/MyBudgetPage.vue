@@ -10,6 +10,52 @@
 
     <el-tabs v-model="activeTab" class="mb-tabs" @tab-change="onTabChange">
       <el-tab-pane label="我的预算" name="budget">
+    <section class="effective-budget" aria-labelledby="effective-budget-title">
+      <div class="mb-panel-head">
+        <div><h2 id="effective-budget-title">当前有效预算</h2><p>合并个人额度、共享池、等级额度与临时扩容后的最终结果。</p></div>
+        <el-tag v-if="tierBudget" type="info">{{ sourceModeLabel }}</el-tag>
+      </div>
+      <el-skeleton v-if="tierLoading && !tierBudget" :rows="4" animated />
+      <el-result v-else-if="tierError" icon="error" title="预算加载失败" :sub-title="tierError">
+        <template #extra><el-button type="primary" @click="loadTierBudget">重试</el-button></template>
+      </el-result>
+      <el-empty v-else-if="tierBudget && !tierBudget.effective_total.length && !tierBudget.tier_limits.length" description="暂无有效预算配置" />
+      <template v-else-if="tierBudget">
+        <DataFreshnessNotice :stale="tierBudget.stale" :updated-at="tierBudget.data_updated_at" />
+        <div class="effective-periods">
+          <article v-for="period in tierBudget.effective_total" :key="period.period_type" class="effective-card">
+            <span>{{ PERIOD_LABELS[period.period_type] }}总预算</span>
+            <strong>{{ period.status === 'disabled' ? '预算已停用' : period.configured ? `$${period.effective_limit_usd}` : '未配置' }}</strong>
+            <small>已用 {{ period.used_usd ? `$${period.used_usd}` : '—' }} · 剩余 {{ period.remaining_usd ? `$${period.remaining_usd}` : '—' }}</small>
+            <el-tag v-if="period.temporary_target_usd" size="small" type="warning">临时额度 ${{ period.temporary_target_usd }}</el-tag>
+          </article>
+        </div>
+        <div v-if="tierBudget.tier_limits.length" class="tier-budget-list">
+          <h3>模型等级额度</h3>
+          <el-table :data="tierBudget.tier_limits">
+            <el-table-column prop="model_tier_name" label="等级" min-width="140" />
+            <el-table-column v-for="period in ['daily', 'weekly', 'monthly']" :key="period" :label="PERIOD_LABELS[period as ExpansionPeriod]">
+              <template #default="{ row }">
+                <template v-if="tierPeriod(row, period)">
+                  <el-tag v-if="tierPeriod(row, period)!.status === 'tier_disabled'" type="info">等级已停用</el-tag>
+                  <el-tag v-else-if="tierPeriod(row, period)!.status === 'limit_disabled'" type="info">额度已停用</el-tag>
+                  <el-tag v-else-if="!tierPeriod(row, period)!.configured" type="info">未配置</el-tag>
+                  <el-tag v-else-if="Number(tierPeriod(row, period)!.effective_limit_usd) === 0" type="danger">$0 · 禁止</el-tag>
+                  <span v-else>${{ tierPeriod(row, period)!.remaining_usd }} 可用</span>
+                  <small v-if="tierPeriod(row, period)!.temporary_target_usd" class="temporary-note">临时 ${{ tierPeriod(row, period)!.temporary_target_usd }}</small>
+                </template>
+                <span v-else>—</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+        <el-collapse class="budget-chain">
+          <el-collapse-item title="预算来源链">
+            <ol><li v-for="node in tierBudget.budget_chain" :key="`${node.scope_type}-${node.label}`">{{ node.label }}<span v-if="!node.visible_amounts">（金额已脱敏）</span></li></ol>
+          </el-collapse-item>
+        </el-collapse>
+      </template>
+    </section>
     <div v-if="loading && !chain.length" v-loading="true" class="mb-loading" />
     <div v-else-if="!chain.length" class="mb-no-budget">
       <template v-if="authStore.isAdmin">
@@ -324,14 +370,16 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Refresh, Setting } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { createExpansionRequest, decideExpansion, getMyBudget, getMyExpansionRequests, getMyKeyRequests, cancelKeyRequest } from '@/services/control-plane'
+import { createExpansionRequest, decideExpansion, getMyBudget, getMyBudgetTiers, getMyExpansionRequests, getMyKeyRequests, cancelKeyRequest, notifyBudgetOwner, precheckExpansion } from '@/services/control-plane'
 import { useAuthStore } from '@/stores/auth'
 import type { BudgetChainItem } from '@/types/budget'
 import type { ExpansionPeriod, ExpansionRequest, ExpansionStatus } from '@/types/expansion'
-import { PERIOD_LABELS, PERIOD_SUFFIX, STATUS_COLORS, STATUS_LABELS } from '@/types/expansion'
+import { PERIOD_LABELS, PERIOD_SUFFIX, STATUS_LABELS } from '@/types/expansion'
 import type { KeyRequest, KeyRequestStatus } from '@/types/key-request'
 import { KEY_REQUEST_STATUS_LABELS, formatKeyRequestBudget, keyRequestHasBudget } from '@/types/key-request'
 import MyQuotaPanel from '@/components/budget/MyQuotaPanel.vue'
+import DataFreshnessNotice from '@/components/common/DataFreshnessNotice.vue'
+import type { MyBudgetTierLimit, MyBudgetTiersResponse } from '@/types/model-tier'
 
 type BudgetActivityKind = 'expansion' | 'key_budget'
 type BudgetActivityStatus = ExpansionStatus | KeyRequestStatus
@@ -344,6 +392,23 @@ interface BudgetActivity {
   sortTime: number
   expansion?: ExpansionRequest
   keyRequest?: KeyRequest
+}
+
+const tierBudget = ref<MyBudgetTiersResponse | null>(null)
+const tierLoading = ref(false)
+const tierError = ref('')
+const sourceModeLabel = computed(() => ({
+  personal: '个人额度', shared: '共享池', mixed: '混合来源',
+}[tierBudget.value?.source_summary.mode || 'shared']))
+function tierPeriod(row: MyBudgetTierLimit, period: string) {
+  return row.periods.find(item => item.period_type === period)
+}
+async function loadTierBudget() {
+  tierLoading.value = true
+  tierError.value = ''
+  try { tierBudget.value = await getMyBudgetTiers() }
+  catch (error) { tierError.value = error instanceof Error ? error.message : '请稍后重试' }
+  finally { tierLoading.value = false }
 }
 
 const router = useRouter()
@@ -432,9 +497,6 @@ const statusTagType = computed(() => {
   if (ratio >= 0.8) return 'warning'
   return 'success'
 })
-const statusClass = computed(() => `is-${statusTagType.value}`)
-const canOpenExpansion = computed(() => authStore.effectiveRole !== 'admin')
-
 // 月度分析相关
 const now = new Date()
 const monthDay = now.getDate()
@@ -537,7 +599,7 @@ const hasPendingRequest = computed(() => latestRequest.value?.status === 'pendin
 const cancellingId = ref<string | null>(null)
 
 async function loadAll() {
-  await Promise.all([loadBudget(), loadRequests()])
+  await Promise.all([loadBudget(), loadTierBudget(), loadRequests()])
 }
 
 async function loadBudget() {
@@ -639,6 +701,25 @@ async function submitExpansion() {
   }
   expansionSubmitting.value = true
   try {
+    const target = Number(expansionForm.value.requestedAmount).toFixed(6)
+    const precheck = await precheckExpansion({
+      scope_type: 'member', scope_id: userID, period_type: expansionForm.value.periodType,
+      dimension_type: 'total', duration_type: 'permanent', priority: 'normal',
+      target_amount_usd: target,
+    })
+    if (!precheck.can_submit) {
+      if (precheck.can_notify_owner) {
+        await notifyBudgetOwner({
+          scope_type: 'member', scope_id: userID, period_type: expansionForm.value.periodType,
+          dimension_type: 'total', message: expansionForm.value.reason,
+        })
+        ElMessage.warning('父级预算受限，已通知预算负责人')
+        expansionVisible.value = false
+        return
+      }
+      ElMessage.warning('当前预算状态不允许提交申请，请调整目标后重试')
+      return
+    }
     await createExpansionRequest({
       scope_type: 'member',
       scope_id: userID,
@@ -656,20 +737,6 @@ async function submitExpansion() {
 
 function statusLabel(status: ExpansionStatus) {
   return STATUS_LABELS[status] || status
-}
-
-function statusColor(status: ExpansionStatus) {
-  return STATUS_COLORS[status] || '#6b7280'
-}
-
-function scopeLabel(type: string) {
-  const map: Record<string, string> = {
-    member: '个人额度',
-    dept_daily: '部门日常',
-    dept_service: '部门服务',
-    studio: '工作室',
-  }
-  return map[type] || type
 }
 
 function formatDateTime(value: string): string {
@@ -779,7 +846,7 @@ async function cancelRequest(id: string) {
   const req = myRequests.value.find(r => r.id === id)
   if (req) req.status = 'cancelled'
   try {
-    await decideExpansion(id, 'cancel')
+    await decideExpansion(id, 'cancel', req?.precheck_version || '')
     ElMessage.success('申请已取消')
     await loadRequests()
   } catch (e: any) {
@@ -804,6 +871,15 @@ onUnmounted(() => { historyObserver?.disconnect() })
 </script>
 
 <style scoped>
+.effective-budget { display: grid; gap: 16px; margin-bottom: 20px; padding: 18px; border: 1px solid var(--el-border-color-light); border-radius: 8px; }
+.effective-periods { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.effective-card { display: grid; gap: 6px; padding: 14px; background: var(--el-fill-color-light); border-radius: 6px; }
+.effective-card strong { font-size: 20px; }
+.effective-card small, .temporary-note { color: var(--el-text-color-secondary); }
+.temporary-note { display: block; margin-top: 3px; font-size: 11px; }
+.tier-budget-list h3 { margin: 0 0 10px; font-size: 16px; }
+.budget-chain ol { margin: 0; padding-left: 20px; }
+@media (max-width: 768px) { .effective-periods { grid-template-columns: 1fr; } }
 /* ─────────────── Layout ─────────────── */
 .mb {
   display: flex;

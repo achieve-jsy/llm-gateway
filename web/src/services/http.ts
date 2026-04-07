@@ -19,6 +19,43 @@ export const ERROR_MESSAGES: Record<string, string> = {
   bad_request:             '请求参数有误',
   unauthorized:           '登录已失效，请重新登录',
   internal_error:          '服务器开小差了，请稍后重试',
+  EXPANSION_PRECHECK_STALE: '预算数据已变化，请重新预检',
+  EXPANSION_PRECHECK_BLOCKED: '当前额度受上级预算限制',
+  BUDGET_LIMIT_BELOW_USED: '新额度低于当前已用，请确认影响',
+  BUDGET_ZERO_BLOCK_CONFIRMATION_REQUIRED: '$0 会阻断后续请求，请明确确认',
+  BUDGET_USAGE_UNAVAILABLE: '实时用量暂不可用，请稍后重试',
+  BUDGET_PENDING_SCHEDULE_EXISTS: '该额度已有待生效变更',
+}
+
+export type GatewayBudgetErrorCode =
+  | 'EXPANSION_PRECHECK_STALE'
+  | 'EXPANSION_PRECHECK_BLOCKED'
+  | 'BUDGET_LIMIT_BELOW_USED'
+  | 'BUDGET_ZERO_BLOCK_CONFIRMATION_REQUIRED'
+  | 'BUDGET_USAGE_UNAVAILABLE'
+  | 'BUDGET_PENDING_SCHEDULE_EXISTS'
+  | 'BUDGET_CONFIG_SYNC_PENDING'
+
+export interface APIProblem {
+  code: string
+  message: string
+  next_action?: 'reprecheck' | 'raise_target' | 'retry' | 'notify_owner'
+  field_errors?: Record<string, string>
+}
+
+export function asAPIProblem(error: unknown): APIProblem {
+  const body = (error as any)?.response?.data || {}
+  const source = body.error && typeof body.error === 'object' ? body.error : body
+  return {
+    code: String(source.code || 'UNKNOWN_ERROR'),
+    message: String(source.message || (error as Error)?.message || '请求失败'),
+    next_action: source.next_action,
+    field_errors: source.field_errors,
+  }
+}
+
+export function budgetErrorMessage(code: GatewayBudgetErrorCode | string): string {
+  return ERROR_MESSAGES[code] || '预算操作失败，请刷新后重试'
 }
 
 /**
@@ -26,15 +63,10 @@ export const ERROR_MESSAGES: Record<string, string> = {
  * 若没有机器码或码未知则返回 null。
  */
 export function resolveErrorMessage(error: unknown): string | null {
-  const code = (error as any)?.response?.data?.error?.code as string | undefined
+  const problem = asAPIProblem(error)
+  const code = problem.code
   return code ? (ERROR_MESSAGES[code] ?? null) : null
 }
-
-/** 独立 axios 实例，保留备用（刷新逻辑已统一收拢到 refreshOnce，此实例不再承担刷新职责） */
-const refreshClient = axios.create({
-  timeout: 10000,
-  headers: { 'Content-Type': 'application/json' },
-})
 
 /** 创建 Axios 实例 */
 const http: AxiosInstance = axios.create({

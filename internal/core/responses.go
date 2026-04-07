@@ -79,8 +79,7 @@ type ResponsesInputElement struct {
 	Role    string `json:"role,omitempty"`
 	Status  string `json:"status,omitempty"`
 	Content any    `json:"content,omitempty"` // Can be string or []ContentPart
-	//nolint:govet // Intentional duplicate json tag for Swagger docs: content is string OR []ContentPart.
-	ContentSchema []ContentPart `json:"content,omitempty" extensions:"x-oneOf=[{\"type\":\"string\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/definitions/core.ContentPart\"}}]"`
+	ContentSchema []ContentPart `json:"-" swaggerignore:"true"`
 
 	// Function call fields (type="function_call")
 	CallID    string `json:"call_id,omitempty"`

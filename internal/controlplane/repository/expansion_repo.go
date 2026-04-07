@@ -1,10 +1,26 @@
 package repository
 
 import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/example/llm-gateway/internal/controlplane/budgetdomain"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
+
+type PendingExpansionKey struct {
+	RequesterID   uuid.UUID
+	ScopeType     string
+	ScopeID       string
+	PeriodType    budgetdomain.PeriodType
+	DimensionType budgetdomain.DimensionType
+	ModelTierID   *uuid.UUID
+	DurationType  budgetdomain.DurationType
+}
 
 // ExpansionRepo 处理扩容审批表。
 type ExpansionRepo struct {
@@ -17,7 +33,125 @@ func NewExpansionRepo(db *gorm.DB) *ExpansionRepo {
 
 // Create 创建扩容申请。
 func (r *ExpansionRepo) Create(req *model.ExpansionRequest) error {
-	return r.db.Create(req).Error
+	err := r.db.Create(req).Error
+	if isUniqueConstraintError(err) {
+		return ErrDuplicatePendingExpansion
+	}
+	return err
+}
+
+func (r *ExpansionRepo) ExistsPending(ctx context.Context, key PendingExpansionKey) (bool, error) {
+	dimensionKey := "total"
+	if key.DimensionType == budgetdomain.DimensionTier && key.ModelTierID != nil {
+		dimensionKey = "tier:" + key.ModelTierID.String()
+	}
+	var count int64
+	err := r.db.WithContext(ctx).Model(&model.ExpansionRequest{}).
+		Where("requester_id = ? AND scope_type = ? AND scope_id = ? AND period_type = ? AND dimension_key = ? AND duration_type = ?",
+			key.RequesterID, key.ScopeType, key.ScopeID, key.PeriodType, dimensionKey, key.DurationType).
+		Where("status IN ?", []string{model.ExpansionStatusPending, model.ExpansionStatusPrecheckRequired}).
+		Count(&count).Error
+	return count > 0, err
+}
+
+func (r *ExpansionRepo) FindByIDForUpdate(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*model.ExpansionRequest, error) {
+	if tx == nil {
+		tx = r.db
+	}
+	var request model.ExpansionRequest
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&request, "id = ?", id).Error; err != nil {
+		return nil, err
+	}
+	return &request, nil
+}
+
+func (r *ExpansionRepo) WithLockedRequest(
+	ctx context.Context,
+	id uuid.UUID,
+	fn func(*gorm.DB, *model.ExpansionRequest) error,
+) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		request, err := r.FindByIDForUpdate(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		return fn(tx, request)
+	})
+}
+
+func (r *ExpansionRepo) Transaction(ctx context.Context, fn func(*gorm.DB) error) error {
+	return r.db.WithContext(ctx).Transaction(fn)
+}
+
+func (r *ExpansionRepo) FindActiveDuplicate(
+	requesterID uuid.UUID,
+	scopeType, scopeID, periodType, dimensionType string,
+	tierID *uuid.UUID,
+	durationType string,
+) (*model.ExpansionRequest, error) {
+	var item model.ExpansionRequest
+	query := r.db.Where(
+		`requester_id = ? AND scope_type = ? AND scope_id = ? AND period_type = ?
+		 AND dimension_type = ? AND duration_type = ? AND status IN ?`,
+		requesterID, scopeType, scopeID, periodType, dimensionType, durationType,
+		[]string{model.ExpansionStatusPending, model.ExpansionStatusPrecheckRequired},
+	)
+	if tierID == nil {
+		query = query.Where("model_tier_id IS NULL")
+	} else {
+		query = query.Where("model_tier_id = ?", *tierID)
+	}
+	if err := query.First(&item).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &item, nil
+}
+
+func (r *ExpansionRepo) UpdateRequestFields(ctx context.Context, id uuid.UUID, updates map[string]any) error {
+	return r.db.WithContext(ctx).Model(&model.ExpansionRequest{}).Where("id = ?", id).Updates(updates).Error
+}
+
+func (r *ExpansionRepo) MarkPrecheckRequired(
+	ctx context.Context,
+	tx *gorm.DB,
+	id uuid.UUID,
+	version string,
+	current, used budgetdomain.Amount,
+	precheckedAt time.Time,
+) error {
+	return tx.WithContext(ctx).Model(&model.ExpansionRequest{}).Where("id = ?", id).Updates(map[string]any{
+		"status": model.ExpansionStatusPrecheckRequired, "precheck_version": version,
+		"current_amount_snapshot": current, "used_amount_snapshot": used, "prechecked_at": precheckedAt,
+	}).Error
+}
+
+func (r *ExpansionRepo) MarkApplied(
+	ctx context.Context,
+	tx *gorm.DB,
+	request *model.ExpansionRequest,
+	targetType string,
+	targetID uuid.UUID,
+	appliedAt time.Time,
+) error {
+	return tx.WithContext(ctx).Model(&model.ExpansionRequest{}).
+		Where("id = ? AND status = ?", request.ID, model.ExpansionStatusPending).
+		Updates(map[string]any{
+			"status": model.ExpansionStatusApproved, "applied_at": appliedAt,
+			"applied_target_type": targetType, "applied_target_id": targetID,
+			"sync_status": "pending",
+		}).Error
+}
+
+func (r *ExpansionRepo) CreateStepInTx(ctx context.Context, tx *gorm.DB, step *model.ExpansionApprovalStep) error {
+	return tx.WithContext(ctx).Create(step).Error
+}
+
+func (r *ExpansionRepo) UpdateSyncStatus(ctx context.Context, id uuid.UUID, status string) error {
+	return r.db.WithContext(ctx).Model(&model.ExpansionRequest{}).Where("id = ?", id).
+		Update("sync_status", status).Error
 }
 
 // FindByID 查找扩容申请。

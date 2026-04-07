@@ -5,6 +5,10 @@ export interface SystemSettings {
   api_base_url: string
   rate_limit_per_minute: number
   max_concurrency_per_key: number
+  default_user_rpm: number
+  default_user_max_concurrency: number
+  default_service_key_rpm: number
+  default_service_key_max_concurrency: number
   oidc_issuer_url: string
   oidc_client_id: string
   oidc_client_secret: string

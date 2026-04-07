@@ -9,6 +9,7 @@ import (
 
 	// 加载全部 GORM model 包
 	authmodel "github.com/example/llm-gateway/internal/auth/model"
+	"github.com/example/llm-gateway/internal/controlplane/keyactivity"
 	cpmmodel "github.com/example/llm-gateway/internal/controlplane/model"
 	obsrvmodel "github.com/example/llm-gateway/internal/observability/model"
 )
@@ -32,22 +33,42 @@ func main() {
 		&cpmmodel.ModelTagRelation{},
 		&cpmmodel.ProviderDefinition{},
 		&cpmmodel.Provider{},
-		&cpmmodel.GroupEntitlement{},
 		&cpmmodel.SystemConfig{},
 		// v0.7 预算模块
 		&cpmmodel.BudgetAllocation{},
 		&cpmmodel.BudgetConsumption{},
 		&cpmmodel.BudgetAlertRecord{},
+		&cpmmodel.ModelTier{},
+		&cpmmodel.BudgetTierLimit{},
+		&cpmmodel.BudgetTemporaryOverride{},
+		&cpmmodel.BudgetLimitSchedule{},
 		// v0.7 扩容审批
 		&cpmmodel.ExpansionRequest{},
 		&cpmmodel.ExpansionApprovalStep{},
 		// 站内通知（独立于公告）
 		&cpmmodel.Notification{},
+		&cpmmodel.NotificationOutbox{},
+		&cpmmodel.NotificationDelivery{},
 		// v0.8 审计日志
 		&cpmmodel.AuditLog{},
 		// Seedance 视频任务记录
 		&cpmmodel.VideoTask{},
 		&cpmmodel.VideoTaskEvent{},
+		&cpmmodel.SystemLog{},
+		&cpmmodel.AlertRule{},
+		&cpmmodel.AlertEvent{},
+		&cpmmodel.AlertSilence{},
+		&cpmmodel.AlertJobHeartbeat{},
+		&cpmmodel.DeptPolicy{},
+		&cpmmodel.KeyRequest{},
+		&cpmmodel.ChannelMonitor{},
+		&cpmmodel.ChannelMonitorHistory{},
+		&cpmmodel.ChannelMonitorDailyRollup{},
+		&cpmmodel.ChannelMonitorRequestTemplate{},
+		&cpmmodel.ChannelMonitorAggregationWatermark{},
+		&keyactivity.KeySourceSeen{},
+		&keyactivity.KeyActivityState{},
+		&keyactivity.KeyActivityAlert{},
 
 		// auth/model (3 个表)
 		&authmodel.Department{},
@@ -58,6 +79,8 @@ func main() {
 		&obsrvmodel.CallLog{},
 		&obsrvmodel.CallTrace{},
 		&obsrvmodel.UsageDaily{},
+		&obsrvmodel.ModelDailyStats{},
+		&obsrvmodel.UserDailyStats{},
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load gorm schema: %v\n", err)

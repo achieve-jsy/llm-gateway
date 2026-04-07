@@ -10,15 +10,15 @@ type Permission string
 
 const (
 	// ── 组织结构 ────────────────────────────────────────────────────────────
-	PermOrgTreeView    Permission = "org:tree:view"      // 查看组织树
-	PermStudioCreate   Permission = "org:studio:create"  // 新建工作室
-	PermStudioDelete   Permission = "org:studio:delete"  // 删除工作室
-	PermDeptCreate     Permission = "org:dept:create"    // 新建部门
-	PermDeptDelete     Permission = "org:dept:delete"    // 删除部门
+	PermOrgTreeView    Permission = "org:tree:view"       // 查看组织树
+	PermStudioCreate   Permission = "org:studio:create"   // 新建工作室
+	PermStudioDelete   Permission = "org:studio:delete"   // 删除工作室
+	PermDeptCreate     Permission = "org:dept:create"     // 新建部门
+	PermDeptDelete     Permission = "org:dept:delete"     // 删除部门
 	PermEmployeeImport Permission = "org:employee:import" // 批量导入花名册
-	PermDeptChange     Permission = "org:dept:change"    // 修改用户所属部门
-	PermSSORevert      Permission = "org:sso:revert"     // 恢复跟随 SSO 归属
-	PermMemberView     Permission = "org:member:view"    // 查看部门成员列表
+	PermDeptChange     Permission = "org:dept:change"     // 修改用户所属部门
+	PermSSORevert      Permission = "org:sso:revert"      // 恢复跟随 SSO 归属
+	PermMemberView     Permission = "org:member:view"     // 查看部门成员列表
 
 	// ── 角色管理 ────────────────────────────────────────────────────────────
 	PermRoleGrant  Permission = "org:role:grant"  // 授予角色
@@ -33,14 +33,16 @@ const (
 	PermUsageViewScoped Permission = "usage:view:scoped" // 查看自己管辖范围用量
 
 	// ── v0.7 模型组授权 ──────────────────────────────────────────────────────
-	PermGroupOpenModeSet   Permission = "group:open_mode:set"    // 设置组开放模式（仅平台 admin）
-	PermGroupEntitleGrant  Permission = "group:entitle:grant"    // 下放受控组给工作室/部门（studio_admin or admin）
-	PermGroupEntitleRevoke Permission = "group:entitle:revoke"   // 撤销授权（同上）
+	PermGroupOpenModeSet   Permission = "group:open_mode:set"  // 设置组开放模式（仅平台 admin）
+	PermGroupEntitleGrant  Permission = "group:entitle:grant"  // 下放受控组给工作室/部门（studio_admin or admin）
+	PermGroupEntitleRevoke Permission = "group:entitle:revoke" // 撤销授权（同上）
 
 	// ── v0.7 预算管理 ────────────────────────────────────────────────────────
 	PermBudgetViewAll    Permission = "budget:view:all"    // 查看全公司预算（admin）
 	PermBudgetViewScoped Permission = "budget:view:scoped" // 查看自己管辖范围预算（dept_admin/studio_admin）
 	PermBudgetSet        Permission = "budget:set"         // 设置/修改预算额度（按管辖域 RBAC 过滤）
+	PermModelTierView    Permission = "model_tier:view"
+	PermModelTierManage  Permission = "model_tier:manage"
 
 	// ── v0.7 Service Key ────────────────────────────────────────────────────
 	PermServiceKeyCreate Permission = "service_key:create" // 创建 Service Key（仅部门负责人）
@@ -55,21 +57,21 @@ const (
 	PermExpansionApprove Permission = "expansion:approve" // 审批扩容申请（studio_admin/admin）
 
 	// ── 模型组授权 ──────────────────────────────────────────────────────────────
-	PermEntitlementManage   Permission = "entitlement:manage"    // 平台管理员：设开放模式 + 授权工作室
+	PermEntitlementManage    Permission = "entitlement:manage"     // 平台管理员：设开放模式 + 授权工作室
 	PermEntitlementGrantDept Permission = "entitlement:grant_dept" // 工作室负责人：下放/开通部门
 
 	// ── feat/key-approval: Key 创建申请与审批 ──────────────────────────────────
-	PermKeyRequestApprove     Permission = "key_request:approve"      // 部门负责人审批 Key 申请
-	PermKeyRequestSetPolicy   Permission = "key_request:set_policy"   // 设置部门 Key 创建策略（dept_admin / admin）
+	PermKeyRequestApprove   Permission = "key_request:approve"    // 部门负责人审批 Key 申请
+	PermKeyRequestSetPolicy Permission = "key_request:set_policy" // 设置部门 Key 创建策略（dept_admin / admin）
 
 	// ── v0.15 四层配额体系 ──────────────────────────────────────────────────
-	PermQuotaDefaultSet    Permission = "quota:default:set"      // 修改两套全局默认（admin）
-	PermQuotaUserSet       Permission = "quota:user:set"         // 设置用户配额（service 层校验 dept 范围）
-	PermQuotaServiceKeySet Permission = "quota:service_key:set"  // 设置 Service Key 配额（按 Key.dept_id 校验）
-	PermQuotaGroupSet      Permission = "quota:group:set"        // 设置模型组配额（admin）
-	PermQuotaModelSet      Permission = "quota:model:set"        // 设置模型配额（admin）
-	PermQuotaViewScoped    Permission = "quota:view:scoped"      // 查看管辖范围内配额
-	PermQuotaViewAll       Permission = "quota:view:all"         // 查看全公司配额（admin）
+	PermQuotaDefaultSet    Permission = "quota:default:set"     // 修改两套全局默认（admin）
+	PermQuotaUserSet       Permission = "quota:user:set"        // 设置用户配额（service 层校验 dept 范围）
+	PermQuotaServiceKeySet Permission = "quota:service_key:set" // 设置 Service Key 配额（按 Key.dept_id 校验）
+	PermQuotaGroupSet      Permission = "quota:group:set"       // 设置模型组配额（admin）
+	PermQuotaModelSet      Permission = "quota:model:set"       // 设置模型配额（admin）
+	PermQuotaViewScoped    Permission = "quota:view:scoped"     // 查看管辖范围内配额
+	PermQuotaViewAll       Permission = "quota:view:all"        // 查看全公司配额（admin）
 )
 
 // ScopeConstraint 权限的范围约束级别（从宽到严）

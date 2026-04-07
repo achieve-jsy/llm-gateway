@@ -223,7 +223,7 @@ const cc = computed(() => ({
   rate: settingsStore.publicSettings.pricing_usd_to_cny_rate || 7.2,
 }))
 
-const { activePanel, userType, modelType, closePanel, togglePanel, jumpToModel, jumpToUser } = usePanelManager()
+const { userType, modelType, closePanel, togglePanel, jumpToModel, jumpToUser } = usePanelManager()
 
 const authStore = useAuthStore()
 const orgStore  = useOrgStore()
@@ -249,14 +249,12 @@ const datePresets = [
 function applyPreset(p: { label: string; days: number }) {
   dateRange.value = [fmt(daysAgo(p.days)), fmt(today)]
   activePreset.value = p.label
-  granularityManuallySet = false
   autoSetGranularity()
   bumpVideoOrLoadAll()
 }
 
 function onDateChange() {
   activePreset.value = ''
-  granularityManuallySet = false
   autoSetGranularity()
   bumpVideoOrLoadAll()
 }
@@ -431,10 +429,6 @@ const currentScope = computed(() => {
 
 const canDrill = computed(() =>
   currentScope.value === 'company' || currentScope.value === 'studio' || currentScope.value === 'dept'
-)
-
-const maxCost = computed(() =>
-  Math.max(1, ...breakdown.value.map(r => r.cost_estimate || 0))
 )
 
 const totalCost = computed(() =>
@@ -672,7 +666,6 @@ function drillDown(row: any) {
 function handleUserClick(row: any) {
   const enhanced = enhancedUserMap.value[row.id]
   const userName = enhanced?.user_name || row.name || row.id
-  const deptName = enhanced?.dept_name || ''
   togglePanel('user', row.id, userName)
 }
 
@@ -735,8 +728,6 @@ const prevTrendData = ref<any[]>([])
 const trendMetric = ref<'all' | 'cost' | 'calls' | 'tokens'>('all')
 
 const trendGranularity = ref<'day' | 'week' | 'month'>('day')
-let granularityManuallySet = false
-
 function autoSetGranularity() {
   const [start, end] = dateRange.value
   if (!start || !end) return
@@ -861,16 +852,6 @@ async function onUserNameChange() {
     }
   }
   loadAll()
-}
-
-function onUserNameClear() {
-  const last = breadcrumbs.value[breadcrumbs.value.length - 1]
-  if (last?.scope === 'user') {
-    breadcrumbs.value = []
-    loadAll()
-    return
-  }
-  reloadLogs()
 }
 
 function loadAll() {

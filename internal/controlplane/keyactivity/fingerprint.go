@@ -31,10 +31,10 @@ func UAFingerprint(raw string) string {
 	return fmt.Sprintf("%x", h.Sum(nil))[:16]
 }
 
-// SourceFP 来源指纹：以 IP 为唯一标识。同 IP 视为同一设备，不区分 UA。
-// IP 为空时回退到 UA 指纹（兜底）。
-func SourceFP(uaRaw, ip string, _ bool) string {
-	if ip != "" {
+// SourceFP 来源指纹：启用 IP 来源识别时优先使用 IP，否则仅使用 UA。
+// IP 为空时始终回退到 UA 指纹。
+func SourceFP(uaRaw, ip string, ipAsSource bool) string {
+	if ipAsSource && ip != "" {
 		return ip
 	}
 	return UAFingerprint(uaRaw)

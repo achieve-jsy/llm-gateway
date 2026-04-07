@@ -1,12 +1,15 @@
 package repository
 
 import (
+	"context"
 	"errors"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+var ErrGroupNotFound = errors.New("group not found")
 
 type GroupRepo struct {
 	db *gorm.DB
@@ -22,7 +25,7 @@ func (r *GroupRepo) Create(group *model.Group) error {
 
 func (r *GroupRepo) FindByID(id uint) (*model.Group, error) {
 	var group model.Group
-	err := r.db.Preload("Models").First(&group, "id = ?", id).Error
+	err := r.db.Preload("Models").Preload("BudgetTier").First(&group, "id = ?", id).Error
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +55,7 @@ func (r *GroupRepo) List(search string, page, pageSize int) ([]model.Group, int6
 	}
 
 	offset := (page - 1) * pageSize
-	err := query.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&groups).Error
+	err := query.Preload("BudgetTier").Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&groups).Error
 	if err != nil {
 		return nil, 0, err
 	}
@@ -79,8 +82,59 @@ func (r *GroupRepo) FindGroupWithModels(id uint) (*model.Group, error) {
 
 func (r *GroupRepo) ListEnabledGroupsWithModels() ([]model.Group, error) {
 	var groups []model.Group
-	err := r.db.Preload("Models").Where("enabled = ?", true).Order("created_at DESC").Find(&groups).Error
+	err := r.db.Preload("Models").Preload("BudgetTier").Where("enabled = ?", true).Order("created_at DESC").Find(&groups).Error
 	return groups, err
+}
+
+func (r *GroupRepo) SetBudgetTier(ctx context.Context, groupID uint, tierID *uuid.UUID) error {
+	result := r.db.WithContext(ctx).Model(&model.Group{}).
+		Where("id = ? AND deleted_at IS NULL", groupID).
+		Update("budget_tier_id", tierID)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrGroupNotFound
+	}
+	return nil
+}
+
+func (r *GroupRepo) SetBudgetTierBatch(ctx context.Context, groupIDs []uint, tierID *uuid.UUID) error {
+	if len(groupIDs) == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var count int64
+		if err := tx.Model(&model.Group{}).
+			Where("id IN ? AND deleted_at IS NULL", groupIDs).
+			Count(&count).Error; err != nil {
+			return err
+		}
+		if count != int64(len(groupIDs)) {
+			return ErrGroupNotFound
+		}
+		result := tx.Model(&model.Group{}).
+			Where("id IN ? AND deleted_at IS NULL", groupIDs).
+			Update("budget_tier_id", tierID)
+		return result.Error
+	})
+}
+
+type BudgetTierGroupSnapshotRow struct {
+	GroupName   string
+	TierID      uuid.UUID
+	TierName    string
+	TierEnabled bool
+}
+
+func (r *GroupRepo) ListBudgetTierGroupSnapshots(ctx context.Context) ([]BudgetTierGroupSnapshotRow, error) {
+	var rows []BudgetTierGroupSnapshotRow
+	err := r.db.WithContext(ctx).Table("model_groups AS g").
+		Select("g.name AS group_name, t.id AS tier_id, t.name AS tier_name, (t.enabled AND t.archived_at IS NULL) AS tier_enabled").
+		Joins("JOIN model_tiers AS t ON t.id = g.budget_tier_id").
+		Where("g.deleted_at IS NULL").
+		Scan(&rows).Error
+	return rows, err
 }
 
 func (r *GroupRepo) AddModelToGroup(groupID uint, gm *model.GroupModel) error {

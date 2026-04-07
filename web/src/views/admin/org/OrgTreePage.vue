@@ -1277,7 +1277,6 @@ async function loadDeptMembers(page = 1) {
   }
 }
 
-let memberSearchTimer: ReturnType<typeof setTimeout> | null = null
 function onMemberSearch() {
   // 本地过滤，无需防抖
 }
@@ -1659,7 +1658,7 @@ async function reload() {
   loading.value = true
   try {
     const userId = authStore.user?.id
-    const [s, d, u, r, myR] = await Promise.all([
+    const [, , , r, myR] = await Promise.all([
       orgStore.fetchStudios(),
       orgStore.fetchDepartments(),
       orgStore.fetchUnmapped(),

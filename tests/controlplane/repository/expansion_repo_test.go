@@ -2,6 +2,7 @@ package repository_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
@@ -24,9 +25,25 @@ func newExpansionTestRepo(t *testing.T) *repository.ExpansionRepo {
 			scope_type TEXT NOT NULL,
 			scope_id TEXT NOT NULL,
 			requester_id TEXT NOT NULL,
+			period_type TEXT,
+			dimension_type TEXT,
+			dimension_key TEXT,
+			model_tier_id TEXT,
+			duration_type TEXT,
+			priority TEXT,
 			current_amount REAL,
 			requested_amount REAL NOT NULL,
+			current_amount_snapshot NUMERIC,
+			used_amount_snapshot NUMERIC,
+			precheck_version TEXT,
+			prechecked_at DATETIME,
+			expires_at DATETIME,
+			applied_at DATETIME,
+			applied_target_type TEXT,
+			applied_target_id TEXT,
+			sync_status TEXT,
 			reason TEXT,
+			urgent_reason TEXT,
 			status TEXT NOT NULL,
 			current_level TEXT NOT NULL,
 			created_at DATETIME,
@@ -34,6 +51,11 @@ func newExpansionTestRepo(t *testing.T) *repository.ExpansionRepo {
 		)
 	`).Error; err != nil {
 		t.Fatalf("create expansion_requests: %v", err)
+	}
+	if err := db.Exec(`CREATE UNIQUE INDEX uniq_expansion_request_pending
+		ON expansion_requests(requester_id, scope_type, scope_id, period_type, dimension_key, duration_type)
+		WHERE status IN ('pending', 'precheck_required')`).Error; err != nil {
+		t.Fatalf("create pending index: %v", err)
 	}
 	if err := db.Exec(`
 		CREATE TABLE expansion_approval_steps (
@@ -51,11 +73,31 @@ func newExpansionTestRepo(t *testing.T) *repository.ExpansionRepo {
 	return repository.NewExpansionRepo(db)
 }
 
+func TestExpansionCreateNormalizesPendingUniqueConflict(t *testing.T) {
+	repo := newExpansionTestRepo(t)
+	requesterID := uuid.New()
+	build := func() *model.ExpansionRequest {
+		return &model.ExpansionRequest{
+			ID: uuid.New(), ScopeType: model.BudgetScopeMember, ScopeID: "member-a", RequesterID: requesterID,
+			PeriodType: model.ExpansionPeriodMonthly, DimensionType: "total", DimensionKey: "total",
+			DurationType: "permanent", RequestedAmount: 100, Status: model.ExpansionStatusPending,
+			CurrentLevel: model.ExpansionLevelDept,
+		}
+	}
+	if err := repo.Create(build()); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	err := repo.Create(build())
+	if !errors.Is(err, repository.ErrDuplicatePendingExpansion) {
+		t.Fatalf("expected stable duplicate error, got %v", err)
+	}
+}
+
 func TestCreateRequestForStudioBudgetGoesToPlatformLevel(t *testing.T) {
 	repo := newExpansionTestRepo(t)
 	svc := service.NewExpansionService(repo)
 
-	req, err := svc.CreateRequest(context.Background(), model.BudgetScopeStudio, "studio-a", uuid.New(), 1000, 2000, "workspace needs more budget")
+	req, err := svc.CreateRequest(context.Background(), model.BudgetScopeStudio, "studio-a", uuid.New(), 1000, 2000, model.ExpansionPeriodMonthly, "workspace needs more budget")
 	if err != nil {
 		t.Fatalf("create request: %v", err)
 	}
@@ -70,7 +112,7 @@ func TestCreateRequestForMemberBudgetGoesToDeptLevel(t *testing.T) {
 	svc := service.NewExpansionService(repo)
 	memberID := uuid.New()
 
-	req, err := svc.CreateRequest(context.Background(), model.BudgetScopeMember, memberID.String(), memberID, 10, 50, "need more personal quota")
+	req, err := svc.CreateRequest(context.Background(), model.BudgetScopeMember, memberID.String(), memberID, 10, 50, model.ExpansionPeriodMonthly, "need more personal quota")
 	if err != nil {
 		t.Fatalf("create request: %v", err)
 	}
@@ -118,7 +160,7 @@ func TestListPendingForApproverScopedFiltersStudioLevelByManagedScopes(t *testin
 		}
 	}
 
-	got, err := repo.ListPendingForApproverScoped(model.ExpansionLevelStudio, []string{"dept-a"}, nil, nil)
+	got, err := repo.ListPendingForApproverScoped(model.ExpansionLevelStudio, []string{"dept-a"}, nil, nil, "")
 	if err != nil {
 		t.Fatalf("list pending: %v", err)
 	}
@@ -159,7 +201,7 @@ func TestListPendingForApproverScopedFiltersDeptLevelByManagedMembers(t *testing
 		}
 	}
 
-	got, err := repo.ListPendingForApproverScoped(model.ExpansionLevelDept, nil, nil, []string{"member-a"})
+	got, err := repo.ListPendingForApproverScoped(model.ExpansionLevelDept, nil, nil, []string{"member-a"}, "")
 	if err != nil {
 		t.Fatalf("list pending: %v", err)
 	}

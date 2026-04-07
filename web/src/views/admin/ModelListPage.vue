@@ -355,7 +355,7 @@ function modelTypeTagType(type: string): 'primary' | 'success' | 'warning' | 'in
   if (type === 'embedding_vl') return 'info'
   if (type === 'rerank') return 'warning'
   if (type === 'rerank_vl') return 'danger'
-  if (type === 'video') return ''
+  if (type === 'video') return 'info'
   return 'info'
 }
 

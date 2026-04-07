@@ -6,6 +6,7 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // NotificationRepo 站内通知数据访问层。
@@ -19,6 +20,9 @@ func NewNotificationRepo(db *gorm.DB) *NotificationRepo {
 
 // Create 写入一条通知。
 func (r *NotificationRepo) Create(n *model.Notification) error {
+	if n.DedupeKey != "" {
+		return r.db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "source"}, {Name: "dedupe_key"}}, DoNothing: true}).Create(n).Error
+	}
 	return r.db.Create(n).Error
 }
 

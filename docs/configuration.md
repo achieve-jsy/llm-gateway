@@ -113,6 +113,15 @@ frontend:
 | `REDIS_PASSWORD` | Redis 密码 | - |
 | `REDIS_DB` | Redis DB | `0` |
 
+Gateway call-log Stream 与预算重建准入：
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `OBSERVABILITY_SPOOL_CAPACITY` | call-log Stream 与有效 billable inflight reservation 的硬容量总和 | `100000` |
+| `OBSERVABILITY_SPOOL_HIGH_WATERMARK` | readiness/health 进入背压状态的容量水位 | `80000` |
+| `OBSERVABILITY_SPOOL_CLAIM_MIN_IDLE` | 多实例 `XAUTOCLAIM` 最小 idle，须大于单批最大处理时间 | `30s` |
+| `OBSERVABILITY_BILLABLE_RESERVATION_TTL` | billable inflight reservation 异常回收时间 | `10m` |
+
 ### 认证
 
 | 变量 | 说明 | 默认值 |

@@ -18,7 +18,7 @@ import type {
   CatalogSyncStatus
 } from '@/types/catalog'
 import type { ApiResponse, PaginatedResponse } from '@/types/api'
-import type { ListKeysResponse, CreateKeyWrappedResponse } from '@/types/api-key'
+import type { AvailableGroupsResponse, ListKeysResponse, CreateKeyWrappedResponse } from '@/types/api-key'
 import type { Announcement, AnnouncementPayload, UpdateAnnouncementPayload } from '@/types/announcement'
 
 // ===================== 渠道定义（Registry） =====================
@@ -863,10 +863,12 @@ export async function getPerformance(
 
 // ===================== v0.7 预算管理 =====================
 
-import type { BudgetItem, BudgetScopeType, BudgetSetPayload, BudgetChainItem, BudgetContextItem } from '@/types/budget'
+import type { BudgetItem, BudgetScopeType, BudgetChainItem, BudgetContextItem, BudgetAdjustmentPayload, BudgetAdjustmentImpact } from '@/types/budget'
 import type { EntitlementPayload, GroupEntitlement } from '@/types/entitlement'
 import type { RawServiceKeyItem, ServiceKeyItem, CreateServiceKeyResponse } from '@/types/service-key'
-import type { ExpansionRequest, CreateExpansionPayload } from '@/types/expansion'
+import type { ExpansionRequest, CreateExpansionPayload, ExpansionPrecheckInput, ExpansionPrecheck, ExpansionDetail, ExpansionAction, NotifyOwnerInput } from '@/types/expansion'
+import type { BudgetRiskFilter, BudgetRiskPage, BudgetRiskSummary } from '@/types/budget-risk'
+import type { ModelTier, ModelTierInput, BudgetTierLimit, BudgetTierUsage, MyBudgetTiersResponse, TierAdjustmentPreview } from '@/types/model-tier'
 import { mapServiceKey } from '@/types/service-key'
 
 /** 获取预算列表（按 scope 类型和 id 过滤，或按 view 参数） */
@@ -875,19 +877,8 @@ export async function getBudgetList(scopeType?: BudgetScopeType, scopeId?: strin
   if (view) params.view = view
   if (scopeType) params.scope_type = scopeType
   if (scopeId) params.scope_id = scopeId
-  const res = await http.get<ApiResponse<{ items: BudgetItem[] }>>('/api/v1/budgets', { params })
+  const res = await http.get<{ items: BudgetItem[] }>('/api/v1/budgets', { params })
   return res.data.items
-}
-
-/** 设置预算额度 */
-export async function setBudget(payload: BudgetSetPayload): Promise<void> {
-  await http.put('/api/v1/budgets', payload)
-}
-
-/** 批量设置预算额度 */
-export async function setBudgetBatch(items: BudgetSetPayload[]): Promise<{ results: Array<{ scope_type: string; scope_id: string; ok: boolean; error?: string }> }> {
-  const res = await http.put<ApiResponse<{ results: Array<{ scope_type: string; scope_id: string; ok: boolean; error?: string }> }>>('/api/v1/budgets/batch', { items })
-  return res.data
 }
 
 /** 从 call_logs 重建 Redis 预算计数器（Redis 丢失恢复用） */
@@ -903,13 +894,13 @@ export async function deleteMemberBudget(scopeType: string, scopeId: string): Pr
 
 /** 获取预算链路上下文（面包屑用） */
 export async function getBudgetContext(): Promise<BudgetContextItem[]> {
-  const res = await http.get<ApiResponse<{ context: BudgetContextItem[] }>>('/api/v1/budgets/context')
+  const res = await http.get<{ context: BudgetContextItem[] }>('/api/v1/budgets/context')
   return res.data.context
 }
 
 /** 获取我的预算链 */
 export async function getMyBudget(): Promise<BudgetChainItem[]> {
-  const res = await http.get<ApiResponse<{ chain: BudgetChainItem[] }>>('/api/v1/my/budget')
+  const res = await http.get<{ chain: BudgetChainItem[] }>('/api/v1/my/budget')
   return res.data.chain
 }
 
@@ -922,7 +913,7 @@ export async function setGroupOpenMode(groupId: number, openMode: 'public' | 'co
 
 /** 获取模型组授权列表 */
 export async function getGroupEntitlements(groupId: number): Promise<GroupEntitlement[]> {
-  const res = await http.get<ApiResponse<{ items: GroupEntitlement[] }>>(`/api/v1/groups/${groupId}/entitlements`)
+  const res = await http.get<{ items: GroupEntitlement[] }>(`/api/v1/groups/${groupId}/entitlements`)
   return res.data.items
 }
 
@@ -1008,7 +999,7 @@ export async function createExpansionRequest(payload: CreateExpansionPayload): P
 export async function getMyExpansionRequests(status?: string): Promise<ExpansionRequest[]> {
   const params: Record<string, string> = {}
   if (status) params.status = status
-  const res = await http.get<ApiResponse<{ items: ExpansionRequest[] }>>('/api/v1/expansion-requests', { params })
+  const res = await http.get<{ items: ExpansionRequest[] }>('/api/v1/expansion-requests', { params })
   return res.data.items
 }
 
@@ -1016,25 +1007,205 @@ export async function getMyExpansionRequests(status?: string): Promise<Expansion
 export async function getPendingExpansions(name?: string): Promise<ExpansionRequest[]> {
   const params: Record<string, string> = {}
   if (name) params.name = name
-  const res = await http.get<ApiResponse<{ items: ExpansionRequest[] }>>('/api/v1/expansion-requests/pending', { params })
+  const res = await http.get<{ items: ExpansionRequest[] }>('/api/v1/expansion-requests/pending', { params })
   return res.data.items
 }
 
 /** 审批扩容申请 */
-export async function decideExpansion(requestId: string, action: 'approve' | 'reject' | 'escalate' | 'cancel', comment?: string): Promise<void> {
-  await http.post(`/api/v1/expansion-requests/${requestId}/decision`, { action, comment })
+export async function decideExpansion(
+  requestId: string,
+  action: 'approve' | 'reject' | 'escalate' | 'cancel',
+  precheckVersion: string,
+  comment?: string,
+): Promise<void> {
+  await http.post(`/api/v1/expansion-requests/${requestId}/decision`, {
+    action,
+    comment,
+    precheck_version: precheckVersion,
+  })
 }
 
 /** 批量审批扩容申请 */
-export async function batchDecideExpansion(decisions: Array<{ id: string; action: string; comment: string }>): Promise<{ results: Array<{ id: string; ok: boolean; error?: string }> }> {
-  const res = await http.post<ApiResponse<{ results: Array<{ id: string; ok: boolean; error?: string }> }>>('/api/v1/expansion-requests/batch-decision', { decisions })
+export async function batchDecideExpansion(decisions: Array<{
+  id: string
+  action: string
+  comment: string
+  precheck_version: string
+}>): Promise<{ results: Array<{ id: string; ok: boolean; error?: string; code?: string; next_action?: string }> }> {
+  const res = await http.post<{ results: Array<{ id: string; ok: boolean; error?: string; code?: string; next_action?: string }> }>('/api/v1/expansion-requests/batch-decision', { decisions })
   return res.data
 }
 
 /** 获取扩容申请的审批流水 */
 export async function getExpansionSteps(requestId: string): Promise<Array<{ id: string; level: string; approver_id?: string; action: string; comment: string; created_at: string }>> {
-  const res = await http.get<ApiResponse<{ steps: Array<{ id: string; level: string; approver_id?: string; action: string; comment: string; created_at: string }> }>>(`/api/v1/expansion-requests/${requestId}/steps`)
+  const res = await http.get<{ steps: Array<{ id: string; level: string; approver_id?: string; action: string; comment: string; created_at: string }> }>(`/api/v1/expansion-requests/${requestId}/steps`)
   return res.data.steps || []
+}
+
+export async function precheckExpansion(input: ExpansionPrecheckInput): Promise<ExpansionPrecheck> {
+  const { data } = await http.post<{ data: ExpansionPrecheck }>('/api/v1/expansion-requests/precheck', input)
+  return data.data
+}
+
+export async function getExpansionDetail(id: string): Promise<ExpansionDetail> {
+  const { data } = await http.get<{ data: ExpansionDetail }>(`/api/v1/expansion-requests/${id}`)
+  return data.data
+}
+
+export async function updateExpansion(id: string, input: {
+  target_amount_usd: string
+  reason: string
+  urgent_reason?: string
+}): Promise<ExpansionRequest> {
+  const { data } = await http.patch<{ data: ExpansionRequest }>(`/api/v1/expansion-requests/${id}`, input)
+  return data.data
+}
+
+export async function reprecheckExpansion(id: string): Promise<ExpansionDetail> {
+  const { data } = await http.post<{ data: ExpansionDetail }>(`/api/v1/expansion-requests/${id}/reprecheck`)
+  return data.data
+}
+
+export async function decideExpansionV2(
+  id: string,
+  input: { action: ExpansionAction; comment: string; precheck_version: string },
+): Promise<ExpansionDetail> {
+  const { data } = await http.post<{ data: ExpansionDetail }>(`/api/v1/expansion-requests/${id}/decision`, input)
+  return data.data
+}
+
+export async function notifyBudgetOwner(input: NotifyOwnerInput): Promise<void> {
+  await http.post('/api/v1/expansion-requests/notify-owner', input)
+}
+
+export async function listBudgetRisks(filter: BudgetRiskFilter = {}): Promise<BudgetRiskPage> {
+  const { data } = await http.get<{ data: BudgetRiskPage }>('/api/v1/budget/risk-events', { params: filter })
+  return data.data
+}
+
+export async function getBudgetRiskSummary(filter: BudgetRiskFilter = {}): Promise<BudgetRiskSummary> {
+  const { data } = await http.get<{ data: BudgetRiskSummary }>('/api/v1/budget/risk-events/summary', { params: filter })
+  return data.data
+}
+
+export async function listModelTiers(includeArchived = false): Promise<ModelTier[]> {
+  const { data } = await http.get<{ data: ModelTier[] }>('/api/v1/model-tiers', {
+    params: { include_archived: includeArchived },
+  })
+  return data.data
+}
+
+export async function createModelTier(input: ModelTierInput & { reason: string }): Promise<ModelTier> {
+  const { data } = await http.post<{ data: ModelTier }>('/api/v1/model-tiers', input)
+  return data.data
+}
+
+export async function updateModelTier(id: string, input: Partial<ModelTierInput> & { reason: string }): Promise<ModelTier> {
+  const { data } = await http.put<{ data: ModelTier }>(`/api/v1/model-tiers/${id}`, input)
+  return data.data
+}
+
+export async function setModelTierStatus(id: string, enabled: boolean, reason: string): Promise<ModelTier> {
+  const { data } = await http.patch<{ data: ModelTier }>(`/api/v1/model-tiers/${id}/status`, { enabled, reason })
+  return data.data
+}
+
+export async function archiveModelTier(id: string, reason: string): Promise<ModelTier> {
+  const { data } = await http.patch<{ data: ModelTier }>(`/api/v1/model-tiers/${id}/archive`, { reason })
+  return data.data
+}
+
+export async function deleteModelTier(id: string, reason: string): Promise<void> {
+  await http.delete(`/api/v1/model-tiers/${id}`, { data: { reason } })
+}
+
+export async function reorderModelTiers(ids: string[], reason: string): Promise<void> {
+  await http.put('/api/v1/model-tiers/reorder', { ids, reason })
+}
+
+export async function setGroupBudgetTier(groupId: number, modelTierId: string | null, reason: string): Promise<void> {
+  await http.put(`/api/v1/groups/${groupId}/budget-tier`, { model_tier_id: modelTierId, reason })
+}
+
+export async function setGroupBudgetTierBatch(groupIds: number[], modelTierId: string | null, reason: string): Promise<void> {
+  await http.put('/api/v1/groups/budget-tiers', { group_ids: groupIds, model_tier_id: modelTierId, reason })
+}
+
+export async function listBudgetTierLimits(allocationId: string): Promise<BudgetTierLimit[]> {
+  const { data } = await http.get<{ data: { tier_limits: BudgetTierLimit[] } }>(`/api/v1/budgets/${allocationId}/tier-limits`)
+  return data.data.tier_limits
+}
+
+export async function previewBudgetTierBatch(input: {
+  operation: 'set_fixed' | 'adjust_percent'
+  items: Array<{
+    item_id: string
+    allocation_id: string
+    model_tier_id: string
+    period_type: 'daily' | 'weekly' | 'monthly'
+    direction?: 'increase' | 'decrease'
+    value: string
+  }>
+  effective_mode: 'immediate' | 'next_period'
+  reason: string
+}): Promise<TierAdjustmentPreview> {
+  const { data } = await http.post<{ data: TierAdjustmentPreview }>('/api/v1/budgets/tier-limits/batch/preview', input)
+  return data.data
+}
+
+export async function applyBudgetTierBatch(input: {
+  preview_token: string
+  confirm_item_ids: string[]
+}): Promise<unknown> {
+  const { data } = await http.post<{ data: unknown }>('/api/v1/budgets/tier-limits/batch/apply', input)
+  return data.data
+}
+
+export async function getBudgetTierUsage(params: Record<string, string>): Promise<BudgetTierUsage[]> {
+  const { data } = await http.get<{ items: BudgetTierUsage[] }>('/api/v1/budgets/tier-usage', { params })
+  return data.items || []
+}
+
+export async function getMyBudgetTiers(): Promise<MyBudgetTiersResponse> {
+  const { data } = await http.get<{ data: MyBudgetTiersResponse }>('/api/v1/my/budget/tiers')
+  return data.data
+}
+
+export async function previewBudgetAdjustment(payload: BudgetAdjustmentPayload): Promise<BudgetAdjustmentImpact> {
+  const { data } = await http.put<{ data: BudgetAdjustmentImpact }>('/api/v1/budgets', { ...payload, preview_only: true })
+  return data.data
+}
+
+export async function adjustBudget(payload: BudgetAdjustmentPayload): Promise<BudgetAdjustmentImpact> {
+  const { data } = await http.put<{ data: BudgetAdjustmentImpact }>('/api/v1/budgets', payload)
+  return data.data
+}
+
+export interface TotalBudgetBatchPayload {
+  operation: 'set_fixed' | 'adjust_percent'
+  direction?: 'increase' | 'decrease'
+  value: string
+  period_type: 'daily' | 'weekly' | 'monthly'
+  effective_mode: 'immediate' | 'next_period'
+  reason: string
+  confirm_zero_block?: boolean
+  confirm_below_used?: boolean
+  confirm_replace_schedule?: boolean
+  items: Array<{ item_id: string; scope_type: string; scope_id: string; preview_version?: string }>
+}
+
+export interface TotalBudgetBatchResult {
+  items: Array<{ item_id: string; target_limit_usd: string; impact: BudgetAdjustmentImpact }>
+}
+
+export async function previewTotalBudgetBatch(payload: TotalBudgetBatchPayload): Promise<TotalBudgetBatchResult> {
+  const { data } = await http.post<{ data: TotalBudgetBatchResult }>('/api/v1/budgets/batch/preview', payload)
+  return data.data
+}
+
+export async function applyTotalBudgetBatch(payload: TotalBudgetBatchPayload): Promise<TotalBudgetBatchResult> {
+  const { data } = await http.post<{ data: TotalBudgetBatchResult }>('/api/v1/budgets/batch/apply', payload)
+  return data.data
 }
 
 // ─── 站内通知 (Notifications) ──────────────────────────────────────────────

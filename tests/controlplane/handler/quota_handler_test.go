@@ -102,6 +102,7 @@ func setupQuotaTestDB(t *testing.T) *gorm.DB {
 		deleted_at DATETIME,
 		name TEXT NOT NULL,
 		description TEXT DEFAULT '',
+		model_type TEXT NOT NULL DEFAULT 'chat',
 		strategy TEXT NOT NULL DEFAULT 'round_robin',
 		enabled INTEGER NOT NULL DEFAULT 1,
 		max_switches INTEGER NOT NULL DEFAULT 2,
@@ -114,7 +115,8 @@ func setupQuotaTestDB(t *testing.T) *gorm.DB {
 		override_supports_function_calling INTEGER NOT NULL DEFAULT 0,
 		override_supports_tool_choice INTEGER NOT NULL DEFAULT 0,
 		quota_rpm INTEGER,
-		quota_max_concurrency INTEGER
+		quota_max_concurrency INTEGER,
+		budget_tier_id TEXT
 	)`).Error)
 
 	// providers table (matches cpmodel.Provider)
@@ -161,6 +163,11 @@ func setupQuotaTestDB(t *testing.T) *gorm.DB {
 		catalog_id TEXT,
 		ctx_overridden INTEGER NOT NULL DEFAULT 0,
 		max_output_overridden INTEGER NOT NULL DEFAULT 0,
+		video_supported_resolutions TEXT NOT NULL DEFAULT '[]',
+		video_supported_aspect_ratios TEXT NOT NULL DEFAULT '[]',
+		video_min_duration_seconds INTEGER NOT NULL DEFAULT 0,
+		video_max_duration_seconds INTEGER NOT NULL DEFAULT 0,
+		video_supported_actions TEXT NOT NULL DEFAULT '[]',
 		quota_rpm INTEGER,
 		quota_max_concurrency INTEGER,
 		consecutive_failures INTEGER NOT NULL DEFAULT 0,
@@ -401,7 +408,7 @@ func TestGetUserQuota_Default(t *testing.T) {
 	var resp map[string]interface{}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	data := resp["data"].(map[string]interface{})
-	assert.Equal(t, float64(60), data["rpm"])              // 默认值
+	assert.Equal(t, float64(60), data["rpm"])             // 默认值
 	assert.Equal(t, float64(10), data["max_concurrency"]) // 默认值
 	assert.Equal(t, "default_user", data["source"])
 }

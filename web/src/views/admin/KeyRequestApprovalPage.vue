@@ -305,7 +305,6 @@ const showAutoApproveDialog = ref(false)
 const autoApproveLoading = ref(false)
 const autoApproveResult = ref<KeyRequestAutoApproveResult | null>(null)
 
-const pendingDisplayTotal = computed(() => Math.max(pendingTotal.value, pendingCount.value))
 const historyDisplayTotal = computed(() => historyTotal.value)
 
 function formatDate(iso?: string): string {

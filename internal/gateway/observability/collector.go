@@ -2,25 +2,42 @@ package observability
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
+	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 	"gorm.io/gorm"
 
 	"github.com/example/llm-gateway/internal/core"
-	obsmodel "github.com/example/llm-gateway/internal/observability/model"
+	"github.com/example/llm-gateway/internal/gateway/budget"
 	"github.com/example/llm-gateway/internal/gateway/observability/model"
 	"github.com/example/llm-gateway/internal/gateway/observability/repository"
+	obsmodel "github.com/example/llm-gateway/internal/observability/model"
 )
 
 // Collector 埋点采集器
 // 在 Logger 中间件 c.Next() 后调用，构造 UsageEvent 并异步投递
 type Collector struct {
-	ch      chan UsageEvent
-	writer  *BatchWriter
-	pricing PricingResolver
-	cfg     CollectorConfig
+	ch                     chan UsageEvent
+	writer                 *BatchWriter
+	pricing                PricingResolver
+	cfg                    CollectorConfig
+	syncFallbackCounter    metric.Int64Counter
+	deliveryFailureCounter metric.Int64Counter
+	writerDone             chan struct{}
+	streamFirst            bool
+	spool                  *CallLogSpool
+	streamSink             *mutableCallLogSink
+	spoolHighWatermark     atomic.Bool
+	spoolHighWaterCounter  metric.Int64Counter
+	reconciliationRequired metric.Int64Counter
 }
 
 // PricingResolver 定价查询接口
@@ -28,46 +45,180 @@ type PricingResolver interface {
 	Resolve(modelKey string) (core.ModelPricing, bool)
 }
 
+type PricingResolverFunc func(modelKey string) (core.ModelPricing, bool)
+
+func (f PricingResolverFunc) Resolve(modelKey string) (core.ModelPricing, bool) {
+	return f(modelKey)
+}
+
+type ProviderPricingResolver interface {
+	PricingResolver
+	ResolveForProvider(modelKey, provider string) (core.ModelPricing, bool)
+}
+
+type ProviderPricingResolverFunc func(modelKey, provider string) (core.ModelPricing, bool)
+
+func (f ProviderPricingResolverFunc) Resolve(modelKey string) (core.ModelPricing, bool) {
+	return f(modelKey, "")
+}
+
+func (f ProviderPricingResolverFunc) ResolveForProvider(modelKey, provider string) (core.ModelPricing, bool) {
+	return f(modelKey, provider)
+}
+
+type ChainedPricingResolver []PricingResolver
+
+func (r ChainedPricingResolver) Resolve(modelKey string) (core.ModelPricing, bool) {
+	for _, resolver := range r {
+		if resolver == nil {
+			continue
+		}
+		if pricing, ok := resolver.Resolve(modelKey); ok {
+			return pricing, true
+		}
+	}
+	return core.ModelPricing{}, false
+}
+
+func (r ChainedPricingResolver) ResolveForProvider(modelKey, provider string) (core.ModelPricing, bool) {
+	for _, resolver := range r {
+		if resolver == nil {
+			continue
+		}
+		if providerResolver, ok := resolver.(ProviderPricingResolver); ok {
+			if pricing, found := providerResolver.ResolveForProvider(modelKey, provider); found {
+				return pricing, true
+			}
+			continue
+		}
+		if pricing, ok := resolver.Resolve(modelKey); ok {
+			return pricing, true
+		}
+	}
+	return core.ModelPricing{}, false
+}
+
 // NewCollector 创建 Collector
 func NewCollector(cfg CollectorConfig, pricing PricingResolver) *Collector {
-	return &Collector{
-		ch:      make(chan UsageEvent, cfg.BufferSize),
-		pricing: pricing,
-		cfg:     cfg,
+	if cfg.EnqueueTimeout <= 0 {
+		cfg.EnqueueTimeout = 25 * time.Millisecond
 	}
+	if cfg.SyncFallbackTimeout <= 0 {
+		cfg.SyncFallbackTimeout = 2 * time.Second
+	}
+	meter := otel.Meter("llm-gateway/observability")
+	syncFallbackCounter, _ := meter.Int64Counter("gateway_call_log_sync_fallback_total")
+	deliveryFailureCounter, _ := meter.Int64Counter("gateway_call_log_delivery_failure_total")
+	spoolHighWaterCounter, _ := meter.Int64Counter("gateway_call_log_spool_high_watermark_total")
+	reconciliationRequired, _ := meter.Int64Counter("gateway_budget_counter_reconciliation_required_total")
+	return &Collector{
+		ch:                     make(chan UsageEvent, cfg.BufferSize),
+		pricing:                pricing,
+		cfg:                    cfg,
+		syncFallbackCounter:    syncFallbackCounter,
+		deliveryFailureCounter: deliveryFailureCounter,
+		spoolHighWaterCounter:  spoolHighWaterCounter,
+		reconciliationRequired: reconciliationRequired,
+	}
+}
+
+func (c *Collector) CanAcceptBillableRequest() bool {
+	return c == nil || !c.spoolHighWatermark.Load()
+}
+
+func (c *Collector) BudgetAdmissionConfig() budget.AdmissionConfig {
+	if c == nil {
+		return budget.AdmissionConfig{}
+	}
+	return budget.AdmissionConfig{
+		SpoolCapacity:  c.cfg.SpoolCapacity,
+		ReservationTTL: c.cfg.BillableReservationTTL,
+	}
+}
+
+func (c *Collector) HandlesBillableReservation() bool {
+	return c != nil && c.streamFirst && c.spool != nil
+}
+
+func (c *Collector) HasLivePostgresSink() bool {
+	return c != nil && c.streamSink != nil && c.streamSink.Available()
 }
 
 // StartWriter 启动批量写入 goroutine
 func (c *Collector) StartWriter(ctx context.Context, repo *repository.CallLogRepository) {
+	c.StartWriterWithSpool(ctx, repo, nil)
+}
+
+// StartWriterWithSpool starts reliable DB persistence with Redis Stream
+// failover. request_id's unique constraint makes replay idempotent.
+func (c *Collector) StartWriterWithSpool(
+	ctx context.Context,
+	repo *repository.CallLogRepository,
+	rdb *redis.Client,
+) {
+	meter := otel.Meter("llm-gateway/observability")
+	retryCounter, _ := meter.Int64Counter("gateway_call_log_db_retry_total")
+	unrecoverableCounter, _ := meter.Int64Counter("gateway_call_log_unrecoverable_total")
 	c.writer = &BatchWriter{
-		repo:     repo,
-		db:       repo.DB(),
-		flushN:   c.cfg.FlushN,
-		interval: c.cfg.FlushInterval,
+		repo:                 repo,
+		db:                   repo.DB(),
+		flushN:               c.cfg.FlushN,
+		interval:             c.cfg.FlushInterval,
+		retryCount:           c.cfg.DBRetryCount,
+		retryBackoff:         c.cfg.DBRetryBackoff,
+		spool:                NewCallLogSpool(rdb),
+		retryCounter:         retryCounter,
+		unrecoverableCounter: unrecoverableCounter,
 	}
-	go c.writer.Run(ctx, c.ch)
+	c.writerDone = make(chan struct{})
+	if c.writer.spool != nil {
+		go c.writer.spool.RunReplay(ctx, repo, c.cfg.SpoolReplayInterval)
+	}
+	go func() {
+		defer close(c.writerDone)
+		c.writer.Run(ctx, c.ch)
+	}()
+}
+
+func (c *Collector) Wait(ctx context.Context) error {
+	if c == nil || c.writerDone == nil {
+		return nil
+	}
+	select {
+	case <-c.writerDone:
+		return nil
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
 }
 
 // NewUsageEvent 从 gin.Context 提取字段构造 UsageEvent
 func (c *Collector) NewUsageEvent(ctx *gin.Context) UsageEvent {
 	now := time.Now()
 	event := UsageEvent{
-		RequestID:       getString(ctx, "request_id"),
-		Timestamp:       now,
-		KeyID:           getString(ctx, "key_id"),
-		KeyName:         getString(ctx, "key_name"),
-		KeyType:         normalizeKeyType(getString(ctx, "key_type")),
-		UserID:          getString(ctx, "user_id"),
-		UserName:        getString(ctx, "user_name"),
-		DeptID:          getString(ctx, "dept_id"),
-		DeptName:        getString(ctx, "dept_name"),
-		StudioID:        getString(ctx, "studio_id"),
-		StudioName:      getString(ctx, "studio_name"),
-		Model:           getString(ctx, "model"),
-		RoutedModel:     getString(ctx, "routed_model"),
-		GroupName:       getString(ctx, "group_name"),
-		Provider:        getString(ctx, "provider"),
-		ReasoningEffort: getString(ctx, "reasoning_effort"),
+		RequestID: getString(ctx, "request_id"),
+		Timestamp: now,
+		BillableReserved: func() bool {
+			_, reserved := ctx.Get(budget.CtxKeyBillableReservation)
+			return reserved
+		}(),
+		BillableReservation:     budget.GetBillableReservation(ctx),
+		PendingBudgetAccount:    budget.GetPendingAccount(ctx),
+		BudgetAdmissionFailOpen: budget.GetAdmissionOutcome(ctx) == budget.AdmissionInfrastructureFailOpen,
+		KeyID:                   getString(ctx, "key_id"),
+		KeyName:                 getString(ctx, "key_name"),
+		KeyType:                 normalizeKeyType(getString(ctx, "key_type")),
+		UserID:                  getString(ctx, "user_id"),
+		UserName:                getString(ctx, "user_name"),
+		DeptID:                  getString(ctx, "dept_id"),
+		DeptName:                getString(ctx, "dept_name"),
+		StudioID:                getString(ctx, "studio_id"),
+		StudioName:              getString(ctx, "studio_name"),
+		Model:                   getString(ctx, "model"),
+		RoutedModel:             getString(ctx, "routed_model"),
+		GroupName:               getString(ctx, "group_name"),
+		Provider:                getString(ctx, "provider"),
+		ReasoningEffort:         getString(ctx, "reasoning_effort"),
 		RoutedViaGroup: func() bool {
 			v, ok := ctx.Get("routed_via_group")
 			if !ok {
@@ -169,18 +320,226 @@ func (c *Collector) NewUsageEvent(ctx *gin.Context) UsageEvent {
 
 	// 成本计算
 	event.EstimateCost(c.pricing)
+	if tier, ok := budget.GetTierContext(ctx); ok {
+		event.BudgetTierID = tier.TierID
+		event.BudgetTierNameSnapshot = tier.TierName
+		event.BudgetTierSnapshotRevision = tier.SnapshotRevision
+		event.BudgetTierAccountingEligible = ctx.GetBool(budget.CtxKeyTierAccountingEligible)
+	}
+	if plan, ok := budget.GetAccountingPlan(ctx); ok && plan != nil {
+		for _, constraint := range plan.Constraints {
+			if constraint.Dimension != budget.DimensionTier {
+				continue
+			}
+			event.BudgetTierConstraintsSnapshot = append(
+				event.BudgetTierConstraintsSnapshot,
+				obsmodel.BudgetTierConstraintSnapshot{
+					RedisKey: constraint.Key, ScopeType: constraint.ScopeType, ScopeID: constraint.ScopeID,
+					TierID: constraint.TierID, PeriodType: string(constraint.PeriodType),
+					Period: constraint.Period, ResetAt: constraint.ResetAt,
+				},
+			)
+		}
+	}
+	if block, ok := budget.GetBlockContext(ctx); ok {
+		event.BudgetBlockCode = stringPtr(block.Code)
+		event.BudgetBlockDimension = stringPtr(string(block.Dimension))
+		event.BudgetBlockScopeType = stringPtr(block.ScopeType)
+		event.BudgetBlockScopeID = stringPtr(block.ScopeID)
+		event.BudgetBlockPeriodType = stringPtr(string(block.PeriodType))
+	}
 
 	return event
 }
 
-// Emit 非阻塞投递事件到 channel
+func stringPtr(value string) *string {
+	if value == "" {
+		return nil
+	}
+	copied := value
+	return &copied
+}
+
+// Emit 在队列满时先有界等待，再同步落库，避免静默丢失审计事实。
 func (c *Collector) Emit(e UsageEvent) {
+	if c == nil {
+		return
+	}
+	if c.streamFirst {
+		c.emitStreamFirst(e)
+		return
+	}
+	if c.writer == nil {
+		ctx := context.Background()
+		if c.deliveryFailureCounter != nil {
+			c.deliveryFailureCounter.Add(ctx, 1)
+		}
+		slog.Error("call log collector has no writer",
+			"request_id", e.RequestID,
+			"stream_first", false,
+		)
+		return
+	}
+	timer := time.NewTimer(c.cfg.EnqueueTimeout)
+	defer timer.Stop()
 	select {
 	case c.ch <- e:
-	default:
-		// 队列满则丢弃并计数
-		log.Printf("[observability] usage event dropped, queue full (capacity=%d)", c.cfg.BufferSize)
+		return
+	case <-timer.C:
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), c.cfg.SyncFallbackTimeout)
+	defer cancel()
+	if c.syncFallbackCounter != nil {
+		c.syncFallbackCounter.Add(ctx, 1)
+	}
+	callLog, err := e.ToCallLog()
+	if err == nil {
+		SanitizeCallLogForWrite(&callLog)
+		err = c.writer.persist(ctx, []obsmodel.CallLog{callLog})
+	}
+	if err != nil {
+		if c.deliveryFailureCounter != nil {
+			c.deliveryFailureCounter.Add(ctx, 1)
+		}
+		slog.ErrorContext(ctx, "call log synchronous fallback failed",
+			"request_id", e.RequestID,
+			"queue_capacity", c.cfg.BufferSize,
+			"error", err,
+		)
+		return
+	}
+	slog.WarnContext(ctx, "call log queue saturated; synchronous fallback persisted event",
+		"request_id", e.RequestID,
+		"queue_capacity", c.cfg.BufferSize,
+	)
+}
+
+func (c *Collector) emitStreamFirst(e UsageEvent) {
+	if e.BillableReservation != nil {
+		defer func() {
+			if err := e.BillableReservation.Finish(context.Background()); err != nil {
+				if c.deliveryFailureCounter != nil {
+					c.deliveryFailureCounter.Add(context.Background(), 1)
+				}
+				slog.Error("release billable reservation after delivery",
+					"request_id", e.RequestID, "error", err)
+			}
+		}()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), c.cfg.SyncFallbackTimeout)
+	defer cancel()
+	callLog, err := e.ToCallLog()
+	validCallLog := err == nil
+	if err == nil {
+		SanitizeCallLogForWrite(&callLog)
+		if e.BudgetAdmissionFailOpen && c.streamSink != nil && c.streamSink.Available() {
+			pgCtx, pgCancel := context.WithTimeout(context.Background(), c.cfg.SyncFallbackTimeout)
+			pgErr := retryCallLogInsert(
+				pgCtx, c.streamSink, []obsmodel.CallLog{callLog}, c.cfg.DBRetryCount, c.cfg.DBRetryBackoff,
+			)
+			pgCancel()
+			if pgErr == nil {
+				return
+			}
+			slog.Error("admission fail-open synchronous postgres write failed; trying Redis spool",
+				"request_id", e.RequestID, "error", pgErr)
+		}
+		if c.spool == nil {
+			err = errors.New("Redis call-log spool is not configured")
+		} else {
+			if e.BillableReserved {
+				if e.PendingBudgetAccount != nil {
+					var newlyAccounted bool
+					newlyAccounted, err = c.spool.StoreReservedWithAccounting(
+						ctx, callLog, e.PendingBudgetAccount, e.BillableReservation,
+					)
+					if err == nil && newlyAccounted && e.PendingBudgetAccount.OnAccounted != nil {
+						e.PendingBudgetAccount.OnAccounted(ctx)
+					}
+					if err != nil && c.reconciliationRequired != nil {
+						c.reconciliationRequired.Add(ctx, 1)
+					}
+				} else {
+					err = c.spool.StoreReserved(ctx, callLog)
+				}
+			} else {
+				err = c.spool.Store(ctx, []obsmodel.CallLog{callLog})
+			}
+		}
+	}
+	if err == nil {
+		if c.spool != nil {
+			c.refreshSpoolHealth(ctx, c.spool.rdb)
+		}
+		return
+	}
+	slog.ErrorContext(ctx, "call log stream-first append failed",
+		"request_id", e.RequestID,
+		"stream", CallLogSpoolStream,
+		"error", err,
+	)
+	if validCallLog && c.streamSink != nil && c.streamSink.Available() {
+		fallbackCtx, fallbackCancel := context.WithTimeout(context.Background(), c.cfg.SyncFallbackTimeout)
+		defer fallbackCancel()
+		if fallbackErr := retryCallLogInsert(
+			fallbackCtx, c.streamSink, []obsmodel.CallLog{callLog}, c.cfg.DBRetryCount, c.cfg.DBRetryBackoff,
+		); fallbackErr == nil {
+			return
+		} else {
+			err = fmt.Errorf("redis append failed (%v), synchronous postgres fallback failed: %w", err, fallbackErr)
+		}
+	}
+	if validCallLog && e.PendingBudgetAccount != nil && c.spool != nil {
+		logOnlyCtx, logOnlyCancel := context.WithTimeout(context.Background(), c.cfg.SyncFallbackTimeout)
+		logOnlyErr := c.spool.StoreReserved(logOnlyCtx, callLog)
+		logOnlyCancel()
+		if logOnlyErr == nil {
+			slog.Warn("budget reconciliation required; persisted call log without counter update",
+				"request_id", e.RequestID)
+			return
+		}
+		err = fmt.Errorf("%v; reconciliation call-log spool failed: %w", err, logOnlyErr)
+	}
+	if c.deliveryFailureCounter != nil {
+		c.deliveryFailureCounter.Add(ctx, 1)
+	}
+	slog.ErrorContext(ctx, "call log event could not be durably persisted",
+		"request_id", e.RequestID,
+		"postgres_connected", c.streamSink != nil && c.streamSink.Available(),
+		"error", err,
+	)
+}
+
+func retryCallLogInsert(
+	ctx context.Context,
+	sink callLogBatchSink,
+	batch []obsmodel.CallLog,
+	retries int,
+	backoff time.Duration,
+) error {
+	if retries < 0 {
+		retries = 0
+	}
+	if backoff <= 0 {
+		backoff = 50 * time.Millisecond
+	}
+	var err error
+	for attempt := 0; attempt <= retries; attempt++ {
+		if err = sink.BatchInsert(ctx, batch); err == nil {
+			return nil
+		}
+		if attempt == retries {
+			break
+		}
+		timer := time.NewTimer(backoff << attempt)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return context.Cause(ctx)
+		case <-timer.C:
+		}
+	}
+	return err
 }
 
 func getString(ctx *gin.Context, key string) string {
@@ -228,7 +587,13 @@ func (e *UsageEvent) EstimateCost(pricing PricingResolver) {
 	if modelKey == "" {
 		modelKey = e.Model
 	}
-	p, ok := pricing.Resolve(modelKey)
+	var p core.ModelPricing
+	var ok bool
+	if providerResolver, providerAware := pricing.(ProviderPricingResolver); providerAware {
+		p, ok = providerResolver.ResolveForProvider(modelKey, e.Provider)
+	} else {
+		p, ok = pricing.Resolve(modelKey)
+	}
 	if !ok {
 		e.UsageMissing = true
 		return
@@ -284,10 +649,15 @@ func (e *UsageEvent) EstimateCost(pricing PricingResolver) {
 
 // BatchWriter 批量写入器
 type BatchWriter struct {
-	repo     *repository.CallLogRepository
-	db       *gorm.DB // 用于落库前补查缺失的用户/部门字段
-	flushN   int
-	interval time.Duration
+	repo                 *repository.CallLogRepository
+	db                   *gorm.DB // 用于落库前补查缺失的用户/部门字段
+	flushN               int
+	interval             time.Duration
+	retryCount           int
+	retryBackoff         time.Duration
+	spool                *CallLogSpool
+	retryCounter         metric.Int64Counter
+	unrecoverableCounter metric.Int64Counter
 }
 
 // Run 消费 channel，按条件批量写入
@@ -309,19 +679,39 @@ func (w *BatchWriter) Run(ctx context.Context, ch <-chan UsageEvent) {
 		if len(b) == 0 {
 			return
 		}
-		if w.db != nil {
-			w.fillMissingIdentity(ctx, b)
-		}
-		if err := w.repo.BatchInsert(ctx, b); err != nil {
-			log.Printf("[observability] batch insert error: %v", err)
+		if err := w.persist(ctx, b); err != nil {
+			log.Printf("[observability] call log persistence exhausted: %v", err)
 		}
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
+		drain:
+			for {
+				select {
+				case e := <-ch:
+					batch = append(batch, eventToCallLog(e))
+				default:
+					break drain
+				}
+			}
 			if len(batch) > 0 {
-				flush(batch)
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				if err := w.persist(shutdownCtx, batch); err != nil {
+					slog.ErrorContext(shutdownCtx, "call log shutdown drain failed",
+						"batch_size", len(batch),
+						"error", err,
+					)
+				}
+				cancel()
+			}
+			if w.spool != nil {
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				if err := w.spool.ReplayOnce(shutdownCtx, w.repo); err != nil {
+					slog.ErrorContext(shutdownCtx, "call log spool shutdown replay failed", "error", err)
+				}
+				cancel()
 			}
 			return
 		case e := <-ch:
@@ -337,6 +727,65 @@ func (w *BatchWriter) Run(ctx context.Context, ch <-chan UsageEvent) {
 			}
 		}
 	}
+}
+
+func (w *BatchWriter) persist(ctx context.Context, batch []model.CallLog) error {
+	if len(batch) == 0 {
+		return nil
+	}
+	if w.db != nil {
+		w.fillMissingIdentity(ctx, batch)
+	}
+	retries := w.retryCount
+	if retries < 0 {
+		retries = 0
+	}
+	backoff := w.retryBackoff
+	if backoff <= 0 {
+		backoff = 50 * time.Millisecond
+	}
+	var dbErr error
+	for attempt := 0; attempt <= retries; attempt++ {
+		dbErr = w.repo.BatchInsert(ctx, batch)
+		if dbErr == nil {
+			return nil
+		}
+		if attempt == retries {
+			break
+		}
+		if w.retryCounter != nil {
+			w.retryCounter.Add(ctx, 1)
+		}
+		timer := time.NewTimer(backoff << attempt)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			dbErr = context.Cause(ctx)
+			attempt = retries
+		case <-timer.C:
+		}
+	}
+	if w.spool != nil {
+		if err := w.spool.Store(ctx, batch); err == nil {
+			slog.WarnContext(ctx, "call log DB write failed; persisted to Redis Stream",
+				"stream", CallLogSpoolStream,
+				"batch_size", len(batch),
+				"error", dbErr,
+			)
+			return nil
+		} else {
+			dbErr = fmt.Errorf("db write failed (%v), spool write failed: %w", dbErr, err)
+		}
+	}
+	if w.unrecoverableCounter != nil {
+		w.unrecoverableCounter.Add(ctx, int64(len(batch)))
+	}
+	slog.ErrorContext(ctx, "call log persistence failed after synchronous retries",
+		"batch_size", len(batch),
+		"redis_spool_configured", w.spool != nil,
+		"error", dbErr,
+	)
+	return dbErr
 }
 
 // fillMissingIdentity 对 batch 中 org 字段缺失的记录，批量查询 api_keys 补全。
@@ -432,50 +881,10 @@ func (w *BatchWriter) fillMissingIdentity(ctx context.Context, batch []model.Cal
 }
 
 func eventToCallLog(e UsageEvent) model.CallLog {
-	cl := model.CallLog{
-		RequestID:           e.RequestID,
-		TS:                  e.Timestamp,
-		KeyID:               e.KeyID,
-		KeyName:             e.KeyName,
-		KeyType:             normalizeKeyType(e.KeyType),
-		UserID:              e.UserID,
-		UserName:            e.UserName,
-		DeptID:              e.DeptID,
-		DeptName:            e.DeptName,
-		StudioID:            e.StudioID,
-		StudioName:          e.StudioName,
-		Model:               e.Model,
-		RoutedModel:         e.RoutedModel,
-		GroupName:           e.GroupName,
-		Provider:            e.Provider,
-		PromptTokens:        e.PromptTokens,
-		CachedTokens:        e.CachedTokens,
-		CacheWriteTokens:    e.CacheWriteTokens,
-		CompletionTokens:    e.CompletionTokens,
-		ReasoningTokens:     e.ReasoningTokens,
-		TotalTokens:         e.TotalTokens,
-		Status:              e.Status,
-		UpstreamStatus:      e.UpstreamStatus,
-		DurationMs:          int(e.DurationMs),
-		FirstTokenMs:        e.FirstTokenMs,
-		StageTTFBMs:         e.StageTTFBMs,
-		StageAuthMs:         e.StageAuthMs,
-		StageRouteMs:        e.StageRouteMs,
-		StageUpstreamMs:     e.StageUpstreamMs,
-		Stream:              e.Stream,
-		FailoverUsed:        e.FailoverUsed,
-		RoutedViaGroup:      e.RoutedViaGroup,
-		UsageMissing:        e.UsageMissing,
-		ReasoningEffort:     e.ReasoningEffort,
-		UserAgent:           e.UserAgent,
-		IPAddress:           e.IPAddress,
-			InboundEndpoint:     e.InboundEndpoint,
-		InputPriceSnapshot:  &e.InputPriceSnapshot,
-		OutputPriceSnapshot: &e.OutputPriceSnapshot,
-		InputCostUSD:        e.InputCostUSD,
-		OutputCostUSD:       e.OutputCostUSD,
-		CacheReadCostUSD:    e.CacheReadCostUSD,
-		EstCostUSD:          e.EstCostUSD,
+	cl, err := e.ToCallLog()
+	if err != nil {
+		log.Printf("[observability] invalid usage event: %v", err)
+		return model.CallLog{RequestID: e.RequestID, TS: e.Timestamp}
 	}
 	SanitizeCallLogForWrite(&cl)
 	return cl

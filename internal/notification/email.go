@@ -2,6 +2,7 @@ package notification
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"fmt"
 	"log/slog"
@@ -34,18 +35,23 @@ func (e *EmailSender) SetSkipTLSVerify(v bool)              { e.skipVerify = v }
 func (e *EmailSender) UpdateRecipients(recipients []string) { e.recipients = recipients }
 
 func (e *EmailSender) SendText(ctx context.Context, text string) error {
-	return e.sendWithSubject(ctx, "[LLM Gateway] 告警通知", text, e.recipients)
+	return e.sendWithSubject(ctx, "[LLM Gateway] 告警通知", text, e.recipients, "")
 }
 
 func (e *EmailSender) SendTextWithSubject(ctx context.Context, subject, text string) error {
-	return e.sendWithSubject(ctx, subject, text, e.recipients)
+	return e.sendWithSubject(ctx, subject, text, e.recipients, "")
+}
+
+// SendTextWithSubjectAndDedupeKey 使用稳定 Message-ID，便于邮件网关和客户端折叠 outbox 重试。
+func (e *EmailSender) SendTextWithSubjectAndDedupeKey(ctx context.Context, subject, text, dedupeKey string) error {
+	return e.sendWithSubject(ctx, subject, text, e.recipients, dedupeKey)
 }
 
 func (e *EmailSender) SendTextTo(ctx context.Context, text string, recipients []string) error {
-	return e.sendWithSubject(ctx, "[LLM Gateway] 告警通知", text, recipients)
+	return e.sendWithSubject(ctx, "[LLM Gateway] 告警通知", text, recipients, "")
 }
 
-func (e *EmailSender) sendWithSubject(ctx context.Context, subject, text string, recipients []string) error {
+func (e *EmailSender) sendWithSubject(ctx context.Context, subject, text string, recipients []string, dedupeKey string) error {
 	if len(recipients) == 0 {
 		slog.Warn("email: no recipients configured, skipping")
 		return nil
@@ -56,7 +62,7 @@ func (e *EmailSender) sendWithSubject(ctx context.Context, subject, text string,
 
 	done := make(chan error, 1)
 	go func() {
-		done <- e.dialAndSend(subject, text, recipients)
+		done <- e.dialAndSend(subject, text, recipients, dedupeKey)
 	}()
 
 	select {
@@ -69,7 +75,7 @@ func (e *EmailSender) sendWithSubject(ctx context.Context, subject, text string,
 	}
 }
 
-func (e *EmailSender) dialAndSend(subject, text string, recipients []string) error {
+func (e *EmailSender) dialAndSend(subject, text string, recipients []string, dedupeKey string) error {
 	d := gomail.NewDialer(e.host, e.port, e.from, e.password)
 
 	// gomail 自动处理 SSL/STARTTLS
@@ -100,6 +106,10 @@ func (e *EmailSender) dialAndSend(subject, text string, recipients []string) err
 	m.SetHeader("From", e.from)
 	m.SetHeader("To", recipients...)
 	m.SetHeader("Subject", subject)
+	if dedupeKey != "" {
+		sum := sha256.Sum256([]byte(dedupeKey))
+		m.SetHeader("Message-ID", fmt.Sprintf("<%x@llm-gateway.local>", sum[:]))
+	}
 	m.SetBody("text/plain; charset=\"utf-8\"", text)
 
 	slog.Info("email: sending message", "to", recipients)

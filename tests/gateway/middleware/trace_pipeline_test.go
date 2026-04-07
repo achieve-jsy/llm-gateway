@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	gwobs "github.com/example/llm-gateway/internal/gateway/observability"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
+	gwobs "github.com/example/llm-gateway/internal/gateway/observability"
 	obsmodel "github.com/example/llm-gateway/internal/observability/model"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -21,7 +21,8 @@ import (
 
 func setupTraceDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{SkipDefaultTransaction: true})
+	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{SkipDefaultTransaction: true})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&obsmodel.CallTrace{}))
 	return db

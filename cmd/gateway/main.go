@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/example/llm-gateway/internal/configsync"
+	"github.com/example/llm-gateway/internal/core"
 	"github.com/joho/godotenv"
 
 	acrypto "github.com/example/llm-gateway/internal/auth/crypto"
@@ -20,6 +21,7 @@ import (
 	authsvc "github.com/example/llm-gateway/internal/auth/service"
 
 	"github.com/example/llm-gateway/internal/gateway/binding"
+	"github.com/example/llm-gateway/internal/gateway/budget"
 	"github.com/example/llm-gateway/internal/gateway/cache"
 	"github.com/example/llm-gateway/internal/gateway/config"
 	"github.com/example/llm-gateway/internal/gateway/infra"
@@ -41,23 +43,22 @@ import (
 	providersgroq "github.com/example/llm-gateway/internal/providers/groq"
 	providerslitellm "github.com/example/llm-gateway/internal/providers/litellm"
 	providersminimax "github.com/example/llm-gateway/internal/providers/minimax"
+	providersollama "github.com/example/llm-gateway/internal/providers/ollama"
 	providersopenai "github.com/example/llm-gateway/internal/providers/openai"
 	providersopenrouter "github.com/example/llm-gateway/internal/providers/openrouter"
-	providersollama "github.com/example/llm-gateway/internal/providers/ollama"
 	providersoracle "github.com/example/llm-gateway/internal/providers/oracle"
+	seedancerelay "github.com/example/llm-gateway/internal/providers/seedance/relay"
+	seedancevolcengine "github.com/example/llm-gateway/internal/providers/seedance/volcengine"
 	providersvertex "github.com/example/llm-gateway/internal/providers/vertex"
 	providersvllm "github.com/example/llm-gateway/internal/providers/vllm"
 	providersxai "github.com/example/llm-gateway/internal/providers/xai"
 	providerszai "github.com/example/llm-gateway/internal/providers/zai"
-	seedancerelay "github.com/example/llm-gateway/internal/providers/seedance/relay"
-	seedancevolcengine "github.com/example/llm-gateway/internal/providers/seedance/volcengine"
 
 	"github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
 
 	cpinfra "github.com/example/llm-gateway/internal/controlplane/infra"
-	cppricing "github.com/example/llm-gateway/internal/controlplane/pricing"
 	gwobs "github.com/example/llm-gateway/internal/gateway/observability"
-	gwobsrepo "github.com/example/llm-gateway/internal/gateway/observability/repository"
 )
 
 type providerLoadResult struct {
@@ -152,6 +153,10 @@ func main() {
 		}
 	})
 	subscriber.AddCallback(keyCache.HandleChangeEvent)
+	tierHolder := budget.NewSnapshotHolder()
+	tierLoader := budget.NewConfigLoader(rdb, tierHolder)
+	subscriber.AddCallback(tierLoader.HandleChangeEvent)
+	go tierLoader.Start(ctx, 30*time.Second)
 
 	// 创建 binding client（热路径：模型组权限校验），在 main 层管理生命周期
 	// 以便将 Key 禁用事件接入缓存失效回调
@@ -201,49 +206,37 @@ func main() {
 		}
 	}
 
-	// Handle graceful shutdown signal.
-	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		<-sigCh
-		slog.Info("received shutdown signal")
-		cancel()
-	}()
+	shutdownSignal := make(chan os.Signal, 1)
+	signal.Notify(shutdownSignal, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(shutdownSignal)
 
 	authClient := infra.NewAuthClient(cfg.Auth.URL, cfg.Auth.Token)
 	authClient.SetKeyCache(keyCache)
 
-	// 初始化埋点采集器（可选，DB 不可用时降级跳过）
-	// 注意：gateway 不直连 Postgres（宪章原则）；埋点通过进程内 channel 写入 DB
-	// 仅在 DATABASE_URL 配置时启用；生产部署由 observability-hub 消费队列
-	var collector *gwobs.Collector
+	// 成本计算始终启用并从最终路由模型的实时 provider registry 读取价格桶；
+	// call_logs 持久化仍可在 DB 不可用时独立降级。
+	providerPricing := gwobs.ProviderPricingResolverFunc(func(modelKey, provider string) (core.ModelPricing, bool) {
+		return providerLoader.Router().ResolvePricing(modelKey, provider)
+	})
+	collectorCfg := gwobs.DefaultCollectorConfig()
+	collectorCfg.SpoolCapacity = cfg.Observability.SpoolCapacity
+	collectorCfg.SpoolHighWatermark = cfg.Observability.SpoolHighWatermark
+	collectorCfg.SpoolClaimMinIdle = cfg.Observability.SpoolClaimMinIdle
+	collectorCfg.BillableReservationTTL = cfg.Observability.BillableReservationTTL
+	collector := gwobs.StartProductionCollector(
+		ctx,
+		collectorCfg,
+		rdb,
+		providerPricing,
+		func(context.Context) (*gorm.DB, error) {
+			return cpinfra.InitPostgres(cfg.Database.URL)
+		},
+		nil,
+	)
 	var traceWriter *gwobs.TraceWriter
 	if db, err := cpinfra.InitPostgres(cfg.Database.URL); err != nil {
-		slog.Warn("usage tracking disabled: postgres not configured or unavailable", "error", err)
+		slog.Warn("request trace persistence unavailable at startup; call logs remain spooled", "error", err)
 	} else {
-		pricingTable := cppricing.NewPricingTable()
-		go func() {
-			if err := pricingTable.Refresh(ctx, db); err != nil {
-				slog.Warn("pricing table initial load failed", "error", err)
-			}
-			ticker := time.NewTicker(5 * time.Minute)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					if err := pricingTable.Refresh(ctx, db); err != nil {
-						slog.Warn("pricing table refresh failed", "error", err)
-					}
-				}
-			}
-		}()
-		callLogRepo := gwobsrepo.NewCallLogRepository(db)
-		collectorCfg := gwobs.DefaultCollectorConfig()
-		collector = gwobs.NewCollector(collectorCfg, pricingTable)
-		collector.StartWriter(ctx, callLogRepo)
-
 		// 请求/响应 trace 写入器
 		traceWriter = gwobs.NewTraceWriter(db, 512, 20, 5*time.Second)
 		go traceWriter.Run(ctx)
@@ -269,7 +262,15 @@ func main() {
 	// Initialize router (inject dependencies). We always use the router obtained
 	// from the ProviderLoader – which is atomically swapped on config changes.
 	// Seedance 视频/素材适配器同样挂到 config:change，改渠道后无需重启。
-	r := server.Setup(providerLoader.Router, icache, state, authClient, controlPlaneURL, internalToken, sch, nameCache, collector, traceWriter, bindClient, rdb,
+	var budgetAlertDispatcher *server.BudgetAlertDispatcher
+	if controlPlaneURL != "" {
+		budgetAlertDispatcher = server.NewBudgetAlertDispatcher(
+			ctx,
+			server.NewBudgetAlertClient(&http.Client{Timeout: 3 * time.Second}, controlPlaneURL, internalToken),
+			server.BudgetAlertDispatcherConfig{},
+		)
+	}
+	r := server.SetupWithBudgetAlertDispatcher(budgetAlertDispatcher, providerLoader.Router, icache, state, authClient, controlPlaneURL, internalToken, sch, nameCache, collector, traceWriter, bindClient, rdb, tierHolder,
 		func(reload func(entries []gatewaymodel.ProviderEntry)) {
 			reloadSeedance = reload
 		},
@@ -281,11 +282,36 @@ func main() {
 	r.POST("/auth/logout", authTokenHandler.Logout)
 	r.POST("/internal/v1/auth/verify-key", authInternalHandler.VerifyKey)
 
-	// 启动服务
+	// 启动服务。收到信号后先停止接入并等待在途请求，再取消后台
+	// context，最后等待 call_logs 完成队列 drain / spool。
 	slog.Info("gateway starting", "port", cfg.Server.Port)
-	if err := r.Run(":" + cfg.Server.Port); err != nil {
-		log.Fatalf("failed to start server: %v", err)
+	httpServer := &http.Server{Addr: ":" + cfg.Server.Port, Handler: r}
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- httpServer.ListenAndServe()
+	}()
+	select {
+	case sig := <-shutdownSignal:
+		slog.Info("received shutdown signal", "signal", sig.String())
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			slog.Error("gateway HTTP shutdown failed", "error", err)
+		}
+		shutdownCancel()
+	case err := <-serverErr:
+		if err != nil && err != http.ErrServerClosed {
+			log.Printf("gateway server stopped unexpectedly: %v", err)
+		}
 	}
+	cancel()
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 8*time.Second)
+	if err := collector.Wait(drainCtx); err != nil {
+		slog.Error("call log writer drain timed out", "error", err)
+	}
+	if err := budgetAlertDispatcher.Wait(drainCtx); err != nil {
+		slog.Error("budget alert dispatcher drain timed out", "error", err)
+	}
+	drainCancel()
 }
 
 // buildProviderFactory creates a ProviderFactory and registers all known provider types.
@@ -432,4 +458,5 @@ func resolveLogLevel(s string) slog.Level {
 		return slog.LevelInfo
 	}
 }
+
 // test: fast deploy pipeline speed test 19:24:54

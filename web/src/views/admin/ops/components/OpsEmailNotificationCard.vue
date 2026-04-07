@@ -129,7 +129,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { opsAPI } from '@/api/ops'
-import type { EmailNotificationConfig, OpsSeverity } from '@/api/ops'
+import type { EmailNotificationConfig } from '@/api/ops'
 
 const loading = ref(false)
 const saving = ref(false)

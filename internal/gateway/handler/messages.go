@@ -12,6 +12,7 @@ import (
 
 	"github.com/example/llm-gateway/internal/core"
 	gatewayerrors "github.com/example/llm-gateway/internal/errors"
+	"github.com/example/llm-gateway/internal/gateway/budget"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
@@ -27,6 +28,8 @@ type MessagesHandler struct {
 	orchestrator  ChatOrchestratorInterface
 	groupDispatch *orchestrator.GroupAwareDispatcher
 	budgetDeps    *middleware.BudgetDeps
+	budgetGate    *budget.Gate
+	requestQuota  *quota.QuotaMiddleware
 	quotaGate     *quota.ModelQuotaGate // v0.15: 模型层配额检查
 }
 
@@ -43,6 +46,14 @@ func NewMessagesHandlerWithGroup(orch ChatOrchestratorInterface, gd *orchestrato
 // SetBudgetDeps 注入预算依赖（router setup 时调用一次）
 func (h *MessagesHandler) SetBudgetDeps(deps *middleware.BudgetDeps) {
 	h.budgetDeps = deps
+}
+
+func (h *MessagesHandler) SetBudgetGate(gate *budget.Gate) {
+	h.budgetGate = gate
+}
+
+func (h *MessagesHandler) SetRequestQuotaGate(gate *quota.QuotaMiddleware) {
+	h.requestQuota = gate
 }
 
 // SetModelQuotaGate 注入模型配额检查器（router setup 时调用一次）
@@ -70,17 +81,6 @@ func (h *MessagesHandler) HandleMessages(c *gin.Context) {
 
 	c.Set("model", anthReq.Model)
 
-	// v0.9: 预算检查（事后记账模式）
-	if h.budgetDeps != nil {
-		if _, err := middleware.Reserve(c, h.budgetDeps); err != nil {
-			if be, ok := err.(*middleware.BudgetExceededError); ok {
-				c.AbortWithStatusJSON(http.StatusPaymentRequired, be.ToJSON())
-				return
-			}
-			slog.Warn("messages: budget check failed", "model", anthReq.Model, "error", err)
-		}
-	}
-
 	// Convert Anthropic request to internal ChatRequest
 	req := core.AnthropicToChatRequest(&anthReq)
 
@@ -89,17 +89,31 @@ func (h *MessagesHandler) HandleMessages(c *gin.Context) {
 	// 记录路由选定的模型 ID，用于模型层配额检查。
 	routedModelID := anthReq.Model
 
-	// Group dispatch (model group resolution)
-	if h.groupDispatch != nil {
-		decision, err := h.groupDispatch.Dispatch(c, anthReq.Model, req)
-		if err != nil {
-			h.respondAnthropicGroupError(c, err)
-			return
+	releaseQuota, err := PrepareAuthorizedGates(c, originalModel, func() error {
+		if h.groupDispatch == nil {
+			return nil
+		}
+		decision, dispatchErr := h.groupDispatch.Dispatch(c, originalModel, req)
+		if dispatchErr != nil {
+			return dispatchErr
 		}
 		if decision != nil {
 			req.Model = decision.ModelName
 			routedModelID = decision.ModelID
 		}
+		return nil
+	}, h.budgetGate, h.requestQuota)
+	if err != nil {
+		if c.IsAborted() {
+			return
+		}
+		if !budget.WriteHTTPError(c, err) {
+			h.respondAnthropicGroupError(c, err)
+		}
+		return
+	}
+	if releaseQuota != nil {
+		defer releaseQuota()
 	}
 
 	// v0.15: 模型层配额检查（路由选定具体 model 之后、转发上游之前）

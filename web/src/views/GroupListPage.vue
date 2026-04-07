@@ -391,11 +391,6 @@ async function handleToggleOpenMode(row: GroupListItem) {
   }
 }
 
-function openEntitlementDialog(row: GroupListItem) {
-  entitlementGroup.value = row
-  entitlementDialogVisible.value = true
-}
-
 function openQuotaDialog(group: GroupListItem) {
   quotaSubjectId.value = String(group.id)
   quotaSubjectLabel.value = `模型组：${group.name}`

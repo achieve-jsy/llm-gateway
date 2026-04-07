@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/example/llm-gateway/internal/configsync"
 	"github.com/example/llm-gateway/internal/core"
+	"github.com/example/llm-gateway/internal/gateway/budget"
 	"github.com/example/llm-gateway/internal/gateway/handler"
 	"github.com/example/llm-gateway/internal/gateway/provider"
 	"github.com/gin-gonic/gin"
@@ -21,6 +23,39 @@ import (
 type fakeHealthRouter struct {
 	resp *core.ModelsResponse
 	err  error
+}
+
+func TestHealthHandler_ReadyAdvertisesBudgetDeploymentCapabilities(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	state := &provider.RuntimeState{}
+	state.MarkLoadSuccess("test", 1, 1)
+	modelsRouter := &fakeHealthRouter{resp: &core.ModelsResponse{
+		Object: "list", Data: []core.Model{{ID: "tiered-model", Object: "model"}},
+	}}
+	holder := budget.NewSnapshotHolder()
+	require.True(t, holder.Set(&configsync.BudgetTierSnapshot{
+		SchemaVersion: 1, Revision: 42, MasterEnabled: true, AccountingEnabled: true,
+		ShadowEnabled: true, LegacyTotalWriteEnabled: true,
+	}))
+	h := handler.NewHealthHandler(rdb, modelsRouter, state, nil)
+	h.SetBudgetSnapshotHolder(holder)
+	router := gin.New()
+	router.GET("/ready", h.Ready)
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	var response struct {
+		Capabilities map[string]any `json:"capabilities"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, float64(1), response.Capabilities["tier_snapshot_schema"])
+	assert.Equal(t, true, response.Capabilities["redis_v2"])
+	assert.Equal(t, true, response.Capabilities["shadow_enabled"])
+	assert.Equal(t, float64(42), response.Capabilities["snapshot_revision"])
 }
 
 func (f *fakeHealthRouter) ListModels(_ context.Context) (*core.ModelsResponse, error) {

@@ -25,6 +25,7 @@
       :child-scope-ids="resolvedChildIds"
       :can-edit="canEdit"
       :can-edit-self="canEditSelf"
+      @navigate="$emit('navigate', $event)"
     />
   </el-drawer>
 </template>
@@ -46,7 +47,10 @@ const props = defineProps<{
   size?: string
 }>()
 
-defineEmits<{ 'update:modelValue': [value: boolean] }>()
+defineEmits<{
+  'update:modelValue': [value: boolean]
+  navigate: [payload: { scopeType: 'dept' | 'member'; scopeId: string; label: string }]
+}>()
 
 const resolving = ref(false)
 const resolvedChildIds = ref<string[]>(props.childScopeIds ?? [])

@@ -663,7 +663,6 @@ const myAppAllTotal = ref(0)
 const myAppPageSize = 10
 const myAppStatusFilter = ref('')
 const myAppSummary = ref({ pending: 0, approved: 0, rejected: 0 })
-const myPendingCount = computed(() => myAppSummary.value.pending)
 const currentDeptId = ref('')
 const deptPolicy = ref<'free'|'approval'>('free')
 const policySaving = ref(false)
@@ -717,7 +716,6 @@ const hasMultiTab = computed(() => {
   return showMyApplicationsTab.value || authStore.isManager
 })
 
-const pendingDisplayTotal = computed(() => Math.max(pendingTotal.value, pendingCount.value))
 const historyDisplayTotal = computed(() => historyTotal.value)
 
 const canManageDeptPolicy = computed(() => authStore.effectiveRole === 'dept_admin' && !!currentDeptId.value)
@@ -870,12 +868,6 @@ watch(
     loadActiveTabData()
   },
 )
-
-function avatarColor(n?: string): string {
-  const c = ['#409EFF','#67C23A','#E6A23C','#F56C6C','#909399','#8B5CF6','#EC4899','#14B8A6']
-  if (!n) return c[0]; let h = 0; for (let i = 0; i < n.length; i++) h = n.charCodeAt(i) + ((h << 5) - h)
-  return c[Math.abs(h) % c.length]
-}
 
 function resolvePageArg(page: number | undefined, pageRef: { value: number }): number {
   if (typeof page === 'number' && Number.isFinite(page) && page >= 1) {

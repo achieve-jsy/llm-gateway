@@ -1,9 +1,7 @@
 package server
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,6 +10,7 @@ import (
 	"github.com/example/llm-gateway/internal/configsync"
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/binding"
+	"github.com/example/llm-gateway/internal/gateway/budget"
 	"github.com/example/llm-gateway/internal/gateway/cache"
 	"github.com/example/llm-gateway/internal/gateway/handler"
 	"github.com/example/llm-gateway/internal/gateway/infra"
@@ -50,6 +49,47 @@ func Setup(
 	traceWriterOpt *gwobs.TraceWriter,
 	bindClient *binding.Client,
 	rdb redisClient,
+	tierHolder *budget.SnapshotHolder,
+	onSeedanceReloadReady ...func(reload func(entries []gwmodel.ProviderEntry)),
+) *gin.Engine {
+	return setup(nil, routerGetter, routerCache, state, authClient, controlPlaneURL, internalToken,
+		sch, nameCache, collectorOpt, traceWriterOpt, bindClient, rdb, tierHolder, onSeedanceReloadReady...)
+}
+
+func SetupWithBudgetAlertDispatcher(
+	alertDispatcher *BudgetAlertDispatcher,
+	routerGetter func() *providers.Router,
+	routerCache *infra.Cache,
+	state *provider.RuntimeState,
+	authClient *infra.AuthClient,
+	controlPlaneURL, internalToken string,
+	sch *scheduler.Scheduler,
+	nameCache *cache.GroupNameCache,
+	collectorOpt *gwobs.Collector,
+	traceWriterOpt *gwobs.TraceWriter,
+	bindClient *binding.Client,
+	rdb redisClient,
+	tierHolder *budget.SnapshotHolder,
+	onSeedanceReloadReady ...func(reload func(entries []gwmodel.ProviderEntry)),
+) *gin.Engine {
+	return setup(alertDispatcher, routerGetter, routerCache, state, authClient, controlPlaneURL, internalToken,
+		sch, nameCache, collectorOpt, traceWriterOpt, bindClient, rdb, tierHolder, onSeedanceReloadReady...)
+}
+
+func setup(
+	alertDispatcher *BudgetAlertDispatcher,
+	routerGetter func() *providers.Router,
+	routerCache *infra.Cache,
+	state *provider.RuntimeState,
+	authClient *infra.AuthClient,
+	controlPlaneURL, internalToken string,
+	sch *scheduler.Scheduler,
+	nameCache *cache.GroupNameCache,
+	collectorOpt *gwobs.Collector,
+	traceWriterOpt *gwobs.TraceWriter,
+	bindClient *binding.Client,
+	rdb redisClient,
+	tierHolder *budget.SnapshotHolder,
 	onSeedanceReloadReady ...func(reload func(entries []gwmodel.ProviderEntry)),
 ) *gin.Engine {
 	var collector []*gwobs.Collector
@@ -78,7 +118,9 @@ func Setup(
 
 	var groupDispatch *orchestrator.GroupAwareDispatcher
 	if sch != nil && nameCache != nil && bindClient != nil {
-		groupDispatch = orchestrator.NewGroupAwareDispatcherWithBinding(sch, nameCache, bindClient)
+		groupDispatch = orchestrator.NewGroupAwareDispatcherWithBindingAndTier(
+			sch, nameCache, bindClient, budget.NewTierResolver(tierHolder),
+		)
 	}
 
 	var chatHandler *handler.ChatHandler
@@ -121,6 +163,7 @@ func Setup(
 	modelDetailHandler := handler.NewModelDetailHandler(controlPlaneURL, internalToken)
 	modelInfoHandler := handler.NewModelInfoHandler(controlPlaneURL, internalToken)
 	healthHandler := handler.NewHealthHandler(routerCache.Client(), modelsRouter, state, sch)
+	healthHandler.SetBudgetSnapshotHolder(tierHolder)
 	var responsesHandler *handler.ResponsesHandler
 	if groupDispatch != nil {
 		responsesHandler = handler.NewResponsesHandlerWithGroup(orch, groupDispatch)
@@ -141,9 +184,42 @@ func Setup(
 	rerankHandler.SetBudgetDeps(budgetDeps)
 	messagesHandler.SetBudgetDeps(budgetDeps)
 	responsesHandler.SetBudgetDeps(budgetDeps)
+	var tierBudgetGate *budget.Gate
+	if tierHolder != nil && rdb != nil {
+		admissionConfig := budget.AdmissionConfig{}
+		if collectorOpt != nil {
+			admissionConfig = collectorOpt.BudgetAdmissionConfig()
+		}
+		tierBudgetGate = budget.NewGate(
+			tierHolder,
+			budget.NewRedisStoreWithAdmission(rdb, admissionConfig),
+			budget.LegacyTotalFuncs{
+				CheckFunc: func(ctx context.Context, plan *budget.AccountingPlan) (*budget.Constraint, error) {
+					return middleware.CheckLegacyBudget(ctx, rdb, plan)
+				},
+				AddFunc: func(ctx context.Context, keys []string, scopeArgs []any, costUSD float64) error {
+					return middleware.BudgetAdd(ctx, rdb, keys, scopeArgs, costUSD)
+				},
+			},
+			time.Now,
+		)
+		chatHandler.SetBudgetGate(tierBudgetGate)
+		embeddingsHandler.SetBudgetGate(tierBudgetGate)
+		rerankHandler.SetBudgetGate(tierBudgetGate)
+		messagesHandler.SetBudgetGate(tierBudgetGate)
+		responsesHandler.SetBudgetGate(tierBudgetGate)
+	}
 
 	r.GET("/health", healthHandler.Health)
-	r.GET("/ready", healthHandler.Ready)
+	r.GET("/ready", func(c *gin.Context) {
+		if collectorOpt != nil && !collectorOpt.CanAcceptBillableRequest() {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"status": "not_ready", "reason": "call_log_spool_high_watermark",
+			})
+			return
+		}
+		healthHandler.Ready(c)
+	})
 
 	// 加载并发管控配置
 	// v0.15: 四层配额体系 — 初始化 QuotaConfigLoader + QuotaMiddleware
@@ -156,6 +232,11 @@ func Setup(
 		quotaLoader.SubscribeToChanges(context.Background())
 	}
 	quotaMW := quota.NewMiddleware(quotaHolder, quotaStore)
+	chatHandler.SetRequestQuotaGate(quotaMW)
+	embeddingsHandler.SetRequestQuotaGate(quotaMW)
+	rerankHandler.SetRequestQuotaGate(quotaMW)
+	messagesHandler.SetRequestQuotaGate(quotaMW)
+	responsesHandler.SetRequestQuotaGate(quotaMW)
 
 	// v0.15: 模型层配额检查（路由选定具体 model 之后、转发上游之前）
 	modelQuotaGate := quota.NewModelQuotaGate(quotaHolder, quotaStore)
@@ -180,20 +261,25 @@ func Setup(
 
 	v1 := r.Group("/v1")
 	v1.Use(middleware.AuthMiddleware(authClient))
+	v1.Use(BillingFactGuard(collectorOpt))
 	// 请求/响应正文捕获（供 trace 记录使用）
 	v1.Use(middleware.TraceCapture())
 	// 埋点采集中间件放在 OrgCheck 之前，确保 403 拦截的调用也能写入 call_logs
-	if len(collector) > 0 && collector[0] != nil {
+	if (len(collector) > 0 && collector[0] != nil) || tierBudgetGate != nil {
 		// v0.7: 构造预算核销+告警触发 hook（仅在 Redis 可用时启用）
 		var budgetHook middleware.PostCostHook
-		if rdb != nil {
-			budgetHook = buildBudgetPostHook(rdb, controlPlaneURL, internalToken)
+		if tierBudgetGate != nil {
+			budgetHook = buildBudgetPostHook(tierBudgetGate, alertDispatcher)
 		}
-		v1.Use(middleware.UsageCollector(collector[0], traceWriterOpt, budgetHook))
+		var callLogCollector *gwobs.Collector
+		if len(collector) > 0 {
+			callLogCollector = collector[0]
+		}
+		v1.Use(middleware.UsageCollector(callLogCollector, traceWriterOpt, budgetHook))
 	}
-		// Provider 并发/限流追踪（写入 Redis 供运维看板读取）
-		// 必须在 UsageCollector 之后，确保 provider 信息已由 orchestrator 写入 context
-		v1.Use(middleware.ProviderTracker(rdb))
+	// Provider 并发/限流追踪（写入 Redis 供运维看板读取）
+	// 必须在 UsageCollector 之后，确保 provider 信息已由 orchestrator 写入 context
+	v1.Use(middleware.ProviderTracker(rdb))
 	// 组织归集状态检查：pending_studio 员工调用模型时返回 403
 	// 注意：必须在 UsageCollector 之后，403 才能被记录到调用明细
 	v1.Use(middleware.OrgCheckMiddleware())
@@ -207,19 +293,19 @@ func Setup(
 		v1.GET("/health/models", modelsHandler.HandleLegacy)
 
 		// Chat completions
-		v1.POST("/chat/completions", quotaMW.Handler(), chatHandler.Handle)
+		v1.POST("/chat/completions", chatHandler.Handle)
 
 		// Embeddings (new)
-		v1.POST("/embeddings", quotaMW.Handler(), embeddingsHandler.Handle)
+		v1.POST("/embeddings", embeddingsHandler.Handle)
 
 		// Rerank
-			v1.POST("/rerank", quotaMW.Handler(), rerankHandler.Handle)
+		v1.POST("/rerank", rerankHandler.Handle)
 
 		// Responses API — OpenAI Agent SDK 核心依赖
-		v1.POST("/responses", quotaMW.Handler(), responsesHandler.Handle)
+		v1.POST("/responses", responsesHandler.Handle)
 
 		// Anthropic Messages API
-		v1.POST("/messages", quotaMW.Handler(), messagesHandler.HandleMessages)
+		v1.POST("/messages", messagesHandler.HandleMessages)
 		v1.POST("/messages/count_tokens", messagesHandler.HandleCountTokens)
 
 		// Provider passthrough: /v1/p/:provider/*path
@@ -307,6 +393,37 @@ func Setup(
 	return r
 }
 
+type billableReadiness interface {
+	CanAcceptBillableRequest() bool
+}
+
+func BillingFactGuard(readiness billableReadiness) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if readiness == nil || readiness.CanAcceptBillableRequest() || !isBillableRequest(c.Request) {
+			c.Next()
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+			"error": gin.H{
+				"code":    "billing_fact_store_backpressure",
+				"message": "Billing fact storage is temporarily at capacity",
+			},
+		})
+	}
+}
+
+func isBillableRequest(request *http.Request) bool {
+	if request == nil || request.Method != http.MethodPost {
+		return false
+	}
+	switch request.URL.Path {
+	case "/v1/chat/completions", "/v1/embeddings", "/v1/rerank", "/v1/responses", "/v1/messages":
+		return true
+	default:
+		return false
+	}
+}
+
 // makePassthroughHandler returns a Gin handler that proxies requests to
 // GET /v1/p/:provider/* directly to the upstream provider.
 func makePassthroughHandler(router *providers.Router) gin.HandlerFunc {
@@ -368,80 +485,85 @@ func makePassthroughHandler(router *providers.Router) gin.HandlerFunc {
 // 告警触发（异步 fire-and-forget）：
 //   - 对 BudgetChain 中的每一层调用控制面 /internal/v1/budget/evaluate-alert
 //   - 控制面告警服务做阈值判断（80%/100%）+ 去重 + webhook 通知
-func buildBudgetPostHook(rdb *redis.Client, controlPlaneURL, internalToken string) middleware.PostCostHook {
+func buildBudgetPostHook(gate *budget.Gate, alertDispatcher *BudgetAlertDispatcher) middleware.PostCostHook {
 	return func(c *gin.Context, realCostUSD float64, httpStatus int) {
-		keysVal, ok := c.Get("budget_keys")
+		if httpStatus >= 400 || realCostUSD <= 0 || gate == nil {
+			return
+		}
+		plan, ok := budget.GetAccountingPlan(c)
 		if !ok {
 			return
 		}
-		budgetKeys, ok := keysVal.([]string)
-		if !ok || len(budgetKeys) == 0 {
+		costMicroUSD, err := budget.MicroUSDFromFloat64(realCostUSD)
+		if err != nil || costMicroUSD <= 0 {
 			return
 		}
-
-		// 1. Redis 累加真实成本（同步，耗时 < 1ms）
-		// 请求失败不累加（没有预扣，无需冲销）
-		if httpStatus < 400 && realCostUSD > 0 {
-			argsVal, _ := c.Get(middleware.CtxKeyBudgetScopeArgs)
-			scopeArgs, _ := argsVal.([]interface{})
-			middleware.BudgetAdd(c.Request.Context(), rdb, budgetKeys, scopeArgs, realCostUSD)
-		}
-
-		// 2. 告警触发（异步 fire-and-forget，不影响响应）
-		identityVal, _ := c.Get("identity")
-		id, ok := identityVal.(*gwmodel.UserIdentity)
-		if !ok || len(id.BudgetChain) == 0 {
+		if budget.GetBillableReservation(c) != nil {
+			if plan.RedisCheckSucceeded && !plan.AdmissionInfrastructureFailOpen {
+				budget.SetPendingAccount(c, &budget.PendingAccount{
+					Plan: budget.PlanForAccounting(plan), CostMicroUSD: costMicroUSD,
+					OnAccounted: func(context.Context) {
+						enqueueBudgetAlertRequests(plan, alertDispatcher)
+					},
+				})
+			}
+			if legacyErr := gate.AccountLegacy(c.Request.Context(), plan, costMicroUSD); legacyErr != nil {
+				slog.Warn("legacy budget account failed", "error", legacyErr)
+			}
 			return
+		} else {
+			accountResult := gate.Account(c.Request.Context(), plan, costMicroUSD)
+			if accountResult.V2Error != nil {
+				slog.Warn("budget v2 account failed", "error", accountResult.V2Error)
+				return
+			}
+			if accountResult.LegacyError != nil {
+				slog.Warn("legacy budget account failed", "error", accountResult.LegacyError)
+			}
 		}
-
-		// 拷贝 chain 数据避免 gin.Context 生命周期问题
-		chain := make([]struct {
-			ScopeType string `json:"scope_type"`
-			ScopeID   string `json:"scope_id"`
-		}, 0, len(id.BudgetChain))
-		for _, s := range id.BudgetChain {
-			chain = append(chain, struct {
-				ScopeType string `json:"scope_type"`
-				ScopeID   string `json:"scope_id"`
-			}{ScopeType: s.ScopeType, ScopeID: s.ScopeID})
-		}
-
-		go triggerBudgetAlert(chain, controlPlaneURL, internalToken)
+		enqueueBudgetAlertRequests(plan, alertDispatcher)
 	}
 }
 
-// triggerBudgetAlert 异步调用控制面 /internal/v1/budget/evaluate-alert。
-// 对 BudgetChain 的每一层各发一次请求（控制面内部做去重）。
-// 任一失败仅 log，不重试。
-func triggerBudgetAlert(chain []struct {
-	ScopeType string `json:"scope_type"`
-	ScopeID   string `json:"scope_id"`
-}, controlPlaneURL, internalToken string) {
-	if controlPlaneURL == "" {
+func enqueueBudgetAlertRequests(plan *budget.AccountingPlan, dispatcher *BudgetAlertDispatcher) {
+	if dispatcher == nil {
 		return
 	}
-	client := &http.Client{Timeout: 3 * time.Second}
-	for _, s := range chain {
-		if s.ScopeType == "" || s.ScopeID == "" {
-			continue
-		}
-		body, _ := json.Marshal(map[string]string{
-			"scope_type": s.ScopeType,
-			"scope_id":   s.ScopeID,
-		})
-		url := controlPlaneURL + "/internal/v1/budget/evaluate-alert"
-		req, err := http.NewRequestWithContext(context.Background(), "POST", url, bytes.NewReader(body))
-		if err != nil {
-			continue
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Internal-Token", internalToken)
-		resp, err := client.Do(req)
-		if err != nil {
-			slog.Debug("budget alert: control-plane unreachable", "error", err)
-			continue
-		}
-		resp.Body.Close()
+	for _, request := range BuildBudgetAlertRequests(plan) {
+		dispatcher.Enqueue(request)
 	}
 }
 
+func BuildBudgetAlertRequests(plan *budget.AccountingPlan) []BudgetAlertRequest {
+	if !budget.ShouldEmitThresholdAlerts(plan) {
+		return nil
+	}
+	requests := make([]BudgetAlertRequest, 0, len(plan.Constraints))
+	seen := make(map[string]struct{}, len(plan.Constraints))
+	for _, constraint := range plan.Constraints {
+		if constraint.Dimension == budget.DimensionTier && !plan.TierAccountingEligible {
+			continue
+		}
+		request := BudgetAlertRequest{
+			ScopeType: constraint.ScopeType, ScopeID: constraint.ScopeID,
+			PeriodType: string(constraint.PeriodType), DimensionType: string(constraint.Dimension),
+			ModelTierID: constraint.TierID,
+		}
+		key := request.ScopeType + ":" + request.ScopeID + ":" + request.PeriodType + ":" +
+			request.DimensionType + ":" + request.ModelTierID
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		requests = append(requests, request)
+	}
+	return requests
+}
+
+type BudgetAlertRequest struct {
+	ScopeType     string `json:"scope_type"`
+	ScopeID       string `json:"scope_id"`
+	PeriodType    string `json:"period_type"`
+	DimensionType string `json:"dimension_type"`
+	ModelTierID   string `json:"model_tier_id,omitempty"`
+}

@@ -130,7 +130,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { opsAPI } from '@/api/ops'
 import type { AlertRule, MetricType, Operator, OpsSeverity } from '@/api/ops'

@@ -1,9 +1,13 @@
 package handler
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/example/llm-gateway/internal/controlplane/audit"
+	"github.com/example/llm-gateway/internal/controlplane/budgetdomain"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
@@ -18,6 +22,7 @@ type BudgetHandler struct {
 	alertSvc *service.BudgetAlertService
 	rbac     *rbac.Checker
 	db       *gorm.DB
+	rebuild  *service.BudgetCounterRebuildService
 }
 
 func NewBudgetHandler(svc *service.BudgetService, rbacChecker *rbac.Checker) *BudgetHandler {
@@ -32,6 +37,60 @@ func (h *BudgetHandler) SetAlertService(svc *service.BudgetAlertService) {
 // SetDB 注入数据库（供 RebuildCounters 查询 call_logs，可选）。
 func (h *BudgetHandler) SetDB(db *gorm.DB) {
 	h.db = db
+}
+
+func (h *BudgetHandler) SetCounterRebuildService(rebuild *service.BudgetCounterRebuildService) {
+	h.rebuild = rebuild
+}
+
+func (h *BudgetHandler) PreviewTotalBatch(c *gin.Context) { h.handleTotalBatch(c, true) }
+func (h *BudgetHandler) ApplyTotalBatch(c *gin.Context)   { h.handleTotalBatch(c, false) }
+
+func (h *BudgetHandler) handleTotalBatch(c *gin.Context, preview bool) {
+	var input service.TotalBatchInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	h.rbac.BuildAndInjectActor(c)
+	actor := rbac.GetActor(c)
+	for _, item := range input.Items {
+		allowed := actor.IsGlobal
+		switch item.ScopeType {
+		case model.BudgetScopeStudio:
+			allowed = allowed || actor.HasStudio(item.ScopeID)
+		case model.BudgetScopeDeptDaily, model.BudgetScopeDeptService:
+			allowed = allowed || actor.HasDept(item.ScopeID)
+		case model.BudgetScopeMember:
+			ok, err := h.svc.MemberInDeptIDs(item.ScopeID, actor.DeptIDs)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			allowed = allowed || ok
+		}
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权批量调整所选预算"})
+			return
+		}
+	}
+	input.ActorID, _ = uuid.Parse(c.GetString("user_id"))
+	var result *service.TotalBatchResult
+	var err error
+	if preview {
+		result, err = h.svc.PreviewTotalBatch(c.Request.Context(), input)
+	} else {
+		result, err = h.svc.ApplyTotalBatch(c.Request.Context(), input)
+	}
+	if err != nil {
+		status := http.StatusUnprocessableEntity
+		if errors.Is(err, service.ErrBudgetPreviewStale) || errors.Is(err, service.ErrPendingScheduleExists) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": result})
 }
 
 // List GET /api/v1/budgets?view=company|studio|department&scope_type=xxx&scope_id=xxx
@@ -82,13 +141,13 @@ func (h *BudgetHandler) List(c *gin.Context) {
 					c.JSON(http.StatusForbidden, gin.H{"error": "无权查看该工作室"})
 					return
 				}
-			deptIDs, err := h.svc.ListDeptIDsByStudioID(scopeID)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-			scopeIDs = append(scopeIDs, scopeID)
-			scopeIDs = append(scopeIDs, deptIDs...)
+				deptIDs, err := h.svc.ListDeptIDsByStudioID(scopeID)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
+				scopeIDs = append(scopeIDs, scopeID)
+				scopeIDs = append(scopeIDs, deptIDs...)
 			} else if !actor.IsGlobal {
 				// 返回自己管辖的工作室 + 下属部门
 				scopeIDs = append(scopeIDs, actor.StudioIDs...)
@@ -217,15 +276,28 @@ func (h *BudgetHandler) Set(c *gin.Context) {
 	var req struct {
 		ScopeType       string   `json:"scope_type" binding:"required"`
 		ScopeID         string   `json:"scope_id" binding:"required"`
-		AmountUSD       *float64 `json:"amount_usd" binding:"required"` // 指针避免 0 被 required 拦截
-		DailyAmountUSD  float64  `json:"daily_amount_usd"`               // 可选，默认 -1（不限）
-		WeeklyAmountUSD float64  `json:"weekly_amount_usd"`              // 可选，默认 -1（不限）
+		AmountUSD       *float64 `json:"amount_usd"`        // 指针避免 0 被 required 拦截
+		DailyAmountUSD  float64  `json:"daily_amount_usd"`  // 可选，默认 -1（不限）
+		WeeklyAmountUSD float64  `json:"weekly_amount_usd"` // 可选，默认 -1（不限）
+		PeriodType      string   `json:"period_type"`
+		TargetLimitUSD  *string  `json:"target_limit_usd"`
+		EffectiveMode   string   `json:"effective_mode"`
+		Reason          string   `json:"reason"`
+		PreviewOnly     bool     `json:"preview_only"`
+		service.BudgetRiskConfirmation
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	amountUSD := *req.AmountUSD
+	if req.AmountUSD == nil && req.TargetLimitUSD == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "amount_usd or target_limit_usd is required"})
+		return
+	}
+	amountUSD := 0.0
+	if req.AmountUSD != nil {
+		amountUSD = *req.AmountUSD
+	}
 	// 未传日/周限额时默认 -1（不限）
 	if req.DailyAmountUSD == 0 {
 		req.DailyAmountUSD = -1
@@ -265,11 +337,58 @@ func (h *BudgetHandler) Set(c *gin.Context) {
 	}
 
 	actorID, _ := uuid.Parse(c.GetString("user_id"))
-	if err := h.svc.SetBudget(c.Request.Context(), req.ScopeType, req.ScopeID, amountUSD, req.DailyAmountUSD, req.WeeklyAmountUSD, actorID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	periodType := budgetdomain.PeriodMonthly
+	if req.PeriodType != "" {
+		periodType = budgetdomain.PeriodType(req.PeriodType)
+	}
+	target, parseErr := budgetdomain.ParseAmount(fmt.Sprintf("%.6f", amountUSD))
+	if req.TargetLimitUSD != nil {
+		target, parseErr = budgetdomain.ParseAmount(*req.TargetLimitUSD)
+		amountUSD, _ = target.Decimal.Float64()
+	}
+	if parseErr != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"code": CodeInvalidMoneyAmount, "message": parseErr.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "scope_type": req.ScopeType, "scope_id": req.ScopeID, "amount_usd": amountUSD, "daily_amount_usd": req.DailyAmountUSD, "weekly_amount_usd": req.WeeklyAmountUSD})
+	effectiveMode := service.EffectiveMode(req.EffectiveMode)
+	if effectiveMode == "" {
+		effectiveMode = service.EffectiveImmediate
+	}
+	if req.PreviewOnly {
+		audit.SetActionOverride(c, audit.ActionBudgetAdjustPreview)
+	} else {
+		audit.SetActionOverride(c, audit.ActionBudgetAdjustApply)
+	}
+	audit.SetReason(c, req.Reason)
+	impact, err := h.svc.AdjustBudget(c.Request.Context(), service.BudgetAdjustmentInput{
+		ScopeType: req.ScopeType, ScopeID: req.ScopeID, PeriodType: periodType,
+		TargetLimitUSD: target, EffectiveMode: effectiveMode, Reason: req.Reason,
+		ActorID: actorID, PreviewOnly: req.PreviewOnly, BudgetRiskConfirmation: req.BudgetRiskConfirmation,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrBudgetReasonRequired):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"code": "BUDGET_REASON_REQUIRED", "message": err.Error()})
+		case errors.Is(err, service.ErrZeroBlockConfirmationRequired):
+			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_ZERO_BLOCK_CONFIRMATION_REQUIRED", "message": err.Error()})
+		case errors.Is(err, service.ErrBelowUsedConfirmationRequired):
+			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_LIMIT_BELOW_USED", "message": err.Error()})
+		case errors.Is(err, service.ErrBudgetUsageUnavailable):
+			c.JSON(http.StatusServiceUnavailable, gin.H{"code": "BUDGET_USAGE_UNAVAILABLE", "message": err.Error()})
+		case errors.Is(err, service.ErrBudgetPreviewStale):
+			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_PREVIEW_STALE", "message": err.Error(), "next_action": "preview"})
+		case errors.Is(err, service.ErrPendingScheduleExists):
+			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_PENDING_SCHEDULE_EXISTS", "message": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok": true, "scope_type": req.ScopeType, "scope_id": req.ScopeID,
+		"amount_usd": amountUSD, "daily_amount_usd": req.DailyAmountUSD,
+		"weekly_amount_usd": req.WeeklyAmountUSD, "impact": impact, "data": impact,
+	})
 }
 
 // MyBudget GET /api/v1/my/budget
@@ -339,17 +458,29 @@ func (h *BudgetHandler) MyBudget(c *gin.Context) {
 // 由 InternalAuth 鉴权，gateway 通过 X-Internal-Token 调用。
 func (h *BudgetHandler) EvaluateAlert(c *gin.Context) {
 	var req struct {
-		ScopeType string `json:"scope_type" binding:"required"`
-		ScopeID   string `json:"scope_id" binding:"required"`
+		ScopeType     string `json:"scope_type" binding:"required"`
+		ScopeID       string `json:"scope_id" binding:"required"`
+		PeriodType    string `json:"period_type" binding:"required"`
+		DimensionType string `json:"dimension_type" binding:"required"`
+		ModelTierID   string `json:"model_tier_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	periodType := budgetdomain.PeriodType(req.PeriodType)
+	dimensionType := budgetdomain.DimensionType(req.DimensionType)
+	if !periodType.Valid() || !dimensionType.Valid() ||
+		(dimensionType == budgetdomain.DimensionTier && req.ModelTierID == "") ||
+		(dimensionType == budgetdomain.DimensionTotal && req.ModelTierID != "") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid budget alert dimension"})
+		return
+	}
 
 	// 调用告警服务做阈值评估（需注入 alertSvc）
 	if h.alertSvc != nil {
-		h.alertSvc.EvaluateAndAlert(c.Request.Context(), req.ScopeType, req.ScopeID)
+		h.alertSvc.EvaluateAndAlert(c.Request.Context(), req.ScopeType, req.ScopeID,
+			req.PeriodType, req.DimensionType, req.ModelTierID)
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -534,6 +665,15 @@ func (h *BudgetHandler) RebuildCounters(c *gin.Context) {
 	}
 	if h.db == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "数据库未注入，无法重建"})
+		return
+	}
+	if h.rebuild != nil {
+		result, err := h.rebuild.RebuildCurrentPeriods(c.Request.Context(), time.Now())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"result": result, "cutover_ready": result.CutoverReady()})
 		return
 	}
 	result, err := h.svc.RebuildCounters(c.Request.Context(), h.db)

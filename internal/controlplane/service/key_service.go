@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/example/llm-gateway/internal/controlplane/budgetdomain"
 	"github.com/example/llm-gateway/internal/controlplane/event"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
@@ -74,12 +75,33 @@ type VerifyResult struct {
 
 // BudgetScope 预算链中单层 scope 的标识与元数据（不含实时 used，used 实时从 Redis 读）。
 type BudgetScope struct {
-	ScopeType       string  `json:"scope_type"`        // company|studio|dept_daily|dept_service|member
-	ScopeID         string  `json:"scope_id"`
-	AmountUSD       float64 `json:"amount_usd"`        // 月限额（-1 表示未配置/不限额）
-	DailyAmountUSD  float64 `json:"daily_amount_usd"`  // 日限额（-1 表示不限）
-	WeeklyAmountUSD float64 `json:"weekly_amount_usd"` // 周限额（-1 表示不限）
-	Label           string  `json:"label"`             // 展示用标签，如「研发部·成员日常预算」
+	ScopeType       string                 `json:"scope_type"` // company|studio|dept_daily|dept_service|member
+	ScopeID         string                 `json:"scope_id"`
+	AmountUSD       float64                `json:"amount_usd"`        // 月限额（-1 表示未配置/不限额）
+	DailyAmountUSD  float64                `json:"daily_amount_usd"`  // 日限额（-1 表示不限）
+	WeeklyAmountUSD float64                `json:"weekly_amount_usd"` // 周限额（-1 表示不限）
+	Label           string                 `json:"label"`             // 展示用标签，如「研发部·成员日常预算」
+	TierLimits      []BudgetScopeTierLimit `json:"tier_limits,omitempty"`
+}
+
+type BudgetScopeTierLimit struct {
+	TierID            uuid.UUID               `json:"tier_id"`
+	TierName          string                  `json:"tier_name"`
+	PeriodType        budgetdomain.PeriodType `json:"period_type"`
+	BaseLimitUSD      budgetdomain.Amount     `json:"base_limit_usd"`
+	EffectiveLimitUSD budgetdomain.Amount     `json:"effective_limit_usd"`
+	Enabled           bool                    `json:"enabled"`
+	EffectiveAt       time.Time               `json:"effective_at"`
+	ExpiresAt         *time.Time              `json:"expires_at,omitempty"`
+}
+
+type keyBudgetReader interface {
+	GetAllocation(scopeType, scopeID string) (*model.BudgetAllocation, error)
+}
+
+type keyBudgetTierReader interface {
+	ListTierLimits(context.Context, uuid.UUID) ([]model.BudgetTierLimit, error)
+	ListActiveOverrides(context.Context, uuid.UUID, time.Time) ([]model.BudgetTemporaryOverride, error)
 }
 
 type EventPublisher interface {
@@ -119,12 +141,19 @@ type KeyService struct {
 	repo           *repository.KeyRepo
 	keyGroupSvc    *KeyGroupService
 	publisher      EventPublisher
-	entitlementSvc EntitlementComputer   // v0.8: 授权计算接口
-	budgetRepo     *repository.BudgetRepo // v0.7: 预算链构造，可选
+	entitlementSvc EntitlementComputer // v0.8: 授权计算接口
+	budgetRepo     keyBudgetReader     // v0.7: 预算链构造，可选
+	budgetTierRepo keyBudgetTierReader
+	clock          func() time.Time
+}
+
+func (s *KeyService) WithBudgetTierRepo(repo keyBudgetTierReader) *KeyService {
+	s.budgetTierRepo = repo
+	return s
 }
 
 func NewKeyService(repo *repository.KeyRepo, keyGroupSvc *KeyGroupService, publisher EventPublisher) *KeyService {
-	return &KeyService{repo: repo, keyGroupSvc: keyGroupSvc, publisher: publisher}
+	return &KeyService{repo: repo, keyGroupSvc: keyGroupSvc, publisher: publisher, clock: time.Now}
 }
 
 // SetEntitlementService 注入授权服务，用于 verify-key 下发 usable_groups 快照。
@@ -133,8 +162,15 @@ func (s *KeyService) SetEntitlementService(svc EntitlementComputer) {
 }
 
 // WithBudgetRepo 注入预算 repo（v0.7 新增），用于 verify-key 下发 BudgetChain。
-func (s *KeyService) WithBudgetRepo(repo *repository.BudgetRepo) *KeyService {
+func (s *KeyService) WithBudgetRepo(repo keyBudgetReader) *KeyService {
 	s.budgetRepo = repo
+	return s
+}
+
+func (s *KeyService) WithClock(clock func() time.Time) *KeyService {
+	if clock != nil {
+		s.clock = clock
+	}
 	return s
 }
 
@@ -458,7 +494,8 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 	if !k.Enabled {
 		status = "disabled"
 	}
-	if k.ExpiresAt != nil && k.ExpiresAt.Before(time.Now()) {
+	now := s.clock()
+	if k.ExpiresAt != nil && k.ExpiresAt.Before(now) {
 		status = "disabled"
 	}
 
@@ -492,7 +529,7 @@ func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResul
 	// v0.7: 构造预算链（scope 列表 + 各层额度，不含实时 used）
 	var budgetChain []BudgetScope
 	if s.budgetRepo != nil {
-		budgetChain = s.buildBudgetChain(k)
+		budgetChain = s.buildBudgetChain(ctx, k, now)
 	}
 
 	// v0.7: key_type（personal/service 默认 personal）
@@ -550,20 +587,20 @@ func parseDeptID(s string) *uuid.UUID {
 // ServiceKeyItem Service Key 列表项（不含明文 key）。
 // ServiceKeyItem Service Key 列表项（不含明文 key）。
 type ServiceKeyItem struct {
-	ID              uuid.UUID  `json:"id"`
-	Name            string     `json:"name"`
-	MaskedKey       string     `json:"masked_key"`
-	KeyType         string     `json:"key_type"`
-	Purpose         string     `json:"purpose"`
-	DeptID          string     `json:"dept_id"`
-	DeptName        string     `json:"dept_name"`
-	Enabled         bool       `json:"enabled"`
-	AccessAllGroups bool       `json:"access_all_groups"`
+	ID              uuid.UUID        `json:"id"`
+	Name            string           `json:"name"`
+	MaskedKey       string           `json:"masked_key"`
+	KeyType         string           `json:"key_type"`
+	Purpose         string           `json:"purpose"`
+	DeptID          string           `json:"dept_id"`
+	DeptName        string           `json:"dept_name"`
+	Enabled         bool             `json:"enabled"`
+	AccessAllGroups bool             `json:"access_all_groups"`
 	BoundGroups     []BoundGroupItem `json:"bound_groups,omitempty"`
-	IPAllowlist     string     `json:"ip_allowlist,omitempty"`
-	CreatedBy       *uuid.UUID `json:"created_by,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
+	IPAllowlist     string           `json:"ip_allowlist,omitempty"`
+	CreatedBy       *uuid.UUID       `json:"created_by,omitempty"`
+	CreatedAt       time.Time        `json:"created_at"`
+	LastUsedAt      *time.Time       `json:"last_used_at,omitempty"`
 }
 
 // CreateServiceKey 创建 Service Key（仅部门负责人）。
@@ -806,7 +843,7 @@ func (s *KeyService) UpdateIPAllowlist(ctx context.Context, keyID uuid.UUID, all
 // buildBudgetChain 根据 key 类型构造预算链（各层 scope + 已配额度）。
 // personal: member(有则含) → dept_daily → studio → company
 // service:  dept_service → studio → company
-func (s *KeyService) buildBudgetChain(k *model.ApiKey) []BudgetScope {
+func (s *KeyService) buildBudgetChain(ctx context.Context, k *model.ApiKey, now time.Time) []BudgetScope {
 	type scopeDef struct {
 		scopeType string
 		scopeID   string
@@ -835,14 +872,16 @@ func (s *KeyService) buildBudgetChain(k *model.ApiKey) []BudgetScope {
 		if d.scopeID == "" {
 			continue
 		}
-		amount := float64(-1)        // -1 = 未配置/不限额
-		dailyAmount := float64(-1)   // -1 = 不限
-		weeklyAmount := float64(-1)  // -1 = 不限
+		amount := float64(-1)       // -1 = 未配置/不限额
+		dailyAmount := float64(-1)  // -1 = 不限
+		weeklyAmount := float64(-1) // -1 = 不限
 		alloc, _ := s.budgetRepo.GetAllocation(d.scopeType, d.scopeID)
+		var tierLimits []BudgetScopeTierLimit
 		if alloc != nil && alloc.Enabled {
 			amount = alloc.AmountUSD
 			dailyAmount = alloc.DailyAmountUSD
 			weeklyAmount = alloc.WeeklyAmountUSD
+			amount, dailyAmount, weeklyAmount, tierLimits = s.effectiveBudgetLimits(ctx, alloc, amount, dailyAmount, weeklyAmount, now)
 		} else if d.scopeType == model.BudgetScopeMember {
 			// 成员未单独设额则跳过（走 dept_daily 共享池）
 			continue
@@ -854,7 +893,66 @@ func (s *KeyService) buildBudgetChain(k *model.ApiKey) []BudgetScope {
 			DailyAmountUSD:  dailyAmount,
 			WeeklyAmountUSD: weeklyAmount,
 			Label:           d.label,
+			TierLimits:      tierLimits,
 		})
 	}
 	return chain
+}
+
+func (s *KeyService) effectiveBudgetLimits(ctx context.Context, allocation *model.BudgetAllocation, monthly, daily, weekly float64, now time.Time) (float64, float64, float64, []BudgetScopeTierLimit) {
+	if s.budgetTierRepo == nil {
+		return monthly, daily, weekly, nil
+	}
+	overrides, overrideErr := s.budgetTierRepo.ListActiveOverrides(ctx, allocation.ID, now)
+	if overrideErr != nil {
+		slog.WarnContext(ctx, "verify-key: failed to query budget overrides; using total base limits",
+			"budget_allocation_id", allocation.ID, "error", overrideErr)
+		overrides = nil
+	}
+	for _, override := range overrides {
+		if override.DimensionType != budgetdomain.DimensionTotal {
+			continue
+		}
+		value, _ := override.TargetLimitUSD.Decimal.Float64()
+		switch override.PeriodType {
+		case budgetdomain.PeriodDaily:
+			if value > daily {
+				daily = value
+			}
+		case budgetdomain.PeriodWeekly:
+			if value > weekly {
+				weekly = value
+			}
+		case budgetdomain.PeriodMonthly:
+			if value > monthly {
+				monthly = value
+			}
+		}
+	}
+	limits, tierErr := s.budgetTierRepo.ListTierLimits(ctx, allocation.ID)
+	if tierErr != nil {
+		slog.WarnContext(ctx, "verify-key: failed to query tier limits; retaining total budget",
+			"budget_allocation_id", allocation.ID, "error", tierErr)
+		return monthly, daily, weekly, nil
+	}
+	result := make([]BudgetScopeTierLimit, 0, len(limits))
+	for _, limit := range limits {
+		effective := limit.LimitUSD
+		var expiresAt *time.Time
+		for _, override := range overrides {
+			if override.DimensionType == budgetdomain.DimensionTier && override.ModelTierID != nil &&
+				*override.ModelTierID == limit.ModelTierID && override.PeriodType == limit.PeriodType &&
+				override.TargetLimitUSD.Decimal.GreaterThan(effective.Decimal) {
+				effective = override.TargetLimitUSD
+				expires := override.ExpiresAt
+				expiresAt = &expires
+			}
+		}
+		result = append(result, BudgetScopeTierLimit{
+			TierID: limit.ModelTierID, TierName: limit.ModelTier.Name, PeriodType: limit.PeriodType,
+			BaseLimitUSD: limit.LimitUSD, EffectiveLimitUSD: effective, Enabled: limit.Enabled,
+			EffectiveAt: limit.EffectiveAt, ExpiresAt: expiresAt,
+		})
+	}
+	return monthly, daily, weekly, result
 }

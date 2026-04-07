@@ -87,6 +87,298 @@ func TestBudgetRiskListMergesOverrideAlertAndBlockSources(t *testing.T) {
 	require.Equal(t, 1, thresholdCount)
 }
 
+func TestRiskEventCreatedWhenBudgetApproachesLimit(t *testing.T) {
+	now := time.Date(2026, 7, 11, 9, 0, 0, 0, time.UTC)
+	db, err := gorm.Open(sqlite.Open("file:"+uuid.NewString()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
+		status integer, budget_tier_id text, budget_block_code text,
+		budget_block_dimension text, budget_block_scope_type text,
+		budget_block_scope_id text, budget_block_period_type text, created_at datetime
+	)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE budget_alert_records (
+		id text primary key, scope_type text, scope_id text, period_type text, period text,
+		threshold integer, dimension_key text, dimension_type text, model_tier_id text, notified_at datetime
+	)`).Error)
+
+	allocationID := uuid.New()
+	allocRepo := newFakeAllocRepo()
+	allocRepo.allocations[allocationKey(model.BudgetScopeCompany, model.BudgetScopeGlobal)] = &model.BudgetAllocation{
+		ID: allocationID, ScopeType: model.BudgetScopeCompany, ScopeID: model.BudgetScopeGlobal,
+		AmountUSD: 100, DailyAmountUSD: -1, WeeklyAmountUSD: -1, Enabled: true,
+	}
+	budgetSvc := service.NewBudgetService(allocRepo, newFakeAlertRepo())
+	mini := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	budgetSvc.SetRedis(redisClient)
+	// Set usage at 85% — above 80% threshold
+	require.NoError(t, redisClient.Set(context.Background(),
+		"budget:v2:used:company:GLOBAL:2026-07", int64(85_000_000), 0).Err())
+
+	tierSvc := service.NewBudgetTierService(
+		&myBudgetStore{limits: map[uuid.UUID][]model.BudgetTierLimit{}, overrides: map[uuid.UUID][]model.BudgetTemporaryOverride{}},
+		myBudgetReader{}, newFakeModelTierRepo(), func() time.Time { return now },
+	)
+	riskSvc := service.NewBudgetRiskService(repository.NewBudgetRiskRepo(db), budgetSvc, tierSvc, func() time.Time { return now })
+
+	page, err := riskSvc.List(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.RiskFilter{
+		ScopeType: model.BudgetScopeCompany, ScopeID: model.BudgetScopeGlobal, PeriodType: "monthly",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, page.Items)
+	found := false
+	for _, item := range page.Items {
+		if item.RiskType == "threshold_reached" && item.Severity == "warning" {
+			found = true
+			require.Equal(t, "85.000000", item.UsedUSD)
+			require.Equal(t, "100.000000", item.EffectiveLimitUSD)
+		}
+	}
+	require.True(t, found, "expected threshold_reached warning event at 85% usage")
+}
+
+func TestRiskEventCreatedWhenBudgetExhausted(t *testing.T) {
+	now := time.Date(2026, 7, 11, 9, 0, 0, 0, time.UTC)
+	db, err := gorm.Open(sqlite.Open("file:"+uuid.NewString()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
+		status integer, budget_tier_id text, budget_block_code text,
+		budget_block_dimension text, budget_block_scope_type text,
+		budget_block_scope_id text, budget_block_period_type text, created_at datetime
+	)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE budget_alert_records (
+		id text primary key, scope_type text, scope_id text, period_type text, period text,
+		threshold integer, dimension_key text, dimension_type text, model_tier_id text, notified_at datetime
+	)`).Error)
+
+	allocationID := uuid.New()
+	allocRepo := newFakeAllocRepo()
+	allocRepo.allocations[allocationKey(model.BudgetScopeCompany, model.BudgetScopeGlobal)] = &model.BudgetAllocation{
+		ID: allocationID, ScopeType: model.BudgetScopeCompany, ScopeID: model.BudgetScopeGlobal,
+		AmountUSD: 100, DailyAmountUSD: -1, WeeklyAmountUSD: -1, Enabled: true,
+	}
+	budgetSvc := service.NewBudgetService(allocRepo, newFakeAlertRepo())
+	mini := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	budgetSvc.SetRedis(redisClient)
+	// Set usage at 100% — triggers budget_exhausted/critical
+	require.NoError(t, redisClient.Set(context.Background(),
+		"budget:v2:used:company:GLOBAL:2026-07", int64(100_000_000), 0).Err())
+
+	tierSvc := service.NewBudgetTierService(
+		&myBudgetStore{limits: map[uuid.UUID][]model.BudgetTierLimit{}, overrides: map[uuid.UUID][]model.BudgetTemporaryOverride{}},
+		myBudgetReader{}, newFakeModelTierRepo(), func() time.Time { return now },
+	)
+	riskSvc := service.NewBudgetRiskService(repository.NewBudgetRiskRepo(db), budgetSvc, tierSvc, func() time.Time { return now })
+
+	page, err := riskSvc.List(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.RiskFilter{
+		ScopeType: model.BudgetScopeCompany, ScopeID: model.BudgetScopeGlobal, PeriodType: "monthly",
+	})
+	require.NoError(t, err)
+	found := false
+	for _, item := range page.Items {
+		if item.RiskType == "budget_exhausted" && item.Severity == "critical" {
+			found = true
+		}
+	}
+	require.True(t, found, "expected budget_exhausted critical event at 100% usage")
+}
+
+func TestRiskEventCreatedWhenRequestIsBlocked(t *testing.T) {
+	now := time.Date(2026, 7, 11, 9, 0, 0, 0, time.UTC)
+	db, err := gorm.Open(sqlite.Open("file:"+uuid.NewString()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
+		status integer, budget_tier_id text, budget_block_code text,
+		budget_block_dimension text, budget_block_scope_type text,
+		budget_block_scope_id text, budget_block_period_type text, created_at datetime
+	)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE budget_alert_records (
+		id text primary key, scope_type text, scope_id text, period_type text, period text,
+		threshold integer, dimension_key text, dimension_type text, model_tier_id text, notified_at datetime
+	)`).Error)
+	// Insert blocked call_log entries (402 status with budget_exceeded code)
+	for range 5 {
+		require.NoError(t, db.Exec(`INSERT INTO call_logs VALUES (402,NULL,?,?,?,?,?,?)`,
+			"budget_exceeded", "total", model.BudgetScopeCompany, model.BudgetScopeGlobal, "monthly", now).Error)
+	}
+
+	allocRepo := newFakeAllocRepo()
+	allocRepo.allocations[allocationKey(model.BudgetScopeCompany, model.BudgetScopeGlobal)] = &model.BudgetAllocation{
+		ID: uuid.New(), ScopeType: model.BudgetScopeCompany, ScopeID: model.BudgetScopeGlobal,
+		AmountUSD: 100, DailyAmountUSD: -1, WeeklyAmountUSD: -1, Enabled: true,
+	}
+	budgetSvc := service.NewBudgetService(allocRepo, newFakeAlertRepo())
+	mini := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	budgetSvc.SetRedis(redisClient)
+	require.NoError(t, redisClient.Set(context.Background(),
+		"budget:v2:used:company:GLOBAL:2026-07", int64(100_000_000), 0).Err())
+
+	tierSvc := service.NewBudgetTierService(
+		&myBudgetStore{limits: map[uuid.UUID][]model.BudgetTierLimit{}, overrides: map[uuid.UUID][]model.BudgetTemporaryOverride{}},
+		myBudgetReader{}, newFakeModelTierRepo(), func() time.Time { return now },
+	)
+	riskSvc := service.NewBudgetRiskService(repository.NewBudgetRiskRepo(db), budgetSvc, tierSvc, func() time.Time { return now })
+
+	page, err := riskSvc.List(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.RiskFilter{
+		ScopeType: model.BudgetScopeCompany, ScopeID: model.BudgetScopeGlobal, PeriodType: "monthly",
+	})
+	require.NoError(t, err)
+	var blockedCount int
+	for _, item := range page.Items {
+		if item.RiskType == "request_blocked" {
+			blockedCount++
+			require.Equal(t, "critical", item.Severity)
+			require.EqualValues(t, 5, item.BlockedRequests)
+		}
+	}
+	require.Equal(t, 1, blockedCount, "expected exactly 1 request_blocked event aggregating 5 blocked calls")
+}
+
+func TestRiskSummaryAggregatesBySeverityAndType(t *testing.T) {
+	now := time.Date(2026, 7, 11, 9, 0, 0, 0, time.UTC)
+	db, err := gorm.Open(sqlite.Open("file:"+uuid.NewString()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
+		status integer, budget_tier_id text, budget_block_code text,
+		budget_block_dimension text, budget_block_scope_type text,
+		budget_block_scope_id text, budget_block_period_type text, created_at datetime
+	)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE budget_alert_records (
+		id text primary key, scope_type text, scope_id text, period_type text, period text,
+		threshold integer, dimension_key text, dimension_type text, model_tier_id text, notified_at datetime
+	)`).Error)
+	// Add 2 blocked call_logs
+	for range 2 {
+		require.NoError(t, db.Exec(`INSERT INTO call_logs VALUES (402,NULL,?,?,?,?,?,?)`,
+			"budget_exceeded", "total", model.BudgetScopeCompany, model.BudgetScopeGlobal, "monthly", now).Error)
+	}
+
+	allocRepo := newFakeAllocRepo()
+	allocRepo.allocations[allocationKey(model.BudgetScopeCompany, model.BudgetScopeGlobal)] = &model.BudgetAllocation{
+		ID: uuid.New(), ScopeType: model.BudgetScopeCompany, ScopeID: model.BudgetScopeGlobal,
+		AmountUSD: 100, DailyAmountUSD: -1, WeeklyAmountUSD: -1, Enabled: true,
+	}
+	budgetSvc := service.NewBudgetService(allocRepo, newFakeAlertRepo())
+	mini := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	budgetSvc.SetRedis(redisClient)
+	// 85% usage triggers threshold_reached warning, plus blocked events are critical
+	require.NoError(t, redisClient.Set(context.Background(),
+		"budget:v2:used:company:GLOBAL:2026-07", int64(85_000_000), 0).Err())
+
+	tierSvc := service.NewBudgetTierService(
+		&myBudgetStore{limits: map[uuid.UUID][]model.BudgetTierLimit{}, overrides: map[uuid.UUID][]model.BudgetTemporaryOverride{}},
+		myBudgetReader{}, newFakeModelTierRepo(), func() time.Time { return now },
+	)
+	riskSvc := service.NewBudgetRiskService(repository.NewBudgetRiskRepo(db), budgetSvc, tierSvc, func() time.Time { return now })
+
+	summary, err := riskSvc.Summary(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.RiskFilter{
+		ScopeType: model.BudgetScopeCompany, ScopeID: model.BudgetScopeGlobal, PeriodType: "monthly",
+	})
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, summary.Total, 2)
+	require.Greater(t, summary.Warning, 0, "expected at least one warning (threshold_reached)")
+	require.Greater(t, summary.Critical, 0, "expected at least one critical (request_blocked)")
+	require.GreaterOrEqual(t, summary.ByType["threshold_reached"], 1)
+	require.GreaterOrEqual(t, summary.ByType["request_blocked"], 1)
+}
+
+func TestRiskEventDeduplicatesAlertAndThresholdSources(t *testing.T) {
+	// When both a budget_alert_record and a threshold projection exist for the
+	// same identity (scope+period+dimension+tier), they should merge into a
+	// single event — not duplicate.
+	now := time.Date(2026, 7, 11, 9, 0, 0, 0, time.UTC)
+	db, err := gorm.Open(sqlite.Open("file:"+uuid.NewString()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
+		status integer, budget_tier_id text, budget_block_code text,
+		budget_block_dimension text, budget_block_scope_type text,
+		budget_block_scope_id text, budget_block_period_type text, created_at datetime
+	)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE budget_alert_records (
+		id text primary key, scope_type text, scope_id text, period_type text, period text,
+		threshold integer, dimension_key text, dimension_type text, model_tier_id text, notified_at datetime
+	)`).Error)
+	// Alert record for the same identity as the threshold projection
+	require.NoError(t, db.Exec(`INSERT INTO budget_alert_records VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		uuid.New(), model.BudgetScopeCompany, model.BudgetScopeGlobal, "monthly", "2026-07",
+		80, "total", "total", nil, now.Add(-time.Hour)).Error)
+
+	allocationID := uuid.New()
+	allocRepo := newFakeAllocRepo()
+	allocRepo.allocations[allocationKey(model.BudgetScopeCompany, model.BudgetScopeGlobal)] = &model.BudgetAllocation{
+		ID: allocationID, ScopeType: model.BudgetScopeCompany, ScopeID: model.BudgetScopeGlobal,
+		AmountUSD: 100, DailyAmountUSD: -1, WeeklyAmountUSD: -1, Enabled: true,
+	}
+	budgetSvc := service.NewBudgetService(allocRepo, newFakeAlertRepo())
+	mini := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	budgetSvc.SetRedis(redisClient)
+	require.NoError(t, redisClient.Set(context.Background(),
+		"budget:v2:used:company:GLOBAL:2026-07", int64(85_000_000), 0).Err())
+
+	tierSvc := service.NewBudgetTierService(
+		&myBudgetStore{limits: map[uuid.UUID][]model.BudgetTierLimit{}, overrides: map[uuid.UUID][]model.BudgetTemporaryOverride{}},
+		myBudgetReader{}, newFakeModelTierRepo(), func() time.Time { return now },
+	)
+	riskSvc := service.NewBudgetRiskService(repository.NewBudgetRiskRepo(db), budgetSvc, tierSvc, func() time.Time { return now })
+
+	page, err := riskSvc.List(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.RiskFilter{
+		ScopeType: model.BudgetScopeCompany, ScopeID: model.BudgetScopeGlobal, PeriodType: "monthly",
+	})
+	require.NoError(t, err)
+	// Only 1 threshold event — the alert record merged its detected_at into it, not a duplicate
+	var thresholdCount int
+	for _, item := range page.Items {
+		if item.RiskType == "threshold_reached" || item.RiskType == "budget_exhausted" {
+			thresholdCount++
+		}
+	}
+	require.Equal(t, 1, thresholdCount, "alert and threshold should deduplicate into 1 event")
+}
+
+func TestRiskNoEventBelowThreshold(t *testing.T) {
+	now := time.Date(2026, 7, 11, 9, 0, 0, 0, time.UTC)
+	db, err := gorm.Open(sqlite.Open("file:"+uuid.NewString()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
+		status integer, budget_tier_id text, budget_block_code text,
+		budget_block_dimension text, budget_block_scope_type text,
+		budget_block_scope_id text, budget_block_period_type text, created_at datetime
+	)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE budget_alert_records (
+		id text primary key, scope_type text, scope_id text, period_type text, period text,
+		threshold integer, dimension_key text, dimension_type text, model_tier_id text, notified_at datetime
+	)`).Error)
+
+	allocRepo := newFakeAllocRepo()
+	allocRepo.allocations[allocationKey(model.BudgetScopeCompany, model.BudgetScopeGlobal)] = &model.BudgetAllocation{
+		ID: uuid.New(), ScopeType: model.BudgetScopeCompany, ScopeID: model.BudgetScopeGlobal,
+		AmountUSD: 100, DailyAmountUSD: -1, WeeklyAmountUSD: -1, Enabled: true,
+	}
+	budgetSvc := service.NewBudgetService(allocRepo, newFakeAlertRepo())
+	mini := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	budgetSvc.SetRedis(redisClient)
+	// 10% usage — well below 80% threshold
+	require.NoError(t, redisClient.Set(context.Background(),
+		"budget:v2:used:company:GLOBAL:2026-07", int64(10_000_000), 0).Err())
+
+	tierSvc := service.NewBudgetTierService(
+		&myBudgetStore{limits: map[uuid.UUID][]model.BudgetTierLimit{}, overrides: map[uuid.UUID][]model.BudgetTemporaryOverride{}},
+		myBudgetReader{}, newFakeModelTierRepo(), func() time.Time { return now },
+	)
+	riskSvc := service.NewBudgetRiskService(repository.NewBudgetRiskRepo(db), budgetSvc, tierSvc, func() time.Time { return now })
+
+	page, err := riskSvc.List(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.RiskFilter{
+		ScopeType: model.BudgetScopeCompany, ScopeID: model.BudgetScopeGlobal, PeriodType: "monthly",
+	})
+	require.NoError(t, err)
+	require.Empty(t, page.Items, "no risk events expected below 80% threshold")
+}
+
 func TestBudgetRiskHistoricalAlertDoesNotStayActiveAfterUsageRecovers(t *testing.T) {
 	now := time.Date(2026, 7, 11, 9, 0, 0, 0, time.UTC)
 	db, err := gorm.Open(sqlite.Open("file:"+uuid.NewString()+"?mode=memory&cache=shared"), &gorm.Config{})

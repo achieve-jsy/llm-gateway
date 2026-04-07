@@ -13,6 +13,7 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/budgetdomain"
 	"github.com/example/llm-gateway/internal/controlplane/handler"
 	"github.com/example/llm-gateway/internal/controlplane/model"
+	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
 	"github.com/gin-gonic/gin"
@@ -435,6 +436,69 @@ func mapKeys(values map[string]json.RawMessage) []string {
 		keys = append(keys, key)
 	}
 	return keys
+}
+
+func TestBudgetTierTierUsageHandlerReturns200WithData(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tierID := uuid.New()
+	reportedCost := handlerAmount(t, "25.500000")
+	accountingCost := handlerAmount(t, "25.500000")
+	fake := &fakeBudgetTierHandlerService{usageResult: &service.TierUsageResponse{Data: service.TierUsageResponseData{
+		DataAsOf: time.Date(2026, 7, 11, 8, 0, 0, 0, time.UTC), Stale: false,
+		Items: []repository.TierUsageAggregate{{
+			ScopeType: "company", ScopeID: "global", TierID: &tierID,
+			ReportedCostUSD: reportedCost, AccountingCostUSD: accountingCost, RequestCount: 42,
+		}},
+	}}}
+	h := handler.NewBudgetTierHandler(fake)
+	router := gin.New()
+	router.GET("/api/v1/budgets/tier-usage", func(c *gin.Context) {
+		rbac.SetActor(c, rbac.Actor{UserID: uuid.NewString(), IsGlobal: true})
+		h.TierUsage(c)
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/budgets/tier-usage?scope_type=company&scope_id=global&period_type=monthly&model_tier_id="+tierID.String(), nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusOK, response.Code)
+	require.Contains(t, response.Body.String(), `"model_tier_id":"`+tierID.String()+`"`)
+	require.Contains(t, response.Body.String(), `"request_count":42`)
+}
+
+func TestBudgetTierTierUsageHandlerRejectsInvalidModelTierID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := handler.NewBudgetTierHandler(&fakeBudgetTierHandlerService{})
+	router := gin.New()
+	router.GET("/api/v1/budgets/tier-usage", func(c *gin.Context) {
+		rbac.SetActor(c, rbac.Actor{UserID: uuid.NewString(), IsGlobal: true})
+		h.TierUsage(c)
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/budgets/tier-usage?model_tier_id=not-a-uuid", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusBadRequest, response.Code)
+	require.Contains(t, response.Body.String(), `"code":"bad_request"`)
+	require.Contains(t, response.Body.String(), "invalid model_tier_id")
+}
+
+func TestBudgetTierTierUsageHandlerRejectsInvalidGroupID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := handler.NewBudgetTierHandler(&fakeBudgetTierHandlerService{})
+	router := gin.New()
+	router.GET("/api/v1/budgets/tier-usage", func(c *gin.Context) {
+		rbac.SetActor(c, rbac.Actor{UserID: uuid.NewString(), IsGlobal: true})
+		h.TierUsage(c)
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/budgets/tier-usage?group_id=not-a-number", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusBadRequest, response.Code)
+	require.Contains(t, response.Body.String(), "invalid group_id")
 }
 
 func TestBudgetTierSetUsesCanonicalPendingScheduleErrorCode(t *testing.T) {

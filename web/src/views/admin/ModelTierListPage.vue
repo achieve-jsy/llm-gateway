@@ -29,7 +29,8 @@
       <el-table-column prop="budget_count" label="预算引用" width="100" />
       <el-table-column prop="history_count" label="历史引用" width="100" />
       <el-table-column label="排序" width="110">
-        <template #default="{ $index }">
+        <template #default="{ row, $index }">
+          <span style="margin-right: 8px; font-size: 12px; color: var(--el-text-color-secondary)">{{ row.sort_order }}</span>
           <el-button text aria-label="上移" :disabled="$index === 0" @click="move($index, -1)">↑</el-button>
           <el-button text aria-label="下移" :disabled="$index === tiers.length - 1" @click="move($index, 1)">↓</el-button>
         </template>
@@ -66,7 +67,7 @@
         <el-select v-model="groupTierFilter" aria-label="按当前等级筛选">
           <el-option label="全部等级" value="all" />
           <el-option label="未分级" value="unclassified" />
-          <el-option v-for="tier in tiers" :key="tier.id" :label="tier.name" :value="tier.id" />
+          <el-option v-for="tier in activeTiers" :key="tier.id" :label="tier.name" :value="tier.id" />
         </el-select>
       </div>
       <el-table :data="filteredGroups" max-height="360" @selection-change="selectedGroups = $event">
@@ -101,7 +102,8 @@ import {
 import type { GroupListItem } from '@/types/group'
 import type { ModelTier } from '@/types/model-tier'
 
-const tiers = ref<ModelTier[]>([])
+const tiersRaw = ref<ModelTier[]>([])
+const tiers = computed(() => [...tiersRaw.value].sort((a, b) => a.sort_order - b.sort_order))
 const groups = ref<GroupListItem[]>([])
 const selectedGroups = ref<GroupListItem[]>([])
 const loading = ref(false)
@@ -114,6 +116,7 @@ const groupSearch = ref('')
 const groupTierFilter = ref('all')
 const reason = ref('')
 const form = reactive({ name: '', description: '', color: '#409EFF' })
+const activeTiers = computed(() => tiers.value.filter(t => !t.archived_at && t.enabled).sort((a, b) => a.sort_order - b.sort_order))
 const filteredGroups = computed(() => groups.value.filter((group) => {
   if (!group.name.toLowerCase().includes(groupSearch.value.toLowerCase())) return false
   if (groupTierFilter.value === 'unclassified') return !group.model_tier_id
@@ -123,7 +126,7 @@ const filteredGroups = computed(() => groups.value.filter((group) => {
 
 async function load() {
   loading.value = true
-  try { tiers.value = await listModelTiers(true) } finally { loading.value = false }
+  try { tiersRaw.value = await listModelTiers(true) } finally { loading.value = false }
 }
 function openCreate() {
   editing.value = null
@@ -148,10 +151,10 @@ async function save() {
   } finally { saving.value = false }
 }
 async function move(index: number, offset: number) {
-  const copy = [...tiers.value]
+  const copy = [...tiersRaw.value]
   ;[copy[index], copy[index + offset]] = [copy[index + offset], copy[index]]
   await reorderModelTiers(copy.map(item => item.id), '调整模型等级顺序')
-  tiers.value = copy
+  tiersRaw.value = copy
 }
 async function askReason(title: string) {
   const result = await ElMessageBox.prompt('请输入变更原因', title, { inputValidator: value => !!value.trim() || '原因不能为空' })

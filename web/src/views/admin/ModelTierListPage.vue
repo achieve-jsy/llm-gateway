@@ -60,7 +60,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="groupsVisible" title="批量关联模型组" width="600px">
+    <el-dialog v-model="groupsVisible" title="批量关联模型组" width="600px" @opened="onGroupsDialogOpened">
       <div class="group-filters">
         <el-input v-model="groupSearch" placeholder="搜索模型组" clearable />
         <el-select v-model="groupTierFilter" aria-label="按当前等级筛选">
@@ -90,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { groupsApi } from '@/api/groups'
 import {
@@ -178,19 +178,17 @@ async function openGroups(row: ModelTier) {
   groupsVisible.value = true
 }
 
-watch(groupsVisible, async (visible) => {
-  if (!visible || !selectedTier.value) return
-  await nextTick()
-  const preSelected = groups.value.filter(g => g.model_tier_id === selectedTier.value!.id)
-  setTimeout(() => {
-    if (groupTableRef.value) {
-      preSelected.forEach((g: GroupListItem) => groupTableRef.value.toggleRowSelection(g, true))
-    }
-  }, 50)
-})
-
 function onGroupSelectionChange(rows: GroupListItem[]) {
   selectedGroups.value = rows
+}
+
+async function onGroupsDialogOpened() {
+  if (!selectedTier.value) return
+  await nextTick()
+  const preSelected = groups.value.filter((g: GroupListItem) => g.model_tier_id === selectedTier.value!.id)
+  if (preSelected.length && groupTableRef.value) {
+    preSelected.forEach((g: GroupListItem) => groupTableRef.value.toggleRowSelection(g, true))
+  }
 }
 async function saveGroups(clear = false) {
   if (!selectedTier.value) return

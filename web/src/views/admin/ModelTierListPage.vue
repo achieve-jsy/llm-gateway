@@ -69,7 +69,7 @@
           <el-option v-for="tier in activeTiers" :key="tier.id" :label="tier.name" :value="tier.id" />
         </el-select>
       </div>
-      <el-table ref="groupTableRef" :data="filteredGroups" max-height="360" @selection-change="onGroupSelectionChange">
+      <el-table ref="groupTableRef" :data="filteredGroups" row-key="id" max-height="360" @selection-change="onGroupSelectionChange">
         <el-table-column type="selection" width="48" />
         <el-table-column prop="name" label="模型组" />
         <el-table-column prop="model_tier_name" label="当前等级">
@@ -90,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { groupsApi } from '@/api/groups'
 import {
@@ -176,15 +176,18 @@ async function openGroups(row: ModelTier) {
   groups.value = response.data.data
   selectedGroups.value = []
   groupsVisible.value = true
+}
+
+watch(groupsVisible, async (visible) => {
+  if (!visible || !selectedTier.value) return
   await nextTick()
-  const preSelected = groups.value.filter(g => g.model_tier_id === row.id)
-  selectedGroups.value = preSelected
+  const preSelected = groups.value.filter(g => g.model_tier_id === selectedTier.value!.id)
   setTimeout(() => {
     if (groupTableRef.value) {
       preSelected.forEach((g: GroupListItem) => groupTableRef.value.toggleRowSelection(g, true))
     }
-  }, 100)
-}
+  }, 50)
+})
 
 function onGroupSelectionChange(rows: GroupListItem[]) {
   selectedGroups.value = rows

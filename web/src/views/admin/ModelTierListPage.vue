@@ -70,20 +70,19 @@
           <el-option v-for="tier in activeTiers" :key="tier.id" :label="tier.name" :value="tier.id" />
         </el-select>
       </div>
-      <el-table ref="groupTableRef" :data="filteredGroups" max-height="360" @selection-change="selectedGroups = $event">
+      <el-table ref="groupTableRef" :data="filteredGroups" max-height="360" @selection-change="onGroupSelectionChange">
         <el-table-column type="selection" width="48" />
         <el-table-column prop="name" label="模型组" />
         <el-table-column prop="model_tier_name" label="当前等级">
           <template #default="{ row }">{{ row.model_tier_name || '未分级' }}</template>
         </el-table-column>
       </el-table>
-      <el-form-item label="变更原因" required class="group-reason"><el-input v-model="reason" /></el-form-item>
       <template #footer>
         <el-button @click="groupsVisible = false">取消</el-button>
-        <el-button :loading="saving" :disabled="selectedGroups.length === 0 || !reason.trim()" @click="saveGroups(true)">
+        <el-button :loading="saving" :disabled="selectedGroups.length === 0" @click="saveGroups(true)">
           清除关联（未分级）
         </el-button>
-        <el-button type="primary" :loading="saving" :disabled="selectedGroups.length === 0 || !reason.trim()" @click="saveGroups(false)">
+        <el-button type="primary" :loading="saving" :disabled="selectedGroups.length === 0" @click="saveGroups(false)">
           关联 {{ selectedGroups.length }} 个模型组
         </el-button>
       </template>
@@ -92,7 +91,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, ElTable } from 'element-plus'
 import { groupsApi } from '@/api/groups'
 import {
@@ -180,19 +179,29 @@ async function openGroups(row: ModelTier) {
   groupTierFilter.value = 'all'
   const response = await groupsApi.listGroups({ page: 1, page_size: 500 })
   groups.value = response.data.data
-  const preSelected = groups.value.filter(g => g.model_tier_id === row.id)
-  selectedGroups.value = preSelected
+  selectedGroups.value = []
   groupsVisible.value = true
-  await nextTick()
-  if (groupTableRef.value) {
-    preSelected.forEach(g => groupTableRef.value!.toggleRowSelection(g, true))
-  }
 }
+
+function onGroupSelectionChange(rows: GroupListItem[]) {
+  selectedGroups.value = rows
+}
+
+watch(groupsVisible, (visible) => {
+  if (!visible || !selectedTier.value) return
+  const preSelected = groups.value.filter(g => g.model_tier_id === selectedTier.value!.id)
+  selectedGroups.value = preSelected
+  nextTick(() => {
+    if (groupTableRef.value) {
+      preSelected.forEach(g => groupTableRef.value!.toggleRowSelection(g, true))
+    }
+  })
+})
 async function saveGroups(clear = false) {
   if (!selectedTier.value) return
   saving.value = true
   try {
-    await setGroupBudgetTierBatch(selectedGroups.value.map(group => group.id), clear ? null : selectedTier.value.id, reason.value)
+    await setGroupBudgetTierBatch(selectedGroups.value.map(group => group.id), clear ? null : selectedTier.value.id, '批量调整模型等级')
     groupsVisible.value = false
     ElMessage.success(clear ? '已清除模型组等级关联' : '模型组关联已更新')
     await load()

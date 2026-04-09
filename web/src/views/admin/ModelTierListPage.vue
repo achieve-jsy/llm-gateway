@@ -53,11 +53,10 @@
         <el-form-item label="名称" required><el-input v-model="form.name" maxlength="40" show-word-limit /></el-form-item>
         <el-form-item label="说明"><el-input v-model="form.description" type="textarea" maxlength="200" show-word-limit /></el-form-item>
         <el-form-item label="标识颜色" required><el-color-picker v-model="form.color" /></el-form-item>
-        <el-form-item label="变更原因" required><el-input v-model="reason" maxlength="200" /></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="formVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" :disabled="!form.name.trim() || !reason.trim()" @click="save">保存</el-button>
+        <el-button type="primary" :loading="saving" :disabled="!form.name.trim()" @click="save">保存</el-button>
       </template>
     </el-dialog>
 
@@ -91,8 +90,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox, ElTable } from 'element-plus'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { groupsApi } from '@/api/groups'
 import {
   archiveModelTier, createModelTier, deleteModelTier, listModelTiers, reorderModelTiers,
@@ -111,10 +110,9 @@ const formVisible = ref(false)
 const groupsVisible = ref(false)
 const editing = ref<ModelTier | null>(null)
 const selectedTier = ref<ModelTier | null>(null)
-const groupTableRef = ref<InstanceType<typeof ElTable> | null>(null)
+const groupTableRef = ref<any>(null)
 const groupSearch = ref('')
 const groupTierFilter = ref('all')
-const reason = ref('')
 const form = reactive({ name: '', description: '', color: '#409EFF' })
 const activeTiers = computed(() => tiers.value.filter(t => !t.archived_at && t.enabled).sort((a, b) => a.sort_order - b.sort_order))
 const filteredGroups = computed(() => groups.value.filter((group) => {
@@ -131,20 +129,18 @@ async function load() {
 function openCreate() {
   editing.value = null
   Object.assign(form, { name: '', description: '', color: '#409EFF' })
-  reason.value = ''
   formVisible.value = true
 }
 function openEdit(row: ModelTier) {
   editing.value = row
   Object.assign(form, { name: row.name, description: row.description, color: row.color })
-  reason.value = ''
   formVisible.value = true
 }
 async function save() {
   saving.value = true
   try {
-    if (editing.value) await updateModelTier(editing.value.id, { ...form, reason: reason.value })
-    else await createModelTier({ ...form, reason: reason.value })
+    if (editing.value) await updateModelTier(editing.value.id, { ...form, reason: '编辑模型等级' })
+    else await createModelTier({ ...form, reason: '创建模型等级' })
     formVisible.value = false
     ElMessage.success('已保存')
     await load()
@@ -175,28 +171,24 @@ async function remove(row: ModelTier) {
 }
 async function openGroups(row: ModelTier) {
   selectedTier.value = row
-  reason.value = ''
   groupTierFilter.value = 'all'
   const response = await groupsApi.listGroups({ page: 1, page_size: 500 })
   groups.value = response.data.data
   selectedGroups.value = []
   groupsVisible.value = true
+  await nextTick()
+  const preSelected = groups.value.filter(g => g.model_tier_id === row.id)
+  selectedGroups.value = preSelected
+  setTimeout(() => {
+    if (groupTableRef.value) {
+      preSelected.forEach((g: GroupListItem) => groupTableRef.value.toggleRowSelection(g, true))
+    }
+  }, 100)
 }
 
 function onGroupSelectionChange(rows: GroupListItem[]) {
   selectedGroups.value = rows
 }
-
-watch(groupsVisible, (visible) => {
-  if (!visible || !selectedTier.value) return
-  const preSelected = groups.value.filter(g => g.model_tier_id === selectedTier.value!.id)
-  selectedGroups.value = preSelected
-  nextTick(() => {
-    if (groupTableRef.value) {
-      preSelected.forEach(g => groupTableRef.value!.toggleRowSelection(g, true))
-    }
-  })
-})
 async function saveGroups(clear = false) {
   if (!selectedTier.value) return
   saving.value = true

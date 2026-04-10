@@ -158,6 +158,7 @@ async function toggle(row: ModelTier) {
   await load()
 }
 async function archive(row: ModelTier) {
+  await ElMessageBox.confirm(`确定归档等级「${row.name}」？归档后不可重新启用。`, '确认归档', { type: 'warning' })
   await archiveModelTier(row.id, '归档模型等级')
   await load()
 }

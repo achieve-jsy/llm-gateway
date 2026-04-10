@@ -165,9 +165,6 @@ func (s *ModelTierService) Update(ctx context.Context, id uuid.UUID, input Updat
 }
 
 func (s *ModelTierService) SetEnabled(ctx context.Context, id uuid.UUID, enabled bool, reason string) (*model.ModelTier, error) {
-	if strings.TrimSpace(reason) == "" {
-		return nil, ErrReasonRequired
-	}
 	tier, err := s.Get(ctx, id)
 	if err != nil {
 		return nil, err
@@ -183,9 +180,6 @@ func (s *ModelTierService) SetEnabled(ctx context.Context, id uuid.UUID, enabled
 }
 
 func (s *ModelTierService) Archive(ctx context.Context, id uuid.UUID, reason string) (*model.ModelTier, error) {
-	if strings.TrimSpace(reason) == "" {
-		return nil, ErrReasonRequired
-	}
 	tier, err := s.Get(ctx, id)
 	if err != nil {
 		return nil, err
@@ -200,9 +194,6 @@ func (s *ModelTierService) Archive(ctx context.Context, id uuid.UUID, reason str
 }
 
 func (s *ModelTierService) Delete(ctx context.Context, id uuid.UUID, reason string) error {
-	if strings.TrimSpace(reason) == "" {
-		return ErrReasonRequired
-	}
 	if _, err := s.Get(ctx, id); err != nil {
 		return err
 	}

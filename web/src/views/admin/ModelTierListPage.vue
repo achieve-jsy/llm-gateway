@@ -152,21 +152,17 @@ async function move(index: number, offset: number) {
   await reorderModelTiers(copy.map(item => item.id), '调整模型等级顺序')
   tiersRaw.value = copy
 }
-async function askReason(title: string) {
-  const result = await ElMessageBox.prompt('请输入变更原因', title, { inputValidator: value => !!value.trim() || '原因不能为空' })
-  return result.value
-}
 async function toggle(row: ModelTier) {
-  await setModelTierStatus(row.id, !row.enabled, await askReason(row.enabled ? '停用等级' : '启用等级'))
+  await setModelTierStatus(row.id, !row.enabled, '模型等级状态变更')
   await load()
 }
 async function archive(row: ModelTier) {
-  await archiveModelTier(row.id, await askReason('归档等级'))
+  await archiveModelTier(row.id, '归档模型等级')
   await load()
 }
 async function remove(row: ModelTier) {
   await ElMessageBox.confirm('仅无模型组、预算和历史引用的等级可永久删除。', '删除等级', { type: 'warning' })
-  await deleteModelTier(row.id, await askReason('确认删除'))
+  await deleteModelTier(row.id, '删除模型等级')
   await load()
 }
 async function openGroups(row: ModelTier) {

@@ -90,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { groupsApi } from '@/api/groups'
 import {
@@ -111,7 +111,6 @@ const groupsVisible = ref(false)
 const editing = ref<ModelTier | null>(null)
 const selectedTier = ref<ModelTier | null>(null)
 const groupTableRef = ref<any>(null)
-const isRestoringSelection = ref(false)
 const groupSearch = ref('')
 const groupTierFilter = ref('all')
 const form = reactive({ name: '', description: '', color: '#409EFF' })
@@ -175,36 +174,36 @@ async function openGroups(row: ModelTier) {
   groupTierFilter.value = 'all'
   const response = await groupsApi.listGroups({ page: 1, page_size: 500 })
   groups.value = response.data.data
-  selectedGroups.value = []
+  const preSelected = groups.value.filter((g: GroupListItem) => g.model_tier_id === row.id)
+  selectedGroups.value = [...preSelected]
   groupsVisible.value = true
+  setTimeout(() => {
+    if (groupTableRef.value) {
+      preSelected.forEach((g: GroupListItem) => groupTableRef.value.toggleRowSelection(g, true))
+    }
+  }, 300)
 }
 
-watch(groupsVisible, (visible) => {
-  if (!visible || !selectedTier.value) return
-  isRestoringSelection.value = true
-  const tierId = selectedTier.value.id
-  setTimeout(() => {
-    if (!groupTableRef.value) { isRestoringSelection.value = false; return }
-    groupTableRef.value.clearSelection()
-    const preSelected = groups.value.filter((g: GroupListItem) => g.model_tier_id === tierId)
-    setTimeout(() => {
-      if (groupTableRef.value) {
-        preSelected.forEach((g: GroupListItem) => groupTableRef.value.toggleRowSelection(g, true))
-      }
-      isRestoringSelection.value = false
-    }, 100)
-  }, 300)
-})
-
 function onGroupSelectionChange(rows: GroupListItem[]) {
-  if (isRestoringSelection.value) return
   selectedGroups.value = rows
 }
 async function saveGroups(clear = false) {
   if (!selectedTier.value) return
   saving.value = true
   try {
-    await setGroupBudgetTierBatch(selectedGroups.value.map(group => group.id), clear ? null : selectedTier.value.id, '批量调整模型等级')
+    const tierId = selectedTier.value.id
+    if (clear) {
+      await setGroupBudgetTierBatch(selectedGroups.value.map(g => g.id), null, '批量调整模型等级')
+    } else {
+      const toAssign = selectedGroups.value.map(g => g.id)
+      const toClear = groups.value.filter(g => g.model_tier_id === tierId && !selectedGroups.value.some(sg => sg.id === g.id)).map(g => g.id)
+      if (toClear.length > 0) {
+        await setGroupBudgetTierBatch(toClear, null, '批量调整模型等级')
+      }
+      if (toAssign.length > 0) {
+        await setGroupBudgetTierBatch(toAssign, tierId, '批量调整模型等级')
+      }
+    }
     groupsVisible.value = false
     ElMessage.success(clear ? '已清除模型组等级关联' : '模型组关联已更新')
     await load()

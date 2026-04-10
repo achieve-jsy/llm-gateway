@@ -153,6 +153,7 @@ async function move(index: number, offset: number) {
   tiersRaw.value = copy
 }
 async function toggle(row: ModelTier) {
+  await ElMessageBox.confirm(`确定${row.enabled ? '停用' : '启用'}等级「${row.name}」？`, '确认操作', { type: 'warning' })
   await setModelTierStatus(row.id, !row.enabled, '模型等级状态变更')
   await load()
 }

@@ -111,6 +111,7 @@ const groupsVisible = ref(false)
 const editing = ref<ModelTier | null>(null)
 const selectedTier = ref<ModelTier | null>(null)
 const groupTableRef = ref<any>(null)
+const isRestoringSelection = ref(false)
 const groupSearch = ref('')
 const groupTierFilter = ref('all')
 const form = reactive({ name: '', description: '', color: '#409EFF' })
@@ -180,16 +181,23 @@ async function openGroups(row: ModelTier) {
 
 watch(groupsVisible, (visible) => {
   if (!visible || !selectedTier.value) return
+  isRestoringSelection.value = true
+  const tierId = selectedTier.value.id
   setTimeout(() => {
-    const preSelected = groups.value.filter((g: GroupListItem) => g.model_tier_id === selectedTier.value!.id)
-    if (preSelected.length && groupTableRef.value) {
-      groupTableRef.value.clearSelection()
-      preSelected.forEach((g: GroupListItem) => groupTableRef.value.toggleRowSelection(g, true))
-    }
-  }, 150)
+    if (!groupTableRef.value) { isRestoringSelection.value = false; return }
+    groupTableRef.value.clearSelection()
+    const preSelected = groups.value.filter((g: GroupListItem) => g.model_tier_id === tierId)
+    setTimeout(() => {
+      if (groupTableRef.value) {
+        preSelected.forEach((g: GroupListItem) => groupTableRef.value.toggleRowSelection(g, true))
+      }
+      isRestoringSelection.value = false
+    }, 100)
+  }, 300)
 })
 
 function onGroupSelectionChange(rows: GroupListItem[]) {
+  if (isRestoringSelection.value) return
   selectedGroups.value = rows
 }
 async function saveGroups(clear = false) {

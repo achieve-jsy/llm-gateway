@@ -120,6 +120,8 @@ func (h *GroupHandler) List(c *gin.Context) {
 		ModelCount              int    `json:"model_count"`
 		OpenMode                string `json:"open_mode"`
 		IsCapabilityOverride    bool   `json:"is_capability_override"`
+		ModelTierID             string `json:"model_tier_id,omitempty"`
+		ModelTierName           string `json:"model_tier_name,omitempty"`
 		CreatedAt               string `json:"created_at"`
 		UpdatedAt               string `json:"updated_at"`
 	}
@@ -130,6 +132,10 @@ func (h *GroupHandler) List(c *gin.Context) {
 		mt := g.ModelType
 		if mt == "" {
 			mt = "chat"
+		}
+		var tierIDStr string
+		if g.BudgetTierID != nil {
+			tierIDStr = g.BudgetTierID.String()
 		}
 		items[i] = groupWithCount{
 			ID:                      g.ID,
@@ -144,6 +150,8 @@ func (h *GroupHandler) List(c *gin.Context) {
 			ModelCount:              count,
 			OpenMode:                g.OpenMode,
 			IsCapabilityOverride:    g.IsCapabilityOverride,
+			ModelTierID:             tierIDStr,
+			ModelTierName:           "",
 			CreatedAt:               g.CreatedAt.Format("2006-01-02T15:04:05Z"),
 			UpdatedAt:               g.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 		}

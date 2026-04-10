@@ -193,15 +193,15 @@ async function saveGroups(clear = false) {
   try {
     const tierId = selectedTier.value.id
     if (clear) {
-      await setGroupBudgetTierBatch(selectedGroups.value.map(g => g.id), null, '批量调整模型等级')
+      await setGroupBudgetTierBatch(selectedGroups.value.map(g => g.id), null)
     } else {
       const toAssign = selectedGroups.value.map(g => g.id)
       const toClear = groups.value.filter(g => g.model_tier_id === tierId && !selectedGroups.value.some(sg => sg.id === g.id)).map(g => g.id)
       if (toClear.length > 0) {
-        await setGroupBudgetTierBatch(toClear, null, '批量调整模型等级')
+        await setGroupBudgetTierBatch(toClear, null)
       }
       if (toAssign.length > 0) {
-        await setGroupBudgetTierBatch(toAssign, tierId, '批量调整模型等级')
+        await setGroupBudgetTierBatch(toAssign, tierId)
       }
     }
     groupsVisible.value = false

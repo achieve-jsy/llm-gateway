@@ -1127,8 +1127,8 @@ export async function setGroupBudgetTier(groupId: number, modelTierId: string | 
   await http.put(`/api/v1/groups/${groupId}/budget-tier`, { model_tier_id: modelTierId, reason })
 }
 
-export async function setGroupBudgetTierBatch(groupIds: number[], modelTierId: string | null, reason: string): Promise<void> {
-  await http.put('/api/v1/groups/budget-tiers', { group_ids: groupIds, model_tier_id: modelTierId, reason })
+export async function setGroupBudgetTierBatch(groupIds: number[], modelTierId: string | null, reason?: string): Promise<void> {
+  await http.put('/api/v1/groups/budget-tiers', { group_ids: groupIds, model_tier_id: modelTierId })
 }
 
 export async function listBudgetTierLimits(allocationId: string): Promise<BudgetTierLimit[]> {

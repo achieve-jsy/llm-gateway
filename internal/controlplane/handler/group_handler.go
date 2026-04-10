@@ -134,8 +134,12 @@ func (h *GroupHandler) List(c *gin.Context) {
 			mt = "chat"
 		}
 		var tierIDStr string
+		var tierName string
 		if g.BudgetTierID != nil {
 			tierIDStr = g.BudgetTierID.String()
+		}
+		if g.BudgetTier != nil {
+			tierName = g.BudgetTier.Name
 		}
 		items[i] = groupWithCount{
 			ID:                      g.ID,
@@ -151,7 +155,7 @@ func (h *GroupHandler) List(c *gin.Context) {
 			OpenMode:                g.OpenMode,
 			IsCapabilityOverride:    g.IsCapabilityOverride,
 			ModelTierID:             tierIDStr,
-			ModelTierName:           "",
+			ModelTierName:           tierName,
 			CreatedAt:               g.CreatedAt.Format("2006-01-02T15:04:05Z"),
 			UpdatedAt:               g.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 		}

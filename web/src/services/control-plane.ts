@@ -1095,12 +1095,12 @@ export async function listModelTiers(includeArchived = false): Promise<ModelTier
   return data.data
 }
 
-export async function createModelTier(input: ModelTierInput & { reason: string }): Promise<ModelTier> {
+export async function createModelTier(input: ModelTierInput): Promise<ModelTier> {
   const { data } = await http.post<{ data: ModelTier }>('/api/v1/model-tiers', input)
   return data.data
 }
 
-export async function updateModelTier(id: string, input: Partial<ModelTierInput> & { reason: string }): Promise<ModelTier> {
+export async function updateModelTier(id: string, input: Partial<ModelTierInput>): Promise<ModelTier> {
   const { data } = await http.put<{ data: ModelTier }>(`/api/v1/model-tiers/${id}`, input)
   return data.data
 }

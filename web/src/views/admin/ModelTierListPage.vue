@@ -139,8 +139,8 @@ function openEdit(row: ModelTier) {
 async function save() {
   saving.value = true
   try {
-    if (editing.value) await updateModelTier(editing.value.id, { ...form, reason: '编辑模型等级' })
-    else await createModelTier({ ...form, reason: '创建模型等级' })
+    if (editing.value) await updateModelTier(editing.value.id, form)
+    else await createModelTier(form)
     formVisible.value = false
     ElMessage.success('已保存')
     await load()

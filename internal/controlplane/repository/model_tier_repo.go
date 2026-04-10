@@ -84,19 +84,20 @@ func (r *ModelTierRepo) Reorder(ctx context.Context, ids []uuid.UUID) error {
 func (r *ModelTierRepo) ReferenceCounts(ctx context.Context, id uuid.UUID) (ModelTierReferenceCounts, error) {
 	var counts ModelTierReferenceCounts
 	targets := []struct {
-		table string
-		out   *int64
+		table  string
+		column string
+		out    *int64
 	}{
-		{"model_groups", &counts.Groups},
-		{"budget_tier_limits", &counts.Limits},
-		{"budget_temporary_overrides", &counts.Overrides},
-		{"budget_limit_schedules", &counts.Schedules},
-		{"budget_alert_records", &counts.Alerts},
-		{"expansion_requests", &counts.Expansions},
-		{"call_logs", &counts.CallLogs},
+		{"model_groups", "budget_tier_id", &counts.Groups},
+		{"budget_tier_limits", "model_tier_id", &counts.Limits},
+		{"budget_temporary_overrides", "model_tier_id", &counts.Overrides},
+		{"budget_limit_schedules", "model_tier_id", &counts.Schedules},
+		{"budget_alert_records", "model_tier_id", &counts.Alerts},
+		{"expansion_requests", "model_tier_id", &counts.Expansions},
+		{"call_logs", "budget_tier_id", &counts.CallLogs},
 	}
 	for _, target := range targets {
-		if err := r.db.WithContext(ctx).Table(target.table).Where("model_tier_id = ?", id).Count(target.out).Error; err != nil {
+		if err := r.db.WithContext(ctx).Table(target.table).Where(target.column+" = ?", id).Count(target.out).Error; err != nil {
 			return ModelTierReferenceCounts{}, err
 		}
 	}

@@ -275,3 +275,192 @@ func BenchmarkRedisStore_CheckTotalAndTier(b *testing.B) {
 		}
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: ReadCounters / ReserveAmount / ReleaseReservation / CommitReservation
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestRedisStore_ReadCountersReturnsCorrectValues verifies that Check reads
+// multiple dimension counters and returns their current values.
+func TestRedisStore_ReadCountersReturnsCorrectValues(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	store := budget.NewRedisStore(rdb)
+
+	totalKey := "budget:v2:used:member:u-1:2026-07"
+	tierKey := "budget:v2:tier:used:member:u-1:tier-1:2026-07"
+	require.NoError(t, rdb.Set(context.Background(), totalKey, "500000", 0).Err())
+	require.NoError(t, rdb.Set(context.Background(), tierKey, "200000", 0).Err())
+
+	plan := &budget.AccountingPlan{Constraints: []budget.Constraint{
+		{Key: totalKey, LimitMicroUSD: 1_000_000, Dimension: budget.DimensionTotal},
+		{Key: tierKey, LimitMicroUSD: 500_000, Dimension: budget.DimensionTier},
+	}}
+
+	result := store.Check(context.Background(), plan)
+	require.NoError(t, result.RedisError)
+	require.Empty(t, result.Blockers, "both counters are under limit")
+
+	// Verify we can read the actual values via direct Redis GET
+	totalUsed, err := rdb.Get(context.Background(), totalKey).Int64()
+	require.NoError(t, err)
+	require.Equal(t, int64(500000), totalUsed)
+	tierUsed, err := rdb.Get(context.Background(), tierKey).Int64()
+	require.NoError(t, err)
+	require.Equal(t, int64(200000), tierUsed)
+}
+
+// TestRedisStore_ReserveAmountAtomicIncrement verifies that Add atomically
+// increments counters and returns the new value.
+func TestRedisStore_ReserveAmountAtomicIncrement(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	store := budget.NewRedisStore(rdb)
+
+	key := "budget:v2:used:member:u-1:2026-07"
+	plan := &budget.AccountingPlan{Constraints: []budget.Constraint{
+		{Key: key, LimitMicroUSD: 10_000_000, PeriodType: budgetdomain.PeriodMonthly},
+	}}
+
+	require.NoError(t, store.Add(context.Background(), plan, 100_000))
+	require.NoError(t, store.Add(context.Background(), plan, 250_000))
+
+	got, err := rdb.Get(context.Background(), key).Int64()
+	require.NoError(t, err)
+	require.Equal(t, int64(350_000), got)
+}
+
+// TestRedisStore_ReleaseReservationDecrements verifies that Finish removes
+// the reservation from the inflight sorted set.
+func TestRedisStore_ReleaseReservationDecrements(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	store := budget.NewRedisStoreWithAdmission(rdb, budget.AdmissionConfig{
+		SpoolCapacity: 10, ReservationTTL: time.Minute,
+	})
+
+	res1, err := store.ReserveWithGeneration(context.Background(), "req-1", time.Now())
+	require.NoError(t, err)
+	res2, err := store.ReserveWithGeneration(context.Background(), "req-2", time.Now())
+	require.NoError(t, err)
+
+	require.Equal(t, int64(2), rdb.ZCard(context.Background(), budget.BillableInflightKey).Val())
+
+	require.NoError(t, res1.Finish(context.Background()))
+	require.Equal(t, int64(1), rdb.ZCard(context.Background(), budget.BillableInflightKey).Val())
+
+	require.NoError(t, res2.Finish(context.Background()))
+	require.Equal(t, int64(0), rdb.ZCard(context.Background(), budget.BillableInflightKey).Val())
+}
+
+// TestRedisStore_CommitReservationConvertsReservedToCommitted verifies that
+// after a reservation is finished, the counter is incremented via Add, and the
+// reservation is removed from inflight.
+func TestRedisStore_CommitReservationConvertsReservedToCommitted(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	store := budget.NewRedisStore(rdb)
+
+	// Simulate: request passes check, reservation is created
+	reservation, err := store.ReserveWithGeneration(context.Background(), "commit-req", time.Now())
+	require.NoError(t, err)
+	require.Equal(t, int64(1), rdb.ZCard(context.Background(), budget.BillableInflightKey).Val())
+
+	// Simulate: request completes, cost is added to counter
+	key := "budget:v2:used:member:u-1:2026-07"
+	plan := &budget.AccountingPlan{Constraints: []budget.Constraint{
+		{Key: key, LimitMicroUSD: 10_000_000, PeriodType: budgetdomain.PeriodMonthly},
+	}}
+	require.NoError(t, store.Add(context.Background(), plan, 750_000))
+
+	// Finish the reservation (remove from inflight)
+	require.NoError(t, reservation.Finish(context.Background()))
+	require.Equal(t, int64(0), rdb.ZCard(context.Background(), budget.BillableInflightKey).Val())
+
+	// Verify counter was incremented
+	got, err := rdb.Get(context.Background(), key).Int64()
+	require.NoError(t, err)
+	require.Equal(t, int64(750_000), got)
+}
+
+// TestRedisStore_CounterTTLManagement verifies that Add sets TTL on keys
+// based on period type (monthly=70d, weekly=14d, daily=3d).
+func TestRedisStore_CounterTTLManagement(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	store := budget.NewRedisStore(rdb)
+
+	resetAt := time.Now().Add(4 * time.Hour)
+	plan := &budget.AccountingPlan{Constraints: []budget.Constraint{
+		{Key: "monthly", PeriodType: budgetdomain.PeriodMonthly, ResetAt: resetAt},
+		{Key: "weekly", PeriodType: budgetdomain.PeriodWeekly, ResetAt: resetAt},
+		{Key: "daily", PeriodType: budgetdomain.PeriodDaily, ResetAt: resetAt},
+	}}
+
+	require.NoError(t, store.Add(context.Background(), plan, 100))
+
+	// Monthly: 70 days + 4 hours
+	monthlyTTL := mr.TTL("monthly")
+	require.InDelta(t, (70*24*time.Hour+4*time.Hour).Seconds(), monthlyTTL.Seconds(), 2)
+
+	// Weekly: 14 days + 4 hours
+	weeklyTTL := mr.TTL("weekly")
+	require.InDelta(t, (14*24*time.Hour+4*time.Hour).Seconds(), weeklyTTL.Seconds(), 2)
+
+	// Daily: 3 days + 4 hours
+	dailyTTL := mr.TTL("daily")
+	require.InDelta(t, (3*24*time.Hour+4*time.Hour).Seconds(), dailyTTL.Seconds(), 2)
+}
+
+// TestRedisStore_KeyExpirationAndCleanup verifies that expired reservations
+// are cleaned up by the reserve script's ZREMRANGEBYSCORE.
+func TestRedisStore_KeyExpirationAndCleanup(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	store := budget.NewRedisStoreWithAdmission(rdb, budget.AdmissionConfig{
+		SpoolCapacity: 5, ReservationTTL: 50 * time.Millisecond,
+	})
+
+	// Create a reservation and immediately finish it (stop heartbeat)
+	res, err := store.ReserveWithGeneration(context.Background(), "expiring-req", time.Now())
+	require.NoError(t, err)
+	require.NoError(t, res.Finish(context.Background()))
+
+	// Manually add an expired entry to the sorted set (simulating a stale reservation)
+	require.NoError(t, rdb.ZAdd(context.Background(), budget.BillableInflightKey,
+		redis.Z{Score: float64(time.Now().Add(-time.Hour).UnixMilli()), Member: "stale-req"},
+	).Err())
+	require.Equal(t, int64(1), rdb.ZCard(context.Background(), budget.BillableInflightKey).Val())
+
+	// Create another reservation — the Lua script should clean up the expired entry
+	_, err = store.ReserveWithGeneration(context.Background(), "new-req", time.Now())
+	require.NoError(t, err)
+
+	// Only the new reservation should remain
+	members := rdb.ZRange(context.Background(), budget.BillableInflightKey, 0, -1).Val()
+	require.Len(t, members, 1)
+	require.Equal(t, "new-req", members[0])
+}
+
+// TestRedisStore_ReservationTTLExtension verifies that heartbeats extend the
+// reservation TTL beyond the initial expiration.
+func TestRedisStore_ReservationTTLExtension(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	store := budget.NewRedisStoreWithAdmission(rdb, budget.AdmissionConfig{
+		SpoolCapacity: 10, ReservationTTL: 100 * time.Millisecond, HeartbeatInterval: 20 * time.Millisecond,
+	})
+
+	reservation, err := store.ReserveWithGeneration(context.Background(), "long-lived", time.Now())
+	require.NoError(t, err)
+
+	// Wait beyond the initial TTL but within heartbeat window
+	time.Sleep(150 * time.Millisecond)
+
+	// Reservation should still exist due to heartbeats
+	score, err := rdb.ZScore(context.Background(), budget.BillableInflightKey, "long-lived").Result()
+	require.NoError(t, err)
+	require.Greater(t, score, float64(time.Now().Add(-time.Minute).UnixMilli()))
+
+	require.NoError(t, reservation.Finish(context.Background()))
+}

@@ -184,12 +184,13 @@ function onGroupSelectionChange(rows: GroupListItem[]) {
 
 async function onGroupsDialogOpened() {
   if (!selectedTier.value) return
-  await nextTick()
-  await nextTick()
   const preSelected = groups.value.filter((g: GroupListItem) => g.model_tier_id === selectedTier.value!.id)
-  if (preSelected.length && groupTableRef.value) {
-    preSelected.forEach((g: GroupListItem) => groupTableRef.value.toggleRowSelection(g, true))
-  }
+  if (!preSelected.length) return
+  setTimeout(() => {
+    if (groupTableRef.value) {
+      preSelected.forEach((g: GroupListItem) => groupTableRef.value.toggleRowSelection(g, true))
+    }
+  }, 200)
 }
 async function saveGroups(clear = false) {
   if (!selectedTier.value) return

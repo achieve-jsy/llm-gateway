@@ -3194,4 +3194,40 @@ onMounted(async () => {
   border-radius: 50%;
   flex-shrink: 0;
 }
+
+/* ── 批量选择栏 ───────────────────────────────────────────────────────────── */
+.batch-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 14px;
+  padding: 10px 12px;
+  border: 1px solid #b7e7c0;
+  background: #f0f9f2;
+  border-radius: 8px;
+}
+.batch-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.batch-bar-selected {
+  color: #26763a;
+  font-weight: 600;
+}
+.batch-bar-divider {
+  width: 1px;
+  height: 16px;
+  background: #b7e7c0;
+}
+.batch-bar-unallocated {
+  color: #26763a;
+  font-size: 13px;
+}
+.batch-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 </style>

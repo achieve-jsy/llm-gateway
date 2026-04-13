@@ -1211,6 +1211,7 @@ export async function applyTotalBudgetBatch(payload: TotalBudgetBatchPayload): P
 // ─── 站内通知 (Notifications) ──────────────────────────────────────────────
 
 import type { Notification } from '@/types/notification'
+import type { MyBudgetTiersResponse } from '@/types/model-tier'
 
 export async function getUnreadNotifications(): Promise<Notification[]> {
   const res = await http.get<ApiResponse<Notification[]>>('/api/v1/notifications/unread', { _silent: true } as any)
@@ -1477,4 +1478,10 @@ export async function setDeptKeyCreationPolicy(
     { policy },
   )
   return res.data.data
+}
+
+/** 获取当前用户的模型等级预算汇总 */
+export async function getMyBudgetTiers(): Promise<MyBudgetTiersResponse> {
+  const { data } = await http.get<{ data: MyBudgetTiersResponse }>('/api/v1/my/budget/tiers')
+  return data.data
 }

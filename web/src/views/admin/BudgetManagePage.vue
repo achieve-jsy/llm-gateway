@@ -3230,4 +3230,100 @@ onMounted(async () => {
   align-items: center;
   gap: 8px;
 }
+
+/* ── 表格样式覆盖（匹配原型图） ─────────────────────────────────────────────── */
+.panel-main :deep(.el-table) {
+  font-size: 13px;
+}
+.panel-main :deep(.el-table__header th) {
+  height: 42px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  background: #f8fafc;
+}
+.panel-main :deep(.el-table__body td) {
+  height: 52px;
+  padding: 8px 12px;
+  color: #334155;
+}
+.panel-main :deep(.el-table__row) {
+  border-bottom: 1px solid #f1f5f9;
+}
+.panel-main :deep(.el-table--striped .el-table__body tr.el-table__row--striped td) {
+  background: #fbfcfd;
+}
+.panel-main :deep(.el-table td.el-table__cell) {
+  border-bottom: 1px solid #f1f5f9;
+}
+
+/* ── 表格内容样式 ─────────────────────────────────────────────────────────── */
+.tier-budget-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tier-budget-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  border-radius: 5px;
+  padding: 0 8px;
+  font-size: 12px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+}
+.tier-budget-tag .tier-name {
+  color: #2563eb;
+  font-weight: 500;
+}
+.tier-budget-tag .success {
+  color: #047857;
+}
+.tier-budget-tag .warning {
+  color: #b45309;
+}
+.tier-budget-tag .danger {
+  color: #dc2626;
+}
+
+/* 状态标签样式覆盖 */
+.panel-main :deep(.el-tag) {
+  height: 24px;
+  border-radius: 5px;
+  padding: 0 8px;
+  font-size: 12px;
+  border-width: 1px;
+}
+.panel-main :deep(.el-tag.el-tag--success) {
+  background: #ecfdf5;
+  color: #047857;
+  border-color: #a7f3d0;
+}
+.panel-main :deep(.el-tag.el-tag--warning) {
+  background: #fffbeb;
+  color: #b45309;
+  border-color: #fde68a;
+}
+.panel-main :deep(.el-tag.el-tag--danger) {
+  background: #fef2f2;
+  color: #dc2626;
+  border-color: #fecaca;
+}
+
+/* 进度条样式覆盖 */
+.panel-main :deep(.el-progress-bar__outer) {
+  height: 5px !important;
+  background: #edf1f5;
+  border-radius: 5px;
+}
+.panel-main :deep(.el-progress-bar__inner) {
+  border-radius: 5px;
+}
+.panel-main :deep(.el-progress__text) {
+  font-size: 12px !important;
+  color: #64748b;
+}
 </style>

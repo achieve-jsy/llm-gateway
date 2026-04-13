@@ -1,5 +1,4 @@
 <template>
-  <div class="page-wrapper">
   <div class="budget-overview">
     <header class="overview-header">
       <div>
@@ -381,15 +380,6 @@
           </div>
             </template>
           </el-table-column>
-          <!-- 日限 / 周限 -->
-          <el-table-column label="日限 / 周限" min-width="120" align="center">
-            <template #default="{ row }">
-              <span v-if="row.daily_amount_usd > 0 || row.weekly_amount_usd > 0" class="limit-text">
-                {{ displayAmount(row.daily_amount_usd) }} / {{ displayAmount(row.weekly_amount_usd) }}
-              </span>
-              <span v-else class="muted">无限额</span>
-            </template>
-          </el-table-column>
           <!-- 等级预算 -->
           <el-table-column label="等级预算" min-width="140">
             <template #default="{ row }">
@@ -613,7 +603,7 @@
               暂未向下分配预算
             </div>
           </div>
-          <div class="divider" />
+          <div class="divider"></div>
         </div>
 
         <!-- 快速跳转 -->
@@ -849,7 +839,7 @@
         </el-table>
       </div>
     </template>
-  </div>
+	  </div>
 
   <!-- ── 分配明细弹窗 ──────────────────────────────────────────────────────── -->
   <el-dialog
@@ -1956,10 +1946,6 @@ function goOrg(row?: BudgetItem) {
 
 function goExpansion() {
   router.push('/admin/expansion-requests')
-}
-
-function openStudioDrawer(studio: BudgetItem) {
-  drillTo('studio', studio.scope_id, studio.label)
 }
 
 // ─── 下钻侧抽屉（admin 专用：工作室 → 部门 → 成员）──────────────────────────

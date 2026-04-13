@@ -1,4 +1,5 @@
 <template>
+  <div class="page-wrapper">
   <div class="budget-overview">
     <header class="overview-header">
       <div>
@@ -1069,6 +1070,7 @@
       <el-button v-if="memberDetailTarget" type="primary" @click="openMemberQuota(memberDetailTarget); memberDetailVisible = false">调整成员额度</el-button>
     </template>
   </el-dialog>
+</div>
 </template>
 
 <script setup lang="ts">

@@ -1623,7 +1623,7 @@ const [budgetItems, contexts, tierData] = await Promise.all([
       getBudgetList(undefined, undefined, overviewView.value),
       getBudgetContext().catch(() => []),
       // 尝试获取等级预算数据
-      http.get<any>('/api/v1/budgets/tier-limits').then(r => {
+      http.get<any>('/api/v1/budgets/tier-usage').then(r => {
         const data = r?.data?.data?.items ?? r?.data?.items ?? r?.data ?? []
         return Array.isArray(data) ? data : []
       }).catch(() => []),

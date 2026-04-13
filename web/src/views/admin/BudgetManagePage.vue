@@ -44,7 +44,7 @@
       <el-button v-if="selectedMemberItem" type="primary" @click="openMemberQuota(selectedMemberItem)">调整成员额度</el-button>
     </section>
     <div v-show="activeBudgetTab === 'overview' && drillScopeType !== 'member'">
-    <BudgetTierLimitsPanel v-if="activeAllocationId" :allocation-id="activeAllocationId" />
+    <BudgetTierLimitsPanel v-if="activeAllocationId && drillScopeType" :allocation-id="activeAllocationId" />
 
     <!-- KPI 条：角色自适应列数 -->
     <section
@@ -448,7 +448,7 @@
           <span>可调整当前层级，并继续向下分配。</span>
         </div>
         <el-table
-          v-else
+          v-if="overviewView === 'studio'"
           ref="studioDeptTableRef"
           v-loading="loading"
           :data="studioDeptRowsFiltered"

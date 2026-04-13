@@ -2093,29 +2093,36 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 20px;
-  padding: 28px 32px;
+  padding: 20px 24px;
 }
 .overview-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   gap: 20px;
+  margin-bottom: 0;
 }
 .overview-header h1 {
   margin: 0;
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 700;
-  color: var(--el-text-color-primary);
+  color: #0f172a;
 }
 .overview-header p {
-  margin: 6px 0 0;
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
+  margin: 5px 0 0;
+  color: #64748b;
+  font-size: 12px;
 }
 .header-actions {
   display: flex;
   gap: 10px;
   flex-shrink: 0;
+}
+.header-actions :deep(.el-button) {
+  height: 32px;
+  padding: 0 13px;
+  border-radius: 7px;
+  font-size: 13px;
 }
 
 /* ── KPI 条 ───────────────────────────────────────────────────────────────── */
@@ -2132,21 +2139,27 @@ onMounted(async () => {
   grid-template-columns: 1fr repeat(3, minmax(120px, 180px));
 }
 .kpi {
-  padding: 16px 18px;
-  border: 1px solid var(--el-border-color-light);
+  padding: 15px 17px;
+  border: 1px solid #e2e8f0;
   border-radius: 12px;
-  background: var(--el-bg-color);
+  background: #fff;
 }
 .kpi-label {
   display: block;
-  color: var(--el-text-color-secondary);
+  color: #64748b;
   font-size: 12px;
-  margin-bottom: 8px;
+  margin-bottom: 7px;
 }
 .kpi strong {
-  font-size: 24px;
-  color: var(--el-text-color-primary);
+  font-size: 23px;
+  color: #0f172a;
   display: block;
+  font-weight: 700;
+  margin: 0 0 4px;
+}
+.kpi-note {
+  font-size: 11px;
+  color: #94a3b8;
 }
 .kpi strong.danger {
   color: var(--el-color-danger);
@@ -2325,9 +2338,9 @@ onMounted(async () => {
   align-items: start;
 }
 .panel {
-  border: 1px solid var(--el-border-color-light);
+  border: 1px solid #e2e8f0;
   border-radius: 14px;
-  background: var(--el-bg-color);
+  background: #fff;
   overflow: hidden;
 }
 .panel-main {
@@ -2341,8 +2354,8 @@ onMounted(async () => {
   justify-content: space-between;
   gap: 16px;
   align-items: center;
-  padding: 18px 20px;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  padding: 17px 20px;
+  border-bottom: 1px solid #f1f5f9;
 }
 .panel-head.compact {
   padding: 0 0 14px;
@@ -2351,11 +2364,13 @@ onMounted(async () => {
 .panel-head h2 {
   margin: 0;
   font-size: 16px;
-  color: var(--el-text-color-primary);
+  color: #0f172a;
 }
 .panel-head p {
   margin: 4px 0 0;
   font-size: 12px;
+  color: #64748b;
+}
   color: var(--el-text-color-secondary);
 }
 
@@ -3325,5 +3340,17 @@ onMounted(async () => {
 .panel-main :deep(.el-progress__text) {
   font-size: 12px !important;
   color: #64748b;
+}
+
+/* 按钮样式覆盖 */
+.panel-main :deep(.el-button) {
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.panel-main :deep(.el-button--small) {
+  height: 28px;
+  padding: 0 11px;
 }
 </style>

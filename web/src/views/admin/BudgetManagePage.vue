@@ -337,39 +337,34 @@
             <template #default="{ row }">
               <div class="scope-cell">
                 <span class="scope-dot" :style="{ background: SCOPE_TYPE_COLORS[row.scope_type as BudgetScopeType] }" />
-                <span class="scope-name">{{ displayScopeName(row) }}</span>
+                <strong class="scope-name">{{ displayScopeName(row) }}</strong>
               </div>
             </template>
           </el-table-column>
           <!-- 已分配额度 -->
           <el-table-column label="已分配额度" min-width="120" align="right">
             <template #default="{ row }">
-              <span>{{ displayAmount(row.amount_usd) }}</span>
+              <span class="mono">{{ displayAmount(row.amount_usd) }}</span>
             </template>
           </el-table-column>
           <!-- 已使用 + 用量占比 -->
           <el-table-column label="已使用" min-width="160">
             <template #default="{ row }">
               <div class="usage-cell">
-                <div style="display:flex;justify-content:space-between;align-items:baseline">
-                  <span>{{ formatUSD(row.used_usd || 0, { compact: true }) }}</span>
-                  <span class="muted" style="font-size:11px">
-                    {{ row.amount_usd > 0
-                      ? Math.round(((row.used_usd || 0) / row.amount_usd) * 100)
-                      : 0 }}%
-              </span>
-            </div>
+                <div class="usage-fraction">
+                  <span class="usage-numerator">{{ formatUSD(row.used_usd || 0, { compact: true }) }}</span>
+                  <span class="usage-separator">/</span>
+                  <span class="usage-denominator">{{ displayAmount(row.amount_usd) }}</span>
+                </div>
                 <el-progress
                   :percentage="row.amount_usd > 0
                     ? Math.min(Math.round(((row.used_usd || 0) / row.amount_usd) * 100), 100)
                     : 0"
                   :stroke-width="5"
-                  :color="row.amount_usd > 0 && (row.used_usd || 0) / row.amount_usd >= 0.95
-                    ? '#e6a23c'
-                    : 'var(--el-color-primary-light-3)'"
+                  :color="riskColor((row.used_usd || 0) / row.amount_usd)"
                   :show-text="false"
                 />
-          </div>
+              </div>
             </template>
           </el-table-column>
           <!-- 等级预算 -->
@@ -3261,6 +3256,46 @@ onMounted(async () => {
 }
 
 /* ── 表格内容样式 ─────────────────────────────────────────────────────────── */
+.scope-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.scope-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.scope-name {
+  font-weight: 600;
+  color: #0f172a;
+}
+.mono {
+  font-variant-numeric: tabular-nums;
+  font-family: 'JetBrains Mono', monospace;
+}
+.usage-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.usage-fraction {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 13px;
+}
+.usage-numerator {
+  font-weight: 600;
+  color: #334155;
+}
+.usage-separator {
+  color: #94a3b8;
+}
+.usage-denominator {
+  color: #64748b;
+}
 .tier-budget-cell {
   display: flex;
   flex-wrap: wrap;

@@ -2371,8 +2371,6 @@ onMounted(async () => {
   font-size: 12px;
   color: #64748b;
 }
-  color: var(--el-text-color-secondary);
-}
 
 /* 风险行：左侧颜色竖条 */
 :deep(.row-danger td:first-child) {

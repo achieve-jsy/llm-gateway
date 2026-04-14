@@ -322,14 +322,6 @@
           />
             </div>
 
-        <div v-if="!loading && riskItems.length === 0" class="healthy-state">
-          <div class="healthy-icon">✓</div>
-          <div>
-            <strong>当前管理范围内暂无预算风险</strong>
-            <span>下方展示消耗最高的对象，便于提前观察趋势。</span>
-          </div>
-        </div>
-
         <!-- admin 视图：工作室维度表格 -->
         <el-table
           v-if="overviewView === 'company'"

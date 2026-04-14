@@ -2158,17 +2158,13 @@ onMounted(async () => {
   margin: 0 0 4px;
 }
 .kpi-note {
+  display: block;
+  margin-top: 4px;
   font-size: 11px;
   color: #94a3b8;
 }
 .kpi strong.danger {
   color: var(--el-color-danger);
-}
-.kpi-note {
-  display: block;
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--el-text-color-placeholder);
 }
 .kpi-note-inline {
   font-size: 11px;

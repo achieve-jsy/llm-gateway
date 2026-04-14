@@ -2122,6 +2122,7 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
+  margin-bottom: 16px;
 }
 .kpi-strip.kpi-5 {
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -2321,7 +2322,7 @@ onMounted(async () => {
 /* ── admin / studio_admin 双栏布局 ─────────────────────────────────────────── */
 .overview-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) 310px;
   gap: 16px;
   align-items: start;
 }

@@ -333,7 +333,7 @@
           size="small"
         >
           <el-table-column type="selection" width="42" align="center" />
-          <el-table-column label="工作室" min-width="180">
+          <el-table-column label="工作室" min-width="140">
             <template #default="{ row }">
               <div class="scope-cell">
                 <span class="scope-dot" :style="{ background: SCOPE_TYPE_COLORS[row.scope_type as BudgetScopeType] }" />
@@ -342,13 +342,13 @@
             </template>
           </el-table-column>
           <!-- 已分配额度 -->
-          <el-table-column label="已分配额度" min-width="120" align="right">
+          <el-table-column label="已分配额度" min-width="110" align="right">
             <template #default="{ row }">
               <span class="mono">{{ displayAmount(row.amount_usd) }}</span>
             </template>
           </el-table-column>
           <!-- 已使用 + 用量占比 -->
-          <el-table-column label="已使用" min-width="160">
+          <el-table-column label="已使用" min-width="150">
             <template #default="{ row }">
               <div class="usage-cell">
                 <div class="usage-fraction">
@@ -368,7 +368,7 @@
             </template>
           </el-table-column>
           <!-- 等级预算 -->
-          <el-table-column label="等级预算" min-width="140">
+          <el-table-column label="等级预算" min-width="130">
             <template #default="{ row }">
               <div class="tier-budget-cell">
                 <template v-if="tierBudgetByScope.has(row.scope_id)">
@@ -386,14 +386,14 @@
             </template>
           </el-table-column>
           <!-- 状态 -->
-          <el-table-column label="状态" width="80" align="center">
+          <el-table-column label="状态" width="90" align="center">
             <template #default="{ row }">
               <el-tag :type="budgetColorLevel(row.used_ratio || 0)" size="small">
                 {{ statusText(row.used_ratio || 0) }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="152" align="center">
+          <el-table-column label="操作" width="170" align="center">
             <template #default="{ row }">
               <el-button size="small" type="primary" plain @click="openStudioDrawer(row)">查看部门</el-button>
               <el-button size="small" @click="openBudgetDrawer({ scope_type: 'studio', scope_id: row.scope_id, label: row.label })">配置</el-button>

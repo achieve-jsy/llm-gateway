@@ -2079,7 +2079,7 @@ onMounted(async () => {
 .budget-overview {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
   padding: 20px 24px;
 }
 .overview-header {
@@ -2110,6 +2110,18 @@ onMounted(async () => {
   padding: 0 13px;
   border-radius: 7px;
   font-size: 13px;
+}
+
+/* ── Tabs样式调整 ───────────────────────────────────────────────────────────── */
+.budget-overview :deep(.el-tabs) {
+  margin-top: 16px;
+  margin-bottom: 16px;
+}
+.budget-overview :deep(.el-tabs__header) {
+  margin: 0;
+}
+.budget-overview :deep(.el-tabs__nav-wrap) {
+  margin-bottom: 0;
 }
 
 /* ── KPI 条 ───────────────────────────────────────────────────────────────── */

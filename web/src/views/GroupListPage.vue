@@ -33,6 +33,14 @@
     <template v-else>
       <div class="group-table-wrap"><el-table :data="groups" border stripe>
         <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip />
+        <el-table-column label="预算等级" width="120" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="(row as any).model_tier_name" type="primary" size="small" effect="light">
+              {{ (row as any).model_tier_name }}
+            </el-tag>
+            <span v-else class="text-placeholder">未分级</span>
+          </template>
+        </el-table-column>
         <el-table-column label="类型" width="120" align="center">
           <template #default="{ row }">
             <el-tag :type="modelTypeTagType((row as any).model_type)" size="small">

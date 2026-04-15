@@ -74,10 +74,10 @@ func (r *BudgetRiskRepo) AggregateBlockedRequests(
 			budget_block_scope_id AS scope_id,
 			budget_block_period_type AS period_type,
 			CASE WHEN budget_block_dimension = 'tier' THEN budget_tier_id ELSE NULL END AS model_tier_id,
-			COUNT(*) AS count, MIN(created_at) AS first_blocked_at,
-			MAX(created_at) AS last_blocked_at`).
+			COUNT(*) AS count, MIN(ts) AS first_blocked_at,
+			MAX(ts) AS last_blocked_at`).
 		Where("status = ?", 402).
-		Where("created_at >= ? AND created_at < ?", query.From, query.To).
+		Where("ts >= ? AND ts < ?", query.From, query.To).
 		Where("budget_block_code IN ?", []string{"budget_exceeded", "tier_budget_exceeded"}).
 		Where("budget_block_dimension IN ?", []string{"total", "tier"}).
 		Where("(budget_block_dimension <> 'tier' OR budget_tier_id IS NOT NULL)").

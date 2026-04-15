@@ -52,7 +52,7 @@ func (r *ModelTierRepo) List(ctx context.Context, includeArchived bool) ([]model
 	if !includeArchived {
 		query = query.Where("archived_at IS NULL")
 	}
-	err := query.Order("sort_order ASC, created_at ASC").Find(&tiers).Error
+	err := query.Order("sort_order ASC, id ASC").Find(&tiers).Error
 	return tiers, err
 }
 

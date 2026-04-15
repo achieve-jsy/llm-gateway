@@ -1095,12 +1095,12 @@ export async function listModelTiers(includeArchived = false): Promise<ModelTier
   return data.data
 }
 
-export async function createModelTier(input: ModelTierInput & { reason: string }): Promise<ModelTier> {
+export async function createModelTier(input: ModelTierInput): Promise<ModelTier> {
   const { data } = await http.post<{ data: ModelTier }>('/api/v1/model-tiers', input)
   return data.data
 }
 
-export async function updateModelTier(id: string, input: Partial<ModelTierInput> & { reason: string }): Promise<ModelTier> {
+export async function updateModelTier(id: string, input: Partial<ModelTierInput>): Promise<ModelTier> {
   const { data } = await http.put<{ data: ModelTier }>(`/api/v1/model-tiers/${id}`, input)
   return data.data
 }
@@ -1127,8 +1127,8 @@ export async function setGroupBudgetTier(groupId: number, modelTierId: string | 
   await http.put(`/api/v1/groups/${groupId}/budget-tier`, { model_tier_id: modelTierId, reason })
 }
 
-export async function setGroupBudgetTierBatch(groupIds: number[], modelTierId: string | null, reason: string): Promise<void> {
-  await http.put('/api/v1/groups/budget-tiers', { group_ids: groupIds, model_tier_id: modelTierId, reason })
+export async function setGroupBudgetTierBatch(groupIds: number[], modelTierId: string | null, reason?: string): Promise<void> {
+  await http.put('/api/v1/groups/budget-tiers', { group_ids: groupIds, model_tier_id: modelTierId })
 }
 
 export async function listBudgetTierLimits(allocationId: string): Promise<BudgetTierLimit[]> {

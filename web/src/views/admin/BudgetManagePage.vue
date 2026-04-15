@@ -332,7 +332,7 @@
           stripe
           size="small"
         >
-          <el-table-column type="selection" width="44" />
+          <el-table-column type="selection" width="42" align="center" />
           <el-table-column label="工作室" min-width="180">
             <template #default="{ row }">
               <div class="scope-cell">
@@ -412,7 +412,7 @@
         </el-table>
 
         <!-- 批量选择栏 -->
-        <div v-if="overviewView === 'company' && tableItems.length > 0" class="batch-bar">
+        <div v-if="overviewView === 'company' && selectedRows.length > 0" class="batch-bar">
           <div class="batch-bar-left">
             <span class="batch-bar-selected">已选择 {{ selectedRows.length }} 项</span>
             <span class="batch-bar-divider" />
@@ -3231,6 +3231,11 @@ onMounted(async () => {
 /* ── 表格样式覆盖（匹配原型图） ─────────────────────────────────────────────── */
 .panel-main :deep(.el-table) {
   font-size: 13px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.panel-main :deep(.el-table__inner-wrapper) {
+  border-radius: 8px;
 }
 .panel-main :deep(.el-table__header th) {
   height: 42px;
@@ -3239,6 +3244,14 @@ onMounted(async () => {
   font-weight: 600;
   color: #64748b;
   background: #f8fafc;
+}
+.panel-main :deep(.el-checkbox__inner) {
+  width: 15px;
+  height: 15px;
+}
+.panel-main :deep(.el-checkbox__input.is-checked .el-checkbox__inner) {
+  background-color: #36b34e;
+  border-color: #36b34e;
 }
 .panel-main :deep(.el-table__body td) {
   height: 52px;

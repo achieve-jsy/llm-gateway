@@ -16,6 +16,16 @@ export type ExpansionPeriod = 'daily' | 'weekly' | 'monthly'
 export type ExpansionDimension = 'total' | 'tier'
 export type ExpansionDuration = 'permanent' | 'current_period'
 export type ExpansionPriority = 'normal' | 'urgent'
+export type ExpansionListTab = 'pending' | 'mine' | 'all'
+
+export interface ExpansionListFilter {
+  dimension: 'all' | ExpansionDimension
+  modelTierId: 'all' | string
+  duration: 'all' | ExpansionDuration
+  priority: 'all' | ExpansionPriority
+  status: 'all' | ExpansionStatus
+  keyword: string
+}
 
 export interface ExpansionRequest {
   id: string

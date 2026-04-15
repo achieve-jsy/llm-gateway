@@ -1,4 +1,4 @@
-import type { BudgetScopeType } from './budget'
+import type { BudgetEffectiveMode, BudgetScopeType } from './budget'
 import type { ExpansionPeriod, MoneyUSD } from './expansion'
 
 export interface ModelTier {
@@ -102,6 +102,20 @@ export interface BudgetTierUsage {
   used_usd: MoneyUSD
   data_as_of: string
   stale: boolean
+}
+
+export interface TierLimitsDraft {
+  total: Record<ExpansionPeriod, {
+    configured: boolean
+    value: string
+  }>
+  tiers: Record<string, Record<ExpansionPeriod, {
+    enabled: boolean
+    configured: boolean
+    value: string
+  }>>
+  effectiveMode: BudgetEffectiveMode
+  reason: string
 }
 
 export interface TierLimitAdjustment {

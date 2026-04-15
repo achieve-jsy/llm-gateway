@@ -25,6 +25,7 @@ export const ERROR_MESSAGES: Record<string, string> = {
   BUDGET_ZERO_BLOCK_CONFIRMATION_REQUIRED: '$0 会阻断后续请求，请明确确认',
   BUDGET_USAGE_UNAVAILABLE: '实时用量暂不可用，请稍后重试',
   BUDGET_PENDING_SCHEDULE_EXISTS: '该额度已有待生效变更',
+  INVALID_BUDGET_PERIOD: '预算周期无效，请选择日/周/月',
 }
 
 export type GatewayBudgetErrorCode =

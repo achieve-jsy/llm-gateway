@@ -203,7 +203,9 @@ describe('BudgetManagePage - API Integration Tests', () => {
       // Verify all APIs are called
       expect(mockGetBudgetList).toHaveBeenCalledWith(undefined, undefined, 'company')
       expect(mockGetBudgetContext).toHaveBeenCalled()
-      expect(mockHttpGet).toHaveBeenCalledWith('/api/v1/budgets/tier-usage')
+      expect(mockHttpGet).toHaveBeenCalledWith('/api/v1/budgets/tier-usage', expect.objectContaining({
+        params: { period_type: 'monthly' },
+      }))
       expect(mockGetBudgetRiskSummary).toHaveBeenCalled()
       expect(mockListModelTiers).toHaveBeenCalledWith(false)
     })
@@ -212,7 +214,9 @@ describe('BudgetManagePage - API Integration Tests', () => {
       await mountPage('admin')
       await flushPromises()
 
-      expect(mockHttpGet).toHaveBeenCalledWith('/api/v1/budgets/tier-usage')
+      expect(mockHttpGet).toHaveBeenCalledWith('/api/v1/budgets/tier-usage', expect.objectContaining({
+        params: { period_type: 'monthly' },
+      }))
     })
 
     it('studio_admin 角色不调用等级预算 API（只有 admin 调用）', async () => {
@@ -226,7 +230,9 @@ describe('BudgetManagePage - API Integration Tests', () => {
 
       // Tier usage API is still called but for admin view
       // The component loads tier data regardless of role
-      expect(mockHttpGet).toHaveBeenCalledWith('/api/v1/budgets/tier-usage')
+      expect(mockHttpGet).toHaveBeenCalledWith('/api/v1/budgets/tier-usage', expect.objectContaining({
+        params: { period_type: 'monthly' },
+      }))
     })
 
     it('dept_admin 角色并行加载成员 7 天用量', async () => {
@@ -313,30 +319,24 @@ describe('BudgetManagePage - API Integration Tests', () => {
   })
 
   describe('API 错误处理', () => {
-    it('getBudgetList 失败时显示错误（静默降级）', async () => {
+    it('getBudgetList 失败时展示 pageError 并可重试', async () => {
       mockGetBudgetList.mockRejectedValue(new Error('Network error'))
 
-      // Suppress Vue warning and unhandled rejection
       const originalWarn = console.warn
       const originalError = console.error
       console.warn = vi.fn()
       console.error = vi.fn()
 
-      // Add temporary unhandledRejection handler
-      const unhandledHandler = vi.fn()
-      process.on('unhandledRejection', unhandledHandler)
-
       const { wrapper } = await mountPage('admin')
       await flushPromises()
 
-      // Restore console
       console.warn = originalWarn
       console.error = originalError
-      process.off('unhandledRejection', unhandledHandler)
 
-      // Component should handle error gracefully
-      // Loading should be false
       expect(wrapper.vm.loading).toBe(false)
+      expect(wrapper.vm.pageError).toContain('Network error')
+      expect(wrapper.find('[data-test="budget-page-error"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="budget-manage-overview"]').exists()).toBe(false)
     })
 
     it('tier-usage API 失败时降级为空数组', async () => {
@@ -608,7 +608,9 @@ describe('BudgetManagePage - API Integration Tests', () => {
       await mountPage('admin')
       await flushPromises()
 
-      expect(mockHttpGet).toHaveBeenCalledWith('/api/v1/budgets/tier-usage')
+      expect(mockHttpGet).toHaveBeenCalledWith('/api/v1/budgets/tier-usage', expect.objectContaining({
+        params: { period_type: 'monthly' },
+      }))
     })
 
     it('等级预算 API 返回数据正确解析并存储', async () => {

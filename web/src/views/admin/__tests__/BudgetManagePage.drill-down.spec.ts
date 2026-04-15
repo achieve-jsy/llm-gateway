@@ -322,6 +322,32 @@ describe('BudgetManagePage - Drill-Down Views', () => {
       expect(poolTabs.text()).toContain('程序服务预算')
     })
 
+    it('pool tab 可切换日常和服务预算', async () => {
+      const wrapper = mountPage(studioQuery)
+      await flushPromises()
+
+      expect(wrapper.get('[data-test="pool-tab-daily"]').classes()).toContain('active')
+      expect(wrapper.find('[data-test="pool-row-alloc-dept-daily"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="pool-row-alloc-dept-service"]').exists()).toBe(false)
+
+      await wrapper.get('[data-test="pool-tab-service"]').trigger('click')
+
+      expect(wrapper.get('[data-test="pool-tab-service"]').classes()).toContain('active')
+      expect(wrapper.find('[data-test="pool-row-alloc-dept-daily"]').exists()).toBe(false)
+      expect(wrapper.find('[data-test="pool-row-alloc-dept-service"]').exists()).toBe(true)
+    })
+
+    it('新增部门预算打开真实部门选择流程', async () => {
+      const wrapper = mountPage(studioQuery)
+      await flushPromises()
+
+      await wrapper.get('[data-test="create-department-budget"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.vm.createDepartmentVisible).toBe(true)
+      expect(wrapper.get('[data-test="create-department-select"]').exists()).toBe(true)
+    })
+
     it('部门表格列匹配原型', async () => {
       const wrapper = mountPage(studioQuery)
       await flushPromises()
@@ -668,6 +694,52 @@ describe('BudgetManagePage - Drill-Down Views', () => {
         await buttons[1].trigger('click')
         expect(mockPush).toHaveBeenCalled()
       }
+    })
+  })
+
+  describe('部门下钻成员过滤', () => {
+    it('仅展示当前部门成员，池 KPI 也只聚合当前部门', async () => {
+      mockAuthStore.effectiveRole = 'admin'
+      const otherDeptDaily: BudgetItem = {
+        ...deptDailyItem,
+        allocation_id: 'alloc-dept-2',
+        scope_id: 'dept-2',
+        label: '业务中台',
+        amount_usd: 9999,
+        used_usd: 1,
+      }
+      const memberOther: BudgetItem = {
+        ...memberItem,
+        allocation_id: 'alloc-m2',
+        scope_id: 'user-2',
+        label: '其他部门成员',
+        parent_scope_id: 'dept-2',
+      }
+      mockGetBudgetList.mockResolvedValue([
+        deptDailyItem,
+        deptServiceItem,
+        otherDeptDaily,
+        memberItem,
+        memberOther,
+      ])
+      mockGetBudgetContext.mockResolvedValue([])
+
+      const wrapper = mountPage({
+        scope_type: 'dept',
+        scope_id: 'dept-1',
+        scope_label: 'AI 研发部',
+        studio_id: 'studio-1',
+        studio_label: '效率平台',
+      })
+      await flushPromises()
+
+      expect(wrapper.vm.memberTableItems.map((m: BudgetItem) => m.scope_id)).toEqual([
+        memberItem.scope_id,
+      ])
+      expect(wrapper.vm.deptDailyKpi.amount).toBe(deptDailyItem.amount_usd)
+      expect(wrapper.vm.deptDailyKpi.amount).not.toBe(
+        deptDailyItem.amount_usd + otherDeptDaily.amount_usd,
+      )
     })
   })
 })

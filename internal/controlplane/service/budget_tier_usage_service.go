@@ -60,6 +60,10 @@ func (s *BudgetTierService) QueryTierUsage(ctx context.Context, actor rbac.Actor
 	if !allowed {
 		return nil, ErrBudgetForbidden
 	}
+	// 列表/概览未指定周期时默认按月汇总（前端遗漏 period_type 时也不应 422）
+	if input.PeriodType == "" {
+		input.PeriodType = budgetdomain.PeriodMonthly
+	}
 	period, err := budgetperiod.Resolve(s.clock(), input.PeriodType, s.periodConfig)
 	if err != nil {
 		return nil, ErrInvalidBudgetPeriod

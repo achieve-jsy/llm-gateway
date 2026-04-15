@@ -69,10 +69,7 @@ func newExpansionApprovalFixture(t *testing.T) (*gorm.DB, *service.ExpansionServ
 			id text primary key, scope_type text, scope_id text, period text
 		)`,
 		`CREATE TABLE budget_temporary_overrides (
-			id text primary key, budget_allocation_id text, dimension_type text, dimension_key text,
-			model_tier_id text, period_type text, target_limit_usd numeric,
-			starts_at datetime, expires_at datetime, expansion_request_id text,
-			status text, failure_reason text, created_at datetime, updated_at datetime
+			id text primary key, status text
 		)`,
 		`CREATE TABLE studios (id text primary key, name text)`,
 		`CREATE TABLE departments (id text primary key, dept_id text, dept_name text, studio_id text)`,

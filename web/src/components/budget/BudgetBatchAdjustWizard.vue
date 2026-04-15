@@ -46,7 +46,19 @@ import DataFreshnessNotice from '@/components/common/DataFreshnessNotice.vue'
 import { applyBudgetTierBatch, applyTotalBudgetBatch, previewBudgetTierBatch, previewTotalBudgetBatch } from '@/services/control-plane'
 import type { BudgetAdjustmentImpact, BudgetItem } from '@/types/budget'
 import type { ModelTier, TierAdjustmentPreview } from '@/types/model-tier'
-const props = defineProps<{ items: BudgetItem[]; tiers: ModelTier[] }>()
+import {
+  batchEntryModeToWizardMode,
+  type BudgetBatchEntryMode,
+} from '@/composables/budgetScopeFilters'
+
+const props = withDefaults(defineProps<{
+  items: BudgetItem[]
+  tiers: ModelTier[]
+  /** 打开向导时预填的调整类型（对齐原型三键入口） */
+  initialMode?: BudgetBatchEntryMode
+}>(), {
+  initialMode: 'absolute',
+})
 const emit = defineEmits<{ applied: [] }>()
 const visible = defineModel<boolean>({ default: false })
 const step = ref(0)
@@ -66,7 +78,17 @@ const previewRows = computed(() => form.mode === 'tier' ? (preview.value?.items 
 })))
 const previewStale = computed(() => form.mode === 'tier' ? !!preview.value?.stale : totalPreviews.value.some(row => row.impact.stale))
 const previewUpdatedAt = computed(() => form.mode === 'tier' ? preview.value?.data_as_of : totalPreviews.value[0]?.impact.data_as_of)
-watch(visible, value => { if (value) { step.value = 0; preview.value = null; totalPreviews.value = [] } })
+watch(visible, (value) => {
+  if (!value) return
+  step.value = 0
+  preview.value = null
+  totalPreviews.value = []
+  form.mode = batchEntryModeToWizardMode(props.initialMode)
+  form.operation = 'set_fixed'
+  form.direction = 'increase'
+  form.value = ''
+  form.reason = ''
+})
 async function runPreview() {
   working.value = true
   try {

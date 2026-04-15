@@ -3,7 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import BudgetRiskEventsSection from '../BudgetRiskEventsSection.vue'
-import type { BudgetRiskEvent, BudgetRiskPage } from '@/types/budget-risk'
+import type { BudgetRiskEvent, BudgetRiskPage, BudgetRiskSummary } from '@/types/budget-risk'
 
 // Mock vue-router
 const mockPush = vi.fn()
@@ -19,10 +19,12 @@ vi.mock('@element-plus/icons-vue', () => ({
 
 // ── Mock API services ──────────────────────────────────────────────
 const mockListBudgetRisks = vi.fn()
+const mockGetBudgetRiskSummary = vi.fn()
 const mockNotifyBudgetOwner = vi.fn()
 
 vi.mock('@/services/control-plane', () => ({
   listBudgetRisks: (...args: unknown[]) => mockListBudgetRisks(...args),
+  getBudgetRiskSummary: (...args: unknown[]) => mockGetBudgetRiskSummary(...args),
   notifyBudgetOwner: (...args: unknown[]) => mockNotifyBudgetOwner(...args),
 }))
 
@@ -70,6 +72,14 @@ const samplePage: BudgetRiskPage = {
   stale: false,
 }
 
+const sampleSummary: BudgetRiskSummary = {
+  total: 3,
+  warning: 2,
+  critical: 1,
+  data_as_of: '2026-07-13T10:00:00Z',
+  stale: false,
+}
+
 // ── Helpers ────────────────────────────────────────────────────────
 function mountSection() {
   const pinia = createPinia()
@@ -81,12 +91,36 @@ function mountSection() {
   })
 }
 
+async function openFirstRisk(wrapper: ReturnType<typeof mountSection>) {
+  await flushPromises()
+  const firstRow = wrapper.findAll('.el-table__row')[0]
+  expect(firstRow).toBeDefined()
+  await firstRow!.trigger('click')
+  await flushPromises()
+}
+
 // ── Tests ──────────────────────────────────────────────────────────
 describe('BudgetRiskEventsSection', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockListBudgetRisks.mockResolvedValue({ ...samplePage })
+    mockGetBudgetRiskSummary.mockResolvedValue({ ...sampleSummary })
     mockNotifyBudgetOwner.mockResolvedValue(undefined)
+  })
+
+  describe('风险摘要', () => {
+    it('同时加载风险摘要和列表并显示 KPI', async () => {
+      const wrapper = mountSection()
+      await flushPromises()
+
+      expect(mockListBudgetRisks).toHaveBeenCalled()
+      expect(mockGetBudgetRiskSummary).toHaveBeenCalled()
+      expect(wrapper.text()).toContain('未处理风险')
+      expect(wrapper.text()).toContain('已阻断')
+      expect(wrapper.text()).toContain('即将耗尽')
+      expect(wrapper.text()).toContain('阻断请求')
+      expect(wrapper.get('[data-test="budget-kpi-blocked-requests"]').text()).toContain('5')
+    })
   })
 
   describe('列表渲染', () => {
@@ -120,8 +154,8 @@ describe('BudgetRiskEventsSection', () => {
       await flushPromises()
 
       const html = wrapper.html()
-      expect(html).toContain('$100.000000')
-      expect(html).toContain('$90.000000')
+      expect(html).toContain('$100.00')
+      expect(html).toContain('$90.00')
     })
   })
 
@@ -209,6 +243,34 @@ describe('BudgetRiskEventsSection', () => {
       // Drawer should be visible and contain details
       expect(wrapper.find('.mock-drawer, .el-drawer').exists()).toBe(true)
     })
+
+    it('显示生效预算链、三种处置方式和建议缓冲', async () => {
+      const wrapper = mountSection()
+      await openFirstRisk(wrapper)
+
+      expect(wrapper.text()).toContain('生效预算链')
+      expect(wrapper.text()).toContain('调整额度')
+      expect(wrapper.text()).toContain('通知负责人')
+      expect(wrapper.text()).toContain('查看用量')
+      expect(wrapper.text()).toContain('建议')
+      expect(wrapper.text()).toContain('$103.50')
+      expect(wrapper.text()).toContain('部门月预算')
+    })
+
+    it('stale 风险禁止直接调额', async () => {
+      mockListBudgetRisks.mockResolvedValue({
+        ...samplePage,
+        items: [makeRiskEvent({ stale: true })],
+        stale: true,
+      })
+      const wrapper = mountSection()
+      await openFirstRisk(wrapper)
+
+      expect(wrapper.get('[data-test="risk-adjust"]').attributes('disabled')).toBeDefined()
+      expect(wrapper.text()).toContain('数据已过期')
+      await wrapper.get('[data-test="risk-adjust"]').trigger('click')
+      expect(wrapper.emitted('viewBudget')).toBeUndefined()
+    })
   })
 
   describe('筛选功能', () => {
@@ -233,6 +295,7 @@ describe('BudgetRiskEventsSection', () => {
       await flushPromises()
 
       expect(mockListBudgetRisks).toHaveBeenCalledTimes(2)
+      expect(mockGetBudgetRiskSummary).toHaveBeenCalledTimes(2)
     })
   })
 
@@ -247,6 +310,7 @@ describe('BudgetRiskEventsSection', () => {
       await flushPromises()
 
       expect(mockListBudgetRisks).toHaveBeenCalledTimes(2)
+      expect(mockGetBudgetRiskSummary).toHaveBeenCalledTimes(2)
     })
   })
 

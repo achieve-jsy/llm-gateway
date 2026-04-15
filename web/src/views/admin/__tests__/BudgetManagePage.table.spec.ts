@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { ElTable, ElTableColumn, ElTag, ElProgress, ElButton, ElCheckbox } from 'element-plus'
+import { createPinia, setActivePinia } from 'pinia'
+import { ElTable, ElTableColumn, ElTag, ElProgress, ElButton, ElCheckbox, ElSelect, ElOption } from 'element-plus'
 import BudgetManagePage from '../BudgetManagePage.vue'
 import { useAuthStore } from '@/stores/auth'
 import { getBudgetList, getBudgetContext } from '@/services/control-plane'
@@ -64,8 +65,11 @@ const mockStudioBudgets: BudgetItem[] = [
 ]
 
 const createWrapper = () => {
+  const pinia = createPinia()
+  setActivePinia(pinia)
   return mount(BudgetManagePage, {
     global: {
+      plugins: [pinia],
       components: {
         ElTable,
         ElTableColumn,
@@ -73,6 +77,8 @@ const createWrapper = () => {
         ElProgress,
         ElButton,
         ElCheckbox,
+        ElSelect,
+        ElOption,
       },
       stubs: {
         ElTabs: { template: '<div><slot /></div>' },
@@ -93,6 +99,7 @@ const createWrapper = () => {
         BudgetRiskEventsSection: { template: '<div />' },
         BudgetTierLimitsPanel: { template: '<div />' },
         BudgetEditDrawer: { template: '<div />' },
+        BudgetBatchAdjustWizard: { template: '<div />' },
         MemberQuotaDialog: { template: '<div />' },
       },
       directives: {
@@ -213,7 +220,7 @@ describe('BudgetManagePage - Table Functionality', () => {
       await wrapper.vm.$nextTick()
       await new Promise(resolve => setTimeout(resolve, 100))
 
-      wrapper.vm.selectedRows = [mockStudioBudgets[0]]
+      await wrapper.findComponent(ElTable).vm.$emit('selection-change', [mockStudioBudgets[0]])
       await wrapper.vm.$nextTick()
 
       const batchBar = wrapper.find('.batch-bar')
@@ -226,7 +233,7 @@ describe('BudgetManagePage - Table Functionality', () => {
       await wrapper.vm.$nextTick()
       await new Promise(resolve => setTimeout(resolve, 100))
 
-      wrapper.vm.selectedRows = [mockStudioBudgets[0], mockStudioBudgets[1]]
+      await wrapper.findComponent(ElTable).vm.$emit('selection-change', [mockStudioBudgets[0], mockStudioBudgets[1]])
       await wrapper.vm.$nextTick()
 
       const batchBar = wrapper.find('.batch-bar')
@@ -259,7 +266,7 @@ describe('BudgetManagePage - Table Functionality', () => {
       await wrapper.vm.$nextTick()
       await new Promise(resolve => setTimeout(resolve, 100))
 
-      const emptyGuide = wrapper.find('.empty-guide')
+      const emptyGuide = wrapper.find('[data-test="budget-empty-company"]')
       expect(emptyGuide.exists()).toBe(true)
     })
 
@@ -271,10 +278,9 @@ describe('BudgetManagePage - Table Functionality', () => {
       await wrapper.vm.$nextTick()
       await new Promise(resolve => setTimeout(resolve, 100))
 
-      const emptyGuide = wrapper.find('.empty-guide')
-      if (emptyGuide.exists()) {
-        expect(emptyGuide.text()).toContain('暂无工作室预算数据')
-      }
+      const emptyGuide = wrapper.get('[data-test="budget-empty-company"]')
+      expect(emptyGuide.text()).toContain('尚未向工作室分配预算')
+      expect(wrapper.get('[data-test="create-studio-budget"]').exists()).toBe(true)
     })
   })
 

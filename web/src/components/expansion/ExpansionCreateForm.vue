@@ -28,11 +28,27 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { createExpansionRequest, listModelTiers, notifyBudgetOwner, precheckExpansion } from '@/services/control-plane'
 import { SCOPE_TYPE_LABELS, type BudgetScopeType } from '@/types/budget'
-import type { ExpansionPrecheck } from '@/types/expansion'
+import type { ExpansionDimension, ExpansionPeriod, ExpansionPrecheck } from '@/types/expansion'
 import type { ModelTier } from '@/types/model-tier'
 import ExpansionPrecheckPanel from './ExpansionPrecheckPanel.vue'
 
-const props = withDefaults(defineProps<{ ordinaryUser?: boolean; initialScopeType?: BudgetScopeType; initialScopeId?: string }>(), { ordinaryUser: false, initialScopeType: 'member', initialScopeId: '' })
+const props = withDefaults(defineProps<{
+  ordinaryUser?: boolean
+  initialScopeType?: BudgetScopeType
+  initialScopeId?: string
+  initialDimensionType?: ExpansionDimension
+  initialModelTierId?: string
+  initialPeriodType?: ExpansionPeriod
+  initialTargetAmountUsd?: string
+}>(), {
+  ordinaryUser: false,
+  initialScopeType: 'member',
+  initialScopeId: '',
+  initialDimensionType: 'total',
+  initialModelTierId: '',
+  initialPeriodType: 'monthly',
+  initialTargetAmountUsd: '',
+})
 const visible = defineModel<boolean>({ default: false })
 const emit = defineEmits<{ created: [] }>()
 const scopeOptions: BudgetScopeType[] = ['company', 'studio', 'dept_daily', 'dept_service', 'member']
@@ -66,7 +82,25 @@ watch(() => [form.scope_type, form.scope_id, form.period_type, form.dimension_ty
   clearTimeout(timer)
   timer = setTimeout(check, 350)
 })
-watch(visible, async value => { if (value && !tiers.value.length) tiers.value = await listModelTiers() })
+watch(visible, async value => {
+  if (!value) return
+  generation++
+  clearTimeout(timer)
+  Object.assign(form, {
+    scope_type: props.initialScopeType,
+    scope_id: props.initialScopeId,
+    dimension_type: props.initialDimensionType,
+    model_tier_id: props.initialModelTierId,
+    period_type: props.initialPeriodType,
+    duration_type: 'permanent',
+    priority: 'normal',
+    target_amount_usd: props.initialTargetAmountUsd,
+    reason: '',
+    urgent_reason: '',
+  })
+  precheck.value = null
+  if (!tiers.value.length) tiers.value = await listModelTiers()
+})
 async function submit() {
   if (!canSubmit.value || !precheck.value) return
   submitting.value = true

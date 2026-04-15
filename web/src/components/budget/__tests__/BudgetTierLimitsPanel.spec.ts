@@ -17,16 +17,6 @@ vi.mock('@/services/control-plane', () => ({
   listBudgetTierLimits: (...args: unknown[]) => mockListBudgetTierLimits(...args),
 }))
 
-// Mock BudgetAdjustDrawer
-vi.mock('../BudgetAdjustDrawer.vue', () => ({
-  default: {
-    name: 'BudgetAdjustDrawer',
-    template: '<div class="mock-drawer" />',
-    props: ['modelValue', 'allocationId', 'modelTierId', 'initial'],
-    emits: ['saved'],
-  },
-}))
-
 // ── Fixtures ───────────────────────────────────────────────────────
 function makeTierLimit(overrides: Partial<BudgetTierLimit> = {}): BudgetTierLimit {
   return {
@@ -95,7 +85,7 @@ describe('BudgetTierLimitsPanel', () => {
       expect(html).toContain('停用')
     })
 
-    it('额度为 0 的显示"$0 · 禁止使用"标签', async () => {
+    it('额度为 0 的显示"$0 · 不可使用"标签', async () => {
       mockListBudgetTierLimits.mockResolvedValue([
         makeTierLimit({ limit_usd: '0', enabled: true }),
       ])
@@ -103,15 +93,15 @@ describe('BudgetTierLimitsPanel', () => {
       await flushPromises()
 
       expect(wrapper.html()).toContain('$0')
-      expect(wrapper.html()).toContain('禁止使用')
+      expect(wrapper.html()).toContain('不可使用')
     })
 
-    it('空列表时显示空状态文本', async () => {
+    it('空列表时显示未配置摘要', async () => {
       mockListBudgetTierLimits.mockResolvedValue([])
       const wrapper = mountPanel()
       await flushPromises()
 
-      expect(wrapper.html()).toContain('暂无等级配置')
+      expect(wrapper.text()).toContain('未配置子预算')
     })
 
     it('点击"刷新"按钮重新加载数据', async () => {
@@ -127,32 +117,14 @@ describe('BudgetTierLimitsPanel', () => {
     })
   })
 
-  describe('编辑操作', () => {
-    it('点击"调整"按钮打开编辑抽屉', async () => {
+  describe('只读摘要', () => {
+    it('复用等级预算 tags 且不提供第二套保存入口', async () => {
       const wrapper = mountPanel()
       await flushPromises()
 
-      const editButtons = wrapper.findAll('button').filter(b => b.text() === '调整')
-      expect(editButtons.length).toBeGreaterThan(0)
-
-      await editButtons[0].trigger('click')
-      await flushPromises()
-
-      // Drawer should be rendered
-      expect(wrapper.find('.mock-drawer').exists()).toBe(true)
-    })
-
-    it('编辑时传递正确的 model_tier_id', async () => {
-      const wrapper = mountPanel()
-      await flushPromises()
-
-      const editButtons = wrapper.findAll('button').filter(b => b.text() === '调整')
-      await editButtons[1].trigger('click')
-      await flushPromises()
-
-      const drawer = wrapper.findComponent({ name: 'BudgetAdjustDrawer' })
-      expect(drawer.exists()).toBe(true)
-      expect(drawer.props('modelTierId')).toBe('tier-2')
+      expect(wrapper.find('.tier-budget-tags').exists()).toBe(true)
+      expect(wrapper.findAll('button').some(button => button.text() === '调整')).toBe(false)
+      expect(wrapper.find('.mock-drawer').exists()).toBe(false)
     })
   })
 

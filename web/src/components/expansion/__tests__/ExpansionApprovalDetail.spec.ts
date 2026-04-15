@@ -141,6 +141,16 @@ describe('ExpansionApprovalDetail', () => {
   })
 
   describe('详情渲染', () => {
+    it('按原型顺序展示比较、效果、预检和审批流水四块信息', async () => {
+      const wrapper = mountDetail(makeExpansionDetail())
+      await flushPromises()
+
+      const text = wrapper.text()
+      for (const label of ['提交时上限', '当前已用', '申请目标', '调整类型', '批准后效果', '申请信息与上级限制预检', '审批流水与审批意见']) {
+        expect(text).toContain(label)
+      }
+    })
+
     it('渲染提交快照信息', async () => {
       const wrapper = mountDetail(makeExpansionDetail())
       await flushPromises()

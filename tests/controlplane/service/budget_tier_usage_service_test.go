@@ -287,6 +287,29 @@ func TestTierUsageIncludesReportedSnapshotsWithoutConfiguredLimitsAndUsesFreshne
 	require.Nil(t, queries[0].TierID)
 }
 
+func TestQueryTierUsageDefaultsEmptyPeriodToMonthly(t *testing.T) {
+	now := time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC)
+	queries := []repository.TierUsageQuery{}
+	usage := myBudgetUsage{asOf: now, queries: &queries, rows: nil}
+	svc := service.NewBudgetTierService(
+		&myBudgetStore{},
+		myBudgetReader{scopes: []repository.MyBudgetScopeAllocation{{
+			Allocation: model.BudgetAllocation{ScopeType: model.BudgetScopeCompany, ScopeID: model.BudgetScopeGlobal},
+		}}},
+		newFakeModelTierRepo(),
+		func() time.Time { return now },
+	).WithTierUsageRepository(usage)
+
+	_, err := svc.QueryTierUsage(context.Background(), rbac.Actor{IsGlobal: true}, service.TierUsageQueryInput{
+		ScopeType: model.BudgetScopeCompany, ScopeID: model.BudgetScopeGlobal,
+	})
+	require.NoError(t, err)
+	require.Len(t, queries, 1)
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2026, 7, 1, 0, 0, 0, 0, loc), queries[0].StartAt)
+}
+
 func TestMyBudgetTiersSummarizesRestrictedUpstreamTotalWithoutAmounts(t *testing.T) {
 	now := time.Date(2026, 7, 11, 8, 0, 0, 0, time.UTC)
 	reader := myBudgetReader{scopes: []repository.MyBudgetScopeAllocation{

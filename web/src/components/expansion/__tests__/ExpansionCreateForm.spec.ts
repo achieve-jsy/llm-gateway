@@ -63,7 +63,15 @@ const sampleTiers: ModelTier[] = [
 ]
 
 // ── Helpers ────────────────────────────────────────────────────────
-function mountForm(props: { ordinaryUser?: boolean; initialScopeType?: string; initialScopeId?: string } = {}) {
+function mountForm(props: {
+  ordinaryUser?: boolean
+  initialScopeType?: string
+  initialScopeId?: string
+  initialDimensionType?: 'total' | 'tier'
+  initialModelTierId?: string
+  initialPeriodType?: 'daily' | 'weekly' | 'monthly'
+  initialTargetAmountUsd?: string
+} = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
   return mount(ExpansionCreateForm, {
@@ -72,6 +80,10 @@ function mountForm(props: { ordinaryUser?: boolean; initialScopeType?: string; i
       ordinaryUser: props.ordinaryUser ?? false,
       initialScopeType: (props.initialScopeType as any) ?? 'member',
       initialScopeId: props.initialScopeId ?? 'user-1',
+      initialDimensionType: props.initialDimensionType,
+      initialModelTierId: props.initialModelTierId,
+      initialPeriodType: props.initialPeriodType,
+      initialTargetAmountUsd: props.initialTargetAmountUsd,
       'onUpdate:modelValue': (val: boolean) => wrapper.setProps({ modelValue: val }),
     },
     global: {
@@ -131,6 +143,29 @@ describe('ExpansionCreateForm', () => {
       await flushPromises()
 
       expect(mockListModelTiers).toHaveBeenCalled()
+    })
+
+    it('每次打开时应用入口预填并据此预检', async () => {
+      wrapper = mountForm({
+        initialScopeId: 'user-1',
+        initialDimensionType: 'tier',
+        initialModelTierId: 'tier-1',
+        initialPeriodType: 'weekly',
+        initialTargetAmountUsd: '250',
+      })
+      await wrapper.setProps({ modelValue: false })
+      await wrapper.setProps({ modelValue: true })
+      vi.advanceTimersByTime(400)
+      await flushPromises()
+
+      expect(mockPrecheckExpansion).toHaveBeenCalledWith(expect.objectContaining({
+        scope_type: 'member',
+        scope_id: 'user-1',
+        dimension_type: 'tier',
+        model_tier_id: 'tier-1',
+        period_type: 'weekly',
+        target_amount_usd: '250.000000',
+      }))
     })
 
     it('选择"模型等级"维度时显示模型等级选择器', async () => {

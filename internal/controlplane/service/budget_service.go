@@ -198,14 +198,19 @@ func (s *BudgetService) AdjustBudget(
 		}
 	}
 	target := input.TargetLimitUSD.Decimal
+	unlimited := input.TargetLimitUSD.IsUnlimited()
+	if unlimited && input.EffectiveMode == EffectiveNextPeriod {
+		// 排期表 Amount 不允许 -1；不限仅支持立即生效
+		return nil, fmt.Errorf("unlimited (-1) only supports immediate effective mode")
+	}
 	impact := &BudgetAdjustmentImpact{
 		BeforeLimitUSD: before.Round(6).StringFixed(6),
 		AfterLimitUSD:  target.Round(6).StringFixed(6),
 		CurrentUsedUSD: used.Round(6).StringFixed(6),
-		AffectedGroups: []AffectedGroup{}, WillBlock: target.LessThanOrEqual(used),
+		AffectedGroups: []AffectedGroup{}, WillBlock: !unlimited && target.LessThanOrEqual(used),
 		StreamPolicy: "进行中的流式请求不中断，完成后记账并阻断后续请求",
 		DataAsOf:     time.Now().UTC(), Stale: stale,
-		BelowUsed: target.LessThan(used), ZeroBlock: target.IsZero(),
+		BelowUsed: !unlimited && target.LessThan(used), ZeroBlock: !unlimited && target.IsZero(),
 	}
 	if input.EffectiveMode == EffectiveNextPeriod {
 		finder, ok := s.scheduler.(interface {
@@ -255,10 +260,10 @@ func (s *BudgetService) AdjustBudget(
 	if stale {
 		return nil, ErrBudgetUsageUnavailable
 	}
-	if target.IsZero() && !input.ConfirmZeroBlock {
+	if !unlimited && target.IsZero() && !input.ConfirmZeroBlock {
 		return nil, ErrZeroBlockConfirmationRequired
 	}
-	if target.LessThan(used) && !input.ConfirmBelowUsed {
+	if !unlimited && target.LessThan(used) && !input.ConfirmBelowUsed {
 		return nil, ErrBelowUsedConfirmationRequired
 	}
 	if impact.ReplacesPendingSchedule && !input.ConfirmReplaceSchedule {

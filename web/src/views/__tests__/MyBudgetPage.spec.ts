@@ -67,6 +67,24 @@ vi.mock('@/components/budget/MyQuotaPanel.vue', () => ({
   },
 }))
 
+vi.mock('@/components/expansion/ExpansionCreateForm.vue', () => ({
+  default: {
+    name: 'ExpansionCreateForm',
+    props: [
+      'modelValue',
+      'ordinaryUser',
+      'initialScopeType',
+      'initialScopeId',
+      'initialDimensionType',
+      'initialModelTierId',
+      'initialPeriodType',
+      'initialTargetAmountUsd',
+    ],
+    emits: ['update:modelValue', 'created'],
+    template: '<div class="mock-expansion-form" />',
+  },
+}))
+
 // Mock DataFreshnessNotice
 vi.mock('@/components/common/DataFreshnessNotice.vue', () => ({
   default: {
@@ -147,6 +165,51 @@ const sampleTierBudget: MyBudgetTiersResponse = {
   stale: false,
 }
 
+const mixedTierBudget: MyBudgetTiersResponse = {
+  ...sampleTierBudget,
+  source_summary: {
+    mode: 'mixed',
+    primary_scope_type: 'member',
+    has_shared_pool: true,
+    has_temporary_override: false,
+  },
+  budget_chain: [
+    {
+      scope_type: 'dept_daily',
+      label: '研发部共享池',
+      visible_amounts: false,
+      periods: [
+        { ...sampleTierBudget.effective_total[1], period_type: 'daily', configured: true },
+      ],
+    },
+    {
+      scope_type: 'member',
+      label: '张三的配额',
+      visible_amounts: true,
+      periods: [
+        { ...sampleTierBudget.effective_total[0], period_type: 'monthly', configured: true },
+      ],
+    },
+  ],
+  tier_limits: [
+    {
+      model_tier_id: 'premium',
+      model_tier_name: '高级',
+      enabled: true,
+      periods: [{
+        period_type: 'monthly',
+        configured: true,
+        effective_limit_usd: '100.000000',
+        used_usd: '85.000000',
+        remaining_usd: '15.000000',
+        reset_at: '2026-08-01T00:00:00Z',
+        status: 'enabled',
+        limiting_source: { scope_type: 'member' },
+      }],
+    },
+  ],
+}
+
 // ── Helpers ────────────────────────────────────────────────────────
 function mountPage() {
   const pinia = createPinia()
@@ -211,30 +274,26 @@ describe('MyBudgetPage', () => {
   })
 
   describe('等级预算显示', () => {
-    it('显示"当前有效预算"区块', async () => {
+    it('mixed 来源显示 notice 和每周期 source pill', async () => {
+      mockGetMyBudgetTiers.mockResolvedValue(mixedTierBudget)
       const wrapper = mountPage()
       await flushPromises()
 
-      expect(wrapper.html()).toContain('当前有效预算')
+      expect(wrapper.text()).toContain('不同维度可能来自不同预算层')
+      expect(wrapper.findAll('[data-test="budget-source-pill"]').map(item => item.text()))
+        .toEqual(expect.arrayContaining(['部门共享', '个人独立']))
     })
 
-    it('显示有效周期预算卡片', async () => {
+    it('总预算页显示等级摘要并可切到等级 tab', async () => {
+      mockGetMyBudgetTiers.mockResolvedValue(mixedTierBudget)
       const wrapper = mountPage()
       await flushPromises()
 
-      const html = wrapper.html()
-      // Monthly total budget
-      expect(html).toContain('$500.000000')
-      expect(html).toContain('$200.000000')
-    })
-
-    it('显示模型等级额度表格', async () => {
-      const wrapper = mountPage()
-      await flushPromises()
-
-      const html = wrapper.html()
-      expect(html).toContain('Standard')
-      expect(html).toContain('模型等级额度')
+      expect(wrapper.text()).toContain('高级预警')
+      await wrapper.get('[data-test="view-tier-budget"]').trigger('click')
+      expect(mockReplace).toHaveBeenCalledWith(
+        expect.objectContaining({ query: expect.objectContaining({ tab: 'tier' }) }),
+      )
     })
 
     it('等级预算加载失败时显示错误状态', async () => {
@@ -245,7 +304,7 @@ describe('MyBudgetPage', () => {
       expect(wrapper.html()).toContain('预算加载失败')
     })
 
-    it('无有效预算时显示空状态', async () => {
+    it('无等级子预算时仍保留总预算周期信息', async () => {
       mockGetMyBudgetTiers.mockResolvedValue({
         ...sampleTierBudget,
         effective_total: [],
@@ -254,7 +313,8 @@ describe('MyBudgetPage', () => {
       const wrapper = mountPage()
       await flushPromises()
 
-      expect(wrapper.html()).toContain('暂无有效预算配置')
+      expect(wrapper.find('.tier-summary-card').exists()).toBe(false)
+      expect(wrapper.text()).toContain('本月额度')
     })
   })
 
@@ -343,6 +403,19 @@ describe('MyBudgetPage', () => {
 
       const newBtn = wrapper.findAll('button').find(b => b.text() === '新建申请')
       expect(newBtn).toBeUndefined()
+    })
+
+    it('所有扩容入口使用 ExpansionCreateForm', async () => {
+      const wrapper = mountPage()
+      await flushPromises()
+
+      await wrapper.get('[data-test="create-expansion"]').trigger('click')
+      const form = wrapper.findComponent({ name: 'ExpansionCreateForm' })
+      expect(wrapper.findAllComponents({ name: 'ExpansionCreateForm' })).toHaveLength(1)
+      expect(form.props('modelValue')).toBe(true)
+      expect(form.props('initialScopeType')).toBe('member')
+      expect(form.props('initialScopeId')).toBe('user-1')
+      expect(wrapper.find('.mb-dialog-summary').exists()).toBe(false)
     })
   })
 

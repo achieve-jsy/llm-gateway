@@ -341,9 +341,9 @@ func (h *BudgetHandler) Set(c *gin.Context) {
 	if req.PeriodType != "" {
 		periodType = budgetdomain.PeriodType(req.PeriodType)
 	}
-	target, parseErr := budgetdomain.ParseAmount(fmt.Sprintf("%.6f", amountUSD))
+	target, parseErr := budgetdomain.ParseLimitAmount(fmt.Sprintf("%.6f", amountUSD))
 	if req.TargetLimitUSD != nil {
-		target, parseErr = budgetdomain.ParseAmount(*req.TargetLimitUSD)
+		target, parseErr = budgetdomain.ParseLimitAmount(*req.TargetLimitUSD)
 		amountUSD, _ = target.Decimal.Float64()
 	}
 	if parseErr != nil {
@@ -379,6 +379,10 @@ func (h *BudgetHandler) Set(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_PREVIEW_STALE", "message": err.Error(), "next_action": "preview"})
 		case errors.Is(err, service.ErrPendingScheduleExists):
 			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_PENDING_SCHEDULE_EXISTS", "message": err.Error()})
+		case errors.Is(err, service.ErrInvalidBudgetPeriod):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": gin.H{"code": CodeInvalidBudgetPeriod, "message": "invalid budget period"}})
+		case errors.Is(err, service.ErrBudgetAllocationNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"code": "BUDGET_ALLOCATION_NOT_FOUND", "message": "budget allocation not found"}})
 		default:
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		}

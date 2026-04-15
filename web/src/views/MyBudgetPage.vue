@@ -10,52 +10,14 @@
 
     <el-tabs v-model="activeTab" class="mb-tabs" @tab-change="onTabChange">
       <el-tab-pane label="我的预算" name="budget">
-    <section class="effective-budget" aria-labelledby="effective-budget-title">
-      <div class="mb-panel-head">
-        <div><h2 id="effective-budget-title">当前有效预算</h2><p>合并个人额度、共享池、等级额度与临时扩容后的最终结果。</p></div>
-        <el-tag v-if="tierBudget" type="info">{{ sourceModeLabel }}</el-tag>
-      </div>
-      <el-skeleton v-if="tierLoading && !tierBudget" :rows="4" animated />
-      <el-result v-else-if="tierError" icon="error" title="预算加载失败" :sub-title="tierError">
-        <template #extra><el-button type="primary" @click="loadTierBudget">重试</el-button></template>
-      </el-result>
-      <el-empty v-else-if="tierBudget && !tierBudget.effective_total.length && !tierBudget.tier_limits.length" description="暂无有效预算配置" />
-      <template v-else-if="tierBudget">
-        <DataFreshnessNotice :stale="tierBudget.stale" :updated-at="tierBudget.data_updated_at" />
-        <div class="effective-periods">
-          <article v-for="period in tierBudget.effective_total" :key="period.period_type" class="effective-card">
-            <span>{{ PERIOD_LABELS[period.period_type] }}总预算</span>
-            <strong>{{ period.status === 'disabled' ? '预算已停用' : period.configured ? `$${period.effective_limit_usd}` : '未配置' }}</strong>
-            <small>已用 {{ period.used_usd ? `$${period.used_usd}` : '—' }} · 剩余 {{ period.remaining_usd ? `$${period.remaining_usd}` : '—' }}</small>
-            <el-tag v-if="period.temporary_target_usd" size="small" type="warning">临时额度 ${{ period.temporary_target_usd }}</el-tag>
-          </article>
-        </div>
-        <div v-if="tierBudget.tier_limits.length" class="tier-budget-list">
-          <h3>模型等级额度</h3>
-          <el-table :data="tierBudget.tier_limits">
-            <el-table-column prop="model_tier_name" label="等级" min-width="140" />
-            <el-table-column v-for="period in ['daily', 'weekly', 'monthly']" :key="period" :label="PERIOD_LABELS[period as ExpansionPeriod]">
-              <template #default="{ row }">
-                <template v-if="tierPeriod(row, period)">
-                  <el-tag v-if="tierPeriod(row, period)!.status === 'tier_disabled'" type="info">等级已停用</el-tag>
-                  <el-tag v-else-if="tierPeriod(row, period)!.status === 'limit_disabled'" type="info">额度已停用</el-tag>
-                  <el-tag v-else-if="!tierPeriod(row, period)!.configured" type="info">未配置</el-tag>
-                  <el-tag v-else-if="Number(tierPeriod(row, period)!.effective_limit_usd) === 0" type="danger">$0 · 禁止</el-tag>
-                  <span v-else>${{ tierPeriod(row, period)!.remaining_usd }} 可用</span>
-                  <small v-if="tierPeriod(row, period)!.temporary_target_usd" class="temporary-note">临时 ${{ tierPeriod(row, period)!.temporary_target_usd }}</small>
-                </template>
-                <span v-else>—</span>
-              </template>
-            </el-table-column>
-          </el-table>
-        </div>
-        <el-collapse class="budget-chain">
-          <el-collapse-item title="预算来源链">
-            <ol><li v-for="node in tierBudget.budget_chain" :key="`${node.scope_type}-${node.label}`">{{ node.label }}<span v-if="!node.visible_amounts">（金额已脱敏）</span></li></ol>
-          </el-collapse-item>
-        </el-collapse>
-      </template>
-    </section>
+    <DataFreshnessNotice
+      v-if="tierBudget"
+      :stale="tierBudget.stale"
+      :updated-at="tierBudget.data_updated_at"
+    />
+    <el-result v-if="tierError" icon="error" title="预算加载失败" :sub-title="tierError">
+      <template #extra><el-button type="primary" @click="loadTierBudget">重试</el-button></template>
+    </el-result>
     <div v-if="loading && !chain.length" v-loading="true" class="mb-loading" />
     <div v-else-if="!chain.length" class="mb-no-budget">
       <template v-if="authStore.isAdmin">
@@ -107,23 +69,19 @@
         <div class="mb-panel">
           <div class="mb-panel-head">
             <div>
-              <h2>{{ primaryBudgetLabel }}</h2>
-              <p>{{ isUsingSharedPool ? '当前所用额度与使用情况' : '您的专属配额与使用情况' }}</p>
+              <h2>{{ sourceNotice.title }}</h2>
+              <p>{{ sourceNotice.detail }}</p>
             </div>
             <div class="mb-panel-head-actions">
               <span :class="`mb-tag mb-tag--${statusTagType}`">{{ statusText }}</span>
             </div>
           </div>
 
-          <!-- 共享池提示 -->
-          <div v-if="isUsingSharedPool" class="mb-shared-pool-notice">
-            <span class="mb-shared-pool-icon">🔗</span>
+          <div class="mb-shared-pool-notice">
+            <span class="mb-shared-pool-icon">◫</span>
             <div class="mb-shared-pool-text">
-              <span class="mb-shared-pool-title">您正在使用部门共享预算池</span>
-              <span class="mb-shared-pool-desc">
-                您尚未分配个人独立配额，当前消耗计入「{{ primaryBudgetLabel }}」共享池。
-                如需独立额度管理，可向部门负责人申请。
-              </span>
+              <span class="mb-shared-pool-title">{{ sourceNotice.title }}</span>
+              <span class="mb-shared-pool-desc">{{ sourceNotice.detail }}</span>
             </div>
           </div>
 
@@ -149,21 +107,33 @@
           </div>
 
           <div class="mb-period-rows">
-            <div class="mb-period-item">
-              <span class="mb-period-name">今日额度</span>
-              <span class="mb-period-value">{{ displayAmount(primaryBudget?.daily_amount_usd ?? -1) }}</span>
-              <span class="mb-period-reset">明天 00:00 重置</span>
+            <div v-for="row in periodRows" :key="row.period" class="mb-period-item">
+              <span class="mb-period-name">
+                {{ row.label }}
+                <em data-test="budget-source-pill" class="source-mini">{{ row.source }}</em>
+              </span>
+              <span class="mb-period-value">{{ row.value }}</span>
+              <span class="mb-period-reset">{{ row.reset }}</span>
             </div>
-            <div class="mb-period-item">
-              <span class="mb-period-name">本周额度</span>
-              <span class="mb-period-value">{{ displayAmount(primaryBudget?.weekly_amount_usd ?? -1) }}</span>
-              <span class="mb-period-reset">下周一 00:00 重置</span>
+          </div>
+
+          <div v-if="tierSummary.length" class="tier-summary-card">
+            <strong>模型等级额度</strong>
+            <div class="tier-summary-items">
+              <BudgetStatusTag
+                v-for="item in tierSummary"
+                :key="item.id"
+                :status="{ ...item.status, label: `${item.name}${item.status.label}` }"
+              />
             </div>
-            <div class="mb-period-item">
-              <span class="mb-period-name">本月额度</span>
-              <span class="mb-period-value">{{ primaryBudget ? displayAmount(primaryBudget.amount_usd) : '未设置' }}</span>
-              <span class="mb-period-reset">下月 1 日 00:00 重置</span>
-            </div>
+            <el-button
+              link
+              type="primary"
+              data-test="view-tier-budget"
+              @click="showTierBudget"
+            >
+              查看详情 →
+            </el-button>
           </div>
 
           <!-- 月度分析 -->
@@ -216,7 +186,16 @@
               <el-tooltip v-if="hasPendingRequest" content="已有审批中的申请，请等待结果或取消后重新提交" placement="top">
                 <el-button size="small" disabled>新建申请</el-button>
               </el-tooltip>
-              <el-button v-else size="small" type="primary" plain @click="openExpansion">新建申请</el-button>
+              <el-button
+                v-else
+                size="small"
+                type="primary"
+                plain
+                data-test="create-expansion"
+                @click="openExpansion()"
+              >
+                新建申请
+              </el-button>
             </template>
           </div>
 
@@ -266,7 +245,7 @@
                   >取消</el-button>
                   <el-button
                     v-else-if="featuredActivity.kind === 'expansion'"
-                    size="small" @click="openExpansion"
+                    size="small" @click="openExpansion()"
                   >重新申请</el-button>
                   <el-button
                     v-else-if="featuredActivity.kind === 'key_budget'"
@@ -332,39 +311,21 @@
         <MyQuotaPanel ref="quotaPanelRef" />
       </el-tab-pane>
       <el-tab-pane label="模型等级额度" name="tier" lazy>
-        <MyTierBudgetPanel ref="tierTabRef" />
+        <MyTierBudgetPanel ref="tierTabRef" @request-expansion="openExpansion" />
       </el-tab-pane>
     </el-tabs>
 
-    <el-dialog v-model="expansionVisible" title="申请提升个人额度" width="520px">
-      <el-form label-position="top">
-        <el-form-item label="调整维度">
-          <el-segmented v-model="expansionForm.periodType" :options="periodOptions" block style="width:100%" />
-        </el-form-item>
-        <el-form-item>
-          <div class="mb-dialog-summary">
-            <div>
-              <span>当前{{ PERIOD_LABELS[expansionForm.periodType] }}</span>
-              <strong>{{ dialogCurrentAmount }}</strong>
-            </div>
-            <div>
-              <span>已用金额</span>
-              <strong>{{ formatUSD(primaryBudget?.used_usd || 0) }}</strong>
-            </div>
-          </div>
-        </el-form-item>
-        <el-form-item :label="`申请后的${PERIOD_LABELS[expansionForm.periodType]}（USD）`">
-          <el-input-number v-model="expansionForm.requestedAmount" :min="1" :precision="2" controls-position="right" style="width:100%" />
-        </el-form-item>
-        <el-form-item label="申请理由">
-          <el-input v-model="expansionForm.reason" type="textarea" :rows="3" placeholder="说明业务场景、预计消耗和需要提升额度的原因" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="expansionVisible = false">取消</el-button>
-        <el-button type="primary" :loading="expansionSubmitting" @click="submitExpansion">提交申请</el-button>
-      </template>
-    </el-dialog>
+    <ExpansionCreateForm
+      v-model="expansionVisible"
+      ordinary-user
+      initial-scope-type="member"
+      :initial-scope-id="authStore.user?.id || ''"
+      :initial-dimension-type="expansionPrefill.dimension"
+      :initial-model-tier-id="expansionPrefill.tierId"
+      :initial-period-type="expansionPrefill.period"
+      :initial-target-amount-usd="expansionPrefill.targetAmount"
+      @created="loadRequests"
+    />
   </div>
 </template>
 
@@ -373,15 +334,20 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Refresh, Setting } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { createExpansionRequest, decideExpansion, getMyBudget, getMyBudgetTiers, getMyExpansionRequests, getMyKeyRequests, cancelKeyRequest, notifyBudgetOwner, precheckExpansion } from '@/services/control-plane'
+import { decideExpansion, getMyBudget, getMyBudgetTiers, getMyExpansionRequests, getMyKeyRequests, cancelKeyRequest } from '@/services/control-plane'
 import { useAuthStore } from '@/stores/auth'
 import type { BudgetChainItem } from '@/types/budget'
-import type { ExpansionPeriod, ExpansionRequest, ExpansionStatus } from '@/types/expansion'
-import { PERIOD_LABELS, PERIOD_SUFFIX, STATUS_LABELS } from '@/types/expansion'
+import type { ExpansionDimension, ExpansionPeriod, ExpansionRequest, ExpansionStatus } from '@/types/expansion'
+import { PERIOD_SUFFIX, STATUS_LABELS } from '@/types/expansion'
+import type { MyBudgetTiersResponse } from '@/types/model-tier'
 import type { KeyRequest, KeyRequestStatus } from '@/types/key-request'
 import { KEY_REQUEST_STATUS_LABELS, formatKeyRequestBudget, keyRequestHasBudget } from '@/types/key-request'
+import { formatBudgetUSD, getBudgetSourceLabel, getBudgetStatus, toUsagePercent } from '@/composables/useBudgetDisplay'
 import MyQuotaPanel from '@/components/budget/MyQuotaPanel.vue'
 import MyTierBudgetPanel from '@/components/budget/MyTierBudgetPanel.vue'
+import BudgetStatusTag from '@/components/budget/BudgetStatusTag.vue'
+import ExpansionCreateForm from '@/components/expansion/ExpansionCreateForm.vue'
+import DataFreshnessNotice from '@/components/common/DataFreshnessNotice.vue'
 
 type BudgetActivityKind = 'expansion' | 'key_budget'
 type BudgetActivityStatus = ExpansionStatus | KeyRequestStatus
@@ -399,12 +365,6 @@ interface BudgetActivity {
 const tierBudget = ref<MyBudgetTiersResponse | null>(null)
 const tierLoading = ref(false)
 const tierError = ref('')
-const sourceModeLabel = computed(() => ({
-  personal: '个人额度', shared: '共享池', mixed: '混合来源',
-}[tierBudget.value?.source_summary.mode || 'shared']))
-function tierPeriod(row: MyBudgetTierLimit, period: string) {
-  return row.periods.find(item => item.period_type === period)
-}
 async function loadTierBudget() {
   tierLoading.value = true
   tierError.value = ''
@@ -459,26 +419,16 @@ const keyBudgetRequests = ref<KeyRequest[]>([])
 const loading = ref(false)
 const requestLoading = ref(false)
 const expansionVisible = ref(false)
-const expansionSubmitting = ref(false)
-const expansionForm = ref<{ periodType: ExpansionPeriod; requestedAmount: number; reason: string }>({
-  periodType: 'monthly',
-  requestedAmount: 100,
-  reason: '',
-})
-
-const periodOptions = [
-  { label: '日额度', value: 'daily' },
-  { label: '周额度', value: 'weekly' },
-  { label: '月额度', value: 'monthly' },
-]
-
-const dialogCurrentAmount = computed(() => {
-  const b = primaryBudget.value
-  if (!b) return '未设置'
-  const pt = expansionForm.value.periodType
-  if (pt === 'daily') return displayAmount(b.daily_amount_usd ?? -1)
-  if (pt === 'weekly') return displayAmount(b.weekly_amount_usd ?? -1)
-  return displayAmount(b.amount_usd)
+const expansionPrefill = ref<{
+  dimension: ExpansionDimension
+  tierId: string
+  period: ExpansionPeriod
+  targetAmount: string
+}>({
+  dimension: 'total',
+  tierId: '',
+  period: 'monthly',
+  targetAmount: '',
 })
 
 const primaryBudget = computed(() =>
@@ -486,11 +436,80 @@ const primaryBudget = computed(() =>
   chain.value.find(item => item.scope_type === 'dept_daily') ||
   chain.value[0]
 )
+const sourceNotice = computed(() => ({
+  personal: {
+    title: '个人独立预算',
+    detail: '日、周、月额度均来自个人配置。',
+  },
+  shared: {
+    title: '您正在使用部门共享预算池',
+    detail: '当前消耗计入部门共享池。如需独立额度管理，可向部门负责人申请。',
+  },
+  mixed: {
+    title: '不同维度可能来自不同预算层',
+    detail: '每个周期和模型等级会单独标注实际来源；上级预算金额不会向普通用户展示。',
+  },
+}[tierBudget.value?.source_summary.mode ?? 'shared']))
+
+const periodRows = computed(() => {
+  const labels: Record<ExpansionPeriod, { label: string; reset: string }> = {
+    daily: { label: '今日额度', reset: '明天 00:00 重置' },
+    weekly: { label: '本周额度', reset: '下周一 00:00 重置' },
+    monthly: { label: '本月额度', reset: '下月 1 日 00:00 重置' },
+  }
+  return (['daily', 'weekly', 'monthly'] as const).map(period => {
+    const effective = tierBudget.value?.effective_total.find(item => item.period_type === period)
+    const chainNode = [...(tierBudget.value?.budget_chain ?? [])].reverse()
+      .find(node => node.periods?.some(item => item.period_type === period && item.configured))
+    const sourceLabel = getBudgetSourceLabel(
+      chainNode?.scope_type ?? tierBudget.value?.source_summary.primary_scope_type,
+      Boolean(effective?.temporary_target_usd),
+    )
+    const source = sourceLabel === '部门共享子预算'
+      ? '部门共享'
+      : sourceLabel === '个人预算'
+        ? '个人独立'
+        : sourceLabel
+    const fallback = period === 'daily'
+      ? primaryBudget.value?.daily_amount_usd
+      : period === 'weekly'
+        ? primaryBudget.value?.weekly_amount_usd
+        : primaryBudget.value?.amount_usd
+    const status = effective
+      ? getBudgetStatus({
+          configured: effective.configured,
+          enabled: effective.status !== 'disabled',
+          limit: effective.effective_limit_usd,
+        })
+      : null
+    const value = effective
+      ? (effective.configured ? formatBudgetUSD(effective.effective_limit_usd) : status?.label ?? '未配置')
+      : displayAmount(fallback ?? -1)
+    return { period, ...labels[period], source, value }
+  })
+})
+
+const tierSummary = computed(() => (tierBudget.value?.tier_limits ?? []).slice(0, 4).map(tier => {
+  const period = tier.periods.find(item => item.period_type === 'monthly') ?? tier.periods[0]
+  const usageRatio = period
+    ? toUsagePercent(period.used_usd, period.effective_limit_usd) / 100
+    : 0
+  return {
+    id: tier.model_tier_id,
+    name: tier.model_tier_name,
+    status: getBudgetStatus({
+      configured: Boolean(period?.configured),
+      enabled: tier.enabled && period?.status !== 'tier_disabled' && period?.status !== 'limit_disabled',
+      limit: period?.effective_limit_usd,
+      usageRatio,
+    }),
+  }
+}))
+
 // 是否正在消费共享部门池（未配置个人独立配额）
 const isUsingSharedPool = computed(() =>
   !!primaryBudget.value && primaryBudget.value.scope_type !== 'member',
 )
-const primaryBudgetLabel = computed(() => primaryBudget.value?.label || '我的额度')
 const primaryRatioPercent = computed(() => Math.min(Math.round((primaryBudget.value?.used_ratio || 0) * 100), 100))
 const remainingAmount = computed(() => {
   const budget = primaryBudget.value
@@ -643,12 +662,11 @@ async function loadRequests() {
 }
 
 function formatUSD(value: number) {
-  return `$${(value || 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+  return formatBudgetUSD(value || 0)
 }
 
 function displayAmount(value: number) {
-  if (value == null || value < 0) return '不限'
-  return formatUSD(value)
+  return formatBudgetUSD(value, { unlimited: true })
 }
 
 function progressColor(ratio: number) {
@@ -682,7 +700,17 @@ function goManagerAdjust() {
   router.push('/admin/org')
 }
 
-function openExpansion() {
+function showTierBudget() {
+  activeTab.value = 'tier'
+  onTabChange('tier')
+}
+
+function openExpansion(prefill: Partial<{
+  dimension: ExpansionDimension
+  tierId: string
+  period: ExpansionPeriod
+  targetAmount: string
+}> = {}) {
   if (authStore.isManager) {
     router.push('/admin/expansion-requests')
     return
@@ -693,58 +721,14 @@ function openExpansion() {
     return
   }
   const base = primaryBudget.value?.amount_usd || 50
-  expansionForm.value = {
-    periodType: 'monthly',
-    requestedAmount: Math.max(Math.ceil(base * 1.5), base + 50),
-    reason: '',
+  expansionPrefill.value = {
+    dimension: prefill.dimension ?? 'total',
+    tierId: prefill.tierId ?? '',
+    period: prefill.period ?? 'monthly',
+    targetAmount: prefill.targetAmount
+      ?? String(Math.max(Math.ceil(base * 1.5), base + 50)),
   }
   expansionVisible.value = true
-}
-
-async function submitExpansion() {
-  const userID = authStore.user?.id || ''
-  if (!userID) {
-    ElMessage.warning('无法确定当前用户，请重新登录')
-    return
-  }
-  if (!expansionForm.value.reason.trim()) {
-    ElMessage.warning('请填写申请理由')
-    return
-  }
-  expansionSubmitting.value = true
-  try {
-    const target = Number(expansionForm.value.requestedAmount).toFixed(6)
-    const precheck = await precheckExpansion({
-      scope_type: 'member', scope_id: userID, period_type: expansionForm.value.periodType,
-      dimension_type: 'total', duration_type: 'permanent', priority: 'normal',
-      target_amount_usd: target,
-    })
-    if (!precheck.can_submit) {
-      if (precheck.can_notify_owner) {
-        await notifyBudgetOwner({
-          scope_type: 'member', scope_id: userID, period_type: expansionForm.value.periodType,
-          dimension_type: 'total', message: expansionForm.value.reason,
-        })
-        ElMessage.warning('父级预算受限，已通知预算负责人')
-        expansionVisible.value = false
-        return
-      }
-      ElMessage.warning('当前预算状态不允许提交申请，请调整目标后重试')
-      return
-    }
-    await createExpansionRequest({
-      scope_type: 'member',
-      scope_id: userID,
-      period_type: expansionForm.value.periodType,
-      requested_amount: expansionForm.value.requestedAmount,
-      reason: expansionForm.value.reason,
-    })
-    ElMessage.success('申请已提交给部门负责人')
-    expansionVisible.value = false
-    await loadRequests()
-  } finally {
-    expansionSubmitting.value = false
-  }
 }
 
 function statusLabel(status: ExpansionStatus) {
@@ -1144,8 +1128,33 @@ onUnmounted(() => { historyObserver?.disconnect() })
 }
 .mb-period-item:last-child { border-bottom: 0; }
 .mb-period-name { color: var(--el-text-color-regular); font-size: 13px; }
+.source-mini {
+  display: inline-flex;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: var(--el-color-info-light-9);
+  color: var(--el-color-info-dark-2);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1.7;
+}
 .mb-period-value { font-size: 16px; font-weight: 700; color: var(--el-text-color-primary); }
 .mb-period-reset { font-size: 12px; color: var(--el-text-color-placeholder); white-space: nowrap; }
+
+.tier-summary-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin: 14px 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+  background: var(--el-fill-color-light);
+}
+.tier-summary-card > strong { font-size: 13px; }
+.tier-summary-items { display: flex; flex-wrap: wrap; gap: 6px; }
 
 /* ─────────────── Monthly Analysis ─────────────── */
 .mb-monthly {
@@ -1345,7 +1354,7 @@ onUnmounted(() => { historyObserver?.disconnect() })
   font-size: 12px;
   color: var(--el-text-color-secondary);
   padding: 7px 10px;
-  background: rgba(255,255,255,.6);
+  background: var(--el-bg-color-overlay);
   border-radius: 6px;
 }
 
@@ -1493,6 +1502,8 @@ onUnmounted(() => { historyObserver?.disconnect() })
   /* 周期行 */
   .mb-period-item { grid-template-columns: 1fr auto; }
   .mb-period-reset { display: none; }
+  .tier-summary-card { grid-template-columns: 1fr auto; }
+  .tier-summary-items { grid-column: 1 / -1; grid-row: 2; }
 
   /* 月度分析：3列→2列 */
   .mb-monthly-stats { grid-template-columns: repeat(2, 1fr); }

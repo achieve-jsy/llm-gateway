@@ -34,36 +34,62 @@
       <template v-if="canEdit">
         <el-form label-position="top" style="margin-top: 16px">
           <el-form-item label="月额度（USD）">
-            <el-input-number
-              v-model="form.amount"
-              :min="0"
-              :precision="2"
-              controls-position="right"
-              style="width: 100%"
-            />
+            <div v-if="form.amountUnlimited" class="mq-unlimited">
+              <strong>不限</strong>
+              <el-button size="small" @click="form.amountUnlimited = false">设置上限</el-button>
+            </div>
+            <template v-else>
+              <el-input-number
+                v-model="form.amount"
+                :min="0"
+                :precision="2"
+                controls-position="right"
+                style="width: 100%"
+              />
+              <el-button link type="primary" style="margin-top:4px" @click="form.amountUnlimited = true">设为不限</el-button>
+            </template>
           </el-form-item>
-          <el-form-item label="周额度（USD，-1 表示不限）">
-            <el-input-number
-              v-model="form.weekly"
-              :min="-1"
-              :precision="2"
-              controls-position="right"
-              style="width: 100%"
-            />
+          <el-form-item label="周额度（USD）">
+            <div v-if="form.weeklyUnlimited" class="mq-unlimited">
+              <strong>不限</strong>
+              <el-button size="small" @click="form.weeklyUnlimited = false">设置上限</el-button>
+            </div>
+            <template v-else>
+              <el-input-number
+                v-model="form.weekly"
+                :min="0"
+                :precision="2"
+                controls-position="right"
+                style="width: 100%"
+              />
+              <el-button link type="primary" style="margin-top:4px" @click="form.weeklyUnlimited = true">设为不限</el-button>
+            </template>
           </el-form-item>
-          <el-form-item label="日额度（USD，-1 表示不限）">
-            <el-input-number
-              v-model="form.daily"
-              :min="-1"
-              :precision="2"
-              controls-position="right"
-              style="width: 100%"
-            />
+          <el-form-item label="日额度（USD）">
+            <div v-if="form.dailyUnlimited" class="mq-unlimited">
+              <strong>不限</strong>
+              <el-button size="small" @click="form.dailyUnlimited = false">设置上限</el-button>
+            </div>
+            <template v-else>
+              <el-input-number
+                v-model="form.daily"
+                :min="0"
+                :precision="2"
+                controls-position="right"
+                style="width: 100%"
+              />
+              <el-button link type="primary" style="margin-top:4px" @click="form.dailyUnlimited = true">设为不限</el-button>
+            </template>
           </el-form-item>
           <el-form-item label="生效方式">
             <el-radio-group v-model="effectiveMode">
               <el-radio value="immediate">立即生效</el-radio>
-              <el-radio value="next_period">下周期生效</el-radio>
+              <el-radio
+                value="next_period"
+                :disabled="form.amountUnlimited || form.weeklyUnlimited || form.dailyUnlimited"
+              >
+                下周期生效
+              </el-radio>
             </el-radio-group>
           </el-form-item>
           <el-form-item label="调整原因" required>
@@ -108,9 +134,22 @@ const emit = defineEmits<{
 
 const router = useRouter()
 const saving = ref(false)
-const form = ref({ amount: 0, weekly: -1 as number, daily: -1 as number })
+const form = ref({
+  amount: 0,
+  weekly: 0,
+  daily: 0,
+  amountUnlimited: false,
+  weeklyUnlimited: true,
+  dailyUnlimited: true,
+})
 const reason = ref('')
 const effectiveMode = ref<BudgetEffectiveMode>('immediate')
+
+function toPeriodState(value: number | undefined | null) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n < 0) return { unlimited: true, value: 0 }
+  return { unlimited: false, value: n }
+}
 
 watch(
   () => props.member,
@@ -118,10 +157,16 @@ watch(
     if (m) {
       reason.value = ''
       effectiveMode.value = 'immediate'
+      const monthly = toPeriodState(m.amount_usd)
+      const weekly = toPeriodState(m.weekly_amount_usd)
+      const daily = toPeriodState(m.daily_amount_usd)
       form.value = {
-        amount: m.amount_usd >= 0 ? m.amount_usd : 0,
-        weekly: m.weekly_amount_usd,
-        daily: m.daily_amount_usd,
+        amount: monthly.value,
+        weekly: weekly.value,
+        daily: daily.value,
+        amountUnlimited: monthly.unlimited,
+        weeklyUnlimited: weekly.unlimited,
+        dailyUnlimited: daily.unlimited,
       }
     }
   },
@@ -149,18 +194,27 @@ function statusText(ratio: number) {
 async function save() {
   if (!props.member) return
   if (!reason.value.trim()) { ElMessage.warning('请填写调整原因'); return }
+  const hasUnlimited = form.value.amountUnlimited || form.value.weeklyUnlimited || form.value.dailyUnlimited
+  if (hasUnlimited && effectiveMode.value === 'next_period') {
+    ElMessage.warning('含「不限」时仅支持立即生效')
+    return
+  }
+  const targets = [
+    { period_type: 'monthly' as const, value: form.value.amountUnlimited ? -1 : form.value.amount },
+    { period_type: 'weekly' as const, value: form.value.weeklyUnlimited ? -1 : form.value.weekly },
+    { period_type: 'daily' as const, value: form.value.dailyUnlimited ? -1 : form.value.daily },
+  ]
+  if (targets.some(item => !(item.value === -1 || (Number.isFinite(item.value) && item.value >= 0)))) {
+    ElMessage.warning('额度必须 ≥ 0，或不限')
+    return
+  }
   saving.value = true
   try {
-    const targets = [
-      { period_type: 'monthly' as const, value: form.value.amount },
-      { period_type: 'weekly' as const, value: form.value.weekly },
-      { period_type: 'daily' as const, value: form.value.daily },
-    ].filter(item => item.value >= 0)
     const previews = await Promise.all(targets.map(item => previewBudgetAdjustment({
       scope_type: 'member',
       scope_id: props.member!.scope_id,
       period_type: item.period_type,
-      target_limit_usd: item.value.toFixed(6),
+      target_limit_usd: Number(item.value).toFixed(6),
       effective_mode: effectiveMode.value,
       reason: reason.value.trim(),
     })))
@@ -184,7 +238,7 @@ async function save() {
       scope_type: 'member',
       scope_id: props.member!.scope_id,
       period_type: item.period_type,
-      target_limit_usd: item.value.toFixed(6),
+      target_limit_usd: Number(item.value).toFixed(6),
       effective_mode: effectiveMode.value,
       reason: reason.value.trim(),
       confirm_zero_block: previews[index].zero_block,

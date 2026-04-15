@@ -1,35 +1,70 @@
 <template>
-  <div class="budget-overview">
-    <header class="overview-header">
-      <div>
-        <h1 v-if="!drillScopeType">预算总览</h1>
-        <h1 v-else>{{ drillLabel || drillScopeId }}预算</h1>
-        <p v-if="auth.effectiveRole === 'admin' && !drillScopeType">查看全公司各工作室预算风险与消耗；点击「调整」可直接在当前页面配置预算。</p>
-        <p v-else-if="auth.effectiveRole === 'studio_admin' && !drillScopeType">查看工作室下各部门预算状态；点击「调整」可直接在当前页面配置预算。</p>
-        <p v-else-if="auth.effectiveRole === 'dept_admin' && !drillScopeType">查看本部门预算与成员用量风险，可直接调整成员配额。</p>
-        <p v-else-if="drillScopeType === 'studio'">查看工作室预算及下属部门分配情况。</p>
-        <p v-else-if="drillScopeType === 'dept'">查看部门预算及成员配额情况。</p>
-        <p v-else-if="drillScopeType === 'member'">查看成员独立额度及等级预算限制。</p>
-      </div>
-      <div class="header-actions">
-        <el-button :loading="loading" @click="load">刷新</el-button>
+  <div class="budget-overview budget-page">
+    <AdminPageHeader
+      class="overview-header"
+      :title="pageTitle"
+      :description="pageDescription"
+      :loading="loading"
+      @refresh="load"
+    >
+      <template #actions>
         <el-button v-if="drillScopeType" @click="clearDrilldown">返回预算首页</el-button>
-        <el-button v-if="auth.effectiveRole === 'admin' && !drillScopeType" type="primary" @click="router.push('/admin/org')">
-          进入组织治理
+        <button
+          v-if="auth.effectiveRole === 'admin' && !drillScopeType"
+          type="button"
+          class="proto-header-btn primary"
+          data-test="adjust-company-budget"
+          @click="openCompanyBudgetDialog"
+        >
+          调整公司预算
+        </button>
+        <el-button
+          v-else-if="drillScopeType"
+          type="primary"
+          @click="openBudgetDrawer({ scope_type: drillScopeType, scope_id: drillScopeId, label: drillLabel || drillScopeId })"
+        >
+          配置当前预算
         </el-button>
-        <el-button v-else-if="drillScopeType" type="primary" @click="openBudgetDrawer({ scope_type: drillScopeType, scope_id: drillScopeId, label: drillLabel || drillScopeId })">配置当前预算</el-button>
         <el-button v-else type="primary" @click="goOrg()">
           {{ isDeptAdmin ? '配置部门预算' : '配置工作室预算' }}
         </el-button>
+      </template>
+    </AdminPageHeader>
+    <div class="proto-budget-tabs" role="tablist" aria-label="预算管理视图">
+      <button
+        type="button"
+        class="proto-budget-tab"
+        role="tab"
+        :aria-selected="activeBudgetTab === 'overview'"
+        :class="{ active: activeBudgetTab === 'overview' }"
+        @click="activeBudgetTab = 'overview'"
+      >
+        预算总览
+      </button>
+      <button
+        type="button"
+        class="proto-budget-tab"
+        role="tab"
+        :aria-selected="activeBudgetTab === 'risks'"
+        :class="{ active: activeBudgetTab === 'risks' }"
+        @click="activeBudgetTab = 'risks'"
+      >
+        风险事件
+        <span v-if="riskCount" class="proto-count-badge">{{ riskCount > 99 ? '99+' : riskCount }}</span>
+      </button>
     </div>
-    </header>
-    <el-tabs v-model="activeBudgetTab" aria-label="预算管理视图">
-      <el-tab-pane label="预算总览" name="overview" />
-      <el-tab-pane name="risks">
-        <template #label>风险事件 <el-badge v-if="riskCount" :value="riskCount" /></template>
-      </el-tab-pane>
-    </el-tabs>
-    <nav v-if="drillScopeType" class="scope-path" aria-label="预算层级导航">
+    <el-result
+      v-if="pageError && activeBudgetTab === 'overview'"
+      icon="error"
+      title="预算数据加载失败"
+      :sub-title="pageError"
+      data-test="budget-page-error"
+    >
+      <template #extra>
+        <el-button type="primary" :loading="loading" @click="load">重试</el-button>
+      </template>
+    </el-result>
+    <nav v-if="!pageError && drillScopeType" class="scope-path" aria-label="预算层级导航">
       <button type="button" @click="clearDrilldown">预算总览</button>
       <template v-for="(crumb, index) in drillBreadcrumbs" :key="`${crumb.scopeType}:${crumb.scopeId}`">
         <span aria-hidden="true">›</span>
@@ -37,8 +72,8 @@
         <button v-else type="button" @click="navigateBreadcrumb(crumb)">{{ crumb.label }}</button>
       </template>
     </nav>
-    <BudgetRiskEventsSection v-if="activeBudgetTab === 'risks'" @view-budget="showRiskBudget" />
-    <section v-if="activeBudgetTab === 'overview' && drillScopeType === 'member'" class="scope-stage-member">
+    <BudgetRiskEventsSection v-if="!pageError && activeBudgetTab === 'risks'" @view-budget="showRiskBudget" />
+    <section v-if="!pageError && activeBudgetTab === 'overview' && drillScopeType === 'member'" class="scope-stage-member">
       <!-- 汇总卡片 -->
       <div class="summary" v-if="selectedMemberItem">
         <div>
@@ -114,12 +149,15 @@
         </el-table>
       </div>
     </section>
-    <div v-show="activeBudgetTab === 'overview' && drillScopeType !== 'member'">
-    <BudgetTierLimitsPanel v-if="activeAllocationId && !drillScopeType" :allocation-id="activeAllocationId" />
+    <div v-show="!pageError && activeBudgetTab === 'overview' && drillScopeType !== 'member'">
+    <BudgetTierLimitsPanel
+      v-if="activeAllocationId && !drillScopeType && auth.effectiveRole !== 'admin'"
+      :allocation-id="activeAllocationId"
+    />
 
-    <!-- KPI 条：仅在顶层（非下钻）显示 -->
+    <!-- KPI 条：非 admin 顶层（admin 使用原型对齐的 BudgetManageOverview） -->
     <section
-      v-if="!drillScopeType"
+      v-if="!drillScopeType && auth.effectiveRole !== 'admin'"
       class="kpi-strip"
       :class="{
         'kpi-5': (isDeptAdmin && managedDeptIds.length <= 1) || overviewView === 'studio' || overviewView === 'company',
@@ -379,7 +417,19 @@
     <!-- ══════════════════════════════════════════════
          studio / dept 下钻：单栏布局（与 overview-grid 平级）
          ══════════════════════════════════════════════ -->
-    <section v-if="!isDeptAdmin && drillScopeType === 'studio'" class="scope-stage-single">
+    <BudgetScopeWorkspace
+      v-if="!isDeptAdmin && drillScopeType === 'studio'"
+      :scope="{ type: 'studio', id: drillScopeId, label: drillLabel }"
+      :items="items"
+      :tier-items="tierBudgetItems"
+      :role="auth.effectiveRole"
+      :remaining="studioUnallocated"
+      @drill="handleWorkspaceDrill"
+      @edit="handleWorkspaceEdit"
+      @batch="handleWorkspaceBatch"
+      @create-department="openCreateDepartmentBudget"
+    />
+    <section v-if="false && !isDeptAdmin && drillScopeType === 'studio'" class="scope-stage-single">
       <div class="summary">
         <div>
           <div class="summary-eye">工作室预算</div>
@@ -501,9 +551,9 @@
           <strong>已选择 {{ studioDeptSelected.length }} 项</strong>
           <span>当前剩余可分配 {{ formatUSD(studioUnallocated, { compact: true }) }}</span>
           <span class="grow" />
-          <el-button size="small" plain @click="openBatchWizard">固定额度</el-button>
-          <el-button size="small" plain @click="openBatchWizard">按比例增减</el-button>
-          <el-button size="small" plain @click="openBatchWizard">等级子预算</el-button>
+          <el-button size="small" plain @click="openBatchWizard('absolute')">固定额度</el-button>
+          <el-button size="small" plain @click="openBatchWizard('percentage')">按比例增减</el-button>
+          <el-button size="small" plain @click="openBatchWizard('tier')">等级子预算</el-button>
           <el-button size="small" @click="clearStudioDeptSelection">取消选择</el-button>
         </div>
       </div>
@@ -608,7 +658,10 @@
             <template #default="{ row }">
               <div class="usage-cell">
                 <span>{{ formatUSD(row.used_usd || 0, { compact: true }) }} / {{ displayAmount(row.amount_usd) }}</span>
-                <el-progress :percentage="Math.min(Math.round((row.used_ratio || 0) * 100), 100)" :stroke-width="5" :color="riskColor(row.used_ratio || 0)" />
+                <div class="usage-meta-row">
+                  <el-progress :percentage="Math.min(Math.round((row.used_ratio || 0) * 100), 100)" :stroke-width="5" :color="riskColor(row.used_ratio || 0)" :show-text="false" />
+                  <span class="usage-status-text">{{ statusText(row.used_ratio || 0) }}</span>
+                </div>
               </div>
             </template>
           </el-table-column>
@@ -641,7 +694,20 @@
     <!-- ══════════════════════════════════════════════
          admin / studio_admin：双栏布局（仅顶层，非下钻）
          ══════════════════════════════════════════════ -->
-    <section v-if="!isDeptAdmin && !drillScopeType" class="overview-grid">
+    <BudgetManageOverview
+      v-if="!pageError && auth.effectiveRole === 'admin' && !drillScopeType && activeBudgetTab === 'overview'"
+      :items="items"
+      :tier-items="tierBudgetItems"
+      :role="auth.effectiveRole"
+      :risk-count="tierBudgetRiskCount || riskCount"
+      :risk-note="tierBudgetRiskSummary"
+      @drill="handleOverviewDrill"
+      @edit="openBudgetDrawer"
+      @batch="handleOverviewBatch"
+      @empty-action="openCompanyBudgetDialog"
+      @kpi-select="handleKpiSelect"
+    />
+    <section v-if="!pageError && auth.effectiveRole !== 'admin' && !isDeptAdmin && !drillScopeType" class="overview-grid">
       <div class="panel panel-main">
         <div v-if="drillScopeType !== 'dept'" class="panel-head">
           <div>
@@ -656,7 +722,7 @@
           />
             </div>
 
-        <!-- admin 视图：工作室维度表格 -->
+        <!-- studio_admin 等非 admin 顶层表格（admin 已由 BudgetManageOverview 承载） -->
         <el-table
           v-if="overviewView === 'company'"
           ref="tableRef"
@@ -1121,16 +1187,12 @@
         <!-- 快速跳转 -->
         <div class="quick-links">
           <h3>快速跳转</h3>
-          <button v-if="auth.effectiveRole === 'admin'" class="quick-link-btn" @click="router.push('/admin/org')">
-            <span>进入组织治理</span>
-            <span class="quick-link-arrow">→</span>
-          </button>
-          <button v-else class="quick-link-btn" @click="goOrg()">
+          <button class="quick-link-btn" @click="goOrg()">
             <span>配置工作室 / 部门预算</span>
             <span class="quick-link-arrow">→</span>
           </button>
           <button class="quick-link-btn" @click="goExpansion">
-            <span>{{ auth.effectiveRole === 'admin' ? '处理平台扩容申请' : '处理扩容申请' }}</span>
+            <span>处理扩容申请</span>
             <span class="quick-link-arrow">→</span>
             </button>
           </div>
@@ -1138,9 +1200,9 @@
     </section>
 
     <!-- ══════════════════════════════════════════════
-         dept_admin：全宽纵向布局
+         dept_admin：全宽纵向布局（仅部门管理员首页；工作室页不应出现成员列表）
          ══════════════════════════════════════════════ -->
-    <template v-else>
+    <template v-if="isDeptAdmin">
       <!-- 多部门时展示各部门明细条（单部门已在 KPI 卡中体现，无需重复） -->
       <div v-if="managedDeptIds.length > 1 && deptContainerItems.length" class="dept-summary-bar">
         <div
@@ -1436,25 +1498,72 @@
   </el-dialog>
 
   <!-- 公司预算池设置 dialog -->
-  <el-dialog v-model="companyBudgetDialogVisible" title="设置公司预算池" width="420px" :close-on-click-modal="false">
-    <el-form label-width="90px" style="margin-top:4px">
-      <el-form-item label="月度总额">
-        <el-input-number v-model="companyBudgetForm.amount" :min="-1" :precision="2" controls-position="right" style="width:100%" />
-        <div style="font-size:11px;color:var(--el-text-color-placeholder);margin-top:3px">-1 表示不限额</div>
+  <el-dialog v-model="companyBudgetDialogVisible" title="设置公司预算池" width="440px" :close-on-click-modal="false">
+    <el-form label-width="96px" style="margin-top:4px" @submit.prevent>
+      <el-form-item label="月度总额" required>
+        <div v-if="companyBudgetForm.amountUnlimited" class="company-budget-unlimited" data-test="company-monthly-unlimited">
+          <strong>不限</strong>
+          <el-button size="small" @click="setCompanyPeriodLimited('amount')">设置上限</el-button>
+        </div>
+        <el-input-number
+          v-else
+          v-model="companyBudgetForm.amount"
+          :min="0"
+          :precision="2"
+          controls-position="right"
+          style="width:100%"
+          data-test="company-monthly-input"
+        />
+        <div class="company-budget-hint">
+          <template v-if="companyBudgetForm.amountUnlimited">不限制公司月度总消耗。</template>
+          <template v-else>
+            填写 ≥ 0 的金额；
+            <el-button link type="primary" @click="setCompanyPeriodUnlimited('amount')">设为不限</el-button>
+          </template>
+        </div>
       </el-form-item>
       <el-form-item label="周限额">
-        <el-input-number v-model="companyBudgetForm.weekly" :min="-1" :precision="2" controls-position="right" style="width:100%" />
-        <div style="font-size:11px;color:var(--el-text-color-placeholder);margin-top:3px">-1 表示不限</div>
+        <div v-if="companyBudgetForm.weeklyUnlimited" class="company-budget-unlimited" data-test="company-weekly-unlimited">
+          <strong>不限</strong>
+          <el-button size="small" @click="setCompanyPeriodLimited('weekly')">设置上限</el-button>
+        </div>
+        <el-input-number
+          v-else
+          v-model="companyBudgetForm.weekly"
+          :min="0"
+          :precision="2"
+          controls-position="right"
+          style="width:100%"
+          data-test="company-weekly-input"
+        />
+        <div class="company-budget-hint">
+          <el-button v-if="!companyBudgetForm.weeklyUnlimited" link type="primary" @click="setCompanyPeriodUnlimited('weekly')">设为不限</el-button>
+        </div>
       </el-form-item>
       <el-form-item label="日限额">
-        <el-input-number v-model="companyBudgetForm.daily" :min="-1" :precision="2" controls-position="right" style="width:100%" />
-        <div style="font-size:11px;color:var(--el-text-color-placeholder);margin-top:3px">-1 表示不限</div>
+        <div v-if="companyBudgetForm.dailyUnlimited" class="company-budget-unlimited" data-test="company-daily-unlimited">
+          <strong>不限</strong>
+          <el-button size="small" @click="setCompanyPeriodLimited('daily')">设置上限</el-button>
+        </div>
+        <el-input-number
+          v-else
+          v-model="companyBudgetForm.daily"
+          :min="0"
+          :precision="2"
+          controls-position="right"
+          style="width:100%"
+          data-test="company-daily-input"
+        />
+        <div class="company-budget-hint">
+          <el-button v-if="!companyBudgetForm.dailyUnlimited" link type="primary" @click="setCompanyPeriodUnlimited('daily')">设为不限</el-button>
+        </div>
       </el-form-item>
       <el-form-item label="生效方式">
         <el-radio-group v-model="companyBudgetForm.effectiveMode">
           <el-radio value="immediate">立即生效</el-radio>
-          <el-radio value="next_period">下周期生效</el-radio>
+          <el-radio value="next_period" :disabled="companyHasUnlimited">下周期生效</el-radio>
         </el-radio-group>
+        <div v-if="companyHasUnlimited" class="company-budget-hint">含「不限」时仅支持立即生效</div>
       </el-form-item>
       <el-form-item label="调整原因" required>
         <el-input v-model="companyBudgetForm.reason" type="textarea" :rows="2" maxlength="200" show-word-limit />
@@ -1466,6 +1575,59 @@
       </template>
     </el-dialog>
 
+  <BudgetBatchAdjustWizard
+    v-model="batchWizardVisible"
+    :items="selectedBatchBudgets"
+    :tiers="batchModelTiers"
+    :initial-mode="batchWizardMode"
+    @applied="load"
+  />
+
+  <el-dialog
+    v-model="createDepartmentVisible"
+    title="新增部门预算"
+    width="460px"
+    destroy-on-close
+  >
+    <el-form label-position="top">
+      <el-form-item label="预算池">
+        <el-tag type="info">
+          {{ createDepartmentScopeType === 'dept_daily' ? '成员日常预算' : '程序服务预算' }}
+        </el-tag>
+      </el-form-item>
+      <el-form-item label="部门" required>
+        <el-select
+          v-model="createDepartmentId"
+          v-loading="createDepartmentLoading"
+          placeholder="选择尚未配置该预算池的部门"
+          style="width: 100%"
+          data-test="create-department-select"
+        >
+          <el-option
+            v-for="department in availableDepartments"
+            :key="department.dept_id"
+            :label="department.dept_name"
+            :value="department.dept_id"
+          />
+        </el-select>
+        <div v-if="!createDepartmentLoading && availableDepartments.length === 0" class="muted">
+          当前工作室没有可新增的部门预算。
+        </div>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="createDepartmentVisible = false">取消</el-button>
+      <el-button
+        type="primary"
+        data-test="confirm-create-department-budget"
+        :disabled="!createDepartmentId"
+        @click="confirmCreateDepartmentBudget"
+      >
+        进入配置
+      </el-button>
+    </template>
+  </el-dialog>
+
   <!-- ── 预算配置抽屉（BudgetScopePanel 内联，替换跳转 OrgTreePage）── -->
   <BudgetEditDrawer
     v-model="budgetDrawerVisible"
@@ -1475,6 +1637,7 @@
     :child-scope-ids="budgetDrawerChildIds"
     :can-edit="budgetDrawerCanEdit"
     :can-edit-self="budgetDrawerCanEditSelf"
+    :initial-allocation="budgetDrawerInitialAllocation"
     @navigate="handleBudgetNavigate"
   />
 
@@ -1583,6 +1746,7 @@ import { adjustBudget, getBudgetContext, getBudgetList, listModelTiers, previewB
 import { getBudgetRiskSummary } from '@/services/control-plane'
 import http from '@/services/http'
 import { useAuthStore } from '@/stores/auth'
+import { useOrgStore } from '@/stores/org'
 import type { BudgetContextItem, BudgetItem, BudgetScopeType, BudgetView } from '@/types/budget'
 import { SCOPE_TYPE_COLORS, SCOPE_TYPE_LABELS } from '@/types/budget'
 import type { BudgetRiskEvent } from '@/types/budget-risk'
@@ -1593,6 +1757,14 @@ import BudgetEditDrawer from '@/components/budget/BudgetEditDrawer.vue'
 import BudgetBatchAdjustWizard from '@/components/budget/BudgetBatchAdjustWizard.vue'
 import type { ModelTier } from '@/types/model-tier'
 import MemberQuotaDialog from '@/components/budget/MemberQuotaDialog.vue'
+import AdminPageHeader from '@/components/budget/AdminPageHeader.vue'
+import BudgetManageOverview from '@/components/budget/BudgetManageOverview.vue'
+import BudgetScopeWorkspace from '@/components/budget/BudgetScopeWorkspace.vue'
+import type { BudgetBatchEntryMode } from '@/composables/budgetScopeFilters'
+import {
+  filterDeptPoolItems,
+  filterMemberItemsByDept,
+} from '@/composables/budgetScopeFilters'
 
 // ─── 类型扩展：enrichedMember = BudgetItem + 7天用量字段 ──────────────────────
 interface EnrichedMember extends BudgetItem {
@@ -1616,6 +1788,7 @@ interface TierBudgetItem {
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
+const orgStore = useOrgStore()
 const riskCount = ref(0)
 const activeBudgetTab = computed({
   get: () => route.query.tab === 'risks' ? 'risks' : 'overview',
@@ -1629,7 +1802,9 @@ function showRiskBudget(event: BudgetRiskEvent) {
   } })
 }
 const loading = ref(false)
+const pageError = ref('')
 const items = ref<BudgetItem[]>([])
+const batchWizardMode = ref<BudgetBatchEntryMode>('absolute')
 const selectedBatchBudgets = ref<BudgetItem[]>([])
 const batchWizardVisible = ref(false)
 const batchModelTiers = ref<ModelTier[]>([])
@@ -1647,6 +1822,15 @@ const contextItems = ref<BudgetContextItem[]>([])
 const drillScopeType = computed(() => typeof route.query.scope_type === 'string' ? route.query.scope_type : '')
 const drillScopeId = computed(() => typeof route.query.scope_id === 'string' ? route.query.scope_id : '')
 const drillLabel = computed(() => typeof route.query.scope_label === 'string' ? route.query.scope_label : '')
+const pageTitle = computed(() => drillScopeType.value ? `${drillLabel.value || drillScopeId.value}预算` : '预算总览')
+const pageDescription = computed(() => {
+  if (drillScopeType.value === 'studio') return '查看工作室预算及下属部门分配情况。'
+  if (drillScopeType.value === 'dept') return '查看部门预算及成员配额情况。'
+  if (drillScopeType.value === 'member') return '查看成员独立额度及等级预算限制。'
+  if (auth.effectiveRole === 'admin') return '平台管理员视角 · 查看全公司预算风险，并向工作室分配额度。'
+  if (auth.effectiveRole === 'studio_admin') return '工作室管理员视角 · 查看工作室下各部门预算状态，并可继续向下分配。'
+  return '查看本部门预算与成员用量风险，可直接调整成员配额。'
+})
 type DrillCrumb = { scopeType: 'studio' | 'dept' | 'member'; scopeId: string; label: string }
 const drillBreadcrumbs = computed<DrillCrumb[]>(() => {
   const result: DrillCrumb[] = []
@@ -1928,10 +2112,6 @@ const tierBudgetByScope = computed(() => {
   return map
 })
 
-// dept_admin 专属 KPI
-const totalMemberBudget = computed(() =>
-  memberTableItems.value.reduce((sum, item) => sum + Math.max(item.amount_usd || 0, 0), 0),
-)
 const totalCost7d = computed(() => {
   let total = 0
   memberUsage7d.value.forEach(v => (total += v))
@@ -2072,31 +2252,40 @@ const tableDesc = computed(() => {
 })
 
 // ─── dept_admin 专属计算 ───────────────────────────────────────────────────────
-const deptContainerItems = computed(() =>
-  overviewView.value === 'department'
-    ? items.value.filter(i => i.scope_type === 'dept_daily' || i.scope_type === 'dept_service')
-    : [],
-)
+const deptContainerItems = computed(() => {
+  if (overviewView.value !== 'department') return []
+  const drillDeptId =
+    drillScopeType.value === 'dept' && drillScopeId.value
+      ? drillScopeId.value
+      : (isDeptAdmin.value && selectedDeptFilter.value ? selectedDeptFilter.value : null)
+  // 部门下钻 / 多部门筛选：仅当前部门池；否则返回全部管辖部门池
+  if (drillDeptId) return filterDeptPoolItems(items.value, drillDeptId)
+  return filterDeptPoolItems(items.value, null)
+})
 
-// 全量成员（所有管辖部门，用于 KPI 计数）
-const memberTableItems = computed(() =>
-  items.value
-    .filter(i => i.scope_type === 'member')
+// 全量或按部门过滤的成员（部门下钻时强制按 drillScopeId）
+const memberTableItems = computed(() => {
+  const deptId =
+    drillScopeType.value === 'dept' && drillScopeId.value
+      ? drillScopeId.value
+      : null
+  return filterMemberItemsByDept(items.value, deptId)
     .slice()
     .sort((a, b) => {
       const ratioDiff = (b.used_ratio || 0) - (a.used_ratio || 0)
       return ratioDiff !== 0 ? ratioDiff : (b.used_usd || 0) - (a.used_usd || 0)
-    }),
-)
+    })
+})
 
-// 按部门过滤后的成员（多部门切换器使用）
+// 按部门过滤后的成员（多部门切换器使用；下钻部门时 memberTableItems 已过滤）
 const filteredMemberItems = computed(() => {
+  if (drillScopeType.value === 'dept' && drillScopeId.value) {
+    return memberTableItems.value
+  }
   if (!selectedDeptFilter.value || managedDeptIds.value.length <= 1) {
     return memberTableItems.value
   }
-  return memberTableItems.value.filter(
-    item => item.parent_scope_id === selectedDeptFilter.value,
-  )
+  return filterMemberItemsByDept(memberTableItems.value, selectedDeptFilter.value)
 })
 
 // enrichedMembers：合并预算 + 7天用量，优先展示高消耗 / 高风险成员
@@ -2130,27 +2319,38 @@ const riskMembers = computed(() =>
 // ─── 数据加载 ─────────────────────────────────────────────────────────────────
 async function load() {
   loading.value = true
+  pageError.value = ''
   try {
-const [budgetItems, contexts, tierData] = await Promise.all([
+    const [budgetResult, contextResult, tierResult] = await Promise.allSettled([
       getBudgetList(undefined, undefined, overviewView.value),
-      getBudgetContext().catch(() => []),
-      // 获取等级预算数据（仅 dept_admin 需要）
-      isDeptAdmin.value && managedDeptIds.value.length > 0
-        ? http.get<any>('/api/v1/budgets/tier-usage', {
-            params: {
-              period_type: 'monthly',
-              scope_type: 'dept',
-              scope_id: managedDeptIds.value[0],
-            },
-          }).then(r => {
-            const data = r?.data?.data?.items ?? r?.data?.items ?? r?.data ?? []
-            return Array.isArray(data) ? data : []
-          }).catch(() => [])
-        : Promise.resolve([]),
+      getBudgetContext(),
+      http.get<any>('/api/v1/budgets/tier-usage', {
+        params: { period_type: 'monthly' },
+        _silent: true,
+      } as any),
     ])
-    items.value = budgetItems
-    contextItems.value = contexts
-    tierBudgetItems.value = (tierData as TierBudgetItem[])
+
+    if (budgetResult.status === 'rejected') {
+      pageError.value = (budgetResult.reason as Error)?.message || '无法加载预算列表，请稍后重试'
+      items.value = []
+      contextItems.value = []
+      tierBudgetItems.value = []
+      return
+    }
+
+    items.value = budgetResult.value || []
+    contextItems.value = contextResult.status === 'fulfilled' ? (contextResult.value || []) : []
+    if (contextResult.status === 'rejected') {
+      ElMessage.warning('预算治理链路加载失败，列表仍可查看')
+    }
+
+    if (tierResult.status === 'fulfilled') {
+      const payload = tierResult.value?.data?.data ?? tierResult.value?.data ?? {}
+      const list = payload?.items ?? (Array.isArray(payload) ? payload : [])
+      tierBudgetItems.value = (Array.isArray(list) ? list : []) as TierBudgetItem[]
+    } else {
+      tierBudgetItems.value = []
+    }
 
     // dept_admin 或 admin/studio_admin 下钻到部门时：拉取该部门成员近7天用量（来自 call_logs，数据可靠）
     const drillDeptIds: string[] = []
@@ -2242,6 +2442,7 @@ const budgetDrawerTitle = ref('')
 const budgetDrawerChildIds = ref<string[] | undefined>(undefined)
 const budgetDrawerCanEdit = ref(false)
 const budgetDrawerCanEditSelf = ref(false)
+const budgetDrawerInitialAllocation = ref<BudgetItem | undefined>(undefined)
 
 function openBudgetDrawer(
   opts: { scope_type: string; scope_id: string; label?: string },
@@ -2252,6 +2453,7 @@ function openBudgetDrawer(
   budgetDrawerScopeId.value = opts.scope_id
   budgetDrawerTitle.value = opts.label || opts.scope_id
   budgetDrawerChildIds.value = childIds
+  budgetDrawerInitialAllocation.value = undefined
 
   if (auth.effectiveRole === 'admin') {
     budgetDrawerCanEdit.value = true
@@ -2353,22 +2555,78 @@ const companyBudgetDialogVisible = ref(false)
 const companyBudgetSaving = ref(false)
 const companyBudgetForm = ref({
   amount: 0,
-  weekly: -1,
-  daily: -1,
+  weekly: 0,
+  daily: 0,
+  amountUnlimited: false,
+  weeklyUnlimited: true,
+  dailyUnlimited: true,
   reason: '',
   effectiveMode: 'immediate' as 'immediate' | 'next_period',
 })
 
+const companyHasUnlimited = computed(() => (
+  companyBudgetForm.value.amountUnlimited
+  || companyBudgetForm.value.weeklyUnlimited
+  || companyBudgetForm.value.dailyUnlimited
+))
+
+function toCompanyPeriodState(value: number | undefined | null) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n < 0) {
+    return { unlimited: true, value: 0 }
+  }
+  return { unlimited: false, value: n }
+}
+
 function openCompanyBudgetDialog() {
   const item = companyPoolItem.value
+  const monthly = toCompanyPeriodState(item?.amount_usd)
+  const weekly = toCompanyPeriodState(item?.weekly_amount_usd)
+  const daily = toCompanyPeriodState(item?.daily_amount_usd)
   companyBudgetForm.value = {
-    amount: item ? item.amount_usd : 0,
-    weekly: item ? item.weekly_amount_usd : -1,
-    daily: item ? item.daily_amount_usd : -1,
+    amount: monthly.value,
+    weekly: weekly.value,
+    daily: daily.value,
+    amountUnlimited: monthly.unlimited,
+    weeklyUnlimited: weekly.unlimited,
+    dailyUnlimited: daily.unlimited,
     reason: '',
     effectiveMode: 'immediate',
   }
   companyBudgetDialogVisible.value = true
+}
+
+function setCompanyPeriodUnlimited(period: 'amount' | 'weekly' | 'daily') {
+  if (period === 'amount') companyBudgetForm.value.amountUnlimited = true
+  if (period === 'weekly') companyBudgetForm.value.weeklyUnlimited = true
+  if (period === 'daily') companyBudgetForm.value.dailyUnlimited = true
+  if (companyBudgetForm.value.effectiveMode === 'next_period') {
+    companyBudgetForm.value.effectiveMode = 'immediate'
+  }
+}
+
+function setCompanyPeriodLimited(period: 'amount' | 'weekly' | 'daily') {
+  if (period === 'amount') {
+    companyBudgetForm.value.amountUnlimited = false
+    if (!(companyBudgetForm.value.amount >= 0)) companyBudgetForm.value.amount = 0
+  }
+  if (period === 'weekly') {
+    companyBudgetForm.value.weeklyUnlimited = false
+    if (!(companyBudgetForm.value.weekly >= 0)) companyBudgetForm.value.weekly = 0
+  }
+  if (period === 'daily') {
+    companyBudgetForm.value.dailyUnlimited = false
+    if (!(companyBudgetForm.value.daily >= 0)) companyBudgetForm.value.daily = 0
+  }
+}
+
+function companyPeriodValue(unlimited: boolean, value: number): number {
+  return unlimited ? -1 : Number(value)
+}
+
+function isValidCompanyLimit(unlimited: boolean, value: number): boolean {
+  if (unlimited) return true
+  return Number.isFinite(value) && value >= 0
 }
 
 async function saveCompanyBudget() {
@@ -2376,18 +2634,44 @@ async function saveCompanyBudget() {
     ElMessage.warning('请填写调整原因')
     return
   }
+  const periods = [
+    {
+      period_type: 'monthly' as const,
+      unlimited: companyBudgetForm.value.amountUnlimited,
+      value: companyBudgetForm.value.amount,
+    },
+    {
+      period_type: 'weekly' as const,
+      unlimited: companyBudgetForm.value.weeklyUnlimited,
+      value: companyBudgetForm.value.weekly,
+    },
+    {
+      period_type: 'daily' as const,
+      unlimited: companyBudgetForm.value.dailyUnlimited,
+      value: companyBudgetForm.value.daily,
+    },
+  ]
+  if (periods.some(item => !isValidCompanyLimit(item.unlimited, item.value))) {
+    ElMessage.warning('额度必须 ≥ 0，或不限')
+    return
+  }
+  if (companyHasUnlimited.value && companyBudgetForm.value.effectiveMode === 'next_period') {
+    ElMessage.warning('含「不限」时仅支持立即生效')
+    return
+  }
+
+  const targets = periods.map(item => ({
+    period_type: item.period_type,
+    value: companyPeriodValue(item.unlimited, item.value),
+  }))
+
   companyBudgetSaving.value = true
   try {
-    const targets = [
-      { period_type: 'monthly' as const, value: companyBudgetForm.value.amount },
-      { period_type: 'weekly' as const, value: companyBudgetForm.value.weekly },
-      { period_type: 'daily' as const, value: companyBudgetForm.value.daily },
-    ].filter(item => item.value >= 0)
     const previews = await Promise.all(targets.map(item => previewBudgetAdjustment({
       scope_type: 'company',
       scope_id: 'GLOBAL',
       period_type: item.period_type,
-      target_limit_usd: item.value.toFixed(6),
+      target_limit_usd: Number(item.value).toFixed(6),
       effective_mode: companyBudgetForm.value.effectiveMode,
       reason: companyBudgetForm.value.reason.trim(),
     })))
@@ -2411,7 +2695,7 @@ async function saveCompanyBudget() {
       scope_type: 'company',
       scope_id: 'GLOBAL',
       period_type: item.period_type,
-      target_limit_usd: item.value.toFixed(6),
+      target_limit_usd: Number(item.value).toFixed(6),
       effective_mode: companyBudgetForm.value.effectiveMode,
       reason: companyBudgetForm.value.reason.trim(),
       confirm_zero_block: previews[index].zero_block,
@@ -2476,98 +2760,122 @@ function goExpansion() {
   router.push('/admin/expansion-requests')
 }
 
-// ─── 下钻侧抽屉（admin 专用：工作室 → 部门 → 成员）──────────────────────────
-const drawerVisible = ref(false)
-const drawerStudio = ref<BudgetItem | null>(null)
-const drawerLoading = ref(false)
-
-// 部门行（来自 view=studio&scope_id=<studioId>）
-interface DrawerDeptRow {
-  deptId: string
-  label: string
-  daily: BudgetItem | null
-  service: BudgetItem | null
-  members: BudgetItem[]      // 展开后加载的成员配额
-  membersLoaded: boolean
-  membersLoading: boolean
-  expanded: boolean
-}
-const drawerDepts = ref<DrawerDeptRow[]>([])
-
-async function openStudioDrawer(studio: BudgetItem) {
-  drawerStudio.value = studio
-  drawerVisible.value = true
-  drawerDepts.value = []
-  drawerLoading.value = true
-  try {
-    const raw = await getBudgetList(undefined, studio.scope_id, 'studio')
-    // 按部门分组（dept_daily / dept_service）
-    const map = new Map<string, DrawerDeptRow>()
-    for (const item of raw) {
-      if (item.scope_type !== 'dept_daily' && item.scope_type !== 'dept_service') continue
-      const key = item.scope_id
-      if (!map.has(key)) {
-        map.set(key, {
-          deptId: key,
-          label: item.label || key,
-          daily: null,
-          service: null,
-          members: [],
-          membersLoaded: false,
-          membersLoading: false,
-          expanded: false,
-        })
-      }
-      const entry = map.get(key)!
-      if (item.scope_type === 'dept_daily') entry.daily = item
-      if (item.scope_type === 'dept_service') entry.service = item
-    }
-    drawerDepts.value = Array.from(map.values()).sort(
-      (a, b) =>
-        Math.max(b.daily?.used_ratio || 0, b.service?.used_ratio || 0) -
-        Math.max(a.daily?.used_ratio || 0, a.service?.used_ratio || 0),
-    )
-  } finally {
-    drawerLoading.value = false
-  }
-}
-
-async function toggleDeptMembers(row: DrawerDeptRow) {
-  if (row.expanded) {
-    row.expanded = false
-    return
-  }
-  row.expanded = true
-  if (row.membersLoaded) return
-  row.membersLoading = true
-  try {
-    const raw = await getBudgetList(undefined, row.deptId, 'department')
-    row.members = raw.filter(i => i.scope_type === 'member')
-    row.membersLoaded = true
-  } finally {
-    row.membersLoading = false
-  }
-}
-
-function goOrgFromDrawer(scopeType: string, scopeId: string, label?: string) {
-  drawerVisible.value = false
-  openBudgetDrawer({ scope_type: scopeType, scope_id: scopeId, label })
-}
-
-// ─── 成员配额抽屉（studio_admin 专用：部门 → 成员）──────────────────────────
-const deptMemberDrawerVisible = ref(false)
-const deptMemberDrawerDept = ref<StudioDeptRow | null>(null)
-const deptMemberDrawerLoading = ref(false)
-const deptMemberDrawerMembers = ref<BudgetItem[]>([])
-
 // ─── 模板占位函数 ─────────────────────────────────────────────────────────────
 const emptyPreviewVisible = ref(false)
 function toggleEmptyPreview() {
   emptyPreviewVisible.value = !emptyPreviewVisible.value
 }
 
-function openBatchWizard() {
+function openBatchWizard(mode: BudgetBatchEntryMode = 'absolute') {
+  batchWizardMode.value = mode
   batchWizardVisible.value = true
+}
+
+function handleOverviewDrill(item: BudgetItem) {
+  drillTo('studio', item.scope_id, item.label)
+}
+
+function handleOverviewBatch(rows: BudgetItem[], mode: BudgetBatchEntryMode = 'absolute') {
+  selectedBatchBudgets.value = rows
+  batchWizardMode.value = mode
+  batchWizardVisible.value = true
+}
+
+function handleWorkspaceDrill(item: BudgetItem) {
+  drillTo('dept', item.scope_id, item.label)
+}
+
+function handleWorkspaceEdit(item: BudgetItem | null) {
+  if (item) {
+    openBudgetDrawer(item)
+    return
+  }
+  openBudgetDrawer({ scope_type: 'studio', scope_id: drillScopeId.value, label: drillLabel.value })
+}
+
+function handleWorkspaceBatch(rows: BudgetItem[], mode: BudgetBatchEntryMode = 'absolute') {
+  selectedBatchBudgets.value = rows
+  batchWizardMode.value = mode
+  batchWizardVisible.value = true
+}
+
+function handleKpiSelect(key: string) {
+  if (key === 'risk') {
+    activeBudgetTab.value = 'risks'
+    return
+  }
+  if (key === 'expansion') {
+    router.push('/admin/expansion-requests')
+    return
+  }
+  if (key === 'scopes') {
+    activeBudgetTab.value = 'overview'
+    // 治理链「明细 →」：滚到工作室预算表（下发明细）
+    requestAnimationFrame(() => {
+      document
+        .querySelector('[data-test="budget-manage-overview"] .proto-native-table')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
+}
+
+const createDepartmentVisible = ref(false)
+const createDepartmentLoading = ref(false)
+const createDepartmentId = ref('')
+const createDepartmentScopeType = ref<'dept_daily' | 'dept_service'>('dept_daily')
+const createDepartmentStudioId = ref('')
+const availableDepartments = computed(() => orgStore.departments.filter(department =>
+  (!department.studio_id || department.studio_id === createDepartmentStudioId.value)
+  && !items.value.some(item =>
+    item.scope_type === createDepartmentScopeType.value
+    && item.scope_id === department.dept_id,
+  ),
+))
+
+async function openCreateDepartmentBudget(payload: {
+  scopeType: 'dept_daily' | 'dept_service'
+  studioId: string
+}) {
+  createDepartmentScopeType.value = payload.scopeType
+  createDepartmentStudioId.value = payload.studioId
+  createDepartmentId.value = ''
+  createDepartmentVisible.value = true
+  if (orgStore.departments.length) return
+  createDepartmentLoading.value = true
+  try {
+    await orgStore.fetchDepartments('active')
+  } catch (error: any) {
+    ElMessage.error(error?.message || '部门列表加载失败')
+  } finally {
+    createDepartmentLoading.value = false
+  }
+}
+
+function confirmCreateDepartmentBudget() {
+  const department = availableDepartments.value.find(item => item.dept_id === createDepartmentId.value)
+  if (!department) {
+    ElMessage.warning('请选择部门')
+    return
+  }
+  createDepartmentVisible.value = false
+  openBudgetDrawer({
+    scope_type: createDepartmentScopeType.value,
+    scope_id: department.dept_id,
+    label: department.dept_name,
+  })
+  budgetDrawerInitialAllocation.value = {
+    scope_type: createDepartmentScopeType.value,
+    scope_id: department.dept_id,
+    parent_scope_id: createDepartmentStudioId.value,
+    label: department.dept_name,
+    amount_usd: 0,
+    daily_amount_usd: -1,
+    weekly_amount_usd: -1,
+    period: '',
+    enabled: true,
+    used_usd: 0,
+    used_ratio: 0,
+  }
 }
 
 // ─── Studio 视图部门表格复选框 ────────────────────────────────────────────────
@@ -2626,12 +2934,54 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-/* ── 页面容器 ─────────────────────────────────────────────────────────────── */
+/* ── 页面容器：铺满主区，避免与 .page-container 双重 padding 收窄 ───────────── */
 .budget-overview {
   display: flex;
   flex-direction: column;
+  width: 100%;
+  max-width: none;
+  margin: 0;
   gap: 16px;
-  padding: 20px 24px;
+  padding: 0;
+}
+/* 对齐原型 page-title 20px */
+.budget-overview :deep(.admin-page-header h1) {
+  font-size: 20px;
+  font-weight: 700;
+  color: #0f172a;
+  line-height: 1.3;
+}
+.budget-overview :deep(.admin-page-header p) {
+  margin-top: 5px;
+  font-size: 12px;
+  color: #64748b;
+}
+.budget-overview :deep(.admin-page-header__refresh) {
+  height: 32px;
+  min-height: 32px;
+  padding: 0 13px;
+  border-radius: 7px;
+  font-size: 13px;
+}
+.proto-header-btn {
+  height: 32px;
+  padding: 0 13px;
+  color: #334155;
+  background: #fff;
+  border: 1px solid #d8dee8;
+  border-radius: 7px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+.proto-header-btn.primary {
+  color: #fff;
+  background: #36b34e;
+  border-color: #36b34e;
+}
+.proto-header-btn.primary:hover {
+  background: #2a9c4b;
+  border-color: #2a9c4b;
 }
 .overview-header {
   display: flex;
@@ -2663,16 +3013,42 @@ onMounted(async () => {
   font-size: 13px;
 }
 
-/* ── Tabs样式调整 ───────────────────────────────────────────────────────────── */
-.budget-overview :deep(.el-tabs) {
-  margin-top: 16px;
-  margin-bottom: 16px;
+/* ── Tabs（对齐原型 underline） ─────────────────────────────────────────────── */
+.proto-budget-tabs {
+  display: flex;
+  gap: 22px;
+  margin: -4px 0 18px;
+  border-bottom: 1px solid #e2e8f0;
 }
-.budget-overview :deep(.el-tabs__header) {
-  margin: 0;
+.proto-budget-tab {
+  height: 42px;
+  padding: 0 2px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: #64748b;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
 }
-.budget-overview :deep(.el-tabs__nav-wrap) {
-  margin-bottom: 0;
+.proto-budget-tab.active {
+  color: #2a9c4b;
+  border-bottom-color: #36b34e;
+  font-weight: 700;
+}
+.proto-count-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 19px;
+  height: 18px;
+  margin-left: 5px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #fef2f2;
+  color: #dc2626;
+  font-size: 10px;
+  font-weight: 600;
+  vertical-align: middle;
 }
 
 /* ── KPI 条 ───────────────────────────────────────────────────────────────── */
@@ -3418,6 +3794,22 @@ onMounted(async () => {
   grid-template-columns: 100px 1fr;
   align-items: center;
   gap: 10px;
+}
+.usage-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.usage-meta-row .el-progress {
+  flex: 1;
+  min-width: 0;
+}
+.usage-status-text {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
 }
 /* studio_admin 分组表格：池内联单元格 */
 .pool-inline-cell {
@@ -4183,5 +4575,25 @@ onMounted(async () => {
   display: block;
   font-size: 12px;
   color: #64748b;
+}
+
+.company-budget-unlimited {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 4px;
+}
+.company-budget-unlimited strong {
+  font-size: 14px;
+  color: var(--el-text-color-primary);
+}
+.company-budget-hint {
+  font-size: 11px;
+  color: var(--el-text-color-placeholder);
+  margin-top: 3px;
+  line-height: 1.4;
 }
 </style>

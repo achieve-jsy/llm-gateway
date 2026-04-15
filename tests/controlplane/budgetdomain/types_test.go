@@ -26,6 +26,32 @@ func TestAmountRejectsNumberNegativeJSONAndNegativeDatabaseValue(t *testing.T) {
 	require.ErrorIs(t, amount.Scan("-1.000000"), budgetdomain.ErrAmountNegative)
 }
 
+func TestParseLimitAmountAllowsUnlimitedAndRejectsFractionalNegative(t *testing.T) {
+	unlimited, err := budgetdomain.ParseLimitAmount("-1")
+	require.NoError(t, err)
+	require.True(t, unlimited.IsUnlimited())
+	require.Equal(t, "-1.000000", unlimited.String())
+
+	unlimitedFixed, err := budgetdomain.ParseLimitAmount("-1.000000")
+	require.NoError(t, err)
+	require.True(t, unlimitedFixed.IsUnlimited())
+
+	zero, err := budgetdomain.ParseLimitAmount("0")
+	require.NoError(t, err)
+	require.False(t, zero.IsUnlimited())
+	require.Equal(t, "0.000000", zero.String())
+
+	_, err = budgetdomain.ParseLimitAmount("-0.5")
+	require.ErrorIs(t, err, budgetdomain.ErrAmountInvalidLimit)
+
+	_, err = budgetdomain.ParseLimitAmount("-2")
+	require.ErrorIs(t, err, budgetdomain.ErrAmountInvalidLimit)
+
+	// 普通金额解析仍拒绝 -1
+	_, err = budgetdomain.ParseAmount("-1")
+	require.ErrorIs(t, err, budgetdomain.ErrAmountNegative)
+}
+
 func TestDimensionValidationAndKey(t *testing.T) {
 	require.NoError(t, budgetdomain.ValidateDimension(budgetdomain.DimensionTotal, nil))
 	require.ErrorIs(t, budgetdomain.ValidateDimension(budgetdomain.DimensionTier, nil), budgetdomain.ErrTierIDRequired)

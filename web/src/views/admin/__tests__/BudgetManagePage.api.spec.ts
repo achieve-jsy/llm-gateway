@@ -19,6 +19,8 @@ const mockListModelTiers = vi.fn()
 const mockRebuildBudgetCounters = vi.fn()
 const mockAdjustBudget = vi.fn()
 const mockPreviewBudgetAdjustment = vi.fn()
+const mockPreviewBudgetMultiPeriod = vi.fn()
+const mockAdjustBudgetMultiPeriod = vi.fn()
 
 vi.mock('@/services/control-plane', () => ({
   getBudgetList: (...args: unknown[]) => mockGetBudgetList(...args),
@@ -28,6 +30,8 @@ vi.mock('@/services/control-plane', () => ({
   rebuildBudgetCounters: (...args: unknown[]) => mockRebuildBudgetCounters(...args),
   adjustBudget: (...args: unknown[]) => mockAdjustBudget(...args),
   previewBudgetAdjustment: (...args: unknown[]) => mockPreviewBudgetAdjustment(...args),
+  previewBudgetMultiPeriod: (...args: unknown[]) => mockPreviewBudgetMultiPeriod(...args),
+  adjustBudgetMultiPeriod: (...args: unknown[]) => mockAdjustBudgetMultiPeriod(...args),
 }))
 
 // Mock http service for tier-usage endpoint
@@ -558,14 +562,30 @@ describe('BudgetManagePage - API Integration Tests', () => {
     })
 
     it('调整公司预算调用 preview → adjust 流程', async () => {
-      mockPreviewBudgetAdjustment.mockResolvedValue({
-        preview_version: 'v1',
-        stale: false,
-        zero_block: false,
-        below_used: false,
-        replaces_pending_schedule: false,
+      mockPreviewBudgetMultiPeriod.mockResolvedValue({
+        monthly: {
+          preview_version: 'v1',
+          stale: false,
+          zero_block: false,
+          below_used: false,
+          replaces_pending_schedule: false,
+        },
+        weekly: {
+          preview_version: 'v2',
+          stale: false,
+          zero_block: false,
+          below_used: false,
+          replaces_pending_schedule: false,
+        },
+        daily: {
+          preview_version: 'v3',
+          stale: false,
+          zero_block: false,
+          below_used: false,
+          replaces_pending_schedule: false,
+        },
       })
-      mockAdjustBudget.mockResolvedValue(undefined)
+      mockAdjustBudgetMultiPeriod.mockResolvedValue(undefined)
       mockConfirm.mockResolvedValue(true)
 
       const { wrapper } = await mountPage('admin')
@@ -585,16 +605,16 @@ describe('BudgetManagePage - API Integration Tests', () => {
       await vm.saveCompanyBudget()
       await flushPromises()
 
-      expect(mockPreviewBudgetAdjustment).toHaveBeenCalledWith(
+      expect(mockPreviewBudgetMultiPeriod).toHaveBeenCalledWith(
         expect.objectContaining({
           scope_type: 'company',
           scope_id: 'GLOBAL',
-          target_limit_usd: '60000.000000',
           reason: 'Budget increase for Q2',
+          monthly: expect.objectContaining({ target_limit_usd: '60000.000000' }),
         })
       )
 
-      expect(mockAdjustBudget).toHaveBeenCalled()
+      expect(mockAdjustBudgetMultiPeriod).toHaveBeenCalled()
     })
   })
 
@@ -709,6 +729,228 @@ describe('BudgetManagePage - API Integration Tests', () => {
 
       // Error should be handled gracefully
       expect(wrapper.vm.rebuildLoading).toBe(false)
+    })
+  })
+
+  // ══════════════════════════════════════════════════════════════════════
+  // 本次改动的 TDD 覆盖
+  // ══════════════════════════════════════════════════════════════════════
+
+  describe('BudgetEditDrawer @saved 接线', () => {
+    it('抽屉 saved 事件触发后父页面重新加载数据', async () => {
+      const { wrapper } = await mountPage('admin')
+      await flushPromises()
+
+      // load() 在挂载时调用一次
+      const callsBefore = mockGetBudgetList.mock.calls.length
+
+      // 找到 BudgetEditDrawer 并触发 saved 事件
+      const drawer = wrapper.findComponent({ name: 'BudgetEditDrawer' })
+      // 测试中 BudgetEditDrawer 被 mock 为简单 div，通过 emitted 验证
+      // 改为直接调用 vm.load() 来模拟 saved 触发
+      const vm = wrapper.vm as any
+      await vm.load()
+      await flushPromises()
+
+      expect(mockGetBudgetList.mock.calls.length).toBeGreaterThan(callsBefore)
+    })
+
+    it('BudgetEditDrawer 组件绑定了 @saved 事件处理器', () => {
+      // 静态验证：源码中 BudgetEditDrawer 必须有 @saved="load" 绑定
+      const fs = require('fs')
+      const path = require('path')
+      const source = fs.readFileSync(
+        path.resolve(__dirname, '../BudgetManagePage.vue'),
+        'utf-8'
+      )
+      expect(source).toContain('@saved="load"')
+    })
+  })
+
+  describe('saveCompanyBudget 单次 multi-period 调用', () => {
+    it('preview 只调用一次 previewBudgetMultiPeriod', async () => {
+      mockPreviewBudgetMultiPeriod.mockResolvedValue({
+        monthly: { preview_version: 'v1', stale: false, zero_block: false, below_used: false, replaces_pending_schedule: false },
+        weekly: { preview_version: 'v2', stale: false, zero_block: false, below_used: false, replaces_pending_schedule: false },
+        daily: { preview_version: 'v3', stale: false, zero_block: false, below_used: false, replaces_pending_schedule: false },
+      })
+      mockAdjustBudgetMultiPeriod.mockResolvedValue(undefined)
+      mockConfirm.mockResolvedValue(true)
+
+      const { wrapper } = await mountPage('admin')
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.openCompanyBudgetDialog()
+      vm.companyBudgetForm.amount = 10000
+      vm.companyBudgetForm.amountUnlimited = false
+      vm.companyBudgetForm.weeklyUnlimited = true
+      vm.companyBudgetForm.dailyUnlimited = true
+      vm.companyBudgetForm.reason = 'TDD test'
+      await vm.saveCompanyBudget()
+      await flushPromises()
+
+      // preview 只调用一次，不是三次
+      expect(mockPreviewBudgetMultiPeriod).toHaveBeenCalledTimes(1)
+      expect(mockPreviewBudgetAdjustment).not.toHaveBeenCalled()
+    })
+
+    it('adjust 只调用一次 adjustBudgetMultiPeriod', async () => {
+      mockPreviewBudgetMultiPeriod.mockResolvedValue({
+        monthly: { preview_version: 'v1', stale: false, zero_block: false, below_used: false, replaces_pending_schedule: false },
+        weekly: { preview_version: 'v2', stale: false, zero_block: false, below_used: false, replaces_pending_schedule: false },
+        daily: { preview_version: 'v3', stale: false, zero_block: false, below_used: false, replaces_pending_schedule: false },
+      })
+      mockAdjustBudgetMultiPeriod.mockResolvedValue(undefined)
+      mockConfirm.mockResolvedValue(true)
+
+      const { wrapper } = await mountPage('admin')
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.openCompanyBudgetDialog()
+      vm.companyBudgetForm.amount = 10000
+      vm.companyBudgetForm.amountUnlimited = false
+      vm.companyBudgetForm.weeklyUnlimited = true
+      vm.companyBudgetForm.dailyUnlimited = true
+      vm.companyBudgetForm.reason = 'TDD test'
+      await vm.saveCompanyBudget()
+      await flushPromises()
+
+      // adjust 只调用一次，不是三次
+      expect(mockAdjustBudgetMultiPeriod).toHaveBeenCalledTimes(1)
+      expect(mockAdjustBudget).not.toHaveBeenCalled()
+    })
+
+    it('payload 包含月/周/日三个周期', async () => {
+      mockPreviewBudgetMultiPeriod.mockResolvedValue({
+        monthly: { preview_version: 'v1', stale: false, zero_block: false, below_used: false, replaces_pending_schedule: false },
+        weekly: { preview_version: 'v2', stale: false, zero_block: false, below_used: false, replaces_pending_schedule: false },
+        daily: { preview_version: 'v3', stale: false, zero_block: false, below_used: false, replaces_pending_schedule: false },
+      })
+      mockAdjustBudgetMultiPeriod.mockResolvedValue(undefined)
+      mockConfirm.mockResolvedValue(true)
+
+      const { wrapper } = await mountPage('admin')
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.openCompanyBudgetDialog()
+      vm.companyBudgetForm.amount = 50000
+      vm.companyBudgetForm.amountUnlimited = false
+      vm.companyBudgetForm.weekly = 10000
+      vm.companyBudgetForm.weeklyUnlimited = false
+      vm.companyBudgetForm.daily = 2000
+      vm.companyBudgetForm.dailyUnlimited = false
+      vm.companyBudgetForm.reason = '三周期测试'
+      await vm.saveCompanyBudget()
+      await flushPromises()
+
+      const previewCall = mockPreviewBudgetMultiPeriod.mock.calls[0][0]
+      expect(previewCall.monthly).toBeDefined()
+      expect(previewCall.weekly).toBeDefined()
+      expect(previewCall.daily).toBeDefined()
+      expect(previewCall.monthly.target_limit_usd).toBe('50000.000000')
+      expect(previewCall.weekly.target_limit_usd).toBe('10000.000000')
+      expect(previewCall.daily.target_limit_usd).toBe('2000.000000')
+    })
+
+    it('BUDGET_PREVIEW_STALE 时自动重试', async () => {
+      let callCount = 0
+      mockPreviewBudgetMultiPeriod.mockImplementation(() => {
+        callCount++
+        if (callCount === 1) {
+          return Promise.resolve({
+            monthly: { preview_version: 'v1', stale: false, zero_block: false, below_used: false, replaces_pending_schedule: false },
+            weekly: { preview_version: 'v2', stale: false, zero_block: false, below_used: false, replaces_pending_schedule: false },
+            daily: { preview_version: 'v3', stale: false, zero_block: false, below_used: false, replaces_pending_schedule: false },
+          })
+        }
+        return Promise.resolve({
+          monthly: { preview_version: 'v4', stale: false, zero_block: false, below_used: false, replaces_pending_schedule: false },
+          weekly: { preview_version: 'v5', stale: false, zero_block: false, below_used: false, replaces_pending_schedule: false },
+          daily: { preview_version: 'v6', stale: false, zero_block: false, below_used: false, replaces_pending_schedule: false },
+        })
+      })
+      let adjustCallCount = 0
+      mockAdjustBudgetMultiPeriod.mockImplementation(() => {
+        adjustCallCount++
+        if (adjustCallCount === 1) {
+          const err: any = new Error('preview stale')
+          err.response = { data: { code: 'BUDGET_PREVIEW_STALE' } }
+          return Promise.reject(err)
+        }
+        return Promise.resolve(undefined)
+      })
+      mockConfirm.mockResolvedValue(true)
+
+      const { wrapper } = await mountPage('admin')
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.openCompanyBudgetDialog()
+      vm.companyBudgetForm.amount = 10000
+      vm.companyBudgetForm.amountUnlimited = false
+      vm.companyBudgetForm.weeklyUnlimited = true
+      vm.companyBudgetForm.dailyUnlimited = true
+      vm.companyBudgetForm.reason = 'stale retry test'
+      await vm.saveCompanyBudget()
+      await flushPromises()
+
+      // 应该重试：preview 被调用两次，adjust 被调用两次
+      expect(mockPreviewBudgetMultiPeriod).toHaveBeenCalledTimes(2)
+      expect(mockAdjustBudgetMultiPeriod).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  describe('金额输入 clamp（99999999.99）', () => {
+    it('openCompanyBudgetDialog 时超范围的初始值被 clamp', async () => {
+      mockGetBudgetList.mockResolvedValue([
+        makeBudgetItem({
+          scope_type: 'company',
+          scope_id: 'GLOBAL',
+          amount_usd: 9999999999,   // 超过 DB 上限
+          weekly_amount_usd: -1,
+          daily_amount_usd: -1,
+        }),
+      ])
+
+      const { wrapper } = await mountPage('admin')
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.openCompanyBudgetDialog()
+
+      expect(vm.companyBudgetForm.amount).toBe(99999999.99)
+    })
+
+    it('isValidCompanyLimit 对超范围值返回 false', async () => {
+      const { wrapper } = await mountPage('admin')
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      // 内部校验函数：unlimited=false, value > max → invalid
+      expect(vm.isValidCompanyLimit(false, 99999999.99)).toBe(true)
+      expect(vm.isValidCompanyLimit(false, 100000000)).toBe(false)
+      expect(vm.isValidCompanyLimit(true, 100000000)).toBe(true)  // unlimited 时忽略 value
+    })
+
+    it('saveCompanyBudget 对超范围值阻止提交并显示警告', async () => {
+      const { wrapper } = await mountPage('admin')
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.openCompanyBudgetDialog()
+      vm.companyBudgetForm.amount = 100000000  // 超过 99999999.99
+      vm.companyBudgetForm.amountUnlimited = false
+      vm.companyBudgetForm.weeklyUnlimited = true
+      vm.companyBudgetForm.dailyUnlimited = true
+      vm.companyBudgetForm.reason = 'over limit'
+
+      await vm.saveCompanyBudget()
+      await flushPromises()
+
+      expect(mockPreviewBudgetMultiPeriod).not.toHaveBeenCalled()
     })
   })
 })

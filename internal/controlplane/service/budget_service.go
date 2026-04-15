@@ -318,6 +318,74 @@ func (s *BudgetService) AdjustBudget(
 	return impact, nil
 }
 
+// MultiPeriodAdjustmentInput 多周期批量调整输入，一次调用处理 monthly/weekly/daily。
+type MultiPeriodAdjustmentInput struct {
+	ScopeType     string
+	ScopeID       string
+	ActorID       uuid.UUID
+	Reason        string
+	EffectiveMode EffectiveMode
+	PreviewOnly   bool
+	// 各周期的目标额度，nil 表示本次不修改该周期。
+	Monthly *MultiPeriodItem
+	Weekly  *MultiPeriodItem
+	Daily   *MultiPeriodItem
+}
+
+// MultiPeriodItem 单个周期的调整参数。
+type MultiPeriodItem struct {
+	TargetLimitUSD budgetdomain.Amount
+	BudgetRiskConfirmation
+}
+
+// MultiPeriodAdjustmentResult 每个周期的 impact，nil 表示未修改。
+type MultiPeriodAdjustmentResult struct {
+	Monthly *BudgetAdjustmentImpact `json:"monthly,omitempty"`
+	Weekly  *BudgetAdjustmentImpact `json:"weekly,omitempty"`
+	Daily   *BudgetAdjustmentImpact `json:"daily,omitempty"`
+}
+
+// AdjustBudgetMultiPeriod 批量调整多个周期的预算额度。
+// preview_only=true 时返回所有周期的预览信息，不写库。
+// preview_only=false 时依次 apply，任意周期失败则立即返回错误（已成功的周期不回滚，
+// 因为 repo 层不支持跨周期事务；handler 层应在出错时提示用户重试）。
+func (s *BudgetService) AdjustBudgetMultiPeriod(
+	ctx context.Context,
+	input MultiPeriodAdjustmentInput,
+) (*MultiPeriodAdjustmentResult, error) {
+	result := &MultiPeriodAdjustmentResult{}
+	periods := []struct {
+		period budgetdomain.PeriodType
+		item   *MultiPeriodItem
+		out    **BudgetAdjustmentImpact
+	}{
+		{budgetdomain.PeriodMonthly, input.Monthly, &result.Monthly},
+		{budgetdomain.PeriodWeekly, input.Weekly, &result.Weekly},
+		{budgetdomain.PeriodDaily, input.Daily, &result.Daily},
+	}
+	for _, p := range periods {
+		if p.item == nil {
+			continue
+		}
+		impact, err := s.AdjustBudget(ctx, BudgetAdjustmentInput{
+			ScopeType:              input.ScopeType,
+			ScopeID:                input.ScopeID,
+			PeriodType:             p.period,
+			TargetLimitUSD:         p.item.TargetLimitUSD,
+			EffectiveMode:          input.EffectiveMode,
+			Reason:                 input.Reason,
+			ActorID:                input.ActorID,
+			PreviewOnly:            input.PreviewOnly,
+			BudgetRiskConfirmation: p.item.BudgetRiskConfirmation,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("period %s: %w", p.period, err)
+		}
+		*p.out = impact
+	}
+	return result, nil
+}
+
 // BudgetItem 预算展示项（含实时 used_usd 占位，网关侧从 Redis 读）。
 type BudgetItem struct {
 	AllocationID string `json:"allocation_id,omitempty"`

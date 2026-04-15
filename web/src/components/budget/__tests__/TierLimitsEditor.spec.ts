@@ -184,4 +184,35 @@ describe('TierLimitsEditor', () => {
     expect(zeroed.tiers.standard.monthly.value).toBe('0')
     expect(wrapper.emitted('dirty-change')).toContainEqual([true])
   })
+
+  it('停用等级的异常用量不会显示 NaN', () => {
+    const invalidUsages: BudgetTierUsage[] = [
+      ...usages,
+      {
+        allocation_id: 'allocation-1',
+        model_tier_id: 'economy',
+        period_type: 'monthly',
+        used_usd: 'not-a-number',
+        data_as_of: '2026-07-14T00:00:00Z',
+        stale: false,
+      },
+    ]
+    const invalidDraft: TierLimitsDraft = {
+      ...draft,
+      tiers: {
+        ...draft.tiers,
+        economy: {
+          ...draft.tiers.economy,
+          monthly: { enabled: false, configured: true, value: '' },
+        },
+      },
+    }
+    const wrapper = mount(TierLimitsEditor, {
+      props: { allocation, tiers, limits, usages: invalidUsages, modelValue: invalidDraft },
+      global: { plugins: [ElementPlus] },
+    })
+
+    expect(wrapper.text()).toContain('已停用')
+    expect(wrapper.text()).not.toContain('NaN')
+  })
 })

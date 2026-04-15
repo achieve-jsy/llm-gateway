@@ -259,10 +259,11 @@ function tierEntry(
   const limit = tierLimits.find(item => (
     item.model_tier_id === tier.id && item.period_type === period
   ))
+  const limitValue = limit?.limit_usd
   return {
     enabled: limit?.enabled ?? tier.enabled,
-    configured: Boolean(limit),
-    value: limit ? String(Number(limit.limit_usd)) : '',
+    configured: Boolean(limit) && Number.isFinite(Number(limitValue)),
+    value: Number.isFinite(Number(limitValue)) ? String(Number(limitValue)) : '',
   }
 }
 
@@ -355,7 +356,7 @@ async function save(): Promise<void> {
       await applyBudgetTierBatch({
         preview_token: tierPreview.preview_token,
         confirm_item_ids: tierPreview.items
-          .filter(item => item.zero_block || item.below_used)
+          .filter(item => item.status === 'valid')
           .map(item => item.item_id),
       })
     }
@@ -372,11 +373,16 @@ async function save(): Promise<void> {
 }
 
 function totalPayload(period: ExpansionPeriod) {
+  const rawValue = draft.value!.total[period].value
+  const numValue = Number(rawValue)
+  // 验证数值有效性，无效时使用空字符串表示未配置
+  const targetLimit = Number.isFinite(numValue) && rawValue !== '' ? numValue.toFixed(6) : ''
+
   return {
     scope_type: selectedAllocation.value!.scope_type,
     scope_id: selectedAllocation.value!.scope_id,
     period_type: period,
-    target_limit_usd: Number(draft.value!.total[period].value).toFixed(6),
+    target_limit_usd: targetLimit,
     effective_mode: draft.value!.effectiveMode,
     reason: draft.value!.reason.trim(),
   }
@@ -393,12 +399,20 @@ function collectChangedTierItems(current: TierLimitsDraft, original: TierLimitsD
     ) {
       return []
     }
+
+    // 验证数值有效性
+    const numValue = Number(next.value)
+    if (!Number.isFinite(numValue) || next.value === '') {
+      console.warn(`[BudgetEditDrawer] Invalid tier value for ${tier.id}/${period}:`, next.value)
+      return []
+    }
+
     return [{
       item_id: `${allocationId}:${tier.id}:${period}`,
       allocation_id: allocationId,
       model_tier_id: tier.id,
       period_type: period,
-      value: Number(next.value).toFixed(6),
+      value: numValue.toFixed(6),
     }]
   }))
 }

@@ -153,6 +153,7 @@
     <BudgetTierLimitsPanel
       v-if="activeAllocationId && !drillScopeType && auth.effectiveRole !== 'admin'"
       :allocation-id="activeAllocationId"
+      :key="`tier-panel-${activeAllocationId}-${loadGeneration}`"
     />
 
     <!-- KPI 条：非 admin 顶层（admin 使用原型对齐的 BudgetManageOverview） -->
@@ -1509,10 +1510,12 @@
           v-else
           v-model="companyBudgetForm.amount"
           :min="0"
+          :max="99999999.99"
           :precision="2"
           controls-position="right"
           style="width:100%"
           data-test="company-monthly-input"
+          @change="(val) => { if (val != null && val > 99999999.99) companyBudgetForm.amount = 99999999.99 }"
         />
         <div class="company-budget-hint">
           <template v-if="companyBudgetForm.amountUnlimited">不限制公司月度总消耗。</template>
@@ -1531,10 +1534,12 @@
           v-else
           v-model="companyBudgetForm.weekly"
           :min="0"
+          :max="99999999.99"
           :precision="2"
           controls-position="right"
           style="width:100%"
           data-test="company-weekly-input"
+          @change="(val) => { if (val != null && val > 99999999.99) companyBudgetForm.weekly = 99999999.99 }"
         />
         <div class="company-budget-hint">
           <el-button v-if="!companyBudgetForm.weeklyUnlimited" link type="primary" @click="setCompanyPeriodUnlimited('weekly')">设为不限</el-button>
@@ -1549,10 +1554,12 @@
           v-else
           v-model="companyBudgetForm.daily"
           :min="0"
+          :max="99999999.99"
           :precision="2"
           controls-position="right"
           style="width:100%"
           data-test="company-daily-input"
+          @change="(val) => { if (val != null && val > 99999999.99) companyBudgetForm.daily = 99999999.99 }"
         />
         <div class="company-budget-hint">
           <el-button v-if="!companyBudgetForm.dailyUnlimited" link type="primary" @click="setCompanyPeriodUnlimited('daily')">设为不限</el-button>
@@ -1639,6 +1646,7 @@
     :can-edit-self="budgetDrawerCanEditSelf"
     :initial-allocation="budgetDrawerInitialAllocation"
     @navigate="handleBudgetNavigate"
+    @saved="load"
   />
 
   <!-- ── 成员配额快速编辑弹窗（dept_admin 专用）── -->
@@ -1742,7 +1750,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { adjustBudget, getBudgetContext, getBudgetList, listModelTiers, previewBudgetAdjustment, rebuildBudgetCounters } from '@/services/control-plane'
+import { adjustBudget, adjustBudgetMultiPeriod, getBudgetContext, getBudgetList, listModelTiers, previewBudgetAdjustment, previewBudgetMultiPeriod, rebuildBudgetCounters } from '@/services/control-plane'
 import { getBudgetRiskSummary } from '@/services/control-plane'
 import http from '@/services/http'
 import { useAuthStore } from '@/stores/auth'
@@ -1887,6 +1895,7 @@ function clearDrilldown() {
 }
 const memberUsage7d = ref<Map<string, number>>(new Map())
 const tierBudgetItems = ref<TierBudgetItem[]>([])
+const loadGeneration = ref(0)
 // 表格选中状态
 const tableRef = ref<any>(null)
 const selectedRows = ref<BudgetItem[]>([])
@@ -2394,6 +2403,7 @@ async function load() {
     }
   } finally {
     loading.value = false
+    loadGeneration.value++
   }
 }
 
@@ -2583,10 +2593,12 @@ function openCompanyBudgetDialog() {
   const monthly = toCompanyPeriodState(item?.amount_usd)
   const weekly = toCompanyPeriodState(item?.weekly_amount_usd)
   const daily = toCompanyPeriodState(item?.daily_amount_usd)
+  // clamp 到 DB 最大值，防止 DB 脏数据或未来字段扩展导致超范围
+  const clampVal = (v: number) => Math.min(v, 99999999.99)
   companyBudgetForm.value = {
-    amount: monthly.value,
-    weekly: weekly.value,
-    daily: daily.value,
+    amount: clampVal(monthly.value),
+    weekly: clampVal(weekly.value),
+    daily: clampVal(daily.value),
     amountUnlimited: monthly.unlimited,
     weeklyUnlimited: weekly.unlimited,
     dailyUnlimited: daily.unlimited,
@@ -2626,7 +2638,7 @@ function companyPeriodValue(unlimited: boolean, value: number): number {
 
 function isValidCompanyLimit(unlimited: boolean, value: number): boolean {
   if (unlimited) return true
-  return Number.isFinite(value) && value >= 0
+  return Number.isFinite(value) && value >= 0 && value <= 99999999.99
 }
 
 async function saveCompanyBudget() {
@@ -2652,7 +2664,7 @@ async function saveCompanyBudget() {
     },
   ]
   if (periods.some(item => !isValidCompanyLimit(item.unlimited, item.value))) {
-    ElMessage.warning('额度必须 ≥ 0，或不限')
+    ElMessage.warning('额度必须在 0 ~ 99,999,999.99 范围内，或设为不限')
     return
   }
   if (companyHasUnlimited.value && companyBudgetForm.value.effectiveMode === 'next_period') {
@@ -2660,54 +2672,84 @@ async function saveCompanyBudget() {
     return
   }
 
-  const targets = periods.map(item => ({
-    period_type: item.period_type,
-    value: companyPeriodValue(item.unlimited, item.value),
-  }))
-
   companyBudgetSaving.value = true
   try {
-    const previews = await Promise.all(targets.map(item => previewBudgetAdjustment({
+    const buildPeriodPayload = (unlimited: boolean, value: number) => ({
+      target_limit_usd: unlimited ? '-1.000000' : Number(value).toFixed(6),
+    })
+
+    // 1. 多周期 preview（一次调用）
+    const previewResult = await previewBudgetMultiPeriod({
       scope_type: 'company',
       scope_id: 'GLOBAL',
-      period_type: item.period_type,
-      target_limit_usd: Number(item.value).toFixed(6),
-      effective_mode: companyBudgetForm.value.effectiveMode,
       reason: companyBudgetForm.value.reason.trim(),
-    })))
-    if (previews.some(item => item.stale)) {
-      ElMessage.warning('用量数据已过期，请刷新后重新预览')
+      effective_mode: companyBudgetForm.value.effectiveMode,
+      monthly: buildPeriodPayload(companyBudgetForm.value.amountUnlimited, companyBudgetForm.value.amount),
+      weekly: buildPeriodPayload(companyBudgetForm.value.weeklyUnlimited, companyBudgetForm.value.weekly),
+      daily: buildPeriodPayload(companyBudgetForm.value.dailyUnlimited, companyBudgetForm.value.daily),
+    })
+
+    const allPreviews = [previewResult.monthly, previewResult.weekly, previewResult.daily].filter(Boolean)
+
+    // 2. 风险确认（逻辑与原来一致）
+    if (allPreviews.some(p => p?.stale)) {
+      ElMessage.warning('用量数据已过期，请稍后重试')
       return
     }
-    if (previews.some(item => item.zero_block)) {
+    if (allPreviews.some(p => p?.zero_block)) {
       await ElMessageBox.confirm('$0 将阻断后续请求，是否继续？', '确认 $0 风险', { type: 'warning' })
     }
-    if (previews.some(item => item.below_used)) {
+    if (allPreviews.some(p => p?.below_used)) {
       await ElMessageBox.confirm('新额度低于当前已用量，是否继续？', '确认低于已用风险', { type: 'warning' })
     }
-    if (previews.some(item => item.replaces_pending_schedule)) {
+    if (allPreviews.some(p => p?.replaces_pending_schedule)) {
       await ElMessageBox.confirm('本次调整将替换已有排期，是否继续？', '确认替换排期', { type: 'warning' })
     }
-    if (!previews.some(item => item.zero_block || item.below_used || item.replaces_pending_schedule)) {
+    if (!allPreviews.some(p => p?.zero_block || p?.below_used || p?.replaces_pending_schedule)) {
       await ElMessageBox.confirm('预览完成，确认应用公司预算调整？', '确认预算调整', { type: 'info' })
     }
-    await Promise.all(targets.map((item, index) => adjustBudget({
+
+    // 3. 多周期 apply（一次调用）
+    await adjustBudgetMultiPeriod({
       scope_type: 'company',
       scope_id: 'GLOBAL',
-      period_type: item.period_type,
-      target_limit_usd: Number(item.value).toFixed(6),
-      effective_mode: companyBudgetForm.value.effectiveMode,
       reason: companyBudgetForm.value.reason.trim(),
-      confirm_zero_block: previews[index].zero_block,
-      confirm_below_used: previews[index].below_used,
-      confirm_replace_schedule: previews[index].replaces_pending_schedule,
-      preview_version: previews[index].preview_version,
-    })))
+      effective_mode: companyBudgetForm.value.effectiveMode,
+      monthly: {
+        ...buildPeriodPayload(companyBudgetForm.value.amountUnlimited, companyBudgetForm.value.amount),
+        preview_version: previewResult.monthly?.preview_version,
+        confirm_zero_block: previewResult.monthly?.zero_block,
+        confirm_below_used: previewResult.monthly?.below_used,
+        confirm_replace_schedule: previewResult.monthly?.replaces_pending_schedule,
+      },
+      weekly: {
+        ...buildPeriodPayload(companyBudgetForm.value.weeklyUnlimited, companyBudgetForm.value.weekly),
+        preview_version: previewResult.weekly?.preview_version,
+        confirm_zero_block: previewResult.weekly?.zero_block,
+        confirm_below_used: previewResult.weekly?.below_used,
+        confirm_replace_schedule: previewResult.weekly?.replaces_pending_schedule,
+      },
+      daily: {
+        ...buildPeriodPayload(companyBudgetForm.value.dailyUnlimited, companyBudgetForm.value.daily),
+        preview_version: previewResult.daily?.preview_version,
+        confirm_zero_block: previewResult.daily?.zero_block,
+        confirm_below_used: previewResult.daily?.below_used,
+        confirm_replace_schedule: previewResult.daily?.replaces_pending_schedule,
+      },
+    })
     ElMessage.success('公司预算池已更新')
     companyBudgetDialogVisible.value = false
     await load()
   } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败')
+    const code = e?.response?.data?.code || e?.code
+    if (code === 'BUDGET_PREVIEW_STALE') {
+      // preview_version 过期（用户在确认框停留太久），自动重试一次
+      ElMessage.warning('预览已过期，正在自动重试...')
+      companyBudgetSaving.value = false
+      await saveCompanyBudget()
+      return
+    }
+    ElMessage.error(e?.response?.data?.message || e?.message || '保存失败')
   } finally {
     companyBudgetSaving.value = false
   }

@@ -395,6 +395,147 @@ func (h *BudgetHandler) Set(c *gin.Context) {
 	})
 }
 
+// SetMultiPeriod PUT /api/v1/budgets/multi-period
+// 一次调用原子地设置月/周/日三个周期的预算额度。
+// 至少提供一个周期，preview_only=true 时仅返回预览不写库。
+func (h *BudgetHandler) SetMultiPeriod(c *gin.Context) {
+	h.rbac.BuildAndInjectActor(c)
+	actor := rbac.GetActor(c)
+	if !actor.IsManager() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "需要管理员权限"})
+		return
+	}
+
+	type periodReq struct {
+		TargetLimitUSD string `json:"target_limit_usd" binding:"required"`
+		service.BudgetRiskConfirmation
+	}
+	var req struct {
+		ScopeType     string     `json:"scope_type" binding:"required"`
+		ScopeID       string     `json:"scope_id" binding:"required"`
+		Reason        string     `json:"reason" binding:"required"`
+		EffectiveMode string     `json:"effective_mode"`
+		PreviewOnly   bool       `json:"preview_only"`
+		Monthly       *periodReq `json:"monthly"`
+		Weekly        *periodReq `json:"weekly"`
+		Daily         *periodReq `json:"daily"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.Monthly == nil && req.Weekly == nil && req.Daily == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "至少需要提供一个周期"})
+		return
+	}
+
+	// RBAC 数据范围校验（与 Set 保持一致）
+	if !actor.IsGlobal {
+		switch req.ScopeType {
+		case model.BudgetScopeDeptDaily, model.BudgetScopeDeptService:
+			if !actor.HasDept(req.ScopeID) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "无权设置该部门预算"})
+				return
+			}
+		case model.BudgetScopeStudio:
+			if !actor.HasStudio(req.ScopeID) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "无权设置该工作室预算"})
+				return
+			}
+		case model.BudgetScopeCompany:
+			c.JSON(http.StatusForbidden, gin.H{"error": "只有平台管理员可以设置公司层预算"})
+			return
+		case model.BudgetScopeMember:
+			ok, err := h.svc.MemberInDeptIDs(req.ScopeID, actor.DeptIDs)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			if !ok {
+				c.JSON(http.StatusForbidden, gin.H{"error": "无权设置该成员预算"})
+				return
+			}
+		}
+	}
+
+	parsePeriod := func(p *periodReq) (*service.MultiPeriodItem, error) {
+		if p == nil {
+			return nil, nil
+		}
+		amount, err := budgetdomain.ParseLimitAmount(p.TargetLimitUSD)
+		if err != nil {
+			return nil, err
+		}
+		return &service.MultiPeriodItem{
+			TargetLimitUSD:         amount,
+			BudgetRiskConfirmation: p.BudgetRiskConfirmation,
+		}, nil
+	}
+
+	monthly, err := parsePeriod(req.Monthly)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"code": CodeInvalidMoneyAmount, "message": "monthly: " + err.Error()})
+		return
+	}
+	weekly, err := parsePeriod(req.Weekly)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"code": CodeInvalidMoneyAmount, "message": "weekly: " + err.Error()})
+		return
+	}
+	daily, err := parsePeriod(req.Daily)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"code": CodeInvalidMoneyAmount, "message": "daily: " + err.Error()})
+		return
+	}
+
+	actorID, _ := uuid.Parse(c.GetString("user_id"))
+	effectiveMode := service.EffectiveMode(req.EffectiveMode)
+	if effectiveMode == "" {
+		effectiveMode = service.EffectiveImmediate
+	}
+
+	if req.PreviewOnly {
+		audit.SetActionOverride(c, audit.ActionBudgetAdjustPreview)
+	} else {
+		audit.SetActionOverride(c, audit.ActionBudgetAdjustApply)
+	}
+	audit.SetReason(c, req.Reason)
+
+	result, err := h.svc.AdjustBudgetMultiPeriod(c.Request.Context(), service.MultiPeriodAdjustmentInput{
+		ScopeType: req.ScopeType, ScopeID: req.ScopeID,
+		ActorID: actorID, Reason: req.Reason, EffectiveMode: effectiveMode,
+		PreviewOnly: req.PreviewOnly,
+		Monthly: monthly, Weekly: weekly, Daily: daily,
+	})
+	if err != nil {
+		// 解包 "period xxx: <原始错误>" 前缀后做错误码匹配
+		unwrapped := errors.Unwrap(err)
+		if unwrapped == nil {
+			unwrapped = err
+		}
+		switch {
+		case errors.Is(unwrapped, service.ErrBudgetPreviewStale):
+			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_PREVIEW_STALE", "message": err.Error(), "next_action": "preview"})
+		case errors.Is(unwrapped, service.ErrZeroBlockConfirmationRequired):
+			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_ZERO_BLOCK_CONFIRMATION_REQUIRED", "message": err.Error()})
+		case errors.Is(unwrapped, service.ErrBelowUsedConfirmationRequired):
+			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_LIMIT_BELOW_USED", "message": err.Error()})
+		case errors.Is(unwrapped, service.ErrBudgetUsageUnavailable):
+			c.JSON(http.StatusServiceUnavailable, gin.H{"code": "BUDGET_USAGE_UNAVAILABLE", "message": err.Error()})
+		case errors.Is(unwrapped, service.ErrBudgetReasonRequired):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"code": "BUDGET_REASON_REQUIRED", "message": err.Error()})
+		case errors.Is(unwrapped, service.ErrPendingScheduleExists):
+			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_PENDING_SCHEDULE_EXISTS", "message": err.Error()})
+		case errors.Is(unwrapped, service.ErrBudgetAllocationNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"code": "BUDGET_ALLOCATION_NOT_FOUND", "message": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
 // MyBudget GET /api/v1/my/budget
 // 员工查看自己的预算链（成员额度 + 部门 + 工作室 + 公司）。
 func (h *BudgetHandler) MyBudget(c *gin.Context) {

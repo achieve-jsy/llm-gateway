@@ -96,6 +96,20 @@ describe('BudgetTierLimitsPanel', () => {
       expect(wrapper.html()).toContain('不可使用')
     })
 
+    it('异常用量不会向标签传递 NaN usageRatio', async () => {
+      mockListBudgetTierLimits.mockResolvedValue([
+        makeTierLimit({ limit_usd: '100.000000', used_usd: 'not-a-number' }),
+      ])
+      const wrapper = mountPanel()
+      await flushPromises()
+
+      const tags = wrapper.findComponent({ name: 'TierBudgetTags' })
+      const items = tags.props('items') as Array<{ usageRatio?: number }>
+      expect(items[0].usageRatio).toBe(0)
+      expect(Number.isFinite(items[0].usageRatio)).toBe(true)
+      expect(wrapper.html()).not.toContain('NaN')
+    })
+
     it('空列表时显示未配置摘要', async () => {
       mockListBudgetTierLimits.mockResolvedValue([])
       const wrapper = mountPanel()

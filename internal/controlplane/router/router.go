@@ -786,6 +786,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		// 预算管理（管理面）
 		adminGroup.GET("/budgets", guard(rbac.PermBudgetViewScoped), budgetHandler.List)
 		adminGroup.PUT("/budgets", guard(rbac.PermBudgetSet), budgetHandler.Set)
+		adminGroup.PUT("/budgets/multi-period", guard(rbac.PermBudgetSet), budgetHandler.SetMultiPeriod)
 		adminGroup.PUT("/budgets/batch", guard(rbac.PermBudgetSet), budgetHandler.BatchSet)
 		adminGroup.POST("/budgets/batch/preview", guard(rbac.PermBudgetSet), budgetHandler.PreviewTotalBatch)
 		adminGroup.POST("/budgets/batch/apply", guard(rbac.PermBudgetSet), budgetHandler.ApplyTotalBatch)

@@ -1181,6 +1181,43 @@ export async function adjustBudget(payload: BudgetAdjustmentPayload): Promise<Bu
   return data.data
 }
 
+// ─── 多周期批量调整 ────────────────────────────────────────────────────────────
+
+export interface MultiPeriodPeriodPayload {
+  target_limit_usd: string
+  preview_version?: string
+  confirm_below_used?: boolean
+  confirm_zero_block?: boolean
+  confirm_replace_schedule?: boolean
+}
+
+export interface MultiPeriodAdjustPayload {
+  scope_type: string
+  scope_id: string
+  reason: string
+  effective_mode?: string
+  preview_only?: boolean
+  monthly?: MultiPeriodPeriodPayload | null
+  weekly?: MultiPeriodPeriodPayload | null
+  daily?: MultiPeriodPeriodPayload | null
+}
+
+export interface MultiPeriodAdjustResult {
+  monthly?: BudgetAdjustmentImpact | null
+  weekly?: BudgetAdjustmentImpact | null
+  daily?: BudgetAdjustmentImpact | null
+}
+
+export async function previewBudgetMultiPeriod(payload: MultiPeriodAdjustPayload): Promise<MultiPeriodAdjustResult> {
+  const { data } = await http.put<{ data: MultiPeriodAdjustResult }>('/api/v1/budgets/multi-period', { ...payload, preview_only: true })
+  return data.data
+}
+
+export async function adjustBudgetMultiPeriod(payload: MultiPeriodAdjustPayload): Promise<MultiPeriodAdjustResult> {
+  const { data } = await http.put<{ data: MultiPeriodAdjustResult }>('/api/v1/budgets/multi-period', payload)
+  return data.data
+}
+
 export interface TotalBudgetBatchPayload {
   operation: 'set_fixed' | 'adjust_percent'
   direction?: 'increase' | 'decrease'

@@ -14,7 +14,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { listBudgetTierLimits } from '@/services/control-plane'
 import type { BudgetTierLimit } from '@/types/model-tier'
 import type { TierBudgetTagItem } from '@/composables/useBudgetDisplay'
@@ -26,19 +26,21 @@ const rows = ref<BudgetTierLimit[]>([])
 const loading = ref(false)
 
 const tagItems = computed<TierBudgetTagItem[]>(() => rows.value.map(row => {
-  const ratio = Number(row.limit_usd) > 0
-    ? Number(row.used_usd ?? 0) / Number(row.limit_usd)
+  const usedAmount = Number(row.used_usd ?? 0)
+  const limitAmount = Number(row.limit_usd)
+  const ratio = Number.isFinite(usedAmount) && Number.isFinite(limitAmount) && limitAmount > 0
+    ? usedAmount / limitAmount
     : 0
   const state: TierBudgetTagItem['state'] = !row.enabled
     ? 'disabled'
-    : Number(row.limit_usd) === 0
+    : limitAmount === 0
       ? 'blocked'
       : ratio >= 0.8
         ? 'warning'
         : 'normal'
   const status = !row.enabled
     ? '已停用'
-    : Number(row.limit_usd) === 0
+    : limitAmount === 0
       ? '$0 · 不可使用'
       : formatBudgetUSD(row.limit_usd)
   return {
@@ -56,6 +58,10 @@ async function load() {
   try { rows.value = await listBudgetTierLimits(props.allocationId) } finally { loading.value = false }
 }
 const period = (value: string) => ({ daily: '日', weekly: '周', monthly: '月' }[value] || value)
+
+watch(() => props.allocationId, (newId) => { if (newId) load() })
+
+defineExpose({ refresh: load })
 onMounted(load)
 </script>
 

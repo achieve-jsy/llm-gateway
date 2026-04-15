@@ -360,11 +360,16 @@ function tierStatus(tier: ModelTier) {
   const usage = tierUsage(tier.id)
   const configuredLimit = tierLimit(tier.id)
   const limit = entry.configured ? entry.value : configuredLimit?.limit_usd
+  const usedAmount = Number(usage?.used_usd ?? 0)
+  const limitAmount = Number(limit)
+  const usageRatio = Number.isFinite(usedAmount) && Number.isFinite(limitAmount) && limitAmount > 0
+    ? usedAmount / limitAmount
+    : 0
   return getBudgetStatus({
     configured: entry.configured,
     enabled: tier.enabled && entry.enabled,
     limit,
-    usageRatio: Number(limit) > 0 ? Number(usage?.used_usd ?? 0) / Number(limit) : 0,
+    usageRatio,
     stale: usage?.stale,
   })
 }

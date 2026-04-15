@@ -190,7 +190,7 @@ describe('BudgetManagePage - KPI Cards', () => {
 
       const html = wrapper.html()
       expect(html).toContain('公司预算池')
-      expect(html).toContain('$10K') // 总额
+      expect(html).toContain('$10,000') // 总额
       expect(html).toContain('已下发')
       expect(html).toContain('余量')
     })
@@ -241,7 +241,7 @@ describe('BudgetManagePage - KPI Cards', () => {
 
       // 余量 = 10000 - 3000 = 7000
       expect(wrapper.html()).toContain('未下发余量')
-      expect(wrapper.html()).toContain('$7K')
+      expect(wrapper.html()).toContain('$7,000')
     })
 
     it('显示等级预算风险数量', async () => {
@@ -306,7 +306,7 @@ describe('BudgetManagePage - KPI Cards', () => {
 
       const html = wrapper.html()
       expect(html).toContain('工作室预算池')
-      expect(html).toContain('$5K')
+      expect(html).toContain('$5,000')
       expect(html).toContain('已下发')
       expect(html).toContain('余量')
     })
@@ -375,8 +375,8 @@ describe('BudgetManagePage - KPI Cards', () => {
       const html = wrapper.html()
       expect(html).toContain('部门日常池')
       expect(html).toContain('部门服务池')
-      expect(html).toContain('$2K') // 日常池
-      expect(html).toContain('$1K') // 服务池
+      expect(html).toContain('$2,000') // 日常池
+      expect(html).toContain('$1,000') // 服务池
     })
 
     it('日常池显示已用、剩余、进度条', async () => {
@@ -389,7 +389,7 @@ describe('BudgetManagePage - KPI Cards', () => {
       const html = wrapper.html()
       expect(html).toContain('已用')
       expect(html).toContain('剩余')
-      expect(html).toContain('$1.6K') // 日常池已用
+      expect(html).toContain('$1,600') // 日常池已用
       expect(html).toContain('$400') // 日常池剩余
     })
 
@@ -468,7 +468,7 @@ describe('BudgetManagePage - KPI Cards', () => {
       expect(wrapper.html()).toContain('不限')
     })
 
-    it('formatUSD: 金额显示紧凑格式（K/M）', async () => {
+    it('formatUSD: 金额显示紧凑格式', async () => {
       const companyPool = createCompanyPoolItem({ amount_usd: 10000 })
       mockGetBudgetList.mockResolvedValue([companyPool])
       mockGetBudgetContext.mockResolvedValue([
@@ -478,7 +478,7 @@ describe('BudgetManagePage - KPI Cards', () => {
       const wrapper = mountPage()
       await flushPromises()
 
-      expect(wrapper.html()).toContain('$10K')
+      expect(wrapper.html()).toContain('$10,000')
     })
 
     it('金额为 0 时正确显示 $0', async () => {
@@ -514,6 +514,8 @@ describe('BudgetManagePage - KPI Cards', () => {
     })
 
     it('used_ratio < 0.8: 绿色 (#36B34E)', async () => {
+      mockAuthStore.effectiveRole = 'dept_admin'
+      mockAuthStore.orgRoles = [{ role: 'dept_admin', scope_id: 'dept-1', scope_type: 'dept' }]
       const depts = [
         {
           ...createDeptItems()[0],
@@ -530,6 +532,8 @@ describe('BudgetManagePage - KPI Cards', () => {
     })
 
     it('0.8 <= used_ratio < 1: 黄色 (#e6a23c)', async () => {
+      mockAuthStore.effectiveRole = 'dept_admin'
+      mockAuthStore.orgRoles = [{ role: 'dept_admin', scope_id: 'dept-1', scope_type: 'dept' }]
       const depts = [
         {
           ...createDeptItems()[0],
@@ -546,6 +550,8 @@ describe('BudgetManagePage - KPI Cards', () => {
     })
 
     it('used_ratio >= 1: 红色 (#f56c6c)', async () => {
+      mockAuthStore.effectiveRole = 'dept_admin'
+      mockAuthStore.orgRoles = [{ role: 'dept_admin', scope_id: 'dept-1', scope_type: 'dept' }]
       const depts = [
         {
           ...createDeptItems()[0],
@@ -633,6 +639,8 @@ describe('BudgetManagePage - KPI Cards', () => {
 
   describe('状态文本', () => {
     it('ratio < 0.8: 显示"正常"', async () => {
+      mockAuthStore.effectiveRole = 'dept_admin'
+      mockAuthStore.orgRoles = [{ role: 'dept_admin', scope_id: 'dept-1', scope_type: 'dept' }]
       const depts = [
         {
           ...createDeptItems()[0],
@@ -648,6 +656,8 @@ describe('BudgetManagePage - KPI Cards', () => {
     })
 
     it('0.8 <= ratio < 1: 显示"预警"', async () => {
+      mockAuthStore.effectiveRole = 'dept_admin'
+      mockAuthStore.orgRoles = [{ role: 'dept_admin', scope_id: 'dept-1', scope_type: 'dept' }]
       const depts = [
         {
           ...createDeptItems()[0],
@@ -663,6 +673,8 @@ describe('BudgetManagePage - KPI Cards', () => {
     })
 
     it('ratio >= 1: 显示"已超额"', async () => {
+      mockAuthStore.effectiveRole = 'dept_admin'
+      mockAuthStore.orgRoles = [{ role: 'dept_admin', scope_id: 'dept-1', scope_type: 'dept' }]
       const depts = [
         {
           ...createDeptItems()[0],

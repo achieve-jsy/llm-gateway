@@ -2,52 +2,124 @@
   <div class="budget-overview">
     <header class="overview-header">
       <div>
-        <h1>预算总览</h1>
-        <p v-if="auth.effectiveRole === 'admin'">查看全公司各工作室预算风险与消耗；点击「调整」可直接在当前页面配置预算。</p>
-        <p v-else-if="auth.effectiveRole === 'studio_admin'">查看工作室下各部门预算状态；点击「调整」可直接在当前页面配置预算。</p>
-        <p v-else>查看本部门预算与成员用量风险，可直接调整成员配额。</p>
+        <h1 v-if="!drillScopeType">预算总览</h1>
+        <h1 v-else>{{ drillLabel || drillScopeId }}预算</h1>
+        <p v-if="auth.effectiveRole === 'admin' && !drillScopeType">查看全公司各工作室预算风险与消耗；点击「调整」可直接在当前页面配置预算。</p>
+        <p v-else-if="auth.effectiveRole === 'studio_admin' && !drillScopeType">查看工作室下各部门预算状态；点击「调整」可直接在当前页面配置预算。</p>
+        <p v-else-if="auth.effectiveRole === 'dept_admin' && !drillScopeType">查看本部门预算与成员用量风险，可直接调整成员配额。</p>
+        <p v-else-if="drillScopeType === 'studio'">查看工作室预算及下属部门分配情况。</p>
+        <p v-else-if="drillScopeType === 'dept'">查看部门预算及成员配额情况。</p>
+        <p v-else-if="drillScopeType === 'member'">查看成员独立额度及等级预算限制。</p>
       </div>
       <div class="header-actions">
         <el-button :loading="loading" @click="load">刷新</el-button>
-        <el-button v-if="auth.effectiveRole === 'admin'" type="primary" @click="router.push('/admin/org')">
+        <el-button v-if="drillScopeType" @click="clearDrilldown">返回预算首页</el-button>
+        <el-button v-if="auth.effectiveRole === 'admin' && !drillScopeType" type="primary" @click="router.push('/admin/org')">
           进入组织治理
         </el-button>
+        <el-button v-else-if="drillScopeType" type="primary" @click="openBudgetDrawer({ scope_type: drillScopeType, scope_id: drillScopeId, label: drillLabel || drillScopeId })">配置当前预算</el-button>
         <el-button v-else type="primary" @click="goOrg()">
           {{ isDeptAdmin ? '配置部门预算' : '配置工作室预算' }}
         </el-button>
     </div>
     </header>
-    <nav v-if="drillScopeType" class="budget-breadcrumbs" aria-label="预算层级导航">
-      <button type="button" @click="clearDrilldown">预算总览</button>
-      <template v-for="(crumb, index) in drillBreadcrumbs" :key="`${crumb.scopeType}:${crumb.scopeId}`">
-        <span aria-hidden="true">/</span>
-        <span v-if="index === drillBreadcrumbs.length - 1">{{ crumb.label }}</span>
-        <button v-else type="button" @click="navigateBreadcrumb(crumb)">{{ crumb.label }}</button>
-      </template>
-    </nav>
-
     <el-tabs v-model="activeBudgetTab" aria-label="预算管理视图">
       <el-tab-pane label="预算总览" name="overview" />
       <el-tab-pane name="risks">
         <template #label>风险事件 <el-badge v-if="riskCount" :value="riskCount" /></template>
       </el-tab-pane>
     </el-tabs>
+    <nav v-if="drillScopeType" class="scope-path" aria-label="预算层级导航">
+      <button type="button" @click="clearDrilldown">预算总览</button>
+      <template v-for="(crumb, index) in drillBreadcrumbs" :key="`${crumb.scopeType}:${crumb.scopeId}`">
+        <span aria-hidden="true">›</span>
+        <span v-if="index === drillBreadcrumbs.length - 1" class="current">{{ crumb.label }}</span>
+        <button v-else type="button" @click="navigateBreadcrumb(crumb)">{{ crumb.label }}</button>
+      </template>
+    </nav>
     <BudgetRiskEventsSection v-if="activeBudgetTab === 'risks'" @view-budget="showRiskBudget" />
-    <section v-if="activeBudgetTab === 'overview' && drillScopeType === 'member'" class="member-terminal-view">
-      <h2>{{ selectedMemberItem?.label || drillLabel || drillScopeId }}</h2>
-      <el-descriptions :column="3" border>
-        <el-descriptions-item label="月额度">{{ displayAmount(selectedMemberItem?.amount_usd ?? -1) }}</el-descriptions-item>
-        <el-descriptions-item label="周额度">{{ displayAmount(selectedMemberItem?.weekly_amount_usd ?? -1) }}</el-descriptions-item>
-        <el-descriptions-item label="日额度">{{ displayAmount(selectedMemberItem?.daily_amount_usd ?? -1) }}</el-descriptions-item>
-        <el-descriptions-item label="已用">{{ formatUSD(selectedMemberItem?.used_usd || 0) }}</el-descriptions-item>
-      </el-descriptions>
-      <el-button v-if="selectedMemberItem" type="primary" @click="openMemberQuota(selectedMemberItem)">调整成员额度</el-button>
+    <section v-if="activeBudgetTab === 'overview' && drillScopeType === 'member'" class="scope-stage-member">
+      <!-- 汇总卡片 -->
+      <div class="summary" v-if="selectedMemberItem">
+        <div>
+          <div class="summary-eye">成员独立额度</div>
+          <div class="summary-name">{{ selectedMemberItem.label || drillLabel || drillScopeId }}</div>
+          <div class="summary-meta">独立额度仍受公司、工作室和部门上级预算共同约束。</div>
+        </div>
+        <div class="summary-amount">
+          <strong>{{ formatUSD(selectedMemberItem.used_usd || 0) }}</strong>
+          <span> / {{ displayAmount(selectedMemberItem.amount_usd) }}</span>
+          <el-progress
+            :percentage="Math.min(Math.round((selectedMemberItem.used_ratio || 0) * 100), 100)"
+            :stroke-width="5"
+            :color="riskColor(selectedMemberItem.used_ratio || 0)"
+            :show-text="false"
+            style="width:220px;margin-top:8px"
+          />
+        </div>
+      </div>
+
+      <!-- 个人预算限制面板 -->
+      <div class="panel" style="margin-top:16px">
+        <div class="panel-head">
+          <div>
+            <h3>个人预算限制</h3>
+            <p>总预算与等级子预算均为月度硬限制。</p>
+          </div>
+          <el-button v-if="selectedMemberItem" type="primary" @click="openMemberQuota(selectedMemberItem)">编辑配置</el-button>
+        </div>
+        <el-table :data="memberTierRows" size="small" stripe>
+          <el-table-column label="限制项" min-width="160">
+            <template #default="{ row }">
+              <span v-if="row.isTotal" style="font-weight:700">总预算</span>
+              <span v-else class="tier-limit-name">
+                <span class="tier-dot" :style="{ background: row.color }" />
+                {{ row.name }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="额度" width="120" align="right">
+            <template #default="{ row }">
+              <span v-if="row.limit === null" class="muted">未配置</span>
+              <span v-else>{{ formatUSD(row.limit, { compact: true }) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="已使用" width="120" align="right">
+            <template #default="{ row }">
+              <span>{{ formatUSD(row.used, { compact: true }) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="使用率" min-width="140">
+            <template #default="{ row }">
+              <template v-if="row.limit !== null && row.limit > 0">
+                <el-progress
+                  :percentage="Math.min(Math.round(row.ratio * 100), 100)"
+                  :stroke-width="5"
+                  :color="riskColor(row.ratio)"
+                />
+              </template>
+              <span v-else-if="row.limit === null" class="muted">仅受总预算</span>
+              <span v-else class="muted">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="90" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="row.limit === null" type="info" size="small">无限制</el-tag>
+              <el-tag v-else-if="row.limit === 0" type="danger" size="small">已禁用</el-tag>
+              <el-tag v-else :type="row.ratio >= 1 ? 'danger' : row.ratio >= 0.8 ? 'warning' : 'success'" size="small">
+                {{ row.ratio >= 1 ? '已超额' : row.ratio >= 0.8 ? '预警' : '正常' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
     </section>
     <div v-show="activeBudgetTab === 'overview' && drillScopeType !== 'member'">
-    <BudgetTierLimitsPanel v-if="activeAllocationId && drillScopeType" :allocation-id="activeAllocationId" />
+    <BudgetTierLimitsPanel v-if="activeAllocationId && !drillScopeType" :allocation-id="activeAllocationId" />
 
-    <!-- KPI 条：角色自适应列数 -->
+    <!-- KPI 条：仅在顶层（非下钻）显示 -->
     <section
+      v-if="!drillScopeType"
       class="kpi-strip"
       :class="{
         'kpi-5': (isDeptAdmin && managedDeptIds.length <= 1) || overviewView === 'studio' || overviewView === 'company',
@@ -305,11 +377,273 @@
     </section>
 
     <!-- ══════════════════════════════════════════════
-         admin / studio_admin：双栏布局
+         studio / dept 下钻：单栏布局（与 overview-grid 平级）
          ══════════════════════════════════════════════ -->
-    <section v-if="!isDeptAdmin" class="overview-grid">
+    <section v-if="!isDeptAdmin && drillScopeType === 'studio'" class="scope-stage-single">
+      <div class="summary">
+        <div>
+          <div class="summary-eye">工作室预算</div>
+          <div class="summary-name">{{ drillLabel || drillScopeId }}</div>
+          <div class="summary-meta">下级部门额度总和不可超过工作室月额度。</div>
+        </div>
+        <div class="summary-amount">
+          <strong>{{ formatUSD(studioPoolItem?.used_usd || 0) }}</strong>
+          <span> / {{ displayAmount(studioPoolItem?.amount_usd ?? 0) }}</span>
+          <el-progress
+            :percentage="Math.min(Math.round((studioPoolItem?.used_ratio || 0) * 100), 100)"
+            :stroke-width="5"
+            :color="riskColor(studioPoolItem?.used_ratio || 0)"
+            :show-text="false"
+            style="width:220px;margin-top:8px"
+          />
+        </div>
+      </div>
+
+      <div class="permission-banner">
+        <span class="role-badge">平台管理员</span>
+        <strong>当前拥有全部预算配置权限</strong>
+        <span>可调整当前层级，并继续向下分配。</span>
+        <span class="grow" />
+        <button type="button" class="link" @click="toggleEmptyPreview">预览空状态</button>
+      </div>
+
+      <div class="scope-toolbar">
+        <div>
+          <strong>部门预算分配</strong>
+          <div class="page-sub">日常预算与程序服务预算互不占用。</div>
+        </div>
+        <div class="actions">
+          <el-button size="small" :disabled="studioDeptSelected.length === 0" @click="openBatchWizard">批量调整</el-button>
+          <el-button size="small" type="primary">新增部门预算</el-button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="pool-tabs">
+          <span class="pool-tab active">成员日常预算</span>
+          <span class="pool-tab">程序服务预算</span>
+        </div>
+
+        <el-table
+          ref="studioDeptTableRef"
+          v-loading="loading"
+          :data="studioDeptRowsFiltered"
+          stripe
+          size="small"
+          :row-class-name="deptRowClassName"
+          @selection-change="onStudioDeptSelectionChange"
+        >
+          <el-table-column type="selection" width="42" />
+          <el-table-column label="部门" min-width="120">
+            <template #default="{ row }"><strong>{{ row.label || row.deptId }}</strong></template>
+          </el-table-column>
+          <el-table-column label="月额度" min-width="100" align="right">
+            <template #default="{ row }">
+              <span class="mono">{{ displayAmount(row.daily?.amount_usd ?? row.service?.amount_usd ?? 0) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="周额度" min-width="90" align="right">
+            <template #default="{ row }">
+              <span v-if="row.daily?.weekly_amount_usd > 0" class="mono">{{ displayAmount(row.daily.weekly_amount_usd) }}</span>
+              <span v-else class="muted">不限</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="日额度" min-width="90" align="right">
+            <template #default="{ row }">
+              <span v-if="row.daily?.daily_amount_usd > 0" class="mono">{{ displayAmount(row.daily.daily_amount_usd) }}</span>
+              <span v-else class="muted">不限</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="使用率" min-width="150">
+            <template #default="{ row }">
+              <div class="usage-cell">
+                <span class="mono">{{ formatUSD(row.daily?.used_usd || 0, { compact: true }) }} / {{ displayAmount(row.daily?.amount_usd ?? 0) }}</span>
+                <el-progress
+                  :percentage="Math.min(Math.round((row.daily?.used_ratio || 0) * 100), 100)"
+                  :stroke-width="4"
+                  :color="riskColor(row.daily?.used_ratio || 0)"
+                  :show-text="false"
+                />
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="等级预算" min-width="130">
+            <template #default="{ row }">
+              <div class="tier-budget-cell">
+                <template v-if="tierBudgetByScope.has(row.deptId)">
+                  <div v-for="t in tierBudgetByScope.get(row.deptId)!" :key="t.tier_name" class="tier-budget-tag">
+                    <span class="tier-name">{{ t.tier_name }}</span>
+                    <span :class="budgetColorLevel(t.used_ratio || 0)">{{ Math.round((t.used_ratio || 0) * 100) }}%</span>
+                  </div>
+                </template>
+                <span v-else class="muted">未配置子预算</span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="180" align="center">
+            <template #default="{ row }">
+              <el-button size="small" type="primary" plain @click="navigateToDeptMembers(row)">查看预算</el-button>
+              <el-button size="small" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: row.deptId, label: row.label })">配置</el-button>
+            </template>
+          </el-table-column>
+          <template #empty>
+            <div class="empty-guide">
+              <div class="empty-guide-icon">📋</div>
+              <div class="empty-guide-text">
+                <strong>暂无部门预算数据</strong>
+                <span>先配置工作室预算，再为各部门分配额度。</span>
+              </div>
+            </div>
+          </template>
+        </el-table>
+
+        <div v-if="studioDeptSelected.length > 0" class="selection-bar show">
+          <strong>已选择 {{ studioDeptSelected.length }} 项</strong>
+          <span>当前剩余可分配 {{ formatUSD(studioUnallocated, { compact: true }) }}</span>
+          <span class="grow" />
+          <el-button size="small" plain @click="openBatchWizard">固定额度</el-button>
+          <el-button size="small" plain @click="openBatchWizard">按比例增减</el-button>
+          <el-button size="small" plain @click="openBatchWizard">等级子预算</el-button>
+          <el-button size="small" @click="clearStudioDeptSelection">取消选择</el-button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════════════════════════════════════════════
+         dept 下钻：单栏布局（admin / studio_admin 下钻到部门）
+         ══════════════════════════════════════════════ -->
+    <section v-if="!isDeptAdmin && drillScopeType === 'dept'" class="scope-stage-single">
+      <div class="summary">
+        <div>
+          <div class="summary-eye">部门预算</div>
+          <div class="summary-name">{{ drillLabel || drillScopeId }}</div>
+          <div class="summary-meta">成员默认共享日常预算池；仅特殊成员设置独立额度。</div>
+        </div>
+        <div class="summary-amount">
+          <strong>{{ formatUSD(deptDailyKpi.used + deptServiceKpi.used) }}</strong>
+          <span> / {{ displayAmount(deptDailyKpi.amount + deptServiceKpi.amount) }}</span>
+          <el-progress
+            :percentage="Math.min(Math.round(Math.max(deptDailyKpi.ratio, deptServiceKpi.ratio) * 100), 100)"
+            :stroke-width="5"
+            :color="riskColor(Math.max(deptDailyKpi.ratio, deptServiceKpi.ratio))"
+            :show-text="false"
+            style="width:220px;margin-top:8px"
+          />
+        </div>
+      </div>
+
+      <div class="pool-grid">
+        <div class="pool">
+          <div class="pool-head">
+            <div>
+              <div class="pool-title">成员日常预算池</div>
+              <div class="pool-sub">个人 Key 默认共享</div>
+            </div>
+            <el-tag :type="budgetColorLevel(deptDailyKpi.ratio)" size="small">{{ statusText(deptDailyKpi.ratio) }}</el-tag>
+          </div>
+          <div class="pool-amount-big">
+            {{ displayAmount(deptDailyKpi.amount) }}
+            <small>{{ formatUSD(deptDailyKpi.used, { compact: true }) }} / {{ displayAmount(deptDailyKpi.amount) }}</small>
+          </div>
+          <el-progress :percentage="Math.min(Math.round(deptDailyKpi.ratio * 100), 100)" :stroke-width="5" :color="riskColor(deptDailyKpi.ratio)" :show-text="false" />
+          <div style="margin-top:10px">
+            <button type="button" class="link" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: drillScopeId, label: drillLabel || drillScopeId })">调整额度与等级限制</button>
+          </div>
+        </div>
+        <div class="pool">
+          <div class="pool-head">
+            <div>
+              <div class="pool-title">程序服务预算池</div>
+              <div class="pool-sub">Service Key 使用</div>
+            </div>
+            <el-tag :type="budgetColorLevel(deptServiceKpi.ratio)" size="small">{{ statusText(deptServiceKpi.ratio) }}</el-tag>
+          </div>
+          <div class="pool-amount-big">
+            {{ displayAmount(deptServiceKpi.amount) }}
+            <small>{{ formatUSD(deptServiceKpi.used, { compact: true }) }} / {{ displayAmount(deptServiceKpi.amount) }}</small>
+          </div>
+          <el-progress :percentage="Math.min(Math.round(deptServiceKpi.ratio * 100), 100)" :stroke-width="5" :color="riskColor(deptServiceKpi.ratio)" :show-text="false" />
+          <div style="margin-top:10px">
+            <button type="button" class="link" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: drillScopeId, label: drillLabel || drillScopeId })">调整额度与等级限制</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="scope-toolbar">
+        <div>
+          <strong>成员配额</strong>
+          <div class="page-sub">按近7天消耗降序 · {{ enrichedMembers.length }} 人</div>
+        </div>
+        <div class="actions">
+          <el-button size="small" :disabled="selectedBatchBudgets.length === 0" @click="batchWizardVisible = true">
+            批量调整{{ selectedBatchBudgets.length ? `（${selectedBatchBudgets.length}）` : '' }}
+          </el-button>
+          <el-button size="small" type="primary" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: drillScopeId, label: drillLabel || drillScopeId })">配置配额</el-button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <el-table
+          v-loading="loading"
+          :data="enrichedMembers"
+          :row-class-name="memberRiskRowClass"
+          stripe
+          size="small"
+          empty-text="暂无成员配额数据，请先配置部门预算"
+          @selection-change="selectedBatchBudgets = $event"
+        >
+          <el-table-column type="selection" width="46" :selectable="(row: BudgetItem) => !!row.allocation_id" />
+          <el-table-column label="成员" min-width="160">
+            <template #default="{ row }">
+              <div class="scope-cell">
+                <span class="risk-indicator" :class="`risk-${row.riskLevel}`" />
+                <span class="scope-name">{{ row.label || row.scope_id }}</span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="月额度" width="100" align="right">
+            <template #default="{ row }"><span class="tabular">{{ displayAmount(row.amount_usd) }}</span></template>
+          </el-table-column>
+          <el-table-column label="已用/使用率" min-width="160">
+            <template #default="{ row }">
+              <div class="usage-cell">
+                <span>{{ formatUSD(row.used_usd || 0, { compact: true }) }} / {{ displayAmount(row.amount_usd) }}</span>
+                <el-progress :percentage="Math.min(Math.round((row.used_ratio || 0) * 100), 100)" :stroke-width="5" :color="riskColor(row.used_ratio || 0)" />
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="等级预算" min-width="130">
+            <template #default="{ row }">
+              <div class="tier-budget-cell">
+                <template v-if="tierBudgetByScope.has(row.scope_id)">
+                  <div v-for="t in tierBudgetByScope.get(row.scope_id)!" :key="t.tier_name" class="tier-budget-tag">
+                    <span class="tier-name">{{ t.tier_name }}</span>
+                    <span :class="budgetColorLevel(t.used_ratio || 0)">{{ Math.round((t.used_ratio || 0) * 100) }}%</span>
+                  </div>
+                </template>
+                <span v-else class="muted">未配置</span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="预算来源" width="100" align="center">
+            <template #default><span class="muted">部门分配</span></template>
+          </el-table-column>
+          <el-table-column label="操作" width="160" align="center">
+            <template #default="{ row }">
+              <el-button size="small" plain @click="openMemberDetail(row)">预算详情</el-button>
+              <el-button size="small" type="primary" plain @click="openMemberQuota(row)">调整配额</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </section>
+
+    <!-- ══════════════════════════════════════════════
+         admin / studio_admin：双栏布局（仅顶层，非下钻）
+         ══════════════════════════════════════════════ -->
+    <section v-if="!isDeptAdmin && !drillScopeType" class="overview-grid">
       <div class="panel panel-main">
-        <div class="panel-head">
+        <div v-if="drillScopeType !== 'dept'" class="panel-head">
           <div>
             <h2>{{ tableTitle }}</h2>
             <p>{{ tableDesc }}</p>
@@ -395,7 +729,7 @@
           </el-table-column>
           <el-table-column label="操作" width="170" align="center">
             <template #default="{ row }">
-              <el-button size="small" type="primary" plain @click="openStudioDrawer(row)">查看部门</el-button>
+              <el-button size="small" type="primary" plain @click="drillTo('studio', row.scope_id, row.label)">查看部门</el-button>
               <el-button size="small" @click="openBudgetDrawer({ scope_type: 'studio', scope_id: row.scope_id, label: row.label })">配置</el-button>
             </template>
           </el-table-column>
@@ -426,16 +760,56 @@
           </div>
         </div>
 
-        <!-- studio_admin 视图：按部门分组，每行含日常 + 服务池 -->
-        <div v-if="overviewView === 'studio'" class="permission-banner margin-banner">
-          <span class="role-badge" style="background:var(--el-color-primary-light-8);color:var(--el-color-primary);font-size:10px;height:20px;padding:0 7px;border-radius:10px;display:inline-flex;align-items:center;flex-shrink:0">
-            平台管理员
-          </span>
+        <!-- studio_admin 视图：下钻到工作室 → 部门表格 -->
+        <!-- 汇总卡片 -->
+        <div v-if="overviewView === 'studio' && drillScopeType === 'studio'" class="summary">
+          <div>
+            <div class="summary-eye">工作室预算</div>
+            <div class="summary-name">{{ drillLabel || drillScopeId }}</div>
+            <div class="summary-meta">下级部门额度总和不可超过工作室月额度。</div>
+          </div>
+          <div class="summary-amount">
+            <strong>{{ formatUSD(studioPoolItem?.used_usd || 0) }}</strong>
+            <span> / {{ displayAmount(studioPoolItem?.amount_usd ?? 0) }}</span>
+            <el-progress
+              :percentage="Math.min(Math.round((studioPoolItem?.used_ratio || 0) * 100), 100)"
+              :stroke-width="5"
+              :color="riskColor(studioPoolItem?.used_ratio || 0)"
+              :show-text="false"
+              style="width:220px;margin-top:8px"
+            />
+          </div>
+        </div>
+
+        <!-- 权限横幅 -->
+        <div v-if="overviewView === 'studio' && drillScopeType === 'studio'" class="permission-banner" style="margin:0 0 14px">
+          <span class="role-badge">平台管理员</span>
           <strong>当前拥有全部预算配置权限</strong>
           <span>可调整当前层级，并继续向下分配。</span>
+          <span class="grow" />
+          <button type="button" class="link" @click="toggleEmptyPreview">预览空状态</button>
         </div>
+
+        <!-- 工具栏 -->
+        <div v-if="overviewView === 'studio' && drillScopeType === 'studio'" class="scope-toolbar">
+          <div>
+            <strong>部门预算分配</strong>
+            <div class="page-sub">日常预算与程序服务预算互不占用。</div>
+          </div>
+          <div class="actions">
+            <el-button size="small" :disabled="studioDeptSelected.length === 0" @click="openBatchWizard">批量调整</el-button>
+            <el-button size="small" type="primary">新增部门预算</el-button>
+          </div>
+        </div>
+
+        <!-- Pool tabs -->
+        <div v-if="overviewView === 'studio' && drillScopeType === 'studio'" class="pool-tabs">
+          <span class="pool-tab active">成员日常预算</span>
+          <span class="pool-tab">程序服务预算</span>
+        </div>
+
         <el-table
-          v-if="overviewView === 'studio'"
+          v-if="overviewView === 'studio' && drillScopeType !== 'dept'"
           ref="studioDeptTableRef"
           v-loading="loading"
           :data="studioDeptRowsFiltered"
@@ -446,78 +820,74 @@
         >
           <el-table-column type="selection" width="42" />
 
-          <!-- 部门名 + 整体状态 -->
-          <el-table-column label="部门" min-width="160">
+          <!-- 部门名 -->
+          <el-table-column label="部门" min-width="120">
             <template #default="{ row }">
-              <div class="scope-cell">
-                <span class="risk-indicator" :class="`risk-${budgetColorLevel(row.maxRatio)}`" />
-                <span class="scope-name">{{ row.label || row.deptId }}</span>
+              <strong>{{ row.label || row.deptId }}</strong>
+            </template>
+          </el-table-column>
+
+          <!-- 月额度 -->
+          <el-table-column label="月额度" min-width="100" align="right">
+            <template #default="{ row }">
+              <span class="mono">{{ displayAmount(row.daily?.amount_usd ?? row.service?.amount_usd ?? 0) }}</span>
+            </template>
+          </el-table-column>
+
+          <!-- 周额度 -->
+          <el-table-column label="周额度" min-width="90" align="right">
+            <template #default="{ row }">
+              <span v-if="row.daily?.weekly_amount_usd > 0" class="mono">{{ displayAmount(row.daily.weekly_amount_usd) }}</span>
+              <span v-else class="muted">不限</span>
+            </template>
+          </el-table-column>
+
+          <!-- 日额度 -->
+          <el-table-column label="日额度" min-width="90" align="right">
+            <template #default="{ row }">
+              <span v-if="row.daily?.daily_amount_usd > 0" class="mono">{{ displayAmount(row.daily.daily_amount_usd) }}</span>
+              <span v-else class="muted">不限</span>
+            </template>
+          </el-table-column>
+
+          <!-- 使用率 -->
+          <el-table-column label="使用率" min-width="150">
+            <template #default="{ row }">
+              <div class="usage-cell">
+                <span class="mono">{{ formatUSD(row.daily?.used_usd || 0, { compact: true }) }} / {{ displayAmount(row.daily?.amount_usd ?? 0) }}</span>
+                <el-progress
+                  :percentage="Math.min(Math.round((row.daily?.used_ratio || 0) * 100), 100)"
+                  :stroke-width="4"
+                  :color="riskColor(row.daily?.used_ratio || 0)"
+                  :show-text="false"
+                />
               </div>
             </template>
           </el-table-column>
 
-          <!-- 日常预算池 -->
-          <el-table-column label="日常预算" min-width="180">
+          <!-- 等级预算 -->
+          <el-table-column label="等级预算" min-width="130">
             <template #default="{ row }">
-              <template v-if="row.daily">
-                <div class="pool-inline-cell">
-                  <div class="pool-inline-usage">
-                    <span>{{ formatUSD(row.daily.used_usd || 0, { compact: true }) }}</span>
-                    <span class="muted">/</span>
-                    <span>{{ displayAmount(row.daily.amount_usd) }}</span>
-                    <el-tag :type="budgetColorLevel(row.daily.used_ratio || 0)" size="small" style="margin-left:4px">
-                      {{ statusText(row.daily.used_ratio || 0) }}
-                    </el-tag>
+              <div class="tier-budget-cell">
+                <template v-if="tierBudgetByScope.has(row.deptId)">
+                  <div
+                    v-for="t in tierBudgetByScope.get(row.deptId)!"
+                    :key="t.tier_name"
+                    class="tier-budget-tag"
+                  >
+                    <span class="tier-name">{{ t.tier_name }}</span>
+                    <span :class="budgetColorLevel(t.used_ratio || 0)">{{ Math.round((t.used_ratio || 0) * 100) }}%</span>
                   </div>
-                  <el-progress
-                    :percentage="Math.min(Math.round((row.daily.used_ratio || 0) * 100), 100)"
-                    :stroke-width="4"
-                    :color="riskColor(row.daily.used_ratio || 0)"
-                    :show-text="false"
-                    style="margin-top:4px"
-                  />
-                  <div class="pool-inline-limits">
-                    日 {{ displayAmount(row.daily.daily_amount_usd) }} · 周 {{ displayAmount(row.daily.weekly_amount_usd) }}
-                  </div>
-                </div>
-              </template>
-              <span v-else class="muted">未配置</span>
-            </template>
-          </el-table-column>
-
-          <!-- 服务预算池 -->
-          <el-table-column label="服务预算" min-width="180">
-            <template #default="{ row }">
-              <template v-if="row.service">
-                <div class="pool-inline-cell">
-                  <div class="pool-inline-usage">
-                    <span>{{ formatUSD(row.service.used_usd || 0, { compact: true }) }}</span>
-                    <span class="muted">/</span>
-                    <span>{{ displayAmount(row.service.amount_usd) }}</span>
-                    <el-tag :type="budgetColorLevel(row.service.used_ratio || 0)" size="small" style="margin-left:4px">
-                      {{ statusText(row.service.used_ratio || 0) }}
-                    </el-tag>
-                  </div>
-                  <el-progress
-                    :percentage="Math.min(Math.round((row.service.used_ratio || 0) * 100), 100)"
-                    :stroke-width="4"
-                    :color="riskColor(row.service.used_ratio || 0)"
-                    :show-text="false"
-                    style="margin-top:4px"
-                  />
-                  <div class="pool-inline-limits">
-                    日 {{ displayAmount(row.service.daily_amount_usd) }} · 周 {{ displayAmount(row.service.weekly_amount_usd) }}
-                  </div>
-                </div>
-              </template>
-              <span v-else class="muted">未配置</span>
+                </template>
+                <span v-else class="muted">未配置子预算</span>
+              </div>
             </template>
           </el-table-column>
 
           <!-- 操作 -->
-          <el-table-column label="操作" width="152" align="center">
+          <el-table-column label="操作" width="180" align="center">
             <template #default="{ row }">
-              <el-button size="small" type="primary" plain @click="navigateToDeptMembers(row)">查看成员</el-button>
+              <el-button size="small" type="primary" plain @click="navigateToDeptMembers(row)">查看预算</el-button>
               <el-button size="small" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: row.deptId, label: row.label })">配置</el-button>
             </template>
           </el-table-column>
@@ -538,10 +908,165 @@
           <span class="grow" />
           <el-button size="small" @click="clearStudioDeptSelection">取消选择</el-button>
         </div>
+
+        <!-- admin / studio_admin：下钻到部门 → 成员配额视图 -->
+        <template v-if="drillScopeType === 'dept'">
+          <!-- 汇总卡片 -->
+          <div class="summary">
+            <div>
+              <div class="summary-eye">部门预算</div>
+              <div class="summary-name">{{ drillLabel || drillScopeId }}</div>
+              <div class="summary-meta">成员日常预算与程序服务预算互不占用。</div>
+            </div>
+            <div class="summary-amount">
+              <strong>{{ formatUSD(deptDailyKpi.used + deptServiceKpi.used) }}</strong>
+              <span> / {{ displayAmount(deptDailyKpi.amount + deptServiceKpi.amount) }}</span>
+              <el-progress
+                :percentage="Math.min(Math.round(Math.max(deptDailyKpi.ratio, deptServiceKpi.ratio) * 100), 100)"
+                :stroke-width="5"
+                :color="riskColor(Math.max(deptDailyKpi.ratio, deptServiceKpi.ratio))"
+                :show-text="false"
+                style="width:220px;margin-top:8px"
+              />
+            </div>
+          </div>
+
+          <!-- 预算池卡片 -->
+          <div class="pool-grid">
+            <div class="pool">
+              <div class="pool-head">
+                <div>
+                  <div class="pool-title">成员日常预算池</div>
+                  <div class="pool-sub">成员日常消耗额度</div>
+                </div>
+                <el-tag :type="budgetColorLevel(deptDailyKpi.ratio)" size="small">
+                  {{ statusText(deptDailyKpi.ratio) }}
+                </el-tag>
+              </div>
+              <div class="pool-amount-big">
+                {{ displayAmount(deptDailyKpi.amount) }}
+                <small>{{ formatUSD(deptDailyKpi.used, { compact: true }) }} / {{ displayAmount(deptDailyKpi.amount) }}</small>
+              </div>
+              <el-progress
+                :percentage="Math.min(Math.round(deptDailyKpi.ratio * 100), 100)"
+                :stroke-width="5"
+                :color="riskColor(deptDailyKpi.ratio)"
+                :show-text="false"
+              />
+              <div style="margin-top:10px">
+                <button type="button" class="link" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: drillScopeId, label: drillLabel || drillScopeId })">调整额度与等级限制</button>
+              </div>
+            </div>
+            <div class="pool">
+              <div class="pool-head">
+                <div>
+                  <div class="pool-title">程序服务预算池</div>
+                  <div class="pool-sub">API 调用与程序服务</div>
+                </div>
+                <el-tag :type="budgetColorLevel(deptServiceKpi.ratio)" size="small">
+                  {{ statusText(deptServiceKpi.ratio) }}
+                </el-tag>
+              </div>
+              <div class="pool-amount-big">
+                {{ displayAmount(deptServiceKpi.amount) }}
+                <small>{{ formatUSD(deptServiceKpi.used, { compact: true }) }} / {{ displayAmount(deptServiceKpi.amount) }}</small>
+              </div>
+              <el-progress
+                :percentage="Math.min(Math.round(deptServiceKpi.ratio * 100), 100)"
+                :stroke-width="5"
+                :color="riskColor(deptServiceKpi.ratio)"
+                :show-text="false"
+              />
+              <div style="margin-top:10px">
+                <button type="button" class="link" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: drillScopeId, label: drillLabel || drillScopeId })">调整额度与等级限制</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 成员配额工具栏 -->
+          <div class="scope-toolbar">
+            <div>
+              <strong>成员配额</strong>
+              <div class="page-sub">按近7天消耗降序 · {{ enrichedMembers.length }} 人</div>
+            </div>
+            <div class="actions">
+              <el-button size="small" :disabled="selectedBatchBudgets.length === 0" @click="batchWizardVisible = true">
+                批量调整{{ selectedBatchBudgets.length ? `（${selectedBatchBudgets.length}）` : '' }}
+              </el-button>
+              <el-button size="small" type="primary" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: drillScopeId, label: drillLabel || drillScopeId })">配置配额</el-button>
+            </div>
+          </div>
+
+          <!-- 成员配额表格 -->
+          <el-table
+            v-loading="loading"
+            :data="enrichedMembers"
+            :row-class-name="memberRiskRowClass"
+            stripe
+            size="small"
+            empty-text="暂无成员配额数据，请先配置部门预算"
+            @selection-change="selectedBatchBudgets = $event"
+          >
+            <el-table-column type="selection" width="46" :selectable="(row: BudgetItem) => !!row.allocation_id" />
+            <el-table-column label="成员" min-width="160">
+              <template #default="{ row }">
+                <div class="scope-cell">
+                  <span class="risk-indicator" :class="`risk-${row.riskLevel}`" />
+                  <span class="scope-name">{{ row.label || row.scope_id }}</span>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="月额度" width="100" align="right">
+              <template #default="{ row }">
+                <span class="tabular">{{ displayAmount(row.amount_usd) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="已用/使用率" min-width="160">
+              <template #default="{ row }">
+                <div class="usage-cell">
+                  <span>{{ formatUSD(row.used_usd || 0, { compact: true }) }} / {{ displayAmount(row.amount_usd) }}</span>
+                  <el-progress
+                    :percentage="Math.min(Math.round((row.used_ratio || 0) * 100), 100)"
+                    :stroke-width="5"
+                    :color="riskColor(row.used_ratio || 0)"
+                  />
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="等级预算" min-width="130">
+              <template #default="{ row }">
+                <div class="tier-budget-cell">
+                  <template v-if="tierBudgetByScope.has(row.scope_id)">
+                    <div
+                      v-for="t in tierBudgetByScope.get(row.scope_id)!"
+                      :key="t.tier_name"
+                      class="tier-budget-tag"
+                    >
+                      <span class="tier-name">{{ t.tier_name }}</span>
+                      <span :class="budgetColorLevel(t.used_ratio || 0)">{{ Math.round((t.used_ratio || 0) * 100) }}%</span>
+                    </div>
+                  </template>
+                  <span v-else class="muted">未配置</span>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="预算来源" width="100" align="center">
+              <template #default>
+                <span class="muted">部门分配</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="160" align="center">
+              <template #default="{ row }">
+                <el-button size="small" plain @click="openMemberDetail(row)">预算详情</el-button>
+                <el-button size="small" type="primary" plain @click="openMemberQuota(row)">调整配额</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </template>
       </div>
 
-      <!-- 右侧边栏：治理链路 + 快速跳转 -->
-      <aside class="panel side-panel">
+      <!-- 右侧边栏：仅在顶层（非下钻）显示 -->
+      <aside v-if="!drillScopeType" class="panel side-panel">
         <!-- 治理链路：当前层 + 下发汇总 -->
         <div v-if="chainCurrentNode" class="context-section">
           <div class="panel-head compact">
@@ -1609,18 +2134,32 @@ async function load() {
 const [budgetItems, contexts, tierData] = await Promise.all([
       getBudgetList(undefined, undefined, overviewView.value),
       getBudgetContext().catch(() => []),
-      // 尝试获取等级预算数据
-      http.get<any>('/api/v1/budgets/tier-usage').then(r => {
-        const data = r?.data?.data?.items ?? r?.data?.items ?? r?.data ?? []
-        return Array.isArray(data) ? data : []
-      }).catch(() => []),
+      // 获取等级预算数据（仅 dept_admin 需要）
+      isDeptAdmin.value && managedDeptIds.value.length > 0
+        ? http.get<any>('/api/v1/budgets/tier-usage', {
+            params: {
+              period_type: 'monthly',
+              scope_type: 'dept',
+              scope_id: managedDeptIds.value[0],
+            },
+          }).then(r => {
+            const data = r?.data?.data?.items ?? r?.data?.items ?? r?.data ?? []
+            return Array.isArray(data) ? data : []
+          }).catch(() => [])
+        : Promise.resolve([]),
     ])
     items.value = budgetItems
     contextItems.value = contexts
     tierBudgetItems.value = (tierData as TierBudgetItem[])
 
-    // 仅 dept_admin：并行拉取所有管辖部门的近7天成员用量（来自 call_logs，数据可靠）
+    // dept_admin 或 admin/studio_admin 下钻到部门时：拉取该部门成员近7天用量（来自 call_logs，数据可靠）
+    const drillDeptIds: string[] = []
     if (isDeptAdmin.value && managedDeptIds.value.length > 0) {
+      drillDeptIds.push(...managedDeptIds.value)
+    } else if (!isDeptAdmin.value && drillScopeType.value === 'dept' && drillScopeId.value) {
+      drillDeptIds.push(drillScopeId.value)
+    }
+    if (drillDeptIds.length > 0) {
       try {
         const today = new Date()
         const end = today.toISOString().slice(0, 10)
@@ -1630,7 +2169,7 @@ const [budgetItems, contexts, tierData] = await Promise.all([
 
         // 多部门并行拉取，合并结果（同一用户可能属于多部门，累加用量）
         const results = await Promise.allSettled(
-          managedDeptIds.value.map(id =>
+          drillDeptIds.map(id =>
             http.get('/api/v1/usage/dashboard', {
               params: { scope: 'dept', id, start, end, page_size: 100 },
             }),
@@ -1650,6 +2189,8 @@ const [budgetItems, contexts, tierData] = await Promise.all([
         // 7天用量是补充信息，失败时静默降级
         memberUsage7d.value = new Map()
       }
+    } else {
+      memberUsage7d.value = new Map()
     }
   } finally {
     loading.value = false
@@ -2018,6 +2559,16 @@ const deptMemberDrawerVisible = ref(false)
 const deptMemberDrawerDept = ref<StudioDeptRow | null>(null)
 const deptMemberDrawerLoading = ref(false)
 const deptMemberDrawerMembers = ref<BudgetItem[]>([])
+
+// ─── 模板占位函数 ─────────────────────────────────────────────────────────────
+const emptyPreviewVisible = ref(false)
+function toggleEmptyPreview() {
+  emptyPreviewVisible.value = !emptyPreviewVisible.value
+}
+
+function openBatchWizard() {
+  batchWizardVisible.value = true
+}
 
 // ─── Studio 视图部门表格复选框 ────────────────────────────────────────────────
 const studioDeptTableRef = ref()
@@ -3399,5 +3950,238 @@ onMounted(async () => {
 .panel-main :deep(.el-button--small) {
   height: 28px;
   padding: 0 11px;
+}
+
+/* ── 面包屑导航 ───────────────────────────────────────────────────────────── */
+.scope-path {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 14px;
+  font-size: 12px;
+  color: #64748b;
+}
+.scope-path button {
+  border: 0;
+  background: none;
+  color: #2f9e4a;
+  padding: 0;
+  cursor: pointer;
+  font-size: 12px;
+}
+.scope-path button:hover {
+  text-decoration: underline;
+}
+.scope-path .current {
+  color: #334155;
+  font-weight: 600;
+}
+
+/* ── 汇总卡片 ───────────────────────────────────────────────────────────── */
+.summary {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 18px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #fff;
+}
+.summary-eye {
+  font-size: 12px;
+  color: #64748b;
+}
+.summary-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: #0f172a;
+  margin-top: 4px;
+}
+.summary-meta {
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 4px;
+}
+.summary-amount {
+  text-align: right;
+  min-width: 180px;
+}
+.summary-amount strong {
+  font-size: 22px;
+  color: #0f172a;
+}
+.summary-amount span {
+  color: #64748b;
+}
+
+/* ── 预算池卡片网格 ──────────────────────────────────────────────────────── */
+.pool-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 16px 0;
+}
+.pool {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 16px;
+  background: #fff;
+}
+.pool-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.pool-title {
+  font-weight: 700;
+  color: #0f172a;
+  font-size: 14px;
+}
+.pool-sub {
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 3px;
+}
+.pool-amount-big {
+  font-size: 22px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 14px 0 4px;
+}
+.pool-amount-big small {
+  font-size: 13px;
+  font-weight: 400;
+  color: #64748b;
+  display: block;
+  margin-top: 2px;
+}
+
+/* ── Pool tabs（studio 下钻视图） ─────────────────────────────────────────── */
+.pool-tabs {
+  display: flex;
+  gap: 18px;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 0 18px;
+}
+.pool-tab {
+  padding: 12px 2px 10px;
+  color: #64748b;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  background: none;
+  border-top: 0;
+  border-left: 0;
+  border-right: 0;
+  font-size: 13px;
+}
+.pool-tab.active {
+  color: #2f9e4a;
+  border-color: #36b34e;
+  font-weight: 600;
+}
+
+/* ── 范围工具栏 ───────────────────────────────────────────────────────────── */
+.scope-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 16px 0 12px;
+}
+.scope-toolbar .actions {
+  display: flex;
+  gap: 8px;
+}
+.scope-toolbar .page-sub {
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 2px;
+}
+.scope-toolbar strong {
+  font-size: 14px;
+  color: #0f172a;
+}
+
+/* ── 通用辅助类 ───────────────────────────────────────────────────────────── */
+.grow {
+  flex: 1;
+}
+.link {
+  color: #2f9e4a;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0;
+}
+.link:hover {
+  text-decoration: underline;
+}
+.link.danger {
+  color: #dc2626;
+}
+
+/* ── 角色徽章 ───────────────────────────────────────────────────────────── */
+.role-badge {
+  background: var(--el-color-primary-light-8);
+  color: var(--el-color-primary);
+  font-size: 10px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+/* ── 成员下钻视图容器 ───────────────────────────────────────────────────── */
+.scope-stage-member {
+  padding: 0;
+}
+
+/* ── 批量选择栏 ───────────────────────────────────────────────────────────── */
+.selection-bar {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 20px;
+  padding: 10px 12px;
+  border: 1px solid #b7e7c0;
+  background: #f0f9f2;
+  border-radius: 8px;
+}
+.selection-bar.show {
+  display: flex;
+}
+.selection-bar strong {
+  color: #26763a;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* ── 空状态引导 ───────────────────────────────────────────────────────────── */
+.empty-guide {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 32px 16px;
+}
+.empty-guide-icon {
+  font-size: 32px;
+}
+.empty-guide-text {
+  text-align: center;
+}
+.empty-guide-text strong {
+  display: block;
+  font-size: 14px;
+  color: #334155;
+  margin-bottom: 4px;
+}
+.empty-guide-text span {
+  display: block;
+  font-size: 12px;
+  color: #64748b;
 }
 </style>

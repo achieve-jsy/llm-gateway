@@ -76,6 +76,7 @@ const sampleSummary: BudgetRiskSummary = {
   total: 3,
   warning: 2,
   critical: 1,
+  by_type: { threshold_reached: 2, request_blocked: 1 },
   data_as_of: '2026-07-13T10:00:00Z',
   stale: false,
 }
@@ -115,9 +116,11 @@ describe('BudgetRiskEventsSection', () => {
 
       expect(mockListBudgetRisks).toHaveBeenCalled()
       expect(mockGetBudgetRiskSummary).toHaveBeenCalled()
-      expect(wrapper.text()).toContain('未处理风险')
-      expect(wrapper.text()).toContain('已阻断')
+      expect(mockListBudgetRisks).toHaveBeenCalledWith(expect.objectContaining({ page: 1, page_size: 50 }))
+      expect(wrapper.text()).toContain('当前风险')
+      expect(wrapper.text()).toContain('严重风险')
       expect(wrapper.text()).toContain('即将耗尽')
+      expect(wrapper.text()).toContain('实际阻断')
       expect(wrapper.text()).toContain('阻断请求')
       expect(wrapper.get('[data-test="budget-kpi-blocked-requests"]').text()).toContain('5')
     })

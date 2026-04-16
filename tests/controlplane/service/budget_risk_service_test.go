@@ -24,7 +24,7 @@ func TestBudgetRiskListMergesOverrideAlertAndBlockSources(t *testing.T) {
 	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
 		status integer, budget_tier_id text, budget_block_code text,
 		budget_block_dimension text, budget_block_scope_type text,
-		budget_block_scope_id text, budget_block_period_type text, created_at datetime
+		budget_block_scope_id text, budget_block_period_type text, ts datetime
 	)`).Error)
 	require.NoError(t, db.Exec(`CREATE TABLE budget_alert_records (
 		id text primary key, scope_type text, scope_id text, period_type text, period text,
@@ -94,7 +94,7 @@ func TestRiskEventCreatedWhenBudgetApproachesLimit(t *testing.T) {
 	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
 		status integer, budget_tier_id text, budget_block_code text,
 		budget_block_dimension text, budget_block_scope_type text,
-		budget_block_scope_id text, budget_block_period_type text, created_at datetime
+		budget_block_scope_id text, budget_block_period_type text, ts datetime
 	)`).Error)
 	require.NoError(t, db.Exec(`CREATE TABLE budget_alert_records (
 		id text primary key, scope_type text, scope_id text, period_type text, period text,
@@ -144,7 +144,7 @@ func TestRiskEventCreatedWhenBudgetExhausted(t *testing.T) {
 	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
 		status integer, budget_tier_id text, budget_block_code text,
 		budget_block_dimension text, budget_block_scope_type text,
-		budget_block_scope_id text, budget_block_period_type text, created_at datetime
+		budget_block_scope_id text, budget_block_period_type text, ts datetime
 	)`).Error)
 	require.NoError(t, db.Exec(`CREATE TABLE budget_alert_records (
 		id text primary key, scope_type text, scope_id text, period_type text, period text,
@@ -191,7 +191,7 @@ func TestRiskEventCreatedWhenRequestIsBlocked(t *testing.T) {
 	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
 		status integer, budget_tier_id text, budget_block_code text,
 		budget_block_dimension text, budget_block_scope_type text,
-		budget_block_scope_id text, budget_block_period_type text, created_at datetime
+		budget_block_scope_id text, budget_block_period_type text, ts datetime
 	)`).Error)
 	require.NoError(t, db.Exec(`CREATE TABLE budget_alert_records (
 		id text primary key, scope_type text, scope_id text, period_type text, period text,
@@ -243,7 +243,7 @@ func TestRiskSummaryAggregatesBySeverityAndType(t *testing.T) {
 	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
 		status integer, budget_tier_id text, budget_block_code text,
 		budget_block_dimension text, budget_block_scope_type text,
-		budget_block_scope_id text, budget_block_period_type text, created_at datetime
+		budget_block_scope_id text, budget_block_period_type text, ts datetime
 	)`).Error)
 	require.NoError(t, db.Exec(`CREATE TABLE budget_alert_records (
 		id text primary key, scope_type text, scope_id text, period_type text, period text,
@@ -295,7 +295,7 @@ func TestRiskEventDeduplicatesAlertAndThresholdSources(t *testing.T) {
 	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
 		status integer, budget_tier_id text, budget_block_code text,
 		budget_block_dimension text, budget_block_scope_type text,
-		budget_block_scope_id text, budget_block_period_type text, created_at datetime
+		budget_block_scope_id text, budget_block_period_type text, ts datetime
 	)`).Error)
 	require.NoError(t, db.Exec(`CREATE TABLE budget_alert_records (
 		id text primary key, scope_type text, scope_id text, period_type text, period text,
@@ -346,7 +346,7 @@ func TestRiskNoEventBelowThreshold(t *testing.T) {
 	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
 		status integer, budget_tier_id text, budget_block_code text,
 		budget_block_dimension text, budget_block_scope_type text,
-		budget_block_scope_id text, budget_block_period_type text, created_at datetime
+		budget_block_scope_id text, budget_block_period_type text, ts datetime
 	)`).Error)
 	require.NoError(t, db.Exec(`CREATE TABLE budget_alert_records (
 		id text primary key, scope_type text, scope_id text, period_type text, period text,
@@ -386,7 +386,7 @@ func TestBudgetRiskHistoricalAlertDoesNotStayActiveAfterUsageRecovers(t *testing
 	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
 		status integer, budget_tier_id text, budget_block_code text,
 		budget_block_dimension text, budget_block_scope_type text,
-		budget_block_scope_id text, budget_block_period_type text, created_at datetime
+		budget_block_scope_id text, budget_block_period_type text, ts datetime
 	)`).Error)
 	require.NoError(t, db.Exec(`CREATE TABLE budget_alert_records (
 		id text primary key, scope_type text, scope_id text, period_type text, period text,
@@ -419,4 +419,100 @@ func TestBudgetRiskHistoricalAlertDoesNotStayActiveAfterUsageRecovers(t *testing
 
 	require.NoError(t, err)
 	require.Empty(t, page.Items)
+}
+
+func TestBudgetRiskIgnoresAlertRecordsFromOtherPeriods(t *testing.T) {
+	now := time.Date(2026, 7, 11, 9, 0, 0, 0, time.UTC)
+	db, err := gorm.Open(sqlite.Open("file:"+uuid.NewString()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
+		status integer, budget_tier_id text, budget_block_code text,
+		budget_block_dimension text, budget_block_scope_type text,
+		budget_block_scope_id text, budget_block_period_type text, ts datetime
+	)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE budget_alert_records (
+		id text primary key, scope_type text, scope_id text, period_type text, period text,
+		threshold integer, dimension_key text, dimension_type text, model_tier_id text, notified_at datetime
+	)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO budget_alert_records VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		uuid.New(), model.BudgetScopeCompany, model.BudgetScopeGlobal, "monthly", "2026-06",
+		80, "total", "total", nil, now.Add(-30*24*time.Hour)).Error)
+
+	allocRepo := newFakeAllocRepo()
+	allocRepo.allocations[allocationKey(model.BudgetScopeCompany, model.BudgetScopeGlobal)] = &model.BudgetAllocation{
+		ID: uuid.New(), ScopeType: model.BudgetScopeCompany, ScopeID: model.BudgetScopeGlobal,
+		AmountUSD: 100, DailyAmountUSD: -1, WeeklyAmountUSD: -1, Enabled: true,
+	}
+	budgetSvc := service.NewBudgetService(allocRepo, newFakeAlertRepo())
+	mini := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	budgetSvc.SetRedis(redisClient)
+	require.NoError(t, redisClient.Set(context.Background(),
+		"budget:v2:used:company:GLOBAL:2026-07", int64(85_000_000), 0).Err())
+
+	tierSvc := service.NewBudgetTierService(
+		&myBudgetStore{limits: map[uuid.UUID][]model.BudgetTierLimit{}, overrides: map[uuid.UUID][]model.BudgetTemporaryOverride{}},
+		myBudgetReader{}, newFakeModelTierRepo(), func() time.Time { return now },
+	)
+	riskSvc := service.NewBudgetRiskService(repository.NewBudgetRiskRepo(db), budgetSvc, tierSvc, func() time.Time { return now })
+
+	page, err := riskSvc.List(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.RiskFilter{
+		ScopeType: model.BudgetScopeCompany, ScopeID: model.BudgetScopeGlobal, PeriodType: "monthly",
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	require.Equal(t, "threshold_reached", page.Items[0].RiskType)
+	require.Equal(t, now, page.Items[0].DetectedAt)
+}
+
+func TestBudgetRiskPaginationDoesNotAffectSummary(t *testing.T) {
+	now := time.Date(2026, 7, 11, 9, 0, 0, 0, time.UTC)
+	db, err := gorm.Open(sqlite.Open("file:"+uuid.NewString()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
+		status integer, budget_tier_id text, budget_block_code text,
+		budget_block_dimension text, budget_block_scope_type text,
+		budget_block_scope_id text, budget_block_period_type text, ts datetime
+	)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE budget_alert_records (
+		id text primary key, scope_type text, scope_id text, period_type text, period text,
+		threshold integer, dimension_key text, dimension_type text, model_tier_id text, notified_at datetime
+	)`).Error)
+
+	allocRepo := newFakeAllocRepo()
+	budgetSvc := service.NewBudgetService(allocRepo, newFakeAlertRepo())
+	mini := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	budgetSvc.SetRedis(redisClient)
+	for _, scopeID := range []string{"member-1", "member-2"} {
+		allocRepo.allocations[allocationKey(model.BudgetScopeMember, scopeID)] = &model.BudgetAllocation{
+			ID: uuid.New(), ScopeType: model.BudgetScopeMember, ScopeID: scopeID,
+			AmountUSD: 100, DailyAmountUSD: -1, WeeklyAmountUSD: -1, Enabled: true,
+		}
+		require.NoError(t, redisClient.Set(context.Background(),
+			"budget:v2:used:member:"+scopeID+":2026-07", int64(85_000_000), 0).Err())
+	}
+
+	tierSvc := service.NewBudgetTierService(
+		&myBudgetStore{limits: map[uuid.UUID][]model.BudgetTierLimit{}, overrides: map[uuid.UUID][]model.BudgetTemporaryOverride{}},
+		myBudgetReader{}, newFakeModelTierRepo(), func() time.Time { return now },
+	)
+	riskSvc := service.NewBudgetRiskService(repository.NewBudgetRiskRepo(db), budgetSvc, tierSvc, func() time.Time { return now })
+
+	page, err := riskSvc.List(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.RiskFilter{
+		ScopeType: model.BudgetScopeMember, PeriodType: "monthly", Page: 1, PageSize: 1,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, page.Total)
+	require.Len(t, page.Items, 1)
+	require.Equal(t, 1, page.Page)
+	require.Equal(t, 1, page.PageSize)
+
+	summary, err := riskSvc.Summary(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.RiskFilter{
+		ScopeType: model.BudgetScopeMember, PeriodType: "monthly", Page: 1, PageSize: 1,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, summary.Total)
+	require.Equal(t, 2, summary.Warning)
 }

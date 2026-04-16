@@ -40,6 +40,8 @@ export interface BudgetRiskFilter {
 export interface BudgetRiskPage {
   items: BudgetRiskEvent[]
   total: number
+  page?: number
+  page_size?: number
   data_as_of: string
   stale: boolean
 }
@@ -48,6 +50,7 @@ export interface BudgetRiskSummary {
   total: number
   warning: number
   critical: number
+  by_type?: Partial<Record<BudgetRiskType, number>>
   data_as_of: string
   stale: boolean
 }

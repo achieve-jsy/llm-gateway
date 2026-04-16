@@ -18,7 +18,7 @@ func TestBudgetRiskRepoAggregatesP1BudgetBlockFields(t *testing.T) {
 	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
 		status integer, budget_tier_id text, budget_block_code text,
 		budget_block_dimension text, budget_block_scope_type text,
-		budget_block_scope_id text, budget_block_period_type text, created_at datetime
+		budget_block_scope_id text, budget_block_period_type text, ts datetime
 	)`).Error)
 	tierID := uuid.New()
 	for _, at := range []time.Time{

@@ -46,11 +46,14 @@ type BudgetRiskEvent struct {
 type RiskFilter struct {
 	ScopeType, ScopeID, PeriodType, DimensionType string
 	ModelTierID, RiskType, Severity               string
+	Page, PageSize                                int
 }
 
 type BudgetRiskPage struct {
 	Items    []BudgetRiskEvent `json:"items"`
 	Total    int               `json:"total"`
+	Page     int               `json:"page,omitempty"`
+	PageSize int               `json:"page_size,omitempty"`
 	DataAsOf time.Time         `json:"data_as_of"`
 	Stale    bool              `json:"stale"`
 }
@@ -123,8 +126,7 @@ func (s *BudgetRiskService) List(ctx context.Context, actor ActorScope, filter R
 		projected, itemStale, projectErr := s.projectAllocation(ctx, allocation, filter, now)
 		if projectErr != nil {
 			if errors.Is(projectErr, ErrBudgetUsageUnavailable) {
-				stale = true
-				continue
+				return nil, projectErr
 			}
 			return nil, projectErr
 		}
@@ -135,6 +137,15 @@ func (s *BudgetRiskService) List(ctx context.Context, actor ActorScope, filter R
 	if filter.PeriodType != "" {
 		periods = []string{filter.PeriodType}
 	}
+	periodKeys := make([]string, 0, len(periods))
+	for _, periodType := range periods {
+		window, resolveErr := budgetperiod.Resolve(now, budgetdomain.PeriodType(periodType), budgetperiod.Config{
+			Timezone: budgetperiod.DefaultTimezone, WeekStart: budgetperiod.CanonicalWeekStart,
+		})
+		if resolveErr == nil {
+			periodKeys = append(periodKeys, window.Key)
+		}
+	}
 	alerts, err := s.blocks.ListAlertRecords(ctx, scopeTypes, scopeIDs, periods)
 	if err != nil {
 		return nil, err
@@ -144,6 +155,9 @@ func (s *BudgetRiskService) List(ctx context.Context, actor ActorScope, filter R
 		activeByIdentity[riskIdentity(items[index])] = index
 	}
 	for _, alert := range alerts {
+		if len(periodKeys) > 0 && !containsString(periodKeys, alert.Period) {
+			continue
+		}
 		tierID := ""
 		if alert.ModelTierID != nil {
 			tierID = alert.ModelTierID.String()
@@ -170,7 +184,13 @@ func (s *BudgetRiskService) List(ctx context.Context, actor ActorScope, filter R
 			return nil, blockErr
 		}
 		for _, row := range blocked {
-			event, eventStale := s.blockedEvent(ctx, row, allocationByScope, now)
+			event, eventStale, eventErr := s.blockedEvent(ctx, row, allocationByScope, now)
+			if eventErr != nil {
+				if errors.Is(eventErr, ErrBudgetUsageUnavailable) {
+					return nil, eventErr
+				}
+				return nil, eventErr
+			}
 			stale = stale || eventStale
 			if riskMatches(event, filter) {
 				items = append(items, event)
@@ -206,7 +226,14 @@ func (s *BudgetRiskService) List(ctx context.Context, actor ActorScope, filter R
 			dataAsOf = item.DataAsOf
 		}
 	}
-	return &BudgetRiskPage{Items: items, Total: len(items), DataAsOf: dataAsOf, Stale: stale}, nil
+	total := len(items)
+	page, pageSize := filter.Page, filter.PageSize
+	if pageSize <= 0 {
+		page = 0
+		pageSize = 0
+	}
+	items = paginateBudgetRiskEvents(items, filter.Page, filter.PageSize)
+	return &BudgetRiskPage{Items: items, Total: total, Page: page, PageSize: pageSize, DataAsOf: dataAsOf, Stale: stale}, nil
 }
 
 func riskIdentity(event BudgetRiskEvent) string {
@@ -216,6 +243,8 @@ func riskIdentity(event BudgetRiskEvent) string {
 }
 
 func (s *BudgetRiskService) Summary(ctx context.Context, actor ActorScope, filter RiskFilter) (*BudgetRiskSummary, error) {
+	filter.Page = 0
+	filter.PageSize = 0
 	page, err := s.List(ctx, actor, filter)
 	if err != nil {
 		return nil, err
@@ -363,7 +392,7 @@ func (s *BudgetRiskService) blockedEvent(
 	row repository.BlockedRequestAggregate,
 	allocations map[string]model.BudgetAllocation,
 	now time.Time,
-) (BudgetRiskEvent, bool) {
+) (BudgetRiskEvent, bool, error) {
 	tierID := ""
 	var tierPtr *string
 	if row.ModelTierID != nil {
@@ -377,7 +406,10 @@ func (s *BudgetRiskService) blockedEvent(
 	if row.DimensionType == string(budgetdomain.DimensionTier) {
 		key = fmt.Sprintf("budget:v2:tier:used:%s:%s:%s:%s", row.ScopeType, row.ScopeID, tierID, keyWindow.Key)
 	}
-	usage, stale, _ := s.readRiskUsage(ctx, key, now)
+	usage, stale, err := s.readRiskUsage(ctx, key, now)
+	if err != nil {
+		return BudgetRiskEvent{}, stale, err
+	}
 	limit, source, tierName := decimal.Zero, "block_event", ""
 	if allocation, ok := allocations[row.ScopeType+":"+row.ScopeID]; ok {
 		limit, source = s.effectiveRiskLimit(ctx, allocation, budgetdomain.PeriodType(row.PeriodType), row.ModelTierID, now)
@@ -398,7 +430,7 @@ func (s *BudgetRiskService) blockedEvent(
 		EffectiveLimitUSD: limit.Round(6).StringFixed(6), UsedUSD: usage.used.String(),
 		UsageRatio: ratio.Round(6).StringFixed(6), LimitSource: source,
 		BlockedRequests: row.Count, DetectedAt: row.FirstBlockedAt, DataAsOf: usage.dataAsOf, Stale: stale,
-	}, stale
+	}, stale, nil
 }
 
 func (s *BudgetRiskService) effectiveRiskLimit(
@@ -515,4 +547,22 @@ func riskMatches(event BudgetRiskEvent, filter RiskFilter) bool {
 		(filter.ModelTierID == "" || (event.ModelTierID != nil && *event.ModelTierID == filter.ModelTierID)) &&
 		(filter.RiskType == "" || event.RiskType == filter.RiskType) &&
 		(filter.Severity == "" || event.Severity == filter.Severity)
+}
+
+func paginateBudgetRiskEvents(items []BudgetRiskEvent, page, pageSize int) []BudgetRiskEvent {
+	if pageSize <= 0 {
+		return items
+	}
+	if page <= 0 {
+		page = 1
+	}
+	start := (page - 1) * pageSize
+	if start >= len(items) {
+		return []BudgetRiskEvent{}
+	}
+	end := start + pageSize
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[start:end]
 }

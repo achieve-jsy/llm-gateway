@@ -33,7 +33,7 @@
             <p>{{ dimensionLabel(selected) }} · {{ periodLabel(selected.period_type) }}预算</p>
           </div>
           <el-tag :type="selected.severity === 'critical' ? 'danger' : 'warning'">
-            {{ selected.severity === 'critical' ? '已阻断' : '即将耗尽' }}
+            {{ riskStatusLabel(selected) }}
           </el-tag>
         </div>
 
@@ -129,9 +129,10 @@ const summary = reactive<BudgetRiskSummary>({ total: 0, warning: 0, critical: 0,
 
 const blockedRequests = computed(() => page.items.reduce((total, item) => total + item.blocked_requests, 0))
 const kpiItems = computed(() => [
-  { key: 'total', label: '未处理风险', value: summary.total, tone: 'neutral' as const },
-  { key: 'critical', label: '已阻断', value: summary.critical, tone: 'danger' as const },
+  { key: 'total', label: '当前风险', value: summary.total, tone: 'neutral' as const },
+  { key: 'critical', label: '严重风险', value: summary.critical, tone: 'danger' as const },
   { key: 'warning', label: '即将耗尽', value: summary.warning, tone: 'warning' as const },
+  { key: 'blocked-events', label: '实际阻断', value: summary.by_type?.request_blocked ?? 0, tone: 'danger' as const },
   { key: 'blocked-requests', label: '阻断请求', value: blockedRequests.value, tone: 'danger' as const, note: '当前页累计' },
 ])
 
@@ -159,7 +160,7 @@ async function load() {
   loading.value = true
   try {
     const [nextPage, nextSummary] = await Promise.all([
-      listBudgetRisks({ ...filter }),
+      listBudgetRisks({ page: 1, page_size: 50, ...filter }),
       getBudgetRiskSummary({ ...filter }),
     ])
     Object.assign(page, nextPage)
@@ -203,6 +204,11 @@ const periodLabel = (value: string) => ({ daily: '日', weekly: '周', monthly: 
 const dimensionLabel = (event: BudgetRiskEvent) => event.dimension_type === 'tier'
   ? event.model_tier_name || '模型等级'
   : '总预算'
+const riskStatusLabel = (event: BudgetRiskEvent) => {
+  if (event.risk_type === 'request_blocked') return '已阻断'
+  if (event.risk_type === 'budget_exhausted') return '预算耗尽'
+  return '即将耗尽'
+}
 const formatTime = (value: string) => new Date(value).toLocaleString()
 onMounted(load)
 </script>

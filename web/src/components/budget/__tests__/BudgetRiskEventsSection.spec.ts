@@ -274,6 +274,29 @@ describe('BudgetRiskEventsSection', () => {
       await wrapper.get('[data-test="risk-adjust"]').trigger('click')
       expect(wrapper.emitted('viewBudget')).toBeUndefined()
     })
+
+    it('预算耗尽风险在抽屉中显示预算耗尽而不是已阻断', async () => {
+      mockListBudgetRisks.mockResolvedValue({
+        ...samplePage,
+        items: [makeRiskEvent({ risk_type: 'budget_exhausted', severity: 'critical', blocked_requests: 0 })],
+      })
+      const wrapper = mountSection()
+      await openFirstRisk(wrapper)
+
+      expect(wrapper.text()).toContain('预算耗尽')
+      expect(wrapper.text()).not.toContain('已阻断')
+    })
+
+    it('真实阻断风险在抽屉中显示已阻断', async () => {
+      mockListBudgetRisks.mockResolvedValue({
+        ...samplePage,
+        items: [makeRiskEvent({ risk_type: 'request_blocked', severity: 'critical', blocked_requests: 3 })],
+      })
+      const wrapper = mountSection()
+      await openFirstRisk(wrapper)
+
+      expect(wrapper.text()).toContain('已阻断')
+    })
   })
 
   describe('筛选功能', () => {

@@ -60,18 +60,6 @@
             <h3>{{ tableTitle }}</h3>
             <p>{{ tableHint }}</p>
           </div>
-          <div class="proto-selection-tools">
-            <button
-              type="button"
-              class="proto-btn sm"
-              :disabled="selectedRows.length === 0"
-              data-test="batch-adjust"
-              @click="emitBatch('absolute')"
-            >
-              批量调整
-            </button>
-            <span class="proto-tag gray">{{ riskCount > 0 ? `风险 ${riskCount}` : '全部风险' }}</span>
-          </div>
         </div>
 
         <div v-if="rows.length === 0" class="proto-table-empty">
@@ -142,9 +130,9 @@
                   </div>
                 </td>
                 <td>
-                  <template v-if="tierTags(row.scope_id).length">
+                  <template v-if="tierTags(row).length">
                     <span
-                      v-for="tag in tierTags(row.scope_id)"
+                      v-for="tag in tierTags(row)"
                       :key="tag.id"
                       class="proto-tier-tag"
                       :class="getTierTagTone(tag.name, tag.state)"
@@ -225,6 +213,8 @@ interface TierUsageItem {
   tier_name: string
   used_ratio?: number
   color?: string
+  enabled?: boolean
+  state?: TierBudgetTagItem['state']
 }
 
 const props = withDefaults(defineProps<{
@@ -349,19 +339,20 @@ function statusTone(ratio?: number): string {
   return 'green'
 }
 
-function tierTags(scopeId: string): TierBudgetTagItem[] {
+function tierTags(row: BudgetItem): TierBudgetTagItem[] {
   return props.tierItems
-    .filter(item => item.scope_id === scopeId)
+    .filter(item => item.scope_id === row.scope_id && (!item.scope_type || item.scope_type === row.scope_type))
     .map((item, index) => {
       const ratio = Number(item.used_ratio ?? 0)
+      const state = item.state ?? (item.enabled === false ? 'disabled' : ratio >= 1 ? 'blocked' : 'normal')
       return {
-        id: `${scopeId}-${item.tier_name}-${index}`,
+        id: `${row.scope_type}-${row.scope_id}-${item.tier_name}-${index}`,
         name: item.tier_name,
         color: item.color,
         usageRatio: ratio,
         // 原型等级色按名称；仅超额覆盖为红（预警仍保留等级色）
-        state: ratio >= 1 ? 'blocked' : 'normal',
-        label: `${item.tier_name} ${Math.round(ratio * 100)}%`,
+        state,
+        label: state === 'disabled' ? `${item.tier_name} 已停用` : `${item.tier_name} ${Math.round(ratio * 100)}%`,
       }
     })
 }
@@ -490,12 +481,6 @@ function clearSelection(): void {
   margin: 4px 0 0;
   color: #64748b;
   font-size: 12px;
-}
-
-.proto-selection-tools {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 .proto-table-wrap {

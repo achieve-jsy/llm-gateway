@@ -21,6 +21,7 @@ const mockAdjustBudget = vi.fn()
 const mockPreviewBudgetAdjustment = vi.fn()
 const mockPreviewBudgetMultiPeriod = vi.fn()
 const mockAdjustBudgetMultiPeriod = vi.fn()
+const mockListBudgetTierLimits = vi.fn()
 
 vi.mock('@/services/control-plane', () => ({
   getBudgetList: (...args: unknown[]) => mockGetBudgetList(...args),
@@ -32,6 +33,7 @@ vi.mock('@/services/control-plane', () => ({
   previewBudgetAdjustment: (...args: unknown[]) => mockPreviewBudgetAdjustment(...args),
   previewBudgetMultiPeriod: (...args: unknown[]) => mockPreviewBudgetMultiPeriod(...args),
   adjustBudgetMultiPeriod: (...args: unknown[]) => mockAdjustBudgetMultiPeriod(...args),
+  listBudgetTierLimits: (...args: unknown[]) => mockListBudgetTierLimits(...args),
 }))
 
 // Mock http service for tier-usage endpoint
@@ -191,6 +193,7 @@ describe('BudgetManagePage - API Integration Tests', () => {
     mockGetBudgetContext.mockResolvedValue([makeContextItem()])
     mockGetBudgetRiskSummary.mockResolvedValue({ total: 0 })
     mockListModelTiers.mockResolvedValue([])
+    mockListBudgetTierLimits.mockResolvedValue([])
     mockHttpGet.mockResolvedValue(sampleTierBudgets)
     mockConfirm.mockResolvedValue(true)
   })
@@ -274,6 +277,42 @@ describe('BudgetManagePage - API Integration Tests', () => {
           }),
         })
       )
+    })
+
+    it('dept_admin 默认进入部门下钻视图而不是旧顶层视图', async () => {
+      mockGetBudgetList.mockResolvedValue([
+        makeBudgetItem({ scope_type: 'dept_daily', scope_id: 'dept-1', label: '技术研发部', amount_usd: 1000 }),
+        makeBudgetItem({ scope_type: 'dept_service', scope_id: 'dept-1', label: '技术研发部', amount_usd: 300 }),
+        makeBudgetItem({ scope_type: 'member', scope_id: 'user-1', parent_scope_id: 'dept-1', label: 'QA员工A', amount_usd: 100 }),
+      ])
+
+      const { wrapper, router } = await mountPage('dept_admin')
+      await flushPromises()
+
+      expect(router.currentRoute.value.query.scope_type).toBe('dept')
+      expect(router.currentRoute.value.query.scope_id).toBe('dept-1')
+      expect(wrapper.text()).toContain('成员独立额度')
+      expect(wrapper.text()).not.toContain('部门日常池')
+    })
+
+    it('dept_admin 在部门池 KPI 上只能申请扩容，不能直接配置部门池', async () => {
+      mockGetBudgetList.mockResolvedValue([
+        makeBudgetItem({ scope_type: 'dept_daily', scope_id: 'dept-1', label: '技术研发部', amount_usd: 1000 }),
+        makeBudgetItem({ scope_type: 'dept_service', scope_id: 'dept-1', label: '技术研发部', amount_usd: 300 }),
+      ])
+
+      const { wrapper, router } = await mountPage('dept_admin')
+      await flushPromises()
+
+      const metrics = wrapper.find('.scope-metrics')
+      expect(metrics.text()).toContain('申请扩容')
+      expect(metrics.text()).toContain('详情')
+      expect(metrics.findAll('.metric-action-btn').map(link => link.text())).not.toContain('配置')
+      await metrics.findAll('.metric-action-btn').find(link => link.text() === '申请扩容')!.trigger('click')
+      await flushPromises()
+      expect(router.currentRoute.value.path).toBe('/admin/expansion-requests')
+      expect(router.currentRoute.value.query.scope_type).toBe('dept_daily')
+      expect(router.currentRoute.value.query.scope_id).toBe('dept-1')
     })
   })
 
@@ -517,8 +556,7 @@ describe('BudgetManagePage - API Integration Tests', () => {
       await router.push({ query: { scope_type: 'studio', scope_id: 'studio-1' } })
       await flushPromises()
 
-      // Should reload with new view parameter (undefined for scopeId in getBudgetList)
-      expect(mockGetBudgetList).toHaveBeenCalledWith(undefined, undefined, 'studio')
+      expect(mockGetBudgetList).toHaveBeenCalledWith(undefined, 'studio-1', 'studio')
     })
 
     it('相同路由参数不重复请求（通过 watch 实现去重）', async () => {
@@ -661,6 +699,80 @@ describe('BudgetManagePage - API Integration Tests', () => {
       expect(wrapper.vm.tierBudgetItems).toHaveLength(1)
       expect(wrapper.vm.tierBudgetItems[0].tier_name).toBe('Premium')
       expect(wrapper.vm.tierBudgetItems[0].used_ratio).toBe(0.85)
+    })
+
+    it('已配置等级子预算但暂无用量时仍显示配置标签', async () => {
+      mockGetBudgetList.mockResolvedValue([
+        makeBudgetItem({ scope_type: 'company', scope_id: 'GLOBAL', allocation_id: 'alloc-company' }),
+        makeBudgetItem({ scope_type: 'studio', scope_id: 'studio-1', allocation_id: 'alloc-studio', label: 'Studio Alpha' }),
+      ])
+      mockHttpGet.mockImplementation((url) => {
+        if (url === '/api/v1/budgets/tier-usage') return Promise.resolve({ data: { data: { items: [] } } })
+        return Promise.resolve({ data: {} })
+      })
+      mockListBudgetTierLimits.mockImplementation((allocationId: string) => {
+        if (allocationId === 'alloc-studio') {
+          return Promise.resolve([{
+            id: 'limit-1',
+            budget_allocation_id: 'alloc-studio',
+            model_tier_id: 'tier-premium',
+            model_tier_name: '高级',
+            period_type: 'monthly',
+            base_limit_usd: '120.000000',
+            effective_limit_usd: '120.000000',
+            enabled: true,
+          }])
+        }
+        return Promise.resolve([])
+      })
+
+      const { wrapper } = await mountPage('admin')
+      await flushPromises()
+
+      expect(wrapper.vm.tierBudgetItems).toHaveLength(1)
+      expect(wrapper.vm.tierBudgetItems[0]).toMatchObject({
+        scope_id: 'studio-1',
+        tier_name: '高级',
+        amount_usd: 120,
+        used_ratio: 0,
+      })
+      expect(wrapper.html()).toContain('高级 0%')
+    })
+
+    it('已停用的等级子预算显示为停用标签', async () => {
+      mockGetBudgetList.mockResolvedValue([
+        makeBudgetItem({ scope_type: 'company', scope_id: 'GLOBAL', allocation_id: 'alloc-company' }),
+        makeBudgetItem({ scope_type: 'studio', scope_id: 'studio-1', allocation_id: 'alloc-studio', label: 'Studio Alpha' }),
+      ])
+      mockHttpGet.mockImplementation((url) => {
+        if (url === '/api/v1/budgets/tier-usage') return Promise.resolve({ data: { data: { items: [] } } })
+        return Promise.resolve({ data: {} })
+      })
+      mockListBudgetTierLimits.mockImplementation((allocationId: string) => {
+        if (allocationId === 'alloc-studio') {
+          return Promise.resolve([{
+            id: 'limit-1',
+            budget_allocation_id: 'alloc-studio',
+            model_tier_id: 'tier-premium',
+            model_tier_name: '高级',
+            period_type: 'monthly',
+            base_limit_usd: '120.000000',
+            effective_limit_usd: '120.000000',
+            enabled: false,
+          }])
+        }
+        return Promise.resolve([])
+      })
+
+      const { wrapper } = await mountPage('admin')
+      await flushPromises()
+
+      expect(wrapper.vm.tierBudgetItems[0]).toMatchObject({
+        tier_name: '高级',
+        enabled: false,
+        state: 'disabled',
+      })
+      expect(wrapper.html()).toContain('高级 已停用')
     })
 
     it('等级预算 API 返回格式容错（data.data.items / data.items / data）', async () => {

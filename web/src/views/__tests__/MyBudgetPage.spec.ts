@@ -258,6 +258,14 @@ describe('MyBudgetPage', () => {
       expect(wrapper.html()).toContain('张三')
     })
 
+    it('普通用户显示个人预算权限说明', async () => {
+      const wrapper = mountPage()
+      await flushPromises()
+
+      expect(wrapper.get('[data-test="my-budget-permission-member"]').text()).toContain('普通用户')
+      expect(wrapper.text()).toContain('当前仅展示你的个人预算和限制来源')
+    })
+
     it('加载预算链路数据', async () => {
       const wrapper = mountPage()
       await flushPromises()
@@ -274,14 +282,29 @@ describe('MyBudgetPage', () => {
   })
 
   describe('等级预算显示', () => {
-    it('mixed 来源显示 notice 和每周期 source pill', async () => {
+    it('mixed 来源显示简洁来源说明和每周期 source pill', async () => {
       mockGetMyBudgetTiers.mockResolvedValue(mixedTierBudget)
       const wrapper = mountPage()
       await flushPromises()
 
-      expect(wrapper.text()).toContain('不同维度可能来自不同预算层')
+      expect(wrapper.text()).toContain('个人独立预算')
+      expect(wrapper.text()).toContain('你的调用消耗计入个人额度')
+      expect(wrapper.text()).not.toContain('上级预算金额不会向普通用户展示')
       expect(wrapper.findAll('[data-test="budget-source-pill"]').map(item => item.text()))
         .toEqual(expect.arrayContaining(['部门共享', '个人独立']))
+    })
+
+    it('未配置个人独立额度时提示部门共享预算池', async () => {
+      mockGetMyBudget.mockResolvedValue([{
+        ...sampleBudgetChain[0],
+        scope_type: 'dept_daily',
+        label: '研发部共享池',
+      }])
+      const wrapper = mountPage()
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('部门共享预算池')
+      expect(wrapper.text()).toContain('你当前未配置个人独立额度，调用消耗会计入部门共享池。')
     })
 
     it('总预算页显示等级摘要并可切到等级 tab', async () => {
@@ -318,19 +341,19 @@ describe('MyBudgetPage', () => {
     })
   })
 
-  describe('KPI 指标条', () => {
-    it('显示可用余额、已用、额度、使用率', async () => {
+  describe('额度详情', () => {
+    it('主卡显示可用余额、已用、总额和百分比', async () => {
       const wrapper = mountPage()
       await flushPromises()
 
       const html = wrapper.html()
       expect(html).toContain('可用余额')
-      expect(html).toContain('本月已用')
-      expect(html).toContain('月度额度')
-      expect(html).toContain('使用率')
+      expect(html).toContain('已用')
+      expect(html).toContain('总额')
+      expect(html).toContain('40%')
     })
 
-    it('使用率超过 80% 时显示危险样式', async () => {
+    it('使用率超过 80% 时显示预警状态', async () => {
       mockGetMyBudget.mockResolvedValue([{
         ...sampleBudgetChain[0],
         used_ratio: 0.9,
@@ -339,7 +362,8 @@ describe('MyBudgetPage', () => {
       const wrapper = mountPage()
       await flushPromises()
 
-      expect(wrapper.html()).toContain('is-danger')
+      expect(wrapper.text()).toContain('预警')
+      expect(wrapper.text()).toContain('90%')
     })
   })
 
@@ -359,16 +383,17 @@ describe('MyBudgetPage', () => {
 
     it('管理员无预算时显示管理入口', async () => {
       mockAuthStore.isAdmin = true
+      mockAuthStore.isManager = true
+      mockAuthStore.effectiveRole = 'admin'
       mockGetMyBudget.mockResolvedValue([])
-      mockGetMyBudgetTiers.mockResolvedValue({
-        ...sampleTierBudget,
-        effective_total: [],
-        tier_limits: [],
-      })
       const wrapper = mountPage()
       await flushPromises()
 
       expect(wrapper.html()).toContain('前往预算管理')
+      expect(wrapper.text()).not.toContain('模型等级额度')
+      expect(mockGetMyBudgetTiers).not.toHaveBeenCalled()
+      expect(mockGetMyExpansionRequests).not.toHaveBeenCalled()
+      expect(mockGetMyKeyRequests).not.toHaveBeenCalled()
     })
   })
 
@@ -486,6 +511,10 @@ describe('MyBudgetPage', () => {
       await flushPromises()
 
       expect(wrapper.html()).toContain('您可直接调整额度')
+      expect(wrapper.get('[data-test="my-budget-permission-dept_admin"]').text()).toContain('部门管理员')
+      expect(wrapper.text()).toContain('部门成员额度可在预算管理中调整')
+      await wrapper.get('[data-test="my-budget-permission-dept_admin"] button').trigger('click')
+      expect(mockPush).toHaveBeenCalledWith(expect.stringContaining('/admin/budget?scope_type=dept&scope_id=dept-1'))
     })
   })
 })

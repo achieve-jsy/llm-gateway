@@ -337,9 +337,43 @@ func TestExpansionApproveCreatesTotalPermanentModification(t *testing.T) {
 	require.Equal(t, model.ExpansionStatusApproved, request.Status)
 }
 
-// TestExpansionApproveCreatesTemporaryOverride verifies that approving
-// a current_period request creates a BudgetTemporaryOverride.
-func TestExpansionApproveCreatesTemporaryOverride(t *testing.T) {
+func TestExpansionApproveCreatesMissingMemberAllocation(t *testing.T) {
+	db, svc := newExpansionApprovalFixture(t)
+
+	requestID, requesterID, approverID := uuid.New(), uuid.New(), uuid.New()
+	seedApprovalChain(t, db, requesterID)
+	expiresAt := time.Now().Add(time.Hour)
+	require.NoError(t, db.Create(&model.ExpansionRequest{
+		ID: requestID, ScopeType: model.BudgetScopeMember, ScopeID: requesterID.String(),
+		RequesterID: requesterID, PeriodType: string(budgetdomain.PeriodMonthly),
+		DimensionType: budgetdomain.DimensionTotal, DimensionKey: "total",
+		DurationType: budgetdomain.DurationPermanent, RequestedAmount: 120,
+		ExpiresAt: &expiresAt, Reason: "increase without existing allocation",
+		Status: model.ExpansionStatusPending, CurrentLevel: model.ExpansionLevelDept,
+	}).Error)
+	precheck, err := svc.Precheck(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.PrecheckInput{
+		ScopeType: model.BudgetScopeMember, ScopeID: requesterID.String(), PeriodType: "monthly",
+		DimensionType: "total", DurationType: "permanent", TargetAmountUSD: "120.000000",
+	})
+	require.NoError(t, err)
+	require.True(t, precheck.CanSubmit)
+	require.NoError(t, db.Model(&model.ExpansionRequest{}).Where("id = ?", requestID).Update("precheck_version", precheck.PrecheckVersion).Error)
+
+	result, err := svc.DecideWorkflow(context.Background(), requestID.String(), approverID, service.DecisionInput{
+		Action: model.ExpansionActionApprove, Comment: "approved", PrecheckVersion: precheck.PrecheckVersion,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "total_base_limit", result.TargetType)
+
+	var allocation model.BudgetAllocation
+	require.NoError(t, db.First(&allocation, "scope_type = ? AND scope_id = ?", model.BudgetScopeMember, requesterID.String()).Error)
+	require.Equal(t, 120.0, allocation.AmountUSD)
+	var request model.ExpansionRequest
+	require.NoError(t, db.First(&request, "id = ?", requestID.String()).Error)
+	require.Equal(t, model.ExpansionStatusApproved, request.Status)
+}
+
+func TestExpansionApproveCreatesTotalTemporaryOverride(t *testing.T) {
 	db, svc := newExpansionApprovalFixture(t)
 
 	requestID, requesterID, approverID, allocationID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
@@ -350,12 +384,12 @@ func TestExpansionApproveCreatesTemporaryOverride(t *testing.T) {
 		allocationID.String(), model.BudgetScopeMember, requesterID.String(), 80, -1, -1, "monthly", true,
 		requesterID.String(), requesterID.String()).Error)
 
-	// Get fresh precheck
 	precheck, err := svc.Precheck(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.PrecheckInput{
 		ScopeType: model.BudgetScopeMember, ScopeID: requesterID.String(), PeriodType: "monthly",
 		DimensionType: "total", DurationType: "current_period", TargetAmountUSD: "120.000000",
 	})
 	require.NoError(t, err)
+	require.True(t, precheck.CanSubmit)
 
 	expiresAt := time.Now().Add(time.Hour)
 	require.NoError(t, db.Create(&model.ExpansionRequest{
@@ -367,26 +401,79 @@ func TestExpansionApproveCreatesTemporaryOverride(t *testing.T) {
 		Status: model.ExpansionStatusPending, CurrentLevel: model.ExpansionLevelDept,
 	}).Error)
 
-	// Approve
 	result, err := svc.DecideWorkflow(context.Background(), requestID.String(), approverID, service.DecisionInput{
 		Action: model.ExpansionActionApprove, Comment: "approved", PrecheckVersion: precheck.PrecheckVersion,
 	})
 	require.NoError(t, err)
 	require.Equal(t, "temporary_override", result.TargetType)
 
-	// Verify temporary override was created
 	var overrideCount int64
 	require.NoError(t, db.Table("budget_temporary_overrides").Count(&overrideCount).Error)
-	require.EqualValues(t, 1, overrideCount)
+	require.Equal(t, int64(1), overrideCount)
+
+	var override model.BudgetTemporaryOverride
+	require.NoError(t, db.First(&override, "id = ?", result.TargetID.String()).Error)
+	require.Equal(t, allocationID, override.BudgetAllocationID)
+	require.Equal(t, budgetdomain.DimensionTotal, override.DimensionType)
+	require.Equal(t, "total", override.DimensionKey)
+	require.Equal(t, budgetdomain.PeriodMonthly, override.PeriodType)
+	require.Equal(t, "120.000000", override.TargetLimitUSD.String())
+	require.Equal(t, budgetdomain.OverrideActive, override.Status)
+}
+
+func TestExpansionApproveCreatesTierPermanentLimit(t *testing.T) {
+	db, svc := newExpansionApprovalFixture(t)
+
+	requestID, requesterID, approverID, allocationID, tierID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	seedApprovalChain(t, db, requesterID)
+	require.NoError(t, db.Exec(`INSERT INTO budget_allocations
+		(id,scope_type,scope_id,amount_usd,daily_amount_usd,weekly_amount_usd,period,enabled,created_by,updated_by)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		allocationID.String(), model.BudgetScopeMember, requesterID.String(), 300, -1, -1, "monthly", true,
+		requesterID.String(), requesterID.String()).Error)
+	require.NoError(t, db.Exec(`INSERT INTO model_tiers(id,name,description,color,sort_order,enabled,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?)`, tierID.String(), "高级", "", "#8b5cf6", 1, true, time.Now(), time.Now()).Error)
+
+	tierIDString := tierID.String()
+	precheck, err := svc.Precheck(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.PrecheckInput{
+		ScopeType: model.BudgetScopeMember, ScopeID: requesterID.String(), PeriodType: "monthly",
+		DimensionType: "tier", ModelTierID: &tierIDString, DurationType: "permanent", TargetAmountUSD: "120.000000",
+	})
+	require.NoError(t, err)
+	require.True(t, precheck.CanSubmit)
+
+	expiresAt := time.Now().Add(time.Hour)
+	require.NoError(t, db.Create(&model.ExpansionRequest{
+		ID: requestID, ScopeType: model.BudgetScopeMember, ScopeID: requesterID.String(),
+		RequesterID: requesterID, PeriodType: string(budgetdomain.PeriodMonthly),
+		DimensionType: budgetdomain.DimensionTier, DimensionKey: "tier:" + tierID.String(), ModelTierID: &tierID,
+		DurationType: budgetdomain.DurationPermanent, RequestedAmount: 120,
+		PrecheckVersion: precheck.PrecheckVersion, ExpiresAt: &expiresAt, Reason: "increase tier",
+		Status: model.ExpansionStatusPending, CurrentLevel: model.ExpansionLevelDept,
+	}).Error)
+
+	result, err := svc.DecideWorkflow(context.Background(), requestID.String(), approverID, service.DecisionInput{
+		Action: model.ExpansionActionApprove, Comment: "approved", PrecheckVersion: precheck.PrecheckVersion,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "tier_base_limit", result.TargetType)
+
+	var limit struct{ LimitUSD string }
+	require.NoError(t, db.Table("budget_tier_limits").Select("limit_usd").
+		Where("budget_allocation_id = ? AND model_tier_id = ? AND period_type = ?", allocationID.String(), tierID.String(), "monthly").
+		Scan(&limit).Error)
+	parsed, err := budgetdomain.ParseAmount(limit.LimitUSD)
+	require.NoError(t, err)
+	require.Equal(t, "120.000000", parsed.String())
 }
 
 // TestExpansionApprovalHierarchy verifies that the approval hierarchy
 // (dept -> studio -> platform) is respected.
 func TestExpansionApprovalHierarchy(t *testing.T) {
 	tests := []struct {
-		name           string
-		scopeType      string
-		expectedLevel  string
+		name          string
+		scopeType     string
+		expectedLevel string
 	}{
 		{
 			name:          "member scope starts at dept level",

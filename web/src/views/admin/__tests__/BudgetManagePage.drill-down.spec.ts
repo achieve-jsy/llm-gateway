@@ -199,6 +199,27 @@ describe('BudgetManagePage - Drill-Down Views', () => {
       expect(nav.text()).toContain('效率平台')
     })
 
+    it('studio 路由 label 为 UUID 时标题使用工作室名称', async () => {
+      mockGetBudgetList.mockResolvedValue([
+        { ...studioPoolItem, scope_id: '200f2786-02e0-4397-a336-3a843bc5f1d3', label: '互娱事业部' },
+      ])
+      const wrapper = mountPage({
+        scope_type: 'studio',
+        scope_id: '200f2786-02e0-4397-a336-3a843bc5f1d3',
+        scope_label: '200f2786-02e0-4397-a336-3a843bc5f1d3',
+        studio_id: '200f2786-02e0-4397-a336-3a843bc5f1d3',
+        studio_label: '200f2786-02e0-4397-a336-3a843bc5f1d3',
+      })
+      await flushPromises()
+
+      const headerText = wrapper.find('.admin-page-header').text()
+      expect(headerText).toContain('互娱事业部预算')
+      expect(headerText).not.toContain('200f2786-02e0-4397-a336-3a843bc5f1d3预算')
+      const navText = wrapper.find('.scope-path').text()
+      expect(navText).toContain('互娱事业部')
+      expect(navText).not.toContain('200f2786-02e0-4397-a336-3a843bc5f1d3')
+    })
+
     it('当前项使用 .current class 加粗', async () => {
       const wrapper = mountPage({
         scope_type: 'studio',
@@ -252,6 +273,41 @@ describe('BudgetManagePage - Drill-Down Views', () => {
     })
   })
 
+  describe('admin 治理链路', () => {
+    beforeEach(() => {
+      mockAuthStore.effectiveRole = 'admin'
+      mockGetBudgetList.mockResolvedValue([
+        {
+          allocation_id: 'alloc-company',
+          scope_type: 'company',
+          scope_id: 'GLOBAL',
+          label: '全公司预算',
+          amount_usd: 10000,
+          weekly_amount_usd: -1,
+          daily_amount_usd: -1,
+          used_usd: 1000,
+          used_ratio: 0.1,
+          period: '2026-07',
+        },
+        studioPoolItem,
+      ])
+      mockGetBudgetContext.mockResolvedValue([
+        { scope_type: 'company', scope_id: 'GLOBAL', label: '全公司预算', amount_usd: 10000 },
+      ])
+    })
+
+    it('点击治理链路明细打开分配明细弹窗', async () => {
+      const wrapper = mountPage()
+      await flushPromises()
+
+      await wrapper.get('[data-test="chain-detail"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.vm.showChainDetail).toBe(true)
+      expect(wrapper.html()).toContain('预算分配明细 · 全公司预算')
+    })
+  })
+
   // ── 2. 工作室下钻视图 ──────────────────────────────────────────────────
   describe('工作室下钻 (scope_type=studio)', () => {
     const studioQuery = {
@@ -282,25 +338,49 @@ describe('BudgetManagePage - Drill-Down Views', () => {
       expect(summary.text()).toContain('下级部门额度总和不可超过工作室月额度')
     })
 
-    it('汇总卡片显示已用/总额', async () => {
+    it('汇总卡片显示工作室总额、已下发、未下发与已用', async () => {
       const wrapper = mountPage(studioQuery)
       await flushPromises()
 
-      const summaryAmount = wrapper.find('.summary-amount')
-      expect(summaryAmount.exists()).toBe(true)
-      // $3,420 / $5,000
-      expect(summaryAmount.text()).toContain('$3,420')
-      expect(summaryAmount.text()).toContain('$5,000')
+      const metrics = wrapper.find('.scope-metrics')
+      expect(metrics.exists()).toBe(true)
+      expect(metrics.text()).toContain('工作室总额')
+      expect(metrics.text()).toContain('$5,000.00')
+      expect(metrics.text()).toContain('已下发')
+      expect(metrics.text()).toContain('$1,800.00')
+      expect(metrics.text()).toContain('未下发')
+      expect(metrics.text()).toContain('$3,200.00')
+      expect(metrics.text()).toContain('已用')
+      expect(metrics.text()).toContain('$3,420.00')
     })
 
-    it('显示权限横幅 (.permission-banner)', async () => {
+    it('studio_admin 在工作室当前预算上只能申请扩容', async () => {
+      mockAuthStore.effectiveRole = 'studio_admin'
+      mockAuthStore.orgRoles = [{ role: 'studio_admin', scope_id: 'studio-1', scope_type: 'studio' }]
       const wrapper = mountPage(studioQuery)
       await flushPromises()
 
-      const banner = wrapper.find('.permission-banner')
-      expect(banner.exists()).toBe(true)
-      expect(banner.text()).toContain('当前拥有全部预算配置权限')
-      expect(banner.text()).toContain('可调整当前层级')
+      const actionMetric = wrapper.find('.scope-metric.action')
+      expect(actionMetric.text()).toContain('申请扩容')
+      expect(actionMetric.text()).not.toContain('配置')
+
+      await actionMetric.get('button').trigger('click')
+      expect(mockPush).toHaveBeenCalled()
+      const pushed = mockPush.mock.calls[mockPush.mock.calls.length - 1][0]
+      expect(pushed.path).toBe('/admin/expansion-requests')
+      expect(pushed.query).toMatchObject({
+        create: '1',
+        scope_type: 'studio',
+        scope_id: 'studio-1',
+      })
+    })
+
+    it('不显示平台管理员权限提示横幅', async () => {
+      const wrapper = mountPage(studioQuery)
+      await flushPromises()
+
+      expect(wrapper.find('.scope-permission-note').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('可配置当前工作室及下属部门预算')
     })
 
     it('显示工具栏 (.scope-toolbar)', async () => {
@@ -337,15 +417,44 @@ describe('BudgetManagePage - Drill-Down Views', () => {
       expect(wrapper.find('[data-test="pool-row-alloc-dept-service"]').exists()).toBe(true)
     })
 
-    it('新增部门预算打开真实部门选择流程', async () => {
+    it('从服务池查看预算进入部门时带 service 池上下文', async () => {
       const wrapper = mountPage(studioQuery)
       await flushPromises()
 
-      await wrapper.get('[data-test="create-department-budget"]').trigger('click')
+      await wrapper.get('[data-test="pool-tab-service"]').trigger('click')
       await flushPromises()
 
-      expect(wrapper.vm.createDepartmentVisible).toBe(true)
-      expect(wrapper.get('[data-test="create-department-select"]').exists()).toBe(true)
+      const buttons = wrapper.findAll('button').filter(button => button.text().includes('查看预算'))
+      await buttons[0].trigger('click')
+
+      expect(mockPush).toHaveBeenCalled()
+      const pushed = mockPush.mock.calls[mockPush.mock.calls.length - 1][0]
+      expect(pushed.query).toMatchObject({
+        scope_type: 'dept',
+        scope_id: 'dept-1',
+        pool: 'service',
+      })
+    })
+
+    it('不提供新增部门预算入口', async () => {
+      const wrapper = mountPage(studioQuery)
+      await flushPromises()
+
+      expect(wrapper.find('[data-test="create-department-budget"]').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('新增部门预算')
+    })
+
+    it('部门下发超出工作室额度时显示超分配金额', async () => {
+      mockGetBudgetList.mockResolvedValue([
+        { ...studioPoolItem, amount_usd: 1000 },
+        { ...deptDailyItem, amount_usd: 1800 },
+      ])
+      const wrapper = mountPage(studioQuery)
+      await flushPromises()
+
+      const metrics = wrapper.find('.scope-metrics')
+      expect(metrics.text()).toContain('超分配')
+      expect(metrics.text()).toContain('$800.00')
     })
 
     it('部门表格列匹配原型', async () => {
@@ -353,11 +462,12 @@ describe('BudgetManagePage - Drill-Down Views', () => {
       await flushPromises()
 
       const html = wrapper.html()
-      // 原型要求的列：部门、月额度、周额度、日额度、使用率、等级预算、操作
+      // 当前列：部门、月额度、周期限制（周/日合并）、使用率、等级预算、操作
       expect(html).toContain('部门')
       expect(html).toContain('月额度')
-      expect(html).toContain('周额度')
-      expect(html).toContain('日额度')
+      expect(html).toContain('周期限制')
+      expect(html).toContain('周 $600.00')
+      expect(html).toContain('日 $120.00')
       expect(html).toContain('使用率')
       expect(html).toContain('等级预算')
       expect(html).toContain('操作')
@@ -404,46 +514,98 @@ describe('BudgetManagePage - Drill-Down Views', () => {
       expect(summary.text()).toContain('AI 研发部')
     })
 
-    it('显示预算池网格 (.pool-grid)', async () => {
+    it('部门预算池不再作为独立卡片展示', async () => {
       const wrapper = mountPage(deptQuery)
       await flushPromises()
 
       const poolGrid = wrapper.find('.pool-grid')
-      expect(poolGrid.exists()).toBe(true)
+      expect(poolGrid.exists()).toBe(false)
     })
 
-    it('显示两个池卡片：日常 + 服务', async () => {
+    it('在顶部指标中显示两个 Key 类型预算池', async () => {
+      const wrapper = mountPage(deptQuery)
+      await flushPromises()
+
+      const metrics = wrapper.find('.scope-metrics')
+      expect(metrics.text()).toContain('个人 Key 池')
+      expect(metrics.text()).toContain('Service Key 池')
+      expect(metrics.text()).toContain('$1,800.00')
+      expect(metrics.text()).toContain('$400.00')
+    })
+
+    it('部门总额只读，两个 Key 类型预算池在顶部指标中包含配置入口', async () => {
+      const wrapper = mountPage(deptQuery)
+      await flushPromises()
+
+      const metricLinks = wrapper.findAll('.metric-action-btn')
+      expect(metricLinks).toHaveLength(2)
+      expect(metricLinks.every(l => l.text() === '配置')).toBe(true)
+    })
+
+    it('部门页顶部按钮指向上一层并明确配置部门总预算', async () => {
       const wrapper = mountPage(deptQuery)
       await flushPromises()
 
       const html = wrapper.html()
-      expect(html).toContain('成员日常预算池')
-      expect(html).toContain('程序服务预算池')
+      expect(html).toContain('返回效率平台')
+      expect(html).toContain('配置部门总预算')
     })
 
-    it('池卡片包含"调整额度与等级限制"链接', async () => {
-      const wrapper = mountPage(deptQuery)
-      await flushPromises()
-
-      const links = wrapper.findAll('.link')
-      const adjustLinks = links.filter(l => l.text().includes('调整额度与等级限制'))
-      expect(adjustLinks.length).toBeGreaterThanOrEqual(2) // 每个池一个
-    })
-
-    it('成员配额表格包含预算来源列', async () => {
+    it('成员独立额度为空时说明成员默认使用个人 Key 预算池', async () => {
       const wrapper = mountPage(deptQuery)
       await flushPromises()
 
       const html = wrapper.html()
-      expect(html).toContain('预算来源')
+      expect(html).toContain('成员独立额度')
+      expect(html).toContain('暂无成员独立额度')
+      expect(html).toContain('成员默认使用个人 Key 预算池')
     })
 
-    it('成员配额表格包含等级预算列', async () => {
+    it('部门预算明细拆分个人 Key 与 Service Key 入口', async () => {
       const wrapper = mountPage(deptQuery)
       await flushPromises()
 
-      const html = wrapper.html()
-      expect(html).toContain('等级预算')
+      expect(wrapper.get('[data-test="dept-detail-tab-personal"]').text()).toContain('个人 Key 使用明细')
+      expect(wrapper.get('[data-test="dept-detail-tab-service"]').text()).toContain('Service Key 使用明细')
+
+      await wrapper.get('[data-test="dept-detail-tab-service"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('Service Key 独立额度')
+      expect(wrapper.text()).toContain('暂无 Service Key 独立额度')
+      expect(wrapper.text()).toContain('当前服务调用默认使用 Service Key 预算池')
+    })
+
+    it('带 pool=service 进入部门页时直接展示 Service Key 详情', async () => {
+      const wrapper = mountPage({ ...deptQuery, pool: 'service' })
+      await flushPromises()
+
+      expect(wrapper.find('[data-test="dept-detail-tab-personal"]').exists()).toBe(false)
+      expect(wrapper.find('[data-test="dept-detail-tab-service"]').exists()).toBe(false)
+      const metrics = wrapper.find('.scope-metrics')
+      expect(metrics.text()).toContain('Service Key 池')
+      expect(metrics.text()).not.toContain('个人 Key 池')
+      expect(metrics.text()).not.toContain('部门总额')
+      expect(wrapper.text()).toContain('Service Key 预算详情')
+      expect(wrapper.text()).toContain('配置 Service Key 池')
+      expect(wrapper.text()).not.toContain('配置部门总预算')
+      expect(wrapper.text()).toContain('Service Key 独立额度')
+      expect(wrapper.text()).not.toContain('成员独立额度')
+    })
+
+    it('带 pool=daily 进入部门页时不展示 Service Key 配置入口', async () => {
+      const wrapper = mountPage({ ...deptQuery, pool: 'daily' })
+      await flushPromises()
+
+      const metrics = wrapper.find('.scope-metrics')
+      expect(metrics.text()).toContain('个人 Key 池')
+      expect(metrics.text()).not.toContain('Service Key 池')
+      expect(metrics.text()).not.toContain('部门总额')
+      expect(wrapper.text()).toContain('个人 Key 预算详情')
+      expect(wrapper.text()).toContain('配置个人 Key 池')
+      expect(wrapper.text()).not.toContain('配置部门总预算')
+      expect(wrapper.text()).toContain('成员独立额度')
+      expect(wrapper.text()).not.toContain('Service Key 独立额度')
     })
 
     it('P0 验证：dept 下钻不再是空白页面', async () => {
@@ -452,8 +614,8 @@ describe('BudgetManagePage - Drill-Down Views', () => {
 
       // 确保页面有实质内容
       expect(wrapper.find('.summary').exists()).toBe(true)
-      expect(wrapper.find('.pool-grid').exists()).toBe(true)
-      expect(wrapper.find('.scope-toolbar').exists()).toBe(true)
+      expect(wrapper.find('.scope-metrics').exists()).toBe(true)
+      expect(wrapper.find('.member-empty-state').exists()).toBe(true)
     })
   })
 

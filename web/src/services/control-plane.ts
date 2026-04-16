@@ -866,7 +866,7 @@ export async function getPerformance(
 import type { BudgetItem, BudgetScopeType, BudgetChainItem, BudgetContextItem, BudgetAdjustmentPayload, BudgetAdjustmentImpact } from '@/types/budget'
 import type { EntitlementPayload, GroupEntitlement } from '@/types/entitlement'
 import type { RawServiceKeyItem, ServiceKeyItem, CreateServiceKeyResponse } from '@/types/service-key'
-import type { ExpansionRequest, CreateExpansionPayload, ExpansionPrecheckInput, ExpansionPrecheck, ExpansionDetail, ExpansionAction, NotifyOwnerInput } from '@/types/expansion'
+import type { ExpansionRequest, CreateExpansionPayload, ExpansionPrecheckInput, ExpansionPrecheck, ExpansionDetail, ExpansionAction, NotifyOwnerInput, ExpansionListFilter } from '@/types/expansion'
 import type { BudgetRiskFilter, BudgetRiskPage, BudgetRiskSummary } from '@/types/budget-risk'
 import type { ModelTier, ModelTierInput, BudgetTierLimit, BudgetTierUsage, MyBudgetTiersResponse, TierAdjustmentPreview } from '@/types/model-tier'
 import { mapServiceKey } from '@/types/service-key'
@@ -996,17 +996,28 @@ export async function createExpansionRequest(payload: CreateExpansionPayload): P
 }
 
 /** 获取我的扩容申请列表 */
-export async function getMyExpansionRequests(status?: string): Promise<ExpansionRequest[]> {
+function expansionFilterParams(filter?: Partial<ExpansionListFilter>): Record<string, string> {
   const params: Record<string, string> = {}
-  if (status) params.status = status
+  if (!filter) return params
+  if (filter.dimension && filter.dimension !== 'all') params.dimension = filter.dimension
+  if (filter.modelTierId && filter.modelTierId !== 'all') params.model_tier_id = filter.modelTierId
+  if (filter.duration && filter.duration !== 'all') params.duration = filter.duration
+  if (filter.priority && filter.priority !== 'all') params.priority = filter.priority
+  if (filter.status && filter.status !== 'all') params.status = filter.status
+  const keyword = filter.keyword?.trim()
+  if (keyword) params.keyword = keyword
+  return params
+}
+
+export async function getMyExpansionRequests(filter?: Partial<ExpansionListFilter> | string): Promise<ExpansionRequest[]> {
+  const params = typeof filter === 'string' ? { status: filter } : expansionFilterParams(filter)
   const res = await http.get<{ items: ExpansionRequest[] }>('/api/v1/expansion-requests', { params })
   return res.data.items
 }
 
 /** 获取待审批列表，name 非空时按申请人姓名模糊搜索 */
-export async function getPendingExpansions(name?: string): Promise<ExpansionRequest[]> {
-  const params: Record<string, string> = {}
-  if (name) params.name = name
+export async function getPendingExpansions(filter?: Partial<ExpansionListFilter> | string): Promise<ExpansionRequest[]> {
+  const params = typeof filter === 'string' ? { name: filter } : expansionFilterParams(filter)
   const res = await http.get<{ items: ExpansionRequest[] }>('/api/v1/expansion-requests/pending', { params })
   return res.data.items
 }
@@ -1156,8 +1167,11 @@ export async function previewBudgetTierBatch(input: {
 export async function applyBudgetTierBatch(input: {
   preview_token: string
   confirm_item_ids: string[]
-}): Promise<unknown> {
-  const { data } = await http.post<{ data: unknown }>('/api/v1/budgets/tier-limits/batch/apply', input)
+}): Promise<{
+  items: Array<{ item_id: string; status: string; error_code?: string }>
+  sync_pending?: boolean
+}> {
+  const { data } = await http.post<{ data: { items: Array<{ item_id: string; status: string; error_code?: string }>; sync_pending?: boolean } }>('/api/v1/budgets/tier-limits/batch/apply', input)
   return data.data
 }
 

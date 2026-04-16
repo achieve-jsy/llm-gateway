@@ -223,6 +223,61 @@ func TestBatchTierLimitApplyWritesOnlyConfirmedValidItems(t *testing.T) {
 	require.Equal(t, "80.000000", store.existing.LimitUSD.String())
 }
 
+func TestStudioManagerCanApplyTierLimitToOwnStudioAllocation(t *testing.T) {
+	studioID := uuid.NewString()
+	allocationID, tierID := uuid.New(), uuid.New()
+	store := &fakeBudgetTierStore{}
+	tierRepo := newFakeModelTierRepo()
+	tierRepo.tiers[tierID] = &model.ModelTier{ID: tierID, Enabled: true}
+	svc := service.NewBudgetTierService(store, fakeAllocationReader{&model.BudgetAllocation{
+		ID: allocationID, ScopeType: model.BudgetScopeStudio, ScopeID: studioID,
+	}}, tierRepo, func() time.Time { return time.Date(2026, 7, 11, 8, 0, 0, 0, time.UTC) })
+	actor := rbac.Actor{UserID: uuid.NewString(), StudioIDs: []string{studioID}}
+
+	preview, err := svc.PreviewBatch(context.Background(), actor, service.BatchTierLimitInput{
+		Operation: service.BatchSetFixed,
+		Items: []service.BatchTierLimitItem{{
+			ItemID: "studio-premium-monthly", AllocationID: allocationID, TierID: tierID,
+			PeriodType: budgetdomain.PeriodMonthly, Value: mustAmount(t, "120"),
+		}},
+		Reason: "事业部配置高级等级子预算",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "valid", preview.Items[0].Status)
+
+	result, err := svc.ApplyBatch(context.Background(), actor, service.ApplyBatchTierLimitInput{
+		PreviewToken: preview.PreviewToken, ConfirmItemIDs: []string{"studio-premium-monthly"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "applied", result.Items[0].Status)
+	require.Equal(t, allocationID, store.existing.BudgetAllocationID)
+	require.Equal(t, tierID, store.existing.ModelTierID)
+	require.Equal(t, "120.000000", store.existing.LimitUSD.String())
+}
+
+func TestStudioManagerCannotApplyTierLimitToOtherStudioAllocation(t *testing.T) {
+	allocationID, tierID := uuid.New(), uuid.New()
+	store := &fakeBudgetTierStore{}
+	tierRepo := newFakeModelTierRepo()
+	tierRepo.tiers[tierID] = &model.ModelTier{ID: tierID, Enabled: true}
+	svc := service.NewBudgetTierService(store, fakeAllocationReader{&model.BudgetAllocation{
+		ID: allocationID, ScopeType: model.BudgetScopeStudio, ScopeID: uuid.NewString(),
+	}}, tierRepo, time.Now)
+	actor := rbac.Actor{UserID: uuid.NewString(), StudioIDs: []string{uuid.NewString()}}
+
+	preview, err := svc.PreviewBatch(context.Background(), actor, service.BatchTierLimitInput{
+		Operation: service.BatchSetFixed,
+		Items: []service.BatchTierLimitItem{{
+			ItemID: "other-studio", AllocationID: allocationID, TierID: tierID,
+			PeriodType: budgetdomain.PeriodMonthly, Value: mustAmount(t, "120"),
+		}},
+		Reason: "不能配置其他事业部",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "forbidden", preview.Items[0].Status)
+	require.Equal(t, "ORG_FORBIDDEN", preview.Items[0].ErrorCode)
+}
+
 func TestBatchTierLimitApplyRejectsStaleUsageWithoutConfirmationBypass(t *testing.T) {
 	allocationID, tierID := uuid.New(), uuid.New()
 	store := &fakeBudgetTierStore{}

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus from 'element-plus'
+import { ElMessageBox } from 'element-plus'
 import ExpansionApprovalDetail from '../ExpansionApprovalDetail.vue'
 import type { ExpansionDetail, ExpansionRequest } from '@/types/expansion'
 
@@ -103,6 +104,10 @@ function makeExpansionDetail(overrides: Partial<ExpansionDetail> = {}): Expansio
   }
 }
 
+function makeGroups(count: number) {
+  return Array.from({ length: count }, (_, index) => ({ id: `g${index + 1}`, name: `Group ${index + 1}` }))
+}
+
 // ── Helpers ────────────────────────────────────────────────────────
 /**
  * The component uses defineModel('detail') which maps to a `detail` prop.
@@ -136,19 +141,21 @@ function mountDetail(detail: ExpansionDetail | null = null) {
 describe('ExpansionApprovalDetail', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     mockDecideExpansionV2.mockResolvedValue(makeExpansionDetail())
     mockReprecheckExpansion.mockResolvedValue(makeExpansionDetail())
   })
 
   describe('详情渲染', () => {
-    it('按原型顺序展示比较、效果、预检和审批流水四块信息', async () => {
+    it('按审批决策顺序展示结论、主体、额度、影响和流水', async () => {
       const wrapper = mountDetail(makeExpansionDetail())
       await flushPromises()
 
       const text = wrapper.text()
-      for (const label of ['提交时上限', '当前已用', '申请目标', '调整类型', '批准后效果', '申请信息与上级限制预检', '审批流水与审批意见']) {
+      for (const label of ['可审批', '可批准，批准后将自动生效', '额度变化', '影响范围', '审批信息']) {
         expect(text).toContain(label)
       }
+      expect(text).not.toContain('上级约束')
     })
 
     it('渲染提交快照信息', async () => {
@@ -156,9 +163,23 @@ describe('ExpansionApprovalDetail', () => {
       await flushPromises()
 
       const html = wrapper.html()
-      expect(html).toContain('提交快照')
-      expect(html).toContain('100.000000')
-      expect(html).toContain('80.000000')
+      expect(html).toContain('提交时上限')
+      expect(html).toContain('$100.00')
+      expect(html).toContain('$80.00')
+    })
+
+    it('个人额度详情缺少 scope_name 时使用申请人姓名而不是 UUID', async () => {
+      const wrapper = mountDetail(makeExpansionDetail({
+        request: makeExpansionRequest({
+          scope_name: '',
+          requester_name: 'QA员工A',
+          scope_id: 'aaaaaaaa-3333-4333-8333-333333333333',
+        }),
+      }))
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('QA员工A')
+      expect(wrapper.text()).not.toContain('aaaaaaaa-3333-4333-8333-333333333333')
     })
 
     it('渲染实时快照信息', async () => {
@@ -166,8 +187,8 @@ describe('ExpansionApprovalDetail', () => {
       await flushPromises()
 
       const html = wrapper.html()
-      expect(html).toContain('实时额度')
-      expect(html).toContain('85.000000')
+      expect(html).toContain('实时上限')
+      expect(html).toContain('$85.00')
     })
 
     it('live_snapshot 为 null 时显示"不可用"', async () => {
@@ -176,7 +197,7 @@ describe('ExpansionApprovalDetail', () => {
       await flushPromises()
 
       const html = wrapper.html()
-      expect(html).toContain('不可用')
+      expect(html).toContain('—')
     })
 
     it('显示审批流程步骤 (timeline)', async () => {
@@ -184,17 +205,17 @@ describe('ExpansionApprovalDetail', () => {
       await flushPromises()
 
       const html = wrapper.html()
-      expect(html).toContain('submitted')
-      expect(html).toContain('dept')
+      expect(html).toContain('提交')
+      expect(html).toContain('部门级')
     })
 
-    it('显示审批池信息', async () => {
+    it('显示审批池人数而不是铺满 UUID', async () => {
       const wrapper = mountDetail(makeExpansionDetail())
       await flushPromises()
 
-      const html = wrapper.html()
-      expect(html).toContain('manager-1')
-      expect(html).toContain('manager-2')
+      const text = wrapper.text()
+      expect(text).toContain('2 人可处理')
+      expect(text).not.toContain('manager-1、manager-2')
     })
 
     it('显示影响范围', async () => {
@@ -204,36 +225,71 @@ describe('ExpansionApprovalDetail', () => {
       const html = wrapper.html()
       expect(html).toContain('Group A')
     })
+
+    it('影响模型组支持查看全部和收起', async () => {
+      const detail = makeExpansionDetail({ affected_groups: makeGroups(10) })
+      const wrapper = mountDetail(detail)
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('Group 8')
+      expect(wrapper.text()).not.toContain('Group 9')
+      const toggle = wrapper.findAll('button').find(button => button.text().includes('查看全部 10 个'))
+      expect(toggle).toBeDefined()
+
+      await toggle!.trigger('click')
+      await flushPromises()
+      expect(wrapper.text()).toContain('Group 9')
+      expect(wrapper.text()).toContain('收起')
+
+      await wrapper.findAll('button').find(button => button.text() === '收起')!.trigger('click')
+      await flushPromises()
+      expect(wrapper.text()).not.toContain('Group 9')
+    })
+
+    it('临时调整展示当前周期生效说明', async () => {
+      const wrapper = mountDetail(makeExpansionDetail({
+        request: makeExpansionRequest({ duration_type: 'current_period' }),
+      }))
+      await flushPromises()
+
+      const text = wrapper.text()
+      expect(text).toContain('临时调整')
+      expect(text).toContain('当前周期临时调整')
+      expect(text).toContain('周期结束后恢复长期基础额度')
+    })
   })
 
-  describe('数据变化警告', () => {
-    it('precheck_required 状态时显示重新预检警告', async () => {
+  describe('数据变化展示', () => {
+    it('状态变化时不展示额外解释，只保留实时指标', async () => {
       const detail = makeExpansionDetail({
         request: makeExpansionRequest({ status: 'precheck_required' }),
       })
       const wrapper = mountDetail(detail)
       await flushPromises()
 
-      expect(wrapper.html()).toContain('数据已变化')
+      expect(wrapper.text()).toContain('实时上限')
+      expect(wrapper.text()).not.toContain('已按最新预算重新计算审批结果')
     })
 
-    it('stale 的 live_snapshot 显示警告', async () => {
+    it('stale 的 live_snapshot 不展示额外解释', async () => {
       const detail = makeExpansionDetail()
       detail.live_snapshot!.stale = true
       const wrapper = mountDetail(detail)
       await flushPromises()
 
-      expect(wrapper.html()).toContain('数据已变化')
+      expect(wrapper.text()).toContain('实时上限')
+      expect(wrapper.text()).not.toContain('状态已变化')
     })
 
-    it('precheck_version 不匹配时显示警告', async () => {
+    it('precheck_version 不匹配时仍可查看实时指标', async () => {
       const detail = makeExpansionDetail()
       detail.live_snapshot!.precheck_version = 'v2'
       detail.request.precheck_version = 'v1'
       const wrapper = mountDetail(detail)
       await flushPromises()
 
-      expect(wrapper.html()).toContain('数据已变化')
+      expect(wrapper.text()).toContain('实时上限')
+      expect(wrapper.text()).not.toContain('已按最新预算重新计算审批结果')
     })
   })
 
@@ -255,7 +311,7 @@ describe('ExpansionApprovalDetail', () => {
       await flushPromises()
 
       const buttons = wrapper.findAll('button')
-      const approveBtn = buttons.find(b => b.text() === '批准')
+      const approveBtn = buttons.find(b => b.text() === '批准并生效')
       const rejectBtn = buttons.find(b => b.text() === '驳回')
       expect(approveBtn).toBeUndefined()
       expect(rejectBtn).toBeUndefined()
@@ -280,7 +336,7 @@ describe('ExpansionApprovalDetail', () => {
       const wrapper = mountDetail(makeExpansionDetail())
       await flushPromises()
 
-      const approveBtn = wrapper.findAll('button').find(b => b.text() === '批准')
+      const approveBtn = wrapper.findAll('button').find(b => b.text() === '批准并生效')
       expect(approveBtn).toBeDefined()
       await approveBtn!.trigger('click')
       await flushPromises()
@@ -289,6 +345,23 @@ describe('ExpansionApprovalDetail', () => {
         action: 'approve',
         precheck_version: 'v1',
       }))
+      expect(ElMessageBox.confirm).toHaveBeenCalledWith(
+        expect.stringContaining('确认批准'),
+        '确认批准扩容申请',
+        expect.objectContaining({ confirmButtonText: '确认批准' }),
+      )
+    })
+
+    it('取消批准确认时不调用 decideExpansionV2', async () => {
+      vi.mocked(ElMessageBox.confirm).mockRejectedValueOnce(new Error('cancel'))
+      const wrapper = mountDetail(makeExpansionDetail())
+      await flushPromises()
+
+      const approveBtn = wrapper.findAll('button').find(b => b.text() === '批准并生效')
+      await approveBtn!.trigger('click')
+      await flushPromises()
+
+      expect(mockDecideExpansionV2).not.toHaveBeenCalled()
     })
 
     it('审批后触发 changed 事件', async () => {
@@ -302,32 +375,32 @@ describe('ExpansionApprovalDetail', () => {
       expect(wrapper.emitted('changed')).toBeDefined()
     })
 
-    it('live_snapshot stale 时批准按钮被禁用', async () => {
+    it('live_snapshot stale 时仍可提交批准并由服务端最终校验', async () => {
       const detail = makeExpansionDetail()
       detail.live_snapshot!.stale = true
       const wrapper = mountDetail(detail)
       await flushPromises()
 
-      const approveBtn = wrapper.findAll('button').find(b => b.text() === '批准')
+      const approveBtn = wrapper.findAll('button').find(b => b.text() === '批准并生效')
       expect(approveBtn).toBeDefined()
-      expect(approveBtn!.attributes('disabled')).toBeDefined()
+      expect(approveBtn!.attributes('disabled')).toBeUndefined()
     })
   })
 
-  describe('重新预检', () => {
-    it('can_reprecheck 为 true 时显示重新预检按钮', async () => {
+  describe('刷新数据', () => {
+    it('can_reprecheck 为 true 时显示刷新数据按钮', async () => {
       const wrapper = mountDetail(makeExpansionDetail())
       await flushPromises()
 
-      const recheckBtn = wrapper.findAll('button').find(b => b.text() === '重新预检')
+      const recheckBtn = wrapper.findAll('button').find(b => b.text() === '刷新数据')
       expect(recheckBtn).toBeDefined()
     })
 
-    it('点击"重新预检"调用 reprecheckExpansion API', async () => {
+    it('点击"刷新数据"调用 reprecheckExpansion API', async () => {
       const wrapper = mountDetail(makeExpansionDetail())
       await flushPromises()
 
-      const recheckBtn = wrapper.findAll('button').find(b => b.text() === '重新预检')
+      const recheckBtn = wrapper.findAll('button').find(b => b.text() === '刷新数据')
       await recheckBtn!.trigger('click')
       await flushPromises()
 
@@ -336,14 +409,15 @@ describe('ExpansionApprovalDetail', () => {
   })
 
   describe('父级约束', () => {
-    it('无父级约束时显示"无父级瓶颈"', async () => {
+    it('不再展示父级约束区块', async () => {
       const wrapper = mountDetail(makeExpansionDetail())
       await flushPromises()
 
-      expect(wrapper.html()).toContain('无父级瓶颈')
+      expect(wrapper.html()).not.toContain('上级约束')
+      expect(wrapper.html()).not.toContain('无父级瓶颈')
     })
 
-    it('有父级约束时显示约束标签', async () => {
+    it('即使接口返回父级约束也不展示约束标签', async () => {
       const detail = makeExpansionDetail({
         parent_constraints: [
           { source_level: 'studio', scope_type: 'studio', scope_id: 's1', limit_usd: '1000.000000', status: 'blocking' },
@@ -353,8 +427,9 @@ describe('ExpansionApprovalDetail', () => {
       await flushPromises()
 
       const html = wrapper.html()
-      expect(html).toContain('studio')
-      expect(html).toContain('blocking')
+      expect(html).not.toContain('上级约束')
+      expect(html).not.toContain('阻断')
+      expect(html).not.toContain('批准后仍可能受上级限制')
     })
   })
 

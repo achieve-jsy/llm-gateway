@@ -66,7 +66,7 @@ var Registry = map[Permission]PolicyEntry{
 	PermBudgetViewScoped: {ScopeManage},
 	// 设置预算（按管辖域过滤）：任意管理角色（service 层做数据范围校验）
 	PermBudgetSet:       {ScopeManage},
-	PermModelTierView:   {ScopeGlobal},
+	PermModelTierView:   {ScopeManage},
 	PermModelTierManage: {ScopeGlobal},
 
 	// ── v0.7 Service Key ────────────────────────────────────────────────────
@@ -83,8 +83,8 @@ var Registry = map[Permission]PolicyEntry{
 	// ── v0.7 扩容审批 ────────────────────────────────────────────────────────
 	// 发起扩容申请：任意管理角色
 	PermExpansionRequest: {ScopeManage},
-	// 审批扩容：studio_admin 或 admin
-	PermExpansionApprove: {ScopeStudio},
+	// 审批扩容：任意管理角色，service 层按 dept/studio/admin 过滤审批范围
+	PermExpansionApprove: {ScopeManage},
 
 	// 模型组授权管理：仅 admin（设开放模式 + 授权工作室）
 	PermEntitlementManage: {ScopeGlobal},

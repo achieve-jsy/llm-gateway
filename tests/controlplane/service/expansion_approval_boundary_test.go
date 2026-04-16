@@ -69,13 +69,25 @@ func newExpansionApprovalFixture(t *testing.T) (*gorm.DB, *service.ExpansionServ
 			id text primary key, scope_type text, scope_id text, period text
 		)`,
 		`CREATE TABLE budget_temporary_overrides (
-			id text primary key, status text
+			id text primary key, budget_allocation_id text, dimension_type text, dimension_key text,
+			model_tier_id text, period_type text, target_limit_usd numeric, starts_at datetime,
+			expires_at datetime, expansion_request_id text, status text, failure_reason text,
+			created_at datetime, updated_at datetime
+		)`,
+		`CREATE TABLE budget_tier_limits (
+			id text primary key, budget_allocation_id text, model_tier_id text, period_type text,
+			limit_usd numeric, effective_at datetime, enabled boolean, created_at datetime, updated_at datetime,
+			unique(budget_allocation_id, model_tier_id, period_type)
 		)`,
 		`CREATE TABLE studios (id text primary key, name text)`,
 		`CREATE TABLE departments (id text primary key, dept_id text, dept_name text, studio_id text)`,
 		`CREATE TABLE dept_studio_map (dept_id text, studio_id text)`,
 		`CREATE TABLE users (id text primary key, dept_id text)`,
 		`CREATE TABLE model_groups (id text primary key, name text, budget_tier_id text, deleted_at datetime)`,
+		`CREATE TABLE model_tiers (
+			id text primary key, name text, description text, color text, sort_order integer,
+			enabled boolean, archived_at datetime, created_at datetime, updated_at datetime
+		)`,
 		`CREATE TABLE notification_outbox (
 			id text primary key, dedupe_key text unique, user_id text, type text, level text, title text, content text,
 			ref_type text, ref_id text, status text, attempts integer, next_attempt datetime, last_error text,
@@ -89,8 +101,12 @@ func newExpansionApprovalFixture(t *testing.T) (*gorm.DB, *service.ExpansionServ
 	budgetSvc := service.NewBudgetService(budgetRepo, repository.NewBudgetAlertRepo(db))
 	mr := miniredis.RunT(t)
 	budgetSvc.SetRedis(redis.NewClient(&redis.Options{Addr: mr.Addr()}))
+	budgetTierSvc := service.NewBudgetTierService(
+		repository.NewBudgetTierRepo(db), budgetRepo, repository.NewModelTierRepo(db), time.Now,
+	)
 	expansionSvc := service.NewExpansionService(expansionRepo)
 	expansionSvc.SetBudgetService(budgetSvc)
+	expansionSvc.SetBudgetTierService(budgetTierSvc)
 	return db, expansionSvc
 }
 
@@ -137,11 +153,10 @@ func TestExpansionPrecheckResolvesParentChainWithoutActorDeptIDs(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	require.False(t, got.CanSubmit)
+	require.True(t, got.CanSubmit)
 	require.True(t, got.CanNotifyOwner)
-	require.NotNil(t, got.BlockingReason)
-	require.Equal(t, "dept", got.BlockingReason.SourceLevel)
-	require.NotEmpty(t, got.ParentConstraints)
+	require.Nil(t, got.BlockingReason)
+	require.Empty(t, got.ParentConstraints)
 }
 
 func TestExpansionPrecheckEnforcesParentChainForStudioAndDepartment(t *testing.T) {
@@ -180,6 +195,76 @@ func TestExpansionPrecheckEnforcesParentChainForStudioAndDepartment(t *testing.T
 			require.Equal(t, tt.wantSource, got.BlockingReason.SourceLevel)
 		})
 	}
+}
+
+func TestExpansionTierPrecheckDoesNotBlockWhenParentTierLimitUnset(t *testing.T) {
+	db, svc := newExpansionApprovalFixture(t)
+	memberID, studioID, tierID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	require.NoError(t, db.Exec(`INSERT INTO studios(id,name) VALUES (?,?)`, studioID, "Studio").Error)
+	require.NoError(t, db.Exec(`INSERT INTO departments(id,dept_id,dept_name,studio_id) VALUES ('row-dept','dept-a','Dept',?)`, studioID).Error)
+	require.NoError(t, db.Exec(`INSERT INTO users(id,dept_id) VALUES (?,'row-dept')`, memberID).Error)
+	require.NoError(t, db.Exec(`INSERT INTO model_tiers(id,name,description,color,sort_order,enabled,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?)`, tierID, "高级", "", "#8b5cf6", 1, true, time.Now(), time.Now()).Error)
+	for _, row := range []struct {
+		scopeType, scopeID string
+		amount             float64
+	}{
+		{model.BudgetScopeMember, memberID, 300},
+		{model.BudgetScopeDeptDaily, "dept-a", 500},
+		{model.BudgetScopeStudio, studioID, 800},
+		{model.BudgetScopeCompany, model.BudgetScopeGlobal, 1000},
+	} {
+		require.NoError(t, db.Exec(`INSERT INTO budget_allocations
+			(id,scope_type,scope_id,amount_usd,daily_amount_usd,weekly_amount_usd,period,enabled)
+			VALUES (?,?,?,?,?,?,?,?)`, uuid.New(), row.scopeType, row.scopeID, row.amount, -1, -1, "monthly", true).Error)
+	}
+
+	got, err := svc.Precheck(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.PrecheckInput{
+		ScopeType: model.BudgetScopeMember, ScopeID: memberID, PeriodType: "monthly",
+		DimensionType: "tier", ModelTierID: &tierID, DurationType: "permanent", TargetAmountUSD: "120.000000",
+	})
+
+	require.NoError(t, err)
+	require.True(t, got.CanSubmit)
+	require.Nil(t, got.BlockingReason)
+	require.NotEmpty(t, got.ParentConstraints)
+	for _, constraint := range got.ParentConstraints {
+		require.Equal(t, "unset", constraint.TierStatus)
+		require.Equal(t, "available", constraint.Status)
+		require.Empty(t, constraint.LimitUSD)
+	}
+}
+
+func TestExpansionPrecheckHidesParentConstraintsForOrdinaryUser(t *testing.T) {
+	db, svc := newExpansionApprovalFixture(t)
+	memberID, studioID := uuid.NewString(), uuid.NewString()
+	require.NoError(t, db.Exec(`INSERT INTO studios(id,name) VALUES (?,?)`, studioID, "Studio").Error)
+	require.NoError(t, db.Exec(`INSERT INTO departments(id,dept_id,dept_name,studio_id) VALUES ('row-dept','dept-a','Dept',?)`, studioID).Error)
+	require.NoError(t, db.Exec(`INSERT INTO users(id,dept_id) VALUES (?,'row-dept')`, memberID).Error)
+	for _, row := range []struct {
+		scopeType, scopeID string
+		amount             float64
+	}{
+		{model.BudgetScopeMember, memberID, 50},
+		{model.BudgetScopeDeptDaily, "dept-a", 80},
+		{model.BudgetScopeStudio, studioID, 100},
+		{model.BudgetScopeCompany, model.BudgetScopeGlobal, 1000},
+	} {
+		require.NoError(t, db.Exec(`INSERT INTO budget_allocations
+			(id,scope_type,scope_id,amount_usd,daily_amount_usd,weekly_amount_usd,period,enabled)
+			VALUES (?,?,?,?,?,?,?,?)`, uuid.New(), row.scopeType, row.scopeID, row.amount, -1, -1, "monthly", true).Error)
+	}
+
+	got, err := svc.Precheck(context.Background(), service.ActorScope{UserID: memberID, Role: "user"}, service.PrecheckInput{
+		ScopeType: model.BudgetScopeMember, ScopeID: memberID, PeriodType: "monthly",
+		DimensionType: "total", DurationType: "permanent", TargetAmountUSD: "90.000000",
+	})
+
+	require.NoError(t, err)
+	require.True(t, got.CanSubmit)
+	require.True(t, got.CanNotifyOwner)
+	require.Nil(t, got.BlockingReason)
+	require.Empty(t, got.ParentConstraints)
 }
 
 func TestExpansionWorkflowMarksStalePrecheckAndRequiresReprecheck(t *testing.T) {
@@ -355,7 +440,6 @@ func TestExpansionApprovalRejectsUnsupportedDimensionWithoutMutation(t *testing.
 		duration  budgetdomain.DurationType
 		tierID    *uuid.UUID
 	}{
-		{name: "tier permanent", dimension: budgetdomain.DimensionTier, duration: budgetdomain.DurationPermanent, tierID: ptrUUID(uuid.New())},
 		{name: "total current period", dimension: budgetdomain.DimensionTotal, duration: budgetdomain.DurationCurrentPeriod},
 		{name: "tier current period", dimension: budgetdomain.DimensionTier, duration: budgetdomain.DurationCurrentPeriod, tierID: ptrUUID(uuid.New())},
 	}

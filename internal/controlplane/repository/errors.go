@@ -12,6 +12,7 @@ var (
 	ErrDuplicatePendingExpansion = errors.New("duplicate pending expansion")
 	ErrPendingScheduleExists     = errors.New("pending budget schedule exists")
 	ErrUniqueConflict            = errors.New("unique constraint conflict")
+	ErrMyBudgetChainUnavailable  = errors.New("my budget chain unavailable")
 )
 
 func isUniqueConstraintError(err error) bool {

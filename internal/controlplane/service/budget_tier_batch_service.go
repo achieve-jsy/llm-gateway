@@ -688,6 +688,8 @@ func (s *BudgetTierService) canManageBatchAllocation(ctx context.Context, actor 
 		return true, nil
 	}
 	switch allocation.ScopeType {
+	case model.BudgetScopeStudio:
+		return actor.HasStudio(allocation.ScopeID), nil
 	case model.BudgetScopeDeptDaily, model.BudgetScopeDeptService:
 		return len(actor.StudioIDs) > 0 && actor.HasDept(allocation.ScopeID), nil
 	case model.BudgetScopeMember:

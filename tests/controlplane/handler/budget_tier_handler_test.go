@@ -36,6 +36,7 @@ type fakeBudgetTierHandlerService struct {
 	applyResult   *service.BatchTierLimitApplyResult
 	usageResult   *service.TierUsageResponse
 	myResult      *service.MyBudgetTiersResponse
+	myActor       rbac.Actor
 }
 
 func (f *fakeBudgetTierHandlerService) ListTierLimits(context.Context, uuid.UUID) ([]service.TierLimitView, error) {
@@ -184,7 +185,8 @@ func (f *fakeBudgetTierHandlerService) QueryTierUsage(context.Context, rbac.Acto
 	}
 	return &service.TierUsageResponse{}, nil
 }
-func (f *fakeBudgetTierHandlerService) GetMyBudgetTiers(context.Context, rbac.Actor) (*service.MyBudgetTiersResponse, error) {
+func (f *fakeBudgetTierHandlerService) GetMyBudgetTiers(_ context.Context, actor rbac.Actor) (*service.MyBudgetTiersResponse, error) {
+	f.myActor = actor
 	if f.myResult != nil {
 		return f.myResult, nil
 	}
@@ -421,6 +423,42 @@ func TestMyBudgetTiersHandlerReturnsCompleteCanonicalDTO(t *testing.T) {
 	)
 	require.Contains(t, response.Body.String(), `"temporary_target_usd":"120.000000"`)
 	require.Contains(t, response.Body.String(), `"limiting_source":{"scope_type":"member","remaining_usd":"100.000000"}`)
+}
+
+func TestMyBudgetTiersHandlerUsesJWTUserIDWhenRBACActorMissing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeBudgetTierHandlerService{}
+	h := handler.NewBudgetTierHandler(fake)
+	router := gin.New()
+	router.GET("/api/v1/my/budget/tiers", func(c *gin.Context) {
+		c.Set("user_id", "member-from-jwt")
+		h.MyBudgetTiers(c)
+	})
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/my/budget/tiers", nil))
+
+	require.Equal(t, http.StatusOK, response.Code)
+	require.Equal(t, "member-from-jwt", fake.myActor.UserID)
+}
+
+func TestMyBudgetTiersHandlerMarksJWTAdminAsGlobalActor(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeBudgetTierHandlerService{}
+	h := handler.NewBudgetTierHandler(fake)
+	router := gin.New()
+	router.GET("/api/v1/my/budget/tiers", func(c *gin.Context) {
+		c.Set("user_id", "admin-user")
+		c.Set("user_role", "admin")
+		h.MyBudgetTiers(c)
+	})
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/my/budget/tiers", nil))
+
+	require.Equal(t, http.StatusOK, response.Code)
+	require.Equal(t, "admin-user", fake.myActor.UserID)
+	require.True(t, fake.myActor.IsGlobal)
 }
 
 func handlerAmount(t *testing.T, value string) budgetdomain.Amount {

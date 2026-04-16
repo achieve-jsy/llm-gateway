@@ -146,72 +146,94 @@
 
       <div v-if="advancedOpen" class="tier-limits-editor__advanced-body">
         <div class="tier-limits-editor__advanced-grid">
-          <el-form-item label="每日上限（USD）">
-            <div v-if="isUnlimited(modelValue.total.daily)" class="tier-limits-editor__mini-unlimited" data-test="daily-unlimited">
-              <strong>不限</strong>
-              <el-button
-                link
-                type="primary"
-                :disabled="disabled"
-                data-test="daily-set-limit"
-                @click="updateTotalPeriod('daily', { configured: true, value: '' })"
-              >
-                设置上限
-              </el-button>
+          <div class="tier-limits-editor__limit-card">
+            <div class="tier-limits-editor__limit-head">
+              <div>
+                <strong>每日上限</strong>
+                <span>USD</span>
+              </div>
+              <span class="tier-limits-editor__limit-state">{{ limitStateLabel(modelValue.total.daily) }}</span>
             </div>
-            <div v-else class="tier-limits-editor__input-row">
-              <el-input
-                :model-value="modelValue.total.daily.configured ? modelValue.total.daily.value : ''"
-                inputmode="decimal"
-                :disabled="disabled"
-                placeholder="留空表示未配置"
-                data-test="daily-limit-input"
-                @update:model-value="updateTotalPeriod('daily', { configured: String($event).trim() !== '', value: String($event) })"
-              />
-              <el-button
-                :disabled="disabled"
-                data-test="daily-set-unlimited"
-                @click="updateTotalPeriod('daily', { configured: true, value: '-1' })"
-              >
-                设为不限
-              </el-button>
+            <div class="tier-limits-editor__limit-control">
+              <template v-if="isUnlimited(modelValue.total.daily)">
+                <div class="tier-limits-editor__limit-unlimited" data-test="daily-unlimited">不限</div>
+                <el-button
+                  plain
+                  :disabled="disabled"
+                  data-test="daily-set-limit"
+                  @click="updateTotalPeriod('daily', { configured: true, value: '' })"
+                >
+                  设置上限
+                </el-button>
+              </template>
+              <template v-else>
+                <el-input
+                  :model-value="modelValue.total.daily.configured ? modelValue.total.daily.value : ''"
+                  inputmode="decimal"
+                  :disabled="disabled"
+                  placeholder="未配置"
+                  data-test="daily-limit-input"
+                  @update:model-value="updateTotalPeriod('daily', { configured: String($event).trim() !== '', value: String($event) })"
+                >
+                  <template #prefix>$</template>
+                </el-input>
+                <el-button
+                  plain
+                  :disabled="disabled"
+                  data-test="daily-set-unlimited"
+                  @click="updateTotalPeriod('daily', { configured: true, value: '-1' })"
+                >
+                  设为不限
+                </el-button>
+              </template>
             </div>
-          </el-form-item>
+          </div>
 
-          <el-form-item label="每周上限（USD）">
-            <div v-if="isUnlimited(modelValue.total.weekly)" class="tier-limits-editor__mini-unlimited" data-test="weekly-unlimited">
-              <strong>不限</strong>
-              <el-button
-                link
-                type="primary"
-                :disabled="disabled"
-                data-test="weekly-set-limit"
-                @click="updateTotalPeriod('weekly', { configured: true, value: '' })"
-              >
-                设置上限
-              </el-button>
+          <div class="tier-limits-editor__limit-card">
+            <div class="tier-limits-editor__limit-head">
+              <div>
+                <strong>每周上限</strong>
+                <span>USD</span>
+              </div>
+              <span class="tier-limits-editor__limit-state">{{ limitStateLabel(modelValue.total.weekly) }}</span>
             </div>
-            <div v-else class="tier-limits-editor__input-row">
-              <el-input
-                :model-value="modelValue.total.weekly.configured ? modelValue.total.weekly.value : ''"
-                inputmode="decimal"
-                :disabled="disabled"
-                placeholder="留空表示未配置"
-                data-test="weekly-limit-input"
-                @update:model-value="updateTotalPeriod('weekly', { configured: String($event).trim() !== '', value: String($event) })"
-              />
-              <el-button
-                :disabled="disabled"
-                data-test="weekly-set-unlimited"
-                @click="updateTotalPeriod('weekly', { configured: true, value: '-1' })"
-              >
-                设为不限
-              </el-button>
+            <div class="tier-limits-editor__limit-control">
+              <template v-if="isUnlimited(modelValue.total.weekly)">
+                <div class="tier-limits-editor__limit-unlimited" data-test="weekly-unlimited">不限</div>
+                <el-button
+                  plain
+                  :disabled="disabled"
+                  data-test="weekly-set-limit"
+                  @click="updateTotalPeriod('weekly', { configured: true, value: '' })"
+                >
+                  设置上限
+                </el-button>
+              </template>
+              <template v-else>
+                <el-input
+                  :model-value="modelValue.total.weekly.configured ? modelValue.total.weekly.value : ''"
+                  inputmode="decimal"
+                  :disabled="disabled"
+                  placeholder="未配置"
+                  data-test="weekly-limit-input"
+                  @update:model-value="updateTotalPeriod('weekly', { configured: String($event).trim() !== '', value: String($event) })"
+                >
+                  <template #prefix>$</template>
+                </el-input>
+                <el-button
+                  plain
+                  :disabled="disabled"
+                  data-test="weekly-set-unlimited"
+                  @click="updateTotalPeriod('weekly', { configured: true, value: '-1' })"
+                >
+                  设为不限
+                </el-button>
+              </template>
             </div>
-          </el-form-item>
+          </div>
         </div>
 
-        <el-form-item label="调整原因" required>
+        <el-form-item class="tier-limits-editor__reason" label="调整原因" required>
           <el-input
             :model-value="modelValue.reason"
             type="textarea"
@@ -283,6 +305,13 @@ const monthlyUsagePercent = computed(() => (
 
 function isUnlimited(entry: TotalEntry): boolean {
   return entry.configured && Number(entry.value) < 0
+}
+
+function limitStateLabel(entry: TotalEntry): string {
+  if (!entry.configured) return '未配置'
+  if (isUnlimited(entry)) return '不限'
+  if (entry.value === '0') return '$0 阻断'
+  return '已设置'
 }
 
 function cloneDraft(): TierLimitsDraft {
@@ -359,7 +388,9 @@ function tierStatus(tier: ModelTier) {
   const entry = tierDraft(tier.id)
   const usage = tierUsage(tier.id)
   const configuredLimit = tierLimit(tier.id)
-  const limit = entry.configured ? entry.value : configuredLimit?.limit_usd
+  const limit = entry.configured
+    ? entry.value
+    : configuredLimit?.effective_limit_usd ?? configuredLimit?.limit_usd ?? configuredLimit?.base_limit_usd
   const usedAmount = Number(usage?.used_usd ?? 0)
   const limitAmount = Number(limit)
   const usageRatio = Number.isFinite(usedAmount) && Number.isFinite(limitAmount) && limitAmount > 0
@@ -608,7 +639,99 @@ p,
 .tier-limits-editor__advanced-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.tier-limits-editor__limit-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.tier-limits-editor__limit-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
+}
+
+.tier-limits-editor__limit-head > div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.tier-limits-editor__limit-head strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.tier-limits-editor__limit-head span {
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.tier-limits-editor__limit-state {
+  flex: none;
+  color: #94a3b8 !important;
+  font-size: 11px !important;
+}
+
+.tier-limits-editor__limit-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 8px;
+}
+
+.tier-limits-editor__limit-control :deep(.el-input__wrapper) {
+  box-shadow: 0 0 0 1px #d8dee8 inset;
+}
+
+.tier-limits-editor__limit-control :deep(.el-input__wrapper:hover) {
+  box-shadow: 0 0 0 1px #b7c3d0 inset;
+}
+
+.tier-limits-editor__limit-control :deep(.el-button) {
+  padding: 0 10px;
+  border-color: #e2e8f0;
+  background: #fff;
+  color: #475569;
+}
+
+.tier-limits-editor__limit-control :deep(.el-button:hover) {
+  border-color: #84d293;
+  color: #2a9c4b;
+}
+
+.tier-limits-editor__limit-control :deep(.el-button) {
+  margin-left: 0;
+}
+
+.tier-limits-editor__limit-unlimited {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px dashed #d8dee8;
+  border-radius: 7px;
+  background: #fff;
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.tier-limits-editor__reason {
+  margin-bottom: 0;
+  padding-top: 2px;
+}
+
+.tier-limits-editor__reason :deep(.el-form-item__label) {
+  margin-bottom: 6px;
+  color: #334155;
+  font-weight: 600;
 }
 
 @media (max-width: 760px) {
@@ -620,6 +743,10 @@ p,
   .tier-limits-editor__tier-controls,
   .tier-limits-editor__input-row {
     flex-wrap: wrap;
+  }
+
+  .tier-limits-editor__limit-control {
+    grid-template-columns: 1fr;
   }
 }
 </style>

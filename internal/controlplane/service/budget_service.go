@@ -112,6 +112,16 @@ func (s *BudgetService) MemberInDeptIDs(memberID string, deptIDs []string) (bool
 	return s.repo.MemberInDeptIDs(memberID, deptIDs)
 }
 
+func (s *BudgetService) ResolveMemberDeptID(memberID string) (string, error) {
+	resolver, ok := s.repo.(interface {
+		ResolveMemberDeptID(string) (string, error)
+	})
+	if !ok {
+		return "", nil
+	}
+	return resolver.ResolveMemberDeptID(memberID)
+}
+
 func (s *BudgetService) ResolveMyBudgetChain(ctx context.Context, userID string) ([]repository.MyBudgetScopeAllocation, error) {
 	reader, ok := s.repo.(interface {
 		ResolveMyBudgetChain(context.Context, string) ([]repository.MyBudgetScopeAllocation, error)
@@ -126,7 +136,9 @@ func (s *BudgetService) ResolveBudgetChain(ctx context.Context, scopeType, scope
 	reader, ok := s.repo.(interface {
 		ResolveBudgetChain(context.Context, string, string) ([]repository.MyBudgetScopeAllocation, error)
 	})
-	if !ok { return nil, fmt.Errorf("budget chain resolver not configured") }
+	if !ok {
+		return nil, fmt.Errorf("budget chain resolver not configured")
+	}
 	return reader.ResolveBudgetChain(ctx, scopeType, scopeID)
 }
 

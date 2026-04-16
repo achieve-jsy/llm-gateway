@@ -110,6 +110,27 @@ describe('BudgetTierLimitsPanel', () => {
       expect(wrapper.html()).not.toContain('NaN')
     })
 
+    it('兼容列表接口返回 effective_limit_usd 字段', async () => {
+      mockListBudgetTierLimits.mockResolvedValue([{
+        id: 'limit-1',
+        budget_allocation_id: 'alloc-1',
+        model_tier_id: 'tier-1',
+        model_tier_name: '高级',
+        period_type: 'monthly',
+        base_limit_usd: '80.000000',
+        effective_limit_usd: '120.000000',
+        enabled: true,
+        used_usd: '60.000000',
+      }])
+      const wrapper = mountPanel()
+      await flushPromises()
+
+      const tags = wrapper.findComponent({ name: 'TierBudgetTags' })
+      const items = tags.props('items') as Array<{ usageRatio?: number; label: string }>
+      expect(items[0].usageRatio).toBe(0.5)
+      expect(items[0].label).toContain('$120.00')
+    })
+
     it('空列表时显示未配置摘要', async () => {
       mockListBudgetTierLimits.mockResolvedValue([])
       const wrapper = mountPanel()

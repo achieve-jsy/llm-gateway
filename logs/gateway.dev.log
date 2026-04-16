@@ -1,0 +1,52 @@
+{"time":"2026-07-15T19:13:25.466033+08:00","level":"INFO","msg":"OTLP tracing disabled"}
+{"time":"2026-07-15T19:13:25.468417+08:00","level":"INFO","msg":"model registry initialized","total_models":9,"providers":3,"failed_providers":0,"metadata_enriched":0,"metadata_total":0,"metadata_providers":0}
+{"time":"2026-07-15T19:13:25.469067+08:00","level":"INFO","msg":"loader: router built","provider_count":3,"model_count":9}
+{"time":"2026-07-15T19:13:25.469091+08:00","level":"INFO","msg":"providers loaded from redis snapshot successfully"}
+{"time":"2026-07-15T19:13:25.469515+08:00","level":"INFO","msg":"scheduler started"}
+{"time":"2026-07-15T19:13:25.471864+08:00","level":"WARN","msg":"group name cache startup refresh failed","attempt":1,"max":5,"error":"http get: Get \"http://127.0.0.1:8081/api/v1/internal/groups\": dial tcp 127.0.0.1:8081: connect: connection refused"}
+{"time":"2026-07-15T19:13:25.472461+08:00","level":"INFO","msg":"config change subscriber started","channel":"config:change"}
+{"time":"2026-07-15T19:13:27.537557+08:00","level":"INFO","msg":"group name cache refreshed","count":21}
+{"time":"2026-07-15T19:13:27.537585+08:00","level":"INFO","msg":"group name cache started","initialized":true}
+{"time":"2026-07-15T19:13:27.554188+08:00","level":"INFO","msg":"usage tracking enabled (direct-DB mode)"}
+{"time":"2026-07-15T19:13:27.579347+08:00","level":"INFO","msg":"pricing_table_refreshed","count":6}
+{"time":"2026-07-15T19:13:27.579378+08:00","level":"INFO","msg":"call log postgres connected; starting spool replay"}
+{"time":"2026-07-15T19:13:27.583092+08:00","level":"INFO","msg":"group name cache refreshed","count":21}
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:	export GIN_MODE=release
+ - using code:	gin.SetMode(gin.ReleaseMode)
+
+[GIN-debug] GET    /swagger/*any             --> github.com/swaggo/gin-swagger.CustomWrapHandler.func1 (7 handlers)
+[GIN-debug] GET    /health                   --> github.com/example/llm-gateway/internal/gateway/handler.(*HealthHandler).Health-fm (7 handlers)
+[GIN-debug] GET    /ready                    --> github.com/example/llm-gateway/internal/gateway/server.setup.func3 (7 handlers)
+{"time":"2026-07-15T19:13:27.698726+08:00","level":"INFO","msg":"loading seedance-volcengine adapter from provider config","endpoint":"https://ark.cn-beijing.volces.com","name":"火山官方-E2E"}
+{"time":"2026-07-15T19:13:27.698742+08:00","level":"WARN","msg":"seedance-relay adapter not configured, using placeholder credentials"}
+[GIN-debug] GET    /v1/models                --> github.com/example/llm-gateway/internal/gateway/handler.(*BoundModelsHandler).Handle-fm (13 handlers)
+[GIN-debug] GET    /v1/models/:model_id      --> github.com/example/llm-gateway/internal/gateway/handler.(*ModelDetailHandler).Handle-fm (13 handlers)
+[GIN-debug] GET    /v1/model/info            --> github.com/example/llm-gateway/internal/gateway/handler.(*ModelInfoHandler).Handle-fm (13 handlers)
+[GIN-debug] GET    /v1/health/models         --> github.com/example/llm-gateway/internal/gateway/handler.(*ModelsHandler).HandleLegacy-fm (13 handlers)
+[GIN-debug] POST   /v1/chat/completions      --> github.com/example/llm-gateway/internal/gateway/handler.(*ChatHandler).Handle-fm (13 handlers)
+[GIN-debug] POST   /v1/embeddings            --> github.com/example/llm-gateway/internal/gateway/handler.(*EmbeddingsHandler).Handle-fm (13 handlers)
+[GIN-debug] POST   /v1/rerank                --> github.com/example/llm-gateway/internal/gateway/handler.(*RerankHandler).Handle-fm (13 handlers)
+[GIN-debug] POST   /v1/responses             --> github.com/example/llm-gateway/internal/gateway/handler.(*ResponsesHandler).Handle-fm (13 handlers)
+[GIN-debug] POST   /v1/messages              --> github.com/example/llm-gateway/internal/gateway/handler.(*MessagesHandler).HandleMessages-fm (13 handlers)
+[GIN-debug] POST   /v1/messages/count_tokens --> github.com/example/llm-gateway/internal/gateway/handler.(*MessagesHandler).HandleCountTokens-fm (13 handlers)
+[GIN-debug] GET    /v1/p/:provider/*path     --> github.com/example/llm-gateway/internal/gateway/server.setup.makePassthroughHandler.func21 (14 handlers)
+[GIN-debug] POST   /v1/p/:provider/*path     --> github.com/example/llm-gateway/internal/gateway/server.setup.makePassthroughHandler.func21 (14 handlers)
+[GIN-debug] PUT    /v1/p/:provider/*path     --> github.com/example/llm-gateway/internal/gateway/server.setup.makePassthroughHandler.func21 (14 handlers)
+[GIN-debug] PATCH  /v1/p/:provider/*path     --> github.com/example/llm-gateway/internal/gateway/server.setup.makePassthroughHandler.func21 (14 handlers)
+[GIN-debug] HEAD   /v1/p/:provider/*path     --> github.com/example/llm-gateway/internal/gateway/server.setup.makePassthroughHandler.func21 (14 handlers)
+[GIN-debug] OPTIONS /v1/p/:provider/*path     --> github.com/example/llm-gateway/internal/gateway/server.setup.makePassthroughHandler.func21 (14 handlers)
+[GIN-debug] DELETE /v1/p/:provider/*path     --> github.com/example/llm-gateway/internal/gateway/server.setup.makePassthroughHandler.func21 (14 handlers)
+[GIN-debug] CONNECT /v1/p/:provider/*path     --> github.com/example/llm-gateway/internal/gateway/server.setup.makePassthroughHandler.func21 (14 handlers)
+[GIN-debug] TRACE  /v1/p/:provider/*path     --> github.com/example/llm-gateway/internal/gateway/server.setup.makePassthroughHandler.func21 (14 handlers)
+[GIN-debug] POST   /v1/contents/generations/tasks --> github.com/example/llm-gateway/internal/gateway/handler.(*VideoHandler).CreateTask-fm (13 handlers)
+[GIN-debug] GET    /v1/contents/generations/tasks/:task_id --> github.com/example/llm-gateway/internal/gateway/handler.(*VideoHandler).GetTask-fm (13 handlers)
+[GIN-debug] POST   /v1/assets/:action        --> github.com/example/llm-gateway/internal/gateway/handler.(*AssetHandler).Handle-fm (13 handlers)
+[GIN-debug] POST   /api/event_logging/batch  --> github.com/example/llm-gateway/internal/gateway/server.setup.func9 (7 handlers)
+[GIN-debug] GET    /.well-known/jwks.json    --> github.com/example/llm-gateway/internal/auth/handler.(*JWKSHandler).GetJWKS-fm (7 handlers)
+[GIN-debug] POST   /auth/refresh             --> github.com/example/llm-gateway/internal/auth/handler.(*TokenHandler).Refresh-fm (7 handlers)
+[GIN-debug] POST   /auth/logout              --> github.com/example/llm-gateway/internal/auth/handler.(*TokenHandler).Logout-fm (7 handlers)
+[GIN-debug] POST   /internal/v1/auth/verify-key --> github.com/example/llm-gateway/internal/auth/handler.(*InternalHandler).VerifyKey-fm (7 handlers)
+{"time":"2026-07-15T19:13:27.699141+08:00","level":"INFO","msg":"gateway starting","port":"8080"}
+{"time":"2026-07-15T19:13:27.70046+08:00","level":"INFO","msg":"quota: config change subscriber started","channel":"config:change"}
+{"time":"2026-07-15T19:13:30.578338+08:00","level":"INFO","msg":"scheduler config synced","groups":21,"models":20}

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/budgetdomain"
@@ -20,6 +21,15 @@ type PendingExpansionKey struct {
 	DimensionType budgetdomain.DimensionType
 	ModelTierID   *uuid.UUID
 	DurationType  budgetdomain.DurationType
+}
+
+type ExpansionListFilter struct {
+	DimensionType string
+	ModelTierID   string
+	DurationType  string
+	Priority      string
+	Status        string
+	Keyword       string
 }
 
 // ExpansionRepo 处理扩容审批表。
@@ -176,15 +186,50 @@ func (r *ExpansionRepo) UpdateStatus(id, status, currentLevel string) error {
 // ListByRequester 查询某用户发起的申请。
 // 若 requesterID 不是合法 UUID，返回空列表（防御性校验，避免 SQL 500）。
 func (r *ExpansionRepo) ListByRequester(requesterID string, status string) ([]model.ExpansionRequest, error) {
+	return r.ListByRequesterFiltered(requesterID, ExpansionListFilter{Status: status})
+}
+
+func (r *ExpansionRepo) ListByRequesterFiltered(requesterID string, filter ExpansionListFilter) ([]model.ExpansionRequest, error) {
 	if _, err := uuid.Parse(requesterID); err != nil {
 		return []model.ExpansionRequest{}, nil
 	}
 	var reqs []model.ExpansionRequest
-	q := r.db.Where("requester_id = ?", requesterID)
-	if status != "" {
-		q = q.Where("status = ?", status)
+	q := r.db.Table("expansion_requests er").Select("er.*").Where("er.requester_id = ?", requesterID)
+	q = applyExpansionListFilter(q, filter)
+	return reqs, q.Order("er.created_at DESC").Find(&reqs).Error
+}
+
+func applyExpansionListFilter(q *gorm.DB, filter ExpansionListFilter) *gorm.DB {
+	if filter.DimensionType != "" && filter.DimensionType != "all" {
+		q = q.Where("er.dimension_type = ?", filter.DimensionType)
 	}
-	return reqs, q.Order("created_at DESC").Find(&reqs).Error
+	if filter.ModelTierID != "" && filter.ModelTierID != "all" {
+		q = q.Where("CAST(er.model_tier_id AS TEXT) = ?", filter.ModelTierID)
+	}
+	if filter.DurationType != "" && filter.DurationType != "all" {
+		q = q.Where("er.duration_type = ?", filter.DurationType)
+	}
+	if filter.Priority != "" && filter.Priority != "all" {
+		q = q.Where("er.priority = ?", filter.Priority)
+	}
+	if filter.Status != "" && filter.Status != "all" {
+		if filter.Status == "in_progress" {
+			q = q.Where("er.status IN ?", []string{
+				model.ExpansionStatusPending,
+				model.ExpansionStatusPrecheckRequired,
+				model.ExpansionStatusPendingReconfirmation,
+			})
+		} else {
+			q = q.Where("er.status = ?", filter.Status)
+		}
+	}
+	keyword := strings.TrimSpace(filter.Keyword)
+	if keyword != "" {
+		pattern := "%" + keyword + "%"
+		q = q.Joins("LEFT JOIN users filter_u ON filter_u.id = er.requester_id").
+			Where("filter_u.name ILIKE ? OR er.scope_id ILIKE ? OR er.reason ILIKE ?", pattern, pattern, pattern)
+	}
+	return q
 }
 
 // ListPendingForApprover 查询待某级别审批的申请（工作室负责人/平台 admin 按级别过滤）。
@@ -198,15 +243,19 @@ func (r *ExpansionRepo) ListPendingForApprover(level string) ([]model.ExpansionR
 // ListPendingForApproverScoped 查询审批人管辖范围内的待审批申请。
 // requesterName 非空时按申请人姓名模糊过滤（JOIN users 表）。
 func (r *ExpansionRepo) ListPendingForApproverScoped(level string, deptIDs, studioIDs, memberIDs []string, requesterName string) ([]model.ExpansionRequest, error) {
+	return r.ListPendingForApproverScopedFiltered(level, deptIDs, studioIDs, memberIDs, ExpansionListFilter{Keyword: requesterName})
+}
+
+func (r *ExpansionRepo) ListPendingForApproverScopedFiltered(level string, deptIDs, studioIDs, memberIDs []string, filter ExpansionListFilter) ([]model.ExpansionRequest, error) {
 	var reqs []model.ExpansionRequest
 	q := r.db.Table("expansion_requests er").
 		Select("er.*").
-		Where("er.status = ? AND er.current_level = ?", model.ExpansionStatusPending, level)
-
-	if requesterName != "" {
-		q = q.Joins("JOIN users u ON u.id = er.requester_id").
-			Where("u.name ILIKE ?", "%"+requesterName+"%")
+		Where("er.current_level = ?", level)
+	filter.Status = strings.TrimSpace(filter.Status)
+	if filter.Status == "" || filter.Status == "all" {
+		filter.Status = "pending"
 	}
+	q = applyExpansionListFilter(q, filter)
 
 	switch level {
 	case model.ExpansionLevelDept:

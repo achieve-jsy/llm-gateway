@@ -97,6 +97,27 @@ func TestBudgetTierDirectWriteRequiresNonEmptyReason(t *testing.T) {
 	require.Nil(t, repo.existing)
 }
 
+func TestBudgetTierListMarksDisabledModelTierAsDisabled(t *testing.T) {
+	allocationID, tierID := uuid.New(), uuid.New()
+	repo := &fakeBudgetTierStore{existing: &model.BudgetTierLimit{
+		ID: uuid.New(), BudgetAllocationID: allocationID, ModelTierID: tierID,
+		ModelTier:  model.ModelTier{ID: tierID, Name: "高级", Enabled: false},
+		PeriodType: budgetdomain.PeriodMonthly, LimitUSD: mustAmount(t, "100"), Enabled: true,
+		EffectiveAt: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+	}}
+	svc := service.NewBudgetTierService(
+		repo,
+		fakeAllocationReader{&model.BudgetAllocation{ID: allocationID}},
+		newFakeModelTierRepo(),
+		time.Now,
+	)
+
+	got, err := svc.ListTierLimits(context.Background(), allocationID)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.False(t, got[0].Enabled)
+}
+
 func TestBudgetTierDirectWriteReturnsTypedEffectiveModeError(t *testing.T) {
 	tierID := uuid.New()
 	repo := &fakeBudgetTierStore{}

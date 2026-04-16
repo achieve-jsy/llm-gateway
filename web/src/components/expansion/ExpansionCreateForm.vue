@@ -2,35 +2,53 @@
   <el-dialog v-model="visible" title="新建扩容申请" width="min(620px, 94vw)" :close-on-click-modal="false">
     <el-form label-position="top">
       <div class="form-grid">
-        <el-form-item label="对象类型" required><el-select v-model="form.scope_type" :disabled="ordinaryUser"><el-option v-for="item in scopeOptions" :key="item" :label="SCOPE_TYPE_LABELS[item]" :value="item" /></el-select></el-form-item>
-        <el-form-item label="对象 ID" required><el-input v-model="form.scope_id" :disabled="ordinaryUser" /></el-form-item>
+        <el-form-item v-if="hideScopeFields" label="申请对象">
+          <div class="scope-summary">{{ scopeSummaryText }}</div>
+        </el-form-item>
+        <template v-else>
+          <el-form-item label="对象类型" required><el-select v-model="form.scope_type"><el-option v-for="item in scopeOptions" :key="item" :label="SCOPE_TYPE_LABELS[item]" :value="item" /></el-select></el-form-item>
+          <el-form-item label="对象 ID" required><el-input v-model="form.scope_id" /></el-form-item>
+        </template>
+        <el-form-item v-if="showManagerPoolSelector" label="预算池">
+          <el-select v-model="form.scope_type">
+            <el-option label="成员日常预算池" value="dept_daily" />
+            <el-option label="程序服务预算池" value="dept_service" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="预算维度"><el-radio-group v-model="form.dimension_type"><el-radio-button value="total">总预算</el-radio-button><el-radio-button value="tier">模型等级</el-radio-button></el-radio-group></el-form-item>
         <el-form-item v-if="form.dimension_type === 'tier'" label="模型等级" required><el-select v-model="form.model_tier_id"><el-option v-for="tier in tiers" :key="tier.id" :label="tier.name" :value="tier.id" /></el-select></el-form-item>
         <el-form-item label="周期"><el-select v-model="form.period_type"><el-option label="日" value="daily" /><el-option label="周" value="weekly" /><el-option label="月" value="monthly" /></el-select></el-form-item>
-        <el-form-item label="持续时间"><el-radio-group v-model="form.duration_type"><el-radio value="permanent">长期</el-radio><el-radio value="current_period">仅当前周期</el-radio></el-radio-group></el-form-item>
+        <el-form-item label="调整类型">
+          <el-radio-group v-model="form.duration_type">
+            <el-radio-button value="current_period">临时扩容</el-radio-button>
+            <el-radio-button value="permanent">长期调额</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
         <el-form-item label="目标额度（USD）" required><el-input v-model="form.target_amount_usd" inputmode="decimal" /></el-form-item>
         <el-form-item label="优先级"><el-radio-group v-model="form.priority"><el-radio value="normal">普通</el-radio><el-radio value="urgent">紧急</el-radio></el-radio-group></el-form-item>
       </div>
       <el-form-item label="申请原因" required><el-input v-model="form.reason" type="textarea" maxlength="300" show-word-limit /></el-form-item>
       <el-form-item v-if="form.priority === 'urgent'" label="紧急原因" required><el-input v-model="form.urgent_reason" type="textarea" /></el-form-item>
     </el-form>
-    <ExpansionPrecheckPanel :value="precheck" />
     <template #footer>
       <el-button @click="visible = false">取消</el-button>
-      <el-button v-if="precheck?.can_notify_owner && !precheck.can_submit" :loading="submitting" @click="notify">通知负责人</el-button>
-      <el-button type="primary" :loading="submitting || checking" :disabled="!canSubmit" @click="submit">提交申请</el-button>
+      <el-button type="primary" :loading="submitting" :disabled="!canSubmit" @click="submit">提交申请</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { createExpansionRequest, listModelTiers, notifyBudgetOwner, precheckExpansion } from '@/services/control-plane'
+import { createExpansionRequest, getMyBudgetTiers, listModelTiers } from '@/services/control-plane'
 import { SCOPE_TYPE_LABELS, type BudgetScopeType } from '@/types/budget'
-import type { ExpansionDimension, ExpansionPeriod, ExpansionPrecheck } from '@/types/expansion'
+import type { ExpansionDimension, ExpansionPeriod } from '@/types/expansion'
 import type { ModelTier } from '@/types/model-tier'
-import ExpansionPrecheckPanel from './ExpansionPrecheckPanel.vue'
+
+interface TierOption {
+  id: string
+  name: string
+}
 
 const props = withDefaults(defineProps<{
   ordinaryUser?: boolean
@@ -40,6 +58,8 @@ const props = withDefaults(defineProps<{
   initialModelTierId?: string
   initialPeriodType?: ExpansionPeriod
   initialTargetAmountUsd?: string
+  fixedManagerScope?: boolean
+  managerScopeLabel?: string
 }>(), {
   ordinaryUser: false,
   initialScopeType: 'member',
@@ -48,44 +68,31 @@ const props = withDefaults(defineProps<{
   initialModelTierId: '',
   initialPeriodType: 'monthly',
   initialTargetAmountUsd: '',
+  fixedManagerScope: false,
+  managerScopeLabel: '',
 })
 const visible = defineModel<boolean>({ default: false })
-const emit = defineEmits<{ created: [] }>()
+const emit = defineEmits<{
+  created: []
+  duplicate: [payload: { scope_type: BudgetScopeType; scope_id: string; dimension_type: ExpansionDimension; model_tier_id: string | null; duration_type: 'permanent' | 'current_period' }]
+}>()
 const scopeOptions: BudgetScopeType[] = ['company', 'studio', 'dept_daily', 'dept_service', 'member']
-const tiers = ref<ModelTier[]>([])
-const precheck = ref<ExpansionPrecheck | null>(null)
-const checking = ref(false)
+const tiers = ref<TierOption[]>([])
 const submitting = ref(false)
-let timer: ReturnType<typeof setTimeout> | undefined
-let generation = 0
 const form = reactive({
   scope_type: props.initialScopeType, scope_id: props.initialScopeId, period_type: 'monthly' as 'daily' | 'weekly' | 'monthly',
   dimension_type: 'total' as 'total' | 'tier', model_tier_id: '', duration_type: 'permanent' as 'permanent' | 'current_period',
   priority: 'normal' as 'normal' | 'urgent', target_amount_usd: '', reason: '', urgent_reason: '',
 })
 const valid = computed(() => form.scope_id && /^\d+(\.\d{1,6})?$/.test(form.target_amount_usd) && form.reason.trim() && (form.priority !== 'urgent' || form.urgent_reason.trim()) && (form.dimension_type !== 'tier' || form.model_tier_id))
-const canSubmit = computed(() => !!valid.value && !!precheck.value?.can_submit && !precheck.value.stale)
-async function check() {
-  if (!form.scope_id || !/^\d+(\.\d{1,6})?$/.test(form.target_amount_usd)) { precheck.value = null; return }
-  const current = ++generation
-  checking.value = true
-  try {
-    const result = await precheckExpansion({
-      scope_type: form.scope_type, scope_id: form.scope_id, period_type: form.period_type,
-      dimension_type: form.dimension_type, model_tier_id: form.dimension_type === 'tier' ? form.model_tier_id : null,
-      duration_type: form.duration_type, priority: form.priority, target_amount_usd: Number(form.target_amount_usd).toFixed(6),
-    })
-    if (current === generation) precheck.value = result
-  } finally { if (current === generation) checking.value = false }
-}
-watch(() => [form.scope_type, form.scope_id, form.period_type, form.dimension_type, form.model_tier_id, form.duration_type, form.priority, form.target_amount_usd], () => {
-  clearTimeout(timer)
-  timer = setTimeout(check, 350)
-})
+const canSubmit = computed(() => !!valid.value)
+const hideScopeFields = computed(() => props.ordinaryUser || props.fixedManagerScope)
+const showManagerPoolSelector = computed(() => props.fixedManagerScope && (props.initialScopeType === 'dept_daily' || props.initialScopeType === 'dept_service'))
+const scopeSummaryText = computed(() => props.fixedManagerScope
+  ? (props.managerScopeLabel || '我的部门')
+  : '我的成员额度')
 watch(visible, async value => {
   if (!value) return
-  generation++
-  clearTimeout(timer)
   Object.assign(form, {
     scope_type: props.initialScopeType,
     scope_id: props.initialScopeId,
@@ -98,11 +105,24 @@ watch(visible, async value => {
     reason: '',
     urgent_reason: '',
   })
-  precheck.value = null
-  if (!tiers.value.length) tiers.value = await listModelTiers()
+  if (!tiers.value.length) tiers.value = await loadTierOptions(props.ordinaryUser)
+  if (form.dimension_type === 'tier' && form.model_tier_id && !tiers.value.some(tier => tier.id === form.model_tier_id)) {
+    form.model_tier_id = ''
+  }
 })
+
+async function loadTierOptions(ordinaryUser: boolean): Promise<TierOption[]> {
+  if (ordinaryUser) {
+    const budget = await getMyBudgetTiers()
+    return budget.tier_limits
+      .filter(tier => tier.enabled && tier.periods.some(period => period.status !== 'tier_disabled'))
+      .map(tier => ({ id: tier.model_tier_id, name: tier.model_tier_name }))
+  }
+  const items: ModelTier[] = await listModelTiers()
+  return items.filter(tier => tier.enabled).map(tier => ({ id: tier.id, name: tier.name }))
+}
 async function submit() {
-  if (!canSubmit.value || !precheck.value) return
+  if (!canSubmit.value) return
   submitting.value = true
   try {
     await createExpansionRequest({
@@ -112,19 +132,23 @@ async function submit() {
     visible.value = false
     ElMessage.success('扩容申请已提交')
     emit('created')
+  } catch (error: any) {
+    const code = error?.response?.data?.error?.code || error?.response?.data?.code
+    const message = error?.response?.data?.error?.message || error?.response?.data?.message
+    if (error?.response?.status === 409 || code === 'DUPLICATE_PENDING_EXPANSION') {
+      ElMessage.warning('已有审批中的同类申请，请等待审批结果或取消后重新提交')
+      visible.value = false
+      emit('duplicate', {
+        scope_type: form.scope_type,
+        scope_id: form.scope_id,
+        dimension_type: form.dimension_type,
+        model_tier_id: form.dimension_type === 'tier' ? form.model_tier_id : null,
+        duration_type: form.duration_type,
+      })
+    } else {
+      ElMessage.error(message || error?.message || '提交失败')
+    }
   } finally { submitting.value = false }
 }
-async function notify() {
-  submitting.value = true
-  try {
-    await notifyBudgetOwner({
-      scope_type: form.scope_type, scope_id: form.scope_id, period_type: form.period_type,
-      dimension_type: form.dimension_type, model_tier_id: form.dimension_type === 'tier' ? form.model_tier_id : null,
-      message: form.reason,
-    })
-    ElMessage.success('已通知上级预算负责人')
-  } finally { submitting.value = false }
-}
-onBeforeUnmount(() => clearTimeout(timer))
 </script>
-<style scoped>.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; } .el-select { width: 100%; } @media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } }</style>
+<style scoped>.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; } .el-select { width: 100%; } .scope-summary { width: 100%; min-height: 32px; display: inline-flex; align-items: center; padding: 0 12px; border: 1px solid var(--el-border-color); border-radius: 6px; color: var(--el-text-color-primary); background: var(--el-fill-color-light); } @media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } }</style>

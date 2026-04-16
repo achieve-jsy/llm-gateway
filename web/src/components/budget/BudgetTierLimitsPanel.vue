@@ -27,7 +27,8 @@ const loading = ref(false)
 
 const tagItems = computed<TierBudgetTagItem[]>(() => rows.value.map(row => {
   const usedAmount = Number(row.used_usd ?? 0)
-  const limitAmount = Number(row.limit_usd)
+  const limitUSD = row.effective_limit_usd ?? row.limit_usd ?? row.base_limit_usd
+  const limitAmount = Number(limitUSD)
   const ratio = Number.isFinite(usedAmount) && Number.isFinite(limitAmount) && limitAmount > 0
     ? usedAmount / limitAmount
     : 0
@@ -42,7 +43,7 @@ const tagItems = computed<TierBudgetTagItem[]>(() => rows.value.map(row => {
     ? '已停用'
     : limitAmount === 0
       ? '$0 · 不可使用'
-      : formatBudgetUSD(row.limit_usd)
+      : formatBudgetUSD(limitUSD)
   return {
     id: row.id ?? `${row.model_tier_id}:${row.period_type}`,
     name: row.model_tier_name ?? row.model_tier_id,

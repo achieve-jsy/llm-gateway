@@ -52,6 +52,7 @@ const (
 	CodeDuplicatePendingExpansion    = "DUPLICATE_PENDING_EXPANSION"
 	CodeExpansionApprovalUnsupported = "EXPANSION_APPROVAL_UNSUPPORTED"
 	CodeExpansionReasonRequired      = "EXPANSION_REASON_REQUIRED"
+	CodeExpansionDurationUnsupported = "EXPANSION_DURATION_UNSUPPORTED"
 
 	// 400 key group binding errors
 	CodeGroupAlreadyBound = "group_already_bound"

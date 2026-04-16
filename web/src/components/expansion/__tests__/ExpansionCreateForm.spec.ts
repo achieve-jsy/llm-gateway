@@ -2,35 +2,35 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus from 'element-plus'
+import { ElMessage } from 'element-plus'
 import ExpansionCreateForm from '../ExpansionCreateForm.vue'
 import type { ExpansionPrecheck, ExpansionRequest } from '@/types/expansion'
-import type { ModelTier } from '@/types/model-tier'
+import type { ModelTier, MyBudgetTiersResponse } from '@/types/model-tier'
 
 // Mock element-plus icons
 vi.mock('@element-plus/icons-vue', () => ({
   Refresh: { template: '<i />' },
 }))
 
+vi.mock('element-plus', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('element-plus')>()
+  return {
+    ...actual,
+    ElMessage: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
+  }
+})
+
 // ── Mock API services ──────────────────────────────────────────────
 const mockCreateExpansionRequest = vi.fn()
 const mockPrecheckExpansion = vi.fn()
 const mockListModelTiers = vi.fn()
-const mockNotifyBudgetOwner = vi.fn()
+const mockGetMyBudgetTiers = vi.fn()
 
 vi.mock('@/services/control-plane', () => ({
   createExpansionRequest: (...args: unknown[]) => mockCreateExpansionRequest(...args),
   precheckExpansion: (...args: unknown[]) => mockPrecheckExpansion(...args),
   listModelTiers: (...args: unknown[]) => mockListModelTiers(...args),
-  notifyBudgetOwner: (...args: unknown[]) => mockNotifyBudgetOwner(...args),
-}))
-
-// Mock ExpansionPrecheckPanel
-vi.mock('../ExpansionPrecheckPanel.vue', () => ({
-  default: {
-    name: 'ExpansionPrecheckPanel',
-    template: '<div class="mock-precheck-panel" />',
-    props: ['value'],
-  },
+  getMyBudgetTiers: (...args: unknown[]) => mockGetMyBudgetTiers(...args),
 }))
 
 // ── Fixtures ───────────────────────────────────────────────────────
@@ -60,7 +60,25 @@ const sampleTiers: ModelTier[] = [
     group_count: 1, budget_count: 1, history_count: 0, reference_count: 2,
     created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
   },
+  {
+    id: 'tier-disabled', name: 'Disabled', description: '', color: '#909399',
+    sort_order: 1, enabled: false, archived_at: null,
+    group_count: 0, budget_count: 0, history_count: 0, reference_count: 0,
+    created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+  },
 ]
+
+const myTierBudget: MyBudgetTiersResponse = {
+  source_summary: { mode: 'personal', primary_scope_type: 'member', has_shared_pool: false, has_temporary_override: false },
+  effective_total: [],
+  budget_chain: [],
+  tier_limits: [
+    { model_tier_id: 'tier-1', model_tier_name: 'Standard', enabled: true, periods: [] },
+    { model_tier_id: 'tier-disabled', model_tier_name: 'Disabled', enabled: false, periods: [{ period_type: 'monthly', configured: false, reset_at: '2026-08-01T00:00:00Z', status: 'tier_disabled', limiting_source: { scope_type: 'member' } }] },
+  ],
+  data_updated_at: '2026-07-15T00:00:00Z',
+  stale: false,
+}
 
 // ── Helpers ────────────────────────────────────────────────────────
 function mountForm(props: {
@@ -71,6 +89,8 @@ function mountForm(props: {
   initialModelTierId?: string
   initialPeriodType?: 'daily' | 'weekly' | 'monthly'
   initialTargetAmountUsd?: string
+  fixedManagerScope?: boolean
+  managerScopeLabel?: string
 } = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -84,6 +104,8 @@ function mountForm(props: {
       initialModelTierId: props.initialModelTierId,
       initialPeriodType: props.initialPeriodType,
       initialTargetAmountUsd: props.initialTargetAmountUsd,
+      fixedManagerScope: props.fixedManagerScope ?? false,
+      managerScopeLabel: props.managerScopeLabel ?? '',
       'onUpdate:modelValue': (val: boolean) => wrapper.setProps({ modelValue: val }),
     },
     global: {
@@ -101,7 +123,7 @@ describe('ExpansionCreateForm', () => {
     mockPrecheckExpansion.mockResolvedValue(makePrecheck())
     mockCreateExpansionRequest.mockResolvedValue({ id: 'req-1' } as ExpansionRequest)
     mockListModelTiers.mockResolvedValue([...sampleTiers])
-    mockNotifyBudgetOwner.mockResolvedValue(undefined)
+    mockGetMyBudgetTiers.mockResolvedValue(structuredClone(myTierBudget))
     vi.useFakeTimers()
   })
 
@@ -123,13 +145,42 @@ describe('ExpansionCreateForm', () => {
       expect(html).toContain('申请原因')
     })
 
-    it('ordinaryUser 模式下 scope_type 和 scope_id 字段被禁用', async () => {
+    it('ordinaryUser 模式隐藏对象类型和对象 ID，仅展示申请对象摘要', async () => {
       wrapper = mountForm({ ordinaryUser: true, initialScopeId: 'user-1' })
       await flushPromises()
 
-      // The selects/inputs should be disabled
-      const html = wrapper.html()
-      expect(html).toContain('disabled')
+      expect(wrapper.text()).toContain('申请对象')
+      expect(wrapper.text()).toContain('我的成员额度')
+      expect(wrapper.text()).not.toContain('对象类型')
+      expect(wrapper.text()).not.toContain('对象 ID')
+      expect(wrapper.html()).not.toContain('user-1')
+    })
+
+    it('fixedManagerScope 模式隐藏对象 ID 并展示预算池选择', async () => {
+      wrapper = mountForm({ initialScopeType: 'dept_daily', initialScopeId: 'dept-1' })
+      await wrapper.setProps({ fixedManagerScope: true, managerScopeLabel: '技术研发部' })
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('申请对象')
+      expect(wrapper.text()).toContain('技术研发部')
+      expect(wrapper.text()).toContain('预算池')
+      expect(wrapper.text()).toContain('成员日常预算池')
+      expect(wrapper.text()).not.toContain('对象类型')
+      expect(wrapper.text()).not.toContain('对象 ID')
+      expect(wrapper.html()).not.toContain('dept-1')
+    })
+
+    it('fixedManagerScope 工作室模式隐藏对象字段且不展示预算池选择', async () => {
+      wrapper = mountForm({ initialScopeType: 'studio', initialScopeId: 'studio-1' })
+      await wrapper.setProps({ fixedManagerScope: true, managerScopeLabel: '互娱事业部' })
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('申请对象')
+      expect(wrapper.text()).toContain('互娱事业部')
+      expect(wrapper.text()).not.toContain('预算池')
+      expect(wrapper.text()).not.toContain('对象类型')
+      expect(wrapper.text()).not.toContain('对象 ID')
+      expect(wrapper.html()).not.toContain('studio-1')
     })
 
     it('打开对话框时加载模型等级列表（visible 从 false 变 true 时触发）', async () => {
@@ -145,7 +196,40 @@ describe('ExpansionCreateForm', () => {
       expect(mockListModelTiers).toHaveBeenCalled()
     })
 
-    it('每次打开时应用入口预填并据此预检', async () => {
+    it('ordinaryUser 模式使用我的等级预算作为等级选项，不调用管理接口', async () => {
+      wrapper = mountForm({ ordinaryUser: true, initialScopeId: 'user-1' })
+      await wrapper.setProps({ modelValue: false })
+      await flushPromises()
+      mockListModelTiers.mockClear()
+      mockGetMyBudgetTiers.mockClear()
+
+      await wrapper.setProps({ modelValue: true })
+      await flushPromises()
+
+      expect(mockGetMyBudgetTiers).toHaveBeenCalled()
+      expect(mockListModelTiers).not.toHaveBeenCalled()
+    })
+
+    it('停用模型等级不能作为扩容申请选项', async () => {
+      wrapper = mountForm({
+        ordinaryUser: true,
+        initialScopeId: 'user-1',
+        initialDimensionType: 'tier',
+        initialModelTierId: 'tier-disabled',
+        initialTargetAmountUsd: '150',
+      })
+      await wrapper.setProps({ modelValue: false })
+      await wrapper.setProps({ modelValue: true })
+      await flushPromises()
+      mockPrecheckExpansion.mockClear()
+
+      vi.advanceTimersByTime(400)
+      await flushPromises()
+
+      expect(mockPrecheckExpansion).not.toHaveBeenCalled()
+    })
+
+    it('每次打开时应用入口预填但不触发预检', async () => {
       wrapper = mountForm({
         initialScopeId: 'user-1',
         initialDimensionType: 'tier',
@@ -158,14 +242,7 @@ describe('ExpansionCreateForm', () => {
       vi.advanceTimersByTime(400)
       await flushPromises()
 
-      expect(mockPrecheckExpansion).toHaveBeenCalledWith(expect.objectContaining({
-        scope_type: 'member',
-        scope_id: 'user-1',
-        dimension_type: 'tier',
-        model_tier_id: 'tier-1',
-        period_type: 'weekly',
-        target_amount_usd: '250.000000',
-      }))
+      expect(mockPrecheckExpansion).not.toHaveBeenCalled()
     })
 
     it('选择"模型等级"维度时显示模型等级选择器', async () => {
@@ -179,6 +256,15 @@ describe('ExpansionCreateForm', () => {
       expect(html).toContain('模型等级')
     })
 
+    it('展示临时扩容和长期调额两种调整类型', async () => {
+      wrapper = mountForm()
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('调整类型')
+      expect(wrapper.text()).toContain('临时扩容')
+      expect(wrapper.text()).toContain('长期调额')
+    })
+
     it('选择紧急优先级时显示紧急原因字段', async () => {
       wrapper = mountForm()
       await flushPromises()
@@ -189,26 +275,70 @@ describe('ExpansionCreateForm', () => {
     })
   })
 
-  describe('预检集成', () => {
-    it('表单值变化后触发预检（debounce 350ms）', async () => {
+  describe('创建前校验行为', () => {
+    it('表单值变化后不再自动请求预检接口', async () => {
       wrapper = mountForm({ initialScopeId: 'user-1' })
       await flushPromises()
 
-      // The watcher fires after 350ms debounce
       vi.advanceTimersByTime(400)
       await flushPromises()
 
-      // Precheck should have been called (form.scope_id is set, but target_amount_usd starts empty)
-      // Since target is empty string initially, precheck won't be called
-      // This tests the debounce mechanism exists
+      expect(mockPrecheckExpansion).not.toHaveBeenCalled()
     })
 
-    it('预检结果显示在 ExpansionPrecheckPanel 中', async () => {
+    it('不直接展示额度校验详情', async () => {
       wrapper = mountForm()
       await flushPromises()
 
-      const precheckPanel = wrapper.findComponent({ name: 'ExpansionPrecheckPanel' })
-      expect(precheckPanel.exists()).toBe(true)
+      expect(wrapper.find('.mock-precheck-panel').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('当前上限')
+      expect(wrapper.text()).not.toContain('当前已用')
+    })
+
+    it('预检 422 不再影响创建表单展示', async () => {
+      mockPrecheckExpansion.mockRejectedValue({
+        response: { data: { error: { message: '目标额度必须大于当前额度' } } },
+      })
+      wrapper = mountForm({ initialScopeId: 'user-1', initialTargetAmountUsd: '10' })
+      await wrapper.setProps({ modelValue: false })
+      await wrapper.setProps({ modelValue: true })
+
+      vi.advanceTimersByTime(400)
+      await flushPromises()
+
+      expect(mockPrecheckExpansion).not.toHaveBeenCalled()
+      expect(wrapper.text()).not.toContain('目标额度必须大于当前额度')
+    })
+
+    it('切换临时扩容时不触发预检接口', async () => {
+      wrapper = mountForm({ initialScopeId: 'user-1', initialTargetAmountUsd: '150' })
+      await wrapper.setProps({ modelValue: false })
+      await wrapper.setProps({ modelValue: true })
+      await flushPromises()
+
+      const temporaryInput = wrapper.find('input[value="current_period"]')
+      expect(temporaryInput.exists()).toBe(true)
+      await temporaryInput.setValue(true)
+      vi.advanceTimersByTime(400)
+      await flushPromises()
+
+      expect(mockPrecheckExpansion).not.toHaveBeenCalled()
+    })
+
+    it('模型等级维度未选择等级时不触发状态校验', async () => {
+      wrapper = mountForm({ initialScopeId: 'user-1', initialTargetAmountUsd: '150' })
+      await wrapper.setProps({ modelValue: false })
+      await wrapper.setProps({ modelValue: true })
+      await flushPromises()
+      mockPrecheckExpansion.mockClear()
+
+      const tierInput = wrapper.find('input[value="tier"]')
+      expect(tierInput.exists()).toBe(true)
+      await tierInput.setValue(true)
+      vi.advanceTimersByTime(400)
+      await flushPromises()
+
+      expect(mockPrecheckExpansion).not.toHaveBeenCalled()
     })
   })
 
@@ -223,17 +353,16 @@ describe('ExpansionCreateForm', () => {
       expect(submitBtn!.attributes('disabled')).toBeDefined()
     })
 
-    it('canSubmit 需要 valid 表单 + precheck.can_submit + 非 stale', async () => {
+    it('未填写完整表单时不受预检结果影响，提交按钮仍禁用', async () => {
       mockPrecheckExpansion.mockResolvedValue(makePrecheck({ can_submit: false }))
       wrapper = mountForm()
       await flushPromises()
 
-      // Even with valid form, canSubmit should be false if precheck fails
       const submitBtn = wrapper.findAll('button').find(b => b.text().includes('提交申请'))
       expect(submitBtn!.attributes('disabled')).toBeDefined()
     })
 
-    it('precheck stale 时提交按钮被禁用', async () => {
+    it('不再因为预检 stale 禁用提交按钮', async () => {
       mockPrecheckExpansion.mockResolvedValue(makePrecheck({ stale: true }))
       wrapper = mountForm()
       await flushPromises()
@@ -249,17 +378,39 @@ describe('ExpansionCreateForm', () => {
       wrapper = mountForm()
       await flushPromises()
 
-      // The submit function checks canSubmit which requires valid form + precheck
       // This is a structural test verifying the submit path exists
     })
 
-    it('通知负责人按钮仅在 can_notify_owner && !can_submit 时显示', async () => {
+    it('重复待审批申请返回 409 时显示友好提示并刷新列表', async () => {
+      mockCreateExpansionRequest.mockRejectedValue({
+        response: {
+          status: 409,
+          data: { error: { code: 'DUPLICATE_PENDING_EXPANSION', message: 'a pending expansion request already exists' } },
+        },
+      })
+      wrapper = mountForm({ initialScopeType: 'dept_daily', initialScopeId: 'dept-1' })
+      await flushPromises()
+
+      Object.assign((wrapper.vm as any).form, {
+        target_amount_usd: '200',
+        reason: '提升部门预算池',
+      })
+      await wrapper.vm.$nextTick()
+
+      const submitBtn = wrapper.findAll('button').find(b => b.text().includes('提交申请'))
+      await submitBtn!.trigger('click')
+      await flushPromises()
+
+      expect(ElMessage.warning).toHaveBeenCalledWith('已有审批中的同类申请，请等待审批结果或取消后重新提交')
+      expect(wrapper.emitted('created')).toBeTruthy()
+    })
+
+    it('不展示通知负责人按钮', async () => {
       mockPrecheckExpansion.mockResolvedValue(makePrecheck({ can_notify_owner: true, can_submit: false }))
       wrapper = mountForm()
       await flushPromises()
 
-      // The notify button condition is: precheck?.can_notify_owner && !precheck.can_submit
-      // This test verifies the button rendering logic exists
+      expect(wrapper.text()).not.toContain('通知负责人')
     })
   })
 

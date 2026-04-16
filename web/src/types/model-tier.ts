@@ -70,6 +70,7 @@ export interface BudgetChainNode {
 export interface MyBudgetTierLimit {
   model_tier_id: string
   model_tier_name: string
+  model_tier_color?: string
   enabled: boolean
   periods: TierPeriodUsage[]
 }
@@ -89,7 +90,10 @@ export interface BudgetTierLimit {
   model_tier_id: string
   model_tier_name?: string
   period_type: ExpansionPeriod
-  limit_usd: MoneyUSD
+  /** Deprecated legacy field; list API now returns base/effective fields. */
+  limit_usd?: MoneyUSD
+  base_limit_usd?: MoneyUSD
+  effective_limit_usd?: MoneyUSD
   enabled: boolean
   state?: TierLimitState
   used_usd?: MoneyUSD

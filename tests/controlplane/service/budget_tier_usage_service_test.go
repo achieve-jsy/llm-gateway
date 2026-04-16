@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 
 type myBudgetReader struct {
 	scopes []repository.MyBudgetScopeAllocation
+	err    error
 }
 
 func (r myBudgetReader) GetAllocationByID(context.Context, uuid.UUID) (*model.BudgetAllocation, error) {
@@ -24,6 +26,9 @@ func (r myBudgetReader) GetAllocationByID(context.Context, uuid.UUID) (*model.Bu
 }
 
 func (r myBudgetReader) ResolveMyBudgetChain(context.Context, string) ([]repository.MyBudgetScopeAllocation, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
 	return r.scopes, nil
 }
 
@@ -113,6 +118,58 @@ func TestMyBudgetTiersHidesAliasesAndKeepsCanonicalEnvelope(t *testing.T) {
 	for _, key := range []string{"source_summary", "effective_total", "budget_chain", "tier_limits", "data_updated_at", "stale"} {
 		require.Contains(t, envelope.Data, key)
 	}
+}
+
+func TestMyBudgetTiersReturnsEmptyDTOWhenIdentityHasNoBudgetChain(t *testing.T) {
+	now := time.Date(2026, 7, 15, 9, 30, 0, 0, time.UTC)
+	svc := service.NewBudgetTierService(
+		&myBudgetStore{},
+		myBudgetReader{err: repository.ErrMyBudgetChainUnavailable},
+		newFakeModelTierRepo(),
+		func() time.Time { return now },
+	)
+
+	got, err := svc.GetMyBudgetTiers(context.Background(), rbac.Actor{UserID: "admin-without-org"})
+
+	require.NoError(t, err)
+	require.Empty(t, got.Data.EffectiveTotal)
+	require.Empty(t, got.Data.BudgetChain)
+	require.Empty(t, got.Data.TierLimits)
+	require.Equal(t, now, got.Data.DataUpdatedAt)
+}
+
+func TestMyBudgetTiersReturnsEmptyDTOWhenActorUserIDMissing(t *testing.T) {
+	now := time.Date(2026, 7, 15, 9, 30, 0, 0, time.UTC)
+	svc := service.NewBudgetTierService(
+		&myBudgetStore{},
+		myBudgetReader{err: errors.New("should not resolve")},
+		newFakeModelTierRepo(),
+		func() time.Time { return now },
+	)
+
+	got, err := svc.GetMyBudgetTiers(context.Background(), rbac.Actor{})
+
+	require.NoError(t, err)
+	require.Empty(t, got.Data.BudgetChain)
+	require.Equal(t, now, got.Data.DataUpdatedAt)
+}
+
+func TestMyBudgetTiersReturnsEmptyDTOForGlobalAdmin(t *testing.T) {
+	now := time.Date(2026, 7, 15, 9, 30, 0, 0, time.UTC)
+	svc := service.NewBudgetTierService(
+		&myBudgetStore{},
+		myBudgetReader{err: errors.New("should not resolve admin personal chain")},
+		newFakeModelTierRepo(),
+		func() time.Time { return now },
+	)
+
+	got, err := svc.GetMyBudgetTiers(context.Background(), rbac.Actor{UserID: "admin", IsGlobal: true})
+
+	require.NoError(t, err)
+	require.Empty(t, got.Data.EffectiveTotal)
+	require.Empty(t, got.Data.BudgetChain)
+	require.Empty(t, got.Data.TierLimits)
+	require.Equal(t, now, got.Data.DataUpdatedAt)
 }
 
 func TestMyBudgetTiersComputesRestrictedUpstreamLimitingSource(t *testing.T) {

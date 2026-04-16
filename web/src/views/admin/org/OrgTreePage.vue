@@ -167,24 +167,6 @@
             </div>
           </el-tab-pane>
 
-          <!-- Tab：预算 -->
-          <el-tab-pane name="budget">
-            <template #label>
-              预算
-            </template>
-            <div class="tab-content">
-              <BudgetScopePanel
-                v-if="selectedStudio"
-                scope-type="studio"
-                :scope-id="selectedStudio.id"
-                :title="selectedStudio.name"
-                :child-scope-ids="selectedStudioDeptIds"
-                :can-edit="canEditSelectedStudioBudget"
-                :can-edit-self="isGlobalAdmin"
-              />
-            </div>
-          </el-tab-pane>
-
           <!-- Tab：工作室负责人 -->
           <el-tab-pane name="owner">
             <template #label>
@@ -382,22 +364,6 @@
                 small
                 class="members-pagination"
                 @current-change="loadDeptMembers"
-              />
-            </div>
-          </el-tab-pane>
-
-          <!-- Tab：预算 -->
-          <el-tab-pane name="budget">
-            <template #label>
-              预算
-            </template>
-            <div class="tab-content">
-              <BudgetScopePanel
-                v-if="selectedDept"
-                scope-type="dept"
-                :scope-id="selectedDept.dept_id"
-                :title="selectedDept.dept_name"
-                :can-edit="canEditSelectedDeptBudget"
               />
             </div>
           </el-tab-pane>
@@ -1009,7 +975,6 @@ import { useAuthStore } from '@/stores/auth'
 import type { Studio, OrgDepartment, ImportDiff, EmployeeImportPreviewRow, EmployeeImportSummary } from '@/types/org'
 import http from '@/services/http'
 import { useRoute, useRouter } from 'vue-router'
-import BudgetScopePanel from '@/components/budget/BudgetScopePanel.vue'
 import QuotaEditDialog from '@/components/QuotaEditDialog.vue'
 import { QUOTA_DEFAULTS, getUserQuota } from '@/api/quota'
 import type { QuotaEffective } from '@/api/quota'
@@ -1159,7 +1124,7 @@ function applyRouteSelection() {
     selectedStudio.value = studio
     selectedDept.value = null
     selectedDeptParentStudio.value = null
-    studioActiveTab.value = targetTab === 'budget' ? 'budget' : 'depts'
+    studioActiveTab.value = targetTab === 'owner' ? 'owner' : 'depts'
     nextTick(() => treeRef.value?.setCurrentKey(`studio:${studio.id}`))
     return
   }
@@ -1172,8 +1137,7 @@ function applyRouteSelection() {
     selectedDept.value = dept
     selectedDeptParentStudio.value = parent
     selectedStudio.value = null
-    // scope_type=dept 默认直接跳预算 tab；其他情况遵循 tab 参数
-    deptActiveTab.value = (scopeType === 'dept' || targetTab === 'budget') ? 'budget' : 'members'
+    deptActiveTab.value = targetTab === 'info' ? 'info' : 'members'
     nextTick(() => treeRef.value?.setCurrentKey(`dept:${dept.dept_id}`))
     if (deptActiveTab.value === 'members') loadDeptMembers(1)
   }
@@ -1219,18 +1183,6 @@ const selectedStudioDepts = computed(() => {
   }
   return base
 })
-
-const selectedStudioDeptIds = computed(() => selectedStudioDepts.value.map(d => d.dept_id))
-
-const canEditSelectedStudioBudget = computed(() =>
-  isGlobalAdmin.value || myStudioIds.value.includes(selectedStudio.value?.id ?? '')
-)
-
-const canEditSelectedDeptBudget = computed(() =>
-  isGlobalAdmin.value ||
-  myStudioIds.value.includes(selectedDeptParentStudio.value?.id ?? '') ||
-  myDeptIds.value.includes(selectedDept.value?.dept_id ?? '')
-)
 
 const selectedStudioOwners = computed(() =>
   allRoles.value.filter(r => r.role === 'studio_admin' && r.scope_id === selectedStudio.value?.id)

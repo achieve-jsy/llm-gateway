@@ -63,7 +63,7 @@ func (r *BudgetRepo) ResolveMyBudgetChain(ctx context.Context, userID string) ([
 		return nil, err
 	}
 	if identity.UserID == "" || identity.DeptID == "" || identity.StudioID == "" {
-		return nil, fmt.Errorf("incomplete budget chain identity for %s", userID)
+		return nil, fmt.Errorf("%w: %s", ErrMyBudgetChainUnavailable, userID)
 	}
 	defs := []struct {
 		scopeType string
@@ -97,14 +97,14 @@ func (r *BudgetRepo) ResolveMyBudgetChain(ctx context.Context, userID string) ([
 }
 
 func (r *BudgetRepo) ResolveBudgetChain(ctx context.Context, scopeType, scopeID string) ([]MyBudgetScopeAllocation, error) {
-	return r.resolveBudgetChain(ctx, r.db, scopeType, scopeID, false)
+	return r.resolveBudgetChain(ctx, r.db, scopeType, scopeID, false, false)
 }
 
 func (r *BudgetRepo) ResolveBudgetChainForUpdate(ctx context.Context, tx *gorm.DB, scopeType, scopeID string) ([]MyBudgetScopeAllocation, error) {
-	return r.resolveBudgetChain(ctx, tx, scopeType, scopeID, true)
+	return r.resolveBudgetChain(ctx, tx, scopeType, scopeID, true, true)
 }
 
-func (r *BudgetRepo) resolveBudgetChain(ctx context.Context, db *gorm.DB, scopeType, scopeID string, lock bool) ([]MyBudgetScopeAllocation, error) {
+func (r *BudgetRepo) resolveBudgetChain(ctx context.Context, db *gorm.DB, scopeType, scopeID string, lock bool, createMissing bool) ([]MyBudgetScopeAllocation, error) {
 	type definition struct{ scopeType, scopeID, label string }
 	defs := make([]definition, 0, 4)
 	switch scopeType {
@@ -171,6 +171,29 @@ func (r *BudgetRepo) resolveBudgetChain(ctx context.Context, db *gorm.DB, scopeT
 		}
 		var allocation model.BudgetAllocation
 		if err := query.First(&allocation).Error; err != nil {
+			if createMissing && errors.Is(err, gorm.ErrRecordNotFound) {
+				now := time.Now().UTC()
+				allocation = model.BudgetAllocation{
+					ID: uuid.New(), ScopeType: def.scopeType, ScopeID: def.scopeID,
+					AmountUSD: 0, DailyAmountUSD: -1, WeeklyAmountUSD: -1,
+					Period: "monthly", Enabled: true, CreatedAt: now, UpdatedAt: now,
+				}
+				if createErr := db.WithContext(ctx).Clauses(clause.OnConflict{
+					Columns:   []clause.Column{{Name: "scope_type"}, {Name: "scope_id"}},
+					DoNothing: true,
+				}).Create(&allocation).Error; createErr != nil {
+					return nil, fmt.Errorf("create budget allocation %s/%s: %w", def.scopeType, def.scopeID, createErr)
+				}
+				lockQuery := db.WithContext(ctx).Where("scope_type = ? AND scope_id = ? AND enabled = true", def.scopeType, def.scopeID)
+				if lock {
+					lockQuery = lockQuery.Clauses(clause.Locking{Strength: "UPDATE"})
+				}
+				if lockErr := lockQuery.First(&allocation).Error; lockErr != nil {
+					return nil, fmt.Errorf("resolve budget allocation %s/%s: %w", def.scopeType, def.scopeID, lockErr)
+				}
+				locked[def.scopeType+":"+def.scopeID] = allocation
+				continue
+			}
 			return nil, fmt.Errorf("resolve budget allocation %s/%s: %w", def.scopeType, def.scopeID, err)
 		}
 		locked[def.scopeType+":"+def.scopeID] = allocation
@@ -786,6 +809,26 @@ func (r *BudgetRepo) MemberInDeptIDs(memberID string, deptIDs []string) (bool, e
 		return false, err
 	}
 	return count > 0, nil
+}
+
+func (r *BudgetRepo) ResolveMemberDeptID(memberID string) (string, error) {
+	if memberID == "" {
+		return "", nil
+	}
+	var row struct {
+		DeptID string `gorm:"column:dept_id"`
+	}
+	err := r.db.Raw(`
+		SELECT COALESCE(d.dept_id, '') AS dept_id
+		FROM users u
+		JOIN departments d ON d.id = u.dept_id
+		WHERE u.id::text = ?
+		LIMIT 1
+	`, memberID).Scan(&row).Error
+	if err != nil {
+		return "", err
+	}
+	return row.DeptID, nil
 }
 
 // DeleteAllocation 删除指定成员的单独配额，还原为共享部门预算池。

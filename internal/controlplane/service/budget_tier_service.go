@@ -354,7 +354,7 @@ func buildTierLimitView(limit model.BudgetTierLimit, overrides []model.BudgetTem
 		ID: limit.ID, BudgetAllocationID: limit.BudgetAllocationID,
 		ModelTierID: limit.ModelTierID, ModelTierName: limit.ModelTier.Name,
 		PeriodType: limit.PeriodType, BaseLimitUSD: limit.LimitUSD,
-		EffectiveLimitUSD: effective, Enabled: limit.Enabled, EffectiveAt: limit.EffectiveAt,
+		EffectiveLimitUSD: effective, Enabled: limit.Enabled && limit.ModelTier.Enabled, EffectiveAt: limit.EffectiveAt,
 		SourceSummary: LimitSourceSummary{SourceType: "base"},
 	}
 	for index := range overrides {

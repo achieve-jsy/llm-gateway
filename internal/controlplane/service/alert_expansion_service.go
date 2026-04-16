@@ -406,6 +406,9 @@ func (s *ExpansionService) CreateRequestAdvanced(ctx context.Context, input Crea
 	if input.DurationType == "" {
 		input.DurationType = budgetdomain.DurationPermanent
 	}
+	if !input.DurationType.Valid() {
+		return nil, ErrExpansionDurationUnsupported
+	}
 	if input.Priority == "" {
 		input.Priority = "normal"
 	}
@@ -542,6 +545,13 @@ func (s *ExpansionService) GetBudgetUsedRatio(ctx context.Context, scopeType, sc
 		return 0, err
 	}
 	return item.UsedRatio, nil
+}
+
+func (s *ExpansionService) ResolveScopeNames(scopeType string, scopeIDs []string) (map[string]string, error) {
+	if s.budgetSvc == nil || len(scopeIDs) == 0 {
+		return map[string]string{}, nil
+	}
+	return s.budgetSvc.repo.ResolveScopeNames(scopeType, scopeIDs)
 }
 
 func (s *ExpansionService) MemberInDeptIDs(memberID string, deptIDs []string) (bool, error) {
@@ -703,6 +713,10 @@ func (s *ExpansionService) ListForRequester(ctx context.Context, requesterID str
 	return s.repo.ListByRequester(requesterID, status)
 }
 
+func (s *ExpansionService) ListForRequesterFiltered(ctx context.Context, requesterID string, filter repository.ExpansionListFilter) ([]model.ExpansionRequest, error) {
+	return s.repo.ListByRequesterFiltered(requesterID, filter)
+}
+
 // ListPending 查询待某级别审批的申请。
 func (s *ExpansionService) ListPending(ctx context.Context, level string) ([]model.ExpansionRequest, error) {
 	return s.repo.ListPendingForApprover(level)
@@ -711,15 +725,19 @@ func (s *ExpansionService) ListPending(ctx context.Context, level string) ([]mod
 // ListPendingScoped 查询当前审批人管辖范围内的待审批申请。
 // requesterName 非空时按申请人姓名模糊过滤。
 func (s *ExpansionService) ListPendingScoped(ctx context.Context, level string, isGlobal bool, deptIDs, studioIDs []string, requesterName string) ([]model.ExpansionRequest, error) {
+	return s.ListPendingScopedFiltered(ctx, level, isGlobal, deptIDs, studioIDs, repository.ExpansionListFilter{Keyword: requesterName})
+}
+
+func (s *ExpansionService) ListPendingScopedFiltered(ctx context.Context, level string, isGlobal bool, deptIDs, studioIDs []string, filter repository.ExpansionListFilter) ([]model.ExpansionRequest, error) {
 	if isGlobal {
 		// 全局管理员不受范围限制，但仍支持姓名过滤
-		return s.repo.ListPendingForApproverScoped(level, nil, nil, nil, requesterName)
+		return s.repo.ListPendingForApproverScopedFiltered(level, nil, nil, nil, filter)
 	}
 	memberIDs, err := s.memberIDsForDeptIDs(deptIDs)
 	if err != nil {
 		return nil, err
 	}
-	return s.repo.ListPendingForApproverScoped(level, deptIDs, studioIDs, memberIDs, requesterName)
+	return s.repo.ListPendingForApproverScopedFiltered(level, deptIDs, studioIDs, memberIDs, filter)
 }
 
 // ListSteps 查询某扩容申请的审批流水。

@@ -141,16 +141,15 @@ async function load(): Promise<void> {
 }
 
 function findInitialAllocation(items: BudgetItem[]): BudgetItem | null {
+  if (props.initialAllocation) return props.initialAllocation
   if (props.scopeType === 'studio') {
     return items.find(item => item.scope_type === 'studio' && item.scope_id === props.scopeId)
       ?? items.find(item => item.scope_type === 'dept_daily')
-      ?? props.initialAllocation
       ?? items[0]
       ?? null
   }
   return items.find(item => item.scope_type === 'dept_daily' && item.scope_id === props.scopeId)
     ?? items.find(item => item.scope_type === 'dept_service' && item.scope_id === props.scopeId)
-    ?? props.initialAllocation
     ?? items[0]
     ?? null
 }
@@ -259,7 +258,7 @@ function tierEntry(
   const limit = tierLimits.find(item => (
     item.model_tier_id === tier.id && item.period_type === period
   ))
-  const limitValue = limit?.limit_usd
+  const limitValue = limit?.base_limit_usd ?? limit?.limit_usd
   return {
     enabled: limit?.enabled ?? tier.enabled,
     configured: Boolean(limit) && Number.isFinite(Number(limitValue)),
@@ -343,21 +342,25 @@ async function save(): Promise<void> {
     }
 
     await confirmPreview(totalPreviews, tierPreview)
-    await Promise.all(changedTotals.map((period, index) => (
-      adjustBudget({
+    if (tierPreview) {
+      const tierApply = await applyBudgetTierBatch({
+        preview_token: tierPreview.preview_token,
+        confirm_item_ids: tierPreview.items
+          .filter(item => item.status === 'valid')
+          .map(item => item.item_id),
+      })
+      const failed = tierApply.items?.find(item => item.status !== 'applied' && item.status !== 'skipped')
+      if (failed) {
+        throw new Error(failed.error_code || '等级子预算保存失败')
+      }
+    }
+    for (const [index, period] of changedTotals.entries()) {
+      await adjustBudget({
         ...totalPayload(period),
         preview_version: totalPreviews[index].preview_version,
         confirm_zero_block: totalPreviews[index].zero_block,
         confirm_below_used: totalPreviews[index].below_used,
         confirm_replace_schedule: totalPreviews[index].replaces_pending_schedule,
-      })
-    )))
-    if (tierPreview) {
-      await applyBudgetTierBatch({
-        preview_token: tierPreview.preview_token,
-        confirm_item_ids: tierPreview.items
-          .filter(item => item.status === 'valid')
-          .map(item => item.item_id),
       })
     }
 

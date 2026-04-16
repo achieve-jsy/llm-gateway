@@ -2,51 +2,100 @@
   <section class="budget-scope-workspace scope-stage-single">
     <div class="summary budget-panel kpi-strip">
       <div>
-        <div class="summary-eye">{{ scope.type === 'studio' ? '工作室预算' : '部门预算' }}</div>
+        <div class="summary-eye">{{ summaryEyebrow }}</div>
         <div class="summary-name">{{ scope.label || scope.id }}</div>
         <div class="summary-meta">
-          {{ scope.type === 'studio'
-            ? '下级部门额度总和不可超过工作室月额度。'
-            : '成员默认共享日常预算池；仅特殊成员设置独立额度。' }}
+          {{ summaryDescription }}
         </div>
       </div>
-      <div class="summary-amount">
-        <strong>{{ formatBudgetUSD(summaryUsed) }}</strong>
-        <span> / {{ formatBudgetUSD(summaryLimit, { unlimited: true }) }}</span>
-        <el-progress
-          :percentage="summaryPercent"
-          :stroke-width="5"
-          :status="summaryPercent >= 100 ? 'exception' : summaryPercent >= 80 ? 'warning' : 'success'"
-          :show-text="false"
-        />
+      <div class="scope-metrics" aria-label="预算概览">
+        <div v-if="showTotalMetric" class="scope-metric primary">
+          <span>{{ scope.type === 'studio' ? '工作室总额' : '部门总额' }}</span>
+          <strong>{{ formatBudgetUSD(summaryLimit, { unlimited: true }) }}</strong>
+        </div>
+        <div v-if="showPersonalPoolMetric" class="scope-metric metric-with-action">
+          <span>个人 Key 池</span>
+          <strong>{{ formatBudgetUSD(departmentDailyPool?.amount_usd, { unlimited: true }) }}</strong>
+          <div class="metric-tier-line" :title="tierSummary(departmentDailyPool)">{{ tierSummary(departmentDailyPool) }}</div>
+          <div v-if="departmentDailyPool" class="metric-actions">
+            <button
+              v-if="!canConfigureDepartmentPools"
+              type="button"
+              class="metric-action-btn secondary"
+              @click="emit('detail', departmentDailyPool)"
+            >
+              详情
+            </button>
+            <button
+              type="button"
+              class="metric-action-btn primary"
+              @click="handlePoolAction(departmentDailyPool)"
+            >
+              {{ poolActionLabel }}
+            </button>
+          </div>
+        </div>
+        <div v-if="showServicePoolMetric" class="scope-metric metric-with-action">
+          <span>Service Key 池</span>
+          <strong>{{ formatBudgetUSD(departmentServicePool?.amount_usd, { unlimited: true }) }}</strong>
+          <div class="metric-tier-line" :title="tierSummary(departmentServicePool)">{{ tierSummary(departmentServicePool) }}</div>
+          <div v-if="departmentServicePool" class="metric-actions">
+            <button
+              v-if="!canConfigureDepartmentPools"
+              type="button"
+              class="metric-action-btn secondary"
+              @click="emit('detail', departmentServicePool)"
+            >
+              详情
+            </button>
+            <button
+              type="button"
+              class="metric-action-btn primary"
+              @click="handlePoolAction(departmentServicePool)"
+            >
+              {{ poolActionLabel }}
+            </button>
+          </div>
+        </div>
+        <div v-if="scope.type === 'studio'" class="scope-metric">
+          <span>已下发</span>
+          <strong>{{ formatBudgetUSD(allocatedAmount) }}</strong>
+        </div>
+        <div v-if="scope.type === 'studio'" class="scope-metric" :class="{ warning: overAllocatedAmount > 0 }">
+          <span>{{ overAllocatedAmount > 0 ? '超分配' : '未下发' }}</span>
+          <strong>{{ formatBudgetUSD(overAllocatedAmount > 0 ? overAllocatedAmount : unallocatedAmount) }}</strong>
+        </div>
+        <div class="scope-metric usage">
+          <span>已用</span>
+          <strong>{{ formatBudgetUSD(summaryUsed) }}</strong>
+          <el-progress
+            :percentage="summaryPercent"
+            :stroke-width="4"
+            :status="summaryPercent >= 100 ? 'exception' : summaryPercent >= 80 ? 'warning' : 'success'"
+            :show-text="false"
+          />
+        </div>
+        <div v-if="scope.type === 'studio'" class="scope-metric action">
+          <span>当前预算</span>
+          <button
+            type="button"
+            class="proto-btn sm"
+            @click="handleStudioBudgetAction"
+          >
+            {{ canConfigureStudioBudget ? '配置' : '申请扩容' }}
+          </button>
+        </div>
+        <div v-if="scope.type === 'studio'" class="scope-metric compact">
+          <span>下属部门</span>
+          <strong>{{ visibleRows.length }}</strong>
+        </div>
       </div>
     </div>
-
-    <BudgetPermissionBanner :role="role" :scope-type="scope.type">
-      <template #actions>
-        <el-button size="small" @click="emit('edit', summaryItem)">配置当前预算</el-button>
-      </template>
-    </BudgetPermissionBanner>
 
     <template v-if="scope.type === 'studio'">
       <div class="scope-toolbar">
         <div>
           <strong>部门预算分配</strong>
-          <div class="page-sub">日常预算与程序服务预算互不占用。</div>
-        </div>
-        <div class="actions">
-          <el-button size="small" :disabled="selectedRows.length === 0" @click="emit('batch', selectedRows, 'absolute')">
-            批量调整
-          </el-button>
-          <el-button
-            v-if="canCreateDepartment"
-            size="small"
-            type="primary"
-            data-test="create-department-budget"
-            @click="emitCreateDepartment"
-          >
-            新增部门预算
-          </el-button>
         </div>
       </div>
 
@@ -76,82 +125,181 @@
           </button>
         </div>
 
-        <el-table
-          ref="tableRef"
-          :data="visibleRows"
-          stripe
-          size="small"
-          @selection-change="selectedRows = $event"
-        >
-          <el-table-column type="selection" width="42" />
-          <el-table-column label="部门" min-width="130">
-            <template #default="{ row }">
-              <strong :data-test="`pool-row-${row.allocation_id || row.scope_id}`">{{ row.label || row.scope_id }}</strong>
-            </template>
-          </el-table-column>
-          <el-table-column label="月额度" min-width="100" align="right">
-            <template #default="{ row }"><span class="mono">{{ formatBudgetUSD(row.amount_usd, { unlimited: true }) }}</span></template>
-          </el-table-column>
-          <el-table-column label="周额度" min-width="90" align="right">
-            <template #default="{ row }"><span class="mono">{{ formatBudgetUSD(row.weekly_amount_usd, { unlimited: true }) }}</span></template>
-          </el-table-column>
-          <el-table-column label="日额度" min-width="90" align="right">
-            <template #default="{ row }"><span class="mono">{{ formatBudgetUSD(row.daily_amount_usd, { unlimited: true }) }}</span></template>
-          </el-table-column>
-          <el-table-column label="使用率" min-width="150">
-            <template #default="{ row }">
-              <div class="usage-cell">
-                <span>{{ Math.round((row.used_ratio || 0) * 100) }}%</span>
-                <el-progress :percentage="Math.min(100, Math.round((row.used_ratio || 0) * 100))" :stroke-width="4" :show-text="false" />
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="等级预算" min-width="160">
-            <template #default="{ row }">
-              <TierBudgetTags :items="tierTags(row.scope_id)" />
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="180" align="center">
-            <template #default="{ row }">
-              <el-button size="small" type="primary" plain @click="emit('drill', row)">查看预算</el-button>
-              <el-button size="small" @click="emit('edit', row)">配置</el-button>
-            </template>
-          </el-table-column>
-          <template #empty>
+        <div v-if="visibleRows.length" class="proto-table-wrap">
+          <table class="proto-native-table">
+            <thead>
+              <tr>
+                <th class="center" style="width:42px">
+                  <input
+                    class="proto-check"
+                    type="checkbox"
+                    :checked="allSelected"
+                    :indeterminate.prop="someSelected && !allSelected"
+                    aria-label="全选部门"
+                    @change="toggleAll(($event.target as HTMLInputElement).checked)"
+                  >
+                </th>
+                <th>部门</th>
+                <th class="right">月额度</th>
+                <th>周期限制</th>
+                <th>使用率</th>
+                <th>等级预算</th>
+                <th class="center">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in visibleRows" :key="row.allocation_id || row.scope_id">
+                <td class="center">
+                  <input
+                    class="proto-check"
+                    type="checkbox"
+                    :checked="isSelected(row)"
+                    :aria-label="`选择 ${row.label || row.scope_id}`"
+                    @change="toggleRow(row, ($event.target as HTMLInputElement).checked)"
+                  >
+                </td>
+                <td>
+                  <strong class="proto-scope-name" :data-test="`pool-row-${row.allocation_id || row.scope_id}`">{{ row.label || row.scope_id }}</strong>
+                </td>
+                <td class="right mono">{{ formatBudgetUSD(row.amount_usd, { unlimited: true }) }}</td>
+                <td>
+                  <span class="period-limit">周 {{ formatBudgetUSD(row.weekly_amount_usd, { unlimited: true }) }}</span>
+                  <span class="period-limit">日 {{ formatBudgetUSD(row.daily_amount_usd, { unlimited: true }) }}</span>
+                </td>
+                <td>
+                  <div class="proto-usage">
+                    <span class="mono">{{ formatBudgetUSD(row.used_usd) }} / {{ formatBudgetUSD(row.amount_usd, { unlimited: true }) }}</span>
+                    <div class="proto-usage-meta">
+                      <div
+                        class="proto-progress"
+                        role="progressbar"
+                        :aria-valuenow="usagePercent(row)"
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                        :aria-label="`使用率 ${usagePercent(row)}%，${statusLabel(row.used_ratio)}`"
+                      >
+                        <i :style="{ width: `${usagePercent(row)}%`, background: progressColor(row.used_ratio) }" />
+                      </div>
+                      <span class="proto-usage-status" :class="statusTone(row.used_ratio)">{{ statusLabel(row.used_ratio) }}</span>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  <template v-if="tierTags(row).length">
+                    <span
+                      v-for="tag in tierTags(row)"
+                      :key="tag.id"
+                      class="proto-tier-tag"
+                      :class="getTierTagTone(tag.name, tag.state)"
+                    >
+                      {{ tag.label }}
+                    </span>
+                  </template>
+                  <span v-else class="muted">未配置子预算</span>
+                </td>
+                <td class="center">
+                  <button type="button" class="proto-btn sm plain-primary" @click="emit('drill', row)">查看预算</button>
+                  <button type="button" class="proto-btn sm" @click="emit('edit', row)">配置</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-else class="proto-table-empty">
             <BudgetEmptyState
               level="studio"
-              :action-label="canCreateDepartment ? '新增部门预算' : undefined"
-              :action-test="canCreateDepartment ? 'create-department-budget-empty' : undefined"
-              @action="emitCreateDepartment"
             />
-          </template>
-        </el-table>
+        </div>
       </div>
     </template>
 
     <template v-else>
-      <div class="pool-grid">
-        <article v-for="pool in departmentPools" :key="pool.key" class="pool budget-panel">
-          <div class="pool-head">
+      <div class="budget-panel">
+        <div v-if="!fixedPool" class="pool-tabs" role="tablist" aria-label="部门预算明细类型">
+          <button
+            type="button"
+            class="pool-tab"
+            :class="{ active: activePool === 'daily' }"
+            data-test="dept-detail-tab-personal"
+            role="tab"
+            :aria-selected="activePool === 'daily'"
+            @click="activePool = 'daily'"
+          >
+            个人 Key 使用明细
+          </button>
+          <button
+            type="button"
+            class="pool-tab"
+            :class="{ active: activePool === 'service' }"
+            data-test="dept-detail-tab-service"
+            role="tab"
+            :aria-selected="activePool === 'service'"
+            @click="activePool = 'service'"
+          >
+            Service Key 使用明细
+          </button>
+        </div>
+
+        <template v-if="detailPool === 'daily'">
+          <div class="budget-panel__header">
             <div>
-              <div class="pool-title">{{ pool.title }}</div>
-              <div class="pool-sub">{{ pool.note }}</div>
+              <strong>成员独立额度</strong>
+              <p>成员默认使用个人 Key 预算池，仅特殊成员需要单独配置。</p>
             </div>
           </div>
-          <div class="pool-amount-big">{{ formatBudgetUSD(pool.item?.amount_usd, { unlimited: true }) }}</div>
-          <button v-if="pool.item" type="button" class="link" @click="emit('edit', pool.item)">调整额度与等级限制</button>
-        </article>
-      </div>
-      <div class="budget-panel">
-        <div class="budget-panel__header"><strong>成员独立额度</strong></div>
-        <BudgetEmptyState v-if="memberRows.length === 0" level="dept" />
-        <el-table v-else :data="memberRows" stripe size="small">
-          <el-table-column label="成员" prop="label" min-width="140" />
-          <el-table-column label="预算来源" min-width="130"><template #default>个人独立额度</template></el-table-column>
-          <el-table-column label="等级预算" min-width="160"><template #default="{ row }"><TierBudgetTags :items="tierTags(row.scope_id)" /></template></el-table-column>
-          <el-table-column label="操作" width="150"><template #default="{ row }"><el-button size="small" @click="emit('edit', row)">配置配额</el-button></template></el-table-column>
-        </el-table>
-      </div>
+          <div v-if="memberRows.length === 0" class="member-empty-state">
+            <strong>暂无成员独立额度</strong>
+            <p>成员默认使用个人 Key 预算池；只有需要单独限制时才配置成员额度。</p>
+          </div>
+          <div v-else class="proto-table-wrap">
+            <table class="proto-native-table member-table">
+              <thead>
+                <tr>
+                  <th>成员</th>
+                  <th>预算来源</th>
+                  <th>等级预算</th>
+                  <th class="center">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in memberRows" :key="row.allocation_id || row.scope_id">
+                  <td><strong class="proto-scope-name">{{ row.label || row.scope_id }}</strong></td>
+                  <td><span class="proto-tag gray">个人独立额度</span></td>
+                  <td>
+                    <template v-if="tierTags(row).length">
+                      <span
+                        v-for="tag in tierTags(row)"
+                        :key="tag.id"
+                        class="proto-tier-tag"
+                        :class="getTierTagTone(tag.name, tag.state)"
+                      >
+                        {{ tag.label }}
+                      </span>
+                    </template>
+                    <span v-else class="muted">未配置子预算</span>
+                  </td>
+                  <td class="center">
+                    <button type="button" class="proto-btn sm" @click="emit('edit', row)">配置配额</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="budget-panel__header">
+            <div>
+              <strong>Service Key 独立额度</strong>
+              <p>服务、自动化任务默认使用 Service Key 预算池；独立额度适合高风险或高频服务。</p>
+            </div>
+          </div>
+          <div class="member-empty-state">
+            <strong>暂无 Service Key 独立额度</strong>
+            <p>当前服务调用默认使用 Service Key 预算池；需要单独限制某个 Service Key 时再配置独立额度。</p>
+          </div>
+        </template>
+        </div>
     </template>
 
     <div v-if="selectedRows.length" class="selection-bar show">
@@ -172,12 +320,11 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { BudgetItem, BudgetScopeType } from '@/types/budget'
+import type { BudgetItem } from '@/types/budget'
 import type { TierBudgetTagItem } from '@/composables/useBudgetDisplay'
-import { formatBudgetUSD } from '@/composables/useBudgetDisplay'
+import { formatBudgetUSD, getTierTagTone } from '@/composables/useBudgetDisplay'
 import type { BudgetBatchEntryMode } from '@/composables/budgetScopeFilters'
 import BudgetEmptyState from './BudgetEmptyState.vue'
-import BudgetPermissionBanner from './BudgetPermissionBanner.vue'
 import BudgetSelectionBar from './BudgetSelectionBar.vue'
 import TierBudgetTags from './TierBudgetTags.vue'
 
@@ -186,10 +333,13 @@ interface TierUsageItem {
   tier_name: string
   used_ratio?: number
   color?: string
+  enabled?: boolean
+  state?: TierBudgetTagItem['state']
 }
 
 const props = withDefaults(defineProps<{
   scope: { type: 'studio' | 'dept'; id: string; label?: string }
+  pool?: 'daily' | 'service'
   items: BudgetItem[]
   tierItems?: TierUsageItem[]
   role: string
@@ -202,13 +352,33 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   drill: [item: BudgetItem]
   edit: [item: BudgetItem | null]
+  detail: [item: BudgetItem]
+  requestExpansion: [item: BudgetItem]
   batch: [items: BudgetItem[], mode: BudgetBatchEntryMode]
-  createDepartment: [payload: { scopeType: Extract<BudgetScopeType, 'dept_daily' | 'dept_service'>; studioId: string }]
 }>()
 
 const activePool = ref<'daily' | 'service'>('daily')
 const selectedRows = ref<BudgetItem[]>([])
-const tableRef = ref<{ clearSelection?: () => void } | null>(null)
+const fixedPool = computed(() => props.scope.type === 'dept' && !!props.pool)
+const detailPool = computed<'daily' | 'service'>(() => props.pool ?? activePool.value)
+const summaryEyebrow = computed(() => {
+  if (props.scope.type === 'studio') return '工作室预算'
+  if (props.pool === 'daily') return '个人 Key 预算详情'
+  if (props.pool === 'service') return 'Service Key 预算详情'
+  return '部门预算'
+})
+const summaryDescription = computed(() => {
+  if (props.scope.type === 'studio') return '下级部门额度总和不可超过工作室月额度。'
+  if (props.pool === 'daily') return '成员通过个人 Key 调用时共享该预算池。'
+  if (props.pool === 'service') return '程序、自动化和服务账号调用时使用该预算池。'
+  return '个人 Key 与 Service Key 分池管理，互不占用。'
+})
+const showTotalMetric = computed(() => props.scope.type !== 'dept' || !fixedPool.value)
+const showPersonalPoolMetric = computed(() => props.scope.type === 'dept' && (!props.pool || props.pool === 'daily'))
+const showServicePoolMetric = computed(() => props.scope.type === 'dept' && (!props.pool || props.pool === 'service'))
+const canConfigureStudioBudget = computed(() => props.role === 'admin')
+const canConfigureDepartmentPools = computed(() => !(props.role === 'dept_admin' && props.scope.type === 'dept'))
+const poolActionLabel = computed(() => canConfigureDepartmentPools.value ? '配置' : '申请扩容')
 
 const visibleRows = computed(() => props.items.filter(item =>
   item.scope_type === (activePool.value === 'daily' ? 'dept_daily' : 'dept_service')
@@ -220,57 +390,136 @@ const memberRows = computed(() => props.items.filter(item =>
 const summaryItem = computed(() => props.items.find(item =>
   item.scope_type === 'studio' && item.scope_id === props.scope.id,
 ) ?? null)
+const departmentDailyPool = computed(() => props.items.find(item => item.scope_type === 'dept_daily' && item.scope_id === props.scope.id) ?? null)
+const departmentServicePool = computed(() => props.items.find(item => item.scope_type === 'dept_service' && item.scope_id === props.scope.id) ?? null)
 const departmentPools = computed(() => [
   {
     key: 'daily',
-    title: '成员日常预算池',
-    note: '个人 Key 默认共享',
-    item: props.items.find(item => item.scope_type === 'dept_daily' && item.scope_id === props.scope.id),
+    title: '个人 Key 预算池',
+    note: '成员通过个人 Key 调用时共享',
+    action: '配置个人 Key 池',
+    item: departmentDailyPool.value,
   },
   {
     key: 'service',
-    title: '程序服务预算池',
-    note: 'Service Key 使用',
-    item: props.items.find(item => item.scope_type === 'dept_service' && item.scope_id === props.scope.id),
+    title: 'Service Key 预算池',
+    note: '程序、自动化和服务账号调用时使用',
+    action: '配置 Service Key 池',
+    item: departmentServicePool.value,
   },
 ])
-const summaryUsed = computed(() => props.scope.type === 'studio'
-  ? Number(summaryItem.value?.used_usd ?? 0)
-  : departmentPools.value.reduce((sum, pool) => sum + Number(pool.item?.used_usd ?? 0), 0))
+const summaryActionTarget = computed(() => props.scope.type === 'studio'
+  ? summaryItem.value
+  : departmentDailyPool.value ?? departmentServicePool.value ?? null)
+const summaryUsed = computed(() => {
+  if (props.scope.type === 'studio') return Number(summaryItem.value?.used_usd ?? 0)
+  if (props.pool === 'daily') return Number(departmentDailyPool.value?.used_usd ?? 0)
+  if (props.pool === 'service') return Number(departmentServicePool.value?.used_usd ?? 0)
+  return departmentPools.value.reduce((sum, pool) => sum + Number(pool.item?.used_usd ?? 0), 0)
+})
 const summaryLimit = computed(() => props.scope.type === 'studio'
   ? Number(summaryItem.value?.amount_usd ?? 0)
   : departmentPools.value.reduce((sum, pool) => sum + Math.max(Number(pool.item?.amount_usd ?? 0), 0), 0))
-const summaryPercent = computed(() => summaryLimit.value > 0
-  ? Math.min(100, Math.round(summaryUsed.value / summaryLimit.value * 100))
+const allocatedAmount = computed(() => visibleRows.value.reduce((sum, item) => (
+  sum + Math.max(Number(item.amount_usd ?? 0), 0)
+), 0))
+const unallocatedAmount = computed(() => Math.max(Number(summaryLimit.value || 0) - allocatedAmount.value, 0))
+const summaryUsageLimit = computed(() => {
+  if (props.pool === 'daily') return Number(departmentDailyPool.value?.amount_usd ?? 0)
+  if (props.pool === 'service') return Number(departmentServicePool.value?.amount_usd ?? 0)
+  return summaryLimit.value
+})
+const summaryPercent = computed(() => summaryUsageLimit.value > 0
+  ? Math.min(100, Math.round(summaryUsed.value / summaryUsageLimit.value * 100))
   : 0)
-const canCreateDepartment = computed(() => props.role === 'admin' || props.role === 'studio_admin')
+const overAllocatedAmount = computed(() => Math.max(allocatedAmount.value - Number(summaryLimit.value || 0), 0))
+const allSelected = computed(() => visibleRows.value.length > 0 && selectedRows.value.length === visibleRows.value.length)
+const someSelected = computed(() => selectedRows.value.length > 0 && selectedRows.value.length < visibleRows.value.length)
 
-function tierTags(scopeId: string): TierBudgetTagItem[] {
+function tierTags(row: BudgetItem): TierBudgetTagItem[] {
   return props.tierItems
-    .filter(item => item.scope_id === scopeId)
+    .filter(item => item.scope_id === row.scope_id && (!item.scope_type || item.scope_type === row.scope_type))
     .map((item, index) => {
       const ratio = Number(item.used_ratio ?? 0)
+      const state = item.state ?? (item.enabled === false ? 'disabled' : ratio >= 1 ? 'blocked' : ratio >= 0.8 ? 'warning' : 'normal')
       return {
-        id: `${scopeId}-${item.tier_name}-${index}`,
+        id: `${row.scope_type}-${row.scope_id}-${item.tier_name}-${index}`,
         name: item.tier_name,
         color: item.color,
         usageRatio: ratio,
-        state: ratio >= 1 ? 'blocked' : ratio >= 0.8 ? 'warning' : 'normal',
-        label: `${item.tier_name} ${Math.round(ratio * 100)}%`,
+        state,
+        label: state === 'disabled' ? `${item.tier_name} 已停用` : `${item.tier_name} ${Math.round(ratio * 100)}%`,
       }
     })
 }
 
-function emitCreateDepartment(): void {
-  emit('createDepartment', {
-    scopeType: activePool.value === 'daily' ? 'dept_daily' : 'dept_service',
-    studioId: props.scope.id,
-  })
+function tierSummary(row?: BudgetItem | null): string {
+  if (!row) return '等级子预算未配置'
+  const tags = tierTags(row)
+  if (!tags.length) return '等级子预算未配置'
+  return tags.slice(0, 3).map(tag => tag.label).join(' · ')
+}
+
+function handlePoolAction(row: BudgetItem): void {
+  if (canConfigureDepartmentPools.value) {
+    emit('edit', row)
+    return
+  }
+  emit('requestExpansion', row)
+}
+
+function handleStudioBudgetAction(): void {
+  if (canConfigureStudioBudget.value) {
+    emit('edit', summaryActionTarget.value)
+    return
+  }
+  if (summaryActionTarget.value) emit('requestExpansion', summaryActionTarget.value)
 }
 
 function clearSelection(): void {
-  tableRef.value?.clearSelection?.()
   selectedRows.value = []
+}
+
+function rowKey(row: BudgetItem): string {
+  return row.allocation_id || `${row.scope_type}:${row.scope_id}`
+}
+
+function isSelected(row: BudgetItem): boolean {
+  const key = rowKey(row)
+  return selectedRows.value.some(item => rowKey(item) === key)
+}
+
+function toggleRow(row: BudgetItem, checked: boolean): void {
+  const key = rowKey(row)
+  selectedRows.value = checked
+    ? [...selectedRows.value.filter(item => rowKey(item) !== key), row]
+    : selectedRows.value.filter(item => rowKey(item) !== key)
+}
+
+function toggleAll(checked: boolean): void {
+  selectedRows.value = checked ? [...visibleRows.value] : []
+}
+
+function usagePercent(row: BudgetItem): number {
+  return Math.min(100, Math.round((row.used_ratio || 0) * 100))
+}
+
+function statusTone(ratio = 0): 'green' | 'orange' | 'red' {
+  if (ratio >= 1) return 'red'
+  if (ratio >= 0.8) return 'orange'
+  return 'green'
+}
+
+function statusLabel(ratio = 0): string {
+  if (ratio >= 1) return '已超额'
+  if (ratio >= 0.8) return '预警'
+  return '正常'
+}
+
+function progressColor(ratio = 0): string {
+  if (ratio >= 1) return '#ef4444'
+  if (ratio >= 0.8) return '#e6a23c'
+  return '#36b34e'
 }
 </script>
 
@@ -323,6 +572,112 @@ function clearSelection(): void {
   font-size: var(--font-size-title);
 }
 
+.scope-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 1px;
+  min-width: min(680px, 58%);
+  overflow: hidden;
+  border: 1px solid var(--budget-row-border);
+  border-radius: 10px;
+  background: var(--budget-row-border);
+}
+
+.scope-metric {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px 14px;
+  background: #fff;
+}
+
+.scope-metric span {
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.scope-metric strong {
+  color: var(--text-primary);
+  font-size: 17px;
+  font-weight: var(--font-weight-bold);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.metric-tier-line {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scope-metric.primary {
+  background: #f5fcf6;
+}
+
+.scope-metric.warning strong {
+  color: var(--el-color-warning);
+}
+
+.scope-metric.usage {
+  min-width: 150px;
+}
+
+.scope-metric.compact {
+  min-width: 86px;
+}
+
+.scope-metric.action {
+  align-content: center;
+  justify-items: start;
+}
+
+.scope-metric.action .proto-btn {
+  margin-top: 1px;
+}
+
+.scope-metric.metric-with-action {
+  align-content: start;
+}
+
+.metric-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.metric-action-btn {
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  line-height: 24px;
+  white-space: nowrap;
+}
+
+.metric-action-btn.primary {
+  color: #fff;
+  background: var(--brand-green);
+  border: 1px solid var(--brand-green);
+}
+
+.metric-action-btn.secondary {
+  color: var(--brand-green-text);
+  background: #fff;
+  border: 1px solid var(--brand-green-light);
+}
+
+.metric-action-btn:hover {
+  filter: brightness(0.97);
+}
+
 .scope-toolbar {
   align-items: center;
   justify-content: space-between;
@@ -355,9 +710,166 @@ function clearSelection(): void {
   font-weight: var(--font-weight-semibold);
 }
 
+.proto-table-wrap {
+  overflow-x: auto;
+}
+
+.proto-table-empty {
+  padding: 8px 0 20px;
+}
+
+.proto-native-table {
+  width: 100%;
+  min-width: 840px;
+  border-collapse: collapse;
+}
+
+.proto-native-table.member-table {
+  min-width: 640px;
+}
+
+.proto-native-table th {
+  height: 42px;
+  padding: 0 12px;
+  color: #64748b;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.proto-native-table td {
+  height: 52px;
+  padding: 8px 12px;
+  color: #334155;
+  border-bottom: 1px solid #f1f5f9;
+  vertical-align: middle;
+}
+
+.proto-native-table tbody tr:nth-child(even) td {
+  background: #fbfcfd;
+}
+
+.proto-native-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.proto-native-table .center {
+  text-align: center;
+}
+
+.proto-native-table .right {
+  text-align: right;
+}
+
+.proto-check {
+  width: 15px;
+  height: 15px;
+  accent-color: #36b34e;
+  cursor: pointer;
+}
+
+.proto-scope-name {
+  color: #0f172a;
+}
+
+.proto-usage {
+  display: grid;
+  gap: 6px;
+  min-width: 140px;
+}
+
+.proto-usage-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.proto-progress {
+  height: 5px;
+  min-width: 80px;
+  overflow: hidden;
+  border-radius: 5px;
+  background: #edf1f5;
+  flex: 1;
+}
+
+.proto-progress > i {
+  display: block;
+  height: 100%;
+  border-radius: 5px;
+  background: #36b34e;
+}
+
+.proto-usage-status {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.proto-usage-status.green { color: #16a34a; }
+.proto-usage-status.orange { color: #d97706; }
+.proto-usage-status.red { color: #dc2626; }
+
+.proto-tier-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  margin: 0 4px 4px 0;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.proto-tier-tag.purple { color: #7e22ce; background: #faf5ff; border-color: #e9d5ff; }
+.proto-tier-tag.blue { color: #2563eb; background: #eff6ff; border-color: #bfdbfe; }
+.proto-tier-tag.green { color: #047857; background: #ecfdf5; border-color: #a7f3d0; }
+.proto-tier-tag.orange { color: #b45309; background: #fffbeb; border-color: #fde68a; }
+.proto-tier-tag.red { color: #dc2626; background: #fef2f2; border-color: #fecaca; }
+.proto-tier-tag.gray { color: #64748b; background: #f8fafc; border-color: #e2e8f0; }
+
+.proto-btn {
+  height: 32px;
+  padding: 0 13px;
+  color: #334155;
+  background: #fff;
+  border: 1px solid #d8dee8;
+  border-radius: 7px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.proto-btn.sm {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.proto-btn.plain-primary {
+  color: #2a9c4b;
+  background: #fff;
+  border-color: #84d293;
+}
+
+.proto-btn + .proto-btn {
+  margin-left: 6px;
+}
+
 .usage-cell {
   display: grid;
   gap: var(--space-1);
+}
+
+.period-limit {
+  display: inline-flex;
+  margin-right: 10px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
 }
 
 .pool-grid {
@@ -382,6 +894,33 @@ function clearSelection(): void {
   font-weight: var(--font-weight-bold);
 }
 
+.member-empty-state {
+  display: grid;
+  min-height: 128px;
+  place-items: center;
+  align-content: center;
+  gap: 6px;
+  color: var(--text-regular);
+  text-align: center;
+}
+
+.member-empty-state strong {
+  color: var(--text-primary);
+}
+
+.member-empty-state p {
+  max-width: 520px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.budget-panel__header p {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+}
+
 .link {
   padding: 0;
   color: var(--brand-green-text);
@@ -397,9 +936,14 @@ function clearSelection(): void {
     flex-direction: column;
   }
 
-  .summary-amount {
+  .summary-amount,
+  .scope-metrics {
     min-width: 0;
-    text-align: left;
+    width: 100%;
+  }
+
+  .scope-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .pool-grid {

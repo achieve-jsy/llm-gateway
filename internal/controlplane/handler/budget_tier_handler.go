@@ -58,7 +58,14 @@ func (h *BudgetTierHandler) TierUsage(c *gin.Context) {
 }
 
 func (h *BudgetTierHandler) MyBudgetTiers(c *gin.Context) {
-	result, err := h.service.GetMyBudgetTiers(c.Request.Context(), rbac.GetActor(c))
+	actor := rbac.GetActor(c)
+	if actor.UserID == "" {
+		actor.UserID = c.GetString("user_id")
+	}
+	if c.GetString("user_role") == "admin" {
+		actor.IsGlobal = true
+	}
+	result, err := h.service.GetMyBudgetTiers(c.Request.Context(), actor)
 	if err != nil {
 		writeBudgetTierError(c, err)
 		return

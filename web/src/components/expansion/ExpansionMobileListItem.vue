@@ -22,25 +22,25 @@
       <span class="avatar">{{ subject.slice(0, 1) }}</span>
       <div class="subject">
         <strong>{{ subject }}</strong>
-        <small>{{ item.requester_name }} · {{ LEVEL_LABELS[item.current_level] }}</small>
+        <small>{{ requesterCaption }}</small>
       </div>
       <el-tag :type="statusType" size="small">{{ STATUS_LABELS[item.status] }}</el-tag>
     </header>
 
     <div class="change">
       <div>
-        <el-tag v-if="item.model_tier_name" size="small" type="primary">{{ item.model_tier_name }}</el-tag>
-        <strong>{{ PERIOD_LABELS[item.period_type] }} {{ money(item.current_amount_snapshot) }} → {{ money(item.target_amount_usd) }}</strong>
+        <el-tag :type="item.dimension_type === 'tier' ? 'primary' : 'success'" size="small">{{ limitItem }}</el-tag>
+        <strong>{{ money(item.current_amount_snapshot) }} → {{ money(targetAmount) }}</strong>
       </div>
-      <small>{{ stale ? '数据已变化，需重新预检' : `当前已用 ${money(item.used_amount_snapshot)}` }}</small>
+      <small>{{ PERIOD_LABELS[item.period_type] }} · 增加 {{ money(increaseAmount) }} · 已用 {{ money(item.used_amount_snapshot) }}</small>
+      <small class="risk-copy">{{ riskCopy }}</small>
     </div>
 
     <footer>
       <div class="meta">
         <el-tag v-if="item.priority === 'urgent'" size="small" type="danger">紧急</el-tag>
-        <el-tag size="small" :type="item.duration_type === 'permanent' ? 'success' : 'primary'">
-          {{ item.duration_type === 'permanent' ? '长期' : '本周期' }}
-        </el-tag>
+        <el-tag size="small" :type="item.duration_type === 'current_period' ? 'warning' : 'success'">{{ durationLabel }}</el-tag>
+        <span>{{ LEVEL_LABELS[item.current_level] }}</span>
         <span>{{ formatTime(item.created_at) }}</span>
       </div>
       <el-button link :type="stale ? 'warning' : 'primary'" @click.stop="emit('open')">
@@ -64,9 +64,11 @@ const props = withDefaults(defineProps<{
   item: ExpansionRequest
   selectable?: boolean
   selected?: boolean
+  showRequester?: boolean
 }>(), {
   selectable: false,
   selected: false,
+  showRequester: true,
 })
 
 const emit = defineEmits<{
@@ -74,11 +76,54 @@ const emit = defineEmits<{
   select: [selected: boolean]
 }>()
 
-const subject = computed(() => props.item.scope_name || props.item.requester_name || props.item.scope_id)
+const subject = computed(() => {
+  if (props.item.scope_name && !isUUIDLike(props.item.scope_name)) return props.item.scope_name
+  if (props.item.scope_type === 'member') return requesterName.value
+  return scopeCaption.value
+})
+const scopeCaptionMap: Record<string, string> = {
+  member: '个人额度',
+  dept_daily: '成员日常预算池',
+  dept_service: '程序服务预算池',
+  studio: '工作室预算',
+  company: '公司预算',
+}
+const scopeCaption = computed(() => scopeCaptionMap[props.item.scope_type] || props.item.scope_type)
+const requesterName = computed(() => {
+  if (props.item.requester_name && !isUUIDLike(props.item.requester_name)) return props.item.requester_name
+  return props.item.requester_id ? `用户 ${props.item.requester_id.slice(0, 8)}` : '未知申请人'
+})
+const requesterCaption = computed(() => props.showRequester
+  ? `${scopeCaption.value} · 申请人 ${requesterName.value}`
+  : scopeCaption.value)
+const limitItem = computed(() => props.item.dimension_type === 'tier'
+  ? `${props.item.model_tier_name || '模型等级'}额度`
+  : '总预算')
+const durationLabel = computed(() => props.item.duration_type === 'current_period' ? '临时调整' : '长期调额')
 const stale = computed(() =>
   props.item.status === 'precheck_required' || props.item.status === 'pending_reconfirmation',
 )
-const actionLabel = computed(() => stale.value ? '重新预检' : '查看详情')
+const increaseAmount = computed(() => {
+  const current = Number(props.item.current_amount_snapshot)
+  const target = targetAmount.value
+  return Number.isFinite(current) && Number.isFinite(target) ? Math.max(target - current, 0) : Number.NaN
+})
+const targetAmount = computed(() => {
+  const target = Number(props.item.target_amount_usd)
+  if (Number.isFinite(target) && target > 0) return target
+  const requested = Number(props.item.requested_amount)
+  return Number.isFinite(requested) ? requested : Number.NaN
+})
+const targetBelowUsed = computed(() => {
+  const used = Number(props.item.used_amount_snapshot)
+  const target = targetAmount.value
+  return Number.isFinite(used) && Number.isFinite(target) && used > target
+})
+const riskCopy = computed(() => {
+  if (targetBelowUsed.value) return '目标低于当前已用，需提高目标'
+  return props.item.reason || '未填写原因'
+})
+const actionLabel = computed(() => stale.value ? '刷新数据' : '查看详情')
 const statusType = computed(() => statusTagType(props.item.status))
 
 function statusTagType(status: ExpansionStatus) {
@@ -86,6 +131,10 @@ function statusTagType(status: ExpansionStatus) {
   if (status === 'rejected') return 'danger'
   if (status === 'cancelled' || status === 'expired') return 'info'
   return 'warning'
+}
+
+function isUUIDLike(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 }
 
 function money(value: string | number) {
@@ -97,9 +146,9 @@ function money(value: string | number) {
 
 function formatTime(value: string) {
   const date = new Date(value)
-  return Number.isNaN(date.getTime())
-    ? value
-    : new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(date)
+  if (Number.isNaN(date.getTime())) return value
+  const pad = (number: number) => String(number).padStart(2, '0')
+  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 </script>
 
@@ -146,6 +195,10 @@ header .subject {
 .meta span {
   color: var(--text-secondary);
   font-size: var(--font-size-xs);
+}
+
+.risk-copy {
+  color: var(--color-warning);
 }
 
 .avatar {

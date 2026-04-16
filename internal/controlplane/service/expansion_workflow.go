@@ -21,18 +21,19 @@ import (
 )
 
 var (
-	ErrExpansionForbidden         = errors.New("expansion scope is outside actor visibility")
-	ErrExpansionTargetRequired    = errors.New("expansion target amount is required")
-	ErrExpansionTargetNotRaised   = errors.New("expansion target must exceed current limit")
-	ErrExpansionUsageUnavailable  = errors.New("budget usage is unavailable")
-	ErrNotInApprovalPool          = errors.New("actor is not in current approval pool")
-	ErrApprovalPoolEmpty          = errors.New("current approval pool is empty")
-	ErrPrecheckStale              = errors.New("expansion precheck is stale")
-	ErrExpansionUsedExceedsTarget = errors.New("current usage exceeds expansion target")
-	ErrExpansionRequestExpired    = errors.New("expansion request has expired")
-	ErrExpansionTerminalConflict  = errors.New("terminal expansion request cannot be changed")
-	ErrDecisionCommentRequired    = errors.New("decision comment is required")
-	ErrConfigSyncPending          = errors.New("budget config sync pending")
+	ErrExpansionForbidden           = errors.New("expansion scope is outside actor visibility")
+	ErrExpansionTargetRequired      = errors.New("expansion target amount is required")
+	ErrExpansionTargetNotRaised     = errors.New("expansion target must exceed current limit")
+	ErrExpansionUsageUnavailable    = errors.New("budget usage is unavailable")
+	ErrNotInApprovalPool            = errors.New("actor is not in current approval pool")
+	ErrApprovalPoolEmpty            = errors.New("current approval pool is empty")
+	ErrPrecheckStale                = errors.New("expansion precheck is stale")
+	ErrExpansionUsedExceedsTarget   = errors.New("current usage exceeds expansion target")
+	ErrExpansionRequestExpired      = errors.New("expansion request has expired")
+	ErrExpansionTerminalConflict    = errors.New("terminal expansion request cannot be changed")
+	ErrDecisionCommentRequired      = errors.New("decision comment is required")
+	ErrConfigSyncPending            = errors.New("budget config sync pending")
+	ErrExpansionDurationUnsupported = errors.New("invalid expansion duration")
 )
 
 type ApprovalPoolResolver interface {
@@ -229,10 +230,14 @@ func (s *ExpansionService) Precheck(ctx context.Context, actor ActorScope, input
 	for _, scopeType := range s.VisibleScopeTypes(actor.Role) {
 		result.VisibleScopes = append(result.VisibleScopes, ScopeOption{Type: scopeType})
 	}
-	result.ParentConstraints, result.BlockingReason, err = s.parentConstraints(ctx, actor, input, target, now)
+	parentConstraints, blockingReason, err := s.parentConstraints(ctx, input, target, now)
 	if err != nil {
-		return nil, err
+		if !isMissingBudgetAllocation(err) {
+			return nil, err
+		}
+		parentConstraints, blockingReason = []ConstraintView{}, nil
 	}
+	result.ParentConstraints, result.BlockingReason = parentConstraints, blockingReason
 	if s.budgetSvc != nil {
 		if projector, ok := s.budgetSvc.repo.(interface {
 			ResolveBudgetImpact(context.Context, string, string, *string, int) (int, []repository.BudgetAffectedGroup, error)
@@ -249,15 +254,36 @@ func (s *ExpansionService) Precheck(ctx context.Context, actor ActorScope, input
 			return nil, fmt.Errorf("budget impact projector not configured")
 		}
 	}
-	if result.BlockingReason != nil {
-		result.CanSubmit = false
+	if blockingReason != nil {
 		result.CanNotifyOwner = true
+		if actor.Role == "user" {
+			result.BlockingReason = nil
+			result.ParentConstraints = []ConstraintView{}
+			result.AffectedGroups = []AffectedGroup{}
+		} else {
+			result.CanSubmit = false
+		}
 	}
 	if !increase.IsPositive() && result.BlockingReason == nil {
 		result.BlockingReason = &BlockingReason{Code: "TARGET_NOT_ABOVE_CURRENT", SourceLevel: scopeLevel(input.ScopeType), Status: "blocked"}
 	}
-	result.PrecheckVersion = makePrecheckVersion(input, current, used, result.ParentConstraints, now)
+	result.PrecheckVersion = makePrecheckVersion(input, current, used, parentConstraints, now)
+	if actor.Role == "user" {
+		result.ParentConstraints = []ConstraintView{}
+		result.AffectedGroups = []AffectedGroup{}
+	}
 	return result, nil
+}
+
+func isMissingBudgetAllocation(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrBudgetAllocationNotFound) || errors.Is(err, gorm.ErrRecordNotFound) {
+		return true
+	}
+	message := err.Error()
+	return strings.Contains(message, "resolve budget allocation") && strings.Contains(message, "record not found")
 }
 
 func (s *ExpansionService) AssertCanDecide(ctx context.Context, requestID, actorID string) error {
@@ -330,6 +356,57 @@ func enqueueExpansionNotificationInTx(tx *gorm.DB, request *model.ExpansionReque
 	}).Error
 }
 
+func ensureRequestAllocationInTx(ctx context.Context, tx *gorm.DB, request *model.ExpansionRequest, actorID uuid.UUID) error {
+	if request == nil || request.ScopeType == "" || request.ScopeID == "" {
+		return ErrBudgetAllocationNotFound
+	}
+	now := time.Now().UTC()
+	allocation := model.BudgetAllocation{
+		ID: uuid.New(), ScopeType: request.ScopeType, ScopeID: request.ScopeID,
+		AmountUSD: 0, DailyAmountUSD: -1, WeeklyAmountUSD: -1,
+		Period: "monthly", Enabled: true,
+		CreatedBy: actorID, UpdatedBy: actorID,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	return tx.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "scope_type"}, {Name: "scope_id"}},
+		DoNothing: true,
+	}).Create(&allocation).Error
+}
+
+func requestAllocationMissingInTx(ctx context.Context, tx *gorm.DB, request *model.ExpansionRequest) (bool, error) {
+	if request == nil || request.ScopeType == "" || request.ScopeID == "" {
+		return false, ErrBudgetAllocationNotFound
+	}
+	var count int64
+	if err := tx.WithContext(ctx).Model(&model.BudgetAllocation{}).
+		Where("scope_type = ? AND scope_id = ? AND enabled = true", request.ScopeType, request.ScopeID).
+		Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count == 0, nil
+}
+
+func (s *ExpansionService) rejectInTx(ctx context.Context, tx *gorm.DB, request *model.ExpansionRequest, actorID uuid.UUID, comment string) error {
+	next, err := model.NextExpansionStatus(request.Status, model.ExpansionActionReject)
+	if err != nil {
+		return err
+	}
+	if err := s.assertCanDecideInTx(ctx, tx, request, actorID); err != nil {
+		return err
+	}
+	if err := tx.WithContext(ctx).Model(request).Update("status", next).Error; err != nil {
+		return err
+	}
+	if err := s.repo.CreateStepInTx(ctx, tx, &model.ExpansionApprovalStep{
+		ID: uuid.New(), RequestID: request.ID, Level: request.CurrentLevel,
+		ApproverID: &actorID, Action: model.ExpansionActionReject, Comment: comment,
+	}); err != nil {
+		return err
+	}
+	return enqueueExpansionNotificationInTx(tx, request, request.RequesterID, model.NotificationTypeExpansionRejected, "扩容申请已驳回", comment)
+}
+
 func (s *ExpansionService) DecideWorkflow(
 	ctx context.Context,
 	requestID string,
@@ -366,6 +443,9 @@ func (s *ExpansionService) applyNonApprovalDecision(
 			if request.RequesterID != actorID {
 				return ErrExpansionForbidden
 			}
+			if request.Status == model.ExpansionStatusCancelled {
+				return nil
+			}
 			next, err := model.NextExpansionStatus(request.Status, input.Action)
 			if err != nil {
 				return err
@@ -391,6 +471,13 @@ func (s *ExpansionService) applyNonApprovalDecision(
 	stale := false
 	err = s.repo.Transaction(ctx, func(tx *gorm.DB) error {
 		allocation, chain, err := s.lockApprovalAllocations(ctx, tx, candidate, allocationStore)
+		if isMissingBudgetAllocation(err) && input.Action == model.ExpansionActionReject {
+			request, lockErr := s.repo.FindByIDForUpdate(ctx, tx, requestID)
+			if lockErr != nil {
+				return lockErr
+			}
+			return s.rejectInTx(ctx, tx, request, actorID, input.Comment)
+		}
 		if err != nil {
 			return err
 		}
@@ -470,7 +557,18 @@ func (s *ExpansionService) approveWorkflow(
 		return nil, fmt.Errorf("budget repository does not support transactional approval")
 	}
 	err = s.repo.Transaction(ctx, func(tx *gorm.DB) error {
+		createdMissingAllocation, err := requestAllocationMissingInTx(ctx, tx, candidate)
+		if err != nil {
+			return err
+		}
 		allocation, chain, err := s.lockApprovalAllocations(ctx, tx, candidate, allocationStore)
+		if isMissingBudgetAllocation(err) {
+			if createErr := ensureRequestAllocationInTx(ctx, tx, candidate, actorID); createErr != nil {
+				return createErr
+			}
+			createdMissingAllocation = true
+			allocation, chain, err = s.lockApprovalAllocations(ctx, tx, candidate, allocationStore)
+		}
 		if err != nil {
 			return err
 		}
@@ -508,7 +606,11 @@ func (s *ExpansionService) approveWorkflow(
 		if used.Decimal.GreaterThan(target.Decimal) {
 			return ErrExpansionUsedExceedsTarget
 		}
-		if latest.PrecheckVersion != input.PrecheckVersion || latest.PrecheckVersion != request.PrecheckVersion || latest.Stale {
+		precheckVersionChanged := latest.PrecheckVersion != input.PrecheckVersion || latest.PrecheckVersion != request.PrecheckVersion
+		if createdMissingAllocation && request.PrecheckVersion == input.PrecheckVersion && !latest.Stale && latest.BlockingReason == nil {
+			precheckVersionChanged = false
+		}
+		if precheckVersionChanged || latest.Stale {
 			current, _ := budgetdomain.ParseAmount(latest.CurrentLimitUSD)
 			if err := s.repo.MarkPrecheckRequired(ctx, tx, request.ID, latest.PrecheckVersion, current, used, latest.DataAsOf); err != nil {
 				return err
@@ -516,27 +618,33 @@ func (s *ExpansionService) approveWorkflow(
 			stale = true
 			return nil
 		}
-		targetID := uuid.New()
-		targetType := "base_limit"
 		targetAmount, _ := budgetdomain.ParseAmount(fmt.Sprintf("%.6f", request.RequestedAmount))
+		targetID := uuid.New()
+		targetType := "temporary_override"
 		if request.DurationType == budgetdomain.DurationCurrentPeriod {
-			targetType = "temporary_override"
-			window, err := budgetperiod.Resolve(now, budgetdomain.PeriodType(request.PeriodType), budgetperiod.Config{
+			window, resolveErr := budgetperiod.Resolve(now, budgetdomain.PeriodType(request.PeriodType), budgetperiod.Config{
 				Timezone: budgetperiod.DefaultTimezone, WeekStart: budgetperiod.CanonicalWeekStart,
 			})
-			if err != nil {
-				return err
+			if resolveErr != nil {
+				return resolveErr
 			}
-			override := &model.BudgetTemporaryOverride{
-				ID: targetID, BudgetAllocationID: allocation.ID,
+			override := model.BudgetTemporaryOverride{
+				ID: uuid.New(), BudgetAllocationID: allocation.ID,
 				DimensionType: request.DimensionType, DimensionKey: request.DimensionKey,
 				ModelTierID: request.ModelTierID, PeriodType: budgetdomain.PeriodType(request.PeriodType),
 				TargetLimitUSD: targetAmount, StartsAt: now, ExpiresAt: window.ResetAt,
 				ExpansionRequestID: &request.ID, Status: budgetdomain.OverrideActive,
 			}
-			if err := tx.WithContext(ctx).Create(override).Error; err != nil {
+			if err := tx.WithContext(ctx).Model(&model.BudgetTemporaryOverride{}).
+				Where("budget_allocation_id = ? AND dimension_key = ? AND period_type = ? AND status = ?",
+					allocation.ID, request.DimensionKey, request.PeriodType, budgetdomain.OverrideActive).
+				Updates(map[string]any{"status": budgetdomain.OverrideCancelled, "updated_at": now, "failure_reason": "replaced by expansion approval"}).Error; err != nil {
 				return err
 			}
+			if err := tx.WithContext(ctx).Create(&override).Error; err != nil {
+				return err
+			}
+			targetID = override.ID
 		} else if request.DimensionType == budgetdomain.DimensionTier && request.ModelTierID != nil {
 			if err := repository.UpsertTierLimitInTx(ctx, tx, repository.UpsertTierLimitParams{
 				BudgetAllocationID: allocation.ID, ModelTierID: *request.ModelTierID,
@@ -1105,7 +1213,7 @@ func (s *ExpansionService) precheckApprovalInTx(
 	}, nil
 }
 
-func (s *ExpansionService) parentConstraints(ctx context.Context, actor ActorScope, input PrecheckInput, target budgetdomain.Amount, now time.Time) ([]ConstraintView, *BlockingReason, error) {
+func (s *ExpansionService) parentConstraints(ctx context.Context, input PrecheckInput, target budgetdomain.Amount, now time.Time) ([]ConstraintView, *BlockingReason, error) {
 	if input.ScopeType == model.BudgetScopeCompany || s.budgetSvc == nil {
 		return []ConstraintView{}, nil, nil
 	}
@@ -1116,14 +1224,6 @@ func (s *ExpansionService) parentConstraints(ctx context.Context, actor ActorSco
 	constraints, blocking, err := s.parentConstraintsFromChain(ctx, nil, input, target, chain, now)
 	if err != nil {
 		return nil, nil, err
-	}
-	if actor.Role == "user" {
-		for index := range constraints {
-			constraints[index].ScopeType, constraints[index].ScopeID = "", ""
-		}
-		if blocking != nil {
-			blocking.ScopeType, blocking.ScopeID = "", ""
-		}
 	}
 	return constraints, blocking, nil
 }
@@ -1136,6 +1236,7 @@ func (s *ExpansionService) parentConstraintsFromChain(ctx context.Context, tx *g
 			continue
 		}
 		limit := totalAllocationLimit(node.Allocation, budgetdomain.PeriodType(input.PeriodType))
+		limitApplies := true
 		tierStatus := ""
 		if input.DimensionType == string(budgetdomain.DimensionTier) && input.ModelTierID != nil {
 			tierID, parseErr := uuid.Parse(*input.ModelTierID)
@@ -1162,12 +1263,14 @@ func (s *ExpansionService) parentConstraintsFromChain(ctx context.Context, tx *g
 			}
 			switch {
 			case tierLimit == nil:
-				limit, tierStatus = decimal.Zero, "unset"
+				limit, tierStatus, limitApplies = decimal.Zero, "unset", false
 			case !tierLimit.Enabled:
 				limit, tierStatus = decimal.Zero, "disabled"
 			default:
 				limit, tierStatus = tierLimit.LimitUSD.Decimal, "enabled"
 			}
+		} else if limit.IsNegative() {
+			limitApplies = false
 		}
 		parent := input
 		parent.ScopeType, parent.ScopeID = node.Allocation.ScopeType, node.Allocation.ScopeID
@@ -1178,19 +1281,23 @@ func (s *ExpansionService) parentConstraintsFromChain(ctx context.Context, tx *g
 		status := "available"
 		if stale {
 			status = "stale"
-		} else if !limit.IsPositive() || !used.Decimal.LessThan(limit) || target.Decimal.GreaterThan(limit) {
+		} else if limitApplies && (!limit.IsPositive() || !used.Decimal.LessThan(limit) || target.Decimal.GreaterThan(limit)) {
 			status = "blocking"
 		}
 		level := scopeLevel(parent.ScopeType)
+		limitUSD := ""
+		if limitApplies {
+			limitUSD = limit.Round(6).StringFixed(6)
+		}
 		view := ConstraintView{
 			AllocationID: node.Allocation.ID.String(), Version: node.Allocation.UpdatedAt.UTC().Format(time.RFC3339Nano),
 			SourceLevel: level, ScopeType: parent.ScopeType, ScopeID: parent.ScopeID,
-			LimitUSD: limit.Round(6).StringFixed(6), UsedUSD: used.String(), Status: status,
+			LimitUSD: limitUSD, UsedUSD: used.String(), Status: status,
 			Freshness: map[bool]string{true: "stale", false: "fresh"}[stale], TierStatus: tierStatus,
 		}
 		constraints = append(constraints, view)
 		if status == "blocking" {
-			reason := &BlockingReason{Code: "PARENT_LIMIT_BLOCKING", SourceLevel: level, ScopeType: parent.ScopeType, ScopeID: parent.ScopeID, LimitUSD: limit.Round(6).StringFixed(6), Status: status}
+			reason := &BlockingReason{Code: "PARENT_LIMIT_BLOCKING", SourceLevel: level, ScopeType: parent.ScopeType, ScopeID: parent.ScopeID, LimitUSD: limitUSD, Status: status}
 			return constraints, reason, nil
 		}
 	}

@@ -8,7 +8,7 @@
       @refresh="load"
     >
       <template #actions>
-        <el-button v-if="drillScopeType" @click="clearDrilldown">返回预算首页</el-button>
+        <el-button v-if="drillScopeType && !isRoleDefaultScope" @click="returnFromDrilldown">{{ drillBackLabel }}</el-button>
         <button
           v-if="auth.effectiveRole === 'admin' && !drillScopeType"
           type="button"
@@ -21,12 +21,12 @@
         <el-button
           v-else-if="drillScopeType"
           type="primary"
-          @click="openBudgetDrawer({ scope_type: drillScopeType, scope_id: drillScopeId, label: drillLabel || drillScopeId })"
+          @click="handleCurrentScopePrimaryAction"
         >
-          配置当前预算
+          {{ currentScopePrimaryLabel }}
         </el-button>
         <el-button v-else type="primary" @click="goOrg()">
-          {{ isDeptAdmin ? '配置部门预算' : '配置工作室预算' }}
+          {{ isDeptAdmin ? '申请扩容' : auth.effectiveRole === 'studio_admin' ? '申请工作室扩容' : '配置工作室预算' }}
         </el-button>
       </template>
     </AdminPageHeader>
@@ -78,7 +78,7 @@
       <div class="summary" v-if="selectedMemberItem">
         <div>
           <div class="summary-eye">成员独立额度</div>
-          <div class="summary-name">{{ selectedMemberItem.label || drillLabel || drillScopeId }}</div>
+          <div class="summary-name">{{ selectedMemberItem.label || drillDisplayLabel }}</div>
           <div class="summary-meta">独立额度仍受公司、工作室和部门上级预算共同约束。</div>
         </div>
         <div class="summary-amount">
@@ -363,7 +363,7 @@
             </span>
             <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
               <el-tag type="info" size="small">下发率 {{ Math.round(studioAllocRatio * 100) }}%</el-tag>
-              <el-button size="small" plain style="padding:2px 8px;height:22px;font-size:11px" @click="goOrg()">配置预算</el-button>
+              <el-button size="small" plain style="padding:2px 8px;height:22px;font-size:11px" @click="goOrg()">申请扩容</el-button>
             </div>
           </div>
           <strong>{{ studioPoolItem ? displayAmount(studioPoolItem.amount_usd) : '—' }}</strong>
@@ -426,15 +426,30 @@
       :role="auth.effectiveRole"
       :remaining="studioUnallocated"
       @drill="handleWorkspaceDrill"
+      @detail="handleWorkspaceDetail"
       @edit="handleWorkspaceEdit"
+      @request-expansion="handleWorkspaceExpansion"
       @batch="handleWorkspaceBatch"
       @create-department="openCreateDepartmentBudget"
+    />
+    <BudgetScopeWorkspace
+      v-if="drillScopeType === 'dept'"
+      :scope="{ type: 'dept', id: drillScopeId, label: drillLabel }"
+      :pool="drillPool"
+      :items="items"
+      :tier-items="tierBudgetItems"
+      :role="auth.effectiveRole"
+      @drill="handleWorkspaceDrill"
+      @detail="handleWorkspaceDetail"
+      @edit="handleWorkspaceEdit"
+      @request-expansion="handleWorkspaceExpansion"
+      @batch="handleWorkspaceBatch"
     />
     <section v-if="false && !isDeptAdmin && drillScopeType === 'studio'" class="scope-stage-single">
       <div class="summary">
         <div>
           <div class="summary-eye">工作室预算</div>
-          <div class="summary-name">{{ drillLabel || drillScopeId }}</div>
+          <div class="summary-name">{{ drillDisplayLabel }}</div>
           <div class="summary-meta">下级部门额度总和不可超过工作室月额度。</div>
         </div>
         <div class="summary-amount">
@@ -521,8 +536,8 @@
           <el-table-column label="等级预算" min-width="130">
             <template #default="{ row }">
               <div class="tier-budget-cell">
-                <template v-if="tierBudgetByScope.has(row.deptId)">
-                  <div v-for="t in tierBudgetByScope.get(row.deptId)!" :key="t.tier_name" class="tier-budget-tag">
+                <template v-if="tierBudgetByScope.has(tierScopeKey('dept_daily', row.deptId))">
+                  <div v-for="t in tierBudgetByScope.get(tierScopeKey('dept_daily', row.deptId))!" :key="t.tier_name" class="tier-budget-tag">
                     <span class="tier-name">{{ t.tier_name }}</span>
                     <span :class="budgetColorLevel(t.used_ratio || 0)">{{ Math.round((t.used_ratio || 0) * 100) }}%</span>
                   </div>
@@ -542,7 +557,7 @@
               <div class="empty-guide-icon">📋</div>
               <div class="empty-guide-text">
                 <strong>暂无部门预算数据</strong>
-                <span>先配置工作室预算，再为各部门分配额度。</span>
+                <span>请先为下属部门配置预算；工作室额度不足时发起扩容申请。</span>
               </div>
             </div>
           </template>
@@ -563,11 +578,11 @@
     <!-- ══════════════════════════════════════════════
          dept 下钻：单栏布局（admin / studio_admin 下钻到部门）
          ══════════════════════════════════════════════ -->
-    <section v-if="!isDeptAdmin && drillScopeType === 'dept'" class="scope-stage-single">
+    <section v-if="false && !isDeptAdmin && drillScopeType === 'dept'" class="scope-stage-single">
       <div class="summary">
         <div>
           <div class="summary-eye">部门预算</div>
-          <div class="summary-name">{{ drillLabel || drillScopeId }}</div>
+          <div class="summary-name">{{ drillDisplayLabel }}</div>
           <div class="summary-meta">成员默认共享日常预算池；仅特殊成员设置独立额度。</div>
         </div>
         <div class="summary-amount">
@@ -598,7 +613,7 @@
           </div>
           <el-progress :percentage="Math.min(Math.round(deptDailyKpi.ratio * 100), 100)" :stroke-width="5" :color="riskColor(deptDailyKpi.ratio)" :show-text="false" />
           <div style="margin-top:10px">
-            <button type="button" class="link" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: drillScopeId, label: drillLabel || drillScopeId })">调整额度与等级限制</button>
+            <button type="button" class="link" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: drillScopeId, label: drillDisplayLabel })">调整额度与等级限制</button>
           </div>
         </div>
         <div class="pool">
@@ -615,7 +630,7 @@
           </div>
           <el-progress :percentage="Math.min(Math.round(deptServiceKpi.ratio * 100), 100)" :stroke-width="5" :color="riskColor(deptServiceKpi.ratio)" :show-text="false" />
           <div style="margin-top:10px">
-            <button type="button" class="link" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: drillScopeId, label: drillLabel || drillScopeId })">调整额度与等级限制</button>
+            <button type="button" class="link" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: drillScopeId, label: drillDisplayLabel })">调整额度与等级限制</button>
           </div>
         </div>
       </div>
@@ -629,7 +644,7 @@
           <el-button size="small" :disabled="selectedBatchBudgets.length === 0" @click="batchWizardVisible = true">
             批量调整{{ selectedBatchBudgets.length ? `（${selectedBatchBudgets.length}）` : '' }}
           </el-button>
-          <el-button size="small" type="primary" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: drillScopeId, label: drillLabel || drillScopeId })">配置配额</el-button>
+          <el-button size="small" type="primary" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: drillScopeId, label: drillDisplayLabel })">配置配额</el-button>
         </div>
       </div>
 
@@ -669,8 +684,8 @@
           <el-table-column label="等级预算" min-width="130">
             <template #default="{ row }">
               <div class="tier-budget-cell">
-                <template v-if="tierBudgetByScope.has(row.scope_id)">
-                  <div v-for="t in tierBudgetByScope.get(row.scope_id)!" :key="t.tier_name" class="tier-budget-tag">
+                <template v-if="tierBudgetByScope.has(tierScopeKey(row.scope_type, row.scope_id))">
+                  <div v-for="t in tierBudgetByScope.get(tierScopeKey(row.scope_type, row.scope_id))!" :key="t.tier_name" class="tier-budget-tag">
                     <span class="tier-name">{{ t.tier_name }}</span>
                     <span :class="budgetColorLevel(t.used_ratio || 0)">{{ Math.round((t.used_ratio || 0) * 100) }}%</span>
                   </div>
@@ -772,9 +787,9 @@
           <el-table-column label="等级预算" min-width="130">
             <template #default="{ row }">
               <div class="tier-budget-cell">
-                <template v-if="tierBudgetByScope.has(row.scope_id)">
+                <template v-if="tierBudgetByScope.has(tierScopeKey(row.scope_type, row.scope_id))">
                   <div
-                    v-for="t in tierBudgetByScope.get(row.scope_id)!"
+                    v-for="t in tierBudgetByScope.get(tierScopeKey(row.scope_type, row.scope_id))!"
                     :key="t.tier_name"
                     class="tier-budget-tag"
                   >
@@ -832,7 +847,7 @@
         <div v-if="overviewView === 'studio' && drillScopeType === 'studio'" class="summary">
           <div>
             <div class="summary-eye">工作室预算</div>
-            <div class="summary-name">{{ drillLabel || drillScopeId }}</div>
+            <div class="summary-name">{{ drillDisplayLabel }}</div>
             <div class="summary-meta">下级部门额度总和不可超过工作室月额度。</div>
           </div>
           <div class="summary-amount">
@@ -936,9 +951,9 @@
           <el-table-column label="等级预算" min-width="130">
             <template #default="{ row }">
               <div class="tier-budget-cell">
-                <template v-if="tierBudgetByScope.has(row.deptId)">
+                <template v-if="tierBudgetByScope.has(tierScopeKey('dept_daily', row.deptId))">
                   <div
-                    v-for="t in tierBudgetByScope.get(row.deptId)!"
+                    v-for="t in tierBudgetByScope.get(tierScopeKey('dept_daily', row.deptId))!"
                     :key="t.tier_name"
                     class="tier-budget-tag"
                   >
@@ -963,7 +978,7 @@
               <div class="empty-guide-icon">📋</div>
               <div class="empty-guide-text">
                 <strong>暂无部门预算数据</strong>
-                <span>先配置工作室预算，再为各部门分配额度。</span>
+                <span>请先为下属部门配置预算；工作室额度不足时发起扩容申请。</span>
               </div>
             </div>
           </template>
@@ -982,7 +997,7 @@
           <div class="summary">
             <div>
               <div class="summary-eye">部门预算</div>
-              <div class="summary-name">{{ drillLabel || drillScopeId }}</div>
+              <div class="summary-name">{{ drillDisplayLabel }}</div>
               <div class="summary-meta">成员日常预算与程序服务预算互不占用。</div>
             </div>
             <div class="summary-amount">
@@ -1021,7 +1036,7 @@
                 :show-text="false"
               />
               <div style="margin-top:10px">
-                <button type="button" class="link" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: drillScopeId, label: drillLabel || drillScopeId })">调整额度与等级限制</button>
+                <button type="button" class="link" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: drillScopeId, label: drillDisplayLabel })">调整额度与等级限制</button>
               </div>
             </div>
             <div class="pool">
@@ -1045,7 +1060,7 @@
                 :show-text="false"
               />
               <div style="margin-top:10px">
-                <button type="button" class="link" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: drillScopeId, label: drillLabel || drillScopeId })">调整额度与等级限制</button>
+                <button type="button" class="link" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: drillScopeId, label: drillDisplayLabel })">调整额度与等级限制</button>
               </div>
             </div>
           </div>
@@ -1060,7 +1075,7 @@
               <el-button size="small" :disabled="selectedBatchBudgets.length === 0" @click="batchWizardVisible = true">
                 批量调整{{ selectedBatchBudgets.length ? `（${selectedBatchBudgets.length}）` : '' }}
               </el-button>
-              <el-button size="small" type="primary" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: drillScopeId, label: drillLabel || drillScopeId })">配置配额</el-button>
+              <el-button size="small" type="primary" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: drillScopeId, label: drillDisplayLabel })">配置配额</el-button>
             </div>
           </div>
 
@@ -1103,9 +1118,9 @@
             <el-table-column label="等级预算" min-width="130">
               <template #default="{ row }">
                 <div class="tier-budget-cell">
-                  <template v-if="tierBudgetByScope.has(row.scope_id)">
+                  <template v-if="tierBudgetByScope.has(tierScopeKey(row.scope_type, row.scope_id))">
                     <div
-                      v-for="t in tierBudgetByScope.get(row.scope_id)!"
+                      v-for="t in tierBudgetByScope.get(tierScopeKey(row.scope_type, row.scope_id))!"
                       :key="t.tier_name"
                       class="tier-budget-tag"
                     >
@@ -1203,7 +1218,7 @@
     <!-- ══════════════════════════════════════════════
          dept_admin：全宽纵向布局（仅部门管理员首页；工作室页不应出现成员列表）
          ══════════════════════════════════════════════ -->
-    <template v-if="isDeptAdmin">
+    <template v-if="false && isDeptAdmin">
       <!-- 多部门时展示各部门明细条（单部门已在 KPI 卡中体现，无需重复） -->
       <div v-if="managedDeptIds.length > 1 && deptContainerItems.length" class="dept-summary-bar">
         <div
@@ -1750,7 +1765,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { adjustBudget, adjustBudgetMultiPeriod, getBudgetContext, getBudgetList, listModelTiers, previewBudgetAdjustment, previewBudgetMultiPeriod, rebuildBudgetCounters } from '@/services/control-plane'
+import { adjustBudget, adjustBudgetMultiPeriod, getBudgetContext, getBudgetList, listBudgetTierLimits, listModelTiers, previewBudgetAdjustment, previewBudgetMultiPeriod, rebuildBudgetCounters } from '@/services/control-plane'
 import { getBudgetRiskSummary } from '@/services/control-plane'
 import http from '@/services/http'
 import { useAuthStore } from '@/stores/auth'
@@ -1763,12 +1778,13 @@ import BudgetTierLimitsPanel from '@/components/budget/BudgetTierLimitsPanel.vue
 import { budgetColorLevel, formatUSD } from '@/utils/format'
 import BudgetEditDrawer from '@/components/budget/BudgetEditDrawer.vue'
 import BudgetBatchAdjustWizard from '@/components/budget/BudgetBatchAdjustWizard.vue'
-import type { ModelTier } from '@/types/model-tier'
+import type { BudgetTierLimit, ModelTier } from '@/types/model-tier'
 import MemberQuotaDialog from '@/components/budget/MemberQuotaDialog.vue'
 import AdminPageHeader from '@/components/budget/AdminPageHeader.vue'
 import BudgetManageOverview from '@/components/budget/BudgetManageOverview.vue'
 import BudgetScopeWorkspace from '@/components/budget/BudgetScopeWorkspace.vue'
 import type { BudgetBatchEntryMode } from '@/composables/budgetScopeFilters'
+import type { TierBudgetTagItem } from '@/composables/useBudgetDisplay'
 import {
   filterDeptPoolItems,
   filterMemberItemsByDept,
@@ -1791,6 +1807,8 @@ interface TierBudgetItem {
   used_usd: number
   used_ratio: number
   label: string
+  enabled?: boolean
+  state?: TierBudgetTagItem['state']
 }
 
 const router = useRouter()
@@ -1822,15 +1840,56 @@ const selectedMemberItem = computed(() =>
     : null,
 )
 const activeAllocationId = computed(() => {
-  const scopeType = typeof route.query.scope_type === 'string' ? route.query.scope_type : undefined
-  const scopeID = typeof route.query.scope_id === 'string' ? route.query.scope_id : undefined
+  const scopeType = drillScopeType.value || undefined
+  const scopeID = drillScopeId.value || undefined
   return items.value.find(item => (!scopeType || item.scope_type === scopeType) && (!scopeID || item.scope_id === scopeID))?.allocation_id || ''
 })
 const contextItems = ref<BudgetContextItem[]>([])
-const drillScopeType = computed(() => typeof route.query.scope_type === 'string' ? route.query.scope_type : '')
-const drillScopeId = computed(() => typeof route.query.scope_id === 'string' ? route.query.scope_id : '')
-const drillLabel = computed(() => typeof route.query.scope_label === 'string' ? route.query.scope_label : '')
-const pageTitle = computed(() => drillScopeType.value ? `${drillLabel.value || drillScopeId.value}预算` : '预算总览')
+const routeDrillScopeType = computed(() => typeof route.query.scope_type === 'string' ? route.query.scope_type : '')
+const routeDrillScopeId = computed(() => typeof route.query.scope_id === 'string' ? route.query.scope_id : '')
+const routeDrillLabel = computed(() => typeof route.query.scope_label === 'string' ? route.query.scope_label : '')
+function isUUIDLike(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+const drillScopeType = computed(() => {
+  if (routeDrillScopeType.value) return routeDrillScopeType.value
+  if (isDeptAdmin.value && currentDeptId.value) return 'dept'
+  if (auth.effectiveRole === 'studio_admin' && currentStudioId.value) return 'studio'
+  return ''
+})
+const drillScopeId = computed(() => {
+  if (routeDrillScopeId.value) return routeDrillScopeId.value
+  if (isDeptAdmin.value && currentDeptId.value) return currentDeptId.value
+  if (auth.effectiveRole === 'studio_admin' && currentStudioId.value) return currentStudioId.value
+  return ''
+})
+const drillLabel = computed(() => {
+  const scopeType = drillScopeType.value
+  const scopeId = drillScopeId.value
+  const routeLabel = routeDrillLabel.value.trim()
+  const routeLabelIsUseful = !!routeLabel && routeLabel !== scopeId && !isUUIDLike(routeLabel)
+  if (scopeType === 'studio') {
+    const itemLabel = items.value.find(i => i.scope_type === 'studio' && i.scope_id === scopeId)?.label
+    const contextLabel = contextItems.value.find(i => i.scope_type === 'studio' && i.scope_id === scopeId)?.label
+    const roleLabel = currentStudioRole.value?.scope_name
+    return itemLabel || contextLabel || roleLabel || (routeLabelIsUseful ? routeLabel : '')
+  }
+  if (routeLabelIsUseful) return routeLabel
+  if (scopeType === 'dept') return currentDeptLabel.value
+  return ''
+})
+const drillPool = computed<'daily' | 'service' | undefined>(() => {
+  if (route.query.pool === 'daily' || route.query.pool === 'service') return route.query.pool
+  return undefined
+})
+const drillFallbackLabel = computed(() => {
+  if (drillScopeType.value === 'studio') return '工作室'
+  if (drillScopeType.value === 'dept') return '部门'
+  if (drillScopeType.value === 'member') return '成员'
+  return drillScopeId.value
+})
+const drillDisplayLabel = computed(() => drillLabel.value || drillFallbackLabel.value)
+const pageTitle = computed(() => drillScopeType.value ? `${drillDisplayLabel.value}预算` : '预算总览')
 const pageDescription = computed(() => {
   if (drillScopeType.value === 'studio') return '查看工作室预算及下属部门分配情况。'
   if (drillScopeType.value === 'dept') return '查看部门预算及成员配额情况。'
@@ -1839,27 +1898,75 @@ const pageDescription = computed(() => {
   if (auth.effectiveRole === 'studio_admin') return '工作室管理员视角 · 查看工作室下各部门预算状态，并可继续向下分配。'
   return '查看本部门预算与成员用量风险，可直接调整成员配额。'
 })
+const drillBackLabel = computed(() => {
+  if (drillScopeType.value === 'dept') {
+    const studioId = typeof route.query.studio_id === 'string' ? String(route.query.studio_id) : ''
+    const studioLabel = studioId ? resolveCrumbLabel('studio', studioId) : '工作室'
+    return `返回${studioLabel}`
+  }
+  if (drillScopeType.value === 'member') {
+    const deptId = typeof route.query.dept_id === 'string' ? String(route.query.dept_id) : ''
+    const deptLabel = deptId ? resolveCrumbLabel('dept', deptId) : '部门'
+    return `返回${deptLabel}`
+  }
+  return '返回预算首页'
+})
+const drillConfigLabel = computed(() => {
+  if (drillScopeType.value === 'dept' && drillPool.value === 'daily') return '配置个人 Key 池'
+  if (drillScopeType.value === 'dept' && drillPool.value === 'service') return '配置 Service Key 池'
+  if (drillScopeType.value === 'dept') return '配置部门总预算'
+  if (drillScopeType.value === 'studio') return '配置工作室预算'
+  return '配置当前预算'
+})
+const currentScopePrimaryLabel = computed(() => {
+  if (isDeptAdmin.value && drillScopeType.value === 'dept') return '申请扩容'
+  if (auth.effectiveRole === 'studio_admin' && drillScopeType.value === 'studio') return '申请工作室扩容'
+  return drillConfigLabel.value
+})
 type DrillCrumb = { scopeType: 'studio' | 'dept' | 'member'; scopeId: string; label: string }
+function usefulRouteLabel(scopeType: 'studio' | 'dept' | 'member', scopeId: string): string {
+  const raw = typeof route.query[`${scopeType}_label`] === 'string'
+    ? String(route.query[`${scopeType}_label`]).trim()
+    : ''
+  return raw && raw !== scopeId && !isUUIDLike(raw) ? raw : ''
+}
+
+function resolveCrumbLabel(scopeType: 'studio' | 'dept' | 'member', scopeId: string): string {
+  if (scopeType === 'studio') {
+    return items.value.find(i => i.scope_type === 'studio' && i.scope_id === scopeId)?.label
+      || contextItems.value.find(i => i.scope_type === 'studio' && i.scope_id === scopeId)?.label
+      || (currentStudioId.value === scopeId ? currentStudioRole.value?.scope_name || '' : '')
+      || usefulRouteLabel(scopeType, scopeId)
+      || '工作室'
+  }
+  if (scopeType === 'dept') {
+    return items.value.find(i => (i.scope_type === 'dept_daily' || i.scope_type === 'dept_service') && i.scope_id === scopeId)?.label
+      || usefulRouteLabel(scopeType, scopeId)
+      || (currentDeptId.value === scopeId ? currentDeptLabel.value || '' : '')
+      || '部门'
+  }
+  return items.value.find(i => i.scope_type === 'member' && i.scope_id === scopeId)?.label
+    || usefulRouteLabel(scopeType, scopeId)
+    || '成员'
+}
+
 const drillBreadcrumbs = computed<DrillCrumb[]>(() => {
   const result: DrillCrumb[] = []
   for (const scopeType of ['studio', 'dept', 'member'] as const) {
     const scopeId = typeof route.query[`${scopeType}_id`] === 'string' ? String(route.query[`${scopeType}_id`]) : ''
     if (!scopeId) continue
-    const label = typeof route.query[`${scopeType}_label`] === 'string'
-      ? String(route.query[`${scopeType}_label`])
-      : scopeId
-    result.push({ scopeType, scopeId, label })
+    result.push({ scopeType, scopeId, label: resolveCrumbLabel(scopeType, scopeId) })
   }
   if (!result.length && drillScopeType.value && drillScopeId.value) {
     result.push({
       scopeType: drillScopeType.value as DrillCrumb['scopeType'],
       scopeId: drillScopeId.value,
-      label: drillLabel.value || drillScopeId.value,
+      label: drillDisplayLabel.value,
     })
   }
   return result
 })
-function drillTo(scopeType: 'studio' | 'dept' | 'member', scopeId: string, label?: string) {
+function drillTo(scopeType: 'studio' | 'dept' | 'member', scopeId: string, label?: string, options?: { pool?: 'daily' | 'service' }) {
   const query = {
     ...route.query,
     tab: undefined,
@@ -1868,6 +1975,7 @@ function drillTo(scopeType: 'studio' | 'dept' | 'member', scopeId: string, label
     scope_label: label || undefined,
     [`${scopeType}_id`]: scopeId,
     [`${scopeType}_label`]: label || undefined,
+    pool: scopeType === 'dept' ? options?.pool : undefined,
   } as Record<string, any>
   if (scopeType === 'studio') {
     query.dept_id = query.dept_label = query.member_id = query.member_label = undefined
@@ -1878,6 +1986,17 @@ function drillTo(scopeType: 'studio' | 'dept' | 'member', scopeId: string, label
 }
 function navigateBreadcrumb(crumb: DrillCrumb) {
   drillTo(crumb.scopeType, crumb.scopeId, crumb.label)
+}
+function returnFromDrilldown() {
+  if (drillScopeType.value === 'dept' && typeof route.query.studio_id === 'string') {
+    drillTo('studio', String(route.query.studio_id), typeof route.query.studio_label === 'string' ? String(route.query.studio_label) : undefined)
+    return
+  }
+  if (drillScopeType.value === 'member' && typeof route.query.dept_id === 'string') {
+    drillTo('dept', String(route.query.dept_id), typeof route.query.dept_label === 'string' ? String(route.query.dept_label) : undefined)
+    return
+  }
+  clearDrilldown()
 }
 function clearDrilldown() {
   router.push({ query: {
@@ -1892,6 +2011,30 @@ function clearDrilldown() {
     member_id: undefined,
     member_label: undefined,
   } })
+}
+function ensureRoleDefaultDrilldown() {
+  if (routeDrillScopeType.value) return
+  if (isDeptAdmin.value && currentDeptId.value) {
+    router.replace({ query: {
+      ...route.query,
+      scope_type: 'dept',
+      scope_id: currentDeptId.value,
+      scope_label: currentDeptLabel.value || currentDeptId.value,
+      dept_id: currentDeptId.value,
+      dept_label: currentDeptLabel.value || currentDeptId.value,
+    } })
+    return
+  }
+  if (auth.effectiveRole === 'studio_admin' && currentStudioId.value) {
+    router.replace({ query: {
+      ...route.query,
+      scope_type: 'studio',
+      scope_id: currentStudioId.value,
+      scope_label: currentStudioRole.value?.scope_name || undefined,
+      studio_id: currentStudioId.value,
+      studio_label: currentStudioRole.value?.scope_name || undefined,
+    } })
+  }
 }
 const memberUsage7d = ref<Map<string, number>>(new Map())
 const tierBudgetItems = ref<TierBudgetItem[]>([])
@@ -1914,6 +2057,14 @@ const managedDeptIds = computed<string[]>(() => {
 
 // 第一个部门 ID（向后兼容单部门场景）
 const currentDeptId = computed<string | null>(() => managedDeptIds.value[0] ?? null)
+const currentDeptLabel = computed(() => auth.user?.departmentName || currentDeptId.value || '')
+const currentStudioRole = computed(() => (auth.orgRoles ?? []).find(r => r.role === 'studio_admin' || r.scope_type === 'studio'))
+const currentStudioId = computed(() => currentStudioRole.value?.scope_id || '')
+const isRoleDefaultScope = computed(() => {
+  if (isDeptAdmin.value) return drillScopeType.value === 'dept' && drillScopeId.value === currentDeptId.value
+  if (auth.effectiveRole === 'studio_admin') return drillScopeType.value === 'studio' && drillScopeId.value === currentStudioId.value
+  return false
+})
 
 // ─── 治理链路 ─────────────────────────────────────────────────────────────────
 // ─── 治理链路：当前节点 + 向下分配摘要 ──────────────────────────────────────
@@ -2110,16 +2261,52 @@ const tierBudgetRiskSummary = computed(() => {
   return parts.join(' · ')
 })
 
-// 按 scope_id 聚合的等级预算数据（用于表格"等级预算"列）
+function tierScopeKey(scopeType: string, scopeID: string): string {
+  return `${scopeType}:${scopeID}`
+}
+
+// 按 scope_type + scope_id 聚合的等级预算数据（用于表格"等级预算"列）
 const tierBudgetByScope = computed(() => {
   const map = new Map<string, TierBudgetItem[]>()
   for (const item of tierBudgetItems.value) {
-    const key = item.scope_id
+    const key = tierScopeKey(item.scope_type, item.scope_id)
     if (!map.has(key)) map.set(key, [])
     map.get(key)!.push(item)
   }
   return map
 })
+
+function tierLimitToBudgetItem(scope: BudgetItem, limit: BudgetTierLimit): TierBudgetItem {
+  const amount = Number(limit.effective_limit_usd ?? limit.limit_usd ?? limit.base_limit_usd ?? 0)
+  const used = Number(limit.used_usd ?? 0)
+  const ratio = amount > 0 && Number.isFinite(used) ? used / amount : 0
+  return {
+    scope_id: scope.scope_id,
+    scope_type: scope.scope_type,
+    tier_name: limit.model_tier_name || limit.model_tier_id,
+    amount_usd: Number.isFinite(amount) ? amount : 0,
+    used_usd: Number.isFinite(used) ? used : 0,
+    used_ratio: Number.isFinite(ratio) ? ratio : 0,
+    label: scope.label || scope.scope_id,
+    enabled: limit.enabled,
+    state: !limit.enabled ? 'disabled' : amount === 0 ? 'blocked' : 'normal',
+  }
+}
+
+async function loadConfiguredTierBudgets(scopes: BudgetItem[]): Promise<TierBudgetItem[]> {
+  const visibleScopeTypes = overviewView.value === 'company'
+    ? new Set<BudgetScopeType>(['studio'])
+    : overviewView.value === 'studio'
+      ? new Set<BudgetScopeType>(['dept_daily', 'dept_service'])
+      : new Set<BudgetScopeType>(['dept_daily', 'dept_service', 'member'])
+  const targets = scopes.filter(scope => scope.allocation_id && visibleScopeTypes.has(scope.scope_type))
+  if (!targets.length) return []
+  const results = await Promise.allSettled(targets.map(async scope => {
+    const limits = await listBudgetTierLimits(scope.allocation_id!)
+    return limits.map(limit => tierLimitToBudgetItem(scope, limit))
+  }))
+  return results.flatMap(result => result.status === 'fulfilled' ? result.value : [])
+}
 
 const totalCost7d = computed(() => {
   let total = 0
@@ -2330,8 +2517,11 @@ async function load() {
   loading.value = true
   pageError.value = ''
   try {
+    const budgetScopeID = drillScopeType.value === 'studio' || drillScopeType.value === 'dept'
+      ? drillScopeId.value
+      : undefined
     const [budgetResult, contextResult, tierResult] = await Promise.allSettled([
-      getBudgetList(undefined, undefined, overviewView.value),
+      getBudgetList(undefined, budgetScopeID, overviewView.value),
       getBudgetContext(),
       http.get<any>('/api/v1/budgets/tier-usage', {
         params: { period_type: 'monthly' },
@@ -2353,13 +2543,24 @@ async function load() {
       ElMessage.warning('预算治理链路加载失败，列表仍可查看')
     }
 
+    let usageTierItems: TierBudgetItem[] = []
     if (tierResult.status === 'fulfilled') {
       const payload = tierResult.value?.data?.data ?? tierResult.value?.data ?? {}
       const list = payload?.items ?? (Array.isArray(payload) ? payload : [])
-      tierBudgetItems.value = (Array.isArray(list) ? list : []) as TierBudgetItem[]
-    } else {
-      tierBudgetItems.value = []
+      usageTierItems = (Array.isArray(list) ? list : []) as TierBudgetItem[]
     }
+    const configuredTierItems = await loadConfiguredTierBudgets(items.value)
+    const mergedTierItems = new Map<string, TierBudgetItem>()
+    for (const item of configuredTierItems) {
+      mergedTierItems.set(`${item.scope_type}:${item.scope_id}:${item.tier_name}`, item)
+    }
+    for (const item of usageTierItems) {
+      mergedTierItems.set(`${item.scope_type}:${item.scope_id}:${item.tier_name}`, {
+        ...(mergedTierItems.get(`${item.scope_type}:${item.scope_id}:${item.tier_name}`) ?? item),
+        ...item,
+      })
+    }
+    tierBudgetItems.value = Array.from(mergedTierItems.values())
 
     // dept_admin 或 admin/studio_admin 下钻到部门时：拉取该部门成员近7天用量（来自 call_logs，数据可靠）
     const drillDeptIds: string[] = []
@@ -2463,13 +2664,17 @@ function openBudgetDrawer(
   budgetDrawerScopeId.value = opts.scope_id
   budgetDrawerTitle.value = opts.label || opts.scope_id
   budgetDrawerChildIds.value = childIds
-  budgetDrawerInitialAllocation.value = undefined
+  budgetDrawerInitialAllocation.value = 'allocation_id' in opts ? opts as BudgetItem : undefined
 
   if (auth.effectiveRole === 'admin') {
     budgetDrawerCanEdit.value = true
     budgetDrawerCanEditSelf.value = isStudio
+  } else if (auth.effectiveRole === 'studio_admin' && isStudio) {
+    // 工作室负责人只能查看自身工作室预算；工作室总额/等级边界需要走扩容审批。
+    budgetDrawerCanEdit.value = false
+    budgetDrawerCanEditSelf.value = false
   } else {
-    // studio_admin / dept_admin：canEdit=true，不可直接修改自身节点总额
+    // studio_admin 可配置下属部门；dept_admin 可配置成员/部门内可管辖对象。
     budgetDrawerCanEdit.value = true
     budgetDrawerCanEditSelf.value = false
   }
@@ -2764,23 +2969,25 @@ function goOrg(row?: BudgetItem) {
 
   if (!row) {
     if (auth.effectiveRole === 'dept_admin') {
-      const deptRole = auth.orgRoles?.find(r => r.scope_type === 'dept_daily' || r.scope_type === 'dept')
-      if (deptRole) {
-        openBudgetDrawer({ scope_type: 'dept', scope_id: deptRole.scope_id })
-        return
-      }
+      goExpansion()
+      return
     }
     if (auth.effectiveRole === 'studio_admin') {
       const studioRole = auth.orgRoles?.find(r => r.scope_type === 'studio')
       if (studioRole) {
-        openBudgetDrawer(
-          { scope_type: 'studio', scope_id: studioRole.scope_id, label: studioPoolItem.value?.label },
-          studioDeptRows.value.map(r => r.deptId),
-        )
+        router.push({
+          path: '/admin/expansion-requests',
+          query: {
+            create: '1',
+            scope_type: 'studio',
+            scope_id: studioRole.scope_id,
+            scope_name: studioPoolItem.value?.label || drillLabel.value || studioRole.scope_id,
+          },
+        })
         return
       }
     }
-    router.push('/admin/org')
+    goExpansion()
     return
   }
 
@@ -2823,8 +3030,46 @@ function handleOverviewBatch(rows: BudgetItem[], mode: BudgetBatchEntryMode = 'a
   batchWizardVisible.value = true
 }
 
+function openCurrentDrillBudget() {
+  if (drillScopeType.value === 'dept' && drillPool.value) {
+    const targetScopeType = drillPool.value === 'service' ? 'dept_service' : 'dept_daily'
+    const target = items.value.find(item => item.scope_type === targetScopeType && item.scope_id === drillScopeId.value)
+    if (target) {
+      openBudgetDrawer(target)
+      return
+    }
+  }
+  openBudgetDrawer({ scope_type: drillScopeType.value, scope_id: drillScopeId.value, label: drillLabel.value || drillScopeId.value })
+}
+
+function requestCurrentScopeExpansion() {
+  router.push({
+    path: '/admin/expansion-requests',
+    query: {
+      create: '1',
+      scope_type: drillScopeType.value,
+      scope_id: drillScopeId.value,
+      scope_name: drillLabel.value || drillScopeId.value,
+    },
+  })
+}
+
+function handleCurrentScopePrimaryAction() {
+  if (isDeptAdmin.value && drillScopeType.value === 'dept') {
+    goExpansion()
+    return
+  }
+  if (auth.effectiveRole === 'studio_admin' && drillScopeType.value === 'studio') {
+    requestCurrentScopeExpansion()
+    return
+  }
+  openCurrentDrillBudget()
+}
+
 function handleWorkspaceDrill(item: BudgetItem) {
-  drillTo('dept', item.scope_id, item.label)
+  drillTo('dept', item.scope_id, item.label, {
+    pool: item.scope_type === 'dept_service' ? 'service' : 'daily',
+  })
 }
 
 function handleWorkspaceEdit(item: BudgetItem | null) {
@@ -2833,6 +3078,24 @@ function handleWorkspaceEdit(item: BudgetItem | null) {
     return
   }
   openBudgetDrawer({ scope_type: 'studio', scope_id: drillScopeId.value, label: drillLabel.value })
+}
+
+function handleWorkspaceDetail(item: BudgetItem) {
+  openBudgetDrawer(item)
+  budgetDrawerCanEdit.value = false
+  budgetDrawerCanEditSelf.value = false
+}
+
+function handleWorkspaceExpansion(item: BudgetItem) {
+  router.push({
+    path: '/admin/expansion-requests',
+    query: {
+      create: '1',
+      scope_type: item.scope_type,
+      scope_id: item.scope_id,
+      scope_name: item.label || item.scope_id,
+    },
+  })
 }
 
 function handleWorkspaceBatch(rows: BudgetItem[], mode: BudgetBatchEntryMode = 'absolute') {
@@ -2852,7 +3115,10 @@ function handleKpiSelect(key: string) {
   }
   if (key === 'scopes') {
     activeBudgetTab.value = 'overview'
-    // 治理链「明细 →」：滚到工作室预算表（下发明细）
+    if (chainCurrentNode.value && (chainDistribution.value || chainDetailRows.value.length > 0)) {
+      showChainDetail.value = true
+      return
+    }
     requestAnimationFrame(() => {
       document
         .querySelector('[data-test="budget-manage-overview"] .proto-native-table')
@@ -2965,8 +3231,17 @@ function handleBudgetNavigate(payload: { scopeType: 'dept' | 'member'; scopeId: 
   drillTo(payload.scopeType, payload.scopeId, payload.label)
 }
 
-watch(() => [route.query.scope_type, route.query.scope_id], () => load())
-onMounted(load)
+watch(() => [route.query.scope_type, route.query.scope_id], () => {
+  ensureRoleDefaultDrilldown()
+  load()
+})
+watch(() => [auth.effectiveRole, auth.orgRoles.map(role => `${role.role}:${role.scope_type}:${role.scope_id}`).join('|')], () => {
+  ensureRoleDefaultDrilldown()
+})
+onMounted(() => {
+  ensureRoleDefaultDrilldown()
+  load()
+})
 onMounted(async () => {
   try { batchModelTiers.value = await listModelTiers(false) } catch { batchModelTiers.value = [] }
 })

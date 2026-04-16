@@ -107,6 +107,23 @@ describe('App navigation', () => {
     wrapper.unmount()
   })
 
+  it('平台管理员不显示我的预算自助菜单，预算入口只在管理区', () => {
+    const wrapper = mountAppAs('admin')
+    expect(wrapper.text()).not.toContain('我的预算')
+    expect(wrapper.text()).toContain('预算管理')
+    wrapper.unmount()
+  })
+
+  it('部门和工作室管理员仍保留我的预算入口', () => {
+    const studioWrapper = mountAppAs('studio_admin')
+    expect(studioWrapper.text()).toContain('我的预算')
+    studioWrapper.unmount()
+
+    const deptWrapper = mountAppAs('dept_admin')
+    expect(deptWrapper.text()).toContain('我的预算')
+    deptWrapper.unmount()
+  })
+
   it('移动侧栏支持 Escape 关闭并在打开时锁定滚动', async () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
     const wrapper = mountAppAs('admin')
@@ -130,5 +147,15 @@ describe('App navigation', () => {
       'utf8',
     )
     expect(routerSource.match(/path:\s*['"]\/admin\/audit-logs['"]/g)).toHaveLength(1)
+  })
+
+  it('平台管理员访问我的预算会被路由到预算管理', () => {
+    const routerSource = readFileSync(
+      resolve(process.cwd(), 'src/router/index.ts'),
+      'utf8',
+    )
+    expect(routerSource).toContain("to.path === '/my/budget'")
+    expect(routerSource).toContain("authStore.effectiveRole === 'admin'")
+    expect(routerSource).toContain("next('/admin/budget')")
   })
 })

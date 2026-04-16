@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/example/llm-gateway/internal/budgetperiod"
@@ -37,15 +39,24 @@ type budgetConstraint struct {
 }
 
 func (s *BudgetTierService) GetMyBudgetTiers(ctx context.Context, actor rbac.Actor) (*MyBudgetTiersResponse, error) {
+	now := s.clock()
+	if actor.IsGlobal {
+		return emptyMyBudgetTiersResponse(now), nil
+	}
+	if strings.TrimSpace(actor.UserID) == "" {
+		return emptyMyBudgetTiersResponse(now), nil
+	}
 	reader, ok := s.allocations.(myBudgetChainReader)
 	if !ok {
 		return nil, fmt.Errorf("my budget chain reader not configured")
 	}
 	scopes, err := reader.ResolveMyBudgetChain(ctx, actor.UserID)
 	if err != nil {
+		if errors.Is(err, repository.ErrMyBudgetChainUnavailable) {
+			return emptyMyBudgetTiersResponse(now), nil
+		}
 		return nil, err
 	}
-	now := s.clock()
 	data := MyBudgetTiersData{
 		EffectiveTotal: []EffectiveTotalPeriod{}, BudgetChain: []MyBudgetChainScope{},
 		TierLimits: []MyBudgetTierView{}, DataUpdatedAt: now,
@@ -180,7 +191,8 @@ func (s *BudgetTierService) GetMyBudgetTiers(ctx context.Context, actor rbac.Act
 			periods = append(periods, MyBudgetTierPeriod{PeriodType: periodType, ResetAt: period.ResetAt, Status: status})
 		}
 		tierViews[tier.ID] = &MyBudgetTierView{
-			ModelTierID: tier.ID, ModelTierName: tier.Name, Enabled: tier.Enabled, Periods: periods,
+			ModelTierID: tier.ID, ModelTierName: tier.Name, ModelTierColor: tier.Color,
+			Enabled: tier.Enabled, Periods: periods,
 		}
 		tierOrder = append(tierOrder, tier.ID)
 	}
@@ -244,6 +256,14 @@ func (s *BudgetTierService) GetMyBudgetTiers(ctx context.Context, actor rbac.Act
 		}
 	}
 	return &MyBudgetTiersResponse{Data: data}, nil
+}
+
+func emptyMyBudgetTiersResponse(now time.Time) *MyBudgetTiersResponse {
+	return &MyBudgetTiersResponse{Data: MyBudgetTiersData{
+		SourceSummary:  MyBudgetSourceSummary{Mode: SourceModeShared, PrimaryScopeType: model.BudgetScopeDeptDaily},
+		EffectiveTotal: []EffectiveTotalPeriod{}, BudgetChain: []MyBudgetChainScope{},
+		TierLimits: []MyBudgetTierView{}, DataUpdatedAt: now, Stale: false,
+	}}
 }
 
 func (s *BudgetTierService) buildConstraint(ctx context.Context, scope repository.MyBudgetScopeAllocation, periodType budgetdomain.PeriodType, tierID *uuid.UUID, tierName string, base budgetdomain.Amount, overrides []model.BudgetTemporaryOverride, effectiveAt *time.Time) (budgetConstraint, error) {

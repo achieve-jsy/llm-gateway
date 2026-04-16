@@ -22,6 +22,8 @@ export interface AvailableGroup {
   name: string
   description: string
   strategy: string
+  budget_tier_id?: string
+  budget_tier_name?: string
 }
 
 export interface RawKeyItem {

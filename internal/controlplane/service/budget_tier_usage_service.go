@@ -53,6 +53,16 @@ func (s *BudgetTierService) QueryTierUsage(ctx context.Context, actor rbac.Actor
 	if s.usageRepo == nil {
 		return nil, fmt.Errorf("tier usage repository not configured")
 	}
+	if input.ScopeType == "" && !actor.IsGlobal {
+		switch {
+		case len(actor.StudioIDs) > 0:
+			input.ScopeType = model.BudgetScopeStudio
+			input.ScopeID = actor.StudioIDs[0]
+		case len(actor.DeptIDs) > 0:
+			input.ScopeType = model.BudgetScopeDeptDaily
+			input.ScopeID = actor.DeptIDs[0]
+		}
+	}
 	allowed, scopeErr := s.canQueryTierUsage(ctx, actor, input.ScopeType, input.ScopeID)
 	if scopeErr != nil {
 		return nil, scopeErr
@@ -128,10 +138,11 @@ type MyBudgetChainScope struct {
 	VisibleAmounts bool   `json:"visible_amounts"`
 }
 type MyBudgetTierView struct {
-	ModelTierID   uuid.UUID            `json:"model_tier_id"`
-	ModelTierName string               `json:"model_tier_name"`
-	Enabled       bool                 `json:"enabled"`
-	Periods       []MyBudgetTierPeriod `json:"periods"`
+	ModelTierID    uuid.UUID            `json:"model_tier_id"`
+	ModelTierName  string               `json:"model_tier_name"`
+	ModelTierColor string               `json:"model_tier_color,omitempty"`
+	Enabled        bool                 `json:"enabled"`
+	Periods        []MyBudgetTierPeriod `json:"periods"`
 }
 type MyBudgetTierPeriod struct {
 	PeriodType         budgetdomain.PeriodType `json:"period_type"`

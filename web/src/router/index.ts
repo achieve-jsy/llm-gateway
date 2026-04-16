@@ -244,10 +244,18 @@ const router = createRouter({
   routes
 })
 
-router.beforeEach((to, _from, next) => {
+router.beforeEach(async (to, _from, next) => {
   if (to.meta.public) { next(); return }
   const authStore = useAuthStore()
   if (!authStore.isLoggedIn) { next('/login'); return }
+
+  if (to.meta.requiresAdmin || to.meta.requiresManager || to.path === '/my/budget') {
+    await authStore.ensureOrgRoles()
+  }
+
+  if (to.path === '/my/budget' && authStore.effectiveRole === 'admin') {
+    next('/admin/budget'); return
+  }
 
   // admin 专属路由（effectiveRole 含 org 层角色提升）
   if (to.meta.requiresAdmin && authStore.effectiveRole !== 'admin') {

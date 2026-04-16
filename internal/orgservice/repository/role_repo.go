@@ -19,7 +19,28 @@ func NewRoleRepo(db *gorm.DB) *RoleRepo {
 func (r *RoleRepo) GetByUserID(userID string) ([]model.UserRole, error) {
 	var roles []model.UserRole
 	err := r.db.Where("user_id = ?", userID).Find(&roles).Error
-	return roles, err
+	if err != nil || len(roles) > 0 {
+		return roles, err
+	}
+	legacyRole, legacyErr := r.legacyUserRole(userID)
+	if legacyErr != nil || legacyRole == "" || legacyRole == string(model.RoleUser) {
+		return roles, legacyErr
+	}
+	return []model.UserRole{{UserID: userID, Role: model.RoleType(legacyRole), ScopeType: model.ScopeSelf, ScopeID: ""}}, nil
+}
+
+func (r *RoleRepo) legacyUserRole(userID string) (string, error) {
+	var row struct{ Role string }
+	if err := r.db.Table("users").Select("role").Where("id = ?", userID).Limit(1).Scan(&row).Error; err != nil {
+		return "", err
+	}
+	if row.Role != "" {
+		return row.Role, nil
+	}
+	if err := r.db.Table("dev_users").Select("role").Where("id = ?", userID).Limit(1).Scan(&row).Error; err != nil {
+		return "", err
+	}
+	return row.Role, nil
 }
 
 // Grant 幂等授予角色（ON CONFLICT DO NOTHING）

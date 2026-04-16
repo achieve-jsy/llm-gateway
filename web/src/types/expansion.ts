@@ -17,13 +17,14 @@ export type ExpansionDimension = 'total' | 'tier'
 export type ExpansionDuration = 'permanent' | 'current_period'
 export type ExpansionPriority = 'normal' | 'urgent'
 export type ExpansionListTab = 'pending' | 'mine' | 'all'
+export type ExpansionStatusFilter = 'all' | 'in_progress' | 'approved' | 'rejected' | 'cancelled' | 'expired'
 
 export interface ExpansionListFilter {
   dimension: 'all' | ExpansionDimension
   modelTierId: 'all' | string
   duration: 'all' | ExpansionDuration
   priority: 'all' | ExpansionPriority
-  status: 'all' | ExpansionStatus
+  status: ExpansionStatusFilter
   keyword: string
 }
 
@@ -171,13 +172,22 @@ export interface DecideExpansionPayload {
 
 export const STATUS_LABELS: Record<ExpansionStatus, string> = {
   pending: '审批中',
-  precheck_required: '待重新预检',
-  pending_reconfirmation: '待再次确认',
+  precheck_required: '审批中',
+  pending_reconfirmation: '审批中',
   approved: '已批准',
   rejected: '已拒绝',
   cancelled: '已取消',
   expired: '已过期',
 }
+
+export const STATUS_FILTER_OPTIONS: Array<{ value: ExpansionStatusFilter; label: string }> = [
+  { value: 'all', label: '全部状态' },
+  { value: 'in_progress', label: '审批中' },
+  { value: 'approved', label: '已批准' },
+  { value: 'rejected', label: '已拒绝' },
+  { value: 'cancelled', label: '已取消' },
+  { value: 'expired', label: '已过期' },
+]
 
 export const STATUS_COLORS: Record<ExpansionStatus, string> = {
   pending: '#f59e0b',

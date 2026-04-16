@@ -14,9 +14,6 @@
       :closable="false"
       show-icon
     />
-    <p v-if="value.parent_constraints.length">
-      上级约束：{{ value.parent_constraints.map(item => item.source_level).join('、') }}
-    </p>
   </div>
 </template>
 <script setup lang="ts">

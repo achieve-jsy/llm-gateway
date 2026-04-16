@@ -10,12 +10,17 @@
 
     <el-tabs v-model="activeTab" class="mb-tabs" @tab-change="onTabChange">
       <el-tab-pane label="我的预算" name="budget">
-    <DataFreshnessNotice
-      v-if="tierBudget"
-      :stale="tierBudget.stale"
-      :updated-at="tierBudget.data_updated_at"
-    />
-    <el-result v-if="tierError" icon="error" title="预算加载失败" :sub-title="tierError">
+    <aside class="mb-permission" :data-test="`my-budget-permission-${authStore.effectiveRole || 'user'}`">
+      <span class="mb-permission__badge">{{ budgetPermissionCopy.badge }}</span>
+      <div class="mb-permission__body">
+        <strong>{{ budgetPermissionCopy.title }}</strong>
+        <span>{{ budgetPermissionCopy.detail }}</span>
+      </div>
+      <el-button v-if="budgetPermissionCopy.action" size="small" type="primary" plain @click="budgetPermissionCopy.action.handler">
+        {{ budgetPermissionCopy.action.label }}
+      </el-button>
+    </aside>
+    <el-result v-if="tierError && !authStore.isAdmin" icon="error" title="预算加载失败" :sub-title="tierError">
       <template #extra><el-button type="primary" @click="loadTierBudget">重试</el-button></template>
     </el-result>
     <div v-if="loading && !chain.length" v-loading="true" class="mb-loading" />
@@ -32,26 +37,6 @@
     </div>
 
     <template v-else>
-      <!-- KPI strip -->
-      <section class="mb-kpi-strip">
-        <div class="mb-kpi">
-          <span>可用余额</span>
-          <strong>{{ formatUSD(remainingAmount) }}</strong>
-        </div>
-        <div class="mb-kpi">
-          <span>本月已用</span>
-          <strong>{{ formatUSD(primaryBudget?.used_usd || 0) }}</strong>
-        </div>
-        <div class="mb-kpi">
-          <span>月度额度<template v-if="isUsingSharedPool"> <em class="mb-kpi-pool-tag">共享池</em></template></span>
-          <strong>{{ primaryBudget ? displayAmount(primaryBudget.amount_usd) : '未设置' }}</strong>
-        </div>
-        <div class="mb-kpi">
-          <span>使用率</span>
-          <strong :class="{ 'is-danger': primaryRatioPercent >= 80 }">{{ primaryRatioPercent }}%</strong>
-        </div>
-      </section>
-
       <el-alert
         v-if="pendingKeyBudgetActivities.length > 0"
         type="info"
@@ -74,14 +59,6 @@
             </div>
             <div class="mb-panel-head-actions">
               <span :class="`mb-tag mb-tag--${statusTagType}`">{{ statusText }}</span>
-            </div>
-          </div>
-
-          <div class="mb-shared-pool-notice">
-            <span class="mb-shared-pool-icon">◫</span>
-            <div class="mb-shared-pool-text">
-              <span class="mb-shared-pool-title">{{ sourceNotice.title }}</span>
-              <span class="mb-shared-pool-desc">{{ sourceNotice.detail }}</span>
             </div>
           </div>
 
@@ -205,8 +182,8 @@
             <div>
               <p class="mb-manager-hint-title">您可直接调整额度</p>
               <p class="mb-manager-hint-desc">
-                <template v-if="authStore.effectiveRole === 'dept_admin'">作为部门负责人，可在「组织管理」中直接修改成员配额，无需提交申请。如需提升部门整体预算，请联系工作室负责人。</template>
-                <template v-else-if="authStore.effectiveRole === 'studio_admin'">作为工作室负责人，可在「组织管理」中直接修改部门预算，无需提交申请。如需提升工作室整体预算，请联系平台管理员。</template>
+                <template v-if="authStore.effectiveRole === 'dept_admin'">作为部门负责人，可在「预算管理」中直接修改成员配额；如需提升部门预算池，可提交部门扩容申请，由工作室负责人审批。</template>
+                <template v-else-if="authStore.effectiveRole === 'studio_admin'">作为工作室负责人，可在「预算管理」中直接修改部门预算；如需提升工作室整体预算，请联系平台管理员。</template>
                 <template v-else>拥有全局额度管理权限，可在「预算总览」中直接调整任意层级的额度。</template>
               </p>
               <el-button
@@ -255,14 +232,21 @@
                 </div>
               </div>
 
-              <p v-if="activitySubtitle(featuredActivity)" class="mb-active-reason">{{ activitySubtitle(featuredActivity) }}</p>
+              <el-tooltip
+                v-if="activitySubtitle(featuredActivity)"
+                :content="activitySubtitle(featuredActivity)"
+                placement="top"
+                :show-after="250"
+              >
+                <span class="mb-active-reason">{{ activitySubtitle(featuredActivity) }}</span>
+              </el-tooltip>
 
               <div class="mb-steps">
                 <div class="mb-step is-done">
                   <div class="mb-step-node">✓</div>
                   <span>提交</span>
                 </div>
-                <div class="mb-step-line" :class="{ 'is-done': featuredActivity.status !== 'pending' }" />
+                <div class="mb-step-line" :class="{ 'is-done': ['pending', 'approved', 'rejected'].includes(featuredActivity.status) }" />
                 <div class="mb-step" :class="{
                   'is-active': featuredActivity.status === 'pending',
                   'is-done': featuredActivity.status === 'approved',
@@ -310,16 +294,18 @@
       <el-tab-pane label="我的配额" name="quota" lazy>
         <MyQuotaPanel ref="quotaPanelRef" />
       </el-tab-pane>
-      <el-tab-pane label="模型等级额度" name="tier" lazy>
+      <el-tab-pane v-if="!authStore.isAdmin" label="模型等级额度" name="tier" lazy>
         <MyTierBudgetPanel ref="tierTabRef" @request-expansion="openExpansion" />
       </el-tab-pane>
     </el-tabs>
 
     <ExpansionCreateForm
       v-model="expansionVisible"
-      ordinary-user
-      initial-scope-type="member"
-      :initial-scope-id="authStore.user?.id || ''"
+      :ordinary-user="!authStore.isManager"
+      :fixed-manager-scope="isDeptAdmin"
+      :manager-scope-label="deptAdminScopeLabel"
+      :initial-scope-type="expansionScopeType"
+      :initial-scope-id="expansionScopeId"
       :initial-dimension-type="expansionPrefill.dimension"
       :initial-model-tier-id="expansionPrefill.tierId"
       :initial-period-type="expansionPrefill.period"
@@ -347,7 +333,6 @@ import MyQuotaPanel from '@/components/budget/MyQuotaPanel.vue'
 import MyTierBudgetPanel from '@/components/budget/MyTierBudgetPanel.vue'
 import BudgetStatusTag from '@/components/budget/BudgetStatusTag.vue'
 import ExpansionCreateForm from '@/components/expansion/ExpansionCreateForm.vue'
-import DataFreshnessNotice from '@/components/common/DataFreshnessNotice.vue'
 
 type BudgetActivityKind = 'expansion' | 'key_budget'
 type BudgetActivityStatus = ExpansionStatus | KeyRequestStatus
@@ -379,12 +364,12 @@ const authStore = useAuthStore()
 
 // Tab 切换：默认「我的预算」，支持 ?tab=quota 直达配额；切 tab 同步到 URL（书签/刷新可恢复）
 type BudgetTabName = 'budget' | 'quota' | 'tier'
-const activeTab = ref<BudgetTabName>(route.query.tab === 'quota' ? 'quota' : route.query.tab === 'tier' ? 'tier' : 'budget')
+const activeTab = ref<BudgetTabName>(route.query.tab === 'quota' ? 'quota' : route.query.tab === 'tier' && !authStore.isAdmin ? 'tier' : 'budget')
 const quotaPanelRef = ref<InstanceType<typeof MyQuotaPanel> | null>(null)
 const tierTabRef = ref<InstanceType<typeof MyTierBudgetPanel> | null>(null)
 
 function onTabChange(name: string | number) {
-  const tab = name === 'quota' ? 'quota' : name === 'tier' ? 'tier' : 'budget'
+  const tab = name === 'quota' ? 'quota' : name === 'tier' && !authStore.isAdmin ? 'tier' : 'budget'
   const query = { ...route.query }
   if (tab === 'budget') delete query.tab
   else query.tab = tab
@@ -436,20 +421,57 @@ const primaryBudget = computed(() =>
   chain.value.find(item => item.scope_type === 'dept_daily') ||
   chain.value[0]
 )
-const sourceNotice = computed(() => ({
-  personal: {
-    title: '个人独立预算',
-    detail: '日、周、月额度均来自个人配置。',
-  },
-  shared: {
-    title: '您正在使用部门共享预算池',
-    detail: '当前消耗计入部门共享池。如需独立额度管理，可向部门负责人申请。',
-  },
-  mixed: {
-    title: '不同维度可能来自不同预算层',
-    detail: '每个周期和模型等级会单独标注实际来源；上级预算金额不会向普通用户展示。',
-  },
-}[tierBudget.value?.source_summary.mode ?? 'shared']))
+const isDeptAdmin = computed(() => authStore.effectiveRole === 'dept_admin')
+const deptAdminRole = computed(() => authStore.orgRoles.find(role => role.role === 'dept_admin' || role.scope_type === 'dept'))
+const deptAdminScopeId = computed(() => deptAdminRole.value?.scope_id || authStore.user?.departmentId || '')
+const deptAdminScopeLabel = computed(() => authStore.user?.departmentName || deptAdminScopeId.value || '我的部门')
+const expansionScopeType = computed(() => isDeptAdmin.value ? 'dept_daily' : 'member')
+const expansionScopeId = computed(() => isDeptAdmin.value ? deptAdminScopeId.value : authStore.user?.id || '')
+const sourceNotice = computed(() => {
+  if (primaryBudget.value?.scope_type === 'member') {
+    return {
+      title: '个人独立预算',
+      detail: '你的调用消耗计入个人额度。',
+    }
+  }
+  return {
+    title: '部门共享预算池',
+    detail: '你当前未配置个人独立额度，调用消耗会计入部门共享池。',
+  }
+})
+
+const budgetPermissionCopy = computed(() => {
+  if (authStore.isAdmin) {
+    return {
+      badge: '平台管理员',
+      title: '当前为个人预算视图',
+      detail: '平台管理员通常不配置个人消费额度；组织预算配置请前往预算管理。',
+      action: { label: '前往预算管理', handler: () => router.push('/admin/budget') },
+    }
+  }
+  if (authStore.effectiveRole === 'studio_admin') {
+    return {
+      badge: '工作室管理员',
+      title: '当前展示你的个人调用预算',
+      detail: '你可查看个人额度；工作室和部门预算请在预算管理中处理，工作室总额度扩容由平台审批。',
+      action: { label: '查看预算管理', handler: () => router.push('/admin/budget') },
+    }
+  }
+  if (authStore.effectiveRole === 'dept_admin') {
+    return {
+      badge: '部门管理员',
+      title: '当前展示你的个人调用预算',
+      detail: '你可查看个人额度；部门成员额度可在预算管理中调整，部门预算池扩容由工作室审批。',
+      action: { label: '查看预算管理', handler: () => goManagerAdjust() },
+    }
+  }
+  return {
+    badge: '普通用户',
+    title: '当前仅展示你的个人预算和限制来源',
+    detail: '可申请本人额度扩容；上级预算由对应负责人审批和配置。',
+    action: null,
+  }
+})
 
 const periodRows = computed(() => {
   const labels: Record<ExpansionPeriod, { label: string; reset: string }> = {
@@ -506,10 +528,6 @@ const tierSummary = computed(() => (tierBudget.value?.tier_limits ?? []).slice(0
   }
 }))
 
-// 是否正在消费共享部门池（未配置个人独立配额）
-const isUsingSharedPool = computed(() =>
-  !!primaryBudget.value && primaryBudget.value.scope_type !== 'member',
-)
 const primaryRatioPercent = computed(() => Math.min(Math.round((primaryBudget.value?.used_ratio || 0) * 100), 100))
 const remainingAmount = computed(() => {
   const budget = primaryBudget.value
@@ -630,6 +648,13 @@ const hasPendingRequest = computed(() => latestRequest.value?.status === 'pendin
 const cancellingId = ref<string | null>(null)
 
 async function loadAll() {
+  if (authStore.isAdmin) {
+    tierBudget.value = null
+    tierError.value = ''
+    activeTab.value = activeTab.value === 'tier' ? 'budget' : activeTab.value
+    await loadBudget()
+    return
+  }
   await Promise.all([loadBudget(), loadTierBudget(), loadRequests()])
 }
 
@@ -681,11 +706,11 @@ function goManagerAdjust() {
     router.push('/admin/budget')
     return
   }
-  // dept_admin：找到自己管辖的部门，直接定位到预算 tab
+  // dept_admin：找到自己管辖的部门，直接定位到预算管理的部门视图
   if (authStore.effectiveRole === 'dept_admin') {
-    const deptRole = authStore.orgRoles.find(r => r.role === 'dept_admin')
+    const deptRole = authStore.orgRoles.find(r => r.role === 'dept_admin' || r.scope_type === 'dept')
     if (deptRole?.scope_id) {
-      router.push(`/admin/org?scope_type=dept_daily&scope_id=${encodeURIComponent(deptRole.scope_id)}&tab=budget`)
+      router.push(`/admin/budget?scope_type=dept&scope_id=${encodeURIComponent(deptRole.scope_id)}&scope_label=${encodeURIComponent(authStore.user?.departmentName || deptRole.scope_id)}`)
       return
     }
   }
@@ -693,11 +718,11 @@ function goManagerAdjust() {
   if (authStore.effectiveRole === 'studio_admin') {
     const studioRole = authStore.orgRoles.find(r => r.role === 'studio_admin')
     if (studioRole?.scope_id) {
-      router.push(`/admin/org?scope_type=studio&scope_id=${encodeURIComponent(studioRole.scope_id)}&tab=budget`)
+      router.push(`/admin/budget?scope_type=studio&scope_id=${encodeURIComponent(studioRole.scope_id)}`)
       return
     }
   }
-  router.push('/admin/org')
+  router.push('/admin/budget')
 }
 
 function showTierBudget() {
@@ -712,7 +737,13 @@ function openExpansion(prefill: Partial<{
   targetAmount: string
 }> = {}) {
   if (authStore.isManager) {
-    router.push('/admin/expansion-requests')
+    expansionPrefill.value = {
+      dimension: prefill.dimension ?? 'total',
+      tierId: prefill.tierId ?? '',
+      period: prefill.period ?? 'monthly',
+      targetAmount: prefill.targetAmount ?? '',
+    }
+    expansionVisible.value = true
     return
   }
   const userID = authStore.user?.id || ''
@@ -740,7 +771,7 @@ function formatDateTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   const pad = (n: number) => String(n).padStart(2, '0')
-  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
 function goKeyRequestDetail() {
@@ -809,6 +840,14 @@ function activityCancelId(a: BudgetActivity) {
   return ''
 }
 
+function requestErrorMessage(error: any, fallback: string) {
+  const data = error?.response?.data
+  if (typeof data?.error === 'string') return data.error
+  if (typeof data?.error?.message === 'string') return data.error.message
+  if (typeof data?.message === 'string') return data.message
+  return fallback
+}
+
 async function cancelActivity(a: BudgetActivity) {
   if (a.kind === 'expansion' && a.expansion) {
     await cancelRequest(a.expansion.id)
@@ -830,7 +869,7 @@ async function cancelKeyRequestActivity(id: string) {
     await loadRequests()
   } catch (e: any) {
     if (req && prev) req.status = prev
-    ElMessage.error(e?.response?.data?.error || '取消失败')
+    ElMessage.error(requestErrorMessage(e, '取消失败'))
   } finally {
     cancellingId.value = null
   }
@@ -848,7 +887,7 @@ async function cancelRequest(id: string) {
   } catch (e: any) {
     // 失败时回滚本地状态
     if (req) req.status = 'pending'
-    ElMessage.error(e?.response?.data?.error || '取消失败')
+    ElMessage.error(requestErrorMessage(e, '取消失败'))
   } finally {
     cancellingId.value = null
   }
@@ -928,6 +967,34 @@ onUnmounted(() => { historyObserver?.disconnect() })
   padding: 3px 12px;
 }
 .mb-loading { height: 360px; }
+.mb-permission {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  background: var(--el-color-primary-light-9);
+  border: 1px solid var(--el-color-primary-light-7);
+  border-radius: 12px;
+}
+.mb-permission__badge {
+  flex: none;
+  padding: 2px 9px;
+  color: var(--el-color-primary);
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-color-primary-light-7);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.mb-permission__body {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  flex: 1;
+}
+.mb-permission__body strong { font-size: 13px; color: var(--el-text-color-primary); }
+.mb-permission__body span { font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.6; }
 .mb-no-budget {
   display: flex;
   flex-direction: column;
@@ -942,42 +1009,6 @@ onUnmounted(() => { historyObserver?.disconnect() })
 .mb-no-budget p { margin: 0; font-size: 16px; font-weight: 600; color: var(--el-text-color-primary); }
 .mb-no-budget span { font-size: 13px; max-width: 320px; line-height: 1.7; }
 .mb-muted { font-size: 12px; color: var(--el-text-color-placeholder); }
-
-.mb-kpi-strip {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1px;
-  overflow: hidden;
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 16px;
-  background: var(--el-border-color-lighter);
-}
-.mb-kpi {
-  padding: 14px 18px;
-  background: var(--el-bg-color);
-}
-.mb-kpi span {
-  display: block;
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-  margin-bottom: 8px;
-}
-.mb-kpi strong {
-  font-size: 24px;
-  color: var(--el-text-color-primary);
-  letter-spacing: -.03em;
-}
-.mb-kpi strong.is-danger { color: var(--el-color-danger); }
-.mb-kpi-pool-tag {
-  font-style: normal;
-  font-size: 10px;
-  font-weight: 500;
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: var(--el-color-info-light-8);
-  color: var(--el-color-info-dark-2);
-  vertical-align: middle;
-}
 
 /* ─────────────── Grid ─────────────── */
 .mb-grid {
@@ -1344,10 +1375,15 @@ onUnmounted(() => { historyObserver?.disconnect() })
   flex-shrink: 0;
 }
 .mb-active-reason {
+  display: block;
+  overflow: hidden;
   margin: 10px 0 0;
   font-size: 12px;
   color: var(--el-text-color-secondary);
   line-height: 1.6;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
 }
 .mb-active-note {
   margin: 10px 0 0;
@@ -1480,7 +1516,6 @@ onUnmounted(() => { historyObserver?.disconnect() })
 @media (max-width: 980px) {
   .mb { padding: 20px 20px; }
   .mb-grid { grid-template-columns: 1fr; }
-  .mb-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mb-panel { min-height: unset; }
   .mb-monthly-stats { grid-template-columns: repeat(3, 1fr); }
 }
@@ -1488,12 +1523,11 @@ onUnmounted(() => { historyObserver?.disconnect() })
 /* ≤720px */
 @media (max-width: 720px) {
   .mb { padding: 14px 16px; }
-  .mb-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .mb-kpi strong { font-size: 22px; }
 
   /* 额度卡头部：允许换行 */
   .mb-panel-head { flex-wrap: wrap; gap: 8px; }
   .mb-panel-head-actions { width: 100%; justify-content: flex-start; }
+  .mb-permission { align-items: flex-start; flex-direction: column; }
 
   /* 余额块：竖排 */
   .mb-balance-block { flex-direction: column; align-items: flex-start; gap: 14px; }
@@ -1515,9 +1549,6 @@ onUnmounted(() => { historyObserver?.disconnect() })
 /* ≤480px */
 @media (max-width: 480px) {
   .mb { padding: 12px; }
-  .mb-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; }
-  .mb-kpi { padding: 10px 12px; }
-  .mb-kpi strong { font-size: 20px; }
 
   /* 月度分析：→1列 */
   .mb-monthly-stats { grid-template-columns: 1fr; }

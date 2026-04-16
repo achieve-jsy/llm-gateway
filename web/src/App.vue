@@ -35,7 +35,7 @@
           <el-icon><Collection /></el-icon>
           <template #title>模型广场</template>
         </el-menu-item>
-        <el-menu-item index="/my/budget">
+        <el-menu-item v-if="!authStore.isAdmin" index="/my/budget">
           <el-icon><Wallet /></el-icon>
           <template #title>
             我的预算
@@ -273,7 +273,10 @@ const expansionPendingCount = ref(0)
 
 // 预算告警检查：任一层 ≥80% 显示红点
 async function checkBudgetAlert() {
-  if (!authStore.isLoggedIn) return
+  if (!authStore.isLoggedIn || authStore.isAdmin) {
+    budgetAlert.value = false
+    return
+  }
   try {
     const { getMyBudget } = await import('@/services/control-plane')
     const chain = await getMyBudget()

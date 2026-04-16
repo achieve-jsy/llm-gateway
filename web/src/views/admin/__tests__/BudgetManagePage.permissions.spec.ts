@@ -89,13 +89,13 @@ describe('BudgetManagePage - Role-Based Access Control', () => {
     it('should display admin perspective description', async () => {
       const wrapper = mountPage('admin')
       await nextTick()
-      expect(wrapper.html()).toContain('查看全公司各工作室预算风险')
+      expect(wrapper.html()).toContain('查看全公司预算风险')
     })
 
-    it('should show "进入组织治理" button', async () => {
+    it('should show company budget adjustment button', async () => {
       const wrapper = mountPage('admin')
       await nextTick()
-      expect(wrapper.html()).toContain('进入组织治理')
+      expect(wrapper.html()).toContain('调整公司预算')
     })
 
     it('should display company view with studio table', async () => {
@@ -104,12 +104,10 @@ describe('BudgetManagePage - Role-Based Access Control', () => {
       expect(wrapper.html()).toContain('工作室')
     })
 
-    it('should display KPI strip with 5 cards', async () => {
+    it('should display unified admin overview', async () => {
       const wrapper = mountPage('admin')
       await nextTick()
-      const kpiStrip = wrapper.find('.kpi-strip')
-      expect(kpiStrip.exists()).toBe(true)
-      expect(kpiStrip.classes()).toContain('kpi-5')
+      expect(wrapper.find('[data-test="budget-manage-overview"]').exists()).toBe(true)
     })
   })
 
@@ -119,13 +117,13 @@ describe('BudgetManagePage - Role-Based Access Control', () => {
     it('should display studio admin perspective description', async () => {
       const wrapper = mountPage('studio_admin', studioOrgRoles)
       await nextTick()
-      expect(wrapper.html()).toContain('查看工作室下各部门预算状态')
+      expect(wrapper.html()).toContain('查看工作室预算及下属部门分配情况')
     })
 
-    it('should show studio budget configuration button', async () => {
+    it('studio_admin should not expose organization governance entry', async () => {
       const wrapper = mountPage('studio_admin', studioOrgRoles)
       await nextTick()
-      expect(wrapper.html()).toContain('配置工作室预算')
+      expect(wrapper.html()).not.toContain('进入组织治理')
     })
 
     it('should NOT show "进入组织治理" button', async () => {
@@ -141,13 +139,14 @@ describe('BudgetManagePage - Role-Based Access Control', () => {
     it('should display dept admin perspective description', async () => {
       const wrapper = mountPage('dept_admin', deptOrgRoles)
       await nextTick()
-      expect(wrapper.html()).toContain('查看本部门预算与成员用量风险')
+      expect(wrapper.html()).toContain('查看部门预算及成员配额情况')
     })
 
-    it('should show department budget configuration button', async () => {
+    it('should show expansion request button instead of department budget configuration', async () => {
       const wrapper = mountPage('dept_admin', deptOrgRoles)
       await nextTick()
-      expect(wrapper.html()).toContain('配置部门预算')
+      expect(wrapper.html()).toContain('申请扩容')
+      expect(wrapper.html()).not.toContain('配置部门预算')
     })
 
     it('should NOT show "进入组织治理" button', async () => {
@@ -186,10 +185,10 @@ describe('BudgetManagePage - Role-Based Access Control', () => {
   })
 
   describe('Operation Permissions', () => {
-    it('admin can see org governance link', async () => {
+    it('admin can adjust company budget', async () => {
       const wrapper = mountPage('admin')
       await nextTick()
-      expect(wrapper.html()).toContain('进入组织治理')
+      expect(wrapper.html()).toContain('调整公司预算')
     })
 
     it('studio_admin cannot access organization governance', async () => {
@@ -227,7 +226,7 @@ describe('BudgetManagePage - Role-Based Access Control', () => {
       await nextTick()
       const description = wrapper.find('.overview-header p')
       expect(description.exists()).toBe(true)
-      expect(description.text()).toContain('本部门')
+      expect(description.text()).toContain('部门预算')
     })
   })
 })

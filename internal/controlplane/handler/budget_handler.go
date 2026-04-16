@@ -161,6 +161,14 @@ func (h *BudgetHandler) List(c *gin.Context) {
 			scopeTypes = []string{model.BudgetScopeDeptDaily, model.BudgetScopeDeptService, model.BudgetScopeMember}
 			if scopeID != "" {
 				if !actor.IsGlobal && !actor.HasDept(scopeID) {
+					if deptID, err := h.svc.ResolveMemberDeptID(scopeID); err != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+						return
+					} else if deptID != "" && actor.HasDept(deptID) {
+						scopeID = deptID
+					}
+				}
+				if !actor.IsGlobal && !actor.HasDept(scopeID) {
 					c.JSON(http.StatusForbidden, gin.H{"error": "无权查看该部门预算"})
 					return
 				}
@@ -505,7 +513,7 @@ func (h *BudgetHandler) SetMultiPeriod(c *gin.Context) {
 		ScopeType: req.ScopeType, ScopeID: req.ScopeID,
 		ActorID: actorID, Reason: req.Reason, EffectiveMode: effectiveMode,
 		PreviewOnly: req.PreviewOnly,
-		Monthly: monthly, Weekly: weekly, Daily: daily,
+		Monthly:     monthly, Weekly: weekly, Daily: daily,
 	})
 	if err != nil {
 		// 解包 "period xxx: <原始错误>" 前缀后做错误码匹配

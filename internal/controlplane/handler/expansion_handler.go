@@ -11,10 +11,13 @@ import (
 	"github.com/example/llm-gateway/internal/budgetperiod"
 	"github.com/example/llm-gateway/internal/controlplane/budgetdomain"
 	"github.com/example/llm-gateway/internal/controlplane/model"
+	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
+	"gorm.io/gorm"
 )
 
 // ExpansionHandler 处理预算扩容申请的发起与审批。
@@ -133,13 +136,22 @@ func (h *ExpansionHandler) Create(c *gin.Context) {
 			return &tierID
 		}(),
 	})
-	if err != nil {
+	if err != nil && !isMissingBudgetAllocation(err) {
 		writeExpansionWorkflowError(c, err)
 		return
 	}
+	now := time.Now().UTC()
+	if precheck == nil {
+		zero := budgetdomain.Amount{Decimal: decimal.Zero}
+		precheck = &service.PrecheckResult{
+			CanSubmit: true, CurrentLimitUSD: zero.String(), CurrentUsedUSD: zero.String(),
+			TargetAmountUSD: target.String(), IncreaseUSD: target.String(), EffectiveAfterUSD: target.String(),
+			PrecheckVersion: "submit-" + uuid.NewString(), DataAsOf: now,
+		}
+	}
 	if !precheck.CanSubmit {
 		c.JSON(http.StatusConflict, gin.H{"error": gin.H{
-			"code": "EXPANSION_PRECHECK_BLOCKED", "message": "当前预检不允许提交",
+			"code": "EXPANSION_SUBMIT_BLOCKED", "message": "当前额度状态不允许提交",
 			"next_action": func() string {
 				if precheck.CanNotifyOwner {
 					return "notify_owner"
@@ -187,10 +199,25 @@ func (h *ExpansionHandler) Create(c *gin.Context) {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": gin.H{"code": CodeInvalidBudgetPeriod, "message": "invalid budget period"}})
 			return
 		}
+		if errors.Is(err, service.ErrExpansionDurationUnsupported) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": gin.H{"code": CodeExpansionDurationUnsupported, "message": "invalid expansion duration"}})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
 	c.JSON(http.StatusCreated, expansionResponse(result, target.String()))
+}
+
+func isMissingBudgetAllocation(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, service.ErrBudgetAllocationNotFound) || errors.Is(err, gorm.ErrRecordNotFound) {
+		return true
+	}
+	message := err.Error()
+	return strings.Contains(message, "resolve budget allocation") && strings.Contains(message, "record not found")
 }
 
 // Precheck POST /api/v1/expansion-requests/precheck
@@ -270,6 +297,21 @@ func expansionResponse(request *model.ExpansionRequest, target string) gin.H {
 	}
 }
 
+func expansionListFilter(c *gin.Context) repository.ExpansionListFilter {
+	keyword := c.Query("keyword")
+	if keyword == "" {
+		keyword = c.Query("name")
+	}
+	return repository.ExpansionListFilter{
+		DimensionType: c.Query("dimension"),
+		ModelTierID:   c.Query("model_tier_id"),
+		DurationType:  c.Query("duration"),
+		Priority:      c.Query("priority"),
+		Status:        c.Query("status"),
+		Keyword:       keyword,
+	}
+}
+
 func writeExpansionWorkflowError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrExpansionForbidden):
@@ -278,6 +320,8 @@ func writeExpansionWorkflowError(c *gin.Context, err error) {
 		c.JSON(http.StatusConflict, gin.H{"code": "EXPANSION_TERMINAL_CONFLICT", "message": err.Error()})
 	case errors.Is(err, service.ErrExpansionUsageUnavailable):
 		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "BUDGET_USAGE_UNAVAILABLE", "message": err.Error(), "next_action": "retry"})
+	case errors.Is(err, service.ErrExpansionDurationUnsupported):
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"code": CodeExpansionDurationUnsupported, "message": err.Error()})
 	default:
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"code": "INVALID_EXPANSION_INPUT", "message": err.Error()})
 	}
@@ -305,6 +349,10 @@ func writeExpansionDecisionError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrDecisionCommentRequired):
 		c.JSON(http.StatusUnprocessableEntity, gin.H{
 			"code": "DECISION_COMMENT_REQUIRED", "message": "驳回和上报必须填写审批意见",
+		})
+	case errors.Is(err, service.ErrExpansionDurationUnsupported):
+		c.JSON(http.StatusUnprocessableEntity, gin.H{
+			"code": CodeExpansionDurationUnsupported, "message": err.Error(),
 		})
 	case errors.Is(err, service.ErrNotInApprovalPool), errors.Is(err, service.ErrApprovalPoolEmpty):
 		c.JSON(http.StatusForbidden, gin.H{"code": "EXPANSION_APPROVAL_FORBIDDEN", "message": err.Error()})
@@ -344,6 +392,10 @@ func (h *ExpansionHandler) Decide(c *gin.Context) {
 	})
 	if err != nil {
 		writeExpansionDecisionError(c, err)
+		return
+	}
+	if req.Action == model.ExpansionActionCancel {
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{"id": requestID, "status": model.ExpansionStatusCancelled}})
 		return
 	}
 	detail, detailErr := h.svc.GetDetail(c.Request.Context(), expansionActor(actor), requestID)
@@ -412,13 +464,12 @@ func (h *ExpansionHandler) NotifyOwner(c *gin.Context) {
 // 查询当前用户发起的申请。
 func (h *ExpansionHandler) ListMine(c *gin.Context) {
 	userID := c.GetString("user_id")
-	status := c.Query("status")
-	items, err := h.svc.ListForRequester(c.Request.Context(), userID, status)
+	items, err := h.svc.ListForRequesterFiltered(c.Request.Context(), userID, expansionListFilter(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items})
+	c.JSON(http.StatusOK, gin.H{"items": h.enrichExpansionList(c, items, false)})
 }
 
 // ListPending GET /api/v1/expansion-requests/pending
@@ -439,37 +490,58 @@ func (h *ExpansionHandler) ListPending(c *gin.Context) {
 		level = model.ExpansionLevelStudio
 	}
 
-	requesterName := c.Query("name")
-	items, err := h.svc.ListPendingScoped(c.Request.Context(), level, actor.IsGlobal, actor.DeptIDs, actor.StudioIDs, requesterName)
+	items, err := h.svc.ListPendingScopedFiltered(c.Request.Context(), level, actor.IsGlobal, actor.DeptIDs, actor.StudioIDs, expansionListFilter(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
 
-	// 批量查申请人姓名
+	c.JSON(http.StatusOK, gin.H{"items": h.enrichExpansionList(c, items, true)})
+}
+
+type expansionListItem struct {
+	model.ExpansionRequest
+	CurrentUsageRatio float64 `json:"current_usage_ratio,omitempty"`
+	RequesterName     string  `json:"requester_name"`
+	ScopeName         string  `json:"scope_name"`
+}
+
+func (h *ExpansionHandler) enrichExpansionList(c *gin.Context, items []model.ExpansionRequest, includeUsage bool) []expansionListItem {
 	requesterIDs := make([]uuid.UUID, 0, len(items))
+	scopeIDsByType := map[string][]string{}
 	for _, item := range items {
 		requesterIDs = append(requesterIDs, item.RequesterID)
+		scopeIDsByType[item.ScopeType] = append(scopeIDsByType[item.ScopeType], item.ScopeID)
 	}
 	userMap, _ := h.userRepo.FindByIDs(requesterIDs)
-
-	// 补查每条申请对应 scope 的当前使用率
-	type PendingItem struct {
-		model.ExpansionRequest
-		CurrentUsageRatio float64 `json:"current_usage_ratio"`
-		RequesterName     string  `json:"requester_name"`
+	scopeNames := map[string]map[string]string{}
+	for scopeType, ids := range scopeIDsByType {
+		names, _ := h.svc.ResolveScopeNames(scopeType, ids)
+		scopeNames[scopeType] = names
 	}
-	result := make([]PendingItem, 0, len(items))
+
+	result := make([]expansionListItem, 0, len(items))
 	for _, item := range items {
-		pi := PendingItem{ExpansionRequest: item}
-		budget, _ := h.svc.GetBudgetUsedRatio(c.Request.Context(), item.ScopeType, item.ScopeID)
-		pi.CurrentUsageRatio = budget
+		pi := expansionListItem{ExpansionRequest: item}
+		if includeUsage {
+			budget, _ := h.svc.GetBudgetUsedRatio(c.Request.Context(), item.ScopeType, item.ScopeID)
+			pi.CurrentUsageRatio = budget
+		}
 		if u, ok := userMap[item.RequesterID]; ok {
 			pi.RequesterName = u.Name
 		}
+		if pi.RequesterName == "" {
+			pi.RequesterName = item.RequesterID.String()
+		}
+		if names := scopeNames[item.ScopeType]; names != nil {
+			pi.ScopeName = names[item.ScopeID]
+		}
+		if pi.ScopeName == "" && item.ScopeType == model.BudgetScopeMember {
+			pi.ScopeName = pi.RequesterName
+		}
 		result = append(result, pi)
 	}
-	c.JSON(http.StatusOK, gin.H{"items": result})
+	return result
 }
 
 // BatchDecide POST /api/v1/expansion-requests/batch-decision

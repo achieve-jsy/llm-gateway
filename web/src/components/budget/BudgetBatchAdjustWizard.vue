@@ -15,7 +15,14 @@
         <el-form-item v-if="form.mode === 'total_percent' || form.operation === 'adjust_percent'" label="方向">
           <el-radio-group v-model="form.direction"><el-radio value="increase">上调</el-radio><el-radio value="decrease">下调</el-radio></el-radio-group>
         </el-form-item>
-        <el-form-item :label="form.operation === 'set_fixed' ? '额度（USD）' : '百分比'"><el-input v-model="form.value" inputmode="decimal" /></el-form-item>
+        <el-form-item v-if="isPercentMode" label="百分比（%）">
+          <div style="display:flex;align-items:center;gap:12px;width:100%">
+            <el-slider v-model="percentSlider" :min="0" :max="100" :step="1" style="flex:1" />
+            <el-input-number v-model="percentSlider" :min="0" :max="100" :step="1" :controls="false" style="width:80px" />
+            <span>%</span>
+          </div>
+        </el-form-item>
+        <el-form-item v-else label="额度（USD）"><el-input v-model="form.value" inputmode="decimal" /></el-form-item>
         <el-form-item label="周期"><el-select v-model="form.periodType"><el-option label="日" value="daily" /><el-option label="周" value="weekly" /><el-option label="月" value="monthly" /></el-select></el-form-item>
         <el-form-item label="生效方式"><el-radio-group v-model="form.effectiveMode"><el-radio value="immediate">立即</el-radio><el-radio value="next_period">下周期</el-radio></el-radio-group></el-form-item>
         <el-form-item label="原因" required><el-input v-model="form.reason" type="textarea" maxlength="200" /></el-form-item>
@@ -23,7 +30,7 @@
       <template v-else>
         <DataFreshnessNotice :stale="previewStale" :updated-at="previewUpdatedAt" />
         <el-table :data="previewRows">
-          <el-table-column prop="item_id" label="对象" />
+          <el-table-column prop="display_label" label="对象" />
           <el-table-column prop="old_limit_usd" label="原额度" />
           <el-table-column prop="new_limit_usd" label="新额度" />
           <el-table-column prop="current_used_usd" label="已用" />
@@ -71,11 +78,30 @@ const form = reactive({
   direction: 'increase' as 'increase' | 'decrease', value: '', periodType: 'monthly' as 'daily' | 'weekly' | 'monthly',
   effectiveMode: 'immediate' as 'immediate' | 'next_period', reason: '',
 })
+const isPercentMode = computed(() => form.mode === 'total_percent' || (form.mode === 'tier' && form.operation === 'adjust_percent'))
+const percentSlider = ref(0)
+watch(percentSlider, (v) => { form.value = String(v) })
 const canPreview = computed(() => props.items.length > 0 && (form.mode !== 'tier' || form.modelTierId) && /^\d+(\.\d{1,6})?$/.test(form.value) && form.reason.trim())
-const previewRows = computed(() => form.mode === 'tier' ? (preview.value?.items || []) : totalPreviews.value.map(row => ({
-  item_id: row.item.allocation_id, old_limit_usd: row.impact.before_limit_usd,
-  new_limit_usd: row.impact.after_limit_usd, current_used_usd: row.impact.current_used_usd,
-})))
+const previewRows = computed(() => {
+  if (form.mode === 'tier') {
+    return (preview.value?.items || []).map(item => ({
+      ...item,
+      display_label: resolveLabel(item.item_id),
+    }))
+  }
+  return totalPreviews.value.map(row => ({
+    item_id: row.item.allocation_id,
+    display_label: row.item.label || row.item.scope_id,
+    old_limit_usd: row.impact.before_limit_usd,
+    new_limit_usd: row.impact.after_limit_usd,
+    current_used_usd: row.impact.current_used_usd,
+  }))
+})
+function resolveLabel(itemId: string): string {
+  const allocationId = itemId.includes(':') ? itemId.split(':')[0] : itemId
+  const item = props.items.find(i => i.allocation_id === allocationId)
+  return item?.label || item?.scope_id || allocationId
+}
 const previewStale = computed(() => form.mode === 'tier' ? !!preview.value?.stale : totalPreviews.value.some(row => row.impact.stale))
 const previewUpdatedAt = computed(() => form.mode === 'tier' ? preview.value?.data_as_of : totalPreviews.value[0]?.impact.data_as_of)
 watch(visible, (value) => {
@@ -87,6 +113,7 @@ watch(visible, (value) => {
   form.operation = 'set_fixed'
   form.direction = 'increase'
   form.value = ''
+  percentSlider.value = 0
   form.reason = ''
 })
 async function runPreview() {

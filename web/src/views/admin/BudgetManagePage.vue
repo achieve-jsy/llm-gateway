@@ -1758,6 +1758,13 @@
       <el-button v-if="memberDetailTarget" type="primary" @click="openMemberQuota(memberDetailTarget); memberDetailVisible = false">调整成员额度</el-button>
     </template>
   </el-dialog>
+
+  <!-- ── 预算详情弹窗（工作室/部门/池通用）── -->
+  <BudgetDetailDialog
+    v-model="budgetDetailVisible"
+    :item="budgetDetailItem"
+    :tier-limits="budgetDetailTierLimits"
+  />
 </div>
 </template>
 
@@ -1783,6 +1790,7 @@ import MemberQuotaDialog from '@/components/budget/MemberQuotaDialog.vue'
 import AdminPageHeader from '@/components/budget/AdminPageHeader.vue'
 import BudgetManageOverview from '@/components/budget/BudgetManageOverview.vue'
 import BudgetScopeWorkspace from '@/components/budget/BudgetScopeWorkspace.vue'
+import BudgetDetailDialog from '@/components/budget/BudgetDetailDialog.vue'
 import type { BudgetBatchEntryMode } from '@/composables/budgetScopeFilters'
 import type { TierBudgetTagItem } from '@/composables/useBudgetDisplay'
 import {
@@ -2689,6 +2697,11 @@ const memberQuotaTarget = ref<BudgetItem | null>(null)
 const memberDetailVisible = ref(false)
 const memberDetailTarget = ref<BudgetItem | null>(null)
 
+// ─── 预算详情弹窗（工作室/部门/池通用）─────────────────────────────────────────
+const budgetDetailVisible = ref(false)
+const budgetDetailItem = ref<BudgetItem | null>(null)
+const budgetDetailTierLimits = ref<BudgetTierLimit[]>([])
+
 interface MemberTierRow {
   isTotal: boolean
   name: string
@@ -3080,10 +3093,28 @@ function handleWorkspaceEdit(item: BudgetItem | null) {
   openBudgetDrawer({ scope_type: 'studio', scope_id: drillScopeId.value, label: drillLabel.value })
 }
 
-function handleWorkspaceDetail(item: BudgetItem) {
-  openBudgetDrawer(item)
-  budgetDrawerCanEdit.value = false
-  budgetDrawerCanEditSelf.value = false
+async function handleWorkspaceDetail(item: BudgetItem) {
+  budgetDetailItem.value = item
+  budgetDetailTierLimits.value = []
+  if (item.allocation_id) {
+    try {
+      const limits = await listBudgetTierLimits(item.allocation_id)
+      budgetDetailTierLimits.value = limits.map(limit => {
+        const usage = tierBudgetItems.value.find(t =>
+          t.scope_id === item.scope_id
+          && t.scope_type === item.scope_type
+          && t.tier_name === limit.model_tier_name
+        )
+        return {
+          ...limit,
+          used_usd: usage?.used_usd ?? 0,
+        }
+      })
+    } catch (error: any) {
+      console.warn('Failed to load tier limits:', error)
+    }
+  }
+  budgetDetailVisible.value = true
 }
 
 function handleWorkspaceExpansion(item: BudgetItem) {

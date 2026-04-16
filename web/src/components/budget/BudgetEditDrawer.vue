@@ -366,7 +366,7 @@ async function save(): Promise<void> {
 
     ElMessage.success('总预算与等级子预算已更新')
     emit('saved')
-    await loadAllocation(selectedAllocation.value)
+    emit('update:modelValue', false)
   } catch (error: any) {
     if (error === 'cancel' || error === 'close') return
     ElMessage.error(error?.message || '预算保存失败')

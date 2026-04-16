@@ -9,9 +9,18 @@
         </div>
       </div>
       <div class="scope-metrics" aria-label="预算概览">
-        <div v-if="showTotalMetric" class="scope-metric primary">
+        <div v-if="showTotalMetric" class="scope-metric primary" :class="{ 'metric-with-action': scope.type === 'studio' && summaryItem }">
           <span>{{ scope.type === 'studio' ? '工作室总额' : '部门总额' }}</span>
           <strong>{{ formatBudgetUSD(summaryLimit, { unlimited: true }) }}</strong>
+          <div v-if="scope.type === 'studio' && summaryItem" class="metric-actions">
+            <button
+              type="button"
+              class="metric-action-btn secondary"
+              @click="emit('detail', summaryItem)"
+            >
+              查看详情
+            </button>
+          </div>
         </div>
         <div v-if="showPersonalPoolMetric" class="scope-metric metric-with-action">
           <span>个人 Key 池</span>
@@ -19,14 +28,14 @@
           <div class="metric-tier-line" :title="tierSummary(departmentDailyPool)">{{ tierSummary(departmentDailyPool) }}</div>
           <div v-if="departmentDailyPool" class="metric-actions">
             <button
-              v-if="!canConfigureDepartmentPools"
               type="button"
               class="metric-action-btn secondary"
               @click="emit('detail', departmentDailyPool)"
             >
-              详情
+              查看详情
             </button>
             <button
+              v-if="!fixedPool"
               type="button"
               class="metric-action-btn primary"
               @click="handlePoolAction(departmentDailyPool)"
@@ -41,14 +50,14 @@
           <div class="metric-tier-line" :title="tierSummary(departmentServicePool)">{{ tierSummary(departmentServicePool) }}</div>
           <div v-if="departmentServicePool" class="metric-actions">
             <button
-              v-if="!canConfigureDepartmentPools"
               type="button"
               class="metric-action-btn secondary"
               @click="emit('detail', departmentServicePool)"
             >
-              详情
+              查看详情
             </button>
             <button
+              v-if="!fixedPool"
               type="button"
               class="metric-action-btn primary"
               @click="handlePoolAction(departmentServicePool)"
@@ -74,16 +83,6 @@
             :status="summaryPercent >= 100 ? 'exception' : summaryPercent >= 80 ? 'warning' : 'success'"
             :show-text="false"
           />
-        </div>
-        <div v-if="scope.type === 'studio'" class="scope-metric action">
-          <span>当前预算</span>
-          <button
-            type="button"
-            class="proto-btn sm"
-            @click="handleStudioBudgetAction"
-          >
-            {{ canConfigureStudioBudget ? '配置' : '申请扩容' }}
-          </button>
         </div>
         <div v-if="scope.type === 'studio'" class="scope-metric compact">
           <span>下属部门</span>
@@ -330,6 +329,7 @@ import TierBudgetTags from './TierBudgetTags.vue'
 
 interface TierUsageItem {
   scope_id: string
+  scope_type?: BudgetItem['scope_type']
   tier_name: string
   used_ratio?: number
   color?: string
@@ -376,7 +376,6 @@ const summaryDescription = computed(() => {
 const showTotalMetric = computed(() => props.scope.type !== 'dept' || !fixedPool.value)
 const showPersonalPoolMetric = computed(() => props.scope.type === 'dept' && (!props.pool || props.pool === 'daily'))
 const showServicePoolMetric = computed(() => props.scope.type === 'dept' && (!props.pool || props.pool === 'service'))
-const canConfigureStudioBudget = computed(() => props.role === 'admin')
 const canConfigureDepartmentPools = computed(() => !(props.role === 'dept_admin' && props.scope.type === 'dept'))
 const poolActionLabel = computed(() => canConfigureDepartmentPools.value ? '配置' : '申请扩容')
 
@@ -397,20 +396,15 @@ const departmentPools = computed(() => [
     key: 'daily',
     title: '个人 Key 预算池',
     note: '成员通过个人 Key 调用时共享',
-    action: '配置个人 Key 池',
     item: departmentDailyPool.value,
   },
   {
     key: 'service',
     title: 'Service Key 预算池',
     note: '程序、自动化和服务账号调用时使用',
-    action: '配置 Service Key 池',
     item: departmentServicePool.value,
   },
 ])
-const summaryActionTarget = computed(() => props.scope.type === 'studio'
-  ? summaryItem.value
-  : departmentDailyPool.value ?? departmentServicePool.value ?? null)
 const summaryUsed = computed(() => {
   if (props.scope.type === 'studio') return Number(summaryItem.value?.used_usd ?? 0)
   if (props.pool === 'daily') return Number(departmentDailyPool.value?.used_usd ?? 0)
@@ -466,14 +460,6 @@ function handlePoolAction(row: BudgetItem): void {
     return
   }
   emit('requestExpansion', row)
-}
-
-function handleStudioBudgetAction(): void {
-  if (canConfigureStudioBudget.value) {
-    emit('edit', summaryActionTarget.value)
-    return
-  }
-  if (summaryActionTarget.value) emit('requestExpansion', summaryActionTarget.value)
 }
 
 function clearSelection(): void {
@@ -618,6 +604,10 @@ function progressColor(ratio = 0): string {
   background: #f5fcf6;
 }
 
+.scope-metric.primary.metric-with-action {
+  align-content: start;
+}
+
 .scope-metric.warning strong {
   color: var(--el-color-warning);
 }
@@ -628,15 +618,6 @@ function progressColor(ratio = 0): string {
 
 .scope-metric.compact {
   min-width: 86px;
-}
-
-.scope-metric.action {
-  align-content: center;
-  justify-items: start;
-}
-
-.scope-metric.action .proto-btn {
-  margin-top: 1px;
 }
 
 .scope-metric.metric-with-action {

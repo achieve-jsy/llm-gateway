@@ -275,7 +275,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
-import { Refresh, Loading, ArrowDown, Search, InfoFilled, DataLine } from '@element-plus/icons-vue'
+import { Refresh, Loading, ArrowDown, Search, DataLine } from '@element-plus/icons-vue'
 import { getPerformance } from '@/services/control-plane'
 import type { PerformanceItem } from '@/services/control-plane'
 import { groupsApi } from '@/api/groups'
@@ -429,28 +429,6 @@ const sortedItems = computed(() => {
   }
   return arr
 })
-
-const maxTtft = computed(() => {
-  let m = 1
-  for (const it of items.value) {
-    if (it.ttft_p50_ms > m) m = it.ttft_p50_ms
-  }
-  return m
-})
-
-function ttftBarWidth(ttft: number): string {
-  const maxMs = 5000
-  const clamped = Math.min(ttft, maxMs)
-  // Inverted: faster → more filled (intuitive gauge)
-  const pct = Math.max(4, Math.round(((maxMs - clamped) / maxMs) * 100))
-  return pct + '%'
-}
-
-function speedLevel(ttft: number): 'fast' | 'mid' | 'slow' {
-  if (ttft <= 1200) return 'fast'
-  if (ttft <= 3500) return 'mid'
-  return 'slow'
-}
 
 // 无流量组（有授权但窗口内无请求）
 const zeroTrafficGroups = computed(() => {

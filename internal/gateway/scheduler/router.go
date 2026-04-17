@@ -151,14 +151,16 @@ func (r *Router) routeRoundRobin(groupName string, healthyModels []*ModelRouting
 }
 
 func (r *Router) routePriority(groupName string, healthyModels []*ModelRoutingEntry) (*ModelRoutingEntry, error) {
-	// healthyModels 已在 RouteTable.ReplaceAll 时按 Priority 升序排好，无需再次排序。
 	minPriority := healthyModels[0].Priority
+	for _, m := range healthyModels {
+		if m.Priority < minPriority {
+			minPriority = m.Priority
+		}
+	}
 	samePrio := make([]*ModelRoutingEntry, 0, len(healthyModels))
 	for _, m := range healthyModels {
 		if m.Priority == minPriority {
 			samePrio = append(samePrio, m)
-		} else {
-			break // 已排好序，后续优先级更高，直接退出
 		}
 	}
 

@@ -6,6 +6,7 @@ export type BudgetScopeType = 'company' | 'studio' | 'dept_daily' | 'dept_servic
 export type BudgetView = 'company' | 'studio' | 'department'
 
 export interface BudgetItem {
+  allocation_id?: string
   scope_type: BudgetScopeType
   scope_id: string
   /** 仅 scope_type=member 时有值，表示该成员所属部门的 dept_id，多部门场景路由跳转使用 */
@@ -31,6 +32,45 @@ export interface BudgetSetPayload {
   amount_usd: number
   daily_amount_usd?: number   // 可选，默认 -1
   weekly_amount_usd?: number  // 可选，默认 -1
+}
+
+export type BudgetEffectiveMode = 'immediate' | 'next_period'
+
+export interface BudgetRiskConfirmation {
+  confirm_below_used?: boolean
+  confirm_zero_block?: boolean
+  confirm_stale?: boolean
+  replace_pending_schedule?: boolean
+  preview_version?: string
+}
+
+export interface BudgetAdjustmentPayload {
+  scope_type: BudgetScopeType
+  scope_id: string
+  period_type: 'daily' | 'weekly' | 'monthly'
+  target_limit_usd: string
+  effective_mode: BudgetEffectiveMode
+  reason: string
+  preview_version?: string
+  confirm_zero_block?: boolean
+  confirm_below_used?: boolean
+  confirm_replace_schedule?: boolean
+}
+
+export interface BudgetAdjustmentImpact {
+  before_limit_usd: string
+  after_limit_usd: string
+  current_used_usd: string
+  below_used: boolean
+  zero_block: boolean
+  affected_members: number
+  affected_groups: string[]
+  replaces_pending_schedule: boolean
+  pending_schedule_id?: string
+  pending_schedule_version?: string
+  preview_version: string
+  stale: boolean
+  data_as_of: string
 }
 
 export interface BudgetBatchPayload {

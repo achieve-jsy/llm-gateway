@@ -10,6 +10,19 @@
 
     <el-tabs v-model="activeTab" class="mb-tabs" @tab-change="onTabChange">
       <el-tab-pane label="我的预算" name="budget">
+    <aside class="mb-permission" :data-test="`my-budget-permission-${authStore.effectiveRole || 'user'}`">
+      <span class="mb-permission__badge">{{ budgetPermissionCopy.badge }}</span>
+      <div class="mb-permission__body">
+        <strong>{{ budgetPermissionCopy.title }}</strong>
+        <span>{{ budgetPermissionCopy.detail }}</span>
+      </div>
+      <el-button v-if="budgetPermissionCopy.action" size="small" type="primary" plain @click="budgetPermissionCopy.action.handler">
+        {{ budgetPermissionCopy.action.label }}
+      </el-button>
+    </aside>
+    <el-result v-if="tierError && !authStore.isAdmin" icon="error" title="预算加载失败" :sub-title="tierError">
+      <template #extra><el-button type="primary" @click="loadTierBudget">重试</el-button></template>
+    </el-result>
     <div v-if="loading && !chain.length" v-loading="true" class="mb-loading" />
     <div v-else-if="!chain.length" class="mb-no-budget">
       <template v-if="authStore.isAdmin">
@@ -24,26 +37,6 @@
     </div>
 
     <template v-else>
-      <!-- KPI strip -->
-      <section class="mb-kpi-strip">
-        <div class="mb-kpi">
-          <span>可用余额</span>
-          <strong>{{ formatUSD(remainingAmount) }}</strong>
-        </div>
-        <div class="mb-kpi">
-          <span>本月已用</span>
-          <strong>{{ formatUSD(primaryBudget?.used_usd || 0) }}</strong>
-        </div>
-        <div class="mb-kpi">
-          <span>月度额度<template v-if="isUsingSharedPool"> <em class="mb-kpi-pool-tag">共享池</em></template></span>
-          <strong>{{ primaryBudget ? displayAmount(primaryBudget.amount_usd) : '未设置' }}</strong>
-        </div>
-        <div class="mb-kpi">
-          <span>使用率</span>
-          <strong :class="{ 'is-danger': primaryRatioPercent >= 80 }">{{ primaryRatioPercent }}%</strong>
-        </div>
-      </section>
-
       <el-alert
         v-if="pendingKeyBudgetActivities.length > 0"
         type="info"
@@ -61,23 +54,11 @@
         <div class="mb-panel">
           <div class="mb-panel-head">
             <div>
-              <h2>{{ primaryBudgetLabel }}</h2>
-              <p>{{ isUsingSharedPool ? '当前所用额度与使用情况' : '您的专属配额与使用情况' }}</p>
+              <h2>{{ sourceNotice.title }}</h2>
+              <p>{{ sourceNotice.detail }}</p>
             </div>
             <div class="mb-panel-head-actions">
               <span :class="`mb-tag mb-tag--${statusTagType}`">{{ statusText }}</span>
-            </div>
-          </div>
-
-          <!-- 共享池提示 -->
-          <div v-if="isUsingSharedPool" class="mb-shared-pool-notice">
-            <span class="mb-shared-pool-icon">🔗</span>
-            <div class="mb-shared-pool-text">
-              <span class="mb-shared-pool-title">您正在使用部门共享预算池</span>
-              <span class="mb-shared-pool-desc">
-                您尚未分配个人独立配额，当前消耗计入「{{ primaryBudgetLabel }}」共享池。
-                如需独立额度管理，可向部门负责人申请。
-              </span>
             </div>
           </div>
 
@@ -103,21 +84,33 @@
           </div>
 
           <div class="mb-period-rows">
-            <div class="mb-period-item">
-              <span class="mb-period-name">今日额度</span>
-              <span class="mb-period-value">{{ displayAmount(primaryBudget?.daily_amount_usd ?? -1) }}</span>
-              <span class="mb-period-reset">明天 00:00 重置</span>
+            <div v-for="row in periodRows" :key="row.period" class="mb-period-item">
+              <span class="mb-period-name">
+                {{ row.label }}
+                <em data-test="budget-source-pill" class="source-mini">{{ row.source }}</em>
+              </span>
+              <span class="mb-period-value">{{ row.value }}</span>
+              <span class="mb-period-reset">{{ row.reset }}</span>
             </div>
-            <div class="mb-period-item">
-              <span class="mb-period-name">本周额度</span>
-              <span class="mb-period-value">{{ displayAmount(primaryBudget?.weekly_amount_usd ?? -1) }}</span>
-              <span class="mb-period-reset">下周一 00:00 重置</span>
+          </div>
+
+          <div v-if="tierSummary.length" class="tier-summary-card">
+            <strong>模型等级额度</strong>
+            <div class="tier-summary-items">
+              <BudgetStatusTag
+                v-for="item in tierSummary"
+                :key="item.id"
+                :status="{ ...item.status, label: `${item.name}${item.status.label}` }"
+              />
             </div>
-            <div class="mb-period-item">
-              <span class="mb-period-name">本月额度</span>
-              <span class="mb-period-value">{{ primaryBudget ? displayAmount(primaryBudget.amount_usd) : '未设置' }}</span>
-              <span class="mb-period-reset">下月 1 日 00:00 重置</span>
-            </div>
+            <el-button
+              link
+              type="primary"
+              data-test="view-tier-budget"
+              @click="showTierBudget"
+            >
+              查看详情 →
+            </el-button>
           </div>
 
           <!-- 月度分析 -->
@@ -170,7 +163,16 @@
               <el-tooltip v-if="hasPendingRequest" content="已有审批中的申请，请等待结果或取消后重新提交" placement="top">
                 <el-button size="small" disabled>新建申请</el-button>
               </el-tooltip>
-              <el-button v-else size="small" type="primary" plain @click="openExpansion">新建申请</el-button>
+              <el-button
+                v-else
+                size="small"
+                type="primary"
+                plain
+                data-test="create-expansion"
+                @click="openExpansion()"
+              >
+                新建申请
+              </el-button>
             </template>
           </div>
 
@@ -180,8 +182,8 @@
             <div>
               <p class="mb-manager-hint-title">您可直接调整额度</p>
               <p class="mb-manager-hint-desc">
-                <template v-if="authStore.effectiveRole === 'dept_admin'">作为部门负责人，可在「组织管理」中直接修改成员配额，无需提交申请。如需提升部门整体预算，请联系工作室负责人。</template>
-                <template v-else-if="authStore.effectiveRole === 'studio_admin'">作为工作室负责人，可在「组织管理」中直接修改部门预算，无需提交申请。如需提升工作室整体预算，请联系平台管理员。</template>
+                <template v-if="authStore.effectiveRole === 'dept_admin'">作为部门负责人，可在「预算管理」中直接修改成员配额；如需提升部门预算池，可提交部门扩容申请，由工作室负责人审批。</template>
+                <template v-else-if="authStore.effectiveRole === 'studio_admin'">作为工作室负责人，可在「预算管理」中直接修改部门预算；如需提升工作室整体预算，请联系平台管理员。</template>
                 <template v-else>拥有全局额度管理权限，可在「预算总览」中直接调整任意层级的额度。</template>
               </p>
               <el-button
@@ -220,7 +222,7 @@
                   >取消</el-button>
                   <el-button
                     v-else-if="featuredActivity.kind === 'expansion'"
-                    size="small" @click="openExpansion"
+                    size="small" @click="openExpansion()"
                   >重新申请</el-button>
                   <el-button
                     v-else-if="featuredActivity.kind === 'key_budget'"
@@ -230,14 +232,21 @@
                 </div>
               </div>
 
-              <p v-if="activitySubtitle(featuredActivity)" class="mb-active-reason">{{ activitySubtitle(featuredActivity) }}</p>
+              <el-tooltip
+                v-if="activitySubtitle(featuredActivity)"
+                :content="activitySubtitle(featuredActivity)"
+                placement="top"
+                :show-after="250"
+              >
+                <span class="mb-active-reason">{{ activitySubtitle(featuredActivity) }}</span>
+              </el-tooltip>
 
               <div class="mb-steps">
                 <div class="mb-step is-done">
                   <div class="mb-step-node">✓</div>
                   <span>提交</span>
                 </div>
-                <div class="mb-step-line" :class="{ 'is-done': featuredActivity.status !== 'pending' }" />
+                <div class="mb-step-line" :class="{ 'is-done': ['pending', 'approved', 'rejected'].includes(featuredActivity.status) }" />
                 <div class="mb-step" :class="{
                   'is-active': featuredActivity.status === 'pending',
                   'is-done': featuredActivity.status === 'approved',
@@ -285,37 +294,24 @@
       <el-tab-pane label="我的配额" name="quota" lazy>
         <MyQuotaPanel ref="quotaPanelRef" />
       </el-tab-pane>
+      <el-tab-pane v-if="!authStore.isAdmin" label="模型等级额度" name="tier" lazy>
+        <MyTierBudgetPanel ref="tierTabRef" @request-expansion="openExpansion" />
+      </el-tab-pane>
     </el-tabs>
 
-    <el-dialog v-model="expansionVisible" title="申请提升个人额度" width="520px">
-      <el-form label-position="top">
-        <el-form-item label="调整维度">
-          <el-segmented v-model="expansionForm.periodType" :options="periodOptions" block style="width:100%" />
-        </el-form-item>
-        <el-form-item>
-          <div class="mb-dialog-summary">
-            <div>
-              <span>当前{{ PERIOD_LABELS[expansionForm.periodType] }}</span>
-              <strong>{{ dialogCurrentAmount }}</strong>
-            </div>
-            <div>
-              <span>已用金额</span>
-              <strong>{{ formatUSD(primaryBudget?.used_usd || 0) }}</strong>
-            </div>
-          </div>
-        </el-form-item>
-        <el-form-item :label="`申请后的${PERIOD_LABELS[expansionForm.periodType]}（USD）`">
-          <el-input-number v-model="expansionForm.requestedAmount" :min="1" :precision="2" controls-position="right" style="width:100%" />
-        </el-form-item>
-        <el-form-item label="申请理由">
-          <el-input v-model="expansionForm.reason" type="textarea" :rows="3" placeholder="说明业务场景、预计消耗和需要提升额度的原因" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="expansionVisible = false">取消</el-button>
-        <el-button type="primary" :loading="expansionSubmitting" @click="submitExpansion">提交申请</el-button>
-      </template>
-    </el-dialog>
+    <ExpansionCreateForm
+      v-model="expansionVisible"
+      :ordinary-user="!authStore.isManager"
+      :fixed-manager-scope="isDeptAdmin"
+      :manager-scope-label="deptAdminScopeLabel"
+      :initial-scope-type="expansionScopeType"
+      :initial-scope-id="expansionScopeId"
+      :initial-dimension-type="expansionPrefill.dimension"
+      :initial-model-tier-id="expansionPrefill.tierId"
+      :initial-period-type="expansionPrefill.period"
+      :initial-target-amount-usd="expansionPrefill.targetAmount"
+      @created="loadRequests"
+    />
   </div>
 </template>
 
@@ -324,14 +320,19 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Refresh, Setting } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { createExpansionRequest, decideExpansion, getMyBudget, getMyExpansionRequests, getMyKeyRequests, cancelKeyRequest } from '@/services/control-plane'
+import { decideExpansion, getMyBudget, getMyBudgetTiers, getMyExpansionRequests, getMyKeyRequests, cancelKeyRequest } from '@/services/control-plane'
 import { useAuthStore } from '@/stores/auth'
 import type { BudgetChainItem } from '@/types/budget'
-import type { ExpansionPeriod, ExpansionRequest, ExpansionStatus } from '@/types/expansion'
-import { PERIOD_LABELS, PERIOD_SUFFIX, STATUS_COLORS, STATUS_LABELS } from '@/types/expansion'
+import type { ExpansionDimension, ExpansionPeriod, ExpansionRequest, ExpansionStatus } from '@/types/expansion'
+import { PERIOD_SUFFIX, STATUS_LABELS } from '@/types/expansion'
+import type { MyBudgetTiersResponse } from '@/types/model-tier'
 import type { KeyRequest, KeyRequestStatus } from '@/types/key-request'
 import { KEY_REQUEST_STATUS_LABELS, formatKeyRequestBudget, keyRequestHasBudget } from '@/types/key-request'
+import { formatBudgetUSD, getBudgetSourceLabel, getBudgetStatus, toUsagePercent } from '@/composables/useBudgetDisplay'
 import MyQuotaPanel from '@/components/budget/MyQuotaPanel.vue'
+import MyTierBudgetPanel from '@/components/budget/MyTierBudgetPanel.vue'
+import BudgetStatusTag from '@/components/budget/BudgetStatusTag.vue'
+import ExpansionCreateForm from '@/components/expansion/ExpansionCreateForm.vue'
 
 type BudgetActivityKind = 'expansion' | 'key_budget'
 type BudgetActivityStatus = ExpansionStatus | KeyRequestStatus
@@ -346,17 +347,29 @@ interface BudgetActivity {
   keyRequest?: KeyRequest
 }
 
+const tierBudget = ref<MyBudgetTiersResponse | null>(null)
+const tierLoading = ref(false)
+const tierError = ref('')
+async function loadTierBudget() {
+  tierLoading.value = true
+  tierError.value = ''
+  try { tierBudget.value = await getMyBudgetTiers() }
+  catch (error) { tierError.value = error instanceof Error ? error.message : '请稍后重试' }
+  finally { tierLoading.value = false }
+}
+
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
 
 // Tab 切换：默认「我的预算」，支持 ?tab=quota 直达配额；切 tab 同步到 URL（书签/刷新可恢复）
-type BudgetTabName = 'budget' | 'quota'
-const activeTab = ref<BudgetTabName>(route.query.tab === 'quota' ? 'quota' : 'budget')
+type BudgetTabName = 'budget' | 'quota' | 'tier'
+const activeTab = ref<BudgetTabName>(route.query.tab === 'quota' ? 'quota' : route.query.tab === 'tier' && !authStore.isAdmin ? 'tier' : 'budget')
 const quotaPanelRef = ref<InstanceType<typeof MyQuotaPanel> | null>(null)
+const tierTabRef = ref<InstanceType<typeof MyTierBudgetPanel> | null>(null)
 
 function onTabChange(name: string | number) {
-  const tab = name === 'quota' ? 'quota' : 'budget'
+  const tab = name === 'quota' ? 'quota' : name === 'tier' && !authStore.isAdmin ? 'tier' : 'budget'
   const query = { ...route.query }
   if (tab === 'budget') delete query.tab
   else query.tab = tab
@@ -373,6 +386,15 @@ async function refreshActiveTab() {
     }
     return
   }
+  if (activeTab.value === 'tier') {
+    loading.value = true
+    try {
+      await tierTabRef.value?.loadTierBudget()
+    } finally {
+      loading.value = false
+    }
+    return
+  }
   await loadAll()
 }
 
@@ -382,26 +404,16 @@ const keyBudgetRequests = ref<KeyRequest[]>([])
 const loading = ref(false)
 const requestLoading = ref(false)
 const expansionVisible = ref(false)
-const expansionSubmitting = ref(false)
-const expansionForm = ref<{ periodType: ExpansionPeriod; requestedAmount: number; reason: string }>({
-  periodType: 'monthly',
-  requestedAmount: 100,
-  reason: '',
-})
-
-const periodOptions = [
-  { label: '日额度', value: 'daily' },
-  { label: '周额度', value: 'weekly' },
-  { label: '月额度', value: 'monthly' },
-]
-
-const dialogCurrentAmount = computed(() => {
-  const b = primaryBudget.value
-  if (!b) return '未设置'
-  const pt = expansionForm.value.periodType
-  if (pt === 'daily') return displayAmount(b.daily_amount_usd ?? -1)
-  if (pt === 'weekly') return displayAmount(b.weekly_amount_usd ?? -1)
-  return displayAmount(b.amount_usd)
+const expansionPrefill = ref<{
+  dimension: ExpansionDimension
+  tierId: string
+  period: ExpansionPeriod
+  targetAmount: string
+}>({
+  dimension: 'total',
+  tierId: '',
+  period: 'monthly',
+  targetAmount: '',
 })
 
 const primaryBudget = computed(() =>
@@ -409,11 +421,113 @@ const primaryBudget = computed(() =>
   chain.value.find(item => item.scope_type === 'dept_daily') ||
   chain.value[0]
 )
-// 是否正在消费共享部门池（未配置个人独立配额）
-const isUsingSharedPool = computed(() =>
-  !!primaryBudget.value && primaryBudget.value.scope_type !== 'member',
-)
-const primaryBudgetLabel = computed(() => primaryBudget.value?.label || '我的额度')
+const isDeptAdmin = computed(() => authStore.effectiveRole === 'dept_admin')
+const deptAdminRole = computed(() => authStore.orgRoles.find(role => role.role === 'dept_admin' || role.scope_type === 'dept'))
+const deptAdminScopeId = computed(() => deptAdminRole.value?.scope_id || authStore.user?.departmentId || '')
+const deptAdminScopeLabel = computed(() => authStore.user?.departmentName || deptAdminScopeId.value || '我的部门')
+const expansionScopeType = computed(() => isDeptAdmin.value ? 'dept_daily' : 'member')
+const expansionScopeId = computed(() => isDeptAdmin.value ? deptAdminScopeId.value : authStore.user?.id || '')
+const sourceNotice = computed(() => {
+  if (primaryBudget.value?.scope_type === 'member') {
+    return {
+      title: '个人独立预算',
+      detail: '你的调用消耗计入个人额度。',
+    }
+  }
+  return {
+    title: '部门共享预算池',
+    detail: '你当前未配置个人独立额度，调用消耗会计入部门共享池。',
+  }
+})
+
+const budgetPermissionCopy = computed(() => {
+  if (authStore.isAdmin) {
+    return {
+      badge: '平台管理员',
+      title: '当前为个人预算视图',
+      detail: '平台管理员通常不配置个人消费额度；组织预算配置请前往预算管理。',
+      action: { label: '前往预算管理', handler: () => router.push('/admin/budget') },
+    }
+  }
+  if (authStore.effectiveRole === 'studio_admin') {
+    return {
+      badge: '工作室管理员',
+      title: '当前展示你的个人调用预算',
+      detail: '你可查看个人额度；工作室和部门预算请在预算管理中处理，工作室总额度扩容由平台审批。',
+      action: { label: '查看预算管理', handler: () => router.push('/admin/budget') },
+    }
+  }
+  if (authStore.effectiveRole === 'dept_admin') {
+    return {
+      badge: '部门管理员',
+      title: '当前展示你的个人调用预算',
+      detail: '你可查看个人额度；部门成员额度可在预算管理中调整，部门预算池扩容由工作室审批。',
+      action: { label: '查看预算管理', handler: () => goManagerAdjust() },
+    }
+  }
+  return {
+    badge: '普通用户',
+    title: '当前仅展示你的个人预算和限制来源',
+    detail: '可申请本人额度扩容；上级预算由对应负责人审批和配置。',
+    action: null,
+  }
+})
+
+const periodRows = computed(() => {
+  const labels: Record<ExpansionPeriod, { label: string; reset: string }> = {
+    daily: { label: '今日额度', reset: '明天 00:00 重置' },
+    weekly: { label: '本周额度', reset: '下周一 00:00 重置' },
+    monthly: { label: '本月额度', reset: '下月 1 日 00:00 重置' },
+  }
+  return (['daily', 'weekly', 'monthly'] as const).map(period => {
+    const effective = tierBudget.value?.effective_total.find(item => item.period_type === period)
+    const chainNode = [...(tierBudget.value?.budget_chain ?? [])].reverse()
+      .find(node => node.periods?.some(item => item.period_type === period && item.configured))
+    const sourceLabel = getBudgetSourceLabel(
+      chainNode?.scope_type ?? tierBudget.value?.source_summary.primary_scope_type,
+      Boolean(effective?.temporary_target_usd),
+    )
+    const source = sourceLabel === '部门共享子预算'
+      ? '部门共享'
+      : sourceLabel === '个人预算'
+        ? '个人独立'
+        : sourceLabel
+    const fallback = period === 'daily'
+      ? primaryBudget.value?.daily_amount_usd
+      : period === 'weekly'
+        ? primaryBudget.value?.weekly_amount_usd
+        : primaryBudget.value?.amount_usd
+    const status = effective
+      ? getBudgetStatus({
+          configured: effective.configured,
+          enabled: effective.status !== 'disabled',
+          limit: effective.effective_limit_usd,
+        })
+      : null
+    const value = effective
+      ? (effective.configured ? formatBudgetUSD(effective.effective_limit_usd) : status?.label ?? '未配置')
+      : displayAmount(fallback ?? -1)
+    return { period, ...labels[period], source, value }
+  })
+})
+
+const tierSummary = computed(() => (tierBudget.value?.tier_limits ?? []).slice(0, 4).map(tier => {
+  const period = tier.periods.find(item => item.period_type === 'monthly') ?? tier.periods[0]
+  const usageRatio = period
+    ? toUsagePercent(period.used_usd, period.effective_limit_usd) / 100
+    : 0
+  return {
+    id: tier.model_tier_id,
+    name: tier.model_tier_name,
+    status: getBudgetStatus({
+      configured: Boolean(period?.configured),
+      enabled: tier.enabled && period?.status !== 'tier_disabled' && period?.status !== 'limit_disabled',
+      limit: period?.effective_limit_usd,
+      usageRatio,
+    }),
+  }
+}))
+
 const primaryRatioPercent = computed(() => Math.min(Math.round((primaryBudget.value?.used_ratio || 0) * 100), 100))
 const remainingAmount = computed(() => {
   const budget = primaryBudget.value
@@ -432,9 +546,6 @@ const statusTagType = computed(() => {
   if (ratio >= 0.8) return 'warning'
   return 'success'
 })
-const statusClass = computed(() => `is-${statusTagType.value}`)
-const canOpenExpansion = computed(() => authStore.effectiveRole !== 'admin')
-
 // 月度分析相关
 const now = new Date()
 const monthDay = now.getDate()
@@ -537,7 +648,14 @@ const hasPendingRequest = computed(() => latestRequest.value?.status === 'pendin
 const cancellingId = ref<string | null>(null)
 
 async function loadAll() {
-  await Promise.all([loadBudget(), loadRequests()])
+  if (authStore.isAdmin) {
+    tierBudget.value = null
+    tierError.value = ''
+    activeTab.value = activeTab.value === 'tier' ? 'budget' : activeTab.value
+    await loadBudget()
+    return
+  }
+  await Promise.all([loadBudget(), loadTierBudget(), loadRequests()])
 }
 
 async function loadBudget() {
@@ -569,12 +687,11 @@ async function loadRequests() {
 }
 
 function formatUSD(value: number) {
-  return `$${(value || 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+  return formatBudgetUSD(value || 0)
 }
 
 function displayAmount(value: number) {
-  if (value == null || value < 0) return '不限'
-  return formatUSD(value)
+  return formatBudgetUSD(value, { unlimited: true })
 }
 
 function progressColor(ratio: number) {
@@ -589,11 +706,11 @@ function goManagerAdjust() {
     router.push('/admin/budget')
     return
   }
-  // dept_admin：找到自己管辖的部门，直接定位到预算 tab
+  // dept_admin：找到自己管辖的部门，直接定位到预算管理的部门视图
   if (authStore.effectiveRole === 'dept_admin') {
-    const deptRole = authStore.orgRoles.find(r => r.role === 'dept_admin')
+    const deptRole = authStore.orgRoles.find(r => r.role === 'dept_admin' || r.scope_type === 'dept')
     if (deptRole?.scope_id) {
-      router.push(`/admin/org?scope_type=dept_daily&scope_id=${encodeURIComponent(deptRole.scope_id)}&tab=budget`)
+      router.push(`/admin/budget?scope_type=dept&scope_id=${encodeURIComponent(deptRole.scope_id)}&scope_label=${encodeURIComponent(authStore.user?.departmentName || deptRole.scope_id)}`)
       return
     }
   }
@@ -601,16 +718,32 @@ function goManagerAdjust() {
   if (authStore.effectiveRole === 'studio_admin') {
     const studioRole = authStore.orgRoles.find(r => r.role === 'studio_admin')
     if (studioRole?.scope_id) {
-      router.push(`/admin/org?scope_type=studio&scope_id=${encodeURIComponent(studioRole.scope_id)}&tab=budget`)
+      router.push(`/admin/budget?scope_type=studio&scope_id=${encodeURIComponent(studioRole.scope_id)}`)
       return
     }
   }
-  router.push('/admin/org')
+  router.push('/admin/budget')
 }
 
-function openExpansion() {
+function showTierBudget() {
+  activeTab.value = 'tier'
+  onTabChange('tier')
+}
+
+function openExpansion(prefill: Partial<{
+  dimension: ExpansionDimension
+  tierId: string
+  period: ExpansionPeriod
+  targetAmount: string
+}> = {}) {
   if (authStore.isManager) {
-    router.push('/admin/expansion-requests')
+    expansionPrefill.value = {
+      dimension: prefill.dimension ?? 'total',
+      tierId: prefill.tierId ?? '',
+      period: prefill.period ?? 'monthly',
+      targetAmount: prefill.targetAmount ?? '',
+    }
+    expansionVisible.value = true
     return
   }
   const userID = authStore.user?.id || ''
@@ -619,57 +752,18 @@ function openExpansion() {
     return
   }
   const base = primaryBudget.value?.amount_usd || 50
-  expansionForm.value = {
-    periodType: 'monthly',
-    requestedAmount: Math.max(Math.ceil(base * 1.5), base + 50),
-    reason: '',
+  expansionPrefill.value = {
+    dimension: prefill.dimension ?? 'total',
+    tierId: prefill.tierId ?? '',
+    period: prefill.period ?? 'monthly',
+    targetAmount: prefill.targetAmount
+      ?? String(Math.max(Math.ceil(base * 1.5), base + 50)),
   }
   expansionVisible.value = true
 }
 
-async function submitExpansion() {
-  const userID = authStore.user?.id || ''
-  if (!userID) {
-    ElMessage.warning('无法确定当前用户，请重新登录')
-    return
-  }
-  if (!expansionForm.value.reason.trim()) {
-    ElMessage.warning('请填写申请理由')
-    return
-  }
-  expansionSubmitting.value = true
-  try {
-    await createExpansionRequest({
-      scope_type: 'member',
-      scope_id: userID,
-      period_type: expansionForm.value.periodType,
-      requested_amount: expansionForm.value.requestedAmount,
-      reason: expansionForm.value.reason,
-    })
-    ElMessage.success('申请已提交给部门负责人')
-    expansionVisible.value = false
-    await loadRequests()
-  } finally {
-    expansionSubmitting.value = false
-  }
-}
-
 function statusLabel(status: ExpansionStatus) {
   return STATUS_LABELS[status] || status
-}
-
-function statusColor(status: ExpansionStatus) {
-  return STATUS_COLORS[status] || '#6b7280'
-}
-
-function scopeLabel(type: string) {
-  const map: Record<string, string> = {
-    member: '个人额度',
-    dept_daily: '部门日常',
-    dept_service: '部门服务',
-    studio: '工作室',
-  }
-  return map[type] || type
 }
 
 function formatDateTime(value: string): string {
@@ -677,7 +771,7 @@ function formatDateTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   const pad = (n: number) => String(n).padStart(2, '0')
-  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
 function goKeyRequestDetail() {
@@ -746,6 +840,14 @@ function activityCancelId(a: BudgetActivity) {
   return ''
 }
 
+function requestErrorMessage(error: any, fallback: string) {
+  const data = error?.response?.data
+  if (typeof data?.error === 'string') return data.error
+  if (typeof data?.error?.message === 'string') return data.error.message
+  if (typeof data?.message === 'string') return data.message
+  return fallback
+}
+
 async function cancelActivity(a: BudgetActivity) {
   if (a.kind === 'expansion' && a.expansion) {
     await cancelRequest(a.expansion.id)
@@ -767,7 +869,7 @@ async function cancelKeyRequestActivity(id: string) {
     await loadRequests()
   } catch (e: any) {
     if (req && prev) req.status = prev
-    ElMessage.error(e?.response?.data?.error || '取消失败')
+    ElMessage.error(requestErrorMessage(e, '取消失败'))
   } finally {
     cancellingId.value = null
   }
@@ -779,13 +881,13 @@ async function cancelRequest(id: string) {
   const req = myRequests.value.find(r => r.id === id)
   if (req) req.status = 'cancelled'
   try {
-    await decideExpansion(id, 'cancel')
+    await decideExpansion(id, 'cancel', req?.precheck_version || '')
     ElMessage.success('申请已取消')
     await loadRequests()
   } catch (e: any) {
     // 失败时回滚本地状态
     if (req) req.status = 'pending'
-    ElMessage.error(e?.response?.data?.error || '取消失败')
+    ElMessage.error(requestErrorMessage(e, '取消失败'))
   } finally {
     cancellingId.value = null
   }
@@ -804,6 +906,15 @@ onUnmounted(() => { historyObserver?.disconnect() })
 </script>
 
 <style scoped>
+.effective-budget { display: grid; gap: 16px; margin-bottom: 20px; padding: 18px; border: 1px solid var(--el-border-color-light); border-radius: 8px; }
+.effective-periods { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.effective-card { display: grid; gap: 6px; padding: 14px; background: var(--el-fill-color-light); border-radius: 6px; }
+.effective-card strong { font-size: 20px; }
+.effective-card small, .temporary-note { color: var(--el-text-color-secondary); }
+.temporary-note { display: block; margin-top: 3px; font-size: 11px; }
+.tier-budget-list h3 { margin: 0 0 10px; font-size: 16px; }
+.budget-chain ol { margin: 0; padding-left: 20px; }
+@media (max-width: 768px) { .effective-periods { grid-template-columns: 1fr; } }
 /* ─────────────── Layout ─────────────── */
 .mb {
   display: flex;
@@ -856,6 +967,34 @@ onUnmounted(() => { historyObserver?.disconnect() })
   padding: 3px 12px;
 }
 .mb-loading { height: 360px; }
+.mb-permission {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  background: var(--el-color-primary-light-9);
+  border: 1px solid var(--el-color-primary-light-7);
+  border-radius: 12px;
+}
+.mb-permission__badge {
+  flex: none;
+  padding: 2px 9px;
+  color: var(--el-color-primary);
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-color-primary-light-7);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.mb-permission__body {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  flex: 1;
+}
+.mb-permission__body strong { font-size: 13px; color: var(--el-text-color-primary); }
+.mb-permission__body span { font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.6; }
 .mb-no-budget {
   display: flex;
   flex-direction: column;
@@ -870,42 +1009,6 @@ onUnmounted(() => { historyObserver?.disconnect() })
 .mb-no-budget p { margin: 0; font-size: 16px; font-weight: 600; color: var(--el-text-color-primary); }
 .mb-no-budget span { font-size: 13px; max-width: 320px; line-height: 1.7; }
 .mb-muted { font-size: 12px; color: var(--el-text-color-placeholder); }
-
-.mb-kpi-strip {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1px;
-  overflow: hidden;
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 16px;
-  background: var(--el-border-color-lighter);
-}
-.mb-kpi {
-  padding: 14px 18px;
-  background: var(--el-bg-color);
-}
-.mb-kpi span {
-  display: block;
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-  margin-bottom: 8px;
-}
-.mb-kpi strong {
-  font-size: 24px;
-  color: var(--el-text-color-primary);
-  letter-spacing: -.03em;
-}
-.mb-kpi strong.is-danger { color: var(--el-color-danger); }
-.mb-kpi-pool-tag {
-  font-style: normal;
-  font-size: 10px;
-  font-weight: 500;
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: var(--el-color-info-light-8);
-  color: var(--el-color-info-dark-2);
-  vertical-align: middle;
-}
 
 /* ─────────────── Grid ─────────────── */
 .mb-grid {
@@ -1056,8 +1159,33 @@ onUnmounted(() => { historyObserver?.disconnect() })
 }
 .mb-period-item:last-child { border-bottom: 0; }
 .mb-period-name { color: var(--el-text-color-regular); font-size: 13px; }
+.source-mini {
+  display: inline-flex;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: var(--el-color-info-light-9);
+  color: var(--el-color-info-dark-2);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1.7;
+}
 .mb-period-value { font-size: 16px; font-weight: 700; color: var(--el-text-color-primary); }
 .mb-period-reset { font-size: 12px; color: var(--el-text-color-placeholder); white-space: nowrap; }
+
+.tier-summary-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin: 14px 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+  background: var(--el-fill-color-light);
+}
+.tier-summary-card > strong { font-size: 13px; }
+.tier-summary-items { display: flex; flex-wrap: wrap; gap: 6px; }
 
 /* ─────────────── Monthly Analysis ─────────────── */
 .mb-monthly {
@@ -1247,17 +1375,22 @@ onUnmounted(() => { historyObserver?.disconnect() })
   flex-shrink: 0;
 }
 .mb-active-reason {
+  display: block;
+  overflow: hidden;
   margin: 10px 0 0;
   font-size: 12px;
   color: var(--el-text-color-secondary);
   line-height: 1.6;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
 }
 .mb-active-note {
   margin: 10px 0 0;
   font-size: 12px;
   color: var(--el-text-color-secondary);
   padding: 7px 10px;
-  background: rgba(255,255,255,.6);
+  background: var(--el-bg-color-overlay);
   border-radius: 6px;
 }
 
@@ -1383,7 +1516,6 @@ onUnmounted(() => { historyObserver?.disconnect() })
 @media (max-width: 980px) {
   .mb { padding: 20px 20px; }
   .mb-grid { grid-template-columns: 1fr; }
-  .mb-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mb-panel { min-height: unset; }
   .mb-monthly-stats { grid-template-columns: repeat(3, 1fr); }
 }
@@ -1391,12 +1523,11 @@ onUnmounted(() => { historyObserver?.disconnect() })
 /* ≤720px */
 @media (max-width: 720px) {
   .mb { padding: 14px 16px; }
-  .mb-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .mb-kpi strong { font-size: 22px; }
 
   /* 额度卡头部：允许换行 */
   .mb-panel-head { flex-wrap: wrap; gap: 8px; }
   .mb-panel-head-actions { width: 100%; justify-content: flex-start; }
+  .mb-permission { align-items: flex-start; flex-direction: column; }
 
   /* 余额块：竖排 */
   .mb-balance-block { flex-direction: column; align-items: flex-start; gap: 14px; }
@@ -1405,6 +1536,8 @@ onUnmounted(() => { historyObserver?.disconnect() })
   /* 周期行 */
   .mb-period-item { grid-template-columns: 1fr auto; }
   .mb-period-reset { display: none; }
+  .tier-summary-card { grid-template-columns: 1fr auto; }
+  .tier-summary-items { grid-column: 1 / -1; grid-row: 2; }
 
   /* 月度分析：3列→2列 */
   .mb-monthly-stats { grid-template-columns: repeat(2, 1fr); }
@@ -1416,9 +1549,6 @@ onUnmounted(() => { historyObserver?.disconnect() })
 /* ≤480px */
 @media (max-width: 480px) {
   .mb { padding: 12px; }
-  .mb-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; }
-  .mb-kpi { padding: 10px 12px; }
-  .mb-kpi strong { font-size: 20px; }
 
   /* 月度分析：→1列 */
   .mb-monthly-stats { grid-template-columns: 1fr; }

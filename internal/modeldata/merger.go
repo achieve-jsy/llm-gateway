@@ -226,8 +226,8 @@ func buildMetadata(model *ModelEntry, pm *ProviderModelEntry) *core.ModelMetadat
 			meta.MaxOutputTokens = pm.MaxOutputTokens
 		}
 		if pm.Pricing != nil {
-			meta.Pricing = pm.Pricing
-			meta.PricingSources = pm.Pricing.FieldSources(core.ModelPricingSourceModelRegistry)
+			meta.Pricing = MergePricing(meta.Pricing, pm.Pricing)
+			meta.PricingSources = meta.Pricing.FieldSources(core.ModelPricingSourceModelRegistry)
 		}
 		if pm.Capabilities != nil {
 			meta.Capabilities = pm.Capabilities

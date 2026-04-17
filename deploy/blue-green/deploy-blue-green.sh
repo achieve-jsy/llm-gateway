@@ -102,6 +102,30 @@ health_check() {
     return 1
 }
 
+supports_budget_v2() {
+    local color="$1" port payload
+    port=$(get_gateway_port "$color")
+    payload=$(curl -fsS --max-time 5 "http://localhost:${port}/ready" 2>/dev/null) || return 1
+    echo "$payload" | jq -e \
+        '.capabilities.tier_snapshot_schema == 1 and .capabilities.redis_v2 == true' \
+        >/dev/null 2>&1
+}
+
+force_safe_budget_mode() {
+    export BUDGET_TIER_MASTER_ENABLED=false
+    export BUDGET_TIER_ACCOUNTING_ENABLED=false
+    export BUDGET_TIER_POSITIVE_ENFORCEMENT_ENABLED=false
+    export BUDGET_TIER_ZERO_BLOCK_ENABLED=false
+    export BUDGET_TIER_SHADOW_ENABLED=false
+    export BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED=false
+    export BUDGET_LEGACY_TOTAL_WRITE_ENABLED=true
+    log "Budget mode forced safe: all tier/v2 enforcement disabled; legacy total write enabled"
+}
+
+log_budget_mode() {
+    log "Budget mode: master=${BUDGET_TIER_MASTER_ENABLED:-false} accounting=${BUDGET_TIER_ACCOUNTING_ENABLED:-false} positive=${BUDGET_TIER_POSITIVE_ENFORCEMENT_ENABLED:-false} zero=${BUDGET_TIER_ZERO_BLOCK_ENABLED:-false} shadow=${BUDGET_TIER_SHADOW_ENABLED:-false} v2_total=${BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED:-false} legacy_write=${BUDGET_LEGACY_TOTAL_WRITE_ENABLED:-true}"
+}
+
 switch_nginx() {
     local color="$1"
     log "Switching nginx upstream to ${color} (${NGINX_UPSTREAM})..."
@@ -170,6 +194,13 @@ main() {
     log "  NGINX_UPSTREAM=${NGINX_UPSTREAM}  DRAIN_TIMEOUT=${DRAIN_TIMEOUT}s"
     log "═══════════════════════════════════════════════════════════"
 
+    command -v jq >/dev/null 2>&1 || die "jq is required for budget capability preflight"
+    if [ "$active" != "none" ] && ! supports_budget_v2 "$active"; then
+        log "Active ${active} does not advertise tier snapshot schema 1 / Redis v2."
+        force_safe_budget_mode
+    fi
+    log_budget_mode
+
     if [ "$rollback" = true ]; then
         # 回滚：直接切回对端（要求对端仍在运行，未被上次 drain 删除）
         [ "$active" = "none" ] && die "No active environment to rollback from"
@@ -199,6 +230,10 @@ main() {
         stop_env "$target" 30 || true
         die "${target} failed health check after $((HEALTH_RETRIES * HEALTH_INTERVAL))s; deploy aborted, nothing switched."
     fi
+    supports_budget_v2 "$target" || {
+        stop_env "$target" 30 || true
+        die "${target} does not advertise tier_snapshot_schema=1 and redis_v2=true"
+    }
 
     # 3. 切换 nginx 到新环境
     switch_nginx "$target"

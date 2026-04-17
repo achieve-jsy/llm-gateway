@@ -54,7 +54,6 @@ import { ref, computed, watch, onMounted, type PropType } from 'vue'
 import { Download } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import http from '@/services/http'
-import { useSettingsStore } from '@/stores/settings'
 import type { Currency } from '@/utils/currency'
 import type { LogRow, TraceData } from '@/types/usage-log'
 import { useLogExport, type ExportColumn } from '@/composables/useLogExport'
@@ -100,8 +99,6 @@ const rows = ref<LogRow[]>([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(props.initialPageSize)
-
-const settingsStore = useSettingsStore()
 
 // ── 合并 tableProps ──
 const mergedTableProps = computed(() => ({

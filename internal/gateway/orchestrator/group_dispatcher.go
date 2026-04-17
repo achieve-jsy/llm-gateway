@@ -8,6 +8,7 @@ import (
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/authz"
 	"github.com/example/llm-gateway/internal/gateway/binding"
+	"github.com/example/llm-gateway/internal/gateway/budget"
 	"github.com/example/llm-gateway/internal/gateway/cache"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
@@ -21,6 +22,7 @@ type GroupAwareDispatcher struct {
 	scheduler    Scheduler
 	nameCache    *cache.GroupNameCache
 	bindingCheck *binding.Client
+	tierResolver budget.TierResolver
 }
 
 func NewGroupAwareDispatcher(sch Scheduler, nc *cache.GroupNameCache) *GroupAwareDispatcher {
@@ -36,6 +38,20 @@ func NewGroupAwareDispatcherWithBinding(sch Scheduler, nc *cache.GroupNameCache,
 		scheduler:    sch,
 		nameCache:    nc,
 		bindingCheck: bindClient,
+	}
+}
+
+func NewGroupAwareDispatcherWithBindingAndTier(
+	sch Scheduler,
+	nc *cache.GroupNameCache,
+	bindClient *binding.Client,
+	tierResolver budget.TierResolver,
+) *GroupAwareDispatcher {
+	return &GroupAwareDispatcher{
+		scheduler:    sch,
+		nameCache:    nc,
+		bindingCheck: bindClient,
+		tierResolver: tierResolver,
 	}
 }
 
@@ -59,6 +75,12 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string, req *c
 	sessionKey := scheduler.ExtractSessionKey(c, req)
 	if req != nil {
 		req.SessionKey = sessionKey
+	}
+
+	if d.tierResolver != nil {
+		if tier, ok := d.tierResolver.Resolve(modelName); ok {
+			budget.SetTierContext(c, tier)
+		}
 	}
 
 	decision, err := d.scheduler.Route(modelName, req)

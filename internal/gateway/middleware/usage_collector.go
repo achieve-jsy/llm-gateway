@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/example/llm-gateway/internal/gateway/budget"
 	gwobs "github.com/example/llm-gateway/internal/gateway/observability"
 )
 
@@ -51,14 +52,17 @@ func UsageCollectorWithRedis(collector *gwobs.Collector, traceWriter *gwobs.Trac
 		// __system_ 前缀为内部保留命名空间，不计入用量统计
 		if isSystemKey(c) {
 			c.Next()
+			_ = budget.ReleaseBillableReservation(c)
 			return
 		}
+		defer func() { _ = budget.ReleaseBillableReservation(c) }()
 
 		c.Next()
 
 		// c.Next() 之后 key_name 才由鉴权中间件写入 context，再次检查一遍
 		// 防止系统探针 key 在鉴权完成后才可见的情况
 		if isSystemKey(c) {
+			_ = budget.ReleaseBillableReservation(c)
 			return
 		}
 
@@ -77,7 +81,18 @@ func UsageCollectorWithRedis(collector *gwobs.Collector, traceWriter *gwobs.Trac
 			event := collector.NewUsageEvent(c)
 			event.Status = c.Writer.Status()
 			event.DurationMs = int64(totalMs)
+
+			// 同步完成预算记账后再投递 call_log，确保 Redis 计数先于审计事件可见。
+			if postHook != nil && event.EstCostUSD > 0 && c.Writer.Status() < 400 {
+				if _, checked := budget.GetAccountingPlan(c); checked {
+					postHook(c, event.EstCostUSD, c.Writer.Status())
+					event.PendingBudgetAccount = budget.GetPendingAccount(c)
+				}
+			}
 			collector.Emit(event)
+			if event.BillableReserved && !collector.HandlesBillableReservation() {
+				_ = budget.ReleaseBillableReservation(c)
+			}
 
 			// ── Redis QPS/TPS 计数器（用于运维看板实时指标） ──
 			if rdb != nil {
@@ -97,18 +112,10 @@ func UsageCollectorWithRedis(collector *gwobs.Collector, traceWriter *gwobs.Trac
 				}
 			}
 
-			// ── v0.9 预算累加 + 告警触发（postHook，事后记账模式） ──
-			// 仅当 Reserve() 做了检查（context 中有 budget_keys）
-			// 且 Redis 检查未因不可用而跳过时触发
-			if postHook != nil && event.EstCostUSD > 0 {
-				_, hasChecked := c.Get(CtxKeyBudgetKeys)
-				_, wasSkipped := c.Get(CtxKeyBudgetSkipped)
-				if hasChecked && !wasSkipped {
-					postHook(c, event.EstCostUSD, c.Writer.Status())
-				}
-			}
 		}
-
+		if collector == nil {
+			_ = budget.ReleaseBillableReservation(c)
+		}
 		// ── Trace 记录（提示词/响应内容）：仅 log_enabled=true 时写入 ──
 		if tw == nil || !logEnabled {
 			return

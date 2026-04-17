@@ -1,17 +1,310 @@
 package repository
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/example/llm-gateway/internal/controlplane/budgetdomain"
 	"github.com/example/llm-gateway/internal/controlplane/model"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
+
+type BatchTierRiskSnapshot struct {
+	ParentLimitUSD       *budgetdomain.Amount
+	SiblingLimitTotalUSD budgetdomain.Amount
+	ParentVersion        string
+	TargetAllocation     *model.BudgetAllocation
+	TargetLimit          *model.BudgetTierLimit
+}
+
+var ErrInvalidBudgetPeriod = errors.New("invalid budget period")
 
 // BudgetRepo 处理预算额度表的读写。
 type BudgetRepo struct {
 	db *gorm.DB
 }
 
+type MyBudgetScopeAllocation struct {
+	Allocation     model.BudgetAllocation
+	Label          string
+	VisibleAmounts bool
+}
+
 func NewBudgetRepo(db *gorm.DB) *BudgetRepo {
 	return &BudgetRepo{db: db}
+}
+
+func (r *BudgetRepo) ResolveMyBudgetChain(ctx context.Context, userID string) ([]MyBudgetScopeAllocation, error) {
+	var identity struct {
+		UserID     string
+		DeptID     string
+		DeptName   string
+		StudioID   string
+		StudioName string
+	}
+	err := r.db.WithContext(ctx).Raw(`
+		SELECT CAST(u.id AS TEXT) AS user_id, COALESCE(d.dept_id, '') AS dept_id,
+		       COALESCE(d.dept_name, '') AS dept_name,
+		       COALESCE(CAST(d.studio_id AS TEXT), CAST(dsm.studio_id AS TEXT), '') AS studio_id,
+		       COALESCE(s.name, '') AS studio_name
+		FROM users u
+		LEFT JOIN departments d ON d.id = u.dept_id
+		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = d.dept_id
+		LEFT JOIN studios s ON CAST(s.id AS TEXT) = COALESCE(CAST(d.studio_id AS TEXT), CAST(dsm.studio_id AS TEXT))
+		WHERE CAST(u.id AS TEXT) = ?
+		LIMIT 1
+	`, userID).Scan(&identity).Error
+	if err != nil {
+		return nil, err
+	}
+	if identity.UserID == "" || identity.DeptID == "" || identity.StudioID == "" {
+		return nil, fmt.Errorf("%w: %s", ErrMyBudgetChainUnavailable, userID)
+	}
+	defs := []struct {
+		scopeType string
+		scopeID   string
+		label     string
+		visible   bool
+	}{
+		{model.BudgetScopeMember, identity.UserID, "我的额度", true},
+		{model.BudgetScopeDeptDaily, identity.DeptID, identity.DeptName + "·成员日常预算", false},
+		{model.BudgetScopeStudio, identity.StudioID, identity.StudioName, false},
+		{model.BudgetScopeCompany, model.BudgetScopeGlobal, "全公司", false},
+	}
+	result := make([]MyBudgetScopeAllocation, 0, len(defs))
+	for _, def := range defs {
+		if def.scopeID == "" {
+			continue
+		}
+		allocation, findErr := r.GetAllocation(def.scopeType, def.scopeID)
+		if findErr != nil {
+			return nil, findErr
+		}
+		if allocation == nil {
+			if def.scopeType == model.BudgetScopeMember {
+				continue
+			}
+			allocation = &model.BudgetAllocation{ScopeType: def.scopeType, ScopeID: def.scopeID, Enabled: false}
+		}
+		result = append(result, MyBudgetScopeAllocation{Allocation: *allocation, Label: def.label, VisibleAmounts: def.visible})
+	}
+	return result, nil
+}
+
+func (r *BudgetRepo) ResolveBudgetChain(ctx context.Context, scopeType, scopeID string) ([]MyBudgetScopeAllocation, error) {
+	return r.resolveBudgetChain(ctx, r.db, scopeType, scopeID, false, false)
+}
+
+func (r *BudgetRepo) ResolveBudgetChainForUpdate(ctx context.Context, tx *gorm.DB, scopeType, scopeID string) ([]MyBudgetScopeAllocation, error) {
+	return r.resolveBudgetChain(ctx, tx, scopeType, scopeID, true, true)
+}
+
+func (r *BudgetRepo) resolveBudgetChain(ctx context.Context, db *gorm.DB, scopeType, scopeID string, lock bool, createMissing bool) ([]MyBudgetScopeAllocation, error) {
+	type definition struct{ scopeType, scopeID, label string }
+	defs := make([]definition, 0, 4)
+	switch scopeType {
+	case model.BudgetScopeCompany:
+		defs = append(defs, definition{model.BudgetScopeCompany, scopeID, "全公司"})
+	case model.BudgetScopeStudio:
+		var studio struct{ ID, Name string }
+		query := db.WithContext(ctx).Table("studios").Select("CAST(id AS TEXT) AS id, name").Where("CAST(id AS TEXT) = ?", scopeID)
+		if lock {
+			query = query.Clauses(clause.Locking{Strength: "UPDATE"})
+		}
+		if err := query.Take(&studio).Error; err != nil {
+			return nil, fmt.Errorf("resolve studio budget chain: %w", err)
+		}
+		defs = append(defs, definition{scopeType, studio.ID, studio.Name}, definition{model.BudgetScopeCompany, model.BudgetScopeGlobal, "全公司"})
+	case model.BudgetScopeDeptDaily, model.BudgetScopeDeptService:
+		var dept struct{ DeptID, DeptName, StudioID, StudioName string }
+		query := db.WithContext(ctx).Table("departments d").
+			Select("d.dept_id, d.dept_name, COALESCE(CAST(d.studio_id AS TEXT), CAST(dsm.studio_id AS TEXT), '') AS studio_id, COALESCE(s.name, '') AS studio_name").
+			Joins("LEFT JOIN dept_studio_map dsm ON dsm.dept_id = d.dept_id").
+			Joins("LEFT JOIN studios s ON CAST(s.id AS TEXT) = COALESCE(CAST(d.studio_id AS TEXT), CAST(dsm.studio_id AS TEXT))").
+			Where("d.dept_id = ?", scopeID)
+		if lock {
+			query = query.Clauses(clause.Locking{Strength: "UPDATE", Table: clause.Table{Name: "d"}})
+		}
+		if err := query.Take(&dept).Error; err != nil {
+			return nil, fmt.Errorf("resolve department budget chain: %w", err)
+		}
+		if dept.StudioID == "" {
+			return nil, fmt.Errorf("department %s has no studio", scopeID)
+		}
+		defs = append(defs, definition{scopeType, dept.DeptID, dept.DeptName}, definition{model.BudgetScopeStudio, dept.StudioID, dept.StudioName}, definition{model.BudgetScopeCompany, model.BudgetScopeGlobal, "全公司"})
+	case model.BudgetScopeMember:
+		var identity struct{ UserID, DeptID, DeptName, StudioID, StudioName string }
+		query := db.WithContext(ctx).Table("users u").
+			Select("CAST(u.id AS TEXT) AS user_id, d.dept_id, d.dept_name, COALESCE(CAST(d.studio_id AS TEXT), CAST(dsm.studio_id AS TEXT), '') AS studio_id, COALESCE(s.name, '') AS studio_name").
+			Joins("JOIN departments d ON d.id = u.dept_id").
+			Joins("LEFT JOIN dept_studio_map dsm ON dsm.dept_id = d.dept_id").
+			Joins("LEFT JOIN studios s ON CAST(s.id AS TEXT) = COALESCE(CAST(d.studio_id AS TEXT), CAST(dsm.studio_id AS TEXT))").
+			Where("CAST(u.id AS TEXT) = ?", scopeID)
+		if lock {
+			query = query.Clauses(clause.Locking{Strength: "UPDATE", Table: clause.Table{Name: "u"}})
+		}
+		if err := query.Take(&identity).Error; err != nil {
+			return nil, fmt.Errorf("resolve member budget chain: %w", err)
+		}
+		if identity.DeptID == "" || identity.StudioID == "" {
+			return nil, fmt.Errorf("incomplete member budget chain: %s", scopeID)
+		}
+		defs = append(defs,
+			definition{scopeType, identity.UserID, "我的额度"},
+			definition{model.BudgetScopeDeptDaily, identity.DeptID, identity.DeptName},
+			definition{model.BudgetScopeStudio, identity.StudioID, identity.StudioName},
+			definition{model.BudgetScopeCompany, model.BudgetScopeGlobal, "全公司"})
+	default:
+		return nil, fmt.Errorf("unsupported budget scope: %s", scopeType)
+	}
+	locked := make(map[string]model.BudgetAllocation, len(defs))
+	for index := len(defs) - 1; index >= 0; index-- {
+		def := defs[index]
+		query := db.WithContext(ctx).Where("scope_type = ? AND scope_id = ? AND enabled = true", def.scopeType, def.scopeID)
+		if lock {
+			query = query.Clauses(clause.Locking{Strength: "UPDATE"})
+		}
+		var allocation model.BudgetAllocation
+		if err := query.First(&allocation).Error; err != nil {
+			if createMissing && errors.Is(err, gorm.ErrRecordNotFound) {
+				now := time.Now().UTC()
+				allocation = model.BudgetAllocation{
+					ID: uuid.New(), ScopeType: def.scopeType, ScopeID: def.scopeID,
+					AmountUSD: 0, DailyAmountUSD: -1, WeeklyAmountUSD: -1,
+					Period: "monthly", Enabled: true, CreatedAt: now, UpdatedAt: now,
+				}
+				if createErr := db.WithContext(ctx).Clauses(clause.OnConflict{
+					Columns:   []clause.Column{{Name: "scope_type"}, {Name: "scope_id"}},
+					DoNothing: true,
+				}).Create(&allocation).Error; createErr != nil {
+					return nil, fmt.Errorf("create budget allocation %s/%s: %w", def.scopeType, def.scopeID, createErr)
+				}
+				lockQuery := db.WithContext(ctx).Where("scope_type = ? AND scope_id = ? AND enabled = true", def.scopeType, def.scopeID)
+				if lock {
+					lockQuery = lockQuery.Clauses(clause.Locking{Strength: "UPDATE"})
+				}
+				if lockErr := lockQuery.First(&allocation).Error; lockErr != nil {
+					return nil, fmt.Errorf("resolve budget allocation %s/%s: %w", def.scopeType, def.scopeID, lockErr)
+				}
+				locked[def.scopeType+":"+def.scopeID] = allocation
+				continue
+			}
+			return nil, fmt.Errorf("resolve budget allocation %s/%s: %w", def.scopeType, def.scopeID, err)
+		}
+		locked[def.scopeType+":"+def.scopeID] = allocation
+	}
+	result := make([]MyBudgetScopeAllocation, 0, len(defs))
+	for _, def := range defs {
+		result = append(result, MyBudgetScopeAllocation{Allocation: locked[def.scopeType+":"+def.scopeID], Label: def.label, VisibleAmounts: def.scopeType == scopeType})
+	}
+	return result, nil
+}
+
+func (r *BudgetRepo) ResolveMyBudgetChainForUpdate(ctx context.Context, tx *gorm.DB, userID string) ([]MyBudgetScopeAllocation, error) {
+	var lockedUser struct{ ID string }
+	if err := tx.WithContext(ctx).Table("users").Clauses(clause.Locking{Strength: "UPDATE"}).
+		Select("CAST(id AS TEXT) AS id").Where("CAST(id AS TEXT) = ?", userID).Take(&lockedUser).Error; err != nil {
+		return nil, fmt.Errorf("lock budget chain user %s: %w", userID, err)
+	}
+	var identity struct {
+		UserID, DeptID, DeptName, StudioID, StudioName string
+	}
+	result := tx.WithContext(ctx).Raw(`
+		SELECT CAST(u.id AS TEXT) AS user_id, COALESCE(d.dept_id, '') AS dept_id,
+		       COALESCE(d.dept_name, '') AS dept_name,
+		       COALESCE(CAST(d.studio_id AS TEXT), CAST(dsm.studio_id AS TEXT), '') AS studio_id,
+		       COALESCE(s.name, '') AS studio_name
+		FROM users u
+		LEFT JOIN departments d ON d.id = u.dept_id
+		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = d.dept_id
+		LEFT JOIN studios s ON CAST(s.id AS TEXT) = COALESCE(CAST(d.studio_id AS TEXT), CAST(dsm.studio_id AS TEXT))
+		WHERE CAST(u.id AS TEXT) = ? LIMIT 1`, userID).Scan(&identity)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if identity.UserID == "" {
+		return nil, fmt.Errorf("budget chain identity not found: %s", userID)
+	}
+	if identity.DeptID == "" || identity.StudioID == "" {
+		return nil, fmt.Errorf("incomplete budget chain identity for %s", userID)
+	}
+	for _, lock := range []struct{ table, column, value string }{
+		{"departments", "dept_id", identity.DeptID}, {"studios", "id", identity.StudioID},
+	} {
+		var row struct{ Value string }
+		if err := tx.WithContext(ctx).Table(lock.table).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Select("CAST("+lock.column+" AS TEXT) AS value").Where("CAST("+lock.column+" AS TEXT) = ?", lock.value).Take(&row).Error; err != nil {
+			return nil, fmt.Errorf("lock budget chain organization %s/%s: %w", lock.table, lock.value, err)
+		}
+	}
+	defs := []struct{ scopeType, scopeID, label string }{
+		{model.BudgetScopeMember, identity.UserID, "我的额度"},
+		{model.BudgetScopeDeptDaily, identity.DeptID, identity.DeptName + "·成员日常预算"},
+		{model.BudgetScopeStudio, identity.StudioID, identity.StudioName},
+		{model.BudgetScopeCompany, model.BudgetScopeGlobal, "全公司"},
+	}
+	locked := make(map[string]model.BudgetAllocation, len(defs))
+	for index := len(defs) - 1; index >= 0; index-- {
+		def := defs[index]
+		if def.scopeID == "" {
+			return nil, fmt.Errorf("incomplete budget chain for %s at %s", userID, def.scopeType)
+		}
+		var allocation model.BudgetAllocation
+		err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("scope_type = ? AND scope_id = ? AND enabled = true", def.scopeType, def.scopeID).First(&allocation).Error
+		if err != nil {
+			return nil, fmt.Errorf("lock budget chain %s/%s: %w", def.scopeType, def.scopeID, err)
+		}
+		locked[def.scopeType+":"+def.scopeID] = allocation
+	}
+	chain := make([]MyBudgetScopeAllocation, 0, len(defs))
+	for _, def := range defs {
+		chain = append(chain, MyBudgetScopeAllocation{Allocation: locked[def.scopeType+":"+def.scopeID], Label: def.label, VisibleAmounts: def.scopeType == model.BudgetScopeMember})
+	}
+	return chain, nil
+}
+
+type BudgetAffectedGroup struct {
+	ID   string
+	Name string
+}
+
+func (r *BudgetRepo) ResolveBudgetImpact(
+	ctx context.Context,
+	scopeType, scopeID string,
+	modelTierID *string,
+	limit int,
+) (int, []BudgetAffectedGroup, error) {
+	memberQuery := r.db.WithContext(ctx).Table("users u")
+	switch scopeType {
+	case model.BudgetScopeMember:
+		memberQuery = memberQuery.Where("CAST(u.id AS TEXT) = ?", scopeID)
+	case model.BudgetScopeDeptDaily, model.BudgetScopeDeptService:
+		memberQuery = memberQuery.Joins("JOIN departments d ON d.id = u.dept_id").Where("d.dept_id = ?", scopeID)
+	case model.BudgetScopeStudio:
+		memberQuery = memberQuery.Joins("JOIN departments d ON d.id = u.dept_id").
+			Joins("LEFT JOIN dept_studio_map dsm ON dsm.dept_id = d.dept_id").
+			Where("COALESCE(CAST(d.studio_id AS TEXT), CAST(dsm.studio_id AS TEXT)) = ?", scopeID)
+	}
+	var members int64
+	if err := memberQuery.Count(&members).Error; err != nil {
+		return 0, nil, err
+	}
+	groupQuery := r.db.WithContext(ctx).Table("model_groups").Select("CAST(id AS TEXT) AS id, name").
+		Where("deleted_at IS NULL")
+	if modelTierID != nil && *modelTierID != "" {
+		groupQuery = groupQuery.Where("CAST(budget_tier_id AS TEXT) = ?", *modelTierID)
+	}
+	var groups []BudgetAffectedGroup
+	if err := groupQuery.Order("name").Limit(limit).Scan(&groups).Error; err != nil {
+		return 0, nil, err
+	}
+	return int(members), groups, nil
 }
 
 // GetAllocation 查询单层预算配置（按 scope_type + scope_id）。
@@ -28,6 +321,345 @@ func (r *BudgetRepo) GetAllocation(scopeType, scopeID string) (*model.BudgetAllo
 	return &a, nil
 }
 
+func (r *BudgetRepo) GetAllocationByID(ctx context.Context, id uuid.UUID) (*model.BudgetAllocation, error) {
+	var allocation model.BudgetAllocation
+	err := r.db.WithContext(ctx).First(&allocation, "id = ?", id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &allocation, nil
+}
+
+func (r *BudgetRepo) GetAllocationByIDForUpdate(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*model.BudgetAllocation, error) {
+	var allocation model.BudgetAllocation
+	err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&allocation, "id = ?", id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &allocation, nil
+}
+
+func (r *BudgetRepo) GetAllocationByIDInTx(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*model.BudgetAllocation, error) {
+	var allocation model.BudgetAllocation
+	if err := tx.WithContext(ctx).First(&allocation, "id = ?", id).Error; err != nil {
+		return nil, err
+	}
+	return &allocation, nil
+}
+
+func (r *BudgetRepo) GetAllocationInTx(ctx context.Context, tx *gorm.DB, scopeType, scopeID string) (*model.BudgetAllocation, error) {
+	var allocation model.BudgetAllocation
+	err := tx.WithContext(ctx).
+		Where("scope_type = ? AND scope_id = ? AND enabled = true", scopeType, scopeID).First(&allocation).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &allocation, nil
+}
+
+func (r *BudgetRepo) GetAllocationForUpdate(ctx context.Context, tx *gorm.DB, scopeType, scopeID string) (*model.BudgetAllocation, error) {
+	var allocation model.BudgetAllocation
+	err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("scope_type = ? AND scope_id = ? AND enabled = true", scopeType, scopeID).First(&allocation).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &allocation, nil
+}
+
+func (r *BudgetRepo) CompareAndSwapAllocationLimits(
+	ctx context.Context,
+	before model.BudgetAllocation,
+	monthly, daily, weekly float64,
+	actorID uuid.UUID,
+) (bool, error) {
+	result := r.db.WithContext(ctx).Model(&model.BudgetAllocation{}).
+		Where("id = ? AND amount_usd = ? AND daily_amount_usd = ? AND weekly_amount_usd = ? AND enabled = ?",
+			before.ID, before.AmountUSD, before.DailyAmountUSD, before.WeeklyAmountUSD, before.Enabled).
+		Updates(map[string]any{
+			"amount_usd": monthly, "daily_amount_usd": daily, "weekly_amount_usd": weekly,
+			"updated_by": actorID, "updated_at": time.Now().UTC(),
+		})
+	return result.RowsAffected == 1, result.Error
+}
+
+func (r *BudgetRepo) GetBatchTierRiskSnapshot(
+	ctx context.Context,
+	allocation model.BudgetAllocation,
+	tierID uuid.UUID,
+	periodType budgetdomain.PeriodType,
+) (BatchTierRiskSnapshot, error) {
+	return r.getBatchTierRiskSnapshot(ctx, r.db, allocation, tierID, periodType, false)
+}
+
+func (r *BudgetRepo) GetBatchTierRiskSnapshotInTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	allocation model.BudgetAllocation,
+	tierID uuid.UUID,
+	periodType budgetdomain.PeriodType,
+) (BatchTierRiskSnapshot, error) {
+	return r.getBatchTierRiskSnapshot(ctx, tx, allocation, tierID, periodType, true)
+}
+
+func (r *BudgetRepo) getBatchTierRiskSnapshot(
+	ctx context.Context,
+	db *gorm.DB,
+	allocation model.BudgetAllocation,
+	tierID uuid.UUID,
+	periodType budgetdomain.PeriodType,
+	lock bool,
+) (BatchTierRiskSnapshot, error) {
+	zero, _ := budgetdomain.ParseAmount("0")
+	result := BatchTierRiskSnapshot{SiblingLimitTotalUSD: zero}
+	parentScopeType, parentScopeID := "", ""
+	childScopeIDs := []string{}
+	switch allocation.ScopeType {
+	case model.BudgetScopeStudio:
+		parentScopeType, parentScopeID = model.BudgetScopeCompany, model.BudgetScopeGlobal
+		var rows []model.BudgetAllocation
+		query := db.WithContext(ctx).Where("scope_type = ?", model.BudgetScopeStudio).Order("id")
+		if err := query.Find(&rows).Error; err != nil {
+			return result, err
+		}
+		for _, row := range rows {
+			childScopeIDs = append(childScopeIDs, row.ScopeID)
+		}
+	case model.BudgetScopeDeptDaily, model.BudgetScopeDeptService:
+		var studioID string
+		if err := db.WithContext(ctx).Raw(`
+			SELECT COALESCE(dsm.studio_id::text, d.studio_id::text, '')
+			FROM departments d
+			LEFT JOIN dept_studio_map dsm ON dsm.dept_id = d.dept_id
+			WHERE d.dept_id::text = ?
+			LIMIT 1
+		`, allocation.ScopeID).Scan(&studioID).Error; err != nil {
+			return result, err
+		}
+		if studioID == "" {
+			return result, nil
+		}
+		parentScopeType, parentScopeID = model.BudgetScopeStudio, studioID
+		ids, err := listDeptIDsByStudioIDDB(db.WithContext(ctx), studioID)
+		if err != nil {
+			return result, err
+		}
+		childScopeIDs = ids
+	case model.BudgetScopeMember:
+		var deptID string
+		if err := db.WithContext(ctx).Raw(`
+			SELECT COALESCE(d.dept_id::text, '')
+			FROM users u
+			JOIN departments d ON d.id = u.dept_id
+			WHERE u.id::text = ?
+			LIMIT 1
+		`, allocation.ScopeID).Scan(&deptID).Error; err != nil {
+			return result, err
+		}
+		if deptID == "" {
+			return result, nil
+		}
+		parentScopeType, parentScopeID = model.BudgetScopeDeptDaily, deptID
+		ids, err := listMemberIDsByDeptIDDB(db.WithContext(ctx), deptID)
+		if err != nil {
+			return result, err
+		}
+		childScopeIDs = ids
+	default:
+		return r.loadTargetTierState(ctx, db, allocation, tierID, periodType, lock, result)
+	}
+	var parent model.BudgetAllocation
+	parentQuery := db.WithContext(ctx).Where("scope_type = ? AND scope_id = ? AND enabled = true", parentScopeType, parentScopeID)
+	if lock {
+		parentQuery = parentQuery.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+	err := parentQuery.First(&parent).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return r.loadTargetTierState(ctx, db, allocation, tierID, periodType, lock, result)
+	}
+	if err != nil {
+		return result, err
+	}
+
+	var childAllocations []model.BudgetAllocation
+	childQuery := db.WithContext(ctx).
+		Where("scope_type = ? AND (scope_id IN ? OR id = ?) AND enabled = true", allocation.ScopeType, childScopeIDs, allocation.ID).
+		Order("id")
+	if lock {
+		childQuery = childQuery.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+	if err := childQuery.Find(&childAllocations).Error; err != nil {
+		return result, err
+	}
+	for index := range childAllocations {
+		if childAllocations[index].ID == allocation.ID {
+			target := childAllocations[index]
+			result.TargetAllocation = &target
+			break
+		}
+	}
+	if result.TargetAllocation == nil {
+		target := allocation
+		result.TargetAllocation = &target
+	}
+
+	allocationIDs := make([]uuid.UUID, 0, len(childAllocations)+1)
+	allocationIDs = append(allocationIDs, parent.ID)
+	for _, child := range childAllocations {
+		allocationIDs = append(allocationIDs, child.ID)
+	}
+	var limits []model.BudgetTierLimit
+	limitQuery := db.WithContext(ctx).
+		Where("budget_allocation_id IN ? AND model_tier_id = ? AND period_type = ?", allocationIDs, tierID, periodType).
+		Order("id")
+	if lock {
+		limitQuery = limitQuery.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+	if err := limitQuery.Find(&limits).Error; err != nil {
+		return result, err
+	}
+
+	result.ParentVersion = fmt.Sprintf("%s:%s:%f:%f:%f:%t:limit:missing",
+		parent.ID, parent.UpdatedAt.UTC().Format(time.RFC3339Nano), parent.AmountUSD,
+		parent.DailyAmountUSD, parent.WeeklyAmountUSD, parent.Enabled)
+	childByID := make(map[uuid.UUID]model.BudgetAllocation, len(childAllocations))
+	for _, child := range childAllocations {
+		childByID[child.ID] = child
+	}
+	total := result.SiblingLimitTotalUSD.Decimal
+	var siblingVersion strings.Builder
+	for index := range limits {
+		limit := &limits[index]
+		if limit.BudgetAllocationID == parent.ID {
+			if limit.Enabled {
+				parentAmount := limit.LimitUSD
+				result.ParentLimitUSD = &parentAmount
+			}
+			result.ParentVersion = fmt.Sprintf("%s:%s:%f:%f:%f:%t:%s:%s:%t",
+				parent.ID, parent.UpdatedAt.UTC().Format(time.RFC3339Nano), parent.AmountUSD,
+				parent.DailyAmountUSD, parent.WeeklyAmountUSD, parent.Enabled,
+				limit.UpdatedAt.UTC().Format(time.RFC3339Nano), limit.LimitUSD.String(), limit.Enabled)
+			continue
+		}
+		if limit.BudgetAllocationID == allocation.ID {
+			target := *limit
+			result.TargetLimit = &target
+		}
+		if _, isChild := childByID[limit.BudgetAllocationID]; !isChild {
+			continue
+		}
+		if limit.Enabled {
+			total = total.Add(limit.LimitUSD.Decimal)
+		}
+		fmt.Fprintf(&siblingVersion, ":%s:%s:%s:%t", limit.ID, limit.UpdatedAt.UTC().Format(time.RFC3339Nano), limit.LimitUSD.String(), limit.Enabled)
+	}
+	result.SiblingLimitTotalUSD, _ = budgetdomain.ParseAmount(total.String())
+	result.ParentVersion += ":siblings" + siblingVersion.String()
+	return result, nil
+}
+
+func (r *BudgetRepo) loadTargetTierState(
+	ctx context.Context,
+	db *gorm.DB,
+	allocation model.BudgetAllocation,
+	tierID uuid.UUID,
+	periodType budgetdomain.PeriodType,
+	lock bool,
+	result BatchTierRiskSnapshot,
+) (BatchTierRiskSnapshot, error) {
+	allocationQuery := db.WithContext(ctx).Where("id = ?", allocation.ID)
+	if lock {
+		allocationQuery = allocationQuery.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+	var target model.BudgetAllocation
+	if err := allocationQuery.First(&target).Error; err != nil {
+		return result, err
+	}
+	result.TargetAllocation = &target
+	limitQuery := db.WithContext(ctx).
+		Where("budget_allocation_id = ? AND model_tier_id = ? AND period_type = ?", target.ID, tierID, periodType).
+		Order("id")
+	if lock {
+		limitQuery = limitQuery.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+	var limits []model.BudgetTierLimit
+	if err := limitQuery.Find(&limits).Error; err != nil {
+		return result, err
+	}
+	if len(limits) > 0 {
+		limit := limits[0]
+		result.TargetLimit = &limit
+	}
+	return result, nil
+}
+
+func listDeptIDsByStudioIDDB(db *gorm.DB, studioID string) ([]string, error) {
+	var rows []struct {
+		DeptID string `gorm:"column:dept_id"`
+	}
+	err := db.Raw(`
+		SELECT DISTINCT d.dept_id
+		FROM departments d
+		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = d.dept_id
+		WHERE dsm.studio_id = ?::uuid OR d.studio_id = ?::uuid
+	`, studioID, studioID).Scan(&rows).Error
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if row.DeptID != "" {
+			ids = append(ids, row.DeptID)
+		}
+	}
+	return ids, err
+}
+
+func listMemberIDsByDeptIDDB(db *gorm.DB, deptID string) ([]string, error) {
+	var rows []struct {
+		ID string `gorm:"column:id"`
+	}
+	err := db.Raw(`
+		SELECT u.id::text AS id
+		FROM users u
+		JOIN departments d ON d.id = u.dept_id
+		WHERE d.dept_id = ?
+	`, deptID).Scan(&rows).Error
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if row.ID != "" {
+			ids = append(ids, row.ID)
+		}
+	}
+	return ids, err
+}
+
+func (r *BudgetRepo) ApplyTotalScheduledLimit(ctx context.Context, tx *gorm.DB, allocationID uuid.UUID, period budgetdomain.PeriodType, target budgetdomain.Amount) error {
+	value, _ := target.Decimal.Float64()
+	column := ""
+	switch period {
+	case budgetdomain.PeriodDaily:
+		column = "daily_amount_usd"
+	case budgetdomain.PeriodWeekly:
+		column = "weekly_amount_usd"
+	case budgetdomain.PeriodMonthly:
+		column = "amount_usd"
+	default:
+		return ErrInvalidBudgetPeriod
+	}
+	result := tx.WithContext(ctx).Model(&model.BudgetAllocation{}).Where("id = ?", allocationID).Update(column, value)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
 // UpsertAllocation 创建或更新预算配置（按 scope 唯一键）。
 func (r *BudgetRepo) UpsertAllocation(a *model.BudgetAllocation) error {
 	return r.db.Where(model.BudgetAllocation{
@@ -42,6 +674,23 @@ func (r *BudgetRepo) UpsertAllocation(a *model.BudgetAllocation) error {
 		CreatedBy:       a.CreatedBy,
 		UpdatedBy:       a.UpdatedBy,
 	}).FirstOrCreate(a).Error
+}
+
+func (r *BudgetRepo) CreatePersonalAllocationWithTierLimit(ctx context.Context, allocation *model.BudgetAllocation, params UpsertTierLimitParams) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return r.CreatePersonalAllocationWithTierLimitInTx(ctx, tx, allocation, params)
+	})
+}
+
+func (r *BudgetRepo) CreatePersonalAllocationWithTierLimitInTx(ctx context.Context, tx *gorm.DB, allocation *model.BudgetAllocation, params UpsertTierLimitParams) error {
+	if err := tx.WithContext(ctx).Create(allocation).Error; err != nil {
+		if isUniqueConstraintError(err) {
+			return ErrUniqueConflict
+		}
+		return err
+	}
+	params.BudgetAllocationID = allocation.ID
+	return UpsertTierLimitInTx(ctx, tx, params)
 }
 
 // UpdateAmount 更新预算额度（改额时调用，同时清理告警去重记录由上层完成）。
@@ -160,6 +809,26 @@ func (r *BudgetRepo) MemberInDeptIDs(memberID string, deptIDs []string) (bool, e
 		return false, err
 	}
 	return count > 0, nil
+}
+
+func (r *BudgetRepo) ResolveMemberDeptID(memberID string) (string, error) {
+	if memberID == "" {
+		return "", nil
+	}
+	var row struct {
+		DeptID string `gorm:"column:dept_id"`
+	}
+	err := r.db.Raw(`
+		SELECT COALESCE(d.dept_id, '') AS dept_id
+		FROM users u
+		JOIN departments d ON d.id = u.dept_id
+		WHERE u.id::text = ?
+		LIMIT 1
+	`, memberID).Scan(&row).Error
+	if err != nil {
+		return "", err
+	}
+	return row.DeptID, nil
 }
 
 // DeleteAllocation 删除指定成员的单独配额，还原为共享部门预算池。

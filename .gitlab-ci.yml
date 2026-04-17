@@ -1,4 +1,5 @@
 stages:
+  - test
   - build
   - migrate
   - deploy
@@ -62,10 +63,90 @@ workflow:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# TEST — 所有构建和迁移的前置门禁
+# ═══════════════════════════════════════════════════════════════════════════════
+test-go:
+  stage: test
+  image: golang:1.26
+  tags: [docker]
+  script:
+    - go test ./tests/... -count=1 -race -coverprofile=coverage.out
+    - go tool cover -func=coverage.out
+    - go build ./...
+    - go vet ./...
+  artifacts:
+    when: always
+    paths: [coverage.out]
+    expire_in: 7 days
+
+test-web:
+  stage: test
+  image: node:22
+  tags: [docker]
+  cache:
+    key:
+      files: [web/package-lock.json]
+    paths: [.npm-cache/]
+  variables:
+    npm_config_cache: "$CI_PROJECT_DIR/.npm-cache"
+  script:
+    - cd web
+    - npm ci --prefer-offline
+    - npm exec vue-tsc -- --noEmit
+    - npm run build
+
+atlas-validate:
+  stage: test
+  image:
+    name: arigaio/atlas:latest
+    entrypoint: [""]
+  tags: [docker]
+  services:
+    - name: postgres:16
+      alias: postgres
+  variables:
+    POSTGRES_PASSWORD: atlas
+    POSTGRES_DB: atlas_validate
+    DATABASE_URL: "postgres://postgres:atlas@postgres:5432/atlas_validate?sslmode=disable"
+  script:
+    - atlas migrate validate --dir file://atlas-migrations
+    - |
+      for attempt in $(seq 1 30); do
+        atlas migrate apply --dir file://atlas-migrations --url "$DATABASE_URL" && break
+        [ "$attempt" -lt 30 ] || exit 1
+        sleep 1
+      done
+    - atlas migrate status --dir file://atlas-migrations --url "$DATABASE_URL"
+
+test-integration-tier-budget:
+  stage: test
+  image: golang:1.26
+  tags: [docker]
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false"]
+  variables:
+    DOCKER_HOST: "tcp://docker:2375"
+    DOCKER_TLS_CERTDIR: ""
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends ca-certificates curl docker.io
+    - curl -sSfL https://release.ariga.io/atlas/install.sh | sh
+  script:
+    - docker info
+    - go test ./tests/integration -tags=integration -run ModelTierBudget -count=1 -v -timeout=20m
+  artifacts:
+    when: always
+    paths:
+      - specs/model-tier-budget/test/
+    expire_in: 7 days
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # BUILD — 测试
 # ═══════════════════════════════════════════════════════════════════════════════
 build-gateway-test:
   stage: build
+  needs: [test-go, test-web, atlas-validate, test-integration-tier-budget]
   image: docker:24
   tags: [docker]
   variables:
@@ -96,6 +177,7 @@ build-gateway-test:
 
 build-control-plane-test:
   stage: build
+  needs: [test-go, test-web, atlas-validate, test-integration-tier-budget]
   image: docker:24
   tags: [docker]
   variables:
@@ -123,6 +205,7 @@ build-control-plane-test:
 
 build-web-test:
   stage: build
+  needs: [test-go, test-web, atlas-validate, test-integration-tier-budget]
   image: node:20-alpine
   tags: [docker]
   retry:
@@ -159,6 +242,7 @@ build-web-test:
 # ═══════════════════════════════════════════════════════════════════════════════
 build-gateway-prod:
   stage: build
+  needs: [test-go, test-web, atlas-validate, test-integration-tier-budget]
   image: docker:24
   tags: [docker]
   variables:
@@ -186,6 +270,7 @@ build-gateway-prod:
 
 build-control-plane-prod:
   stage: build
+  needs: [test-go, test-web, atlas-validate, test-integration-tier-budget]
   image: docker:24
   tags: [docker]
   variables:
@@ -210,6 +295,7 @@ build-control-plane-prod:
 
 build-web-prod:
   stage: build
+  needs: [test-go, test-web, atlas-validate, test-integration-tier-budget]
   image: node:20-alpine
   tags: [docker]
   retry:
@@ -275,7 +361,7 @@ migrate-prod:
 
 migrate-test:
   stage: migrate
-  needs: []
+  needs: [test-go, test-web, atlas-validate, test-integration-tier-budget]
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   cache:
@@ -352,6 +438,11 @@ deploy-app-test:
         export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
         export OAUTH_REDIRECT_URI='http://192.0.2.10:9080/auth/callback'
         export FRONTEND_URL='http://192.0.2.10:9080'
+        # 非密钥 canonical 开关：测试环境默认进入安全影子记账，不启用任何阻断。
+        export BUDGET_TIER_MASTER_ENABLED=true BUDGET_TIER_ACCOUNTING_ENABLED=true
+        export BUDGET_TIER_POSITIVE_ENFORCEMENT_ENABLED=false BUDGET_TIER_ZERO_BLOCK_ENABLED=false
+        export BUDGET_TIER_SHADOW_ENABLED=true BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED=false
+        export BUDGET_LEGACY_TOTAL_WRITE_ENABLED=true
         bash deploy-blue-green.sh
       "
   environment:
@@ -389,6 +480,10 @@ rollback-test:
         export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
         export OAUTH_REDIRECT_URI='http://192.0.2.10:9080/auth/callback'
         export FRONTEND_URL='http://192.0.2.10:9080'
+        export BUDGET_TIER_MASTER_ENABLED=true BUDGET_TIER_ACCOUNTING_ENABLED=true
+        export BUDGET_TIER_POSITIVE_ENFORCEMENT_ENABLED=false BUDGET_TIER_ZERO_BLOCK_ENABLED=false
+        export BUDGET_TIER_SHADOW_ENABLED=true BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED=false
+        export BUDGET_LEGACY_TOTAL_WRITE_ENABLED=true
         bash deploy-blue-green.sh --rollback
       "
   environment:
@@ -481,6 +576,10 @@ deploy-app-test-fast:
         export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
         export OAUTH_REDIRECT_URI='http://192.0.2.10:9080/auth/callback'
         export FRONTEND_URL='http://192.0.2.10:9080'
+        export BUDGET_TIER_MASTER_ENABLED=true BUDGET_TIER_ACCOUNTING_ENABLED=true
+        export BUDGET_TIER_POSITIVE_ENFORCEMENT_ENABLED=false BUDGET_TIER_ZERO_BLOCK_ENABLED=false
+        export BUDGET_TIER_SHADOW_ENABLED=true BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED=false
+        export BUDGET_LEGACY_TOTAL_WRITE_ENABLED=true
         docker compose -f docker-compose.${TARGET_COLOR}.yml -p llm-${TARGET_COLOR} up -d --remove-orphans
       "
 
@@ -522,6 +621,10 @@ deploy-app-test-fast:
         export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
         export OAUTH_REDIRECT_URI='http://192.0.2.10:9080/auth/callback'
         export FRONTEND_URL='http://192.0.2.10:9080'
+        export BUDGET_TIER_MASTER_ENABLED=true BUDGET_TIER_ACCOUNTING_ENABLED=true
+        export BUDGET_TIER_POSITIVE_ENFORCEMENT_ENABLED=false BUDGET_TIER_ZERO_BLOCK_ENABLED=false
+        export BUDGET_TIER_SHADOW_ENABLED=true BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED=false
+        export BUDGET_LEGACY_TOTAL_WRITE_ENABLED=true
         # 直接执行 nginx 切换 + 停旧（跳过启动，因为容器已启动）
         bash deploy-blue-green.sh --skip-start
       "
@@ -580,6 +683,14 @@ deploy-prod:
         export FRONTEND_URL='${PROD_FRONTEND_URL:-https://aimeter.xk-devops.com}'
         export INTERNAL_AUTH_TOKEN='${PROD_INTERNAL_AUTH_TOKEN}'
         export OAUTH_ISSUER_URL='${PROD_OAUTH_ISSUER_URL:-https://oauth.example.net/}'
+        # 生产非密钥开关由受控 CI 变量注入；未配置时 compose 使用安全关闭默认值。
+        export BUDGET_TIER_MASTER_ENABLED='${PROD_BUDGET_TIER_MASTER_ENABLED:-false}'
+        export BUDGET_TIER_ACCOUNTING_ENABLED='${PROD_BUDGET_TIER_ACCOUNTING_ENABLED:-false}'
+        export BUDGET_TIER_POSITIVE_ENFORCEMENT_ENABLED='${PROD_BUDGET_TIER_POSITIVE_ENFORCEMENT_ENABLED:-false}'
+        export BUDGET_TIER_ZERO_BLOCK_ENABLED='${PROD_BUDGET_TIER_ZERO_BLOCK_ENABLED:-false}'
+        export BUDGET_TIER_SHADOW_ENABLED='${PROD_BUDGET_TIER_SHADOW_ENABLED:-false}'
+        export BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED='${PROD_BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED:-false}'
+        export BUDGET_LEGACY_TOTAL_WRITE_ENABLED='${PROD_BUDGET_LEGACY_TOTAL_WRITE_ENABLED:-true}'
         bash deploy-blue-green.sh
       "
   environment:

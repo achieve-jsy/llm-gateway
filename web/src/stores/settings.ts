@@ -11,6 +11,8 @@ function defaultSystemSettings(): SystemSettings {
   return {
     site_name: 'LLM Gateway', site_logo: '', site_subtitle: '', api_base_url: '',
     rate_limit_per_minute: 60, max_concurrency_per_key: 10,
+    default_user_rpm: 60, default_user_max_concurrency: 10,
+    default_service_key_rpm: 120, default_service_key_max_concurrency: 20,
     oidc_issuer_url: '', oidc_client_id: '', oidc_client_secret: '',
     oidc_redirect_url: '', oidc_scopes: 'openid profile email', oidc_enabled: false,
     webhook_enabled: false, webhook_url: '', webhook_secret: '', webhook_events: 'health_check_failed',

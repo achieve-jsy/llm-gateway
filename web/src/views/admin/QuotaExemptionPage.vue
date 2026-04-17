@@ -240,7 +240,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, Search } from '@element-plus/icons-vue'
 import {
@@ -393,7 +393,7 @@ async function loadExemptions() {
   try {
     const res = await listQuotaExemptions({
       page: currentPage.value,
-      page_size: pageSize.value,
+      pageSize: pageSize.value,
       keyword: searchKeyword.value || undefined,
       subject_type: filterType.value || undefined,
       status: filterStatus.value || undefined

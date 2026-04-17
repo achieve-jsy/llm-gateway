@@ -2,14 +2,19 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
+	"github.com/example/llm-gateway/internal/budgetperiod"
+	"github.com/example/llm-gateway/internal/controlplane/budgetdomain"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -23,19 +28,35 @@ type budgetAllocReader interface {
 
 // alertRecordStore 告警去重表操作接口。
 type alertRecordStore interface {
-	ExistsForPeriod(scopeType, scopeID, period string, threshold int) bool
+	ExistsForPeriod(context.Context, repository.AlertDimension) (bool, error)
 	Create(a *model.BudgetAlertRecord) error
 	FindOwnersByBudgetScope(scopeType, scopeID string) ([]repository.AlertOwnerRow, error)
 }
 
 // BudgetAlertService 处理告警触发（阈值+去重）与通知发送。
 type BudgetAlertService struct {
-	budgetRepo       budgetAllocReader
-	alertRepo        alertRecordStore
-	notifier         Notifier
-	rdb              *redis.Client
+	budgetRepo budgetAllocReader
+	alertRepo  alertRecordStore
+	notifier   Notifier
+	rdb        *redis.Client
+	tierRepo   interface {
+		ListTierLimits(context.Context, uuid.UUID) ([]model.BudgetTierLimit, error)
+		ListActiveOverrides(context.Context, uuid.UUID, time.Time) ([]model.BudgetTemporaryOverride, error)
+	}
 	// webhookNotifier 可选：webhook 发送（nil = 仅站内+邮件）
 	webhookNotifier WebhookNotifier
+}
+
+type notificationWriter interface {
+	Create(*model.Notification) error
+}
+
+type notificationWriterAdapter struct {
+	writer notificationWriter
+}
+
+func (a notificationWriterAdapter) Notify(_ context.Context, notification *model.Notification) error {
+	return a.writer.Create(notification)
 }
 
 // SetRedis 注入 Redis 客户端，用于读取实时已用量。
@@ -43,9 +64,24 @@ func (s *BudgetAlertService) SetRedis(rdb *redis.Client) {
 	s.rdb = rdb
 }
 
+func (s *BudgetAlertService) SetBudgetTierRepo(repo interface {
+	ListTierLimits(context.Context, uuid.UUID) ([]model.BudgetTierLimit, error)
+	ListActiveOverrides(context.Context, uuid.UUID, time.Time) ([]model.BudgetTemporaryOverride, error)
+}) {
+	s.tierRepo = repo
+}
+
 // SetNotifier 注入通用 Notifier（站内信+邮件等）。
 func (s *BudgetAlertService) SetNotifier(n Notifier) {
 	s.notifier = n
+}
+
+func (s *BudgetAlertService) SetNotificationRepo(writer notificationWriter) {
+	if writer == nil {
+		s.notifier = nil
+		return
+	}
+	s.notifier = notificationWriterAdapter{writer: writer}
 }
 
 // SetWebhookNotifier 注入 Webhook 通知器（由调用方按 settings 动态构建）。
@@ -77,21 +113,76 @@ func NewBudgetAlertServiceForTest(budgetRepo budgetAllocReader, alertRepo alertR
 
 // EvaluateAndAlert 在核销后评估是否需要触发告警（阈值 80%/100%）。
 // 应在 usage_collector 核销完成后异步调用，避免阻塞请求链路。
-func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, scopeID string) {
-	period := time.Now().Format("2006-01")
+func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, scopeID string, details ...string) {
+	periodType := budgetdomain.PeriodMonthly
+	dimensionType := budgetdomain.DimensionTotal
+	modelTierID := ""
+	if len(details) >= 3 {
+		periodType = budgetdomain.PeriodType(details[0])
+		dimensionType = budgetdomain.DimensionType(details[1])
+		modelTierID = details[2]
+	}
+	window, err := budgetperiod.Resolve(time.Now(), periodType, budgetperiod.Config{
+		Timezone: budgetperiod.DefaultTimezone, WeekStart: budgetperiod.CanonicalWeekStart,
+	})
+	if err != nil {
+		return
+	}
+	period := window.Key
 
 	alloc, err := s.budgetRepo.GetAllocation(scopeType, scopeID)
-	if err != nil || alloc == nil || alloc.AmountUSD <= 0 {
+	if err != nil || alloc == nil {
+		return
+	}
+	limitUSD := alloc.AmountUSD
+	if periodType == budgetdomain.PeriodDaily {
+		limitUSD = alloc.DailyAmountUSD
+	} else if periodType == budgetdomain.PeriodWeekly {
+		limitUSD = alloc.WeeklyAmountUSD
+	}
+	if dimensionType == budgetdomain.DimensionTier {
+		limitUSD = -1
+		now := time.Now()
+		tierID, parseErr := uuid.Parse(modelTierID)
+		if parseErr != nil || s.tierRepo == nil {
+			return
+		}
+		limits, listErr := s.tierRepo.ListTierLimits(ctx, alloc.ID)
+		if listErr != nil {
+			return
+		}
+		for _, limit := range limits {
+			if limit.ModelTierID == tierID && limit.PeriodType == periodType && limit.Enabled &&
+				!limit.EffectiveAt.After(now) {
+				limitUSD, _ = limit.LimitUSD.Float64()
+				break
+			}
+		}
+		overrides, overrideErr := s.tierRepo.ListActiveOverrides(ctx, alloc.ID, now)
+		if overrideErr != nil {
+			return
+		}
+		for _, override := range overrides {
+			if override.DimensionType != budgetdomain.DimensionTier || override.ModelTierID == nil ||
+				*override.ModelTierID != tierID || override.PeriodType != periodType {
+				continue
+			}
+			target, _ := override.TargetLimitUSD.Float64()
+			if target > limitUSD {
+				limitUSD = target
+			}
+		}
+	}
+	if limitUSD <= 0 {
 		return
 	}
 
-	// 从 Redis 读取实时已用量（与网关核销保持同源，budget_consumption 表未维护）
-	usedUSD := s.readUsedFromRedis(ctx, scopeType, scopeID, period)
-	ratio := usedUSD / alloc.AmountUSD
+	usedUSD := s.readDimensionUsedFromRedis(ctx, scopeType, scopeID, period, dimensionType, modelTierID, len(details) == 0)
+	ratio := usedUSD / limitUSD
 
 	thresholds := []int{model.AlertThreshold80}
-	// 程序服务预算额外添加 100% 阈值
-	if scopeType == model.BudgetScopeDeptService {
+	// 等级维度对所有 scope 同时评估 80%/100%；总预算保留 legacy 规则。
+	if dimensionType == budgetdomain.DimensionTier || scopeType == model.BudgetScopeDeptService {
 		thresholds = append(thresholds, model.AlertThreshold100)
 	}
 
@@ -101,27 +192,52 @@ func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, sc
 			continue
 		}
 		// 去重：已发过此 period+threshold 的告警则跳过
-		if s.alertRepo.ExistsForPeriod(scopeType, scopeID, period, threshold) {
+		exists, err := s.alertRepo.ExistsForPeriod(ctx, repository.AlertDimension{
+			ScopeType: scopeType, ScopeID: scopeID, PeriodType: periodType,
+			Period: period, Threshold: threshold, DimensionType: dimensionType,
+			ModelTierID: func() *uuid.UUID {
+				if dimensionType != budgetdomain.DimensionTier {
+					return nil
+				}
+				id, _ := uuid.Parse(modelTierID)
+				return &id
+			}(),
+		})
+		if err != nil || exists {
 			continue
 		}
 		// 写去重记录
 		if err := s.alertRepo.Create(&model.BudgetAlertRecord{
-			ScopeType:  scopeType,
-			ScopeID:    scopeID,
-			PeriodType: "monthly",
-			Period:     period,
-			Threshold:  threshold,
+			ScopeType:     scopeType,
+			ScopeID:       scopeID,
+			PeriodType:    string(periodType),
+			Period:        period,
+			Threshold:     threshold,
+			DimensionType: dimensionType,
+			DimensionKey: func() string {
+				if dimensionType == budgetdomain.DimensionTier {
+					return "tier:" + modelTierID
+				}
+				return "total"
+			}(),
+			ModelTierID: func() *uuid.UUID {
+				if dimensionType != budgetdomain.DimensionTier {
+					return nil
+				}
+				id, _ := uuid.Parse(modelTierID)
+				return &id
+			}(),
 			NotifiedAt: time.Now(),
 		}); err != nil {
 			slog.Error("budget_alert: failed to create alert record", "error", err)
 			continue
 		}
 
-		msg := fmt.Sprintf("【预算告警】%s(%s) 本月用量已达 %d%%（$%.2f / $%.2f），请关注并考虑扩容",
-			scopeType, scopeID, threshold, usedUSD, alloc.AmountUSD)
+		msg := fmt.Sprintf("【预算告警】%s(%s) %s用量已达 %d%%（$%.2f / $%.2f），请关注并考虑扩容",
+			scopeType, scopeID, dimensionType, threshold, usedUSD, limitUSD)
 
 		// 通道 1（解耦的 Notifier：站内信 + 邮件 + ...）
-		s.sendNotifications(ctx, scopeType, scopeID, threshold, usedUSD, alloc.AmountUSD)
+		s.sendNotifications(ctx, scopeType, scopeID, threshold, usedUSD, limitUSD)
 
 		// 通道 2（Webhook 降级：失败不阻断，仅记录）
 		if s.webhookNotifier != nil {
@@ -202,23 +318,221 @@ func (s *BudgetAlertService) readUsedFromRedis(ctx context.Context, scopeType, s
 	return val
 }
 
+func (s *BudgetAlertService) readDimensionUsedFromRedis(
+	ctx context.Context,
+	scopeType, scopeID, period string,
+	dimensionType budgetdomain.DimensionType,
+	modelTierID string,
+	legacy bool,
+) float64 {
+	if legacy {
+		return s.readUsedFromRedis(ctx, scopeType, scopeID, period)
+	}
+	if s.rdb == nil {
+		return 0
+	}
+	key := fmt.Sprintf("budget:v2:used:%s:%s:%s", scopeType, scopeID, period)
+	if dimensionType == budgetdomain.DimensionTier {
+		key = fmt.Sprintf("budget:v2:tier:used:%s:%s:%s:%s", scopeType, scopeID, modelTierID, period)
+	}
+	micro, err := s.rdb.Get(ctx, key).Int64()
+	if err != nil {
+		return 0
+	}
+	return float64(micro) / 1_000_000
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 扩容审批状态机
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ExpansionService 处理扩容申请的状态机与升级链。
 type ExpansionService struct {
-	repo      *repository.ExpansionRepo
-	budgetSvc *BudgetService
+	repo              *repository.ExpansionRepo
+	budgetSvc         *BudgetService
+	budgetTierSvc     *BudgetTierService
+	legacyQuotaWriter LegacyExpansionQuotaWriter
+	approvalPool      ApprovalPoolResolver
+	snapshotPublisher BudgetConfigPublisher
+	notifier          Notifier
+	clock             func() time.Time
+}
+
+type LegacyExpansionQuotaWriter interface {
+	ApplyLegacyExpansionQuota(context.Context, *model.ExpansionRequest, uuid.UUID) error
+}
+
+var (
+	ErrInvalidExpansionDimension    = errors.New("invalid expansion dimension")
+	ErrDuplicatePendingExpansion    = errors.New("duplicate pending expansion")
+	ErrExpansionApprovalUnsupported = errors.New("expansion approval dimension or duration is unsupported before P2")
+	ErrExpansionReasonRequired      = errors.New("expansion application reason is required")
+	ErrInvalidExpansionPeriod       = errors.New("invalid expansion period")
+)
+
+type CreateExpansionRequestInput struct {
+	ScopeType             string
+	ScopeID               string
+	RequesterID           uuid.UUID
+	PeriodType            budgetdomain.PeriodType
+	DimensionType         budgetdomain.DimensionType
+	ModelTierID           *uuid.UUID
+	DurationType          budgetdomain.DurationType
+	Priority              string
+	CurrentAmount         float64
+	RequestedAmount       float64
+	CurrentAmountSnapshot budgetdomain.Amount
+	UsedAmountSnapshot    budgetdomain.Amount
+	PrecheckVersion       string
+	PrecheckedAt          time.Time
+	ExpiresAt             time.Time
+	Reason                string
+	UrgentReason          string
+}
+
+func (s *ExpansionService) CreateRequestAdvanced(ctx context.Context, input CreateExpansionRequestInput) (*model.ExpansionRequest, error) {
+	if strings.TrimSpace(input.Reason) == "" {
+		return nil, ErrExpansionReasonRequired
+	}
+	if input.PeriodType == "" {
+		input.PeriodType = budgetdomain.PeriodMonthly
+	}
+	if !input.PeriodType.Valid() {
+		return nil, ErrInvalidExpansionPeriod
+	}
+	if input.DimensionType == "" {
+		input.DimensionType = budgetdomain.DimensionTotal
+	}
+	if input.DurationType == "" {
+		input.DurationType = budgetdomain.DurationPermanent
+	}
+	if !input.DurationType.Valid() {
+		return nil, ErrExpansionDurationUnsupported
+	}
+	if input.Priority == "" {
+		input.Priority = "normal"
+	}
+	if err := budgetdomain.ValidateDimension(input.DimensionType, input.ModelTierID); err != nil {
+		return nil, ErrInvalidExpansionDimension
+	}
+	exists, err := s.repo.ExistsPending(ctx, repository.PendingExpansionKey{
+		RequesterID: input.RequesterID, ScopeType: input.ScopeType, ScopeID: input.ScopeID,
+		PeriodType: input.PeriodType, DimensionType: input.DimensionType,
+		ModelTierID: input.ModelTierID, DurationType: input.DurationType,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, ErrDuplicatePendingExpansion
+	}
+	currentLevel := model.ExpansionLevelStudio
+	if input.ScopeType == model.BudgetScopeMember {
+		currentLevel = model.ExpansionLevelDept
+	} else if input.ScopeType == model.BudgetScopeStudio {
+		currentLevel = model.ExpansionLevelPlatform
+	}
+	dimensionKey := "total"
+	if input.ModelTierID != nil {
+		dimensionKey = "tier:" + input.ModelTierID.String()
+	}
+	request := &model.ExpansionRequest{
+		ScopeType: input.ScopeType, ScopeID: input.ScopeID, RequesterID: input.RequesterID,
+		PeriodType: string(input.PeriodType), DimensionType: input.DimensionType, DimensionKey: dimensionKey,
+		ModelTierID: input.ModelTierID, DurationType: input.DurationType, Priority: input.Priority,
+		CurrentAmount: input.CurrentAmount, RequestedAmount: input.RequestedAmount,
+		CurrentAmountSnapshot: input.CurrentAmountSnapshot, UsedAmountSnapshot: input.UsedAmountSnapshot,
+		PrecheckVersion: input.PrecheckVersion, PrecheckedAt: &input.PrecheckedAt, ExpiresAt: &input.ExpiresAt,
+		Reason: input.Reason, UrgentReason: input.UrgentReason,
+		Status: model.ExpansionStatusPending, CurrentLevel: currentLevel,
+	}
+	if err := s.repo.Transaction(ctx, func(tx *gorm.DB) error {
+		if err := tx.WithContext(ctx).Create(request).Error; err != nil {
+			return err
+		}
+		if s.approvalPool == nil {
+			return nil
+		}
+		var recipients []uuid.UUID
+		var err error
+		if resolver, ok := s.approvalPool.(interface {
+			ResolveInTx(context.Context, *gorm.DB, *model.ExpansionRequest) ([]uuid.UUID, error)
+		}); ok {
+			recipients, err = resolver.ResolveInTx(ctx, tx, request)
+		} else {
+			return fmt.Errorf("approval pool resolver is not transaction-bound")
+		}
+		if err != nil {
+			return err
+		}
+		for _, recipient := range recipients {
+			if err := enqueueExpansionNotificationInTx(tx, request, recipient, model.NotificationTypeExpansionSubmitted, "新的扩容审批申请", request.Reason); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		if errors.Is(err, repository.ErrDuplicatePendingExpansion) {
+			return nil, ErrDuplicatePendingExpansion
+		}
+		return nil, fmt.Errorf("create expansion request: %w", err)
+	}
+	return request, nil
+}
+
+func (s *ExpansionService) notifyExpansionSubmitted(ctx context.Context, request *model.ExpansionRequest) {
+	if s.notifier == nil || s.approvalPool == nil {
+		return
+	}
+	recipients, err := s.approvalPool.Resolve(ctx, request)
+	if err != nil {
+		return
+	}
+	for _, recipient := range recipients {
+		notification := &model.Notification{
+			UserID: recipient, Type: model.NotificationTypeExpansionSubmitted,
+			Level: model.NotificationLevelInfo, Title: "新的扩容审批申请",
+			Content: request.Reason, RefType: "expansion_request", RefID: request.ID.String(),
+		}
+		for attempt := 0; attempt < 3; attempt++ {
+			if s.notifier.Notify(ctx, notification) == nil {
+				break
+			}
+		}
+	}
 }
 
 func NewExpansionService(repo *repository.ExpansionRepo) *ExpansionService {
-	return &ExpansionService{repo: repo}
+	return &ExpansionService{repo: repo, clock: time.Now}
 }
 
 // SetBudgetService 注入预算服务（用于查询使用率）。
 func (s *ExpansionService) SetBudgetService(bs *BudgetService) {
 	s.budgetSvc = bs
+	s.legacyQuotaWriter = bs
+}
+
+func (s *ExpansionService) SetBudgetTierService(tierSvc *BudgetTierService) {
+	s.budgetTierSvc = tierSvc
+}
+
+func (s *ExpansionService) WithApprovalPool(resolver ApprovalPoolResolver) *ExpansionService {
+	s.approvalPool = resolver
+	return s
+}
+
+func (s *ExpansionService) WithSnapshotPublisher(publisher BudgetConfigPublisher) *ExpansionService {
+	s.snapshotPublisher = publisher
+	return s
+}
+
+func (s *ExpansionService) WithNotifier(notifier Notifier) *ExpansionService {
+	s.notifier = notifier
+	return s
+}
+
+func (s *ExpansionService) SetLegacyQuotaWriter(writer LegacyExpansionQuotaWriter) {
+	s.legacyQuotaWriter = writer
 }
 
 // GetBudgetUsedRatio 查询某 scope 当前使用率（供 ListPending 附加信息用）。
@@ -233,6 +547,13 @@ func (s *ExpansionService) GetBudgetUsedRatio(ctx context.Context, scopeType, sc
 	return item.UsedRatio, nil
 }
 
+func (s *ExpansionService) ResolveScopeNames(scopeType string, scopeIDs []string) (map[string]string, error) {
+	if s.budgetSvc == nil || len(scopeIDs) == 0 {
+		return map[string]string{}, nil
+	}
+	return s.budgetSvc.repo.ResolveScopeNames(scopeType, scopeIDs)
+}
+
 func (s *ExpansionService) MemberInDeptIDs(memberID string, deptIDs []string) (bool, error) {
 	if s.budgetSvc == nil {
 		return false, nil
@@ -242,6 +563,9 @@ func (s *ExpansionService) MemberInDeptIDs(memberID string, deptIDs []string) (b
 
 // CreateRequest 部门负责人发起扩容申请。
 func (s *ExpansionService) CreateRequest(ctx context.Context, scopeType, scopeID string, requesterID uuid.UUID, currentAmount, requestedAmount float64, periodType, reason string) (*model.ExpansionRequest, error) {
+	if strings.TrimSpace(reason) == "" {
+		return nil, ErrExpansionReasonRequired
+	}
 	currentLevel := model.ExpansionLevelStudio
 	if scopeType == model.BudgetScopeMember {
 		currentLevel = model.ExpansionLevelDept
@@ -250,6 +574,9 @@ func (s *ExpansionService) CreateRequest(ctx context.Context, scopeType, scopeID
 	}
 	if periodType == "" {
 		periodType = model.ExpansionPeriodMonthly
+	}
+	if !budgetdomain.PeriodType(periodType).Valid() {
+		return nil, ErrInvalidExpansionPeriod
 	}
 	req := &model.ExpansionRequest{
 		ScopeType:       scopeType,
@@ -261,8 +588,15 @@ func (s *ExpansionService) CreateRequest(ctx context.Context, scopeType, scopeID
 		Reason:          reason,
 		Status:          model.ExpansionStatusPending,
 		CurrentLevel:    currentLevel,
+		DimensionType:   budgetdomain.DimensionTotal,
+		DimensionKey:    "total",
+		DurationType:    budgetdomain.DurationPermanent,
+		Priority:        "normal",
 	}
 	if err := s.repo.Create(req); err != nil {
+		if errors.Is(err, repository.ErrDuplicatePendingExpansion) {
+			return nil, ErrDuplicatePendingExpansion
+		}
 		return nil, fmt.Errorf("create expansion request: %w", err)
 	}
 	return req, nil
@@ -301,17 +635,14 @@ func (s *ExpansionService) Decide(ctx context.Context, requestID string, approve
 		return fmt.Errorf("invalid action: %s", action)
 	}
 
+	if action == model.ExpansionActionApprove &&
+		(req.DimensionType != budgetdomain.DimensionTotal || req.DurationType != budgetdomain.DurationPermanent) {
+		return ErrExpansionApprovalUnsupported
+	}
+
 	// 更新申请状态
 	if err := s.repo.UpdateStatus(requestID, newStatus, newLevel); err != nil {
 		return fmt.Errorf("update expansion status: %w", err)
-	}
-
-	// 批准时自动按 period_type 更新对应预算字段
-	if action == model.ExpansionActionApprove && s.budgetSvc != nil {
-		if err := s.applyApprovedQuota(ctx, req, approverID); err != nil {
-			// 非致命：日志记录即可，申请状态已更新
-			slog.Warn("expansion: auto-apply quota failed", "request_id", requestID, "error", err)
-		}
 	}
 
 	// 写审批流水
@@ -322,14 +653,23 @@ func (s *ExpansionService) Decide(ctx context.Context, requestID string, approve
 		Action:     action,
 		Comment:    comment,
 	})
+	if action == model.ExpansionActionApprove && s.legacyQuotaWriter != nil {
+		if err := s.legacyQuotaWriter.ApplyLegacyExpansionQuota(ctx, req, approverID); err != nil {
+			slog.Warn("expansion: auto-apply quota failed", "request_id", requestID, "error", err)
+		}
+	}
 	return nil
 }
 
-// applyApprovedQuota 批准时自动将 RequestedAmount 写入 BudgetAllocation 对应维度字段。
-func (s *ExpansionService) applyApprovedQuota(ctx context.Context, req *model.ExpansionRequest, approverID uuid.UUID) error {
-	alloc, err := s.budgetSvc.repo.GetAllocation(req.ScopeType, req.ScopeID)
-	if err != nil {
-		// 该 scope 尚无预算记录，以请求额度初始化
+// ApplyLegacyExpansionQuota 保留 P0 既有 total+permanent 审批行为。
+// tier 与 current_period 必须等待 P2 的原子审批实现。
+func (s *BudgetService) ApplyLegacyExpansionQuota(ctx context.Context, req *model.ExpansionRequest, approverID uuid.UUID) error {
+	periodType := budgetdomain.PeriodType(req.PeriodType)
+	if !periodType.Valid() {
+		return ErrInvalidExpansionPeriod
+	}
+	alloc, err := s.repo.GetAllocation(req.ScopeType, req.ScopeID)
+	if err != nil || alloc == nil {
 		alloc = &model.BudgetAllocation{
 			ScopeType:       req.ScopeType,
 			ScopeID:         req.ScopeID,
@@ -338,21 +678,16 @@ func (s *ExpansionService) applyApprovedQuota(ctx context.Context, req *model.Ex
 			WeeklyAmountUSD: -1,
 		}
 	}
-
-	monthly := alloc.AmountUSD
-	daily := alloc.DailyAmountUSD
-	weekly := alloc.WeeklyAmountUSD
-
-	switch req.PeriodType {
-	case model.ExpansionPeriodDaily:
+	monthly, daily, weekly := alloc.AmountUSD, alloc.DailyAmountUSD, alloc.WeeklyAmountUSD
+	switch periodType {
+	case budgetdomain.PeriodDaily:
 		daily = req.RequestedAmount
-	case model.ExpansionPeriodWeekly:
+	case budgetdomain.PeriodWeekly:
 		weekly = req.RequestedAmount
-	default: // monthly
+	case budgetdomain.PeriodMonthly:
 		monthly = req.RequestedAmount
 	}
-
-	return s.budgetSvc.SetBudget(ctx, req.ScopeType, req.ScopeID, monthly, daily, weekly, approverID)
+	return s.SetBudget(ctx, req.ScopeType, req.ScopeID, monthly, daily, weekly, approverID)
 }
 
 // DecideScoped 按审批人的管辖范围做决策。cancel 仅允许申请人本人取消。
@@ -378,6 +713,10 @@ func (s *ExpansionService) ListForRequester(ctx context.Context, requesterID str
 	return s.repo.ListByRequester(requesterID, status)
 }
 
+func (s *ExpansionService) ListForRequesterFiltered(ctx context.Context, requesterID string, filter repository.ExpansionListFilter) ([]model.ExpansionRequest, error) {
+	return s.repo.ListByRequesterFiltered(requesterID, filter)
+}
+
 // ListPending 查询待某级别审批的申请。
 func (s *ExpansionService) ListPending(ctx context.Context, level string) ([]model.ExpansionRequest, error) {
 	return s.repo.ListPendingForApprover(level)
@@ -386,19 +725,39 @@ func (s *ExpansionService) ListPending(ctx context.Context, level string) ([]mod
 // ListPendingScoped 查询当前审批人管辖范围内的待审批申请。
 // requesterName 非空时按申请人姓名模糊过滤。
 func (s *ExpansionService) ListPendingScoped(ctx context.Context, level string, isGlobal bool, deptIDs, studioIDs []string, requesterName string) ([]model.ExpansionRequest, error) {
+	return s.ListPendingScopedFiltered(ctx, level, isGlobal, deptIDs, studioIDs, repository.ExpansionListFilter{Keyword: requesterName})
+}
+
+func (s *ExpansionService) ListPendingScopedFiltered(ctx context.Context, level string, isGlobal bool, deptIDs, studioIDs []string, filter repository.ExpansionListFilter) ([]model.ExpansionRequest, error) {
 	if isGlobal {
 		// 全局管理员不受范围限制，但仍支持姓名过滤
-		return s.repo.ListPendingForApproverScoped(level, nil, nil, nil, requesterName)
+		return s.repo.ListPendingForApproverScopedFiltered(level, nil, nil, nil, filter)
 	}
 	memberIDs, err := s.memberIDsForDeptIDs(deptIDs)
 	if err != nil {
 		return nil, err
 	}
-	return s.repo.ListPendingForApproverScoped(level, deptIDs, studioIDs, memberIDs, requesterName)
+	return s.repo.ListPendingForApproverScopedFiltered(level, deptIDs, studioIDs, memberIDs, filter)
 }
 
 // ListSteps 查询某扩容申请的审批流水。
 func (s *ExpansionService) ListSteps(ctx context.Context, requestID string) ([]model.ExpansionApprovalStep, error) {
+	return s.repo.ListSteps(requestID)
+}
+
+func (s *ExpansionService) ListStepsScoped(ctx context.Context, actor ActorScope, requestID string) ([]model.ExpansionApprovalStep, error) {
+	request, err := s.repo.FindByID(requestID)
+	if err != nil {
+		return nil, err
+	}
+	if request.RequesterID.String() != actor.UserID {
+		if err := s.validateActorScope(ctx, actor, request.ScopeType, request.ScopeID); err != nil {
+			return nil, err
+		}
+		if actor.Role == "user" {
+			return nil, ErrExpansionForbidden
+		}
+	}
 	return s.repo.ListSteps(requestID)
 }
 

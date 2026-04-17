@@ -10,6 +10,7 @@ import (
 
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/binding"
+	"github.com/example/llm-gateway/internal/gateway/budget"
 	"github.com/example/llm-gateway/internal/gateway/cache"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
@@ -23,6 +24,36 @@ import (
 type fakeScheduler struct {
 	decision *scheduler.RouteDecision
 	err      error
+}
+
+type countingTierResolver struct {
+	calls int
+}
+
+func (r *countingTierResolver) Resolve(groupName string) (budget.TierContext, bool) {
+	r.calls++
+	return budget.TierContext{TierID: "tier-1", GroupName: groupName}, true
+}
+
+func TestDispatch_AuthorizationBeforeTier(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	sch := &fakeScheduler{decision: &scheduler.RouteDecision{ModelID: "1", ModelName: "m"}}
+	nc := cache.NewGroupNameCache("")
+	nc.SetNames([]string{"premium"})
+	resolver := &countingTierResolver{}
+	dispatcher := orchestrator.NewGroupAwareDispatcherWithBindingAndTier(sch, nc, nil, resolver)
+	ctx, _ := makeContext(&model.UserIdentity{
+		KeyID:           "key-1",
+		AccessAllGroups: true,
+		UsableGroups:    []string{"other"},
+	})
+
+	decision, err := dispatcher.Dispatch(ctx, "premium", nil)
+	require.ErrorIs(t, err, model.ErrModelGroupUnauthorized)
+	require.Nil(t, decision)
+	require.Zero(t, resolver.calls)
+	_, ok := budget.GetTierContext(ctx)
+	require.False(t, ok)
 }
 
 func (f *fakeScheduler) Route(_ string, _ *core.ChatRequest) (*scheduler.RouteDecision, error) {

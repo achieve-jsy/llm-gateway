@@ -21,22 +21,34 @@
       </div>
     </div>
 
-    <!-- compact 模式：仅显示部门日常池一行状态，聚焦成员配额 -->
+    <!-- compact 模式：日常池 / 服务池可切换，点击切换当前编辑 allocation -->
     <div v-if="compact && scopeType === 'dept'" class="compact-pool-status">
-      <template v-for="pool in deptPools" :key="pool.scope_type">
-        <div v-if="pool.scope_type === 'dept_daily'" class="compact-pool-row">
-          <span class="compact-pool-label">成员日常预算池</span>
-          <span class="compact-pool-amount">{{ formatUSD(pool.used_usd || 0, { compact: true }) }} / {{ displayAmount(pool.amount_usd) }}</span>
-          <el-progress
-            style="width:80px; flex-shrink:0"
-            :percentage="Math.min(Math.round((pool.used_ratio || 0) * 100), 100)"
-            :stroke-width="4"
-            :color="progressColor(pool.used_ratio || 0)"
-            :show-text="false"
-          />
-          <el-tag :type="statusType(pool.used_ratio || 0)" size="small">{{ statusText(pool.used_ratio || 0) }}</el-tag>
-        </div>
-      </template>
+      <button
+        v-for="pool in deptPools"
+        :key="pool.scope_type"
+        type="button"
+        class="compact-pool-row"
+        :class="{ 'is-active': selectedPoolType === pool.scope_type }"
+        :data-test="`compact-pool-${pool.scope_type}`"
+        @click="selectCompactPool(pool)"
+      >
+        <span class="compact-pool-label">
+          {{ pool.scope_type === 'dept_service' ? '程序服务预算池' : '成员日常预算池' }}
+        </span>
+        <span class="compact-pool-amount">
+          {{ formatUSD(pool.used_usd || 0, { compact: true }) }} / {{ displayAmount(pool.amount_usd) }}
+        </span>
+        <el-progress
+          style="width:80px; flex-shrink:0"
+          :percentage="Math.min(Math.round((pool.used_ratio || 0) * 100), 100)"
+          :stroke-width="4"
+          :color="progressColor(pool.used_ratio || 0)"
+          :show-text="false"
+        />
+        <el-tag :type="statusType(pool.used_ratio || 0)" size="small">
+          {{ statusText(pool.used_ratio || 0) }}
+        </el-tag>
+      </button>
     </div>
 
     <div v-if="!compact" class="budget-toolbar">
@@ -71,7 +83,7 @@
           <span>周 {{ displayAmount(pool.weekly_amount_usd) }}</span>
           <span>日 {{ displayAmount(pool.daily_amount_usd) }}</span>
         </div>
-        <el-button v-if="canEdit" link type="primary" size="small" class="pool-edit" @click="openDrawer(pool)">调整额度</el-button>
+        <el-button v-if="canEdit" link type="primary" size="small" class="pool-edit" @click="requestEdit(pool)">调整额度</el-button>
         <el-button v-else link type="primary" size="small" class="pool-edit" @click="goExpansion(pool)">申请扩容</el-button>
       </div>
     </div>
@@ -82,7 +94,7 @@
           <span class="member-quota-title">{{ compact ? '成员配额' : '成员单独额度' }}</span>
           <span class="member-quota-count">{{ allocationRows.length }} 人</span>
         </div>
-        <el-button v-if="canEdit" size="small" type="primary" :plain="!compact" :link="compact" @click="openMemberDrawer">
+        <el-button v-if="canEdit" size="small" type="primary" :plain="!compact" :link="compact" @click="requestCreateMember">
           {{ compact ? '+ 新增' : '+ 设置额度' }}
         </el-button>
       </div>
@@ -150,10 +162,11 @@
       </el-table-column>
       <el-table-column label="操作" :width="compact ? 120 : 140" fixed="right" align="center">
         <template #default="{ row }">
+          <el-button v-if="!row.isDefaultPool" link type="info" size="small" @click="navigateToMember(row)">查看</el-button>
           <template v-if="canEdit">
-            <el-button v-if="row.isDefaultPool" link type="primary" size="small" @click="openDrawerForMember(row)">设置额度</el-button>
+                <el-button v-if="row.isDefaultPool" link type="primary" size="small" @click="requestEditForMember(row)">设置额度</el-button>
             <template v-else-if="compact">
-              <el-button link type="primary" size="small" @click="openDrawer(row)">调额</el-button>
+              <el-button link type="primary" size="small" @click="requestEdit(row)">调额</el-button>
               <el-dropdown size="small" trigger="click" @command="(cmd: string) => cmd === 'reset' && resetToPool(row)">
                 <el-button link size="small" style="padding:0 2px">⋯</el-button>
                 <template #dropdown>
@@ -164,7 +177,7 @@
               </el-dropdown>
             </template>
             <template v-else>
-              <el-button link type="primary" size="small" @click="openDrawer(row)">调额</el-button>
+              <el-button link type="primary" size="small" @click="requestEdit(row)">调额</el-button>
               <el-button link type="danger" size="small" @click="resetToPool(row)">还原</el-button>
             </template>
           </template>
@@ -200,7 +213,7 @@
           </div>
         </div>
         <div class="studio-alloc-actions">
-          <el-button v-if="effectiveCanEditSelf" size="small" type="primary" plain @click="openStudioAllocDrawer">调整额度</el-button>
+          <el-button v-if="effectiveCanEditSelf" size="small" type="primary" plain @click="requestStudioEdit">调整额度</el-button>
           <el-button v-else size="small" plain @click="goExpansion(studioAllocPlaceholder)">申请扩容</el-button>
           <el-button :loading="loading" size="small" @click="load">刷新</el-button>
         </div>
@@ -243,9 +256,9 @@
               </el-table-column>
               <el-table-column label="操作" width="130" align="center">
                 <template #default="{ row }">
-                  <el-button v-if="canEdit" link type="primary" size="small" @click="openDrawer(row)">调额</el-button>
+                  <el-button v-if="canEdit" link type="primary" size="small" @click="requestEdit(row)">调额</el-button>
                   <el-button v-else link type="primary" size="small" @click="goExpansion(row)">申请</el-button>
-                  <el-button link type="info" size="small" @click="openDeptMemberDrawer(row)">成员预算</el-button>
+                  <el-button link type="info" size="small" @click="navigateToDept(row)">成员预算</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -287,7 +300,7 @@
               </el-table-column>
               <el-table-column label="操作" width="80" align="center">
                 <template #default="{ row }">
-                  <el-button v-if="canEdit" link type="primary" size="small" @click="openDrawer(row)">调额</el-button>
+                  <el-button v-if="canEdit" link type="primary" size="small" @click="requestEdit(row)">调额</el-button>
                   <el-button v-else link type="primary" size="small" @click="goExpansion(row)">申请</el-button>
                 </template>
               </el-table-column>
@@ -297,100 +310,34 @@
       </div>
     </template>
 
-    <el-drawer v-model="drawerVisible" title="调整预算额度" size="380px">
-      <div v-if="editingItem" class="budget-drawer">
-        <div class="drawer-scope">
-          <div class="scope-name">{{ editingItem.label || editingItem.scope_id }}</div>
-          <div class="scope-id">{{ SCOPE_TYPE_LABELS[editingItem.scope_type] }} · {{ editingItem.scope_id }}</div>
-        </div>
-        <el-form label-position="top">
-          <el-form-item label="月额度（USD）">
-            <el-input-number v-model="editForm.amount" :min="0" :precision="2" controls-position="right" style="width:100%" />
-          </el-form-item>
-          <el-form-item label="周额度（USD，-1 表示不限）">
-            <el-input-number v-model="editForm.weekly" :min="-1" :precision="2" controls-position="right" style="width:100%" />
-          </el-form-item>
-          <el-form-item label="日额度（USD，-1 表示不限）">
-            <el-input-number v-model="editForm.daily" :min="-1" :precision="2" controls-position="right" style="width:100%" />
-          </el-form-item>
-        </el-form>
-        <div class="drawer-hint">保存后预算配置立即生效；已有告警去重会随改额重置。</div>
-      </div>
-      <template #footer>
-        <el-button @click="drawerVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="save">保存</el-button>
-      </template>
-    </el-drawer>
-
-    <!-- 嵌套抽屉：部门成员预算（工作室视图下钻） -->
-    <el-drawer
-      v-model="deptMemberDrawerVisible"
-      direction="rtl"
-      size="560px"
+    <el-dialog
+      v-model="memberSelectorVisible"
+      title="选择成员"
+      width="440px"
       append-to-body
-      :destroy-on-close="true"
-      class="dept-member-drawer"
+      :close-on-click-modal="false"
     >
-      <template #header>
-        <div class="dept-drawer-header">
-          <el-button link class="dept-drawer-back" @click="deptMemberDrawerVisible = false">
-            <el-icon><ArrowLeft /></el-icon>
-            {{ title }}
-          </el-button>
-          <div class="dept-drawer-title-row">
-            <span class="dept-drawer-title">{{ deptMemberDrawerLabel }}</span>
-            <span class="dept-drawer-sub">成员预算配置</span>
-          </div>
-        </div>
-      </template>
-      <BudgetScopePanel
-        v-if="deptMemberDrawerScopeId"
-        scope-type="dept"
-        :scope-id="deptMemberDrawerScopeId"
-        :title="deptMemberDrawerLabel"
-        :can-edit="canEdit"
-        :can-edit-self="canEdit"
-        compact
-      />
-    </el-drawer>
-
-    <!-- 添加成员配额弹窗 -->
-    <el-dialog v-model="memberDialogVisible" title="设置成员单独额度" width="460px" :close-on-click-modal="false">
-      <el-form label-width="80px">
-        <el-form-item label="选择成员">
-          <el-select
-            v-model="memberForm.userId"
-            filterable
-            remote
-            :remote-method="searchMembers"
-            :loading="memberSearchLoading"
-            placeholder="输入姓名搜索"
-            style="width: 100%"
-            value-key="id"
-          >
-            <el-option
-              v-for="u in memberSearchResults"
-              :key="u.id"
-              :label="`${u.name}（${u.email || u.id}）`"
-              :value="u.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="月限额">
-          <el-input-number v-model="memberForm.amount" :min="0" :precision="2" controls-position="right" style="width:100%" />
-        </el-form-item>
-        <el-form-item label="周限额">
-          <el-input-number v-model="memberForm.weekly" :min="-1" :precision="2" controls-position="right" style="width:100%" />
-          <div style="font-size:11px;color:var(--el-text-color-placeholder);margin-top:2px">-1 表示不限</div>
-        </el-form-item>
-        <el-form-item label="日限额">
-          <el-input-number v-model="memberForm.daily" :min="-1" :precision="2" controls-position="right" style="width:100%" />
-          <div style="font-size:11px;color:var(--el-text-color-placeholder);margin-top:2px">-1 表示不限</div>
-        </el-form-item>
-      </el-form>
+      <el-select
+        v-model="selectedMemberId"
+        filterable
+        remote
+        :remote-method="searchMembers"
+        :loading="memberSearchLoading"
+        placeholder="输入姓名搜索"
+        style="width: 100%"
+      >
+        <el-option
+          v-for="member in memberSearchResults"
+          :key="member.id"
+          :label="`${member.name}（${member.email || member.id}）`"
+          :value="member.id"
+        />
+      </el-select>
       <template #footer>
-        <el-button @click="memberDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="memberSaving" @click="saveMemberQuota">确认设置</el-button>
+        <el-button @click="memberSelectorVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!selectedMemberId" @click="confirmMemberSelection">
+          配置额度
+        </el-button>
       </template>
     </el-dialog>
   </div>
@@ -400,16 +347,14 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft } from '@element-plus/icons-vue'
-import { getBudgetList, setBudgetBatch, deleteMemberBudget } from '@/services/control-plane'
-import type { BudgetItem, BudgetSetPayload, BudgetView } from '@/types/budget'
+import { deleteMemberBudget, getBudgetList } from '@/services/control-plane'
+import type { BudgetItem, BudgetView } from '@/types/budget'
 import { SCOPE_TYPE_COLORS, SCOPE_TYPE_LABELS } from '@/types/budget'
 import { formatUSD } from '@/utils/format'
 import { useOrgStore } from '@/stores/org'
 import type { DeptMember } from '@/stores/org'
-import BudgetScopePanel from './BudgetScopePanel.vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   scopeType: 'studio' | 'dept'
   scopeId: string
   title: string
@@ -421,7 +366,25 @@ const props = defineProps<{
   canEditSelf?: boolean
   /** 紧凑模式：用于嵌套抽屉场景，隐藏顶部 summary，池卡片改为单列行内样式 */
   compact?: boolean
+  /** 当前正在编辑的池类型，用于 compact 双池高亮 */
+  activeScopeType?: string
+}>(), {
+  childScopeIds: undefined,
+  canEdit: false,
+  canEditSelf: undefined,
+  compact: false,
+  activeScopeType: '',
+})
+const emit = defineEmits<{
+  navigate: [payload: { scopeType: 'dept' | 'member'; scopeId: string; label: string }]
+  editRequested: [payload: { item: BudgetItem }]
+  createMemberRequested: [payload: { deptId: string }]
 }>()
+
+const selectedPoolType = computed(() => {
+  if (props.activeScopeType) return props.activeScopeType
+  return deptPools.value[0]?.scope_type || 'dept_daily'
+})
 
 const router = useRouter()
 const loading = ref(false)
@@ -430,53 +393,11 @@ const items = ref<BudgetItem[]>([])
 // 部门全量成员列表（dept 模式使用）
 const deptMembers = ref<DeptMember[]>([])
 const deptMembersTotal = ref(0)
-const drawerVisible = ref(false)
-const editingItem = ref<BudgetItem | null>(null)
-const saving = ref(false)
-const editForm = ref({ amount: 0, weekly: -1, daily: -1 })
 const poolTab = ref('daily')
-
-// 成员配额
-const memberDialogVisible = ref(false)
-const memberSaving = ref(false)
+const memberSelectorVisible = ref(false)
 const memberSearchLoading = ref(false)
 const memberSearchResults = ref<Array<{ id: string; name: string; email?: string }>>([])
-const memberForm = ref({ userId: '', amount: 100, weekly: -1, daily: -1 })
-
-function openMemberDrawer() {
-  memberForm.value = { userId: '', amount: 100, weekly: -1, daily: -1 }
-  memberSearchResults.value = []
-  memberDialogVisible.value = true
-}
-
-async function searchMembers(keyword: string) {
-  if (!keyword) return
-  memberSearchLoading.value = true
-  try {
-    const results = await orgStore.searchUsers(keyword)
-    memberSearchResults.value = results.map(u => ({ id: u.id, name: u.name || u.id, email: u.email || '' }))
-  } catch { memberSearchResults.value = [] }
-  finally { memberSearchLoading.value = false }
-}
-
-async function saveMemberQuota() {
-  if (!memberForm.value.userId) { ElMessage.warning('请选择成员'); return }
-  memberSaving.value = true
-  try {
-    const payload: BudgetSetPayload = {
-      scope_type: 'member',
-      scope_id: memberForm.value.userId,
-      amount_usd: memberForm.value.amount,
-      weekly_amount_usd: memberForm.value.weekly,
-      daily_amount_usd: memberForm.value.daily,
-    }
-    await setBudgetBatch([payload])
-    ElMessage.success('成员配额已设置')
-    memberDialogVisible.value = false
-    await load()
-  } catch (e: any) { ElMessage.error(e?.message || '设置失败') }
-  finally { memberSaving.value = false }
-}
+const selectedMemberId = ref('')
 
 const view = computed<BudgetView>(() => props.scopeType === 'studio' ? 'studio' : 'department')
 
@@ -546,33 +467,6 @@ const allocationRows = computed<MemberRow[]>(() => {
   })
 })
 
-// 工作室视图：按部门分组（同一 scope_id 的 dept_daily + dept_service 归为一组）
-interface DeptGroup {
-  deptId: string
-  deptName: string
-  pools: BudgetItem[]
-}
-const deptGroups = computed<DeptGroup[]>(() => {
-  if (props.scopeType !== 'studio') return []
-  const map = new Map<string, DeptGroup>()
-  for (const item of displayItems.value) {
-    if (item.scope_type !== 'dept_daily' && item.scope_type !== 'dept_service') continue
-    const existing = map.get(item.scope_id)
-    if (existing) {
-      existing.pools.push(item)
-    } else {
-      // 从 label 中提取部门名（label 格式通常为"部门名"或"部门名·xxx"）
-      const deptName = (item.label || item.scope_id).replace(/[·.].*$/, '')
-      map.set(item.scope_id, { deptId: item.scope_id, deptName, pools: [item] })
-    }
-  }
-  // 每组内按 dept_daily 在前、dept_service 在后排序
-  for (const group of map.values()) {
-    group.pools.sort((a, b) => (a.scope_type === 'dept_daily' ? -1 : 1))
-  }
-  return Array.from(map.values())
-})
-
 // 工作室视图分表：日常预算 / 服务预算
 const dailyRows = computed(() => displayItems.value.filter(i => i.scope_type === 'dept_daily'))
 const serviceRows = computed(() => displayItems.value.filter(i => i.scope_type === 'dept_service'))
@@ -590,17 +484,12 @@ const studioAllocPlaceholder = computed<BudgetItem>(() => studioAlloc.value ?? {
   daily_amount_usd: -1,
   used_usd: 0,
   used_ratio: 0,
+  period: '',
+  enabled: true,
 })
 
-function openStudioAllocDrawer() {
-  const item = studioAllocPlaceholder.value
-  editingItem.value = item
-  editForm.value = {
-    amount: item.amount_usd < 0 ? 0 : item.amount_usd,
-    weekly: item.weekly_amount_usd,
-    daily: item.daily_amount_usd,
-  }
-  drawerVisible.value = true
+function requestStudioEdit() {
+  requestEdit(studioAllocPlaceholder.value)
 }
 
 const totalAmount = computed(() => {
@@ -646,40 +535,62 @@ async function loadAllDeptMembers() {
   deptMembersTotal.value = all.length
 }
 
-function openDrawer(item: BudgetItem) {
-  editingItem.value = item
-  editForm.value = {
-    amount: item.amount_usd,
-    weekly: item.weekly_amount_usd,
-    daily: item.daily_amount_usd,
+function requestEdit(item: BudgetItem) {
+  emit('editRequested', { item })
+}
+
+function selectCompactPool(pool: BudgetItem) {
+  requestEdit(pool)
+}
+
+function requestEditForMember(row: MemberRow) {
+  requestEdit({ ...row, amount_usd: 0, weekly_amount_usd: -1, daily_amount_usd: -1 })
+}
+
+function requestCreateMember() {
+  emit('createMemberRequested', { deptId: props.scopeId })
+  memberSearchResults.value = []
+  selectedMemberId.value = ''
+  memberSelectorVisible.value = true
+}
+
+async function searchMembers(keyword: string) {
+  if (!keyword.trim()) {
+    memberSearchResults.value = []
+    return
   }
-  drawerVisible.value = true
-}
-
-function openDrawerForMember(row: MemberRow) {
-  editingItem.value = { ...row, amount_usd: 0, weekly_amount_usd: -1, daily_amount_usd: -1 }
-  editForm.value = { amount: 0, weekly: -1, daily: -1 }
-  drawerVisible.value = true
-}
-
-async function save() {
-  if (!editingItem.value) return
-  saving.value = true
+  memberSearchLoading.value = true
   try {
-    const payload: BudgetSetPayload = {
-      scope_type: editingItem.value.scope_type,
-      scope_id: editingItem.value.scope_id,
-      amount_usd: editForm.value.amount,
-      weekly_amount_usd: editForm.value.weekly,
-      daily_amount_usd: editForm.value.daily,
-    }
-    await setBudgetBatch([payload])
-    ElMessage.success('预算已更新')
-    drawerVisible.value = false
-    await load()
+    const results = await orgStore.searchUsers(keyword)
+    memberSearchResults.value = results.map(user => ({
+      id: user.id,
+      name: user.name || user.id,
+      email: user.email || '',
+    }))
+  } catch {
+    memberSearchResults.value = []
   } finally {
-    saving.value = false
+    memberSearchLoading.value = false
   }
+}
+
+function confirmMemberSelection() {
+  const member = memberSearchResults.value.find(item => item.id === selectedMemberId.value)
+  if (!member) return
+  memberSelectorVisible.value = false
+  requestEdit({
+    scope_type: 'member',
+    scope_id: member.id,
+    parent_scope_id: props.scopeId,
+    label: member.name,
+    amount_usd: -1,
+    weekly_amount_usd: -1,
+    daily_amount_usd: -1,
+    period: '',
+    enabled: true,
+    used_usd: 0,
+    used_ratio: 0,
+  })
 }
 
 async function resetToPool(row: MemberRow) {
@@ -712,15 +623,12 @@ function goExpansion(item: BudgetItem) {
   })
 }
 
-// ─── 工作室视图：嵌套抽屉下钻到部门成员预算 ─────────────────────────────────
-const deptMemberDrawerVisible = ref(false)
-const deptMemberDrawerScopeId = ref('')
-const deptMemberDrawerLabel = ref('')
+function navigateToDept(row: BudgetItem) {
+  emit('navigate', { scopeType: 'dept', scopeId: row.scope_id, label: row.label || row.scope_id })
+}
 
-function openDeptMemberDrawer(row: BudgetItem) {
-  deptMemberDrawerScopeId.value = row.scope_id
-  deptMemberDrawerLabel.value = row.label || row.scope_id
-  deptMemberDrawerVisible.value = true
+function navigateToMember(row: BudgetItem) {
+  emit('navigate', { scopeType: 'member', scopeId: row.scope_id, label: row.label || row.scope_id })
 }
 
 function displayAmount(value: number) {
@@ -848,27 +756,42 @@ watch(() => [props.scopeType, props.scopeId, props.childScopeIds?.join(',')], lo
 .is-compact {
   gap: 12px;
 }
-/* compact 模式：仅日常池状态一行 */
+/* compact 模式：日常/服务双池可切换 */
 .compact-pool-status {
-  padding: 8px 12px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-  background: var(--el-fill-color-light);
+  display: grid;
+  gap: 8px;
 }
 .compact-pool-row {
   display: flex;
   align-items: center;
   gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  color: inherit;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.compact-pool-row.is-active {
+  background: var(--el-color-primary-light-9);
+  border-color: var(--brand-green-light);
+}
+.compact-pool-row:focus-visible {
+  outline: 2px solid var(--brand-green);
+  outline-offset: 1px;
 }
 .compact-pool-label {
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: var(--text-secondary);
   white-space: nowrap;
 }
 .compact-pool-amount {
   font-size: 13px;
   font-weight: 600;
-  color: var(--el-text-color-primary);
+  color: var(--text-primary);
   white-space: nowrap;
 }
 

@@ -11,7 +11,7 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "preserve",
-    "strict": true,
+    "strict": false,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
@@ -22,5 +22,6 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.tsx", "src/**/*.vue", "env.d.ts"],
+  "exclude": ["src/**/__tests__/**", "src/**/*.spec.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

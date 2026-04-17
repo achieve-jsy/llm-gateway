@@ -11,26 +11,26 @@ import (
 
 // ChannelMonitor 渠道监控配置
 type ChannelMonitor struct {
-	ID              int64          `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name            string         `gorm:"type:varchar(200);not null" json:"name"`
-	Provider        string         `gorm:"type:varchar(50);not null" json:"provider"`
-	APIMode         string         `gorm:"type:varchar(50);not null;default:chat_completions" json:"api_mode"`
-	Endpoint        string         `gorm:"type:text;not null" json:"endpoint"`
-	APIKeyEncrypted string         `gorm:"type:text;not null" json:"-"`
-	PrimaryModel    string         `gorm:"type:varchar(200);not null" json:"primary_model"`
-	ExtraModels     StringArray    `gorm:"type:text[];not null;default:'{}'" json:"extra_models"`
-	GroupName       string         `gorm:"type:varchar(200);not null;default:''" json:"group_name"`
-	Enabled         bool           `gorm:"not null;default:true" json:"enabled"`
-	IntervalSeconds int            `gorm:"not null;default:60" json:"interval_seconds"`
-	LastCheckedAt   *time.Time     `json:"last_checked_at"`
-	CreatedBy       string         `gorm:"type:varchar(100);not null;default:''" json:"created_by"`
-	ExtraHeaders    JSONMap        `gorm:"type:jsonb;not null;default:'{}'" json:"extra_headers"`
-	BodyOverrideMode string        `gorm:"type:varchar(20);not null;default:off" json:"body_override_mode"`
-	BodyOverride    JSONRaw        `gorm:"type:jsonb" json:"body_override,omitempty"`
-	TemplateID      *int64         `json:"template_id,omitempty"`
-	CreatedAt       time.Time      `gorm:"not null;autoCreateTime" json:"created_at"`
-	UpdatedAt       time.Time      `gorm:"not null;autoUpdateTime" json:"updated_at"`
-	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+	ID               int64          `gorm:"primaryKey;autoIncrement" json:"id"`
+	Name             string         `gorm:"type:varchar(200);not null" json:"name"`
+	Provider         string         `gorm:"type:varchar(50);not null" json:"provider"`
+	APIMode          string         `gorm:"type:varchar(50);not null;default:chat_completions" json:"api_mode"`
+	Endpoint         string         `gorm:"type:text;not null" json:"endpoint"`
+	APIKeyEncrypted  string         `gorm:"type:text;not null" json:"-"`
+	PrimaryModel     string         `gorm:"type:varchar(200);not null" json:"primary_model"`
+	ExtraModels      StringArray    `gorm:"type:text[];not null;default:'{}'" json:"extra_models"`
+	GroupName        string         `gorm:"type:varchar(200);not null;default:''" json:"group_name"`
+	Enabled          bool           `gorm:"not null;default:true" json:"enabled"`
+	IntervalSeconds  int            `gorm:"not null;default:60" json:"interval_seconds"`
+	LastCheckedAt    *time.Time     `json:"last_checked_at"`
+	CreatedBy        string         `gorm:"type:varchar(100);not null;default:''" json:"created_by"`
+	ExtraHeaders     JSONMap        `gorm:"type:jsonb;not null;default:'{}'" json:"extra_headers"`
+	BodyOverrideMode string         `gorm:"type:varchar(20);not null;default:off" json:"body_override_mode"`
+	BodyOverride     JSONRaw        `gorm:"type:jsonb" json:"body_override,omitempty"`
+	TemplateID       *int64         `json:"template_id,omitempty"`
+	CreatedAt        time.Time      `gorm:"not null;autoCreateTime" json:"created_at"`
+	UpdatedAt        time.Time      `gorm:"not null;autoUpdateTime" json:"updated_at"`
+	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (ChannelMonitor) TableName() string { return "channel_monitors" }
@@ -51,22 +51,22 @@ func (ChannelMonitorHistory) TableName() string { return "channel_monitor_histor
 
 // ChannelMonitorDailyRollup 渠道监控日聚合
 type ChannelMonitorDailyRollup struct {
-	ID               int64      `gorm:"primaryKey;autoIncrement" json:"id"`
-	MonitorID        int64      `gorm:"not null;uniqueIndex:idx_channel_monitor_daily_rollups_uniq" json:"monitor_id"`
-	Model            string     `gorm:"type:varchar(200);not null;uniqueIndex:idx_channel_monitor_daily_rollups_uniq" json:"model"`
-	BucketDate       string     `gorm:"type:date;not null;uniqueIndex:idx_channel_monitor_daily_rollups_uniq" json:"bucket_date"`
-	TotalChecks      int        `gorm:"not null;default:0" json:"total_checks"`
-	OkCount          int        `gorm:"not null;default:0" json:"ok_count"`
-	OperationalCount int        `gorm:"not null;default:0" json:"operational_count"`
-	DegradedCount    int        `gorm:"not null;default:0" json:"degraded_count"`
-	FailedCount      int        `gorm:"not null;default:0" json:"failed_count"`
-	ErrorCount       int        `gorm:"not null;default:0" json:"error_count"`
-	SumLatencyMs     int64      `gorm:"not null;default:0" json:"sum_latency_ms"`
-	CountLatency     int        `gorm:"not null;default:0" json:"count_latency"`
-	SumPingLatencyMs int64      `gorm:"not null;default:0" json:"sum_ping_latency_ms"`
-	CountPingLatency int        `gorm:"not null;default:0" json:"count_ping_latency"`
-	ComputedAt       time.Time  `gorm:"not null;autoCreateTime" json:"computed_at"`
-	CreatedAt        time.Time  `gorm:"not null;autoCreateTime" json:"created_at"`
+	ID               int64          `gorm:"primaryKey;autoIncrement" json:"id"`
+	MonitorID        int64          `gorm:"not null;uniqueIndex:idx_channel_monitor_daily_rollups_uniq" json:"monitor_id"`
+	Model            string         `gorm:"type:varchar(200);not null;uniqueIndex:idx_channel_monitor_daily_rollups_uniq" json:"model"`
+	BucketDate       string         `gorm:"type:date;not null;uniqueIndex:idx_channel_monitor_daily_rollups_uniq" json:"bucket_date"`
+	TotalChecks      int            `gorm:"not null;default:0" json:"total_checks"`
+	OkCount          int            `gorm:"not null;default:0" json:"ok_count"`
+	OperationalCount int            `gorm:"not null;default:0" json:"operational_count"`
+	DegradedCount    int            `gorm:"not null;default:0" json:"degraded_count"`
+	FailedCount      int            `gorm:"not null;default:0" json:"failed_count"`
+	ErrorCount       int            `gorm:"not null;default:0" json:"error_count"`
+	SumLatencyMs     int64          `gorm:"not null;default:0" json:"sum_latency_ms"`
+	CountLatency     int            `gorm:"not null;default:0" json:"count_latency"`
+	SumPingLatencyMs int64          `gorm:"not null;default:0" json:"sum_ping_latency_ms"`
+	CountPingLatency int            `gorm:"not null;default:0" json:"count_ping_latency"`
+	ComputedAt       time.Time      `gorm:"not null;autoCreateTime" json:"computed_at"`
+	CreatedAt        time.Time      `gorm:"not null;autoCreateTime" json:"created_at"`
 	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
@@ -91,12 +91,14 @@ func (ChannelMonitorRequestTemplate) TableName() string { return "channel_monito
 
 // ChannelMonitorAggregationWatermark 聚合水位标记（单行，id=1）
 type ChannelMonitorAggregationWatermark struct {
-	ID                  int       `gorm:"primaryKey;default:1" json:"id"`
-	LastAggregatedDate  string    `gorm:"type:date;not null" json:"last_aggregated_date"`
-	UpdatedAt           time.Time `gorm:"not null;autoUpdateTime" json:"updated_at"`
+	ID                 int       `gorm:"primaryKey;autoIncrement:false;default:1" json:"id"`
+	LastAggregatedDate string    `gorm:"type:date;not null" json:"last_aggregated_date"`
+	UpdatedAt          time.Time `gorm:"not null;autoUpdateTime" json:"updated_at"`
 }
 
-func (ChannelMonitorAggregationWatermark) TableName() string { return "channel_monitor_aggregation_watermark" }
+func (ChannelMonitorAggregationWatermark) TableName() string {
+	return "channel_monitor_aggregation_watermark"
+}
 
 // ── Custom GORM types ──
 

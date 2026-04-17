@@ -1,0 +1,481 @@
+bash: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8): Bad file descriptor
+Error: No available formula with the name "php@7.4". Did you mean php@8.4, php@8.3, php@8.2 or php@8.1?
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:	export GIN_MODE=release
+ - using code:	gin.SetMode(gin.ReleaseMode)
+
+[GIN-debug] GET    /healthz                  --> github.com/example/llm-gateway/internal/controlplane/router.Setup.func1 (4 handlers)
+[GIN-debug] GET    /api/v1/auth/oidc/login   --> github.com/example/llm-gateway/internal/controlplane/auth.(*Handler).Login-fm (4 handlers)
+[GIN-debug] POST   /auth/oidc/callback       --> github.com/example/llm-gateway/internal/controlplane/auth.(*Handler).Callback-fm (4 handlers)
+[GIN-debug] POST   /auth/refresh             --> github.com/example/llm-gateway/internal/controlplane/auth.(*Handler).Refresh-fm (4 handlers)
+[GIN-debug] POST   /auth/logout              --> github.com/example/llm-gateway/internal/controlplane/auth.(*Handler).Logout-fm (4 handlers)
+[GIN-debug] GET    /api/v1/me                --> github.com/example/llm-gateway/internal/controlplane/auth.(*Handler).GetCurrentUser-fm (5 handlers)
+[GIN-debug] POST   /auth/dev/login           --> github.com/example/llm-gateway/internal/controlplane/handler.(*DevLoginHandler).Login-fm (4 handlers)
+2026/07/15 19:26:53 INFO [bootstrap] system already has admin, bootstrap channel closed
+2026/07/15 19:26:53 INFO pricing_table_refreshed count=6
+[GIN-debug] GET    /api/v1/settings/public   --> github.com/example/llm-gateway/internal/controlplane/router.Setup.func9 (4 handlers)
+[GIN-debug] GET    /api/v1/public/announcements --> github.com/example/llm-gateway/internal/controlplane/handler.(*AnnouncementHandler).ListActive-fm (4 handlers)
+[GIN-debug] GET    /api/v1/public/announcements/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*AnnouncementHandler).GetPublicByID-fm (4 handlers)
+[GIN-debug] GET    /api/v1/opencode-config/script --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpencodeConfigHandler).GetScript-fm (4 handlers)
+[GIN-debug] GET    /api/v1/opencode-config/plugin --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpencodeConfigHandler).GetPlugin-fm (4 handlers)
+[GIN-debug] GET    /api/v1/opencode-config/plugin/version --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpencodeConfigHandler).GetPluginVersion-fm (4 handlers)
+[GIN-debug] POST   /api/v1/opencode-config/callback --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpencodeConfigHandler).Callback-fm (4 handlers)
+[GIN-debug] GET    /api/v1/groups/capabilities --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelInfoHandler).GetGroupModelInfo-fm (5 handlers)
+[GIN-debug] GET    /api/v1/groups/defaults   --> github.com/example/llm-gateway/internal/controlplane/handler.(*GroupHandler).GetDefaults-fm (5 handlers)
+2026/07/15 19:26:53 INFO health check background started interval_minutes=5
+2026/07/15 19:26:53 INFO model check background started interval_seconds=300
+2026/07/15 19:26:53 INFO group check background started interval_seconds=300
+2026/07/15 19:26:53 INFO rollup_cron_started interval=5m0s
+[GIN-debug] GET    /api/v1/internal/groups   --> github.com/example/llm-gateway/internal/controlplane/handler.(*GroupHandler).ListEnabledGroups-fm (4 handlers)
+[GIN-debug] GET    /api/v1/public/channel-monitors --> github.com/example/llm-gateway/internal/controlplane/handler.(*ChannelMonitorUserHandler).ListPublic-fm (4 handlers)
+[GIN-debug] GET    /api/v1/public/channel-monitors/:id/status --> github.com/example/llm-gateway/internal/controlplane/handler.(*ChannelMonitorUserHandler).GetStatus-fm (4 handlers)
+[GIN-debug] GET    /api/v1/provider-definitions --> github.com/example/llm-gateway/internal/controlplane/handler.(*DefinitionHandler).ListDefinitions-fm (6 handlers)
+[GIN-debug] GET    /api/v1/provider-definitions/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*DefinitionHandler).GetDefinition-fm (6 handlers)
+[GIN-debug] POST   /api/v1/providers/check-all --> github.com/example/llm-gateway/internal/controlplane/handler.(*HealthCheckHandler).CheckAll-fm (6 handlers)
+[GIN-debug] POST   /api/v1/providers         --> github.com/example/llm-gateway/internal/controlplane/handler.(*ProviderHandler).CreateProvider-fm (6 handlers)
+[GIN-debug] GET    /api/v1/providers         --> github.com/example/llm-gateway/internal/controlplane/handler.(*ProviderHandler).ListProviders-fm (6 handlers)
+[GIN-debug] GET    /api/v1/providers/:id     --> github.com/example/llm-gateway/internal/controlplane/handler.(*ProviderHandler).GetProvider-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/providers/:id     --> github.com/example/llm-gateway/internal/controlplane/handler.(*ProviderHandler).UpdateProvider-fm (6 handlers)
+[GIN-debug] PATCH  /api/v1/providers/:id/status --> github.com/example/llm-gateway/internal/controlplane/handler.(*ProviderHandler).ToggleProviderStatus-fm (6 handlers)
+[GIN-debug] DELETE /api/v1/providers/:id     --> github.com/example/llm-gateway/internal/controlplane/handler.(*ProviderHandler).DeleteProvider-fm (6 handlers)
+[GIN-debug] POST   /api/v1/providers/:id/test --> github.com/example/llm-gateway/internal/controlplane/handler.(*TestHandler).TestProvider-fm (6 handlers)
+[GIN-debug] POST   /api/v1/providers/:id/check --> github.com/example/llm-gateway/internal/controlplane/handler.(*HealthCheckHandler).CheckOne-fm (6 handlers)
+[GIN-debug] POST   /api/v1/providers/:id/sync-models --> github.com/example/llm-gateway/internal/controlplane/handler.(*SyncHandler).SyncModels-fm (6 handlers)
+[GIN-debug] POST   /api/v1/providers/:id/sync-models/confirm --> github.com/example/llm-gateway/internal/controlplane/handler.(*SyncHandler).ConfirmSync-fm (6 handlers)
+2026/07/15 19:26:53 INFO rollup_start day=2026-07-15
+[GIN-debug] POST   /api/v1/providers/:id/check-models --> github.com/example/llm-gateway/internal/controlplane/handler.(*SyncHandler).CheckModels-fm (6 handlers)
+[GIN-debug] GET    /api/v1/model-tiers       --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelTierHandler).List-fm (7 handlers)
+[GIN-debug] POST   /api/v1/model-tiers       --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelTierHandler).Create-fm (7 handlers)
+[GIN-debug] PUT    /api/v1/model-tiers/reorder --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelTierHandler).Reorder-fm (7 handlers)
+[GIN-debug] GET    /api/v1/model-tiers/:id   --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelTierHandler).Get-fm (7 handlers)
+[GIN-debug] PUT    /api/v1/model-tiers/:id   --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelTierHandler).Update-fm (7 handlers)
+[GIN-debug] PATCH  /api/v1/model-tiers/:id/status --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelTierHandler).SetStatus-fm (7 handlers)
+[GIN-debug] PATCH  /api/v1/model-tiers/:id/archive --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelTierHandler).Archive-fm (7 handlers)
+[GIN-debug] DELETE /api/v1/model-tiers/:id   --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelTierHandler).Delete-fm (7 handlers)
+[GIN-debug] PUT    /api/v1/groups/budget-tiers --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelTierHandler).SetGroupBudgetTierBatch-fm (7 handlers)
+[GIN-debug] PUT    /api/v1/groups/:id/budget-tier --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelTierHandler).SetGroupBudgetTier-fm (7 handlers)
+[GIN-debug] GET    /api/v1/budgets/:allocation_id/tier-limits --> github.com/example/llm-gateway/internal/controlplane/handler.(*BudgetTierHandler).List-fm (7 handlers)
+[GIN-debug] PUT    /api/v1/budgets/:allocation_id/tier-limits --> github.com/example/llm-gateway/internal/controlplane/handler.(*BudgetTierHandler).DeprecatedSet-fm (7 handlers)
+[GIN-debug] POST   /api/v1/budgets/tier-limits/batch/preview --> github.com/example/llm-gateway/internal/controlplane/handler.(*BudgetTierHandler).PreviewBatch-fm (7 handlers)
+[GIN-debug] POST   /api/v1/budgets/tier-limits/batch/apply --> github.com/example/llm-gateway/internal/controlplane/handler.(*BudgetTierHandler).ApplyBatch-fm (7 handlers)
+[GIN-debug] GET    /api/v1/budgets/tier-usage --> github.com/example/llm-gateway/internal/controlplane/handler.(*BudgetTierHandler).TierUsage-fm (7 handlers)
+[GIN-debug] GET    /api/v1/my/budget/tiers   --> github.com/example/llm-gateway/internal/controlplane/handler.(*BudgetTierHandler).MyBudgetTiers-fm (6 handlers)
+[GIN-debug] POST   /api/v1/models            --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelHandler).CreateModel-fm (6 handlers)
+[GIN-debug] GET    /api/v1/models            --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelHandler).ListModels-fm (6 handlers)
+[GIN-debug] GET    /api/v1/models/check-name --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelHandler).CheckModelName-fm (6 handlers)
+[GIN-debug] POST   /api/v1/models/check-all  --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelCheckHandler).CheckAll-fm (6 handlers)
+[GIN-debug] DELETE /api/v1/models/batch      --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelHandler).BatchDeleteModels-fm (6 handlers)
+[GIN-debug] PATCH  /api/v1/models/batch-status --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelHandler).BatchUpdateModelStatus-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/models/batch-tags --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelTagHandler).BatchSetModelTags-fm (6 handlers)
+2026/07/15 19:26:53 INFO key_activity_cron_started
+[GIN-debug] POST   /api/v1/models/batch-tags/query --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelTagHandler).BatchGetModelTags-fm (6 handlers)
+[GIN-debug] POST   /api/v1/models/from-catalog --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelHandler).CreateModelFromCatalog-fm (6 handlers)
+[GIN-debug] POST   /api/v1/models/batch-bind-catalog --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelHandler).BatchBindCatalog-fm (6 handlers)
+[GIN-debug] GET    /api/v1/models/:id/status-logs --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelStatusLogHandler).GetModelStatusLogs-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/models/:id        --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelHandler).UpdateModel-fm (6 handlers)
+[GIN-debug] DELETE /api/v1/models/:id        --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelHandler).DeleteModel-fm (6 handlers)
+[GIN-debug] POST   /api/v1/models/:id/check  --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelCheckHandler).CheckOne-fm (6 handlers)
+[GIN-debug] POST   /api/v1/models/:id/reset-override --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelHandler).ResetModelOverride-fm (6 handlers)
+[GIN-debug] POST   /api/v1/models/:id/bind-catalog --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelHandler).BindCatalog-fm (6 handlers)
+[GIN-debug] POST   /api/v1/models/:id/unbind-catalog --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelHandler).UnbindCatalog-fm (6 handlers)
+[GIN-debug] GET    /api/v1/model-tags        --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelTagHandler).ListTags-fm (6 handlers)
+[GIN-debug] POST   /api/v1/model-tags        --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelTagHandler).CreateTag-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/model-tags/:id    --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelTagHandler).UpdateTag-fm (6 handlers)
+[GIN-debug] DELETE /api/v1/model-tags/:id    --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelTagHandler).DeleteTag-fm (6 handlers)
+[GIN-debug] GET    /api/v1/models/:id/tags   --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelTagHandler).GetModelTags-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/models/:id/tags   --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelTagHandler).SetModelTags-fm (6 handlers)
+[GIN-debug] GET    /api/v1/health-check/config --> github.com/example/llm-gateway/internal/controlplane/handler.(*HealthCheckHandler).GetConfig-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/health-check/config --> github.com/example/llm-gateway/internal/controlplane/handler.(*HealthCheckHandler).UpdateConfig-fm (6 handlers)
+[GIN-debug] GET    /api/v1/health-check/logs --> github.com/example/llm-gateway/internal/controlplane/handler.(*HealthCheckHandler).GetLogs-fm (6 handlers)
+[GIN-debug] GET    /api/v1/health-check/status --> github.com/example/llm-gateway/internal/controlplane/handler.(*HealthCheckHandler).GetStatus-fm (6 handlers)
+[GIN-debug] POST   /api/v1/health-check/run  --> github.com/example/llm-gateway/internal/controlplane/handler.(*HealthCheckHandler).RunNow-fm (6 handlers)
+[GIN-debug] GET    /api/v1/health-check/timeline --> github.com/example/llm-gateway/internal/controlplane/handler.(*HealthCheckHandler).GetTimeline-fm (6 handlers)
+[GIN-debug] GET    /api/v1/health-check/group-timeline --> github.com/example/llm-gateway/internal/controlplane/handler.(*HealthCheckHandler).GetGroupTimeline-fm (6 handlers)
+[GIN-debug] GET    /api/v1/health/performance --> github.com/example/llm-gateway/internal/controlplane/handler.(*PerformanceHandler).GetPerformance-fm (6 handlers)
+
+2026/07/15 19:26:53 [31;1m/Users/jsy/Public/self_code/llm-gateway/internal/controlplane/repository/channel_monitor_repo.go:79 [35;1mERROR: relation "channel_monitors" does not exist (SQLSTATE 42P01)
+[0m[33m[0.763ms] [34;1m[rows:0][0m SELECT * FROM "channel_monitors" WHERE enabled = true AND "channel_monitors"."deleted_at" IS NULL
+2026/07/15 19:26:53 ERROR channel_monitor: failed to load enabled monitors error="ERROR: relation \"channel_monitors\" does not exist (SQLSTATE 42P01)"
+
+2026/07/15 19:26:53 [31;1m/Users/jsy/Public/self_code/llm-gateway/internal/controlplane/repository/notification_repo.go:24 [35;1mERROR: there is no unique or exclusion constraint matching the ON CONFLICT specification (SQLSTATE 42P10)
+[0m[33m[2.235ms] [34;1m[rows:0][0m INSERT INTO "notifications" ("user_id","type","level","title","content","source","dedupe_key","ref_type","ref_id","is_read","read_at","created_at") VALUES ('22222222-2222-4222-8222-222222222222','expansion_submitted','info','新的扩容审批申请','123131','outbox','expansion:c33adba1-a17d-4597-b4de-9d825c580e7a:expansion_submitted:22222222-2222-4222-8222-222222222222','expansion_request','c33adba1-a17d-4597-b4de-9d825c580e7a',false,NULL,'2026-07-15 19:26:53.608') ON CONFLICT ("source","dedupe_key") DO NOTHING RETURNING "id"
+2026/07/15 19:26:53 WARN notifier: db write failed user_id=22222222-2222-4222-8222-222222222222 type=expansion_submitted error="ERROR: there is no unique or exclusion constraint matching the ON CONFLICT specification (SQLSTATE 42P10)"
+
+2026/07/15 19:26:53 [31;1m/Users/jsy/Public/self_code/llm-gateway/internal/controlplane/repository/settings_repo.go:21 [35;1mrecord not found
+[0m[33m[1.028ms] [34;1m[rows:0][0m SELECT * FROM "system_configs" WHERE key = 'ops_advanced_settings' ORDER BY "system_configs"."key" LIMIT 1
+2026/07/15 19:26:53 ERROR ops_cleanup: failed to add cron job error="expected exactly 6 fields, found 5: [0 3 * * *]"
+2026/07/15 19:26:53 INFO scheduled_report: started instance_id=3eb5f849-0117-4dc1-b1c3-0729a1fec119
+[GIN-debug] GET    /api/v1/ops/groups        --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetGroupOptions-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/providers     --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).ListProviders-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/models        --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).ListModels-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/dashboard     --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetDashboard-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/dashboard/snapshot-v2 --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetSnapshotV2-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/traffic-trend --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetTrafficTrend-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/error-trend   --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetErrorTrend-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/latency-histogram --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetLatencyHistogram-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/error-distribution --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetErrorDistribution-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/requests      --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).ListRequests-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/request-errors --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).ListRequestErrors-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/request-errors/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetRequestErrorDetail-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/upstream-errors --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).ListUpstreamErrors-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/concurrency   --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetConcurrencyStats-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/switch-rate-trend --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetSwitchRateTrend-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/throughput-trend --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetThroughputTrend-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/alert-rules   --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).ListAlertRules-fm (6 handlers)
+[GIN-debug] POST   /api/v1/ops/alert-rules   --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).CreateAlertRule-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/ops/alert-rules/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).UpdateAlertRule-fm (6 handlers)
+[GIN-debug] DELETE /api/v1/ops/alert-rules/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).DeleteAlertRule-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/alert-events  --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).ListAlertEvents-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/alert-events/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetAlertEvent-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/ops/alert-events/:id/status --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).UpdateAlertEventStatus-fm (6 handlers)
+[GIN-debug] POST   /api/v1/ops/alert-silences --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).CreateAlertSilence-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/system-logs   --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).ListSystemLogs-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/system-logs/health --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetSystemLogSinkHealth-fm (6 handlers)
+[GIN-debug] POST   /api/v1/ops/system-logs/cleanup --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).CleanupSystemLogs-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/runtime/logging --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetRuntimeLogConfig-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/ops/runtime/logging --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).UpdateRuntimeLogConfig-fm (6 handlers)
+[GIN-debug] POST   /api/v1/ops/runtime/logging/reset --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).ResetRuntimeLogConfig-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/token-stats   --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetTokenStats-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/settings/metric-thresholds --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetMetricThresholds-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/ops/settings/metric-thresholds --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).UpdateMetricThresholds-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/settings/dashboard --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetDashboardSettings-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/ops/settings/dashboard --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).UpdateDashboardSettings-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/settings/advanced --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetAdvancedSettings-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/ops/settings/advanced --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).UpdateAdvancedSettings-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/user-concurrency --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetUserConcurrency-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/account-availability --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetAccountAvailability-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/realtime-traffic --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetRealtimeTraffic-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/request-errors/:id/correlation --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetRequestErrorCorrelation-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/upstream-errors/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetUpstreamErrorDetail-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/jobs          --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).ListJobs-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/settings/email-notification --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetEmailNotificationConfig-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/ops/settings/email-notification --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).UpdateEmailNotificationConfig-fm (6 handlers)
+[GIN-debug] POST   /api/v1/ops/settings/email-notification/test --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).SendTestAlertEmail-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/settings/alert-runtime --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).GetAlertRuntimeSettings-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/ops/settings/alert-runtime --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).UpdateAlertRuntimeSettings-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/error-logs    --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).ListErrorLogs-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/ops/error-logs/:id/resolve --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).ResolveErrorLog-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/ops/request-errors/:id/resolve --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).ResolveRequestError-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/ops/upstream-errors/:id/resolve --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsHandler).ResolveUpstreamError-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/video-tasks/stats --> github.com/example/llm-gateway/internal/controlplane/handler.(*VideoTaskHandler).Stats-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/video-tasks   --> github.com/example/llm-gateway/internal/controlplane/handler.(*VideoTaskHandler).List-fm (6 handlers)
+[GIN-debug] GET    /api/v1/ops/video-tasks/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*VideoTaskHandler).Get-fm (6 handlers)
+[GIN-debug] GET    /api/v1/video/tasks/stats/trend --> github.com/example/llm-gateway/internal/controlplane/handler.(*VideoTaskHandler).StatsTrend-fm (6 handlers)
+[GIN-debug] GET    /api/v1/video/tasks/stats/distribution --> github.com/example/llm-gateway/internal/controlplane/handler.(*VideoTaskHandler).StatsDistribution-fm (6 handlers)
+[GIN-debug] GET    /api/v1/video/tasks/stats --> github.com/example/llm-gateway/internal/controlplane/handler.(*VideoTaskHandler).Stats-fm (6 handlers)
+[GIN-debug] GET    /api/v1/video/tasks       --> github.com/example/llm-gateway/internal/controlplane/handler.(*VideoTaskHandler).List-fm (6 handlers)
+[GIN-debug] GET    /api/v1/video/tasks/:id   --> github.com/example/llm-gateway/internal/controlplane/handler.(*VideoTaskHandler).Get-fm (6 handlers)
+[GIN-debug] GET    /api/v1/model-status-logs --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelStatusLogHandler).ListModelStatusLogs-fm (6 handlers)
+[GIN-debug] GET    /api/v1/model-catalog/search --> github.com/example/llm-gateway/internal/controlplane/handler.(*CatalogHandler).Search-fm (6 handlers)
+[GIN-debug] POST   /api/v1/keys              --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyHandler).CreateKey-fm (6 handlers)
+[GIN-debug] GET    /api/v1/keys              --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyHandler).ListKeys-fm (6 handlers)
+[GIN-debug] GET    /api/v1/keys/:id          --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyHandler).GetKey-fm (6 handlers)
+[GIN-debug] PATCH  /api/v1/keys/:id/disable  --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyHandler).DisableKey-fm (6 handlers)
+[GIN-debug] PATCH  /api/v1/keys/:id/enable   --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyHandler).EnableKey-fm (6 handlers)
+[GIN-debug] DELETE /api/v1/keys/:id          --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyHandler).DeleteKey-fm (6 handlers)
+[GIN-debug] POST   /api/v1/keys/:id/reset    --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyHandler).ResetKey-fm (6 handlers)
+[GIN-debug] POST   /api/v1/keys/:id/reveal   --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyHandler).RevealKey-fm (6 handlers)
+[GIN-debug] GET    /api/v1/keys/:id/groups   --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyHandler).ListKeyGroups-fm (6 handlers)
+[GIN-debug] POST   /api/v1/keys/:id/groups   --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyHandler).UpdateKeyGroups-fm (6 handlers)
+[GIN-debug] POST   /api/v1/keys/:id/access-all-groups --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyHandler).ToggleAccessAllGroups-fm (6 handlers)
+[GIN-debug] PATCH  /api/v1/keys/:id/log-enabled --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyHandler).ToggleLogEnabled-fm (6 handlers)
+[GIN-debug] GET    /api/v1/groups/available  --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyHandler).ListAvailableGroups-fm (6 handlers)
+[GIN-debug] POST   /api/v1/keys/:id/opencode-config/token --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpencodeConfigHandler).GenerateToken-fm (6 handlers)
+[GIN-debug] GET    /api/v1/keys/:id/opencode-config/status --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpencodeConfigHandler).GetStatus-fm (6 handlers)
+[GIN-debug] GET    /api/v1/model-catalog/by-source --> github.com/example/llm-gateway/internal/controlplane/handler.(*CatalogHandler).GetBySource-fm (6 handlers)
+[GIN-debug] POST   /api/v1/model-catalog/sync --> github.com/example/llm-gateway/internal/controlplane/handler.(*CatalogHandler).Sync-fm (6 handlers)
+[GIN-debug] GET    /api/v1/model-catalog/diff --> github.com/example/llm-gateway/internal/controlplane/handler.(*CatalogHandler).Diff-fm (6 handlers)
+[GIN-debug] POST   /api/v1/model-catalog/apply-diff --> github.com/example/llm-gateway/internal/controlplane/handler.(*CatalogHandler).ApplyDiff-fm (6 handlers)
+[GIN-debug] POST   /api/v1/model-catalog/auto-bind --> github.com/example/llm-gateway/internal/controlplane/handler.(*CatalogHandler).AutoBind-fm (6 handlers)
+[GIN-debug] GET    /api/v1/model-catalog/binding-stats --> github.com/example/llm-gateway/internal/controlplane/handler.(*CatalogHandler).BindingStats-fm (6 handlers)
+[GIN-debug] GET    /api/v1/model-catalog/sync-status --> github.com/example/llm-gateway/internal/controlplane/handler.(*CatalogHandler).SyncStatus-fm (6 handlers)
+[GIN-debug] GET    /api/v1/model-catalog/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*CatalogHandler).GetByID-fm (6 handlers)
+[GIN-debug] POST   /api/v1/groups/check-all  --> github.com/example/llm-gateway/internal/controlplane/handler.(*GroupCheckHandler).CheckAll-fm (6 handlers)
+[GIN-debug] POST   /api/v1/groups            --> github.com/example/llm-gateway/internal/controlplane/handler.(*GroupHandler).Create-fm (6 handlers)
+[GIN-debug] GET    /api/v1/groups            --> github.com/example/llm-gateway/internal/controlplane/handler.(*GroupHandler).List-fm (6 handlers)
+[GIN-debug] GET    /api/v1/groups/:id        --> github.com/example/llm-gateway/internal/controlplane/handler.(*GroupHandler).GetByID-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/groups/:id        --> github.com/example/llm-gateway/internal/controlplane/handler.(*GroupHandler).Update-fm (6 handlers)
+[GIN-debug] DELETE /api/v1/groups/:id        --> github.com/example/llm-gateway/internal/controlplane/handler.(*GroupHandler).Delete-fm (6 handlers)
+[GIN-debug] POST   /api/v1/groups/:id/models --> github.com/example/llm-gateway/internal/controlplane/handler.(*GroupHandler).AddModels-fm (6 handlers)
+[GIN-debug] GET    /api/v1/groups/:id/models --> github.com/example/llm-gateway/internal/controlplane/handler.(*GroupHandler).ListModels-fm (6 handlers)
+[GIN-debug] DELETE /api/v1/groups/:id/models/:model_id --> github.com/example/llm-gateway/internal/controlplane/handler.(*GroupHandler).RemoveModel-fm (6 handlers)
+[GIN-debug] POST   /api/v1/groups/:id/reset-capability --> github.com/example/llm-gateway/internal/controlplane/handler.(*GroupHandler).ResetCapability-fm (6 handlers)
+[GIN-debug] POST   /api/v1/groups/:id/check  --> github.com/example/llm-gateway/internal/controlplane/handler.(*GroupCheckHandler).CheckOne-fm (6 handlers)
+[GIN-debug] GET    /api/v1/settings          --> github.com/example/llm-gateway/internal/controlplane/handler.(*SettingsHandler).GetSystemSettings-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/settings          --> github.com/example/llm-gateway/internal/controlplane/handler.(*SettingsHandler).UpdateSettings-fm (6 handlers)
+[GIN-debug] POST   /api/v1/settings/test-webhook --> github.com/example/llm-gateway/internal/controlplane/handler.(*SettingsHandler).TestWebhook-fm (6 handlers)
+[GIN-debug] POST   /api/v1/settings/test-email --> github.com/example/llm-gateway/internal/controlplane/handler.(*SettingsHandler).TestEmail-fm (6 handlers)
+[GIN-debug] POST   /api/v1/settings/export   --> github.com/example/llm-gateway/internal/controlplane/handler.(*SettingsHandler).ExportSettings-fm (6 handlers)
+[GIN-debug] POST   /api/v1/settings/import   --> github.com/example/llm-gateway/internal/controlplane/handler.(*SettingsHandler).ImportSettings-fm (6 handlers)
+[GIN-debug] GET    /api/v1/announcements     --> github.com/example/llm-gateway/internal/controlplane/handler.(*AnnouncementHandler).List-fm (6 handlers)
+[GIN-debug] POST   /api/v1/announcements     --> github.com/example/llm-gateway/internal/controlplane/handler.(*AnnouncementHandler).Create-fm (6 handlers)
+[GIN-debug] GET    /api/v1/announcements/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*AnnouncementHandler).GetByID-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/announcements/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*AnnouncementHandler).Update-fm (6 handlers)
+[GIN-debug] DELETE /api/v1/announcements/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*AnnouncementHandler).Delete-fm (6 handlers)
+[GIN-debug] PATCH  /api/v1/announcements/:id/publish --> github.com/example/llm-gateway/internal/controlplane/handler.(*AnnouncementHandler).Publish-fm (6 handlers)
+[GIN-debug] PATCH  /api/v1/announcements/:id/archive --> github.com/example/llm-gateway/internal/controlplane/handler.(*AnnouncementHandler).Archive-fm (6 handlers)
+[GIN-debug] POST   /api/v1/announcements/:id/read --> github.com/example/llm-gateway/internal/controlplane/handler.(*AnnouncementHandler).MarkRead-fm (6 handlers)
+[GIN-debug] GET    /api/v1/announcements/unread --> github.com/example/llm-gateway/internal/controlplane/handler.(*AnnouncementHandler).GetUnread-fm (6 handlers)
+[GIN-debug] GET    /api/v1/announcements/unread/count --> github.com/example/llm-gateway/internal/controlplane/handler.(*AnnouncementHandler).GetUnreadCount-fm (6 handlers)
+[GIN-debug] GET    /api/v1/announcements/history --> github.com/example/llm-gateway/internal/controlplane/handler.(*AnnouncementHandler).GetReadHistory-fm (6 handlers)
+[GIN-debug] GET    /api/v1/notifications/unread --> github.com/example/llm-gateway/internal/controlplane/handler.(*NotificationHandler).GetUnread-fm (6 handlers)
+[GIN-debug] GET    /api/v1/notifications/unread/count --> github.com/example/llm-gateway/internal/controlplane/handler.(*NotificationHandler).GetUnreadCount-fm (6 handlers)
+[GIN-debug] GET    /api/v1/notifications/history --> github.com/example/llm-gateway/internal/controlplane/handler.(*NotificationHandler).GetHistory-fm (6 handlers)
+[GIN-debug] POST   /api/v1/notifications/:id/read --> github.com/example/llm-gateway/internal/controlplane/handler.(*NotificationHandler).MarkRead-fm (6 handlers)
+[GIN-debug] POST   /api/v1/notifications/read-all --> github.com/example/llm-gateway/internal/controlplane/handler.(*NotificationHandler).MarkAllRead-fm (6 handlers)
+[GIN-debug] GET    /api/v1/usage/logs        --> github.com/example/llm-gateway/internal/observability/handler.(*UsageHandler).Logs-fm (6 handlers)
+[GIN-debug] GET    /api/v1/usage/logs/:request_id/trace --> github.com/example/llm-gateway/internal/observability/handler.(*UsageHandler).Trace-fm (6 handlers)
+[GIN-debug] GET    /api/v1/usage/options     --> github.com/example/llm-gateway/internal/observability/handler.(*UsageHandler).Options-fm (6 handlers)
+[GIN-debug] GET    /api/v1/usage             --> github.com/example/llm-gateway/internal/observability/handler.(*UsageHandler).Query-fm (6 handlers)
+[GIN-debug] GET    /api/v1/usage-logs        --> github.com/example/llm-gateway/internal/observability/handler.(*UsageHandler).Logs-fm (6 handlers)
+[GIN-debug] GET    /api/v1/my/keys           --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyHandler).MyKeys-fm (6 handlers)
+[GIN-debug] GET    /api/v1/my/usage          --> github.com/example/llm-gateway/internal/observability/handler.(*UsageHandler).MyQuery-fm (6 handlers)
+[GIN-debug] GET    /api/v1/my/usage/percentiles --> github.com/example/llm-gateway/internal/observability/handler.(*UsageHandler).MyPercentiles-fm (6 handlers)
+[GIN-debug] GET    /api/v1/my/usage/logs     --> github.com/example/llm-gateway/internal/observability/handler.(*UsageHandler).MyLogs-fm (6 handlers)
+[GIN-debug] GET    /api/v1/my/usage/logs/:request_id/trace --> github.com/example/llm-gateway/internal/observability/handler.(*UsageHandler).Trace-fm (6 handlers)
+[GIN-debug] GET    /api/v1/my/video/tasks/stats/trend --> github.com/example/llm-gateway/internal/controlplane/handler.(*VideoTaskHandler).MyStatsTrend-fm (6 handlers)
+[GIN-debug] GET    /api/v1/my/video/tasks/stats/distribution --> github.com/example/llm-gateway/internal/controlplane/handler.(*VideoTaskHandler).MyStatsDistribution-fm (6 handlers)
+[GIN-debug] GET    /api/v1/my/video/tasks/stats --> github.com/example/llm-gateway/internal/controlplane/handler.(*VideoTaskHandler).MyStats-fm (6 handlers)
+[GIN-debug] GET    /api/v1/my/video/tasks    --> github.com/example/llm-gateway/internal/controlplane/handler.(*VideoTaskHandler).MyList-fm (6 handlers)
+[GIN-debug] GET    /internal/v1/models/available --> github.com/example/llm-gateway/internal/controlplane/handler.(*InternalHandler).ListAvailableModels-fm (5 handlers)
+[GIN-debug] GET    /internal/v1/models/health --> github.com/example/llm-gateway/internal/controlplane/handler.(*InternalHandler).GetModelHealth-fm (5 handlers)
+[GIN-debug] GET    /internal/v1/models/pricing --> github.com/example/llm-gateway/internal/controlplane/handler.(*InternalHandler).GetModelPricing-fm (5 handlers)
+[GIN-debug] POST   /internal/v1/keys/verify  --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyHandler).VerifyKey-fm (5 handlers)
+[GIN-debug] POST   /internal/v1/auth/verify-key --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyHandler).VerifyKey-fm (5 handlers)
+[GIN-debug] GET    /internal/v1/keys/:id/groups --> github.com/example/llm-gateway/internal/controlplane/handler.(*InternalHandler).GetKeyGroups-fm (5 handlers)
+[GIN-debug] GET    /internal/v1/groups/model-info --> github.com/example/llm-gateway/internal/controlplane/handler.(*ModelInfoHandler).GetGroupModelInfo-fm (5 handlers)
+2026/07/15 19:26:53 INFO rollup_done day=2026-07-15 rows_affected=0
+[GIN-debug] PUT    /api/v1/groups/:id/open-mode --> github.com/example/llm-gateway/internal/controlplane/handler.(*EntitlementHandler).SetOpenMode-fm (7 handlers)
+[GIN-debug] POST   /api/v1/groups/:id/entitlements --> github.com/example/llm-gateway/internal/controlplane/handler.(*EntitlementHandler).Grant-fm (7 handlers)
+[GIN-debug] DELETE /api/v1/groups/:id/entitlements/:eid --> github.com/example/llm-gateway/internal/controlplane/handler.(*EntitlementHandler).Revoke-fm (7 handlers)
+[GIN-debug] GET    /api/v1/groups/:id/entitlements --> github.com/example/llm-gateway/internal/controlplane/handler.(*EntitlementHandler).List-fm (7 handlers)
+[GIN-debug] POST   /internal/v1/budget/evaluate-alert --> github.com/example/llm-gateway/internal/controlplane/handler.(*BudgetHandler).EvaluateAlert-fm (5 handlers)
+[GIN-debug] POST   /internal/v1/video/tasks  --> github.com/example/llm-gateway/internal/controlplane/handler.(*VideoTaskHandler).InternalCreate-fm (5 handlers)
+[GIN-debug] PATCH  /internal/v1/video/tasks/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*VideoTaskHandler).InternalUpdate-fm (5 handlers)
+[GIN-debug] PATCH  /internal/v1/video/tasks/:id/status --> github.com/example/llm-gateway/internal/controlplane/handler.(*VideoTaskHandler).InternalUpdateStatus-fm (5 handlers)
+[GIN-debug] GET    /internal/v1/video/tasks/:id/provider-type --> github.com/example/llm-gateway/internal/controlplane/handler.(*VideoTaskHandler).InternalGetProviderType-fm (5 handlers)
+[GIN-debug] POST   /api/v1/service-keys      --> github.com/example/llm-gateway/internal/controlplane/handler.(*ServiceKeyHandler).Create-fm (7 handlers)
+[GIN-debug] GET    /api/v1/service-keys      --> github.com/example/llm-gateway/internal/controlplane/handler.(*ServiceKeyHandler).List-fm (7 handlers)
+[GIN-debug] PATCH  /api/v1/service-keys/:id/status --> github.com/example/llm-gateway/internal/controlplane/handler.(*ServiceKeyHandler).Toggle-fm (7 handlers)
+[GIN-debug] PATCH  /api/v1/service-keys/:id/ip-allowlist --> github.com/example/llm-gateway/internal/controlplane/handler.(*ServiceKeyHandler).UpdateIPAllowlist-fm (7 handlers)
+[GIN-debug] POST   /api/v1/service-keys/:id/groups --> github.com/example/llm-gateway/internal/controlplane/handler.(*ServiceKeyHandler).UpdateGroups-fm (7 handlers)
+[GIN-debug] POST   /api/v1/service-keys/:id/access-all-groups --> github.com/example/llm-gateway/internal/controlplane/handler.(*ServiceKeyHandler).ToggleAccessAllGroups-fm (7 handlers)
+[GIN-debug] DELETE /api/v1/service-keys/:id  --> github.com/example/llm-gateway/internal/controlplane/handler.(*ServiceKeyHandler).Delete-fm (7 handlers)
+[GIN-debug] GET    /api/v1/audit-logs        --> github.com/example/llm-gateway/internal/controlplane/handler.(*AuditLogHandler).List-fm (7 handlers)
+[GIN-debug] GET    /api/v1/budgets           --> github.com/example/llm-gateway/internal/controlplane/handler.(*BudgetHandler).List-fm (7 handlers)
+[GIN-debug] PUT    /api/v1/budgets           --> github.com/example/llm-gateway/internal/controlplane/handler.(*BudgetHandler).Set-fm (7 handlers)
+[GIN-debug] PUT    /api/v1/budgets/multi-period --> github.com/example/llm-gateway/internal/controlplane/handler.(*BudgetHandler).SetMultiPeriod-fm (7 handlers)
+[GIN-debug] PUT    /api/v1/budgets/batch     --> github.com/example/llm-gateway/internal/controlplane/handler.(*BudgetHandler).BatchSet-fm (7 handlers)
+[GIN-debug] POST   /api/v1/budgets/batch/preview --> github.com/example/llm-gateway/internal/controlplane/handler.(*BudgetHandler).PreviewTotalBatch-fm (7 handlers)
+[GIN-debug] POST   /api/v1/budgets/batch/apply --> github.com/example/llm-gateway/internal/controlplane/handler.(*BudgetHandler).ApplyTotalBatch-fm (7 handlers)
+[GIN-debug] DELETE /api/v1/budgets           --> github.com/example/llm-gateway/internal/controlplane/handler.(*BudgetHandler).Delete-fm (7 handlers)
+[GIN-debug] GET    /api/v1/budgets/context   --> github.com/example/llm-gateway/internal/controlplane/handler.(*BudgetHandler).Context-fm (7 handlers)
+[GIN-debug] POST   /api/v1/budget/rebuild-counters --> github.com/example/llm-gateway/internal/controlplane/handler.(*BudgetHandler).RebuildCounters-fm (7 handlers)
+[GIN-debug] GET    /api/v1/budget/risk-events --> github.com/example/llm-gateway/internal/controlplane/handler.(*BudgetRiskHandler).List-fm (7 handlers)
+[GIN-debug] GET    /api/v1/budget/risk-events/summary --> github.com/example/llm-gateway/internal/controlplane/handler.(*BudgetRiskHandler).Summary-fm (7 handlers)
+[GIN-debug] POST   /api/v1/expansion-requests/precheck --> github.com/example/llm-gateway/internal/controlplane/handler.(*ExpansionHandler).Precheck-fm (6 handlers)
+[GIN-debug] POST   /api/v1/expansion-requests/notify-owner --> github.com/example/llm-gateway/internal/controlplane/handler.(*ExpansionHandler).NotifyOwner-fm (6 handlers)
+[GIN-debug] POST   /api/v1/expansion-requests --> github.com/example/llm-gateway/internal/controlplane/handler.(*ExpansionHandler).Create-fm (6 handlers)
+[GIN-debug] GET    /api/v1/expansion-requests --> github.com/example/llm-gateway/internal/controlplane/handler.(*ExpansionHandler).ListMine-fm (6 handlers)
+[GIN-debug] GET    /api/v1/expansion-requests/pending --> github.com/example/llm-gateway/internal/controlplane/handler.(*ExpansionHandler).ListPending-fm (7 handlers)
+[GIN-debug] GET    /api/v1/expansion-requests/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*ExpansionHandler).Get-fm (6 handlers)
+[GIN-debug] PATCH  /api/v1/expansion-requests/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*ExpansionHandler).Update-fm (6 handlers)
+[GIN-debug] POST   /api/v1/expansion-requests/:id/reprecheck --> github.com/example/llm-gateway/internal/controlplane/handler.(*ExpansionHandler).Reprecheck-fm (6 handlers)
+[GIN-debug] POST   /api/v1/expansion-requests/:id/decision --> github.com/example/llm-gateway/internal/controlplane/handler.(*ExpansionHandler).Decide-fm (6 handlers)
+[GIN-debug] GET    /api/v1/expansion-requests/:id/steps --> github.com/example/llm-gateway/internal/controlplane/handler.(*ExpansionHandler).ListSteps-fm (6 handlers)
+[GIN-debug] POST   /api/v1/expansion-requests/batch-decision --> github.com/example/llm-gateway/internal/controlplane/handler.(*ExpansionHandler).BatchDecide-fm (7 handlers)
+[GIN-debug] GET    /api/v1/key-requests/policy --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyRequestHandler).CheckPolicy-fm (6 handlers)
+[GIN-debug] POST   /api/v1/key-requests      --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyRequestHandler).Create-fm (6 handlers)
+[GIN-debug] GET    /api/v1/key-requests      --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyRequestHandler).ListMine-fm (6 handlers)
+[GIN-debug] GET    /api/v1/key-requests/summary --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyRequestHandler).CountMine-fm (6 handlers)
+[GIN-debug] GET    /api/v1/key-requests/pending --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyRequestHandler).ListPending-fm (7 handlers)
+[GIN-debug] GET    /api/v1/key-requests/pending/count --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyRequestHandler).CountPendingForDept-fm (7 handlers)
+[GIN-debug] GET    /api/v1/key-requests/history --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyRequestHandler).ListHistory-fm (7 handlers)
+[GIN-debug] POST   /api/v1/key-requests/:id/cancel --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyRequestHandler).CancelMine-fm (6 handlers)
+[GIN-debug] POST   /api/v1/key-requests/:id/decision --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyRequestHandler).Decide-fm (7 handlers)
+[GIN-debug] GET    /api/v1/dept-policies/:dept_id/key-creation --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyRequestHandler).GetDeptPolicy-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/dept-policies/:dept_id/key-creation --> github.com/example/llm-gateway/internal/controlplane/handler.(*KeyRequestHandler).SetDeptPolicy-fm (7 handlers)
+[GIN-debug] GET    /api/v1/channel-monitors  --> github.com/example/llm-gateway/internal/controlplane/handler.(*ChannelMonitorHandler).List-fm (6 handlers)
+[GIN-debug] POST   /api/v1/channel-monitors  --> github.com/example/llm-gateway/internal/controlplane/handler.(*ChannelMonitorHandler).Create-fm (6 handlers)
+[GIN-debug] GET    /api/v1/channel-monitors/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*ChannelMonitorHandler).Get-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/channel-monitors/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*ChannelMonitorHandler).Update-fm (6 handlers)
+[GIN-debug] DELETE /api/v1/channel-monitors/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*ChannelMonitorHandler).Delete-fm (6 handlers)
+[GIN-debug] POST   /api/v1/channel-monitors/:id/run --> github.com/example/llm-gateway/internal/controlplane/handler.(*ChannelMonitorHandler).RunCheck-fm (6 handlers)
+[GIN-debug] GET    /api/v1/channel-monitors/:id/history --> github.com/example/llm-gateway/internal/controlplane/handler.(*ChannelMonitorHandler).GetHistory-fm (6 handlers)
+[GIN-debug] GET    /api/v1/channel-monitor-templates --> github.com/example/llm-gateway/internal/controlplane/handler.(*ChannelMonitorHandler).ListTemplates-fm (6 handlers)
+[GIN-debug] POST   /api/v1/channel-monitor-templates --> github.com/example/llm-gateway/internal/controlplane/handler.(*ChannelMonitorHandler).CreateTemplate-fm (6 handlers)
+[GIN-debug] GET    /api/v1/channel-monitor-templates/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*ChannelMonitorHandler).GetTemplate-fm (6 handlers)
+[GIN-debug] PUT    /api/v1/channel-monitor-templates/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*ChannelMonitorHandler).UpdateTemplate-fm (6 handlers)
+[GIN-debug] DELETE /api/v1/channel-monitor-templates/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*ChannelMonitorHandler).DeleteTemplate-fm (6 handlers)
+[GIN-debug] GET    /api/v1/my/budget         --> github.com/example/llm-gateway/internal/controlplane/handler.(*BudgetHandler).MyBudget-fm (5 handlers)
+[GIN-debug] GET    /api/v1/ops/ws/qps        --> github.com/example/llm-gateway/internal/controlplane/handler.(*OpsWSHandler).HandleQPSWebSocket-fm (4 handlers)
+[GIN-debug] PATCH  /api/v1/users/:id/quota   --> github.com/example/llm-gateway/internal/controlplane/handler.(*QuotaHandler).SetUserQuota-fm (7 handlers)
+[GIN-debug] GET    /api/v1/users/:id/quota   --> github.com/example/llm-gateway/internal/controlplane/handler.(*QuotaHandler).GetUserQuota-fm (7 handlers)
+[GIN-debug] PATCH  /api/v1/keys/:id/quota    --> github.com/example/llm-gateway/internal/controlplane/handler.(*QuotaHandler).SetServiceKeyQuota-fm (7 handlers)
+[GIN-debug] GET    /api/v1/keys/:id/quota    --> github.com/example/llm-gateway/internal/controlplane/handler.(*QuotaHandler).GetServiceKeyQuota-fm (7 handlers)
+[GIN-debug] PATCH  /api/v1/groups/:id/quota  --> github.com/example/llm-gateway/internal/controlplane/handler.(*QuotaHandler).SetGroupQuota-fm (7 handlers)
+[GIN-debug] GET    /api/v1/groups/:id/quota  --> github.com/example/llm-gateway/internal/controlplane/handler.(*QuotaHandler).GetGroupQuota-fm (7 handlers)
+[GIN-debug] PATCH  /api/v1/models/:id/quota  --> github.com/example/llm-gateway/internal/controlplane/handler.(*QuotaHandler).SetModelQuota-fm (7 handlers)
+[GIN-debug] GET    /api/v1/models/:id/quota  --> github.com/example/llm-gateway/internal/controlplane/handler.(*QuotaHandler).GetModelQuota-fm (7 handlers)
+[GIN-debug] GET    /api/v1/me/quota          --> github.com/example/llm-gateway/internal/controlplane/handler.(*QuotaHandler).GetMyQuota-fm (5 handlers)
+[GIN-debug] POST   /api/v1/quota/exemptions  --> github.com/example/llm-gateway/internal/controlplane/handler.(*QuotaExemptionHandler).Create-fm (7 handlers)
+[GIN-debug] DELETE /api/v1/quota/exemptions/:id --> github.com/example/llm-gateway/internal/controlplane/handler.(*QuotaExemptionHandler).Revoke-fm (7 handlers)
+[GIN-debug] GET    /api/v1/quota/exemptions  --> github.com/example/llm-gateway/internal/controlplane/handler.(*QuotaExemptionHandler).List-fm (7 handlers)
+[GIN-debug] GET    /internal/v1/quota/snapshot --> github.com/example/llm-gateway/internal/controlplane/router.Setup.func15 (5 handlers)
+[GIN-debug] GET    /api/v1/org/studios       --> github.com/example/llm-gateway/internal/orgservice/handler.(*OrgHandler).ListStudios-fm (6 handlers)
+[GIN-debug] POST   /api/v1/org/studios       --> github.com/example/llm-gateway/internal/orgservice/handler.(*OrgHandler).CreateStudio-fm (7 handlers)
+[GIN-debug] GET    /api/v1/org/studios/:id   --> github.com/example/llm-gateway/internal/orgservice/handler.(*OrgHandler).GetStudio-fm (6 handlers)
+[GIN-debug] DELETE /api/v1/org/studios/:id   --> github.com/example/llm-gateway/internal/orgservice/handler.(*OrgHandler).DeleteStudio-fm (7 handlers)
+[GIN-debug] GET    /api/v1/org/departments   --> github.com/example/llm-gateway/internal/orgservice/handler.(*MappingHandler).ListDepartments-fm (6 handlers)
+[GIN-debug] GET    /api/v1/org/departments/unmapped --> github.com/example/llm-gateway/internal/orgservice/handler.(*MappingHandler).ListUnmappedDepts-fm (6 handlers)
+2026/07/15 19:26:53 INFO exemption_cleanup_cron_started interval=1h0m0s
+[GIN-debug] PUT    /api/v1/org/departments/:id/studio --> github.com/example/llm-gateway/internal/orgservice/handler.(*MappingHandler).SetDeptStudio-fm (7 handlers)
+[GIN-debug] GET    /api/v1/org/dept-studio-map --> github.com/example/llm-gateway/internal/orgservice/handler.(*MappingHandler).ListMappings-fm (6 handlers)
+[GIN-debug] POST   /api/v1/org/dept-studio-map/import --> github.com/example/llm-gateway/internal/orgservice/handler.(*MappingHandler).ImportMappings-fm (7 handlers)
+[GIN-debug] GET    /api/v1/org/departments/:dept_id/members --> github.com/example/llm-gateway/internal/orgservice/handler.(*OrgHandler).GetDeptMembers-fm (7 handlers)
+[GIN-debug] GET    /api/v1/org/users         --> github.com/example/llm-gateway/internal/orgservice/handler.(*OrgHandler).SearchUsers-fm (6 handlers)
+[GIN-debug] GET    /api/v1/org/all-roles     --> github.com/example/llm-gateway/internal/orgservice/handler.(*OrgHandler).ListAllRoles-fm (7 handlers)
+[GIN-debug] POST   /api/v1/org/roles/grant   --> github.com/example/llm-gateway/internal/orgservice/handler.(*RoleHandler).GrantRole-fm (7 handlers)
+[GIN-debug] POST   /api/v1/org/roles/revoke  --> github.com/example/llm-gateway/internal/orgservice/handler.(*RoleHandler).RevokeRole-fm (7 handlers)
+[GIN-debug] GET    /api/v1/org/roles/me      --> github.com/example/llm-gateway/internal/orgservice/handler.(*RoleHandler).GetMyRoles-fm (6 handlers)
+[GIN-debug] GET    /api/v1/org/roles/:user_id --> github.com/example/llm-gateway/internal/orgservice/handler.(*RoleHandler).GetUserRoles-fm (6 handlers)
+[GIN-debug] POST   /api/v1/org/employees/import --> github.com/example/llm-gateway/internal/orgservice/handler.(*EmployeeImportHandler).Import-fm (7 handlers)
+[GIN-debug] PUT    /api/v1/org/users/:id/department --> github.com/example/llm-gateway/internal/orgservice/handler.(*DeptAssignHandler).ChangeDepartment-fm (7 handlers)
+[GIN-debug] PUT    /api/v1/org/users/:id/department/follow-sso --> github.com/example/llm-gateway/internal/orgservice/handler.(*DeptAssignHandler).FollowSSO-fm (7 handlers)
+[GIN-debug] GET    /api/v1/usage/dashboard   --> github.com/example/llm-gateway/internal/observability/handler.(*UsageHandler).GetDashboard-fm (7 handlers)
+[GIN-debug] GET    /api/v1/usage/dashboard/trend --> github.com/example/llm-gateway/internal/observability/handler.(*UsageHandler).DashboardTrend-fm (7 handlers)
+[GIN-debug] GET    /api/v1/usage/dashboard/models --> github.com/example/llm-gateway/internal/observability/handler.(*UsageHandler).DashboardModelsEnhanced-fm (7 handlers)
+[GIN-debug] GET    /api/v1/usage/dashboard/users --> github.com/example/llm-gateway/internal/observability/handler.(*UsageHandler).DashboardUsersEnhanced-fm (7 handlers)
+[GIN-debug] GET    /api/v1/usage/dashboard/user-top-models --> github.com/example/llm-gateway/internal/observability/handler.(*UsageHandler).DashboardUserTopModels-fm (7 handlers)
+[GIN-debug] GET    /api/v1/usage/dashboard/user-detail --> github.com/example/llm-gateway/internal/observability/handler.(*UsageHandler).DashboardUserDetail-fm (7 handlers)
+[GIN-debug] GET    /api/v1/usage/dashboard/model-detail --> github.com/example/llm-gateway/internal/observability/handler.(*UsageHandler).DashboardModelDetail-fm (7 handlers)
+[GIN-debug] GET    /api/v1/usage/scoped/logs --> github.com/example/llm-gateway/internal/observability/handler.(*UsageHandler).ScopedLogs-fm (7 handlers)
+[GIN-debug] POST   /internal/v1/org/auth/check-scope --> github.com/example/llm-gateway/internal/orgservice/handler.(*RoleHandler).CheckScope-fm (5 handlers)
+[GIN-debug] GET    /internal/v1/org/tree     --> github.com/example/llm-gateway/internal/orgservice/handler.(*OrgHandler).GetOrgTree-fm (5 handlers)
+2026/07/15 19:26:53 control-plane starting on :8081
+
+2026/07/15 19:26:53 [31;1m/Users/jsy/Public/self_code/llm-gateway/internal/observability/service/rollup_service.go:941 [35;1mERROR: relation "model_daily_stats" does not exist (SQLSTATE 42P01)
+[0m[33m[0.540ms] [34;1m[rows:0][0m 
+		INSERT INTO model_daily_stats (
+			stat_date, model, studio_id,
+			req_count, success_count, user_count, dept_count, active_days,
+			prompt_tokens, cached_tokens, cache_write_tokens,
+			completion_tokens, reasoning_tokens, est_cost_usd,
+			avg_duration_ms, p50_duration_ms, p90_duration_ms, avg_first_token_ms
+		)
+		SELECT
+			'2026-07-14 08:00:00'::date AS stat_date,
+			cl.model,
+			COALESCE(dsm.studio_id::text, '') AS studio_id,
+			COUNT(*) AS req_count,
+			COUNT(*) FILTER (WHERE cl.status = 200) AS success_count,
+			COUNT(DISTINCT cl.user_id) AS user_count,
+			COUNT(DISTINCT cl.dept_id) AS dept_count,
+			CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END AS active_days,
+			COALESCE(SUM(cl.prompt_tokens), 0) AS prompt_tokens,
+			COALESCE(SUM(cl.cached_tokens), 0) AS cached_tokens,
+			COALESCE(SUM(cl.cache_write_tokens), 0) AS cache_write_tokens,
+			COALESCE(SUM(cl.completion_tokens), 0) AS completion_tokens,
+			COALESCE(SUM(cl.reasoning_tokens), 0) AS reasoning_tokens,
+			COALESCE(SUM(cl.est_cost_usd), 0) AS est_cost_usd,
+			COALESCE(AVG(cl.duration_ms), 0)::int AS avg_duration_ms,
+			COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY cl.duration_ms), 0)::int AS p50_duration_ms,
+			COALESCE(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY cl.duration_ms), 0)::int AS p90_duration_ms,
+			COALESCE(AVG(cl.first_token_ms), 0)::int AS avg_first_token_ms
+		FROM call_logs cl
+		LEFT JOIN departments d ON (d.dept_id = cl.dept_id OR d.id::text = cl.dept_id)
+		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = COALESCE(d.dept_id, cl.dept_id)
+		WHERE cl.ts::date = '2026-07-14 08:00:00'::date
+		  AND cl.model IS NOT NULL AND cl.model != ''
+		GROUP BY cl.model, COALESCE(dsm.studio_id::text, '')
+		ON CONFLICT (stat_date, model, studio_id) DO UPDATE SET
+			req_count = EXCLUDED.req_count,
+			success_count = EXCLUDED.success_count,
+			user_count = EXCLUDED.user_count,
+			dept_count = EXCLUDED.dept_count,
+			active_days = EXCLUDED.active_days,
+			prompt_tokens = EXCLUDED.prompt_tokens,
+			cached_tokens = EXCLUDED.cached_tokens,
+			cache_write_tokens = EXCLUDED.cache_write_tokens,
+			completion_tokens = EXCLUDED.completion_tokens,
+			reasoning_tokens = EXCLUDED.reasoning_tokens,
+			est_cost_usd = EXCLUDED.est_cost_usd,
+			avg_duration_ms = EXCLUDED.avg_duration_ms,
+			p50_duration_ms = EXCLUDED.p50_duration_ms,
+			p90_duration_ms = EXCLUDED.p90_duration_ms,
+			avg_first_token_ms = EXCLUDED.avg_first_token_ms
+	
+2026/07/15 19:26:53 ERROR model_daily_stats_aggregate_failed date=2026-07-14T08:00:00.000+08:00 error="ERROR: relation \"model_daily_stats\" does not exist (SQLSTATE 42P01)"
+
+2026/07/15 19:26:53 [31;1m/Users/jsy/Public/self_code/llm-gateway/internal/observability/service/rollup_service.go:1021 [35;1mERROR: relation "user_daily_stats" does not exist (SQLSTATE 42P01)
+[0m[33m[0.608ms] [34;1m[rows:0][0m 
+		INSERT INTO user_daily_stats (
+			stat_date, user_id, studio_id, dept_id,
+			req_count, success_count, error_count, model_count,
+			prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens,
+			est_cost_usd, hourly_distribution
+		)
+		SELECT
+			'2026-07-14 08:00:00'::date AS stat_date,
+			sub.user_id,
+			sub.studio_id,
+			sub.dept_id,
+			SUM(sub.req_count) AS req_count,
+			SUM(sub.success_count) AS success_count,
+			SUM(sub.error_count) AS error_count,
+			-- Fix: COUNT DISTINCT models across all hours without overcounting.
+			-- Unnest per-hour model arrays, deduplicate across all hours, then count.
+			cardinality(array_agg(DISTINCT unnest(sub.model_list))) AS model_count,
+			SUM(sub.prompt_tokens) AS prompt_tokens,
+			SUM(sub.cached_tokens) AS cached_tokens,
+			SUM(sub.completion_tokens) AS completion_tokens,
+			SUM(sub.reasoning_tokens) AS reasoning_tokens,
+			SUM(sub.est_cost_usd) AS est_cost_usd,
+			jsonb_object_agg(sub.hour_key, sub.hour_count) AS hourly_distribution
+		FROM (
+			SELECT
+				COALESCE(cl.user_id, 'unknown') AS user_id,
+				COALESCE(dsm.studio_id::text, '') AS studio_id,
+				COALESCE(d.dept_id, cl.dept_id, '') AS dept_id,
+				COUNT(*) AS req_count,
+				COUNT(*) FILTER (WHERE cl.status = 200) AS success_count,
+				COUNT(*) FILTER (WHERE cl.status != 200) AS error_count,
+				array_agg(DISTINCT cl.model) AS model_list,
+				COALESCE(SUM(cl.prompt_tokens), 0) AS prompt_tokens,
+				COALESCE(SUM(cl.cached_tokens), 0) AS cached_tokens,
+				COALESCE(SUM(cl.completion_tokens), 0) AS completion_tokens,
+				COALESCE(SUM(cl.reasoning_tokens), 0) AS reasoning_tokens,
+				COALESCE(SUM(cl.est_cost_usd), 0) AS est_cost_usd,
+				EXTRACT(HOUR FROM cl.ts)::text AS hour_key,
+				COUNT(*) AS hour_count
+			FROM call_logs cl
+			LEFT JOIN departments d ON (d.dept_id = cl.dept_id OR d.id::text = cl.dept_id)
+			LEFT JOIN dept_studio_map dsm ON dsm.dept_id = COALESCE(d.dept_id, cl.dept_id)
+			WHERE cl.ts::date = '2026-07-14 08:00:00'::date
+				AND (COALESCE(NULLIF(cl.key_type, ''), 'personal') != 'service')
+			GROUP BY COALESCE(cl.user_id, 'unknown'),
+					 COALESCE(dsm.studio_id::text, ''),
+					 COALESCE(d.dept_id, cl.dept_id, ''),
+					 EXTRACT(HOUR FROM cl.ts)
+		) sub
+		GROUP BY sub.user_id, sub.studio_id, sub.dept_id
+		ON CONFLICT (stat_date, user_id) DO UPDATE SET
+			studio_id = EXCLUDED.studio_id,
+			dept_id = EXCLUDED.dept_id,
+			req_count = EXCLUDED.req_count,
+			success_count = EXCLUDED.success_count,
+			error_count = EXCLUDED.error_count,
+			model_count = EXCLUDED.model_count,
+			prompt_tokens = EXCLUDED.prompt_tokens,
+			cached_tokens = EXCLUDED.cached_tokens,
+			completion_tokens = EXCLUDED.completion_tokens,
+			reasoning_tokens = EXCLUDED.reasoning_tokens,
+			est_cost_usd = EXCLUDED.est_cost_usd,
+			hourly_distribution = EXCLUDED.hourly_distribution
+	
+2026/07/15 19:26:53 ERROR user_daily_stats_aggregate_failed date=2026-07-14T08:00:00.000+08:00 error="ERROR: relation \"user_daily_stats\" does not exist (SQLSTATE 42P01)"
+2026/07/15 19:26:53 WARN initial rollup failed error="ERROR: relation \"model_daily_stats\" does not exist (SQLSTATE 42P01)\nERROR: relation \"user_daily_stats\" does not exist (SQLSTATE 42P01)"
+
+2026/07/15 19:26:53 [31;1m/Users/jsy/Public/self_code/llm-gateway/internal/controlplane/repository/notification_repo.go:24 [35;1mERROR: there is no unique or exclusion constraint matching the ON CONFLICT specification (SQLSTATE 42P10)
+[0m[33m[2.095ms] [34;1m[rows:0][0m INSERT INTO "notifications" ("user_id","type","level","title","content","source","dedupe_key","ref_type","ref_id","is_read","read_at","created_at") VALUES ('22222222-2222-4222-8222-222222222222','expansion_submitted','info','新的扩容审批申请','231','outbox','expansion:beb68369-ba47-4ce7-a907-2cfdb9f899d3:expansion_submitted:22222222-2222-4222-8222-222222222222','expansion_request','beb68369-ba47-4ce7-a907-2cfdb9f899d3',false,NULL,'2026-07-15 19:26:53.624') ON CONFLICT ("source","dedupe_key") DO NOTHING RETURNING "id"
+2026/07/15 19:26:53 WARN notifier: db write failed user_id=22222222-2222-4222-8222-222222222222 type=expansion_submitted error="ERROR: there is no unique or exclusion constraint matching the ON CONFLICT specification (SQLSTATE 42P10)"

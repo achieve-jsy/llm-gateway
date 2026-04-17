@@ -113,8 +113,8 @@ func updateKeyDeptInfo(t *testing.T, keyID, deptID, studioID string) {
 // TestTDD7_BudgetExceeded_402 验证预算预扣在 chat 请求超限时返回 402。
 //
 // 场景：
-//   1. 创建一个测试 key，给它设极小预算（0.0001 USD）
-//   2. 调 chat/completions → 期望 402 budget_exceeded
+//  1. 创建一个测试 key，给它设极小预算（0.0001 USD）
+//  2. 调 chat/completions → 期望 402 budget_exceeded
 //
 // 注：由于 personal key 不能通过 API 设 dept_id，我们复用一个已存在的带 dept_id 的测试 key
 // （tdd7-test-key，setup 已在之前手工创建）。
@@ -175,10 +175,10 @@ func TestTDD7_BudgetExceeded_402(t *testing.T) {
 // TestTDD7_BudgetPreReserve_RedisIncr 验证预算预扣后 Redis used 增量。
 //
 // 场景：
-//   1. 配置充足预算
-//   2. 清空 Redis used
-//   3. 调 chat/completions（可能 upstream 失败，但预算应已预扣）
-//   4. 检查 Redis budget:used:dept_daily:{dept} 是否大于 0
+//  1. 配置充足预算
+//  2. 清空 Redis used
+//  3. 调 chat/completions（可能 upstream 失败，但预算应已预扣）
+//  4. 检查 Redis budget:used:dept_daily:{dept} 是否大于 0
 func TestTDD7_BudgetPreReserve_RedisIncr(t *testing.T) {
 	adminToken := generateAdminToken(t)
 

@@ -2,16 +2,22 @@ package service_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"testing"
 	"time"
 
+	"github.com/example/llm-gateway/internal/controlplane/budgetdomain"
 	"github.com/example/llm-gateway/internal/controlplane/event"
 	"github.com/example/llm-gateway/internal/controlplane/model"
+	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 // ── fakeEventPublisher 完整版（补全 InvalidateKeyCache 方法）──
@@ -263,6 +269,110 @@ func TestAuditIntegration_WithPublisher(t *testing.T) {
 		assert.Len(t, pub.invalidatedHashes, 1)
 		assert.Equal(t, event.KeyDeleted, pub.published[0].eventType)
 	})
+}
+
+type verifyBudgetReader struct {
+	allocations map[string]*model.BudgetAllocation
+}
+
+func (r verifyBudgetReader) GetAllocation(scopeType, scopeID string) (*model.BudgetAllocation, error) {
+	return r.allocations[scopeType+":"+scopeID], nil
+}
+
+type verifyTierReader struct {
+	limits    map[uuid.UUID][]model.BudgetTierLimit
+	overrides map[uuid.UUID][]model.BudgetTemporaryOverride
+}
+
+func (r verifyTierReader) ListTierLimits(_ context.Context, allocationID uuid.UUID) ([]model.BudgetTierLimit, error) {
+	return r.limits[allocationID], nil
+}
+
+func (r verifyTierReader) ListActiveOverrides(_ context.Context, allocationID uuid.UUID, now time.Time) ([]model.BudgetTemporaryOverride, error) {
+	var active []model.BudgetTemporaryOverride
+	for _, override := range r.overrides[allocationID] {
+		if override.Status == budgetdomain.OverrideActive &&
+			!override.StartsAt.After(now) && override.ExpiresAt.After(now) {
+			active = append(active, override)
+		}
+	}
+	return active, nil
+}
+
+func TestVerifyKeyBudgetChainKeepsTotalNumbersAndAddsEffectiveTierDecimalStrings(t *testing.T) {
+	now := time.Date(2026, 7, 11, 8, 0, 0, 0, time.UTC)
+	keyRaw := "sk-test-tier-budget"
+	hash := sha256.Sum256([]byte(keyRaw))
+	keyHash := hex.EncodeToString(hash[:])
+	keyID, userID, allocationID, tierID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+
+	db, err := gorm.Open(sqlite.Open("file:"+uuid.NewString()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`CREATE TABLE api_keys (
+		id text PRIMARY KEY, user_id text NOT NULL, name text NOT NULL,
+		key_hash text NOT NULL, encrypted_key text NOT NULL, key_prefix text NOT NULL,
+		key_hint text NOT NULL, enabled boolean NOT NULL, log_enabled boolean NOT NULL,
+		access_all_groups boolean NOT NULL, bypass_org_check boolean NOT NULL,
+		user_name text, dept_id text, dept_name text, studio_id text, studio_name text,
+		key_type text NOT NULL, purpose text, created_by text, ip_allowlist text,
+		quota_rpm integer, quota_max_concurrency integer, created_at datetime,
+		updated_at datetime, last_used_at datetime, expires_at datetime
+	)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO api_keys (
+		id,user_id,name,key_hash,encrypted_key,key_prefix,key_hint,enabled,log_enabled,
+		access_all_groups,bypass_org_check,user_name,dept_id,dept_name,studio_id,studio_name,
+		key_type,purpose,ip_allowlist,created_at,updated_at
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		keyID.String(), userID.String(), "tier-test", keyHash, "encrypted", "sk-", "test",
+		true, false, false, false, "Tester", "dept-a", "研发部", "studio-a", "研发工作室",
+		model.KeyTypePersonal, "", "", now, now).Error)
+
+	baseTier := mustAmount(t, "80.000000")
+	totalTarget := mustAmount(t, "120.000000")
+	tierTarget := mustAmount(t, "100.000000")
+	tier := model.ModelTier{ID: tierID, Name: "高级", Enabled: true}
+	allocation := &model.BudgetAllocation{
+		ID: allocationID, ScopeType: model.BudgetScopeMember, ScopeID: userID.String(),
+		AmountUSD: 100, DailyAmountUSD: -1, WeeklyAmountUSD: -1, Enabled: true,
+	}
+	start, expiry := now.Add(-time.Hour), now.Add(time.Hour)
+	svc := service.NewKeyService(repository.NewKeyRepo(db), nil, nil).
+		WithBudgetRepo(verifyBudgetReader{allocations: map[string]*model.BudgetAllocation{
+			model.BudgetScopeMember + ":" + userID.String(): allocation,
+		}}).
+		WithBudgetTierRepo(verifyTierReader{
+			limits: map[uuid.UUID][]model.BudgetTierLimit{allocationID: {{
+				ID: uuid.New(), BudgetAllocationID: allocationID, ModelTierID: tierID,
+				PeriodType: budgetdomain.PeriodMonthly, LimitUSD: baseTier, EffectiveAt: now.Add(-24 * time.Hour),
+				Enabled: true, ModelTier: tier,
+			}}},
+			overrides: map[uuid.UUID][]model.BudgetTemporaryOverride{allocationID: {
+				{ID: uuid.New(), BudgetAllocationID: allocationID, DimensionType: budgetdomain.DimensionTotal,
+					DimensionKey: "total", PeriodType: budgetdomain.PeriodMonthly, TargetLimitUSD: totalTarget,
+					StartsAt: start, ExpiresAt: expiry, Status: budgetdomain.OverrideActive},
+				{ID: uuid.New(), BudgetAllocationID: allocationID, DimensionType: budgetdomain.DimensionTier,
+					DimensionKey: "tier:" + tierID.String(), ModelTierID: &tierID, PeriodType: budgetdomain.PeriodMonthly,
+					TargetLimitUSD: tierTarget, StartsAt: start, ExpiresAt: expiry, Status: budgetdomain.OverrideActive},
+			}},
+		}).
+		WithClock(func() time.Time { return now })
+
+	got, err := svc.VerifyKey(context.Background(), keyRaw)
+	require.NoError(t, err)
+	require.NotEmpty(t, got.BudgetChain)
+	member := got.BudgetChain[0]
+	require.Equal(t, 120.0, member.AmountUSD)
+	require.Equal(t, -1.0, member.DailyAmountUSD)
+	require.Len(t, member.TierLimits, 1)
+	require.Equal(t, "80.000000", member.TierLimits[0].BaseLimitUSD.String())
+	require.Equal(t, "100.000000", member.TierLimits[0].EffectiveLimitUSD.String())
+	require.Equal(t, expiry, *member.TierLimits[0].ExpiresAt)
+
+	raw, err := json.Marshal(member)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), `"amount_usd":120`)
+	require.Contains(t, string(raw), `"base_limit_usd":"80.000000"`)
+	require.Contains(t, string(raw), `"effective_limit_usd":"100.000000"`)
 }
 
 func TestBudgetScope_Structure(t *testing.T) {

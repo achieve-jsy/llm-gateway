@@ -30,26 +30,27 @@ const (
 	EntitlementRevoked ChangeEventType = "entitlement_revoked"
 	OpenModeChanged    ChangeEventType = "open_mode_changed"
 	// v0.15 四层配额体系
-	QuotaConfigChanged   ChangeEventType = "quota_config_changed"
-	QuotaSnapshotUpdated ChangeEventType = "quota_snapshot_updated"
+	QuotaConfigChanged        ChangeEventType = "quota_config_changed"
+	QuotaSnapshotUpdated      ChangeEventType = "quota_snapshot_updated"
+	BudgetTierSnapshotUpdated ChangeEventType = "budget_tier_snapshot_updated"
 )
 
 // ChangeEvent 配置变更事件
 type ChangeEvent struct {
-	Type         ChangeEventType `json:"type"`
-	ResourceType string          `json:"resource_type"`
-	ResourceID   uuid.UUID       `json:"resource_id"`
-	SnapshotVersion int64        `json:"snapshot_version,omitempty"`
-	Timestamp    time.Time       `json:"timestamp"`
+	Type            ChangeEventType `json:"type"`
+	ResourceType    string          `json:"resource_type"`
+	ResourceID      uuid.UUID       `json:"resource_id"`
+	SnapshotVersion int64           `json:"snapshot_version,omitempty"`
+	Timestamp       time.Time       `json:"timestamp"`
 }
 
 // NewChangeEvent 创建变更事件
 func NewChangeEvent(eventType ChangeEventType, resourceType string, resourceID uuid.UUID, snapshotVersion int64) *ChangeEvent {
 	return &ChangeEvent{
-		Type:         eventType,
-		ResourceType: resourceType,
-		ResourceID:   resourceID,
+		Type:            eventType,
+		ResourceType:    resourceType,
+		ResourceID:      resourceID,
 		SnapshotVersion: snapshotVersion,
-		Timestamp:    time.Now().UTC(),
+		Timestamp:       time.Now().UTC(),
 	}
 }

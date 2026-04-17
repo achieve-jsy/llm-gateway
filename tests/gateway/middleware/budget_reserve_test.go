@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/example/llm-gateway/internal/controlplane/budgetdomain"
+	"github.com/example/llm-gateway/internal/gateway/budget"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	gwmodel "github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/gin-gonic/gin"
@@ -62,6 +64,28 @@ func weekStr(w int) string {
 func setUsed(rdb *redis.Client, scopeType, scopeID, period string, used float64) {
 	key := "budget:used:" + scopeType + ":" + scopeID + ":" + period
 	rdb.Set(context.Background(), key, used, 0)
+}
+
+func TestCheckLegacyBudget_ReturnsStructuredTotalConstraint(t *testing.T) {
+	rdb, _ := startMiniredis(t)
+	constraint := budget.Constraint{
+		Dimension: budget.DimensionTotal, ScopeType: "member", ScopeID: "u-1",
+		Label: "成员", PeriodType: budgetdomain.PeriodMonthly, Period: "2026-07",
+		LimitMicroUSD: 1_000_000,
+	}
+	constraint.Key = budget.TotalUsedKey(constraint.ScopeType, constraint.ScopeID, constraint.Period)
+	plan := &budget.AccountingPlan{
+		Constraints:     []budget.Constraint{constraint},
+		LegacyKeys:      []string{middleware.BudgetUsedKey("member", "u-1", "2026-07")},
+		LegacyScopeArgs: []any{1.0, -1.0, -1.0, "成员"},
+	}
+	require.NoError(t, rdb.Set(context.Background(), plan.LegacyKeys[0], "1", 0).Err())
+
+	blocked, err := middleware.CheckLegacyBudget(context.Background(), rdb, plan)
+	require.NoError(t, err)
+	require.NotNil(t, blocked)
+	require.Equal(t, "u-1", blocked.ScopeID)
+	require.Equal(t, budget.DimensionTotal, blocked.Dimension)
 }
 
 func getUsed(mr *miniredis.Miniredis, scopeType, scopeID, period string) float64 {

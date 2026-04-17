@@ -388,7 +388,6 @@
 import { ref, reactive, onMounted, onUnmounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
-  Search,
   Refresh,
   Timer,
   Download,
@@ -529,20 +528,6 @@ function formatDuration(ms: number): string {
   const min = Math.floor(ms / 60000)
   const sec = Math.floor((ms % 60000) / 1000)
   return `${min} 分 ${sec} 秒`
-}
-
-function sanitizeJSON(obj: unknown): unknown {
-  if (typeof obj !== 'object' || obj === null) return obj
-  if (Array.isArray(obj)) return obj.map(sanitizeJSON)
-  const result: Record<string, unknown> = {}
-  for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
-    if (/password|token|secret|api[_-]?key|authorization|cookie/i.test(key)) {
-      result[key] = '***'
-    } else {
-      result[key] = sanitizeJSON(val)
-    }
-  }
-  return result
 }
 
 function avatarChar(name: string | null | undefined): string {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	authrepo "github.com/example/llm-gateway/internal/auth/repository"
+	"github.com/example/llm-gateway/internal/budgetperiod"
 	"github.com/example/llm-gateway/internal/controlplane/auth"
 	cpconfig "github.com/example/llm-gateway/internal/controlplane/config"
 	cpcron "github.com/example/llm-gateway/internal/controlplane/cron"
@@ -32,7 +33,10 @@ import (
 )
 
 // Setup 初始化 Gin 路由和中间件链
-func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
+func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.Engine {
+	if lifecycleCtx == nil {
+		panic("control-plane lifecycle context is required")
+	}
 	// 加载配置（YAML + 环境变量）
 	cfg := cpconfig.Load()
 
@@ -131,18 +135,53 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		settingsSvc.GetDefaultFailoverCooldownSeconds(context.Background()),
 	)
 	groupHandler := handler.NewGroupHandler(groupSvc, modelRepo, providerRepo)
+	modelTierRepo := repository.NewModelTierRepo(db)
+	groupSvc.WithModelTierRepo(modelTierRepo)
+	modelTierSvc := service.NewModelTierService(modelTierRepo)
+	budgetSnapshotPublisher := service.NewBudgetTierSnapshotPublisher(
+		groupRepo, rdb, publisher, service.BudgetTierSnapshotSettings{
+			MasterEnabled:              cfg.BudgetTier.MasterEnabled,
+			AccountingEnabled:          cfg.BudgetTier.AccountingEnabled,
+			PositiveEnforcementEnabled: cfg.BudgetTier.PositiveEnforcementEnabled,
+			ZeroBlockEnabled:           cfg.BudgetTier.ZeroBlockEnabled,
+			ShadowEnabled:              cfg.BudgetTier.ShadowEnabled,
+			V2TotalEnforcementEnabled:  cfg.BudgetTier.V2TotalEnforcementEnabled,
+			LegacyTotalWriteEnabled:    cfg.BudgetTier.LegacyTotalWriteEnabled,
+			Timezone:                   cfg.Budget.Timezone,
+			WeekStart:                  cfg.Budget.WeekStart,
+		}, time.Now,
+	)
+	groupSvc.WithBudgetTierSnapshotPublisher(budgetSnapshotPublisher)
+	modelTierSvc.WithSnapshotPublisher(budgetSnapshotPublisher)
+	go budgetSnapshotPublisher.StartReconcile(lifecycleCtx, 30*time.Second)
+	modelTierHandler := handler.NewModelTierHandler(modelTierSvc).WithGroupService(groupSvc)
 
 	// v0.7: 预算 repo，注入 KeyService 用于 verify-key 下发 BudgetChain
 	budgetRepo := repository.NewBudgetRepo(db)
 	keySvc.WithBudgetRepo(budgetRepo)
 	budgetAlertRepo := repository.NewBudgetAlertRepo(db)
 	budgetSvc := service.NewBudgetService(budgetRepo, budgetAlertRepo)
+	budgetTierRepo := repository.NewBudgetTierRepo(db)
+	budgetSvc.SetLifecycleScheduler(budgetTierRepo)
+	keySvc.WithBudgetTierRepo(budgetTierRepo)
+	budgetTierSvc := service.NewBudgetTierService(budgetTierRepo, budgetRepo, modelTierRepo, time.Now).
+		WithPeriodConfig(budgetperiod.Config{Timezone: cfg.Budget.Timezone, WeekStart: cfg.Budget.WeekStart}).
+		WithTierUsageRepository(repository.NewCallLogRepo(db)).
+		WithSnapshotPublisher(budgetSnapshotPublisher).
+		WithRedis(rdb)
+	go budgetTierSvc.StartPreviewCacheCleanup(lifecycleCtx, time.Minute)
+	budgetTierHandler := handler.NewBudgetTierHandler(budgetTierSvc).WithScopeResolver(budgetSvc)
 	// v0.7: 改额即时生效——注入 publisher 用于广播 auth_config_changed，
 	// 注入 Redis 用于写 budget:amount:{scope_type}:{scope_id} 键。
 	budgetSvc.SetPublisher(service.NewEventPublisherAdapter(publisher))
 	budgetSvc.SetRedis(rdb)
 	budgetAlertSvc := service.NewBudgetAlertService(budgetRepo, budgetAlertRepo, nil)
 	budgetAlertSvc.SetRedis(rdb)
+	budgetAlertSvc.SetBudgetTierRepo(budgetTierRepo)
+	budgetRiskSvc := service.NewBudgetRiskService(
+		repository.NewBudgetRiskRepo(db), budgetSvc, budgetTierSvc, time.Now,
+	)
+	budgetRiskHandler := handler.NewBudgetRiskHandler(budgetRiskSvc, orgContainer.RBAC)
 	notificationRepo := repository.NewNotificationRepo(db)
 	// v0.8: 审计日志（仅管理面写操作落库）
 	auditRepo := repository.NewAuditLogRepo(db)
@@ -156,6 +195,16 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		emailNotifier,
 	)
 	budgetAlertSvc.SetNotifier(sharedNotifier)
+	expansionRepo := repository.NewExpansionRepo(db)
+	approvalPoolResolver := service.NewDatabaseApprovalPoolResolver(db)
+	budgetOwnerResolver := service.NewDatabaseBudgetOwnerResolver(db, approvalPoolResolver)
+	lifecycleObserver := service.NewBudgetLifecycleNotificationObserver(
+		db, expansionRepo, budgetOwnerResolver, sharedNotifier,
+	)
+	budgetLifecycleExecutor := service.NewBudgetLifecycleExecutor(
+		budgetTierRepo, budgetRepo, budgetTierRepo, budgetSnapshotPublisher, lifecycleObserver,
+	)
+	go budgetLifecycleExecutor.Start(lifecycleCtx, time.Minute)
 
 	// 动态 notifier：按 settings 中的 webhook / email 配置构建；
 	// Dispatcher 统一负责写日志文件 + Webhook + 邮件三条通道。
@@ -194,9 +243,12 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		}
 	}()
 	// v0.7: 扩容审批 service
-	expansionRepo := repository.NewExpansionRepo(db)
 	expansionSvc := service.NewExpansionService(expansionRepo)
 	expansionSvc.SetBudgetService(budgetSvc)
+	expansionSvc.SetBudgetTierService(budgetTierSvc)
+	expansionSvc.WithApprovalPool(approvalPoolResolver).
+		WithSnapshotPublisher(budgetSnapshotPublisher).
+		WithNotifier(sharedNotifier)
 	expansionUserRepo := authrepo.NewUserRepository(db)
 
 	// feat/key-approval: Key 创建申请 + 部门策略审批
@@ -395,6 +447,23 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.POST("/providers/:id/check-models", syncHandler.CheckModels)
 
 		// 模型管理
+		adminGroup.GET("/model-tiers", guard(rbac.PermModelTierView), modelTierHandler.List)
+		adminGroup.POST("/model-tiers", guard(rbac.PermModelTierManage), modelTierHandler.Create)
+		adminGroup.PUT("/model-tiers/reorder", guard(rbac.PermModelTierManage), modelTierHandler.Reorder)
+		adminGroup.GET("/model-tiers/:id", guard(rbac.PermModelTierView), modelTierHandler.Get)
+		adminGroup.PUT("/model-tiers/:id", guard(rbac.PermModelTierManage), modelTierHandler.Update)
+		adminGroup.PATCH("/model-tiers/:id/status", guard(rbac.PermModelTierManage), modelTierHandler.SetStatus)
+		adminGroup.PATCH("/model-tiers/:id/archive", guard(rbac.PermModelTierManage), modelTierHandler.Archive)
+		adminGroup.DELETE("/model-tiers/:id", guard(rbac.PermModelTierManage), modelTierHandler.Delete)
+		adminGroup.PUT("/groups/budget-tiers", guard(rbac.PermModelTierManage), modelTierHandler.SetGroupBudgetTierBatch)
+		adminGroup.PUT("/groups/:id/budget-tier", guard(rbac.PermModelTierManage), modelTierHandler.SetGroupBudgetTier)
+		adminGroup.GET("/budgets/:allocation_id/tier-limits", guard(rbac.PermBudgetViewScoped), budgetTierHandler.List)
+		adminGroup.PUT("/budgets/:allocation_id/tier-limits", guard(rbac.PermBudgetSet), budgetTierHandler.DeprecatedSet)
+		adminGroup.POST("/budgets/tier-limits/batch/preview", guard(rbac.PermBudgetSet), budgetTierHandler.PreviewBatch)
+		adminGroup.POST("/budgets/tier-limits/batch/apply", guard(rbac.PermBudgetSet), budgetTierHandler.ApplyBatch)
+		adminGroup.GET("/budgets/tier-usage", guard(rbac.PermBudgetViewScoped), budgetTierHandler.TierUsage)
+		adminGroup.GET("/my/budget/tiers", budgetTierHandler.MyBudgetTiers)
+
 		adminGroup.POST("/models", modelHandler.CreateModel)
 		adminGroup.GET("/models", modelHandler.ListModels)
 		// 注意：静态路径必须在 :id 通配前注册，否则会被吞掉
@@ -691,6 +760,9 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	budgetHandler := handler.NewBudgetHandler(budgetSvc, orgContainer.RBAC)
 	budgetHandler.SetAlertService(budgetAlertSvc)
 	budgetHandler.SetDB(db)
+	budgetHandler.SetCounterRebuildService(service.NewBudgetCounterRebuildService(
+		db, rdb, budgetperiod.Config{Timezone: cfg.Budget.Timezone, WeekStart: cfg.Budget.WeekStart},
+	))
 	// 注册内部告警触发端点（供 gateway 调用）
 	internalGroup.POST("/budget/evaluate-alert", budgetHandler.EvaluateAlert)
 	// 视频任务写入/查询（供 gateway 调用）
@@ -714,17 +786,27 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		// 预算管理（管理面）
 		adminGroup.GET("/budgets", guard(rbac.PermBudgetViewScoped), budgetHandler.List)
 		adminGroup.PUT("/budgets", guard(rbac.PermBudgetSet), budgetHandler.Set)
+		adminGroup.PUT("/budgets/multi-period", guard(rbac.PermBudgetSet), budgetHandler.SetMultiPeriod)
 		adminGroup.PUT("/budgets/batch", guard(rbac.PermBudgetSet), budgetHandler.BatchSet)
+		adminGroup.POST("/budgets/batch/preview", guard(rbac.PermBudgetSet), budgetHandler.PreviewTotalBatch)
+		adminGroup.POST("/budgets/batch/apply", guard(rbac.PermBudgetSet), budgetHandler.ApplyTotalBatch)
 		adminGroup.DELETE("/budgets", guard(rbac.PermBudgetSet), budgetHandler.Delete)
 		adminGroup.GET("/budgets/context", guard(rbac.PermBudgetViewScoped), budgetHandler.Context)
 		adminGroup.POST("/budget/rebuild-counters", guard(rbac.PermBudgetSet), budgetHandler.RebuildCounters)
+		adminGroup.GET("/budget/risk-events", guard(rbac.PermBudgetViewScoped), budgetRiskHandler.List)
+		adminGroup.GET("/budget/risk-events/summary", guard(rbac.PermBudgetViewScoped), budgetRiskHandler.Summary)
 		// 扩容申请：创建/我的申请/流水允许登录用户访问；审批接口继续走 RBAC。
+		adminGroup.POST("/expansion-requests/precheck", expansionHandler.Precheck)
+		adminGroup.POST("/expansion-requests/notify-owner", expansionHandler.NotifyOwner)
 		adminGroup.POST("/expansion-requests", expansionHandler.Create)
 		adminGroup.GET("/expansion-requests", expansionHandler.ListMine)
-		adminGroup.GET("/expansion-requests/pending", guard(rbac.PermExpansionRequest), expansionHandler.ListPending)
+		adminGroup.GET("/expansion-requests/pending", guard(rbac.PermExpansionApprove), expansionHandler.ListPending)
+		adminGroup.GET("/expansion-requests/:id", expansionHandler.Get)
+		adminGroup.PATCH("/expansion-requests/:id", expansionHandler.Update)
+		adminGroup.POST("/expansion-requests/:id/reprecheck", expansionHandler.Reprecheck)
 		adminGroup.POST("/expansion-requests/:id/decision", expansionHandler.Decide)
 		adminGroup.GET("/expansion-requests/:id/steps", expansionHandler.ListSteps)
-		adminGroup.POST("/expansion-requests/batch-decision", guard(rbac.PermExpansionRequest), expansionHandler.BatchDecide)
+		adminGroup.POST("/expansion-requests/batch-decision", guard(rbac.PermExpansionApprove), expansionHandler.BatchDecide)
 
 		// feat/key-approval: Key 创建申请 + 审批
 		keyRequestHandler := handler.NewKeyRequestHandler(keyRequestSvc, orgContainer.RBAC, expansionUserRepo)

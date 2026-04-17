@@ -7,14 +7,172 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/example/llm-gateway/internal/controlplane/budgetdomain"
 	"github.com/example/llm-gateway/internal/controlplane/event"
 	"github.com/example/llm-gateway/internal/controlplane/model"
+	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
+
+func mustBudgetAmount(t *testing.T, value string) budgetdomain.Amount {
+	t.Helper()
+	amount, err := budgetdomain.ParseAmount(value)
+	require.NoError(t, err)
+	return amount
+}
+
+func TestAdjustBudgetPreviewReportsZeroBlockWithoutMutation(t *testing.T) {
+	repo := newFakeAllocRepo()
+	repo.allocations[allocationKey(model.BudgetScopeMember, "member-1")] = &model.BudgetAllocation{
+		ID: uuid.New(), ScopeType: model.BudgetScopeMember, ScopeID: "member-1",
+		AmountUSD: 100, DailyAmountUSD: -1, WeeklyAmountUSD: -1, Enabled: true,
+	}
+	svc := service.NewBudgetService(repo, newFakeAlertRepo())
+
+	impact, err := svc.AdjustBudget(context.Background(), service.BudgetAdjustmentInput{
+		ScopeType: model.BudgetScopeMember, ScopeID: "member-1",
+		PeriodType: budgetdomain.PeriodMonthly, TargetLimitUSD: mustBudgetAmount(t, "0.000000"),
+		EffectiveMode: service.EffectiveImmediate, Reason: "preview zero block", PreviewOnly: true,
+	})
+
+	require.NoError(t, err)
+	assert.True(t, impact.WillBlock)
+	assert.True(t, impact.Stale)
+	assert.Equal(t, "0.000000", impact.AfterLimitUSD)
+	assert.NotEmpty(t, impact.PreviewVersion)
+	assert.Empty(t, repo.upsertCalls)
+}
+
+func TestAdjustBudgetApplyZeroRequiresExplicitConfirmation(t *testing.T) {
+	repo := newFakeAllocRepo()
+	repo.allocations[allocationKey(model.BudgetScopeMember, "member-1")] = &model.BudgetAllocation{
+		ID: uuid.New(), ScopeType: model.BudgetScopeMember, ScopeID: "member-1",
+		AmountUSD: 100, DailyAmountUSD: -1, WeeklyAmountUSD: -1, Enabled: true,
+	}
+	svc := service.NewBudgetService(repo, newFakeAlertRepo())
+	mini := miniredis.RunT(t)
+	svc.SetRedis(redis.NewClient(&redis.Options{Addr: mini.Addr()}))
+	preview, err := svc.AdjustBudget(context.Background(), service.BudgetAdjustmentInput{
+		ScopeType: model.BudgetScopeMember, ScopeID: "member-1",
+		PeriodType: budgetdomain.PeriodMonthly, TargetLimitUSD: mustBudgetAmount(t, "0.000000"),
+		EffectiveMode: service.EffectiveImmediate, Reason: "preview zero block", PreviewOnly: true,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.AdjustBudget(context.Background(), service.BudgetAdjustmentInput{
+		ScopeType: model.BudgetScopeMember, ScopeID: "member-1",
+		PeriodType: budgetdomain.PeriodMonthly, TargetLimitUSD: mustBudgetAmount(t, "0.000000"),
+		EffectiveMode: service.EffectiveImmediate, Reason: "apply zero block",
+		BudgetRiskConfirmation: service.BudgetRiskConfirmation{PreviewVersion: preview.PreviewVersion},
+	})
+
+	require.ErrorIs(t, err, service.ErrZeroBlockConfirmationRequired)
+	assert.Empty(t, repo.upsertCalls)
+}
+
+func TestAdjustBudgetStaleUsageCannotBeConfirmedOrApplied(t *testing.T) {
+	repo := newFakeAllocRepo()
+	repo.allocations[allocationKey(model.BudgetScopeMember, "member-stale")] = &model.BudgetAllocation{
+		ID: uuid.New(), ScopeType: model.BudgetScopeMember, ScopeID: "member-stale",
+		AmountUSD: 100, DailyAmountUSD: -1, WeeklyAmountUSD: -1, Enabled: true,
+	}
+	svc := service.NewBudgetService(repo, newFakeAlertRepo())
+	preview, err := svc.AdjustBudget(context.Background(), service.BudgetAdjustmentInput{
+		ScopeType: model.BudgetScopeMember, ScopeID: "member-stale",
+		PeriodType: budgetdomain.PeriodMonthly, TargetLimitUSD: mustBudgetAmount(t, "50.000000"),
+		EffectiveMode: service.EffectiveImmediate, Reason: "preview stale usage", PreviewOnly: true,
+	})
+	require.NoError(t, err)
+	require.True(t, preview.Stale)
+
+	_, err = svc.AdjustBudget(context.Background(), service.BudgetAdjustmentInput{
+		ScopeType: model.BudgetScopeMember, ScopeID: "member-stale",
+		PeriodType: budgetdomain.PeriodMonthly, TargetLimitUSD: mustBudgetAmount(t, "50.000000"),
+		EffectiveMode: service.EffectiveImmediate, Reason: "must not bypass stale usage",
+		BudgetRiskConfirmation: service.BudgetRiskConfirmation{
+			PreviewVersion: preview.PreviewVersion,
+			ConfirmStale:   true,
+		},
+	})
+
+	require.ErrorIs(t, err, service.ErrBudgetUsageUnavailable)
+	require.Empty(t, repo.upsertCalls)
+}
+
+func TestAdjustBudgetNextPeriodRequiresExplicitScheduleReplacement(t *testing.T) {
+	repo := newFakeAllocRepo()
+	allocationID := uuid.New()
+	repo.allocations[allocationKey(model.BudgetScopeMember, "member-next")] = &model.BudgetAllocation{
+		ID: allocationID, ScopeType: model.BudgetScopeMember, ScopeID: "member-next",
+		AmountUSD: 100, DailyAmountUSD: -1, WeeklyAmountUSD: -1, Enabled: true,
+	}
+	scheduler := &fakeBudgetScheduleRepo{pending: &model.BudgetLimitSchedule{
+		ID: uuid.New(), BudgetAllocationID: allocationID, DimensionKey: "total",
+		PeriodType: budgetdomain.PeriodMonthly, UpdatedAt: time.Now().UTC(),
+	}}
+	svc := service.NewBudgetService(repo, newFakeAlertRepo())
+	svc.SetLifecycleScheduler(scheduler)
+	mini := miniredis.RunT(t)
+	svc.SetRedis(redis.NewClient(&redis.Options{Addr: mini.Addr()}))
+	input := service.BudgetAdjustmentInput{
+		ScopeType: model.BudgetScopeMember, ScopeID: "member-next", PeriodType: budgetdomain.PeriodMonthly,
+		TargetLimitUSD: mustBudgetAmount(t, "120"), EffectiveMode: service.EffectiveNextPeriod, Reason: "replace next",
+		PreviewOnly: true,
+	}
+	preview, err := svc.AdjustBudget(context.Background(), input)
+	require.NoError(t, err)
+	require.True(t, preview.ReplacesPendingSchedule)
+	require.Equal(t, scheduler.pending.ID.String(), preview.PendingScheduleID)
+	require.NotEmpty(t, preview.PendingScheduleVersion)
+	input.PreviewOnly = false
+	input.PreviewVersion = preview.PreviewVersion
+	_, err = svc.AdjustBudget(context.Background(), input)
+	require.ErrorIs(t, err, service.ErrPendingScheduleExists)
+	input.ConfirmReplaceSchedule = true
+	_, err = svc.AdjustBudget(context.Background(), input)
+	require.NoError(t, err)
+}
+
+func TestTotalBudgetBatchApplyRollsBackEveryItemWhenOnePreviewIsStale(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:total-batch-atomic?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	for _, ddl := range []string{
+		`CREATE TABLE budget_allocations (id text primary key, scope_type text, scope_id text, amount_usd real, daily_amount_usd real, weekly_amount_usd real, period text, enabled bool, created_by text, updated_by text, created_at datetime, updated_at datetime, UNIQUE(scope_type,scope_id))`,
+		`CREATE TABLE users (id text primary key, dept_id text)`,
+		`CREATE TABLE departments (id text primary key, dept_id text, studio_id text)`,
+		`CREATE TABLE dept_studio_map (dept_id text, studio_id text)`,
+		`CREATE TABLE model_groups (id text primary key, name text, budget_tier_id text, deleted_at datetime)`,
+	} {
+		require.NoError(t, db.Exec(ddl).Error)
+	}
+	for _, id := range []string{"studio-a", "studio-b"} {
+		require.NoError(t, db.Exec(`INSERT INTO budget_allocations(id,scope_type,scope_id,amount_usd,daily_amount_usd,weekly_amount_usd,period,enabled) VALUES (?,?,?,?,?,?,?,?)`,
+			uuid.NewString(), model.BudgetScopeStudio, id, 100, 100, 100, "monthly", true).Error)
+	}
+	svc := service.NewBudgetService(repository.NewBudgetRepo(db), newFakeAlertRepo())
+	mini := miniredis.RunT(t)
+	svc.SetRedis(redis.NewClient(&redis.Options{Addr: mini.Addr()}))
+	input := service.TotalBatchInput{
+		Operation: "set_fixed", Value: "150", PeriodType: budgetdomain.PeriodMonthly,
+		EffectiveMode: service.EffectiveImmediate, Reason: "atomic batch",
+		Items: []service.TotalBatchObject{{ItemID: "a", ScopeType: model.BudgetScopeStudio, ScopeID: "studio-a"}, {ItemID: "b", ScopeType: model.BudgetScopeStudio, ScopeID: "studio-b"}},
+	}
+	preview, err := svc.PreviewTotalBatch(context.Background(), input)
+	require.NoError(t, err)
+	input.Items[0].PreviewVersion = preview.Items[0].Impact.PreviewVersion
+	input.Items[1].PreviewVersion = "stale"
+	_, err = svc.ApplyTotalBatch(context.Background(), input)
+	require.Error(t, err)
+	var amounts []float64
+	require.NoError(t, db.Table("budget_allocations").Order("scope_id").Pluck("amount_usd", &amounts).Error)
+	require.Equal(t, []float64{100, 100}, amounts)
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Fakes: 手写 fake struct 模拟 BudgetService 依赖（遵循 tests/README.md 约定）
@@ -34,6 +192,23 @@ type fakeBudgetAllocationRepo struct {
 	// 错误注入
 	upsertErr error
 	getErr    error
+}
+
+type fakeBudgetScheduleRepo struct{ pending *model.BudgetLimitSchedule }
+
+func (f *fakeBudgetScheduleRepo) FindPendingSchedule(context.Context, uuid.UUID, string, budgetdomain.PeriodType) (*model.BudgetLimitSchedule, error) {
+	return f.pending, nil
+}
+func (f *fakeBudgetScheduleRepo) PutPendingSchedule(_ context.Context, schedule *model.BudgetLimitSchedule, replace bool) (*model.BudgetLimitSchedule, error) {
+	if f.pending != nil && !replace {
+		return nil, repository.ErrPendingScheduleExists
+	}
+	f.pending = schedule
+	return schedule, nil
+}
+
+func (f *fakeBudgetAllocationRepo) ResolveBudgetImpact(context.Context, string, string, *string, int) (int, []repository.BudgetAffectedGroup, error) {
+	return 1, []repository.BudgetAffectedGroup{{ID: "group-1", Name: "Group 1"}}, nil
 }
 
 func newFakeAllocRepo() *fakeBudgetAllocationRepo {
@@ -71,7 +246,21 @@ func (f *fakeBudgetAllocationRepo) GetConsumption(scopeType, scopeID, period str
 
 func (f *fakeBudgetAllocationRepo) ListScoped(scopeTypes, scopeIDs []string) ([]model.BudgetAllocation, error) {
 	f.listScopedCalls++
-	return nil, nil
+	result := make([]model.BudgetAllocation, 0)
+	for _, allocation := range f.allocations {
+		typeAllowed := len(scopeTypes) == 0
+		for _, scopeType := range scopeTypes {
+			typeAllowed = typeAllowed || allocation.ScopeType == scopeType
+		}
+		idAllowed := len(scopeIDs) == 0
+		for _, scopeID := range scopeIDs {
+			idAllowed = idAllowed || allocation.ScopeID == scopeID
+		}
+		if typeAllowed && idAllowed {
+			result = append(result, *allocation)
+		}
+	}
+	return result, nil
 }
 
 func (f *fakeBudgetAllocationRepo) ListMemberIDsByDeptID(deptID string) ([]string, error) {

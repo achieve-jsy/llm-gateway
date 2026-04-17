@@ -1,9 +1,13 @@
 package middleware
 
 import (
+	"net/http"
+
+	"github.com/example/llm-gateway/internal/gateway/budget"
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 	"go.opentelemetry.io/otel/trace"
@@ -49,11 +53,20 @@ func Tracing() gin.HandlerFunc {
 
 		if status >= 400 {
 			span.SetAttributes(attribute.Bool("error", true))
+			span.SetStatus(codes.Error, http.StatusText(status))
 		}
 
 		// 记录模型名（如果有）
 		if model, exists := c.Get("model"); exists {
 			span.SetAttributes(attribute.String("llm.model", model.(string)))
 		}
+		if tier, ok := budget.GetTierContext(c); ok {
+			span.SetAttributes(attribute.String("llm.budget_tier_id", tier.TierID))
+		}
+		span.SetAttributes(
+			attribute.String("budget.check_result", c.GetString(budget.CtxKeyCheckResult)),
+			attribute.String("budget.block_reason", c.GetString(budget.CtxKeyBlockReason)),
+			attribute.Bool("budget.shadow_enabled", c.GetBool(budget.CtxKeyShadowMode)),
+		)
 	}
 }

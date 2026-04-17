@@ -349,7 +349,7 @@ import { ElMessage } from 'element-plus'
 import { useSettingsStore } from '@/stores/settings'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
 import type { UsageEndpointType } from '@/utils/usage-endpoint'
-import { fmtDateTime, fmtDate, fmtDuration } from '@/utils/time'
+import { fmtDate } from '@/utils/time'
 import {
   countActiveFilters,
   isStatusCompatible,
@@ -404,14 +404,6 @@ const daysAgo = (n: number) => { const d = new Date(today); d.setDate(d.getDate(
 const dateRange = ref<[string, string]>([fmt(daysAgo(6)), fmt(today)])
 const videoDateStart = computed(() => dateRange.value?.[0] || '')
 const videoDateEnd = computed(() => dateRange.value?.[1] || '')
-const dateShortcuts = [
-  { text: '今天',       value: () => [fmt(today), fmt(today)] },
-  { text: '昨天',       value: () => { const d = fmt(daysAgo(1)); return [d, d] } },
-  { text: '最近 7 天',  value: () => [fmt(daysAgo(6)), fmt(today)] },
-  { text: '最近 30 天', value: () => [fmt(daysAgo(29)), fmt(today)] },
-  { text: '本月',       value: () => [fmt(new Date(today.getFullYear(), today.getMonth(), 1)), fmt(today)] },
-]
-
 // ── Date presets ──
 const datePresets = [
   { label: '今天',   days: 0 },
@@ -627,17 +619,6 @@ const fmtCost = (v?: number | null): string => {
   else if (Math.abs(n) >= 0.0001) s = n.toFixed(6)
   else s = n.toFixed(8)
   return sym + s.replace(/(\.\d{2,}?)0+$/, '$1')
-}
-const fmtCost6 = (v?: number | null): string => {
-  const n = convertCost(Number(v || 0), cc.value)
-  return `${currencySymbol(cc.value.currency)}${n.toFixed(6)}`
-}
-const fmtPrice = (n?: number | null) => {
-  const sym = currencySymbol(cc.value.currency)
-  if (n == null) return '—'
-  if (n === 0) return `${sym}0`
-  const v = convertCost(n, cc.value)
-  return sym + (Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(4).replace(/0+$/, '').replace(/\.$/, ''))
 }
 const fmtTokens = (n?: number | null) => {
   if (!n) return '0'

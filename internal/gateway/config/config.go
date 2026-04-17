@@ -4,19 +4,21 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
 
 // Config 网关全局配置
 type Config struct {
-	Server   ServerConfig
-	Redis    RedisConfig
-	Database DatabaseConfig
-	OTLP     OTLPConfig
-	Provider ProviderConfig
-	Auth     AuthConfig
-	OIDC     OIDCConfig
+	Server        ServerConfig
+	Redis         RedisConfig
+	Database      DatabaseConfig
+	OTLP          OTLPConfig
+	Provider      ProviderConfig
+	Auth          AuthConfig
+	OIDC          OIDCConfig
+	Observability ObservabilityConfig
 }
 
 // ServerConfig 服务配置
@@ -34,6 +36,13 @@ type RedisConfig struct {
 // DatabaseConfig 数据库连接配置
 type DatabaseConfig struct {
 	URL string
+}
+
+type ObservabilityConfig struct {
+	SpoolCapacity          int64
+	SpoolHighWatermark     int64
+	SpoolClaimMinIdle      time.Duration
+	BillableReservationTTL time.Duration
 }
 
 // OTLPConfig OpenTelemetry 导出配置
@@ -82,6 +91,10 @@ func Load() *Config {
 	v.SetDefault("redis.password", "")
 	v.SetDefault("redis.db", 0)
 	v.SetDefault("database.url", "")
+	v.SetDefault("observability.spool_capacity", 100_000)
+	v.SetDefault("observability.spool_high_watermark", 80_000)
+	v.SetDefault("observability.spool_claim_min_idle", "30s")
+	v.SetDefault("observability.billable_reservation_ttl", "10m")
 	v.SetDefault("otlp.endpoint", "localhost:4317")
 	v.SetDefault("otlp.enabled", false)
 	v.SetDefault("provider.internal_token", "")
@@ -153,6 +166,12 @@ func Load() *Config {
 		},
 		Database: DatabaseConfig{
 			URL: v.GetString("database.url"),
+		},
+		Observability: ObservabilityConfig{
+			SpoolCapacity:          v.GetInt64("observability.spool_capacity"),
+			SpoolHighWatermark:     v.GetInt64("observability.spool_high_watermark"),
+			SpoolClaimMinIdle:      v.GetDuration("observability.spool_claim_min_idle"),
+			BillableReservationTTL: v.GetDuration("observability.billable_reservation_ttl"),
 		},
 		OTLP: OTLPConfig{
 			Endpoint: v.GetString("otlp.endpoint"),

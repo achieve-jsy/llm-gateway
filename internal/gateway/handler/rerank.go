@@ -3,12 +3,12 @@ package handler
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/example/llm-gateway/internal/core"
 	gatewayerrors "github.com/example/llm-gateway/internal/errors"
+	"github.com/example/llm-gateway/internal/gateway/budget"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
@@ -26,6 +26,8 @@ type RerankHandler struct {
 	orchestrator  RerankOrchestratorInterface
 	groupDispatch *orchestrator.GroupAwareDispatcher
 	budgetDeps    *middleware.BudgetDeps
+	budgetGate    *budget.Gate
+	requestQuota  *quota.QuotaMiddleware
 	quotaGate     *quota.ModelQuotaGate
 }
 
@@ -42,6 +44,14 @@ func NewRerankHandlerWithGroup(orch RerankOrchestratorInterface, gd *orchestrato
 // SetBudgetDeps injects budget dependencies (called once during router setup).
 func (h *RerankHandler) SetBudgetDeps(deps *middleware.BudgetDeps) {
 	h.budgetDeps = deps
+}
+
+func (h *RerankHandler) SetBudgetGate(gate *budget.Gate) {
+	h.budgetGate = gate
+}
+
+func (h *RerankHandler) SetRequestQuotaGate(gate *quota.QuotaMiddleware) {
+	h.requestQuota = gate
 }
 
 // SetModelQuotaGate injects the model quota gate (called once during router setup).
@@ -108,23 +118,16 @@ func (h *RerankHandler) Handle(c *gin.Context) {
 
 	c.Set("model", req.Model)
 
-	if h.budgetDeps != nil {
-		if _, err := middleware.Reserve(c, h.budgetDeps); err != nil {
-			if be, ok := err.(*middleware.BudgetExceededError); ok {
-				be.WriteHTTPResponse(c)
-				return
-			}
-			slog.Warn("rerank: budget check failed", "model", req.Model, "error", err)
-		}
-	}
-
 	routedModelID := req.Model
+	originalModel := req.Model
 
-	if h.groupDispatch != nil {
-		decision, err := h.groupDispatch.Dispatch(c, req.Model, nil)
-		if err != nil {
-			respondGroupError(c, err)
-			return
+	releaseQuota, err := PrepareAuthorizedGates(c, originalModel, func() error {
+		if h.groupDispatch == nil {
+			return nil
+		}
+		decision, dispatchErr := h.groupDispatch.Dispatch(c, originalModel, nil)
+		if dispatchErr != nil {
+			return dispatchErr
 		}
 		if decision != nil {
 			req.Model = decision.ModelName
@@ -134,6 +137,19 @@ func (h *RerankHandler) Handle(c *gin.Context) {
 			}
 			routedModelID = decision.ModelID
 		}
+		return nil
+	}, h.budgetGate, h.requestQuota)
+	if err != nil {
+		if c.IsAborted() {
+			return
+		}
+		if !budget.WriteHTTPError(c, err) {
+			respondGroupError(c, err)
+		}
+		return
+	}
+	if releaseQuota != nil {
+		defer releaseQuota()
 	}
 
 	if isMultimodalRerankInput(req.Query, req.Documents) && req.ModelType != "rerank_vl" {

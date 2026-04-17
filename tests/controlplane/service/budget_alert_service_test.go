@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/example/llm-gateway/internal/controlplane/budgetdomain"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/example/llm-gateway/internal/controlplane/service"
@@ -32,11 +33,24 @@ func (f *fakeAllocReader) GetAllocation(_, _ string) (*model.BudgetAllocation, e
 
 // fakeAlertStore 模拟 alertRecordStore，记录所有写入和查询调用。
 type fakeAlertStore struct {
-	existsResult map[string]bool
+	existsResult   map[string]bool
 	createdRecords []*model.BudgetAlertRecord
-	createErr    error
-	ownersResult map[string][]repository.AlertOwnerRow
-	ownersErr    error
+	createErr      error
+	ownersResult   map[string][]repository.AlertOwnerRow
+	ownersErr      error
+}
+
+type fakeAlertTierRepo struct {
+	limits    []model.BudgetTierLimit
+	overrides []model.BudgetTemporaryOverride
+}
+
+func (f *fakeAlertTierRepo) ListTierLimits(context.Context, uuid.UUID) ([]model.BudgetTierLimit, error) {
+	return f.limits, nil
+}
+
+func (f *fakeAlertTierRepo) ListActiveOverrides(context.Context, uuid.UUID, time.Time) ([]model.BudgetTemporaryOverride, error) {
+	return f.overrides, nil
 }
 
 func newFakeAlertStore() *fakeAlertStore {
@@ -46,9 +60,9 @@ func newFakeAlertStore() *fakeAlertStore {
 	}
 }
 
-func (f *fakeAlertStore) ExistsForPeriod(scopeType, scopeID, period string, threshold int) bool {
-	key := scopeType + ":" + scopeID + ":" + period + ":" + string(rune(threshold))
-	return f.existsResult[key]
+func (f *fakeAlertStore) ExistsForPeriod(_ context.Context, d repository.AlertDimension) (bool, error) {
+	key := d.ScopeType + ":" + d.ScopeID + ":" + d.Period + ":" + string(rune(d.Threshold))
+	return f.existsResult[key], nil
 }
 
 func (f *fakeAlertStore) Create(a *model.BudgetAlertRecord) error {
@@ -69,7 +83,7 @@ func (f *fakeAlertStore) FindOwnersByBudgetScope(scopeType, scopeID string) ([]r
 // fakeNotificationWriter 模拟 notificationWriter，记录写入的通知。
 type fakeNotificationWriter struct {
 	createdNotifications []*model.Notification
-	createErr          error
+	createErr            error
 }
 
 func (f *fakeNotificationWriter) Create(n *model.Notification) error {
@@ -250,6 +264,48 @@ func TestEvaluateAndAlert_DeptServiceOnly80TriggersAt80(t *testing.T) {
 
 	require.Len(t, alertStore.createdRecords, 1)
 	assert.Equal(t, 80, alertStore.createdRecords[0].Threshold)
+}
+
+func TestEvaluateTierAlert_UsesTemporaryEffectiveLimitAndTwoThresholds(t *testing.T) {
+	scopeType, scopeID := "member", "u-1"
+	allocationID, tierID := uuid.New(), uuid.New()
+	alloc := &model.BudgetAllocation{ID: allocationID, ScopeType: scopeType, ScopeID: scopeID, AmountUSD: 100}
+	base, err := budgetdomain.ParseAmount("100.000000")
+	require.NoError(t, err)
+	target, err := budgetdomain.ParseAmount("200.000000")
+	require.NoError(t, err)
+	alertStore := newFakeAlertStore()
+	svc := newAlertService(alloc, alertStore, &fakeNotificationWriter{}, nil, nil)
+	svc.SetBudgetTierRepo(&fakeAlertTierRepo{
+		limits: []model.BudgetTierLimit{{
+			BudgetAllocationID: allocationID, ModelTierID: tierID,
+			PeriodType: budgetdomain.PeriodMonthly, LimitUSD: base,
+			Enabled: true, EffectiveAt: time.Now().Add(-time.Hour),
+		}},
+		overrides: []model.BudgetTemporaryOverride{{
+			BudgetAllocationID: allocationID, ModelTierID: &tierID,
+			DimensionType: budgetdomain.DimensionTier, PeriodType: budgetdomain.PeriodMonthly,
+			TargetLimitUSD: target, StartsAt: time.Now().Add(-time.Hour),
+			ExpiresAt: time.Now().Add(time.Hour), Status: budgetdomain.OverrideActive,
+		}},
+	})
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	svc.SetRedis(rdb)
+	period := time.Now().In(time.FixedZone("CST", 8*3600)).Format("2006-01")
+	key := "budget:v2:tier:used:" + scopeType + ":" + scopeID + ":" + tierID.String() + ":" + period
+	require.NoError(t, rdb.Set(context.Background(), key, "100000000", 0).Err())
+
+	svc.EvaluateAndAlert(context.Background(), scopeType, scopeID, "monthly", "tier", tierID.String())
+	require.Empty(t, alertStore.createdRecords, "temporary limit 200 means usage 100 is below 80%")
+
+	require.NoError(t, rdb.Set(context.Background(), key, "200000000", 0).Err())
+	svc.EvaluateAndAlert(context.Background(), scopeType, scopeID, "monthly", "tier", tierID.String())
+	require.Len(t, alertStore.createdRecords, 2)
+	require.Equal(t, []int{80, 100}, []int{
+		alertStore.createdRecords[0].Threshold,
+		alertStore.createdRecords[1].Threshold,
+	})
 }
 
 // TestEvaluateAndAlert_Deduplication 验证：已存在去重记录时不重复告警。

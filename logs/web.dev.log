@@ -1,0 +1,6 @@
+bash: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8): Bad file descriptor
+Error: No available formula with the name "php@7.4". Did you mean php@8.4, php@8.3, php@8.2 or php@8.1?
+
+  VITE v5.4.21  ready in 245 ms
+
+  ➜  Local:   http://127.0.0.1:5173/

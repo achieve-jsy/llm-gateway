@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/audit"
 	"github.com/example/llm-gateway/internal/controlplane/keyactivity"
@@ -13,6 +14,7 @@ import (
 	"github.com/example/llm-gateway/internal/notification"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -56,8 +58,8 @@ func (w *DBNotifier) Notify(_ context.Context, n *model.Notification) error {
 // EmailNotifier 读取 system_configs 中的邮件配置，按配置向告警接收人发送邮件。
 // 每次 Notify 重建 Sender，使运行时配置修改无需重启即生效。
 type EmailNotifier struct {
-	settingsRepo *repository.SettingsRepo
-	db           *gorm.DB
+	settingsRepo  *repository.SettingsRepo
+	db            *gorm.DB
 	auditRecorder audit.Recorder
 }
 
@@ -97,6 +99,33 @@ func (e *EmailNotifier) Notify(ctx context.Context, n *model.Notification) error
 	sender := notification.NewEmailSender(smtp.host, smtp.port, smtp.from, smtp.password, recipients)
 	if smtp.skipVerify {
 		sender.SetSkipTLSVerify(true)
+	}
+	if n.DedupeKey != "" {
+		delivery := &model.NotificationDelivery{ID: uuid.New(), DedupeKey: n.DedupeKey, Channel: "email", Status: "pending"}
+		if err := e.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "dedupe_key"}, {Name: "channel"}}, DoNothing: true}).Create(delivery).Error; err != nil {
+			return err
+		}
+		var persisted model.NotificationDelivery
+		if err := e.db.WithContext(ctx).Where("dedupe_key = ? AND channel = ?", n.DedupeKey, "email").First(&persisted).Error; err != nil {
+			return err
+		}
+		if persisted.Status == "delivered" {
+			return nil
+		}
+		subject := "[LLM Gateway] " + n.Title
+		body := fmt.Sprintf("%s\n\n时间: %s", n.Content, n.CreatedAt.Format("2006-01-02 15:04"))
+		err := sender.SendTextWithSubjectAndDedupeKey(ctx, subject, body, n.DedupeKey)
+		updates := map[string]any{"attempts": gorm.Expr("attempts + 1")}
+		if err != nil {
+			updates["status"], updates["last_error"] = "failed", err.Error()
+		} else {
+			now := time.Now().UTC()
+			updates["status"], updates["last_error"], updates["delivered_at"] = "delivered", "", now
+		}
+		if updateErr := e.db.WithContext(ctx).Model(&persisted).Updates(updates).Error; updateErr != nil {
+			return updateErr
+		}
+		return err
 	}
 
 	go e.sendAsync(sender, n, recipients)

@@ -23,10 +23,12 @@ type BoundGroupItem struct {
 }
 
 type AvailableGroupItem struct {
-	ID          uint   `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Strategy    string `json:"strategy"`
+	ID             uint   `json:"id"`
+	Name           string `json:"name"`
+	Description    string `json:"description"`
+	Strategy       string `json:"strategy"`
+	BudgetTierID   string `json:"budget_tier_id,omitempty"`
+	BudgetTierName string `json:"budget_tier_name,omitempty"`
 }
 
 type KeyGroupService struct {
@@ -157,12 +159,19 @@ func (s *KeyGroupService) ListAvailableGroups(ctx context.Context) ([]AvailableG
 	}
 	items := make([]AvailableGroupItem, 0, len(groups))
 	for _, g := range groups {
-		items = append(items, AvailableGroupItem{
+		item := AvailableGroupItem{
 			ID:          g.ID,
 			Name:        g.Name,
 			Description: g.Description,
 			Strategy:    g.Strategy,
-		})
+		}
+		if g.BudgetTierID != nil {
+			item.BudgetTierID = g.BudgetTierID.String()
+		}
+		if g.BudgetTier != nil {
+			item.BudgetTierName = g.BudgetTier.Name
+		}
+		items = append(items, item)
 	}
 	return items, nil
 }

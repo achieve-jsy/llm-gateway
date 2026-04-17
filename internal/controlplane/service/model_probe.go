@@ -87,6 +87,20 @@ func probeChatCompletion(ctx context.Context, endpoint, modelName, apiKey string
 		return false, true, elapsed, errMsg
 	}
 
+	// 新模型拒绝 max_tokens：改用 max_completion_tokens 重试一次。
+	if strings.Contains(lower, "max_completion_tokens") && strings.Contains(lower, "max_tokens") {
+		retryReq := cloneProbeRequest(baseReq)
+		if mt, ok := retryReq["max_tokens"]; ok {
+			retryReq["max_completion_tokens"] = mt
+			delete(retryReq, "max_tokens")
+		}
+		ok, t, retryErr := doProbeRequest(ctx, chatEndpoint, apiKey, retryReq, false)
+		if ok {
+			return true, false, t, ""
+		}
+		return false, false, t, retryErr
+	}
+
 	return false, false, elapsed, errMsg
 }
 

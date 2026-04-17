@@ -182,3 +182,67 @@ func TestChatCompletion_AzureSanitizesReasoningAliases(t *testing.T) {
 	assert.False(t, hasSummary)
 	assert.False(t, hasEffortCamel)
 }
+
+// Azure 新模型（含自定义部署名）拒绝 max_tokens，必须改写为 max_completion_tokens。
+func TestChatCompletion_AzureRewritesMaxTokensEvenForCustomDeploymentName(t *testing.T) {
+	var gotBody map[string]any
+	fakeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-1", "object": "chat.completion", "model": "westus-gpt55",
+			"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": "ok"}, "finish_reason": "stop"}},
+		})
+	}))
+	defer fakeServer.Close()
+
+	p := azure.New(providers.ProviderConfig{
+		APIKey:  "test-key",
+		BaseURL: fakeServer.URL,
+	}, providers.ProviderOptions{})
+
+	maxTokens := 24
+	_, err := p.ChatCompletion(context.Background(), &core.ChatRequest{
+		Model:     "westus-gpt55", // 部署名不含 gpt-5，不能依赖模型名启发式
+		Messages:  []core.Message{{Role: "user", Content: "hi"}},
+		MaxTokens: &maxTokens,
+	})
+	require.NoError(t, err)
+
+	_, hasMaxTokens := gotBody["max_tokens"]
+	assert.False(t, hasMaxTokens, "Azure 出站不得再带 max_tokens")
+	assert.Equal(t, float64(24), gotBody["max_completion_tokens"])
+}
+
+func TestChatCompletion_AzureKeepsExistingMaxCompletionTokens(t *testing.T) {
+	var gotBody map[string]any
+	fakeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-1", "object": "chat.completion", "model": "gpt-5.5",
+			"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": "ok"}, "finish_reason": "stop"}},
+		})
+	}))
+	defer fakeServer.Close()
+
+	p := azure.New(providers.ProviderConfig{
+		APIKey:  "test-key",
+		BaseURL: fakeServer.URL,
+	}, providers.ProviderOptions{})
+
+	raw := []byte(`{
+		"model":"gpt-5.5",
+		"messages":[{"role":"user","content":"hi"}],
+		"max_tokens":16,
+		"max_completion_tokens":48
+	}`)
+	var req core.ChatRequest
+	require.NoError(t, json.Unmarshal(raw, &req))
+	_, err := p.ChatCompletion(context.Background(), &req)
+	require.NoError(t, err)
+
+	_, hasMaxTokens := gotBody["max_tokens"]
+	assert.False(t, hasMaxTokens)
+	assert.Equal(t, float64(48), gotBody["max_completion_tokens"])
+}

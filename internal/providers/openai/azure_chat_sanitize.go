@@ -46,5 +46,13 @@ func sanitizeAzureRawMap(raw map[string]json.RawMessage) map[string]json.RawMess
 	for _, key := range azureChatAlwaysDrop {
 		delete(raw, key)
 	}
+	// Azure 新模型（gpt-5 / o-series 等）拒绝 max_tokens；部署名也可能不含模型族前缀，
+	// 因此在 Azure 出站统一改写，不依赖模型名启发式。
+	if maxTokens, ok := raw["max_tokens"]; ok {
+		if _, has := raw["max_completion_tokens"]; !has {
+			raw["max_completion_tokens"] = maxTokens
+		}
+		delete(raw, "max_tokens")
+	}
 	return raw
 }

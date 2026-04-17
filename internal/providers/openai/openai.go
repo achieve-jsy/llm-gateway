@@ -137,6 +137,12 @@ func isReasoningChatModel(model string) bool {
 	return isOSeriesModel(model) || isGPT5Model(model)
 }
 
+// requiresMaxCompletionTokens reports models that reject max_tokens on Chat Completions.
+// Includes gpt-5-chat*（保留 temperature，但仍需改写 max_tokens）。
+func requiresMaxCompletionTokens(model string) bool {
+	return isOSeriesModel(model) || isGPT5Model(model) || isGPT5ChatModel(model)
+}
+
 // ShouldBridgeChatToResponses reports whether a Chat Completions request must
 // be routed through the Responses API, matching LiteLLM get_chat_completion_mode:
 //
@@ -198,7 +204,9 @@ func hasChatReasoningSummary(req *core.ChatRequest) bool {
 //   - reasoning:{effort}（Responses 形态）→ reasoning_effort
 //   - reasoning_effort dict → string（Chat Completions 只接受 string）
 // 与 LiteLLM drop_params / OpenCode 兼容策略对齐。
-func adaptForReasoningChat(req *core.ChatRequest) (any, error) {
+//
+// dropTemperature：o-series / gpt-5（非 chat）为 true；gpt-5-chat* 为 false。
+func adaptForReasoningChat(req *core.ChatRequest, dropTemperature bool) (any, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, core.NewInvalidRequestError("failed to marshal reasoning request: "+err.Error(), err)
@@ -214,7 +222,9 @@ func adaptForReasoningChat(req *core.ChatRequest) (any, error) {
 		}
 		delete(raw, "max_tokens")
 	}
-	delete(raw, "temperature")
+	if dropTemperature {
+		delete(raw, "temperature")
+	}
 	normalizeReasoningChatParams(raw)
 	return raw, nil
 }
@@ -267,10 +277,11 @@ func normalizeReasoningEffortJSON(raw json.RawMessage) json.RawMessage {
 }
 
 // chatRequestBody returns the appropriate request body for the model.
-// Reasoning models get parameter adaptation; others pass through as-is.
+// Models that reject max_tokens get parameter adaptation; others pass through as-is.
 func chatRequestBody(req *core.ChatRequest) (any, error) {
-	if isReasoningChatModel(req.Model) {
-		return adaptForReasoningChat(req)
+	if requiresMaxCompletionTokens(req.Model) {
+		// gpt-5-chat 保留 temperature；其余 reasoning 模型丢弃。
+		return adaptForReasoningChat(req, isReasoningChatModel(req.Model))
 	}
 	return req, nil
 }

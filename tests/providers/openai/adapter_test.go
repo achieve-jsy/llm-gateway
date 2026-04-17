@@ -575,17 +575,20 @@ func TestChatCompletion_GPT5ChatKeepsTemperature(t *testing.T) {
 	defer fakeServer.Close()
 
 	temp := 0.4
+	maxTokens := 16
 	req := &core.ChatRequest{
 		Model:       "gpt-5-chat-latest",
 		Messages:    []core.Message{{Role: "user", Content: "hi"}},
 		Temperature: &temp,
+		MaxTokens:   &maxTokens,
 	}
 	p := newFakeProvider(t, fakeServer.URL)
 	_, err := p.ChatCompletion(context.Background(), req)
 	require.NoError(t, err)
 	assert.Equal(t, 0.4, gotBody["temperature"])
-	_, hasMaxCompletion := gotBody["max_completion_tokens"]
-	assert.False(t, hasMaxCompletion)
+	_, hasMaxTokens := gotBody["max_tokens"]
+	assert.False(t, hasMaxTokens, "gpt-5-chat 也应改写 max_tokens")
+	assert.Equal(t, float64(16), gotBody["max_completion_tokens"])
 }
 
 func TestChatCompletion_GPT55ToolsReasoningBridgesToResponses(t *testing.T) {

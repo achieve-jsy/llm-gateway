@@ -1148,14 +1148,14 @@ export async function listBudgetTierLimits(allocationId: string): Promise<Budget
 }
 
 export async function previewBudgetTierBatch(input: {
-  operation: 'set_fixed' | 'adjust_percent'
+  operation: 'set_fixed' | 'adjust_percent' | 'clear'
   items: Array<{
     item_id: string
     allocation_id: string
     model_tier_id: string
     period_type: 'daily' | 'weekly' | 'monthly'
     direction?: 'increase' | 'decrease'
-    value: string
+    value?: string
   }>
   effective_mode: 'immediate' | 'next_period'
   reason: string

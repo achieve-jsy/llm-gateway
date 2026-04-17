@@ -1,4 +1,4 @@
-h1:9ZQpQJ2Nret6FyH8VcpxcJq7hxZVt+1H9lrEF9DBBj0=
+h1:x6ivUx3CIlpYJoadnmEkzm6cKpSGM0d42U3IzgEWkW4=
 20260609082623_baseline.sql h1:EypMLzQ+lwKOXInv3+ZdRYfRjDkE8V0LWKJ+7Ul6hMY=
 20260610120000_add_model_status.sql h1:dsiXmqu5v1ClJQJFnN8Ilphj0UtIN0I6bpvUW43i294=
 20260611000000_add_users_login_status.sql h1:IdW/XoVpwI/HIG0nsz+cLsWwQfoIhguaFU3LWMwelMY=
@@ -43,3 +43,4 @@ h1:9ZQpQJ2Nret6FyH8VcpxcJq7hxZVt+1H9lrEF9DBBj0=
 20260714172000_create_quota_exemptions_table.sql h1:vTDM5eVBfBYQT7hlXlbf06W3REjvPlHyV8TjVXcR7jQ=
 20260714180000_azure_provider_definition.sql h1:SzdbD7Tky5Oh37AuvfhDJ9xLXAhikdkpi0UGmKVUwug=
 20260714233000_azure_openai_v1.sql h1:wDILN/GljJhy/zAxnULcqQnPGNSVwV0MUOABQZ6uG90=
+20260716160000_add_budget_schedule_operation.sql h1:gZdhccRZS1psAgehzGQu4n7P4wIOLne4QYh2EbOS7RQ=

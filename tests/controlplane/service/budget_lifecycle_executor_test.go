@@ -165,12 +165,37 @@ func (lifecycleTierWriter) UpsertTierLimitInTx(context.Context, *gorm.DB, reposi
 	return nil
 }
 
+func (lifecycleTierWriter) DeleteTierLimitInTx(context.Context, *gorm.DB, uuid.UUID, uuid.UUID, budgetdomain.PeriodType) error {
+	return nil
+}
+
+type capturingLifecycleTierDeleter struct {
+	allocationID uuid.UUID
+	tierID       uuid.UUID
+	period       budgetdomain.PeriodType
+}
+
+func (w *capturingLifecycleTierDeleter) UpsertTierLimitInTx(context.Context, *gorm.DB, repository.UpsertTierLimitParams) error {
+	return nil
+}
+
+func (w *capturingLifecycleTierDeleter) DeleteTierLimitInTx(_ context.Context, _ *gorm.DB, allocationID, tierID uuid.UUID, period budgetdomain.PeriodType) error {
+	w.allocationID = allocationID
+	w.tierID = tierID
+	w.period = period
+	return nil
+}
+
 type capturingLifecycleTierWriter struct {
 	params repository.UpsertTierLimitParams
 }
 
 func (w *capturingLifecycleTierWriter) UpsertTierLimitInTx(_ context.Context, _ *gorm.DB, params repository.UpsertTierLimitParams) error {
 	w.params = params
+	return nil
+}
+
+func (w *capturingLifecycleTierWriter) DeleteTierLimitInTx(context.Context, *gorm.DB, uuid.UUID, uuid.UUID, budgetdomain.PeriodType) error {
 	return nil
 }
 
@@ -187,6 +212,30 @@ type capturingLifecycleErrorReporter struct {
 
 func (r *capturingLifecycleErrorReporter) ReportBudgetLifecycleError(_ context.Context, event service.BudgetLifecycleErrorEvent) {
 	r.events = append(r.events, event)
+}
+
+func TestBudgetLifecycleExecutorAppliesClearTierSchedule(t *testing.T) {
+	now := time.Now()
+	scheduleID, allocationID, tierID := uuid.New(), uuid.New(), uuid.New()
+	repo := &lifecycleRepo{
+		schedules: map[uuid.UUID]*model.BudgetLimitSchedule{
+			scheduleID: {
+				ID: scheduleID, BudgetAllocationID: allocationID, DimensionType: budgetdomain.DimensionTier,
+				ModelTierID: &tierID, PeriodType: budgetdomain.PeriodMonthly,
+				ScheduleOperation: budgetdomain.ScheduleOperationClear, Status: budgetdomain.SchedulePending,
+			},
+		},
+	}
+	writer := &capturingLifecycleTierDeleter{}
+	executor := service.NewBudgetLifecycleExecutor(
+		repo, lifecycleTotalWriter{}, writer, &lifecyclePublisher{}, service.NoopBudgetLifecycleObserver{},
+	)
+	result, err := executor.RunOnce(context.Background(), now, 100)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.SchedulesApplied)
+	require.Equal(t, allocationID, writer.allocationID)
+	require.Equal(t, tierID, writer.tierID)
+	require.Equal(t, budgetdomain.PeriodMonthly, writer.period)
 }
 
 func TestBudgetLifecycleExecutorProcessesSchedulesAndOverrides(t *testing.T) {

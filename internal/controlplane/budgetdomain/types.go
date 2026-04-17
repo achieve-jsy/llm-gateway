@@ -205,3 +205,20 @@ func (s ScheduleStatus) Valid() bool {
 		return false
 	}
 }
+
+// ScheduleOperation 描述排期到期时要执行的动作。
+type ScheduleOperation string
+
+const (
+	ScheduleOperationSet   ScheduleOperation = "set"
+	ScheduleOperationClear ScheduleOperation = "clear"
+)
+
+func (o ScheduleOperation) Valid() bool {
+	switch o {
+	case ScheduleOperationSet, ScheduleOperationClear:
+		return true
+	default:
+		return false
+	}
+}

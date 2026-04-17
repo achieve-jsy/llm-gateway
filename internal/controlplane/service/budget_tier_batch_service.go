@@ -26,6 +26,8 @@ type BatchOperation string
 const (
 	BatchSetFixed      BatchOperation = "set_fixed"
 	BatchAdjustPercent BatchOperation = "adjust_percent"
+	// BatchClear 删除等级子预算行，恢复为「未配置」（只受总预算约束）。
+	BatchClear BatchOperation = "clear"
 )
 
 var (
@@ -144,6 +146,7 @@ type batchAtomicTierStore interface {
 	Transaction(context.Context, func(*gorm.DB) error) error
 	FindTierLimitForUpdate(context.Context, *gorm.DB, uuid.UUID, uuid.UUID, budgetdomain.PeriodType) (*model.BudgetTierLimit, error)
 	UpsertTierLimitInTx(context.Context, *gorm.DB, repository.UpsertTierLimitParams) error
+	DeleteTierLimitInTx(context.Context, *gorm.DB, uuid.UUID, uuid.UUID, budgetdomain.PeriodType) error
 	PutPendingScheduleInTx(context.Context, *gorm.DB, *model.BudgetLimitSchedule, bool) error
 }
 
@@ -237,8 +240,8 @@ func (s *BudgetTierService) PreviewBatch(ctx context.Context, actor rbac.Actor, 
 	if strings.TrimSpace(input.Reason) == "" {
 		return nil, ErrBudgetReasonRequired
 	}
-	if input.Operation != BatchSetFixed && input.Operation != BatchAdjustPercent {
-		return nil, newBatchValidationError("operation", "must be set_fixed or adjust_percent")
+	if input.Operation != BatchSetFixed && input.Operation != BatchAdjustPercent && input.Operation != BatchClear {
+		return nil, newBatchValidationError("operation", "must be set_fixed, adjust_percent, or clear")
 	}
 	seen := make(map[string]struct{}, len(input.Items))
 	for _, item := range input.Items {
@@ -263,7 +266,8 @@ func (s *BudgetTierService) PreviewBatch(ctx context.Context, actor rbac.Actor, 
 		indices []int
 	}
 	riskGroups := map[string]*riskGroup{}
-	activeTiers, err := s.tiers.List(ctx, false)
+	includeArchived := input.Operation == BatchClear
+	activeTiers, err := s.tiers.List(ctx, includeArchived)
 	if err != nil {
 		return nil, err
 	}
@@ -290,13 +294,24 @@ func (s *BudgetTierService) PreviewBatch(ctx context.Context, actor rbac.Actor, 
 			continue
 		}
 		tier, found := tierByID[item.TierID]
-		if !found || !tier.Enabled || tier.ArchivedAt != nil {
+		// clear 允许清理已停用/归档等级上的残留限制；set/adjust 仍要求等级可用
+		if input.Operation != BatchClear && (!found || !tier.Enabled || tier.ArchivedAt != nil) {
 			view.Status, view.ErrorCode = "invalid", "MODEL_TIER_DISABLED"
+			result.Items = append(result.Items, view)
+			continue
+		}
+		if input.Operation == BatchClear && !found {
+			view.Status, view.ErrorCode = "invalid", "MODEL_TIER_NOT_FOUND"
 			result.Items = append(result.Items, view)
 			continue
 		}
 		if !item.PeriodType.Valid() {
 			view.Status, view.ErrorCode = "invalid", "INVALID_BUDGET_PERIOD"
+			result.Items = append(result.Items, view)
+			continue
+		}
+		if convertToPersonal && input.Operation == BatchClear {
+			view.Status, view.ErrorCode = "invalid", "BUDGET_TIER_LIMIT_NOT_FOUND"
 			result.Items = append(result.Items, view)
 			continue
 		}
@@ -315,6 +330,34 @@ func (s *BudgetTierService) PreviewBatch(ctx context.Context, actor rbac.Actor, 
 			}
 		}
 		versions[item.ItemID] = batchTierLimitVersion(allocation, convertToPersonal, existing, risk.ParentVersion)
+		if input.Operation == BatchClear {
+			// 幂等：已无行也视为可清除
+			if existing != nil {
+				old := existing.LimitUSD
+				view.OldLimitUSD = &old
+				view.DeltaUSD = decimal.Zero.Sub(old.Decimal).StringFixed(6)
+			} else {
+				view.DeltaUSD = "0.000000"
+			}
+			view.NewLimitUSD = budgetdomain.Amount{}
+			view.CurrentUsedUSD, view.Stale = s.currentTierUsage(ctx, SetTierLimitInput{
+				AllocationID: allocation.ID, TierID: item.TierID, PeriodType: item.PeriodType,
+			}, now)
+			result.Stale = result.Stale || view.Stale
+			if risk.ParentLimitUSD != nil && risk.ParentLimitUSD.Decimal.IsPositive() && existing != nil {
+				key := risk.ParentVersion + ":" + item.TierID.String() + ":" + string(item.PeriodType)
+				group := riskGroups[key]
+				if group == nil {
+					group = &riskGroup{parent: *risk.ParentLimitUSD, total: risk.SiblingLimitTotalUSD}
+					riskGroups[key] = group
+				}
+				group.delta = group.delta.Sub(existing.LimitUSD.Decimal)
+				group.indices = append(group.indices, len(result.Items))
+			}
+			view.Status = "valid"
+			result.Items = append(result.Items, view)
+			continue
+		}
 		newLimit, calcErr := calculateBatchLimit(input.Operation, item, existing)
 		if calcErr != "" {
 			view.Status, view.ErrorCode = "invalid", calcErr
@@ -477,6 +520,11 @@ func (s *BudgetTierService) ApplyBatch(ctx context.Context, actor rbac.Actor, in
 				ctx, actor, atomicStore, atomicAllocations, state, item, previewItem,
 			)
 		} else if convertToPersonal {
+			if state.input.Operation == BatchClear {
+				applied.Status, applied.ErrorCode = "failed", "BUDGET_TIER_LIMIT_NOT_FOUND"
+				result.Items = append(result.Items, applied)
+				continue
+			}
 			allocation.ID = uuid.New()
 			allocation.AmountUSD, allocation.DailyAmountUSD, allocation.WeeklyAmountUSD = -1, -1, -1
 			allocation.Period, allocation.Enabled = "monthly", true
@@ -497,11 +545,43 @@ func (s *BudgetTierService) ApplyBatch(ctx context.Context, actor rbac.Actor, in
 			beforeLimit = current.LimitUSD.String()
 		}
 		if !handledAtomically && !convertToPersonal {
-			_, setErr = s.setTierLimit(ctx, SetTierLimitInput{
-				AllocationID: allocation.ID, TierID: item.TierID, PeriodType: item.PeriodType,
-				LimitUSD: previewItem.NewLimitUSD, Enabled: current == nil || current.Enabled,
-				EffectiveMode: state.input.EffectiveMode, Reason: state.input.Reason, ActorID: state.input.ActorID,
-			}, false)
+			if state.input.Operation == BatchClear {
+				switch state.input.EffectiveMode {
+				case EffectiveImmediate:
+					if current == nil {
+						setErr = nil
+					} else {
+						setErr = s.repo.DeleteTierLimit(ctx, allocation.ID, item.TierID, item.PeriodType)
+					}
+				case EffectiveNextPeriod:
+					if current == nil {
+						setErr = nil
+					} else {
+						period, periodErr := budgetperiod.Resolve(s.clock(), item.PeriodType, s.periodConfig)
+						if periodErr != nil {
+							setErr = periodErr
+						} else {
+							schedule := &model.BudgetLimitSchedule{
+								ID: uuid.New(), BudgetAllocationID: allocation.ID,
+								DimensionType: budgetdomain.DimensionTier, DimensionKey: "tier:" + item.TierID.String(), ModelTierID: &item.TierID,
+								PeriodType: item.PeriodType, TargetLimitUSD: budgetdomain.Amount{},
+								ScheduleOperation: budgetdomain.ScheduleOperationClear,
+								EffectiveAt: period.ResetAt, Reason: state.input.Reason, CreatedBy: state.input.ActorID,
+								Status: budgetdomain.SchedulePending,
+							}
+							_, setErr = s.repo.PutPendingSchedule(ctx, schedule, false)
+						}
+					}
+				default:
+					setErr = ErrInvalidEffectiveMode
+				}
+			} else {
+				_, setErr = s.setTierLimit(ctx, SetTierLimitInput{
+					AllocationID: allocation.ID, TierID: item.TierID, PeriodType: item.PeriodType,
+					LimitUSD: previewItem.NewLimitUSD, Enabled: current == nil || current.Enabled,
+					EffectiveMode: state.input.EffectiveMode, Reason: state.input.Reason, ActorID: state.input.ActorID,
+				}, false)
+			}
 		}
 		persisted := setErr == nil || errors.Is(setErr, ErrBudgetConfigSyncPending)
 		if errors.Is(setErr, ErrBudgetConfigSyncPending) {
@@ -514,13 +594,18 @@ func (s *BudgetTierService) ApplyBatch(ctx context.Context, actor rbac.Actor, in
 		}
 		if persisted {
 			persistedAny = true
+			afterLimit := any(nil)
+			if state.input.Operation != BatchClear {
+				afterLimit = previewItem.NewLimitUSD.String()
+			}
 			result.AuditBefore = append(result.AuditBefore, map[string]any{
 				"item_id": item.ItemID, "allocation_id": allocation.ID,
 				"scope_type": allocation.ScopeType, "scope_id": allocation.ScopeID, "limit_usd": beforeLimit,
 			})
 			result.AuditAfter = append(result.AuditAfter, map[string]any{
-				"item_id": item.ItemID, "allocation_id": allocation.ID, "limit_usd": previewItem.NewLimitUSD.String(),
-				"scope_type": allocation.ScopeType, "scope_id": allocation.ScopeID, "converted_to_personal": convertToPersonal,
+				"item_id": item.ItemID, "allocation_id": allocation.ID, "limit_usd": afterLimit,
+				"scope_type": allocation.ScopeType, "scope_id": allocation.ScopeID,
+				"converted_to_personal": convertToPersonal, "cleared": state.input.Operation == BatchClear,
 			})
 		}
 		result.Items = append(result.Items, applied)
@@ -595,6 +680,9 @@ func (s *BudgetTierService) applyBatchTierLimitAtomic(
 			return ErrBatchPreviewStale
 		}
 		if convertToPersonal {
+			if state.input.Operation == BatchClear {
+				return ErrBudgetAllocationNotFound
+			}
 			if state.input.EffectiveMode != EffectiveImmediate {
 				return errors.New("personal allocation conversion only supports immediate mode")
 			}
@@ -606,6 +694,34 @@ func (s *BudgetTierService) applyBatchTierLimitAtomic(
 				BudgetAllocationID: allocation.ID, ModelTierID: item.TierID, PeriodType: item.PeriodType,
 				LimitUSD: previewItem.NewLimitUSD, EffectiveAt: s.clock(), Enabled: true,
 			})
+		}
+		if state.input.Operation == BatchClear {
+			switch state.input.EffectiveMode {
+			case EffectiveImmediate:
+				if current == nil {
+					return nil
+				}
+				return store.DeleteTierLimitInTx(ctx, tx, allocation.ID, item.TierID, item.PeriodType)
+			case EffectiveNextPeriod:
+				if current == nil {
+					return nil
+				}
+				period, err := budgetperiod.Resolve(s.clock(), item.PeriodType, s.periodConfig)
+				if err != nil {
+					return err
+				}
+				schedule := &model.BudgetLimitSchedule{
+					ID: uuid.New(), BudgetAllocationID: allocation.ID,
+					DimensionType: budgetdomain.DimensionTier, DimensionKey: "tier:" + item.TierID.String(), ModelTierID: &item.TierID,
+					PeriodType: item.PeriodType, TargetLimitUSD: budgetdomain.Amount{},
+					ScheduleOperation: budgetdomain.ScheduleOperationClear,
+					EffectiveAt: period.ResetAt, Reason: state.input.Reason, CreatedBy: state.input.ActorID,
+					Status: budgetdomain.SchedulePending,
+				}
+				return store.PutPendingScheduleInTx(ctx, tx, schedule, false)
+			default:
+				return ErrInvalidEffectiveMode
+			}
 		}
 		if state.input.EffectiveMode == EffectiveImmediate {
 			return store.UpsertTierLimitInTx(ctx, tx, repository.UpsertTierLimitParams{
@@ -624,6 +740,7 @@ func (s *BudgetTierService) applyBatchTierLimitAtomic(
 			ID: uuid.New(), BudgetAllocationID: allocation.ID,
 			DimensionType: budgetdomain.DimensionTier, DimensionKey: "tier:" + item.TierID.String(), ModelTierID: &item.TierID,
 			PeriodType: item.PeriodType, TargetLimitUSD: previewItem.NewLimitUSD,
+			ScheduleOperation: budgetdomain.ScheduleOperationSet,
 			EffectiveAt: period.ResetAt, Reason: state.input.Reason, CreatedBy: state.input.ActorID,
 			Status: budgetdomain.SchedulePending,
 		}

@@ -284,32 +284,32 @@ async function save(): Promise<void> {
     return
   }
 
-  const unsupportedRemovals = collectUnsupportedRemovals(draft.value, originalDraft.value)
-  if (unsupportedRemovals.length) {
-    ElMessage.warning(`现有 API 暂不支持移除限制：${unsupportedRemovals.join('、')}`)
+  const unsupportedTotalRemovals = collectUnsupportedTotalRemovals(draft.value, originalDraft.value)
+  if (unsupportedTotalRemovals.length && draft.value.effectiveMode === 'next_period') {
+    ElMessage.warning(`总预算改为不限仅支持「立即生效」：${unsupportedTotalRemovals.join('、')}`)
     return
   }
 
-  const changedTotals = periods.filter(period => {
-    const current = draft.value!.total[period]
-    const original = originalDraft.value!.total[period]
-    return current.configured
-      && (current.configured !== original.configured || current.value !== original.value)
-  })
+  const changedTotals = periods.filter(period => totalPeriodChanged(draft.value!, originalDraft.value!, period))
   const changedTierItems = collectChangedTierItems(draft.value, originalDraft.value)
+  const clearedTierItems = collectClearedTierItems(draft.value, originalDraft.value)
 
   if (
-    changedTotals.some(period => !isLimitValue(draft.value!.total[period].value))
+    changedTotals.some(period => {
+      const entry = draft.value!.total[period]
+      if (!entry.configured) return false
+      return !isLimitValue(entry.value)
+    })
     || changedTierItems.some(item => !isMoney(item.value))
   ) {
     ElMessage.warning('额度必须是最多 6 位小数的非负数字，或不限（-1）')
     return
   }
-  if (changedTierItems.length && !selectedAllocation.value.allocation_id) {
+  if ((changedTierItems.length || clearedTierItems.length) && !selectedAllocation.value.allocation_id) {
     ElMessage.warning('请先保存总预算，生成 allocation 后再设置等级子预算')
     return
   }
-  if (!changedTotals.length && !changedTierItems.length) {
+  if (!changedTotals.length && !changedTierItems.length && !clearedTierItems.length) {
     ElMessage.info('没有需要保存的额度变更')
     return
   }
@@ -319,6 +319,14 @@ async function save(): Promise<void> {
     const totalPreviews = await Promise.all(changedTotals.map(period => (
       previewBudgetAdjustment(totalPayload(period))
     )))
+    const clearPreview = clearedTierItems.length
+      ? await previewBudgetTierBatch({
+          operation: 'clear',
+          items: clearedTierItems,
+          effective_mode: draft.value.effectiveMode,
+          reason: draft.value.reason.trim(),
+        })
+      : null
     const tierPreview = changedTierItems.length
       ? await previewBudgetTierBatch({
           operation: 'set_fixed',
@@ -330,18 +338,36 @@ async function save(): Promise<void> {
 
     if (
       totalPreviews.some(item => item.stale)
+      || clearPreview?.stale
+      || clearPreview?.items.some(item => item.stale)
       || tierPreview?.stale
       || tierPreview?.items.some(item => item.stale)
     ) {
       ElMessage.warning('用量数据已过期，请刷新后重新预览')
       return
     }
+    const invalidClearItem = clearPreview?.items.find(item => item.status !== 'valid')
+    if (invalidClearItem) {
+      throw new Error(invalidClearItem.error_code || '移除等级限制预览失败')
+    }
     const invalidTierItem = tierPreview?.items.find(item => item.status !== 'valid')
     if (invalidTierItem) {
       throw new Error(invalidTierItem.error_code || '等级子预算预览失败')
     }
 
-    await confirmPreview(totalPreviews, tierPreview)
+    await confirmPreview(totalPreviews, tierPreview, clearPreview)
+    if (clearPreview) {
+      const clearApply = await applyBudgetTierBatch({
+        preview_token: clearPreview.preview_token,
+        confirm_item_ids: clearPreview.items
+          .filter(item => item.status === 'valid')
+          .map(item => item.item_id),
+      })
+      const failed = clearApply.items?.find(item => item.status !== 'applied' && item.status !== 'skipped')
+      if (failed) {
+        throw new Error(failed.error_code || '移除等级限制失败')
+      }
+    }
     if (tierPreview) {
       const tierApply = await applyBudgetTierBatch({
         preview_token: tierPreview.preview_token,
@@ -376,10 +402,14 @@ async function save(): Promise<void> {
 }
 
 function totalPayload(period: ExpansionPeriod) {
-  const rawValue = draft.value!.total[period].value
-  const numValue = Number(rawValue)
-  // 验证数值有效性，无效时使用空字符串表示未配置
-  const targetLimit = Number.isFinite(numValue) && rawValue !== '' ? numValue.toFixed(6) : ''
+  const entry = draft.value!.total[period]
+  let targetLimit = ''
+  if (!entry.configured) {
+    targetLimit = '-1.000000'
+  } else {
+    const numValue = Number(entry.value)
+    targetLimit = Number.isFinite(numValue) && entry.value !== '' ? numValue.toFixed(6) : ''
+  }
 
   return {
     scope_type: selectedAllocation.value!.scope_type,
@@ -389,6 +419,15 @@ function totalPayload(period: ExpansionPeriod) {
     effective_mode: draft.value!.effectiveMode,
     reason: draft.value!.reason.trim(),
   }
+}
+
+function totalPeriodChanged(current: TierLimitsDraft, original: TierLimitsDraft, period: ExpansionPeriod): boolean {
+  const next = current.total[period]
+  const before = original.total[period]
+  if (!before.configured && !next.configured) return false
+  if (!next.configured && before.configured) return true
+  if (next.configured !== before.configured) return true
+  return next.configured && next.value !== before.value
 }
 
 function collectChangedTierItems(current: TierLimitsDraft, original: TierLimitsDraft) {
@@ -420,21 +459,34 @@ function collectChangedTierItems(current: TierLimitsDraft, original: TierLimitsD
   }))
 }
 
-function collectUnsupportedRemovals(
+function collectClearedTierItems(current: TierLimitsDraft, original: TierLimitsDraft) {
+  const allocationId = selectedAllocation.value?.allocation_id ?? ''
+  return tiers.value.flatMap(tier => periods.flatMap(period => {
+    const next = current.tiers[tier.id][period]
+    const before = original.tiers[tier.id][period]
+    if (!before.configured || next.configured) return []
+    return [{
+      item_id: `${allocationId}:${tier.id}:${period}:clear`,
+      allocation_id: allocationId,
+      model_tier_id: tier.id,
+      period_type: period,
+    }]
+  }))
+}
+
+function collectUnsupportedTotalRemovals(
   current: TierLimitsDraft,
   original: TierLimitsDraft,
 ): string[] {
   const removals: string[] = []
+  const periodLabels: Record<ExpansionPeriod, string> = {
+    daily: '日',
+    weekly: '周',
+    monthly: '月',
+  }
   for (const period of periods) {
     if (original.total[period].configured && !current.total[period].configured) {
-      removals.push(`${period} 总预算`)
-    }
-  }
-  for (const tier of tiers.value) {
-    for (const period of periods) {
-      if (original.tiers[tier.id][period].configured && !current.tiers[tier.id][period].configured) {
-        removals.push(`${tier.name} ${period}`)
-      }
+      removals.push(`${periodLabels[period]}总预算`)
     }
   }
   return removals
@@ -443,9 +495,15 @@ function collectUnsupportedRemovals(
 async function confirmPreview(
   totalPreviews: Awaited<ReturnType<typeof previewBudgetAdjustment>>[],
   tierPreview: Awaited<ReturnType<typeof previewBudgetTierBatch>> | null,
+  clearPreview: Awaited<ReturnType<typeof previewBudgetTierBatch>> | null = null,
 ): Promise<void> {
-  const allTierItems = tierPreview?.items ?? []
+  const allTierItems = [...(tierPreview?.items ?? []), ...(clearPreview?.items ?? [])]
   const warnings: string[] = []
+  if (clearPreview?.items.some(item => item.status === 'valid')) {
+    warnings.push(draft.value?.effectiveMode === 'next_period'
+      ? '下周期将移除等级子预算限制'
+      : '移除等级限制后该等级将只受总预算约束')
+  }
   if (totalPreviews.some(item => item.zero_block) || allTierItems.some(item => item.zero_block)) {
     warnings.push('$0 将阻断后续请求')
   }

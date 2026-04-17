@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus from 'element-plus'
@@ -20,6 +20,7 @@ const mockReorderModelTiers = vi.fn()
 const mockArchiveModelTier = vi.fn()
 const mockSetModelTierStatus = vi.fn()
 const mockSetGroupBudgetTierBatch = vi.fn()
+const mockListGroups = vi.fn()
 
 vi.mock('@/services/control-plane', () => ({
   listModelTiers: (...args: unknown[]) => mockListModelTiers(...args),
@@ -35,7 +36,7 @@ vi.mock('@/services/control-plane', () => ({
 // Mock groups API
 vi.mock('@/api/groups', () => ({
   groupsApi: {
-    listGroups: vi.fn().mockResolvedValue({ data: { data: [] } }),
+    listGroups: (...args: unknown[]) => mockListGroups(...args),
   },
 }))
 
@@ -94,6 +95,7 @@ function mountPage() {
 describe('ModelTierListPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.useFakeTimers()
     mockListModelTiers.mockResolvedValue([...sampleTiers])
     mockCreateModelTier.mockResolvedValue(makeTier())
     mockUpdateModelTier.mockResolvedValue(makeTier())
@@ -102,6 +104,11 @@ describe('ModelTierListPage', () => {
     mockArchiveModelTier.mockResolvedValue(makeTier())
     mockSetModelTierStatus.mockResolvedValue(makeTier())
     mockSetGroupBudgetTierBatch.mockResolvedValue(undefined)
+    mockListGroups.mockResolvedValue({ data: { data: [], total: 0 } })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   describe('页面渲染', () => {
@@ -266,6 +273,122 @@ describe('ModelTierListPage', () => {
 
       const deleteButtons = wrapper.findAll('button').filter(b => b.text() === '删除')
       expect(deleteButtons.length).toBe(1)
+    })
+  })
+
+  describe('批量关联模型组', () => {
+    const sampleGroups = [
+      {
+        id: 1,
+        name: 'gpt-chat',
+        description: 'OpenAI chat',
+        strategy: 'round_robin',
+        strategy_label: '轮询',
+        model_type: 'chat',
+        enabled: true,
+        max_switches: 3,
+        same_model_retries: 1,
+        failover_cooldown_seconds: 0,
+        timeout_seconds: 60,
+        open_mode: 'public',
+        is_capability_override: false,
+        override_supports_vision: false,
+        override_supports_function_calling: false,
+        override_supports_tool_choice: false,
+        created_at: '',
+        updated_at: '',
+        model_tier_id: 'tier-1',
+        model_tier_name: 'Standard',
+      },
+      {
+        id: 2,
+        name: 'claude-code',
+        description: 'Anthropic',
+        strategy: 'round_robin',
+        strategy_label: '轮询',
+        model_type: 'chat',
+        enabled: true,
+        max_switches: 3,
+        same_model_retries: 1,
+        failover_cooldown_seconds: 0,
+        timeout_seconds: 60,
+        open_mode: 'public',
+        is_capability_override: false,
+        override_supports_vision: false,
+        override_supports_function_calling: false,
+        override_supports_tool_choice: false,
+        created_at: '',
+        updated_at: '',
+        model_tier_id: null,
+        model_tier_name: null,
+      },
+    ]
+
+    async function openAssociateDialog() {
+      const wrapper = mountPage()
+      await flushPromises()
+      const btn = wrapper.findAll('button').find(b => b.text().includes('关联模型组'))
+      expect(btn).toBeDefined()
+      await btn!.trigger('click')
+      await flushPromises()
+      return wrapper
+    }
+
+    it('打开弹窗时按 page_size=200 分页拉取全量模型组', async () => {
+      const page1 = Array.from({ length: 200 }, (_, i) => ({
+        ...sampleGroups[1],
+        id: i + 1,
+        name: `group-${i + 1}`,
+      }))
+      const page2 = [{ ...sampleGroups[0], id: 201, name: 'group-201' }]
+      mockListGroups
+        .mockResolvedValueOnce({ data: { data: page1, total: 201 } })
+        .mockResolvedValueOnce({ data: { data: page2, total: 201 } })
+
+      await openAssociateDialog()
+
+      expect(mockListGroups).toHaveBeenCalledWith({ page: 1, page_size: 200, search: undefined })
+      expect(mockListGroups).toHaveBeenCalledWith({ page: 2, page_size: 200, search: undefined })
+      expect(mockListGroups).toHaveBeenCalledTimes(2)
+    })
+
+    it('搜索框即时过滤本地目录，并 debounce 后带 search 调用后端', async () => {
+      mockListGroups.mockResolvedValue({ data: { data: sampleGroups, total: 2 } })
+      const wrapper = await openAssociateDialog()
+      mockListGroups.mockClear()
+      mockListGroups.mockResolvedValue({
+        data: { data: [sampleGroups[0]], total: 1 },
+      })
+
+      const vm = wrapper.vm as any
+      vm.groupSearch = 'gpt'
+      await flushPromises()
+
+      expect(vm.filteredGroups.map((g: { name: string }) => g.name)).toEqual(['gpt-chat'])
+
+      await vi.advanceTimersByTimeAsync(300)
+      await flushPromises()
+
+      expect(mockListGroups).toHaveBeenCalledWith({
+        page: 1,
+        page_size: 200,
+        search: 'gpt',
+      })
+    })
+
+    it('搜索只过滤展示列表，全量目录保持不变', async () => {
+      mockListGroups.mockResolvedValue({ data: { data: sampleGroups, total: 2 } })
+      const wrapper = await openAssociateDialog()
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      expect(vm.groupsCatalog).toHaveLength(2)
+
+      vm.groupSearch = 'gpt'
+      await flushPromises()
+
+      expect(vm.filteredGroups.map((g: { name: string }) => g.name)).toEqual(['gpt-chat'])
+      expect(vm.groupsCatalog).toHaveLength(2)
     })
   })
 })

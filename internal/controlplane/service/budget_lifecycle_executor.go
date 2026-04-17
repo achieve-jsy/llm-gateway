@@ -34,6 +34,7 @@ type TotalBudgetScheduleWriter interface {
 }
 type TierBudgetScheduleWriter interface {
 	UpsertTierLimitInTx(context.Context, *gorm.DB, repository.UpsertTierLimitParams) error
+	DeleteTierLimitInTx(context.Context, *gorm.DB, uuid.UUID, uuid.UUID, budgetdomain.PeriodType) error
 }
 
 type BudgetLifecycleResult struct {
@@ -287,10 +288,15 @@ func (e *BudgetLifecycleExecutor) executeSchedule(ctx context.Context, id uuid.U
 		if schedule.DimensionType == budgetdomain.DimensionTotal {
 			err = e.total.ApplyTotalScheduledLimit(ctx, tx, schedule.BudgetAllocationID, schedule.PeriodType, schedule.TargetLimitUSD)
 		} else if schedule.ModelTierID != nil {
-			err = e.tier.UpsertTierLimitInTx(ctx, tx, repository.UpsertTierLimitParams{
-				BudgetAllocationID: schedule.BudgetAllocationID, ModelTierID: *schedule.ModelTierID,
-				PeriodType: schedule.PeriodType, LimitUSD: schedule.TargetLimitUSD, EffectiveAt: schedule.EffectiveAt, Enabled: true,
-			})
+			switch schedule.ScheduleOperation {
+			case budgetdomain.ScheduleOperationClear:
+				err = e.tier.DeleteTierLimitInTx(ctx, tx, schedule.BudgetAllocationID, *schedule.ModelTierID, schedule.PeriodType)
+			default:
+				err = e.tier.UpsertTierLimitInTx(ctx, tx, repository.UpsertTierLimitParams{
+					BudgetAllocationID: schedule.BudgetAllocationID, ModelTierID: *schedule.ModelTierID,
+					PeriodType: schedule.PeriodType, LimitUSD: schedule.TargetLimitUSD, EffectiveAt: schedule.EffectiveAt, Enabled: true,
+				})
+			}
 		} else {
 			err = fmt.Errorf("tier schedule missing model tier")
 		}

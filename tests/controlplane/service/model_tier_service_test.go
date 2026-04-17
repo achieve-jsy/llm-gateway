@@ -80,6 +80,28 @@ func TestModelTierServiceDeleteReferencedTierReturnsConflict(t *testing.T) {
 	require.ErrorIs(t, err, service.ErrModelTierReferenced)
 }
 
+func TestModelTierServiceDisableReferencedTierReturnsConflict(t *testing.T) {
+	repo := newFakeModelTierRepo()
+	id := uuid.New()
+	repo.tiers[id] = &model.ModelTier{ID: id, Name: "高级", Enabled: true}
+	repo.references[id] = repository.ModelTierReferenceCounts{Groups: 1}
+
+	_, err := service.NewModelTierService(repo).SetEnabled(context.Background(), id, false, "test")
+	require.ErrorIs(t, err, service.ErrModelTierReferenced)
+	require.True(t, repo.tiers[id].Enabled)
+}
+
+func TestModelTierServiceEnableReferencedTierSucceeds(t *testing.T) {
+	repo := newFakeModelTierRepo()
+	id := uuid.New()
+	repo.tiers[id] = &model.ModelTier{ID: id, Name: "高级", Enabled: false}
+	repo.references[id] = repository.ModelTierReferenceCounts{Groups: 1}
+
+	tier, err := service.NewModelTierService(repo).SetEnabled(context.Background(), id, true, "test")
+	require.NoError(t, err)
+	require.True(t, tier.Enabled)
+}
+
 func TestModelTierListIncludesReferenceAndHistoryCounts(t *testing.T) {
 	repo := newFakeModelTierRepo()
 	id := uuid.New()

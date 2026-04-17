@@ -146,6 +146,90 @@ func TestExpansionPrecheckVersionChangesWhenBudgetStateChanges(t *testing.T) {
 		"precheck version should change when budget state changes")
 }
 
+func TestExpansionDecisionAcceptsCreatePrecheckVersionWhenBudgetUnchanged(t *testing.T) {
+	for _, action := range []string{model.ExpansionActionApprove, model.ExpansionActionReject} {
+		t.Run(action, func(t *testing.T) {
+			db, svc := newExpansionApprovalFixture(t)
+			requesterID, approverID := uuid.New(), uuid.New()
+			seedApprovalChain(t, db, requesterID)
+			require.NoError(t, db.Exec(`INSERT INTO budget_allocations
+				(id,scope_type,scope_id,amount_usd,daily_amount_usd,weekly_amount_usd,period,enabled,created_by,updated_by)
+				VALUES (?,?,?,?,?,?,?,?,?,?)`,
+				uuid.New(), model.BudgetScopeMember, requesterID.String(), 80, -1, -1, "monthly", true,
+				requesterID, requesterID).Error)
+
+			precheck, err := svc.Precheck(context.Background(), service.ActorScope{
+				UserID: requesterID.String(), Role: "user",
+			}, service.PrecheckInput{
+				ScopeType: model.BudgetScopeMember, ScopeID: requesterID.String(), PeriodType: "monthly",
+				DimensionType: "total", DurationType: "permanent", TargetAmountUSD: "120.000000",
+			})
+			require.NoError(t, err)
+			require.True(t, precheck.CanSubmit)
+
+			request, err := svc.CreateRequestAdvanced(context.Background(), service.CreateExpansionRequestInput{
+				ScopeType: model.BudgetScopeMember, ScopeID: requesterID.String(), RequesterID: requesterID,
+				PeriodType: budgetdomain.PeriodMonthly, DimensionType: budgetdomain.DimensionTotal,
+				DurationType: budgetdomain.DurationPermanent, RequestedAmount: 120,
+				CurrentAmountSnapshot: budgetdomain.Amount{}, UsedAmountSnapshot: budgetdomain.Amount{},
+				PrecheckVersion: precheck.PrecheckVersion, PrecheckedAt: precheck.DataAsOf,
+				ExpiresAt: time.Now().Add(time.Hour), Reason: "increase total",
+			})
+			require.NoError(t, err)
+			request.ID = uuid.New()
+			require.NoError(t, db.Model(&model.ExpansionRequest{}).
+				Where("requester_id = ?", requesterID).Update("id", request.ID).Error)
+			require.NoError(t, db.Model(&model.BudgetAllocation{}).
+				Where("scope_type <> ?", model.BudgetScopeMember).
+				Update("updated_at", time.Now().UTC()).Error)
+
+			_, err = svc.DecideWorkflow(context.Background(), request.ID.String(), approverID, service.DecisionInput{
+				Action: action, Comment: "decision", PrecheckVersion: precheck.PrecheckVersion,
+			})
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestExpansionDecisionRejectsWrongCreatePrecheckVersion(t *testing.T) {
+	db, svc := newExpansionApprovalFixture(t)
+	requesterID, approverID := uuid.New(), uuid.New()
+	seedApprovalChain(t, db, requesterID)
+	require.NoError(t, db.Exec(`INSERT INTO budget_allocations
+		(id,scope_type,scope_id,amount_usd,daily_amount_usd,weekly_amount_usd,period,enabled,created_by,updated_by)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		uuid.New(), model.BudgetScopeMember, requesterID.String(), 80, -1, -1, "monthly", true,
+		requesterID, requesterID).Error)
+
+	precheck, err := svc.Precheck(context.Background(), service.ActorScope{
+		UserID: requesterID.String(), Role: "user",
+	}, service.PrecheckInput{
+		ScopeType: model.BudgetScopeMember, ScopeID: requesterID.String(), PeriodType: "monthly",
+		DimensionType: "total", DurationType: "permanent", TargetAmountUSD: "120.000000",
+	})
+	require.NoError(t, err)
+	request, err := svc.CreateRequestAdvanced(context.Background(), service.CreateExpansionRequestInput{
+		ScopeType: model.BudgetScopeMember, ScopeID: requesterID.String(), RequesterID: requesterID,
+		PeriodType: budgetdomain.PeriodMonthly, DimensionType: budgetdomain.DimensionTotal,
+		DurationType: budgetdomain.DurationPermanent, RequestedAmount: 120,
+		PrecheckVersion: precheck.PrecheckVersion, PrecheckedAt: precheck.DataAsOf,
+		ExpiresAt: time.Now().Add(time.Hour), Reason: "increase total",
+	})
+	require.NoError(t, err)
+	request.ID = uuid.New()
+	require.NoError(t, db.Model(&model.ExpansionRequest{}).
+		Where("requester_id = ?", requesterID).Update("id", request.ID).Error)
+
+	_, err = svc.DecideWorkflow(context.Background(), request.ID.String(), approverID, service.DecisionInput{
+		Action: model.ExpansionActionReject, Comment: "reject", PrecheckVersion: "wrong-version",
+	})
+	require.ErrorIs(t, err, service.ErrPrecheckStale)
+
+	var stored model.ExpansionRequest
+	require.NoError(t, db.First(&stored, "id = ?", request.ID).Error)
+	require.Equal(t, model.ExpansionStatusPrecheckRequired, stored.Status)
+}
+
 // TestExpansionApproveWithStalePrecheckReturnsError verifies that approval
 // fails with ErrPrecheckStale when the budget state has changed since precheck.
 func TestExpansionApproveWithStalePrecheckReturnsError(t *testing.T) {

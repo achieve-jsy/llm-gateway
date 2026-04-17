@@ -556,18 +556,30 @@ func (h *BudgetHandler) MyBudget(c *gin.Context) {
 		return
 	}
 
+	if h.rbac != nil {
+		h.rbac.BuildAndInjectActor(c)
+	}
+	actor := rbac.GetActor(c)
+	if actor.UserID == "" {
+		actor.UserID = userID
+	}
+	if c.GetString("user_role") == "admin" {
+		actor.IsGlobal = true
+	}
+
 	period := time.Now().Format("2006-01")
 	type chainItem struct {
-		ScopeType       string  `json:"scope_type"`
-		Label           string  `json:"label"`
-		AmountUSD       float64 `json:"amount_usd"`
-		DailyAmountUSD  float64 `json:"daily_amount_usd"`
-		WeeklyAmountUSD float64 `json:"weekly_amount_usd"`
-		UsedUSD         float64 `json:"used_usd"`
-		DailyUsedUSD    float64 `json:"daily_used_usd"`
-		WeeklyUsedUSD   float64 `json:"weekly_used_usd"`
-		UsedRatio       float64 `json:"used_ratio"`
-		Period          string  `json:"period"`
+		ScopeType       string   `json:"scope_type"`
+		Label           string   `json:"label"`
+		VisibleAmounts  bool     `json:"visible_amounts"`
+		AmountUSD       *float64 `json:"amount_usd,omitempty"`
+		DailyAmountUSD  *float64 `json:"daily_amount_usd,omitempty"`
+		WeeklyAmountUSD *float64 `json:"weekly_amount_usd,omitempty"`
+		UsedUSD         *float64 `json:"used_usd,omitempty"`
+		DailyUsedUSD    *float64 `json:"daily_used_usd,omitempty"`
+		WeeklyUsedUSD   *float64 `json:"weekly_used_usd,omitempty"`
+		UsedRatio       *float64 `json:"used_ratio,omitempty"`
+		Period          string   `json:"period"`
 	}
 
 	scopes := []struct {
@@ -584,24 +596,56 @@ func (h *BudgetHandler) MyBudget(c *gin.Context) {
 		if s.scopeID == "" {
 			continue
 		}
-		item := chainItem{ScopeType: s.scopeType, Label: s.label, Period: period, AmountUSD: -1, DailyAmountUSD: -1, WeeklyAmountUSD: -1}
+		visibleAmounts := canViewMyBudgetScope(actor, userID, s.scopeType, s.scopeID)
+		item := chainItem{
+			ScopeType: s.scopeType, Label: s.label, Period: period,
+			VisibleAmounts: visibleAmounts,
+		}
 		alloc, _ := h.svc.GetBudget(c.Request.Context(), s.scopeType, s.scopeID)
-		if alloc != nil {
-			item.AmountUSD = alloc.AmountUSD
-			item.DailyAmountUSD = alloc.DailyAmountUSD
-			item.WeeklyAmountUSD = alloc.WeeklyAmountUSD
-			item.UsedUSD = alloc.UsedUSD
-			item.DailyUsedUSD = alloc.DailyUsedUSD
-			item.WeeklyUsedUSD = alloc.WeeklyUsedUSD
-			item.UsedRatio = alloc.UsedRatio
+		if visibleAmounts {
+			amountUSD, dailyAmountUSD, weeklyAmountUSD := -1.0, -1.0, -1.0
+			usedUSD, dailyUsedUSD, weeklyUsedUSD, usedRatio := 0.0, 0.0, 0.0, 0.0
+			if alloc != nil {
+				amountUSD = alloc.AmountUSD
+				dailyAmountUSD = alloc.DailyAmountUSD
+				weeklyAmountUSD = alloc.WeeklyAmountUSD
+				usedUSD = alloc.UsedUSD
+				dailyUsedUSD = alloc.DailyUsedUSD
+				weeklyUsedUSD = alloc.WeeklyUsedUSD
+				usedRatio = alloc.UsedRatio
+			}
+			item.AmountUSD = &amountUSD
+			item.DailyAmountUSD = &dailyAmountUSD
+			item.WeeklyAmountUSD = &weeklyAmountUSD
+			item.UsedUSD = &usedUSD
+			item.DailyUsedUSD = &dailyUsedUSD
+			item.WeeklyUsedUSD = &weeklyUsedUSD
+			item.UsedRatio = &usedRatio
 		}
 		// 成员层未配额度则跳过
-		if s.scopeType == model.BudgetScopeMember && item.AmountUSD < 0 {
+		if s.scopeType == model.BudgetScopeMember && (alloc == nil || alloc.AmountUSD < 0) {
 			continue
 		}
 		chain = append(chain, item)
 	}
 	c.JSON(http.StatusOK, gin.H{"chain": chain})
+}
+
+func canViewMyBudgetScope(actor rbac.Actor, userID, scopeType, scopeID string) bool {
+	if scopeType == model.BudgetScopeMember {
+		return scopeID == userID
+	}
+	if actor.IsGlobal {
+		return true
+	}
+	switch scopeType {
+	case model.BudgetScopeDeptDaily, model.BudgetScopeDeptService:
+		return actor.HasDept(scopeID)
+	case model.BudgetScopeStudio:
+		return actor.HasStudio(scopeID)
+	default:
+		return false
+	}
 }
 
 // EvaluateAlert POST /internal/v1/budget/evaluate-alert

@@ -172,6 +172,15 @@ func (s *ModelTierService) SetEnabled(ctx context.Context, id uuid.UUID, enabled
 	if tier.ArchivedAt != nil && enabled {
 		return nil, ErrInvalidModelTier
 	}
+	if !enabled {
+		counts, err := s.repo.ReferenceCounts(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if counts.Groups > 0 {
+			return nil, ErrModelTierReferenced
+		}
+	}
 	tier.Enabled = enabled
 	if err := s.repo.Update(ctx, tier); err != nil {
 		return nil, err

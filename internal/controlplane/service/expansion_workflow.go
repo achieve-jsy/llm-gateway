@@ -1380,8 +1380,8 @@ func makePrecheckVersion(input PrecheckInput, current, used budgetdomain.Amount,
 		parts = append(parts, *input.ModelTierID)
 	}
 	for _, constraint := range constraints {
-		parts = append(parts, constraint.AllocationID, constraint.Version, constraint.SourceLevel,
-			constraint.Status, constraint.LimitUSD, constraint.UsedUSD, constraint.Freshness, constraint.TierStatus)
+		parts = append(parts, constraint.SourceLevel, constraint.ScopeType, constraint.ScopeID,
+			constraint.Status, constraint.LimitUSD, constraint.UsedUSD, constraint.TierStatus)
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
 	return hex.EncodeToString(sum[:])

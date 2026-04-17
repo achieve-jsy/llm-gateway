@@ -18,12 +18,12 @@ import (
 )
 
 type fakeModelTierService struct {
-	deleteErr  error
-	createErr  error
-	updateErr  error
+	deleteErr     error
+	createErr     error
+	updateErr     error
 	setEnabledErr error
-	tier       *model.ModelTier
-	tiers      []model.ModelTier
+	tier          *model.ModelTier
+	tiers         []model.ModelTier
 }
 
 func (f *fakeModelTierService) List(context.Context, bool) ([]model.ModelTier, error) {
@@ -257,6 +257,27 @@ func TestModelTierHandlerSetStatusReturns200(t *testing.T) {
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &result))
 	require.Equal(t, id, result.Data.ID)
 	require.False(t, result.Data.Enabled)
+}
+
+func TestModelTierHandlerDisableReferencedTierReturns409(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	id := uuid.New()
+	h := handler.NewModelTierHandler(&fakeModelTierService{
+		setEnabledErr: service.ErrModelTierReferenced,
+		tier:          &model.ModelTier{ID: id, Name: "高级", Enabled: true},
+	})
+	router := gin.New()
+	router.PATCH("/api/v1/model-tiers/:id/status", h.SetStatus)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/model-tiers/"+id.String()+"/status", bytes.NewBufferString(
+		`{"enabled":false,"reason":"禁用该分层"}`,
+	))
+	req.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+
+	require.Equal(t, http.StatusConflict, response.Code)
+	require.JSONEq(t, `{"error":{"type":"conflict","code":"MODEL_TIER_REFERENCED","message":"model tier is referenced"}}`, response.Body.String())
 }
 
 func TestModelTierHandlerDeleteReturns200(t *testing.T) {

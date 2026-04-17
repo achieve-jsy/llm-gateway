@@ -60,6 +60,9 @@ func (s *myBudgetStore) FindTierLimit(context.Context, uuid.UUID, uuid.UUID, bud
 func (s *myBudgetStore) UpsertTierLimit(context.Context, repository.UpsertTierLimitParams) (*model.BudgetTierLimit, error) {
 	return nil, nil
 }
+func (s *myBudgetStore) DeleteTierLimit(context.Context, uuid.UUID, uuid.UUID, budgetdomain.PeriodType) error {
+	return nil
+}
 func (s *myBudgetStore) ListActiveOverrides(_ context.Context, allocationID uuid.UUID, _ time.Time) ([]model.BudgetTemporaryOverride, error) {
 	return s.overrides[allocationID], nil
 }

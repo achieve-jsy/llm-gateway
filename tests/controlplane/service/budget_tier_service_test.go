@@ -40,6 +40,10 @@ func (f *fakeBudgetTierStore) UpsertTierLimit(_ context.Context, params reposito
 	f.existing.Enabled = params.Enabled
 	return f.existing, nil
 }
+func (f *fakeBudgetTierStore) DeleteTierLimit(context.Context, uuid.UUID, uuid.UUID, budgetdomain.PeriodType) error {
+	f.existing = nil
+	return nil
+}
 func (f *fakeBudgetTierStore) ListActiveOverrides(context.Context, uuid.UUID, time.Time) ([]model.BudgetTemporaryOverride, error) {
 	return nil, nil
 }

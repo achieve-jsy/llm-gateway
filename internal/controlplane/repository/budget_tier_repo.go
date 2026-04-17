@@ -298,6 +298,30 @@ func (r *BudgetTierRepo) UpsertTierLimitInTx(ctx context.Context, tx *gorm.DB, p
 	return UpsertTierLimitInTx(ctx, tx, params)
 }
 
+// DeleteTierLimit 删除等级子预算行，使该 (allocation, tier, period) 回到「未配置」状态。
+func (r *BudgetTierRepo) DeleteTierLimit(ctx context.Context, allocationID, tierID uuid.UUID, period budgetdomain.PeriodType) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return DeleteTierLimitInTx(ctx, tx, allocationID, tierID, period)
+	})
+}
+
+func DeleteTierLimitInTx(ctx context.Context, tx *gorm.DB, allocationID, tierID uuid.UUID, period budgetdomain.PeriodType) error {
+	if err := lockBudgetAllocation(ctx, tx, allocationID); err != nil {
+		return err
+	}
+	result := tx.WithContext(ctx).
+		Where("budget_allocation_id = ? AND model_tier_id = ? AND period_type = ?", allocationID, tierID, period).
+		Delete(&model.BudgetTierLimit{})
+	if result.Error != nil {
+		return result.Error
+	}
+	return nil
+}
+
+func (r *BudgetTierRepo) DeleteTierLimitInTx(ctx context.Context, tx *gorm.DB, allocationID, tierID uuid.UUID, period budgetdomain.PeriodType) error {
+	return DeleteTierLimitInTx(ctx, tx, allocationID, tierID, period)
+}
+
 func (r *BudgetTierRepo) ApplyTierLimitsBatch(ctx context.Context, items []UpsertTierLimitParams) error {
 	return r.Transaction(ctx, func(tx *gorm.DB) error {
 		for _, item := range items {

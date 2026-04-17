@@ -186,6 +186,71 @@ describe('BudgetEditDrawer', () => {
     expect(mockMessageSuccess).toHaveBeenCalledWith('总预算与等级子预算已更新')
   })
 
+  it('总预算移除限制时映射为 -1 并提交', async () => {
+    mockListBudgetTierLimits.mockResolvedValue([])
+    const wrapper = mountDrawer()
+    await flushPromises()
+
+    const vm = wrapper.vm as any
+    vm.originalDraft.total.weekly = { configured: true, value: '100' }
+    vm.draft.total.weekly = { configured: false, value: '' }
+    vm.dirty = true
+    await vm.save()
+    await flushPromises()
+
+    expect(mockPreviewBudgetAdjustment).toHaveBeenCalledWith(expect.objectContaining({
+      period_type: 'weekly',
+      target_limit_usd: '-1.000000',
+    }))
+  })
+
+  it('移除等级限制时走 clear 批量预览与应用', async () => {
+    mockListBudgetTierLimits.mockResolvedValue([{
+      id: 'limit-premium',
+      budget_allocation_id: 'alloc-studio',
+      model_tier_id: 'tier-premium',
+      model_tier_name: '高级',
+      period_type: 'monthly',
+      base_limit_usd: '80.000000',
+      effective_limit_usd: '80.000000',
+      enabled: true,
+    }])
+    mockPreviewBudgetTierBatch.mockResolvedValue({
+      preview_token: 'clear-token',
+      stale: false,
+      items: [{ item_id: 'alloc-studio:tier-premium:monthly:clear', status: 'valid' }],
+    } as TierAdjustmentPreview)
+    mockApplyBudgetTierBatch.mockResolvedValue({
+      items: [{ item_id: 'alloc-studio:tier-premium:monthly:clear', status: 'applied' }],
+    })
+
+    const wrapper = mountDrawer()
+    await flushPromises()
+
+    const vm = wrapper.vm as any
+    expect(vm.draft.tiers['tier-premium'].monthly).toMatchObject({ configured: true, value: '80' })
+    vm.draft.tiers['tier-premium'].monthly = { enabled: true, configured: false, value: '' }
+    vm.dirty = true
+    await vm.save()
+    await flushPromises()
+
+    expect(mockPreviewBudgetTierBatch).toHaveBeenCalledWith(expect.objectContaining({
+      operation: 'clear',
+      effective_mode: 'immediate',
+      items: [expect.objectContaining({
+        item_id: 'alloc-studio:tier-premium:monthly:clear',
+        allocation_id: 'alloc-studio',
+        model_tier_id: 'tier-premium',
+        period_type: 'monthly',
+      })],
+    }))
+    expect(mockApplyBudgetTierBatch).toHaveBeenCalledWith({
+      preview_token: 'clear-token',
+      confirm_item_ids: ['alloc-studio:tier-premium:monthly:clear'],
+    })
+    expect(mockMessageSuccess).toHaveBeenCalledWith('总预算与等级子预算已更新')
+  })
+
   it('等级子预算批量应用返回单项失败时不提示成功', async () => {
     mockApplyBudgetTierBatch.mockResolvedValue({
       items: [{ item_id: 'alloc-studio:tier-premium:monthly', status: 'failed', error_code: 'ORG_FORBIDDEN' }],

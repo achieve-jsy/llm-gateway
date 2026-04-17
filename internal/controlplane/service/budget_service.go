@@ -334,6 +334,7 @@ func (s *BudgetService) AdjustBudget(
 			ID: uuid.New(), BudgetAllocationID: allocation.ID,
 			DimensionType: budgetdomain.DimensionTotal, DimensionKey: "total",
 			PeriodType: input.PeriodType, TargetLimitUSD: input.TargetLimitUSD,
+			ScheduleOperation: budgetdomain.ScheduleOperationSet,
 			EffectiveAt: window.ResetAt, Reason: input.Reason, CreatedBy: input.ActorID,
 			Status: budgetdomain.SchedulePending,
 		}

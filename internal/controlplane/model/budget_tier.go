@@ -56,6 +56,7 @@ type BudgetLimitSchedule struct {
 	ModelTierID        *uuid.UUID                  `gorm:"type:uuid;index;check:chk_budget_schedule_dimension,(dimension_type = 'total' AND model_tier_id IS NULL) OR (dimension_type = 'tier' AND model_tier_id IS NOT NULL)" json:"model_tier_id,omitempty"`
 	PeriodType         budgetdomain.PeriodType     `gorm:"type:varchar(8);not null;uniqueIndex:uniq_budget_schedule_pending,where:status = 'pending';check:period_type IN ('daily','weekly','monthly')" json:"period_type"`
 	TargetLimitUSD     budgetdomain.Amount         `gorm:"type:numeric(18,6);not null;check:target_limit_usd >= 0" json:"target_limit_usd"`
+	ScheduleOperation  budgetdomain.ScheduleOperation `gorm:"type:varchar(8);not null;default:'set';check:schedule_operation IN ('set','clear')" json:"schedule_operation"`
 	EffectiveAt        time.Time                   `gorm:"not null;index" json:"effective_at"`
 	Reason             string                      `gorm:"type:text;not null" json:"reason"`
 	CreatedBy          uuid.UUID                   `gorm:"type:uuid;not null" json:"created_by"`

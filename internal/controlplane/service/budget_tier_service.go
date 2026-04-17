@@ -41,6 +41,7 @@ type BudgetTierStore interface {
 	ListTierLimits(context.Context, uuid.UUID) ([]model.BudgetTierLimit, error)
 	FindTierLimit(context.Context, uuid.UUID, uuid.UUID, budgetdomain.PeriodType) (*model.BudgetTierLimit, error)
 	UpsertTierLimit(context.Context, repository.UpsertTierLimitParams) (*model.BudgetTierLimit, error)
+	DeleteTierLimit(context.Context, uuid.UUID, uuid.UUID, budgetdomain.PeriodType) error
 	ListActiveOverrides(context.Context, uuid.UUID, time.Time) ([]model.BudgetTemporaryOverride, error)
 	FindPendingSchedule(context.Context, uuid.UUID, string, budgetdomain.PeriodType) (*model.BudgetLimitSchedule, error)
 	PutPendingSchedule(context.Context, *model.BudgetLimitSchedule, bool) (*model.BudgetLimitSchedule, error)
@@ -75,10 +76,11 @@ type LimitSourceSummary struct {
 }
 
 type ScheduleView struct {
-	ID             uuid.UUID                   `json:"id"`
-	TargetLimitUSD budgetdomain.Amount         `json:"target_limit_usd"`
-	EffectiveAt    time.Time                   `json:"effective_at"`
-	Status         budgetdomain.ScheduleStatus `json:"status"`
+	ID                uuid.UUID                      `json:"id"`
+	TargetLimitUSD    budgetdomain.Amount            `json:"target_limit_usd"`
+	ScheduleOperation budgetdomain.ScheduleOperation `json:"schedule_operation,omitempty"`
+	EffectiveAt       time.Time                      `json:"effective_at"`
+	Status            budgetdomain.ScheduleStatus    `json:"status"`
 }
 
 type TierLimitView struct {
@@ -190,7 +192,10 @@ func (s *BudgetTierService) ListTierLimits(ctx context.Context, allocationID uui
 			}
 		}
 		if pending != nil {
-			view.PendingSchedule = &ScheduleView{ID: pending.ID, TargetLimitUSD: pending.TargetLimitUSD, EffectiveAt: pending.EffectiveAt, Status: pending.Status}
+			view.PendingSchedule = &ScheduleView{
+				ID: pending.ID, TargetLimitUSD: pending.TargetLimitUSD,
+				ScheduleOperation: pending.ScheduleOperation, EffectiveAt: pending.EffectiveAt, Status: pending.Status,
+			}
 		}
 		views = append(views, view)
 	}
@@ -261,6 +266,7 @@ func (s *BudgetTierService) setTierLimit(ctx context.Context, input SetTierLimit
 			ID: uuid.New(), BudgetAllocationID: input.AllocationID,
 			DimensionType: budgetdomain.DimensionTier, DimensionKey: key, ModelTierID: &input.TierID,
 			PeriodType: input.PeriodType, TargetLimitUSD: input.LimitUSD,
+			ScheduleOperation: budgetdomain.ScheduleOperationSet,
 			EffectiveAt: period.ResetAt, Reason: input.Reason, CreatedBy: input.ActorID,
 			Status: budgetdomain.SchedulePending,
 		}
@@ -279,7 +285,10 @@ func (s *BudgetTierService) setTierLimit(ctx context.Context, input SetTierLimit
 		}
 		existing.ModelTier = *tier
 		view := buildTierLimitView(*existing, nil)
-		view.PendingSchedule = &ScheduleView{ID: schedule.ID, TargetLimitUSD: schedule.TargetLimitUSD, EffectiveAt: schedule.EffectiveAt, Status: schedule.Status}
+		view.PendingSchedule = &ScheduleView{
+			ID: schedule.ID, TargetLimitUSD: schedule.TargetLimitUSD,
+			ScheduleOperation: schedule.ScheduleOperation, EffectiveAt: schedule.EffectiveAt, Status: schedule.Status,
+		}
 		if publish {
 			return &view, s.publishBudgetSnapshot(ctx, input.AllocationID)
 		}

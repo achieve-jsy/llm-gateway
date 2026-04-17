@@ -57,6 +57,11 @@ func (s *atomicBudgetTierStore) UpsertTierLimitInTx(_ context.Context, _ *gorm.D
 	return err
 }
 
+func (s *atomicBudgetTierStore) DeleteTierLimitInTx(_ context.Context, _ *gorm.DB, _ uuid.UUID, _ uuid.UUID, _ budgetdomain.PeriodType) error {
+	s.writes++
+	return s.DeleteTierLimit(context.Background(), uuid.Nil, uuid.Nil, budgetdomain.PeriodMonthly)
+}
+
 func (s *atomicBudgetTierStore) PutPendingScheduleInTx(context.Context, *gorm.DB, *model.BudgetLimitSchedule, bool) error {
 	return nil
 }
@@ -161,6 +166,81 @@ func TestBatchTierLimitPreviewReturnsValidItemWithoutWriting(t *testing.T) {
 	require.Equal(t, nowPlus(t, 5*time.Minute), preview.ExpiresAt)
 	require.Equal(t, "100.000000", preview.Items[0].NewLimitUSD.String())
 	require.Equal(t, "100.000000", preview.Items[0].DeltaUSD)
+}
+
+func TestBatchClearRemovesTierLimitRow(t *testing.T) {
+	allocationID, tierID := uuid.New(), uuid.New()
+	store := &fakeBudgetTierStore{existing: &model.BudgetTierLimit{
+		ID: uuid.New(), BudgetAllocationID: allocationID, ModelTierID: tierID,
+		PeriodType: budgetdomain.PeriodMonthly, LimitUSD: mustAmount(t, "80"), Enabled: true,
+		UpdatedAt: time.Date(2026, 7, 11, 7, 0, 0, 0, time.UTC),
+	}}
+	tierRepo := newFakeModelTierRepo()
+	tierRepo.tiers[tierID] = &model.ModelTier{ID: tierID, Enabled: true}
+	svc := service.NewBudgetTierService(
+		store,
+		fakeAllocationReader{&model.BudgetAllocation{
+			ID: allocationID, ScopeType: model.BudgetScopeCompany, UpdatedAt: time.Date(2026, 7, 11, 6, 0, 0, 0, time.UTC),
+		}},
+		tierRepo,
+		func() time.Time { return time.Date(2026, 7, 11, 8, 0, 0, 0, time.UTC) },
+	)
+	preview, err := svc.PreviewBatch(context.Background(), rbac.Actor{IsGlobal: true, UserID: "admin"}, service.BatchTierLimitInput{
+		Operation: service.BatchClear, EffectiveMode: service.EffectiveImmediate, Reason: "移除 gpt monthly 限制",
+		Items: []service.BatchTierLimitItem{{
+			ItemID: "row-clear", AllocationID: allocationID, TierID: tierID, PeriodType: budgetdomain.PeriodMonthly,
+		}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "valid", preview.Items[0].Status)
+	require.Equal(t, "80.000000", preview.Items[0].OldLimitUSD.String())
+	require.Equal(t, "-80.000000", preview.Items[0].DeltaUSD)
+	require.False(t, preview.Items[0].ZeroBlock)
+
+	result, err := svc.ApplyBatch(context.Background(), rbac.Actor{IsGlobal: true, UserID: "admin"}, service.ApplyBatchTierLimitInput{
+		PreviewToken: preview.PreviewToken, ConfirmItemIDs: []string{"row-clear"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "applied", result.Items[0].Status)
+	require.Nil(t, store.existing)
+}
+
+func TestBatchClearSchedulesNextPeriodRemoval(t *testing.T) {
+	allocationID, tierID := uuid.New(), uuid.New()
+	store := &fakeBudgetTierStore{existing: &model.BudgetTierLimit{
+		ID: uuid.New(), BudgetAllocationID: allocationID, ModelTierID: tierID,
+		PeriodType: budgetdomain.PeriodMonthly, LimitUSD: mustAmount(t, "80"), Enabled: true,
+		UpdatedAt: time.Date(2026, 7, 11, 7, 0, 0, 0, time.UTC),
+	}}
+	tierRepo := newFakeModelTierRepo()
+	tierRepo.tiers[tierID] = &model.ModelTier{ID: tierID, Enabled: true}
+	svc := service.NewBudgetTierService(
+		store,
+		fakeAllocationReader{&model.BudgetAllocation{
+			ID: allocationID, ScopeType: model.BudgetScopeCompany, UpdatedAt: time.Date(2026, 7, 11, 6, 0, 0, 0, time.UTC),
+		}},
+		tierRepo,
+		func() time.Time { return time.Date(2026, 7, 11, 8, 0, 0, 0, time.UTC) },
+	)
+	preview, err := svc.PreviewBatch(context.Background(), rbac.Actor{IsGlobal: true, UserID: "admin"}, service.BatchTierLimitInput{
+		Operation: service.BatchClear, EffectiveMode: service.EffectiveNextPeriod, Reason: "下周期移除",
+		Items: []service.BatchTierLimitItem{{
+			ItemID: "row-clear-next", AllocationID: allocationID, TierID: tierID, PeriodType: budgetdomain.PeriodMonthly,
+		}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "valid", preview.Items[0].Status)
+	require.NotNil(t, store.existing)
+
+	result, err := svc.ApplyBatch(context.Background(), rbac.Actor{IsGlobal: true, UserID: "admin"}, service.ApplyBatchTierLimitInput{
+		PreviewToken: preview.PreviewToken, ConfirmItemIDs: []string{"row-clear-next"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "applied", result.Items[0].Status)
+	require.NotNil(t, store.existing)
+	require.NotNil(t, store.createdSchedule)
+	require.Equal(t, budgetdomain.ScheduleOperationClear, store.createdSchedule.ScheduleOperation)
+	require.Equal(t, budgetdomain.SchedulePending, store.createdSchedule.Status)
 }
 
 func TestBatchPreviewReturnsRecognizableValidationErrors(t *testing.T) {

@@ -185,8 +185,23 @@ func (s *BudgetService) AdjustBudget(
 	if err != nil {
 		return nil, err
 	}
-	if allocation == nil {
-		return nil, ErrBudgetAllocationNotFound
+	creating := allocation == nil
+	if creating {
+		// 首次为成员等 scope 配置独立额度：允许立即生效创建；下周期排期需要已有行。
+		if input.EffectiveMode == EffectiveNextPeriod {
+			return nil, ErrBudgetAllocationNotFound
+		}
+		allocation = &model.BudgetAllocation{
+			ScopeType:       input.ScopeType,
+			ScopeID:         input.ScopeID,
+			AmountUSD:       -1,
+			DailyAmountUSD:  -1,
+			WeeklyAmountUSD: -1,
+			Period:          "monthly",
+			Enabled:         true,
+			CreatedBy:       input.ActorID,
+			UpdatedBy:       input.ActorID,
+		}
 	}
 	before := totalAllocationLimit(*allocation, input.PeriodType)
 	window, err := budgetperiod.Resolve(time.Now(), input.PeriodType, budgetperiod.Config{
@@ -293,7 +308,11 @@ func (s *BudgetService) AdjustBudget(
 		default:
 			monthly = value
 		}
-		if casRepo, ok := s.repo.(budgetAllocationCASRepo); ok {
+		if creating {
+			if err := s.SetBudget(ctx, input.ScopeType, input.ScopeID, monthly, daily, weekly, input.ActorID); err != nil {
+				return nil, err
+			}
+		} else if casRepo, ok := s.repo.(budgetAllocationCASRepo); ok {
 			updated, updateErr := casRepo.CompareAndSwapAllocationLimits(
 				ctx, *allocation, monthly, daily, weekly, input.ActorID,
 			)

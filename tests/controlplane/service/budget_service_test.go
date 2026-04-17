@@ -27,6 +27,51 @@ func mustBudgetAmount(t *testing.T, value string) budgetdomain.Amount {
 	return amount
 }
 
+func TestAdjustBudgetCreatesMemberAllocationOnFirstApply(t *testing.T) {
+	repo := newFakeAllocRepo()
+	svc := service.NewBudgetService(repo, newFakeAlertRepo())
+	mini := miniredis.RunT(t)
+	svc.SetRedis(redis.NewClient(&redis.Options{Addr: mini.Addr()}))
+
+	preview, err := svc.AdjustBudget(context.Background(), service.BudgetAdjustmentInput{
+		ScopeType: model.BudgetScopeMember, ScopeID: "member-new",
+		PeriodType: budgetdomain.PeriodMonthly, TargetLimitUSD: mustBudgetAmount(t, "200.000000"),
+		EffectiveMode: service.EffectiveImmediate, Reason: "first member quota", PreviewOnly: true,
+		ActorID: uuid.New(),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "-1.000000", preview.BeforeLimitUSD)
+	assert.Equal(t, "200.000000", preview.AfterLimitUSD)
+	assert.Empty(t, repo.upsertCalls)
+
+	_, err = svc.AdjustBudget(context.Background(), service.BudgetAdjustmentInput{
+		ScopeType: model.BudgetScopeMember, ScopeID: "member-new",
+		PeriodType: budgetdomain.PeriodMonthly, TargetLimitUSD: mustBudgetAmount(t, "200.000000"),
+		EffectiveMode: service.EffectiveImmediate, Reason: "first member quota",
+		ActorID: uuid.New(),
+		BudgetRiskConfirmation: service.BudgetRiskConfirmation{PreviewVersion: preview.PreviewVersion},
+	})
+	require.NoError(t, err)
+	require.Len(t, repo.upsertCalls, 1)
+	created := repo.allocations[allocationKey(model.BudgetScopeMember, "member-new")]
+	require.NotNil(t, created)
+	assert.Equal(t, 200.0, created.AmountUSD)
+	assert.Equal(t, -1.0, created.DailyAmountUSD)
+	assert.Equal(t, -1.0, created.WeeklyAmountUSD)
+}
+
+func TestAdjustBudgetNextPeriodStillRequiresExistingAllocation(t *testing.T) {
+	repo := newFakeAllocRepo()
+	svc := service.NewBudgetService(repo, newFakeAlertRepo())
+
+	_, err := svc.AdjustBudget(context.Background(), service.BudgetAdjustmentInput{
+		ScopeType: model.BudgetScopeMember, ScopeID: "member-missing",
+		PeriodType: budgetdomain.PeriodMonthly, TargetLimitUSD: mustBudgetAmount(t, "100.000000"),
+		EffectiveMode: service.EffectiveNextPeriod, Reason: "schedule missing", PreviewOnly: true,
+	})
+	require.ErrorIs(t, err, service.ErrBudgetAllocationNotFound)
+}
+
 func TestAdjustBudgetPreviewReportsZeroBlockWithoutMutation(t *testing.T) {
 	repo := newFakeAllocRepo()
 	repo.allocations[allocationKey(model.BudgetScopeMember, "member-1")] = &model.BudgetAllocation{

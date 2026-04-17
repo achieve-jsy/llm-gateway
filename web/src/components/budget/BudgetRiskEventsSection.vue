@@ -19,7 +19,9 @@
       <el-table-column label="维度" min-width="130"><template #default="{ row }">{{ row.dimension_type === 'tier' ? (row.model_tier_name || '模型等级') : '总预算' }} / {{ periodLabel(row.period_type) }}</template></el-table-column>
       <el-table-column label="额度 / 已用" min-width="180"><template #default="{ row }">{{ formatBudgetUSD(row.effective_limit_usd) }} / {{ formatBudgetUSD(row.used_usd) }}</template></el-table-column>
       <el-table-column prop="usage_ratio" label="使用率" width="100" />
-      <el-table-column prop="limit_source" label="限制来源" min-width="140" />
+      <el-table-column label="限制来源" min-width="140">
+        <template #default="{ row }">{{ limitSourceLabel(row.limit_source) }}</template>
+      </el-table-column>
       <el-table-column prop="blocked_requests" label="阻断次数" width="100" />
       <el-table-column prop="detected_at" label="发现时间" min-width="170"><template #default="{ row }">{{ formatTime(row.detected_at) }}</template></el-table-column>
     </el-table>
@@ -114,6 +116,7 @@ import { ElMessage } from 'element-plus'
 import BudgetKpiStrip from '@/components/budget/BudgetKpiStrip.vue'
 import DataFreshnessNotice from '@/components/common/DataFreshnessNotice.vue'
 import { formatBudgetUSD } from '@/composables/useBudgetDisplay'
+import { limitSourceLabel } from '@/utils/budget-risk-labels'
 import { getBudgetRiskSummary, listBudgetRisks, notifyBudgetOwner } from '@/services/control-plane'
 import type { BudgetRiskEvent, BudgetRiskFilter, BudgetRiskPage, BudgetRiskSummary } from '@/types/budget-risk'
 
@@ -146,7 +149,7 @@ const chainRows = computed(() => {
     },
     {
       label: '限制来源',
-      detail: selected.value.limit_source || '—',
+      detail: limitSourceLabel(selected.value.limit_source),
       limiting: true,
     },
   ]

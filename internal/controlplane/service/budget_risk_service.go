@@ -197,20 +197,7 @@ func (s *BudgetRiskService) List(ctx context.Context, actor ActorScope, filter R
 			}
 		}
 	}
-	for _, scopeType := range scopeTypes {
-		names, resolveErr := s.budgets.repo.ResolveScopeNames(scopeType, scopeIDs)
-		if resolveErr != nil {
-			continue
-		}
-		for index := range items {
-			if items[index].ScopeType == scopeType {
-				items[index].ScopeName = names[items[index].ScopeID]
-				if items[index].ScopeName == "" {
-					items[index].ScopeName = items[index].ScopeID
-				}
-			}
-		}
-	}
+	s.resolveRiskScopeNames(items)
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].RiskType == "request_blocked" && items[j].RiskType != "request_blocked" {
 			return true
@@ -234,6 +221,57 @@ func (s *BudgetRiskService) List(ctx context.Context, actor ActorScope, filter R
 	}
 	items = paginateBudgetRiskEvents(items, filter.Page, filter.PageSize)
 	return &BudgetRiskPage{Items: items, Total: total, Page: page, PageSize: pageSize, DataAsOf: dataAsOf, Stale: stale}, nil
+}
+
+func (s *BudgetRiskService) resolveRiskScopeNames(items []BudgetRiskEvent) {
+	grouped := make(map[string][]string)
+	for _, item := range items {
+		if item.ScopeType == model.BudgetScopeCompany {
+			continue
+		}
+		grouped[item.ScopeType] = append(grouped[item.ScopeType], item.ScopeID)
+	}
+	names := make(map[string]string, len(items))
+	for scopeType, ids := range grouped {
+		unique := uniqueScopeIDs(ids)
+		resolved, err := s.budgets.repo.ResolveScopeNames(scopeType, unique)
+		if err != nil {
+			continue
+		}
+		for id, name := range resolved {
+			names[scopeType+":"+id] = name
+		}
+	}
+	for index := range items {
+		if items[index].ScopeType == model.BudgetScopeCompany {
+			items[index].ScopeName = "全公司"
+			continue
+		}
+		if name := names[items[index].ScopeType+":"+items[index].ScopeID]; name != "" {
+			items[index].ScopeName = name
+			continue
+		}
+		items[index].ScopeName = items[index].ScopeID
+	}
+}
+
+func uniqueScopeIDs(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(ids))
+	unique := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	return unique
 }
 
 func riskIdentity(event BudgetRiskEvent) string {

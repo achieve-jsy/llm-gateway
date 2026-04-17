@@ -203,6 +203,32 @@ describe('BudgetRiskEventsSection', () => {
     })
   })
 
+  describe('限制来源显示', () => {
+    it('将后端枚举映射为中文业务文案', async () => {
+      mockListBudgetRisks.mockResolvedValue({
+        items: [
+          makeRiskEvent({ id: 'risk-base', limit_source: 'base_limit' }),
+          makeRiskEvent({ id: 'risk-tier', limit_source: 'tier_base_limit' }),
+          makeRiskEvent({ id: 'risk-override', limit_source: 'temporary_override' }),
+          makeRiskEvent({ id: 'risk-block', limit_source: 'block_event', risk_type: 'request_blocked' }),
+        ],
+        total: 4,
+        data_as_of: '',
+        stale: false,
+      })
+      const wrapper = mountSection()
+      await flushPromises()
+
+      const text = wrapper.text()
+      expect(text).toContain('总预算')
+      expect(text).toContain('等级预算')
+      expect(text).toContain('临时提额')
+      expect(text).toContain('阻断事件')
+      expect(text).not.toContain('base_limit')
+      expect(text).not.toContain('tier_base_limit')
+    })
+  })
+
   describe('维度显示', () => {
     it('总预算维度显示"总预算"', async () => {
       const wrapper = mountSection()

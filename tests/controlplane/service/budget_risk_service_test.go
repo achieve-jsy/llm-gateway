@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -74,7 +75,7 @@ func TestBudgetRiskListMergesOverrideAlertAndBlockSources(t *testing.T) {
 	for _, item := range page.Items {
 		sources[item.LimitSource] = true
 		types[item.RiskType] = true
-		require.Equal(t, model.BudgetScopeGlobal, item.ScopeName)
+		require.Equal(t, "全公司", item.ScopeName)
 		require.NotEmpty(t, item.EffectiveLimitUSD)
 		if item.RiskType == "threshold_reached" {
 			thresholdCount++
@@ -643,6 +644,45 @@ func TestBudgetRiskFiltersSpecificModelTierDimension(t *testing.T) {
 	require.NotNil(t, page.Items[0].ModelTierID)
 	require.Equal(t, premiumTierID.String(), *page.Items[0].ModelTierID)
 	require.Equal(t, "90.000000", page.Items[0].UsedUSD)
+}
+
+func TestBudgetRiskResolvesScopeNamesFromItemsForGlobalAdmin(t *testing.T) {
+	now := time.Date(2026, 7, 16, 10, 45, 0, 0, time.UTC)
+	memberID := uuid.New()
+	allocationID := uuid.New()
+	db := newBudgetRiskTestDB(t)
+
+	allocRepo := newFakeAllocRepo()
+	allocRepo.allocations[allocationKey(model.BudgetScopeMember, memberID.String())] = &model.BudgetAllocation{
+		ID: allocationID, ScopeType: model.BudgetScopeMember, ScopeID: memberID.String(),
+		AmountUSD: 10, DailyAmountUSD: -1, WeeklyAmountUSD: -1, Enabled: true,
+	}
+	allocRepo.resolveScopeNames = func(scopeType string, scopeIDs []string) (map[string]string, error) {
+		require.Equal(t, model.BudgetScopeMember, scopeType)
+		require.Equal(t, []string{memberID.String()}, scopeIDs)
+		return map[string]string{memberID.String(): "张三"}, nil
+	}
+
+	budgetSvc := service.NewBudgetService(allocRepo, newFakeAlertRepo())
+	mini := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	budgetSvc.SetRedis(redisClient)
+	require.NoError(t, redisClient.Set(context.Background(),
+		fmt.Sprintf("budget:v2:used:member:%s:2026-07", memberID), int64(10_190_000), 0).Err())
+
+	tierSvc := service.NewBudgetTierService(
+		&myBudgetStore{limits: map[uuid.UUID][]model.BudgetTierLimit{}, overrides: map[uuid.UUID][]model.BudgetTemporaryOverride{}},
+		myBudgetReader{}, newFakeModelTierRepo(), func() time.Time { return now },
+	)
+	riskSvc := service.NewBudgetRiskService(repository.NewBudgetRiskRepo(db), budgetSvc, tierSvc, func() time.Time { return now })
+
+	page, err := riskSvc.List(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.RiskFilter{
+		PeriodType: "monthly",
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	require.Equal(t, "张三", page.Items[0].ScopeName)
+	require.Equal(t, memberID.String(), page.Items[0].ScopeID)
 }
 
 func newBudgetRiskTestDB(t *testing.T) *gorm.DB {

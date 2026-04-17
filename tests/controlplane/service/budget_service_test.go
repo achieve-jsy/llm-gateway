@@ -237,6 +237,9 @@ type fakeBudgetAllocationRepo struct {
 	// 错误注入
 	upsertErr error
 	getErr    error
+
+	// 可选：测试用 scope 名称解析
+	resolveScopeNames func(scopeType string, scopeIDs []string) (map[string]string, error)
 }
 
 type fakeBudgetScheduleRepo struct{ pending *model.BudgetLimitSchedule }
@@ -330,7 +333,9 @@ func (f *fakeBudgetAllocationRepo) DeleteAllocation(scopeType, scopeID string) e
 }
 
 func (f *fakeBudgetAllocationRepo) ResolveScopeNames(scopeType string, scopeIDs []string) (map[string]string, error) {
-	// 测试中不需要真实名称解析，返回空 map
+	if f.resolveScopeNames != nil {
+		return f.resolveScopeNames(scopeType, scopeIDs)
+	}
 	return make(map[string]string), nil
 }
 

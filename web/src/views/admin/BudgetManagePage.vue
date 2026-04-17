@@ -3086,6 +3086,10 @@ function handleWorkspaceDrill(item: BudgetItem) {
 }
 
 function handleWorkspaceEdit(item: BudgetItem | null) {
+  if (item?.scope_type === 'member') {
+    openMemberQuota(item)
+    return
+  }
   if (item) {
     openBudgetDrawer(item)
     return

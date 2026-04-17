@@ -242,16 +242,20 @@
         <template v-if="detailPool === 'daily'">
           <div class="budget-panel__header">
             <div>
-              <strong>成员独立额度</strong>
-              <p>成员默认使用个人 Key 预算池，仅特殊成员需要单独配置。</p>
+              <strong>成员额度</strong>
+              <p>默认走部门个人 Key 共享池；需要单独限制时再设独立额度。</p>
             </div>
+            <span v-if="memberRows.length" class="member-count">{{ memberRows.length }} 人</span>
           </div>
-          <div v-if="memberRows.length === 0" class="member-empty-state">
-            <strong>暂无成员独立额度</strong>
-            <p>成员默认使用个人 Key 预算池；只有需要单独限制时才配置成员额度。</p>
+          <div v-if="membersLoading" class="member-empty-state" data-test="dept-members-loading">
+            <p>正在加载部门成员…</p>
+          </div>
+          <div v-else-if="memberRows.length === 0" class="member-empty-state" data-test="dept-members-empty">
+            <strong>暂无成员</strong>
+            <p>该部门下还没有成员；成员加入后会出现在此列表，并可单独配置额度。</p>
           </div>
           <div v-else class="proto-table-wrap">
-            <table class="proto-native-table member-table">
+            <table class="proto-native-table member-table" data-test="dept-members-table">
               <thead>
                 <tr>
                   <th>成员</th>
@@ -261,11 +265,18 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="row in memberRows" :key="row.allocation_id || row.scope_id">
+                <tr
+                  v-for="row in memberRows"
+                  :key="row.allocation_id || row.scope_id"
+                  :class="{ 'is-shared-pool': row.isDefaultPool }"
+                >
                   <td><strong class="proto-scope-name">{{ row.label || row.scope_id }}</strong></td>
-                  <td><span class="proto-tag gray">个人独立额度</span></td>
                   <td>
-                    <template v-if="tierTags(row).length">
+                    <span v-if="row.isDefaultPool" class="proto-tag gray">共享预算池</span>
+                    <span v-else class="proto-tag">个人独立额度</span>
+                  </td>
+                  <td>
+                    <template v-if="!row.isDefaultPool && tierTags(row).length">
                       <span
                         v-for="tag in tierTags(row)"
                         :key="tag.id"
@@ -275,10 +286,18 @@
                         {{ tag.label }}
                       </span>
                     </template>
+                    <span v-else-if="row.isDefaultPool" class="muted">—</span>
                     <span v-else class="muted">未配置子预算</span>
                   </td>
                   <td class="center">
-                    <button type="button" class="proto-btn sm" @click="emit('edit', row)">配置配额</button>
+                    <button
+                      type="button"
+                      class="proto-btn sm"
+                      :data-test="row.isDefaultPool ? 'member-set-quota' : 'member-edit-quota'"
+                      @click="emit('edit', row)"
+                    >
+                      {{ row.isDefaultPool ? '设置额度' : '配置配额' }}
+                    </button>
                   </td>
                 </tr>
               </tbody>
@@ -318,11 +337,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { BudgetItem } from '@/types/budget'
 import type { TierBudgetTagItem } from '@/composables/useBudgetDisplay'
 import { formatBudgetUSD, getTierTagTone } from '@/composables/useBudgetDisplay'
 import type { BudgetBatchEntryMode } from '@/composables/budgetScopeFilters'
+import { useOrgStore, type DeptMember } from '@/stores/org'
 import BudgetEmptyState from './BudgetEmptyState.vue'
 import BudgetSelectionBar from './BudgetSelectionBar.vue'
 import TierBudgetTags from './TierBudgetTags.vue'
@@ -335,6 +355,11 @@ interface TierUsageItem {
   color?: string
   enabled?: boolean
   state?: TierBudgetTagItem['state']
+}
+
+/** 部门成员行：已配额合并预算；未配额标 isDefaultPool，走共享池 */
+export interface MemberBudgetRow extends BudgetItem {
+  isDefaultPool?: boolean
 }
 
 const props = withDefaults(defineProps<{
@@ -357,8 +382,11 @@ const emit = defineEmits<{
   batch: [items: BudgetItem[], mode: BudgetBatchEntryMode]
 }>()
 
+const orgStore = useOrgStore()
 const activePool = ref<'daily' | 'service'>('daily')
 const selectedRows = ref<BudgetItem[]>([])
+const deptMembers = ref<DeptMember[]>([])
+const membersLoading = ref(false)
 const fixedPool = computed(() => props.scope.type === 'dept' && !!props.pool)
 const detailPool = computed<'daily' | 'service'>(() => props.pool ?? activePool.value)
 const summaryEyebrow = computed(() => {
@@ -383,9 +411,77 @@ const visibleRows = computed(() => props.items.filter(item =>
   item.scope_type === (activePool.value === 'daily' ? 'dept_daily' : 'dept_service')
   && (!item.parent_scope_id || item.parent_scope_id === props.scope.id),
 ))
-const memberRows = computed(() => props.items.filter(item =>
-  item.scope_type === 'member' && (!item.parent_scope_id || item.parent_scope_id === props.scope.id),
-))
+const budgetMemberMap = computed(() => {
+  const map = new Map<string, BudgetItem>()
+  for (const item of props.items) {
+    if (item.scope_type !== 'member') continue
+    if (item.parent_scope_id && item.parent_scope_id !== props.scope.id) continue
+    map.set(item.scope_id, item)
+  }
+  return map
+})
+
+const memberRows = computed<MemberBudgetRow[]>(() => {
+  if (props.scope.type !== 'dept') return []
+
+  if (deptMembers.value.length === 0) {
+    // 成员列表未加载到时，回退为仅展示已有独立额度
+    return [...budgetMemberMap.value.values()].map(item => ({ ...item, isDefaultPool: false }))
+  }
+
+  return deptMembers.value.map<MemberBudgetRow>((member) => {
+    const existing = budgetMemberMap.value.get(member.id)
+    if (existing) {
+      return { ...existing, label: existing.label || member.name, isDefaultPool: false }
+    }
+    return {
+      scope_type: 'member',
+      scope_id: member.id,
+      parent_scope_id: props.scope.id,
+      label: member.name,
+      amount_usd: 0,
+      weekly_amount_usd: -1,
+      daily_amount_usd: -1,
+      used_usd: 0,
+      used_ratio: 0,
+      period: '',
+      enabled: true,
+      isDefaultPool: true,
+    }
+  })
+})
+
+async function loadAllDeptMembers(deptId: string) {
+  membersLoading.value = true
+  try {
+    const pageSize = 100
+    let page = 1
+    const all: DeptMember[] = []
+    while (true) {
+      const { members, total } = await orgStore.fetchDeptMembers(deptId, page, pageSize)
+      all.push(...members)
+      if (all.length >= total || members.length === 0) break
+      page++
+    }
+    deptMembers.value = all
+  } catch {
+    deptMembers.value = []
+  } finally {
+    membersLoading.value = false
+  }
+}
+
+watch(
+  () => [props.scope.type, props.scope.id] as const,
+  ([type, id]) => {
+    if (type === 'dept' && id) {
+      void loadAllDeptMembers(id)
+    } else {
+      deptMembers.value = []
+    }
+  },
+  { immediate: true },
+)
 const summaryItem = computed(() => props.items.find(item =>
   item.scope_type === 'studio' && item.scope_id === props.scope.id,
 ) ?? null)
@@ -892,6 +988,19 @@ function progressColor(ratio = 0): string {
 .member-empty-state p {
   max-width: 520px;
   margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.budget-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.budget-panel__header .member-count {
+  flex-shrink: 0;
   color: var(--text-secondary);
   font-size: var(--font-size-sm);
 }

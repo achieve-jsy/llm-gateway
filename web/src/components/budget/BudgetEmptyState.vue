@@ -39,8 +39,8 @@ const emptyCopy: Record<EmptyLevel, { title: string; description: string }> = {
     description: '新增部门预算后，可分别管理成员日常池和程序服务池。',
   },
   dept: {
-    title: '暂无成员独立额度',
-    description: '未设置独立额度的成员继续使用部门共享池。',
+    title: '暂无成员',
+    description: '该部门下还没有成员；成员加入后会出现在此列表，并可单独配置额度。',
   },
   member: {
     title: '暂无个人预算限制',

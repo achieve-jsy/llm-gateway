@@ -74,6 +74,15 @@ vi.mock('@/services/http', () => ({
   },
 }))
 
+const mockFetchDeptMembers = vi.fn().mockResolvedValue({ members: [], total: 0 })
+vi.mock('@/stores/org', () => ({
+  useOrgStore: () => ({
+    departments: [],
+    fetchDepartments: vi.fn().mockResolvedValue({ departments: [] }),
+    fetchDeptMembers: (...args: unknown[]) => mockFetchDeptMembers(...args),
+  }),
+}))
+
 // ── Fixtures ──────────────────────────────────────────────────────────────
 const studioPoolItem: BudgetItem = {
   allocation_id: 'alloc-studio',
@@ -166,6 +175,7 @@ describe('BudgetManagePage - Drill-Down Views', () => {
     mockGetBudgetContext.mockResolvedValue([])
     mockGetBudgetRiskSummary.mockResolvedValue({ total: 0 })
     mockListModelTiers.mockResolvedValue([])
+    mockFetchDeptMembers.mockResolvedValue({ members: [], total: 0 })
     mockAuthStore.effectiveRole = 'admin'
     mockAuthStore.orgRoles = []
     currentQuery = {}
@@ -360,11 +370,11 @@ describe('BudgetManagePage - Drill-Down Views', () => {
       const wrapper = mountPage(studioQuery)
       await flushPromises()
 
-      const actionMetric = wrapper.find('.scope-metric.action')
-      expect(actionMetric.text()).toContain('申请扩容')
-      expect(actionMetric.text()).not.toContain('配置')
+      const headerBtn = wrapper.findAll('button').find(b => b.text().includes('申请工作室扩容'))
+      expect(headerBtn).toBeTruthy()
+      expect(wrapper.text()).not.toMatch(/配置工作室预算/)
 
-      await actionMetric.get('button').trigger('click')
+      await headerBtn!.trigger('click')
       expect(mockPush).toHaveBeenCalled()
       const pushed = mockPush.mock.calls[mockPush.mock.calls.length - 1][0]
       expect(pushed.path).toBe('/admin/expansion-requests')
@@ -537,9 +547,8 @@ describe('BudgetManagePage - Drill-Down Views', () => {
       const wrapper = mountPage(deptQuery)
       await flushPromises()
 
-      const metricLinks = wrapper.findAll('.metric-action-btn')
-      expect(metricLinks).toHaveLength(2)
-      expect(metricLinks.every(l => l.text() === '配置')).toBe(true)
+      const configBtns = wrapper.findAll('.metric-action-btn').filter(l => l.text() === '配置')
+      expect(configBtns).toHaveLength(2)
     })
 
     it('部门页顶部按钮指向上一层并明确配置部门总预算', async () => {
@@ -551,14 +560,42 @@ describe('BudgetManagePage - Drill-Down Views', () => {
       expect(html).toContain('配置部门总预算')
     })
 
-    it('成员独立额度为空时说明成员默认使用个人 Key 预算池', async () => {
+    it('部门无人时空状态为暂无成员，并说明可单独配置额度', async () => {
       const wrapper = mountPage(deptQuery)
       await flushPromises()
 
       const html = wrapper.html()
-      expect(html).toContain('成员独立额度')
-      expect(html).toContain('暂无成员独立额度')
-      expect(html).toContain('成员默认使用个人 Key 预算池')
+      expect(html).toContain('成员额度')
+      expect(html).toContain('暂无成员')
+      expect(html).toContain('默认走部门个人 Key 共享池')
+      expect(html).toContain('可单独配置额度')
+      expect(wrapper.find('[data-test="dept-members-empty"]').exists()).toBe(true)
+    })
+
+    it('列出部门全部成员；未配额显示共享池并可设置额度', async () => {
+      mockFetchDeptMembers.mockResolvedValue({
+        members: [
+          { id: 'user-a', name: '张三', email: 'a@example.com', joined_at: '', dept_source: 'sso', login_status: 'active', has_conflict: false },
+          { id: 'user-b', name: '李四', email: 'b@example.com', joined_at: '', dept_source: 'sso', login_status: 'active', has_conflict: false },
+        ],
+        total: 2,
+      })
+      mockGetBudgetList.mockResolvedValue([
+        deptDailyItem,
+        deptServiceItem,
+        { ...memberItem, scope_id: 'user-a', label: '张三' },
+      ])
+
+      const wrapper = mountPage(deptQuery)
+      await flushPromises()
+
+      expect(wrapper.find('[data-test="dept-members-table"]').exists()).toBe(true)
+      expect(wrapper.text()).toContain('张三')
+      expect(wrapper.text()).toContain('李四')
+      expect(wrapper.text()).toContain('个人独立额度')
+      expect(wrapper.text()).toContain('共享预算池')
+      expect(wrapper.find('[data-test="member-set-quota"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="member-edit-quota"]').exists()).toBe(true)
     })
 
     it('部门预算明细拆分个人 Key 与 Service Key 入口', async () => {
@@ -604,7 +641,7 @@ describe('BudgetManagePage - Drill-Down Views', () => {
       expect(wrapper.text()).toContain('个人 Key 预算详情')
       expect(wrapper.text()).toContain('配置个人 Key 池')
       expect(wrapper.text()).not.toContain('配置部门总预算')
-      expect(wrapper.text()).toContain('成员独立额度')
+      expect(wrapper.text()).toContain('成员额度')
       expect(wrapper.text()).not.toContain('Service Key 独立额度')
     })
 

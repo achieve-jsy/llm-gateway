@@ -7,7 +7,7 @@ describe('BudgetEmptyState', () => {
   it.each([
     ['company', '尚未向工作室分配预算'],
     ['studio', '暂无部门预算'],
-    ['dept', '暂无成员独立额度'],
+    ['dept', '暂无成员'],
     ['member', '暂无个人预算限制'],
   ] as const)('显示 %s 层级空状态', (level, title) => {
     const wrapper = mount(BudgetEmptyState, {

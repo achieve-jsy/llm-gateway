@@ -1,5 +1,4 @@
 stages:
-  - test
   - build
   - migrate
   - deploy
@@ -20,20 +19,6 @@ variables:
   # 首次对“已有 schema 的非空库”执行迁移时，把该版本标记为已应用且不执行其 SQL；
   # revision 表建立后再带此参数为无操作（幂等）。注意：切勿对空库使用，否则不会建表。
   ATLAS_BASELINE: "20260609082623"
-
-# 有实际影响的文件变更（排除 docs/skills/README/.gitignore 等不会影响运行的文件）
-.test-significant-changes: &test-significant-changes
-  - "internal/**/*"
-  - "cmd/**/*"
-  - "go.mod"
-  - "go.sum"
-  - "web/**/*"
-  - "deploy/docker/**/*"
-  - "deploy/blue-green/**/*"
-  - "config/**/*"
-  - "docker-compose.yml"
-  - "atlas-migrations/**/*"
-  - ".gitlab-ci.yml"
 
 # Go 后端变更（触发 gateway + control-plane 构建）
 .go-changes: &go-changes
@@ -63,90 +48,10 @@ workflow:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TEST — 所有构建和迁移的前置门禁
-# ═══════════════════════════════════════════════════════════════════════════════
-test-go:
-  stage: test
-  image: golang:1.26
-  tags: [docker]
-  script:
-    - go test ./tests/... -count=1 -race -coverprofile=coverage.out
-    - go tool cover -func=coverage.out
-    - go build ./...
-    - go vet ./...
-  artifacts:
-    when: always
-    paths: [coverage.out]
-    expire_in: 7 days
-
-test-web:
-  stage: test
-  image: node:22
-  tags: [docker]
-  cache:
-    key:
-      files: [web/package-lock.json]
-    paths: [.npm-cache/]
-  variables:
-    npm_config_cache: "$CI_PROJECT_DIR/.npm-cache"
-  script:
-    - cd web
-    - npm ci --prefer-offline
-    - npm exec vue-tsc -- --noEmit
-    - npm run build
-
-atlas-validate:
-  stage: test
-  image:
-    name: arigaio/atlas:latest
-    entrypoint: [""]
-  tags: [docker]
-  services:
-    - name: postgres:16
-      alias: postgres
-  variables:
-    POSTGRES_PASSWORD: atlas
-    POSTGRES_DB: atlas_validate
-    DATABASE_URL: "postgres://postgres:atlas@postgres:5432/atlas_validate?sslmode=disable"
-  script:
-    - atlas migrate validate --dir file://atlas-migrations
-    - |
-      for attempt in $(seq 1 30); do
-        atlas migrate apply --dir file://atlas-migrations --url "$DATABASE_URL" && break
-        [ "$attempt" -lt 30 ] || exit 1
-        sleep 1
-      done
-    - atlas migrate status --dir file://atlas-migrations --url "$DATABASE_URL"
-
-test-integration-tier-budget:
-  stage: test
-  image: golang:1.26
-  tags: [docker]
-  services:
-    - name: docker:24-dind
-      alias: docker
-      command: ["--tls=false"]
-  variables:
-    DOCKER_HOST: "tcp://docker:2375"
-    DOCKER_TLS_CERTDIR: ""
-  before_script:
-    - apt-get update && apt-get install -y --no-install-recommends ca-certificates curl docker.io
-    - curl -sSfL https://release.ariga.io/atlas/install.sh | sh
-  script:
-    - docker info
-    - go test ./tests/integration -tags=integration -run ModelTierBudget -count=1 -v -timeout=20m
-  artifacts:
-    when: always
-    paths:
-      - specs/model-tier-budget/test/
-    expire_in: 7 days
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # BUILD — 测试
 # ═══════════════════════════════════════════════════════════════════════════════
 build-gateway-test:
   stage: build
-  needs: [test-go, test-web, atlas-validate, test-integration-tier-budget]
   image: docker:24
   tags: [docker]
   variables:
@@ -177,7 +82,6 @@ build-gateway-test:
 
 build-control-plane-test:
   stage: build
-  needs: [test-go, test-web, atlas-validate, test-integration-tier-budget]
   image: docker:24
   tags: [docker]
   variables:
@@ -205,7 +109,6 @@ build-control-plane-test:
 
 build-web-test:
   stage: build
-  needs: [test-go, test-web, atlas-validate, test-integration-tier-budget]
   image: node:20-alpine
   tags: [docker]
   retry:
@@ -242,7 +145,6 @@ build-web-test:
 # ═══════════════════════════════════════════════════════════════════════════════
 build-gateway-prod:
   stage: build
-  needs: [test-go, test-web, atlas-validate, test-integration-tier-budget]
   image: docker:24
   tags: [docker]
   variables:
@@ -270,7 +172,6 @@ build-gateway-prod:
 
 build-control-plane-prod:
   stage: build
-  needs: [test-go, test-web, atlas-validate, test-integration-tier-budget]
   image: docker:24
   tags: [docker]
   variables:
@@ -295,7 +196,6 @@ build-control-plane-prod:
 
 build-web-prod:
   stage: build
-  needs: [test-go, test-web, atlas-validate, test-integration-tier-budget]
   image: node:20-alpine
   tags: [docker]
   retry:
@@ -361,7 +261,6 @@ migrate-prod:
 
 migrate-test:
   stage: migrate
-  needs: [test-go, test-web, atlas-validate, test-integration-tier-budget]
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   cache:

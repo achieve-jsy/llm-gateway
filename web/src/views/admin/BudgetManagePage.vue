@@ -2664,15 +2664,51 @@ const budgetDrawerCanEditSelf = ref(false)
 const budgetDrawerInitialAllocation = ref<BudgetItem | undefined>(undefined)
 
 function openBudgetDrawer(
-  opts: { scope_type: string; scope_id: string; label?: string },
+  opts: { scope_type: string; scope_id: string; label?: string; parent_scope_id?: string } | BudgetItem,
   childIds?: string[],
 ) {
+  // 成员：抽屉挂在所属部门上，initialAllocation 指向该成员（含新建无 allocation_id）
+  if (opts.scope_type === 'member') {
+    const member = opts as BudgetItem
+    const deptId = member.parent_scope_id
+      || (drillScopeType.value === 'dept' ? drillScopeId.value : '')
+      || ''
+    if (!deptId) {
+      ElMessage.warning('无法确定成员所属部门，请从部门页进入后再配置')
+      return
+    }
+    budgetDrawerScopeType.value = 'dept'
+    budgetDrawerScopeId.value = deptId
+    budgetDrawerTitle.value = member.label || member.scope_id
+    budgetDrawerChildIds.value = childIds
+    budgetDrawerInitialAllocation.value = {
+      scope_type: 'member',
+      scope_id: member.scope_id,
+      parent_scope_id: deptId,
+      label: member.label,
+      allocation_id: member.allocation_id,
+      amount_usd: Number(member.amount_usd ?? 0),
+      weekly_amount_usd: Number.isFinite(Number(member.weekly_amount_usd)) ? Number(member.weekly_amount_usd) : -1,
+      daily_amount_usd: Number.isFinite(Number(member.daily_amount_usd)) ? Number(member.daily_amount_usd) : -1,
+      used_usd: Number(member.used_usd ?? 0),
+      used_ratio: Number(member.used_ratio ?? 0),
+      period: member.period || '',
+      enabled: member.enabled ?? true,
+    }
+    budgetDrawerCanEdit.value = true
+    budgetDrawerCanEditSelf.value = false
+    budgetDrawerVisible.value = true
+    return
+  }
+
   const isStudio = opts.scope_type === 'studio'
   budgetDrawerScopeType.value = isStudio ? 'studio' : 'dept'
   budgetDrawerScopeId.value = opts.scope_id
   budgetDrawerTitle.value = opts.label || opts.scope_id
   budgetDrawerChildIds.value = childIds
-  budgetDrawerInitialAllocation.value = 'allocation_id' in opts ? opts as BudgetItem : undefined
+  budgetDrawerInitialAllocation.value = 'allocation_id' in opts && opts.allocation_id
+    ? opts as BudgetItem
+    : ('amount_usd' in opts ? opts as BudgetItem : undefined)
 
   if (auth.effectiveRole === 'admin') {
     budgetDrawerCanEdit.value = true
@@ -2748,8 +2784,8 @@ function openMemberDetail(member: BudgetItem) {
 }
 
 function openMemberQuota(member: BudgetItem) {
-  memberQuotaTarget.value = member
-  memberQuotaVisible.value = true
+  // 与部门/工作室一致：走完整抽屉，支持等级子预算
+  openBudgetDrawer(member)
 }
 
 // ─── 导航 ─────────────────────────────────────────────────────────────────────
@@ -3086,10 +3122,6 @@ function handleWorkspaceDrill(item: BudgetItem) {
 }
 
 function handleWorkspaceEdit(item: BudgetItem | null) {
-  if (item?.scope_type === 'member') {
-    openMemberQuota(item)
-    return
-  }
   if (item) {
     openBudgetDrawer(item)
     return

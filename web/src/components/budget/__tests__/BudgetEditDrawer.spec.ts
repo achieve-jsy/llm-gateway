@@ -279,4 +279,89 @@ describe('BudgetEditDrawer', () => {
 
     expect(order).toEqual(['tier-apply', 'total-weekly', 'total-monthly'])
   })
+
+  it('新建成员额度时先保存总预算再写等级子预算', async () => {
+    const memberSeed: BudgetItem = {
+      scope_type: 'member',
+      scope_id: 'user-1',
+      parent_scope_id: 'dept-1',
+      label: '张三',
+      amount_usd: 0,
+      weekly_amount_usd: -1,
+      daily_amount_usd: -1,
+      period: '',
+      enabled: true,
+      used_usd: 0,
+      used_ratio: 0,
+    }
+    const memberCreated: BudgetItem = {
+      ...memberSeed,
+      allocation_id: 'alloc-member-1',
+      amount_usd: 200,
+    }
+
+    mockGetBudgetList
+      .mockResolvedValueOnce([deptAllocation])
+      .mockResolvedValueOnce([deptAllocation, memberCreated])
+    mockListBudgetTierLimits.mockResolvedValue([])
+    mockGetBudgetTierUsage.mockResolvedValue([])
+    mockPreviewBudgetAdjustment.mockResolvedValue({
+      preview_version: 'v1',
+      stale: false,
+      zero_block: false,
+      below_used: false,
+      replaces_pending_schedule: false,
+    })
+    mockPreviewBudgetTierBatch.mockResolvedValue(validTierPreview('alloc-member-1:tier-premium:monthly'))
+    mockApplyBudgetTierBatch.mockResolvedValue({
+      items: [{ item_id: 'alloc-member-1:tier-premium:monthly', status: 'applied' }],
+    })
+
+    const order: string[] = []
+    mockAdjustBudget.mockImplementation(async () => {
+      order.push('total')
+      return {}
+    })
+    mockApplyBudgetTierBatch.mockImplementation(async () => {
+      order.push('tier')
+      return { items: [{ item_id: 'alloc-member-1:tier-premium:monthly', status: 'applied' }] }
+    })
+
+    const wrapper = mount(BudgetEditDrawer, {
+      props: {
+        modelValue: true,
+        scopeType: 'dept',
+        scopeId: 'dept-1',
+        title: '张三',
+        canEdit: true,
+        initialAllocation: memberSeed,
+      },
+      global: { plugins: [ElementPlus] },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const vm = wrapper.vm as any
+    expect(vm.selectedAllocation.scope_type).toBe('member')
+    expect(wrapper.text()).toContain('成员额度（含等级子预算）')
+
+    vm.draft.total.monthly = { configured: true, value: '200' }
+    vm.draft.tiers['tier-premium'].monthly = { enabled: true, configured: true, value: '80' }
+    vm.dirty = true
+    await vm.save()
+    await flushPromises()
+
+    expect(order).toEqual(['total', 'tier'])
+    expect(mockAdjustBudget).toHaveBeenCalledWith(expect.objectContaining({
+      scope_type: 'member',
+      scope_id: 'user-1',
+      period_type: 'monthly',
+    }))
+    expect(mockPreviewBudgetTierBatch).toHaveBeenCalledWith(expect.objectContaining({
+      items: [expect.objectContaining({
+        allocation_id: 'alloc-member-1',
+        item_id: 'alloc-member-1:tier-premium:monthly',
+      })],
+    }))
+  })
 })

@@ -12,7 +12,11 @@
         <div class="bed-header-info">
           <span class="bed-title">配置 · {{ title }}</span>
           <span class="bed-sub">
-            {{ scopeType === 'studio' ? '工作室月预算' : '部门预算' }}
+            {{
+              selectedAllocation?.scope_type === 'member'
+                ? '成员额度（含等级子预算）'
+                : scopeType === 'studio' ? '工作室月预算' : '部门预算'
+            }}
             <template v-if="selectedAllocation">
               · 已用 {{ formatHeaderUsed }} / {{ formatHeaderLimit }}
             </template>
@@ -305,7 +309,7 @@ async function save(): Promise<void> {
     ElMessage.warning('额度必须是最多 6 位小数的非负数字，或不限（-1）')
     return
   }
-  if (changedTierItems.length && !selectedAllocation.value.allocation_id) {
+  if (changedTierItems.length && !selectedAllocation.value.allocation_id && !changedTotals.length) {
     ElMessage.warning('请先保存总预算，生成 allocation 后再设置等级子预算')
     return
   }
@@ -316,6 +320,79 @@ async function save(): Promise<void> {
 
   saving.value = true
   try {
+    // 新建成员额度时尚无 allocation_id：必须先落总预算，再写等级子预算
+    const bootstrapAllocation = Boolean(
+      changedTierItems.length && !selectedAllocation.value.allocation_id && changedTotals.length,
+    )
+
+    if (bootstrapAllocation) {
+      const totalPreviews = await Promise.all(changedTotals.map(period => (
+        previewBudgetAdjustment(totalPayload(period))
+      )))
+      if (totalPreviews.some(item => item.stale)) {
+        ElMessage.warning('用量数据已过期，请刷新后重新预览')
+        return
+      }
+      await confirmPreview(totalPreviews, null)
+      for (const [index, period] of changedTotals.entries()) {
+        await adjustBudget({
+          ...totalPayload(period),
+          preview_version: totalPreviews[index].preview_version,
+          confirm_zero_block: totalPreviews[index].zero_block,
+          confirm_below_used: totalPreviews[index].below_used,
+          confirm_replace_schedule: totalPreviews[index].replaces_pending_schedule,
+        })
+      }
+
+      const items = await getBudgetList(
+        undefined,
+        props.scopeId,
+        props.scopeType === 'studio' ? 'studio' : 'department',
+      )
+      const created = items.find(candidate => (
+        candidate.scope_type === selectedAllocation.value!.scope_type
+        && candidate.scope_id === selectedAllocation.value!.scope_id
+      ))
+      if (!created?.allocation_id) {
+        throw new Error('总预算已保存，但未拿到 allocation_id，请刷新后继续配置等级子预算')
+      }
+      selectedAllocation.value = created
+
+      const tierItems = collectChangedTierItems(draft.value, originalDraft.value)
+      if (tierItems.length) {
+        const tierPreview = await previewBudgetTierBatch({
+          operation: 'set_fixed',
+          items: tierItems,
+          effective_mode: draft.value.effectiveMode,
+          reason: draft.value.reason.trim(),
+        })
+        if (tierPreview.stale || tierPreview.items.some(item => item.stale)) {
+          ElMessage.warning('用量数据已过期，请刷新后重新预览')
+          return
+        }
+        const invalidBootstrapTier = tierPreview.items.find(item => item.status !== 'valid')
+        if (invalidBootstrapTier) {
+          throw new Error(invalidBootstrapTier.error_code || '等级子预算预览失败')
+        }
+        await confirmPreview([], tierPreview)
+        const tierApply = await applyBudgetTierBatch({
+          preview_token: tierPreview.preview_token,
+          confirm_item_ids: tierPreview.items
+            .filter(item => item.status === 'valid')
+            .map(item => item.item_id),
+        })
+        const failed = tierApply.items?.find(item => item.status !== 'applied' && item.status !== 'skipped')
+        if (failed) {
+          throw new Error(failed.error_code || '等级子预算保存失败')
+        }
+      }
+
+      ElMessage.success('成员总预算与等级子预算已更新')
+      emit('saved')
+      emit('update:modelValue', false)
+      return
+    }
+
     const totalPreviews = await Promise.all(changedTotals.map(period => (
       previewBudgetAdjustment(totalPayload(period))
     )))

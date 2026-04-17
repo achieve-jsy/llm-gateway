@@ -199,6 +199,9 @@ func (s *ExpansionService) VisibleScopeTypes(role string) []string {
 }
 
 func (s *ExpansionService) Precheck(ctx context.Context, actor ActorScope, input PrecheckInput) (*PrecheckResult, error) {
+	if strings.TrimSpace(input.DurationType) == "" {
+		input.DurationType = string(budgetdomain.DurationPermanent)
+	}
 	if err := validatePrecheckInput(actor, input, s.VisibleScopeTypes(actor.Role)); err != nil {
 		return nil, err
 	}
@@ -1071,10 +1074,11 @@ func (s *ExpansionService) readExpansionSnapshot(ctx context.Context, input Prec
 	if err != nil {
 		return budgetdomain.Amount{}, budgetdomain.Amount{}, false, err
 	}
+	periodType := budgetdomain.PeriodType(input.PeriodType)
 	current := decimal.Zero
-	if input.DimensionType == string(budgetdomain.DimensionTotal) {
-		if allocation != nil {
-			switch budgetdomain.PeriodType(input.PeriodType) {
+	if allocation != nil {
+		if input.DimensionType == string(budgetdomain.DimensionTotal) {
+			switch periodType {
 			case budgetdomain.PeriodDaily:
 				current = decimal.NewFromFloat(allocation.DailyAmountUSD)
 			case budgetdomain.PeriodWeekly:
@@ -1082,32 +1086,35 @@ func (s *ExpansionService) readExpansionSnapshot(ctx context.Context, input Prec
 			default:
 				current = decimal.NewFromFloat(allocation.AmountUSD)
 			}
-		}
-	} else if allocation != nil && s.budgetTierSvc != nil && input.ModelTierID != nil {
-		tierID, _ := uuid.Parse(*input.ModelTierID)
-		limit, findErr := s.budgetTierSvc.repo.FindTierLimit(ctx, allocation.ID, tierID, budgetdomain.PeriodType(input.PeriodType))
-		if findErr != nil {
-			return budgetdomain.Amount{}, budgetdomain.Amount{}, false, findErr
-		}
-		if limit != nil && limit.Enabled {
-			current = limit.LimitUSD.Decimal
-			overrides, listErr := s.budgetTierSvc.repo.ListActiveOverrides(ctx, allocation.ID, now)
-			if listErr != nil {
-				return budgetdomain.Amount{}, budgetdomain.Amount{}, false, listErr
+			merged, mergeErr := s.applyActiveOverrideTarget(ctx, allocation.ID, periodType, nil, current, now)
+			if mergeErr != nil {
+				return budgetdomain.Amount{}, budgetdomain.Amount{}, false, mergeErr
 			}
-			for _, override := range overrides {
-				if override.DimensionType == budgetdomain.DimensionTier && override.ModelTierID != nil &&
-					*override.ModelTierID == tierID && override.PeriodType == budgetdomain.PeriodType(input.PeriodType) &&
-					override.TargetLimitUSD.Decimal.GreaterThan(current) {
-					current = override.TargetLimitUSD.Decimal
-				}
+			current = merged
+		} else if s.budgetTierSvc != nil && input.ModelTierID != nil {
+			tierID, parseErr := uuid.Parse(*input.ModelTierID)
+			if parseErr != nil {
+				return budgetdomain.Amount{}, budgetdomain.Amount{}, false, ErrInvalidExpansionDimension
 			}
+			limit, findErr := s.budgetTierSvc.repo.FindTierLimit(ctx, allocation.ID, tierID, periodType)
+			if findErr != nil {
+				return budgetdomain.Amount{}, budgetdomain.Amount{}, false, findErr
+			}
+			if limit != nil && limit.Enabled {
+				current = limit.LimitUSD.Decimal
+			}
+			// 无 base 行时仍合并 temporary override，与 my/budget/tiers effective 对齐。
+			merged, mergeErr := s.applyActiveOverrideTarget(ctx, allocation.ID, periodType, &tierID, current, now)
+			if mergeErr != nil {
+				return budgetdomain.Amount{}, budgetdomain.Amount{}, false, mergeErr
+			}
+			current = merged
 		}
 	}
 	if current.IsNegative() {
 		current = decimal.Zero
 	}
-	window, err := budgetperiod.Resolve(now, budgetdomain.PeriodType(input.PeriodType), budgetperiod.Config{
+	window, err := budgetperiod.Resolve(now, periodType, budgetperiod.Config{
 		Timezone: budgetperiod.DefaultTimezone, WeekStart: budgetperiod.CanonicalWeekStart,
 	})
 	if err != nil {
@@ -1131,6 +1138,44 @@ func (s *ExpansionService) readExpansionSnapshot(ctx context.Context, input Prec
 		}
 	}
 	return budgetdomain.Amount{Decimal: current.Round(6)}, budgetdomain.Amount{Decimal: used.Round(6)}, stale, nil
+}
+
+// applyActiveOverrideTarget 将 active temporary override 合并进 current（取更大目标额）。
+// tierID == nil 表示 total 维度；非 nil 表示对应等级子预算。
+func (s *ExpansionService) applyActiveOverrideTarget(
+	ctx context.Context,
+	allocationID uuid.UUID,
+	periodType budgetdomain.PeriodType,
+	tierID *uuid.UUID,
+	current decimal.Decimal,
+	now time.Time,
+) (decimal.Decimal, error) {
+	if s.budgetTierSvc == nil {
+		return current, nil
+	}
+	overrides, listErr := s.budgetTierSvc.repo.ListActiveOverrides(ctx, allocationID, now)
+	if listErr != nil {
+		return current, listErr
+	}
+	for _, override := range overrides {
+		if override.PeriodType != periodType {
+			continue
+		}
+		if tierID == nil {
+			if override.DimensionType != budgetdomain.DimensionTotal {
+				continue
+			}
+		} else {
+			if override.DimensionType != budgetdomain.DimensionTier ||
+				override.ModelTierID == nil || *override.ModelTierID != *tierID {
+				continue
+			}
+		}
+		if override.TargetLimitUSD.Decimal.GreaterThan(current) {
+			current = override.TargetLimitUSD.Decimal
+		}
+	}
+	return current, nil
 }
 
 func (s *ExpansionService) precheckApprovalInTx(

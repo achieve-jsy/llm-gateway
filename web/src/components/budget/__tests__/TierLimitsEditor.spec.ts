@@ -164,11 +164,53 @@ describe('TierLimitsEditor', () => {
     expect(wrapper.find('[data-test="monthly-limit-input"]').exists()).toBe(false)
   })
 
-  it('展开高级设置后可见日/周与原因', async () => {
+  it('展开高级设置后可见总预算日/周、等级日/周与原因', async () => {
     const wrapper = mountEditor()
     await wrapper.get('[data-test="advanced-toggle"]').trigger('click')
     expect(wrapper.find('[data-test="daily-unlimited"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="tier-period-advanced"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="tier-premium-daily-input"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="tier-premium-weekly-input"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="adjust-reason"]').exists()).toBe(true)
+  })
+
+  it('默认不展示等级日/周控件', () => {
+    const wrapper = mountEditor()
+    expect(wrapper.find('[data-test="tier-premium-daily-input"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="tier-premium-weekly-input"]').exists()).toBe(false)
+  })
+
+  it('高级设置可编辑等级日/周额度', async () => {
+    const wrapper = mountEditor()
+    await wrapper.get('[data-test="advanced-toggle"]').trigger('click')
+
+    await wrapper.get('[data-test="tier-premium-daily-input"]').setValue('12.5')
+    const dailyUpdated = wrapper.emitted('update:modelValue')?.at(-1)?.[0] as TierLimitsDraft
+    expect(dailyUpdated.tiers.premium.daily).toEqual({
+      enabled: true,
+      configured: true,
+      value: '12.5',
+    })
+
+    await wrapper.get('[data-test="tier-standard-weekly-zero"]').trigger('click')
+    const weeklyZeroed = wrapper.emitted('update:modelValue')?.at(-1)?.[0] as TierLimitsDraft
+    expect(weeklyZeroed.tiers.standard.weekly).toEqual({
+      enabled: true,
+      configured: true,
+      value: '0',
+    })
+  })
+
+  it('停用等级的日/周控件不可编辑', async () => {
+    const wrapper = mountEditor()
+    await wrapper.get('[data-test="advanced-toggle"]').trigger('click')
+
+    const dailyInput = wrapper.get('[data-test="tier-economy-daily-input"]')
+    const weeklyInput = wrapper.get('[data-test="tier-economy-weekly-input"]')
+    expect(dailyInput.attributes('disabled')).toBeDefined()
+    expect(weeklyInput.attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="tier-economy-daily-zero"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="tier-economy-weekly-unconfigure"]').attributes('disabled')).toBeDefined()
   })
 
   it('区分移除限制与设置为零', async () => {

@@ -1,87 +1,103 @@
 <template>
-  <el-dialog v-model="visible" :title="dialogTitle" width="680px" destroy-on-close>
-    <div v-if="item" class="budget-detail-dialog">
+  <el-dialog v-model="visible" :title="dialogTitle" width="760px" destroy-on-close class="budget-detail-dialog-host">
+    <div v-if="item" class="budget-detail-dialog" data-test="budget-detail-dialog">
       <section class="detail-section">
         <h3>周期限额</h3>
         <div class="detail-grid">
           <div class="detail-card" :class="periodClass(monthlyRatio)">
-            <span>月额度</span>
-            <strong>{{ formatBudgetUSD(item.amount_usd, { unlimited: true }) }}</strong>
-            <small>已用 {{ formatBudgetUSD(item.used_usd) }}</small>
-            <el-progress
-              :percentage="Math.min(100, Math.round(monthlyRatio * 100))"
-              :stroke-width="4"
-              :color="progressColor(monthlyRatio)"
-              :show-text="false"
-            />
+            <span class="detail-card__label">月额度</span>
+            <strong class="detail-card__value">{{ formatBudgetUSD(item.amount_usd, { unlimited: true }) }}</strong>
+            <div class="detail-card__meta">
+              <span>已用 {{ formatBudgetUSD(item.used_usd) }}</span>
+              <span>{{ usageLabel(monthlyRatio, item.amount_usd) }}</span>
+            </div>
           </div>
           <div class="detail-card" :class="periodClass(weeklyRatio)">
-            <span>周额度</span>
-            <strong>{{ formatBudgetUSD(item.weekly_amount_usd, { unlimited: true }) }}</strong>
-            <small>已用 {{ formatBudgetUSD(item.weekly_used_usd ?? 0) }}</small>
-            <el-progress
-              :percentage="Math.min(100, Math.round(weeklyRatio * 100))"
-              :stroke-width="4"
-              :color="progressColor(weeklyRatio)"
-              :show-text="false"
-            />
+            <span class="detail-card__label">周额度</span>
+            <strong class="detail-card__value">{{ formatBudgetUSD(item.weekly_amount_usd, { unlimited: true }) }}</strong>
+            <div class="detail-card__meta">
+              <span>已用 {{ formatBudgetUSD(item.weekly_used_usd ?? 0) }}</span>
+              <span>{{ usageLabel(weeklyRatio, item.weekly_amount_usd) }}</span>
+            </div>
           </div>
           <div class="detail-card" :class="periodClass(dailyRatio)">
-            <span>日额度</span>
-            <strong>{{ formatBudgetUSD(item.daily_amount_usd, { unlimited: true }) }}</strong>
-            <small>已用 {{ formatBudgetUSD(item.daily_used_usd ?? 0) }}</small>
-            <el-progress
-              :percentage="Math.min(100, Math.round(dailyRatio * 100))"
-              :stroke-width="4"
-              :color="progressColor(dailyRatio)"
-              :show-text="false"
-            />
+            <span class="detail-card__label">日额度</span>
+            <strong class="detail-card__value">{{ formatBudgetUSD(item.daily_amount_usd, { unlimited: true }) }}</strong>
+            <div class="detail-card__meta">
+              <span>已用 {{ formatBudgetUSD(item.daily_used_usd ?? 0) }}</span>
+              <span>{{ usageLabel(dailyRatio, item.daily_amount_usd) }}</span>
+            </div>
           </div>
         </div>
       </section>
 
       <section v-if="tierRows.length" class="detail-section">
-        <h3>等级子预算</h3>
-        <el-table :data="tierRows" size="small" stripe>
-          <el-table-column label="等级" min-width="120">
+        <div class="detail-section__head">
+          <h3>等级子预算</h3>
+          <span class="detail-section__hint">用量与状态按月额度计算</span>
+        </div>
+        <el-table
+          :data="tierRows"
+          size="small"
+          class="tier-detail-table"
+          data-test="tier-detail-table"
+        >
+          <el-table-column label="等级" min-width="108">
             <template #default="{ row }">
               <span class="tier-name">
-                <span class="tier-dot" :style="{ background: row.color }" />
-                {{ row.name }}
+                <span class="tier-dot" :style="{ background: row.color || 'var(--el-color-info)' }" />
+                <span class="tier-name__text">{{ row.name }}</span>
               </span>
             </template>
           </el-table-column>
-          <el-table-column label="月额度" width="120" align="right">
+          <el-table-column label="月额度" min-width="112" align="right">
             <template #default="{ row }">
-              <span v-if="!row.enabled" class="muted">已停用</span>
-              <span v-else-if="row.limit === null" class="muted">未配置</span>
-              <span v-else>{{ formatBudgetUSD(row.limit, { compact: true }) }}</span>
+              <span class="money-cell" :class="{ muted: !row.enabled || row.monthly === null }">
+                {{ formatTierCell(row, row.monthly) }}
+              </span>
             </template>
           </el-table-column>
-          <el-table-column label="已使用" width="120" align="right">
+          <el-table-column label="周额度" min-width="112" align="right">
             <template #default="{ row }">
-              <span>{{ formatBudgetUSD(row.used, { compact: true }) }}</span>
+              <span class="money-cell" :class="{ muted: !row.enabled || row.weekly === null }">
+                {{ formatTierCell(row, row.weekly) }}
+              </span>
             </template>
           </el-table-column>
-          <el-table-column label="使用率" min-width="140">
+          <el-table-column label="日额度" min-width="112" align="right">
             <template #default="{ row }">
-              <template v-if="row.limit !== null && row.limit > 0">
-                <el-progress
-                  :percentage="Math.min(100, Math.round(row.ratio * 100))"
-                  :stroke-width="5"
-                  :color="progressColor(row.ratio)"
-                />
-              </template>
-              <span v-else-if="row.limit === null" class="muted">无限制</span>
-              <span v-else class="muted">—</span>
+              <span class="money-cell" :class="{ muted: !row.enabled || row.daily === null }">
+                {{ formatTierCell(row, row.daily) }}
+              </span>
             </template>
           </el-table-column>
-          <el-table-column label="状态" width="90" align="center">
+          <el-table-column label="月用量" min-width="128" align="right">
             <template #default="{ row }">
-              <el-tag v-if="!row.enabled" type="info" size="small">已停用</el-tag>
-              <el-tag v-else-if="row.limit === null" type="info" size="small">无限制</el-tag>
-              <el-tag v-else-if="row.limit === 0" type="danger" size="small">已禁用</el-tag>
-              <el-tag v-else :type="row.ratio >= 1 ? 'danger' : row.ratio >= 0.8 ? 'warning' : 'success'" size="small">
+              <span v-if="!row.enabled" class="muted">—</span>
+              <span v-else class="usage-cell">
+                <span class="money-cell">{{ formatBudgetUSD(row.used) }}</span>
+                <span class="usage-cell__pct">{{ monthlyUsageText(row) }}</span>
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="88" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="!row.enabled" type="info" size="small" effect="plain">已停用</el-tag>
+              <el-tag
+                v-else-if="row.monthly === null && row.weekly === null && row.daily === null"
+                type="info"
+                size="small"
+                effect="plain"
+              >
+                无限制
+              </el-tag>
+              <el-tag v-else-if="row.monthly === 0" type="danger" size="small" effect="plain">已禁用</el-tag>
+              <el-tag
+                v-else
+                :type="row.ratio >= 1 ? 'danger' : row.ratio >= 0.8 ? 'warning' : 'success'"
+                size="small"
+                effect="plain"
+              >
                 {{ row.ratio >= 1 ? '已超额' : row.ratio >= 0.8 ? '预警' : '正常' }}
               </el-tag>
             </template>
@@ -106,15 +122,7 @@ import { computed } from 'vue'
 import type { BudgetItem } from '@/types/budget'
 import type { BudgetTierLimit } from '@/types/model-tier'
 import { formatBudgetUSD } from '@/composables/useBudgetDisplay'
-
-interface TierRow {
-  name: string
-  color?: string
-  enabled: boolean
-  limit: number | null
-  used: number
-  ratio: number
-}
+import { buildTierDetailRows, type TierDetailRow } from './budgetDetailRows'
 
 const props = defineProps<{
   item: BudgetItem | null
@@ -128,139 +136,201 @@ const dialogTitle = computed(() => {
   return `${props.item.label || props.item.scope_id} · 预算详情`
 })
 
-const monthlyRatio = computed(() => {
-  if (!props.item) return 0
-  const limit = Number(props.item.amount_usd ?? 0)
-  const used = Number(props.item.used_usd ?? 0)
-  return limit > 0 ? used / limit : 0
-})
+const monthlyRatio = computed(() => ratioOf(props.item?.amount_usd, props.item?.used_usd))
+const weeklyRatio = computed(() => ratioOf(props.item?.weekly_amount_usd, props.item?.weekly_used_usd))
+const dailyRatio = computed(() => ratioOf(props.item?.daily_amount_usd, props.item?.daily_used_usd))
+const tierRows = computed(() => buildTierDetailRows(props.tierLimits))
 
-const weeklyRatio = computed(() => {
-  if (!props.item) return 0
-  const limit = Number(props.item.weekly_amount_usd ?? 0)
-  const used = Number(props.item.weekly_used_usd ?? 0)
-  return limit > 0 ? used / limit : 0
-})
-
-const dailyRatio = computed(() => {
-  if (!props.item) return 0
-  const limit = Number(props.item.daily_amount_usd ?? 0)
-  const used = Number(props.item.daily_used_usd ?? 0)
-  return limit > 0 ? used / limit : 0
-})
-
-const tierRows = computed<TierRow[]>(() => {
-  if (!props.tierLimits?.length) return []
-  return props.tierLimits.map(limit => {
-    const limitValue = limit.base_limit_usd ?? limit.limit_usd
-    const safeLimit = Number(limitValue ?? 0)
-    const used = Number(limit.used_usd ?? 0)
-    const ratio = safeLimit > 0 ? used / safeLimit : 0
-    return {
-      name: limit.model_tier_name ?? limit.model_tier_id,
-      color: undefined,
-      enabled: limit.enabled ?? true,
-      limit: Number.isFinite(safeLimit) ? safeLimit : null,
-      used,
-      ratio,
-    }
-  })
-})
-
-function periodClass(ratio: number): string {
-  if (ratio >= 1) return 'danger'
-  if (ratio >= 0.8) return 'warning'
-  return ''
+function ratioOf(limit?: number | null, used?: number | null): number {
+  const safeLimit = Number(limit ?? 0)
+  const safeUsed = Number(used ?? 0)
+  return safeLimit > 0 ? safeUsed / safeLimit : 0
 }
 
-function progressColor(ratio: number): string {
-  if (ratio >= 1) return '#ef4444'
-  if (ratio >= 0.8) return '#e6a23c'
-  return '#36b34e'
+function usageLabel(ratio: number, limit?: number | null): string {
+  const amount = Number(limit ?? NaN)
+  if (!Number.isFinite(amount) || amount < 0) return '不限'
+  if (amount === 0) return '已阻断'
+  return `${Math.min(999, Math.round(ratio * 100))}%`
+}
+
+function formatTierCell(row: TierDetailRow, value: number | null): string {
+  if (!row.enabled) return '—'
+  if (value === null) return '未配置'
+  return formatBudgetUSD(value)
+}
+
+function monthlyUsageText(row: TierDetailRow): string {
+  if (row.monthly === null) return '无月限'
+  if (row.monthly <= 0) return '—'
+  return `${Math.min(999, Math.round(row.ratio * 100))}%`
+}
+
+function periodClass(ratio: number): string {
+  if (ratio >= 1) return 'is-danger'
+  if (ratio >= 0.8) return 'is-warning'
+  return ''
 }
 </script>
 
 <style scoped>
 .budget-detail-dialog {
   display: grid;
-  gap: 24px;
+  gap: 20px;
 }
 
 .detail-section h3 {
-  margin: 0 0 12px;
-  color: var(--text-primary);
+  margin: 0;
+  color: var(--el-text-color-primary);
   font-size: 14px;
   font-weight: 600;
+}
+
+.detail-section__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.detail-section__hint {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.detail-section > h3 {
+  margin-bottom: 10px;
 }
 
 .detail-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .detail-card {
   display: grid;
-  gap: 8px;
-  padding: 14px;
-  border: 1px solid #e5e7eb;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;
-  background: #fff;
+  background: var(--el-fill-color-blank);
 }
 
-.detail-card span {
-  color: var(--text-secondary);
+.detail-card__label {
+  color: var(--el-text-color-secondary);
   font-size: 12px;
 }
 
-.detail-card strong {
-  color: var(--text-primary);
-  font-size: 18px;
+.detail-card__value {
+  color: var(--el-text-color-primary);
+  font-size: 20px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.detail-card__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
-.detail-card small {
-  color: var(--text-secondary);
-  font-size: 12px;
+.detail-card.is-warning {
+  border-color: var(--el-color-warning-light-5);
+  background: var(--el-color-warning-light-9);
 }
 
-.detail-card.warning {
-  border-color: var(--el-color-warning);
-  background: #fef3e7;
-}
-
-.detail-card.warning strong {
+.detail-card.is-warning .detail-card__value {
   color: var(--el-color-warning);
 }
 
-.detail-card.danger {
-  border-color: var(--el-color-danger);
-  background: #fef0f0;
+.detail-card.is-danger {
+  border-color: var(--el-color-danger-light-5);
+  background: var(--el-color-danger-light-9);
 }
 
-.detail-card.danger strong {
+.detail-card.is-danger .detail-card__value {
   color: var(--el-color-danger);
 }
 
+.tier-detail-table {
+  --el-table-border-color: var(--el-border-color-lighter);
+}
+
+.tier-detail-table :deep(.el-table__header th) {
+  color: var(--el-text-color-secondary);
+  font-weight: 600;
+  background: var(--el-fill-color-light);
+}
+
+.tier-detail-table :deep(.el-table__cell) {
+  padding: 10px 0;
+}
+
 .tier-name {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tier-name__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tier-dot {
-  display: inline-block;
+  flex: none;
   width: 8px;
   height: 8px;
   border-radius: 50%;
 }
 
+.money-cell {
+  display: inline-block;
+  color: var(--el-text-color-primary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.usage-cell {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  line-height: 1.2;
+}
+
+.usage-cell__pct {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 .empty-state {
-  padding: 24px;
+  padding: 20px;
+  border: 1px dashed var(--el-border-color);
+  border-radius: 8px;
   text-align: center;
+  background: var(--el-fill-color-lighter);
 }
 
 .muted {
-  color: var(--text-secondary);
+  color: var(--el-text-color-secondary);
+}
+
+@media (max-width: 720px) {
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

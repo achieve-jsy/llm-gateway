@@ -602,3 +602,125 @@ func TestExpansionExpiredRequestCannotBeApproved(t *testing.T) {
 	})
 	require.ErrorIs(t, err, service.ErrExpansionRequestExpired)
 }
+
+func TestExpansionPrecheckUsesTierTemporaryWithoutBase(t *testing.T) {
+	db, svc := newExpansionApprovalFixture(t)
+
+	memberID, allocationID, tierID := uuid.New(), uuid.New(), uuid.New()
+	seedApprovalChain(t, db, memberID)
+	require.NoError(t, db.Exec(`INSERT INTO budget_allocations
+		(id,scope_type,scope_id,amount_usd,daily_amount_usd,weekly_amount_usd,period,enabled)
+		VALUES (?,?,?,?,?,?,?,?)`,
+		allocationID.String(), model.BudgetScopeMember, memberID.String(), 300, -1, -1, "monthly", true).Error)
+	require.NoError(t, db.Exec(`INSERT INTO model_tiers(id,name,description,color,sort_order,enabled,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?)`, tierID.String(), "高级", "", "#8b5cf6", 1, true, time.Now(), time.Now()).Error)
+
+	now := time.Now().UTC()
+	require.NoError(t, db.Create(&model.BudgetTemporaryOverride{
+		ID: uuid.New(), BudgetAllocationID: allocationID,
+		DimensionType: budgetdomain.DimensionTier, DimensionKey: "tier:" + tierID.String(),
+		ModelTierID: &tierID, PeriodType: budgetdomain.PeriodMonthly,
+		TargetLimitUSD: mustAmount(t, "1200.000000"), StartsAt: now.Add(-time.Hour), ExpiresAt: now.Add(24 * time.Hour),
+		Status: budgetdomain.OverrideActive,
+	}).Error)
+
+	tierIDString := tierID.String()
+	result, err := svc.Precheck(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.PrecheckInput{
+		ScopeType: model.BudgetScopeMember, ScopeID: memberID.String(), PeriodType: "monthly",
+		DimensionType: "tier", ModelTierID: &tierIDString, DurationType: "permanent", TargetAmountUSD: "1500.000000",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "1200.000000", result.CurrentLimitUSD)
+}
+
+func TestExpansionPrecheckUsesMaxOfBaseAndTierTemporary(t *testing.T) {
+	db, svc := newExpansionApprovalFixture(t)
+
+	memberID, allocationID, tierID := uuid.New(), uuid.New(), uuid.New()
+	seedApprovalChain(t, db, memberID)
+	require.NoError(t, db.Exec(`UPDATE budget_allocations SET amount_usd = 5000 WHERE scope_type IN (?, ?, ?)`,
+		model.BudgetScopeDeptDaily, model.BudgetScopeStudio, model.BudgetScopeCompany).Error)
+	require.NoError(t, db.Exec(`INSERT INTO budget_allocations
+		(id,scope_type,scope_id,amount_usd,daily_amount_usd,weekly_amount_usd,period,enabled)
+		VALUES (?,?,?,?,?,?,?,?)`,
+		allocationID.String(), model.BudgetScopeMember, memberID.String(), 300, -1, -1, "monthly", true).Error)
+	require.NoError(t, db.Exec(`INSERT INTO model_tiers(id,name,description,color,sort_order,enabled,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?)`, tierID.String(), "高级", "", "#8b5cf6", 1, true, time.Now(), time.Now()).Error)
+	require.NoError(t, db.Create(&model.BudgetTierLimit{
+		ID: uuid.New(), BudgetAllocationID: allocationID, ModelTierID: tierID,
+		PeriodType: budgetdomain.PeriodMonthly, LimitUSD: mustAmount(t, "1.000000"),
+		EffectiveAt: time.Now().UTC().Add(-time.Hour), Enabled: true,
+	}).Error)
+
+	now := time.Now().UTC()
+	require.NoError(t, db.Create(&model.BudgetTemporaryOverride{
+		ID: uuid.New(), BudgetAllocationID: allocationID,
+		DimensionType: budgetdomain.DimensionTier, DimensionKey: "tier:" + tierID.String(),
+		ModelTierID: &tierID, PeriodType: budgetdomain.PeriodMonthly,
+		TargetLimitUSD: mustAmount(t, "1200.000000"), StartsAt: now.Add(-time.Hour), ExpiresAt: now.Add(24 * time.Hour),
+		Status: budgetdomain.OverrideActive,
+	}).Error)
+
+	tierIDString := tierID.String()
+	result, err := svc.Precheck(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.PrecheckInput{
+		ScopeType: model.BudgetScopeMember, ScopeID: memberID.String(), PeriodType: "monthly",
+		DimensionType: "tier", ModelTierID: &tierIDString, DurationType: "permanent", TargetAmountUSD: "1500.000000",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "1200.000000", result.CurrentLimitUSD)
+}
+
+func TestExpansionPrecheckUsesTotalTemporaryOverride(t *testing.T) {
+	db, svc := newExpansionApprovalFixture(t)
+
+	memberID, allocationID := uuid.New(), uuid.New()
+	seedApprovalChain(t, db, memberID)
+	require.NoError(t, db.Exec(`UPDATE budget_allocations SET amount_usd = 5000 WHERE scope_type IN (?, ?, ?)`,
+		model.BudgetScopeDeptDaily, model.BudgetScopeStudio, model.BudgetScopeCompany).Error)
+	require.NoError(t, db.Exec(`INSERT INTO budget_allocations
+		(id,scope_type,scope_id,amount_usd,daily_amount_usd,weekly_amount_usd,period,enabled)
+		VALUES (?,?,?,?,?,?,?,?)`,
+		allocationID.String(), model.BudgetScopeMember, memberID.String(), 80, -1, -1, "monthly", true).Error)
+
+	now := time.Now().UTC()
+	require.NoError(t, db.Create(&model.BudgetTemporaryOverride{
+		ID: uuid.New(), BudgetAllocationID: allocationID,
+		DimensionType: budgetdomain.DimensionTotal, DimensionKey: "total",
+		PeriodType: budgetdomain.PeriodMonthly, TargetLimitUSD: mustAmount(t, "1200.000000"),
+		StartsAt: now.Add(-time.Hour), ExpiresAt: now.Add(24 * time.Hour),
+		Status: budgetdomain.OverrideActive,
+	}).Error)
+
+	result, err := svc.Precheck(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.PrecheckInput{
+		ScopeType: model.BudgetScopeMember, ScopeID: memberID.String(), PeriodType: "monthly",
+		DimensionType: "total", DurationType: "permanent", TargetAmountUSD: "1500.000000",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "1200.000000", result.CurrentLimitUSD)
+}
+
+func TestExpansionPrecheckDefaultsEmptyDurationToPermanent(t *testing.T) {
+	db, svc := newExpansionApprovalFixture(t)
+
+	memberID := uuid.New()
+	seedApprovalChain(t, db, memberID)
+	require.NoError(t, db.Exec(`INSERT INTO budget_allocations
+		(id,scope_type,scope_id,amount_usd,daily_amount_usd,weekly_amount_usd,period,enabled)
+		VALUES (?,?,?,?,?,?,?,?)`,
+		uuid.New(), model.BudgetScopeMember, memberID.String(), 80, -1, -1, "monthly", true).Error)
+
+	result, err := svc.Precheck(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.PrecheckInput{
+		ScopeType: model.BudgetScopeMember, ScopeID: memberID.String(), PeriodType: "monthly",
+		DimensionType: "total", DurationType: "", TargetAmountUSD: "120.000000",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "80.000000", result.CurrentLimitUSD)
+	require.True(t, result.CanSubmit)
+
+	withPermanent, err := svc.Precheck(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.PrecheckInput{
+		ScopeType: model.BudgetScopeMember, ScopeID: memberID.String(), PeriodType: "monthly",
+		DimensionType: "total", DurationType: "permanent", TargetAmountUSD: "120.000000",
+	})
+	require.NoError(t, err)
+	require.Equal(t, withPermanent.PrecheckVersion, result.PrecheckVersion)
+}

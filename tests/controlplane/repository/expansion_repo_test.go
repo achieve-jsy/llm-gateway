@@ -15,6 +15,12 @@ import (
 
 func newExpansionTestRepo(t *testing.T) *repository.ExpansionRepo {
 	t.Helper()
+	repo, _ := newExpansionTestDB(t)
+	return repo
+}
+
+func newExpansionTestDB(t *testing.T) (*repository.ExpansionRepo, *gorm.DB) {
+	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -70,7 +76,16 @@ func newExpansionTestRepo(t *testing.T) *repository.ExpansionRepo {
 	`).Error; err != nil {
 		t.Fatalf("create expansion_approval_steps: %v", err)
 	}
-	return repository.NewExpansionRepo(db)
+	for _, stmt := range []string{
+		`CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT)`,
+		`CREATE TABLE studios (id TEXT PRIMARY KEY, name TEXT)`,
+		`CREATE TABLE departments (dept_id TEXT PRIMARY KEY, dept_name TEXT)`,
+	} {
+		if err := db.Exec(stmt).Error; err != nil {
+			t.Fatalf("create lookup table: %v", err)
+		}
+	}
+	return repository.NewExpansionRepo(db), db
 }
 
 func TestExpansionCreateNormalizesPendingUniqueConflict(t *testing.T) {
@@ -210,5 +225,109 @@ func TestListPendingForApproverScopedFiltersDeptLevelByManagedMembers(t *testing
 	}
 	if got[0].ScopeID != "member-a" {
 		t.Fatalf("expected member-a request, got %s", got[0].ScopeID)
+	}
+}
+
+func TestExpansionListFilterKeywordMatchesScopeDisplayNames(t *testing.T) {
+	repo, db := newExpansionTestDB(t)
+	requesterID := uuid.New()
+	memberID := uuid.New().String()
+	otherMemberID := uuid.New().String()
+	studioID := uuid.New().String()
+	deptID := uuid.New().String()
+
+	for _, stmt := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO users (id, name) VALUES (?, ?)`, []any{requesterID.String(), "申请人甲"}},
+		{`INSERT INTO users (id, name) VALUES (?, ?)`, []any{memberID, "林晓"}},
+		{`INSERT INTO users (id, name) VALUES (?, ?)`, []any{otherMemberID, "周然"}},
+		{`INSERT INTO studios (id, name) VALUES (?, ?)`, []any{studioID, "互娱事业部"}},
+		{`INSERT INTO departments (dept_id, dept_name) VALUES (?, ?)`, []any{deptID, "技术研发部"}},
+	} {
+		if err := db.Exec(stmt.sql, stmt.args...).Error; err != nil {
+			t.Fatalf("seed lookup: %v", err)
+		}
+	}
+
+	requests := []*model.ExpansionRequest{
+		{
+			ID: uuid.New(), ScopeType: model.BudgetScopeMember, ScopeID: memberID, RequesterID: requesterID,
+			RequestedAmount: 50, Status: model.ExpansionStatusPending, CurrentLevel: model.ExpansionLevelDept,
+			Reason: "日常扩容",
+		},
+		{
+			ID: uuid.New(), ScopeType: model.BudgetScopeMember, ScopeID: otherMemberID, RequesterID: requesterID,
+			RequestedAmount: 60, Status: model.ExpansionStatusPending, CurrentLevel: model.ExpansionLevelDept,
+			Reason: "日常扩容",
+		},
+		{
+			ID: uuid.New(), ScopeType: model.BudgetScopeStudio, ScopeID: studioID, RequesterID: requesterID,
+			RequestedAmount: 100, Status: model.ExpansionStatusPending, CurrentLevel: model.ExpansionLevelPlatform,
+			Reason: "工作室扩容",
+		},
+		{
+			ID: uuid.New(), ScopeType: model.BudgetScopeDeptDaily, ScopeID: deptID, RequesterID: requesterID,
+			RequestedAmount: 80, Status: model.ExpansionStatusPending, CurrentLevel: model.ExpansionLevelStudio,
+			Reason: "部门扩容",
+		},
+	}
+	for _, req := range requests {
+		if err := repo.Create(req); err != nil {
+			t.Fatalf("seed request: %v", err)
+		}
+	}
+
+	gotMember, err := repo.ListByRequesterFiltered(requesterID.String(), repository.ExpansionListFilter{Keyword: "林晓"})
+	if err != nil {
+		t.Fatalf("keyword member: %v", err)
+	}
+	if len(gotMember) != 1 || gotMember[0].ScopeID != memberID {
+		t.Fatalf("expected member 林晓 hit, got %+v", gotMember)
+	}
+
+	gotStudio, err := repo.ListByRequesterFiltered(requesterID.String(), repository.ExpansionListFilter{Keyword: "互娱"})
+	if err != nil {
+		t.Fatalf("keyword studio: %v", err)
+	}
+	if len(gotStudio) != 1 || gotStudio[0].ScopeID != studioID {
+		t.Fatalf("expected studio hit, got %+v", gotStudio)
+	}
+
+	gotDept, err := repo.ListByRequesterFiltered(requesterID.String(), repository.ExpansionListFilter{Keyword: "技术研发"})
+	if err != nil {
+		t.Fatalf("keyword dept: %v", err)
+	}
+	if len(gotDept) != 1 || gotDept[0].ScopeID != deptID {
+		t.Fatalf("expected dept hit, got %+v", gotDept)
+	}
+
+	gotRequester, err := repo.ListByRequesterFiltered(requesterID.String(), repository.ExpansionListFilter{Keyword: "申请人甲"})
+	if err != nil {
+		t.Fatalf("keyword requester: %v", err)
+	}
+	if len(gotRequester) != 4 {
+		t.Fatalf("expected all 4 rows for requester name, got %d", len(gotRequester))
+	}
+
+	// UUID/ID 片段兜底：request_id 与 requester_id 应可被 keyword 命中。
+	target := requests[0]
+	idFrag := target.ID.String()[:8]
+	gotByID, err := repo.ListByRequesterFiltered(requesterID.String(), repository.ExpansionListFilter{Keyword: idFrag})
+	if err != nil {
+		t.Fatalf("keyword request id fragment: %v", err)
+	}
+	if len(gotByID) != 1 || gotByID[0].ID != target.ID {
+		t.Fatalf("expected request id fragment hit, got %+v", gotByID)
+	}
+
+	requesterFrag := requesterID.String()[:8]
+	gotByRequesterID, err := repo.ListByRequesterFiltered(requesterID.String(), repository.ExpansionListFilter{Keyword: requesterFrag})
+	if err != nil {
+		t.Fatalf("keyword requester id fragment: %v", err)
+	}
+	if len(gotByRequesterID) != 4 {
+		t.Fatalf("expected all 4 rows for requester id fragment, got %d", len(gotByRequesterID))
 	}
 }

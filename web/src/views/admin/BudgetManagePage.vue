@@ -3100,6 +3100,7 @@ async function handleWorkspaceDetail(item: BudgetItem) {
     try {
       const limits = await listBudgetTierLimits(item.allocation_id)
       budgetDetailTierLimits.value = limits.map(limit => {
+        if (limit.period_type !== 'monthly') return limit
         const usage = tierBudgetItems.value.find(t =>
           t.scope_id === item.scope_id
           && t.scope_type === item.scope_type
@@ -3107,7 +3108,7 @@ async function handleWorkspaceDetail(item: BudgetItem) {
         )
         return {
           ...limit,
-          used_usd: usage?.used_usd ?? 0,
+          used_usd: usage?.used_usd ?? limit.used_usd ?? 0,
         }
       })
     } catch (error: any) {

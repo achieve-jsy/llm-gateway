@@ -225,11 +225,42 @@ func applyExpansionListFilter(q *gorm.DB, filter ExpansionListFilter) *gorm.DB {
 	}
 	keyword := strings.TrimSpace(filter.Keyword)
 	if keyword != "" {
+		// 搜索申请人姓名 + 预算主体显示名（成员/工作室/部门）+ scope_id/原因 + request/requester UUID 片段。
 		pattern := "%" + keyword + "%"
-		q = q.Joins("LEFT JOIN users filter_u ON filter_u.id = er.requester_id").
-			Where("filter_u.name ILIKE ? OR er.scope_id ILIKE ? OR er.reason ILIKE ?", pattern, pattern, pattern)
+		like := expansionKeywordLikeOp(q)
+		q = q.Joins("LEFT JOIN users filter_requester ON filter_requester.id = er.requester_id").
+			Joins(
+				"LEFT JOIN users filter_member ON er.scope_type = ? AND CAST(filter_member.id AS TEXT) = er.scope_id",
+				model.BudgetScopeMember,
+			).
+			Joins(
+				"LEFT JOIN studios filter_studio ON er.scope_type = ? AND CAST(filter_studio.id AS TEXT) = er.scope_id",
+				model.BudgetScopeStudio,
+			).
+			Joins(
+				"LEFT JOIN departments filter_dept ON er.scope_type IN ? AND CAST(filter_dept.dept_id AS TEXT) = er.scope_id",
+				[]string{model.BudgetScopeDeptDaily, model.BudgetScopeDeptService},
+			).
+			Where(
+				"filter_requester.name "+like+" ? OR "+
+					"filter_member.name "+like+" ? OR "+
+					"filter_studio.name "+like+" ? OR "+
+					"filter_dept.dept_name "+like+" ? OR "+
+					"er.scope_id "+like+" ? OR "+
+					"er.reason "+like+" ? OR "+
+					"CAST(er.id AS TEXT) "+like+" ? OR "+
+					"CAST(er.requester_id AS TEXT) "+like+" ?",
+				pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern,
+			)
 	}
 	return q
+}
+
+func expansionKeywordLikeOp(q *gorm.DB) string {
+	if q != nil && q.Dialector != nil && q.Dialector.Name() == "sqlite" {
+		return "LIKE"
+	}
+	return "ILIKE"
 }
 
 // ListPendingForApprover 查询待某级别审批的申请（工作室负责人/平台 admin 按级别过滤）。

@@ -75,7 +75,7 @@
       <div class="tier-limits-editor__heading">
         <div>
           <h3>等级子预算</h3>
-          <p>按月限制模型等级；未配置则只受总预算约束。</p>
+          <p>默认按月限制；日/周在高级设置。未配置则只受总预算约束。</p>
         </div>
       </div>
 
@@ -140,11 +140,14 @@
         @click="advancedOpen = !advancedOpen"
       >
         <span>高级设置</span>
-        <span class="tier-limits-editor__advanced-hint">日/周上限 · 调整原因</span>
+        <span class="tier-limits-editor__advanced-hint">总预算日/周 · 等级日/周 · 调整原因</span>
         <span aria-hidden="true">{{ advancedOpen ? '收起' : '展开' }}</span>
       </button>
 
       <div v-if="advancedOpen" class="tier-limits-editor__advanced-body">
+        <div class="tier-limits-editor__advanced-block-head">
+          <strong>总预算 · 日/周</strong>
+        </div>
         <div class="tier-limits-editor__advanced-grid">
           <div class="tier-limits-editor__limit-card">
             <div class="tier-limits-editor__limit-head">
@@ -230,6 +233,99 @@
                 </el-button>
               </template>
             </div>
+          </div>
+        </div>
+
+        <div class="tier-limits-editor__advanced-block" data-test="tier-period-advanced">
+          <div class="tier-limits-editor__advanced-block-head">
+            <div>
+              <strong>等级子预算 · 日/周</strong>
+              <p>未配置则该周期只受总预算约束；与月度子预算同一套语义。</p>
+            </div>
+          </div>
+
+          <div class="tier-limits-editor__tier-period-list">
+            <article
+              v-for="tier in tiers"
+              :key="`advanced-${tier.id}`"
+              class="tier-limits-editor__tier-period-row"
+            >
+              <div class="tier-limits-editor__tier-meta">
+                <TierColorDot :color="tier.color" />
+                <div>
+                  <strong>{{ tier.name }}</strong>
+                  <span>{{ tier.enabled ? '可配置' : '已停用' }}</span>
+                </div>
+              </div>
+
+              <div class="tier-limits-editor__tier-period-controls">
+                <div class="tier-limits-editor__tier-period-field">
+                  <label>日</label>
+                  <el-input
+                    :model-value="tierPeriodDraft(tier.id, 'daily').value"
+                    inputmode="decimal"
+                    :disabled="disabled || !tier.enabled"
+                    placeholder="未配置"
+                    :data-test="`tier-${tier.id}-daily-input`"
+                    @update:model-value="updateTier(tier.id, 'daily', {
+                      configured: true,
+                      value: String($event),
+                    })"
+                  >
+                    <template #prefix>$</template>
+                  </el-input>
+                  <el-button
+                    plain
+                    :data-test="`tier-${tier.id}-daily-zero`"
+                    :disabled="disabled || !tier.enabled"
+                    @click="updateTier(tier.id, 'daily', { configured: true, value: '0' })"
+                  >
+                    $0
+                  </el-button>
+                  <el-button
+                    plain
+                    :data-test="`tier-${tier.id}-daily-unconfigure`"
+                    :disabled="disabled || !tier.enabled"
+                    @click="updateTier(tier.id, 'daily', { configured: false, value: '' })"
+                  >
+                    移除
+                  </el-button>
+                </div>
+
+                <div class="tier-limits-editor__tier-period-field">
+                  <label>周</label>
+                  <el-input
+                    :model-value="tierPeriodDraft(tier.id, 'weekly').value"
+                    inputmode="decimal"
+                    :disabled="disabled || !tier.enabled"
+                    placeholder="未配置"
+                    :data-test="`tier-${tier.id}-weekly-input`"
+                    @update:model-value="updateTier(tier.id, 'weekly', {
+                      configured: true,
+                      value: String($event),
+                    })"
+                  >
+                    <template #prefix>$</template>
+                  </el-input>
+                  <el-button
+                    plain
+                    :data-test="`tier-${tier.id}-weekly-zero`"
+                    :disabled="disabled || !tier.enabled"
+                    @click="updateTier(tier.id, 'weekly', { configured: true, value: '0' })"
+                  >
+                    $0
+                  </el-button>
+                  <el-button
+                    plain
+                    :data-test="`tier-${tier.id}-weekly-unconfigure`"
+                    :disabled="disabled || !tier.enabled"
+                    @click="updateTier(tier.id, 'weekly', { configured: false, value: '' })"
+                  >
+                    移除
+                  </el-button>
+                </div>
+              </div>
+            </article>
           </div>
         </div>
 
@@ -364,6 +460,10 @@ function updateTier(
 
 function tierDraft(tierId: string) {
   return props.modelValue.tiers[tierId].monthly
+}
+
+function tierPeriodDraft(tierId: string, period: ExpansionPeriod) {
+  return props.modelValue.tiers[tierId][period]
 }
 
 function tierLimit(tierId: string): BudgetTierLimit | undefined {
@@ -636,10 +736,76 @@ p,
   border-top: 1px solid #e2e8f0;
 }
 
+.tier-limits-editor__advanced-block-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tier-limits-editor__advanced-block-head strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.tier-limits-editor__advanced-block-head p {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.tier-limits-editor__advanced-block {
+  display: grid;
+  gap: 10px;
+  padding-top: 4px;
+  border-top: 1px dashed #e2e8f0;
+}
+
 .tier-limits-editor__advanced-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
+}
+
+.tier-limits-editor__tier-period-list {
+  display: grid;
+}
+
+.tier-limits-editor__tier-period-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.45fr) minmax(0, 1.55fr);
+  align-items: start;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid #f1f5f9;
+}
+
+.tier-limits-editor__tier-period-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.tier-limits-editor__tier-period-controls {
+  display: grid;
+  gap: 8px;
+}
+
+.tier-limits-editor__tier-period-field {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) max-content max-content;
+  align-items: center;
+  gap: 8px;
+}
+
+.tier-limits-editor__tier-period-field label {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tier-limits-editor__tier-period-field :deep(.el-button) {
+  padding: 0 10px;
+  margin-left: 0;
 }
 
 .tier-limits-editor__limit-card {
@@ -736,7 +902,8 @@ p,
 
 @media (max-width: 760px) {
   .tier-limits-editor__tier-row,
-  .tier-limits-editor__advanced-grid {
+  .tier-limits-editor__advanced-grid,
+  .tier-limits-editor__tier-period-row {
     grid-template-columns: 1fr;
   }
 
@@ -745,7 +912,8 @@ p,
     flex-wrap: wrap;
   }
 
-  .tier-limits-editor__limit-control {
+  .tier-limits-editor__limit-control,
+  .tier-limits-editor__tier-period-field {
     grid-template-columns: 1fr;
   }
 }

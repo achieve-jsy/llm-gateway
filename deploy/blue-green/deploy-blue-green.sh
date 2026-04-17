@@ -106,9 +106,24 @@ supports_budget_v2() {
     local color="$1" port payload
     port=$(get_gateway_port "$color")
     payload=$(curl -fsS --max-time 5 "http://localhost:${port}/ready" 2>/dev/null) || return 1
-    echo "$payload" | jq -e \
-        '.capabilities.tier_snapshot_schema == 1 and .capabilities.redis_v2 == true' \
-        >/dev/null 2>&1
+    # jq 优先；生产机未必装 jq，回退 python3，避免预检因缺工具直接中断部署。
+    if command -v jq >/dev/null 2>&1; then
+        echo "$payload" | jq -e \
+            '.capabilities.tier_snapshot_schema == 1 and .capabilities.redis_v2 == true' \
+            >/dev/null 2>&1
+        return $?
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        printf '%s' "$payload" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+c = d.get("capabilities") or {}
+sys.exit(0 if c.get("tier_snapshot_schema") == 1 and c.get("redis_v2") is True else 1)
+'
+        return $?
+    fi
+    log "WARN: neither jq nor python3 available; treating active as budget-v2 unsupported"
+    return 1
 }
 
 force_safe_budget_mode() {
@@ -194,7 +209,6 @@ main() {
     log "  NGINX_UPSTREAM=${NGINX_UPSTREAM}  DRAIN_TIMEOUT=${DRAIN_TIMEOUT}s"
     log "═══════════════════════════════════════════════════════════"
 
-    command -v jq >/dev/null 2>&1 || die "jq is required for budget capability preflight"
     if [ "$active" != "none" ] && ! supports_budget_v2 "$active"; then
         log "Active ${active} does not advertise tier snapshot schema 1 / Redis v2."
         force_safe_budget_mode

@@ -713,6 +713,23 @@ func TestShouldBridgeChatToResponses(t *testing.T) {
 		Tools:     []map[string]any{{"type": "function"}},
 		Reasoning: &core.Reasoning{Effort: "medium"},
 	}))
+
+	// Azure 自定义部署名：4476-gpt-56luna-xlab（gpt-5.6 luna）
+	assert.True(t, openai.ShouldBridgeChatToResponses(&core.ChatRequest{
+		Model:     "4476-gpt-56luna-xlab",
+		Tools:     []map[string]any{{"type": "function"}},
+		Reasoning: &core.Reasoning{Effort: "medium"},
+	}), "compact Azure deployment name must bridge tools+effort")
+	assert.True(t, openai.ShouldBridgeChatToResponsesForProvider("azure", &core.ChatRequest{
+		Model:     "my-custom-deployment",
+		Tools:     []map[string]any{{"type": "function"}},
+		Reasoning: &core.Reasoning{Effort: "low"},
+	}), "Azure provider must bridge tools+effort even when name has no gpt-5 token")
+	assert.False(t, openai.ShouldBridgeChatToResponsesForProvider("openai", &core.ChatRequest{
+		Model:     "my-custom-deployment",
+		Tools:     []map[string]any{{"type": "function"}},
+		Reasoning: &core.Reasoning{Effort: "low"},
+	}), "non-Azure providers still require recognizable gpt-5.4+ names")
 }
 
 func mustExtraFields(t *testing.T, fields map[string]any) core.UnknownJSONFields {

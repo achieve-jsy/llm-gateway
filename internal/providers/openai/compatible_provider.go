@@ -94,7 +94,8 @@ func (p *CompatibleProvider) ChatCompletion(ctx context.Context, req *core.ChatR
 		return nil, core.NewInvalidRequestError("chat request is required", nil)
 	}
 	// LiteLLM 对齐：gpt-5.4+ + tools + reasoning_effort → 自动桥到 /responses
-	if ShouldBridgeChatToResponses(req) {
+	// Azure 自定义部署名再额外兜底（见 ShouldBridgeChatToResponsesForProvider）。
+	if ShouldBridgeChatToResponsesForProvider(p.providerName, req) {
 		slog.InfoContext(ctx, "chat via responses bridge",
 			"provider", p.providerName,
 			"model", req.Model,
@@ -137,7 +138,7 @@ func (p *CompatibleProvider) StreamChatCompletion(ctx context.Context, req *core
 		return nil, core.NewInvalidRequestError("chat request is required", nil)
 	}
 	streamReq := req.WithStreaming()
-	if ShouldBridgeChatToResponses(streamReq) {
+	if ShouldBridgeChatToResponsesForProvider(p.providerName, streamReq) {
 		slog.InfoContext(ctx, "stream chat via responses bridge",
 			"provider", p.providerName,
 			"model", streamReq.Model,

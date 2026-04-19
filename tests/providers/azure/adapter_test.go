@@ -184,6 +184,41 @@ func TestChatCompletion_AzureSanitizesReasoningAliases(t *testing.T) {
 }
 
 // Azure 新模型（含自定义部署名）拒绝 max_tokens，必须改写为 max_completion_tokens。
+func TestChatCompletion_AzureCustomDeploymentBridgesToolsAndReasoning(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	fakeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "resp_1", "object": "response", "model": "4476-gpt-56luna-xlab", "status": "completed", "created_at": 1700000000,
+			"output": []map[string]any{{
+				"id": "msg_1", "type": "message", "status": "completed", "role": "assistant",
+				"content": []map[string]any{{"type": "output_text", "text": "ok"}},
+			}},
+			"usage": map[string]any{"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
+		})
+	}))
+	defer fakeServer.Close()
+
+	p := azure.New(providers.ProviderConfig{
+		APIKey:  "test-key",
+		BaseURL: fakeServer.URL,
+	}, providers.ProviderOptions{})
+
+	_, err := p.ChatCompletion(context.Background(), &core.ChatRequest{
+		Model:     "4476-gpt-56luna-xlab",
+		Messages:  []core.Message{{Role: "user", Content: "hi"}},
+		Tools:     []map[string]any{{"type": "function", "function": map[string]any{"name": "ping"}}},
+		Reasoning: &core.Reasoning{Effort: "medium"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "/openai/v1/responses", gotPath, "must bridge to Responses, not Chat Completions")
+	assert.Equal(t, "4476-gpt-56luna-xlab", gotBody["model"])
+}
+
+// Azure 新模型（含自定义部署名）拒绝 max_tokens，必须改写为 max_completion_tokens。
 func TestChatCompletion_AzureRewritesMaxTokensEvenForCustomDeploymentName(t *testing.T) {
 	var gotBody map[string]any
 	fakeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

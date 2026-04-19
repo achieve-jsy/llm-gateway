@@ -386,6 +386,18 @@ func flattenAnthropicBlocksToMessages(role string, blocks []AnthropicContentBloc
 		}
 	}
 
+	// For assistant messages: tool_calls are bundled into the single assistant message.
+	// For user messages that mix tool_result blocks with text/image blocks, OpenAI/Azure
+	// requires all tool role messages to appear BEFORE any following user text message.
+	// Emitting text first would produce an invalid sequence:
+	//   assistant (tool_calls) → user (text) → tool
+	// instead of the required:
+	//   assistant (tool_calls) → tool → user (text)
+	// So always emit tool results first, then the text/image content message.
+
+	// Emit tool result messages first (only present on user-role messages).
+	result = append(result, toolResults...)
+
 	// Build the primary message (assistant with tool_calls, or user with content).
 	// 单 text part 若带 cache_control，必须保留为 ContentPart，不能折叠成 string（否则 ExtraFields 丢失）。
 	if len(textParts) > 0 || len(toolCalls) > 0 {
@@ -401,8 +413,6 @@ func flattenAnthropicBlocksToMessages(role string, blocks []AnthropicContentBloc
 		result = append(result, msg)
 	}
 
-	// Append tool result messages after the primary message
-	result = append(result, toolResults...)
 	return result
 }
 

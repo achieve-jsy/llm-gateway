@@ -251,6 +251,7 @@ func (h *ModelTierHandler) SetGroupBudgetTier(c *gin.Context) {
 	}
 	var request struct {
 		ModelTierID *uuid.UUID `json:"model_tier_id"`
+		Reason      string     `json:"reason"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		writeModelTierError(c, service.ErrInvalidModelTier)
@@ -261,7 +262,7 @@ func (h *ModelTierHandler) SetGroupBudgetTier(c *gin.Context) {
 		return
 	}
 	before := h.getGroupForAudit(c.Request.Context(), uint(groupID64), "group_tier_before")
-	if err := h.groupService.SetBudgetTier(c.Request.Context(), uint(groupID64), request.ModelTierID, "设置模型组等级"); err != nil {
+	if err := h.groupService.SetBudgetTier(c.Request.Context(), uint(groupID64), request.ModelTierID, request.Reason); err != nil {
 		if errors.Is(err, service.ErrBudgetConfigSyncPending) {
 			after := h.getGroupForAudit(c.Request.Context(), uint(groupID64), "group_tier_after_sync_pending")
 			audit.SetBeforeAfter(c, before, after)
@@ -283,6 +284,7 @@ func (h *ModelTierHandler) SetGroupBudgetTierBatch(c *gin.Context) {
 	var request struct {
 		GroupIDs    []uint     `json:"group_ids" binding:"required,min=1"`
 		ModelTierID *uuid.UUID `json:"model_tier_id"`
+		Reason      string     `json:"reason"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		writeModelTierError(c, service.ErrInvalidModelTier)
@@ -297,7 +299,7 @@ func (h *ModelTierHandler) SetGroupBudgetTierBatch(c *gin.Context) {
 		group := h.getGroupForAudit(c.Request.Context(), groupID, "group_batch_before")
 		before = append(before, group)
 	}
-	if err := h.groupService.SetBudgetTierBatch(c.Request.Context(), request.GroupIDs, request.ModelTierID, "批量调整模型等级"); err != nil {
+	if err := h.groupService.SetBudgetTierBatch(c.Request.Context(), request.GroupIDs, request.ModelTierID, request.Reason); err != nil {
 		if errors.Is(err, service.ErrBudgetConfigSyncPending) {
 			after := make([]*model.Group, 0, len(request.GroupIDs))
 			for _, groupID := range request.GroupIDs {

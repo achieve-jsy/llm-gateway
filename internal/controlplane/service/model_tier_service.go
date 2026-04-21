@@ -105,6 +105,9 @@ func (s *ModelTierService) Get(ctx context.Context, id uuid.UUID) (*model.ModelT
 }
 
 func (s *ModelTierService) Create(ctx context.Context, input CreateModelTierInput) (*model.ModelTier, error) {
+	if err := validateReason(input.Reason); err != nil {
+		return nil, err
+	}
 	name, color, err := validateTierValues(input.Name, input.Color)
 	if err != nil {
 		return nil, err
@@ -128,6 +131,9 @@ func (s *ModelTierService) Create(ctx context.Context, input CreateModelTierInpu
 }
 
 func (s *ModelTierService) Update(ctx context.Context, id uuid.UUID, input UpdateModelTierInput) (*model.ModelTier, error) {
+	if err := validateReason(input.Reason); err != nil {
+		return nil, err
+	}
 	tier, err := s.Get(ctx, id)
 	if err != nil {
 		return nil, err
@@ -165,6 +171,9 @@ func (s *ModelTierService) Update(ctx context.Context, id uuid.UUID, input Updat
 }
 
 func (s *ModelTierService) SetEnabled(ctx context.Context, id uuid.UUID, enabled bool, reason string) (*model.ModelTier, error) {
+	if err := validateReason(reason); err != nil {
+		return nil, err
+	}
 	tier, err := s.Get(ctx, id)
 	if err != nil {
 		return nil, err
@@ -189,6 +198,9 @@ func (s *ModelTierService) SetEnabled(ctx context.Context, id uuid.UUID, enabled
 }
 
 func (s *ModelTierService) Archive(ctx context.Context, id uuid.UUID, reason string) (*model.ModelTier, error) {
+	if err := validateReason(reason); err != nil {
+		return nil, err
+	}
 	tier, err := s.Get(ctx, id)
 	if err != nil {
 		return nil, err
@@ -203,6 +215,9 @@ func (s *ModelTierService) Archive(ctx context.Context, id uuid.UUID, reason str
 }
 
 func (s *ModelTierService) Delete(ctx context.Context, id uuid.UUID, reason string) error {
+	if err := validateReason(reason); err != nil {
+		return err
+	}
 	if _, err := s.Get(ctx, id); err != nil {
 		return err
 	}
@@ -220,8 +235,8 @@ func (s *ModelTierService) Delete(ctx context.Context, id uuid.UUID, reason stri
 }
 
 func (s *ModelTierService) Reorder(ctx context.Context, ids []uuid.UUID, reason string) error {
-	if strings.TrimSpace(reason) == "" {
-		return ErrReasonRequired
+	if err := validateReason(reason); err != nil {
+		return err
 	}
 	tiers, err := s.repo.List(ctx, false)
 	if err != nil {
@@ -259,6 +274,13 @@ func (s *ModelTierService) ensureUniqueName(ctx context.Context, name string, ex
 		if tier.ID != except && tier.ArchivedAt == nil && strings.EqualFold(tier.Name, name) {
 			return ErrModelTierNameExists
 		}
+	}
+	return nil
+}
+
+func validateReason(reason string) error {
+	if strings.TrimSpace(reason) == "" {
+		return ErrReasonRequired
 	}
 	return nil
 }

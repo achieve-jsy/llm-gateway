@@ -31,8 +31,8 @@
       <el-table-column prop="history_count" label="历史引用" width="100" />
       <el-table-column label="排序" width="110">
         <template #default="{ row, $index }">
-          <el-button text aria-label="上移" :disabled="row.archived_at || $index === 0" @click="move($index, -1)">↑</el-button>
-          <el-button text aria-label="下移" :disabled="row.archived_at || $index === tiers.length - 1" @click="move($index, 1)">↓</el-button>
+          <el-button text aria-label="上移" :disabled="!canMove($index, -1)" @click="move($index, -1)">↑</el-button>
+          <el-button text aria-label="下移" :disabled="!canMove($index, 1)" @click="move($index, 1)">↓</el-button>
         </template>
       </el-table-column>
       <el-table-column label="操作" width="280" fixed="right">
@@ -117,7 +117,11 @@ import type { GroupListItem } from '@/types/group'
 import type { ModelTier } from '@/types/model-tier'
 
 const tiersRaw = ref<ModelTier[]>([])
-const tiers = computed(() => [...tiersRaw.value].sort((a, b) => a.sort_order - b.sort_order))
+const tiers = computed(() => [...tiersRaw.value].sort((a, b) => {
+  const archivedDelta = Number(Boolean(a.archived_at)) - Number(Boolean(b.archived_at))
+  if (archivedDelta !== 0) return archivedDelta
+  return a.sort_order - b.sort_order
+}))
 /** 打开弹窗时拉取的全量目录，保存时用于计算取消勾选 */
 const groupsCatalog = ref<GroupListItem[]>([])
 /** 当前展示数据源（全量或搜索结果） */
@@ -176,11 +180,23 @@ async function save() {
     await load()
   } finally { saving.value = false }
 }
+function canMove(index: number, offset: number) {
+  const current = tiers.value[index]
+  const target = tiers.value[index + offset]
+  return Boolean(current && target && !current.archived_at && !target.archived_at)
+}
 async function move(index: number, offset: number) {
-  const copy = [...tiersRaw.value]
-  ;[copy[index], copy[index + offset]] = [copy[index + offset], copy[index]]
-  await reorderModelTiers(copy.map(item => item.id), '调整模型等级顺序')
-  tiersRaw.value = copy
+  const sorted = [...tiers.value]
+  const targetIndex = index + offset
+  if (targetIndex < 0 || targetIndex >= sorted.length) return
+  if (sorted[index]?.archived_at || sorted[targetIndex]?.archived_at) return
+  ;[sorted[index], sorted[targetIndex]] = [sorted[targetIndex], sorted[index]]
+  await reorderModelTiers(sorted.filter(item => !item.archived_at).map(item => item.id), '调整模型等级顺序')
+  let nextActiveOrder = 0
+  tiersRaw.value = sorted.map((item) => {
+    if (item.archived_at) return item
+    return { ...item, sort_order: nextActiveOrder++ }
+  })
 }
 async function toggle(row: ModelTier) {
   await ElMessageBox.confirm(`确定${row.enabled ? '停用' : '启用'}等级「${row.name}」？`, '确认操作', { type: 'warning' })
@@ -284,7 +300,7 @@ async function saveGroups(clear = false) {
   try {
     const tierId = selectedTier.value.id
     if (clear) {
-      await setGroupBudgetTierBatch(selectedGroups.value.map(g => g.id), null)
+      await setGroupBudgetTierBatch(selectedGroups.value.map(g => g.id), null, '清除模型组等级关联')
     } else {
       const toAssign = selectedGroups.value.map(g => g.id)
       // 取消勾选：基于全量目录，避免搜索态漏清
@@ -292,10 +308,10 @@ async function saveGroups(clear = false) {
         .filter(g => g.model_tier_id === tierId && !selectedGroups.value.some(sg => sg.id === g.id))
         .map(g => g.id)
       if (toClear.length > 0) {
-        await setGroupBudgetTierBatch(toClear, null)
+        await setGroupBudgetTierBatch(toClear, null, '清除模型组等级关联')
       }
       if (toAssign.length > 0) {
-        await setGroupBudgetTierBatch(toAssign, tierId)
+        await setGroupBudgetTierBatch(toAssign, tierId, '批量调整模型等级')
       }
     }
     groupsVisible.value = false

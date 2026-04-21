@@ -45,6 +45,9 @@ func (s *GroupService) WithModelTierRepo(repo ModelTierRepository) *GroupService
 }
 
 func (s *GroupService) SetBudgetTier(ctx context.Context, groupID uint, tierID *uuid.UUID, reason string) error {
+	if err := validateReason(reason); err != nil {
+		return err
+	}
 	if err := s.validateBudgetTier(ctx, tierID); err != nil {
 		return err
 	}
@@ -65,6 +68,9 @@ func (s *GroupService) SetBudgetTier(ctx context.Context, groupID uint, tierID *
 }
 
 func (s *GroupService) SetBudgetTierBatch(ctx context.Context, groupIDs []uint, tierID *uuid.UUID, reason string) error {
+	if err := validateReason(reason); err != nil {
+		return err
+	}
 	if err := s.validateBudgetTier(ctx, tierID); err != nil {
 		return err
 	}

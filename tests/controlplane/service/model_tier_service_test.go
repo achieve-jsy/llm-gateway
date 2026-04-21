@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
@@ -50,9 +51,12 @@ func (f *fakeModelTierRepo) Create(_ context.Context, tier *model.ModelTier) err
 func (f *fakeModelTierRepo) FindByID(_ context.Context, id uuid.UUID) (*model.ModelTier, error) {
 	return f.tiers[id], nil
 }
-func (f *fakeModelTierRepo) List(_ context.Context, _ bool) ([]model.ModelTier, error) {
+func (f *fakeModelTierRepo) List(_ context.Context, includeArchived bool) ([]model.ModelTier, error) {
 	out := make([]model.ModelTier, 0, len(f.tiers))
 	for _, tier := range f.tiers {
+		if !includeArchived && tier.ArchivedAt != nil {
+			continue
+		}
 		out = append(out, *tier)
 	}
 	return out, nil
@@ -152,6 +156,18 @@ func TestModelTierServiceReorderRequiresExactActiveSet(t *testing.T) {
 
 	err := service.NewModelTierService(repo).Reorder(context.Background(), []uuid.UUID{a, a, c}, "test")
 	require.ErrorIs(t, err, service.ErrInvalidTierOrder)
+}
+
+func TestModelTierServiceReorderIgnoresArchivedTiers(t *testing.T) {
+	repo := newFakeModelTierRepo()
+	a, b, archived := uuid.New(), uuid.New(), uuid.New()
+	archivedAt := time.Now().UTC()
+	repo.tiers[a] = &model.ModelTier{ID: a}
+	repo.tiers[b] = &model.ModelTier{ID: b}
+	repo.tiers[archived] = &model.ModelTier{ID: archived, ArchivedAt: &archivedAt}
+
+	err := service.NewModelTierService(repo).Reorder(context.Background(), []uuid.UUID{b, a}, "test")
+	require.NoError(t, err)
 }
 
 func TestModelTierWritesRequireNonEmptyReason(t *testing.T) {

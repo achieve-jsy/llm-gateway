@@ -233,6 +233,23 @@ describe('ModelTierListPage', () => {
       expect(newOrder[0]).toBe('tier-2')
       expect(newOrder[1]).toBe('tier-1')
     })
+
+    it('归档等级不参与 reorderModelTiers 提交', async () => {
+      mockListModelTiers.mockResolvedValue([
+        makeTier({ id: 'tier-1', name: 'Standard', sort_order: 0 }),
+        makeTier({ id: 'tier-2', name: 'Premium', sort_order: 1 }),
+        makeTier({ id: 'archived-tier', name: 'Archived', sort_order: 2, archived_at: '2026-03-01T00:00:00Z' }),
+      ])
+      const wrapper = mountPage()
+      await flushPromises()
+
+      const downButtons = wrapper.findAll('[aria-label="下移"]')
+      await downButtons[0].trigger('click')
+      await flushPromises()
+
+      expect(mockReorderModelTiers).toHaveBeenCalledOnce()
+      expect(mockReorderModelTiers.mock.calls[0][0]).toEqual(['tier-2', 'tier-1'])
+    })
   })
 
   // TDD: The component's load() uses try/finally without catch,

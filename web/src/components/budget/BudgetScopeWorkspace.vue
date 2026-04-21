@@ -245,7 +245,12 @@
               <strong>成员额度</strong>
               <p>默认走部门个人 Key 共享池；需要单独限制时再设独立额度。</p>
             </div>
-            <span v-if="memberRows.length" class="member-count">{{ memberRows.length }} 人</span>
+            <div v-if="memberRows.length" class="member-header-meta">
+              <span class="member-count">{{ memberRows.length }} 人</span>
+              <el-button size="small" plain :disabled="selectedMemberRows.length === 0" data-test="member-batch-quota" @click="emit('batch', selectedMemberRows, 'absolute')">
+                批量设置额度{{ selectedMemberRows.length ? `（${selectedMemberRows.length}）` : '' }}
+              </el-button>
+            </div>
           </div>
           <div v-if="membersLoading" class="member-empty-state" data-test="dept-members-loading">
             <p>正在加载部门成员…</p>
@@ -258,6 +263,17 @@
             <table class="proto-native-table member-table" data-test="dept-members-table">
               <thead>
                 <tr>
+                  <th class="center" style="width:42px">
+                    <input
+                      class="proto-check"
+                      type="checkbox"
+                      :checked="allMembersSelected"
+                      :indeterminate.prop="someMembersSelected && !allMembersSelected"
+                      aria-label="全选成员"
+                      data-test="member-select-all"
+                      @change="toggleAllMembers(($event.target as HTMLInputElement).checked)"
+                    >
+                  </th>
                   <th>成员</th>
                   <th>预算来源</th>
                   <th>等级预算</th>
@@ -270,6 +286,16 @@
                   :key="row.allocation_id || row.scope_id"
                   :class="{ 'is-shared-pool': row.isDefaultPool }"
                 >
+                  <td class="center">
+                    <input
+                      class="proto-check"
+                      type="checkbox"
+                      :checked="isMemberSelected(row)"
+                      :aria-label="`选择 ${row.label || row.scope_id}`"
+                      data-test="member-select-row"
+                      @change="toggleMemberRow(row, ($event.target as HTMLInputElement).checked)"
+                    >
+                  </td>
                   <td><strong class="proto-scope-name">{{ row.label || row.scope_id }}</strong></td>
                   <td>
                     <span v-if="row.isDefaultPool" class="proto-tag gray">共享预算池</span>
@@ -302,6 +328,24 @@
                 </tr>
               </tbody>
             </table>
+          </div>
+          <div v-if="selectedMemberRows.length" class="selection-bar show member-selection-bar">
+            <BudgetSelectionBar
+              :count="selectedMemberRows.length"
+              remaining-text="将为所选成员设置个人独立额度"
+              @clear="clearMemberSelection"
+            >
+              <template #actions>
+                <el-button size="small" plain data-test="member-batch-absolute" @click="emit('batch', selectedMemberRows, 'absolute')">固定额度</el-button>
+                <el-button
+                  size="small"
+                  plain
+                  data-test="member-batch-percentage"
+                  :disabled="selectedMembersNeedFixedAmount"
+                  @click="emit('batch', selectedMemberRows, 'percentage')"
+                >按比例增减</el-button>
+              </template>
+            </BudgetSelectionBar>
           </div>
         </template>
 
@@ -385,6 +429,7 @@ const emit = defineEmits<{
 const orgStore = useOrgStore()
 const activePool = ref<'daily' | 'service'>('daily')
 const selectedRows = ref<BudgetItem[]>([])
+const selectedMemberRows = ref<MemberBudgetRow[]>([])
 const deptMembers = ref<DeptMember[]>([])
 const membersLoading = ref(false)
 const fixedPool = computed(() => props.scope.type === 'dept' && !!props.pool)
@@ -525,6 +570,9 @@ const summaryPercent = computed(() => summaryUsageLimit.value > 0
 const overAllocatedAmount = computed(() => Math.max(allocatedAmount.value - Number(summaryLimit.value || 0), 0))
 const allSelected = computed(() => visibleRows.value.length > 0 && selectedRows.value.length === visibleRows.value.length)
 const someSelected = computed(() => selectedRows.value.length > 0 && selectedRows.value.length < visibleRows.value.length)
+const allMembersSelected = computed(() => memberRows.value.length > 0 && selectedMemberRows.value.length === memberRows.value.length)
+const someMembersSelected = computed(() => selectedMemberRows.value.length > 0 && selectedMemberRows.value.length < memberRows.value.length)
+const selectedMembersNeedFixedAmount = computed(() => selectedMemberRows.value.some(row => !row.allocation_id))
 
 function tierTags(row: BudgetItem): TierBudgetTagItem[] {
   return props.tierItems
@@ -562,6 +610,10 @@ function clearSelection(): void {
   selectedRows.value = []
 }
 
+function clearMemberSelection(): void {
+  selectedMemberRows.value = []
+}
+
 function rowKey(row: BudgetItem): string {
   return row.allocation_id || `${row.scope_type}:${row.scope_id}`
 }
@@ -569,6 +621,10 @@ function rowKey(row: BudgetItem): string {
 function isSelected(row: BudgetItem): boolean {
   const key = rowKey(row)
   return selectedRows.value.some(item => rowKey(item) === key)
+}
+
+function isMemberSelected(row: MemberBudgetRow): boolean {
+  return selectedMemberRows.value.some(item => item.scope_id === row.scope_id)
 }
 
 function toggleRow(row: BudgetItem, checked: boolean): void {
@@ -581,6 +637,21 @@ function toggleRow(row: BudgetItem, checked: boolean): void {
 function toggleAll(checked: boolean): void {
   selectedRows.value = checked ? [...visibleRows.value] : []
 }
+
+function toggleMemberRow(row: MemberBudgetRow, checked: boolean): void {
+  selectedMemberRows.value = checked
+    ? [...selectedMemberRows.value.filter(item => item.scope_id !== row.scope_id), row]
+    : selectedMemberRows.value.filter(item => item.scope_id !== row.scope_id)
+}
+
+function toggleAllMembers(checked: boolean): void {
+  selectedMemberRows.value = checked ? [...memberRows.value] : []
+}
+
+watch(memberRows, (rows) => {
+  const allowed = new Set(rows.map(row => row.scope_id))
+  selectedMemberRows.value = selectedMemberRows.value.filter(row => allowed.has(row.scope_id))
+})
 
 function usagePercent(row: BudgetItem): number {
   return Math.min(100, Math.round((row.used_ratio || 0) * 100))
@@ -1003,6 +1074,18 @@ function progressColor(ratio = 0): string {
   flex-shrink: 0;
   color: var(--text-secondary);
   font-size: var(--font-size-sm);
+}
+
+.member-header-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.member-selection-bar {
+  margin-top: var(--space-3);
 }
 
 .budget-panel__header p {

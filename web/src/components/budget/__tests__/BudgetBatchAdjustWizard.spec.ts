@@ -4,6 +4,7 @@ import { nextTick } from 'vue'
 import ElementPlus from 'element-plus'
 import BudgetBatchAdjustWizard from '../BudgetBatchAdjustWizard.vue'
 import type { BudgetItem } from '@/types/budget'
+import { previewTotalBudgetBatch } from '@/services/control-plane'
 
 vi.mock('@/services/control-plane', () => ({
   previewTotalBudgetBatch: vi.fn(),
@@ -63,5 +64,37 @@ describe('BudgetBatchAdjustWizard', () => {
     await nextTick()
 
     expect(wrapper.find('.el-radio-button.is-active').text()).toContain('等级额度')
+  })
+
+  it('未创建独立额度的成员批量设置时使用 scope 作为 item_id', async () => {
+    vi.mocked(previewTotalBudgetBatch).mockResolvedValueOnce({
+      items: [{
+        item_id: 'member:user-b',
+        target_limit_usd: '120.000000',
+        impact: {
+          before_limit_usd: '-1.000000', after_limit_usd: '120.000000', current_used_usd: '0.000000',
+          below_used: false, zero_block: false, affected_members: 0, affected_groups: [], replaces_pending_schedule: false,
+          preview_version: 'pv-1', stale: false, data_as_of: '2026-07-17T00:00:00Z',
+        },
+      }],
+    })
+    const member = {
+      scope_type: 'member', scope_id: 'user-b', label: '李四', amount_usd: 0,
+      daily_amount_usd: -1, weekly_amount_usd: -1, period: '', enabled: true, used_usd: 0, used_ratio: 0,
+    } as BudgetItem
+    const wrapper = mount(BudgetBatchAdjustWizard, {
+      props: { modelValue: true, items: [member], tiers: [], initialMode: 'absolute' },
+      global: { plugins: [ElementPlus] },
+    })
+
+    await flushPromises()
+    ;(wrapper.vm as any).form.value = '120'
+    ;(wrapper.vm as any).form.reason = '批量成员额度'
+    await (wrapper.vm as any).runPreview()
+    await flushPromises()
+
+    expect(previewTotalBudgetBatch).toHaveBeenCalledWith(expect.objectContaining({
+      items: [{ item_id: 'member:user-b', scope_type: 'member', scope_id: 'user-b' }],
+    }))
   })
 })

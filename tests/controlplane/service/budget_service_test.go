@@ -48,7 +48,7 @@ func TestAdjustBudgetCreatesMemberAllocationOnFirstApply(t *testing.T) {
 		ScopeType: model.BudgetScopeMember, ScopeID: "member-new",
 		PeriodType: budgetdomain.PeriodMonthly, TargetLimitUSD: mustBudgetAmount(t, "200.000000"),
 		EffectiveMode: service.EffectiveImmediate, Reason: "first member quota",
-		ActorID: uuid.New(),
+		ActorID:                uuid.New(),
 		BudgetRiskConfirmation: service.BudgetRiskConfirmation{PreviewVersion: preview.PreviewVersion},
 	})
 	require.NoError(t, err)
@@ -217,6 +217,49 @@ func TestTotalBudgetBatchApplyRollsBackEveryItemWhenOnePreviewIsStale(t *testing
 	var amounts []float64
 	require.NoError(t, db.Table("budget_allocations").Order("scope_id").Pluck("amount_usd", &amounts).Error)
 	require.Equal(t, []float64{100, 100}, amounts)
+}
+
+func TestTotalBudgetBatchCreatesMissingMemberAllocations(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:total-batch-member-create?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	for _, ddl := range []string{
+		`CREATE TABLE budget_allocations (id text primary key, scope_type text, scope_id text, amount_usd real, daily_amount_usd real, weekly_amount_usd real, period text, enabled bool, created_by text, updated_by text, created_at datetime, updated_at datetime, UNIQUE(scope_type,scope_id))`,
+		`CREATE TABLE users (id text primary key, dept_id text)`,
+		`CREATE TABLE departments (id text primary key, dept_id text, studio_id text)`,
+		`CREATE TABLE dept_studio_map (dept_id text, studio_id text)`,
+		`CREATE TABLE model_groups (id text primary key, name text, budget_tier_id text, deleted_at datetime)`,
+	} {
+		require.NoError(t, db.Exec(ddl).Error)
+	}
+	require.NoError(t, db.Exec(`INSERT INTO users(id,dept_id) VALUES (?,?),(?,?)`, "user-a", "dept-1", "user-b", "dept-1").Error)
+	svc := service.NewBudgetService(repository.NewBudgetRepo(db), newFakeAlertRepo())
+	mini := miniredis.RunT(t)
+	svc.SetRedis(redis.NewClient(&redis.Options{Addr: mini.Addr()}))
+	input := service.TotalBatchInput{
+		Operation: "set_fixed", Value: "120", PeriodType: budgetdomain.PeriodMonthly,
+		EffectiveMode: service.EffectiveImmediate, Reason: "batch member quota",
+		ActorID: uuid.New(),
+		Items: []service.TotalBatchObject{
+			{ItemID: "member:user-a", ScopeType: model.BudgetScopeMember, ScopeID: "user-a"},
+			{ItemID: "member:user-b", ScopeType: model.BudgetScopeMember, ScopeID: "user-b"},
+		},
+	}
+
+	preview, err := svc.PreviewTotalBatch(context.Background(), input)
+	require.NoError(t, err)
+	require.Len(t, preview.Items, 2)
+	for _, item := range preview.Items {
+		require.Equal(t, "-1.000000", item.Impact.BeforeLimitUSD)
+		require.Equal(t, "120.000000", item.Impact.AfterLimitUSD)
+	}
+	input.Items[0].PreviewVersion = preview.Items[0].Impact.PreviewVersion
+	input.Items[1].PreviewVersion = preview.Items[1].Impact.PreviewVersion
+
+	_, err = svc.ApplyTotalBatch(context.Background(), input)
+	require.NoError(t, err)
+	var amounts []float64
+	require.NoError(t, db.Table("budget_allocations").Order("scope_id").Pluck("amount_usd", &amounts).Error)
+	require.Equal(t, []float64{120, 120}, amounts)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

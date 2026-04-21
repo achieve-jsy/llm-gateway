@@ -90,7 +90,7 @@ const previewRows = computed(() => {
     }))
   }
   return totalPreviews.value.map(row => ({
-    item_id: row.item.allocation_id,
+    item_id: budgetBatchItemId(row.item),
     display_label: row.item.label || row.item.scope_id,
     old_limit_usd: row.impact.before_limit_usd,
     new_limit_usd: row.impact.after_limit_usd,
@@ -101,6 +101,9 @@ function resolveLabel(itemId: string): string {
   const allocationId = itemId.includes(':') ? itemId.split(':')[0] : itemId
   const item = props.items.find(i => i.allocation_id === allocationId)
   return item?.label || item?.scope_id || allocationId
+}
+function budgetBatchItemId(item: BudgetItem): string {
+  return item.allocation_id || `${item.scope_type}:${item.scope_id}`
 }
 const previewStale = computed(() => form.mode === 'tier' ? !!preview.value?.stale : totalPreviews.value.some(row => row.impact.stale))
 const previewUpdatedAt = computed(() => form.mode === 'tier' ? preview.value?.data_as_of : totalPreviews.value[0]?.impact.data_as_of)
@@ -124,10 +127,10 @@ async function runPreview() {
         operation: form.mode === 'total_fixed' ? 'set_fixed' : 'adjust_percent',
         direction: form.direction, value: Number(form.value).toFixed(6), period_type: form.periodType,
         effective_mode: form.effectiveMode, reason: form.reason.trim(),
-        items: props.items.map(item => ({ item_id: item.allocation_id!, scope_type: item.scope_type, scope_id: item.scope_id })),
+        items: props.items.map(item => ({ item_id: budgetBatchItemId(item), scope_type: item.scope_type, scope_id: item.scope_id })),
       })
       totalPreviews.value = response.items.map(result => ({
-        item: props.items.find(item => item.allocation_id === result.item_id)!,
+        item: props.items.find(item => budgetBatchItemId(item) === result.item_id)!,
         impact: result.impact, target: result.target_limit_usd,
       }))
     } else preview.value = await previewBudgetTierBatch({
@@ -158,7 +161,7 @@ async function apply() {
         confirm_below_used: totalPreviews.value.some(row => row.impact.below_used),
         confirm_replace_schedule: totalPreviews.value.some(row => row.impact.replaces_pending_schedule),
         items: totalPreviews.value.map(row => ({
-          item_id: row.item.allocation_id!, scope_type: row.item.scope_type, scope_id: row.item.scope_id,
+          item_id: budgetBatchItemId(row.item), scope_type: row.item.scope_type, scope_id: row.item.scope_id,
           preview_version: row.impact.preview_version,
         })),
       })
@@ -178,6 +181,8 @@ async function apply() {
     emit('applied')
   } finally { working.value = false }
 }
+
+defineExpose({ form, runPreview })
 </script>
 
 <style scoped>.wizard-body { min-height: 240px; padding: 24px 0; }</style>

@@ -82,13 +82,15 @@ func (s *BudgetService) runTotalBatch(ctx context.Context, tx *gorm.DB, input To
 	result := &TotalBatchResult{Items: make([]TotalBatchItemResult, 0, len(items))}
 	for _, item := range items {
 		allocation, err := s.repo.GetAllocation(item.ScopeType, item.ScopeID)
-		if err != nil || allocation == nil {
-			if err == nil {
-				err = ErrBudgetAllocationNotFound
-			}
+		if err != nil {
 			return nil, err
 		}
-		current := totalAllocationLimit(*allocation, input.PeriodType)
+		current := decimal.NewFromInt(-1)
+		if allocation != nil {
+			current = totalAllocationLimit(*allocation, input.PeriodType)
+		} else if input.Operation != "set_fixed" || input.EffectiveMode == EffectiveNextPeriod {
+			return nil, ErrBudgetAllocationNotFound
+		}
 		target := value
 		if input.Operation == "adjust_percent" {
 			ratio := value.Div(decimal.NewFromInt(100))

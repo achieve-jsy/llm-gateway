@@ -81,12 +81,14 @@ func (rt *RouteTable) ReplaceAll(config *ControlPlaneConfig) {
 			return models[i].Priority < models[j].Priority
 		})
 		newData[g.Name] = &GroupRoutingConfig{
-			GroupID:        g.ID,
-			GroupName:      g.Name,
-			Strategy:       g.Strategy,
-			Enabled:        g.Enabled,
-			TimeoutSeconds: g.TimeoutSeconds,
-			Models:         models,
+			GroupID:          g.ID,
+			GroupName:        g.Name,
+			Strategy:         g.Strategy,
+			Enabled:          g.Enabled,
+			TimeoutSeconds:   g.TimeoutSeconds,
+			StickyEnabled:    g.StickyEnabled,
+			StickyTTLSeconds: g.StickyTTLSeconds,
+			Models:           models,
 		}
 	}
 

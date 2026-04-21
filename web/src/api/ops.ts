@@ -794,7 +794,7 @@ export const opsAPI = {
     get<AlertEvent>(`/api/v1/ops/alert-events/${id}`),
 
   updateAlertEventStatus: (id: number, status: AlertEventStatus) =>
-    put(`/api/v1/ops/alert-events/${id}/status`, { status }),
+    put<AlertEvent>(`/api/v1/ops/alert-events/${id}/status`, { status }),
 
   createAlertSilence: (silence: AlertSilenceCreate) =>
     post<void>('/api/v1/ops/alert-silences', silence),
@@ -982,7 +982,7 @@ export function subscribeQPS(
 
     ws.onerror = () => { /* onClose will fire */ }
 
-    ws.onclose = (event) => {
+    ws.onclose = () => {
       clearTimers()
       ws = null
       if (!shouldReconnect) {

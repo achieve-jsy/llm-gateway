@@ -79,8 +79,7 @@ type ResponsesInputElement struct {
 	Role    string `json:"role,omitempty"`
 	Status  string `json:"status,omitempty"`
 	Content any    `json:"content,omitempty"` // Can be string or []ContentPart
-	//nolint:govet // Intentional duplicate json tag for Swagger docs: content is string OR []ContentPart.
-	ContentSchema []ContentPart `json:"content,omitempty" extensions:"x-oneOf=[{\"type\":\"string\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/definitions/core.ContentPart\"}}]"`
+	ContentSchema []ContentPart `json:"-" swaggerignore:"true"`
 
 	// Function call fields (type="function_call")
 	CallID    string `json:"call_id,omitempty"`
@@ -108,13 +107,15 @@ type ResponsesResponse struct {
 // ResponsesOutputItem represents an item in the output array.
 type ResponsesOutputItem struct {
 	ID        string                 `json:"id"`
-	Type      string                 `json:"type"` // "message", "function_call", etc.
+	Type      string                 `json:"type"` // "message", "function_call", "reasoning", etc.
 	Role      string                 `json:"role,omitempty"`
 	Status    string                 `json:"status,omitempty"`
 	CallID    string                 `json:"call_id,omitempty"`
 	Name      string                 `json:"name,omitempty"`
 	Arguments string                 `json:"arguments,omitempty"`
 	Content   []ResponsesContentItem `json:"content,omitempty"`
+	// Summary holds reasoning summary parts (type="reasoning" items).
+	Summary []ResponsesContentItem `json:"summary,omitempty"`
 }
 
 // ResponsesContentItem represents a content item in the output.

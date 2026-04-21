@@ -32,17 +32,18 @@ type VideoGroupDispatcher interface {
 
 // VideoTaskRecord 创建任务时写入持久化层的完整字段。
 type VideoTaskRecord struct {
-	TaskID       string
-	APIKeyID     string
-	APIKeyName   string
-	APIKeyType   string
-	UserID       string
-	UserName     string
-	Model        string
-	ProviderName string
-	ProviderType string
-	Status       string
-	RequestBody  string
+	TaskID        string
+	APIKeyID      string
+	APIKeyName    string
+	APIKeyType    string
+	UserID        string
+	UserName      string
+	Model         string // 对外组名（不含 :CreateTask 后缀）
+	UpstreamModel string // 上游模型 ID（仅 Redis 热缓存，供 GetTask routed_model）
+	ProviderName  string
+	ProviderType  string
+	Status        string
+	RequestBody   string
 }
 
 type VideoTaskUpdate struct {
@@ -52,10 +53,19 @@ type VideoTaskUpdate struct {
 	ErrorMessage string
 }
 
+// VideoTaskMeta 任务路由与 call_logs 反查结果。
+type VideoTaskMeta struct {
+	Model         string
+	UpstreamModel string
+	ProviderType  string
+	ProviderName  string
+}
+
 // VideoTaskStore 持久化并查询视频任务 → 渠道映射。
 type VideoTaskStore interface {
 	Record(ctx context.Context, rec VideoTaskRecord) error
 	LookupProviderType(ctx context.Context, taskID string) (string, error)
+	LookupTaskMeta(ctx context.Context, taskID string) (*VideoTaskMeta, error)
 	Update(ctx context.Context, taskID string, update VideoTaskUpdate) error
 	UpdateStatus(ctx context.Context, taskID, status string) error
 }
@@ -178,11 +188,16 @@ func (s *RedisVideoTaskStore) Record(ctx context.Context, rec VideoTaskRecord) e
 		return nil
 	}
 	key := "video_task:" + rec.TaskID
-	if err := s.hset(ctx, key,
+	fields := []interface{}{
 		"provider_type", rec.ProviderType,
 		"model", rec.Model,
+		"provider_name", rec.ProviderName,
 		"created_at", time.Now().UTC().Format(time.RFC3339),
-	); err != nil {
+	}
+	if rec.UpstreamModel != "" {
+		fields = append(fields, "upstream_model", rec.UpstreamModel)
+	}
+	if err := s.hset(ctx, key, fields...); err != nil {
 		return err
 	}
 	if s.ttl > 0 {
@@ -192,10 +207,34 @@ func (s *RedisVideoTaskStore) Record(ctx context.Context, rec VideoTaskRecord) e
 }
 
 func (s *RedisVideoTaskStore) LookupProviderType(ctx context.Context, taskID string) (string, error) {
-	if taskID == "" {
-		return "", nil
+	meta, err := s.LookupTaskMeta(ctx, taskID)
+	if err != nil || meta == nil {
+		return "", err
 	}
-	return s.hget(ctx, "video_task:"+taskID, "provider_type")
+	return meta.ProviderType, nil
+}
+
+func (s *RedisVideoTaskStore) LookupTaskMeta(ctx context.Context, taskID string) (*VideoTaskMeta, error) {
+	if taskID == "" {
+		return nil, nil
+	}
+	key := "video_task:" + taskID
+	providerType, err := s.hget(ctx, key, "provider_type")
+	if err != nil {
+		return nil, err
+	}
+	model, _ := s.hget(ctx, key, "model")
+	providerName, _ := s.hget(ctx, key, "provider_name")
+	upstream, _ := s.hget(ctx, key, "upstream_model")
+	if providerType == "" && model == "" {
+		return nil, nil
+	}
+	return &VideoTaskMeta{
+		Model:         model,
+		UpstreamModel: upstream,
+		ProviderType:  providerType,
+		ProviderName:  providerName,
+	}, nil
 }
 
 func (s *RedisVideoTaskStore) UpdateStatus(ctx context.Context, taskID, status string) error {
@@ -218,6 +257,7 @@ type ControlPlaneVideoTaskWriter interface {
 	Update(ctx context.Context, taskID string, update VideoTaskUpdate) error
 	UpdateStatus(ctx context.Context, taskID, status string) error
 	LookupProviderType(ctx context.Context, taskID string) (string, error)
+	LookupTaskMeta(ctx context.Context, taskID string) (*VideoTaskMeta, error)
 }
 
 // CompositeVideoTaskStore 先写 Redis，再写控制面；查询 Redis → PG。
@@ -244,15 +284,24 @@ func (s *CompositeVideoTaskStore) Record(ctx context.Context, rec VideoTaskRecor
 }
 
 func (s *CompositeVideoTaskStore) LookupProviderType(ctx context.Context, taskID string) (string, error) {
+	meta, err := s.LookupTaskMeta(ctx, taskID)
+	if err != nil || meta == nil {
+		return "", err
+	}
+	return meta.ProviderType, nil
+}
+
+func (s *CompositeVideoTaskStore) LookupTaskMeta(ctx context.Context, taskID string) (*VideoTaskMeta, error) {
 	if s.redis != nil {
-		if pt, err := s.redis.LookupProviderType(ctx, taskID); err == nil && pt != "" {
-			return pt, nil
+		if meta, err := s.redis.LookupTaskMeta(ctx, taskID); err == nil && meta != nil &&
+			(meta.ProviderType != "" || meta.Model != "") {
+			return meta, nil
 		}
 	}
 	if s.cp != nil {
-		return s.cp.LookupProviderType(ctx, taskID)
+		return s.cp.LookupTaskMeta(ctx, taskID)
 	}
-	return "", nil
+	return nil, nil
 }
 
 func (s *CompositeVideoTaskStore) UpdateStatus(ctx context.Context, taskID, status string) error {
@@ -395,9 +444,12 @@ func (h *VideoHandler) CreateTask(c *gin.Context) {
 		}
 	}
 
-	// 供 UsageCollector / call_logs 使用：对外模型名保留组名
-	c.Set("model", originalModel)
+	// 供 UsageCollector / call_logs：对外 model 带操作后缀；持久化仍用纯组名
+	c.Set("model", originalModel+":CreateTask")
 	c.Set("provider", providerName)
+	if upstreamModel != "" {
+		c.Set("routed_model", upstreamModel)
+	}
 
 	adapter := h.adapterReg.Get(providerType)
 
@@ -409,17 +461,18 @@ func (h *VideoHandler) CreateTask(c *gin.Context) {
 
 	if h.taskStore != nil && taskID != "" {
 		rec := VideoTaskRecord{
-			TaskID:       taskID,
-			APIKeyID:     c.GetString("key_id"),
-			APIKeyName:   c.GetString("key_name"),
-			APIKeyType:   c.GetString("key_type"),
-			UserID:       c.GetString("user_id"),
-			UserName:     c.GetString("user_name"),
-			Model:        originalModel,
-			ProviderName: providerName,
-			ProviderType: providerType,
-			Status:       "submitted",
-			RequestBody:  truncateVideoTaskBody(body),
+			TaskID:        taskID,
+			APIKeyID:      c.GetString("key_id"),
+			APIKeyName:    c.GetString("key_name"),
+			APIKeyType:    c.GetString("key_type"),
+			UserID:        c.GetString("user_id"),
+			UserName:      c.GetString("user_name"),
+			Model:         originalModel,
+			UpstreamModel: upstreamModel,
+			ProviderName:  providerName,
+			ProviderType:  providerType,
+			Status:        "submitted",
+			RequestBody:   truncateVideoTaskBody(body),
 		}
 		go func() {
 			if err := h.taskStore.Record(context.Background(), rec); err != nil {
@@ -450,11 +503,31 @@ func (h *VideoHandler) GetTask(c *gin.Context) {
 	taskID := c.Param("task_id")
 
 	providerType := "seedance-relay"
+	logModel := "seedance-task:GetTask"
+	providerName := h.resolveProviderName(providerType)
+
 	if h.taskStore != nil {
-		if pt, err := h.taskStore.LookupProviderType(c.Request.Context(), taskID); err == nil && pt != "" {
-			providerType = pt
+		if meta, err := h.taskStore.LookupTaskMeta(c.Request.Context(), taskID); err == nil && meta != nil {
+			if meta.ProviderType != "" {
+				providerType = meta.ProviderType
+			}
+			if meta.ProviderName != "" {
+				providerName = meta.ProviderName
+			} else {
+				providerName = h.resolveProviderName(providerType)
+			}
+			if group := strings.TrimSpace(meta.Model); group != "" {
+				logModel = group + ":GetTask"
+			}
+			if upstream := strings.TrimSpace(meta.UpstreamModel); upstream != "" {
+				c.Set("routed_model", upstream)
+			}
 		}
 	}
+
+	c.Set("model", logModel)
+	c.Set("provider", providerName)
+
 	adapter := h.adapterReg.Get(providerType)
 
 	result, err := adapter.GetTask(c.Request.Context(), taskID)

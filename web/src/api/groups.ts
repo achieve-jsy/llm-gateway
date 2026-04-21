@@ -73,7 +73,7 @@ export const groupsApi = {
     return http.get<ApiResponse<GroupModel[]>>(`/api/v1/groups/${id}/models`)
   },
 
-  removeModelFromGroup(groupId: number, modelId: number) {
+  removeModelFromGroup(groupId: number, modelId: string) {
     return http.delete(`/api/v1/groups/${groupId}/models/${modelId}`)
   },
 

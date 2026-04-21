@@ -68,18 +68,18 @@ func makeAdminJWT(t *testing.T, userID, deptID, studioID string) string {
 	t.Helper()
 	now := time.Now()
 	claims := jwt.MapClaims{
-		"iss":        "llm-gateway",
-		"iat":        now.Unix(),
-		"exp":        now.Add(time.Hour).Unix(),
-		"user_id":    userID,
-		"email":      "tdd-admin@test.local",
-		"name":       "TDD Admin",
-		"passport":   "",
-		"dept_id":    deptID,
-		"dept_name":  "TDD Dept",
-		"studio_id":  studioID,
+		"iss":         "llm-gateway",
+		"iat":         now.Unix(),
+		"exp":         now.Add(time.Hour).Unix(),
+		"user_id":     userID,
+		"email":       "tdd-admin@test.local",
+		"name":        "TDD Admin",
+		"passport":    "",
+		"dept_id":     deptID,
+		"dept_name":   "TDD Dept",
+		"studio_id":   studioID,
 		"studio_name": "TDD Studio",
-		"role":       "admin",
+		"role":        "admin",
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := token.SignedString([]byte(jwtSecret()))
@@ -135,18 +135,18 @@ func TestTDD6_BudgetSet_AndMyBudget(t *testing.T) {
 
 	// 1. PUT /api/v1/budgets 设置 dept_daily
 	r1 := doRequest(t, "PUT", cpURL()+"/api/v1/budgets", authHeader(token), map[string]any{
-		"scope_type":  "dept_daily",
-		"scope_id":    uniqueDept,
-		"amount_usd":  123.45,
+		"scope_type": "dept_daily",
+		"scope_id":   uniqueDept,
+		"amount_usd": 123.45,
 	})
 	assert.Equal(t, http.StatusOK, r1.Status, "PUT dept_daily 应成功: %s", r1.Raw)
 	assert.Equal(t, true, r1.Body["ok"])
 
 	// 2. PUT /api/v1/budgets 设置 studio
 	r2 := doRequest(t, "PUT", cpURL()+"/api/v1/budgets", authHeader(token), map[string]any{
-		"scope_type":  "studio",
-		"scope_id":    uniqueStudio,
-		"amount_usd":  9999.99,
+		"scope_type": "studio",
+		"scope_id":   uniqueStudio,
+		"amount_usd": 9999.99,
 	})
 	assert.Equal(t, http.StatusOK, r2.Status, "PUT studio 应成功: %s", r2.Raw)
 
@@ -185,9 +185,9 @@ func TestTDD6_BudgetSet_NegativeAmount_Rejected(t *testing.T) {
 	token := makeAdminJWT(t, "tdd6-user-neg", "tdd6-dept-neg", "tdd6-studio-neg")
 
 	r := doRequest(t, "PUT", cpURL()+"/api/v1/budgets", authHeader(token), map[string]any{
-		"scope_type":  "studio",
-		"scope_id":    "tdd6-studio-neg",
-		"amount_usd":  -100.0,
+		"scope_type": "studio",
+		"scope_id":   "tdd6-studio-neg",
+		"amount_usd": -100.0,
 	})
 	assert.Equal(t, http.StatusInternalServerError, r.Status, "负金额应被拒绝")
 }

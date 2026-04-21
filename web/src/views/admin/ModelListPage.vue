@@ -96,6 +96,7 @@
       <el-tab-pane label="Embedding" name="embedding" />
       <el-tab-pane label="Embedding-VL" name="embedding_vl" />
       <el-tab-pane label="Rerank" name="rerank" />
+      <el-tab-pane label="Rerank-VL" name="rerank_vl" />
       <el-tab-pane label="Video" name="video" />
     </el-tabs>
 
@@ -344,6 +345,7 @@ const MODEL_TYPE_LABEL: Record<string, string> = {
   embedding: 'Embedding',
   embedding_vl: 'Embedding-VL',
   rerank: 'Rerank',
+  rerank_vl: 'Rerank-VL',
   video: 'Video',
 }
 
@@ -352,7 +354,8 @@ function modelTypeTagType(type: string): 'primary' | 'success' | 'warning' | 'in
   if (type === 'embedding') return 'success'
   if (type === 'embedding_vl') return 'info'
   if (type === 'rerank') return 'warning'
-  if (type === 'video') return ''
+  if (type === 'rerank_vl') return 'danger'
+  if (type === 'video') return 'info'
   return 'info'
 }
 

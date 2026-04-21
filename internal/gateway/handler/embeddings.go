@@ -2,11 +2,11 @@ package handler
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 
 	"github.com/example/llm-gateway/internal/core"
 	gatewayerrors "github.com/example/llm-gateway/internal/errors"
+	"github.com/example/llm-gateway/internal/gateway/budget"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
@@ -24,6 +24,8 @@ type EmbeddingsHandler struct {
 	orchestrator  EmbeddingsOrchestratorInterface
 	groupDispatch *orchestrator.GroupAwareDispatcher
 	budgetDeps    *middleware.BudgetDeps
+	budgetGate    *budget.Gate
+	requestQuota  *quota.QuotaMiddleware
 	quotaGate     *quota.ModelQuotaGate // v0.15: 模型层配额检查
 }
 
@@ -35,6 +37,14 @@ func NewEmbeddingsHandler(orch EmbeddingsOrchestratorInterface) *EmbeddingsHandl
 // SetBudgetDeps 注入预算依赖（router setup 时调用一次）
 func (h *EmbeddingsHandler) SetBudgetDeps(deps *middleware.BudgetDeps) {
 	h.budgetDeps = deps
+}
+
+func (h *EmbeddingsHandler) SetBudgetGate(gate *budget.Gate) {
+	h.budgetGate = gate
+}
+
+func (h *EmbeddingsHandler) SetRequestQuotaGate(gate *quota.QuotaMiddleware) {
+	h.requestQuota = gate
 }
 
 // SetModelQuotaGate 注入模型配额检查器（router setup 时调用一次）
@@ -101,25 +111,17 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 
 	c.Set("model", req.Model)
 
-	// v0.9: 预算检查（事后记账模式）
-	if h.budgetDeps != nil {
-		if _, err := middleware.Reserve(c, h.budgetDeps); err != nil {
-			if be, ok := err.(*middleware.BudgetExceededError); ok {
-				be.WriteHTTPResponse(c)
-				return
-			}
-			slog.Warn("embeddings: budget check failed", "model", req.Model, "error", err)
-		}
-	}
-
 	// 记录路由选定的模型 ID，用于模型层配额检查。
 	routedModelID := req.Model
 
-	if h.groupDispatch != nil {
-		decision, err := h.groupDispatch.Dispatch(c, req.Model, nil)
-		if err != nil {
-			respondGroupError(c, err)
-			return
+	originalModel := req.Model
+	releaseQuota, err := PrepareAuthorizedGates(c, originalModel, func() error {
+		if h.groupDispatch == nil {
+			return nil
+		}
+		decision, dispatchErr := h.groupDispatch.Dispatch(c, originalModel, nil)
+		if dispatchErr != nil {
+			return dispatchErr
 		}
 		if decision != nil {
 			req.Model = decision.ModelName
@@ -129,6 +131,26 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 			}
 			routedModelID = decision.ModelID
 		}
+		return nil
+	}, h.budgetGate, h.requestQuota)
+	if err != nil {
+		if c.IsAborted() {
+			return
+		}
+		if !budget.WriteHTTPError(c, err) {
+			respondGroupError(c, err)
+		}
+		return
+	}
+	if releaseQuota != nil {
+		defer releaseQuota()
+	}
+
+	// 多模态 embedding input 只能路由到 embedding_vl 模型/组，避免错误写入文本向量空间。
+	if isMultimodalEmbeddingInput(req.Input) && req.ModelType != "embedding_vl" {
+		gatewayerrors.WriteError(c, "model_capability_mismatch",
+			gatewayerrors.WithMessage("多模态 embedding input 需要使用 embedding_vl 模型或模型组"))
+		return
 	}
 
 	// v0.15: 模型层配额检查（路由选定具体 model 之后、转发上游之前）
@@ -166,4 +188,31 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 	c.Set("resp_object", resp)
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// isMultimodalEmbeddingInput 检查 input 是否包含图片/音频对象。
+func isMultimodalEmbeddingInput(input any) bool {
+	if input == nil {
+		return false
+	}
+	if list, ok := input.([]interface{}); ok {
+		for _, item := range list {
+			if m, ok := item.(map[string]interface{}); ok {
+				if _, hasImage := m["image"]; hasImage {
+					return true
+				}
+				if _, hasAudio := m["audio"]; hasAudio {
+					return true
+				}
+				// OpenAI 风格多模态 content：{type:"image_url", image_url:{url:...}}
+				if _, hasImageURL := m["image_url"]; hasImageURL {
+					return true
+				}
+				if t, _ := m["type"].(string); t == "image_url" || t == "input_audio" {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

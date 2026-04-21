@@ -144,13 +144,7 @@ import { Chart, registerables } from 'chart.js'
 import { useSettingsStore } from '@/stores/settings'
 import { currencySymbol, convertCost, type Currency } from '@/utils/currency'
 import { fetchUserDetail } from '@/api/dashboard-enhanced'
-import type {
-  UserDetailResponse,
-  UserDetailSummary,
-  DailyTrendItem,
-  ModelDistributionItem,
-  HourlyDistributionItem,
-} from '@/types/dashboard-enhanced'
+import type { UserDetailResponse } from '@/types/dashboard-enhanced'
 
 Chart.register(...registerables)
 
@@ -196,9 +190,9 @@ const sym = computed(() => currencySymbol(props.currency as Currency))
 
 // ── Computed ────────────────────────────────────────────────────────
 const successRate = computed(() => {
-  if (!detail.value) return 0
+  if (!detail.value) return '0'
   const { success_count, total_calls } = detail.value.summary
-  if (!total_calls) return 0
+  if (!total_calls) return '0'
   return ((success_count / total_calls) * 100).toFixed(1)
 })
 
@@ -290,8 +284,6 @@ function initPieChart() {
 
   const items = detail.value.model_distribution
   const metric = pieMetric.value
-  const total = items.reduce((s, i) => s + i[metric], 0)
-
   // Top 5 + Other
   const sorted = [...items].sort((a, b) => b[metric] - a[metric])
   const top5 = sorted.slice(0, 5)
@@ -307,8 +299,6 @@ function initPieChart() {
     data.push(otherSum)
     colors.push(PIE_OTHER_COLOR)
   }
-
-  const modelMap = new Map(top5.map(i => [i.model, i]))
 
   pieChart = new Chart(pieCanvas.value, {
     type: 'doughnut',

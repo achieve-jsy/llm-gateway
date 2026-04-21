@@ -29,7 +29,7 @@ func ProbeModelForward(ctx context.Context, endpoint, modelName, apiKey, modelTy
 	case lower == "image_generation" || lower == "image":
 		return probeImageGeneration(ctx, endpoint, modelName, apiKey)
 
-	case lower == "rerank":
+	case lower == "rerank" || lower == "rerank_vl":
 		return probeRerank(ctx, endpoint, modelName, apiKey)
 
 	case lower == "audio_transcription" || lower == "audio_speech" || lower == "audio":
@@ -85,6 +85,20 @@ func probeChatCompletion(ctx context.Context, endpoint, modelName, apiKey string
 
 	if isIncompatibleProbeError(lower) {
 		return false, true, elapsed, errMsg
+	}
+
+	// 新模型拒绝 max_tokens：改用 max_completion_tokens 重试一次。
+	if strings.Contains(lower, "max_completion_tokens") && strings.Contains(lower, "max_tokens") {
+		retryReq := cloneProbeRequest(baseReq)
+		if mt, ok := retryReq["max_tokens"]; ok {
+			retryReq["max_completion_tokens"] = mt
+			delete(retryReq, "max_tokens")
+		}
+		ok, t, retryErr := doProbeRequest(ctx, chatEndpoint, apiKey, retryReq, false)
+		if ok {
+			return true, false, t, ""
+		}
+		return false, false, t, retryErr
 	}
 
 	return false, false, elapsed, errMsg

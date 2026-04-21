@@ -1,9 +1,13 @@
 package handler
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/example/llm-gateway/internal/controlplane/audit"
+	"github.com/example/llm-gateway/internal/controlplane/budgetdomain"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
@@ -18,6 +22,7 @@ type BudgetHandler struct {
 	alertSvc *service.BudgetAlertService
 	rbac     *rbac.Checker
 	db       *gorm.DB
+	rebuild  *service.BudgetCounterRebuildService
 }
 
 func NewBudgetHandler(svc *service.BudgetService, rbacChecker *rbac.Checker) *BudgetHandler {
@@ -32,6 +37,60 @@ func (h *BudgetHandler) SetAlertService(svc *service.BudgetAlertService) {
 // SetDB 注入数据库（供 RebuildCounters 查询 call_logs，可选）。
 func (h *BudgetHandler) SetDB(db *gorm.DB) {
 	h.db = db
+}
+
+func (h *BudgetHandler) SetCounterRebuildService(rebuild *service.BudgetCounterRebuildService) {
+	h.rebuild = rebuild
+}
+
+func (h *BudgetHandler) PreviewTotalBatch(c *gin.Context) { h.handleTotalBatch(c, true) }
+func (h *BudgetHandler) ApplyTotalBatch(c *gin.Context)   { h.handleTotalBatch(c, false) }
+
+func (h *BudgetHandler) handleTotalBatch(c *gin.Context, preview bool) {
+	var input service.TotalBatchInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	h.rbac.BuildAndInjectActor(c)
+	actor := rbac.GetActor(c)
+	for _, item := range input.Items {
+		allowed := actor.IsGlobal
+		switch item.ScopeType {
+		case model.BudgetScopeStudio:
+			allowed = allowed || actor.HasStudio(item.ScopeID)
+		case model.BudgetScopeDeptDaily, model.BudgetScopeDeptService:
+			allowed = allowed || actor.HasDept(item.ScopeID)
+		case model.BudgetScopeMember:
+			ok, err := h.svc.MemberInDeptIDs(item.ScopeID, actor.DeptIDs)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			allowed = allowed || ok
+		}
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权批量调整所选预算"})
+			return
+		}
+	}
+	input.ActorID, _ = uuid.Parse(c.GetString("user_id"))
+	var result *service.TotalBatchResult
+	var err error
+	if preview {
+		result, err = h.svc.PreviewTotalBatch(c.Request.Context(), input)
+	} else {
+		result, err = h.svc.ApplyTotalBatch(c.Request.Context(), input)
+	}
+	if err != nil {
+		status := http.StatusUnprocessableEntity
+		if errors.Is(err, service.ErrBudgetPreviewStale) || errors.Is(err, service.ErrPendingScheduleExists) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": result})
 }
 
 // List GET /api/v1/budgets?view=company|studio|department&scope_type=xxx&scope_id=xxx
@@ -82,13 +141,13 @@ func (h *BudgetHandler) List(c *gin.Context) {
 					c.JSON(http.StatusForbidden, gin.H{"error": "无权查看该工作室"})
 					return
 				}
-			deptIDs, err := h.svc.ListDeptIDsByStudioID(scopeID)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-			scopeIDs = append(scopeIDs, scopeID)
-			scopeIDs = append(scopeIDs, deptIDs...)
+				deptIDs, err := h.svc.ListDeptIDsByStudioID(scopeID)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
+				scopeIDs = append(scopeIDs, scopeID)
+				scopeIDs = append(scopeIDs, deptIDs...)
 			} else if !actor.IsGlobal {
 				// 返回自己管辖的工作室 + 下属部门
 				scopeIDs = append(scopeIDs, actor.StudioIDs...)
@@ -101,6 +160,14 @@ func (h *BudgetHandler) List(c *gin.Context) {
 			userDeptMap = make(map[string]string)
 			scopeTypes = []string{model.BudgetScopeDeptDaily, model.BudgetScopeDeptService, model.BudgetScopeMember}
 			if scopeID != "" {
+				if !actor.IsGlobal && !actor.HasDept(scopeID) {
+					if deptID, err := h.svc.ResolveMemberDeptID(scopeID); err != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+						return
+					} else if deptID != "" && actor.HasDept(deptID) {
+						scopeID = deptID
+					}
+				}
 				if !actor.IsGlobal && !actor.HasDept(scopeID) {
 					c.JSON(http.StatusForbidden, gin.H{"error": "无权查看该部门预算"})
 					return
@@ -217,15 +284,28 @@ func (h *BudgetHandler) Set(c *gin.Context) {
 	var req struct {
 		ScopeType       string   `json:"scope_type" binding:"required"`
 		ScopeID         string   `json:"scope_id" binding:"required"`
-		AmountUSD       *float64 `json:"amount_usd" binding:"required"` // 指针避免 0 被 required 拦截
-		DailyAmountUSD  float64  `json:"daily_amount_usd"`               // 可选，默认 -1（不限）
-		WeeklyAmountUSD float64  `json:"weekly_amount_usd"`              // 可选，默认 -1（不限）
+		AmountUSD       *float64 `json:"amount_usd"`        // 指针避免 0 被 required 拦截
+		DailyAmountUSD  float64  `json:"daily_amount_usd"`  // 可选，默认 -1（不限）
+		WeeklyAmountUSD float64  `json:"weekly_amount_usd"` // 可选，默认 -1（不限）
+		PeriodType      string   `json:"period_type"`
+		TargetLimitUSD  *string  `json:"target_limit_usd"`
+		EffectiveMode   string   `json:"effective_mode"`
+		Reason          string   `json:"reason"`
+		PreviewOnly     bool     `json:"preview_only"`
+		service.BudgetRiskConfirmation
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	amountUSD := *req.AmountUSD
+	if req.AmountUSD == nil && req.TargetLimitUSD == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "amount_usd or target_limit_usd is required"})
+		return
+	}
+	amountUSD := 0.0
+	if req.AmountUSD != nil {
+		amountUSD = *req.AmountUSD
+	}
 	// 未传日/周限额时默认 -1（不限）
 	if req.DailyAmountUSD == 0 {
 		req.DailyAmountUSD = -1
@@ -265,11 +345,203 @@ func (h *BudgetHandler) Set(c *gin.Context) {
 	}
 
 	actorID, _ := uuid.Parse(c.GetString("user_id"))
-	if err := h.svc.SetBudget(c.Request.Context(), req.ScopeType, req.ScopeID, amountUSD, req.DailyAmountUSD, req.WeeklyAmountUSD, actorID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	periodType := budgetdomain.PeriodMonthly
+	if req.PeriodType != "" {
+		periodType = budgetdomain.PeriodType(req.PeriodType)
+	}
+	target, parseErr := budgetdomain.ParseLimitAmount(fmt.Sprintf("%.6f", amountUSD))
+	if req.TargetLimitUSD != nil {
+		target, parseErr = budgetdomain.ParseLimitAmount(*req.TargetLimitUSD)
+		amountUSD, _ = target.Decimal.Float64()
+	}
+	if parseErr != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"code": CodeInvalidMoneyAmount, "message": parseErr.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "scope_type": req.ScopeType, "scope_id": req.ScopeID, "amount_usd": amountUSD, "daily_amount_usd": req.DailyAmountUSD, "weekly_amount_usd": req.WeeklyAmountUSD})
+	effectiveMode := service.EffectiveMode(req.EffectiveMode)
+	if effectiveMode == "" {
+		effectiveMode = service.EffectiveImmediate
+	}
+	if req.PreviewOnly {
+		audit.SetActionOverride(c, audit.ActionBudgetAdjustPreview)
+	} else {
+		audit.SetActionOverride(c, audit.ActionBudgetAdjustApply)
+	}
+	audit.SetReason(c, req.Reason)
+	impact, err := h.svc.AdjustBudget(c.Request.Context(), service.BudgetAdjustmentInput{
+		ScopeType: req.ScopeType, ScopeID: req.ScopeID, PeriodType: periodType,
+		TargetLimitUSD: target, EffectiveMode: effectiveMode, Reason: req.Reason,
+		ActorID: actorID, PreviewOnly: req.PreviewOnly, BudgetRiskConfirmation: req.BudgetRiskConfirmation,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrBudgetReasonRequired):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"code": "BUDGET_REASON_REQUIRED", "message": err.Error()})
+		case errors.Is(err, service.ErrZeroBlockConfirmationRequired):
+			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_ZERO_BLOCK_CONFIRMATION_REQUIRED", "message": err.Error()})
+		case errors.Is(err, service.ErrBelowUsedConfirmationRequired):
+			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_LIMIT_BELOW_USED", "message": err.Error()})
+		case errors.Is(err, service.ErrBudgetUsageUnavailable):
+			c.JSON(http.StatusServiceUnavailable, gin.H{"code": "BUDGET_USAGE_UNAVAILABLE", "message": err.Error()})
+		case errors.Is(err, service.ErrBudgetPreviewStale):
+			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_PREVIEW_STALE", "message": err.Error(), "next_action": "preview"})
+		case errors.Is(err, service.ErrPendingScheduleExists):
+			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_PENDING_SCHEDULE_EXISTS", "message": err.Error()})
+		case errors.Is(err, service.ErrInvalidBudgetPeriod):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": gin.H{"code": CodeInvalidBudgetPeriod, "message": "invalid budget period"}})
+		case errors.Is(err, service.ErrBudgetAllocationNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"code": "BUDGET_ALLOCATION_NOT_FOUND", "message": "budget allocation not found"}})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok": true, "scope_type": req.ScopeType, "scope_id": req.ScopeID,
+		"amount_usd": amountUSD, "daily_amount_usd": req.DailyAmountUSD,
+		"weekly_amount_usd": req.WeeklyAmountUSD, "impact": impact, "data": impact,
+	})
+}
+
+// SetMultiPeriod PUT /api/v1/budgets/multi-period
+// 一次调用原子地设置月/周/日三个周期的预算额度。
+// 至少提供一个周期，preview_only=true 时仅返回预览不写库。
+func (h *BudgetHandler) SetMultiPeriod(c *gin.Context) {
+	h.rbac.BuildAndInjectActor(c)
+	actor := rbac.GetActor(c)
+	if !actor.IsManager() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "需要管理员权限"})
+		return
+	}
+
+	type periodReq struct {
+		TargetLimitUSD string `json:"target_limit_usd" binding:"required"`
+		service.BudgetRiskConfirmation
+	}
+	var req struct {
+		ScopeType     string     `json:"scope_type" binding:"required"`
+		ScopeID       string     `json:"scope_id" binding:"required"`
+		Reason        string     `json:"reason" binding:"required"`
+		EffectiveMode string     `json:"effective_mode"`
+		PreviewOnly   bool       `json:"preview_only"`
+		Monthly       *periodReq `json:"monthly"`
+		Weekly        *periodReq `json:"weekly"`
+		Daily         *periodReq `json:"daily"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.Monthly == nil && req.Weekly == nil && req.Daily == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "至少需要提供一个周期"})
+		return
+	}
+
+	// RBAC 数据范围校验（与 Set 保持一致）
+	if !actor.IsGlobal {
+		switch req.ScopeType {
+		case model.BudgetScopeDeptDaily, model.BudgetScopeDeptService:
+			if !actor.HasDept(req.ScopeID) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "无权设置该部门预算"})
+				return
+			}
+		case model.BudgetScopeStudio:
+			if !actor.HasStudio(req.ScopeID) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "无权设置该工作室预算"})
+				return
+			}
+		case model.BudgetScopeCompany:
+			c.JSON(http.StatusForbidden, gin.H{"error": "只有平台管理员可以设置公司层预算"})
+			return
+		case model.BudgetScopeMember:
+			ok, err := h.svc.MemberInDeptIDs(req.ScopeID, actor.DeptIDs)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			if !ok {
+				c.JSON(http.StatusForbidden, gin.H{"error": "无权设置该成员预算"})
+				return
+			}
+		}
+	}
+
+	parsePeriod := func(p *periodReq) (*service.MultiPeriodItem, error) {
+		if p == nil {
+			return nil, nil
+		}
+		amount, err := budgetdomain.ParseLimitAmount(p.TargetLimitUSD)
+		if err != nil {
+			return nil, err
+		}
+		return &service.MultiPeriodItem{
+			TargetLimitUSD:         amount,
+			BudgetRiskConfirmation: p.BudgetRiskConfirmation,
+		}, nil
+	}
+
+	monthly, err := parsePeriod(req.Monthly)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"code": CodeInvalidMoneyAmount, "message": "monthly: " + err.Error()})
+		return
+	}
+	weekly, err := parsePeriod(req.Weekly)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"code": CodeInvalidMoneyAmount, "message": "weekly: " + err.Error()})
+		return
+	}
+	daily, err := parsePeriod(req.Daily)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"code": CodeInvalidMoneyAmount, "message": "daily: " + err.Error()})
+		return
+	}
+
+	actorID, _ := uuid.Parse(c.GetString("user_id"))
+	effectiveMode := service.EffectiveMode(req.EffectiveMode)
+	if effectiveMode == "" {
+		effectiveMode = service.EffectiveImmediate
+	}
+
+	if req.PreviewOnly {
+		audit.SetActionOverride(c, audit.ActionBudgetAdjustPreview)
+	} else {
+		audit.SetActionOverride(c, audit.ActionBudgetAdjustApply)
+	}
+	audit.SetReason(c, req.Reason)
+
+	result, err := h.svc.AdjustBudgetMultiPeriod(c.Request.Context(), service.MultiPeriodAdjustmentInput{
+		ScopeType: req.ScopeType, ScopeID: req.ScopeID,
+		ActorID: actorID, Reason: req.Reason, EffectiveMode: effectiveMode,
+		PreviewOnly: req.PreviewOnly,
+		Monthly:     monthly, Weekly: weekly, Daily: daily,
+	})
+	if err != nil {
+		// 解包 "period xxx: <原始错误>" 前缀后做错误码匹配
+		unwrapped := errors.Unwrap(err)
+		if unwrapped == nil {
+			unwrapped = err
+		}
+		switch {
+		case errors.Is(unwrapped, service.ErrBudgetPreviewStale):
+			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_PREVIEW_STALE", "message": err.Error(), "next_action": "preview"})
+		case errors.Is(unwrapped, service.ErrZeroBlockConfirmationRequired):
+			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_ZERO_BLOCK_CONFIRMATION_REQUIRED", "message": err.Error()})
+		case errors.Is(unwrapped, service.ErrBelowUsedConfirmationRequired):
+			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_LIMIT_BELOW_USED", "message": err.Error()})
+		case errors.Is(unwrapped, service.ErrBudgetUsageUnavailable):
+			c.JSON(http.StatusServiceUnavailable, gin.H{"code": "BUDGET_USAGE_UNAVAILABLE", "message": err.Error()})
+		case errors.Is(unwrapped, service.ErrBudgetReasonRequired):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"code": "BUDGET_REASON_REQUIRED", "message": err.Error()})
+		case errors.Is(unwrapped, service.ErrPendingScheduleExists):
+			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_PENDING_SCHEDULE_EXISTS", "message": err.Error()})
+		case errors.Is(unwrapped, service.ErrBudgetAllocationNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"code": "BUDGET_ALLOCATION_NOT_FOUND", "message": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": result})
 }
 
 // MyBudget GET /api/v1/my/budget
@@ -284,18 +556,30 @@ func (h *BudgetHandler) MyBudget(c *gin.Context) {
 		return
 	}
 
+	if h.rbac != nil {
+		h.rbac.BuildAndInjectActor(c)
+	}
+	actor := rbac.GetActor(c)
+	if actor.UserID == "" {
+		actor.UserID = userID
+	}
+	if c.GetString("user_role") == "admin" {
+		actor.IsGlobal = true
+	}
+
 	period := time.Now().Format("2006-01")
 	type chainItem struct {
-		ScopeType       string  `json:"scope_type"`
-		Label           string  `json:"label"`
-		AmountUSD       float64 `json:"amount_usd"`
-		DailyAmountUSD  float64 `json:"daily_amount_usd"`
-		WeeklyAmountUSD float64 `json:"weekly_amount_usd"`
-		UsedUSD         float64 `json:"used_usd"`
-		DailyUsedUSD    float64 `json:"daily_used_usd"`
-		WeeklyUsedUSD   float64 `json:"weekly_used_usd"`
-		UsedRatio       float64 `json:"used_ratio"`
-		Period          string  `json:"period"`
+		ScopeType       string   `json:"scope_type"`
+		Label           string   `json:"label"`
+		VisibleAmounts  bool     `json:"visible_amounts"`
+		AmountUSD       *float64 `json:"amount_usd,omitempty"`
+		DailyAmountUSD  *float64 `json:"daily_amount_usd,omitempty"`
+		WeeklyAmountUSD *float64 `json:"weekly_amount_usd,omitempty"`
+		UsedUSD         *float64 `json:"used_usd,omitempty"`
+		DailyUsedUSD    *float64 `json:"daily_used_usd,omitempty"`
+		WeeklyUsedUSD   *float64 `json:"weekly_used_usd,omitempty"`
+		UsedRatio       *float64 `json:"used_ratio,omitempty"`
+		Period          string   `json:"period"`
 	}
 
 	scopes := []struct {
@@ -312,24 +596,56 @@ func (h *BudgetHandler) MyBudget(c *gin.Context) {
 		if s.scopeID == "" {
 			continue
 		}
-		item := chainItem{ScopeType: s.scopeType, Label: s.label, Period: period, AmountUSD: -1, DailyAmountUSD: -1, WeeklyAmountUSD: -1}
+		visibleAmounts := canViewMyBudgetScope(actor, userID, s.scopeType, s.scopeID)
+		item := chainItem{
+			ScopeType: s.scopeType, Label: s.label, Period: period,
+			VisibleAmounts: visibleAmounts,
+		}
 		alloc, _ := h.svc.GetBudget(c.Request.Context(), s.scopeType, s.scopeID)
-		if alloc != nil {
-			item.AmountUSD = alloc.AmountUSD
-			item.DailyAmountUSD = alloc.DailyAmountUSD
-			item.WeeklyAmountUSD = alloc.WeeklyAmountUSD
-			item.UsedUSD = alloc.UsedUSD
-			item.DailyUsedUSD = alloc.DailyUsedUSD
-			item.WeeklyUsedUSD = alloc.WeeklyUsedUSD
-			item.UsedRatio = alloc.UsedRatio
+		if visibleAmounts {
+			amountUSD, dailyAmountUSD, weeklyAmountUSD := -1.0, -1.0, -1.0
+			usedUSD, dailyUsedUSD, weeklyUsedUSD, usedRatio := 0.0, 0.0, 0.0, 0.0
+			if alloc != nil {
+				amountUSD = alloc.AmountUSD
+				dailyAmountUSD = alloc.DailyAmountUSD
+				weeklyAmountUSD = alloc.WeeklyAmountUSD
+				usedUSD = alloc.UsedUSD
+				dailyUsedUSD = alloc.DailyUsedUSD
+				weeklyUsedUSD = alloc.WeeklyUsedUSD
+				usedRatio = alloc.UsedRatio
+			}
+			item.AmountUSD = &amountUSD
+			item.DailyAmountUSD = &dailyAmountUSD
+			item.WeeklyAmountUSD = &weeklyAmountUSD
+			item.UsedUSD = &usedUSD
+			item.DailyUsedUSD = &dailyUsedUSD
+			item.WeeklyUsedUSD = &weeklyUsedUSD
+			item.UsedRatio = &usedRatio
 		}
 		// 成员层未配额度则跳过
-		if s.scopeType == model.BudgetScopeMember && item.AmountUSD < 0 {
+		if s.scopeType == model.BudgetScopeMember && (alloc == nil || alloc.AmountUSD < 0) {
 			continue
 		}
 		chain = append(chain, item)
 	}
 	c.JSON(http.StatusOK, gin.H{"chain": chain})
+}
+
+func canViewMyBudgetScope(actor rbac.Actor, userID, scopeType, scopeID string) bool {
+	if scopeType == model.BudgetScopeMember {
+		return scopeID == userID
+	}
+	if actor.IsGlobal {
+		return true
+	}
+	switch scopeType {
+	case model.BudgetScopeDeptDaily, model.BudgetScopeDeptService:
+		return actor.HasDept(scopeID)
+	case model.BudgetScopeStudio:
+		return actor.HasStudio(scopeID)
+	default:
+		return false
+	}
 }
 
 // EvaluateAlert POST /internal/v1/budget/evaluate-alert
@@ -339,17 +655,29 @@ func (h *BudgetHandler) MyBudget(c *gin.Context) {
 // 由 InternalAuth 鉴权，gateway 通过 X-Internal-Token 调用。
 func (h *BudgetHandler) EvaluateAlert(c *gin.Context) {
 	var req struct {
-		ScopeType string `json:"scope_type" binding:"required"`
-		ScopeID   string `json:"scope_id" binding:"required"`
+		ScopeType     string `json:"scope_type" binding:"required"`
+		ScopeID       string `json:"scope_id" binding:"required"`
+		PeriodType    string `json:"period_type" binding:"required"`
+		DimensionType string `json:"dimension_type" binding:"required"`
+		ModelTierID   string `json:"model_tier_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	periodType := budgetdomain.PeriodType(req.PeriodType)
+	dimensionType := budgetdomain.DimensionType(req.DimensionType)
+	if !periodType.Valid() || !dimensionType.Valid() ||
+		(dimensionType == budgetdomain.DimensionTier && req.ModelTierID == "") ||
+		(dimensionType == budgetdomain.DimensionTotal && req.ModelTierID != "") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid budget alert dimension"})
+		return
+	}
 
 	// 调用告警服务做阈值评估（需注入 alertSvc）
 	if h.alertSvc != nil {
-		h.alertSvc.EvaluateAndAlert(c.Request.Context(), req.ScopeType, req.ScopeID)
+		h.alertSvc.EvaluateAndAlert(c.Request.Context(), req.ScopeType, req.ScopeID,
+			req.PeriodType, req.DimensionType, req.ModelTierID)
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -534,6 +862,15 @@ func (h *BudgetHandler) RebuildCounters(c *gin.Context) {
 	}
 	if h.db == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "数据库未注入，无法重建"})
+		return
+	}
+	if h.rebuild != nil {
+		result, err := h.rebuild.RebuildCurrentPeriods(c.Request.Context(), time.Now())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"result": result, "cutover_ready": result.CutoverReady()})
 		return
 	}
 	result, err := h.svc.RebuildCounters(c.Request.Context(), h.db)

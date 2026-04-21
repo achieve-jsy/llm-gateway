@@ -94,7 +94,7 @@ func (s *ModelService) publishEvent(eventType event.ChangeEventType, resourceTyp
 type CreateModelInput struct {
 	Name            string   `json:"name" binding:"required,max=200"`
 	ProviderID      string   `json:"provider_id" binding:"required,uuid"`
-	ModelType       string   `json:"model_type" binding:"required,oneof=chat embedding embedding_vl rerank video"`
+	ModelType       string   `json:"model_type" binding:"required,oneof=chat embedding embedding_vl rerank rerank_vl video"`
 	UpstreamModelID string   `json:"upstream_model_id" binding:"omitempty,max=200"`
 	Description     string   `json:"description" binding:"omitempty,max=500"`
 	ContextLength   *int     `json:"context_length" binding:"omitempty,min=0,max=10000000"`
@@ -218,7 +218,7 @@ func (s *ModelService) GetModel(id uuid.UUID) (*model.Model, error) {
 type UpdateModelInput struct {
 	Name            string   `json:"name" binding:"omitempty,max=200"`
 	ProviderID      string   `json:"provider_id" binding:"omitempty,uuid"`
-	ModelType       string   `json:"model_type" binding:"omitempty,oneof=chat embedding embedding_vl rerank video"`
+	ModelType       string   `json:"model_type" binding:"omitempty,oneof=chat embedding embedding_vl rerank rerank_vl video"`
 	Enabled         *bool    `json:"enabled"`
 	UpstreamModelID *string  `json:"upstream_model_id" binding:"omitempty,max=200"`
 	Description     *string  `json:"description" binding:"omitempty,max=500"`
@@ -349,12 +349,12 @@ func applyVideoParams(
 		m.VideoSupportedActions = actions
 	}
 	if m.ModelType != "video" {
-		// 非视频类型清空，避免脏数据
-		m.VideoSupportedResolutions = nil
-		m.VideoSupportedAspectRatios = nil
+		// 非视频类型清空，避免脏数据；用空切片而非 nil，防止 jsonb 序列化为空字符串
+		m.VideoSupportedResolutions = []string{}
+		m.VideoSupportedAspectRatios = []string{}
 		m.VideoMinDurationSeconds = 0
 		m.VideoMaxDurationSeconds = 0
-		m.VideoSupportedActions = nil
+		m.VideoSupportedActions = []string{}
 	}
 }
 

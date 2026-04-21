@@ -1,8 +1,10 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
@@ -12,9 +14,10 @@ import (
 )
 
 var (
-	ErrGroupNotFound   = errors.New("group not found")
-	ErrGroupNameExists = errors.New("group name already exists")
-	ErrGroupDeleted    = errors.New("group has been deleted")
+	ErrGroupNotFound          = errors.New("group not found")
+	ErrGroupNameExists        = errors.New("group name already exists")
+	ErrGroupDeleted           = errors.New("group has been deleted")
+	ErrGroupModelTypeMismatch = errors.New("group models must share the same model_type")
 )
 
 type FailoverDefaults struct {
@@ -24,13 +27,90 @@ type FailoverDefaults struct {
 }
 
 type GroupService struct {
-	repo             *repository.GroupRepo
-	failoverDefaults *FailoverDefaults
+	repo              *repository.GroupRepo
+	modelRepo         *repository.ModelRepo
+	failoverDefaults  *FailoverDefaults
+	modelTierRepo     ModelTierRepository
+	snapshotPublisher BudgetConfigPublisher
 }
 
-func NewGroupService(repo *repository.GroupRepo) *GroupService {
+func (s *GroupService) WithBudgetTierSnapshotPublisher(p BudgetConfigPublisher) *GroupService {
+	s.snapshotPublisher = p
+	return s
+}
+
+func (s *GroupService) WithModelTierRepo(repo ModelTierRepository) *GroupService {
+	s.modelTierRepo = repo
+	return s
+}
+
+func (s *GroupService) SetBudgetTier(ctx context.Context, groupID uint, tierID *uuid.UUID, reason string) error {
+	if err := validateReason(reason); err != nil {
+		return err
+	}
+	if err := s.validateBudgetTier(ctx, tierID); err != nil {
+		return err
+	}
+	if err := s.repo.SetBudgetTier(ctx, groupID, tierID); err != nil {
+		if errors.Is(err, repository.ErrGroupNotFound) {
+			return ErrGroupNotFound
+		}
+		return err
+	}
+	if s.snapshotPublisher != nil {
+		if err := s.snapshotPublisher.MarkDirtyAndPublish(ctx); err != nil {
+			slog.ErrorContext(ctx, "budget snapshot publish failed after group tier write",
+				"group_id", groupID, "error", err)
+			return fmt.Errorf("%w: %v", ErrBudgetConfigSyncPending, err)
+		}
+	}
+	return nil
+}
+
+func (s *GroupService) SetBudgetTierBatch(ctx context.Context, groupIDs []uint, tierID *uuid.UUID, reason string) error {
+	if err := validateReason(reason); err != nil {
+		return err
+	}
+	if err := s.validateBudgetTier(ctx, tierID); err != nil {
+		return err
+	}
+	if err := s.repo.SetBudgetTierBatch(ctx, groupIDs, tierID); err != nil {
+		if errors.Is(err, repository.ErrGroupNotFound) {
+			return ErrGroupNotFound
+		}
+		return err
+	}
+	if s.snapshotPublisher != nil {
+		if err := s.snapshotPublisher.MarkDirtyAndPublish(ctx); err != nil {
+			slog.ErrorContext(ctx, "budget snapshot publish failed after group tier batch write",
+				"group_ids", groupIDs, "error", err)
+			return fmt.Errorf("%w: %v", ErrBudgetConfigSyncPending, err)
+		}
+	}
+	return nil
+}
+
+func (s *GroupService) validateBudgetTier(ctx context.Context, tierID *uuid.UUID) error {
+	if tierID == nil {
+		return nil
+	}
+	if s.modelTierRepo == nil {
+		return ErrModelTierNotFound
+	}
+	tier, err := s.modelTierRepo.FindByID(ctx, *tierID)
+	if err != nil || tier == nil || tier.ArchivedAt != nil {
+		return ErrModelTierNotFound
+	}
+	if !tier.Enabled {
+		return ErrModelTierDisabled
+	}
+	return nil
+}
+
+func NewGroupService(repo *repository.GroupRepo, modelRepo *repository.ModelRepo) *GroupService {
 	return &GroupService{
-		repo: repo,
+		repo:      repo,
+		modelRepo: modelRepo,
 		failoverDefaults: &FailoverDefaults{
 			MaxSwitches:      2,
 			SameModelRetries: 1,
@@ -58,7 +138,7 @@ func (s *GroupService) GetFailoverDefaults() FailoverDefaults {
 type CreateGroupRequest struct {
 	Name                    string `json:"name" binding:"required,max=64"`
 	Description             string `json:"description"`
-	ModelType               string `json:"model_type" binding:"omitempty,oneof=chat embedding embedding_vl rerank video"`
+	ModelType               string `json:"model_type" binding:"omitempty,oneof=chat embedding embedding_vl rerank rerank_vl video"`
 	Strategy                string `json:"strategy" binding:"required,oneof=round_robin priority weighted auto"`
 	MaxSwitches             *int   `json:"max_switches"`
 	SameModelRetries        *int   `json:"same_model_retries"`
@@ -69,7 +149,7 @@ type CreateGroupRequest struct {
 type UpdateGroupRequest struct {
 	Name                    *string `json:"name"`
 	Description             *string `json:"description"`
-	ModelType               *string `json:"model_type" binding:"omitempty,oneof=chat embedding embedding_vl rerank video"`
+	ModelType               *string `json:"model_type" binding:"omitempty,oneof=chat embedding embedding_vl rerank rerank_vl video"`
 	Strategy                *string `json:"strategy" binding:"omitempty,oneof=round_robin priority weighted auto"`
 	Enabled                 *bool   `json:"enabled"`
 	MaxSwitches             *int    `json:"max_switches"`
@@ -274,6 +354,10 @@ func (s *GroupService) AddModelsToGroup(groupID uint, modelIDs []uuid.UUID, prio
 		return fmt.Errorf("find group: %w", err)
 	}
 
+	if err := s.validateGroupModelTypes(groupID, modelIDs); err != nil {
+		return err
+	}
+
 	for _, modelID := range modelIDs {
 		gm := &model.GroupModel{
 			ModelID: modelID,
@@ -296,6 +380,67 @@ func (s *GroupService) AddModelsToGroup(groupID uint, modelIDs []uuid.UUID, prio
 		}
 	}
 
+	return nil
+}
+
+func (s *GroupService) validateGroupModelTypes(groupID uint, newModelIDs []uuid.UUID) error {
+	if s.modelRepo == nil {
+		return fmt.Errorf("model repo is required")
+	}
+
+	existingModels, err := s.repo.ListGroupModels(groupID)
+	if err != nil {
+		return fmt.Errorf("list group models: %w", err)
+	}
+
+	allIDs := make([]uuid.UUID, 0, len(existingModels)+len(newModelIDs))
+	seen := make(map[uuid.UUID]struct{}, len(existingModels)+len(newModelIDs))
+	for _, gm := range existingModels {
+		if _, ok := seen[gm.ModelID]; ok {
+			continue
+		}
+		seen[gm.ModelID] = struct{}{}
+		allIDs = append(allIDs, gm.ModelID)
+	}
+	for _, modelID := range newModelIDs {
+		if _, ok := seen[modelID]; ok {
+			continue
+		}
+		seen[modelID] = struct{}{}
+		allIDs = append(allIDs, modelID)
+	}
+
+	modelsByID, err := s.modelRepo.GetByIDs(allIDs)
+	if err != nil {
+		return fmt.Errorf("get group models: %w", err)
+	}
+
+	modelTypes := make([]string, 0, len(allIDs))
+	for _, modelID := range allIDs {
+		m, ok := modelsByID[modelID]
+		if !ok {
+			return fmt.Errorf("model %s not found", modelID)
+		}
+		modelTypes = append(modelTypes, m.ModelType)
+	}
+
+	return assertSameModelType(modelTypes)
+}
+
+func assertSameModelType(modelTypes []string) error {
+	if len(modelTypes) == 0 {
+		return nil
+	}
+
+	expected := strings.TrimSpace(modelTypes[0])
+	if expected == "" {
+		return ErrGroupModelTypeMismatch
+	}
+	for _, modelType := range modelTypes[1:] {
+		if strings.TrimSpace(modelType) != expected {
+			return ErrGroupModelTypeMismatch
+		}
+	}
 	return nil
 }
 

@@ -144,7 +144,7 @@
             </div>
           </div>
           <!-- Progress bars -->
-          <div class="ud-model-user-progress-row" v-for="(user, idx) in topUsers" :key="'p-' + user.user_id">
+          <div class="ud-model-user-progress-row" v-for="user in topUsers" :key="'p-' + user.user_id">
             <div class="ud-model-progress">
               <div
                 class="ud-model-progress-bar"
@@ -182,9 +182,7 @@ import { currencySymbol, convertCost, type Currency } from '@/utils/currency'
 import { fetchModelDetail } from '@/api/dashboard-enhanced'
 import type {
   ModelDetailResponse,
-  ModelDetailSummary,
   DailyTrendItem,
-  ModelUserDistributionItem,
 } from '@/types/dashboard-enhanced'
 
 Chart.register(...registerables)
@@ -231,9 +229,9 @@ const sym = computed(() => currencySymbol(props.currency as Currency))
 
 // ── Computed ────────────────────────────────────────────────────────
 const successRate = computed(() => {
-  if (!detail.value) return 0
+  if (!detail.value) return '0'
   const { success_count, total_calls } = detail.value.summary
-  if (!total_calls) return 0
+  if (!total_calls) return '0'
   return ((success_count / total_calls) * 100).toFixed(1)
 })
 

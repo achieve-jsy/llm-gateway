@@ -9,14 +9,24 @@ interface OrgRole {
   role: string
   scope_type: string
   scope_id: string
+  scope_name?: string
 }
 
 function parseJWT(token: string): Record<string, any> | null {
   try {
-    const base64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
+    const payload = token.split('.')[1]
+    if (!payload) return null
+    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/')
     const json = decodeURIComponent(atob(base64).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''))
     return JSON.parse(json)
   } catch { return null }
+}
+
+function clearStoredAuth() {
+  localStorage.removeItem('access_token')
+  localStorage.removeItem('refresh_token')
+  localStorage.removeItem('save_user')
+  localStorage.removeItem('dept_status')
 }
 
 function restoreUser(): { user: User | null; role: string | null } {
@@ -29,9 +39,14 @@ function restoreUser(): { user: User | null; role: string | null } {
 
   const save = localStorage.getItem('save_user')
   if (save) {
-    const saved = JSON.parse(save) as { user: User | null; role: string | null }
-    // role 以 JWT 为准，避免缓存过期导致权限丢失
-    return { user: saved.user, role: jwtRole ?? saved.role }
+    try {
+      const saved = JSON.parse(save) as { user: User | null; role: string | null }
+      // role 以 JWT 为准，避免缓存过期导致权限丢失
+      return { user: saved.user, role: jwtRole ?? saved.role }
+    } catch {
+      clearStoredAuth()
+      return { user: null, role: null }
+    }
   }
 
   if (claims) {
@@ -44,6 +59,7 @@ function restoreUser(): { user: User | null; role: string | null } {
     }
     return { user: u, role: jwtRole }
   }
+  clearStoredAuth()
   return { user: null, role: null }
 }
 
@@ -92,6 +108,7 @@ export const useAuthStore = defineStore('auth', () => {
   // org 角色（从 /api/v1/org/roles/me 拉取，login 后异步刷新）
   const orgRoles = ref<OrgRole[]>([])
   const effectiveRole = ref<UserRole | null>(restored.role as any || null)
+  const orgRolesLoaded = ref(false)
 
   // 登录时后端返回的部门映射状态，供前端展示引导提示（localStorage 持久化）
   const deptStatus = ref<DeptStatus | null>(
@@ -126,7 +143,13 @@ export const useAuthStore = defineStore('auth', () => {
       if (data.effective_role) {
         effectiveRole.value = data.effective_role as UserRole
       }
+      orgRolesLoaded.value = true
     } catch {}
+  }
+
+  async function ensureOrgRoles() {
+    if (orgRolesLoaded.value) return
+    await fetchOrgRoles()
   }
 
   function setAuth(data: { accessToken: string; refreshToken: string; user: User; role?: UserRole | string; dept_status?: DeptStatus; is_bootstrap_admin?: boolean }) {
@@ -178,6 +201,7 @@ export const useAuthStore = defineStore('auth', () => {
     role.value = null
     orgRoles.value = []
     effectiveRole.value = null
+    orgRolesLoaded.value = false
     localStorage.removeItem('access_token')
     localStorage.removeItem('refresh_token')
     localStorage.removeItem('save_user')
@@ -210,8 +234,8 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   return {
-    accessToken, refreshTokenValue, user, role, orgRoles, effectiveRole,
+    accessToken, refreshTokenValue, user, role, orgRoles, effectiveRole, orgRolesLoaded,
     isLoggedIn, isAdmin, isManager, userName, departmentName, deptStatus, isBootstrapAdmin,
-    setAuth, handleCallback, refresh, handleLogout, fetchOrgRoles, refreshDeptStatus,
+    setAuth, handleCallback, refresh, handleLogout, fetchOrgRoles, ensureOrgRoles, refreshDeptStatus,
   }
 })

@@ -258,8 +258,8 @@ function sourceLabel(source: string): string {
 function sourceTagType(source: string): string {
   switch (source) {
     case 'override': return 'success'      // 绿色
-    case 'default_user': return ''         // 蓝色（默认）
-    case 'default_service_key': return ''   // 蓝色（默认）
+    case 'default_user': return 'primary'  // 蓝色（默认）
+    case 'default_service_key': return 'primary' // 蓝色（默认）
     case 'unset': return 'info'            // 灰色
     default: return 'info'
   }

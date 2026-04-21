@@ -80,6 +80,7 @@
             <el-option label="Chat" value="/v1/chat/completions" />
             <el-option label="Embedding" value="/v1/embeddings" />
             <el-option label="Rerank" value="/v1/rerank" />
+            <el-option label="Rerank VL" value="/v1/rerank_vl" />
           </el-select>
 
           <el-select
@@ -136,7 +137,7 @@
         <el-button
           size="small"
           plain
-          @click="emit(fullscreen ? 'exit-fullscreen' : 'enter-fullscreen')"
+          @click="toggleFullscreen"
         >
           {{ fullscreen ? '退出全屏' : '全屏' }}
         </el-button>
@@ -555,7 +556,14 @@ import {
 } from 'element-plus'
 import { DataBoard, Refresh, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import { opsAPI, subscribeQPS } from '@/api/ops'
-import type { OpsOverview, OpsJobHeartbeat, OpsGroupOption } from '@/api/ops'
+import type {
+  OpsGroupOption,
+  OpsJobHeartbeat,
+  OpsModelItem,
+  OpsOverview,
+  OpsProviderItem,
+  OpsSystemMetrics,
+} from '@/api/ops'
 import {
   getHealthScoreColor,
   getThresholdColor,
@@ -611,6 +619,11 @@ const emit = defineEmits<{
   (e: 'enter-fullscreen'): void
   (e: 'exit-fullscreen'): void
 }>()
+
+function toggleFullscreen() {
+  if (props.fullscreen) emit('exit-fullscreen')
+  else emit('enter-fullscreen')
+}
 
 // ============ Filter State & Options ============
 
@@ -844,7 +857,7 @@ interface DiagnosisItem {
   statusText: string
 }
 
-const emptySystemMetrics = {
+const emptySystemMetrics: OpsSystemMetrics = {
   cpu_usage_percent: 0,
   memory_used_mb: 0,
   memory_total_mb: 0,
@@ -857,6 +870,9 @@ const emptySystemMetrics = {
   redis_total_conns: 0,
   redis_idle_conns: 0,
   redis_pool_size: 0,
+  concurrency_queue_depth: 0,
+  db_ok: false,
+  redis_ok: false,
   collected_at: '',
 }
 
@@ -1079,7 +1095,7 @@ const jobsColor = computed(() => jobsSummary.value.color)
 const queueDepthColor = computed(() => {
   const depth = systemMetrics.value.concurrency_queue_depth
   if (depth > 10) return HEALTH_COLORS.CRITICAL
-  if (depth > 0) return HEALTH_COLORS.WARNING
+  if (depth > 0) return HEALTH_COLORS.WARN
   return HEALTH_COLORS.OK
 })
 

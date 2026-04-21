@@ -47,6 +47,10 @@ func (f *fakeProvider) Embeddings(_ context.Context, _ *core.EmbeddingRequest) (
 	return nil, nil
 }
 
+func (f *fakeProvider) Rerank(_ context.Context, _ *core.RerankRequest) (*core.RerankResponse, error) {
+	return nil, nil
+}
+
 // newTestFactory 创建一个注册了 "fake" 类型的 ProviderFactory，用于测试
 func newTestFactory() *providers.ProviderFactory {
 	factory := providers.NewProviderFactory()

@@ -20,20 +20,6 @@ variables:
   # revision 表建立后再带此参数为无操作（幂等）。注意：切勿对空库使用，否则不会建表。
   ATLAS_BASELINE: "20260609082623"
 
-# 有实际影响的文件变更（排除 docs/skills/README/.gitignore 等不会影响运行的文件）
-.test-significant-changes: &test-significant-changes
-  - "internal/**/*"
-  - "cmd/**/*"
-  - "go.mod"
-  - "go.sum"
-  - "web/**/*"
-  - "deploy/docker/**/*"
-  - "deploy/blue-green/**/*"
-  - "config/**/*"
-  - "docker-compose.yml"
-  - "atlas-migrations/**/*"
-  - ".gitlab-ci.yml"
-
 # Go 后端变更（触发 gateway + control-plane 构建）
 .go-changes: &go-changes
   - "internal/**/*"
@@ -275,7 +261,6 @@ migrate-prod:
 
 migrate-test:
   stage: migrate
-  needs: []
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   cache:
@@ -352,6 +337,11 @@ deploy-app-test:
         export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
         export OAUTH_REDIRECT_URI='http://192.0.2.10:9080/auth/callback'
         export FRONTEND_URL='http://192.0.2.10:9080'
+        # 非密钥 canonical 开关：测试环境默认进入安全影子记账，不启用任何阻断。
+        export BUDGET_TIER_MASTER_ENABLED=true BUDGET_TIER_ACCOUNTING_ENABLED=true
+        export BUDGET_TIER_POSITIVE_ENFORCEMENT_ENABLED=false BUDGET_TIER_ZERO_BLOCK_ENABLED=false
+        export BUDGET_TIER_SHADOW_ENABLED=true BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED=false
+        export BUDGET_LEGACY_TOTAL_WRITE_ENABLED=true
         bash deploy-blue-green.sh
       "
   environment:
@@ -389,6 +379,10 @@ rollback-test:
         export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
         export OAUTH_REDIRECT_URI='http://192.0.2.10:9080/auth/callback'
         export FRONTEND_URL='http://192.0.2.10:9080'
+        export BUDGET_TIER_MASTER_ENABLED=true BUDGET_TIER_ACCOUNTING_ENABLED=true
+        export BUDGET_TIER_POSITIVE_ENFORCEMENT_ENABLED=false BUDGET_TIER_ZERO_BLOCK_ENABLED=false
+        export BUDGET_TIER_SHADOW_ENABLED=true BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED=false
+        export BUDGET_LEGACY_TOTAL_WRITE_ENABLED=true
         bash deploy-blue-green.sh --rollback
       "
   environment:
@@ -481,6 +475,10 @@ deploy-app-test-fast:
         export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
         export OAUTH_REDIRECT_URI='http://192.0.2.10:9080/auth/callback'
         export FRONTEND_URL='http://192.0.2.10:9080'
+        export BUDGET_TIER_MASTER_ENABLED=true BUDGET_TIER_ACCOUNTING_ENABLED=true
+        export BUDGET_TIER_POSITIVE_ENFORCEMENT_ENABLED=false BUDGET_TIER_ZERO_BLOCK_ENABLED=false
+        export BUDGET_TIER_SHADOW_ENABLED=true BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED=false
+        export BUDGET_LEGACY_TOTAL_WRITE_ENABLED=true
         docker compose -f docker-compose.${TARGET_COLOR}.yml -p llm-${TARGET_COLOR} up -d --remove-orphans
       "
 
@@ -522,6 +520,10 @@ deploy-app-test-fast:
         export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
         export OAUTH_REDIRECT_URI='http://192.0.2.10:9080/auth/callback'
         export FRONTEND_URL='http://192.0.2.10:9080'
+        export BUDGET_TIER_MASTER_ENABLED=true BUDGET_TIER_ACCOUNTING_ENABLED=true
+        export BUDGET_TIER_POSITIVE_ENFORCEMENT_ENABLED=false BUDGET_TIER_ZERO_BLOCK_ENABLED=false
+        export BUDGET_TIER_SHADOW_ENABLED=true BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED=false
+        export BUDGET_LEGACY_TOTAL_WRITE_ENABLED=true
         # 直接执行 nginx 切换 + 停旧（跳过启动，因为容器已启动）
         bash deploy-blue-green.sh --skip-start
       "
@@ -580,6 +582,14 @@ deploy-prod:
         export FRONTEND_URL='${PROD_FRONTEND_URL:-https://aimeter.xk-devops.com}'
         export INTERNAL_AUTH_TOKEN='${PROD_INTERNAL_AUTH_TOKEN}'
         export OAUTH_ISSUER_URL='${PROD_OAUTH_ISSUER_URL:-https://oauth.example.net/}'
+        # 生产非密钥开关由受控 CI 变量注入；未配置时 compose 使用安全关闭默认值。
+        export BUDGET_TIER_MASTER_ENABLED='${PROD_BUDGET_TIER_MASTER_ENABLED:-false}'
+        export BUDGET_TIER_ACCOUNTING_ENABLED='${PROD_BUDGET_TIER_ACCOUNTING_ENABLED:-false}'
+        export BUDGET_TIER_POSITIVE_ENFORCEMENT_ENABLED='${PROD_BUDGET_TIER_POSITIVE_ENFORCEMENT_ENABLED:-false}'
+        export BUDGET_TIER_ZERO_BLOCK_ENABLED='${PROD_BUDGET_TIER_ZERO_BLOCK_ENABLED:-false}'
+        export BUDGET_TIER_SHADOW_ENABLED='${PROD_BUDGET_TIER_SHADOW_ENABLED:-false}'
+        export BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED='${PROD_BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED:-false}'
+        export BUDGET_LEGACY_TOTAL_WRITE_ENABLED='${PROD_BUDGET_LEGACY_TOTAL_WRITE_ENABLED:-true}'
         bash deploy-blue-green.sh
       "
   environment:

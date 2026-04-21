@@ -1,10 +1,34 @@
 package repository
 
 import (
+	"context"
 	"fmt"
+	"time"
 
+	"github.com/example/llm-gateway/internal/controlplane/budgetdomain"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+type TierUsageQuery struct {
+	ScopeType string
+	ScopeID   string
+	TierID    *uuid.UUID
+	GroupID   *uint
+	StartAt   time.Time
+	EndAt     time.Time
+	Total     bool
+}
+
+type TierUsageAggregate struct {
+	ScopeType         string              `gorm:"column:scope_type" json:"scope_type"`
+	ScopeID           string              `gorm:"column:scope_id" json:"scope_id"`
+	TierID            *uuid.UUID          `gorm:"column:tier_id" json:"model_tier_id,omitempty"`
+	GroupID           *uint               `gorm:"column:group_id" json:"group_id,omitempty"`
+	ReportedCostUSD   budgetdomain.Amount `gorm:"column:reported_cost_usd" json:"reported_cost_usd"`
+	AccountingCostUSD budgetdomain.Amount `gorm:"column:accounting_cost_usd" json:"accounting_cost_usd"`
+	RequestCount      int64               `gorm:"column:request_count" json:"request_count"`
+}
 
 // CallLogRepo 调用日志性能聚合数据访问层
 type CallLogRepo struct {
@@ -14,6 +38,81 @@ type CallLogRepo struct {
 // NewCallLogRepo 创建 CallLogRepo 实例
 func NewCallLogRepo(db *gorm.DB) *CallLogRepo {
 	return &CallLogRepo{db: db}
+}
+
+func (r *CallLogRepo) SumTierUsage(ctx context.Context, q TierUsageQuery) ([]TierUsageAggregate, error) {
+	db := r.db.WithContext(ctx).Table("call_logs").
+		Where("ts >= ? AND ts < ? AND status < 400", q.StartAt, q.EndAt)
+	if !q.Total {
+		db = db.Where("budget_tier_id IS NOT NULL")
+	}
+	if q.TierID != nil {
+		db = db.Where("budget_tier_id = ?", *q.TierID)
+	}
+	scopeColumn := ""
+	switch q.ScopeType {
+	case "studio":
+		scopeColumn = "studio_id"
+	case "dept_daily", "dept_service":
+		scopeColumn = "dept_id"
+	case "member":
+		scopeColumn = "user_id"
+	}
+	if scopeColumn != "" && q.ScopeID != "" {
+		db = db.Where(scopeColumn+" = ?", q.ScopeID)
+	}
+	if q.ScopeType == "dept_daily" {
+		db = db.Where("COALESCE(NULLIF(key_type, ''), 'personal') != 'service'")
+	} else if q.ScopeType == "dept_service" {
+		db = db.Where("key_type = 'service'")
+	}
+	scopeIDExpr := "''"
+	if scopeColumn != "" {
+		scopeIDExpr = scopeColumn
+	}
+	tierExpr := "budget_tier_id"
+	if q.Total {
+		tierExpr = "NULL"
+	}
+	groupIDExpr := "NULL"
+	if q.GroupID != nil {
+		db = db.Joins("JOIN model_groups mg ON mg.name = call_logs.group_name").Where("mg.id = ?", *q.GroupID)
+		groupIDExpr = "mg.id"
+	}
+	accountingCostExpr := "SUM(CASE WHEN budget_tier_accounting_eligible THEN est_cost_usd ELSE 0 END)"
+	if q.Total {
+		accountingCostExpr = "SUM(est_cost_usd)"
+	}
+	var rows []TierUsageAggregate
+	db = db.Select(
+		"? AS scope_type, "+scopeIDExpr+" AS scope_id, "+tierExpr+" AS tier_id, "+groupIDExpr+" AS group_id, "+
+			"SUM(est_cost_usd) AS reported_cost_usd, "+
+			accountingCostExpr+" AS accounting_cost_usd, "+
+			"COUNT(*) AS request_count",
+		q.ScopeType,
+	)
+	if scopeColumn != "" {
+		db = db.Group(scopeColumn)
+	}
+	if !q.Total {
+		db = db.Group("budget_tier_id")
+	}
+	if q.GroupID != nil {
+		db = db.Group("mg.id")
+	}
+	err := db.Scan(&rows).Error
+	return rows, err
+}
+
+func (r *CallLogRepo) UsageFreshness(ctx context.Context) (time.Time, bool, error) {
+	var latest *time.Time
+	if err := r.db.WithContext(ctx).Table("call_logs").Select("MAX(ts)").Scan(&latest).Error; err != nil {
+		return time.Time{}, true, err
+	}
+	if latest == nil {
+		return time.Time{}, true, nil
+	}
+	return latest.UTC(), time.Since(*latest) > 10*time.Minute, nil
 }
 
 // PerformanceGroupRow 性能聚合查询结果行

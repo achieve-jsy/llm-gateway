@@ -266,37 +266,39 @@ const traceTab = ref('prompt')
 const traceEndpointType = computed((): UsageEndpointType => {
   const fromRow = endpointPathToType(props.row?.inbound_endpoint)
   if (fromRow) return fromRow
-  if (props.endpointType === 'embedding' || props.endpointType === 'rerank') return props.endpointType
+  if (props.endpointType === 'embedding' || props.endpointType === 'rerank' || props.endpointType === 'rerank_vl') return props.endpointType
   return 'chat'
 })
 
 const isNonChatEndpoint = computed(() =>
-  traceEndpointType.value === 'embedding' || traceEndpointType.value === 'rerank',
+  traceEndpointType.value === 'embedding' || traceEndpointType.value === 'rerank' || traceEndpointType.value === 'rerank_vl',
 )
 
 const traceEndpointLabel = computed(() => {
   const map: Record<string, string> = {
     embedding: 'Embedding',
     rerank: 'Rerank',
+    rerank_vl: 'Rerank VL',
   }
   return map[traceEndpointType.value] || ''
 })
 
 const traceEndpointTagType = computed(() => {
   if (traceEndpointType.value === 'embedding') return 'success'
-  if (traceEndpointType.value === 'rerank') return 'warning'
+  if (traceEndpointType.value === 'rerank' || traceEndpointType.value === 'rerank_vl') return 'warning'
   return 'info'
 })
 
 const usageSectionTitle = computed(() => {
   if (traceEndpointType.value === 'embedding') return 'Embedding 用量'
   if (traceEndpointType.value === 'rerank') return 'Rerank 请求'
+  if (traceEndpointType.value === 'rerank_vl') return 'Rerank VL 请求'
   return 'Token 用量'
 })
 
 const requestTabLabel = computed(() => {
   if (traceEndpointType.value === 'embedding') return '输入'
-  if (traceEndpointType.value === 'rerank') return '请求'
+  if (traceEndpointType.value === 'rerank' || traceEndpointType.value === 'rerank_vl') return '请求'
   return '提示词'
 })
 

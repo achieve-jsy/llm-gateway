@@ -22,6 +22,7 @@ func TestInferModelType_Scenarios(t *testing.T) {
 		{name: "多模态embedding-vision", modelName: "vision-embedding-v2", want: "embedding_vl"},
 		{name: "rerank模型", modelName: "qwen3-rerank", want: "rerank"},
 		{name: "rerank模型(大写)", modelName: "GTE-RERANK-V2", want: "rerank"},
+		{name: "多模态rerank-vl", modelName: "qwen3-vl-rerank", want: "rerank_vl"},
 		{name: "rerank优先于embed", modelName: "embed-rerank-model", want: "rerank"},
 		{name: "vl优先于embed", modelName: "embed-vl-model", want: "embedding_vl"},
 		{name: "未知模型默认chat", modelName: "unknown-model", want: "chat"},

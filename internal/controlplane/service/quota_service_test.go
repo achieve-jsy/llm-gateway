@@ -104,7 +104,10 @@ func setupQuotaServiceTestDB(t *testing.T) *gorm.DB {
 		override_supports_function_calling INTEGER NOT NULL DEFAULT 0,
 		override_supports_tool_choice INTEGER NOT NULL DEFAULT 0,
 		quota_rpm INTEGER,
-		quota_max_concurrency INTEGER
+		quota_max_concurrency INTEGER,
+		budget_tier_id TEXT,
+		sticky_enabled INTEGER NOT NULL DEFAULT 0,
+		sticky_ttl_seconds INTEGER NOT NULL DEFAULT 3600
 	)`).Error)
 
 	// providers table

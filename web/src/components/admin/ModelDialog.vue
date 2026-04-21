@@ -17,7 +17,6 @@
         <el-input
           v-model="formData.name"
           placeholder="如 gpt-4o, qwen-turbo"
-          :disabled="isEdit"
           @input="onNameInput"
         />
         <!-- Catalog 联想填充建议下拉 -->
@@ -55,6 +54,13 @@
           v-model="formData.upstream_model_id"
           placeholder="留空则使用上游模型ID原样转发"
         />
+        <div
+          v-if="selectedProviderDefinitionId === 'azure'"
+          class="form-hint"
+          style="margin-top: 4px; color: var(--el-text-color-secondary); font-size: 12px;"
+        >
+          Azure 渠道：此处必须填 Azure <b>部署名</b>（如 gpt-5.5）。填写 azure/us/gpt-5.5 等前缀会导致 DeploymentNotFound。
+        </div>
       </el-form-item>
 
       <el-form-item label="归属渠道" prop="provider_id">
@@ -82,6 +88,7 @@
           <el-option label="Embedding（向量）" value="embedding" />
           <el-option label="Embedding-VL（多模态向量）" value="embedding_vl" />
           <el-option label="Rerank（重排序）" value="rerank" />
+          <el-option label="Rerank-VL（多模态重排序）" value="rerank_vl" />
           <el-option label="🎬 Video（视频生成）" value="video" />
         </el-select>
       </el-form-item>
@@ -368,7 +375,7 @@ interface FormState {
   name: string
   upstream_model_id: string
   provider_id: string
-  model_type: 'chat' | 'embedding' | 'embedding_vl' | 'rerank' | 'video'
+  model_type: 'chat' | 'embedding' | 'embedding_vl' | 'rerank' | 'rerank_vl' | 'video'
   description: string
   context_length: number
   max_output_tokens: number
@@ -413,6 +420,10 @@ const applyingCatalog = ref(false)
 
 const isEdit = computed(() => !!props.model)
 const catalogLinked = computed(() => !!selectedCatalogId.value)
+const selectedProviderDefinitionId = computed(() => {
+  const p = props.providers.find((pr) => pr.id === formData.value.provider_id)
+  return (p as { definition_id?: string } | undefined)?.definition_id || ''
+})
 
 function formatCtxK(n: number): number {
   return Math.round(n / 1000)
@@ -447,7 +458,7 @@ watch(
         name: val.name,
         upstream_model_id: val.upstream_model_id || '',
         provider_id: val.provider_id,
-        model_type: (val.model_type as FormState['model_type']) || 'chat',
+model_type: (val.model_type as FormState['model_type']) || 'chat',
         description: val.description || '',
         context_length: val.context_length || 0,
         max_output_tokens: val.max_output_tokens || 0,

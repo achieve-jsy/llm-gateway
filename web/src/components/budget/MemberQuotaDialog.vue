@@ -34,31 +34,66 @@
       <template v-if="canEdit">
         <el-form label-position="top" style="margin-top: 16px">
           <el-form-item label="月额度（USD）">
-            <el-input-number
-              v-model="form.amount"
-              :min="0"
-              :precision="2"
-              controls-position="right"
-              style="width: 100%"
-            />
+            <div v-if="form.amountUnlimited" class="mq-unlimited">
+              <strong>不限</strong>
+              <el-button size="small" @click="form.amountUnlimited = false">设置上限</el-button>
+            </div>
+            <template v-else>
+              <el-input-number
+                v-model="form.amount"
+                :min="0"
+                :precision="2"
+                controls-position="right"
+                style="width: 100%"
+              />
+              <el-button link type="primary" style="margin-top:4px" @click="form.amountUnlimited = true">设为不限</el-button>
+            </template>
           </el-form-item>
-          <el-form-item label="周额度（USD，-1 表示不限）">
-            <el-input-number
-              v-model="form.weekly"
-              :min="-1"
-              :precision="2"
-              controls-position="right"
-              style="width: 100%"
-            />
+          <el-form-item label="周额度（USD）">
+            <div v-if="form.weeklyUnlimited" class="mq-unlimited">
+              <strong>不限</strong>
+              <el-button size="small" @click="form.weeklyUnlimited = false">设置上限</el-button>
+            </div>
+            <template v-else>
+              <el-input-number
+                v-model="form.weekly"
+                :min="0"
+                :precision="2"
+                controls-position="right"
+                style="width: 100%"
+              />
+              <el-button link type="primary" style="margin-top:4px" @click="form.weeklyUnlimited = true">设为不限</el-button>
+            </template>
           </el-form-item>
-          <el-form-item label="日额度（USD，-1 表示不限）">
-            <el-input-number
-              v-model="form.daily"
-              :min="-1"
-              :precision="2"
-              controls-position="right"
-              style="width: 100%"
-            />
+          <el-form-item label="日额度（USD）">
+            <div v-if="form.dailyUnlimited" class="mq-unlimited">
+              <strong>不限</strong>
+              <el-button size="small" @click="form.dailyUnlimited = false">设置上限</el-button>
+            </div>
+            <template v-else>
+              <el-input-number
+                v-model="form.daily"
+                :min="0"
+                :precision="2"
+                controls-position="right"
+                style="width: 100%"
+              />
+              <el-button link type="primary" style="margin-top:4px" @click="form.dailyUnlimited = true">设为不限</el-button>
+            </template>
+          </el-form-item>
+          <el-form-item label="生效方式">
+            <el-radio-group v-model="effectiveMode">
+              <el-radio value="immediate">立即生效</el-radio>
+              <el-radio
+                value="next_period"
+                :disabled="form.amountUnlimited || form.weeklyUnlimited || form.dailyUnlimited"
+              >
+                下周期生效
+              </el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="调整原因" required>
+            <el-input v-model="reason" type="textarea" :rows="2" maxlength="200" />
           </el-form-item>
         </el-form>
         <div class="mq-hint">保存后预算配置立即生效；已有告警去重会随改额重置。</div>
@@ -80,10 +115,10 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
-import { setBudgetBatch } from '@/services/control-plane'
-import type { BudgetItem } from '@/types/budget'
+import { adjustBudget, previewBudgetAdjustment } from '@/services/control-plane'
+import type { BudgetEffectiveMode, BudgetItem } from '@/types/budget'
 import { formatUSD } from '@/utils/format'
 
 const props = defineProps<{
@@ -99,16 +134,39 @@ const emit = defineEmits<{
 
 const router = useRouter()
 const saving = ref(false)
-const form = ref({ amount: 0, weekly: -1 as number, daily: -1 as number })
+const form = ref({
+  amount: 0,
+  weekly: 0,
+  daily: 0,
+  amountUnlimited: false,
+  weeklyUnlimited: true,
+  dailyUnlimited: true,
+})
+const reason = ref('')
+const effectiveMode = ref<BudgetEffectiveMode>('immediate')
+
+function toPeriodState(value: number | undefined | null) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n < 0) return { unlimited: true, value: 0 }
+  return { unlimited: false, value: n }
+}
 
 watch(
   () => props.member,
   (m) => {
     if (m) {
+      reason.value = ''
+      effectiveMode.value = 'immediate'
+      const monthly = toPeriodState(m.amount_usd)
+      const weekly = toPeriodState(m.weekly_amount_usd)
+      const daily = toPeriodState(m.daily_amount_usd)
       form.value = {
-        amount: m.amount_usd >= 0 ? m.amount_usd : 0,
-        weekly: m.weekly_amount_usd,
-        daily: m.daily_amount_usd,
+        amount: monthly.value,
+        weekly: weekly.value,
+        daily: daily.value,
+        amountUnlimited: monthly.unlimited,
+        weeklyUnlimited: weekly.unlimited,
+        dailyUnlimited: daily.unlimited,
       }
     }
   },
@@ -135,15 +193,59 @@ function statusText(ratio: number) {
 
 async function save() {
   if (!props.member) return
+  if (!reason.value.trim()) { ElMessage.warning('请填写调整原因'); return }
+  const hasUnlimited = form.value.amountUnlimited || form.value.weeklyUnlimited || form.value.dailyUnlimited
+  if (hasUnlimited && effectiveMode.value === 'next_period') {
+    ElMessage.warning('含「不限」时仅支持立即生效')
+    return
+  }
+  const targets = [
+    { period_type: 'monthly' as const, value: form.value.amountUnlimited ? -1 : form.value.amount },
+    { period_type: 'weekly' as const, value: form.value.weeklyUnlimited ? -1 : form.value.weekly },
+    { period_type: 'daily' as const, value: form.value.dailyUnlimited ? -1 : form.value.daily },
+  ]
+  if (targets.some(item => !(item.value === -1 || (Number.isFinite(item.value) && item.value >= 0)))) {
+    ElMessage.warning('额度必须 ≥ 0，或不限')
+    return
+  }
   saving.value = true
   try {
-    await setBudgetBatch([{
+    const previews = await Promise.all(targets.map(item => previewBudgetAdjustment({
       scope_type: 'member',
-      scope_id: props.member.scope_id,
-      amount_usd: form.value.amount,
-      weekly_amount_usd: form.value.weekly,
-      daily_amount_usd: form.value.daily,
-    }])
+      scope_id: props.member!.scope_id,
+      period_type: item.period_type,
+      target_limit_usd: Number(item.value).toFixed(6),
+      effective_mode: effectiveMode.value,
+      reason: reason.value.trim(),
+    })))
+    if (previews.some(item => item.stale)) {
+      ElMessage.warning('用量数据已过期，请刷新后重新预览')
+      return
+    }
+    if (previews.some(item => item.zero_block)) {
+      await ElMessageBox.confirm('$0 将阻断后续请求，是否继续？', '确认 $0 风险', { type: 'warning' })
+    }
+    if (previews.some(item => item.below_used)) {
+      await ElMessageBox.confirm('新额度低于当前已用量，是否继续？', '确认低于已用风险', { type: 'warning' })
+    }
+    if (previews.some(item => item.replaces_pending_schedule)) {
+      await ElMessageBox.confirm('本次调整将替换已有排期，是否继续？', '确认替换排期', { type: 'warning' })
+    }
+    if (!previews.some(item => item.zero_block || item.below_used || item.replaces_pending_schedule)) {
+      await ElMessageBox.confirm('预览完成，确认应用预算调整？', '确认预算调整', { type: 'info' })
+    }
+    await Promise.all(targets.map((item, index) => adjustBudget({
+      scope_type: 'member',
+      scope_id: props.member!.scope_id,
+      period_type: item.period_type,
+      target_limit_usd: Number(item.value).toFixed(6),
+      effective_mode: effectiveMode.value,
+      reason: reason.value.trim(),
+      confirm_zero_block: previews[index].zero_block,
+      confirm_below_used: previews[index].below_used,
+      confirm_replace_schedule: previews[index].replaces_pending_schedule,
+      preview_version: previews[index].preview_version,
+    })))
     ElMessage.success('成员配额已更新')
     emit('update:modelValue', false)
     emit('refresh')

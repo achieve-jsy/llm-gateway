@@ -356,13 +356,13 @@ interface DisplayItem {
   req_count?: number
   timeline?: any
   perf?: PerformanceItem
-  used_by_groups?: string
+  used_by_groups?: number
   success_rate: number
   p50_ms: number
   p95_ms: number
   ttft_p50_ms: number
   ttft_p95_ms: number
-  pct_in_24h_p50?: number
+  pct_in_24h_p50?: number | null
   failover_count: number
   err_429: number
   err_5xx: number
@@ -630,12 +630,6 @@ function toggleExpand(name: string) {
   const s = new Set(expandedGroups.value)
   if (s.has(name)) s.delete(name); else s.add(name)
   expandedGroups.value = s
-}
-
-function rateType(percent: number): 'success' | 'warning' | 'danger' {
-  if (percent >= 95) return 'success'
-  if (percent >= 80) return 'warning'
-  return 'danger'
 }
 
 function rateClass(rate: number): string {

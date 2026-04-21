@@ -67,12 +67,19 @@ func buildProviderEntries(models []controlmodel.Model) ([]gatewaymodel.ProviderE
 				return nil, fmt.Errorf("decrypt provider credentials for %s: %w", providerID, err)
 			}
 
+			// api_version 从 ProviderDefinition.VendorOptions 继承，per-instance 可覆盖（暂不开放）
+			var apiVersion string
+			if def := m.Provider.Definition; def != nil {
+				apiVersion = def.VendorOptions.APIVersion
+			}
+
 			entry = &gatewaymodel.ProviderEntry{
 				ID:          providerID,
 				Name:        m.Provider.Name,
 				Type:        providerTypeForGateway(m.Provider),
 				Endpoint:    m.Provider.Endpoint,
 				Credentials: extractAPIKey(credentials),
+				APIVersion:  apiVersion,
 				Enabled:     true,
 				Models:      make([]string, 0, 4),
 			}

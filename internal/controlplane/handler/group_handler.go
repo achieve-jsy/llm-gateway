@@ -120,6 +120,8 @@ func (h *GroupHandler) List(c *gin.Context) {
 		ModelCount              int    `json:"model_count"`
 		OpenMode                string `json:"open_mode"`
 		IsCapabilityOverride    bool   `json:"is_capability_override"`
+		ModelTierID             string `json:"model_tier_id,omitempty"`
+		ModelTierName           string `json:"model_tier_name,omitempty"`
 		CreatedAt               string `json:"created_at"`
 		UpdatedAt               string `json:"updated_at"`
 	}
@@ -130,6 +132,14 @@ func (h *GroupHandler) List(c *gin.Context) {
 		mt := g.ModelType
 		if mt == "" {
 			mt = "chat"
+		}
+		var tierIDStr string
+		var tierName string
+		if g.BudgetTierID != nil {
+			tierIDStr = g.BudgetTierID.String()
+		}
+		if g.BudgetTier != nil {
+			tierName = g.BudgetTier.Name
 		}
 		items[i] = groupWithCount{
 			ID:                      g.ID,
@@ -144,6 +154,8 @@ func (h *GroupHandler) List(c *gin.Context) {
 			ModelCount:              count,
 			OpenMode:                g.OpenMode,
 			IsCapabilityOverride:    g.IsCapabilityOverride,
+			ModelTierID:             tierIDStr,
+			ModelTierName:           tierName,
 			CreatedAt:               g.CreatedAt.Format("2006-01-02T15:04:05Z"),
 			UpdatedAt:               g.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 		}
@@ -415,6 +427,7 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 	type modelInfo struct {
 		ID             uuid.UUID `json:"id"`
 		Name           string    `json:"name"`
+		ModelType      string    `json:"model_type,omitempty"`
 		ProviderID     uuid.UUID `json:"provider_id,omitempty"`
 		ProviderType   string    `json:"provider_type,omitempty"`
 		ProviderName   string    `json:"provider_name,omitempty"`
@@ -425,25 +438,29 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 	}
 
 	type groupInfo struct {
-		ID             uint        `json:"id"`
-		Name           string      `json:"name"`
-		Description    string      `json:"description"`
-		Strategy       string      `json:"strategy"`
-		Enabled        bool        `json:"enabled"`
-		TimeoutSeconds int         `json:"timeout_seconds"`
-		Models         []modelInfo `json:"models"`
+		ID               uint        `json:"id"`
+		Name             string      `json:"name"`
+		Description      string      `json:"description"`
+		Strategy         string      `json:"strategy"`
+		Enabled          bool        `json:"enabled"`
+		TimeoutSeconds   int         `json:"timeout_seconds"`
+		StickyEnabled    bool        `json:"sticky_enabled"`
+		StickyTTLSeconds int         `json:"sticky_ttl_seconds"`
+		Models           []modelInfo `json:"models"`
 	}
 
 	result := make([]groupInfo, 0, len(groups))
 	for _, g := range groups {
 		gi := groupInfo{
-			ID:             g.ID,
-			Name:           g.Name,
-			Description:    g.Description,
-			Strategy:       g.Strategy,
-			Enabled:        g.Enabled,
-			TimeoutSeconds: g.TimeoutSeconds,
-			Models:         make([]modelInfo, 0, len(g.Models)),
+			ID:               g.ID,
+			Name:             g.Name,
+			Description:      g.Description,
+			Strategy:         g.Strategy,
+			Enabled:          g.Enabled,
+			TimeoutSeconds:   g.TimeoutSeconds,
+			StickyEnabled:    g.StickyEnabled,
+			StickyTTLSeconds: g.StickyTTLSeconds,
+			Models:           make([]modelInfo, 0, len(g.Models)),
 		}
 		for _, gm := range g.Models {
 			mi := modelInfo{
@@ -460,12 +477,16 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 						continue
 					}
 				mi.Name = m.UpstreamName()
+				mi.ModelType = m.ModelType
 				mi.ProviderID = m.ProviderID
 				providerEnabled := false
 				if h.providerRepo != nil {
 					p, err := h.providerRepo.GetByID(m.ProviderID)
 					if err == nil && p != nil && p.Enabled {
 						mi.ProviderType = p.DefinitionID
+						if mi.ProviderType == "" {
+							mi.ProviderType = p.Type
+						}
 						mi.ProviderName = p.Name
 						mi.Endpoint = p.Endpoint
 						providerEnabled = true

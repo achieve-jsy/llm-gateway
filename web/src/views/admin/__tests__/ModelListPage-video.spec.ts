@@ -228,11 +228,11 @@ describe('ModelListPage - Video Tab', () => {
   })
 
   describe('modelTypeTagType', () => {
-    it('video type returns empty string (default style)', () => {
+    it('video type returns info (default style)', () => {
       const wrapper = mountComponent()
       const vm = wrapper.vm as any
 
-      expect(vm.modelTypeTagType('video')).toBe('')
+      expect(vm.modelTypeTagType('video')).toBe('info')
     })
 
     it('chat type returns primary', () => {

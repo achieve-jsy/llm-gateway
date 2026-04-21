@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"time"
 
 	"github.com/example/llm-gateway/internal/core"
@@ -15,4 +16,8 @@ type Scheduler interface {
 	NotifyFailure(modelID string)
 	// SetCooldown 为指定模型设置 429 冷却期。
 	SetCooldown(modelID string, duration time.Duration)
+	// PersistSticky 持久化 sticky 映射
+	PersistSticky(ctx context.Context, groupName, sessionKey string, decision *scheduler.RouteDecision)
+	// UpdateSticky 更新 sticky 映射（用于 failover）
+	UpdateSticky(ctx context.Context, groupName, sessionKey, newModelID string)
 }

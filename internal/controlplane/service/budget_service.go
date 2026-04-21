@@ -2,14 +2,22 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
+	"github.com/example/llm-gateway/internal/budgetperiod"
+	"github.com/example/llm-gateway/internal/controlplane/budgetdomain"
 	"github.com/example/llm-gateway/internal/controlplane/event"
 	"github.com/example/llm-gateway/internal/controlplane/model"
+	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
 
@@ -19,6 +27,53 @@ type BudgetService struct {
 	alertRepo BudgetAlertRecordRepo
 	publisher EventPublisher
 	rdb       *redis.Client
+	scheduler interface {
+		PutPendingSchedule(context.Context, *model.BudgetLimitSchedule, bool) (*model.BudgetLimitSchedule, error)
+	}
+}
+
+type BudgetRiskConfirmation struct {
+	ConfirmBelowUsed       bool   `json:"confirm_below_used"`
+	ConfirmZeroBlock       bool   `json:"confirm_zero_block"`
+	ConfirmStale           bool   `json:"confirm_stale"`
+	ConfirmReplaceSchedule bool   `json:"confirm_replace_schedule"`
+	PreviewVersion         string `json:"preview_version"`
+}
+
+type BudgetAdjustmentInput struct {
+	ScopeType      string
+	ScopeID        string
+	PeriodType     budgetdomain.PeriodType
+	TargetLimitUSD budgetdomain.Amount
+	EffectiveMode  EffectiveMode
+	Reason         string
+	ActorID        uuid.UUID
+	PreviewOnly    bool
+	BudgetRiskConfirmation
+}
+
+type BudgetAdjustmentImpact struct {
+	BeforeLimitUSD          string          `json:"before_limit_usd"`
+	AfterLimitUSD           string          `json:"after_limit_usd"`
+	CurrentUsedUSD          string          `json:"current_used_usd"`
+	AffectedMembers         int             `json:"affected_members"`
+	AffectedGroups          []AffectedGroup `json:"affected_groups"`
+	WillBlock               bool            `json:"will_block"`
+	StreamPolicy            string          `json:"stream_policy"`
+	DataAsOf                time.Time       `json:"data_as_of"`
+	Stale                   bool            `json:"stale"`
+	BelowUsed               bool            `json:"below_used"`
+	ZeroBlock               bool            `json:"zero_block"`
+	ReplacesPendingSchedule bool            `json:"replaces_pending_schedule"`
+	PendingScheduleID       string          `json:"pending_schedule_id,omitempty"`
+	PendingScheduleVersion  string          `json:"pending_schedule_version,omitempty"`
+	PreviewVersion          string          `json:"preview_version"`
+}
+
+func (s *BudgetService) SetLifecycleScheduler(scheduler interface {
+	PutPendingSchedule(context.Context, *model.BudgetLimitSchedule, bool) (*model.BudgetLimitSchedule, error)
+}) {
+	s.scheduler = scheduler
 }
 
 // BudgetAllocationRepo 预算额度表的访问接口。
@@ -41,6 +96,10 @@ type BudgetAllocationRepo interface {
 	DeleteAllocation(scopeType, scopeID string) error
 }
 
+type budgetAllocationCASRepo interface {
+	CompareAndSwapAllocationLimits(context.Context, model.BudgetAllocation, float64, float64, float64, uuid.UUID) (bool, error)
+}
+
 func (s *BudgetService) ListMemberIDsByDeptID(deptID string) ([]string, error) {
 	return s.repo.ListMemberIDsByDeptID(deptID)
 }
@@ -53,6 +112,36 @@ func (s *BudgetService) MemberInDeptIDs(memberID string, deptIDs []string) (bool
 	return s.repo.MemberInDeptIDs(memberID, deptIDs)
 }
 
+func (s *BudgetService) ResolveMemberDeptID(memberID string) (string, error) {
+	resolver, ok := s.repo.(interface {
+		ResolveMemberDeptID(string) (string, error)
+	})
+	if !ok {
+		return "", nil
+	}
+	return resolver.ResolveMemberDeptID(memberID)
+}
+
+func (s *BudgetService) ResolveMyBudgetChain(ctx context.Context, userID string) ([]repository.MyBudgetScopeAllocation, error) {
+	reader, ok := s.repo.(interface {
+		ResolveMyBudgetChain(context.Context, string) ([]repository.MyBudgetScopeAllocation, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("budget chain resolver not configured")
+	}
+	return reader.ResolveMyBudgetChain(ctx, userID)
+}
+
+func (s *BudgetService) ResolveBudgetChain(ctx context.Context, scopeType, scopeID string) ([]repository.MyBudgetScopeAllocation, error) {
+	reader, ok := s.repo.(interface {
+		ResolveBudgetChain(context.Context, string, string) ([]repository.MyBudgetScopeAllocation, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("budget chain resolver not configured")
+	}
+	return reader.ResolveBudgetChain(ctx, scopeType, scopeID)
+}
+
 // DeleteMemberBudget 删除成员的单独配额，还原为共享部门预算池。
 func (s *BudgetService) DeleteMemberBudget(ctx context.Context, scopeType, scopeID string) error {
 	return s.repo.DeleteAllocation(scopeType, scopeID)
@@ -62,8 +151,6 @@ func (s *BudgetService) DeleteMemberBudget(ctx context.Context, scopeType, scope
 // 实现者：repository.BudgetAlertRepo（真实 DB）。
 // 依赖注入点：测试可用 fake 替换。
 type BudgetAlertRecordRepo interface {
-	ExistsForPeriod(scopeType, scopeID, period string, threshold int) bool
-	Create(a *model.BudgetAlertRecord) error
 	DeleteByScope(scopeType, scopeID, period string) error
 }
 
@@ -84,10 +171,258 @@ func (s *BudgetService) SetRedis(rdb *redis.Client) {
 	s.rdb = rdb
 }
 
+func (s *BudgetService) AdjustBudget(
+	ctx context.Context,
+	input BudgetAdjustmentInput,
+) (*BudgetAdjustmentImpact, error) {
+	if strings.TrimSpace(input.Reason) == "" {
+		return nil, ErrBudgetReasonRequired
+	}
+	if !input.PeriodType.Valid() {
+		return nil, ErrInvalidBudgetPeriod
+	}
+	allocation, err := s.repo.GetAllocation(input.ScopeType, input.ScopeID)
+	if err != nil {
+		return nil, err
+	}
+	creating := allocation == nil
+	if creating {
+		// 首次为成员等 scope 配置独立额度：允许立即生效创建；下周期排期需要已有行。
+		if input.EffectiveMode == EffectiveNextPeriod {
+			return nil, ErrBudgetAllocationNotFound
+		}
+		allocation = &model.BudgetAllocation{
+			ScopeType:       input.ScopeType,
+			ScopeID:         input.ScopeID,
+			AmountUSD:       -1,
+			DailyAmountUSD:  -1,
+			WeeklyAmountUSD: -1,
+			Period:          "monthly",
+			Enabled:         true,
+			CreatedBy:       input.ActorID,
+			UpdatedBy:       input.ActorID,
+		}
+	}
+	before := totalAllocationLimit(*allocation, input.PeriodType)
+	window, err := budgetperiod.Resolve(time.Now(), input.PeriodType, budgetperiod.Config{
+		Timezone: budgetperiod.DefaultTimezone, WeekStart: budgetperiod.CanonicalWeekStart,
+	})
+	if err != nil {
+		return nil, err
+	}
+	used := decimal.Zero
+	stale := s.rdb == nil
+	if s.rdb != nil {
+		key := fmt.Sprintf("budget:v2:used:%s:%s:%s", input.ScopeType, input.ScopeID, window.Key)
+		value, readErr := s.rdb.Get(ctx, key).Int64()
+		switch {
+		case readErr == nil:
+			used, stale = decimal.New(value, -6), false
+		case errors.Is(readErr, redis.Nil):
+			stale = false
+		default:
+			stale = true
+		}
+	}
+	target := input.TargetLimitUSD.Decimal
+	unlimited := input.TargetLimitUSD.IsUnlimited()
+	if unlimited && input.EffectiveMode == EffectiveNextPeriod {
+		// 排期表 Amount 不允许 -1；不限仅支持立即生效
+		return nil, fmt.Errorf("unlimited (-1) only supports immediate effective mode")
+	}
+	impact := &BudgetAdjustmentImpact{
+		BeforeLimitUSD: before.Round(6).StringFixed(6),
+		AfterLimitUSD:  target.Round(6).StringFixed(6),
+		CurrentUsedUSD: used.Round(6).StringFixed(6),
+		AffectedGroups: []AffectedGroup{}, WillBlock: !unlimited && target.LessThanOrEqual(used),
+		StreamPolicy: "进行中的流式请求不中断，完成后记账并阻断后续请求",
+		DataAsOf:     time.Now().UTC(), Stale: stale,
+		BelowUsed: !unlimited && target.LessThan(used), ZeroBlock: !unlimited && target.IsZero(),
+	}
+	if input.EffectiveMode == EffectiveNextPeriod {
+		finder, ok := s.scheduler.(interface {
+			FindPendingSchedule(context.Context, uuid.UUID, string, budgetdomain.PeriodType) (*model.BudgetLimitSchedule, error)
+		})
+		if !ok {
+			return nil, ErrInvalidEffectiveMode
+		}
+		pending, findErr := finder.FindPendingSchedule(ctx, allocation.ID, "total", input.PeriodType)
+		if findErr != nil {
+			return nil, findErr
+		}
+		if pending != nil {
+			impact.ReplacesPendingSchedule = true
+			impact.PendingScheduleID = pending.ID.String()
+			impact.PendingScheduleVersion = pending.UpdatedAt.UTC().Format(time.RFC3339Nano)
+		}
+	}
+	if projector, ok := s.repo.(interface {
+		ResolveBudgetImpact(context.Context, string, string, *string, int) (int, []repository.BudgetAffectedGroup, error)
+	}); ok {
+		count, groups, projectErr := projector.ResolveBudgetImpact(ctx, input.ScopeType, input.ScopeID, nil, 20)
+		if projectErr != nil {
+			return nil, projectErr
+		}
+		impact.AffectedMembers = count
+		for _, group := range groups {
+			impact.AffectedGroups = append(impact.AffectedGroups, AffectedGroup{ID: group.ID, Name: group.Name})
+		}
+	} else {
+		return nil, fmt.Errorf("budget impact projector not configured")
+	}
+	versionPayload := strings.Join([]string{
+		input.ScopeType, input.ScopeID, string(input.PeriodType),
+		before.Round(6).StringFixed(6), used.Round(6).StringFixed(6),
+		input.TargetLimitUSD.String(), string(input.EffectiveMode),
+		impact.PendingScheduleID, impact.PendingScheduleVersion,
+	}, "|")
+	versionSum := sha256.Sum256([]byte(versionPayload))
+	impact.PreviewVersion = hex.EncodeToString(versionSum[:])
+	if input.PreviewOnly {
+		return impact, nil
+	}
+	if input.PreviewVersion == "" || input.PreviewVersion != impact.PreviewVersion {
+		return nil, ErrBudgetPreviewStale
+	}
+	if stale {
+		return nil, ErrBudgetUsageUnavailable
+	}
+	if !unlimited && target.IsZero() && !input.ConfirmZeroBlock {
+		return nil, ErrZeroBlockConfirmationRequired
+	}
+	if !unlimited && target.LessThan(used) && !input.ConfirmBelowUsed {
+		return nil, ErrBelowUsedConfirmationRequired
+	}
+	if impact.ReplacesPendingSchedule && !input.ConfirmReplaceSchedule {
+		return nil, ErrPendingScheduleExists
+	}
+	switch input.EffectiveMode {
+	case EffectiveImmediate:
+		monthly, daily, weekly := allocation.AmountUSD, allocation.DailyAmountUSD, allocation.WeeklyAmountUSD
+		value, _ := target.Float64()
+		switch input.PeriodType {
+		case budgetdomain.PeriodDaily:
+			daily = value
+		case budgetdomain.PeriodWeekly:
+			weekly = value
+		default:
+			monthly = value
+		}
+		if creating {
+			if err := s.SetBudget(ctx, input.ScopeType, input.ScopeID, monthly, daily, weekly, input.ActorID); err != nil {
+				return nil, err
+			}
+		} else if casRepo, ok := s.repo.(budgetAllocationCASRepo); ok {
+			updated, updateErr := casRepo.CompareAndSwapAllocationLimits(
+				ctx, *allocation, monthly, daily, weekly, input.ActorID,
+			)
+			if updateErr != nil {
+				return nil, updateErr
+			}
+			if !updated {
+				return nil, ErrBudgetPreviewStale
+			}
+			s.afterBudgetWrite(input.ScopeType, input.ScopeID, monthly)
+		} else if err := s.SetBudget(ctx, input.ScopeType, input.ScopeID, monthly, daily, weekly, input.ActorID); err != nil {
+			return nil, err
+		}
+	case EffectiveNextPeriod:
+		if s.scheduler == nil {
+			return nil, ErrInvalidEffectiveMode
+		}
+		schedule := &model.BudgetLimitSchedule{
+			ID: uuid.New(), BudgetAllocationID: allocation.ID,
+			DimensionType: budgetdomain.DimensionTotal, DimensionKey: "total",
+			PeriodType: input.PeriodType, TargetLimitUSD: input.TargetLimitUSD,
+			ScheduleOperation: budgetdomain.ScheduleOperationSet,
+			EffectiveAt: window.ResetAt, Reason: input.Reason, CreatedBy: input.ActorID,
+			Status: budgetdomain.SchedulePending,
+		}
+		if _, err := s.scheduler.PutPendingSchedule(ctx, schedule, input.ConfirmReplaceSchedule); err != nil {
+			if errors.Is(err, repository.ErrPendingScheduleExists) {
+				return nil, ErrPendingScheduleExists
+			}
+			return nil, err
+		}
+	default:
+		return nil, ErrInvalidEffectiveMode
+	}
+	return impact, nil
+}
+
+// MultiPeriodAdjustmentInput 多周期批量调整输入，一次调用处理 monthly/weekly/daily。
+type MultiPeriodAdjustmentInput struct {
+	ScopeType     string
+	ScopeID       string
+	ActorID       uuid.UUID
+	Reason        string
+	EffectiveMode EffectiveMode
+	PreviewOnly   bool
+	// 各周期的目标额度，nil 表示本次不修改该周期。
+	Monthly *MultiPeriodItem
+	Weekly  *MultiPeriodItem
+	Daily   *MultiPeriodItem
+}
+
+// MultiPeriodItem 单个周期的调整参数。
+type MultiPeriodItem struct {
+	TargetLimitUSD budgetdomain.Amount
+	BudgetRiskConfirmation
+}
+
+// MultiPeriodAdjustmentResult 每个周期的 impact，nil 表示未修改。
+type MultiPeriodAdjustmentResult struct {
+	Monthly *BudgetAdjustmentImpact `json:"monthly,omitempty"`
+	Weekly  *BudgetAdjustmentImpact `json:"weekly,omitempty"`
+	Daily   *BudgetAdjustmentImpact `json:"daily,omitempty"`
+}
+
+// AdjustBudgetMultiPeriod 批量调整多个周期的预算额度。
+// preview_only=true 时返回所有周期的预览信息，不写库。
+// preview_only=false 时依次 apply，任意周期失败则立即返回错误（已成功的周期不回滚，
+// 因为 repo 层不支持跨周期事务；handler 层应在出错时提示用户重试）。
+func (s *BudgetService) AdjustBudgetMultiPeriod(
+	ctx context.Context,
+	input MultiPeriodAdjustmentInput,
+) (*MultiPeriodAdjustmentResult, error) {
+	result := &MultiPeriodAdjustmentResult{}
+	periods := []struct {
+		period budgetdomain.PeriodType
+		item   *MultiPeriodItem
+		out    **BudgetAdjustmentImpact
+	}{
+		{budgetdomain.PeriodMonthly, input.Monthly, &result.Monthly},
+		{budgetdomain.PeriodWeekly, input.Weekly, &result.Weekly},
+		{budgetdomain.PeriodDaily, input.Daily, &result.Daily},
+	}
+	for _, p := range periods {
+		if p.item == nil {
+			continue
+		}
+		impact, err := s.AdjustBudget(ctx, BudgetAdjustmentInput{
+			ScopeType:              input.ScopeType,
+			ScopeID:                input.ScopeID,
+			PeriodType:             p.period,
+			TargetLimitUSD:         p.item.TargetLimitUSD,
+			EffectiveMode:          input.EffectiveMode,
+			Reason:                 input.Reason,
+			ActorID:                input.ActorID,
+			PreviewOnly:            input.PreviewOnly,
+			BudgetRiskConfirmation: p.item.BudgetRiskConfirmation,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("period %s: %w", p.period, err)
+		}
+		*p.out = impact
+	}
+	return result, nil
+}
+
 // BudgetItem 预算展示项（含实时 used_usd 占位，网关侧从 Redis 读）。
 type BudgetItem struct {
-	ScopeType       string  `json:"scope_type"`
-	ScopeID         string  `json:"scope_id"`
+	AllocationID string `json:"allocation_id,omitempty"`
+	ScopeType    string `json:"scope_type"`
+	ScopeID      string `json:"scope_id"`
 	// ParentScopeID 仅 scope_type=member 时填充，值为所属部门的 dept_id，
 	// 供前端多部门场景路由跳转使用。
 	ParentScopeID   string  `json:"parent_scope_id,omitempty"`
@@ -98,10 +433,10 @@ type BudgetItem struct {
 	Period          string  `json:"period"`
 	Enabled         bool    `json:"enabled"`
 	// UsedUSD/DailyUsedUSD/WeeklyUsedUSD 从 Redis 实时读取（budget:used:{scope_type}:{scope_id}:{period}）
-	UsedUSD        float64 `json:"used_usd"`
-	DailyUsedUSD   float64 `json:"daily_used_usd"`
-	WeeklyUsedUSD  float64 `json:"weekly_used_usd"`
-	UsedRatio      float64 `json:"used_ratio"`
+	UsedUSD       float64 `json:"used_usd"`
+	DailyUsedUSD  float64 `json:"daily_used_usd"`
+	WeeklyUsedUSD float64 `json:"weekly_used_usd"`
+	UsedRatio     float64 `json:"used_ratio"`
 	UpdatedBy     string  `json:"updated_by,omitempty"`      // 最后修改人 ID
 	UpdatedByName string  `json:"updated_by_name,omitempty"` // 最后修改人名称
 	UpdatedAt     string  `json:"updated_at,omitempty"`      // 最后修改时间
@@ -112,7 +447,7 @@ type BudgetItem struct {
 func (s *BudgetService) SetBudget(ctx context.Context, scopeType, scopeID string, amountUSD, dailyAmountUSD, weeklyAmountUSD float64, createdBy uuid.UUID) error {
 	// -1 表示不限额（与 daily/weekly 语义一致）；< -1 无意义拒绝
 	if amountUSD < -1 {
-		return fmt.Errorf("amount_usd must be >= -1 (-1 means unlimited)")
+		return fmt.Errorf("amount_usd must be >= 0 or exactly -1 (unlimited)")
 	}
 	a := &model.BudgetAllocation{
 		ScopeType:       scopeType,
@@ -128,6 +463,11 @@ func (s *BudgetService) SetBudget(ctx context.Context, scopeType, scopeID string
 	if err := s.repo.UpsertAllocation(a); err != nil {
 		return fmt.Errorf("upsert budget: %w", err)
 	}
+	s.afterBudgetWrite(scopeType, scopeID, amountUSD)
+	return nil
+}
+
+func (s *BudgetService) afterBudgetWrite(scopeType, scopeID string, amountUSD float64) {
 	// 改额后清理本月告警去重记录，让扩容后能再次触发告警
 	period := time.Now().Format("2006-01")
 	_ = s.alertRepo.DeleteByScope(scopeType, scopeID, period)
@@ -146,7 +486,6 @@ func (s *BudgetService) SetBudget(ctx context.Context, scopeType, scopeID string
 	if s.publisher != nil {
 		s.publisher.Publish(event.AuthConfigChanged, "auth_config", uuid.Nil)
 	}
-	return nil
 }
 
 // GetBudget 查询单层预算（控制面展示，used_usd 从 Redis 实时读取）。
@@ -165,6 +504,7 @@ func (s *BudgetService) GetBudget(ctx context.Context, scopeType, scopeID string
 		WeeklyAmountUSD: -1,
 	}
 	if alloc != nil {
+		item.AllocationID = alloc.ID.String()
 		item.AmountUSD = alloc.AmountUSD
 		item.DailyAmountUSD = alloc.DailyAmountUSD
 		item.WeeklyAmountUSD = alloc.WeeklyAmountUSD
@@ -228,6 +568,7 @@ func (s *BudgetService) ListScoped(ctx context.Context, scopeTypes []string, sco
 	items := make([]BudgetItem, 0, len(allocs))
 	for _, a := range allocs {
 		item := BudgetItem{
+			AllocationID:    a.ID.String(),
 			ScopeType:       a.ScopeType,
 			ScopeID:         a.ScopeID,
 			Label:           nameMap[a.ScopeType+":"+a.ScopeID],

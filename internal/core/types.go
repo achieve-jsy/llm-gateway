@@ -14,8 +14,11 @@ type StreamOptions struct {
 // This is used with OpenAI's o-series models and other reasoning-capable models.
 type Reasoning struct {
 	// Effort controls how much reasoning effort the model should use.
-	// Valid values are "low", "medium", and "high".
+	// Valid values are "none", "minimal", "low", "medium", "high", and "xhigh".
 	Effort string `json:"effort,omitempty"`
+	// Summary requests a reasoning summary (Responses API). Chat Completions
+	// rejects this field; adapters must strip it or bridge to /responses.
+	Summary string `json:"summary,omitempty"`
 }
 
 // ChatRequest represents the incoming chat completion request
@@ -32,6 +35,8 @@ type ChatRequest struct {
 	StreamOptions     *StreamOptions    `json:"stream_options,omitempty"`
 	Reasoning         *Reasoning        `json:"reasoning,omitempty"`
 	ExtraFields       UnknownJSONFields `json:"-" swaggerignore:"true"`
+	// SessionKey is extracted from conversation_id or KeyID hash for sticky routing (transient, not serialized)
+	SessionKey string `json:"-" swaggerignore:"true"`
 }
 
 func (r *ChatRequest) semanticSelector() (string, string) {
@@ -60,10 +65,9 @@ type Message struct {
 	// Content accepts either a plain string or an array of ContentPart values.
 	// This preserves OpenAI-compatible multimodal chat payloads.
 	Content MessageContent `json:"content"`
-	//nolint:govet // Intentional duplicate json tag for Swagger docs: content is null OR string OR []ContentPart.
 	// ContentSchema documents that `content` accepts either a plain string
 	// or an array of ContentPart values.
-	ContentSchema []ContentPart     `json:"content,omitempty" extensions:"x-oneOf=[{\"type\":\"null\"},{\"type\":\"string\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/definitions/core.ContentPart\"}}]"`
+	ContentSchema []ContentPart     `json:"-" swaggerignore:"true"`
 	ToolCalls     []ToolCall        `json:"tool_calls,omitempty"`
 	ExtraFields   UnknownJSONFields `json:"-" swaggerignore:"true"`
 }
@@ -107,8 +111,7 @@ type Choice struct {
 type ResponseMessage struct {
 	Role    string         `json:"role"`
 	Content MessageContent `json:"content"`
-	//nolint:govet // Intentional duplicate json tag for Swagger docs: content is null OR string OR []ContentPart.
-	ContentSchema []ContentPart     `json:"content,omitempty" extensions:"x-oneOf=[{\"type\":\"null\"},{\"type\":\"string\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/definitions/core.ContentPart\"}}]"`
+	ContentSchema []ContentPart     `json:"-" swaggerignore:"true"`
 	ToolCalls     []ToolCall        `json:"tool_calls,omitempty"`
 	ExtraFields   UnknownJSONFields `json:"-" swaggerignore:"true"`
 }
@@ -491,11 +494,13 @@ type EmbeddingUsage struct {
 }
 
 // RerankRequest represents a reranking request.
+// Query / Documents 支持硅基流动式扩展：string 或单模态 object（{text|image|video}）。
 type RerankRequest struct {
 	Model           string            `json:"model"`
 	Provider        string            `json:"provider,omitempty"` // Gateway routing hint; stripped before upstream execution.
-	Query           string            `json:"query"`
-	Documents       []string          `json:"documents"`
+	ModelType       string            `json:"-"`                     // "rerank" or "rerank_vl"；调度后填充，不入 JSON
+	Query           any               `json:"query"`                 // string | {text|image}
+	Documents       []any             `json:"documents"`             // [](string | {text|image|video})
 	TopN            *int              `json:"top_n,omitempty"`
 	ReturnDocuments *bool             `json:"return_documents,omitempty"`
 	MaxChunksPerDoc *int              `json:"max_chunks_per_doc,omitempty"`

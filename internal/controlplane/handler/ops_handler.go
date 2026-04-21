@@ -105,13 +105,13 @@ type OpsDashboardResponse struct {
 
 // OpsOverview 总览数据
 type OpsOverview struct {
-	HealthScore   int                        `json:"health_score"`
-	SystemMetrics *service.SystemMetrics     `json:"system_metrics"`
-	Traffic       OpsTraffic                 `json:"traffic"`
-	SLA           OpsSLA                     `json:"sla"`
-	Latency       OpsLatency                 `json:"latency"`
-	Errors        OpsErrors                  `json:"errors"`
-	Jobs          []model.AlertJobHeartbeat  `json:"jobs"`
+	HealthScore   int                       `json:"health_score"`
+	SystemMetrics *service.SystemMetrics    `json:"system_metrics"`
+	Traffic       OpsTraffic                `json:"traffic"`
+	SLA           OpsSLA                    `json:"sla"`
+	Latency       OpsLatency                `json:"latency"`
+	Errors        OpsErrors                 `json:"errors"`
+	Jobs          []model.AlertJobHeartbeat `json:"jobs"`
 }
 
 // OpsTraffic 流量指标
@@ -135,27 +135,27 @@ type OpsSLA struct {
 
 // OpsLatency 延迟指标
 type OpsLatency struct {
-	DurationP50Ms  int `json:"duration_p50_ms"`
-	DurationP90Ms  int `json:"duration_p90_ms"`
-	DurationP95Ms  int `json:"duration_p95_ms"`
-	DurationP99Ms  int `json:"duration_p99_ms"`
-	DurationAvgMs  int `json:"duration_avg_ms"`
-	DurationMaxMs  int `json:"duration_max_ms"`
-	TTFTP50Ms      int `json:"ttft_p50_ms"`
-	TTFTP90Ms      int `json:"ttft_p90_ms"`
-	TTFTP95Ms      int `json:"ttft_p95_ms"`
-	TTFTP99Ms      int `json:"ttft_p99_ms"`
-	TTFTAvgMs      int `json:"ttft_avg_ms"`
-	TTFTMaxMs      int `json:"ttft_max_ms"`
+	DurationP50Ms int `json:"duration_p50_ms"`
+	DurationP90Ms int `json:"duration_p90_ms"`
+	DurationP95Ms int `json:"duration_p95_ms"`
+	DurationP99Ms int `json:"duration_p99_ms"`
+	DurationAvgMs int `json:"duration_avg_ms"`
+	DurationMaxMs int `json:"duration_max_ms"`
+	TTFTP50Ms     int `json:"ttft_p50_ms"`
+	TTFTP90Ms     int `json:"ttft_p90_ms"`
+	TTFTP95Ms     int `json:"ttft_p95_ms"`
+	TTFTP99Ms     int `json:"ttft_p99_ms"`
+	TTFTAvgMs     int `json:"ttft_avg_ms"`
+	TTFTMaxMs     int `json:"ttft_max_ms"`
 }
 
 // OpsErrors 错误指标
 type OpsErrors struct {
-	RequestErrors               int64 `json:"request_errors"`
-	UpstreamErrors              int64 `json:"upstream_errors"`
-	BusinessErrors              int64 `json:"business_errors"`
-	UpstreamErrorsExcl429_529   int64 `json:"upstream_errors_excl_429_529"`
-	RateLimit429_529            int64 `json:"rate_limit_429_529"`
+	RequestErrors             int64 `json:"request_errors"`
+	UpstreamErrors            int64 `json:"upstream_errors"`
+	BusinessErrors            int64 `json:"business_errors"`
+	UpstreamErrorsExcl429_529 int64 `json:"upstream_errors_excl_429_529"`
+	RateLimit429_529          int64 `json:"rate_limit_429_529"`
 }
 
 // OpsFilter 运维看板通用过滤参数
@@ -170,7 +170,7 @@ type OpsFilter struct {
 	KeyID         string // gap#10: API Key ID
 	Account       string // gap#10: 账户名(对应 provider)
 	MaxDurationMs string // gap#10: 最大耗时过滤(duration_ms <= ?)
-	Endpoint     string // 入站端点路径，如 /v1/chat/completions, /v1/embeddings, /v1/rerank
+	Endpoint      string // 入站端点路径，如 /v1/chat/completions, /v1/embeddings, /v1/rerank
 }
 
 // buildFilterClause 根据 OpsFilter 生成 SQL WHERE 子句和参数。
@@ -902,9 +902,10 @@ func (h *OpsHandler) ListRequestErrors(c *gin.Context) {
 func (h *OpsHandler) GetRequestErrorDetail(c *gin.Context) {
 	id := c.Param("id")
 	rows, err := h.db.Raw(`
-		SELECT request_id, ts, key_id, user_id, model, group_name, provider,
+		SELECT request_id, ts, key_id, key_name, user_id, model, group_name, provider,
 			status, duration_ms, first_token_ms, total_tokens, prompt_tokens, completion_tokens,
-			upstream_status, ip_address, failover_used, routed_via_group
+			upstream_status, ip_address, failover_used, routed_via_group,
+			stage_auth_ms, stage_route_ms, stage_upstream_ms
 		FROM call_logs
 		WHERE request_id = ? AND status >= 400 AND status < 500
 	`, id).Rows()
@@ -919,15 +920,17 @@ func (h *OpsHandler) GetRequestErrorDetail(c *gin.Context) {
 		return
 	}
 
-	var requestID, ts, keyID, userID, modelName, groupName, provider, ipAddress string
+	var requestID, ts, keyID, keyName, userID, modelName, groupName, provider, ipAddress string
 	var status, durationMs, totalTokens, promptTokens, completionTokens int
+	var authStage, routingStage, upstreamStage *int16
 	var firstTokenMs *int
 	var upstreamStatus int
 	var failoverUsed, routedViaGroup bool
 
-	if scanErr := rows.Scan(&requestID, &ts, &keyID, &userID, &modelName, &groupName, &provider,
+	if scanErr := rows.Scan(&requestID, &ts, &keyID, &keyName, &userID, &modelName, &groupName, &provider,
 		&status, &durationMs, &firstTokenMs, &totalTokens, &promptTokens, &completionTokens,
-		&upstreamStatus, &ipAddress, &failoverUsed, &routedViaGroup); scanErr != nil {
+		&upstreamStatus, &ipAddress, &failoverUsed, &routedViaGroup,
+		&authStage, &routingStage, &upstreamStage); scanErr != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to scan"})
 		return
 	}
@@ -937,27 +940,36 @@ func (h *OpsHandler) GetRequestErrorDetail(c *gin.Context) {
 		UpstreamStatusCode: upstreamStatus,
 	}
 
-	// 构建 latency_breakdown（call_logs 仅含 duration_ms / first_token_ms，其余返回 0）
 	ttftMs := 0
 	if firstTokenMs != nil {
 		ttftMs = *firstTokenMs
 	}
+	authMs, routingMs, upstreamMs := 0, 0, 0
+	if authStage != nil {
+		authMs = int(*authStage)
+	}
+	if routingStage != nil {
+		routingMs = int(*routingStage)
+	}
+	if upstreamStage != nil {
+		upstreamMs = int(*upstreamStage)
+	}
 	latencyBreakdown := LatencyBreakdown{
-		AuthMs:     0,
-		RoutingMs:  0,
-		UpstreamMs: durationMs,
-		ResponseMs: 0,
+		AuthMs:     authMs,
+		RoutingMs:  routingMs,
+		UpstreamMs: upstreamMs,
+		ResponseMs: max(durationMs-authMs-routingMs-upstreamMs, 0),
 		TTFTMs:     ttftMs,
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"request_id": requestID, "ts": ts, "key_id": keyID, "user_id": userID,
+		"request_id": requestID, "ts": ts, "key_id": keyID, "key_name": keyName, "user_id": userID,
 		"model": modelName, "group_name": groupName, "provider": provider,
 		"status": status, "duration_ms": durationMs, "first_token_ms": firstTokenMs,
 		"total_tokens": totalTokens, "prompt_tokens": promptTokens, "completion_tokens": completionTokens,
 		"upstream_status": upstreamStatus, "ip_address": ipAddress,
 		"failover_used": failoverUsed, "routed_via_group": routedViaGroup,
-		"upstream_context": upstreamCtx,
+		"upstream_context":  upstreamCtx,
 		"latency_breakdown": latencyBreakdown,
 	})
 }
@@ -1243,13 +1255,13 @@ func (h *OpsHandler) GetConcurrencyStats(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"providers":               providers,
-		"total_providers":         len(providers),
-		"available_providers":     len(providers) - int(rateLimitedProviders),
-		"rate_limited_providers":  rateLimitedProviders,
-		"error_providers":         errorProviders,
-		"total_active_requests":   totalActive,
-		"total_waiting_queue":     totalWaiting,
+		"providers":              providers,
+		"total_providers":        len(providers),
+		"available_providers":    len(providers) - int(rateLimitedProviders),
+		"rate_limited_providers": rateLimitedProviders,
+		"error_providers":        errorProviders,
+		"total_active_requests":  totalActive,
+		"total_waiting_queue":    totalWaiting,
 	})
 }
 
@@ -1422,7 +1434,7 @@ func (h *OpsHandler) GetThroughputTrend(c *gin.Context) {
 	points := make([]ThroughputTrendPoint, 0, len(rows))
 	for _, r := range rows {
 		points = append(points, ThroughputTrendPoint{
-			Timestamp: r.Timestamp.Format(time.RFC3339),
+			Timestamp:    r.Timestamp.Format(time.RFC3339),
 			RequestCount: r.RequestCount, TokenCount: r.TokenCount,
 		})
 	}
@@ -1710,18 +1722,18 @@ func (h *OpsHandler) GetSystemLogSinkHealth(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		// 前端契约字段（B06）
-		"queue_depth":       queueDepth,
-		"queue_capacity":    0, // TODO(WP7): 接真 sink 后填真实容量
-		"dropped":           0, // TODO(WP7): 接真 sink 的 dropped 计数
-		"write_failures":    0, // TODO(WP7): 接真 sink 的写入失败计数
+		"queue_depth":        queueDepth,
+		"queue_capacity":     0, // TODO(WP7): 接真 sink 后填真实容量
+		"dropped":            0, // TODO(WP7): 接真 sink 的 dropped 计数
+		"write_failures":     0, // TODO(WP7): 接真 sink 的写入失败计数
 		"avg_write_delay_ms": 0.0,
-		"status":            "degraded", // writer 未接入，真实降级态
+		"status":             "degraded", // writer 未接入，真实降级态
 		// 兼容字段（旧读取 / 既有测试）
-		"writer_enabled":  false,
-		"recent_errors":   0,
-		"last_write_at":   nil,
-		"pending_count":   queueDepth,
-		"dropped_count":   0,
+		"writer_enabled": false,
+		"recent_errors":  0,
+		"last_write_at":  nil,
+		"pending_count":  queueDepth,
+		"dropped_count":  0,
 	})
 }
 
@@ -1780,18 +1792,18 @@ const settingKeyRuntimeLogConfig = "ops_runtime_log_config"
 // log_request_body / log_response_body / max_body_bytes。
 func defaultLogConfig() gin.H {
 	return gin.H{
-		"level":                "info",
-		"slow_request_ms":      5000,
-		"sample_rate":          1.0,
-		"log_request_body":     false,
-		"log_response_body":    false,
-		"max_body_bytes":       2048,
-		"retention_days":       30,
-		"enable_caller":        true,
-		"enable_stacktrace":    false,
-		"stacktrace_level":     "error",
-		"sampling_initial":     5,
-		"sampling_thereafter":  200,
+		"level":               "info",
+		"slow_request_ms":     5000,
+		"sample_rate":         1.0,
+		"log_request_body":    false,
+		"log_response_body":   false,
+		"max_body_bytes":      2048,
+		"retention_days":      30,
+		"enable_caller":       true,
+		"enable_stacktrace":   false,
+		"stacktrace_level":    "error",
+		"sampling_initial":    5,
+		"sampling_thereafter": 200,
 	}
 }
 
@@ -1856,13 +1868,13 @@ func (h *OpsHandler) ResetRuntimeLogConfig(c *gin.Context) {
 
 // TokenStatsItem token 统计聚合项
 type TokenStatsItem struct {
-	Provider       string  `gorm:"column:provider" json:"provider"`
-	Model          string  `gorm:"column:model" json:"model"`
-	RequestCount   int64   `gorm:"column:request_count" json:"request_count"`
-	PromptTokens   int64   `gorm:"column:prompt_tokens" json:"prompt_tokens"`
-	CompletionTokens int64 `gorm:"column:completion_tokens" json:"completion_tokens"`
-	TotalTokens    int64   `gorm:"column:total_tokens" json:"total_tokens"`
-	AvgDurationMs  float64 `gorm:"column:avg_duration_ms" json:"avg_duration_ms"`
+	Provider         string  `gorm:"column:provider" json:"provider"`
+	Model            string  `gorm:"column:model" json:"model"`
+	RequestCount     int64   `gorm:"column:request_count" json:"request_count"`
+	PromptTokens     int64   `gorm:"column:prompt_tokens" json:"prompt_tokens"`
+	CompletionTokens int64   `gorm:"column:completion_tokens" json:"completion_tokens"`
+	TotalTokens      int64   `gorm:"column:total_tokens" json:"total_tokens"`
+	AvgDurationMs    float64 `gorm:"column:avg_duration_ms" json:"avg_duration_ms"`
 }
 
 // GetTokenStats 获取 token 用量统计
@@ -1907,14 +1919,14 @@ const settingKeyDashboardSettings = "ops_dashboard_settings"
 // defaultMetricThresholds 默认指标阈值
 func defaultMetricThresholds() gin.H {
 	return gin.H{
-		"error_rate_warn":     0.05,
-		"error_rate_critical": 0.10,
-		"p95_ms_warn":         3000,
-		"p95_ms_critical":     10000,
-		"ttft_p95_ms_warn":    2000,
+		"error_rate_warn":      0.05,
+		"error_rate_critical":  0.10,
+		"p95_ms_warn":          3000,
+		"p95_ms_critical":      10000,
+		"ttft_p95_ms_warn":     2000,
 		"ttft_p95_ms_critical": 8000,
-		"success_rate_min":    0.95,
-		"concurrency_warn":    100,
+		"success_rate_min":     0.95,
+		"concurrency_warn":     100,
 	}
 }
 
@@ -1927,15 +1939,15 @@ func defaultMetricThresholds() gin.H {
 func defaultDashboardSettings() gin.H {
 	return gin.H{
 		// 基础项（既有）
-		"default_time_range": "1h",
-		"refresh_interval":   30,
+		"default_time_range":  "1h",
+		"refresh_interval":    30,
 		"show_system_metrics": true,
-		"compact_mode":       false,
+		"compact_mode":        false,
 		// 卡片可见性开关（B02：前端 v-if 读这些字段，缺失会导致卡片消失）
-		"show_concurrency_card":   true,
-		"show_switch_rate_chart":  true,
-		"show_token_stats":        true,
-		"show_alert_events":       true,
+		"show_concurrency_card":  true,
+		"show_switch_rate_chart": true,
+		"show_token_stats":       true,
+		"show_alert_events":      true,
 		// 自动刷新与查询模式（前端 OpsDashboardSettings 期望字段）
 		"auto_refresh_interval": 30,
 		"default_query_mode":    "auto",
@@ -2085,11 +2097,11 @@ func (h *OpsHandler) GetUserConcurrency(c *gin.Context) {
 
 // AccountAvailabilityItem Provider 可用性项
 type AccountAvailabilityItem struct {
-	ProviderID           string `json:"provider_id"`
-	IsRateLimited        bool   `json:"is_rate_limited"`
-	RateLimitRemaining   int    `json:"rate_limit_remaining"`
-	RateLimitResetSeconds int   `json:"rate_limit_reset_seconds"`
-	ErrorCount           int64  `json:"error_count"`
+	ProviderID            string `json:"provider_id"`
+	IsRateLimited         bool   `json:"is_rate_limited"`
+	RateLimitRemaining    int    `json:"rate_limit_remaining"`
+	RateLimitResetSeconds int    `json:"rate_limit_reset_seconds"`
+	ErrorCount            int64  `json:"error_count"`
 }
 
 // GetAccountAvailability 获取各 Provider 的 rate limit 状态
@@ -2120,10 +2132,10 @@ func (h *OpsHandler) GetAccountAvailability(c *gin.Context) {
 
 		// 尝试解析 JSON，兼容不同存储格式
 		var data struct {
-			IsRateLimited        bool `json:"is_rate_limited"`
-			RateLimitRemaining   int  `json:"rate_limit_remaining"`
-			RateLimitResetSeconds int `json:"rate_limit_reset_seconds"`
-			ErrorCount           int64 `json:"error_count"`
+			IsRateLimited         bool  `json:"is_rate_limited"`
+			RateLimitRemaining    int   `json:"rate_limit_remaining"`
+			RateLimitResetSeconds int   `json:"rate_limit_reset_seconds"`
+			ErrorCount            int64 `json:"error_count"`
 		}
 		if jsonErr := json.Unmarshal([]byte(val), &data); jsonErr != nil {
 			// 回退：简单计数
@@ -2132,11 +2144,11 @@ func (h *OpsHandler) GetAccountAvailability(c *gin.Context) {
 		}
 
 		items = append(items, AccountAvailabilityItem{
-			ProviderID:           providerID,
-			IsRateLimited:        data.IsRateLimited,
-			RateLimitRemaining:   data.RateLimitRemaining,
+			ProviderID:            providerID,
+			IsRateLimited:         data.IsRateLimited,
+			RateLimitRemaining:    data.RateLimitRemaining,
 			RateLimitResetSeconds: data.RateLimitResetSeconds,
-			ErrorCount:           data.ErrorCount,
+			ErrorCount:            data.ErrorCount,
 		})
 	}
 
@@ -2334,11 +2346,11 @@ func (h *OpsHandler) UpdateAdvancedSettings(c *gin.Context) {
 
 // ErrorCorrelationItem 上游错误关联项
 type ErrorCorrelationItem struct {
-	Provider              string `gorm:"column:provider" json:"provider"`
-	UpstreamStatus        int    `gorm:"column:upstream_status" json:"upstream_status"`
-	UpstreamErrorMessage  string `gorm:"column:upstream_error_message" json:"upstream_error_message"`
-	TS                    string `gorm:"column:ts" json:"ts"`
-	DurationMs            int    `gorm:"column:duration_ms" json:"duration_ms"`
+	Provider             string `gorm:"column:provider" json:"provider"`
+	UpstreamStatus       int    `gorm:"column:upstream_status" json:"upstream_status"`
+	UpstreamErrorMessage string `gorm:"column:upstream_error_message" json:"upstream_error_message"`
+	TS                   string `gorm:"column:ts" json:"ts"`
+	DurationMs           int    `gorm:"column:duration_ms" json:"duration_ms"`
 }
 
 // GetRequestErrorCorrelation 获取请求错误关联的上游错误
@@ -2387,11 +2399,11 @@ type UpstreamContext struct {
 
 // LatencyBreakdown 延迟拆解
 type LatencyBreakdown struct {
-	AuthMs      int `json:"auth_ms"`
-	RoutingMs   int `json:"routing_ms"`
-	UpstreamMs  int `json:"upstream_ms"`
-	ResponseMs  int `json:"response_ms"`
-	TTFTMs      int `json:"ttft_ms"`
+	AuthMs     int `json:"auth_ms"`
+	RoutingMs  int `json:"routing_ms"`
+	UpstreamMs int `json:"upstream_ms"`
+	ResponseMs int `json:"response_ms"`
+	TTFTMs     int `json:"ttft_ms"`
 }
 
 // OpsGroupOption 模型组下拉选项
@@ -2568,9 +2580,9 @@ type AlertRuntimeSettings struct {
 
 // AlertThresholdSettings 阈值覆写
 type AlertThresholdSettings struct {
-	SLAMin              *float64 `json:"sla_percent_min"`
-	TTFTP99Max          *float64 `json:"ttft_p99_ms_max"`
-	ReqErrorRateMax     *float64 `json:"request_error_rate_percent_max"`
+	SLAMin               *float64 `json:"sla_percent_min"`
+	TTFTP99Max           *float64 `json:"ttft_p99_ms_max"`
+	ReqErrorRateMax      *float64 `json:"request_error_rate_percent_max"`
 	UpstreamErrorRateMax *float64 `json:"upstream_error_rate_percent_max"`
 }
 

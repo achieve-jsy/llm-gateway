@@ -79,6 +79,7 @@
             <el-option label="Chat" value="/v1/chat/completions" />
             <el-option label="Embedding" value="/v1/embeddings" />
             <el-option label="Rerank" value="/v1/rerank" />
+            <el-option label="Rerank VL" value="/v1/rerank_vl" />
           </el-select>
         </div>
         <el-button v-if="activeFilterCount > 0" link size="small" type="warning" @click="$emit('clearFilters')">
@@ -90,7 +91,7 @@
 </template>
 
 <script setup lang="ts">
-import { User, ArrowUp, ArrowDown } from '@element-plus/icons-vue'
+import { User } from '@element-plus/icons-vue'
 
 defineOptions({ name: 'DashboardFilters' })
 

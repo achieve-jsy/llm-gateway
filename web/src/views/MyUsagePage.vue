@@ -14,7 +14,7 @@
           <el-radio-button value="USD">$ USD</el-radio-button>
           <el-radio-button value="CNY">¥ CNY</el-radio-button>
         </el-radio-group>
-        <el-button :loading="statsLoading" :icon="Refresh" circle size="small" title="刷新" @click="loadAll" />
+        <el-button :loading="statsLoading" :icon="Refresh" circle size="small" title="刷新" @click="bumpVideoOrLoadAll" />
 
       </div>
     </div>
@@ -22,96 +22,72 @@
     <!-- ═══════════════════════════════════════════
          筛选栏
     ═══════════════════════════════════════════ -->
-    <div class="mu-filter">
-      <div class="mu-presets">
-        <button
-          v-for="p in datePresets" :key="p.label"
-          class="mu-preset-btn"
-          :class="{ 'mu-preset-btn--active': activePreset === p.label }"
-          @click="applyPreset(p)"
-        >{{ p.label }}</button>
-      </div>
-      <div class="mu-filter-divider" />
-      <el-date-picker
-        v-model="dateRange"
-        type="datetimerange"
-        range-separator="~"
-        start-placeholder="开始时间"
-        end-placeholder="结束时间"
-        value-format="YYYY-MM-DD HH:mm"
-        format="MM/DD HH:mm"
-        :shortcuts="dateShortcuts"
-        class="mu-filter__date"
-        size="small"
-        @change="onDateChange"
-      />
-      <div class="mu-filter-divider" />
-      <el-input v-model="filterGroupName" placeholder="模型组" clearable size="small"
-        class="mu-filter__chip" @change="loadAll" @clear="loadAll">
-        <template #prefix><el-icon><Grid /></el-icon></template>
-      </el-input>
-      <el-input v-model="filterModelName" placeholder="模型名" clearable size="small"
-        class="mu-filter__chip" @change="loadAll" @clear="loadAll">
-        <template #prefix><el-icon><Cpu /></el-icon></template>
-      </el-input>
-      <el-select v-model="filterKeyId" placeholder="选择 Key" clearable size="small"
-        class="mu-filter__chip mu-filter__chip--key" filterable @change="loadAll" @clear="loadAll">
-        <el-option v-for="k in myKeyOptions" :key="k.value" :label="k.label" :value="k.value" />
-      </el-select>
-      <div class="mu-filter-divider" />
-      <el-select v-model="filterStatus" placeholder="状态" clearable size="small"
-        class="mu-filter__status" @change="loadAll" @clear="loadAll">
-        <el-option label="全部" value="" />
-        <el-option value="success"><span class="mu-dot mu-dot--ok" /> 成功</el-option>
-        <el-option value="error"><span class="mu-dot mu-dot--err" /> 失败</el-option>
-      </el-select>
-      <!-- endpoint filter hidden – replaced by type tabs -->
-      <!-- <el-select v-model="filterEndpoint" placeholder="端点" clearable size="small"
-        class="mu-filter__endpoint" @change="loadAll" @clear="loadAll">
-        <el-option label="Chat" value="/v1/chat/completions" />
-        <el-option label="Embedding" value="/v1/embeddings" />
-        <el-option label="Rerank" value="/v1/rerank" />
-        <el-option label="Video" value="/v1/contents/generations/tasks" />
-      </el-select> -->
-      <el-button v-if="activeFilterCount > 0" size="small" plain type="warning"
-        :icon="Close" @click="clearFilters" class="mu-filter__clear">
-        清空 {{ activeFilterCount }}
-      </el-button>
-    </div>
-
-    <!-- Type Tabs -->
-    <div class="usage-type-tabs">
-      <el-radio-group v-model="activeTab" size="default" @change="onTabChange">
-        <el-radio-button value="chat">Chat</el-radio-button>
-        <el-radio-button value="embedding">Embedding</el-radio-button>
-        <el-radio-button value="rerank">Rerank</el-radio-button>
-        <el-radio-button value="video">Video</el-radio-button>
-      </el-radio-group>
-    </div>
+    <UsageFilterBar
+      page-role="mine"
+      :capability="(activeTab as any)"
+      date-mode="datetime"
+      :date-presets="datePresets"
+      v-model:date-range="dateRange"
+      v-model:active-preset="activePreset"
+      v-model:group-name="filterGroupName"
+      v-model:model-name="filterModelName"
+      v-model:key-id="filterKeyId"
+      v-model:status="filterStatus"
+      v-model:provider="filterProvider"
+      :key-options="myKeyOptions"
+      :provider-options="providerOptions"
+      :active-count="activeFilterCount"
+      @apply-preset="applyPreset"
+      @change="onFilterChange"
+      @date-change="onDateChange"
+      @clear="clearFilters"
+    >
+      <template #tabs>
+        <div class="usage-type-tabs">
+          <el-radio-group v-model="activeTab" size="default" @change="onTabChange">
+            <el-radio-button value="chat">Chat</el-radio-button>
+            <el-radio-button value="embedding">Embedding</el-radio-button>
+            <el-radio-button value="rerank">Rerank</el-radio-button>
+            <el-radio-button value="rerank_vl">Rerank VL</el-radio-button>
+            <el-radio-button value="video">Video</el-radio-button>
+          </el-radio-group>
+        </div>
+      </template>
+    </UsageFilterBar>
 
     <template v-if="activeTab === 'video'">
       <VideoKpiCards
         :refresh-token="videoRefreshToken"
         :start="videoDateStart"
         :end="videoDateEnd"
-        :model-name="filterModelName"
+        :model-name="videoModelParam"
+        :provider-name="filterProvider || undefined"
         mine
       />
       <VideoTrendChart
         :refresh-token="videoRefreshToken"
         :start="videoDateStart"
         :end="videoDateEnd"
-        :model-name="filterModelName"
+        :model-name="videoModelParam"
+        :provider-name="filterProvider || undefined"
         mine
       />
       <VideoDistributionCharts
         :refresh-token="videoRefreshToken"
         :start="videoDateStart"
         :end="videoDateEnd"
-        :model-name="filterModelName"
+        :model-name="videoModelParam"
+        :provider-name="filterProvider || undefined"
         mine
       />
-      <VideoTaskTable :refresh-token="videoRefreshToken" mine />
+      <VideoTaskTable
+        :refresh-token="videoRefreshToken"
+        controlled
+        mine
+        :status="filterStatus"
+        :model-name="videoModelParam"
+        :provider-name="filterProvider"
+      />
     </template>
     <template v-else>
 
@@ -365,15 +341,20 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import {
-  Refresh, Histogram, Money, DataLine, Coin, CircleCheck,
-  Close, Grid, Cpu, ArrowDown
+  Refresh, Histogram, Money, DataLine, Coin, CircleCheck
 } from '@element-plus/icons-vue'
 import type { UsageEndpointType } from '@/utils/usage-endpoint'
 import UsageLogSection from '@/components/usage/UsageLogSection.vue'
+import UsageFilterBar from '@/components/usage/UsageFilterBar.vue'
 import VideoKpiCards from '@/components/usage/VideoKpiCards.vue'
 import VideoTrendChart from '@/components/usage/VideoTrendChart.vue'
 import VideoDistributionCharts from '@/components/usage/VideoDistributionCharts.vue'
 import VideoTaskTable from '@/components/usage/VideoTaskTable.vue'
+import {
+  countActiveFilters,
+  isStatusCompatible,
+  videoModelNameParam,
+} from '@/utils/usageFilterConfig'
 import {
   Chart, LineController, DoughnutController, BarController, CategoryScale, LinearScale,
   LineElement, PointElement, ArcElement, BarElement,
@@ -385,7 +366,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
 import { isDark } from '@/composables/useTheme'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
-import { fmtDateTime, fmtDate, fmtDuration } from '@/utils/time'
+import { fmtDate, fmtDuration } from '@/utils/time'
 
 Chart.register(
   LineController, DoughnutController, BarController,
@@ -395,14 +376,6 @@ Chart.register(
 
 const authStore = useAuthStore()
 const settingsStore = useSettingsStore()
-
-const TABLE_HEADER = {
-  background: 'var(--el-fill-color-light)',
-  fontWeight: '600',
-  color: 'var(--el-text-color-secondary)',
-  fontSize: '12px',
-  borderBottom: '1px solid var(--el-border-color-light)',
-}
 
 const CHART_PALETTE = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#f97316']
 const RANK_COLORS = ['#f59e0b', '#94a3b8', '#92400e', '#3b82f6', '#10b981', '#8b5cf6', '#06b6d4', '#ec4899']
@@ -414,10 +387,6 @@ const cc = computed(() => ({
 }))
 
 const toCny = (usd: number | undefined | null) => convertCost(usd ?? 0, cc.value)
-const toCnyFormatted = (usd: number | undefined | null) => {
-  const n = convertCost(usd ?? 0, cc.value)
-  return `${currencySymbol(cc.value.currency)}${n.toFixed(6)}`
-}
 const fmtCny = (usd: number | undefined | null) => {
   const n = convertCost(usd ?? 0, cc.value)
   const sym = currencySymbol(cc.value.currency)
@@ -465,12 +434,6 @@ const fmtLocalDateTime = (d: Date) => {
   const minute = String(d.getMinutes()).padStart(2, '0')
   return `${year}-${month}-${day} ${hour}:${minute}`
 }
-const parseLocalDate = (s: string) => {
-  // 支持 "YYYY-MM-DD" 和 "YYYY-MM-DD HH:mm" 格式
-  const [datePart] = s.split(' ')
-  const [y, m, d] = datePart.split('-').map(Number)
-  return new Date(y, m - 1, d)
-}
 const parseLocalDateTime = (s: string) => {
   // 支持 "YYYY-MM-DD" 和 "YYYY-MM-DD HH:mm" 格式
   const parts = s.split(' ')
@@ -489,13 +452,6 @@ initEnd.setHours(23, 59, 59, 999)
 const dateRange = ref<[string, string]>([fmtLocalDateTime(initStart), fmtLocalDateTime(initEnd)])
 const videoDateStart = computed(() => dateRange.value?.[0]?.slice(0, 10) || '')
 const videoDateEnd = computed(() => dateRange.value?.[1]?.slice(0, 10) || '')
-const dateShortcuts = [
-  { text: '今天',     value: () => { const t = new Date(); const s = new Date(t); s.setHours(0,0,0,0); return [fmtLocalDateTime(s), fmtLocalDateTime(t)] as [string, string] } },
-  { text: '昨天',     value: () => { const d = new Date(); d.setDate(d.getDate() - 1); d.setHours(0,0,0,0); const e = new Date(d); e.setHours(23,59,59,999); return [fmtLocalDateTime(d), fmtLocalDateTime(e)] as [string, string] } },
-  { text: '最近 7 天', value: () => { const end = new Date(); const start = new Date(); start.setDate(end.getDate() - 6); start.setHours(0,0,0,0); return [fmtLocalDateTime(start), fmtLocalDateTime(end)] as [string, string] } },
-  { text: '最近 30 天', value: () => { const end = new Date(); const start = new Date(); start.setDate(end.getDate() - 29); start.setHours(0,0,0,0); return [fmtLocalDateTime(start), fmtLocalDateTime(end)] as [string, string] } },
-  { text: '本月',     value: () => { const end = new Date(); const start = new Date(end.getFullYear(), end.getMonth(), 1); start.setHours(0,0,0,0); return [fmtLocalDateTime(start), fmtLocalDateTime(end)] as [string, string] } },
-]
 const datePresets = [
   { label: '今天',   days: 0 },
   { label: '近3天',  days: 2 },
@@ -512,11 +468,11 @@ function applyPreset(p: { label: string; days: number }) {
   start.setHours(0, 0, 0, 0)
   dateRange.value = [fmtLocalDateTime(start), fmtLocalDateTime(end)]
   activePreset.value = p.label
-  loadAll()
+  bumpVideoOrLoadAll()
 }
 function onDateChange() {
   activePreset.value = ''
-  loadAll()
+  bumpVideoOrLoadAll()
 }
 
 // ── Filters ──
@@ -524,15 +480,28 @@ const filterKeyId     = ref('')
 const filterModelName = ref('')
 const filterGroupName = ref('')
 const filterStatus    = ref('')
+const filterProvider  = ref('')
 const filterEndpoint  = ref('')
 const activeTab = ref('chat')
+const providerOptions = ref<string[]>([])
+
+const videoModelParam = computed(() =>
+  videoModelNameParam(filterGroupName.value, filterModelName.value),
+)
+
+async function loadProviderOptions() {
+  try {
+    const r = await http.get('/api/v1/usage/options')
+    providerOptions.value = r.data.providers || []
+  } catch { /* ignore */ }
+}
 
 const isCompactUsageTab = computed(() =>
-  activeTab.value === 'embedding' || activeTab.value === 'rerank',
+  activeTab.value === 'embedding' || activeTab.value === 'rerank' || activeTab.value === 'rerank_vl',
 )
 
 const logEndpointType = computed((): UsageEndpointType => {
-  if (activeTab.value === 'embedding' || activeTab.value === 'rerank') return activeTab.value
+  if (activeTab.value === 'embedding' || activeTab.value === 'rerank' || activeTab.value === 'rerank_vl') return activeTab.value
   return 'chat'
 })
 
@@ -561,15 +530,34 @@ const myErrorCount = computed(() => {
 
 const videoRefreshToken = ref(0)
 
+function bumpVideoOrLoadAll() {
+  if (activeTab.value === 'video') {
+    videoRefreshToken.value++
+    return
+  }
+  loadAll()
+}
+
+function onFilterChange() {
+  bumpVideoOrLoadAll()
+}
+
 function onTabChange(value: string | number | boolean) {
+  const tab = String(value)
   const endpointMap: Record<string, string> = {
     chat: '/v1/chat/completions',
     embedding: '/v1/embeddings',
     rerank: '/v1/rerank',
     video: '/v1/contents/generations/tasks',
   }
-  filterEndpoint.value = endpointMap[value as string] || ''
-  if (value === 'video') {
+  filterEndpoint.value = endpointMap[tab] || ''
+  if (!isStatusCompatible(tab as any, filterStatus.value)) {
+    filterStatus.value = ''
+  }
+  if (tab !== 'video') {
+    filterProvider.value = ''
+  }
+  if (tab === 'video') {
     videoRefreshToken.value++
     return
   }
@@ -579,11 +567,17 @@ function onTabChange(value: string | number | boolean) {
 const groupBy = ref('day')
 
 const activeFilterCount = computed(() =>
-  [filterKeyId.value, filterModelName.value, filterGroupName.value, filterStatus.value, filterEndpoint.value].filter(Boolean).length
+  countActiveFilters('mine', activeTab.value as any, {
+    groupName: filterGroupName.value,
+    modelName: filterModelName.value,
+    keyId: filterKeyId.value,
+    status: filterStatus.value,
+    provider: filterProvider.value,
+  }),
 )
 function clearFilters() {
-  filterKeyId.value = filterModelName.value = filterGroupName.value = filterStatus.value = filterEndpoint.value = ''
-  loadAll()
+  filterKeyId.value = filterModelName.value = filterGroupName.value = filterStatus.value = filterEndpoint.value = filterProvider.value = ''
+  bumpVideoOrLoadAll()
 }
 
 // ── My Keys ──
@@ -674,11 +668,6 @@ const totalTokens = computed(() => {
   return (t?.prompt_tokens || 0) + (t?.completion_tokens || 0)
 })
 
-const netInputTokens = computed(() => {
-  const t = statsTotal.value
-  return Math.max((t?.prompt_tokens || 0) - (t?.cached_tokens || 0), 0)
-})
-
 const cacheHitPct = computed(() => {
   const t = statsTotal.value
   if (!t?.prompt_tokens) return 0
@@ -736,14 +725,6 @@ const maxModelRankValue = computed(() => {
   return Math.max(...rows.map(r => modelRankValue(r)), 0.0001)
 })
 
-// ── Model ranking ──
-const modelByCost = computed(() => {
-  return [...modelStatsRows.value]
-    .sort((a, b) => (b.est_cost_usd || 0) - (a.est_cost_usd || 0))
-    .slice(0, 8)
-})
-const maxModelCost = computed(() => Math.max(...modelByCost.value.map(r => r.est_cost_usd || 0), 0.0001))
-
 // ── KEY 花费分布 ──
 const keyDistSorted = computed(() => {
   return [...keyDistRows.value]
@@ -758,11 +739,7 @@ function rankBarColor(idx: number) {
 
 // ── Cost per M tokens ──
 // ── Table bar helpers ──
-const maxPrompt     = computed(() => Math.max(...statsRows.value.map(r => r.prompt_tokens || 0), 1))
-const maxCompletion = computed(() => Math.max(...statsRows.value.map(r => r.completion_tokens || 0), 1))
-const maxCost       = computed(() => Math.max(...statsRows.value.map(r => r.est_cost_usd || 0), 0.0001))
 const pct = (v: number, max: number) => Math.min(Math.round(v / max * 100), 100)
-const costColor = (v: number) => v > maxCost.value * 0.7 ? 'c-red fw6' : v > maxCost.value * 0.3 ? 'c-amber fw6' : 'c-green'
 
 // ── Formatters ──
 const fmtNum = (n?: number | null) => n?.toLocaleString() ?? '0'
@@ -776,13 +753,6 @@ const fmtPreciseCny = (v?: number | null): string => {
   else if (Math.abs(n) >= 0.0001) s = n.toFixed(6)
   else s = n.toFixed(8)
   return sym + s.replace(/(\.\d{2,}?)0+$/, '$1')
-}
-const fmtPrice = (n?: number | null) => {
-  const sym = currencySymbol(cc.value.currency)
-  if (n == null) return '—'
-  if (n === 0) return `${sym}0`
-  const v = convertCost(n, cc.value)
-  return sym + (Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(4).replace(/0+$/, '').replace(/\.$/, ''))
 }
 const fmtTokens = (n?: number | null) => {
   if (!n) return '0'
@@ -840,7 +810,7 @@ async function loadAvgDuration() {
     if (filterStatus.value)    params.status     = filterStatus.value
     if (filterEndpoint.value) params.endpoint   = filterEndpoint.value
     const r = await http.get('/api/v1/my/usage/logs', { params, _silent: true } as any)
-    const rows: LogRow[] = r.data.rows || []
+    const rows: Array<{ duration_ms?: number }> = r.data.rows || []
     avgDurationMs.value = rows.length
       ? Math.round(rows.reduce((s, row) => s + (row.duration_ms || 0), 0) / rows.length)
       : null
@@ -910,8 +880,8 @@ const costTrendCanvas = ref<HTMLCanvasElement | null>(null)
 const distCanvas      = ref<HTMLCanvasElement | null>(null)
 const keyDistCanvas   = ref<HTMLCanvasElement | null>(null)
 let costTrendChart: Chart | null = null
-let distChart: Chart | null = null
-let keyDistChart: Chart | null = null
+let distChart: Chart<'doughnut'> | null = null
+let keyDistChart: Chart<'doughnut'> | null = null
 
 // Doughnut center plugin
 const doughnutCenterPlugin = {
@@ -938,7 +908,7 @@ const doughnutCenterPlugin = {
 const segmentLabelPlugin = {
   id: 'segmentLabel',
   afterDraw(chart: Chart) {
-    if (chart.config.type !== 'doughnut') return
+    if (chart.getDatasetMeta(0).type !== 'doughnut') return
     const ds = chart.data.datasets[0]
     if (!ds?.data?.length) return
     const total = (ds.data as number[]).reduce((a, b) => a + b, 0)
@@ -1091,7 +1061,7 @@ function renderDist() {
   const total = data.reduce((a, b) => a + b, 0)
   const palette = CHART_PALETTE.map(c => c + 'CC')
 
-  distChart = new Chart(canvas, {
+  distChart = new Chart<'doughnut'>(canvas, {
     type: 'doughnut',
     data: {
       labels,
@@ -1152,7 +1122,7 @@ function renderKeyDist() {
   const total = data.reduce((a, b) => a + b, 0)
   const palette = CHART_PALETTE.map(c => c + 'CC')
 
-  keyDistChart = new Chart(canvas, {
+  keyDistChart = new Chart<'doughnut'>(canvas, {
     type: 'doughnut',
     data: {
       labels,
@@ -1219,6 +1189,7 @@ onUnmounted(() => {
 })
 
 loadMyKeys()
+loadProviderOptions()
 loadAll()
 
 if (typeof MutationObserver !== 'undefined') {

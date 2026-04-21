@@ -73,7 +73,7 @@ func MergeMetadata(base, override *core.ModelMetadata) *core.ModelMetadata {
 		merged.Rankings = out
 	}
 	if override.Pricing != nil {
-		merged.Pricing = override.Pricing.Clone()
+		merged.Pricing = MergePricing(merged.Pricing, override.Pricing)
 		if len(override.PricingSources) > 0 {
 			merged.PricingSources = clonePricingSources(override.PricingSources)
 		} else {
@@ -82,6 +82,56 @@ func MergeMetadata(base, override *core.ModelMetadata) *core.ModelMetadata {
 	}
 
 	return merged
+}
+
+// MergePricing overlays only explicitly supplied price buckets. Provider-level
+// overrides therefore do not erase registry buckets such as rerank search-unit
+// pricing when they customize an unrelated token price.
+func MergePricing(base, override *core.ModelPricing) *core.ModelPricing {
+	if override == nil {
+		return base.Clone()
+	}
+	if base == nil {
+		return override.Clone()
+	}
+	out := base.Clone()
+	if override.Currency != "" {
+		out.Currency = override.Currency
+	}
+	mergeFloat := func(dst **float64, src *float64) {
+		if src != nil {
+			*dst = cloneFloat(src)
+		}
+	}
+	mergeFloat(&out.InputPerMtok, override.InputPerMtok)
+	mergeFloat(&out.OutputPerMtok, override.OutputPerMtok)
+	mergeFloat(&out.CachedInputPerMtok, override.CachedInputPerMtok)
+	mergeFloat(&out.CacheWritePerMtok, override.CacheWritePerMtok)
+	mergeFloat(&out.ReasoningOutputPerMtok, override.ReasoningOutputPerMtok)
+	mergeFloat(&out.BatchInputPerMtok, override.BatchInputPerMtok)
+	mergeFloat(&out.BatchOutputPerMtok, override.BatchOutputPerMtok)
+	mergeFloat(&out.AudioInputPerMtok, override.AudioInputPerMtok)
+	mergeFloat(&out.AudioOutputPerMtok, override.AudioOutputPerMtok)
+	mergeFloat(&out.PerImage, override.PerImage)
+	mergeFloat(&out.InputPerImage, override.InputPerImage)
+	mergeFloat(&out.PerSecondInput, override.PerSecondInput)
+	mergeFloat(&out.PerSecondOutput, override.PerSecondOutput)
+	mergeFloat(&out.PerCharacterInput, override.PerCharacterInput)
+	mergeFloat(&out.PerRequest, override.PerRequest)
+	mergeFloat(&out.PerPage, override.PerPage)
+	mergeFloat(&out.RerankPerSearchUnit, override.RerankPerSearchUnit)
+	if len(override.Tiers) > 0 {
+		out.Tiers = override.Clone().Tiers
+	}
+	return out
+}
+
+func cloneFloat(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }
 
 func clonePricingSources(in map[string]string) map[string]string {

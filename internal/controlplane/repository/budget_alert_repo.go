@@ -1,9 +1,23 @@
 package repository
 
 import (
+	"context"
+
+	"github.com/example/llm-gateway/internal/controlplane/budgetdomain"
 	"github.com/example/llm-gateway/internal/controlplane/model"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+type AlertDimension struct {
+	ScopeType     string
+	ScopeID       string
+	PeriodType    budgetdomain.PeriodType
+	Period        string
+	Threshold     int
+	DimensionType budgetdomain.DimensionType
+	ModelTierID   *uuid.UUID
+}
 
 // BudgetAlertRepo 处理告警去重表。
 type BudgetAlertRepo struct {
@@ -21,13 +35,18 @@ func NewBudgetAlertRepo(db *gorm.DB) *BudgetAlertRepo {
 }
 
 // ExistsForPeriod 判断某对象/周期/档位是否已发过告警（去重判断）。
-func (r *BudgetAlertRepo) ExistsForPeriod(scopeType, scopeID, period string, threshold int) bool {
+func (r *BudgetAlertRepo) ExistsForPeriod(ctx context.Context, d AlertDimension) (bool, error) {
 	var count int64
-	r.db.Model(&model.BudgetAlertRecord{}).
-		Where("scope_type = ? AND scope_id = ? AND period = ? AND threshold = ?",
-			scopeType, scopeID, period, threshold).
-		Count(&count)
-	return count > 0
+	query := r.db.WithContext(ctx).Model(&model.BudgetAlertRecord{}).
+		Where("scope_type = ? AND scope_id = ? AND period_type = ? AND period = ? AND threshold = ? AND dimension_type = ?",
+			d.ScopeType, d.ScopeID, d.PeriodType, d.Period, d.Threshold, d.DimensionType)
+	if d.ModelTierID == nil {
+		query = query.Where("model_tier_id IS NULL")
+	} else {
+		query = query.Where("model_tier_id = ?", *d.ModelTierID)
+	}
+	err := query.Count(&count).Error
+	return count > 0, err
 }
 
 // Create 写入告警去重记录。
@@ -39,6 +58,19 @@ func (r *BudgetAlertRepo) Create(a *model.BudgetAlertRecord) error {
 func (r *BudgetAlertRepo) DeleteByScope(scopeType, scopeID, period string) error {
 	return r.db.Where("scope_type = ? AND scope_id = ? AND period = ?", scopeType, scopeID, period).
 		Delete(&model.BudgetAlertRecord{}).Error
+}
+
+func (r *BudgetAlertRepo) DeleteByDimension(ctx context.Context, d AlertDimension) error {
+	query := r.db.WithContext(ctx).Where(
+		"scope_type = ? AND scope_id = ? AND period_type = ? AND period = ? AND dimension_type = ?",
+		d.ScopeType, d.ScopeID, d.PeriodType, d.Period, d.DimensionType,
+	)
+	if d.ModelTierID == nil {
+		query = query.Where("model_tier_id IS NULL")
+	} else {
+		query = query.Where("model_tier_id = ?", *d.ModelTierID)
+	}
+	return query.Delete(&model.BudgetAlertRecord{}).Error
 }
 
 // FindOwnersByBudgetScope 查询某 scope 的告警接收人列表，用于站内信定向投递。

@@ -1,21 +1,21 @@
 <template>
   <div class="vtt">
-    <div class="vtt-toolbar">
+    <div v-if="!controlled" class="vtt-toolbar">
       <div class="vtt-filters">
         <el-select
-          v-model="filterStatus"
+          v-model="localStatus"
           clearable
           placeholder="任务状态"
           style="width: 140px"
           @change="reload"
         >
-          <el-option label="submitted" value="submitted" />
-          <el-option label="running" value="running" />
-          <el-option label="succeeded" value="succeeded" />
-          <el-option label="failed" value="failed" />
+          <el-option label="排队中" value="submitted" />
+          <el-option label="生成中" value="running" />
+          <el-option label="成功" value="succeeded" />
+          <el-option label="失败" value="failed" />
         </el-select>
         <el-input
-          v-model="filterModel"
+          v-model="localModel"
           clearable
           placeholder="模型"
           style="width: 200px"
@@ -92,10 +92,15 @@ import { resolveGroupAndModel, resolveKeyLabel } from '@/utils/videoTaskDisplay'
 
 const props = withDefaults(defineProps<{
   refreshToken?: number
-  /** 我的用量：只查当前用户任务 */
   mine?: boolean
+  /** 由页级筛选条控制时隐藏表内筛选项 */
+  controlled?: boolean
+  status?: string
+  modelName?: string
+  providerName?: string
 }>(), {
   mine: false,
+  controlled: false,
 })
 
 const loading = ref(false)
@@ -103,8 +108,8 @@ const rows = ref<VideoTask[]>([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
-const filterStatus = ref('')
-const filterModel = ref('')
+const localStatus = ref('')
+const localModel = ref('')
 
 const detailVisible = ref(false)
 const detailTask = ref<VideoTask | null>(null)
@@ -141,11 +146,14 @@ function openDetail(row: VideoTask) {
 async function load() {
   loading.value = true
   try {
+    const status = props.controlled ? (props.status || undefined) : (localStatus.value || undefined)
+    const modelName = props.controlled ? (props.modelName || undefined) : (localModel.value || undefined)
     const res = await videoTasksAPI.list({
       page: page.value,
       page_size: pageSize.value,
-      status: filterStatus.value || undefined,
-      model_name: filterModel.value || undefined,
+      status,
+      model_name: modelName,
+      provider_name: props.controlled ? (props.providerName || undefined) : undefined,
     }, { mine: props.mine })
     rows.value = res.data || []
     total.value = res.total || 0
@@ -167,7 +175,10 @@ function onSizeChange() {
   load()
 }
 
-watch(() => props.refreshToken, () => load())
+watch(
+  () => [props.refreshToken, props.status, props.modelName, props.providerName, props.controlled, props.mine],
+  () => load(),
+)
 onMounted(load)
 
 defineExpose({ reload: load })

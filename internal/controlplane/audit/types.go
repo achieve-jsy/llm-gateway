@@ -10,6 +10,11 @@ import (
 const (
 	contextKeyRecorded     = "_audit_recorded"
 	contextKeyResourceName = "_audit_resource_name"
+	contextKeyBefore       = "_audit_before"
+	contextKeyAfter        = "_audit_after"
+	contextKeyReason       = "_audit_reason"
+	contextKeyScopeType    = "_audit_scope_type"
+	contextKeyScopeID      = "_audit_scope_id"
 )
 
 // Action 审计操作类型标识（类型安全字符串）
@@ -21,18 +26,18 @@ type Resource string
 // ── 操作动作（按资源域分组，便于 grep）──────────────────────────
 
 const (
-	ActionServiceKeyCreate       Action = "service_key.create"
-	ActionServiceKeyDelete       Action = "service_key.delete"
-	ActionServiceKeyToggle       Action = "service_key.toggle"
-	ActionServiceKeyIPChanged    Action = "service_key.ip_allowlist_changed"
-	ActionServiceKeyReset        Action = "service_key.reset"
+	ActionServiceKeyCreate    Action = "service_key.create"
+	ActionServiceKeyDelete    Action = "service_key.delete"
+	ActionServiceKeyToggle    Action = "service_key.toggle"
+	ActionServiceKeyIPChanged Action = "service_key.ip_allowlist_changed"
+	ActionServiceKeyReset     Action = "service_key.reset"
 
-	ActionProviderCreate         Action = "provider.create"
-	ActionProviderUpdate         Action = "provider.update"
-	ActionProviderDelete         Action = "provider.delete"
-	ActionProviderToggle         Action = "provider.toggle"
-	ActionProviderTest           Action = "provider.test"
-	ActionProviderSyncModels     Action = "provider.sync_models"
+	ActionProviderCreate     Action = "provider.create"
+	ActionProviderUpdate     Action = "provider.update"
+	ActionProviderDelete     Action = "provider.delete"
+	ActionProviderToggle     Action = "provider.toggle"
+	ActionProviderTest       Action = "provider.test"
+	ActionProviderSyncModels Action = "provider.sync_models"
 
 	ActionModelCreate            Action = "model.create"
 	ActionModelUpdate            Action = "model.update"
@@ -47,58 +52,74 @@ const (
 	ActionGroupEntitlementGrant  Action = "group.entitlement_grant"
 	ActionGroupEntitlementRevoke Action = "group.entitlement_revoke"
 
-	ActionBudgetSet              Action = "budget.set"
-	ActionBudgetDelete           Action = "budget.delete"
+	ActionBudgetSet                 Action = "budget.set"
+	ActionBudgetDelete              Action = "budget.delete"
+	ActionModelTierCreate           Action = "model_tier.create"
+	ActionModelTierUpdate           Action = "model_tier.update"
+	ActionModelTierStatus           Action = "model_tier.status"
+	ActionModelTierReorder          Action = "model_tier.reorder"
+	ActionModelTierArchive          Action = "model_tier.archive"
+	ActionModelTierDelete           Action = "model_tier.delete"
+	ActionBudgetTierLimitSet        Action = "budget_tier_limit.set"
+	ActionBudgetTierLimitSchedule   Action = "budget_tier_limit.schedule"
+	ActionBudgetTierReplaceSchedule Action = "budget_tier_limit.replace_schedule"
 
-	ActionExpansionCreate        Action = "expansion.create"
-	ActionExpansionDecision      Action = "expansion.decision"
+	ActionExpansionCreate      Action = "expansion.create"
+	ActionExpansionDecision    Action = "expansion.decision"
+	ActionExpansionPrecheck    Action = "expansion.precheck"
+	ActionExpansionReprecheck  Action = "expansion.reprecheck"
+	ActionExpansionNotifyOwner Action = "expansion.notify_owner"
+	ActionExpansionApplyFailed Action = "expansion.apply_failed"
+	ActionBudgetAdjustPreview  Action = "budget.adjust.preview"
+	ActionBudgetAdjustApply    Action = "budget.adjust.apply"
 
-	ActionKeyCreate              Action = "key.create"
-	ActionKeyDisable             Action = "key.disable"
-	ActionKeyEnable              Action = "key.enable"
-	ActionKeyDelete              Action = "key.delete"
-	ActionKeyReset               Action = "key.reset"
-	ActionKeyToggleLog           Action = "key.toggle_log"
-	ActionKeyToggleAccessAll     Action = "key.toggle_access_all"
-	ActionKeyBindGroups          Action = "key.bind_groups"
+	ActionKeyCreate          Action = "key.create"
+	ActionKeyDisable         Action = "key.disable"
+	ActionKeyEnable          Action = "key.enable"
+	ActionKeyDelete          Action = "key.delete"
+	ActionKeyReset           Action = "key.reset"
+	ActionKeyToggleLog       Action = "key.toggle_log"
+	ActionKeyToggleAccessAll Action = "key.toggle_access_all"
+	ActionKeyBindGroups      Action = "key.bind_groups"
 
-	ActionUserLogin              Action = "user.login"
-	ActionUserLogout             Action = "user.logout"
+	ActionUserLogin  Action = "user.login"
+	ActionUserLogout Action = "user.logout"
 
-	ActionSettingsUpdate         Action = "settings.update"
+	ActionSettingsUpdate Action = "settings.update"
 
-	ActionAnnouncementPublish    Action = "announcement.publish"
-	ActionAnnouncementDelete     Action = "announcement.delete"
+	ActionAnnouncementPublish Action = "announcement.publish"
+	ActionAnnouncementDelete  Action = "announcement.delete"
 
-	ActionHealthCheckRun         Action = "health_check.run"
+	ActionHealthCheckRun Action = "health_check.run"
 
-	ActionEmployeeImport         Action = "employee.import"
+	ActionEmployeeImport Action = "employee.import"
 
-	ActionEmailTest              Action = "email.send_test"
-	ActionEmailAlert             Action = "email.send_alert"
+	ActionEmailTest  Action = "email.send_test"
+	ActionEmailAlert Action = "email.send_alert"
 
 	// v0.15 配额审计
-	ActionQuotaDefaultUpdate     Action = "quota.default.update"
-	ActionQuotaUserUpdate        Action = "quota.user.update"
-	ActionQuotaServiceKeyUpdate  Action = "quota.service_key.update"
-	ActionQuotaGroupUpdate       Action = "quota.group.update"
-	ActionQuotaModelUpdate       Action = "quota.model.update"
-	ActionQuotaExemptionCreate   Action = "quota.exemption.create"
-	ActionQuotaExemptionRevoke   Action = "quota.exemption.revoke"
+	ActionQuotaDefaultUpdate    Action = "quota.default.update"
+	ActionQuotaUserUpdate       Action = "quota.user.update"
+	ActionQuotaServiceKeyUpdate Action = "quota.service_key.update"
+	ActionQuotaGroupUpdate      Action = "quota.group.update"
+	ActionQuotaModelUpdate      Action = "quota.model.update"
+	ActionQuotaExemptionCreate  Action = "quota.exemption.create"
+	ActionQuotaExemptionRevoke  Action = "quota.exemption.revoke"
 )
 
 // ── 资源类型常量 ──────────────────────────────────────────────
 
 const (
-	ResourceServiceKey  Resource = "service_key"
-	ResourceProvider    Resource = "provider"
-	ResourceModel       Resource = "model"
-	ResourceGroup       Resource = "group"
-	ResourceBudget      Resource = "budget"
-	ResourceExpansion   Resource = "expansion_request"
-	ResourceKey         Resource = "api_key"
-	ResourceUser        Resource = "user"
-	ResourceSettings    Resource = "settings"
+	ResourceServiceKey   Resource = "service_key"
+	ResourceProvider     Resource = "provider"
+	ResourceModel        Resource = "model"
+	ResourceGroup        Resource = "group"
+	ResourceBudget       Resource = "budget"
+	ResourceModelTier    Resource = "model_tier"
+	ResourceExpansion    Resource = "expansion_request"
+	ResourceKey          Resource = "api_key"
+	ResourceUser         Resource = "user"
+	ResourceSettings     Resource = "settings"
 	ResourceAnnouncement Resource = "announcement"
 	ResourceHealthCheck  Resource = "health_check"
 	ResourceEmployee     Resource = "employee"
@@ -148,4 +169,50 @@ func GetResourceNameCtx(c *gin.Context) string {
 	}
 	s, _ := v.(string)
 	return s
+}
+
+func SetBeforeAfter(c *gin.Context, before, after any) {
+	c.Set(contextKeyBefore, before)
+	c.Set(contextKeyAfter, after)
+}
+
+func GetBeforeAfter(c *gin.Context) (any, any) {
+	before, _ := c.Get(contextKeyBefore)
+	after, _ := c.Get(contextKeyAfter)
+	return before, after
+}
+
+func SetReason(c *gin.Context, reason string) {
+	c.Set(contextKeyReason, reason)
+}
+
+func GetReason(c *gin.Context) string {
+	reason, _ := c.Get(contextKeyReason)
+	value, _ := reason.(string)
+	return value
+}
+
+func SetScope(c *gin.Context, scopeType, scopeID string) {
+	c.Set(contextKeyScopeType, scopeType)
+	c.Set(contextKeyScopeID, scopeID)
+}
+
+func GetScope(c *gin.Context) (string, string) {
+	scopeType, _ := c.Get(contextKeyScopeType)
+	scopeID, _ := c.Get(contextKeyScopeID)
+	typeValue, _ := scopeType.(string)
+	idValue, _ := scopeID.(string)
+	return typeValue, idValue
+}
+
+const contextKeyActionOverride = "audit_action_override"
+
+func SetActionOverride(c *gin.Context, action Action) {
+	c.Set(contextKeyActionOverride, action)
+}
+
+func GetActionOverride(c *gin.Context) (Action, bool) {
+	value, ok := c.Get(contextKeyActionOverride)
+	action, valid := value.(Action)
+	return action, ok && valid && action != ""
 }

@@ -3,7 +3,9 @@ package middleware
 import (
 	"context"
 	"log/slog"
+	"strconv"
 
+	"github.com/example/llm-gateway/internal/gateway/budget"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -91,16 +93,60 @@ return 1
 // keys：各层各维度 Redis key（月+周+日 × N scopes）
 // scopeArgs：scope 额度信息，用于判断哪些维度已启用（来自 ctx 中的 budget_scope_args）
 // realCost：provider 返回的真实成本（USD）
-func BudgetAdd(ctx context.Context, rdb *redis.Client, keys []string, scopeArgs []interface{}, realCost float64) {
+func BudgetAdd(ctx context.Context, rdb *redis.Client, keys []string, scopeArgs []interface{}, realCost float64) error {
 	if rdb == nil || len(keys) == 0 || realCost <= 0 {
-		return
+		return nil
 	}
 	args := make([]interface{}, 0, 1+len(scopeArgs))
 	args = append(args, realCost)
 	args = append(args, scopeArgs...)
 	if err := budgetAddScript.Run(ctx, rdb, keys, args...).Err(); err != nil {
 		slog.Warn("budget_add: redis error", "real_cost", realCost, "error", err)
+		return err
 	}
+	return nil
+}
+
+var legacyPlanCheckScript = redis.NewScript(`
+for i = 1, #KEYS do
+  local used = tonumber(redis.call('GET', KEYS[i]) or '0')
+  local limit = tonumber(ARGV[i])
+  if used >= limit then return i end
+end
+return 0
+`)
+
+func CheckLegacyBudget(
+	ctx context.Context,
+	rdb *redis.Client,
+	plan *budget.AccountingPlan,
+) (*budget.Constraint, error) {
+	if rdb == nil || plan == nil {
+		return nil, nil
+	}
+	keys := make([]string, 0, len(plan.Constraints))
+	args := make([]any, 0, len(plan.Constraints))
+	constraints := make([]budget.Constraint, 0, len(plan.Constraints))
+	for _, constraint := range plan.Constraints {
+		if constraint.Dimension != budget.DimensionTotal {
+			continue
+		}
+		keys = append(keys, BudgetUsedKey(constraint.ScopeType, constraint.ScopeID, constraint.Period))
+		args = append(args, strconv.FormatFloat(float64(constraint.LimitMicroUSD)/1_000_000, 'f', 6, 64))
+		constraints = append(constraints, constraint)
+	}
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	index, err := legacyPlanCheckScript.Run(ctx, rdb, keys, args...).Int()
+	if err != nil {
+		return nil, err
+	}
+	if index == 0 {
+		return nil, nil
+	}
+	blocked := constraints[index-1]
+	return &blocked, nil
 }
 
 // BudgetUsedKey 构造 Redis 预算用键名（外部如需读取实时已用额用）。

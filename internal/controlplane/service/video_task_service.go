@@ -55,6 +55,10 @@ func (s *VideoTaskService) GetProviderType(taskID string) (string, error) {
 	return s.repo.GetProviderType(taskID)
 }
 
+func (s *VideoTaskService) GetTaskMeta(taskID string) (*repository.VideoTaskMeta, error) {
+	return s.repo.GetTaskMeta(taskID)
+}
+
 func (s *VideoTaskService) Stats(start, end, userID, providerName, modelName string) (map[string]interface{}, error) {
 	return s.repo.Stats(start, end, userID, providerName, modelName)
 }

@@ -6,6 +6,14 @@
         <p class="page-desc">管理你的 Key{{ authStore.isManager ? '，审批团队成员的申请' : '' }}</p>
       </div>
       <div class="header-actions">
+        <div class="base-url-box">
+          <span class="base-url-box__prefix">BASE URL</span>
+          <span class="base-url-box__value">{{ displayBaseUrl }}</span>
+          <button class="base-url-box__btn" :class="{ ok: urlCopied }" @click="copyBaseUrl">
+            <el-icon><component :is="urlCopied ? Check : CopyDocument" /></el-icon>
+            {{ urlCopied ? '已复制' : '复制' }}
+          </button>
+        </div>
         <el-button type="primary" @click="handleCreateClick">{{ createKeyButtonLabel }}</el-button>
       </div>
     </div>
@@ -552,7 +560,7 @@ import { ref, onMounted, computed, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { LocationQuery } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Key, Search } from '@element-plus/icons-vue'
+import { Key, Search, CopyDocument, Check } from '@element-plus/icons-vue'
 import {
   listKeys, disableKey, enableKey, deleteKey, resetKey, revealKey,
   updateKeyGroups, getAvailableGroups, toggleAccessAllGroups, toggleLogEnabled,
@@ -607,6 +615,21 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const keyCache = useKeyCacheStore()
+const settingsStore = useSettingsStore()
+
+/* ── Base URL 复制条 ── */
+const urlCopied = ref(false)
+let urlCopyTimer: ReturnType<typeof setTimeout> | null = null
+const displayBaseUrl = computed(() => {
+  const base = settingsStore.getBaseUrl()
+  return base.endsWith('/v1') ? base : base.replace(/\/+$/, '') + '/v1'
+})
+function copyBaseUrl() {
+  copyToClipboard(displayBaseUrl.value)
+  urlCopied.value = true
+  if (urlCopyTimer) clearTimeout(urlCopyTimer)
+  urlCopyTimer = setTimeout(() => { urlCopied.value = false }, 2200)
+}
 const tabPrefsHydrated = ref(false)
 let skipTabRouteSync = false
 const activeTab = ref<KeyListTab>(parseTabFromQuery(route.query))
@@ -640,7 +663,6 @@ const myAppAllTotal = ref(0)
 const myAppPageSize = 10
 const myAppStatusFilter = ref('')
 const myAppSummary = ref({ pending: 0, approved: 0, rejected: 0 })
-const myPendingCount = computed(() => myAppSummary.value.pending)
 const currentDeptId = ref('')
 const deptPolicy = ref<'free'|'approval'>('free')
 const policySaving = ref(false)
@@ -694,7 +716,6 @@ const hasMultiTab = computed(() => {
   return showMyApplicationsTab.value || authStore.isManager
 })
 
-const pendingDisplayTotal = computed(() => Math.max(pendingTotal.value, pendingCount.value))
 const historyDisplayTotal = computed(() => historyTotal.value)
 
 const canManageDeptPolicy = computed(() => authStore.effectiveRole === 'dept_admin' && !!currentDeptId.value)
@@ -847,12 +868,6 @@ watch(
     loadActiveTabData()
   },
 )
-
-function avatarColor(n?: string): string {
-  const c = ['#409EFF','#67C23A','#E6A23C','#F56C6C','#909399','#8B5CF6','#EC4899','#14B8A6']
-  if (!n) return c[0]; let h = 0; for (let i = 0; i < n.length; i++) h = n.charCodeAt(i) + ((h << 5) - h)
-  return c[Math.abs(h) % c.length]
-}
 
 function resolvePageArg(page: number | undefined, pageRef: { value: number }): number {
   if (typeof page === 'number' && Number.isFinite(page) && page >= 1) {
@@ -1158,7 +1173,7 @@ watch(() => authStore.effectiveRole, (role) => {
 .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
 .page-title { font-size: 22px; font-weight: 700; margin: 0; }
 .page-desc { font-size: 13px; color: var(--el-text-color-secondary); margin: 4px 0 0; }
-.header-actions { flex-shrink: 0; }
+.header-actions { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
 .key-cell { display: flex; align-items: center; gap: 6px; }
 .key-masked { font-family: 'SF Mono',monospace; font-size: 13px; background: var(--el-fill-color-light); padding: 2px 10px; border-radius: 4px; color: var(--el-text-color-secondary); }
 .text-muted { color: var(--el-text-color-secondary); font-size: 13px; }
@@ -1463,5 +1478,68 @@ watch(() => authStore.effectiveRole, (role) => {
   font-size: 12px;
   color: var(--el-text-color-regular);
   line-height: 1.4;
+}
+
+/* ── Base URL 组件（参考模型广场） ── */
+.base-url-box {
+  display: flex;
+  align-items: center;
+  background: var(--el-fill-color-blank);
+  border: 1.5px solid #C8E4E2;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(54,179,78,0.06);
+  margin-top: 10px;
+}
+.base-url-box__prefix {
+  padding: 0 12px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #36B34E;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  border-right: 1px solid #D8EEEC;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  background: rgba(54,179,78,0.04);
+}
+.base-url-box__value {
+  padding: 0 14px;
+  font-family: 'Fira Code', 'JetBrains Mono', monospace;
+  font-size: 13px;
+  color: #1A5C58;
+  font-weight: 600;
+  white-space: nowrap;
+  user-select: all;
+}
+.base-url-box__btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 16px;
+  height: 40px;
+  background: #36B34E;
+  border: none;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+  .el-icon { font-size: 14px; }
+  &:hover { background: #229A94; }
+  &.ok { background: #0EA371; }
+  &:focus-visible { outline: 2px solid #36B34E; outline-offset: 2px; }
+}
+
+:global(html.dark) .base-url-box { border-color: #1F5230; background: #0A1B1A; box-shadow: none; }
+:global(html.dark) .base-url-box__prefix { background: rgba(54,179,78,0.07); border-color: #1F5230; }
+:global(html.dark) .base-url-box__value { color: #6CD083; }
+
+@media (max-width: 768px) {
+  .base-url-box { width: 100%; margin-top: 8px; }
+  .base-url-box__value { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 }
 </style>

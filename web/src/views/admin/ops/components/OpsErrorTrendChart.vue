@@ -77,10 +77,6 @@ interface Props {
 
 const props = defineProps<Props>()
 
-const emit = defineEmits<{
-  (e: 'open-error-details', type: 'request' | 'upstream'): void
-}>()
-
 const chartRef = shallowRef<{ chart: ChartJS } | null>(null)
 const hasData = computed(() => props.points.length > 0)
 

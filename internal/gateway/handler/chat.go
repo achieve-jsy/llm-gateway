@@ -12,6 +12,7 @@ import (
 
 	"github.com/example/llm-gateway/internal/core"
 	gatewayerrors "github.com/example/llm-gateway/internal/errors"
+	"github.com/example/llm-gateway/internal/gateway/budget"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
@@ -42,7 +43,9 @@ type ChatHandler struct {
 	orchestrator  ChatOrchestratorInterface
 	groupDispatch *orchestrator.GroupAwareDispatcher
 	budgetDeps    *middleware.BudgetDeps // v0.7: 预算预扣依赖（nil 表示跳过预算校验）
-	quotaGate     *quota.ModelQuotaGate  // v0.15: 模型层配额检查（nil 表示跳过）
+	budgetGate    *budget.Gate
+	requestQuota  *quota.QuotaMiddleware
+	quotaGate     *quota.ModelQuotaGate // v0.15: 模型层配额检查（nil 表示跳过）
 }
 
 // NewChatHandler 创建 ChatHandler 实例
@@ -58,6 +61,14 @@ func NewChatHandlerWithGroup(orch ChatOrchestratorInterface, gd *orchestrator.Gr
 // SetBudgetDeps 注入预算依赖（router setup 时调用一次）
 func (h *ChatHandler) SetBudgetDeps(deps *middleware.BudgetDeps) {
 	h.budgetDeps = deps
+}
+
+func (h *ChatHandler) SetBudgetGate(gate *budget.Gate) {
+	h.budgetGate = gate
+}
+
+func (h *ChatHandler) SetRequestQuotaGate(gate *quota.QuotaMiddleware) {
+	h.requestQuota = gate
 }
 
 // SetModelQuotaGate 注入模型配额检查器（router setup 时调用一次）
@@ -91,22 +102,15 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 	originalModel := req.Model
 	c.Set("model", req.Model)
 
-	// v0.9: 预算检查（事后记账模式，只检查已累计用量，不估算本次成本）
-	if h.budgetDeps != nil {
-		if _, err := middleware.Reserve(c, h.budgetDeps); err != nil {
-			if be, ok := err.(*middleware.BudgetExceededError); ok {
-				be.WriteHTTPResponse(c)
-				return
-			}
-			slog.Warn("chat: budget check failed", "model", req.Model, "error", err)
+	var decision *scheduler.RouteDecision
+	releaseQuota, err := PrepareAuthorizedGates(c, originalModel, func() error {
+		if h.groupDispatch == nil {
+			return nil
 		}
-	}
-
-	if h.groupDispatch != nil {
-		decision, err := h.groupDispatch.Dispatch(c, req.Model, &req)
-		if err != nil {
-			respondGroupError(c, err)
-			return
+		var dispatchErr error
+		decision, dispatchErr = h.groupDispatch.Dispatch(c, originalModel, &req)
+		if dispatchErr != nil {
+			return dispatchErr
 		}
 		if decision != nil {
 			req.Model = decision.ModelName
@@ -114,24 +118,37 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 			// 选择 scheduler 指定的 provider，避免路由歧义。
 			if decision.ProviderName != "" {
 				req.Provider = decision.ProviderName
-					// Track provider concurrency in Redis (WP8)
-					middleware.TrackProviderRequest(c, decision.ProviderName)
+				// Track provider concurrency in Redis (WP8)
+				middleware.TrackProviderRequest(c, decision.ProviderName)
 			}
 			if decision.Strategy == scheduler.StrategyAuto && decision.ComplexityTier != "" {
 				c.Header("X-Auto-Tier", decision.ComplexityTier)
 				c.Header("X-Auto-Score", fmt.Sprintf("%.2f", decision.ComplexityScore))
 			}
 
-			// v0.15: 模型层配额检查（在路由选定具体 model 之后、转发上游之前）
-			if h.quotaGate != nil {
-				subjectType, _ := c.Get("quota_subject_type")
-				subjectID, _ := c.Get("quota_subject_id")
-				if st, ok := subjectType.(string); ok {
-					if si, ok := subjectID.(string); ok {
-						if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelID); err != nil {
-							return // BeforeUpstream 已写入 429 响应
-						}
-					}
+		}
+		return nil
+	}, h.budgetGate, h.requestQuota)
+	if err != nil {
+		if c.IsAborted() {
+			return
+		}
+		if !budget.WriteHTTPError(c, err) {
+			respondGroupError(c, err)
+		}
+		return
+	}
+	if releaseQuota != nil {
+		defer releaseQuota()
+	}
+
+	if decision != nil && h.quotaGate != nil {
+		subjectType, _ := c.Get("quota_subject_type")
+		subjectID, _ := c.Get("quota_subject_id")
+		if st, ok := subjectType.(string); ok {
+			if si, ok := subjectID.(string); ok {
+				if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelID); err != nil {
+					return
 				}
 			}
 		}
@@ -224,9 +241,15 @@ func (h *ChatHandler) handleNonStream(c *gin.Context, baseCtx context.Context, r
 
 		req.Model = decision.ModelName
 		req.Provider = decision.ProviderName
-			// Track provider concurrency for failover target (WP8)
-			middleware.TrackProviderRequest(c, decision.ProviderName)
+		// Track provider concurrency for failover target (WP8)
+		middleware.TrackProviderRequest(c, decision.ProviderName)
 		c.Set("failover_used", true)
+
+		// Update sticky mapping after successful failover
+		dc := model.GetDispatchContext(c)
+		if dc != nil && dc.SessionKey != "" {
+			h.groupDispatch.UpdateSticky(c.Request.Context(), originalModel, dc.SessionKey, decision.ModelID)
+		}
 
 		// v0.15: failover 模型也需要经过模型层配额检查
 		if h.quotaGate != nil {
@@ -325,9 +348,15 @@ func (h *ChatHandler) handleStream(c *gin.Context, baseCtx context.Context, req 
 
 		req.Model = decision.ModelName
 		req.Provider = decision.ProviderName
-			// Track provider concurrency for failover target (WP8)
-			middleware.TrackProviderRequest(c, decision.ProviderName)
+		// Track provider concurrency for failover target (WP8)
+		middleware.TrackProviderRequest(c, decision.ProviderName)
 		c.Set("failover_used", true)
+
+		// Update sticky mapping after successful failover
+		dc := model.GetDispatchContext(c)
+		if dc != nil && dc.SessionKey != "" {
+			h.groupDispatch.UpdateSticky(c.Request.Context(), originalModel, dc.SessionKey, decision.ModelID)
+		}
 
 		// v0.15: failover 模型也需要经过模型层配额检查
 		if h.quotaGate != nil {

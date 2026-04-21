@@ -4,7 +4,6 @@ package core
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 )
 
 // ──────────────────────────────────────────────
@@ -37,17 +36,18 @@ type AnthropicMessage struct {
 
 // AnthropicContentBlock is a discriminated content block inside a message.
 type AnthropicContentBlock struct {
-	Type      string                `json:"type"`                // "text", "image", "tool_use", "tool_result", "thinking", "redacted_thinking"
-	Text      string                `json:"text,omitempty"`
-	Source    *AnthropicImageSource `json:"source,omitempty"`    // type="image"
-	ID        string                `json:"id,omitempty"`        // type="tool_use"
-	Name      string                `json:"name,omitempty"`      // type="tool_use"
-	Input     json.RawMessage       `json:"input,omitempty"`     // type="tool_use" — tool arguments
-	ToolUseID string                `json:"tool_use_id,omitempty"` // type="tool_result"
-	Content   any                   `json:"content,omitempty"`   // type="tool_result" — string or []AnthropicContentBlock
-	IsError   bool                  `json:"is_error,omitempty"`  // type="tool_result"
-	Thinking  string                `json:"thinking,omitempty"`  // type="thinking"
-	Signature string                `json:"signature,omitempty"` // type="redacted_thinking"
+	Type         string                `json:"type"`                    // "text", "image", "tool_use", "tool_result", "thinking", "redacted_thinking"
+	Text         string                `json:"text,omitempty"`
+	Source       *AnthropicImageSource `json:"source,omitempty"`         // type="image"
+	ID           string                `json:"id,omitempty"`             // type="tool_use"
+	Name         string                `json:"name,omitempty"`           // type="tool_use"
+	Input        json.RawMessage       `json:"input,omitempty"`          // type="tool_use" — tool arguments
+	ToolUseID    string                `json:"tool_use_id,omitempty"`    // type="tool_result"
+	Content      any                   `json:"content,omitempty"`        // type="tool_result" — string or []AnthropicContentBlock
+	IsError      bool                  `json:"is_error,omitempty"`       // type="tool_result"
+	Thinking     string                `json:"thinking,omitempty"`       // type="thinking"
+	Signature    string                `json:"signature,omitempty"`      // type="redacted_thinking"
+	CacheControl json.RawMessage       `json:"cache_control,omitempty"` // prompt-cache breakpoint
 }
 
 // AnthropicImageSource references an image for content blocks of type "image".
@@ -60,9 +60,10 @@ type AnthropicImageSource struct {
 
 // AnthropicTool defines a tool that can be used by the model.
 type AnthropicTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"input_schema"` // JSON Schema object
+	Name         string          `json:"name"`
+	Description  string          `json:"description,omitempty"`
+	InputSchema  json.RawMessage `json:"input_schema"`            // JSON Schema object
+	CacheControl json.RawMessage `json:"cache_control,omitempty"` // prompt-cache breakpoint (usually on last tool)
 }
 
 // AnthropicToolChoice controls which tool (if any) the model should use.
@@ -79,8 +80,9 @@ type AnthropicThinking struct {
 
 // AnthropicSystemBlock is a system message content block.
 type AnthropicSystemBlock struct {
-	Type string `json:"type"` // "text"
-	Text string `json:"text"`
+	Type         string          `json:"type"` // "text"
+	Text         string          `json:"text"`
+	CacheControl json.RawMessage `json:"cache_control,omitempty"` // prompt-cache breakpoint
 }
 
 // ──────────────────────────────────────────────
@@ -211,11 +213,44 @@ func decodeContentBlocks(content any) []AnthropicContentBlock {
 		if c, exists := m["content"]; exists {
 			block.Content = c
 		}
+		if cc, exists := m["cache_control"]; exists {
+			block.CacheControl = rawCacheControlFromAny(cc)
+		}
 		if block.Type != "" {
 			blocks = append(blocks, block)
 		}
 	}
 	return blocks
+}
+
+// rawCacheControlFromAny normalizes a decoded cache_control value to json.RawMessage.
+func rawCacheControlFromAny(v any) json.RawMessage {
+	if v == nil {
+		return nil
+	}
+	switch t := v.(type) {
+	case json.RawMessage:
+		return CloneRawJSON(t)
+	case []byte:
+		return CloneRawJSON(json.RawMessage(t))
+	default:
+		raw, err := json.Marshal(t)
+		if err != nil {
+			return nil
+		}
+		return raw
+	}
+}
+
+// cacheControlExtraFields lifts Anthropic cache_control into ContentPart/Message ExtraFields
+// so Bedrock / native Anthropic adapters can re-emit CachePoint / cache_control.
+func cacheControlExtraFields(cc json.RawMessage) UnknownJSONFields {
+	if len(cc) == 0 || string(cc) == "null" {
+		return UnknownJSONFields{}
+	}
+	return UnknownJSONFieldsFromMap(map[string]json.RawMessage{
+		"cache_control": CloneRawJSON(cc),
+	})
 }
 
 func convertAnthropicMessages(anthMsgs []AnthropicMessage) []Message {
@@ -272,11 +307,18 @@ func flattenAnthropicBlocksToMessages(role string, blocks []AnthropicContentBloc
 		switch block.Type {
 		case "text":
 			if block.Text != "" {
-				textParts = append(textParts, ContentPart{Type: "text", Text: block.Text})
+				textParts = append(textParts, ContentPart{
+					Type:        "text",
+					Text:        block.Text,
+					ExtraFields: cacheControlExtraFields(block.CacheControl),
+				})
 			}
 		case "image":
 			part := convertAnthropicImage(block)
 			if part != nil {
+				if extra := cacheControlExtraFields(block.CacheControl); !extra.IsEmpty() {
+					part.ExtraFields = extra
+				}
 				textParts = append(textParts, *part)
 			}
 		case "tool_use":
@@ -287,13 +329,15 @@ func flattenAnthropicBlocksToMessages(role string, blocks []AnthropicContentBloc
 					Name:      block.Name,
 					Arguments: string(block.Input),
 				},
+				ExtraFields: cacheControlExtraFields(block.CacheControl),
 			}
 			toolCalls = append(toolCalls, tc)
 		case "tool_result":
 			// tool_result becomes a separate "tool" role message
 			toolMsg := Message{
-				Role:       "tool",
-				ToolCallID: block.ToolUseID,
+				Role:        "tool",
+				ToolCallID:  block.ToolUseID,
+				ExtraFields: cacheControlExtraFields(block.CacheControl),
 			}
 			switch resContent := block.Content.(type) {
 			case string:
@@ -342,10 +386,23 @@ func flattenAnthropicBlocksToMessages(role string, blocks []AnthropicContentBloc
 		}
 	}
 
-	// Build the primary message (assistant with tool_calls, or user with content)
+	// For assistant messages: tool_calls are bundled into the single assistant message.
+	// For user messages that mix tool_result blocks with text/image blocks, OpenAI/Azure
+	// requires all tool role messages to appear BEFORE any following user text message.
+	// Emitting text first would produce an invalid sequence:
+	//   assistant (tool_calls) → user (text) → tool
+	// instead of the required:
+	//   assistant (tool_calls) → tool → user (text)
+	// So always emit tool results first, then the text/image content message.
+
+	// Emit tool result messages first (only present on user-role messages).
+	result = append(result, toolResults...)
+
+	// Build the primary message (assistant with tool_calls, or user with content).
+	// 单 text part 若带 cache_control，必须保留为 ContentPart，不能折叠成 string（否则 ExtraFields 丢失）。
 	if len(textParts) > 0 || len(toolCalls) > 0 {
 		msg := Message{Role: role}
-		if len(textParts) == 1 && textParts[0].Type == "text" && len(toolCalls) == 0 {
+		if len(textParts) == 1 && textParts[0].Type == "text" && len(toolCalls) == 0 && textParts[0].ExtraFields.IsEmpty() {
 			msg.Content = textParts[0].Text
 		} else if len(textParts) > 0 {
 			msg.Content = textParts
@@ -356,8 +413,6 @@ func flattenAnthropicBlocksToMessages(role string, blocks []AnthropicContentBloc
 		result = append(result, msg)
 	}
 
-	// Append tool result messages after the primary message
-	result = append(result, toolResults...)
 	return result
 }
 
@@ -414,6 +469,12 @@ func convertAnthropicTools(anthTools []AnthropicTool) []map[string]any {
 				"parameters":  params,
 			},
 		}
+		if len(tool.CacheControl) > 0 && string(tool.CacheControl) != "null" {
+			var cc any
+			if err := json.Unmarshal(tool.CacheControl, &cc); err == nil && cc != nil {
+				t["cache_control"] = cc
+			}
+		}
 		tools = append(tools, t)
 	}
 	return tools
@@ -465,59 +526,92 @@ func convertAnthropicToolChoice(tc any) any {
 
 // prependSystemMessage adds system instructions as the first message
 // (with role "system") if present.
+//
+// 若 system 为带 cache_control 的 block 数组，保留为 []ContentPart（ExtraFields），
+// 供 Bedrock 在对应 text block 后插入 CachePoint；无断点时仍折叠为普通 string。
 func prependSystemMessage(system any, msgs []Message) []Message {
 	if system == nil {
 		return msgs
 	}
 
-	var systemText string
-	switch s := system.(type) {
-	case string:
-		systemText = s
-	case []AnthropicSystemBlock:
-		var b strings.Builder
-		for _, block := range s {
-			if block.Type == "text" {
-				if b.Len() > 0 {
-					b.WriteString("\n\n")
-				}
-				b.WriteString(block.Text)
-			}
-		}
-		systemText = b.String()
-	case []any:
-		// JSON decoding produces []any for array system blocks; decode each map.
-		var b strings.Builder
-		for _, item := range s {
-			if m, ok := item.(map[string]any); ok {
-				if t, _ := m["type"].(string); t == "text" {
-					if text, ok := m["text"].(string); ok && text != "" {
-						if b.Len() > 0 {
-							b.WriteString("\n\n")
-						}
-						b.WriteString(text)
-					}
-				}
-			}
-		}
-		systemText = b.String()
-	case map[string]any:
-		// Try to extract text from a single system block object
-		if t, ok := s["text"].(string); ok {
-			systemText = t
-		}
-	default:
-		systemText = fmt.Sprintf("%v", s)
-	}
-
-	if systemText == "" {
+	parts := systemToContentParts(system)
+	if len(parts) == 0 {
 		return msgs
 	}
 
+	var content any
+	if len(parts) == 1 && parts[0].ExtraFields.IsEmpty() {
+		content = parts[0].Text
+	} else {
+		content = parts
+	}
+
 	result := make([]Message, 0, len(msgs)+1)
-	result = append(result, Message{Role: "system", Content: systemText})
+	result = append(result, Message{Role: "system", Content: content})
 	result = append(result, msgs...)
 	return result
+}
+
+// systemToContentParts normalizes Anthropic system (string / blocks) into ContentParts,
+// preserving per-block cache_control.
+func systemToContentParts(system any) []ContentPart {
+	switch s := system.(type) {
+	case string:
+		if s == "" {
+			return nil
+		}
+		return []ContentPart{{Type: "text", Text: s}}
+	case []AnthropicSystemBlock:
+		parts := make([]ContentPart, 0, len(s))
+		for _, block := range s {
+			if block.Type != "text" || block.Text == "" {
+				continue
+			}
+			parts = append(parts, ContentPart{
+				Type:        "text",
+				Text:        block.Text,
+				ExtraFields: cacheControlExtraFields(block.CacheControl),
+			})
+		}
+		return parts
+	case []any:
+		parts := make([]ContentPart, 0, len(s))
+		for _, item := range s {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if t, _ := m["type"].(string); t != "" && t != "text" {
+				continue
+			}
+			text, _ := m["text"].(string)
+			if text == "" {
+				continue
+			}
+			parts = append(parts, ContentPart{
+				Type:        "text",
+				Text:        text,
+				ExtraFields: cacheControlExtraFields(rawCacheControlFromAny(m["cache_control"])),
+			})
+		}
+		return parts
+	case map[string]any:
+		text, _ := s["text"].(string)
+		if text == "" {
+			return nil
+		}
+		return []ContentPart{{
+			Type:        "text",
+			Text:        text,
+			ExtraFields: cacheControlExtraFields(rawCacheControlFromAny(s["cache_control"])),
+		}}
+	default:
+		text := fmt.Sprintf("%v", s)
+		if text == "" || text == "<nil>" {
+			return nil
+		}
+		return []ContentPart{{Type: "text", Text: text}}
+	}
 }
 
 // ──────────────────────────────────────────────

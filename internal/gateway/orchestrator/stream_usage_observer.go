@@ -126,13 +126,21 @@ func (o *streamUsageObserver) OnJSONEvent(payload map[string]any) {
 					u.TotalTokens = u.PromptTokens + u.CompletionTokens
 				}
 			}
-			// 提取 OpenAI-compatible prompt_tokens_details（含 cached_tokens）
-			if details, ok := usageMap["prompt_tokens_details"].(map[string]any); ok {
+			// 提取 OpenAI-compatible / Responses 的 input 明细（含 cached_tokens）
+			if details := firstUsageDetailsMap(usageMap, "prompt_tokens_details", "input_tokens_details"); details != nil {
 				u.PromptTokensDetails = &core.PromptTokensDetails{
 					CachedTokens: toInt(details["cached_tokens"]),
 					AudioTokens:  toInt(details["audio_tokens"]),
 					TextTokens:   toInt(details["text_tokens"]),
 					ImageTokens:  toInt(details["image_tokens"]),
+				}
+			}
+			if details := firstUsageDetailsMap(usageMap, "completion_tokens_details", "output_tokens_details"); details != nil {
+				u.CompletionTokensDetails = &core.CompletionTokensDetails{
+					ReasoningTokens:          toInt(details["reasoning_tokens"]),
+					AudioTokens:              toInt(details["audio_tokens"]),
+					AcceptedPredictionTokens: toInt(details["accepted_prediction_tokens"]),
+					RejectedPredictionTokens: toInt(details["rejected_prediction_tokens"]),
 				}
 			}
 			// 提取 DeepSeek / Anthropic / Bedrock 缓存字段到 RawUsage
@@ -243,4 +251,13 @@ func toInt(v any) int {
 		return int(f)
 	}
 	return 0
+}
+
+func firstUsageDetailsMap(m map[string]any, keys ...string) map[string]any {
+	for _, k := range keys {
+		if v, ok := m[k].(map[string]any); ok && v != nil {
+			return v
+		}
+	}
+	return nil
 }

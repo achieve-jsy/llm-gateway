@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
@@ -507,5 +508,227 @@ func TestVideoAdapterRegistry_Swap(t *testing.T) {
 	}
 	if name := reg.ProviderName("seedance-relay"); name != "景汐-新" {
 		t.Fatalf("expected new name, got %q", name)
+	}
+}
+
+// =============================================================================
+// call_logs context (UsageCollector) tests
+// =============================================================================
+
+type memoryTaskStore struct {
+	meta map[string]*VideoTaskMeta
+	recs []VideoTaskRecord
+}
+
+func (s *memoryTaskStore) Record(ctx context.Context, rec VideoTaskRecord) error {
+	s.recs = append(s.recs, rec)
+	if s.meta == nil {
+		s.meta = map[string]*VideoTaskMeta{}
+	}
+	s.meta[rec.TaskID] = &VideoTaskMeta{
+		Model:         rec.Model,
+		UpstreamModel: rec.UpstreamModel,
+		ProviderType:  rec.ProviderType,
+		ProviderName:  rec.ProviderName,
+	}
+	return nil
+}
+func (s *memoryTaskStore) LookupProviderType(ctx context.Context, taskID string) (string, error) {
+	m, err := s.LookupTaskMeta(ctx, taskID)
+	if err != nil || m == nil {
+		return "", err
+	}
+	return m.ProviderType, nil
+}
+func (s *memoryTaskStore) LookupTaskMeta(ctx context.Context, taskID string) (*VideoTaskMeta, error) {
+	if s.meta == nil {
+		return nil, nil
+	}
+	return s.meta[taskID], nil
+}
+func (s *memoryTaskStore) Update(ctx context.Context, taskID string, update VideoTaskUpdate) error {
+	return nil
+}
+func (s *memoryTaskStore) UpdateStatus(ctx context.Context, taskID, status string) error {
+	return nil
+}
+
+func TestVideoHandler_CreateTask_SetsUsageContext(t *testing.T) {
+	mock := &mockVideoProvider{createTaskID: "cgt-log-1"}
+	store := &memoryTaskStore{}
+	h := NewVideoHandler(mock, mock, WithTaskStore(store), WithProviderNameResolver(func(pt string) string {
+		return "景汐-seedance"
+	}))
+
+	var gotModel, gotProvider, gotRouted string
+	router := setupTestRouter()
+	router.POST("/contents/generations/tasks", func(c *gin.Context) {
+		h.CreateTask(c)
+		gotModel = c.GetString("model")
+		gotProvider = c.GetString("provider")
+		gotRouted = c.GetString("routed_model")
+	})
+
+	body := `{"model":"seedance-2-0","content":[{"type":"text","text":"hi"}]}`
+	req, _ := http.NewRequest("POST", "/contents/generations/tasks", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if gotModel != "seedance-2-0:CreateTask" {
+		t.Fatalf("model=%q", gotModel)
+	}
+	if gotProvider != "景汐-seedance" {
+		t.Fatalf("provider=%q", gotProvider)
+	}
+	if gotRouted != "seedance-2-0" {
+		t.Fatalf("routed_model=%q (no group dispatch → same as request model)", gotRouted)
+	}
+	// wait async record
+	for i := 0; i < 50 && len(store.recs) == 0; i++ {
+		// tiny spin
+	}
+}
+
+func TestVideoHandler_GetTask_SetsUsageContextFromMeta(t *testing.T) {
+	mock := &mockVideoProvider{
+		getTaskResp: json.RawMessage(`{"id":"cgt-1","status":"running"}`),
+	}
+	store := &memoryTaskStore{meta: map[string]*VideoTaskMeta{
+		"cgt-1": {
+			Model:         "seedance-2-0",
+			UpstreamModel: "doubao-seedance-2-0-260128",
+			ProviderType:  "seedance-relay",
+			ProviderName:  "景汐-seedance",
+		},
+	}}
+	h := NewVideoHandler(mock, mock, WithTaskStore(store))
+
+	var gotModel, gotProvider, gotRouted string
+	router := setupTestRouter()
+	router.GET("/contents/generations/tasks/:task_id", func(c *gin.Context) {
+		h.GetTask(c)
+		gotModel = c.GetString("model")
+		gotProvider = c.GetString("provider")
+		gotRouted = c.GetString("routed_model")
+	})
+
+	req, _ := http.NewRequest("GET", "/contents/generations/tasks/cgt-1", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d", w.Code)
+	}
+	if gotModel != "seedance-2-0:GetTask" {
+		t.Fatalf("model=%q", gotModel)
+	}
+	if gotProvider != "景汐-seedance" {
+		t.Fatalf("provider=%q", gotProvider)
+	}
+	if gotRouted != "doubao-seedance-2-0-260128" {
+		t.Fatalf("routed_model=%q", gotRouted)
+	}
+}
+
+func TestVideoHandler_GetTask_FallbackModelWhenNoMeta(t *testing.T) {
+	mock := &mockVideoProvider{
+		getTaskResp: json.RawMessage(`{"id":"cgt-x","status":"running"}`),
+	}
+	h := NewVideoHandler(mock, mock)
+
+	var gotModel string
+	router := setupTestRouter()
+	router.GET("/contents/generations/tasks/:task_id", func(c *gin.Context) {
+		h.GetTask(c)
+		gotModel = c.GetString("model")
+	})
+
+	req, _ := http.NewRequest("GET", "/contents/generations/tasks/cgt-x", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if gotModel != "seedance-task:GetTask" {
+		t.Fatalf("model=%q", gotModel)
+	}
+}
+
+func TestAssetHandler_Handle_SetsUsageContext(t *testing.T) {
+	mock := &mockAssetProvider{doActionResp: json.RawMessage(`{"Result":{}}`)}
+	h := NewAssetHandler(mock, mock,
+		WithAssetProviderType("seedance-relay"),
+		WithAssetProviderName("景汐-seedance"),
+	)
+
+	var gotModel, gotProvider, gotRouted string
+	router := setupTestRouter()
+	router.POST("/assets/:action", func(c *gin.Context) {
+		h.Handle(c)
+		gotModel = c.GetString("model")
+		gotProvider = c.GetString("provider")
+		gotRouted = c.GetString("routed_model")
+	})
+
+	req, _ := http.NewRequest("POST", "/assets/CreateAssetGroup", bytes.NewBufferString(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d", w.Code)
+	}
+	if gotModel != "seedance-asset:CreateAssetGroup" {
+		t.Fatalf("model=%q", gotModel)
+	}
+	if gotProvider != "景汐-seedance" {
+		t.Fatalf("provider=%q", gotProvider)
+	}
+	if gotRouted != "seedance-relay" {
+		t.Fatalf("routed_model=%q", gotRouted)
+	}
+}
+
+func TestRedisVideoTaskStore_LookupTaskMeta(t *testing.T) {
+	data := map[string]map[string]string{}
+	store := NewRedisVideoTaskStore(
+		func(ctx context.Context, key string, values ...interface{}) error {
+			if data[key] == nil {
+				data[key] = map[string]string{}
+			}
+			for i := 0; i+1 < len(values); i += 2 {
+				data[key][values[i].(string)] = values[i+1].(string)
+			}
+			return nil
+		},
+		func(ctx context.Context, key, field string) (string, error) {
+			if data[key] == nil {
+				return "", nil
+			}
+			return data[key][field], nil
+		},
+		func(ctx context.Context, key string, expiration time.Duration) error { return nil },
+		0,
+	)
+	if err := store.Record(context.Background(), VideoTaskRecord{
+		TaskID:        "cgt-meta",
+		Model:         "seedance-2-0",
+		UpstreamModel: "doubao-seedance-2-0-260128",
+		ProviderType:  "seedance-relay",
+		ProviderName:  "景汐",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := store.LookupTaskMeta(context.Background(), "cgt-meta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta == nil || meta.Model != "seedance-2-0" || meta.UpstreamModel != "doubao-seedance-2-0-260128" {
+		t.Fatalf("meta=%+v", meta)
+	}
+	if meta.ProviderType != "seedance-relay" || meta.ProviderName != "景汐" {
+		t.Fatalf("meta=%+v", meta)
 	}
 }

@@ -1,0 +1,283 @@
+package azure_test
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/example/llm-gateway/internal/core"
+	"github.com/example/llm-gateway/internal/providers"
+	"github.com/example/llm-gateway/internal/providers/azure"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestAzureV1_ChatUsesOpenAIV1PathWithoutAPIVersion(t *testing.T) {
+	var gotPath, gotQuery, gotAPIKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		gotAPIKey = r.Header.Get("api-key")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":      "chatcmpl-1",
+			"object":  "chat.completion",
+			"model":   "gpt-5.5",
+			"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": "pong"}, "finish_reason": "stop"}},
+		})
+	}))
+	defer srv.Close()
+
+	p := azure.New(providers.ProviderConfig{
+		APIKey:  "test-azure-key",
+		BaseURL: srv.URL, // 资源根（此处用 httptest 根）
+	}, providers.ProviderOptions{})
+
+	resp, err := p.ChatCompletion(context.Background(), &core.ChatRequest{
+		Model:    "gpt-5.5",
+		Messages: []core.Message{{Role: "user", Content: "ping"}},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, "/openai/v1/chat/completions", gotPath)
+	assert.Empty(t, gotQuery, "v1 GA 默认不应附带 dated api-version")
+	assert.Equal(t, "test-azure-key", gotAPIKey)
+}
+
+func TestAzureV1_ResponsesUsesOpenAIV1Path(t *testing.T) {
+	var gotPath, gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		body, _ := io.ReadAll(r.Body)
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal(body, &payload))
+		assert.Equal(t, "gpt-5.5", payload["model"])
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":     "resp_1",
+			"object": "response",
+			"model":  "gpt-5.5",
+			"status": "completed",
+			"output": []any{},
+		})
+	}))
+	defer srv.Close()
+
+	p := azure.New(providers.ProviderConfig{
+		APIKey:  "k",
+		BaseURL: srv.URL + "/openai/deployments/gpt-5.5", // 旧配法应被归一化到资源根
+	}, providers.ProviderOptions{})
+
+	_, err := p.Responses(context.Background(), &core.ResponsesRequest{
+		Model: "gpt-5.5",
+		Input: "ping",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "/openai/v1/responses", gotPath)
+	assert.Empty(t, gotQuery)
+}
+
+func TestAzureV1_ListModelsUsesOpenAIV1Path(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"object": "list",
+			"data":   []map[string]any{{"id": "gpt-5.5", "object": "model"}},
+		})
+	}))
+	defer srv.Close()
+
+	p := azure.New(providers.ProviderConfig{
+		APIKey:  "k",
+		BaseURL: srv.URL + "/openai/responses?api-version=2025-04-01-preview",
+	}, providers.ProviderOptions{})
+
+	resp, err := p.ListModels(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, "/openai/v1/models", gotPath)
+}
+
+func TestAzureV1_OptionalPreviewAPIVersionAppended(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-1", "object": "chat.completion", "model": "gpt-5.5",
+			"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": "ok"}, "finish_reason": "stop"}},
+		})
+	}))
+	defer srv.Close()
+
+	p := azure.New(providers.ProviderConfig{
+		APIKey:     "k",
+		BaseURL:    srv.URL,
+		APIVersion: "preview",
+	}, providers.ProviderOptions{})
+
+	_, err := p.ChatCompletion(context.Background(), &core.ChatRequest{
+		Model:    "gpt-5.5",
+		Messages: []core.Message{{Role: "user", Content: "hi"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "api-version=preview", gotQuery)
+}
+
+func TestNormalizeAzureResourceRoot(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"https://examplewestus.openai.azure.com", "https://examplewestus.openai.azure.com"},
+		{"https://examplewestus.openai.azure.com/", "https://examplewestus.openai.azure.com"},
+		{"https://examplewestus.openai.azure.com/openai/v1", "https://examplewestus.openai.azure.com"},
+		{"https://examplewestus.openai.azure.com/openai/v1/", "https://examplewestus.openai.azure.com"},
+		{"https://examplewestus.openai.azure.com/openai/deployments/gpt-5.5", "https://examplewestus.openai.azure.com"},
+		{"https://examplewestus.openai.azure.com/openai/responses?api-version=2025-04-01-preview", "https://examplewestus.openai.azure.com"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			assert.Equal(t, tc.want, azure.NormalizeAzureResourceRoot(tc.in))
+		})
+	}
+}
+
+func TestChatCompletion_AzureSanitizesReasoningAliases(t *testing.T) {
+	var gotBody map[string]any
+	fakeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/openai/v1/chat/completions", r.URL.Path)
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-1", "object": "chat.completion", "model": "gpt-4o",
+			"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": "ok"}, "finish_reason": "stop"}},
+		})
+	}))
+	defer fakeServer.Close()
+
+	p := azure.New(providers.ProviderConfig{
+		APIKey:  "test-key",
+		BaseURL: fakeServer.URL,
+	}, providers.ProviderOptions{})
+
+	raw := []byte(`{
+		"model":"gpt-4o",
+		"messages":[{"role":"user","content":"hi"}],
+		"reasoningSummary":"auto",
+		"reasoningEffort":"low"
+	}`)
+	var req core.ChatRequest
+	require.NoError(t, json.Unmarshal(raw, &req))
+	_, err := p.ChatCompletion(context.Background(), &req)
+	require.NoError(t, err)
+	_, hasSummary := gotBody["reasoningSummary"]
+	_, hasEffortCamel := gotBody["reasoningEffort"]
+	assert.False(t, hasSummary)
+	assert.False(t, hasEffortCamel)
+}
+
+// Azure 新模型（含自定义部署名）拒绝 max_tokens，必须改写为 max_completion_tokens。
+func TestChatCompletion_AzureCustomDeploymentBridgesToolsAndReasoning(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	fakeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "resp_1", "object": "response", "model": "4476-gpt-56luna-xlab", "status": "completed", "created_at": 1700000000,
+			"output": []map[string]any{{
+				"id": "msg_1", "type": "message", "status": "completed", "role": "assistant",
+				"content": []map[string]any{{"type": "output_text", "text": "ok"}},
+			}},
+			"usage": map[string]any{"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
+		})
+	}))
+	defer fakeServer.Close()
+
+	p := azure.New(providers.ProviderConfig{
+		APIKey:  "test-key",
+		BaseURL: fakeServer.URL,
+	}, providers.ProviderOptions{})
+
+	_, err := p.ChatCompletion(context.Background(), &core.ChatRequest{
+		Model:     "4476-gpt-56luna-xlab",
+		Messages:  []core.Message{{Role: "user", Content: "hi"}},
+		Tools:     []map[string]any{{"type": "function", "function": map[string]any{"name": "ping"}}},
+		Reasoning: &core.Reasoning{Effort: "medium"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "/openai/v1/responses", gotPath, "must bridge to Responses, not Chat Completions")
+	assert.Equal(t, "4476-gpt-56luna-xlab", gotBody["model"])
+}
+
+// Azure 新模型（含自定义部署名）拒绝 max_tokens，必须改写为 max_completion_tokens。
+func TestChatCompletion_AzureRewritesMaxTokensEvenForCustomDeploymentName(t *testing.T) {
+	var gotBody map[string]any
+	fakeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-1", "object": "chat.completion", "model": "westus-gpt55",
+			"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": "ok"}, "finish_reason": "stop"}},
+		})
+	}))
+	defer fakeServer.Close()
+
+	p := azure.New(providers.ProviderConfig{
+		APIKey:  "test-key",
+		BaseURL: fakeServer.URL,
+	}, providers.ProviderOptions{})
+
+	maxTokens := 24
+	_, err := p.ChatCompletion(context.Background(), &core.ChatRequest{
+		Model:     "westus-gpt55", // 部署名不含 gpt-5，不能依赖模型名启发式
+		Messages:  []core.Message{{Role: "user", Content: "hi"}},
+		MaxTokens: &maxTokens,
+	})
+	require.NoError(t, err)
+
+	_, hasMaxTokens := gotBody["max_tokens"]
+	assert.False(t, hasMaxTokens, "Azure 出站不得再带 max_tokens")
+	assert.Equal(t, float64(24), gotBody["max_completion_tokens"])
+}
+
+func TestChatCompletion_AzureKeepsExistingMaxCompletionTokens(t *testing.T) {
+	var gotBody map[string]any
+	fakeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-1", "object": "chat.completion", "model": "gpt-5.5",
+			"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": "ok"}, "finish_reason": "stop"}},
+		})
+	}))
+	defer fakeServer.Close()
+
+	p := azure.New(providers.ProviderConfig{
+		APIKey:  "test-key",
+		BaseURL: fakeServer.URL,
+	}, providers.ProviderOptions{})
+
+	raw := []byte(`{
+		"model":"gpt-5.5",
+		"messages":[{"role":"user","content":"hi"}],
+		"max_tokens":16,
+		"max_completion_tokens":48
+	}`)
+	var req core.ChatRequest
+	require.NoError(t, json.Unmarshal(raw, &req))
+	_, err := p.ChatCompletion(context.Background(), &req)
+	require.NoError(t, err)
+
+	_, hasMaxTokens := gotBody["max_tokens"]
+	assert.False(t, hasMaxTokens)
+	assert.Equal(t, float64(48), gotBody["max_completion_tokens"])
+}

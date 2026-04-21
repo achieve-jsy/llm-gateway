@@ -202,19 +202,13 @@ import { useAuthStore } from '@/stores/auth'
 import { getPerformance } from '@/services/control-plane'
 import type { PerformanceItem } from '@/services/control-plane'
 
-const STRATEGY_LABEL: Record<string, string> = {
-  round_robin: '轮询',
-  priority: '优先级',
-  weighted: '加权',
-  auto: '自动',
-}
-
 const MODE_LABEL: Record<string, string> = {
   chat: '对话',
   completion: '补全',
   embedding: '向量',
   embedding_vl: '多模态向量',
   rerank: '重排序',
+  rerank_vl: '多模态重排序',
   image_generation: '图像生成',
   audio_transcription: '语音转写',
   audio_speech: '语音合成',
@@ -376,7 +370,7 @@ function resetFilters() {
   clearChips()
 }
 
-function togglePriceChip(range: string) {
+function togglePriceChip(range: 'free' | 'cheap' | 'mid' | 'expensive') {
   chipFilters.priceRange = chipFilters.priceRange === range ? '' : range
 }
 

@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -14,6 +15,7 @@ import (
 type Router struct {
 	routeTable  *RouteTable
 	healthStore *HealthStore
+	stickyStore *StickyStore
 	counters    map[string]uint64
 	countersMu  sync.Mutex
 	classifier  *ComplexityClassifier
@@ -23,9 +25,15 @@ func NewRouter(rt *RouteTable, hs *HealthStore) *Router {
 	return &Router{
 		routeTable:  rt,
 		healthStore: hs,
+		stickyStore: nil, // Set via SetStickyStore after Redis client available
 		counters:    make(map[string]uint64),
 		classifier:  NewComplexityClassifier(),
 	}
+}
+
+// SetStickyStore injects the Redis-backed sticky store (called during scheduler setup)
+func (r *Router) SetStickyStore(store *StickyStore) {
+	r.stickyStore = store
 }
 
 func (r *Router) Route(groupName string, req *core.ChatRequest) (*RouteDecision, error) {
@@ -46,6 +54,15 @@ func (r *Router) Route(groupName string, req *core.ChatRequest) (*RouteDecision,
 	}
 
 	slog.Debug("router: healthy models", "group", groupName, "healthy", len(healthyModels))
+
+	// Sticky routing（strategy 选择之前）。req 可能为 nil（embeddings/rerank 组路由）。
+	if group.StickyEnabled && r.stickyStore != nil && req != nil && req.SessionKey != "" {
+		if entry := r.trySticky(groupName, req.SessionKey, healthyModels); entry != nil {
+			decision := buildDecision(group, entry, start)
+			decision.StickyUsed = true
+			return decision, nil
+		}
+	}
 
 	if group.Strategy == StrategyAuto {
 		entry, meta, err := r.routeAutoWithMeta(healthyModels, req)
@@ -134,14 +151,16 @@ func (r *Router) routeRoundRobin(groupName string, healthyModels []*ModelRouting
 }
 
 func (r *Router) routePriority(groupName string, healthyModels []*ModelRoutingEntry) (*ModelRoutingEntry, error) {
-	// healthyModels 已在 RouteTable.ReplaceAll 时按 Priority 升序排好，无需再次排序。
 	minPriority := healthyModels[0].Priority
+	for _, m := range healthyModels {
+		if m.Priority < minPriority {
+			minPriority = m.Priority
+		}
+	}
 	samePrio := make([]*ModelRoutingEntry, 0, len(healthyModels))
 	for _, m := range healthyModels {
 		if m.Priority == minPriority {
 			samePrio = append(samePrio, m)
-		} else {
-			break // 已排好序，后续优先级更高，直接退出
 		}
 	}
 
@@ -250,4 +269,44 @@ func (r *Router) routeAutoWithMeta(healthyModels []*ModelRoutingEntry, req *core
 func (r *Router) routeAuto(healthyModels []*ModelRoutingEntry, req *core.ChatRequest) (*ModelRoutingEntry, error) {
 	entry, _, err := r.routeAutoWithMeta(healthyModels, req)
 	return entry, err
+}
+
+// trySticky checks if there's a valid sticky pin for this session
+func (r *Router) trySticky(groupName, sessionKey string, healthyModels []*ModelRoutingEntry) *ModelRoutingEntry {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	pinnedModelID, err := r.stickyStore.Get(ctx, groupName, sessionKey)
+	if err != nil || pinnedModelID == "" {
+		return nil // No pin or Redis error
+	}
+
+	// Validate: is pinned model still in healthy pool?
+	for _, m := range healthyModels {
+		if fmt.Sprintf("%d", m.ModelID) == pinnedModelID {
+			sessionKeyPrefix := sessionKey
+			if len(sessionKey) > 8 {
+				sessionKeyPrefix = sessionKey[:8] + "..."
+			}
+			slog.Info("sticky: using pinned model",
+				"group", groupName,
+				"session_key", sessionKeyPrefix,
+				"model_id", pinnedModelID,
+				"model_name", m.ModelName,
+			)
+			return m
+		}
+	}
+
+	// Pinned model is not healthy or not in pool - fall through to strategy
+	sessionKeyPrefix := sessionKey
+	if len(sessionKey) > 8 {
+		sessionKeyPrefix = sessionKey[:8] + "..."
+	}
+	slog.Info("sticky: pinned model not available, routing fresh",
+		"group", groupName,
+		"session_key", sessionKeyPrefix,
+		"pinned_model_id", pinnedModelID,
+	)
+	return nil
 }

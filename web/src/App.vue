@@ -1,7 +1,12 @@
 <template>
   <div class="layout-sidebar" :class="{ 'layout-sidebar--mobile': isMobile }">
     <!-- 侧边栏：已登录时始终显示（/403 等兜底页也保留菜单） -->
-    <aside v-if="authStore.isLoggedIn" class="sidebar" :class="{ 'sidebar--collapsed': isCollapsed, 'sidebar--mobile-open': isMobile && showMobileSidebar }">
+    <aside
+      v-if="authStore.isLoggedIn"
+      id="app-navigation"
+      class="sidebar"
+      :class="{ 'sidebar--collapsed': isCollapsed, 'sidebar--mobile-open': isMobile && showMobileSidebar }"
+    >
       <div class="sidebar-header">
         <img :src="sidebarLogoSrc" class="sidebar-logo" alt="logo" />
         <span v-show="!isCollapsed" class="sidebar-title">{{ siteTitle }}</span>
@@ -12,14 +17,12 @@
         :collapse="isCollapsed"
         @select="handleMenuSelect"
       >
+        <div class="menu-group-label">员工</div>
         <el-menu-item index="/access/unified-entry">
           <el-icon><Connection /></el-icon>
           <template #title>首页</template>
         </el-menu-item>
 
-        <el-divider class="menu-divider" />
-
-        <div class="menu-group-label">员工</div>
         <el-menu-item index="/keys">
           <el-icon><Key /></el-icon>
           <template #title>我的 Key</template>
@@ -32,7 +35,7 @@
           <el-icon><Collection /></el-icon>
           <template #title>模型广场</template>
         </el-menu-item>
-        <el-menu-item index="/my/budget">
+        <el-menu-item v-if="!authStore.isAdmin" index="/my/budget">
           <el-icon><Wallet /></el-icon>
           <template #title>
             我的预算
@@ -43,11 +46,6 @@
           <el-icon><Histogram /></el-icon>
           <template #title>模型组健康</template>
         </el-menu-item>
-        <el-menu-item v-if="authStore.isManager" index="/admin/expansion-requests">
-          <el-icon><TrendCharts /></el-icon>
-          <template #title>扩容申请</template>
-        </el-menu-item>
-
         <!-- 管理（管理角色可见）-->
         <template v-if="authStore.isManager">
           <el-divider class="menu-divider" />
@@ -67,6 +65,19 @@
           <el-menu-item index="/admin/budget">
             <el-icon><Wallet /></el-icon>
             <template #title>预算管理</template>
+          </el-menu-item>
+          <el-menu-item data-test="menu-expansion-requests" index="/admin/expansion-requests">
+            <el-icon><TrendCharts /></el-icon>
+            <template #title>
+              扩容申请
+              <span
+                v-if="expansionPendingCount > 0"
+                data-test="expansion-pending-badge"
+                class="expansion-pending-badge"
+              >
+                {{ expansionPendingCount > 99 ? '99+' : expansionPendingCount }}
+              </span>
+            </template>
           </el-menu-item>
           <el-menu-item index="/admin/service-keys">
             <el-icon><Key /></el-icon>
@@ -102,6 +113,10 @@
           <el-menu-item index="/admin/groups">
             <el-icon><Collection /></el-icon>
             <template #title>模型组</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/model-tiers">
+            <el-icon><PriceTag /></el-icon>
+            <template #title>模型等级</template>
           </el-menu-item>
           <el-menu-item index="/admin/tags">
             <el-icon><PriceTag /></el-icon>
@@ -151,7 +166,14 @@
     <!-- 主内容区 -->
     <div class="main-content">
       <!-- 顶部工具栏 -->
-      <div v-if="authStore.isLoggedIn" class="top-bar">        <button v-if="isMobile" class="hamburger-btn" @click="showMobileSidebar = !showMobileSidebar">
+      <div v-if="authStore.isLoggedIn" class="top-bar">
+        <button
+          v-if="isMobile"
+          class="hamburger-btn"
+          aria-controls="app-navigation"
+          :aria-expanded="showMobileSidebar"
+          @click="showMobileSidebar = !showMobileSidebar"
+        >
           <el-icon :size="20"><Menu /></el-icon>
         </button>
         <button v-if="!isMobile" class="collapse-btn" @click="toggleCollapse" :title="isCollapsed ? '展开菜单' : '收起菜单'">
@@ -200,7 +222,13 @@
       </div>
     </div>
 
-    <div v-if="isMobile && showMobileSidebar" class="sidebar-backdrop" @click="showMobileSidebar = false" />
+    <div
+      v-if="isMobile && showMobileSidebar"
+      class="sidebar-backdrop"
+      aria-controls="app-navigation"
+      aria-expanded="true"
+      @click="showMobileSidebar = false"
+    />
 
     <AnnouncementPopup
       v-if="authStore.isLoggedIn"
@@ -221,7 +249,7 @@ import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key,
 import NotificationBell from '@/components/common/NotificationBell.vue'
 import AnnouncementBanner from '@/components/common/AnnouncementBanner.vue'
 import AnnouncementPopup from '@/components/common/AnnouncementPopup.vue'
-import { getUnreadAnnouncements } from '@/services/control-plane'
+import { getPendingExpansions, getUnreadAnnouncements } from '@/services/control-plane'
 
 const route = useRoute()
 const router = useRouter()
@@ -241,10 +269,14 @@ function resolveActiveMenu(r: { path: string; query: { tab?: string } }): string
 const activeMenu = ref(resolveActiveMenu(route))
 const showPopup = ref(false)
 const budgetAlert = ref(false)
+const expansionPendingCount = ref(0)
 
 // 预算告警检查：任一层 ≥80% 显示红点
 async function checkBudgetAlert() {
-  if (!authStore.isLoggedIn) return
+  if (!authStore.isLoggedIn || authStore.isAdmin) {
+    budgetAlert.value = false
+    return
+  }
   try {
     const { getMyBudget } = await import('@/services/control-plane')
     const chain = await getMyBudget()
@@ -252,8 +284,12 @@ async function checkBudgetAlert() {
   } catch { budgetAlert.value = false }
 }
 
-watch(() => route.path, (newPath) => {
+watch(() => route.path, (newPath, oldPath) => {
   activeMenu.value = newPath
+  if (isMobile.value) showMobileSidebar.value = false
+  if (oldPath === '/admin/expansion-requests' && newPath !== oldPath) {
+    refreshExpansionPendingCount()
+  }
 })
 
 // 预算页内 tab 切换时，按 ?tab=quota 让「我的预算」菜单项高亮
@@ -302,14 +338,42 @@ watch(() => authStore.deptStatus, (s) => {
 
 const notificationBellRef = ref<{ refresh: () => void } | null>(null)
 let bellRefreshTimer: ReturnType<typeof setInterval> | null = null
+let previousBodyOverflow = ''
 
 const handleResize = () => { isMobile.value = window.innerWidth < 768; if (!isMobile.value) showMobileSidebar.value = false }
+const handleKeydown = (event: KeyboardEvent) => {
+  if (event.key === 'Escape' && showMobileSidebar.value) showMobileSidebar.value = false
+}
+
+async function refreshExpansionPendingCount() {
+  if (!authStore.isManager) {
+    expansionPendingCount.value = 0
+    return
+  }
+  try {
+    expansionPendingCount.value = (await getPendingExpansions()).length
+  } catch {
+    expansionPendingCount.value = 0
+  }
+}
+
+watch(showMobileSidebar, (open) => {
+  if (open && isMobile.value) {
+    previousBodyOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+  } else {
+    document.body.style.overflow = previousBodyOverflow
+  }
+})
 
 onMounted(() => {
   settingsStore.loadPublicSettings()
   checkPopupAnnouncements()
   checkBudgetAlert()
+  if (authStore.isLoggedIn) loadAiWidget()
+  refreshExpansionPendingCount()
   window.addEventListener('resize', handleResize)
+  window.addEventListener('keydown', handleKeydown)
   // 每 30s 刷新一次铃铛未读数（含告警定向推送）
   bellRefreshTimer = setInterval(() => {
     if (authStore.isLoggedIn) notificationBellRef.value?.refresh()
@@ -318,12 +382,41 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
+  window.removeEventListener('keydown', handleKeydown)
+  document.body.style.overflow = previousBodyOverflow
   if (bellRefreshTimer) clearInterval(bellRefreshTimer)
+  removeAiWidget()
 })
 
 watch(() => authStore.isLoggedIn, (loggedIn) => {
-  if (loggedIn) checkPopupAnnouncements()
+  if (loggedIn) {
+    checkPopupAnnouncements()
+    loadAiWidget()
+    refreshExpansionPendingCount()
+  } else {
+    removeAiWidget()
+    expansionPendingCount.value = 0
+  }
 })
+
+const AI_WIDGET_ID = 'ks-ai-widget-script'
+const AI_WIDGET_HOST_ID = 'ks-widget-host'
+
+function loadAiWidget() {
+  if (document.getElementById(AI_WIDGET_ID)) return
+  const s = document.createElement('script')
+  s.id = AI_WIDGET_ID
+  s.src = 'http://192.0.2.10/widget.js'
+  s.dataset.token = 'ks_90981925f61594ab5e7138ac76a20a019a420cbdc7b2d16a9a5602e67be9ce6d'
+  s.dataset.project = 'f4d72fea-c48d-43c9-a0da-ddf56688577b'
+  s.dataset.primaryColor = '#36B34E'
+  document.body.appendChild(s)
+}
+
+function removeAiWidget() {
+  document.getElementById(AI_WIDGET_ID)?.remove()
+  document.getElementById(AI_WIDGET_HOST_ID)?.remove()
+}
 
 function handleMenuSelect(index: string) {
   if (isMobile.value) showMobileSidebar.value = false
@@ -512,6 +605,21 @@ function onPopupAllRead() {
   animation: badge-pulse 1.5s infinite;
 }
 @keyframes badge-pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+.expansion-pending-badge {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  margin-left: 6px;
+  padding: 0 5px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: var(--el-color-danger);
+  color: var(--el-color-white);
+  font-size: 11px;
+  line-height: 18px;
+}
 
 .theme-toggle {
   display: flex;

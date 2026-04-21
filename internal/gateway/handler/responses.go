@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/example/llm-gateway/internal/core"
+	"github.com/example/llm-gateway/internal/gateway/budget"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
@@ -21,6 +22,8 @@ type ResponsesHandler struct {
 	orchestrator  ResponsesOrchestratorInterface
 	groupDispatch *orchestrator.GroupAwareDispatcher
 	budgetDeps    *middleware.BudgetDeps
+	budgetGate    *budget.Gate
+	requestQuota  *quota.QuotaMiddleware
 	quotaGate     *quota.ModelQuotaGate // v0.15: 模型层配额检查
 }
 
@@ -43,6 +46,14 @@ func NewResponsesHandlerWithGroup(orch ResponsesOrchestratorInterface, gd *orche
 // SetBudgetDeps 注入预算依赖（router setup 时调用一次）
 func (h *ResponsesHandler) SetBudgetDeps(deps *middleware.BudgetDeps) {
 	h.budgetDeps = deps
+}
+
+func (h *ResponsesHandler) SetBudgetGate(gate *budget.Gate) {
+	h.budgetGate = gate
+}
+
+func (h *ResponsesHandler) SetRequestQuotaGate(gate *quota.QuotaMiddleware) {
+	h.requestQuota = gate
 }
 
 // SetModelQuotaGate 注入模型配额检查器（router setup 时调用一次）
@@ -68,21 +79,25 @@ func (h *ResponsesHandler) Handle(c *gin.Context) {
 	originalModel := req.Model
 	c.Set("stream", req.Stream)
 
-	// v0.9: 预算检查（事后记账模式）
-	if h.budgetDeps != nil {
-		if _, err := middleware.Reserve(c, h.budgetDeps); err != nil {
-			if be, ok := err.(*middleware.BudgetExceededError); ok {
-				be.WriteHTTPResponse(c)
-				return
-			}
-			slog.Warn("responses: budget check failed", "model", req.Model, "error", err)
+	releaseQuota, err := PrepareAuthorizedGates(c, originalModel, func() error {
+		if h.groupDispatch == nil {
+			return nil
 		}
-	}
-
-	// 若请求的是模型组名，通过 group dispatcher 解析到实际 provider 模型
-	if h.groupDispatch != nil {
-		decision, err := h.groupDispatch.Dispatch(c, req.Model, nil)
-		if err != nil {
+		decision, dispatchErr := h.groupDispatch.Dispatch(c, originalModel, nil)
+		if dispatchErr != nil {
+			return dispatchErr
+		}
+		if decision != nil {
+			req.Model = decision.ModelName
+			req.Provider = decision.ChannelType
+		}
+		return nil
+	}, h.budgetGate, h.requestQuota)
+	if err != nil {
+		if c.IsAborted() {
+			return
+		}
+		if !budget.WriteHTTPError(c, err) {
 			if ue, ok := err.(*model.UnifiedError); ok {
 				respondError(c, ue)
 			} else {
@@ -90,12 +105,11 @@ func (h *ResponsesHandler) Handle(c *gin.Context) {
 					"error": gin.H{"type": "unavailable", "message": "no available model in group", "code": "no_available_model"},
 				})
 			}
-			return
 		}
-		if decision != nil {
-			req.Model = decision.ModelName
-			req.Provider = decision.ChannelType
-		}
+		return
+	}
+	if releaseQuota != nil {
+		defer releaseQuota()
 	}
 
 	// v0.15: 模型层配额检查（路由选定具体 model 之后、转发上游之前）

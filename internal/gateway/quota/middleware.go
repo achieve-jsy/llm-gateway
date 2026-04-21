@@ -35,120 +35,90 @@ func NewMiddleware(holder *SnapshotHolder, store *RedisStore) *QuotaMiddleware {
 // Handler 返回 Gin 中间件函数。
 func (m *QuotaMiddleware) Handler() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 系统探针 key（__system_ 前缀）豁免
-		if v, ok := c.Get("key_name"); ok {
-			if name, ok := v.(string); ok && strings.HasPrefix(name, "__system_") {
-				c.Next()
-				return
-			}
-		}
-
-		identityVal, exists := c.Get("identity")
-		if !exists {
-			c.Next()
+		if err := m.BeforeUpstream(c, ""); err != nil {
 			return
 		}
-		id, ok := identityVal.(*gwmodel.UserIdentity)
-		if !ok {
-			c.Next()
-			return
-		}
-
-		subjectType, subjectID := ResolveSubject(id)
-		snap := m.holder.Get()
-
-		// 豁免检查：如果主体在豁免列表中，跳过全部配额检查
-		if snap != nil {
-			for _, ex := range snap.Exemptions {
-				if ex.SubjectType == subjectType && ex.SubjectID == subjectID && ex.ExpiresAt.After(time.Now()) {
-					c.Next()
-					return
-				}
-			}
-		}
-
-		// 模型组名 = 请求中的 model 参数（即组名）
-		groupName := extractModelParam(c)
-
-		// 检查层列表
-		type layerCheck struct {
-			layer   string
-			limits  EffectiveResult
-			rpmKey  string
-			concKey string
-		}
-		layers := []layerCheck{
-			{
-				layer:   "subject",
-				limits:  ResolveSubjectLimits(snap, subjectType, subjectID),
-				rpmKey:  RPMKey(subjectType, subjectID, "", ""),
-				concKey: ConcurrencyKey(subjectType, subjectID, "", ""),
-			},
-		}
-		if groupName != "" {
-			layers = append(layers, layerCheck{
-				layer:   "group",
-				limits:  ResolveGroupLimits(snap, groupName),
-				rpmKey:  RPMKey(subjectType, subjectID, "group", groupName),
-				concKey: ConcurrencyKey(subjectType, subjectID, "group", groupName),
-			})
-		}
-
-		// 逐层检查并 acquire
-		// 先检查并发再检查 RPM：RPM 检查会写入 ZADD（不可回滚），
-		// 并发失败时尚未写入 RPM 条目，不会产生滑动窗口"泄漏"。
-		tokens := []releaseToken{}
-		ctx := c.Request.Context()
-
-		for _, l := range layers {
-			// 并发 acquire
-			if err := m.store.AcquireConcurrency(ctx, l.concKey, l.limits.MaxConcurrency); err != nil {
-				m.releaseAll(tokens)
-				WriteQuotaRejected(c, quota.QuotaViolation{
-					SubjectType: subjectType,
-					SubjectID:   subjectID,
-					Layer:       l.layer,
-					Gate:        "concurrency",
-					Limit:       l.limits.MaxConcurrency,
-				})
-				return
-			}
-			tokens = append(tokens, releaseToken{key: l.concKey})
-
-			// RPM 检查
-			if err := m.store.CheckRPM(ctx, l.rpmKey, l.limits.RPM); err != nil {
-				// RPM 失败需要回滚已获取的并发许可
-				m.releaseAll(tokens)
-				WriteQuotaRejected(c, quota.QuotaViolation{
-					SubjectType: subjectType,
-					SubjectID:   subjectID,
-					Layer:       l.layer,
-					Gate:        "rpm",
-					Limit:       l.limits.RPM,
-				})
-				return
-			}
-		}
-
-		// 存储 tokens 供后续释放（handler 完成后）
-		c.Set("quota_release_tokens", tokens)
-		c.Set("quota_subject_type", subjectType)
-		c.Set("quota_subject_id", subjectID)
-
-		// 执行 handler
 		c.Next()
+		m.AfterUpstream(c)
+	}
+}
 
-		// 释放并发（含流式：在 flush 完成后的 defer）
-		// 注意：ModelQuotaGate.BeforeUpstream 可能在 c.Next() 内向 context 的
-		// quota_release_tokens 追加 model 层令牌。append 在容量不足时返回新切片，
-		// 局部 tokens 变量拿不到，故必须从 context 回读最终列表，否则 model 并发槽泄漏。
-		if final, ok := c.Get("quota_release_tokens"); ok {
-			if t, ok := final.([]releaseToken); ok {
-				tokens = t
+func (m *QuotaMiddleware) BeforeUpstream(c *gin.Context, groupName string) error {
+	if name, ok := c.Get("key_name"); ok {
+		if value, ok := name.(string); ok && strings.HasPrefix(value, "__system_") {
+			return nil
+		}
+	}
+	identityVal, exists := c.Get("identity")
+	if !exists {
+		return nil
+	}
+	id, ok := identityVal.(*gwmodel.UserIdentity)
+	if !ok {
+		return nil
+	}
+	subjectType, subjectID := ResolveSubject(id)
+	snapshot := m.holder.Get()
+	if snapshot != nil {
+		for _, exemption := range snapshot.Exemptions {
+			if exemption.SubjectType == subjectType && exemption.SubjectID == subjectID && exemption.ExpiresAt.After(time.Now()) {
+				return nil
 			}
 		}
-		m.releaseAll(tokens)
 	}
+	if groupName == "" {
+		groupName = extractModelParam(c)
+	}
+	type layerCheck struct {
+		layer   string
+		limits  EffectiveResult
+		rpmKey  string
+		concKey string
+	}
+	layers := []layerCheck{{
+		layer: "subject", limits: ResolveSubjectLimits(snapshot, subjectType, subjectID),
+		rpmKey: RPMKey(subjectType, subjectID, "", ""), concKey: ConcurrencyKey(subjectType, subjectID, "", ""),
+	}}
+	if groupName != "" {
+		layers = append(layers, layerCheck{
+			layer: "group", limits: ResolveGroupLimits(snapshot, groupName),
+			rpmKey:  RPMKey(subjectType, subjectID, "group", groupName),
+			concKey: ConcurrencyKey(subjectType, subjectID, "group", groupName),
+		})
+	}
+	tokens := []releaseToken{}
+	for _, layer := range layers {
+		if err := m.store.AcquireConcurrency(c.Request.Context(), layer.concKey, layer.limits.MaxConcurrency); err != nil {
+			m.releaseAll(tokens)
+			WriteQuotaRejected(c, quota.QuotaViolation{
+				SubjectType: subjectType, SubjectID: subjectID, Layer: layer.layer,
+				Gate: "concurrency", Limit: layer.limits.MaxConcurrency,
+			})
+			return err
+		}
+		tokens = append(tokens, releaseToken{key: layer.concKey})
+		if err := m.store.CheckRPM(c.Request.Context(), layer.rpmKey, layer.limits.RPM); err != nil {
+			m.releaseAll(tokens)
+			WriteQuotaRejected(c, quota.QuotaViolation{
+				SubjectType: subjectType, SubjectID: subjectID, Layer: layer.layer,
+				Gate: "rpm", Limit: layer.limits.RPM,
+			})
+			return err
+		}
+	}
+	c.Set("quota_release_tokens", tokens)
+	c.Set("quota_subject_type", subjectType)
+	c.Set("quota_subject_id", subjectID)
+	return nil
+}
+
+func (m *QuotaMiddleware) AfterUpstream(c *gin.Context) {
+	if final, ok := c.Get("quota_release_tokens"); ok {
+		if tokens, ok := final.([]releaseToken); ok {
+			m.releaseAll(tokens)
+		}
+	}
+	c.Set("quota_release_tokens", []releaseToken{})
 }
 
 // releaseAll 逆序释放所有并发令牌。

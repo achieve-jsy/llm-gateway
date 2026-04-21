@@ -56,6 +56,10 @@ type providerModelRefresher interface {
 	RefreshProviderModels(ctx context.Context, providerSelector string) (int, error)
 }
 
+type pricingLookup interface {
+	ResolvePricing(model, providerType string) *core.ModelPricing
+}
+
 func registryUnavailableError(err error) error {
 	return core.NewProviderError("", http.StatusServiceUnavailable, err.Error(), err)
 }
@@ -70,6 +74,27 @@ func NewRouter(lookup core.ModelLookup) (*Router, error) {
 	return &Router{
 		lookup: lookup,
 	}, nil
+}
+
+// ResolvePricing returns the price buckets of the finally routed model.
+// It deliberately reads from the live lookup so provider snapshot hot reloads
+// are reflected without rebuilding the observability collector.
+func (r *Router) ResolvePricing(model, providerSelector string) (core.ModelPricing, bool) {
+	if r == nil || r.lookup == nil || strings.TrimSpace(model) == "" {
+		return core.ModelPricing{}, false
+	}
+	lookup, ok := r.lookup.(pricingLookup)
+	if !ok {
+		return core.ModelPricing{}, false
+	}
+	if strings.TrimSpace(providerSelector) == "" {
+		providerSelector = r.lookup.GetProviderType(model)
+	}
+	pricing := lookup.ResolvePricing(model, providerSelector)
+	if pricing == nil {
+		return core.ModelPricing{}, false
+	}
+	return *pricing, true
 }
 
 // checkReady verifies the lookup has models available.

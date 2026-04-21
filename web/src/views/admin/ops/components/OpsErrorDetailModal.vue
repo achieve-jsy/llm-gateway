@@ -200,6 +200,11 @@ async function fetchDetail() {
   }
 }
 
+async function copyRequestId(requestId: string) {
+  await navigator.clipboard.writeText(requestId)
+  ElMessage.success('request_id 已复制')
+}
+
 async function markResolved() {
   // B05b/WP3 降级方案：request/upstream 错误的 resolve 已在后端返回 409，
   // 按钮已禁用，此函数仅作保留路径；若被调用则提示不支持。

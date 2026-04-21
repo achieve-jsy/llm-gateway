@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/example/llm-gateway/internal/gateway/infra"
@@ -158,4 +159,31 @@ func TestVerifyKey_Unreachable_ReturnsError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, resp)
 	assert.Contains(t, err.Error(), "unreachable")
+}
+
+func TestAuthClient_DecodesTierLimitWithoutChangingLegacyTotals(t *testing.T) {
+	payload := `{"data":{"status":"active","budget_chain":[{"scope_type":"member","scope_id":"u-1","amount_usd":300,"daily_amount_usd":-1,"weekly_amount_usd":12.5,"label":"member","tier_limits":[{"tier_id":"00bb2e65-9c67-45f7-b061-d297a3944876","tier_name":"高级","period_type":"monthly","base_limit_usd":"80.000000","effective_limit_usd":"100.000000","enabled":true,"effective_at":"2026-07-11T08:00:00Z"}]}]}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+
+	resp, err := newTestAuthClient(srv).VerifyKey(context.Background(), "sk-tier")
+	require.NoError(t, err)
+	require.Len(t, resp.Data.BudgetChain, 1)
+	scope := resp.Data.BudgetChain[0]
+	require.Equal(t, 300.0, scope.AmountUSD)
+	require.Equal(t, -1.0, scope.DailyAmountUSD)
+	require.Equal(t, 12.5, scope.WeeklyAmountUSD)
+	require.Len(t, scope.TierLimits, 1)
+	require.Equal(t, "100.000000", scope.TierLimits[0].EffectiveLimitUSD)
+
+	raw, err := json.Marshal(scope)
+	require.NoError(t, err)
+	encoded := string(raw)
+	require.Equal(t, 1, strings.Count(encoded, `"amount_usd"`))
+	require.Equal(t, 1, strings.Count(encoded, `"daily_amount_usd"`))
+	require.Equal(t, 1, strings.Count(encoded, `"weekly_amount_usd"`))
+	require.NotContains(t, encoded, "_v2")
 }

@@ -449,7 +449,7 @@ const effectiveShowProvider = computed(() => props.showProvider || isCompactMode
 const effectiveShowCost = computed(() => !isCompactMode.value)
 
 const traceDrawerEndpointType = computed((): UsageEndpointType => {
-  if (props.endpointType === 'embedding' || props.endpointType === 'rerank') return props.endpointType
+  if (props.endpointType === 'embedding' || props.endpointType === 'rerank' || props.endpointType === 'rerank_vl') return props.endpointType
   return endpointPathToType(traceRow.value?.inbound_endpoint) || 'chat'
 })
 

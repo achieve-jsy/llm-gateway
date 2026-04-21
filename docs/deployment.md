@@ -327,3 +327,15 @@ make dev-infra-full
 - migrate 不可由蓝绿双实例在启动时争抢执行
 - deploy 失败 → 销毁新色，旧色不受影响
 - 密钥从 CI Variables 来，不写进仓库（详见 [配置体系](./configuration.md)）
+
+## 模型等级预算灰度顺序
+
+1. 全部 Gateway 支持 v2 后部署，七个开关仅保留 `legacy_total_write_enabled=true`。
+2. 开启 `master_enabled`、`accounting_enabled`、`shadow_enabled`，保持正数、静态零和 v2 总预算拦截关闭。
+3. 从 `call_logs` 重建当前日/周/月计数；连续一个最长预算周期满足 `max(0.1%, $1/day)` 对账阈值。
+4. 开启 `zero_block_enabled`。
+5. 关闭影子并开启 `positive_enforcement_enabled`。
+6. 开启 `v2_total_enforcement_enabled`，继续双写旧总预算一个完整周期。
+7. 稳定后关闭 `legacy_total_write_enabled`，旧 key 按 TTL 自然过期。
+
+回滚时先恢复影子，再关闭 v2 总预算拦截。除非静态配置错误，不关闭静态零；完全关闭等级功能使用 `master_enabled=false`。回滚不删除 v2 key，也不修改调用日志。

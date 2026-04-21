@@ -280,17 +280,21 @@ func (h *VideoTaskHandler) InternalUpdateStatus(c *gin.Context) {
 	h.InternalUpdate(c)
 }
 
-// InternalGetProviderType 供 gateway 查询任务对应的 provider_type
+// InternalGetProviderType 供 gateway 查询任务对应的 provider_type（并附带 model，供 call_logs）
 func (h *VideoTaskHandler) InternalGetProviderType(c *gin.Context) {
 	taskID := c.Param("id")
 	if taskID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "task id required"})
 		return
 	}
-	providerType, err := h.svc.GetProviderType(taskID)
+	meta, err := h.svc.GetTaskMeta(taskID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"provider_type": providerType})
+	c.JSON(http.StatusOK, gin.H{
+		"provider_type": meta.ProviderType,
+		"model":         meta.Model,
+		"provider_name": meta.ProviderName,
+	})
 }

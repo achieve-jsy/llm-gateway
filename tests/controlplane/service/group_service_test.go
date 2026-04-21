@@ -9,7 +9,7 @@ import (
 
 func TestNewGroupService_NilRepo(t *testing.T) {
 	t.Run("repo为nil时构造不panic", func(t *testing.T) {
-		svc := service.NewGroupService(nil)
+		svc := service.NewGroupService(nil, nil)
 		assert.NotNil(t, svc)
 	})
 }
@@ -39,6 +39,12 @@ func TestGroupServiceErrors(t *testing.T) {
 			err:         service.ErrGroupDeleted,
 			wantMsg:     "group has been deleted",
 		},
+		{
+			name:        "ErrGroupModelTypeMismatch",
+			description: "group models must share the same model_type 错误值存在且消息正确",
+			err:         service.ErrGroupModelTypeMismatch,
+			wantMsg:     "group models must share the same model_type",
+		},
 	}
 
 	for _, tt := range tests {
@@ -51,7 +57,7 @@ func TestGroupServiceErrors(t *testing.T) {
 
 func TestGroupService_FailoverDefaults(t *testing.T) {
 	t.Run("默认failover参数", func(t *testing.T) {
-		svc := service.NewGroupService(nil)
+		svc := service.NewGroupService(nil, nil)
 		defaults := svc.GetFailoverDefaults()
 		assert.Equal(t, 2, defaults.MaxSwitches)
 		assert.Equal(t, 1, defaults.SameModelRetries)
@@ -59,7 +65,7 @@ func TestGroupService_FailoverDefaults(t *testing.T) {
 	})
 
 	t.Run("自定义failover参数", func(t *testing.T) {
-		svc := service.NewGroupService(nil)
+		svc := service.NewGroupService(nil, nil)
 		svc.SetFailoverDefaults(5, 3, 120)
 		defaults := svc.GetFailoverDefaults()
 		assert.Equal(t, 5, defaults.MaxSwitches)

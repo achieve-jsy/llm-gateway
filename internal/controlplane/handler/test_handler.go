@@ -202,12 +202,51 @@ func (h *TestHandler) testNonOpenAIProvider(provider *model.Provider, credJSON s
 		return h.testSeedanceRelay(provider, credJSON, testChat)
 	case "seedance-volcengine":
 		return h.testSeedanceVolcengine(provider, credJSON, testChat)
+	case "azure":
+		return h.testAzure(provider, credJSON, testChat)
 	default:
 		return testResult{
 			Success: true,
 			Message: fmt.Sprintf("provider type '%s' 暂不支持自动检测（已跳过）", provider.DefinitionID),
 		}
 	}
+}
+
+// testAzure 与定时健康检查共用 Azure v1 探针。
+func (h *TestHandler) testAzure(provider *model.Provider, credJSON string, testChat bool) testResult {
+	apiKey := extractAPIKey(credJSON)
+	res := cpservice.ProbeAzureConnectivity(context.Background(), provider.Endpoint, apiKey)
+	out := testResult{
+		Success:      res.Success,
+		ResponseTime: res.ResponseTime,
+		StatusCode:   res.StatusCode,
+		Message:      res.Message,
+	}
+	if !res.Success {
+		out.Error = res.Message
+		out.Message = ""
+		return out
+	}
+	_ = h.providerRepo.UpdateResponseTime(provider.ID, res.ResponseTime)
+
+	if testChat {
+		testModel := provider.TestModel
+		if testModel == "" {
+			f := false
+			out.ChatSuccess = &f
+			out.ChatError = "未配置 test_model，跳过转发测试"
+			return out
+		}
+		chatRes := cpservice.ProbeAzureChat(context.Background(), provider.Endpoint, apiKey, testModel)
+		out.ChatModel = testModel
+		out.ChatResponseTime = chatRes.ResponseTime
+		ok := chatRes.Success
+		out.ChatSuccess = &ok
+		if !chatRes.Success {
+			out.ChatError = chatRes.Message
+		}
+	}
+	return out
 }
 
 // testSeedanceRelay 与定时健康检查共用 ProbeSeedanceRelayConnectivity。
@@ -236,11 +275,11 @@ func (h *TestHandler) testSeedanceRelay(provider *model.Provider, credJSON strin
 
 // testSeedanceVolcengine 与定时健康检查共用 ProbeSeedanceVolcengineConnectivity。
 func (h *TestHandler) testSeedanceVolcengine(provider *model.Provider, credJSON string, testChat bool) testResult {
-	ak, sk, region := cpservice.ParseSeedanceVolcCredentials(credJSON)
-	if ak == "" || sk == "" {
-		return testResult{Success: false, Error: "seedance-volcengine: missing access_key/secret_key"}
+	cred := cpservice.ParseSeedanceVolcCreds(credJSON)
+	if !cred.HasAuth() {
+		return testResult{Success: false, Error: "seedance-volcengine: missing credentials for selected auth_type"}
 	}
-	res := cpservice.ProbeSeedanceVolcengineConnectivity(context.Background(), provider.Endpoint, ak, sk, region)
+	res := cpservice.ProbeSeedanceVolcengineConnectivityCreds(context.Background(), provider.Endpoint, cred)
 	out := testResult{
 		Success:      res.Success,
 		ResponseTime: res.ResponseTime,
@@ -518,10 +557,15 @@ func extractErrorMessage(body []byte) string {
 	return truncate(string(body), 150)
 }
 
-// extractAPIKey 从凭证 JSON 中提取 api_key 字段，若不是 JSON 则原样返回
+// extractAPIKey 从凭证 JSON 中提取 api_key 字段，若不是 JSON 则原样返回。
+// auth_type=aksk 时保留完整 JSON，避免丢失 AK/SK。
 func extractAPIKey(credentialJSON string) string {
 	var m map[string]string
 	if json.Unmarshal([]byte(credentialJSON), &m) == nil {
+		switch strings.ToLower(strings.TrimSpace(m["auth_type"])) {
+		case "aksk", "iam", "hmac":
+			return credentialJSON
+		}
 		if key, ok := m["api_key"]; ok && key != "" {
 			return key
 		}

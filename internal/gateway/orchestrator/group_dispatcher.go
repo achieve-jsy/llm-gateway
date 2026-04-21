@@ -1,12 +1,14 @@
 package orchestrator
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/authz"
 	"github.com/example/llm-gateway/internal/gateway/binding"
+	"github.com/example/llm-gateway/internal/gateway/budget"
 	"github.com/example/llm-gateway/internal/gateway/cache"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
@@ -20,6 +22,7 @@ type GroupAwareDispatcher struct {
 	scheduler    Scheduler
 	nameCache    *cache.GroupNameCache
 	bindingCheck *binding.Client
+	tierResolver budget.TierResolver
 }
 
 func NewGroupAwareDispatcher(sch Scheduler, nc *cache.GroupNameCache) *GroupAwareDispatcher {
@@ -38,6 +41,20 @@ func NewGroupAwareDispatcherWithBinding(sch Scheduler, nc *cache.GroupNameCache,
 	}
 }
 
+func NewGroupAwareDispatcherWithBindingAndTier(
+	sch Scheduler,
+	nc *cache.GroupNameCache,
+	bindClient *binding.Client,
+	tierResolver budget.TierResolver,
+) *GroupAwareDispatcher {
+	return &GroupAwareDispatcher{
+		scheduler:    sch,
+		nameCache:    nc,
+		bindingCheck: bindClient,
+		tierResolver: tierResolver,
+	}
+}
+
 func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string, req *core.ChatRequest) (*scheduler.RouteDecision, error) {
 	if !d.nameCache.IsGroupName(modelName) {
 		return nil, nil
@@ -52,6 +69,20 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string, req *c
 		}
 	}
 
+	// Extract session key BEFORE routing。
+	// embeddings/rerank/responses 会传 req=nil（无 ChatRequest），必须空指针保护，
+	// 否则 req.SessionKey = ... 会直接 panic → HTTP 500。
+	sessionKey := scheduler.ExtractSessionKey(c, req)
+	if req != nil {
+		req.SessionKey = sessionKey
+	}
+
+	if d.tierResolver != nil {
+		if tier, ok := d.tierResolver.Resolve(modelName); ok {
+			budget.SetTierContext(c, tier)
+		}
+	}
+
 	decision, err := d.scheduler.Route(modelName, req)
 	if err != nil {
 		slog.Error("group route failed",
@@ -61,9 +92,15 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string, req *c
 		return nil, model.ErrNoAvailableModel
 	}
 
+	// Persist sticky mapping if enabled and not already used
+	if !decision.StickyUsed && sessionKey != "" {
+		d.scheduler.PersistSticky(c.Request.Context(), modelName, sessionKey, decision)
+	}
+
 	model.SetDispatchContext(c, &model.DispatchContext{
 		GroupName:     modelName,
 		RoutedModelID: decision.ModelID,
+		SessionKey:    sessionKey,
 	})
 
 	c.Set("group_name", modelName)
@@ -168,4 +205,23 @@ func (d *GroupAwareDispatcher) GetGroupTimeout(groupName string, defaultTimeout 
 		return time.Duration(cfg.TimeoutSeconds) * time.Second
 	}
 	return defaultTimeout
+}
+
+// UpdateSticky updates the sticky mapping when failover succeeds
+func (d *GroupAwareDispatcher) UpdateSticky(ctx context.Context, groupName, sessionKey, newModelID string) {
+	if sessionKey == "" {
+		return
+	}
+
+	d.scheduler.UpdateSticky(ctx, groupName, sessionKey, newModelID)
+
+	sessionKeyPrefix := sessionKey
+	if len(sessionKey) > 8 {
+		sessionKeyPrefix = sessionKey[:8] + "..."
+	}
+	slog.Info("sticky: updated after failover",
+		"group", groupName,
+		"session_key", sessionKeyPrefix,
+		"new_model_id", newModelID,
+	)
 }

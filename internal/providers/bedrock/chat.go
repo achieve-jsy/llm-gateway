@@ -30,7 +30,7 @@ func (p *Provider) ChatCompletion(ctx context.Context, req *core.ChatRequest) (*
 		return nil, core.NewInvalidRequestError("bedrock chat request is required", nil)
 	}
 
-	parts, err := buildConverseParts(req)
+	parts, err := p.buildConverseParts(req)
 	if err != nil {
 		return nil, err
 	}
@@ -62,13 +62,20 @@ type converseParts struct {
 // buildConverseParts translates a core.ChatRequest into the Bedrock Converse
 // shape. Tool definitions and tool_choice are forwarded only for models that
 // accept them; unsupported families will surface their own validation errors.
-func buildConverseParts(req *core.ChatRequest) (converseParts, error) {
+func (p *Provider) buildConverseParts(req *core.ChatRequest) (converseParts, error) {
 	model := strings.TrimSpace(req.Model)
 	// 兼容路由表传递的 "{provider}/" 前缀格式（如 "bedrock/global.xxx"）。
 	// AWS Bedrock Converse API 只需要 model ID 部分。
 	model = stripProviderPrefix(model, "bedrock")
 	if model == "" {
 		return converseParts{}, core.NewInvalidRequestError("bedrock chat request requires a model", nil)
+	}
+
+	// 优先使用 upstream_model_id（数据库配置的上游模型 ID）
+	if p.modelUpstreamIDs != nil {
+		if upstreamID, ok := p.modelUpstreamIDs[req.Model]; ok && upstreamID != "" {
+			model = upstreamID
+		}
 	}
 
 	system, messages, err := convertMessages(req.Messages)
@@ -135,6 +142,19 @@ func buildConverseParts(req *core.ChatRequest) (converseParts, error) {
 	}
 	parts.toolCfg = toolCfg
 
+	// 将 tools[] 上的 cache_control（Anthropic / OpenAI 兼容字段）转为 Bedrock Tool CachePoint。
+	injectExplicitToolCachePoints(parts.toolCfg, req.Tools)
+
+	// Auto-inject：
+	//   - tools：客户端未显式标记时始终注入（Claude Desktop 常只标 system/tool_result，漏标 tools）
+	//   - conversation：仅当 messages 侧没有任何 cache_control 时注入，避免干扰客户端自管断点
+	if !hasCacheControlInTools(req.Tools) {
+		injectToolCachePoint(parts.toolCfg)
+	}
+	if !hasCacheControlInMessages(req.Messages) {
+		injectConversationCachePoints(parts.messages)
+	}
+
 	return parts, nil
 }
 
@@ -150,7 +170,159 @@ func messagesContainToolBlocks(messages []brtypes.Message) bool {
 	return false
 }
 
+// hasCacheControlInMessages reports whether any message in the original core
+// request carries a cache_control marker. When a client (like Claude Code or
+// newer OpenCode) manages its own cache boundaries, we must not inject
+// additional auto-cache points that would interfere.
+//
+// 识别范围：
+//   - ContentPart.ExtraFields.cache_control（/v1/messages 转换后的 text/image part）
+//   - Message.ExtraFields.cache_control（tool_result / OpenCode message 级断点）
+//   - ToolCall.ExtraFields.cache_control（assistant tool_use 断点）
+func hasCacheControlInMessages(messages []core.Message) bool {
+	for _, msg := range messages {
+		if messageHasCacheControl(msg) {
+			return true
+		}
+		parts, ok := core.NormalizeContentParts(msg.Content)
+		if !ok {
+			continue
+		}
+		for _, part := range parts {
+			if hasCacheControl(part) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func messageHasCacheControl(msg core.Message) bool {
+	if msg.ExtraFields.Lookup("cache_control") != nil {
+		return true
+	}
+	for _, call := range msg.ToolCalls {
+		if call.ExtraFields.Lookup("cache_control") != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// hasCacheControlInTools reports whether any tool definition carries cache_control
+// (Anthropic Messages tools[] 或 OpenAI-compatible tool map 顶层字段).
+func hasCacheControlInTools(tools []map[string]any) bool {
+	for _, tool := range tools {
+		if tool == nil {
+			continue
+		}
+		if cc, ok := tool["cache_control"]; ok && cc != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// injectExplicitToolCachePoints inserts a Bedrock Tool CachePoint after each tool
+// that carries an explicit cache_control marker (Claude Code 通常标在最后一个 tool 上).
+func injectExplicitToolCachePoints(toolCfg *brtypes.ToolConfiguration, tools []map[string]any) {
+	if toolCfg == nil || len(tools) == 0 {
+		return
+	}
+	out := make([]brtypes.Tool, 0, len(toolCfg.Tools)+len(tools))
+	specIdx := 0
+	for _, tool := range tools {
+		if specIdx >= len(toolCfg.Tools) {
+			break
+		}
+		out = append(out, toolCfg.Tools[specIdx])
+		specIdx++
+		if tool == nil {
+			continue
+		}
+		if cc, ok := tool["cache_control"]; ok && cc != nil {
+			out = append(out, &brtypes.ToolMemberCachePoint{
+				Value: brtypes.CachePointBlock{Type: brtypes.CachePointTypeDefault},
+			})
+		}
+	}
+	// 保留 convertTools 可能追加的其它条目（理论上不应有）
+	if specIdx < len(toolCfg.Tools) {
+		out = append(out, toolCfg.Tools[specIdx:]...)
+	}
+	toolCfg.Tools = out
+}
+
+// injectToolCachePoint appends a CachePoint to the tool configuration so that
+// tool definitions (which are identical across turns for the same session) are
+// cached by Bedrock. This is the single highest-ROI cache breakpoint: tool
+// definitions from coding agents routinely consume 5K–50K tokens per request.
+func injectToolCachePoint(toolCfg *brtypes.ToolConfiguration) {
+	if toolCfg == nil || len(toolCfg.Tools) == 0 {
+		return
+	}
+	toolCfg.Tools = append(toolCfg.Tools, &brtypes.ToolMemberCachePoint{
+		Value: brtypes.CachePointBlock{Type: brtypes.CachePointTypeDefault},
+	})
+}
+
+// conversationCacheMinMessages is the minimum number of messages required to
+// inject a conversation-history CachePoint. Short conversations (< 6 turns)
+// don't benefit from a second breakpoint because the system+tools prefix
+// already covers most of the prompt.
+const conversationCacheMinMessages = 6
+
+// injectConversationCachePoints inserts a CachePoint in the conversation
+// history at the boundary between stable (repeated) and dynamic (new) content.
+//
+// The placement strategy: put the breakpoint at ~2/3 back from the end.
+// For a 547-message conversation this caches ~365 messages (~250K tokens) that
+// are identical across turns, turning a 2% cache hit rate into ~65%.
+//
+// Bedrock requires the CachePoint to be attached to a user or assistant text
+// block, so we search backwards from the target index for a suitable anchor.
+func injectConversationCachePoints(messages []brtypes.Message) {
+	if len(messages) < conversationCacheMinMessages {
+		return
+	}
+
+	// Target: ~2/3 back from the end of the conversation.
+	targetIdx := len(messages) * 2 / 3
+	if targetIdx <= 0 {
+		targetIdx = 1
+	}
+
+	// Search backwards from target for a message with a text block we can anchor on.
+	for i := targetIdx; i >= 0; i-- {
+		if injectCachePointOnMessage(&messages[i]) {
+			return
+		}
+	}
+	// Fallback: search forward from target.
+	for i := targetIdx + 1; i < len(messages); i++ {
+		if injectCachePointOnMessage(&messages[i]) {
+			return
+		}
+	}
+}
+
+// injectCachePointOnMessage appends a CachePoint to the last content block of
+// the given message if it contains a Text, ToolUse, or ToolResult block.
+// Returns true if a CachePoint was successfully injected.
+func injectCachePointOnMessage(msg *brtypes.Message) bool {
+	if len(msg.Content) == 0 {
+		return false
+	}
+	msg.Content = append(msg.Content, &brtypes.ContentBlockMemberCachePoint{
+		Value: brtypes.CachePointBlock{Type: brtypes.CachePointTypeDefault},
+	})
+	return true
+}
+
 func convertMessages(messages []core.Message) ([]brtypes.SystemContentBlock, []brtypes.Message, error) {
+	// LiteLLM-style sanitization（始终开启）：补齐孤儿 tool_result、删除无效 tool、空 content 占位。
+	messages = core.SanitizeToolMessages(messages)
+
 	system := make([]brtypes.SystemContentBlock, 0)
 	out := make([]brtypes.Message, 0, len(messages))
 
@@ -183,6 +355,12 @@ func convertMessages(messages []core.Message) ([]brtypes.SystemContentBlock, []b
 			if len(sysBlocks) == 0 {
 				continue
 			}
+			// OpenCode 等把 cache_control 挂在 message 级 ExtraFields（content 仍是 string）
+			if msg.ExtraFields.Lookup("cache_control") != nil && !systemTrailingCachePoint(sysBlocks) {
+				sysBlocks = append(sysBlocks, &brtypes.SystemContentBlockMemberCachePoint{
+					Value: brtypes.CachePointBlock{Type: brtypes.CachePointTypeDefault},
+				})
+			}
 			system = append(system, sysBlocks...)
 		case "tool":
 			block, err := convertToolResultMessage(msg)
@@ -190,10 +368,19 @@ func convertMessages(messages []core.Message) ([]brtypes.SystemContentBlock, []b
 				return nil, nil, err
 			}
 			pendingToolResults = append(pendingToolResults, block)
+			// /v1/messages tool_result.cache_control → Message.ExtraFields → CachePoint
+			if msg.ExtraFields.Lookup("cache_control") != nil {
+				pendingToolResults = append(pendingToolResults, &brtypes.ContentBlockMemberCachePoint{
+					Value: brtypes.CachePointBlock{Type: brtypes.CachePointTypeDefault},
+				})
+			}
 		case "user":
 			blocks, err := convertUserContentBlocks(msg.Content)
 			if err != nil {
 				return nil, nil, err
+			}
+			if msg.ExtraFields.Lookup("cache_control") != nil {
+				blocks = appendCachePointBlock(blocks)
 			}
 			appendOrMerge(brtypes.ConversationRoleUser, blocks)
 		case "assistant":
@@ -423,8 +610,23 @@ func detectImageFormatFromContentType(ct string) brtypes.ImageFormat {
 }
 
 func convertAssistantMessage(msg core.Message) ([]brtypes.ContentBlock, error) {
-	blocks := make([]brtypes.ContentBlock, 0, 1+len(msg.ToolCalls))
-	if text := core.ExtractTextContent(msg.Content); text != "" {
+	blocks := make([]brtypes.ContentBlock, 0, 1+len(msg.ToolCalls)*2)
+	if parts, ok := core.NormalizeContentParts(msg.Content); ok {
+		for _, part := range parts {
+			if part.Type != "text" && part.Type != "input_text" {
+				continue
+			}
+			if part.Text == "" {
+				continue
+			}
+			blocks = append(blocks, &brtypes.ContentBlockMemberText{Value: part.Text})
+			if hasCacheControl(part) {
+				blocks = append(blocks, &brtypes.ContentBlockMemberCachePoint{
+					Value: brtypes.CachePointBlock{Type: brtypes.CachePointTypeDefault},
+				})
+			}
+		}
+	} else if text := core.ExtractTextContent(msg.Content); text != "" {
 		blocks = append(blocks, &brtypes.ContentBlockMemberText{Value: text})
 	}
 	for _, call := range msg.ToolCalls {
@@ -447,8 +649,36 @@ func convertAssistantMessage(msg core.Message) ([]brtypes.ContentBlock, error) {
 				Input:     toDocument(input),
 			},
 		})
+		if call.ExtraFields.Lookup("cache_control") != nil {
+			blocks = append(blocks, &brtypes.ContentBlockMemberCachePoint{
+				Value: brtypes.CachePointBlock{Type: brtypes.CachePointTypeDefault},
+			})
+		}
+	}
+	if msg.ExtraFields.Lookup("cache_control") != nil {
+		blocks = appendCachePointBlock(blocks)
 	}
 	return blocks, nil
+}
+
+func systemTrailingCachePoint(blocks []brtypes.SystemContentBlock) bool {
+	if len(blocks) == 0 {
+		return false
+	}
+	_, ok := blocks[len(blocks)-1].(*brtypes.SystemContentBlockMemberCachePoint)
+	return ok
+}
+
+func appendCachePointBlock(blocks []brtypes.ContentBlock) []brtypes.ContentBlock {
+	if len(blocks) == 0 {
+		return blocks
+	}
+	if _, ok := blocks[len(blocks)-1].(*brtypes.ContentBlockMemberCachePoint); ok {
+		return blocks
+	}
+	return append(blocks, &brtypes.ContentBlockMemberCachePoint{
+		Value: brtypes.CachePointBlock{Type: brtypes.CachePointTypeDefault},
+	})
 }
 
 func convertToolResultMessage(msg core.Message) (brtypes.ContentBlock, error) {

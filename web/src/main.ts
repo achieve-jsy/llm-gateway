@@ -8,6 +8,7 @@ import App from './App.vue'
 import router from './router'
 import './styles/variables.scss'
 import './styles/global.scss'
+import './styles/budget.scss'
 import { initTheme } from './composables/useTheme'
 
 // 初始化主题（在挂载前执行，避免闪烁）

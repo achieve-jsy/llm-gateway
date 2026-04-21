@@ -18,6 +18,10 @@
       "input_price_snapshot", "output_price_snapshot",
       "stage_auth_ms", "stage_route_ms", "stage_upstream_ms", "stage_ttfb_ms",
       "stream", "failover_used", "usage_missing", "reasoning_effort",
+      "budget_tier_id", "budget_tier_name_snapshot", "budget_tier_accounting_eligible",
+      "budget_tier_constraints_snapshot",
+      "budget_block_code", "budget_block_dimension", "budget_block_scope_type",
+      "budget_block_scope_id", "budget_block_period_type",
       "ip_address", "user_agent"
     ],
     "key_type_enum": ["personal", "service"],
@@ -207,6 +211,298 @@
         "handler": "QuotaExemptionHandler.List",
         "response_status": [200, 500],
         "response_fields": ["code", "data"]
+      }
+    ]
+  },
+  "model_tier_budget": {
+    "base_prefix": "/api/v1",
+    "money_format": "decimal string (scale=6)",
+    "legacy_expansion_money_format": {
+      "current_amount": "JSON number (legacy)",
+      "requested_amount": "JSON number (legacy)"
+    },
+    "period_type_enum": ["daily", "weekly", "monthly"],
+    "dimension_type_enum": ["total", "tier"],
+    "duration_type_enum": ["permanent", "current_period"],
+    "gateway_402_error_codes": [
+      "budget_exceeded",
+      "tier_budget_exceeded"
+    ],
+    "budget_period": {
+      "timezone": "Asia/Shanghai",
+      "week_start": "monday",
+      "resolver_signature": "Resolve(now, periodType, config) -> (Period, error)"
+    },
+    "verify_key_budget_scope": {
+      "legacy_total_number_fields": ["amount_usd", "daily_amount_usd", "weekly_amount_usd"],
+      "tier_limit_decimal_string_fields": ["base_limit_usd", "effective_limit_usd"],
+      "effective_limit_rule": "max(base_limit, active_temporary_override_target)"
+    },
+    "lifecycle_executor": {
+      "name": "BudgetLifecycleExecutor",
+      "dimensions": ["total", "tier"],
+      "records": ["schedule", "temporary_override"],
+      "transaction_rule": "one record per transaction; mark failed in a fresh transaction",
+      "observer": {
+        "name": "BudgetLifecycleObserver",
+        "methods": ["OnOverrideExpired", "OnScheduleApplied", "OnScheduleFailed"]
+      }
+    },
+    "snapshot_event": {
+      "type": "budget_tier_snapshot_updated",
+      "resource_type": "budget_tier_snapshot",
+      "json_fields": ["type", "resource_type", "resource_id", "snapshot_version", "timestamp"]
+    },
+    "call_log_block_fields": {
+      "budget_block_code": {"go_type": "*string", "max_length": 64},
+      "budget_block_dimension": {"go_type": "*string", "max_length": 8},
+      "budget_block_scope_type": {"go_type": "*string", "max_length": 32},
+      "budget_block_scope_id": {"go_type": "*string", "max_length": 128},
+      "budget_block_period_type": {"go_type": "*string", "max_length": 8}
+    },
+    "snapshot_flags": [
+      "master_enabled",
+      "accounting_enabled",
+      "positive_enforcement_enabled",
+      "zero_block_enabled",
+      "shadow_enabled",
+      "v2_total_enforcement_enabled",
+      "legacy_total_write_enabled"
+    ],
+    "model_tier_fields": ["id", "name", "description", "color", "sort_order", "enabled", "archived_at", "created_at", "updated_at"],
+    "tier_limit_fields": ["id", "budget_allocation_id", "model_tier_id", "model_tier_name", "period_type", "base_limit_usd", "temporary_target_usd", "effective_limit_usd", "source_summary", "enabled", "effective_at", "override_expires_at", "pending_schedule"],
+    "my_budget_tiers_fields": ["source_summary", "effective_total", "budget_chain", "tier_limits", "data_updated_at", "stale"],
+    "my_budget_source_modes": ["personal", "shared", "mixed"],
+    "my_budget_tier_period_statuses": ["tier_disabled", "limit_disabled", "unset", "blocked", "exhausted", "available", "restricted"],
+    "my_budget_forbidden_aliases": ["source_mode", "tiers", "data_as_of"],
+    "batch_preview_item_status": ["valid", "forbidden", "invalid"],
+    "batch_apply_item_status": ["applied", "failed", "skipped"],
+    "batch_apply_error_codes": ["BUDGET_ALLOCATION_NOT_FOUND", "ORG_FORBIDDEN", "MODEL_TIER_NOT_FOUND", "MODEL_TIER_DISABLED", "INVALID_BUDGET_PERIOD", "PENDING_BUDGET_SCHEDULE_EXISTS", "BUDGET_PREVIEW_STALE", "BUDGET_CONVERSION_UNSUPPORTED", "BUDGET_CONFIG_SYNC_PENDING", "BUDGET_TIER_LIMIT_NOT_FOUND", "INTERNAL_ERROR"],
+    "batch_operations": ["set_fixed", "adjust_percent", "clear"],
+    "batch_adjust_directions": ["increase", "decrease"],
+    "batch_item_fields": ["item_id", "allocation_id", "scope_type", "scope_id", "model_tier_id", "period_type", "direction", "value"],
+    "batch_preview_item_fields": ["item_id", "old_limit_usd", "new_limit_usd", "delta_usd", "status", "error_code", "over_allocation_ratio", "converts_shared_member_to_independent"],
+    "batch_apply_fields": ["preview_token", "confirm_item_ids"],
+    "tier_usage_cost_fields": ["reported_cost_usd", "accounting_cost_usd"],
+    "internal_budget_alert_request_fields": ["scope_type", "scope_id", "period_type", "dimension_type", "model_tier_id"],
+    "routes": {
+      "GET /model-tiers": {
+        "permission": "model_tier:view",
+        "request_body_fields": [],
+        "query_fields": ["include_archived"],
+        "success_status": 200,
+        "alternative_success_statuses": {},
+        "error_statuses": {"401": ["unauthorized"], "403": ["org.forbidden"], "500": ["internal_error"]},
+        "response_fields": ["data"],
+        "empty": {"data": []}
+      },
+      "POST /model-tiers": {
+        "permission": "model_tier:manage",
+        "request_body_fields": ["name", "description", "color", "sort_order", "reason"],
+        "query_fields": [],
+        "success_status": 201,
+        "alternative_success_statuses": {"202": ["BUDGET_CONFIG_SYNC_PENDING"]},
+        "error_statuses": {"400": ["bad_request"], "401": ["unauthorized"], "403": ["org.forbidden"], "409": ["MODEL_TIER_NAME_CONFLICT"], "422": ["bad_request"], "500": ["internal_error"]},
+        "response_fields": ["data"]
+      },
+      "PUT /model-tiers/reorder": {
+        "permission": "model_tier:manage",
+        "request_body_fields": ["ids", "reason"],
+        "query_fields": [],
+        "success_status": 200,
+        "alternative_success_statuses": {"202": ["BUDGET_CONFIG_SYNC_PENDING"]},
+        "error_statuses": {"401": ["unauthorized"], "403": ["org.forbidden"], "422": ["INVALID_MODEL_TIER_ORDER", "bad_request"], "500": ["internal_error"]},
+        "response_fields": ["data"]
+      },
+      "GET /model-tiers/:id": {
+        "permission": "model_tier:view",
+        "request_body_fields": [],
+        "query_fields": [],
+        "success_status": 200,
+        "alternative_success_statuses": {},
+        "error_statuses": {"400": ["bad_request"], "401": ["unauthorized"], "403": ["org.forbidden"], "404": ["MODEL_TIER_NOT_FOUND"], "500": ["internal_error"]},
+        "response_fields": ["data"]
+      },
+      "PUT /model-tiers/:id": {
+        "permission": "model_tier:manage",
+        "request_body_fields": ["name", "description", "color", "sort_order", "reason"],
+        "query_fields": [],
+        "success_status": 200,
+        "alternative_success_statuses": {"202": ["BUDGET_CONFIG_SYNC_PENDING"]},
+        "error_statuses": {"400": ["bad_request"], "401": ["unauthorized"], "403": ["org.forbidden"], "404": ["MODEL_TIER_NOT_FOUND"], "409": ["MODEL_TIER_NAME_CONFLICT"], "422": ["bad_request"], "500": ["internal_error"]},
+        "response_fields": ["data"]
+      },
+      "PATCH /model-tiers/:id/status": {
+        "permission": "model_tier:manage",
+        "request_body_fields": ["enabled", "reason"],
+        "query_fields": [],
+        "success_status": 200,
+        "alternative_success_statuses": {"202": ["BUDGET_CONFIG_SYNC_PENDING"]},
+        "error_statuses": {"400": ["bad_request"], "401": ["unauthorized"], "403": ["org.forbidden"], "404": ["MODEL_TIER_NOT_FOUND"], "422": ["bad_request"], "500": ["internal_error"]},
+        "response_fields": ["data"]
+      },
+      "PATCH /model-tiers/:id/archive": {
+        "permission": "model_tier:manage",
+        "request_body_fields": ["reason"],
+        "query_fields": [],
+        "success_status": 200,
+        "alternative_success_statuses": {"202": ["BUDGET_CONFIG_SYNC_PENDING"]},
+        "error_statuses": {"400": ["bad_request"], "401": ["unauthorized"], "403": ["org.forbidden"], "404": ["MODEL_TIER_NOT_FOUND"], "422": ["bad_request"], "500": ["internal_error"]},
+        "response_fields": ["data"]
+      },
+      "DELETE /model-tiers/:id": {
+        "permission": "model_tier:manage",
+        "request_body_fields": ["reason"],
+        "query_fields": [],
+        "success_status": 200,
+        "alternative_success_statuses": {"202": ["BUDGET_CONFIG_SYNC_PENDING"]},
+        "error_statuses": {"400": ["bad_request"], "401": ["unauthorized"], "403": ["org.forbidden"], "404": ["MODEL_TIER_NOT_FOUND"], "409": ["MODEL_TIER_REFERENCED"], "422": ["bad_request"], "500": ["internal_error"]},
+        "response_fields": ["data"]
+      },
+      "PUT /groups/budget-tiers": {
+        "permission": "model_tier:manage",
+        "request_body_fields": ["group_ids", "model_tier_id", "reason"],
+        "query_fields": [],
+        "success_status": 200,
+        "alternative_success_statuses": {"202": ["BUDGET_CONFIG_SYNC_PENDING"]},
+        "error_statuses": {"400": ["bad_request"], "401": ["unauthorized"], "403": ["org.forbidden"], "404": ["group_not_found", "MODEL_TIER_NOT_FOUND"], "422": ["MODEL_TIER_DISABLED", "bad_request"], "500": ["internal_error"]},
+        "response_fields": ["data"]
+      },
+      "PUT /groups/:id/budget-tier": {
+        "permission": "model_tier:manage",
+        "request_body_fields": ["model_tier_id", "reason"],
+        "query_fields": [],
+        "success_status": 200,
+        "alternative_success_statuses": {"202": ["BUDGET_CONFIG_SYNC_PENDING"]},
+        "error_statuses": {"400": ["bad_request"], "401": ["unauthorized"], "403": ["org.forbidden"], "404": ["group_not_found", "MODEL_TIER_NOT_FOUND"], "422": ["MODEL_TIER_DISABLED", "bad_request"], "500": ["internal_error"]},
+        "response_fields": ["data"]
+      },
+      "GET /budgets/:allocation_id/tier-limits": {
+        "permission": "budget:view:scoped",
+        "request_body_fields": [],
+        "query_fields": [],
+        "success_status": 200,
+        "alternative_success_statuses": {},
+        "error_statuses": {"400": ["bad_request"], "401": ["unauthorized"], "403": ["org.forbidden"], "404": ["BUDGET_ALLOCATION_NOT_FOUND"], "500": ["internal_error"]},
+        "response_fields": ["allocation_id", "tier_limits"],
+        "empty": {"tier_limits": []}
+      },
+      "PUT /budgets/:allocation_id/tier-limits": {
+        "permission": "budget:set",
+        "request_body_fields": ["items", "reason", "confirm_replace_schedule"],
+        "query_fields": [],
+        "success_status": 200,
+        "alternative_success_statuses": {"202": ["BUDGET_CONFIG_SYNC_PENDING"], "207": ["PARTIAL_FAILURE"]},
+        "error_statuses": {"400": ["bad_request"], "401": ["unauthorized"], "403": ["org.forbidden"], "404": ["BUDGET_ALLOCATION_NOT_FOUND", "MODEL_TIER_NOT_FOUND"], "409": ["PENDING_BUDGET_SCHEDULE_EXISTS"], "410": ["BUDGET_PREVIEW_REQUIRED"], "422": ["INVALID_MONEY_AMOUNT", "INVALID_BUDGET_PERIOD", "MODEL_TIER_DISABLED", "bad_request", "INTERNAL_ERROR"], "500": ["internal_error"]},
+        "response_fields": ["allocation_id", "items", "sync_pending"]
+      },
+      "POST /budgets/tier-limits/batch/preview": {
+        "permission": "budget:set",
+        "request_body_fields": ["operation", "items", "effective_mode", "reason"],
+        "query_fields": [],
+        "success_status": 200,
+        "alternative_success_statuses": {},
+        "error_statuses": {"401": ["unauthorized"], "403": ["org.forbidden"], "422": ["INVALID_MONEY_AMOUNT", "bad_request"], "500": ["internal_error"]},
+        "response_fields": ["preview_token", "expires_at", "data_as_of", "stale", "items"]
+      },
+      "POST /budgets/tier-limits/batch/apply": {
+        "permission": "budget:set",
+        "request_body_fields": ["preview_token", "confirm_item_ids"],
+        "query_fields": [],
+        "success_status": 200,
+        "alternative_success_statuses": {"202": ["BUDGET_CONFIG_SYNC_PENDING"], "207": ["PARTIAL_FAILURE"]},
+        "error_statuses": {"401": ["unauthorized"], "403": ["org.forbidden"], "409": ["budget.preview_stale", "PENDING_BUDGET_SCHEDULE_EXISTS", "BUDGET_ALLOCATION_CONFLICT"], "422": ["bad_request", "BUDGET_ALLOCATION_NOT_FOUND", "ORG_FORBIDDEN", "MODEL_TIER_NOT_FOUND", "MODEL_TIER_DISABLED", "INVALID_BUDGET_PERIOD", "BUDGET_PREVIEW_STALE", "BUDGET_CONVERSION_UNSUPPORTED", "INTERNAL_ERROR"], "500": ["internal_error"]},
+        "response_fields": ["items", "sync_pending"]
+      },
+      "GET /budgets/tier-usage": {
+        "permission": "budget:view:scoped",
+        "request_body_fields": [],
+        "query_fields": ["scope_type", "scope_id", "period_type", "model_tier_id", "group_id"],
+        "success_status": 200,
+        "alternative_success_statuses": {},
+        "error_statuses": {"400": ["bad_request"], "401": ["unauthorized"], "403": ["org.forbidden"], "422": ["INVALID_BUDGET_PERIOD"], "500": ["internal_error"]},
+        "response_fields": ["data_as_of", "stale", "items"],
+        "empty": {"items": []}
+      },
+      "GET /my/budget/tiers": {
+        "permission": "authenticated",
+        "request_body_fields": [],
+        "query_fields": [],
+        "success_status": 200,
+        "alternative_success_statuses": {},
+        "error_statuses": {"401": ["unauthorized"], "500": ["internal_error"]},
+        "response_fields": ["source_summary", "effective_total", "budget_chain", "tier_limits", "data_updated_at", "stale"]
+      }
+    },
+    "error_codes": {
+      "MODEL_TIER_NOT_FOUND": 404,
+      "MODEL_TIER_NAME_CONFLICT": 409,
+      "MODEL_TIER_REFERENCED": 409,
+      "MODEL_TIER_DISABLED": 422,
+      "INVALID_MODEL_TIER_ORDER": 422,
+      "BUDGET_ALLOCATION_NOT_FOUND": 404,
+      "INVALID_BUDGET_PERIOD": 422,
+      "INVALID_MONEY_AMOUNT": 422,
+      "PENDING_BUDGET_SCHEDULE_EXISTS": 409,
+      "INVALID_EXPANSION_DIMENSION": 422,
+      "DUPLICATE_PENDING_EXPANSION": 409,
+      "EXPANSION_REASON_REQUIRED": 422,
+      "EXPANSION_APPROVAL_UNSUPPORTED": 412,
+      "BUDGET_LIMIT_BELOW_USED": 409,
+      "BUDGET_USAGE_UNAVAILABLE": 503,
+      "BUDGET_CONFIG_SYNC_PENDING": 202
+    }
+  },
+  "model_tier_budget_p2": {
+    "money_format": "^-?[0-9]+\\.[0-9]{6}$",
+    "legacy_number_fields": ["current_amount", "requested_amount"],
+    "decimal_string_fields": ["current_amount_snapshot", "used_amount_snapshot", "target_amount_usd"],
+    "risk_block_source_fields": [
+      "budget_block_code", "budget_block_dimension", "budget_block_scope_type",
+      "budget_block_scope_id", "budget_block_period_type"
+    ],
+    "expansion_status_enum": ["pending", "precheck_required", "pending_reconfirmation", "approved", "rejected", "cancelled", "expired"],
+    "routes": [
+      {"method": "POST", "path": "/api/v1/expansion-requests", "response_status": [201, 400, 401, 409, 422]},
+      {"method": "GET", "path": "/api/v1/expansion-requests", "response_status": [200, 401]},
+      {"method": "GET", "path": "/api/v1/expansion-requests/pending", "response_status": [200, 401, 403]},
+      {"method": "GET", "path": "/api/v1/expansion-requests/:id", "response_status": [200, 401, 403, 404]},
+      {"method": "PATCH", "path": "/api/v1/expansion-requests/:id", "response_status": [200, 400, 401, 403, 404, 409]},
+      {"method": "GET", "path": "/api/v1/expansion-requests/:id/steps", "response_status": [200, 401, 403, 404]},
+      {
+        "method": "POST",
+        "path": "/api/v1/expansion-requests/precheck",
+        "response_status": [200, 400, 403, 409, 503],
+        "response_fields": [
+          "can_submit", "can_notify_owner", "current_limit_usd", "current_used_usd",
+          "target_amount_usd", "increase_usd", "precheck_version", "data_as_of",
+          "stale", "parent_constraints", "affected_groups", "visible_scopes"
+        ]
+      },
+      {"method": "POST", "path": "/api/v1/expansion-requests/:id/reprecheck", "response_status": [200, 400, 401, 403, 404, 409, 503]},
+      {"method": "POST", "path": "/api/v1/expansion-requests/:id/decision", "response_status": [200, 400, 401, 403, 404, 409, 503]},
+      {
+        "method": "POST",
+        "path": "/api/v1/expansion-requests/batch-decision",
+        "request_fields": ["decisions[].id", "decisions[].action", "decisions[].comment", "decisions[].precheck_version"],
+        "response_status": [200, 400, 401, 403],
+        "response_fields": ["results"]
+      },
+      {"method": "POST", "path": "/api/v1/expansion-requests/notify-owner", "response_status": [200, 400, 401, 403, 503]},
+      {
+        "method": "PUT",
+        "path": "/api/v1/budgets",
+        "request_fields": ["scope_type", "scope_id", "period_type", "target_limit_usd", "effective_mode", "reason", "preview_only", "preview_version", "confirm_zero_block", "confirm_below_used", "confirm_replace_schedule"],
+        "response_status": [200, 400, 401, 403, 409, 422, 503],
+        "response_fields": ["before_limit_usd", "after_limit_usd", "current_used_usd", "affected_members", "affected_groups", "data_as_of", "stale", "below_used", "zero_block", "replaces_pending_schedule", "preview_version"]
+      },
+      {"method": "GET", "path": "/api/v1/budget/risk-events", "response_status": [200, 400, 403, 503], "response_fields": ["items", "total", "data_as_of", "stale"]},
+      {"method": "GET", "path": "/api/v1/budget/risk-events/summary", "response_status": [200, 400, 403, 503]},
+      {
+        "method": "GET",
+        "path": "/api/v1/my/budget/tiers",
+        "response_status": [200, 401, 503],
+        "response_fields": ["source_summary", "effective_total", "budget_chain", "tier_limits", "data_updated_at", "stale"]
       }
     ]
   }

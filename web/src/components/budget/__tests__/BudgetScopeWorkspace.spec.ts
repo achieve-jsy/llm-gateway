@@ -91,4 +91,51 @@ describe('BudgetScopeWorkspace — 部门成员列表', () => {
     expect(editPayload.scope_id).toBe('u2')
     expect(editPayload.isDefaultPool).toBe(true)
   })
+
+  it('勾选成员后可以批量设置额度并携带未配额成员行', async () => {
+    mockFetchDeptMembers.mockResolvedValue({
+      members: [
+        { id: 'u1', name: '已配额成员', email: 'a@x.com', joined_at: '', dept_source: 'sso', login_status: 'active', has_conflict: false },
+        { id: 'u2', name: '未配额成员', email: 'b@x.com', joined_at: '', dept_source: 'sso', login_status: 'active', has_conflict: false },
+      ],
+      total: 2,
+    })
+
+    const wrapper = mountDept([deptDaily, memberAlloc])
+    await flushPromises()
+
+    const rows = wrapper.findAll('[data-test="member-select-row"]')
+    expect(rows).toHaveLength(2)
+    await rows[1].setValue(true)
+
+    expect(wrapper.text()).toContain('已选择 1 项')
+    await wrapper.get('[data-test="member-batch-absolute"]').trigger('click')
+
+    const batchPayload = wrapper.emitted('batch')?.[0]
+    expect(batchPayload?.[1]).toBe('absolute')
+    expect(batchPayload?.[0]).toEqual([expect.objectContaining({
+      scope_type: 'member', scope_id: 'u2', isDefaultPool: true,
+    })])
+  })
+
+  it('选中未配额成员时禁用按比例批量调整', async () => {
+    mockFetchDeptMembers.mockResolvedValue({
+      members: [
+        { id: 'u1', name: '已配额成员', email: 'a@x.com', joined_at: '', dept_source: 'sso', login_status: 'active', has_conflict: false },
+        { id: 'u2', name: '未配额成员', email: 'b@x.com', joined_at: '', dept_source: 'sso', login_status: 'active', has_conflict: false },
+      ],
+      total: 2,
+    })
+
+    const wrapper = mountDept([deptDaily, memberAlloc])
+    await flushPromises()
+
+    const rows = wrapper.findAll('[data-test="member-select-row"]')
+    await rows[1].setValue(true)
+    expect(wrapper.get('[data-test="member-batch-percentage"]').attributes('disabled')).toBeDefined()
+
+    await rows[1].setValue(false)
+    await rows[0].setValue(true)
+    expect(wrapper.get('[data-test="member-batch-percentage"]').attributes('disabled')).toBeUndefined()
+  })
 })

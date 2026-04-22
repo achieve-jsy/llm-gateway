@@ -90,13 +90,16 @@ build-control-plane-test:
   script:
     - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
     - |
-      docker pull ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache 2>/dev/null || true
+      docker pull ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:build-cache 2>/dev/null || true
       docker build \
-        --cache-from ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache \
+        --cache-from ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:build-cache \
+        --cache-to type=inline \
         --build-arg APP_ENV=test \
         -f deploy/docker/control-plane.Dockerfile \
         -t ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} \
         .
+      docker tag ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:build-cache
+      docker push ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:build-cache
       docker push ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
       docker tag ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
       docker push ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
@@ -319,12 +322,15 @@ deploy-app-test:
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
         set -e
         cd ${TEST_PATH}
-        docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG} || echo 'Gateway image not found, reusing existing'
-        docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} || echo 'CP image not found, reusing existing'
+        docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG} & gateway_pull=\$!
+        docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} & cp_pull=\$!
+        wait \$gateway_pull
+        wait \$cp_pull
         export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=test
         # 蓝绿参数：nginx upstream 走测试机路径；测试环境用短 drain/stop，避免流水线长时间等待
         export NGINX_UPSTREAM=${TEST_PATH}/upstream-active.conf
-        export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30
+        export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30 SAFE_SWITCH_ENABLED=true KEEP_OLD_ENV=true
+        export NGINX_SMOKE_URL='http://127.0.0.1:9080/health'
         export LEGACY_CONTAINERS='llm-gw-gateway llm-gw-control-plane'
         # 密钥/连接串由 GitLab CI/CD 变量注入到本 SSH 会话，compose 才读得到。
         # 切勿删除这些 export（详见 test-env-config skill）。
@@ -369,7 +375,8 @@ rollback-test:
         cd ${TEST_PATH}
         export REGISTRY=${REGISTRY} APP_ENV=test
         export NGINX_UPSTREAM=${TEST_PATH}/upstream-active.conf
-        export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30
+        export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30 SAFE_SWITCH_ENABLED=true KEEP_OLD_ENV=true
+        export NGINX_SMOKE_URL='http://127.0.0.1:9080/health'
         export DATABASE_URL='${TEST_DATABASE_URL}'
         export REDIS_ADDR='${TEST_REDIS_ADDR}' REDIS_PASSWORD='${TEST_REDIS_PASSWORD}'
         export REDIS_DB='${TEST_REDIS_DB}'
@@ -465,7 +472,8 @@ deploy-app-test-fast:
         cd ${TEST_PATH}
         export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=test
         export NGINX_UPSTREAM=${TEST_PATH}/upstream-active.conf
-        export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30
+        export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30 SAFE_SWITCH_ENABLED=true KEEP_OLD_ENV=true
+        export NGINX_SMOKE_URL='http://127.0.0.1:9080/health'
         export DATABASE_URL='${TEST_DATABASE_URL}'
         export REDIS_ADDR='${TEST_REDIS_ADDR}' REDIS_PASSWORD='${TEST_REDIS_PASSWORD}'
         export REDIS_DB='${TEST_REDIS_DB}'
@@ -509,7 +517,8 @@ deploy-app-test-fast:
         cd ${TEST_PATH}
         export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=test
         export NGINX_UPSTREAM=${TEST_PATH}/upstream-active.conf
-        export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30
+        export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30 SAFE_SWITCH_ENABLED=true KEEP_OLD_ENV=true
+        export NGINX_SMOKE_URL='http://127.0.0.1:9080/health'
         export LEGACY_CONTAINERS='llm-gw-gateway llm-gw-control-plane'
         export DATABASE_URL='${TEST_DATABASE_URL}'
         export REDIS_ADDR='${TEST_REDIS_ADDR}' REDIS_PASSWORD='${TEST_REDIS_PASSWORD}'

@@ -50,59 +50,22 @@ workflow:
 # ═══════════════════════════════════════════════════════════════════════════════
 # BUILD — 测试
 # ═══════════════════════════════════════════════════════════════════════════════
-build-gateway-test:
+build-backend-test:
   stage: build
   image: docker:24
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
     DOCKER_BUILDKIT: "1"
+    BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
   script:
     - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
     - |
-      docker pull ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache 2>/dev/null || true
-      docker build \
-        --cache-from ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache \
-        --cache-to type=inline \
-        --build-arg APP_ENV=test \
-        -f deploy/docker/gateway.Dockerfile \
-        -t ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} \
-        .
-      docker tag ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache
-      docker push ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache
-      docker push ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG}
-      docker tag ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
-      docker push ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
-  rules:
-    - if: $CI_COMMIT_BRANCH == "test"
-    - if: $CI_COMMIT_BRANCH == "staging"
-      changes: *go-changes
-    - if: $CI_COMMIT_BRANCH == "main"
-      changes: *go-changes
-
-build-control-plane-test:
-  stage: build
-  image: docker:24
-  tags: [docker]
-  variables:
-    DOCKER_HOST: "unix:///var/run/docker.sock"
-    DOCKER_BUILDKIT: "1"
-  script:
-    - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
-    - |
-      docker pull ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:build-cache 2>/dev/null || true
-      docker build \
-        --cache-from ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:build-cache \
-        --cache-to type=inline \
-        --build-arg APP_ENV=test \
-        -f deploy/docker/control-plane.Dockerfile \
-        -t ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} \
-        .
-      docker tag ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:build-cache
-      docker push ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:build-cache
-      docker push ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
-      docker tag ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
-      docker push ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
+      started_at=$(date +%s)
+      REGISTRY=${REGISTRY} IMAGE_TAG=${IMAGE_TAG} APP_ENV=test \
+        docker buildx bake -f deploy/docker/docker-bake.hcl --push
+      elapsed=$(( $(date +%s) - started_at ))
+      echo "Backend images built and pushed in ${elapsed}s"
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
     - if: $CI_COMMIT_BRANCH == "staging"
@@ -305,7 +268,7 @@ migrate-test:
 # ═══════════════════════════════════════════════════════════════════════════════
 deploy-app-test:
   stage: deploy
-  needs: ["build-gateway-test", "build-control-plane-test", "migrate-test"]
+  needs: ["build-backend-test", "migrate-test"]
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   timeout: 15m
@@ -432,9 +395,7 @@ deploy-app-test-fast:
   tags: [docker]
   timeout: 10m
   needs:
-    - job: build-gateway-test
-      optional: true
-    - job: build-control-plane-test
+    - job: build-backend-test
       optional: true
     - migrate-test
   script:

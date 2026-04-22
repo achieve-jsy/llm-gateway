@@ -255,7 +255,7 @@ migrate-test:
         set -e
         chmod +x /tmp/atlas-migrate/atlas
         /tmp/atlas-migrate/atlas migrate hash --dir 'file:///tmp/atlas-migrate/atlas-migrations'
-        /tmp/atlas-migrate/atlas migrate apply --dir 'file:///tmp/atlas-migrate/atlas-migrations' --url '${DATABASE_URL}' --baseline '${ATLAS_BASELINE}'
+        /tmp/atlas-migrate/atlas migrate apply --dir 'file:///tmp/atlas-migrate/atlas-migrations' --url '${DATABASE_URL}' --baseline '${ATLAS_BASELINE}' --exec-order non-linear
         rm -rf /tmp/atlas-migrate
       "
   rules:

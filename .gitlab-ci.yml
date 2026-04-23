@@ -62,7 +62,8 @@ build-backend-test:
     - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
     - |
       started_at=$(date +%s)
-      apk add --no-cache docker-cli
+      apk add --no-cache docker-cli docker-cli-buildx
+      docker buildx version
       mkdir -p .backend-dist "$GOCACHE"
       CGO_ENABLED=0 go build -mod=vendor -ldflags="-s -w" -o .backend-dist/ ./cmd/gateway ./cmd/control-plane
 

@@ -9,6 +9,8 @@ variables:
   REGISTRY_LOCAL: "127.0.0.1:5000"
   GATEWAY_IMAGE: "llm-gateway"
   CONTROL_PLANE_IMAGE: "llm-control-plane"
+  BACKEND_CI_IMAGE: "llm-ci-backend"
+  BACKEND_CI_IMAGE_TAG: "go1.26"
   TEST_HOST: "192.0.2.10"
   TEST_USER: "root"
   TEST_PATH: "/data/llm-gateway"
@@ -50,21 +52,49 @@ workflow:
 # ═══════════════════════════════════════════════════════════════════════════════
 # BUILD — 测试
 # ═══════════════════════════════════════════════════════════════════════════════
-build-backend-test:
+build-backend-ci-image-test:
   stage: build
-  image: ${REGISTRY}/golang:1.26-alpine
+  image: docker:24
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
     DOCKER_BUILDKIT: "1"
-    GOCACHE: "/cache/llm-gateway-go-build"
+  script:
+    - |
+      docker build \
+        -f deploy/docker/ci-backend.Dockerfile \
+        -t ${REGISTRY}/${BACKEND_CI_IMAGE}:${BACKEND_CI_IMAGE_TAG} \
+        .
+      docker push ${REGISTRY}/${BACKEND_CI_IMAGE}:${BACKEND_CI_IMAGE_TAG}
+  rules:
+    - if: $CI_COMMIT_BRANCH == "test"
+      changes:
+        - "deploy/docker/ci-backend.Dockerfile"
+        - ".gitlab-ci.yml"
+    - when: manual
+      allow_failure: true
+
+build-backend-test:
+  stage: build
+  image: ${REGISTRY}/${BACKEND_CI_IMAGE}:${BACKEND_CI_IMAGE_TAG}
+  tags: [docker]
+  needs:
+    - job: build-backend-ci-image-test
+      optional: true
+  variables:
+    DOCKER_HOST: "unix:///var/run/docker.sock"
+    DOCKER_BUILDKIT: "1"
+    GOCACHE: "/cache/llm-gateway/go-build"
+    GOMODCACHE: "/cache/llm-gateway/go-mod"
   script:
     - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
     - |
       started_at=$(date +%s)
-      apk add --no-cache docker-cli docker-cli-buildx
+      export PATH="/go/bin:/usr/local/go/bin:${PATH}"
+      go version
+      go env GOCACHE GOMODCACHE
       docker buildx version
-      mkdir -p .backend-dist "$GOCACHE"
+      mkdir -p .backend-dist "$GOCACHE" "$GOMODCACHE"
       CGO_ENABLED=0 go build -mod=vendor -ldflags="-s -w" -o .backend-dist/ ./cmd/gateway ./cmd/control-plane
 
       mkdir -p .backend-image-context

@@ -287,12 +287,13 @@ migrate-test:
 deploy-app-test:
   stage: deploy
   needs: ["build-backend-test", "migrate-test"]
+  resource_group: test-app-deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   timeout: 15m
   script:
     - |
-      SSH_OPTS="-o StrictHostKeyChecking=no"
+      SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
       IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
       echo "=== Blue-Green Deploy ${IMAGE_TAG} to ${TEST_HOST} (test) ==="
 
@@ -344,12 +345,13 @@ deploy-app-test:
 # 测试环境回滚（切回上一个颜色，要求对端仍在运行；手动触发）
 rollback-test:
   stage: deploy
+  resource_group: test-app-deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   timeout: 15m
   script:
     - |
-      SSH_OPTS="-o StrictHostKeyChecking=no"
+      SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
       echo "=== Rollback test to previous color ==="
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
         set -e
@@ -409,6 +411,7 @@ deploy-web-test:
 # 快速部署（测试环境）：跳过 Docker 构建/推送/拉取，直接编译 Go 二进制 → SCP → 替换容器内文件
 deploy-app-test-fast:
   stage: deploy
+  resource_group: test-app-deploy
   image: golang:1.26-alpine
   tags: [docker]
   timeout: 10m
@@ -418,7 +421,7 @@ deploy-app-test-fast:
     - migrate-test
   script:
     - |
-      SSH_OPTS="-o StrictHostKeyChecking=no"
+      SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
       IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
       echo "=== Fast Deploy: compile + SCP binary directly to ${TEST_HOST} ==="
 

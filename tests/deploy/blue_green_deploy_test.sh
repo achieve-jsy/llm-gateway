@@ -71,6 +71,7 @@ EOF
 
     cat > "${fixture}/bin/flock" <<'EOF'
 #!/bin/bash
+echo "flock $*" >> "$CALLS_LOG"
 [ "${LOCK_BUSY:-false}" != "true" ]
 EOF
 
@@ -126,7 +127,7 @@ test_failed_smoke_restores_previous_upstream() {
     assert_contains "${fixture}/calls.log" "compose -f ${fixture}/deploy/docker-compose.green.yml -p llm-green down --timeout 30"
 }
 
-test_concurrent_deploy_is_rejected() {
+test_concurrent_deploy_waits_then_times_out() {
     local fixture
     fixture=$(new_fixture lock-busy)
 
@@ -135,6 +136,7 @@ test_concurrent_deploy_is_rejected() {
     fi
 
     [ "$(cat "${fixture}/deploy/.active-color")" = "blue" ] || fail "active color changed while lock was busy"
+    assert_contains "${fixture}/calls.log" "flock -w 600 9"
     assert_not_contains "${fixture}/calls.log" "compose"
 }
 
@@ -155,6 +157,6 @@ test_retained_target_is_removed_before_replacement() {
 
 test_success_keeps_old_environment
 test_failed_smoke_restores_previous_upstream
-test_concurrent_deploy_is_rejected
+test_concurrent_deploy_waits_then_times_out
 test_retained_target_is_removed_before_replacement
 echo "PASS: blue-green deployment tests"

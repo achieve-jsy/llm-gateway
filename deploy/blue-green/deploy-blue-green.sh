@@ -23,6 +23,7 @@
 #   SMOKE_RETRIES    nginx 冒烟重试次数               (默认 5)
 #   SMOKE_INTERVAL   nginx 冒烟重试间隔秒数           (默认 2)
 #   DEPLOY_LOCK_FILE 主机级部署锁文件                 (默认同脚本目录)
+#   DEPLOY_LOCK_TIMEOUT 等待其他部署释放锁的秒数       (默认 600)
 #   LEGACY_CONTAINERS 首次迁移时要下线的旧容器名     (默认 "llm-gw-gateway llm-gw-control-plane")
 #   IMAGE_TAG / REGISTRY / APP_ENV 及各密钥由 compose 透传
 #
@@ -48,6 +49,7 @@ NGINX_SMOKE_URL="${NGINX_SMOKE_URL:-}"
 SMOKE_RETRIES="${SMOKE_RETRIES:-5}"
 SMOKE_INTERVAL="${SMOKE_INTERVAL:-2}"
 DEPLOY_LOCK_FILE="${DEPLOY_LOCK_FILE:-${DEPLOY_DIR}/.deploy.lock}"
+DEPLOY_LOCK_TIMEOUT="${DEPLOY_LOCK_TIMEOUT:-600}"
 LEGACY_CONTAINERS="${LEGACY_CONTAINERS:-llm-gw-gateway llm-gw-control-plane}"
 PRE_SWITCH_UPSTREAM=""
 
@@ -60,7 +62,8 @@ acquire_deploy_lock() {
     [ "$SAFE_SWITCH_ENABLED" = "true" ] || return 0
     command -v flock >/dev/null 2>&1 || die "flock is required for serialized deployment"
     exec 9>"$DEPLOY_LOCK_FILE"
-    flock -n 9 || die "Another deployment is already running (lock: ${DEPLOY_LOCK_FILE})"
+    log "Waiting up to ${DEPLOY_LOCK_TIMEOUT}s for deployment lock (${DEPLOY_LOCK_FILE})..."
+    flock -w "$DEPLOY_LOCK_TIMEOUT" 9 || die "Timed out waiting for another deployment to finish (lock: ${DEPLOY_LOCK_FILE})"
 }
 
 get_active_color() {

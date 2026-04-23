@@ -18,6 +18,7 @@
 #   HEALTH_INTERVAL  健康检查间隔秒数               (默认 3)
 #   SAFE_SWITCH_ENABLED 启用部署锁和可恢复的原子切流 (默认 false)
 #   KEEP_OLD_ENV     切流后保留旧颜色，供快速回滚     (默认 false)
+#   TARGET_REPLACE_TIMEOUT 替换非活跃旧颜色的超时秒数 (默认 30)
 #   NGINX_SMOKE_URL  切流后经 nginx 验证的 URL        (默认空，不执行)
 #   SMOKE_RETRIES    nginx 冒烟重试次数               (默认 5)
 #   SMOKE_INTERVAL   nginx 冒烟重试间隔秒数           (默认 2)
@@ -42,6 +43,7 @@ HEALTH_RETRIES="${HEALTH_RETRIES:-15}"
 HEALTH_INTERVAL="${HEALTH_INTERVAL:-2}"
 SAFE_SWITCH_ENABLED="${SAFE_SWITCH_ENABLED:-false}"
 KEEP_OLD_ENV="${KEEP_OLD_ENV:-false}"
+TARGET_REPLACE_TIMEOUT="${TARGET_REPLACE_TIMEOUT:-30}"
 NGINX_SMOKE_URL="${NGINX_SMOKE_URL:-}"
 SMOKE_RETRIES="${SMOKE_RETRIES:-5}"
 SMOKE_INTERVAL="${SMOKE_INTERVAL:-2}"
@@ -243,6 +245,10 @@ smoke_check_nginx() {
 
 start_env() {
     local color="$1"
+    if [ "$KEEP_OLD_ENV" = "true" ] && docker ps -a --format '{{.Names}}' | grep -qx "llm-${color}-gateway"; then
+        log "Removing retained ${color} environment before replacement..."
+        stop_env "$color" "$TARGET_REPLACE_TIMEOUT"
+    fi
     log "Starting ${color} environment..."
     docker compose -f "${DEPLOY_DIR}/docker-compose.${color}.yml" -p "llm-${color}" up -d --remove-orphans
 }

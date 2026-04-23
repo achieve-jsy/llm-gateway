@@ -39,7 +39,7 @@ new_fixture() {
 #!/bin/bash
 echo "docker $*" >> "$CALLS_LOG"
 if [ "${1:-}" = "ps" ]; then
-    echo llm-blue-gateway
+    printf '%s\n' "${DOCKER_PS_OUTPUT:-llm-blue-gateway}"
 fi
 EOF
 
@@ -54,10 +54,10 @@ EOF
 url="${*: -1}"
 echo "curl $url" >> "$CALLS_LOG"
 case "$url" in
-    http://localhost:8082/ready)
+    http://localhost:8080/ready|http://localhost:8082/ready)
         printf '%s\n' '{"capabilities":{"tier_snapshot_schema":1,"redis_v2":true}}'
         ;;
-    http://localhost:8080/ready|http://localhost:8083/healthz)
+    http://localhost:8081/healthz|http://localhost:8083/healthz)
         exit 0
         ;;
     http://nginx.test/health)
@@ -138,7 +138,23 @@ test_concurrent_deploy_is_rejected() {
     assert_not_contains "${fixture}/calls.log" "compose"
 }
 
+test_retained_target_is_removed_before_replacement() {
+    local fixture down_line up_line
+    fixture=$(new_fixture retained-target)
+    printf 'green\n' > "${fixture}/deploy/.active-color"
+    cp "${SOURCE_DIR}/upstream-green.conf" "${fixture}/upstream-active.conf"
+
+    run_deploy "$fixture" DOCKER_PS_OUTPUT=$'llm-green-gateway\nllm-blue-gateway'
+
+    down_line=$(grep -n "compose -f ${fixture}/deploy/docker-compose.blue.yml -p llm-blue down --timeout 30" "${fixture}/calls.log" | cut -d: -f1)
+    up_line=$(grep -n "compose -f ${fixture}/deploy/docker-compose.blue.yml -p llm-blue up -d --remove-orphans" "${fixture}/calls.log" | cut -d: -f1)
+    [ -n "$down_line" ] || fail "retained blue environment was not removed"
+    [ -n "$up_line" ] || fail "replacement blue environment was not started"
+    [ "$down_line" -lt "$up_line" ] || fail "retained blue environment was removed after replacement start"
+}
+
 test_success_keeps_old_environment
 test_failed_smoke_restores_previous_upstream
 test_concurrent_deploy_is_rejected
+test_retained_target_is_removed_before_replacement
 echo "PASS: blue-green deployment tests"

@@ -52,18 +52,35 @@ workflow:
 # ═══════════════════════════════════════════════════════════════════════════════
 build-backend-test:
   stage: build
-  image: docker:24
+  image: ${REGISTRY}/golang:1.26-alpine
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
     DOCKER_BUILDKIT: "1"
-    BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
+    GOCACHE: "/cache/llm-gateway-go-build"
   script:
     - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
     - |
       started_at=$(date +%s)
-      REGISTRY=${REGISTRY} IMAGE_TAG=${IMAGE_TAG} APP_ENV=test \
-        docker buildx bake -f deploy/docker/docker-bake.hcl --push
+      apk add --no-cache docker-cli
+      mkdir -p .backend-dist "$GOCACHE"
+      CGO_ENABLED=0 go build -mod=vendor -ldflags="-s -w" -o .backend-dist/ ./cmd/gateway ./cmd/control-plane
+
+      mkdir -p .backend-image-context
+      cp .backend-dist/gateway .backend-dist/control-plane .backend-image-context/
+      cp -R config atlas-migrations .backend-image-context/
+
+      docker build --target gateway --build-arg APP_ENV=test \
+        -f deploy/docker/backend.Dockerfile \
+        -t ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG} .backend-image-context
+      docker build --target control-plane --build-arg APP_ENV=test \
+        -f deploy/docker/backend.Dockerfile \
+        -t ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} .backend-image-context
+
+      docker push ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG} & gateway_push=$!
+      docker push ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} & cp_push=$!
+      wait $gateway_push
+      wait $cp_push
       elapsed=$(( $(date +%s) - started_at ))
       echo "Backend images built and pushed in ${elapsed}s"
   rules:

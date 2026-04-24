@@ -8,6 +8,7 @@ import (
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/service"
+	"github.com/example/llm-gateway/internal/orgservice/rbac"
 	"github.com/gin-gonic/gin"
 )
 
@@ -51,7 +52,7 @@ func (h *VideoTaskHandler) List(c *gin.Context) {
 	status := c.Query("status")
 	userID := c.Query("user_id")
 
-	tasks, total, err := h.svc.List(page, pageSize, providerName, modelName, status, userID)
+	tasks, total, err := h.svc.ListScoped(page, pageSize, providerName, modelName, status, userID, videoTaskScopeFromContext(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -95,7 +96,24 @@ func (h *VideoTaskHandler) MyList(c *gin.Context) {
 // Get 任务详情
 func (h *VideoTaskHandler) Get(c *gin.Context) {
 	taskID := c.Param("id")
-	task, err := h.svc.GetByID(taskID)
+	task, err := h.svc.GetByIDScoped(taskID, videoTaskScopeFromContext(c))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": task})
+}
+
+// MyGet 当前登录用户的视频任务详情。
+func (h *VideoTaskHandler) MyGet(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	taskID := c.Param("id")
+	task, err := h.svc.GetByIDAndUserID(taskID, userID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
 		return
@@ -107,7 +125,7 @@ func (h *VideoTaskHandler) Get(c *gin.Context) {
 // Stats 统计数据
 func (h *VideoTaskHandler) Stats(c *gin.Context) {
 	start, end, userID, providerName, modelName := statsFilters(c)
-	stats, err := h.svc.Stats(start, end, userID, providerName, modelName)
+	stats, err := h.svc.StatsScoped(start, end, userID, providerName, modelName, videoTaskScopeFromContext(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -136,7 +154,7 @@ func (h *VideoTaskHandler) MyStats(c *gin.Context) {
 // StatsTrend 视频任务按天趋势
 func (h *VideoTaskHandler) StatsTrend(c *gin.Context) {
 	start, end, userID, providerName, modelName := statsFilters(c)
-	rows, err := h.svc.StatsTrend(start, end, userID, providerName, modelName)
+	rows, err := h.svc.StatsTrendScoped(start, end, userID, providerName, modelName, videoTaskScopeFromContext(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -165,7 +183,7 @@ func (h *VideoTaskHandler) MyStatsTrend(c *gin.Context) {
 // StatsDistribution 视频任务分布统计
 func (h *VideoTaskHandler) StatsDistribution(c *gin.Context) {
 	start, end, userID, providerName, modelName := statsFilters(c)
-	rows, err := h.svc.StatsDistribution(start, end, userID, providerName, modelName)
+	rows, err := h.svc.StatsDistributionScoped(start, end, userID, providerName, modelName, videoTaskScopeFromContext(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -207,6 +225,17 @@ func firstQuery(c *gin.Context, names ...string) string {
 		}
 	}
 	return ""
+}
+
+func videoTaskScopeFromContext(c *gin.Context) service.VideoTaskScope {
+	actor := rbac.GetActor(c)
+	if actor.IsGlobal {
+		return service.VideoTaskScope{IsGlobal: true}
+	}
+	if len(actor.StudioIDs) > 0 || len(actor.DeptIDs) > 0 {
+		return service.VideoTaskScope{StudioIDs: actor.StudioIDs, DeptIDs: actor.DeptIDs}
+	}
+	return service.VideoTaskScope{UserID: c.GetString("user_id")}
 }
 
 // InternalCreate 供 gateway 写入 video_tasks（X-Internal-Token）

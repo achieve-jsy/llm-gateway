@@ -13,6 +13,37 @@ const (
 	ModelStatusAutoDisabled     = 3 // 自动禁用（健康检测触发）
 )
 
+// Upstream planner v2 的显式协议/参数配置枚举。
+// ParamStyle 保留为兼容旧链路，新增能力一律使用 ParamProfile。
+const (
+	ProtocolModeAuto              = "auto"
+	ProtocolModeOpenAIChat        = "openai_chat"
+	ProtocolModeOpenAIResponses   = "openai_responses"
+	ProtocolModeAnthropicMessages = "anthropic_messages"
+	ProtocolModeGeminiNative      = "gemini_native"
+	ProtocolModeBedrockConverse   = "bedrock_converse"
+	ProtocolModeOpenAICompatible  = "openai_compatible"
+	ProtocolModePassthrough       = "passthrough"
+
+	ParamProfileAuto                = "auto"
+	ParamProfileOpenAIStandard      = "openai_standard"
+	ParamProfileOpenAIReasoningChat = "openai_reasoning_chat"
+	ParamProfileOpenAIResponses     = "openai_responses"
+	ParamProfileDeepSeekReasoning   = "deepseek_reasoning"
+	ParamProfileGeminiThinking      = "gemini_thinking"
+	ParamProfileAnthropicThinking   = "anthropic_thinking"
+	ParamProfileBedrockConverse     = "bedrock_converse"
+	ParamProfilePassthrough         = "passthrough"
+
+	UnsupportedParamPolicyPreserve = "preserve"
+	UnsupportedParamPolicyDrop     = "drop"
+	UnsupportedParamPolicyReject   = "reject"
+)
+
+// PlannerJSONMap 保存 Upstream Planner v2 的有限覆盖配置。
+// 默认使用空对象 {}，避免 nil/null 在 snapshot 与前端之间产生歧义。
+type PlannerJSONMap map[string]any
+
 // Model 模型注册实体
 //
 // catalog 联动字段：
@@ -25,23 +56,29 @@ const (
 // 价格语义：InputPrice / OutputPrice 单位统一为 USD per 1,000,000 tokens，
 // 与 model_catalog.InputPricePerMillion / OutputPricePerMillion 同语义。
 type Model struct {
-	ID                  uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	Name                string     `gorm:"type:varchar(200);not null;uniqueIndex:idx_models_name_provider_unique,composite:name_provider" json:"name"`
-	ProviderID          uuid.UUID  `gorm:"type:uuid;not null;index:idx_models_provider_id;uniqueIndex:idx_models_name_provider_unique,composite:name_provider" json:"provider_id"`
-	ModelType           string     `gorm:"type:varchar(50);not null;default:chat" json:"model_type"`
-Enabled                    *bool      `gorm:"not null;default:true;index:idx_models_enabled" json:"enabled"`
-	Status                     int        `gorm:"not null;default:1" json:"status"`
-	UpstreamModelID            string     `gorm:"type:varchar(200);default:''" json:"upstream_model_id"`
-	Description         string     `gorm:"type:varchar(500);default:''" json:"description"`
-	ContextLength       int        `gorm:"default:0" json:"context_length"`
-	MaxOutputTokens     int        `gorm:"default:0" json:"max_output_tokens"`
-	InputPrice          float64    `gorm:"type:decimal(14,6);default:0" json:"input_price"`
-	OutputPrice         float64    `gorm:"type:decimal(14,6);default:0" json:"output_price"`
-	PriceMode           string     `gorm:"type:varchar(10);not null;default:catalog" json:"price_mode"`
-	Weight              int        `gorm:"not null;default:1" json:"weight"`
-	CatalogID           *uuid.UUID `gorm:"type:uuid;index:idx_models_catalog_id" json:"catalog_id,omitempty"`
-	CtxOverridden       bool       `gorm:"not null;default:false" json:"ctx_overridden"`
-	MaxOutputOverridden bool       `gorm:"not null;default:false" json:"max_output_overridden"`
+	ID                      uuid.UUID      `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	Name                    string         `gorm:"type:varchar(200);not null;uniqueIndex:idx_models_name_provider_unique,composite:name_provider" json:"name"`
+	ProviderID              uuid.UUID      `gorm:"type:uuid;not null;index:idx_models_provider_id;uniqueIndex:idx_models_name_provider_unique,composite:name_provider" json:"provider_id"`
+	ModelType               string         `gorm:"type:varchar(50);not null;default:chat" json:"model_type"`
+	Enabled                 *bool          `gorm:"not null;default:true;index:idx_models_enabled" json:"enabled"`
+	Status                  int            `gorm:"not null;default:1" json:"status"`
+	UpstreamModelID         string         `gorm:"type:varchar(200);default:''" json:"upstream_model_id"`
+	BaseModel               string         `gorm:"type:varchar(255);not null;default:''" json:"base_model"`
+	ProtocolMode            string         `gorm:"type:varchar(40);not null;default:auto" json:"protocol_mode"`
+	ParamProfile            string         `gorm:"type:varchar(64);not null;default:auto" json:"param_profile"`
+	UnsupportedParamPolicy  string         `gorm:"type:varchar(40);not null;default:preserve" json:"unsupported_param_policy"`
+	SupportedParamsOverride PlannerJSONMap `gorm:"type:jsonb;not null;default:'{}';serializer:json" json:"supported_params_override"`
+	TransformOverrides      PlannerJSONMap `gorm:"type:jsonb;not null;default:'{}';serializer:json" json:"transform_overrides"`
+	Description             string         `gorm:"type:varchar(500);default:''" json:"description"`
+	ContextLength           int            `gorm:"default:0" json:"context_length"`
+	MaxOutputTokens         int            `gorm:"default:0" json:"max_output_tokens"`
+	InputPrice              float64        `gorm:"type:decimal(14,6);default:0" json:"input_price"`
+	OutputPrice             float64        `gorm:"type:decimal(14,6);default:0" json:"output_price"`
+	PriceMode               string         `gorm:"type:varchar(10);not null;default:catalog" json:"price_mode"`
+	Weight                  int            `gorm:"not null;default:1" json:"weight"`
+	CatalogID               *uuid.UUID     `gorm:"type:uuid;index:idx_models_catalog_id" json:"catalog_id,omitempty"`
+	CtxOverridden           bool           `gorm:"not null;default:false" json:"ctx_overridden"`
+	MaxOutputOverridden     bool           `gorm:"not null;default:false" json:"max_output_overridden"`
 	// 视频模型参数（model_type=video 时使用；JSON 数组字符串）
 	VideoSupportedResolutions  []string `gorm:"type:jsonb;not null;default:'[]';serializer:json" json:"video_supported_resolutions,omitempty"`
 	VideoSupportedAspectRatios []string `gorm:"type:jsonb;not null;default:'[]';serializer:json" json:"video_supported_aspect_ratios,omitempty"`
@@ -52,12 +89,17 @@ Enabled                    *bool      `gorm:"not null;default:true;index:idx_mod
 	// NULL = 不限，运行时按主体独立计数
 	QuotaRPM            *int `gorm:"column:quota_rpm" json:"quota_rpm,omitempty"`
 	QuotaMaxConcurrency *int `gorm:"column:quota_max_concurrency" json:"quota_max_concurrency,omitempty"`
-	ConsecutiveFailures         int        `gorm:"not null;default:0" json:"consecutive_failures"`
-	ConsecutiveRecoverySuccesses int        `gorm:"not null;default:0" json:"consecutive_recovery_successes"`
-	LastCheckError              string     `gorm:"type:varchar(500);default:''" json:"last_check_error"`
-	ResponseTime        int        `gorm:"default:0" json:"response_time"`
-	CreatedAt           time.Time  `gorm:"not null;autoCreateTime" json:"created_at"`
-	UpdatedAt           time.Time  `gorm:"not null;autoUpdateTime" json:"updated_at"`
+	// ParamStyle 显式声明参数适配策略：
+	//   ""          → 按模型名自动检测（向后兼容）
+	//   "reasoning" → 推理模型适配（max_tokens→max_completion_tokens，drop temperature）
+	//   "standard"  → 标准透传，不做任何转换
+	ParamStyle                   string    `gorm:"type:varchar(20);not null;default:''" json:"param_style,omitempty"`
+	ConsecutiveFailures          int       `gorm:"not null;default:0" json:"consecutive_failures"`
+	ConsecutiveRecoverySuccesses int       `gorm:"not null;default:0" json:"consecutive_recovery_successes"`
+	LastCheckError               string    `gorm:"type:varchar(500);default:''" json:"last_check_error"`
+	ResponseTime                 int       `gorm:"default:0" json:"response_time"`
+	CreatedAt                    time.Time `gorm:"not null;autoCreateTime" json:"created_at"`
+	UpdatedAt                    time.Time `gorm:"not null;autoUpdateTime" json:"updated_at"`
 
 	// 关联（默认查询不预加载，列表 API 需要时显式 Preload）
 	Provider Provider      `gorm:"foreignKey:ProviderID" json:"provider,omitempty"`

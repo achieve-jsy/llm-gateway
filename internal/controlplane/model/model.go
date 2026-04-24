@@ -52,6 +52,11 @@ Enabled                    *bool      `gorm:"not null;default:true;index:idx_mod
 	// NULL = 不限，运行时按主体独立计数
 	QuotaRPM            *int `gorm:"column:quota_rpm" json:"quota_rpm,omitempty"`
 	QuotaMaxConcurrency *int `gorm:"column:quota_max_concurrency" json:"quota_max_concurrency,omitempty"`
+	// ParamStyle 显式声明参数适配策略：
+	//   ""          → 按模型名自动检测（向后兼容）
+	//   "reasoning" → 推理模型适配（max_tokens→max_completion_tokens，drop temperature）
+	//   "standard"  → 标准透传，不做任何转换
+	ParamStyle string `gorm:"type:varchar(20);not null;default:''" json:"param_style,omitempty"`
 	ConsecutiveFailures         int        `gorm:"not null;default:0" json:"consecutive_failures"`
 	ConsecutiveRecoverySuccesses int        `gorm:"not null;default:0" json:"consecutive_recovery_successes"`
 	LastCheckError              string     `gorm:"type:varchar(500);default:''" json:"last_check_error"`

@@ -37,6 +37,7 @@ type CPModelData struct {
 	Priority       *int   `json:"priority"`
 	Weight         *int   `json:"weight"`
 	ComplexityTier string `json:"complexity_tier"`
+	ParamStyle     string `json:"param_style"`
 }
 
 // GroupConfig 模型组配置
@@ -64,6 +65,7 @@ type GroupModel struct {
 	Priority       *int   `json:"priority"`
 	Weight         *int   `json:"weight"`
 	ComplexityTier string `json:"complexity_tier"`
+	ParamStyle     string `json:"param_style"`
 }
 
 // GroupRoutingConfig 内存中的组路由配置
@@ -91,6 +93,7 @@ type ModelRoutingEntry struct {
 	Priority       int    `json:"priority"`
 	Weight         int    `json:"weight"`
 	ComplexityTier string `json:"complexity_tier"`
+	ParamStyle     string `json:"param_style"`
 }
 
 // ChannelEndpoint 渠道连接端点信息

@@ -81,6 +81,8 @@ export interface Model {
   video_min_duration_seconds?: number
   video_max_duration_seconds?: number
   video_supported_actions?: string[]
+  /** 参数适配策略：reasoning = 推理模型；standard = 标准透传；'' = 自动检测 */
+  param_style?: string
 }
 
 /** 创建/编辑模型的请求体 */
@@ -102,4 +104,6 @@ export interface ModelPayload {
   video_min_duration_seconds?: number
   video_max_duration_seconds?: number
   video_supported_actions?: string[]
+  /** 参数适配策略：reasoning = 推理模型；standard = 标准透传；'' = 自动检测 */
+  param_style?: string
 }

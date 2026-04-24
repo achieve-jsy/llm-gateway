@@ -100,6 +100,7 @@ func buildDecision(group *GroupRoutingConfig, entry *ModelRoutingEntry, start ti
 		Endpoint:       entry.Endpoint,
 		Credential:     entry.Credential,
 		DecisionTimeUs: time.Since(start).Microseconds(),
+		ParamStyle:     entry.ParamStyle,
 	}
 }
 

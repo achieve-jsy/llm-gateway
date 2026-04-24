@@ -65,6 +65,7 @@ func (rt *RouteTable) ReplaceAll(config *ControlPlaneConfig) {
 			Priority:       derefPriority(m.Priority),
 			Weight:         derefWeight(m.Weight),
 			ComplexityTier: m.ComplexityTier,
+			ParamStyle:     m.ParamStyle,
 		})
 	}
 

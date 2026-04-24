@@ -435,6 +435,7 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 		Priority       *int      `json:"priority"`
 		Weight         *int      `json:"weight"`
 		ComplexityTier string    `json:"complexity_tier"`
+		ParamStyle     string    `json:"param_style,omitempty"`
 	}
 
 	type groupInfo struct {
@@ -479,6 +480,7 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 				mi.Name = m.UpstreamName()
 				mi.ModelType = m.ModelType
 				mi.ProviderID = m.ProviderID
+				mi.ParamStyle = m.ParamStyle
 				providerEnabled := false
 				if h.providerRepo != nil {
 					p, err := h.providerRepo.GetByID(m.ProviderID)

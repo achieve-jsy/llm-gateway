@@ -109,6 +109,7 @@ type CreateModelInput struct {
 	VideoMinDurationSeconds    *int     `json:"video_min_duration_seconds" binding:"omitempty,min=0,max=600"`
 	VideoMaxDurationSeconds    *int     `json:"video_max_duration_seconds" binding:"omitempty,min=0,max=600"`
 	VideoSupportedActions      []string `json:"video_supported_actions"`
+	ParamStyle                 string   `json:"param_style" binding:"omitempty,oneof=reasoning standard"`
 }
 
 // CreateModel 注册模型（T030）
@@ -166,6 +167,7 @@ func (s *ModelService) CreateModel(input CreateModelInput) (*model.Model, error)
 	}
 	applyVideoParams(m, input.VideoSupportedResolutions, input.VideoSupportedAspectRatios,
 		input.VideoMinDurationSeconds, input.VideoMaxDurationSeconds, input.VideoSupportedActions)
+	m.ParamStyle = input.ParamStyle
 
 	if err := s.modelRepo.Create(m); err != nil {
 		return nil, fmt.Errorf("create model: %w", err)
@@ -233,6 +235,7 @@ type UpdateModelInput struct {
 	VideoMinDurationSeconds    *int     `json:"video_min_duration_seconds" binding:"omitempty,min=0,max=600"`
 	VideoMaxDurationSeconds    *int     `json:"video_max_duration_seconds" binding:"omitempty,min=0,max=600"`
 	VideoSupportedActions      []string `json:"video_supported_actions"`
+	ParamStyle                 *string  `json:"param_style" binding:"omitempty,oneof=reasoning standard"`
 }
 
 // UpdateModel 更新模型（T032）
@@ -314,6 +317,9 @@ func (s *ModelService) UpdateModel(id uuid.UUID, input UpdateModelInput) (*model
 	}
 	applyVideoParams(m, input.VideoSupportedResolutions, input.VideoSupportedAspectRatios,
 		input.VideoMinDurationSeconds, input.VideoMaxDurationSeconds, input.VideoSupportedActions)
+	if input.ParamStyle != nil {
+		m.ParamStyle = *input.ParamStyle
+	}
 
 	if err := s.modelRepo.Update(m); err != nil {
 		return nil, fmt.Errorf("update model: %w", err)

@@ -115,6 +115,7 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 		if decision != nil {
 			req.Model = decision.ModelName
 			req.LogicalModel = decision.GroupName
+			req.ParamStyle = decision.ParamStyle
 			// 传递 provider hint，确保 Router 在同名模型多 provider 场景下
 			// 选择 scheduler 指定的 provider，避免路由歧义。
 			if decision.ProviderName != "" {

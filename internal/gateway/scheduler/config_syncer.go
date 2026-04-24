@@ -163,6 +163,7 @@ func (cs *ConfigSyncer) fetchConfig() (*ControlPlaneConfig, error) {
 					Priority:       m.Priority,
 					Weight:         m.Weight,
 					ComplexityTier: m.ComplexityTier,
+					ParamStyle:     m.ParamStyle,
 				})
 				modelIdx++
 			}

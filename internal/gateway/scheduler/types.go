@@ -42,6 +42,7 @@ type RouteDecision struct {
 	DecisionTimeUs int64           `json:"decision_time_us"`
 	// auto 审计字段（仅 strategy=auto 时填充）
 	ComplexityTier   string  `json:"complexity_tier,omitempty"`
+	ParamStyle       string  `json:"param_style,omitempty"`
 	ComplexityScore  float64 `json:"complexity_score,omitempty"`
 	ReasoningMarkers int     `json:"reasoning_markers,omitempty"`
 	BiasUpApplied    bool    `json:"bias_up_applied,omitempty"`

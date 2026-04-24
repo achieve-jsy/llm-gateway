@@ -84,6 +84,7 @@ build-backend-test:
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
     DOCKER_BUILDKIT: "1"
+    BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
     GOCACHE: "/cache/llm-gateway/go-build"
     GOMODCACHE: "/cache/llm-gateway/go-mod"
   script:

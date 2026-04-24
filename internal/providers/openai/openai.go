@@ -269,7 +269,13 @@ func normalizeReasoningEffortJSON(raw json.RawMessage) json.RawMessage {
 // chatRequestBody returns the appropriate request body for the model.
 // Reasoning models get parameter adaptation; others pass through as-is.
 func chatRequestBody(req *core.ChatRequest) (any, error) {
-	if isReasoningChatModel(req.Model) {
+	// Prefer LogicalModel (group name, e.g. "gpt-5.6-sol") for capability
+	// detection, falling back to Model (deployment name, e.g. "4476-gpt-56sol-xlab").
+	modelForDetection := req.LogicalModel
+	if modelForDetection == "" {
+		modelForDetection = req.Model
+	}
+	if isReasoningChatModel(modelForDetection) {
 		return adaptForReasoningChat(req)
 	}
 	return req, nil

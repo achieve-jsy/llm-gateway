@@ -83,6 +83,18 @@ export interface Model {
   video_supported_actions?: string[]
   /** 参数适配策略：reasoning = 推理模型；standard = 标准透传；'' = 自动检测 */
   param_style?: string
+  /** Upstream Planner v2：基础模型名，用于能力与协议推断 */
+  base_model?: string
+  /** Upstream Planner v2：协议模式 */
+  protocol_mode?: 'auto' | 'openai_chat' | 'openai_responses' | 'anthropic_messages' | 'gemini_native' | 'bedrock_converse' | 'openai_compatible' | 'passthrough'
+  /** Upstream Planner v2：参数画像 */
+  param_profile?: 'auto' | 'openai_standard' | 'openai_reasoning_chat' | 'openai_responses' | 'deepseek_reasoning' | 'gemini_thinking' | 'anthropic_thinking' | 'bedrock_converse' | 'passthrough'
+  /** Upstream Planner v2：遇到不支持参数时的策略 */
+  unsupported_param_policy?: 'preserve' | 'drop' | 'reject'
+  /** Upstream Planner v2：单模型参数支持覆盖 */
+  supported_params_override?: Record<string, unknown>
+  /** Upstream Planner v2：有限参数转换覆盖 */
+  transform_overrides?: Record<string, unknown>
 }
 
 /** 创建/编辑模型的请求体 */
@@ -106,4 +118,16 @@ export interface ModelPayload {
   video_supported_actions?: string[]
   /** 参数适配策略：reasoning = 推理模型；standard = 标准透传；'' = 自动检测 */
   param_style?: string
+  /** Upstream Planner v2：基础模型名，用于能力与协议推断 */
+  base_model?: string
+  /** Upstream Planner v2：协议模式 */
+  protocol_mode?: 'auto' | 'openai_chat' | 'openai_responses' | 'anthropic_messages' | 'gemini_native' | 'bedrock_converse' | 'openai_compatible' | 'passthrough'
+  /** Upstream Planner v2：参数画像 */
+  param_profile?: 'auto' | 'openai_standard' | 'openai_reasoning_chat' | 'openai_responses' | 'deepseek_reasoning' | 'gemini_thinking' | 'anthropic_thinking' | 'bedrock_converse' | 'passthrough'
+  /** Upstream Planner v2：遇到不支持参数时的策略 */
+  unsupported_param_policy?: 'preserve' | 'drop' | 'reject'
+  /** Upstream Planner v2：单模型参数支持覆盖 */
+  supported_params_override?: Record<string, unknown>
+  /** Upstream Planner v2：有限参数转换覆盖 */
+  transform_overrides?: Record<string, unknown>
 }

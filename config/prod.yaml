@@ -39,3 +39,8 @@ frontend:
 
 gateway:
   url: "https://aimeter.xk-devops.com"
+
+upstream_planner:
+  enabled: false
+  shadow_enabled: false
+  debug_header_enabled: false

@@ -13,9 +13,10 @@ import (
 )
 
 var (
-	ErrModelNameExists      = errors.New("model name already exists")
-	ErrModelNotFound        = errors.New("model not found")
-	ErrModelProviderInvalid = errors.New("associated provider not found or disabled")
+	ErrModelNameExists            = errors.New("model name already exists")
+	ErrModelNotFound              = errors.New("model not found")
+	ErrModelProviderInvalid       = errors.New("associated provider not found or disabled")
+	ErrModelInvalidPlanningConfig = errors.New("invalid model planning config")
 )
 
 // CatalogLookup ModelService 用来读 catalog 快照的最小接口（只读）。
@@ -30,12 +31,12 @@ type CatalogLookup interface {
 
 // ModelService 模型注册管理服务
 type ModelService struct {
-	modelRepo          ModelRepoInterface
-	providerRepo       ProviderRepoInterface
-	publisher          *event.Publisher
-	snapshotter        *ProviderSnapshotRefresher
-	catalogLookup      CatalogLookup // 可选，未注入时 ResetOverride / CreateModelFromCatalog 走 fallback / 报错
-	modelStatusLogSvc  *ModelStatusLogService
+	modelRepo         ModelRepoInterface
+	providerRepo      ProviderRepoInterface
+	publisher         *event.Publisher
+	snapshotter       *ProviderSnapshotRefresher
+	catalogLookup     CatalogLookup // 可选，未注入时 ResetOverride / CreateModelFromCatalog 走 fallback / 报错
+	modelStatusLogSvc *ModelStatusLogService
 }
 
 // NewModelService 创建 ModelService 实例
@@ -92,17 +93,23 @@ func (s *ModelService) publishEvent(eventType event.ChangeEventType, resourceTyp
 //     指针类型用于区分 "未传" 与 "传零值"；未传时落 DB 列默认值
 //     （context_length=0/max_output_tokens=0/input_price=0/output_price=0/weight=1）
 type CreateModelInput struct {
-	Name            string   `json:"name" binding:"required,max=200"`
-	ProviderID      string   `json:"provider_id" binding:"required,uuid"`
-	ModelType       string   `json:"model_type" binding:"required,oneof=chat embedding embedding_vl rerank rerank_vl video"`
-	UpstreamModelID string   `json:"upstream_model_id" binding:"omitempty,max=200"`
-	Description     string   `json:"description" binding:"omitempty,max=500"`
-	ContextLength   *int     `json:"context_length" binding:"omitempty,min=0,max=10000000"`
-	MaxOutputTokens *int     `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
-	InputPrice      *float64 `json:"input_price" binding:"omitempty,min=0"`
-	OutputPrice     *float64 `json:"output_price" binding:"omitempty,min=0"`
-	PriceMode       string   `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
-	Weight          *int     `json:"weight" binding:"omitempty,min=0,max=9999"`
+	Name                    string               `json:"name" binding:"required,max=200"`
+	ProviderID              string               `json:"provider_id" binding:"required,uuid"`
+	ModelType               string               `json:"model_type" binding:"required,oneof=chat embedding embedding_vl rerank rerank_vl video"`
+	UpstreamModelID         string               `json:"upstream_model_id" binding:"omitempty,max=200"`
+	BaseModel               string               `json:"base_model" binding:"omitempty,max=255"`
+	ProtocolMode            string               `json:"protocol_mode" binding:"omitempty,oneof=auto openai_chat openai_responses anthropic_messages gemini_native bedrock_converse openai_compatible passthrough"`
+	ParamProfile            string               `json:"param_profile" binding:"omitempty,oneof=auto openai_standard openai_reasoning_chat openai_responses deepseek_reasoning gemini_thinking anthropic_thinking bedrock_converse passthrough"`
+	UnsupportedParamPolicy  string               `json:"unsupported_param_policy" binding:"omitempty,oneof=preserve drop reject"`
+	SupportedParamsOverride model.PlannerJSONMap `json:"supported_params_override"`
+	TransformOverrides      model.PlannerJSONMap `json:"transform_overrides"`
+	Description             string               `json:"description" binding:"omitempty,max=500"`
+	ContextLength           *int                 `json:"context_length" binding:"omitempty,min=0,max=10000000"`
+	MaxOutputTokens         *int                 `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
+	InputPrice              *float64             `json:"input_price" binding:"omitempty,min=0"`
+	OutputPrice             *float64             `json:"output_price" binding:"omitempty,min=0"`
+	PriceMode               string               `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
+	Weight                  *int                 `json:"weight" binding:"omitempty,min=0,max=9999"`
 	// 视频模型参数
 	VideoSupportedResolutions  []string `json:"video_supported_resolutions"`
 	VideoSupportedAspectRatios []string `json:"video_supported_aspect_ratios"`
@@ -131,14 +138,25 @@ func (s *ModelService) CreateModel(input CreateModelInput) (*model.Model, error)
 		return nil, ErrModelNameExists
 	}
 
+	applyCreatePlanningDefaults(&input)
+	if err := validatePlanningFields(input.ProtocolMode, input.ParamProfile, input.UnsupportedParamPolicy); err != nil {
+		return nil, err
+	}
+
 	enabled := true
 	m := &model.Model{
-		Name:            input.Name,
-		ProviderID:      providerID,
-		ModelType:       input.ModelType,
-		Enabled:         &enabled,
-		UpstreamModelID: input.UpstreamModelID,
-		Description:     input.Description,
+		Name:                    input.Name,
+		ProviderID:              providerID,
+		ModelType:               input.ModelType,
+		Enabled:                 &enabled,
+		UpstreamModelID:         input.UpstreamModelID,
+		BaseModel:               input.BaseModel,
+		ProtocolMode:            input.ProtocolMode,
+		ParamProfile:            input.ParamProfile,
+		UnsupportedParamPolicy:  input.UnsupportedParamPolicy,
+		SupportedParamsOverride: cloneJSONMap(input.SupportedParamsOverride),
+		TransformOverrides:      cloneJSONMap(input.TransformOverrides),
+		Description:             input.Description,
 	}
 	if input.ContextLength != nil {
 		m.ContextLength = *input.ContextLength
@@ -218,24 +236,30 @@ func (s *ModelService) GetModel(id uuid.UUID) (*model.Model, error) {
 //
 // 字段同 CreateModelInput；标量字段使用 *string 以便区分 "未传" 与 "传空串清空"。
 type UpdateModelInput struct {
-	Name            string   `json:"name" binding:"omitempty,max=200"`
-	ProviderID      string   `json:"provider_id" binding:"omitempty,uuid"`
-	ModelType       string   `json:"model_type" binding:"omitempty,oneof=chat embedding embedding_vl rerank rerank_vl video"`
-	Enabled         *bool    `json:"enabled"`
-	UpstreamModelID *string  `json:"upstream_model_id" binding:"omitempty,max=200"`
-	Description     *string  `json:"description" binding:"omitempty,max=500"`
-	ContextLength   *int     `json:"context_length" binding:"omitempty,min=0,max=10000000"`
-	MaxOutputTokens *int     `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
-	InputPrice      *float64 `json:"input_price" binding:"omitempty,min=0"`
-	OutputPrice     *float64 `json:"output_price" binding:"omitempty,min=0"`
-	PriceMode       string   `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
-	Weight          *int     `json:"weight" binding:"omitempty,min=0,max=9999"`
-	VideoSupportedResolutions  []string `json:"video_supported_resolutions"`
-	VideoSupportedAspectRatios []string `json:"video_supported_aspect_ratios"`
-	VideoMinDurationSeconds    *int     `json:"video_min_duration_seconds" binding:"omitempty,min=0,max=600"`
-	VideoMaxDurationSeconds    *int     `json:"video_max_duration_seconds" binding:"omitempty,min=0,max=600"`
-	VideoSupportedActions      []string `json:"video_supported_actions"`
-	ParamStyle                 *string  `json:"param_style" binding:"omitempty,oneof=reasoning standard"`
+	Name                       string                `json:"name" binding:"omitempty,max=200"`
+	ProviderID                 string                `json:"provider_id" binding:"omitempty,uuid"`
+	ModelType                  string                `json:"model_type" binding:"omitempty,oneof=chat embedding embedding_vl rerank rerank_vl video"`
+	Enabled                    *bool                 `json:"enabled"`
+	UpstreamModelID            *string               `json:"upstream_model_id" binding:"omitempty,max=200"`
+	BaseModel                  *string               `json:"base_model" binding:"omitempty,max=255"`
+	ProtocolMode               *string               `json:"protocol_mode" binding:"omitempty,oneof=auto openai_chat openai_responses anthropic_messages gemini_native bedrock_converse openai_compatible passthrough"`
+	ParamProfile               *string               `json:"param_profile" binding:"omitempty,oneof=auto openai_standard openai_reasoning_chat openai_responses deepseek_reasoning gemini_thinking anthropic_thinking bedrock_converse passthrough"`
+	UnsupportedParamPolicy     *string               `json:"unsupported_param_policy" binding:"omitempty,oneof=preserve drop reject"`
+	SupportedParamsOverride    *model.PlannerJSONMap `json:"supported_params_override"`
+	TransformOverrides         *model.PlannerJSONMap `json:"transform_overrides"`
+	Description                *string               `json:"description" binding:"omitempty,max=500"`
+	ContextLength              *int                  `json:"context_length" binding:"omitempty,min=0,max=10000000"`
+	MaxOutputTokens            *int                  `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
+	InputPrice                 *float64              `json:"input_price" binding:"omitempty,min=0"`
+	OutputPrice                *float64              `json:"output_price" binding:"omitempty,min=0"`
+	PriceMode                  string                `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
+	Weight                     *int                  `json:"weight" binding:"omitempty,min=0,max=9999"`
+	VideoSupportedResolutions  []string              `json:"video_supported_resolutions"`
+	VideoSupportedAspectRatios []string              `json:"video_supported_aspect_ratios"`
+	VideoMinDurationSeconds    *int                  `json:"video_min_duration_seconds" binding:"omitempty,min=0,max=600"`
+	VideoMaxDurationSeconds    *int                  `json:"video_max_duration_seconds" binding:"omitempty,min=0,max=600"`
+	VideoSupportedActions      []string              `json:"video_supported_actions"`
+	ParamStyle                 *string               `json:"param_style" binding:"omitempty,oneof=reasoning standard"`
 }
 
 // UpdateModel 更新模型（T032）
@@ -282,6 +306,9 @@ func (s *ModelService) UpdateModel(id uuid.UUID, input UpdateModelInput) (*model
 	}
 	if input.UpstreamModelID != nil {
 		m.UpstreamModelID = *input.UpstreamModelID
+	}
+	if err := applyUpdatePlanningFields(m, input); err != nil {
+		return nil, err
 	}
 	if input.Description != nil {
 		m.Description = *input.Description
@@ -400,18 +427,24 @@ func (s *ModelService) CreateModelFromCatalog(catalogID, providerID uuid.UUID, n
 	enabled := true
 	catID := cat.ID
 	m := &model.Model{
-		Name:            name,
-		ProviderID:      providerID,
-		ModelType:       cat.Mode,
-		Enabled:         &enabled,
-		UpstreamModelID: cat.SourceModelID,
-		Description:     cat.DisplayName,
-		ContextLength:   int(cat.ContextLength),
-		MaxOutputTokens: int(cat.MaxOutputTokens),
-		InputPrice:      cat.InputPricePerMillion,
-		OutputPrice:     cat.OutputPricePerMillion,
-		Weight:          1,
-		CatalogID:       &catID,
+		Name:                    name,
+		ProviderID:              providerID,
+		ModelType:               cat.Mode,
+		Enabled:                 &enabled,
+		UpstreamModelID:         cat.SourceModelID,
+		BaseModel:               cat.SourceModelID,
+		ProtocolMode:            model.ProtocolModeAuto,
+		ParamProfile:            model.ParamProfileAuto,
+		UnsupportedParamPolicy:  model.UnsupportedParamPolicyPreserve,
+		SupportedParamsOverride: model.PlannerJSONMap{},
+		TransformOverrides:      model.PlannerJSONMap{},
+		Description:             cat.DisplayName,
+		ContextLength:           int(cat.ContextLength),
+		MaxOutputTokens:         int(cat.MaxOutputTokens),
+		InputPrice:              cat.InputPricePerMillion,
+		OutputPrice:             cat.OutputPricePerMillion,
+		Weight:                  1,
+		CatalogID:               &catID,
 	}
 	if m.ModelType == "" {
 		m.ModelType = "chat"
@@ -550,8 +583,8 @@ type BatchBindInput struct {
 
 // BatchBindResult BatchBindCatalog 的汇总。
 type BatchBindResult struct {
-	Applied   int                 `json:"applied"`
-	FailedIDs map[string]string   `json:"failed_ids"` // model_id -> 错误原因（admin 可看）
+	Applied   int               `json:"applied"`
+	FailedIDs map[string]string `json:"failed_ids"` // model_id -> 错误原因（admin 可看）
 }
 
 // BatchBindCatalog 批量绑定。
@@ -696,4 +729,146 @@ func (s *ModelService) BatchUpdateModelStatusWithOperator(ids []uuid.UUID, enabl
 // BatchUpdateModelStatus 批量更新模型启用状态（兼容旧接口）
 func (s *ModelService) BatchUpdateModelStatus(ids []uuid.UUID, enabled bool) (int64, error) {
 	return s.BatchUpdateModelStatusWithOperator(ids, enabled, nil, "")
+}
+
+func applyCreatePlanningDefaults(input *CreateModelInput) {
+	if input == nil {
+		return
+	}
+	if input.ProtocolMode == "" {
+		input.ProtocolMode = model.ProtocolModeAuto
+	}
+	if input.ParamProfile == "" {
+		input.ParamProfile = model.ParamProfileAuto
+	}
+	if input.UnsupportedParamPolicy == "" {
+		input.UnsupportedParamPolicy = model.UnsupportedParamPolicyPreserve
+	}
+	if input.SupportedParamsOverride == nil {
+		input.SupportedParamsOverride = model.PlannerJSONMap{}
+	}
+	if input.TransformOverrides == nil {
+		input.TransformOverrides = model.PlannerJSONMap{}
+	}
+}
+
+func applyUpdatePlanningFields(m *model.Model, input UpdateModelInput) error {
+	if m == nil {
+		return nil
+	}
+	if input.BaseModel != nil {
+		m.BaseModel = *input.BaseModel
+	}
+	if input.ProtocolMode != nil {
+		if err := validateProtocolMode(*input.ProtocolMode); err != nil {
+			return err
+		}
+		m.ProtocolMode = *input.ProtocolMode
+	}
+	if input.ParamProfile != nil {
+		if err := validateParamProfile(*input.ParamProfile); err != nil {
+			return err
+		}
+		m.ParamProfile = *input.ParamProfile
+	}
+	if input.UnsupportedParamPolicy != nil {
+		if err := validateUnsupportedParamPolicy(*input.UnsupportedParamPolicy); err != nil {
+			return err
+		}
+		m.UnsupportedParamPolicy = *input.UnsupportedParamPolicy
+	}
+	if input.SupportedParamsOverride != nil {
+		m.SupportedParamsOverride = cloneJSONMap(*input.SupportedParamsOverride)
+	}
+	if input.TransformOverrides != nil {
+		m.TransformOverrides = cloneJSONMap(*input.TransformOverrides)
+	}
+	ensurePlanningDefaults(m)
+	return nil
+}
+
+func ensurePlanningDefaults(m *model.Model) {
+	if m == nil {
+		return
+	}
+	if m.ProtocolMode == "" {
+		m.ProtocolMode = model.ProtocolModeAuto
+	}
+	if m.ParamProfile == "" {
+		m.ParamProfile = model.ParamProfileAuto
+	}
+	if m.UnsupportedParamPolicy == "" {
+		m.UnsupportedParamPolicy = model.UnsupportedParamPolicyPreserve
+	}
+	if m.SupportedParamsOverride == nil {
+		m.SupportedParamsOverride = model.PlannerJSONMap{}
+	}
+	if m.TransformOverrides == nil {
+		m.TransformOverrides = model.PlannerJSONMap{}
+	}
+}
+
+func validatePlanningFields(protocolMode, paramProfile, unsupportedParamPolicy string) error {
+	if err := validateProtocolMode(protocolMode); err != nil {
+		return err
+	}
+	if err := validateParamProfile(paramProfile); err != nil {
+		return err
+	}
+	if err := validateUnsupportedParamPolicy(unsupportedParamPolicy); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateProtocolMode(v string) error {
+	switch v {
+	case model.ProtocolModeAuto,
+		model.ProtocolModeOpenAIChat,
+		model.ProtocolModeOpenAIResponses,
+		model.ProtocolModeAnthropicMessages,
+		model.ProtocolModeGeminiNative,
+		model.ProtocolModeBedrockConverse,
+		model.ProtocolModeOpenAICompatible,
+		model.ProtocolModePassthrough:
+		return nil
+	}
+	return fmt.Errorf("%w: invalid protocol_mode %q", ErrModelInvalidPlanningConfig, v)
+}
+
+func validateParamProfile(v string) error {
+	switch v {
+	case model.ParamProfileAuto,
+		model.ParamProfileOpenAIStandard,
+		model.ParamProfileOpenAIReasoningChat,
+		model.ParamProfileOpenAIResponses,
+		model.ParamProfileDeepSeekReasoning,
+		model.ParamProfileGeminiThinking,
+		model.ParamProfileAnthropicThinking,
+		model.ParamProfileBedrockConverse,
+		model.ParamProfilePassthrough:
+		return nil
+	}
+	return fmt.Errorf("%w: invalid param_profile %q", ErrModelInvalidPlanningConfig, v)
+}
+
+func validateUnsupportedParamPolicy(v string) error {
+	switch v {
+	case model.UnsupportedParamPolicyPreserve,
+		model.UnsupportedParamPolicyDrop,
+		model.UnsupportedParamPolicyReject:
+		return nil
+	}
+	return fmt.Errorf("%w: invalid unsupported_param_policy %q", ErrModelInvalidPlanningConfig, v)
+}
+
+func cloneJSONMap(src model.PlannerJSONMap) model.PlannerJSONMap {
+	if src == nil {
+		return model.PlannerJSONMap{}
+	}
+	dst := make(model.PlannerJSONMap, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }

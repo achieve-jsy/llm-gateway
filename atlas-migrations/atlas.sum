@@ -1,4 +1,4 @@
-h1:iH6Vq4fQlcS5nh5Wnldel5hT1rprw8LXKbS/uHNwpYo=
+h1:NBTzwOZPcAzZE4osZVhafgf3TUj/9O2Tpob6d4wAxOo=
 20260609082623_baseline.sql h1:EypMLzQ+lwKOXInv3+ZdRYfRjDkE8V0LWKJ+7Ul6hMY=
 20260610120000_add_model_status.sql h1:dsiXmqu5v1ClJQJFnN8Ilphj0UtIN0I6bpvUW43i294=
 20260611000000_add_users_login_status.sql h1:IdW/XoVpwI/HIG0nsz+cLsWwQfoIhguaFU3LWMwelMY=
@@ -43,3 +43,5 @@ h1:iH6Vq4fQlcS5nh5Wnldel5hT1rprw8LXKbS/uHNwpYo=
 20260716025002_add_model_tier_budget_indexes_concurrently.sql h1:W1/sgdog7QTLIb8tXhXXw3IbBz1CpGLxccjcbNQmuFU=
 20260716025003_validate_model_tier_budget_constraints.sql h1:oCoDQUspjCwj2rE4MIHiSlZlWdfcp77BSOt47m1eyxs=
 20260716025004_add_notification_outbox.sql h1:YhxWhf+BlPZMZu7mscwJeVtIYIbj5pdZxSjXogxavsw=
+20260717000000_add_models_param_style.sql h1:oYTMaNx2xrxq1yIKhEs+/l/ahbWosDLdsZHbGMUDdFo=
+20260717074500_add_model_protocol_planning_fields.sql h1:uCgtHAK7LzWkDdVm5Eluny0WyJmWdaEmM82T5LvnV40=

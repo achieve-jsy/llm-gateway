@@ -201,3 +201,44 @@ func TestRouteTable_GetAllModels(t *testing.T) {
 		})
 	}
 }
+
+func TestRouteTable_ReplaceAll_PlannerFields(t *testing.T) {
+	rt := scheduler.NewRouteTable()
+	rt.ReplaceAll(&scheduler.ControlPlaneConfig{
+		Groups: []scheduler.GroupConfig{
+			{ID: 1, Name: "planner-group", Strategy: scheduler.StrategyPriority, Enabled: true},
+		},
+		Models: []scheduler.GroupModel{
+			{
+				ID:                     1,
+				GroupID:                1,
+				ModelID:                10,
+				ModelName:              "deployment-001",
+				ChannelType:            "azure",
+				Endpoint:               "https://example.openai.azure.com",
+				UpstreamModelID:        "deployment-001",
+				BaseModel:              "gpt-5",
+				ProtocolMode:           "openai_responses",
+				ParamProfile:           "openai_responses",
+				UnsupportedParamPolicy: "drop",
+				SupportedParamsOverride: map[string]any{
+					"reasoning": true,
+				},
+				TransformOverrides: map[string]any{
+					"drop": []any{"temperature"},
+				},
+			},
+		},
+	})
+
+	group := rt.Get("planner-group")
+	require.NotNil(t, group)
+	require.Len(t, group.Models, 1)
+	entry := group.Models[0]
+	assert.Equal(t, "gpt-5", entry.BaseModel)
+	assert.Equal(t, "openai_responses", entry.ProtocolMode)
+	assert.Equal(t, "openai_responses", entry.ParamProfile)
+	assert.Equal(t, "drop", entry.UnsupportedParamPolicy)
+	assert.Equal(t, true, entry.SupportedParamsOverride["reasoning"])
+	assert.NotEmpty(t, entry.TransformOverrides)
+}

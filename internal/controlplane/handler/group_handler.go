@@ -28,8 +28,8 @@ type GroupServiceInterface interface {
 }
 
 type GroupHandler struct {
-	svc        GroupServiceInterface
-	modelRepo  ModelRepoInterface
+	svc          GroupServiceInterface
+	modelRepo    ModelRepoInterface
 	providerRepo ProviderRepoInterface
 }
 
@@ -46,9 +46,9 @@ func NewGroupHandler(svc GroupServiceInterface, modelRepo ModelRepoInterface, pr
 }
 
 type addModelsRequest struct {
-	ModelIDs        []uuid.UUID         `json:"model_ids" binding:"required,min=1"`
-	Priorities      map[uuid.UUID]int   `json:"priorities,omitempty"`
-	Weights         map[uuid.UUID]int   `json:"weights,omitempty"`
+	ModelIDs        []uuid.UUID          `json:"model_ids" binding:"required,min=1"`
+	Priorities      map[uuid.UUID]int    `json:"priorities,omitempty"`
+	Weights         map[uuid.UUID]int    `json:"weights,omitempty"`
 	ComplexityTiers map[uuid.UUID]string `json:"complexity_tiers,omitempty"`
 }
 
@@ -425,17 +425,24 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 	}
 
 	type modelInfo struct {
-		ID             uuid.UUID `json:"id"`
-		Name           string    `json:"name"`
-		ModelType      string    `json:"model_type,omitempty"`
-		ProviderID     uuid.UUID `json:"provider_id,omitempty"`
-		ProviderType   string    `json:"provider_type,omitempty"`
-		ProviderName   string    `json:"provider_name,omitempty"`
-		Endpoint       string    `json:"endpoint,omitempty"`
-		Priority       *int      `json:"priority"`
-		Weight         *int      `json:"weight"`
-		ComplexityTier string    `json:"complexity_tier"`
-		ParamStyle     string    `json:"param_style,omitempty"`
+		ID                      uuid.UUID            `json:"id"`
+		Name                    string               `json:"name"`
+		ModelType               string               `json:"model_type,omitempty"`
+		ProviderID              uuid.UUID            `json:"provider_id,omitempty"`
+		ProviderType            string               `json:"provider_type,omitempty"`
+		ProviderName            string               `json:"provider_name,omitempty"`
+		Endpoint                string               `json:"endpoint,omitempty"`
+		Priority                *int                 `json:"priority"`
+		Weight                  *int                 `json:"weight"`
+		ComplexityTier          string               `json:"complexity_tier"`
+		ParamStyle              string               `json:"param_style,omitempty"`
+		BaseModel               string               `json:"base_model"`
+		UpstreamModelID         string               `json:"upstream_model_id,omitempty"`
+		ProtocolMode            string               `json:"protocol_mode"`
+		ParamProfile            string               `json:"param_profile"`
+		UnsupportedParamPolicy  string               `json:"unsupported_param_policy"`
+		SupportedParamsOverride model.PlannerJSONMap `json:"supported_params_override"`
+		TransformOverrides      model.PlannerJSONMap `json:"transform_overrides"`
 	}
 
 	type groupInfo struct {
@@ -477,23 +484,36 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 					if m.Enabled == nil || !*m.Enabled {
 						continue
 					}
-				mi.Name = m.UpstreamName()
-				mi.ModelType = m.ModelType
-				mi.ProviderID = m.ProviderID
-				mi.ParamStyle = m.ParamStyle
-				providerEnabled := false
-				if h.providerRepo != nil {
-					p, err := h.providerRepo.GetByID(m.ProviderID)
-					if err == nil && p != nil && p.Enabled {
-						mi.ProviderType = p.DefinitionID
-						if mi.ProviderType == "" {
-							mi.ProviderType = p.Type
-						}
-						mi.ProviderName = p.Name
-						mi.Endpoint = p.Endpoint
-						providerEnabled = true
+					mi.Name = m.UpstreamName()
+					mi.ModelType = m.ModelType
+					mi.ProviderID = m.ProviderID
+					mi.ParamStyle = m.ParamStyle
+					mi.BaseModel = m.BaseModel
+					mi.UpstreamModelID = m.UpstreamModelID
+					mi.ProtocolMode = defaultString(m.ProtocolMode, model.ProtocolModeAuto)
+					mi.ParamProfile = defaultString(m.ParamProfile, model.ParamProfileAuto)
+					mi.UnsupportedParamPolicy = defaultString(m.UnsupportedParamPolicy, model.UnsupportedParamPolicyPreserve)
+					mi.SupportedParamsOverride = m.SupportedParamsOverride
+					if mi.SupportedParamsOverride == nil {
+						mi.SupportedParamsOverride = model.PlannerJSONMap{}
 					}
-				}
+					mi.TransformOverrides = m.TransformOverrides
+					if mi.TransformOverrides == nil {
+						mi.TransformOverrides = model.PlannerJSONMap{}
+					}
+					providerEnabled := false
+					if h.providerRepo != nil {
+						p, err := h.providerRepo.GetByID(m.ProviderID)
+						if err == nil && p != nil && p.Enabled {
+							mi.ProviderType = p.DefinitionID
+							if mi.ProviderType == "" {
+								mi.ProviderType = p.Type
+							}
+							mi.ProviderName = p.Name
+							mi.Endpoint = p.Endpoint
+							providerEnabled = true
+						}
+					}
 					if !providerEnabled {
 						continue
 					}
@@ -519,4 +539,10 @@ func upstreamModelName(m *model.Model) string {
 		return m.UpstreamModelID
 	}
 	return m.Name
+}
+func defaultString(v, fallback string) string {
+	if v == "" {
+		return fallback
+	}
+	return v
 }

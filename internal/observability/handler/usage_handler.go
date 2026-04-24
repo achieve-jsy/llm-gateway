@@ -180,6 +180,7 @@ func (h *UsageHandler) Logs(c *gin.Context) {
 		Provider:  c.Query("provider"),
 		Status:    c.Query("status"),
 		Endpoint:  c.Query("endpoint"),
+		Seedance:  parseBoolQuery(c.Query("seedance")),
 		Page:      page,
 		PageSize:  pageSize,
 	}
@@ -320,8 +321,10 @@ func (h *UsageHandler) MyLogs(c *gin.Context) {
 		UserName:  c.Query("user_name"),
 		ModelName: c.Query("model_name"),
 		GroupName: c.Query("group_name"),
+		Provider:  c.Query("provider"),
 		Status:    c.Query("status"),
 		Endpoint:  c.Query("endpoint"),
+		Seedance:  parseBoolQuery(c.Query("seedance")),
 		Page:      page,
 		PageSize:  pageSize,
 	}
@@ -382,6 +385,15 @@ func parseDateTime(s string) (time.Time, error) {
 	return time.Parse("2006-01-02", s)
 }
 
+func parseBoolQuery(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
+}
+
 // GetDashboard GET /api/v1/usage/dashboard
 // 按 scope(company|studio|dept|user) 聚合用量，支持按角色注入过滤条件
 func (h *UsageHandler) GetDashboard(c *gin.Context) {
@@ -403,7 +415,7 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 
 	startStr := c.DefaultQuery("start", time.Now().AddDate(0, -1, 0).Format("2006-01-02"))
 	endStr := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
-	modelName   := c.Query("model_name")
+	modelName := c.Query("model_name")
 	filterStatus := c.Query("status")
 	filterEndpoint := c.Query("endpoint")
 
@@ -632,9 +644,9 @@ func (h *UsageHandler) DashboardTrend(c *gin.Context) {
 	}
 	startStr := c.DefaultQuery("start", time.Now().AddDate(0, -1, 0).Format("2006-01-02"))
 	endStr := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
-	filterUserID  := c.Query("user_id")
-	filterModel   := c.Query("model_name")
-	filterStatus  := c.Query("status")
+	filterUserID := c.Query("user_id")
+	filterModel := c.Query("model_name")
+	filterStatus := c.Query("status")
 
 	actor := rbac.GetActor(c)
 	usagePol := policy.UsagePolicy{}
@@ -756,10 +768,11 @@ func (h *UsageHandler) DashboardModels(c *gin.Context) {
 
 // ScopedLogs GET /api/v1/usage/scoped/logs
 // 按 JWT role 自动注入 scope 过滤，只返回元数据（无 prompt/response 内容）：
-//   admin       → 全公司所有记录
-//   studio_admin → 自己工作室下所有部门成员的记录
-//   dept_admin  → 自己部门成员的记录
-//   其他         → 仅自己的记录（等同 /my/usage/logs）
+//
+//	admin       → 全公司所有记录
+//	studio_admin → 自己工作室下所有部门成员的记录
+//	dept_admin  → 自己部门成员的记录
+//	其他         → 仅自己的记录（等同 /my/usage/logs）
 func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 	if h.db == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db not configured"})
@@ -768,13 +781,14 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 
 	startStr := c.DefaultQuery("start", time.Now().AddDate(0, -1, 0).Format("2006-01-02"))
 	endStr := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
-	modelName    := c.Query("model_name")
-	statusStr    := c.Query("status")   // "success" | "error" | ""
-	filterUserID := c.Query("user_id")  // 查看特定成员时传入（精确）
-	filterUser   := c.Query("user_name") // 成员姓名模糊搜索
-	filterDeptID := c.Query("dept_id")   // 按部门筛选
+	modelName := c.Query("model_name")
+	statusStr := c.Query("status")         // "success" | "error" | ""
+	filterUserID := c.Query("user_id")     // 查看特定成员时传入（精确）
+	filterUser := c.Query("user_name")     // 成员姓名模糊搜索
+	filterDeptID := c.Query("dept_id")     // 按部门筛选
 	filterStudioID := c.Query("studio_id") // 按工作室筛选
-	filterKeyType  := c.Query("key_type")   // personal | service
+	filterKeyType := c.Query("key_type")   // personal | service
+	filterProvider := c.Query("provider")
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
 	if page < 1 {
@@ -812,10 +826,16 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 		base = base.Where("COALESCE(NULLIF(call_logs.key_type, ''), 'personal') = ?", filterKeyType)
 	}
 	if modelName != "" {
-		base = base.Where("call_logs.model ILIKE ?", "%"+modelName+"%")
+		base = base.Where("(call_logs.model ILIKE ? OR call_logs.routed_model ILIKE ? OR call_logs.group_name ILIKE ?)", "%"+modelName+"%", "%"+modelName+"%", "%"+modelName+"%")
 	}
 	if endpoint := c.Query("endpoint"); endpoint != "" {
 		base = base.Where("call_logs.inbound_endpoint = ?", endpoint)
+	}
+	if filterProvider != "" {
+		base = base.Where("call_logs.provider = ?", filterProvider)
+	}
+	if parseBoolQuery(c.Query("seedance")) {
+		base = service.ApplySeedanceLogFilter(base, "call_logs")
 	}
 	switch statusStr {
 	case "success":
@@ -967,8 +987,8 @@ func (h *UsageHandler) DashboardUsers(c *gin.Context) {
 	}
 
 	studioID := c.Query("studio_id")
-	deptID   := c.Query("dept_id")
-	db       := h.db.WithContext(c.Request.Context())
+	deptID := c.Query("dept_id")
+	db := h.db.WithContext(c.Request.Context())
 
 	// 全局汇总（不分页）
 	var sumRow struct {
@@ -1070,7 +1090,7 @@ func (h *UsageHandler) DashboardUserTopModels(c *gin.Context) {
 	}
 
 	studioID := c.Query("studio_id")
-	deptID   := c.Query("dept_id")
+	deptID := c.Query("dept_id")
 
 	type topModelRow struct {
 		UserID      string  `gorm:"column:user_id"`

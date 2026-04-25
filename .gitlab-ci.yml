@@ -70,7 +70,6 @@ build-backend-ci-image-test:
     - if: $CI_COMMIT_BRANCH == "test"
       changes:
         - "deploy/docker/ci-backend.Dockerfile"
-        - ".gitlab-ci.yml"
     - when: manual
       allow_failure: true
 
@@ -91,28 +90,44 @@ build-backend-test:
     - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
     - |
       started_at=$(date +%s)
+      step_start=0
+      mark_start() { step_start=$(date +%s); }
+      mark_done() { now=$(date +%s); echo "TIMING ${1}=$((now - step_start))s"; }
+
       export PATH="/go/bin:/usr/local/go/bin:${PATH}"
       go version
       go env GOCACHE GOMODCACHE
       docker buildx version
+
+      mark_start
       mkdir -p .backend-dist "$GOCACHE" "$GOMODCACHE"
       CGO_ENABLED=0 go build -mod=vendor -ldflags="-s -w" -o .backend-dist/ ./cmd/gateway ./cmd/control-plane
+      mark_done go_build
 
+      mark_start
       mkdir -p .backend-image-context
       cp .backend-dist/gateway .backend-dist/control-plane .backend-image-context/
       cp -R config atlas-migrations .backend-image-context/
+      mark_done image_context
 
+      mark_start
       docker build --target gateway --build-arg APP_ENV=test \
         -f deploy/docker/backend.Dockerfile \
-        -t ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG} .backend-image-context
+        -t ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG} .backend-image-context & gateway_build=$!
       docker build --target control-plane --build-arg APP_ENV=test \
         -f deploy/docker/backend.Dockerfile \
-        -t ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} .backend-image-context
+        -t ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} .backend-image-context & cp_build=$!
+      wait $gateway_build
+      wait $cp_build
+      mark_done runtime_build
 
+      mark_start
       docker push ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG} & gateway_push=$!
       docker push ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} & cp_push=$!
       wait $gateway_push
       wait $cp_push
+      mark_done image_push
+
       elapsed=$(( $(date +%s) - started_at ))
       echo "Backend images built and pushed in ${elapsed}s"
   rules:

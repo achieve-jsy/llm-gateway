@@ -160,7 +160,8 @@ func (h *UsageHandler) Options(c *gin.Context) {
 
 // Logs GET /api/v1/usage/logs — 调用明细查询
 func (h *UsageHandler) Logs(c *gin.Context) {
-	from, to, ok := parseDateRange(c)
+	seedance := parseBoolQuery(c.Query("seedance"))
+	from, to, ok := parseDateRangeWithDefault(c, seedance)
 	if !ok {
 		return
 	}
@@ -180,7 +181,7 @@ func (h *UsageHandler) Logs(c *gin.Context) {
 		Provider:  c.Query("provider"),
 		Status:    c.Query("status"),
 		Endpoint:  c.Query("endpoint"),
-		Seedance:  parseBoolQuery(c.Query("seedance")),
+		Seedance:  seedance,
 		Page:      page,
 		PageSize:  pageSize,
 	}
@@ -199,7 +200,8 @@ func (h *UsageHandler) MyQuery(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not authenticated"})
 		return
 	}
-	from, to, ok := parseDateRange(c)
+	seedance := parseBoolQuery(c.Query("seedance"))
+	from, to, ok := parseDateRangeWithDefault(c, seedance)
 	if !ok {
 		return
 	}
@@ -305,7 +307,8 @@ func (h *UsageHandler) MyLogs(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not authenticated"})
 		return
 	}
-	from, to, ok := parseDateRange(c)
+	seedance := parseBoolQuery(c.Query("seedance"))
+	from, to, ok := parseDateRangeWithDefault(c, seedance)
 	if !ok {
 		return
 	}
@@ -324,7 +327,7 @@ func (h *UsageHandler) MyLogs(c *gin.Context) {
 		Provider:  c.Query("provider"),
 		Status:    c.Query("status"),
 		Endpoint:  c.Query("endpoint"),
-		Seedance:  parseBoolQuery(c.Query("seedance")),
+		Seedance:  seedance,
 		Page:      page,
 		PageSize:  pageSize,
 	}
@@ -339,9 +342,19 @@ func (h *UsageHandler) MyLogs(c *gin.Context) {
 // parseDateRange 解析并校验日期范围参数
 // 支持两种格式：YYYY-MM-DD（天精度）和 YYYY-MM-DDTHH:MM / YYYY-MM-DD HH:MM（小时精度）
 func parseDateRange(c *gin.Context) (from, to time.Time, ok bool) {
+	return parseDateRangeWithDefault(c, false)
+}
+
+func parseDateRangeWithDefault(c *gin.Context, allowDefault bool) (from, to time.Time, ok bool) {
 	fromStr := c.Query("from")
 	toStr := c.Query("to")
 	if fromStr == "" || toStr == "" {
+		if allowDefault {
+			to = time.Now()
+			from = to.AddDate(0, 0, -30)
+			ok = true
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": "from and to are required (YYYY-MM-DD or YYYY-MM-DDTHH:MM)"})
 		return
 	}

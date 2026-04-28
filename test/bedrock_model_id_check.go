@@ -1,6 +1,3 @@
-//go:build bedrock_debug
-// +build bedrock_debug
-
 package main
 
 import (
@@ -23,8 +20,8 @@ import (
 )
 
 const (
-	dbConnStr     = "postgres://llm_gateway:CHANGE_ME_PASSWORD@192.0.2.10:5433/llm_gateway_prod?sslmode=disable"
-	encryptionKey = "12345678901234567890123456789012"
+	dbConnStr      = "postgres://llm_gateway:CHANGE_ME_PASSWORD@192.0.2.10:5433/llm_gateway_prod?sslmode=disable"
+	encryptionKey  = "12345678901234567890123456789012"
 )
 
 type AWSCredentials struct {

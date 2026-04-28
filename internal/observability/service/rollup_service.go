@@ -471,7 +471,6 @@ type LogsQueryParams struct {
 	Provider  string
 	Status    string // "success" | "error" | ""
 	Endpoint  string // 入口端点过滤（inbound_endpoint）
-	Seedance  bool   // 仅 Seedance 视频/素材相关请求
 	Page      int
 	PageSize  int
 	// 鉴权注入
@@ -537,7 +536,6 @@ type LogRow struct {
 	OutputPriceSnapshot *float64        `json:"output_price_snapshot" gorm:"column:output_price_snapshot"`
 	RequestBody         *datatypes.JSON `json:"request_body,omitempty"  gorm:"column:request_body"`
 	ResponseBody        *datatypes.JSON `json:"response_body,omitempty" gorm:"column:response_body"`
-	TaskID              string          `json:"task_id,omitempty"       gorm:"column:task_id"`
 	// DocumentsCount 来自 call_traces.request_body.documents 数组长度（Rerank）
 	DocumentsCount *int `json:"documents_count,omitempty" gorm:"column:documents_count"`
 }
@@ -607,9 +605,6 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 	if params.Endpoint != "" {
 		query = query.Where("call_logs.inbound_endpoint = ?", params.Endpoint)
 	}
-	if params.Seedance {
-		query = ApplySeedanceLogFilter(query, "call_logs")
-	}
 	switch params.Status {
 	case "success":
 		query = query.Where("call_logs.status = 200")
@@ -641,7 +636,6 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 			"call_logs.input_cost_usd, call_logs.output_cost_usd, call_logs.cache_read_cost_usd, call_logs.est_cost_usd, " +
 			"call_logs.input_price_snapshot, call_logs.output_price_snapshot, " +
 			"ct.request_body AS request_body, ct.response_body AS response_body, " +
-			"COALESCE(NULLIF(substring(call_logs.inbound_endpoint FROM '/v1/contents/generations/tasks/([^/?#]+)'), ''), ct.response_body->>'id', ct.response_body->>'task_id') AS task_id, " +
 			"CASE WHEN jsonb_typeof(ct.request_body->'documents') = 'array' " +
 			"THEN jsonb_array_length(ct.request_body->'documents') ELSE NULL END AS documents_count").
 		Joins("LEFT JOIN call_traces ct ON ct.request_id = call_logs.request_id").
@@ -656,30 +650,6 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 	}
 
 	return &LogsResponse{Rows: rows, Total: total, Page: params.Page, PageSize: params.PageSize}, nil
-}
-
-func ApplySeedanceLogFilter(query *gorm.DB, tableAlias string) *gorm.DB {
-	prefix := ""
-	if tableAlias != "" {
-		prefix = tableAlias + "."
-	}
-	return query.Where(`(
-		`+prefix+`inbound_endpoint = ? OR
-		`+prefix+`inbound_endpoint LIKE ? OR
-		`+prefix+`inbound_endpoint LIKE ? OR
-		`+prefix+`model LIKE ? OR
-		`+prefix+`model LIKE ? OR
-		`+prefix+`model LIKE ? OR
-		`+prefix+`model LIKE ?
-	)`,
-		"/v1/contents/generations/tasks",
-		"/v1/contents/generations/tasks/%",
-		"/v1/assets/%",
-		"%:CreateTask",
-		"%:GetTask",
-		"seedance-task:%",
-		"seedance-asset:%",
-	)
 }
 
 // MyStatsRow 个人统计结果行
@@ -1026,7 +996,7 @@ func (s *RollupService) aggregateUserDailyStats(ctx context.Context, date time.T
 			LEFT JOIN departments d ON (d.dept_id = cl.dept_id OR d.id::text = cl.dept_id)
 			LEFT JOIN dept_studio_map dsm ON dsm.dept_id = COALESCE(d.dept_id, cl.dept_id)
 			WHERE cl.ts::date = ?::date
-				AND (` + obsmodel.WhereExcludeServiceKeyLogsCL + `)
+				AND (`+obsmodel.WhereExcludeServiceKeyLogsCL+`)
 			GROUP BY COALESCE(cl.user_id, 'unknown'),
 					 COALESCE(dsm.studio_id::text, ''),
 					 COALESCE(d.dept_id, cl.dept_id, ''),

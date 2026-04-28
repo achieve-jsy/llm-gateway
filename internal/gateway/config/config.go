@@ -11,15 +11,14 @@ import (
 
 // Config 网关全局配置
 type Config struct {
-	Server          ServerConfig
-	Redis           RedisConfig
-	Database        DatabaseConfig
-	OTLP            OTLPConfig
-	Provider        ProviderConfig
-	Auth            AuthConfig
-	OIDC            OIDCConfig
-	Observability   ObservabilityConfig
-	UpstreamPlanner UpstreamPlannerConfig
+	Server        ServerConfig
+	Redis         RedisConfig
+	Database      DatabaseConfig
+	OTLP          OTLPConfig
+	Provider      ProviderConfig
+	Auth          AuthConfig
+	OIDC          OIDCConfig
+	Observability ObservabilityConfig
 }
 
 // ServerConfig 服务配置
@@ -44,14 +43,6 @@ type ObservabilityConfig struct {
 	SpoolHighWatermark     int64
 	SpoolClaimMinIdle      time.Duration
 	BillableReservationTTL time.Duration
-}
-
-// UpstreamPlannerConfig 控制 Upstream Planner v2 的灰度开关。
-// 默认全部关闭，确保重构期间旧转发链路行为不变。
-type UpstreamPlannerConfig struct {
-	Enabled            bool `mapstructure:"enabled"`
-	ShadowEnabled      bool `mapstructure:"shadow_enabled"`
-	DebugHeaderEnabled bool `mapstructure:"debug_header_enabled"`
 }
 
 // OTLPConfig OpenTelemetry 导出配置
@@ -104,9 +95,6 @@ func Load() *Config {
 	v.SetDefault("observability.spool_high_watermark", 80_000)
 	v.SetDefault("observability.spool_claim_min_idle", "30s")
 	v.SetDefault("observability.billable_reservation_ttl", "10m")
-	v.SetDefault("upstream_planner.enabled", false)
-	v.SetDefault("upstream_planner.shadow_enabled", false)
-	v.SetDefault("upstream_planner.debug_header_enabled", false)
 	v.SetDefault("otlp.endpoint", "localhost:4317")
 	v.SetDefault("otlp.enabled", false)
 	v.SetDefault("provider.internal_token", "")
@@ -151,9 +139,6 @@ func Load() *Config {
 	_ = v.BindEnv("redis.password", "REDIS_PASSWORD")
 	_ = v.BindEnv("redis.db", "REDIS_DB")
 	_ = v.BindEnv("database.url", "DATABASE_URL")
-	_ = v.BindEnv("upstream_planner.enabled", "UPSTREAM_PLANNER_ENABLED")
-	_ = v.BindEnv("upstream_planner.shadow_enabled", "UPSTREAM_PLANNER_SHADOW_ENABLED")
-	_ = v.BindEnv("upstream_planner.debug_header_enabled", "UPSTREAM_PLANNER_DEBUG_HEADER_ENABLED")
 	_ = v.BindEnv("otlp.endpoint", "OTLP_ENDPOINT")
 	_ = v.BindEnv("otlp.enabled", "OTLP_ENABLED")
 	_ = v.BindEnv("provider.internal_token", "INTERNAL_TOKEN")
@@ -187,11 +172,6 @@ func Load() *Config {
 			SpoolHighWatermark:     v.GetInt64("observability.spool_high_watermark"),
 			SpoolClaimMinIdle:      v.GetDuration("observability.spool_claim_min_idle"),
 			BillableReservationTTL: v.GetDuration("observability.billable_reservation_ttl"),
-		},
-		UpstreamPlanner: UpstreamPlannerConfig{
-			Enabled:            v.GetBool("upstream_planner.enabled"),
-			ShadowEnabled:      v.GetBool("upstream_planner.shadow_enabled"),
-			DebugHeaderEnabled: v.GetBool("upstream_planner.debug_header_enabled"),
 		},
 		OTLP: OTLPConfig{
 			Endpoint: v.GetString("otlp.endpoint"),

@@ -9,99 +9,8 @@
         style="width:100%;cursor:pointer"
         @row-click="onRowClick"
       >
-        <!-- Seedance 请求日志专用列 -->
-        <template v-if="isSeedanceMode">
-          <el-table-column prop="ts" label="时间" min-width="155" :sortable="sortableColumns?.includes('ts') || false">
-            <template #default="{ row }">
-              <span class="urt-time">{{ fmtDateTime(row.ts) }}</span>
-            </template>
-          </el-table-column>
-
-          <el-table-column label="操作" min-width="130">
-            <template #default="{ row }">
-              <div class="urt-op-cell">
-                <el-tag size="small" :type="seedanceOperationType(row)" effect="plain">{{ seedanceOperation(row) }}</el-tag>
-                <span class="urt-endpoint">{{ seedanceEndpointLabel(row) }}</span>
-              </div>
-            </template>
-          </el-table-column>
-
-          <el-table-column label="任务/资源" min-width="190" show-overflow-tooltip>
-            <template #default="{ row }">
-              <span class="urt-mono">{{ seedanceResourceID(row) }}</span>
-            </template>
-          </el-table-column>
-
-          <el-table-column label="模型" min-width="170" show-overflow-tooltip>
-            <template #default="{ row }">
-              <div class="urt-model-cell">
-                <span class="urt-model-name">{{ seedancePrimaryModel(row) }}</span>
-                <div v-if="seedanceSecondaryModel(row)" class="urt-model-routed">
-                  <span class="urt-arrow">↳</span>
-                  <span class="urt-model-name urt-model-name--muted">{{ seedanceSecondaryModel(row) }}</span>
-                </div>
-              </div>
-            </template>
-          </el-table-column>
-
-          <el-table-column v-if="effectiveShowProvider" prop="provider" label="渠道" min-width="110" show-overflow-tooltip>
-            <template #default="{ row }">
-              <span v-if="row.provider" class="urt-provider">{{ row.provider }}</span>
-              <span v-else class="urt-dash">—</span>
-            </template>
-          </el-table-column>
-
-          <el-table-column v-if="effectiveShowKey" label="Key" min-width="110" show-overflow-tooltip>
-            <template #default="{ row }">
-              <span class="urt-name">{{ resolveKey(row) }}</span>
-            </template>
-          </el-table-column>
-
-          <el-table-column v-if="effectiveShowUser" prop="user_name" :label="userLabel ?? '用户'" min-width="100" show-overflow-tooltip>
-            <template #default="{ row }">
-              <span v-if="row.key_type !== 'service' && row.user_name" class="urt-name">{{ row.user_name }}</span>
-              <span v-else class="urt-dash">—</span>
-            </template>
-          </el-table-column>
-
-          <el-table-column label="HTTP / 上游" min-width="105" align="center">
-            <template #default="{ row }">
-              <div class="urt-status-stack">
-                <el-tag :type="row.status === 200 ? 'success' : 'danger'" size="small" effect="dark">{{ row.status || '—' }}</el-tag>
-                <span v-if="row.upstream_status" class="urt-upstream-status">上游 {{ row.upstream_status }}</span>
-              </div>
-            </template>
-          </el-table-column>
-
-          <el-table-column prop="duration_ms" label="耗时" min-width="80" align="right" :sortable="sortableColumns?.includes('duration_ms') || false">
-            <template #default="{ row }">
-              <span class="urt-duration">{{ fmtDuration(row.duration_ms) }}</span>
-            </template>
-          </el-table-column>
-
-          <el-table-column label="结果" min-width="120">
-            <template #default="{ row }">
-              <el-tag v-if="seedanceResult(row) !== '—'" :type="seedanceResultType(row)" size="small" effect="plain">{{ seedanceResult(row) }}</el-tag>
-              <span v-else class="urt-dash">—</span>
-            </template>
-          </el-table-column>
-
-          <el-table-column label="错误" min-width="180" show-overflow-tooltip>
-            <template #default="{ row }">
-              <span v-if="seedanceError(row)" class="urt-error-text">{{ seedanceError(row) }}</span>
-              <span v-else class="urt-dash">—</span>
-            </template>
-          </el-table-column>
-
-          <el-table-column label="详情" min-width="64" align="center" fixed="right">
-            <template #default="{ row }">
-              <el-button link type="primary" size="small" @click.stop="openTrace(row)">详情</el-button>
-            </template>
-          </el-table-column>
-        </template>
-
         <!-- Embedding / Rerank 精简列 -->
-        <template v-else-if="isCompactMode">
+        <template v-if="isCompactMode">
           <el-table-column
             prop="ts"
             label="时间"
@@ -511,7 +420,6 @@ const props = withDefaults(defineProps<{
 
   // Trace Drawer 模式
   traceMetaMode?: 'full' | 'personal'
-  displayMode?: 'default' | 'seedance'
 
   /** 当前 Tab 端点类型，控制列布局 */
   endpointType?: UsageEndpointType
@@ -526,13 +434,11 @@ const props = withDefaults(defineProps<{
   showSource: false,
   currency: 'USD',
   traceMetaMode: 'full',
-  displayMode: 'default',
   endpointType: 'chat',
 })
 
-const isSeedanceMode = computed(() => props.displayMode === 'seedance')
 const isCompactMode = computed(() =>
-  !isSeedanceMode.value && (props.endpointType === 'embedding' || props.endpointType === 'rerank'),
+  props.endpointType === 'embedding' || props.endpointType === 'rerank',
 )
 
 // 精简模式下隐藏 Key/费用等 Chat 专属列
@@ -616,112 +522,6 @@ function onRowClick(row: LogRow) {
 function fmtDocCount(row: LogRow): string {
   const n = resolveRerankDocumentsCount(row)
   return n != null ? String(n) : '—'
-}
-
-function seedanceOperation(row: LogRow): string {
-  const model = row.model || ''
-  const endpoint = row.inbound_endpoint || ''
-  if (model.includes(':CreateTask') || endpoint === '/v1/contents/generations/tasks') return 'CreateTask'
-  if (model.includes(':GetTask') || endpoint.startsWith('/v1/contents/generations/tasks/')) return 'GetTask'
-  const assetMatch = model.match(/^seedance-asset:(.+)$/) || endpoint.match(/^\/v1\/assets\/([^/?#]+)/)
-  if (assetMatch?.[1]) return assetMatch[1]
-  return 'Seedance'
-}
-
-function seedanceOperationType(row: LogRow): 'primary' | 'success' | 'warning' | 'info' | 'danger' {
-  const op = seedanceOperation(row)
-  if (op === 'CreateTask') return 'primary'
-  if (op === 'GetTask') return 'success'
-  if (row.status && row.status >= 400) return 'danger'
-  if (op.toLowerCase().includes('asset')) return 'warning'
-  return 'info'
-}
-
-function seedanceEndpointLabel(row: LogRow): string {
-  const endpoint = row.inbound_endpoint || ''
-  if (endpoint === '/v1/contents/generations/tasks') return 'tasks'
-  if (endpoint.startsWith('/v1/contents/generations/tasks/')) return 'task detail'
-  if (endpoint.startsWith('/v1/assets/')) return 'assets'
-  return endpoint || '—'
-}
-
-function seedanceResourceID(row: LogRow): string {
-  if (row.task_id) return row.task_id
-  const endpoint = row.inbound_endpoint || ''
-  const taskPath = endpoint.match(/^\/v1\/contents\/generations\/tasks\/([^/?#]+)/)
-  if (taskPath?.[1]) return taskPath[1]
-  const bodyTask = stringAt(row.request_body, ['id']) || stringAt(row.request_body, ['task_id']) || stringAt(row.response_body, ['id']) || stringAt(row.response_body, ['task_id'])
-  if (bodyTask) return bodyTask
-  const asset = stringAt(row.request_body, ['asset_id']) || stringAt(row.request_body, ['asset_group_id']) || stringAt(row.response_body, ['asset_id']) || stringAt(row.response_body, ['asset_group_id'])
-  if (asset) return asset
-  return row.request_id || '—'
-}
-
-function seedancePrimaryModel(row: LogRow): string {
-  const clean = stripSeedanceOperation(row.model || '')
-  return clean || row.group_name || row.routed_model || '—'
-}
-
-function seedanceSecondaryModel(row: LogRow): string {
-  const primary = seedancePrimaryModel(row)
-  if (row.routed_model && row.routed_model !== primary) return row.routed_model
-  if (row.group_name && row.group_name !== primary) return row.group_name
-  return ''
-}
-
-function stripSeedanceOperation(model: string): string {
-  return model.replace(/:(CreateTask|GetTask)$/u, '').replace(/^seedance-(task|asset):/u, 'seedance-')
-}
-
-function seedanceResult(row: LogRow): string {
-  const status = stringAt(row.response_body, ['status']) || stringAt(row.response_body, ['data', 'status']) || stringAt(row.request_body, ['status'])
-  if (status) return status
-  if (row.status >= 200 && row.status < 300) return 'ok'
-  if (row.status >= 400) return 'failed'
-  return '—'
-}
-
-function seedanceResultType(row: LogRow): 'primary' | 'success' | 'warning' | 'info' | 'danger' {
-  const result = seedanceResult(row).toLowerCase()
-  if (['succeeded', 'success', 'ok'].includes(result)) return 'success'
-  if (['failed', 'error'].includes(result) || row.status >= 400) return 'danger'
-  if (['running', 'processing', 'submitted', 'queued'].includes(result)) return 'warning'
-  return 'info'
-}
-
-function seedanceError(row: LogRow): string {
-  if (row.status >= 400 && !row.response_body) return `HTTP ${row.status}`
-  return stringAt(row.response_body, ['error', 'message']) ||
-    stringAt(row.response_body, ['error_message']) ||
-    stringAt(row.response_body, ['message']) ||
-    stringAt(row.response_body, ['data', 'error_message']) ||
-    ''
-}
-
-function stringAt(raw: unknown, path: string[]): string {
-  const value = valueAt(raw, path)
-  if (value == null) return ''
-  if (typeof value === 'string') return value.trim()
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  return ''
-}
-
-function valueAt(raw: unknown, path: string[]): unknown {
-  const obj = normalizeJSON(raw)
-  let cur: any = obj
-  for (const key of path) {
-    if (!cur || typeof cur !== 'object') return undefined
-    cur = cur[key]
-  }
-  return cur
-}
-
-function normalizeJSON(raw: unknown): unknown {
-  if (!raw) return undefined
-  if (typeof raw === 'string') {
-    try { return JSON.parse(raw) } catch { return undefined }
-  }
-  return raw
 }
 
 // ── 端点标签 ──

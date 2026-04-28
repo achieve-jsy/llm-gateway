@@ -12,13 +12,6 @@ type VideoTaskRepo struct {
 	db *gorm.DB
 }
 
-type VideoTaskScope struct {
-	IsGlobal  bool
-	UserID    string
-	StudioIDs []string
-	DeptIDs   []string
-}
-
 type TrendRow struct {
 	Date      string `json:"date"`
 	Tasks     int64  `json:"tasks"`
@@ -64,15 +57,10 @@ type VideoTaskUpdateFields struct {
 
 // List 分页查询
 func (r *VideoTaskRepo) List(page, pageSize int, providerName, modelName, status, userID string) ([]model.VideoTask, int64, error) {
-	return r.ListScoped(page, pageSize, providerName, modelName, status, userID, VideoTaskScope{IsGlobal: true})
-}
-
-func (r *VideoTaskRepo) ListScoped(page, pageSize int, providerName, modelName, status, userID string, scope VideoTaskScope) ([]model.VideoTask, int64, error) {
 	var tasks []model.VideoTask
 	var total int64
 
 	query := r.db.Model(&model.VideoTask{})
-	query = r.applyScope(query, scope)
 
 	if providerName != "" {
 		query = query.Where("provider_name = ?", providerName)
@@ -101,31 +89,12 @@ func (r *VideoTaskRepo) ListScoped(page, pageSize int, providerName, modelName, 
 
 // GetByID 按 task_id 查询
 func (r *VideoTaskRepo) GetByID(taskID string) (*model.VideoTask, error) {
-	return r.GetByIDScoped(taskID, VideoTaskScope{IsGlobal: true})
-}
-
-func (r *VideoTaskRepo) GetByIDScoped(taskID string, scope VideoTaskScope) (*model.VideoTask, error) {
-	var task model.VideoTask
-	query := r.applyScope(r.db.Model(&model.VideoTask{}), scope)
-	if err := query.
-		Preload("Events", func(db *gorm.DB) *gorm.DB {
-			return db.Order("created_at ASC").Order("id ASC")
-		}).
-		Where("task_id = ?", taskID).
-		First(&task).Error; err != nil {
-		return nil, err
-	}
-	return &task, nil
-}
-
-// GetByIDAndUserID 按 task_id + user_id 查询，供个人中心详情隔离使用。
-func (r *VideoTaskRepo) GetByIDAndUserID(taskID, userID string) (*model.VideoTask, error) {
 	var task model.VideoTask
 	if err := r.db.
 		Preload("Events", func(db *gorm.DB) *gorm.DB {
 			return db.Order("created_at ASC").Order("id ASC")
 		}).
-		Where("task_id = ? AND user_id = ?", taskID, userID).
+		Where("task_id = ?", taskID).
 		First(&task).Error; err != nil {
 		return nil, err
 	}
@@ -231,11 +200,7 @@ func (r *VideoTaskRepo) GetTaskMeta(taskID string) (*VideoTaskMeta, error) {
 }
 
 func (r *VideoTaskRepo) statsQuery(start, end, userID, providerName, modelName string) *gorm.DB {
-	return r.statsQueryScoped(start, end, userID, providerName, modelName, VideoTaskScope{IsGlobal: true})
-}
-
-func (r *VideoTaskRepo) statsQueryScoped(start, end, userID, providerName, modelName string, scope VideoTaskScope) *gorm.DB {
-	query := r.applyScope(r.db.Model(&model.VideoTask{}), scope)
+	query := r.db.Model(&model.VideoTask{})
 	if start != "" {
 		query = query.Where("created_at >= ?", start)
 	}
@@ -254,42 +219,12 @@ func (r *VideoTaskRepo) statsQueryScoped(start, end, userID, providerName, model
 	return query
 }
 
-func (r *VideoTaskRepo) applyScope(query *gorm.DB, scope VideoTaskScope) *gorm.DB {
-	if scope.IsGlobal {
-		return query
-	}
-	if scope.UserID != "" {
-		return query.Where("video_tasks.user_id = ?", scope.UserID)
-	}
-	if len(scope.StudioIDs) > 0 {
-		return query.Where(`video_tasks.user_id IN (
-			SELECT CAST(u.id AS TEXT)
-			FROM users u
-			JOIN departments d ON d.id = u.dept_id
-			WHERE CAST(d.studio_id AS TEXT) IN ?
-		)`, scope.StudioIDs)
-	}
-	if len(scope.DeptIDs) > 0 {
-		return query.Where(`video_tasks.user_id IN (
-			SELECT CAST(u.id AS TEXT)
-			FROM users u
-			JOIN departments d ON d.id = u.dept_id
-			WHERE CAST(d.id AS TEXT) IN ? OR d.dept_id IN ?
-		)`, scope.DeptIDs, scope.DeptIDs)
-	}
-	return query.Where("1 = 0")
-}
-
 // Stats 统计
 func (r *VideoTaskRepo) Stats(start, end, userID, providerName, modelName string) (map[string]interface{}, error) {
-	return r.StatsScoped(start, end, userID, providerName, modelName, VideoTaskScope{IsGlobal: true})
-}
-
-func (r *VideoTaskRepo) StatsScoped(start, end, userID, providerName, modelName string, scope VideoTaskScope) (map[string]interface{}, error) {
 	var total, submitted, running, succeeded, failed int64
 	var avgDurationSeconds float64
 
-	base := r.statsQueryScoped(start, end, userID, providerName, modelName, scope)
+	base := r.statsQuery(start, end, userID, providerName, modelName)
 	if err := base.Session(&gorm.Session{}).Count(&total).Error; err != nil {
 		return nil, err
 	}
@@ -326,12 +261,8 @@ func (r *VideoTaskRepo) StatsScoped(start, end, userID, providerName, modelName 
 
 // StatsTrend 按天统计任务趋势。
 func (r *VideoTaskRepo) StatsTrend(start, end, userID, providerName, modelName string) ([]TrendRow, error) {
-	return r.StatsTrendScoped(start, end, userID, providerName, modelName, VideoTaskScope{IsGlobal: true})
-}
-
-func (r *VideoTaskRepo) StatsTrendScoped(start, end, userID, providerName, modelName string, scope VideoTaskScope) ([]TrendRow, error) {
 	var rows []TrendRow
-	err := r.statsQueryScoped(start, end, userID, providerName, modelName, scope).
+	err := r.statsQuery(start, end, userID, providerName, modelName).
 		Select(`
 			TO_CHAR(created_at::date, 'YYYY-MM-DD') AS date,
 			COUNT(*) AS tasks,
@@ -348,27 +279,23 @@ func (r *VideoTaskRepo) StatsTrendScoped(start, end, userID, providerName, model
 
 // StatsDistribution 统计渠道、状态、模型分布。
 func (r *VideoTaskRepo) StatsDistribution(start, end, userID, providerName, modelName string) (DistributionRows, error) {
-	return r.StatsDistributionScoped(start, end, userID, providerName, modelName, VideoTaskScope{IsGlobal: true})
-}
-
-func (r *VideoTaskRepo) StatsDistributionScoped(start, end, userID, providerName, modelName string, scope VideoTaskScope) (DistributionRows, error) {
 	var result DistributionRows
 
-	if err := r.statsQueryScoped(start, end, userID, providerName, modelName, scope).
+	if err := r.statsQuery(start, end, userID, providerName, modelName).
 		Select("provider_name, COUNT(*) AS count").
 		Group("provider_name").
 		Order("count DESC").
 		Scan(&result.Providers).Error; err != nil {
 		return result, err
 	}
-	if err := r.statsQueryScoped(start, end, userID, providerName, modelName, scope).
+	if err := r.statsQuery(start, end, userID, providerName, modelName).
 		Select("status, COUNT(*) AS count").
 		Group("status").
 		Order("count DESC").
 		Scan(&result.Statuses).Error; err != nil {
 		return result, err
 	}
-	if err := r.statsQueryScoped(start, end, userID, providerName, modelName, scope).
+	if err := r.statsQuery(start, end, userID, providerName, modelName).
 		Select(`
 			model,
 			COUNT(*) AS count,

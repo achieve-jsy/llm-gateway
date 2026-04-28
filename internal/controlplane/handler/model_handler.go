@@ -58,12 +58,6 @@ func (h *ModelHandler) CreateModel(c *gin.Context) {
 
 	m, err := h.svc.CreateModel(input)
 	if err != nil {
-		if errors.Is(err, service.ErrModelInvalidPlanningConfig) {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": gin.H{"type": "invalid_request", "message": err.Error(), "code": CodeBadRequest},
-			})
-			return
-		}
 		if errors.Is(err, service.ErrModelNameExists) {
 			c.JSON(http.StatusConflict, gin.H{
 				"error": gin.H{"type": "conflict", "message": "model name already exists", "code": CodeModelNameConflict},
@@ -152,12 +146,6 @@ func (h *ModelHandler) UpdateModel(c *gin.Context) {
 
 	m, err := h.svc.UpdateModel(id, input)
 	if err != nil {
-		if errors.Is(err, service.ErrModelInvalidPlanningConfig) {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": gin.H{"type": "invalid_request", "message": err.Error(), "code": CodeBadRequest},
-			})
-			return
-		}
 		if errors.Is(err, service.ErrModelNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": gin.H{"type": "not_found", "message": "model not found", "code": CodeModelNotFound},
@@ -447,8 +435,7 @@ func containsUnsupportedField(s string) bool {
 //
 // 请求体：{ "catalog_id": "uuid", "reset_fields": false }
 // 行为：把当前 model 关联到指定 catalog 条目；reset_fields=true 时同步把价格/容量/上游 ID 全部
-//
-//	回写为新 catalog 的当前值；标志位 ctx_overridden / max_output_overridden 始终重置为 false。
+//      回写为新 catalog 的当前值；标志位 ctx_overridden / max_output_overridden 始终重置为 false。
 type bindCatalogInput struct {
 	CatalogID   uuid.UUID `json:"catalog_id" binding:"required"`
 	ResetFields bool      `json:"reset_fields"`

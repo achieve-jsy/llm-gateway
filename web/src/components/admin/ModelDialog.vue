@@ -165,14 +165,6 @@
 
       <el-divider content-position="left">参数配置</el-divider>
 
-      <el-form-item label="参数风格" v-if="formData.model_type === 'chat'">
-        <el-select v-model="formData.param_style" placeholder="自动检测" style="width: 100%">
-          <el-option label="自动检测（按模型名判断）" value="" />
-          <el-option label="reasoning（推理模型，max_tokens → max_completion_tokens）" value="reasoning" />
-          <el-option label="standard（标准透传，不做任何转换）" value="standard" />
-        </el-select>
-      </el-form-item>
-
       <el-form-item label="上下文长度" v-if="formData.model_type === 'chat'">
         <el-input-number
           v-model="formData.context_length"
@@ -396,7 +388,6 @@ interface FormState {
   video_min_duration_seconds: number
   video_max_duration_seconds: number
   video_supported_actions: string[]
-  param_style: string
 }
 
 const props = defineProps<{
@@ -455,7 +446,6 @@ const formData = ref<FormState>({
   video_min_duration_seconds: 4,
   video_max_duration_seconds: 15,
   video_supported_actions: ['text_to_video', 'image_to_video', 'multimodal_reference'],
-  param_style: '',
 })
 
 /** 监听 model 变化，回填表单 */
@@ -481,7 +471,6 @@ model_type: (val.model_type as FormState['model_type']) || 'chat',
         video_min_duration_seconds: val.video_min_duration_seconds || 4,
         video_max_duration_seconds: val.video_max_duration_seconds || 15,
         video_supported_actions: val.video_supported_actions || ['text_to_video', 'image_to_video', 'multimodal_reference'],
-        param_style: val.param_style || '',
       }
       try {
         const tags = await getModelTagsForModel(val.id)
@@ -806,9 +795,6 @@ async function handleSubmit() {
       payload.video_min_duration_seconds = formData.value.video_min_duration_seconds
       payload.video_max_duration_seconds = formData.value.video_max_duration_seconds
       payload.video_supported_actions = formData.value.video_supported_actions
-    }
-    if (formData.value.param_style) {
-      payload.param_style = formData.value.param_style
     }
 
     let modelId: string

@@ -41,18 +41,10 @@ type RouteDecision struct {
 	Credential     string          `json:"credential"`
 	DecisionTimeUs int64           `json:"decision_time_us"`
 	// auto 审计字段（仅 strategy=auto 时填充）
-	ComplexityTier          string         `json:"complexity_tier,omitempty"`
-	ParamStyle              string         `json:"param_style,omitempty"`
-	UpstreamModelID         string         `json:"upstream_model_id,omitempty"`
-	BaseModel               string         `json:"base_model"`
-	ProtocolMode            string         `json:"protocol_mode"`
-	ParamProfile            string         `json:"param_profile"`
-	UnsupportedParamPolicy  string         `json:"unsupported_param_policy"`
-	SupportedParamsOverride map[string]any `json:"supported_params_override"`
-	TransformOverrides      map[string]any `json:"transform_overrides"`
-	ComplexityScore         float64        `json:"complexity_score,omitempty"`
-	ReasoningMarkers        int            `json:"reasoning_markers,omitempty"`
-	BiasUpApplied           bool           `json:"bias_up_applied,omitempty"`
+	ComplexityTier   string  `json:"complexity_tier,omitempty"`
+	ComplexityScore  float64 `json:"complexity_score,omitempty"`
+	ReasoningMarkers int     `json:"reasoning_markers,omitempty"`
+	BiasUpApplied    bool    `json:"bias_up_applied,omitempty"`
 	// sticky 审计字段
 	StickyUsed bool `json:"sticky_used,omitempty"`
 }

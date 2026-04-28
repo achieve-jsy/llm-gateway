@@ -60,18 +60,33 @@
     </UsageFilterBar>
 
     <template v-if="activeTab === 'video'">
-      <SeedanceVideoTabs
+      <VideoKpiCards
         :refresh-token="videoRefreshToken"
         :start="videoDateStart"
         :end="videoDateEnd"
+        :provider-name="filterProvider || undefined"
+        :model-name="videoModelParam"
+      />
+      <VideoTrendChart
+        :refresh-token="videoRefreshToken"
+        :start="videoDateStart"
+        :end="videoDateEnd"
+        :provider-name="filterProvider || undefined"
+        :model-name="videoModelParam"
+      />
+      <VideoDistributionCharts
+        :refresh-token="videoRefreshToken"
+        :start="videoDateStart"
+        :end="videoDateEnd"
+        :provider-name="filterProvider || undefined"
+        :model-name="videoModelParam"
+      />
+      <VideoTaskTable
+        :refresh-token="videoRefreshToken"
+        controlled
+        :status="filterStatus"
         :model-name="videoModelParam"
         :provider-name="filterProvider"
-        :task-status="filterStatus"
-        api-path="/api/v1/usage-logs"
-        trace-api-path="/api/v1/usage/logs"
-        :params="logParams"
-        :currency="currency"
-        :table-props="logTableProps"
       />
     </template>
     <template v-else>
@@ -321,7 +336,10 @@ import {
 } from '@element-plus/icons-vue'
 import UsageLogSection from '@/components/usage/UsageLogSection.vue'
 import UsageFilterBar from '@/components/usage/UsageFilterBar.vue'
-import SeedanceVideoTabs from '@/components/usage/SeedanceVideoTabs.vue'
+import VideoKpiCards from '@/components/usage/VideoKpiCards.vue'
+import VideoTrendChart from '@/components/usage/VideoTrendChart.vue'
+import VideoDistributionCharts from '@/components/usage/VideoDistributionCharts.vue'
+import VideoTaskTable from '@/components/usage/VideoTaskTable.vue'
 import {
   Chart, BarController, LineController, CategoryScale, LinearScale, BarElement, LineElement,
   PointElement, Tooltip, Legend, Filler
@@ -1248,3 +1266,4 @@ loadAll()
   }
 }
 </style>
+

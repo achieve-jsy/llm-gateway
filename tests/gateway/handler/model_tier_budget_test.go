@@ -342,11 +342,9 @@ func (protocolScheduler) Failover(string, string, *core.ChatRequest) (*gwschedul
 func (protocolScheduler) FailoverExcluding(string, []string, *core.ChatRequest) (*gwscheduler.RouteDecision, error) {
 	return nil, errors.New("unused")
 }
-func (protocolScheduler) GetGroupConfig(string) *gwscheduler.GroupRoutingConfig                     { return nil }
-func (protocolScheduler) NotifyFailure(string)                                                      {}
-func (protocolScheduler) SetCooldown(string, time.Duration)                                         {}
-func (protocolScheduler) PersistSticky(context.Context, string, string, *gwscheduler.RouteDecision) {}
-func (protocolScheduler) UpdateSticky(context.Context, string, string, string)                      {}
+func (protocolScheduler) GetGroupConfig(string) *gwscheduler.GroupRoutingConfig { return nil }
+func (protocolScheduler) NotifyFailure(string)                                  {}
+func (protocolScheduler) SetCooldown(string, time.Duration)                     {}
 
 func TestRealHandlers_EnforceAuthorizationBudgetQuotaBeforeUpstream(t *testing.T) {
 	gin.SetMode(gin.TestMode)

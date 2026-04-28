@@ -266,7 +266,6 @@ func hasChatReasoningSummary(req *core.ChatRequest) bool {
 //   - reasoningEffort（camelCase）→ reasoning_effort
 //   - reasoning:{effort}（Responses 形态）→ reasoning_effort
 //   - reasoning_effort dict → string（Chat Completions 只接受 string）
-//
 // 与 LiteLLM drop_params / OpenCode 兼容策略对齐。
 //
 // dropTemperature：o-series / gpt-5（非 chat）为 true；gpt-5-chat* 为 false。
@@ -343,24 +342,9 @@ func normalizeReasoningEffortJSON(raw json.RawMessage) json.RawMessage {
 // chatRequestBody returns the appropriate request body for the model.
 // Models that reject max_tokens get parameter adaptation; others pass through as-is.
 func chatRequestBody(req *core.ChatRequest) (any, error) {
-	// Explicit param_style takes priority over name-based detection.
-	switch req.ParamStyle {
-	case "reasoning":
-		return adaptForReasoningChat(req, true)
-	case "standard":
-		return req, nil
-	}
-
-	// Fallback: infer from LogicalModel (group name / base model hint) first,
-	// then from Model (upstream deployment/model name). Azure deployments often
-	// use opaque names, so the logical model is the safer capability hint.
-	modelForDetection := req.LogicalModel
-	if modelForDetection == "" {
-		modelForDetection = req.Model
-	}
-	if requiresMaxCompletionTokens(modelForDetection) {
+	if requiresMaxCompletionTokens(req.Model) {
 		// gpt-5-chat 保留 temperature；其余 reasoning 模型丢弃。
-		return adaptForReasoningChat(req, isReasoningChatModel(modelForDetection))
+		return adaptForReasoningChat(req, isReasoningChatModel(req.Model))
 	}
 	return req, nil
 }

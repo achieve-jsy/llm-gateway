@@ -37,12 +37,6 @@ type ChatRequest struct {
 	ExtraFields       UnknownJSONFields `json:"-" swaggerignore:"true"`
 	// SessionKey is extracted from conversation_id or KeyID hash for sticky routing (transient, not serialized)
 	SessionKey string `json:"-" swaggerignore:"true"`
-	// LogicalModel is the group/logical model name used for capability detection (e.g. "gpt-5.6-sol").
-	// Set by the router after dispatch; not serialized to upstream.
-	LogicalModel string `json:"-" swaggerignore:"true"`
-	// ParamStyle overrides the upstream parameter adaptation strategy.
-	// "reasoning" → adaptForReasoningChat; "standard" → pass-through; "" → auto-detect by model name.
-	ParamStyle string `json:"-" swaggerignore:"true"`
 }
 
 func (r *ChatRequest) semanticSelector() (string, string) {

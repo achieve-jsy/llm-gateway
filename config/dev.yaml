@@ -40,8 +40,3 @@ frontend:
 
 gateway:
   url: "http://127.0.0.1:8080"
-
-upstream_planner:
-  enabled: false
-  shadow_enabled: false
-  debug_header_enabled: false

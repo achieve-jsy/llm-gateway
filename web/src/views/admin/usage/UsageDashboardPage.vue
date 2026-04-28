@@ -39,18 +39,33 @@
     </UsageFilterBar>
 
     <template v-if="activeTab === 'video'">
-      <SeedanceVideoTabs
+      <VideoKpiCards
         :refresh-token="videoRefreshToken"
         :start="videoDateStart"
         :end="videoDateEnd"
         :model-name="videoModelParam"
+        :provider-name="filterProvider || undefined"
+      />
+      <VideoTrendChart
+        :refresh-token="videoRefreshToken"
+        :start="videoDateStart"
+        :end="videoDateEnd"
+        :model-name="videoModelParam"
+        :provider-name="filterProvider || undefined"
+      />
+      <VideoDistributionCharts
+        :refresh-token="videoRefreshToken"
+        :start="videoDateStart"
+        :end="videoDateEnd"
+        :model-name="videoModelParam"
+        :provider-name="filterProvider || undefined"
+      />
+      <VideoTaskTable
+        :refresh-token="videoRefreshToken"
+        controlled
+        :status="filterStatus"
+        :model-name="videoModelParam"
         :provider-name="filterProvider"
-        :task-status="filterStatus"
-        api-path="/api/v1/usage/scoped/logs"
-        trace-api-path="/api/v1/usage/logs"
-        :params="logParams"
-        :currency="currency"
-        :table-props="logTableProps"
       />
     </template>
     <template v-else>
@@ -180,7 +195,10 @@ import ModelChartSection from './components/ModelChartSection.vue'
 import LongTailAlerts from './components/LongTailAlerts.vue'
 import UsageLogSection from '@/components/usage/UsageLogSection.vue'
 import UsageFilterBar from '@/components/usage/UsageFilterBar.vue'
-import SeedanceVideoTabs from '@/components/usage/SeedanceVideoTabs.vue'
+import VideoKpiCards from '@/components/usage/VideoKpiCards.vue'
+import VideoTrendChart from '@/components/usage/VideoTrendChart.vue'
+import VideoDistributionCharts from '@/components/usage/VideoDistributionCharts.vue'
+import VideoTaskTable from '@/components/usage/VideoTaskTable.vue'
 import UserDetailPanel from './components/UserDetailPanel.vue'
 import ModelDetailPanel from './components/ModelDetailPanel.vue'
 import { usePanelManager } from '@/composables/usePanelManager'

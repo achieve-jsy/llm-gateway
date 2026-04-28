@@ -91,25 +91,12 @@ func buildProviderEntries(models []controlmodel.Model) ([]gatewaymodel.ProviderE
 		// 某些上游（如 ZHIPU）期望收到带前缀的完整模型名；
 		// Bedrock 等需要剥前缀的 provider 在各自的 adapter 中处理。
 		entry.Models = append(entry.Models, m.Name)
-		entry.ModelsV2 = append(entry.ModelsV2, gatewaymodel.ModelEntry{
-			Name:                    m.Name,
-			UpstreamModelID:         m.UpstreamModelID,
-			BaseModel:               m.BaseModel,
-			ProtocolMode:            defaultString(m.ProtocolMode, controlmodel.ProtocolModeAuto),
-			ParamProfile:            defaultString(m.ParamProfile, controlmodel.ParamProfileAuto),
-			UnsupportedParamPolicy:  defaultString(m.UnsupportedParamPolicy, controlmodel.UnsupportedParamPolicyPreserve),
-			SupportedParamsOverride: plannerJSONMapToAny(m.SupportedParamsOverride),
-			TransformOverrides:      plannerJSONMapToAny(m.TransformOverrides),
-		})
 	}
 
 	entries := make([]gatewaymodel.ProviderEntry, 0, len(providerOrder))
 	for _, providerID := range providerOrder {
 		entry := providerMap[providerID]
 		sort.Strings(entry.Models)
-		sort.Slice(entry.ModelsV2, func(i, j int) bool {
-			return entry.ModelsV2[i].Name < entry.ModelsV2[j].Name
-		})
 		entries = append(entries, *entry)
 	}
 
@@ -121,22 +108,4 @@ func providerTypeForGateway(p controlmodel.Provider) string {
 		return p.Type
 	}
 	return p.DefinitionID
-}
-
-func defaultString(v, fallback string) string {
-	if v == "" {
-		return fallback
-	}
-	return v
-}
-
-func plannerJSONMapToAny(src controlmodel.PlannerJSONMap) map[string]any {
-	if src == nil {
-		return map[string]any{}
-	}
-	dst := make(map[string]any, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
 }

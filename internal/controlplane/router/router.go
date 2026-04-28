@@ -608,16 +608,16 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.PUT("/ops/upstream-errors/:id/resolve", opsHandler.ResolveUpstreamError)
 
 		// 视频任务统计（Ops Dashboard 视频指标卡片）
-		adminGroup.GET("/ops/video-tasks/stats", guard(rbac.PermUsageViewScoped), videoTaskHandler.Stats)
-		adminGroup.GET("/ops/video-tasks", guard(rbac.PermUsageViewScoped), videoTaskHandler.List)
-		adminGroup.GET("/ops/video-tasks/:id", guard(rbac.PermUsageViewScoped), videoTaskHandler.Get)
+		adminGroup.GET("/ops/video-tasks/stats", videoTaskHandler.Stats)
+		adminGroup.GET("/ops/video-tasks", videoTaskHandler.List)
+		adminGroup.GET("/ops/video-tasks/:id", videoTaskHandler.Get)
 
 		// 视频任务管理
-		adminGroup.GET("/video/tasks/stats/trend", guard(rbac.PermUsageViewScoped), videoTaskHandler.StatsTrend)
-		adminGroup.GET("/video/tasks/stats/distribution", guard(rbac.PermUsageViewScoped), videoTaskHandler.StatsDistribution)
-		adminGroup.GET("/video/tasks/stats", guard(rbac.PermUsageViewScoped), videoTaskHandler.Stats)
-		adminGroup.GET("/video/tasks", guard(rbac.PermUsageViewScoped), videoTaskHandler.List)
-		adminGroup.GET("/video/tasks/:id", guard(rbac.PermUsageViewScoped), videoTaskHandler.Get)
+		adminGroup.GET("/video/tasks/stats/trend", videoTaskHandler.StatsTrend)
+		adminGroup.GET("/video/tasks/stats/distribution", videoTaskHandler.StatsDistribution)
+		adminGroup.GET("/video/tasks/stats", videoTaskHandler.Stats)
+		adminGroup.GET("/video/tasks", videoTaskHandler.List)
+		adminGroup.GET("/video/tasks/:id", videoTaskHandler.Get)
 
 		// 模型状态变更日志
 		adminGroup.GET("/model-status-logs", modelStatusLogHandler.ListModelStatusLogs)
@@ -713,7 +713,6 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/my/video/tasks/stats/distribution", videoTaskHandler.MyStatsDistribution)
 		adminGroup.GET("/my/video/tasks/stats", videoTaskHandler.MyStats)
 		adminGroup.GET("/my/video/tasks", videoTaskHandler.MyList)
-		adminGroup.GET("/my/video/tasks/:id", videoTaskHandler.MyGet)
 	}
 
 	// 内部接口组（内部 Token 认证）

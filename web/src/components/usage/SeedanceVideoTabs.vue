@@ -137,6 +137,7 @@ const mergedLogTableProps = computed(() => ({
   showSource: 'full',
   sortableColumns: ['duration_ms', 'est_cost_usd', 'ts'] as const,
   endpointType: 'chat',
+  displayMode: 'seedance',
   ...props.logTableProps,
 }))
 

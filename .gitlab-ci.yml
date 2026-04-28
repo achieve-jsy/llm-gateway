@@ -576,14 +576,14 @@ deploy-app-test-fast:
 deploy-prod:
   stage: deploy
   needs: ["migrate-prod"]
+  resource_group: production-deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
-  # 预算：preflight(~2m) + DRAIN_TIMEOUT(600s) + STOP_TIMEOUT(120s) ≈ 14m，留足余量。
-  # 旧值 20m 与「drain 600 + stop 600」相等，旧 gateway 停得慢时必超时（部署其实已成功）。
-  timeout: 30m
+  # 常驻双颜色：切流成功后保留旧环境用于快速回滚，不再同步等待 600s drain。
+  timeout: 15m
   script:
     - |
-      SSH_OPTS="-o StrictHostKeyChecking=no"
+      SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
       IMAGE_TAG="$CI_COMMIT_TAG"
       echo "=== Blue-Green Deploy ${IMAGE_TAG} to ${PROD_HOST} (prod) ==="
 
@@ -591,20 +591,24 @@ deploy-prod:
       ssh ${SSH_OPTS} root@${PROD_HOST} "mkdir -p ${PROD_PATH}"
       scp ${SSH_OPTS} -r deploy/blue-green/* root@${PROD_HOST}:${PROD_PATH}/
 
-      # Pull 镜像
+      # Pull 镜像（并行拉取，失败立即中止）
       ssh ${SSH_OPTS} root@${PROD_HOST} "
-        docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
-        docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
+        set -e
+        docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG} & gateway_pull=\$!
+        docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} & cp_pull=\$!
+        wait \$gateway_pull
+        wait \$cp_pull
       "
 
-      # 执行蓝绿部署（脚本内包含 600s drain 等待）
+      # 执行蓝绿部署：新环境稳定 ready 后切流，切流后保留旧颜色用于快速回滚。
       ssh ${SSH_OPTS} root@${PROD_HOST} "
         set -e
         cd ${PROD_PATH}
         export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=prod
-        # 旧环境经 600s drain 后已无新流量，停它不需再等 600s（默认值），
-        # 否则 drain 600 + stop 600 = 20m 撑满 job timeout，导致部署成功但 job 报错。
-        export DRAIN_TIMEOUT=600 STOP_TIMEOUT=120
+        export DRAIN_TIMEOUT=600 STOP_TIMEOUT=120 TARGET_REPLACE_TIMEOUT=30
+        export SAFE_SWITCH_ENABLED=true KEEP_OLD_ENV=true DEPLOY_LOCK_TIMEOUT=600
+        export READY_STABLE_CHECKS=3 READY_STABLE_INTERVAL=2 READY_MIN_MODEL_COUNT=1 READY_REQUIRE_STABLE_VERSION=true
+        export NGINX_SMOKE_URL='http://127.0.0.1:9080/health'
         export DATABASE_URL='${PROD_DATABASE_URL}'
         export REDIS_ADDR='${PROD_REDIS_ADDR}' REDIS_DB='${PROD_REDIS_DB}' REDIS_PASSWORD='${PROD_REDIS_PASSWORD}'
         export JWT_SECRET='${PROD_JWT_SECRET}'
@@ -635,19 +639,22 @@ deploy-prod:
 # 生产回滚（快速切回上一个颜色，无需重新构建）
 rollback-prod:
   stage: deploy
+  resource_group: production-deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
-  # 预算：DRAIN_TIMEOUT(600s) + STOP_TIMEOUT(120s) + preflight ≈ 13m，留足余量。
-  timeout: 20m
+  # 常驻双颜色回滚：只做健康确认 + 原子切流 + nginx 冒烟。
+  timeout: 10m
   script:
     - |
-      SSH_OPTS="-o StrictHostKeyChecking=no"
+      SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
       echo "=== Rollback prod to previous color ==="
       ssh ${SSH_OPTS} root@${PROD_HOST} "
         set -e
         cd ${PROD_PATH}
-        # 同 deploy-prod：drain 后旧环境已空闲，停它无需默认 600s（否则会撑爆 timeout）。
-        export DRAIN_TIMEOUT=600 STOP_TIMEOUT=120
+        export DRAIN_TIMEOUT=600 STOP_TIMEOUT=120 TARGET_REPLACE_TIMEOUT=30
+        export SAFE_SWITCH_ENABLED=true KEEP_OLD_ENV=true DEPLOY_LOCK_TIMEOUT=600
+        export READY_STABLE_CHECKS=3 READY_STABLE_INTERVAL=2 READY_MIN_MODEL_COUNT=1 READY_REQUIRE_STABLE_VERSION=true
+        export NGINX_SMOKE_URL='http://127.0.0.1:9080/health'
         bash deploy-blue-green.sh --rollback
       "
   environment:

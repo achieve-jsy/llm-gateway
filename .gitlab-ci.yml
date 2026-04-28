@@ -70,16 +70,11 @@ build-backend-ci-image-test:
     - if: $CI_COMMIT_BRANCH == "test"
       changes:
         - "deploy/docker/ci-backend.Dockerfile"
-    - when: manual
-      allow_failure: true
 
 build-backend-test:
   stage: build
   image: ${REGISTRY}/${BACKEND_CI_IMAGE}:${BACKEND_CI_IMAGE_TAG}
   tags: [docker]
-  needs:
-    - job: build-backend-ci-image-test
-      optional: true
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
     DOCKER_BUILDKIT: "1"

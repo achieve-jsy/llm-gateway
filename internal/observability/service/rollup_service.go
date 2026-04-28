@@ -537,6 +537,7 @@ type LogRow struct {
 	OutputPriceSnapshot *float64        `json:"output_price_snapshot" gorm:"column:output_price_snapshot"`
 	RequestBody         *datatypes.JSON `json:"request_body,omitempty"  gorm:"column:request_body"`
 	ResponseBody        *datatypes.JSON `json:"response_body,omitempty" gorm:"column:response_body"`
+	TaskID              string          `json:"task_id,omitempty"       gorm:"column:task_id"`
 	// DocumentsCount 来自 call_traces.request_body.documents 数组长度（Rerank）
 	DocumentsCount *int `json:"documents_count,omitempty" gorm:"column:documents_count"`
 }
@@ -640,6 +641,7 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 			"call_logs.input_cost_usd, call_logs.output_cost_usd, call_logs.cache_read_cost_usd, call_logs.est_cost_usd, " +
 			"call_logs.input_price_snapshot, call_logs.output_price_snapshot, " +
 			"ct.request_body AS request_body, ct.response_body AS response_body, " +
+			"COALESCE(NULLIF(substring(call_logs.inbound_endpoint FROM '/v1/contents/generations/tasks/([^/?#]+)'), ''), ct.response_body->>'id', ct.response_body->>'task_id') AS task_id, " +
 			"CASE WHEN jsonb_typeof(ct.request_body->'documents') = 'array' " +
 			"THEN jsonb_array_length(ct.request_body->'documents') ELSE NULL END AS documents_count").
 		Joins("LEFT JOIN call_traces ct ON ct.request_id = call_logs.request_id").

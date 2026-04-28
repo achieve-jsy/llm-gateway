@@ -878,6 +878,7 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 		call_logs.stream, call_logs.failover_used, call_logs.usage_missing, call_logs.reasoning_effort,
 		call_logs.ip_address, call_logs.user_agent,
 		ct.request_body AS request_body, ct.response_body AS response_body,
+		COALESCE(NULLIF(substring(call_logs.inbound_endpoint FROM '/v1/contents/generations/tasks/([^/?#]+)'), ''), ct.response_body->>'id', ct.response_body->>'task_id') AS task_id,
 		CASE WHEN jsonb_typeof(ct.request_body->'documents') = 'array'
 			THEN jsonb_array_length(ct.request_body->'documents') ELSE NULL END AS documents_count`
 

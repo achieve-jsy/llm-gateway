@@ -16,6 +16,18 @@
 #   STOP_TIMEOUT     drain 后停止旧环境容器的超时秒数   (默认 600；旧容器若不响应 SIGTERM 会等满)
 #   HEALTH_RETRIES   健康检查重试次数               (默认 30)
 #   HEALTH_INTERVAL  健康检查间隔秒数               (默认 3)
+#   READY_STABLE_CHECKS 切流前 gateway /ready 连续稳定次数 (默认 3)
+#   READY_STABLE_INTERVAL 连续稳定检查间隔秒数              (默认 2)
+#   READY_MIN_MODEL_COUNT 切流前最少可见模型数量            (默认 1)
+#   READY_REQUIRE_STABLE_VERSION 要求 /ready version 连续一致 (默认 true)
+#   SAFE_SWITCH_ENABLED 启用部署锁和可恢复的原子切流 (默认 false)
+#   KEEP_OLD_ENV     切流后保留旧颜色，供快速回滚     (默认 false)
+#   TARGET_REPLACE_TIMEOUT 替换非活跃旧颜色的超时秒数 (默认 30)
+#   NGINX_SMOKE_URL  切流后经 nginx 验证的 URL        (默认空，不执行)
+#   SMOKE_RETRIES    nginx 冒烟重试次数               (默认 5)
+#   SMOKE_INTERVAL   nginx 冒烟重试间隔秒数           (默认 2)
+#   DEPLOY_LOCK_FILE 主机级部署锁文件                 (默认同脚本目录)
+#   DEPLOY_LOCK_TIMEOUT 等待其他部署释放锁的秒数       (默认 600)
 #   LEGACY_CONTAINERS 首次迁移时要下线的旧容器名     (默认 "llm-gw-gateway llm-gw-control-plane")
 #   IMAGE_TAG / REGISTRY / APP_ENV 及各密钥由 compose 透传
 #
@@ -34,12 +46,33 @@ DRAIN_TIMEOUT="${DRAIN_TIMEOUT:-600}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-600}"
 HEALTH_RETRIES="${HEALTH_RETRIES:-15}"
 HEALTH_INTERVAL="${HEALTH_INTERVAL:-2}"
+READY_STABLE_CHECKS="${READY_STABLE_CHECKS:-3}"
+READY_STABLE_INTERVAL="${READY_STABLE_INTERVAL:-2}"
+READY_MIN_MODEL_COUNT="${READY_MIN_MODEL_COUNT:-1}"
+READY_REQUIRE_STABLE_VERSION="${READY_REQUIRE_STABLE_VERSION:-true}"
+SAFE_SWITCH_ENABLED="${SAFE_SWITCH_ENABLED:-false}"
+KEEP_OLD_ENV="${KEEP_OLD_ENV:-false}"
+TARGET_REPLACE_TIMEOUT="${TARGET_REPLACE_TIMEOUT:-30}"
+NGINX_SMOKE_URL="${NGINX_SMOKE_URL:-}"
+SMOKE_RETRIES="${SMOKE_RETRIES:-5}"
+SMOKE_INTERVAL="${SMOKE_INTERVAL:-2}"
+DEPLOY_LOCK_FILE="${DEPLOY_LOCK_FILE:-${DEPLOY_DIR}/.deploy.lock}"
+DEPLOY_LOCK_TIMEOUT="${DEPLOY_LOCK_TIMEOUT:-600}"
 LEGACY_CONTAINERS="${LEGACY_CONTAINERS:-llm-gw-gateway llm-gw-control-plane}"
+PRE_SWITCH_UPSTREAM=""
 
 # ─── 工具函数 ──────────────────────────────────────────────────────────────────
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 die() { log "ERROR: $*"; exit 1; }
+
+acquire_deploy_lock() {
+    [ "$SAFE_SWITCH_ENABLED" = "true" ] || return 0
+    command -v flock >/dev/null 2>&1 || die "flock is required for serialized deployment"
+    exec 9>"$DEPLOY_LOCK_FILE"
+    log "Waiting up to ${DEPLOY_LOCK_TIMEOUT}s for deployment lock (${DEPLOY_LOCK_FILE})..."
+    flock -w "$DEPLOY_LOCK_TIMEOUT" 9 || die "Timed out waiting for another deployment to finish (lock: ${DEPLOY_LOCK_FILE})"
+}
 
 get_active_color() {
     if [ -f "$STATE_FILE" ]; then
@@ -102,6 +135,108 @@ health_check() {
     return 1
 }
 
+extract_ready_fingerprint() {
+    local payload="$1"
+
+    if command -v jq >/dev/null 2>&1; then
+        printf '%s' "$payload" | jq -r --argjson min_models "$READY_MIN_MODEL_COUNT" '
+            def nonempty: type == "string" and length > 0;
+            if .status == "ready"
+              and .checks.redis == "ok"
+              and .checks.registry == "ok"
+              and .checks.scheduler == "ok"
+              and ((.details.model_count // 0) >= $min_models)
+              and (.details.source | nonempty)
+              and (.details.loaded_at | nonempty)
+              and (.capabilities.tier_snapshot_schema == 1)
+              and (.capabilities.redis_v2 == true)
+            then
+              [(.details.version // 0), (.details.model_count // 0), (.details.source // ""), (.details.loaded_at // ""), (.capabilities.snapshot_revision // 0)] | @tsv
+            else
+              empty
+            end
+        ' 2>/dev/null
+        return $?
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+        READY_PAYLOAD="$payload" READY_MIN_MODEL_COUNT="$READY_MIN_MODEL_COUNT" python3 - <<'PY'
+import json, os, sys
+
+try:
+    data = json.loads(os.environ.get("READY_PAYLOAD", ""))
+except Exception:
+    sys.exit(1)
+
+checks = data.get("checks") or {}
+details = data.get("details") or {}
+caps = data.get("capabilities") or {}
+min_models = int(os.environ.get("READY_MIN_MODEL_COUNT") or "1")
+
+ok = (
+    data.get("status") == "ready"
+    and checks.get("redis") == "ok"
+    and checks.get("registry") == "ok"
+    and checks.get("scheduler") == "ok"
+    and int(details.get("model_count") or 0) >= min_models
+    and isinstance(details.get("source"), str) and len(details.get("source")) > 0
+    and isinstance(details.get("loaded_at"), str) and len(details.get("loaded_at")) > 0
+    and caps.get("tier_snapshot_schema") == 1
+    and caps.get("redis_v2") is True
+)
+if not ok:
+    sys.exit(1)
+
+print("\t".join([
+    str(details.get("version") or 0),
+    str(details.get("model_count") or 0),
+    details.get("source") or "",
+    details.get("loaded_at") or "",
+    str(caps.get("snapshot_revision") or 0),
+]))
+PY
+        return $?
+    fi
+
+    log "WARN: neither jq nor python3 available; cannot parse /ready payload for stable readiness"
+    return 1
+}
+
+wait_gateway_ready_stable() {
+    local color="$1"
+    local port i payload fingerprint previous="" stable=0 display
+    port=$(get_gateway_port "$color")
+
+    log "Waiting for ${color} gateway readiness to stabilize (${READY_STABLE_CHECKS} consecutive checks, min_models=${READY_MIN_MODEL_COUNT})..."
+    for i in $(seq 1 "$HEALTH_RETRIES"); do
+        payload=$(curl -fsS --max-time 5 "http://localhost:${port}/ready" 2>/dev/null) || {
+            stable=0
+            sleep "$READY_STABLE_INTERVAL"
+            continue
+        }
+
+        if fingerprint=$(extract_ready_fingerprint "$payload") && [ -n "$fingerprint" ]; then
+            if [ "$READY_REQUIRE_STABLE_VERSION" != "true" ] || [ -z "$previous" ] || [ "$fingerprint" = "$previous" ]; then
+                stable=$((stable + 1))
+            else
+                stable=1
+            fi
+            previous="$fingerprint"
+            display=$(printf '%s' "$fingerprint" | tr '\t' ' ')
+            log "${color} gateway ready fingerprint stable=${stable}/${READY_STABLE_CHECKS}: ${display}"
+            if [ "$stable" -ge "$READY_STABLE_CHECKS" ]; then
+                return 0
+            fi
+        else
+            stable=0
+            previous=""
+            log "${color} gateway /ready payload not cutover-ready yet (attempt ${i}/${HEALTH_RETRIES})"
+        fi
+        sleep "$READY_STABLE_INTERVAL"
+    done
+    return 1
+}
+
 supports_budget_v2() {
     local color="$1" port payload
     port=$(get_gateway_port "$color")
@@ -143,15 +278,90 @@ log_budget_mode() {
 
 switch_nginx() {
     local color="$1"
+    local candidate backup
+
+    if [ "$SAFE_SWITCH_ENABLED" != "true" ]; then
+        log "Switching nginx upstream to ${color} (${NGINX_UPSTREAM})..."
+        cp "${UPSTREAM_DIR}/upstream-${color}.conf" "$NGINX_UPSTREAM"
+        nginx -t || die "nginx config test failed after switching to ${color}"
+        nginx -s reload
+        log "nginx reloaded → traffic now on ${color}"
+        return 0
+    fi
+
+    candidate="${NGINX_UPSTREAM}.candidate.$$"
+    backup="${NGINX_UPSTREAM}.backup.$$"
+
     log "Switching nginx upstream to ${color} (${NGINX_UPSTREAM})..."
-    cp "${UPSTREAM_DIR}/upstream-${color}.conf" "$NGINX_UPSTREAM"
-    nginx -t || die "nginx config test failed after switching to ${color}"
-    nginx -s reload
+    cp "${UPSTREAM_DIR}/upstream-${color}.conf" "$candidate"
+    if [ -e "$NGINX_UPSTREAM" ]; then
+        cp -p "$NGINX_UPSTREAM" "$backup"
+    fi
+    mv -f "$candidate" "$NGINX_UPSTREAM"
+
+    if ! nginx -t; then
+        if [ -e "$backup" ]; then mv -f "$backup" "$NGINX_UPSTREAM"; else rm -f "$NGINX_UPSTREAM"; fi
+        die "nginx config test failed after switching to ${color}; upstream restored"
+    fi
+    if ! nginx -s reload; then
+        if [ -e "$backup" ]; then
+            mv -f "$backup" "$NGINX_UPSTREAM"
+            nginx -t && nginx -s reload || true
+        else
+            rm -f "$NGINX_UPSTREAM"
+        fi
+        die "nginx reload failed after switching to ${color}; upstream restored"
+    fi
+    rm -f "$backup"
     log "nginx reloaded → traffic now on ${color}"
+}
+
+capture_current_upstream() {
+    PRE_SWITCH_UPSTREAM="${NGINX_UPSTREAM}.pre-switch.$$"
+    if [ -e "$NGINX_UPSTREAM" ]; then
+        cp -p "$NGINX_UPSTREAM" "$PRE_SWITCH_UPSTREAM"
+    else
+        : > "$PRE_SWITCH_UPSTREAM"
+    fi
+}
+
+discard_captured_upstream() {
+    [ -z "$PRE_SWITCH_UPSTREAM" ] || rm -f "$PRE_SWITCH_UPSTREAM"
+    PRE_SWITCH_UPSTREAM=""
+}
+
+restore_captured_upstream() {
+    [ -n "$PRE_SWITCH_UPSTREAM" ] || return 1
+    if [ -s "$PRE_SWITCH_UPSTREAM" ]; then
+        mv -f "$PRE_SWITCH_UPSTREAM" "$NGINX_UPSTREAM"
+    else
+        rm -f "$PRE_SWITCH_UPSTREAM" "$NGINX_UPSTREAM"
+    fi
+    PRE_SWITCH_UPSTREAM=""
+    nginx -t && nginx -s reload
+}
+
+smoke_check_nginx() {
+    local i
+    [ -z "$NGINX_SMOKE_URL" ] && return 0
+
+    log "Verifying switched traffic through nginx (${NGINX_SMOKE_URL})..."
+    for i in $(seq 1 "$SMOKE_RETRIES"); do
+        if curl -fsS -o /dev/null --max-time 5 "$NGINX_SMOKE_URL"; then
+            log "nginx smoke check passed (attempt ${i}/${SMOKE_RETRIES})"
+            return 0
+        fi
+        sleep "$SMOKE_INTERVAL"
+    done
+    return 1
 }
 
 start_env() {
     local color="$1"
+    if [ "$KEEP_OLD_ENV" = "true" ] && docker ps -a --format '{{.Names}}' | grep -qx "llm-${color}-gateway"; then
+        log "Removing retained ${color} environment before replacement..."
+        stop_env "$color" "$TARGET_REPLACE_TIMEOUT"
+    fi
     log "Starting ${color} environment..."
     docker compose -f "${DEPLOY_DIR}/docker-compose.${color}.yml" -p "llm-${color}" up -d --remove-orphans
 }
@@ -184,13 +394,17 @@ stop_legacy() {
 }
 
 save_state() {
-    echo "$1" > "$STATE_FILE"
+    local state_tmp="${STATE_FILE}.tmp.$$"
+    printf '%s\n' "$1" > "$state_tmp"
+    mv -f "$state_tmp" "$STATE_FILE"
     log "State saved: active=${1}"
 }
 
 # ─── 主逻辑 ────────────────────────────────────────────────────────────────────
 
 main() {
+    acquire_deploy_lock
+
     local rollback=false
     local skip_start=false
     for arg in "$@"; do
@@ -206,7 +420,7 @@ main() {
 
     log "═══════════════════════════════════════════════════════════"
     log "Blue-Green Deploy: active=${active} → target=${target} (rollback=${rollback})"
-    log "  NGINX_UPSTREAM=${NGINX_UPSTREAM}  DRAIN_TIMEOUT=${DRAIN_TIMEOUT}s"
+    log "  NGINX_UPSTREAM=${NGINX_UPSTREAM}  DRAIN_TIMEOUT=${DRAIN_TIMEOUT}s  SAFE_SWITCH_ENABLED=${SAFE_SWITCH_ENABLED}  KEEP_OLD_ENV=${KEEP_OLD_ENV}"
     log "═══════════════════════════════════════════════════════════"
 
     if [ "$active" != "none" ] && ! supports_budget_v2 "$active"; then
@@ -220,8 +434,19 @@ main() {
         [ "$active" = "none" ] && die "No active environment to rollback from"
         log "ROLLBACK: switching back to ${target}"
         health_check "$target" || die "${target} is not running/healthy, cannot rollback (请改用指定版本重新部署)"
+        capture_current_upstream
         switch_nginx "$target"
+        if ! smoke_check_nginx; then
+            log "Rollback smoke check failed; restoring traffic to ${active}"
+            restore_captured_upstream || die "Rollback smoke check failed and previous nginx upstream could not be restored; both environments were kept running"
+            die "Rollback aborted because nginx smoke check failed; traffic restored to ${active}"
+        fi
+        discard_captured_upstream
         save_state "$target"
+        if [ "$KEEP_OLD_ENV" = "true" ]; then
+            log "Rollback complete. Keeping ${active} running for fast recovery."
+            return 0
+        fi
         log "Rollback complete. Draining old (${active}) for ${DRAIN_TIMEOUT}s then stop..."
         sleep "$DRAIN_TIMEOUT"
         stop_env "$active" "$STOP_TIMEOUT"
@@ -244,19 +469,34 @@ main() {
         stop_env "$target" 30 || true
         die "${target} failed health check after $((HEALTH_RETRIES * HEALTH_INTERVAL))s; deploy aborted, nothing switched."
     fi
+    if [ "$SAFE_SWITCH_ENABLED" = "true" ] && ! wait_gateway_ready_stable "$target"; then
+        log "Gateway readiness did not stabilize for ${target}. Current traffic stays on previous env."
+        stop_env "$target" 30 || true
+        die "${target} gateway /ready did not become cutover-ready; deploy aborted, nothing switched."
+    fi
     supports_budget_v2 "$target" || {
         stop_env "$target" 30 || true
         die "${target} does not advertise tier_snapshot_schema=1 and redis_v2=true"
     }
 
     # 3. 切换 nginx 到新环境
+    capture_current_upstream
     switch_nginx "$target"
+    if ! smoke_check_nginx; then
+        log "Post-switch smoke check failed; restoring previous nginx upstream"
+        restore_captured_upstream || die "nginx smoke check failed and previous upstream could not be restored; both environments were kept running"
+        stop_env "$target" 30 || true
+        die "nginx smoke check failed; deploy rolled back"
+    fi
+    discard_captured_upstream
     save_state "$target"
 
     # 4. 下线旧环境（流量已切走）
     if [ "$active" = "none" ]; then
         # 首次迁移：下线旧（非蓝绿）容器
         stop_legacy
+    elif [ "$KEEP_OLD_ENV" = "true" ]; then
+        log "Keeping old environment (${active}) running for fast rollback."
     else
         log "Draining old environment (${active}) for ${DRAIN_TIMEOUT}s..."
         sleep "$DRAIN_TIMEOUT"
@@ -270,4 +510,6 @@ main() {
     log "═══════════════════════════════════════════════════════════"
 }
 
-main "$@"
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    main "$@"
+fi

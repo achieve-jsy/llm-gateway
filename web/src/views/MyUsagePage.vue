@@ -56,37 +56,19 @@
     </UsageFilterBar>
 
     <template v-if="activeTab === 'video'">
-      <VideoKpiCards
+      <SeedanceVideoTabs
         :refresh-token="videoRefreshToken"
         :start="videoDateStart"
         :end="videoDateEnd"
-        :model-name="videoModelParam"
-        :provider-name="filterProvider || undefined"
-        mine
-      />
-      <VideoTrendChart
-        :refresh-token="videoRefreshToken"
-        :start="videoDateStart"
-        :end="videoDateEnd"
-        :model-name="videoModelParam"
-        :provider-name="filterProvider || undefined"
-        mine
-      />
-      <VideoDistributionCharts
-        :refresh-token="videoRefreshToken"
-        :start="videoDateStart"
-        :end="videoDateEnd"
-        :model-name="videoModelParam"
-        :provider-name="filterProvider || undefined"
-        mine
-      />
-      <VideoTaskTable
-        :refresh-token="videoRefreshToken"
-        controlled
-        mine
-        :status="filterStatus"
         :model-name="videoModelParam"
         :provider-name="filterProvider"
+        :task-status="filterStatus"
+        mine
+        api-path="/api/v1/my/usage/logs"
+        trace-api-path="/api/v1/my/usage/logs"
+        :params="logParams"
+        :currency="currency"
+        :table-props="logTableProps"
       />
     </template>
     <template v-else>
@@ -346,10 +328,7 @@ import {
 import type { UsageEndpointType } from '@/utils/usage-endpoint'
 import UsageLogSection from '@/components/usage/UsageLogSection.vue'
 import UsageFilterBar from '@/components/usage/UsageFilterBar.vue'
-import VideoKpiCards from '@/components/usage/VideoKpiCards.vue'
-import VideoTrendChart from '@/components/usage/VideoTrendChart.vue'
-import VideoDistributionCharts from '@/components/usage/VideoDistributionCharts.vue'
-import VideoTaskTable from '@/components/usage/VideoTaskTable.vue'
+import SeedanceVideoTabs from '@/components/usage/SeedanceVideoTabs.vue'
 import {
   countActiveFilters,
   isStatusCompatible,

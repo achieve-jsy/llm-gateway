@@ -102,8 +102,10 @@ export const videoTasksAPI = {
     return http.get<VideoTaskListResponse>(path, { params }).then(r => r.data)
   },
 
-  get: (taskId: string) =>
-    http.get<{ data: VideoTask }>(`/api/v1/video/tasks/${encodeURIComponent(taskId)}`).then(r => r.data.data),
+  get: (taskId: string, opts?: VideoTaskApiOptions) => {
+    const path = opts?.mine ? '/api/v1/my/video/tasks' : '/api/v1/video/tasks'
+    return http.get<{ data: VideoTask }>(`${path}/${encodeURIComponent(taskId)}`).then(r => r.data.data)
+  },
 
   stats: (params: VideoTaskStatsParams = {}, opts?: VideoTaskApiOptions) => {
     const path = opts?.mine ? '/api/v1/my/video/tasks/stats' : '/api/v1/video/tasks/stats'

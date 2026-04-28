@@ -14,7 +14,26 @@ func TestListHistoryPaged_respectsPageSize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&model.KeyRequest{}); err != nil {
+	if err := db.Exec(`CREATE TABLE key_requests (
+		id TEXT PRIMARY KEY,
+		requester_id TEXT NOT NULL,
+		requester_name TEXT DEFAULT '',
+		dept_id TEXT DEFAULT '',
+		dept_name TEXT DEFAULT '',
+		key_name TEXT NOT NULL,
+		key_type TEXT NOT NULL DEFAULT 'personal',
+		purpose TEXT DEFAULT '',
+		group_ids TEXT DEFAULT '',
+		expires_at DATETIME,
+		budget_monthly REAL DEFAULT 0,
+		status TEXT NOT NULL DEFAULT 'pending',
+		approver_id TEXT,
+		approver_name TEXT DEFAULT '',
+		approve_comment TEXT DEFAULT '',
+		created_key_id TEXT,
+		created_at DATETIME,
+		updated_at DATETIME
+	)`).Error; err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	repo := NewKeyRequestRepo(db)

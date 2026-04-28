@@ -92,6 +92,7 @@ import { resolveKeyLabel, resolveVideoDisplay } from '@/utils/videoTaskDisplay'
 
 const props = defineProps<{
   task: VideoTask | null
+  mine?: boolean
 }>()
 
 const visible = defineModel<boolean>({ required: true })
@@ -149,7 +150,7 @@ const timelineItems = computed(() => {
 async function refresh(taskId: string) {
   loading.value = true
   try {
-    localTask.value = await videoTasksAPI.get(taskId)
+    localTask.value = await videoTasksAPI.get(taskId, { mine: props.mine })
   } catch {
     // 保留传入的初始数据
   } finally {

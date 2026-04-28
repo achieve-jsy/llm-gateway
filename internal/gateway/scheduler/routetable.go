@@ -56,15 +56,23 @@ func (rt *RouteTable) ReplaceAll(config *ControlPlaneConfig) {
 	groupModels := make(map[uint][]*ModelRoutingEntry)
 	for _, m := range config.Models {
 		groupModels[m.GroupID] = append(groupModels[m.GroupID], &ModelRoutingEntry{
-			ModelID:        m.ModelID,
-			ModelName:      m.ModelName,
-			ModelType:      m.ModelType,
-			ChannelType:    m.ChannelType,
-			ProviderName:   m.ProviderName,
-			Endpoint:       m.Endpoint,
-			Priority:       derefPriority(m.Priority),
-			Weight:         derefWeight(m.Weight),
-			ComplexityTier: m.ComplexityTier,
+			ModelID:                 m.ModelID,
+			ModelName:               m.ModelName,
+			ModelType:               m.ModelType,
+			ChannelType:             m.ChannelType,
+			ProviderName:            m.ProviderName,
+			Endpoint:                m.Endpoint,
+			Priority:                derefPriority(m.Priority),
+			Weight:                  derefWeight(m.Weight),
+			ComplexityTier:          m.ComplexityTier,
+			ParamStyle:              m.ParamStyle,
+			UpstreamModelID:         m.UpstreamModelID,
+			BaseModel:               m.BaseModel,
+			ProtocolMode:            m.ProtocolMode,
+			ParamProfile:            m.ParamProfile,
+			UnsupportedParamPolicy:  m.UnsupportedParamPolicy,
+			SupportedParamsOverride: m.SupportedParamsOverride,
+			TransformOverrides:      m.TransformOverrides,
 		})
 	}
 

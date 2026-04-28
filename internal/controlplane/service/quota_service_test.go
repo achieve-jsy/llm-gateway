@@ -104,7 +104,10 @@ func setupQuotaServiceTestDB(t *testing.T) *gorm.DB {
 		override_supports_function_calling INTEGER NOT NULL DEFAULT 0,
 		override_supports_tool_choice INTEGER NOT NULL DEFAULT 0,
 		quota_rpm INTEGER,
-		quota_max_concurrency INTEGER
+		quota_max_concurrency INTEGER,
+		budget_tier_id TEXT,
+		sticky_enabled INTEGER NOT NULL DEFAULT 0,
+		sticky_ttl_seconds INTEGER NOT NULL DEFAULT 3600
 	)`).Error)
 
 	// providers table
@@ -141,6 +144,12 @@ func setupQuotaServiceTestDB(t *testing.T) *gorm.DB {
 		enabled INTEGER NOT NULL DEFAULT 1,
 		status INTEGER NOT NULL DEFAULT 1,
 		upstream_model_id TEXT DEFAULT '',
+		base_model TEXT NOT NULL DEFAULT '',
+		protocol_mode TEXT NOT NULL DEFAULT 'auto',
+		param_profile TEXT NOT NULL DEFAULT 'auto',
+		unsupported_param_policy TEXT NOT NULL DEFAULT 'preserve',
+		supported_params_override TEXT NOT NULL DEFAULT '{}',
+		transform_overrides TEXT NOT NULL DEFAULT '{}',
 		description TEXT DEFAULT '',
 		context_length INTEGER DEFAULT 0,
 		max_output_tokens INTEGER DEFAULT 0,
@@ -158,6 +167,7 @@ func setupQuotaServiceTestDB(t *testing.T) *gorm.DB {
 		video_supported_actions TEXT NOT NULL DEFAULT '[]',
 		quota_rpm INTEGER,
 		quota_max_concurrency INTEGER,
+		param_style TEXT NOT NULL DEFAULT '',
 		consecutive_failures INTEGER NOT NULL DEFAULT 0,
 		consecutive_recovery_successes INTEGER NOT NULL DEFAULT 0,
 		last_check_error TEXT DEFAULT '',

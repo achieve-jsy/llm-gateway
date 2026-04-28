@@ -31,7 +31,7 @@ services:
       BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED: ${BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED:-false}
       BUDGET_LEGACY_TOTAL_WRITE_ENABLED: ${BUDGET_LEGACY_TOTAL_WRITE_ENABLED:-true}
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -72,7 +72,7 @@ services:
       BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED: ${BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED:-false}
       BUDGET_LEGACY_TOTAL_WRITE_ENABLED: ${BUDGET_LEGACY_TOTAL_WRITE_ENABLED:-true}
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/healthz"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8081/healthz"]
       interval: 10s
       timeout: 5s
       retries: 3

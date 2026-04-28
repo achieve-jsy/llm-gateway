@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	configSyncTimeout     = 5 * time.Second
-	configSyncEndpoint    = "/api/v1/internal/groups"
+	configSyncTimeout  = 5 * time.Second
+	configSyncEndpoint = "/api/v1/internal/groups"
 )
 
 // ConfigSyncer periodically fetches configuration from the control plane
@@ -139,7 +139,7 @@ func (cs *ConfigSyncer) fetchConfig() (*ControlPlaneConfig, error) {
 		config.Groups = make([]GroupConfig, 0, len(config.Data))
 		config.Models = make([]GroupModel, 0)
 		modelIdx := uint(1)
-				for _, g := range config.Data {
+		for _, g := range config.Data {
 			config.Groups = append(config.Groups, GroupConfig{
 				ID:               g.ID,
 				Name:             g.Name,
@@ -152,17 +152,25 @@ func (cs *ConfigSyncer) fetchConfig() (*ControlPlaneConfig, error) {
 			})
 			for _, m := range g.Models {
 				config.Models = append(config.Models, GroupModel{
-					ID:             modelIdx,
-					GroupID:        g.ID,
-					ModelID:        modelIdx,
-					ModelName:      m.Name,
-					ModelType:      m.ModelType,
-					ChannelType:    m.ProviderType,
-					ProviderName:   m.ProviderName,
-					Endpoint:       m.Endpoint,
-					Priority:       m.Priority,
-					Weight:         m.Weight,
-					ComplexityTier: m.ComplexityTier,
+					ID:                      modelIdx,
+					GroupID:                 g.ID,
+					ModelID:                 modelIdx,
+					ModelName:               m.Name,
+					ModelType:               m.ModelType,
+					ChannelType:             m.ProviderType,
+					ProviderName:            m.ProviderName,
+					Endpoint:                m.Endpoint,
+					Priority:                m.Priority,
+					Weight:                  m.Weight,
+					ComplexityTier:          m.ComplexityTier,
+					ParamStyle:              m.ParamStyle,
+					UpstreamModelID:         m.UpstreamModelID,
+					BaseModel:               m.BaseModel,
+					ProtocolMode:            m.ProtocolMode,
+					ParamProfile:            m.ParamProfile,
+					UnsupportedParamPolicy:  m.UnsupportedParamPolicy,
+					SupportedParamsOverride: m.SupportedParamsOverride,
+					TransformOverrides:      m.TransformOverrides,
 				})
 				modelIdx++
 			}

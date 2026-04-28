@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -141,9 +142,14 @@ func TestModelTierBudgetContractFullyDefinesEveryP0Route(t *testing.T) {
 }
 
 func TestP0FoundationOwnsTierConstraintSnapshotSchemaAndContract(t *testing.T) {
-	foundation, err := os.ReadFile("../../atlas-migrations/20260711132830_add_model_tier_budget_foundation.sql")
+	foundationPath := "../../atlas-migrations/20260711132830_add_model_tier_budget_foundation.sql"
+	foundation, err := os.ReadFile(foundationPath)
+	if errors.Is(err, os.ErrNotExist) {
+		foundationPath = "../../atlas-migrations/20260716025000_add_model_tier_budget_foundation.sql"
+		foundation, err = os.ReadFile(foundationPath)
+	}
 	require.NoError(t, err)
-	require.Contains(t, string(foundation), `"budget_tier_constraints_snapshot" jsonb NOT NULL DEFAULT '[]'`)
+	require.Contains(t, string(foundation), `"budget_tier_constraints_snapshot" jsonb NOT NULL DEFAULT '[]'`, foundationPath)
 	_, err = os.Stat("../../atlas-migrations/20260711140938_add_call_logs_budget_tier_constraints_snapshot.sql")
 	require.ErrorIs(t, err, os.ErrNotExist, "P1 must not own a separate schema migration")
 

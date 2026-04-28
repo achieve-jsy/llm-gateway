@@ -9,6 +9,8 @@ variables:
   REGISTRY_LOCAL: "127.0.0.1:5000"
   GATEWAY_IMAGE: "llm-gateway"
   CONTROL_PLANE_IMAGE: "llm-control-plane"
+  BACKEND_CI_IMAGE: "llm-ci-backend"
+  BACKEND_CI_IMAGE_TAG: "go1.26"
   TEST_HOST: "192.0.2.10"
   TEST_USER: "root"
   TEST_PATH: "/data/llm-gateway"
@@ -50,7 +52,7 @@ workflow:
 # ═══════════════════════════════════════════════════════════════════════════════
 # BUILD — 测试
 # ═══════════════════════════════════════════════════════════════════════════════
-build-gateway-test:
+build-backend-ci-image-test:
   stage: build
   image: docker:24
   tags: [docker]
@@ -58,48 +60,71 @@ build-gateway-test:
     DOCKER_HOST: "unix:///var/run/docker.sock"
     DOCKER_BUILDKIT: "1"
   script:
-    - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
     - |
-      docker pull ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache 2>/dev/null || true
       docker build \
-        --cache-from ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache \
-        --cache-to type=inline \
-        --build-arg APP_ENV=test \
-        -f deploy/docker/gateway.Dockerfile \
-        -t ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} \
+        -f deploy/docker/ci-backend.Dockerfile \
+        -t ${REGISTRY}/${BACKEND_CI_IMAGE}:${BACKEND_CI_IMAGE_TAG} \
         .
-      docker tag ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache
-      docker push ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache
-      docker push ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG}
-      docker tag ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
-      docker push ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
+      docker push ${REGISTRY}/${BACKEND_CI_IMAGE}:${BACKEND_CI_IMAGE_TAG}
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
-    - if: $CI_COMMIT_BRANCH == "staging"
-      changes: *go-changes
-    - if: $CI_COMMIT_BRANCH == "main"
-      changes: *go-changes
+      changes:
+        - "deploy/docker/ci-backend.Dockerfile"
 
-build-control-plane-test:
+build-backend-test:
   stage: build
-  image: docker:24
+  image: ${REGISTRY}/${BACKEND_CI_IMAGE}:${BACKEND_CI_IMAGE_TAG}
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
     DOCKER_BUILDKIT: "1"
+    BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
+    GOCACHE: "/cache/llm-gateway/go-build"
+    GOMODCACHE: "/cache/llm-gateway/go-mod"
   script:
     - export IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
     - |
-      docker pull ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache 2>/dev/null || true
-      docker build \
-        --cache-from ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache \
-        --build-arg APP_ENV=test \
-        -f deploy/docker/control-plane.Dockerfile \
-        -t ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} \
-        .
-      docker push ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
-      docker tag ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
-      docker push ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
+      started_at=$(date +%s)
+      step_start=0
+      mark_start() { step_start=$(date +%s); }
+      mark_done() { now=$(date +%s); echo "TIMING ${1}=$((now - step_start))s"; }
+
+      export PATH="/go/bin:/usr/local/go/bin:${PATH}"
+      go version
+      go env GOCACHE GOMODCACHE
+      docker buildx version
+
+      mark_start
+      mkdir -p .backend-dist "$GOCACHE" "$GOMODCACHE"
+      CGO_ENABLED=0 go build -mod=vendor -ldflags="-s -w" -o .backend-dist/ ./cmd/gateway ./cmd/control-plane
+      mark_done go_build
+
+      mark_start
+      mkdir -p .backend-image-context
+      cp .backend-dist/gateway .backend-dist/control-plane .backend-image-context/
+      cp -R config atlas-migrations .backend-image-context/
+      mark_done image_context
+
+      mark_start
+      docker build --target gateway --build-arg APP_ENV=test \
+        -f deploy/docker/backend.Dockerfile \
+        -t ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG} .backend-image-context & gateway_build=$!
+      docker build --target control-plane --build-arg APP_ENV=test \
+        -f deploy/docker/backend.Dockerfile \
+        -t ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} .backend-image-context & cp_build=$!
+      wait $gateway_build
+      wait $cp_build
+      mark_done runtime_build
+
+      mark_start
+      docker push ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG} & gateway_push=$!
+      docker push ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} & cp_push=$!
+      wait $gateway_push
+      wait $cp_push
+      mark_done image_push
+
+      elapsed=$(( $(date +%s) - started_at ))
+      echo "Backend images built and pushed in ${elapsed}s"
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
     - if: $CI_COMMIT_BRANCH == "staging"
@@ -232,7 +257,7 @@ build-web-prod:
 # ═══════════════════════════════════════════════════════════════════════════════
 migrate-prod:
   stage: migrate
-  needs: ["build-gateway-prod"]
+  needs: ["build-gateway-prod", "build-control-plane-prod"]
   image: alpine:3.21
   tags: [docker]
   cache:
@@ -289,7 +314,7 @@ migrate-test:
         set -e
         chmod +x /tmp/atlas-migrate/atlas
         /tmp/atlas-migrate/atlas migrate hash --dir 'file:///tmp/atlas-migrate/atlas-migrations'
-        /tmp/atlas-migrate/atlas migrate apply --dir 'file:///tmp/atlas-migrate/atlas-migrations' --url '${DATABASE_URL}' --baseline '${ATLAS_BASELINE}'
+        /tmp/atlas-migrate/atlas migrate apply --dir 'file:///tmp/atlas-migrate/atlas-migrations' --url '${DATABASE_URL}' --baseline '${ATLAS_BASELINE}' --exec-order non-linear
         rm -rf /tmp/atlas-migrate
       "
   rules:
@@ -302,13 +327,14 @@ migrate-test:
 # ═══════════════════════════════════════════════════════════════════════════════
 deploy-app-test:
   stage: deploy
-  needs: ["build-gateway-test", "build-control-plane-test", "migrate-test"]
+  needs: ["build-backend-test", "migrate-test"]
+  resource_group: test-app-deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   timeout: 15m
   script:
     - |
-      SSH_OPTS="-o StrictHostKeyChecking=no"
+      SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
       IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
       echo "=== Blue-Green Deploy ${IMAGE_TAG} to ${TEST_HOST} (test) ==="
 
@@ -319,12 +345,15 @@ deploy-app-test:
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
         set -e
         cd ${TEST_PATH}
-        docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG} || echo 'Gateway image not found, reusing existing'
-        docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} || echo 'CP image not found, reusing existing'
+        docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG} & gateway_pull=\$!
+        docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} & cp_pull=\$!
+        wait \$gateway_pull
+        wait \$cp_pull
         export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=test
         # 蓝绿参数：nginx upstream 走测试机路径；测试环境用短 drain/stop，避免流水线长时间等待
         export NGINX_UPSTREAM=${TEST_PATH}/upstream-active.conf
-        export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30
+        export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30 SAFE_SWITCH_ENABLED=true KEEP_OLD_ENV=true
+        export NGINX_SMOKE_URL='http://127.0.0.1:9080/health'
         export LEGACY_CONTAINERS='llm-gw-gateway llm-gw-control-plane'
         # 密钥/连接串由 GitLab CI/CD 变量注入到本 SSH 会话，compose 才读得到。
         # 切勿删除这些 export（详见 test-env-config skill）。
@@ -357,19 +386,21 @@ deploy-app-test:
 # 测试环境回滚（切回上一个颜色，要求对端仍在运行；手动触发）
 rollback-test:
   stage: deploy
+  resource_group: test-app-deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   timeout: 15m
   script:
     - |
-      SSH_OPTS="-o StrictHostKeyChecking=no"
+      SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
       echo "=== Rollback test to previous color ==="
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "
         set -e
         cd ${TEST_PATH}
         export REGISTRY=${REGISTRY} APP_ENV=test
         export NGINX_UPSTREAM=${TEST_PATH}/upstream-active.conf
-        export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30
+        export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30 SAFE_SWITCH_ENABLED=true KEEP_OLD_ENV=true
+        export NGINX_SMOKE_URL='http://127.0.0.1:9080/health'
         export DATABASE_URL='${TEST_DATABASE_URL}'
         export REDIS_ADDR='${TEST_REDIS_ADDR}' REDIS_PASSWORD='${TEST_REDIS_PASSWORD}'
         export REDIS_DB='${TEST_REDIS_DB}'
@@ -421,18 +452,17 @@ deploy-web-test:
 # 快速部署（测试环境）：跳过 Docker 构建/推送/拉取，直接编译 Go 二进制 → SCP → 替换容器内文件
 deploy-app-test-fast:
   stage: deploy
+  resource_group: test-app-deploy
   image: golang:1.26-alpine
   tags: [docker]
   timeout: 10m
   needs:
-    - job: build-gateway-test
-      optional: true
-    - job: build-control-plane-test
+    - job: build-backend-test
       optional: true
     - migrate-test
   script:
     - |
-      SSH_OPTS="-o StrictHostKeyChecking=no"
+      SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
       IMAGE_TAG="test-${CI_COMMIT_SHORT_SHA}"
       echo "=== Fast Deploy: compile + SCP binary directly to ${TEST_HOST} ==="
 
@@ -465,7 +495,8 @@ deploy-app-test-fast:
         cd ${TEST_PATH}
         export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=test
         export NGINX_UPSTREAM=${TEST_PATH}/upstream-active.conf
-        export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30
+        export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30 SAFE_SWITCH_ENABLED=true KEEP_OLD_ENV=true
+        export NGINX_SMOKE_URL='http://127.0.0.1:9080/health'
         export DATABASE_URL='${TEST_DATABASE_URL}'
         export REDIS_ADDR='${TEST_REDIS_ADDR}' REDIS_PASSWORD='${TEST_REDIS_PASSWORD}'
         export REDIS_DB='${TEST_REDIS_DB}'
@@ -509,7 +540,8 @@ deploy-app-test-fast:
         cd ${TEST_PATH}
         export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=test
         export NGINX_UPSTREAM=${TEST_PATH}/upstream-active.conf
-        export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30
+        export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30 SAFE_SWITCH_ENABLED=true KEEP_OLD_ENV=true
+        export NGINX_SMOKE_URL='http://127.0.0.1:9080/health'
         export LEGACY_CONTAINERS='llm-gw-gateway llm-gw-control-plane'
         export DATABASE_URL='${TEST_DATABASE_URL}'
         export REDIS_ADDR='${TEST_REDIS_ADDR}' REDIS_PASSWORD='${TEST_REDIS_PASSWORD}'
@@ -543,15 +575,15 @@ deploy-app-test-fast:
 # ═══════════════════════════════════════════════════════════════════════════════
 deploy-prod:
   stage: deploy
-  needs: ["migrate-prod"]
+  needs: ["build-gateway-prod", "build-control-plane-prod", "migrate-prod"]
+  resource_group: production-deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
-  # 预算：preflight(~2m) + DRAIN_TIMEOUT(600s) + STOP_TIMEOUT(120s) ≈ 14m，留足余量。
-  # 旧值 20m 与「drain 600 + stop 600」相等，旧 gateway 停得慢时必超时（部署其实已成功）。
-  timeout: 30m
+  # 常驻双颜色：切流成功后保留旧环境用于快速回滚，不再同步等待 600s drain。
+  timeout: 15m
   script:
     - |
-      SSH_OPTS="-o StrictHostKeyChecking=no"
+      SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
       IMAGE_TAG="$CI_COMMIT_TAG"
       echo "=== Blue-Green Deploy ${IMAGE_TAG} to ${PROD_HOST} (prod) ==="
 
@@ -559,20 +591,24 @@ deploy-prod:
       ssh ${SSH_OPTS} root@${PROD_HOST} "mkdir -p ${PROD_PATH}"
       scp ${SSH_OPTS} -r deploy/blue-green/* root@${PROD_HOST}:${PROD_PATH}/
 
-      # Pull 镜像
+      # Pull 镜像（并行拉取，失败立即中止）
       ssh ${SSH_OPTS} root@${PROD_HOST} "
-        docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
-        docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
+        set -e
+        docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG} & gateway_pull=\$!
+        docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} & cp_pull=\$!
+        wait \$gateway_pull
+        wait \$cp_pull
       "
 
-      # 执行蓝绿部署（脚本内包含 600s drain 等待）
+      # 执行蓝绿部署：新环境稳定 ready 后切流，切流后保留旧颜色用于快速回滚。
       ssh ${SSH_OPTS} root@${PROD_HOST} "
         set -e
         cd ${PROD_PATH}
         export IMAGE_TAG=${IMAGE_TAG} REGISTRY=${REGISTRY} APP_ENV=prod
-        # 旧环境经 600s drain 后已无新流量，停它不需再等 600s（默认值），
-        # 否则 drain 600 + stop 600 = 20m 撑满 job timeout，导致部署成功但 job 报错。
-        export DRAIN_TIMEOUT=600 STOP_TIMEOUT=120
+        export DRAIN_TIMEOUT=600 STOP_TIMEOUT=120 TARGET_REPLACE_TIMEOUT=30
+        export SAFE_SWITCH_ENABLED=true KEEP_OLD_ENV=true DEPLOY_LOCK_TIMEOUT=600
+        export READY_STABLE_CHECKS=3 READY_STABLE_INTERVAL=2 READY_MIN_MODEL_COUNT=1 READY_REQUIRE_STABLE_VERSION=true
+        export NGINX_SMOKE_URL='http://127.0.0.1:9080/health'
         export DATABASE_URL='${PROD_DATABASE_URL}'
         export REDIS_ADDR='${PROD_REDIS_ADDR}' REDIS_DB='${PROD_REDIS_DB}' REDIS_PASSWORD='${PROD_REDIS_PASSWORD}'
         export JWT_SECRET='${PROD_JWT_SECRET}'
@@ -603,19 +639,22 @@ deploy-prod:
 # 生产回滚（快速切回上一个颜色，无需重新构建）
 rollback-prod:
   stage: deploy
+  resource_group: production-deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
-  # 预算：DRAIN_TIMEOUT(600s) + STOP_TIMEOUT(120s) + preflight ≈ 13m，留足余量。
-  timeout: 20m
+  # 常驻双颜色回滚：只做健康确认 + 原子切流 + nginx 冒烟。
+  timeout: 10m
   script:
     - |
-      SSH_OPTS="-o StrictHostKeyChecking=no"
+      SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
       echo "=== Rollback prod to previous color ==="
       ssh ${SSH_OPTS} root@${PROD_HOST} "
         set -e
         cd ${PROD_PATH}
-        # 同 deploy-prod：drain 后旧环境已空闲，停它无需默认 600s（否则会撑爆 timeout）。
-        export DRAIN_TIMEOUT=600 STOP_TIMEOUT=120
+        export DRAIN_TIMEOUT=600 STOP_TIMEOUT=120 TARGET_REPLACE_TIMEOUT=30
+        export SAFE_SWITCH_ENABLED=true KEEP_OLD_ENV=true DEPLOY_LOCK_TIMEOUT=600
+        export READY_STABLE_CHECKS=3 READY_STABLE_INTERVAL=2 READY_MIN_MODEL_COUNT=1 READY_REQUIRE_STABLE_VERSION=true
+        export NGINX_SMOKE_URL='http://127.0.0.1:9080/health'
         bash deploy-blue-green.sh --rollback
       "
   environment:

@@ -257,7 +257,7 @@ build-web-prod:
 # ═══════════════════════════════════════════════════════════════════════════════
 migrate-prod:
   stage: migrate
-  needs: ["build-gateway-prod"]
+  needs: ["build-gateway-prod", "build-control-plane-prod"]
   image: alpine:3.21
   tags: [docker]
   cache:
@@ -575,7 +575,7 @@ deploy-app-test-fast:
 # ═══════════════════════════════════════════════════════════════════════════════
 deploy-prod:
   stage: deploy
-  needs: ["migrate-prod"]
+  needs: ["build-gateway-prod", "build-control-plane-prod", "migrate-prod"]
   resource_group: production-deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]

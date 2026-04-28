@@ -55,7 +55,20 @@ url="${*: -1}"
 echo "curl $url" >> "$CALLS_LOG"
 case "$url" in
     http://localhost:8080/ready|http://localhost:8082/ready)
-        printf '%s\n' '{"capabilities":{"tier_snapshot_schema":1,"redis_v2":true}}'
+        count_file="${CALLS_LOG}.ready-count"
+        count=0
+        [ -f "$count_file" ] && count=$(cat "$count_file")
+        count=$((count + 1))
+        printf '%s' "$count" > "$count_file"
+        version=7
+        model_count=12
+        if [ "${FLAP_READY_VERSION:-false}" = "true" ]; then
+            version=$count
+        fi
+        if [ "${EMPTY_READY_MODELS:-false}" = "true" ]; then
+            model_count=0
+        fi
+        printf '{"status":"ready","checks":{"redis":"ok","registry":"ok","scheduler":"ok"},"details":{"version":%s,"model_count":%s,"source":"redis-snapshot","loaded_at":"2026-07-17T00:00:00Z"},"capabilities":{"tier_snapshot_schema":1,"redis_v2":true,"snapshot_revision":4}}\n' "$version" "$model_count"
         ;;
     http://localhost:8081/healthz|http://localhost:8083/healthz)
         exit 0
@@ -95,8 +108,10 @@ run_deploy() {
         NGINX_SMOKE_URL="http://nginx.test/health" \
         SAFE_SWITCH_ENABLED=true \
         KEEP_OLD_ENV=true \
-        HEALTH_RETRIES=1 \
+        HEALTH_RETRIES=3 \
         HEALTH_INTERVAL=0 \
+        READY_STABLE_CHECKS=2 \
+        READY_STABLE_INTERVAL=0 \
         SMOKE_RETRIES=1 \
         SMOKE_INTERVAL=0 \
         "$@" \
@@ -125,6 +140,32 @@ test_failed_smoke_restores_previous_upstream() {
     [ "$(cat "${fixture}/deploy/.active-color")" = "blue" ] || fail "active color changed after failed smoke check"
     assert_contains "${fixture}/upstream-active.conf" "127.0.0.1:8080"
     assert_contains "${fixture}/calls.log" "compose -f ${fixture}/deploy/docker-compose.green.yml -p llm-green down --timeout 30"
+}
+
+test_flapping_ready_version_blocks_cutover() {
+    local fixture
+    fixture=$(new_fixture ready-flap)
+
+    if run_deploy "$fixture" HEALTH_RETRIES=3 FLAP_READY_VERSION=true; then
+        fail "deployment should fail when gateway ready version does not stabilize"
+    fi
+
+    [ "$(cat "${fixture}/deploy/.active-color")" = "blue" ] || fail "active color changed after unstable ready payload"
+    assert_contains "${fixture}/upstream-active.conf" "127.0.0.1:8080"
+    assert_not_contains "${fixture}/calls.log" "nginx -s reload"
+}
+
+test_empty_ready_models_blocks_cutover() {
+    local fixture
+    fixture=$(new_fixture ready-empty)
+
+    if run_deploy "$fixture" HEALTH_RETRIES=2 EMPTY_READY_MODELS=true; then
+        fail "deployment should fail when gateway ready model_count is empty"
+    fi
+
+    [ "$(cat "${fixture}/deploy/.active-color")" = "blue" ] || fail "active color changed with empty ready models"
+    assert_contains "${fixture}/upstream-active.conf" "127.0.0.1:8080"
+    assert_not_contains "${fixture}/calls.log" "nginx -s reload"
 }
 
 test_concurrent_deploy_waits_then_times_out() {
@@ -157,6 +198,8 @@ test_retained_target_is_removed_before_replacement() {
 
 test_success_keeps_old_environment
 test_failed_smoke_restores_previous_upstream
+test_flapping_ready_version_blocks_cutover
+test_empty_ready_models_blocks_cutover
 test_concurrent_deploy_waits_then_times_out
 test_retained_target_is_removed_before_replacement
 echo "PASS: blue-green deployment tests"

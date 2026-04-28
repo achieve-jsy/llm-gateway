@@ -16,6 +16,10 @@
 #   STOP_TIMEOUT     drain 后停止旧环境容器的超时秒数   (默认 600；旧容器若不响应 SIGTERM 会等满)
 #   HEALTH_RETRIES   健康检查重试次数               (默认 30)
 #   HEALTH_INTERVAL  健康检查间隔秒数               (默认 3)
+#   READY_STABLE_CHECKS 切流前 gateway /ready 连续稳定次数 (默认 3)
+#   READY_STABLE_INTERVAL 连续稳定检查间隔秒数              (默认 2)
+#   READY_MIN_MODEL_COUNT 切流前最少可见模型数量            (默认 1)
+#   READY_REQUIRE_STABLE_VERSION 要求 /ready version 连续一致 (默认 true)
 #   SAFE_SWITCH_ENABLED 启用部署锁和可恢复的原子切流 (默认 false)
 #   KEEP_OLD_ENV     切流后保留旧颜色，供快速回滚     (默认 false)
 #   TARGET_REPLACE_TIMEOUT 替换非活跃旧颜色的超时秒数 (默认 30)
@@ -42,6 +46,10 @@ DRAIN_TIMEOUT="${DRAIN_TIMEOUT:-600}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-600}"
 HEALTH_RETRIES="${HEALTH_RETRIES:-15}"
 HEALTH_INTERVAL="${HEALTH_INTERVAL:-2}"
+READY_STABLE_CHECKS="${READY_STABLE_CHECKS:-3}"
+READY_STABLE_INTERVAL="${READY_STABLE_INTERVAL:-2}"
+READY_MIN_MODEL_COUNT="${READY_MIN_MODEL_COUNT:-1}"
+READY_REQUIRE_STABLE_VERSION="${READY_REQUIRE_STABLE_VERSION:-true}"
 SAFE_SWITCH_ENABLED="${SAFE_SWITCH_ENABLED:-false}"
 KEEP_OLD_ENV="${KEEP_OLD_ENV:-false}"
 TARGET_REPLACE_TIMEOUT="${TARGET_REPLACE_TIMEOUT:-30}"
@@ -123,6 +131,108 @@ health_check() {
             return 0
         fi
         sleep "$HEALTH_INTERVAL"
+    done
+    return 1
+}
+
+extract_ready_fingerprint() {
+    local payload="$1"
+
+    if command -v jq >/dev/null 2>&1; then
+        printf '%s' "$payload" | jq -r --argjson min_models "$READY_MIN_MODEL_COUNT" '
+            def nonempty: type == "string" and length > 0;
+            if .status == "ready"
+              and .checks.redis == "ok"
+              and .checks.registry == "ok"
+              and .checks.scheduler == "ok"
+              and ((.details.model_count // 0) >= $min_models)
+              and (.details.source | nonempty)
+              and (.details.loaded_at | nonempty)
+              and (.capabilities.tier_snapshot_schema == 1)
+              and (.capabilities.redis_v2 == true)
+            then
+              [(.details.version // 0), (.details.model_count // 0), (.details.source // ""), (.details.loaded_at // ""), (.capabilities.snapshot_revision // 0)] | @tsv
+            else
+              empty
+            end
+        ' 2>/dev/null
+        return $?
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+        READY_PAYLOAD="$payload" READY_MIN_MODEL_COUNT="$READY_MIN_MODEL_COUNT" python3 - <<'PY'
+import json, os, sys
+
+try:
+    data = json.loads(os.environ.get("READY_PAYLOAD", ""))
+except Exception:
+    sys.exit(1)
+
+checks = data.get("checks") or {}
+details = data.get("details") or {}
+caps = data.get("capabilities") or {}
+min_models = int(os.environ.get("READY_MIN_MODEL_COUNT") or "1")
+
+ok = (
+    data.get("status") == "ready"
+    and checks.get("redis") == "ok"
+    and checks.get("registry") == "ok"
+    and checks.get("scheduler") == "ok"
+    and int(details.get("model_count") or 0) >= min_models
+    and isinstance(details.get("source"), str) and len(details.get("source")) > 0
+    and isinstance(details.get("loaded_at"), str) and len(details.get("loaded_at")) > 0
+    and caps.get("tier_snapshot_schema") == 1
+    and caps.get("redis_v2") is True
+)
+if not ok:
+    sys.exit(1)
+
+print("\t".join([
+    str(details.get("version") or 0),
+    str(details.get("model_count") or 0),
+    details.get("source") or "",
+    details.get("loaded_at") or "",
+    str(caps.get("snapshot_revision") or 0),
+]))
+PY
+        return $?
+    fi
+
+    log "WARN: neither jq nor python3 available; cannot parse /ready payload for stable readiness"
+    return 1
+}
+
+wait_gateway_ready_stable() {
+    local color="$1"
+    local port i payload fingerprint previous="" stable=0 display
+    port=$(get_gateway_port "$color")
+
+    log "Waiting for ${color} gateway readiness to stabilize (${READY_STABLE_CHECKS} consecutive checks, min_models=${READY_MIN_MODEL_COUNT})..."
+    for i in $(seq 1 "$HEALTH_RETRIES"); do
+        payload=$(curl -fsS --max-time 5 "http://localhost:${port}/ready" 2>/dev/null) || {
+            stable=0
+            sleep "$READY_STABLE_INTERVAL"
+            continue
+        }
+
+        if fingerprint=$(extract_ready_fingerprint "$payload") && [ -n "$fingerprint" ]; then
+            if [ "$READY_REQUIRE_STABLE_VERSION" != "true" ] || [ -z "$previous" ] || [ "$fingerprint" = "$previous" ]; then
+                stable=$((stable + 1))
+            else
+                stable=1
+            fi
+            previous="$fingerprint"
+            display=$(printf '%s' "$fingerprint" | tr '\t' ' ')
+            log "${color} gateway ready fingerprint stable=${stable}/${READY_STABLE_CHECKS}: ${display}"
+            if [ "$stable" -ge "$READY_STABLE_CHECKS" ]; then
+                return 0
+            fi
+        else
+            stable=0
+            previous=""
+            log "${color} gateway /ready payload not cutover-ready yet (attempt ${i}/${HEALTH_RETRIES})"
+        fi
+        sleep "$READY_STABLE_INTERVAL"
     done
     return 1
 }
@@ -358,6 +468,11 @@ main() {
         log "Tearing down failed ${target} to free ports..."
         stop_env "$target" 30 || true
         die "${target} failed health check after $((HEALTH_RETRIES * HEALTH_INTERVAL))s; deploy aborted, nothing switched."
+    fi
+    if [ "$SAFE_SWITCH_ENABLED" = "true" ] && ! wait_gateway_ready_stable "$target"; then
+        log "Gateway readiness did not stabilize for ${target}. Current traffic stays on previous env."
+        stop_env "$target" 30 || true
+        die "${target} gateway /ready did not become cutover-ready; deploy aborted, nothing switched."
     fi
     supports_budget_v2 "$target" || {
         stop_env "$target" 30 || true

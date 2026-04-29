@@ -39,3 +39,16 @@ frontend:
 
 gateway:
   url: "https://aimeter.xk-devops.com"
+
+budget:
+  timezone: "Asia/Shanghai"
+  week_start: "monday"
+
+budget_tier:
+  master_enabled: true
+  accounting_enabled: true
+  positive_enforcement_enabled: true
+  zero_block_enabled: true
+  shadow_enabled: false
+  v2_total_enforcement_enabled: false
+  legacy_total_write_enabled: true

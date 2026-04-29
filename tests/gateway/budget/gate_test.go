@@ -48,6 +48,35 @@ func TestBuildAccountingPlan_ExpandsTotalAndEligibleTierConstraints(t *testing.T
 	require.True(t, plan.TierAccountingEligible)
 }
 
+func TestBuildAccountingPlan_EnabledSnapshotWritesTierConstraints(t *testing.T) {
+	now := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
+	identity := &gwmodel.UserIdentity{BudgetChain: []gwmodel.BudgetScope{{
+		ScopeType: "key", ScopeID: "key-1", Label: "X-Lab",
+		AmountUSD: -1, WeeklyAmountUSD: -1, DailyAmountUSD: -1,
+		TierLimits: []gwmodel.TierLimit{{
+			TierID: "tier-high", TierName: "高级模型", PeriodType: "monthly",
+			EffectiveLimitUSD: "45000.000000", Enabled: true, EffectiveAt: now.Add(-time.Hour),
+		}},
+	}}}
+	snapshot := &configsync.BudgetTierSnapshot{
+		SchemaVersion: 1, MasterEnabled: true, AccountingEnabled: true,
+		Timezone: "Asia/Shanghai", WeekStart: "monday",
+	}
+	tier := budget.TierContext{
+		TierID: "tier-high", TierName: "高级模型", GroupName: "x-lab",
+		AccountingEligible: true, EnforcementEligible: true,
+	}
+
+	plan, err := budget.BuildAccountingPlan(identity, tier, now, snapshot)
+	require.NoError(t, err)
+	require.True(t, plan.TierAccountingEligible)
+	require.True(t, plan.TierEnforcementEligible)
+	require.Len(t, plan.Constraints, 1)
+	require.Equal(t, budget.DimensionTier, plan.Constraints[0].Dimension)
+	require.Equal(t, "budget:v2:tier:used:key:key-1:tier-high:2026-07", plan.Constraints[0].Key)
+	require.Equal(t, int64(45_000_000_000), plan.Constraints[0].LimitMicroUSD)
+}
+
 func newBudgetContext(identity *gwmodel.UserIdentity, tier budget.TierContext) *gin.Context {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())

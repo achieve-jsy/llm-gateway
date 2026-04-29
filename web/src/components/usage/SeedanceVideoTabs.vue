@@ -89,10 +89,14 @@ const props = withDefaults(defineProps<{
 const activeSubTab = ref<'tasks' | 'logs'>('tasks')
 
 const seedanceLogParams = computed(() => {
+  const base = props.logParams || {}
   const params: Record<string, any> = {
-    ...props.logParams,
+    ...base,
     seedance: true,
   }
+  const fallbackRange = defaultDateRange()
+  params.from = params.from || params.start || props.start || fallbackRange.from
+  params.to = params.to || params.end || props.end || fallbackRange.to
   delete params.endpoint
   const status = String(params.status || '')
   if (status && !['success', 'error'].includes(status)) {
@@ -107,6 +111,23 @@ const seedanceLogParams = computed(() => {
   }
   return params
 })
+
+function defaultDateRange() {
+  const now = new Date()
+  const start = new Date(now)
+  start.setDate(start.getDate() - 30)
+  return {
+    from: formatDate(start),
+    to: formatDate(now),
+  }
+}
+
+function formatDate(date: Date): string {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
 
 const mergedLogTableProps = computed(() => ({
   showProvider: true,

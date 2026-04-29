@@ -51,6 +51,10 @@ export interface LogRow {
   inbound_endpoint?: string
   /** 原始请求体（列表 API 自 call_traces JOIN，用于 rerank 文档数等） */
   request_body?: unknown
+  /** 原始响应体（列表 API 自 call_traces JOIN，用于 Seedance 结果/错误摘要） */
+  response_body?: unknown
+  /** Seedance 视频任务 ID（后端从 endpoint/响应体提取） */
+  task_id?: string
   /** Rerank：documents 数组长度（后端 SQL 提取，优先于解析 request_body） */
   documents_count?: number | null
 }

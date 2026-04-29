@@ -79,7 +79,7 @@
       />
     </div>
 
-    <VideoTaskDetail v-model="detailVisible" :task="detailTask" />
+    <VideoTaskDetail v-model="detailVisible" :task="detailTask" :mine="mine" />
   </div>
 </template>
 

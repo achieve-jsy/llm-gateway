@@ -2340,6 +2340,23 @@ function normalizeTierUsageItem(raw: any, configuredByKey: Map<string, TierBudge
   }
 }
 
+async function loadScopedTierUsageItems(configuredItems: TierBudgetItem[]): Promise<TierBudgetItem[]> {
+  const scopes = Array.from(new Map(configuredItems.map(item => [tierScopeKey(item.scope_type, item.scope_id), item])).values())
+  if (!scopes.length) return []
+  const results = await Promise.allSettled(scopes.map(async scope => {
+    const { data } = await http.get<any>('/api/v1/budgets/tier-usage', {
+      params: { period_type: 'monthly', scope_type: scope.scope_type, scope_id: scope.scope_id },
+      _silent: true,
+    } as any)
+    const payload = data?.data ?? data ?? {}
+    const list = payload?.items ?? (Array.isArray(payload) ? payload : [])
+    return Array.isArray(list) ? list : []
+  }))
+  return results.flatMap(result => result.status === 'fulfilled' ? result.value : [])
+    .map(item => normalizeTierUsageItem(item, new Map(configuredItems.map(configured => [tierBudgetMergeKey(configured), configured]))))
+    .filter((item): item is TierBudgetItem => Boolean(item))
+}
+
 async function loadConfiguredTierBudgets(scopes: BudgetItem[]): Promise<TierBudgetItem[]> {
   const visibleScopeTypes = overviewView.value === 'company'
     ? new Set<BudgetScopeType>(['studio'])
@@ -2603,6 +2620,7 @@ async function load() {
         .map(item => normalizeTierUsageItem(item, mergedTierItems))
         .filter((item): item is TierBudgetItem => Boolean(item))
     }
+    usageTierItems.push(...await loadScopedTierUsageItems(configuredTierItems))
     for (const item of usageTierItems) {
       const key = tierBudgetMergeKey(item)
       mergedTierItems.set(key, {

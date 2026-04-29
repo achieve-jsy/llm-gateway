@@ -168,54 +168,60 @@ build-web-test:
 # ═══════════════════════════════════════════════════════════════════════════════
 # BUILD — 生产
 # ═══════════════════════════════════════════════════════════════════════════════
-build-gateway-prod:
+build-backend-prod:
   stage: build
-  image: docker:24
+  image: ${REGISTRY}/${BACKEND_CI_IMAGE}:${BACKEND_CI_IMAGE_TAG}
   tags: [docker]
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
     DOCKER_BUILDKIT: "1"
-  before_script:
-    - export IMAGE_TAG="${CI_COMMIT_TAG}"
+    BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
+    GOCACHE: "/cache/llm-gateway/go-build"
+    GOMODCACHE: "/cache/llm-gateway/go-mod"
   script:
+    - export IMAGE_TAG="${CI_COMMIT_TAG}"
     - |
-      docker pull ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache 2>/dev/null || true
-      docker build \
-        --cache-from ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache \
-        --cache-to type=inline \
-        --build-arg APP_ENV=prod \
-        -f deploy/docker/gateway.Dockerfile \
-        -t ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} \
-        .
-      docker tag ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache
-      docker push ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache
-      docker push ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG}
-      docker tag ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:${IMAGE_TAG} ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
-      docker push ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
-  rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+      started_at=$(date +%s)
+      step_start=0
+      mark_start() { step_start=$(date +%s); }
+      mark_done() { now=$(date +%s); echo "TIMING ${1}=$((now - step_start))s"; }
 
-build-control-plane-prod:
-  stage: build
-  image: docker:24
-  tags: [docker]
-  variables:
-    DOCKER_HOST: "unix:///var/run/docker.sock"
-    DOCKER_BUILDKIT: "1"
-  before_script:
-    - export IMAGE_TAG="${CI_COMMIT_TAG}"
-  script:
-    - |
-      docker pull ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache 2>/dev/null || true
-      docker build \
-        --cache-from ${REGISTRY_LOCAL}/${GATEWAY_IMAGE}:build-cache \
-        --build-arg APP_ENV=prod \
-        -f deploy/docker/control-plane.Dockerfile \
-        -t ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} \
-        .
-      docker push ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
-      docker tag ${REGISTRY_LOCAL}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
-      docker push ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
+      export PATH="/go/bin:/usr/local/go/bin:${PATH}"
+      go version
+      go env GOCACHE GOMODCACHE
+      docker buildx version
+
+      mark_start
+      mkdir -p .backend-dist "$GOCACHE" "$GOMODCACHE"
+      CGO_ENABLED=0 go build -mod=vendor -ldflags="-s -w" -o .backend-dist/ ./cmd/gateway ./cmd/control-plane
+      mark_done go_build
+
+      mark_start
+      mkdir -p .backend-image-context
+      cp .backend-dist/gateway .backend-dist/control-plane .backend-image-context/
+      cp -R config atlas-migrations .backend-image-context/
+      mark_done image_context
+
+      mark_start
+      docker build --target gateway --build-arg APP_ENV=prod \
+        -f deploy/docker/backend.Dockerfile \
+        -t ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG} .backend-image-context & gateway_build=$!
+      docker build --target control-plane --build-arg APP_ENV=prod \
+        -f deploy/docker/backend.Dockerfile \
+        -t ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} .backend-image-context & cp_build=$!
+      wait $gateway_build
+      wait $cp_build
+      mark_done runtime_build
+
+      mark_start
+      docker push ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG} & gateway_push=$!
+      docker push ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} & cp_push=$!
+      wait $gateway_push
+      wait $cp_push
+      mark_done image_push
+
+      elapsed=$(( $(date +%s) - started_at ))
+      echo "Backend images built and pushed in ${elapsed}s"
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
@@ -257,7 +263,7 @@ build-web-prod:
 # ═══════════════════════════════════════════════════════════════════════════════
 migrate-prod:
   stage: migrate
-  needs: ["build-gateway-prod", "build-control-plane-prod"]
+  needs: ["build-backend-prod"]
   image: alpine:3.21
   tags: [docker]
   cache:
@@ -575,7 +581,7 @@ deploy-app-test-fast:
 # ═══════════════════════════════════════════════════════════════════════════════
 deploy-prod:
   stage: deploy
-  needs: ["build-gateway-prod", "build-control-plane-prod", "migrate-prod"]
+  needs: ["build-backend-prod", "migrate-prod"]
   resource_group: production-deploy
   image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]

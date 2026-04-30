@@ -74,6 +74,14 @@
           批量设置标签{{ selectedModels.length > 0 ? `(${selectedModels.length})` : '' }}
         </el-button>
         <el-button
+          type="primary"
+          plain
+          :disabled="selectedModels.length === 0"
+          @click="openBatchBindGroupDialog"
+        >
+          绑定模型组{{ selectedModels.length > 0 ? `(${selectedModels.length})` : '' }}
+        </el-button>
+        <el-button
           type="danger"
           :disabled="selectedModels.length === 0"
           @click="handleBatchDelete"
@@ -301,6 +309,66 @@
       @close="batchTagDialogVisible = false"
     />
 
+    <!-- 批量绑定模型组对话框 -->
+    <el-dialog v-model="batchBindGroupDialogVisible" title="绑定模型组" width="560px" destroy-on-close>
+      <div class="bind-group-dialog">
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          :title="`已选择 ${selectedModels.length} 个模型，将绑定到同一个模型组`"
+        />
+        <div class="selected-model-summary">
+          <el-tag
+            v-for="type in selectedModelTypes"
+            :key="type"
+            :type="modelTypeTagType(type)"
+            effect="plain"
+          >{{ MODEL_TYPE_LABEL[type] ?? type }}</el-tag>
+          <span v-if="selectedModelTypes.length > 1" class="text-muted">请选择同一类型模型后再绑定</span>
+        </div>
+        <el-form label-width="100px" label-position="left">
+          <el-form-item label="模型组">
+            <el-select
+              v-model="batchBindGroupForm.groupId"
+              filterable
+              placeholder="选择模型组"
+              style="width: 100%"
+              :disabled="selectedModelTypes.length !== 1"
+            >
+              <el-option
+                v-for="group in bindableGroups"
+                :key="group.id"
+                :label="`${group.name}（${MODEL_TYPE_LABEL[group.model_type] ?? group.model_type}）`"
+                :value="group.id"
+              />
+            </el-select>
+            <div class="form-hint">仅展示与所选模型类型一致的模型组。</div>
+          </el-form-item>
+          <el-form-item label="默认权重">
+            <el-input-number v-model="batchBindGroupForm.weight" :min="1" :max="100" />
+          </el-form-item>
+          <el-form-item label="复杂度档位">
+            <el-select v-model="batchBindGroupForm.complexityTier" style="width: 180px">
+              <el-option label="SIMPLE" value="SIMPLE" />
+              <el-option label="MEDIUM" value="MEDIUM" />
+              <el-option label="COMPLEX" value="COMPLEX" />
+              <el-option label="REASONING" value="REASONING" />
+            </el-select>
+          </el-form-item>
+        </el-form>
+      </div>
+      <template #footer>
+        <el-button @click="batchBindGroupDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="batchBindGroupSubmitting"
+          :disabled="!canSubmitBatchBindGroup"
+          @click="handleBatchBindGroup"
+        >绑定</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 模型检测设置对话框 -->
     <ModelCheckSettingsDialog
       :visible="modelCheckSettingsVisible"
@@ -331,6 +399,8 @@ import type { Model } from '@/types/model'
 import type { Provider } from '@/types/provider'
 import type { ModelTag } from '@/types/model-tag'
 import type { ResettableOverrideField } from '@/types/catalog'
+import { groupsApi } from '@/api/groups'
+import type { ComplexityTier, GroupListItem } from '@/types/group'
 import ModelDialog from '@/components/admin/ModelDialog.vue'
 import BatchTagDialog from '@/components/admin/BatchTagDialog.vue'
 import ModelCheckSettingsDialog from '@/components/admin/ModelCheckSettingsDialog.vue'
@@ -380,8 +450,30 @@ const editingModel = ref<Model | null>(null)
 const selectedModels = ref<Model[]>([])
 const selectedModelIds = computed(() => selectedModels.value.map(m => m.id))
 const batchTagDialogVisible = ref(false)
+const batchBindGroupDialogVisible = ref(false)
+const batchBindGroupSubmitting = ref(false)
+const groupOptions = ref<GroupListItem[]>([])
+const batchBindGroupForm = ref<{ groupId: number | null; weight: number; complexityTier: ComplexityTier }>({
+  groupId: null,
+  weight: 1,
+  complexityTier: 'MEDIUM',
+})
 const modelCheckSettingsVisible = ref(false)
 const checkingModelId = ref('')
+
+const selectedModelTypes = computed(() => Array.from(new Set(selectedModels.value.map(m => m.model_type).filter(Boolean))))
+
+const bindableGroups = computed(() => {
+  if (selectedModelTypes.value.length !== 1) return []
+  const modelType = selectedModelTypes.value[0]
+  return groupOptions.value.filter(group => group.model_type === modelType)
+})
+
+const canSubmitBatchBindGroup = computed(() => (
+  selectedModels.value.length > 0 &&
+  selectedModelTypes.value.length === 1 &&
+  batchBindGroupForm.value.groupId != null
+))
 
 // ── 配额编辑 ──────────────────────────────────────────────
 const quotaDialogVisible = ref(false)
@@ -491,6 +583,16 @@ async function loadAllTags() {
     allTags.value = await getModelTags()
   } catch {
     allTags.value = []
+  }
+}
+
+/** 加载模型组列表（用于批量绑定） */
+async function loadGroups() {
+  try {
+    const result = await groupsApi.listGroups({ page: 1, page_size: 200 })
+    groupOptions.value = result.data.data || []
+  } catch {
+    groupOptions.value = []
   }
 }
 
@@ -609,6 +711,38 @@ function onBatchTagSaved() {
   loadModels()
 }
 
+/** 打开批量绑定模型组对话框 */
+async function openBatchBindGroupDialog() {
+  if (selectedModels.value.length === 0) return
+  batchBindGroupForm.value = { groupId: null, weight: 1, complexityTier: 'MEDIUM' }
+  if (groupOptions.value.length === 0) await loadGroups()
+  batchBindGroupDialogVisible.value = true
+}
+
+/** 批量绑定模型到模型组 */
+async function handleBatchBindGroup() {
+  if (!canSubmitBatchBindGroup.value || batchBindGroupForm.value.groupId == null) return
+  const modelIds = selectedModelIds.value
+  const weights = Object.fromEntries(modelIds.map(id => [id, batchBindGroupForm.value.weight]))
+  const complexityTiers = Object.fromEntries(modelIds.map(id => [id, batchBindGroupForm.value.complexityTier]))
+  batchBindGroupSubmitting.value = true
+  try {
+    await groupsApi.addModelsToGroup(batchBindGroupForm.value.groupId, {
+      model_ids: modelIds,
+      weights,
+      complexity_tiers: complexityTiers,
+    })
+    const group = groupOptions.value.find(item => item.id === batchBindGroupForm.value.groupId)
+    ElMessage.success(`已将 ${modelIds.length} 个模型绑定到${group ? `「${group.name}」` : '模型组'}`)
+    batchBindGroupDialogVisible.value = false
+  } catch (error: any) {
+    const message = error?.response?.data?.error?.message || error?.message || '绑定模型组失败'
+    ElMessage.error(message)
+  } finally {
+    batchBindGroupSubmitting.value = false
+  }
+}
+
 /** 模型检测设置保存成功 */
 function onModelCheckSettingsSaved() {
   modelCheckSettingsVisible.value = false
@@ -713,7 +847,7 @@ function goToStatusLogs(row: Model) {
 }
 
 onMounted(() => {
-  Promise.all([loadProviders(), loadAllTags(), loadModels()])
+  Promise.all([loadProviders(), loadAllTags(), loadGroups(), loadModels()])
 })
 </script>
 
@@ -820,6 +954,26 @@ onMounted(() => {
 .health-ok-text { color: #0EA371; }
 .health-warn-text { color: #EAB308; }
 .health-error-text { color: #E74C3C; }
+
+.bind-group-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.selected-model-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.form-hint {
+  margin-top: 4px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
 
 @media (max-width: 900px) {
   .page-header {

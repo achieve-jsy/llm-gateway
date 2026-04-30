@@ -40,6 +40,7 @@
             :value="tag"
           />
         </el-select>
+        <el-button type="primary" plain @click="openQuickOnboardingDialog">快速接入供应商</el-button>
         <el-button type="primary" @click="openCreateDialog">新建渠道</el-button>
       </div>
     </div>
@@ -218,6 +219,15 @@
       @close="dialogVisible = false"
     />
 
+    <!-- 快速接入供应商 -->
+    <QuickProviderOnboardingDialog
+      v-model:visible="quickDialogVisible"
+      :definitions="definitions"
+      :providers="providers"
+      @saved="onQuickDialogSaved"
+      @close="quickDialogVisible = false"
+    />
+
     <!-- 同步模型对话框 -->
     <SyncModelsDialog
       :visible="syncDialogVisible"
@@ -248,6 +258,7 @@ import type { Provider, ProviderDefinition } from '@/types/provider'
 import { ProviderStatus } from '@/types/provider'
 import type { SyncResult } from '@/types/sync'
 import ProviderDialog from '@/components/admin/ProviderDialog.vue'
+import QuickProviderOnboardingDialog from '@/components/admin/QuickProviderOnboardingDialog.vue'
 import SyncModelsDialog from '@/components/admin/SyncModelsDialog.vue'
 
 const providers = ref<Provider[]>([])
@@ -261,6 +272,7 @@ const pageSize = ref(10)
 const total = ref(0)
 
 const dialogVisible = ref(false)
+const quickDialogVisible = ref(false)
 const editingProvider = ref<Provider | null>(null)
 
 const syncDialogVisible = ref(false)
@@ -440,6 +452,11 @@ function openCreateDialog() {
   dialogVisible.value = true
 }
 
+/** 打开快速接入对话框 */
+function openQuickOnboardingDialog() {
+  quickDialogVisible.value = true
+}
+
 /** 打开编辑对话框 */
 function openEditDialog(row: Provider) {
   editingProvider.value = row
@@ -449,6 +466,13 @@ function openEditDialog(row: Provider) {
 /** 对话框保存成功回调 */
 function onDialogSaved() {
   dialogVisible.value = false
+  currentPage.value = 1
+  loadProviders()
+}
+
+/** 快速接入保存成功回调 */
+function onQuickDialogSaved() {
+  quickDialogVisible.value = false
   currentPage.value = 1
   loadProviders()
 }

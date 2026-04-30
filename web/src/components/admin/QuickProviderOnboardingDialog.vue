@@ -68,33 +68,6 @@
           <div v-if="selectedDef?.base_url" class="form-hint">默认地址：{{ selectedDef.base_url }}</div>
         </el-form-item>
 
-        <el-row :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="优先级">
-              <el-input-number v-model="formData.priority" :min="0" :max="9999" />
-              <span class="form-hint inline">数值越大优先级越高</span>
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="权重">
-              <el-input-number v-model="formData.weight" :min="0" :max="9999" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-
-        <el-row :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="超时(秒)">
-              <el-input-number v-model="formData.timeout" :min="1" :max="300" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="最大重试">
-              <el-input-number v-model="formData.max_retries" :min="0" :max="10" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-
         <el-form-item label="渠道标签">
           <el-input v-model="formData.tag" placeholder="可选，多个标签用逗号分隔" />
         </el-form-item>
@@ -223,10 +196,6 @@ type ModelType = ModelPayload['model_type']
 interface FormData {
   definition_id: string
   endpoint: string
-  priority: number
-  weight: number
-  timeout: number
-  max_retries: number
   tag: string
   purpose: string
   credential_key: string
@@ -258,10 +227,6 @@ const previewMatrixCount = ref(0)
 const formData = ref<FormData>({
   definition_id: '',
   endpoint: '',
-  priority: 0,
-  weight: 1,
-  timeout: 30,
-  max_retries: 2,
   tag: '',
   purpose: '',
   credential_key: '',
@@ -327,10 +292,6 @@ function resetForm() {
   formData.value = {
     definition_id: '',
     endpoint: '',
-    priority: 0,
-    weight: 1,
-    timeout: 30,
-    max_retries: 2,
     tag: '',
     purpose: '',
     credential_key: '',
@@ -383,10 +344,6 @@ function handleTemplateChange(providerId: string) {
   const provider = props.providers.find(item => item.id === providerId)
   if (!provider) return
   formData.value.endpoint = provider.endpoint || selectedDef.value?.base_url || ''
-  formData.value.priority = provider.priority || 0
-  formData.value.weight = provider.weight || 1
-  formData.value.timeout = provider.timeout || 30
-  formData.value.max_retries = provider.max_retries || 2
   formData.value.tag = provider.tag || ''
 }
 
@@ -419,10 +376,6 @@ function buildPayload(): QuickOnboardPayload {
       definition_id: formData.value.definition_id,
       type: selectedDef.value?.adapter || formData.value.definition_id,
       endpoint: formData.value.endpoint,
-      priority: formData.value.priority,
-      weight: formData.value.weight,
-      timeout: formData.value.timeout,
-      max_retries: formData.value.max_retries,
       test_model: parsedModels.value[0] || undefined,
       tag: formData.value.tag,
       remark: `快速接入创建：${selectedDef.value?.display_name || formData.value.definition_id}`

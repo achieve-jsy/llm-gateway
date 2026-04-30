@@ -42,6 +42,39 @@ func TestTierUsageCountsOnlyEligibleRowsForAccountingUsage(t *testing.T) {
 	require.Equal(t, groupID, *got[0].GroupID)
 }
 
+func TestTierUsageKeepsReportedCostWhenNoRowsAreAccountingEligible(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:tier_usage_reported_only?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
+		request_id text primary key, ts datetime, budget_tier_id text, est_cost_usd numeric,
+		budget_tier_accounting_eligible boolean, status integer, studio_id text, dept_id text,
+		user_id text, key_type text, group_name text
+	)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE model_groups (id integer primary key, name text)`).Error)
+	tierID := uuid.New()
+	now := time.Now().UTC()
+	for _, row := range []struct {
+		id   string
+		cost float64
+	}{
+		{"reported-a", 3.25},
+		{"reported-b", 4.75},
+	} {
+		require.NoError(t, db.Exec(`INSERT INTO call_logs VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			row.id, now, tierID.String(), row.cost, false, 200, "", "dept-a", "member-a", "personal", "").Error)
+	}
+
+	got, err := repository.NewCallLogRepo(db).SumTierUsage(context.Background(), repository.TierUsageQuery{
+		ScopeType: "dept_daily", ScopeID: "dept-a", TierID: &tierID,
+		StartAt: now.Add(-time.Hour), EndAt: now.Add(time.Hour),
+	})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, "8.000000", got[0].ReportedCostUSD.String())
+	require.Equal(t, "0.000000", got[0].AccountingCostUSD.String())
+	require.Equal(t, int64(2), got[0].RequestCount)
+}
+
 func TestTierUsageSeparatesPersonalAndServiceDepartmentPools(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:tier_usage_key_type?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)

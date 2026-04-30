@@ -42,6 +42,32 @@ func TestBudgetTierSnapshotReconcileRepairsCleanRedisDrift(t *testing.T) {
 	require.Equal(t, int64(2), repaired.Revision)
 }
 
+func TestBudgetTierSnapshotReconcilePublishesFullSnapshotWhenRedisMissing(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	events := &snapshotEvents{}
+	tierID := uuid.New()
+	source := snapshotSource{rows: []repository.BudgetTierGroupSnapshotRow{{
+		GroupName: "x-lab", TierID: tierID, TierName: "高级模型", TierEnabled: true,
+	}}}
+	p := service.NewBudgetTierSnapshotPublisher(source, rdb, events, service.BudgetTierSnapshotSettings{
+		MasterEnabled: true, AccountingEnabled: true,
+	}, time.Now)
+
+	require.NoError(t, p.Reconcile(context.Background()))
+
+	snapshot, err := configsync.LoadBudgetTierSnapshot(context.Background(), rdb)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), snapshot.Revision)
+	require.True(t, snapshot.MasterEnabled)
+	require.True(t, snapshot.AccountingEnabled)
+	require.Len(t, snapshot.GroupTiers, 1)
+	require.Equal(t, configsync.BudgetTierGroupSnapshot{TierID: tierID, TierName: "高级模型", Enabled: true}, snapshot.GroupTiers["x-lab"])
+	require.Len(t, events.events, 2)
+	require.Equal(t, event.BudgetTierSnapshotUpdated, events.events[0].Type)
+	require.Equal(t, event.AuthConfigChanged, events.events[1].Type)
+}
+
 func (s snapshotSource) ListBudgetTierGroupSnapshots(context.Context) ([]repository.BudgetTierGroupSnapshotRow, error) {
 	return s.rows, nil
 }

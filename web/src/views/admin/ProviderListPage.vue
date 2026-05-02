@@ -195,7 +195,7 @@
     <QuickProviderOnboardingDialog
       v-model:visible="quickDialogVisible"
       :definitions="definitions"
-      :providers="providers"
+      :providers="quickTemplateProviders"
       @saved="onQuickDialogSaved"
       @close="quickDialogVisible = false"
     />
@@ -234,6 +234,7 @@ import QuickProviderOnboardingDialog from '@/components/admin/QuickProviderOnboa
 import SyncModelsDialog from '@/components/admin/SyncModelsDialog.vue'
 
 const providers = ref<Provider[]>([])
+const quickTemplateProviders = ref<Provider[]>([])
 const definitions = ref<ProviderDefinition[]>([])
 const tagOptions = ref<string[]>([])
 const filterTag = ref('')
@@ -280,6 +281,15 @@ async function loadProviders() {
     extractTagOptionsFromProviders(result.data)
   } catch {
     ElMessage.error('加载渠道列表失败')
+  }
+}
+
+async function loadQuickTemplateProviders() {
+  try {
+    const result = await getProviders({ page: 1, pageSize: 500 })
+    quickTemplateProviders.value = result.data
+  } catch {
+    quickTemplateProviders.value = providers.value
   }
 }
 
@@ -409,7 +419,8 @@ function openCreateDialog() {
 }
 
 /** 打开快速接入对话框 */
-function openQuickOnboardingDialog() {
+async function openQuickOnboardingDialog() {
+  await Promise.all([loadDefinitions(), loadQuickTemplateProviders()])
   quickDialogVisible.value = true
 }
 

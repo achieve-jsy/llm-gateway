@@ -345,8 +345,26 @@
             </el-select>
             <div class="form-hint">仅展示与所选模型类型一致的模型组。</div>
           </el-form-item>
-          <el-form-item label="默认权重">
+          <el-form-item v-if="selectedBindGroup" label="调度策略">
+            <el-tag size="small" effect="plain">{{ strategyLabel(selectedBindGroup.strategy) }}</el-tag>
+            <div class="form-hint">配置项会根据模型组调度策略自动切换。</div>
+          </el-form-item>
+          <el-form-item v-if="selectedBindGroup?.strategy === 'weighted'" label="默认权重">
             <el-input-number v-model="batchBindGroupForm.weight" :min="1" :max="100" />
+          </el-form-item>
+          <el-form-item v-else-if="selectedBindGroup?.strategy === 'priority'" label="默认优先级">
+            <el-input-number v-model="batchBindGroupForm.priority" :min="0" :max="9999" />
+          </el-form-item>
+          <el-form-item v-else-if="selectedBindGroup?.strategy === 'auto'" label="复杂度档位">
+            <el-select v-model="batchBindGroupForm.complexityTier" style="width: 180px">
+              <el-option label="SIMPLE" value="SIMPLE" />
+              <el-option label="MEDIUM" value="MEDIUM" />
+              <el-option label="COMPLEX" value="COMPLEX" />
+              <el-option label="REASONING" value="REASONING" />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-else-if="selectedBindGroup?.strategy === 'round_robin'" label="配置">
+            <span class="text-muted">轮询策略不需要额外参数</span>
           </el-form-item>
         </el-form>
       </div>
@@ -392,7 +410,7 @@ import type { Provider } from '@/types/provider'
 import type { ModelTag } from '@/types/model-tag'
 import type { ResettableOverrideField } from '@/types/catalog'
 import { groupsApi } from '@/api/groups'
-import type { GroupListItem } from '@/types/group'
+import type { ComplexityTier, GroupListItem, Strategy } from '@/types/group'
 import ModelDialog from '@/components/admin/ModelDialog.vue'
 import BatchTagDialog from '@/components/admin/BatchTagDialog.vue'
 import ModelCheckSettingsDialog from '@/components/admin/ModelCheckSettingsDialog.vue'
@@ -445,9 +463,11 @@ const batchTagDialogVisible = ref(false)
 const batchBindGroupDialogVisible = ref(false)
 const batchBindGroupSubmitting = ref(false)
 const groupOptions = ref<GroupListItem[]>([])
-const batchBindGroupForm = ref<{ groupId: number | null; weight: number }>({
+const batchBindGroupForm = ref<{ groupId: number | null; weight: number; priority: number; complexityTier: ComplexityTier }>({
   groupId: null,
   weight: 1,
+  priority: 0,
+  complexityTier: 'MEDIUM',
 })
 const modelCheckSettingsVisible = ref(false)
 const checkingModelId = ref('')
@@ -458,6 +478,11 @@ const bindableGroups = computed(() => {
   if (selectedModelTypes.value.length !== 1) return []
   const modelType = selectedModelTypes.value[0]
   return groupOptions.value.filter(group => group.model_type === modelType)
+})
+
+const selectedBindGroup = computed(() => {
+  if (batchBindGroupForm.value.groupId == null) return null
+  return bindableGroups.value.find(group => group.id === batchBindGroupForm.value.groupId) || null
 })
 
 const canSubmitBatchBindGroup = computed(() => (
@@ -705,7 +730,7 @@ function onBatchTagSaved() {
 /** 打开批量绑定模型组对话框 */
 async function openBatchBindGroupDialog() {
   if (selectedModels.value.length === 0) return
-  batchBindGroupForm.value = { groupId: null, weight: 1 }
+  batchBindGroupForm.value = { groupId: null, weight: 1, priority: 0, complexityTier: 'MEDIUM' }
   if (groupOptions.value.length === 0) await loadGroups()
   batchBindGroupDialogVisible.value = true
 }
@@ -714,13 +739,10 @@ async function openBatchBindGroupDialog() {
 async function handleBatchBindGroup() {
   if (!canSubmitBatchBindGroup.value || batchBindGroupForm.value.groupId == null) return
   const modelIds = selectedModelIds.value
-  const weights = Object.fromEntries(modelIds.map(id => [id, batchBindGroupForm.value.weight]))
+  const strategy = selectedBindGroup.value?.strategy
   batchBindGroupSubmitting.value = true
   try {
-    await groupsApi.addModelsToGroup(batchBindGroupForm.value.groupId, {
-      model_ids: modelIds,
-      weights,
-    })
+    await groupsApi.addModelsToGroup(batchBindGroupForm.value.groupId, buildBatchBindPayload(modelIds, strategy))
     const group = groupOptions.value.find(item => item.id === batchBindGroupForm.value.groupId)
     ElMessage.success(`已将 ${modelIds.length} 个模型绑定到${group ? `「${group.name}」` : '模型组'}`)
     batchBindGroupDialogVisible.value = false
@@ -730,6 +752,34 @@ async function handleBatchBindGroup() {
   } finally {
     batchBindGroupSubmitting.value = false
   }
+}
+
+function buildBatchBindPayload(modelIds: string[], strategy?: Strategy) {
+  const payload: {
+    model_ids: string[]
+    priorities?: Record<string, number>
+    weights?: Record<string, number>
+    complexity_tiers?: Record<string, ComplexityTier>
+  } = { model_ids: modelIds }
+
+  if (strategy === 'weighted') {
+    payload.weights = Object.fromEntries(modelIds.map(id => [id, batchBindGroupForm.value.weight]))
+  } else if (strategy === 'priority') {
+    payload.priorities = Object.fromEntries(modelIds.map(id => [id, batchBindGroupForm.value.priority]))
+  } else if (strategy === 'auto') {
+    payload.complexity_tiers = Object.fromEntries(modelIds.map(id => [id, batchBindGroupForm.value.complexityTier]))
+  }
+  return payload
+}
+
+function strategyLabel(strategy?: string): string {
+  const labels: Record<string, string> = {
+    round_robin: '轮询',
+    weighted: '权重轮询',
+    priority: '优先级',
+    auto: '自动选择',
+  }
+  return strategy ? labels[strategy] || strategy : '-'
 }
 
 /** 模型检测设置保存成功 */

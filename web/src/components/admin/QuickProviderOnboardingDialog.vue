@@ -146,11 +146,12 @@
                 </div>
                 <div v-for="model in parsedModels" :key="model" class="catalog-row">
                   <span class="mono-text">{{ model }}</span>
-                  <el-select
-                    v-model="catalogBindings[model]"
-                    filterable
-                    remote
+                <el-select
+                  v-model="catalogBindings[model]"
+                  filterable
+                  remote
                   clearable
+                  popper-class="quick-catalog-select-dropdown"
                   :remote-method="(query: string) => searchCatalogOptions(model, query)"
                   :loading="catalogLoading[model]"
                   placeholder="搜索并选择 Catalog"
@@ -167,10 +168,11 @@
                     <div class="catalog-option">
                       <div class="catalog-option-title">{{ item.source_model_id }}</div>
                       <div class="catalog-option-meta">
-                        {{ item.provider || '-' }} · {{ item.mode || '-' }} · in ${{ item.input_price_per_million }} / out ${{ item.output_price_per_million }}
-                        <span v-if="item.cache_read_price != null || item.cache_write_price != null">
-                          · cache ${{ item.cache_read_price ?? '-' }} / ${{ item.cache_write_price ?? '-' }}
-                        </span>
+                        <span>{{ item.provider || '-' }}</span>
+                        <span>{{ item.mode || '-' }}</span>
+                        <span>in ${{ item.input_price_per_million }}</span>
+                        <span>out ${{ item.output_price_per_million }}</span>
+                        <span v-if="item.cache_read_price != null || item.cache_write_price != null">cache ${{ item.cache_read_price ?? '-' }} / ${{ item.cache_write_price ?? '-' }}</span>
                         <span v-if="item.deprecation_date" class="catalog-option-warning"> · 已废弃</span>
                       </div>
                     </div>
@@ -975,14 +977,19 @@ function validatePricing(): boolean {
 .catalog-option {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 4px 0;
-  line-height: 1.35;
+  gap: 4px;
+  min-width: 0;
+  padding: 6px 0;
+  line-height: 1.25;
 }
 
 .catalog-option-title {
   color: var(--el-text-color-primary);
+  font-size: 13px;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .catalog-option-meta,
@@ -991,13 +998,45 @@ function validatePricing(): boolean {
   font-size: 12px;
 }
 
+.catalog-option-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.catalog-option-meta span {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--el-fill-color-lighter);
+}
+
 .catalog-option-warning {
-  color: var(--el-color-warning);
+  color: var(--el-color-warning) !important;
+  background: var(--el-color-warning-light-9) !important;
 }
 
 .catalog-selected {
   margin-top: 4px;
   min-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.quick-catalog-select-dropdown) {
+  max-width: min(720px, calc(100vw - 48px));
+}
+
+:global(.quick-catalog-select-dropdown .el-select-dropdown__wrap) {
+  max-height: 320px;
+}
+
+:global(.quick-catalog-select-dropdown .el-select-dropdown__item) {
+  height: auto;
+  min-height: 54px;
+  padding: 4px 12px;
+  line-height: normal;
 }
 
 :deep(.el-form-item__label) {

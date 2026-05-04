@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,6 +12,25 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/google/uuid"
 )
+
+type OptionalFloat64 struct {
+	Set   bool
+	Value *float64
+}
+
+func (o *OptionalFloat64) UnmarshalJSON(data []byte) error {
+	o.Set = true
+	if string(data) == "null" {
+		o.Value = nil
+		return nil
+	}
+	var value float64
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	o.Value = &value
+	return nil
+}
 
 var (
 	ErrModelNameExists      = errors.New("model name already exists")
@@ -92,19 +112,19 @@ func (s *ModelService) publishEvent(eventType event.ChangeEventType, resourceTyp
 //     指针类型用于区分 "未传" 与 "传零值"；未传时落 DB 列默认值
 //     （context_length=0/max_output_tokens=0/input_price=0/output_price=0/weight=1）
 type CreateModelInput struct {
-	Name            string   `json:"name" binding:"required,max=200"`
-	ProviderID      string   `json:"provider_id" binding:"required,uuid"`
-	ModelType       string   `json:"model_type" binding:"required,oneof=chat embedding embedding_vl rerank rerank_vl video"`
-	UpstreamModelID string   `json:"upstream_model_id" binding:"omitempty,max=200"`
-	Description     string   `json:"description" binding:"omitempty,max=500"`
-	ContextLength   *int     `json:"context_length" binding:"omitempty,min=0,max=10000000"`
-	MaxOutputTokens *int     `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
-	InputPrice      *float64 `json:"input_price" binding:"omitempty,min=0"`
-	OutputPrice     *float64 `json:"output_price" binding:"omitempty,min=0"`
-	CacheReadPrice  *float64 `json:"cache_read_price" binding:"omitempty,min=0"`
-	CacheWritePrice *float64 `json:"cache_write_price" binding:"omitempty,min=0"`
-	PriceMode       string   `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
-	Weight          *int     `json:"weight" binding:"omitempty,min=0,max=9999"`
+	Name            string          `json:"name" binding:"required,max=200"`
+	ProviderID      string          `json:"provider_id" binding:"required,uuid"`
+	ModelType       string          `json:"model_type" binding:"required,oneof=chat embedding embedding_vl rerank rerank_vl video"`
+	UpstreamModelID string          `json:"upstream_model_id" binding:"omitempty,max=200"`
+	Description     string          `json:"description" binding:"omitempty,max=500"`
+	ContextLength   *int            `json:"context_length" binding:"omitempty,min=0,max=10000000"`
+	MaxOutputTokens *int            `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
+	InputPrice      *float64        `json:"input_price" binding:"omitempty,min=0"`
+	OutputPrice     *float64        `json:"output_price" binding:"omitempty,min=0"`
+	CacheReadPrice  OptionalFloat64 `json:"cache_read_price"`
+	CacheWritePrice OptionalFloat64 `json:"cache_write_price"`
+	PriceMode       string          `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
+	Weight          *int            `json:"weight" binding:"omitempty,min=0,max=9999"`
 	// 视频模型参数
 	VideoSupportedResolutions  []string `json:"video_supported_resolutions"`
 	VideoSupportedAspectRatios []string `json:"video_supported_aspect_ratios"`
@@ -153,11 +173,17 @@ func (s *ModelService) CreateModel(input CreateModelInput) (*model.Model, error)
 	if input.OutputPrice != nil {
 		m.OutputPrice = *input.OutputPrice
 	}
-	if input.CacheReadPrice != nil {
-		m.CacheReadPrice = input.CacheReadPrice
+	if input.CacheReadPrice.Set {
+		if input.CacheReadPrice.Value != nil && *input.CacheReadPrice.Value < 0 {
+			return nil, fmt.Errorf("cache_read_price must be >= 0")
+		}
+		m.CacheReadPrice = input.CacheReadPrice.Value
 	}
-	if input.CacheWritePrice != nil {
-		m.CacheWritePrice = input.CacheWritePrice
+	if input.CacheWritePrice.Set {
+		if input.CacheWritePrice.Value != nil && *input.CacheWritePrice.Value < 0 {
+			return nil, fmt.Errorf("cache_write_price must be >= 0")
+		}
+		m.CacheWritePrice = input.CacheWritePrice.Value
 	}
 	if input.PriceMode != "" {
 		m.PriceMode = input.PriceMode
@@ -224,25 +250,25 @@ func (s *ModelService) GetModel(id uuid.UUID) (*model.Model, error) {
 //
 // 字段同 CreateModelInput；标量字段使用 *string 以便区分 "未传" 与 "传空串清空"。
 type UpdateModelInput struct {
-	Name                       string   `json:"name" binding:"omitempty,max=200"`
-	ProviderID                 string   `json:"provider_id" binding:"omitempty,uuid"`
-	ModelType                  string   `json:"model_type" binding:"omitempty,oneof=chat embedding embedding_vl rerank rerank_vl video"`
-	Enabled                    *bool    `json:"enabled"`
-	UpstreamModelID            *string  `json:"upstream_model_id" binding:"omitempty,max=200"`
-	Description                *string  `json:"description" binding:"omitempty,max=500"`
-	ContextLength              *int     `json:"context_length" binding:"omitempty,min=0,max=10000000"`
-	MaxOutputTokens            *int     `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
-	InputPrice                 *float64 `json:"input_price" binding:"omitempty,min=0"`
-	OutputPrice                *float64 `json:"output_price" binding:"omitempty,min=0"`
-	CacheReadPrice             *float64 `json:"cache_read_price" binding:"omitempty,min=0"`
-	CacheWritePrice            *float64 `json:"cache_write_price" binding:"omitempty,min=0"`
-	PriceMode                  string   `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
-	Weight                     *int     `json:"weight" binding:"omitempty,min=0,max=9999"`
-	VideoSupportedResolutions  []string `json:"video_supported_resolutions"`
-	VideoSupportedAspectRatios []string `json:"video_supported_aspect_ratios"`
-	VideoMinDurationSeconds    *int     `json:"video_min_duration_seconds" binding:"omitempty,min=0,max=600"`
-	VideoMaxDurationSeconds    *int     `json:"video_max_duration_seconds" binding:"omitempty,min=0,max=600"`
-	VideoSupportedActions      []string `json:"video_supported_actions"`
+	Name                       string          `json:"name" binding:"omitempty,max=200"`
+	ProviderID                 string          `json:"provider_id" binding:"omitempty,uuid"`
+	ModelType                  string          `json:"model_type" binding:"omitempty,oneof=chat embedding embedding_vl rerank rerank_vl video"`
+	Enabled                    *bool           `json:"enabled"`
+	UpstreamModelID            *string         `json:"upstream_model_id" binding:"omitempty,max=200"`
+	Description                *string         `json:"description" binding:"omitempty,max=500"`
+	ContextLength              *int            `json:"context_length" binding:"omitempty,min=0,max=10000000"`
+	MaxOutputTokens            *int            `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
+	InputPrice                 *float64        `json:"input_price" binding:"omitempty,min=0"`
+	OutputPrice                *float64        `json:"output_price" binding:"omitempty,min=0"`
+	CacheReadPrice             OptionalFloat64 `json:"cache_read_price"`
+	CacheWritePrice            OptionalFloat64 `json:"cache_write_price"`
+	PriceMode                  string          `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
+	Weight                     *int            `json:"weight" binding:"omitempty,min=0,max=9999"`
+	VideoSupportedResolutions  []string        `json:"video_supported_resolutions"`
+	VideoSupportedAspectRatios []string        `json:"video_supported_aspect_ratios"`
+	VideoMinDurationSeconds    *int            `json:"video_min_duration_seconds" binding:"omitempty,min=0,max=600"`
+	VideoMaxDurationSeconds    *int            `json:"video_max_duration_seconds" binding:"omitempty,min=0,max=600"`
+	VideoSupportedActions      []string        `json:"video_supported_actions"`
 }
 
 // UpdateModel 更新模型（T032）
@@ -312,11 +338,17 @@ func (s *ModelService) UpdateModel(id uuid.UUID, input UpdateModelInput) (*model
 	if input.OutputPrice != nil {
 		m.OutputPrice = *input.OutputPrice
 	}
-	if input.CacheReadPrice != nil {
-		m.CacheReadPrice = input.CacheReadPrice
+	if input.CacheReadPrice.Set {
+		if input.CacheReadPrice.Value != nil && *input.CacheReadPrice.Value < 0 {
+			return nil, fmt.Errorf("cache_read_price must be >= 0")
+		}
+		m.CacheReadPrice = input.CacheReadPrice.Value
 	}
-	if input.CacheWritePrice != nil {
-		m.CacheWritePrice = input.CacheWritePrice
+	if input.CacheWritePrice.Set {
+		if input.CacheWritePrice.Value != nil && *input.CacheWritePrice.Value < 0 {
+			return nil, fmt.Errorf("cache_write_price must be >= 0")
+		}
+		m.CacheWritePrice = input.CacheWritePrice.Value
 	}
 	if input.PriceMode != "" {
 		m.PriceMode = input.PriceMode

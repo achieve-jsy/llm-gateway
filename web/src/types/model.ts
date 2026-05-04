@@ -98,8 +98,8 @@ export interface ModelPayload {
   price_mode?: 'catalog' | 'manual'
   input_price?: number
   output_price?: number
-  cache_read_price?: number
-  cache_write_price?: number
+  cache_read_price?: number | null
+  cache_write_price?: number | null
   weight?: number
   video_supported_resolutions?: string[]
   video_supported_aspect_ratios?: string[]

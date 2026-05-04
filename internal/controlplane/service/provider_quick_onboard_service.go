@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -45,6 +46,7 @@ type QuickOnboardModelInput struct {
 	CacheReadPrice  *float64 `json:"cache_read_price" binding:"omitempty,min=0"`
 	CacheWritePrice *float64 `json:"cache_write_price" binding:"omitempty,min=0"`
 	PriceMode       string   `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
+	CatalogID       string   `json:"catalog_id" binding:"omitempty,uuid"`
 	Weight          *int     `json:"weight" binding:"omitempty,min=0,max=9999"`
 }
 
@@ -308,6 +310,7 @@ func normalizeQuickOnboardRequest(req QuickOnboardRequest) (QuickOnboardRequest,
 		item.UpstreamModelID = strings.TrimSpace(item.UpstreamModelID)
 		item.Description = strings.TrimSpace(item.Description)
 		item.PriceMode = strings.TrimSpace(item.PriceMode)
+		item.CatalogID = strings.TrimSpace(item.CatalogID)
 		if item.Name == "" {
 			continue
 		}
@@ -323,6 +326,11 @@ func normalizeQuickOnboardRequest(req QuickOnboardRequest) (QuickOnboardRequest,
 		}
 		if item.PriceMode == "" {
 			item.PriceMode = "catalog"
+		}
+		if item.CatalogID != "" {
+			if _, err := uuid.Parse(item.CatalogID); err != nil {
+				return req, fmt.Errorf("%w: invalid catalog_id for model %s", ErrQuickOnboardInvalidRequest, item.Name)
+			}
 		}
 		if item.PriceMode == "manual" {
 			inputPrice := 0.0
@@ -407,6 +415,10 @@ func buildQuickOnboardModel(providerID uuid.UUID, input QuickOnboardModelInput) 
 		PriceMode:       input.PriceMode,
 		Weight:          weight,
 	}
+	if input.CatalogID != "" {
+		catalogID := uuid.MustParse(input.CatalogID)
+		m.CatalogID = &catalogID
+	}
 	if input.ContextLength != nil {
 		m.ContextLength = *input.ContextLength
 	}
@@ -475,6 +487,14 @@ func maskQuickCredential(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return ""
+	}
+	var fields map[string]string
+	if err := json.Unmarshal([]byte(value), &fields); err == nil {
+		for _, key := range []string{"api_key", "key", "token", "access_key", "secret_key"} {
+			if fieldValue := strings.TrimSpace(fields[key]); fieldValue != "" {
+				return crypto.Mask(fieldValue)
+			}
+		}
 	}
 	return crypto.Mask(value)
 }

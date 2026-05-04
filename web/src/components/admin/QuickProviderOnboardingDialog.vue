@@ -173,6 +173,39 @@
           </el-collapse-item>
         </el-collapse>
 
+        <el-collapse v-model="catalogPanels" class="advanced-collapse">
+          <el-collapse-item title="Catalog 关联（可选）" name="catalog">
+            <div class="form-hint catalog-hint">可为每个模型手动指定 Catalog 条目；不指定时按模型名和后续自动绑定流程处理。</div>
+            <div class="catalog-map-table">
+              <div class="catalog-row catalog-head">
+                <span>模型名</span>
+                <span>Catalog 条目</span>
+              </div>
+              <div v-for="model in parsedModels" :key="model" class="catalog-row">
+                <span class="mono-text">{{ model }}</span>
+                <el-select
+                  v-model="catalogBindings[model]"
+                  filterable
+                  remote
+                  clearable
+                  :remote-method="(query: string) => searchCatalogOptions(model, query)"
+                  :loading="catalogLoading[model]"
+                  placeholder="搜索并选择 Catalog"
+                  style="width: 100%"
+                >
+                  <el-option
+                    v-for="item in catalogOptions[model] || []"
+                    :key="item.id"
+                    :label="catalogOptionLabel(item)"
+                    :value="item.id"
+                  />
+                </el-select>
+              </div>
+              <div v-if="parsedModels.length === 0" class="pricing-empty">输入模型名后可关联 Catalog</div>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
+
         <el-collapse v-model="advancedPanels" class="advanced-collapse">
           <el-collapse-item title="高级设置" name="advanced">
             <el-row :gutter="16">
@@ -261,6 +294,11 @@
               <el-tag size="small" effect="plain">{{ pricingModeLabel }}</el-tag>
             </template>
           </el-table-column>
+          <el-table-column label="Catalog" width="110">
+            <template #default>
+              <el-tag size="small" effect="plain">{{ catalogSummaryLabel }}</el-tag>
+            </template>
+          </el-table-column>
         </el-table>
       </div>
     </div>
@@ -278,10 +316,11 @@
 import { computed, ref, watch } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { createQuickOnboardProviders, previewQuickOnboardProviders } from '@/services/control-plane'
+import { createQuickOnboardProviders, previewQuickOnboardProviders, searchCatalog } from '@/services/control-plane'
 import { resolveErrorMessage } from '@/services/http'
 import type { ModelPayload } from '@/types/model'
 import type { Provider, ProviderDefinition, QuickOnboardPayload, QuickOnboardProviderPlan } from '@/types/provider'
+import type { ModelCatalog } from '@/types/catalog'
 
 type ModelType = ModelPayload['model_type']
 type PricingMode = 'catalog' | 'uniform' | 'per_model'
@@ -316,9 +355,13 @@ const previewLoading = ref(false)
 const templateProviderId = ref('')
 const advancedPanels = ref<string[]>([])
 const pricingPanels = ref<string[]>([])
+const catalogPanels = ref<string[]>([])
 const pricingMode = ref<PricingMode>('catalog')
 const uniformPricing = ref<PricePair>({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
 const perModelPricing = ref<Record<string, PricePair>>({})
+const catalogBindings = ref<Record<string, string>>({})
+const catalogOptions = ref<Record<string, ModelCatalog[]>>({})
+const catalogLoading = ref<Record<string, boolean>>({})
 const serverPreviewRows = ref<QuickOnboardProviderPlan[]>([])
 const previewWarnings = ref<string[]>([])
 const previewMatrixCount = ref(0)
@@ -365,6 +408,11 @@ const pricingModeLabel = computed(() => {
   return 'Catalog'
 })
 
+const catalogSummaryLabel = computed(() => {
+  const bound = parsedModels.value.filter(model => catalogBindings.value[model]).length
+  return bound > 0 ? `${bound}/${parsedModels.value.length}` : '自动'
+})
+
 const rules: FormRules = {
   definition_id: [{ required: true, message: '请选择供应商', trigger: 'change' }],
   endpoint: [{ required: true, validator: validateEndpoint, trigger: 'blur' }],
@@ -393,9 +441,13 @@ function resetForm() {
   templateProviderId.value = ''
   advancedPanels.value = []
   pricingPanels.value = []
+  catalogPanels.value = []
   pricingMode.value = 'catalog'
   uniformPricing.value = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
   perModelPricing.value = {}
+  catalogBindings.value = {}
+  catalogOptions.value = {}
+  catalogLoading.value = {}
   serverPreviewRows.value = []
   previewWarnings.value = []
   previewMatrixCount.value = 0
@@ -413,10 +465,19 @@ function resetForm() {
 
 watch(parsedModels, (models) => {
   const next: Record<string, PricePair> = {}
+  const nextCatalogBindings: Record<string, string> = {}
+  const nextCatalogOptions: Record<string, ModelCatalog[]> = {}
+  const nextCatalogLoading: Record<string, boolean> = {}
   models.forEach(model => {
     next[model] = perModelPricing.value[model] || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    nextCatalogBindings[model] = catalogBindings.value[model] || ''
+    nextCatalogOptions[model] = catalogOptions.value[model] || []
+    nextCatalogLoading[model] = catalogLoading.value[model] || false
   })
   perModelPricing.value = next
+  catalogBindings.value = nextCatalogBindings
+  catalogOptions.value = nextCatalogOptions
+  catalogLoading.value = nextCatalogLoading
 })
 
 function parseMultiline(value: string): string[] {
@@ -513,6 +574,7 @@ function buildModelPayload(modelName: string) {
     price_mode: 'catalog',
     weight: 1
   }
+  if (catalogBindings.value[modelName]) payload.catalog_id = catalogBindings.value[modelName]
   if (pricingMode.value === 'uniform') {
     return applyManualPricing(payload, uniformPricing.value)
   }
@@ -520,6 +582,27 @@ function buildModelPayload(modelName: string) {
     return applyManualPricing(payload, perModelPricing.value[modelName] || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
   }
   return payload
+}
+
+async function searchCatalogOptions(modelName: string, query: string) {
+  const q = (query || modelName).trim()
+  if (q.length < 2) {
+    catalogOptions.value[modelName] = []
+    return
+  }
+  catalogLoading.value[modelName] = true
+  try {
+    const result = await searchCatalog({ q, provider: selectedDef.value?.id, mode: formData.value.model_type, limit: 20 })
+    catalogOptions.value[modelName] = result.data
+  } catch {
+    catalogOptions.value[modelName] = []
+  } finally {
+    catalogLoading.value[modelName] = false
+  }
+}
+
+function catalogOptionLabel(item: ModelCatalog): string {
+  return `${item.source_model_id} · ${item.provider || '-'} · $${item.input_price_per_million}/${item.output_price_per_million}`
 }
 
 function applyManualPricing(payload: QuickOnboardPayload['models'][number], pair: PricePair) {
@@ -792,6 +875,30 @@ function validatePricing(): boolean {
   border-radius: 6px;
 }
 
+.catalog-hint {
+  margin-bottom: 10px;
+}
+
+.catalog-map-table {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.catalog-row {
+  display: grid;
+  grid-template-columns: minmax(0, 180px) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.catalog-head {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 :deep(.el-form-item__label) {
   margin-bottom: 6px;
   color: var(--el-text-color-regular);
@@ -884,6 +991,10 @@ function validatePricing(): boolean {
   }
 
   .pricing-row {
+    grid-template-columns: 1fr;
+  }
+
+  .catalog-row {
     grid-template-columns: 1fr;
   }
 }

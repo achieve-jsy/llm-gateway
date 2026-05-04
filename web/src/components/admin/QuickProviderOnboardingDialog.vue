@@ -9,131 +9,160 @@
     <div class="quick-provider">
       <div class="summary-band">
         <div>
-          <div class="summary-title">{{ previewRows.length }} 个渠道 · {{ totalModelCreates }} 个模型</div>
-          <div class="summary-subtitle">每个 Key 都会创建一个渠道，且每个渠道都会拥有输入的每个模型</div>
+          <div class="summary-title">批量创建 {{ parsedKeys.length }} 个渠道</div>
+          <div class="summary-subtitle">每个 Key 生成一个渠道，并绑定当前输入的全部模型</div>
         </div>
-        <el-tag type="info" effect="plain">{{ selectedDef?.display_name || '选择供应商' }}</el-tag>
+        <div class="summary-metrics">
+          <span>{{ parsedKeys.length }} Keys</span>
+          <span>{{ parsedModels.length }} 模型</span>
+          <span>{{ totalModelCreates }} 绑定</span>
+        </div>
       </div>
 
       <el-form
         ref="formRef"
         :model="formData"
         :rules="rules"
-        label-width="112px"
-        label-position="left"
+        label-position="top"
       >
-        <el-row :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="供应商" prop="definition_id">
-              <el-select
-                v-model="formData.definition_id"
-                filterable
-                placeholder="选择渠道类型"
-                style="width: 100%"
-                @change="handleDefinitionChange"
-              >
-                <el-option
-                  v-for="def in definitions"
-                  :key="def.id"
-                  :label="def.display_name"
-                  :value="def.id"
-                />
-              </el-select>
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="继承配置">
-              <el-select
-                v-model="templateProviderId"
-                clearable
-                filterable
-                :disabled="!formData.definition_id"
-                placeholder="可选，从已有渠道带入配置"
-                style="width: 100%"
-                @change="handleTemplateChange"
-              >
-                <el-option
-                  v-for="provider in templateProviders"
-                  :key="provider.id"
-                  :label="provider.name"
-                  :value="provider.id"
-                />
-              </el-select>
-            </el-form-item>
-          </el-col>
-        </el-row>
+        <section class="section-block">
+          <div class="section-heading">选择供应商</div>
+          <el-row :gutter="16">
+            <el-col :span="12">
+              <el-form-item label="供应商" prop="definition_id">
+                <el-select
+                  v-model="formData.definition_id"
+                  filterable
+                  placeholder="选择供应商"
+                  style="width: 100%"
+                  @change="handleDefinitionChange"
+                >
+                  <el-option
+                    v-for="def in definitions"
+                    :key="def.id"
+                    :label="def.display_name"
+                    :value="def.id"
+                  />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="继承配置">
+                <el-select
+                  v-model="templateProviderId"
+                  clearable
+                  filterable
+                  :disabled="!formData.definition_id"
+                  placeholder="可选，复用已有渠道配置"
+                  style="width: 100%"
+                  @change="handleTemplateChange"
+                >
+                  <el-option
+                    v-for="provider in templateProviders"
+                    :key="provider.id"
+                    :label="provider.name"
+                    :value="provider.id"
+                  />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+        </section>
 
-        <el-form-item label="Endpoint" prop="endpoint">
-          <el-input v-model="formData.endpoint" placeholder="https://..." />
-          <div v-if="selectedDef?.base_url" class="form-hint">默认地址：{{ selectedDef.base_url }}</div>
-        </el-form-item>
-
-        <el-form-item label="渠道标签">
-          <el-input v-model="formData.tag" placeholder="可选，多个标签用逗号分隔" />
-        </el-form-item>
-
-        <el-form-item label="用途">
-          <el-input v-model="formData.purpose" placeholder="可选，例如：坐席、备用、研发；用于自动生成渠道名" />
-          <div class="form-hint">不需要逐个填写渠道名称，后端会按供应商和用途自动生成并避让重名</div>
-        </el-form-item>
-
-        <el-form-item label="Key 字段" prop="credential_key">
-          <el-select
-            v-model="formData.credential_key"
-            :disabled="credentialKeys.length <= 1"
-            placeholder="选择批量填充的凭证字段"
-            style="width: 100%"
-          >
-            <el-option
-              v-for="item in credentialKeys"
-              :key="item.key"
-              :label="item.label"
-              :value="item.key"
-            />
-          </el-select>
-          <div class="form-hint">其他凭证字段会使用供应商默认值；如需复杂认证，请先创建一个渠道再从它继承配置</div>
-        </el-form-item>
-
-        <el-row :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="API Keys" prop="keys_text">
+        <section class="batch-grid">
+          <div class="input-panel">
+            <div class="panel-heading">
+              <div>
+                <div class="panel-title">API Keys</div>
+                <div class="panel-subtitle">每个 Key 会创建一个独立渠道</div>
+              </div>
+              <el-tag size="small" effect="plain">{{ parsedKeys.length }} 个</el-tag>
+            </div>
+            <el-form-item prop="keys_text" class="textarea-item">
               <el-input
                 v-model="formData.keys_text"
                 type="textarea"
                 :rows="8"
                 resize="none"
-                placeholder="每行一个 Key，也支持用逗号分隔"
+                placeholder="每行一个 Key，也支持逗号分隔"
               />
-              <div class="form-hint">已识别 {{ parsedKeys.length }} 个 Key，自动去重空行</div>
             </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="模型名" prop="models_text">
+          </div>
+
+          <div class="input-panel">
+            <div class="panel-heading">
+              <div>
+                <div class="panel-title">模型</div>
+                <div class="panel-subtitle">每个渠道都会创建这些模型</div>
+              </div>
+              <el-tag size="small" effect="plain">{{ parsedModels.length }} 个</el-tag>
+            </div>
+            <el-form-item prop="models_text" class="textarea-item">
               <el-input
                 v-model="formData.models_text"
                 type="textarea"
-                :rows="8"
+                :rows="6"
                 resize="none"
                 placeholder="每行一个模型名，如 gpt-4o 或 qwen-plus"
               />
-              <div class="form-hint">已识别 {{ parsedModels.length }} 个模型；每个渠道都会创建这些模型</div>
             </el-form-item>
-          </el-col>
-        </el-row>
+            <el-form-item label="模型类型" class="model-type-item">
+              <el-select v-model="formData.model_type" style="width: 100%">
+                <el-option label="Chat（对话）" value="chat" />
+                <el-option label="Embedding（向量）" value="embedding" />
+                <el-option label="Embedding-VL（多模态向量）" value="embedding_vl" />
+                <el-option label="Rerank（重排序）" value="rerank" />
+                <el-option label="Rerank-VL（多模态重排序）" value="rerank_vl" />
+                <el-option label="Video（视频生成）" value="video" />
+              </el-select>
+            </el-form-item>
+          </div>
+        </section>
 
-        <el-form-item label="模型类型">
-          <el-select v-model="formData.model_type" style="width: 240px">
-            <el-option label="Chat（对话）" value="chat" />
-            <el-option label="Embedding（向量）" value="embedding" />
-            <el-option label="Embedding-VL（多模态向量）" value="embedding_vl" />
-            <el-option label="Rerank（重排序）" value="rerank" />
-            <el-option label="Rerank-VL（多模态重排序）" value="rerank_vl" />
-            <el-option label="Video（视频生成）" value="video" />
-          </el-select>
-        </el-form-item>
+        <el-collapse v-model="advancedPanels" class="advanced-collapse">
+          <el-collapse-item title="高级设置" name="advanced">
+            <el-row :gutter="16">
+              <el-col :span="12">
+                <el-form-item label="Endpoint" prop="endpoint">
+                  <el-input v-model="formData.endpoint" placeholder="https://..." />
+                  <div v-if="selectedDef?.base_url" class="form-hint">默认地址：{{ selectedDef.base_url }}</div>
+                </el-form-item>
+              </el-col>
+              <el-col :span="12">
+                <el-form-item label="Key 字段" prop="credential_key">
+                  <el-select
+                    v-model="formData.credential_key"
+                    :disabled="credentialKeys.length <= 1"
+                    placeholder="选择批量填充的凭证字段"
+                    style="width: 100%"
+                  >
+                    <el-option
+                      v-for="item in credentialKeys"
+                      :key="item.key"
+                      :label="item.label"
+                      :value="item.key"
+                    />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+            </el-row>
+            <el-row :gutter="16">
+              <el-col :span="12">
+                <el-form-item label="渠道标签">
+                  <el-input v-model="formData.tag" placeholder="可选，多个标签用逗号分隔" />
+                </el-form-item>
+              </el-col>
+              <el-col :span="12">
+                <el-form-item label="用途">
+                  <el-input v-model="formData.purpose" placeholder="可选，如：坐席、备用、研发" />
+                </el-form-item>
+              </el-col>
+            </el-row>
+          </el-collapse-item>
+        </el-collapse>
       </el-form>
 
-      <div class="preview-panel">
+      <div class="preview-panel" :class="{ 'is-empty': previewRows.length === 0 }">
         <div class="preview-header">
           <div>
             <span>创建预览</span>
@@ -151,7 +180,10 @@
         >
           <template #title>{{ previewWarnings.join('；') }}</template>
         </el-alert>
-        <el-table :data="previewRows" border max-height="260" empty-text="输入 Key 和模型后生成预览">
+        <div v-if="previewRows.length === 0" class="preview-empty">
+          输入 Key 和模型后生成渠道预览
+        </div>
+        <el-table v-else :data="previewRows" border max-height="220">
           <el-table-column label="渠道名称" min-width="190">
             <template #default="{ row }">
               <span>{{ row.name }}</span>
@@ -220,6 +252,7 @@ const formRef = ref<FormInstance>()
 const submitting = ref(false)
 const previewLoading = ref(false)
 const templateProviderId = ref('')
+const advancedPanels = ref<string[]>([])
 const serverPreviewRows = ref<QuickOnboardProviderPlan[]>([])
 const previewWarnings = ref<string[]>([])
 const previewMatrixCount = ref(0)
@@ -286,6 +319,7 @@ watch(
 
 function resetForm() {
   templateProviderId.value = ''
+  advancedPanels.value = []
   serverPreviewRows.value = []
   previewWarnings.value = []
   previewMatrixCount.value = 0
@@ -470,7 +504,7 @@ async function handleSubmit() {
 .quick-provider {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 
 .summary-band {
@@ -478,16 +512,35 @@ async function handleSubmit() {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 14px 16px;
+  padding: 16px 18px;
   border: 1px solid var(--el-border-color-light);
-  border-radius: 6px;
-  background: var(--el-fill-color-lighter);
+  border-radius: 8px;
+  background: linear-gradient(180deg, var(--el-fill-color-extra-light), var(--el-fill-color-lighter));
 }
 
 .summary-title {
   font-size: 16px;
   font-weight: 600;
   color: var(--el-text-color-primary);
+}
+
+.summary-metrics {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.summary-metrics span {
+  min-width: 68px;
+  padding: 6px 10px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 6px;
+  background: var(--el-bg-color);
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+  text-align: center;
 }
 
 .summary-subtitle,
@@ -497,14 +550,108 @@ async function handleSubmit() {
   line-height: 1.5;
 }
 
-.form-hint.inline {
-  margin-left: 10px;
+.section-block {
+  padding: 14px 16px 0;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  background: var(--el-bg-color);
+}
+
+.section-heading {
+  margin-bottom: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.batch-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.input-panel {
+  min-width: 0;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  background: var(--el-bg-color);
+}
+
+.panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.panel-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.panel-subtitle {
+  margin-top: 2px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.textarea-item,
+.model-type-item {
+  margin-bottom: 0;
+}
+
+.model-type-item {
+  margin-top: 12px;
+}
+
+.advanced-collapse {
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.advanced-collapse :deep(.el-collapse-item__header) {
+  height: 42px;
+  padding: 0 16px;
+  border-bottom: 0;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  background: var(--el-fill-color-extra-light);
+}
+
+.advanced-collapse :deep(.el-collapse-item__wrap) {
+  border-bottom: 0;
+}
+
+.advanced-collapse :deep(.el-collapse-item__content) {
+  padding: 14px 16px 0;
+}
+
+:deep(.el-form-item__label) {
+  margin-bottom: 6px;
+  color: var(--el-text-color-regular);
+  font-weight: 500;
+}
+
+:deep(.el-form-item.is-error .el-textarea__inner),
+:deep(.el-form-item.is-error .el-input__wrapper),
+:deep(.el-form-item.is-error .el-select__wrapper) {
+  box-shadow: 0 0 0 1px var(--el-color-danger-light-5) inset;
 }
 
 .preview-panel {
   border: 1px solid var(--el-border-color-light);
-  border-radius: 6px;
+  border-radius: 8px;
   overflow: hidden;
+  background: var(--el-bg-color);
+}
+
+.preview-panel.is-empty {
+  border-style: dashed;
 }
 
 .preview-warning {
@@ -517,7 +664,7 @@ async function handleSubmit() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  padding: 10px 14px;
   font-size: 14px;
   font-weight: 600;
   color: var(--el-text-color-primary);
@@ -529,6 +676,15 @@ async function handleSubmit() {
   font-size: 12px;
   font-weight: 400;
   color: var(--el-text-color-secondary);
+}
+
+.preview-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 64px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 
 .mono-text {
@@ -556,6 +712,14 @@ async function handleSubmit() {
   .summary-band {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .summary-metrics {
+    justify-content: flex-start;
+  }
+
+  .batch-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

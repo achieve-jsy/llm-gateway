@@ -128,6 +128,10 @@ func quickProviderOnboardPayload() string {
 	}`
 }
 
+func quickProviderOnboardPayloadWithNamePrefix() string {
+	return strings.Replace(quickProviderOnboardPayload(), `"purpose":"坐席",`, `"purpose":"坐席","name_prefix":"agent-prod",`, 1)
+}
+
 func doQuickProviderRequest(r *gin.Engine, method, path, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -196,6 +200,29 @@ func TestProviderQuickOnboardHandler_PreviewNoWriteAndMasksCredentials(t *testin
 	require.NoError(t, db.Model(&model.Model{}).Count(&modelCount).Error)
 	assert.EqualValues(t, 1, providerCount, "preview 不应新增 provider")
 	assert.EqualValues(t, 0, modelCount, "preview 不应新增 model")
+}
+
+func TestProviderQuickOnboardHandler_PreviewUsesCustomNamePrefix(t *testing.T) {
+	// 中文说明：管理员可以自定义渠道名前缀，后端仍负责追加 001/002 并避让重名。
+	r, _ := setupProviderQuickOnboardHandler(t)
+
+	w := doQuickProviderRequest(r, http.MethodPost, quickProviderPreviewPath, quickProviderOnboardPayloadWithNamePrefix())
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var resp struct {
+		Data struct {
+			NamePrefix string `json:"name_prefix"`
+			Providers  []struct {
+				Name string `json:"name"`
+			} `json:"providers"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	assert.Equal(t, "agent-prod", resp.Data.NamePrefix)
+	require.Len(t, resp.Data.Providers, 2)
+	assert.Equal(t, "agent-prod-001", resp.Data.Providers[0].Name)
+	assert.Equal(t, "agent-prod-002", resp.Data.Providers[1].Name)
 }
 
 func TestProviderQuickOnboardHandler_CreateCreatesProviderModelMatrix(t *testing.T) {

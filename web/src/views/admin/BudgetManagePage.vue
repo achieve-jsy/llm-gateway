@@ -538,7 +538,7 @@
               <div class="tier-budget-cell">
                 <template v-if="tierBudgetByScope.has(tierScopeKey('dept_daily', row.deptId))">
                   <div v-for="t in tierBudgetByScope.get(tierScopeKey('dept_daily', row.deptId))!" :key="t.tier_name" class="tier-budget-tag">
-                    <span class="tier-name">{{ t.tier_name }}</span>
+                    <span class="tier-name">{{ displayTierName(t) }}</span>
                     <span :class="budgetColorLevel(t.used_ratio || 0)">{{ Math.round((t.used_ratio || 0) * 100) }}%</span>
                   </div>
                 </template>
@@ -548,8 +548,10 @@
           </el-table-column>
           <el-table-column label="操作" width="180" align="center">
             <template #default="{ row }">
-              <el-button size="small" type="primary" plain @click="navigateToDeptMembers(row)">查看预算</el-button>
-              <el-button size="small" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: row.deptId, label: row.label })">配置</el-button>
+              <div class="table-actions-inline">
+                <el-button size="small" type="primary" plain @click="navigateToDeptMembers(row)">查看预算</el-button>
+                <el-button size="small" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: row.deptId, label: row.label })">配置</el-button>
+              </div>
             </template>
           </el-table-column>
           <template #empty>
@@ -686,7 +688,7 @@
               <div class="tier-budget-cell">
                 <template v-if="tierBudgetByScope.has(tierScopeKey(row.scope_type, row.scope_id))">
                   <div v-for="t in tierBudgetByScope.get(tierScopeKey(row.scope_type, row.scope_id))!" :key="t.tier_name" class="tier-budget-tag">
-                    <span class="tier-name">{{ t.tier_name }}</span>
+                    <span class="tier-name">{{ displayTierName(t) }}</span>
                     <span :class="budgetColorLevel(t.used_ratio || 0)">{{ Math.round((t.used_ratio || 0) * 100) }}%</span>
                   </div>
                 </template>
@@ -699,8 +701,10 @@
           </el-table-column>
           <el-table-column label="操作" width="160" align="center">
             <template #default="{ row }">
-              <el-button size="small" plain @click="openMemberDetail(row)">预算详情</el-button>
-              <el-button size="small" type="primary" plain @click="openMemberQuota(row)">调整配额</el-button>
+              <div class="table-actions-inline">
+                <el-button size="small" plain @click="openMemberDetail(row)">预算详情</el-button>
+                <el-button size="small" type="primary" plain @click="openMemberQuota(row)">调整配额</el-button>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -793,7 +797,7 @@
                     :key="t.tier_name"
                     class="tier-budget-tag"
                   >
-                    <span class="tier-name">{{ t.tier_name }}</span>
+                    <span class="tier-name">{{ displayTierName(t) }}</span>
                     <span :class="budgetColorLevel(t.used_ratio || 0)">{{ Math.round((t.used_ratio || 0) * 100) }}%</span>
                   </div>
                 </template>
@@ -957,7 +961,7 @@
                     :key="t.tier_name"
                     class="tier-budget-tag"
                   >
-                    <span class="tier-name">{{ t.tier_name }}</span>
+                    <span class="tier-name">{{ displayTierName(t) }}</span>
                     <span :class="budgetColorLevel(t.used_ratio || 0)">{{ Math.round((t.used_ratio || 0) * 100) }}%</span>
                   </div>
                 </template>
@@ -969,8 +973,10 @@
           <!-- 操作 -->
           <el-table-column label="操作" width="180" align="center">
             <template #default="{ row }">
-              <el-button size="small" type="primary" plain @click="navigateToDeptMembers(row)">查看预算</el-button>
-              <el-button size="small" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: row.deptId, label: row.label })">配置</el-button>
+              <div class="table-actions-inline">
+                <el-button size="small" type="primary" plain @click="navigateToDeptMembers(row)">查看预算</el-button>
+                <el-button size="small" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: row.deptId, label: row.label })">配置</el-button>
+              </div>
             </template>
           </el-table-column>
           <template #empty>
@@ -1124,7 +1130,7 @@
                       :key="t.tier_name"
                       class="tier-budget-tag"
                     >
-                      <span class="tier-name">{{ t.tier_name }}</span>
+                      <span class="tier-name">{{ displayTierName(t) }}</span>
                       <span :class="budgetColorLevel(t.used_ratio || 0)">{{ Math.round((t.used_ratio || 0) * 100) }}%</span>
                     </div>
                   </template>
@@ -1139,8 +1145,10 @@
             </el-table-column>
             <el-table-column label="操作" width="160" align="center">
               <template #default="{ row }">
-                <el-button size="small" plain @click="openMemberDetail(row)">预算详情</el-button>
-                <el-button size="small" type="primary" plain @click="openMemberQuota(row)">调整配额</el-button>
+                <div class="table-actions-inline">
+                  <el-button size="small" plain @click="openMemberDetail(row)">预算详情</el-button>
+                  <el-button size="small" type="primary" plain @click="openMemberQuota(row)">调整配额</el-button>
+                </div>
               </template>
             </el-table-column>
           </el-table>
@@ -1312,8 +1320,10 @@
           </el-table-column>
           <el-table-column label="操作" width="150" align="center">
             <template #default="{ row }">
-              <el-button size="small" plain @click="openMemberDetail(row)">预算详情</el-button>
-              <el-button size="small" type="primary" plain @click="openMemberQuota(row)">调整配额</el-button>
+              <div class="table-actions-inline">
+                <el-button size="small" plain @click="openMemberDetail(row)">预算详情</el-button>
+                <el-button size="small" type="primary" plain @click="openMemberQuota(row)">调整配额</el-button>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -1422,8 +1432,10 @@
           </el-table-column>
           <el-table-column label="操作" width="150" align="center">
             <template #default="{ row }">
-              <el-button size="small" plain @click="openMemberDetail(row)">预算详情</el-button>
-              <el-button size="small" type="primary" plain @click="openMemberQuota(row)">调整配额</el-button>
+              <div class="table-actions-inline">
+                <el-button size="small" plain @click="openMemberDetail(row)">预算详情</el-button>
+                <el-button size="small" type="primary" plain @click="openMemberQuota(row)">调整配额</el-button>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -2293,7 +2305,7 @@ function tierLimitToBudgetItem(scope: BudgetItem, limit: BudgetTierLimit): TierB
     scope_id: scope.scope_id,
     scope_type: scope.scope_type,
     model_tier_id: limit.model_tier_id,
-    tier_name: limit.model_tier_name || limit.model_tier_id,
+    tier_name: fallbackTierName({ model_tier_id: limit.model_tier_id, tier_name: limit.model_tier_name }),
     amount_usd: Number.isFinite(amount) ? amount : 0,
     used_usd: Number.isFinite(used) ? used : 0,
     used_ratio: Number.isFinite(ratio) ? ratio : 0,
@@ -2305,6 +2317,16 @@ function tierLimitToBudgetItem(scope: BudgetItem, limit: BudgetTierLimit): TierB
 
 function tierBudgetMergeKey(item: TierBudgetItem): string {
   return `${item.scope_type}:${item.scope_id}:${item.model_tier_id || item.tier_name}`
+}
+
+function fallbackTierName(item: Pick<TierBudgetItem, 'model_tier_id' | 'tier_name'>): string {
+  if (item.tier_name && !isUUIDLike(item.tier_name)) return item.tier_name
+  if (item.model_tier_id && !isUUIDLike(item.model_tier_id)) return item.model_tier_id
+  return '未知等级'
+}
+
+function displayTierName(item: Pick<TierBudgetItem, 'model_tier_id' | 'tier_name'>): string {
+  return fallbackTierName(item)
 }
 
 function normalizeTierUsageItem(raw: any, configuredByKey: Map<string, TierBudgetItem>): TierBudgetItem | null {
@@ -2330,7 +2352,7 @@ function normalizeTierUsageItem(raw: any, configuredByKey: Map<string, TierBudge
     scope_id: scopeID,
     scope_type: scopeType,
     model_tier_id: modelTierID,
-    tier_name: configured?.tier_name || tierName,
+    tier_name: configured?.tier_name || fallbackTierName({ model_tier_id: modelTierID, tier_name: tierName }),
     amount_usd: Number.isFinite(amount) ? amount : 0,
     used_usd: Number.isFinite(used) ? used : 0,
     used_ratio: Number.isFinite(ratio) ? ratio : 0,
@@ -4713,6 +4735,7 @@ onMounted(async () => {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  min-width: 0;
 }
 .tier-budget-tag {
   display: inline-flex;
@@ -4724,10 +4747,15 @@ onMounted(async () => {
   font-size: 12px;
   background: #eff6ff;
   border: 1px solid #bfdbfe;
+  max-width: 100%;
 }
 .tier-budget-tag .tier-name {
   color: #2563eb;
   font-weight: 500;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tier-budget-tag .success {
   color: #047857;
@@ -4737,6 +4765,19 @@ onMounted(async () => {
 }
 .tier-budget-tag .danger {
   color: #dc2626;
+}
+
+.table-actions-inline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.table-actions-inline :deep(.el-button + .el-button) {
+  margin-left: 0;
 }
 
 /* 状态标签样式覆盖 */

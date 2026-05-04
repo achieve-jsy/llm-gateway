@@ -207,16 +207,6 @@
           label-width="100px"
           label-position="left"
         >
-          <el-form-item label="优先级">
-            <el-input-number v-model="formData.priority" :min="0" :max="9999" />
-            <span class="form-hint inline">数值越大优先级越高</span>
-          </el-form-item>
-
-          <el-form-item label="权重">
-            <el-input-number v-model="formData.weight" :min="0" :max="9999" />
-            <span class="form-hint inline">负载均衡权重</span>
-          </el-form-item>
-
           <!-- AWS Bedrock: Region 设置 -->
           <el-form-item v-if="selectedDef?.id === 'bedrock'" label="Region">
             <el-input v-model="formData.region" placeholder="us-east-1" />
@@ -237,14 +227,6 @@
           <el-form-item v-if="selectedDef?.id === 'azure-openai'" label="API Version">
             <el-input v-model="formData.api_version" placeholder="已废弃，请改用 Azure OpenAI (azure)" />
             <div class="form-hint">该渠道类型已废弃，请改用 definition「Azure OpenAI」(azure) + /openai/v1</div>
-          </el-form-item>
-
-          <el-form-item label="超时(秒)">
-            <el-input-number v-model="formData.timeout" :min="1" :max="300" />
-          </el-form-item>
-
-          <el-form-item label="最大重试">
-            <el-input-number v-model="formData.max_retries" :min="0" :max="10" />
           </el-form-item>
 
           <el-form-item label="测试模型">
@@ -291,52 +273,6 @@
         </el-form>
       </el-tab-pane>
 
-      <!-- 模型预填 Tab（仅创建时） -->
-      <el-tab-pane v-if="!isEdit" label="预填模型" name="models">
-        <div v-if="selectedDef && selectedDef.default_models?.length" class="models-prefill">
-          <p class="form-hint" style="margin-bottom: 12px">
-            选择要自动注册的模型（来自 {{ selectedDef.display_name }} 默认模型列表）
-          </p>
-          <div class="models-actions">
-            <el-button size="small" text type="primary" @click="selectAllModels">全选</el-button>
-            <el-button size="small" text type="danger" @click="clearAllModels">一键清除</el-button>
-          </div>
-          <el-checkbox-group v-model="formData.selected_models">
-            <el-checkbox
-              v-for="model in selectedDef.default_models"
-              :key="model"
-              :label="model"
-              :value="model"
-              class="prefill-model-item"
-            >
-              {{ model }}
-            </el-checkbox>
-          </el-checkbox-group>
-
-          <el-divider content-position="left">手动添加</el-divider>
-          <div class="extra-model-input">
-            <el-input
-              v-model="extraModelName"
-              placeholder="输入额外模型名称"
-              class="extra-model-field"
-              @keyup.enter="addExtraModel"
-            />
-            <el-button size="small" @click="addExtraModel">添加</el-button>
-          </div>
-          <div v-if="formData.extra_models.length" class="extra-model-tags">
-            <el-tag
-              v-for="(m, idx) in formData.extra_models"
-              :key="m"
-              closable
-              class="extra-model-tag"
-              @close="formData.extra_models.splice(idx, 1)"
-            >
-              {{ m }}
-            </el-tag>
-          </div>
-        </div>
-        <el-empty v-else description="请先选择渠道类型，或该类型无默认模型" :image-size="60" />
-      </el-tab-pane>
     </el-tabs>
 
     <template #footer>
@@ -352,7 +288,7 @@
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import type { FormInstance, FormRules, InputInstance } from 'element-plus'
 import { ElMessage } from 'element-plus'
-import { createProvider, updateProvider, getProviderDefinitions, createModel } from '@/services/control-plane'
+import { createProvider, updateProvider, getProviderDefinitions } from '@/services/control-plane'
 import type { Provider, ProviderPayload, ProviderDefinition, CredentialFieldSchema } from '@/types/provider'
 
 const props = defineProps<{
@@ -371,7 +307,6 @@ const credFormRef = ref<FormInstance>()
 const submitting = ref(false)
 const definitions = ref<ProviderDefinition[]>([])
 const activeTab = ref('basic')
-const extraModelName = ref('')
 const maskedCredentials = ref('') // 编辑模式下记住脱敏值，用于判断是否修改
 
 // ─── Bedrock 专属认证状态 ─────────────────────────────────────────────────────
@@ -400,17 +335,11 @@ interface FormData {
   definition_id: string
   endpoint: string
   credentials_map: Record<string, string>
-  priority: number
-  weight: number
-  timeout: number
-  max_retries: number
   test_model: string
   tags: string[]       // 多标签，提交时用逗号拼接存入 tag 字段
   remark: string
   region: string
   api_version: string
-  selected_models: string[]
-  extra_models: string[]
 }
 
 const formData = ref<FormData>({
@@ -418,17 +347,11 @@ const formData = ref<FormData>({
   definition_id: '',
   endpoint: '',
   credentials_map: {},
-  priority: 0,
-  weight: 1,
-  timeout: 30,
-  max_retries: 2,
   test_model: '',
   tags: [],
   remark: '',
   region: '',
-  api_version: '',
-  selected_models: [],
-  extra_models: []
+  api_version: ''
 })
 
 // ─── 多标签输入逻辑 ───────────────────────────────────────────────────────────
@@ -471,17 +394,11 @@ watch(
         definition_id: val.definition_id || val.type,
         endpoint: val.endpoint,
         credentials_map: {},
-        priority: val.priority || 0,
-        weight: val.weight || 1,
-        timeout: val.timeout || 30,
-        max_retries: val.max_retries || 2,
         test_model: val.test_model || '',
         tags: val.tag ? val.tag.split(',').map(t => t.trim()).filter(Boolean) : [],
         remark: val.remark || '',
         region: '',
-        api_version: '',
-        selected_models: [],
-        extra_models: []
+        api_version: ''
       }
       // 回填脱敏凭证值（让管理员看到当前配的是哪个 Key）
       if (val.credentials && selectedDef.value?.credential_schema) {
@@ -549,17 +466,11 @@ watch(
         definition_id: '',
         endpoint: '',
         credentials_map: {},
-        priority: 0,
-        weight: 1,
-        timeout: 30,
-        max_retries: 2,
         test_model: '',
         tags: [],
         remark: '',
         region: '',
-        api_version: '',
-        selected_models: [],
-        extra_models: []
+        api_version: ''
       }
     }
   },
@@ -599,10 +510,6 @@ function handleDefinitionChange(defId: string) {
     formData.value.api_version = def.vendor_options?.default_api_version || '2024-02-01'
   }
 
-  // 预选所有默认模型
-  if (def.default_models?.length) {
-    formData.value.selected_models = [...def.default_models]
-  }
 }
 
 /** 监听 region 变化，自动更新 Bedrock endpoint */
@@ -614,28 +521,6 @@ watch(
     }
   }
 )
-
-function selectAllModels() {
-  if (selectedDef.value?.default_models?.length) {
-    formData.value.selected_models = [...selectedDef.value.default_models]
-  }
-}
-
-function clearAllModels() {
-  formData.value.selected_models = []
-}
-
-/** 添加额外模型 */
-function addExtraModel() {
-  const name = extraModelName.value.trim()
-  if (!name) return
-  if (formData.value.extra_models.includes(name) || formData.value.selected_models.includes(name)) {
-    ElMessage.warning('模型已存在列表中')
-    return
-  }
-  formData.value.extra_models.push(name)
-  extraModelName.value = ''
-}
 
 /** 根据 schema 生成凭证字段校验规则（新建模式必填，编辑模式不必填） */
 function getCredentialFieldRules(field: CredentialFieldSchema) {
@@ -732,10 +617,6 @@ async function handleSubmit() {
       definition_id: formData.value.definition_id,
       endpoint: endpoint,
       credentials: hasCredentials ? credentialsJson : '',
-      priority: formData.value.priority,
-      weight: formData.value.weight,
-      timeout: formData.value.timeout,
-      max_retries: formData.value.max_retries,
       test_model: formData.value.test_model || undefined,
       tag: formData.value.tags.join(','),  // 空数组时传 '' 让后端清空标签
       remark: formData.value.remark || undefined
@@ -784,31 +665,8 @@ async function handleSubmit() {
       await updateProvider(props.provider.id, payload)
       ElMessage.success('更新成功')
     } else {
-      const created = await createProvider(payload)
-      // 创建后自动注册预填模型
-      const modelsToCreate = [
-        ...formData.value.selected_models,
-        ...formData.value.extra_models
-      ]
-      if (modelsToCreate.length > 0) {
-        const results = await Promise.allSettled(
-          modelsToCreate.map(name =>
-            createModel({
-              name,
-              provider_id: created.id,
-              model_type: 'chat'
-            })
-          )
-        )
-        const failed = results.filter(r => r.status === 'rejected').length
-        if (failed > 0) {
-          ElMessage.warning(`渠道创建成功，但有 ${failed} 个模型注册失败`)
-        } else {
-          ElMessage.success(`创建成功，已注册 ${modelsToCreate.length} 个模型`)
-        }
-      } else {
-        ElMessage.success('创建成功')
-      }
+      await createProvider(payload)
+      ElMessage.success('创建成功')
     }
     emit('saved')
   } catch {
@@ -875,40 +733,6 @@ async function handleSubmit() {
   margin-left: 12px;
 }
 
-.models-prefill {
-  padding: 8px 0;
-}
-
-.extra-model-input {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.extra-model-field {
-  width: 280px;
-}
-
-.extra-model-tags {
-  margin-top: 8px;
-}
-
-.extra-model-tag {
-  margin-right: 6px;
-  margin-bottom: 4px;
-}
-
-.prefill-model-item {
-  display: block;
-  margin-bottom: 6px;
-}
-
-.models-actions {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
 .el-divider {
   margin: 16px 0;
   border-color: #2C2C2E;
@@ -926,15 +750,6 @@ async function handleSubmit() {
   }
   :deep(.el-dialog .el-dialog__body) {
     padding: 16px !important;
-  }
-  .extra-model-field {
-    width: 100%;
-  }
-  .models-actions {
-    flex-wrap: wrap;
-  }
-  .prefill-model-item {
-    word-break: break-all;
   }
 }
 </style>

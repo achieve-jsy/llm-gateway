@@ -1,5 +1,5 @@
 import http from './http'
-import type { Provider, ProviderPayload, ProviderDefinition } from '@/types/provider'
+import type { Provider, ProviderPayload, ProviderDefinition, QuickOnboardPayload, QuickOnboardPreview, QuickOnboardCreateResult } from '@/types/provider'
 import type { Model, ModelPayload } from '@/types/model'
 import type { ModelTag, ModelTagPayload } from '@/types/model-tag'
 import type { SyncResult, ConfirmSyncPayload, ConfirmSyncResult, CheckModelsPayload, CheckModelsResult } from '@/types/sync'
@@ -55,6 +55,18 @@ export async function getProvider(id: string): Promise<Provider> {
 /** 创建渠道 */
 export async function createProvider(payload: ProviderPayload): Promise<Provider> {
   const response = await http.post<ApiResponse<Provider>>('/api/v1/providers', payload)
+  return response.data.data
+}
+
+/** 快速接入预览：同供应商多个 Key 将生成哪些渠道和模型矩阵 */
+export async function previewQuickOnboardProviders(payload: QuickOnboardPayload): Promise<QuickOnboardPreview> {
+  const response = await http.post<ApiResponse<QuickOnboardPreview>>('/api/v1/providers/quick-onboard/preview', payload)
+  return response.data.data
+}
+
+/** 快速接入创建：同供应商多个 Key 批量创建渠道，并为每个渠道创建输入的所有模型 */
+export async function createQuickOnboardProviders(payload: QuickOnboardPayload): Promise<QuickOnboardCreateResult> {
+  const response = await http.post<ApiResponse<QuickOnboardCreateResult>>('/api/v1/providers/quick-onboard', payload)
   return response.data.data
 }
 

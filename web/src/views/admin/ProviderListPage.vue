@@ -40,6 +40,7 @@
             :value="tag"
           />
         </el-select>
+        <el-button type="primary" plain @click="openQuickOnboardingDialog">快速接入供应商</el-button>
         <el-button type="primary" @click="openCreateDialog">新建渠道</el-button>
       </div>
     </div>
@@ -99,34 +100,6 @@
           <el-tag v-if="row.status === ProviderStatus.ENABLED" type="success" size="small">启用</el-tag>
           <el-tag v-else-if="row.status === ProviderStatus.MANUALLY_DISABLED" type="info" size="small">已禁用</el-tag>
           <el-tag v-else type="info" size="small">未知</el-tag>
-        </template>
-      </el-table-column>
-
-      <el-table-column label="优先级" width="90" align="center">
-        <template #default="{ row }">
-          <el-input-number
-            v-model="row.priority"
-            :min="0"
-            :max="9999"
-            size="small"
-            controls-position="right"
-            style="width: 70px"
-            @change="handleInlineUpdate(row)"
-          />
-        </template>
-      </el-table-column>
-
-      <el-table-column label="权重" width="90" align="center">
-        <template #default="{ row }">
-          <el-input-number
-            v-model="row.weight"
-            :min="0"
-            :max="9999"
-            size="small"
-            controls-position="right"
-            style="width: 70px"
-            @change="handleInlineUpdate(row)"
-          />
         </template>
       </el-table-column>
 
@@ -218,6 +191,15 @@
       @close="dialogVisible = false"
     />
 
+    <!-- 快速接入供应商 -->
+    <QuickProviderOnboardingDialog
+      v-model:visible="quickDialogVisible"
+      :definitions="definitions"
+      :providers="quickTemplateProviders"
+      @saved="onQuickDialogSaved"
+      @close="quickDialogVisible = false"
+    />
+
     <!-- 同步模型对话框 -->
     <SyncModelsDialog
       :visible="syncDialogVisible"
@@ -248,9 +230,11 @@ import type { Provider, ProviderDefinition } from '@/types/provider'
 import { ProviderStatus } from '@/types/provider'
 import type { SyncResult } from '@/types/sync'
 import ProviderDialog from '@/components/admin/ProviderDialog.vue'
+import QuickProviderOnboardingDialog from '@/components/admin/QuickProviderOnboardingDialog.vue'
 import SyncModelsDialog from '@/components/admin/SyncModelsDialog.vue'
 
 const providers = ref<Provider[]>([])
+const quickTemplateProviders = ref<Provider[]>([])
 const definitions = ref<ProviderDefinition[]>([])
 const tagOptions = ref<string[]>([])
 const filterTag = ref('')
@@ -261,6 +245,7 @@ const pageSize = ref(10)
 const total = ref(0)
 
 const dialogVisible = ref(false)
+const quickDialogVisible = ref(false)
 const editingProvider = ref<Provider | null>(null)
 
 const syncDialogVisible = ref(false)
@@ -296,6 +281,15 @@ async function loadProviders() {
     extractTagOptionsFromProviders(result.data)
   } catch {
     ElMessage.error('加载渠道列表失败')
+  }
+}
+
+async function loadQuickTemplateProviders() {
+  try {
+    const result = await getProviders({ page: 1, pageSize: 500 })
+    quickTemplateProviders.value = result.data
+  } catch {
+    quickTemplateProviders.value = providers.value
   }
 }
 
@@ -403,22 +397,6 @@ function onSyncSaved() {
 }
 
 
-/** 行内编辑优先级/权重 */
-async function handleInlineUpdate(row: Provider) {
-  try {
-    await updateProvider(row.id, {
-      name: row.name,
-      definition_id: row.definition_id,
-      endpoint: row.endpoint,
-      credentials: '',
-      priority: row.priority,
-      weight: row.weight
-    })
-  } catch {
-    loadProviders()
-  }
-}
-
 /** 删除渠道 */
 async function handleDelete(row: Provider) {
   try {
@@ -440,6 +418,12 @@ function openCreateDialog() {
   dialogVisible.value = true
 }
 
+/** 打开快速接入对话框 */
+async function openQuickOnboardingDialog() {
+  await Promise.all([loadDefinitions(), loadQuickTemplateProviders()])
+  quickDialogVisible.value = true
+}
+
 /** 打开编辑对话框 */
 function openEditDialog(row: Provider) {
   editingProvider.value = row
@@ -449,6 +433,13 @@ function openEditDialog(row: Provider) {
 /** 对话框保存成功回调 */
 function onDialogSaved() {
   dialogVisible.value = false
+  currentPage.value = 1
+  loadProviders()
+}
+
+/** 快速接入保存成功回调 */
+function onQuickDialogSaved() {
+  quickDialogVisible.value = false
   currentPage.value = 1
   loadProviders()
 }

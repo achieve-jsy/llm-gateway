@@ -22,21 +22,23 @@ const (
 //   - InputPrice / OutputPrice：仅 price_mode=manual 时作为实付价生效；
 //     price_mode=catalog 时忽略，读取 model_catalog 价格。
 //
-// 价格语义：InputPrice / OutputPrice 单位统一为 USD per 1,000,000 tokens，
-// 与 model_catalog.InputPricePerMillion / OutputPricePerMillion 同语义。
+// 价格语义：InputPrice / OutputPrice / CacheReadPrice / CacheWritePrice
+// 单位统一为 USD per 1,000,000 tokens，与 model_catalog 对应价格字段同语义。
 type Model struct {
 	ID                  uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	Name                string     `gorm:"type:varchar(200);not null;uniqueIndex:idx_models_name_provider_unique,composite:name_provider" json:"name"`
 	ProviderID          uuid.UUID  `gorm:"type:uuid;not null;index:idx_models_provider_id;uniqueIndex:idx_models_name_provider_unique,composite:name_provider" json:"provider_id"`
 	ModelType           string     `gorm:"type:varchar(50);not null;default:chat" json:"model_type"`
-Enabled                    *bool      `gorm:"not null;default:true;index:idx_models_enabled" json:"enabled"`
-	Status                     int        `gorm:"not null;default:1" json:"status"`
-	UpstreamModelID            string     `gorm:"type:varchar(200);default:''" json:"upstream_model_id"`
+	Enabled             *bool      `gorm:"not null;default:true;index:idx_models_enabled" json:"enabled"`
+	Status              int        `gorm:"not null;default:1" json:"status"`
+	UpstreamModelID     string     `gorm:"type:varchar(200);default:''" json:"upstream_model_id"`
 	Description         string     `gorm:"type:varchar(500);default:''" json:"description"`
 	ContextLength       int        `gorm:"default:0" json:"context_length"`
 	MaxOutputTokens     int        `gorm:"default:0" json:"max_output_tokens"`
 	InputPrice          float64    `gorm:"type:decimal(14,6);default:0" json:"input_price"`
 	OutputPrice         float64    `gorm:"type:decimal(14,6);default:0" json:"output_price"`
+	CacheReadPrice      *float64   `gorm:"type:decimal(14,6)" json:"cache_read_price,omitempty"`
+	CacheWritePrice     *float64   `gorm:"type:decimal(14,6)" json:"cache_write_price,omitempty"`
 	PriceMode           string     `gorm:"type:varchar(10);not null;default:catalog" json:"price_mode"`
 	Weight              int        `gorm:"not null;default:1" json:"weight"`
 	CatalogID           *uuid.UUID `gorm:"type:uuid;index:idx_models_catalog_id" json:"catalog_id,omitempty"`
@@ -50,14 +52,14 @@ Enabled                    *bool      `gorm:"not null;default:true;index:idx_mod
 	VideoSupportedActions      []string `gorm:"type:jsonb;not null;default:'[]';serializer:json" json:"video_supported_actions,omitempty"`
 	// 四层配额体系（Phase 1）
 	// NULL = 不限，运行时按主体独立计数
-	QuotaRPM            *int `gorm:"column:quota_rpm" json:"quota_rpm,omitempty"`
-	QuotaMaxConcurrency *int `gorm:"column:quota_max_concurrency" json:"quota_max_concurrency,omitempty"`
-	ConsecutiveFailures         int        `gorm:"not null;default:0" json:"consecutive_failures"`
-	ConsecutiveRecoverySuccesses int        `gorm:"not null;default:0" json:"consecutive_recovery_successes"`
-	LastCheckError              string     `gorm:"type:varchar(500);default:''" json:"last_check_error"`
-	ResponseTime        int        `gorm:"default:0" json:"response_time"`
-	CreatedAt           time.Time  `gorm:"not null;autoCreateTime" json:"created_at"`
-	UpdatedAt           time.Time  `gorm:"not null;autoUpdateTime" json:"updated_at"`
+	QuotaRPM                     *int      `gorm:"column:quota_rpm" json:"quota_rpm,omitempty"`
+	QuotaMaxConcurrency          *int      `gorm:"column:quota_max_concurrency" json:"quota_max_concurrency,omitempty"`
+	ConsecutiveFailures          int       `gorm:"not null;default:0" json:"consecutive_failures"`
+	ConsecutiveRecoverySuccesses int       `gorm:"not null;default:0" json:"consecutive_recovery_successes"`
+	LastCheckError               string    `gorm:"type:varchar(500);default:''" json:"last_check_error"`
+	ResponseTime                 int       `gorm:"default:0" json:"response_time"`
+	CreatedAt                    time.Time `gorm:"not null;autoCreateTime" json:"created_at"`
+	UpdatedAt                    time.Time `gorm:"not null;autoUpdateTime" json:"updated_at"`
 
 	// 关联（默认查询不预加载，列表 API 需要时显式 Preload）
 	Provider Provider      `gorm:"foreignKey:ProviderID" json:"provider,omitempty"`

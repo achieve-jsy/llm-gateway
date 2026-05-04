@@ -41,9 +41,9 @@
           <el-table :data="models" stripe size="small" empty-text="暂无模型成员">
             <el-table-column label="模型名称" prop="model_name" min-width="200" />
             <el-table-column label="厂商" prop="provider_name" width="120" />
-            <el-table-column label="权重" prop="weight" width="80" align="center" v-if="group?.model_type !== 'video'" />
-            <el-table-column label="优先级" prop="priority" width="80" align="center" v-if="group?.model_type !== 'video'" />
-            <el-table-column label="复杂度档位" prop="complexity_tier" width="110" align="center" v-if="group?.model_type !== 'video'">
+            <el-table-column label="权重" prop="weight" width="80" align="center" v-if="showWeightColumn" />
+            <el-table-column label="优先级" prop="priority" width="80" align="center" v-if="showPriorityColumn" />
+            <el-table-column label="复杂度档位" prop="complexity_tier" width="110" align="center" v-if="showComplexityColumn">
               <template #default="scope">
                 <el-tag v-if="scope.row.complexity_tier" size="small">{{ scope.row.complexity_tier }}</el-tag>
               </template>
@@ -305,9 +305,13 @@ function onQuotaSaved() {
 }
 
 function strategyLabel(s: string): string {
-  const map: Record<string, string> = { round_robin: '轮询', priority: '优先级', weighted: '加权', auto: '自动' }
+  const map: Record<string, string> = { round_robin: '轮询', priority: '优先级', weighted: '权重轮询', auto: '自动选择' }
   return map[s] || s
 }
+
+const showWeightColumn = computed(() => group.value?.model_type !== 'video' && group.value?.strategy === 'weighted')
+const showPriorityColumn = computed(() => group.value?.model_type !== 'video' && group.value?.strategy === 'priority')
+const showComplexityColumn = computed(() => group.value?.model_type !== 'video' && group.value?.strategy === 'auto')
 
 function modelTypeLabel(t?: string): string {
   const map: Record<string, string> = {

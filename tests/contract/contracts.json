@@ -1,5 +1,68 @@
 {
   "$comment": "FE↔BE 接口契约（增量维护）。历史全量契约曾移除；本文件按功能模块逐步补回。",
+  "quick_provider_onboard": {
+    "base_prefix": "/api/v1",
+    "auth": "admin Bearer <jwt>",
+    "purpose": "同一供应商多个 Key 快速创建多个渠道，并为每个渠道添加输入的所有模型；用户无需逐个填写渠道名。",
+    "routes": {
+      "POST /providers/quick-onboard/preview": {
+        "handler": "ProviderQuickOnboardHandler.Preview",
+        "success_status": 200,
+        "error_statuses": {
+          "400": ["bad_request"],
+          "401": ["unauthorized"],
+          "500": ["internal_error"]
+        },
+        "response_fields": ["provider_count", "model_count", "matrix_count", "name_prefix", "providers", "warnings"]
+      },
+      "POST /providers/quick-onboard": {
+        "handler": "ProviderQuickOnboardHandler.Create",
+        "success_status": 201,
+        "alternative_success_statuses": {
+          "409": ["all_targets_failed_with_data"]
+        },
+        "error_statuses": {
+          "400": ["bad_request"],
+          "401": ["unauthorized"],
+          "500": ["internal_error"]
+        },
+        "response_fields": ["provider_count", "succeeded_count", "failed_count", "model_count_per_provider", "matrix_count", "results"]
+      }
+    },
+    "request_body_fields": [
+      "provider", "provider_slug", "purpose", "name_prefix", "credentials", "models"
+    ],
+    "provider_fields": [
+      "definition_id", "type", "endpoint", "weight", "priority", "test_model",
+      "remark", "max_retries", "timeout", "tag"
+    ],
+    "credential_item_fields": ["credentials", "remark"],
+    "model_item_fields": [
+      "name", "model_type", "upstream_model_id", "description",
+      "context_length", "max_output_tokens", "price_mode",
+      "input_price", "output_price", "weight"
+    ],
+    "required_fields": ["provider.definition_id", "provider.endpoint", "credentials", "models"],
+    "validation": {
+      "credentials": "array, min=1；每项 credentials 为与单渠道 ProviderPayload.credentials 一致的 JSON 字符串",
+      "models": "array, min=1；每个输入模型都会创建到每个新渠道下",
+      "model_type": "可选；chat | embedding | embedding_vl | rerank | rerank_vl | video；未传时后端按模型名推断",
+      "price_mode": "catalog | manual；manual 时 input_price 或 output_price 至少一个大于 0",
+      "name_prefix": "可选；后端用于自动生成渠道名。未传时按 provider definition display_name/id 生成",
+      "provider_name_generation": "后端生成唯一渠道名：<name_prefix-or-definition-id/purpose>-NNN；若与已有 providers.name 冲突应自动递增，分配失败返回 400 bad_request。"
+    },
+    "preview_provider_fields": ["index", "name", "credential", "models", "model_count", "remark", "will_create"],
+    "create_result_item_fields": ["index", "name", "provider_id", "model_ids", "model_count", "status", "error"],
+    "status_enum": ["success", "failed"],
+    "uniqueness": {
+      "providers": "providers.name 全局唯一（idx_providers_name_unique）；快速接入不得要求用户逐条输入 name。",
+      "models": "models(name, provider_id) 唯一（idx_models_name_provider_unique）；当前实现会在 normalize 阶段按 name 去重，同一渠道下不会写入重复模型名。"
+    },
+    "snapshot_refresh": {
+      "rule": "至少一个 provider 目标创建成功后，只刷新一次 provider snapshot 并发布一次 config:change。",
+      "response_note": "当前响应未返回 snapshot_version；如前端需要展示配置生效版本，需要后端扩展 QuickOnboardCreateResult。"
+    }
+  },
   "observability": {
     "base_prefix": "/api/v1",
     "auth": {

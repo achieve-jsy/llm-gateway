@@ -1,6 +1,9 @@
 package repository
 
 import (
+	"sort"
+	"strings"
+
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"gorm.io/gorm"
 )
@@ -18,8 +21,120 @@ func NewProviderDefinitionRepo(db *gorm.DB) *ProviderDefinitionRepo {
 // List 查询所有启用的渠道定义
 func (r *ProviderDefinitionRepo) List() ([]model.ProviderDefinition, error) {
 	var defs []model.ProviderDefinition
-	err := r.db.Where("enabled = ?", true).Order("builtin DESC, display_name ASC").Find(&defs).Error
-	return defs, err
+	if err := r.db.Where("enabled = ?", true).Order("builtin DESC, display_name ASC").Find(&defs).Error; err != nil {
+		return nil, err
+	}
+	if len(defs) > 0 {
+		return defs, nil
+	}
+	return r.fallbackDefinitionsFromProviders()
+}
+
+type providerDefinitionFallbackRow struct {
+	DefinitionID string
+	Type         string
+	Endpoint     string
+}
+
+func (r *ProviderDefinitionRepo) fallbackDefinitionsFromProviders() ([]model.ProviderDefinition, error) {
+	var rows []providerDefinitionFallbackRow
+	if err := r.db.Model(&model.Provider{}).
+		Select("definition_id, type, MIN(endpoint) AS endpoint").
+		Where("enabled = ?", true).
+		Where("COALESCE(definition_id, '') <> '' OR COALESCE(type, '') <> ''").
+		Group("definition_id, type").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	byID := make(map[string]model.ProviderDefinition)
+	for _, row := range rows {
+		id := strings.TrimSpace(row.DefinitionID)
+		adapter := strings.TrimSpace(row.Type)
+		if id == "" {
+			id = adapter
+		}
+		if adapter == "" {
+			adapter = id
+		}
+		if id == "" || adapter == "" {
+			continue
+		}
+		def := fallbackProviderDefinition(id, adapter, row.Endpoint)
+		if existing, ok := byID[def.ID]; ok && existing.BaseURL != "" {
+			continue
+		}
+		byID[def.ID] = def
+	}
+
+	defs := make([]model.ProviderDefinition, 0, len(byID))
+	for _, def := range byID {
+		defs = append(defs, def)
+	}
+	sort.Slice(defs, func(i, j int) bool {
+		return defs[i].DisplayName < defs[j].DisplayName
+	})
+	return defs, nil
+}
+
+func fallbackProviderDefinition(id, adapter, endpoint string) model.ProviderDefinition {
+	def := model.ProviderDefinition{
+		ID:               id,
+		DisplayName:      fallbackProviderDisplayName(id),
+		Adapter:          adapter,
+		BaseURL:          endpoint,
+		CredentialSchema: fallbackCredentialSchema(adapter),
+		VendorOptions:    fallbackVendorOptions(adapter),
+		Builtin:          true,
+		Enabled:          true,
+	}
+	return def
+}
+
+func fallbackProviderDisplayName(id string) string {
+	switch strings.ToLower(strings.TrimSpace(id)) {
+	case "qwen", "dashscope", "bailian":
+		return "千问"
+	case "deepseek":
+		return "DeepSeek"
+	case "openai":
+		return "OpenAI"
+	case "openai-compatible", "openai_compatible":
+		return "OpenAI 兼容"
+	case "azure":
+		return "Azure OpenAI"
+	case "gemini":
+		return "Google Gemini"
+	default:
+		return strings.ToUpper(id[:1]) + id[1:]
+	}
+}
+
+func fallbackCredentialSchema(adapter string) model.CredentialSchema {
+	schema := model.CredentialSchema{
+		"api_key": {
+			Type:        "string",
+			Required:    true,
+			Secret:      true,
+			Label:       "API Key",
+			Placeholder: "sk-...",
+		},
+	}
+	if strings.EqualFold(adapter, "azure") {
+		schema["api_key"] = model.CredentialField{Type: "string", Required: true, Secret: true, Label: "API Key", Placeholder: "从 Azure Portal 获取"}
+	}
+	return schema
+}
+
+func fallbackVendorOptions(adapter string) model.VendorOptions {
+	switch strings.ToLower(strings.TrimSpace(adapter)) {
+	case "azure":
+		return model.VendorOptions{URLPattern: "azure", AuthHeader: "api-key", RequiresAPIVersion: true, APIVersion: "2025-04-01-preview", EmptyChoicesSkip: true}
+	case "dashscope", "bailian":
+		return model.VendorOptions{URLPattern: "standard", AuthHeader: "bearer", StreamUsageInLastChunk: true, EmptyChoicesSkip: true}
+	default:
+		return model.VendorOptions{URLPattern: "standard", AuthHeader: "bearer"}
+	}
 }
 
 // GetByID 按 ID 查询渠道定义

@@ -98,6 +98,8 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 
 	providerSvc := service.NewProviderService(providerRepo, modelRepo, publisher)
 	providerSvc.SetSnapshotRefresher(snapshotter)
+	quickOnboardSvc := service.NewQuickOnboardService(db, publisher)
+	quickOnboardSvc.SetSnapshotRefresher(snapshotter)
 	modelSvc := service.NewModelService(modelRepo, providerRepo, publisher)
 	modelSvc.SetSnapshotRefresher(snapshotter)
 	modelSvc.SetModelStatusLogService(modelStatusLogSvc)
@@ -273,6 +275,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	}()
 
 	providerHandler := handler.NewProviderHandler(providerSvc)
+	quickOnboardHandler := handler.NewProviderQuickOnboardHandler(quickOnboardSvc)
 	modelHandler := handler.NewModelHandler(modelSvc)
 	internalHandler := handler.NewInternalHandler(internalSvc, keySvc, keyGroupSvc)
 	// 注入定价服务（供 /internal/v1/models/pricing 使用）
@@ -434,6 +437,8 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 
 		// 渠道管理
 		adminGroup.POST("/providers/check-all", healthCheckHandler.CheckAll)
+		adminGroup.POST("/providers/quick-onboard/preview", quickOnboardHandler.Preview)
+		adminGroup.POST("/providers/quick-onboard", quickOnboardHandler.Create)
 		adminGroup.POST("/providers", providerHandler.CreateProvider)
 		adminGroup.GET("/providers", providerHandler.ListProviders)
 		adminGroup.GET("/providers/:id", providerHandler.GetProvider)

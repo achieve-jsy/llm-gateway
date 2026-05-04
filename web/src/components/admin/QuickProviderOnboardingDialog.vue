@@ -150,20 +150,39 @@
                     v-model="catalogBindings[model]"
                     filterable
                     remote
-                    clearable
-                    :remote-method="(query: string) => searchCatalogOptions(model, query)"
-                    :loading="catalogLoading[model]"
-                    placeholder="搜索并选择 Catalog"
-                    style="width: 100%"
+                  clearable
+                  :remote-method="(query: string) => searchCatalogOptions(model, query)"
+                  :loading="catalogLoading[model]"
+                  placeholder="搜索并选择 Catalog"
+                  style="width: 100%"
+                  @visible-change="(visible: boolean) => handleCatalogVisible(model, visible)"
+                  @change="(catalogId: string) => handleCatalogChange(model, catalogId)"
+                >
+                  <el-option
+                    v-for="item in catalogOptions[model] || []"
+                    :key="item.id"
+                    :label="catalogOptionLabel(item)"
+                    :value="item.id"
                   >
-                    <el-option
-                      v-for="item in catalogOptions[model] || []"
-                      :key="item.id"
-                      :label="catalogOptionLabel(item)"
-                      :value="item.id"
-                    />
-                  </el-select>
+                    <div class="catalog-option">
+                      <div class="catalog-option-title">{{ item.source_model_id }}</div>
+                      <div class="catalog-option-meta">
+                        {{ item.provider || '-' }} · {{ item.mode || '-' }} · in ${{ item.input_price_per_million }} / out ${{ item.output_price_per_million }}
+                        <span v-if="item.cache_read_price != null || item.cache_write_price != null">
+                          · cache ${{ item.cache_read_price ?? '-' }} / ${{ item.cache_write_price ?? '-' }}
+                        </span>
+                        <span v-if="item.deprecation_date" class="catalog-option-warning"> · 已废弃</span>
+                      </div>
+                    </div>
+                  </el-option>
+                </el-select>
+                <div class="catalog-selected">
+                  <template v-if="selectedCatalogItems[model]">
+                    {{ catalogOptionLabel(selectedCatalogItems[model]) }}
+                  </template>
+                  <template v-else>自动匹配</template>
                 </div>
+              </div>
                 <div v-if="parsedModels.length === 0" class="pricing-empty">输入模型名后可关联 Catalog</div>
               </div>
             </template>
@@ -391,6 +410,7 @@ const uniformPricing = ref<PricePair>({ input: 0, output: 0, cacheRead: 0, cache
 const perModelPricing = ref<Record<string, PricePair>>({})
 const catalogBindings = ref<Record<string, string>>({})
 const catalogOptions = ref<Record<string, ModelCatalog[]>>({})
+const selectedCatalogItems = ref<Record<string, ModelCatalog | null>>({})
 const catalogLoading = ref<Record<string, boolean>>({})
 const serverPreviewRows = ref<QuickOnboardProviderPlan[]>([])
 const previewWarnings = ref<string[]>([])
@@ -480,6 +500,7 @@ function resetForm() {
   perModelPricing.value = {}
   catalogBindings.value = {}
   catalogOptions.value = {}
+  selectedCatalogItems.value = {}
   catalogLoading.value = {}
   serverPreviewRows.value = []
   previewWarnings.value = []
@@ -500,16 +521,19 @@ watch(parsedModels, (models) => {
   const next: Record<string, PricePair> = {}
   const nextCatalogBindings: Record<string, string> = {}
   const nextCatalogOptions: Record<string, ModelCatalog[]> = {}
+  const nextSelectedCatalogItems: Record<string, ModelCatalog | null> = {}
   const nextCatalogLoading: Record<string, boolean> = {}
   models.forEach(model => {
     next[model] = perModelPricing.value[model] || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
     nextCatalogBindings[model] = catalogBindings.value[model] || ''
     nextCatalogOptions[model] = catalogOptions.value[model] || []
+    nextSelectedCatalogItems[model] = selectedCatalogItems.value[model] || null
     nextCatalogLoading[model] = catalogLoading.value[model] || false
   })
   perModelPricing.value = next
   catalogBindings.value = nextCatalogBindings
   catalogOptions.value = nextCatalogOptions
+  selectedCatalogItems.value = nextSelectedCatalogItems
   catalogLoading.value = nextCatalogLoading
 })
 
@@ -634,6 +658,16 @@ async function searchCatalogOptions(modelName: string, query: string) {
   } finally {
     catalogLoading.value[modelName] = false
   }
+}
+
+function handleCatalogVisible(modelName: string, visible: boolean) {
+  if (!visible) return
+  if ((catalogOptions.value[modelName] || []).length > 0) return
+  searchCatalogOptions(modelName, modelName)
+}
+
+function handleCatalogChange(modelName: string, catalogId: string) {
+  selectedCatalogItems.value[modelName] = (catalogOptions.value[modelName] || []).find(item => item.id === catalogId) || null
 }
 
 function catalogOptionLabel(item: ModelCatalog): string {
@@ -936,6 +970,34 @@ function validatePricing(): boolean {
   color: var(--el-text-color-secondary);
   font-size: 12px;
   font-weight: 600;
+}
+
+.catalog-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0;
+  line-height: 1.35;
+}
+
+.catalog-option-title {
+  color: var(--el-text-color-primary);
+  font-weight: 600;
+}
+
+.catalog-option-meta,
+.catalog-selected {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.catalog-option-warning {
+  color: var(--el-color-warning);
+}
+
+.catalog-selected {
+  margin-top: 4px;
+  min-height: 18px;
 }
 
 :deep(.el-form-item__label) {

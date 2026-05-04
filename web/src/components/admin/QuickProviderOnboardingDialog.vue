@@ -119,6 +119,46 @@
           </div>
         </section>
 
+        <el-collapse v-model="pricingPanels" class="advanced-collapse">
+          <el-collapse-item title="价格设置（可选）" name="pricing">
+            <el-form-item label="价格来源">
+              <el-radio-group v-model="pricingMode">
+                <el-radio-button label="catalog">Catalog 自动匹配</el-radio-button>
+                <el-radio-button label="uniform">统一手动价格</el-radio-button>
+                <el-radio-button label="per_model">按模型分别设置</el-radio-button>
+              </el-radio-group>
+              <div class="form-hint">默认使用 Catalog；手动价格单位为 USD / 1M tokens。</div>
+            </el-form-item>
+
+            <el-row v-if="pricingMode === 'uniform'" :gutter="16">
+              <el-col :span="12">
+                <el-form-item label="输入价格">
+                  <el-input-number v-model="uniformPricing.input" :min="0" :precision="6" :step="0.1" style="width: 100%" />
+                </el-form-item>
+              </el-col>
+              <el-col :span="12">
+                <el-form-item label="输出价格">
+                  <el-input-number v-model="uniformPricing.output" :min="0" :precision="6" :step="0.1" style="width: 100%" />
+                </el-form-item>
+              </el-col>
+            </el-row>
+
+            <div v-else-if="pricingMode === 'per_model'" class="pricing-table">
+              <div class="pricing-row pricing-head">
+                <span>模型名</span>
+                <span>输入价格</span>
+                <span>输出价格</span>
+              </div>
+              <div v-for="model in parsedModels" :key="model" class="pricing-row">
+                <span class="mono-text">{{ model }}</span>
+                <el-input-number v-model="perModelPricing[model].input" :min="0" :precision="6" :step="0.1" />
+                <el-input-number v-model="perModelPricing[model].output" :min="0" :precision="6" :step="0.1" />
+              </div>
+              <div v-if="parsedModels.length === 0" class="pricing-empty">输入模型名后可分别设置价格</div>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
+
         <el-collapse v-model="advancedPanels" class="advanced-collapse">
           <el-collapse-item title="高级设置" name="advanced">
             <el-row :gutter="16">
@@ -202,6 +242,11 @@
               </div>
             </template>
           </el-table-column>
+          <el-table-column label="价格来源" width="140">
+            <template #default>
+              <el-tag size="small" effect="plain">{{ pricingModeLabel }}</el-tag>
+            </template>
+          </el-table-column>
         </el-table>
       </div>
     </div>
@@ -225,6 +270,8 @@ import type { ModelPayload } from '@/types/model'
 import type { Provider, ProviderDefinition, QuickOnboardPayload, QuickOnboardProviderPlan } from '@/types/provider'
 
 type ModelType = ModelPayload['model_type']
+type PricingMode = 'catalog' | 'uniform' | 'per_model'
+type PricePair = { input: number; output: number }
 
 interface FormData {
   definition_id: string
@@ -254,6 +301,10 @@ const submitting = ref(false)
 const previewLoading = ref(false)
 const templateProviderId = ref('')
 const advancedPanels = ref<string[]>([])
+const pricingPanels = ref<string[]>([])
+const pricingMode = ref<PricingMode>('catalog')
+const uniformPricing = ref<PricePair>({ input: 0, output: 0 })
+const perModelPricing = ref<Record<string, PricePair>>({})
 const serverPreviewRows = ref<QuickOnboardProviderPlan[]>([])
 const previewWarnings = ref<string[]>([])
 const previewMatrixCount = ref(0)
@@ -294,6 +345,12 @@ const previewRows = computed(() => {
   return buildLocalPreviewRows()
 })
 
+const pricingModeLabel = computed(() => {
+  if (pricingMode.value === 'uniform') return '统一手动'
+  if (pricingMode.value === 'per_model') return '单独手动'
+  return 'Catalog'
+})
+
 const rules: FormRules = {
   definition_id: [{ required: true, message: '请选择供应商', trigger: 'change' }],
   endpoint: [{ required: true, validator: validateEndpoint, trigger: 'blur' }],
@@ -321,6 +378,10 @@ watch(
 function resetForm() {
   templateProviderId.value = ''
   advancedPanels.value = []
+  pricingPanels.value = []
+  pricingMode.value = 'catalog'
+  uniformPricing.value = { input: 0, output: 0 }
+  perModelPricing.value = {}
   serverPreviewRows.value = []
   previewWarnings.value = []
   previewMatrixCount.value = 0
@@ -335,6 +396,14 @@ function resetForm() {
     model_type: 'chat'
   }
 }
+
+watch(parsedModels, (models) => {
+  const next: Record<string, PricePair> = {}
+  models.forEach(model => {
+    next[model] = perModelPricing.value[model] || { input: 0, output: 0 }
+  })
+  perModelPricing.value = next
+})
 
 function parseMultiline(value: string): string[] {
   const seen = new Set<string>()
@@ -418,13 +487,33 @@ function buildPayload(): QuickOnboardPayload {
     provider_slug: selectedDef.value?.id || formData.value.definition_id,
     name_prefix: formData.value.name_prefix || undefined,
     credentials: parsedKeys.value.map(key => ({ credentials: buildCredentials(key) })),
-    models: parsedModels.value.map(modelName => ({
-      name: modelName,
-      upstream_model_id: modelName,
-      model_type: formData.value.model_type,
-      price_mode: 'catalog',
-      weight: 1
-    }))
+    models: parsedModels.value.map(buildModelPayload)
+  }
+}
+
+function buildModelPayload(modelName: string) {
+  const payload: QuickOnboardPayload['models'][number] = {
+    name: modelName,
+    upstream_model_id: modelName,
+    model_type: formData.value.model_type,
+    price_mode: 'catalog',
+    weight: 1
+  }
+  if (pricingMode.value === 'uniform') {
+    return applyManualPricing(payload, uniformPricing.value)
+  }
+  if (pricingMode.value === 'per_model') {
+    return applyManualPricing(payload, perModelPricing.value[modelName] || { input: 0, output: 0 })
+  }
+  return payload
+}
+
+function applyManualPricing(payload: QuickOnboardPayload['models'][number], pair: PricePair) {
+  return {
+    ...payload,
+    price_mode: 'manual' as const,
+    input_price: pair.input,
+    output_price: pair.output,
   }
 }
 
@@ -453,6 +542,7 @@ function slugifyNamePrefix(value: string): string {
 
 async function refreshPreview(): Promise<boolean> {
   if (!selectedDef.value || parsedKeys.value.length === 0 || parsedModels.value.length === 0) return false
+  if (!validatePricing()) return false
   previewLoading.value = true
   try {
     const preview = await previewQuickOnboardProviders(buildPayload())
@@ -471,6 +561,7 @@ async function refreshPreview(): Promise<boolean> {
 async function handleSubmit() {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid || !selectedDef.value) return
+  if (!validatePricing()) return
 
   const previewReady = serverPreviewRows.value.length > 0 || await refreshPreview()
   if (!previewReady) return
@@ -503,6 +594,22 @@ async function handleSubmit() {
   } finally {
     submitting.value = false
   }
+}
+
+function validatePricing(): boolean {
+  if (pricingMode.value === 'catalog') return true
+  if (pricingMode.value === 'uniform') {
+    if (uniformPricing.value.input > 0 || uniformPricing.value.output > 0) return true
+    ElMessage.error('请输入统一手动价格，或切回 Catalog 自动匹配')
+    return false
+  }
+  const missing = parsedModels.value.find(model => {
+    const pair = perModelPricing.value[model]
+    return !pair || (pair.input <= 0 && pair.output <= 0)
+  })
+  if (!missing) return true
+  ElMessage.error(`请为模型 ${missing} 输入手动价格，或切回 Catalog 自动匹配`)
+  return false
 }
 </script>
 
@@ -637,6 +744,37 @@ async function handleSubmit() {
   padding: 14px 16px 0;
 }
 
+.pricing-table {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.pricing-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px 160px;
+  gap: 10px;
+  align-items: center;
+}
+
+.pricing-head {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pricing-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  border: 1px dashed var(--el-border-color-light);
+  border-radius: 6px;
+}
+
 :deep(.el-form-item__label) {
   margin-bottom: 6px;
   color: var(--el-text-color-regular);
@@ -725,6 +863,10 @@ async function handleSubmit() {
   }
 
   .batch-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pricing-row {
     grid-template-columns: 1fr;
   }
 }

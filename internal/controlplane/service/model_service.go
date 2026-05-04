@@ -30,12 +30,12 @@ type CatalogLookup interface {
 
 // ModelService 模型注册管理服务
 type ModelService struct {
-	modelRepo          ModelRepoInterface
-	providerRepo       ProviderRepoInterface
-	publisher          *event.Publisher
-	snapshotter        *ProviderSnapshotRefresher
-	catalogLookup      CatalogLookup // 可选，未注入时 ResetOverride / CreateModelFromCatalog 走 fallback / 报错
-	modelStatusLogSvc  *ModelStatusLogService
+	modelRepo         ModelRepoInterface
+	providerRepo      ProviderRepoInterface
+	publisher         *event.Publisher
+	snapshotter       *ProviderSnapshotRefresher
+	catalogLookup     CatalogLookup // 可选，未注入时 ResetOverride / CreateModelFromCatalog 走 fallback / 报错
+	modelStatusLogSvc *ModelStatusLogService
 }
 
 // NewModelService 创建 ModelService 实例
@@ -101,6 +101,8 @@ type CreateModelInput struct {
 	MaxOutputTokens *int     `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
 	InputPrice      *float64 `json:"input_price" binding:"omitempty,min=0"`
 	OutputPrice     *float64 `json:"output_price" binding:"omitempty,min=0"`
+	CacheReadPrice  *float64 `json:"cache_read_price" binding:"omitempty,min=0"`
+	CacheWritePrice *float64 `json:"cache_write_price" binding:"omitempty,min=0"`
 	PriceMode       string   `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
 	Weight          *int     `json:"weight" binding:"omitempty,min=0,max=9999"`
 	// 视频模型参数
@@ -150,6 +152,12 @@ func (s *ModelService) CreateModel(input CreateModelInput) (*model.Model, error)
 	}
 	if input.OutputPrice != nil {
 		m.OutputPrice = *input.OutputPrice
+	}
+	if input.CacheReadPrice != nil {
+		m.CacheReadPrice = input.CacheReadPrice
+	}
+	if input.CacheWritePrice != nil {
+		m.CacheWritePrice = input.CacheWritePrice
 	}
 	if input.PriceMode != "" {
 		m.PriceMode = input.PriceMode
@@ -216,18 +224,20 @@ func (s *ModelService) GetModel(id uuid.UUID) (*model.Model, error) {
 //
 // 字段同 CreateModelInput；标量字段使用 *string 以便区分 "未传" 与 "传空串清空"。
 type UpdateModelInput struct {
-	Name            string   `json:"name" binding:"omitempty,max=200"`
-	ProviderID      string   `json:"provider_id" binding:"omitempty,uuid"`
-	ModelType       string   `json:"model_type" binding:"omitempty,oneof=chat embedding embedding_vl rerank rerank_vl video"`
-	Enabled         *bool    `json:"enabled"`
-	UpstreamModelID *string  `json:"upstream_model_id" binding:"omitempty,max=200"`
-	Description     *string  `json:"description" binding:"omitempty,max=500"`
-	ContextLength   *int     `json:"context_length" binding:"omitempty,min=0,max=10000000"`
-	MaxOutputTokens *int     `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
-	InputPrice      *float64 `json:"input_price" binding:"omitempty,min=0"`
-	OutputPrice     *float64 `json:"output_price" binding:"omitempty,min=0"`
-	PriceMode       string   `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
-	Weight          *int     `json:"weight" binding:"omitempty,min=0,max=9999"`
+	Name                       string   `json:"name" binding:"omitempty,max=200"`
+	ProviderID                 string   `json:"provider_id" binding:"omitempty,uuid"`
+	ModelType                  string   `json:"model_type" binding:"omitempty,oneof=chat embedding embedding_vl rerank rerank_vl video"`
+	Enabled                    *bool    `json:"enabled"`
+	UpstreamModelID            *string  `json:"upstream_model_id" binding:"omitempty,max=200"`
+	Description                *string  `json:"description" binding:"omitempty,max=500"`
+	ContextLength              *int     `json:"context_length" binding:"omitempty,min=0,max=10000000"`
+	MaxOutputTokens            *int     `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
+	InputPrice                 *float64 `json:"input_price" binding:"omitempty,min=0"`
+	OutputPrice                *float64 `json:"output_price" binding:"omitempty,min=0"`
+	CacheReadPrice             *float64 `json:"cache_read_price" binding:"omitempty,min=0"`
+	CacheWritePrice            *float64 `json:"cache_write_price" binding:"omitempty,min=0"`
+	PriceMode                  string   `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
+	Weight                     *int     `json:"weight" binding:"omitempty,min=0,max=9999"`
 	VideoSupportedResolutions  []string `json:"video_supported_resolutions"`
 	VideoSupportedAspectRatios []string `json:"video_supported_aspect_ratios"`
 	VideoMinDurationSeconds    *int     `json:"video_min_duration_seconds" binding:"omitempty,min=0,max=600"`
@@ -301,6 +311,12 @@ func (s *ModelService) UpdateModel(id uuid.UUID, input UpdateModelInput) (*model
 	}
 	if input.OutputPrice != nil {
 		m.OutputPrice = *input.OutputPrice
+	}
+	if input.CacheReadPrice != nil {
+		m.CacheReadPrice = input.CacheReadPrice
+	}
+	if input.CacheWritePrice != nil {
+		m.CacheWritePrice = input.CacheWritePrice
 	}
 	if input.PriceMode != "" {
 		m.PriceMode = input.PriceMode
@@ -504,6 +520,8 @@ func (s *ModelService) BindCatalog(modelID, catalogID uuid.UUID, resetFields boo
 	if resetFields {
 		m.InputPrice = cat.InputPricePerMillion
 		m.OutputPrice = cat.OutputPricePerMillion
+		m.CacheReadPrice = nil
+		m.CacheWritePrice = nil
 		m.ContextLength = int(cat.ContextLength)
 		m.MaxOutputTokens = int(cat.MaxOutputTokens)
 		m.UpstreamModelID = cat.SourceModelID
@@ -544,8 +562,8 @@ type BatchBindInput struct {
 
 // BatchBindResult BatchBindCatalog 的汇总。
 type BatchBindResult struct {
-	Applied   int                 `json:"applied"`
-	FailedIDs map[string]string   `json:"failed_ids"` // model_id -> 错误原因（admin 可看）
+	Applied   int               `json:"applied"`
+	FailedIDs map[string]string `json:"failed_ids"` // model_id -> 错误原因（admin 可看）
 }
 
 // BatchBindCatalog 批量绑定。
@@ -600,6 +618,8 @@ func (s *ModelService) BatchBindCatalog(items []BatchBindInput) (*BatchBindResul
 		if it.ResetFields {
 			m.InputPrice = cat.InputPricePerMillion
 			m.OutputPrice = cat.OutputPricePerMillion
+			m.CacheReadPrice = nil
+			m.CacheWritePrice = nil
 			m.ContextLength = int(cat.ContextLength)
 			m.MaxOutputTokens = int(cat.MaxOutputTokens)
 			m.UpstreamModelID = cat.SourceModelID

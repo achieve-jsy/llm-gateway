@@ -76,6 +76,8 @@ func setupProviderQuickOnboardHandler(t *testing.T) (*gin.Engine, *gorm.DB) {
 			max_output_tokens INTEGER DEFAULT 0,
 			input_price REAL DEFAULT 0,
 			output_price REAL DEFAULT 0,
+			cache_read_price REAL,
+			cache_write_price REAL,
 			price_mode TEXT NOT NULL DEFAULT 'catalog',
 			weight INTEGER NOT NULL DEFAULT 1,
 			catalog_id TEXT,

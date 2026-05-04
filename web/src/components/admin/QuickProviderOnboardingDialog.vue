@@ -131,14 +131,24 @@
             </el-form-item>
 
             <el-row v-if="pricingMode === 'uniform'" :gutter="16">
-              <el-col :span="12">
+              <el-col :span="6">
                 <el-form-item label="输入价格">
                   <el-input-number v-model="uniformPricing.input" :min="0" :precision="6" :step="0.1" style="width: 100%" />
                 </el-form-item>
               </el-col>
-              <el-col :span="12">
+              <el-col :span="6">
                 <el-form-item label="输出价格">
                   <el-input-number v-model="uniformPricing.output" :min="0" :precision="6" :step="0.1" style="width: 100%" />
+                </el-form-item>
+              </el-col>
+              <el-col :span="6">
+                <el-form-item label="缓存读价格">
+                  <el-input-number v-model="uniformPricing.cacheRead" :min="0" :precision="6" :step="0.1" style="width: 100%" />
+                </el-form-item>
+              </el-col>
+              <el-col :span="6">
+                <el-form-item label="缓存写价格">
+                  <el-input-number v-model="uniformPricing.cacheWrite" :min="0" :precision="6" :step="0.1" style="width: 100%" />
                 </el-form-item>
               </el-col>
             </el-row>
@@ -148,11 +158,15 @@
                 <span>模型名</span>
                 <span>输入价格</span>
                 <span>输出价格</span>
+                <span>缓存读价格</span>
+                <span>缓存写价格</span>
               </div>
               <div v-for="model in parsedModels" :key="model" class="pricing-row">
                 <span class="mono-text">{{ model }}</span>
                 <el-input-number v-model="perModelPricing[model].input" :min="0" :precision="6" :step="0.1" />
                 <el-input-number v-model="perModelPricing[model].output" :min="0" :precision="6" :step="0.1" />
+                <el-input-number v-model="perModelPricing[model].cacheRead" :min="0" :precision="6" :step="0.1" />
+                <el-input-number v-model="perModelPricing[model].cacheWrite" :min="0" :precision="6" :step="0.1" />
               </div>
               <div v-if="parsedModels.length === 0" class="pricing-empty">输入模型名后可分别设置价格</div>
             </div>
@@ -271,7 +285,7 @@ import type { Provider, ProviderDefinition, QuickOnboardPayload, QuickOnboardPro
 
 type ModelType = ModelPayload['model_type']
 type PricingMode = 'catalog' | 'uniform' | 'per_model'
-type PricePair = { input: number; output: number }
+type PricePair = { input: number; output: number; cacheRead: number; cacheWrite: number }
 
 interface FormData {
   definition_id: string
@@ -303,7 +317,7 @@ const templateProviderId = ref('')
 const advancedPanels = ref<string[]>([])
 const pricingPanels = ref<string[]>([])
 const pricingMode = ref<PricingMode>('catalog')
-const uniformPricing = ref<PricePair>({ input: 0, output: 0 })
+const uniformPricing = ref<PricePair>({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
 const perModelPricing = ref<Record<string, PricePair>>({})
 const serverPreviewRows = ref<QuickOnboardProviderPlan[]>([])
 const previewWarnings = ref<string[]>([])
@@ -380,7 +394,7 @@ function resetForm() {
   advancedPanels.value = []
   pricingPanels.value = []
   pricingMode.value = 'catalog'
-  uniformPricing.value = { input: 0, output: 0 }
+  uniformPricing.value = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
   perModelPricing.value = {}
   serverPreviewRows.value = []
   previewWarnings.value = []
@@ -400,7 +414,7 @@ function resetForm() {
 watch(parsedModels, (models) => {
   const next: Record<string, PricePair> = {}
   models.forEach(model => {
-    next[model] = perModelPricing.value[model] || { input: 0, output: 0 }
+    next[model] = perModelPricing.value[model] || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
   })
   perModelPricing.value = next
 })
@@ -503,18 +517,21 @@ function buildModelPayload(modelName: string) {
     return applyManualPricing(payload, uniformPricing.value)
   }
   if (pricingMode.value === 'per_model') {
-    return applyManualPricing(payload, perModelPricing.value[modelName] || { input: 0, output: 0 })
+    return applyManualPricing(payload, perModelPricing.value[modelName] || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
   }
   return payload
 }
 
 function applyManualPricing(payload: QuickOnboardPayload['models'][number], pair: PricePair) {
-  return {
+  const priced = {
     ...payload,
     price_mode: 'manual' as const,
     input_price: pair.input,
     output_price: pair.output,
   }
+  if (pair.cacheRead > 0) priced.cache_read_price = pair.cacheRead
+  if (pair.cacheWrite > 0) priced.cache_write_price = pair.cacheWrite
+  return priced
 }
 
 function maskKey(key: string): string {
@@ -753,7 +770,7 @@ function validatePricing(): boolean {
 
 .pricing-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 160px 160px;
+  grid-template-columns: minmax(0, 1fr) 130px 130px 130px 130px;
   gap: 10px;
   align-items: center;
 }

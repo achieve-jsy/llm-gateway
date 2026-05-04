@@ -254,6 +254,30 @@
           <span class="form-hint inline">USD / 百万 tokens</span>
         </el-form-item>
 
+        <el-form-item label="缓存读价格">
+          <el-input-number
+            v-model="formData.cache_read_price"
+            :min="0"
+            :precision="6"
+            :step="0.1"
+            :disabled="formData.price_mode === 'catalog'"
+            class="metric-input"
+          />
+          <span class="form-hint inline">可选；为空按现有逻辑</span>
+        </el-form-item>
+
+        <el-form-item label="缓存写价格">
+          <el-input-number
+            v-model="formData.cache_write_price"
+            :min="0"
+            :precision="6"
+            :step="0.1"
+            :disabled="formData.price_mode === 'catalog'"
+            class="metric-input"
+          />
+          <span class="form-hint inline">可选；为空按现有逻辑</span>
+        </el-form-item>
+
         <el-form-item label="权重">
           <el-input-number
             v-model="formData.weight"
@@ -382,6 +406,8 @@ interface FormState {
   price_mode: 'catalog' | 'manual'
   input_price: number
   output_price: number
+  cache_read_price: number
+  cache_write_price: number
   weight: number
   video_supported_resolutions: string[]
   video_supported_aspect_ratios: string[]
@@ -440,6 +466,8 @@ const formData = ref<FormState>({
   price_mode: 'catalog',
   input_price: 0,
   output_price: 0,
+  cache_read_price: 0,
+  cache_write_price: 0,
   weight: 1,
   video_supported_resolutions: ['720p', '480p'],
   video_supported_aspect_ratios: ['16:9', '9:16', '1:1'],
@@ -465,6 +493,8 @@ model_type: (val.model_type as FormState['model_type']) || 'chat',
         price_mode: val.price_mode || 'catalog',
         input_price: val.input_price || 0,
         output_price: val.output_price || 0,
+        cache_read_price: val.cache_read_price || 0,
+        cache_write_price: val.cache_write_price || 0,
         weight: val.weight || 1,
         video_supported_resolutions: val.video_supported_resolutions || ['720p', '480p'],
         video_supported_aspect_ratios: val.video_supported_aspect_ratios || ['16:9', '9:16', '1:1'],
@@ -490,6 +520,8 @@ model_type: (val.model_type as FormState['model_type']) || 'chat',
         price_mode: 'catalog',
         input_price: 0,
         output_price: 0,
+        cache_read_price: 0,
+        cache_write_price: 0,
         weight: 1,
         video_supported_resolutions: ['720p', '480p'],
         video_supported_aspect_ratios: ['16:9', '9:16', '1:1'],
@@ -787,6 +819,8 @@ async function handleSubmit() {
       price_mode: isVideo ? 'manual' : formData.value.price_mode,
       input_price: isVideo ? undefined : (formData.value.price_mode === 'manual' ? (formData.value.input_price || undefined) : undefined),
       output_price: isVideo ? undefined : (formData.value.price_mode === 'manual' ? (formData.value.output_price || undefined) : undefined),
+      cache_read_price: isVideo ? undefined : (formData.value.price_mode === 'manual' ? (formData.value.cache_read_price || undefined) : undefined),
+      cache_write_price: isVideo ? undefined : (formData.value.price_mode === 'manual' ? (formData.value.cache_write_price || undefined) : undefined),
       weight: isVideo ? 1 : formData.value.weight,
     }
     if (isVideo) {

@@ -24,6 +24,21 @@ function parseLimit(limit?: BudgetTierLimit): number | null {
   return Number.isFinite(safeLimit) ? safeLimit : null
 }
 
+function isUUIDLike(value?: string): boolean {
+  return Boolean(value && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))
+}
+
+function displayTierName(limit: BudgetTierLimit): string {
+  if (limit.model_tier_name && !isUUIDLike(limit.model_tier_name)) return limit.model_tier_name
+  if (limit.model_tier_id && !isUUIDLike(limit.model_tier_id)) return limit.model_tier_id
+  return '未知等级'
+}
+
+function usageAmount(limit?: BudgetTierLimit): number {
+  const raw = limit as any
+  return Number(raw?.used_usd ?? raw?.accounting_cost_usd ?? raw?.reported_cost_usd ?? 0)
+}
+
 /** 将多周期 limit 行按等级聚合为一行（月/周/日）。 */
 export function buildTierDetailRows(tierLimits: BudgetTierLimit[] = []): TierDetailRow[] {
   if (!tierLimits.length) return []
@@ -42,12 +57,12 @@ export function buildTierDetailRows(tierLimits: BudgetTierLimit[] = []): TierDet
     const daily = findPeriod(limits, 'daily')
     const any = monthly ?? weekly ?? daily ?? limits[0]
     const monthlyLimit = parseLimit(monthly)
-    const used = Number(monthly?.used_usd ?? 0)
+    const used = usageAmount(monthly)
     const ratio = monthlyLimit !== null && monthlyLimit > 0 ? used / monthlyLimit : 0
 
     return {
       id,
-      name: any.model_tier_name ?? id,
+      name: displayTierName(any),
       color: undefined,
       enabled: any.enabled ?? true,
       monthly: monthlyLimit,

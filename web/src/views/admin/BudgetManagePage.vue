@@ -3243,10 +3243,11 @@ async function handleWorkspaceDetail(item: BudgetItem) {
         const usage = tierBudgetItems.value.find(t =>
           t.scope_id === item.scope_id
           && t.scope_type === item.scope_type
-          && t.tier_name === limit.model_tier_name
+          && t.model_tier_id === limit.model_tier_id
         )
         return {
           ...limit,
+          model_tier_name: limit.model_tier_name || modelTierNameById.value.get(limit.model_tier_id),
           used_usd: usage?.used_usd ?? limit.used_usd ?? 0,
         }
       })

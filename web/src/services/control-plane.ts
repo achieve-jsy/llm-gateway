@@ -1189,7 +1189,11 @@ export async function applyBudgetTierBatch(input: {
 
 export async function getBudgetTierUsage(params: Record<string, string>): Promise<BudgetTierUsage[]> {
   const { data } = await http.get<{ items?: BudgetTierUsage[]; data?: { items?: BudgetTierUsage[] } }>('/api/v1/budgets/tier-usage', { params })
-  return data.data?.items || data.items || []
+  const items = data.data?.items || data.items || []
+  return items.map((item: any) => ({
+    ...item,
+    used_usd: item.used_usd ?? item.accounting_cost_usd ?? item.reported_cost_usd ?? 0,
+  }))
 }
 
 export async function getMyBudgetTiers(): Promise<MyBudgetTiersResponse> {

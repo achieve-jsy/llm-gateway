@@ -2340,6 +2340,10 @@ function displayTierName(item: Pick<TierBudgetItem, 'model_tier_id' | 'tier_name
   return fallbackTierName(item)
 }
 
+function tierUsageAmount(raw: any): number {
+  return Number(raw?.used_usd ?? raw?.accounting_cost_usd ?? raw?.reported_cost_usd ?? 0)
+}
+
 function normalizeTierUsageItem(raw: any, configuredByKey: Map<string, TierBudgetItem>): TierBudgetItem | null {
   const scopeType = String(raw?.scope_type || 'studio')
   const scopeID = String(raw?.scope_id || '')
@@ -2350,7 +2354,7 @@ function normalizeTierUsageItem(raw: any, configuredByKey: Map<string, TierBudge
   const key = `${scopeType}:${scopeID}:${modelTierID || tierName}`
   const configured = configuredByKey.get(key)
   const amount = Number(raw?.amount_usd ?? configured?.amount_usd ?? 0)
-  const used = Number(raw?.used_usd ?? raw?.reported_cost_usd ?? raw?.accounting_cost_usd ?? 0)
+  const used = tierUsageAmount(raw)
   const ratio = raw?.used_ratio !== undefined
     ? Number(raw.used_ratio)
     : amount > 0 && Number.isFinite(used)

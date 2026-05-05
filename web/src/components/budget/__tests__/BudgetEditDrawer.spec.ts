@@ -186,6 +186,17 @@ describe('BudgetEditDrawer', () => {
     expect(mockMessageSuccess).toHaveBeenCalledWith('总预算与等级子预算已更新')
   })
 
+  it('打开抽屉按预算主体 scope 查询等级已用，避免 allocation_id 查不到实时用量', async () => {
+    mountDeptServiceDrawer()
+    await flushPromises()
+
+    expect(mockGetBudgetTierUsage).toHaveBeenCalledWith({
+      scope_type: 'dept_service',
+      scope_id: 'dept-1',
+      period_type: 'monthly',
+    })
+  })
+
   it('总预算移除限制时映射为 -1 并提交', async () => {
     mockListBudgetTierLimits.mockResolvedValue([])
     const wrapper = mountDrawer()

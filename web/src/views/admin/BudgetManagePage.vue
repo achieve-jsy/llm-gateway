@@ -1830,6 +1830,7 @@ interface TierBudgetItem {
   label: string
   enabled?: boolean
   state?: TierBudgetTagItem['state']
+  displayable?: boolean
 }
 
 const router = useRouter()
@@ -2290,6 +2291,7 @@ function tierScopeKey(scopeType: string, scopeID: string): string {
 const tierBudgetByScope = computed(() => {
   const map = new Map<string, TierBudgetItem[]>()
   for (const item of tierBudgetItems.value) {
+    if (item.displayable === false) continue
     const key = tierScopeKey(item.scope_type, item.scope_id)
     if (!map.has(key)) map.set(key, [])
     map.get(key)!.push(item)
@@ -2312,6 +2314,7 @@ function tierLimitToBudgetItem(scope: BudgetItem, limit: BudgetTierLimit): TierB
     label: scope.label || scope.scope_id,
     enabled: limit.enabled,
     state: !limit.enabled ? 'disabled' : amount === 0 ? 'blocked' : 'normal',
+    displayable: true,
   }
 }
 
@@ -2323,6 +2326,10 @@ function fallbackTierName(item: Pick<TierBudgetItem, 'model_tier_id' | 'tier_nam
   if (item.tier_name && !isUUIDLike(item.tier_name)) return item.tier_name
   if (item.model_tier_id && !isUUIDLike(item.model_tier_id)) return item.model_tier_id
   return '未知等级'
+}
+
+function hasDisplayableTierName(item: Pick<TierBudgetItem, 'model_tier_id' | 'tier_name'>): boolean {
+  return fallbackTierName(item) !== '未知等级'
 }
 
 function displayTierName(item: Pick<TierBudgetItem, 'model_tier_id' | 'tier_name'>): string {
@@ -2359,6 +2366,7 @@ function normalizeTierUsageItem(raw: any, configuredByKey: Map<string, TierBudge
     label: configured?.label || raw?.label || scopeID,
     enabled,
     state,
+    displayable: Boolean(configured) || hasDisplayableTierName({ model_tier_id: modelTierID, tier_name: tierName }),
   }
 }
 

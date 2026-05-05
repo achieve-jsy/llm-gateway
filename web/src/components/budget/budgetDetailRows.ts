@@ -24,16 +24,6 @@ function parseLimit(limit?: BudgetTierLimit): number | null {
   return Number.isFinite(safeLimit) ? safeLimit : null
 }
 
-function isUUIDLike(value?: string): boolean {
-  return Boolean(value && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))
-}
-
-function displayTierName(limit: BudgetTierLimit): string {
-  if (limit.model_tier_name && !isUUIDLike(limit.model_tier_name)) return limit.model_tier_name
-  if (limit.model_tier_id && !isUUIDLike(limit.model_tier_id)) return limit.model_tier_id
-  return '未知等级'
-}
-
 function usageAmount(limit?: BudgetTierLimit): number {
   const raw = limit as any
   return Number(raw?.used_usd ?? raw?.accounting_cost_usd ?? raw?.reported_cost_usd ?? 0)
@@ -45,6 +35,7 @@ export function buildTierDetailRows(tierLimits: BudgetTierLimit[] = []): TierDet
 
   const byTier = new Map<string, BudgetTierLimit[]>()
   for (const limit of tierLimits) {
+    if (!limit.model_tier_name) continue
     const key = limit.model_tier_id
     const list = byTier.get(key) ?? []
     list.push(limit)
@@ -62,7 +53,7 @@ export function buildTierDetailRows(tierLimits: BudgetTierLimit[] = []): TierDet
 
     return {
       id,
-      name: displayTierName(any),
+      name: any.model_tier_name,
       color: undefined,
       enabled: any.enabled ?? true,
       monthly: monthlyLimit,

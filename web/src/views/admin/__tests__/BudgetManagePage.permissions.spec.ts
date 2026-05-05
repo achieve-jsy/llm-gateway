@@ -44,15 +44,19 @@ const mockGetBudgetList = vi.fn()
 const mockGetBudgetContext = vi.fn()
 const mockGetBudgetRiskSummary = vi.fn()
 const mockListModelTiers = vi.fn()
+const mockListBudgetTierLimits = vi.fn()
 
 vi.mock('@/services/control-plane', () => ({
   getBudgetList: (...args: unknown[]) => mockGetBudgetList(...args),
   getBudgetContext: (...args: unknown[]) => mockGetBudgetContext(...args),
   getBudgetRiskSummary: (...args: unknown[]) => mockGetBudgetRiskSummary(...args),
   listModelTiers: (...args: unknown[]) => mockListModelTiers(...args),
+  listBudgetTierLimits: (...args: unknown[]) => mockListBudgetTierLimits(...args),
   rebuildBudgetCounters: vi.fn(),
   adjustBudget: vi.fn(),
   previewBudgetAdjustment: vi.fn(),
+  adjustBudgetMultiPeriod: vi.fn(),
+  previewBudgetMultiPeriod: vi.fn(),
 }))
 
 vi.mock('@/services/http', () => ({
@@ -81,6 +85,7 @@ describe('BudgetManagePage - Role-Based Access Control', () => {
     mockGetBudgetContext.mockResolvedValue([])
     mockGetBudgetRiskSummary.mockResolvedValue({ total: 0 })
     mockListModelTiers.mockResolvedValue([])
+    mockListBudgetTierLimits.mockResolvedValue([])
     mockAuthStore.effectiveRole = 'admin'
     mockAuthStore.orgRoles = []
   })

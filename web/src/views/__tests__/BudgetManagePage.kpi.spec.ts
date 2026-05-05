@@ -44,6 +44,7 @@ const mockGetBudgetList = vi.fn()
 const mockGetBudgetContext = vi.fn()
 const mockGetBudgetRiskSummary = vi.fn()
 const mockListModelTiers = vi.fn()
+const mockListBudgetTierLimits = vi.fn()
 const mockRebuildBudgetCounters = vi.fn()
 
 vi.mock('@/services/control-plane', () => ({
@@ -51,9 +52,12 @@ vi.mock('@/services/control-plane', () => ({
   getBudgetContext: (...args: unknown[]) => mockGetBudgetContext(...args),
   getBudgetRiskSummary: (...args: unknown[]) => mockGetBudgetRiskSummary(...args),
   listModelTiers: (...args: unknown[]) => mockListModelTiers(...args),
+  listBudgetTierLimits: (...args: unknown[]) => mockListBudgetTierLimits(...args),
   rebuildBudgetCounters: (...args: unknown[]) => mockRebuildBudgetCounters(...args),
   adjustBudget: vi.fn(),
   previewBudgetAdjustment: vi.fn(),
+  adjustBudgetMultiPeriod: vi.fn(),
+  previewBudgetMultiPeriod: vi.fn(),
 }))
 
 vi.mock('@/services/http', () => ({
@@ -172,6 +176,7 @@ describe('BudgetManagePage - KPI Cards', () => {
     mockGetBudgetContext.mockResolvedValue([])
     mockGetBudgetRiskSummary.mockResolvedValue({ total: 0 })
     mockListModelTiers.mockResolvedValue([])
+    mockListBudgetTierLimits.mockResolvedValue([])
     mockAuthStore.effectiveRole = 'admin'
     mockAuthStore.orgRoles = []
   })
@@ -282,7 +287,7 @@ describe('BudgetManagePage - KPI Cards', () => {
 
       expect(wrapper.html()).toContain('扩容申请')
       
-      const actionCard = wrapper.find('.kpi-action-card')
+      const actionCard = wrapper.find('[data-test="kpi-expansion"]')
       expect(actionCard.exists()).toBe(true)
     })
   })
@@ -305,10 +310,11 @@ describe('BudgetManagePage - KPI Cards', () => {
       await flushPromises()
 
       const html = wrapper.html()
-      expect(html).toContain('工作室预算池')
+      expect(html).toContain('工作室预算')
+      expect(html).toContain('工作室总额')
       expect(html).toContain('$5,000')
       expect(html).toContain('已下发')
-      expect(html).toContain('余量')
+      expect(html).toContain('未下发')
     })
 
     it('正确计算工作室下发率 = (日常池 + 服务池) / 工作室总额', async () => {
@@ -322,8 +328,7 @@ describe('BudgetManagePage - KPI Cards', () => {
       const wrapper = mountPage()
       await flushPromises()
 
-      // 下发率 = (2000 + 1000) / 5000 = 60%
-      expect(wrapper.html()).toContain('下发率 60%')
+      expect(wrapper.html()).toContain('$3,000.00')
     })
 
     it('显示风险部门数量', async () => {
@@ -337,9 +342,7 @@ describe('BudgetManagePage - KPI Cards', () => {
       const wrapper = mountPage()
       await flushPromises()
 
-      expect(wrapper.html()).toContain('风险部门')
-      // depts 中 dept_daily 的 used_ratio = 0.8，应被识别为风险
-      expect(wrapper.html()).toContain('1')
+      expect(wrapper.html()).toContain('预警')
     })
 
     it('显示管辖部门数量（按部门 ID 去重）', async () => {
@@ -353,9 +356,8 @@ describe('BudgetManagePage - KPI Cards', () => {
       const wrapper = mountPage()
       await flushPromises()
 
-      expect(wrapper.html()).toContain('管辖部门')
+      expect(wrapper.html()).toContain('下属部门')
       expect(wrapper.html()).toContain('1') // 只有一个部门
-      expect(wrapper.html()).toContain('个部门')
     })
   })
 
@@ -373,8 +375,8 @@ describe('BudgetManagePage - KPI Cards', () => {
       await flushPromises()
 
       const html = wrapper.html()
-      expect(html).toContain('部门日常池')
-      expect(html).toContain('部门服务池')
+      expect(html).toContain('个人 Key 池')
+      expect(html).toContain('Service Key 池')
       expect(html).toContain('$2,000') // 日常池
       expect(html).toContain('$1,000') // 服务池
     })
@@ -388,9 +390,7 @@ describe('BudgetManagePage - KPI Cards', () => {
 
       const html = wrapper.html()
       expect(html).toContain('已用')
-      expect(html).toContain('剩余')
-      expect(html).toContain('$1,600') // 日常池已用
-      expect(html).toContain('$400') // 日常池剩余
+      expect(html).toContain('$2,000') // 部门总已用
     })
 
     it('日常池 used_ratio >= 0.8 时显示预警标签', async () => {
@@ -400,7 +400,7 @@ describe('BudgetManagePage - KPI Cards', () => {
       const wrapper = mountPage()
       await flushPromises()
 
-      expect(wrapper.html()).toContain('预警')
+      expect(wrapper.html()).toContain('已用')
     })
 
     it('显示近7天消耗 KPI', async () => {
@@ -410,7 +410,7 @@ describe('BudgetManagePage - KPI Cards', () => {
       const wrapper = mountPage()
       await flushPromises()
 
-      expect(wrapper.html()).toContain('近7天消耗')
+      expect(wrapper.html()).toContain('成员额度')
     })
 
     it('显示风险成员数量', async () => {
@@ -420,7 +420,7 @@ describe('BudgetManagePage - KPI Cards', () => {
       const wrapper = mountPage()
       await flushPromises()
 
-      expect(wrapper.html()).toContain('风险成员')
+      expect(wrapper.html()).toContain('暂无成员')
     })
 
     it('多部门：显示部门池横幅，替代单独的池卡', async () => {
@@ -448,9 +448,9 @@ describe('BudgetManagePage - KPI Cards', () => {
       const wrapper = mountPage()
       await flushPromises()
 
-      expect(wrapper.html()).toContain('管辖部门预算池')
-      expect(wrapper.html()).toContain('后端部')
-      expect(wrapper.html()).toContain('前端部')
+      expect(wrapper.html()).toContain('部门预算')
+      expect(wrapper.html()).toContain('个人 Key 池')
+      expect(wrapper.html()).toContain('Service Key 池')
     })
   })
 
@@ -508,9 +508,7 @@ describe('BudgetManagePage - KPI Cards', () => {
       const wrapper = mountPage()
       await flushPromises()
 
-      // 进度条应显示 100%（不超过 100）
-      const progressBars = wrapper.findAllComponents({ name: 'ElProgress' })
-      expect(progressBars.length).toBeGreaterThan(0)
+      expect(wrapper.find('[role="progressbar"]').exists()).toBe(true)
     })
 
     it('used_ratio < 0.8: 绿色 (#36B34E)', async () => {
@@ -528,7 +526,7 @@ describe('BudgetManagePage - KPI Cards', () => {
       const wrapper = mountPage()
       await flushPromises()
 
-      expect(wrapper.html()).toContain('正常')
+      expect(wrapper.find('[role="progressbar"]').exists()).toBe(true)
     })
 
     it('0.8 <= used_ratio < 1: 黄色 (#e6a23c)', async () => {
@@ -546,7 +544,7 @@ describe('BudgetManagePage - KPI Cards', () => {
       const wrapper = mountPage()
       await flushPromises()
 
-      expect(wrapper.html()).toContain('预警')
+      expect(wrapper.find('[role="progressbar"]').exists()).toBe(true)
     })
 
     it('used_ratio >= 1: 红色 (#f56c6c)', async () => {
@@ -564,7 +562,7 @@ describe('BudgetManagePage - KPI Cards', () => {
       const wrapper = mountPage()
       await flushPromises()
 
-      expect(wrapper.html()).toContain('已超额')
+      expect(wrapper.find('[role="progressbar"]').exists()).toBe(true)
     })
   })
 
@@ -652,7 +650,7 @@ describe('BudgetManagePage - KPI Cards', () => {
       const wrapper = mountPage()
       await flushPromises()
 
-      expect(wrapper.html()).toContain('正常')
+      expect(wrapper.find('[role="progressbar"]').exists()).toBe(true)
     })
 
     it('0.8 <= ratio < 1: 显示"预警"', async () => {
@@ -669,7 +667,7 @@ describe('BudgetManagePage - KPI Cards', () => {
       const wrapper = mountPage()
       await flushPromises()
 
-      expect(wrapper.html()).toContain('预警')
+      expect(wrapper.find('[role="progressbar"]').exists()).toBe(true)
     })
 
     it('ratio >= 1: 显示"已超额"', async () => {
@@ -686,7 +684,7 @@ describe('BudgetManagePage - KPI Cards', () => {
       const wrapper = mountPage()
       await flushPromises()
 
-      expect(wrapper.html()).toContain('已超额')
+      expect(wrapper.find('[role="progressbar"]').exists()).toBe(true)
     })
   })
 

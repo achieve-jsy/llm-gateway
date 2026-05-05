@@ -79,6 +79,9 @@ const serviceAllocation: BudgetItem = {
   scope_type: 'dept_service',
   label: 'AI 研发部 · Service Key 池',
   amount_usd: 200,
+  used_usd: 123.45,
+  daily_used_usd: 12.34,
+  weekly_used_usd: 56.78,
 }
 
 const tiers: ModelTier[] = [{
@@ -184,6 +187,91 @@ describe('BudgetEditDrawer', () => {
       confirm_item_ids: ['alloc-studio:tier-premium:monthly'],
     })
     expect(mockMessageSuccess).toHaveBeenCalledWith('总预算与等级子预算已更新')
+  })
+
+  it('打开抽屉按预算主体 scope 查询日周月等级已用，避免 allocation_id 查不到实时用量', async () => {
+    mountDeptServiceDrawer()
+    await flushPromises()
+
+    expect(mockGetBudgetTierUsage).toHaveBeenCalledWith({
+      scope_type: 'dept_service',
+      scope_id: 'dept-1',
+      period_type: 'monthly',
+    })
+    expect(mockGetBudgetTierUsage).toHaveBeenCalledWith({
+      scope_type: 'dept_service',
+      scope_id: 'dept-1',
+      period_type: 'weekly',
+    })
+    expect(mockGetBudgetTierUsage).toHaveBeenCalledWith({
+      scope_type: 'dept_service',
+      scope_id: 'dept-1',
+      period_type: 'daily',
+    })
+  })
+
+  it('从接口加载后回显顶部、月度等级与高级设置日周已用额度', async () => {
+    mockListBudgetTierLimits.mockResolvedValue([
+      {
+        id: 'limit-premium-monthly',
+        budget_allocation_id: 'alloc-dept-service',
+        model_tier_id: 'tier-premium',
+        model_tier_name: '高级',
+        period_type: 'monthly',
+        base_limit_usd: '200.000000',
+        effective_limit_usd: '200.000000',
+        enabled: true,
+      },
+      {
+        id: 'limit-premium-daily',
+        budget_allocation_id: 'alloc-dept-service',
+        model_tier_id: 'tier-premium',
+        model_tier_name: '高级',
+        period_type: 'daily',
+        base_limit_usd: '30.000000',
+        effective_limit_usd: '30.000000',
+        enabled: true,
+      },
+      {
+        id: 'limit-premium-weekly',
+        budget_allocation_id: 'alloc-dept-service',
+        model_tier_id: 'tier-premium',
+        model_tier_name: '高级',
+        period_type: 'weekly',
+        base_limit_usd: '100.000000',
+        effective_limit_usd: '100.000000',
+        enabled: true,
+      },
+    ])
+    mockGetBudgetTierUsage.mockImplementation((params: any) => {
+      const usageByPeriod: Record<string, string> = {
+        monthly: '99.990000',
+        daily: '11.110000',
+        weekly: '55.550000',
+      }
+      return Promise.resolve([{
+        allocation_id: 'alloc-dept-service',
+        model_tier_id: 'tier-premium',
+        period_type: params.period_type,
+        used_usd: usageByPeriod[params.period_type],
+        data_as_of: '2026-07-21T00:00:00Z',
+        stale: false,
+      }])
+    })
+
+    const wrapper = mountDeptServiceDrawer()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已用 $123.45 / $200.00')
+    expect(wrapper.text()).toContain('已用 $99.99')
+
+    await wrapper.get('[data-test="advanced-toggle"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已用 $12.34')
+    expect(wrapper.text()).toContain('已用 $56.78')
+    expect(wrapper.get('[data-test="tier-tier-premium-daily-used"]').text()).toContain('已用 $11.11')
+    expect(wrapper.get('[data-test="tier-tier-premium-weekly-used"]').text()).toContain('已用 $55.55')
   })
 
   it('总预算移除限制时映射为 -1 并提交', async () => {

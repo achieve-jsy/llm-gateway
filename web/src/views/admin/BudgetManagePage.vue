@@ -2060,6 +2060,7 @@ function ensureRoleDefaultDrilldown() {
 }
 const memberUsage7d = ref<Map<string, number>>(new Map())
 const tierBudgetItems = ref<TierBudgetItem[]>([])
+const modelTierNameById = ref<Map<string, string>>(new Map())
 const loadGeneration = ref(0)
 // 表格选中状态
 const tableRef = ref<any>(null)
@@ -2307,7 +2308,10 @@ function tierLimitToBudgetItem(scope: BudgetItem, limit: BudgetTierLimit): TierB
     scope_id: scope.scope_id,
     scope_type: scope.scope_type,
     model_tier_id: limit.model_tier_id,
-    tier_name: fallbackTierName({ model_tier_id: limit.model_tier_id, tier_name: limit.model_tier_name }),
+    tier_name: fallbackTierName({
+      model_tier_id: limit.model_tier_id,
+      tier_name: limit.model_tier_name || modelTierNameById.value.get(limit.model_tier_id),
+    }),
     amount_usd: Number.isFinite(amount) ? amount : 0,
     used_usd: Number.isFinite(used) ? used : 0,
     used_ratio: Number.isFinite(ratio) ? ratio : 0,
@@ -2340,7 +2344,7 @@ function normalizeTierUsageItem(raw: any, configuredByKey: Map<string, TierBudge
   const scopeType = String(raw?.scope_type || 'studio')
   const scopeID = String(raw?.scope_id || '')
   const modelTierID = raw?.model_tier_id ? String(raw.model_tier_id) : undefined
-  const tierName = String(raw?.tier_name || raw?.model_tier_name || raw?.budget_tier_name_snapshot || modelTierID || '')
+  const tierName = String(raw?.tier_name || raw?.model_tier_name || raw?.budget_tier_name_snapshot || (modelTierID ? modelTierNameById.value.get(modelTierID) : '') || modelTierID || '')
   if (!modelTierID && !tierName) return null
 
   const key = `${scopeType}:${scopeID}:${modelTierID || tierName}`
@@ -2614,13 +2618,14 @@ async function load() {
     const budgetScopeID = drillScopeType.value === 'studio' || drillScopeType.value === 'dept'
       ? drillScopeId.value
       : undefined
-    const [budgetResult, contextResult, tierResult] = await Promise.allSettled([
+    const [budgetResult, contextResult, tierResult, modelTierResult] = await Promise.allSettled([
       getBudgetList(undefined, budgetScopeID, overviewView.value),
       getBudgetContext(),
       http.get<any>('/api/v1/budgets/tier-usage', {
         params: { period_type: 'monthly' },
         _silent: true,
       } as any),
+      listModelTiers(false),
     ])
 
     if (budgetResult.status === 'rejected') {
@@ -2633,6 +2638,10 @@ async function load() {
 
     items.value = budgetResult.value || []
     contextItems.value = contextResult.status === 'fulfilled' ? (contextResult.value || []) : []
+    if (modelTierResult.status === 'fulfilled') {
+      batchModelTiers.value = modelTierResult.value || []
+      modelTierNameById.value = new Map(batchModelTiers.value.map(tier => [tier.id, tier.name]))
+    }
     if (contextResult.status === 'rejected') {
       ElMessage.warning('预算治理链路加载失败，列表仍可查看')
     }
@@ -3399,9 +3408,6 @@ watch(() => [auth.effectiveRole, auth.orgRoles.map(role => `${role.role}:${role.
 onMounted(() => {
   ensureRoleDefaultDrilldown()
   load()
-})
-onMounted(async () => {
-  try { batchModelTiers.value = await listModelTiers(false) } catch { batchModelTiers.value = [] }
 })
 onMounted(async () => {
   try { riskCount.value = (await getBudgetRiskSummary()).total } catch { riskCount.value = 0 }

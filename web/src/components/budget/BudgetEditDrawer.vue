@@ -172,8 +172,8 @@ async function selectAllocation(item: BudgetItem): Promise<void> {
 async function loadAllocation(item: BudgetItem | null, knownItems?: BudgetItem[]): Promise<void> {
   const allocationId = item?.allocation_id
   const usageParams = item
-    ? { scope_type: item.scope_type, scope_id: item.scope_id, period_type: 'monthly' }
-    : null
+    ? periods.map(period => ({ scope_type: item.scope_type, scope_id: item.scope_id, period_type: period }))
+    : []
   const [nextItems, nextTiers, nextLimits, nextUsages] = await Promise.all([
     knownItems
       ? Promise.resolve(knownItems)
@@ -184,8 +184,8 @@ async function loadAllocation(item: BudgetItem | null, knownItems?: BudgetItem[]
         ),
     listModelTiers(false),
     allocationId ? listBudgetTierLimits(allocationId) : Promise.resolve([]),
-    usageParams
-      ? getBudgetTierUsage(usageParams)
+    usageParams.length
+      ? Promise.all(usageParams.map(params => getBudgetTierUsage(params))).then(results => results.flat())
       : Promise.resolve([]),
   ])
 

@@ -186,7 +186,7 @@ describe('BudgetEditDrawer', () => {
     expect(mockMessageSuccess).toHaveBeenCalledWith('总预算与等级子预算已更新')
   })
 
-  it('打开抽屉按预算主体 scope 查询等级已用，避免 allocation_id 查不到实时用量', async () => {
+  it('打开抽屉按预算主体 scope 查询日周月等级已用，避免 allocation_id 查不到实时用量', async () => {
     mountDeptServiceDrawer()
     await flushPromises()
 
@@ -194,6 +194,16 @@ describe('BudgetEditDrawer', () => {
       scope_type: 'dept_service',
       scope_id: 'dept-1',
       period_type: 'monthly',
+    })
+    expect(mockGetBudgetTierUsage).toHaveBeenCalledWith({
+      scope_type: 'dept_service',
+      scope_id: 'dept-1',
+      period_type: 'weekly',
+    })
+    expect(mockGetBudgetTierUsage).toHaveBeenCalledWith({
+      scope_type: 'dept_service',
+      scope_id: 'dept-1',
+      period_type: 'daily',
     })
   })
 

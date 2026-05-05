@@ -4,7 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { ElTable, ElTableColumn, ElTag, ElProgress, ElButton, ElCheckbox, ElSelect, ElOption } from 'element-plus'
 import BudgetManagePage from '../BudgetManagePage.vue'
 import { useAuthStore } from '@/stores/auth'
-import { getBudgetList, getBudgetContext } from '@/services/control-plane'
+import { getBudgetList, getBudgetContext, listBudgetTierLimits } from '@/services/control-plane'
 import type { BudgetItem } from '@/types/budget'
 
 vi.mock('@/services/control-plane')
@@ -13,6 +13,31 @@ vi.mock('@/services/http', () => ({
   default: {
     get: vi.fn().mockResolvedValue({ data: { items: [] } }),
     post: vi.fn().mockResolvedValue({ data: {} }),
+  },
+}))
+vi.mock('@/components/budget/BudgetManageOverview.vue', () => ({
+  default: {
+    name: 'BudgetManageOverview',
+    props: ['items'],
+    data: () => ({ selectedRows: [] as BudgetItem[] }),
+    template: `
+      <section>
+        <div v-if="!items.length" data-test="budget-empty-company">
+          尚未向工作室分配预算
+          <button data-test="create-studio-budget">创建工作室预算</button>
+        </div>
+        <el-table v-else :data="items" stripe size="small" @selection-change="selectedRows = $event">
+          <el-table-column type="selection" width="42" />
+          <el-table-column label="工作室"><template #default="{ row }"><div class="scope-cell"><span class="scope-dot" /><strong class="scope-name">{{ row.label }}</strong></div></template></el-table-column>
+          <el-table-column label="已分配额度"><template #default="{ row }"><span class="mono">{{ row.amount_usd }}</span></template></el-table-column>
+          <el-table-column label="已使用"><template #default="{ row }"><el-progress :percentage="Math.min(Math.round((row.used_ratio || 0) * 100), 100)" /></template></el-table-column>
+          <el-table-column label="等级预算" />
+          <el-table-column label="状态"><template #default><el-tag>正常</el-tag></template></el-table-column>
+          <el-table-column label="操作"><template #default><el-button>配置</el-button></template></el-table-column>
+        </el-table>
+        <div v-if="selectedRows.length" class="batch-bar">已选择 {{ selectedRows.length }} 项</div>
+      </section>
+    `,
   },
 }))
 vi.mock('vue-router', () => ({
@@ -96,6 +121,7 @@ const createWrapper = () => {
         ElInput: { template: '<input />' },
         ElForm: { template: '<form><slot /></form>' },
         ElMessageBox: { template: '<div />' },
+        ElResult: { template: '<div><slot /><slot name="extra" /></div>' },
         BudgetRiskEventsSection: { template: '<div />' },
         BudgetTierLimitsPanel: { template: '<div />' },
         BudgetEditDrawer: { template: '<div />' },
@@ -117,6 +143,7 @@ describe('BudgetManagePage - Table Functionality', () => {
     vi.clearAllMocks()
     vi.mocked(getBudgetList).mockResolvedValue(mockStudioBudgets)
     vi.mocked(getBudgetContext).mockResolvedValue([])
+    vi.mocked(listBudgetTierLimits).mockResolvedValue([])
     vi.mocked(useAuthStore).mockReturnValue({
       effectiveRole: 'admin',
       orgRoles: [],

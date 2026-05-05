@@ -145,6 +145,7 @@ async function submit() {
         model_tier_id: form.dimension_type === 'tier' ? form.model_tier_id : null,
         duration_type: form.duration_type,
       })
+      emit('created')
     } else {
       ElMessage.error(message || error?.message || '提交失败')
     }

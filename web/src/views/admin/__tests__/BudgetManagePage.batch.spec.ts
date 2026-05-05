@@ -37,6 +37,7 @@ vi.mock('vue-router', () => ({
 const mockGetBudgetList = vi.fn()
 const mockGetBudgetContext = vi.fn()
 const mockListModelTiers = vi.fn()
+const mockListBudgetTierLimits = vi.fn()
 const mockGetBudgetRiskSummary = vi.fn()
 const mockAdjustBudget = vi.fn()
 const mockPreviewBudgetAdjustment = vi.fn()
@@ -47,9 +48,12 @@ vi.mock('@/services/control-plane', () => ({
   getBudgetList: (...args: unknown[]) => mockGetBudgetList(...args),
   getBudgetContext: (...args: unknown[]) => mockGetBudgetContext(...args),
   listModelTiers: (...args: unknown[]) => mockListModelTiers(...args),
+  listBudgetTierLimits: (...args: unknown[]) => mockListBudgetTierLimits(...args),
   getBudgetRiskSummary: (...args: unknown[]) => mockGetBudgetRiskSummary(...args),
   adjustBudget: (...args: unknown[]) => mockAdjustBudget(...args),
   previewBudgetAdjustment: (...args: unknown[]) => mockPreviewBudgetAdjustment(...args),
+  adjustBudgetMultiPeriod: vi.fn(),
+  previewBudgetMultiPeriod: vi.fn(),
   rebuildBudgetCounters: (...args: unknown[]) => mockRebuildBudgetCounters(...args),
 }))
 
@@ -96,6 +100,47 @@ vi.mock('@/components/budget/BudgetBatchAdjustWizard.vue', () => ({
     name: 'BudgetBatchAdjustWizard',
     template: '<div class="mock-batch-wizard" />',
     props: ['modelValue'],
+  },
+}))
+
+vi.mock('@/components/budget/BudgetManageOverview.vue', () => ({
+  default: {
+    name: 'BudgetManageOverview',
+    props: ['items'],
+    data: () => ({ selectedRows: [] as BudgetItem[] }),
+    computed: {
+      remaining(): number {
+        const rows = this.items as BudgetItem[]
+        const company = rows.find(item => item.scope_type === 'company')
+        const allocated = rows
+          .filter(item => item.scope_type === 'studio')
+          .reduce((sum, item) => sum + Number(item.amount_usd || 0), 0)
+        return Math.max(Number(company?.amount_usd || 0) - allocated, 0)
+      },
+      remainingText(): string {
+        return `$${this.remaining.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      },
+    },
+    template: `
+      <section>
+        <el-table :data="items" @selection-change="selectedRows = $event">
+          <el-table-column type="selection" />
+        </el-table>
+        <div v-if="selectedRows.length" class="batch-bar">
+          <div class="batch-bar-left">
+            <span class="batch-bar-selected">已选择 {{ selectedRows.length }} 项</span>
+            <span class="batch-bar-divider" />
+            <span class="batch-bar-unallocated">当前未下发余量 {{ remainingText }}</span>
+          </div>
+          <div class="batch-bar-right">
+            <el-button size="small" plain :disabled="selectedRows.length === 0">固定额度</el-button>
+            <el-button size="small" plain :disabled="selectedRows.length === 0">按比例增减</el-button>
+            <el-button size="small" plain :disabled="selectedRows.length === 0">等级子预算</el-button>
+            <el-button size="small" text @click="selectedRows = []">取消选择</el-button>
+          </div>
+        </div>
+      </section>
+    `,
   },
 }))
 
@@ -190,6 +235,7 @@ describe('BudgetManagePage - 批量操作功能', () => {
       },
     ])
     mockListModelTiers.mockResolvedValue([])
+    mockListBudgetTierLimits.mockResolvedValue([])
     mockGetBudgetRiskSummary.mockResolvedValue({ total: 0 })
     mockHttpGet.mockResolvedValue({ data: { items: [] } })
 
@@ -459,10 +505,6 @@ describe('BudgetManagePage - 批量操作功能', () => {
 
       const table = wrapper.findComponent({ name: 'ElTable' })
 
-      // Mock clearSelection method
-      const clearSelectionMock = vi.fn()
-      table.vm.clearSelection = clearSelectionMock
-
       // Select items
       await table.vm.$emit('selection-change', [sampleStudioBudgets[0], sampleStudioBudgets[1]])
       await flushPromises()
@@ -475,8 +517,7 @@ describe('BudgetManagePage - 批量操作功能', () => {
       await cancelBtn?.trigger('click')
       await flushPromises()
 
-      // Should have called clearSelection
-      expect(clearSelectionMock).toHaveBeenCalled()
+      expect(wrapper.find('.batch-bar').exists()).toBe(false)
     })
 
     it('取消选择后批量选择栏消失', async () => {

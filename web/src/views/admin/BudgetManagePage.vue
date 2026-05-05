@@ -2285,7 +2285,8 @@ const tierBudgetByScope = computed(() => {
   return map
 })
 
-function tierLimitToBudgetItem(scope: BudgetItem, limit: BudgetTierLimit): TierBudgetItem {
+function tierLimitToBudgetItem(scope: BudgetItem, limit: BudgetTierLimit): TierBudgetItem | null {
+  if (!limit.model_tier_name) return null
   const amount = Number(limit.effective_limit_usd ?? limit.limit_usd ?? limit.base_limit_usd ?? 0)
   const used = Number(limit.used_usd ?? 0)
   const ratio = amount > 0 && Number.isFinite(used) ? used / amount : 0
@@ -2311,11 +2312,12 @@ function normalizeTierUsageItem(raw: any, configuredByKey: Map<string, TierBudge
   const scopeType = String(raw?.scope_type || 'studio')
   const scopeID = String(raw?.scope_id || '')
   const modelTierID = raw?.model_tier_id ? String(raw.model_tier_id) : undefined
-  const tierName = String(raw?.tier_name || raw?.model_tier_name || raw?.budget_tier_name_snapshot || modelTierID || '')
-  if (!modelTierID && !tierName) return null
-
-  const key = `${scopeType}:${scopeID}:${modelTierID || tierName}`
+  const rawTierName = String(raw?.tier_name || raw?.model_tier_name || raw?.budget_tier_name_snapshot || '')
+  const key = `${scopeType}:${scopeID}:${modelTierID || rawTierName}`
   const configured = configuredByKey.get(key)
+  const tierName = configured?.tier_name || rawTierName
+  if (!tierName || tierName === '未知等级') return null
+
   const amount = Number(raw?.amount_usd ?? configured?.amount_usd ?? 0)
   const used = Number(raw?.used_usd ?? raw?.reported_cost_usd ?? raw?.accounting_cost_usd ?? 0)
   const ratio = raw?.used_ratio !== undefined
@@ -2330,7 +2332,7 @@ function normalizeTierUsageItem(raw: any, configuredByKey: Map<string, TierBudge
     scope_id: scopeID,
     scope_type: scopeType,
     model_tier_id: modelTierID,
-    tier_name: configured?.tier_name || tierName,
+    tier_name: tierName,
     amount_usd: Number.isFinite(amount) ? amount : 0,
     used_usd: Number.isFinite(used) ? used : 0,
     used_ratio: Number.isFinite(ratio) ? ratio : 0,
@@ -2367,7 +2369,9 @@ async function loadConfiguredTierBudgets(scopes: BudgetItem[]): Promise<TierBudg
   if (!targets.length) return []
   const results = await Promise.allSettled(targets.map(async scope => {
     const limits = await listBudgetTierLimits(scope.allocation_id!)
-    return limits.map(limit => tierLimitToBudgetItem(scope, limit))
+    return limits
+      .map(limit => tierLimitToBudgetItem(scope, limit))
+      .filter((item): item is TierBudgetItem => Boolean(item))
   }))
   return results.flatMap(result => result.status === 'fulfilled' ? result.value : [])
 }
@@ -3200,7 +3204,7 @@ async function handleWorkspaceDetail(item: BudgetItem) {
         const usage = tierBudgetItems.value.find(t =>
           t.scope_id === item.scope_id
           && t.scope_type === item.scope_type
-          && t.tier_name === limit.model_tier_name
+          && t.model_tier_id === limit.model_tier_id
         )
         return {
           ...limit,

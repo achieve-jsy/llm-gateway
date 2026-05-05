@@ -837,6 +837,68 @@ describe('BudgetManagePage - API Integration Tests', () => {
       expect(wrapper.html()).toContain('中等级模型')
     })
 
+    it('过滤无法匹配当前等级定义的未知等级用量', async () => {
+      mockGetBudgetList.mockResolvedValue([
+        makeBudgetItem({ scope_type: 'studio', scope_id: 'studio-xlab', allocation_id: 'alloc-xlab', label: 'X-Lab' }),
+      ])
+      mockListBudgetTierLimits.mockImplementation((allocationId: string) => {
+        if (allocationId === 'alloc-xlab') {
+          return Promise.resolve([{
+            id: 'limit-high',
+            budget_allocation_id: 'alloc-xlab',
+            model_tier_id: 'tier-high',
+            model_tier_name: '高级模型',
+            period_type: 'monthly',
+            base_limit_usd: '45000.000000',
+            effective_limit_usd: '45000.000000',
+            enabled: true,
+          }])
+        }
+        return Promise.resolve([])
+      })
+      mockHttpGet.mockImplementation((url) => {
+        if (url === '/api/v1/budgets/tier-usage') {
+          return Promise.resolve({ data: { data: { items: [
+            {
+              scope_type: 'studio',
+              scope_id: 'studio-xlab',
+              model_tier_id: 'tier-high',
+              reported_cost_usd: '20003.590000',
+              accounting_cost_usd: '20003.590000',
+            },
+            {
+              scope_type: 'studio',
+              scope_id: 'studio-xlab',
+              model_tier_id: '8e6a9354-a339-438d-aeee-c2dd27c62e11',
+              reported_cost_usd: '0.000000',
+              accounting_cost_usd: '0.000000',
+            },
+            {
+              scope_type: 'studio',
+              scope_id: 'studio-xlab',
+              model_tier_id: 'orphan-tier',
+              model_tier_name: '未知等级',
+              reported_cost_usd: '0.000000',
+              accounting_cost_usd: '0.000000',
+            },
+          ] } } })
+        }
+        return Promise.resolve({ data: {} })
+      })
+
+      const { wrapper } = await mountPage('admin')
+      await flushPromises()
+
+      expect(wrapper.vm.tierBudgetItems).toHaveLength(1)
+      expect(wrapper.vm.tierBudgetItems[0]).toMatchObject({
+        model_tier_id: 'tier-high',
+        tier_name: '高级模型',
+      })
+      expect(wrapper.html()).toContain('高级模型')
+      expect(wrapper.html()).not.toContain('未知等级')
+      expect(wrapper.html()).not.toContain('8e6a9354-a339-438d-aeee-c2dd27c62e11')
+    })
+
     it('accounting_cost_usd 为 0 但 reported_cost_usd 非 0 时仍展示 reported 用量', async () => {
       mockGetBudgetList.mockResolvedValue([
         makeBudgetItem({ scope_type: 'studio', scope_id: 'studio-xlab', allocation_id: 'alloc-xlab', label: 'X-Lab' }),

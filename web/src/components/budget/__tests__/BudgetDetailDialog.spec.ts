@@ -67,4 +67,22 @@ describe('buildTierDetailRows', () => {
       used: 0,
     })
   })
+
+  it('缺少模型等级名称时不回退展示 id', () => {
+    const rows = buildTierDetailRows([
+      ...tierLimits,
+      {
+        id: 'orphan-limit',
+        budget_allocation_id: 'alloc-1',
+        model_tier_id: '8e6a9354-a339-438d-aeee-c2dd27c62e11',
+        period_type: 'monthly',
+        limit_usd: '10',
+        enabled: true,
+        used_usd: '0',
+      },
+    ])
+
+    expect(rows).toHaveLength(2)
+    expect(rows.some(row => row.id === '8e6a9354-a339-438d-aeee-c2dd27c62e11')).toBe(false)
+  })
 })

@@ -30,6 +30,7 @@ export function buildTierDetailRows(tierLimits: BudgetTierLimit[] = []): TierDet
 
   const byTier = new Map<string, BudgetTierLimit[]>()
   for (const limit of tierLimits) {
+    if (!limit.model_tier_name) continue
     const key = limit.model_tier_id
     const list = byTier.get(key) ?? []
     list.push(limit)
@@ -47,7 +48,7 @@ export function buildTierDetailRows(tierLimits: BudgetTierLimit[] = []): TierDet
 
     return {
       id,
-      name: any.model_tier_name ?? id,
+      name: any.model_tier_name,
       color: undefined,
       enabled: any.enabled ?? true,
       monthly: monthlyLimit,

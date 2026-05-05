@@ -181,8 +181,8 @@ async function loadAllocation(item: BudgetItem | null, knownItems?: BudgetItem[]
         ),
     listModelTiers(false),
     allocationId ? listBudgetTierLimits(allocationId) : Promise.resolve([]),
-    allocationId
-      ? getBudgetTierUsage({ allocation_id: allocationId, period_type: 'monthly' })
+    item
+      ? getBudgetTierUsage({ scope_type: item.scope_type, scope_id: item.scope_id, period_type: 'monthly' })
       : Promise.resolve([]),
   ])
 

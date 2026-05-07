@@ -58,6 +58,8 @@ type ProviderPricingResolver interface {
 
 type ProviderPricingResolverFunc func(modelKey, provider string) (core.ModelPricing, bool)
 
+const largePromptCacheMissThreshold = 100_000
+
 func (f ProviderPricingResolverFunc) Resolve(modelKey string) (core.ModelPricing, bool) {
 	return f(modelKey, "")
 }
@@ -318,6 +320,8 @@ func (c *Collector) NewUsageEvent(ctx *gin.Context) UsageEvent {
 		event.FailoverUsed, _ = b.(bool)
 	}
 
+	logLargePromptCacheMiss(event)
+
 	// 成本计算
 	event.EstimateCost(c.pricing)
 	if tier, ok := budget.GetTierContext(ctx); ok {
@@ -350,6 +354,31 @@ func (c *Collector) NewUsageEvent(ctx *gin.Context) UsageEvent {
 	}
 
 	return event
+}
+
+func logLargePromptCacheMiss(event UsageEvent) {
+	if event.UsageMissing || event.Status >= 400 {
+		return
+	}
+	if event.PromptTokens < largePromptCacheMissThreshold || event.CachedTokens > 0 || event.CacheWriteTokens > 0 {
+		return
+	}
+	slog.Warn("large prompt cache miss observed",
+		"request_id", event.RequestID,
+		"model", event.Model,
+		"routed_model", event.RoutedModel,
+		"group_name", event.GroupName,
+		"provider", event.Provider,
+		"prompt_tokens", event.PromptTokens,
+		"cached_tokens", event.CachedTokens,
+		"cache_write_tokens", event.CacheWriteTokens,
+		"completion_tokens", event.CompletionTokens,
+		"total_tokens", event.TotalTokens,
+		"stream", event.Stream,
+		"status", event.Status,
+		"failover_used", event.FailoverUsed,
+		"inbound_endpoint", event.InboundEndpoint,
+	)
 }
 
 func stringPtr(value string) *string {

@@ -91,6 +91,7 @@ const props = defineProps<{
   canEditSelf?: boolean
   size?: string
   initialAllocation?: BudgetItem
+  initialUsages?: BudgetTierUsage[]
 }>()
 
 const emit = defineEmits<{
@@ -174,7 +175,7 @@ async function loadAllocation(item: BudgetItem | null, knownItems?: BudgetItem[]
   const usageParams = item
     ? periods.map(period => ({ scope_type: item.scope_type, scope_id: item.scope_id, period_type: period }))
     : []
-  const [nextItems, nextTiers, nextLimits, nextUsages] = await Promise.all([
+  const [nextItems, nextTiers, nextLimits, fetchedUsages] = await Promise.all([
     knownItems
       ? Promise.resolve(knownItems)
       : getBudgetList(
@@ -202,10 +203,32 @@ async function loadAllocation(item: BudgetItem | null, knownItems?: BudgetItem[]
   selectedAllocation.value = refreshedItem
   tiers.value = nextTiers
   limits.value = nextLimits
-  usages.value = nextUsages
+  usages.value = mergeUsages(props.initialUsages ?? [], fetchedUsages)
   draft.value = refreshedItem ? createDraft(refreshedItem, nextTiers, nextLimits) : null
   originalDraft.value = draft.value ? structuredClone(toRaw(draft.value)) : null
   dirty.value = false
+}
+
+function usageKey(usage: BudgetTierUsage): string {
+  return `${usage.model_tier_id}:${usage.period_type}`
+}
+
+function usageValue(usage: BudgetTierUsage): number {
+  const amount = Number(usage.used_usd ?? 0)
+  return Number.isFinite(amount) ? amount : 0
+}
+
+function mergeUsages(fallbacks: BudgetTierUsage[], fetched: BudgetTierUsage[]): BudgetTierUsage[] {
+  const map = new Map<string, BudgetTierUsage>()
+  for (const usage of fallbacks) {
+    if (usage.model_tier_id && usage.period_type) map.set(usageKey(usage), usage)
+  }
+  for (const usage of fetched) {
+    if (!usage.model_tier_id || !usage.period_type) continue
+    const existing = map.get(usageKey(usage))
+    map.set(usageKey(usage), existing && usageValue(usage) === 0 && usageValue(existing) > 0 ? existing : usage)
+  }
+  return Array.from(map.values())
 }
 
 function resolveChildIds(items: BudgetItem[]): string[] {

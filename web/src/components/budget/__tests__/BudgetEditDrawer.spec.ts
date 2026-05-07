@@ -274,6 +274,51 @@ describe('BudgetEditDrawer', () => {
     expect(wrapper.get('[data-test="tier-tier-premium-weekly-used"]').text()).toContain('已用 $55.55')
   })
 
+  it('接口等级用量为 0 时使用父页面已加载的等级用量兜底回显', async () => {
+    mockListBudgetTierLimits.mockResolvedValue([{
+      id: 'limit-premium-monthly',
+      budget_allocation_id: 'alloc-studio',
+      model_tier_id: 'tier-premium',
+      model_tier_name: '高级',
+      period_type: 'monthly',
+      base_limit_usd: '5000.000000',
+      effective_limit_usd: '5000.000000',
+      enabled: true,
+    }])
+    mockGetBudgetTierUsage.mockImplementation((params: any) => Promise.resolve([{
+      allocation_id: 'alloc-studio',
+      model_tier_id: 'tier-premium',
+      period_type: params.period_type,
+      used_usd: '0.000000',
+      data_as_of: '2026-07-21T00:00:00Z',
+      stale: false,
+    }]))
+
+    const wrapper = mount(BudgetEditDrawer, {
+      props: {
+        modelValue: true,
+        scopeType: 'studio',
+        scopeId: 'studio-1',
+        title: '效率平台',
+        canEdit: true,
+        initialAllocation: studioAllocation,
+        initialUsages: [{
+          allocation_id: 'alloc-studio',
+          model_tier_id: 'tier-premium',
+          period_type: 'monthly',
+          used_usd: 1234.56,
+          data_as_of: '',
+          stale: false,
+        }],
+      },
+      global: { plugins: [ElementPlus] },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已用 $1,234.56')
+  })
+
   it('总预算移除限制时映射为 -1 并提交', async () => {
     mockListBudgetTierLimits.mockResolvedValue([])
     const wrapper = mountDrawer()

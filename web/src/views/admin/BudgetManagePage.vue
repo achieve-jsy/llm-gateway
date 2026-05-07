@@ -1672,6 +1672,7 @@
     :can-edit="budgetDrawerCanEdit"
     :can-edit-self="budgetDrawerCanEditSelf"
     :initial-allocation="budgetDrawerInitialAllocation"
+    :initial-usages="budgetDrawerInitialUsages"
     @navigate="handleBudgetNavigate"
     @saved="load"
   />
@@ -1784,7 +1785,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { adjustBudget, adjustBudgetMultiPeriod, getBudgetContext, getBudgetList, listBudgetTierLimits, listModelTiers, previewBudgetAdjustment, previewBudgetMultiPeriod, rebuildBudgetCounters } from '@/services/control-plane'
+import { adjustBudget, adjustBudgetMultiPeriod, getBudgetContext, getBudgetList, getBudgetTierUsage, listBudgetTierLimits, listModelTiers, previewBudgetAdjustment, previewBudgetMultiPeriod, rebuildBudgetCounters } from '@/services/control-plane'
 import { getBudgetRiskSummary } from '@/services/control-plane'
 import http from '@/services/http'
 import { useAuthStore } from '@/stores/auth'
@@ -1797,7 +1798,7 @@ import BudgetTierLimitsPanel from '@/components/budget/BudgetTierLimitsPanel.vue
 import { budgetColorLevel, formatUSD } from '@/utils/format'
 import BudgetEditDrawer from '@/components/budget/BudgetEditDrawer.vue'
 import BudgetBatchAdjustWizard from '@/components/budget/BudgetBatchAdjustWizard.vue'
-import type { BudgetTierLimit, ModelTier } from '@/types/model-tier'
+import type { BudgetTierLimit, BudgetTierUsage, ModelTier } from '@/types/model-tier'
 import MemberQuotaDialog from '@/components/budget/MemberQuotaDialog.vue'
 import AdminPageHeader from '@/components/budget/AdminPageHeader.vue'
 import BudgetManageOverview from '@/components/budget/BudgetManageOverview.vue'
@@ -2773,6 +2774,22 @@ const budgetDrawerChildIds = ref<string[] | undefined>(undefined)
 const budgetDrawerCanEdit = ref(false)
 const budgetDrawerCanEditSelf = ref(false)
 const budgetDrawerInitialAllocation = ref<BudgetItem | undefined>(undefined)
+const budgetDrawerInitialUsages = computed<BudgetTierUsage[]>(() => {
+  const allocation = budgetDrawerInitialAllocation.value
+  const scopeType = allocation?.scope_type || (budgetDrawerScopeType.value === 'studio' ? 'studio' : '')
+  const scopeID = allocation?.scope_id || budgetDrawerScopeId.value
+  if (!scopeType || !scopeID) return []
+  return tierBudgetItems.value
+    .filter(item => item.scope_type === scopeType && item.scope_id === scopeID && item.model_tier_id)
+    .map(item => ({
+      allocation_id: allocation?.allocation_id || '',
+      model_tier_id: item.model_tier_id!,
+      period_type: 'monthly',
+      used_usd: item.used_usd,
+      data_as_of: '',
+      stale: false,
+    }))
+})
 
 function openBudgetDrawer(
   opts: { scope_type: string; scope_id: string; label?: string; parent_scope_id?: string } | BudgetItem,
@@ -3245,10 +3262,14 @@ async function handleWorkspaceDetail(item: BudgetItem) {
   budgetDetailTierLimits.value = []
   if (item.allocation_id) {
     try {
-      const limits = await listBudgetTierLimits(item.allocation_id)
+      const [limits, scopedUsages] = await Promise.all([
+        listBudgetTierLimits(item.allocation_id),
+        getBudgetTierUsage({ scope_type: item.scope_type, scope_id: item.scope_id, period_type: 'monthly' }).catch(() => []),
+      ])
       budgetDetailTierLimits.value = limits.map(limit => {
         if (limit.period_type !== 'monthly') return limit
-        const usage = tierBudgetItems.value.find(t =>
+        const scopedUsage = scopedUsages.find(usage => usage.model_tier_id === limit.model_tier_id)
+        const pageUsage = tierBudgetItems.value.find(t =>
           t.scope_id === item.scope_id
           && t.scope_type === item.scope_type
           && t.model_tier_id === limit.model_tier_id
@@ -3256,7 +3277,7 @@ async function handleWorkspaceDetail(item: BudgetItem) {
         return {
           ...limit,
           model_tier_name: limit.model_tier_name || modelTierNameById.value.get(limit.model_tier_id),
-          used_usd: usage?.used_usd ?? limit.used_usd ?? 0,
+          used_usd: scopedUsage?.used_usd ?? pageUsage?.used_usd ?? limit.used_usd ?? 0,
         }
       })
     } catch (error: any) {

@@ -39,3 +39,9 @@ func SourceFP(uaRaw, ip string, ipAsSource bool) string {
 	}
 	return UAFingerprint(uaRaw)
 }
+
+// IsSilentUserAgent returns true for clients whose bootstrap/probe requests are
+// expected and should not produce first-use/new-source/wakeup notifications.
+func IsSilentUserAgent(raw string) bool {
+	return strings.Contains(strings.ToLower(raw), "trae")
+}

@@ -1773,7 +1773,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { adjustBudget, adjustBudgetMultiPeriod, getBudgetContext, getBudgetList, listBudgetTierLimits, listModelTiers, previewBudgetAdjustment, previewBudgetMultiPeriod, rebuildBudgetCounters } from '@/services/control-plane'
+import { adjustBudget, adjustBudgetMultiPeriod, getBudgetContext, getBudgetList, getBudgetTierUsage, listBudgetTierLimits, listModelTiers, previewBudgetAdjustment, previewBudgetMultiPeriod, rebuildBudgetCounters } from '@/services/control-plane'
 import { getBudgetRiskSummary } from '@/services/control-plane'
 import http from '@/services/http'
 import { useAuthStore } from '@/stores/auth'
@@ -3215,17 +3215,21 @@ async function handleWorkspaceDetail(item: BudgetItem) {
   budgetDetailTierLimits.value = []
   if (item.allocation_id) {
     try {
-      const limits = await listBudgetTierLimits(item.allocation_id)
+      const [limits, scopedUsages] = await Promise.all([
+        listBudgetTierLimits(item.allocation_id),
+        getBudgetTierUsage({ scope_type: item.scope_type, scope_id: item.scope_id, period_type: 'monthly' }).catch(() => []),
+      ])
       budgetDetailTierLimits.value = limits.map(limit => {
         if (limit.period_type !== 'monthly') return limit
-        const usage = tierBudgetItems.value.find(t =>
+        const scopedUsage = scopedUsages.find(usage => usage.model_tier_id === limit.model_tier_id)
+        const pageUsage = tierBudgetItems.value.find(t =>
           t.scope_id === item.scope_id
           && t.scope_type === item.scope_type
           && t.model_tier_id === limit.model_tier_id
         )
         return {
           ...limit,
-          used_usd: usage?.used_usd ?? limit.used_usd ?? 0,
+          used_usd: scopedUsage?.used_usd ?? pageUsage?.used_usd ?? limit.used_usd ?? 0,
         }
       })
     } catch (error: any) {

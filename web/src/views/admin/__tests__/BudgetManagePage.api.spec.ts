@@ -22,6 +22,7 @@ const mockPreviewBudgetAdjustment = vi.fn()
 const mockPreviewBudgetMultiPeriod = vi.fn()
 const mockAdjustBudgetMultiPeriod = vi.fn()
 const mockListBudgetTierLimits = vi.fn()
+const mockGetBudgetTierUsage = vi.fn()
 
 vi.mock('@/services/control-plane', () => ({
   getBudgetList: (...args: unknown[]) => mockGetBudgetList(...args),
@@ -34,6 +35,7 @@ vi.mock('@/services/control-plane', () => ({
   previewBudgetMultiPeriod: (...args: unknown[]) => mockPreviewBudgetMultiPeriod(...args),
   adjustBudgetMultiPeriod: (...args: unknown[]) => mockAdjustBudgetMultiPeriod(...args),
   listBudgetTierLimits: (...args: unknown[]) => mockListBudgetTierLimits(...args),
+  getBudgetTierUsage: (...args: unknown[]) => mockGetBudgetTierUsage(...args),
 }))
 
 // Mock http service for tier-usage endpoint
@@ -198,6 +200,7 @@ describe('BudgetManagePage - API Integration Tests', () => {
     mockGetBudgetRiskSummary.mockResolvedValue({ total: 0 })
     mockListModelTiers.mockResolvedValue([])
     mockListBudgetTierLimits.mockResolvedValue([])
+    mockGetBudgetTierUsage.mockResolvedValue([])
     mockHttpGet.mockResolvedValue(sampleTierBudgets)
     mockConfirm.mockResolvedValue(true)
   })
@@ -1251,6 +1254,75 @@ describe('BudgetManagePage - API Integration Tests', () => {
         period_type: 'monthly',
         used_usd: 24267.68,
       })])
+    })
+  })
+
+  describe('预算详情弹窗等级用量', () => {
+    it('下钻到工作室页时从 scoped tier usage 回填等级月用量', async () => {
+      const studioItem = makeBudgetItem({
+        scope_type: 'studio',
+        scope_id: 'studio-xlab',
+        allocation_id: 'alloc-xlab',
+        label: '技术研究工作室',
+        amount_usd: 200000,
+        used_usd: 24261.73,
+      })
+      mockGetBudgetList.mockResolvedValue([studioItem])
+      mockListBudgetTierLimits.mockResolvedValue([
+        {
+          id: 'limit-high',
+          budget_allocation_id: 'alloc-xlab',
+          model_tier_id: 'tier-high',
+          model_tier_name: '高级模型',
+          period_type: 'monthly',
+          base_limit_usd: '20000.000000',
+          effective_limit_usd: '20000.000000',
+          enabled: true,
+        },
+        {
+          id: 'limit-ultra',
+          budget_allocation_id: 'alloc-xlab',
+          model_tier_id: 'tier-ultra',
+          model_tier_name: '超高级模型',
+          period_type: 'monthly',
+          base_limit_usd: '20000.000000',
+          effective_limit_usd: '20000.000000',
+          enabled: true,
+        },
+      ])
+      mockGetBudgetTierUsage.mockResolvedValue([
+        {
+          allocation_id: 'alloc-xlab',
+          model_tier_id: 'tier-high',
+          period_type: 'monthly',
+          used_usd: 1800,
+          data_as_of: '',
+          stale: false,
+        },
+        {
+          allocation_id: 'alloc-xlab',
+          model_tier_id: 'tier-ultra',
+          period_type: 'monthly',
+          used_usd: 4800,
+          data_as_of: '',
+          stale: false,
+        },
+      ])
+
+      const { wrapper } = await mountPage('admin', { scope_type: 'studio', scope_id: 'studio-xlab' })
+      await flushPromises()
+      await (wrapper.vm as any).handleWorkspaceDetail(studioItem)
+      await flushPromises()
+
+      expect(mockGetBudgetTierUsage).toHaveBeenCalledWith({
+        scope_type: 'studio',
+        scope_id: 'studio-xlab',
+        period_type: 'monthly',
+      })
+      expect((wrapper.vm as any).budgetDetailTierLimits).toEqual(expect.arrayContaining([
+        expect.objectContaining({ model_tier_id: 'tier-high', used_usd: 1800 }),
+        expect.objectContaining({ model_tier_id: 'tier-ultra', used_usd: 4800 }),
+      ]))
     })
   })
 

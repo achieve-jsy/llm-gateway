@@ -53,4 +53,17 @@ describe('BudgetManageOverview', () => {
     await wrapper.get('[data-test="chain-detail"]').trigger('click')
     expect(wrapper.emitted('kpiSelect')?.[0]).toEqual(['scopes'])
   })
+
+  it('等级预算标签展示实际用量而不是子预算百分比', () => {
+    const wrapper = mount(BudgetManageOverview, {
+      props: {
+        items: [company, studio],
+        role: 'admin',
+        tierItems: [{ scope_id: 's1', tier_name: '高级模型', used_usd: 2056, used_ratio: 1.96 }],
+      },
+    })
+
+    expect(wrapper.text()).toContain('高级模型 $2,056.00')
+    expect(wrapper.text()).not.toContain('高级模型 196%')
+  })
 })

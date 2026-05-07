@@ -211,6 +211,7 @@ import BudgetEmptyState from './BudgetEmptyState.vue'
 interface TierUsageItem {
   scope_id: string
   tier_name: string
+  used_usd?: number
   used_ratio?: number
   color?: string
   enabled?: boolean
@@ -344,6 +345,7 @@ function tierTags(row: BudgetItem): TierBudgetTagItem[] {
     .filter(item => item.scope_id === row.scope_id && (!item.scope_type || item.scope_type === row.scope_type))
     .map((item, index) => {
       const ratio = Number(item.used_ratio ?? 0)
+      const used = Number(item.used_usd ?? 0)
       const state = item.state ?? (item.enabled === false ? 'disabled' : ratio >= 1 ? 'blocked' : 'normal')
       return {
         id: `${row.scope_type}-${row.scope_id}-${item.tier_name}-${index}`,
@@ -352,7 +354,7 @@ function tierTags(row: BudgetItem): TierBudgetTagItem[] {
         usageRatio: ratio,
         // 原型等级色按名称；仅超额覆盖为红（预警仍保留等级色）
         state,
-        label: state === 'disabled' ? `${item.tier_name} 已停用` : `${item.tier_name} ${Math.round(ratio * 100)}%`,
+        label: state === 'disabled' ? `${item.tier_name} 已停用` : `${item.tier_name} ${formatBudgetUSD(Number.isFinite(used) ? used : 0)}`,
       }
     })
 }

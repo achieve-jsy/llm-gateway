@@ -71,4 +71,28 @@ describe('control-plane budget tier usage service', () => {
 
     expect(items[0].used_usd).toBe('24267.680000')
   })
+
+  it('后端未返回 period_type 时使用请求周期兜底，保证高级设置日周用量可匹配', async () => {
+    vi.mocked(http.get).mockResolvedValueOnce({
+      data: {
+        data: {
+          items: [{
+            scope_type: 'studio',
+            scope_id: 'studio-1',
+            model_tier_id: 'tier-high',
+            accounting_cost_usd: '12.340000',
+          }],
+        },
+      },
+    })
+
+    const items = await getBudgetTierUsage({
+      scope_type: 'studio',
+      scope_id: 'studio-1',
+      period_type: 'daily',
+    })
+
+    expect(items[0].period_type).toBe('daily')
+    expect(items[0].used_usd).toBe('12.340000')
+  })
 })

@@ -836,11 +836,11 @@ describe('BudgetManagePage - API Integration Tests', () => {
         }),
       ]))
       expect(wrapper.html()).toContain('高级模型')
-      expect(wrapper.html()).toContain('44%')
+      expect(wrapper.html()).toContain('$20,003.59')
       expect(wrapper.html()).toContain('超高级模型')
-      expect(wrapper.html()).toContain('25%')
+      expect(wrapper.html()).toContain('$3,000.00')
       expect(wrapper.html()).toContain('低等级模型')
-      expect(wrapper.html()).toContain('1%')
+      expect(wrapper.html()).toContain('$80.00')
       expect(wrapper.html()).toContain('中等级模型')
     })
 
@@ -952,7 +952,7 @@ describe('BudgetManagePage - API Integration Tests', () => {
         used_ratio: 20003.59 / 45000,
       })
       expect(wrapper.html()).toContain('高级模型')
-      expect(wrapper.html()).toContain('44%')
+      expect(wrapper.html()).toContain('$20,003.59')
       expect(wrapper.html()).not.toContain('高级模型 0%')
     })
 
@@ -1018,7 +1018,7 @@ describe('BudgetManagePage - API Integration Tests', () => {
         used_ratio: 0.25,
       })
       expect(wrapper.html()).toContain('Codex E2E High Tier')
-      expect(wrapper.html()).toContain('25%')
+      expect(wrapper.html()).toContain('$250.00')
       expect(wrapper.html()).not.toContain('Codex E2E High Tier 0%')
     })
 
@@ -1057,7 +1057,7 @@ describe('BudgetManagePage - API Integration Tests', () => {
         amount_usd: 120,
         used_ratio: 0,
       })
-      expect(wrapper.html()).toContain('高级 0%')
+      expect(wrapper.html()).toContain('高级 $0.00')
     })
 
     it('已停用的等级子预算显示为停用标签', async () => {

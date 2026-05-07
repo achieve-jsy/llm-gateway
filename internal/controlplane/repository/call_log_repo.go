@@ -25,6 +25,7 @@ type TierUsageAggregate struct {
 	ScopeID           string              `gorm:"column:scope_id" json:"scope_id"`
 	TierID            *uuid.UUID          `gorm:"column:tier_id" json:"model_tier_id,omitempty"`
 	GroupID           *uint               `gorm:"column:group_id" json:"group_id,omitempty"`
+	PeriodType        string              `gorm:"-" json:"period_type,omitempty"`
 	ReportedCostUSD   budgetdomain.Amount `gorm:"column:reported_cost_usd" json:"reported_cost_usd"`
 	AccountingCostUSD budgetdomain.Amount `gorm:"column:accounting_cost_usd" json:"accounting_cost_usd"`
 	RequestCount      int64               `gorm:"column:request_count" json:"request_count"`

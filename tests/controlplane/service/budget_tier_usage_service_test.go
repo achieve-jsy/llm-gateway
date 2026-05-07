@@ -347,6 +347,32 @@ func TestTierUsageIncludesReportedSnapshotsWithoutConfiguredLimitsAndUsesFreshne
 	require.Nil(t, queries[0].TierID)
 }
 
+func TestTierUsageResponseItemsIncludeRequestedPeriodType(t *testing.T) {
+	now := time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC)
+	tierID := uuid.New()
+	usage := myBudgetUsage{asOf: now, rows: []repository.TierUsageAggregate{{
+		TierID:            &tierID,
+		ReportedCostUSD:   mustAmount(t, "12.34"),
+		AccountingCostUSD: mustAmount(t, "12.34"),
+	}}}
+	svc := service.NewBudgetTierService(
+		&myBudgetStore{},
+		myBudgetReader{scopes: []repository.MyBudgetScopeAllocation{{
+			Allocation: model.BudgetAllocation{ScopeType: model.BudgetScopeStudio, ScopeID: "studio-a"},
+		}}},
+		newFakeModelTierRepo(),
+		func() time.Time { return now },
+	).WithTierUsageRepository(usage)
+
+	got, err := svc.QueryTierUsage(context.Background(), rbac.Actor{IsGlobal: true}, service.TierUsageQueryInput{
+		ScopeType: model.BudgetScopeStudio, ScopeID: "studio-a", PeriodType: budgetdomain.PeriodDaily,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, got.Data.Items, 1)
+	require.Equal(t, "daily", got.Data.Items[0].PeriodType)
+}
+
 func TestQueryTierUsageDefaultsEmptyPeriodToMonthly(t *testing.T) {
 	now := time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC)
 	queries := []repository.TierUsageQuery{}

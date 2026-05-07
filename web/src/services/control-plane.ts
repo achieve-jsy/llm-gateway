@@ -1200,6 +1200,7 @@ export async function getBudgetTierUsage(params: Record<string, string>): Promis
   }
   return items.map(item => ({
     ...item,
+    period_type: item.period_type ?? params.period_type,
     used_usd: usedAmount(item),
     data_as_of: item.data_as_of ?? dataAsOf ?? '',
     stale: item.stale ?? stale ?? false,

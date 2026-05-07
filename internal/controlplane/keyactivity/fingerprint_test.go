@@ -81,3 +81,20 @@ func TestSourceFP(t *testing.T) {
 		t.Errorf("ipAsSource=false should not include ip: got %q", fp3)
 	}
 }
+
+func TestIsSilentUserAgent(t *testing.T) {
+	cases := []struct {
+		ua   string
+		want bool
+	}{
+		{"Trae/2.3.47348", true},
+		{"Mozilla/5.0 TRAE/2.3.47348 Electron/33.2.1", true},
+		{"Codex Desktop/0.145.0", false},
+		{"curl/8.0", false},
+	}
+	for _, tc := range cases {
+		if got := IsSilentUserAgent(tc.ua); got != tc.want {
+			t.Fatalf("IsSilentUserAgent(%q) = %v, want %v", tc.ua, got, tc.want)
+		}
+	}
+}

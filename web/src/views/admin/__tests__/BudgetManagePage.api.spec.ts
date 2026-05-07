@@ -710,7 +710,7 @@ describe('BudgetManagePage - API Integration Tests', () => {
 
     it('等级预算 API 真实聚合字段按 model_tier_id 合并 X-Lab 配置并计算 used_ratio', async () => {
       mockGetBudgetList.mockResolvedValue([
-        makeBudgetItem({ scope_type: 'studio', scope_id: 'studio-xlab', allocation_id: 'alloc-xlab', label: 'X-Lab' }),
+        makeBudgetItem({ scope_type: 'studio', scope_id: 'studio-xlab', allocation_id: 'alloc-xlab', label: 'X-Lab', amount_usd: 45000 }),
       ])
       mockListBudgetTierLimits.mockImplementation((allocationId: string) => {
         if (allocationId === 'alloc-xlab') {
@@ -836,17 +836,17 @@ describe('BudgetManagePage - API Integration Tests', () => {
         }),
       ]))
       expect(wrapper.html()).toContain('高级模型')
-      expect(wrapper.html()).toContain('$20,003.59')
+      expect(wrapper.html()).toContain('44%')
       expect(wrapper.html()).toContain('超高级模型')
-      expect(wrapper.html()).toContain('$3,000.00')
+      expect(wrapper.html()).toContain('7%')
       expect(wrapper.html()).toContain('低等级模型')
-      expect(wrapper.html()).toContain('$80.00')
+      expect(wrapper.html()).toContain('0%')
       expect(wrapper.html()).toContain('中等级模型')
     })
 
     it('过滤无法匹配当前等级定义的未知等级用量', async () => {
       mockGetBudgetList.mockResolvedValue([
-        makeBudgetItem({ scope_type: 'studio', scope_id: 'studio-xlab', allocation_id: 'alloc-xlab', label: 'X-Lab' }),
+        makeBudgetItem({ scope_type: 'studio', scope_id: 'studio-xlab', allocation_id: 'alloc-xlab', label: 'X-Lab', amount_usd: 45000 }),
       ])
       mockListBudgetTierLimits.mockImplementation((allocationId: string) => {
         if (allocationId === 'alloc-xlab') {
@@ -908,7 +908,7 @@ describe('BudgetManagePage - API Integration Tests', () => {
 
     it('accounting_cost_usd 为 0 但 reported_cost_usd 非 0 时仍展示 reported 用量', async () => {
       mockGetBudgetList.mockResolvedValue([
-        makeBudgetItem({ scope_type: 'studio', scope_id: 'studio-xlab', allocation_id: 'alloc-xlab', label: 'X-Lab' }),
+        makeBudgetItem({ scope_type: 'studio', scope_id: 'studio-xlab', allocation_id: 'alloc-xlab', label: 'X-Lab', amount_usd: 45000 }),
       ])
       mockListBudgetTierLimits.mockImplementation((allocationId: string) => {
         if (allocationId === 'alloc-xlab') {
@@ -952,7 +952,7 @@ describe('BudgetManagePage - API Integration Tests', () => {
         used_ratio: 20003.59 / 45000,
       })
       expect(wrapper.html()).toContain('高级模型')
-      expect(wrapper.html()).toContain('$20,003.59')
+      expect(wrapper.html()).toContain('44%')
       expect(wrapper.html()).not.toContain('高级模型 0%')
     })
 
@@ -1018,7 +1018,7 @@ describe('BudgetManagePage - API Integration Tests', () => {
         used_ratio: 0.25,
       })
       expect(wrapper.html()).toContain('Codex E2E High Tier')
-      expect(wrapper.html()).toContain('$250.00')
+      expect(wrapper.html()).toContain('25%')
       expect(wrapper.html()).not.toContain('Codex E2E High Tier 0%')
     })
 
@@ -1057,7 +1057,7 @@ describe('BudgetManagePage - API Integration Tests', () => {
         amount_usd: 120,
         used_ratio: 0,
       })
-      expect(wrapper.html()).toContain('高级 $0.00')
+      expect(wrapper.html()).toContain('高级 0%')
     })
 
     it('已停用的等级子预算显示为停用标签', async () => {

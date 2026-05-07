@@ -54,16 +54,16 @@ describe('BudgetManageOverview', () => {
     expect(wrapper.emitted('kpiSelect')?.[0]).toEqual(['scopes'])
   })
 
-  it('等级预算标签展示实际用量而不是子预算百分比', () => {
+  it('等级预算标签展示占当前行总预算的百分比，而不是子预算百分比', () => {
     const wrapper = mount(BudgetManageOverview, {
       props: {
-        items: [company, studio],
+        items: [company, { ...studio, amount_usd: 45000 }],
         role: 'admin',
         tierItems: [{ scope_id: 's1', tier_name: '高级模型', used_usd: 2056, used_ratio: 1.96 }],
       },
     })
 
-    expect(wrapper.text()).toContain('高级模型 $2,056.00')
+    expect(wrapper.text()).toContain('高级模型 5%')
     expect(wrapper.text()).not.toContain('高级模型 196%')
   })
 })

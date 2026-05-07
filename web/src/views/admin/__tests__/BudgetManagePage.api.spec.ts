@@ -52,7 +52,11 @@ vi.mock('@/components/budget/BudgetTierLimitsPanel.vue', () => ({
   default: { template: '<div class="mock-tier-limits">Tier Limits</div>' },
 }))
 vi.mock('@/components/budget/BudgetEditDrawer.vue', () => ({
-  default: { template: '<div class="mock-budget-drawer">Budget Drawer</div>' },
+  default: {
+    name: 'BudgetEditDrawer',
+    props: ['modelValue', 'initialUsages'],
+    template: '<div class="mock-budget-drawer">Budget Drawer</div>',
+  },
 }))
 vi.mock('@/components/budget/MemberQuotaDialog.vue', () => ({
   default: { template: '<div class="mock-member-quota">Member Quota</div>' },
@@ -1190,6 +1194,63 @@ describe('BudgetManagePage - API Integration Tests', () => {
         'utf-8'
       )
       expect(source).toContain('@saved="load"')
+    })
+
+    it('从预算总览打开配置时把已加载的等级用量传给抽屉兜底回显', async () => {
+      mockGetBudgetList.mockResolvedValue([
+        makeBudgetItem({ scope_type: 'studio', scope_id: 'studio-xlab', allocation_id: 'alloc-xlab', label: 'X-Lab' }),
+      ])
+      mockListBudgetTierLimits.mockImplementation((allocationId: string) => {
+        if (allocationId === 'alloc-xlab') {
+          return Promise.resolve([{
+            id: 'limit-high',
+            budget_allocation_id: 'alloc-xlab',
+            model_tier_id: 'tier-high',
+            model_tier_name: '高级模型',
+            period_type: 'monthly',
+            base_limit_usd: '200000.000000',
+            effective_limit_usd: '200000.000000',
+            enabled: true,
+          }])
+        }
+        return Promise.resolve([])
+      })
+      mockHttpGet.mockImplementation((url) => {
+        if (url === '/api/v1/budgets/tier-usage') {
+          return Promise.resolve({ data: { data: { items: [{
+            scope_type: 'studio',
+            scope_id: 'studio-xlab',
+            model_tier_id: 'tier-high',
+            reported_cost_usd: '24267.680000',
+            accounting_cost_usd: '0.000000',
+          }] } } })
+        }
+        return Promise.resolve({ data: {} })
+      })
+
+      const { wrapper } = await mountPage('admin')
+      await flushPromises()
+      ;(wrapper.vm as any).openBudgetDrawer({
+        scope_type: 'studio',
+        scope_id: 'studio-xlab',
+        allocation_id: 'alloc-xlab',
+        label: 'X-Lab',
+        amount_usd: 200000,
+        used_usd: 24267.68,
+        used_ratio: 0.12,
+        weekly_amount_usd: -1,
+        daily_amount_usd: -1,
+        period: 'monthly',
+        enabled: true,
+      })
+      await flushPromises()
+
+      const drawer = wrapper.findComponent({ name: 'BudgetEditDrawer' })
+      expect(drawer.props('initialUsages')).toEqual([expect.objectContaining({
+        model_tier_id: 'tier-high',
+        period_type: 'monthly',
+        used_usd: 24267.68,
+      })])
     })
   })
 

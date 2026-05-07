@@ -1192,9 +1192,15 @@ export async function getBudgetTierUsage(params: Record<string, string>): Promis
   const dataAsOf = data.data?.data_as_of
   const stale = data.data?.stale
   const items = data.data?.items ?? data.items ?? []
+  const usedAmount = (item: RawBudgetTierUsage) => {
+    if (item.used_usd !== undefined) return item.used_usd
+    const accounting = Number(item.accounting_cost_usd)
+    if (Number.isFinite(accounting) && accounting > 0) return item.accounting_cost_usd
+    return item.reported_cost_usd ?? item.accounting_cost_usd ?? 0
+  }
   return items.map(item => ({
     ...item,
-    used_usd: item.used_usd ?? item.accounting_cost_usd ?? item.reported_cost_usd ?? 0,
+    used_usd: usedAmount(item),
     data_as_of: item.data_as_of ?? dataAsOf ?? '',
     stale: item.stale ?? stale ?? false,
   }))

@@ -1660,6 +1660,7 @@
     :can-edit="budgetDrawerCanEdit"
     :can-edit-self="budgetDrawerCanEditSelf"
     :initial-allocation="budgetDrawerInitialAllocation"
+    :initial-usages="budgetDrawerInitialUsages"
     @navigate="handleBudgetNavigate"
     @saved="load"
   />
@@ -1785,7 +1786,7 @@ import BudgetTierLimitsPanel from '@/components/budget/BudgetTierLimitsPanel.vue
 import { budgetColorLevel, formatUSD } from '@/utils/format'
 import BudgetEditDrawer from '@/components/budget/BudgetEditDrawer.vue'
 import BudgetBatchAdjustWizard from '@/components/budget/BudgetBatchAdjustWizard.vue'
-import type { BudgetTierLimit, ModelTier } from '@/types/model-tier'
+import type { BudgetTierLimit, BudgetTierUsage, ModelTier } from '@/types/model-tier'
 import MemberQuotaDialog from '@/components/budget/MemberQuotaDialog.vue'
 import AdminPageHeader from '@/components/budget/AdminPageHeader.vue'
 import BudgetManageOverview from '@/components/budget/BudgetManageOverview.vue'
@@ -2726,6 +2727,22 @@ const budgetDrawerChildIds = ref<string[] | undefined>(undefined)
 const budgetDrawerCanEdit = ref(false)
 const budgetDrawerCanEditSelf = ref(false)
 const budgetDrawerInitialAllocation = ref<BudgetItem | undefined>(undefined)
+const budgetDrawerInitialUsages = computed<BudgetTierUsage[]>(() => {
+  const allocation = budgetDrawerInitialAllocation.value
+  const scopeType = allocation?.scope_type || (budgetDrawerScopeType.value === 'studio' ? 'studio' : '')
+  const scopeID = allocation?.scope_id || budgetDrawerScopeId.value
+  if (!scopeType || !scopeID) return []
+  return tierBudgetItems.value
+    .filter(item => item.scope_type === scopeType && item.scope_id === scopeID && item.model_tier_id)
+    .map(item => ({
+      allocation_id: allocation?.allocation_id || '',
+      model_tier_id: item.model_tier_id!,
+      period_type: 'monthly',
+      used_usd: item.used_usd,
+      data_as_of: '',
+      stale: false,
+    }))
+})
 
 function openBudgetDrawer(
   opts: { scope_type: string; scope_id: string; label?: string; parent_scope_id?: string } | BudgetItem,

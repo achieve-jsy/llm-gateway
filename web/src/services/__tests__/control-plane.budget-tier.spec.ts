@@ -46,4 +46,29 @@ describe('control-plane budget tier usage service', () => {
       stale: false,
     }])
   })
+
+  it('accounting 为 0 时使用 reported 成本回显已用额度', async () => {
+    vi.mocked(http.get).mockResolvedValueOnce({
+      data: {
+        data: {
+          items: [{
+            scope_type: 'studio',
+            scope_id: 'studio-1',
+            model_tier_id: 'tier-high',
+            period_type: 'monthly',
+            accounting_cost_usd: '0.000000',
+            reported_cost_usd: '24267.680000',
+          }],
+        },
+      },
+    })
+
+    const items = await getBudgetTierUsage({
+      scope_type: 'studio',
+      scope_id: 'studio-1',
+      period_type: 'monthly',
+    })
+
+    expect(items[0].used_usd).toBe('24267.680000')
+  })
 })

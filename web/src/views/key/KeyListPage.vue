@@ -624,11 +624,15 @@ const displayBaseUrl = computed(() => {
   const base = settingsStore.getBaseUrl()
   return base.endsWith('/v1') ? base : base.replace(/\/+$/, '') + '/v1'
 })
-function copyBaseUrl() {
-  copyToClipboard(displayBaseUrl.value)
-  urlCopied.value = true
-  if (urlCopyTimer) clearTimeout(urlCopyTimer)
-  urlCopyTimer = setTimeout(() => { urlCopied.value = false }, 2200)
+async function copyBaseUrl() {
+  try {
+    await copyToClipboard(displayBaseUrl.value)
+    urlCopied.value = true
+    if (urlCopyTimer) clearTimeout(urlCopyTimer)
+    urlCopyTimer = setTimeout(() => { urlCopied.value = false }, 2200)
+  } catch {
+    ElMessage.warning('复制失败，请手动复制')
+  }
 }
 const tabPrefsHydrated = ref(false)
 let skipTabRouteSync = false
@@ -889,7 +893,37 @@ async function loadKeys(page?: number) {
     loading.value = false
   }
 }
-async function copyFullKey(row: ApiKey) { try { const r = await revealKey(row.id); await copyToClipboard(r.key); ElMessage.success('已复制') } catch { ElMessage.warning('获取失败') } }
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+async function showManualKeyCopy(key: string) {
+  await ElMessageBox.alert(
+    `<p style="margin:0 0 8px;color:var(--el-text-color-secondary);">浏览器未允许自动写入剪贴板，请手动复制下方 Key。</p><pre style="background:var(--el-fill-color-light);padding:10px;border-radius:6px;font-size:13px;white-space:pre-wrap;word-break:break-all;user-select:text;">${escapeHtml(key)}</pre>`,
+    '手动复制 Key',
+    { dangerouslyUseHTMLString: true, confirmButtonText: '关闭' },
+  )
+}
+
+async function copyFullKey(row: ApiKey) {
+  try {
+    const r = await revealKey(row.id)
+    try {
+      await copyToClipboard(r.key)
+      ElMessage.success('已复制')
+    } catch {
+      ElMessage.warning('Safari 未允许自动复制，请手动复制')
+      await showManualKeyCopy(r.key)
+    }
+  } catch {
+    ElMessage.warning('获取失败')
+  }
+}
 function openUseKey(row: ApiKey) { usageKeyId.value = row.id; usageKeyHint.value = row.keyHint; showUsageModal.value = true }
 function openOpenCode(row: ApiKey) { openCodeKeyId.value = row.id; openCodeMaskedKey.value = row.maskedKey; showOpenCode.value = true }
 async function handleToggle(row: ApiKey, en: boolean) { try { if (en) await enableKey(row.id); else { await ElMessageBox.confirm('确定禁用「'+row.name+'」？','确认',{type:'warning'}); await disableKey(row.id) } ElMessage.success(en?'已启用':'已禁用'); await loadKeys() } catch { row.enabled = !en } }

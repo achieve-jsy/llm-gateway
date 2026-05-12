@@ -838,7 +838,7 @@ describe('BudgetManagePage - API Integration Tests', () => {
       expect(wrapper.html()).toContain('高级模型')
       expect(wrapper.html()).toContain('44%')
       expect(wrapper.html()).toContain('超高级模型')
-      expect(wrapper.html()).toContain('7%')
+      expect(wrapper.html()).toContain('25%')
       expect(wrapper.html()).toContain('低等级模型')
       expect(wrapper.html()).toContain('0%')
       expect(wrapper.html()).toContain('中等级模型')

@@ -54,7 +54,7 @@ describe('BudgetManageOverview', () => {
     expect(wrapper.emitted('kpiSelect')?.[0]).toEqual(['scopes'])
   })
 
-  it('等级预算标签展示占当前行总预算的百分比，而不是子预算百分比', () => {
+  it('等级预算标签展示子预算已用占可用额度的百分比', () => {
     const wrapper = mount(BudgetManageOverview, {
       props: {
         items: [company, { ...studio, amount_usd: 45000 }],
@@ -63,7 +63,6 @@ describe('BudgetManageOverview', () => {
       },
     })
 
-    expect(wrapper.text()).toContain('高级模型 5%')
-    expect(wrapper.text()).not.toContain('高级模型 196%')
+    expect(wrapper.text()).toContain('高级模型 196%')
   })
 })

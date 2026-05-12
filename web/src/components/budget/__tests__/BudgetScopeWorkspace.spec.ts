@@ -139,7 +139,7 @@ describe('BudgetScopeWorkspace — 部门成员列表', () => {
     expect(wrapper.get('[data-test="member-batch-percentage"]').attributes('disabled')).toBeUndefined()
   })
 
-  it('部门等级预算标签展示占当前行总预算的百分比，而不是子预算百分比', async () => {
+  it('部门等级预算标签展示子预算已用占可用额度的百分比', async () => {
     const wrapper = mount(BudgetScopeWorkspace, {
       props: {
         scope: { type: 'studio', id: 'studio-1', label: '技术研究工作室' },
@@ -151,7 +151,6 @@ describe('BudgetScopeWorkspace — 部门成员列表', () => {
     })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('超高级模型 9%')
-    expect(wrapper.text()).not.toContain('超高级模型 425%')
+    expect(wrapper.text()).toContain('超高级模型 425%')
   })
 })

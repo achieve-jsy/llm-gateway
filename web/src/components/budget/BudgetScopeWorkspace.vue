@@ -580,9 +580,6 @@ function tierTags(row: BudgetItem): TierBudgetTagItem[] {
     .filter(item => item.scope_id === row.scope_id && (!item.scope_type || item.scope_type === row.scope_type))
     .map((item, index) => {
       const ratio = Number(item.used_ratio ?? 0)
-      const used = Number(item.used_usd ?? 0)
-      const rowLimit = Number(row.amount_usd ?? 0)
-      const displayRatio = rowLimit > 0 && Number.isFinite(used) ? used / rowLimit : 0
       const state = item.state ?? (item.enabled === false ? 'disabled' : ratio >= 1 ? 'blocked' : ratio >= 0.8 ? 'warning' : 'normal')
       return {
         id: `${row.scope_type}-${row.scope_id}-${item.tier_name}-${index}`,
@@ -590,7 +587,7 @@ function tierTags(row: BudgetItem): TierBudgetTagItem[] {
         color: item.color,
         usageRatio: ratio,
         state,
-        label: state === 'disabled' ? `${item.tier_name} 已停用` : `${item.tier_name} ${Math.round(displayRatio * 100)}%`,
+        label: state === 'disabled' ? `${item.tier_name} 已停用` : `${item.tier_name} ${Math.round(ratio * 100)}%`,
       }
     })
 }

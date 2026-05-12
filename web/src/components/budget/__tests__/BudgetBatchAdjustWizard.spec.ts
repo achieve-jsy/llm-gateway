@@ -4,7 +4,7 @@ import { nextTick } from 'vue'
 import ElementPlus from 'element-plus'
 import BudgetBatchAdjustWizard from '../BudgetBatchAdjustWizard.vue'
 import type { BudgetItem } from '@/types/budget'
-import { previewTotalBudgetBatch } from '@/services/control-plane'
+import { previewBudgetTierBatch, previewTotalBudgetBatch } from '@/services/control-plane'
 
 vi.mock('@/services/control-plane', () => ({
   previewTotalBudgetBatch: vi.fn(),
@@ -96,5 +96,56 @@ describe('BudgetBatchAdjustWizard', () => {
     expect(previewTotalBudgetBatch).toHaveBeenCalledWith(expect.objectContaining({
       items: [{ item_id: 'member:user-b', scope_type: 'member', scope_id: 'user-b' }],
     }))
+  })
+
+  it('等级额度批量预览包含未创建独立额度的成员并回显名称', async () => {
+    vi.mocked(previewBudgetTierBatch).mockResolvedValueOnce({
+      preview_token: 'tier-preview',
+      expires_at: '2026-07-17T00:05:00Z',
+      data_as_of: '2026-07-17T00:00:00Z',
+      stale: false,
+      items: [{
+        item_id: 'member:user-b',
+        old_limit_usd: undefined,
+        new_limit_usd: '80.000000',
+        current_used_usd: '0.000000',
+        below_used: false,
+        zero_block: false,
+        stale: false,
+        status: 'valid',
+      }],
+    })
+    const member = {
+      scope_type: 'member', scope_id: 'user-b', label: '李四', amount_usd: 0,
+      daily_amount_usd: -1, weekly_amount_usd: -1, period: '', enabled: true, used_usd: 0, used_ratio: 0,
+    } as BudgetItem
+    const wrapper = mount(BudgetBatchAdjustWizard, {
+      props: {
+        modelValue: false,
+        items: [member],
+        tiers: [{ id: 'tier-high', name: '高级' } as any],
+        initialMode: 'tier',
+      },
+      global: { plugins: [ElementPlus] },
+    })
+
+    await wrapper.setProps({ modelValue: true })
+    await flushPromises()
+    ;(wrapper.vm as any).form.modelTierId = 'tier-high'
+    ;(wrapper.vm as any).form.value = '80'
+    ;(wrapper.vm as any).form.reason = '批量成员等级额度'
+    await (wrapper.vm as any).runPreview()
+    await flushPromises()
+
+    expect(previewBudgetTierBatch).toHaveBeenCalledWith(expect.objectContaining({
+      items: [expect.objectContaining({
+        item_id: 'member:user-b',
+        allocation_id: undefined,
+        scope_type: 'member',
+        scope_id: 'user-b',
+        model_tier_id: 'tier-high',
+      })],
+    }))
+    expect(wrapper.text()).toContain('李四')
   })
 })

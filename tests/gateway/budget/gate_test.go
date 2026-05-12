@@ -589,6 +589,39 @@ func TestGate_ReserveWithTierSpecificConstraints(t *testing.T) {
 	require.Equal(t, 2, tierCount)
 }
 
+func TestGate_BlocksWhenAnyDailyWeeklyOrMonthlyTierLimitIsReached(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	holder := budget.NewSnapshotHolder()
+	holder.Set(&configsync.BudgetTierSnapshot{
+		SchemaVersion: 1, Revision: 1, MasterEnabled: true, AccountingEnabled: true,
+		PositiveEnforcementEnabled: true, Timezone: "Asia/Shanghai", WeekStart: "monday",
+	})
+	now := time.Date(2026, 7, 11, 16, 0, 0, 0, time.UTC)
+	identity := &gwmodel.UserIdentity{BudgetChain: []gwmodel.BudgetScope{{
+		ScopeType: "member", ScopeID: "u-1", AmountUSD: -1, WeeklyAmountUSD: -1, DailyAmountUSD: -1,
+		TierLimits: []gwmodel.TierLimit{
+			{TierID: "tier-1", PeriodType: "daily", EffectiveLimitUSD: "5", Enabled: true, EffectiveAt: now.Add(-time.Hour)},
+			{TierID: "tier-1", PeriodType: "weekly", EffectiveLimitUSD: "5", Enabled: true, EffectiveAt: now.Add(-time.Hour)},
+			{TierID: "tier-1", PeriodType: "monthly", EffectiveLimitUSD: "5", Enabled: true, EffectiveAt: now.Add(-time.Hour)},
+		},
+	}}}
+	ctx := newBudgetContext(identity, budget.TierContext{TierID: "tier-1", AccountingEligible: true, EnforcementEligible: true})
+	for _, key := range []string{
+		budget.TierUsedKey("member", "u-1", "tier-1", "2026-07-12"),
+		budget.TierUsedKey("member", "u-1", "tier-1", "2026-W28"),
+		budget.TierUsedKey("member", "u-1", "tier-1", "2026-07"),
+	} {
+		require.NoError(t, rdb.Set(context.Background(), key, "5000000", 0).Err())
+	}
+
+	_, err := budget.NewGate(holder, budget.NewRedisStore(rdb), nil, func() time.Time { return now }).Check(ctx)
+	var exceeded *budget.ExceededError
+	require.ErrorAs(t, err, &exceeded)
+	require.Equal(t, "tier_budget_exceeded", exceeded.Code)
+	require.Len(t, exceeded.Additional, 2)
+}
+
 // TestGate_AccountUpdatesRedisCountersCorrectly verifies that Account writes
 // micro-USD amounts to both total and tier counters.
 func TestGate_AccountUpdatesRedisCountersCorrectly(t *testing.T) {

@@ -40,3 +40,13 @@ frontend:
 
 gateway:
   url: "http://127.0.0.1:8080"
+
+# 模型等级额度在开发环境也保持与生产一致的记账和拦截语义，避免页面显示额度但请求未被限制。
+budget_tier:
+  master_enabled: true
+  accounting_enabled: true
+  positive_enforcement_enabled: true
+  zero_block_enabled: true
+  shadow_enabled: false
+  v2_total_enforcement_enabled: false
+  legacy_total_write_enabled: true

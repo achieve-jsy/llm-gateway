@@ -221,6 +221,111 @@ func TestGate_MissingSnapshotUsesLegacyOnly(t *testing.T) {
 	require.False(t, mr.Exists("budget:v2:used:member:u-1"))
 }
 
+func TestGate_LegacyTotalBlocksEveryScopeAndPeriod(t *testing.T) {
+	now := time.Date(2026, 7, 11, 16, 0, 0, 0, time.UTC)
+	periods := []struct {
+		name       string
+		periodType budgetdomain.PeriodType
+		period     string
+		configure  func(*gwmodel.BudgetScope)
+	}{
+		{name: "monthly", periodType: budgetdomain.PeriodMonthly, period: "2026-07", configure: func(scope *gwmodel.BudgetScope) { scope.AmountUSD = 1 }},
+		{name: "weekly", periodType: budgetdomain.PeriodWeekly, period: "2026-W28", configure: func(scope *gwmodel.BudgetScope) { scope.WeeklyAmountUSD = 1 }},
+		{name: "daily", periodType: budgetdomain.PeriodDaily, period: "2026-07-12", configure: func(scope *gwmodel.BudgetScope) { scope.DailyAmountUSD = 1 }},
+	}
+	scopes := []struct {
+		scopeType string
+		scopeID   string
+	}{
+		{scopeType: "member", scopeID: "member-1"},
+		{scopeType: "dept_daily", scopeID: "dept-daily-1"},
+		{scopeType: "dept_service", scopeID: "dept-service-1"},
+		{scopeType: "studio", scopeID: "studio-1"},
+		{scopeType: "company", scopeID: "company-1"},
+	}
+
+	for _, scopeCase := range scopes {
+		for _, periodCase := range periods {
+			t.Run(scopeCase.scopeType+"/"+periodCase.name, func(t *testing.T) {
+				mr := miniredis.RunT(t)
+				rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+				t.Cleanup(func() { _ = rdb.Close() })
+				scope := gwmodel.BudgetScope{
+					ScopeType: scopeCase.scopeType, ScopeID: scopeCase.scopeID,
+					AmountUSD: -1, WeeklyAmountUSD: -1, DailyAmountUSD: -1,
+				}
+				periodCase.configure(&scope)
+				key := middleware.BudgetUsedKey(scope.ScopeType, scope.ScopeID, periodCase.period)
+				require.NoError(t, rdb.Set(context.Background(), key, "1", 0).Err())
+				legacy := budget.LegacyTotalFuncs{CheckFunc: func(ctx context.Context, plan *budget.AccountingPlan) (*budget.Constraint, error) {
+					return middleware.CheckLegacyBudget(ctx, rdb, plan)
+				}}
+
+				ctx := newBudgetContext(&gwmodel.UserIdentity{BudgetChain: []gwmodel.BudgetScope{scope}}, budget.TierContext{})
+				_, err := budget.NewGate(nil, budget.NewRedisStore(rdb), legacy, func() time.Time { return now }).Check(ctx)
+				var exceeded *budget.ExceededError
+				require.ErrorAs(t, err, &exceeded)
+				require.Equal(t, budget.DimensionTotal, exceeded.Primary.Dimension)
+				require.Equal(t, scopeCase.scopeType, exceeded.Primary.ScopeType)
+				require.Equal(t, periodCase.periodType, exceeded.Primary.PeriodType)
+			})
+		}
+	}
+}
+
+func TestLegacyAccountingWritesEveryScopeAndPeriodInBudgetChains(t *testing.T) {
+	now := time.Date(2026, 7, 11, 16, 0, 0, 0, time.UTC)
+	snapshot := &configsync.BudgetTierSnapshot{
+		SchemaVersion: 1, LegacyTotalWriteEnabled: true,
+		Timezone: "Asia/Shanghai", WeekStart: "monday",
+	}
+	tests := []struct {
+		name   string
+		scopes []gwmodel.BudgetScope
+	}{
+		{name: "personal-key", scopes: []gwmodel.BudgetScope{
+			{ScopeType: "member", ScopeID: "member-1"},
+			{ScopeType: "dept_daily", ScopeID: "dept-daily-1"},
+			{ScopeType: "studio", ScopeID: "studio-1"},
+			{ScopeType: "company", ScopeID: "company-1"},
+		}},
+		{name: "service-key", scopes: []gwmodel.BudgetScope{
+			{ScopeType: "dept_service", ScopeID: "dept-service-1"},
+			{ScopeType: "studio", ScopeID: "studio-1"},
+			{ScopeType: "company", ScopeID: "company-1"},
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mr := miniredis.RunT(t)
+			rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+			t.Cleanup(func() { _ = rdb.Close() })
+			for i := range tc.scopes {
+				tc.scopes[i].AmountUSD = 10
+				tc.scopes[i].WeeklyAmountUSD = 10
+				tc.scopes[i].DailyAmountUSD = 10
+			}
+			plan, err := budget.BuildAccountingPlan(
+				&gwmodel.UserIdentity{BudgetChain: tc.scopes}, budget.TierContext{}, now, snapshot,
+			)
+			require.NoError(t, err)
+			require.Len(t, plan.LegacyKeys, len(tc.scopes)*3)
+			require.NoError(t, middleware.BudgetAdd(
+				context.Background(), rdb, plan.LegacyKeys, plan.LegacyScopeArgs, 0.25,
+			))
+
+			for _, scope := range tc.scopes {
+				for _, period := range []string{"2026-07", "2026-W28", "2026-07-12"} {
+					value, err := rdb.Get(context.Background(), middleware.BudgetUsedKey(scope.ScopeType, scope.ScopeID, period)).Float64()
+					require.NoError(t, err)
+					require.InDelta(t, 0.25, value, 0.000001, "%s %s 应正确记账", scope.ScopeType, period)
+				}
+			}
+		})
+	}
+}
+
 func TestGate_CombinesLegacyAndTierBlockersBeforeSelectingPrimary(t *testing.T) {
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})

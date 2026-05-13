@@ -226,6 +226,34 @@ func TestProviderLoader_Build_MultipleProviders(t *testing.T) {
 	assert.False(t, router.Supports("unknown-model"), "Router 不应支持未注册模型")
 }
 
+func TestProviderLoader_Build_LoadsSnapshotPricingForCustomModel(t *testing.T) {
+	inputPrice := 1.5
+	outputPrice := 3.0
+	pl := loader.NewProviderLoader(newTestFactory(), nil)
+
+	router, err := pl.Build([]gatewaymodel.ProviderEntry{{
+		ID: "p1", Name: "custom-provider", Type: "fake",
+		Endpoint: "http://custom.local", Credentials: "sk-test", Enabled: true,
+		ModelsV2: []gatewaymodel.ModelEntry{{
+			Name: "custom-model-not-in-registry",
+			Pricing: &core.ModelPricing{
+				InputPerMtok:  &inputPrice,
+				OutputPerMtok: &outputPrice,
+			},
+		}},
+	}})
+	require.NoError(t, err)
+	require.NotNil(t, router)
+	require.True(t, router.Supports("custom-model-not-in-registry"))
+
+	pricing, ok := router.ResolvePricing("custom-model-not-in-registry", "custom-provider")
+	require.True(t, ok, "snapshot 定价应进入网关模型元数据")
+	require.NotNil(t, pricing.InputPerMtok)
+	require.NotNil(t, pricing.OutputPerMtok)
+	assert.InDelta(t, inputPrice, *pricing.InputPerMtok, 0.000001)
+	assert.InDelta(t, outputPrice, *pricing.OutputPerMtok, 0.000001)
+}
+
 func TestProviderLoader_Build_AtomicSwap(t *testing.T) {
 	// 测试目的：第二次 Build 成功后 Router 被原子替换，旧 Router 实例不受影响
 	pl := loader.NewProviderLoader(newTestFactory(), nil)

@@ -130,6 +130,7 @@ func snapshotModelPricing(m controlmodel.Model) core.ModelPricing {
 	}
 	pricing := controlpricing.ResolveModelPricing(
 		m.PriceMode, m.InputPrice, m.OutputPrice,
+		m.CacheReadPrice, m.CacheWritePrice,
 		inputPricePerMillion, outputPricePerMillion,
 		cacheReadPrice, cacheWritePrice,
 		tierThreshold, inputPriceAboveTier, outputPriceAboveTier,

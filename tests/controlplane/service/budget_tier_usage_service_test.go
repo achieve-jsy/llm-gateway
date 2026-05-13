@@ -204,7 +204,9 @@ func TestMyBudgetTiersComputesRestrictedUpstreamLimitingSource(t *testing.T) {
 		limits:    map[uuid.UUID][]model.BudgetTierLimit{memberAllocationID: {memberLimit}, studioAllocationID: {studioLimit}},
 		overrides: map[uuid.UUID][]model.BudgetTemporaryOverride{memberAllocationID: {override}},
 	}
-	svc := service.NewBudgetTierService(store, reader, newFakeModelTierRepo(), func() time.Time { return now }).
+	tiers := newFakeModelTierRepo()
+	tiers.tiers[tierID] = &model.ModelTier{ID: tierID, Name: "高级", Enabled: true, Color: "#7C3AED"}
+	svc := service.NewBudgetTierService(store, reader, tiers, func() time.Time { return now }).
 		WithTierUsageRepository(myBudgetUsage{amount: mustAmount(t, "20"), asOf: now.Add(-time.Minute)})
 	got, err := svc.GetMyBudgetTiers(context.Background(), rbac.Actor{UserID: "member-a"})
 	require.NoError(t, err)
@@ -221,6 +223,51 @@ func TestMyBudgetTiersComputesRestrictedUpstreamLimitingSource(t *testing.T) {
 	require.Nil(t, period.EffectiveLimitUSD)
 	require.Nil(t, period.UsedUSD)
 	require.Nil(t, period.RemainingUSD)
+}
+
+func TestMyBudgetTiersHidesArchivedModelTiers(t *testing.T) {
+	now := time.Date(2026, 7, 11, 8, 0, 0, 0, time.UTC)
+	allocationID, activeID, archivedID := uuid.New(), uuid.New(), uuid.New()
+	archivedAt := now.Add(-time.Hour)
+	tiers := newFakeModelTierRepo()
+	tiers.tiers[activeID] = &model.ModelTier{ID: activeID, Name: "标准", Enabled: true, SortOrder: 1}
+	tiers.tiers[archivedID] = &model.ModelTier{
+		ID: archivedID, Name: "已归档", Enabled: true, SortOrder: 2, ArchivedAt: &archivedAt,
+	}
+	store := &myBudgetStore{
+		limits: map[uuid.UUID][]model.BudgetTierLimit{allocationID: {
+			{
+				BudgetAllocationID: allocationID, ModelTierID: activeID,
+				PeriodType: budgetdomain.PeriodMonthly, LimitUSD: mustAmount(t, "100"),
+				Enabled: true, EffectiveAt: now.Add(-time.Hour),
+				ModelTier: model.ModelTier{ID: activeID, Name: "标准", Enabled: true},
+			},
+			{
+				BudgetAllocationID: allocationID, ModelTierID: archivedID,
+				PeriodType: budgetdomain.PeriodMonthly, LimitUSD: mustAmount(t, "50"),
+				Enabled: true, EffectiveAt: now.Add(-time.Hour),
+				ModelTier: model.ModelTier{
+					ID: archivedID, Name: "已归档", Enabled: true, ArchivedAt: &archivedAt,
+				},
+			},
+		}},
+		overrides: map[uuid.UUID][]model.BudgetTemporaryOverride{},
+	}
+	reader := myBudgetReader{scopes: []repository.MyBudgetScopeAllocation{{
+		Allocation: model.BudgetAllocation{
+			ID: allocationID, ScopeType: model.BudgetScopeMember, ScopeID: "member-a",
+			AmountUSD: 300, DailyAmountUSD: -1, WeeklyAmountUSD: -1, Enabled: true,
+		},
+		VisibleAmounts: true,
+	}}}
+	svc := service.NewBudgetTierService(store, reader, tiers, func() time.Time { return now }).
+		WithTierUsageRepository(myBudgetUsage{amount: mustAmount(t, "0")})
+
+	got, err := svc.GetMyBudgetTiers(context.Background(), rbac.Actor{UserID: "member-a"})
+	require.NoError(t, err)
+	require.Len(t, got.Data.TierLimits, 1)
+	require.Equal(t, activeID, got.Data.TierLimits[0].ModelTierID)
+	require.Equal(t, "标准", got.Data.TierLimits[0].ModelTierName)
 }
 
 func TestMyBudgetTiersIncludesEnabledDisabledAndUnsetPeriods(t *testing.T) {

@@ -106,6 +106,10 @@ func (s *BudgetTierService) GetMyBudgetTiers(ctx context.Context, actor rbac.Act
 		}
 		for index := range limits {
 			limit := &limits[index]
+			// 已归档等级不出现在「我的预算」；额度配置可保留供管理面审计，但不对终端用户展示。
+			if limit.ModelTier.ArchivedAt != nil {
+				continue
+			}
 			key := limit.ModelTierID.String() + ":" + string(limit.PeriodType)
 			if !limit.Enabled {
 				disabledTierPeriods[key] = true
@@ -205,13 +209,8 @@ func (s *BudgetTierService) GetMyBudgetTiers(ctx context.Context, actor rbac.Act
 		}
 		view := tierViews[*limiting.tierID]
 		if view == nil {
-			view = &MyBudgetTierView{ModelTierID: *limiting.tierID, ModelTierName: limiting.tierName, Enabled: true}
-			for _, periodType := range []budgetdomain.PeriodType{budgetdomain.PeriodDaily, budgetdomain.PeriodWeekly, budgetdomain.PeriodMonthly} {
-				period, _ := budgetperiod.Resolve(now, periodType, s.periodConfig)
-				view.Periods = append(view.Periods, MyBudgetTierPeriod{PeriodType: periodType, ResetAt: period.ResetAt, Status: "unset"})
-			}
-			tierViews[*limiting.tierID] = view
-			tierOrder = append(tierOrder, *limiting.tierID)
+			// 不在活跃等级列表（含已归档）：不合成展示项，避免归档等级回流到「我的预算」。
+			continue
 		}
 		periodView := MyBudgetTierPeriod{
 			PeriodType: limiting.period, Configured: true, ResetAt: limiting.resetAt,

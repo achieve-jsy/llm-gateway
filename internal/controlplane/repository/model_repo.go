@@ -117,7 +117,7 @@ func (r *ModelRepo) CountByProviderID(providerID uuid.UUID) (int64, error) {
 // ListAvailable 查询所有启用的模型及其渠道信息（供 gateway-api 内部接口消费）
 func (r *ModelRepo) ListAvailable() ([]model.Model, error) {
 	var models []model.Model
-	err := r.db.Preload("Provider").Preload("Provider.Definition").
+	err := r.db.Preload("Provider").Preload("Provider.Definition").Preload("Catalog").
 		Joins("JOIN providers ON providers.id = models.provider_id").
 		Where("models.enabled = ? AND providers.enabled = ?", true, true).
 		Find(&models).Error

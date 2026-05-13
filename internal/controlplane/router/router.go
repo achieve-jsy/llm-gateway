@@ -480,6 +480,8 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.POST("/models/batch-tags/query", modelTagHandler.BatchGetModelTags)
 		// CAT-1：catalog 一键创建（静态路径，必须在 :id 之前）
 		adminGroup.POST("/models/from-catalog", modelHandler.CreateModelFromCatalog)
+		adminGroup.POST("/models/batch", modelHandler.BatchCreateModels)
+		adminGroup.POST("/models/batch-from-catalog", modelHandler.BatchCreateModelsFromCatalog)
 		// CAT-2：批量绑定（静态路径，必须在 :id 之前）
 		adminGroup.POST("/models/batch-bind-catalog", modelHandler.BatchBindCatalog)
 		adminGroup.GET("/models/:id/status-logs", modelStatusLogHandler.GetModelStatusLogs)

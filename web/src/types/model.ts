@@ -107,3 +107,8 @@ export interface ModelPayload {
   video_max_duration_seconds?: number
   video_supported_actions?: string[]
 }
+
+/** 批量注册模型请求体（多渠道） */
+export interface BatchCreateModelsPayload extends Omit<ModelPayload, 'provider_id'> {
+  provider_ids: string[]
+}

@@ -66,10 +66,28 @@
         </div>
       </el-form-item>
 
-      <el-form-item label="归属渠道" prop="provider_id">
+      <el-form-item v-if="isEdit" label="归属渠道" prop="provider_id">
         <el-select
           v-model="formData.provider_id"
           placeholder="请选择渠道"
+          style="width: 100%"
+        >
+          <el-option
+            v-for="p in providers"
+            :key="p.id"
+            :label="p.name"
+            :value="p.id"
+          />
+        </el-select>
+      </el-form-item>
+      <el-form-item v-else label="归属渠道" prop="provider_ids">
+        <el-select
+          v-model="formData.provider_ids"
+          multiple
+          filterable
+          collapse-tags
+          collapse-tags-tooltip
+          placeholder="请选择一个或多个渠道"
           style="width: 100%"
         >
           <el-option
@@ -375,22 +393,23 @@ import { ref, computed, watch, nextTick } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  createModel,
   updateModel,
   checkModelNameUnique,
   getModelTags,
   getModelTagsForModel,
   setModelTags,
+  batchSetModelTags,
   searchCatalog,
-  createModelFromCatalog,
+  batchCreateModels,
+  batchCreateModelsFromCatalog,
   bindModelCatalog,
   unbindModelCatalog
 } from '@/services/control-plane'
 import { resolveErrorMessage } from '@/services/http'
-import type { Model, ModelPayload } from '@/types/model'
+import type { Model, ModelPayload, BatchCreateModelsPayload } from '@/types/model'
 import type { Provider } from '@/types/provider'
 import type { ModelTag } from '@/types/model-tag'
-import type { ModelCatalog } from '@/types/catalog'
+import type { BatchCreateModelsResult, ModelCatalog } from '@/types/catalog'
 
 const VIDEO_RESOLUTIONS = ['720p', '480p', '1080p', '4K'] as const
 const VIDEO_ASPECT_RATIOS = ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9', 'adaptive'] as const
@@ -405,6 +424,8 @@ interface FormState {
   name: string
   upstream_model_id: string
   provider_id: string
+  /** 注册态多选渠道；编辑态忽略 */
+  provider_ids: string[]
   model_type: 'chat' | 'embedding' | 'embedding_vl' | 'rerank' | 'rerank_vl' | 'video'
   description: string
   context_length: number
@@ -452,10 +473,30 @@ const applyingCatalog = ref(false)
 
 const isEdit = computed(() => !!props.model)
 const catalogLinked = computed(() => !!selectedCatalogId.value)
+/** 注册态取首个已选渠道，用于 Azure 提示 / catalog 联想过滤 */
+const primaryProviderId = computed(() => {
+  if (isEdit.value) return formData.value.provider_id
+  return formData.value.provider_ids[0] || ''
+})
+
 const selectedProviderDefinitionId = computed(() => {
-  const p = props.providers.find((pr) => pr.id === formData.value.provider_id)
+  const p = props.providers.find((pr) => pr.id === primaryProviderId.value)
   return (p as { definition_id?: string } | undefined)?.definition_id || ''
 })
+
+function providerName(id: string): string {
+  return props.providers.find((p) => p.id === id)?.name || id
+}
+
+function formatBatchCreateSummary(res: BatchCreateModelsResult): string {
+  const lines = [`注册完成：成功 ${res.success_count}，跳过 ${res.skip_count}，失败 ${res.fail_count}`]
+  for (const item of res.results) {
+    if (item.status === 'created') continue
+    const label = providerName(item.provider_id)
+    lines.push(`${label}：${item.status}${item.reason ? `（${item.reason}）` : ''}`)
+  }
+  return lines.join('\n')
+}
 
 function formatCtxK(n: number): number {
   return Math.round(n / 1000)
@@ -465,6 +506,7 @@ const formData = ref<FormState>({
   name: '',
   upstream_model_id: '',
   provider_id: '',
+  provider_ids: [],
   model_type: 'chat',
   description: '',
   context_length: 0,
@@ -492,7 +534,8 @@ watch(
         name: val.name,
         upstream_model_id: val.upstream_model_id || '',
         provider_id: val.provider_id,
-model_type: (val.model_type as FormState['model_type']) || 'chat',
+        provider_ids: val.provider_id ? [val.provider_id] : [],
+        model_type: (val.model_type as FormState['model_type']) || 'chat',
         description: val.description || '',
         context_length: val.context_length || 0,
         max_output_tokens: val.max_output_tokens || 0,
@@ -519,6 +562,7 @@ model_type: (val.model_type as FormState['model_type']) || 'chat',
         name: '',
         upstream_model_id: '',
         provider_id: '',
+        provider_ids: [],
         model_type: 'chat',
         description: '',
         context_length: 0,
@@ -559,15 +603,19 @@ async function loadAvailableTags() {
 let checkTimer: ReturnType<typeof setTimeout> | null = null
 let catalogSearchTimer: ReturnType<typeof setTimeout> | null = null
 
-/** 防抖检查模型名称唯一性 */
+/** 防抖检查模型名称唯一性（仅单渠道时乐观提示；多渠道由批量接口按条 skip） */
 function debouncedCheckName() {
   nameConflict.value = false
   if (checkTimer) clearTimeout(checkTimer)
   if (!formData.value.name || isEdit.value) return
+  if (formData.value.provider_ids.length !== 1) return
 
   checkTimer = setTimeout(async () => {
     try {
-      const available = await checkModelNameUnique(formData.value.name)
+      const available = await checkModelNameUnique(
+        formData.value.name,
+        formData.value.provider_ids[0]
+      )
       nameConflict.value = !available
       formRef.value?.validateField('name')
     } catch {
@@ -587,8 +635,8 @@ function debouncedSearchCatalog() {
   }
   catalogSearchTimer = setTimeout(async () => {
     try {
-      const provider = formData.value.provider_id
-        ? findProviderCatalogKey(formData.value.provider_id)
+      const provider = primaryProviderId.value
+        ? findProviderCatalogKey(primaryProviderId.value)
         : undefined
       const result = await searchCatalog({
         q,
@@ -798,9 +846,18 @@ function validateName(_rule: any, value: string, callback: (err?: Error) => void
   callback()
 }
 
+function validateProviderIds(_rule: unknown, value: string[], callback: (err?: Error) => void) {
+  if (!value || value.length === 0) {
+    callback(new Error('请至少选择一个归属渠道'))
+    return
+  }
+  callback()
+}
+
 const rules: FormRules = {
   name: [{ required: true, validator: validateName, trigger: 'blur' }],
   provider_id: [{ required: true, message: '请选择归属渠道', trigger: 'change' }],
+  provider_ids: [{ required: true, validator: validateProviderIds, trigger: 'change' }],
   model_type: [{ required: true, message: '请选择模型类型', trigger: 'change' }]
 }
 
@@ -813,52 +870,68 @@ async function handleSubmit() {
   submitting.value = true
   try {
     const isVideo = formData.value.model_type === 'video'
-    const payload: ModelPayload = {
+    const sharedFields = {
       name: formData.value.name,
-      provider_id: formData.value.provider_id,
       model_type: formData.value.model_type,
       upstream_model_id: formData.value.upstream_model_id || undefined,
       description: formData.value.description || undefined,
       context_length: isVideo ? undefined : (formData.value.context_length || undefined),
       max_output_tokens: isVideo ? undefined : (formData.value.max_output_tokens || undefined),
       // Video 本期不计费、无负载权重；保留默认 weight=1 满足后端字段，不提交 Token 价
-      price_mode: isVideo ? 'manual' : formData.value.price_mode,
+      price_mode: isVideo ? 'manual' as const : formData.value.price_mode,
       input_price: isVideo ? undefined : (formData.value.price_mode === 'manual' ? (formData.value.input_price || undefined) : undefined),
       output_price: isVideo ? undefined : (formData.value.price_mode === 'manual' ? (formData.value.output_price || undefined) : undefined),
       cache_read_price: isVideo ? undefined : (formData.value.price_mode === 'manual' ? formData.value.cache_read_price : null),
       cache_write_price: isVideo ? undefined : (formData.value.price_mode === 'manual' ? formData.value.cache_write_price : null),
       weight: isVideo ? 1 : formData.value.weight,
-    }
-    if (isVideo) {
-      payload.video_supported_resolutions = formData.value.video_supported_resolutions
-      payload.video_supported_aspect_ratios = formData.value.video_supported_aspect_ratios
-      payload.video_min_duration_seconds = formData.value.video_min_duration_seconds
-      payload.video_max_duration_seconds = formData.value.video_max_duration_seconds
-      payload.video_supported_actions = formData.value.video_supported_actions
+      ...(isVideo ? {
+        video_supported_resolutions: formData.value.video_supported_resolutions,
+        video_supported_aspect_ratios: formData.value.video_supported_aspect_ratios,
+        video_min_duration_seconds: formData.value.video_min_duration_seconds,
+        video_max_duration_seconds: formData.value.video_max_duration_seconds,
+        video_supported_actions: formData.value.video_supported_actions,
+      } : {}),
     }
 
-    let modelId: string
     if (isEdit.value && props.model) {
-      await updateModel(props.model.id, payload)
-      modelId = props.model.id
-    } else if (selectedCatalogId.value) {
-      // 走 catalog 注册路径：仅传 catalog_id/provider_id/name；
-      // 其他字段由后端从 catalog 自动展开（用户改过的字段后端会记录 override）。
-      const created = await createModelFromCatalog({
-        catalog_id: selectedCatalogId.value,
+      const payload: ModelPayload = {
+        ...sharedFields,
         provider_id: formData.value.provider_id,
-        name: formData.value.name
-      })
-      modelId = created.id
-    } else {
-      const created = await createModel(payload)
-      modelId = created.id
+      }
+      await updateModel(props.model.id, payload)
+      await setModelTags(props.model.id, selectedTagIds.value)
+      ElMessage.success('更新成功')
+      emit('saved')
+      return
     }
 
-    // 保存标签关联
-    await setModelTags(modelId, selectedTagIds.value)
+    let res: BatchCreateModelsResult
+    if (selectedCatalogId.value) {
+      res = await batchCreateModelsFromCatalog({
+        catalog_id: selectedCatalogId.value,
+        provider_ids: formData.value.provider_ids,
+        name: formData.value.name,
+      })
+    } else {
+      const payload: BatchCreateModelsPayload = {
+        ...sharedFields,
+        provider_ids: formData.value.provider_ids,
+      }
+      res = await batchCreateModels(payload)
+    }
 
-    ElMessage.success(isEdit.value ? '更新成功' : '注册成功')
+    const createdIds = res.results
+      .filter((r) => r.status === 'created' && r.model_id)
+      .map((r) => r.model_id!)
+    if (createdIds.length > 0 && selectedTagIds.value.length > 0) {
+      await batchSetModelTags(createdIds, selectedTagIds.value)
+    }
+
+    if (res.fail_count === 0 && res.skip_count === 0) {
+      ElMessage.success(res.success_count > 1 ? `已注册到 ${res.success_count} 个渠道` : '注册成功')
+    } else {
+      ElMessage.warning(formatBatchCreateSummary(res))
+    }
     emit('saved')
   } catch (e: unknown) {
     const friendly = resolveErrorMessage(e)

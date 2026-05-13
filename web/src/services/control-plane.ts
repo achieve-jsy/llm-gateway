@@ -1,6 +1,6 @@
 import http from './http'
 import type { Provider, ProviderPayload, ProviderDefinition, QuickOnboardPayload, QuickOnboardPreview, QuickOnboardCreateResult } from '@/types/provider'
-import type { Model, ModelPayload } from '@/types/model'
+import type { Model, ModelPayload, BatchCreateModelsPayload } from '@/types/model'
 import type { ModelTag, ModelTagPayload } from '@/types/model-tag'
 import type { SyncResult, ConfirmSyncPayload, ConfirmSyncResult, CheckModelsPayload, CheckModelsResult } from '@/types/sync'
 import type {
@@ -9,6 +9,8 @@ import type {
   SyncTriggerResponse,
   ApplyDiffResponse,
   CreateFromCatalogPayload,
+  BatchCreateFromCatalogPayload,
+  BatchCreateModelsResult,
   ResettableOverrideField,
   AutoBindResult,
   BindCatalogPayload,
@@ -343,6 +345,12 @@ export async function createModel(payload: ModelPayload): Promise<Model> {
   return response.data.data
 }
 
+/** 批量注册模型到多个渠道 */
+export async function batchCreateModels(payload: BatchCreateModelsPayload): Promise<BatchCreateModelsResult> {
+  const response = await http.post<ApiResponse<BatchCreateModelsResult>>('/api/v1/models/batch', payload)
+  return response.data.data
+}
+
 /** 更新模型 */
 export async function updateModel(id: string, payload: ModelPayload): Promise<Model> {
   const response = await http.put<ApiResponse<Model>>(`/api/v1/models/${id}`, payload)
@@ -369,15 +377,17 @@ export async function batchUpdateModelStatus(modelIds: string[], enabled: boolea
 /**
  * 检查模型名称是否可用（不与现有模型冲突）。
  *
- * 走独立的 `GET /api/v1/models/check-name?name=…` 端点（S0-3 修复），返回
+ * 走独立的 `GET /api/v1/models/check-name?name=…&provider_id=…` 端点（S0-3 修复），返回
  * `{ data: { available: boolean } }`。
  *
  * 注意：仅做乐观查重提示，最终唯一性由 CreateModel 的事务校验兜底。
  */
-export async function checkModelNameUnique(name: string): Promise<boolean> {
+export async function checkModelNameUnique(name: string, providerId?: string): Promise<boolean> {
+  const params: Record<string, string> = { name }
+  if (providerId) params.provider_id = providerId
   const response = await http.get<ApiResponse<{ available: boolean }>>(
     '/api/v1/models/check-name',
-    { params: { name } }
+    { params }
   )
   return response.data.data.available
 }
@@ -549,6 +559,17 @@ export async function autoBindCatalog(): Promise<AutoBindResult> {
 /** 基于 catalog 项直接注册一个本地 Model */
 export async function createModelFromCatalog(payload: CreateFromCatalogPayload): Promise<Model> {
   const response = await http.post<ApiResponse<Model>>('/api/v1/models/from-catalog', payload)
+  return response.data.data
+}
+
+/** 基于 catalog 项批量注册到多个渠道 */
+export async function batchCreateModelsFromCatalog(
+  payload: BatchCreateFromCatalogPayload
+): Promise<BatchCreateModelsResult> {
+  const response = await http.post<ApiResponse<BatchCreateModelsResult>>(
+    '/api/v1/models/batch-from-catalog',
+    payload
+  )
   return response.data.data
 }
 

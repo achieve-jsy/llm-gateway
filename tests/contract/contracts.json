@@ -568,5 +568,53 @@
         "response_fields": ["source_summary", "effective_total", "budget_chain", "tier_limits", "data_updated_at", "stale"]
       }
     ]
+  },
+  "batch_register_models": {
+    "base_prefix": "/api/v1",
+    "auth": "admin Bearer <jwt>",
+    "purpose": "注册模型时多选渠道，将同一模型配置批量挂到多个渠道；部分成功并返回逐渠道结果。",
+    "routes": {
+      "POST /models/batch": {
+        "handler": "ModelHandler.BatchCreateModels",
+        "success_status": 200,
+        "error_statuses": {
+          "400": ["bad_request"],
+          "401": ["unauthorized"],
+          "500": ["internal_error"]
+        },
+        "request_body_fields": [
+          "name", "provider_ids", "model_type",
+          "upstream_model_id", "description",
+          "context_length", "max_output_tokens",
+          "input_price", "output_price", "cache_read_price", "cache_write_price",
+          "price_mode", "weight",
+          "video_supported_resolutions", "video_supported_aspect_ratios",
+          "video_min_duration_seconds", "video_max_duration_seconds", "video_supported_actions"
+        ],
+        "required_fields": ["name", "provider_ids", "model_type"],
+        "response_fields": ["success_count", "skip_count", "fail_count", "results"]
+      },
+      "POST /models/batch-from-catalog": {
+        "handler": "ModelHandler.BatchCreateModelsFromCatalog",
+        "success_status": 200,
+        "error_statuses": {
+          "400": ["bad_request"],
+          "401": ["unauthorized"],
+          "404": ["catalog_not_found"],
+          "500": ["internal_error"]
+        },
+        "request_body_fields": ["catalog_id", "provider_ids", "name"],
+        "required_fields": ["catalog_id", "provider_ids", "name"],
+        "response_fields": ["success_count", "skip_count", "fail_count", "results"]
+      }
+    },
+    "result_item_fields": ["provider_id", "status", "model_id", "reason"],
+    "status_enum": ["created", "skipped", "failed"],
+    "semantics": {
+      "partial_success": "单渠道失败/已存在不阻塞其余渠道；HTTP 200 返回汇总（除非整请求非法或 catalog 不存在）。",
+      "skipped": "同名模型在该渠道已存在 → status=skipped, reason=model already exists",
+      "provider_ids": "必填数组，至少 1 个 UUID；服务端去重保序",
+      "from_catalog": "catalog 不存在时整请求 404 catalog_not_found，不创建任何模型"
+    }
   }
 }

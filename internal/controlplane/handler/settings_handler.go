@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -59,6 +60,15 @@ func (h *SettingsHandler) UpdateSettings(c *gin.Context) {
 		return
 	}
 	if err := h.svc.UpdateSettings(c.Request.Context(), &input); err != nil {
+		if errors.Is(err, service.ErrBudgetShadowAndPositive) || errors.Is(err, service.ErrBudgetMasterDisabled) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": gin.H{
+					"message": err.Error(),
+					"code":    CodeBadRequest,
+				},
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{
 				"message": "更新系统设置失败",

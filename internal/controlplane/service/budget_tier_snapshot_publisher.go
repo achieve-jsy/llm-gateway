@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -44,11 +45,20 @@ type BudgetTierSnapshotSettings struct {
 	WeekStart                  string
 }
 
+// BudgetEnforcementFlags 可由系统设置热更新的拦截开关（不含 master/legacy）。
+type BudgetEnforcementFlags struct {
+	PositiveEnforcementEnabled bool
+	ZeroBlockEnabled           bool
+	ShadowEnabled              bool
+	V2TotalEnforcementEnabled  bool
+}
+
 type BudgetTierSnapshotPublisher struct {
 	source   BudgetTierSnapshotSource
 	rdb      *redis.Client
 	events   SnapshotEventPublisher
 	settings BudgetTierSnapshotSettings
+	mu       sync.RWMutex
 	clock    func() time.Time
 	dirty    atomic.Bool
 }
@@ -120,25 +130,51 @@ func (p *BudgetTierSnapshotPublisher) Publish(ctx context.Context) (snapshot *co
 	return snapshot, nil
 }
 
-func (p *BudgetTierSnapshotPublisher) buildSnapshot(ctx context.Context) (*configsync.BudgetTierSnapshot, error) {
-	if _, err := time.LoadLocation(p.settings.Timezone); err != nil {
-		return nil, fmt.Errorf("invalid budget timezone %q: %w", p.settings.Timezone, err)
+// UpdateEnforcement 热更新拦截开关；开启正向/影子时自动打开 accounting。
+func (p *BudgetTierSnapshotPublisher) UpdateEnforcement(flags BudgetEnforcementFlags) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.settings.PositiveEnforcementEnabled = flags.PositiveEnforcementEnabled
+	p.settings.ZeroBlockEnabled = flags.ZeroBlockEnabled
+	p.settings.ShadowEnabled = flags.ShadowEnabled
+	p.settings.V2TotalEnforcementEnabled = flags.V2TotalEnforcementEnabled
+	if flags.PositiveEnforcementEnabled || flags.ShadowEnabled {
+		p.settings.AccountingEnabled = true
 	}
-	if p.settings.WeekStart != budgetperiod.CanonicalWeekStart {
-		return nil, fmt.Errorf("invalid budget week_start %q: only %q is supported", p.settings.WeekStart, budgetperiod.CanonicalWeekStart)
+}
+
+func (p *BudgetTierSnapshotPublisher) CurrentSettings() BudgetTierSnapshotSettings {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.settings
+}
+
+func (p *BudgetTierSnapshotPublisher) buildSnapshot(ctx context.Context) (*configsync.BudgetTierSnapshot, error) {
+	p.mu.RLock()
+	settings := p.settings
+	p.mu.RUnlock()
+	if _, err := time.LoadLocation(settings.Timezone); err != nil {
+		return nil, fmt.Errorf("invalid budget timezone %q: %w", settings.Timezone, err)
+	}
+	if settings.WeekStart != budgetperiod.CanonicalWeekStart {
+		return nil, fmt.Errorf("invalid budget week_start %q: only %q is supported", settings.WeekStart, budgetperiod.CanonicalWeekStart)
 	}
 	rows, err := p.source.ListBudgetTierGroupSnapshots(ctx)
 	if err != nil {
 		return nil, err
 	}
 	snapshot := &configsync.BudgetTierSnapshot{
-		SchemaVersion: 1,
-		MasterEnabled: p.settings.MasterEnabled, AccountingEnabled: p.settings.AccountingEnabled,
-		PositiveEnforcementEnabled: p.settings.PositiveEnforcementEnabled, ZeroBlockEnabled: p.settings.ZeroBlockEnabled,
-		ShadowEnabled: p.settings.ShadowEnabled, V2TotalEnforcementEnabled: p.settings.V2TotalEnforcementEnabled,
-		LegacyTotalWriteEnabled: p.settings.LegacyTotalWriteEnabled,
-		Timezone:                p.settings.Timezone, WeekStart: p.settings.WeekStart,
-		GroupTiers: make(map[string]configsync.BudgetTierGroupSnapshot, len(rows)),
+		SchemaVersion:              1,
+		MasterEnabled:              settings.MasterEnabled,
+		AccountingEnabled:          settings.AccountingEnabled,
+		PositiveEnforcementEnabled: settings.PositiveEnforcementEnabled,
+		ZeroBlockEnabled:           settings.ZeroBlockEnabled,
+		ShadowEnabled:              settings.ShadowEnabled,
+		V2TotalEnforcementEnabled:  settings.V2TotalEnforcementEnabled,
+		LegacyTotalWriteEnabled:    settings.LegacyTotalWriteEnabled,
+		Timezone:                   settings.Timezone,
+		WeekStart:                  settings.WeekStart,
+		GroupTiers:                 make(map[string]configsync.BudgetTierGroupSnapshot, len(rows)),
 	}
 	for _, row := range rows {
 		snapshot.GroupTiers[row.GroupName] = configsync.BudgetTierGroupSnapshot{TierID: row.TierID, TierName: row.TierName, Enabled: row.TierEnabled}

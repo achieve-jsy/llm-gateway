@@ -474,6 +474,57 @@
         </div>
       </div>
 
+      <!-- 预算拦截 -->
+      <div v-show="activeTab === 'budget'" class="settings-card">
+        <div class="card-header">
+          <div class="card-title-row">
+            <span class="card-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            </span>
+            <h3 class="card-title">预算拦截</h3>
+          </div>
+          <p class="card-desc">热切换网关预算拦截策略，保存后经 snapshot 秒级生效，无需重启服务</p>
+        </div>
+
+        <div class="card-body">
+          <div class="form-group">
+            <div class="inline-toggle">
+              <label class="form-label">正向拦截</label>
+              <el-switch
+                v-model="form.budget_positive_enforcement_enabled"
+                :disabled="form.budget_shadow_enabled"
+                @change="onPositiveEnforcementChange"
+              />
+            </div>
+            <p class="form-hint">超额时返回 402，拒绝继续调用</p>
+          </div>
+          <div class="form-group">
+            <div class="inline-toggle">
+              <label class="form-label">零额度拦截</label>
+              <el-switch v-model="form.budget_zero_block_enabled" />
+            </div>
+            <p class="form-hint">档位额度为 $0 时直接拒绝</p>
+          </div>
+          <div class="form-group">
+            <div class="inline-toggle">
+              <label class="form-label">影子模式</label>
+              <el-switch
+                v-model="form.budget_shadow_enabled"
+                :disabled="form.budget_positive_enforcement_enabled"
+              />
+            </div>
+            <p class="form-hint">只记录 would-block，不真正拦截；与正向拦截互斥</p>
+          </div>
+          <div class="form-group">
+            <div class="inline-toggle">
+              <label class="form-label">v2 总额拦截</label>
+              <el-switch v-model="form.budget_v2_total_enforcement_enabled" />
+            </div>
+            <p class="form-hint">总额超限走 v2 Redis 拦截链路</p>
+          </div>
+        </div>
+      </div>
+
       <!-- 数据管理 -->
       <div v-show="activeTab === 'data'" class="settings-card">
         <div class="card-header">
@@ -537,7 +588,7 @@
 
 <script setup lang="ts">
 import { reactive, ref, onMounted, computed } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useSettingsStore } from '@/stores/settings'
 import { exportSettings, importSettings } from '@/services/control-plane'
 import { QUOTA_DEFAULTS } from '@/api/quota'
@@ -563,6 +614,7 @@ const tabs = [
   { key: 'email', label: '邮件通知', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="22 6 12 13 2 6"/></svg>' },
   { key: 'failover', label: '故障默认配置', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>' },
   { key: 'pricing', label: '价格汇率', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>' },
+  { key: 'budget', label: '预算拦截', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>' },
   { key: 'data', label: '数据管理', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>' },
 ]
 
@@ -600,6 +652,10 @@ const form = reactive<SystemSettings>({
   default_same_model_retries: 1,
   default_failover_cooldown_seconds: 60,
   pricing_usd_to_cny_rate: 7.2,
+  budget_positive_enforcement_enabled: false,
+  budget_zero_block_enabled: false,
+  budget_shadow_enabled: false,
+  budget_v2_total_enforcement_enabled: false,
 })
 
 const initialForm = reactive<SystemSettings>({
@@ -636,6 +692,10 @@ const initialForm = reactive<SystemSettings>({
 	default_same_model_retries: 1,
 	default_failover_cooldown_seconds: 60,
 	pricing_usd_to_cny_rate: 7.2,
+  budget_positive_enforcement_enabled: false,
+  budget_zero_block_enabled: false,
+  budget_shadow_enabled: false,
+  budget_v2_total_enforcement_enabled: false,
 })
 
 const previewCny = computed(() => (form.pricing_usd_to_cny_rate || 0).toFixed(4).replace(/0+$/, '').replace(/\.$/, ''))
@@ -683,7 +743,11 @@ const formChanged = computed(() => {
     form.default_max_switches !== initialForm.default_max_switches ||
     form.default_same_model_retries !== initialForm.default_same_model_retries ||
     form.default_failover_cooldown_seconds !== initialForm.default_failover_cooldown_seconds ||
-    form.pricing_usd_to_cny_rate !== initialForm.pricing_usd_to_cny_rate
+    form.pricing_usd_to_cny_rate !== initialForm.pricing_usd_to_cny_rate ||
+    form.budget_positive_enforcement_enabled !== initialForm.budget_positive_enforcement_enabled ||
+    form.budget_zero_block_enabled !== initialForm.budget_zero_block_enabled ||
+    form.budget_shadow_enabled !== initialForm.budget_shadow_enabled ||
+    form.budget_v2_total_enforcement_enabled !== initialForm.budget_v2_total_enforcement_enabled
   )
 })
 
@@ -719,6 +783,10 @@ function setFormValues(source: typeof form) {
   form.default_same_model_retries = source.default_same_model_retries
   form.default_failover_cooldown_seconds = source.default_failover_cooldown_seconds
   form.pricing_usd_to_cny_rate = source.pricing_usd_to_cny_rate
+  form.budget_positive_enforcement_enabled = source.budget_positive_enforcement_enabled
+  form.budget_zero_block_enabled = source.budget_zero_block_enabled
+  form.budget_shadow_enabled = source.budget_shadow_enabled
+  form.budget_v2_total_enforcement_enabled = source.budget_v2_total_enforcement_enabled
 }
 
 function captureInitial() {
@@ -753,6 +821,24 @@ function captureInitial() {
   initialForm.default_same_model_retries = form.default_same_model_retries
   initialForm.default_failover_cooldown_seconds = form.default_failover_cooldown_seconds
   initialForm.pricing_usd_to_cny_rate = form.pricing_usd_to_cny_rate
+  initialForm.budget_positive_enforcement_enabled = form.budget_positive_enforcement_enabled
+  initialForm.budget_zero_block_enabled = form.budget_zero_block_enabled
+  initialForm.budget_shadow_enabled = form.budget_shadow_enabled
+  initialForm.budget_v2_total_enforcement_enabled = form.budget_v2_total_enforcement_enabled
+}
+
+async function onPositiveEnforcementChange(enabled: boolean) {
+  if (!enabled) return
+  try {
+    await ElMessageBox.confirm(
+      '开启后，超预算请求将立即被拒绝（402）。确认开启正向拦截？',
+      '确认开启正向拦截',
+      { type: 'warning', confirmButtonText: '开启', cancelButtonText: '取消' },
+    )
+    form.budget_shadow_enabled = false
+  } catch {
+    form.budget_positive_enforcement_enabled = false
+  }
 }
 
 onMounted(async () => {
@@ -788,6 +874,10 @@ onMounted(async () => {
     form.default_same_model_retries = s.default_same_model_retries ?? 1
     form.default_failover_cooldown_seconds = s.default_failover_cooldown_seconds ?? 60
     form.pricing_usd_to_cny_rate = s.pricing_usd_to_cny_rate ?? 7.2
+    form.budget_positive_enforcement_enabled = s.budget_positive_enforcement_enabled ?? false
+    form.budget_zero_block_enabled = s.budget_zero_block_enabled ?? false
+    form.budget_shadow_enabled = s.budget_shadow_enabled ?? false
+    form.budget_v2_total_enforcement_enabled = s.budget_v2_total_enforcement_enabled ?? false
   }
   captureInitial()
 })
@@ -825,6 +915,9 @@ function validateForm(): string | null {
       return '启用邮件通知时请填写发件人邮箱'
     }
   }
+  if (form.budget_shadow_enabled && form.budget_positive_enforcement_enabled) {
+    return '影子模式与正向拦截不能同时开启'
+  }
   return null
 }
 
@@ -836,7 +929,7 @@ async function handleSave() {
   }
   saving.value = true
   try {
-    const ok = await settingsStore.saveSettings({
+    const result = await settingsStore.saveSettings({
       site_name: form.site_name.trim(),
       site_logo: form.site_logo,
       site_subtitle: form.site_subtitle.trim(),
@@ -868,12 +961,16 @@ async function handleSave() {
       default_same_model_retries: form.default_same_model_retries,
       default_failover_cooldown_seconds: form.default_failover_cooldown_seconds,
       pricing_usd_to_cny_rate: form.pricing_usd_to_cny_rate,
+      budget_positive_enforcement_enabled: form.budget_positive_enforcement_enabled,
+      budget_zero_block_enabled: form.budget_zero_block_enabled,
+      budget_shadow_enabled: form.budget_shadow_enabled,
+      budget_v2_total_enforcement_enabled: form.budget_v2_total_enforcement_enabled,
     })
-    if (ok) {
+    if (result.ok) {
       ElMessage.success('设置已保存')
       captureInitial()
     } else {
-      ElMessage.error('保存失败，请重试')
+      ElMessage.error(result.message || '保存失败，请重试')
     }
   } catch {
     ElMessage.error('保存失败，请重试')

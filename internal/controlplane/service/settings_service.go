@@ -98,7 +98,9 @@ type SettingsRepository interface {
 }
 
 type SettingsService struct {
-	repo SettingsRepository
+	repo                SettingsRepository
+	budgetMasterEnabled bool
+	budgetPublisher     budgetEnforcementPublisher
 }
 
 func NewSettingsService(repo SettingsRepository) *SettingsService {
@@ -128,6 +130,8 @@ func allSettingKeys() []string {
 		SettingKeyKeyActivityBootstrapDone, SettingKeyKeyActivityScanCursor,
 		SettingKeyEmailEnabled, SettingKeySMTPHost, SettingKeySMTPPort,
 		SettingKeySMTPFrom, SettingKeySMTPPassword, SettingKeySMTPTLSSkipVerify,
+		SettingKeyBudgetPositiveEnforcement, SettingKeyBudgetZeroBlock,
+		SettingKeyBudgetShadow, SettingKeyBudgetV2TotalEnforcement,
 	}
 }
 
@@ -216,6 +220,10 @@ func (s *SettingsService) GetSystemSettings(ctx context.Context) (*model.SystemS
 		SMTPFrom:          valOrDefault(vals, SettingKeySMTPFrom, ""),
 		SMTPPassword:      maskSecret(valOrDefault(vals, SettingKeySMTPPassword, "")),
 		SMTPTLSSkipVerify: boolOrDefault(vals, SettingKeySMTPTLSSkipVerify, false),
+		BudgetPositiveEnforcementEnabled: boolOrDefault(vals, SettingKeyBudgetPositiveEnforcement, false),
+		BudgetZeroBlockEnabled:           boolOrDefault(vals, SettingKeyBudgetZeroBlock, false),
+		BudgetShadowEnabled:              boolOrDefault(vals, SettingKeyBudgetShadow, false),
+		BudgetV2TotalEnforcementEnabled:  boolOrDefault(vals, SettingKeyBudgetV2TotalEnforcement, false),
 	}, nil
 }
 
@@ -326,7 +334,17 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, settings *model.Sy
 		updates[SettingKeySMTPPassword] = settings.SMTPPassword
 	}
 	updates[SettingKeySMTPTLSSkipVerify] = fmt.Sprintf("%t", settings.SMTPTLSSkipVerify)
-	return s.repo.SetMultiple(updates)
+	if err := validateBudgetEnforcement(settings, s.budgetMasterEnabled); err != nil {
+		return err
+	}
+	updates[SettingKeyBudgetPositiveEnforcement] = fmt.Sprintf("%t", settings.BudgetPositiveEnforcementEnabled)
+	updates[SettingKeyBudgetZeroBlock] = fmt.Sprintf("%t", settings.BudgetZeroBlockEnabled)
+	updates[SettingKeyBudgetShadow] = fmt.Sprintf("%t", settings.BudgetShadowEnabled)
+	updates[SettingKeyBudgetV2TotalEnforcement] = fmt.Sprintf("%t", settings.BudgetV2TotalEnforcementEnabled)
+	if err := s.repo.SetMultiple(updates); err != nil {
+		return err
+	}
+	return s.publishBudgetEnforcement(ctx, settings)
 }
 
 // GetSMTPPassword 返回原始 SMTP 密码（未脱敏），供测试邮件等内部场景使用。
@@ -469,7 +487,18 @@ func (s *SettingsService) ExportAll(ctx context.Context) (map[string]string, err
 }
 
 func (s *SettingsService) ImportSettings(ctx context.Context, settings map[string]string) error {
-	return s.repo.SetMultiple(settings)
+	if err := s.repo.SetMultiple(settings); err != nil {
+		return err
+	}
+	// 导入若含预算拦截 key，同步到 snapshot；否则保持现状。
+	current, err := s.GetSystemSettings(ctx)
+	if err != nil {
+		return err
+	}
+	if err := validateBudgetEnforcement(current, s.budgetMasterEnabled); err != nil {
+		return err
+	}
+	return s.publishBudgetEnforcement(ctx, current)
 }
 
 // GetKeyActivityConfig 从 system_configs 解析 Key 活动提醒的全部配置

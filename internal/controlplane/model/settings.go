@@ -54,6 +54,11 @@ type SystemSettings struct {
 	SMTPFrom          string `json:"smtp_from"`
 	SMTPPassword      string `json:"smtp_password"`
 	SMTPTLSSkipVerify bool   `json:"smtp_tls_skip_verify"`
+	// 预算拦截（热切换，写入 system_configs 后重发 snapshot）
+	BudgetPositiveEnforcementEnabled bool `json:"budget_positive_enforcement_enabled"`
+	BudgetZeroBlockEnabled           bool `json:"budget_zero_block_enabled"`
+	BudgetShadowEnabled              bool `json:"budget_shadow_enabled"`
+	BudgetV2TotalEnforcementEnabled  bool `json:"budget_v2_total_enforcement_enabled"`
 }
 
 type PublicSettings struct {

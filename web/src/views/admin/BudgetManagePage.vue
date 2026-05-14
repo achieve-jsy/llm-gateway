@@ -2628,9 +2628,12 @@ async function load() {
   loading.value = true
   pageError.value = ''
   try {
+    // 成员下钻时带上 dept_id，便于后端填充 parent_scope_id（所属部门）
     const budgetScopeID = drillScopeType.value === 'studio' || drillScopeType.value === 'dept'
       ? drillScopeId.value
-      : undefined
+      : drillScopeType.value === 'member' && typeof route.query.dept_id === 'string' && route.query.dept_id
+        ? String(route.query.dept_id)
+        : undefined
     const [budgetResult, contextResult, tierResult, modelTierResult] = await Promise.allSettled([
       getBudgetList(undefined, budgetScopeID, overviewView.value),
       getBudgetContext(),
@@ -2791,6 +2794,21 @@ const budgetDrawerInitialUsages = computed<BudgetTierUsage[]>(() => {
     }))
 })
 
+/** 解析成员所属部门（SSO dept_id）：item → 路由 → 当前部门下钻上下文 */
+function resolveMemberDeptId(member?: { parent_scope_id?: string; scope_id?: string } | null): string {
+  if (member?.parent_scope_id) return member.parent_scope_id
+  if (typeof route.query.dept_id === 'string' && route.query.dept_id) return String(route.query.dept_id)
+  if (drillScopeType.value === 'dept' && drillScopeId.value) return drillScopeId.value
+  // 列表里可能已有同成员带 parent 的副本
+  if (member?.scope_id) {
+    const matched = items.value.find(
+      item => item.scope_type === 'member' && item.scope_id === member.scope_id && item.parent_scope_id,
+    )
+    if (matched?.parent_scope_id) return matched.parent_scope_id
+  }
+  return ''
+}
+
 function openBudgetDrawer(
   opts: { scope_type: string; scope_id: string; label?: string; parent_scope_id?: string } | BudgetItem,
   childIds?: string[],
@@ -2798,9 +2816,7 @@ function openBudgetDrawer(
   // 成员：抽屉挂在所属部门上，initialAllocation 指向该成员（含新建无 allocation_id）
   if (opts.scope_type === 'member') {
     const member = opts as BudgetItem
-    const deptId = member.parent_scope_id
-      || (drillScopeType.value === 'dept' ? drillScopeId.value : '')
-      || ''
+    const deptId = resolveMemberDeptId(member)
     if (!deptId) {
       ElMessage.warning('无法确定成员所属部门，请从部门页进入后再配置')
       return
@@ -2875,34 +2891,44 @@ interface MemberTierRow {
   ratio: number
 }
 
-const TIER_META = [
-  { name: '高级', color: '#8b5cf6', limit: 80, used: 77 },
-  { name: '标准', color: '#3b82f6', limit: 120, used: 69 },
-  { name: '经济', color: '#10b981', limit: null, used: 38 },
-] as const
+/** 成员下钻页与弹窗共用：优先弹窗目标，否则当前下钻成员 */
+const memberPanelTarget = computed(() => memberDetailTarget.value || selectedMemberItem.value)
 
 const memberTierRows = computed<MemberTierRow[]>(() => {
-  const member = memberDetailTarget.value
+  const member = memberPanelTarget.value
   if (!member) return []
-  const totalLimit = member.amount_usd > 0 ? member.amount_usd : 300
-  const totalUsed = member.used_usd || 218
-  const totalRatio = totalLimit > 0 ? totalUsed / totalLimit : 0
+  const totalLimit = Number(member.amount_usd)
+  const totalUsed = Number(member.used_usd || 0)
+  const hasFiniteLimit = Number.isFinite(totalLimit) && totalLimit >= 0
   const totalRow: MemberTierRow = {
     isTotal: true,
     name: '总预算',
     color: 'transparent',
-    limit: totalLimit,
-    used: totalUsed,
-    ratio: totalRatio,
+    limit: hasFiniteLimit ? totalLimit : null,
+    used: Number.isFinite(totalUsed) ? totalUsed : 0,
+    ratio: hasFiniteLimit && totalLimit > 0 ? totalUsed / totalLimit : 0,
   }
-  const tierRows: MemberTierRow[] = TIER_META.map(t => ({
-    isTotal: false,
-    name: t.name,
-    color: t.color,
-    limit: t.limit,
-    used: t.used,
-    ratio: t.limit !== null && t.limit > 0 ? t.used / t.limit : 0,
-  }))
+  const colorById = new Map(batchModelTiers.value.map(tier => [tier.id, tier.color || '#64748b']))
+  const seen = new Set<string>()
+  const tierRows: MemberTierRow[] = []
+  for (const item of tierBudgetItems.value) {
+    if (item.scope_type !== 'member' || item.scope_id !== member.scope_id || !item.model_tier_id) continue
+    if (seen.has(item.model_tier_id)) continue
+    seen.add(item.model_tier_id)
+    const limit = item.enabled === false ? 0 : Number(item.amount_usd)
+    const used = Number(item.used_usd || 0)
+    const ratio = item.used_ratio !== undefined
+      ? Number(item.used_ratio)
+      : limit > 0 ? used / limit : 0
+    tierRows.push({
+      isTotal: false,
+      name: displayTierName(item),
+      color: colorById.get(item.model_tier_id) || '#64748b',
+      limit: Number.isFinite(limit) ? limit : null,
+      used: Number.isFinite(used) ? used : 0,
+      ratio: Number.isFinite(ratio) ? ratio : 0,
+    })
+  }
   return [totalRow, ...tierRows]
 })
 
@@ -2913,7 +2939,10 @@ function openMemberDetail(member: BudgetItem) {
 
 function openMemberQuota(member: BudgetItem) {
   // 与部门/工作室一致：走完整抽屉，支持等级子预算
-  openBudgetDrawer(member)
+  openBudgetDrawer({
+    ...member,
+    parent_scope_id: resolveMemberDeptId(member),
+  })
 }
 
 // ─── 导航 ─────────────────────────────────────────────────────────────────────
@@ -3215,6 +3244,28 @@ function openCurrentDrillBudget() {
       openBudgetDrawer(target)
       return
     }
+  }
+  if (drillScopeType.value === 'member') {
+    const member = selectedMemberItem.value || {
+      scope_type: 'member' as const,
+      scope_id: drillScopeId.value,
+      label: drillLabel.value || drillScopeId.value,
+      parent_scope_id: resolveMemberDeptId({ scope_id: drillScopeId.value }),
+      amount_usd: 0,
+      weekly_amount_usd: -1,
+      daily_amount_usd: -1,
+      used_usd: 0,
+      weekly_used_usd: 0,
+      daily_used_usd: 0,
+      used_ratio: 0,
+      period: '',
+      allocation_id: '',
+    }
+    openBudgetDrawer({
+      ...member,
+      parent_scope_id: resolveMemberDeptId(member),
+    })
+    return
   }
   openBudgetDrawer({ scope_type: drillScopeType.value, scope_id: drillScopeId.value, label: drillLabel.value || drillScopeId.value })
 }

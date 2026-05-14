@@ -207,11 +207,33 @@ func (h *BudgetHandler) List(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		// 为 member item 填充所属部门（多部门场景路由跳转使用）
-		if len(userDeptMap) > 0 {
+		// 为 member item 填充所属部门（多部门场景路由跳转 / 成员配置抽屉使用）
+		if userDeptMap == nil {
+			userDeptMap = make(map[string]string)
+		}
+		for i := range items {
+			if items[i].ScopeType != model.BudgetScopeMember {
+				continue
+			}
+			if deptID := userDeptMap[items[i].ScopeID]; deptID != "" {
+				items[i].ParentScopeID = deptID
+			}
+		}
+		missing := make([]string, 0)
+		for i := range items {
+			if items[i].ScopeType == model.BudgetScopeMember && items[i].ParentScopeID == "" {
+				missing = append(missing, items[i].ScopeID)
+			}
+		}
+		if len(missing) > 0 {
+			resolved, resolveErr := h.svc.MapMemberDeptIDs(missing)
+			if resolveErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": resolveErr.Error()})
+				return
+			}
 			for i := range items {
-				if items[i].ScopeType == model.BudgetScopeMember {
-					items[i].ParentScopeID = userDeptMap[items[i].ScopeID]
+				if items[i].ScopeType == model.BudgetScopeMember && items[i].ParentScopeID == "" {
+					items[i].ParentScopeID = resolved[items[i].ScopeID]
 				}
 			}
 		}

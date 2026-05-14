@@ -122,6 +122,27 @@ func (s *BudgetService) ResolveMemberDeptID(memberID string) (string, error) {
 	return resolver.ResolveMemberDeptID(memberID)
 }
 
+// MapMemberDeptIDs 批量解析成员 → SSO dept_id。
+func (s *BudgetService) MapMemberDeptIDs(memberIDs []string) (map[string]string, error) {
+	mapper, ok := s.repo.(interface {
+		MapMemberDeptIDs([]string) (map[string]string, error)
+	})
+	if !ok {
+		out := make(map[string]string, len(memberIDs))
+		for _, id := range memberIDs {
+			deptID, err := s.ResolveMemberDeptID(id)
+			if err != nil {
+				return nil, err
+			}
+			if deptID != "" {
+				out[id] = deptID
+			}
+		}
+		return out, nil
+	}
+	return mapper.MapMemberDeptIDs(memberIDs)
+}
+
 func (s *BudgetService) ResolveMyBudgetChain(ctx context.Context, userID string) ([]repository.MyBudgetScopeAllocation, error) {
 	reader, ok := s.repo.(interface {
 		ResolveMyBudgetChain(context.Context, string) ([]repository.MyBudgetScopeAllocation, error)

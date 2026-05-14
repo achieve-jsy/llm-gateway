@@ -815,20 +815,53 @@ func (r *BudgetRepo) ResolveMemberDeptID(memberID string) (string, error) {
 	if memberID == "" {
 		return "", nil
 	}
-	var row struct {
-		DeptID string `gorm:"column:dept_id"`
-	}
-	err := r.db.Raw(`
-		SELECT COALESCE(d.dept_id, '') AS dept_id
-		FROM users u
-		JOIN departments d ON d.id = u.dept_id
-		WHERE u.id::text = ?
-		LIMIT 1
-	`, memberID).Scan(&row).Error
+	m, err := r.MapMemberDeptIDs([]string{memberID})
 	if err != nil {
 		return "", err
 	}
-	return row.DeptID, nil
+	return m[memberID], nil
+}
+
+// MapMemberDeptIDs 批量解析 user_id → SSO dept_id。
+func (r *BudgetRepo) MapMemberDeptIDs(memberIDs []string) (map[string]string, error) {
+	out := make(map[string]string, len(memberIDs))
+	if len(memberIDs) == 0 {
+		return out, nil
+	}
+	uniq := make([]string, 0, len(memberIDs))
+	seen := make(map[string]struct{}, len(memberIDs))
+	for _, id := range memberIDs {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniq = append(uniq, id)
+	}
+	if len(uniq) == 0 {
+		return out, nil
+	}
+	var rows []struct {
+		UserID string `gorm:"column:user_id"`
+		DeptID string `gorm:"column:dept_id"`
+	}
+	err := r.db.Raw(`
+		SELECT CAST(u.id AS TEXT) AS user_id, COALESCE(d.dept_id, '') AS dept_id
+		FROM users u
+		JOIN departments d ON d.id = u.dept_id
+		WHERE CAST(u.id AS TEXT) IN ?
+	`, uniq).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		if row.UserID != "" && row.DeptID != "" {
+			out[row.UserID] = row.DeptID
+		}
+	}
+	return out, nil
 }
 
 // DeleteAllocation 删除指定成员的单独配额，还原为共享部门预算池。

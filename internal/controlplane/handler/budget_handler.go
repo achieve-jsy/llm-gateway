@@ -567,13 +567,13 @@ func (h *BudgetHandler) SetMultiPeriod(c *gin.Context) {
 }
 
 // MyBudget GET /api/v1/my/budget
-// 员工查看自己的预算链（成员额度 + 部门 + 工作室 + 公司）。
+// 员工/管理员查看自己的预算链（成员额度 + 可选部门/工作室 + 公司）。
 func (h *BudgetHandler) MyBudget(c *gin.Context) {
 	deptID := c.GetString("user_dept_id")
 	studioID := c.GetString("user_studio_id")
 	userID := c.GetString("user_id")
 
-	if deptID == "" {
+	if userID == "" {
 		c.JSON(http.StatusOK, gin.H{"chain": []interface{}{}})
 		return
 	}
@@ -585,6 +585,7 @@ func (h *BudgetHandler) MyBudget(c *gin.Context) {
 	if actor.UserID == "" {
 		actor.UserID = userID
 	}
+	// 平台管理员也可查看个人预算；金额可见性仍按 Actor 权限（含 IsGlobal）。
 	if c.GetString("user_role") == "admin" {
 		actor.IsGlobal = true
 	}

@@ -62,9 +62,10 @@ func (r *BudgetRepo) ResolveMyBudgetChain(ctx context.Context, userID string) ([
 	if err != nil {
 		return nil, err
 	}
-	if identity.UserID == "" || identity.DeptID == "" || identity.StudioID == "" {
+	if identity.UserID == "" {
 		return nil, fmt.Errorf("%w: %s", ErrMyBudgetChainUnavailable, userID)
 	}
+	// 未挂部门/工作室时仍返回个人层（平台管理员常见）；有完整组织再补上级链。
 	defs := []struct {
 		scopeType string
 		scopeID   string
@@ -72,10 +73,29 @@ func (r *BudgetRepo) ResolveMyBudgetChain(ctx context.Context, userID string) ([
 		visible   bool
 	}{
 		{model.BudgetScopeMember, identity.UserID, "我的额度", true},
-		{model.BudgetScopeDeptDaily, identity.DeptID, identity.DeptName + "·成员日常预算", false},
-		{model.BudgetScopeStudio, identity.StudioID, identity.StudioName, false},
-		{model.BudgetScopeCompany, model.BudgetScopeGlobal, "全公司", false},
 	}
+	if identity.DeptID != "" {
+		defs = append(defs, struct {
+			scopeType string
+			scopeID   string
+			label     string
+			visible   bool
+		}{model.BudgetScopeDeptDaily, identity.DeptID, identity.DeptName + "·成员日常预算", false})
+	}
+	if identity.StudioID != "" {
+		defs = append(defs, struct {
+			scopeType string
+			scopeID   string
+			label     string
+			visible   bool
+		}{model.BudgetScopeStudio, identity.StudioID, identity.StudioName, false})
+	}
+	defs = append(defs, struct {
+		scopeType string
+		scopeID   string
+		label     string
+		visible   bool
+	}{model.BudgetScopeCompany, model.BudgetScopeGlobal, "全公司", false})
 	result := make([]MyBudgetScopeAllocation, 0, len(defs))
 	for _, def := range defs {
 		if def.scopeID == "" {

@@ -444,8 +444,8 @@ const budgetPermissionCopy = computed(() => {
   if (authStore.isAdmin) {
     return {
       badge: '平台管理员',
-      title: '当前为个人预算视图',
-      detail: '平台管理员通常不配置个人消费额度；组织预算配置请前往预算管理。',
+      title: '当前展示你的个人调用预算',
+      detail: '与普通成员相同，可查看本人额度与档位限制；组织预算配置请前往预算管理。',
       action: { label: '前往预算管理', handler: () => router.push('/admin/budget') },
     }
   }

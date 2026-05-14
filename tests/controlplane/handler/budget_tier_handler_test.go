@@ -442,7 +442,7 @@ func TestMyBudgetTiersHandlerUsesJWTUserIDWhenRBACActorMissing(t *testing.T) {
 	require.Equal(t, "member-from-jwt", fake.myActor.UserID)
 }
 
-func TestMyBudgetTiersHandlerMarksJWTAdminAsGlobalActor(t *testing.T) {
+func TestMyBudgetTiersHandlerUsesPersonalActorForJWTAdmin(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	fake := &fakeBudgetTierHandlerService{}
 	h := handler.NewBudgetTierHandler(fake)
@@ -458,7 +458,7 @@ func TestMyBudgetTiersHandlerMarksJWTAdminAsGlobalActor(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, response.Code)
 	require.Equal(t, "admin-user", fake.myActor.UserID)
-	require.True(t, fake.myActor.IsGlobal)
+	require.False(t, fake.myActor.IsGlobal)
 }
 
 func handlerAmount(t *testing.T, value string) budgetdomain.Amount {

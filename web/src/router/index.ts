@@ -253,10 +253,6 @@ router.beforeEach(async (to, _from, next) => {
     await authStore.ensureOrgRoles()
   }
 
-  if (to.path === '/my/budget' && authStore.effectiveRole === 'admin') {
-    next('/admin/budget'); return
-  }
-
   // admin 专属路由（effectiveRole 含 org 层角色提升）
   if (to.meta.requiresAdmin && authStore.effectiveRole !== 'admin') {
     next('/403'); return

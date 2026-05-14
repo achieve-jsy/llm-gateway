@@ -161,11 +161,19 @@ func TestMyBudgetTiersReturnsEmptyDTOWhenActorUserIDMissing(t *testing.T) {
 	require.Equal(t, now, got.Data.DataUpdatedAt)
 }
 
-func TestMyBudgetTiersReturnsEmptyDTOForGlobalAdmin(t *testing.T) {
+func TestMyBudgetTiersResolvesPersonalChainForGlobalAdmin(t *testing.T) {
 	now := time.Date(2026, 7, 15, 9, 30, 0, 0, time.UTC)
+	memberAllocationID := uuid.New()
+	reader := myBudgetReader{scopes: []repository.MyBudgetScopeAllocation{{
+		Allocation: model.BudgetAllocation{
+			ID: memberAllocationID, ScopeType: model.BudgetScopeMember, ScopeID: "admin",
+			AmountUSD: 100, Enabled: true,
+		},
+		Label: "我的额度", VisibleAmounts: true,
+	}}}
 	svc := service.NewBudgetTierService(
 		&myBudgetStore{},
-		myBudgetReader{err: errors.New("should not resolve admin personal chain")},
+		reader,
 		newFakeModelTierRepo(),
 		func() time.Time { return now },
 	)
@@ -173,9 +181,8 @@ func TestMyBudgetTiersReturnsEmptyDTOForGlobalAdmin(t *testing.T) {
 	got, err := svc.GetMyBudgetTiers(context.Background(), rbac.Actor{UserID: "admin", IsGlobal: true})
 
 	require.NoError(t, err)
-	require.Empty(t, got.Data.EffectiveTotal)
-	require.Empty(t, got.Data.BudgetChain)
-	require.Empty(t, got.Data.TierLimits)
+	require.Len(t, got.Data.BudgetChain, 1)
+	require.Equal(t, model.BudgetScopeMember, got.Data.BudgetChain[0].ScopeType)
 	require.Equal(t, now, got.Data.DataUpdatedAt)
 }
 

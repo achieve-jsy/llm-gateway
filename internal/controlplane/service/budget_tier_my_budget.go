@@ -42,9 +42,7 @@ type budgetConstraint struct {
 
 func (s *BudgetTierService) GetMyBudgetTiers(ctx context.Context, actor rbac.Actor) (*MyBudgetTiersResponse, error) {
 	now := s.clock()
-	if actor.IsGlobal {
-		return emptyMyBudgetTiersResponse(now), nil
-	}
+	// 平台管理员也按个人身份查看「我的预算」；IsGlobal 不再短路为空。
 	if strings.TrimSpace(actor.UserID) == "" {
 		return emptyMyBudgetTiersResponse(now), nil
 	}

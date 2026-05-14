@@ -144,13 +144,68 @@ describe('MyTierBudgetPanel', () => {
     await flushPromises()
 
     await wrapper.get('[data-test="tier-create-expansion"]').trigger('click')
+    // 当前有效 100、已用 85 → 建议 max(ceil(150), 150, 85) = 150
     expect(wrapper.emitted('requestExpansion')).toEqual([[
       {
         dimension: 'tier',
         tierId: 'premium',
         period: 'monthly',
-        targetAmount: '100.000000',
+        targetAmount: '150',
       },
     ]])
+  })
+
+  it('已超额时仍可点击申请提升，且预填目标高于当前与已用量', async () => {
+    const overQuota = structuredClone(fixture)
+    overQuota.tier_limits[0].periods[0] = {
+      ...overQuota.tier_limits[0].periods[0],
+      effective_limit_usd: '2.000000',
+      used_usd: '2.208651',
+      remaining_usd: '0.000000',
+      temporary_target_usd: undefined,
+      base_limit_usd: '2.000000',
+    }
+    overQuota.source_summary.has_temporary_override = false
+    mockGetMyBudgetTiers.mockResolvedValue(overQuota)
+
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已超额')
+    const applyBtn = wrapper.findAll('button').find(button => button.text().includes('申请提升'))
+    expect(applyBtn).toBeTruthy()
+    expect(applyBtn!.attributes('disabled')).toBeUndefined()
+
+    await applyBtn!.trigger('click')
+    expect(wrapper.emitted('requestExpansion')).toEqual([[
+      {
+        dimension: 'tier',
+        tierId: 'premium',
+        period: 'monthly',
+        targetAmount: '52',
+      },
+    ]])
+  })
+
+  it('$0 限额时仍可申请提升', async () => {
+    const zeroLimit = structuredClone(fixture)
+    zeroLimit.tier_limits[0].periods[0] = {
+      ...zeroLimit.tier_limits[0].periods[0],
+      effective_limit_usd: '0.000000',
+      used_usd: '0.000000',
+      remaining_usd: '0.000000',
+      temporary_target_usd: undefined,
+      base_limit_usd: '0.000000',
+    }
+    zeroLimit.source_summary.has_temporary_override = false
+    mockGetMyBudgetTiers.mockResolvedValue(zeroLimit)
+
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('$0')
+    const applyBtn = wrapper.findAll('button').find(button => button.text().includes('申请提升'))
+    expect(applyBtn).toBeTruthy()
+    expect(applyBtn!.attributes('disabled')).toBeUndefined()
   })
 })

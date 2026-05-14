@@ -85,7 +85,7 @@ describe('BudgetTierLimitsPanel', () => {
       expect(html).toContain('停用')
     })
 
-    it('额度为 0 的显示"$0 · 不可使用"标签', async () => {
+    it('额度为 0 的显示"$0 · 未设置限额"标签', async () => {
       mockListBudgetTierLimits.mockResolvedValue([
         makeTierLimit({ limit_usd: '0', enabled: true }),
       ])
@@ -93,7 +93,7 @@ describe('BudgetTierLimitsPanel', () => {
       await flushPromises()
 
       expect(wrapper.html()).toContain('$0')
-      expect(wrapper.html()).toContain('不可使用')
+      expect(wrapper.html()).toContain('未设置限额')
     })
 
     it('异常用量不会向标签传递 NaN usageRatio', async () => {

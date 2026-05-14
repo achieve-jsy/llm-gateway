@@ -93,12 +93,12 @@ export function budgetColorLevel(ratio: number | null | undefined): 'success' | 
 }
 
 /**
- * 预算额度显示（-1=不限，0=已禁用，>0=正常金额）
+ * 预算额度显示（-1=不限，0=未设置限额，>0=正常金额）
  */
 export function formatBudgetAmount(amount: number | null | undefined): string {
   if (amount == null || isNaN(amount)) return '未设置'
   if (amount < 0) return '不限'
-  if (amount === 0) return '$0（已禁用）'
+  if (amount === 0) return '$0（未设置限额）'
   return formatUSD(amount)
 }
 

@@ -91,7 +91,7 @@
               >
                 无限制
               </el-tag>
-              <el-tag v-else-if="row.monthly === 0" type="danger" size="small" effect="plain">已禁用</el-tag>
+              <el-tag v-else-if="row.monthly === 0" type="info" size="small" effect="plain">未设置限额</el-tag>
               <el-tag
                 v-else
                 :type="row.ratio >= 1 ? 'danger' : row.ratio >= 0.8 ? 'warning' : 'success'"

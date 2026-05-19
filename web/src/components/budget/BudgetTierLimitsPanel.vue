@@ -42,7 +42,7 @@ const tagItems = computed<TierBudgetTagItem[]>(() => rows.value.map(row => {
   const status = !row.enabled
     ? '已停用'
     : limitAmount === 0
-      ? '$0 · 不可使用'
+      ? '$0 · 未设置限额'
       : formatBudgetUSD(limitUSD)
   return {
     id: row.id ?? `${row.model_tier_id}:${row.period_type}`,

@@ -140,7 +140,7 @@
           <el-table-column label="状态" width="90" align="center">
             <template #default="{ row }">
               <el-tag v-if="row.limit === null" type="info" size="small">无限制</el-tag>
-              <el-tag v-else-if="row.limit === 0" type="danger" size="small">已禁用</el-tag>
+              <el-tag v-else-if="row.limit === 0" type="info" size="small">未设置限额</el-tag>
               <el-tag v-else :type="row.ratio >= 1 ? 'danger' : row.ratio >= 0.8 ? 'warning' : 'success'" size="small">
                 {{ row.ratio >= 1 ? '已超额' : row.ratio >= 0.8 ? '预警' : '正常' }}
               </el-tag>
@@ -1757,7 +1757,7 @@
           <el-table-column label="状态" width="90" align="center">
             <template #default="{ row }">
               <el-tag v-if="row.limit === null" type="info" size="small">无限制</el-tag>
-              <el-tag v-else-if="row.limit === 0" type="danger" size="small">已禁用</el-tag>
+              <el-tag v-else-if="row.limit === 0" type="info" size="small">未设置限额</el-tag>
               <el-tag v-else :type="row.ratio >= 1 ? 'danger' : row.ratio >= 0.8 ? 'warning' : 'success'" size="small">
                 {{ row.ratio >= 1 ? '已超额' : row.ratio >= 0.8 ? '预警' : '正常' }}
               </el-tag>

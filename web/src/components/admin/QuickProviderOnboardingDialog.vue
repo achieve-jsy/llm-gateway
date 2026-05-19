@@ -689,29 +689,58 @@ async function fetchAllProviderModels(providerId: string): Promise<Model[]> {
   return all
 }
 
+function resolveInheritedPrices(model: Model): {
+  input: number
+  output: number
+  cacheRead: number | null
+  cacheWrite: number | null
+} {
+  const catalog = model.catalog
+  const input = Number(model.input_price) > 0
+    ? Number(model.input_price)
+    : Number(catalog?.input_price_per_million || 0)
+  const output = Number(model.output_price) > 0
+    ? Number(model.output_price)
+    : Number(catalog?.output_price_per_million || 0)
+  const cacheRead = model.cache_read_price != null
+    ? Number(model.cache_read_price)
+    : (catalog?.cache_read_price != null ? Number(catalog.cache_read_price) : null)
+  const cacheWrite = model.cache_write_price != null
+    ? Number(model.cache_write_price)
+    : (catalog?.cache_write_price != null ? Number(catalog.cache_write_price) : null)
+  return { input, output, cacheRead, cacheWrite }
+}
+
 function mapSourceModelToOnboardInput(model: Model): QuickOnboardModelInput {
   const allowedTypes: ModelType[] = ['chat', 'embedding', 'embedding_vl', 'rerank', 'rerank_vl', 'video']
   const modelType = allowedTypes.includes(model.model_type as ModelType)
     ? (model.model_type as ModelType)
     : 'chat'
+  const prices = resolveInheritedPrices(model)
+  let priceMode: 'catalog' | 'manual' = model.price_mode || 'catalog'
+  // catalog 未绑定条目时，若源上已有有效价格，落成 manual 以免数字价丢失
+  if (priceMode === 'catalog' && !model.catalog_id && (prices.input > 0 || prices.output > 0)) {
+    priceMode = 'manual'
+  }
   const input: QuickOnboardModelInput = {
     name: model.name,
     model_type: modelType,
     upstream_model_id: model.upstream_model_id || model.name,
     description: model.description || undefined,
-    price_mode: model.price_mode || 'catalog',
+    price_mode: priceMode,
     weight: model.weight ?? 1,
     enabled: model.enabled !== false,
   }
   if (model.context_length > 0) input.context_length = model.context_length
   if (model.max_output_tokens > 0) input.max_output_tokens = model.max_output_tokens
   if (model.catalog_id) input.catalog_id = model.catalog_id
-  if (model.price_mode === 'manual') {
-    input.input_price = model.input_price ?? 0
-    input.output_price = model.output_price ?? 0
-    if (model.cache_read_price != null) input.cache_read_price = model.cache_read_price
-    if (model.cache_write_price != null) input.cache_write_price = model.cache_write_price
+  // 始终带上有效价格：manual 直接落库；catalog 也保留快照数字，便于核对
+  if (prices.input > 0 || prices.output > 0 || priceMode === 'manual') {
+    input.input_price = prices.input
+    input.output_price = prices.output
   }
+  if (prices.cacheRead != null && prices.cacheRead > 0) input.cache_read_price = prices.cacheRead
+  if (prices.cacheWrite != null && prices.cacheWrite > 0) input.cache_write_price = prices.cacheWrite
   return input
 }
 

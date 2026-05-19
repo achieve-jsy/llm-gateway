@@ -135,7 +135,51 @@
 
         <el-collapse v-model="pricingPanels" class="advanced-collapse">
           <el-collapse-item title="价格设置（可选）" name="pricing">
-            <el-form-item label="价格来源">
+            <div v-if="usingInheritedModels" class="inherit-price-panel">
+              <div class="inherit-price-banner">
+                已按源渠道逐模型继承定价（Catalog 关联 / 手动价）。提交时以本表为准，下方全局价格来源不会覆盖。
+              </div>
+              <div class="inherit-price-summary">
+                <el-tag size="small" effect="plain">共 {{ inheritedPriceRows.length }} 个</el-tag>
+                <el-tag size="small" type="success" effect="plain">Catalog {{ inheritedCatalogCount }}</el-tag>
+                <el-tag size="small" type="warning" effect="plain">手动 {{ inheritedManualCount }}</el-tag>
+                <el-tag v-if="inheritedDisabledCount > 0" size="small" type="info" effect="plain">禁用 {{ inheritedDisabledCount }}</el-tag>
+              </div>
+              <el-table :data="inheritedPriceRows" border size="small" max-height="280" class="inherit-price-table">
+                <el-table-column prop="name" label="模型" min-width="140">
+                  <template #default="{ row }">
+                    <span class="mono-text">{{ row.name }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="定价方式" width="100" align="center">
+                  <template #default="{ row }">
+                    <el-tag :type="row.price_mode === 'catalog' ? 'success' : 'warning'" size="small" effect="plain">
+                      {{ row.price_mode === 'catalog' ? 'Catalog' : '手动' }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="Catalog 关联" min-width="180">
+                  <template #default="{ row }">
+                    <span v-if="row.catalog_label" class="catalog-echo">{{ row.catalog_label }}</span>
+                    <span v-else class="muted">未关联</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="价格 in/out" width="140" align="right">
+                  <template #default="{ row }">
+                    <span class="mono-text">${{ formatPrice(row.input_price) }} / ${{ formatPrice(row.output_price) }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="状态" width="80" align="center">
+                  <template #default="{ row }">
+                    <el-tag :type="row.enabled ? 'success' : 'info'" size="small" effect="plain">
+                      {{ row.enabled ? '启用' : '禁用' }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+
+            <el-form-item v-if="!usingInheritedModels" label="价格来源">
               <el-radio-group v-model="pricingMode">
                 <el-radio-button label="catalog">Catalog 自动匹配</el-radio-button>
                 <el-radio-button label="uniform">统一手动价格</el-radio-button>
@@ -144,7 +188,7 @@
               <div class="form-hint">默认使用 Catalog；手动价格单位为 USD / 1M tokens。</div>
             </el-form-item>
 
-            <template v-if="pricingMode === 'catalog'">
+            <template v-if="!usingInheritedModels && pricingMode === 'catalog'">
               <el-form-item label="Catalog 关联">
                 <el-radio-group v-model="catalogBindingMode">
                   <el-radio-button label="auto">自动匹配</el-radio-button>
@@ -203,12 +247,12 @@
               </div>
             </template>
 
-            <el-form-item v-if="pricingMode !== 'catalog'" label="缓存价格">
+            <el-form-item v-if="!usingInheritedModels && pricingMode !== 'catalog'" label="缓存价格">
               <el-checkbox v-model="showCachePricing">设置缓存读/写价格</el-checkbox>
               <div class="form-hint">不设置时按现有计费逻辑处理。</div>
             </el-form-item>
 
-            <el-row v-if="pricingMode === 'uniform'" :gutter="16">
+            <el-row v-if="!usingInheritedModels && pricingMode === 'uniform'" :gutter="16">
               <el-col :span="12">
                 <el-form-item label="输入价格">
                   <el-input-number v-model="uniformPricing.input" :min="0" :precision="6" :step="0.1" style="width: 100%" />
@@ -231,7 +275,7 @@
               </el-col>
             </el-row>
 
-            <div v-else-if="pricingMode === 'per_model'" class="pricing-table" :class="{ 'with-cache': showCachePricing }">
+            <div v-else-if="!usingInheritedModels && pricingMode === 'per_model'" class="pricing-table" :class="{ 'with-cache': showCachePricing }">
               <div class="pricing-row pricing-head">
                 <span>模型名</span>
                 <span>输入价格</span>
@@ -422,6 +466,8 @@ const inheritModelsAndPrices = ref(true)
 const inheritLoading = ref(false)
 /** 继承得到的完整模型配置；有值时提交优先使用，不再走统一价格模式覆盖 */
 const inheritedModelsByName = ref<Record<string, QuickOnboardModelInput>>({})
+/** Catalog 回显文案：modelName → 展示标签 */
+const inheritedCatalogLabels = ref<Record<string, string>>({})
 const advancedPanels = ref<string[]>([])
 const pricingPanels = ref<string[]>([])
 const previewPanels = ref<string[]>([])
@@ -469,6 +515,27 @@ const inheritedDisabledCount = computed(() =>
 )
 const usingInheritedModels = computed(() =>
   inheritModelsAndPrices.value && Object.keys(inheritedModelsByName.value).length > 0
+)
+const inheritedPriceRows = computed(() =>
+  parsedModels.value
+    .map(name => inheritedModelsByName.value[name])
+    .filter((item): item is QuickOnboardModelInput => !!item)
+    .map(item => ({
+      name: item.name,
+      price_mode: item.price_mode || 'catalog',
+      catalog_label: item.catalog_id
+        ? (inheritedCatalogLabels.value[item.name] || item.catalog_id)
+        : '',
+      input_price: item.input_price ?? 0,
+      output_price: item.output_price ?? 0,
+      enabled: item.enabled !== false,
+    }))
+)
+const inheritedCatalogCount = computed(() =>
+  inheritedPriceRows.value.filter(row => row.price_mode === 'catalog').length
+)
+const inheritedManualCount = computed(() =>
+  inheritedPriceRows.value.filter(row => row.price_mode === 'manual').length
 )
 const previewMeta = computed(() => {
   if (previewMatrixCount.value > 0) return `${previewRows.value.length} Keys × ${parsedModels.value.length} 模型 = ${previewMatrixCount.value} 项`
@@ -521,6 +588,7 @@ function resetForm() {
   inheritModelsAndPrices.value = true
   inheritLoading.value = false
   inheritedModelsByName.value = {}
+  inheritedCatalogLabels.value = {}
   advancedPanels.value = []
   pricingPanels.value = []
   previewPanels.value = []
@@ -546,6 +614,17 @@ function resetForm() {
     models_text: '',
     model_type: 'chat'
   }
+}
+
+function clearInheritedPricingState() {
+  inheritedModelsByName.value = {}
+  inheritedCatalogLabels.value = {}
+}
+
+function formatPrice(value?: number | null): string {
+  const n = Number(value || 0)
+  if (!Number.isFinite(n)) return '0'
+  return n.toFixed(6).replace(/\.?0+$/, '') || '0'
 }
 
 watch(parsedModels, (models) => {
@@ -603,14 +682,14 @@ function validateModels(_rule: unknown, _value: string, callback: (error?: Error
 function handleDefinitionChange(defId: string) {
   const def = props.definitions.find(item => item.id === defId)
   templateProviderId.value = ''
-  inheritedModelsByName.value = {}
+  clearInheritedPricingState()
   formData.value.endpoint = def?.base_url || ''
   formData.value.credential_key = findDefaultCredentialKey(def)
 }
 
 async function handleTemplateChange(providerId: string) {
   if (!providerId) {
-    inheritedModelsByName.value = {}
+    clearInheritedPricingState()
     return
   }
   const provider = props.providers.find(item => item.id === providerId)
@@ -620,19 +699,67 @@ async function handleTemplateChange(providerId: string) {
   if (inheritModelsAndPrices.value) {
     await loadInheritedModels(providerId)
   } else {
-    inheritedModelsByName.value = {}
+    clearInheritedPricingState()
   }
 }
 
 async function handleInheritModelsToggle(checked: boolean | string | number) {
   const on = checked === true
   if (!on) {
-    inheritedModelsByName.value = {}
-    ElMessage.info('已关闭继承；当前模型列表保留，可继续手动编辑')
+    clearInheritedPricingState()
+    ElMessage.info('已关闭继承；当前模型列表保留，可继续手动编辑价格设置')
     return
   }
   if (!templateProviderId.value) return
   await loadInheritedModels(templateProviderId.value)
+}
+
+function syncInheritedPricingEcho(sourceModels: Model[], inputs: Record<string, QuickOnboardModelInput>) {
+  const nextLabels: Record<string, string> = {}
+  const nextBindings: Record<string, string> = {}
+  const nextSelected: Record<string, ModelCatalog | null> = {}
+  const nextOptions: Record<string, ModelCatalog[]> = {}
+  const nextPerModel: Record<string, PricePair> = {}
+  let hasCache = false
+
+  for (const model of sourceModels) {
+    const input = inputs[model.name]
+    if (!input) continue
+    if (model.catalog) {
+      nextLabels[model.name] = catalogOptionLabel(model.catalog)
+      nextSelected[model.name] = model.catalog
+      nextOptions[model.name] = [model.catalog]
+    } else if (input.catalog_id) {
+      nextLabels[model.name] = input.catalog_id
+    }
+    if (input.catalog_id) {
+      nextBindings[model.name] = input.catalog_id
+    }
+    nextPerModel[model.name] = {
+      input: input.input_price ?? 0,
+      output: input.output_price ?? 0,
+      cacheRead: input.cache_read_price ?? 0,
+      cacheWrite: input.cache_write_price ?? 0,
+    }
+    if ((input.cache_read_price ?? 0) > 0 || (input.cache_write_price ?? 0) > 0) {
+      hasCache = true
+    }
+  }
+
+  inheritedCatalogLabels.value = nextLabels
+  catalogBindings.value = nextBindings
+  selectedCatalogItems.value = nextSelected
+  catalogOptions.value = nextOptions
+  perModelPricing.value = nextPerModel
+  showCachePricing.value = hasCache
+  catalogBindingMode.value = Object.keys(nextBindings).length > 0 ? 'manual' : 'auto'
+  // 混合定价时仍以继承表为准；全局模式仅作兜底展示态
+  const modes = Object.values(inputs).map(item => item.price_mode || 'catalog')
+  const allManual = modes.length > 0 && modes.every(mode => mode === 'manual')
+  pricingMode.value = allManual ? 'per_model' : 'catalog'
+  if (!pricingPanels.value.includes('pricing')) {
+    pricingPanels.value = [...pricingPanels.value, 'pricing']
+  }
 }
 
 async function loadInheritedModels(providerId: string) {
@@ -640,7 +767,7 @@ async function loadInheritedModels(providerId: string) {
   try {
     const models = await fetchAllProviderModels(providerId)
     if (models.length === 0) {
-      inheritedModelsByName.value = {}
+      clearInheritedPricingState()
       ElMessage.warning('源渠道暂无模型可继承')
       return
     }
@@ -659,14 +786,17 @@ async function loadInheritedModels(providerId: string) {
     }
     inheritedModelsByName.value = next
     formData.value.models_text = names.join('\n')
+    syncInheritedPricingEcho(source, next)
     const disabledCount = names.filter(name => next[name]?.enabled === false).length
+    const catalogCount = names.filter(name => next[name]?.price_mode === 'catalog').length
+    const manualCount = names.length - catalogCount
     ElMessage.success(
       truncated
-        ? `已继承前 ${QUICK_ONBOARD_MAX_MODELS} 个模型（源渠道共 ${models.length} 个，含 ${disabledCount} 个禁用）`
-        : `已继承 ${names.length} 个模型（含 ${disabledCount} 个禁用）`
+        ? `已继承前 ${QUICK_ONBOARD_MAX_MODELS} 个模型（Catalog ${catalogCount} / 手动 ${manualCount}，禁用 ${disabledCount}）`
+        : `已继承 ${names.length} 个模型（Catalog ${catalogCount} / 手动 ${manualCount}，禁用 ${disabledCount}）`
     )
   } catch (error: any) {
-    inheritedModelsByName.value = {}
+    clearInheritedPricingState()
     ElMessage.error(resolveErrorMessage(error) || '加载源渠道模型失败')
   } finally {
     inheritLoading.value = false
@@ -932,6 +1062,8 @@ async function handleSubmit() {
 }
 
 function validatePricing(): boolean {
+  // 继承模式按源渠道逐模型配置提交，不校验全局价格表单
+  if (usingInheritedModels.value) return true
   if (pricingMode.value === 'catalog') return true
   if (pricingMode.value === 'uniform') {
     if (uniformPricing.value.input > 0 || uniformPricing.value.output > 0) return true
@@ -1010,6 +1142,42 @@ function validatePricing(): boolean {
 .inherit-loading {
   margin-left: 4px;
   color: var(--el-text-color-secondary);
+}
+
+.inherit-price-panel {
+  margin-bottom: 16px;
+}
+
+.inherit-price-banner {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.inherit-price-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.inherit-price-table {
+  width: 100%;
+}
+
+.catalog-echo {
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+  word-break: break-all;
+}
+
+.muted {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 
 .section-block {

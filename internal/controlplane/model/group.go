@@ -54,6 +54,7 @@ type GroupModel struct {
 	GroupID        uint      `gorm:"not null;uniqueIndex:uniq_group_model;index" json:"group_id"`
 	ModelID        uuid.UUID `gorm:"type:uuid;not null;uniqueIndex:uniq_group_model;index:idx_group_models_model_id" json:"model_id"`
 	ModelName      string    `gorm:"->" json:"model_name"`
+	ProviderName   string    `gorm:"->" json:"provider_name,omitempty"`
 	Priority       *int      `gorm:"default:null" json:"priority"`
 	Weight         *int      `gorm:"default:null;check:weight >= 1 AND weight <= 100" json:"weight"`
 	ComplexityTier string    `gorm:"type:varchar(16);not null;default:MEDIUM;check:complexity_tier IN ('SIMPLE','MEDIUM','COMPLEX','REASONING')" json:"complexity_tier"`

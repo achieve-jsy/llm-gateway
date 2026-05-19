@@ -117,7 +117,7 @@
           </div>
           <div v-else class="model-items">
             <div v-for="(item, index) in modelList" :key="item.model_id" class="model-item">
-              <span class="model-item-name">{{ item.model_name }}</span>
+              <span class="model-item-name">{{ formatModelLabel(item) }}</span>
               <template v-if="formData.model_type !== 'video' && formData.strategy === 'priority'">
                 <el-input-number
                   :model-value="item.priority ?? 0"
@@ -208,9 +208,14 @@ import ModelGroupSelector from '@/components/ModelGroupSelector.vue'
 interface ModelItem {
   model_id: string
   model_name: string
+  provider_name?: string
   priority: number | null
   weight: number | null
   complexity_tier?: ComplexityTier
+}
+
+function formatModelLabel(item: Pick<ModelItem, 'model_name' | 'provider_name'>) {
+  return item.provider_name ? `${item.provider_name}: ${item.model_name}` : item.model_name
 }
 
 interface FormState {
@@ -355,6 +360,7 @@ async function loadGroupModels(groupId: number) {
     modelList.value = (res.data.data || []).map(m => ({
       model_id: m.model_id,
       model_name: m.model_name,
+      provider_name: m.provider_name,
       priority: m.priority,
       weight: m.weight,
       complexity_tier: m.complexity_tier,

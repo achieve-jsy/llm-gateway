@@ -39,6 +39,7 @@ export interface GroupModel {
   group_id: number
   model_id: string
   model_name: string
+  provider_name?: string
   priority: number | null
   weight: number | null
   complexity_tier?: ComplexityTier

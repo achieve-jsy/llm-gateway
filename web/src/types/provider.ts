@@ -113,6 +113,8 @@ export interface QuickOnboardModelInput {
   cache_write_price?: number
   catalog_id?: string
   weight?: number
+  /** 缺省 true；继承禁用模型时传 false */
+  enabled?: boolean
 }
 
 export interface QuickOnboardProviderInput {

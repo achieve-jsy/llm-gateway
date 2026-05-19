@@ -327,6 +327,37 @@ func TestProviderQuickOnboardHandler_CreateCreatesProviderModelMatrix(t *testing
 	}
 }
 
+func TestProviderQuickOnboardHandler_CreateRespectsModelEnabledFalse(t *testing.T) {
+	// 中文说明：继承源渠道禁用模型时，新渠道模型应保持 enabled=false / 手动禁用状态。
+	r, db := setupProviderQuickOnboardHandler(t)
+	body := `{
+		"provider": {
+			"definition_id":"qwen",
+			"type":"qwen",
+			"endpoint":"https://dashscope.aliyuncs.com/compatible-mode/v1"
+		},
+		"credentials":[{"credentials":"sk-live-credential-a"}],
+		"models":[
+			{"name":"qwen-plus","model_type":"chat","enabled":true},
+			{"name":"qwen-disabled","model_type":"chat","enabled":false}
+		]
+	}`
+	w := doQuickProviderRequest(r, http.MethodPost, quickProviderCreatePath, body)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var enabledModel model.Model
+	require.NoError(t, db.Where("name = ?", "qwen-plus").First(&enabledModel).Error)
+	require.NotNil(t, enabledModel.Enabled)
+	assert.True(t, *enabledModel.Enabled)
+	assert.Equal(t, model.ModelStatusEnabled, enabledModel.Status)
+
+	var disabledModel model.Model
+	require.NoError(t, db.Where("name = ?", "qwen-disabled").First(&disabledModel).Error)
+	require.NotNil(t, disabledModel.Enabled)
+	assert.False(t, *disabledModel.Enabled)
+	assert.Equal(t, model.ModelStatusManuallyDisabled, disabledModel.Status)
+}
+
 func TestProviderQuickOnboardHandler_CreatePersistsCatalogBinding(t *testing.T) {
 	// 中文说明：快速接入可按模型手动关联 Catalog，创建出的每个渠道模型都写入 catalog_id。
 	r, db := setupProviderQuickOnboardHandler(t)

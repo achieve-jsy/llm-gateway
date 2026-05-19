@@ -65,6 +65,20 @@
                   />
                 </el-select>
               </el-form-item>
+              <el-form-item class="inherit-models-item">
+                <el-checkbox
+                  v-model="inheritModelsAndPrices"
+                  :disabled="!templateProviderId || inheritLoading"
+                  @change="handleInheritModelsToggle"
+                >
+                  同时继承模型与价格
+                  <span v-if="inheritLoading" class="inherit-loading">（加载中…）</span>
+                </el-checkbox>
+                <div class="form-hint">
+                  默认开启；将复制源渠道全部模型（含已禁用），禁用状态与价格一并保留。
+                  <template v-if="inheritedDisabledCount > 0"> 当前含 {{ inheritedDisabledCount }} 个禁用模型。</template>
+                </div>
+              </el-form-item>
             </el-col>
           </el-row>
         </section>
@@ -365,11 +379,13 @@
 import { computed, ref, watch } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { createQuickOnboardProviders, previewQuickOnboardProviders, searchCatalog } from '@/services/control-plane'
+import { createQuickOnboardProviders, getModels, previewQuickOnboardProviders, searchCatalog } from '@/services/control-plane'
 import { resolveErrorMessage } from '@/services/http'
-import type { ModelPayload } from '@/types/model'
-import type { Provider, ProviderDefinition, QuickOnboardPayload, QuickOnboardProviderPlan } from '@/types/provider'
+import type { Model, ModelPayload } from '@/types/model'
+import type { Provider, ProviderDefinition, QuickOnboardModelInput, QuickOnboardPayload, QuickOnboardProviderPlan } from '@/types/provider'
 import type { ModelCatalog } from '@/types/catalog'
+
+const QUICK_ONBOARD_MAX_MODELS = 200
 
 type ModelType = ModelPayload['model_type']
 type PricingMode = 'catalog' | 'uniform' | 'per_model'
@@ -402,6 +418,10 @@ const formRef = ref<FormInstance>()
 const submitting = ref(false)
 const previewLoading = ref(false)
 const templateProviderId = ref('')
+const inheritModelsAndPrices = ref(true)
+const inheritLoading = ref(false)
+/** 继承得到的完整模型配置；有值时提交优先使用，不再走统一价格模式覆盖 */
+const inheritedModelsByName = ref<Record<string, QuickOnboardModelInput>>({})
 const advancedPanels = ref<string[]>([])
 const pricingPanels = ref<string[]>([])
 const previewPanels = ref<string[]>([])
@@ -444,6 +464,12 @@ const credentialKeys = computed(() => {
 const parsedKeys = computed(() => parseMultiline(formData.value.keys_text))
 const parsedModels = computed(() => parseMultiline(formData.value.models_text))
 const totalModelCreates = computed(() => parsedKeys.value.length * parsedModels.value.length)
+const inheritedDisabledCount = computed(() =>
+  Object.values(inheritedModelsByName.value).filter(item => item.enabled === false).length
+)
+const usingInheritedModels = computed(() =>
+  inheritModelsAndPrices.value && Object.keys(inheritedModelsByName.value).length > 0
+)
 const previewMeta = computed(() => {
   if (previewMatrixCount.value > 0) return `${previewRows.value.length} Keys × ${parsedModels.value.length} 模型 = ${previewMatrixCount.value} 项`
   return `${parsedKeys.value.length} Keys × ${parsedModels.value.length} 模型`
@@ -492,6 +518,9 @@ watch(
 
 function resetForm() {
   templateProviderId.value = ''
+  inheritModelsAndPrices.value = true
+  inheritLoading.value = false
+  inheritedModelsByName.value = {}
   advancedPanels.value = []
   pricingPanels.value = []
   previewPanels.value = []
@@ -574,15 +603,116 @@ function validateModels(_rule: unknown, _value: string, callback: (error?: Error
 function handleDefinitionChange(defId: string) {
   const def = props.definitions.find(item => item.id === defId)
   templateProviderId.value = ''
+  inheritedModelsByName.value = {}
   formData.value.endpoint = def?.base_url || ''
   formData.value.credential_key = findDefaultCredentialKey(def)
 }
 
-function handleTemplateChange(providerId: string) {
+async function handleTemplateChange(providerId: string) {
+  if (!providerId) {
+    inheritedModelsByName.value = {}
+    return
+  }
   const provider = props.providers.find(item => item.id === providerId)
   if (!provider) return
   formData.value.endpoint = provider.endpoint || selectedDef.value?.base_url || ''
   formData.value.tag = provider.tag || ''
+  if (inheritModelsAndPrices.value) {
+    await loadInheritedModels(providerId)
+  } else {
+    inheritedModelsByName.value = {}
+  }
+}
+
+async function handleInheritModelsToggle(checked: boolean | string | number) {
+  const on = checked === true
+  if (!on) {
+    inheritedModelsByName.value = {}
+    ElMessage.info('已关闭继承；当前模型列表保留，可继续手动编辑')
+    return
+  }
+  if (!templateProviderId.value) return
+  await loadInheritedModels(templateProviderId.value)
+}
+
+async function loadInheritedModels(providerId: string) {
+  inheritLoading.value = true
+  try {
+    const models = await fetchAllProviderModels(providerId)
+    if (models.length === 0) {
+      inheritedModelsByName.value = {}
+      ElMessage.warning('源渠道暂无模型可继承')
+      return
+    }
+    let truncated = false
+    let source = models
+    if (source.length > QUICK_ONBOARD_MAX_MODELS) {
+      source = source.slice(0, QUICK_ONBOARD_MAX_MODELS)
+      truncated = true
+    }
+    const next: Record<string, QuickOnboardModelInput> = {}
+    const names: string[] = []
+    for (const model of source) {
+      const input = mapSourceModelToOnboardInput(model)
+      next[input.name] = input
+      names.push(input.name)
+    }
+    inheritedModelsByName.value = next
+    formData.value.models_text = names.join('\n')
+    const disabledCount = names.filter(name => next[name]?.enabled === false).length
+    ElMessage.success(
+      truncated
+        ? `已继承前 ${QUICK_ONBOARD_MAX_MODELS} 个模型（源渠道共 ${models.length} 个，含 ${disabledCount} 个禁用）`
+        : `已继承 ${names.length} 个模型（含 ${disabledCount} 个禁用）`
+    )
+  } catch (error: any) {
+    inheritedModelsByName.value = {}
+    ElMessage.error(resolveErrorMessage(error) || '加载源渠道模型失败')
+  } finally {
+    inheritLoading.value = false
+  }
+}
+
+async function fetchAllProviderModels(providerId: string): Promise<Model[]> {
+  const pageSize = 100
+  let page = 1
+  let total = Infinity
+  const all: Model[] = []
+  while (all.length < total && all.length < QUICK_ONBOARD_MAX_MODELS + pageSize) {
+    const result = await getModels(providerId, { page, pageSize })
+    total = result.total
+    all.push(...result.data)
+    if (result.data.length === 0) break
+    page += 1
+    if (page > 50) break
+  }
+  return all
+}
+
+function mapSourceModelToOnboardInput(model: Model): QuickOnboardModelInput {
+  const allowedTypes: ModelType[] = ['chat', 'embedding', 'embedding_vl', 'rerank', 'rerank_vl', 'video']
+  const modelType = allowedTypes.includes(model.model_type as ModelType)
+    ? (model.model_type as ModelType)
+    : 'chat'
+  const input: QuickOnboardModelInput = {
+    name: model.name,
+    model_type: modelType,
+    upstream_model_id: model.upstream_model_id || model.name,
+    description: model.description || undefined,
+    price_mode: model.price_mode || 'catalog',
+    weight: model.weight ?? 1,
+    enabled: model.enabled !== false,
+  }
+  if (model.context_length > 0) input.context_length = model.context_length
+  if (model.max_output_tokens > 0) input.max_output_tokens = model.max_output_tokens
+  if (model.catalog_id) input.catalog_id = model.catalog_id
+  if (model.price_mode === 'manual') {
+    input.input_price = model.input_price ?? 0
+    input.output_price = model.output_price ?? 0
+    if (model.cache_read_price != null) input.cache_read_price = model.cache_read_price
+    if (model.cache_write_price != null) input.cache_write_price = model.cache_write_price
+  }
+  return input
 }
 
 function findDefaultCredentialKey(def?: ProviderDefinition): string {
@@ -626,12 +756,17 @@ function buildPayload(): QuickOnboardPayload {
 }
 
 function buildModelPayload(modelName: string) {
+  const inherited = inheritedModelsByName.value[modelName]
+  if (usingInheritedModels.value && inherited) {
+    return { ...inherited, name: modelName }
+  }
   const payload: QuickOnboardPayload['models'][number] = {
     name: modelName,
     upstream_model_id: modelName,
     model_type: formData.value.model_type,
     price_mode: 'catalog',
-    weight: 1
+    weight: 1,
+    enabled: true,
   }
   if (pricingMode.value === 'catalog' && catalogBindingMode.value === 'manual' && catalogBindings.value[modelName]) {
     payload.catalog_id = catalogBindings.value[modelName]
@@ -832,6 +967,20 @@ function validatePricing(): boolean {
   font-size: 12px;
   color: var(--el-text-color-secondary);
   line-height: 1.5;
+}
+
+.inherit-models-item {
+  margin-top: -8px;
+  margin-bottom: 8px;
+}
+
+.inherit-models-item :deep(.el-form-item__content) {
+  display: block;
+}
+
+.inherit-loading {
+  margin-left: 4px;
+  color: var(--el-text-color-secondary);
 }
 
 .section-block {

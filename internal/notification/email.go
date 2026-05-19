@@ -6,11 +6,37 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"net/smtp"
 	"strings"
 	"time"
 
 	"gopkg.in/gomail.v2"
 )
+
+// loginAuth 实现 SASL LOGIN，供仅广播 LOGIN/NTLM（无 PLAIN）的企业 Exchange 使用。
+// gomail 默认 smtp.PlainAuth，在此类服务器上会 535 Authentication unsuccessful。
+type loginAuth struct {
+	username string
+	password string
+}
+
+func (a *loginAuth) Start(_ *smtp.ServerInfo) (string, []byte, error) {
+	return "LOGIN", nil, nil
+}
+
+func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
+	if !more {
+		return nil, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(string(fromServer))) {
+	case "username:":
+		return []byte(a.username), nil
+	case "password:":
+		return []byte(a.password), nil
+	default:
+		return nil, fmt.Errorf("unexpected server challenge: %q", string(fromServer))
+	}
+}
 
 type EmailSender struct {
 	host       string
@@ -85,12 +111,10 @@ func (e *EmailSender) dialAndSend(subject, text string, recipients []string, ded
 		InsecureSkipVerify: e.skipVerify,
 		MinVersion:         tls.VersionTLS12,
 	}
+	// 强制 LOGIN：Exchange 常见仅 AUTH GSSAPI NTLM LOGIN（无 PLAIN）
+	d.Auth = &loginAuth{username: e.from, password: e.password}
 
-	// gomail 会自动协商 AUTH 方法
-	// 默认使用 gomail 的自动检测（优先 CRAM-MD5 → LOGIN → PLAIN）
-	// 当服务器在 EHLO 中广播 AUTH 方法时，gomail 会自动选择合适的认证方式
-
-	slog.Info("email: dialing SMTP server", "host", e.host, "port", e.port, "ssl", d.SSL, "skipVerify", e.skipVerify)
+	slog.Info("email: dialing SMTP server", "host", e.host, "port", e.port, "ssl", d.SSL, "skipVerify", e.skipVerify, "auth", "LOGIN")
 
 	slog.Info("email: calling d.Dial()")
 	s, err := d.Dial()

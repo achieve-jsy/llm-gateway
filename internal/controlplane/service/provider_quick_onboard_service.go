@@ -48,6 +48,8 @@ type QuickOnboardModelInput struct {
 	PriceMode       string   `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
 	CatalogID       string   `json:"catalog_id" binding:"omitempty,uuid"`
 	Weight          *int     `json:"weight" binding:"omitempty,min=0,max=9999"`
+	// Enabled 可选；缺省为 true。继承源渠道禁用模型时应传 false。
+	Enabled *bool `json:"enabled"`
 }
 
 type QuickOnboardCredentialInput struct {
@@ -399,9 +401,16 @@ func buildQuickOnboardProvider(req QuickOnboardRequest, name, encryptedCredentia
 
 func buildQuickOnboardModel(providerID uuid.UUID, input QuickOnboardModelInput) *model.Model {
 	enabled := true
+	if input.Enabled != nil {
+		enabled = *input.Enabled
+	}
 	weight := 1
 	if input.Weight != nil {
 		weight = *input.Weight
+	}
+	status := model.ModelStatusEnabled
+	if !enabled {
+		status = model.ModelStatusManuallyDisabled
 	}
 	m := &model.Model{
 		ID:              uuid.New(),
@@ -409,7 +418,7 @@ func buildQuickOnboardModel(providerID uuid.UUID, input QuickOnboardModelInput) 
 		ProviderID:      providerID,
 		ModelType:       input.ModelType,
 		Enabled:         &enabled,
-		Status:          model.ModelStatusEnabled,
+		Status:          status,
 		UpstreamModelID: input.UpstreamModelID,
 		Description:     input.Description,
 		PriceMode:       input.PriceMode,

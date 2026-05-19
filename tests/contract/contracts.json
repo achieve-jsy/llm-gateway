@@ -40,13 +40,15 @@
     "model_item_fields": [
       "name", "model_type", "upstream_model_id", "description",
       "context_length", "max_output_tokens", "price_mode",
-      "input_price", "output_price", "weight"
+      "input_price", "output_price", "cache_read_price", "cache_write_price",
+      "catalog_id", "weight", "enabled"
     ],
     "required_fields": ["provider.definition_id", "provider.endpoint", "credentials", "models"],
     "validation": {
       "credentials": "array, min=1；每项 credentials 为与单渠道 ProviderPayload.credentials 一致的 JSON 字符串",
       "models": "array, min=1；每个输入模型都会创建到每个新渠道下",
       "model_type": "可选；chat | embedding | embedding_vl | rerank | rerank_vl | video；未传时后端按模型名推断",
+      "enabled": "可选 bool；缺省 true。继承源渠道禁用模型时应传 false，创建后保持禁用",
       "price_mode": "catalog | manual；manual 时 input_price 或 output_price 至少一个大于 0",
       "name_prefix": "可选；后端用于自动生成渠道名。未传时按 provider definition display_name/id 生成",
       "provider_name_generation": "后端生成唯一渠道名：<name_prefix-or-definition-id/purpose>-NNN；若与已有 providers.name 冲突应自动递增，分配失败返回 400 bad_request。"

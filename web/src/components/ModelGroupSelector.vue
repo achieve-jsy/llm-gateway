@@ -96,6 +96,7 @@ import type { ModelOption, Strategy } from '@/types/group'
 interface ModelItem {
   model_id: string
   model_name: string
+  provider_name?: string
   priority: number | null
   weight: number | null
 }
@@ -270,6 +271,7 @@ function onConfirm() {
     return {
       model_id: id,
       model_name: model?.name ?? id,
+      provider_name: model?.provider?.name,
       priority: props.strategy === 'priority' ? (priorities.value[id] ?? 0) : null,
       weight: props.strategy === 'weighted' ? (weights.value[id] ?? 1) : null,
     }

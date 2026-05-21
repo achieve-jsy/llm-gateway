@@ -562,7 +562,7 @@
         "response_fields": ["before_limit_usd", "after_limit_usd", "current_used_usd", "affected_members", "affected_groups", "data_as_of", "stale", "below_used", "zero_block", "replaces_pending_schedule", "preview_version"]
       },
       {"method": "GET", "path": "/api/v1/budget/risk-events", "response_status": [200, 400, 403, 503], "response_fields": ["items", "total", "data_as_of", "stale"]},
-      {"method": "GET", "path": "/api/v1/budget/risk-events/summary", "response_status": [200, 400, 403, 503]},
+      {"method": "GET", "path": "/api/v1/budget/risk-events/summary", "response_status": [200, 400, 403, 503], "response_fields": ["total", "warning", "critical", "by_type", "blocked_requests_total", "data_as_of", "stale"]},
       {
         "method": "GET",
         "path": "/api/v1/my/budget/tiers",

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
@@ -56,7 +57,9 @@ func riskFilter(c *gin.Context) service.RiskFilter {
 		PeriodType: c.Query("period_type"), DimensionType: c.Query("dimension_type"),
 		ModelTierID: c.Query("model_tier_id"), RiskType: c.Query("risk_type"),
 		Severity: c.Query("severity"),
-		Page:     page, PageSize: pageSize,
+		Q:        strings.TrimSpace(c.Query("q")),
+		SortBy:   c.Query("sort_by"), SortOrder: c.Query("sort_order"),
+		Page: page, PageSize: pageSize,
 	}
 }
 

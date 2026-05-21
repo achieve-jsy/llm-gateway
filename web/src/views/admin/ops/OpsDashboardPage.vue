@@ -314,6 +314,37 @@ function buildFilter(extraTimeRange?: string): { time_range?: string; group_id?:
   return filter
 }
 
+/** 与后端 bucketSeconds 对齐：缺 qps/tps 时用 request_count/token_count 推算 */
+function trafficBucketSeconds(range: string): number {
+  switch (range) {
+    case '5m': return 60
+    case '30m': return 300
+    case '6h': return 1800
+    case '24h': return 3600
+    default: return 300 // 1h
+  }
+}
+
+function normalizeTrafficPoints(
+  points: Array<Partial<OpsTrafficPoint> & { request_count?: number; token_count?: number }>,
+  range: string,
+): OpsTrafficPoint[] {
+  const sec = trafficBucketSeconds(range)
+  return (points || []).map((p) => {
+    const requestCount = Number(p.request_count ?? 0)
+    const tokenCount = Number(p.token_count ?? 0)
+    const qpsRaw = Number(p.qps)
+    const tpsRaw = Number(p.tps)
+    return {
+      timestamp: String(p.timestamp ?? ''),
+      request_count: requestCount,
+      token_count: tokenCount,
+      qps: Number.isFinite(qpsRaw) ? qpsRaw : requestCount / sec,
+      tps: Number.isFinite(tpsRaw) ? tpsRaw : tokenCount / sec,
+    }
+  })
+}
+
 // -- Fetchers --
 
 async function fetchAllData() {
@@ -328,7 +359,8 @@ async function fetchAllData() {
   try {
     const snap = await opsAPI.getSnapshotV2(buildFilter())
     dashboardData.value = snap.overview
-    trafficTrendData.value = snap.throughput_trend.points as any
+    // snapshot-v2 历史版本可能只返回 request_count/token_count，需补齐 qps/tps 才能画图
+    trafficTrendData.value = normalizeTrafficPoints(snap.throughput_trend?.points ?? [], timeRange.value)
     errorTrendData.value = snap.error_trend.points as any
   } catch {
     await Promise.all([
@@ -363,7 +395,7 @@ async function fetchTrafficAndThroughput() {
       opsAPI.getTrafficTrend(buildFilter()),
       opsAPI.getThroughputTrend(buildFilter()).catch(() => null)
     ])
-    trafficTrendData.value = trendResp.points
+    trafficTrendData.value = normalizeTrafficPoints(trendResp.points ?? [], timeRange.value)
     if (throughputResp) {
       throughputByProvider.value = throughputResp.by_provider || []
       throughputTopGroups.value = throughputResp.top_groups || []

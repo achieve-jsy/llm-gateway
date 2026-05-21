@@ -3,6 +3,7 @@ import type { ExpansionDimension, ExpansionPeriod, MoneyUSD } from './expansion'
 
 export type BudgetRiskType = 'threshold_reached' | 'budget_exhausted' | 'request_blocked'
 export type BudgetRiskSeverity = 'warning' | 'critical'
+export type BudgetRiskSortBy = 'usage_ratio' | 'blocked_requests' | 'detected_at'
 
 export interface BudgetRiskEvent {
   id: string
@@ -33,6 +34,9 @@ export interface BudgetRiskFilter {
   model_tier_id?: string
   risk_type?: BudgetRiskType
   severity?: BudgetRiskSeverity
+  q?: string
+  sort_by?: BudgetRiskSortBy | ''
+  sort_order?: 'asc' | 'desc' | ''
   page?: number
   page_size?: number
 }
@@ -51,6 +55,7 @@ export interface BudgetRiskSummary {
   warning: number
   critical: number
   by_type?: Partial<Record<BudgetRiskType, number>>
+  blocked_requests_total?: number
   data_as_of: string
   stale: boolean
 }

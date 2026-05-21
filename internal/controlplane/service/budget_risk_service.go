@@ -46,6 +46,9 @@ type BudgetRiskEvent struct {
 type RiskFilter struct {
 	ScopeType, ScopeID, PeriodType, DimensionType string
 	ModelTierID, RiskType, Severity               string
+	Q                                             string // 影响对象名称关键词（人名/部门等）
+	SortBy                                        string // usage_ratio | blocked_requests | detected_at
+	SortOrder                                     string // asc | desc
 	Page, PageSize                                int
 }
 
@@ -59,12 +62,13 @@ type BudgetRiskPage struct {
 }
 
 type BudgetRiskSummary struct {
-	Total    int            `json:"total"`
-	Warning  int            `json:"warning"`
-	Critical int            `json:"critical"`
-	ByType   map[string]int `json:"by_type"`
-	DataAsOf time.Time      `json:"data_as_of"`
-	Stale    bool           `json:"stale"`
+	Total                int            `json:"total"`
+	Warning              int            `json:"warning"`
+	Critical             int            `json:"critical"`
+	ByType               map[string]int `json:"by_type"`
+	BlockedRequestsTotal int64          `json:"blocked_requests_total"`
+	DataAsOf             time.Time      `json:"data_as_of"`
+	Stale                bool           `json:"stale"`
 }
 
 type BudgetRiskService struct {
@@ -198,15 +202,17 @@ func (s *BudgetRiskService) List(ctx context.Context, actor ActorScope, filter R
 		}
 	}
 	s.resolveRiskScopeNames(items)
-	sort.SliceStable(items, func(i, j int) bool {
-		if items[i].RiskType == "request_blocked" && items[j].RiskType != "request_blocked" {
-			return true
+	if q := strings.TrimSpace(filter.Q); q != "" {
+		needle := strings.ToLower(q)
+		filtered := make([]BudgetRiskEvent, 0, len(items))
+		for _, item := range items {
+			if strings.Contains(strings.ToLower(item.ScopeName), needle) {
+				filtered = append(filtered, item)
+			}
 		}
-		if items[i].Severity != items[j].Severity {
-			return items[i].Severity == "critical"
-		}
-		return items[i].DetectedAt.After(items[j].DetectedAt)
-	})
+		items = filtered
+	}
+	sortBudgetRiskEvents(items, filter.SortBy, filter.SortOrder)
 	dataAsOf := now
 	for _, item := range items {
 		if item.DataAsOf.Before(dataAsOf) {
@@ -293,6 +299,7 @@ func (s *BudgetRiskService) Summary(ctx context.Context, actor ActorScope, filte
 	}
 	for _, item := range page.Items {
 		summary.ByType[item.RiskType]++
+		summary.BlockedRequestsTotal += item.BlockedRequests
 		if item.Severity == "critical" {
 			summary.Critical++
 		} else {
@@ -585,6 +592,49 @@ func riskMatches(event BudgetRiskEvent, filter RiskFilter) bool {
 		(filter.ModelTierID == "" || (event.ModelTierID != nil && *event.ModelTierID == filter.ModelTierID)) &&
 		(filter.RiskType == "" || event.RiskType == filter.RiskType) &&
 		(filter.Severity == "" || event.Severity == filter.Severity)
+}
+
+func sortBudgetRiskEvents(items []BudgetRiskEvent, sortBy, sortOrder string) {
+	desc := !strings.EqualFold(sortOrder, "asc")
+	switch sortBy {
+	case "usage_ratio":
+		sort.SliceStable(items, func(i, j int) bool {
+			ri, _ := decimal.NewFromString(items[i].UsageRatio)
+			rj, _ := decimal.NewFromString(items[j].UsageRatio)
+			if desc {
+				return ri.GreaterThan(rj)
+			}
+			return ri.LessThan(rj)
+		})
+	case "blocked_requests":
+		sort.SliceStable(items, func(i, j int) bool {
+			if desc {
+				return items[i].BlockedRequests > items[j].BlockedRequests
+			}
+			return items[i].BlockedRequests < items[j].BlockedRequests
+		})
+	case "detected_at":
+		sort.SliceStable(items, func(i, j int) bool {
+			if desc {
+				return items[i].DetectedAt.After(items[j].DetectedAt)
+			}
+			return items[i].DetectedAt.Before(items[j].DetectedAt)
+		})
+	default:
+		// 默认：阻断优先 → 严重优先 → 最近发现
+		sort.SliceStable(items, func(i, j int) bool {
+			if items[i].RiskType == "request_blocked" && items[j].RiskType != "request_blocked" {
+				return true
+			}
+			if items[i].RiskType != "request_blocked" && items[j].RiskType == "request_blocked" {
+				return false
+			}
+			if items[i].Severity != items[j].Severity {
+				return items[i].Severity == "critical"
+			}
+			return items[i].DetectedAt.After(items[j].DetectedAt)
+		})
+	}
 }
 
 func paginateBudgetRiskEvents(items []BudgetRiskEvent, page, pageSize int) []BudgetRiskEvent {

@@ -1,23 +1,23 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import BudgetRiskEventsSection from '../BudgetRiskEventsSection.vue'
 import type { BudgetRiskEvent, BudgetRiskPage, BudgetRiskSummary } from '@/types/budget-risk'
 
-// Mock vue-router
 const mockPush = vi.fn()
+const mockReplace = vi.fn()
+const routeQuery: Record<string, string> = {}
+
 vi.mock('vue-router', () => ({
-  useRouter: () => ({ push: mockPush }),
-  useRoute: () => ({ query: {} }),
+  useRouter: () => ({ push: mockPush, replace: mockReplace }),
+  useRoute: () => ({ query: routeQuery }),
 }))
 
-// Mock element-plus icons
 vi.mock('@element-plus/icons-vue', () => ({
   Refresh: { template: '<i />' },
 }))
 
-// ── Mock API services ──────────────────────────────────────────────
 const mockListBudgetRisks = vi.fn()
 const mockGetBudgetRiskSummary = vi.fn()
 const mockNotifyBudgetOwner = vi.fn()
@@ -28,7 +28,6 @@ vi.mock('@/services/control-plane', () => ({
   notifyBudgetOwner: (...args: unknown[]) => mockNotifyBudgetOwner(...args),
 }))
 
-// Mock DataFreshnessNotice
 vi.mock('@/components/common/DataFreshnessNotice.vue', () => ({
   default: {
     name: 'DataFreshnessNotice',
@@ -37,7 +36,6 @@ vi.mock('@/components/common/DataFreshnessNotice.vue', () => ({
   },
 }))
 
-// ── Fixtures ───────────────────────────────────────────────────────
 function makeRiskEvent(overrides: Partial<BudgetRiskEvent> = {}): BudgetRiskEvent {
   return {
     id: 'risk-1',
@@ -64,8 +62,15 @@ function makeRiskEvent(overrides: Partial<BudgetRiskEvent> = {}): BudgetRiskEven
 
 const samplePage: BudgetRiskPage = {
   items: [
-    makeRiskEvent({ id: 'risk-1', severity: 'warning', scope_name: '张三' }),
-    makeRiskEvent({ id: 'risk-2', severity: 'critical', scope_name: '李四', risk_type: 'request_blocked', blocked_requests: 5 }),
+    makeRiskEvent({ id: 'risk-1', severity: 'warning', scope_name: '张三', usage_ratio: '0.90' }),
+    makeRiskEvent({
+      id: 'risk-2',
+      severity: 'critical',
+      scope_name: '李四',
+      risk_type: 'request_blocked',
+      blocked_requests: 5,
+      usage_ratio: '1.11',
+    }),
   ],
   total: 2,
   data_as_of: '2026-07-13T10:00:00Z',
@@ -77,11 +82,11 @@ const sampleSummary: BudgetRiskSummary = {
   warning: 2,
   critical: 1,
   by_type: { threshold_reached: 2, request_blocked: 1 },
+  blocked_requests_total: 12,
   data_as_of: '2026-07-13T10:00:00Z',
   stale: false,
 }
 
-// ── Helpers ────────────────────────────────────────────────────────
 function mountSection() {
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -100,13 +105,19 @@ async function openFirstRisk(wrapper: ReturnType<typeof mountSection>) {
   await flushPromises()
 }
 
-// ── Tests ──────────────────────────────────────────────────────────
 describe('BudgetRiskEventsSection', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.useFakeTimers()
+    Object.keys(routeQuery).forEach((key) => delete routeQuery[key])
+    localStorage.setItem('budget-risk-auto-refresh', '0')
     mockListBudgetRisks.mockResolvedValue({ ...samplePage })
     mockGetBudgetRiskSummary.mockResolvedValue({ ...sampleSummary })
     mockNotifyBudgetOwner.mockResolvedValue(undefined)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   describe('风险摘要', () => {
@@ -116,13 +127,14 @@ describe('BudgetRiskEventsSection', () => {
 
       expect(mockListBudgetRisks).toHaveBeenCalled()
       expect(mockGetBudgetRiskSummary).toHaveBeenCalled()
-      expect(mockListBudgetRisks).toHaveBeenCalledWith(expect.objectContaining({ page: 1, page_size: 50 }))
+      expect(mockListBudgetRisks).toHaveBeenCalledWith(expect.objectContaining({ page: 1, page_size: 20 }))
       expect(wrapper.text()).toContain('当前风险')
       expect(wrapper.text()).toContain('严重风险')
       expect(wrapper.text()).toContain('即将耗尽')
       expect(wrapper.text()).toContain('实际阻断')
       expect(wrapper.text()).toContain('阻断请求')
-      expect(wrapper.get('[data-test="budget-kpi-blocked-requests"]').text()).toContain('5')
+      expect(wrapper.get('[data-test="budget-kpi-blocked-requests"]').text()).toContain('12')
+      expect(wrapper.get('[data-test="budget-kpi-blocked-requests"]').text()).toContain('全量合计')
     })
   })
 
@@ -144,12 +156,13 @@ describe('BudgetRiskEventsSection', () => {
       expect(wrapper.html()).toContain('实时风险事件')
     })
 
-    it('空列表时显示"当前没有预算风险"', async () => {
+    it('空列表时显示监控中与上次刷新时间', async () => {
       mockListBudgetRisks.mockResolvedValue({ items: [], total: 0, data_as_of: '', stale: false })
       const wrapper = mountSection()
       await flushPromises()
 
-      expect(wrapper.html()).toContain('当前没有预算风险')
+      expect(wrapper.get('[data-test="risk-empty"]').text()).toContain('系统持续监控中')
+      expect(wrapper.get('[data-test="risk-empty"]').text()).toContain('上次刷新')
     })
 
     it('显示额度和已用金额', async () => {
@@ -159,6 +172,33 @@ describe('BudgetRiskEventsSection', () => {
       const html = wrapper.html()
       expect(html).toContain('$100.00')
       expect(html).toContain('$90.00')
+    })
+
+    it('使用率以进度条和百分比展示，超额标红', async () => {
+      const wrapper = mountSection()
+      await flushPromises()
+
+      const bars = wrapper.findAll('[data-test="risk-usage-bar"]')
+      expect(bars.length).toBeGreaterThanOrEqual(2)
+      expect(bars.some((bar) => bar.text().includes('90%'))).toBe(true)
+      expect(bars.some((bar) => bar.text().includes('111%'))).toBe(true)
+      expect(bars.some((bar) => bar.classes().includes('is-over'))).toBe(true)
+    })
+
+    it('行内可直接调整额度与查看用量', async () => {
+      const wrapper = mountSection()
+      await flushPromises()
+
+      await wrapper.get('[data-test="risk-inline-adjust"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.emitted('viewBudget')?.[0]?.[0]).toMatchObject({ scope_name: '张三' })
+
+      await wrapper.get('[data-test="risk-inline-usage"]').trigger('click')
+      await flushPromises()
+      expect(mockPush).toHaveBeenCalledWith(expect.objectContaining({
+        path: '/admin/usage/dashboard',
+        query: expect.objectContaining({ scope_type: 'member', scope_id: 'user-1' }),
+      }))
     })
   })
 
@@ -194,10 +234,7 @@ describe('BudgetRiskEventsSection', () => {
       await flushPromises()
 
       const tags = wrapper.findAll('.el-tag')
-      // We expect at least 2 tags (warning + critical from sample data)
-      // warning uses type="warning", critical uses type="danger"
       const tagTypes = tags.map(t => t.classes()).flat()
-      // el-tag renders with el-tag--warning or el-tag--danger classes
       expect(tagTypes.some(c => c.includes('warning'))).toBe(true)
       expect(tagTypes.some(c => c.includes('danger'))).toBe(true)
     })
@@ -263,13 +300,11 @@ describe('BudgetRiskEventsSection', () => {
       const wrapper = mountSection()
       await flushPromises()
 
-      // Simulate row click
       const rows = wrapper.findAll('.el-table__row')
       expect(rows.length).toBeGreaterThan(0)
       await rows[0].trigger('click')
       await flushPromises()
 
-      // Drawer should be visible and contain details
       expect(wrapper.find('.mock-drawer, .el-drawer').exists()).toBe(true)
     })
 
@@ -326,7 +361,7 @@ describe('BudgetRiskEventsSection', () => {
   })
 
   describe('筛选功能', () => {
-    it('渲染筛选器（周期、维度、类型、严重度）', async () => {
+    it('渲染筛选器（周期、维度、类型、严重度、关键词）', async () => {
       const wrapper = mountSection()
       await flushPromises()
 
@@ -335,23 +370,101 @@ describe('BudgetRiskEventsSection', () => {
       expect(html).toContain('全部维度')
       expect(html).toContain('全部类型')
       expect(html).toContain('全部严重度')
+      expect(wrapper.find('[data-test="risk-filter-q"]').exists()).toBe(true)
+      expect(wrapper.findAll('button').some(b => b.text() === '筛选')).toBe(false)
     })
 
-    it('点击"筛选"按钮重新加载数据', async () => {
+    it('改下拉后立即重新加载并写入 URL', async () => {
       const wrapper = mountSection()
       await flushPromises()
+      mockListBudgetRisks.mockClear()
+      mockGetBudgetRiskSummary.mockClear()
+      mockReplace.mockClear()
 
-      const filterBtn = wrapper.findAll('button').find(b => b.text() === '筛选')
-      expect(filterBtn).toBeDefined()
-      await filterBtn!.trigger('click')
+      const period = wrapper.findComponent('[data-test="risk-filter-period"]')
+      await period.vm.$emit('update:modelValue', 'daily')
       await flushPromises()
 
-      expect(mockListBudgetRisks).toHaveBeenCalledTimes(2)
-      expect(mockGetBudgetRiskSummary).toHaveBeenCalledTimes(2)
+      expect(mockListBudgetRisks).toHaveBeenCalledWith(expect.objectContaining({
+        period_type: 'daily',
+        page: 1,
+        page_size: 20,
+      }))
+      expect(mockReplace).toHaveBeenCalledWith(expect.objectContaining({
+        query: expect.objectContaining({ rf_period: 'daily' }),
+      }))
+    })
+
+    it('关键词防抖后携带 q 参数请求', async () => {
+      const wrapper = mountSection()
+      await flushPromises()
+      mockListBudgetRisks.mockClear()
+
+      const input = wrapper.get('[data-test="risk-filter-q"]').findComponent({ name: 'ElInput' })
+      await input.setValue('研发')
+      await flushPromises()
+      expect(mockListBudgetRisks).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(300)
+      await flushPromises()
+      expect(mockListBudgetRisks).toHaveBeenCalledWith(expect.objectContaining({ q: '研发', page: 1 }))
     })
   })
 
-  describe('刷新按钮', () => {
+  describe('分页与排序', () => {
+    it('渲染分页器并绑定 total', async () => {
+      mockListBudgetRisks.mockResolvedValue({
+        ...samplePage,
+        total: 35,
+        page: 1,
+        page_size: 20,
+      })
+      const wrapper = mountSection()
+      await flushPromises()
+
+      const pagination = wrapper.findComponent({ name: 'ElPagination' })
+      expect(pagination.exists()).toBe(true)
+      expect(pagination.props('total')).toBe(35)
+      expect(pagination.props('pageSize')).toBe(20)
+    })
+
+    it('切换页码时携带 page 参数重新请求', async () => {
+      mockListBudgetRisks.mockResolvedValue({
+        ...samplePage,
+        total: 35,
+        page: 1,
+        page_size: 20,
+      })
+      const wrapper = mountSection()
+      await flushPromises()
+
+      const pagination = wrapper.findComponent({ name: 'ElPagination' })
+      pagination.vm.$emit('update:current-page', 2)
+      await flushPromises()
+      pagination.vm.$emit('current-change', 2)
+      await flushPromises()
+
+      expect(mockListBudgetRisks).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2, page_size: 20 }))
+    })
+
+    it('表头排序携带 sort_by / sort_order', async () => {
+      const wrapper = mountSection()
+      await flushPromises()
+      mockListBudgetRisks.mockClear()
+
+      const table = wrapper.findComponent({ name: 'ElTable' })
+      table.vm.$emit('sort-change', { prop: 'usage_ratio', order: 'descending' })
+      await flushPromises()
+
+      expect(mockListBudgetRisks).toHaveBeenCalledWith(expect.objectContaining({
+        sort_by: 'usage_ratio',
+        sort_order: 'desc',
+        page: 1,
+      }))
+    })
+  })
+
+  describe('刷新与自动刷新', () => {
     it('点击"刷新"重新加载数据', async () => {
       const wrapper = mountSection()
       await flushPromises()
@@ -364,6 +477,21 @@ describe('BudgetRiskEventsSection', () => {
       expect(mockListBudgetRisks).toHaveBeenCalledTimes(2)
       expect(mockGetBudgetRiskSummary).toHaveBeenCalledTimes(2)
     })
+
+    it('开启自动刷新后按 30s 轮询', async () => {
+      const wrapper = mountSection()
+      await flushPromises()
+      mockListBudgetRisks.mockClear()
+
+      const auto = wrapper.findComponent('[data-test="risk-auto-refresh"] .el-switch')
+      await auto.vm.$emit('update:modelValue', true)
+      await flushPromises()
+
+      await vi.advanceTimersByTimeAsync(30_000)
+      await flushPromises()
+      expect(mockListBudgetRisks).toHaveBeenCalled()
+      expect(localStorage.getItem('budget-risk-auto-refresh')).toBe('1')
+    })
   })
 
   describe('DataFreshnessNotice', () => {
@@ -374,8 +502,4 @@ describe('BudgetRiskEventsSection', () => {
       expect(wrapper.findComponent({ name: 'DataFreshnessNotice' }).exists()).toBe(true)
     })
   })
-
-  // TDD: The component's load() uses try/finally without catch,
-  // so API errors produce unhandled rejections. This is a known bug
-  // to be fixed separately.
 })

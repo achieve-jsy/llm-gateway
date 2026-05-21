@@ -685,6 +685,72 @@ func TestBudgetRiskResolvesScopeNamesFromItemsForGlobalAdmin(t *testing.T) {
 	require.Equal(t, memberID.String(), page.Items[0].ScopeID)
 }
 
+func TestBudgetRiskKeywordAndSortAndBlockedTotal(t *testing.T) {
+	now := time.Date(2026, 7, 11, 9, 0, 0, 0, time.UTC)
+	db := newBudgetRiskTestDB(t)
+	memberA := uuid.New()
+	memberB := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO call_logs VALUES (402,NULL,?,?,?,?,?,?)`,
+		"budget_exceeded", "total", model.BudgetScopeMember, memberA.String(), "monthly", now).Error)
+	require.NoError(t, db.Exec(`INSERT INTO call_logs VALUES (402,NULL,?,?,?,?,?,?)`,
+		"budget_exceeded", "total", model.BudgetScopeMember, memberA.String(), "monthly", now.Add(-time.Minute)).Error)
+	require.NoError(t, db.Exec(`INSERT INTO call_logs VALUES (402,NULL,?,?,?,?,?,?)`,
+		"budget_exceeded", "total", model.BudgetScopeMember, memberB.String(), "monthly", now).Error)
+
+	allocRepo := newFakeAllocRepo()
+	allocRepo.allocations[allocationKey(model.BudgetScopeMember, memberA.String())] = &model.BudgetAllocation{
+		ID: uuid.New(), ScopeType: model.BudgetScopeMember, ScopeID: memberA.String(),
+		AmountUSD: 10, DailyAmountUSD: -1, WeeklyAmountUSD: -1, Enabled: true,
+	}
+	allocRepo.allocations[allocationKey(model.BudgetScopeMember, memberB.String())] = &model.BudgetAllocation{
+		ID: uuid.New(), ScopeType: model.BudgetScopeMember, ScopeID: memberB.String(),
+		AmountUSD: 10, DailyAmountUSD: -1, WeeklyAmountUSD: -1, Enabled: true,
+	}
+	allocRepo.resolveScopeNames = func(scopeType string, scopeIDs []string) (map[string]string, error) {
+		require.Equal(t, model.BudgetScopeMember, scopeType)
+		return map[string]string{
+			memberA.String(): "张三",
+			memberB.String(): "李四-研发部",
+		}, nil
+	}
+	budgetSvc := service.NewBudgetService(allocRepo, newFakeAlertRepo())
+	mini := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	budgetSvc.SetRedis(redisClient)
+	require.NoError(t, redisClient.Set(context.Background(),
+		fmt.Sprintf("budget:v2:used:member:%s:2026-07", memberA.String()), int64(15_000_000), 0).Err())
+	require.NoError(t, redisClient.Set(context.Background(),
+		fmt.Sprintf("budget:v2:used:member:%s:2026-07", memberB.String()), int64(11_000_000), 0).Err())
+
+	tierSvc := service.NewBudgetTierService(
+		&myBudgetStore{limits: map[uuid.UUID][]model.BudgetTierLimit{}, overrides: map[uuid.UUID][]model.BudgetTemporaryOverride{}},
+		myBudgetReader{}, newFakeModelTierRepo(), func() time.Time { return now },
+	)
+	riskSvc := service.NewBudgetRiskService(repository.NewBudgetRiskRepo(db), budgetSvc, tierSvc, func() time.Time { return now })
+
+	page, err := riskSvc.List(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.RiskFilter{
+		PeriodType: "monthly", Q: "研发",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, page.Total) // 李四：阻断 + 耗尽
+	for _, item := range page.Items {
+		require.Equal(t, "李四-研发部", item.ScopeName)
+	}
+
+	sorted, err := riskSvc.List(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.RiskFilter{
+		PeriodType: "monthly", SortBy: "usage_ratio", SortOrder: "desc",
+	})
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, sorted.Total, 2)
+	require.Equal(t, "张三", sorted.Items[0].ScopeName)
+
+	summary, err := riskSvc.Summary(context.Background(), service.ActorScope{Role: "admin", IsGlobal: true}, service.RiskFilter{
+		PeriodType: "monthly",
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(3), summary.BlockedRequestsTotal)
+}
+
 func newBudgetRiskTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+uuid.NewString()+"?mode=memory&cache=shared"), &gorm.Config{})

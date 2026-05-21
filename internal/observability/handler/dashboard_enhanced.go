@@ -553,7 +553,7 @@ func (h *UsageHandler) DashboardUserDetail(c *gin.Context) {
 		ORDER BY cost DESC
 	`, from, toExcl, userID, endpoint, endpoint).Scan(&models)
 
-	// 小时分布
+	// 小时分布（ts 为 timestamptz/UTC，转 Asia/Shanghai 后再取小时，避免整体偏移 8 小时）
 	type hourlyDist struct {
 		Hour  int   `json:"hour"  gorm:"column:hour"`
 		Calls int64 `json:"calls" gorm:"column:calls"`
@@ -561,12 +561,12 @@ func (h *UsageHandler) DashboardUserDetail(c *gin.Context) {
 	var hourly []hourlyDist
 	_ = db.Raw(`
 		SELECT
-			EXTRACT(HOUR FROM ts)::int AS hour,
+			EXTRACT(HOUR FROM (ts AT TIME ZONE 'Asia/Shanghai'))::int AS hour,
 			COUNT(*) AS calls
 		FROM call_logs
 		WHERE ts >= ? AND ts < ? AND COALESCE(user_id, 'unknown') = ?
 			AND (? = '' OR inbound_endpoint = ?)
-		GROUP BY EXTRACT(HOUR FROM ts)
+		GROUP BY EXTRACT(HOUR FROM (ts AT TIME ZONE 'Asia/Shanghai'))
 		ORDER BY hour ASC
 	`, from, toExcl, userID, endpoint, endpoint).Scan(&hourly)
 

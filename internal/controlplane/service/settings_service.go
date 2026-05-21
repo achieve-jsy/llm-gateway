@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/example/llm-gateway/internal/controlplane/keyactivity"
 	"github.com/example/llm-gateway/internal/controlplane/model"
@@ -227,12 +228,26 @@ func (s *SettingsService) GetSystemSettings(ctx context.Context) (*model.SystemS
 	}, nil
 }
 
-// maskSecret 脱敏密码/密钥：非空时返回 "••••••" 避免在 API 响应中泄露。
+// MaskedSecretPlaceholder 设置页 API 对密码/密钥的脱敏占位符。
+// 前端回显后若原样提交，必须视为「未修改」而非真实凭据。
+const MaskedSecretPlaceholder = "••••••"
+
+// maskSecret 脱敏密码/密钥：非空时返回占位符，避免在 API 响应中泄露。
 func maskSecret(s string) string {
 	if s == "" {
 		return ""
 	}
-	return "••••••"
+	return MaskedSecretPlaceholder
+}
+
+// IsMaskedSecret 判断是否为脱敏占位（含历史 ASCII 星号形态）。
+func IsMaskedSecret(s string) bool {
+	switch strings.TrimSpace(s) {
+	case "", MaskedSecretPlaceholder, "******", "********":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *SettingsService) GetPublicSettings(ctx context.Context) (*model.PublicSettings, error) {
@@ -284,7 +299,7 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, settings *model.Sy
 	}
 	updates[SettingKeyOIDCIssuerURL] = settings.OIDCIssuerURL
 	updates[SettingKeyOIDCClientID] = settings.OIDCClientID
-	if settings.OIDCClientSecret != "" {
+	if settings.OIDCClientSecret != "" && !IsMaskedSecret(settings.OIDCClientSecret) {
 		updates[SettingKeyOIDCClientSecret] = settings.OIDCClientSecret
 	}
 	updates[SettingKeyOIDCRedirectURL] = settings.OIDCRedirectURL
@@ -292,7 +307,7 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, settings *model.Sy
 	updates[SettingKeyOIDCEnabled] = fmt.Sprintf("%t", settings.OIDCEnabled)
 	updates[SettingKeyWebhookEnabled] = fmt.Sprintf("%t", settings.WebhookEnabled)
 	updates[SettingKeyWebhookURL] = settings.WebhookURL
-	if settings.WebhookSecret != "" {
+	if settings.WebhookSecret != "" && !IsMaskedSecret(settings.WebhookSecret) {
 		updates[SettingKeyWebhookSecret] = settings.WebhookSecret
 	}
 	updates[SettingKeyWebhookEvents] = settings.WebhookEvents
@@ -330,7 +345,7 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, settings *model.Sy
 	if settings.SMTPFrom != "" {
 		updates[SettingKeySMTPFrom] = settings.SMTPFrom
 	}
-	if settings.SMTPPassword != "" {
+	if settings.SMTPPassword != "" && !IsMaskedSecret(settings.SMTPPassword) {
 		updates[SettingKeySMTPPassword] = settings.SMTPPassword
 	}
 	updates[SettingKeySMTPTLSSkipVerify] = fmt.Sprintf("%t", settings.SMTPTLSSkipVerify)

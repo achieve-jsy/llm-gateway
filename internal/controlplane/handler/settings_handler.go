@@ -164,22 +164,21 @@ func (h *SettingsHandler) TestEmail(c *gin.Context) {
 	password := req.Password
 	skipVerify := req.SkipVerify
 
+	// 前端回显的脱敏占位（••••••）不能当真实密码；一律回落已保存明文。
+	if service.IsMaskedSecret(password) {
+		password = ""
+	}
+
 	if host == "" && saved != nil {
 		host = saved.SMTPHost
 		port = saved.SMTPPort
 		from = saved.SMTPFrom
-		if password == "" {
-			password = saved.SMTPPassword
-			// SMTPPassword 在 GetSystemSettings 中已脱敏，用原始值覆盖
-			if h.svc != nil {
-				if raw := h.svc.GetSMTPPassword(c.Request.Context()); raw != "" {
-					password = raw
-				}
-			}
-		}
 		if !req.SkipVerify {
 			skipVerify = saved.SMTPTLSSkipVerify
 		}
+	}
+	if password == "" {
+		password = h.svc.GetSMTPPassword(c.Request.Context())
 	}
 
 	if host == "" {
@@ -193,9 +192,6 @@ func (h *SettingsHandler) TestEmail(c *gin.Context) {
 			"error": gin.H{"message": "请填写发件人邮箱", "code": CodeBadRequest},
 		})
 		return
-	}
-	if password == "" && saved != nil {
-		password = h.svc.GetSMTPPassword(c.Request.Context())
 	}
 	if password == "" {
 		c.JSON(http.StatusBadRequest, gin.H{

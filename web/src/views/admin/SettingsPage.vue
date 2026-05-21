@@ -921,6 +921,13 @@ function validateForm(): string | null {
   return null
 }
 
+/** 脱敏占位不当真值提交；空字符串表示「不改已保存密钥」 */
+function secretForSave(v: string | undefined) {
+  const s = (v ?? '').trim()
+  if (!s || s === '••••••' || /^\*+$/.test(s)) return ''
+  return s
+}
+
 async function handleSave() {
   const error = validateForm()
   if (error) {
@@ -943,19 +950,19 @@ async function handleSave() {
       default_service_key_max_concurrency: form.default_service_key_max_concurrency,
      oidc_issuer_url: form.oidc_issuer_url.trim(),
       oidc_client_id: form.oidc_client_id.trim(),
-      oidc_client_secret: form.oidc_client_secret,
+      oidc_client_secret: secretForSave(form.oidc_client_secret),
       oidc_redirect_url: form.oidc_redirect_url.trim(),
       oidc_scopes: form.oidc_scopes.trim(),
       oidc_enabled: form.oidc_enabled,
       webhook_enabled: form.webhook_enabled,
       webhook_url: form.webhook_url.trim(),
-      webhook_secret: form.webhook_secret,
+      webhook_secret: secretForSave(form.webhook_secret),
       webhook_events: form.webhook_events,
       email_enabled: form.email_enabled,
       smtp_host: form.smtp_host.trim(),
       smtp_port: form.smtp_port,
       smtp_from: form.smtp_from.trim(),
-      smtp_password: form.smtp_password,
+      smtp_password: secretForSave(form.smtp_password),
       smtp_tls_skip_verify: form.smtp_tls_skip_verify,
       default_max_switches: form.default_max_switches,
       default_same_model_retries: form.default_same_model_retries,
@@ -1020,7 +1027,7 @@ async function handleTestEmail() {
       smtp_host: form.smtp_host.trim(),
       smtp_port: form.smtp_port,
       smtp_from: form.smtp_from.trim(),
-      smtp_password: form.smtp_password,
+      smtp_password: secretForSave(form.smtp_password),
       smtp_tls_skip_verify: form.smtp_tls_skip_verify,
     })
     ElMessage.success(`测试邮件已发送至 ${email}`)

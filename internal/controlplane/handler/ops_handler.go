@@ -2884,9 +2884,10 @@ func (h *OpsHandler) GetSnapshotV2(c *gin.Context) {
 		return
 	}
 
-	// throughput trend
+	// throughput trend（字段需与 GetTrafficTrend / 前端 OpsTrafficPoint 一致：含 qps/tps）
 	interval := timeRangeToInterval(filter.TimeRange)
 	truncExpr := bucketTruncExpr(filter.TimeRange)
+	sec := bucketSeconds(filter.TimeRange)
 	whereClause, args := h.buildFilterClause(c.Request.Context(), filter, interval)
 
 	var throughputRows []struct {
@@ -2904,6 +2905,8 @@ func (h *OpsHandler) GetSnapshotV2(c *gin.Context) {
 	for _, r := range throughputRows {
 		throughputPoints = append(throughputPoints, gin.H{
 			"timestamp":     r.Timestamp.Format(time.RFC3339),
+			"qps":           float64(r.RequestCount) / sec,
+			"tps":           float64(r.TokenCount) / sec,
 			"request_count": r.RequestCount,
 			"token_count":   r.TokenCount,
 		})

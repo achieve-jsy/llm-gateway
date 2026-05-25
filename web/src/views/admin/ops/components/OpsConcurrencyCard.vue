@@ -120,7 +120,7 @@
         <table class="ops-user-table">
           <thead>
             <tr>
-              <th>用户ID</th>
+              <th>用户名</th>
               <th>请求数</th>
               <th>错误数</th>
               <th>平均耗时</th>
@@ -129,7 +129,7 @@
           </thead>
           <tbody>
             <tr v-for="u in userStats.items" :key="u.user_id">
-              <td class="ops-user-id">{{ u.user_id }}</td>
+              <td class="ops-user-id" :title="u.user_id">{{ u.user_name || u.user_id }}</td>
               <td>{{ u.request_count }}</td>
               <td>
                 <span :class="{ 'ops-error-count--has': u.error_count > 0 }">

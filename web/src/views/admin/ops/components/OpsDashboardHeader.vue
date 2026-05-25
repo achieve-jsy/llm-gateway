@@ -542,7 +542,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import {
   ElIcon,
   ElButton,
@@ -679,9 +679,12 @@ onMounted(() => {
   loadGroupOptions()
   loadProviderOptions()
   loadModelOptions()
+  void fetchRealtimeSummary(realtimeWindow.value)
   try {
     wsUnsubscribe.value = subscribeQPS(
       (msg) => {
+        // 仅 1min 窗口接受 WS 瞬时推送，避免覆盖 5min/30min/1h 的窗口均值
+        if (realtimeWindow.value !== '1min') return
         realtimeQPS.value = msg.qps
         realtimeTPS.value = msg.tps
       },
@@ -772,6 +775,8 @@ const realtimeWindow = ref<string>('1min')
 const loadingRealtime = ref(false)
 const realtimeQPS = ref<number | null>(null)
 const realtimeTPS = ref<number | null>(null)
+const realtimePeakQPS = ref<number | null>(null)
+const realtimePeakTPS = ref<number | null>(null)
 const wsStatus = ref<'connecting' | 'connected' | 'reconnecting' | 'offline' | 'closed' | null>(null)
 
 const onRealtimeWindowClick = async (w: string) => {
@@ -789,23 +794,19 @@ const fetchRealtimeSummary = async (window: string) => {
   loadingRealtime.value = true
   try {
     const resp = await opsAPI.getRealtimeTrafficSummary(window)
-    realtimeQPS.value = resp.current_qps
-    realtimeTPS.value = resp.current_tps
+    // 优先窗口均值（随 1min/5min/30min/1h 变化）；current_* 与 avg_* 后端已对齐
+    const qps = resp.avg_qps ?? resp.current_qps ?? 0
+    const tps = resp.avg_tps ?? resp.current_tps ?? 0
+    realtimeQPS.value = qps
+    realtimeTPS.value = tps
+    realtimePeakQPS.value = resp.peak_qps ?? null
+    realtimePeakTPS.value = resp.peak_tps ?? null
   } catch (err) {
     console.error('Failed to fetch realtime traffic summary:', err)
   } finally {
     loadingRealtime.value = false
   }
 }
-
-// 当 overview 变化时，重置 realtime 覆盖数据
-watch(
-  () => props.overview,
-  () => {
-    realtimeQPS.value = null
-    realtimeTPS.value = null
-  },
-)
 
 // ============ Status & Display ============
 
@@ -1023,8 +1024,8 @@ const traffic = computed(() => props.overview?.traffic ?? emptyTraffic)
 
 const currentQPS = computed(() => realtimeQPS.value ?? traffic.value.current_qps ?? 0)
 const currentTPS = computed(() => realtimeTPS.value ?? traffic.value.current_tps ?? 0)
-const peakQPS = computed(() => traffic.value.peak_qps ?? 0)
-const peakTPS = computed(() => traffic.value.peak_tps ?? 0)
+const peakQPS = computed(() => realtimePeakQPS.value ?? traffic.value.peak_qps ?? 0)
+const peakTPS = computed(() => realtimePeakTPS.value ?? traffic.value.peak_tps ?? 0)
 
 // ============ Errors ============
 

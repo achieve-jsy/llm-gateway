@@ -275,7 +275,8 @@ func setup(
 		if len(collector) > 0 {
 			callLogCollector = collector[0]
 		}
-		v1.Use(middleware.UsageCollector(callLogCollector, traceWriterOpt, budgetHook))
+		// 必须带 Redis：运维看板实时 QPS/TPS（ops:qps:* / ops:tps:*）由此写入
+		v1.Use(middleware.UsageCollectorWithRedis(callLogCollector, traceWriterOpt, budgetHook, rdb))
 	}
 	// Provider 并发/限流追踪（写入 Redis 供运维看板读取）
 	// 必须在 UsageCollector 之后，确保 provider 信息已由 orchestrator 写入 context

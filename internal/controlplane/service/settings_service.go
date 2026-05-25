@@ -62,6 +62,10 @@ const (
 	SettingKeySMTPFrom          = "smtp_from"
 	SettingKeySMTPPassword      = "smtp_password"
 	SettingKeySMTPTLSSkipVerify = "smtp_tls_skip_verify"
+
+	// 全局粘性路由默认
+	SettingKeyStickyDefaultEnabled    = "sticky_default_enabled"
+	SettingKeyStickyDefaultTTLSeconds = "sticky_default_ttl_seconds"
 )
 
 const (
@@ -88,6 +92,8 @@ const (
 	defaultKAMinBaseline                = 20.0
 	defaultKAMinDev                     = 5.0
 	defaultKABootstrapDays              = 90
+	defaultStickyEnabled                = true
+	defaultStickyTTLSeconds             = 300
 )
 
 type SettingsRepository interface {
@@ -128,6 +134,7 @@ func allSettingKeys() []string {
 		SettingKeyKeyActivityBootstrapDone, SettingKeyKeyActivityScanCursor,
 		SettingKeyEmailEnabled, SettingKeySMTPHost, SettingKeySMTPPort,
 		SettingKeySMTPFrom, SettingKeySMTPPassword, SettingKeySMTPTLSSkipVerify,
+		SettingKeyStickyDefaultEnabled, SettingKeyStickyDefaultTTLSeconds,
 	}
 }
 
@@ -166,6 +173,8 @@ func (s *SettingsService) ensureDefaults() {
 		SettingKeySMTPFrom:                  "llm-gateway@example.com",
 		SettingKeySMTPPassword:      "JHk#7wt#3v)R@W2jP)",
 		SettingKeySMTPTLSSkipVerify: "false",
+		SettingKeyStickyDefaultEnabled:    fmt.Sprintf("%t", defaultStickyEnabled),
+		SettingKeyStickyDefaultTTLSeconds: fmt.Sprintf("%d", defaultStickyTTLSeconds),
 	}
 	existing, _ := s.repo.GetMultiple(allSettingKeys())
 	for k, v := range defaults {
@@ -216,6 +225,8 @@ func (s *SettingsService) GetSystemSettings(ctx context.Context) (*model.SystemS
 		SMTPFrom:          valOrDefault(vals, SettingKeySMTPFrom, ""),
 		SMTPPassword:      maskSecret(valOrDefault(vals, SettingKeySMTPPassword, "")),
 		SMTPTLSSkipVerify: boolOrDefault(vals, SettingKeySMTPTLSSkipVerify, false),
+		StickyDefaultEnabled:    boolOrDefault(vals, SettingKeyStickyDefaultEnabled, defaultStickyEnabled),
+		StickyDefaultTTLSeconds: intOrDefault(vals, SettingKeyStickyDefaultTTLSeconds, defaultStickyTTLSeconds),
 	}, nil
 }
 
@@ -326,6 +337,11 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, settings *model.Sy
 		updates[SettingKeySMTPPassword] = settings.SMTPPassword
 	}
 	updates[SettingKeySMTPTLSSkipVerify] = fmt.Sprintf("%t", settings.SMTPTLSSkipVerify)
+	// 全局粘性路由默认
+	updates[SettingKeyStickyDefaultEnabled] = fmt.Sprintf("%t", settings.StickyDefaultEnabled)
+	if settings.StickyDefaultTTLSeconds > 0 {
+		updates[SettingKeyStickyDefaultTTLSeconds] = fmt.Sprintf("%d", settings.StickyDefaultTTLSeconds)
+	}
 	return s.repo.SetMultiple(updates)
 }
 

@@ -54,6 +54,9 @@ type SystemSettings struct {
 	SMTPFrom          string `json:"smtp_from"`
 	SMTPPassword      string `json:"smtp_password"`
 	SMTPTLSSkipVerify bool   `json:"smtp_tls_skip_verify"`
+	// 全局粘性路由默认
+	StickyDefaultEnabled    bool `json:"sticky_default_enabled"`
+	StickyDefaultTTLSeconds int  `json:"sticky_default_ttl_seconds"`
 }
 
 type PublicSettings struct {

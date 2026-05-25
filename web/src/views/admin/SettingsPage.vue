@@ -429,7 +429,29 @@
                 :step="10"
                 class="form-input-number"
               />
-              <p class="form-hint">模型切换后冷却多久</p>
+            <p class="form-hint">模型切换后冷却多久</p>
+            </div>
+          </div>
+
+          <div class="quota-section">
+            <h4 class="quota-section-title">粘性路由</h4>
+            <p class="quota-section-desc">组级未单独设置时，按此全局默认值决定是否启用会话粘性路由</p>
+            <div class="form-row form-row-3col">
+              <div class="form-group inline-toggle">
+                <label class="form-label">启用粘性路由</label>
+                <el-switch v-model="form.sticky_default_enabled" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">默认 TTL（秒）</label>
+                <el-input-number
+                  v-model="form.sticky_default_ttl_seconds"
+                  :min="60"
+                  :max="86400"
+                  :step="60"
+                  class="form-input-number"
+                />
+                <p class="form-hint">粘性绑定过期时间，命中渠道后保持的最长秒数</p>
+              </div>
             </div>
           </div>
         </div>
@@ -600,6 +622,8 @@ const form = reactive<SystemSettings>({
   default_same_model_retries: 1,
   default_failover_cooldown_seconds: 60,
   pricing_usd_to_cny_rate: 7.2,
+  sticky_default_enabled: false,
+  sticky_default_ttl_seconds: 300,
 })
 
 const initialForm = reactive<SystemSettings>({
@@ -636,6 +660,8 @@ const initialForm = reactive<SystemSettings>({
 	default_same_model_retries: 1,
 	default_failover_cooldown_seconds: 60,
 	pricing_usd_to_cny_rate: 7.2,
+	sticky_default_enabled: false,
+	sticky_default_ttl_seconds: 300,
 })
 
 const previewCny = computed(() => (form.pricing_usd_to_cny_rate || 0).toFixed(4).replace(/0+$/, '').replace(/\.$/, ''))
@@ -683,7 +709,9 @@ const formChanged = computed(() => {
     form.default_max_switches !== initialForm.default_max_switches ||
     form.default_same_model_retries !== initialForm.default_same_model_retries ||
     form.default_failover_cooldown_seconds !== initialForm.default_failover_cooldown_seconds ||
-    form.pricing_usd_to_cny_rate !== initialForm.pricing_usd_to_cny_rate
+    form.pricing_usd_to_cny_rate !== initialForm.pricing_usd_to_cny_rate ||
+    form.sticky_default_enabled !== initialForm.sticky_default_enabled ||
+    form.sticky_default_ttl_seconds !== initialForm.sticky_default_ttl_seconds
   )
 })
 
@@ -719,6 +747,8 @@ function setFormValues(source: typeof form) {
   form.default_same_model_retries = source.default_same_model_retries
   form.default_failover_cooldown_seconds = source.default_failover_cooldown_seconds
   form.pricing_usd_to_cny_rate = source.pricing_usd_to_cny_rate
+  form.sticky_default_enabled = source.sticky_default_enabled
+  form.sticky_default_ttl_seconds = source.sticky_default_ttl_seconds
 }
 
 function captureInitial() {
@@ -753,6 +783,8 @@ function captureInitial() {
   initialForm.default_same_model_retries = form.default_same_model_retries
   initialForm.default_failover_cooldown_seconds = form.default_failover_cooldown_seconds
   initialForm.pricing_usd_to_cny_rate = form.pricing_usd_to_cny_rate
+  initialForm.sticky_default_enabled = form.sticky_default_enabled
+  initialForm.sticky_default_ttl_seconds = form.sticky_default_ttl_seconds
 }
 
 onMounted(async () => {
@@ -788,6 +820,8 @@ onMounted(async () => {
     form.default_same_model_retries = s.default_same_model_retries ?? 1
     form.default_failover_cooldown_seconds = s.default_failover_cooldown_seconds ?? 60
     form.pricing_usd_to_cny_rate = s.pricing_usd_to_cny_rate ?? 7.2
+    form.sticky_default_enabled = s.sticky_default_enabled ?? false
+    form.sticky_default_ttl_seconds = s.sticky_default_ttl_seconds ?? 300
   }
   captureInitial()
 })
@@ -868,6 +902,8 @@ async function handleSave() {
       default_same_model_retries: form.default_same_model_retries,
       default_failover_cooldown_seconds: form.default_failover_cooldown_seconds,
       pricing_usd_to_cny_rate: form.pricing_usd_to_cny_rate,
+      sticky_default_enabled: form.sticky_default_enabled,
+      sticky_default_ttl_seconds: form.sticky_default_ttl_seconds,
     })
     if (ok) {
       ElMessage.success('设置已保存')

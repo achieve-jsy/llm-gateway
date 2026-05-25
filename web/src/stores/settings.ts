@@ -21,6 +21,8 @@ function defaultSystemSettings(): SystemSettings {
     default_max_switches: 2, default_same_model_retries: 1, default_failover_cooldown_seconds: 60,
     supplier_name: '某公司',
     pricing_usd_to_cny_rate: 7.2,
+    sticky_default_enabled: false,
+    sticky_default_ttl_seconds: 300,
   }
 }
 

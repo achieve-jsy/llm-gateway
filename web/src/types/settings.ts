@@ -30,6 +30,8 @@ export interface SystemSettings {
   default_failover_cooldown_seconds: number
   supplier_name: string
   pricing_usd_to_cny_rate: number
+  sticky_default_enabled: boolean
+  sticky_default_ttl_seconds: number
 }
 
 export interface PublicSettings {

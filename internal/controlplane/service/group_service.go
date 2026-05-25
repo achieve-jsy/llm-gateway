@@ -144,6 +144,8 @@ type CreateGroupRequest struct {
 	SameModelRetries        *int   `json:"same_model_retries"`
 	FailoverCooldownSeconds *int   `json:"failover_cooldown_seconds"`
 	TimeoutSeconds          *int   `json:"timeout_seconds"`
+	StickyEnabled           *bool  `json:"sticky_enabled"`
+	StickyTTLSeconds        *int   `json:"sticky_ttl_seconds"`
 }
 
 type UpdateGroupRequest struct {
@@ -161,6 +163,9 @@ type UpdateGroupRequest struct {
 	OverrideSupportsVision *bool `json:"override_supports_vision"`
 	OverrideSupportsFC     *bool `json:"override_supports_function_calling"`
 	OverrideSupportsTC     *bool `json:"override_supports_tool_choice"`
+
+	StickyEnabled    *bool `json:"sticky_enabled"`
+	StickyTTLSeconds *int  `json:"sticky_ttl_seconds"`
 }
 
 func (s *GroupService) Create(req CreateGroupRequest) (*model.Group, error) {
@@ -211,6 +216,12 @@ func (s *GroupService) Create(req CreateGroupRequest) (*model.Group, error) {
 	}
 	if req.TimeoutSeconds != nil {
 		group.TimeoutSeconds = *req.TimeoutSeconds
+	}
+	if req.StickyEnabled != nil {
+		group.StickyEnabled = req.StickyEnabled
+	}
+	if req.StickyTTLSeconds != nil {
+		group.StickyTTLSeconds = req.StickyTTLSeconds
 	}
 
 	if err := s.repo.Create(group); err != nil {
@@ -300,6 +311,14 @@ func (s *GroupService) Update(id uint, req UpdateGroupRequest) (*model.Group, er
 	}
 	if req.OverrideSupportsTC != nil {
 		group.OverrideSupportsTC = *req.OverrideSupportsTC
+	}
+
+	// 粘性路由：nil 表示跟随全局，显式设置则覆盖
+	if req.StickyEnabled != nil {
+		group.StickyEnabled = req.StickyEnabled
+	}
+	if req.StickyTTLSeconds != nil {
+		group.StickyTTLSeconds = req.StickyTTLSeconds
 	}
 
 	if err := s.repo.Update(group); err != nil {

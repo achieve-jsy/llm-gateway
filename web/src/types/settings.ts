@@ -34,6 +34,8 @@ export interface SystemSettings {
   budget_zero_block_enabled: boolean
   budget_shadow_enabled: boolean
   budget_v2_total_enforcement_enabled: boolean
+  sticky_default_enabled: boolean
+  sticky_default_ttl_seconds: number
 }
 
 export interface PublicSettings {

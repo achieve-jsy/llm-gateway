@@ -31,6 +31,7 @@ type GroupHandler struct {
 	svc        GroupServiceInterface
 	modelRepo  ModelRepoInterface
 	providerRepo ProviderRepoInterface
+	settingsSvc  SettingsServiceInterface
 }
 
 type ModelRepoInterface interface {
@@ -43,6 +44,12 @@ type ProviderRepoInterface interface {
 
 func NewGroupHandler(svc GroupServiceInterface, modelRepo ModelRepoInterface, providerRepo ProviderRepoInterface) *GroupHandler {
 	return &GroupHandler{svc: svc, modelRepo: modelRepo, providerRepo: providerRepo}
+}
+
+// WithSettingsService 注入设置服务，用于解析组级 sticky 的全局默认值。
+func (h *GroupHandler) WithSettingsService(svc SettingsServiceInterface) *GroupHandler {
+	h.settingsSvc = svc
+	return h
 }
 
 type addModelsRequest struct {
@@ -424,6 +431,16 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 		return
 	}
 
+	// 获取全局 sticky 默认值，用于组级未显式设置时的 fallback
+	stickyDefaultEnabled := true
+	stickyDefaultTTL := 300
+	if h.settingsSvc != nil {
+		if sysSettings, err := h.settingsSvc.GetSystemSettings(c.Request.Context()); err == nil && sysSettings != nil {
+			stickyDefaultEnabled = sysSettings.StickyDefaultEnabled
+			stickyDefaultTTL = sysSettings.StickyDefaultTTLSeconds
+		}
+	}
+
 	type modelInfo struct {
 		ID             uuid.UUID `json:"id"`
 		Name           string    `json:"name"`
@@ -451,6 +468,16 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 
 	result := make([]groupInfo, 0, len(groups))
 	for _, g := range groups {
+		// 解析 effective sticky：组级显式设置优先，否则用全局默认
+		effStickyEnabled := stickyDefaultEnabled
+		if g.StickyEnabled != nil {
+			effStickyEnabled = *g.StickyEnabled
+		}
+		effStickyTTL := stickyDefaultTTL
+		if g.StickyTTLSeconds != nil {
+			effStickyTTL = *g.StickyTTLSeconds
+		}
+
 		gi := groupInfo{
 			ID:               g.ID,
 			Name:             g.Name,
@@ -458,8 +485,8 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 			Strategy:         g.Strategy,
 			Enabled:          g.Enabled,
 			TimeoutSeconds:   g.TimeoutSeconds,
-			StickyEnabled:    g.StickyEnabled,
-			StickyTTLSeconds: g.StickyTTLSeconds,
+			StickyEnabled:    effStickyEnabled,
+			StickyTTLSeconds: effStickyTTL,
 			Models:           make([]modelInfo, 0, len(g.Models)),
 		}
 		for _, gm := range g.Models {

@@ -25,6 +25,8 @@ function defaultSystemSettings(): SystemSettings {
     budget_zero_block_enabled: false,
     budget_shadow_enabled: false,
     budget_v2_total_enforcement_enabled: false,
+    sticky_default_enabled: true,
+    sticky_default_ttl_seconds: 300,
   }
 }
 

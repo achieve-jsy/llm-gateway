@@ -30,6 +30,7 @@
           <el-descriptions-item label="类型">{{ modelTypeLabel(group.model_type) }}</el-descriptions-item>
           <el-descriptions-item label="策略">{{ group?.model_type === 'video' ? '—' : strategyLabel(group.strategy) }}</el-descriptions-item>
           <el-descriptions-item label="模型数量">{{ group.model_count }}</el-descriptions-item>
+          <el-descriptions-item label="会话粘性" v-if="group?.model_type !== 'video'">{{ stickyLabel(group.sticky_enabled) }}<template v-if="group.sticky_ttl_seconds"> ({{ group.sticky_ttl_seconds }}s)</template></el-descriptions-item>
           <el-descriptions-item label="状态">{{ group.enabled ? '启用' : '禁用' }}</el-descriptions-item>
           <el-descriptions-item label="创建时间" :span="2">{{ group.created_at }}</el-descriptions-item>
         </el-descriptions>
@@ -312,6 +313,11 @@ function strategyLabel(s: string): string {
 const showWeightColumn = computed(() => group.value?.model_type !== 'video' && group.value?.strategy === 'weighted')
 const showPriorityColumn = computed(() => group.value?.model_type !== 'video' && group.value?.strategy === 'priority')
 const showComplexityColumn = computed(() => group.value?.model_type !== 'video' && group.value?.strategy === 'auto')
+
+function stickyLabel(enabled: boolean | null | undefined): string {
+  if (enabled === null || enabled === undefined) return '跟随全局'
+  return enabled ? '开启' : '关闭'
+}
 
 function modelTypeLabel(t?: string): string {
   const map: Record<string, string> = {

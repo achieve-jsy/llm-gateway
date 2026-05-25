@@ -59,6 +59,9 @@ type SystemSettings struct {
 	BudgetZeroBlockEnabled           bool `json:"budget_zero_block_enabled"`
 	BudgetShadowEnabled              bool `json:"budget_shadow_enabled"`
 	BudgetV2TotalEnforcementEnabled  bool `json:"budget_v2_total_enforcement_enabled"`
+	// 全局粘性路由默认
+	StickyDefaultEnabled    bool `json:"sticky_default_enabled"`
+	StickyDefaultTTLSeconds int  `json:"sticky_default_ttl_seconds"`
 }
 
 type PublicSettings struct {

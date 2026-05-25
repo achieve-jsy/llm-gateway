@@ -39,9 +39,9 @@ type Group struct {
 	QuotaMaxConcurrency *int       `gorm:"column:quota_max_concurrency" json:"quota_max_concurrency,omitempty"`
 	BudgetTierID        *uuid.UUID `gorm:"type:uuid;index:idx_model_groups_budget_tier,where:budget_tier_id IS NOT NULL AND deleted_at IS NULL" json:"budget_tier_id,omitempty"`
 	BudgetTier          *ModelTier `gorm:"foreignKey:BudgetTierID;constraint:OnDelete:RESTRICT" json:"budget_tier,omitempty"`
-	// Session 粘性路由配置
-	StickyEnabled    bool         `gorm:"not null;default:false" json:"sticky_enabled"`
-	StickyTTLSeconds int          `gorm:"not null;default:3600" json:"sticky_ttl_seconds"`
+	// Session 粘性路由配置（NULL = 跟随全局默认，TRUE/FALSE = 组级显式覆盖）
+	StickyEnabled    *bool        `gorm:"default:null" json:"sticky_enabled"`
+	StickyTTLSeconds *int         `gorm:"default:null" json:"sticky_ttl_seconds"`
 	Models           []GroupModel `gorm:"foreignKey:GroupID" json:"models,omitempty"`
 }
 

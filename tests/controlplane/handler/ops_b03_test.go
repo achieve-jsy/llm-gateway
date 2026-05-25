@@ -52,4 +52,9 @@ func TestGetConcurrencyStats_WithRedisProvider(t *testing.T) {
 	assert.Equal(t, "available", p["status"])
 	assert.Equal(t, float64(1), resp["total_providers"])
 	assert.Equal(t, float64(5), resp["total_active_requests"])
+	// 无 call_logs 时质量字段应为 null（不造假 0%）
+	assert.Contains(t, p, "success_rate_5min")
+	assert.Contains(t, p, "duration_p95_ms")
+	assert.Nil(t, p["success_rate_5min"])
+	assert.Nil(t, p["duration_p95_ms"])
 }

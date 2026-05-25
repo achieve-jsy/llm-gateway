@@ -184,7 +184,9 @@
               <span v-if="isIdle" class="ops-health-idle-label">空闲</span>
               <template v-else>
                 <span class="ops-health-value" :style="{ color: healthColor }">{{ healthScore }}</span>
-                <span class="ops-health-label">健康评分</span>
+                <span class="ops-health-label" :title="`基于实时窗口 ${realtimeWindow} 的成功率 + 系统负载`">
+                  健康评分 · {{ realtimeWindow }}
+                </span>
               </template>
             </div>
           </div>
@@ -231,12 +233,12 @@
             <span class="ops-realtime-unit">QPS</span>
           </div>
           <div class="ops-realtime-item">
-            <span class="ops-realtime-value">{{ currentTPS.toFixed(1) }}</span>
-            <span class="ops-realtime-unit">TPS</span>
+            <span class="ops-realtime-value">{{ formatTokenRate(currentTPS) }}</span>
+            <span class="ops-realtime-unit">Tokens/s</span>
           </div>
         </div>
         <div class="ops-realtime-peak">
-          峰值 QPS: {{ peakQPS.toFixed(1) }} / TPS: {{ peakTPS.toFixed(1) }}
+          峰值 QPS: {{ peakQPS.toFixed(1) }} / Tokens/s: {{ formatTokenRate(peakTPS) }}
         </div>
         <!-- Realtime window button group -->
         <div class="ops-realtime-windows">
@@ -323,27 +325,10 @@
         </div>
       </div>
 
-      <!-- 4. 延迟 P99 -->
+      <!-- 4. 首字延迟 P99 (TTFT) —— 衡量「多久开始出字」 -->
       <div class="ops-metric-card">
         <div class="ops-metric-label ops-section-label">
-          <el-tooltip content="端到端请求延迟的 P99 百分位值，含网关处理 + 上游调用完整链路" placement="top">
-            <span>延迟 P99</span>
-          </el-tooltip>
-        </div>
-        <div class="ops-metric-value">{{ latency.duration_p99_ms }}ms</div>
-        <div class="ops-latency-grid">
-          <div class="ops-latency-cell"><span class="ops-latency-k">P95</span><span class="ops-latency-v">{{ latency.duration_p95_ms }}</span></div>
-          <div class="ops-latency-cell"><span class="ops-latency-k">P90</span><span class="ops-latency-v">{{ latency.duration_p90_ms }}</span></div>
-          <div class="ops-latency-cell"><span class="ops-latency-k">P50</span><span class="ops-latency-v">{{ latency.duration_p50_ms }}</span></div>
-          <div class="ops-latency-cell"><span class="ops-latency-k">Avg</span><span class="ops-latency-v">{{ latency.duration_avg_ms }}</span></div>
-          <div class="ops-latency-cell"><span class="ops-latency-k">Max</span><span class="ops-latency-v">{{ latency.duration_max_ms }}</span></div>
-        </div>
-      </div>
-
-      <!-- 5. 首字延迟 P99 (TTFT) -->
-      <div class="ops-metric-card">
-        <div class="ops-metric-label ops-section-label">
-          <el-tooltip content="首 Token 延迟 (Time To First Token) 的 P99 百分位值，衡量流式响应首字节速度。Embedding/Rerank 无此指标" placement="top">
+          <el-tooltip content="流式首 Token 延迟 P99（TTFT）。大上下文预填充会到数秒～十余秒；Embedding/Rerank 无此指标" placement="top">
             <span>首字延迟 P99</span>
           </el-tooltip>
         </div>
@@ -358,13 +343,42 @@
           </div>
         </template>
         <template v-else>
-          <div class="ops-metric-value">{{ latency.ttft_p99_ms }}ms</div>
+          <div class="ops-metric-value">{{ formatLatencyMs(latency.ttft_p99_ms) }}</div>
           <div class="ops-latency-grid">
-            <div class="ops-latency-cell"><span class="ops-latency-k">P95</span><span class="ops-latency-v">{{ latency.ttft_p95_ms }}</span></div>
-            <div class="ops-latency-cell"><span class="ops-latency-k">P90</span><span class="ops-latency-v">{{ latency.ttft_p90_ms }}</span></div>
-            <div class="ops-latency-cell"><span class="ops-latency-k">P50</span><span class="ops-latency-v">{{ latency.ttft_p50_ms }}</span></div>
-            <div class="ops-latency-cell"><span class="ops-latency-k">Avg</span><span class="ops-latency-v">{{ latency.ttft_avg_ms }}</span></div>
-            <div class="ops-latency-cell"><span class="ops-latency-k">Max</span><span class="ops-latency-v">{{ latency.ttft_max_ms }}</span></div>
+            <div class="ops-latency-cell"><span class="ops-latency-k">P95</span><span class="ops-latency-v">{{ formatLatencyMs(latency.ttft_p95_ms) }}</span></div>
+            <div class="ops-latency-cell"><span class="ops-latency-k">P90</span><span class="ops-latency-v">{{ formatLatencyMs(latency.ttft_p90_ms) }}</span></div>
+            <div class="ops-latency-cell"><span class="ops-latency-k">P50</span><span class="ops-latency-v">{{ formatLatencyMs(latency.ttft_p50_ms) }}</span></div>
+            <div class="ops-latency-cell"><span class="ops-latency-k">Avg</span><span class="ops-latency-v">{{ formatLatencyMs(latency.ttft_avg_ms) }}</span></div>
+            <div class="ops-latency-cell"><span class="ops-latency-k">Max</span><span class="ops-latency-v">{{ formatLatencyMs(latency.ttft_max_ms) }}</span></div>
+          </div>
+        </template>
+      </div>
+
+      <!-- 5. 生成耗时 P99 —— 首字之后到流结束；端到端单独标注 -->
+      <div class="ops-metric-card">
+        <div class="ops-metric-label ops-section-label">
+          <el-tooltip content="生成耗时 = 端到端 − 首字（仅流式）。长输出会到分钟级。下方「端到端」含首字+生成完整链路" placement="top">
+            <span>生成耗时 P99</span>
+          </el-tooltip>
+        </div>
+        <template v-if="isNonChatEndpoint">
+          <div class="ops-metric-value">-</div>
+          <div class="ops-metric-sub-detail">
+            <span>非流式端点无生成阶段</span>
+          </div>
+        </template>
+        <template v-else>
+          <div class="ops-metric-value">{{ formatLatencyMs(latency.gen_p99_ms) }}</div>
+          <div class="ops-latency-grid">
+            <div class="ops-latency-cell"><span class="ops-latency-k">P95</span><span class="ops-latency-v">{{ formatLatencyMs(latency.gen_p95_ms) }}</span></div>
+            <div class="ops-latency-cell"><span class="ops-latency-k">P90</span><span class="ops-latency-v">{{ formatLatencyMs(latency.gen_p90_ms) }}</span></div>
+            <div class="ops-latency-cell"><span class="ops-latency-k">P50</span><span class="ops-latency-v">{{ formatLatencyMs(latency.gen_p50_ms) }}</span></div>
+            <div class="ops-latency-cell"><span class="ops-latency-k">Avg</span><span class="ops-latency-v">{{ formatLatencyMs(latency.gen_avg_ms) }}</span></div>
+            <div class="ops-latency-cell"><span class="ops-latency-k">Max</span><span class="ops-latency-v">{{ formatLatencyMs(latency.gen_max_ms) }}</span></div>
+          </div>
+          <div class="ops-metric-sub-detail">
+            <span>端到端 P99: {{ formatLatencyMs(latency.duration_p99_ms) }}</span>
+            <span class="ops-metric-sub-hint">P50 {{ formatLatencyMs(latency.duration_p50_ms) }}</span>
           </div>
         </template>
       </div>
@@ -542,7 +556,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import {
   ElIcon,
   ElButton,
@@ -777,6 +791,7 @@ const realtimeQPS = ref<number | null>(null)
 const realtimeTPS = ref<number | null>(null)
 const realtimePeakQPS = ref<number | null>(null)
 const realtimePeakTPS = ref<number | null>(null)
+const realtimeHealthScore = ref<number | null>(null)
 const wsStatus = ref<'connecting' | 'connected' | 'reconnecting' | 'offline' | 'closed' | null>(null)
 
 const onRealtimeWindowClick = async (w: string) => {
@@ -793,7 +808,12 @@ const refreshRealtime = async () => {
 const fetchRealtimeSummary = async (window: string) => {
   loadingRealtime.value = true
   try {
-    const resp = await opsAPI.getRealtimeTrafficSummary(window)
+    const resp = await opsAPI.getRealtimeTrafficSummary(window, {
+      group_id: props.groupId ?? undefined,
+      provider: props.provider || undefined,
+      model: props.model || undefined,
+      endpoint: props.endpoint || undefined,
+    })
     // 优先窗口均值（随 1min/5min/30min/1h 变化）；current_* 与 avg_* 后端已对齐
     const qps = resp.avg_qps ?? resp.current_qps ?? 0
     const tps = resp.avg_tps ?? resp.current_tps ?? 0
@@ -801,12 +821,23 @@ const fetchRealtimeSummary = async (window: string) => {
     realtimeTPS.value = tps
     realtimePeakQPS.value = resp.peak_qps ?? null
     realtimePeakTPS.value = resp.peak_tps ?? null
+    // 健康评分随实时窗口变化（SLA 取该窗口成功率）
+    realtimeHealthScore.value =
+      typeof resp.health_score === 'number' ? resp.health_score : null
   } catch (err) {
     console.error('Failed to fetch realtime traffic summary:', err)
   } finally {
     loadingRealtime.value = false
   }
 }
+
+// 顶部维度筛选变化时，同步刷新实时流量 + 窗口健康分
+watch(
+  () => [props.groupId, props.provider, props.model, props.endpoint] as const,
+  () => {
+    void fetchRealtimeSummary(realtimeWindow.value)
+  },
+)
 
 // ============ Status & Display ============
 
@@ -833,8 +864,11 @@ const formatLastUpdated = (d: Date): string => {
 }
 
 // ============ Health Score ============
+// 优先用实时窗口（1min/5min/…）算出的评分；未拉取前回退 overview
 
-const healthScore = computed(() => props.overview?.health_score ?? 0)
+const healthScore = computed(
+  () => realtimeHealthScore.value ?? props.overview?.health_score ?? 0,
+)
 
 const healthColor = computed(() => getHealthScoreColor(healthScore.value, isIdle.value))
 
@@ -903,6 +937,12 @@ const latency = computed(
       ttft_p99_ms: 0,
       ttft_avg_ms: 0,
       ttft_max_ms: 0,
+      gen_p50_ms: 0,
+      gen_p90_ms: 0,
+      gen_p95_ms: 0,
+      gen_p99_ms: 0,
+      gen_avg_ms: 0,
+      gen_max_ms: 0,
     },
 )
 
@@ -972,8 +1012,8 @@ const diagnosisItems = computed<DiagnosisItem[]>(() => {
     },
     {
       name: 'TTFT P99',
-      value: `${l.ttft_p99_ms}ms`,
-      threshold: '3000ms / 5000ms',
+      value: formatLatencyMs(l.ttft_p99_ms),
+      threshold: '3s / 5s',
       raw: l.ttft_p99_ms,
       warn: 3000,
       crit: 5000,
@@ -1026,6 +1066,24 @@ const currentQPS = computed(() => realtimeQPS.value ?? traffic.value.current_qps
 const currentTPS = computed(() => realtimeTPS.value ?? traffic.value.current_tps ?? 0)
 const peakQPS = computed(() => realtimePeakQPS.value ?? traffic.value.peak_qps ?? 0)
 const peakTPS = computed(() => realtimePeakTPS.value ?? traffic.value.peak_tps ?? 0)
+
+/** Tokens/s：大数用 K，与流量趋势图 TPS(K) 口径一致 */
+function formatTokenRate(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0.0'
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`
+  return n.toFixed(1)
+}
+
+/** 延迟展示：≥1s 用秒，≥60s 用分秒，避免 123805ms 难读 */
+function formatLatencyMs(ms: number | string | null | undefined): string {
+  const n = Number(ms)
+  if (!Number.isFinite(n) || n <= 0) return '0ms'
+  if (n < 1000) return `${Math.round(n)}ms`
+  if (n < 60000) return `${(n / 1000).toFixed(1)}s`
+  const m = Math.floor(n / 60000)
+  const s = ((n % 60000) / 1000).toFixed(1)
+  return `${m}m ${s}s`
+}
 
 // ============ Errors ============
 

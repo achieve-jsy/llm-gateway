@@ -569,6 +569,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/ops/error-trend", opsHandler.GetErrorTrend)
 		adminGroup.GET("/ops/latency-histogram", opsHandler.GetLatencyHistogram)
 		adminGroup.GET("/ops/error-distribution", opsHandler.GetErrorDistribution)
+		adminGroup.GET("/ops/top-issues", opsHandler.GetTopIssues)
 
 		// 运维看板 v2：请求日志、错误分析、并发、趋势
 		adminGroup.GET("/ops/requests", opsHandler.ListRequests)

@@ -266,8 +266,11 @@ func (s *ProviderService) ListProviders(filter repository.ProviderListFilter, pa
 	if page < 1 {
 		page = 1
 	}
-	if pageSize < 1 || pageSize > 200 {
+	if pageSize < 1 {
 		pageSize = 20
+	}
+	if pageSize > 1000 {
+		pageSize = 1000
 	}
 	offset := (page - 1) * pageSize
 

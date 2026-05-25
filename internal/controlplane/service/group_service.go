@@ -313,6 +313,14 @@ func (s *GroupService) Update(id uint, req UpdateGroupRequest) (*model.Group, er
 		group.OverrideSupportsTC = *req.OverrideSupportsTC
 	}
 
+	// 粘性路由：nil 表示跟随全局，显式设置则覆盖
+	if req.StickyEnabled != nil {
+		group.StickyEnabled = req.StickyEnabled
+	}
+	if req.StickyTTLSeconds != nil {
+		group.StickyTTLSeconds = req.StickyTTLSeconds
+	}
+
 	if err := s.repo.Update(group); err != nil {
 		return nil, fmt.Errorf("update group: %w", err)
 	}

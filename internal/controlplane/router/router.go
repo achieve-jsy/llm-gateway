@@ -135,6 +135,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		settingsSvc.GetDefaultFailoverCooldownSeconds(context.Background()),
 	)
 	groupHandler := handler.NewGroupHandler(groupSvc, modelRepo, providerRepo)
+	groupHandler.WithSettingsService(settingsSvc)
 	modelTierRepo := repository.NewModelTierRepo(db)
 	groupSvc.WithModelTierRepo(modelTierRepo)
 	modelTierSvc := service.NewModelTierService(modelTierRepo)

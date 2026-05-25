@@ -2056,6 +2056,7 @@ func (h *OpsHandler) ListJobs(c *gin.Context) {
 // UserConcurrencyItem 用户并发统计项
 type UserConcurrencyItem struct {
 	UserID        string  `gorm:"column:user_id" json:"user_id"`
+	UserName      string  `gorm:"column:user_name" json:"user_name"`
 	RequestCount  int64   `gorm:"column:request_count" json:"request_count"`
 	ErrorCount    int64   `gorm:"column:error_count" json:"error_count"`
 	AvgDurationMs float64 `gorm:"column:avg_duration_ms" json:"avg_duration_ms"`
@@ -2068,6 +2069,7 @@ func (h *OpsHandler) GetUserConcurrency(c *gin.Context) {
 	err := h.db.Raw(`
 		SELECT
 			user_id,
+			COALESCE(NULLIF(MAX(user_name), ''), user_id) AS user_name,
 			COUNT(*)::bigint AS request_count,
 			SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END)::bigint AS error_count,
 			COALESCE(AVG(duration_ms), 0)::float AS avg_duration_ms
@@ -2229,30 +2231,50 @@ func (h *OpsHandler) GetRealtimeTraffic(c *gin.Context) {
 	avgQPS := float64(traffic.TotalRequests) / windowSeconds
 	avgTPS := float64(traffic.TotalTokens) / windowSeconds
 
-	// 获取当前 QPS（从 Redis 最近 1 分钟）
-	now := time.Now()
-	minuteKey := now.Format("200601021504")
-	currentQPS := 0.0
-	currentTPS := 0.0
+	// 窗口内按分钟峰值（call_logs），保证切换 1min/5min/30min/1h 时 peak 随窗口变化
+	var peakRow struct {
+		PeakReqs   int64 `gorm:"column:peak_reqs"`
+		PeakTokens int64 `gorm:"column:peak_tokens"`
+	}
+	_ = h.db.Raw(fmt.Sprintf(`
+		SELECT COALESCE(MAX(reqs), 0)::bigint AS peak_reqs,
+		       COALESCE(MAX(tokens), 0)::bigint AS peak_tokens
+		FROM (
+			SELECT date_trunc('minute', ts) AS m,
+			       COUNT(*)::bigint AS reqs,
+			       COALESCE(SUM(total_tokens), 0)::bigint AS tokens
+			FROM call_logs %s
+			GROUP BY 1
+		) t
+	`, where), args...).Scan(&peakRow)
+	peakQPS := float64(peakRow.PeakReqs) / 60.0
+	peakTPS := float64(peakRow.PeakTokens) / 60.0
 
+	// Redis 最近 1 分钟瞬时值（有则覆盖 current；窗口平均值始终放在 avg_*）
+	instantQPS, instantTPS := 0.0, 0.0
 	if h.rdb != nil {
-		qpsKey := fmt.Sprintf("ops:qps:%s", minuteKey)
-		tpsKey := fmt.Sprintf("ops:tps:%s", minuteKey)
-
-		qpsCount, _ := h.rdb.Get(c.Request.Context(), qpsKey).Int64()
-		tpsCount, _ := h.rdb.Get(c.Request.Context(), tpsKey).Int64()
-
-		currentQPS = float64(qpsCount) / 60.0
-		currentTPS = float64(tpsCount) / 60.0
+		now := time.Now()
+		minuteKey := now.Format("200601021504")
+		qpsCount, _ := h.rdb.Get(c.Request.Context(), "ops:qps:"+minuteKey).Int64()
+		tpsCount, _ := h.rdb.Get(c.Request.Context(), "ops:tps:"+minuteKey).Int64()
+		elapsed := float64(now.Second() + 1)
+		if elapsed > 60 {
+			elapsed = 60
+		}
+		instantQPS = float64(qpsCount) / elapsed
+		instantTPS = float64(tpsCount) / elapsed
+		if q := float64(qpsCount) / 60.0; q > peakQPS {
+			peakQPS = q
+		}
+		if t := float64(tpsCount) / 60.0; t > peakTPS {
+			peakTPS = t
+		}
 	}
 
-	peakQPS := currentQPS * 1.5
-	if peakQPS < avgQPS*1.5 {
-		peakQPS = avgQPS * 1.5
-	}
-	peakTPS := currentTPS * 1.5
-	if peakTPS < avgTPS*1.5 {
-		peakTPS = avgTPS * 1.5
+	// current_*：窗口切换必须可见差异 → 用窗口平均；1min 且 Redis 有瞬时值时优先瞬时
+	currentQPS, currentTPS := avgQPS, avgTPS
+	if window == "1min" && (instantQPS > 0 || instantTPS > 0) {
+		currentQPS, currentTPS = instantQPS, instantTPS
 	}
 
 	c.JSON(http.StatusOK, OpsTraffic{

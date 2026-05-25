@@ -72,11 +72,18 @@ export interface OpsTraffic {
   peak_tps: number
 }
 
+/** 与后端 OpsTraffic 对齐；window 切换应反映 avg/current/peak */
 export interface OpsRealtimeTrafficSummary {
+  total_requests?: number
+  total_tokens?: number
+  avg_qps?: number
+  avg_tps?: number
   current_qps: number
   current_tps: number
-  window: string
-  sample_count: number
+  peak_qps?: number
+  peak_tps?: number
+  window?: string
+  sample_count?: number
 }
 
 export interface OpsGroupOption {
@@ -529,6 +536,7 @@ export interface OpsAdvancedSettings {
 
 export interface OpsUserConcurrencyItem {
   user_id: string
+  user_name?: string
   request_count: number
   error_count: number
   avg_duration_ms: number

@@ -45,7 +45,7 @@
           v-if="settings?.show_switch_rate_chart"
           :points="switchRatePoints"
           :loading="loadingSwitchRate"
-          :time-range="'5h'"
+          :time-range="timeRange === 'custom' ? '1h' : timeRange"
           :fullscreen="isFullscreen"
         />
         <OpsTrafficTrendChart
@@ -94,6 +94,20 @@
           @open-error-details="openErrorDetails"
         />
       </div>
+
+      <!-- Top 慢路径 / Top 错误路径 -->
+      <OpsTopIssuesCard
+        :time-range="timeRange"
+        :group-id="groupId"
+        :provider="provider"
+        :model="model"
+        :endpoint="endpoint"
+        :custom-start="customStartTime"
+        :custom-end="customEndTime"
+        :refresh-token="refreshToken"
+        @select-provider="provider = $event"
+        @select-model="model = $event"
+      />
 
       <!-- Token Stats (full-width) -->
       <OpsTokenStatsCard v-if="settings?.show_token_stats" :refresh-token="refreshToken" />
@@ -234,6 +248,7 @@ import OpsRequestDetailsModal from './components/OpsRequestDetailsModal.vue'
 import OpsEmailNotificationCard from './components/OpsEmailNotificationCard.vue'
 import OpsRuntimeSettingsCard from './components/OpsRuntimeSettingsCard.vue'
 import OpsErrorLogTable from './components/OpsErrorLogTable.vue'
+import OpsTopIssuesCard from './components/OpsTopIssuesCard.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -304,9 +319,22 @@ const isIdle = computed(() => {
 
 // -- Filter Helpers --
 
-function buildFilter(extraTimeRange?: string): { time_range?: string; group_id?: number; provider?: string; model?: string; endpoint?: string } {
-  const filter: { time_range?: string; group_id?: number; provider?: string; model?: string; endpoint?: string } = {}
-  filter.time_range = extraTimeRange || timeRange.value
+function buildFilter(extraTimeRange?: string) {
+  const filter: {
+    time_range?: string
+    start?: string
+    end?: string
+    group_id?: number
+    provider?: string
+    model?: string
+    endpoint?: string
+  } = {}
+  const tr = extraTimeRange || timeRange.value
+  filter.time_range = tr
+  if (tr === 'custom' && customStartTime.value && customEndTime.value) {
+    filter.start = customStartTime.value
+    filter.end = customEndTime.value
+  }
   if (groupId.value != null) filter.group_id = groupId.value
   if (provider.value) filter.provider = provider.value
   if (model.value) filter.model = model.value
@@ -447,7 +475,8 @@ async function fetchErrorDistribution() {
 async function fetchSwitchRate() {
   loadingSwitchRate.value = true
   try {
-    const response = await opsAPI.getSwitchRateTrend(buildFilter('5h'))
+    // 与顶部时间/维度筛选一致（不再写死 5h）
+    const response = await opsAPI.getSwitchRateTrend(buildFilter())
     switchRatePoints.value = response.points
   } catch (error) {
     console.error('Failed to fetch switch rate trend:', error)
@@ -559,6 +588,17 @@ function syncToRoute() {
 watch(timeRange, () => {
   fetchAllData()
   syncToRoute()
+})
+
+// 顶部模型组/渠道/模型/端点变更时，下方图表与顶部指标一并刷新
+watch([groupId, provider, model, endpoint], () => {
+  fetchAllData()
+})
+
+watch([customStartTime, customEndTime], () => {
+  if (timeRange.value === 'custom' && customStartTime.value && customEndTime.value) {
+    fetchAllData()
+  }
 })
 
 watch(isFullscreen, () => {

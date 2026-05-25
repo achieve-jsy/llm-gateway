@@ -89,6 +89,9 @@ func TestIsSilentUserAgent(t *testing.T) {
 	}{
 		{"Trae/2.3.47348", true},
 		{"Mozilla/5.0 TRAE/2.3.47348 Electron/33.2.1", true},
+		{"hertz", true},
+		{"Hertz", true},
+		{"foo-hertz-bar", true},
 		{"Codex Desktop/0.145.0", false},
 		{"curl/8.0", false},
 	}

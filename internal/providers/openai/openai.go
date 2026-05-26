@@ -346,5 +346,29 @@ func chatRequestBody(req *core.ChatRequest) (any, error) {
 		// gpt-5-chat 保留 temperature；其余 reasoning 模型丢弃。
 		return adaptForReasoningChat(req, isReasoningChatModel(req.Model))
 	}
-	return req, nil
+	return adaptFixedTemperature(req), nil
+}
+
+// adaptFixedTemperature 为要求固定 temperature 的模型（如 kimi-k3 必须 0.6）兜底。
+// 若用户未传 temperature 或传了非要求值，统一设为模型要求的值。
+func adaptFixedTemperature(req *core.ChatRequest) any {
+	if temp := FixedTemperatureForModel(req.Model); temp != nil {
+		if req.Temperature == nil || *req.Temperature != *temp {
+			req.Temperature = temp
+		}
+	}
+	return req
+}
+
+// FixedTemperatureForModel 返回模型要求的固定 temperature 值，无要求则返回 nil。
+func FixedTemperatureForModel(model string) *float64 {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if i := strings.LastIndex(m, "/"); i >= 0 {
+		m = m[i+1:]
+	}
+	if m == "kimi-k3" {
+		v := 0.6
+		return &v
+	}
+	return nil
 }

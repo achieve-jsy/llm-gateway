@@ -84,6 +84,15 @@ func TestBuildOpenAIBodyResponses(t *testing.T) {
 	}
 }
 
+func TestBuildOpenAIBodyChatCompletions_KimiK3(t *testing.T) {
+	challenge := monitorChallenge{Prompt: "What is 3+5?", Expected: "8"}
+	body := buildOpenAIBody(MonitorAPIModeChatCompletions, "kimi-k3", challenge)
+
+	if body["temperature"] != 0.6 {
+		t.Errorf("temperature = %v, want 0.6 for kimi-k3", body["temperature"])
+	}
+}
+
 func TestBuildAnthropicBody(t *testing.T) {
 	challenge := monitorChallenge{Prompt: "Count to 5", Expected: "5"}
 	body := buildAnthropicBody("claude-3", challenge)

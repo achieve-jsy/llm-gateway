@@ -1034,10 +1034,13 @@ async function handleSave() {
       default_same_model_retries: form.default_same_model_retries,
       default_failover_cooldown_seconds: form.default_failover_cooldown_seconds,
       pricing_usd_to_cny_rate: form.pricing_usd_to_cny_rate,
+      budget_master_enabled: form.budget_master_enabled,
+      budget_accounting_enabled: form.budget_accounting_enabled,
       budget_positive_enforcement_enabled: form.budget_positive_enforcement_enabled,
       budget_zero_block_enabled: form.budget_zero_block_enabled,
       budget_shadow_enabled: form.budget_shadow_enabled,
       budget_v2_total_enforcement_enabled: form.budget_v2_total_enforcement_enabled,
+      budget_legacy_total_write_enabled: form.budget_legacy_total_write_enabled,
       sticky_default_enabled: form.sticky_default_enabled,
       sticky_default_ttl_seconds: form.sticky_default_ttl_seconds,
     })

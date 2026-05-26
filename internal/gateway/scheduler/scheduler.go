@@ -123,11 +123,11 @@ func (s *Scheduler) PersistSticky(ctx context.Context, groupName, sessionKey str
 		ttl = time.Hour // Default fallback
 	}
 
-	_ = s.router.stickyStore.Set(ctx, groupName, sessionKey, decision.ModelID, ttl)
+	_ = s.router.stickyStore.Set(ctx, groupName, sessionKey, decision.ModelName, ttl)
 }
 
 // UpdateSticky updates a sticky mapping after failover
-func (s *Scheduler) UpdateSticky(ctx context.Context, groupName, sessionKey, newModelID string) {
+func (s *Scheduler) UpdateSticky(ctx context.Context, groupName, sessionKey, newModelName string) {
 	if s.router.stickyStore == nil || sessionKey == "" {
 		return
 	}
@@ -142,5 +142,5 @@ func (s *Scheduler) UpdateSticky(ctx context.Context, groupName, sessionKey, new
 		ttl = time.Hour
 	}
 
-	_ = s.router.stickyStore.Set(ctx, groupName, sessionKey, newModelID, ttl)
+	_ = s.router.stickyStore.Set(ctx, groupName, sessionKey, newModelName, ttl)
 }

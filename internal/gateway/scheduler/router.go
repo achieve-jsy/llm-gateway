@@ -276,14 +276,14 @@ func (r *Router) trySticky(groupName, sessionKey string, healthyModels []*ModelR
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	pinnedModelID, err := r.stickyStore.Get(ctx, groupName, sessionKey)
-	if err != nil || pinnedModelID == "" {
+	pinnedModel, err := r.stickyStore.Get(ctx, groupName, sessionKey)
+	if err != nil || pinnedModel == "" {
 		return nil // No pin or Redis error
 	}
 
 	// Validate: is pinned model still in healthy pool?
 	for _, m := range healthyModels {
-		if fmt.Sprintf("%d", m.ModelID) == pinnedModelID {
+		if m.ModelName == pinnedModel {
 			sessionKeyPrefix := sessionKey
 			if len(sessionKey) > 8 {
 				sessionKeyPrefix = sessionKey[:8] + "..."
@@ -291,8 +291,7 @@ func (r *Router) trySticky(groupName, sessionKey string, healthyModels []*ModelR
 			slog.Info("sticky: using pinned model",
 				"group", groupName,
 				"session_key", sessionKeyPrefix,
-				"model_id", pinnedModelID,
-				"model_name", m.ModelName,
+				"model_name", pinnedModel,
 			)
 			return m
 		}
@@ -306,7 +305,7 @@ func (r *Router) trySticky(groupName, sessionKey string, healthyModels []*ModelR
 	slog.Info("sticky: pinned model not available, routing fresh",
 		"group", groupName,
 		"session_key", sessionKeyPrefix,
-		"pinned_model_id", pinnedModelID,
+		"pinned_model", pinnedModel,
 	)
 	return nil
 }

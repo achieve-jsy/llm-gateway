@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/example/llm-gateway/internal/providers/openai"
 )
 
 // ProbeModelForward 用最小请求探测模型可用性。
@@ -55,6 +57,9 @@ func probeChatCompletion(ctx context.Context, endpoint, modelName, apiKey string
 		"messages":        []map[string]string{{"role": "user", "content": "hi"}},
 		"max_tokens":      10,
 		"enable_thinking": false,
+	}
+	if temp := openai.FixedTemperatureForModel(modelName); temp != nil {
+		baseReq["temperature"] = *temp
 	}
 
 	success, elapsed, errMsg := doProbeRequest(ctx, chatEndpoint, apiKey, baseReq, false)

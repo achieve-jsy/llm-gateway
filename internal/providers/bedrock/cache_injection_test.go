@@ -45,18 +45,6 @@ func countCachePoints(messages []brtypes.Message) int {
 	return n
 }
 
-func countToolCachePoints(toolCfg *brtypes.ToolConfiguration) int {
-	if toolCfg == nil {
-		return 0
-	}
-	n := 0
-	for _, t := range toolCfg.Tools {
-		if _, ok := t.(*brtypes.ToolMemberCachePoint); ok {
-			n++
-		}
-	}
-	return n
-}
 
 // makeTools builds N tool definitions in the JSON-decoded map shape that
 // convertTools expects. The name must be a plain string (not *string).
@@ -278,15 +266,6 @@ func TestBuildConverseParts_NoAutoInject_WithClientCacheControl(t *testing.T) {
 	}
 }
 
-func countSystemCachePoints(system []brtypes.SystemContentBlock) int {
-	n := 0
-	for _, b := range system {
-		if _, ok := b.(*brtypes.SystemContentBlockMemberCachePoint); ok {
-			n++
-		}
-	}
-	return n
-}
 
 func TestBuildConverseParts_MessagesProtocol_ToolResultCacheControl(t *testing.T) {
 	// 模拟 /v1/messages → AnthropicToChatRequest 后的形态：

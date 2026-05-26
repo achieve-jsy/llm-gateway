@@ -511,6 +511,22 @@
         <div class="card-body">
           <div class="form-group">
             <div class="inline-toggle">
+              <label class="form-label">总开关</label>
+              <el-switch
+                v-model="form.budget_master_enabled"
+              />
+            </div>
+            <p class="form-hint">控制整个 tier budget 系统的启停，关闭后所有拦截和计数均不生效</p>
+          </div>
+          <div class="form-group">
+            <div class="inline-toggle">
+              <label class="form-label">计费开关</label>
+              <el-switch v-model="form.budget_accounting_enabled" />
+            </div>
+            <p class="form-hint">控制是否写入用量计数器；开启正向拦截或影子模式时自动开启</p>
+          </div>
+          <div class="form-group">
+            <div class="inline-toggle">
               <label class="form-label">正向拦截</label>
               <el-switch
                 v-model="form.budget_positive_enforcement_enabled"
@@ -543,6 +559,13 @@
               <el-switch v-model="form.budget_v2_total_enforcement_enabled" />
             </div>
             <p class="form-hint">总额超限走 v2 Redis 拦截链路</p>
+          </div>
+          <div class="form-group">
+            <div class="inline-toggle">
+              <label class="form-label">旧版总量写入</label>
+              <el-switch v-model="form.budget_legacy_total_write_enabled" />
+            </div>
+            <p class="form-hint">向旧版 total budget 计数器同步写入，用于过渡期兼容</p>
           </div>
         </div>
       </div>
@@ -674,10 +697,13 @@ const form = reactive<SystemSettings>({
   default_same_model_retries: 1,
   default_failover_cooldown_seconds: 60,
   pricing_usd_to_cny_rate: 7.2,
+  budget_master_enabled: false,
+  budget_accounting_enabled: false,
   budget_positive_enforcement_enabled: false,
   budget_zero_block_enabled: false,
   budget_shadow_enabled: false,
   budget_v2_total_enforcement_enabled: false,
+  budget_legacy_total_write_enabled: true,
   sticky_default_enabled: false,
   sticky_default_ttl_seconds: 300,
 })
@@ -716,10 +742,13 @@ const initialForm = reactive<SystemSettings>({
 	default_same_model_retries: 1,
 	default_failover_cooldown_seconds: 60,
 	pricing_usd_to_cny_rate: 7.2,
+  budget_master_enabled: false,
+  budget_accounting_enabled: false,
   budget_positive_enforcement_enabled: false,
   budget_zero_block_enabled: false,
   budget_shadow_enabled: false,
   budget_v2_total_enforcement_enabled: false,
+	budget_legacy_total_write_enabled: true,
 	sticky_default_enabled: false,
 	sticky_default_ttl_seconds: 300,
 })
@@ -906,10 +935,13 @@ onMounted(async () => {
     form.default_same_model_retries = s.default_same_model_retries ?? 1
     form.default_failover_cooldown_seconds = s.default_failover_cooldown_seconds ?? 60
     form.pricing_usd_to_cny_rate = s.pricing_usd_to_cny_rate ?? 7.2
+    form.budget_master_enabled = s.budget_master_enabled ?? false
+    form.budget_accounting_enabled = s.budget_accounting_enabled ?? false
     form.budget_positive_enforcement_enabled = s.budget_positive_enforcement_enabled ?? false
     form.budget_zero_block_enabled = s.budget_zero_block_enabled ?? false
     form.budget_shadow_enabled = s.budget_shadow_enabled ?? false
     form.budget_v2_total_enforcement_enabled = s.budget_v2_total_enforcement_enabled ?? false
+    form.budget_legacy_total_write_enabled = s.budget_legacy_total_write_enabled ?? true
     form.sticky_default_enabled = s.sticky_default_enabled ?? false
     form.sticky_default_ttl_seconds = s.sticky_default_ttl_seconds ?? 300
   }

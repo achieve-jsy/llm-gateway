@@ -84,6 +84,8 @@ func TestSeedBudgetEnforcementDefaultsOnlyFillsMissingKeys(t *testing.T) {
 	_ = repo.SetMultiple(map[string]string{service.SettingKeyBudgetPositiveEnforcement: "true"})
 	svc := service.NewSettingsService(repo)
 	svc.SeedBudgetEnforcementDefaults(service.BudgetEnforcementSeed{
+		MasterEnabled:              true,
+		AccountingEnabled:          false,
 		PositiveEnforcementEnabled: false,
 		ZeroBlockEnabled:           true,
 		ShadowEnabled:              false,
@@ -100,7 +102,7 @@ func TestSeedBudgetEnforcementDefaultsOnlyFillsMissingKeys(t *testing.T) {
 func TestUpdateSettingsRejectsShadowAndPositive(t *testing.T) {
 	repo := newMemSettingsRepo()
 	pub := &fakeEnforcementPublisher{}
-	svc := service.NewSettingsService(repo).WithBudgetEnforcement(true, pub)
+	svc := service.NewSettingsService(repo).WithBudgetEnforcement(pub)
 
 	err := svc.UpdateSettings(context.Background(), &model.SystemSettings{
 		SiteName:                         "LLM Gateway",
@@ -114,10 +116,11 @@ func TestUpdateSettingsRejectsShadowAndPositive(t *testing.T) {
 func TestUpdateSettingsRejectsWhenMasterDisabled(t *testing.T) {
 	repo := newMemSettingsRepo()
 	pub := &fakeEnforcementPublisher{}
-	svc := service.NewSettingsService(repo).WithBudgetEnforcement(false, pub)
+	svc := service.NewSettingsService(repo).WithBudgetEnforcement(pub)
 
 	err := svc.UpdateSettings(context.Background(), &model.SystemSettings{
 		SiteName:                         "LLM Gateway",
+		BudgetMasterEnabled:              false,
 		BudgetPositiveEnforcementEnabled: true,
 	})
 	require.ErrorIs(t, err, service.ErrBudgetMasterDisabled)
@@ -127,10 +130,11 @@ func TestUpdateSettingsRejectsWhenMasterDisabled(t *testing.T) {
 func TestUpdateSettingsPublishesEnforcementFlags(t *testing.T) {
 	repo := newMemSettingsRepo()
 	pub := &fakeEnforcementPublisher{}
-	svc := service.NewSettingsService(repo).WithBudgetEnforcement(true, pub)
+	svc := service.NewSettingsService(repo).WithBudgetEnforcement(pub)
 
 	err := svc.UpdateSettings(context.Background(), &model.SystemSettings{
 		SiteName:                         "LLM Gateway",
+		BudgetMasterEnabled:              true,
 		BudgetPositiveEnforcementEnabled: true,
 		BudgetZeroBlockEnabled:           true,
 		BudgetV2TotalEnforcementEnabled:  true,

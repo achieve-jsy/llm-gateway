@@ -45,12 +45,15 @@ type BudgetTierSnapshotSettings struct {
 	WeekStart                  string
 }
 
-// BudgetEnforcementFlags 可由系统设置热更新的拦截开关（不含 master/legacy）。
+// BudgetEnforcementFlags 可由系统设置热更新的拦截开关（含 master/accounting）。
 type BudgetEnforcementFlags struct {
+	MasterEnabled              bool
+	AccountingEnabled          bool
 	PositiveEnforcementEnabled bool
 	ZeroBlockEnabled           bool
 	ShadowEnabled              bool
 	V2TotalEnforcementEnabled  bool
+	LegacyTotalWriteEnabled    bool
 }
 
 type BudgetTierSnapshotPublisher struct {
@@ -134,10 +137,13 @@ func (p *BudgetTierSnapshotPublisher) Publish(ctx context.Context) (snapshot *co
 func (p *BudgetTierSnapshotPublisher) UpdateEnforcement(flags BudgetEnforcementFlags) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.settings.MasterEnabled = flags.MasterEnabled
+	p.settings.AccountingEnabled = flags.AccountingEnabled
 	p.settings.PositiveEnforcementEnabled = flags.PositiveEnforcementEnabled
 	p.settings.ZeroBlockEnabled = flags.ZeroBlockEnabled
 	p.settings.ShadowEnabled = flags.ShadowEnabled
 	p.settings.V2TotalEnforcementEnabled = flags.V2TotalEnforcementEnabled
+	p.settings.LegacyTotalWriteEnabled = flags.LegacyTotalWriteEnabled
 	if flags.PositiveEnforcementEnabled || flags.ShadowEnabled {
 		p.settings.AccountingEnabled = true
 	}

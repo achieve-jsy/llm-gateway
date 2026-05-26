@@ -144,37 +144,45 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	// 拦截开关：DB（设置页）优先；缺失 key 时用部署 cfg 种子。
 	settingsSvc.SeedBudgetEnforcementDefaults(service.BudgetEnforcementSeed{
 		MasterEnabled:              cfg.BudgetTier.MasterEnabled,
+		AccountingEnabled:          cfg.BudgetTier.AccountingEnabled,
 		PositiveEnforcementEnabled: cfg.BudgetTier.PositiveEnforcementEnabled,
 		ZeroBlockEnabled:           cfg.BudgetTier.ZeroBlockEnabled,
 		ShadowEnabled:              cfg.BudgetTier.ShadowEnabled,
 		V2TotalEnforcementEnabled:  cfg.BudgetTier.V2TotalEnforcementEnabled,
+		LegacyTotalWriteEnabled:    cfg.BudgetTier.LegacyTotalWriteEnabled,
 	})
 	budgetSettingsFromDB, _ := settingsSvc.GetSystemSettings(lifecycleCtx)
+	masterEnabled := cfg.BudgetTier.MasterEnabled
+	accountingEnabled := cfg.BudgetTier.AccountingEnabled
 	positiveEnabled := cfg.BudgetTier.PositiveEnforcementEnabled
 	zeroBlockEnabled := cfg.BudgetTier.ZeroBlockEnabled
 	shadowEnabled := cfg.BudgetTier.ShadowEnabled
 	v2TotalEnabled := cfg.BudgetTier.V2TotalEnforcementEnabled
+	legacyTotalWriteEnabled := cfg.BudgetTier.LegacyTotalWriteEnabled
 	if budgetSettingsFromDB != nil {
+		masterEnabled = budgetSettingsFromDB.BudgetMasterEnabled
+		accountingEnabled = budgetSettingsFromDB.BudgetAccountingEnabled
 		positiveEnabled = budgetSettingsFromDB.BudgetPositiveEnforcementEnabled
 		zeroBlockEnabled = budgetSettingsFromDB.BudgetZeroBlockEnabled
 		shadowEnabled = budgetSettingsFromDB.BudgetShadowEnabled
 		v2TotalEnabled = budgetSettingsFromDB.BudgetV2TotalEnforcementEnabled
+		legacyTotalWriteEnabled = budgetSettingsFromDB.BudgetLegacyTotalWriteEnabled
 	}
-	accountingEnabled := cfg.BudgetTier.AccountingEnabled || positiveEnabled || shadowEnabled
+	accountingEnabled = accountingEnabled || positiveEnabled || shadowEnabled
 	budgetSnapshotPublisher := service.NewBudgetTierSnapshotPublisher(
 		groupRepo, rdb, publisher, service.BudgetTierSnapshotSettings{
-			MasterEnabled:              cfg.BudgetTier.MasterEnabled,
+			MasterEnabled:              masterEnabled,
 			AccountingEnabled:          accountingEnabled,
 			PositiveEnforcementEnabled: positiveEnabled,
 			ZeroBlockEnabled:           zeroBlockEnabled,
 			ShadowEnabled:              shadowEnabled,
 			V2TotalEnforcementEnabled:  v2TotalEnabled,
-			LegacyTotalWriteEnabled:    cfg.BudgetTier.LegacyTotalWriteEnabled,
+			LegacyTotalWriteEnabled:    legacyTotalWriteEnabled,
 			Timezone:                   cfg.Budget.Timezone,
 			WeekStart:                  cfg.Budget.WeekStart,
 		}, time.Now,
 	)
-	settingsSvc.WithBudgetEnforcement(cfg.BudgetTier.MasterEnabled, budgetSnapshotPublisher)
+	settingsSvc.WithBudgetEnforcement(budgetSnapshotPublisher)
 	groupSvc.WithBudgetTierSnapshotPublisher(budgetSnapshotPublisher)
 	modelTierSvc.WithSnapshotPublisher(budgetSnapshotPublisher)
 	go budgetSnapshotPublisher.StartReconcile(lifecycleCtx, 30*time.Second)

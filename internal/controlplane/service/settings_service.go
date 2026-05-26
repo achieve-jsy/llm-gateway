@@ -105,9 +105,8 @@ type SettingsRepository interface {
 }
 
 type SettingsService struct {
-	repo                SettingsRepository
-	budgetMasterEnabled bool
-	budgetPublisher     budgetEnforcementPublisher
+	repo            SettingsRepository
+	budgetPublisher budgetEnforcementPublisher
 }
 
 func NewSettingsService(repo SettingsRepository) *SettingsService {
@@ -137,7 +136,8 @@ func allSettingKeys() []string {
 		SettingKeyKeyActivityBootstrapDone, SettingKeyKeyActivityScanCursor,
 		SettingKeyEmailEnabled, SettingKeySMTPHost, SettingKeySMTPPort,
 		SettingKeySMTPFrom, SettingKeySMTPPassword, SettingKeySMTPTLSSkipVerify,
-		SettingKeyBudgetPositiveEnforcement, SettingKeyBudgetZeroBlock,
+		SettingKeyBudgetMaster, SettingKeyBudgetAccounting,
+			SettingKeyBudgetPositiveEnforcement, SettingKeyBudgetZeroBlock,
 		SettingKeyBudgetShadow, SettingKeyBudgetV2TotalEnforcement,
 		SettingKeyStickyDefaultEnabled, SettingKeyStickyDefaultTTLSeconds,
 	}
@@ -230,10 +230,13 @@ func (s *SettingsService) GetSystemSettings(ctx context.Context) (*model.SystemS
 		SMTPFrom:          valOrDefault(vals, SettingKeySMTPFrom, ""),
 		SMTPPassword:      maskSecret(valOrDefault(vals, SettingKeySMTPPassword, "")),
 		SMTPTLSSkipVerify: boolOrDefault(vals, SettingKeySMTPTLSSkipVerify, false),
+		BudgetMasterEnabled:              boolOrDefault(vals, SettingKeyBudgetMaster, false),
+		BudgetAccountingEnabled:          boolOrDefault(vals, SettingKeyBudgetAccounting, false),
 		BudgetPositiveEnforcementEnabled: boolOrDefault(vals, SettingKeyBudgetPositiveEnforcement, false),
 		BudgetZeroBlockEnabled:           boolOrDefault(vals, SettingKeyBudgetZeroBlock, false),
 		BudgetShadowEnabled:              boolOrDefault(vals, SettingKeyBudgetShadow, false),
 		BudgetV2TotalEnforcementEnabled:  boolOrDefault(vals, SettingKeyBudgetV2TotalEnforcement, false),
+		BudgetLegacyTotalWriteEnabled:   boolOrDefault(vals, SettingKeyBudgetLegacyTotalWrite, true),
 		StickyDefaultEnabled:    boolOrDefault(vals, SettingKeyStickyDefaultEnabled, defaultStickyEnabled),
 		StickyDefaultTTLSeconds: intOrDefault(vals, SettingKeyStickyDefaultTTLSeconds, defaultStickyTTLSeconds),
 	}, nil
@@ -360,13 +363,16 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, settings *model.Sy
 		updates[SettingKeySMTPPassword] = settings.SMTPPassword
 	}
 	updates[SettingKeySMTPTLSSkipVerify] = fmt.Sprintf("%t", settings.SMTPTLSSkipVerify)
-	if err := validateBudgetEnforcement(settings, s.budgetMasterEnabled); err != nil {
+	if err := validateBudgetEnforcement(settings); err != nil {
 		return err
 	}
+	updates[SettingKeyBudgetMaster] = fmt.Sprintf("%t", settings.BudgetMasterEnabled)
+	updates[SettingKeyBudgetAccounting] = fmt.Sprintf("%t", settings.BudgetAccountingEnabled)
 	updates[SettingKeyBudgetPositiveEnforcement] = fmt.Sprintf("%t", settings.BudgetPositiveEnforcementEnabled)
 	updates[SettingKeyBudgetZeroBlock] = fmt.Sprintf("%t", settings.BudgetZeroBlockEnabled)
 	updates[SettingKeyBudgetShadow] = fmt.Sprintf("%t", settings.BudgetShadowEnabled)
 	updates[SettingKeyBudgetV2TotalEnforcement] = fmt.Sprintf("%t", settings.BudgetV2TotalEnforcementEnabled)
+	updates[SettingKeyBudgetLegacyTotalWrite] = fmt.Sprintf("%t", settings.BudgetLegacyTotalWriteEnabled)
 	// 全局粘性路由默认
 	updates[SettingKeyStickyDefaultEnabled] = fmt.Sprintf("%t", settings.StickyDefaultEnabled)
 	if settings.StickyDefaultTTLSeconds > 0 {
@@ -526,7 +532,7 @@ func (s *SettingsService) ImportSettings(ctx context.Context, settings map[strin
 	if err != nil {
 		return err
 	}
-	if err := validateBudgetEnforcement(current, s.budgetMasterEnabled); err != nil {
+	if err := validateBudgetEnforcement(current); err != nil {
 		return err
 	}
 	return s.publishBudgetEnforcement(ctx, current)

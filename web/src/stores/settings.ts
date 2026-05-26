@@ -21,10 +21,13 @@ function defaultSystemSettings(): SystemSettings {
     default_max_switches: 2, default_same_model_retries: 1, default_failover_cooldown_seconds: 60,
     supplier_name: '某公司',
     pricing_usd_to_cny_rate: 7.2,
+    budget_master_enabled: false,
+    budget_accounting_enabled: false,
     budget_positive_enforcement_enabled: false,
     budget_zero_block_enabled: false,
     budget_shadow_enabled: false,
     budget_v2_total_enforcement_enabled: false,
+    budget_legacy_total_write_enabled: true,
     sticky_default_enabled: true,
     sticky_default_ttl_seconds: 300,
   }

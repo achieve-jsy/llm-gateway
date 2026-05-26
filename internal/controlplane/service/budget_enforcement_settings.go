@@ -9,10 +9,13 @@ import (
 )
 
 const (
+	SettingKeyBudgetMaster             = "budget_master_enabled"
+	SettingKeyBudgetAccounting         = "budget_accounting_enabled"
 	SettingKeyBudgetPositiveEnforcement = "budget_positive_enforcement_enabled"
 	SettingKeyBudgetZeroBlock           = "budget_zero_block_enabled"
 	SettingKeyBudgetShadow              = "budget_shadow_enabled"
 	SettingKeyBudgetV2TotalEnforcement  = "budget_v2_total_enforcement_enabled"
+	SettingKeyBudgetLegacyTotalWrite    = "budget_legacy_total_write_enabled"
 )
 
 var (
@@ -23,10 +26,12 @@ var (
 // BudgetEnforcementSeed 部署配置中的拦截默认值（仅在 DB 尚无对应 key 时写入）。
 type BudgetEnforcementSeed struct {
 	MasterEnabled              bool
+	AccountingEnabled          bool
 	PositiveEnforcementEnabled bool
 	ZeroBlockEnabled           bool
 	ShadowEnabled              bool
 	V2TotalEnforcementEnabled  bool
+	LegacyTotalWriteEnabled    bool
 }
 
 type budgetEnforcementPublisher interface {
@@ -36,16 +41,18 @@ type budgetEnforcementPublisher interface {
 
 func budgetEnforcementSettingKeys() []string {
 	return []string{
+		SettingKeyBudgetMaster,
+		SettingKeyBudgetAccounting,
 		SettingKeyBudgetPositiveEnforcement,
 		SettingKeyBudgetZeroBlock,
 		SettingKeyBudgetShadow,
 		SettingKeyBudgetV2TotalEnforcement,
+		SettingKeyBudgetLegacyTotalWrite,
 	}
 }
 
-// WithBudgetEnforcement 注入部署层 master 与 snapshot publisher，供设置页热切换。
-func (s *SettingsService) WithBudgetEnforcement(masterEnabled bool, publisher budgetEnforcementPublisher) *SettingsService {
-	s.budgetMasterEnabled = masterEnabled
+// WithBudgetEnforcement 注入 snapshot publisher，供设置页热切换。
+func (s *SettingsService) WithBudgetEnforcement(publisher budgetEnforcementPublisher) *SettingsService {
 	s.budgetPublisher = publisher
 	return s
 }
@@ -59,16 +66,19 @@ func (s *SettingsService) SeedBudgetEnforcementDefaults(seed BudgetEnforcementSe
 			updates[key] = fmt.Sprintf("%t", value)
 		}
 	}
+	setIfMissing(SettingKeyBudgetMaster, seed.MasterEnabled)
+	setIfMissing(SettingKeyBudgetAccounting, seed.AccountingEnabled)
 	setIfMissing(SettingKeyBudgetPositiveEnforcement, seed.PositiveEnforcementEnabled)
 	setIfMissing(SettingKeyBudgetZeroBlock, seed.ZeroBlockEnabled)
 	setIfMissing(SettingKeyBudgetShadow, seed.ShadowEnabled)
 	setIfMissing(SettingKeyBudgetV2TotalEnforcement, seed.V2TotalEnforcementEnabled)
+	setIfMissing(SettingKeyBudgetLegacyTotalWrite, seed.LegacyTotalWriteEnabled)
 	if len(updates) > 0 {
 		_ = s.repo.SetMultiple(updates)
 	}
 }
 
-func validateBudgetEnforcement(settings *model.SystemSettings, masterEnabled bool) error {
+func validateBudgetEnforcement(settings *model.SystemSettings) error {
 	if settings == nil {
 		return nil
 	}
@@ -79,7 +89,7 @@ func validateBudgetEnforcement(settings *model.SystemSettings, masterEnabled boo
 		settings.BudgetZeroBlockEnabled ||
 		settings.BudgetShadowEnabled ||
 		settings.BudgetV2TotalEnforcementEnabled
-	if anyOn && !masterEnabled {
+	if anyOn && !settings.BudgetMasterEnabled {
 		return ErrBudgetMasterDisabled
 	}
 	return nil
@@ -90,10 +100,13 @@ func (s *SettingsService) publishBudgetEnforcement(ctx context.Context, settings
 		return nil
 	}
 	s.budgetPublisher.UpdateEnforcement(BudgetEnforcementFlags{
+		MasterEnabled:              settings.BudgetMasterEnabled,
+		AccountingEnabled:          settings.BudgetAccountingEnabled || settings.BudgetPositiveEnforcementEnabled || settings.BudgetShadowEnabled,
 		PositiveEnforcementEnabled: settings.BudgetPositiveEnforcementEnabled,
 		ZeroBlockEnabled:           settings.BudgetZeroBlockEnabled,
 		ShadowEnabled:              settings.BudgetShadowEnabled,
 		V2TotalEnforcementEnabled:  settings.BudgetV2TotalEnforcementEnabled,
+		LegacyTotalWriteEnabled:    settings.BudgetLegacyTotalWriteEnabled,
 	})
 	if err := s.budgetPublisher.MarkDirtyAndPublish(ctx); err != nil {
 		return fmt.Errorf("%w: %v", ErrBudgetConfigSyncPending, err)

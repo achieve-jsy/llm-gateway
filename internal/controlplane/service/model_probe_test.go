@@ -176,6 +176,53 @@ func TestProbeChatCompletion_KimiK3_ErrorBasedRetry(t *testing.T) {
 	assert.Equal(t, 2, callCount, "应该发了两次请求（首次失败 + 重试成功）")
 }
 
+func TestProbeChatCompletion_KimiK3_NoEnableThinking(t *testing.T) {
+	var receivedEnableThinking interface{}
+	var receivedTemp interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&body)
+		receivedEnableThinking = body["enable_thinking"]
+		receivedTemp = body["temperature"]
+		if body["enable_thinking"] != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": map[string]interface{}{
+					"message": "invalid temperature: only 0.6 is allowed for this model",
+					"type":    "InvalidParameter",
+				},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{"choices": []interface{}{}})
+	}))
+	defer srv.Close()
+
+	success, skipped, _, errMsg := probeChatCompletion(context.Background(), srv.URL, "kimi/kimi-k3", "test-key")
+	assert.True(t, success, "kimi-k3 不应发送 enable_thinking 字段")
+	assert.False(t, skipped)
+	assert.Empty(t, errMsg)
+	assert.Nil(t, receivedEnableThinking, "enable_thinking 不应出现在请求体中")
+	assert.Equal(t, 0.6, receivedTemp, "temperature 应为 0.6")
+}
+
+func TestProbeChatCompletion_NonKimiModel_HasEnableThinking(t *testing.T) {
+	var receivedEnableThinking interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&body)
+		receivedEnableThinking = body["enable_thinking"]
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{"choices": []interface{}{}})
+	}))
+	defer srv.Close()
+
+	success, _, _, _ := probeChatCompletion(context.Background(), srv.URL, "gpt-4", "test-key")
+	assert.True(t, success)
+	assert.Equal(t, false, receivedEnableThinking, "非固定 temperature 模型应保留 enable_thinking=false")
+}
+
 func TestProbeChatCompletion_NonKimiModel_NoTemperature(t *testing.T) {
 	var receivedTemp interface{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -53,13 +53,14 @@ func probeChatCompletion(ctx context.Context, endpoint, modelName, apiKey string
 	chatEndpoint := strings.TrimRight(endpoint, "/") + "/chat/completions"
 
 	baseReq := map[string]interface{}{
-		"model":           modelName,
-		"messages":        []map[string]string{{"role": "user", "content": "hi"}},
-		"max_tokens":      10,
-		"enable_thinking": false,
+		"model":      modelName,
+		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
+		"max_tokens": 10,
 	}
 	if temp := openai.FixedTemperatureForModel(modelName); temp != nil {
 		baseReq["temperature"] = *temp
+	} else {
+		baseReq["enable_thinking"] = false
 	}
 
 	success, elapsed, errMsg := doProbeRequest(ctx, chatEndpoint, apiKey, baseReq, false)

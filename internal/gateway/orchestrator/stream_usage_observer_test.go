@@ -59,3 +59,46 @@ func TestStreamUsageObserver_CachedTokensFromInputTokensDetails(t *testing.T) {
 		t.Fatalf("reasoning_tokens missing: %#v", obs.usage.CompletionTokensDetails)
 	}
 }
+
+func TestStreamUsageObserver_ResponsesAPIUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(nil)
+	obs := newStreamUsageObserver(c, time.Now())
+	// Responses API format: usage nested under response.usage
+	obs.OnJSONEvent(map[string]any{
+		"type": "response.completed",
+		"response": map[string]any{
+			"id":     "resp_abc123",
+			"status": "completed",
+			"usage": map[string]any{
+				"input_tokens":  float64(500),
+				"output_tokens": float64(200),
+				"total_tokens":  float64(700),
+				"input_tokens_details": map[string]any{
+					"cached_tokens": float64(100),
+				},
+				"output_tokens_details": map[string]any{
+					"reasoning_tokens": float64(50),
+				},
+			},
+		},
+	})
+	if obs.usage == nil {
+		t.Fatal("expected usage from Responses API format")
+	}
+	if obs.usage.PromptTokens != 500 {
+		t.Fatalf("PromptTokens=%d want 500", obs.usage.PromptTokens)
+	}
+	if obs.usage.CompletionTokens != 200 {
+		t.Fatalf("CompletionTokens=%d want 200", obs.usage.CompletionTokens)
+	}
+	if obs.usage.TotalTokens != 700 {
+		t.Fatalf("TotalTokens=%d want 700", obs.usage.TotalTokens)
+	}
+	if obs.usage.PromptTokensDetails == nil || obs.usage.PromptTokensDetails.CachedTokens != 100 {
+		t.Fatalf("cached_tokens missing from Responses API format: %#v", obs.usage.PromptTokensDetails)
+	}
+	if obs.usage.CompletionTokensDetails == nil || obs.usage.CompletionTokensDetails.ReasoningTokens != 50 {
+		t.Fatalf("reasoning_tokens missing from Responses API format: %#v", obs.usage.CompletionTokensDetails)
+	}
+}

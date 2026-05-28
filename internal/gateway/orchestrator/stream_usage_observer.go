@@ -103,64 +103,66 @@ func (o *streamUsageObserver) OnJSONEvent(payload map[string]any) {
 		}
 	}
 
-	// 末尾 usage chunk：直接从 map 提取字段，避免 json.Marshal+Unmarshal 双往返
-	if raw, ok := payload["usage"]; ok && raw != nil {
-		if usageMap, ok := raw.(map[string]any); ok {
-			u := core.Usage{
-				PromptTokens:     toInt(usageMap["prompt_tokens"]),
-				CompletionTokens: toInt(usageMap["completion_tokens"]),
-				TotalTokens:      toInt(usageMap["total_tokens"]),
-			}
-			// v0.7: 兼容 Responses API 的 input_tokens/output_tokens 命名
-			// Responses API 不使用 prompt_tokens/completion_tokens，但 usage_collector
-			// 依赖 PromptTokens/CompletionTokens 做成本估算。
-			if u.PromptTokens == 0 {
-				u.PromptTokens = toInt(usageMap["input_tokens"])
-			}
-			if u.CompletionTokens == 0 {
-				u.CompletionTokens = toInt(usageMap["output_tokens"])
-			}
+	// 末尾 usage chunk：直接从 map 提取字段，避免 json.Marshal+Unmarshal 双往返。
+	// 支持两种格式：
+	//   - Chat Completions: {"usage": {"prompt_tokens": ..., "completion_tokens": ...}}
+	//   - Responses API:     {"response": {"usage": {"input_tokens": ..., "output_tokens": ...}}}
+	usageMap := extractUsageMap(payload)
+	if usageMap != nil {
+		u := core.Usage{
+			PromptTokens:     toInt(usageMap["prompt_tokens"]),
+			CompletionTokens: toInt(usageMap["completion_tokens"]),
+			TotalTokens:      toInt(usageMap["total_tokens"]),
+		}
+		// v0.7: 兼容 Responses API 的 input_tokens/output_tokens 命名
+		// Responses API 不使用 prompt_tokens/completion_tokens，但 usage_collector
+		// 依赖 PromptTokens/CompletionTokens 做成本估算。
+		if u.PromptTokens == 0 {
+			u.PromptTokens = toInt(usageMap["input_tokens"])
+		}
+		if u.CompletionTokens == 0 {
+			u.CompletionTokens = toInt(usageMap["output_tokens"])
+		}
+		if u.TotalTokens == 0 {
+			u.TotalTokens = toInt(usageMap["total_tokens"])
 			if u.TotalTokens == 0 {
-				u.TotalTokens = toInt(usageMap["total_tokens"])
-				if u.TotalTokens == 0 {
-					u.TotalTokens = u.PromptTokens + u.CompletionTokens
+				u.TotalTokens = u.PromptTokens + u.CompletionTokens
+			}
+		}
+		// 提取 OpenAI-compatible / Responses 的 input 明细（含 cached_tokens）
+		if details := firstUsageDetailsMap(usageMap, "prompt_tokens_details", "input_tokens_details"); details != nil {
+			u.PromptTokensDetails = &core.PromptTokensDetails{
+				CachedTokens: toInt(details["cached_tokens"]),
+				AudioTokens:  toInt(details["audio_tokens"]),
+				TextTokens:   toInt(details["text_tokens"]),
+				ImageTokens:  toInt(details["image_tokens"]),
+			}
+		}
+		if details := firstUsageDetailsMap(usageMap, "completion_tokens_details", "output_tokens_details"); details != nil {
+			u.CompletionTokensDetails = &core.CompletionTokensDetails{
+				ReasoningTokens:          toInt(details["reasoning_tokens"]),
+				AudioTokens:              toInt(details["audio_tokens"]),
+				AcceptedPredictionTokens: toInt(details["accepted_prediction_tokens"]),
+				RejectedPredictionTokens: toInt(details["rejected_prediction_tokens"]),
+			}
+		}
+		// 提取 DeepSeek / Anthropic / Bedrock 缓存字段到 RawUsage
+		rawKeys := []string{
+			"prompt_cache_hit_tokens",     // DeepSeek
+			"prompt_cache_miss_tokens",    // DeepSeek
+			"cache_read_input_tokens",     // Anthropic / Bedrock
+			"cache_creation_input_tokens", // Anthropic / Bedrock
+		}
+		for _, k := range rawKeys {
+			if v := usageMap[k]; v != nil {
+				if u.RawUsage == nil {
+					u.RawUsage = make(map[string]any)
 				}
+				u.RawUsage[k] = v
 			}
-			// 提取 OpenAI-compatible / Responses 的 input 明细（含 cached_tokens）
-			if details := firstUsageDetailsMap(usageMap, "prompt_tokens_details", "input_tokens_details"); details != nil {
-				u.PromptTokensDetails = &core.PromptTokensDetails{
-					CachedTokens: toInt(details["cached_tokens"]),
-					AudioTokens:  toInt(details["audio_tokens"]),
-					TextTokens:   toInt(details["text_tokens"]),
-					ImageTokens:  toInt(details["image_tokens"]),
-				}
-			}
-			if details := firstUsageDetailsMap(usageMap, "completion_tokens_details", "output_tokens_details"); details != nil {
-				u.CompletionTokensDetails = &core.CompletionTokensDetails{
-					ReasoningTokens:          toInt(details["reasoning_tokens"]),
-					AudioTokens:              toInt(details["audio_tokens"]),
-					AcceptedPredictionTokens: toInt(details["accepted_prediction_tokens"]),
-					RejectedPredictionTokens: toInt(details["rejected_prediction_tokens"]),
-				}
-			}
-			// 提取 DeepSeek / Anthropic / Bedrock 缓存字段到 RawUsage
-			rawKeys := []string{
-				"prompt_cache_hit_tokens",    // DeepSeek
-				"prompt_cache_miss_tokens",   // DeepSeek
-				"cache_read_input_tokens",    // Anthropic / Bedrock
-				"cache_creation_input_tokens", // Anthropic / Bedrock
-			}
-			for _, k := range rawKeys {
-				if v := usageMap[k]; v != nil {
-					if u.RawUsage == nil {
-						u.RawUsage = make(map[string]any)
-					}
-					u.RawUsage[k] = v
-				}
-			}
-			if u.PromptTokens > 0 || u.CompletionTokens > 0 || u.TotalTokens > 0 {
-				o.usage = &u
-			}
+		}
+		if u.PromptTokens > 0 || u.CompletionTokens > 0 || u.TotalTokens > 0 {
+			o.usage = &u
 		}
 	}
 }
@@ -243,6 +245,29 @@ func chunkHasContent(payload map[string]any) bool {
 		return true
 	}
 	return false
+}
+
+// extractUsageMap 从 payload 中提取 usage map，支持两种格式：
+//   - Chat Completions:  payload["usage"]
+//   - Responses API:     payload["response"]["usage"]
+func extractUsageMap(payload map[string]any) map[string]any {
+	// 格式 1: Chat Completions — 顶层 usage
+	if raw, ok := payload["usage"]; ok {
+		if m, ok := raw.(map[string]any); ok && m != nil {
+			return m
+		}
+	}
+	// 格式 2: Responses API — response.usage (response.completed 等事件)
+	if raw, ok := payload["response"]; ok {
+		if resp, ok := raw.(map[string]any); ok {
+			if usage, ok := resp["usage"]; ok {
+				if m, ok := usage.(map[string]any); ok && m != nil {
+					return m
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // toInt 从 JSON 数字（float64）安全转换为 int，非数字返回 0。

@@ -385,7 +385,8 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	r.POST("/api/v1/opencode-config/callback", opencodeConfigHandler.Callback)
 
 	// 模型组静态路由：在 adminGroup 之前注册，避免被 /groups/:id 吞掉
-	r.GET("/api/v1/groups/capabilities", middleware.JWTAuth(), modelInfoHandler.GetGroupModelInfo)
+	// capabilities 是模型广场列表价格/能力接口，放开为匿名可调（无需 JWT）
+	r.GET("/api/v1/groups/capabilities", modelInfoHandler.GetGroupModelInfo)
 	r.GET("/api/v1/groups/defaults", middleware.JWTAuth(), groupHandler.GetDefaults)
 
 	// 启动健康检测调度器（优先使用环境变量 HEALTH_CHECK_INTERVAL 控制）

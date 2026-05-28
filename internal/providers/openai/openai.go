@@ -351,11 +351,15 @@ func chatRequestBody(req *core.ChatRequest) (any, error) {
 
 // adaptFixedTemperature 为要求固定 temperature 的模型（如 kimi-k3 必须 0.6）兜底。
 // 若用户未传 temperature 或传了非要求值，统一设为模型要求的值。
+// 同时删除 enable_thinking：固定 temperature 模型不接受 enable_thinking+temperature 组合。
 func adaptFixedTemperature(req *core.ChatRequest) any {
 	if temp := FixedTemperatureForModel(req.Model); temp != nil {
 		if req.Temperature == nil || *req.Temperature != *temp {
 			req.Temperature = temp
 		}
+		// kimi-k3 等固定 temperature 模型拒绝 enable_thinking 字段（包括 false），
+		// 删除 ExtraFields 中可能存在的 enable_thinking。
+		req.ExtraFields.Delete("enable_thinking")
 	}
 	return req
 }

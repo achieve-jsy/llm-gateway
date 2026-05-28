@@ -32,6 +32,9 @@ export interface GroupCapability {
   // 单价：USD per 1,000,000 tokens；0 表示缺价。
   input_price_per_million: number
   output_price_per_million: number
+  // 缓存单价：USD per 1,000,000 tokens；缺价或不可用为 undefined。
+  cache_read_price_per_million?: number
+  cache_write_price_per_million?: number
   is_capability_override: boolean
 
   // ── 视频模型专用字段（seedance） ──────────────────────────────────────

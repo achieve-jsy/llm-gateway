@@ -27,7 +27,11 @@ type GroupModelInfo struct {
 	// 单模型组即为精确值；0 表示缺价（成员未绑定 catalog 或未配置 manual 价）。
 	InputPricePerMillion  float64 `json:"input_price_per_million"`
 	OutputPricePerMillion float64 `json:"output_price_per_million"`
-	IsCapabilityOverride  bool    `json:"is_capability_override"`
+	// 缓存单价：USD per 1,000,000 tokens，与输入/输出单价同语义。
+	// 组内成员不一致时取最大值（保守上界）；所有成员均无缓存价时为 nil。
+	CacheReadPricePerMillion  *float64 `json:"cache_read_price_per_million,omitempty"`
+	CacheWritePricePerMillion *float64 `json:"cache_write_price_per_million,omitempty"`
+	IsCapabilityOverride      bool     `json:"is_capability_override"`
 
 	// ── 视频模型专用字段（seedance） ──────────────────────────────────────
 	// 当 mode == "video" 时从成员模型参数聚合；非视频模型保持零值。
@@ -176,6 +180,20 @@ func aggregateGroupModelInfo(members []*model.Model) GroupModelInfo {
 			info.OutputPricePerMillion = out
 		}
 
+		// 缓存单价同样取组内最大值（保守上界）；无任何成员配置时保持 nil。
+		if cr := memberCacheReadPrice(m); cr != nil {
+			if info.CacheReadPricePerMillion == nil || *cr > *info.CacheReadPricePerMillion {
+				v := *cr
+				info.CacheReadPricePerMillion = &v
+			}
+		}
+		if cw := memberCacheWritePrice(m); cw != nil {
+			if info.CacheWritePricePerMillion == nil || *cw > *info.CacheWritePricePerMillion {
+				v := *cw
+				info.CacheWritePricePerMillion = &v
+			}
+		}
+
 		// 未绑定 catalog 的成员视为「能力未知 = 不支持」，从而拉低组级能力。
 		var memberVision, memberFC, memberTC bool
 		if m.Catalog != nil {
@@ -300,6 +318,29 @@ func memberOutputPrice(m *model.Model) float64 {
 		return m.Catalog.OutputPricePerMillion
 	}
 	return 0
+}
+
+// memberCacheReadPrice / memberCacheWritePrice 解析单个成员模型的有效缓存单价：
+//   - price_mode=manual：取模型自身的 CacheReadPrice/CacheWritePrice；
+//   - 其他（catalog/默认）：取关联 catalog 的缓存价格，未绑定则为 nil。
+func memberCacheReadPrice(m *model.Model) *float64 {
+	if m.PriceMode == "manual" {
+		return m.CacheReadPrice
+	}
+	if m.Catalog != nil {
+		return m.Catalog.CacheReadPrice
+	}
+	return nil
+}
+
+func memberCacheWritePrice(m *model.Model) *float64 {
+	if m.PriceMode == "manual" {
+		return m.CacheWritePrice
+	}
+	if m.Catalog != nil {
+		return m.Catalog.CacheWritePrice
+	}
+	return nil
 }
 
 func applyGroupOverride(info GroupModelInfo, g *model.Group) GroupModelInfo {

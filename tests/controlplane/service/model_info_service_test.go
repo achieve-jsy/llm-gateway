@@ -794,3 +794,185 @@ func TestModelInfoService_GetGroupModelInfo_MultipleGroups(t *testing.T) {
 	assert.Equal(t, 32000, tl.MaxInputTokens, "text-lite input token 32000")
 	assert.Equal(t, 1024, tl.MaxOutputTokens, "text-lite output token 1024")
 }
+
+func TestModelInfoService_GetGroupModelInfo_CachePrices(t *testing.T) {
+	fp := func(v float64) *float64 { return &v }
+
+	t.Run("单成员_catalog缓存价_原样返回", func(t *testing.T) {
+		groupID := uint(30)
+		g := model.Group{
+			ID: groupID, Name: "cache-single", Enabled: true,
+			Models: []model.GroupModel{{GroupID: groupID, ModelID: modelID1}},
+		}
+		models := map[uuid.UUID]*model.Model{
+			modelID1: {
+				ID: modelID1, Name: "m1", ModelType: "chat", Enabled: boolPtr(true),
+				PriceMode: "catalog",
+				CatalogID: uuidPtr(catID1),
+				Catalog: &model.ModelCatalog{
+					ID: catID1, Mode: "chat",
+					InputPricePerMillion:  3,
+					OutputPricePerMillion: 15,
+					CacheReadPrice:        fp(0.3),
+					CacheWritePrice:       fp(3.75),
+				},
+			},
+		}
+		svc := service.NewModelInfoService(
+			&fakeGroupInfoRepo{listFunc: func() ([]model.Group, error) { return []model.Group{g}, nil }},
+			&fakeModelInfoRepo{getByIDsFunc: func(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error) { return models, nil }},
+		)
+		result, err := svc.GetGroupModelInfo(nil)
+		require.NoError(t, err)
+		require.Contains(t, result, "cache-single")
+		info := result["cache-single"]
+		assert.NotNil(t, info.CacheReadPricePerMillion, "catalog 有缓存读价，应返回")
+		assert.Equal(t, 0.3, *info.CacheReadPricePerMillion)
+		assert.NotNil(t, info.CacheWritePricePerMillion, "catalog 有缓存写价，应返回")
+		assert.Equal(t, 3.75, *info.CacheWritePricePerMillion)
+	})
+
+	t.Run("多成员_catalog缓存价_取最大值", func(t *testing.T) {
+		groupID := uint(31)
+		g := model.Group{
+			ID: groupID, Name: "cache-multi", Enabled: true,
+			Models: []model.GroupModel{
+				{GroupID: groupID, ModelID: modelID1},
+				{GroupID: groupID, ModelID: modelID2},
+			},
+		}
+		models := map[uuid.UUID]*model.Model{
+			modelID1: {
+				ID: modelID1, Name: "m1", ModelType: "chat", Enabled: boolPtr(true),
+				CatalogID: uuidPtr(catID1),
+				Catalog: &model.ModelCatalog{
+					ID: catID1, Mode: "chat",
+					CacheReadPrice:  fp(0.1),
+					CacheWritePrice: fp(1.0),
+				},
+			},
+			modelID2: {
+				ID: modelID2, Name: "m2", ModelType: "chat", Enabled: boolPtr(true),
+				CatalogID: uuidPtr(catID2),
+				Catalog: &model.ModelCatalog{
+					ID: catID2, Mode: "chat",
+					CacheReadPrice:  fp(0.3),
+					CacheWritePrice: fp(0.5),
+				},
+			},
+		}
+		svc := service.NewModelInfoService(
+			&fakeGroupInfoRepo{listFunc: func() ([]model.Group, error) { return []model.Group{g}, nil }},
+			&fakeModelInfoRepo{getByIDsFunc: func(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error) { return models, nil }},
+		)
+		result, err := svc.GetGroupModelInfo(nil)
+		require.NoError(t, err)
+		require.Contains(t, result, "cache-multi")
+		info := result["cache-multi"]
+		assert.NotNil(t, info.CacheReadPricePerMillion, "应返回缓存读价")
+		assert.Equal(t, 0.3, *info.CacheReadPricePerMillion, "缓存读取组内最大值 0.3")
+		assert.NotNil(t, info.CacheWritePricePerMillion, "应返回缓存写价")
+		assert.Equal(t, 1.0, *info.CacheWritePricePerMillion, "缓存写取组内最大值 1.0")
+	})
+
+	t.Run("无缓存价_保持nil", func(t *testing.T) {
+		groupID := uint(32)
+		g := model.Group{
+			ID: groupID, Name: "cache-none", Enabled: true,
+			Models: []model.GroupModel{{GroupID: groupID, ModelID: modelID1}},
+		}
+		models := map[uuid.UUID]*model.Model{
+			modelID1: {
+				ID: modelID1, Name: "m1", ModelType: "chat", Enabled: boolPtr(true),
+				PriceMode: "catalog",
+				CatalogID: uuidPtr(catID1),
+				Catalog: &model.ModelCatalog{
+					ID:                      catID1,
+					Mode:                    "chat",
+					InputPricePerMillion:   2,
+					OutputPricePerMillion:  8,
+					CacheReadPrice:         nil,
+					CacheWritePrice:        nil,
+				},
+			},
+		}
+		svc := service.NewModelInfoService(
+			&fakeGroupInfoRepo{listFunc: func() ([]model.Group, error) { return []model.Group{g}, nil }},
+			&fakeModelInfoRepo{getByIDsFunc: func(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error) { return models, nil }},
+		)
+		result, err := svc.GetGroupModelInfo(nil)
+		require.NoError(t, err)
+		require.Contains(t, result, "cache-none")
+		info := result["cache-none"]
+		assert.Nil(t, info.CacheReadPricePerMillion, "无缓存读价，应为 nil")
+		assert.Nil(t, info.CacheWritePricePerMillion, "无缓存写价，应为 nil")
+		assert.Equal(t, 2.0, info.InputPricePerMillion, "常规输入价不受影响")
+		assert.Equal(t, 8.0, info.OutputPricePerMillion, "常规输出价不受影响")
+	})
+
+	t.Run("manual模式_取模型自身缓存价", func(t *testing.T) {
+		groupID := uint(33)
+		g := model.Group{
+			ID: groupID, Name: "cache-manual", Enabled: true,
+			Models: []model.GroupModel{{GroupID: groupID, ModelID: modelID1}},
+		}
+		models := map[uuid.UUID]*model.Model{
+			modelID1: {
+				ID: modelID1, Name: "m1", ModelType: "chat", Enabled: boolPtr(true),
+				PriceMode:       "manual",
+				InputPrice:      4,
+				OutputPrice:     20,
+				CacheReadPrice:  fp(0.4),
+				CacheWritePrice: fp(5),
+			},
+		}
+		svc := service.NewModelInfoService(
+			&fakeGroupInfoRepo{listFunc: func() ([]model.Group, error) { return []model.Group{g}, nil }},
+			&fakeModelInfoRepo{getByIDsFunc: func(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error) { return models, nil }},
+		)
+		result, err := svc.GetGroupModelInfo(nil)
+		require.NoError(t, err)
+		require.Contains(t, result, "cache-manual")
+		info := result["cache-manual"]
+		assert.NotNil(t, info.CacheReadPricePerMillion, "manual 缓存读价应返回")
+		assert.Equal(t, 0.4, *info.CacheReadPricePerMillion)
+		assert.NotNil(t, info.CacheWritePricePerMillion, "manual 缓存写价应返回")
+		assert.Equal(t, 5.0, *info.CacheWritePricePerMillion)
+	})
+
+	t.Run("catalog模式_模型自身缓存价被忽略", func(t *testing.T) {
+		// price_mode=catalog 时，模型自身的 CacheReadPrice/CacheWritePrice 不生效，
+		// 应取 catalog 上的缓存价。
+		groupID := uint(34)
+		g := model.Group{
+			ID: groupID, Name: "cache-catalog-ignores-self", Enabled: true,
+			Models: []model.GroupModel{{GroupID: groupID, ModelID: modelID1}},
+		}
+		models := map[uuid.UUID]*model.Model{
+			modelID1: {
+				ID: modelID1, Name: "m1", ModelType: "chat", Enabled: boolPtr(true),
+				PriceMode:      "catalog",
+				CacheReadPrice: fp(9.9), // catalog 模式下应被忽略
+				CatalogID:      uuidPtr(catID1),
+				Catalog: &model.ModelCatalog{
+					ID:              catID1,
+					Mode:            "chat",
+					CacheReadPrice:  fp(0.2),
+					CacheWritePrice: fp(2),
+				},
+			},
+		}
+		svc := service.NewModelInfoService(
+			&fakeGroupInfoRepo{listFunc: func() ([]model.Group, error) { return []model.Group{g}, nil }},
+			&fakeModelInfoRepo{getByIDsFunc: func(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error) { return models, nil }},
+		)
+		result, err := svc.GetGroupModelInfo(nil)
+		require.NoError(t, err)
+		require.Contains(t, result, "cache-catalog-ignores-self")
+		info := result["cache-catalog-ignores-self"]
+		assert.NotNil(t, info.CacheReadPricePerMillion)
+		assert.Equal(t, 0.2, *info.CacheReadPricePerMillion, "catalog 模式应取 catalog 缓存读价，忽略模型自身 9.9")
+		assert.NotNil(t, info.CacheWritePricePerMillion)
+		assert.Equal(t, 2.0, *info.CacheWritePricePerMillion)
+	})
+}

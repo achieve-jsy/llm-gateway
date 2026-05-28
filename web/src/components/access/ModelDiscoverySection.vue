@@ -139,10 +139,21 @@
             </div>
 
             <!-- 价格（紧凑单行） -->
-            <div class="gc-price" v-if="caps[g.name] && (caps[g.name].input_price_per_million > 0 || caps[g.name].output_price_per_million > 0)">
+            <div
+              class="gc-price"
+              v-if="caps[g.name] && (caps[g.name].input_price_per_million > 0 || caps[g.name].output_price_per_million > 0 || caps[g.name].cache_read_price_per_million > 0 || caps[g.name].cache_write_price_per_million > 0)"
+            >
               <span>输入 <b>{{ formatPrice(caps[g.name].input_price_per_million) }}</b></span>
               <span class="gc-price-sep">/</span>
               <span>输出 <b>{{ formatPrice(caps[g.name].output_price_per_million) }}</b></span>
+              <template v-if="caps[g.name].cache_read_price_per_million > 0">
+                <span class="gc-price-sep">/</span>
+                <span>缓存读 <b>{{ formatPrice(caps[g.name].cache_read_price_per_million) }}</b></span>
+              </template>
+              <template v-if="caps[g.name].cache_write_price_per_million > 0">
+                <span class="gc-price-sep">/</span>
+                <span>缓存写 <b>{{ formatPrice(caps[g.name].cache_write_price_per_million) }}</b></span>
+              </template>
               <span class="gc-price-unit">/1M</span>
             </div>
 

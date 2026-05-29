@@ -875,7 +875,7 @@ func TestModelInfoService_GetGroupModelInfo_CachePrices(t *testing.T) {
 		assert.Equal(t, 1.0, *info.CacheWritePricePerMillion, "缓存写取组内最大值 1.0")
 	})
 
-	t.Run("无缓存价_保持nil", func(t *testing.T) {
+	t.Run("无缓存价_输入价兜底十分之一", func(t *testing.T) {
 		groupID := uint(32)
 		g := model.Group{
 			ID: groupID, Name: "cache-none", Enabled: true,
@@ -887,12 +887,12 @@ func TestModelInfoService_GetGroupModelInfo_CachePrices(t *testing.T) {
 				PriceMode: "catalog",
 				CatalogID: uuidPtr(catID1),
 				Catalog: &model.ModelCatalog{
-					ID:                      catID1,
-					Mode:                    "chat",
-					InputPricePerMillion:   2,
-					OutputPricePerMillion:  8,
-					CacheReadPrice:         nil,
-					CacheWritePrice:        nil,
+					ID:                     catID1,
+					Mode:                   "chat",
+					InputPricePerMillion:  2,
+					OutputPricePerMillion: 8,
+					CacheReadPrice:        nil,
+					CacheWritePrice:       nil,
 				},
 			},
 		}
@@ -904,10 +904,96 @@ func TestModelInfoService_GetGroupModelInfo_CachePrices(t *testing.T) {
 		require.NoError(t, err)
 		require.Contains(t, result, "cache-none")
 		info := result["cache-none"]
-		assert.Nil(t, info.CacheReadPricePerMillion, "无缓存读价，应为 nil")
-		assert.Nil(t, info.CacheWritePricePerMillion, "无缓存写价，应为 nil")
+		assert.NotNil(t, info.CacheReadPricePerMillion, "无缓存价但有输入价，应按输入价 1/10 兜底")
+		assert.Equal(t, 0.2, *info.CacheReadPricePerMillion, "输入价 2 的 1/10 应为 0.2")
+		assert.NotNil(t, info.CacheWritePricePerMillion, "无缓存写价但有输入价，应按输入价 1/10 兜底")
+		assert.Equal(t, 0.2, *info.CacheWritePricePerMillion, "输入价 2 的 1/10 应为 0.2")
 		assert.Equal(t, 2.0, info.InputPricePerMillion, "常规输入价不受影响")
 		assert.Equal(t, 8.0, info.OutputPricePerMillion, "常规输出价不受影响")
+	})
+
+	t.Run("输入价也为0_完全缺价_保持nil", func(t *testing.T) {
+		// 模型既没有缓存价也没有输入价（完全缺价），兜底无从谈起，缓存价保持 nil
+		groupID := uint(35)
+		g := model.Group{
+			ID: groupID, Name: "cache-fully-missing", Enabled: true,
+			Models: []model.GroupModel{{GroupID: groupID, ModelID: modelID1}},
+		}
+		models := map[uuid.UUID]*model.Model{
+			modelID1: {
+				ID: modelID1, Name: "m1", ModelType: "chat", Enabled: boolPtr(true),
+				PriceMode: "catalog",
+				CatalogID: uuidPtr(catID1),
+				Catalog: &model.ModelCatalog{
+					ID: catID1, Mode: "chat",
+					InputPricePerMillion:  0,
+					OutputPricePerMillion: 0,
+					CacheReadPrice:        nil,
+					CacheWritePrice:       nil,
+				},
+			},
+		}
+		svc := service.NewModelInfoService(
+			&fakeGroupInfoRepo{listFunc: func() ([]model.Group, error) { return []model.Group{g}, nil }},
+			&fakeModelInfoRepo{getByIDsFunc: func(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error) { return models, nil }},
+		)
+		result, err := svc.GetGroupModelInfo(nil)
+		require.NoError(t, err)
+		require.Contains(t, result, "cache-fully-missing")
+		info := result["cache-fully-missing"]
+		assert.Nil(t, info.CacheReadPricePerMillion, "输入价 0 无兜底，应为 nil")
+		assert.Nil(t, info.CacheWritePricePerMillion, "输入价 0 无兜底，应为 nil")
+	})
+
+	t.Run("多成员_显式缓存价与兜底混合_取最大值", func(t *testing.T) {
+		// m1 无缓存价但输入价 100 → 兜底 10；m2 显式缓存读 0.5/写 0.3。
+		// 保守上界：读取 10，写入取 10（兜底写 10 > 显式写 0.3）
+		groupID := uint(36)
+		g := model.Group{
+			ID: groupID, Name: "cache-mixed", Enabled: true,
+			Models: []model.GroupModel{
+				{GroupID: groupID, ModelID: modelID1},
+				{GroupID: groupID, ModelID: modelID2},
+			},
+		}
+		models := map[uuid.UUID]*model.Model{
+			modelID1: {
+				ID: modelID1, Name: "m1", ModelType: "chat", Enabled: boolPtr(true),
+				CatalogID: uuidPtr(catID1),
+				Catalog: &model.ModelCatalog{
+					ID:                      catID1,
+					Mode:                    "chat",
+					InputPricePerMillion:   100,
+					OutputPricePerMillion:  200,
+					CacheReadPrice:         nil,
+					CacheWritePrice:        nil,
+				},
+			},
+			modelID2: {
+				ID: modelID2, Name: "m2", ModelType: "chat", Enabled: boolPtr(true),
+				CatalogID: uuidPtr(catID2),
+				Catalog: &model.ModelCatalog{
+					ID:                      catID2,
+					Mode:                    "chat",
+					InputPricePerMillion:   3,
+					OutputPricePerMillion:  12,
+					CacheReadPrice:         fp(0.5),
+					CacheWritePrice:        fp(0.3),
+				},
+			},
+		}
+		svc := service.NewModelInfoService(
+			&fakeGroupInfoRepo{listFunc: func() ([]model.Group, error) { return []model.Group{g}, nil }},
+			&fakeModelInfoRepo{getByIDsFunc: func(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error) { return models, nil }},
+		)
+		result, err := svc.GetGroupModelInfo(nil)
+		require.NoError(t, err)
+		require.Contains(t, result, "cache-mixed")
+		info := result["cache-mixed"]
+		assert.NotNil(t, info.CacheReadPricePerMillion)
+		assert.Equal(t, 10.0, *info.CacheReadPricePerMillion, "兜底读 10 > 显式读 0.5，取 10")
+		assert.NotNil(t, info.CacheWritePricePerMillion)
+		assert.Equal(t, 10.0, *info.CacheWritePricePerMillion, "兜底写 10 > 显式写 0.3，取 10")
 	})
 
 	t.Run("manual模式_取模型自身缓存价", func(t *testing.T) {

@@ -28,7 +28,8 @@ type GroupModelInfo struct {
 	InputPricePerMillion  float64 `json:"input_price_per_million"`
 	OutputPricePerMillion float64 `json:"output_price_per_million"`
 	// 缓存单价：USD per 1,000,000 tokens，与输入/输出单价同语义。
-	// 组内成员不一致时取最大值（保守上界）；所有成员均无缓存价时为 nil。
+	// 组内成员不一致时取最大值（保守上界）；成员未显式配置缓存价时，
+	// 以其输入价的 1/10 兜底；成员连输入价也没有（完全缺价）时为 nil。
 	CacheReadPricePerMillion  *float64 `json:"cache_read_price_per_million,omitempty"`
 	CacheWritePricePerMillion *float64 `json:"cache_write_price_per_million,omitempty"`
 	IsCapabilityOverride      bool     `json:"is_capability_override"`
@@ -180,14 +181,15 @@ func aggregateGroupModelInfo(members []*model.Model) GroupModelInfo {
 			info.OutputPricePerMillion = out
 		}
 
-		// 缓存单价同样取组内最大值（保守上界）；无任何成员配置时保持 nil。
-		if cr := memberCacheReadPrice(m); cr != nil {
+		// 缓存单价同样取组内最大值（保守上界）。未显式配置缓存价的成员
+		// 以输入价 1/10 兜底；输入价也为 0（完全缺价）时保持 nil。
+		if cr := effectiveCachePrice(memberCacheReadPrice(m), memberInputPrice(m)); cr != nil {
 			if info.CacheReadPricePerMillion == nil || *cr > *info.CacheReadPricePerMillion {
 				v := *cr
 				info.CacheReadPricePerMillion = &v
 			}
 		}
-		if cw := memberCacheWritePrice(m); cw != nil {
+		if cw := effectiveCachePrice(memberCacheWritePrice(m), memberInputPrice(m)); cw != nil {
 			if info.CacheWritePricePerMillion == nil || *cw > *info.CacheWritePricePerMillion {
 				v := *cw
 				info.CacheWritePricePerMillion = &v
@@ -339,6 +341,21 @@ func memberCacheWritePrice(m *model.Model) *float64 {
 	}
 	if m.Catalog != nil {
 		return m.Catalog.CacheWritePrice
+	}
+	return nil
+}
+
+// effectiveCachePrice 返回单个成员的有效缓存单价：
+//   - 显式配置的缓存价（manual/catalog）优先；
+//   - 未配置缓存价时以输入价 1/10 兜底；
+//   - 输入价也为 0（完全缺价）时返回 nil。
+func effectiveCachePrice(cachePrice *float64, inputPrice float64) *float64 {
+	if cachePrice != nil {
+		return cachePrice
+	}
+	if inputPrice > 0 {
+		v := inputPrice / 10
+		return &v
 	}
 	return nil
 }

@@ -52,6 +52,54 @@ func (o *streamUsageObserver) OnJSONEvent(payload map[string]any) {
 		o.lastCreated = int64(c)
 	}
 
+	// Responses API 流式事件（直连 /v1/responses）：元数据在 response 内层
+	if resp, ok := payload["response"].(map[string]any); ok {
+		if id, ok := resp["id"].(string); ok && id != "" {
+			o.lastID = id
+		}
+		if m, ok := resp["model"].(string); ok && m != "" {
+			o.lastModel = m
+		}
+		if c, ok := resp["created_at"].(float64); ok && c > 0 {
+			o.lastCreated = int64(c)
+		}
+	}
+
+	// Responses API 文本增量：output_text.delta / reasoning_summary_text.delta 的
+	// 顶层 delta 是字符串（Chat 格式是 choices[].delta map），此前从未被捕获。
+	if evtType, ok := payload["type"].(string); ok {
+		switch evtType {
+		case "response.output_text.delta":
+			if d, ok := payload["delta"].(string); ok && d != "" {
+				if o.firstTokenAt.IsZero() {
+					o.firstTokenAt = time.Now()
+				}
+				o.contentBuf.WriteString(d)
+			}
+		case "response.reasoning_summary_text.delta":
+			if d, ok := payload["delta"].(string); ok && d != "" {
+				if o.firstTokenAt.IsZero() {
+					o.firstTokenAt = time.Now()
+				}
+				o.reasoningBuf.WriteString(d)
+			}
+		}
+	}
+
+	// 错误检测 → 写回 gin ctx（usage_collector 在流关闭后读取）
+	// 桥接路径：converter 发出的独立 {"error":{...}} 事件
+	if errObj, ok := payload["error"].(map[string]any); ok {
+		o.recordError(errObj)
+	}
+	// 直连路径：response.failed / response.incomplete 内的 response.error
+	if resp, ok := payload["response"].(map[string]any); ok {
+		if errObj, ok := resp["error"].(map[string]any); ok {
+			o.recordError(errObj)
+		} else if evtType, _ := payload["type"].(string); evtType == "response.failed" {
+			o.recordError(map[string]any{"message": "upstream responses stream failed"})
+		}
+	}
+
 	// 逐 chunk 拼接 content / reasoning_content
 	if choices, ok := payload["choices"].([]any); ok && len(choices) > 0 {
 		if first, ok := choices[0].(map[string]any); ok {
@@ -165,6 +213,22 @@ func (o *streamUsageObserver) OnJSONEvent(payload map[string]any) {
 			o.usage = &u
 		}
 	}
+}
+
+// recordError 把上游流式错误写入 gin ctx，供 usage_collector 落 error_message/
+// error_code="upstream_error"。message 缺失时退化为 code。
+func (o *streamUsageObserver) recordError(errObj map[string]any) {
+	if o == nil || o.gc == nil {
+		return
+	}
+	msg, _ := errObj["message"].(string)
+	if msg == "" {
+		msg, _ = errObj["code"].(string)
+	}
+	if msg == "" {
+		return
+	}
+	o.gc.Set("error_message", msg)
 }
 
 // OnStreamClose 流关闭时回写 Gin context。

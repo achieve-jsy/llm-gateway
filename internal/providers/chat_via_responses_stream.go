@@ -138,6 +138,8 @@ func (c *ResponsesToChatStreamConverter) convertEvent(payload string) []json.Raw
 		return c.toolArgsDeltaChunks(itemID, delta)
 	case "response.completed":
 		return c.completedChunks(evt)
+	case "response.failed", "response.incomplete":
+		return c.failedChunks(evt)
 	default:
 		return nil
 	}
@@ -242,7 +244,9 @@ func (c *ResponsesToChatStreamConverter) toolArgsDeltaChunks(itemID, delta strin
 func (c *ResponsesToChatStreamConverter) completedChunks(evt map[string]any) []json.RawMessage {
 	c.finished = true
 	finishReason := "stop"
-	if resp, ok := evt["response"].(map[string]any); ok {
+	var resp map[string]any
+	if r, ok := evt["response"].(map[string]any); ok {
+		resp = r
 		if output, ok := resp["output"].([]any); ok {
 			for _, item := range output {
 				itemMap, _ := item.(map[string]any)
@@ -261,22 +265,89 @@ func (c *ResponsesToChatStreamConverter) completedChunks(evt map[string]any) []j
 	}
 
 	out := []json.RawMessage{c.chunk(map[string]any{}, &finishReason)}
-	if c.includeUsage {
-		if resp, ok := evt["response"].(map[string]any); ok {
-			if usage, ok := resp["usage"].(map[string]any); ok {
-				body, _ := json.Marshal(map[string]any{
-					"id":      c.chatID,
-					"object":  "chat.completion.chunk",
-					"created": c.created,
-					"model":   c.model,
-					"choices": []map[string]any{},
-					"usage":   chatUsageFromResponsesUsageMap(usage),
-				})
-				out = append(out, body)
+	out = append(out, c.usageChunksFromResp(resp)...)
+	return out
+}
+
+// failedChunks 处理上游 response.failed / response.incomplete 事件：
+// 流式响应在 200 之后失败时，之前 convertEvent 的 default 分支会静默丢弃，
+// 导致客户端拿到空流且 usage_missing。这里显式结束流、按需发射 usage，
+// 并发出独立 {"error":{...}} 事件（对齐 OpenAI 流式错误形状，SDK 会抛异常，
+// observer 侧识别并记录 error_message）。
+func (c *ResponsesToChatStreamConverter) failedChunks(evt map[string]any) []json.RawMessage {
+	c.finished = true
+	var resp map[string]any
+	if r, ok := evt["response"].(map[string]any); ok {
+		resp = r
+		if id, ok := resp["id"].(string); ok && id != "" {
+			c.chatID = "chatcmpl-" + strings.TrimPrefix(id, "resp_")
+		}
+		if model, ok := resp["model"].(string); ok && model != "" {
+			c.model = model
+		}
+	}
+
+	out := make([]json.RawMessage, 0, 2)
+	out = append(out, c.usageChunksFromResp(resp)...)
+	out = append(out, c.errorChunk(resp, evtTypeName(evt)))
+	return out
+}
+
+func evtTypeName(evt map[string]any) string {
+	t, _ := evt["type"].(string)
+	return t
+}
+
+// errorChunk 构造 OpenAI 流式错误事件 {"error":{message,type,code,param}}。
+// 优先取 response.error 的字段，缺失 message 时按 status / incomplete_details 拼兜底。
+func (c *ResponsesToChatStreamConverter) errorChunk(resp map[string]any, evtType string) json.RawMessage {
+	errObj := map[string]any{"type": "upstream_error"}
+	if resp != nil {
+		if e, ok := resp["error"].(map[string]any); ok {
+			for _, k := range []string{"message", "code", "type", "param"} {
+				if v, ok := e[k].(string); ok && v != "" {
+					errObj[k] = v
+				}
 			}
 		}
 	}
-	return out
+	if _, ok := errObj["message"]; !ok {
+		msg := "upstream responses stream ended with status " + evtType
+		if resp != nil {
+			if status, ok := resp["status"].(string); ok && status != "" {
+				msg = "upstream responses stream ended with status " + status
+			}
+			if d, ok := resp["incomplete_details"].(map[string]any); ok {
+				if reason, ok := d["reason"].(string); ok && reason != "" {
+					msg += ": " + reason
+				}
+			}
+		}
+		errObj["message"] = msg
+	}
+	body, _ := json.Marshal(map[string]any{"error": errObj})
+	return body
+}
+
+// usageChunksFromResp 按需发射 Chat Completions 格式的 usage-only chunk。
+// completedChunks 与 failedChunks 共用：上游只在使用 include=["usage"] 时才回传 usage。
+func (c *ResponsesToChatStreamConverter) usageChunksFromResp(resp map[string]any) []json.RawMessage {
+	if !c.includeUsage || resp == nil {
+		return nil
+	}
+	usage, ok := resp["usage"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	body, _ := json.Marshal(map[string]any{
+		"id":      c.chatID,
+		"object":  "chat.completion.chunk",
+		"created": c.created,
+		"model":   c.model,
+		"choices": []map[string]any{},
+		"usage":   chatUsageFromResponsesUsageMap(usage),
+	})
+	return []json.RawMessage{body}
 }
 
 // chatUsageFromResponsesUsageMap 将 Responses usage 映射为 Chat Completions usage。

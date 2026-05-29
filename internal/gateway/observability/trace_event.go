@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log"
@@ -74,7 +75,16 @@ func (w *TraceWriter) Run(ctx context.Context) {
 		if err := w.db.WithContext(ctx).
 			Clauses(clause.OnConflict{DoNothing: true}).
 			Create(&b).Error; err != nil {
-			log.Printf("[trace] batch insert error: %v", err)
+			log.Printf("[trace] batch insert error, falling back to per-record: %v", err)
+			// 单条坏记录（如 jsonb 含 PG 不接受的 NUL 转义）会导致整批回滚，
+			// 降级为逐条插入并跳过坏记录，避免连坐丢弃正常 trace。
+			for i := range b {
+				if err := w.db.WithContext(ctx).
+					Clauses(clause.OnConflict{DoNothing: true}).
+					Create(&b[i]).Error; err != nil {
+					log.Printf("[trace] skip trace request_id=%s: %v", b[i].RequestID, err)
+				}
+			}
 		}
 	}
 
@@ -110,24 +120,34 @@ func traceEventToModel(e TraceEvent) obsmodel.CallTrace {
 		ErrorMessage:    e.ErrorMessage,
 	}
 	if len(e.RequestHeadersRaw) > 0 && json.Valid(e.RequestHeadersRaw) {
-		ct.RequestHeaders = e.RequestHeadersRaw
+		ct.RequestHeaders = scrubNULEscapes(e.RequestHeadersRaw)
 	}
 	// RequestBodyRaw 经过 sanitizeChatRequestBody 处理后始终是合法 JSON；
 	// json.Valid 作为防御性校验保留，非法时仍写入（避免因极端兜底路径导致数据丢失）
 	if len(e.RequestBodyRaw) > 0 {
 		if json.Valid(e.RequestBodyRaw) {
-			ct.RequestBody = e.RequestBodyRaw
+			ct.RequestBody = scrubNULEscapes(e.RequestBodyRaw)
 		} else {
 			// sanitize 兜底路径：原始请求体非合法 JSON（极少发生），
 			// 包装为 {"_raw_truncated": "..."} 写入，确保字段不为 null
 			wrapped, err := json.Marshal(map[string]string{"_raw_truncated": string(e.RequestBodyRaw[:min(256, len(e.RequestBodyRaw))])})
 			if err == nil {
-				ct.RequestBody = wrapped
+				ct.RequestBody = scrubNULEscapes(wrapped)
 			}
 		}
 	}
 	if len(e.ResponseBodyRaw) > 0 && json.Valid(e.ResponseBodyRaw) {
-		ct.ResponseBody = e.ResponseBodyRaw
+		ct.ResponseBody = scrubNULEscapes(e.ResponseBodyRaw)
 	}
 	return ct
+}
+
+// scrubNULEscapes 将 JSON 字节中的 \u0000 转义替换为 \ufffd（U+FFFD 替换字符）。
+// Go 的 json.Marshal 会把字符串里的 NUL 字节编码成 \u0000，
+// 而 PostgreSQL jsonb 拒绝该转义（SQLSTATE 22P05），单条坏记录即可让整批写入失败。
+func scrubNULEscapes(b []byte) []byte {
+	if !bytes.Contains(b, []byte(`\u0000`)) {
+		return b
+	}
+	return bytes.ReplaceAll(b, []byte(`\u0000`), []byte(`\ufffd`))
 }

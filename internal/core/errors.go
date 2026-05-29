@@ -35,6 +35,9 @@ type GatewayError struct {
 	Code       *string   `json:"code" extensions:"x-nullable"`
 	// Original error for debugging (not exposed to clients)
 	Err error `json:"-"`
+	// Body 保留上游原始响应 body，用于向客户端忠实透传上游错误详情。
+	// 仅内部传递，不进入任何序列化。
+	Body []byte `json:"-"`
 }
 
 // OpenAIErrorEnvelope documents the public OpenAI-compatible error response.
@@ -232,6 +235,7 @@ func ParseProviderError(provider string, statusCode int, body []byte, originalEr
 	if errorResponse.Code != "" {
 		gatewayErr = gatewayErr.WithCode(errorResponse.Code)
 	}
+	gatewayErr.Body = body
 
 	return gatewayErr
 }

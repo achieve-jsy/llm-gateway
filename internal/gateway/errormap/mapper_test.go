@@ -125,3 +125,55 @@ func TestMapProviderError_UpstreamContent(t *testing.T) {
 		t.Errorf("upstream body.error.message = %q, want %q", errObj["message"], "upstream request timeout")
 	}
 }
+
+func TestMapProviderError_RawUpstreamBodyPreserved(t *testing.T) {
+	// ParseProviderError 构造的错误携带原始 body 时，upstream.body 应忠实呈现
+	// 上游真实结构（含 code/type/param），而非合成假体。
+	raw := `{"error":{"message":"Incorrect API key provided: sk-abc123","type":"invalid_request_error","param":null,"code":"invalid_api_key"}}`
+	gwErr := core.ParseProviderError("openai", http.StatusUnauthorized, []byte(raw), nil)
+
+	ue := MapProviderError(gwErr)
+	if ue == nil {
+		t.Fatal("MapProviderError returned nil")
+	}
+	// 映射仍应正确识别为认证错误（用重建 body，而非原始 type）
+	if ue.Code != "provider_auth_error" {
+		t.Errorf("code = %q, want %q", ue.Code, "provider_auth_error")
+	}
+	if ue.Upstream == nil {
+		t.Fatal("Upstream is nil")
+	}
+	bodyMap, ok := ue.Upstream.Body.(map[string]any)
+	if !ok {
+		t.Fatalf("upstream body is not map[string]any, got %T: %v", ue.Upstream.Body, ue.Upstream.Body)
+	}
+	errObj, ok := bodyMap["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("upstream body.error is not map[string]any, got %T", bodyMap["error"])
+	}
+	// 原始 code/type 必须保留
+	if errObj["code"] != "invalid_api_key" {
+		t.Errorf("upstream body.error.code = %v, want %q", errObj["code"], "invalid_api_key")
+	}
+	if errObj["type"] != "invalid_request_error" {
+		t.Errorf("upstream body.error.type = %v, want %q", errObj["type"], "invalid_request_error")
+	}
+	if errObj["message"] != "Incorrect API key provided: sk-abc123" {
+		t.Errorf("upstream body.error.message = %v, want %q", errObj["message"], "Incorrect API key provided: sk-abc123")
+	}
+}
+
+func TestMapProviderError_RawNonJSONBodyPreserved(t *testing.T) {
+	// 非 JSON body 应作为原始字符串透传
+	gwErr := core.ParseProviderError("custom", http.StatusBadGateway, []byte("Bad Gateway: upstream crashed"), nil)
+	ue := MapProviderError(gwErr)
+	if ue == nil {
+		t.Fatal("MapProviderError returned nil")
+	}
+	if ue.Upstream == nil {
+		t.Fatal("Upstream is nil")
+	}
+	if body, ok := ue.Upstream.Body.(string); !ok || body != "Bad Gateway: upstream crashed" {
+		t.Errorf("upstream body = %#v, want string %q", ue.Upstream.Body, "Bad Gateway: upstream crashed")
+	}
+}

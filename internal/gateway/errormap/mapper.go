@@ -56,6 +56,11 @@ func MapProviderError(err error) *model.UnifiedError {
 		body := formatErrorBody(gwErr)
 
 		code, upstream := gatewayerrors.MapProviderError(provider, status, body, nil)
+		// 展示用原始上游 body 覆盖，让客户端看到真实错误结构（含 code/type/param）；
+		// 映射仍用重建 body（含网关分类后的 error.type），避免 openai 401 等被原始 type 误判为 bad_request。
+		if len(gwErr.Body) > 0 {
+			upstream.Body = parseErrorBody(gwErr.Body)
+		}
 		if gatewayerrors.Has(code) {
 			ec := gatewayerrors.Lookup(code)
 			// 构建 UnifiedError，保留原始错误信息
@@ -86,4 +91,19 @@ func formatErrorBody(gwErr *core.GatewayError) []byte {
 		},
 	})
 	return body
+}
+
+// parseErrorBody 将原始上游 body 解析为 JSON 结构，非 JSON 时回退为原始字符串。
+// 与 internal/errors 映射引擎的展示逻辑保持一致。
+func parseErrorBody(body []byte) any {
+	if len(body) == 0 {
+		return nil
+	}
+	if json.Valid(body) {
+		var parsed any
+		if err := json.Unmarshal(body, &parsed); err == nil {
+			return parsed
+		}
+	}
+	return string(body)
 }

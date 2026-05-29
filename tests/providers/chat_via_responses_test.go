@@ -238,3 +238,100 @@ func TestResponsesToChatStreamConverter_PreservesCachedTokens(t *testing.T) {
 	assert.Contains(t, text, `"reasoning_tokens":4`)
 	assert.NotContains(t, text, `"input_tokens_details"`)
 }
+
+func TestResponsesToChatStreamConverter_FailedEmitsUsageAndError(t *testing.T) {
+	upstream := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"partial"}`,
+		``,
+		`data: {"type":"response.failed","response":{"id":"resp_f","model":"gpt-5.5","status":"failed","error":{"message":"boom","code":"server_error"},"usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105}}}`,
+		``,
+	}, "\n")))
+
+	conv := providers.NewResponsesToChatStreamConverter(upstream, "gpt-5.5", true)
+	defer conv.Close()
+
+	body, err := io.ReadAll(conv)
+	require.NoError(t, err)
+	text := string(body)
+	assert.Contains(t, text, `"content":"partial"`)
+	assert.Contains(t, text, `"prompt_tokens":100`)
+	assert.Contains(t, text, `"error"`)
+	assert.Contains(t, text, `"message":"boom"`)
+	assert.Contains(t, text, "data: [DONE]")
+}
+
+func TestResponsesToChatStreamConverter_FailedNoIncludeUsageSkipsUsage(t *testing.T) {
+	upstream := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`data: {"type":"response.failed","response":{"id":"resp_f2","model":"gpt-5.5","status":"failed","error":{"message":"boom"},"usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105}}}`,
+		``,
+	}, "\n")))
+
+	conv := providers.NewResponsesToChatStreamConverter(upstream, "gpt-5.5", false)
+	defer conv.Close()
+
+	body, err := io.ReadAll(conv)
+	require.NoError(t, err)
+	text := string(body)
+	assert.Contains(t, text, `"error"`)
+	assert.NotContains(t, text, `"prompt_tokens"`)
+	assert.Contains(t, text, "data: [DONE]")
+}
+
+func TestResponsesToChatStreamConverter_IncompleteEmitsError(t *testing.T) {
+	upstream := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`data: {"type":"response.incomplete","response":{"id":"resp_i","model":"gpt-5.5","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}`,
+		``,
+	}, "\n")))
+
+	conv := providers.NewResponsesToChatStreamConverter(upstream, "gpt-5.5", true)
+	defer conv.Close()
+
+	body, err := io.ReadAll(conv)
+	require.NoError(t, err)
+	text := string(body)
+	assert.Contains(t, text, `"error"`)
+	assert.Contains(t, text, "max_output_tokens")
+	assert.Contains(t, text, "data: [DONE]")
+	assert.NotContains(t, text, `"prompt_tokens"`)
+}
+
+func TestSanitizeResponsesRequest_StreamForcesIncludeUsage(t *testing.T) {
+	req := &core.ResponsesRequest{
+		Model:  "gpt-5.5",
+		Input:  "hi",
+		Stream: true,
+	}
+	providers.SanitizeResponsesRequest(req)
+	includeRaw := req.ExtraFields.Lookup("include")
+	require.NotEmpty(t, includeRaw)
+	var include []string
+	require.NoError(t, json.Unmarshal(includeRaw, &include))
+	assert.Contains(t, include, "usage")
+}
+
+func TestSanitizeResponsesRequest_StreamMergesExistingInclude(t *testing.T) {
+	req := &core.ResponsesRequest{
+		Model:  "gpt-5.5",
+		Input:  "hi",
+		Stream: true,
+		ExtraFields: core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
+			"include": json.RawMessage(`["file_search"]`),
+		}),
+	}
+	providers.SanitizeResponsesRequest(req)
+	includeRaw := req.ExtraFields.Lookup("include")
+	require.NotEmpty(t, includeRaw)
+	var include []string
+	require.NoError(t, json.Unmarshal(includeRaw, &include))
+	assert.ElementsMatch(t, []string{"file_search", "usage"}, include)
+}
+
+func TestSanitizeResponsesRequest_NonStreamSkipsInclude(t *testing.T) {
+	req := &core.ResponsesRequest{
+		Model:  "gpt-5.5",
+		Input:  "hi",
+		Stream: false,
+	}
+	providers.SanitizeResponsesRequest(req)
+	assert.Empty(t, req.ExtraFields.Lookup("include"))
+}

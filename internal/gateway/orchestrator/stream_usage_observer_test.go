@@ -60,6 +60,73 @@ func TestStreamUsageObserver_CachedTokensFromInputTokensDetails(t *testing.T) {
 	}
 }
 
+func TestStreamUsageObserver_ResponsesOutputTextDelta(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(nil)
+	obs := newStreamUsageObserver(c, time.Now())
+	obs.OnJSONEvent(map[string]any{"type": "response.output_text.delta", "delta": "Hello "})
+	obs.OnJSONEvent(map[string]any{"type": "response.output_text.delta", "delta": "world"})
+	obs.OnJSONEvent(map[string]any{
+		"type":     "response.completed",
+		"response": map[string]any{"id": "resp_xyz", "model": "gpt-5.5", "created_at": float64(1700000000)},
+	})
+	if got := obs.contentBuf.String(); got != "Hello world" {
+		t.Fatalf("content=%q want %q", got, "Hello world")
+	}
+	if obs.lastID != "resp_xyz" || obs.lastModel != "gpt-5.5" || obs.lastCreated != 1700000000 {
+		t.Fatalf("metadata=%s/%s/%d want resp_xyz/gpt-5.5/1700000000", obs.lastID, obs.lastModel, obs.lastCreated)
+	}
+}
+
+func TestStreamUsageObserver_ResponsesReasoningDelta(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(nil)
+	obs := newStreamUsageObserver(c, time.Now())
+	obs.OnJSONEvent(map[string]any{"type": "response.reasoning_summary_text.delta", "delta": "think"})
+	if got := obs.reasoningBuf.String(); got != "think" {
+		t.Fatalf("reasoning=%q want %q", got, "think")
+	}
+}
+
+func TestStreamUsageObserver_ResponsesFailedRecordsError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(nil)
+	obs := newStreamUsageObserver(c, time.Now())
+	obs.OnJSONEvent(map[string]any{
+		"type": "response.failed",
+		"response": map[string]any{
+			"id":     "resp_fail",
+			"status": "failed",
+			"error":  map[string]any{"message": "upstream exploded", "code": "server_error"},
+		},
+	})
+	if got, _ := c.Get("error_message"); got != "upstream exploded" {
+		t.Fatalf("error_message=%v want %q", got, "upstream exploded")
+	}
+}
+
+func TestStreamUsageObserver_ResponsesFailedWithoutErrorObject(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(nil)
+	obs := newStreamUsageObserver(c, time.Now())
+	obs.OnJSONEvent(map[string]any{"type": "response.failed", "response": map[string]any{"id": "resp_f", "status": "failed"}})
+	if got, _ := c.Get("error_message"); got != "upstream responses stream failed" {
+		t.Fatalf("error_message=%v want %q", got, "upstream responses stream failed")
+	}
+}
+
+func TestStreamUsageObserver_ConverterErrorEventRecordsError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(nil)
+	obs := newStreamUsageObserver(c, time.Now())
+	obs.OnJSONEvent(map[string]any{
+		"error": map[string]any{"message": "upstream responses stream ended with status response.failed", "type": "upstream_error"},
+	})
+	if got, _ := c.Get("error_message"); got != "upstream responses stream ended with status response.failed" {
+		t.Fatalf("error_message=%v", got)
+	}
+}
+
 func TestStreamUsageObserver_ResponsesAPIUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(nil)

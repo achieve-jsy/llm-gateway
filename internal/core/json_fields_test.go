@@ -70,3 +70,56 @@ func TestUnknownJSONFields_Delete(t *testing.T) {
 	}
 }
 
+func TestUnknownJSONFields_Set(t *testing.T) {
+	tests := []struct {
+		name    string
+		initial string
+		key     string
+		value   string
+		want    string
+	}{
+		{
+			name:    "空对象新增字段",
+			initial: "",
+			key:     "include",
+			value:   `["usage"]`,
+			want:    `{"include":["usage"]}`,
+		},
+		{
+			name:    "既有字段间新增",
+			initial: `{"a":1,"b":2}`,
+			key:     "include",
+			value:   `["usage"]`,
+			want:    `{"a":1,"b":2,"include":["usage"]}`,
+		},
+		{
+			name:    "覆盖既有键",
+			initial: `{"a":1,"include":["file_search"]}`,
+			key:     "include",
+			value:   `["file_search","usage"]`,
+			want:    `{"a":1,"include":["file_search","usage"]}`,
+		},
+		{
+			name:    "空对象 key 覆盖",
+			initial: `{}`,
+			key:     "include",
+			value:   `["usage"]`,
+			want:    `{"include":["usage"]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var fields UnknownJSONFields
+			if tt.initial != "" {
+				fields = UnknownJSONFields{raw: json.RawMessage(tt.initial)}
+			}
+
+			fields.Set(tt.key, json.RawMessage(tt.value))
+
+			assert.JSONEq(t, tt.want, string(fields.raw))
+		})
+	}
+}
+
+

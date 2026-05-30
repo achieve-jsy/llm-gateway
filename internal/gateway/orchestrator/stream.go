@@ -83,6 +83,7 @@ func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest
 		)
 		if gc := ginContextFrom(ctx); gc != nil {
 			gc.Set("error_message", err.Error())
+			gc.Set("upstream_status", upstreamStatus(err))
 		}
 		return nil, errormap.MapProviderError(err)
 	}
@@ -116,6 +117,7 @@ func (o *ChatOrchestrator) ChatStream(ctx context.Context, req *core.ChatRequest
 			gc.Set("t_ttfb_ms", int(ttfb))
 		}
 		usageObserver = newStreamUsageObserver(gc, start)
+		gc.Delete("upstream_status")
 	}
 
 	// 用 ObservedSSEStream 包装原始流：

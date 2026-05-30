@@ -233,6 +233,7 @@ func (c *Collector) NewUsageEvent(ctx *gin.Context) UsageEvent {
 		UserAgent:       ctx.Request.UserAgent(),
 		IPAddress:       ctx.ClientIP(),
 		Status:          getInt(ctx, "status"),
+		UpstreamStatus:  getInt(ctx, "upstream_status"),
 		DurationMs: func() int64 {
 			if startTime, ok := ctx.Get("start_time"); ok {
 				if t, ok := startTime.(time.Time); ok {

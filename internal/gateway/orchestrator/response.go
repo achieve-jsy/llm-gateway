@@ -54,6 +54,10 @@ func (o *ChatOrchestrator) Responses(ctx context.Context, req *core.ResponsesReq
 				"error", err.Error(),
 			}, extractUpstreamErrorAttrs(err)...)...,
 		)
+		if gc := ginContextFrom(ctx); gc != nil {
+			gc.Set("error_message", err.Error())
+			gc.Set("upstream_status", upstreamStatus(err))
+		}
 		return nil, errormap.MapProviderError(err)
 	}
 
@@ -73,10 +77,12 @@ func (o *ChatOrchestrator) Responses(ctx context.Context, req *core.ResponsesReq
 				TotalTokens:      resp.Usage.TotalTokens,
 			})
 			gc.Set("resp_object", resp)
+			gc.Delete("upstream_status")
 		}
 	} else if gc := ginContextFrom(ctx); gc != nil {
 		gc.Set("stream", false)
 		gc.Set("resp_object", resp)
+		gc.Delete("upstream_status")
 	}
 	span.SetStatus(codes.Ok, "")
 
@@ -129,6 +135,10 @@ func (o *ChatOrchestrator) ResponsesStream(ctx context.Context, req *core.Respon
 				"error", err.Error(),
 			}, extractUpstreamErrorAttrs(err)...)...,
 		)
+		if gc := ginContextFrom(ctx); gc != nil {
+			gc.Set("error_message", err.Error())
+			gc.Set("upstream_status", upstreamStatus(err))
+		}
 		return nil, errormap.MapProviderError(err)
 	}
 
@@ -144,6 +154,7 @@ func (o *ChatOrchestrator) ResponsesStream(ctx context.Context, req *core.Respon
 	if gc := ginContextFrom(ctx); gc != nil {
 		gc.Set("stream", true)
 		usageObserver = newStreamUsageObserver(gc, start)
+		gc.Delete("upstream_status")
 	}
 
 	// 用 ObservedSSEStream 包装原始流：

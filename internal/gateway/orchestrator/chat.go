@@ -137,6 +137,7 @@ func (o *ChatOrchestrator) Chat(ctx context.Context, req *core.ChatRequest) (*co
 		)
 		if gc := ginContextFrom(ctx); gc != nil {
 			gc.Set("error_message", err.Error())
+			gc.Set("upstream_status", upstreamStatus(err))
 		}
 		return nil, errormap.MapProviderError(err)
 	}
@@ -170,6 +171,7 @@ func (o *ChatOrchestrator) Chat(ctx context.Context, req *core.ChatRequest) (*co
 		gc.Set("stream", false)
 		// 保存响应体供 TraceWriter 使用（仅非流式）
 		gc.Set("resp_object", resp)
+		gc.Delete("upstream_status")
 	}
 
 	slog.DebugContext(ctx, "upstream_call_done",
@@ -232,6 +234,7 @@ func (o *ChatOrchestrator) Rerank(ctx context.Context, req *core.RerankRequest) 
 		)
 		if gc := ginContextFrom(ctx); gc != nil {
 			gc.Set("error_message", err.Error())
+			gc.Set("upstream_status", upstreamStatus(err))
 		}
 		return nil, errormap.MapProviderError(err)
 	}
@@ -258,6 +261,7 @@ func (o *ChatOrchestrator) Rerank(ctx context.Context, req *core.RerankRequest) 
 		gc.Set("usage", resp.Usage)
 		gc.Set("stream", false)
 		gc.Set("resp_object", resp)
+		gc.Delete("upstream_status")
 	}
 
 	slog.DebugContext(ctx, "upstream_rerank_done",
@@ -316,6 +320,7 @@ func (o *ChatOrchestrator) Embeddings(ctx context.Context, req *core.EmbeddingRe
 		)
 		if gc := ginContextFrom(ctx); gc != nil {
 			gc.Set("error_message", err.Error())
+			gc.Set("upstream_status", upstreamStatus(err))
 		}
 		return nil, errormap.MapProviderError(err)
 	}
@@ -342,6 +347,7 @@ func (o *ChatOrchestrator) Embeddings(ctx context.Context, req *core.EmbeddingRe
 		gc.Set("usage", resp.Usage)
 		gc.Set("stream", false)
 		gc.Set("resp_object", resp)
+		gc.Delete("upstream_status")
 	}
 
 	slog.DebugContext(ctx, "upstream_embedding_done",

@@ -20,3 +20,13 @@ func extractUpstreamErrorAttrs(err error) []any {
 	}
 	return nil
 }
+
+// upstreamStatus 提取错误中的上游 HTTP 状态码，供写入 gin context 供 call_logs 记录。
+// 非 *core.GatewayError 时返回 0（无上游 HTTP 状态）。
+func upstreamStatus(err error) int {
+	var gwErr *core.GatewayError
+	if errors.As(err, &gwErr) {
+		return gwErr.StatusCode
+	}
+	return 0
+}

@@ -57,6 +57,13 @@ func NewGroupAwareDispatcherWithBindingAndTier(
 
 func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string, req *core.ChatRequest) (*scheduler.RouteDecision, error) {
 	if !d.nameCache.IsGroupName(modelName) {
+		// 直连（非组名）模型请求会绕过档位预算：只有组名路径会设置 tier context，
+		// 导致 budget.Gate.Check 读不到档位而跳过档位限制。启用档位预算
+		// （tierResolver != nil）时一律拒绝，强制走组名访问。
+		// 空 model 放行给下游原有的 unknown_model（404）处理，避免语义退化为 403。
+		if modelName != "" && d.tierResolver != nil {
+			return nil, model.ErrDirectModelNotAllowed
+		}
 		return nil, nil
 	}
 

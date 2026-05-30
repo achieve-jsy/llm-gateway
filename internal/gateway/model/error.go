@@ -10,20 +10,20 @@ import (
 type ErrorType string
 
 const (
-	ErrorTypeInvalidRequest ErrorType = "invalid_request"    // 400 输入错误
-	ErrorTypeModelNotFound  ErrorType = "model_not_found"    // 404 模型不存在
-	ErrorTypeModelUnavail   ErrorType = "model_unavailable"  // 503 模型不可用
-	ErrorTypeTempFailure    ErrorType = "temporary_failure"  // 502/504 临时失败
+	ErrorTypeInvalidRequest ErrorType = "invalid_request"      // 400 输入错误
+	ErrorTypeModelNotFound  ErrorType = "model_not_found"      // 404 模型不存在
+	ErrorTypeModelUnavail   ErrorType = "model_unavailable"    // 503 模型不可用
+	ErrorTypeTempFailure    ErrorType = "temporary_failure"    // 502/504 临时失败
 	ErrorTypeAuthError      ErrorType = "authentication_error" // 401 认证失败
-	ErrorTypeInternal       ErrorType = "internal_error"     // 500 内部错误
+	ErrorTypeInternal       ErrorType = "internal_error"       // 500 内部错误
 )
 
 // UnifiedError 统一错误结构
 type UnifiedError struct {
-	Type       ErrorType                  `json:"type"`
-	Code       string                     `json:"code"`
-	Message    string                     `json:"message"`
-	HTTPStatus int                        `json:"-"`
+	Type       ErrorType                   `json:"type"`
+	Code       string                      `json:"code"`
+	Message    string                      `json:"message"`
+	HTTPStatus int                         `json:"-"`
 	Upstream   *gatewayerrors.UpstreamInfo `json:"upstream,omitempty"`
 }
 
@@ -86,6 +86,12 @@ var (
 	ErrModelGroupUnauthorized = &UnifiedError{
 		Type: "group_not_authorized", Code: "group_not_authorized",
 		Message: "your department does not have access to this model group", HTTPStatus: http.StatusForbidden,
+	}
+	// ErrDirectModelNotAllowed 直连（非组名）模型请求被拒绝：
+	// 直连渠道 ID 会绕过档位预算闸门，启用档位预算时一律要求走组名访问。
+	ErrDirectModelNotAllowed = &UnifiedError{
+		Type: "forbidden", Code: "direct_model_not_allowed",
+		Message: "direct model access is not allowed; request the model by its model group name", HTTPStatus: http.StatusForbidden,
 	}
 )
 

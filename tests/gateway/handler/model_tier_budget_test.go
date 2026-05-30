@@ -432,6 +432,61 @@ func TestRealHandlers_EnforceAuthorizationBudgetQuotaBeforeUpstream(t *testing.T
 	}
 }
 
+// TestRealHandlers_DirectModelRejected 镜像 exploit 路径：非组名模型（如上游渠道 ID）
+// 经真实 handler 必须返回 403 direct_model_not_allowed，而不能直连上游绕过档位预算。
+func TestRealHandlers_DirectModelRejected(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	now := time.Date(2026, 7, 11, 16, 0, 0, 0, time.UTC)
+	tierID := uuid.MustParse("00bb2e65-9c67-45f7-b061-d297a3944876")
+	budgetHolder := budget.NewSnapshotHolder()
+	budgetHolder.Set(&configsync.BudgetTierSnapshot{
+		SchemaVersion: 1, MasterEnabled: true, AccountingEnabled: true,
+		PositiveEnforcementEnabled: true, ZeroBlockEnabled: true,
+		Timezone: "Asia/Shanghai", WeekStart: "monday",
+		GroupTiers: map[string]configsync.BudgetTierGroupSnapshot{
+			"premium": {TierID: tierID, TierName: "高级", Enabled: true},
+		},
+	})
+	budgetGate := budget.NewGate(budgetHolder, budget.NewRedisStore(rdb), nil, func() time.Time { return now })
+	quotaHolder := quota.NewSnapshotHolder()
+	quotaHolder.Set(&corequota.QuotaSnapshot{Version: 1, DefaultUserRPM: 1})
+	quotaGate := quota.NewMiddleware(quotaHolder, quota.NewRedisStore(rdb))
+	nameCache := cache.NewGroupNameCache("")
+	nameCache.SetNames([]string{"premium"})
+	dispatcher := orchestrator.NewGroupAwareDispatcherWithBindingAndTier(
+		protocolScheduler{}, nameCache, nil, budget.NewTierResolver(budgetHolder),
+	)
+	upstream := &protocolOrchestrator{}
+	handle := realProtocolHandler("chat", upstream, dispatcher, budgetGate, quotaGate)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("identity", &gwmodel.UserIdentity{
+			KeyID: "key-1", UserID: "u-1", KeyType: "personal", AccessAllGroups: true,
+			UsableGroups: []string{"premium"},
+			BudgetChain: []gwmodel.BudgetScope{{
+				ScopeType: "member", ScopeID: "u-1", AmountUSD: -1, DailyAmountUSD: -1, WeeklyAmountUSD: -1,
+				TierLimits: []gwmodel.TierLimit{{
+					TierID: tierID.String(), PeriodType: "monthly", EffectiveLimitUSD: "100",
+					Enabled: true, EffectiveAt: now.Add(-time.Hour),
+				}},
+			}},
+		})
+		c.Next()
+	})
+	router.POST("/v1/chat/completions", handle)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"direct-model","messages":[{"role":"user","content":"hi"}]}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+	require.Contains(t, recorder.Body.String(), "direct_model_not_allowed")
+	require.Zero(t, upstream.calls.Load())
+}
+
 func realProtocolHandler(
 	protocol string,
 	upstream *protocolOrchestrator,

@@ -106,7 +106,7 @@ export interface QuickOnboardModelInput {
   description?: string
   context_length?: number
   max_output_tokens?: number
-  price_mode?: 'catalog' | 'manual'
+  price_mode?: 'catalog' | 'manual' | 'video'
   input_price?: number
   output_price?: number
   cache_read_price?: number

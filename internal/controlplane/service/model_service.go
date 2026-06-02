@@ -123,7 +123,7 @@ type CreateModelInput struct {
 	OutputPrice     *float64        `json:"output_price" binding:"omitempty,min=0"`
 	CacheReadPrice  OptionalFloat64 `json:"cache_read_price"`
 	CacheWritePrice OptionalFloat64 `json:"cache_write_price"`
-	PriceMode       string          `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
+	PriceMode       string          `json:"price_mode" binding:"omitempty,oneof=catalog manual video"`
 	Weight          *int            `json:"weight" binding:"omitempty,min=0,max=9999"`
 	// 视频模型参数
 	VideoSupportedResolutions  []string `json:"video_supported_resolutions"`
@@ -131,6 +131,16 @@ type CreateModelInput struct {
 	VideoMinDurationSeconds    *int     `json:"video_min_duration_seconds" binding:"omitempty,min=0,max=600"`
 	VideoMaxDurationSeconds    *int     `json:"video_max_duration_seconds" binding:"omitempty,min=0,max=600"`
 	VideoSupportedActions      []string `json:"video_supported_actions"`
+}
+
+// validateModelPricing 校验模型定价：
+//   - manual 模式必须至少一个价格为正值（input_price 或 output_price > 0）；
+//   - catalog / video 模式价格可为零（video 走独立计费，非 token 价）。
+func validateModelPricing(priceMode string, inputPrice, outputPrice float64) error {
+	if priceMode == "manual" && inputPrice <= 0 && outputPrice <= 0 {
+		return fmt.Errorf("manual price_mode requires input_price or output_price > 0")
+	}
+	return nil
 }
 
 // CreateModel 注册模型（T030）
@@ -190,8 +200,8 @@ func (s *ModelService) CreateModel(input CreateModelInput) (*model.Model, error)
 	} else {
 		m.PriceMode = "catalog" // 默认跟随目录价
 	}
-	if m.PriceMode == "manual" && m.InputPrice <= 0 && m.OutputPrice <= 0 {
-		return nil, fmt.Errorf("manual price_mode requires input_price or output_price > 0")
+	if err := validateModelPricing(m.PriceMode, m.InputPrice, m.OutputPrice); err != nil {
+		return nil, err
 	}
 	if input.Weight != nil {
 		m.Weight = *input.Weight
@@ -262,7 +272,7 @@ type UpdateModelInput struct {
 	OutputPrice                *float64        `json:"output_price" binding:"omitempty,min=0"`
 	CacheReadPrice             OptionalFloat64 `json:"cache_read_price"`
 	CacheWritePrice            OptionalFloat64 `json:"cache_write_price"`
-	PriceMode                  string          `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
+	PriceMode                  string          `json:"price_mode" binding:"omitempty,oneof=catalog manual video"`
 	Weight                     *int            `json:"weight" binding:"omitempty,min=0,max=9999"`
 	VideoSupportedResolutions  []string        `json:"video_supported_resolutions"`
 	VideoSupportedAspectRatios []string        `json:"video_supported_aspect_ratios"`
@@ -354,8 +364,8 @@ func (s *ModelService) UpdateModel(id uuid.UUID, input UpdateModelInput) (*model
 		m.PriceMode = input.PriceMode
 	}
 	// manual 模式校验
-	if m.PriceMode == "manual" && m.InputPrice <= 0 && m.OutputPrice <= 0 {
-		return nil, fmt.Errorf("manual price_mode requires input_price or output_price > 0")
+	if err := validateModelPricing(m.PriceMode, m.InputPrice, m.OutputPrice); err != nil {
+		return nil, err
 	}
 	if input.Weight != nil {
 		m.Weight = *input.Weight
@@ -479,7 +489,7 @@ type BatchCreateModelsInput struct {
 	OutputPrice     *float64        `json:"output_price" binding:"omitempty,min=0"`
 	CacheReadPrice  OptionalFloat64 `json:"cache_read_price"`
 	CacheWritePrice OptionalFloat64 `json:"cache_write_price"`
-	PriceMode       string          `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
+	PriceMode       string          `json:"price_mode" binding:"omitempty,oneof=catalog manual video"`
 	Weight          *int            `json:"weight" binding:"omitempty,min=0,max=9999"`
 	VideoSupportedResolutions  []string `json:"video_supported_resolutions"`
 	VideoSupportedAspectRatios []string `json:"video_supported_aspect_ratios"`

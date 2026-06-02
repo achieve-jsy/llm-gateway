@@ -330,7 +330,8 @@ func (c *ResponsesToChatStreamConverter) errorChunk(resp map[string]any, evtType
 }
 
 // usageChunksFromResp 按需发射 Chat Completions 格式的 usage-only chunk。
-// completedChunks 与 failedChunks 共用：上游只在使用 include=["usage"] 时才回传 usage。
+// completedChunks 与 failedChunks 共用；usage 来自 response.completed 事件的
+// response.usage，仅在客户端请求 include_usage 时下发。
 func (c *ResponsesToChatStreamConverter) usageChunksFromResp(resp map[string]any) []json.RawMessage {
 	if !c.includeUsage || resp == nil {
 		return nil

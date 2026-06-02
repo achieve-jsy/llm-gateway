@@ -295,21 +295,20 @@ func TestResponsesToChatStreamConverter_IncompleteEmitsError(t *testing.T) {
 	assert.NotContains(t, text, `"prompt_tokens"`)
 }
 
-func TestSanitizeResponsesRequest_StreamForcesIncludeUsage(t *testing.T) {
+func TestSanitizeResponsesRequest_StreamDoesNotInjectUsage(t *testing.T) {
+	// Azure/OpenAI 的 Responses include 白名单不含 "usage"（合法值见
+	// ResponseIncludable），网关不得强加 include=["usage"]；流式 usage 从
+	// response.completed 事件的 response.usage 提取，无需该参数。
 	req := &core.ResponsesRequest{
 		Model:  "gpt-5.5",
 		Input:  "hi",
 		Stream: true,
 	}
 	providers.SanitizeResponsesRequest(req)
-	includeRaw := req.ExtraFields.Lookup("include")
-	require.NotEmpty(t, includeRaw)
-	var include []string
-	require.NoError(t, json.Unmarshal(includeRaw, &include))
-	assert.Contains(t, include, "usage")
+	assert.Empty(t, req.ExtraFields.Lookup("include"))
 }
 
-func TestSanitizeResponsesRequest_StreamMergesExistingInclude(t *testing.T) {
+func TestSanitizeResponsesRequest_StreamKeepsClientIncludeUntouched(t *testing.T) {
 	req := &core.ResponsesRequest{
 		Model:  "gpt-5.5",
 		Input:  "hi",
@@ -323,7 +322,7 @@ func TestSanitizeResponsesRequest_StreamMergesExistingInclude(t *testing.T) {
 	require.NotEmpty(t, includeRaw)
 	var include []string
 	require.NoError(t, json.Unmarshal(includeRaw, &include))
-	assert.ElementsMatch(t, []string{"file_search", "usage"}, include)
+	assert.ElementsMatch(t, []string{"file_search"}, include)
 }
 
 func TestSanitizeResponsesRequest_NonStreamSkipsInclude(t *testing.T) {

@@ -425,31 +425,6 @@ func SanitizeResponsesRequest(req *core.ResponsesRequest) {
 	// Chat Completions 的 stream_options.include_usage 对 Responses 非法。
 	req.StreamOptions = nil
 	applyResponsesOptionalExtras(req.ExtraFields, req)
-	// 流式请求强制 include=["usage"]，否则 Azure/OpenAI 不会回传 usage →
-	// usage_missing / 不计费。两条路径（直连 + 桥接）都在此收敛。
-	if req.Stream {
-		forceIncludeUsage(req)
-	}
-}
-
-// forceIncludeUsage 在流式 Responses 请求的 ExtraFields 里合并 include=["usage"]。
-// 客户端已有 include 时去重追加，malformed include 退化为 ["usage"]。
-func forceIncludeUsage(req *core.ResponsesRequest) {
-	include := make([]string, 0, 4)
-	if raw := req.ExtraFields.Lookup("include"); len(raw) > 0 {
-		_ = json.Unmarshal(raw, &include)
-	}
-	for _, v := range include {
-		if v == "usage" {
-			return
-		}
-	}
-	include = append(include, "usage")
-	encoded, err := json.Marshal(include)
-	if err != nil {
-		return
-	}
-	req.ExtraFields.Set("include", encoded)
 }
 
 // applyResponsesOptionalExtras 将 ExtraFields 收敛为 Responses 白名单字段，

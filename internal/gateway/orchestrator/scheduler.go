@@ -18,6 +18,6 @@ type Scheduler interface {
 	SetCooldown(modelID string, duration time.Duration)
 	// PersistSticky 持久化 sticky 映射
 	PersistSticky(ctx context.Context, groupName, sessionKey string, decision *scheduler.RouteDecision)
-	// UpdateSticky 更新 sticky 映射（用于 failover）
-	UpdateSticky(ctx context.Context, groupName, sessionKey, newModelName string)
+	// UpdateSticky 更新 sticky 映射（用于 failover）。返回是否真正写入（组开启 sticky 时）。
+	UpdateSticky(ctx context.Context, groupName, sessionKey, newModelName, newProviderName string) bool
 }

@@ -123,18 +123,19 @@ func (s *Scheduler) PersistSticky(ctx context.Context, groupName, sessionKey str
 		ttl = time.Hour // Default fallback
 	}
 
-	_ = s.router.stickyStore.Set(ctx, groupName, sessionKey, decision.ModelName, ttl)
+	_ = s.router.stickyStore.Set(ctx, groupName, sessionKey, encodeStickyBinding(decision.ModelName, decision.ProviderName), ttl)
 }
 
-// UpdateSticky updates a sticky mapping after failover
-func (s *Scheduler) UpdateSticky(ctx context.Context, groupName, sessionKey, newModelName string) {
+// UpdateSticky updates a sticky mapping after failover. Returns true if a pin
+// was actually written (group has sticky enabled), false otherwise.
+func (s *Scheduler) UpdateSticky(ctx context.Context, groupName, sessionKey, newModelName, newProviderName string) bool {
 	if s.router.stickyStore == nil || sessionKey == "" {
-		return
+		return false
 	}
 
 	group := s.router.routeTable.Get(groupName)
 	if group == nil || !group.StickyEnabled {
-		return
+		return false
 	}
 
 	ttl := time.Duration(group.StickyTTLSeconds) * time.Second
@@ -142,5 +143,5 @@ func (s *Scheduler) UpdateSticky(ctx context.Context, groupName, sessionKey, new
 		ttl = time.Hour
 	}
 
-	_ = s.router.stickyStore.Set(ctx, groupName, sessionKey, newModelName, ttl)
+	return s.router.stickyStore.Set(ctx, groupName, sessionKey, encodeStickyBinding(newModelName, newProviderName), ttl) == nil
 }

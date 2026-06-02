@@ -276,14 +276,19 @@ func (r *Router) trySticky(groupName, sessionKey string, healthyModels []*ModelR
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	pinnedModel, err := r.stickyStore.Get(ctx, groupName, sessionKey)
-	if err != nil || pinnedModel == "" {
+	pinned, err := r.stickyStore.Get(ctx, groupName, sessionKey)
+	if err != nil || pinned == "" {
 		return nil // No pin or Redis error
 	}
 
-	// Validate: is pinned model still in healthy pool?
+	pinnedModel, pinnedProvider := parseStickyBinding(pinned)
+
+	// Validate: pinned channel still in healthy pool? 同名多渠道按 ProviderName 区分。
 	for _, m := range healthyModels {
-		if m.ModelName == pinnedModel {
+		if m.ModelName != pinnedModel {
+			continue
+		}
+		if pinnedProvider == "" || m.ProviderName == pinnedProvider {
 			sessionKeyPrefix := sessionKey
 			if len(sessionKey) > 8 {
 				sessionKeyPrefix = sessionKey[:8] + "..."
@@ -292,12 +297,13 @@ func (r *Router) trySticky(groupName, sessionKey string, healthyModels []*ModelR
 				"group", groupName,
 				"session_key", sessionKeyPrefix,
 				"model_name", pinnedModel,
+				"provider", m.ProviderName,
 			)
 			return m
 		}
 	}
 
-	// Pinned model is not healthy or not in pool - fall through to strategy
+	// Pinned channel is not healthy or not in pool - fall through to strategy
 	sessionKeyPrefix := sessionKey
 	if len(sessionKey) > 8 {
 		sessionKeyPrefix = sessionKey[:8] + "..."
@@ -306,6 +312,7 @@ func (r *Router) trySticky(groupName, sessionKey string, healthyModels []*ModelR
 		"group", groupName,
 		"session_key", sessionKeyPrefix,
 		"pinned_model", pinnedModel,
+		"pinned_provider", pinnedProvider,
 	)
 	return nil
 }

@@ -254,7 +254,7 @@ func (h *MessagesHandler) handleNonStream(c *gin.Context, baseCtx context.Contex
 		// Update sticky mapping after successful failover
 		dc := model.GetDispatchContext(c)
 		if dc != nil && dc.SessionKey != "" {
-			h.groupDispatch.UpdateSticky(c.Request.Context(), originalModel, dc.SessionKey, decision.ModelName)
+			h.groupDispatch.UpdateSticky(c.Request.Context(), originalModel, dc.SessionKey, decision.ModelName, decision.ProviderName)
 		}
 
 		// v0.15: failover 模型也需要经过模型层配额检查
@@ -353,7 +353,7 @@ func (h *MessagesHandler) handleStream(c *gin.Context, baseCtx context.Context, 
 		// Update sticky mapping after successful failover
 		dc := model.GetDispatchContext(c)
 		if dc != nil && dc.SessionKey != "" {
-			h.groupDispatch.UpdateSticky(c.Request.Context(), originalModel, dc.SessionKey, decision.ModelName)
+			h.groupDispatch.UpdateSticky(c.Request.Context(), originalModel, dc.SessionKey, decision.ModelName, decision.ProviderName)
 		}
 
 		// v0.15: failover 模型也需要经过模型层配额检查

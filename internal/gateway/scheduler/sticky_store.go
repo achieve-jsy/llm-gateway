@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -80,4 +81,19 @@ func (s *StickyStore) Delete(ctx context.Context, groupName, sessionKey string) 
 
 func (s *StickyStore) buildKey(groupName, sessionKey string) string {
 	return fmt.Sprintf("%s%s:%s", s.prefix, groupName, sessionKey)
+}
+
+// encodeStickyBinding 编码 sticky 绑定值:模型名 + 渠道名(ProviderName)。
+// 同名多渠道的组靠渠道维度区分;provider 为空时退回纯模型名,兼容单渠道组。
+func encodeStickyBinding(modelName, providerName string) string {
+	if providerName == "" {
+		return modelName
+	}
+	return modelName + "|" + providerName
+}
+
+// parseStickyBinding 解码 sticky 绑定值。旧格式(无 |)返回 provider 为空。
+func parseStickyBinding(v string) (modelName, providerName string) {
+	modelName, providerName, _ = strings.Cut(v, "|")
+	return modelName, providerName
 }

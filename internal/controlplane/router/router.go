@@ -542,13 +542,13 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/health-check/status", guard(rbac.PermOpsView), healthCheckHandler.GetStatus)
 		adminGroup.POST("/health-check/run", guard(rbac.PermHealthCheckManage), healthCheckHandler.RunNow)
 		adminGroup.GET("/health-check/timeline", guard(rbac.PermOpsView), healthCheckHandler.GetTimeline)
-		adminGroup.GET("/health-check/group-timeline", guard(rbac.PermOpsView), healthCheckHandler.GetGroupTimeline)
+		adminGroup.GET("/health-check/group-timeline", healthCheckHandler.GetGroupTimeline)
 
 		// 性能看板
 		callLogRepo := repository.NewCallLogRepo(db)
 		performanceSvc := service.NewPerformanceService(callLogRepo, groupRepo)
 		performanceHandler := handler.NewPerformanceHandler(performanceSvc)
-		adminGroup.GET("/health/performance", guard(rbac.PermOpsView), performanceHandler.GetPerformance)
+		adminGroup.GET("/health/performance", performanceHandler.GetPerformance)
 
 		// 运维看板（Ops Dashboard）
 		systemMetricsCollector := service.NewSystemMetricsCollector(db, rdb)
@@ -669,18 +669,18 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 
 		// API Key 管理
 		adminGroup.POST("/keys", guard(rbac.PermKeyManage), keyHandler.CreateKey)
-		adminGroup.GET("/keys", guard(rbac.PermKeyManage), keyHandler.ListKeys)
-		adminGroup.GET("/keys/:id", guard(rbac.PermKeyManage), keyHandler.GetKey)
+		adminGroup.GET("/keys", keyHandler.ListKeys)
+		adminGroup.GET("/keys/:id", keyHandler.GetKey)
 		adminGroup.PATCH("/keys/:id/disable", guard(rbac.PermKeyManage), keyHandler.DisableKey)
 		adminGroup.PATCH("/keys/:id/enable", guard(rbac.PermKeyManage), keyHandler.EnableKey)
 		adminGroup.DELETE("/keys/:id", guard(rbac.PermKeyManage), keyHandler.DeleteKey)
 		adminGroup.POST("/keys/:id/reset", guard(rbac.PermKeyManage), keyHandler.ResetKey)
 		adminGroup.POST("/keys/:id/reveal", guard(rbac.PermKeyManage), keyHandler.RevealKey)
-		adminGroup.GET("/keys/:id/groups", guard(rbac.PermKeyManage), keyHandler.ListKeyGroups)
+		adminGroup.GET("/keys/:id/groups", keyHandler.ListKeyGroups)
 		adminGroup.POST("/keys/:id/groups", guard(rbac.PermKeyManage), keyHandler.UpdateKeyGroups)
 		adminGroup.POST("/keys/:id/access-all-groups", guard(rbac.PermKeyManage), keyHandler.ToggleAccessAllGroups)
 		adminGroup.PATCH("/keys/:id/log-enabled", guard(rbac.PermKeyManage), keyHandler.ToggleLogEnabled)
-		adminGroup.GET("/groups/available", guard(rbac.PermKeyManage), keyHandler.ListAvailableGroups)
+		adminGroup.GET("/groups/available", keyHandler.ListAvailableGroups)
 
 		// OpenCode 配置（token 生成 + 状态轮询，作用于具体 key）
 		adminGroup.POST("/keys/:id/opencode-config/token", guard(rbac.PermKeyManage), opencodeConfigHandler.GenerateToken)
@@ -698,12 +698,12 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		// 模型分组管理
 		adminGroup.POST("/groups/check-all", guard(rbac.PermGroupManage), groupCheckHandler.CheckAll)
 		adminGroup.POST("/groups", guard(rbac.PermGroupManage), groupHandler.Create)
-		adminGroup.GET("/groups", guard(rbac.PermGroupManage), groupHandler.List)
-		adminGroup.GET("/groups/:id", guard(rbac.PermGroupManage), groupHandler.GetByID)
+		adminGroup.GET("/groups", groupHandler.List)
+		adminGroup.GET("/groups/:id", groupHandler.GetByID)
 		adminGroup.PUT("/groups/:id", guard(rbac.PermGroupManage), groupHandler.Update)
 		adminGroup.DELETE("/groups/:id", guard(rbac.PermGroupManage), groupHandler.Delete)
 		adminGroup.POST("/groups/:id/models", guard(rbac.PermGroupManage), groupHandler.AddModels)
-		adminGroup.GET("/groups/:id/models", guard(rbac.PermGroupManage), groupHandler.ListModels)
+		adminGroup.GET("/groups/:id/models", groupHandler.ListModels)
 		adminGroup.DELETE("/groups/:id/models/:model_id", guard(rbac.PermGroupManage), groupHandler.RemoveModel)
 		adminGroup.POST("/groups/:id/reset-capability", guard(rbac.PermGroupManage), groupHandler.ResetCapability)
 		adminGroup.POST("/groups/:id/check", guard(rbac.PermGroupManage), groupCheckHandler.CheckOne)
@@ -742,7 +742,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		usageH.SetRedis(rdb)
 		adminGroup.GET("/usage/logs", guard(rbac.PermUsageViewAll), usageH.Logs)
 		adminGroup.GET("/usage/logs/:request_id/trace", guard(rbac.PermUsageViewAll), usageH.Trace)
-		adminGroup.GET("/usage/options", guard(rbac.PermUsageViewAll), usageH.Options)
+		adminGroup.GET("/usage/options", usageH.Options)
 		adminGroup.GET("/usage", guard(rbac.PermUsageViewAll), usageH.Query)
 		adminGroup.GET("/usage-logs", guard(rbac.PermUsageViewAll), usageH.Logs)
 		// 个人用量查询（按登录用户 user_id 隔离）
@@ -863,7 +863,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.POST("/key-requests/:id/cancel", keyRequestHandler.CancelMine)
 		adminGroup.POST("/key-requests/:id/decision", guard(rbac.PermKeyRequestApprove), keyRequestHandler.Decide)
 		// 部门 Key 创建策略配置（读写均走管理角色权限）
-		adminGroup.GET("/dept-policies/:dept_id/key-creation", guard(rbac.PermKeyRequestSetPolicy), keyRequestHandler.GetDeptPolicy)
+		adminGroup.GET("/dept-policies/:dept_id/key-creation", keyRequestHandler.GetDeptPolicy)
 		adminGroup.PUT("/dept-policies/:dept_id/key-creation", guard(rbac.PermKeyRequestSetPolicy), keyRequestHandler.SetDeptPolicy)
 
 		// Channel Monitor 管理路由

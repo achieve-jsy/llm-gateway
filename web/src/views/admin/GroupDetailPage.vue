@@ -142,6 +142,32 @@
               <el-form-item label="Tool Choice">
                 <el-switch v-model="capForm.override_supports_tool_choice" />
               </el-form-item>
+              <el-form-item label="Mode">
+                <el-input
+                  v-model="capForm.override_mode"
+                  placeholder="留空 = 继承成员聚合值"
+                  clearable
+                  style="width: 240px"
+                />
+              </el-form-item>
+              <el-form-item label="上下文长度">
+                <el-input-number
+                  v-model="capForm.override_context_length"
+                  :min="1"
+                  :controls="false"
+                  placeholder="留空 = 继承聚合值"
+                  style="width: 240px"
+                />
+              </el-form-item>
+              <el-form-item label="最大输出">
+                <el-input-number
+                  v-model="capForm.override_max_output_tokens"
+                  :min="1"
+                  :controls="false"
+                  placeholder="留空 = 继承聚合值"
+                  style="width: 240px"
+                />
+              </el-form-item>
             </el-form>
 
             <div class="cap-btn-row">
@@ -157,6 +183,9 @@
           <div v-else class="cap-auto-hint">
             <span>当前为自动聚合模式，能力字段由组内成员 Catalog 计算得出。</span>
             <template v-if="capAggregated">
+              <el-tag v-if="capAggregated.mode" type="info" size="small" effect="light">mode: {{ capAggregated.mode }}</el-tag>
+              <el-tag v-if="capAggregated.max_input_tokens > 0" type="info" size="small" effect="light">上下文: {{ capAggregated.max_input_tokens }}</el-tag>
+              <el-tag v-if="capAggregated.max_output_tokens > 0" type="info" size="small" effect="light">输出: {{ capAggregated.max_output_tokens }}</el-tag>
               <el-tag v-if="capAggregated.supports_vision" type="success" size="small" effect="light">图像输入</el-tag>
               <el-tag v-if="capAggregated.supports_function_calling" type="warning" size="small" effect="light">工具调用</el-tag>
               <el-tag v-if="capAggregated.supports_tool_choice" type="warning" size="small" effect="plain">tool_choice</el-tag>
@@ -273,6 +302,9 @@ const capForm = ref({
   override_supports_vision: false,
   override_supports_function_calling: false,
   override_supports_tool_choice: false,
+  override_mode: '',
+  override_context_length: null as number | null,
+  override_max_output_tokens: null as number | null,
 })
 const capSaving = ref(false)
 const capAggregated = ref<GroupCapability | null>(null)
@@ -362,6 +394,9 @@ function syncCapFormFromGroup(g: any) {
     override_supports_vision: !!g.override_supports_vision,
     override_supports_function_calling: !!g.override_supports_function_calling,
     override_supports_tool_choice: !!g.override_supports_tool_choice,
+    override_mode: g.override_mode || '',
+    override_context_length: g.override_context_length ?? null,
+    override_max_output_tokens: g.override_max_output_tokens ?? null,
   }
 }
 
@@ -442,6 +477,9 @@ async function saveCapability() {
       override_supports_vision: capForm.value.override_supports_vision,
       override_supports_function_calling: capForm.value.override_supports_function_calling,
       override_supports_tool_choice: capForm.value.override_supports_tool_choice,
+      override_mode: capForm.value.override_mode || '',
+      override_context_length: capForm.value.override_context_length ?? null,
+      override_max_output_tokens: capForm.value.override_max_output_tokens ?? null,
     })
     group.value = { ...group.value, ...(res.data as any)?.data }
     ElMessage.success('能力设置已保存')

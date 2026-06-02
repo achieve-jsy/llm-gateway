@@ -127,6 +127,15 @@ func (s *ModelInfoService) GetGroupModelInfo(names []string) (map[string]GroupMo
 				members = append(members, m)
 			}
 		}
+		// 空壳组回退：启用成员为空时，把 disabled 成员也纳入聚合取交集，
+		// 使未开手动覆盖的组也能从子模型拿到 mode/context/output。
+		if len(members) == 0 {
+			for _, id := range ref.modelIDs {
+				if m, ok := modelsByID[id]; ok && m != nil {
+					members = append(members, m)
+				}
+			}
+		}
 		info := aggregateGroupModelInfo(members)
 		if g, ok := groupsByName[ref.name]; ok && g.IsCapabilityOverride {
 			info = applyGroupOverride(info, g)
@@ -364,6 +373,16 @@ func applyGroupOverride(info GroupModelInfo, g *model.Group) GroupModelInfo {
 	info.SupportsVision = g.OverrideSupportsVision
 	info.SupportsFunctionCalling = g.OverrideSupportsFC
 	info.SupportsToolChoice = g.OverrideSupportsTC
+	// mode/context/output 按字段覆盖：空/NULL/<=0 时回退到成员聚合值。
+	if strings.TrimSpace(g.OverrideMode) != "" {
+		info.Mode = strings.TrimSpace(g.OverrideMode)
+	}
+	if g.OverrideContextLength != nil && *g.OverrideContextLength > 0 {
+		info.MaxInputTokens = *g.OverrideContextLength
+	}
+	if g.OverrideMaxOutputTokens != nil && *g.OverrideMaxOutputTokens > 0 {
+		info.MaxOutputTokens = *g.OverrideMaxOutputTokens
+	}
 	info.IsCapabilityOverride = true
 	return info
 }

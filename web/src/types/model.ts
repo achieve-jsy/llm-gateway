@@ -54,8 +54,8 @@ export interface Model {
   output_price: number
   cache_read_price?: number | null
   cache_write_price?: number | null
-  /** 定价模式：catalog = 实时读取目录价格；manual = 手动指定固定价格 */
-  price_mode: 'catalog' | 'manual'
+  /** 定价模式：catalog = 实时读取目录价格；manual = 手动指定固定价格；video = 视频计费（非 token 价） */
+  price_mode: 'catalog' | 'manual' | 'video'
   weight: number
   consecutive_failures: number
   last_check_error: string
@@ -95,7 +95,7 @@ export interface ModelPayload {
   description?: string
   context_length?: number
   max_output_tokens?: number
-  price_mode?: 'catalog' | 'manual'
+  price_mode?: 'catalog' | 'manual' | 'video'
   input_price?: number
   output_price?: number
   cache_read_price?: number | null

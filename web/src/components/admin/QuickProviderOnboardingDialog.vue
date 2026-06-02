@@ -153,8 +153,8 @@
                 </el-table-column>
                 <el-table-column label="定价方式" width="100" align="center">
                   <template #default="{ row }">
-                    <el-tag :type="row.price_mode === 'catalog' ? 'success' : 'warning'" size="small" effect="plain">
-                      {{ row.price_mode === 'catalog' ? 'Catalog' : '手动' }}
+                    <el-tag :type="row.price_mode === 'catalog' ? 'success' : (row.price_mode === 'video' ? 'info' : 'warning')" size="small" effect="plain">
+                      {{ row.price_mode === 'catalog' ? 'Catalog' : (row.price_mode === 'video' ? '视频计费' : '手动') }}
                     </el-tag>
                   </template>
                 </el-table-column>
@@ -847,7 +847,7 @@ function mapSourceModelToOnboardInput(model: Model): QuickOnboardModelInput {
     ? (model.model_type as ModelType)
     : 'chat'
   const prices = resolveInheritedPrices(model)
-  let priceMode: 'catalog' | 'manual' = model.price_mode || 'catalog'
+  let priceMode: 'catalog' | 'manual' | 'video' = model.price_mode || 'catalog'
   // catalog 未绑定条目时，若源上已有有效价格，落成 manual 以免数字价丢失
   if (priceMode === 'catalog' && !model.catalog_id && (prices.input > 0 || prices.output > 0)) {
     priceMode = 'manual'

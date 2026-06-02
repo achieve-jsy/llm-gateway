@@ -45,7 +45,7 @@ type QuickOnboardModelInput struct {
 	OutputPrice     *float64 `json:"output_price" binding:"omitempty,min=0"`
 	CacheReadPrice  *float64 `json:"cache_read_price" binding:"omitempty,min=0"`
 	CacheWritePrice *float64 `json:"cache_write_price" binding:"omitempty,min=0"`
-	PriceMode       string   `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
+	PriceMode       string   `json:"price_mode" binding:"omitempty,oneof=catalog manual video"`
 	CatalogID       string   `json:"catalog_id" binding:"omitempty,uuid"`
 	Weight          *int     `json:"weight" binding:"omitempty,min=0,max=9999"`
 	// Enabled 可选；缺省为 true。继承源渠道禁用模型时应传 false。

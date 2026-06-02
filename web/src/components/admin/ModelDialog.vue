@@ -430,7 +430,7 @@ interface FormState {
   description: string
   context_length: number
   max_output_tokens: number
-  price_mode: 'catalog' | 'manual'
+  price_mode: 'catalog' | 'manual' | 'video'
   input_price: number
   output_price: number
   cache_read_price: number | null
@@ -877,8 +877,9 @@ async function handleSubmit() {
       description: formData.value.description || undefined,
       context_length: isVideo ? undefined : (formData.value.context_length || undefined),
       max_output_tokens: isVideo ? undefined : (formData.value.max_output_tokens || undefined),
-      // Video 本期不计费、无负载权重；保留默认 weight=1 满足后端字段，不提交 Token 价
-      price_mode: isVideo ? 'manual' as const : formData.value.price_mode,
+      // Video 走独立计费（非 token 价）；UI 不展示价格项，price_mode 用 video 枚举，
+      // 避免落入 manual 模式（后端要求价格 > 0）或 catalog 模式（视频不跟随目录价）。
+      price_mode: isVideo ? 'video' as const : formData.value.price_mode,
       input_price: isVideo ? undefined : (formData.value.price_mode === 'manual' ? (formData.value.input_price || undefined) : undefined),
       output_price: isVideo ? undefined : (formData.value.price_mode === 'manual' ? (formData.value.output_price || undefined) : undefined),
       cache_read_price: isVideo ? undefined : (formData.value.price_mode === 'manual' ? formData.value.cache_read_price : null),

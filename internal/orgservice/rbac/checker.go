@@ -20,7 +20,8 @@ func NewChecker(roleRepo *repository.RoleRepo, userOrgRepo *repository.UserOrgRe
 }
 
 // BuildAndInjectActor 根据当前请求上下文构建 Actor 并注入 gin.Context，供 Guard middleware 调用。
-// 若 JWT claim 中 user_role=admin，直接返回全局权限 Actor（不查 DB）。
+// admin / studio_admin / dept_admin 权限一律以服务端 user_roles 表（含 users/dev_users 遗留 role 兜底）为准，
+// 绝不信任 JWT 中客户端自证的 user_role claim。
 // studio_admin 的管辖部门列表在此处预展开，handler/policy 层无需二次查询。
 func (ch *Checker) BuildAndInjectActor(c *gin.Context) {
 	a := ch.buildActor(c)
@@ -29,11 +30,6 @@ func (ch *Checker) BuildAndInjectActor(c *gin.Context) {
 
 func (ch *Checker) buildActor(c *gin.Context) Actor {
 	userID := c.GetString("user_id")
-
-	// JWT claim admin → 全局权限
-	if c.GetString("user_role") == "admin" {
-		return Actor{UserID: userID, IsGlobal: true}
-	}
 
 	rows, err := ch.roleRepo.GetByUserID(userID)
 	if err != nil || len(rows) == 0 {
@@ -44,7 +40,7 @@ func (ch *Checker) buildActor(c *gin.Context) Actor {
 	for _, r := range rows {
 		switch r.Role {
 		case "admin":
-			// user_roles 中也存在 admin 记录 → 全局权限
+			// user_roles 中存在 admin 记录 → 全局权限
 			return Actor{UserID: userID, IsGlobal: true}
 		case "studio_admin":
 			actor.StudioIDs = appendUniq(actor.StudioIDs, r.ScopeID)

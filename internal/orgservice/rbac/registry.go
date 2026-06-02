@@ -113,4 +113,30 @@ var Registry = map[Permission]PolicyEntry{
 	PermQuotaViewScoped: {ScopeManage},
 	// 查看全公司配额：仅 admin
 	PermQuotaViewAll: {ScopeGlobal},
+
+	// ── 管理面敏感操作（默认仅 admin）────────────────────────────────────────
+	// 渠道管理（含上游凭证）：仅 admin
+	PermProviderManage: {ScopeGlobal},
+	// API Key 管理（含 reveal/重置密钥）：仅 admin
+	PermKeyManage: {ScopeGlobal},
+	// 系统设置读写（含导出/导入）：仅 admin
+	PermSettingsManage: {ScopeGlobal},
+	// 运维看板查看：仅 admin
+	PermOpsView: {ScopeGlobal},
+	// 模型管理：仅 admin
+	PermModelManage: {ScopeGlobal},
+	// 模型 Catalog 同步/绑定：仅 admin
+	PermModelCatalogManage: {ScopeGlobal},
+	// 模型组管理：仅 admin
+	PermGroupManage: {ScopeGlobal},
+	// 渠道监控管理：仅 admin
+	PermChannelMonitorManage: {ScopeGlobal},
+	// 健康检测配置/触发：仅 admin
+	PermHealthCheckManage: {ScopeGlobal},
+	// 公告管理（写操作）：仅 admin
+	PermAnnouncementManage: {ScopeGlobal},
+	// 用户搜索：任意管理角色
+	PermOrgUserSearch: {ScopeManage},
+	// 查看用户角色：任意管理角色
+	PermRoleView: {ScopeManage},
 }

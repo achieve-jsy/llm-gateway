@@ -253,6 +253,12 @@ func (h *SettingsHandler) ImportSettings(c *gin.Context) {
 		return
 	}
 	if err := h.svc.ImportSettings(c.Request.Context(), input); err != nil {
+		if errors.Is(err, service.ErrImportForbiddenKey) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": gin.H{"message": err.Error(), "code": CodeBadRequest},
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{"message": "导入设置失败", "code": CodeInternalError},
 		})

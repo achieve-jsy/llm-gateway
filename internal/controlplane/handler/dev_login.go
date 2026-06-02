@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/auth"
@@ -20,7 +21,22 @@ func NewDevLoginHandler(db *gorm.DB, jwtSecret string, accessTokenTTL time.Durat
 	return &DevLoginHandler{db: db, jwtSecret: jwtSecret, accessTokenTTL: accessTokenTTL}
 }
 
+// DevLoginEnabled reports whether the pre-auth dev-login backdoor is allowed.
+// It is an explicit opt-in that defaults OFF everywhere: the route is only
+// registered (and the handler only proceeds) when DEV_LOGIN_ENABLED == "true"
+// AND the environment is not production. This stays production-safe even if
+// someone forgets to set the flag or mistakenly sets it to true in prod.
+func DevLoginEnabled() bool {
+	return os.Getenv("APP_ENV") != "prod" && os.Getenv("DEV_LOGIN_ENABLED") == "true"
+}
+
 func (h *DevLoginHandler) Login(c *gin.Context) {
+	// Defense in depth: even if the route were reachable, refuse when disabled.
+	if !DevLoginEnabled() {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+
 	var req struct {
 		Username string `json:"username" binding:"required"`
 		Password string `json:"password" binding:"required"`

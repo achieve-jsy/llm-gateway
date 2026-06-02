@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/example/llm-gateway/internal/controlplane/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
@@ -430,14 +431,14 @@ func extractTokenFromProtocol(c *gin.Context) string {
 
 // validateOpsWSToken 复用 admin JWTAuth 同源校验范式：HMAC + JWT_SECRET，
 // 校验 signing method、Valid、user_id claim 存在。成功返回 claims。
-// secret 解析与 middleware.JWTAuth 完全一致，保证 token 跨入口互通。
+// secret 解析与 middleware.JWTAuth 完全一致（fail-closed），保证 token 跨入口互通。
 func validateOpsWSToken(token string) (jwt.MapClaims, bool) {
 	if token == "" {
 		return nil, false
 	}
-	secret := strings.TrimSpace(os.Getenv("JWT_SECRET"))
+	secret := middleware.ResolveJWTSecret()
 	if secret == "" {
-		secret = "change-me-in-production"
+		return nil, false
 	}
 	parsed, err := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {

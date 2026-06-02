@@ -72,6 +72,20 @@ const (
 	PermQuotaModelSet      Permission = "quota:model:set"       // 设置模型配额（admin）
 	PermQuotaViewScoped    Permission = "quota:view:scoped"     // 查看管辖范围内配额
 	PermQuotaViewAll       Permission = "quota:view:all"        // 查看全公司配额（admin）
+
+	// ── 管理面敏感操作（默认仅 admin）────────────────────────────────────────
+	PermProviderManage       Permission = "provider:manage"        // 渠道管理（含上游凭证）
+	PermKeyManage            Permission = "key:manage"             // API Key 管理（含 reveal/重置密钥）
+	PermSettingsManage       Permission = "settings:manage"        // 系统设置读写（含导出/导入）
+	PermOpsView              Permission = "ops:view"               // 运维看板查看
+	PermModelManage          Permission = "model:manage"           // 模型管理
+	PermModelCatalogManage   Permission = "model_catalog:manage"   // 模型 Catalog 同步/绑定
+	PermGroupManage          Permission = "group:manage"           // 模型组管理
+	PermChannelMonitorManage Permission = "channel_monitor:manage" // 渠道监控管理
+	PermHealthCheckManage    Permission = "health_check:manage"    // 健康检测配置/触发
+	PermAnnouncementManage   Permission = "announcement:manage"    // 公告管理（写操作）
+	PermOrgUserSearch        Permission = "org:user:search"        // 用户搜索（任意管理角色）
+	PermRoleView             Permission = "org:role:view"          // 查看用户角色（任意管理角色）
 )
 
 // ScopeConstraint 权限的范围约束级别（从宽到严）

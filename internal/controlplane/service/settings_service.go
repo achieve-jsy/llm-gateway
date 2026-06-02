@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -264,6 +266,19 @@ func IsMaskedSecret(s string) bool {
 	}
 }
 
+// secretSettingKeys 需要脱敏的密码/密钥类 key，与 GetSystemSettings 中 maskSecret 覆盖的字段保持一致。
+// 导出时对这类 key 同样脱敏，避免导出文件泄露明文凭据。
+var secretSettingKeys = map[string]struct{}{
+	SettingKeyOIDCClientSecret: {},
+	SettingKeyWebhookSecret:    {},
+	SettingKeySMTPPassword:     {},
+}
+
+func isSecretSettingKey(key string) bool {
+	_, ok := secretSettingKeys[key]
+	return ok
+}
+
 func (s *SettingsService) GetPublicSettings(ctx context.Context) (*model.PublicSettings, error) {
 	vals, err := s.repo.GetMultiple([]string{
 		SettingKeySiteName, SettingKeySiteLogo, SettingKeySiteSubtitle, SettingKeyAPIBaseURL,
@@ -511,6 +526,8 @@ func (s *SettingsService) GetPricingUsdToCnyRate(ctx context.Context) float64 {
 	return n
 }
 
+// ExportAll 导出全部系统配置。与 GetSystemSettings 一致，对密码/密钥类 key 做脱敏，
+// 避免导出文件泄露明文凭据。
 func (s *SettingsService) ExportAll(ctx context.Context) (map[string]string, error) {
 	cfgs, err := s.repo.GetAll()
 	if err != nil {
@@ -518,16 +535,60 @@ func (s *SettingsService) ExportAll(ctx context.Context) (map[string]string, err
 	}
 	result := make(map[string]string, len(cfgs))
 	for _, c := range cfgs {
-		result[c.Key] = c.Value
+		if isSecretSettingKey(c.Key) {
+			result[c.Key] = maskSecret(c.Value)
+		} else {
+			result[c.Key] = c.Value
+		}
 	}
 	return result, nil
 }
 
+// ErrImportForbiddenKey 导入请求包含不允许通过 settings/import 写入的 key 时返回。
+// 预算拦截开关等运行期控制开关不允许通过裸 map 导入翻转；不在设置白名单内的 key
+// （如 ops_*、default_key_creation_policy、key_activity.scan_cursor 等）也不允许通过导入注入。
+var ErrImportForbiddenKey = errors.New("导入包含不允许写入的 key（预算拦截开关与未知 key 不可通过导入设置）")
+
+// importAllowedKeySet 允许通过 settings/import 写入的 key 白名单。
+// 覆盖设置页管理的全部 key（allSettingKeys），但排除预算拦截等运行期控制开关
+// （budgetEnforcementSettingKeys），防止通过裸 map 导入翻转预算拦截或注入任意 system_configs key。
+var importAllowedKeySet = func() map[string]struct{} {
+	set := make(map[string]struct{}, len(allSettingKeys()))
+	for _, k := range allSettingKeys() {
+		set[k] = struct{}{}
+	}
+	for _, k := range budgetEnforcementSettingKeys() {
+		delete(set, k)
+	}
+	return set
+}()
+
 func (s *SettingsService) ImportSettings(ctx context.Context, settings map[string]string) error {
-	if err := s.repo.SetMultiple(settings); err != nil {
+	var forbidden []string
+	for k := range settings {
+		if _, ok := importAllowedKeySet[k]; !ok {
+			forbidden = append(forbidden, k)
+		}
+	}
+	if len(forbidden) > 0 {
+		sort.Strings(forbidden)
+		return fmt.Errorf("%w: %s", ErrImportForbiddenKey, strings.Join(forbidden, ", "))
+	}
+	// 脱敏占位符（••••••）视为「未修改」，跳过不写，避免用占位符覆盖真实凭据。
+	updates := make(map[string]string, len(settings))
+	for k, v := range settings {
+		if isSecretSettingKey(k) && IsMaskedSecret(v) {
+			continue
+		}
+		updates[k] = v
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	if err := s.repo.SetMultiple(updates); err != nil {
 		return err
 	}
-	// 导入若含预算拦截 key，同步到 snapshot；否则保持现状。
+	// 重读当前设置，保持导入后与预算快照运行态一致。
 	current, err := s.GetSystemSettings(ctx)
 	if err != nil {
 		return err

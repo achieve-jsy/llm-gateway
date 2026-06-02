@@ -1,11 +1,12 @@
 package handler
 
 import (
+	"crypto/subtle"
 	"errors"
 	"net/http"
-	"os"
 	"strconv"
 
+	"github.com/example/llm-gateway/internal/controlplane/middleware"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/gin-gonic/gin"
@@ -412,11 +413,11 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 	if token == "" {
 		token = c.GetHeader("X-Internal-Token")
 	}
-	expected := os.Getenv("INTERNAL_AUTH_TOKEN")
-	if expected == "" {
-		expected = "internal-shared-secret"
-	}
-	if token != expected {
+	// 与 middleware.InternalAuth 共用同一解析后的内部 Token（env INTERNAL_TOKEN，
+	// 兼容历史部署变量名 INTERNAL_AUTH_TOKEN），常量时间比较，未配置/默认值/不匹配
+	// 一律 403（fail-closed）。
+	expected := middleware.ResolveInternalToken()
+	if expected == "" || token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(expected)) != 1 {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error": gin.H{"type": "authorization_error", "message": "invalid auth token", "code": "forbidden"},
 		})

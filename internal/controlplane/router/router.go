@@ -70,9 +70,12 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	// 需要认证的用户信息接口
 	r.GET("/api/v1/me", middleware.JWTAuth(), authHandler.GetCurrentUser)
 
-	// Dev login (no auth required)
-	devLoginHandler := handler.NewDevLoginHandler(db, authCfg.JWTSecret, authCfg.AccessTokenTTL)
-	r.POST("/auth/dev/login", devLoginHandler.Login)
+	// Dev login (no auth required) — opt-in only, defaults OFF and force-disabled
+	// in prod (see handler.DevLoginEnabled). Route is not registered when disabled.
+	if handler.DevLoginEnabled() {
+		devLoginHandler := handler.NewDevLoginHandler(db, authCfg.JWTSecret, authCfg.AccessTokenTTL)
+		r.POST("/auth/dev/login", devLoginHandler.Login)
+	}
 
 	// 初始化依赖
 	providerRepo := repository.NewProviderRepo(db)
@@ -463,24 +466,24 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	adminGroup.Use(middleware.AuditMiddleware(auditSvc, db))
 	{
 		// 渠道定义（Registry）
-		adminGroup.GET("/provider-definitions", defHandler.ListDefinitions)
-		adminGroup.GET("/provider-definitions/:id", defHandler.GetDefinition)
+		adminGroup.GET("/provider-definitions", guard(rbac.PermProviderManage), defHandler.ListDefinitions)
+		adminGroup.GET("/provider-definitions/:id", guard(rbac.PermProviderManage), defHandler.GetDefinition)
 
 		// 渠道管理
-		adminGroup.POST("/providers/check-all", healthCheckHandler.CheckAll)
-		adminGroup.POST("/providers/quick-onboard/preview", quickOnboardHandler.Preview)
-		adminGroup.POST("/providers/quick-onboard", quickOnboardHandler.Create)
-		adminGroup.POST("/providers", providerHandler.CreateProvider)
-		adminGroup.GET("/providers", providerHandler.ListProviders)
-		adminGroup.GET("/providers/:id", providerHandler.GetProvider)
-		adminGroup.PUT("/providers/:id", providerHandler.UpdateProvider)
-		adminGroup.PATCH("/providers/:id/status", providerHandler.ToggleProviderStatus)
-		adminGroup.DELETE("/providers/:id", providerHandler.DeleteProvider)
-		adminGroup.POST("/providers/:id/test", testHandler.TestProvider)
-		adminGroup.POST("/providers/:id/check", healthCheckHandler.CheckOne)
-		adminGroup.POST("/providers/:id/sync-models", syncHandler.SyncModels)
-		adminGroup.POST("/providers/:id/sync-models/confirm", syncHandler.ConfirmSync)
-		adminGroup.POST("/providers/:id/check-models", syncHandler.CheckModels)
+		adminGroup.POST("/providers/check-all", guard(rbac.PermProviderManage), healthCheckHandler.CheckAll)
+		adminGroup.POST("/providers/quick-onboard/preview", guard(rbac.PermProviderManage), quickOnboardHandler.Preview)
+		adminGroup.POST("/providers/quick-onboard", guard(rbac.PermProviderManage), quickOnboardHandler.Create)
+		adminGroup.POST("/providers", guard(rbac.PermProviderManage), providerHandler.CreateProvider)
+		adminGroup.GET("/providers", guard(rbac.PermProviderManage), providerHandler.ListProviders)
+		adminGroup.GET("/providers/:id", guard(rbac.PermProviderManage), providerHandler.GetProvider)
+		adminGroup.PUT("/providers/:id", guard(rbac.PermProviderManage), providerHandler.UpdateProvider)
+		adminGroup.PATCH("/providers/:id/status", guard(rbac.PermProviderManage), providerHandler.ToggleProviderStatus)
+		adminGroup.DELETE("/providers/:id", guard(rbac.PermProviderManage), providerHandler.DeleteProvider)
+		adminGroup.POST("/providers/:id/test", guard(rbac.PermProviderManage), testHandler.TestProvider)
+		adminGroup.POST("/providers/:id/check", guard(rbac.PermProviderManage), healthCheckHandler.CheckOne)
+		adminGroup.POST("/providers/:id/sync-models", guard(rbac.PermProviderManage), syncHandler.SyncModels)
+		adminGroup.POST("/providers/:id/sync-models/confirm", guard(rbac.PermProviderManage), syncHandler.ConfirmSync)
+		adminGroup.POST("/providers/:id/check-models", guard(rbac.PermProviderManage), syncHandler.CheckModels)
 
 		// 模型管理
 		adminGroup.GET("/model-tiers", guard(rbac.PermModelTierView), modelTierHandler.List)
@@ -500,52 +503,52 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/budgets/tier-usage", guard(rbac.PermBudgetViewScoped), budgetTierHandler.TierUsage)
 		adminGroup.GET("/my/budget/tiers", budgetTierHandler.MyBudgetTiers)
 
-		adminGroup.POST("/models", modelHandler.CreateModel)
-		adminGroup.GET("/models", modelHandler.ListModels)
+		adminGroup.POST("/models", guard(rbac.PermModelManage), modelHandler.CreateModel)
+		adminGroup.GET("/models", guard(rbac.PermModelManage), modelHandler.ListModels)
 		// 注意：静态路径必须在 :id 通配前注册，否则会被吞掉
-		adminGroup.GET("/models/check-name", modelHandler.CheckModelName)
-		adminGroup.POST("/models/check-all", modelCheckHandler.CheckAll)
-		adminGroup.DELETE("/models/batch", modelHandler.BatchDeleteModels)
-		adminGroup.PATCH("/models/batch-status", modelHandler.BatchUpdateModelStatus)
-		adminGroup.PUT("/models/batch-tags", modelTagHandler.BatchSetModelTags)
-		adminGroup.POST("/models/batch-tags/query", modelTagHandler.BatchGetModelTags)
+		adminGroup.GET("/models/check-name", guard(rbac.PermModelManage), modelHandler.CheckModelName)
+		adminGroup.POST("/models/check-all", guard(rbac.PermModelManage), modelCheckHandler.CheckAll)
+		adminGroup.DELETE("/models/batch", guard(rbac.PermModelManage), modelHandler.BatchDeleteModels)
+		adminGroup.PATCH("/models/batch-status", guard(rbac.PermModelManage), modelHandler.BatchUpdateModelStatus)
+		adminGroup.PUT("/models/batch-tags", guard(rbac.PermModelManage), modelTagHandler.BatchSetModelTags)
+		adminGroup.POST("/models/batch-tags/query", guard(rbac.PermModelManage), modelTagHandler.BatchGetModelTags)
 		// CAT-1：catalog 一键创建（静态路径，必须在 :id 之前）
-		adminGroup.POST("/models/from-catalog", modelHandler.CreateModelFromCatalog)
-		adminGroup.POST("/models/batch", modelHandler.BatchCreateModels)
-		adminGroup.POST("/models/batch-from-catalog", modelHandler.BatchCreateModelsFromCatalog)
+		adminGroup.POST("/models/from-catalog", guard(rbac.PermModelManage), modelHandler.CreateModelFromCatalog)
+		adminGroup.POST("/models/batch", guard(rbac.PermModelManage), modelHandler.BatchCreateModels)
+		adminGroup.POST("/models/batch-from-catalog", guard(rbac.PermModelManage), modelHandler.BatchCreateModelsFromCatalog)
 		// CAT-2：批量绑定（静态路径，必须在 :id 之前）
-		adminGroup.POST("/models/batch-bind-catalog", modelHandler.BatchBindCatalog)
-		adminGroup.GET("/models/:id/status-logs", modelStatusLogHandler.GetModelStatusLogs)
-		adminGroup.PUT("/models/:id", modelHandler.UpdateModel)
-		adminGroup.DELETE("/models/:id", modelHandler.DeleteModel)
-		adminGroup.POST("/models/:id/check", modelCheckHandler.CheckOne)
-		adminGroup.POST("/models/:id/reset-override", modelHandler.ResetModelOverride)
+		adminGroup.POST("/models/batch-bind-catalog", guard(rbac.PermModelManage), modelHandler.BatchBindCatalog)
+		adminGroup.GET("/models/:id/status-logs", guard(rbac.PermModelManage), modelStatusLogHandler.GetModelStatusLogs)
+		adminGroup.PUT("/models/:id", guard(rbac.PermModelManage), modelHandler.UpdateModel)
+		adminGroup.DELETE("/models/:id", guard(rbac.PermModelManage), modelHandler.DeleteModel)
+		adminGroup.POST("/models/:id/check", guard(rbac.PermModelManage), modelCheckHandler.CheckOne)
+		adminGroup.POST("/models/:id/reset-override", guard(rbac.PermModelManage), modelHandler.ResetModelOverride)
 		// CAT-2：单条绑定/换绑/解绑
-		adminGroup.POST("/models/:id/bind-catalog", modelHandler.BindCatalog)
-		adminGroup.POST("/models/:id/unbind-catalog", modelHandler.UnbindCatalog)
+		adminGroup.POST("/models/:id/bind-catalog", guard(rbac.PermModelManage), modelHandler.BindCatalog)
+		adminGroup.POST("/models/:id/unbind-catalog", guard(rbac.PermModelManage), modelHandler.UnbindCatalog)
 
 		// 模型标签
-		adminGroup.GET("/model-tags", modelTagHandler.ListTags)
-		adminGroup.POST("/model-tags", modelTagHandler.CreateTag)
-		adminGroup.PUT("/model-tags/:id", modelTagHandler.UpdateTag)
-		adminGroup.DELETE("/model-tags/:id", modelTagHandler.DeleteTag)
-		adminGroup.GET("/models/:id/tags", modelTagHandler.GetModelTags)
-		adminGroup.PUT("/models/:id/tags", modelTagHandler.SetModelTags)
+		adminGroup.GET("/model-tags", guard(rbac.PermModelManage), modelTagHandler.ListTags)
+		adminGroup.POST("/model-tags", guard(rbac.PermModelManage), modelTagHandler.CreateTag)
+		adminGroup.PUT("/model-tags/:id", guard(rbac.PermModelManage), modelTagHandler.UpdateTag)
+		adminGroup.DELETE("/model-tags/:id", guard(rbac.PermModelManage), modelTagHandler.DeleteTag)
+		adminGroup.GET("/models/:id/tags", guard(rbac.PermModelManage), modelTagHandler.GetModelTags)
+		adminGroup.PUT("/models/:id/tags", guard(rbac.PermModelManage), modelTagHandler.SetModelTags)
 
-		// 健康检测管理
-		adminGroup.GET("/health-check/config", healthCheckHandler.GetConfig)
-		adminGroup.PUT("/health-check/config", healthCheckHandler.UpdateConfig)
-		adminGroup.GET("/health-check/logs", healthCheckHandler.GetLogs)
-		adminGroup.GET("/health-check/status", healthCheckHandler.GetStatus)
-		adminGroup.POST("/health-check/run", healthCheckHandler.RunNow)
-		adminGroup.GET("/health-check/timeline", healthCheckHandler.GetTimeline)
-		adminGroup.GET("/health-check/group-timeline", healthCheckHandler.GetGroupTimeline)
+		// 健康检测管理（配置/触发仅 admin；只读状态与日志按运维看板权限 admin-only）
+		adminGroup.GET("/health-check/config", guard(rbac.PermHealthCheckManage), healthCheckHandler.GetConfig)
+		adminGroup.PUT("/health-check/config", guard(rbac.PermHealthCheckManage), healthCheckHandler.UpdateConfig)
+		adminGroup.GET("/health-check/logs", guard(rbac.PermOpsView), healthCheckHandler.GetLogs)
+		adminGroup.GET("/health-check/status", guard(rbac.PermOpsView), healthCheckHandler.GetStatus)
+		adminGroup.POST("/health-check/run", guard(rbac.PermHealthCheckManage), healthCheckHandler.RunNow)
+		adminGroup.GET("/health-check/timeline", guard(rbac.PermOpsView), healthCheckHandler.GetTimeline)
+		adminGroup.GET("/health-check/group-timeline", guard(rbac.PermOpsView), healthCheckHandler.GetGroupTimeline)
 
 		// 性能看板
 		callLogRepo := repository.NewCallLogRepo(db)
 		performanceSvc := service.NewPerformanceService(callLogRepo, groupRepo)
 		performanceHandler := handler.NewPerformanceHandler(performanceSvc)
-		adminGroup.GET("/health/performance", performanceHandler.GetPerformance)
+		adminGroup.GET("/health/performance", guard(rbac.PermOpsView), performanceHandler.GetPerformance)
 
 		// 运维看板（Ops Dashboard）
 		systemMetricsCollector := service.NewSystemMetricsCollector(db, rdb)
@@ -570,81 +573,81 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		emailSvc := service.NewEmailService()
 		scheduledReportSvc := service.NewScheduledReportService(db, rdb, emailSvc)
 		scheduledReportSvc.Start()
-		adminGroup.GET("/ops/groups", opsHandler.GetGroupOptions)
-		adminGroup.GET("/ops/providers", opsHandler.ListProviders)
-		adminGroup.GET("/ops/models", opsHandler.ListModels)
-		adminGroup.GET("/ops/dashboard", opsHandler.GetDashboard)
-		adminGroup.GET("/ops/dashboard/snapshot-v2", opsHandler.GetSnapshotV2)
-		adminGroup.GET("/ops/traffic-trend", opsHandler.GetTrafficTrend)
-		adminGroup.GET("/ops/error-trend", opsHandler.GetErrorTrend)
-		adminGroup.GET("/ops/latency-histogram", opsHandler.GetLatencyHistogram)
-		adminGroup.GET("/ops/error-distribution", opsHandler.GetErrorDistribution)
-		adminGroup.GET("/ops/top-issues", opsHandler.GetTopIssues)
+		adminGroup.GET("/ops/groups", guard(rbac.PermOpsView), opsHandler.GetGroupOptions)
+		adminGroup.GET("/ops/providers", guard(rbac.PermOpsView), opsHandler.ListProviders)
+		adminGroup.GET("/ops/models", guard(rbac.PermOpsView), opsHandler.ListModels)
+		adminGroup.GET("/ops/dashboard", guard(rbac.PermOpsView), opsHandler.GetDashboard)
+		adminGroup.GET("/ops/dashboard/snapshot-v2", guard(rbac.PermOpsView), opsHandler.GetSnapshotV2)
+		adminGroup.GET("/ops/traffic-trend", guard(rbac.PermOpsView), opsHandler.GetTrafficTrend)
+		adminGroup.GET("/ops/error-trend", guard(rbac.PermOpsView), opsHandler.GetErrorTrend)
+		adminGroup.GET("/ops/latency-histogram", guard(rbac.PermOpsView), opsHandler.GetLatencyHistogram)
+		adminGroup.GET("/ops/error-distribution", guard(rbac.PermOpsView), opsHandler.GetErrorDistribution)
+		adminGroup.GET("/ops/top-issues", guard(rbac.PermOpsView), opsHandler.GetTopIssues)
 
 		// 运维看板 v2：请求日志、错误分析、并发、趋势
-		adminGroup.GET("/ops/requests", opsHandler.ListRequests)
-		adminGroup.GET("/ops/request-errors", opsHandler.ListRequestErrors)
-		adminGroup.GET("/ops/request-errors/:id", opsHandler.GetRequestErrorDetail)
-		adminGroup.GET("/ops/upstream-errors", opsHandler.ListUpstreamErrors)
-		adminGroup.GET("/ops/concurrency", opsHandler.GetConcurrencyStats)
-		adminGroup.GET("/ops/switch-rate-trend", opsHandler.GetSwitchRateTrend)
-		adminGroup.GET("/ops/throughput-trend", opsHandler.GetThroughputTrend)
+		adminGroup.GET("/ops/requests", guard(rbac.PermOpsView), opsHandler.ListRequests)
+		adminGroup.GET("/ops/request-errors", guard(rbac.PermOpsView), opsHandler.ListRequestErrors)
+		adminGroup.GET("/ops/request-errors/:id", guard(rbac.PermOpsView), opsHandler.GetRequestErrorDetail)
+		adminGroup.GET("/ops/upstream-errors", guard(rbac.PermOpsView), opsHandler.ListUpstreamErrors)
+		adminGroup.GET("/ops/concurrency", guard(rbac.PermOpsView), opsHandler.GetConcurrencyStats)
+		adminGroup.GET("/ops/switch-rate-trend", guard(rbac.PermOpsView), opsHandler.GetSwitchRateTrend)
+		adminGroup.GET("/ops/throughput-trend", guard(rbac.PermOpsView), opsHandler.GetThroughputTrend)
 
 		// 运维看板 v2：告警规则 / 事件 / 静默
-		adminGroup.GET("/ops/alert-rules", opsHandler.ListAlertRules)
-		adminGroup.POST("/ops/alert-rules", opsHandler.CreateAlertRule)
-		adminGroup.PUT("/ops/alert-rules/:id", opsHandler.UpdateAlertRule)
-		adminGroup.DELETE("/ops/alert-rules/:id", opsHandler.DeleteAlertRule)
-		adminGroup.GET("/ops/alert-events", opsHandler.ListAlertEvents)
-		adminGroup.GET("/ops/alert-events/:id", opsHandler.GetAlertEvent)
-		adminGroup.PUT("/ops/alert-events/:id/status", opsHandler.UpdateAlertEventStatus)
-		adminGroup.POST("/ops/alert-silences", opsHandler.CreateAlertSilence)
+		adminGroup.GET("/ops/alert-rules", guard(rbac.PermOpsView), opsHandler.ListAlertRules)
+		adminGroup.POST("/ops/alert-rules", guard(rbac.PermOpsView), opsHandler.CreateAlertRule)
+		adminGroup.PUT("/ops/alert-rules/:id", guard(rbac.PermOpsView), opsHandler.UpdateAlertRule)
+		adminGroup.DELETE("/ops/alert-rules/:id", guard(rbac.PermOpsView), opsHandler.DeleteAlertRule)
+		adminGroup.GET("/ops/alert-events", guard(rbac.PermOpsView), opsHandler.ListAlertEvents)
+		adminGroup.GET("/ops/alert-events/:id", guard(rbac.PermOpsView), opsHandler.GetAlertEvent)
+		adminGroup.PUT("/ops/alert-events/:id/status", guard(rbac.PermOpsView), opsHandler.UpdateAlertEventStatus)
+		adminGroup.POST("/ops/alert-silences", guard(rbac.PermOpsView), opsHandler.CreateAlertSilence)
 
 		// 运维看板 v2：系统日志
-		adminGroup.GET("/ops/system-logs", opsHandler.ListSystemLogs)
-		adminGroup.GET("/ops/system-logs/health", opsHandler.GetSystemLogSinkHealth)
-		adminGroup.POST("/ops/system-logs/cleanup", opsHandler.CleanupSystemLogs)
+		adminGroup.GET("/ops/system-logs", guard(rbac.PermOpsView), opsHandler.ListSystemLogs)
+		adminGroup.GET("/ops/system-logs/health", guard(rbac.PermOpsView), opsHandler.GetSystemLogSinkHealth)
+		adminGroup.POST("/ops/system-logs/cleanup", guard(rbac.PermOpsView), opsHandler.CleanupSystemLogs)
 
 		// 运维看板 v2：运行时日志配置
-		adminGroup.GET("/ops/runtime/logging", opsHandler.GetRuntimeLogConfig)
-		adminGroup.PUT("/ops/runtime/logging", opsHandler.UpdateRuntimeLogConfig)
-		adminGroup.POST("/ops/runtime/logging/reset", opsHandler.ResetRuntimeLogConfig)
+		adminGroup.GET("/ops/runtime/logging", guard(rbac.PermOpsView), opsHandler.GetRuntimeLogConfig)
+		adminGroup.PUT("/ops/runtime/logging", guard(rbac.PermOpsView), opsHandler.UpdateRuntimeLogConfig)
+		adminGroup.POST("/ops/runtime/logging/reset", guard(rbac.PermOpsView), opsHandler.ResetRuntimeLogConfig)
 
 		// 运维看板 v2：Token 统计
-		adminGroup.GET("/ops/token-stats", opsHandler.GetTokenStats)
+		adminGroup.GET("/ops/token-stats", guard(rbac.PermOpsView), opsHandler.GetTokenStats)
 
 		// 运维看板 v2：阈值 & 看板设置
-		adminGroup.GET("/ops/settings/metric-thresholds", opsHandler.GetMetricThresholds)
-		adminGroup.PUT("/ops/settings/metric-thresholds", opsHandler.UpdateMetricThresholds)
-		adminGroup.GET("/ops/settings/dashboard", opsHandler.GetDashboardSettings)
-		adminGroup.PUT("/ops/settings/dashboard", opsHandler.UpdateDashboardSettings)
-		adminGroup.GET("/ops/settings/advanced", opsHandler.GetAdvancedSettings)
-		adminGroup.PUT("/ops/settings/advanced", opsHandler.UpdateAdvancedSettings)
+		adminGroup.GET("/ops/settings/metric-thresholds", guard(rbac.PermOpsView), opsHandler.GetMetricThresholds)
+		adminGroup.PUT("/ops/settings/metric-thresholds", guard(rbac.PermOpsView), opsHandler.UpdateMetricThresholds)
+		adminGroup.GET("/ops/settings/dashboard", guard(rbac.PermOpsView), opsHandler.GetDashboardSettings)
+		adminGroup.PUT("/ops/settings/dashboard", guard(rbac.PermOpsView), opsHandler.UpdateDashboardSettings)
+		adminGroup.GET("/ops/settings/advanced", guard(rbac.PermOpsView), opsHandler.GetAdvancedSettings)
+		adminGroup.PUT("/ops/settings/advanced", guard(rbac.PermOpsView), opsHandler.UpdateAdvancedSettings)
 
 		// 运维看板 v2：用户并发 & 账户可用性 & 实时流量 & 请求错误关联
-		adminGroup.GET("/ops/user-concurrency", opsHandler.GetUserConcurrency)
-		adminGroup.GET("/ops/account-availability", opsHandler.GetAccountAvailability)
-		adminGroup.GET("/ops/realtime-traffic", opsHandler.GetRealtimeTraffic)
-		adminGroup.GET("/ops/request-errors/:id/correlation", opsHandler.GetRequestErrorCorrelation)
-		adminGroup.GET("/ops/upstream-errors/:id", opsHandler.GetUpstreamErrorDetail)
+		adminGroup.GET("/ops/user-concurrency", guard(rbac.PermOpsView), opsHandler.GetUserConcurrency)
+		adminGroup.GET("/ops/account-availability", guard(rbac.PermOpsView), opsHandler.GetAccountAvailability)
+		adminGroup.GET("/ops/realtime-traffic", guard(rbac.PermOpsView), opsHandler.GetRealtimeTraffic)
+		adminGroup.GET("/ops/request-errors/:id/correlation", guard(rbac.PermOpsView), opsHandler.GetRequestErrorCorrelation)
+		adminGroup.GET("/ops/upstream-errors/:id", guard(rbac.PermOpsView), opsHandler.GetUpstreamErrorDetail)
 
 		// 运维看板 v2：后台任务
-		adminGroup.GET("/ops/jobs", opsHandler.ListJobs)
+		adminGroup.GET("/ops/jobs", guard(rbac.PermOpsView), opsHandler.ListJobs)
 
 		// 运维看板 v3：邮件通知配置
-		adminGroup.GET("/ops/settings/email-notification", opsHandler.GetEmailNotificationConfig)
-		adminGroup.PUT("/ops/settings/email-notification", opsHandler.UpdateEmailNotificationConfig)
-		adminGroup.POST("/ops/settings/email-notification/test", opsHandler.SendTestAlertEmail)
+		adminGroup.GET("/ops/settings/email-notification", guard(rbac.PermOpsView), opsHandler.GetEmailNotificationConfig)
+		adminGroup.PUT("/ops/settings/email-notification", guard(rbac.PermOpsView), opsHandler.UpdateEmailNotificationConfig)
+		adminGroup.POST("/ops/settings/email-notification/test", guard(rbac.PermOpsView), opsHandler.SendTestAlertEmail)
 
 		// 运维看板 v3：告警运行时设置
-		adminGroup.GET("/ops/settings/alert-runtime", opsHandler.GetAlertRuntimeSettings)
-		adminGroup.PUT("/ops/settings/alert-runtime", opsHandler.UpdateAlertRuntimeSettings)
+		adminGroup.GET("/ops/settings/alert-runtime", guard(rbac.PermOpsView), opsHandler.GetAlertRuntimeSettings)
+		adminGroup.PUT("/ops/settings/alert-runtime", guard(rbac.PermOpsView), opsHandler.UpdateAlertRuntimeSettings)
 
 		// 运维看板 v3：错误日志增强视图
-		adminGroup.GET("/ops/error-logs", opsHandler.ListErrorLogs)
-		adminGroup.PUT("/ops/error-logs/:id/resolve", opsHandler.ResolveErrorLog)
-		adminGroup.PUT("/ops/request-errors/:id/resolve", opsHandler.ResolveRequestError)
-		adminGroup.PUT("/ops/upstream-errors/:id/resolve", opsHandler.ResolveUpstreamError)
+		adminGroup.GET("/ops/error-logs", guard(rbac.PermOpsView), opsHandler.ListErrorLogs)
+		adminGroup.PUT("/ops/error-logs/:id/resolve", guard(rbac.PermOpsView), opsHandler.ResolveErrorLog)
+		adminGroup.PUT("/ops/request-errors/:id/resolve", guard(rbac.PermOpsView), opsHandler.ResolveRequestError)
+		adminGroup.PUT("/ops/upstream-errors/:id/resolve", guard(rbac.PermOpsView), opsHandler.ResolveUpstreamError)
 
 		// 视频任务统计（Ops Dashboard 视频指标卡片）
 		adminGroup.GET("/ops/video-tasks/stats", guard(rbac.PermUsageViewScoped), videoTaskHandler.Stats)
@@ -659,68 +662,68 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/video/tasks/:id", guard(rbac.PermUsageViewScoped), videoTaskHandler.Get)
 
 		// 模型状态变更日志
-		adminGroup.GET("/model-status-logs", modelStatusLogHandler.ListModelStatusLogs)
+		adminGroup.GET("/model-status-logs", guard(rbac.PermModelManage), modelStatusLogHandler.ListModelStatusLogs)
 
 		// 模型 Catalog（注意：source_model_id 含 '/'，通过 query 入口而非路径参数访问）
 		adminGroup.GET("/model-catalog/search", catalogHandler.Search)
 
 		// API Key 管理
-		adminGroup.POST("/keys", keyHandler.CreateKey)
-		adminGroup.GET("/keys", keyHandler.ListKeys)
-		adminGroup.GET("/keys/:id", keyHandler.GetKey)
-		adminGroup.PATCH("/keys/:id/disable", keyHandler.DisableKey)
-		adminGroup.PATCH("/keys/:id/enable", keyHandler.EnableKey)
-		adminGroup.DELETE("/keys/:id", keyHandler.DeleteKey)
-		adminGroup.POST("/keys/:id/reset", keyHandler.ResetKey)
-		adminGroup.POST("/keys/:id/reveal", keyHandler.RevealKey)
-		adminGroup.GET("/keys/:id/groups", keyHandler.ListKeyGroups)
-		adminGroup.POST("/keys/:id/groups", keyHandler.UpdateKeyGroups)
-		adminGroup.POST("/keys/:id/access-all-groups", keyHandler.ToggleAccessAllGroups)
-		adminGroup.PATCH("/keys/:id/log-enabled", keyHandler.ToggleLogEnabled)
-		adminGroup.GET("/groups/available", keyHandler.ListAvailableGroups)
+		adminGroup.POST("/keys", guard(rbac.PermKeyManage), keyHandler.CreateKey)
+		adminGroup.GET("/keys", guard(rbac.PermKeyManage), keyHandler.ListKeys)
+		adminGroup.GET("/keys/:id", guard(rbac.PermKeyManage), keyHandler.GetKey)
+		adminGroup.PATCH("/keys/:id/disable", guard(rbac.PermKeyManage), keyHandler.DisableKey)
+		adminGroup.PATCH("/keys/:id/enable", guard(rbac.PermKeyManage), keyHandler.EnableKey)
+		adminGroup.DELETE("/keys/:id", guard(rbac.PermKeyManage), keyHandler.DeleteKey)
+		adminGroup.POST("/keys/:id/reset", guard(rbac.PermKeyManage), keyHandler.ResetKey)
+		adminGroup.POST("/keys/:id/reveal", guard(rbac.PermKeyManage), keyHandler.RevealKey)
+		adminGroup.GET("/keys/:id/groups", guard(rbac.PermKeyManage), keyHandler.ListKeyGroups)
+		adminGroup.POST("/keys/:id/groups", guard(rbac.PermKeyManage), keyHandler.UpdateKeyGroups)
+		adminGroup.POST("/keys/:id/access-all-groups", guard(rbac.PermKeyManage), keyHandler.ToggleAccessAllGroups)
+		adminGroup.PATCH("/keys/:id/log-enabled", guard(rbac.PermKeyManage), keyHandler.ToggleLogEnabled)
+		adminGroup.GET("/groups/available", guard(rbac.PermKeyManage), keyHandler.ListAvailableGroups)
 
-		// OpenCode 配置（token 生成 + 状态轮询）
-		adminGroup.POST("/keys/:id/opencode-config/token", opencodeConfigHandler.GenerateToken)
-		adminGroup.GET("/keys/:id/opencode-config/status", opencodeConfigHandler.GetStatus)
-		adminGroup.GET("/model-catalog/by-source", catalogHandler.GetBySource)
-		adminGroup.POST("/model-catalog/sync", catalogHandler.Sync)
-		adminGroup.GET("/model-catalog/diff", catalogHandler.Diff)
-		adminGroup.POST("/model-catalog/apply-diff", catalogHandler.ApplyDiff)
-		adminGroup.POST("/model-catalog/auto-bind", catalogHandler.AutoBind)
-		adminGroup.GET("/model-catalog/binding-stats", catalogHandler.BindingStats)
-		adminGroup.GET("/model-catalog/sync-status", catalogHandler.SyncStatus)
+		// OpenCode 配置（token 生成 + 状态轮询，作用于具体 key）
+		adminGroup.POST("/keys/:id/opencode-config/token", guard(rbac.PermKeyManage), opencodeConfigHandler.GenerateToken)
+		adminGroup.GET("/keys/:id/opencode-config/status", guard(rbac.PermKeyManage), opencodeConfigHandler.GetStatus)
+		adminGroup.GET("/model-catalog/by-source", guard(rbac.PermModelCatalogManage), catalogHandler.GetBySource)
+		adminGroup.POST("/model-catalog/sync", guard(rbac.PermModelCatalogManage), catalogHandler.Sync)
+		adminGroup.GET("/model-catalog/diff", guard(rbac.PermModelCatalogManage), catalogHandler.Diff)
+		adminGroup.POST("/model-catalog/apply-diff", guard(rbac.PermModelCatalogManage), catalogHandler.ApplyDiff)
+		adminGroup.POST("/model-catalog/auto-bind", guard(rbac.PermModelCatalogManage), catalogHandler.AutoBind)
+		adminGroup.GET("/model-catalog/binding-stats", guard(rbac.PermModelCatalogManage), catalogHandler.BindingStats)
+		adminGroup.GET("/model-catalog/sync-status", guard(rbac.PermModelCatalogManage), catalogHandler.SyncStatus)
 		// :id（UUID）放最后，避免吃掉前面的静态路径
-		adminGroup.GET("/model-catalog/:id", catalogHandler.GetByID)
+		adminGroup.GET("/model-catalog/:id", guard(rbac.PermModelCatalogManage), catalogHandler.GetByID)
 
 		// 模型分组管理
-		adminGroup.POST("/groups/check-all", groupCheckHandler.CheckAll)
-		adminGroup.POST("/groups", groupHandler.Create)
-		adminGroup.GET("/groups", groupHandler.List)
-		adminGroup.GET("/groups/:id", groupHandler.GetByID)
-		adminGroup.PUT("/groups/:id", groupHandler.Update)
-		adminGroup.DELETE("/groups/:id", groupHandler.Delete)
-		adminGroup.POST("/groups/:id/models", groupHandler.AddModels)
-		adminGroup.GET("/groups/:id/models", groupHandler.ListModels)
-		adminGroup.DELETE("/groups/:id/models/:model_id", groupHandler.RemoveModel)
-		adminGroup.POST("/groups/:id/reset-capability", groupHandler.ResetCapability)
-		adminGroup.POST("/groups/:id/check", groupCheckHandler.CheckOne)
+		adminGroup.POST("/groups/check-all", guard(rbac.PermGroupManage), groupCheckHandler.CheckAll)
+		adminGroup.POST("/groups", guard(rbac.PermGroupManage), groupHandler.Create)
+		adminGroup.GET("/groups", guard(rbac.PermGroupManage), groupHandler.List)
+		adminGroup.GET("/groups/:id", guard(rbac.PermGroupManage), groupHandler.GetByID)
+		adminGroup.PUT("/groups/:id", guard(rbac.PermGroupManage), groupHandler.Update)
+		adminGroup.DELETE("/groups/:id", guard(rbac.PermGroupManage), groupHandler.Delete)
+		adminGroup.POST("/groups/:id/models", guard(rbac.PermGroupManage), groupHandler.AddModels)
+		adminGroup.GET("/groups/:id/models", guard(rbac.PermGroupManage), groupHandler.ListModels)
+		adminGroup.DELETE("/groups/:id/models/:model_id", guard(rbac.PermGroupManage), groupHandler.RemoveModel)
+		adminGroup.POST("/groups/:id/reset-capability", guard(rbac.PermGroupManage), groupHandler.ResetCapability)
+		adminGroup.POST("/groups/:id/check", guard(rbac.PermGroupManage), groupCheckHandler.CheckOne)
 
 		// 系统设置
-		adminGroup.GET("/settings", settingsHandler.GetSystemSettings)
-		adminGroup.PUT("/settings", settingsHandler.UpdateSettings)
-		adminGroup.POST("/settings/test-webhook", settingsHandler.TestWebhook)
-		adminGroup.POST("/settings/test-email", settingsHandler.TestEmail)
-		adminGroup.POST("/settings/export", settingsHandler.ExportSettings)
-		adminGroup.POST("/settings/import", settingsHandler.ImportSettings)
+		adminGroup.GET("/settings", guard(rbac.PermSettingsManage), settingsHandler.GetSystemSettings)
+		adminGroup.PUT("/settings", guard(rbac.PermSettingsManage), settingsHandler.UpdateSettings)
+		adminGroup.POST("/settings/test-webhook", guard(rbac.PermSettingsManage), settingsHandler.TestWebhook)
+		adminGroup.POST("/settings/test-email", guard(rbac.PermSettingsManage), settingsHandler.TestEmail)
+		adminGroup.POST("/settings/export", guard(rbac.PermSettingsManage), settingsHandler.ExportSettings)
+		adminGroup.POST("/settings/import", guard(rbac.PermSettingsManage), settingsHandler.ImportSettings)
 
-		// 公告管理
+		// 公告管理（读/标记已读对所有登录用户开放，写操作仅 admin）
 		adminGroup.GET("/announcements", announcementHandler.List)
-		adminGroup.POST("/announcements", announcementHandler.Create)
+		adminGroup.POST("/announcements", guard(rbac.PermAnnouncementManage), announcementHandler.Create)
 		adminGroup.GET("/announcements/:id", announcementHandler.GetByID)
-		adminGroup.PUT("/announcements/:id", announcementHandler.Update)
-		adminGroup.DELETE("/announcements/:id", announcementHandler.Delete)
-		adminGroup.PATCH("/announcements/:id/publish", announcementHandler.Publish)
-		adminGroup.PATCH("/announcements/:id/archive", announcementHandler.Archive)
+		adminGroup.PUT("/announcements/:id", guard(rbac.PermAnnouncementManage), announcementHandler.Update)
+		adminGroup.DELETE("/announcements/:id", guard(rbac.PermAnnouncementManage), announcementHandler.Delete)
+		adminGroup.PATCH("/announcements/:id/publish", guard(rbac.PermAnnouncementManage), announcementHandler.Publish)
+		adminGroup.PATCH("/announcements/:id/archive", guard(rbac.PermAnnouncementManage), announcementHandler.Archive)
 		adminGroup.POST("/announcements/:id/read", announcementHandler.MarkRead)
 		adminGroup.GET("/announcements/unread", announcementHandler.GetUnread)
 		adminGroup.GET("/announcements/unread/count", announcementHandler.GetUnreadCount)
@@ -737,11 +740,11 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		usageSvc := obssvc.NewRollupService(db)
 		usageH := obshandler.NewUsageHandler(usageSvc, db)
 		usageH.SetRedis(rdb)
-		adminGroup.GET("/usage/logs", usageH.Logs)
-		adminGroup.GET("/usage/logs/:request_id/trace", usageH.Trace)
-		adminGroup.GET("/usage/options", usageH.Options)
-		adminGroup.GET("/usage", usageH.Query)
-		adminGroup.GET("/usage-logs", usageH.Logs)
+		adminGroup.GET("/usage/logs", guard(rbac.PermUsageViewAll), usageH.Logs)
+		adminGroup.GET("/usage/logs/:request_id/trace", guard(rbac.PermUsageViewAll), usageH.Trace)
+		adminGroup.GET("/usage/options", guard(rbac.PermUsageViewAll), usageH.Options)
+		adminGroup.GET("/usage", guard(rbac.PermUsageViewAll), usageH.Query)
+		adminGroup.GET("/usage-logs", guard(rbac.PermUsageViewAll), usageH.Logs)
 		// 个人用量查询（按登录用户 user_id 隔离）
 		adminGroup.GET("/my/keys", keyHandler.MyKeys)
 		adminGroup.GET("/my/usage", usageH.MyQuery)
@@ -859,24 +862,24 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/key-requests/history", guard(rbac.PermKeyRequestApprove), keyRequestHandler.ListHistory)
 		adminGroup.POST("/key-requests/:id/cancel", keyRequestHandler.CancelMine)
 		adminGroup.POST("/key-requests/:id/decision", guard(rbac.PermKeyRequestApprove), keyRequestHandler.Decide)
-		// 部门 Key 创建策略配置
-		adminGroup.GET("/dept-policies/:dept_id/key-creation", keyRequestHandler.GetDeptPolicy)
+		// 部门 Key 创建策略配置（读写均走管理角色权限）
+		adminGroup.GET("/dept-policies/:dept_id/key-creation", guard(rbac.PermKeyRequestSetPolicy), keyRequestHandler.GetDeptPolicy)
 		adminGroup.PUT("/dept-policies/:dept_id/key-creation", guard(rbac.PermKeyRequestSetPolicy), keyRequestHandler.SetDeptPolicy)
 
 		// Channel Monitor 管理路由
-		adminGroup.GET("/channel-monitors", channelMonitorHandler.List)
-		adminGroup.POST("/channel-monitors", channelMonitorHandler.Create)
-		adminGroup.GET("/channel-monitors/:id", channelMonitorHandler.Get)
-		adminGroup.PUT("/channel-monitors/:id", channelMonitorHandler.Update)
-		adminGroup.DELETE("/channel-monitors/:id", channelMonitorHandler.Delete)
-		adminGroup.POST("/channel-monitors/:id/run", channelMonitorHandler.RunCheck)
-		adminGroup.GET("/channel-monitors/:id/history", channelMonitorHandler.GetHistory)
+		adminGroup.GET("/channel-monitors", guard(rbac.PermChannelMonitorManage), channelMonitorHandler.List)
+		adminGroup.POST("/channel-monitors", guard(rbac.PermChannelMonitorManage), channelMonitorHandler.Create)
+		adminGroup.GET("/channel-monitors/:id", guard(rbac.PermChannelMonitorManage), channelMonitorHandler.Get)
+		adminGroup.PUT("/channel-monitors/:id", guard(rbac.PermChannelMonitorManage), channelMonitorHandler.Update)
+		adminGroup.DELETE("/channel-monitors/:id", guard(rbac.PermChannelMonitorManage), channelMonitorHandler.Delete)
+		adminGroup.POST("/channel-monitors/:id/run", guard(rbac.PermChannelMonitorManage), channelMonitorHandler.RunCheck)
+		adminGroup.GET("/channel-monitors/:id/history", guard(rbac.PermChannelMonitorManage), channelMonitorHandler.GetHistory)
 		// Channel Monitor 请求模板
-		adminGroup.GET("/channel-monitor-templates", channelMonitorHandler.ListTemplates)
-		adminGroup.POST("/channel-monitor-templates", channelMonitorHandler.CreateTemplate)
-		adminGroup.GET("/channel-monitor-templates/:id", channelMonitorHandler.GetTemplate)
-		adminGroup.PUT("/channel-monitor-templates/:id", channelMonitorHandler.UpdateTemplate)
-		adminGroup.DELETE("/channel-monitor-templates/:id", channelMonitorHandler.DeleteTemplate)
+		adminGroup.GET("/channel-monitor-templates", guard(rbac.PermChannelMonitorManage), channelMonitorHandler.ListTemplates)
+		adminGroup.POST("/channel-monitor-templates", guard(rbac.PermChannelMonitorManage), channelMonitorHandler.CreateTemplate)
+		adminGroup.GET("/channel-monitor-templates/:id", guard(rbac.PermChannelMonitorManage), channelMonitorHandler.GetTemplate)
+		adminGroup.PUT("/channel-monitor-templates/:id", guard(rbac.PermChannelMonitorManage), channelMonitorHandler.UpdateTemplate)
+		adminGroup.DELETE("/channel-monitor-templates/:id", guard(rbac.PermChannelMonitorManage), channelMonitorHandler.DeleteTemplate)
 	}
 
 	// 员工自助查询预算（JWTAuth 即可，不需要 admin）
@@ -950,14 +953,14 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 
 		// ── 成员（管理角色可查，部门范围由 Policy 过滤）─────────────────────
 		orgGroup.GET("/departments/:dept_id/members", guard(rbac.PermMemberView), orgH.GetDeptMembers)
-		orgGroup.GET("/users", orgH.SearchUsers) // 用户搜索，无额外权限约束
+		orgGroup.GET("/users", guard(rbac.PermOrgUserSearch), orgH.SearchUsers) // 用户搜索（任意管理角色）
 
 		// ── 角色管理 ─────────────────────────────────────────────────────────
 		orgGroup.GET("/all-roles", guard(rbac.PermRoleList), orgH.ListAllRoles)
 		orgGroup.POST("/roles/grant", guard(rbac.PermRoleGrant), roleH.GrantRole)
 		orgGroup.POST("/roles/revoke", guard(rbac.PermRoleRevoke), roleH.RevokeRole)
 		orgGroup.GET("/roles/me", roleH.GetMyRoles) // 当前用户 org 角色（/me 须在 /:user_id 前）
-		orgGroup.GET("/roles/:user_id", roleH.GetUserRoles)
+		orgGroup.GET("/roles/:user_id", guard(rbac.PermRoleView), roleH.GetUserRoles)
 
 		// ── 员工花名册导入（仅 admin）────────────────────────────────────────
 		orgGroup.POST("/employees/import", guard(rbac.PermEmployeeImport), empImportH.Import)

@@ -455,11 +455,15 @@ func (h *Handler) Refresh(c *gin.Context) {
 		return
 	}
 
-	// Refresh 时重新查库获取最新的 dept/studio 信息，
-	// 避免 org 变动后 token 里的 studio_id 仍为旧值导致 OrgCheck 403。
+	// Refresh 时重新查库获取最新的 dept/studio/role 信息，
+	// 避免 org 变动后 token 里的 studio_id 仍为旧值导致 OrgCheck 403，
+	// 也避免被卸任的 admin 通过 refresh 续期保权（role 一律以服务端 users 表为准）。
 	name, email, passport := claims.Name, claims.Email, claims.Passport
 	deptID, deptName, studioID, studioName := claims.DeptID, claims.DeptName, claims.StudioID, claims.StudioName
+	role := "user"
 	if claims.UserID != "" {
+		// 从 users 表刷新 role；未命中（如 dev_users 本地账号无 users 行）回退为 "user"，绝不复用旧 claim
+		role = h.userRoleInfo(c.Request.Context(), claims.UserID)
 		// 从 users 表刷新 name/email/sub（SSO 用户）；dev_users 用户回退到 claims
 		if freshName, freshEmail, freshPassport := h.userIdentityInfo(c.Request.Context(), claims.UserID); freshName != "" {
 			name, email, passport = freshName, freshEmail, freshPassport
@@ -480,12 +484,12 @@ func (h *Handler) Refresh(c *gin.Context) {
 		}
 	}
 
-	accessToken, err := GenerateAccessToken(h.config.JWTSecret, h.config.AccessTokenTTL, claims.UserID, deptID, deptName, studioID, studioName, email, name, passport, claims.Role)
+	accessToken, err := GenerateAccessToken(h.config.JWTSecret, h.config.AccessTokenTTL, claims.UserID, deptID, deptName, studioID, studioName, email, name, passport, role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "token generation failed", "code": "internal_error"}})
 		return
 	}
-	refreshToken, err := GenerateRefreshToken(h.config.JWTSecret, claims.UserID, claims.Role, name, email, passport)
+	refreshToken, err := GenerateRefreshToken(h.config.JWTSecret, claims.UserID, role, name, email, passport)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "token generation failed", "code": "internal_error"}})
 		return
@@ -595,6 +599,26 @@ func (h *Handler) userDeptInfo(ctx context.Context, userID string) (deptID, dept
 		LIMIT 1
 	`, userID).Scan(&row)
 	return row.DeptID, row.DeptName
+}
+
+// userRoleInfo 通过 user_id 查询用户当前在 users 表中的 role，是 JWT role claim 的唯一权威来源。
+// 用于 Refresh Token 时刷新 JWT 里的 role，确保被卸任的 admin（users.role 已降级/删除）无法通过
+// refresh 续期保权。未命中（例如 dev_users 本地账号没有 users 行）时回退为 "user"，
+// 绝不回退到 refresh token 中自证的旧 role claim。
+func (h *Handler) userRoleInfo(ctx context.Context, userID string) string {
+	var row struct {
+		Role string `gorm:"column:role"`
+	}
+	h.db.WithContext(ctx).Raw(`
+		SELECT COALESCE(role, '') AS role
+		FROM users
+		WHERE id::text = ?
+		LIMIT 1
+	`, userID).Scan(&row)
+	if row.Role != "" {
+		return row.Role
+	}
+	return "user"
 }
 
 func generateState() string {

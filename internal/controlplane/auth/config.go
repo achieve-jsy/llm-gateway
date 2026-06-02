@@ -4,6 +4,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/example/llm-gateway/internal/controlplane/middleware"
 )
 
 // Config holds OAuth2/OIDC configuration for DaQun SSO
@@ -39,7 +41,9 @@ func LoadConfig() *Config {
 		ClientSecret:   os.Getenv("OAUTH_CLIENT_SECRET"),
 		RedirectURI:    os.Getenv("OAUTH_REDIRECT_URI"),
 		Scopes:         splitScopes(scopes),
-		JWTSecret:      getEnvOrDefault("JWT_SECRET", "change-me-in-production"),
+		// JWT 签名/校验密钥：与 middleware.JWTAuth 同源，仅从 env JWT_SECRET 解析；
+		// 未配置或命中已知默认值时返回 ""，系统 fail-closed（不再签发/接受弱密钥 token）。
+		JWTSecret:      middleware.ResolveJWTSecret(),
 		FrontendURL:    getEnvOrDefault("FRONTEND_URL", "http://localhost:5173"),
 		AccessTokenTTL: getEnvDuration("JWT_ACCESS_TOKEN_TTL_MINUTES", 480),
 	}

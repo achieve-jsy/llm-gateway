@@ -177,8 +177,12 @@ func TestJWTAuth_ResponseBody(t *testing.T) {
 }
 
 func TestInternalAuth(t *testing.T) {
-	// 内部服务间 Token 认证中间件的完整测试集合
+	// 内部服务间 Token 认证中间件的完整测试集合。
+	// 安全语义（fail-closed）：仅当请求 token 与 env INTERNAL_TOKEN 常量时间比对一致才放行，
+	// 任意非空 token 不再被视为合法（修复前的旧行为）。
 	gin.SetMode(gin.TestMode)
+
+	const expectedToken = "test-internal-token-abc"
 
 	tests := []struct {
 		name                string
@@ -189,20 +193,20 @@ func TestInternalAuth(t *testing.T) {
 		wantInternalToken   string // 期望 context 中的 internal_token 值
 	}{
 		{
-			name:                "X-Internal-Token 存在",
-			description:         "设置了 X-Internal-Token header，中间件应放行并通过 context 透传 token",
-			xInternalToken:      "my-internal-token-123",
+			name:                "X-Internal-Token 匹配",
+			description:         "X-Internal-Token 与 INTERNAL_TOKEN 一致，中间件应放行并通过 context 透传 token",
+			xInternalToken:      expectedToken,
 			authorizationBearer: "",
 			wantStatus:          http.StatusOK,
-			wantInternalToken:   "my-internal-token-123",
+			wantInternalToken:   expectedToken,
 		},
 		{
-			name:                "Authorization Bearer 存在",
-			description:         "未设 X-Internal-Token 但设置了 Authorization: Bearer，中间件应降级读取 Bearer token",
+			name:                "Authorization Bearer 匹配",
+			description:         "未设 X-Internal-Token 但 Authorization: Bearer 与 INTERNAL_TOKEN 一致，中间件应降级读取 Bearer 并放行",
 			xInternalToken:      "",
-			authorizationBearer: "bearer-token-from-auth",
+			authorizationBearer: expectedToken,
 			wantStatus:          http.StatusOK,
-			wantInternalToken:   "bearer-token-from-auth",
+			wantInternalToken:   expectedToken,
 		},
 		{
 			name:                "两种 header 均不存在",
@@ -213,19 +217,18 @@ func TestInternalAuth(t *testing.T) {
 		},
 		{
 			name:                "优先使用 X-Internal-Token",
-			description:         "同时设置了 X-Internal-Token 和 Authorization: Bearer，中间件应优先采用 X-Internal-Token",
-			xInternalToken:      "x-token-wins",
-			authorizationBearer: "bearer-loses",
+			description:         "X-Internal-Token 匹配但 Authorization Bearer 不匹配，中间件应优先采用 X-Internal-Token 并放行",
+			xInternalToken:      expectedToken,
+			authorizationBearer: "wrong-bearer",
 			wantStatus:          http.StatusOK,
-			wantInternalToken:   "x-token-wins",
+			wantInternalToken:   expectedToken,
 		},
 		{
-			name:                "X-Internal-Token 为空字符串",
-			description:         "X-Internal-Token header 存在但值为空，中间件应降级读取 Authorization Bearer",
-			xInternalToken:      "",
-			authorizationBearer: "fallback-bearer",
-			wantStatus:          http.StatusOK,
-			wantInternalToken:   "fallback-bearer",
+			name:                "token 不匹配",
+			description:         "提供的 X-Internal-Token 与 INTERNAL_TOKEN 不一致，中间件应返回 403（安全核心：不再信任任意非空 token）",
+			xInternalToken:      "wrong-token",
+			authorizationBearer: "",
+			wantStatus:          http.StatusForbidden,
 		},
 		{
 			name:                "两种 header 均存在但值为空",
@@ -238,6 +241,8 @@ func TestInternalAuth(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("INTERNAL_TOKEN", expectedToken)
+
 			var capturedInternalToken string
 			router := gin.New()
 			router.Use(cpmiddleware.InternalAuth())
@@ -249,7 +254,7 @@ func TestInternalAuth(t *testing.T) {
 			w := httptest.NewRecorder()
 			req, _ := http.NewRequest("GET", "/test", nil)
 
-			if tt.xInternalToken != "" || tt.name == "X-Internal-Token 为空字符串" {
+			if tt.xInternalToken != "" {
 				req.Header.Set("X-Internal-Token", tt.xInternalToken)
 			}
 			if tt.authorizationBearer != "" {
@@ -322,33 +327,41 @@ func TestJWTAuth_AdminTokenInContext(t *testing.T) {
 	assert.Equal(t, tokenString, capturedAdminToken, "admin_token 应等于原始 token 字符串")
 }
 
-// TestJWTAuth_DefaultSecret 验证未设 JWT_SECRET 环境变量时使用默认密钥
-func TestJWTAuth_DefaultSecret(t *testing.T) {
-	// 测试目的：JWT_SECRET 未设置时，中间件应使用默认值 "change-me-in-production"
+// TestJWTAuth_DefaultSecretFailClosed 验证 fail-closed：JWT_SECRET 未配置或命中已知弱默认值时，
+// 即使攻击者用公开默认值伪造 token，JWTAuth 也必须拒绝（401）。
+func TestJWTAuth_DefaultSecretFailClosed(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	// 确保环境变量未被设置
-	t.Setenv("JWT_SECRET", "")
-
-	// 使用默认密钥签名
-	validToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"user_id": "default-secret-user",
-	})
-	tokenString, err := validToken.SignedString([]byte("change-me-in-production"))
+	// 用已知弱默认密钥签名，模拟攻击者伪造的 admin token
+	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"user_id": "forged-admin"})
+	tokenString, err := tok.SignedString([]byte("change-me-in-production"))
 	require.NoError(t, err)
 
-	router := gin.New()
-	router.Use(cpmiddleware.JWTAuth())
-	router.GET("/test", func(c *gin.Context) {
-		c.Status(http.StatusOK)
-	})
+	for _, tc := range []struct {
+		name   string
+		secret string
+	}{
+		{name: "JWT_SECRET 未设置", secret: ""},
+		{name: "JWT_SECRET 命中生产默认值", secret: "change-me-in-production"},
+		{name: "JWT_SECRET 命中 dev 默认值", secret: "CHANGE_ME_JWT_SECRET"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("JWT_SECRET", tc.secret)
 
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/test", nil)
-	req.Header.Set("Authorization", "Bearer "+tokenString)
-	router.ServeHTTP(w, req)
+			router := gin.New()
+			router.Use(cpmiddleware.JWTAuth())
+			router.GET("/test", func(c *gin.Context) {
+				c.Status(http.StatusOK)
+			})
 
-	assert.Equal(t, http.StatusOK, w.Code, "使用默认密钥签名的 token 应通过认证")
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", "/test", nil)
+			req.Header.Set("Authorization", "Bearer "+tokenString)
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusUnauthorized, w.Code, "弱默认密钥签发的 token 必须被 fail-closed 拒绝")
+		})
+	}
 }
 
 // init 确保测试运行前设置 Gin 为 TestMode（兜底）

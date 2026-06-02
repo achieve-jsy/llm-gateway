@@ -33,6 +33,10 @@ type Group struct {
 	OverrideSupportsVision  bool   `gorm:"not null;default:false" json:"override_supports_vision"`
 	OverrideSupportsFC      bool   `gorm:"not null;default:false;column:override_supports_function_calling" json:"override_supports_function_calling"`
 	OverrideSupportsTC      bool   `gorm:"not null;default:false;column:override_supports_tool_choice" json:"override_supports_tool_choice"`
+	// mode/context/output 覆盖（空或 NULL = 继承成员聚合值）
+	OverrideMode            string `gorm:"column:override_mode;type:varchar(50);default:null" json:"override_mode,omitempty"`
+	OverrideContextLength   *int   `gorm:"column:override_context_length;default:null" json:"override_context_length,omitempty"`
+	OverrideMaxOutputTokens *int   `gorm:"column:override_max_output_tokens;default:null" json:"override_max_output_tokens,omitempty"`
 	// 四层配额体系（Phase 1）
 	// NULL = 不限，运行时按主体独立计数
 	QuotaRPM            *int       `gorm:"column:quota_rpm" json:"quota_rpm,omitempty"`

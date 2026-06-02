@@ -24,6 +24,9 @@ export interface Group {
   override_supports_vision: boolean
   override_supports_function_calling: boolean
   override_supports_tool_choice: boolean
+  override_mode: string
+  override_context_length: number | null
+  override_max_output_tokens: number | null
   sticky_enabled: boolean | null
   sticky_ttl_seconds: number | null
   created_at: string
@@ -80,6 +83,9 @@ export interface UpdateGroupRequest {
   override_supports_vision?: boolean
   override_supports_function_calling?: boolean
   override_supports_tool_choice?: boolean
+  override_mode?: string
+  override_context_length?: number | null
+  override_max_output_tokens?: number | null
   sticky_enabled?: boolean | null
   sticky_ttl_seconds?: number | null
 }

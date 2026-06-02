@@ -41,7 +41,7 @@ export async function discoverModelsFromProvider(
     const response = await fetch(url, {
       method: "GET",
       headers,
-      signal: AbortSignal.timeout(3000),
+      signal: AbortSignal.timeout(15000),
     })
 
     if (!response.ok) {
@@ -74,7 +74,7 @@ export async function discoverModelInfoFromProvider(
     const response = await fetch(url, {
       method: "GET",
       headers,
-      signal: AbortSignal.timeout(3000),
+      signal: AbortSignal.timeout(15000),
     })
 
     if (!response.ok) {
@@ -96,7 +96,7 @@ export async function fetchModelsDirect(baseURL: string, endpoint: string = OPEN
     const url = buildAPIURL(baseURL, endpoint)
     const response = await fetch(url, {
       method: "GET",
-      signal: AbortSignal.timeout(3000),
+      signal: AbortSignal.timeout(15000),
     })
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`)

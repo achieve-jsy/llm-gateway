@@ -39,7 +39,8 @@ export function createConfigHook(
       pluginConfig,
       logger.child({ category: 'discovery' })
     )
-    const timeoutMs = 5000
+    // 需大于单次 /v1/models fetch 的 15s 超时，否则发现结果还来不及落回 config 就被截断。
+    const timeoutMs = 20000
 
     try {
       await Promise.race([

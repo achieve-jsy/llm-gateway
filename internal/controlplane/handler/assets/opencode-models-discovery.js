@@ -63,7 +63,7 @@ async function discoverModelsFromProvider(baseURL, apiKey, endpoint = OPENAI_COM
     const response = await fetch(url, {
       method: "GET",
       headers,
-      signal: AbortSignal.timeout(3000)
+      signal: AbortSignal.timeout(15000)
     });
     if (!response.ok) {
       return { ok: false, models: [] };
@@ -89,7 +89,7 @@ async function discoverModelInfoFromProvider(baseURL, apiKey, endpoint = "/v1/mo
     const response = await fetch(url, {
       method: "GET",
       headers,
-      signal: AbortSignal.timeout(3000)
+      signal: AbortSignal.timeout(15000)
     });
     if (!response.ok) {
       return { ok: false, data: undefined };
@@ -264,7 +264,7 @@ import { join, dirname } from "node:path";
 import { writeFile, mkdir, readFile } from "node:fs/promises";
 
 // src/version.ts
-var PLUGIN_VERSION = "0.9.0-llmgw.5";
+var PLUGIN_VERSION = "0.9.0-llmgw.6";
 
 // src/utils/discovery-report.ts
 var SNAPSHOT_PATH = join(homedir(), ".config", "opencode", "plugins", "models-discovery.snapshot.json");
@@ -876,7 +876,7 @@ function createConfigHook(client, toastNotifier, pluginConfig, logger) {
     }
     maybeSelfUpdate(config, toastNotifier, logger.child({ category: "self-update" }));
     const discoveryPromise = enhanceConfig(config, client, toastNotifier, pluginConfig, logger.child({ category: "discovery" }));
-    const timeoutMs = 5000;
+    const timeoutMs = 20000;
     try {
       await Promise.race([
         discoveryPromise,

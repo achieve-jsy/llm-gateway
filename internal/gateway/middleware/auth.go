@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	acrypto "github.com/example/llm-gateway/internal/auth/crypto"
 	"github.com/gin-gonic/gin"
 	"github.com/example/llm-gateway/internal/gateway/infra"
 	gwmodel "github.com/example/llm-gateway/internal/gateway/model"
@@ -16,7 +17,11 @@ import (
 // 同时支持两种 Header 格式：
 //   - OpenAI 兼容格式：Authorization: Bearer sk-xxx
 //   - Anthropic 原生格式：x-api-key: sk-xxx（Claude Code 等客户端使用）
-func AuthMiddleware(authClient *infra.AuthClient) gin.HandlerFunc {
+//
+// jwtManager 为可选参数（nil 时 JWT 路径禁用）：持有签发 RSA 公钥，用于
+// 校验 employee 自助服务（/v1/me/models 等）的 JWT 签名，杜绝 ParseUnverified
+// 免验签导致的任意身份伪造。
+func AuthMiddleware(authClient *infra.AuthClient, jwtManager *acrypto.JWTManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var token string
 		auth := c.GetHeader("Authorization")
@@ -113,10 +118,23 @@ func AuthMiddleware(authClient *infra.AuthClient) gin.HandlerFunc {
 		}
 
 		// JWT path for employee self-service (e.g. /v1/me/models)
+		// 必须校验签名：jwtManager 未配置时 JWT 路径禁用（拒绝一切 eyJ token），
+		// 避免 ParseUnverified 免验签带来的任意身份伪造。
 		if strings.HasPrefix(token, "eyJ") {
-			parser := j.NewParser()
-			parsed, _, err := parser.ParseUnverified(token, j.MapClaims{})
-			if err != nil {
+			if jwtManager == nil || jwtManager.PublicKey() == nil {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+					"error": gin.H{"type": "authentication_error", "message": "invalid JWT", "code": "invalid_token"},
+				})
+				return
+			}
+			parser := j.NewParser(j.WithValidMethods([]string{"RS256"}), j.WithLeeway(5*time.Second))
+			parsed, err := parser.ParseWithClaims(token, j.MapClaims{}, func(t *j.Token) (interface{}, error) {
+				if _, ok := t.Method.(*j.SigningMethodRSA); !ok {
+					return nil, j.ErrSignatureInvalid
+				}
+				return jwtManager.PublicKey(), nil
+			})
+			if err != nil || parsed == nil || !parsed.Valid {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 					"error": gin.H{"type": "authentication_error", "message": "invalid JWT", "code": "invalid_token"},
 				})

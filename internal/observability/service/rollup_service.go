@@ -627,7 +627,7 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 
 	var rows []LogRow
 	offset := (params.Page - 1) * params.PageSize
-	// request_body / response_body 在 call_traces；列表 LEFT JOIN 供 Rerank 文档数等展示
+	// request_body/response_body 大字段不跨线传输；task_id/documents_count 在 SQL 侧从 call_traces 提取
 	if err := query.
 		Select("call_logs.request_id, call_logs.ts, call_logs.key_id, COALESCE(call_logs.key_name, '') AS key_name, " +
 			"COALESCE(NULLIF(call_logs.key_type, ''), 'personal') AS key_type, " +
@@ -640,7 +640,6 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 			"call_logs.reasoning_effort, call_logs.user_agent, call_logs.ip_address, " +
 			"call_logs.input_cost_usd, call_logs.output_cost_usd, call_logs.cache_read_cost_usd, call_logs.est_cost_usd, " +
 			"call_logs.input_price_snapshot, call_logs.output_price_snapshot, " +
-			"ct.request_body AS request_body, ct.response_body AS response_body, " +
 			"COALESCE(NULLIF(substring(call_logs.inbound_endpoint FROM '/v1/contents/generations/tasks/([^/?#]+)'), ''), ct.response_body->>'id', ct.response_body->>'task_id') AS task_id, " +
 			"CASE WHEN jsonb_typeof(ct.request_body->'documents') = 'array' " +
 			"THEN jsonb_array_length(ct.request_body->'documents') ELSE NULL END AS documents_count").

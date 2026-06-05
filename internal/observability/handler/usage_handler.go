@@ -864,7 +864,7 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 		return
 	}
 
-	// request_body 在 call_traces；列表 LEFT JOIN 供 Rerank 文档数等展示
+	// request_body/response_body 大字段不跨线传输；task_id/documents_count 在 SQL 侧从 call_traces 提取
 	cols := `call_logs.request_id, call_logs.ts,
 		call_logs.key_id, call_logs.key_name, call_logs.key_type, call_logs.user_id, call_logs.user_name,
 		call_logs.dept_id, call_logs.dept_name, call_logs.studio_id, call_logs.studio_name,
@@ -877,7 +877,6 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 		call_logs.stage_auth_ms, call_logs.stage_route_ms, call_logs.stage_upstream_ms, call_logs.stage_ttfb_ms,
 		call_logs.stream, call_logs.failover_used, call_logs.usage_missing, call_logs.reasoning_effort,
 		call_logs.ip_address, call_logs.user_agent,
-		ct.request_body AS request_body, ct.response_body AS response_body,
 		COALESCE(NULLIF(substring(call_logs.inbound_endpoint FROM '/v1/contents/generations/tasks/([^/?#]+)'), ''), ct.response_body->>'id', ct.response_body->>'task_id') AS task_id,
 		CASE WHEN jsonb_typeof(ct.request_body->'documents') = 'array'
 			THEN jsonb_array_length(ct.request_body->'documents') ELSE NULL END AS documents_count`

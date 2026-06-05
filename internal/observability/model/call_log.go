@@ -9,15 +9,15 @@ import (
 // CallLog 调用明细
 type CallLog struct {
 	RequestID                     string                         `gorm:"type:text;primaryKey"                                          json:"request_id"`
-	TS                            time.Time                      `gorm:"not null;index:idx_call_logs_ts;index:idx_call_logs_budget_tier_ts,priority:2" json:"ts"`
+	TS                            time.Time                      `gorm:"not null;index:idx_call_logs_ts;index:idx_call_logs_budget_tier_ts,priority:2;index:idx_call_logs_user_ts,priority:2;index:idx_call_logs_studio_ts,priority:2" json:"ts"`
 	KeyID                         string                         `gorm:"type:text;index:idx_call_logs_key_ts,composite:key_ts"         json:"key_id"`
 	KeyName                       string                         `gorm:"type:varchar(128)"                                             json:"key_name,omitempty"`
 	KeyType                       string                         `gorm:"type:varchar(16);not null;default:personal;index:idx_call_logs_key_type" json:"key_type"`
-	UserID                        string                         `gorm:"type:text"                                                     json:"user_id"`
+	UserID                        string                         `gorm:"type:text;index:idx_call_logs_user_ts,priority:1"                                                     json:"user_id"`
 	UserName                      string                         `gorm:"type:varchar(128)"                                             json:"user_name,omitempty"`
 	DeptID                        string                         `gorm:"type:text;index:idx_call_logs_dept_ts,composite:dept_ts"       json:"dept_id"`
 	DeptName                      string                         `gorm:"type:varchar(128)"                                             json:"dept_name,omitempty"`
-	StudioID                      string                         `gorm:"type:text"                                                     json:"studio_id"`
+	StudioID                      string                         `gorm:"type:text;index:idx_call_logs_studio_ts,priority:1"                                                     json:"studio_id"`
 	StudioName                    string                         `gorm:"type:varchar(128)"                                             json:"studio_name,omitempty"`
 	Model                         string                         `gorm:"type:text;not null;index:idx_call_logs_model_ts,composite:model_ts" json:"model"`
 	RoutedModel                   string                         `gorm:"type:text"                                                     json:"routed_model"`

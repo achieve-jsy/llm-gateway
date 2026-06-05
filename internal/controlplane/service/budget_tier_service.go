@@ -20,6 +20,7 @@ import (
 
 var (
 	ErrBudgetAllocationNotFound      = errors.New("budget allocation not found")
+	ErrNextPeriodRequiresAllocation  = errors.New("next_period requires an existing budget allocation")
 	ErrInvalidBudgetPeriod           = errors.New("invalid budget period")
 	ErrPendingScheduleExists         = errors.New("pending budget schedule exists")
 	ErrBudgetReasonRequired          = errors.New("budget change reason is required")

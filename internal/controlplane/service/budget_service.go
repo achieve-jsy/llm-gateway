@@ -210,7 +210,7 @@ func (s *BudgetService) AdjustBudget(
 	if creating {
 		// 首次为成员等 scope 配置独立额度：允许立即生效创建；下周期排期需要已有行。
 		if input.EffectiveMode == EffectiveNextPeriod {
-			return nil, ErrBudgetAllocationNotFound
+			return nil, ErrNextPeriodRequiresAllocation
 		}
 		allocation = &model.BudgetAllocation{
 			ScopeType:       input.ScopeType,

@@ -65,8 +65,9 @@
             @update:model-value="updateRoot('effectiveMode', $event)"
           >
             <el-radio-button value="immediate">立即</el-radio-button>
-            <el-radio-button value="next_period">下周期</el-radio-button>
+            <el-radio-button value="next_period" :disabled="firstTimeSetup">下周期</el-radio-button>
           </el-radio-group>
+          <span v-if="firstTimeSetup" class="tier-limits-editor__effective-hint">首次配置仅支持立即生效</span>
         </div>
       </div>
     </section>
@@ -394,6 +395,7 @@ const monthlyUnlimited = computed(() => isUnlimited(monthlyEntry.value))
 const displayMonthlyValue = computed(() => (
   monthlyUnlimited.value ? '' : monthlyEntry.value.value
 ))
+const firstTimeSetup = computed(() => !props.allocation.allocation_id)
 const monthlyUsage = computed(() => props.allocation.used_usd ?? 0)
 const dailyUsage = computed(() => props.allocation.daily_used_usd ?? 0)
 const weeklyUsage = computed(() => props.allocation.weekly_used_usd ?? 0)
@@ -639,6 +641,14 @@ p,
   gap: 10px;
   color: #64748b;
   font-size: 13px;
+}
+
+.tier-limits-editor__effective-hint {
+  font-size: 12px;
+  color: #b45309;
+  background: #fef3c7;
+  padding: 2px 8px;
+  border-radius: 6px;
 }
 
 .tier-limits-editor__tier-list {

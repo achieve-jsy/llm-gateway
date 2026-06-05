@@ -411,6 +411,8 @@ func (h *BudgetHandler) Set(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_PENDING_SCHEDULE_EXISTS", "message": err.Error()})
 		case errors.Is(err, service.ErrInvalidBudgetPeriod):
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": gin.H{"code": CodeInvalidBudgetPeriod, "message": "invalid budget period"}})
+		case errors.Is(err, service.ErrNextPeriodRequiresAllocation):
+			c.JSON(http.StatusConflict, gin.H{"error": gin.H{"code": "BUDGET_NEXT_PERIOD_REQUIRES_ALLOCATION", "message": err.Error()}})
 		case errors.Is(err, service.ErrBudgetAllocationNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"code": "BUDGET_ALLOCATION_NOT_FOUND", "message": "budget allocation not found"}})
 		default:
@@ -556,6 +558,8 @@ func (h *BudgetHandler) SetMultiPeriod(c *gin.Context) {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"code": "BUDGET_REASON_REQUIRED", "message": err.Error()})
 		case errors.Is(unwrapped, service.ErrPendingScheduleExists):
 			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_PENDING_SCHEDULE_EXISTS", "message": err.Error()})
+		case errors.Is(unwrapped, service.ErrNextPeriodRequiresAllocation):
+			c.JSON(http.StatusConflict, gin.H{"code": "BUDGET_NEXT_PERIOD_REQUIRES_ALLOCATION", "message": err.Error()})
 		case errors.Is(unwrapped, service.ErrBudgetAllocationNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"code": "BUDGET_ALLOCATION_NOT_FOUND", "message": err.Error()})
 		default:

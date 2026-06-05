@@ -69,7 +69,7 @@ func TestAdjustBudgetNextPeriodStillRequiresExistingAllocation(t *testing.T) {
 		PeriodType: budgetdomain.PeriodMonthly, TargetLimitUSD: mustBudgetAmount(t, "100.000000"),
 		EffectiveMode: service.EffectiveNextPeriod, Reason: "schedule missing", PreviewOnly: true,
 	})
-	require.ErrorIs(t, err, service.ErrBudgetAllocationNotFound)
+	require.ErrorIs(t, err, service.ErrNextPeriodRequiresAllocation)
 }
 
 func TestAdjustBudgetPreviewReportsZeroBlockWithoutMutation(t *testing.T) {

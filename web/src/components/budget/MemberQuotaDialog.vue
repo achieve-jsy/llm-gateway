@@ -86,7 +86,7 @@
               <el-radio value="immediate">立即生效</el-radio>
               <el-radio
                 value="next_period"
-                :disabled="form.amountUnlimited || form.weeklyUnlimited || form.dailyUnlimited"
+                :disabled="form.amountUnlimited || form.weeklyUnlimited || form.dailyUnlimited || !member?.allocation_id"
               >
                 下周期生效
               </el-radio>

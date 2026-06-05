@@ -24,6 +24,7 @@ type BudgetTierHandlerService interface {
 	PreviewBatch(context.Context, rbac.Actor, service.BatchTierLimitInput) (*service.BatchTierLimitPreview, error)
 	ApplyBatch(context.Context, rbac.Actor, service.ApplyBatchTierLimitInput) (*service.BatchTierLimitApplyResult, error)
 	QueryTierUsage(context.Context, rbac.Actor, service.TierUsageQueryInput) (*service.TierUsageResponse, error)
+	QueryScopedTierUsage(context.Context, rbac.Actor, string, []string, budgetdomain.PeriodType) (*service.TierUsageResponse, error)
 	GetMyBudgetTiers(context.Context, rbac.Actor) (*service.MyBudgetTiersResponse, error)
 }
 
@@ -49,12 +50,41 @@ func (h *BudgetTierHandler) TierUsage(c *gin.Context) {
 		groupID := uint(id)
 		input.GroupID = &groupID
 	}
+	// 批量：scope_ids 逗号分隔，一次返回多个 scope 的 tier 用量（预算页避免对每个成员/部门池 N+1 请求）。
+	if raw := c.Query("scope_ids"); raw != "" {
+		result, err := h.service.QueryScopedTierUsage(c.Request.Context(), rbac.GetActor(c), input.ScopeType, splitCommaList(raw), input.PeriodType)
+		if err != nil {
+			writeBudgetTierError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, result)
+		return
+	}
 	result, err := h.service.QueryTierUsage(c.Request.Context(), rbac.GetActor(c), input)
 	if err != nil {
 		writeBudgetTierError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+// splitCommaList 按逗号切分并去空、去重（用于 scope_ids 批量参数）。
+func splitCommaList(raw string) []string {
+	parts := strings.Split(raw, ",")
+	seen := make(map[string]struct{}, len(parts))
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	return out
 }
 
 func (h *BudgetTierHandler) MyBudgetTiers(c *gin.Context) {

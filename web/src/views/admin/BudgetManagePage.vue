@@ -2388,14 +2388,21 @@ function normalizeTierUsageItem(raw: any, configuredByKey: Map<string, TierBudge
 async function loadScopedTierUsageItems(configuredItems: TierBudgetItem[]): Promise<TierBudgetItem[]> {
   const scopes = Array.from(new Map(configuredItems.map(item => [tierScopeKey(item.scope_type, item.scope_id), item])).values())
   if (!scopes.length) return []
-  const results = await Promise.allSettled(scopes.map(async scope => {
+  // 按 scope_type 分组，每类合并为一次批量请求（scope_ids 逗号分隔），避免对每个成员/部门池 N+1。
+  const byType = new Map<string, TierBudgetItem[]>()
+  for (const scope of scopes) {
+    const list = byType.get(scope.scope_type) ?? []
+    list.push(scope)
+    byType.set(scope.scope_type, list)
+  }
+  const results = await Promise.allSettled(Array.from(byType.entries()).map(async ([scopeType, list]) => {
     const { data } = await http.get<any>('/api/v1/budgets/tier-usage', {
-      params: { period_type: 'monthly', scope_type: scope.scope_type, scope_id: scope.scope_id },
+      params: { period_type: 'monthly', scope_type: scopeType, scope_ids: list.map(s => s.scope_id).join(',') },
       _silent: true,
     } as any)
     const payload = data?.data ?? data ?? {}
-    const list = payload?.items ?? (Array.isArray(payload) ? payload : [])
-    return Array.isArray(list) ? list : []
+    const l = payload?.items ?? (Array.isArray(payload) ? payload : [])
+    return Array.isArray(l) ? l : []
   }))
   return results.flatMap(result => result.status === 'fulfilled' ? result.value : [])
     .map(item => normalizeTierUsageItem(item, new Map(configuredItems.map(configured => [tierBudgetMergeKey(configured), configured]))))

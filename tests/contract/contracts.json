@@ -482,7 +482,7 @@
       "GET /budgets/tier-usage": {
         "permission": "budget:view:scoped",
         "request_body_fields": [],
-        "query_fields": ["scope_type", "scope_id", "period_type", "model_tier_id", "group_id"],
+        "query_fields": ["scope_type", "scope_id", "scope_ids", "period_type", "model_tier_id", "group_id"],
         "success_status": 200,
         "alternative_success_statuses": {},
         "error_statuses": {"400": ["bad_request"], "401": ["unauthorized"], "403": ["org.forbidden"], "422": ["INVALID_BUDGET_PERIOD"], "500": ["internal_error"]},

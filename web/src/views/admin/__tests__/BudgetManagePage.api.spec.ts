@@ -1006,7 +1006,7 @@ describe('BudgetManagePage - API Integration Tests', () => {
       expect(mockHttpGet).toHaveBeenCalledWith('/api/v1/budgets/tier-usage', expect.objectContaining({
         params: expect.objectContaining({
           scope_type: 'dept_daily',
-          scope_id: '377A16DD-EC42-4992-AF77-ABFC4E7FA305',
+          scope_ids: '377A16DD-EC42-4992-AF77-ABFC4E7FA305',
         }),
       }))
       expect(wrapper.vm.tierBudgetItems).toHaveLength(1)

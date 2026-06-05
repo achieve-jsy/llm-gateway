@@ -50,6 +50,18 @@ func (r myBudgetReader) MemberInDeptIDs(memberID string, deptIDs []string) (bool
 	return memberID == "member-a" && len(deptIDs) == 1 && deptIDs[0] == "dept-a", nil
 }
 
+func (r myBudgetReader) MembersInDeptIDs(memberIDs []string, deptIDs []string) (bool, error) {
+	if len(deptIDs) != 1 || deptIDs[0] != "dept-a" {
+		return false, nil
+	}
+	for _, id := range memberIDs {
+		if id != "member-a" && id != "member-b" {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 type myBudgetStore struct {
 	limits    map[uuid.UUID][]model.BudgetTierLimit
 	overrides map[uuid.UUID][]model.BudgetTemporaryOverride
@@ -425,6 +437,33 @@ func TestTierUsageRejectsUnmanagedMember(t *testing.T) {
 	_, err := svc.QueryTierUsage(context.Background(), rbac.Actor{DeptIDs: []string{"dept-a"}}, service.TierUsageQueryInput{
 		ScopeType: model.BudgetScopeMember, ScopeID: "member-b", PeriodType: budgetdomain.PeriodMonthly,
 	})
+	require.ErrorIs(t, err, service.ErrBudgetForbidden)
+}
+
+func TestQueryScopedTierUsageBatchesScopes(t *testing.T) {
+	now := time.Date(2026, 7, 11, 8, 0, 0, 0, time.UTC)
+	queries := []repository.TierUsageQuery{}
+	svc := service.NewBudgetTierService(&myBudgetStore{}, myBudgetReader{}, newFakeModelTierRepo(), func() time.Time { return now }).
+		WithTierUsageRepository(myBudgetUsage{queries: &queries, asOf: now})
+
+	got, err := svc.QueryScopedTierUsage(context.Background(), rbac.Actor{IsGlobal: true}, model.BudgetScopeMember,
+		[]string{"member-a", "member-b"}, budgetdomain.PeriodMonthly)
+	require.NoError(t, err)
+	require.Len(t, queries, 1)
+	require.Equal(t, model.BudgetScopeMember, queries[0].ScopeType)
+	require.Equal(t, []string{"member-a", "member-b"}, queries[0].ScopeIDs)
+	require.Empty(t, queries[0].ScopeID)
+	require.Len(t, got.Data.Items, 1)
+	require.Equal(t, now, got.Data.DataAsOf)
+}
+
+func TestQueryScopedTierUsageRejectsUnmanagedMember(t *testing.T) {
+	now := time.Date(2026, 7, 11, 8, 0, 0, 0, time.UTC)
+	svc := service.NewBudgetTierService(&myBudgetStore{}, myBudgetReader{}, newFakeModelTierRepo(), func() time.Time { return now }).
+		WithTierUsageRepository(myBudgetUsage{amount: mustAmount(t, "0")})
+
+	_, err := svc.QueryScopedTierUsage(context.Background(), rbac.Actor{DeptIDs: []string{"dept-a"}}, model.BudgetScopeMember,
+		[]string{"member-a", "member-x"}, budgetdomain.PeriodMonthly)
 	require.ErrorIs(t, err, service.ErrBudgetForbidden)
 }
 

@@ -13,11 +13,13 @@ import (
 type TierUsageQuery struct {
 	ScopeType string
 	ScopeID   string
-	TierID    *uuid.UUID
-	GroupID   *uint
-	StartAt   time.Time
-	EndAt     time.Time
-	Total     bool
+	// ScopeIDs 批量查询：非空时按 IN 过滤并 GROUP BY scope 列，一次返回多个 scope 的用量。
+	ScopeIDs []string
+	TierID   *uuid.UUID
+	GroupID  *uint
+	StartAt  time.Time
+	EndAt    time.Time
+	Total    bool
 }
 
 type TierUsageAggregate struct {
@@ -59,8 +61,12 @@ func (r *CallLogRepo) SumTierUsage(ctx context.Context, q TierUsageQuery) ([]Tie
 	case "member":
 		scopeColumn = "user_id"
 	}
-	if scopeColumn != "" && q.ScopeID != "" {
-		db = db.Where(scopeColumn+" = ?", q.ScopeID)
+	if scopeColumn != "" {
+		if len(q.ScopeIDs) > 0 {
+			db = db.Where(scopeColumn+" IN ?", q.ScopeIDs)
+		} else if q.ScopeID != "" {
+			db = db.Where(scopeColumn+" = ?", q.ScopeID)
+		}
 	}
 	if q.ScopeType == "dept_daily" {
 		db = db.Where("COALESCE(NULLIF(key_type, ''), 'personal') != 'service'")

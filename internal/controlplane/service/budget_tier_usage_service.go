@@ -23,6 +23,10 @@ type memberScopeResolver interface {
 	MemberInDeptIDs(string, []string) (bool, error)
 }
 
+type membersScopeResolver interface {
+	MembersInDeptIDs([]string, []string) (bool, error)
+}
+
 type allocationScopeReader interface {
 	GetAllocation(string, string) (*model.BudgetAllocation, error)
 }
@@ -182,6 +186,78 @@ func (s *BudgetTierService) canQueryTierUsage(ctx context.Context, actor rbac.Ac
 			return false, nil
 		}
 		return resolver.MemberInDeptIDs(scopeID, actor.DeptIDs)
+	default:
+		return false, nil
+	}
+}
+
+// QueryScopedTierUsage 批量查询同一 scope 类型下多个 scope 的 tier 用量。
+// 用于预算管理页避免对每个成员/部门池各发一次请求（N+1）。
+func (s *BudgetTierService) QueryScopedTierUsage(ctx context.Context, actor rbac.Actor, scopeType string, scopeIDs []string, periodType budgetdomain.PeriodType) (*TierUsageResponse, error) {
+	if s.usageRepo == nil {
+		return nil, fmt.Errorf("tier usage repository not configured")
+	}
+	if len(scopeIDs) == 0 {
+		return &TierUsageResponse{Data: TierUsageResponseData{Items: []repository.TierUsageAggregate{}}}, nil
+	}
+	allowed, scopeErr := s.canQueryScopedTierUsage(ctx, actor, scopeType, scopeIDs)
+	if scopeErr != nil {
+		return nil, scopeErr
+	}
+	if !allowed {
+		return nil, ErrBudgetForbidden
+	}
+	if periodType == "" {
+		periodType = budgetdomain.PeriodMonthly
+	}
+	period, err := budgetperiod.Resolve(s.clock(), periodType, s.periodConfig)
+	if err != nil {
+		return nil, ErrInvalidBudgetPeriod
+	}
+	items, usageErr := s.usageRepo.SumTierUsage(ctx, repository.TierUsageQuery{
+		ScopeType: scopeType, ScopeIDs: scopeIDs, StartAt: period.StartAt, EndAt: period.ResetAt,
+	})
+	if usageErr != nil {
+		return nil, usageErr
+	}
+	for i := range items {
+		items[i].PeriodType = string(periodType)
+	}
+	dataAsOf, stale, freshnessErr := s.usageRepo.UsageFreshness(ctx)
+	if freshnessErr != nil {
+		dataAsOf, stale = s.clock(), true
+	}
+	return &TierUsageResponse{Data: TierUsageResponseData{DataAsOf: dataAsOf, Stale: stale, Items: items}}, nil
+}
+
+func (s *BudgetTierService) canQueryScopedTierUsage(ctx context.Context, actor rbac.Actor, scopeType string, scopeIDs []string) (bool, error) {
+	if actor.IsGlobal {
+		return true, nil
+	}
+	switch scopeType {
+	case "studio":
+		for _, id := range scopeIDs {
+			if !actor.HasStudio(id) {
+				return false, nil
+			}
+		}
+		return true, nil
+	case "dept_daily", "dept_service":
+		for _, id := range scopeIDs {
+			if !actor.HasDept(id) {
+				return false, nil
+			}
+		}
+		return true, nil
+	case "member":
+		if len(actor.StudioIDs) > 0 || len(actor.DeptIDs) == 0 {
+			return false, nil
+		}
+		resolver, ok := s.allocations.(membersScopeResolver)
+		if !ok {
+			return false, nil
+		}
+		return resolver.MembersInDeptIDs(scopeIDs, actor.DeptIDs)
 	default:
 		return false, nil
 	}

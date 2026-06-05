@@ -831,6 +831,25 @@ func (r *BudgetRepo) MemberInDeptIDs(memberID string, deptIDs []string) (bool, e
 	return count > 0, nil
 }
 
+// MembersInDeptIDs 批量判断所有成员是否都归属于指定部门集合（member 批量 tier-usage 的 RBAC 检查）。
+// memberIDs 应已去重。
+func (r *BudgetRepo) MembersInDeptIDs(memberIDs []string, deptIDs []string) (bool, error) {
+	if len(memberIDs) == 0 || len(deptIDs) == 0 {
+		return false, nil
+	}
+	var count int64
+	err := r.db.Raw(`
+		SELECT COUNT(DISTINCT u.id)
+		FROM users u
+		JOIN departments d ON d.id = u.dept_id
+		WHERE u.id::text IN ? AND d.dept_id IN ?
+	`, memberIDs, deptIDs).Scan(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count == int64(len(memberIDs)), nil
+}
+
 func (r *BudgetRepo) ResolveMemberDeptID(memberID string) (string, error) {
 	if memberID == "" {
 		return "", nil

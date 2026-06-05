@@ -185,6 +185,12 @@ func (f *fakeBudgetTierHandlerService) QueryTierUsage(context.Context, rbac.Acto
 	}
 	return &service.TierUsageResponse{}, nil
 }
+func (f *fakeBudgetTierHandlerService) QueryScopedTierUsage(context.Context, rbac.Actor, string, []string, budgetdomain.PeriodType) (*service.TierUsageResponse, error) {
+	if f.usageResult != nil {
+		return f.usageResult, nil
+	}
+	return &service.TierUsageResponse{}, nil
+}
 func (f *fakeBudgetTierHandlerService) GetMyBudgetTiers(_ context.Context, actor rbac.Actor) (*service.MyBudgetTiersResponse, error) {
 	f.myActor = actor
 	if f.myResult != nil {

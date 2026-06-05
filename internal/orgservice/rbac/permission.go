@@ -75,7 +75,6 @@ const (
 
 	// ── 管理面敏感操作（默认仅 admin）────────────────────────────────────────
 	PermProviderManage       Permission = "provider:manage"        // 渠道管理（含上游凭证）
-	PermKeyManage            Permission = "key:manage"             // API Key 管理（含 reveal/重置密钥）
 	PermSettingsManage       Permission = "settings:manage"        // 系统设置读写（含导出/导入）
 	PermOpsView              Permission = "ops:view"               // 运维看板查看
 	PermModelManage          Permission = "model:manage"           // 模型管理

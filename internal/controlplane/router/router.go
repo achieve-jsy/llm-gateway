@@ -667,10 +667,11 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		// 模型 Catalog（注意：source_model_id 含 '/'，通过 query 入口而非路径参数访问）
 		adminGroup.GET("/model-catalog/search", catalogHandler.Search)
 
-		// API Key 管理：自助 CRUD（创建/查看/开关/删除/重置/绑定组）按 user_id 隔离，
-		// service 层对每个操作做 k.UserID != userID 校验，因此走 JWTAuth 即可，
-		// 与 expansion-requests 的自助操作同范式。仅 access-all-groups / log-enabled
-		// 属特权属性（passthrough 受信标志 / 审计开关），保留 admin 管理权限。
+		// API Key 管理：自助 CRUD（创建/查看/开关/删除/重置/绑定组/access-all-groups/log-enabled）
+		// 均按 user_id 隔离，service 层对每个操作做 k.UserID != userID 校验，因此走 JWTAuth 即可，
+		// 与 expansion-requests 的自助操作同范式。access-all-groups 对 personal key 是
+		// 「访问自己有权的全部组」（entitlement 天花板），不越权；log-enabled 作用于自己的 key。
+		// 注意：Service Key 的 access-all-groups 才是管理操作，走 PermServiceKeyRevoke（见 service-keys）。
 		adminGroup.POST("/keys", keyHandler.CreateKey)
 		adminGroup.GET("/keys", keyHandler.ListKeys)
 		adminGroup.GET("/keys/:id", keyHandler.GetKey)
@@ -681,8 +682,8 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.POST("/keys/:id/reveal", keyHandler.RevealKey)
 		adminGroup.GET("/keys/:id/groups", keyHandler.ListKeyGroups)
 		adminGroup.POST("/keys/:id/groups", keyHandler.UpdateKeyGroups)
-		adminGroup.POST("/keys/:id/access-all-groups", guard(rbac.PermKeyManage), keyHandler.ToggleAccessAllGroups)
-		adminGroup.PATCH("/keys/:id/log-enabled", guard(rbac.PermKeyManage), keyHandler.ToggleLogEnabled)
+		adminGroup.POST("/keys/:id/access-all-groups", keyHandler.ToggleAccessAllGroups)
+		adminGroup.PATCH("/keys/:id/log-enabled", keyHandler.ToggleLogEnabled)
 		adminGroup.GET("/groups/available", keyHandler.ListAvailableGroups)
 
 		// OpenCode 配置（token 生成 + 状态轮询，作用于自己的 key）

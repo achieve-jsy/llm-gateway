@@ -552,7 +552,7 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = COALESCE(d.dept_id, cl.dept_id)
 		LEFT JOIN studios s ON s.id = dsm.studio_id
 		LEFT JOIN users u ON u.id::text = cl.user_id
-		WHERE cl.ts::date BETWEEN ?::date AND ?::date
+		WHERE cl.ts >= ?::date AND cl.ts < (?::date + INTERVAL '1 day')
 		` + whereClause + `
 		GROUP BY ` + groupExpr + `, ` + nameExpr + `
 		ORDER BY cost_est DESC
@@ -580,7 +580,7 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 		SELECT COUNT(DISTINCT cl.user_id) AS cnt
 		FROM call_logs cl
 		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = cl.dept_id
-		WHERE cl.ts::date BETWEEN ?::date AND ?::date
+		WHERE cl.ts >= ?::date AND cl.ts < (?::date + INTERVAL '1 day')
 			AND cl.user_id != ''
 			AND (` + obsmodel.WhereExcludeServiceKeyLogsCL + `)
 		` + whereClause
@@ -604,7 +604,7 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 	}
 	_ = db.Table("call_logs").
 		Select("SUM(est_cost_usd) AS cost, COUNT(*) AS calls").
-		Where("ts::date BETWEEN ?::date AND ?::date", prevStart.Format("2006-01-02"), prevEnd.Format("2006-01-02")).
+		Where("ts >= ?::date AND ts < (?::date + INTERVAL '1 day')", prevStart.Format("2006-01-02"), prevEnd.Format("2006-01-02")).
 		Scopes(usagePolicy.QueryScope(actor)).
 		Scan(&prevRow).Error
 	summary.PrevCostEstimate = prevRow.Cost
@@ -660,45 +660,94 @@ func (h *UsageHandler) DashboardTrend(c *gin.Context) {
 	filterUserID := c.Query("user_id")
 	filterModel := c.Query("model_name")
 	filterStatus := c.Query("status")
+	endpoint := c.Query("endpoint")
 
 	actor := rbac.GetActor(c)
 	usagePol := policy.UsagePolicy{}
 
-	var rows []struct {
+	type trendRow struct {
 		Date        string  `gorm:"column:date"`
 		Calls       int64   `gorm:"column:calls"`
 		Errors      int64   `gorm:"column:errors"`
 		TotalTokens int64   `gorm:"column:total_tokens"`
 		Cost        float64 `gorm:"column:cost"`
 	}
-	q := h.db.WithContext(c.Request.Context()).
-		Table("call_logs").
-		Select(`ts::date::text AS date,
-			COUNT(*) AS calls,
-			COUNT(*) FILTER (WHERE status != 200) AS errors,
-			SUM(prompt_tokens + completion_tokens + reasoning_tokens) AS total_tokens,
-			SUM(est_cost_usd) AS cost`).
-		Where("ts::date BETWEEN ?::date AND ?::date", startStr, endStr).
-		Scopes(usagePol.QueryScope(actor))
-	if filterUserID != "" {
-		q = q.Where("user_id = ?", filterUserID)
+	var rows []trendRow
+
+	// 快速路径：全局视角且无精细过滤时，历史日期读 usage_daily 预聚合表，今天读 call_logs 实时，
+	// 兼顾速度与实时性。usage_daily 按 (stat_date, key_id, dept_id, studio_id, model) 聚合，
+	// 跨维度 SUM 与 call_logs 逐日聚合等价；用数据库 CURRENT_DATE 切分「今天/历史」，避免
+	// Go 本地时区与 PG 会话时区不一致导致日期错配。
+	useFastPath := actor.IsGlobal && filterUserID == "" && filterModel == "" && filterStatus == "" && endpoint == ""
+	if useFastPath && !h.db.Migrator().HasTable("usage_daily") {
+		useFastPath = false // usage_daily 尚未建表，回退 call_logs
 	}
-	if filterModel != "" {
-		q = q.Where("(model ILIKE ? OR routed_model ILIKE ? OR group_name ILIKE ?)", "%"+filterModel+"%", "%"+filterModel+"%", "%"+filterModel+"%")
+	if useFastPath {
+		// 历史段（CURRENT_DATE 之前）：usage_daily 预聚合，避开 call_logs 全表扫描
+		var histRows []trendRow
+		if err := h.db.WithContext(c.Request.Context()).
+			Table("usage_daily").
+			Select(`stat_date::text AS date,
+				SUM(req_count) AS calls,
+				SUM(req_count - success_count) AS errors,
+				SUM(prompt_tokens + completion_tokens + reasoning_tokens) AS total_tokens,
+				SUM(est_cost_usd) AS cost`).
+			Where("stat_date >= ?::date AND stat_date <= ?::date AND stat_date < CURRENT_DATE", startStr, endStr).
+			Group("stat_date").
+			Order("stat_date ASC").
+			Scan(&histRows).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		// 今天段（CURRENT_DATE 起）：call_logs 实时，保证最近数据零滞后；扫描量仅今天一天
+		var todayRows []trendRow
+		if err := h.db.WithContext(c.Request.Context()).
+			Table("call_logs").
+			Select(`ts::date::text AS date,
+				COUNT(*) AS calls,
+				COUNT(*) FILTER (WHERE status != 200) AS errors,
+				SUM(prompt_tokens + completion_tokens + reasoning_tokens) AS total_tokens,
+				SUM(est_cost_usd) AS cost`).
+			Where("ts >= CURRENT_DATE AND ts < (?::date + INTERVAL '1 day')", endStr).
+			Group("ts::date").
+			Order("ts::date ASC").
+			Scan(&todayRows).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		rows = append(histRows, todayRows...)
 	}
-	if filterStatus == "success" {
-		q = q.Where("status = 200")
-	} else if filterStatus == "error" {
-		q = q.Where("status != 200")
-	}
-	if endpoint := c.Query("endpoint"); endpoint != "" {
-		q = q.Where("inbound_endpoint = ?", endpoint)
-	}
-	if err := q.Group("ts::date").
-		Order("ts::date ASC").
-		Scan(&rows).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+
+	if !useFastPath {
+		q := h.db.WithContext(c.Request.Context()).
+			Table("call_logs").
+			Select(`ts::date::text AS date,
+				COUNT(*) AS calls,
+				COUNT(*) FILTER (WHERE status != 200) AS errors,
+				SUM(prompt_tokens + completion_tokens + reasoning_tokens) AS total_tokens,
+				SUM(est_cost_usd) AS cost`).
+			Where("ts >= ?::date AND ts < (?::date + INTERVAL '1 day')", startStr, endStr).
+			Scopes(usagePol.QueryScope(actor))
+		if filterUserID != "" {
+			q = q.Where("user_id = ?", filterUserID)
+		}
+		if filterModel != "" {
+			q = q.Where("(model ILIKE ? OR routed_model ILIKE ? OR group_name ILIKE ?)", "%"+filterModel+"%", "%"+filterModel+"%", "%"+filterModel+"%")
+		}
+		if filterStatus == "success" {
+			q = q.Where("status = 200")
+		} else if filterStatus == "error" {
+			q = q.Where("status != 200")
+		}
+		if endpoint != "" {
+			q = q.Where("inbound_endpoint = ?", endpoint)
+		}
+		if err := q.Group("ts::date").
+			Order("ts::date ASC").
+			Scan(&rows).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	points := make([]TrendPoint, 0, len(rows))
@@ -745,7 +794,7 @@ func (h *UsageHandler) DashboardModels(c *gin.Context) {
 			COUNT(*) AS calls,
 			SUM(prompt_tokens + completion_tokens + reasoning_tokens) AS total_tokens,
 			SUM(est_cost_usd) AS cost`).
-		Where("ts::date BETWEEN ?::date AND ?::date", startStr, endStr).
+		Where("ts >= ?::date AND ts < (?::date + INTERVAL '1 day')", startStr, endStr).
 		Where("LENGTH(model) <= 128"). // 过滤脏数据：model 字段误填 prompt 内容的异常记录
 		Scopes(usagePol.QueryScope(actor))
 	if filterUserID != "" {
@@ -819,7 +868,7 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 
 	// 列名加 call_logs. 前缀：后续 LEFT JOIN call_traces 时避免 ts 歧义
 	base := db.Table("call_logs").
-		Where("call_logs.ts::date BETWEEN ? AND ?", startStr, endStr).
+		Where("call_logs.ts >= ?::date AND call_logs.ts < (?::date + INTERVAL '1 day')", startStr, endStr).
 		Scopes(usagePol.QueryScope(actor))
 
 	// 可选过滤条件

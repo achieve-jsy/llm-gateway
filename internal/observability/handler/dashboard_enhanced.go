@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"time"
 
+	obsmodel "github.com/example/llm-gateway/internal/observability/model"
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
 	"github.com/example/llm-gateway/internal/orgservice/rbac/policy"
-	obsmodel "github.com/example/llm-gateway/internal/observability/model"
 	"github.com/gin-gonic/gin"
 )
 
@@ -91,6 +91,7 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 		TotalCost   float64 `gorm:"column:total_cost"`
 		TotalCalls  int64   `gorm:"column:total_calls"`
 		ActiveDays  int     `gorm:"column:active_days"`
+		ErrorCount  int64   `gorm:"column:error_count"`
 	}
 	_ = db.Raw(`
 		SELECT
@@ -98,7 +99,8 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 			COALESCE(SUM(total_tokens), 0)              AS total_tokens,
 			COALESCE(SUM(est_cost_usd), 0)              AS total_cost,
 			COUNT(*)                                     AS total_calls,
-			COUNT(DISTINCT ts::date)                     AS active_days
+			COUNT(DISTINCT ts::date)                     AS active_days,
+			COUNT(*) FILTER (WHERE status != 200)        AS error_count
 		FROM call_logs
 		WHERE ts >= ? AND ts < ?
 			AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
@@ -122,33 +124,20 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 		avgCallCount = float64(sumRow.TotalCalls) / float64(sumRow.TotalUsers)
 	}
 	if sumRow.TotalCalls > 0 {
-		var totalErrors int64
-		_ = db.Raw(`
-			SELECT COUNT(*) FROM call_logs
-			WHERE ts >= ? AND ts < ? AND status != 200
-				AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
-				AND (? = '' OR studio_id = ?)
-				AND (? = '' OR dept_id = ?)
-				AND (? = '' OR model ILIKE ?)
-				AND (? = '' OR inbound_endpoint = ?)
-		`, from, toExcl, studioID, studioID, deptID, deptID, modelName, "%"+modelName+"%", endpoint, endpoint).Scan(&totalErrors)
-		avgErrorRate = float64(totalErrors) / float64(sumRow.TotalCalls) * 100.0
+		avgErrorRate = float64(sumRow.ErrorCount) / float64(sumRow.TotalCalls) * 100.0
 	}
 
-	// ── 分页前总行数 ─────────────────────────────────────────────
+	// ── 分页前总行数（单趟 COUNT DISTINCT，避免子查询二次扫描 call_logs）──
 	var totalCount int64
 	_ = db.Raw(`
-		SELECT COUNT(*) FROM (
-			SELECT COALESCE(user_id, 'unknown')
-			FROM call_logs
-			WHERE ts >= ? AND ts < ?
-				AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
-				AND (? = '' OR studio_id = ?)
-				AND (? = '' OR dept_id = ?)
-				AND (? = '' OR model ILIKE ?)
-				AND (? = '' OR inbound_endpoint = ?)
-			GROUP BY COALESCE(user_id, 'unknown'), COALESCE(user_name, ''), COALESCE(dept_name, '')
-		) AS sub
+		SELECT COUNT(DISTINCT (COALESCE(user_id, 'unknown'), COALESCE(user_name, ''), COALESCE(dept_name, '')))
+		FROM call_logs
+		WHERE ts >= ? AND ts < ?
+			AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
+			AND (? = '' OR studio_id = ?)
+			AND (? = '' OR dept_id = ?)
+			AND (? = '' OR model ILIKE ?)
+			AND (? = '' OR inbound_endpoint = ?)
 	`, from, toExcl, studioID, studioID, deptID, deptID, modelName, "%"+modelName+"%", endpoint, endpoint).Scan(&totalCount)
 
 	// ── 当期分页数据 ─────────────────────────────────────────────
@@ -390,7 +379,7 @@ func (h *UsageHandler) DashboardModelsEnhanced(c *gin.Context) {
 			COALESCE(AVG(duration_ms), 0) AS avg_duration_ms,
 			COALESCE(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY duration_ms), 0) AS p90_duration_ms,
 			COALESCE(AVG(first_token_ms), 0) AS avg_first_token_ms`).
-		Where("ts::date BETWEEN ?::date AND ?::date", startStr, endStr).
+		Where("ts >= ?::date AND ts < (?::date + INTERVAL '1 day')", startStr, endStr).
 		Where("LENGTH(model) <= 128"). // 过滤脏数据：model 字段误填 prompt 内容的异常记录
 		Scopes(usagePol.QueryScope(actor))
 	if filterUserID != "" {

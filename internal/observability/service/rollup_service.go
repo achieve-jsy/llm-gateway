@@ -946,7 +946,7 @@ func (s *RollupService) aggregateModelDailyStats(ctx context.Context, date time.
 		FROM call_logs cl
 		LEFT JOIN departments d ON (d.dept_id = cl.dept_id OR d.id::text = cl.dept_id)
 		LEFT JOIN dept_studio_map dsm ON dsm.dept_id = COALESCE(d.dept_id, cl.dept_id)
-		WHERE cl.ts::date = ?::date
+		WHERE cl.ts >= ?::date AND cl.ts < (?::date + INTERVAL '1 day')
 		  AND cl.model IS NOT NULL AND cl.model != ''
 		GROUP BY cl.model, COALESCE(dsm.studio_id::text, '')
 		ON CONFLICT (stat_date, model, studio_id) DO UPDATE SET
@@ -967,7 +967,7 @@ func (s *RollupService) aggregateModelDailyStats(ctx context.Context, date time.
 			avg_first_token_ms = EXCLUDED.avg_first_token_ms
 	`
 
-	if err := db.Exec(sql, statDate, statDate).Error; err != nil {
+	if err := db.Exec(sql, statDate, statDate, statDate).Error; err != nil {
 		slog.Error("model_daily_stats_aggregate_failed", "date", statDate, "error", err)
 		return err
 	}
@@ -1024,7 +1024,7 @@ func (s *RollupService) aggregateUserDailyStats(ctx context.Context, date time.T
 			FROM call_logs cl
 			LEFT JOIN departments d ON (d.dept_id = cl.dept_id OR d.id::text = cl.dept_id)
 			LEFT JOIN dept_studio_map dsm ON dsm.dept_id = COALESCE(d.dept_id, cl.dept_id)
-			WHERE cl.ts::date = ?::date
+			WHERE cl.ts >= ?::date AND cl.ts < (?::date + INTERVAL '1 day')
 				AND (` + obsmodel.WhereExcludeServiceKeyLogsCL + `)
 			GROUP BY COALESCE(cl.user_id, 'unknown'),
 					 COALESCE(dsm.studio_id::text, ''),
@@ -1047,7 +1047,7 @@ func (s *RollupService) aggregateUserDailyStats(ctx context.Context, date time.T
 			hourly_distribution = EXCLUDED.hourly_distribution
 	`
 
-	if err := db.Exec(sql, statDate, statDate).Error; err != nil {
+	if err := db.Exec(sql, statDate, statDate, statDate).Error; err != nil {
 		slog.Error("user_daily_stats_aggregate_failed", "date", statDate, "error", err)
 		return err
 	}

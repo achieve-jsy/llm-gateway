@@ -118,6 +118,9 @@ var Registry = map[Permission]PolicyEntry{
 	// 渠道管理（含上游凭证）：仅 admin
 	PermProviderManage: {ScopeGlobal},
 	// API Key 管理（含 reveal/重置密钥）：仅 admin
+	// 注意：Personal Key 的自助 CRUD（创建/查看/开关/删除/重置/绑定组）不走本权限，
+	// 它们按 user_id 隔离、service 层校验所有权，路由层仅 JWTAuth（与 expansion 自助同范式）。
+	// 本权限只用于特权操作：access-all-groups（passthrough 受信标志）、log-enabled（审计开关）。
 	PermKeyManage: {ScopeGlobal},
 	// 系统设置读写（含导出/导入）：仅 admin
 	PermSettingsManage: {ScopeGlobal},

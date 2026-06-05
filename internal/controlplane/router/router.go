@@ -667,24 +667,27 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		// 模型 Catalog（注意：source_model_id 含 '/'，通过 query 入口而非路径参数访问）
 		adminGroup.GET("/model-catalog/search", catalogHandler.Search)
 
-		// API Key 管理
-		adminGroup.POST("/keys", guard(rbac.PermKeyManage), keyHandler.CreateKey)
+		// API Key 管理：自助 CRUD（创建/查看/开关/删除/重置/绑定组）按 user_id 隔离，
+		// service 层对每个操作做 k.UserID != userID 校验，因此走 JWTAuth 即可，
+		// 与 expansion-requests 的自助操作同范式。仅 access-all-groups / log-enabled
+		// 属特权属性（passthrough 受信标志 / 审计开关），保留 admin 管理权限。
+		adminGroup.POST("/keys", keyHandler.CreateKey)
 		adminGroup.GET("/keys", keyHandler.ListKeys)
 		adminGroup.GET("/keys/:id", keyHandler.GetKey)
-		adminGroup.PATCH("/keys/:id/disable", guard(rbac.PermKeyManage), keyHandler.DisableKey)
-		adminGroup.PATCH("/keys/:id/enable", guard(rbac.PermKeyManage), keyHandler.EnableKey)
-		adminGroup.DELETE("/keys/:id", guard(rbac.PermKeyManage), keyHandler.DeleteKey)
-		adminGroup.POST("/keys/:id/reset", guard(rbac.PermKeyManage), keyHandler.ResetKey)
-		adminGroup.POST("/keys/:id/reveal", guard(rbac.PermKeyManage), keyHandler.RevealKey)
+		adminGroup.PATCH("/keys/:id/disable", keyHandler.DisableKey)
+		adminGroup.PATCH("/keys/:id/enable", keyHandler.EnableKey)
+		adminGroup.DELETE("/keys/:id", keyHandler.DeleteKey)
+		adminGroup.POST("/keys/:id/reset", keyHandler.ResetKey)
+		adminGroup.POST("/keys/:id/reveal", keyHandler.RevealKey)
 		adminGroup.GET("/keys/:id/groups", keyHandler.ListKeyGroups)
-		adminGroup.POST("/keys/:id/groups", guard(rbac.PermKeyManage), keyHandler.UpdateKeyGroups)
+		adminGroup.POST("/keys/:id/groups", keyHandler.UpdateKeyGroups)
 		adminGroup.POST("/keys/:id/access-all-groups", guard(rbac.PermKeyManage), keyHandler.ToggleAccessAllGroups)
 		adminGroup.PATCH("/keys/:id/log-enabled", guard(rbac.PermKeyManage), keyHandler.ToggleLogEnabled)
 		adminGroup.GET("/groups/available", keyHandler.ListAvailableGroups)
 
-		// OpenCode 配置（token 生成 + 状态轮询，作用于具体 key）
-		adminGroup.POST("/keys/:id/opencode-config/token", guard(rbac.PermKeyManage), opencodeConfigHandler.GenerateToken)
-		adminGroup.GET("/keys/:id/opencode-config/status", guard(rbac.PermKeyManage), opencodeConfigHandler.GetStatus)
+		// OpenCode 配置（token 生成 + 状态轮询，作用于自己的 key）
+		adminGroup.POST("/keys/:id/opencode-config/token", opencodeConfigHandler.GenerateToken)
+		adminGroup.GET("/keys/:id/opencode-config/status", opencodeConfigHandler.GetStatus)
 		adminGroup.GET("/model-catalog/by-source", guard(rbac.PermModelCatalogManage), catalogHandler.GetBySource)
 		adminGroup.POST("/model-catalog/sync", guard(rbac.PermModelCatalogManage), catalogHandler.Sync)
 		adminGroup.GET("/model-catalog/diff", guard(rbac.PermModelCatalogManage), catalogHandler.Diff)

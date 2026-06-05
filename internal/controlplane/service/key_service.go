@@ -456,6 +456,9 @@ func (s *KeyService) UpdateAccessAllGroups(ctx context.Context, userID, keyID uu
 	if err != nil {
 		return nil, ErrKeyNotFound
 	}
+	if k.UserID != userID {
+		return nil, ErrKeyNotFound
+	}
 	if err := s.repo.UpdateAccessAllGroups(keyID, value); err != nil {
 		return nil, fmt.Errorf("update access_all_groups: %w", err)
 	}
@@ -466,6 +469,9 @@ func (s *KeyService) UpdateAccessAllGroups(ctx context.Context, userID, keyID uu
 func (s *KeyService) UpdateLogEnabled(ctx context.Context, userID, keyID uuid.UUID, value bool) (*model.ApiKey, error) {
 	k, err := s.repo.FindByID(keyID)
 	if err != nil {
+		return nil, ErrKeyNotFound
+	}
+	if k.UserID != userID {
 		return nil, ErrKeyNotFound
 	}
 	if err := s.repo.UpdateLogEnabled(keyID, value); err != nil {

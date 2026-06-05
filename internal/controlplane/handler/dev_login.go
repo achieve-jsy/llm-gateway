@@ -23,11 +23,19 @@ func NewDevLoginHandler(db *gorm.DB, jwtSecret string, accessTokenTTL time.Durat
 
 // DevLoginEnabled reports whether the pre-auth dev-login backdoor is allowed.
 // It is an explicit opt-in that defaults OFF everywhere: the route is only
-// registered (and the handler only proceeds) when DEV_LOGIN_ENABLED == "true"
-// AND the environment is not production. This stays production-safe even if
-// someone forgets to set the flag or mistakenly sets it to true in prod.
+// registered (and the handler only proceeds) when DEV_LOGIN_ENABLED == "true".
+// In production (APP_ENV=prod) a second gate DEV_LOGIN_PROD_ALLOWED == "true"
+// is required to prevent accidental enablement — this path bypasses OIDC
+// (MFA / offboarding / audit), so it must be enabled deliberately and removed
+// once the SSO bootstrap is complete.
 func DevLoginEnabled() bool {
-	return os.Getenv("APP_ENV") != "prod" && os.Getenv("DEV_LOGIN_ENABLED") == "true"
+	if os.Getenv("DEV_LOGIN_ENABLED") != "true" {
+		return false
+	}
+	if os.Getenv("APP_ENV") == "prod" {
+		return os.Getenv("DEV_LOGIN_PROD_ALLOWED") == "true"
+	}
+	return true
 }
 
 func (h *DevLoginHandler) Login(c *gin.Context) {

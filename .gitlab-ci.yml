@@ -377,6 +377,8 @@ deploy-app-test:
         export BUDGET_TIER_POSITIVE_ENFORCEMENT_ENABLED=false BUDGET_TIER_ZERO_BLOCK_ENABLED=false
         export BUDGET_TIER_SHADOW_ENABLED=true BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED=false
         export BUDGET_LEGACY_TOTAL_WRITE_ENABLED=true
+        export DEV_LOGIN_ENABLED='${TEST_DEV_LOGIN_ENABLED:-false}'
+        export DEV_LOGIN_PROD_ALLOWED='${TEST_DEV_LOGIN_PROD_ALLOWED:-false}'
         bash deploy-blue-green.sh
       "
   environment:
@@ -633,6 +635,10 @@ deploy-prod:
         export BUDGET_TIER_SHADOW_ENABLED='${PROD_BUDGET_TIER_SHADOW_ENABLED:-false}'
         export BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED='${PROD_BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED:-false}'
         export BUDGET_LEGACY_TOTAL_WRITE_ENABLED='${PROD_BUDGET_LEGACY_TOTAL_WRITE_ENABLED:-true}'
+        # dev-login 双闸：默认关闭。应急登录需在 CI/CD 变量设 PROD_DEV_LOGIN_ENABLED=true
+        # 与 PROD_DEV_LOGIN_PROD_ALLOWED=true，用毕移除并重新部署即关闭。
+        export DEV_LOGIN_ENABLED='${PROD_DEV_LOGIN_ENABLED:-false}'
+        export DEV_LOGIN_PROD_ALLOWED='${PROD_DEV_LOGIN_PROD_ALLOWED:-false}'
         bash deploy-blue-green.sh
       "
   environment:

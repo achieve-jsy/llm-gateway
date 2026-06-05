@@ -531,13 +531,16 @@ describe('BudgetManagePage - API Integration Tests', () => {
       // Wait for all async operations
       await new Promise((resolve) => setTimeout(resolve, 50))
 
-      // All should start before any end (parallel execution)
-      expect(callOrder.filter(c => c.endsWith('-start')).length).toBe(3)
+      // 第一波（budgets/context/全量 tier-usage）并发发起：各自的 start 都在第一个 end 之前
       const firstEnd = callOrder.findIndex(c => c.endsWith('-end'))
-      const lastStart = callOrder.map((c, i) => c.endsWith('-start') ? i : -1).filter(i => i >= 0).pop()!
+      const firstWaveStarts = ['budgets-start', 'context-start', 'tier-start']
+      firstWaveStarts.forEach(s => {
+        expect(callOrder.indexOf(s)).toBeGreaterThanOrEqual(0)
+        expect(callOrder.indexOf(s)).toBeLessThan(firstEnd)
+      })
 
-      // This verifies parallel execution: all starts happen before first end
-      expect(lastStart).toBeLessThan(firstEnd)
+      // tier-limits 与 scoped tier-usage 作为第二波在 budgets 返回后并行：tier-usage 共请求两次（全量 + scoped）
+      expect(callOrder.filter(c => c === 'tier-start').length).toBe(2)
     })
 
     it('其中一个 API 失败不影响其他 API 的数据加载', async () => {

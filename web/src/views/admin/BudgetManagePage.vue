@@ -2385,11 +2385,20 @@ function normalizeTierUsageItem(raw: any, configuredByKey: Map<string, TierBudge
   }
 }
 
-async function loadScopedTierUsageItems(configuredItems: TierBudgetItem[]): Promise<TierBudgetItem[]> {
-  const scopes = Array.from(new Map(configuredItems.map(item => [tierScopeKey(item.scope_type, item.scope_id), item])).values())
+// 提取「有 allocation 且当前视图可见」的 scope（tier-limits 与 tier-usage 的共同目标集合）
+function tierScopeTargets(scopes: BudgetItem[]): BudgetItem[] {
+  const visibleScopeTypes = overviewView.value === 'company'
+    ? new Set<BudgetScopeType>(['studio'])
+    : overviewView.value === 'studio'
+      ? new Set<BudgetScopeType>(['dept_daily', 'dept_service'])
+      : new Set<BudgetScopeType>(['dept_daily', 'dept_service', 'member'])
+  return scopes.filter(scope => scope.allocation_id && visibleScopeTypes.has(scope.scope_type))
+}
+
+// 按 scope 批量拉取 tier-usage 原始数据（返回未归一化的用量项，供 load() 与 tier-limits 并行）
+async function fetchScopedTierUsage(scopes: BudgetItem[]): Promise<any[]> {
   if (!scopes.length) return []
-  // 按 scope_type 分组，每类合并为一次批量请求（scope_ids 逗号分隔），避免对每个成员/部门池 N+1。
-  const byType = new Map<string, TierBudgetItem[]>()
+  const byType = new Map<string, BudgetItem[]>()
   for (const scope of scopes) {
     const list = byType.get(scope.scope_type) ?? []
     list.push(scope)
@@ -2405,17 +2414,20 @@ async function loadScopedTierUsageItems(configuredItems: TierBudgetItem[]): Prom
     return Array.isArray(l) ? l : []
   }))
   return results.flatMap(result => result.status === 'fulfilled' ? result.value : [])
-    .map(item => normalizeTierUsageItem(item, new Map(configuredItems.map(configured => [tierBudgetMergeKey(configured), configured]))))
+}
+
+// 归一化 scoped tier-usage：仅保留「有等级配置」的 scope，保持与旧逻辑一致的展示语义
+function normalizeScopedTierUsage(rawUsageItems: any[], configuredItems: TierBudgetItem[]): TierBudgetItem[] {
+  const configuredScopeKeys = new Set(configuredItems.map(item => tierScopeKey(item.scope_type, item.scope_id)))
+  const configuredByKey = new Map(configuredItems.map(configured => [tierBudgetMergeKey(configured), configured]))
+  return rawUsageItems
+    .map(item => normalizeTierUsageItem(item, configuredByKey))
     .filter((item): item is TierBudgetItem => Boolean(item))
+    .filter(item => configuredScopeKeys.has(tierScopeKey(item.scope_type, item.scope_id)))
 }
 
 async function loadConfiguredTierBudgets(scopes: BudgetItem[]): Promise<TierBudgetItem[]> {
-  const visibleScopeTypes = overviewView.value === 'company'
-    ? new Set<BudgetScopeType>(['studio'])
-    : overviewView.value === 'studio'
-      ? new Set<BudgetScopeType>(['dept_daily', 'dept_service'])
-      : new Set<BudgetScopeType>(['dept_daily', 'dept_service', 'member'])
-  const targets = scopes.filter(scope => scope.allocation_id && visibleScopeTypes.has(scope.scope_type))
+  const targets = tierScopeTargets(scopes)
   if (!targets.length) return []
   // 批量拉取所有 allocation 的 tier 限额（一次请求），再按 scope 映射，避免对每个成员/部门池 N+1。
   const allocationIds = Array.from(new Set(targets.map(scope => scope.allocation_id!)))
@@ -2671,7 +2683,12 @@ async function load() {
       ElMessage.warning('预算治理链路加载失败，列表仍可查看')
     }
 
-    const configuredTierItems = await loadConfiguredTierBudgets(items.value)
+    // 并行拉取 tier-limits（等级配置）与 scoped tier-usage（等级用量）：两者只依赖 items 的 scope 列表，互不依赖
+    const tierTargets = tierScopeTargets(items.value)
+    const [configuredTierItems, rawScopedUsage] = await Promise.all([
+      loadConfiguredTierBudgets(items.value),
+      fetchScopedTierUsage(tierTargets),
+    ])
     const mergedTierItems = new Map<string, TierBudgetItem>()
     for (const item of configuredTierItems) {
       mergedTierItems.set(tierBudgetMergeKey(item), item)
@@ -2684,7 +2701,7 @@ async function load() {
         .map(item => normalizeTierUsageItem(item, mergedTierItems))
         .filter((item): item is TierBudgetItem => Boolean(item))
     }
-    usageTierItems.push(...await loadScopedTierUsageItems(configuredTierItems))
+    usageTierItems.push(...normalizeScopedTierUsage(rawScopedUsage, configuredTierItems))
     for (const item of usageTierItems) {
       const key = tierBudgetMergeKey(item)
       mergedTierItems.set(key, {

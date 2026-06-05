@@ -22,6 +22,14 @@ const mockPreviewBudgetAdjustment = vi.fn()
 const mockPreviewBudgetMultiPeriod = vi.fn()
 const mockAdjustBudgetMultiPeriod = vi.fn()
 const mockListBudgetTierLimits = vi.fn()
+const mockListBudgetTierLimitsBatch = vi.fn(async (allocationIds: string[]) => {
+  const map = new Map<string, any[]>()
+  for (const id of allocationIds) {
+    const limits = await mockListBudgetTierLimits(id)
+    map.set(id, limits ?? [])
+  }
+  return map
+})
 const mockGetBudgetTierUsage = vi.fn()
 
 vi.mock('@/services/control-plane', () => ({
@@ -35,6 +43,7 @@ vi.mock('@/services/control-plane', () => ({
   previewBudgetMultiPeriod: (...args: unknown[]) => mockPreviewBudgetMultiPeriod(...args),
   adjustBudgetMultiPeriod: (...args: unknown[]) => mockAdjustBudgetMultiPeriod(...args),
   listBudgetTierLimits: (...args: unknown[]) => mockListBudgetTierLimits(...args),
+  listBudgetTierLimitsBatch: (...args: unknown[]) => mockListBudgetTierLimitsBatch(...args),
   getBudgetTierUsage: (...args: unknown[]) => mockGetBudgetTierUsage(...args),
 }))
 

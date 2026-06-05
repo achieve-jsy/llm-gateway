@@ -1180,6 +1180,18 @@ export async function listBudgetTierLimits(allocationId: string): Promise<Budget
   return data.data.tier_limits
 }
 
+export async function listBudgetTierLimitsBatch(allocationIds: string[]): Promise<Map<string, BudgetTierLimit[]>> {
+  const { data } = await http.get<{ data: { items: Array<{ allocation_id: string; tier_limits: BudgetTierLimit[] }> } }>(
+    '/api/v1/budgets/tier-limits',
+    { params: { allocation_ids: allocationIds.join(',') } } as any,
+  )
+  const map = new Map<string, BudgetTierLimit[]>()
+  for (const item of data.data.items ?? []) {
+    map.set(item.allocation_id, item.tier_limits ?? [])
+  }
+  return map
+}
+
 export async function previewBudgetTierBatch(input: {
   operation: 'set_fixed' | 'adjust_percent' | 'clear'
   items: Array<{

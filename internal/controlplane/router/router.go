@@ -496,6 +496,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.DELETE("/model-tiers/:id", guard(rbac.PermModelTierManage), modelTierHandler.Delete)
 		adminGroup.PUT("/groups/budget-tiers", guard(rbac.PermModelTierManage), modelTierHandler.SetGroupBudgetTierBatch)
 		adminGroup.PUT("/groups/:id/budget-tier", guard(rbac.PermModelTierManage), modelTierHandler.SetGroupBudgetTier)
+		adminGroup.GET("/budgets/tier-limits", guard(rbac.PermBudgetViewScoped), budgetTierHandler.ListScoped)
 		adminGroup.GET("/budgets/:allocation_id/tier-limits", guard(rbac.PermBudgetViewScoped), budgetTierHandler.List)
 		adminGroup.PUT("/budgets/:allocation_id/tier-limits", guard(rbac.PermBudgetSet), budgetTierHandler.DeprecatedSet)
 		adminGroup.POST("/budgets/tier-limits/batch/preview", guard(rbac.PermBudgetSet), budgetTierHandler.PreviewBatch)

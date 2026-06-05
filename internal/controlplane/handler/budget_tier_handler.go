@@ -219,6 +219,60 @@ func (h *BudgetTierHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"allocation_id": allocationID, "tier_limits": limits}})
 }
 
+// ListScoped 批量查询多个 allocation 的 tier 限额，避免预算页对每个成员/部门池 N+1 请求。
+// 入参 allocation_ids 逗号分隔（去重、限上限）；单个 allocation 无权/查不到时跳过，不拖垮整批。
+func (h *BudgetTierHandler) ListScoped(c *gin.Context) {
+	ids := parseUUIDList(c.Query("allocation_ids"))
+	if len(ids) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request", "code": CodeBadRequest, "message": "invalid allocation_ids"}})
+		return
+	}
+	actor := rbac.GetActor(c)
+	items := make([]gin.H, 0, len(ids))
+	for _, id := range ids {
+		allocation, err := h.service.GetAllocation(c.Request.Context(), id)
+		if err != nil || allocation == nil {
+			continue
+		}
+		allowed, scopeErr := h.canRead(actor, allocation)
+		if scopeErr != nil || !allowed {
+			continue
+		}
+		limits, err := h.service.ListTierLimits(c.Request.Context(), id)
+		if err != nil {
+			continue
+		}
+		items = append(items, gin.H{"allocation_id": id, "tier_limits": limits})
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"items": items}})
+}
+
+// parseUUIDList 解析逗号分隔的 UUID 列表（去重、去空、限上限），非法项跳过。
+func parseUUIDList(raw string) []uuid.UUID {
+	parts := strings.Split(raw, ",")
+	out := make([]uuid.UUID, 0, len(parts))
+	seen := make(map[uuid.UUID]struct{}, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		id, err := uuid.Parse(p)
+		if err != nil {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+		if len(out) >= 500 {
+			break
+		}
+	}
+	return out
+}
+
 func (h *BudgetTierHandler) Set(c *gin.Context) {
 	allocationID, ok := parseAllocationID(c)
 	if !ok {

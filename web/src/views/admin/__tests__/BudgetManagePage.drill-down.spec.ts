@@ -58,6 +58,14 @@ const mockGetBudgetContext = vi.fn()
 const mockGetBudgetRiskSummary = vi.fn()
 const mockListModelTiers = vi.fn()
 const mockListBudgetTierLimits = vi.fn()
+const mockListBudgetTierLimitsBatch = vi.fn(async (allocationIds: string[]) => {
+  const map = new Map<string, any[]>()
+  for (const id of allocationIds) {
+    const limits = await mockListBudgetTierLimits(id)
+    map.set(id, limits ?? [])
+  }
+  return map
+})
 
 vi.mock('@/services/control-plane', () => ({
   getBudgetList: (...args: unknown[]) => mockGetBudgetList(...args),
@@ -65,6 +73,7 @@ vi.mock('@/services/control-plane', () => ({
   getBudgetRiskSummary: (...args: unknown[]) => mockGetBudgetRiskSummary(...args),
   listModelTiers: (...args: unknown[]) => mockListModelTiers(...args),
   listBudgetTierLimits: (...args: unknown[]) => mockListBudgetTierLimits(...args),
+  listBudgetTierLimitsBatch: (...args: unknown[]) => mockListBudgetTierLimitsBatch(...args),
   rebuildBudgetCounters: vi.fn(),
   adjustBudget: vi.fn(),
   previewBudgetAdjustment: vi.fn(),

@@ -240,6 +240,43 @@ func TestBudgetTierDeptAdminCanReadManagedMemberLimits(t *testing.T) {
 	require.Equal(t, http.StatusOK, response.Code)
 }
 
+func TestBudgetTierListScopedBatchesAllocations(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	id1, id2 := uuid.New(), uuid.New()
+	fake := &fakeBudgetTierHandlerService{
+		allocation:    &model.BudgetAllocation{ID: id1, ScopeType: model.BudgetScopeMember, ScopeID: "member-a"},
+		memberAllowed: true,
+	}
+	h := handler.NewBudgetTierHandler(fake).WithScopeResolver(fake)
+	router := gin.New()
+	router.GET("/api/v1/budgets/tier-limits", func(c *gin.Context) {
+		rbac.SetActor(c, rbac.Actor{UserID: uuid.NewString(), DeptIDs: []string{"dept-a"}})
+		h.ListScoped(c)
+	})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/budgets/tier-limits?allocation_ids="+id1.String()+","+id2.String(), nil))
+	require.Equal(t, http.StatusOK, response.Code)
+	var body struct {
+		Data struct {
+			Items []struct {
+				AllocationID string `json:"allocation_id"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
+	require.Len(t, body.Data.Items, 2)
+}
+
+func TestBudgetTierListScopedRejectsMissingIds(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := handler.NewBudgetTierHandler(&fakeBudgetTierHandlerService{})
+	router := gin.New()
+	router.GET("/api/v1/budgets/tier-limits", h.ListScoped)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/budgets/tier-limits", nil))
+	require.Equal(t, http.StatusBadRequest, response.Code)
+}
+
 func TestBudgetTierBatchPreviewAcceptsCanonicalRequest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	fake := &fakeBudgetTierHandlerService{}

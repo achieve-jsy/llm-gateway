@@ -1785,7 +1785,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { adjustBudget, adjustBudgetMultiPeriod, getBudgetContext, getBudgetList, getBudgetTierUsage, listBudgetTierLimits, listModelTiers, previewBudgetAdjustment, previewBudgetMultiPeriod, rebuildBudgetCounters } from '@/services/control-plane'
+import { adjustBudget, adjustBudgetMultiPeriod, getBudgetContext, getBudgetList, getBudgetTierUsage, listBudgetTierLimits, listBudgetTierLimitsBatch, listModelTiers, previewBudgetAdjustment, previewBudgetMultiPeriod, rebuildBudgetCounters } from '@/services/control-plane'
 import { getBudgetRiskSummary } from '@/services/control-plane'
 import http from '@/services/http'
 import { useAuthStore } from '@/stores/auth'
@@ -2417,13 +2417,15 @@ async function loadConfiguredTierBudgets(scopes: BudgetItem[]): Promise<TierBudg
       : new Set<BudgetScopeType>(['dept_daily', 'dept_service', 'member'])
   const targets = scopes.filter(scope => scope.allocation_id && visibleScopeTypes.has(scope.scope_type))
   if (!targets.length) return []
-  const results = await Promise.allSettled(targets.map(async scope => {
-    const limits = await listBudgetTierLimits(scope.allocation_id!)
+  // 批量拉取所有 allocation 的 tier 限额（一次请求），再按 scope 映射，避免对每个成员/部门池 N+1。
+  const allocationIds = Array.from(new Set(targets.map(scope => scope.allocation_id!)))
+  const limitsByAllocation = await listBudgetTierLimitsBatch(allocationIds)
+  return targets.flatMap(scope => {
+    const limits = limitsByAllocation.get(scope.allocation_id!) ?? []
     return limits
       .map(limit => tierLimitToBudgetItem(scope, limit))
       .filter((item): item is TierBudgetItem => Boolean(item))
-  }))
-  return results.flatMap(result => result.status === 'fulfilled' ? result.value : [])
+  })
 }
 
 const totalCost7d = computed(() => {

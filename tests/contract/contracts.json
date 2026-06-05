@@ -442,6 +442,16 @@
         "error_statuses": {"400": ["bad_request"], "401": ["unauthorized"], "403": ["org.forbidden"], "404": ["group_not_found", "MODEL_TIER_NOT_FOUND"], "422": ["MODEL_TIER_DISABLED", "bad_request"], "500": ["internal_error"]},
         "response_fields": ["data"]
       },
+      "GET /budgets/tier-limits": {
+        "permission": "budget:view:scoped",
+        "request_body_fields": [],
+        "query_fields": ["allocation_ids"],
+        "success_status": 200,
+        "alternative_success_statuses": {},
+        "error_statuses": {"400": ["bad_request"], "401": ["unauthorized"], "403": ["org.forbidden"], "500": ["internal_error"]},
+        "response_fields": ["items"],
+        "empty": {"items": []}
+      },
       "GET /budgets/:allocation_id/tier-limits": {
         "permission": "budget:view:scoped",
         "request_body_fields": [],

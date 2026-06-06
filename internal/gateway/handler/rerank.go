@@ -135,7 +135,7 @@ func (h *RerankHandler) Handle(c *gin.Context) {
 			if decision.ProviderName != "" {
 				req.Provider = decision.ProviderName
 			}
-			routedModelID = decision.ModelID
+			routedModelID = decision.ModelUUID
 		}
 		return nil
 	}, h.budgetGate, h.requestQuota)

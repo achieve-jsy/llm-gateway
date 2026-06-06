@@ -147,7 +147,7 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 		subjectID, _ := c.Get("quota_subject_id")
 		if st, ok := subjectType.(string); ok {
 			if si, ok := subjectID.(string); ok {
-				if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelID); err != nil {
+				if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelUUID); err != nil {
 					return
 				}
 			}
@@ -257,7 +257,7 @@ func (h *ChatHandler) handleNonStream(c *gin.Context, baseCtx context.Context, r
 			subjectID, _ := c.Get("quota_subject_id")
 			if st, ok := subjectType.(string); ok {
 				if si, ok := subjectID.(string); ok {
-					if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelID); err != nil {
+					if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelUUID); err != nil {
 						return // BeforeUpstream 已写入 429 响应
 					}
 				}
@@ -364,7 +364,7 @@ func (h *ChatHandler) handleStream(c *gin.Context, baseCtx context.Context, req 
 			subjectID, _ := c.Get("quota_subject_id")
 			if st, ok := subjectType.(string); ok {
 				if si, ok := subjectID.(string); ok {
-					if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelID); err != nil {
+					if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelUUID); err != nil {
 						return // BeforeUpstream 已写入 429 响应
 					}
 				}

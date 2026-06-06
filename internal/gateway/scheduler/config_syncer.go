@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	configSyncTimeout     = 5 * time.Second
-	configSyncEndpoint    = "/api/v1/internal/groups"
+	configSyncTimeout  = 5 * time.Second
+	configSyncEndpoint = "/api/v1/internal/groups"
 )
 
 // ConfigSyncer periodically fetches configuration from the control plane
@@ -139,7 +139,7 @@ func (cs *ConfigSyncer) fetchConfig() (*ControlPlaneConfig, error) {
 		config.Groups = make([]GroupConfig, 0, len(config.Data))
 		config.Models = make([]GroupModel, 0)
 		modelIdx := uint(1)
-				for _, g := range config.Data {
+		for _, g := range config.Data {
 			config.Groups = append(config.Groups, GroupConfig{
 				ID:               g.ID,
 				Name:             g.Name,
@@ -155,6 +155,7 @@ func (cs *ConfigSyncer) fetchConfig() (*ControlPlaneConfig, error) {
 					ID:             modelIdx,
 					GroupID:        g.ID,
 					ModelID:        modelIdx,
+					ModelUUID:      m.ID,
 					ModelName:      m.Name,
 					ModelType:      m.ModelType,
 					ChannelType:    m.ProviderType,

@@ -77,6 +77,9 @@ func (h *ResponsesHandler) Handle(c *gin.Context) {
 
 	c.Set("model", req.Model)
 	originalModel := req.Model
+	// routedModelUUID 保存路由选定模型的 UUID，用于模型层配额键匹配
+	//（dispatch 在下方闭包中执行，需把 decision 带出闭包作用域）。
+	routedModelUUID := ""
 	c.Set("stream", req.Stream)
 
 	releaseQuota, err := PrepareAuthorizedGates(c, originalModel, func() error {
@@ -90,6 +93,7 @@ func (h *ResponsesHandler) Handle(c *gin.Context) {
 		if decision != nil {
 			req.Model = decision.ModelName
 			req.Provider = decision.ChannelType
+			routedModelUUID = decision.ModelUUID
 		}
 		return nil
 	}, h.budgetGate, h.requestQuota)
@@ -117,7 +121,7 @@ func (h *ResponsesHandler) Handle(c *gin.Context) {
 		subjectType, _ := c.Get("quota_subject_type")
 		subjectID, _ := c.Get("quota_subject_id")
 		if subjectType != nil && subjectID != nil {
-			if err := h.quotaGate.BeforeUpstream(c, subjectType.(string), subjectID.(string), req.Model); err != nil {
+			if err := h.quotaGate.BeforeUpstream(c, subjectType.(string), subjectID.(string), routedModelUUID); err != nil {
 				return // 已在 middleware 中写入 429 响应
 			}
 		}

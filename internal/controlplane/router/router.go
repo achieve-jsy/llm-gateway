@@ -918,7 +918,9 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	quotaExemptionHandler.SetAuditRecorder(auditSvc)
 	adminGroup.POST("/quota/exemptions", guard(rbac.PermQuotaDefaultSet), quotaExemptionHandler.Create)
 	adminGroup.DELETE("/quota/exemptions/:id", guard(rbac.PermQuotaDefaultSet), quotaExemptionHandler.Revoke)
-	adminGroup.GET("/quota/exemptions", guard(rbac.PermQuotaViewScoped), quotaExemptionHandler.List)
+	// 豁免列表含真实用户姓名 / Service Key 名 / 原因，属敏感数据，仅 admin 可见
+	//（与前端 admin-only 入口、Create/Revoke 的 PermQuotaDefaultSet 保持一致）。
+	adminGroup.GET("/quota/exemptions", guard(rbac.PermQuotaDefaultSet), quotaExemptionHandler.List)
 	// 过期豁免清理定时任务（每小时一次）
 	exemptionCleanupCron := cpcron.NewExemptionCleanupCron(quotaExemptionSvc)
 	exemptionCleanupCron.Start(context.Background())

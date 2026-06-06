@@ -151,6 +151,7 @@ func (h *ServiceKeyHandler) List(c *gin.Context) {
 	actor := rbac.GetActor(c)
 
 	deptID := c.Query("dept_id")
+	keyword := c.Query("keyword")
 
 	var allowedDepts []string
 	if !actor.IsGlobal {
@@ -187,7 +188,7 @@ func (h *ServiceKeyHandler) List(c *gin.Context) {
 		}
 	}
 
-	items, total, err := h.keySvc.ListServiceKeysPaged(c.Request.Context(), deptID, allowedDepts, page, pageSize)
+	items, total, err := h.keySvc.ListServiceKeysPaged(c.Request.Context(), deptID, allowedDepts, page, pageSize, keyword)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

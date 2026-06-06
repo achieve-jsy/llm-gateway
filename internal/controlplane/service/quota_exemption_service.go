@@ -2,26 +2,36 @@ package service
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
-	"github.com/example/llm-gateway/internal/controlplane/event"
 	"github.com/example/llm-gateway/internal/core/quota"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
+// ErrExemptionNotFound 豁免不存在（或已被撤销/清理），供 handler 区分 404。
+var ErrExemptionNotFound = errors.New("exemption not found")
+
 // QuotaExemptionService 管理紧急豁免（创建/撤销/查询）
 type QuotaExemptionService struct {
 	db  *gorm.DB
 	rdb *redis.Client
+	// quotaSvc 复用 QuotaService 的全量快照重建逻辑：豁免变更后
+	// 从数据库重建完整快照，而不是读旧快照只覆盖 Exemptions 再写回。
+	quotaSvc *QuotaService
 }
 
 func NewQuotaExemptionService(db *gorm.DB, rdb *redis.Client) *QuotaExemptionService {
-	return &QuotaExemptionService{db: db, rdb: rdb}
+	return &QuotaExemptionService{
+		db:       db,
+		rdb:      rdb,
+		quotaSvc: NewQuotaService(db, rdb),
+	}
 }
 
 // CreateExemption 创建紧急豁免
@@ -43,6 +53,19 @@ func (s *QuotaExemptionService) CreateExemption(ctx context.Context, req CreateE
 	}
 	if req.CreatedBy == "" {
 		return nil, fmt.Errorf("created_by is required")
+	}
+
+	// 查重：同一主体（subject_type + subject_id）只允许一条生效中的豁免，
+	// 避免重复创建后撤销一条仍被豁免。服务层查重能挡绝大多数重复；
+	// 极端并发下仍有极小竞态窗口（低频人工操作可接受，如需彻底可再补 DB 层约束）。
+	var existing int64
+	if err := s.db.WithContext(ctx).Model(&quota.QuotaExemption{}).
+		Where("subject_type = ? AND subject_id = ? AND expires_at > ?", req.SubjectType, req.SubjectID, now).
+		Count(&existing).Error; err != nil {
+		return nil, fmt.Errorf("check existing exemption: %w", err)
+	}
+	if existing > 0 {
+		return nil, fmt.Errorf("subject already has an active exemption")
 	}
 
 	exemption := &quota.QuotaExemption{
@@ -75,8 +98,12 @@ func (s *QuotaExemptionService) CreateExemption(ctx context.Context, req CreateE
 // RevokeExemption 撤销豁免
 func (s *QuotaExemptionService) RevokeExemption(ctx context.Context, exemptionID uuid.UUID, revokedBy string) error {
 	var exemption quota.QuotaExemption
-	if err := s.db.WithContext(ctx).Where("id = ?", exemptionID).First(&exemption).Error; err != nil {
-		return fmt.Errorf("exemption not found: %w", err)
+	err := s.db.WithContext(ctx).Where("id = ?", exemptionID).First(&exemption).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrExemptionNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("find exemption: %w", err)
 	}
 
 	if err := s.db.WithContext(ctx).Delete(&exemption).Error; err != nil {
@@ -118,10 +145,22 @@ func (s *QuotaExemptionService) ListAllExemptions(ctx context.Context, limit int
 // IsExempt 检查指定主体是否当前被豁免
 func (s *QuotaExemptionService) IsExempt(ctx context.Context, subjectType, subjectID string) bool {
 	var count int64
-	s.db.WithContext(ctx).Model(&quota.QuotaExemption{}).
+	if err := s.db.WithContext(ctx).Model(&quota.QuotaExemption{}).
 		Where("subject_type = ? AND subject_id = ? AND expires_at > ?", subjectType, subjectID, time.Now().UTC()).
-		Count(&count)
+		Count(&count).Error; err != nil {
+		// 查询失败时保守返回 false（fail-closed），不把错误静默吞掉
+		slog.Warn("check exemption failed", "subject_type", subjectType, "subject_id", subjectID, "error", err)
+		return false
+	}
 	return count > 0
+}
+
+// escapeLike 转义 LIKE/ILIKE 通配符（% _ \），避免用户输入被当作通配符展开。
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "%", "\\%")
+	s = strings.ReplaceAll(s, "_", "\\_")
+	return s
 }
 
 // CleanupExpired 清理过期豁免（可由定时任务调用）
@@ -144,55 +183,19 @@ func (s *QuotaExemptionService) refreshSnapshotAsync() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	exemptions, err := s.ListActiveExemptions(ctx)
-	if err != nil {
-		slog.Warn("failed to list exemptions for snapshot", "error", err)
+	// 豁免变更后走与 QuotaService 相同的「全量重建」路径：从数据库重新计算
+	// 完整快照（配额字段 + 豁免）一次性写回。
+	//
+	// 之前的实现是「读旧快照 → 只覆盖 Exemptions → 写回」（read-modify-write），
+	// 会与 QuotaService 的配额全量重建并发写同一个 Redis 键，导致：
+	//   - 丢失配额变更（用旧快照覆盖新配额）
+	//   - 丢失新建/撤销的豁免（全量重建读到旧豁免覆盖掉新豁免）
+	// 全量重建没有「读旧值再改」的窗口，任何时刻写回的都是数据库的完整真实状态。
+	if err := s.quotaSvc.refreshSnapshot(ctx); err != nil {
+		slog.Warn("quota snapshot full rebuild after exemption change failed", "error", err)
 		return
 	}
-
-	// 读取当前 snapshot 并更新 exemptions
-	raw, err := s.rdb.Get(ctx, QuotaSnapshotKey).Result()
-	if err != nil {
-		slog.Warn("failed to read snapshot for exemption update", "error", err)
-		return
-	}
-
-	var snap QuotaSnapshotData
-	if err := json.Unmarshal([]byte(raw), &snap); err != nil {
-		slog.Warn("failed to unmarshal snapshot", "error", err)
-		return
-	}
-
-	// 转换 exemptions
-	snap.Exemptions = make([]QuotaExemptionEntry, 0, len(exemptions))
-	for _, e := range exemptions {
-		snap.Exemptions = append(snap.Exemptions, QuotaExemptionEntry{
-			SubjectType: e.SubjectType,
-			SubjectID:   e.SubjectID,
-			Reason:      e.Reason,
-			ExpiresAt:   e.ExpiresAt,
-		})
-	}
-
-	data, err := json.Marshal(snap)
-	if err != nil {
-		slog.Warn("failed to marshal snapshot", "error", err)
-		return
-	}
-
-	if err := s.rdb.Set(ctx, QuotaSnapshotKey, data, 0).Err(); err != nil {
-		slog.Warn("failed to write snapshot", "error", err)
-		return
-	}
-
-	ev := event.NewChangeEvent(event.QuotaSnapshotUpdated, "quota", uuid.Nil, 0)
-	payload, err := json.Marshal(ev)
-	if err != nil {
-		slog.Warn("quota snapshot event marshal failed", "error", err)
-	} else if err := s.rdb.Publish(ctx, "config:change", string(payload)).Err(); err != nil {
-		slog.Warn("quota snapshot publish failed", "error", err)
-	}
-	slog.Info("quota snapshot updated with exemptions", "count", len(exemptions))
+	slog.Info("quota snapshot rebuilt after exemption change")
 }
 
 // QuotaExemptionListItem 豁免列表项（含解析后的名称）
@@ -226,7 +229,7 @@ func (s *QuotaExemptionService) ListActiveExemptionsWithNames(ctx context.Contex
 	var matchedUserIDs []string
 	var matchedKeyIDs []string
 	if filter.Keyword != "" {
-		kw := "%" + filter.Keyword + "%"
+		kw := "%" + escapeLike(filter.Keyword) + "%"
 		type idRow struct {
 			ID string
 		}
@@ -234,7 +237,7 @@ func (s *QuotaExemptionService) ListActiveExemptionsWithNames(ctx context.Contex
 		var userRows []idRow
 		_ = s.db.WithContext(ctx).Table("users").
 			Select("CAST(id AS TEXT) AS id").
-			Where("name ILIKE ?", kw).
+			Where("name ILIKE ? ESCAPE '\\'", kw).
 			Find(&userRows).Error
 		for _, r := range userRows {
 			matchedUserIDs = append(matchedUserIDs, r.ID)
@@ -243,7 +246,7 @@ func (s *QuotaExemptionService) ListActiveExemptionsWithNames(ctx context.Contex
 		var keyRows []idRow
 		_ = s.db.WithContext(ctx).Table("api_keys").
 			Select("CAST(id AS TEXT) AS id").
-			Where("name ILIKE ?", kw).
+			Where("name ILIKE ? ESCAPE '\\'", kw).
 			Find(&keyRows).Error
 		for _, r := range keyRows {
 			matchedKeyIDs = append(matchedKeyIDs, r.ID)
@@ -321,66 +324,66 @@ func (s *QuotaExemptionService) ListActiveExemptionsWithNames(ctx context.Contex
 		}
 	}
 
-		// 批量查询用户名称（users.id 是 uuid，需要 CAST 为 text 与 string 比较）
-		userNames := make(map[string]string)
-		if len(userIDs) > 0 {
-			ids := make([]string, 0, len(userIDs))
-			for id := range userIDs {
-				ids = append(ids, id)
+	// 批量查询用户名称（users.id 是 uuid，需要 CAST 为 text 与 string 比较）
+	userNames := make(map[string]string)
+	if len(userIDs) > 0 {
+		ids := make([]string, 0, len(userIDs))
+		for id := range userIDs {
+			ids = append(ids, id)
+		}
+		type userNameRow struct {
+			ID   string
+			Name string
+		}
+		// 先查 users 表（SSO 真实用户）
+		var rows []userNameRow
+		_ = s.db.WithContext(ctx).Table("users").
+			Select("CAST(id AS TEXT) AS id, name").
+			Where("CAST(id AS TEXT) IN ?", ids).
+			Find(&rows).Error
+		for _, r := range rows {
+			userNames[r.ID] = r.Name
+		}
+		// 兜底查 dev_users（dev-login 创建的记录 user_id 是 dev_users.id，不在 users 表），
+		// 用 username 作显示名，避免列表回显 UUID
+		var missingIDs []string
+		for _, id := range ids {
+			if _, ok := userNames[id]; !ok {
+				missingIDs = append(missingIDs, id)
 			}
-			type userNameRow struct {
-				ID   string
-				Name string
-			}
-			// 先查 users 表（SSO 真实用户）
-			var rows []userNameRow
-			_ = s.db.WithContext(ctx).Table("users").
-				Select("CAST(id AS TEXT) AS id, name").
-				Where("CAST(id AS TEXT) IN ?", ids).
-				Find(&rows).Error
-			for _, r := range rows {
+		}
+		if len(missingIDs) > 0 {
+			var devRows []userNameRow
+			_ = s.db.WithContext(ctx).Table("dev_users").
+				Select("CAST(id AS TEXT) AS id, username AS name").
+				Where("CAST(id AS TEXT) IN ?", missingIDs).
+				Find(&devRows).Error
+			for _, r := range devRows {
 				userNames[r.ID] = r.Name
 			}
-			// 兜底查 dev_users（dev-login 创建的记录 user_id 是 dev_users.id，不在 users 表），
-			// 用 username 作显示名，避免列表回显 UUID
-			var missingIDs []string
-			for _, id := range ids {
-				if _, ok := userNames[id]; !ok {
-					missingIDs = append(missingIDs, id)
-				}
-			}
-			if len(missingIDs) > 0 {
-				var devRows []userNameRow
-				_ = s.db.WithContext(ctx).Table("dev_users").
-					Select("CAST(id AS TEXT) AS id, username AS name").
-					Where("CAST(id AS TEXT) IN ?", missingIDs).
-					Find(&devRows).Error
-				for _, r := range devRows {
-					userNames[r.ID] = r.Name
-				}
-			}
 		}
+	}
 
-		// 批量查询 Service Key 名称（api_keys.id 是 uuid，需要 CAST 为 text 与 string 比较）
-		keyNames := make(map[string]string)
-		if len(keyIDs) > 0 {
-			ids := make([]string, 0, len(keyIDs))
-			for id := range keyIDs {
-				ids = append(ids, id)
-			}
-			type keyNameRow struct {
-				ID   string
-				Name string
-			}
-			var rows []keyNameRow
-			_ = s.db.WithContext(ctx).Table("api_keys").
-				Select("CAST(id AS TEXT) AS id, name").
-				Where("CAST(id AS TEXT) IN ?", ids).
-				Find(&rows).Error
-			for _, r := range rows {
-				keyNames[r.ID] = r.Name
-			}
+	// 批量查询 Service Key 名称（api_keys.id 是 uuid，需要 CAST 为 text 与 string 比较）
+	keyNames := make(map[string]string)
+	if len(keyIDs) > 0 {
+		ids := make([]string, 0, len(keyIDs))
+		for id := range keyIDs {
+			ids = append(ids, id)
 		}
+		type keyNameRow struct {
+			ID   string
+			Name string
+		}
+		var rows []keyNameRow
+		_ = s.db.WithContext(ctx).Table("api_keys").
+			Select("CAST(id AS TEXT) AS id, name").
+			Where("CAST(id AS TEXT) IN ?", ids).
+			Find(&rows).Error
+		for _, r := range rows {
+			keyNames[r.ID] = r.Name
+		}
+	}
 
 	// 组装结果
 	items := make([]QuotaExemptionListItem, 0, len(exemptions))

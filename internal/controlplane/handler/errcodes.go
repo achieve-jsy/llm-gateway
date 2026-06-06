@@ -21,6 +21,7 @@ const (
 	CodeKeyNotFound              = "key_not_found"
 	CodeGroupNotFound            = "group_not_found"
 	CodeAnnouncementNotFound     = "announcement_not_found"
+	CodeExemptionNotFound        = "exemption_not_found"
 	CodeModelTierNotFound        = "MODEL_TIER_NOT_FOUND"
 	CodeBudgetAllocationNotFound = "BUDGET_ALLOCATION_NOT_FOUND"
 

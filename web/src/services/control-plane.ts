@@ -962,14 +962,16 @@ export async function revokeEntitlement(payload: EntitlementPayload): Promise<vo
 
 // ===================== v0.7 Service Key =====================
 
-/** 获取部门 Service Key 列表（分页） */
+/** 获取部门 Service Key 列表（分页，可选按名称搜索） */
 export async function listServiceKeys(
   deptId: string,
   page = 1,
-  pageSize = 20
+  pageSize = 20,
+  keyword = ''
 ): Promise<{ items: ServiceKeyItem[]; total: number }> {
   const params: Record<string, string | number> = { page, page_size: pageSize }
   if (deptId) params.dept_id = deptId
+  if (keyword) params.keyword = keyword
   const res = await http.get<{ items: RawServiceKeyItem[]; total: number }>(
     '/api/v1/service-keys', { params }
   )

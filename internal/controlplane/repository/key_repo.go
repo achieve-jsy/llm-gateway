@@ -153,7 +153,7 @@ func (r *KeyRepo) ListByDeptAndType(deptID, keyType string) ([]model.ApiKey, err
 	return keys, err
 }
 
-func (r *KeyRepo) ListByDeptAndTypePaged(deptID string, allowedDepts []string, keyType string, offset, limit int) ([]model.ApiKey, int64, error) {
+func (r *KeyRepo) ListByDeptAndTypePaged(deptID string, allowedDepts []string, keyType string, offset, limit int, keyword string) ([]model.ApiKey, int64, error) {
 	var keys []model.ApiKey
 	var total int64
 	q := r.db.Model(&model.ApiKey{}).Where("key_type = ?", keyType)
@@ -161,6 +161,9 @@ func (r *KeyRepo) ListByDeptAndTypePaged(deptID string, allowedDepts []string, k
 		q = q.Where("dept_id = ?", deptID)
 	} else if len(allowedDepts) > 0 {
 		q = q.Where("dept_id IN ?", allowedDepts)
+	}
+	if keyword != "" {
+		q = q.Where("name ILIKE ?", "%"+keyword+"%")
 	}
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err

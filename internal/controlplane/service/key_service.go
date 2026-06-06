@@ -697,14 +697,15 @@ func (s *KeyService) ListServiceKeys(ctx context.Context, deptID string) ([]Serv
 
 // ListServiceKeysPaged 分页列出 Service Key。
 // allowedDepts 非 nil 时限制可见部门范围（用于非全局管理员）；deptID 非空时再细化到单部门。
-func (s *KeyService) ListServiceKeysPaged(ctx context.Context, deptID string, allowedDepts []string, page, pageSize int) ([]ServiceKeyItem, int64, error) {
+// keyword 非空时按 Key 名模糊搜索。
+func (s *KeyService) ListServiceKeysPaged(ctx context.Context, deptID string, allowedDepts []string, page, pageSize int, keyword string) ([]ServiceKeyItem, int64, error) {
 	if page < 1 {
 		page = 1
 	}
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 20
 	}
-	keys, total, err := s.repo.ListByDeptAndTypePaged(deptID, allowedDepts, model.KeyTypeService, (page-1)*pageSize, pageSize)
+	keys, total, err := s.repo.ListByDeptAndTypePaged(deptID, allowedDepts, model.KeyTypeService, (page-1)*pageSize, pageSize, keyword)
 	if err != nil {
 		return nil, 0, err
 	}

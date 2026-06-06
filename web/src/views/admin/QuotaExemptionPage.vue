@@ -127,7 +127,7 @@
             @confirm="handleDelete(row)"
           >
             <template #reference>
-              <el-button type="danger" link size="small">撤销</el-button>
+              <el-button v-if="!isExpired(row.expires_at)" type="danger" link size="small">撤销</el-button>
             </template>
           </el-popconfirm>
         </template>
@@ -225,7 +225,7 @@
             type="datetime"
             placeholder="选择过期时间"
             style="width: 100%"
-            :disabled-date="(date: Date) => date.getTime() < Date.now()"
+            :disabled-date="(date: Date) => date.getTime() < new Date().setHours(0, 0, 0, 0)"
             value-format="YYYY-MM-DDTHH:mm:ss"
           />
           <div class="form-hint">豁免到期后自动失效，恢复配额限制</div>
@@ -325,12 +325,9 @@ async function searchServiceKey(keyword: string) {
   }
   skSearchLoading.value = true
   try {
-    // 后端无 keyword 搜索，先拉全量再前端过滤
-    const res = await listServiceKeys('', 1, 100)
-    const kw = keyword.toLowerCase()
-    skSearchResults.value = res.items.filter(
-      sk => sk.name.toLowerCase().includes(kw) || sk.deptName?.toLowerCase().includes(kw)
-    )
+    // 后端按 name 模糊搜索（不再是拉全量前端过滤），避免 >100 个 Key 时后段搜不到
+    const res = await listServiceKeys('', 1, 100, keyword.trim())
+    skSearchResults.value = res.items
   } catch {
     skSearchResults.value = []
   } finally {
@@ -411,7 +408,7 @@ async function loadExemptions() {
       total.value = 0
     }
   } catch (e: any) {
-    loadError.value = e?.response?.data?.error || e?.message || '未知错误'
+    loadError.value = e?.response?.data?.error?.message || e?.message || '未知错误'
     allExemptions.value = []
     total.value = 0
   } finally {
@@ -449,12 +446,16 @@ function openCreateDialog() {
 }
 
 async function handleCreate() {
-  if (!createFormRef.value) return
+  if (!createFormRef.value || creating.value) return
+  // 提前置位 creating，validate 异步期间按钮即进入 loading 态，防止双击重复提交
+  creating.value = true
   try {
     await createFormRef.value.validate()
-  } catch { return }
+  } catch {
+    creating.value = false
+    return
+  }
 
-  creating.value = true
   try {
     const expiresAt = new Date(createForm.expires_at).toISOString()
     await createQuotaExemption({
@@ -467,8 +468,8 @@ async function handleCreate() {
     createDialogVisible.value = false
     currentPage.value = 1
     await loadExemptions()
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.error || e?.message || '创建失败')
+  } catch {
+    // 全局 http 拦截器已统一弹出错误 toast，这里不再重复提示
   } finally {
     creating.value = false
   }
@@ -479,8 +480,8 @@ async function handleDelete(row: QuotaExemption) {
     await deleteQuotaExemption(row.id)
     ElMessage.success('豁免已撤销')
     await loadExemptions()
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.error || e?.message || '撤销失败')
+  } catch {
+    // 全局 http 拦截器已统一弹出错误 toast，这里不再重复提示
   }
 }
 

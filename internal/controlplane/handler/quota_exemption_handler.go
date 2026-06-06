@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -95,8 +97,16 @@ func (h *QuotaExemptionHandler) Revoke(c *gin.Context) {
 	uid, _ := userID.(string)
 
 	if err := h.svc.RevokeExemption(c.Request.Context(), id, uid); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": gin.H{"type": "not_found", "message": err.Error(), "code": CodeBadRequest},
+		if errors.Is(err, service.ErrExemptionNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": gin.H{"type": "not_found", "message": "exemption not found", "code": CodeExemptionNotFound},
+			})
+			return
+		}
+		// 其他错误（如 DB 故障）不向外泄露内部细节
+		slog.Error("revoke quota exemption failed", "exemption_id", id, "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{"type": "internal_error", "message": "撤销豁免失败", "code": CodeInternalError},
 		})
 		return
 	}
@@ -132,6 +142,16 @@ func (h *QuotaExemptionHandler) List(c *gin.Context) {
 	keyword := c.Query("keyword")
 	subjectType := c.Query("subject_type")
 	status := c.Query("status")
+
+	// 校验 status 合法值，避免非法值被静默当作「不过滤」返回全部记录
+	switch status {
+	case "", "active", "expiring_soon", "expired", "all":
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{"type": "invalid_request", "message": "无效的 status 参数", "code": CodeBadRequest},
+		})
+		return
+	}
 
 	exemptions, total, err := h.svc.ListActiveExemptionsWithNames(c.Request.Context(), page, pageSize, service.ListExemptionFilter{
 		Keyword:     keyword,

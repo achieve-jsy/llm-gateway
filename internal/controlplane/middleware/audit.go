@@ -235,11 +235,12 @@ func AuditMiddleware(recorder audit.Recorder, db ...*gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// 捕获请求体（读取后还原供下游处理）
+		// 捕获请求体：只取前 64KB 用于审计，再用 MultiReader 把剩余流接回，
+		// 保证下游 handler 读到完整 body（修复 >64KB 请求被截断导致的功能不可用）。
 		var bodyBytes []byte
 		if c.Request.Body != nil && c.Request.ContentLength != 0 {
 			bodyBytes, _ = io.ReadAll(io.LimitReader(c.Request.Body, 64*1024))
-			c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			c.Request.Body = io.NopCloser(io.MultiReader(bytes.NewReader(bodyBytes), c.Request.Body))
 		}
 		startTime := time.Now()
 
@@ -438,11 +439,67 @@ func (w *responseBodyWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
-// sanitizeBody 对请求/响应体进行脱敏处理
+// sanitizeBody 对请求/响应体进行脱敏处理。
+// 脱敏原则「宁多勿少」：宁可多隐藏字段，也不能泄漏密钥。
 var sensitiveKeys = []string{
-	"password", "secret", "token",
+	"password", "passwd", "secret", "token",
 	"authorization", "cookie",
-	"api_key", "apikey",
+	"api_key", "apikey", "credential", "key",
+}
+
+// isSensitiveKey 判断 key 名是否命中敏感子串（大小写不敏感）。
+func isSensitiveKey(k string) bool {
+	kl := strings.ToLower(k)
+	for _, sk := range sensitiveKeys {
+		if strings.Contains(kl, sk) {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikeSecret 判断字符串值是否疑似密钥（sk- 前缀、Bearer token 等）。
+func looksLikeSecret(v string) bool {
+	t := strings.ToLower(strings.TrimSpace(v))
+	return strings.HasPrefix(t, "sk-") || strings.HasPrefix(t, "bearer ")
+}
+
+// redactValue 递归脱敏：遍历 map/切片，命中敏感 key 名或疑似密钥值时替换为 "***"。
+func redactValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, val := range t {
+			if isSensitiveKey(k) {
+				out[k] = "***"
+				continue
+			}
+			out[k] = redactValue(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, val := range t {
+			out[i] = redactValue(val)
+		}
+		return out
+	case string:
+		if looksLikeSecret(t) {
+			return "***"
+		}
+		// 字符串化的 JSON（如 credentials 字段）也要递归脱敏
+		if s := strings.TrimSpace(t); strings.HasPrefix(s, "{") {
+			var inner any
+			if json.Unmarshal([]byte(s), &inner) == nil {
+				if out, err := json.Marshal(redactValue(inner)); err == nil {
+					return string(out)
+				}
+			}
+		}
+		return t
+	default:
+		return v
+	}
 }
 
 func sanitizeBody(data []byte) string {
@@ -450,31 +507,21 @@ func sanitizeBody(data []byte) string {
 		return ""
 	}
 	if !json.Valid(data) {
-		s := string(data)
-		if len(s) > 2048 {
-			return s[:2048] + "..."
-		}
-		return s
+		return truncateBody(string(data))
 	}
-	var obj map[string]any
+	var obj any
 	if err := json.Unmarshal(data, &obj); err != nil {
-		s := string(data)
-		if len(s) > 2048 {
-			return s[:2048] + "..."
-		}
-		return s
+		return truncateBody(string(data))
 	}
-	for k := range obj {
-		kl := strings.ToLower(k)
-		for _, sk := range sensitiveKeys {
-			if strings.Contains(kl, sk) {
-				obj[k] = "***"
-				break
-			}
-		}
+	out, err := json.Marshal(redactValue(obj))
+	if err != nil {
+		return truncateBody(string(data))
 	}
-	out, _ := json.Marshal(obj)
-	s := string(out)
+	return truncateBody(string(out))
+}
+
+// truncateBody 截断审计体到 2048 字节，超长追加 "..."。
+func truncateBody(s string) string {
 	if len(s) > 2048 {
 		return s[:2048] + "..."
 	}

@@ -26,6 +26,25 @@ func (h *QuotaExemptionHandler) SetAuditRecorder(r auditRecorder) {
 	h.auditor = r
 }
 
+// recordAudit 内部辅助：写审计并标记跳过全局中间件，避免双写，并补齐部门归属。
+func (h *QuotaExemptionHandler) recordAudit(c *gin.Context, action audit.Action, resourceID string) {
+	if h.auditor == nil {
+		return
+	}
+	uid, _ := uuid.Parse(c.GetString("user_id"))
+	h.auditor.Record(audit.Input{
+		UserID:       uid,
+		UserName:     c.GetString("user_name"),
+		Action:       action,
+		ResourceType: audit.ResourceQuota,
+		ResourceID:   resourceID,
+		DeptID:       c.GetString("dept_id"),
+		DeptName:     c.GetString("dept_name"),
+		ClientIP:     c.ClientIP(),
+	})
+	audit.MarkRecorded(c)
+}
+
 type createExemptionRequest struct {
 	SubjectType string    `json:"subject_type" binding:"required"`
 	SubjectID   string    `json:"subject_id" binding:"required"`
@@ -68,18 +87,7 @@ func (h *QuotaExemptionHandler) Create(c *gin.Context) {
 		return
 	}
 
-	if h.auditor != nil {
-		uid, _ := c.Get("user_id")
-		uname, _ := c.Get("user_name")
-		uidStr, _ := uid.(string)
-		unameStr, _ := uname.(string)
-		uidUUID, _ := uuid.Parse(uidStr)
-		h.auditor.Record(audit.Input{
-			UserID: uidUUID, UserName: unameStr,
-			Action: audit.ActionQuotaExemptionCreate, ResourceType: audit.ResourceQuota,
-			ResourceID: exemption.ID.String(), ClientIP: c.ClientIP(),
-		})
-	}
+	h.recordAudit(c, audit.ActionQuotaExemptionCreate, exemption.ID.String())
 	c.JSON(http.StatusCreated, gin.H{"code": 0, "data": exemption})
 }
 
@@ -111,18 +119,7 @@ func (h *QuotaExemptionHandler) Revoke(c *gin.Context) {
 		return
 	}
 
-	if h.auditor != nil {
-		uid, _ := c.Get("user_id")
-		uname, _ := c.Get("user_name")
-		uidStr, _ := uid.(string)
-		unameStr, _ := uname.(string)
-		uidUUID, _ := uuid.Parse(uidStr)
-		h.auditor.Record(audit.Input{
-			UserID: uidUUID, UserName: unameStr,
-			Action: audit.ActionQuotaExemptionRevoke, ResourceType: audit.ResourceQuota,
-			ResourceID: id.String(), ClientIP: c.ClientIP(),
-		})
-	}
+	h.recordAudit(c, audit.ActionQuotaExemptionRevoke, id.String())
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "豁免已撤销"})
 }
 

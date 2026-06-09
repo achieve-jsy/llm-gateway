@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -529,13 +530,26 @@ func truncateBody(s string) string {
 }
 
 func extractClientIP(c *gin.Context) string {
+	// 校验 IP 格式，拒绝非 IP 的伪造值；仍存在「伪造合法 IP」风险，彻底修复需配置 gin.SetTrustedProxies。
 	if xff := c.GetHeader("X-Forwarded-For"); xff != "" {
-		return strings.TrimSpace(strings.Split(xff, ",")[0])
+		if ip := firstValidIP(xff); ip != "" {
+			return ip
+		}
 	}
-	if xri := c.GetHeader("X-Real-IP"); xri != "" {
-		return strings.TrimSpace(xri)
+	if xri := strings.TrimSpace(c.GetHeader("X-Real-IP")); xri != "" && net.ParseIP(xri) != nil {
+		return xri
 	}
 	return c.ClientIP()
+}
+
+// firstValidIP 返回 X-Forwarded-For 中第一个合法 IP，跳过非法段。
+func firstValidIP(xff string) string {
+	for _, part := range strings.Split(xff, ",") {
+		if ip := strings.TrimSpace(part); net.ParseIP(ip) != nil {
+			return ip
+		}
+	}
+	return ""
 }
 
 func inferAction(method, path string) audit.Action {
@@ -623,14 +637,11 @@ func inferResourceType(path string) string {
 }
 
 func inferResourceID(c *gin.Context) string {
-	if id := c.Param("id"); id != "" {
-		return id
-	}
-	if id := c.Param("model_id"); id != "" {
-		return id
-	}
-	if id := c.Param("eid"); id != "" {
-		return id
+	// 依次尝试常见资源 ID 参数；补 allocation_id/dept_id/user_id，避免 budget tier-limit 等落库 resource_id 为空。
+	for _, key := range []string{"id", "model_id", "eid", "allocation_id", "dept_id", "user_id"} {
+		if v := c.Param(key); v != "" {
+			return v
+		}
 	}
 	return ""
 }

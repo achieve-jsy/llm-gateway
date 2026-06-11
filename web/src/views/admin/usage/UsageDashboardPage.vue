@@ -188,6 +188,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useOrgStore } from '@/stores/org'
 import { useRoute } from 'vue-router'
 import http from '@/services/http'
+import axios from 'axios'
 import { useSettingsStore } from '@/stores/settings'
 import { fetchUsersRanking } from '@/api/dashboard-enhanced'
 import type { UserRankRow } from '@/types/dashboard-enhanced'
@@ -217,8 +218,8 @@ const fmt = (d: Date) => d.toISOString().split('T')[0]
 const today = new Date()
 const daysAgo = (n: number) => { const d = new Date(today); d.setDate(d.getDate() - n); return d }
 
-const dateRange = ref<[string, string]>([fmt(daysAgo(29)), fmt(today)])
-const activePreset = ref('近30天')
+const dateRange = ref<[string, string]>([fmt(daysAgo(6)), fmt(today)])
+const activePreset = ref('近7天')
 const videoDateStart = computed(() => dateRange.value?.[0] || '')
 const videoDateEnd = computed(() => dateRange.value?.[1] || '')
 
@@ -240,6 +241,33 @@ function onDateChange() {
   activePreset.value = ''
   autoSetGranularity()
   bumpVideoOrLoadAll()
+}
+
+// ── 请求竞态控制 ──────────────────────────────────────────────
+// 看板汇总/趋势/模型/明细在切换日期/筛选时会并发重发。用「代际计数器 +
+// AbortController」双重防护：既真正中断在途请求，又丢弃过期响应，
+// 避免 30 天查询结果覆盖刚切到的 7 天结果。
+let dashAbort: AbortController | null = null
+let summaryGen = 0
+let trendGen = 0
+let modelsGen = 0
+let budgetGen = 0
+let userTopGen = 0
+let enhancedGen = 0
+
+/** 看板查询超时按所选天数自适应：近30天/90天查询更久，避免 15s 全局超时 */
+function dashTimeout(): number {
+  const [start, end] = dateRange.value
+  if (!start || !end) return 15000
+  const days = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000) + 1
+  if (days >= 60) return 120000
+  if (days >= 15) return 60000
+  return 15000
+}
+
+/** 统一封装看板 GET：附带自适应超时与可选中止信号 */
+function dashGet(url: string, params: Record<string, any>, signal?: AbortSignal) {
+  return http.get(url, { params, timeout: dashTimeout(), signal })
 }
 
 // ── 筛选 ──────────────────────────────────────────────────────
@@ -444,11 +472,14 @@ const budgetPoolItems = computed(() =>
   budgetContext.value.filter((c: any) => c.amount_usd > 0)
 )
 
-async function loadBudget() {
+async function loadBudget(signal?: AbortSignal) {
+  const gen = ++budgetGen
   try {
-    const res = await http.get('/api/v1/budgets/context')
+    const res = await http.get('/api/v1/budgets/context', { signal })
+    if (gen !== budgetGen) return
     budgetContext.value = res.data?.context ?? []
   } catch (e) {
+    if (gen !== budgetGen || axios.isCancel(e)) return
     budgetContext.value = []
     console.warn('Failed to load budget context:', e)
   }
@@ -547,7 +578,8 @@ const prevPeriodLabel = computed(() => {
 
 
 
-async function loadSummary() {
+async function loadSummary(signal?: AbortSignal) {
+  const gen = ++summaryGen
   summaryLoading.value = true
   try {
     const last = breadcrumbs.value[breadcrumbs.value.length - 1]
@@ -562,28 +594,30 @@ async function loadSummary() {
     if (filterModel.value) params.model_name = filterModel.value
     if (filterStatus.value) params.status = filterStatus.value
     if (filterEndpoint.value) params.endpoint = filterEndpoint.value
-    const res = await http.get('/api/v1/usage/dashboard', { params })
+    const res = await dashGet('/api/v1/usage/dashboard', params, signal)
+    if (gen !== summaryGen) return
     summary.value = res.data?.summary ?? null
     breakdown.value = res.data?.breakdown ?? []
     rankTotal.value = res.data?.total ?? 0
 
     if (currentScope.value === 'user') {
-      loadUserTopModels()
+      loadUserTopModels(signal)
     } else {
       userTopModels.value = {}
     }
     // Phase B: 当展示用户列表时(dept scope)，并行获取增强数据
     if (currentScope.value === 'dept') {
-      loadEnhancedUsers()
+      loadEnhancedUsers(signal)
     } else {
       enhancedUserMap.value = {}
     }
   } catch (e) {
+    if (gen !== summaryGen || axios.isCancel(e)) return
     summary.value = null
     breakdown.value = []
     console.warn('Failed to load summary:', e)
   } finally {
-    summaryLoading.value = false
+    if (gen === summaryGen) summaryLoading.value = false
   }
 }
 
@@ -591,7 +625,8 @@ async function loadSummary() {
 const userTopModels = ref<Record<string, { model: string; est_cost_usd: number }[]>>({})
 const enhancedUserMap = ref<Record<string, UserRankRow>>({})
 
-async function loadUserTopModels() {
+async function loadUserTopModels(signal?: AbortSignal) {
+  const gen = ++userTopGen
   try {
     const last = breadcrumbs.value[breadcrumbs.value.length - 1]
     const params: Record<string, any> = {
@@ -601,15 +636,18 @@ async function loadUserTopModels() {
     }
     if (last?.id && last.scope === 'studio') params.studio_id = last.id
     if (last?.id && last.scope === 'dept') params.dept_id = last.id
-    const res = await http.get('/api/v1/usage/dashboard/user-top-models', { params })
+    const res = await dashGet('/api/v1/usage/dashboard/user-top-models', params, signal)
+    if (gen !== userTopGen) return
     userTopModels.value = res.data?.models ?? {}
   } catch (e) {
+    if (gen !== userTopGen || axios.isCancel(e)) return
     userTopModels.value = {}
     console.warn('Failed to load user top models:', e)
   }
 }
 
-async function loadEnhancedUsers() {
+async function loadEnhancedUsers(signal?: AbortSignal) {
+  const gen = ++enhancedGen
   try {
     const last = breadcrumbs.value[breadcrumbs.value.length - 1]
     const params: any = {
@@ -622,13 +660,15 @@ async function loadEnhancedUsers() {
     if (last?.id && last.scope === 'studio') params.studio_id = last.id
     if (filterModel.value) params.model_name = filterModel.value
     if (filterEndpoint.value) params.endpoint = filterEndpoint.value
-    const data = await fetchUsersRanking(params)
+    const data = await fetchUsersRanking(params, { timeout: dashTimeout(), signal })
+    if (gen !== enhancedGen) return
     const map: Record<string, UserRankRow> = {}
     for (const row of data.rows) {
       map[row.user_id] = row
     }
     enhancedUserMap.value = map
   } catch (e) {
+    if (gen !== enhancedGen || axios.isCancel(e)) return
     enhancedUserMap.value = {}
     console.warn('Failed to load enhanced users:', e)
   }
@@ -720,7 +760,8 @@ function autoSetGranularity() {
   else trendGranularity.value = 'day'
 }
 
-async function loadTrend() {
+async function loadTrend(signal?: AbortSignal) {
+  const gen = ++trendGen
   trendLoading.value = true
   try {
     const trendParams: Record<string, any> = { start: dateRange.value[0], end: dateRange.value[1] }
@@ -737,17 +778,19 @@ async function loadTrend() {
     const prevParams = { ...trendParams, start: fmt(prevStart), end: fmt(prevEnd) }
 
     const [res, prevRes] = await Promise.all([
-      http.get('/api/v1/usage/dashboard/trend', { params: trendParams }),
-      http.get('/api/v1/usage/dashboard/trend', { params: prevParams }).catch(() => ({ data: { rows: [] } })),
+      dashGet('/api/v1/usage/dashboard/trend', trendParams, signal),
+      dashGet('/api/v1/usage/dashboard/trend', prevParams, signal).catch(() => ({ data: { rows: [] } })),
     ])
+    if (gen !== trendGen) return
     trendData.value     = res.data?.rows     ?? []
     prevTrendData.value = prevRes.data?.rows ?? []
   } catch (e) {
+    if (gen !== trendGen || axios.isCancel(e)) return
     trendData.value     = []
     prevTrendData.value = []
     console.warn('Failed to load trend data:', e)
   } finally {
-    trendLoading.value = false
+    if (gen === trendGen) trendLoading.value = false
   }
 }
 
@@ -768,7 +811,8 @@ const modelMetric    = ref<'cost' | 'calls' | 'tokens'>('cost')
 function switchModelChartType(_t: any) { /* ModelChartSection handles rendering */ }
 function switchModelMetric(_m: any) { /* ModelChartSection handles rendering */ }
 
-async function loadModels() {
+async function loadModels(signal?: AbortSignal) {
+  const gen = ++modelsGen
   modelsLoading.value = true
   try {
     const modelParams: Record<string, any> = { start: dateRange.value[0], end: dateRange.value[1] }
@@ -776,13 +820,15 @@ async function loadModels() {
     if (filterModel.value)  modelParams.model_name = filterModel.value
     if (filterStatus.value) modelParams.status = filterStatus.value
     if (filterEndpoint.value) modelParams.endpoint = filterEndpoint.value
-    const res = await http.get('/api/v1/usage/dashboard/models', { params: modelParams })
+    const res = await dashGet('/api/v1/usage/dashboard/models', modelParams, signal)
+    if (gen !== modelsGen) return
     modelsData.value = res.data?.rows ?? []
   } catch (e) {
+    if (gen !== modelsGen || axios.isCancel(e)) return
     modelsData.value = []
     console.warn('Failed to load models:', e)
   } finally {
-    modelsLoading.value = false
+    if (gen === modelsGen) modelsLoading.value = false
   }
 }
 
@@ -838,10 +884,13 @@ async function onUserNameChange() {
 }
 
 function loadAll() {
-  loadSummary()
-  loadTrend()
-  loadModels()
-  loadBudget()
+  dashAbort?.abort()
+  dashAbort = new AbortController()
+  const signal = dashAbort.signal
+  loadSummary(signal)
+  loadTrend(signal)
+  loadModels(signal)
+  loadBudget(signal)
   nextTick(() => logSectionRef.value?.refresh())
 }
 

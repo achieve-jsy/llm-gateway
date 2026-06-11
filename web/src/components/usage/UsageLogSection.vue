@@ -54,6 +54,7 @@ import { ref, computed, watch, onMounted, type PropType } from 'vue'
 import { Download } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import http from '@/services/http'
+import axios from 'axios'
 import type { Currency } from '@/utils/currency'
 import type { LogRow, TraceData } from '@/types/usage-log'
 import { useLogExport, type ExportColumn } from '@/composables/useLogExport'
@@ -108,7 +109,26 @@ const mergedTableProps = computed(() => ({
 }))
 
 // ── API 调用 ──
+// ── 请求竞态控制：切换日期/筛选时中断在途请求并丢弃过期响应 ──
+let logsGen = 0
+let logsAbort: AbortController | null = null
+
+/** 明细查询超时按日期跨度自适应（近30天/90天更久，避免 15s 全局超时） */
+function logTimeout(): number {
+  const start = props.params?.start
+  const end = props.params?.end
+  if (!start || !end) return 15000
+  const days = Math.round((new Date(String(end)).getTime() - new Date(String(start)).getTime()) / 86400000) + 1
+  if (days >= 60) return 120000
+  if (days >= 15) return 60000
+  return 15000
+}
+
 async function loadLogs() {
+  const gen = ++logsGen
+  logsAbort?.abort()
+  logsAbort = new AbortController()
+  const signal = logsAbort.signal
   loading.value = true
   try {
     const queryParams: Record<string, any> = {
@@ -116,15 +136,17 @@ async function loadLogs() {
       page: page.value,
       page_size: pageSize.value,
     }
-    const r = await http.get(props.apiPath, { params: queryParams })
+    const r = await http.get(props.apiPath, { params: queryParams, timeout: logTimeout(), signal })
+    if (gen !== logsGen) return
     rows.value = r.data?.rows ?? []
     total.value = r.data?.total ?? 0
   } catch (e: any) {
+    if (gen !== logsGen || axios.isCancel(e)) return
     ElMessage.error(e?.response?.data?.details || '明细查询失败')
     rows.value = []
     total.value = 0
   } finally {
-    loading.value = false
+    if (gen === logsGen) loading.value = false
   }
 }
 

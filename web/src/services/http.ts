@@ -113,6 +113,10 @@ http.interceptors.response.use(
     return response
   },
   async (error) => {
+    // 请求被主动取消（如看板切换日期时 AbortController 中断）时静默失败，不弹错误提示
+    if (axios.isCancel(error)) {
+      return Promise.reject(error)
+    }
     const status = error.response?.status
     const requestUrl = String(error.config?.url || '')
     const friendlyMsg = resolveErrorMessage(error)

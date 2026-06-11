@@ -13,16 +13,19 @@ import type {
 } from '@/types/dashboard-enhanced'
 
 /** 增强版用户排行 GET /api/v1/usage/dashboard/users */
-export async function fetchUsersRanking(params: {
-  from: string
-  to: string
-  studio_id?: string
-  dept_id?: string
-  model_name?: string
-  page?: number
-  page_size?: number
-}): Promise<UsersApiResponse> {
-  const res = await http.get('/api/v1/usage/dashboard/users', { params })
+export async function fetchUsersRanking(
+  params: {
+    from: string
+    to: string
+    studio_id?: string
+    dept_id?: string
+    model_name?: string
+    page?: number
+    page_size?: number
+  },
+  opts?: { timeout?: number; signal?: AbortSignal },
+): Promise<UsersApiResponse> {
+  const res = await http.get('/api/v1/usage/dashboard/users', { params, ...opts })
   return res.data as UsersApiResponse
 }
 

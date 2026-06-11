@@ -18,9 +18,10 @@ const (
 	opsCleanupLeaderKey     = "ops:cleanup:leader"
 	opsCleanupLockTTL       = 30 * time.Minute
 	opsCleanupLockExtendTTL = 5 * time.Minute
-	defaultCleanupSchedule  = "0 3 * * *" // 每天凌晨 3:00
-	defaultCallLogRetention = 30
+	defaultCleanupSchedule   = "0 3 * * *" // 每天凌晨 3:00
+	defaultCallLogRetention  = 30
 	defaultErrorLogRetention = 90
+	defaultAuditLogRetention = 180 // 审计日志保留半年，满足合规追溯
 )
 
 // OpsCleanupService 定期清理过期 call_logs 和 system_logs。
@@ -34,6 +35,7 @@ type OpsCleanupService struct {
 	// retention 配置（运行时从 settings 读取）
 	callLogRetentionDays  int
 	errorLogRetentionDays int
+	auditLogRetentionDays int
 	cronSchedule          string
 
 	mu sync.RWMutex
@@ -48,6 +50,7 @@ func NewOpsCleanupService(db *gorm.DB, rdb *redis.Client) *OpsCleanupService {
 		instanceID:            fmt.Sprintf("%s-%d", hostname, time.Now().UnixNano()),
 		callLogRetentionDays:  defaultCallLogRetention,
 		errorLogRetentionDays: defaultErrorLogRetention,
+		auditLogRetentionDays: defaultAuditLogRetention,
 		cronSchedule:          defaultCleanupSchedule,
 	}
 }
@@ -61,6 +64,15 @@ func (s *OpsCleanupService) SetRetention(callLogDays, errorLogDays int) {
 	}
 	if errorLogDays > 0 {
 		s.errorLogRetentionDays = errorLogDays
+	}
+}
+
+// SetAuditRetention 设置审计日志保留天数。
+func (s *OpsCleanupService) SetAuditRetention(days int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if days > 0 {
+		s.auditLogRetentionDays = days
 	}
 }
 
@@ -189,6 +201,9 @@ func (s *OpsCleanupService) runCleanup(ctx context.Context) {
 	// 清理 system_logs
 	s.cleanupSystemLogs(ctx)
 
+	// 清理 audit_logs
+	s.cleanupAuditLogs(ctx)
+
 	slog.Info("ops_cleanup: cleanup cycle completed")
 }
 
@@ -233,6 +248,27 @@ func (s *OpsCleanupService) cleanupSystemLogs(ctx context.Context) {
 	slog.Info("ops_cleanup: system_logs cleanup done", "deleted_rows", result.RowsAffected)
 }
 
+// cleanupAuditLogs 清理过期的 audit_logs。
+func (s *OpsCleanupService) cleanupAuditLogs(ctx context.Context) {
+	s.mu.RLock()
+	days := s.auditLogRetentionDays
+	s.mu.RUnlock()
+
+	slog.Info("ops_cleanup: cleaning audit_logs", "retention_days", days)
+
+	// audit_logs 用 created_at 列（非 ts）
+	deleteSQL := fmt.Sprintf("DELETE FROM audit_logs WHERE created_at < NOW() - INTERVAL '%d days'", days)
+	if s.db.Dialector.Name() == "sqlite" {
+		deleteSQL = fmt.Sprintf("DELETE FROM audit_logs WHERE created_at < datetime('now','-%d days')", days)
+	}
+	result := s.db.WithContext(ctx).Exec(deleteSQL)
+	if result.Error != nil {
+		slog.Error("ops_cleanup: failed to cleanup audit_logs", "error", result.Error)
+		return
+	}
+	slog.Info("ops_cleanup: audit_logs cleanup done", "deleted_rows", result.RowsAffected)
+}
+
 // LoadRetentionFromSettings 从 settings 加载保留天数配置。
 func (s *OpsCleanupService) LoadRetentionFromSettings(settingsValue string) {
 	if settingsValue == "" {
@@ -241,10 +277,12 @@ func (s *OpsCleanupService) LoadRetentionFromSettings(settingsValue string) {
 	var settings struct {
 		DataRetentionDays int `json:"data_retention_days"`
 		ErrorLogRetention int `json:"error_log_retention_days"`
+		AuditLogRetention int `json:"audit_log_retention_days"`
 	}
 	if err := json.Unmarshal([]byte(settingsValue), &settings); err != nil {
 		slog.Warn("ops_cleanup: failed to parse advanced settings", "error", err)
 		return
 	}
 	s.SetRetention(settings.DataRetentionDays, settings.ErrorLogRetention)
+	s.SetAuditRetention(settings.AuditLogRetention)
 }

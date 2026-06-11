@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -155,6 +156,68 @@ var auditRouteMap = map[string]routeAction{
 	"POST:/api/v1/org/employees/import":               {audit.ActionEmployeeImport, audit.ResourceEmployee},
 	"PUT:/api/v1/org/users/:id/department":            {audit.Action("user.change_department"), audit.ResourceUser},
 	"PUT:/api/v1/org/users/:id/department/follow-sso": {audit.Action("user.follow_sso_department"), audit.ResourceUser},
+
+	// ── Service Keys（补 2 条未手动埋点的写操作）───────────────────
+	"POST:/api/v1/service-keys/:id/groups":           {audit.Action("service_key.update_groups"), audit.ResourceServiceKey},
+	"POST:/api/v1/service-keys/:id/access-all-groups": {audit.Action("service_key.toggle_access_all"), audit.ResourceServiceKey},
+
+	// ── Quick Onboard ──────────────────────────────────────────────
+	"POST:/api/v1/providers/quick-onboard/preview": {audit.Action("provider.quick_onboard_preview"), audit.ResourceProvider},
+	"POST:/api/v1/providers/quick-onboard":          {audit.Action("provider.quick_onboard"), audit.ResourceProvider},
+
+	// ── Group capability reset ─────────────────────────────────────
+	"POST:/api/v1/groups/:id/reset-capability": {audit.Action("group.reset_capability"), audit.ResourceGroup},
+
+	// ── Expansion（PATCH 更新）─────────────────────────────────────
+	"PATCH:/api/v1/expansion-requests/:id": {audit.Action("expansion.update"), audit.ResourceExpansion},
+
+	// ── Key Requests ───────────────────────────────────────────────
+	"POST:/api/v1/key-requests":              {audit.Action("key_request.create"), audit.Resource("key_request")},
+	"POST:/api/v1/key-requests/:id/cancel":   {audit.Action("key_request.cancel"), audit.Resource("key_request")},
+	"POST:/api/v1/key-requests/:id/decision": {audit.Action("key_request.decision"), audit.Resource("key_request")},
+
+	// ── Dept Policies ──────────────────────────────────────────────
+	"PUT:/api/v1/dept-policies/:dept_id/key-creation": {audit.Action("dept_policy.update_key_creation"), audit.Resource("dept_policy")},
+
+	// ── Budgets（批量/多周期）──────────────────────────────────────
+	"PUT:/api/v1/budgets/multi-period":               {audit.ActionBudgetSet, audit.ResourceBudget},
+	"POST:/api/v1/budgets/batch/preview":             {audit.ActionBudgetAdjustPreview, audit.ResourceBudget},
+	"POST:/api/v1/budgets/batch/apply":               {audit.ActionBudgetAdjustApply, audit.ResourceBudget},
+	"POST:/api/v1/budgets/tier-limits/batch/preview": {audit.ActionBudgetAdjustPreview, audit.ResourceBudget},
+
+	// ── Channel Monitors ───────────────────────────────────────────
+	"POST:/api/v1/channel-monitors":                   {audit.Action("channel_monitor.create"), audit.Resource("channel_monitor")},
+	"PUT:/api/v1/channel-monitors/:id":                {audit.Action("channel_monitor.update"), audit.Resource("channel_monitor")},
+	"DELETE:/api/v1/channel-monitors/:id":             {audit.Action("channel_monitor.delete"), audit.Resource("channel_monitor")},
+	"POST:/api/v1/channel-monitors/:id/run":           {audit.Action("channel_monitor.run"), audit.Resource("channel_monitor")},
+	"POST:/api/v1/channel-monitor-templates":          {audit.Action("channel_monitor_template.create"), audit.Resource("channel_monitor")},
+	"PUT:/api/v1/channel-monitor-templates/:id":       {audit.Action("channel_monitor_template.update"), audit.Resource("channel_monitor")},
+	"DELETE:/api/v1/channel-monitor-templates/:id":    {audit.Action("channel_monitor_template.delete"), audit.Resource("channel_monitor")},
+
+	// ── Ops（运维看板写操作）───────────────────────────────────────
+	"POST:/api/v1/ops/alert-rules":                       {audit.Action("ops.alert_rule.create"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/alert-rules/:id":                    {audit.Action("ops.alert_rule.update"), audit.Resource("ops")},
+	"DELETE:/api/v1/ops/alert-rules/:id":                 {audit.Action("ops.alert_rule.delete"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/alert-events/:id/status":            {audit.Action("ops.alert_event.update_status"), audit.Resource("ops")},
+	"POST:/api/v1/ops/alert-silences":                    {audit.Action("ops.alert_silence.create"), audit.Resource("ops")},
+	"POST:/api/v1/ops/system-logs/cleanup":               {audit.Action("ops.system_log.cleanup"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/runtime/logging":                    {audit.Action("ops.runtime_logging.update"), audit.Resource("ops")},
+	"POST:/api/v1/ops/runtime/logging/reset":             {audit.Action("ops.runtime_logging.reset"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/settings/metric-thresholds":         {audit.Action("ops.settings.update_metric_thresholds"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/settings/dashboard":                 {audit.Action("ops.settings.update_dashboard"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/settings/advanced":                  {audit.Action("ops.settings.update_advanced"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/settings/email-notification":        {audit.Action("ops.settings.update_email"), audit.Resource("ops")},
+	"POST:/api/v1/ops/settings/email-notification/test":  {audit.Action("ops.settings.test_email"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/settings/alert-runtime":             {audit.Action("ops.settings.update_alert_runtime"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/error-logs/:id/resolve":             {audit.Action("ops.error_log.resolve"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/request-errors/:id/resolve":         {audit.Action("ops.request_error.resolve"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/upstream-errors/:id/resolve":        {audit.Action("ops.upstream_error.resolve"), audit.Resource("ops")},
+
+	// ── Internal（gateway 调用的状态变更，需审计；高频 verify-key 不审计）──
+	"POST:/internal/v1/budget/evaluate-alert":   {audit.Action("budget.evaluate_alert"), audit.ResourceBudget},
+	"POST:/internal/v1/video/tasks":             {audit.Action("video_task.create"), audit.Resource("video_task")},
+	"PATCH:/internal/v1/video/tasks/:id":        {audit.Action("video_task.update"), audit.Resource("video_task")},
+	"PATCH:/internal/v1/video/tasks/:id/status": {audit.Action("video_task.update_status"), audit.Resource("video_task")},
 }
 
 func lookupRouteAction(fullPath, method string) (action audit.Action, resource audit.Resource, ok bool) {
@@ -235,11 +298,12 @@ func AuditMiddleware(recorder audit.Recorder, db ...*gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// 捕获请求体（读取后还原供下游处理）
+		// 捕获请求体：只取前 64KB 用于审计，再用 MultiReader 把剩余流接回，
+		// 保证下游 handler 读到完整 body（修复 >64KB 请求被截断导致的功能不可用）。
 		var bodyBytes []byte
 		if c.Request.Body != nil && c.Request.ContentLength != 0 {
 			bodyBytes, _ = io.ReadAll(io.LimitReader(c.Request.Body, 64*1024))
-			c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			c.Request.Body = io.NopCloser(io.MultiReader(bytes.NewReader(bodyBytes), c.Request.Body))
 		}
 		startTime := time.Now()
 
@@ -438,11 +502,67 @@ func (w *responseBodyWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
-// sanitizeBody 对请求/响应体进行脱敏处理
+// sanitizeBody 对请求/响应体进行脱敏处理。
+// 脱敏原则「宁多勿少」：宁可多隐藏字段，也不能泄漏密钥。
 var sensitiveKeys = []string{
-	"password", "secret", "token",
+	"password", "passwd", "secret", "token",
 	"authorization", "cookie",
-	"api_key", "apikey",
+	"api_key", "apikey", "credential", "key",
+}
+
+// isSensitiveKey 判断 key 名是否命中敏感子串（大小写不敏感）。
+func isSensitiveKey(k string) bool {
+	kl := strings.ToLower(k)
+	for _, sk := range sensitiveKeys {
+		if strings.Contains(kl, sk) {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikeSecret 判断字符串值是否疑似密钥（sk- 前缀、Bearer token 等）。
+func looksLikeSecret(v string) bool {
+	t := strings.ToLower(strings.TrimSpace(v))
+	return strings.HasPrefix(t, "sk-") || strings.HasPrefix(t, "bearer ")
+}
+
+// redactValue 递归脱敏：遍历 map/切片，命中敏感 key 名或疑似密钥值时替换为 "***"。
+func redactValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, val := range t {
+			if isSensitiveKey(k) {
+				out[k] = "***"
+				continue
+			}
+			out[k] = redactValue(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, val := range t {
+			out[i] = redactValue(val)
+		}
+		return out
+	case string:
+		if looksLikeSecret(t) {
+			return "***"
+		}
+		// 字符串化的 JSON（如 credentials 字段）也要递归脱敏
+		if s := strings.TrimSpace(t); strings.HasPrefix(s, "{") {
+			var inner any
+			if json.Unmarshal([]byte(s), &inner) == nil {
+				if out, err := json.Marshal(redactValue(inner)); err == nil {
+					return string(out)
+				}
+			}
+		}
+		return t
+	default:
+		return v
+	}
 }
 
 func sanitizeBody(data []byte) string {
@@ -450,31 +570,21 @@ func sanitizeBody(data []byte) string {
 		return ""
 	}
 	if !json.Valid(data) {
-		s := string(data)
-		if len(s) > 2048 {
-			return s[:2048] + "..."
-		}
-		return s
+		return truncateBody(string(data))
 	}
-	var obj map[string]any
+	var obj any
 	if err := json.Unmarshal(data, &obj); err != nil {
-		s := string(data)
-		if len(s) > 2048 {
-			return s[:2048] + "..."
-		}
-		return s
+		return truncateBody(string(data))
 	}
-	for k := range obj {
-		kl := strings.ToLower(k)
-		for _, sk := range sensitiveKeys {
-			if strings.Contains(kl, sk) {
-				obj[k] = "***"
-				break
-			}
-		}
+	out, err := json.Marshal(redactValue(obj))
+	if err != nil {
+		return truncateBody(string(data))
 	}
-	out, _ := json.Marshal(obj)
-	s := string(out)
+	return truncateBody(string(out))
+}
+
+// truncateBody 截断审计体到 2048 字节，超长追加 "..."。
+func truncateBody(s string) string {
 	if len(s) > 2048 {
 		return s[:2048] + "..."
 	}
@@ -482,13 +592,26 @@ func sanitizeBody(data []byte) string {
 }
 
 func extractClientIP(c *gin.Context) string {
+	// 校验 IP 格式，拒绝非 IP 的伪造值；仍存在「伪造合法 IP」风险，彻底修复需配置 gin.SetTrustedProxies。
 	if xff := c.GetHeader("X-Forwarded-For"); xff != "" {
-		return strings.TrimSpace(strings.Split(xff, ",")[0])
+		if ip := firstValidIP(xff); ip != "" {
+			return ip
+		}
 	}
-	if xri := c.GetHeader("X-Real-IP"); xri != "" {
-		return strings.TrimSpace(xri)
+	if xri := strings.TrimSpace(c.GetHeader("X-Real-IP")); xri != "" && net.ParseIP(xri) != nil {
+		return xri
 	}
 	return c.ClientIP()
+}
+
+// firstValidIP 返回 X-Forwarded-For 中第一个合法 IP，跳过非法段。
+func firstValidIP(xff string) string {
+	for _, part := range strings.Split(xff, ",") {
+		if ip := strings.TrimSpace(part); net.ParseIP(ip) != nil {
+			return ip
+		}
+	}
+	return ""
 }
 
 func inferAction(method, path string) audit.Action {
@@ -576,14 +699,11 @@ func inferResourceType(path string) string {
 }
 
 func inferResourceID(c *gin.Context) string {
-	if id := c.Param("id"); id != "" {
-		return id
-	}
-	if id := c.Param("model_id"); id != "" {
-		return id
-	}
-	if id := c.Param("eid"); id != "" {
-		return id
+	// 依次尝试常见资源 ID 参数；补 allocation_id/dept_id/user_id，避免 budget tier-limit 等落库 resource_id 为空。
+	for _, key := range []string{"id", "model_id", "eid", "allocation_id", "dept_id", "user_id"} {
+		if v := c.Param(key); v != "" {
+			return v
+		}
 	}
 	return ""
 }

@@ -46,7 +46,7 @@ flowchart TB
 | `internal/fallback/` `internal/llmclientconfig/` | fallback 候选链解析与韧性配置类型 |
 | `internal/cache/` `internal/modeldata/` `internal/streaming/` | KV/模型缓存、外部 models.json 富化、SSE 流观测 |
 | `web/src/views/admin/` | 管理面页面（渠道/模型/Catalog/设置/健康/公告等） |
-| `migrations/` | Postgres SQL 迁移（按序号 `001..NNN`） |
+| `atlas-migrations/` | Atlas SQL 迁移（唯一迁移源，时间戳命名；legacy `migrations/` 已冻结） |
 | `tools/opencode-models-discovery/` | OpenCode 模型发现插件（fork），见 `docs/opencode-models-discovery.md` |
 | `docs/` | 设计/架构文档 |
 | `tests/` | 测试代码，与业务代码物理分离。按模块镜像 `internal/` 结构，原则见 `tests/README.md` |
@@ -111,7 +111,7 @@ cd tools/opencode-models-discovery && bun run build:bundle && bunx tsc --noEmit 
 - **改了 Go 后**务必本地 `go build ./...` 并按需补测试；`tests/contract/contracts.json` 为 FE↔BE 接口契约参考，改动接口时需同步更新。
 - **gateway 不要直连数据库**——它只通过 Redis snapshot / 控制面内部 API 获取配置。新增需要持久化的能力放控制面，gateway 经 `internal/gateway/binding` 调内部接口。
 - **新增厂商**：在 `internal/providers/<vendor>/` 实现 `core.Provider`，在 `cmd/gateway/main.go` 的 `buildProviderFactory()` 注册 `Type`。
-- **数据库变更**：新增 `migrations/NNN_*.sql`（递增序号），对应改 `internal/controlplane/model` 与 repository。
+- **数据库变更**：用 Atlas 管理，迁移文件放 `atlas-migrations/<timestamp>_*.sql`，对应改 `internal/controlplane/model` 与 repository；改 schema 走 `atlas-db-migration` skill（`atlas migrate diff` / `atlas migrate apply`）。
 - **能力/价格/上下文**走 `model_catalog`，不要在多处硬编码；模型组能力是**聚合**结果。
 - **插件分发**改动后要 bump `tools/opencode-models-discovery/package.json` 版本并 `bun run build:bundle`，否则客户端不会自更新；插件落地目录是复数 `~/.config/opencode/plugins/`。
 - **不要提交**编译产物（`bin/`、根目录的 `gateway`/`control-plane`/`auth` 大文件）和密钥（`.env`）。

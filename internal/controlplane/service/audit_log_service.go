@@ -16,11 +16,18 @@ import (
 // 通过写 DB 的方式持久化，实现了 audit.Recorder 接口（Record(in audit.Input)）。
 // 其他依赖审计的组件（handler/middleware）均持有 audit.Recorder 接口，不直接依赖此类。
 type AuditLogService struct {
-	repo *repository.AuditLogRepo
+	repo   *repository.AuditLogRepo
+	writer *AuditLogWriter
 }
 
-func NewAuditLogService(repo *repository.AuditLogRepo) *AuditLogService {
-	return &AuditLogService{repo: repo}
+// NewAuditLogService 创建审计日志存储。
+// 传入 AuditLogWriter 时启用异步批量写；不传则回退为同步写（测试用）。
+func NewAuditLogService(repo *repository.AuditLogRepo, writers ...*AuditLogWriter) *AuditLogService {
+	s := &AuditLogService{repo: repo}
+	if len(writers) > 0 {
+		s.writer = writers[0]
+	}
+	return s
 }
 
 // Record 写入一条审计日志（实现 audit.Recorder 接口）。
@@ -63,6 +70,10 @@ func (s *AuditLogService) Record(in audit.Input) {
 		UserAgent:    truncate(in.UserAgent, 512),
 		Details:      truncate(details, auditDetailsMaxLen),
 		CreatedAt:    ts,
+	}
+	if s.writer != nil {
+		s.writer.Write(log)
+		return
 	}
 	if err := s.repo.Create(log); err != nil {
 		slog.Warn("audit: failed to write audit log",

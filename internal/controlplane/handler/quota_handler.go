@@ -227,17 +227,16 @@ func (h *QuotaHandler) recordAudit(c *gin.Context, action audit.Action, resource
 	if h.auditor == nil {
 		return
 	}
-	userID, _ := c.Get("user_id")
-	userName, _ := c.Get("user_name")
-	uid, _ := userID.(string)
-	uname, _ := userName.(string)
-	uidUUID, _ := uuid.Parse(uid)
+	uid, _ := uuid.Parse(c.GetString("user_id"))
 	h.auditor.Record(audit.Input{
-		UserID:       uidUUID,
-		UserName:     uname,
+		UserID:       uid,
+		UserName:     c.GetString("user_name"),
 		Action:       action,
 		ResourceType: resourceType,
 		ResourceID:   resourceID,
+		DeptID:       c.GetString("dept_id"),
+		DeptName:     c.GetString("dept_name"),
 		ClientIP:     c.ClientIP(),
 	})
+	audit.MarkRecorded(c)
 }

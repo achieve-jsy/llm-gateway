@@ -218,9 +218,16 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	)
 	budgetRiskHandler := handler.NewBudgetRiskHandler(budgetRiskSvc, orgContainer.RBAC)
 	notificationRepo := repository.NewNotificationRepo(db)
-	// v0.8: 审计日志（仅管理面写操作落库）
+	// v0.8: 审计日志（仅管理面写操作落库，异步批量写，失败不阻断业务）
 	auditRepo := repository.NewAuditLogRepo(db)
-	auditSvc := service.NewAuditLogService(auditRepo)
+	auditWriter := service.NewAuditLogWriter(db)
+	auditWriter.Start()
+	auditSvc := service.NewAuditLogService(auditRepo, auditWriter)
+	// 优雅停机时排空审计写队列
+	go func() {
+		<-lifecycleCtx.Done()
+		auditWriter.Stop()
+	}()
 	// 解耦的通知分发：MultiNotifier = 站内信 + 邮件
 	// 调用方只管构造 model.Notification，内部按已配置通道分发。
 	emailNotifier := service.NewEmailNotifier(settingsRepo)
@@ -811,12 +818,15 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	budgetHandler.SetCounterRebuildService(service.NewBudgetCounterRebuildService(
 		db, rdb, budgetperiod.Config{Timezone: cfg.Budget.Timezone, WeekStart: cfg.Budget.WeekStart},
 	))
-	// 注册内部告警触发端点（供 gateway 调用）
-	internalGroup.POST("/budget/evaluate-alert", budgetHandler.EvaluateAlert)
+	// 注册内部告警触发端点（供 gateway 调用）—— 状态变更走审计中间件；
+	// 高频 verify-key 查询保持不审计，避免审计表被刷爆。
+	internalAudited := internalGroup.Group("")
+	internalAudited.Use(middleware.AuditMiddleware(auditSvc, db))
+	internalAudited.POST("/budget/evaluate-alert", budgetHandler.EvaluateAlert)
 	// 视频任务写入/查询（供 gateway 调用）
-	internalGroup.POST("/video/tasks", videoTaskHandler.InternalCreate)
-	internalGroup.PATCH("/video/tasks/:id", videoTaskHandler.InternalUpdate)
-	internalGroup.PATCH("/video/tasks/:id/status", videoTaskHandler.InternalUpdateStatus)
+	internalAudited.POST("/video/tasks", videoTaskHandler.InternalCreate)
+	internalAudited.PATCH("/video/tasks/:id", videoTaskHandler.InternalUpdate)
+	internalAudited.PATCH("/video/tasks/:id/status", videoTaskHandler.InternalUpdateStatus)
 	internalGroup.GET("/video/tasks/:id/provider-type", videoTaskHandler.InternalGetProviderType)
 	// v0.7: 扩容审批路由
 	expansionHandler := handler.NewExpansionHandler(expansionSvc, orgContainer.RBAC, expansionUserRepo)

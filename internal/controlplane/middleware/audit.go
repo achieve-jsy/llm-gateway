@@ -156,6 +156,68 @@ var auditRouteMap = map[string]routeAction{
 	"POST:/api/v1/org/employees/import":               {audit.ActionEmployeeImport, audit.ResourceEmployee},
 	"PUT:/api/v1/org/users/:id/department":            {audit.Action("user.change_department"), audit.ResourceUser},
 	"PUT:/api/v1/org/users/:id/department/follow-sso": {audit.Action("user.follow_sso_department"), audit.ResourceUser},
+
+	// ── Service Keys（补 2 条未手动埋点的写操作）───────────────────
+	"POST:/api/v1/service-keys/:id/groups":           {audit.Action("service_key.update_groups"), audit.ResourceServiceKey},
+	"POST:/api/v1/service-keys/:id/access-all-groups": {audit.Action("service_key.toggle_access_all"), audit.ResourceServiceKey},
+
+	// ── Quick Onboard ──────────────────────────────────────────────
+	"POST:/api/v1/providers/quick-onboard/preview": {audit.Action("provider.quick_onboard_preview"), audit.ResourceProvider},
+	"POST:/api/v1/providers/quick-onboard":          {audit.Action("provider.quick_onboard"), audit.ResourceProvider},
+
+	// ── Group capability reset ─────────────────────────────────────
+	"POST:/api/v1/groups/:id/reset-capability": {audit.Action("group.reset_capability"), audit.ResourceGroup},
+
+	// ── Expansion（PATCH 更新）─────────────────────────────────────
+	"PATCH:/api/v1/expansion-requests/:id": {audit.Action("expansion.update"), audit.ResourceExpansion},
+
+	// ── Key Requests ───────────────────────────────────────────────
+	"POST:/api/v1/key-requests":              {audit.Action("key_request.create"), audit.Resource("key_request")},
+	"POST:/api/v1/key-requests/:id/cancel":   {audit.Action("key_request.cancel"), audit.Resource("key_request")},
+	"POST:/api/v1/key-requests/:id/decision": {audit.Action("key_request.decision"), audit.Resource("key_request")},
+
+	// ── Dept Policies ──────────────────────────────────────────────
+	"PUT:/api/v1/dept-policies/:dept_id/key-creation": {audit.Action("dept_policy.update_key_creation"), audit.Resource("dept_policy")},
+
+	// ── Budgets（批量/多周期）──────────────────────────────────────
+	"PUT:/api/v1/budgets/multi-period":               {audit.ActionBudgetSet, audit.ResourceBudget},
+	"POST:/api/v1/budgets/batch/preview":             {audit.ActionBudgetAdjustPreview, audit.ResourceBudget},
+	"POST:/api/v1/budgets/batch/apply":               {audit.ActionBudgetAdjustApply, audit.ResourceBudget},
+	"POST:/api/v1/budgets/tier-limits/batch/preview": {audit.ActionBudgetAdjustPreview, audit.ResourceBudget},
+
+	// ── Channel Monitors ───────────────────────────────────────────
+	"POST:/api/v1/channel-monitors":                   {audit.Action("channel_monitor.create"), audit.Resource("channel_monitor")},
+	"PUT:/api/v1/channel-monitors/:id":                {audit.Action("channel_monitor.update"), audit.Resource("channel_monitor")},
+	"DELETE:/api/v1/channel-monitors/:id":             {audit.Action("channel_monitor.delete"), audit.Resource("channel_monitor")},
+	"POST:/api/v1/channel-monitors/:id/run":           {audit.Action("channel_monitor.run"), audit.Resource("channel_monitor")},
+	"POST:/api/v1/channel-monitor-templates":          {audit.Action("channel_monitor_template.create"), audit.Resource("channel_monitor")},
+	"PUT:/api/v1/channel-monitor-templates/:id":       {audit.Action("channel_monitor_template.update"), audit.Resource("channel_monitor")},
+	"DELETE:/api/v1/channel-monitor-templates/:id":    {audit.Action("channel_monitor_template.delete"), audit.Resource("channel_monitor")},
+
+	// ── Ops（运维看板写操作）───────────────────────────────────────
+	"POST:/api/v1/ops/alert-rules":                       {audit.Action("ops.alert_rule.create"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/alert-rules/:id":                    {audit.Action("ops.alert_rule.update"), audit.Resource("ops")},
+	"DELETE:/api/v1/ops/alert-rules/:id":                 {audit.Action("ops.alert_rule.delete"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/alert-events/:id/status":            {audit.Action("ops.alert_event.update_status"), audit.Resource("ops")},
+	"POST:/api/v1/ops/alert-silences":                    {audit.Action("ops.alert_silence.create"), audit.Resource("ops")},
+	"POST:/api/v1/ops/system-logs/cleanup":               {audit.Action("ops.system_log.cleanup"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/runtime/logging":                    {audit.Action("ops.runtime_logging.update"), audit.Resource("ops")},
+	"POST:/api/v1/ops/runtime/logging/reset":             {audit.Action("ops.runtime_logging.reset"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/settings/metric-thresholds":         {audit.Action("ops.settings.update_metric_thresholds"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/settings/dashboard":                 {audit.Action("ops.settings.update_dashboard"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/settings/advanced":                  {audit.Action("ops.settings.update_advanced"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/settings/email-notification":        {audit.Action("ops.settings.update_email"), audit.Resource("ops")},
+	"POST:/api/v1/ops/settings/email-notification/test":  {audit.Action("ops.settings.test_email"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/settings/alert-runtime":             {audit.Action("ops.settings.update_alert_runtime"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/error-logs/:id/resolve":             {audit.Action("ops.error_log.resolve"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/request-errors/:id/resolve":         {audit.Action("ops.request_error.resolve"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/upstream-errors/:id/resolve":        {audit.Action("ops.upstream_error.resolve"), audit.Resource("ops")},
+
+	// ── Internal（gateway 调用的状态变更，需审计；高频 verify-key 不审计）──
+	"POST:/internal/v1/budget/evaluate-alert":   {audit.Action("budget.evaluate_alert"), audit.ResourceBudget},
+	"POST:/internal/v1/video/tasks":             {audit.Action("video_task.create"), audit.Resource("video_task")},
+	"PATCH:/internal/v1/video/tasks/:id":        {audit.Action("video_task.update"), audit.Resource("video_task")},
+	"PATCH:/internal/v1/video/tasks/:id/status": {audit.Action("video_task.update_status"), audit.Resource("video_task")},
 }
 
 func lookupRouteAction(fullPath, method string) (action audit.Action, resource audit.Resource, ok bool) {

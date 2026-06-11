@@ -818,12 +818,15 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	budgetHandler.SetCounterRebuildService(service.NewBudgetCounterRebuildService(
 		db, rdb, budgetperiod.Config{Timezone: cfg.Budget.Timezone, WeekStart: cfg.Budget.WeekStart},
 	))
-	// 注册内部告警触发端点（供 gateway 调用）
-	internalGroup.POST("/budget/evaluate-alert", budgetHandler.EvaluateAlert)
+	// 注册内部告警触发端点（供 gateway 调用）—— 状态变更走审计中间件；
+	// 高频 verify-key 查询保持不审计，避免审计表被刷爆。
+	internalAudited := internalGroup.Group("")
+	internalAudited.Use(middleware.AuditMiddleware(auditSvc, db))
+	internalAudited.POST("/budget/evaluate-alert", budgetHandler.EvaluateAlert)
 	// 视频任务写入/查询（供 gateway 调用）
-	internalGroup.POST("/video/tasks", videoTaskHandler.InternalCreate)
-	internalGroup.PATCH("/video/tasks/:id", videoTaskHandler.InternalUpdate)
-	internalGroup.PATCH("/video/tasks/:id/status", videoTaskHandler.InternalUpdateStatus)
+	internalAudited.POST("/video/tasks", videoTaskHandler.InternalCreate)
+	internalAudited.PATCH("/video/tasks/:id", videoTaskHandler.InternalUpdate)
+	internalAudited.PATCH("/video/tasks/:id/status", videoTaskHandler.InternalUpdateStatus)
 	internalGroup.GET("/video/tasks/:id/provider-type", videoTaskHandler.InternalGetProviderType)
 	// v0.7: 扩容审批路由
 	expansionHandler := handler.NewExpansionHandler(expansionSvc, orgContainer.RBAC, expansionUserRepo)

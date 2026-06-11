@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getModels } from '@/services/control-plane'
+import { groupsApi } from '@/api/groups'
+import { getModels, listKeys, revealKey } from '@/services/control-plane'
+import { mapKeysResponse, type ApiKey } from '@/types/api-key'
+import type { GroupListItem, GroupModel } from '@/types/group'
 import type { Model } from '@/types/model'
 
 // ─── 类型 ──────────────────────────────────────────────────────────────────
-type PlaygroundMode = 'session' | 'apikey'
+type PlaygroundMode = 'model' | 'group' | 'apikey'
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
@@ -21,10 +24,17 @@ interface GatewayModelInfo {
 }
 
 // ─── 状态 ──────────────────────────────────────────────────────────────────
-const mode = ref<PlaygroundMode>('session')
+const mode = ref<PlaygroundMode>('model')
 const models = ref<Model[]>([])
 const gatewayModelIds = ref<string[]>([])
 const loadingModels = ref(false)
+const groups = ref<GroupListItem[]>([])
+const groupModels = ref<Record<number, GroupModel[]>>({})
+const selectedGroupId = ref<number | ''>('')
+const myKeys = ref<ApiKey[]>([])
+const selectedKeyId = ref('')
+const loadingGroups = ref(false)
+const loadingKeys = ref(false)
 
 const config = reactive({
   model: '',
@@ -57,7 +67,7 @@ const effectiveApiBase = computed(() => config.apiBase || '/v1')
 
 // 选中模型的上下文窗口提示
 const modelHint = computed(() => {
-  if (mode.value === 'apikey') return ''
+  if (mode.value !== 'model') return ''
   const meta = currentModelMeta.value
   if (!meta) return ''
   const parts: string[] = []
@@ -66,7 +76,11 @@ const modelHint = computed(() => {
   return parts.join(' / ')
 })
 
-// 在 API Key 模式下，模型选项来自 gateway 名称列表
+const selectedGroup = computed(() => groups.value.find(g => g.id === selectedGroupId.value) || null)
+
+// 模型选项：
+// - API Key 模式：来自网关 /v1/models（该 Key 有权限的模型）
+// - 模型模式：全部已注册模型；模型组模式走独立的组下拉，不经过此列表
 const modelOptions = computed(() => {
   if (mode.value === 'apikey') {
     return gatewayModelIds.value.map(id => ({ id: '', name: id, upstream_model_id: id, model_type: 'chat', enabled: true } as Model))
@@ -96,6 +110,68 @@ async function loadAdminModels() {
   } finally {
     loadingModels.value = false
   }
+}
+
+// ─── 模型组 / API Key 选项 ────────────────────────────────────────────────
+async function loadGroups() {
+  loadingGroups.value = true
+  try {
+    const res = await groupsApi.listGroups({ page_size: 200 })
+    groups.value = res.data.data ?? []
+  } catch {
+    groups.value = []
+  } finally {
+    loadingGroups.value = false
+  }
+}
+
+async function loadMyKeys() {
+  loadingKeys.value = true
+  try {
+    const res = await listKeys(1, 100)
+    myKeys.value = mapKeysResponse(res)
+  } catch {
+    myKeys.value = []
+  } finally {
+    loadingKeys.value = false
+  }
+}
+
+async function onGroupChange() {
+  config.model = ''
+  if (selectedGroupId.value === '') return
+  const gid = selectedGroupId.value
+  // 选组后直接用组名作为发送的 model（gateway 按组调度）
+  config.model = selectedGroup.value?.name || ''
+  // 懒加载组内成员（仅用于展示该组包含哪些模型）
+  if (!groupModels.value[gid]) {
+    try {
+      const res = await groupsApi.listGroupModels(gid)
+      groupModels.value = { ...groupModels.value, [gid]: res.data.data ?? [] }
+    } catch {
+      groupModels.value = { ...groupModels.value, [gid]: [] }
+    }
+  }
+}
+
+async function onKeySelect(keyId: string) {
+  const key = myKeys.value.find(k => k.id === keyId)
+  if (!key) return
+  try {
+    const r = await revealKey(keyId)
+    config.apiKey = r.key
+    selectedKeyId.value = keyId
+    config.model = ''
+    await loadGatewayModels()
+  } catch {
+    ElMessage.error('获取 API Key 失败')
+  }
+}
+
+async function onManualApiKeyChange() {
+  config.model = ''
+  selectedKeyId.value = ''
+  await loadGatewayModels()
 }
 
 async function loadGatewayModels() {
@@ -132,22 +208,31 @@ async function loadGatewayModels() {
 async function loadModels() {
   if (mode.value === 'apikey') {
     await loadGatewayModels()
-  } else {
+  } else if (mode.value === 'model') {
     await loadAdminModels()
   }
+  // 模型组模式不需要模型列表（走组下拉）
 }
 
 watch(mode, () => {
   config.model = ''
+  selectedGroupId.value = ''
+  selectedKeyId.value = ''
+  if (mode.value === 'apikey' && myKeys.value.length === 0) loadMyKeys()
   loadModels()
 })
 
-onMounted(loadAdminModels)
+onMounted(() => {
+  loadAdminModels()
+  loadGroups()
+  loadMyKeys()
+})
 
 // ─── 主动获取鉴权 token ───────────────────────────────────────────────────
 function getAuthToken(): string {
   if (mode.value === 'apikey') return config.apiKey
-  return localStorage.getItem('access_token') || ''
+  // 模型 / 模型组模式：优先用可选密钥覆盖，否则用会话令牌
+  return config.apiKey || localStorage.getItem('access_token') || ''
 }
 
 // ─── 滚动到底部 ──────────────────────────────────────────────────────────
@@ -332,16 +417,36 @@ function renderContent(content: string): string {
       </div>
 
       <div class="pg-sidebar__body">
-        <!-- 模式切换 -->
+        <!-- 模式切换：模型 / 模型组 / API Key 三种调用方式 -->
         <div class="field">
-          <label class="field__label">模式</label>
+          <label class="field__label">调用方式</label>
           <el-radio-group v-model="mode" size="small" class="field__control" :disabled="isStreaming">
-            <el-radio-button value="session">会话</el-radio-button>
+            <el-radio-button value="model">模型</el-radio-button>
+            <el-radio-button value="group">模型组</el-radio-button>
             <el-radio-button value="apikey">API Key</el-radio-button>
           </el-radio-group>
         </div>
 
-        <!-- API Key 模式密钥输入 -->
+        <!-- API Key 模式：选择我的 Key / 手动输入 -->
+        <div v-if="mode === 'apikey'" class="field">
+          <label class="field__label">我的 API Key</label>
+          <el-select
+            v-model="selectedKeyId"
+            filterable
+            clearable
+            placeholder="选择我的 Key"
+            :loading="loadingKeys"
+            class="field__control"
+            @change="onKeySelect"
+          >
+            <el-option v-for="k in myKeys" :key="k.id" :label="k.name" :value="k.id">
+              <div class="model-option">
+                <span class="model-option__name">{{ k.name }}</span>
+                <span class="model-option__owner">{{ k.maskedKey }}</span>
+              </div>
+            </el-option>
+          </el-select>
+        </div>
         <div v-if="mode === 'apikey'" class="field">
           <label class="field__label">API Key</label>
           <el-input
@@ -351,12 +456,34 @@ function renderContent(content: string): string {
             show-password
             clearable
             class="field__control"
-            @change="loadGatewayModels"
+            @change="onManualApiKeyChange"
+            @clear="selectedKeyId = ''"
           />
         </div>
 
-        <!-- 模型选择 -->
-        <div class="field">
+        <!-- 模型组模式：选择模型组 -->
+        <div v-if="mode === 'group'" class="field">
+          <label class="field__label">模型组</label>
+          <el-select
+            v-model="selectedGroupId"
+            filterable
+            clearable
+            placeholder="选择模型组"
+            :loading="loadingGroups"
+            class="field__control"
+            @change="onGroupChange"
+          >
+            <el-option
+              v-for="g in groups"
+              :key="g.id"
+              :label="g.name"
+              :value="g.id"
+            />
+          </el-select>
+        </div>
+
+        <!-- 模型选择（模型 / API Key 模式） -->
+        <div v-if="mode !== 'group'" class="field">
           <label class="field__label">模型</label>
           <el-select
             v-model="config.model"
@@ -375,7 +502,7 @@ function renderContent(content: string): string {
             >
               <div class="model-option">
                 <span class="model-option__name">{{ m.name }}</span>
-                <span v-if="mode === 'session'" class="model-option__owner">{{ m.provider?.name || m.provider_id }}</span>
+                <span v-if="mode === 'model'" class="model-option__owner">{{ m.provider?.name || m.provider_id }}</span>
               </div>
             </el-option>
           </el-select>
@@ -462,7 +589,7 @@ function renderContent(content: string): string {
             />
           </div>
 
-          <div v-if="mode === 'session'" class="field">
+          <div v-if="mode !== 'apikey'" class="field">
             <label class="field__label">密钥</label>
             <el-input
               v-model="config.apiKey"

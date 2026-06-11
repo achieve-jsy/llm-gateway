@@ -79,3 +79,26 @@
 
 ---
 *完整三份原始报告见各任务 output；覆盖度明细（盲区清单 A/B/C/D）另见 `audit-coverage-report.md`。*
+
+## 六、执行进度（已落地提交，分支 audit-log-review）
+
+| 提交 | 内容 |
+|------|------|
+| cffcd4c6 | **P0** fix：递归脱敏 + 修请求体 64KB 截断 |
+| 87a4cd03 | **P1** fix：quota/exemption 双写去重 + 补部门归属 |
+| 16fc5897 | **P1** fix：校验客户端 IP + inferResourceID 补参 |
+| aae76bce | **P1** perf：审计异步批量写（AuditLogWriter） |
+| 70ebcdff | **P1** feat：audit_logs 保留期清理（默认 180 天） |
+| 301acd43 | docs：审计报告归档 |
+| 26419b25 | **P2** fix：补齐 ~40 条路由映射 + 内部状态变更审计 |
+| d1d738c4 | **P2** docs：Atlas 唯一迁移源澄清 |
+| 206f7965 | **P2** perf：audit_logs 组合索引 |
+
+### 剩余未做
+
+- **M3**：写入失败 DLQ/告警指标（异步写器已带 dropped/writeFailures 计数器，未接 OTel/Prometheus）。
+- **M9**：默认不落 body、最小化脱敏（行为变更，需业务确认）。
+- **H3 彻底防 IP 伪造**：需 gin.SetTrustedProxies 配 nginx 代理地址（当前仅做非法 IP 格式校验）。
+- **L 级**：UTF-8 安全截断、responseBodyWriter 补 WriteString、内联字符串全部提常量。
+- **⚠ 新发现（需团队跟进）**：atlas-migrations/ 与 main 的 GORM model 存在既有 drift（alert_events / channel_monitor / model 等多表变更未生成迁移）。本次只提交 audit_logs 索引的最小迁移，未触碰该 drift。
+

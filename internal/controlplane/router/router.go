@@ -822,7 +822,9 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	// 高频 verify-key 查询保持不审计，避免审计表被刷爆。
 	internalAudited := internalGroup.Group("")
 	internalAudited.Use(middleware.AuditMiddleware(auditSvc, db))
-	internalAudited.POST("/budget/evaluate-alert", budgetHandler.EvaluateAlert)
+	// budget/evaluate-alert 是每笔计费请求 fire-and-forget 的高频内部调用，
+	// 与 verify-key 一样不审计，避免审计表被刷爆（否则每笔请求都会落一条零用户/127.0.0.1 的噪声）。
+	internalGroup.POST("/budget/evaluate-alert", budgetHandler.EvaluateAlert)
 	// 视频任务写入/查询（供 gateway 调用）
 	internalAudited.POST("/video/tasks", videoTaskHandler.InternalCreate)
 	internalAudited.PATCH("/video/tasks/:id", videoTaskHandler.InternalUpdate)

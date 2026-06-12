@@ -15,21 +15,22 @@ import (
 )
 
 const (
-	opsCleanupLeaderKey     = "ops:cleanup:leader"
-	opsCleanupLockTTL       = 30 * time.Minute
-	opsCleanupLockExtendTTL = 5 * time.Minute
+	opsCleanupLeaderKey      = "ops:cleanup:leader"
+	opsCleanupLockTTL        = 30 * time.Minute
+	opsCleanupLockExtendTTL  = 5 * time.Minute
 	defaultCleanupSchedule   = "0 3 * * *" // 每天凌晨 3:00
 	defaultCallLogRetention  = 30
 	defaultErrorLogRetention = 90
-	defaultAuditLogRetention = 180 // 审计日志保留半年，满足合规追溯
+	defaultAuditLogRetention = 180  // 审计日志保留半年，满足合规追溯
+	auditCleanupBatch        = 5000 // audit_logs 分批删除的批大小
 )
 
 // OpsCleanupService 定期清理过期 call_logs 和 system_logs。
 // 使用 robfig/cron 定时调度 + Redis leader lock 保证单实例执行。
 type OpsCleanupService struct {
-	db       *gorm.DB
-	rdb      *redis.Client
-	cron     *cron.Cron
+	db         *gorm.DB
+	rdb        *redis.Client
+	cron       *cron.Cron
 	instanceID string
 
 	// retention 配置（运行时从 settings 读取）
@@ -248,7 +249,7 @@ func (s *OpsCleanupService) cleanupSystemLogs(ctx context.Context) {
 	slog.Info("ops_cleanup: system_logs cleanup done", "deleted_rows", result.RowsAffected)
 }
 
-// cleanupAuditLogs 清理过期的 audit_logs。
+// cleanupAuditLogs 清理过期的 audit_logs（按 created_at，分批删除避免长锁/大 WAL）。
 func (s *OpsCleanupService) cleanupAuditLogs(ctx context.Context) {
 	s.mu.RLock()
 	days := s.auditLogRetentionDays
@@ -256,17 +257,24 @@ func (s *OpsCleanupService) cleanupAuditLogs(ctx context.Context) {
 
 	slog.Info("ops_cleanup: cleaning audit_logs", "retention_days", days)
 
-	// audit_logs 用 created_at 列（非 ts）
-	deleteSQL := fmt.Sprintf("DELETE FROM audit_logs WHERE created_at < NOW() - INTERVAL '%d days'", days)
-	if s.db.Dialector.Name() == "sqlite" {
-		deleteSQL = fmt.Sprintf("DELETE FROM audit_logs WHERE created_at < datetime('now','-%d days')", days)
+	// cutoff 用 Go 计算，避免 fmt.Sprintf 拼 SQL；audit_logs 用 created_at 列（非 ts）。
+	cutoff := time.Now().AddDate(0, 0, -days)
+
+	var deleted int64
+	for {
+		res := s.db.WithContext(ctx).Exec(
+			"DELETE FROM audit_logs WHERE id IN (SELECT id FROM audit_logs WHERE created_at < ? LIMIT ?)",
+			cutoff, auditCleanupBatch)
+		if res.Error != nil {
+			slog.Error("ops_cleanup: failed to cleanup audit_logs", "error", res.Error)
+			return
+		}
+		deleted += res.RowsAffected
+		if res.RowsAffected < auditCleanupBatch {
+			break
+		}
 	}
-	result := s.db.WithContext(ctx).Exec(deleteSQL)
-	if result.Error != nil {
-		slog.Error("ops_cleanup: failed to cleanup audit_logs", "error", result.Error)
-		return
-	}
-	slog.Info("ops_cleanup: audit_logs cleanup done", "deleted_rows", result.RowsAffected)
+	slog.Info("ops_cleanup: audit_logs cleanup done", "deleted_rows", deleted)
 }
 
 // LoadRetentionFromSettings 从 settings 加载保留天数配置。

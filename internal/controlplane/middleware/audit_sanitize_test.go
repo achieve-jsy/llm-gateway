@@ -24,7 +24,7 @@ func TestSanitizeBodyRedacts(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := sanitizeBody([]byte(tc.in))
+			got := sanitizeBody([]byte(tc.in), "application/json")
 			var root any
 			if err := json.Unmarshal([]byte(got), &root); err != nil {
 				t.Fatalf("sanitizeBody produced invalid JSON %q: %v", got, err)
@@ -40,7 +40,7 @@ func TestSanitizeBodyRedacts(t *testing.T) {
 // TestSanitizeBodyPreserves 验证非敏感字段不被误伤。
 func TestSanitizeBodyPreserves(t *testing.T) {
 	in := `{"name":"myname","data":{"id":"550e8400-e29b-41d4-a716-446655440000","models":["m1","m2"]}}`
-	got := sanitizeBody([]byte(in))
+	got := sanitizeBody([]byte(in), "application/json")
 	var root map[string]any
 	if err := json.Unmarshal([]byte(got), &root); err != nil {
 		t.Fatalf("invalid JSON: %v (%s)", err, got)

@@ -71,6 +71,29 @@ func TestAuditLogWriter_AsyncWriteAndFlush(t *testing.T) {
 	}
 }
 
+// TestAuditLogWriter_DropWhenQueueFull 验证队列满时丢弃计数与 metric 调用不 panic。
+func TestAuditLogWriter_DropWhenQueueFull(t *testing.T) {
+	db := newAuditTestDB(t)
+	// bufferSize=0 → 无缓冲 channel，且不 Start（无消费者），Write 必然走丢弃分支。
+	w := NewAuditLogWriterWithConfig(db, 0, 10, time.Second)
+	entry := &model.AuditLog{
+		UserID:       uuid.MustParse("22222222-2222-2222-2222-222222222222"),
+		Action:       "test.drop",
+		ResourceType: "test",
+		CreatedAt:    time.Now(),
+	}
+	w.Write(entry)
+	if w.DroppedCount() != 1 {
+		t.Fatalf("expected 1 dropped, got %d", w.DroppedCount())
+	}
+	if w.WrittenCount() != 0 {
+		t.Fatalf("expected 0 written, got %d", w.WrittenCount())
+	}
+	if w.WriteFailures() != 0 {
+		t.Fatalf("expected 0 write failures, got %d", w.WriteFailures())
+	}
+}
+
 // TestAuditLogService_AsyncRecord 验证 service 走异步写路径仍能查询到。
 func TestAuditLogService_AsyncRecord(t *testing.T) {
 	db := newAuditTestDB(t)
@@ -91,7 +114,7 @@ func TestAuditLogService_AsyncRecord(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 
 	var uid = uuid.MustParse("22222222-2222-2222-2222-222222222222")
-	_, total, err := svc.List(0, 10, &uid, "", "", "", nil, nil, nil)
+	_, total, err := svc.List(0, 10, &uid, "", "", "", nil, nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

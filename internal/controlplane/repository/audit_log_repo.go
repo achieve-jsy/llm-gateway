@@ -32,7 +32,7 @@ func (r *AuditLogRepo) CreateAsync(log *model.AuditLog) {
 }
 
 // List 分页查询审计日志
-func (r *AuditLogRepo) List(offset, limit int, userID *uuid.UUID, action, resourceType, deptID string, deptIDs []string, from, to *time.Time) ([]model.AuditLog, int64, error) {
+func (r *AuditLogRepo) List(offset, limit int, userID *uuid.UUID, action, resourceType, deptID string, deptIDs []string, from, to *time.Time, search, sort string) ([]model.AuditLog, int64, error) {
 	var logs []model.AuditLog
 	var total int64
 
@@ -57,17 +57,39 @@ func (r *AuditLogRepo) List(offset, limit int, userID *uuid.UUID, action, resour
 	if to != nil {
 		query = query.Where("created_at <= ?", *to)
 	}
+	if search != "" {
+		// 大小写不敏感模糊匹配：Postgres 用 ILIKE，sqlite 测试兜底退化为 LIKE。
+		op := likeOp(r.db)
+		kw := "%" + search + "%"
+		query = query.Where("(user_name "+op+" ? OR resource_name "+op+" ? OR resource_id "+op+" ? OR client_ip "+op+" ?)", kw, kw, kw, kw)
+	}
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	err := query.Order("created_at DESC").Offset(offset).Limit(limit).Find(&logs).Error
+	order := "created_at DESC"
+	switch sort {
+	case "created_at:asc":
+		order = "created_at ASC"
+	case "created_at:desc":
+		order = "created_at DESC"
+	}
+
+	err := query.Order(order).Offset(offset).Limit(limit).Find(&logs).Error
 	if err != nil {
 		return nil, 0, err
 	}
 
 	return logs, total, nil
+}
+
+// likeOp 返回当前方言的大小写不敏感 LIKE 操作符：Postgres 用 ILIKE，sqlite 测试兜底用 LIKE。
+func likeOp(db *gorm.DB) string {
+	if db != nil && db.Dialector != nil && db.Dialector.Name() == "sqlite" {
+		return "LIKE"
+	}
+	return "ILIKE"
 }
 
 // DeleteBefore 清理历史日志（GDPR/容量保护）

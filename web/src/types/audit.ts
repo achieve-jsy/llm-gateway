@@ -36,6 +36,8 @@ export interface AuditLogQuery {
   action?: string
   resource_type?: string
   dept_id?: string
+  search?: string
+  sort?: string
   from?: string
   to?: string
   page?: number

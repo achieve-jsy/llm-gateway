@@ -10,6 +10,8 @@ export async function getAuditLogs(query: AuditLogQuery): Promise<AuditLogListRe
   if (query.action) params.action = query.action
   if (query.resource_type) params.resource_type = query.resource_type
   if (query.dept_id) params.dept_id = query.dept_id
+  if (query.search) params.search = query.search
+  if (query.sort) params.sort = query.sort
   if (query.from) params.from = query.from
   if (query.to) params.to = query.to
   if (query.page) params.page = query.page

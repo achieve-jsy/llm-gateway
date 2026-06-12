@@ -109,12 +109,12 @@ func truncate(s string, maxLen int) string {
 const auditDetailsMaxLen = 16384
 
 // List 分页查询审计日志（保留供 handler 调用；不属于 Recorder 接口）
-func (s *AuditLogService) List(offset, limit int, userID *uuid.UUID, action, resourceType, deptID string, deptIDs []string, from, to *time.Time) ([]model.AuditLog, int64, error) {
+func (s *AuditLogService) List(offset, limit int, userID *uuid.UUID, action, resourceType, deptID string, deptIDs []string, from, to *time.Time, search, sort string) ([]model.AuditLog, int64, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 20
 	}
 	if offset < 0 {
 		offset = 0
 	}
-	return s.repo.List(offset, limit, userID, action, resourceType, deptID, deptIDs, from, to)
+	return s.repo.List(offset, limit, userID, action, resourceType, deptID, deptIDs, from, to, search, sort)
 }

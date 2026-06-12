@@ -3,10 +3,14 @@ package middleware
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
+	"net/url"
+	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/audit"
@@ -41,7 +45,7 @@ var auditRouteMap = map[string]routeAction{
 	"PATCH:/api/v1/models/batch-status":      {audit.ActionModelBatchUpdateStatus, audit.ResourceModel},
 	"PUT:/api/v1/models/batch-tags":          {audit.Action("model.tag.update"), audit.ResourceModel},
 	"POST:/api/v1/models/from-catalog":       {audit.ActionModelCreate, audit.ResourceModel},
-	"POST:/api/v1/models/batch":             {audit.ActionModelCreate, audit.ResourceModel},
+	"POST:/api/v1/models/batch":              {audit.ActionModelCreate, audit.ResourceModel},
 	"POST:/api/v1/models/batch-from-catalog": {audit.ActionModelCreate, audit.ResourceModel},
 	"POST:/api/v1/models/batch-bind-catalog": {audit.Action("model.bind_catalog"), audit.ResourceModel},
 	"POST:/api/v1/models/check-all":          {audit.Action("model.check"), audit.ResourceModel},
@@ -158,12 +162,12 @@ var auditRouteMap = map[string]routeAction{
 	"PUT:/api/v1/org/users/:id/department/follow-sso": {audit.Action("user.follow_sso_department"), audit.ResourceUser},
 
 	// ── Service Keys（补 2 条未手动埋点的写操作）───────────────────
-	"POST:/api/v1/service-keys/:id/groups":           {audit.Action("service_key.update_groups"), audit.ResourceServiceKey},
+	"POST:/api/v1/service-keys/:id/groups":            {audit.Action("service_key.update_groups"), audit.ResourceServiceKey},
 	"POST:/api/v1/service-keys/:id/access-all-groups": {audit.Action("service_key.toggle_access_all"), audit.ResourceServiceKey},
 
 	// ── Quick Onboard ──────────────────────────────────────────────
 	"POST:/api/v1/providers/quick-onboard/preview": {audit.Action("provider.quick_onboard_preview"), audit.ResourceProvider},
-	"POST:/api/v1/providers/quick-onboard":          {audit.Action("provider.quick_onboard"), audit.ResourceProvider},
+	"POST:/api/v1/providers/quick-onboard":         {audit.Action("provider.quick_onboard"), audit.ResourceProvider},
 
 	// ── Group capability reset ─────────────────────────────────────
 	"POST:/api/v1/groups/:id/reset-capability": {audit.Action("group.reset_capability"), audit.ResourceGroup},
@@ -186,32 +190,32 @@ var auditRouteMap = map[string]routeAction{
 	"POST:/api/v1/budgets/tier-limits/batch/preview": {audit.ActionBudgetAdjustPreview, audit.ResourceBudget},
 
 	// ── Channel Monitors ───────────────────────────────────────────
-	"POST:/api/v1/channel-monitors":                   {audit.Action("channel_monitor.create"), audit.Resource("channel_monitor")},
-	"PUT:/api/v1/channel-monitors/:id":                {audit.Action("channel_monitor.update"), audit.Resource("channel_monitor")},
-	"DELETE:/api/v1/channel-monitors/:id":             {audit.Action("channel_monitor.delete"), audit.Resource("channel_monitor")},
-	"POST:/api/v1/channel-monitors/:id/run":           {audit.Action("channel_monitor.run"), audit.Resource("channel_monitor")},
-	"POST:/api/v1/channel-monitor-templates":          {audit.Action("channel_monitor_template.create"), audit.Resource("channel_monitor")},
-	"PUT:/api/v1/channel-monitor-templates/:id":       {audit.Action("channel_monitor_template.update"), audit.Resource("channel_monitor")},
-	"DELETE:/api/v1/channel-monitor-templates/:id":    {audit.Action("channel_monitor_template.delete"), audit.Resource("channel_monitor")},
+	"POST:/api/v1/channel-monitors":                {audit.Action("channel_monitor.create"), audit.Resource("channel_monitor")},
+	"PUT:/api/v1/channel-monitors/:id":             {audit.Action("channel_monitor.update"), audit.Resource("channel_monitor")},
+	"DELETE:/api/v1/channel-monitors/:id":          {audit.Action("channel_monitor.delete"), audit.Resource("channel_monitor")},
+	"POST:/api/v1/channel-monitors/:id/run":        {audit.Action("channel_monitor.run"), audit.Resource("channel_monitor")},
+	"POST:/api/v1/channel-monitor-templates":       {audit.Action("channel_monitor_template.create"), audit.Resource("channel_monitor")},
+	"PUT:/api/v1/channel-monitor-templates/:id":    {audit.Action("channel_monitor_template.update"), audit.Resource("channel_monitor")},
+	"DELETE:/api/v1/channel-monitor-templates/:id": {audit.Action("channel_monitor_template.delete"), audit.Resource("channel_monitor")},
 
 	// ── Ops（运维看板写操作）───────────────────────────────────────
-	"POST:/api/v1/ops/alert-rules":                       {audit.Action("ops.alert_rule.create"), audit.Resource("ops")},
-	"PUT:/api/v1/ops/alert-rules/:id":                    {audit.Action("ops.alert_rule.update"), audit.Resource("ops")},
-	"DELETE:/api/v1/ops/alert-rules/:id":                 {audit.Action("ops.alert_rule.delete"), audit.Resource("ops")},
-	"PUT:/api/v1/ops/alert-events/:id/status":            {audit.Action("ops.alert_event.update_status"), audit.Resource("ops")},
-	"POST:/api/v1/ops/alert-silences":                    {audit.Action("ops.alert_silence.create"), audit.Resource("ops")},
-	"POST:/api/v1/ops/system-logs/cleanup":               {audit.Action("ops.system_log.cleanup"), audit.Resource("ops")},
-	"PUT:/api/v1/ops/runtime/logging":                    {audit.Action("ops.runtime_logging.update"), audit.Resource("ops")},
-	"POST:/api/v1/ops/runtime/logging/reset":             {audit.Action("ops.runtime_logging.reset"), audit.Resource("ops")},
-	"PUT:/api/v1/ops/settings/metric-thresholds":         {audit.Action("ops.settings.update_metric_thresholds"), audit.Resource("ops")},
-	"PUT:/api/v1/ops/settings/dashboard":                 {audit.Action("ops.settings.update_dashboard"), audit.Resource("ops")},
-	"PUT:/api/v1/ops/settings/advanced":                  {audit.Action("ops.settings.update_advanced"), audit.Resource("ops")},
-	"PUT:/api/v1/ops/settings/email-notification":        {audit.Action("ops.settings.update_email"), audit.Resource("ops")},
-	"POST:/api/v1/ops/settings/email-notification/test":  {audit.Action("ops.settings.test_email"), audit.Resource("ops")},
-	"PUT:/api/v1/ops/settings/alert-runtime":             {audit.Action("ops.settings.update_alert_runtime"), audit.Resource("ops")},
-	"PUT:/api/v1/ops/error-logs/:id/resolve":             {audit.Action("ops.error_log.resolve"), audit.Resource("ops")},
-	"PUT:/api/v1/ops/request-errors/:id/resolve":         {audit.Action("ops.request_error.resolve"), audit.Resource("ops")},
-	"PUT:/api/v1/ops/upstream-errors/:id/resolve":        {audit.Action("ops.upstream_error.resolve"), audit.Resource("ops")},
+	"POST:/api/v1/ops/alert-rules":                      {audit.Action("ops.alert_rule.create"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/alert-rules/:id":                   {audit.Action("ops.alert_rule.update"), audit.Resource("ops")},
+	"DELETE:/api/v1/ops/alert-rules/:id":                {audit.Action("ops.alert_rule.delete"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/alert-events/:id/status":           {audit.Action("ops.alert_event.update_status"), audit.Resource("ops")},
+	"POST:/api/v1/ops/alert-silences":                   {audit.Action("ops.alert_silence.create"), audit.Resource("ops")},
+	"POST:/api/v1/ops/system-logs/cleanup":              {audit.Action("ops.system_log.cleanup"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/runtime/logging":                   {audit.Action("ops.runtime_logging.update"), audit.Resource("ops")},
+	"POST:/api/v1/ops/runtime/logging/reset":            {audit.Action("ops.runtime_logging.reset"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/settings/metric-thresholds":        {audit.Action("ops.settings.update_metric_thresholds"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/settings/dashboard":                {audit.Action("ops.settings.update_dashboard"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/settings/advanced":                 {audit.Action("ops.settings.update_advanced"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/settings/email-notification":       {audit.Action("ops.settings.update_email"), audit.Resource("ops")},
+	"POST:/api/v1/ops/settings/email-notification/test": {audit.Action("ops.settings.test_email"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/settings/alert-runtime":            {audit.Action("ops.settings.update_alert_runtime"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/error-logs/:id/resolve":            {audit.Action("ops.error_log.resolve"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/request-errors/:id/resolve":        {audit.Action("ops.request_error.resolve"), audit.Resource("ops")},
+	"PUT:/api/v1/ops/upstream-errors/:id/resolve":       {audit.Action("ops.upstream_error.resolve"), audit.Resource("ops")},
 
 	// ── Internal（gateway 调用的状态变更，需审计；高频 verify-key 不审计）──
 	"POST:/internal/v1/budget/evaluate-alert":   {audit.Action("budget.evaluate_alert"), audit.ResourceBudget},
@@ -241,7 +245,26 @@ type userIdentity struct {
 var (
 	auditUserCache sync.Map
 	auditCacheTTL  = 5 * time.Minute
+
+	// auditUserCacheCount 记录缓存条目数（含 TTL 过期但仍未删除的条目），
+	// 用于在超过上限时整体清空，防止长期运行内存无界增长。
+	auditUserCacheCount atomic.Int64
 )
+
+// auditUserCacheMaxEntries 审计用户缓存上限，越阈时整体清空（冷启动重建）。
+const auditUserCacheMaxEntries = 10000
+
+// bumpAuditUserCache 在每次 Store 后递增计数，越阈则清空整个缓存并重置计数。
+// sync.Map 本身并发安全，计数用 atomic；清空为 O(n)，仅在越阈时触发。
+func bumpAuditUserCache() {
+	if auditUserCacheCount.Add(1) > auditUserCacheMaxEntries {
+		auditUserCache.Range(func(k, _ any) bool {
+			auditUserCache.Delete(k)
+			return true
+		})
+		auditUserCacheCount.Store(0)
+	}
+}
 
 func lookupUserIdentity(db *gorm.DB, userID string) (name, deptID, deptName string) {
 	if db == nil || userID == "" {
@@ -253,32 +276,56 @@ func lookupUserIdentity(db *gorm.DB, userID string) (name, deptID, deptName stri
 			return id.Name, id.DeptID, id.DeptName
 		}
 	}
+
 	var row struct {
 		Name     string `gorm:"column:name"`
 		DeptID   string `gorm:"column:dept_id"`
 		DeptName string `gorm:"column:dept_name"`
 	}
-	db.Raw(`
-		SELECT
-			COALESCE(u.name, '') AS name,
-			COALESCE(d.dept_id, '') AS dept_id,
-			COALESCE(d.dept_name, '') AS dept_name
-		FROM users u
-		LEFT JOIN departments d ON d.id = u.dept_id
-		WHERE u.id::text = ?
-		LIMIT 1
-	`, userID).Scan(&row)
+
+	// 优先用 UUID 主键直接比较（走主键索引）；非 UUID 的 userID 回退 ::text 字符串比较。
+	uid, uidOK := uuid.Parse(userID)
+	if uidOK == nil {
+		db.Raw(`
+			SELECT
+				COALESCE(u.name, '') AS name,
+				COALESCE(d.dept_id, '') AS dept_id,
+				COALESCE(d.dept_name, '') AS dept_name
+			FROM users u
+			LEFT JOIN departments d ON d.id = u.dept_id
+			WHERE u.id = ?
+			LIMIT 1
+		`, uid).Scan(&row)
+	} else {
+		db.Raw(`
+			SELECT
+				COALESCE(u.name, '') AS name,
+				COALESCE(d.dept_id, '') AS dept_id,
+				COALESCE(d.dept_name, '') AS dept_name
+			FROM users u
+			LEFT JOIN departments d ON d.id = u.dept_id
+			WHERE u.id::text = ?
+			LIMIT 1
+		`, userID).Scan(&row)
+	}
+
 	if row.Name == "" {
 		var devRow struct {
 			Username string `gorm:"column:username"`
 		}
-		db.Raw(`SELECT username FROM dev_users WHERE id::text = ? LIMIT 1`, userID).Scan(&devRow)
+		if uidOK == nil {
+			db.Raw(`SELECT username FROM dev_users WHERE id = ? LIMIT 1`, uid).Scan(&devRow)
+		} else {
+			db.Raw(`SELECT username FROM dev_users WHERE id::text = ? LIMIT 1`, userID).Scan(&devRow)
+		}
 		if devRow.Username != "" {
 			row.Name = devRow.Username
 		}
 	}
+
 	entry := &userIdentity{Name: row.Name, DeptID: row.DeptID, DeptName: row.DeptName, expireAt: time.Now().Add(auditCacheTTL)}
 	auditUserCache.Store(userID, entry)
+	bumpAuditUserCache()
 	return row.Name, row.DeptID, row.DeptName
 }
 
@@ -379,10 +426,10 @@ func AuditMiddleware(recorder audit.Recorder, db ...*gorm.DB) gin.HandlerFunc {
 		if ct := c.GetHeader("Content-Type"); ct != "" {
 			details["content_type"] = ct
 		}
-		if rqBody := sanitizeBody(bodyBytes); rqBody != "" {
+		if rqBody := sanitizeBody(bodyBytes, c.GetHeader("Content-Type")); rqBody != "" {
 			details["request_body"] = rqBody
 		}
-		if rpBody := sanitizeBody(bw.body); rpBody != "" {
+		if rpBody := sanitizeBody(bw.body, c.Writer.Header().Get("Content-Type")); rpBody != "" {
 			details["response_body"] = rpBody
 		}
 		if len(bodyBytes) > 0 && json.Valid(bodyBytes) {
@@ -397,8 +444,12 @@ func AuditMiddleware(recorder audit.Recorder, db ...*gorm.DB) gin.HandlerFunc {
 			details["reason"] = reason
 		}
 		if before, after := audit.GetBeforeAfter(c); before != nil || after != nil {
-			details["before"] = before
-			details["after"] = after
+			if r := redactJSONValue(before); r != nil {
+				details["before"] = r
+			}
+			if r := redactJSONValue(after); r != nil {
+				details["after"] = r
+			}
 		}
 		if scopeType, scopeID := audit.GetScope(c); scopeType != "" || scopeID != "" {
 			details["scope_type"] = scopeType
@@ -521,10 +572,85 @@ func isSensitiveKey(k string) bool {
 	return false
 }
 
-// looksLikeSecret 判断字符串值是否疑似密钥（sk- 前缀、Bearer token 等）。
+// isSensitiveQueryKey 判断 URL 查询串/表单参数名是否命中敏感子串。
+// 相比 isSensitiveKey 额外覆盖签名字段（sig），避免把 "sig" 加进全局黑名单
+// 导致 "design"/"assign" 等普通字段被误杀。
+func isSensitiveQueryKey(k string) bool {
+	kl := strings.ToLower(k)
+	for _, sk := range []string{
+		"token", "password", "passwd", "secret", "key",
+		"sig", "credential", "authorization", "api_key", "apikey",
+	} {
+		if strings.Contains(kl, sk) {
+			return true
+		}
+	}
+	return false
+}
+
+// urlUserinfoRe 匹配 URL 中的 scheme://user:pass@ 段，用于掩码内嵌密码。
+var urlUserinfoRe = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://[^/@\s]*):([^/@\s]*)@`)
+
+// querySecretRe 匹配 URL 查询串中的 key=value 段（分隔符、参数名、参数值）。
+var querySecretRe = regexp.MustCompile(`(?i)([?&])([^=&#\s]+)=([^&#\s]*)`)
+
+// maskURLCredentials 掩码 URL/连接串中内嵌的凭证：
+//  1. scheme://user:pass@host 中的密码段；
+//  2. 查询串中敏感参数（token/password/secret/key/sig 等）的值。
+//
+// 返回掩码后的字符串及是否发生替换（幂等，已掩码的内容不会再次变化）。
+func maskURLCredentials(s string) (string, bool) {
+	if s == "" {
+		return s, false
+	}
+	out := urlUserinfoRe.ReplaceAllString(s, "${1}:***@")
+	out = querySecretRe.ReplaceAllStringFunc(out, func(m string) string {
+		sub := querySecretRe.FindStringSubmatch(m)
+		if len(sub) != 4 {
+			return m
+		}
+		if isSensitiveQueryKey(sub[2]) {
+			return sub[1] + sub[2] + "=***"
+		}
+		return m
+	})
+	return out, out != s
+}
+
+// looksLikeSecret 判断字符串值是否疑似密钥（sk-/Bearer 前缀、JWT、AWS 密钥等）。
 func looksLikeSecret(v string) bool {
 	t := strings.ToLower(strings.TrimSpace(v))
-	return strings.HasPrefix(t, "sk-") || strings.HasPrefix(t, "bearer ")
+	if strings.HasPrefix(t, "sk-") || strings.HasPrefix(t, "bearer ") {
+		return true
+	}
+	// JWT：三段 base64url，首段 header 固定以 eyJ 开头
+	if strings.HasPrefix(t, "eyj") {
+		return true
+	}
+	// AWS Access Key ID：AKIA / ASIA 前缀
+	if strings.HasPrefix(t, "akia") || strings.HasPrefix(t, "asia") {
+		return true
+	}
+	return false
+}
+
+// redactJSONValue 对任意值做「JSON 归一化 + 脱敏」：
+// json.Marshal → json.Unmarshal 到 any → redactValue，返回脱敏后的值。
+// 用于 handler 注入的 before/after 等未经 sanitizeBody 处理的结构化对象。
+// nil 或无法归一化的值原样回退（保证不 panic）。
+func redactJSONValue(v any) any {
+	if v == nil {
+		return nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return redactValue(v)
+	}
+	var normalized any
+	if err := json.Unmarshal(b, &normalized); err != nil {
+		return redactValue(v)
+	}
+	return redactValue(normalized)
 }
 
 // redactValue 递归脱敏：遍历 map/切片，命中敏感 key 名或疑似密钥值时替换为 "***"。
@@ -550,8 +676,8 @@ func redactValue(v any) any {
 		if looksLikeSecret(t) {
 			return "***"
 		}
-		// 字符串化的 JSON（如 credentials 字段）也要递归脱敏
-		if s := strings.TrimSpace(t); strings.HasPrefix(s, "{") {
+		// 字符串化的 JSON（对象/数组，如 credentials 字段）也要递归脱敏
+		if s := strings.TrimSpace(t); strings.HasPrefix(s, "{") || strings.HasPrefix(s, "[") {
 			var inner any
 			if json.Unmarshal([]byte(s), &inner) == nil {
 				if out, err := json.Marshal(redactValue(inner)); err == nil {
@@ -559,28 +685,69 @@ func redactValue(v any) any {
 				}
 			}
 		}
+		// URL/连接串内嵌凭证掩码（user:pass@ 与敏感查询参数）
+		if masked, ok := maskURLCredentials(t); ok {
+			return masked
+		}
 		return t
 	default:
 		return v
 	}
 }
 
-func sanitizeBody(data []byte) string {
+// sanitizeBody 对请求/响应体进行脱敏处理。
+// 脱敏原则「宁多勿少」：宁可多隐藏字段，也不能泄漏密钥。
+func sanitizeBody(data []byte, contentType string) string {
 	if len(data) == 0 {
 		return ""
 	}
-	if !json.Valid(data) {
-		return truncateBody(string(data))
+	ct := strings.ToLower(strings.TrimSpace(contentType))
+
+	// multipart/文件上传：只存大小占位，绝不落原始内容（含文件内容与 boundary）。
+	if strings.HasPrefix(ct, "multipart/") {
+		return fmt.Sprintf("<multipart body, %d bytes>", len(data))
 	}
+
+	if !json.Valid(data) {
+		// application/x-www-form-urlencoded：解析后对敏感字段脱敏，再重新编码。
+		if strings.HasPrefix(ct, "application/x-www-form-urlencoded") {
+			return sanitizeFormBody(data)
+		}
+		// 其它非 JSON 体（纯文本/未知类型）：不落原始内容，只存元数据占位。
+		return fmt.Sprintf("<non-json body, %d bytes>", len(data))
+	}
+
 	var obj any
 	if err := json.Unmarshal(data, &obj); err != nil {
-		return truncateBody(string(data))
+		return fmt.Sprintf("<non-json body, %d bytes>", len(data))
 	}
 	out, err := json.Marshal(redactValue(obj))
 	if err != nil {
-		return truncateBody(string(data))
+		return fmt.Sprintf("<non-json body, %d bytes>", len(data))
 	}
 	return truncateBody(string(out))
+}
+
+// sanitizeFormBody 对 application/x-www-form-urlencoded 体做字段级脱敏：
+// 敏感 key 的字段值置 "***"，非敏感字段的值再做一次 URL 内嵌凭证掩码。
+// 解析失败时不落原始内容，返回占位。
+func sanitizeFormBody(data []byte) string {
+	vals, err := url.ParseQuery(string(data))
+	if err != nil {
+		return fmt.Sprintf("<non-json body, %d bytes>", len(data))
+	}
+	for k, vv := range vals {
+		for i := range vv {
+			if isSensitiveKey(k) {
+				vv[i] = "***"
+				continue
+			}
+			if masked, ok := maskURLCredentials(vv[i]); ok {
+				vv[i] = masked
+			}
+		}
+	}
+	return truncateBody(vals.Encode())
 }
 
 // truncateBody 截断审计体到 2048 字节，超长追加 "..."。

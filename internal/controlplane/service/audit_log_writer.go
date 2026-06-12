@@ -16,24 +16,26 @@ const (
 	defaultAuditLogBufferSize    = 4096
 	defaultAuditLogBatchSize     = 200
 	defaultAuditLogFlushInterval = 1 * time.Second
+	auditLogDropLogIntervalSec   = 10 // 队列满丢弃时，warn 日志的最小间隔（秒），避免刷屏
 )
 
 // AuditLogWriter 是 audit_logs 的异步批量写器。
 // 通过有界 channel 接收审计日志，后台 goroutine 批量落库，写失败不阻断业务。
 // 队列满时丢弃并计数（审计是 best-effort，宁可丢也不阻塞请求路径）。
 type AuditLogWriter struct {
-	db            *gorm.DB
-	queue         chan *model.AuditLog
-	batchSize     int
-	flushInterval time.Duration
-	ctx           context.Context
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
-	droppedCount  atomic.Int64
-	writeFailures atomic.Int64
-	writtenCount  atomic.Int64
-	lastError     atomic.Value
-	running       atomic.Bool
+	db             *gorm.DB
+	queue          chan *model.AuditLog
+	batchSize      int
+	flushInterval  time.Duration
+	ctx            context.Context
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
+	droppedCount   atomic.Int64
+	writeFailures  atomic.Int64
+	writtenCount   atomic.Int64
+	lastError      atomic.Value
+	running        atomic.Bool
+	lastDropLogSec atomic.Int64
 }
 
 // NewAuditLogWriter 创建审计日志异步写器（使用默认配置）。
@@ -94,6 +96,19 @@ func (w *AuditLogWriter) Write(entry *model.AuditLog) {
 	case w.queue <- entry:
 	default:
 		w.droppedCount.Add(1)
+		recordAuditLogDropped(context.Background())
+		w.logDropThrottled()
+	}
+}
+
+// logDropThrottled 队列满丢弃时打 warn 日志：每 10 秒最多一条，避免高负载刷屏。
+// 丢弃计数与 metric 每次都记录，这里只节流日志输出。
+func (w *AuditLogWriter) logDropThrottled() {
+	now := time.Now().Unix()
+	if last := w.lastDropLogSec.Load(); now-last >= auditLogDropLogIntervalSec {
+		if w.lastDropLogSec.CompareAndSwap(last, now) {
+			slog.Warn("audit_log_writer: queue full, audit log dropped", "dropped_total", w.droppedCount.Load())
+		}
 	}
 }
 
@@ -133,13 +148,16 @@ func (w *AuditLogWriter) run() {
 		if len(batch) == 0 {
 			return
 		}
+		n := len(batch)
 		if err := w.flushBatch(ctx, batch); err != nil {
-			w.writeFailures.Add(int64(len(batch)))
+			w.writeFailures.Add(int64(n))
 			w.lastError.Store(err.Error())
-			slog.Warn("audit_log_writer: flush failed", "batch_size", len(batch), "error", err)
+			recordAuditLogWriteFailed(ctx, n)
+			slog.Warn("audit_log_writer: flush failed", "batch_size", n, "error", err)
 		} else {
-			w.writtenCount.Add(int64(len(batch)))
+			w.writtenCount.Add(int64(n))
 			w.lastError.Store("")
+			recordAuditLogWritten(ctx, n)
 		}
 		batch = batch[:0]
 	}

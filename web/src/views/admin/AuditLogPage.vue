@@ -12,8 +12,8 @@
           clearable
           prefix-icon="Search"
           class="toolbar-field-lg"
-          @clear="fetchData"
-          @keyup.enter="fetchData"
+          @clear="resetAndFetch"
+          @keyup.enter="resetAndFetch"
         />
         <el-select
           v-model="query.action"
@@ -21,7 +21,7 @@
           clearable
           filterable
           class="toolbar-field"
-          @change="fetchData"
+          @change="resetAndFetch"
         >
           <el-option
             v-for="opt in AUDIT_ACTIONS"
@@ -35,7 +35,7 @@
           placeholder="资源类型"
           clearable
           class="toolbar-field"
-          @change="fetchData"
+          @change="resetAndFetch"
         >
           <el-option
             v-for="opt in RESOURCE_TYPES"
@@ -51,7 +51,7 @@
           start-placeholder="开始"
           end-placeholder="结束"
           format="YYYY-MM-DD HH:mm"
-          value-format="YYYY-MM-DDTHH:mm:ss"
+          value-format="YYYY-MM-DDTHH:mm:ssZ"
           class="toolbar-field-lg"
           :shortcuts="dateShortcuts"
           @change="onDateRangeChange"
@@ -589,12 +589,18 @@ function onSizeChange(size: number) {
   fetchData()
 }
 
+function resetAndFetch() {
+  currentPage.value = 1
+  fetchData()
+}
+
 function handleSortChange({ prop, order }: any) {
   if (prop === 'created_at' && order) {
-    (query as any).sort = order === 'ascending' ? 'created_at:asc' : 'created_at:desc'
+    query.sort = order === 'ascending' ? 'created_at:asc' : 'created_at:desc'
   } else {
-    (query as any).sort = undefined
+    query.sort = undefined
   }
+  currentPage.value = 1
   fetchData()
 }
 
@@ -618,7 +624,7 @@ async function fetchData() {
       search: searchKeyword.value || undefined,
       page: currentPage.value,
       page_size: pageSize.value,
-    } as any)
+    })
     logs.value = res.items || []
     total.value = res.total || 0
     lastUpdateTime.value = new Date()
@@ -637,7 +643,7 @@ async function fetchTodayCount() {
     const start = new Date()
     start.setHours(0, 0, 0, 0)
     const res = await getAuditLogs({
-      from: start.toISOString().split('.')[0],
+      from: start.toISOString(),
       page: 1,
       page_size: 1,
     })
@@ -712,7 +718,7 @@ function exportToCSV() {
           search: searchKeyword.value || undefined,
           page,
           page_size: pageSize,
-        } as any)
+        })
 
         const items = res.items || []
         totalCount = res.total || 0

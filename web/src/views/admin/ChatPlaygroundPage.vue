@@ -230,9 +230,27 @@ onMounted(() => {
 
 // ─── 主动获取鉴权 token ───────────────────────────────────────────────────
 function getAuthToken(): string {
-  if (mode.value === 'apikey') return config.apiKey
-  // 模型 / 模型组模式：优先用可选密钥覆盖，否则用会话令牌
-  return config.apiKey || localStorage.getItem('access_token') || ''
+  return config.apiKey
+}
+
+// ─── 模型/模型组模式：自动用当前账号的第一个可用 Key（不再回退会话令牌） ───
+async function ensureApiKeyForNonApikeyMode(): Promise<boolean> {
+  if (config.apiKey.trim()) return true
+  if (myKeys.value.length === 0) await loadMyKeys()
+  const key = myKeys.value.find(k => k.enabled)
+  if (!key) {
+    ElMessage.warning('当前账号没有可用的 API Key，请先在「Key 管理」创建一个')
+    return false
+  }
+  try {
+    const r = await revealKey(key.id)
+    config.apiKey = r.key
+    selectedKeyId.value = key.id
+    return true
+  } catch {
+    ElMessage.error('获取 API Key 失败')
+    return false
+  }
 }
 
 // ─── 滚动到底部 ──────────────────────────────────────────────────────────
@@ -254,9 +272,11 @@ async function sendMessage() {
     return
   }
 
-  if (mode.value === 'apikey' && !config.apiKey.trim()) {
-    ElMessage.warning('请先输入 API Key')
-    return
+  if (!config.apiKey.trim()) {
+    if (mode.value === 'apikey' || !(await ensureApiKeyForNonApikeyMode())) {
+      ElMessage.warning('请先输入 API Key')
+      return
+    }
   }
 
   if (config.temperature < 0 || config.temperature > 2) {
@@ -281,7 +301,7 @@ async function sendMessage() {
 
   const token = getAuthToken()
   if (!token) {
-    ElMessage.warning(mode.value === 'apikey' ? '请先输入 API Key' : '请先登录获取会话令牌')
+    ElMessage.warning('请先输入 API Key')
     return
   }
 
@@ -593,7 +613,7 @@ function renderContent(content: string): string {
             <label class="field__label">密钥</label>
             <el-input
               v-model="config.apiKey"
-              placeholder="默认为会话令牌"
+              placeholder="留空自动使用我的 Key"
               type="password"
               show-password
               clearable

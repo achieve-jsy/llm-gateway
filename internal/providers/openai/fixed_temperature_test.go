@@ -86,3 +86,37 @@ func TestChatRequestBody_FixedTemperature(t *testing.T) {
 func floatPtr(f float64) *float64 {
 	return &f
 }
+
+func TestReasoningEffortForModel(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		want  *string
+	}{
+		{"glm-5.3", "ZHIPU/GLM-5.3", strPtr("low")},
+		{"glm-5.3 带前缀", "zhipu/glm-5.3", strPtr("low")},
+		{"glm-5.3 大小写", "Zhipu/GLM-5.3", strPtr("low")},
+		{"glm-5.4 预期同类", "glm-5.4", strPtr("low")},
+		{"glm-5 非始终思考", "glm-5", nil},
+		{"glm-5.1 非始终思考", "glm-5.1", nil},
+		{"glm-5.2 非始终思考", "glm-5.2", nil},
+		{"gpt-4 无限制", "gpt-4", nil},
+		{"空字符串", "", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ReasoningEffortForModel(tt.model)
+			if tt.want == nil {
+				assert.Nil(t, got)
+			} else {
+				require.NotNil(t, got)
+				assert.Equal(t, *tt.want, *got)
+			}
+		})
+	}
+}
+
+func strPtr(s string) *string {
+	return &s
+}

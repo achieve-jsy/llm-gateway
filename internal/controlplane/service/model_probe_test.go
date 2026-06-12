@@ -300,6 +300,86 @@ func TestProbeModelForward_KimiK3_EndToEnd(t *testing.T) {
 	assert.Empty(t, errMsg)
 }
 
+// TestProbeChatCompletion_AlwaysThinkingModel_Named 验证「模型级特判」快路径：
+// 对已知始终思考模型（ZHIPU/GLM-5.3），第一次探测就直接带 reasoning_effort，
+// 不再发送 enable_thinking:false，避免被上游驳回（code 1210）。
+func TestProbeChatCompletion_AlwaysThinkingModel_Named(t *testing.T) {
+	callCount := 0
+	var lastEnableThinking interface{}
+	var lastReasoningEffort interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		var body map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&body)
+		lastEnableThinking = body["enable_thinking"]
+		lastReasoningEffort = body["reasoning_effort"]
+		// 上游规则：存在 enable_thinking 即拒绝（模型始终思考，不允许关闭）。
+		if body["enable_thinking"] != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": map[string]interface{}{
+					"message": "该模型始终思考，不支持关闭思考；请使用 low、high 或 max。",
+					"type":    nil,
+					"param":   nil,
+					"code":    "1210",
+				},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{"choices": []interface{}{}})
+	}))
+	defer srv.Close()
+
+	success, skipped, _, errMsg := probeChatCompletion(context.Background(), srv.URL, "ZHIPU/GLM-5.3", "test-key")
+	assert.True(t, success, "GLM-5.3 第一次探测应直接成功")
+	assert.False(t, skipped)
+	assert.Empty(t, errMsg)
+	assert.Equal(t, 1, callCount, "已知始终思考模型应一次通过，无需重试")
+	assert.Nil(t, lastEnableThinking, "不应发送 enable_thinking")
+	assert.Equal(t, "low", lastReasoningEffort, "第一次探测应直接带 reasoning_effort=low")
+}
+
+// TestProbeChatCompletion_AlwaysThinkingModel_Alias 验证 error-based retry 兜底：
+// 模型以别名配置（不匹配 ReasoningEffortForModel 硬编码名），首探测仍带
+// enable_thinking:false 被拒；必须识别「始终思考」错误并去掉 enable_thinking、
+// 注入 reasoning_effort=low 重试，否则模型会被自动禁用。
+func TestProbeChatCompletion_AlwaysThinkingModel_Alias(t *testing.T) {
+	callCount := 0
+	var lastEnableThinking interface{}
+	var lastReasoningEffort interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		var body map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&body)
+		lastEnableThinking = body["enable_thinking"]
+		lastReasoningEffort = body["reasoning_effort"]
+		if body["enable_thinking"] != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": map[string]interface{}{
+					"message": "该模型始终思考，不支持关闭思考；请使用 low、high 或 max。",
+					"type":    nil,
+					"param":   nil,
+					"code":    "1210",
+				},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{"choices": []interface{}{}})
+	}))
+	defer srv.Close()
+
+	success, skipped, _, errMsg := probeChatCompletion(context.Background(), srv.URL, "my-glm-alias", "test-key")
+	assert.True(t, success, "error-based retry 应去掉 enable_thinking 并注入 reasoning_effort=low 后成功")
+	assert.False(t, skipped)
+	assert.Empty(t, errMsg)
+	assert.Equal(t, 2, callCount, "应该发了两次请求（首次失败 + 重试成功）")
+	assert.Nil(t, lastEnableThinking, "重试请求不应再带 enable_thinking")
+	assert.Equal(t, "low", lastReasoningEffort, "重试请求应注入 reasoning_effort=low")
+}
+
 func floatPtr(f float64) *float64 {
 	return &f
 }

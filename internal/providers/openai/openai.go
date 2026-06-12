@@ -352,6 +352,8 @@ func chatRequestBody(req *core.ChatRequest) (any, error) {
 // adaptFixedTemperature 为要求固定 temperature 的模型（如 kimi-k3 必须 0.6）兜底。
 // 若用户未传 temperature 或传了非要求值，统一设为模型要求的值。
 // 同时删除 enable_thinking：固定 temperature 模型不接受 enable_thinking+temperature 组合。
+// 对「始终思考」模型（GLM-5.3 等）同样删除 enable_thinking：它们只接受 reasoning_effort
+// 的 low/high/max，显式关闭思考（enable_thinking:false）会被上游拒绝（code 1210）。
 func adaptFixedTemperature(req *core.ChatRequest) any {
 	if temp := FixedTemperatureForModel(req.Model); temp != nil {
 		if req.Temperature == nil || *req.Temperature != *temp {
@@ -359,6 +361,11 @@ func adaptFixedTemperature(req *core.ChatRequest) any {
 		}
 		// kimi-k3 等固定 temperature 模型拒绝 enable_thinking 字段（包括 false），
 		// 删除 ExtraFields 中可能存在的 enable_thinking。
+		req.ExtraFields.Delete("enable_thinking")
+	}
+	if ReasoningEffortForModel(req.Model) != nil {
+		// GLM-5.3 等始终思考模型仅接受 low/high/max，删除 enable_thinking，
+		// 避免客户端显式传 enable_thinking:false 时被上游 400。
 		req.ExtraFields.Delete("enable_thinking")
 	}
 	return req
@@ -372,6 +379,24 @@ func FixedTemperatureForModel(model string) *float64 {
 	}
 	if m == "kimi-k3" {
 		v := 0.6
+		return &v
+	}
+	return nil
+}
+
+// ReasoningEffortForModel 返回模型强制/推荐的 reasoning_effort 档位，无要求则返回 nil。
+// 某些「始终思考」模型（如 ZHIPU GLM-5.3）不接受 enable_thinking:false，只接受
+// low/high/max（错误码 1210：该模型始终思考，不支持关闭思考；请使用 low、high 或 max）。
+// 健康探测与其请求转发应直接给 reasoning_effort，而不是尝试关闭思考。
+func ReasoningEffortForModel(model string) *string {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if i := strings.LastIndex(m, "/"); i >= 0 {
+		m = m[i+1:]
+	}
+	// 覆盖 GLM-5.3 及预期同类的更新版本（始终思考、仅允许低/中/高档）。
+	// 注意：GLM-5 / 5.1 / 5.2 接受 enable_thinking:false（健康检测已验证），故仅命中 5.3 及以上。
+	if m == "glm-5.3" || strings.HasPrefix(m, "glm-5.3") || strings.HasPrefix(m, "glm-5.4") {
+		v := "low"
 		return &v
 	}
 	return nil

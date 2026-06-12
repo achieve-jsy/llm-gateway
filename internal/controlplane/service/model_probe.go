@@ -57,8 +57,13 @@ func probeChatCompletion(ctx context.Context, endpoint, modelName, apiKey string
 		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
 		"max_tokens": 10,
 	}
+	// 固定 temperature 模型（如 kimi-k3）优先注入 temperature；
+	// 「始终思考」模型（如 ZHIPU GLM-5.3）第一次探测就直接给 reasoning_effort，
+	// 不发送 enable_thinking:false（上游会拒绝并报 code 1210）。
 	if temp := openai.FixedTemperatureForModel(modelName); temp != nil {
 		baseReq["temperature"] = *temp
+	} else if effort := openai.ReasoningEffortForModel(modelName); effort != nil {
+		baseReq["reasoning_effort"] = *effort
 	} else {
 		baseReq["enable_thinking"] = false
 	}
@@ -73,6 +78,21 @@ func probeChatCompletion(ctx context.Context, endpoint, modelName, apiKey string
 	if strings.Contains(lower, "enable_thinking") && strings.Contains(lower, "true") {
 		thinkingReq := cloneProbeRequest(baseReq)
 		thinkingReq["enable_thinking"] = true
+		ok, t, thinkingErr := doProbeRequest(ctx, chatEndpoint, apiKey, thinkingReq, false)
+		if ok {
+			return true, false, t, ""
+		}
+		return false, false, t, thinkingErr
+	}
+
+	// 模型「始终思考」，不允许关闭 thinking（如 ZHIPU GLM-5.x 经 DashScope 中转）。
+	// 错误形如：该模型始终思考，不支持关闭思考；请使用 low、high 或 max。
+	// 首次探测带 enable_thinking:false 被拒；重试必须去掉 enable_thinking 并
+	// 显式给 reasoning_effort=low（最低档、探测成本最小）否则模型会被自动禁用。
+	if isAlwaysThinkingError(lower) {
+		thinkingReq := cloneProbeRequest(baseReq)
+		delete(thinkingReq, "enable_thinking")
+		thinkingReq["reasoning_effort"] = "low"
 		ok, t, thinkingErr := doProbeRequest(ctx, chatEndpoint, apiKey, thinkingReq, false)
 		if ok {
 			return true, false, t, ""
@@ -324,6 +344,24 @@ func isIncompatibleProbeError(lower string) bool {
 		}
 	}
 	return false
+}
+
+// isAlwaysThinkingError 判断是否为「模型始终思考，不支持关闭思考，请用 low/high/max」类错误。
+// 典型模型：ZHIPU GLM-5.x 等 reasoning-only 模型（经 DashScope compatible-mode 中转）。
+// 中文：该模型始终思考，不支持关闭思考；请使用 low、high 或 max。
+// 英文：reasoning is always enabled / cannot disable thinking; use low, high or max.
+// 需要同时命中思考类标记与低/高/最大三档 effort 提示，避免误判其它 400。
+func isAlwaysThinkingError(lower string) bool {
+	thinkingMarker := strings.Contains(lower, "始终思考") ||
+		strings.Contains(lower, "不支持关闭思考") ||
+		strings.Contains(lower, "cannot disable thinking") ||
+		strings.Contains(lower, "thinking is always enabled") ||
+		strings.Contains(lower, "does not support disabling thinking")
+	if !thinkingMarker {
+		return false
+	}
+	return strings.Contains(lower, "low") && strings.Contains(lower, "high") && strings.Contains(lower, "max") ||
+		strings.Contains(lower, "reasoning_effort")
 }
 
 func truncateProbeString(s string, maxLen int) string {

@@ -1,0 +1,83 @@
+package main
+
+// config.go —— CLI 参数与配置解析（stdlib flag + 环境变量缺省）。
+// 阶段一离线工具：独立入口，不直连 DB、不改 gateway/control-plane 运行时。
+
+import (
+	"flag"
+	"os"
+	"time"
+)
+
+// Config 运行配置。
+type Config struct {
+	BaseURL     string
+	Token       string
+	Level       string // personal | department | studio
+	Scope       string // personal=user_id / department=dept_id / studio=studio_id
+	From        string
+	To          string
+	Period      string // week | month | custom
+	KeyType     string
+	JobCategory string
+	USDCNYRate  float64
+	MaxLogs     int
+	JSONOut     string
+	MDOut       string
+	HTMLOut     string
+	Debug       bool
+}
+
+func parseConfig(args []string) Config {
+	var c Config
+	fs := flag.NewFlagSet("usage-report", flag.ExitOnError)
+	fs.StringVar(&c.BaseURL, "base", envOr("USAGE_REPORT_BASE", "http://127.0.0.1:8081/api/v1"), "控制面 /api/v1 base URL")
+	fs.StringVar(&c.Token, "token", os.Getenv("USAGE_REPORT_TOKEN"), "admin JWT(PermUsageViewAll/PermMemberView)")
+	fs.StringVar(&c.Level, "level", "personal", "report level: personal|department|studio")
+	fs.StringVar(&c.Scope, "scope", "", "scope id (user_id|dept_id|studio_id)")
+	fs.StringVar(&c.From, "from", "", "start date YYYY-MM-DD")
+	fs.StringVar(&c.To, "to", "", "end date YYYY-MM-DD")
+	fs.StringVar(&c.Period, "period", "week", "week|month|custom")
+	fs.StringVar(&c.KeyType, "key-type", "", "filter key_type (personal|service|'')")
+	fs.StringVar(&c.JobCategory, "job-category", "", "同岗分位用 job_category；空则自适应回退")
+	fs.Float64Var(&c.USDCNYRate, "fx-rate", 7.2, "USD→CNY 汇率")
+	fs.IntVar(&c.MaxLogs, "max-logs", 20000, "日志拉取上限（条）")
+	fs.StringVar(&c.JSONOut, "json-out", "", "输出 report JSON 路径")
+	fs.StringVar(&c.MDOut, "md-out", "", "输出 MD 路径")
+	fs.StringVar(&c.HTMLOut, "html-out", "", "输出 HTML 路径")
+	fs.BoolVar(&c.Debug, "debug", false, "打印调试")
+	_ = fs.Parse(args)
+	if c.From == "" || c.To == "" {
+		from, to := periodFor(c.Period)
+		if c.From == "" {
+			c.From = from
+		}
+		if c.To == "" {
+			c.To = to
+		}
+	}
+	if c.USDCNYRate == 0 {
+		c.USDCNYRate = 7.2
+	}
+	return c
+}
+
+func periodFor(p string) (string, string) {
+	now := time.Now()
+	end := now.Format("2006-01-02")
+	switch p {
+	case "week":
+		return now.AddDate(0, 0, -6).Format("2006-01-02"), end
+	case "month":
+		return now.AddDate(0, -1, 0).Format("2006-01-02"), end
+	default:
+		return now.AddDate(0, 0, -6).Format("2006-01-02"), end
+	}
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}

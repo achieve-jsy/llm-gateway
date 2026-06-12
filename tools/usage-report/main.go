@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/example/llm-gateway/internal/observability/report"
@@ -118,11 +119,74 @@ func run(args []string) error {
 			return err
 		}
 	}
-	if cfg.JSONOut == "" && cfg.MDOut == "" && cfg.HTMLOut == "" {
+	if cfg.VickyOut != "" {
+		if err := os.WriteFile(cfg.VickyOut, []byte(render.RenderVicky(rep)), 0o644); err != nil {
+			return err
+		}
+		if cfg.VickySubmit {
+			payload := vickyPayload(cfg, rep)
+			if err := writeJSON(cfg.VickyOut+".payload.json", payload); err != nil {
+				return err
+			}
+		}
+	}
+	if cfg.JSONOut == "" && cfg.MDOut == "" && cfg.HTMLOut == "" && cfg.VickyOut == "" {
 		// 默认打印 MD
 		fmt.Print(render.RenderMD(rep))
 	}
 	return nil
+}
+
+// vickyPayload 组装可 POST <VICKY_ORIGIN>/api/reports 的 JSON 载荷（category/narrative/project 由 config 指定）。
+func vickyPayload(cfg Config, rep *report.Report) map[string]interface{} {
+	content := render.RenderVicky(rep)
+	slug := vickySlug(cfg, rep)
+	return map[string]interface{}{
+		"title":    vickyTitle(cfg, rep),
+		"slug":     slug,
+		"category": cfg.VickyCategory,
+		"narrative": cfg.VickyNarrative,
+		"project":  cfg.VickyProject,
+		"tag":      "META · 用量周报",
+		"template": "book",
+		"content":  content,
+	}
+}
+
+func vickyTitle(cfg Config, rep *report.Report) string {
+	name := rep.Meta.Scope.Name
+	if name == "" {
+		name = rep.Meta.Scope.ID
+	}
+	return "用量周报 · " + name + "（" + rep.Meta.Period.Label + "）"
+}
+
+// vickySlug 生成 url-slug：<from>-usage-<level>-<scope>。
+func vickySlug(cfg Config, rep *report.Report) string {
+	from := rep.Meta.Period.From
+	if from == "" {
+		from = "daily"
+	}
+	lvl := sanitizeSlug(rep.Meta.Level)
+	scope := sanitizeSlug(rep.Meta.Scope.ID)
+	return fmt.Sprintf("%s-usage-%s-%s", from, lvl, scope)
+}
+
+// sanitizeSlug 保留小写字母/数字/连字符，其余转连字符。
+func sanitizeSlug(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == ' ' || r == '/' || r == '_':
+			b.WriteByte('-')
+		}
+	}
+	if b.Len() == 0 {
+		return "unit"
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 func writeJSON(path string, v interface{}) error {

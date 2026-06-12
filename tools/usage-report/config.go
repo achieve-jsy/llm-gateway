@@ -25,6 +25,11 @@ type Config struct {
 	JSONOut     string
 	MDOut       string
 	HTMLOut     string
+	VickyOut    string
+	VickySubmit bool // 是否生成可 POST /api/reports 的 JSON 载荷
+	VickyProject string
+	VickyCategory string
+	VickyNarrative string
 	Debug       bool
 }
 
@@ -45,6 +50,11 @@ func parseConfig(args []string) Config {
 	fs.StringVar(&c.JSONOut, "json-out", "", "输出 report JSON 路径")
 	fs.StringVar(&c.MDOut, "md-out", "", "输出 MD 路径")
 	fs.StringVar(&c.HTMLOut, "html-out", "", "输出 HTML 路径")
+	fs.StringVar(&c.VickyOut, "vicky-out", "", "输出 Vicky 规范 HTML content 路径")
+	fs.BoolVar(&c.VickySubmit, "vicky-submit", false, "同时生成可 POST /api/reports 的 JSON 载荷")
+	fs.StringVar(&c.VickyProject, "vicky-project", "gateway", "Vicky project slug")
+	fs.StringVar(&c.VickyCategory, "vicky-category", "business-report", "Vicky category")
+	fs.StringVar(&c.VickyNarrative, "vicky-narrative", "金字塔/结论先行", "Vicky narrative")
 	fs.BoolVar(&c.Debug, "debug", false, "打印调试")
 	_ = fs.Parse(args)
 	if c.From == "" || c.To == "" {

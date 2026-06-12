@@ -37,6 +37,7 @@ func ConvertResponsesInputToMessages(input any) ([]core.Message, error) {
 func convertResponsesInputItems(items []any) ([]core.Message, error) {
 	messages := make([]core.Message, 0, len(items))
 	var pendingAssistant *core.Message
+	var pendingReasoning []string
 
 	flushPendingAssistant := func() {
 		if pendingAssistant == nil {
@@ -46,10 +47,29 @@ func convertResponsesInputItems(items []any) ([]core.Message, error) {
 		pendingAssistant = nil
 	}
 
+	attachReasoning := func(msg *core.Message) {
+		if len(pendingReasoning) == 0 {
+			return
+		}
+		if raw, err := json.Marshal(strings.Join(pendingReasoning, "\n")); err == nil {
+			msg.ExtraFields.Set("reasoning_content", raw)
+		}
+		pendingReasoning = nil
+	}
+
 	for i, item := range items {
 		msg, itemType, err := convertResponsesInputItem(item, i)
 		if err != nil {
 			return nil, err
+		}
+
+		// reasoning item 前置累积，挂到紧随其后的 assistant message 上
+		//（DeepSeek thinking 模式要求把 reasoning_content 回传给上游）。
+		if itemType == "reasoning" {
+			if text := core.ExtractTextContent(msg.Content); strings.TrimSpace(text) != "" {
+				pendingReasoning = append(pendingReasoning, text)
+			}
+			continue
 		}
 
 		if msg.Role == "assistant" {
@@ -58,12 +78,14 @@ func convertResponsesInputItems(items []any) ([]core.Message, error) {
 			}
 			if pendingAssistant == nil {
 				assistant := cloneResponsesMessage(msg)
+				attachReasoning(&assistant)
 				pendingAssistant = &assistant
 			} else if canMergeAssistantMessages(*pendingAssistant, msg) {
 				mergeAssistantMessage(pendingAssistant, msg)
 			} else {
 				flushPendingAssistant()
 				assistant := cloneResponsesMessage(msg)
+				attachReasoning(&assistant)
 				pendingAssistant = &assistant
 			}
 			continue
@@ -130,6 +152,14 @@ func convertResponsesInputElement(item core.ResponsesInputElement, index int) (c
 			Content:     content,
 			ExtraFields: core.CloneUnknownJSONFields(item.ExtraFields),
 		}, "function_call_output", nil
+	case "reasoning":
+		// reasoning item：提取明文思维链（summary + reasoning content），
+		// 交由 convertResponsesInputItems 挂到紧随其后的 assistant message 的
+		// reasoning_content 上，满足 DeepSeek thinking 模式的回传要求。
+		return core.Message{
+			Role:    "assistant",
+			Content: reasoningTextFromResponsesContent(item.Summary, item.ReasoningContent),
+		}, "reasoning", nil
 	default: // message (type="" or "message")
 		role := strings.TrimSpace(item.Role)
 		if role == "" {
@@ -191,6 +221,11 @@ func convertResponsesInputMap(item map[string]any, index int) (core.Message, str
 			Content:     content,
 			ExtraFields: core.UnknownJSONFieldsFromMap(rawJSONMapFromUnknownKeys(item, "type", "call_id", "status", "output")),
 		}, "function_call_output", nil
+	case "reasoning":
+		return core.Message{
+			Role:    "assistant",
+			Content: reasoningTextFromAny(item["summary"], item["content"]),
+		}, "reasoning", nil
 	}
 
 	role, _ := item["role"].(string)
@@ -293,5 +328,59 @@ func stringifyResponsesInputValueWithError(value any) (string, error) {
 			return "", err
 		}
 		return string(encoded), nil
+	}
+}
+
+// reasoningTextFromResponsesContent 从 reasoning item 的 summary 与 content
+// 部分提取明文思维链文本（summary_text / output_text / text / reasoning_text）。
+func reasoningTextFromResponsesContent(summary, content []core.ResponsesContentItem) string {
+	parts := make([]string, 0, len(summary)+len(content))
+	appendText := func(items []core.ResponsesContentItem) {
+		for _, c := range items {
+			if c.Text == "" {
+				continue
+			}
+			switch c.Type {
+			case "summary_text", "output_text", "text", "reasoning_text":
+				parts = append(parts, c.Text)
+			}
+		}
+	}
+	appendText(summary)
+	appendText(content)
+	return strings.Join(parts, "\n")
+}
+
+// reasoningTextFromAny 从 map 形态的 reasoning item 的 summary/content 中提取文本。
+func reasoningTextFromAny(summary, content any) string {
+	parts := make([]string, 0)
+	appendText := func(v any) {
+		switch items := v.(type) {
+		case []any:
+			for _, item := range items {
+				m, ok := item.(map[string]any)
+				if !ok {
+					continue
+				}
+				appendReasoningText(m, &parts)
+			}
+		case []map[string]any:
+			for _, m := range items {
+				appendReasoningText(m, &parts)
+			}
+		}
+	}
+	appendText(summary)
+	appendText(content)
+	return strings.Join(parts, "\n")
+}
+
+func appendReasoningText(m map[string]any, parts *[]string) {
+	t, _ := m["type"].(string)
+	switch t {
+	case "summary_text", "output_text", "text", "reasoning_text":
+		if text, ok := m["text"].(string); ok && text != "" {
+			*parts = append(*parts, text)
+		}
 	}
 }

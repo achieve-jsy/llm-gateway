@@ -67,18 +67,19 @@ func (r *ResponsesRequest) WithStreaming() *ResponsesRequest {
 //   - "" or "message": a chat-style message with Role and Content
 //   - "function_call": a tool invocation with CallID, Name, and Arguments
 //   - "function_call_output": a tool result with CallID and Output
+//   - "reasoning": a reasoning/thinking item with Summary (and optionally Content)
 //
 // Unknown JSON members encountered during unmarshaling are preserved in
 // ExtraFields (UnknownJSONFields) and marshaled back out unchanged so
 // extensions can round-trip; Swagger ignores ExtraFields, and typed fields
 // should be preferred when available.
 type ResponsesInputElement struct {
-	Type string `json:"type,omitempty"` // "message", "function_call", "function_call_output"
+	Type string `json:"type,omitempty"` // "message", "function_call", "function_call_output", "reasoning"
 
 	// Message fields (type="" or "message")
-	Role    string `json:"role,omitempty"`
-	Status  string `json:"status,omitempty"`
-	Content any    `json:"content,omitempty"` // Can be string or []ContentPart
+	Role          string        `json:"role,omitempty"`
+	Status        string        `json:"status,omitempty"`
+	Content       any           `json:"content,omitempty"` // Can be string or []ContentPart
 	ContentSchema []ContentPart `json:"-" swaggerignore:"true"`
 
 	// Function call fields (type="function_call")
@@ -87,7 +88,16 @@ type ResponsesInputElement struct {
 	Arguments string `json:"arguments,omitempty"`
 
 	// Function call output fields (type="function_call_output") — CallID shared above
-	Output      string            `json:"output,omitempty"`
+	Output string `json:"output,omitempty"`
+
+	// Reasoning fields (type="reasoning"): Summary carries the plaintext
+	// reasoning summary parts (summary_text). Reasoning content parts (when
+	// present) are decoded into ReasoningContent so providers that require
+	// reasoning_content to be echoed back (e.g. DeepSeek thinking mode) can
+	// reconstruct the full chain of thought on the Chat Completions side.
+	Summary          []ResponsesContentItem `json:"summary,omitempty"`
+	ReasoningContent []ResponsesContentItem `json:"-" swaggerignore:"true"`
+
 	ExtraFields UnknownJSONFields `json:"-" swaggerignore:"true"`
 }
 

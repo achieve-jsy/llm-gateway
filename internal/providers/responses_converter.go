@@ -66,6 +66,9 @@ func (sc *OpenAIResponsesStreamConverter) ensureToolCallState(index int) *Respon
 		if sc.output.AssistantReserved() {
 			outputIndex++
 		}
+		if sc.output.ReasoningReserved() {
+			outputIndex++
+		}
 		state = &ResponsesOutputToolCallState{OutputIndex: outputIndex}
 		sc.toolCalls[index] = state
 	}
@@ -82,6 +85,28 @@ func (sc *OpenAIResponsesStreamConverter) reserveAssistantOutput() {
 			state.OutputIndex++
 		}
 	}
+}
+
+// reserveReasoningOutput 在首次出现 reasoning_content 时把 reasoning item 定为首位
+// （output_index 0），并将已预占的 tool output_index 整体后移一位。
+func (sc *OpenAIResponsesStreamConverter) reserveReasoningOutput() {
+	if sc.output.ReasoningReserved() {
+		return
+	}
+	sc.output.ReserveReasoning()
+	for _, state := range sc.toolCalls {
+		if state != nil && !state.Started {
+			state.OutputIndex++
+		}
+	}
+}
+
+// assistantOutputIndex 返回 assistant message 的 output_index：有 reasoning 时为 1，否则为 0。
+func (sc *OpenAIResponsesStreamConverter) assistantOutputIndex() int {
+	if sc.output.ReasoningReserved() {
+		return 1
+	}
+	return 0
 }
 
 func (sc *OpenAIResponsesStreamConverter) forceStartToolCall(state *ResponsesOutputToolCallState) string {
@@ -121,7 +146,7 @@ func (sc *OpenAIResponsesStreamConverter) handleToolCallDeltas(toolCalls []any) 
 	var out bytes.Buffer
 
 	if sc.output.AssistantStarted() && !sc.output.AssistantDone() {
-		out.WriteString(sc.output.CompleteAssistantOutput(0))
+		out.WriteString(sc.output.CompleteAssistantOutput(sc.assistantOutputIndex()))
 	}
 
 	for _, item := range toolCalls {
@@ -235,7 +260,8 @@ func (sc *OpenAIResponsesStreamConverter) Read(p []byte) (n int, err error) {
 					// Send done event
 					if !sc.sentDone {
 						sc.sentDone = true
-						sc.buffer.AppendString(sc.output.CompleteAssistantOutput(0))
+						sc.buffer.AppendString(sc.output.CompleteReasoningOutput(0))
+						sc.buffer.AppendString(sc.output.CompleteAssistantOutput(sc.assistantOutputIndex()))
 						sc.buffer.AppendString(sc.completePendingToolCalls())
 						responseData := map[string]any{
 							"id":         sc.responseID,
@@ -280,9 +306,25 @@ func (sc *OpenAIResponsesStreamConverter) Read(p []byte) (n int, err error) {
 				if choices, ok := chunk["choices"].([]any); ok && len(choices) > 0 {
 					if choice, ok := choices[0].(map[string]any); ok {
 						if delta, ok := choice["delta"].(map[string]any); ok {
+							if reasoningContent, ok := delta["reasoning_content"].(string); ok && reasoningContent != "" {
+								sc.reserveReasoningOutput()
+								sc.buffer.AppendString(sc.output.StartReasoningOutput(0))
+								sc.output.AppendReasoningText(reasoningContent)
+								reasoningEvent := map[string]any{
+									"type":         "response.reasoning_summary_text.delta",
+									"item_id":      sc.output.ReasoningItemID(),
+									"output_index": 0,
+									"delta":        reasoningContent,
+								}
+								if jsonData, err := json.Marshal(reasoningEvent); err == nil {
+									sc.buffer.AppendString("event: response.reasoning_summary_text.delta\ndata: ")
+									sc.buffer.AppendBytes(jsonData)
+									sc.buffer.AppendString("\n\n")
+								}
+							}
 							if content, ok := delta["content"].(string); ok && content != "" {
 								sc.reserveAssistantOutput()
-								sc.buffer.AppendString(sc.output.StartAssistantOutput(0))
+								sc.buffer.AppendString(sc.output.StartAssistantOutput(sc.assistantOutputIndex()))
 								sc.output.AppendAssistantText(content)
 								deltaEvent := map[string]any{
 									"type":  "response.output_text.delta",
@@ -315,7 +357,8 @@ func (sc *OpenAIResponsesStreamConverter) Read(p []byte) (n int, err error) {
 			// Send final done event if we haven't already
 			if !sc.sentDone {
 				sc.sentDone = true
-				sc.buffer.AppendString(sc.output.CompleteAssistantOutput(0))
+				sc.buffer.AppendString(sc.output.CompleteReasoningOutput(0))
+				sc.buffer.AppendString(sc.output.CompleteAssistantOutput(sc.assistantOutputIndex()))
 				sc.buffer.AppendString(sc.completePendingToolCalls())
 				responseData := map[string]any{
 					"id":         sc.responseID,

@@ -334,3 +334,93 @@ func TestSanitizeResponsesRequest_NonStreamSkipsInclude(t *testing.T) {
 	providers.SanitizeResponsesRequest(req)
 	assert.Empty(t, req.ExtraFields.Lookup("include"))
 }
+
+func TestConvertResponsesInputToMessages_ReasoningItem(t *testing.T) {
+	// DeepSeek thinking 模式要求把上一轮 reasoning_content 回传；Responses 输入里
+	// 以 type="reasoning" item 承载，须映射回 assistant message 的 reasoning_content。
+	raw := []byte(`[
+		{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"step 1"}],"content":[{"type":"reasoning_text","text":"step 2"}]},
+		{"type":"message","role":"assistant","content":[{"type":"output_text","text":"the answer"}]}
+	]`)
+	var elements []core.ResponsesInputElement
+	require.NoError(t, json.Unmarshal(raw, &elements))
+
+	msgs, err := providers.ConvertResponsesInputToMessages(elements)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "assistant", msgs[0].Role)
+	assert.Equal(t, "the answer", core.ExtractTextContent(msgs[0].Content))
+
+	rc := msgs[0].ExtraFields.Lookup("reasoning_content")
+	require.NotEmpty(t, rc)
+	var reasoning string
+	require.NoError(t, json.Unmarshal(rc, &reasoning))
+	assert.Equal(t, "step 1\nstep 2", reasoning)
+}
+
+func TestConvertResponsesInputToMessages_ReasoningItemMap(t *testing.T) {
+	input := []map[string]any{
+		{"type": "reasoning", "summary": []any{map[string]any{"type": "summary_text", "text": "map step"}}},
+		{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "map answer"}}},
+	}
+	msgs, err := providers.ConvertResponsesInputToMessages(input)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "map answer", core.ExtractTextContent(msgs[0].Content))
+
+	rc := msgs[0].ExtraFields.Lookup("reasoning_content")
+	require.NotEmpty(t, rc)
+	var reasoning string
+	require.NoError(t, json.Unmarshal(rc, &reasoning))
+	assert.Equal(t, "map step", reasoning)
+}
+
+func TestConvertResponsesInputToMessages_ReasoningBeforeFunctionCall(t *testing.T) {
+	// 无正文、直接调工具的轮次：reasoning 应挂到 function_call 对应的 assistant message。
+	raw := []byte(`[
+		{"type":"reasoning","summary":[{"type":"summary_text","text":"think then call"}]},
+		{"type":"function_call","call_id":"call_1","name":"ping","arguments":"{}"}
+	]`)
+	var elements []core.ResponsesInputElement
+	require.NoError(t, json.Unmarshal(raw, &elements))
+
+	msgs, err := providers.ConvertResponsesInputToMessages(elements)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	require.Len(t, msgs[0].ToolCalls, 1)
+
+	rc := msgs[0].ExtraFields.Lookup("reasoning_content")
+	require.NotEmpty(t, rc)
+	var reasoning string
+	require.NoError(t, json.Unmarshal(rc, &reasoning))
+	assert.Equal(t, "think then call", reasoning)
+}
+
+func TestOpenAIResponsesStreamConverter_ReasoningContent(t *testing.T) {
+	// Chat→Responses 桥接须把 delta.reasoning_content 转为 reasoning item + 摘要文本事件。
+	upstream := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"think step"}}]}`,
+		``,
+		`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"answer"}}]}`,
+		``,
+		`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		``,
+		`data: [DONE]`,
+		``,
+	}, "\n")))
+
+	conv := providers.NewOpenAIResponsesStreamConverter(upstream, "gpt-5.5", "openai")
+	defer conv.Close()
+
+	body, err := io.ReadAll(conv)
+	require.NoError(t, err)
+	text := string(body)
+
+	assert.Contains(t, text, "response.reasoning_summary_text.delta")
+	assert.Contains(t, text, `"delta":"think step"`)
+	assert.Contains(t, text, `"type":"reasoning"`)
+	assert.Contains(t, text, `"summary_text"`)
+	assert.Contains(t, text, "response.output_text.delta")
+	assert.Contains(t, text, `"delta":"answer"`)
+	assert.Contains(t, text, "data: [DONE]")
+}

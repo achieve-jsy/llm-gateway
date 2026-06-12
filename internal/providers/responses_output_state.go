@@ -29,6 +29,12 @@ type ResponsesOutputEventState struct {
 	assistantDone      bool
 	assistantMessageID string
 	assistantText      strings.Builder
+	// reasoning item（type="reasoning"）承载思维链，排在 assistant message 之前。
+	reasoningReserved bool
+	reasoningStarted  bool
+	reasoningDone     bool
+	reasoningItemID   string
+	reasoningText     strings.Builder
 }
 
 // NewResponsesOutputEventState creates a new Responses output-item state manager.
@@ -117,6 +123,85 @@ func (s *ResponsesOutputEventState) CompleteAssistantOutput(outputIndex int) str
 	return s.StartAssistantOutput(outputIndex) + s.WriteEvent("response.output_item.done", map[string]any{
 		"type":         "response.output_item.done",
 		"item":         s.AssistantMessageItem("completed", true),
+		"output_index": outputIndex,
+	})
+}
+
+// ReserveReasoning marks that a reasoning output item occupies the leading index.
+func (s *ResponsesOutputEventState) ReserveReasoning() {
+	s.reasoningReserved = true
+}
+
+// ReasoningReserved reports whether a reasoning output item has been reserved.
+func (s *ResponsesOutputEventState) ReasoningReserved() bool {
+	return s.reasoningReserved
+}
+
+// ReasoningStarted reports whether the reasoning output item has been emitted.
+func (s *ResponsesOutputEventState) ReasoningStarted() bool {
+	return s.reasoningStarted
+}
+
+// ReasoningDone reports whether the reasoning output item has been completed.
+func (s *ResponsesOutputEventState) ReasoningDone() bool {
+	return s.reasoningDone
+}
+
+// ReasoningItemID returns the stable id of the reasoning output item.
+func (s *ResponsesOutputEventState) ReasoningItemID() string {
+	return s.reasoningItemID
+}
+
+// AppendReasoningText appends plaintext reasoning content to the reasoning item.
+func (s *ResponsesOutputEventState) AppendReasoningText(text string) {
+	_, _ = s.reasoningText.WriteString(text)
+}
+
+// ReasoningItem renders the reasoning output item payload. The plaintext chain
+// of thought is exposed in `summary` so OpenAI-compatible clients can display
+// it and echo it back on the next turn.
+func (s *ResponsesOutputEventState) ReasoningItem(includeSummary bool) map[string]any {
+	item := map[string]any{
+		"id":      s.reasoningItemID,
+		"type":    "reasoning",
+		"summary": []map[string]any{},
+	}
+	if includeSummary && s.reasoningText.Len() > 0 {
+		item["summary"] = []map[string]any{
+			{
+				"type": "summary_text",
+				"text": s.reasoningText.String(),
+			},
+		}
+	}
+	return item
+}
+
+// StartReasoningOutput emits the reasoning output_item.added event once.
+func (s *ResponsesOutputEventState) StartReasoningOutput(outputIndex int) string {
+	if s.reasoningStarted {
+		return ""
+	}
+	s.reasoningStarted = true
+	if s.reasoningItemID == "" {
+		s.reasoningItemID = "rs_" + uuid.New().String()
+	}
+	return s.WriteEvent("response.output_item.added", map[string]any{
+		"type":         "response.output_item.added",
+		"item":         s.ReasoningItem(false),
+		"output_index": outputIndex,
+	})
+}
+
+// CompleteReasoningOutput emits the reasoning output_item.done event once.
+func (s *ResponsesOutputEventState) CompleteReasoningOutput(outputIndex int) string {
+	if !s.reasoningReserved || s.reasoningDone {
+		return ""
+	}
+	s.reasoningDone = true
+	return s.StartReasoningOutput(outputIndex) + s.WriteEvent("response.output_item.done", map[string]any{
+		"type":         "response.output_item.done",
+		"item":         s.ReasoningItem(true),
 		"output_index": outputIndex,
 	})
 }

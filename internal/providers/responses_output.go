@@ -111,6 +111,20 @@ func buildResponsesContentItemsFromParts(parts []core.ContentPart) []core.Respon
 // BuildResponsesOutputItems converts a response message into Responses API output items.
 func BuildResponsesOutputItems(msg core.ResponseMessage) []core.ResponsesOutputItem {
 	output := make([]core.ResponsesOutputItem, 0, len(msg.ToolCalls)+1)
+	// reasoning 先于 message：DeepSeek 等 thinking provider 的 reasoning_content
+	// 通过 ExtraFields 透传，此处转为 Responses 的 reasoning item 让客户端可回显/回传。
+	if rc := msg.ExtraFields.Lookup("reasoning_content"); len(rc) > 0 {
+		var text string
+		if json.Unmarshal(rc, &text) == nil && strings.TrimSpace(text) != "" {
+			output = append(output, core.ResponsesOutputItem{
+				ID:   "rs_" + uuid.New().String(),
+				Type: "reasoning",
+				Summary: []core.ResponsesContentItem{
+					{Type: "summary_text", Text: text},
+				},
+			})
+		}
+	}
 	contentItems := buildResponsesMessageContent(msg.Content)
 	if len(contentItems) > 0 || len(msg.ToolCalls) == 0 {
 		if len(contentItems) == 0 {

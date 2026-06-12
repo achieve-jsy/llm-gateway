@@ -164,7 +164,8 @@ type catalogResponse struct {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, q map[string]string) ([]byte, error) {
-	u := c.base + strings.TrimPrefix(path, "/api/v1")
+	// base 由 New 保证以 "/" 结尾；TrimLeft 去掉 path 前导 "/"，避免拼出 "//"。
+	u := c.base + strings.TrimLeft(strings.TrimPrefix(path, "/api/v1"), "/")
 	if len(q) > 0 {
 		parts := make([]string, 0, len(q))
 		for k, v := range q {
@@ -234,15 +235,31 @@ func isRetryable(err error) bool {
 }
 
 // FetchLogs 拉取调用明细（分页 ≤ maxPageSize，上限 c.maxLogs 条）。
-func (c *Client) FetchLogs(ctx context.Context, from, to, keyType, deptName, studioID string) ([]LogRow, error) {
+// userID 非空时走 /usage/scoped/logs（服务端按用户过滤），否则走 /usage/logs。
+func (c *Client) FetchLogs(ctx context.Context, from, to, keyType, userID, deptName, studioID string) ([]LogRow, error) {
 	var out []LogRow
 	page := 1
+	path := "/usage/logs"
+	if userID != "" {
+		path = "/usage/scoped/logs"
+	}
 	for page <= 200 {
+		// /usage/logs 用 from/to；/usage/scoped/logs 用 start/end（ScopedLogs 忽略 from/to，默认 30 天窗）。
 		q := map[string]string{
-			"from": from, "to": to, "page": strconv.Itoa(page), "page_size": strconv.Itoa(maxPageSize),
+			"page": strconv.Itoa(page), "page_size": strconv.Itoa(maxPageSize),
+		}
+		if userID != "" {
+			q["start"] = from
+			q["end"] = to
+		} else {
+			q["from"] = from
+			q["to"] = to
 		}
 		if keyType != "" {
 			q["key_type"] = keyType
+		}
+		if userID != "" {
+			q["user_id"] = userID
 		}
 		if deptName != "" {
 			q["dept_name"] = deptName
@@ -250,7 +267,7 @@ func (c *Client) FetchLogs(ctx context.Context, from, to, keyType, deptName, stu
 		if studioID != "" {
 			q["studio_id"] = studioID
 		}
-		b, err := c.do(ctx, "GET", "/usage/logs", q)
+		b, err := c.do(ctx, "GET", path, q)
 		if err != nil {
 			return nil, err
 		}

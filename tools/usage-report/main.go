@@ -233,14 +233,16 @@ func resolveScope(ctx context.Context, cli *client.Client, cfg Config) (report.S
 
 // fetchScopeLogs 按 level 拉取日志，做客户端侧二次过滤保证口径（部门/工作室再做服务端 dept_name/studio_id 过滤）。
 func fetchScopeLogs(ctx context.Context, cli *client.Client, cfg Config, scope report.Scope, from, to string) ([]client.LogRow, error) {
-	deptName, studioID := "", ""
+	deptName, studioID, userID := "", "", ""
 	switch cfg.Level {
+	case "personal":
+		userID = scope.ID
 	case "department":
 		deptName = scope.Name
 	case "studio":
 		studioID = scope.StudioID
 	}
-	rows, err := cli.FetchLogs(ctx, from, to, cfg.KeyType, deptName, studioID)
+	rows, err := cli.FetchLogs(ctx, from, to, cfg.KeyType, userID, deptName, studioID)
 	if err != nil {
 		return nil, err
 	}

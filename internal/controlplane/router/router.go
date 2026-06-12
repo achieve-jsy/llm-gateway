@@ -818,17 +818,12 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	budgetHandler.SetCounterRebuildService(service.NewBudgetCounterRebuildService(
 		db, rdb, budgetperiod.Config{Timezone: cfg.Budget.Timezone, WeekStart: cfg.Budget.WeekStart},
 	))
-	// 注册内部告警触发端点（供 gateway 调用）—— 状态变更走审计中间件；
-	// 高频 verify-key 查询保持不审计，避免审计表被刷爆。
-	internalAudited := internalGroup.Group("")
-	internalAudited.Use(middleware.AuditMiddleware(auditSvc, db))
-	// budget/evaluate-alert 是每笔计费请求 fire-and-forget 的高频内部调用，
-	// 与 verify-key 一样不审计，避免审计表被刷爆（否则每笔请求都会落一条零用户/127.0.0.1 的噪声）。
+	// 内部端点（供 gateway 调用）：均为机器间调用（verify-key / budget.evaluate-alert / video/tasks），
+	// 属请求级流量而非管理面人工操作，不写审计——审计表只记录管理面写操作，避免被内部高频调用刷爆。
 	internalGroup.POST("/budget/evaluate-alert", budgetHandler.EvaluateAlert)
-	// 视频任务写入/查询（供 gateway 调用）
-	internalAudited.POST("/video/tasks", videoTaskHandler.InternalCreate)
-	internalAudited.PATCH("/video/tasks/:id", videoTaskHandler.InternalUpdate)
-	internalAudited.PATCH("/video/tasks/:id/status", videoTaskHandler.InternalUpdateStatus)
+	internalGroup.POST("/video/tasks", videoTaskHandler.InternalCreate)
+	internalGroup.PATCH("/video/tasks/:id", videoTaskHandler.InternalUpdate)
+	internalGroup.PATCH("/video/tasks/:id/status", videoTaskHandler.InternalUpdateStatus)
 	internalGroup.GET("/video/tasks/:id/provider-type", videoTaskHandler.InternalGetProviderType)
 	// v0.7: 扩容审批路由
 	expansionHandler := handler.NewExpansionHandler(expansionSvc, orgContainer.RBAC, expansionUserRepo)

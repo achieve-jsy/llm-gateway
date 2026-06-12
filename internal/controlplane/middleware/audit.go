@@ -216,11 +216,6 @@ var auditRouteMap = map[string]routeAction{
 	"PUT:/api/v1/ops/error-logs/:id/resolve":            {audit.Action("ops.error_log.resolve"), audit.Resource("ops")},
 	"PUT:/api/v1/ops/request-errors/:id/resolve":        {audit.Action("ops.request_error.resolve"), audit.Resource("ops")},
 	"PUT:/api/v1/ops/upstream-errors/:id/resolve":       {audit.Action("ops.upstream_error.resolve"), audit.Resource("ops")},
-
-	// ── Internal（gateway 调用的状态变更，需审计；高频 verify-key / budget.evaluate-alert 不审计）──
-	"POST:/internal/v1/video/tasks":             {audit.Action("video_task.create"), audit.Resource("video_task")},
-	"PATCH:/internal/v1/video/tasks/:id":        {audit.Action("video_task.update"), audit.Resource("video_task")},
-	"PATCH:/internal/v1/video/tasks/:id/status": {audit.Action("video_task.update_status"), audit.Resource("video_task")},
 }
 
 func lookupRouteAction(fullPath, method string) (action audit.Action, resource audit.Resource, ok bool) {

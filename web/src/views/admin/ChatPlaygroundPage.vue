@@ -237,9 +237,17 @@ function getAuthToken(): string {
 async function ensureApiKeyForNonApikeyMode(): Promise<boolean> {
   if (config.apiKey.trim()) return true
   if (myKeys.value.length === 0) await loadMyKeys()
-  const key = myKeys.value.find(k => k.enabled)
+  const now = Date.now()
+  const key = myKeys.value.find(k => {
+    if (!k.enabled) return false
+    if (k.expiresAt) {
+      const t = new Date(k.expiresAt).getTime()
+      if (!Number.isNaN(t) && t < now) return false
+    }
+    return true
+  })
   if (!key) {
-    ElMessage.warning('当前账号没有可用的 API Key，请先在「Key 管理」创建一个')
+    ElMessage.warning('当前账号没有可用（未过期）的 API Key，请先在「Key 管理」创建或续期')
     return false
   }
   try {

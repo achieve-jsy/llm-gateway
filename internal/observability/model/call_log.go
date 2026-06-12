@@ -89,3 +89,6 @@ const WhereExcludeServiceKeyLogs = `COALESCE(NULLIF(key_type, ''), 'personal') !
 
 // WhereExcludeServiceKeyLogsCL 带 call_logs 表别名 cl。
 const WhereExcludeServiceKeyLogsCL = `COALESCE(NULLIF(cl.key_type, ''), 'personal') != 'service'`
+
+// WhereServiceKeyLogsCL 仅匹配程序 Service Key 调用（带表别名 cl），用于把程序调用单独聚合。
+const WhereServiceKeyLogsCL = `COALESCE(NULLIF(cl.key_type, ''), 'personal') = 'service'`

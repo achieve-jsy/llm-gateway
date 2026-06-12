@@ -186,6 +186,30 @@ describe('UsageRecordTable', () => {
     })
   })
 
+  describe('主体三态', () => {
+    function rowWith(overrides: Record<string, any>) {
+      return { ...mockRows[1], ...overrides }
+    }
+
+    it('service key 归为「程序」', () => {
+      const wrapper = mountComponent()
+      const vm = wrapper.vm as any
+      expect(vm.subjectType(rowWith({ key_type: 'service', user_name: '' }))).toBe('service')
+    })
+
+    it('个人 key 无用户名归为「未关联」', () => {
+      const wrapper = mountComponent()
+      const vm = wrapper.vm as any
+      expect(vm.subjectType(rowWith({ key_type: 'personal', user_name: '' }))).toBe('unowned')
+    })
+
+    it('个人 key 有用户名归为「成员」', () => {
+      const wrapper = mountComponent()
+      const vm = wrapper.vm as any
+      expect(vm.subjectType(rowWith({ key_type: 'personal', user_name: 'Alice' }))).toBe('member')
+    })
+  })
+
   describe('端点标签映射', () => {
     it('正确映射端点标签', () => {
       const wrapper = mountComponent()

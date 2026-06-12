@@ -103,6 +103,7 @@
           :currency="currency"
           :user-top-models="userTopModels"
           :enhanced-user-map="enhancedUserMap"
+          :service-summary="serviceSummary"
           v-model:rank-page="rankPage"
           v-model:rank-search="rankSearch"
           @drill-down="drillDown"
@@ -111,6 +112,7 @@
           @pop-to-level="popToLevel"
           @load-summary="loadSummary"
           @user-click="handleUserClick"
+          @view-service-calls="viewServiceCalls"
         />
         <ModelChartSection
           :loading="modelsLoading"
@@ -297,7 +299,7 @@ const logTableProps = computed(() => ({
   showKey: !isCompactUsageTab.value,
   showKeyType: !isCompactUsageTab.value && authStore.effectiveRole !== 'user',
   showUser: !isCompactUsageTab.value,
-  userLabel: '成员',
+  userLabel: '主体',
   showStudio: !isCompactUsageTab.value && authStore.effectiveRole === 'admin',
   showDept: !isCompactUsageTab.value && (authStore.effectiveRole === 'admin' || authStore.effectiveRole === 'studio_admin'),
   showProvider: true,
@@ -443,8 +445,19 @@ const canDrill = computed(() =>
 )
 
 const totalCost = computed(() =>
-  breakdown.value.reduce((sum, r) => sum + (r.cost_estimate || 0), 0)
+  summary.value?.cost_estimate ?? breakdown.value.reduce((sum, r) => sum + (r.cost_estimate || 0), 0)
 )
+
+// 程序调用（Service Key）聚合，仅 dept 范围下由后端回填。
+const serviceSummary = computed(() => {
+  const s = summary.value
+  if (!s || (s.service_call_count == null && s.service_cost_estimate == null)) return null
+  return {
+    cost_estimate: s.service_cost_estimate ?? 0,
+    call_count: s.service_call_count ?? 0,
+    total_tokens: s.service_total_tokens ?? 0,
+  }
+})
 
 const avgCostPerCall = computed(() => {
   const s = summary.value
@@ -861,6 +874,12 @@ const logParams = computed(() => {
 
 function reloadLogs() {
   logSectionRef.value?.refresh()
+}
+
+// 「查看程序调用」：把明细区切到 Service Key 视图（排行保持成员口径）。
+function viewServiceCalls() {
+  filterKeyType.value = 'service'
+  loadAll()
 }
 
 async function onUserNameChange() {

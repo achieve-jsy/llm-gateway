@@ -78,7 +78,7 @@
               <div class="up-meta-heading">调用者</div>
               <div class="up-meta-row"><span>Key</span><span>{{ row?.key_name || maskKey(row?.key_id || '') }}</span></div>
               <div v-if="row?.key_type" class="up-meta-row"><span>Key 类型</span><span>{{ keyTypeLabel(row.key_type) }}</span></div>
-              <div class="up-meta-row"><span>用户</span><span>{{ row?.key_type === 'service' ? '—' : (row?.user_name || '—') }}</span></div>
+              <div class="up-meta-row"><span>主体</span><span>{{ subjectLabel(row) }}</span></div>
               <div class="up-meta-row"><span>部门</span><span>{{ row?.dept_name || row?.dept_id || '—' }}</span></div>
               <div class="up-meta-row"><span>IP</span><code>{{ row?.ip_address || '—' }}</code></div>
               <div class="up-meta-row up-meta-row--wrap"><span>UA</span><code class="up-meta-ua">{{ row?.user_agent || '—' }}</code></div>
@@ -320,9 +320,16 @@ watch(() => props.traceLoading, (loading) => {
 const fmtNum = (n?: number | null) => n?.toLocaleString() ?? '0'
 
 const keyTypeLabel = (t?: string) => {
-  if (t === 'service') return '程序 Key'
-  if (t === 'personal') return '个人 Key'
+  if (t === 'service') return '程序'
+  if (t === 'personal') return '个人'
   return t || '—'
+}
+
+// 主体三态：程序调用 / 成员 / 未关联
+const subjectLabel = (row?: LogRow | null) => {
+  if (row?.key_type === 'service') return '程序调用'
+  if (!row?.user_name) return '未关联'
+  return row.user_name
 }
 
 const fmtCost = (v?: number | null): string => {

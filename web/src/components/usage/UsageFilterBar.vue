@@ -151,7 +151,7 @@
         />
       </div>
       <div v-if="fields.keyType" class="ufb-chip">
-        <span class="ufb-label">Key 类型</span>
+        <span class="ufb-label">主体</span>
         <el-select
           v-model="keyType"
           placeholder="全部"
@@ -161,8 +161,8 @@
           @change="emit('change')"
           @clear="emit('change')"
         >
-          <el-option label="个人 Key" value="personal" />
-          <el-option label="程序 Key" value="service" />
+          <el-option label="成员" value="personal" />
+          <el-option label="程序" value="service" />
         </el-select>
       </div>
     </div>

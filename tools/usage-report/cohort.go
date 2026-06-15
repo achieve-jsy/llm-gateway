@@ -30,6 +30,16 @@ type rosterEntry struct {
 func buildCohort(ctx context.Context, cli *client.Client, cfg Config, scope report.Scope, calls []report.CallEvent) (report.CohortDef, []report.NotComputed) {
 	var ncs []report.NotComputed
 	cohort := report.CohortDef{Enabled: true, Option: "sameRole", Metric: "cost_per_1k_tokens", Direction: "cost"}
+	if cfg.Level != "personal" {
+		cohort.Enabled = false // 同岗分位仅适用于个人；单元级这里只取 roster 总人数。
+		count, err := unitRosterCount(ctx, cli, cfg.Level, scope.ID)
+		if err != nil {
+			ncs = append(ncs, report.NotComputed{Metric: "组织花名册人数", Reason: err.Error()})
+			return cohort, ncs
+		}
+		cohort.RosterUserCount = count
+		return cohort, ncs
+	}
 
 	// personal 的 scope 明细只含本人，不能据此声称 peer 样本不足；改拉同期全公司 personal 明细。
 	// 单元报告不计算同岗分位，但仍复用 roster 得到组织总人数。
@@ -110,25 +120,6 @@ func buildCohort(ctx context.Context, cli *client.Client, cfg Config, scope repo
 		}
 	}
 
-	switch cfg.Level {
-	case "department":
-		for _, e := range roster {
-			if e.DeptID == scope.ID {
-				cohort.RosterUserCount++
-			}
-		}
-		cohort.Enabled = false
-		return cohort, ncs
-	case "studio":
-		for _, e := range roster {
-			if e.StudioID == scope.ID {
-				cohort.RosterUserCount++
-			}
-		}
-		cohort.Enabled = false
-		return cohort, ncs
-	}
-
 	target := roster[cfg.Scope]
 	if target.UserID == "" {
 		ncs = append(ncs, report.NotComputed{Metric: "同岗分位", Reason: "目标用户在 active 部门花名册中未匹配到岗位（可能 users.dept_id IS NULL 或非 active 部门）。"})
@@ -149,6 +140,41 @@ func buildCohort(ctx context.Context, cli *client.Client, cfg Config, scope repo
 		ncs = append(ncs, report.NotComputed{Metric: "同岗分位-覆盖", Reason: "有 " + itoa(len(skipped)) + " 个部门成员拉取失败(越权/限流)，roster 不完整；peer 分位仅基于可取到样本。"})
 	}
 	return cohort, ncs
+}
+
+func unitRosterCount(ctx context.Context, cli *client.Client, level, scopeID string) (int, error) {
+	depts, err := cli.FetchDepartments(ctx, "active")
+	if err != nil {
+		return 0, err
+	}
+	studioOfDept := map[string]string{}
+	if level == "studio" {
+		mappings, mapErr := cli.FetchDeptStudioMap(ctx)
+		if mapErr != nil {
+			return 0, mapErr
+		}
+		for _, m := range mappings {
+			studioOfDept[m.DeptID] = m.StudioID
+		}
+	}
+	users := map[string]struct{}{}
+	for _, d := range depts {
+		studioID := d.StudioID
+		if studioID == "" {
+			studioID = studioOfDept[d.DeptID]
+		}
+		if level == "department" && d.DeptID != scopeID || level == "studio" && studioID != scopeID {
+			continue
+		}
+		members, fetchErr := cli.FetchMembers(ctx, d.DeptID)
+		if fetchErr != nil {
+			return 0, fetchErr
+		}
+		for _, member := range members {
+			users[member.ID] = struct{}{}
+		}
+	}
+	return len(users), nil
 }
 
 // jobSlot 取值链：job_category → job_family → job_title → ""（org-roster.md §3-C）。

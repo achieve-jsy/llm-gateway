@@ -50,12 +50,36 @@ func RenderMD(r *report.Report) string {
 	}
 
 	w("\n## 口径与对账\n\n")
-	for _, al := range r.Meta.QA.Alignment {
-		w("- %s\n", al)
+	// 只列一次：打印 QA.Alignment（对账/口径单一来源），去重；缺失才补默认；最后补一条判定性说明。
+	seen := map[string]bool{}
+	add := func(line string) {
+		if strings.TrimSpace(line) == "" || seen[line] {
+			return
+		}
+		seen[line] = true
+		w("- %s\n", line)
 	}
-	w("- 成功=`status=200`；个人画像/岗位人均排除 `key_type='service'`；部门 Service Key 块仅 `=service` 且归属当前部门。\n")
-	w("- `total_tokens=prompt+completion+reasoning`（不含 cached）；对账基准 `GET /api/v1/usage/dashboard`。\n")
-	w("- 判定性分析确定性可复现；A1–A5 阈值为阶段一默认，T4 用真实数据校准。\n")
+	for _, al := range r.Meta.QA.Alignment {
+		add(al)
+	}
+	defaults := []string{
+		"成功=`status=200`；个人画像/岗位人均排除 `key_type='service'`；部门 Service Key 块仅 `=service` 且归属当前部门。",
+		"`total_tokens=prompt+completion+reasoning`（不含 cached/cache_write）；对账基准 `GET /api/v1/usage/dashboard`。",
+	}
+	for _, d := range defaults {
+		covered := false
+		pfx := strings.SplitN(d, "；", 2)[0]
+		for k := range seen {
+			if strings.HasPrefix(k, pfx) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			add(d)
+		}
+	}
+	add("判定性分析确定性可复现；A1–A5 阈值为阶段一默认，T4 用真实数据校准。")
 
 	return b.String()
 }

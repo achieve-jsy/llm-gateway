@@ -50,6 +50,7 @@ type LogRow struct {
 	KeyID            string  `json:"key_id"`
 	KeyType          string  `json:"key_type"`
 	UserID           string  `json:"user_id"`
+	UserName         string  `json:"user_name"`
 	DeptID           string  `json:"dept_id"`
 	DeptName         string  `json:"dept_name"`
 	StudioName       string  `json:"studio_name"`

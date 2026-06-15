@@ -49,6 +49,10 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	// 个人级：把范围名解析为人名（默认是 UUID），提升可读性。
+	if cfg.Level == "personal" && len(rows) > 0 && rows[0].UserName != "" {
+		scope.Name = rows[0].UserName
+	}
 
 	// 3) 归一化：CallEvent + DailyMetric（口径：total_tokens=prompt+completion+reasoning）
 	allCalls := toEvents(rows)

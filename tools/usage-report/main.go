@@ -27,11 +27,11 @@ func main() {
 
 func run(args []string) error {
 	cfg := parseConfig(args)
-	if cfg.Token == "" {
-		return fmt.Errorf("缺少 token（--token 或 USAGE_REPORT_TOKEN）")
+	if err := validateConfig(cfg); err != nil {
+		return err
 	}
 	ctx := context.Background()
-	cli := client.New(cfg.BaseURL, cfg.Token)
+	cli := client.New(cfg.BaseURL, cfg.Token, client.WithMaxLogs(cfg.MaxLogs))
 
 	// 1) 解析范围（名称/studio/dept）
 	scope, err := resolveScope(ctx, cli, cfg)
@@ -67,6 +67,8 @@ func run(args []string) error {
 		return err
 	}
 	baselineMetrics := aggregateDaily(nonService(toEvents(baselineRows)), cfg.Level, scope.ID)
+	// A1/A2 历史窗口分布用逐调用事件（成员口径，排除 service），与当前期口径一致。
+	baselineCalls := nonService(toEvents(baselineRows))
 
 	// 4) 模型能力（A4 有效输入预算）
 	models := distinctModels(rows)
@@ -78,11 +80,22 @@ func run(args []string) error {
 	// 6) 装配派生
 	rules := report.DefaultRuleSet()
 	rules.USDCNYRate = cfg.USDCNYRate
+	now := time.Now()
+	periodDays, _ := inclusiveDays(cfg.From, cfg.To)
 	meta := report.Meta{
-		Level:    cfg.Level,
-		Period:   report.Period{From: cfg.From, To: cfg.To, Type: cfg.Period, Label: cfg.Period + " " + cfg.From + "~" + cfg.To},
-		Scope:    scope,
-		Currency: report.Currency{Base: "USD", ReportCurrency: "CNY", USDCNYRate: cfg.USDCNYRate, RateSource: "config", RateAt: time.Now().Format(time.RFC3339)},
+		Level:           cfg.Level,
+		Period:          report.Period{From: cfg.From, To: cfg.To, Type: cfg.Period, Days: periodDays, Label: cfg.Period + " " + cfg.From + "~" + cfg.To},
+		Scope:           scope,
+		GeneratedAt:     now.Format(time.RFC3339),
+		DataRetrievedAt: now.Format(time.RFC3339),
+		APIS: []string{
+			"GET /api/v1/usage/logs|scoped/logs",
+			"GET /api/v1/usage/dashboard",
+			"GET /api/v1/org/departments",
+			"GET /api/v1/org/departments/:dept_id/members",
+			"GET /api/v1/model-catalog/search",
+		},
+		Currency: report.Currency{Base: "USD", ReportCurrency: "CNY", USDCNYRate: cfg.USDCNYRate, RateSource: "config", RateAt: now.Format(time.RFC3339)},
 		QA: report.QA{Alignment: []string{
 			"成功=`status=200`；个人画像/岗位人均排除 `key_type='service'`；部门 Service Key 块仅 `=service` 且归属当前部门。",
 			"`total_tokens=prompt+completion+reasoning`（不含 cached/cache_write）；对账基准 `GET /api/v1/usage/dashboard`。",
@@ -92,7 +105,7 @@ func run(args []string) error {
 		}, AnomalyEnabled: true, PeerPercentileEnabled: cohort.Enabled},
 	}
 	in := report.ReportInput{
-		Metrics: metrics, Calls: memberCalls, BaselineMetrics: baselineMetrics, Cohort: cohort,
+		Metrics: metrics, Calls: memberCalls, BaselineMetrics: baselineMetrics, BaselineCalls: baselineCalls, Cohort: cohort,
 		LevelMeta:          scope,
 		ModelContextBudget: budget,
 	}
@@ -141,19 +154,67 @@ func run(args []string) error {
 	return nil
 }
 
+func validateConfig(cfg Config) error {
+	if cfg.Token == "" {
+		return fmt.Errorf("缺少 token（--token 或 USAGE_REPORT_TOKEN）")
+	}
+	if cfg.Scope == "" {
+		return fmt.Errorf("缺少 scope（--scope）")
+	}
+	switch cfg.Level {
+	case "personal", "department", "studio":
+	default:
+		return fmt.Errorf("无效 level %q（应为 personal|department|studio）", cfg.Level)
+	}
+	switch cfg.Period {
+	case "week", "month", "custom":
+	default:
+		return fmt.Errorf("无效 period %q（应为 week|month|custom）", cfg.Period)
+	}
+	if cfg.KeyType != "" && cfg.KeyType != "personal" && cfg.KeyType != "service" {
+		return fmt.Errorf("无效 key-type %q（应为 personal|service 或空）", cfg.KeyType)
+	}
+	if cfg.USDCNYRate <= 0 {
+		return fmt.Errorf("fx-rate 必须大于 0")
+	}
+	if cfg.MaxLogs <= 0 {
+		return fmt.Errorf("max-logs 必须大于 0")
+	}
+	if _, err := inclusiveDays(cfg.From, cfg.To); err != nil {
+		return err
+	}
+	return nil
+}
+
+func inclusiveDays(from, to string) (int, error) {
+	const layout = "2006-01-02"
+	start, err := time.Parse(layout, from)
+	if err != nil {
+		return 0, fmt.Errorf("无效 from 日期 %q（应为 YYYY-MM-DD）", from)
+	}
+	end, err := time.Parse(layout, to)
+	if err != nil {
+		return 0, fmt.Errorf("无效 to 日期 %q（应为 YYYY-MM-DD）", to)
+	}
+	if end.Before(start) {
+		return 0, fmt.Errorf("无效日期范围：to %s 早于 from %s", to, from)
+	}
+	return int(end.Sub(start).Hours()/24) + 1, nil
+}
+
 // vickyPayload 组装可 POST <VICKY_ORIGIN>/api/reports 的 JSON 载荷（category/narrative/project 由 config 指定）。
 func vickyPayload(cfg Config, rep *report.Report) map[string]interface{} {
 	content := render.RenderVicky(rep)
 	slug := vickySlug(cfg, rep)
 	return map[string]interface{}{
-		"title":    vickyTitle(cfg, rep),
-		"slug":     slug,
-		"category": cfg.VickyCategory,
+		"title":     vickyTitle(cfg, rep),
+		"slug":      slug,
+		"category":  cfg.VickyCategory,
 		"narrative": cfg.VickyNarrative,
-		"project":  cfg.VickyProject,
-		"tag":      "META · 用量周报",
-		"template": "book",
-		"content":  content,
+		"project":   cfg.VickyProject,
+		"tag":       "META · 用量周报",
+		"template":  "book",
+		"content":   content,
 	}
 }
 
@@ -211,26 +272,30 @@ func resolveScope(ctx context.Context, cli *client.Client, cfg Config) (report.S
 	switch cfg.Level {
 	case "department":
 		depts, err := cli.FetchDepartments(ctx, "")
-		if err == nil {
-			for _, d := range depts {
-				if d.DeptID == cfg.Scope || d.ID == cfg.Scope {
-					s.ID, s.Name = d.DeptID, d.DeptName
-					s.DeptID, s.StudioID = d.DeptID, d.StudioID
-					break
-				}
+		if err != nil {
+			return report.Scope{}, fmt.Errorf("解析部门范围失败: %w", err)
+		}
+		for _, d := range depts {
+			if d.DeptID == cfg.Scope || d.ID == cfg.Scope {
+				s.ID, s.Name = d.DeptID, d.DeptName
+				s.DeptID, s.StudioID = d.DeptID, d.StudioID
+				return s, nil
 			}
 		}
+		return report.Scope{}, fmt.Errorf("未找到部门 scope %q", cfg.Scope)
 	case "studio":
 		studios, err := cli.FetchStudios(ctx)
-		if err == nil {
-			for _, st := range studios {
-				if st.ID == cfg.Scope {
-					s.ID, s.Name = st.ID, st.Name
-					s.StudioID = st.ID
-					break
-				}
+		if err != nil {
+			return report.Scope{}, fmt.Errorf("解析工作室范围失败: %w", err)
+		}
+		for _, st := range studios {
+			if st.ID == cfg.Scope {
+				s.ID, s.Name = st.ID, st.Name
+				s.StudioID = st.ID
+				return s, nil
 			}
 		}
+		return report.Scope{}, fmt.Errorf("未找到工作室 scope %q", cfg.Scope)
 	}
 	return s, nil
 }
@@ -261,16 +326,9 @@ func fetchScopeLogs(ctx context.Context, cli *client.Client, cfg Config, scope r
 			if r.KeyType == "service" {
 				continue
 			}
-		case "department":
-			// dept_id 归一：匹配合法 dept_id 或 departments.id
-			if scope.DeptID != "" && r.DeptID != scope.DeptID {
-				continue
-			}
-		case "studio":
-			// studio 由查询参数过滤；此处按 StudioName 兜底（LogRow 无 studio_id）。
-			if scope.StudioID != "" && r.StudioName != scope.Name {
-				continue
-			}
+		case "department", "studio":
+			// 范围过滤由服务端完成：Dashboard/usage 查询使用 departments 双 ID 归一和
+			// dept_studio_map。客户端若再按单一 dept_id 或可变名称过滤，会误删合法历史记录。
 		}
 		out = append(out, r)
 	}
@@ -357,17 +415,19 @@ func distinctModels(rows []client.LogRow) []string {
 	return out
 }
 
-func reportFactTotals(rep *report.Report) (calls int64, tokens int64) {
+func reportFactParts(rep *report.Report) (memberCalls, memberTokens, serviceCalls, serviceTokens int64) {
 	if rep.Fact.Personal != nil {
-		return rep.Fact.Personal.ReqCount, rep.Fact.Personal.TotalTokens
+		return rep.Fact.Personal.ReqCount, rep.Fact.Personal.TotalTokens, 0, 0
 	}
 	if rep.Fact.Department != nil {
-		return rep.Fact.Department.Member.ReqCount, rep.Fact.Department.Member.TotalTokens
+		u := rep.Fact.Department
+		return u.Member.ReqCount, u.Member.TotalTokens, u.ServiceKey.ReqCount, u.ServiceKey.TotalTokens
 	}
 	if rep.Fact.Studio != nil {
-		return rep.Fact.Studio.Member.ReqCount, rep.Fact.Studio.Member.TotalTokens
+		u := rep.Fact.Studio
+		return u.Member.ReqCount, u.Member.TotalTokens, u.ServiceKey.ReqCount, u.ServiceKey.TotalTokens
 	}
-	return 0, 0
+	return 0, 0, 0, 0
 }
 
 // reconcileWithDashboard 以 GetDashboard 为对账基准：把报告 total_tokens 与之比较并记录差异（口径说明，不覆盖数据）。
@@ -379,16 +439,26 @@ func reconcileWithDashboard(ctx context.Context, cli *client.Client, cfg Config,
 		rep.Meta.QA.Alignment = append(rep.Meta.QA.Alignment, "对账：GetDashboard 拉取失败("+err.Error()+")，仅以 /usage/logs 聚合口径为准。")
 		return
 	}
-	// 报告自身口径（/usage/logs 聚合，已排除 service 且 total=prompt+completion+reasoning）
-	rcalls, rtokens := reportFactTotals(rep)
-	if db.CallCount == 0 {
-		rep.Meta.QA.Alignment = append(rep.Meta.QA.Alignment, "对账：GetDashboard 返回 0 调用，跳过对账。")
+	memberCalls, memberTokens, serviceCalls, serviceTokens := reportFactParts(rep)
+	if db.CallCount == 0 && memberCalls+serviceCalls == 0 {
+		rep.Meta.QA.Alignment = append(rep.Meta.QA.Alignment, "对账(GetDashboard=基准)：报告与 GetDashboard 均为 0 调用。")
 		return
 	}
-	diff := rtokens - db.TotalTokens
-	note := fmt.Sprintf("对账(GetDashboard=基准)：报告 total_tokens=%d vs GetDashboard total_tokens=%d（差 %d，调用 %d vs %d）；两者均=SUM(prompt+completion+reasoning)，未混拼 /usage/dashboard/users* 存储列。", rtokens, db.TotalTokens, diff, rcalls, db.CallCount)
-	if cfg.Level == "personal" {
-		note += " personal 范围 GetDashboard(scope=user) 含该用户 service key，而 personal 画像排除 key_type='service'；差异应≈service key 贡献。"
+	if cfg.Level == "department" {
+		dashboardMemberCalls := db.CallCount - db.ServiceCallCount
+		dashboardMemberTokens := db.TotalTokens - db.ServiceTotalTokens
+		note := fmt.Sprintf("对账(GetDashboard=基准)：Member tokens %d vs %d（差 %d），calls %d vs %d；Service tokens %d vs %d（差 %d），calls %d vs %d；Total tokens %d vs %d（差 %d）。",
+			memberTokens, dashboardMemberTokens, memberTokens-dashboardMemberTokens,
+			memberCalls, dashboardMemberCalls,
+			serviceTokens, db.ServiceTotalTokens, serviceTokens-db.ServiceTotalTokens,
+			serviceCalls, db.ServiceCallCount,
+			memberTokens+serviceTokens, db.TotalTokens, memberTokens+serviceTokens-db.TotalTokens)
+		rep.Meta.QA.Alignment = append(rep.Meta.QA.Alignment, note)
+		return
 	}
+	// personal/studio 当前 Dashboard 未提供可靠的 service 拆分：按现有同口径总量比较，差异如实呈现，不自动归因。
+	note := fmt.Sprintf("对账(GetDashboard=基准)：报告 total_tokens=%d vs GetDashboard total_tokens=%d（差 %d，调用 %d vs %d）；两者均=SUM(prompt+completion+reasoning)，未混拼 /usage/dashboard/users* 存储列。",
+		memberTokens+serviceTokens, db.TotalTokens, memberTokens+serviceTokens-db.TotalTokens,
+		memberCalls+serviceCalls, db.CallCount)
 	rep.Meta.QA.Alignment = append(rep.Meta.QA.Alignment, note)
 }

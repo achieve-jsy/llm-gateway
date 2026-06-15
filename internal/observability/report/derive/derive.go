@@ -153,8 +153,10 @@ func buildPersonalFact(in report.ReportInput) *report.PersonalFact {
 func buildUnitFact(in report.ReportInput, level string) *report.UnitFact {
 	u := &report.UnitFact{ScopeID: in.LevelMeta.ID, ScopeName: in.LevelMeta.Name, StudioID: in.LevelMeta.StudioID}
 	modelSet := map[string]struct{}{}
-	daySet := map[string]struct{}{}
+	serviceDaySet := map[string]struct{}{}
 	activeUsers := map[string]struct{}{}
+	userDays := map[string]map[string]struct{}{}
+	modelAgg := map[string]*report.TopModel{}
 	// member vs service 分离（成员口径排除 service；service 块只算 service 且归属当前部门，由工具侧过滤）
 	for _, m := range in.Metrics {
 		if u.ScopeID != m.ScopeID {
@@ -168,7 +170,7 @@ func buildUnitFact(in report.ReportInput, level string) *report.UnitFact {
 			s.TotalTokens += m.TotalTokens
 			s.EstCostUSD += m.EstCostUSD
 			if m.Date != "" {
-				daySet[m.Date] = struct{}{}
+				serviceDaySet[m.Date] = struct{}{}
 			}
 			continue
 		}
@@ -183,21 +185,46 @@ func buildUnitFact(in report.ReportInput, level string) *report.UnitFact {
 		mb.EstCostUSD += m.EstCostUSD
 		if m.UserID != "" {
 			activeUsers[m.UserID] = struct{}{}
+			if m.Date != "" {
+				if userDays[m.UserID] == nil {
+					userDays[m.UserID] = map[string]struct{}{}
+				}
+				userDays[m.UserID][m.Date] = struct{}{}
+			}
 		}
 		if m.Model != "" {
 			modelSet[m.Model] = struct{}{}
+			tm := modelAgg[m.Model]
+			if tm == nil {
+				tm = &report.TopModel{Model: m.Model}
+				modelAgg[m.Model] = tm
+			}
+			tm.Calls += m.ReqCount
+			tm.TotalTokens += m.TotalTokens
+			tm.CostUSD += m.EstCostUSD
 		}
 	}
-	u.ServiceKey.ActiveDays = len(daySet)
+	u.ServiceKey.ActiveDays = len(serviceDaySet)
 	u.Member.ModelCount = len(modelSet)
-	u.Member.UserCount = len(activeUsers)
+	u.Member.UserCount = in.Cohort.RosterUserCount
 	u.Member.ActiveUserCount = len(activeUsers)
+	for _, tm := range modelAgg {
+		u.Member.TopModels = append(u.Member.TopModels, *tm)
+	}
+	sort.Slice(u.Member.TopModels, func(i, j int) bool { return u.Member.TopModels[i].Calls > u.Member.TopModels[j].Calls })
+	if len(u.Member.TopModels) > 5 {
+		u.Member.TopModels = u.Member.TopModels[:5]
+	}
 	if u.Member.ActiveUserCount > 0 {
+		activeDaySum := 0
+		for _, days := range userDays {
+			activeDaySum += len(days)
+		}
 		u.Member.PerCapita = report.PerCapita{
 			ReqCount:    u.Member.ReqCount / int64(u.Member.ActiveUserCount),
 			EstCostUSD:  u.Member.EstCostUSD / float64(u.Member.ActiveUserCount),
 			SuccessRate: safeDiv(float64(u.Member.SuccessCount), float64(u.Member.ReqCount)),
-			ActiveDays:  u.Member.ActiveUserCount,
+			ActiveDays:  activeDaySum / u.Member.ActiveUserCount,
 		}
 	}
 	return u

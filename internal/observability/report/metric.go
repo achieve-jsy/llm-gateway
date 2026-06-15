@@ -76,6 +76,8 @@ type CohortDef struct {
 	Members   []CohortMember
 	Metric    string // 效能指标（cost_per_1k_tokens | cache_hit_rate | calls_per_active_day | unique_models）
 	Direction string // cost（越低越好）| efficiency（越高越好）
+	// RosterUserCount 是当前部门/工作室的花名册总人数；与报告期活跃人数分开。
+	RosterUserCount int
 }
 
 // CohortMember 标池内一个匿名成员（不指名）。

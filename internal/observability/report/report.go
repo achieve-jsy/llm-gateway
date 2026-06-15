@@ -110,18 +110,19 @@ type UnitFact struct {
 }
 
 type UnitMember struct {
-	UserCount        int       `json:"user_count"`
-	ActiveUserCount  int       `json:"active_user_count"`
-	ReqCount         int64     `json:"req_count"`
-	SuccessCount     int64     `json:"success_count"`
-	ErrorCount       int64     `json:"error_count"`
-	PromptTokens     int64     `json:"prompt_tokens"`
-	CompletionTokens int64     `json:"completion_tokens"`
-	ReasoningTokens  int64     `json:"reasoning_tokens"`
-	TotalTokens      int64     `json:"total_tokens"`
-	EstCostUSD       float64   `json:"est_cost_usd"`
-	ModelCount       int       `json:"model_count"`
-	PerCapita        PerCapita `json:"per_capita"`
+	UserCount        int        `json:"user_count"`
+	ActiveUserCount  int        `json:"active_user_count"`
+	ReqCount         int64      `json:"req_count"`
+	SuccessCount     int64      `json:"success_count"`
+	ErrorCount       int64      `json:"error_count"`
+	PromptTokens     int64      `json:"prompt_tokens"`
+	CompletionTokens int64      `json:"completion_tokens"`
+	ReasoningTokens  int64      `json:"reasoning_tokens"`
+	TotalTokens      int64      `json:"total_tokens"`
+	EstCostUSD       float64    `json:"est_cost_usd"`
+	ModelCount       int        `json:"model_count"`
+	TopModels        []TopModel `json:"top_models"`
+	PerCapita        PerCapita  `json:"per_capita"`
 }
 
 type UnitService struct {

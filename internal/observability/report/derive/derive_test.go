@@ -153,10 +153,12 @@ func TestUnitDepartmentFact(t *testing.T) {
 	rules.USDCNYRate = 7.2
 	in := report.ReportInput{
 		Metrics: []report.DailyMetric{
-			{Date: "2026-08-01", Level: "department", ScopeID: "dept1", UserID: "u1", KeyType: "personal", ReqCount: 100, SuccessCount: 95, PromptTokens: 1000, CompletionTokens: 500, TotalTokens: 1500, EstCostUSD: 5},
-			{Date: "2026-08-01", Level: "department", ScopeID: "dept1", UserID: "u2", KeyType: "personal", ReqCount: 50, SuccessCount: 48, PromptTokens: 500, CompletionTokens: 200, TotalTokens: 700, EstCostUSD: 2},
+			{Date: "2026-08-01", Level: "department", ScopeID: "dept1", UserID: "u1", KeyType: "personal", Model: "m1", ReqCount: 100, SuccessCount: 95, PromptTokens: 1000, CompletionTokens: 500, TotalTokens: 1500, EstCostUSD: 5},
+			{Date: "2026-08-02", Level: "department", ScopeID: "dept1", UserID: "u1", KeyType: "personal", Model: "m1", ReqCount: 20, SuccessCount: 20, TotalTokens: 200, EstCostUSD: 1},
+			{Date: "2026-08-01", Level: "department", ScopeID: "dept1", UserID: "u2", KeyType: "personal", Model: "m2", ReqCount: 50, SuccessCount: 48, PromptTokens: 500, CompletionTokens: 200, TotalTokens: 700, EstCostUSD: 2},
 			{Date: "2026-08-01", Level: "department", ScopeID: "dept1", UserID: "", KeyType: "service", ReqCount: 80, SuccessCount: 80, TotalTokens: 3000, EstCostUSD: 8},
 		},
+		Cohort:    report.CohortDef{RosterUserCount: 5},
 		LevelMeta: report.Scope{Level: "department", ID: "dept1", Name: "研发部", DeptID: "dept1"},
 	}
 	meta := report.Meta{Level: "department", Period: report.Period{From: "2026-08-01", To: "2026-08-01", Type: "week", Label: "w"}, Scope: report.Scope{Level: "department", ID: "dept1", Name: "研发部"}, QA: report.QA{AnomalyEnabled: true}}
@@ -168,14 +170,23 @@ func TestUnitDepartmentFact(t *testing.T) {
 	if d == nil {
 		t.Fatal("expected department fact")
 	}
-	if d.Member.ReqCount != 150 {
-		t.Fatalf("member req=%d want 150", d.Member.ReqCount)
+	if d.Member.ReqCount != 170 {
+		t.Fatalf("member req=%d want 170", d.Member.ReqCount)
 	}
 	if d.ServiceKey.ReqCount != 80 {
 		t.Fatalf("service req=%d want 80", d.ServiceKey.ReqCount)
 	}
-	if d.Member.UserCount != 2 {
-		t.Fatalf("user count=%d want 2", d.Member.UserCount)
+	if d.Member.UserCount != 5 || d.Member.ActiveUserCount != 2 {
+		t.Fatalf("roster/active users=%d/%d want 5/2", d.Member.UserCount, d.Member.ActiveUserCount)
+	}
+	if d.Member.PerCapita.ActiveDays != 1 { // (u1 两天 + u2 一天) / 2，整数口径
+		t.Fatalf("per-capita active days=%d want 1", d.Member.PerCapita.ActiveDays)
+	}
+	if len(d.Member.TopModels) != 2 || d.Member.TopModels[0].Model != "m1" {
+		t.Fatalf("unit top models missing: %+v", d.Member.TopModels)
+	}
+	if len(rep.Judgment.Attribution) == 0 || rep.Judgment.Attribution[0].Subject != "模型 m1" {
+		t.Fatalf("unit model attribution missing: %+v", rep.Judgment.Attribution)
 	}
 }
 

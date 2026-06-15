@@ -31,11 +31,27 @@ func buildCohort(ctx context.Context, cli *client.Client, cfg Config, scope repo
 	var ncs []report.NotComputed
 	cohort := report.CohortDef{Enabled: true, Option: "sameRole", Metric: "cost_per_1k_tokens", Direction: "cost"}
 
-	// 每用户效能（cost_per_1k_tokens）与总 token
+	// personal 的 scope 明细只含本人，不能据此声称 peer 样本不足；改拉同期全公司 personal 明细。
+	// 单元报告不计算同岗分位，但仍复用 roster 得到组织总人数。
+	metricCalls := calls
+	if cfg.Level == "personal" {
+		rows, err := cli.FetchLogs(ctx, cfg.From, cfg.To, "personal", "", "", "")
+		if err != nil {
+			ncs = append(ncs, report.NotComputed{Metric: "同岗分位", Reason: "同期全公司成员指标不可取得：" + err.Error()})
+			cohort.Enabled = false
+			return cohort, ncs
+		}
+		metricCalls = make([]report.CallEvent, 0, len(rows))
+		for _, row := range rows {
+			metricCalls = append(metricCalls, row.ToCallEvent())
+		}
+	}
+
+	// 每用户效能（cost_per_1k_tokens）与总 token。
 	perUser := map[string]float64{}
 	validUser := map[string]bool{}
 	agg := map[string]*struct{ cost, tokens float64 }{}
-	for _, c := range calls {
+	for _, c := range metricCalls {
 		if c.KeyType == "service" {
 			continue // 同岗分位排除 service
 		}
@@ -94,6 +110,25 @@ func buildCohort(ctx context.Context, cli *client.Client, cfg Config, scope repo
 		}
 	}
 
+	switch cfg.Level {
+	case "department":
+		for _, e := range roster {
+			if e.DeptID == scope.ID {
+				cohort.RosterUserCount++
+			}
+		}
+		cohort.Enabled = false
+		return cohort, ncs
+	case "studio":
+		for _, e := range roster {
+			if e.StudioID == scope.ID {
+				cohort.RosterUserCount++
+			}
+		}
+		cohort.Enabled = false
+		return cohort, ncs
+	}
+
 	target := roster[cfg.Scope]
 	if target.UserID == "" {
 		ncs = append(ncs, report.NotComputed{Metric: "同岗分位", Reason: "目标用户在 active 部门花名册中未匹配到岗位（可能 users.dept_id IS NULL 或非 active 部门）。"})
@@ -101,13 +136,13 @@ func buildCohort(ctx context.Context, cli *client.Client, cfg Config, scope repo
 		return cohort, ncs
 	}
 
-	members := poolFor(target, roster, validUser, perUser)
+	members, poolType := poolFor(target, roster, validUser, perUser)
 	if len(members) == 0 {
 		ncs = append(ncs, report.NotComputed{Metric: "同岗分位", Reason: "同岗位(同 category/studio)可比样本为 0，无法产出匿名分位。"})
 		cohort.Enabled = false
 		return cohort, ncs
 	}
-	cohort.PoolType = "studio+job_category"
+	cohort.PoolType = poolType
 	cohort.Members = members
 	if len(skipped) > 0 {
 		cohort.Enabled = true
@@ -130,31 +165,31 @@ func jobSlot(c, f, t string) string {
 // poolFor 依「同岗位 + 同 studio」优先，样本不足时逐级回退（org-roster §4.2）：
 // 同studio+同category → 全公司同category → 同studio(任意) → 全公司(任意)；
 // 仍 <MIN_SAMPLE(5) 则交由 derive 判定 supported=false。
-func poolFor(t rosterEntry, roster map[string]rosterEntry, validUser map[string]bool, perUser map[string]float64) []report.CohortMember {
+func poolFor(t rosterEntry, roster map[string]rosterEntry, validUser map[string]bool, perUser map[string]float64) ([]report.CohortMember, string) {
 	got := collectSame(t, roster, validUser, perUser, func(e rosterEntry) bool {
 		return e.StudioID == t.StudioID && e.JobKey == t.JobKey && e.UserID != t.UserID
 	})
 	if len(got) >= 5 {
-		return got
+		return got, "studio+job_category"
 	}
 	// 回退：公司同岗位
 	got = collectSame(t, roster, validUser, perUser, func(e rosterEntry) bool {
 		return e.JobKey == t.JobKey && e.UserID != t.UserID
 	})
 	if len(got) >= 5 {
-		return got
+		return got, "company+job_category"
 	}
 	// 回退：同 studio（任意岗位）
 	got = collectSame(t, roster, validUser, perUser, func(e rosterEntry) bool {
 		return e.StudioID == t.StudioID && e.UserID != t.UserID
 	})
 	if len(got) >= 5 {
-		return got
+		return got, "studio"
 	}
 	// 回退：全公司（任意岗位）
 	return collectSame(t, roster, validUser, perUser, func(e rosterEntry) bool {
 		return e.UserID != t.UserID
-	})
+	}), "company"
 }
 
 func collectSame(t rosterEntry, roster map[string]rosterEntry, validUser map[string]bool, perUser map[string]float64, match func(rosterEntry) bool) []report.CohortMember {

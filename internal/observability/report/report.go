@@ -217,6 +217,7 @@ type AnomalyHit struct {
 	Severity       string            `json:"severity"` // P0..P3
 	Window         string            `json:"window"`
 	Hit            bool              `json:"hit"`
+	NotComputed    bool              `json:"not_computed,omitempty"` // 缺少判定所需事实时为 true；不得视为未命中
 	ActualValue    float64           `json:"actual_value"`
 	ThresholdValue float64           `json:"threshold_value"`
 	BaselineValue  float64           `json:"baseline_value"`

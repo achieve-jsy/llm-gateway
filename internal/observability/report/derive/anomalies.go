@@ -14,10 +14,10 @@ import (
 )
 
 // Anomalies 返回 A1–A5 判定结果（命中/未命中都返回，未命中附 basis）。
-func Anomalies(calls []CallEvent, rules report.RuleSet, modelBudget map[string]int64) []report.AnomalyHit {
+func Anomalies(calls, baselineCalls []CallEvent, rules report.RuleSet, modelBudget map[string]int64) []report.AnomalyHit {
 	return []report.AnomalyHit{
-		A1(calls, rules),
-		A2(calls, rules),
+		A1(calls, baselineCalls, rules),
+		A2(calls, baselineCalls, rules),
 		A3(calls, rules),
 		A4(calls, rules, modelBudget),
 		A5(calls, rules),
@@ -31,41 +31,46 @@ type ev struct {
 	minute int64 // unix 分钟桶
 }
 
+type windowStat struct {
+	start, end int64
+	lo, hi     int
+	count      int
+	cost       float64
+}
+
 func bucket(calls []CallEvent) []ev {
 	out := make([]ev, 0, len(calls))
 	for _, c := range calls {
 		out = append(out, ev{c: c, minute: c.TS.Unix() / 60})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].minute < out[j].minute })
+	sort.Slice(out, func(i, j int) bool { return out[i].c.TS.Before(out[j].c.TS) })
 	return out
 }
 
-func countIn(b []ev, s, e int64) int {
-	n := 0
-	for _, x := range b {
-		if x.minute >= s && x.minute < e {
-			n++
-		}
+// windows 用双指针一次生成逐分钟滑窗，避免每个分钟重新扫描全部调用。
+func windows(b []ev, width int64) []windowStat {
+	if len(b) == 0 || width <= 0 {
+		return nil
 	}
-	return n
-}
-
-func sumCostIn(b []ev, s, e int64) float64 {
-	var sum float64
-	for _, x := range b {
-		if x.minute >= s && x.minute < e {
-			sum += x.c.EstCostUSD
+	minB, maxB := maxBucket(b)
+	out := make([]windowStat, 0, maxB-minB+1)
+	lo, hi := 0, 0
+	var cost float64
+	for s := minB; s <= maxB; s++ {
+		for lo < len(b) && b[lo].minute < s {
+			if lo < hi {
+				cost -= b[lo].c.EstCostUSD
+			}
+			lo++
+			if hi < lo {
+				hi = lo
+			}
 		}
-	}
-	return sum
-}
-
-func within(b []ev, s, e int64) []ev {
-	out := make([]ev, 0)
-	for _, x := range b {
-		if x.minute >= s && x.minute < e {
-			out = append(out, x)
+		for hi < len(b) && b[hi].minute < s+width {
+			cost += b[hi].c.EstCostUSD
+			hi++
 		}
+		out = append(out, windowStat{start: s, end: s + width, lo: lo, hi: hi, count: hi - lo, cost: cost})
 	}
 	return out
 }
@@ -76,7 +81,7 @@ func medianIntervalSec(b []ev) float64 {
 	}
 	ivs := make([]float64, 0, len(b)-1)
 	for i := 1; i < len(b); i++ {
-		ivs = append(ivs, float64(b[i].minute-b[i-1].minute)*60)
+		ivs = append(ivs, b[i].c.TS.Sub(b[i-1].c.TS).Seconds())
 	}
 	return Median(ivs)
 }
@@ -102,64 +107,55 @@ func evs(f, v string) report.Evidence         { return report.Evidence{Field: f,
 // ---- A1 程序失控 ----
 
 // A1：10 分钟调用 > max(60, 个人P99_10min) 且中位间隔 <10s 且连续 ≥15 分钟（1 分钟粒度滑动窗，勿 tumbling）。
-func A1(calls []CallEvent, rules report.RuleSet) report.AnomalyHit {
-	a := newHit("A1", "v1", "程序失控", "P1", "10min/连续15min")
+func A1(calls, baselineCalls []CallEvent, rules report.RuleSet) report.AnomalyHit {
+	a := newHit("A1", "v1", "程序失控", "P1", itoa(rules.A1WindowMinutes)+"min/连续"+itoa(rules.A1SustainMinutes)+"min")
 	if len(calls) < 2 {
-		a.Hit = false
 		a.Evidence = append(a.Evidence, evs("basis", "调用样本不足，无法判定程序失控。"))
 		return a
 	}
 	b := bucket(calls)
-	// 个人 P99_10min：按 1 分钟粒度统计每个 10 分钟窗口调用数，取 P99
 	w := int64(rules.A1WindowMinutes)
-	byWindow := map[int64]int{}
-	for _, x := range b {
-		byWindow[x.minute] = countIn(b, x.minute, x.minute+w)
+	var p99 float64
+	if historical := windows(bucket(baselineCalls), w); len(historical) > 0 {
+		cnts := make([]float64, 0, len(historical))
+		for _, x := range historical {
+			cnts = append(cnts, float64(x.count))
+		}
+		sort.Float64s(cnts)
+		p99 = Percentile(cnts, 99)
+		a.BaselineWindow = "历史窗口P99_" + itoa(rules.A1WindowMinutes) + "min"
+	} else {
+		a.BaselineWindow = "无历史窗口，仅绝对阈值"
 	}
-	cnts := make([]float64, 0, len(byWindow))
-	for _, n := range byWindow {
-		cnts = append(cnts, float64(n))
-	}
-	sort.Float64s(cnts)
-	p99 := Percentile(cnts, 99)
 	thr := math.Max(float64(rules.A1MinCallsAbsolute), math.Ceil(p99))
 
-	minB, maxB := maxBucket(b)
 	bestStart, bestEnd := int64(-1), int64(-1)
 	bestCount := 0
 	bestInterval := 0.0
 	bestCost := 0.0
 	streak := 0
-	for s := minB; s <= maxB; s++ {
-		e := s + w
-		n := countIn(b, s, e)
-		if n < int(thr) {
+	for _, x := range windows(b, w) {
+		iv := medianIntervalSec(b[x.lo:x.hi])
+		if x.count <= int(thr) || iv >= rules.A1MaxMedianIntervalS {
 			streak = 0
 			continue
 		}
 		streak++
-		iv := medianIntervalSec(within(b, s, e))
-		// 1 分钟粒度滑动窗口：连续 hot 起点数即持续时间（分钟），需 ≥ A1SustainMinutes（勿除以窗口分钟数）。
-		if int64(streak) >= int64(rules.A1SustainMinutes) && iv < rules.A1MaxMedianIntervalS {
-			if n > bestCount {
-				bestStart, bestEnd = s, e
-				bestCount = n
-				bestInterval = iv
-				bestCost = sumCostIn(b, s, e)
-			}
+		if streak >= rules.A1SustainMinutes && x.count > bestCount {
+			bestStart, bestEnd = x.start, x.end
+			bestCount, bestInterval, bestCost = x.count, iv, x.cost
 		}
 	}
 	if bestStart < 0 {
 		a.Hit = false
 		a.Evidence = append(a.Evidence,
-			evs("basis", "未发现满足阈值的高调用窗口（每分钟>max(60,P99="+fmtFloat(math.Ceil(p99))+")，且中位间隔<"+fmtFloat(rules.A1MaxMedianIntervalS)+"s，连续≥"+itoa(rules.A1SustainMinutes)+"min）。"))
+			evs("basis", "未发现满足阈值的高调用窗口（窗口调用>max("+itoa(rules.A1MinCallsAbsolute)+",历史P99="+fmtFloat(math.Ceil(p99))+")，且中位间隔<"+fmtFloat(rules.A1MaxMedianIntervalS)+"s，连续≥"+itoa(rules.A1SustainMinutes)+"min）。"))
 		return a
 	}
 	a.Hit = true
 	a.ActualValue = float64(bestCount)
 	a.ThresholdValue = thr
 	a.BaselineValue = p99
-	a.BaselineWindow = "P99_10min"
 	a.MatchedCount = bestCount
 	a.ImpactCostUSD = bestCost
 	a.ExcessCostUSD = bestCost
@@ -179,7 +175,7 @@ func A1(calls []CallEvent, rules report.RuleSet) report.AnomalyHit {
 // ---- A2 成本燃烧 ----
 
 // A2：15 分钟成本 > max(¥50, 个人28天同窗中位×5)；另加 HARD_CAP_A2=¥200/15min 独立触发。
-func A2(calls []CallEvent, rules report.RuleSet) report.AnomalyHit {
+func A2(calls, baselineCalls []CallEvent, rules report.RuleSet) report.AnomalyHit {
 	a := newHit("A2", "v1", "成本燃烧", "P1", "15min")
 	if len(calls) < 2 {
 		a.Hit = false
@@ -193,29 +189,26 @@ func A2(calls []CallEvent, rules report.RuleSet) report.AnomalyHit {
 	w := int64(rules.A2WindowMinutes)
 	b := bucket(calls)
 
-	// 基线：单个 15 分钟窗口成本的中位数
-	byMin := map[int64][]ev{}
-	for _, x := range b {
-		byMin[x.minute] = append(byMin[x.minute], x)
+	var med float64
+	if historical := windows(bucket(baselineCalls), w); len(historical) > 0 {
+		costVals := make([]float64, 0, len(historical))
+		for _, x := range historical {
+			costVals = append(costVals, x.cost)
+		}
+		sort.Float64s(costVals)
+		med = Median(costVals)
+		a.BaselineWindow = "历史" + itoa(rules.A2WindowMinutes) + "min窗口中位"
+	} else {
+		a.BaselineWindow = "无历史窗口，仅绝对阈值"
 	}
-	costVals := make([]float64, 0, len(byMin))
-	for _, arr := range byMin {
-		costVals = append(costVals, sumCostIn(arr, arr[0].minute, arr[0].minute+w))
-	}
-	sort.Float64s(costVals)
-	med := Median(costVals)
-	absMinUSD := rules.A2AbsMinUSD
-	baseThr := math.Max(med*rules.A2BaselineMedianMultiple, absMinUSD)
+	baseThr := math.Max(med*rules.A2BaselineMedianMultiple, rules.A2AbsMinUSD)
 
-	minB, maxB := maxBucket(b)
 	bestCost := 0.0
 	bestStart, bestEnd := int64(-1), int64(-1)
-	for s := minB; s <= maxB; s++ {
-		e := s + w
-		c := sumCostIn(b, s, e)
-		if c > bestCost {
-			bestCost = c
-			bestStart, bestEnd = s, e
+	bestCount := 0
+	for _, x := range windows(b, w) {
+		if x.cost > bestCost {
+			bestCost, bestStart, bestEnd, bestCount = x.cost, x.start, x.end, x.count
 		}
 	}
 	bestCNY := bestCost * rate
@@ -241,8 +234,7 @@ func A2(calls []CallEvent, rules report.RuleSet) report.AnomalyHit {
 		a.ExcessCostUSD = 0
 	}
 	a.BaselineValue = med
-	a.BaselineWindow = "个人28天同窗中位"
-	a.MatchedCount = countIn(b, bestStart, bestEnd)
+	a.MatchedCount = bestCount
 	a.ImpactCostUSD = bestCost
 	a.Dimensions["rule_version"] = "v1"
 	a.Dimensions["usd_cny_rate"] = fmtFloat(rate)
@@ -263,86 +255,81 @@ func A2(calls []CallEvent, rules report.RuleSet) report.AnomalyHit {
 // A3：段=(key_id,model)，段内 req≥20 ∧ fail_rate≥30% ∧ 单一 status_code 占失败≥80% ∧ failed≥6。
 // 失败定义 status>=400；区分上游故障(5xx→归上游)与客户端僵死(429/400)。
 func A3(calls []CallEvent, rules report.RuleSet) report.AnomalyHit {
-	a := newHit("A3", "v1", "重试循环", "P2", itoa(rules.A3WindowMinutes)+"min段")
+	a := newHit("A3", "v1", "重试循环", "P2", itoa(rules.A3WindowMinutes)+"min滑窗")
 	if len(calls) < 2 {
-		a.Hit = false
 		a.Evidence = append(a.Evidence, evs("basis", "调用样本不足，无法判定重试循环。"))
 		return a
 	}
 	type seg struct{ keyID, model string }
-	groups := map[seg][]CallEvent{}
+	groups := map[seg][]ev{}
 	for _, c := range calls {
 		k := seg{keyID: c.KeyID, model: c.Model}
-		groups[k] = append(groups[k], c)
+		groups[k] = append(groups[k], ev{c: c, minute: c.TS.Unix() / 60})
 	}
 	best := report.AnomalyHit{}
-	found := false
 	bestFailed := 0
+	width := int64(rules.A3WindowMinutes)
 	for k, arr := range groups {
-		req := len(arr)
-		if req < rules.A3MinSegmentReq {
+		sort.Slice(arr, func(i, j int) bool { return arr[i].c.TS.Before(arr[j].c.TS) })
+		if len(arr) == 0 {
 			continue
 		}
-		failCnt := 0
+		lo, hi, failed := 0, 0, 0
+		var failCost float64
 		statusCnt := map[int]int{}
-		for _, c := range arr {
-			if c.Status >= 400 {
-				failCnt++
-				statusCnt[c.Status]++
+		minB, maxB := maxBucket(arr)
+		for start := minB; start <= maxB; start++ {
+			for lo < hi && arr[lo].minute < start {
+				if arr[lo].c.Status != 200 {
+					failed--
+					failCost -= arr[lo].c.EstCostUSD
+					statusCnt[arr[lo].c.Status]--
+				}
+				lo++
 			}
-		}
-		if failCnt < rules.A3MinFailed {
-			continue
-		}
-		failRate := float64(failCnt) / float64(req)
-		if failRate < rules.A3FailRateThresh {
-			continue
-		}
-		domStatus, domShare := dominantStatus(statusCnt, failCnt)
-		if domShare < rules.A3DominantFailShare {
-			continue
-		}
-		if failCnt > bestFailed {
-			best = report.AnomalyHit{
-				Rule: "A3", RuleVersion: "v1", Name: "重试循环", Severity: "P2",
-				Window: itoa(rules.A3WindowMinutes) + "min段", Hit: true,
-				ActualValue: float64(failRate), ThresholdValue: rules.A3FailRateThresh,
-				MatchedCount: failCnt, Dimensions: map[string]string{}, Evidence: []report.Evidence{},
+			for hi < len(arr) && arr[hi].minute < start+width {
+				if arr[hi].c.Status != 200 {
+					failed++
+					failCost += arr[hi].c.EstCostUSD
+					statusCnt[arr[hi].c.Status]++
+				}
+				hi++
 			}
-			best.Dimensions["key_id"] = k.keyID
-			best.Dimensions["model"] = k.model
+			req := hi - lo
+			if req < rules.A3MinSegmentReq || failed < rules.A3MinFailed {
+				continue
+			}
+			failRate := float64(failed) / float64(req)
+			domStatus, domShare := dominantStatus(statusCnt, failed)
+			if failRate < rules.A3FailRateThresh || domShare < rules.A3DominantFailShare || failed <= bestFailed {
+				continue
+			}
+			best = newHit("A3", "v1", "重试循环", "P2", itoa(rules.A3WindowMinutes)+"min滑窗")
+			best.Hit = true
+			best.ActualValue, best.ThresholdValue = failRate, rules.A3FailRateThresh
+			best.MatchedCount, best.ImpactCostUSD, best.ExcessCostUSD = failed, failCost, failCost
+			best.BaselineWindow = "无（规则型）"
+			best.Dimensions["key_id"], best.Dimensions["model"] = k.keyID, k.model
 			best.Dimensions["segment"] = k.keyID + "|" + k.model
 			best.Dimensions["fail_rate"] = fmtFloat(failRate)
 			best.Dimensions["dominant_status"] = itoa(domStatus)
 			best.Dimensions["dominant_fail_share"] = fmtFloat(domShare)
-			// 区分上游 vs 客户端
 			if domStatus >= 500 {
 				best.Dimensions["kind"] = "上游故障(5xx)"
 			} else {
-				best.Dimensions["kind"] = "客户端僵死(4xx)"
+				best.Dimensions["kind"] = "客户端僵死(非200)"
 			}
-			best.BaselineValue = 0
-			best.BaselineWindow = "无（规则型）"
-			for _, c := range arr {
-				if c.Status >= 400 {
-					best.ImpactCostUSD += c.EstCostUSD
-				}
-			}
-			best.ExcessCostUSD = best.ImpactCostUSD
 			best.Evidence = append(best.Evidence,
-				evi("segment_req", req),
-				evi("failed", failCnt),
+				evi("segment_req", req), evi("failed", failed),
 				evs("fail_rate", fmtFloat(failRate)),
 				evs("dominant_status", itoa(domStatus)+" 占比 "+fmtFloat(domShare)),
-				evs("impact_cost_usd", fmtFloat(best.ImpactCostUSD)),
-			)
-			bestFailed = failCnt
-			found = true
+				evs("window", fmtTime(start)+"~"+fmtTime(start+width)),
+				evs("impact_cost_usd", fmtFloat(failCost)))
+			bestFailed = failed
 		}
 	}
-	if !found {
-		a.Hit = false
-		a.Evidence = append(a.Evidence, evs("basis", "未发现段内 req>=20/fail_rate>=30%/单一status>=80%/failed>=6 的重复失败。"))
+	if bestFailed == 0 {
+		a.Evidence = append(a.Evidence, evs("basis", "未发现配置滑窗内 req/fail_rate/单一status/failed 同时达到阈值的重复失败（失败=status!=200）。"))
 		return a
 	}
 	return best
@@ -370,75 +357,67 @@ func dominantStatus(cnt map[int]int, failures int) (int, float64) {
 func A4(calls []CallEvent, rules report.RuleSet, budget map[string]int64) report.AnomalyHit {
 	a := newHit("A4", "v1", "超长上下文", "P2", itoa(rules.A4WindowMinutes)+"min")
 	if len(calls) == 0 {
-		a.Hit = false
 		a.Evidence = append(a.Evidence, evs("basis", "无调用数据，无法判定超长上下文。"))
 		return a
 	}
-	b := bucket(calls)
-	minB, maxB := maxBucket(b)
-	w := int64(rules.A4WindowMinutes)
-	best := report.AnomalyHit{}
-	found := false
+	known := make([]CallEvent, 0, len(calls))
+	unknownModels := map[string]struct{}{}
+	for _, c := range calls {
+		if bd := budget[c.Model]; bd > 0 {
+			known = append(known, c)
+		} else {
+			unknownModels[c.Model] = struct{}{}
+		}
+	}
+	if len(known) == 0 {
+		a.NotComputed = true
+		a.Evidence = append(a.Evidence, evs("basis", "全部调用缺少 model_catalog 有效输入预算，A4 不可判定。"))
+		return a
+	}
+	b := bucket(known)
 	bestNear := 0
-	for s := minB; s <= maxB; s++ {
-		e := s + w
-		arr := within(b, s, e)
-		near := 0
+	for _, win := range windows(b, int64(rules.A4WindowMinutes)) {
+		near, maxPrompt := 0, 0
 		var cost float64
-		var maxPrompt int
-		var maxModel string
-		for _, x := range arr {
-			c := x.c
-			budg := int64(rules.A4MinPromptAbsolute)
-			if bd, ok := budget[c.Model]; ok && bd > 0 {
-				budg = bd
-			}
-			// prompt_total（含 cached 都算作输入）——近上限才计入
-			if float64(int64(c.PromptTokens)) >= float64(budg)*rules.A4NearLimitRatio {
+		maxModel := ""
+		for _, x := range b[win.lo:win.hi] {
+			bd := budget[x.c.Model]
+			// Catalog 预算是必要事实；绝对下限仅提高阈值，不能替代缺失预算。
+			threshold := math.Min(float64(bd)*rules.A4NearLimitRatio, float64(rules.A4MinPromptAbsolute))
+			if float64(x.c.PromptTokens) > threshold {
 				near++
-				cost += c.EstCostUSD
+				cost += x.c.EstCostUSD
 			}
-			if c.PromptTokens > maxPrompt {
-				maxPrompt = c.PromptTokens
-				maxModel = c.Model
+			if x.c.PromptTokens > maxPrompt {
+				maxPrompt, maxModel = x.c.PromptTokens, x.c.Model
 			}
 		}
 		if near < rules.A4MinNearLimit || near <= bestNear {
 			continue
 		}
-		best = report.AnomalyHit{
-			Rule: "A4", RuleVersion: "v1", Name: "超长上下文", Severity: "P2",
-			Window: itoa(rules.A4WindowMinutes) + "min", Hit: true,
-			ActualValue: float64(near), ThresholdValue: float64(rules.A4MinNearLimit),
-			MatchedCount: near, Dimensions: map[string]string{}, Evidence: []report.Evidence{},
-		}
+		bd := budget[maxModel]
+		best := newHit("A4", "v1", "超长上下文", "P2", itoa(rules.A4WindowMinutes)+"min")
+		best.Hit, best.ActualValue = true, float64(near)
+		best.ThresholdValue, best.MatchedCount = float64(rules.A4MinNearLimit), near
+		best.BaselineValue, best.BaselineWindow = float64(bd), maxModel+" Catalog有效输入预算"
+		best.ImpactCostUSD, best.ExcessCostUSD = cost, cost
 		best.Dimensions["model"] = maxModel
-		best.BaselineValue = float64(rules.A4MinPromptAbsolute)
-		best.BaselineWindow = "保守下限(未录上下文)"
-		if bd, ok := budget[maxModel]; ok && bd > 0 {
-			best.BaselineValue = float64(bd)
-			best.BaselineWindow = maxModel + " 有效输入预算"
-		}
-		best.ImpactCostUSD = cost
-		best.ExcessCostUSD = cost
 		best.Evidence = append(best.Evidence,
-			evi("near_limit_req_in_window", near),
-			evi("max_prompt", maxPrompt),
-			evs("model", maxModel),
-			evs("budget", fmtFloat(best.BaselineValue)),
-			evs("ratio", fmtFloat(float64(maxPrompt)/best.BaselineValue)),
-			evs("impact_cost_usd", fmtFloat(cost)),
-		)
-		best.Note = "注：分支2(IO比同场景P99)依赖 scene 埋点，未埋点前默认禁用/灰度（阶段一不启用）。"
+			evi("near_limit_req_in_window", near), evi("max_prompt", maxPrompt),
+			evs("model", maxModel), evs("budget", fmtFloat(float64(bd))),
+			evs("ratio", fmtFloat(float64(maxPrompt)/float64(bd))),
+			evs("window", fmtTime(win.start)+"~"+fmtTime(win.end)),
+			evs("impact_cost_usd", fmtFloat(cost)))
+		if len(unknownModels) > 0 {
+			best.Note = "部分模型缺少 Catalog 预算，已排除这些调用；缺失预算不会用绝对下限兜底命中。"
+		}
 		bestNear = near
-		found = true
+		a = best
 	}
-	if !found {
-		a.Hit = false
-		a.Evidence = append(a.Evidence, evs("basis", "未发现窗口内近上下文上限请求（>80% 有效预算）≥"+itoa(rules.A4MinNearLimit)+" 条。"))
-		return a
+	if bestNear == 0 {
+		a.Evidence = append(a.Evidence, evs("basis", "已知 Catalog 预算的调用中，未发现窗口内近上下文上限请求达到阈值。"))
 	}
-	return best
+	return a
 }
 
 // ---- A5 非工作时段 ----

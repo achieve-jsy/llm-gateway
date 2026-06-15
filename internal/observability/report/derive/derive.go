@@ -50,11 +50,14 @@ func Derive(meta report.Meta, in report.ReportInput, rules report.RuleSet) (*rep
 	}
 
 	// A1–A5
-	anoms := Anomalies(in.Calls, rules, in.ModelContextBudget)
+	anoms := Anomalies(in.Calls, in.BaselineCalls, rules, in.ModelContextBudget)
 	// 单元级语义说明：A1/A2 基于个人窗口/中位，单元级运行在「该单元成员调用流（排除 service）」上。
 	scope := in.LevelMeta.Level
 	for i := range anoms {
 		anoms[i].Dimensions["scope"] = scope
+		if anoms[i].NotComputed {
+			judge.NotComputed = append(judge.NotComputed, report.NotComputed{Metric: anoms[i].Rule + " " + anoms[i].Name, Reason: evidenceBasis(anoms[i].Evidence)})
+		}
 		if scope != "" && scope != "personal" {
 			anoms[i].Note += "（注：单元级(" + scope + ")异常基于该单元成员调用流聚合、排除 service；A1/A2 个人窗口/中位语义仅在 personal 粒度完整成立）"
 		}
@@ -341,8 +344,7 @@ func buildAttribution(f report.Fact) []report.Attribution {
 }
 
 func topModelsFromUnit(unit report.UnitMember) []report.TopModel {
-	// unit 层未预先聚合 top model；此处返回空（阶段一 unit 层不展开 top model，由明细端对账）。
-	return nil
+	return unit.TopModels
 }
 
 func buildBaselineSeries(in report.ReportInput, rules report.RuleSet) BaseResult {
@@ -381,11 +383,8 @@ func buildBaselineSeries(in report.ReportInput, rules report.RuleSet) BaseResult
 			vals = append(vals, float64(n))
 		}
 	} else {
-		// 降级：无基线窗数据 → 用当前周期近似（自一致参考，不作历史偏离），并在 CurrentWindow 注明。
-		for _, n := range byDay {
-			vals = append(vals, float64(n))
-		}
-		windowLabel = "当前周期近似(未物化,仅供自一致参考)"
+		// 当前周期不是历史基线；无历史数据时明确不可计算。
+		windowLabel = "期前历史窗口缺失"
 	}
 	return Baseline(vals, current, rules.BaselineWindowDays, rules.MinBaselineSamples, windowLabel)
 }
@@ -436,11 +435,14 @@ func buildExpression(rep *report.Report, rules report.RuleSet) report.Expression
 	j := &rep.Judgment
 	hitCount := 0
 	sev := ""
+	severityRank := map[string]int{"P0": 0, "P1": 1, "P2": 2, "P3": 3}
 	for _, a := range j.Anomalies {
-		if a.Hit {
-			hitCount++
+		if !a.Hit {
+			continue
+		}
+		hitCount++
+		if sev == "" || severityRank[a.Severity] < severityRank[sev] {
 			sev = a.Severity
-			break
 		}
 	}
 	if hitCount == 0 {
@@ -489,4 +491,13 @@ func safeDiv(a, b float64) float64 {
 		return 0
 	}
 	return a / b
+}
+
+func evidenceBasis(evidence []report.Evidence) string {
+	for _, e := range evidence {
+		if e.Field == "basis" {
+			return e.Value
+		}
+	}
+	return "缺少判定所需事实"
 }

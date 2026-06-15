@@ -118,7 +118,7 @@ func TestA1ProgramLoadHit(t *testing.T) {
 	}
 	rules := report.DefaultRuleSet()
 	rules.USDCNYRate = 7.2
-	hits := derive.Anomalies(calls, rules, nil)
+	hits := derive.Anomalies(calls, nil, rules, nil)
 	a1 := findHit(hits, "A1")
 	if a1 == nil || !a1.Hit {
 		t.Fatalf("expected A1 hit; got %+v", hits)
@@ -140,7 +140,7 @@ func TestA2CostAnomalyHit(t *testing.T) {
 	}
 	rules := report.DefaultRuleSet()
 	rules.USDCNYRate = 7.2
-	hits := derive.Anomalies(calls, rules, nil)
+	hits := derive.Anomalies(calls, nil, rules, nil)
 	a2 := findHit(hits, "A2")
 	if a2 == nil || !a2.Hit {
 		t.Fatalf("expected A2 hit; got %+v", hits)
@@ -216,7 +216,7 @@ func TestBaselineMaterialized(t *testing.T) {
 	}
 }
 
-// 28 天基线降级：无 BaselineMetrics → CurrentWindow 注明「近似」，避免误读为真实历史基线。
+// 无历史数据时不得用当前周期伪装历史基线。
 func TestBaselineDegraded(t *testing.T) {
 	rules := report.DefaultRuleSet()
 	in := report.ReportInput{
@@ -228,7 +228,88 @@ func TestBaselineDegraded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("derive %v", err)
 	}
-	if !strings.Contains(rep.Judgment.Baseline.CurrentWindow, "近似") {
-		t.Fatalf("expected degraded window, got %s", rep.Judgment.Baseline.CurrentWindow)
+	if rep.Judgment.Baseline.Supported || !strings.Contains(rep.Judgment.Baseline.CurrentWindow, "缺失") {
+		t.Fatalf("expected unsupported missing-history baseline, got %+v", rep.Judgment.Baseline)
+	}
+}
+
+func TestA1UsesHistoricalWindow(t *testing.T) {
+	rules := report.DefaultRuleSet()
+	rules.A1SustainMinutes = 1
+	rules.A1MinCallsAbsolute = 2
+	start := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
+	current := []report.CallEvent{
+		{TS: start, Status: 200}, {TS: start.Add(time.Second), Status: 200}, {TS: start.Add(2 * time.Second), Status: 200},
+	}
+	baseline := make([]report.CallEvent, 0, 10)
+	for i := 0; i < 10; i++ {
+		baseline = append(baseline, report.CallEvent{TS: start.Add(-24*time.Hour + time.Duration(i)*time.Second), Status: 200})
+	}
+	a1 := findHit(derive.Anomalies(current, baseline, rules, nil), "A1")
+	if a1 == nil || a1.Hit || !strings.Contains(a1.BaselineWindow, "历史") {
+		t.Fatalf("historical P99 must suppress current spike: %+v", a1)
+	}
+}
+
+func TestA2WithoutHistoryDoesNotClaim28Days(t *testing.T) {
+	rules := report.DefaultRuleSet()
+	start := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
+	calls := []report.CallEvent{{TS: start, Status: 200, EstCostUSD: 1}, {TS: start.Add(time.Second), Status: 200, EstCostUSD: 1}}
+	a2 := findHit(derive.Anomalies(calls, nil, rules, nil), "A2")
+	if a2 == nil || strings.Contains(a2.BaselineWindow, "28") || !strings.Contains(a2.BaselineWindow, "无历史") {
+		t.Fatalf("must state missing history: %+v", a2)
+	}
+}
+
+func TestA3UsesConfiguredWindowAndNon200Failure(t *testing.T) {
+	rules := report.DefaultRuleSet()
+	rules.A3WindowMinutes = 5
+	start := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
+	var spread []report.CallEvent
+	for i := 0; i < 20; i++ {
+		spread = append(spread, report.CallEvent{TS: start.Add(time.Duration(i) * time.Minute), KeyID: "k", Model: "m", Status: 0})
+	}
+	if a3 := findHit(derive.Anomalies(spread, nil, rules, nil), "A3"); a3 == nil || a3.Hit {
+		t.Fatalf("events outside a 5m window must not hit: %+v", a3)
+	}
+	var dense []report.CallEvent
+	for i := 0; i < 20; i++ {
+		dense = append(dense, report.CallEvent{TS: start.Add(time.Duration(i) * time.Second), KeyID: "k", Model: "m", Status: 0})
+	}
+	if a3 := findHit(derive.Anomalies(dense, nil, rules, nil), "A3"); a3 == nil || !a3.Hit {
+		t.Fatalf("status!=200 must count as failure in configured window: %+v", a3)
+	}
+}
+
+func TestA4MissingCatalogBudgetNotComputed(t *testing.T) {
+	rules := report.DefaultRuleSet()
+	start := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
+	calls := []report.CallEvent{
+		{TS: start, Model: "unknown", PromptTokens: 200000},
+		{TS: start.Add(time.Second), Model: "unknown", PromptTokens: 200000},
+	}
+	a4 := findHit(derive.Anomalies(calls, nil, rules, nil), "A4")
+	if a4 == nil || a4.Hit || !a4.NotComputed {
+		t.Fatalf("missing Catalog budget must be not-computed: %+v", a4)
+	}
+}
+
+func TestExpressionCountsAllHitsAndHighestSeverity(t *testing.T) {
+	rules := report.DefaultRuleSet()
+	rules.A3MinSegmentReq, rules.A3MinFailed = 2, 2
+	rules.A3FailRateThresh, rules.A3DominantFailShare = 1, 1
+	rules.A5MinCallCount, rules.A5FloorCNY = 2, 1
+	start := time.Date(2026, 8, 8, 2, 0, 0, 0, time.UTC)
+	calls := []report.CallEvent{
+		{TS: start, KeyID: "k", Model: "m", Status: 500, EstCostUSD: 1},
+		{TS: start.Add(time.Second), KeyID: "k", Model: "m", Status: 500, EstCostUSD: 1},
+	}
+	in := report.ReportInput{Calls: calls, LevelMeta: report.Scope{Level: "personal", ID: "u"}}
+	rep, err := derive.Derive(report.Meta{Level: "personal"}, in, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rep.Expression.Headline, "2 条") || !strings.Contains(rep.Expression.Headline, "P2") {
+		t.Fatalf("headline must count all hits/highest severity: %q", rep.Expression.Headline)
 	}
 }

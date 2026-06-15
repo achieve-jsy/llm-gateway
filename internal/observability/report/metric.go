@@ -56,11 +56,14 @@ type CallEvent struct {
 type ReportInput struct {
 	Metrics []DailyMetric
 	Calls   []CallEvent
+	// BaselineCalls 期前历史窗口逐调用事件，供 A1/A2 计算真实历史窗口分布。
+	// 为空时 A1 仅使用绝对阈值，A2 仅保留绝对阈值/HARD_CAP，且不得标记为 28 天基线。
+	BaselineCalls []CallEvent
 	// BaselineMetrics 期前 28 完整自然日（事件日前 28d ~ 前1d）的日聚合序列，用于 28 天稳健基线物化。
-	// 若为空，则由 buildBaselineSeries 降级为「当前周期近似」（并注明），避免误读为真实历史基线。
+	// 若为空，基线明确标记 unsupported；当前周期不得替代真实历史基线。
 	BaselineMetrics []DailyMetric
 	// ModelContextBudget 模型→有效输入预算（context_length - max_output_tokens），来自 model_catalog（A4 用）。
-	// 缺省/未知模型回退到保守值（A4MinPromptAbsolute）。
+	// 缺省/未知模型的调用不参与 A4；若全部缺失则 A4 NotComputed。
 	ModelContextBudget map[string]int64
 	// Cohort 为同岗分位对标池（适配器拉 /api/v1/org/* 后在工具侧拼装；库内不负责拉数）。
 	Cohort CohortDef

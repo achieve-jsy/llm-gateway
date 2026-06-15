@@ -17,7 +17,10 @@ import (
 	"github.com/example/llm-gateway/internal/observability/report"
 )
 
-const maxPageSize = 200
+const (
+	maxPageSize    = 200
+	defaultMaxLogs = 20000
+)
 
 // asiaShanghai 报告统一时区（口径：日切与 A5 非工作时段按 Asia/Shanghai）。
 var asiaShanghai = func() *time.Location {
@@ -35,11 +38,26 @@ type Client struct {
 	maxLogs int
 }
 
-func New(base, token string) *Client {
+type Option func(*Client)
+
+// WithMaxLogs 设置单次 FetchLogs 可接受的最大日志数；非正值使用默认值。
+func WithMaxLogs(maxLogs int) Option {
+	return func(c *Client) {
+		if maxLogs > 0 {
+			c.maxLogs = maxLogs
+		}
+	}
+}
+
+func New(base, token string, options ...Option) *Client {
 	if !strings.HasSuffix(base, "/") {
 		base += "/"
 	}
-	return &Client{base: base, token: token, http: &http.Client{Timeout: 30 * time.Second}, maxLogs: 20000}
+	c := &Client{base: base, token: token, http: &http.Client{Timeout: 30 * time.Second}, maxLogs: defaultMaxLogs}
+	for _, option := range options {
+		option(c)
+	}
+	return c
 }
 
 // ===== 传输层结构（只读，不参与派生）=====
@@ -237,14 +255,16 @@ func isRetryable(err error) bool {
 
 // FetchLogs 拉取调用明细（分页 ≤ maxPageSize，上限 c.maxLogs 条）。
 // userID 非空时走 /usage/scoped/logs（服务端按用户过滤），否则走 /usage/logs。
+// 服务端声明的 total 超过配置上限或最终未拉全时返回错误，不返回部分数据。
 func (c *Client) FetchLogs(ctx context.Context, from, to, keyType, userID, deptName, studioID string) ([]LogRow, error) {
 	var out []LogRow
+	var total int64 = -1
 	page := 1
 	path := "/usage/logs"
 	if userID != "" {
 		path = "/usage/scoped/logs"
 	}
-	for page <= 200 {
+	for {
 		// /usage/logs 用 from/to；/usage/scoped/logs 用 start/end（ScopedLogs 忽略 from/to，默认 30 天窗）。
 		q := map[string]string{
 			"page": strconv.Itoa(page), "page_size": strconv.Itoa(maxPageSize),
@@ -276,14 +296,25 @@ func (c *Client) FetchLogs(ctx context.Context, from, to, keyType, userID, deptN
 		if err := json.Unmarshal(b, &resp); err != nil {
 			return nil, err
 		}
+		if total < 0 {
+			total = resp.Total
+		} else if resp.Total != total {
+			return nil, fmt.Errorf("usage logs total changed during pagination: was %d, now %d", total, resp.Total)
+		}
+		if total > int64(c.maxLogs) {
+			return nil, fmt.Errorf("usage logs exceed configured max logs %d: total %d", c.maxLogs, total)
+		}
 		out = append(out, resp.Rows...)
-		if len(out) >= c.maxLogs || len(resp.Rows) == 0 || page*maxPageSize >= int(resp.Total) {
+		if int64(len(out)) >= total {
 			break
+		}
+		if len(resp.Rows) == 0 {
+			return nil, fmt.Errorf("incomplete usage logs: fetched %d of %d", len(out), total)
 		}
 		page++
 	}
-	if len(out) > c.maxLogs {
-		out = out[:c.maxLogs]
+	if int64(len(out)) != total {
+		return nil, fmt.Errorf("incomplete usage logs: fetched %d of %d", len(out), total)
 	}
 	return out, nil
 }

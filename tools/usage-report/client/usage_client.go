@@ -115,6 +115,20 @@ type dashboardResponse struct {
 	Summary   DashboardSummary `json:"summary"`
 }
 
+// DashboardUserMetric 是同岗分位所需的最小用户聚合行。
+type DashboardUserMetric struct {
+	UserID      string  `json:"user_id"`
+	TotalTokens int64   `json:"total_tokens"`
+	EstCostUSD  float64 `json:"est_cost_usd"`
+}
+
+type dashboardUsersResponse struct {
+	Rows       []DashboardUserMetric `json:"rows"`
+	Page       int                   `json:"page"`
+	PageSize   int                   `json:"page_size"`
+	TotalCount int64                 `json:"total_count"`
+}
+
 // DeptMember 组织成员（/org/departments/:dept_id/members）。
 type DeptMember struct {
 	ID          string `json:"id"`
@@ -346,6 +360,40 @@ func (c *Client) FetchDashboard(ctx context.Context, level, id, from, to string)
 		return DashboardSummary{}, err
 	}
 	return resp.Summary, nil
+}
+
+// FetchDashboardUsers 分页拉取报告期用户聚合指标，避免扫描全公司原始调用明细。
+func (c *Client) FetchDashboardUsers(ctx context.Context, from, to string) ([]DashboardUserMetric, error) {
+	var out []DashboardUserMetric
+	var total int64 = -1
+	for page := 1; ; page++ {
+		b, err := c.do(ctx, "GET", "/usage/dashboard/users", map[string]string{
+			"from": from, "to": to, "page": strconv.Itoa(page), "page_size": "100",
+		})
+		if err != nil {
+			return nil, err
+		}
+		var resp dashboardUsersResponse
+		if err := json.Unmarshal(b, &resp); err != nil {
+			return nil, err
+		}
+		if total < 0 {
+			total = resp.TotalCount
+		} else if total != resp.TotalCount {
+			return nil, fmt.Errorf("dashboard users total changed during pagination: was %d, now %d", total, resp.TotalCount)
+		}
+		out = append(out, resp.Rows...)
+		if int64(len(out)) >= total {
+			break
+		}
+		if len(resp.Rows) == 0 {
+			return nil, fmt.Errorf("incomplete dashboard users: fetched %d of %d", len(out), total)
+		}
+	}
+	if int64(len(out)) != total {
+		return nil, fmt.Errorf("incomplete dashboard users: fetched %d of %d", len(out), total)
+	}
+	return out, nil
 }
 
 // FetchMembers 拉取部门成员（/org/departments/:dept_id/members）。

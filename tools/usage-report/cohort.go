@@ -41,46 +41,19 @@ func buildCohort(ctx context.Context, cli *client.Client, cfg Config, scope repo
 		return cohort, ncs
 	}
 
-	// personal 的 scope 明细只含本人，不能据此声称 peer 样本不足；改拉同期全公司 personal 明细。
-	// 单元报告不计算同岗分位，但仍复用 roster 得到组织总人数。
-	metricCalls := calls
-	if cfg.Level == "personal" {
-		rows, err := cli.FetchLogs(ctx, cfg.From, cfg.To, "personal", "", "", "")
-		if err != nil {
-			ncs = append(ncs, report.NotComputed{Metric: "同岗分位", Reason: "同期全公司成员指标不可取得：" + err.Error()})
-			cohort.Enabled = false
-			return cohort, ncs
-		}
-		metricCalls = make([]report.CallEvent, 0, len(rows))
-		for _, row := range rows {
-			metricCalls = append(metricCalls, row.ToCallEvent())
-		}
+	// personal 的 scope 明细只含本人；同岗候选使用服务端用户聚合接口，禁止拉全公司原始日志。
+	rows, err := cli.FetchDashboardUsers(ctx, cfg.From, cfg.To)
+	if err != nil {
+		ncs = append(ncs, report.NotComputed{Metric: "同岗分位", Reason: "同期全公司用户聚合指标不可取得：" + err.Error()})
+		cohort.Enabled = false
+		return cohort, ncs
 	}
-
-	// 每用户效能（cost_per_1k_tokens）与总 token。
 	perUser := map[string]float64{}
 	validUser := map[string]bool{}
-	agg := map[string]*struct{ cost, tokens float64 }{}
-	for _, c := range metricCalls {
-		if c.KeyType == "service" {
-			continue // 同岗分位排除 service
-		}
-		u := c.UserID
-		if u == "" {
-			continue
-		}
-		a := agg[u]
-		if a == nil {
-			a = &struct{ cost, tokens float64 }{}
-			agg[u] = a
-		}
-		a.cost += c.EstCostUSD
-		a.tokens += float64(c.PromptTokens + c.CompletionTokens + c.ReasoningTokens)
-	}
-	for u, a := range agg {
-		if a.tokens > 0 {
-			perUser[u] = a.cost / a.tokens * 1000
-			validUser[u] = true
+	for _, row := range rows {
+		if row.UserID != "" && row.TotalTokens > 0 {
+			perUser[row.UserID] = row.EstCostUSD / float64(row.TotalTokens) * 1000
+			validUser[row.UserID] = true
 		}
 	}
 

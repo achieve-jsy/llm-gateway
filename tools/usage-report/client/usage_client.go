@@ -89,10 +89,11 @@ type LogRow struct {
 }
 
 type logsResponse struct {
-	Rows     []LogRow `json:"rows"`
-	Total    int64    `json:"total"`
-	Page     int      `json:"page"`
-	PageSize int      `json:"page_size"`
+	Rows       []LogRow `json:"rows"`
+	Total      int64    `json:"total"`
+	Page       int      `json:"page"`
+	PageSize   int      `json:"page_size"`
+	NextCursor string   `json:"next_cursor"`
 }
 
 // DashboardSummary /usage/dashboard 的汇总卡片（对账基准：total_tokens=SUM(prompt+completion+reasoning)，不含 cached）。
@@ -268,36 +269,34 @@ func isRetryable(err error) bool {
 }
 
 // FetchLogs 拉取调用明细（分页 ≤ maxPageSize，上限 c.maxLogs 条）。
-// userID 非空时走 /usage/scoped/logs（服务端按用户过滤），否则走 /usage/logs。
-// 服务端声明的 total 超过配置上限或最终未拉全时返回错误，不返回部分数据。
-func (c *Client) FetchLogs(ctx context.Context, from, to, keyType, userID, deptName, studioID string) ([]LogRow, error) {
+// 恒走专用 keyset 接口 /usage/report/logs（服务端按 user_id/dept_id/studio_id 稳定键过滤），
+// 服务端声明 total 超上限或最终未拉全时返回错误，不返回部分数据。
+// csv 参数：userID→user_id（personal），deptID→dept_id（department），studioID→studio_id（studio）。
+func (c *Client) FetchLogs(ctx context.Context, from, to, keyType, userID, deptID, studioID string) ([]LogRow, error) {
 	var out []LogRow
 	var total int64 = -1
+	path := "/usage/report/logs"
+	// 先以首屏（无 cursor）探测服务端 keyset：支持则后续带 cursor 逐页拉到底，无深 OFFSET。
 	page := 1
-	path := "/usage/logs"
-	if userID != "" {
-		path = "/usage/scoped/logs"
-	}
+	cursor := ""
+	useKeyset := false
 	for {
-		// /usage/logs 用 from/to；/usage/scoped/logs 用 start/end（ScopedLogs 忽略 from/to，默认 30 天窗）。
 		q := map[string]string{
 			"page": strconv.Itoa(page), "page_size": strconv.Itoa(maxPageSize),
+			"start": from, "end": to,
 		}
-		if userID != "" {
-			q["start"] = from
-			q["end"] = to
-		} else {
-			q["from"] = from
-			q["to"] = to
+		if useKeyset {
+			q["cursor"] = cursor
 		}
 		if keyType != "" {
 			q["key_type"] = keyType
 		}
+		// 稳定键：新端点只接受 user_id/dept_id/studio_id。deptName 旧路径废弃。
 		if userID != "" {
 			q["user_id"] = userID
 		}
-		if deptName != "" {
-			q["dept_name"] = deptName
+		if deptID != "" {
+			q["dept_id"] = deptID
 		}
 		if studioID != "" {
 			q["studio_id"] = studioID
@@ -309,6 +308,11 @@ func (c *Client) FetchLogs(ctx context.Context, from, to, keyType, userID, deptN
 		var resp logsResponse
 		if err := json.Unmarshal(b, &resp); err != nil {
 			return nil, err
+		}
+		// 首屏探测服务端 keyset：支持则本页即含 next_cursor，后续随 cursor 提交。
+		if page == 1 && resp.NextCursor != "" && !useKeyset {
+			useKeyset = true
+			cursor = resp.NextCursor
 		}
 		if total < 0 {
 			total = resp.Total
@@ -325,7 +329,14 @@ func (c *Client) FetchLogs(ctx context.Context, from, to, keyType, userID, deptN
 		if len(resp.Rows) == 0 {
 			return nil, fmt.Errorf("incomplete usage logs: fetched %d of %d", len(out), total)
 		}
-		page++
+		if useKeyset {
+			if resp.NextCursor == "" {
+				return nil, fmt.Errorf("incomplete usage logs: keyset ended early at %d of %d", len(out), total)
+			}
+			cursor = resp.NextCursor
+		} else {
+			page++
+		}
 	}
 	if int64(len(out)) != total {
 		return nil, fmt.Errorf("incomplete usage logs: fetched %d of %d", len(out), total)

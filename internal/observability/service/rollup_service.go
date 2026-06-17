@@ -474,6 +474,9 @@ type LogsQueryParams struct {
 	Seedance  bool   // 仅 Seedance 视频/素材相关请求
 	Page      int
 	PageSize  int
+	// Cursor 可选 keyset 游标（RFC3339Nano|request_id）。传空则走旧 page/offset 分页；
+	// 非空时按 (ts DESC, request_id DESC) 游标定位，避免深 OFFSET，适配大表深分页。
+	Cursor string
 	// 鉴权注入
 	ScopeSQL string
 }
@@ -548,6 +551,8 @@ type LogsResponse struct {
 	Total    int64    `json:"total"`
 	Page     int      `json:"page"`
 	PageSize int      `json:"page_size"`
+	// NextCursor 仅 keyset 分页（logs client 传 cursor 时）返回，供下一页继续；空表示无更多页。
+	NextCursor string `json:"next_cursor,omitempty"`
 }
 
 // QueryLogs 查询调用明细
@@ -557,6 +562,23 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 	}
 	if params.PageSize < 1 || params.PageSize > 200 {
 		params.PageSize = 50
+	}
+	// keyset 游标（可选）：非空时按 (ts DESC, request_id DESC) 定位翻页，避免深 OFFSET。
+	useKeyset := false
+	var cursorTS time.Time
+	var cursorRID string
+	if params.Cursor != "" {
+		parts := strings.SplitN(params.Cursor, "|", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid cursor format, want RFC3339Nano|request_id")
+		}
+		t, err := time.Parse(time.RFC3339Nano, parts[0])
+		if err != nil {
+			return nil, fmt.Errorf("invalid cursor timestamp: %w", err)
+		}
+		cursorTS = t
+		cursorRID = parts[1]
+		useKeyset = true
 	}
 
 	// 列名加 call_logs. 前缀：后续 LEFT JOIN call_traces 时避免 ts/request_id 歧义
@@ -627,34 +649,45 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 
 	var rows []LogRow
 	offset := (params.Page - 1) * params.PageSize
+	cols := "call_logs.request_id, call_logs.ts, call_logs.key_id, COALESCE(call_logs.key_name, '') AS key_name, " +
+		"COALESCE(NULLIF(call_logs.key_type, ''), 'personal') AS key_type, " +
+		"call_logs.user_id, call_logs.user_name, call_logs.dept_id, call_logs.dept_name, call_logs.studio_name, " +
+		"call_logs.model, call_logs.routed_model, call_logs.group_name, call_logs.provider, " +
+		"call_logs.prompt_tokens, call_logs.cached_tokens, call_logs.cache_write_tokens, call_logs.completion_tokens, call_logs.reasoning_tokens, call_logs.total_tokens, " +
+		"call_logs.status, call_logs.upstream_status, call_logs.duration_ms, call_logs.first_token_ms, " +
+		"call_logs.stage_ttfb_ms, call_logs.stage_auth_ms, call_logs.stage_route_ms, call_logs.stage_upstream_ms, " +
+		"call_logs.stream, call_logs.failover_used, call_logs.usage_missing, " +
+		"call_logs.reasoning_effort, call_logs.user_agent, call_logs.ip_address, " +
+		"call_logs.input_cost_usd, call_logs.output_cost_usd, call_logs.cache_read_cost_usd, call_logs.est_cost_usd, " +
+		"call_logs.input_price_snapshot, call_logs.output_price_snapshot, " +
+		"COALESCE(NULLIF(substring(call_logs.inbound_endpoint FROM '/v1/contents/generations/tasks/([^/?#]+)'), ''), ct.response_body->>'id', ct.response_body->>'task_id') AS task_id, " +
+		"CASE WHEN jsonb_typeof(ct.request_body->'documents') = 'array' " +
+		"THEN jsonb_array_length(ct.request_body->'documents') ELSE NULL END AS documents_count"
 	// request_body/response_body 大字段不跨线传输；task_id/documents_count 在 SQL 侧从 call_traces 提取
-	if err := query.
-		Select("call_logs.request_id, call_logs.ts, call_logs.key_id, COALESCE(call_logs.key_name, '') AS key_name, " +
-			"COALESCE(NULLIF(call_logs.key_type, ''), 'personal') AS key_type, " +
-			"call_logs.user_id, call_logs.user_name, call_logs.dept_id, call_logs.dept_name, call_logs.studio_name, " +
-			"call_logs.model, call_logs.routed_model, call_logs.group_name, call_logs.provider, " +
-			"call_logs.prompt_tokens, call_logs.cached_tokens, call_logs.cache_write_tokens, call_logs.completion_tokens, call_logs.reasoning_tokens, call_logs.total_tokens, " +
-			"call_logs.status, call_logs.upstream_status, call_logs.duration_ms, call_logs.first_token_ms, " +
-			"call_logs.stage_ttfb_ms, call_logs.stage_auth_ms, call_logs.stage_route_ms, call_logs.stage_upstream_ms, " +
-			"call_logs.stream, call_logs.failover_used, call_logs.usage_missing, " +
-			"call_logs.reasoning_effort, call_logs.user_agent, call_logs.ip_address, " +
-			"call_logs.input_cost_usd, call_logs.output_cost_usd, call_logs.cache_read_cost_usd, call_logs.est_cost_usd, " +
-			"call_logs.input_price_snapshot, call_logs.output_price_snapshot, " +
-			"COALESCE(NULLIF(substring(call_logs.inbound_endpoint FROM '/v1/contents/generations/tasks/([^/?#]+)'), ''), ct.response_body->>'id', ct.response_body->>'task_id') AS task_id, " +
-			"CASE WHEN jsonb_typeof(ct.request_body->'documents') = 'array' " +
-			"THEN jsonb_array_length(ct.request_body->'documents') ELSE NULL END AS documents_count").
+	q := query.
+		Select(cols).
 		Joins("LEFT JOIN call_traces ct ON ct.request_id = call_logs.request_id").
-		Order("call_logs.ts DESC").
-		Offset(offset).
-		Limit(params.PageSize).
-		Find(&rows).Error; err != nil {
+		Order("call_logs.ts DESC, call_logs.request_id DESC")
+	if useKeyset {
+		q = q.Where("(call_logs.ts < ?) OR (call_logs.ts = ? AND call_logs.request_id < ?)", cursorTS, cursorTS, cursorRID)
+	} else {
+		q = q.Offset(offset)
+	}
+	if err := q.Limit(params.PageSize).Find(&rows).Error; err != nil {
 		if isTableNotExistError(err) {
 			return &LogsResponse{Rows: []LogRow{}, Total: 0, Page: params.Page, PageSize: params.PageSize}, nil
 		}
 		return nil, fmt.Errorf("query call_logs: %w", err)
 	}
 
-	return &LogsResponse{Rows: rows, Total: total, Page: params.Page, PageSize: params.PageSize}, nil
+	resp := &LogsResponse{Rows: rows, Total: total, Page: params.Page, PageSize: params.PageSize}
+	if useKeyset && len(rows) > 0 {
+		last := rows[len(rows)-1]
+		if last.RequestID != "" {
+			resp.NextCursor = last.TS + "|" + last.RequestID
+		}
+	}
+	return resp, nil
 }
 
 func ApplySeedanceLogFilter(query *gorm.DB, tableAlias string) *gorm.DB {

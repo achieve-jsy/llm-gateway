@@ -188,6 +188,7 @@ func (h *UsageHandler) Logs(c *gin.Context) {
 		Seedance:  seedance,
 		Page:      page,
 		PageSize:  pageSize,
+		Cursor:    c.Query("cursor"),
 	}
 	resp, err := h.svc.QueryLogs(c.Request.Context(), params)
 	if err != nil {
@@ -334,6 +335,7 @@ func (h *UsageHandler) MyLogs(c *gin.Context) {
 		Seedance:  seedance,
 		Page:      page,
 		PageSize:  pageSize,
+		Cursor:    c.Query("cursor"),
 	}
 	resp, err := h.svc.QueryLogs(c.Request.Context(), params)
 	if err != nil {
@@ -990,7 +992,139 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 	})
 }
 
-// UserRankRow 用户排行行
+// ReportLogs GET /api/v1/usage/report/logs
+// 离线用量报告的专用明细接口：keyset 分页（无深 OFFSET，大表稳定），通过稳定键过滤：
+//   - personal    → user_id（精确）
+//   - department  → dept_id（含双 ID 归一：dept_id 或 departments.id 或 user→dept 映射）
+//   - studio      → studio_id
+//
+// 复用 UsagePolicy.QueryScope(actor) 做角色范围（admin 不过滤，dept/studio_admin 受限）。
+// 返回 {rows, total, next_cursor, page, page_size}；next_cursor 供客户端 keyset 翻页。
+// 对账基准保持 GET /api/v1/usage/dashboard 口径（total_tokens=SUM(prompt+completion+reasoning)）。
+func (h *UsageHandler) ReportLogs(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db not configured"})
+		return
+	}
+
+	startStr := c.DefaultQuery("start", time.Now().AddDate(0, -1, 0).Format("2006-01-02"))
+	endStr := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
+	filterUserID := c.Query("user_id")
+	filterDeptID := c.Query("dept_id")
+	filterStudioID := c.Query("studio_id")
+	filterKeyType := c.Query("key_type")
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "200"))
+	if pageSize < 1 || pageSize > 200 {
+		pageSize = 200
+	}
+	cursor := c.Query("cursor")
+
+	db := h.db.WithContext(c.Request.Context())
+
+	base := db.Table("call_logs").
+		Where("call_logs.ts >= ?::date AND call_logs.ts < (?::date + INTERVAL '1 day')", startStr, endStr).
+		Scopes(policy.UsagePolicy{}.QueryScope(rbac.GetActor(c)))
+
+	if filterUserID != "" {
+		base = base.Where("call_logs.user_id = ?", filterUserID)
+	}
+	if filterDeptID != "" {
+		// 部门双 ID 归一：直接 dept_id，或 departments.id（UUID），或 user→dept 映射。
+		base = base.Where(`call_logs.dept_id = ?
+			OR call_logs.dept_id IN (SELECT d.id::text FROM departments d WHERE d.dept_id = ? OR d.id::text = ?)
+			OR call_logs.user_id IN (SELECT u.id::text FROM users u JOIN departments d ON d.id = u.dept_id WHERE d.dept_id = ? OR d.id::text = ?)`,
+			filterDeptID, filterDeptID, filterDeptID, filterDeptID, filterDeptID)
+	}
+	if filterStudioID != "" {
+		base = base.Where("call_logs.studio_id = ?", filterStudioID)
+	}
+	if filterKeyType != "" {
+		base = base.Where("COALESCE(NULLIF(call_logs.key_type, ''), 'personal') = ?", filterKeyType)
+	}
+
+	// Count（JOIN 前统计，避免 call_traces 放大行数）
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	cols := `call_logs.request_id, call_logs.ts,
+		call_logs.key_id, call_logs.key_name, call_logs.key_type, call_logs.user_id, call_logs.user_name,
+		call_logs.dept_id, call_logs.dept_name, call_logs.studio_id, call_logs.studio_name,
+		call_logs.model, call_logs.routed_model, call_logs.group_name, call_logs.provider,
+		call_logs.prompt_tokens, call_logs.cached_tokens, call_logs.cache_write_tokens,
+		call_logs.completion_tokens, call_logs.reasoning_tokens, call_logs.total_tokens,
+		call_logs.status, call_logs.duration_ms, call_logs.first_token_ms,
+		call_logs.est_cost_usd, call_logs.input_cost_usd, call_logs.output_cost_usd, call_logs.cache_read_cost_usd,
+		call_logs.input_price_snapshot, call_logs.output_price_snapshot,
+		call_logs.stage_auth_ms, call_logs.stage_route_ms, call_logs.stage_upstream_ms, call_logs.stage_ttfb_ms,
+		call_logs.stream, call_logs.failover_used, call_logs.usage_missing, call_logs.reasoning_effort,
+		call_logs.ip_address, call_logs.user_agent`
+
+	q := base.Select(cols).Order("call_logs.ts DESC, call_logs.request_id DESC")
+
+	var cursorTS time.Time
+	useKeyset := false
+	if cursor != "" {
+		parts := strings.SplitN(cursor, "|", 2)
+		if len(parts) != 2 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid cursor format, want RFC3339Nano|request_id"})
+			return
+		}
+		t, err := time.Parse(time.RFC3339Nano, parts[0])
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid cursor timestamp"})
+			return
+		}
+		cursorTS = t
+		useKeyset = true
+		q = q.Where("(call_logs.ts < ?) OR (call_logs.ts = ? AND call_logs.request_id < ?)", cursorTS, parts[1], cursorTS, parts[1])
+	}
+
+	var rows []map[string]interface{}
+	if useKeyset {
+		if err := q.Limit(pageSize).Find(&rows).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	} else {
+		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+		if page < 1 {
+			page = 1
+		}
+		if err := q.Limit(pageSize).Offset((page - 1) * pageSize).Find(&rows).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
+	nextCursor := ""
+	if useKeyset && len(rows) > 0 {
+		last := rows[len(rows)-1]
+		rid, _ := last["request_id"].(string)
+		tsStr := ""
+		switch t := last["ts"].(type) {
+		case string:
+			tsStr = t
+		case time.Time:
+			tsStr = t.Format(time.RFC3339Nano)
+		}
+		if rid != "" && tsStr != "" {
+			nextCursor = tsStr + "|" + rid
+		}
+	}
+
+	resp := gin.H{"rows": rows, "total": total, "page_size": pageSize}
+	if useKeyset {
+		resp["next_cursor"] = nextCursor
+	} else {
+		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+		resp["page"] = page
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
 type UserRankRow struct {
 	UserID           string  `json:"user_id"           gorm:"column:user_id"`
 	UserName         string  `json:"user_name"         gorm:"column:user_name"`

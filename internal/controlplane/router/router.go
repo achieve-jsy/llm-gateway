@@ -994,6 +994,8 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/usage/dashboard/user-detail", guard(rbac.PermUsageViewScoped), usageH2.DashboardUserDetail)
 		adminGroup.GET("/usage/dashboard/model-detail", guard(rbac.PermUsageViewScoped), usageH2.DashboardModelDetail)
 		adminGroup.GET("/usage/scoped/logs", guard(rbac.PermUsageViewScoped), usageH2.ScopedLogs)
+		// 离线用量报告专用明细：keyset 分页，稳定键(user_id/dept_id/studio_id)过滤，专供 usage-report CLI。
+		adminGroup.GET("/usage/report/logs", guard(rbac.PermUsageViewScoped), usageH2.ReportLogs)
 	}
 
 	// 内部接口（InternalAuth 已在 internalGroup 上，复用）

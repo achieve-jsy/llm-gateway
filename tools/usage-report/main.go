@@ -306,16 +306,16 @@ func resolveScope(ctx context.Context, cli *client.Client, cfg Config) (report.S
 
 // fetchScopeLogs 按 level 拉取日志，做客户端侧二次过滤保证口径（部门/工作室再做服务端 dept_name/studio_id 过滤）。
 func fetchScopeLogs(ctx context.Context, cli *client.Client, cfg Config, scope report.Scope, from, to string) ([]client.LogRow, error) {
-	deptName, studioID, userID := "", "", ""
+	deptID, studioID, userID := "", "", ""
 	switch cfg.Level {
 	case "personal":
 		userID = scope.ID
 	case "department":
-		deptName = scope.Name
+		deptID = scope.DeptID
 	case "studio":
 		studioID = scope.StudioID
 	}
-	rows, err := cli.FetchLogs(ctx, from, to, cfg.KeyType, userID, deptName, studioID)
+	rows, err := cli.FetchLogs(ctx, from, to, cfg.KeyType, userID, deptID, studioID)
 	if err != nil {
 		return nil, err
 	}
@@ -331,8 +331,8 @@ func fetchScopeLogs(ctx context.Context, cli *client.Client, cfg Config, scope r
 				continue
 			}
 		case "department", "studio":
-			// 范围过滤由服务端完成：Dashboard/usage 查询使用 departments 双 ID 归一和
-			// dept_studio_map。客户端若再按单一 dept_id 或可变名称过滤，会误删合法历史记录。
+			// 范围过滤由服务端 /usage/report/logs 完成：dept_id 双 ID 归一 / studio_id。
+			// 客户端不再按单一 dept_id 或可变名称过滤，避免误删合法历史记录。
 		}
 		out = append(out, r)
 	}

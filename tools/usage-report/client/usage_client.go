@@ -362,8 +362,8 @@ func (c *Client) FetchDashboard(ctx context.Context, level, id, from, to string)
 	return resp.Summary, nil
 }
 
-// FetchDashboardUsers 分页拉取报告期用户聚合指标，避免扫描全公司原始调用明细。
-func (c *Client) FetchDashboardUsers(ctx context.Context, from, to string) ([]DashboardUserMetric, error) {
+// FetchUserMetrics 分页拉取报告期用户聚合指标，避免扫描全公司原始调用明细。
+func (c *Client) FetchUserMetrics(ctx context.Context, from, to string) ([]DashboardUserMetric, error) {
 	var out []DashboardUserMetric
 	var total int64 = -1
 	for page := 1; ; page++ {

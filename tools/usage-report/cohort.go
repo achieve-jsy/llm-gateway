@@ -42,7 +42,7 @@ func buildCohort(ctx context.Context, cli *client.Client, cfg Config, scope repo
 	}
 
 	// personal 的 scope 明细只含本人；同岗候选使用服务端用户聚合接口，禁止拉全公司原始日志。
-	rows, err := cli.FetchDashboardUsers(ctx, cfg.From, cfg.To)
+	rows, err := cli.FetchUserMetrics(ctx, cfg.From, cfg.To)
 	if err != nil {
 		ncs = append(ncs, report.NotComputed{Metric: "同岗分位", Reason: "同期全公司用户聚合指标不可取得：" + err.Error()})
 		cohort.Enabled = false

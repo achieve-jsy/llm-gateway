@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestFetchDashboardUsersPaginatesAggregates(t *testing.T) {
+func TestFetchUserMetricsPaginatesAggregates(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/usage/dashboard/users" || r.URL.Query().Get("from") != "2026-08-01" || r.URL.Query().Get("to") != "2026-08-07" {
 			t.Fatalf("unexpected request: %s?%s", r.URL.Path, r.URL.RawQuery)
@@ -22,7 +22,7 @@ func TestFetchDashboardUsersPaginatesAggregates(t *testing.T) {
 	}))
 	defer server.Close()
 
-	rows, err := New(server.URL, "token").FetchDashboardUsers(context.Background(), "2026-08-01", "2026-08-07")
+	rows, err := New(server.URL, "token").FetchUserMetrics(context.Background(), "2026-08-01", "2026-08-07")
 	if err != nil {
 		t.Fatal(err)
 	}

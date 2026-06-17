@@ -31,6 +31,14 @@ type DailyMetric struct {
 	TotalTokens      int64 // = prompt+completion+reasoning（不含 cached/cache_write）
 }
 
+// MinuteBucket 期前基线的最小时间粒度聚合：某分钟非 service 调用的 count 与总成本。
+// 用于 A1/A2 历史窗口分位的加权滑窗重建，避免拉取/构建全量逐调用事件（大数据部门为数十万行）。
+type MinuteBucket struct {
+	Minute time.Time // 该分钟（Asia/Shanghai）
+	Count  int       // 该分钟非 service 调用数
+	Cost   float64   // 该分钟非 service 调用成本合计（USD）
+}
+
 // CallEvent 归一化的逐调用事件（A1–A5 分钟窗判定用）。
 type CallEvent struct {
 	TS                 time.Time
@@ -59,6 +67,9 @@ type ReportInput struct {
 	// BaselineCalls 期前历史窗口逐调用事件，供 A1/A2 计算真实历史窗口分布。
 	// 为空时 A1 仅使用绝对阈值，A2 仅保留绝对阈值/HARD_CAP，且不得标记为 28 天基线。
 	BaselineCalls []CallEvent
+	// BaselineBuckets 期前历史窗口的分钟桶聚合（非 service），供 A1/A2 做加权滑窗分位重建。
+	// 非空时优先于 BaselineCalls 使用：基于分钟桶聚合直接滑动，避免展开数十万逐调用事件（大数据部门内存关键）。
+	BaselineBuckets []MinuteBucket
 	// BaselineMetrics 期前 28 完整自然日（事件日前 28d ~ 前1d）的日聚合序列，用于 28 天稳健基线物化。
 	// 若为空，基线明确标记 unsupported；当前周期不得替代真实历史基线。
 	BaselineMetrics []DailyMetric

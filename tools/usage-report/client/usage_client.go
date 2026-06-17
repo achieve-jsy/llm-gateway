@@ -344,6 +344,50 @@ func (c *Client) FetchLogs(ctx context.Context, from, to, keyType, userID, deptI
 	return out, nil
 }
 
+// BaselineDaily 基线日聚合：某天非 service 调用数（供 28 天稳健基线物化）。
+type BaselineDaily struct {
+	Date     string `json:"date"`
+	ReqCount int64  `json:"req_count"`
+}
+
+// BaselineBucket 基线分钟桶：某分钟的非 service 调用数与成本（供 A1/A2 历史窗口分位重建）。
+type BaselineBucket struct {
+	Minute string  `json:"minute"`
+	Count  int64   `json:"count"`
+	Cost   float64 `json:"cost"`
+}
+
+// BaselineResponse 期前基线聚合：daily（日序列）+ minute_buckets（分钟桶序列）。
+type BaselineResponse struct {
+	Daily         []BaselineDaily  `json:"daily"`
+	MinuteBuckets []BaselineBucket `json:"minute_buckets"`
+}
+
+// FetchBaseline 拉取期前基线的「日聚合 + 分钟桶聚合」（零明细，走 /usage/report/baseline）。
+// 供 28 天稳健基线物化（daily）与 A1/A2 历史窗口分位重建（minute_buckets）。
+// 返回的 daily 为每日非 service 调用数；minute_buckets 为每分钟非 service 调用数 + 成本。
+func (c *Client) FetchBaseline(ctx context.Context, from, to, userID, deptID, studioID string) (*BaselineResponse, error) {
+	q := map[string]string{"start": from, "end": to}
+	if userID != "" {
+		q["user_id"] = userID
+	}
+	if deptID != "" {
+		q["dept_id"] = deptID
+	}
+	if studioID != "" {
+		q["studio_id"] = studioID
+	}
+	b, err := c.do(ctx, "GET", "/usage/report/baseline", q)
+	if err != nil {
+		return nil, err
+	}
+	var resp BaselineResponse
+	if err := json.Unmarshal(b, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 // FetchDashboard 拉取 GetDashboard 汇总（对账基准）。level→scope 映射：personal→user, department→dept, studio→studio。
 // 返回 (summary, scope, id)。任一步失败返回 error；调用方决定是否用其做对账。
 func (c *Client) FetchDashboard(ctx context.Context, level, id, from, to string) (DashboardSummary, error) {

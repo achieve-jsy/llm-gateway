@@ -996,6 +996,8 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/usage/scoped/logs", guard(rbac.PermUsageViewScoped), usageH2.ScopedLogs)
 		// 离线用量报告专用明细：keyset 分页，稳定键(user_id/dept_id/studio_id)过滤，专供 usage-report CLI。
 		adminGroup.GET("/usage/report/logs", guard(rbac.PermUsageViewScoped), usageH2.ReportLogs)
+		// 离线用量报告专用于期前基线的日聚合+分钟桶聚合（零明细），供 28 天稳健基线物化与 A1/A2 窗口分位重建。
+		adminGroup.GET("/usage/report/baseline", guard(rbac.PermUsageViewScoped), usageH2.ReportBaseline)
 	}
 
 	// 内部接口（InternalAuth 已在 internalGroup 上，复用）

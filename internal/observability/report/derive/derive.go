@@ -50,7 +50,7 @@ func Derive(meta report.Meta, in report.ReportInput, rules report.RuleSet) (*rep
 	}
 
 	// A1–A5
-	anoms := Anomalies(in.Calls, in.BaselineCalls, rules, in.ModelContextBudget)
+	anoms := Anomalies(in.Calls, in.BaselineCalls, in.BaselineBuckets, rules, in.ModelContextBudget)
 	// 单元级语义说明：A1/A2 基于个人窗口/中位，单元级运行在「该单元成员调用流（排除 service）」上。
 	scope := in.LevelMeta.Level
 	for i := range anoms {

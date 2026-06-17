@@ -14,10 +14,12 @@ import (
 )
 
 // Anomalies 返回 A1–A5 判定结果（命中/未命中都返回，未命中附 basis）。
-func Anomalies(calls, baselineCalls []CallEvent, rules report.RuleSet, modelBudget map[string]int64) []report.AnomalyHit {
+// baselineBuckets 为期前历史的分钟桶聚合（非 service），非空时优先用于 A1/A2 历史窗口分位；
+// 为空时回退 baselineCalls（逐调用），以兼容旧调用/测试路径。
+func Anomalies(calls, baselineCalls []CallEvent, baselineBuckets []report.MinuteBucket, rules report.RuleSet, modelBudget map[string]int64) []report.AnomalyHit {
 	return []report.AnomalyHit{
-		A1(calls, baselineCalls, rules),
-		A2(calls, baselineCalls, rules),
+		A1(calls, baselineCalls, baselineBuckets, rules),
+		A2(calls, baselineCalls, baselineBuckets, rules),
 		A3(calls, rules),
 		A4(calls, rules, modelBudget),
 		A5(calls, rules),
@@ -75,6 +77,48 @@ func windows(b []ev, width int64) []windowStat {
 	return out
 }
 
+// weightedWindows 基于分钟桶聚合做逐分钟加权滑窗，返回与 windows 一致的结构。
+// 每个桶代表该分钟 count 次调用、cost 总成本；滑窗的 count = 窗口内各桶 Count 之和，
+// cost = 窗口内各桶 Cost 之和。供 A1/A2 用期前分钟桶重建历史窗口分位，而无需展开逐调用事件。
+// 桶按 Minute 升序；不含调用的分钟（桶间空隙）视为 count=0/cost=0 参与滑窗，保证窗口连续。
+func weightedWindows(buckets []report.MinuteBucket, width int64) []windowStat {
+	if len(buckets) == 0 || width <= 0 {
+		return nil
+	}
+	sorted := make([]report.MinuteBucket, len(buckets))
+	copy(sorted, buckets)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Minute.Before(sorted[j].Minute) })
+
+	// 每秒/分钟桶对应的 unix 分钟索引。buckets 可能稀疏（无调用分钟缺失）。
+	minB := sorted[0].Minute.Unix() / 60
+	maxB := sorted[len(sorted)-1].Minute.Unix() / 60
+	out := make([]windowStat, 0, maxB-minB+1)
+
+	lo, hi := 0, 0
+	var count, cost float64
+	for s := minB; s <= maxB; s++ {
+		// 移除起点 < s 的桶（其 contribution 已滑出窗口）
+		for lo < len(sorted) && sorted[lo].Minute.Unix()/60 < s {
+			if lo < hi {
+				count -= float64(sorted[lo].Count)
+				cost -= sorted[lo].Cost
+			}
+			lo++
+			if hi < lo {
+				hi = lo
+			}
+		}
+		// 加入 < s+width 的桶
+		for hi < len(sorted) && sorted[hi].Minute.Unix()/60 < s+width {
+			count += float64(sorted[hi].Count)
+			cost += sorted[hi].Cost
+			hi++
+		}
+		out = append(out, windowStat{start: s, end: s + width, lo: lo, hi: hi, count: int(count), cost: cost})
+	}
+	return out
+}
+
 func medianIntervalSec(b []ev) float64 {
 	if len(b) < 2 {
 		return math.Inf(1)
@@ -107,7 +151,7 @@ func evs(f, v string) report.Evidence         { return report.Evidence{Field: f,
 // ---- A1 程序失控 ----
 
 // A1：10 分钟调用 > max(60, 个人P99_10min) 且中位间隔 <10s 且连续 ≥15 分钟（1 分钟粒度滑动窗，勿 tumbling）。
-func A1(calls, baselineCalls []CallEvent, rules report.RuleSet) report.AnomalyHit {
+func A1(calls, baselineCalls []CallEvent, baselineBuckets []report.MinuteBucket, rules report.RuleSet) report.AnomalyHit {
 	a := newHit("A1", "v1", "程序失控", "P1", itoa(rules.A1WindowMinutes)+"min/连续"+itoa(rules.A1SustainMinutes)+"min")
 	if len(calls) < 2 {
 		a.Evidence = append(a.Evidence, evs("basis", "调用样本不足，无法判定程序失控。"))
@@ -116,7 +160,13 @@ func A1(calls, baselineCalls []CallEvent, rules report.RuleSet) report.AnomalyHi
 	b := bucket(calls)
 	w := int64(rules.A1WindowMinutes)
 	var p99 float64
-	if historical := windows(bucket(baselineCalls), w); len(historical) > 0 {
+	var historical []windowStat
+	if len(baselineBuckets) > 0 {
+		historical = weightedWindows(baselineBuckets, w)
+	} else {
+		historical = windows(bucket(baselineCalls), w)
+	}
+	if len(historical) > 0 {
 		cnts := make([]float64, 0, len(historical))
 		for _, x := range historical {
 			cnts = append(cnts, float64(x.count))
@@ -175,7 +225,7 @@ func A1(calls, baselineCalls []CallEvent, rules report.RuleSet) report.AnomalyHi
 // ---- A2 成本燃烧 ----
 
 // A2：15 分钟成本 > max(¥50, 个人28天同窗中位×5)；另加 HARD_CAP_A2=¥200/15min 独立触发。
-func A2(calls, baselineCalls []CallEvent, rules report.RuleSet) report.AnomalyHit {
+func A2(calls, baselineCalls []CallEvent, baselineBuckets []report.MinuteBucket, rules report.RuleSet) report.AnomalyHit {
 	a := newHit("A2", "v1", "成本燃烧", "P1", "15min")
 	if len(calls) < 2 {
 		a.Hit = false
@@ -190,7 +240,13 @@ func A2(calls, baselineCalls []CallEvent, rules report.RuleSet) report.AnomalyHi
 	b := bucket(calls)
 
 	var med float64
-	if historical := windows(bucket(baselineCalls), w); len(historical) > 0 {
+	var historical []windowStat
+	if len(baselineBuckets) > 0 {
+		historical = weightedWindows(baselineBuckets, w)
+	} else {
+		historical = windows(bucket(baselineCalls), w)
+	}
+	if len(historical) > 0 {
 		costVals := make([]float64, 0, len(historical))
 		for _, x := range historical {
 			costVals = append(costVals, x.cost)

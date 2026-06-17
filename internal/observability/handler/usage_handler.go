@@ -1129,6 +1129,79 @@ func (h *UsageHandler) ReportLogs(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// BaselineDaily 基线日聚合：某天非 service 调用数（供 28 天稳健基线物化）。
+type BaselineDaily struct {
+	Date     string `json:"date"` // YYYY-MM-DD
+	ReqCount int64  `json:"req_count"`
+}
+
+// BaselineBucket 基线分钟桶：某分钟的非 service 调用数与成本（供 A1/A2 历史窗口分位重建）。
+type BaselineBucket struct {
+	Minute string  `json:"minute"` // RFC3339 minute
+	Count  int64   `json:"count"`
+	Cost   float64 `json:"cost"`
+}
+
+// ReportBaseline GET /api/v1/usage/report/baseline
+// 只读：期前 28 天基线的「日聚合 + 分钟桶聚合」，从 call_logs 按 level 稳定键 + 排除 service 分桶。
+// 供报告工具用日聚合序列物化 28 天稳健基线、用分钟桶重建 A1/A2 历史窗口分位，而无需拉全量明细行。
+func (h *UsageHandler) ReportBaseline(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db not configured"})
+		return
+	}
+	startStr := c.DefaultQuery("start", time.Now().AddDate(0, -1, 0).Format("2006-01-02"))
+	endStr := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
+	filterUserID := c.Query("user_id")
+	filterDeptID := c.Query("dept_id")
+	filterStudioID := c.Query("studio_id")
+
+	db := h.db.WithContext(c.Request.Context())
+
+	// 统一用 cl 别名，便于复用排除 service 的常量子串。
+	base := db.Table("call_logs cl").
+		Where("cl.ts >= ?::date AND cl.ts < (?::date + INTERVAL '1 day')", startStr, endStr).
+		Where(obsmodel.WhereExcludeServiceKeyLogsCL).
+		Scopes(policy.UsagePolicy{}.QueryScope(rbac.GetActor(c)))
+
+	if filterUserID != "" {
+		base = base.Where("cl.user_id = ?", filterUserID)
+	}
+	if filterDeptID != "" {
+		// 部门双 ID 归一：直接 dept_id，或 departments.id（UUID），或 user→dept 映射。
+		base = base.Where(`cl.dept_id = ?
+			OR cl.dept_id IN (SELECT d.id::text FROM departments d WHERE d.dept_id = ? OR d.id::text = ?)
+			OR cl.user_id IN (SELECT u.id::text FROM users u JOIN departments d ON d.id = u.dept_id WHERE d.dept_id = ? OR d.id::text = ?)`,
+			filterDeptID, filterDeptID, filterDeptID, filterDeptID, filterDeptID)
+	}
+	if filterStudioID != "" {
+		base = base.Where("cl.studio_id = ?", filterStudioID)
+	}
+
+	// 日聚合：供 28 天稳健基线（非 service 调用数按天求和）。
+	var days []BaselineDaily
+	if err := base.Select(`cl.ts::date::text AS date, COUNT(*) AS req_count`).
+		Group("cl.ts::date").
+		Order("cl.ts::date ASC").
+		Scan(&days).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 分钟桶聚合：供 A1/A2 历史窗口分位重建（调用数 + 成本，按分钟分桶）。
+	var buckets []BaselineBucket
+	if err := base.Select(`TO_CHAR(date_trunc('minute', cl.ts), 'YYYY-MM-DD HH24:MI:SS') AS minute,
+		COUNT(*) AS count, COALESCE(SUM(cl.est_cost_usd), 0) AS cost`).
+		Group("date_trunc('minute', cl.ts)").
+		Order("date_trunc('minute', cl.ts) ASC").
+		Scan(&buckets).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"daily": days, "minute_buckets": buckets})
+}
+
 type UserRankRow struct {
 	UserID           string  `json:"user_id"           gorm:"column:user_id"`
 	UserName         string  `json:"user_name"         gorm:"column:user_name"`

@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/example/llm-gateway/internal/observability/report"
@@ -17,6 +18,15 @@ import (
 	"github.com/example/llm-gateway/internal/observability/report/render"
 	"github.com/example/llm-gateway/tools/usage-report/client"
 )
+
+// shLoc 报告统一时区（Asia/Shanghai）；分钟桶/日切按上海时间判定（口径，与 client.asiaShanghai 一致）。
+var shLoc = func() *time.Location {
+	l, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		return time.FixedZone("Asia/Shanghai", 8*3600)
+	}
+	return l
+}()
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -60,15 +70,37 @@ func run(args []string) error {
 	memberCalls := nonService(allCalls)
 	metrics := aggregateDaily(allCalls, cfg.Level, scope.ID) // 事实层含 member+service 分离（buildUnitFact 内拆）
 
-	// 3b) 28 天基线物化：拉期前 28 完整自然日 [from-28d, from-1d]（同 level/scope 过滤），成员口径日聚合。
+	// 3b) 28 天基线物化：期前 28 完整自然日 [from-28d, from-1d]（同 level/scope 过滤），走聚合接口零明细。
 	bf, bt := baselineWindow(cfg.From, cfg.To)
-	baselineRows, err := fetchScopeLogs(ctx, cli, cfg, scope, bf, bt)
+	buid, bdept, bstudio := "", "", ""
+	switch cfg.Level {
+	case "personal":
+		buid = scope.ID
+	case "department":
+		bdept = scope.DeptID
+	case "studio":
+		bstudio = scope.StudioID
+	}
+	baselineResp, err := cli.FetchBaseline(ctx, bf, bt, buid, bdept, bstudio)
 	if err != nil {
 		return err
 	}
-	baselineMetrics := aggregateDaily(nonService(toEvents(baselineRows)), cfg.Level, scope.ID)
-	// A1/A2 历史窗口分布用逐调用事件（成员口径，排除 service），与当前期口径一致。
-	baselineCalls := nonService(toEvents(baselineRows))
+	// daily → 28 天稳健基线物化（非 service 调用数按天聚合）。
+	baselineMetrics := make([]report.DailyMetric, 0, len(baselineResp.Daily))
+	for _, d := range baselineResp.Daily {
+		baselineMetrics = append(baselineMetrics, report.DailyMetric{
+			Date: d.Date, Level: cfg.Level, ScopeID: scope.ID, KeyType: "personal", ReqCount: d.ReqCount,
+		})
+	}
+	// minute_buckets → A1/A2 历史窗口加权滑窗分位重建（非 service，按分钟聚合，零展开）。
+	baselineBuckets := make([]report.MinuteBucket, 0, len(baselineResp.MinuteBuckets))
+	for _, bk := range baselineResp.MinuteBuckets {
+		t, e := time.ParseInLocation("2006-01-02 15:04:05", bk.Minute, shLoc)
+		if e != nil {
+			continue
+		}
+		baselineBuckets = append(baselineBuckets, report.MinuteBucket{Minute: t, Count: int(bk.Count), Cost: bk.Cost})
+	}
 
 	// 4) 模型能力（A4 有效输入预算）
 	models := distinctModels(rows)
@@ -106,7 +138,7 @@ func run(args []string) error {
 		}, AnomalyEnabled: true, PeerPercentileEnabled: cohort.Enabled},
 	}
 	in := report.ReportInput{
-		Metrics: metrics, Calls: memberCalls, BaselineMetrics: baselineMetrics, BaselineCalls: baselineCalls, Cohort: cohort,
+		Metrics: metrics, Calls: memberCalls, BaselineMetrics: baselineMetrics, BaselineBuckets: baselineBuckets, Cohort: cohort,
 		LevelMeta:          scope,
 		ModelContextBudget: budget,
 	}
@@ -304,8 +336,64 @@ func resolveScope(ctx context.Context, cli *client.Client, cfg Config) (report.S
 	return s, nil
 }
 
+// fetchScopeConcurrency 并行拉取的日窗口数上限。实测（X-Lab 3 日窗口样本，固定工作量）吞吐：
+// 并发 1→2453, 2→3851, 4→4925, 8→6863 rows/s（峰值）, 12→5340（下滑，服务端吃紧）。
+// 故 8 为甜点位：既最大化吞吐，又避免 12+ 压垮服务端/DB。超大部门（数十万行）据此近乎线性加速。
+const fetchScopeConcurrency = 8
+
 // fetchScopeLogs 按 level 拉取日志，做客户端侧二次过滤保证口径（部门/工作室再做服务端 dept_name/studio_id 过滤）。
+// 大数据集优化：把 [from,to) 按天切成独立日窗口，并发（有限）走各自的 FetchLogs 单链，合并后按
+// ts DESC, request_id DESC 重排，保持与单链结果一致的时序。单日/小窗口自动回退单链，不影响结果。
 func fetchScopeLogs(ctx context.Context, cli *client.Client, cfg Config, scope report.Scope, from, to string) ([]client.LogRow, error) {
+	windows, err := dailyWindows(from, to)
+	if err != nil {
+		return nil, err
+	}
+	if len(windows) <= 1 {
+		return fetchScopeLogsWindow(ctx, cli, cfg, scope, from, to)
+	}
+
+	results := make([][]client.LogRow, len(windows))
+	errs := make([]error, len(windows))
+	sem := make(chan struct{}, fetchScopeConcurrency)
+	var wg sync.WaitGroup
+	for i, w := range windows {
+		wg.Add(1)
+		go func(idx int, wf, wt string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if ctx.Err() != nil {
+				errs[idx] = ctx.Err()
+				return
+			}
+			rows, e := fetchScopeLogsWindow(ctx, cli, cfg, scope, wf, wt)
+			results[idx] = rows
+			errs[idx] = e
+		}(i, w.from, w.to)
+	}
+	wg.Wait()
+
+	var out []client.LogRow
+	for i := range windows {
+		if errs[i] != nil {
+			return nil, fmt.Errorf("日窗口 %s~%s 拉取失败: %w", windows[i].from, windows[i].to, errs[i])
+		}
+		out = append(out, results[i]...)
+	}
+	// 保持报告对周期时序的依赖：按 ts DESC, request_id DESC 重排（与单链一致）。
+	sort.SliceStable(out, func(a, b int) bool {
+		ta, tb := out[a].TS, out[b].TS
+		if ta == tb {
+			return out[a].RequestID > out[b].RequestID
+		}
+		return tsLess(ta, tb)
+	})
+	return out, nil
+}
+
+// fetchScopeLogsWindow 在单个 [from,to) 区间内拉取日志并做客户端二次过滤（单链逻辑）。
+func fetchScopeLogsWindow(ctx context.Context, cli *client.Client, cfg Config, scope report.Scope, from, to string) ([]client.LogRow, error) {
 	deptID, studioID, userID := "", "", ""
 	switch cfg.Level {
 	case "personal":
@@ -337,6 +425,44 @@ func fetchScopeLogs(ctx context.Context, cli *client.Client, cfg Config, scope r
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// dailyWindow 表示一个 [from,to) 的日粒度闭开区间。
+type dailyWindow struct{ from, to string }
+
+// dailyWindows 把 [from,to) 按天切成 N 个不重不漏的日窗口；不足 2 天返回 nil（调用方回退单链）。
+// 与报告对账周期（ReportLogs 的 start=?::date AND ts < end?::date + INTERVAL '1 day'）一致。
+func dailyWindows(from, to string) ([]dailyWindow, error) {
+	f, err := time.Parse("2006-01-02", from)
+	if err != nil {
+		return nil, fmt.Errorf("invalid from %q: %w", from, err)
+	}
+	t, err := time.Parse("2006-01-02", to)
+	if err != nil {
+		return nil, fmt.Errorf("invalid to %q: %w", to, err)
+	}
+	if t.Before(f) {
+		return nil, nil
+	}
+	if t.Equal(f) {
+		return nil, nil
+	}
+	var ws []dailyWindow
+	for cur := f; cur.Before(t); cur = cur.AddDate(0, 0, 1) {
+		next := cur.AddDate(0, 0, 1)
+		ws = append(ws, dailyWindow{from: cur.Format("2006-01-02"), to: next.Format("2006-01-02")})
+	}
+	return ws, nil
+}
+
+// tsLess 以 UTC 归一比较两条 RFC3339 时间戳，避免不同时区表示（Z vs +08:00）导致的字典序错乱。
+func tsLess(a, b string) bool {
+	uA, errA := time.Parse(time.RFC3339, a)
+	uB, errB := time.Parse(time.RFC3339, b)
+	if errA == nil && errB == nil {
+		return uA.Before(uB)
+	}
+	return a < b
 }
 
 func toEvents(rows []client.LogRow) []report.CallEvent {

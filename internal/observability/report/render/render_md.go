@@ -26,6 +26,12 @@ func RenderMD(r *report.Report) string {
 		w("  success: %d\n", r.Fact.Personal.SuccessCount)
 		w("  total_tokens: %d\n", r.Fact.Personal.TotalTokens) // = prompt+completion+reasoning（不含 cached）
 		w("  cost_usd: %.4f\n", r.Fact.Personal.EstCostUSD)
+	} else if u := unitFact(r); u != nil {
+		w("  req: %d\n", u.Member.ReqCount)
+		w("  success: %d\n", u.Member.SuccessCount)
+		w("  total_tokens: %d\n", u.Member.TotalTokens)
+		w("  cost_usd: %.4f\n", u.Member.EstCostUSD)
+		w("  service_req: %d\n", u.ServiceKey.ReqCount)
 	}
 	w("  total_tokens_note: \"prompt+completion+reasoning（不含 cached/cache_write）\"\n")
 	w("  baseline: \"GET /api/v1/usage/dashboard\"\n")
@@ -92,13 +98,22 @@ func writeFactTable(b *strings.Builder, r *report.Report) {
 		fmt.Fprintf(b, "| 总 Token | %d |\n", p.TotalTokens)
 		fmt.Fprintf(b, "| 成本 | `%.4f` USD |\n", p.EstCostUSD)
 		fmt.Fprintf(b, "| 模型数 | %d |\n", p.ModelCount)
-	} else if r.Fact.Department != nil {
-		u := r.Fact.Department
-		fmt.Fprintf(b, "| 成员调用 | %d（%d 人） |\n", u.Member.ReqCount, u.Member.ActiveUserCount)
+	} else if u := unitFact(r); u != nil {
+		fmt.Fprintf(b, "| 成员调用 | %d（花名册 %d 人，活跃 %d 人） |\n", u.Member.ReqCount, u.Member.UserCount, u.Member.ActiveUserCount)
 		fmt.Fprintf(b, "| 成员成功率 | %s |\n", pct(u.Member.SuccessCount, u.Member.ReqCount))
+		fmt.Fprintf(b, "| 成员 Token | %d |\n", u.Member.TotalTokens)
 		fmt.Fprintf(b, "| 成员成本 | `%.4f` USD |\n", u.Member.EstCostUSD)
 		fmt.Fprintf(b, "| Service Key 调用 | %d |\n", u.ServiceKey.ReqCount)
+		fmt.Fprintf(b, "| Service Key Token | %d |\n", u.ServiceKey.TotalTokens)
+		fmt.Fprintf(b, "| Service Key 成本 | `%.4f` USD |\n", u.ServiceKey.EstCostUSD)
 	}
+}
+
+func unitFact(r *report.Report) *report.UnitFact {
+	if r.Fact.Department != nil {
+		return r.Fact.Department
+	}
+	return r.Fact.Studio
 }
 
 func writeJudgment(b *strings.Builder, r *report.Report) {

@@ -97,6 +97,7 @@ func run(args []string) error {
 		},
 		Currency: report.Currency{Base: "USD", ReportCurrency: "CNY", USDCNYRate: cfg.USDCNYRate, RateSource: "config", RateAt: now.Format(time.RFC3339)},
 		QA: report.QA{Alignment: []string{
+			"`api_endpoints_used` 为本次流程规划使用的端点清单，不是逐请求审计日志；可选/失败端点仍可能列出。",
 			"成功=`status=200`；个人画像/岗位人均排除 `key_type='service'`；部门 Service Key 块仅 `=service` 且归属当前部门。",
 			"`total_tokens=prompt+completion+reasoning`（不含 cached/cache_write）；对账基准 `GET /api/v1/usage/dashboard`。",
 			"28 天基线采用期前 28 完整自然日（`from-28d ~ from-1d`）物化，口径=成员调用；若基线样本不足则降级为当前周期近似并注明（仅供自一致参考）。",
@@ -120,7 +121,10 @@ func run(args []string) error {
 	// 禁止混拼 /usage/dashboard/users* 存储列）。差异写入 QA.Alignment 说明。
 	reconcileWithDashboard(ctx, cli, cfg, scope, rep)
 
-	// 7) 渲染输出
+	// 7) 渲染输出：落盘前校验稳定契约，避免生成不可复用的半成品。
+	if err := rep.Validate(); err != nil {
+		return fmt.Errorf("报告契约校验失败: %w", err)
+	}
 	if cfg.JSONOut != "" {
 		if err := writeJSON(cfg.JSONOut, rep); err != nil {
 			return err

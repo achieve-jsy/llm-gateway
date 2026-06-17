@@ -7,6 +7,11 @@
 //   - 判定性分析全部确定性、可复现、可作依据；无依据不下结论。
 package report
 
+import (
+	"fmt"
+	"time"
+)
+
 // SchemaVersion 报告契约版本。
 const SchemaVersion = "1.0"
 
@@ -17,6 +22,59 @@ type Report struct {
 	Fact          Fact       `json:"fact"`
 	Judgment      Judgment   `json:"judgment"`
 	Expression    Expression `json:"expression"`
+}
+
+// Validate 校验可存档报告的最小稳定契约。
+func (r Report) Validate() error {
+	if r.SchemaVersion != SchemaVersion {
+		return fmt.Errorf("unsupported schema_version %q", r.SchemaVersion)
+	}
+	if r.Meta.Level != "personal" && r.Meta.Level != "department" && r.Meta.Level != "studio" {
+		return fmt.Errorf("invalid meta.level %q", r.Meta.Level)
+	}
+	if r.Meta.Scope.Level != r.Meta.Level {
+		return fmt.Errorf("meta.level %q does not match scope.level %q", r.Meta.Level, r.Meta.Scope.Level)
+	}
+	facts := 0
+	if r.Fact.Personal != nil {
+		facts++
+	}
+	if r.Fact.Department != nil {
+		facts++
+	}
+	if r.Fact.Studio != nil {
+		facts++
+	}
+	if facts != 1 {
+		return fmt.Errorf("fact must contain exactly one level, got %d", facts)
+	}
+	if r.Meta.Level == "personal" && r.Fact.Personal == nil || r.Meta.Level == "department" && r.Fact.Department == nil || r.Meta.Level == "studio" && r.Fact.Studio == nil {
+		return fmt.Errorf("fact does not match meta.level %q", r.Meta.Level)
+	}
+	from, err := time.Parse("2006-01-02", r.Meta.Period.From)
+	if err != nil {
+		return fmt.Errorf("invalid period.from: %w", err)
+	}
+	to, err := time.Parse("2006-01-02", r.Meta.Period.To)
+	if err != nil {
+		return fmt.Errorf("invalid period.to: %w", err)
+	}
+	if to.Before(from) {
+		return fmt.Errorf("period.to precedes period.from")
+	}
+	wantDays := int(to.Sub(from).Hours()/24) + 1
+	if r.Meta.Period.Days != wantDays {
+		return fmt.Errorf("period.days=%d, want inclusive %d", r.Meta.Period.Days, wantDays)
+	}
+	for name, value := range map[string]string{"generated_at": r.Meta.GeneratedAt, "data_retrieved_at": r.Meta.DataRetrievedAt} {
+		if _, err := time.Parse(time.RFC3339, value); err != nil {
+			return fmt.Errorf("invalid %s: %w", name, err)
+		}
+	}
+	if r.Meta.Currency.USDCNYRate <= 0 {
+		return fmt.Errorf("currency.usd_cny_rate must be positive")
+	}
+	return nil
 }
 
 // Meta 元信息。

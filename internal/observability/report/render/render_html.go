@@ -50,8 +50,7 @@ func toDigest(r *report.Report) digest {
 		d.TotalTokens = p.TotalTokens
 		d.SuccessRate = pct(p.SuccessCount, p.ReqCount)
 		d.CostUSD = fmt2(p.EstCostUSD)
-	} else if r.Fact.Department != nil {
-		u := r.Fact.Department
+	} else if u := unitFact(r); u != nil {
 		d.ReqCount = u.Member.ReqCount
 		d.TotalTokens = u.Member.TotalTokens
 		d.SuccessRate = pct(u.Member.SuccessCount, u.Member.ReqCount)

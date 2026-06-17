@@ -76,7 +76,7 @@ func TestDeriveAndRender(t *testing.T) {
 		t.Errorf("expected A4 hit (near-limit prompt); got %+v", rep.Judgment.Anomalies)
 	}
 	md := render.RenderMD(rep)
-	if !strings.Contains(md, "用量周报") {
+	if !strings.Contains(md, "个人周报") && !strings.Contains(md, "用量周报") {
 		t.Errorf("MD missing title")
 	}
 	html := render.RenderHTML(rep)

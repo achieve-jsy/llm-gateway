@@ -5,6 +5,7 @@ package derive
 // 三层数据流在此收口；输入为数据源无关的 ReportInput（[]DailyMetric + []CallEvent + CohortDef）。
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -51,6 +52,9 @@ func Derive(meta report.Meta, in report.ReportInput, rules report.RuleSet) (*rep
 
 	// 同岗使用效能画像（Vicky 多指标分位表）；样本不足时指标级降级，不整体判失败。
 	judge.PeerProfiles = buildPeerProfiles(in, rep.Fact, rules.MinCohortSample)
+
+	// 第四章：成本最高模型的同岗画像（仅个人粒度）。
+	judge.TopModelPortrait = buildTopModelPortrait(in, rep.Fact, rules.MinCohortSample)
 
 	// 个人报告补充：同岗 Target 的周环比与成本最高模型（来自服务端聚合，不经明细；agg/明细两模式共用）。
 	if rep.Fact.Personal != nil && in.Cohort.Target.WoWCostPct != 0 {
@@ -630,11 +634,84 @@ func buildPeerProfiles(in report.ReportInput, f report.Fact, minSample int) []re
 	return out
 }
 
+// buildTopModelPortrait 计算 Vicky 第四章「成本最高模型的同岗画像」。
+// 从本人 TopModels[0] 取成本最高模型，遍历同岗池成员找出也用过该模型的采用者，
+// 算采用率 / 频率 P50 / 成本依赖 P50 / 单位成本 P50（全部在采用者子集内）。
+func buildTopModelPortrait(in report.ReportInput, f report.Fact, minSample int) *report.TopModelPortrait {
+	if f.Personal == nil || len(f.Personal.TopModels) == 0 || f.Personal.TopModels[0].CostUSD == 0 {
+		return nil
+	}
+	topModel := f.Personal.TopModels[0].Model
+	personCostUSD := f.Personal.TopModels[0].CostUSD
+	personCalls := float64(f.Personal.TopModels[0].Calls)
+
+	portrait := &report.TopModelPortrait{
+		Model:           topModel,
+		PersonCostUSD:   personCostUSD,
+		PersonFreq:      personCalls,
+		PoolN:           len(in.Cohort.Members),
+	}
+	if f.Personal.EstCostUSD > 0 {
+		portrait.PersonCostRatio = personCostUSD / f.Personal.EstCostUSD
+	}
+	if f.Personal.TotalTokens > 0 && personCostUSD > 0 {
+		personTokens := f.Personal.TopModels[0].TotalTokens
+		if personTokens > 0 {
+			portrait.PersonUnitCost = personCostUSD / float64(personTokens) * 1e6
+		}
+	}
+
+	// 遍历同岗池，找采用了该模型的成员
+	var freqVals, costDepVals, unitCostVals []float64
+	for _, m := range in.Cohort.Members {
+		for _, tm := range m.Metrics.TopModels {
+			if tm.Model != topModel {
+				continue
+			}
+			portrait.AdoptionCount++
+			freqVals = append(freqVals, float64(tm.CallCount))
+			if m.Metrics.EstCostUSD > 0 {
+				costDepVals = append(costDepVals, tm.CostUSD/m.Metrics.EstCostUSD)
+			}
+			if tm.TotalTokens > 0 {
+				unitCostVals = append(unitCostVals, tm.CostUSD/float64(tm.TotalTokens)*1e6)
+			}
+			break
+		}
+	}
+	if portrait.PoolN > 0 {
+		portrait.AdoptionRate = float64(portrait.AdoptionCount) / float64(portrait.PoolN)
+	}
+	if len(freqVals) < minSample {
+		portrait.Supported = false
+		portrait.Note = "采用者样本 <" + itoa(minSample) + "，分位数据不可靠，仅展示采用率。"
+		return portrait
+	}
+	portrait.Supported = true
+	sort.Float64s(freqVals)
+	portrait.FreqP50 = Percentile(freqVals, 50)
+	portrait.PersonFreqRank = PercentRank(freqVals, personCalls)
+	if len(costDepVals) >= minSample {
+		sort.Float64s(costDepVals)
+		portrait.CostDepP50 = Percentile(costDepVals, 50)
+		portrait.PersonCostDepRank = PercentRank(costDepVals, portrait.PersonCostRatio)
+	}
+	if len(unitCostVals) >= minSample {
+		sort.Float64s(unitCostVals)
+		portrait.UnitCostP50 = Percentile(unitCostVals, 50)
+		portrait.PersonUnitCostRank = PercentRank(unitCostVals, portrait.PersonUnitCost)
+	}
+	return portrait
+}
+
 // ---- 表达层 ----
 
 func buildExpression(rep *report.Report, rules report.RuleSet) report.Expression {
 	expr := report.Expression{Lang: "zh", Audience: "个人/单元负责人", Tone: "中性/基于证据"}
 	j := &rep.Judgment
+	p := rep.Fact.Personal
+
+	// ── 异常摘要 ──────────────────────────────────────────────────
 	hitCount := 0
 	sev := ""
 	severityRank := map[string]int{"P0": 0, "P1": 1, "P2": 2, "P3": 3}
@@ -652,23 +729,153 @@ func buildExpression(rep *report.Report, rules report.RuleSet) report.Expression
 	} else {
 		expr.Headline = "本周期命中 " + itoa(hitCount) + " 条规则异常（" + sev + "）"
 	}
-	// insights：只引用已存在标签/规则名，不引入新数字
+
+	// ── 效能标签（个人粒度 + 同岗画像有数据才产出）────────────────
+	if p != nil && len(j.PeerProfiles) > 0 {
+		expr.EfficiencyLabel = buildEfficiencyLabel(p, j.PeerProfiles)
+	}
+
+	// ── insights ─────────────────────────────────────────────────
 	for _, lbl := range j.Anomalies {
 		if lbl.Hit {
 			expr.Insights = append(expr.Insights, "命中规则 "+lbl.Rule+"（"+lbl.Name+"）："+lbl.Note)
 		}
 	}
-	// suggestions：基于命中规则给措辞，不含新数字
+
+	// ── suggestions：异常规则建议 ─────────────────────────────────
 	for _, a := range j.Anomalies {
 		if a.Hit {
 			expr.Suggestions = append(expr.Suggestions, suggestionsFor(a.Rule, a.Name))
 		}
 	}
+
+	// ── suggestions：数据驱动建议（基于已算指标，无 LLM）─────────
+	if p != nil {
+		expr.Suggestions = append(expr.Suggestions, dataBasedSuggestions(p, j)...)
+	}
+
 	if len(expr.Suggestions) == 0 {
 		expr.Suggestions = []string{"未命中规则型异常，保持现状并在下期继续观察。"}
 	}
 	return expr
 }
+
+// buildEfficiencyLabel 从同岗 7 指标分位综合判断效能标签（确定性，参考 Vicky 模板）。
+// 规则：采用量（调用/Token/活跃）高于 P50 → 高采用；低于 P25 → 低采用；其余 → 中等采用。
+// 效能（成本/上下文/缓存）处于 P75 以上偏高 → 待优化；低于 P50 → 良好；否则 → 正常。
+func buildEfficiencyLabel(p *report.PersonalFact, profiles []report.PeerMetric) string {
+	usageRank := -1.0   // 调用量维度在同岗的平均分位（calls/tokens/active_days 均值）
+	effRank := -1.0     // 效能维度（cost/ctx/cache）中最差的分位
+
+	usageCnt := 0
+	for _, pm := range profiles {
+		if !pm.Supported {
+			continue
+		}
+		switch pm.Metric {
+		case "weekly_calls", "weekly_tokens", "active_days":
+			if usageRank < 0 {
+				usageRank = pm.PercentileRank
+			} else {
+				usageRank = (usageRank + pm.PercentileRank) / 2
+			}
+			usageCnt++
+		case "cost_per_1m":
+			// 成本越高分位越高 → 越"待优化"
+			if effRank < pm.PercentileRank {
+				effRank = pm.PercentileRank
+			}
+		case "avg_input_ctx":
+			if effRank < pm.PercentileRank {
+				effRank = pm.PercentileRank
+			}
+		case "cache_hit_rate":
+			// 缓存占比越高越好；低分位 = 待优化
+			inv := 1 - pm.PercentileRank
+			if effRank < inv {
+				effRank = inv
+			}
+		}
+	}
+	if usageCnt == 0 && effRank < 0 {
+		return ""
+	}
+
+	usagePart := "中等采用"
+	if usageRank >= 0 {
+		switch {
+		case usageRank >= 0.6:
+			usagePart = "高采用"
+		case usageRank < 0.3:
+			usagePart = "低采用"
+		}
+	}
+	effPart := "效能正常"
+	if effRank >= 0 {
+		switch {
+		case effRank >= 0.75:
+			effPart = "待优化"
+		case effRank < 0.4:
+			effPart = "效能良好"
+		}
+	}
+	return usagePart + "、" + effPart
+}
+
+// dataBasedSuggestions 基于已算 PersonalFact 指标生成具体建议（确定性，无 LLM）。
+func dataBasedSuggestions(p *report.PersonalFact, j *report.Judgment) []string {
+	var sugs []string
+
+	// 建议：输入上下文偏高
+	if p.AvgInputCtxTokens > 0 {
+		for _, pm := range j.PeerProfiles {
+			if pm.Metric == "avg_input_ctx" && pm.Supported && pm.PercentileRank >= 0.75 {
+				sugs = append(sugs, "上下文：单次平均输入（"+fmtK(p.AvgInputCtxTokens)+"k token）高于同岗 P75，建议压缩历史会话或用检索召回替代长上下文。")
+				break
+			}
+		}
+	}
+
+	// 建议：缓存占比偏低
+	if p.CacheHitRate >= 0 {
+		for _, pm := range j.PeerProfiles {
+			if pm.Metric == "cache_hit_rate" && pm.Supported && pm.PercentileRank < 0.25 {
+				sugs = append(sugs, "缓存：缓存 Token 占比（"+pctStr(p.CacheHitRate)+"）低于同岗 P25，检查是否反复传相同前缀，可启用 prompt caching 节省成本。")
+				break
+			}
+		}
+	}
+
+	// 建议：每百万 Token 成本偏高
+	if p.CostPer1Million > 0 {
+		for _, pm := range j.PeerProfiles {
+			if pm.Metric == "cost_per_1m" && pm.Supported && pm.PercentileRank >= 0.75 {
+				sugs = append(sugs, "合理用模：每百万 Token 成本（"+fmtUSD(p.CostPer1Million)+"/M）高于同岗 P75，可评估对部分场景降级至更经济模型。")
+				break
+			}
+		}
+	}
+
+	// 建议：成本下降（正面反馈）
+	if p.WoWCostPct < -20 {
+		sugs = append(sugs, "成本：本周成本环比下降 "+pctStr(-p.WoWCostPct)+"，趋势良好，持续保持。")
+	}
+	// 建议：成本上升且无异常命中
+	if p.WoWCostPct > 50 && j.TopModelPortrait != nil && !j.TopModelPortrait.Supported {
+		sugs = append(sugs, "成本：本周成本环比上升 "+pctStr(p.WoWCostPct)+"，建议关注调用量或模型选择变化。")
+	}
+
+	return sugs
+}
+
+func fmtK(v float64) string { return fmt.Sprintf("%.0f", v/1000) }
+func pctStr(v float64) string {
+	if v < 1 {
+		return fmt.Sprintf("%.1f%%", v*100)
+	}
+	return fmt.Sprintf("%.1f%%", v)
+}
+func fmtUSD(v float64) string { return fmt.Sprintf("$%.2f", v) }
 
 func suggestionsFor(rule, name string) string {
 	switch rule {

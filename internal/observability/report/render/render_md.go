@@ -38,7 +38,25 @@ func RenderMD(r *report.Report) string {
 	w("  schema_version: %s\n", r.SchemaVersion)
 	w("---\n\n")
 
-	w("# 用量周报 · %s\n\n", r.Expression.Headline)
+	if r.Fact.Personal != nil {
+		// Vicky 格式标题：# 个人周报 · 周期 · 姓名（岗位 / 工作室）
+		title := scopeLabel(r.Meta.Scope)
+		if r.Meta.Scope.JobCategory != "" || r.Meta.Scope.JobFamily != "" {
+			job := r.Meta.Scope.JobCategory
+			if job == "" {
+				job = r.Meta.Scope.JobFamily
+			}
+			extra := job
+			if r.Meta.Scope.StudioID != "" {
+				extra += " / " + r.Meta.Scope.StudioID
+			}
+			title += "（" + extra + "）"
+		}
+		w("# 个人周报 · %s · %s\n\n", r.Meta.Period.From+"~"+r.Meta.Period.To, title)
+		w("【本周结论】%s\n\n", buildWeeklyConclusion(r))
+	} else {
+		w("# 用量周报 · %s\n\n", r.Expression.Headline)
+	}
 	w("> **级别**：%s · **范围**：%s\n", levelLabel(r.Meta.Level), scopeLabel(r.Meta.Scope))
 	w("> **周期**：%s（%s ~ %s，%d 天）\n", r.Meta.Period.Label, r.Meta.Period.From, r.Meta.Period.To, r.Meta.Period.Days)
 	w("> **币种**：%s（USD→CNY %.4f）\n\n", r.Meta.Currency.ReportCurrency, r.Meta.Currency.USDCNYRate)
@@ -253,7 +271,8 @@ func writePersonalSections(b *strings.Builder, r *report.Report) {
 	// 二、纵向基线
 	fmt.Fprintf(b, "\n## 纵向基线\n\n")
 	if j.Baseline.Supported {
-		fmt.Fprintf(b, "- vs 本人过去 %d 天：成本处于 P%.0f（MAD 偏离 %.2fσ，%s）\n", j.Baseline.WindowDays, j.Baseline.Percentile*100, j.Baseline.DevSigma, j.Baseline.Trend)
+		fmt.Fprintf(b, "- vs 本人过去 %d 天：成本处于 P%.0f（MAD 偏离 %.2fσ，%s）\n",
+			j.Baseline.WindowDays, j.Baseline.Percentile*100, j.Baseline.DevSigma, j.Baseline.Trend)
 	} else {
 		fmt.Fprintf(b, "- %s\n", j.Baseline.Note)
 	}
@@ -261,35 +280,94 @@ func writePersonalSections(b *strings.Builder, r *report.Report) {
 	// 三、同岗使用效能画像
 	fmt.Fprintf(b, "\n## 同岗使用效能画像\n\n")
 	if len(j.PeerProfiles) > 0 {
-		fmt.Fprintf(b, "对标范围：%s（N=%d）。\n\n", j.Peer.PoolType, j.Peer.SampleN)
+		poolDesc := j.Peer.PoolType
+		if j.Peer.SampleN > 0 {
+			poolDesc = fmt.Sprintf("%s（N=%d；不足 5 人则扩展至全公司同岗）", j.Peer.PoolType, j.Peer.SampleN)
+		}
+		fmt.Fprintf(b, "对标范围：%s。\n\n", poolDesc)
 		fmt.Fprintf(b, "| 指标 | 本人 | 同岗 P50 | 本人分位 |\n|---|---:|---:|---:|\n")
 		for _, pm := range j.PeerProfiles {
 			if !pm.Supported {
-				fmt.Fprintf(b, "| %s | %s | %s | %s |\n", pm.Label, fmtVal(pm.Current), fmtVal(pm.P50), pm.Note)
+				fmt.Fprintf(b, "| %s | %s | — | 样本不足 |\n", pm.Label, fmtVal(pm.Current))
 				continue
 			}
-			fmt.Fprintf(b, "| %s | %s | %s | P%.0f |\n", pm.Label, fmtVal(pm.Current), fmtVal(pm.P50), pm.PercentileRank*100)
+			fmt.Fprintf(b, "| %s | %s | %s | P%.0f |\n",
+				pm.Label, fmtVal(pm.Current), fmtVal(pm.P50), pm.PercentileRank*100)
 		}
+		// 效能标签
+		if r.Expression.EfficiencyLabel != "" {
+			fmt.Fprintf(b, "\n- 使用效能标签：**%s**\n", r.Expression.EfficiencyLabel)
+		}
+		fmt.Fprintf(b, "- 本画像用于资源治理、优秀实践沉淀和使用辅导；不单独作为能力或绩效结论。\n")
 	} else {
 		fmt.Fprintf(b, "- 无同岗样本，不产出分位。\n")
 	}
 
 	// 四、成本最高模型的同岗画像
-	if p.TopModel != "" {
-		fmt.Fprintf(b, "\n## 成本最高模型画像\n\n")
-		fmt.Fprintf(b, "- 成本最高模型：`%s`；本人该模型成本 `%s`，占本周总成本 %s。\n", p.TopModel, cny(topModelCostUSD(p), rate), pctP(p.HighTierCostRatio))
-		if p.ModelCount > 1 {
-			fmt.Fprintf(b, "- 同岗采用率：见上方同岗画像（同岗位上使用该模型的比例由池内统计）。\n")
+	if mp := j.TopModelPortrait; mp != nil {
+		fmt.Fprintf(b, "\n## 成本最高模型的同岗画像\n\n")
+		fmt.Fprintf(b, "- 成本最高模型：`%s`；本人该模型成本 `%s`，占本周总成本 %s。\n",
+			mp.Model, cny(mp.PersonCostUSD, rate), pctP(mp.PersonCostRatio))
+		if mp.PoolN > 0 {
+			fmt.Fprintf(b, "- 同岗采用率：同岗 %d 人中 %d 人本周使用过该模型，占 %s。\n",
+				mp.PoolN, mp.AdoptionCount, pctP(mp.AdoptionRate))
 		}
+		if mp.Supported {
+			fmt.Fprintf(b, "- 同岗使用频率：仅采用者中比较，周调用 P50 为 %.0f 次；本人 %.0f 次，P%.0f。\n",
+				mp.FreqP50, mp.PersonFreq, mp.PersonFreqRank*100)
+			if mp.CostDepP50 > 0 {
+				fmt.Fprintf(b, "- 同岗成本依赖：采用者该模型成本占比 P50 为 %s；本人 %s，P%.0f。\n",
+					pctP(mp.CostDepP50), pctP(mp.PersonCostRatio), mp.PersonCostDepRank*100)
+			}
+			if mp.UnitCostP50 > 0 {
+				fmt.Fprintf(b, "- 同岗单位成本：采用者 P50 为 `%s / 百万 Token`；本人 `%s`，P%.0f。\n",
+					cny(mp.UnitCostP50, rate), cny(mp.PersonUnitCost, rate), mp.PersonUnitCostRank*100)
+			}
+		} else if mp.Note != "" {
+			fmt.Fprintf(b, "- %s\n", mp.Note)
+		}
+	} else if p.TopModel != "" {
+		// 有成本最高模型但无同岗池时简要输出
+		fmt.Fprintf(b, "\n## 成本最高模型\n\n")
+		fmt.Fprintf(b, "- 成本最高模型：`%s`，本周成本 `%s`，占比 %s。\n",
+			p.TopModel, cny(topModelCostUSD(p), rate), pctP(p.HighTierCostRatio))
 	}
 
-	// 五、场景与合理用模（确定性布局：仅当有模型分布时给提示）
+	// 五、场景与合理用模
 	if len(p.TopModels) > 0 {
 		fmt.Fprintf(b, "\n## 场景与合理用模\n\n")
 		top := p.TopModels[0]
-		fmt.Fprintf(b, "- 主用模型：`%s`（占调用 %s）。\n", top.Model, pct(top.Calls, p.ReqCount))
-		fmt.Fprintf(b, "- 建议：结合上方同岗画像判断是否存在模型选择/上下文优化空间。\n")
+		fmt.Fprintf(b, "- 主用模型：`%s`（占调用 %s，成本 `%s`）。\n",
+			top.Model, pct(top.Calls, p.ReqCount), cny(top.CostUSD, rate))
+		if p.ModelCount > 1 {
+			fmt.Fprintf(b, "- 本周共使用 %d 个模型；成本最高模型占比见上方第四章。\n", p.ModelCount)
+		}
 	}
+
+	// 七、优化建议（data-based，写入 ## 建议 之前由 RenderMD 统一输出，这里不重复）
+}
+
+// buildWeeklyConclusion 生成「本周结论」一行（确定性，基于已算字段）。
+func buildWeeklyConclusion(r *report.Report) string {
+	p := r.Fact.Personal
+	j := &r.Judgment
+	// 最高优先级：异常命中
+	for _, a := range j.Anomalies {
+		if a.Hit {
+			return "关注 —— 命中 " + a.Rule + "（" + a.Name + "），" + a.Severity
+		}
+	}
+	// 次优先：成本大幅波动
+	if p != nil {
+		if p.WoWCostPct >= 50 {
+			return fmt.Sprintf("关注 —— 成本环比 +%.0f%%，建议关注用量变化", p.WoWCostPct)
+		}
+		if p.WoWCostPct <= -30 {
+			return fmt.Sprintf("良好 —— 成本环比下降 %.0f%%，持续保持", -p.WoWCostPct)
+		}
+	}
+	// 默认
+	return "正常 —— " + r.Expression.Headline
 }
 
 // fmtVal 精简数值展示：整数无小数，小数保留 2 位。

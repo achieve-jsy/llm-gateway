@@ -62,6 +62,7 @@ func buildCohort(ctx context.Context, cli *client.Client, cfg Config, scope repo
 		cm := report.CohortMetrics{
 			ReqCount:    row.CallCount,
 			TotalTokens: row.TotalTokens,
+			EstCostUSD:  row.EstCostUSD,
 			ActiveDays:  row.ActiveDays,
 		}
 		if row.CallCount > 0 && row.PromptTokens > 0 {
@@ -75,6 +76,15 @@ func buildCohort(ctx context.Context, cli *client.Client, cfg Config, scope repo
 		}
 		if row.EstCostUSD > 0 && row.TopModelCostUSD > 0 {
 			cm.HighTierCostRatio = row.TopModelCostUSD / row.EstCostUSD
+		}
+		// TopModels 接线：供第四章同岗模型采用率/P50 计算
+		for _, tm := range row.TopModels {
+			if tm.Model != "" {
+				cm.TopModels = append(cm.TopModels, report.CohortTopModel{
+					Model: tm.Model, CostUSD: tm.EstCostUSD,
+					CallCount: tm.CallCount, TotalTokens: tm.TotalTokens,
+				})
+			}
 		}
 		// 有任一有效指标才入池（避免纯 0 空值污染分位）
 		if cm.ReqCount > 0 || cm.TotalTokens > 0 || cm.ActiveDays > 0 {

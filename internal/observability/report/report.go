@@ -220,13 +220,35 @@ type TopModel struct {
 // ===== 判断层（算法可复算；命中必须附证据）=====
 
 type Judgment struct {
-	Baseline     Baseline      `json:"baseline"`
-	Peer         Peer          `json:"peer"`
-	PeerProfiles []PeerMetric  `json:"peer_profiles"` // Vicky「同岗使用效能画像」多指标分位表
-	Efficiency   Efficiency    `json:"efficiency"`
-	Anomalies    []AnomalyHit  `json:"anomalies"`
-	Attribution  []Attribution `json:"attribution"`
-	NotComputed  []NotComputed `json:"not_computed"`
+	Baseline         Baseline          `json:"baseline"`
+	Peer             Peer              `json:"peer"`
+	PeerProfiles     []PeerMetric      `json:"peer_profiles"`     // Vicky「同岗使用效能画像」多指标分位表
+	TopModelPortrait *TopModelPortrait `json:"top_model_portrait"` // Vicky「成本最高模型的同岗画像」第四章
+	Efficiency       Efficiency        `json:"efficiency"`
+	Anomalies        []AnomalyHit      `json:"anomalies"`
+	Attribution      []Attribution     `json:"attribution"`
+	NotComputed      []NotComputed     `json:"not_computed"`
+}
+
+// TopModelPortrait 成本最高模型的同岗画像（Vicky 第四章）。
+// 仅个人粒度产出；单元级为 nil。
+type TopModelPortrait struct {
+	Model             string  `json:"model"`               // 成本最高模型名
+	PersonCostUSD     float64 `json:"person_cost_usd"`     // 本人该模型成本
+	PersonCostRatio   float64 `json:"person_cost_ratio"`   // 本人该模型成本占比
+	AdoptionCount     int     `json:"adoption_count"`      // 同岗中使用过该模型的人数
+	PoolN             int     `json:"pool_n"`              // 同岗总人数
+	AdoptionRate      float64 `json:"adoption_rate"`       // 采用率 = AdoptionCount / PoolN
+	FreqP50           float64 `json:"freq_p50"`            // 采用者中该模型周调用 P50
+	PersonFreq        float64 `json:"person_freq"`         // 本人该模型调用数
+	PersonFreqRank    float64 `json:"person_freq_rank"`    // 本人在采用者中调用分位
+	CostDepP50        float64 `json:"cost_dep_p50"`        // 采用者中该模型成本占比 P50
+	PersonCostDepRank float64 `json:"person_cost_dep_rank"` // 本人成本依赖在采用者中的分位
+	UnitCostP50       float64 `json:"unit_cost_p50"`       // 采用者中该模型每百万 Token 成本 P50（USD）
+	PersonUnitCost    float64 `json:"person_unit_cost"`    // 本人该模型单位成本（USD/百万 Token）
+	PersonUnitCostRank float64 `json:"person_unit_cost_rank"` // 本人单位成本在采用者中的分位
+	Supported         bool    `json:"supported"`
+	Note              string  `json:"note,omitempty"`
 }
 
 // PeerMetric 同岗画像单个指标的分位（本人 vs 同岗 P50 + 分位 rank）。
@@ -332,10 +354,11 @@ type NotComputed struct {
 // ===== 表达层（只读措辞：只引用 fact/judgment 已存在字段，禁止裸数字）=====
 
 type Expression struct {
-	Headline    string   `json:"headline"`
-	Insights    []string `json:"insights"`
-	Suggestions []string `json:"suggestions"`
-	Tone        string   `json:"tone"`
-	Lang        string   `json:"lang"`
-	Audience    string   `json:"audience"`
+	Headline        string   `json:"headline"`
+	Insights        []string `json:"insights"`
+	Suggestions     []string `json:"suggestions"`
+	EfficiencyLabel string   `json:"efficiency_label,omitempty"` // 效能标签，如「高采用、待优化」
+	Tone            string   `json:"tone"`
+	Lang            string   `json:"lang"`
+	Audience        string   `json:"audience"`
 }

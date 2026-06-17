@@ -151,11 +151,21 @@ type CohortMember struct {
 type CohortMetrics struct {
 	ReqCount          int64   // 周调用次数
 	TotalTokens       int64   // 周 Token 总量
+	EstCostUSD        float64 // 周成本 USD（第四章分母）
 	ActiveDays        int64   // 活跃天数
 	AvgInputCtxTokens float64 // 平均输入上下文长度 = prompt_total / req
 	CacheHitRate      float64 // 缓存 Token 占比 = cached / prompt_total
 	CostPer1kTokens   float64 // 每百万 Token 成本 = cost / total_tokens * 1e6
 	HighTierCostRatio float64 // 成本最高模型成本占比 = top_model_cost / total_cost
+	TopModels         []CohortTopModel // 该成员 Top3 模型（供第四章同岗模型采用率/P50 计算）
+}
+
+// CohortTopModel 同岗池成员的单个 Top 模型（来自 dashboard/users top_models）。
+type CohortTopModel struct {
+	Model       string
+	CostUSD     float64
+	CallCount   int64
+	TotalTokens int64
 }
 
 // RuleSet 阈值与参数集中地（阶段一默认值；均来自文档/任务描述，T4 用真实数据校准）。

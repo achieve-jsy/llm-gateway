@@ -1202,6 +1202,95 @@ func (h *UsageHandler) ReportBaseline(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"daily": days, "minute_buckets": buckets})
 }
 
+// MemberAggRow 成员级聚合单行：按 user 聚合返回核心单一指标。
+// 口径：排除 service；user_name/job_category 来自 users (u.id::text = cl.user_id)；
+// dept_id/studio_id 取 call_logs 原始列（供上层 rollup 用）。
+type MemberAggRow struct {
+	UserID           string  `json:"user_id"            gorm:"column:user_id"`
+	UserName         string  `json:"user_name"          gorm:"column:user_name"`
+	JobCategory      string  `json:"job_category"       gorm:"column:job_category"`
+	DeptID           string  `json:"dept_id"            gorm:"column:dept_id"`
+	StudioID         string  `json:"studio_id"          gorm:"column:studio_id"`
+	ReqCount         int64   `json:"req_count"          gorm:"column:req_count"`
+	SuccessCount     int64   `json:"success_count"      gorm:"column:success_count"`
+	ErrorCount       int64   `json:"error_count"        gorm:"column:error_count"`
+	PromptTokens     int64   `json:"prompt_tokens"      gorm:"column:prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"  gorm:"column:completion_tokens"`
+	ReasoningTokens  int64   `json:"reasoning_tokens"   gorm:"column:reasoning_tokens"`
+	CachedTokens     int64   `json:"cached_tokens"      gorm:"column:cached_tokens"`
+	TotalTokens      int64   `json:"total_tokens"       gorm:"column:total_tokens"`
+	CostUSD          float64 `json:"cost_usd"           gorm:"column:cost_usd"`
+	ActiveDays       int64   `json:"active_days"        gorm:"column:active_days"`
+	ModelCount       int     `json:"model_count"        gorm:"column:model_count"`
+}
+
+// ReportMembers 成员级聚合接口：按 user_id 聚合返回每人一行的单一指标。
+// 语义：个人画像口径排除 service；用于整个「按人统计 + 逐层横向对比」方案的人工层地基。
+// 表名用无别名 call_logs（与 QueryScope 的 call_logs. 前缀一致，避免非全局角色下前缀失效）。
+func (h *UsageHandler) ReportMembers(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db not configured"})
+		return
+	}
+	startStr := c.DefaultQuery("start", time.Now().AddDate(0, -1, 0).Format("2006-01-02"))
+	endStr := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
+	filterUserID := c.Query("user_id")
+	filterDeptID := c.Query("dept_id")
+	filterStudioID := c.Query("studio_id")
+
+	db := h.db.WithContext(c.Request.Context())
+
+	// 无别名 call_logs，让 UsagePolicy.QueryScope 的 call_logs. 前缀天然有效。
+	base := db.Table("call_logs").
+		Where("call_logs.ts >= ?::date AND call_logs.ts < (?::date + INTERVAL '1 day')", startStr, endStr).
+		Where(`COALESCE(NULLIF(call_logs.key_type, ''), 'personal') != 'service'`).
+		Scopes(policy.UsagePolicy{}.QueryScope(rbac.GetActor(c)))
+
+	if filterUserID != "" {
+		base = base.Where("call_logs.user_id = ?", filterUserID)
+	}
+	if filterDeptID != "" {
+		// 部门双 ID 归一：直接 dept_id，或 departments.id（UUID），或 user→dept 映射。
+		base = base.Where(`call_logs.dept_id = ?
+			OR call_logs.dept_id IN (SELECT d.id::text FROM departments d WHERE d.dept_id = ? OR d.id::text = ?)
+			OR call_logs.user_id IN (SELECT u.id::text FROM users u JOIN departments d ON d.id = u.dept_id WHERE d.dept_id = ? OR d.id::text = ?)`,
+			filterDeptID, filterDeptID, filterDeptID, filterDeptID, filterDeptID)
+	}
+	if filterStudioID != "" {
+		base = base.Where("call_logs.studio_id = ?", filterStudioID)
+	}
+
+	// 按 user_id 聚合：每人一行核心单一指标。LEFT JOIN users 取 name/job_category；
+	// dept/studio 用 call_logs 原始列（无需 JOIN 地图即可供上层按列 rollup）。
+	var rows []MemberAggRow
+	if err := base.Select(`
+		COALESCE(call_logs.user_id, '') AS user_id,
+		COALESCE(u.name, '') AS user_name,
+		COALESCE(u.job_category, '') AS job_category,
+		COALESCE(call_logs.dept_id, '') AS dept_id,
+		COALESCE(call_logs.studio_id, '') AS studio_id,
+		COUNT(*) AS req_count,
+		COUNT(*) FILTER (WHERE call_logs.status = 200) AS success_count,
+		COUNT(*) FILTER (WHERE call_logs.status != 200) AS error_count,
+		COALESCE(SUM(call_logs.prompt_tokens), 0) AS prompt_tokens,
+		COALESCE(SUM(call_logs.completion_tokens), 0) AS completion_tokens,
+		COALESCE(SUM(call_logs.reasoning_tokens), 0) AS reasoning_tokens,
+		COALESCE(SUM(call_logs.cached_tokens), 0) AS cached_tokens,
+		COALESCE(SUM(call_logs.prompt_tokens + call_logs.completion_tokens + call_logs.reasoning_tokens), 0) AS total_tokens,
+		COALESCE(SUM(call_logs.est_cost_usd), 0) AS cost_usd,
+		COUNT(DISTINCT call_logs.ts::date) AS active_days,
+		COUNT(DISTINCT call_logs.model) AS model_count`).
+		Joins("LEFT JOIN users u ON u.id::text = call_logs.user_id").
+		Group("call_logs.user_id, u.name, u.job_category, call_logs.dept_id, call_logs.studio_id").
+		Order("cost_usd DESC").
+		Scan(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"rows": rows})
+}
+
 type UserRankRow struct {
 	UserID           string  `json:"user_id"           gorm:"column:user_id"`
 	UserName         string  `json:"user_name"         gorm:"column:user_name"`

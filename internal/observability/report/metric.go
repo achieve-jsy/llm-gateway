@@ -60,10 +60,36 @@ type CallEvent struct {
 	InboundEndpoint    string
 }
 
+// MemberAgg 归一化的成员级聚合行（每人一行、周期聚合、排除 service）。
+// 数据源无关：阶段二 main.go 用 FetchMemberAgg(/usage/report/members) 填充，供「按人统计 + 逐层横向对比」
+// 人工层地基与 UnitFact/PersonalFact 的成员加法核心。与 DailyMetric 粒度不同（无日期/模型/key 维度），
+// 只能复现加法/计数子集，无法还原 TopModels/ServiceKey/日模型分布。
+type MemberAgg struct {
+	UserID           string
+	UserName         string
+	JobCategory      string
+	DeptID           string
+	StudioID         string
+	ReqCount         int64
+	SuccessCount     int64
+	ErrorCount       int64
+	PromptTokens     int64
+	CompletionTokens int64
+	ReasoningTokens  int64
+	CachedTokens     int64
+	TotalTokens      int64
+	CostUSD          float64
+	ActiveDays       int64
+	ModelCount       int
+}
+
 // ReportInput 派生输入：基线/分位用日聚合，A1–A5 用逐调用事件。
 type ReportInput struct {
 	Metrics []DailyMetric
 	Calls   []CallEvent
+	// MemberAgg 成员级聚合行（排除 service）。非空且 Metrics 为空时，事实层成员加法核心由它构造
+	// （用于不拉全量明细的大部门/工作室）；若同时存在 Metrics(明细派生)，以 Metrics 为准（保真 TopModels/ServiceKey/日模型分布）。
+	MemberAgg []MemberAgg
 	// BaselineCalls 期前历史窗口逐调用事件，供 A1/A2 计算真实历史窗口分布。
 	// 为空时 A1 仅使用绝对阈值，A2 仅保留绝对阈值/HARD_CAP，且不得标记为 28 天基线。
 	BaselineCalls []CallEvent

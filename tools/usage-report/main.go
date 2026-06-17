@@ -5,9 +5,11 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -43,32 +45,68 @@ func run(args []string) error {
 	ctx := context.Background()
 	cli := client.New(cfg.BaseURL, cfg.Token, client.WithMaxLogs(cfg.MaxLogs))
 
+	// 批量编排（--all）：枚举指定 level 的全体对象，各出一份报告 + 一条汇总索引。
+	if cfg.All {
+		return runAll(ctx, cli, cfg)
+	}
+
 	// 1) 解析范围（名称/studio/dept）
 	scope, err := resolveScope(ctx, cli, cfg)
 	if err != nil {
 		return err
 	}
+	_, err = runOne(ctx, cli, cfg, scope)
+	return err
+}
 
+// runOne 对单个已解析 scope 生成并落盘一份报告，返回该对象的关键指标（供批量汇总索引）。
+// 主体 = 数据获取 → 基线/预算/同岗 → derive → 渲染写盘；scope 解析由调用方完成。
+func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Scope) (*BatchSummary, error) {
 	// 口径④：personal 画像/岗位人均排除 key_type='service' → 按 key_type=personal 过滤 /usage/logs。
 	if cfg.Level == "personal" && cfg.KeyType == "" {
 		cfg.KeyType = "personal"
 	}
 
-	// 2) 拉取调用明细（当前周期 [from,to]，按 level 设过滤；部门/工作室做服务端 dept_name/studio_id 过滤）
-	rows, err := fetchScopeLogs(ctx, cli, cfg, scope, cfg.From, cfg.To)
-	if err != nil {
-		return err
-	}
-	// 个人级：把范围名解析为人名（默认是 UUID），提升可读性。
-	if cfg.Level == "personal" && len(rows) > 0 && rows[0].UserName != "" {
-		scope.Name = rows[0].UserName
-	}
+	// 2) 数据获取：默认拉调用明细（A1–A5/模型预算/ServiceKey/Top模型保真）；
+	// `-agg` 则用 member 聚合(/usage/report/members)构造事实层加法核心（零明细），明细依赖项降级。
+	var rows []client.LogRow
+	var metrics []report.DailyMetric
+	var memberCalls []report.CallEvent
+	var memberAgg []report.MemberAgg
+	if cfg.Agg {
+		aggRows, aggErr := fetchMemberAggForScope(ctx, cli, cfg, scope)
+		if aggErr != nil {
+			return nil, aggErr
+		}
+		memberAgg = make([]report.MemberAgg, 0, len(aggRows))
+		for _, r := range aggRows {
+			memberAgg = append(memberAgg, r.ToMemberAgg())
+		}
+		// 个人级：把范围名解析为人名（默认是 UUID），提升可读性。
+		if cfg.Level == "personal" {
+			for _, m := range memberAgg {
+				if m.UserID == scope.ID && m.UserName != "" {
+					scope.Name = m.UserName
+					break
+				}
+			}
+		}
+	} else {
+		rows, err := fetchScopeLogs(ctx, cli, cfg, scope, cfg.From, cfg.To)
+		if err != nil {
+			return nil, err
+		}
+		// 个人级：把范围名解析为人名（默认是 UUID），提升可读性。
+		if cfg.Level == "personal" && len(rows) > 0 && rows[0].UserName != "" {
+			scope.Name = rows[0].UserName
+		}
 
-	// 3) 归一化：CallEvent + DailyMetric（口径：total_tokens=prompt+completion+reasoning）
-	allCalls := toEvents(rows)
-	// A1–A5 在个人口径排除 service；单元级同样只对成员调用（member）跑 A1–A5，service 不参与异常判定。
-	memberCalls := nonService(allCalls)
-	metrics := aggregateDaily(allCalls, cfg.Level, scope.ID) // 事实层含 member+service 分离（buildUnitFact 内拆）
+		// 3) 归一化：CallEvent + DailyMetric（口径：total_tokens=prompt+completion+reasoning）
+		allCalls := toEvents(rows)
+		// A1–A5 在个人口径排除 service；单元级同样只对成员调用（member）跑 A1–A5，service 不参与异常判定。
+		memberCalls = nonService(allCalls)
+		metrics = aggregateDaily(allCalls, cfg.Level, scope.ID) // 事实层含 member+service 分离（buildUnitFact 内拆）
+	}
 
 	// 3b) 28 天基线物化：期前 28 完整自然日 [from-28d, from-1d]（同 level/scope 过滤），走聚合接口零明细。
 	bf, bt := baselineWindow(cfg.From, cfg.To)
@@ -83,7 +121,7 @@ func run(args []string) error {
 	}
 	baselineResp, err := cli.FetchBaseline(ctx, bf, bt, buid, bdept, bstudio)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// daily → 28 天稳健基线物化（非 service 调用数按天聚合）。
 	baselineMetrics := make([]report.DailyMetric, 0, len(baselineResp.Daily))
@@ -102,9 +140,11 @@ func run(args []string) error {
 		baselineBuckets = append(baselineBuckets, report.MinuteBucket{Minute: t, Count: int(bk.Count), Cost: bk.Cost})
 	}
 
-	// 4) 模型能力（A4 有效输入预算）
-	models := distinctModels(rows)
-	budget := cli.ModelContextBudget(ctx, models)
+	// 4) 模型能力（A4 有效输入预算）。agg 模式无明细→无模型名清单，A4 降 NotComputed（预算 map 留空）。
+	var budget map[string]int64
+	if !cfg.Agg {
+		budget = cli.ModelContextBudget(ctx, distinctModels(rows))
+	}
 
 	// 5) 同岗分位：花名册(岗位/studio) + 每用户效能（成员口径）
 	cohort, notComputed := buildCohort(ctx, cli, cfg, scope, memberCalls)
@@ -141,10 +181,11 @@ func run(args []string) error {
 		Metrics: metrics, Calls: memberCalls, BaselineMetrics: baselineMetrics, BaselineBuckets: baselineBuckets, Cohort: cohort,
 		LevelMeta:          scope,
 		ModelContextBudget: budget,
+		MemberAgg:          memberAgg, // agg 模式（-agg）：无明细派生(Metrics 空)时有成员聚合行时，事实层走聚合口径
 	}
 	rep, err := derive.Derive(meta, in, rules)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, nc := range notComputed {
 		rep.Judgment.NotComputed = append(rep.Judgment.NotComputed, nc)
@@ -155,47 +196,277 @@ func run(args []string) error {
 
 	// 7) 渲染输出：落盘前校验稳定契约，避免生成不可复用的半成品。
 	if err := rep.Validate(); err != nil {
-		return fmt.Errorf("报告契约校验失败: %w", err)
+		return nil, fmt.Errorf("报告契约校验失败: %w", err)
 	}
 	if cfg.JSONOut != "" {
 		if err := writeJSON(cfg.JSONOut, rep); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if cfg.MDOut != "" {
 		if err := os.WriteFile(cfg.MDOut, []byte(render.RenderMD(rep)), 0o644); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if cfg.HTMLOut != "" {
 		if err := os.WriteFile(cfg.HTMLOut, []byte(render.RenderHTML(rep)), 0o644); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if cfg.VickyOut != "" {
 		if err := os.WriteFile(cfg.VickyOut, []byte(render.RenderVicky(rep)), 0o644); err != nil {
-			return err
+			return nil, err
 		}
 		if cfg.VickySubmit {
 			payload := vickyPayload(cfg, rep)
 			if err := writeJSON(cfg.VickyOut+".payload.json", payload); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
-	if cfg.JSONOut == "" && cfg.MDOut == "" && cfg.HTMLOut == "" && cfg.VickyOut == "" {
-		// 默认打印 MD
+	// 单对象模式且未指定任何输出路径 → 默认打印 MD（批量模式的汇总索引由 runAll 负责）。
+	if !cfg.All && cfg.JSONOut == "" && cfg.MDOut == "" && cfg.HTMLOut == "" && cfg.VickyOut == "" {
 		fmt.Print(render.RenderMD(rep))
 	}
+	return buildSummary(rep), nil
+}
+
+// BatchSummary 批量编排中单个对象的报告关键指标摘要（供汇总索引）。
+type BatchSummary struct {
+	Level        string  `json:"level"`
+	ScopeID      string  `json:"scope_id"`
+	ScopeName    string  `json:"scope_name"`
+	ReqCount     int64   `json:"req_count"`
+	SuccessCount int64   `json:"success_count"`
+	ErrorCount   int64   `json:"error_count"`
+	TotalTokens  int64   `json:"total_tokens"`
+	CostUSD      float64 `json:"cost_usd"`
+	SuccessRate  float64 `json:"success_rate"`
+	CostPer1k    float64 `json:"cost_per_1k_tokens"`
+	KeyAnomalies int     `json:"key_anomalies"` // A1–A5 命中数（P1+P2），便于汇总里定位高风险对象
+}
+
+// buildSummary 从派生报告提取该对象的关键指标；无事实层时返回零值 summary。
+func buildSummary(rep *report.Report) *BatchSummary {
+	s := &BatchSummary{
+		Level:     rep.Meta.Level,
+		ScopeID:   rep.Meta.Scope.ID,
+		ScopeName: rep.Meta.Scope.Name,
+	}
+	f := rep.Fact
+	switch {
+	case f.Personal != nil:
+		s.ReqCount, s.SuccessCount, s.ErrorCount = f.Personal.ReqCount, f.Personal.SuccessCount, f.Personal.ErrorCount
+		s.TotalTokens, s.CostUSD = f.Personal.TotalTokens, f.Personal.EstCostUSD
+	case f.Department != nil:
+		m := f.Department.Member
+		s.ReqCount, s.SuccessCount, s.ErrorCount = m.ReqCount, m.SuccessCount, m.ErrorCount
+		s.TotalTokens, s.CostUSD = m.TotalTokens, m.EstCostUSD
+	case f.Studio != nil:
+		m := f.Studio.Member
+		s.ReqCount, s.SuccessCount, s.ErrorCount = m.ReqCount, m.SuccessCount, m.ErrorCount
+		s.TotalTokens, s.CostUSD = m.TotalTokens, m.EstCostUSD
+	}
+	e := rep.Judgment.Efficiency
+	s.SuccessRate = e.SuccessRate
+	s.CostPer1k = e.CostPer1kTokens
+	for _, a := range rep.Judgment.Anomalies {
+		if a.Hit && (a.Severity == "P1" || a.Severity == "P2") {
+			s.KeyAnomalies++
+		}
+	}
+	return s
+}
+
+// ---- 批量编排（阶段4）----
+
+// runAll 枚举指定 level 的全体对象，逐对象生成报告并输出一份汇总索引。
+// 批量默认建议 `-agg`（成员聚合，零明细防 OOM）；明细派生的 A1–A5/模型归因在 agg 下按既有降级处理。
+// 输出：每对象一份 <outdir>/<level>_<slug>_<from>_<to>.md；汇总索引写 <outdir>/summary_<from>_<to>.md（+ .json）。
+func runAll(ctx context.Context, cli *client.Client, cfg Config) error {
+	scopes, err := enumerateScopes(ctx, cli, cfg)
+	if err != nil {
+		return err
+	}
+	if len(scopes) == 0 {
+		return fmt.Errorf("未枚举到任何对象（level=%s）", cfg.Level)
+	}
+
+	outDir := cfg.OutDir
+	if outDir == "" {
+		outDir = cfg.MDOut
+	}
+	if outDir == "" {
+		outDir = "."
+	}
+	// 汇总索引默认路径
+	summaryMD := cfg.SummaryMD
+	if summaryMD == "" {
+		summaryMD = filepath.Join(outDir, "summary_"+cfg.From+"_"+cfg.To+".md")
+	}
+
+	fmt.Printf("批量编排：level=%s 对象数=%d 输出目录=%s\n", cfg.Level, len(scopes), outDir)
+	var summaries []*BatchSummary
+	ok, failed := 0, 0
+	for _, sc := range scopes {
+		// 每个对象一份独立报告，输出路径按约定命名（单对象时若用户给了 MDOut 则覆盖为专属名）。
+		scCfg := cfg
+		scCfg.Scope = sc.ID
+		scCfg.MDOut = filepath.Join(outDir, batchFileName(cfg.Level, sc, cfg.From, cfg.To))
+		// 单对象模式下的 JSONOut/HTMLOut 在批量下不逐对象生成（避免大量文件）；汇总索引承载明细。
+		scCfg.JSONOut, scCfg.HTMLOut, scCfg.VickyOut = "", "", ""
+		scCfg.All = false
+		sum, rerr := runOne(ctx, cli, scCfg, sc)
+		if rerr != nil {
+			failed++
+			fmt.Printf("  [x] %s/%s: %v\n", cfg.Level, sc.ID, rerr)
+			continue
+		}
+		summaries = append(summaries, sum)
+		ok++
+		numPrefix := ""
+		if sum.KeyAnomalies > 0 {
+			numPrefix = fmt.Sprintf(" (A1-A5命中%d)", sum.KeyAnomalies)
+		}
+		fmt.Printf("  [o] %s/%s: req=%d cost=%.4f succ=%.1f%%%s\n", cfg.Level, sum.ScopeName, sum.ReqCount, sum.CostUSD, sum.SuccessRate*100, numPrefix)
+	}
+
+	// 汇总索引：写 MD + JSON。
+	md := renderBatchSummary(cfg, summaries, ok, failed)
+	if err := os.WriteFile(summaryMD, []byte(md), 0o644); err != nil {
+		return fmt.Errorf("写汇总索引失败: %w", err)
+	}
+	summaryJSON := summaryMD[:len(summaryMD)-len(filepath.Ext(summaryMD))] + ".json"
+	if err := writeJSON(summaryJSON, map[string]interface{}{
+		"level": cfg.Level, "from": cfg.From, "to": cfg.To,
+		"total": len(scopes), "ok": ok, "failed": failed,
+		"items": summaries,
+	}); err != nil {
+		return fmt.Errorf("写汇总 JSON 失败: %w", err)
+	}
+	fmt.Printf("汇总索引 %d/%d 对象：%s\n", ok, len(scopes), summaryMD)
 	return nil
+}
+
+// enumerateScopes 按 level 枚举全部对象（scope）。personal 枚举各活部门的成员；department/studio 枚举组织单元。
+func enumerateScopes(ctx context.Context, cli *client.Client, cfg Config) ([]report.Scope, error) {
+	switch cfg.Level {
+	case "department":
+		depts, err := cli.FetchDepartments(ctx, "active")
+		if err != nil {
+			return nil, err
+		}
+		out := make([]report.Scope, 0, len(depts))
+		for _, d := range depts {
+			out = append(out, report.Scope{Level: "department", ID: d.DeptID, Name: d.DeptName, DeptID: d.DeptID, StudioID: d.StudioID})
+		}
+		return out, nil
+	case "studio":
+		studios, err := cli.FetchStudios(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]report.Scope, 0, len(studios))
+		for _, st := range studios {
+			out = append(out, report.Scope{Level: "studio", ID: st.ID, Name: st.Name, StudioID: st.ID})
+		}
+		return out, nil
+	case "personal":
+		// 枚举所有活部门的成员去重；dept_id 双 ID 归一（SSO id 或 uuid），以 user_id 去重。
+		depts, err := cli.FetchDepartments(ctx, "active")
+		if err != nil {
+			return nil, err
+		}
+		seen := map[string]bool{}
+		out := make([]report.Scope, 0)
+		for _, d := range depts {
+			members, merr := cli.FetchMembers(ctx, d.DeptID)
+			if merr != nil {
+				continue // 403/404/429 跳过该部门成员，不中断整体
+			}
+			for _, mb := range members {
+				if mb.ID == "" || seen[mb.ID] {
+					continue
+				}
+				seen[mb.ID] = true
+				out = append(out, report.Scope{Level: "personal", ID: mb.ID, Name: mb.Name, DeptID: d.DeptID, StudioID: d.StudioID})
+			}
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("批量不支持 level %q", cfg.Level)
+	}
+}
+
+func batchFileName(level string, sc report.Scope, from, to string) string {
+	id := slugID(sc.ID)
+	if id == "" {
+		// 非 ASCII 的 dept_id（如中文部门名）slug 为空 → 用短 hash 兜底，避免多个对象覆盖同名 "unit" 文件。
+		id = "id-" + shortHash(sc.ID)
+	}
+	name := ""
+	if sc.Name != "" && sc.Name != sc.ID {
+		if n := slugID(sc.Name); n != "" {
+			name = n + "_"
+		}
+	}
+	return fmt.Sprintf("%s_%s%s_%s_%s.md", level, name, id, from, to)
+}
+
+// shortHash 取字符串 SHA-256 前 8 字节的十六进制（短唯一标识，供非 ASCII scope id 作文件名兜底）。
+func shortHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return fmt.Sprintf("%x", sum[:4])
+}
+
+// slugID 把 scope id/name 转成安全文件名的 slug，**保留连字符**（dept_id 形如 d-dev/u-uuid，
+// 连字符是标识符的一部分，不容丢失；sanitizeSlug 会把 '-' 丢弃，故这里单独处理）。
+// 无可用字符时返回空串，由调用方决定兜底。
+func slugID(s string) string {
+	var b strings.Builder
+	lastHyphen := false
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastHyphen = false
+		case r == '-' || r == ' ' || r == '/' || r == '_':
+			if !lastHyphen {
+				b.WriteByte('-')
+				lastHyphen = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+func renderBatchSummary(cfg Config, items []*BatchSummary, ok, failed int) string {
+	var b strings.Builder
+	b.WriteString("# 用量报告批量汇总 · " + cfg.Level + " · " + cfg.From + "~" + cfg.To + "\n\n")
+	b.WriteString("> 成功 " + itoa(ok) + " / 失败 " + itoa(failed) + "；级别 " + cfg.Level + "；周期 " + cfg.From + " ~ " + cfg.To + "\n")
+	if cfg.Agg {
+		b.WriteString("> 数据源：成员聚合(`-agg`)，A1–A5/模型归因/ServiceKey 等明细依赖项按既有降级处理。\n")
+	}
+	b.WriteString("\n| 对象 | 请求数 | 成功 | 失败 | 成功率 | 总Token | 成本USD | 每1k成本 | A1-A5命中 |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|\n")
+	for _, it := range items {
+		name := it.ScopeName
+		if name == "" {
+			name = it.ScopeID
+		}
+		fmt.Fprintf(&b, "| %s | %d | %d | %d | %.1f%% | %d | %.4f | %.4f | %d |\n",
+			name, it.ReqCount, it.SuccessCount, it.ErrorCount, it.SuccessRate*100, it.TotalTokens, it.CostUSD, it.CostPer1k, it.KeyAnomalies)
+	}
+	return b.String()
 }
 
 func validateConfig(cfg Config) error {
 	if cfg.Token == "" {
 		return fmt.Errorf("缺少 token（--token 或 USAGE_REPORT_TOKEN）")
 	}
-	if cfg.Scope == "" {
-		return fmt.Errorf("缺少 scope（--scope）")
+	// 批量编排（--all）无需 scope；单对象模式必须提供 scope。
+	if !cfg.All && cfg.Scope == "" {
+		return fmt.Errorf("缺少 scope（--scope；或加 --all 走批量编排）")
 	}
 	switch cfg.Level {
 	case "personal", "department", "studio":
@@ -425,6 +696,37 @@ func fetchScopeLogsWindow(ctx context.Context, cli *client.Client, cfg Config, s
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// fetchMemberAggForScope 用成员聚合(/usage/report/members)按 scope 拉取每人一行的加法/计数核心（零明细）。
+// 与 fetchScopeLogsWindow 同口径：personal 传 user_id；department 传 dept_id（服务端做双 ID 归一）；studio 传 studio_id。
+// 返回的 MemberAgg 只含加法/计数子集（无日期/模型/key 维度），供人工层「按人统计 + 逐层横向对比」与事实层加法核心；
+// A1–A5/模型归因/ServiceKey/TopModels 等明细依赖项在 agg 模式下由 derive 降级（NotComputed/空+注记）。
+func fetchMemberAggForScope(ctx context.Context, cli *client.Client, cfg Config, scope report.Scope) ([]client.MemberAggRow, error) {
+	userID, deptID, studioID := "", "", ""
+	switch cfg.Level {
+	case "personal":
+		userID = scope.ID
+	case "department":
+		deptID = scope.DeptID
+	case "studio":
+		studioID = scope.StudioID
+	}
+	rows, err := cli.FetchMemberAgg(ctx, cfg.From, cfg.To, userID, deptID, studioID)
+	if err != nil {
+		return nil, err
+	}
+	// personal 兜底：/usage/report/members 已按 user_id 过滤并排除 service，此处再确保只留目标人。
+	if cfg.Level == "personal" && cfg.Scope != "" {
+		var out []client.MemberAggRow
+		for _, r := range rows {
+			if r.UserID == cfg.Scope {
+				out = append(out, r)
+			}
+		}
+		return out, nil
+	}
+	return rows, nil
 }
 
 // dailyWindow 表示一个 [from,to) 的日粒度闭开区间。

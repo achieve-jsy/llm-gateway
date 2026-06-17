@@ -75,13 +75,17 @@ func PercentRank(sortedVals []float64, value float64) float64 {
 func RobustZ(value, median, mad float64) float64 {
 	sig := 1.4826 * mad
 	if sig == 0 {
+		// 历史基线完全无波动（MAD==0）：无法给出真实 σ 分位。
+		// 禁止返回 ±Inf（会污染 JSON marshal 并产生非确定输出）。
+		// 若当前等于中位数视为无偏离；否则给一个有界的大幅偏离（>常规 6σ 判定线），
+		// 使「当前≠基线"被显著标记，同时保持在合法浮点范围内。
 		if value == median {
 			return 0
 		}
 		if value > median {
-			return math.Inf(1)
+			return 6.0
 		}
-		return math.Inf(-1)
+		return -6.0
 	}
 	return (value - median) / sig
 }

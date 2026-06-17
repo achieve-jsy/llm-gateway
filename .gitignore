@@ -53,3 +53,6 @@ deploy/blue-green/upstream-active.conf
 .DS_Store
 **/.DS_Store
 tools/atlas-loader/atlas-loader
+
+# ── 用量报告批量产物（本地生成，不入库） ───────────────────────────────────
+out/

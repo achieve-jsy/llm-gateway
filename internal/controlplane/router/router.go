@@ -998,6 +998,8 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/usage/report/logs", guard(rbac.PermUsageViewScoped), usageH2.ReportLogs)
 		// 离线用量报告专用于期前基线的日聚合+分钟桶聚合（零明细），供 28 天稳健基线物化与 A1/A2 窗口分位重建。
 		adminGroup.GET("/usage/report/baseline", guard(rbac.PermUsageViewScoped), usageH2.ReportBaseline)
+		// 成员级聚合：按 user_id 返回每人一行的核心单一指标（排除 service），作为「按人统计+逐层横向对比」方案的人工层地基。
+		adminGroup.GET("/usage/report/members", guard(rbac.PermUsageViewScoped), usageH2.ReportMembers)
 	}
 
 	// 内部接口（InternalAuth 已在 internalGroup 上，复用）

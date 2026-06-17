@@ -79,15 +79,100 @@ func Derive(meta report.Meta, in report.ReportInput, rules report.RuleSet) (*rep
 
 func buildFact(in report.ReportInput) report.Fact {
 	var fact report.Fact
+	// 成员聚合接入：无明细派生(Metrics 空)但有成员聚合(MemberAgg)时，事实层走聚合口径
+	//（每人一行、排除 service；TopModels/ServiceKey/日模型分布等明细依赖项降级/空，见 builder）。
 	switch in.LevelMeta.Level {
 	case "personal":
-		fact.Personal = buildPersonalFact(in)
+		if len(in.Metrics) == 0 && len(in.MemberAgg) > 0 {
+			fact.Personal = buildPersonalFactFromAgg(in)
+		} else {
+			fact.Personal = buildPersonalFact(in)
+		}
 	case "department":
-		fact.Department = buildUnitFact(in, "department")
+		if len(in.Metrics) == 0 && len(in.MemberAgg) > 0 {
+			fact.Department = buildUnitFactFromAgg(in, "department")
+		} else {
+			fact.Department = buildUnitFact(in, "department")
+		}
 	case "studio":
-		fact.Studio = buildUnitFact(in, "studio")
+		if len(in.Metrics) == 0 && len(in.MemberAgg) > 0 {
+			fact.Studio = buildUnitFactFromAgg(in, "studio")
+		} else {
+			fact.Studio = buildUnitFact(in, "studio")
+		}
 	}
 	return fact
+}
+
+// ---- 成员聚合事实层（阶段二：不拉全量明细，用 FetchMemberAgg 每人一行构造加法核心）----
+
+// buildPersonalFactFromAgg 用单条成员聚合构造 PersonalFact。缺明细依赖项：TopModels(空)、
+// HourlyDistribution(空)、AvgDurationMs(0)、CacheWriteTokens(0)、ModelCount/ActiveDays 用其计数。
+func buildPersonalFactFromAgg(in report.ReportInput) *report.PersonalFact {
+	p := &report.PersonalFact{ScopeID: in.LevelMeta.ID, ScopeName: in.LevelMeta.Name, HourlyDistribution: map[string]int{}}
+	for _, m := range in.MemberAgg {
+		if m.UserID == "" || (m.ReqCount == 0 && m.CostUSD == 0 && m.TotalTokens == 0) {
+			continue
+		}
+		// personal 只认与 scope 匹配的一行；若调用方已按 user 过滤(常见)，匹配 ID 即可。
+		if in.LevelMeta.ID != "" && m.UserID != in.LevelMeta.ID {
+			continue
+		}
+		p.ReqCount += m.ReqCount
+		p.SuccessCount += m.SuccessCount
+		p.ErrorCount += m.ErrorCount
+		p.PromptTokens += m.PromptTokens
+		p.CachedTokens += m.CachedTokens
+		p.CompletionTokens += m.CompletionTokens
+		p.ReasoningTokens += m.ReasoningTokens
+		p.TotalTokens += m.TotalTokens
+		p.EstCostUSD += m.CostUSD
+		p.ModelCount += m.ModelCount
+		p.ActiveDays += int(m.ActiveDays)
+		break
+	}
+	return p
+}
+
+// buildUnitFactFromAgg 用成员聚合行(每人一行、排除 service)构造 UnitFact 的成员加法核心。
+// 明细依赖项降级：ServiceKey 空(聚合成员接口恒排除 service，原样标注 Notes)、
+// TopModels/ModelCount 空(无模型粒度，u.Member.ModelCount=0)、PerCapita 用 Σreq/Σcost/count 与 Σactive_days/count。
+func buildUnitFactFromAgg(in report.ReportInput, level string) *report.UnitFact {
+	u := &report.UnitFact{ScopeID: in.LevelMeta.ID, ScopeName: in.LevelMeta.Name, StudioID: in.LevelMeta.StudioID}
+	if len(in.MemberAgg) == 0 {
+		u.ServiceKey.Notes = "成员聚合口径：未拉明细，Service Key 块不可得。"
+		return u
+	}
+	active := 0
+	var activeDaySum int64
+	for _, m := range in.MemberAgg {
+		if m.ReqCount == 0 && m.CostUSD == 0 && m.TotalTokens == 0 {
+			continue
+		}
+		mb := &u.Member
+		mb.ReqCount += m.ReqCount
+		mb.SuccessCount += m.SuccessCount
+		mb.ErrorCount += m.ErrorCount
+		mb.PromptTokens += m.PromptTokens
+		mb.CompletionTokens += m.CompletionTokens
+		mb.ReasoningTokens += m.ReasoningTokens
+		mb.TotalTokens += m.TotalTokens
+		mb.EstCostUSD += m.CostUSD
+		active++
+		activeDaySum += m.ActiveDays
+	}
+	u.Member.ActiveUserCount = active
+	u.Member.UserCount = in.Cohort.RosterUserCount
+	u.ServiceKey.Notes = "成员聚合口径：未拉明细，Service Key 块与 TopModels/模型并集不可得(排除 service)。"
+	if active > 0 {
+		u.Member.PerCapita = report.PerCapita{
+			ReqCount:    u.Member.ReqCount / int64(active),
+			EstCostUSD:  u.Member.EstCostUSD / float64(active),
+			SuccessRate: safeDiv(float64(u.Member.SuccessCount), float64(u.Member.ReqCount)),
+			ActiveDays:  int(activeDaySum / int64(active)),
+		}
+	}
+	return u
 }
 
 func buildPersonalFact(in report.ReportInput) *report.PersonalFact {

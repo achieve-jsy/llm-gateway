@@ -439,13 +439,15 @@ func A4(calls []CallEvent, rules report.RuleSet, budget map[string]int64) report
 		for _, x := range b[win.lo:win.hi] {
 			bd := budget[x.c.Model]
 			// Catalog 预算是必要事实；绝对下限仅提高阈值，不能替代缺失预算。
+			// 用有效输入 PromptBeforeCached（=prompt_total − cached）判定近上限，剔除缓存命中，与「A4 有效输入>80% 预算」口径一致。
+			effectiveInput := x.c.PromptBeforeCached
 			threshold := math.Min(float64(bd)*rules.A4NearLimitRatio, float64(rules.A4MinPromptAbsolute))
-			if float64(x.c.PromptTokens) > threshold {
+			if float64(effectiveInput) > threshold {
 				near++
 				cost += x.c.EstCostUSD
 			}
-			if x.c.PromptTokens > maxPrompt {
-				maxPrompt, maxModel = x.c.PromptTokens, x.c.Model
+			if effectiveInput > maxPrompt {
+				maxPrompt, maxModel = effectiveInput, x.c.Model
 			}
 		}
 		if near < rules.A4MinNearLimit || near <= bestNear {

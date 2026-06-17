@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -388,6 +389,53 @@ func (c *Client) FetchBaseline(ctx context.Context, from, to, userID, deptID, st
 	return &resp, nil
 }
 
+// MemberAggRow 成员级聚合单行：按 user 返回核心单一指标（口径=排除 service）。
+// 与 /usage/report/members 响应行对齐；供「按人统计 + 逐层横向对比」方案的人工层地基。
+type MemberAggRow struct {
+	UserID           string  `json:"user_id"`
+	UserName         string  `json:"user_name"`
+	JobCategory      string  `json:"job_category"`
+	DeptID           string  `json:"dept_id"`
+	StudioID         string  `json:"studio_id"`
+	ReqCount         int64   `json:"req_count"`
+	SuccessCount     int64   `json:"success_count"`
+	ErrorCount       int64   `json:"error_count"`
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	ReasoningTokens  int64   `json:"reasoning_tokens"`
+	CachedTokens     int64   `json:"cached_tokens"`
+	TotalTokens      int64   `json:"total_tokens"`
+	CostUSD          float64 `json:"cost_usd"`
+	ActiveDays       int64   `json:"active_days"`
+	ModelCount       int     `json:"model_count"`
+}
+
+// FetchMemberAgg 拉取成员级聚合（每人一行核心单一指标，排除 service），走 /usage/report/members。
+// 供上层按 dept/studio rollup、横向分位、部门/工作室画像；零明细。
+func (c *Client) FetchMemberAgg(ctx context.Context, from, to, userID, deptID, studioID string) ([]MemberAggRow, error) {
+	q := map[string]string{"start": from, "end": to}
+	if userID != "" {
+		q["user_id"] = userID
+	}
+	if deptID != "" {
+		q["dept_id"] = deptID
+	}
+	if studioID != "" {
+		q["studio_id"] = studioID
+	}
+	b, err := c.do(ctx, "GET", "/usage/report/members", q)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Rows []MemberAggRow `json:"rows"`
+	}
+	if err := json.Unmarshal(b, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Rows, nil
+}
+
 // FetchDashboard 拉取 GetDashboard 汇总（对账基准）。level→scope 映射：personal→user, department→dept, studio→studio。
 // 返回 (summary, scope, id)。任一步失败返回 error；调用方决定是否用其做对账。
 func (c *Client) FetchDashboard(ctx context.Context, level, id, from, to string) (DashboardSummary, error) {
@@ -586,19 +634,21 @@ func (r LogRow) ToCallEvent() report.CallEvent {
 	}
 }
 
-func urlEncode(s string) string { return strings.ReplaceAll(urlEscape(s), "+", "%20") }
-func urlEscape(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' || r == '~':
-			b.WriteRune(r)
-		default:
-			b.WriteString(fmt.Sprintf("%%%02X", r))
-		}
+// ToMemberAgg 把成员级聚合行转为报告中间表示 MemberAgg（每人一行、周期聚合、排除 service）。
+func (r MemberAggRow) ToMemberAgg() report.MemberAgg {
+	return report.MemberAgg{
+		UserID: r.UserID, UserName: r.UserName, JobCategory: r.JobCategory,
+		DeptID: r.DeptID, StudioID: r.StudioID,
+		ReqCount: r.ReqCount, SuccessCount: r.SuccessCount, ErrorCount: r.ErrorCount,
+		PromptTokens: r.PromptTokens, CompletionTokens: r.CompletionTokens, ReasoningTokens: r.ReasoningTokens,
+		CachedTokens: r.CachedTokens, TotalTokens: r.TotalTokens,
+		CostUSD: r.CostUSD, ActiveDays: r.ActiveDays, ModelCount: r.ModelCount,
 	}
-	return b.String()
 }
+
+// urlEncode 编码 query/path 值：标准 URL 百分号编码（UTF-8 字节正确，中文 dept_id/user 名不破坏编码；
+// 空格统一为 %20）。
+func urlEncode(s string) string { return strings.ReplaceAll(url.QueryEscape(s), "+", "%20") }
 
 func trimBytes(b []byte, n int) string {
 	if len(b) > n {

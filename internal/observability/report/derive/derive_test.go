@@ -18,9 +18,9 @@ func mkCalls() []report.CallEvent {
 	for i := 0; i < 25; i++ {
 		calls = append(calls, report.CallEvent{TS: weekend.Add(time.Duration(i) * time.Minute), Model: "x", KeyType: "personal", UserID: "u1", Status: 200, EstCostUSD: 10, PromptTokens: 100, CompletionTokens: 50})
 	}
-	// A4：模型 limit=10 万，prompt=9.9 万（近上限），≥2 条
+	// A4：模型 limit=10 万，有效输入(未缓存)=9.9 万（近上限），≥2 条
 	for i := 0; i < 3; i++ {
-		calls = append(calls, report.CallEvent{TS: offModel.Add(time.Duration(i) * time.Minute), Model: "duck", KeyType: "personal", UserID: "u1", Status: 200, EstCostUSD: 1, PromptTokens: 99000, CompletionTokens: 100})
+		calls = append(calls, report.CallEvent{TS: offModel.Add(time.Duration(i) * time.Minute), Model: "duck", KeyType: "personal", UserID: "u1", Status: 200, EstCostUSD: 1, PromptTokens: 99000, PromptBeforeCached: 99000, CompletionTokens: 100})
 	}
 	// A3：段=(k,model)，20+ req，失败 ≥30%，单一 500 占失败 ≥80%
 	for i := 0; i < 30; i++ {

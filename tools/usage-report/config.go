@@ -31,6 +31,10 @@ type Config struct {
 	VickyCategory string
 	VickyNarrative string
 	Debug       bool
+	Agg         bool // 用成员聚合(/usage/report/members)构造事实层加法核心，不拉全量明细；A1–A5/模型预算/服务Key/Top模型等明细依赖项降级(NotComputed/空+注记)
+	All         bool // 批量编排：枚举 level 全体对象，各出报告 + 汇总索引（阶段4）
+	OutDir      string // 批量输出目录（每对象报告 + 汇总索引）；默认当前目录
+	SummaryMD   string // 批量汇总索引 MD 路径；默认 <outdir>/summary_<from>_<to>.md
 }
 
 func parseConfig(args []string) Config {
@@ -56,6 +60,10 @@ func parseConfig(args []string) Config {
 	fs.StringVar(&c.VickyCategory, "vicky-category", "business-report", "Vicky category")
 	fs.StringVar(&c.VickyNarrative, "vicky-narrative", "金字塔/结论先行", "Vicky narrative")
 	fs.BoolVar(&c.Debug, "debug", false, "打印调试")
+	fs.BoolVar(&c.Agg, "agg", false, "用成员聚合(/usage/report/members)构造事实层加法核心，不拉全量明细")
+	fs.BoolVar(&c.All, "all", false, "批量编排：枚举 level 全体对象，各出报告 + 汇总索引(建议配 -agg)")
+	fs.StringVar(&c.OutDir, "outdir", "", "批量输出目录(每对象报告+汇总索引)；默认当前目录")
+	fs.StringVar(&c.SummaryMD, "summary-md", "", "批量汇总索引 MD 路径；默认 <outdir>/summary_<from>_<to>.md")
 	_ = fs.Parse(args)
 	if c.From == "" || c.To == "" {
 		from, to := periodFor(c.Period)

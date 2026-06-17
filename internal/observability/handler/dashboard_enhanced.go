@@ -22,14 +22,22 @@ type DashboardUserRowEnhanced struct {
 	TotalTokens      int64              `json:"total_tokens"`
 	PromptTokens     int64              `json:"prompt_tokens"`
 	CompletionTokens int64              `json:"completion_tokens"`
+	ReasoningTokens  int64              `json:"reasoning_tokens"`
+	CachedTokens     int64              `json:"cached_tokens"`
 	EstCostUSD       float64            `json:"est_cost_usd"`
 	CallCount        int64              `json:"call_count"`
 	ErrorCount       int64              `json:"error_count"`
 	ModelCount       int                `json:"model_count"`
+	ActiveDays       int64              `json:"active_days"`
 	CostRatio        float64            `json:"cost_ratio"`         // B1: 占总成本百分比
 	CostChangePct    float64            `json:"cost_change_pct"`    // B1: 环比变化百分比
 	CostPer1kTokens  float64            `json:"cost_per_1k_tokens"` // B1: 每千 token 成本
 	ErrorRate        float64            `json:"error_rate"`         // B1: 错误率 %
+	TopModel         string             `json:"top_model"`          // B8: 成本最高模型名
+	TopModelCostUSD  float64            `json:"top_model_cost_usd"` // B8: 成本最高模型成本
+	TopModelCalls    int64              `json:"top_model_calls"`    // B8: 成本最高模型调用数
+	WowReqPct        float64            `json:"wow_req_pct"`        // B9: 调用量环比 %
+	WowTokenPct      float64            `json:"wow_token_pct"`      // B9: Token 环比 %
 	TopModels        []UserTopModelRow  `json:"top_models"`         // B2: 用户 Top 3 模型
 	VsAvg            DashboardUserVsAvg `json:"vs_avg"`             // B3: 与平均对比
 }
@@ -149,24 +157,30 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 		TotalTokens      int64   `gorm:"column:total_tokens"`
 		PromptTokens     int64   `gorm:"column:prompt_tokens"`
 		CompletionTokens int64   `gorm:"column:completion_tokens"`
+		ReasoningTokens  int64   `gorm:"column:reasoning_tokens"`
+		CachedTokens     int64   `gorm:"column:cached_tokens"`
 		EstCostUSD       float64 `gorm:"column:est_cost_usd"`
 		CallCount        int64   `gorm:"column:call_count"`
 		ErrorCount       int64   `gorm:"column:error_count"`
 		ModelCount       int     `gorm:"column:model_count"`
+		ActiveDays       int64   `gorm:"column:active_days"`
 	}
 	var rawRows []rawUserRow
 	err := db.Raw(`
 		SELECT
-			COALESCE(user_id, 'unknown')    AS user_id,
-			COALESCE(user_name, '')          AS user_name,
-			COALESCE(dept_name, '')          AS dept_name,
-			COALESCE(SUM(total_tokens), 0)   AS total_tokens,
-			COALESCE(SUM(prompt_tokens), 0)  AS prompt_tokens,
+			COALESCE(user_id, 'unknown')       AS user_id,
+			COALESCE(user_name, '')            AS user_name,
+			COALESCE(dept_name, '')            AS dept_name,
+			COALESCE(SUM(total_tokens), 0)     AS total_tokens,
+			COALESCE(SUM(prompt_tokens), 0)    AS prompt_tokens,
 			COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
-			COALESCE(SUM(est_cost_usd), 0)   AS est_cost_usd,
-			COUNT(*)                          AS call_count,
+			COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
+			COALESCE(SUM(cached_tokens), 0)    AS cached_tokens,
+			COALESCE(SUM(est_cost_usd), 0)     AS est_cost_usd,
+			COUNT(*)                            AS call_count,
 			COUNT(*) FILTER (WHERE status != 200) AS error_count,
-			COUNT(DISTINCT model)             AS model_count
+			COUNT(DISTINCT model)               AS model_count,
+			COUNT(DISTINCT ts::date)            AS active_days
 		FROM call_logs
 		WHERE ts >= ? AND ts < ?
 			AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
@@ -183,18 +197,24 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 		return
 	}
 
-	// ── 上期成本查询（B1 cost_change_pct）────────────────────────────
+	// ── 上期成本/调用/Token 查询（B1 cost_change_pct + B9 wow）────────────
 	prevCostMap := make(map[string]float64)
+	prevReqMap := make(map[string]int64)
+	prevTokenMap := make(map[string]int64)
 	{
 		type prevRow struct {
-			UserID     string  `gorm:"column:user_id"`
-			EstCostUSD float64 `gorm:"column:est_cost_usd"`
+			UserID      string  `gorm:"column:user_id"`
+			EstCostUSD  float64 `gorm:"column:est_cost_usd"`
+			CallCount   int64   `gorm:"column:call_count"`
+			TotalTokens int64   `gorm:"column:total_tokens"`
 		}
 		var prevRows []prevRow
 		_ = db.Raw(`
 			SELECT
 				COALESCE(user_id, 'unknown') AS user_id,
-				COALESCE(SUM(est_cost_usd), 0) AS est_cost_usd
+				COALESCE(SUM(est_cost_usd), 0) AS est_cost_usd,
+				COUNT(*) AS call_count,
+				COALESCE(SUM(total_tokens), 0) AS total_tokens
 			FROM call_logs
 			WHERE ts >= ? AND ts < ?
 				AND (`+obsmodel.WhereExcludeServiceKeyLogs+`)
@@ -206,6 +226,8 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 		`, prevFrom, prevToExcl, studioID, studioID, deptID, deptID, modelName, "%"+modelName+"%", endpoint, endpoint).Scan(&prevRows)
 		for _, pr := range prevRows {
 			prevCostMap[pr.UserID] = pr.EstCostUSD
+			prevReqMap[pr.UserID] = pr.CallCount
+			prevTokenMap[pr.UserID] = pr.TotalTokens
 		}
 	}
 
@@ -280,9 +302,31 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 			errorRate = float64(r.ErrorCount) / float64(r.CallCount) * 100.0
 		}
 
+		// B9 周环比（调用 / Token）：复用上期聚合，无上期则取本期的 +100% 语义同成本。
+		wowReqPct := 0.0
+		if prevReq, ok := prevReqMap[r.UserID]; ok && prevReq > 0 {
+			wowReqPct = (float64(r.CallCount) - float64(prevReq)) / float64(prevReq) * 100.0
+		} else if r.CallCount > 0 {
+			wowReqPct = 100.0
+		}
+		wowTokenPct := 0.0
+		if prevTok, ok := prevTokenMap[r.UserID]; ok && prevTok > 0 {
+			wowTokenPct = (float64(r.TotalTokens) - float64(prevTok)) / float64(prevTok) * 100.0
+		} else if r.TotalTokens > 0 {
+			wowTokenPct = 100.0
+		}
+
 		topModels := topModelsMap[r.UserID]
 		if topModels == nil {
 			topModels = []UserTopModelRow{}
+		}
+		// 成本最高模型 = Top3 中排名第 1（按 cost 降序）的模型。
+		topModel := ""
+		var topModelCostUSD, topModelCalls float64
+		if len(topModels) > 0 && topModels[0].EstCostUSD > 0 {
+			topModel = topModels[0].Model
+			topModelCostUSD = topModels[0].EstCostUSD
+			topModelCalls = float64(topModels[0].CallCount)
 		}
 
 		rows = append(rows, DashboardUserRowEnhanced{
@@ -292,14 +336,22 @@ func (h *UsageHandler) DashboardUsersEnhanced(c *gin.Context) {
 			TotalTokens:      r.TotalTokens,
 			PromptTokens:     r.PromptTokens,
 			CompletionTokens: r.CompletionTokens,
+			ReasoningTokens:  r.ReasoningTokens,
+			CachedTokens:     r.CachedTokens,
 			EstCostUSD:       r.EstCostUSD,
 			CallCount:        r.CallCount,
 			ErrorCount:       r.ErrorCount,
 			ModelCount:       r.ModelCount,
+			ActiveDays:       r.ActiveDays,
 			CostRatio:        math.Round(costRatio*100) / 100,
 			CostChangePct:    math.Round(costChangePct*100) / 100,
 			CostPer1kTokens:  math.Round(costPer1k*10000) / 10000,
 			ErrorRate:        math.Round(errorRate*100) / 100,
+			TopModel:         topModel,
+			TopModelCostUSD:  math.Round(topModelCostUSD*10000) / 10000,
+			TopModelCalls:    int64(topModelCalls),
+			WowReqPct:        math.Round(wowReqPct*100) / 100,
+			WowTokenPct:      math.Round(wowTokenPct*100) / 100,
 			TopModels:        topModels,
 			VsAvg: DashboardUserVsAvg{
 				CostRatioVsAvg: math.Round((costRatio-avgCostRatio)*100) / 100,

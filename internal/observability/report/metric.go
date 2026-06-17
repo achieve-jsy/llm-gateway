@@ -118,6 +118,18 @@ type CohortDef struct {
 	Direction string // cost（越低越好）| efficiency（越高越好）
 	// RosterUserCount 是当前部门/工作室的花名册总人数；与报告期活跃人数分开。
 	RosterUserCount int
+	// Target 本人在报告期的画像指标 + 周环比（个人粒度；来自服务端聚合，供 derive 填充 PersonalFact）
+	Target CohortTarget
+}
+
+// CohortTarget 本人画像指标与周环比（个人报告用）。
+type CohortTarget struct {
+	Metrics        CohortMetrics
+	WoWReqPct      float64 // 调用量周环比 %
+	WoWTokenPct    float64 // Token 周环比 %
+	WoWCostPct     float64 // 成本周环比 %
+	TopModel       string  // 成本最高模型名
+	TopModelCalls  int64
 }
 
 // CohortMember 标池内一个匿名成员（不指名）。
@@ -130,6 +142,20 @@ type CohortMember struct {
 	JobTitle    string
 	MetricValue float64 // 该成员在报告期的效能指标值（已预先算好；无效为 0 且 Valid=false）
 	MetricValid bool
+	// Metrics 该成员的完整同岗画像指标集（Vicky 「同岗使用效能画像」7 指标；valid 由各指标非零判定）。
+	Metrics CohortMetrics
+}
+
+// CohortMetrics 同岗画像成员的多指标集。每个指标字段非零即有效；derive 端各自独立判分位，
+// 不做整体 valid 一票否决（允许某成员仅在部分指标参与）。
+type CohortMetrics struct {
+	ReqCount          int64   // 周调用次数
+	TotalTokens       int64   // 周 Token 总量
+	ActiveDays        int64   // 活跃天数
+	AvgInputCtxTokens float64 // 平均输入上下文长度 = prompt_total / req
+	CacheHitRate      float64 // 缓存 Token 占比 = cached / prompt_total
+	CostPer1kTokens   float64 // 每百万 Token 成本 = cost / total_tokens * 1e6
+	HighTierCostRatio float64 // 成本最高模型成本占比 = top_model_cost / total_cost
 }
 
 // RuleSet 阈值与参数集中地（阶段一默认值；均来自文档/任务描述，T4 用真实数据校准）。

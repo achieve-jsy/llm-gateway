@@ -117,11 +117,37 @@ type dashboardResponse struct {
 	Summary   DashboardSummary `json:"summary"`
 }
 
-// DashboardUserMetric 是同岗分位所需的最小用户聚合行。
+// DashboardUserMetric 是同岗分位所需的用户聚合行（对应 /usage/dashboard/users 的 rows）。
 type DashboardUserMetric struct {
-	UserID      string  `json:"user_id"`
-	TotalTokens int64   `json:"total_tokens"`
+	UserID           string             `json:"user_id"`
+	UserName         string             `json:"user_name"`
+	DeptName         string             `json:"dept_name"`
+	TotalTokens      int64              `json:"total_tokens"`
+	PromptTokens     int64              `json:"prompt_tokens"`
+	CompletionTokens int64              `json:"completion_tokens"`
+	ReasoningTokens  int64              `json:"reasoning_tokens"`
+	CachedTokens     int64              `json:"cached_tokens"`
+	EstCostUSD       float64            `json:"est_cost_usd"`
+	CallCount        int64              `json:"call_count"`
+	ErrorCount       int64              `json:"error_count"`
+	ModelCount       int                `json:"model_count"`
+	ActiveDays       int64              `json:"active_days"`
+	CostPer1kTokens  float64            `json:"cost_per_1k_tokens"`
+	TopModel         string             `json:"top_model"`
+	TopModelCostUSD  float64            `json:"top_model_cost_usd"`
+	TopModelCalls    int64              `json:"top_model_calls"`
+	WowReqPct        float64            `json:"wow_req_pct"`
+	WowTokenPct      float64            `json:"wow_token_pct"`
+	CostChangePct    float64            `json:"cost_change_pct"`
+	TopModels        []UserTopModelRow  `json:"top_models"`
+}
+
+// UserTopModelRow 用户 Top 模型行（对应服务端 top_models）。
+type UserTopModelRow struct {
+	Model       string  `json:"model"`
 	EstCostUSD  float64 `json:"est_cost_usd"`
+	CallCount   int64   `json:"call_count"`
+	TotalTokens int64   `json:"total_tokens"`
 }
 
 type dashboardUsersResponse struct {

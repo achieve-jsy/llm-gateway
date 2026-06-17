@@ -47,6 +47,11 @@ func RenderMD(r *report.Report) string {
 	w("| 指标 | 值 |\n|---|---|\n")
 	writeFactTable(&b, r)
 
+	if r.Fact.Personal != nil {
+		// Vicky 个人周报：纵向基线 / 同岗使用效能画像 / 成本最高模型 / 场景与合理用模
+		writePersonalSections(&b, r)
+	}
+
 	w("\n## 判断\n\n")
 	writeJudgment(&b, r)
 
@@ -93,11 +98,33 @@ func RenderMD(r *report.Report) string {
 func writeFactTable(b *strings.Builder, r *report.Report) {
 	if r.Fact.Personal != nil {
 		p := r.Fact.Personal
+		rate := r.Meta.Currency.USDCNYRate
 		fmt.Fprintf(b, "| 调用数 | %d |\n", p.ReqCount)
 		fmt.Fprintf(b, "| 成功率 | %s |\n", pct(p.SuccessCount, p.ReqCount))
 		fmt.Fprintf(b, "| 总 Token | %d |\n", p.TotalTokens)
-		fmt.Fprintf(b, "| 成本 | `%.4f` USD |\n", p.EstCostUSD)
+		fmt.Fprintf(b, "| 成本 | `%s` |\n", cny(p.EstCostUSD, rate))
+		fmt.Fprintf(b, "| 活跃天数 | %d |\n", p.ActiveDays)
 		fmt.Fprintf(b, "| 模型数 | %d |\n", p.ModelCount)
+		fmt.Fprintf(b, "| 平均耗时 | %.1fs |\n", p.AvgDurationMs/1000)
+		if p.P95DurationMs > 0 {
+			fmt.Fprintf(b, "| p95 耗时 | %.1fs |\n", p.P95DurationMs/1000)
+		}
+		if p.AvgInputCtxTokens > 0 {
+			fmt.Fprintf(b, "| 平均输入上下文 | %.0f token |\n", p.AvgInputCtxTokens)
+		}
+		if p.CacheHitRate > 0 {
+			fmt.Fprintf(b, "| 缓存 Token 占比 | %s |\n", pctP(p.CacheHitRate))
+		}
+		if p.CostPer1Million > 0 {
+			fmt.Fprintf(b, "| 每百万 Token 成本 | `%s` |\n", cny(p.CostPer1Million, rate))
+		}
+		if p.TopModel != "" {
+			fmt.Fprintf(b, "| 成本最高模型 | %s |\n", p.TopModel)
+		}
+		// 周环比
+		fmt.Fprintf(b, "| 周环比·调用 | %s |\n", signedPct(p.WoWReqPct))
+		fmt.Fprintf(b, "| 周环比·Token | %s |\n", signedPct(p.WoWTokenPct))
+		fmt.Fprintf(b, "| 周环比·成本 | %s |\n", signedPct(p.WoWCostPct))
 	} else if u := unitFact(r); u != nil {
 		fmt.Fprintf(b, "| 成员调用 | %d（花名册 %d 人，活跃 %d 人） |\n", u.Member.ReqCount, u.Member.UserCount, u.Member.ActiveUserCount)
 		fmt.Fprintf(b, "| 成员成功率 | %s |\n", pct(u.Member.SuccessCount, u.Member.ReqCount))
@@ -107,6 +134,19 @@ func writeFactTable(b *strings.Builder, r *report.Report) {
 		fmt.Fprintf(b, "| Service Key Token | %d |\n", u.ServiceKey.TotalTokens)
 		fmt.Fprintf(b, "| Service Key 成本 | `%.4f` USD |\n", u.ServiceKey.EstCostUSD)
 	}
+}
+
+// cny 将 USD 金额按汇率换算并以人民币 ¥ 显示（保留 2 位）。
+func cny(usd float64, rate float64) string {
+	return fmt.Sprintf("¥%.2f", usd*rate)
+}
+
+// signedPct 显示带符号的百分比（周环比用），0 显示为 0.0%。
+func signedPct(v float64) string {
+	if v == 0 {
+		return "0.0%"
+	}
+	return fmt.Sprintf("%+.1f%%", v)
 }
 
 func unitFact(r *report.Report) *report.UnitFact {
@@ -203,3 +243,67 @@ func pct(a, b int64) string {
 }
 
 func pctP(v float64) string { return fmt.Sprintf("%.1f%%", v*100) }
+
+// writePersonalSections 输出 Vicky 个人周报的纵向基线 / 同岗使用效能画像 / 成本最高模型 / 场景与合理用模。
+func writePersonalSections(b *strings.Builder, r *report.Report) {
+	p := r.Fact.Personal
+	j := &r.Judgment
+	rate := r.Meta.Currency.USDCNYRate
+
+	// 二、纵向基线
+	fmt.Fprintf(b, "\n## 纵向基线\n\n")
+	if j.Baseline.Supported {
+		fmt.Fprintf(b, "- vs 本人过去 %d 天：成本处于 P%.0f（MAD 偏离 %.2fσ，%s）\n", j.Baseline.WindowDays, j.Baseline.Percentile*100, j.Baseline.DevSigma, j.Baseline.Trend)
+	} else {
+		fmt.Fprintf(b, "- %s\n", j.Baseline.Note)
+	}
+
+	// 三、同岗使用效能画像
+	fmt.Fprintf(b, "\n## 同岗使用效能画像\n\n")
+	if len(j.PeerProfiles) > 0 {
+		fmt.Fprintf(b, "对标范围：%s（N=%d）。\n\n", j.Peer.PoolType, j.Peer.SampleN)
+		fmt.Fprintf(b, "| 指标 | 本人 | 同岗 P50 | 本人分位 |\n|---|---:|---:|---:|\n")
+		for _, pm := range j.PeerProfiles {
+			if !pm.Supported {
+				fmt.Fprintf(b, "| %s | %s | %s | %s |\n", pm.Label, fmtVal(pm.Current), fmtVal(pm.P50), pm.Note)
+				continue
+			}
+			fmt.Fprintf(b, "| %s | %s | %s | P%.0f |\n", pm.Label, fmtVal(pm.Current), fmtVal(pm.P50), pm.PercentileRank*100)
+		}
+	} else {
+		fmt.Fprintf(b, "- 无同岗样本，不产出分位。\n")
+	}
+
+	// 四、成本最高模型的同岗画像
+	if p.TopModel != "" {
+		fmt.Fprintf(b, "\n## 成本最高模型画像\n\n")
+		fmt.Fprintf(b, "- 成本最高模型：`%s`；本人该模型成本 `%s`，占本周总成本 %s。\n", p.TopModel, cny(topModelCostUSD(p), rate), pctP(p.HighTierCostRatio))
+		if p.ModelCount > 1 {
+			fmt.Fprintf(b, "- 同岗采用率：见上方同岗画像（同岗位上使用该模型的比例由池内统计）。\n")
+		}
+	}
+
+	// 五、场景与合理用模（确定性布局：仅当有模型分布时给提示）
+	if len(p.TopModels) > 0 {
+		fmt.Fprintf(b, "\n## 场景与合理用模\n\n")
+		top := p.TopModels[0]
+		fmt.Fprintf(b, "- 主用模型：`%s`（占调用 %s）。\n", top.Model, pct(top.Calls, p.ReqCount))
+		fmt.Fprintf(b, "- 建议：结合上方同岗画像判断是否存在模型选择/上下文优化空间。\n")
+	}
+}
+
+// fmtVal 精简数值展示：整数无小数，小数保留 2 位。
+func fmtVal(v float64) string {
+	if v == float64(int64(v)) {
+		return fmt.Sprintf("%d", int64(v))
+	}
+	return fmt.Sprintf("%.2f", v)
+}
+
+// topModelCostUSD 取成本最高模型的成本（USD）。
+func topModelCostUSD(p *report.PersonalFact) float64 {
+	if len(p.TopModels) > 0 {
+		return p.TopModels[0].CostUSD
+	}
+	return 0
+}

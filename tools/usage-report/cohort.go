@@ -48,11 +48,37 @@ func buildCohort(ctx context.Context, cli *client.Client, cfg Config, scope repo
 		cohort.Enabled = false
 		return cohort, ncs
 	}
-	perUser := map[string]float64{}
+	perUser := map[string]report.CohortMetrics{}
 	validUser := map[string]bool{}
+	var rawTarget *client.DashboardUserMetric
 	for _, row := range rows {
-		if row.UserID != "" && row.TotalTokens > 0 {
-			perUser[row.UserID] = row.EstCostUSD / float64(row.TotalTokens) * 1000
+		if row.UserID == "" {
+			continue
+		}
+		if row.UserID == cfg.Scope {
+			r := row
+			rawTarget = &r
+		}
+		cm := report.CohortMetrics{
+			ReqCount:    row.CallCount,
+			TotalTokens: row.TotalTokens,
+			ActiveDays:  row.ActiveDays,
+		}
+		if row.CallCount > 0 && row.PromptTokens > 0 {
+			cm.AvgInputCtxTokens = float64(row.PromptTokens) / float64(row.CallCount)
+		}
+		if row.PromptTokens > 0 {
+			cm.CacheHitRate = float64(row.CachedTokens) / float64(row.PromptTokens)
+		}
+		if row.TotalTokens > 0 {
+			cm.CostPer1kTokens = row.EstCostUSD / float64(row.TotalTokens) * 1e6 // 每百万 Token 成本
+		}
+		if row.EstCostUSD > 0 && row.TopModelCostUSD > 0 {
+			cm.HighTierCostRatio = row.TopModelCostUSD / row.EstCostUSD
+		}
+		// 有任一有效指标才入池（避免纯 0 空值污染分位）
+		if cm.ReqCount > 0 || cm.TotalTokens > 0 || cm.ActiveDays > 0 {
+			perUser[row.UserID] = cm
 			validUser[row.UserID] = true
 		}
 	}
@@ -108,6 +134,16 @@ func buildCohort(ctx context.Context, cli *client.Client, cfg Config, scope repo
 	}
 	cohort.PoolType = poolType
 	cohort.Members = members
+	if rt := rawTarget; rt != nil {
+		cohort.Target = report.CohortTarget{
+			Metrics:       perUser[cfg.Scope],
+			WoWReqPct:     rt.WowReqPct,
+			WoWTokenPct:   rt.WowTokenPct,
+			WoWCostPct:    rt.CostChangePct,
+			TopModel:      rt.TopModel,
+			TopModelCalls: rt.TopModelCalls,
+		}
+	}
 	if len(skipped) > 0 {
 		cohort.Enabled = true
 		ncs = append(ncs, report.NotComputed{Metric: "同岗分位-覆盖", Reason: "有 " + itoa(len(skipped)) + " 个部门成员拉取失败(越权/限流)，roster 不完整；peer 分位仅基于可取到样本。"})
@@ -164,7 +200,7 @@ func jobSlot(c, f, t string) string {
 // poolFor 依「同岗位 + 同 studio」优先，样本不足时逐级回退（org-roster §4.2）：
 // 同studio+同category → 全公司同category → 同studio(任意) → 全公司(任意)；
 // 仍 <MIN_SAMPLE(5) 则交由 derive 判定 supported=false。
-func poolFor(t rosterEntry, roster map[string]rosterEntry, validUser map[string]bool, perUser map[string]float64) ([]report.CohortMember, string) {
+func poolFor(t rosterEntry, roster map[string]rosterEntry, validUser map[string]bool, perUser map[string]report.CohortMetrics) ([]report.CohortMember, string) {
 	got := collectSame(t, roster, validUser, perUser, func(e rosterEntry) bool {
 		return e.StudioID == t.StudioID && e.JobKey == t.JobKey && e.UserID != t.UserID
 	})
@@ -191,7 +227,7 @@ func poolFor(t rosterEntry, roster map[string]rosterEntry, validUser map[string]
 	}), "company"
 }
 
-func collectSame(t rosterEntry, roster map[string]rosterEntry, validUser map[string]bool, perUser map[string]float64, match func(rosterEntry) bool) []report.CohortMember {
+func collectSame(t rosterEntry, roster map[string]rosterEntry, validUser map[string]bool, perUser map[string]report.CohortMetrics, match func(rosterEntry) bool) []report.CohortMember {
 	var out []report.CohortMember
 	for _, e := range roster {
 		if !match(e) {
@@ -200,7 +236,8 @@ func collectSame(t rosterEntry, roster map[string]rosterEntry, validUser map[str
 		if !validUser[e.UserID] {
 			continue
 		}
-		out = append(out, report.CohortMember{UserID: e.UserID, StudioID: e.StudioID, DeptID: e.DeptID, JobCategory: e.JobKey, JobFamily: e.JobFamily, JobTitle: e.JobTitle, MetricValue: perUser[e.UserID], MetricValid: true})
+		m := perUser[e.UserID]
+		out = append(out, report.CohortMember{UserID: e.UserID, StudioID: e.StudioID, DeptID: e.DeptID, JobCategory: e.JobKey, JobFamily: e.JobFamily, JobTitle: e.JobTitle, MetricValue: m.CostPer1kTokens, MetricValid: true, Metrics: m})
 	}
 	return out
 }

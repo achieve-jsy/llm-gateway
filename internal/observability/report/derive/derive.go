@@ -49,6 +49,31 @@ func Derive(meta report.Meta, in report.ReportInput, rules report.RuleSet) (*rep
 		judge.NotComputed = append(judge.NotComputed, report.NotComputed{Metric: "同岗分位", Reason: peer.Note})
 	}
 
+	// 同岗使用效能画像（Vicky 多指标分位表）；样本不足时指标级降级，不整体判失败。
+	judge.PeerProfiles = buildPeerProfiles(in, rep.Fact, rules.MinCohortSample)
+
+	// 个人报告补充：同岗 Target 的周环比与成本最高模型（来自服务端聚合，不经明细；agg/明细两模式共用）。
+	if rep.Fact.Personal != nil && in.Cohort.Target.WoWCostPct != 0 {
+		rep.Fact.Personal.WoWReqPct = in.Cohort.Target.WoWReqPct
+		rep.Fact.Personal.WoWTokenPct = in.Cohort.Target.WoWTokenPct
+		rep.Fact.Personal.WoWCostPct = in.Cohort.Target.WoWCostPct
+		if in.Cohort.Target.TopModel != "" {
+			rep.Fact.Personal.TopModel = in.Cohort.Target.TopModel
+		}
+		if m := in.Cohort.Target.Metrics; m.AvgInputCtxTokens > 0 {
+			rep.Fact.Personal.AvgInputCtxTokens = m.AvgInputCtxTokens
+		}
+		if m := in.Cohort.Target.Metrics; m.CacheHitRate > 0 {
+			rep.Fact.Personal.CacheHitRate = m.CacheHitRate
+		}
+		if m := in.Cohort.Target.Metrics; m.CostPer1kTokens > 0 {
+			rep.Fact.Personal.CostPer1Million = m.CostPer1kTokens
+		}
+		if m := in.Cohort.Target.Metrics; m.HighTierCostRatio > 0 {
+			rep.Fact.Personal.HighTierCostRatio = m.HighTierCostRatio
+		}
+	}
+
 	// A1–A5
 	anoms := Anomalies(in.Calls, in.BaselineCalls, in.BaselineBuckets, rules, in.ModelContextBudget)
 	// 单元级语义说明：A1/A2 基于个人窗口/中位，单元级运行在「该单元成员调用流（排除 service）」上。
@@ -131,6 +156,16 @@ func buildPersonalFactFromAgg(in report.ReportInput) *report.PersonalFact {
 		p.ActiveDays += int(m.ActiveDays)
 		break
 	}
+	// 派生指标（同 buildPersonalFact，基于 agg 字段推算）
+	if p.ReqCount > 0 && p.PromptTokens > 0 {
+		p.AvgInputCtxTokens = float64(p.PromptTokens) / float64(p.ReqCount)
+	}
+	if p.PromptTokens > 0 {
+		p.CacheHitRate = float64(p.CachedTokens) / float64(p.PromptTokens)
+	}
+	if p.TotalTokens > 0 {
+		p.CostPer1Million = p.EstCostUSD / float64(p.TotalTokens) * 1e6
+	}
 	return p
 }
 
@@ -184,6 +219,7 @@ func buildPersonalFact(in report.ReportInput) *report.PersonalFact {
 	daySet := map[string]struct{}{}
 	modelAgg := map[string]*report.TopModel{}
 	var durSum, durCount int64
+	durSlice := make([]float64, 0, 512)
 	for _, m := range in.Metrics {
 		if m.ReqCount == 0 && m.EstCostUSD == 0 && m.TotalTokens == 0 {
 			continue
@@ -219,12 +255,17 @@ func buildPersonalFact(in report.ReportInput) *report.PersonalFact {
 		if c.DurationMs > 0 {
 			durSum += int64(c.DurationMs)
 			durCount++
+			durSlice = append(durSlice, float64(c.DurationMs))
 		}
 	}
 	p.ModelCount = len(modelSet)
 	p.ActiveDays = len(daySet)
 	if durCount > 0 {
 		p.AvgDurationMs = float64(durSum) / float64(durCount)
+	}
+	if len(durSlice) > 0 {
+		sort.Float64s(durSlice)
+		p.P95DurationMs = Percentile(durSlice, 95)
 	}
 	tms := make([]report.TopModel, 0, len(modelAgg))
 	for _, tm := range modelAgg {
@@ -235,6 +276,25 @@ func buildPersonalFact(in report.ReportInput) *report.PersonalFact {
 		tms = tms[:5]
 	}
 	p.TopModels = tms
+	// 派生指标：同岗画像所需（输入ctx / 缓存占比 / 每百万成本 / 成本最高模型占比）。
+	if p.ReqCount > 0 && p.PromptTokens > 0 {
+		p.AvgInputCtxTokens = float64(p.PromptTokens) / float64(p.ReqCount)
+	}
+	if p.PromptTokens > 0 {
+		p.CacheHitRate = float64(p.CachedTokens) / float64(p.PromptTokens)
+	}
+	if p.TotalTokens > 0 {
+		p.CostPer1Million = p.EstCostUSD / float64(p.TotalTokens) * 1e6
+	}
+	if p.TopModels != nil && p.EstCostUSD > 0 {
+		for _, tm := range p.TopModels {
+			if tm.Model != "" && tm.CostUSD > 0 {
+				p.TopModel = tm.Model
+				p.HighTierCostRatio = tm.CostUSD / p.EstCostUSD
+				break
+			}
+		}
+	}
 	return p
 }
 
@@ -511,6 +571,63 @@ func cohortCurrentMetric(c report.CohortDef, f report.Fact) float64 {
 		}
 	}
 	return 0
+}
+
+// peerMetricDef 描述同岗画像的一个指标：key / 中文标签 / 单位 / 从本人取当前值 / 从池成员取池值。
+type peerMetricDef struct {
+	Key   string
+	Label string
+	Unit  string
+	cur   func(p *report.PersonalFact) float64
+	pool  func(m report.CohortMetrics) float64
+}
+
+// buildPeerProfiles 计算 Vicky「同岗使用效能画像」多指标分位表。
+// 每个指标独立判采样；池样本 < minSample 时该指标 supported=false（不整体失败）。
+// direction：成本类/占比越高越需关注，这里只给分位不额外定好坏（呈现层自行解释），
+// 但所有指标统一用 PercentRank 表示"本人处于同岗的什么位置"。
+func buildPeerProfiles(in report.ReportInput, f report.Fact, minSample int) []report.PeerMetric {
+	defs := []peerMetricDef{
+		{Key: "weekly_calls", Label: "周调用次数", Unit: "次", cur: func(p *report.PersonalFact) float64 { return float64(p.ReqCount) }, pool: func(m report.CohortMetrics) float64 { return float64(m.ReqCount) }},
+		{Key: "weekly_tokens", Label: "周 Token 总量", Unit: "", cur: func(p *report.PersonalFact) float64 { return float64(p.TotalTokens) }, pool: func(m report.CohortMetrics) float64 { return float64(m.TotalTokens) }},
+		{Key: "active_days", Label: "活跃天数", Unit: "天", cur: func(p *report.PersonalFact) float64 { return float64(p.ActiveDays) }, pool: func(m report.CohortMetrics) float64 { return float64(m.ActiveDays) }},
+		{Key: "avg_input_ctx", Label: "平均输入上下文", Unit: "token", cur: func(p *report.PersonalFact) float64 { return p.AvgInputCtxTokens }, pool: func(m report.CohortMetrics) float64 { return m.AvgInputCtxTokens }},
+		{Key: "cache_hit_rate", Label: "缓存 Token 占比", Unit: "%", cur: func(p *report.PersonalFact) float64 { return p.CacheHitRate }, pool: func(m report.CohortMetrics) float64 { return m.CacheHitRate }},
+		{Key: "cost_per_1m", Label: "每百万 Token 成本", Unit: "USD", cur: func(p *report.PersonalFact) float64 { return p.CostPer1Million }, pool: func(m report.CohortMetrics) float64 { return m.CostPer1kTokens }},
+		{Key: "high_tier_cost_ratio", Label: "成本最高模型成本占比", Unit: "%", cur: func(p *report.PersonalFact) float64 { return p.HighTierCostRatio }, pool: func(m report.CohortMetrics) float64 { return m.HighTierCostRatio }},
+	}
+	// 仅个人粒度有同岗画像；其他层级直接返回空表。
+	if f.Personal == nil {
+		return nil
+	}
+	// 本人各指标当前值
+	cur := func(d peerMetricDef) float64 { return d.cur(f.Personal) }
+
+	out := make([]report.PeerMetric, 0, len(defs))
+	for _, d := range defs {
+		vals := make([]float64, 0, len(in.Cohort.Members))
+		for _, m := range in.Cohort.Members {
+			v := d.pool(m.Metrics)
+			// 该成员此项有值（非零）才入池；由工具侧在算 Metrics 时置 0 表示缺失
+			if v != 0 {
+				vals = append(vals, v)
+			}
+		}
+		pm := report.PeerMetric{Metric: d.Key, Label: d.Label, Unit: d.Unit}
+		if len(vals) < minSample {
+			pm.Supported = false
+			pm.Note = "同岗样本 <" + itoa(minSample) + "，该指标不产出分位。"
+			out = append(out, pm)
+			continue
+		}
+		sort.Float64s(vals)
+		pm.Supported = true
+		pm.P50 = Percentile(vals, 50)
+		pm.Current = cur(d)
+		pm.PercentileRank = PercentRank(vals, pm.Current)
+		out = append(out, pm)
+	}
+	return out
 }
 
 // ---- 表达层 ----

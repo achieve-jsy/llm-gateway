@@ -155,6 +155,16 @@ type PersonalFact struct {
 	ActiveDays         int            `json:"active_days"`
 	HourlyDistribution map[string]int `json:"hourly_distribution"` // "0":n ... "23":n
 	AvgDurationMs      float64        `json:"avg_duration_ms"`
+	P95DurationMs      float64        `json:"p95_duration_ms"`
+	AvgTTFTMs          float64        `json:"avg_ttft_ms"`
+	AvgInputCtxTokens  float64        `json:"avg_input_ctx_tokens"`  // = prompt_total / req
+	CacheHitRate       float64        `json:"cache_hit_rate"`        // = cached / prompt_total
+	CostPer1Million    float64        `json:"cost_per_1m_tokens"`    // = cost / total_tokens * 1e6
+	HighTierCostRatio  float64        `json:"high_tier_cost_ratio"`  // = top_model_cost / total_cost
+	TopModel           string         `json:"top_model"`             // 成本最高模型名
+	WoWReqPct          float64        `json:"wow_req_pct"`           // 调用量周环比 %
+	WoWTokenPct        float64        `json:"wow_token_pct"`         // Token 周环比 %
+	WoWCostPct         float64        `json:"wow_cost_pct"`          // 成本周环比 %
 	TopModels          []TopModel     `json:"top_models"`
 }
 
@@ -210,12 +220,25 @@ type TopModel struct {
 // ===== 判断层（算法可复算；命中必须附证据）=====
 
 type Judgment struct {
-	Baseline    Baseline      `json:"baseline"`
-	Peer        Peer          `json:"peer"`
-	Efficiency  Efficiency    `json:"efficiency"`
-	Anomalies   []AnomalyHit  `json:"anomalies"`
-	Attribution []Attribution `json:"attribution"`
-	NotComputed []NotComputed `json:"not_computed"`
+	Baseline     Baseline      `json:"baseline"`
+	Peer         Peer          `json:"peer"`
+	PeerProfiles []PeerMetric  `json:"peer_profiles"` // Vicky「同岗使用效能画像」多指标分位表
+	Efficiency   Efficiency    `json:"efficiency"`
+	Anomalies    []AnomalyHit  `json:"anomalies"`
+	Attribution  []Attribution `json:"attribution"`
+	NotComputed  []NotComputed `json:"not_computed"`
+}
+
+// PeerMetric 同岗画像单个指标的分位（本人 vs 同岗 P50 + 分位 rank）。
+type PeerMetric struct {
+	Metric         string  `json:"metric"`          // 指标 key（如 weekly_calls / total_tokens / active_days ...）
+	Label          string  `json:"label"`           // 中文标签
+	Unit           string  `json:"unit,omitempty"`  // 展示单位（次 / 万token / 天 / % ...）
+	Current        float64 `json:"current"`         // 本人值
+	P50            float64 `json:"p50"`             // 同岗中位
+	PercentileRank float64 `json:"percentile_rank"` // 0..1
+	Supported      bool    `json:"supported"`
+	Note           string  `json:"note,omitempty"`
 }
 
 // Baseline 28 天稳健基线（中位数 + 1.4826×MAD）。

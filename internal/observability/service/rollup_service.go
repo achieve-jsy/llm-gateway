@@ -681,7 +681,8 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 	}
 
 	resp := &LogsResponse{Rows: rows, Total: total, Page: params.Page, PageSize: params.PageSize}
-	if useKeyset && len(rows) > 0 {
+	// 只要返回了 rows 就给出 NextCursor（含首屏），便于客户端探测并持续 keyset 翻页。
+	if len(rows) > 0 {
 		last := rows[len(rows)-1]
 		if last.RequestID != "" {
 			resp.NextCursor = last.TS + "|" + last.RequestID

@@ -1072,14 +1072,16 @@ func (h *UsageHandler) ReportLogs(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid cursor format, want RFC3339Nano|request_id"})
 			return
 		}
-		t, err := time.Parse(time.RFC3339Nano, parts[0])
+		parsedTS, err := time.Parse(time.RFC3339Nano, parts[0])
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid cursor timestamp"})
 			return
 		}
-		cursorTS = t
+		cursorTS = parsedTS
+		cursorRID := parts[1]
 		useKeyset = true
-		q = q.Where("(call_logs.ts < ?) OR (call_logs.ts = ? AND call_logs.request_id < ?)", cursorTS, parts[1], cursorTS, parts[1])
+		// 游标条件 3 个占位符：ts < ? OR (ts = ? AND request_id < ?)
+		q = q.Where("(call_logs.ts < ?) OR (call_logs.ts = ? AND call_logs.request_id < ?)", cursorTS, cursorTS, cursorRID)
 	}
 
 	var rows []map[string]interface{}
@@ -1100,7 +1102,7 @@ func (h *UsageHandler) ReportLogs(c *gin.Context) {
 	}
 
 	nextCursor := ""
-	if useKeyset && len(rows) > 0 {
+	if len(rows) > 0 {
 		last := rows[len(rows)-1]
 		rid, _ := last["request_id"].(string)
 		tsStr := ""
@@ -1116,9 +1118,11 @@ func (h *UsageHandler) ReportLogs(c *gin.Context) {
 	}
 
 	resp := gin.H{"rows": rows, "total": total, "page_size": pageSize}
-	if useKeyset {
+	// 只要返回了 rows 就给出 next_cursor（含首屏），便于客户端探测并持续 keyset 翻页。
+	if nextCursor != "" {
 		resp["next_cursor"] = nextCursor
-	} else {
+	}
+	if !useKeyset {
 		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 		resp["page"] = page
 	}

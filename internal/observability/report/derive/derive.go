@@ -184,6 +184,7 @@ func buildUnitFactFromAgg(in report.ReportInput, level string) *report.UnitFact 
 	}
 	active := 0
 	var activeDaySum int64
+	var totalCached, totalPrompt int64
 	for _, m := range in.MemberAgg {
 		if m.ReqCount == 0 && m.CostUSD == 0 && m.TotalTokens == 0 {
 			continue
@@ -197,6 +198,8 @@ func buildUnitFactFromAgg(in report.ReportInput, level string) *report.UnitFact 
 		mb.ReasoningTokens += m.ReasoningTokens
 		mb.TotalTokens += m.TotalTokens
 		mb.EstCostUSD += m.CostUSD
+		totalCached += m.CachedTokens
+		totalPrompt += m.PromptTokens
 		active++
 		activeDaySum += m.ActiveDays
 	}
@@ -211,7 +214,182 @@ func buildUnitFactFromAgg(in report.ReportInput, level string) *report.UnitFact 
 			ActiveDays:  int(activeDaySum / int64(active)),
 		}
 	}
+
+	// 效能字段（agg 模式）
+	// CacheHitRate = Σcached / Σprompt（prompt>0 才算）
+	if totalPrompt > 0 {
+		u.Member.CacheHitRate = float64(totalCached) / float64(totalPrompt)
+	}
+	// CostPer1Million = Σcost / Σtotal_tokens * 1e6
+	if u.Member.TotalTokens > 0 {
+		u.Member.CostPer1Million = u.Member.EstCostUSD / float64(u.Member.TotalTokens) * 1e6
+	}
+
+	// 岗位分组（按 JobCategory 分组，空 JobCategory 归 "其他"）
+	u.JobGroups = buildJobGroups(in.MemberAgg)
+
+	// 周环比（上期 MemberAgg 非空时）
+	if len(in.PrevMemberAgg) > 0 {
+		var prevReq, prevTokens int64
+		var prevCost float64
+		for _, m := range in.PrevMemberAgg {
+			prevReq += m.ReqCount
+			prevTokens += m.TotalTokens
+			prevCost += m.CostUSD
+		}
+		curReq := u.Member.ReqCount
+		curTokens := u.Member.TotalTokens
+		curCost := u.Member.EstCostUSD
+		if prevReq != 0 {
+			u.WoWReqPct = float64(curReq-prevReq) / float64(prevReq) * 100
+		}
+		if prevTokens != 0 {
+			u.WoWTokenPct = float64(curTokens-prevTokens) / float64(prevTokens) * 100
+		}
+		if prevCost != 0 {
+			u.WoWCostPct = (curCost - prevCost) / prevCost * 100
+		}
+
+		// Top 变化人员（|WoWCostPct| 最大的前 5 人，匿名）
+		u.TopChanged = buildTopChanged(in.MemberAgg, in.PrevMemberAgg)
+	}
+
 	return u
+}
+
+// buildJobGroups 按 JobCategory 对 MemberAgg 分组，计算每组使用概况。
+// 空 JobCategory 归入 "其他"；按 AvgCostUSD 降序，最多 10 组。
+func buildJobGroups(aggs []report.MemberAgg) []report.JobGroup {
+	type groupEntry struct {
+		activeUsers int
+		totalCost   float64
+		perReqCosts []float64 // 每人 cost/req（活跃用户，用于中位数）
+	}
+	groups := map[string]*groupEntry{}
+	for _, m := range aggs {
+		cat := m.JobCategory
+		if cat == "" {
+			cat = "其他"
+		}
+		if m.ReqCount == 0 && m.CostUSD == 0 && m.TotalTokens == 0 {
+			continue
+		}
+		e := groups[cat]
+		if e == nil {
+			e = &groupEntry{}
+			groups[cat] = e
+		}
+		if m.ReqCount > 0 {
+			e.activeUsers++
+			e.totalCost += m.CostUSD
+			// 单次成本 = cost / req
+			e.perReqCosts = append(e.perReqCosts, m.CostUSD/float64(m.ReqCount))
+		}
+	}
+	result := make([]report.JobGroup, 0, len(groups))
+	for cat, e := range groups {
+		jg := report.JobGroup{
+			JobCategory: cat,
+			ActiveUsers: e.activeUsers,
+			TopModel:    "", // MemberAgg 无模型粒度，占位；t3 sprint 再接线
+		}
+		if e.activeUsers > 0 {
+			jg.AvgCostUSD = e.totalCost / float64(e.activeUsers)
+		}
+		if len(e.perReqCosts) > 0 {
+			sort.Float64s(e.perReqCosts)
+			jg.MedianCostUSD = Percentile(e.perReqCosts, 50)
+		}
+		result = append(result, jg)
+	}
+	// 按 AvgCostUSD 降序
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].AvgCostUSD > result[j].AvgCostUSD
+	})
+	if len(result) > 10 {
+		result = result[:10]
+	}
+	return result
+}
+
+// buildTopChanged 计算环比变化最大的前 5 名匿名成员。
+// 只考虑同时出现在本期和上期的成员，按 |WoWCostPct| 降序取前 5，匿名化（仅输出 Idx）。
+func buildTopChanged(cur, prev []report.MemberAgg) []report.TopChangedMember {
+	// 构建上期 cost 与 req 索引（以 UserID 为键）
+	prevCostMap := make(map[string]float64, len(prev))
+	prevReqMap := make(map[string]int64, len(prev))
+	for _, m := range prev {
+		if m.UserID == "" {
+			continue
+		}
+		prevCostMap[m.UserID] = m.CostUSD
+		prevReqMap[m.UserID] = m.ReqCount
+	}
+
+	type candidate struct {
+		wowCostPct float64
+		wowReqPct  float64
+		jobCat     string
+		absWoW     float64
+	}
+	var candidates []candidate
+
+	for _, m := range cur {
+		if m.UserID == "" {
+			continue
+		}
+		if m.ReqCount == 0 && m.CostUSD == 0 && m.TotalTokens == 0 {
+			continue
+		}
+		pCost, ok := prevCostMap[m.UserID]
+		if !ok {
+			continue // 仅计算两期都有的成员
+		}
+		var wowCost float64
+		if pCost != 0 {
+			wowCost = (m.CostUSD - pCost) / pCost * 100
+		}
+		var wowReq float64
+		pReq := prevReqMap[m.UserID]
+		if pReq != 0 {
+			wowReq = float64(m.ReqCount-pReq) / float64(pReq) * 100
+		}
+		cat := m.JobCategory
+		if cat == "" {
+			cat = "其他"
+		}
+		abs := wowCost
+		if abs < 0 {
+			abs = -abs
+		}
+		candidates = append(candidates, candidate{
+			wowCostPct: wowCost,
+			wowReqPct:  wowReq,
+			jobCat:     cat,
+			absWoW:     abs,
+		})
+	}
+
+	// 按 |WoWCostPct| 降序
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].absWoW > candidates[j].absWoW
+	})
+	if len(candidates) > 5 {
+		candidates = candidates[:5]
+	}
+
+	result := make([]report.TopChangedMember, len(candidates))
+	for i, c := range candidates {
+		result[i] = report.TopChangedMember{
+			Idx:         i + 1,
+			JobCategory: c.jobCat,
+			WoWCostPct:  c.wowCostPct,
+			WoWReqPct:   c.wowReqPct,
+			TopModel:    "",  // MemberAgg 无模型粒度，占位
+			AnomalyRule: "", // derive 层不访问 Anomalies，置空
+		}
+	}
+	return result
 }
 
 func buildPersonalFact(in report.ReportInput) *report.PersonalFact {
@@ -309,6 +487,7 @@ func buildUnitFact(in report.ReportInput, level string) *report.UnitFact {
 	activeUsers := map[string]struct{}{}
 	userDays := map[string]map[string]struct{}{}
 	modelAgg := map[string]*report.TopModel{}
+	var memberCachedTokens, memberPromptTokens int64
 	// member vs service 分离（成员口径排除 service；service 块只算 service 且归属当前部门，由工具侧过滤）
 	for _, m := range in.Metrics {
 		if u.ScopeID != m.ScopeID {
@@ -335,6 +514,8 @@ func buildUnitFact(in report.ReportInput, level string) *report.UnitFact {
 		mb.ReasoningTokens += m.ReasoningTokens
 		mb.TotalTokens += m.TotalTokens
 		mb.EstCostUSD += m.EstCostUSD
+		memberCachedTokens += m.CachedTokens
+		memberPromptTokens += m.PromptTokens
 		if m.UserID != "" {
 			activeUsers[m.UserID] = struct{}{}
 			if m.Date != "" {
@@ -378,6 +559,15 @@ func buildUnitFact(in report.ReportInput, level string) *report.UnitFact {
 			SuccessRate: safeDiv(float64(u.Member.SuccessCount), float64(u.Member.ReqCount)),
 			ActiveDays:  activeDaySum / u.Member.ActiveUserCount,
 		}
+	}
+	// 效能字段（明细模式）
+	// CacheHitRate = Σcached / Σprompt
+	if memberPromptTokens > 0 {
+		u.Member.CacheHitRate = float64(memberCachedTokens) / float64(memberPromptTokens)
+	}
+	// CostPer1Million = Σcost / Σtotal_tokens * 1e6
+	if u.Member.TotalTokens > 0 {
+		u.Member.CostPer1Million = u.Member.EstCostUSD / float64(u.Member.TotalTokens) * 1e6
 	}
 	return u
 }

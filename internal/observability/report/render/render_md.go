@@ -54,6 +54,13 @@ func RenderMD(r *report.Report) string {
 		}
 		w("# 个人周报 · %s · %s\n\n", r.Meta.Period.From+"~"+r.Meta.Period.To, title)
 		w("【本周结论】%s\n\n", buildWeeklyConclusion(r))
+	} else if r.Fact.Department != nil {
+		// Vicky 部门周报标题：只用部门名，不附 StudioID（UUID 无可读性）
+		w("# 部门周报 · %s · %s\n\n", r.Meta.Period.From+"~"+r.Meta.Period.To, scopeLabel(r.Meta.Scope))
+		w("【本周结论】%s\n\n", buildDeptConclusion(r))
+	} else if r.Fact.Studio != nil {
+		w("# 工作室周报 · %s · %s\n\n", r.Meta.Period.From+"~"+r.Meta.Period.To, scopeLabel(r.Meta.Scope))
+		w("【本周结论】%s\n\n", buildDeptConclusion(r))
 	} else {
 		w("# 用量周报 · %s\n\n", r.Expression.Headline)
 	}
@@ -68,14 +75,20 @@ func RenderMD(r *report.Report) string {
 	if r.Fact.Personal != nil {
 		// Vicky 个人周报：纵向基线 / 同岗使用效能画像 / 成本最高模型 / 场景与合理用模
 		writePersonalSections(&b, r)
+	} else if r.Fact.Department != nil {
+		// Vicky 部门周报：6 章模板
+		writeDeptSections(&b, r)
 	}
 
 	w("\n## 判断\n\n")
 	writeJudgment(&b, r)
 
-	w("\n## 建议\n\n")
-	for _, g := range r.Expression.Suggestions {
-		w("- %s\n", g)
+	// 部门/工作室周报：建议已在第六章输出，跳过通用建议块避免重复
+	if r.Fact.Personal != nil {
+		w("\n## 建议\n\n")
+		for _, g := range r.Expression.Suggestions {
+			w("- %s\n", g)
+		}
 	}
 
 	w("\n## 口径与对账\n\n")
@@ -384,4 +397,152 @@ func topModelCostUSD(p *report.PersonalFact) float64 {
 		return p.TopModels[0].CostUSD
 	}
 	return 0
+}
+
+// writeDeptSections 输出 Vicky 部门周报 6 章内容。
+// 依赖 r.Fact.Department != nil。
+func writeDeptSections(b *strings.Builder, r *report.Report) {
+	u := r.Fact.Department
+	rate := r.Meta.Currency.USDCNYRate
+	j := &r.Judgment
+	w := func(format string, args ...interface{}) { fmt.Fprintf(b, format, args...) }
+
+	// 一、部门概览
+	w("\n## 一、部门概览\n\n")
+	// 第一行：成本 / 调用 / 成功率 / 活跃人数
+	successRate := pct(u.Member.SuccessCount, u.Member.ReqCount)
+	w("- 成本 %s | 调用 %d 次 | 成功率 %s | 活跃 %d 人\n",
+		cny(u.Member.EstCostUSD, rate), u.Member.ReqCount, successRate, u.Member.ActiveUserCount)
+	// 第二行：周环比（仅当有上期数据时输出，WoW 字段全零视为无上期）
+	hasWoW := u.WoWCostPct != 0 || u.WoWReqPct != 0 || u.WoWTokenPct != 0
+	if hasWoW {
+		w("- 周环比：成本 %s / 调用 %s / Token %s\n",
+			signedPct(u.WoWCostPct), signedPct(u.WoWReqPct), signedPct(u.WoWTokenPct))
+	}
+	// 基线行
+	if j.Baseline.Supported {
+		w("- vs 本部门过去 %d 天：成本处于 P%.0f（MAD 偏离 %.2fσ，%s）\n",
+			j.Baseline.WindowDays, j.Baseline.Percentile*100, j.Baseline.DevSigma, j.Baseline.Trend)
+	}
+
+	// 二、岗位分布
+	w("\n## 二、岗位分布（同岗位分位，不做跨岗位裸排名）\n\n")
+	if len(u.JobGroups) > 0 {
+		w("| 岗位类别 | 活跃人数 | 人均成本 | 单次成本中位 | 主用模型 |\n")
+		w("|---|---|---|---|---|\n")
+		for _, jg := range u.JobGroups {
+			w("| %s | %d | %s | %s | %s |\n",
+				jg.JobCategory, jg.ActiveUsers,
+				cny(jg.AvgCostUSD, rate),
+				cny(jg.MedianCostUSD, rate),
+				jg.TopModel)
+		}
+	} else {
+		w("- 岗位分布数据不可得（-agg 模式无 JobCategory 明细）\n")
+	}
+
+	// 三、Service Key 用量与风险
+	w("\n## 三、Service Key 用量与风险（仅当前归属部门）\n\n")
+	sk := u.ServiceKey
+	if sk.ReqCount > 0 {
+		totalCost := u.Member.EstCostUSD + sk.EstCostUSD
+		var skRatio string
+		if totalCost > 0 {
+			skRatio = fmt.Sprintf("，占部门总成本 %s", pctP(sk.EstCostUSD/totalCost))
+		}
+		w("- Service Key 总成本 %s%s；调用 %d 次；Token %d\n",
+			cny(sk.EstCostUSD, rate), skRatio, sk.ReqCount, sk.TotalTokens)
+	} else {
+		w("- 本周期无 Service Key 调用（或 -agg 模式未拉取明细）\n")
+	}
+
+	// 四、重点变化（Top 变化人员）
+	w("\n## 四、重点变化（Top 变化人员）\n\n")
+	if len(u.TopChanged) > 0 {
+		w("| 人员（匿名） | 岗位 | 成本环比 | 主用模型 | 是否有解释 |\n")
+		w("|---|---|---|---|---|\n")
+		for _, tc := range u.TopChanged {
+			explain := "待确认"
+			if tc.AnomalyRule != "" {
+				explain = "命中 " + tc.AnomalyRule
+			}
+			w("| 员工%d | %s | %s | %s | %s |\n",
+				tc.Idx, tc.JobCategory, signedPct(tc.WoWCostPct), tc.TopModel, explain)
+		}
+	} else {
+		w("- 无上期数据，不产出环比变化（需 -agg 模式 + 有上期记录）\n")
+	}
+
+	// 五、异常处置
+	w("\n## 五、异常处置\n\n")
+	hitCount, missCount := 0, 0
+	for _, a := range j.Anomalies {
+		if a.Hit {
+			hitCount++
+		} else if !a.NotComputed {
+			missCount++
+		}
+	}
+	w("- 命中 %d 条 | 未命中 %d 条\n", hitCount, missCount)
+	for _, a := range j.Anomalies {
+		if a.Hit {
+			detail := a.Name
+			if len(a.Evidence) > 0 {
+				detail += "（" + a.Evidence[0].Value + "）"
+			}
+			w("- [%s] %s —— %s\n", a.Severity, a.Rule, detail)
+		}
+	}
+
+	// 六、建议
+	w("\n## 六、建议\n\n")
+	hasSuggestion := false
+	if len(u.TopChanged) > 0 {
+		w("- 关注成本环比变化最大的成员（见第四章），建议核查原因\n")
+		hasSuggestion = true
+	}
+	// 若部门整体缓存命中偏低，给出优化提示
+	if u.Member.CacheHitRate > 0 && u.Member.CacheHitRate < 0.2 {
+		w("- 部门整体缓存命中率偏低（%s），建议各岗位关注 Prompt 缓存策略\n", pctP(u.Member.CacheHitRate))
+		hasSuggestion = true
+	}
+	if hitCount == 0 {
+		w("- 本周期无规则型异常，各岗位用量正常，保持现状\n")
+		hasSuggestion = true
+	}
+	if !hasSuggestion {
+		// 兜底
+		w("- 本周期无特别建议\n")
+	}
+}
+
+// buildDeptConclusion 生成部门周报「本周结论」一行。
+// 优先级：异常命中 > 成本大幅上涨 > 成本下降 > 正常。
+func buildDeptConclusion(r *report.Report) string {
+	u := r.Fact.Department
+	j := &r.Judgment
+	// 最高优先：异常命中
+	hitCount := 0
+	maxSeverity := ""
+	for _, a := range j.Anomalies {
+		if a.Hit {
+			hitCount++
+			if maxSeverity == "" || a.Severity < maxSeverity {
+				maxSeverity = a.Severity // P0 < P1 < P2 < P3，字典序越小越严重
+			}
+		}
+	}
+	if hitCount > 0 {
+		return fmt.Sprintf("关注 —— 命中 %d 条异常（%s）", hitCount, maxSeverity)
+	}
+	// 次优先：成本大幅上涨
+	if u != nil && u.WoWCostPct >= 30 {
+		return fmt.Sprintf("关注 —— 成本环比 +%.0f%%", u.WoWCostPct)
+	}
+	// 次优先：成本明显下降
+	if u != nil && u.WoWCostPct <= -20 {
+		return fmt.Sprintf("良好 —— 成本环比下降 %.0f%%", -u.WoWCostPct)
+	}
+	// 默认
+	return "正常 —— 本周期未见异常"
 }

@@ -175,6 +175,14 @@ type UnitFact struct {
 	StudioID   string      `json:"studio_id,omitempty"`
 	Member     UnitMember  `json:"member"`
 	ServiceKey UnitService `json:"service_key"`
+	// 周环比（对比上期同口径 memberAgg；上期窗口 = 本期往前推同等长度）
+	WoWReqPct   float64 `json:"wow_req_pct"`
+	WoWTokenPct float64 `json:"wow_token_pct"`
+	WoWCostPct  float64 `json:"wow_cost_pct"`
+	// 岗位分组（第二章/第四章用）
+	JobGroups []JobGroup `json:"job_groups,omitempty"`
+	// 成本/调用环比变化最大的匿名成员（第四章用）
+	TopChanged []TopChangedMember `json:"top_changed,omitempty"`
 }
 
 type UnitMember struct {
@@ -191,6 +199,10 @@ type UnitMember struct {
 	ModelCount       int        `json:"model_count"`
 	TopModels        []TopModel `json:"top_models"`
 	PerCapita        PerCapita  `json:"per_capita"`
+	// 缓存命中率 = cached_tokens / prompt_tokens（仅 agg 模式有 cached_tokens 时有效）
+	CacheHitRate float64 `json:"cache_hit_rate"`
+	// 每百万 Token 成本 = cost / total_tokens * 1e6（零分母时为 0）
+	CostPer1Million float64 `json:"cost_per_1m_tokens"`
 }
 
 type UnitService struct {

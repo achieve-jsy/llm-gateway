@@ -83,6 +83,25 @@ type MemberAgg struct {
 	ModelCount       int
 }
 
+// JobGroup 岗位分组统计（部门周报二章）。
+type JobGroup struct {
+	JobCategory   string  `json:"job_category"`
+	ActiveUsers   int     `json:"active_users"`
+	AvgCostUSD    float64 `json:"avg_cost_usd"`
+	MedianCostUSD float64 `json:"median_cost_usd"` // 单次成本中位 = per-req cost 中位数
+	TopModel      string  `json:"top_model"`
+}
+
+// TopChangedMember 成本变化最大成员（匿名，部门周报四章）。
+type TopChangedMember struct {
+	Idx         int     `json:"idx"`          // 1,2,3...
+	JobCategory string  `json:"job_category"`
+	WoWCostPct  float64 `json:"wow_cost_pct"`
+	WoWReqPct   float64 `json:"wow_req_pct"`
+	TopModel    string  `json:"top_model"`
+	AnomalyRule string  `json:"anomaly_rule"` // 空=无命中
+}
+
 // ReportInput 派生输入：基线/分位用日聚合，A1–A5 用逐调用事件。
 type ReportInput struct {
 	Metrics []DailyMetric
@@ -90,6 +109,10 @@ type ReportInput struct {
 	// MemberAgg 成员级聚合行（排除 service）。非空且 Metrics 为空时，事实层成员加法核心由它构造
 	// （用于不拉全量明细的大部门/工作室）；若同时存在 Metrics(明细派生)，以 Metrics 为准（保真 TopModels/ServiceKey/日模型分布）。
 	MemberAgg []MemberAgg
+	// PrevMemberAgg 上期成员聚合行（与 MemberAgg 同口径，用于 derive 计算周环比）。
+	// 上期窗口 = 本期 [from,to] 往前推同等长度（prevFrom = from-periodDays, prevTo = from-1d）。
+	// 仅 agg 模式（-agg）填充；明细模式暂不处理。
+	PrevMemberAgg []MemberAgg
 	// BaselineCalls 期前历史窗口逐调用事件，供 A1/A2 计算真实历史窗口分布。
 	// 为空时 A1 仅使用绝对阈值，A2 仅保留绝对阈值/HARD_CAP，且不得标记为 28 天基线。
 	BaselineCalls []CallEvent

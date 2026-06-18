@@ -73,6 +73,7 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 	var metrics []report.DailyMetric
 	var memberCalls []report.CallEvent
 	var memberAgg []report.MemberAgg
+	var prevMemberAgg []report.MemberAgg
 	if cfg.Agg {
 		aggRows, aggErr := fetchMemberAggForScope(ctx, cli, cfg, scope)
 		if aggErr != nil {
@@ -89,6 +90,27 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 					scope.Name = m.UserName
 					break
 				}
+			}
+		}
+		// 上期数据：prevFrom = from - periodDays 天，prevTo = from - 1天。
+		// 与本期同口径（同 deptID/studioID/userID），供 derive 层算周环比。
+		if periodDaysVal, pdErr := inclusiveDays(cfg.From, cfg.To); pdErr == nil && periodDaysVal > 0 {
+			const layout = "2006-01-02"
+			fromT, fErr := time.Parse(layout, cfg.From)
+			if fErr == nil {
+				prevToT := fromT.AddDate(0, 0, -1)
+				prevFromT := fromT.AddDate(0, 0, -periodDaysVal)
+				prevCfg := cfg
+				prevCfg.From = prevFromT.Format(layout)
+				prevCfg.To = prevToT.Format(layout)
+				prevRows, prevErr := fetchMemberAggForScope(ctx, cli, prevCfg, scope)
+				if prevErr == nil {
+					prevMemberAgg = make([]report.MemberAgg, 0, len(prevRows))
+					for _, r := range prevRows {
+						prevMemberAgg = append(prevMemberAgg, r.ToMemberAgg())
+					}
+				}
+				// 上期拉取失败时静默忽略（derive 层收到空 PrevMemberAgg 即跳过环比）
 			}
 		}
 	} else {
@@ -181,7 +203,8 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 		Metrics: metrics, Calls: memberCalls, BaselineMetrics: baselineMetrics, BaselineBuckets: baselineBuckets, Cohort: cohort,
 		LevelMeta:          scope,
 		ModelContextBudget: budget,
-		MemberAgg:          memberAgg, // agg 模式（-agg）：无明细派生(Metrics 空)时有成员聚合行时，事实层走聚合口径
+		MemberAgg:          memberAgg,     // agg 模式（-agg）：无明细派生(Metrics 空)时有成员聚合行时，事实层走聚合口径
+		PrevMemberAgg:      prevMemberAgg, // agg 模式：上期成员聚合，供 derive 算周环比（空=无上期数据）
 	}
 	rep, err := derive.Derive(meta, in, rules)
 	if err != nil {

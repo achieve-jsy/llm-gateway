@@ -18,8 +18,9 @@ func TestRenderMDLevelMatrix(t *testing.T) {
 				}
 			}
 			if level == "personal" {
-				if !strings.Contains(md, "| 调用数 | 0 |") || !strings.Contains(md, "| 成功率 | n/a |") {
-					t.Errorf("personal empty state is not explicit:\n%s", md)
+				// 个人报告改为一行摘要格式，含「调用 0 次」
+				if !strings.Contains(md, "调用 0 次") {
+					t.Errorf("personal overview line missing: %s", md)
 				}
 			} else {
 				for _, want := range []string{"| 成员调用 | 0（花名册 3 人，活跃 0 人） |", "| 成员成功率 | n/a |", "| Service Key 调用 | 2 |"} {

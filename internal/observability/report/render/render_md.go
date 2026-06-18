@@ -39,18 +39,13 @@ func RenderMD(r *report.Report) string {
 	w("---\n\n")
 
 	if r.Fact.Personal != nil {
-		// Vicky 格式标题：# 个人周报 · 周期 · 姓名（岗位 / 工作室）
+		// Vicky 格式标题：# 个人周报 · 周期 · 姓名（岗位）
+		// 岗位：jobSlot 回退 category→family→title；工作室因只有 ID 不展示（避免 UUID）
 		title := scopeLabel(r.Meta.Scope)
-		if r.Meta.Scope.JobCategory != "" || r.Meta.Scope.JobFamily != "" {
-			job := r.Meta.Scope.JobCategory
-			if job == "" {
-				job = r.Meta.Scope.JobFamily
-			}
-			extra := job
-			if r.Meta.Scope.StudioID != "" {
-				extra += " / " + r.Meta.Scope.StudioID
-			}
-			title += "（" + extra + "）"
+		s := r.Meta.Scope
+		job := jobSlotRender(s.JobCategory, s.JobFamily, s.JobTitle)
+		if job != "" {
+			title += "（" + job + "）"
 		}
 		w("# 个人周报 · %s · %s\n\n", r.Meta.Period.From+"~"+r.Meta.Period.To, title)
 		w("【本周结论】%s\n\n", buildWeeklyConclusion(r))
@@ -130,32 +125,40 @@ func writeFactTable(b *strings.Builder, r *report.Report) {
 	if r.Fact.Personal != nil {
 		p := r.Fact.Personal
 		rate := r.Meta.Currency.USDCNYRate
-		fmt.Fprintf(b, "| 调用数 | %d |\n", p.ReqCount)
-		fmt.Fprintf(b, "| 成功率 | %s |\n", pct(p.SuccessCount, p.ReqCount))
-		fmt.Fprintf(b, "| 总 Token | %d |\n", p.TotalTokens)
-		fmt.Fprintf(b, "| 成本 | `%s` |\n", cny(p.EstCostUSD, rate))
-		fmt.Fprintf(b, "| 活跃天数 | %d |\n", p.ActiveDays)
-		fmt.Fprintf(b, "| 模型数 | %d |\n", p.ModelCount)
-		fmt.Fprintf(b, "| 平均耗时 | %.1fs |\n", p.AvgDurationMs/1000)
-		if p.P95DurationMs > 0 {
-			fmt.Fprintf(b, "| p95 耗时 | %.1fs |\n", p.P95DurationMs/1000)
+		// Vicky 一行摘要格式
+		fmt.Fprintf(b, "- 调用 %d 次 | 成本 %s | Token %s | 活跃 %d 天 | 用了 %d 个模型\n",
+			p.ReqCount, cny(p.EstCostUSD, rate), fmtTokens(p.TotalTokens), p.ActiveDays, p.ModelCount)
+		// 耗时行（agg 模式无明细时省略）
+		if p.AvgDurationMs > 0 || p.P95DurationMs > 0 || p.AvgTTFTMs > 0 {
+			parts := []string{}
+			if p.AvgDurationMs > 0 {
+				parts = append(parts, fmt.Sprintf("平均耗时 %.1fs", p.AvgDurationMs/1000))
+			}
+			if p.P95DurationMs > 0 {
+				parts = append(parts, fmt.Sprintf("p95 %.1fs", p.P95DurationMs/1000))
+			}
+			if p.AvgTTFTMs > 0 {
+				parts = append(parts, fmt.Sprintf("平均 TTFT %.0fms", p.AvgTTFTMs))
+			}
+			fmt.Fprintf(b, "- %s\n", strings.Join(parts, " | "))
 		}
-		if p.AvgInputCtxTokens > 0 {
-			fmt.Fprintf(b, "| 平均输入上下文 | %.0f token |\n", p.AvgInputCtxTokens)
-		}
-		if p.CacheHitRate > 0 {
-			fmt.Fprintf(b, "| 缓存 Token 占比 | %s |\n", pctP(p.CacheHitRate))
-		}
-		if p.CostPer1Million > 0 {
-			fmt.Fprintf(b, "| 每百万 Token 成本 | `%s` |\n", cny(p.CostPer1Million, rate))
-		}
-		if p.TopModel != "" {
-			fmt.Fprintf(b, "| 成本最高模型 | %s |\n", p.TopModel)
+		// 缓存/输入上下文/每百万成本
+		if p.CacheHitRate > 0 || p.AvgInputCtxTokens > 0 || p.CostPer1Million > 0 {
+			parts := []string{}
+			if p.CacheHitRate > 0 {
+				parts = append(parts, "缓存占比 "+pctP(p.CacheHitRate))
+			}
+			if p.AvgInputCtxTokens > 0 {
+				parts = append(parts, fmt.Sprintf("平均输入 %.0fk token", p.AvgInputCtxTokens/1000))
+			}
+			if p.CostPer1Million > 0 {
+				parts = append(parts, "每百万 Token "+cny(p.CostPer1Million, rate))
+			}
+			fmt.Fprintf(b, "- %s\n", strings.Join(parts, " | "))
 		}
 		// 周环比
-		fmt.Fprintf(b, "| 周环比·调用 | %s |\n", signedPct(p.WoWReqPct))
-		fmt.Fprintf(b, "| 周环比·Token | %s |\n", signedPct(p.WoWTokenPct))
-		fmt.Fprintf(b, "| 周环比·成本 | %s |\n", signedPct(p.WoWCostPct))
+		fmt.Fprintf(b, "- 周环比：调用 %s / 成本 %s / Token %s\n",
+			signedPct(p.WoWReqPct), signedPct(p.WoWCostPct), signedPct(p.WoWTokenPct))
 	} else if u := unitFact(r); u != nil {
 		fmt.Fprintf(b, "| 成员调用 | %d（花名册 %d 人，活跃 %d 人） |\n", u.Member.ReqCount, u.Member.UserCount, u.Member.ActiveUserCount)
 		fmt.Fprintf(b, "| 成员成功率 | %s |\n", pct(u.Member.SuccessCount, u.Member.ReqCount))
@@ -413,6 +416,11 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 	successRate := pct(u.Member.SuccessCount, u.Member.ReqCount)
 	w("- 成本 %s | 调用 %d 次 | 成功率 %s | 活跃 %d 人\n",
 		cny(u.Member.EstCostUSD, rate), u.Member.ReqCount, successRate, u.Member.ActiveUserCount)
+	// 工作室内占比（有工作室总成本时输出）
+	if u.StudioTotalCostUSD > 0 && u.Member.EstCostUSD > 0 {
+		studioRatio := u.Member.EstCostUSD / u.StudioTotalCostUSD * 100
+		w("- 工作室内占比 %.1f%%\n", studioRatio)
+	}
 	// 第二行：周环比（仅当有上期数据时输出，WoW 字段全零视为无上期）
 	hasWoW := u.WoWCostPct != 0 || u.WoWReqPct != 0 || u.WoWTokenPct != 0
 	if hasWoW {
@@ -431,11 +439,15 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 		w("| 岗位类别 | 活跃人数 | 人均成本 | 单次成本中位 | 主用模型 |\n")
 		w("|---|---|---|---|---|\n")
 		for _, jg := range u.JobGroups {
+			topModel := jg.TopModel
+			if topModel == "" {
+				topModel = "—"
+			}
 			w("| %s | %d | %s | %s | %s |\n",
 				jg.JobCategory, jg.ActiveUsers,
 				cny(jg.AvgCostUSD, rate),
 				cny(jg.MedianCostUSD, rate),
-				jg.TopModel)
+				topModel)
 		}
 	} else {
 		w("- 岗位分布数据不可得（-agg 模式无 JobCategory 明细）\n")
@@ -545,4 +557,29 @@ func buildDeptConclusion(r *report.Report) string {
 	}
 	// 默认
 	return "正常 —— 本周期未见异常"
+}
+
+// jobSlotRender 岗位回退（render 包内独立）：category→family→title→""。
+func jobSlotRender(category, family, title string) string {
+	if category != "" {
+		return category
+	}
+	if family != "" {
+		return family
+	}
+	return title
+}
+
+// fmtTokens 把 token 数量格式化为易读形式（3.2M / 354M / 1.2B）。
+func fmtTokens(n int64) string {
+	switch {
+	case n >= 1_000_000_000:
+		return fmt.Sprintf("%.1fB", float64(n)/1_000_000_000)
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }

@@ -115,6 +115,12 @@ type ReportInput struct {
 	// 上期窗口 = 本期 [from,to] 往前推同等长度（prevFrom = from-periodDays, prevTo = from-1d）。
 	// 仅 agg 模式（-agg）填充；明细模式暂不处理。
 	PrevMemberAgg []MemberAgg
+	// StudioMemberAgg 工作室级成员聚合（department 级别报告时额外拉取，用于计算部门在工作室的占比）。
+	// 空时不产出占比字段。
+	StudioMemberAgg []MemberAgg
+	// UserTopModels 每用户的 Top 模型列表（来自 /usage/dashboard/users，部门/工作室级别用于岗位分布主用模型）。
+	// key=UserID，value=Top 模型列表（已按 cost DESC 排序）。
+	UserTopModels map[string][]CohortTopModel
 	// BaselineCalls 期前历史窗口逐调用事件，供 A1/A2 计算真实历史窗口分布。
 	// 为空时 A1 仅使用绝对阈值，A2 仅保留绝对阈值/HARD_CAP，且不得标记为 28 天基线。
 	BaselineCalls []CallEvent
@@ -155,6 +161,11 @@ type CohortTarget struct {
 	WoWCostPct     float64 // 成本周环比 %
 	TopModel       string  // 成本最高模型名
 	TopModelCalls  int64
+	// 目标用户岗位/组织信息（从 roster 取，用于回填 Scope 标题）
+	JobCategory    string
+	JobFamily      string
+	JobTitle       string
+	StudioID       string
 }
 
 // CohortMember 标池内一个匿名成员（不指名）。

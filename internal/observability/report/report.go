@@ -183,6 +183,8 @@ type UnitFact struct {
 	JobGroups []JobGroup `json:"job_groups,omitempty"`
 	// 成本/调用环比变化最大的匿名成员（第四章用）
 	TopChanged []TopChangedMember `json:"top_changed,omitempty"`
+	// 工作室总成本（部门报告一章「工作室内占比」用；department 级别时由工具侧额外拉 studio agg 填入）
+	StudioTotalCostUSD float64 `json:"studio_total_cost_usd,omitempty"`
 }
 
 type UnitMember struct {

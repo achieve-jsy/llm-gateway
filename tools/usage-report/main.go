@@ -171,6 +171,22 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 	// 5) 同岗分位：花名册(岗位/studio) + 每用户效能（成员口径）
 	cohort, notComputed := buildCohort(ctx, cli, cfg, scope, memberCalls)
 
+	// 个人报告：从同岗池 target（roster 已查到）回填岗位/工作室到 scope，供标题渲染。
+	if cfg.Level == "personal" && cohort.Target.JobTitle+cohort.Target.JobCategory+cohort.Target.JobFamily != "" {
+		if scope.JobCategory == "" {
+			scope.JobCategory = cohort.Target.JobCategory
+		}
+		if scope.JobFamily == "" {
+			scope.JobFamily = cohort.Target.JobFamily
+		}
+		if scope.JobTitle == "" {
+			scope.JobTitle = cohort.Target.JobTitle
+		}
+		if scope.StudioID == "" {
+			scope.StudioID = cohort.Target.StudioID
+		}
+	}
+
 	// 6) 装配派生
 	rules := report.DefaultRuleSet()
 	rules.USDCNYRate = cfg.USDCNYRate
@@ -199,12 +215,53 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 			"A1–A5 异常在个人口径排除 service；部门/工作室口径仅对成员调用（member）判定，service 不参与异常判定。",
 		}, AnomalyEnabled: true, PeerPercentileEnabled: cohort.Enabled},
 	}
+	// 部门报告补拉工作室级 MemberAgg（用于「工作室内占比」）：仅 agg 模式、department 级、有 studioID 时拉。
+	var studioMemberAgg []report.MemberAgg
+	if cfg.Agg && cfg.Level == "department" && scope.StudioID != "" {
+		studioCfg := cfg
+		studioCfg.From, studioCfg.To = cfg.From, cfg.To
+		studioRows, studioErr := fetchMemberAggForScope(ctx, cli, studioCfg,
+			report.Scope{Level: "studio", ID: scope.StudioID, StudioID: scope.StudioID})
+		if studioErr == nil {
+			studioMemberAgg = make([]report.MemberAgg, 0, len(studioRows))
+			for _, r := range studioRows {
+				studioMemberAgg = append(studioMemberAgg, r.ToMemberAgg())
+			}
+		}
+		// 拉取失败时静默忽略，占比字段留空
+	}
+
+	// 部门/工作室报告：拉 dashboard/users 补充每用户 Top 模型（用于岗位分布主用模型列）。
+	// agg 模式才拉（明细模式有 TopModels 来自明细聚合）；失败静默忽略。
+	var userTopModels map[string][]report.CohortTopModel
+	if cfg.Agg && (cfg.Level == "department" || cfg.Level == "studio") {
+		umRows, umErr := cli.FetchUserMetrics(ctx, cfg.From, cfg.To)
+		if umErr == nil && len(umRows) > 0 {
+			userTopModels = make(map[string][]report.CohortTopModel, len(umRows))
+			for _, row := range umRows {
+				if row.UserID == "" || len(row.TopModels) == 0 {
+					continue
+				}
+				tms := make([]report.CohortTopModel, 0, len(row.TopModels))
+				for _, tm := range row.TopModels {
+					tms = append(tms, report.CohortTopModel{
+						Model: tm.Model, CostUSD: tm.EstCostUSD,
+						CallCount: tm.CallCount, TotalTokens: tm.TotalTokens,
+					})
+				}
+				userTopModels[row.UserID] = tms
+			}
+		}
+	}
+
 	in := report.ReportInput{
 		Metrics: metrics, Calls: memberCalls, BaselineMetrics: baselineMetrics, BaselineBuckets: baselineBuckets, Cohort: cohort,
 		LevelMeta:          scope,
 		ModelContextBudget: budget,
-		MemberAgg:          memberAgg,     // agg 模式（-agg）：无明细派生(Metrics 空)时有成员聚合行时，事实层走聚合口径
-		PrevMemberAgg:      prevMemberAgg, // agg 模式：上期成员聚合，供 derive 算周环比（空=无上期数据）
+		MemberAgg:          memberAgg,
+		PrevMemberAgg:      prevMemberAgg,
+		StudioMemberAgg:    studioMemberAgg,
+		UserTopModels:      userTopModels, // 部门/工作室: 每用户 top 模型（岗位分布/Top变化人员）
 	}
 	rep, err := derive.Derive(meta, in, rules)
 	if err != nil {

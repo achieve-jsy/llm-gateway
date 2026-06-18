@@ -152,6 +152,11 @@ func buildCohort(ctx context.Context, cli *client.Client, cfg Config, scope repo
 			WoWCostPct:    rt.CostChangePct,
 			TopModel:      rt.TopModel,
 			TopModelCalls: rt.TopModelCalls,
+			// 岗位/组织信息从 roster 补入（target 找到时才有，找不到则空）
+			JobCategory:   target.JobCategory,
+			JobFamily:     target.JobFamily,
+			JobTitle:      target.JobTitle,
+			StudioID:      target.StudioID,
 		}
 	}
 	if len(skipped) > 0 {

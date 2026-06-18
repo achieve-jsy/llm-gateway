@@ -225,8 +225,19 @@ func buildUnitFactFromAgg(in report.ReportInput, level string) *report.UnitFact 
 		u.Member.CostPer1Million = u.Member.EstCostUSD / float64(u.Member.TotalTokens) * 1e6
 	}
 
-	// 岗位分组（按 JobCategory 分组，空 JobCategory 归 "其他"）
-	u.JobGroups = buildJobGroups(in.MemberAgg)
+	// 岗位分组：构建 userID→TopModels map（优先 Cohort.Members，补 ReportInput.UserTopModels）
+	userTopModels := make(map[string][]report.CohortTopModel, len(in.Cohort.Members)+len(in.UserTopModels))
+	// 先从 ReportInput.UserTopModels（部门/工作室级别由工具侧拉 dashboard/users 填入）
+	for uid, tms := range in.UserTopModels {
+		userTopModels[uid] = tms
+	}
+	// Cohort.Members 覆盖（personal 级别更精确）
+	for _, m := range in.Cohort.Members {
+		if len(m.Metrics.TopModels) > 0 {
+			userTopModels[m.UserID] = m.Metrics.TopModels
+		}
+	}
+	u.JobGroups = buildJobGroups(in.MemberAgg, userTopModels)
 
 	// 周环比（上期 MemberAgg 非空时）
 	if len(in.PrevMemberAgg) > 0 {
@@ -251,20 +262,31 @@ func buildUnitFactFromAgg(in report.ReportInput, level string) *report.UnitFact 
 		}
 
 		// Top 变化人员（|WoWCostPct| 最大的前 5 人，匿名）
-		u.TopChanged = buildTopChanged(in.MemberAgg, in.PrevMemberAgg)
+		u.TopChanged = buildTopChanged(in.MemberAgg, in.PrevMemberAgg, userTopModels)
+	}
+
+	// 工作室总成本（department 级别：从 StudioMemberAgg 聚合，用于「工作室内占比」）
+	if len(in.StudioMemberAgg) > 0 {
+		var studioCost float64
+		for _, m := range in.StudioMemberAgg {
+			studioCost += m.CostUSD
+		}
+		u.StudioTotalCostUSD = studioCost
 	}
 
 	return u
 }
 
 // buildJobGroups 按岗位分组，计算每组使用概况。
+// userTopModels: userID → 该用户 Top 模型列表（来自 dashboard/users，用于统计每组主用模型）。
 // 分组键优先取 JobCategory，空时回退 JobFamily，再空回退 JobTitle，都空归 "其他"。
 // 按 AvgCostUSD 降序，最多 10 组。
-func buildJobGroups(aggs []report.MemberAgg) []report.JobGroup {
+func buildJobGroups(aggs []report.MemberAgg, userTopModels map[string][]report.CohortTopModel) []report.JobGroup {
 	type groupEntry struct {
 		activeUsers int
 		totalCost   float64
 		perReqCosts []float64 // 每人 cost/req（活跃用户，用于中位数）
+		modelCost   map[string]float64 // 该组内各模型累计成本（用于选 TopModel）
 	}
 	groups := map[string]*groupEntry{}
 	for _, m := range aggs {
@@ -274,22 +296,36 @@ func buildJobGroups(aggs []report.MemberAgg) []report.JobGroup {
 		}
 		e := groups[cat]
 		if e == nil {
-			e = &groupEntry{}
+			e = &groupEntry{modelCost: map[string]float64{}}
 			groups[cat] = e
 		}
 		if m.ReqCount > 0 {
 			e.activeUsers++
 			e.totalCost += m.CostUSD
-			// 单次成本 = cost / req
 			e.perReqCosts = append(e.perReqCosts, m.CostUSD/float64(m.ReqCount))
+		}
+		// 从 userTopModels 累加该组内各模型成本
+		for _, tm := range userTopModels[m.UserID] {
+			if tm.Model != "" {
+				e.modelCost[tm.Model] += tm.CostUSD
+			}
 		}
 	}
 	result := make([]report.JobGroup, 0, len(groups))
 	for cat, e := range groups {
+		// 选该组成本最高的模型作为 TopModel
+		topModel := ""
+		maxCost := 0.0
+		for model, cost := range e.modelCost {
+			if cost > maxCost {
+				maxCost = cost
+				topModel = model
+			}
+		}
 		jg := report.JobGroup{
 			JobCategory: cat,
 			ActiveUsers: e.activeUsers,
-			TopModel:    "", // MemberAgg 无模型粒度，占位；t3 sprint 再接线
+			TopModel:    topModel,
 		}
 		if e.activeUsers > 0 {
 			jg.AvgCostUSD = e.totalCost / float64(e.activeUsers)
@@ -311,8 +347,8 @@ func buildJobGroups(aggs []report.MemberAgg) []report.JobGroup {
 }
 
 // buildTopChanged 计算环比变化最大的前 5 名匿名成员。
-// 只考虑同时出现在本期和上期的成员，按 |WoWCostPct| 降序取前 5，匿名化（仅输出 Idx）。
-func buildTopChanged(cur, prev []report.MemberAgg) []report.TopChangedMember {
+// userTopModels: userID → Top 模型列表（可空），用于填充 TopModel 字段。
+func buildTopChanged(cur, prev []report.MemberAgg, userTopModels map[string][]report.CohortTopModel) []report.TopChangedMember {
 	// 构建上期 cost 与 req 索引（以 UserID 为键）
 	prevCostMap := make(map[string]float64, len(prev))
 	prevReqMap := make(map[string]int64, len(prev))
@@ -325,6 +361,7 @@ func buildTopChanged(cur, prev []report.MemberAgg) []report.TopChangedMember {
 	}
 
 	type candidate struct {
+		userID     string
 		wowCostPct float64
 		wowReqPct  float64
 		jobCat     string
@@ -358,6 +395,7 @@ func buildTopChanged(cur, prev []report.MemberAgg) []report.TopChangedMember {
 			abs = -abs
 		}
 		candidates = append(candidates, candidate{
+			userID:     m.UserID,
 			wowCostPct: wowCost,
 			wowReqPct:  wowReq,
 			jobCat:     cat,
@@ -375,12 +413,17 @@ func buildTopChanged(cur, prev []report.MemberAgg) []report.TopChangedMember {
 
 	result := make([]report.TopChangedMember, len(candidates))
 	for i, c := range candidates {
+		// 从 userTopModels 取该成员成本最高的模型名
+		topModel := ""
+		if tms, ok := userTopModels[c.userID]; ok && len(tms) > 0 {
+			topModel = tms[0].Model // top_models 已按 cost DESC 排序
+		}
 		result[i] = report.TopChangedMember{
 			Idx:         i + 1,
 			JobCategory: c.jobCat,
 			WoWCostPct:  c.wowCostPct,
 			WoWReqPct:   c.wowReqPct,
-			TopModel:    "",  // MemberAgg 无模型粒度，占位
+			TopModel:    topModel,
 			AnomalyRule: "", // derive 层不访问 Anomalies，置空
 		}
 	}

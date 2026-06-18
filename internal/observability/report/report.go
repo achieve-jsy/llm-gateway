@@ -185,6 +185,8 @@ type UnitFact struct {
 	TopChanged []TopChangedMember `json:"top_changed,omitempty"`
 	// 工作室总成本（部门报告一章「工作室内占比」用；department 级别时由工具侧额外拉 studio agg 填入）
 	StudioTotalCostUSD float64 `json:"studio_total_cost_usd,omitempty"`
+	// DeptContributions 工作室下各部门贡献（工作室周报专用）
+	DeptContributions []DeptContribution `json:"dept_contributions,omitempty"`
 }
 
 type UnitMember struct {

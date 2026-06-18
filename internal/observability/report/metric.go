@@ -94,6 +94,18 @@ type JobGroup struct {
 	TopModel      string  `json:"top_model"`
 }
 
+// DeptContribution 工作室下单个部门的贡献统计（工作室周报第二章）。
+type DeptContribution struct {
+	DeptID      string  `json:"dept_id"`
+	DeptName    string  `json:"dept_name"`
+	ActiveUsers int     `json:"active_users"`
+	CostUSD     float64 `json:"cost_usd"`
+	ReqCount    int64   `json:"req_count"`
+	// 以下由 derive 层算出
+	CostRatio  float64 `json:"cost_ratio"`   // 占工作室总成本比例 0~1
+	AvgCostUSD float64 `json:"avg_cost_usd"` // 人均成本
+}
+
 // TopChangedMember 成本变化最大成员（匿名，部门周报四章）。
 type TopChangedMember struct {
 	Idx         int     `json:"idx"`          // 1,2,3...
@@ -137,6 +149,8 @@ type ReportInput struct {
 	Cohort CohortDef
 	// LevelMeta 携带本次报告范围的岗位/工作室/部门上下文（填写 Report.Meta.Scope）。
 	LevelMeta Scope
+	// DeptNames deptID→deptName 映射（工作室级别时由工具侧填入，用于 DeptContribution.DeptName）
+	DeptNames map[string]string `json:"dept_names,omitempty"`
 }
 
 // CohortDef 同岗位分位对标池定义（供 derive 计算分位，pool 内每元素为匿名成员）。

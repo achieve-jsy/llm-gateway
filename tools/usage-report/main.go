@@ -254,6 +254,19 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 		}
 	}
 
+	// 工作室报告：构建 deptID→deptName 映射，供 derive 层填充 DeptContribution.DeptName。
+	// 从部门列表接口拉取，失败静默忽略（DeptName 留空时 derive 降级使用 deptID）。
+	var deptNames map[string]string
+	if cfg.Agg && cfg.Level == "studio" {
+		depts, dErr := cli.FetchDepartments(ctx, "active")
+		if dErr == nil && len(depts) > 0 {
+			deptNames = make(map[string]string, len(depts))
+			for _, d := range depts {
+				deptNames[d.DeptID] = d.DeptName
+			}
+		}
+	}
+
 	in := report.ReportInput{
 		Metrics: metrics, Calls: memberCalls, BaselineMetrics: baselineMetrics, BaselineBuckets: baselineBuckets, Cohort: cohort,
 		LevelMeta:          scope,
@@ -262,6 +275,7 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 		PrevMemberAgg:      prevMemberAgg,
 		StudioMemberAgg:    studioMemberAgg,
 		UserTopModels:      userTopModels, // 部门/工作室: 每用户 top 模型（岗位分布/Top变化人员）
+		DeptNames:          deptNames,     // 工作室级别: deptID→deptName 映射（DeptContribution.DeptName 用）
 	}
 	rep, err := derive.Derive(meta, in, rules)
 	if err != nil {

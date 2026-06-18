@@ -50,13 +50,8 @@ func Derive(meta report.Meta, in report.ReportInput, rules report.RuleSet) (*rep
 		judge.NotComputed = append(judge.NotComputed, report.NotComputed{Metric: "同岗分位", Reason: peer.Note})
 	}
 
-	// 同岗使用效能画像（Vicky 多指标分位表）；样本不足时指标级降级，不整体判失败。
-	judge.PeerProfiles = buildPeerProfiles(in, rep.Fact, rules.MinCohortSample)
-
-	// 第四章：成本最高模型的同岗画像（仅个人粒度）。
-	judge.TopModelPortrait = buildTopModelPortrait(in, rep.Fact, rules.MinCohortSample)
-
 	// 个人报告补充：同岗 Target 的周环比与成本最高模型（来自服务端聚合，不经明细；agg/明细两模式共用）。
+	// 注意：必须在 buildTopModelPortrait 之前执行，portrait 依赖 PersonalFact.TopModels。
 	if rep.Fact.Personal != nil && in.Cohort.Target.WoWCostPct != 0 {
 		rep.Fact.Personal.WoWReqPct = in.Cohort.Target.WoWReqPct
 		rep.Fact.Personal.WoWTokenPct = in.Cohort.Target.WoWTokenPct
@@ -76,7 +71,24 @@ func Derive(meta report.Meta, in report.ReportInput, rules report.RuleSet) (*rep
 		if m := in.Cohort.Target.Metrics; m.HighTierCostRatio > 0 {
 			rep.Fact.Personal.HighTierCostRatio = m.HighTierCostRatio
 		}
+		// agg 模式无明细 TopModels；从 CohortTarget.Metrics.TopModels 补入（dashboard/users 已有）
+		if len(rep.Fact.Personal.TopModels) == 0 {
+			for _, tm := range in.Cohort.Target.Metrics.TopModels {
+				rep.Fact.Personal.TopModels = append(rep.Fact.Personal.TopModels, report.TopModel{
+					Model:       tm.Model,
+					CostUSD:     tm.CostUSD,
+					Calls:       tm.CallCount,
+					TotalTokens: tm.TotalTokens,
+				})
+			}
+		}
 	}
+
+	// 同岗使用效能画像（Vicky 多指标分位表）；样本不足时指标级降级，不整体判失败。
+	judge.PeerProfiles = buildPeerProfiles(in, rep.Fact, rules.MinCohortSample)
+
+	// 第四章：成本最高模型的同岗画像（依赖 PersonalFact.TopModels，须在上方注入之后调用）。
+	judge.TopModelPortrait = buildTopModelPortrait(in, rep.Fact, rules.MinCohortSample)
 
 	// A1–A5
 	anoms := Anomalies(in.Calls, in.BaselineCalls, in.BaselineBuckets, rules, in.ModelContextBudget)

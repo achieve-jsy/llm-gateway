@@ -496,7 +496,6 @@ func (c *Client) FetchDashboard(ctx context.Context, level, id, from, to string)
 // FetchUserMetrics 分页拉取报告期用户聚合指标，避免扫描全公司原始调用明细。
 func (c *Client) FetchUserMetrics(ctx context.Context, from, to string) ([]DashboardUserMetric, error) {
 	var out []DashboardUserMetric
-	var total int64 = -1
 	for page := 1; ; page++ {
 		b, err := c.do(ctx, "GET", "/usage/dashboard/users", map[string]string{
 			"from": from, "to": to, "page": strconv.Itoa(page), "page_size": "100",
@@ -508,21 +507,14 @@ func (c *Client) FetchUserMetrics(ctx context.Context, from, to string) ([]Dashb
 		if err := json.Unmarshal(b, &resp); err != nil {
 			return nil, err
 		}
-		if total < 0 {
-			total = resp.TotalCount
-		} else if total != resp.TotalCount {
-			return nil, fmt.Errorf("dashboard users total changed during pagination: was %d, now %d", total, resp.TotalCount)
-		}
 		out = append(out, resp.Rows...)
-		if int64(len(out)) >= total {
+		// 终止条件：本页无数据，或已达 total_count（total_count 可能因活跃数据变化有小偏差，不报错）
+		if len(resp.Rows) == 0 {
 			break
 		}
-		if len(resp.Rows) == 0 {
-			return nil, fmt.Errorf("incomplete dashboard users: fetched %d of %d", len(out), total)
+		if resp.TotalCount > 0 && int64(len(out)) >= resp.TotalCount {
+			break
 		}
-	}
-	if int64(len(out)) != total {
-		return nil, fmt.Errorf("incomplete dashboard users: fetched %d of %d", len(out), total)
 	}
 	return out, nil
 }

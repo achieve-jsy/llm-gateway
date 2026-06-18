@@ -304,11 +304,11 @@ func writePersonalSections(b *strings.Builder, r *report.Report) {
 		fmt.Fprintf(b, "| 指标 | 本人 | 同岗 P50 | 本人分位 |\n|---|---:|---:|---:|\n")
 		for _, pm := range j.PeerProfiles {
 			if !pm.Supported {
-				fmt.Fprintf(b, "| %s | %s | — | 样本不足 |\n", pm.Label, fmtVal(pm.Current))
+				fmt.Fprintf(b, "| %s | %s | — | 样本不足 |\n", pm.Label, fmtPeerVal(pm.Current, pm.Unit, rate))
 				continue
 			}
 			fmt.Fprintf(b, "| %s | %s | %s | P%.0f |\n",
-				pm.Label, fmtVal(pm.Current), fmtVal(pm.P50), pm.PercentileRank*100)
+				pm.Label, fmtPeerVal(pm.Current, pm.Unit, rate), fmtPeerVal(pm.P50, pm.Unit, rate), pm.PercentileRank*100)
 		}
 		// 效能标签
 		if r.Expression.EfficiencyLabel != "" {
@@ -582,5 +582,25 @@ func fmtTokens(n int64) string {
 		return fmt.Sprintf("%.1fk", float64(n)/1_000)
 	default:
 		return fmt.Sprintf("%d", n)
+	}
+}
+
+// fmtPeerVal 按指标单位格式化同岗画像数值。
+// unit="%" → 小数×100 显示为百分比；unit="USD" → CNY；unit="次"/"天" → 整数；
+// unit="token" → 万 token；空 unit（total_tokens）→ fmtTokens。
+func fmtPeerVal(v float64, unit string, rate float64) string {
+	switch unit {
+	case "%":
+		return fmt.Sprintf("%.1f%%", v*100)
+	case "USD":
+		return cny(v, rate)
+	case "次", "天":
+		return fmt.Sprintf("%.0f %s", v, unit)
+	case "token":
+		// 平均输入上下文：显示为 k token
+		return fmt.Sprintf("%.0fk token", v/1000)
+	default:
+		// total_tokens 等大数字用 fmtTokens
+		return fmtTokens(int64(v))
 	}
 }

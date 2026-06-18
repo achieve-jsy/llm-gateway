@@ -201,15 +201,16 @@ func unitRosterCount(ctx context.Context, cli *client.Client, level, scopeID str
 	return len(users), nil
 }
 
-// jobSlot 取值链：job_category → job_family → job_title → ""（org-roster.md §3-C）。
+// jobSlot 取值链：job_title → job_category → job_family → ""。
+// 优先展示职位名（如"WEB前端开发"），无则退回岗位类别，再退族（org-roster.md §3-C）。
 func jobSlot(c, f, t string) string {
+	if t != "" {
+		return t
+	}
 	if c != "" {
 		return c
 	}
-	if f != "" {
-		return f
-	}
-	return t
+	return f
 }
 
 // poolFor 依「同岗位 + 同 studio」优先，样本不足时逐级回退（org-roster §4.2）：

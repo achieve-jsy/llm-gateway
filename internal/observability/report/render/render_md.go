@@ -559,15 +559,16 @@ func buildDeptConclusion(r *report.Report) string {
 	return "正常 —— 本周期未见异常"
 }
 
-// jobSlotRender 岗位回退（render 包内独立）：category→family→title→""。
+// jobSlotRender 岗位回退（render 包内独立）：title→category→family→""。
+// 优先展示职位名（job_title，如"WEB前端开发"），无则退回岗位类别，再退族。
 func jobSlotRender(category, family, title string) string {
+	if title != "" {
+		return title
+	}
 	if category != "" {
 		return category
 	}
-	if family != "" {
-		return family
-	}
-	return title
+	return family
 }
 
 // fmtTokens 把 token 数量格式化为易读形式（3.2M / 354M / 1.2B）。

@@ -1139,17 +1139,18 @@ func evidenceBasis(evidence []report.Evidence) string {
 	return "缺少判定所需事实"
 }
 
-// jobSlotDerive 岗位回退：category → family → title → "其他"。
+// jobSlotDerive 岗位回退：title → category → family → "其他"。
+// 优先展示职位名（如"WEB前端开发"），无则退回岗位类别，再退族，都空归"其他"。
 // 与 tools/usage-report/cohort.go 的 jobSlot 语义一致，但在 derive 包内独立实现（无工具层依赖）。
 func jobSlotDerive(category, family, title string) string {
+	if title != "" {
+		return title
+	}
 	if category != "" {
 		return category
 	}
 	if family != "" {
 		return family
-	}
-	if title != "" {
-		return title
 	}
 	return "其他"
 }

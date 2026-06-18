@@ -257,8 +257,9 @@ func buildUnitFactFromAgg(in report.ReportInput, level string) *report.UnitFact 
 	return u
 }
 
-// buildJobGroups 按 JobCategory 对 MemberAgg 分组，计算每组使用概况。
-// 空 JobCategory 归入 "其他"；按 AvgCostUSD 降序，最多 10 组。
+// buildJobGroups 按岗位分组，计算每组使用概况。
+// 分组键优先取 JobCategory，空时回退 JobFamily，再空回退 JobTitle，都空归 "其他"。
+// 按 AvgCostUSD 降序，最多 10 组。
 func buildJobGroups(aggs []report.MemberAgg) []report.JobGroup {
 	type groupEntry struct {
 		activeUsers int
@@ -267,10 +268,7 @@ func buildJobGroups(aggs []report.MemberAgg) []report.JobGroup {
 	}
 	groups := map[string]*groupEntry{}
 	for _, m := range aggs {
-		cat := m.JobCategory
-		if cat == "" {
-			cat = "其他"
-		}
+		cat := jobSlotDerive(m.JobCategory, m.JobFamily, m.JobTitle)
 		if m.ReqCount == 0 && m.CostUSD == 0 && m.TotalTokens == 0 {
 			continue
 		}
@@ -354,10 +352,7 @@ func buildTopChanged(cur, prev []report.MemberAgg) []report.TopChangedMember {
 		if pReq != 0 {
 			wowReq = float64(m.ReqCount-pReq) / float64(pReq) * 100
 		}
-		cat := m.JobCategory
-		if cat == "" {
-			cat = "其他"
-		}
+		cat := jobSlotDerive(m.JobCategory, m.JobFamily, m.JobTitle)
 		abs := wowCost
 		if abs < 0 {
 			abs = -abs
@@ -1099,4 +1094,19 @@ func evidenceBasis(evidence []report.Evidence) string {
 		}
 	}
 	return "缺少判定所需事实"
+}
+
+// jobSlotDerive 岗位回退：category → family → title → "其他"。
+// 与 tools/usage-report/cohort.go 的 jobSlot 语义一致，但在 derive 包内独立实现（无工具层依赖）。
+func jobSlotDerive(category, family, title string) string {
+	if category != "" {
+		return category
+	}
+	if family != "" {
+		return family
+	}
+	if title != "" {
+		return title
+	}
+	return "其他"
 }

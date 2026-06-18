@@ -1209,6 +1209,8 @@ type MemberAggRow struct {
 	UserID           string  `json:"user_id"            gorm:"column:user_id"`
 	UserName         string  `json:"user_name"          gorm:"column:user_name"`
 	JobCategory      string  `json:"job_category"       gorm:"column:job_category"`
+	JobFamily        string  `json:"job_family"         gorm:"column:job_family"`
+	JobTitle         string  `json:"job_title"          gorm:"column:job_title"`
 	DeptID           string  `json:"dept_id"            gorm:"column:dept_id"`
 	StudioID         string  `json:"studio_id"          gorm:"column:studio_id"`
 	ReqCount         int64   `json:"req_count"          gorm:"column:req_count"`
@@ -1260,13 +1262,15 @@ func (h *UsageHandler) ReportMembers(c *gin.Context) {
 		base = base.Where("call_logs.studio_id = ?", filterStudioID)
 	}
 
-	// 按 user_id 聚合：每人一行核心单一指标。LEFT JOIN users 取 name/job_category；
+	// 按 user_id 聚合：每人一行核心单一指标。LEFT JOIN users 取 name/job_category/job_family/job_title；
 	// dept/studio 用 call_logs 原始列（无需 JOIN 地图即可供上层按列 rollup）。
 	var rows []MemberAggRow
 	if err := base.Select(`
 		COALESCE(call_logs.user_id, '') AS user_id,
 		COALESCE(u.name, '') AS user_name,
 		COALESCE(u.job_category, '') AS job_category,
+		COALESCE(u.job_family, '') AS job_family,
+		COALESCE(u.job_title, '') AS job_title,
 		COALESCE(call_logs.dept_id, '') AS dept_id,
 		COALESCE(call_logs.studio_id, '') AS studio_id,
 		COUNT(*) AS req_count,
@@ -1281,7 +1285,7 @@ func (h *UsageHandler) ReportMembers(c *gin.Context) {
 		COUNT(DISTINCT call_logs.ts::date) AS active_days,
 		COUNT(DISTINCT call_logs.model) AS model_count`).
 		Joins("LEFT JOIN users u ON u.id::text = call_logs.user_id").
-		Group("call_logs.user_id, u.name, u.job_category, call_logs.dept_id, call_logs.studio_id").
+		Group("call_logs.user_id, u.name, u.job_category, u.job_family, u.job_title, call_logs.dept_id, call_logs.studio_id").
 		Order("cost_usd DESC").
 		Scan(&rows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

@@ -421,6 +421,8 @@ type MemberAggRow struct {
 	UserID           string  `json:"user_id"`
 	UserName         string  `json:"user_name"`
 	JobCategory      string  `json:"job_category"`
+	JobFamily        string  `json:"job_family"`
+	JobTitle         string  `json:"job_title"`
 	DeptID           string  `json:"dept_id"`
 	StudioID         string  `json:"studio_id"`
 	ReqCount         int64   `json:"req_count"`
@@ -663,7 +665,8 @@ func (r LogRow) ToCallEvent() report.CallEvent {
 // ToMemberAgg 把成员级聚合行转为报告中间表示 MemberAgg（每人一行、周期聚合、排除 service）。
 func (r MemberAggRow) ToMemberAgg() report.MemberAgg {
 	return report.MemberAgg{
-		UserID: r.UserID, UserName: r.UserName, JobCategory: r.JobCategory,
+		UserID: r.UserID, UserName: r.UserName,
+		JobCategory: r.JobCategory, JobFamily: r.JobFamily, JobTitle: r.JobTitle,
 		DeptID: r.DeptID, StudioID: r.StudioID,
 		ReqCount: r.ReqCount, SuccessCount: r.SuccessCount, ErrorCount: r.ErrorCount,
 		PromptTokens: r.PromptTokens, CompletionTokens: r.CompletionTokens, ReasoningTokens: r.ReasoningTokens,

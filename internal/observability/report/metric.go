@@ -68,6 +68,8 @@ type MemberAgg struct {
 	UserID           string
 	UserName         string
 	JobCategory      string
+	JobFamily        string
+	JobTitle         string
 	DeptID           string
 	StudioID         string
 	ReqCount         int64

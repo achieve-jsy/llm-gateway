@@ -286,7 +286,84 @@ func buildUnitFactFromAgg(in report.ReportInput, level string) *report.UnitFact 
 		u.StudioTotalCostUSD = studioCost
 	}
 
+	// 部门贡献（studio 级别专用：按 DeptID 聚合 MemberAgg，算各部门成本/人数/人均）
+	if level == "studio" {
+		u.DeptContributions = buildDeptContributions(in)
+	}
+
 	return u
+}
+
+// buildDeptContributions 按 DeptID 聚合 MemberAgg，计算工作室下各部门的成本/人数/人均贡献。
+// 仅在 studio 级别调用。
+// - DeptName 从 in.DeptNames 映射查取，无映射时保持 DeptID 原值作为名称。
+// - CostRatio = 该部门成本 / 工作室总成本（Σ全部活跃成员 CostUSD）；总成本为 0 时比例置 0。
+// - AvgCostUSD = 该部门成本 / 活跃人数（活跃 = ReqCount>0 || CostUSD>0 || TotalTokens>0）；无活跃时为 0。
+// - 结果按 CostUSD 降序排列。
+func buildDeptContributions(in report.ReportInput) []report.DeptContribution {
+	type deptEntry struct {
+		activeUsers int
+		costUSD     float64
+		reqCount    int64
+	}
+	groups := map[string]*deptEntry{}
+
+	// 按 DeptID 聚合
+	for _, m := range in.MemberAgg {
+		if m.ReqCount == 0 && m.CostUSD == 0 && m.TotalTokens == 0 {
+			continue
+		}
+		deptID := m.DeptID
+		if deptID == "" {
+			deptID = "(未分配部门)"
+		}
+		e := groups[deptID]
+		if e == nil {
+			e = &deptEntry{}
+			groups[deptID] = e
+		}
+		e.activeUsers++
+		e.costUSD += m.CostUSD
+		e.reqCount += m.ReqCount
+	}
+
+	if len(groups) == 0 {
+		return nil
+	}
+
+	// 计算工作室总成本（用于 CostRatio 分母）
+	var totalCost float64
+	for _, e := range groups {
+		totalCost += e.costUSD
+	}
+
+	result := make([]report.DeptContribution, 0, len(groups))
+	for deptID, e := range groups {
+		deptName := deptID
+		if n, ok := in.DeptNames[deptID]; ok && n != "" {
+			deptName = n
+		}
+		dc := report.DeptContribution{
+			DeptID:      deptID,
+			DeptName:    deptName,
+			ActiveUsers: e.activeUsers,
+			CostUSD:     e.costUSD,
+			ReqCount:    e.reqCount,
+		}
+		if totalCost > 0 {
+			dc.CostRatio = e.costUSD / totalCost
+		}
+		if e.activeUsers > 0 {
+			dc.AvgCostUSD = e.costUSD / float64(e.activeUsers)
+		}
+		result = append(result, dc)
+	}
+
+	// 按 CostUSD 降序排列
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].CostUSD > result[j].CostUSD
+	})
+	return result
 }
 
 // buildJobGroups 按岗位分组，计算每组使用概况。

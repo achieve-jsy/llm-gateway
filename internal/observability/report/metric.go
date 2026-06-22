@@ -151,6 +151,21 @@ type ReportInput struct {
 	LevelMeta Scope
 	// DeptNames deptID→deptName 映射（工作室级别时由工具侧填入，用于 DeptContribution.DeptName）
 	DeptNames map[string]string `json:"dept_names,omitempty"`
+	// CompanyCostUSD 全公司同期总成本（USD），一页摘要「全公司占比」用。0 时不下发占比。
+	CompanyCostUSD float64 `json:"company_cost_usd,omitempty"`
+	// PrevUserTopModels 上期（同长度窗口）每用户 Top 模型列表，变化归因用。
+	// key=UserID，value=该用户上期 Top 模型列表（与 UserTopModels 同结构）。
+	PrevUserTopModels map[string][]CohortTopModel `json:"prev_user_top_models,omitempty"`
+	// WeeklyTrend 最近 N 周工作室成本序列（4周趋势用）。降序，最新在前。
+	WeeklyTrend []WeeklyPoint `json:"weekly_trend,omitempty"`
+}
+
+// WeeklyPoint 单个周窗口的成本/请求序列点（Vicky 四章模板「4 周趋势」用）。
+type WeeklyPoint struct {
+	WeekStart string  `json:"week_start"`
+	WeekEnd   string  `json:"week_end"`
+	CostUSD   float64 `json:"cost_usd"`
+	ReqCount  int64   `json:"req_count"`
 }
 
 // CohortDef 同岗位分位对标池定义（供 derive 计算分位，pool 内每元素为匿名成员）。

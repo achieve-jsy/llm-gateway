@@ -235,7 +235,7 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 	// agg 模式才拉（明细模式有 TopModels 来自明细聚合）；失败静默忽略。
 	var userTopModels map[string][]report.CohortTopModel
 	if cfg.Agg && (cfg.Level == "department" || cfg.Level == "studio") {
-		umRows, umErr := cli.FetchUserMetrics(ctx, cfg.From, cfg.To)
+		umRows, umErr := cli.FetchUserMetrics(ctx, cfg.From, cfg.To, "", "")
 		if umErr == nil && len(umRows) > 0 {
 			userTopModels = make(map[string][]report.CohortTopModel, len(umRows))
 			for _, row := range umRows {
@@ -267,6 +267,40 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 		}
 	}
 
+	// 工作室报告（Vicky 四章模板）数据层：全公司同期成本 / 上期每用户 Top 模型 / 最近 4 周成本趋势。
+	// 仅在 studio 级别填充；任一拉取失败静默忽略（字段为空即降级），不中断报告。
+	var companyCostUSD float64
+	var prevUserTopModels map[string][]report.CohortTopModel
+	var weeklyTrend []report.WeeklyPoint
+	if cfg.Level == "studio" {
+		// 全公司同期成本：一页摘要「全公司占比」用（CompanyCostUSD 为 0 时 derive/渲染不下发占比）。
+		if db, dErr := cli.FetchDashboard(ctx, "company", "", cfg.From, cfg.To); dErr == nil {
+			companyCostUSD = db.CostEstimate
+		}
+		// 上期（同长度窗口）每用户 Top 模型：变化归因用。复用 prevCfg 窗口口径 [from-periodDays, from-1d]。
+		if pFrom, pTo, pErr := prevWindowDates(cfg.From, cfg.To); pErr == nil {
+			prRows, umErr := cli.FetchUserMetrics(ctx, pFrom, pTo, "", scope.StudioID)
+			if umErr == nil && len(prRows) > 0 {
+				prevUserTopModels = make(map[string][]report.CohortTopModel, len(prRows))
+				for _, row := range prRows {
+					if row.UserID == "" || len(row.TopModels) == 0 {
+						continue
+					}
+					tms := make([]report.CohortTopModel, 0, len(row.TopModels))
+					for _, tm := range row.TopModels {
+						tms = append(tms, report.CohortTopModel{
+							Model: tm.Model, CostUSD: tm.EstCostUSD,
+							CallCount: tm.CallCount, TotalTokens: tm.TotalTokens,
+						})
+					}
+					prevUserTopModels[row.UserID] = tms
+				}
+			}
+		}
+		// 最近 4 周成本趋势：从 cfg.From 往前推 4 个独立 7 天周窗口（降序，最新在前）。
+		weeklyTrend = buildWeeklyTrend(ctx, cli, scope.StudioID, cfg.From)
+	}
+
 	in := report.ReportInput{
 		Metrics: metrics, Calls: memberCalls, BaselineMetrics: baselineMetrics, BaselineBuckets: baselineBuckets, Cohort: cohort,
 		LevelMeta:          scope,
@@ -274,8 +308,11 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 		MemberAgg:          memberAgg,
 		PrevMemberAgg:      prevMemberAgg,
 		StudioMemberAgg:    studioMemberAgg,
-		UserTopModels:      userTopModels, // 部门/工作室: 每用户 top 模型（岗位分布/Top变化人员）
-		DeptNames:          deptNames,     // 工作室级别: deptID→deptName 映射（DeptContribution.DeptName 用）
+		UserTopModels:      userTopModels,     // 部门/工作室: 每用户 top 模型（岗位分布/Top变化人员）
+		DeptNames:          deptNames,         // 工作室级别: deptID→deptName 映射（DeptContribution.DeptName 用）
+		CompanyCostUSD:     companyCostUSD,    // 工作室: 全公司同期成本（一页摘要占比）
+		PrevUserTopModels:  prevUserTopModels, // 工作室: 上期每用户 Top 模型（变化归因）
+		WeeklyTrend:        weeklyTrend,       // 工作室: 最近4周成本趋势
 	}
 	rep, err := derive.Derive(meta, in, rules)
 	if err != nil {
@@ -888,6 +925,47 @@ func baselineWindow(from, to string) (string, string) {
 		f = time.Now()
 	}
 	return f.AddDate(0, 0, -28).Format("2006-01-02"), f.AddDate(0, 0, -1).Format("2006-01-02")
+}
+
+// prevWindowDates 计算与本期同长度窗口的上期窗口范围：[from-periodDays, from-1d]。
+// 与 main.go 中 prevCfg 的构造口径一致（供 Vicky 变化归因「上期每用户 Top 模型」使用）。
+func prevWindowDates(from, to string) (string, string, error) {
+	periodDays, err := inclusiveDays(from, to)
+	if err != nil {
+		return "", "", err
+	}
+	const layout = "2006-01-02"
+	fromT, err := time.Parse(layout, from)
+	if err != nil {
+		return "", "", err
+	}
+	return fromT.AddDate(0, 0, -periodDays).Format(layout), fromT.AddDate(0, 0, -1).Format(layout), nil
+}
+
+// buildWeeklyTrend 构建最近 4 周（截至 cfg.From 前一天）的工作室成本/请求趋势序列，降序（最新在前）。
+// 每个窗口为 7 天不重叠区间（[from-7(i+1)+1d, from-7i-1d]）；任一窗口拉取失败则跳过该点，不中断整体。
+func buildWeeklyTrend(ctx context.Context, cli *client.Client, studioID, from string) []report.WeeklyPoint {
+	const layout = "2006-01-02"
+	fromT, err := time.Parse(layout, from)
+	if err != nil {
+		return nil
+	}
+	out := make([]report.WeeklyPoint, 0, 4)
+	for i := 0; i < 4; i++ {
+		end := fromT.AddDate(0, 0, -1-7*i)
+		start := end.AddDate(0, 0, -6)
+		db, dErr := cli.FetchDashboard(ctx, "studio", studioID, start.Format(layout), end.Format(layout))
+		if dErr != nil {
+			continue // 拉取失败静默忽略，该周点不产出
+		}
+		out = append(out, report.WeeklyPoint{
+			WeekStart: start.Format(layout),
+			WeekEnd:   end.Format(layout),
+			CostUSD:   db.CostEstimate,
+			ReqCount:  db.CallCount,
+		})
+	}
+	return out
 }
 
 // aggregateDaily 把 CallEvent 按(日期,模型,key_id,user_id,scope)聚合成 DailyMetric；total=prompt+completion+reasoning。

@@ -494,12 +494,20 @@ func (c *Client) FetchDashboard(ctx context.Context, level, id, from, to string)
 }
 
 // FetchUserMetrics 分页拉取报告期用户聚合指标，避免扫描全公司原始调用明细。
-func (c *Client) FetchUserMetrics(ctx context.Context, from, to string) ([]DashboardUserMetric, error) {
+// deptID/studioID 非空时作为服务端过滤（dept_id/studio_id），支持按部门/工作室范围拉取。
+func (c *Client) FetchUserMetrics(ctx context.Context, from, to, deptID, studioID string) ([]DashboardUserMetric, error) {
 	var out []DashboardUserMetric
 	for page := 1; ; page++ {
-		b, err := c.do(ctx, "GET", "/usage/dashboard/users", map[string]string{
+		q := map[string]string{
 			"from": from, "to": to, "page": strconv.Itoa(page), "page_size": "100",
-		})
+		}
+		if deptID != "" {
+			q["dept_id"] = deptID
+		}
+		if studioID != "" {
+			q["studio_id"] = studioID
+		}
+		b, err := c.do(ctx, "GET", "/usage/dashboard/users", q)
 		if err != nil {
 			return nil, err
 		}

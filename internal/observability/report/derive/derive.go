@@ -6,6 +6,7 @@ package derive
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -107,6 +108,17 @@ func Derive(meta report.Meta, in report.ReportInput, rules report.RuleSet) (*rep
 
 	// 归因（按模型占比候选）
 	judge.Attribution = buildAttribution(rep.Fact)
+
+	// ---- Vicky 工作室模板（仅 studio 级别）：一页摘要 / 部门环比 / 成本集中度 / 变化归因 ----
+	if rep.Fact.Studio != nil {
+		dcs, conc := buildDeptContributionWoW(in, rep.Fact.Studio.DeptContributions)
+		rep.Fact.Studio.DeptContributions = dcs
+		rep.Fact.Studio.CostConcentration = conc
+		buildStudioSummary(rep.Fact.Studio, in, judge)
+		if attrs := buildStudioAttribution(in); len(attrs) > 0 {
+			judge.Attribution = attrs
+		}
+	}
 
 	rep.Judgment = *judge
 
@@ -807,6 +819,287 @@ func buildAttribution(f report.Fact) []report.Attribution {
 		out = append(out, report.Attribution{Subject: "模型 " + subject, Detail: "周期内调用占比 " + fmtPct(x.weight), Weight: x.weight})
 	}
 	return out
+}
+
+// ===== Vicky 工作室模板派生（t2：一页摘要 / 部门环比 / 成本集中度 / 变化归因）=====
+
+// buildDeptContributionWoW 计算各部门成本周环比（WoWCostPct）与工作室成本集中度（CostConcentration）。
+//   - WoWCostPct：用 in.PrevMemberAgg 按 DeptID（与 buildDeptContributions 相同的归并口径）分组对比；
+//     无上期成本时为 0。
+//   - CostConcentration：Top2 部门 CostRatio 之和（dcs 已按 CostUSD 降序，[0]/[1] 即 Top2；不足 2 部门时收敛 1）。
+//
+// 返回更新后的 dcs 与 CostConcentration。仅在 studio 级别调用；不改动部门/个人路径。
+func buildDeptContributionWoW(in report.ReportInput, dcs []report.DeptContribution) ([]report.DeptContribution, float64) {
+	if len(dcs) == 0 {
+		return dcs, 0
+	}
+	prevCost := map[string]float64{}
+	for _, m := range in.PrevMemberAgg {
+		if m.ReqCount == 0 && m.CostUSD == 0 && m.TotalTokens == 0 {
+			continue
+		}
+		deptID := m.DeptID
+		if deptID == "" {
+			deptID = "(未分配部门)"
+		}
+		prevCost[deptID] += m.CostUSD
+	}
+	for i := range dcs {
+		if p, ok := prevCost[dcs[i].DeptID]; ok && p != 0 {
+			dcs[i].WoWCostPct = (dcs[i].CostUSD - p) / p * 100
+		}
+	}
+	var conc float64
+	for i := 0; i < len(dcs) && i < 2; i++ {
+		conc += dcs[i].CostRatio
+	}
+	if conc > 1 {
+		conc = 1
+	}
+	return dcs, conc
+}
+
+// buildStudioSummary 填充 Vicky 工作室「一页摘要」的派生字段（确定性、可复算）：
+// CompanyCostUSD / CompanyRatio / AnomalySummary / WeeklyTrend / OptimizableCostUSD。
+// 数据不足时安全降级（对应字段保持 0 / nil），不 panic。
+func buildStudioSummary(unitFact *report.UnitFact, in report.ReportInput, judge *report.Judgment) {
+	if unitFact == nil {
+		return
+	}
+	// 全公司占比（CompanyCostUSD 由 tool 侧填入；为 0 时不下发占比）
+	unitFact.CompanyCostUSD = in.CompanyCostUSD
+	if in.CompanyCostUSD > 0 && unitFact.Member.EstCostUSD > 0 {
+		unitFact.CompanyRatio = unitFact.Member.EstCostUSD / in.CompanyCostUSD
+	}
+	// 4 周趋势（原始序列；升/降/平与周均由呈现层据此序列降级呈现）
+	if len(in.WeeklyTrend) > 0 {
+		unitFact.WeeklyTrend = in.WeeklyTrend
+	}
+	// 未关闭异常按 Severity 统计（Hit 且 !NotComputed）
+	if judge != nil {
+		sevCount := map[string]int{}
+		var sevs []string
+		for _, a := range judge.Anomalies {
+			if !a.Hit || a.NotComputed {
+				continue
+			}
+			if sevCount[a.Severity] == 0 {
+				sevs = append(sevs, a.Severity)
+			}
+			sevCount[a.Severity]++
+		}
+		if len(sevs) > 0 {
+			sort.Slice(sevs, func(i, j int) bool { return severityRank(sevs[i]) < severityRank(sevs[j]) })
+			for _, s := range sevs {
+				unitFact.AnomalySummary = append(unitFact.AnomalySummary, report.AnomalyCount{Severity: s, Count: sevCount[s]})
+			}
+		}
+	}
+	// 预计可优化成本（近值估算）
+	unitFact.OptimizableCostUSD = estimateOptimizable(unitFact, in)
+}
+
+// severityRank 返回异常等级的中文排序权重（P0<P1<P2<P3），未知等级靠后（用于 AnomalySummary 稳定排序）。
+func severityRank(s string) int {
+	switch s {
+	case "P0":
+		return 0
+	case "P1":
+		return 1
+	case "P2":
+		return 2
+	case "P3":
+		return 3
+	default:
+		return 99
+	}
+}
+
+// estimateOptimizable 近值估算可优化成本（USD），全部确定性可复算：
+//   - 缓存命中率 < 30%：约省总成本 * 0.1；
+//   - 高价值模型成本占比偏高（>=50%）：约省成本最高模型 * 0.2；
+//   - 以上均未触发时给一个保守近值（成本最高模型 * 0.1，或总成本 * 5%），保证不返回 0。
+func estimateOptimizable(u *report.UnitFact, in report.ReportInput) float64 {
+	total := u.Member.EstCostUSD
+	if total <= 0 {
+		return 0
+	}
+	// 成本最高模型成本（agg 模式优先 UserTopModels；明细模式 Member.TopModels 已按 Calls 排序，取其成本）
+	topModelCost := 0.0
+	if len(u.Member.TopModels) > 0 {
+		topModelCost = u.Member.TopModels[0].CostUSD
+	}
+	if topModelCost <= 0 {
+		topModelCost = topModelCostOf(in)
+	}
+	var opt float64
+	if u.Member.CacheHitRate > 0 && u.Member.CacheHitRate < 0.3 {
+		opt += total * 0.1
+	}
+	// 高价值模型成本占比：agg 模式无 HighTierCostRatio 字段，用成本最高模型 / 总成本近似。
+	highRatio := 0.0
+	if topModelCost > 0 {
+		highRatio = topModelCost / total
+	}
+	if highRatio >= 0.5 && topModelCost > 0 {
+		opt += topModelCost * 0.2
+	}
+	if opt <= 0 {
+		if topModelCost > 0 {
+			opt = topModelCost * 0.1
+		} else {
+			opt = total * 0.05
+		}
+	}
+	return opt
+}
+
+// topModelCostOf 从 in.UserTopModels 取全部用户 Top 模型中的单模型最大成本（agg 模式无 Member.TopModels）。
+func topModelCostOf(in report.ReportInput) float64 {
+	var maxCost float64
+	for _, tms := range in.UserTopModels {
+		for _, tm := range tms {
+			if tm.CostUSD > maxCost {
+				maxCost = tm.CostUSD
+			}
+		}
+	}
+	return maxCost
+}
+
+// studioModelAgg 模型维度聚合（跨用户累加），用于变化归因的中间表示。
+type studioModelAgg struct {
+	calls  int64
+	tokens int64
+	cost   float64
+}
+
+// buildStudioAttribution 用本期 vs 上期每用户 Top 模型列表对比，把工作室成本增量拆为 5 类来源：
+// 业务调用量增长、模型切换(含单价/档位)、上下文变长、错误重试、新项目(新增用户/模型组合)。
+//
+// 每条 Attribution{Subject, Detail, Weight}。约定 Σd_i = totalDelta（总增量），Weight = d_i/totalDelta，
+// 因此 ΣWeight = 1，render 可用「成本值 = 总增量 × Weight」还原各来源增量；totalDelta 恰为 0 时按 Σ|Δ| 归一。
+// 无上期数据（in.PrevUserTopModels 为空）时返回 nil，由 render 降级。
+// 数据不足的来源 Weight=0（Detail 注明）；所有推导确定性、可复算。
+func buildStudioAttribution(in report.ReportInput) []report.Attribution {
+	if len(in.PrevUserTopModels) == 0 {
+		return nil
+	}
+	cur := aggregateStudioModels(in.UserTopModels)
+	prev := aggregateStudioModels(in.PrevUserTopModels)
+	var curCalls, prevCalls int64
+	var curCost, prevCost, curTokens, prevTokens float64
+	for _, a := range cur {
+		curCalls += a.calls
+		curTokens += float64(a.tokens)
+		curCost += a.cost
+	}
+	for _, a := range prev {
+		prevCalls += a.calls
+		prevTokens += float64(a.tokens)
+		prevCost += a.cost
+	}
+	if curCalls == 0 || prevCalls == 0 {
+		return nil
+	}
+	prevUnitCost := prevCost / float64(prevCalls)
+	prevUnitTokenCost := safeDiv(prevCost, prevTokens)
+	prevTokensPerCall := float64(prevTokens) / float64(prevCalls)
+	curTokensPerCall := float64(curTokens) / float64(curCalls)
+
+	// ① 业务调用量增长：调用差 × 上期单位成本
+	d1 := float64(curCalls-prevCalls) * prevUnitCost
+	// ③ 上下文变长：token/调用 比值变化 × 上期单位 token 成本 × 本期调用
+	d3 := (curTokensPerCall - prevTokensPerCall) * float64(curCalls) * prevUnitTokenCost
+	// ④ 错误重试：error/req 比值变化 × 上期单位成本 × 本期调用（成员口径；无数据时为 0）
+	d4 := errorRateDelta(in) * float64(curCalls) * prevUnitCost
+	// ⑤ 新项目：本期新增 (user,model) 组合的成本（上期不存在）
+	newKeys := map[string]bool{}
+	for user, tms := range in.PrevUserTopModels {
+		for _, tm := range tms {
+			newKeys[user+"\x00"+tm.Model] = true
+		}
+	}
+	var d5 float64
+	for user, tms := range in.UserTopModels {
+		for _, tm := range tms {
+			if !newKeys[user+"\x00"+tm.Model] {
+				d5 += tm.CostUSD
+			}
+		}
+	}
+	// ② 模型切换：剩余增量 = 总模型成本增量 - 其他四类（可正可负，代表模型/单价/档位变化）
+	totalDelta := curCost - prevCost
+	d2 := totalDelta - (d1 + d3 + d4 + d5)
+
+	sources := []struct {
+		subject string
+		detail  string
+		delta   float64
+	}{
+		{"业务调用量增长", fmt.Sprintf("调用量由 %d -> %d，按上期单位成本估算", prevCalls, curCalls), d1},
+		{"模型切换", fmt.Sprintf("剔除调用量/上下文/错误/新项目影响后的模型与单价变化，估算 %s", fmtUSD(d2)), d2},
+		{"上下文变长", fmt.Sprintf("单位调用 Token 由 %.0f -> %.0f，按上期单位 token 成本估算", prevTokensPerCall, curTokensPerCall), d3},
+		{"错误重试", fmt.Sprintf("错误率变化 %s -> %s，导致的估算额外成本", errorRatePct(in.PrevMemberAgg), errorRatePct(in.MemberAgg)), d4},
+		{"新项目", fmt.Sprintf("本期新增用户/模型组合成本合计 %s", fmtUSD(d5)), d5},
+	}
+
+	// Weight = 该来源成本增量 / 总增量（Σd_i = totalDelta，故 ΣWeight = 1）。
+	// 约定 render 用「成本值 = 总增量 × Weight」还原该来源增量。
+	// 当总增量恰为 0 时（净变化为 0，无法除），退化为 Σ|Δ| 归一以保留相对量级。
+	var absSum float64
+	for _, s := range sources {
+		absSum += math.Abs(s.delta)
+	}
+	out := make([]report.Attribution, 0, len(sources))
+	for _, s := range sources {
+		w := 0.0
+		if totalDelta != 0 {
+			w = s.delta / totalDelta
+		} else if absSum > 0 {
+			w = s.delta / absSum
+		}
+		out = append(out, report.Attribution{Subject: s.subject, Detail: s.detail, Weight: w})
+	}
+	return out
+}
+
+// aggregateStudioModels 把 per-user Top 模型累加为模型维度聚合（跨用户）。
+func aggregateStudioModels(utm map[string][]report.CohortTopModel) map[string]*studioModelAgg {
+	m := map[string]*studioModelAgg{}
+	for _, tms := range utm {
+		for _, tm := range tms {
+			a := m[tm.Model]
+			if a == nil {
+				a = &studioModelAgg{}
+				m[tm.Model] = a
+			}
+			a.calls += tm.CallCount
+			a.tokens += tm.TotalTokens
+			a.cost += tm.CostUSD
+		}
+	}
+	return m
+}
+
+// memberErrorRate 返回成员口径的 error/req（0..1；分母为 0 时为 0）。
+func memberErrorRate(aggs []report.MemberAgg) float64 {
+	var req, err int64
+	for _, m := range aggs {
+		req += m.ReqCount
+		err += m.ErrorCount
+	}
+	return safeDiv(float64(err), float64(req))
+}
+
+// errorRateDelta 返回本期与上期 error/req 比值之差（无错误数据时为 0）。
+func errorRateDelta(in report.ReportInput) float64 {
+	return memberErrorRate(in.MemberAgg) - memberErrorRate(in.PrevMemberAgg)
+}
+
+// errorRatePct 返回百分比字符串（如 "5.0%"）。
+func errorRatePct(aggs []report.MemberAgg) string {
+	return fmt.Sprintf("%.1f%%", memberErrorRate(aggs)*100)
 }
 
 func topModelsFromUnit(unit report.UnitMember) []report.TopModel {

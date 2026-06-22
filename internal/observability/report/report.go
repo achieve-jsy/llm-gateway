@@ -187,6 +187,19 @@ type UnitFact struct {
 	StudioTotalCostUSD float64 `json:"studio_total_cost_usd,omitempty"`
 	// DeptContributions 工作室下各部门贡献（工作室周报专用）
 	DeptContributions []DeptContribution `json:"dept_contributions,omitempty"`
+	// Vicky 工作室模板「一页摘要」字段（derive 层填充；tool 侧仅在 studio 级别时填入对应的 in 字段）
+	CompanyCostUSD     float64        `json:"company_cost_usd,omitempty"`     // 全公司同期总成本（USD）
+	CompanyRatio       float64        `json:"company_ratio,omitempty"`        // 本工作室占全公司成本比例 0~1
+	AnomalySummary     []AnomalyCount `json:"anomaly_summary,omitempty"`      // 未关闭异常按 Severity 统计（P1×N）
+	WeeklyTrend        []WeeklyPoint  `json:"weekly_trend,omitempty"`         // 最近 N 周工作室成本序列（4周趋势）
+	OptimizableCostUSD float64        `json:"optimizable_cost_usd,omitempty"` // 预计可优化成本（USD）
+	CostConcentration  float64        `json:"cost_concentration,omitempty"`   // 成本集中度：Top2 部门成本占比之和 0~1
+}
+
+// AnomalyCount 未关闭异常的 Severity 级统计（Vicky 工作室一页摘要「异常 P1×N」）。
+type AnomalyCount struct {
+	Severity string `json:"severity"`
+	Count    int    `json:"count"`
 }
 
 type UnitMember struct {

@@ -104,6 +104,8 @@ type DeptContribution struct {
 	// 以下由 derive 层算出
 	CostRatio  float64 `json:"cost_ratio"`   // 占工作室总成本比例 0~1
 	AvgCostUSD float64 `json:"avg_cost_usd"` // 人均成本
+	// WoWCostPct 该部门成本周环比 %（对比上期同部门成员聚合；无上期数据时为 0）
+	WoWCostPct float64 `json:"wow_cost_pct"`
 }
 
 // TopChangedMember 成本变化最大成员（匿名，部门周报四章）。

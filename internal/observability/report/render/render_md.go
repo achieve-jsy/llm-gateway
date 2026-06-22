@@ -6,6 +6,7 @@ package render
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/example/llm-gateway/internal/observability/report"
@@ -74,7 +75,7 @@ func RenderMD(r *report.Report) string {
 		// Vicky 部门周报：6 章模板
 		writeDeptSections(&b, r)
 	} else if r.Fact.Studio != nil {
-		// Vicky 工作室周报：6 章模板（含特有「部门贡献」章节）
+		// Vicky 工作室周报：真实 4 章模板（一页摘要 / 部门贡献 / 变化归因 / 风险与行动清单）
 		writeStudioSections(&b, r)
 	}
 
@@ -531,140 +532,249 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 	}
 }
 
-// writeStudioSections 输出 Vicky 工作室周报 6 章内容。
-// 与部门周报的区别：一章无「工作室内占比」行，二章改为工作室特有的「部门贡献」排名。
-// 依赖 r.Fact.Studio != nil。
+// writeStudioSections 输出 Vicky 工作室周报真实 4 章模板：
+// 一、一页摘要 / 二、部门贡献 / 三、变化归因 / 四、风险与行动清单。
+// 数据缺失时逐条安全降级（对应行跳过/输出占位），不 panic。依赖 r.Fact.Studio != nil。
 func writeStudioSections(b *strings.Builder, r *report.Report) {
 	u := r.Fact.Studio
 	rate := r.Meta.Currency.USDCNYRate
 	j := &r.Judgment
 	w := func(format string, args ...interface{}) { fmt.Fprintf(b, format, args...) }
+	m := u.Member
 
-	// 一、工作室概览
-	w("\n## 一、工作室概览\n\n")
-	successRate := pct(u.Member.SuccessCount, u.Member.ReqCount)
-	w("- 成本 %s | 调用 %d 次 | 成功率 %s | 活跃 %d 人\n",
-		cny(u.Member.EstCostUSD, rate), u.Member.ReqCount, successRate, u.Member.ActiveUserCount)
-	hasWoW := u.WoWCostPct != 0 || u.WoWReqPct != 0 || u.WoWTokenPct != 0
-	if hasWoW {
-		w("- 周环比：成本 %s / 调用 %s / Token %s\n",
-			signedPct(u.WoWCostPct), signedPct(u.WoWReqPct), signedPct(u.WoWTokenPct))
+	// ===== 一、一页摘要 =====
+	w("\n## 一、一页摘要\n\n")
+	// 第一行：成本 / 调用 / 活跃 / Token
+	w("- 成本 %s | 调用 %d 次 | 活跃 %d 人 | Token %s\n",
+		cny(m.EstCostUSD, rate), m.ReqCount, m.ActiveUserCount, fmtTokens(m.TotalTokens))
+	// 第二行：全公司占比 + 周环比（占比仅在公司成本>0 时下发）
+	var line2 []string
+	if u.CompanyRatio > 0 {
+		line2 = append(line2, fmt.Sprintf("全公司占比 %s", pctP(u.CompanyRatio)))
 	}
-	if j.Baseline.Supported {
-		w("- vs 本工作室过去 %d 天：成本处于 P%.0f（MAD 偏离 %.2fσ，%s）\n",
-			j.Baseline.WindowDays, j.Baseline.Percentile*100, j.Baseline.DevSigma, j.Baseline.Trend)
+	if u.WoWCostPct != 0 || u.WoWReqPct != 0 {
+		line2 = append(line2, fmt.Sprintf("周环比：成本 %s / 调用 %s", signedPct(u.WoWCostPct), signedPct(u.WoWReqPct)))
+	}
+	if len(line2) > 0 {
+		w("- %s\n", strings.Join(line2, " | "))
+	}
+	// 第三行：4 周趋势 + 预计可优化成本
+	var line3 []string
+	if len(u.WeeklyTrend) >= 2 {
+		line3 = append(line3, fmt.Sprintf("4 周趋势：%s", studioTrendLabel(u.WeeklyTrend)))
+	}
+	if u.OptimizableCostUSD > 0 {
+		line3 = append(line3, fmt.Sprintf("预计可优化成本：约 %s/周（模型降级 + 缓存）", cny(u.OptimizableCostUSD, rate)))
+	}
+	if len(line3) > 0 {
+		w("- %s\n", strings.Join(line3, " | "))
+	}
+	// 第四行：新增未关闭异常统计（P1 ×N，P2 ×N）
+	if len(u.AnomalySummary) > 0 {
+		var sevParts []string
+		for _, ac := range u.AnomalySummary {
+			sevParts = append(sevParts, fmt.Sprintf("%s ×%d", ac.Severity, ac.Count))
+		}
+		w("- 新增未关闭异常：%s\n", strings.Join(sevParts, "，"))
 	}
 
-	// 二、部门贡献（工作室特有）
-	w("\n## 二、部门贡献（按成本占比排序）\n\n")
+	// ===== 二、部门贡献 =====
+	w("\n## 二、部门贡献\n\n")
 	if len(u.DeptContributions) > 0 {
-		w("| 部门 | 活跃人数 | 成本 | 占比 | 人均成本 |\n")
+		w("| 部门 | 成本 | 占比 | 环比 | 单位活跃人成本 |\n")
 		w("|---|---:|---:|---:|---:|\n")
 		for _, dc := range u.DeptContributions {
-			w("| %s | %d | %s | %s | %s |\n",
-				dc.DeptName, dc.ActiveUsers,
-				cny(dc.CostUSD, rate),
-				pctP(dc.CostRatio),
-				cny(dc.AvgCostUSD, rate))
+			wow := "—"
+			if dc.WoWCostPct != 0 { // 无上期成本时 WoW=0，显示占位
+				wow = signedPct(dc.WoWCostPct)
+			}
+			w("| %s | %s | %s | %s | %s |\n",
+				dc.DeptName, cny(dc.CostUSD, rate), pctP(dc.CostRatio), wow, cny(dc.AvgCostUSD, rate))
+		}
+		if u.CostConcentration > 0 {
+			w("\n- 成本集中度：Top2 部门占 %s\n", pctP(u.CostConcentration))
 		}
 	} else {
 		w("- 本周期无部门贡献数据\n")
 	}
 
-	// 三、岗位分布
-	w("\n## 三、岗位分布（同岗位分位，不做跨岗位裸排名）\n\n")
-	if len(u.JobGroups) > 0 {
-		w("| 岗位类别 | 活跃人数 | 人均成本 | 单次成本中位 | 主用模型 |\n")
-		w("|---|---|---|---|---|\n")
-		for _, jg := range u.JobGroups {
-			topModel := jg.TopModel
-			if topModel == "" {
-				topModel = "—"
+	// ===== 三、变化归因 =====
+	if len(j.Attribution) == 0 {
+		w("\n## 三、变化归因\n\n")
+		w("- 无上期数据，不产出变化归因\n")
+	} else {
+		netDelta := studioNetDeltaUSD(u)
+		if deltas, ok := attributionDeltas(j.Attribution, netDelta); ok {
+			w("\n## 三、变化归因（成本 %s 拆解）\n\n", signedCNY(netDelta, rate))
+			w("| 来源 | 贡献 |\n")
+			w("|---|---:|\n")
+			for i, at := range j.Attribution {
+				w("| %s | %s |\n", at.Subject, signedCNY(deltas[i], rate))
 			}
-			w("| %s | %d | %s | %s | %s |\n",
-				jg.JobCategory, jg.ActiveUsers,
-				cny(jg.AvgCostUSD, rate),
-				cny(jg.MedianCostUSD, rate),
-				topModel)
+		} else {
+			w("\n## 三、变化归因\n\n")
+			w("- 本周期成本变化有限，无需归因\n")
 		}
-	} else {
-		w("- 岗位分布数据不可得（-agg 模式无 JobCategory 明细）\n")
 	}
 
-	// 四、Service Key 用量与风险
-	w("\n## 四、Service Key 用量与风险（仅当前归属工作室）\n\n")
-	sk := u.ServiceKey
-	if sk.ReqCount > 0 {
-		totalCost := u.Member.EstCostUSD + sk.EstCostUSD
-		var skRatio string
-		if totalCost > 0 {
-			skRatio = fmt.Sprintf("，占工作室总成本 %s", pctP(sk.EstCostUSD/totalCost))
-		}
-		w("- Service Key 总成本 %s%s；调用 %d 次；Token %d\n",
-			cny(sk.EstCostUSD, rate), skRatio, sk.ReqCount, sk.TotalTokens)
-	} else {
-		w("- 本周期无 Service Key 调用（或 -agg 模式未拉取明细）\n")
-	}
-
-	// 五、重点变化（Top 变化人员）
-	w("\n## 五、重点变化（Top 变化人员）\n\n")
-	if len(u.TopChanged) > 0 {
-		w("| 人员（匿名） | 岗位 | 成本环比 | 主用模型 | 是否有解释 |\n")
-		w("|---|---|---|---|---|\n")
-		for _, tc := range u.TopChanged {
-			explain := "待确认"
-			if tc.AnomalyRule != "" {
-				explain = "命中 " + tc.AnomalyRule
-			}
-			w("| 员工%d | %s | %s | %s | %s |\n",
-				tc.Idx, tc.JobCategory, signedPct(tc.WoWCostPct), tc.TopModel, explain)
-		}
-	} else {
-		w("- 无上期数据，不产出环比变化（需 -agg 模式 + 有上期记录）\n")
-	}
-
-	// 六、建议（含异常摘要）
-	w("\n## 六、建议\n\n")
-	hitCount, missCount := 0, 0
+	// ===== 四、风险与行动清单 =====
+	w("\n## 四、风险与行动清单\n\n")
+	var hits []report.AnomalyHit
 	for _, a := range j.Anomalies {
-		if a.Hit {
-			hitCount++
-		} else if !a.NotComputed {
-			missCount++
+		if a.Hit && !a.NotComputed {
+			hits = append(hits, a)
 		}
 	}
-	// 异常摘要行
-	w("- 异常：命中 %d 条 | 未命中 %d 条\n", hitCount, missCount)
-	for _, a := range j.Anomalies {
-		if a.Hit {
-			detail := a.Name
-			if len(a.Evidence) > 0 {
-				detail += "（" + a.Evidence[0].Value + "）"
+	if len(hits) == 0 {
+		w("- 本周期无风险项，各成员用量正常\n")
+	} else {
+		w("| 对象 | 时间 | 命中规则 | 影响成本 | 状态 | Owner | 建议动作 | 截止 |\n")
+		w("|---|---|---|---|---|---|---|---|\n")
+		for _, a := range hits {
+			win := a.Window
+			if win == "" {
+				win = r.Meta.Period.From + "~" + r.Meta.Period.To
 			}
-			w("  - [%s] %s —— %s\n", a.Severity, a.Rule, detail)
+			impact := "—"
+			if a.ImpactCostUSD > 0 {
+				impact = cny(a.ImpactCostUSD, rate)
+			}
+			w("| %s | %s | %s | %s | 待确认 | 应用Owner | %s | %s |\n",
+				riskObject(a), win, a.Rule+" "+a.Name, impact, riskAction(a.Rule), shortDate(r.Meta.Period.To))
 		}
-	}
-	// 建议条目
-	hasSuggestion := false
-	if len(u.TopChanged) > 0 {
-		w("- 关注成本环比变化最大的成员（见第五章），建议核查原因\n")
-		hasSuggestion = true
-	}
-	if u.Member.CacheHitRate > 0 && u.Member.CacheHitRate < 0.2 {
-		w("- 工作室整体缓存命中率偏低（%s），建议各岗位关注 Prompt 缓存策略\n", pctP(u.Member.CacheHitRate))
-		hasSuggestion = true
-	}
-	if hitCount == 0 {
-		w("- 本周期无规则型异常，各岗位用量正常，保持现状\n")
-		hasSuggestion = true
-	}
-	if !hasSuggestion {
-		w("- 本周期无特别建议\n")
 	}
 }
 
-// buildDeptConclusion 生成部门周报「本周结论」一行。
+// signedCNY 带符号的 CNY 展示：+¥12.34 / -¥56.78（入参为 USD，按汇率换算）。
+func signedCNY(usd float64, rate float64) string {
+	sign := "+"
+	v := usd * rate
+	if v < 0 {
+		sign = "-"
+		v = -v
+	}
+	return fmt.Sprintf("%s¥%.2f", sign, v)
+}
+
+// studioNetDeltaUSD 计算工作室成本净增量（USD）：本期成本 - 上期成本（由 WoWCostPct 反推上期）。
+// WoWCostPct==0（无上期/无变化）或无法反推时返回 0。
+func studioNetDeltaUSD(u *report.UnitFact) float64 {
+	cur := u.Member.EstCostUSD
+	if cur <= 0 {
+		return 0
+	}
+	denom := 1 + u.WoWCostPct/100
+	if denom <= 0 {
+		return 0
+	}
+	return cur - cur/denom
+}
+
+// attributionDeltas 由 judge.Attribution 的 Weight（按 Σ|Δ| 归一，可为负表示降本）反推各来源成本增量(USD)。
+// 已知 Σweight = netDelta/absSum，故 absSum = netDelta/Σweight；Δi = weight_i × absSum。
+// 反推不可行（无上期 / netDelta≈0 / Σweight≈0）时返回 ok=false，由调用方降级为「成本变化有限」。
+func attributionDeltas(attrs []report.Attribution, netDelta float64) ([]float64, bool) {
+	if len(attrs) == 0 {
+		return nil, false
+	}
+	if math.Abs(netDelta) < 0.005 {
+		return nil, false
+	}
+	var sumW float64
+	for _, a := range attrs {
+		sumW += a.Weight
+	}
+	if math.Abs(sumW) < 1e-9 {
+		return nil, false
+	}
+	absSum := netDelta / sumW
+	out := make([]float64, len(attrs))
+	for i, a := range attrs {
+		out[i] = a.Weight * absSum
+	}
+	return out, true
+}
+
+// studioTrendLabel 依据 4 周成本序列（降序、最新在前）给出确定性趋势标签。
+func studioTrendLabel(pts []report.WeeklyPoint) string {
+	if len(pts) < 2 {
+		return "数据不足"
+	}
+	first := pts[len(pts)-1].CostUSD // 最旧
+	last := pts[0].CostUSD           // 最新
+	if first <= 0 {
+		return "数据不足"
+	}
+	chg := (last - first) / first
+	switch {
+	case chg > 0.05:
+		return "上升"
+	case chg > 0.01:
+		return "稳中有升"
+	case chg < -0.05:
+		return "下降"
+	case chg < -0.01:
+		return "稳中有降"
+	default:
+		return "平稳"
+	}
+}
+
+// riskObject 从异常命中的维度信息提取风险对象；无组织维度时用默认「成员/部门」。
+func riskObject(a report.AnomalyHit) string {
+	if a.Dimensions != nil {
+		if v := a.Dimensions["user_id"]; v != "" {
+			return "成员 " + v
+		}
+		if v := a.Dimensions["dept_name"]; v != "" {
+			return v
+		}
+		if v := a.Dimensions["dept_id"]; v != "" {
+			return "部门 " + v
+		}
+	}
+	return "成员/部门"
+}
+
+// riskAction 按命中规则给出一条默认建议动作（无组织数据时使用）。
+func riskAction(rule string) string {
+	switch rule {
+	case "A1":
+		return "确认是否存在失控脚本/任务，核查运行时长与调用频率"
+	case "A2":
+		return "核查批处理/循环/异常重试，定位成本激增来源"
+	case "A3":
+		return "检查重试策略与失败率，定位高失败重试段"
+	case "A4":
+		return "优化 Prompt / 精简上下文，核查超长调用"
+	case "A5":
+		return "确认是否备案；未备案建议加强非工作时段管控"
+	default:
+		return "核查原因"
+	}
+}
+
+// shortDate 将 "YYYY-MM-DD" 截断为 "MM-DD"；非日期字符串原样返回。
+func shortDate(s string) string {
+	if len(s) >= 10 && s[4] == '-' {
+		return s[5:10]
+	}
+	return s
+}
+
+// countSeverity 统计未关闭异常中指定等级的条数（AnomalySummary 专用）。
+func countSeverity(summary []report.AnomalyCount, sev string) int {
+	for _, ac := range summary {
+		if ac.Severity == sev {
+			return ac.Count
+		}
+	}
+	return 0
+}
+
+// buildDeptConclusion 生成部门/工作室周报「本周结论」一行。
 // 优先级：异常命中 > 成本大幅上涨 > 成本下降 > 正常。
+// 工作室级别：数据存在时追加「占全公司 %；新增 N 起 P1 待处理」。
 func buildDeptConclusion(r *report.Report) string {
 	u := unitFact(r)
 	j := &r.Judgment
@@ -679,19 +789,31 @@ func buildDeptConclusion(r *report.Report) string {
 			}
 		}
 	}
-	if hitCount > 0 {
-		return fmt.Sprintf("关注 —— 命中 %d 条异常（%s）", hitCount, maxSeverity)
+	base := ""
+	switch {
+	case hitCount > 0:
+		base = fmt.Sprintf("关注 —— 命中 %d 条异常（%s）", hitCount, maxSeverity)
+	case u != nil && u.WoWCostPct >= 30:
+		base = fmt.Sprintf("关注 —— 成本环比 +%.0f%%", u.WoWCostPct)
+	case u != nil && u.WoWCostPct <= -20:
+		base = fmt.Sprintf("良好 —— 成本环比下降 %.0f%%", -u.WoWCostPct)
+	default:
+		base = "正常 —— 本周期未见异常"
 	}
-	// 次优先：成本大幅上涨
-	if u != nil && u.WoWCostPct >= 30 {
-		return fmt.Sprintf("关注 —— 成本环比 +%.0f%%", u.WoWCostPct)
+	// 工作室专属追加：占全公司占比 + 新增未关闭 P1（仅 studio 级别有这些字段）
+	if r.Fact.Studio != nil && u != nil {
+		var suffix []string
+		if u.CompanyRatio > 0 {
+			suffix = append(suffix, fmt.Sprintf("占全公司 %.1f%%", u.CompanyRatio*100))
+		}
+		if p1 := countSeverity(u.AnomalySummary, "P1"); p1 > 0 {
+			suffix = append(suffix, fmt.Sprintf("%d 起 P1 待处理", p1))
+		}
+		if len(suffix) > 0 {
+			base += " ｜ " + strings.Join(suffix, "；")
+		}
 	}
-	// 次优先：成本明显下降
-	if u != nil && u.WoWCostPct <= -20 {
-		return fmt.Sprintf("良好 —— 成本环比下降 %.0f%%", -u.WoWCostPct)
-	}
-	// 默认
-	return "正常 —— 本周期未见异常"
+	return base
 }
 
 // jobSlotRender 岗位回退（render 包内独立）：title→category→family→""。

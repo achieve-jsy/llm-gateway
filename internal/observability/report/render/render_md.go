@@ -623,8 +623,8 @@ func writeStudioSections(b *strings.Builder, r *report.Report) {
 		w("- 无上期数据，不产出环比变化（需 -agg 模式 + 有上期记录）\n")
 	}
 
-	// 六、异常处置
-	w("\n## 六、异常处置\n\n")
+	// 六、建议（含异常摘要）
+	w("\n## 六、建议\n\n")
 	hitCount, missCount := 0, 0
 	for _, a := range j.Anomalies {
 		if a.Hit {
@@ -633,19 +633,18 @@ func writeStudioSections(b *strings.Builder, r *report.Report) {
 			missCount++
 		}
 	}
-	w("- 命中 %d 条 | 未命中 %d 条\n", hitCount, missCount)
+	// 异常摘要行
+	w("- 异常：命中 %d 条 | 未命中 %d 条\n", hitCount, missCount)
 	for _, a := range j.Anomalies {
 		if a.Hit {
 			detail := a.Name
 			if len(a.Evidence) > 0 {
 				detail += "（" + a.Evidence[0].Value + "）"
 			}
-			w("- [%s] %s —— %s\n", a.Severity, a.Rule, detail)
+			w("  - [%s] %s —— %s\n", a.Severity, a.Rule, detail)
 		}
 	}
-
-	// 七、建议
-	w("\n## 七、建议\n\n")
+	// 建议条目
 	hasSuggestion := false
 	if len(u.TopChanged) > 0 {
 		w("- 关注成本环比变化最大的成员（见第五章），建议核查原因\n")

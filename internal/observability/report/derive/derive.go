@@ -1124,6 +1124,20 @@ func buildBaselineSeries(in report.ReportInput, rules report.RuleSet) BaseResult
 		current = float64(totalReq) / float64(len(byDay))
 	}
 
+	// 口径：当期无逐日调用数据（如 -agg 成员聚合模式，Metrics 为空）→ 无法计算
+	// 当期日均，禁用「当前=0 去套历史分位」的误导性判定，明确降级不做基线判定。
+	if len(byDay) == 0 {
+		return BaseResult{
+			Supported:     false,
+			WindowDays:    rules.BaselineWindowDays,
+			SampleDays:    0,
+			Current:       0,
+			CurrentWindow: "期前28日物化",
+			Trend:         "flat",
+			Note:          "当前周期无逐日调用数据（-agg 成员聚合模式不拉逐日明细），无法计算当期日均，不做基线判定。",
+		}
+	}
+
 	// 基线日序列：工具侧已拉「期前 28 完整自然日」并聚合到 BaselineMetrics（成员口径）。
 	var vals []float64
 	windowLabel := "期前28日物化"

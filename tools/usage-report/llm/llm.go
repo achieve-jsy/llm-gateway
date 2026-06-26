@@ -17,7 +17,7 @@ import (
 const (
 	defaultTimeout = 60 * time.Second
 	defaultModel   = "gpt-5.6-sol" // 未指定 model 时的兜底模型
-	maxTokens      = 2000
+	maxTokens      = 8000    // 模型分析需生成较长的 Markdown；深度推理模型 reasoning 会吃掉大量 token
 	respBodyLimit  = 1 << 20 // 响应体读取上限（1 MiB）
 	errBodyLen     = 500     // 错误信息里 body 截断长度
 )

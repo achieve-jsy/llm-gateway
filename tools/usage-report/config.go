@@ -6,39 +6,41 @@ package main
 import (
 	"flag"
 	"os"
+	"strconv"
 	"time"
 )
 
 // Config 运行配置。
 type Config struct {
-	BaseURL     string
-	Token       string
-	Level       string // personal | department | studio
-	Scope       string // personal=user_id / department=dept_id / studio=studio_id
-	From        string
-	To          string
-	Period      string // week | month | custom
-	KeyType     string
-	JobCategory string
-	USDCNYRate  float64
-	MaxLogs     int
-	JSONOut     string
-	MDOut       string
-	HTMLOut     string
-	VickyOut    string
-	VickySubmit bool // 是否生成可 POST /api/reports 的 JSON 载荷
-	VickyProject string
-	VickyCategory string
+	BaseURL        string
+	Token          string
+	Level          string // personal | department | studio
+	Scope          string // personal=user_id / department=dept_id / studio=studio_id
+	From           string
+	To             string
+	Period         string // week | month | custom
+	KeyType        string
+	JobCategory    string
+	USDCNYRate     float64
+	MaxLogs        int
+	JSONOut        string
+	MDOut          string
+	HTMLOut        string
+	VickyOut       string
+	VickySubmit    bool // 是否生成可 POST /api/reports 的 JSON 载荷
+	VickyProject   string
+	VickyCategory  string
 	VickyNarrative string
-	Debug       bool
-	Agg         bool // 用成员聚合(/usage/report/members)构造事实层加法核心，不拉全量明细；A1–A5/模型预算/服务Key/Top模型等明细依赖项降级(NotComputed/空+注记)
-	All         bool // 批量编排：枚举 level 全体对象，各出报告 + 汇总索引（阶段4）
-	OutDir      string // 批量输出目录（每对象报告 + 汇总索引）；默认当前目录
-	SummaryMD   string // 批量汇总索引 MD 路径；默认 <outdir>/summary_<from>_<to>.md
-	LLMBase     string // LLM base URL（如 https://aimeter.xk-devops.com/v1）
-	LLMKey      string // LLM API key；非空即视为启用
-	LLMModel    string // LLM 模型名
-	LLMEnabled  bool   // 是否启用 LLM 分析（显式开关或 LLMKey 非空）
+	Debug          bool
+	Agg            bool   // 用成员聚合(/usage/report/members)构造事实层加法核心，不拉全量明细；A1–A5/模型预算/服务Key/Top模型等明细依赖项降级(NotComputed/空+注记)
+	All            bool   // 批量编排：枚举 level 全体对象，各出报告 + 汇总索引（阶段4）
+	OutDir         string // 批量输出目录（每对象报告 + 汇总索引）；默认当前目录
+	SummaryMD      string // 批量汇总索引 MD 路径；默认 <outdir>/summary_<from>_<to>.md
+	LLMBase        string // LLM base URL（如 https://aimeter.xk-devops.com/v1）
+	LLMKey         string // LLM API key；非空即视为启用
+	LLMModel       string // LLM 模型名
+	LLMTimeout     int    // LLM 单次请求超时（秒）；推理模型较慢建议较大值
+	LLMEnabled     bool   // 是否启用 LLM 分析（显式开关或 LLMKey 非空）
 }
 
 func parseConfig(args []string) Config {
@@ -71,11 +73,15 @@ func parseConfig(args []string) Config {
 	fs.StringVar(&c.LLMBase, "llm-base", envOr("USAGE_REPORT_LLM_BASE", ""), "LLM base URL(如 https://aimeter.xk-devops.com/v1)")
 	fs.StringVar(&c.LLMKey, "llm-key", os.Getenv("USAGE_REPORT_LLM_KEY"), "LLM API key")
 	fs.StringVar(&c.LLMModel, "llm-model", envOr("USAGE_REPORT_LLM_MODEL", "gpt-5.6-sol"), "LLM 模型名")
+	fs.IntVar(&c.LLMTimeout, "llm-timeout", envInt("USAGE_REPORT_LLM_TIMEOUT", 120), "LLM 单次请求超时(秒)；推理模型建议较大值")
 	fs.BoolVar(&c.LLMEnabled, "llm-enabled", false, "启用 LLM 分析(显式开关或 LLMKey 非空才启用)")
 	_ = fs.Parse(args)
 	// LLM 启用：显式 -llm-enabled 开关，或提供了 LLMKey（key 非空即视为启用）。
 	if !c.LLMEnabled && c.LLMKey != "" {
 		c.LLMEnabled = true
+	}
+	if c.LLMTimeout <= 0 {
+		c.LLMTimeout = 120
 	}
 	if c.From == "" || c.To == "" {
 		from, to := periodFor(c.Period)
@@ -108,6 +114,16 @@ func periodFor(p string) (string, string) {
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return def
+}
+
+// envInt 从环境变量读取整数，非空且可解析时使用，否则返回 def。
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
 	return def
 }

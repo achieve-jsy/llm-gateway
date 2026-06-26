@@ -73,7 +73,7 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 	// LLM 模型分析客户端：仅启用时才构造（懒初始化，避免无效连接；失败走降级，绝不中断报告）。
 	var llmCli *llm.Client
 	if cfg.LLMEnabled {
-		llmCli = llm.New(cfg.LLMBase, cfg.LLMKey, cfg.LLMModel)
+		llmCli = llm.New(cfg.LLMBase, cfg.LLMKey, cfg.LLMModel, time.Duration(cfg.LLMTimeout)*time.Second, 0)
 	}
 
 	// 2) 数据获取：默认拉调用明细（A1–A5/模型预算/ServiceKey/Top模型保真）；

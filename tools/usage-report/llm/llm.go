@@ -17,28 +17,38 @@ import (
 const (
 	defaultTimeout = 60 * time.Second
 	defaultModel   = "gpt-5.6-sol" // 未指定 model 时的兜底模型
-	maxTokens      = 8000    // 模型分析需生成较长的 Markdown；深度推理模型 reasoning 会吃掉大量 token
-	respBodyLimit  = 1 << 20 // 响应体读取上限（1 MiB）
-	errBodyLen     = 500     // 错误信息里 body 截断长度
+	defaultMaxTok  = 8000          // 模型分析需生成较长的 Markdown；深度推理模型 reasoning 会吃掉大量 token
+	respBodyLimit  = 1 << 20       // 响应体读取上限（1 MiB）
+	errBodyLen     = 500           // 错误信息里 body 截断长度
 )
 
 // Client 是 OpenAI 兼容 chat/completions 客户端。
 type Client struct {
-	baseURL string // 如 https://aimeter.xk-devops.com/v1
-	apiKey  string
-	model   string
-	client  *http.Client
-	timeout time.Duration
+	baseURL   string // 如 https://aimeter.xk-devops.com/v1
+	apiKey    string
+	model     string
+	timeout   time.Duration
+	maxTokens int
+	client    *http.Client
 }
 
 // New 构造 LLM 客户端。baseURL 固定为 {service}/v1，末尾多余的 "/" 会被去掉。
-func New(baseURL, apiKey, model string) *Client {
+// timeout 为单次请求超时（推理模型较慢，建议传入较大值；<=0 用默认 60s）。
+// maxTokens 为单次响应 token 上限（深度推理模型需较大值；<=0 用默认 8000）。
+func New(baseURL, apiKey, model string, timeout time.Duration, maxTokens int) *Client {
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+	if maxTokens <= 0 {
+		maxTokens = defaultMaxTok
+	}
 	return &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		apiKey:  apiKey,
-		model:   model,
-		client:  &http.Client{Timeout: defaultTimeout},
-		timeout: defaultTimeout,
+		baseURL:   strings.TrimRight(baseURL, "/"),
+		apiKey:    apiKey,
+		model:     model,
+		timeout:   timeout,
+		maxTokens: maxTokens,
+		client:    &http.Client{Timeout: timeout},
 	}
 }
 
@@ -82,7 +92,7 @@ func (c *Client) Complete(ctx context.Context, system, user string) (string, err
 			{Role: "system", Content: system},
 			{Role: "user", Content: user},
 		},
-		MaxTokens: maxTokens,
+		MaxTokens: c.maxTokens,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

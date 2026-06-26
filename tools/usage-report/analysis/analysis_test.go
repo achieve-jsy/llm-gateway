@@ -93,7 +93,7 @@ func lvlRequiredKeyword(level string) string {
 
 // newLLM 构造一个指向给定 server 的 llm.Client（固定 model + 测试 key）。
 func newLLM(srv *httptest.Server) *llm.Client {
-	return llm.New(srv.URL, "test-key", "gpt-4o")
+	return llm.New(srv.URL, "test-key", "gpt-4o", 0, 0)
 }
 
 func TestGenerate_NilCLI(t *testing.T) {

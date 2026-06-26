@@ -34,8 +34,8 @@ func TestCompleteSuccess(t *testing.T) {
 		if req.Model != "test-model" {
 			t.Fatalf("request model = %q, want test-model", req.Model)
 		}
-		if req.MaxTokens != maxTokens {
-			t.Fatalf("request max_tokens = %d, want %d", req.MaxTokens, maxTokens)
+		if req.MaxTokens != defaultMaxTok {
+			t.Fatalf("request max_tokens = %d, want %d", req.MaxTokens, defaultMaxTok)
 		}
 		if len(req.Messages) != 2 || req.Messages[0].Role != "system" || req.Messages[1].Role != "user" {
 			t.Fatalf("unexpected messages: %+v", req.Messages)
@@ -50,7 +50,7 @@ func TestCompleteSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(server.URL, "test-key", "test-model")
+	c := New(server.URL, "test-key", "test-model", 0, 0)
 	out, err := c.Complete(context.Background(), "sys", "user")
 	if err != nil {
 		t.Fatalf("Complete error: %v", err)
@@ -74,7 +74,7 @@ func TestCompleteDefaultModel(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(server.URL, "test-key", "") // 空 model → 用默认
+	c := New(server.URL, "test-key", "", 0, 0) // 空 model → 用默认
 	if _, err := c.Complete(context.Background(), "sys", "user"); err != nil {
 		t.Fatalf("Complete error: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestCompleteHTTPError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(server.URL, "test-key", "test-model")
+	c := New(server.URL, "test-key", "test-model", 0, 0)
 	_, err := c.Complete(context.Background(), "sys", "user")
 	if err == nil {
 		t.Fatal("expected error for non-2xx status")
@@ -104,7 +104,7 @@ func TestCompleteNoChoices(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(server.URL, "test-key", "test-model")
+	c := New(server.URL, "test-key", "test-model", 0, 0)
 	_, err := c.Complete(context.Background(), "sys", "user")
 	if err == nil {
 		t.Fatal("expected error for no choices")
@@ -121,7 +121,7 @@ func TestCompleteInvalidJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(server.URL, "test-key", "test-model")
+	c := New(server.URL, "test-key", "test-model", 0, 0)
 	_, err := c.Complete(context.Background(), "sys", "user")
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
@@ -130,11 +130,11 @@ func TestCompleteInvalidJSON(t *testing.T) {
 
 func TestCompleteEmptyBaseAndKey(t *testing.T) {
 	// base 为空的错误
-	if _, err := New("", "key", "m").Complete(context.Background(), "s", "u"); err == nil {
+	if _, err := New("", "key", "m", 0, 0).Complete(context.Background(), "s", "u"); err == nil {
 		t.Fatal("expected error for empty base URL")
 	}
 	// key 为空的错误
-	if _, err := New("http://example.com/v1", "", "m").Complete(context.Background(), "s", "u"); err == nil {
+	if _, err := New("http://example.com/v1", "", "m", 0, 0).Complete(context.Background(), "s", "u"); err == nil {
 		t.Fatal("expected error for empty api key")
 	}
 	// nil client 的错误

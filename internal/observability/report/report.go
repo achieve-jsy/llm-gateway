@@ -22,6 +22,16 @@ type Report struct {
 	Fact          Fact       `json:"fact"`
 	Judgment      Judgment   `json:"judgment"`
 	Expression    Expression `json:"expression"`
+	// ModelAnalysis LLM 生成的模型分析章节（各类型注入）。仅在 LLM 分析启用时非 nil；
+	// LLM 失败/未启用时 Levels 为空、Note 记录原因，供渲染层展示降级说明。
+	ModelAnalysis *ModelAnalysis `json:"model_analysis,omitempty"`
+}
+
+// ModelAnalysis LLM 生成的模型分析章节（personal|department|studio 各类型注入）。
+type ModelAnalysis struct {
+	Level    string `json:"level,omitempty"`    // personal|department|studio
+	Sections string `json:"sections,omitempty"` // LLM 生成的 Markdown 章节内容（含 ## 子标题）
+	Note     string `json:"note,omitempty"`     // 若 LLM 失败/未启用，说明原因（渲染层可展示降级说明）
 }
 
 // Validate 校验可存档报告的最小稳定契约。
@@ -157,14 +167,14 @@ type PersonalFact struct {
 	AvgDurationMs      float64        `json:"avg_duration_ms"`
 	P95DurationMs      float64        `json:"p95_duration_ms"`
 	AvgTTFTMs          float64        `json:"avg_ttft_ms"`
-	AvgInputCtxTokens  float64        `json:"avg_input_ctx_tokens"`  // = prompt_total / req
-	CacheHitRate       float64        `json:"cache_hit_rate"`        // = cached / prompt_total
-	CostPer1Million    float64        `json:"cost_per_1m_tokens"`    // = cost / total_tokens * 1e6
-	HighTierCostRatio  float64        `json:"high_tier_cost_ratio"`  // = top_model_cost / total_cost
-	TopModel           string         `json:"top_model"`             // 成本最高模型名
-	WoWReqPct          float64        `json:"wow_req_pct"`           // 调用量周环比 %
-	WoWTokenPct        float64        `json:"wow_token_pct"`         // Token 周环比 %
-	WoWCostPct         float64        `json:"wow_cost_pct"`          // 成本周环比 %
+	AvgInputCtxTokens  float64        `json:"avg_input_ctx_tokens"` // = prompt_total / req
+	CacheHitRate       float64        `json:"cache_hit_rate"`       // = cached / prompt_total
+	CostPer1Million    float64        `json:"cost_per_1m_tokens"`   // = cost / total_tokens * 1e6
+	HighTierCostRatio  float64        `json:"high_tier_cost_ratio"` // = top_model_cost / total_cost
+	TopModel           string         `json:"top_model"`            // 成本最高模型名
+	WoWReqPct          float64        `json:"wow_req_pct"`          // 调用量周环比 %
+	WoWTokenPct        float64        `json:"wow_token_pct"`        // Token 周环比 %
+	WoWCostPct         float64        `json:"wow_cost_pct"`         // 成本周环比 %
 	TopModels          []TopModel     `json:"top_models"`
 }
 
@@ -251,7 +261,7 @@ type TopModel struct {
 type Judgment struct {
 	Baseline         Baseline          `json:"baseline"`
 	Peer             Peer              `json:"peer"`
-	PeerProfiles     []PeerMetric      `json:"peer_profiles"`     // Vicky「同岗使用效能画像」多指标分位表
+	PeerProfiles     []PeerMetric      `json:"peer_profiles"`      // Vicky「同岗使用效能画像」多指标分位表
 	TopModelPortrait *TopModelPortrait `json:"top_model_portrait"` // Vicky「成本最高模型的同岗画像」第四章
 	Efficiency       Efficiency        `json:"efficiency"`
 	Anomalies        []AnomalyHit      `json:"anomalies"`
@@ -262,22 +272,22 @@ type Judgment struct {
 // TopModelPortrait 成本最高模型的同岗画像（Vicky 第四章）。
 // 仅个人粒度产出；单元级为 nil。
 type TopModelPortrait struct {
-	Model             string  `json:"model"`               // 成本最高模型名
-	PersonCostUSD     float64 `json:"person_cost_usd"`     // 本人该模型成本
-	PersonCostRatio   float64 `json:"person_cost_ratio"`   // 本人该模型成本占比
-	AdoptionCount     int     `json:"adoption_count"`      // 同岗中使用过该模型的人数
-	PoolN             int     `json:"pool_n"`              // 同岗总人数
-	AdoptionRate      float64 `json:"adoption_rate"`       // 采用率 = AdoptionCount / PoolN
-	FreqP50           float64 `json:"freq_p50"`            // 采用者中该模型周调用 P50
-	PersonFreq        float64 `json:"person_freq"`         // 本人该模型调用数
-	PersonFreqRank    float64 `json:"person_freq_rank"`    // 本人在采用者中调用分位
-	CostDepP50        float64 `json:"cost_dep_p50"`        // 采用者中该模型成本占比 P50
-	PersonCostDepRank float64 `json:"person_cost_dep_rank"` // 本人成本依赖在采用者中的分位
-	UnitCostP50       float64 `json:"unit_cost_p50"`       // 采用者中该模型每百万 Token 成本 P50（USD）
-	PersonUnitCost    float64 `json:"person_unit_cost"`    // 本人该模型单位成本（USD/百万 Token）
+	Model              string  `json:"model"`                 // 成本最高模型名
+	PersonCostUSD      float64 `json:"person_cost_usd"`       // 本人该模型成本
+	PersonCostRatio    float64 `json:"person_cost_ratio"`     // 本人该模型成本占比
+	AdoptionCount      int     `json:"adoption_count"`        // 同岗中使用过该模型的人数
+	PoolN              int     `json:"pool_n"`                // 同岗总人数
+	AdoptionRate       float64 `json:"adoption_rate"`         // 采用率 = AdoptionCount / PoolN
+	FreqP50            float64 `json:"freq_p50"`              // 采用者中该模型周调用 P50
+	PersonFreq         float64 `json:"person_freq"`           // 本人该模型调用数
+	PersonFreqRank     float64 `json:"person_freq_rank"`      // 本人在采用者中调用分位
+	CostDepP50         float64 `json:"cost_dep_p50"`          // 采用者中该模型成本占比 P50
+	PersonCostDepRank  float64 `json:"person_cost_dep_rank"`  // 本人成本依赖在采用者中的分位
+	UnitCostP50        float64 `json:"unit_cost_p50"`         // 采用者中该模型每百万 Token 成本 P50（USD）
+	PersonUnitCost     float64 `json:"person_unit_cost"`      // 本人该模型单位成本（USD/百万 Token）
 	PersonUnitCostRank float64 `json:"person_unit_cost_rank"` // 本人单位成本在采用者中的分位
-	Supported         bool    `json:"supported"`
-	Note              string  `json:"note,omitempty"`
+	Supported          bool    `json:"supported"`
+	Note               string  `json:"note,omitempty"`
 }
 
 // PeerMetric 同岗画像单个指标的分位（本人 vs 同岗 P50 + 分位 rank）。

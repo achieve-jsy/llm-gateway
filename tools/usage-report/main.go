@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,7 +19,9 @@ import (
 	"github.com/example/llm-gateway/internal/observability/report"
 	"github.com/example/llm-gateway/internal/observability/report/derive"
 	"github.com/example/llm-gateway/internal/observability/report/render"
+	"github.com/example/llm-gateway/tools/usage-report/analysis"
 	"github.com/example/llm-gateway/tools/usage-report/client"
+	"github.com/example/llm-gateway/tools/usage-report/llm"
 )
 
 // shLoc 报告统一时区（Asia/Shanghai）；分钟桶/日切按上海时间判定（口径，与 client.asiaShanghai 一致）。
@@ -65,6 +68,12 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 	// 口径④：personal 画像/岗位人均排除 key_type='service' → 按 key_type=personal 过滤 /usage/logs。
 	if cfg.Level == "personal" && cfg.KeyType == "" {
 		cfg.KeyType = "personal"
+	}
+
+	// LLM 模型分析客户端：仅启用时才构造（懒初始化，避免无效连接；失败走降级，绝不中断报告）。
+	var llmCli *llm.Client
+	if cfg.LLMEnabled {
+		llmCli = llm.New(cfg.LLMBase, cfg.LLMKey, cfg.LLMModel)
 	}
 
 	// 2) 数据获取：默认拉调用明细（A1–A5/模型预算/ServiceKey/Top模型保真）；
@@ -325,7 +334,18 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 	// 禁止混拼 /usage/dashboard/users* 存储列）。差异写入 QA.Alignment 说明。
 	reconcileWithDashboard(ctx, cli, cfg, scope, rep)
 
-	// 7) 渲染输出：落盘前校验稳定契约，避免生成不可复用的半成品。
+	// 7) LLM 模型分析注入：仅在启用且客户端已构造时执行；成功回填 LLM 章节，失败/未启用安全降级，
+	//    绝不 panic、绝不中断报告。降级说明（Note）也回填，供渲染层展示原因；错误仅在 debug 下记录。
+	if cfg.LLMEnabled && llmCli != nil {
+		if ma, err := analysis.Generate(ctx, llmCli, cfg.Level, rep, cfg.USDCNYRate); ma != nil {
+			rep.ModelAnalysis = ma // 成功=LLM 章节；失败=带降级 Note 的降级对象
+			if err != nil && cfg.Debug {
+				log.Printf("model analysis skipped: %v", err)
+			}
+		}
+	}
+
+	// 8) 渲染输出：落盘前校验稳定契约，避免生成不可复用的半成品。
 	if err := rep.Validate(); err != nil {
 		return nil, fmt.Errorf("报告契约校验失败: %w", err)
 	}

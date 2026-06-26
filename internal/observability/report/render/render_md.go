@@ -218,29 +218,34 @@ func writeJudgment(b *strings.Builder, r *report.Report) {
 		fmt.Fprintf(b, "- %s\n", j.Peer.Note)
 	}
 
-	// 异常
-	fmt.Fprintf(b, "\n### 异常（A1–A5）\n\n")
-	for _, a := range j.Anomalies {
-		fmt.Fprintf(b, "- [%s] **%s**（%s）\n", a.Rule, a.Name, a.Severity)
-		if a.Hit {
-			fmt.Fprintf(b, "  - `actual=%.2f` · `threshold=%.2f` · `baseline=%.2f`（%s）\n", a.ActualValue, a.ThresholdValue, a.BaselineValue, a.BaselineWindow)
-			if a.ImpactCostUSD > 0 {
-				fmt.Fprintf(b, "  - 影响成本 `%.2f` USD · 超支 `%.2f` USD\n", a.ImpactCostUSD, a.ExcessCostUSD)
-			}
-			for _, e := range a.Evidence {
-				fmt.Fprintf(b, "  - %s: `%s`\n", e.Field, e.Value)
-			}
-		} else {
-			for _, e := range a.Evidence {
-				if e.Field == "basis" {
-					fmt.Fprintf(b, "  - 未命中：%s\n", e.Value)
+	// 异常（A1–A5）
+	// Studio 报告已在新第四章「风险与行动清单」完整呈现异常与风险，此处抑制，避免与四章重复。
+	isStudio := r.Meta.Level == "studio"
+	if !isStudio {
+		fmt.Fprintf(b, "\n### 异常（A1–A5）\n\n")
+		for _, a := range j.Anomalies {
+			fmt.Fprintf(b, "- [%s] **%s**（%s）\n", a.Rule, a.Name, a.Severity)
+			if a.Hit {
+				fmt.Fprintf(b, "  - `actual=%.2f` · `threshold=%.2f` · `baseline=%.2f`（%s）\n", a.ActualValue, a.ThresholdValue, a.BaselineValue, a.BaselineWindow)
+				if a.ImpactCostUSD > 0 {
+					fmt.Fprintf(b, "  - 影响成本 `%.2f` USD · 超支 `%.2f` USD\n", a.ImpactCostUSD, a.ExcessCostUSD)
+				}
+				for _, e := range a.Evidence {
+					fmt.Fprintf(b, "  - %s: `%s`\n", e.Field, e.Value)
+				}
+			} else {
+				for _, e := range a.Evidence {
+					if e.Field == "basis" {
+						fmt.Fprintf(b, "  - 未命中：%s\n", e.Value)
+					}
 				}
 			}
 		}
 	}
 
-	// 归因 + 未判定
-	if len(j.Attribution) > 0 {
+	// 归因候选 + 未判定
+	// Studio 报告已在新第三章「变化归因」完整呈现归因，此处抑制，避免与三章重复。
+	if !isStudio && len(j.Attribution) > 0 {
 		fmt.Fprintf(b, "\n### 归因候选（由人终裁）\n\n")
 		for _, at := range j.Attribution {
 			fmt.Fprintf(b, "- %s：%s（占比 %s）\n", at.Subject, at.Detail, pctP(at.Weight))
@@ -670,9 +675,9 @@ func studioNetDeltaUSD(u *report.UnitFact) float64 {
 	return cur - cur/denom
 }
 
-// attributionDeltas 由 judge.Attribution 的 Weight（按 Σ|Δ| 归一，可为负表示降本）反推各来源成本增量(USD)。
-// 已知 Σweight = netDelta/absSum，故 absSum = netDelta/Σweight；Δi = weight_i × absSum。
-// 反推不可行（无上期 / netDelta≈0 / Σweight≈0）时返回 ok=false，由调用方降级为「成本变化有限」。
+// attributionDeltas 由 judge.Attribution 的 Weight（契约：Weight=该来源增量/总增量，ΣWeight=1，可为负表示降本）
+// 直接还原各来源成本增量（USD）：Δi = 总增量 × Weight。
+// 无上期（len==0）或总增量≈0（ΣWeight→0，netDelta 不可作为拆解基准）时返回 ok=false，由调用方降级。
 func attributionDeltas(attrs []report.Attribution, netDelta float64) ([]float64, bool) {
 	if len(attrs) == 0 {
 		return nil, false
@@ -680,17 +685,9 @@ func attributionDeltas(attrs []report.Attribution, netDelta float64) ([]float64,
 	if math.Abs(netDelta) < 0.005 {
 		return nil, false
 	}
-	var sumW float64
-	for _, a := range attrs {
-		sumW += a.Weight
-	}
-	if math.Abs(sumW) < 1e-9 {
-		return nil, false
-	}
-	absSum := netDelta / sumW
 	out := make([]float64, len(attrs))
 	for i, a := range attrs {
-		out[i] = a.Weight * absSum
+		out[i] = netDelta * a.Weight
 	}
 	return out, true
 }

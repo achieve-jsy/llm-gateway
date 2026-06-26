@@ -358,14 +358,27 @@ func writePersonalSections(b *strings.Builder, r *report.Report) {
 			p.TopModel, cny(topModelCostUSD(p), rate), pctP(p.HighTierCostRatio))
 	}
 
-	// 五、场景与合理用模
-	if len(p.TopModels) > 0 {
+	// 五、场景与合理用模（确定性降级输出 + LLM 模型分析增强）
+	// 截面：确定性 TopModels 数据（LLM 未启用时的降级）+ LLM 生成内容（增强）。
+	// 头部仅在确定性数据或 LLM 内容任一存在时输出；ma==nil 时行为与现状完全一致。
+	ma := r.ModelAnalysis
+	hasDet := len(p.TopModels) > 0
+	if hasDet || ma != nil {
 		fmt.Fprintf(b, "\n## 场景与合理用模\n\n")
-		top := p.TopModels[0]
-		fmt.Fprintf(b, "- 主用模型：`%s`（占调用 %s，成本 `%s`）。\n",
-			top.Model, pct(top.Calls, p.ReqCount), cny(top.CostUSD, rate))
-		if p.ModelCount > 1 {
-			fmt.Fprintf(b, "- 本周共使用 %d 个模型；成本最高模型占比见上方第四章。\n", p.ModelCount)
+		if hasDet {
+			top := p.TopModels[0]
+			fmt.Fprintf(b, "- 主用模型：`%s`（占调用 %s，成本 `%s`）。\n",
+				top.Model, pct(top.Calls, p.ReqCount), cny(top.CostUSD, rate))
+			if p.ModelCount > 1 {
+				fmt.Fprintf(b, "- 本周共使用 %d 个模型；成本最高模型占比见上方第四章。\n", p.ModelCount)
+			}
+		}
+		// LLM 增强：Sections 展开 + Note 降级说明（复用统一 helper 的章节体；确定性内容后补空行区隔）
+		if ma != nil {
+			if strings.TrimSpace(ma.Sections) != "" && hasDet {
+				fmt.Fprintf(b, "\n")
+			}
+			writeModelAnalysisBody(b, ma)
 		}
 	}
 
@@ -535,6 +548,9 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 		// 兜底
 		w("- 本周期无特别建议\n")
 	}
+
+	// 模型分析（LLM 生成；rep.ModelAnalysis==nil 时跳过，保持现状）—— 六、建议之后
+	writeModelAnalysisSection(b, r, "模型分析")
 }
 
 // writeStudioSections 输出 Vicky 工作室周报真实 4 章模板：
@@ -648,6 +664,37 @@ func writeStudioSections(b *strings.Builder, r *report.Report) {
 				riskObject(a), win, a.Rule+" "+a.Name, impact, riskAction(a.Rule), shortDate(r.Meta.Period.To))
 		}
 	}
+
+	// 模型分析（LLM 生成；rep.ModelAnalysis==nil 时跳过，保持现状）—— 四、风险与行动清单之后
+	writeModelAnalysisSection(b, r, "模型分析")
+}
+
+// writeModelAnalysisBody 输出 LLM 模型分析的章节体（不含标题）：Sections 非空优先展开；
+// 有 Note 时追加一行降级说明；都为空时输出兜底文案，绝不 panic。ma==nil 时跳过。
+func writeModelAnalysisBody(b *strings.Builder, ma *report.ModelAnalysis) {
+	if ma == nil {
+		return
+	}
+	if strings.TrimSpace(ma.Sections) != "" {
+		fmt.Fprintf(b, "%s\n", ma.Sections)
+	}
+	if ma.Note != "" {
+		fmt.Fprintf(b, "- （注：%s）\n", ma.Note)
+	}
+	if strings.TrimSpace(ma.Sections) == "" && strings.TrimSpace(ma.Note) == "" {
+		fmt.Fprintf(b, "- 本周期模型分析数据不可得\n")
+	}
+}
+
+// writeModelAnalysisSection 输出 LLM 模型分析章节（含标题）。
+// title 由调用方传入：个人周报复用「场景与合理用模」标题，部门/工作室周报用「模型分析」。
+// 契约：rep.ModelAnalysis==nil 时完全跳过（保持现状不发章节），绝不 panic。
+func writeModelAnalysisSection(b *strings.Builder, r *report.Report, title string) {
+	if r.ModelAnalysis == nil {
+		return
+	}
+	fmt.Fprintf(b, "\n## %s\n\n", title)
+	writeModelAnalysisBody(b, r.ModelAnalysis)
 }
 
 // signedCNY 带符号的 CNY 展示：+¥12.34 / -¥56.78（入参为 USD，按汇率换算）。

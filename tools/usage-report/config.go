@@ -35,6 +35,10 @@ type Config struct {
 	All         bool // 批量编排：枚举 level 全体对象，各出报告 + 汇总索引（阶段4）
 	OutDir      string // 批量输出目录（每对象报告 + 汇总索引）；默认当前目录
 	SummaryMD   string // 批量汇总索引 MD 路径；默认 <outdir>/summary_<from>_<to>.md
+	LLMBase     string // LLM base URL（如 https://aimeter.xk-devops.com/v1）
+	LLMKey      string // LLM API key；非空即视为启用
+	LLMModel    string // LLM 模型名
+	LLMEnabled  bool   // 是否启用 LLM 分析（显式开关或 LLMKey 非空）
 }
 
 func parseConfig(args []string) Config {
@@ -64,7 +68,15 @@ func parseConfig(args []string) Config {
 	fs.BoolVar(&c.All, "all", false, "批量编排：枚举 level 全体对象，各出报告 + 汇总索引(建议配 -agg)")
 	fs.StringVar(&c.OutDir, "outdir", "", "批量输出目录(每对象报告+汇总索引)；默认当前目录")
 	fs.StringVar(&c.SummaryMD, "summary-md", "", "批量汇总索引 MD 路径；默认 <outdir>/summary_<from>_<to>.md")
+	fs.StringVar(&c.LLMBase, "llm-base", envOr("USAGE_REPORT_LLM_BASE", ""), "LLM base URL(如 https://aimeter.xk-devops.com/v1)")
+	fs.StringVar(&c.LLMKey, "llm-key", os.Getenv("USAGE_REPORT_LLM_KEY"), "LLM API key")
+	fs.StringVar(&c.LLMModel, "llm-model", envOr("USAGE_REPORT_LLM_MODEL", "gpt-5.6-sol"), "LLM 模型名")
+	fs.BoolVar(&c.LLMEnabled, "llm-enabled", false, "启用 LLM 分析(显式开关或 LLMKey 非空才启用)")
 	_ = fs.Parse(args)
+	// LLM 启用：显式 -llm-enabled 开关，或提供了 LLMKey（key 非空即视为启用）。
+	if !c.LLMEnabled && c.LLMKey != "" {
+		c.LLMEnabled = true
+	}
 	if c.From == "" || c.To == "" {
 		from, to := periodFor(c.Period)
 		if c.From == "" {

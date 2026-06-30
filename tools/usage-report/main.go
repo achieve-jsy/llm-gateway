@@ -81,6 +81,7 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 	var rows []client.LogRow
 	var metrics []report.DailyMetric
 	var baselineCurrent []report.DailyMetric // -agg 当期按天序列，仅供基线 current，不污染 Metrics
+	var currentBuckets []report.MinuteBucket // -agg 当期分钟桶，供 A1/A2 当期窗口判定（calls 空时）
 	var memberCalls []report.CallEvent
 	var memberAgg []report.MemberAgg
 	var prevMemberAgg []report.MemberAgg
@@ -123,10 +124,11 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 				// 上期拉取失败时静默忽略（derive 层收到空 PrevMemberAgg 即跳过环比）
 			}
 		}
-		// 当期按天序列：-agg 成员聚合无逐日明细，但 `/usage/report/baseline` 仍可
-		// 按天返回非 service 调用数（同 level/scope 过滤）。这里的按天序列仅供衡
-		// 期基线(current 日均)用，存 BaselineCurrent（独立字段），不污染 Metrics：
-		// Metrics 在 agg 模式必须保持空，否则 buildFact 会误走明细路径导致成本/Token=0。
+		// 当期按天序列 + 分钟桶：-agg 成员聚合无逐日明细/逐调用，但 `/usage/report/baseline`
+		// 仍可按天返回非 service 调用数（同 level/scope 过滤），并返回 minute_buckets。
+		// 按天序列存 BaselineCurrent 供 28 天基线算当期日均；分钟桶存 CurrentBuckets 供
+		// A1/A2 当期窗口判定（否则 -agg 下 calls 空、A1/A2 只能降级「样本不足」）。
+		// 两者都独立字段，不污染 Metrics（agg 必须保持空，否则 buildFact 误走明细路径）。
 		if cuid, cdept, cstudio := baselineScopeIDs(cfg.Level, scope); true {
 			if curBaseline, curErr := cli.FetchBaseline(ctx, cfg.From, cfg.To, cuid, cdept, cstudio); curErr == nil && len(curBaseline.Daily) > 0 {
 				baselineCurrent = make([]report.DailyMetric, 0, len(curBaseline.Daily))
@@ -134,6 +136,13 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 					baselineCurrent = append(baselineCurrent, report.DailyMetric{
 						Date: d.Date, Level: cfg.Level, ScopeID: scope.ID, KeyType: "personal", ReqCount: d.ReqCount,
 					})
+				}
+				// 当期分钟桶 → A1/A2 当期窗口扫描（非 service 调用数/成本按分钟分桶）。
+				currentBuckets = make([]report.MinuteBucket, 0, len(curBaseline.MinuteBuckets))
+				for _, bk := range curBaseline.MinuteBuckets {
+					if t, e := time.ParseInLocation("2006-01-02 15:04:05", bk.Minute, shLoc); e == nil {
+						currentBuckets = append(currentBuckets, report.MinuteBucket{Minute: t, Count: int(bk.Count), Cost: bk.Cost})
+					}
 				}
 			} else if cfg.Debug {
 				log.Printf("agg 当期 baseline 拉取失败/为空: %v", curErr)
@@ -327,6 +336,7 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 		PrevMemberAgg:      prevMemberAgg,
 		StudioMemberAgg:    studioMemberAgg,
 		BaselineCurrent:    baselineCurrent,   // -agg 当期按天序列，仅供基线 current
+		CurrentBuckets:     currentBuckets,    // -agg 当期分钟桶，供 A1/A2 当期窗口判定
 		UserTopModels:      userTopModels,     // 部门/工作室: 每用户 top 模型（岗位分布/Top变化人员）
 		DeptNames:          deptNames,         // 工作室级别: deptID→deptName 映射（DeptContribution.DeptName 用）
 		CompanyCostUSD:     companyCostUSD,    // 工作室: 全公司同期成本（一页摘要占比）

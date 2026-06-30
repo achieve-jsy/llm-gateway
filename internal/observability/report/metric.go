@@ -148,6 +148,10 @@ type ReportInput struct {
 	// 仅 -agg 成员聚合模式下填充（此时 Metrics 保持空以走 buildUnitFactFromAgg，避免成本/Token 被
 	// 明细路径清空）；仅供 28 天基线计算当期日均(current)，不参与事实层装配。
 	BaselineCurrent []DailyMetric
+	// CurrentBuckets 当期 [from,to] 的分钟桶聚合（非 service，走 /usage/report/baseline minute_buckets）。
+	// -agg 成员聚合模式无逐调用明细（Calls 空）时，A1/A2 用它在分钟窗口上直接滑窗判定，避免降级
+	// 「调用样本不足」；空时 A1/A2 回退 Calls 逐调用路径。
+	CurrentBuckets []MinuteBucket
 	// ModelContextBudget 模型→有效输入预算（context_length - max_output_tokens），来自 model_catalog（A4 用）。
 	// 缺省/未知模型的调用不参与 A4；若全部缺失则 A4 NotComputed。
 	ModelContextBudget map[string]int64

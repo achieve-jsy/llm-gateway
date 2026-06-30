@@ -118,7 +118,7 @@ func TestA1ProgramLoadHit(t *testing.T) {
 	}
 	rules := report.DefaultRuleSet()
 	rules.USDCNYRate = 7.2
-	hits := derive.Anomalies(calls, nil, nil, rules, nil)
+	hits := derive.Anomalies(calls, nil, nil, nil, rules, nil)
 	a1 := findHit(hits, "A1")
 	if a1 == nil || !a1.Hit {
 		t.Fatalf("expected A1 hit; got %+v", hits)
@@ -140,7 +140,7 @@ func TestA2CostAnomalyHit(t *testing.T) {
 	}
 	rules := report.DefaultRuleSet()
 	rules.USDCNYRate = 7.2
-	hits := derive.Anomalies(calls, nil, nil, rules, nil)
+	hits := derive.Anomalies(calls, nil, nil, nil, rules, nil)
 	a2 := findHit(hits, "A2")
 	if a2 == nil || !a2.Hit {
 		t.Fatalf("expected A2 hit; got %+v", hits)
@@ -245,7 +245,7 @@ func TestA1UsesHistoricalWindow(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		baseline = append(baseline, report.CallEvent{TS: start.Add(-24*time.Hour + time.Duration(i)*time.Second), Status: 200})
 	}
-	a1 := findHit(derive.Anomalies(current, baseline, nil, rules, nil), "A1")
+	a1 := findHit(derive.Anomalies(current, baseline, nil, nil, rules, nil), "A1")
 	if a1 == nil || a1.Hit || !strings.Contains(a1.BaselineWindow, "历史") {
 		t.Fatalf("historical P99 must suppress current spike: %+v", a1)
 	}
@@ -255,7 +255,7 @@ func TestA2WithoutHistoryDoesNotClaim28Days(t *testing.T) {
 	rules := report.DefaultRuleSet()
 	start := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
 	calls := []report.CallEvent{{TS: start, Status: 200, EstCostUSD: 1}, {TS: start.Add(time.Second), Status: 200, EstCostUSD: 1}}
-	a2 := findHit(derive.Anomalies(calls, nil, nil, rules, nil), "A2")
+	a2 := findHit(derive.Anomalies(calls, nil, nil, nil, rules, nil), "A2")
 	if a2 == nil || strings.Contains(a2.BaselineWindow, "28") || !strings.Contains(a2.BaselineWindow, "无历史") {
 		t.Fatalf("must state missing history: %+v", a2)
 	}
@@ -269,14 +269,14 @@ func TestA3UsesConfiguredWindowAndNon200Failure(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		spread = append(spread, report.CallEvent{TS: start.Add(time.Duration(i) * time.Minute), KeyID: "k", Model: "m", Status: 0})
 	}
-	if a3 := findHit(derive.Anomalies(spread, nil, nil, rules, nil), "A3"); a3 == nil || a3.Hit {
+	if a3 := findHit(derive.Anomalies(spread, nil, nil, nil, rules, nil), "A3"); a3 == nil || a3.Hit {
 		t.Fatalf("events outside a 5m window must not hit: %+v", a3)
 	}
 	var dense []report.CallEvent
 	for i := 0; i < 20; i++ {
 		dense = append(dense, report.CallEvent{TS: start.Add(time.Duration(i) * time.Second), KeyID: "k", Model: "m", Status: 0})
 	}
-	if a3 := findHit(derive.Anomalies(dense, nil, nil, rules, nil), "A3"); a3 == nil || !a3.Hit {
+	if a3 := findHit(derive.Anomalies(dense, nil, nil, nil, rules, nil), "A3"); a3 == nil || !a3.Hit {
 		t.Fatalf("status!=200 must count as failure in configured window: %+v", a3)
 	}
 }
@@ -288,7 +288,7 @@ func TestA4MissingCatalogBudgetNotComputed(t *testing.T) {
 		{TS: start, Model: "unknown", PromptTokens: 200000},
 		{TS: start.Add(time.Second), Model: "unknown", PromptTokens: 200000},
 	}
-	a4 := findHit(derive.Anomalies(calls, nil, nil, rules, nil), "A4")
+	a4 := findHit(derive.Anomalies(calls, nil, nil, nil, rules, nil), "A4")
 	if a4 == nil || a4.Hit || !a4.NotComputed {
 		t.Fatalf("missing Catalog budget must be not-computed: %+v", a4)
 	}

@@ -16,10 +16,13 @@ import (
 // Anomalies 返回 A1–A5 判定结果（命中/未命中都返回，未命中附 basis）。
 // baselineBuckets 为期前历史的分钟桶聚合（非 service），非空时优先用于 A1/A2 历史窗口分位；
 // 为空时回退 baselineCalls（逐调用），以兼容旧调用/测试路径。
-func Anomalies(calls, baselineCalls []CallEvent, baselineBuckets []report.MinuteBucket, rules report.RuleSet, modelBudget map[string]int64) []report.AnomalyHit {
+// currentBuckets 为当期 [from,to] 的分钟桶聚合（非 service）。-agg 成员聚合模式无逐调用明细
+// （calls 为空），但服务端 /usage/report/baseline 可返回当期分钟桶；非空时 A1/A2 用它在
+// 分钟窗口上直接滑窗判定，无需逐调用展开。A3–A5 依赖逐调用失败率/上下文/时段，仍走 calls（agg 下降级）。
+func Anomalies(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []report.MinuteBucket, rules report.RuleSet, modelBudget map[string]int64) []report.AnomalyHit {
 	return []report.AnomalyHit{
-		A1(calls, baselineCalls, baselineBuckets, rules),
-		A2(calls, baselineCalls, baselineBuckets, rules),
+		A1(calls, baselineCalls, baselineBuckets, currentBuckets, rules),
+		A2(calls, baselineCalls, baselineBuckets, currentBuckets, rules),
 		A3(calls, rules),
 		A4(calls, rules, modelBudget),
 		A5(calls, rules),
@@ -151,9 +154,13 @@ func evs(f, v string) report.Evidence         { return report.Evidence{Field: f,
 // ---- A1 程序失控 ----
 
 // A1：10 分钟调用 > max(60, 个人P99_10min) 且中位间隔 <10s 且连续 ≥15 分钟（1 分钟粒度滑动窗，勿 tumbling）。
-func A1(calls, baselineCalls []CallEvent, baselineBuckets []report.MinuteBucket, rules report.RuleSet) report.AnomalyHit {
+// currentBuckets 非空时（-agg 无明细）用当期分钟桶做窗口扫描；count 阈值照常判定，
+// 但「中位间隔<10s」依赖逐调用间隔、桶粒度无法精确复原，此时以命中调用数超阈值且窗口连续为准
+// （聚合近似，证据维度注明 bucket_mode）。
+func A1(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []report.MinuteBucket, rules report.RuleSet) report.AnomalyHit {
 	a := newHit("A1", "v1", "程序失控", "P1", itoa(rules.A1WindowMinutes)+"min/连续"+itoa(rules.A1SustainMinutes)+"min")
-	if len(calls) < 2 {
+	bucketMode := len(currentBuckets) > 0
+	if len(calls) < 2 && !bucketMode {
 		a.Evidence = append(a.Evidence, evs("basis", "调用样本不足，无法判定程序失控。"))
 		return a
 	}
@@ -179,14 +186,22 @@ func A1(calls, baselineCalls []CallEvent, baselineBuckets []report.MinuteBucket,
 	}
 	thr := math.Max(float64(rules.A1MinCallsAbsolute), math.Ceil(p99))
 
+	// 当期窗口扫描：bucketMode 用分钟桶滑窗（无逐调用间隔），否则用逐调用窗口。
+	win := windows(b, w)
+	if bucketMode {
+		win = weightedWindows(currentBuckets, w)
+	}
 	bestStart, bestEnd := int64(-1), int64(-1)
 	bestCount := 0
 	bestInterval := 0.0
 	bestCost := 0.0
 	streak := 0
-	for _, x := range windows(b, w) {
-		iv := medianIntervalSec(b[x.lo:x.hi])
-		if x.count <= int(thr) || iv >= rules.A1MaxMedianIntervalS {
+	for _, x := range win {
+		iv := math.Inf(1)
+		if !bucketMode {
+			iv = medianIntervalSec(b[x.lo:x.hi])
+		}
+		if x.count <= int(thr) || (!bucketMode && iv >= rules.A1MaxMedianIntervalS) {
 			streak = 0
 			continue
 		}
@@ -196,10 +211,16 @@ func A1(calls, baselineCalls []CallEvent, baselineBuckets []report.MinuteBucket,
 			bestCount, bestInterval, bestCost = x.count, iv, x.cost
 		}
 	}
+	if bucketMode {
+		a.Dimensions["bucket_mode"] = "1"
+	}
 	if bestStart < 0 {
+		cond := "未发现满足阈值的高调用窗口（窗口调用>max(" + itoa(rules.A1MinCallsAbsolute) + ",历史P99=" + fmtFloat(math.Ceil(p99)) + ")，且中位间隔<" + fmtFloat(rules.A1MaxMedianIntervalS) + "s，连续≥" + itoa(rules.A1SustainMinutes) + "min）。"
+		if bucketMode {
+			cond = "未发现满足阈值的高调用窗口（窗口调用>max(" + itoa(rules.A1MinCallsAbsolute) + ",历史P99=" + fmtFloat(math.Ceil(p99)) + ")，连续≥" + itoa(rules.A1SustainMinutes) + "min；聚合桶模式未校验逐调用中位间隔）。"
+		}
 		a.Hit = false
-		a.Evidence = append(a.Evidence,
-			evs("basis", "未发现满足阈值的高调用窗口（窗口调用>max("+itoa(rules.A1MinCallsAbsolute)+",历史P99="+fmtFloat(math.Ceil(p99))+")，且中位间隔<"+fmtFloat(rules.A1MaxMedianIntervalS)+"s，连续≥"+itoa(rules.A1SustainMinutes)+"min）。"))
+		a.Evidence = append(a.Evidence, evs("basis", cond))
 		return a
 	}
 	a.Hit = true
@@ -225,9 +246,10 @@ func A1(calls, baselineCalls []CallEvent, baselineBuckets []report.MinuteBucket,
 // ---- A2 成本燃烧 ----
 
 // A2：15 分钟成本 > max(¥50, 个人28天同窗中位×5)；另加 HARD_CAP_A2=¥200/15min 独立触发。
-func A2(calls, baselineCalls []CallEvent, baselineBuckets []report.MinuteBucket, rules report.RuleSet) report.AnomalyHit {
+func A2(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []report.MinuteBucket, rules report.RuleSet) report.AnomalyHit {
 	a := newHit("A2", "v1", "成本燃烧", "P1", "15min")
-	if len(calls) < 2 {
+	bucketMode := len(currentBuckets) > 0
+	if len(calls) < 2 && !bucketMode {
 		a.Hit = false
 		a.Evidence = append(a.Evidence, evs("basis", "调用样本不足，无法判定成本燃烧。"))
 		return a
@@ -259,10 +281,15 @@ func A2(calls, baselineCalls []CallEvent, baselineBuckets []report.MinuteBucket,
 	}
 	baseThr := math.Max(med*rules.A2BaselineMedianMultiple, rules.A2AbsMinUSD)
 
+	// 当期窗口扫描：bucketMode 用分钟桶滑窗，否则用逐调用窗口。
+	win := windows(b, w)
+	if bucketMode {
+		win = weightedWindows(currentBuckets, w)
+	}
 	bestCost := 0.0
 	bestStart, bestEnd := int64(-1), int64(-1)
 	bestCount := 0
-	for _, x := range windows(b, w) {
+	for _, x := range win {
 		if x.cost > bestCost {
 			bestCost, bestStart, bestEnd, bestCount = x.cost, x.start, x.end, x.count
 		}

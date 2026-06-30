@@ -170,9 +170,9 @@ func TestJobGroups_MedianCostPerReq(t *testing.T) {
 	// 同岗 3 人：per-req cost 分别为 0.04, 0.05, 0.06 → 中位数应为 0.05
 	in := report.ReportInput{
 		MemberAgg: []report.MemberAgg{
-			{UserID: "u1", JobCategory: "工程师", ReqCount: 100, TotalTokens: 1000, CostUSD: 4.0},  // 0.04/req
-			{UserID: "u2", JobCategory: "工程师", ReqCount: 100, TotalTokens: 1000, CostUSD: 5.0},  // 0.05/req
-			{UserID: "u3", JobCategory: "工程师", ReqCount: 100, TotalTokens: 1000, CostUSD: 6.0},  // 0.06/req
+			{UserID: "u1", JobCategory: "工程师", ReqCount: 100, TotalTokens: 1000, CostUSD: 4.0}, // 0.04/req
+			{UserID: "u2", JobCategory: "工程师", ReqCount: 100, TotalTokens: 1000, CostUSD: 5.0}, // 0.05/req
+			{UserID: "u3", JobCategory: "工程师", ReqCount: 100, TotalTokens: 1000, CostUSD: 6.0}, // 0.06/req
 		},
 		LevelMeta: report.Scope{Level: "department", ID: "d1", Name: "部门一"},
 	}

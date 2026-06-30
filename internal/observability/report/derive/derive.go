@@ -92,7 +92,7 @@ func Derive(meta report.Meta, in report.ReportInput, rules report.RuleSet) (*rep
 	judge.TopModelPortrait = buildTopModelPortrait(in, rep.Fact, rules.MinCohortSample)
 
 	// A1–A5
-	anoms := Anomalies(in.Calls, in.BaselineCalls, in.BaselineBuckets, rules, in.ModelContextBudget)
+	anoms := Anomalies(in.Calls, in.BaselineCalls, in.BaselineBuckets, in.CurrentBuckets, rules, in.ModelContextBudget)
 	// 单元级语义说明：A1/A2 基于个人窗口/中位，单元级运行在「该单元成员调用流（排除 service）」上。
 	scope := in.LevelMeta.Level
 	for i := range anoms {
@@ -1248,9 +1248,9 @@ func buildPeerProfiles(in report.ReportInput, f report.Fact, minSample int) []re
 			}
 		}
 		pm := report.PeerMetric{Metric: d.Key, Label: d.Label, Unit: d.Unit}
-		if len(vals) < minSample {
+		if len(vals) == 0 {
 			pm.Supported = false
-			pm.Note = "同岗样本 <" + itoa(minSample) + "，该指标不产出分位。"
+			pm.Note = "同岗样本为 0，该指标不产出分位。"
 			out = append(out, pm)
 			continue
 		}
@@ -1259,6 +1259,9 @@ func buildPeerProfiles(in report.ReportInput, f report.Fact, minSample int) []re
 		pm.P50 = Percentile(vals, 50)
 		pm.Current = cur(d)
 		pm.PercentileRank = PercentRank(vals, pm.Current)
+		if len(vals) < minSample {
+			pm.Note = "该指标同岗有效样本仅 " + itoa(len(vals)) + " 人，分位仅供参考。"
+		}
 		out = append(out, pm)
 	}
 	return out
@@ -1313,20 +1316,40 @@ func buildTopModelPortrait(in report.ReportInput, f report.Fact, minSample int) 
 		portrait.AdoptionRate = float64(portrait.AdoptionCount) / float64(portrait.PoolN)
 	}
 	if len(freqVals) < minSample {
-		portrait.Supported = false
-		portrait.Note = "采用者样本 <" + itoa(minSample) + "，分位数据不可靠，仅展示采用率。"
+		// 采用者样本不足 MinCohortSample(5)：仍按实际人数计算并展示分位，仅标注样本少、供参考。
+		// 不再整体降级为「仅展示采用率」——分位数对任意非空样本都有定义（n=1 时 P50=该值）。
+		// 数值仍来自真实数据，不造假；但需提示读者样本小、统计意义有限。
+		portrait.Supported = len(freqVals) > 0
+		if portrait.Supported {
+			portrait.Note = fmt.Sprintf("采用者样本仅 %d 人（不足 %d），分位数仅供参考。", len(freqVals), minSample)
+		} else {
+			portrait.Note = "本周同岗无人使用该模型，无法计算采用者分位。"
+		}
+		sort.Float64s(freqVals)
+		portrait.FreqP50 = Percentile(freqVals, 50)
+		portrait.PersonFreqRank = PercentRank(freqVals, personCalls)
+		if len(costDepVals) > 0 {
+			sort.Float64s(costDepVals)
+			portrait.CostDepP50 = Percentile(costDepVals, 50)
+			portrait.PersonCostDepRank = PercentRank(costDepVals, portrait.PersonCostRatio)
+		}
+		if len(unitCostVals) > 0 {
+			sort.Float64s(unitCostVals)
+			portrait.UnitCostP50 = Percentile(unitCostVals, 50)
+			portrait.PersonUnitCostRank = PercentRank(unitCostVals, portrait.PersonUnitCost)
+		}
 		return portrait
 	}
 	portrait.Supported = true
 	sort.Float64s(freqVals)
 	portrait.FreqP50 = Percentile(freqVals, 50)
 	portrait.PersonFreqRank = PercentRank(freqVals, personCalls)
-	if len(costDepVals) >= minSample {
+	if len(costDepVals) > 0 {
 		sort.Float64s(costDepVals)
 		portrait.CostDepP50 = Percentile(costDepVals, 50)
 		portrait.PersonCostDepRank = PercentRank(costDepVals, portrait.PersonCostRatio)
 	}
-	if len(unitCostVals) >= minSample {
+	if len(unitCostVals) > 0 {
 		sort.Float64s(unitCostVals)
 		portrait.UnitCostP50 = Percentile(unitCostVals, 50)
 		portrait.PersonUnitCostRank = PercentRank(unitCostVals, portrait.PersonUnitCost)

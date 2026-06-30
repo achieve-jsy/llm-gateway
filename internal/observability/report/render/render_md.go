@@ -338,6 +338,9 @@ func writePersonalSections(b *strings.Builder, r *report.Report) {
 				mp.PoolN, mp.AdoptionCount, pctP(mp.AdoptionRate))
 		}
 		if mp.Supported {
+			if mp.Note != "" {
+				fmt.Fprintf(b, "- %s\n", mp.Note)
+			}
 			fmt.Fprintf(b, "- 同岗使用频率：仅采用者中比较，周调用 P50 为 %.0f 次；本人 %.0f 次，P%.0f。\n",
 				mp.FreqP50, mp.PersonFreq, mp.PersonFreqRank*100)
 			if mp.CostDepP50 > 0 {

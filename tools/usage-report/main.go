@@ -80,6 +80,7 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 	// `-agg` 则用 member 聚合(/usage/report/members)构造事实层加法核心（零明细），明细依赖项降级。
 	var rows []client.LogRow
 	var metrics []report.DailyMetric
+	var baselineCurrent []report.DailyMetric // -agg 当期按天序列，仅供基线 current，不污染 Metrics
 	var memberCalls []report.CallEvent
 	var memberAgg []report.MemberAgg
 	var prevMemberAgg []report.MemberAgg
@@ -123,13 +124,14 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 			}
 		}
 		// 当期按天序列：-agg 成员聚合无逐日明细，但 `/usage/report/baseline` 仍可
-		// 按天返回非 service 调用数（同 level/scope 过滤），据此构造 metrics，
-		// 使 28 天基线能算真实当期日均（current），不再降级「不做基线判定」。
+		// 按天返回非 service 调用数（同 level/scope 过滤）。这里的按天序列仅供衡
+		// 期基线(current 日均)用，存 BaselineCurrent（独立字段），不污染 Metrics：
+		// Metrics 在 agg 模式必须保持空，否则 buildFact 会误走明细路径导致成本/Token=0。
 		if cuid, cdept, cstudio := baselineScopeIDs(cfg.Level, scope); true {
 			if curBaseline, curErr := cli.FetchBaseline(ctx, cfg.From, cfg.To, cuid, cdept, cstudio); curErr == nil && len(curBaseline.Daily) > 0 {
-				metrics = make([]report.DailyMetric, 0, len(curBaseline.Daily))
+				baselineCurrent = make([]report.DailyMetric, 0, len(curBaseline.Daily))
 				for _, d := range curBaseline.Daily {
-					metrics = append(metrics, report.DailyMetric{
+					baselineCurrent = append(baselineCurrent, report.DailyMetric{
 						Date: d.Date, Level: cfg.Level, ScopeID: scope.ID, KeyType: "personal", ReqCount: d.ReqCount,
 					})
 				}
@@ -324,6 +326,7 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 		MemberAgg:          memberAgg,
 		PrevMemberAgg:      prevMemberAgg,
 		StudioMemberAgg:    studioMemberAgg,
+		BaselineCurrent:    baselineCurrent,   // -agg 当期按天序列，仅供基线 current
 		UserTopModels:      userTopModels,     // 部门/工作室: 每用户 top 模型（岗位分布/Top变化人员）
 		DeptNames:          deptNames,         // 工作室级别: deptID→deptName 映射（DeptContribution.DeptName 用）
 		CompanyCostUSD:     companyCostUSD,    // 工作室: 全公司同期成本（一页摘要占比）

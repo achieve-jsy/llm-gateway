@@ -386,7 +386,7 @@ func buildJobGroups(aggs []report.MemberAgg, userTopModels map[string][]report.C
 	type groupEntry struct {
 		activeUsers int
 		totalCost   float64
-		perReqCosts []float64 // 每人 cost/req（活跃用户，用于中位数）
+		perReqCosts []float64          // 每人 cost/req（活跃用户，用于中位数）
 		modelCost   map[string]float64 // 该组内各模型累计成本（用于选 TopModel）
 	}
 	groups := map[string]*groupEntry{}
@@ -1108,9 +1108,15 @@ func topModelsFromUnit(unit report.UnitMember) []report.TopModel {
 
 func buildBaselineSeries(in report.ReportInput, rules report.RuleSet) BaseResult {
 	// 当前值 = 当前周期成员调用日均（排除 service，口径与异常/分位一致）。
+	// agg 模式：用 BaselineCurrent（当期按天序列，工具侧从 /usage/report/baseline 拉取，
+	// 与历史基线同接口同过滤）；非 agg：Metrics 已含逐日明细。两者都只取 member 非 service。
 	var current float64
 	byDay := map[string]int64{}
-	for _, m := range in.Metrics {
+	currentMetrics := in.Metrics
+	if len(currentMetrics) == 0 {
+		currentMetrics = in.BaselineCurrent
+	}
+	for _, m := range currentMetrics {
 		if m.KeyType == "service" {
 			continue
 		}
@@ -1124,8 +1130,8 @@ func buildBaselineSeries(in report.ReportInput, rules report.RuleSet) BaseResult
 		current = float64(totalReq) / float64(len(byDay))
 	}
 
-	// 口径：当期无逐日调用数据（如 -agg 成员聚合模式，Metrics 为空）→ 无法计算
-	// 当期日均，禁用「当前=0 去套历史分位」的误导性判定，明确降级不做基线判定。
+	// 口径：当期无逐日调用数据（如 -agg 成员聚合模式且 baseline 接口当期也无按天数据）→
+	// 无法计算当期日均，禁用「当前=0 去套历史分位」的误导性判定，明确降级不做基线判定。
 	if len(byDay) == 0 {
 		return BaseResult{
 			Supported:     false,
@@ -1270,10 +1276,10 @@ func buildTopModelPortrait(in report.ReportInput, f report.Fact, minSample int) 
 	personCalls := float64(f.Personal.TopModels[0].Calls)
 
 	portrait := &report.TopModelPortrait{
-		Model:           topModel,
-		PersonCostUSD:   personCostUSD,
-		PersonFreq:      personCalls,
-		PoolN:           len(in.Cohort.Members),
+		Model:         topModel,
+		PersonCostUSD: personCostUSD,
+		PersonFreq:    personCalls,
+		PoolN:         len(in.Cohort.Members),
 	}
 	if f.Personal.EstCostUSD > 0 {
 		portrait.PersonCostRatio = personCostUSD / f.Personal.EstCostUSD
@@ -1388,8 +1394,8 @@ func buildExpression(rep *report.Report, rules report.RuleSet) report.Expression
 // 规则：采用量（调用/Token/活跃）高于 P50 → 高采用；低于 P25 → 低采用；其余 → 中等采用。
 // 效能（成本/上下文/缓存）处于 P75 以上偏高 → 待优化；低于 P50 → 良好；否则 → 正常。
 func buildEfficiencyLabel(p *report.PersonalFact, profiles []report.PeerMetric) string {
-	usageRank := -1.0   // 调用量维度在同岗的平均分位（calls/tokens/active_days 均值）
-	effRank := -1.0     // 效能维度（cost/ctx/cache）中最差的分位
+	usageRank := -1.0 // 调用量维度在同岗的平均分位（calls/tokens/active_days 均值）
+	effRank := -1.0   // 效能维度（cost/ctx/cache）中最差的分位
 
 	usageCnt := 0
 	for _, pm := range profiles {

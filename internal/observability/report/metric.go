@@ -110,7 +110,7 @@ type DeptContribution struct {
 
 // TopChangedMember 成本变化最大成员（匿名，部门周报四章）。
 type TopChangedMember struct {
-	Idx         int     `json:"idx"`          // 1,2,3...
+	Idx         int     `json:"idx"` // 1,2,3...
 	JobCategory string  `json:"job_category"`
 	WoWCostPct  float64 `json:"wow_cost_pct"`
 	WoWReqPct   float64 `json:"wow_req_pct"`
@@ -144,6 +144,10 @@ type ReportInput struct {
 	// BaselineMetrics 期前 28 完整自然日（事件日前 28d ~ 前1d）的日聚合序列，用于 28 天稳健基线物化。
 	// 若为空，基线明确标记 unsupported；当前周期不得替代真实历史基线。
 	BaselineMetrics []DailyMetric
+	// BaselineCurrent 当期 [from,to] 的日聚合序列（同 level/scope 过滤，走 /usage/report/baseline）。
+	// 仅 -agg 成员聚合模式下填充（此时 Metrics 保持空以走 buildUnitFactFromAgg，避免成本/Token 被
+	// 明细路径清空）；仅供 28 天基线计算当期日均(current)，不参与事实层装配。
+	BaselineCurrent []DailyMetric
 	// ModelContextBudget 模型→有效输入预算（context_length - max_output_tokens），来自 model_catalog（A4 用）。
 	// 缺省/未知模型的调用不参与 A4；若全部缺失则 A4 NotComputed。
 	ModelContextBudget map[string]int64
@@ -186,17 +190,17 @@ type CohortDef struct {
 
 // CohortTarget 本人画像指标与周环比（个人报告用）。
 type CohortTarget struct {
-	Metrics        CohortMetrics
-	WoWReqPct      float64 // 调用量周环比 %
-	WoWTokenPct    float64 // Token 周环比 %
-	WoWCostPct     float64 // 成本周环比 %
-	TopModel       string  // 成本最高模型名
-	TopModelCalls  int64
+	Metrics       CohortMetrics
+	WoWReqPct     float64 // 调用量周环比 %
+	WoWTokenPct   float64 // Token 周环比 %
+	WoWCostPct    float64 // 成本周环比 %
+	TopModel      string  // 成本最高模型名
+	TopModelCalls int64
 	// 目标用户岗位/组织信息（从 roster 取，用于回填 Scope 标题）
-	JobCategory    string
-	JobFamily      string
-	JobTitle       string
-	StudioID       string
+	JobCategory string
+	JobFamily   string
+	JobTitle    string
+	StudioID    string
 }
 
 // CohortMember 标池内一个匿名成员（不指名）。
@@ -216,14 +220,14 @@ type CohortMember struct {
 // CohortMetrics 同岗画像成员的多指标集。每个指标字段非零即有效；derive 端各自独立判分位，
 // 不做整体 valid 一票否决（允许某成员仅在部分指标参与）。
 type CohortMetrics struct {
-	ReqCount          int64   // 周调用次数
-	TotalTokens       int64   // 周 Token 总量
-	EstCostUSD        float64 // 周成本 USD（第四章分母）
-	ActiveDays        int64   // 活跃天数
-	AvgInputCtxTokens float64 // 平均输入上下文长度 = prompt_total / req
-	CacheHitRate      float64 // 缓存 Token 占比 = cached / prompt_total
-	CostPer1kTokens   float64 // 每百万 Token 成本 = cost / total_tokens * 1e6
-	HighTierCostRatio float64 // 成本最高模型成本占比 = top_model_cost / total_cost
+	ReqCount          int64            // 周调用次数
+	TotalTokens       int64            // 周 Token 总量
+	EstCostUSD        float64          // 周成本 USD（第四章分母）
+	ActiveDays        int64            // 活跃天数
+	AvgInputCtxTokens float64          // 平均输入上下文长度 = prompt_total / req
+	CacheHitRate      float64          // 缓存 Token 占比 = cached / prompt_total
+	CostPer1kTokens   float64          // 每百万 Token 成本 = cost / total_tokens * 1e6
+	HighTierCostRatio float64          // 成本最高模型成本占比 = top_model_cost / total_cost
 	TopModels         []CohortTopModel // 该成员 Top3 模型（供第四章同岗模型采用率/P50 计算）
 }
 

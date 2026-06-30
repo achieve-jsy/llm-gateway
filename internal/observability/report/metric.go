@@ -83,6 +83,39 @@ type MemberAgg struct {
 	CostUSD          float64
 	ActiveDays       int64
 	ModelCount       int
+	// 耗时/TTFT/上下文 派生字段（服务端已算好，供报告「耗时行」装配；口径同服务端 SQL 聚合结果）。
+	// 均用 float64 承载：AVG/PERCENTILE_CONT 产出为浮点，与 /usage/report/members 响应 json 精确对齐。
+	AvgDurationMs     float64 // 平均耗时 ms
+	P95DurationMs     float64 // P95 耗时 ms
+	AvgFirstTokenMs   float64 // 平均首字延迟 ms
+	AvgInputCtxTokens float64 // 平均输入上下文 token 数
+}
+
+// ServiceKeyAgg 归一化的程序 Service Key 聚合行（每 Key 一行、排除 personal、无日期/模型维度）。
+// 供 derive 装配 UnitFact.ServiceKey 块（agg 模式恒排除 service，成员聚合接口不可得，需此通道）；
+// 数据源无关：工具侧用 client.FetchServiceKeys（/usage/report/service-keys）填充。
+// KeyName/OwnerName 取服务端冗余快照；SuccessCount/ErrorCount 为 UnitService 装配所需（客户端已带出）。
+type ServiceKeyAgg struct {
+	KeyName      string
+	OwnerName    string
+	ReqCount     int64
+	SuccessCount int64
+	ErrorCount   int64
+	TotalTokens  int64
+	CostUSD      float64
+	ModelCount   int
+	ActiveDays   int64
+}
+
+// CompanyUserMetric 全公司每用户的口径指标行（匿名横比用）。数据源无关；
+// 工具侧用 client.FetchUserMetricsAll（/usage/dashboard/users，dept/studio 传空）填充。
+// 注意：用户维度只有 DeptName（部门名，无 DeptID）；供 derive 按 DeptName 分组算「部门单位活跃人成本」。
+type CompanyUserMetric struct {
+	UserName   string
+	DeptName   string
+	EstCostUSD float64
+	CallCount  int64
+	ActiveDays int64
 }
 
 // JobGroup 岗位分组统计（部门周报二章）。
@@ -125,6 +158,14 @@ type ReportInput struct {
 	// MemberAgg 成员级聚合行（排除 service）。非空且 Metrics 为空时，事实层成员加法核心由它构造
 	// （用于不拉全量明细的大部门/工作室）；若同时存在 Metrics(明细派生)，以 Metrics 为准（保真 TopModels/ServiceKey/日模型分布）。
 	MemberAgg []MemberAgg
+	// ServiceKeys 程序 Service Key 聚合行（每 Key 一行、排除 personal；走 /usage/report/service-keys）。
+	// 供 derive 装配 UnitFact.ServiceKey 块（agg 模式成员聚合接口恒排除 service，需此通道补 owner/model_count 等）。
+	// 空时 ServiceKey 块降级为 Notes 标注「不可得」。
+	ServiceKeys []ServiceKeyAgg
+	// CompanyUserMetrics 全公司每用户口径指标（无 dept/studio 过滤；走 client.FetchUserMetricsAll）。
+	// 供 derive 按 DeptName 分组算「部门单位活跃人成本 = ΣEstCostUSD / 去重UserName」，做单元级匿名横比
+	// （judge.PeerUnitCost）。空时该横比 supported=false。
+	CompanyUserMetrics []CompanyUserMetric
 	// PrevMemberAgg 上期成员聚合行（与 MemberAgg 同口径，用于 derive 计算周环比）。
 	// 上期窗口 = 本期 [from,to] 往前推同等长度（prevFrom = from-periodDays, prevTo = from-1d）。
 	// 仅 agg 模式（-agg）填充；明细模式暂不处理。

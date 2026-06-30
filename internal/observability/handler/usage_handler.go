@@ -1224,6 +1224,11 @@ type MemberAggRow struct {
 	CostUSD          float64 `json:"cost_usd"           gorm:"column:cost_usd"`
 	ActiveDays       int64   `json:"active_days"        gorm:"column:active_days"`
 	ModelCount       int     `json:"model_count"        gorm:"column:model_count"`
+	// 耗时/TTFT/上下文派生字段（服务端已算好，供报告「耗时行」装配）。
+	AvgDurationMs     float64 `json:"avg_duration_ms"      gorm:"column:avg_duration_ms"`
+	P95DurationMs     float64 `json:"p95_duration_ms"      gorm:"column:p95_duration_ms"`
+	AvgFirstTokenMs   float64 `json:"avg_first_token_ms"   gorm:"column:avg_first_token_ms"`
+	AvgInputCtxTokens float64 `json:"avg_input_ctx_tokens" gorm:"column:avg_input_ctx_tokens"`
 }
 
 // ReportMembers 成员级聚合接口：按 user_id 聚合返回每人一行的单一指标。
@@ -1283,9 +1288,86 @@ func (h *UsageHandler) ReportMembers(c *gin.Context) {
 		COALESCE(SUM(call_logs.prompt_tokens + call_logs.completion_tokens + call_logs.reasoning_tokens), 0) AS total_tokens,
 		COALESCE(SUM(call_logs.est_cost_usd), 0) AS cost_usd,
 		COUNT(DISTINCT call_logs.ts::date) AS active_days,
-		COUNT(DISTINCT call_logs.model) AS model_count`).
+		COUNT(DISTINCT call_logs.model) AS model_count,
+		COALESCE(AVG(call_logs.duration_ms), 0) AS avg_duration_ms,
+		COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY call_logs.duration_ms), 0) AS p95_duration_ms,
+		COALESCE(AVG(call_logs.first_token_ms), 0) AS avg_first_token_ms,
+		COALESCE(AVG(call_logs.prompt_tokens), 0) AS avg_input_ctx_tokens`).
 		Joins("LEFT JOIN users u ON u.id::text = call_logs.user_id").
 		Group("call_logs.user_id, u.name, u.job_category, u.job_family, u.job_title, call_logs.dept_id, call_logs.studio_id").
+		Order("cost_usd DESC").
+		Scan(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"rows": rows})
+}
+
+// ServiceKeyAggRow 程序 Service Key 聚合单行：按 key_id 聚合返回每 Key 一行的核心指标。
+// 口径：仅 key_type='service'；key_name/owner 取该 Key 在 call_logs 中的冗余快照。
+type ServiceKeyAggRow struct {
+	KeyID        string  `json:"key_id"         gorm:"column:key_id"`
+	KeyName      string  `json:"key_name"       gorm:"column:key_name"`
+	OwnerName    string  `json:"owner_name"     gorm:"column:owner_name"`
+	ReqCount     int64   `json:"req_count"      gorm:"column:req_count"`
+	SuccessCount int64   `json:"success_count"  gorm:"column:success_count"`
+	ErrorCount   int64   `json:"error_count"    gorm:"column:error_count"`
+	TotalTokens  int64   `json:"total_tokens"   gorm:"column:total_tokens"`
+	CostUSD      float64 `json:"cost_usd"       gorm:"column:cost_usd"`
+	ModelCount   int     `json:"model_count"    gorm:"column:model_count"`
+	ActiveDays   int64   `json:"active_days"    gorm:"column:active_days"`
+	StartDate    string  `json:"start_date"     gorm:"column:start_date"`
+	EndDate      string  `json:"end_date"       gorm:"column:end_date"`
+}
+
+// ReportServiceKeys 程序 Service Key 聚合接口：按 key_id 返回每 Key 一行的核心单一指标。
+// 语义：仅聚合 key_type='service' 的调用，按归属 dept/studio 过滤（QueryScope 同时按角色限定范围）。
+// 表名用无别名 call_logs（与 QueryScope 的 call_logs. 前缀一致，避免非全局角色下前缀失效）。
+func (h *UsageHandler) ReportServiceKeys(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db not configured"})
+		return
+	}
+	startStr := c.DefaultQuery("start", time.Now().AddDate(0, -1, 0).Format("2006-01-02"))
+	endStr := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
+	filterDeptID := c.Query("dept_id")
+	filterStudioID := c.Query("studio_id")
+
+	db := h.db.WithContext(c.Request.Context())
+
+	base := db.Table("call_logs").
+		Where("call_logs.ts >= ?::date AND call_logs.ts < (?::date + INTERVAL '1 day')", startStr, endStr).
+		Where(`COALESCE(NULLIF(call_logs.key_type, ''), 'personal') = 'service'`).
+		Scopes(policy.UsagePolicy{}.QueryScope(rbac.GetActor(c)))
+
+	if filterDeptID != "" {
+		// 部门双 ID 归一：直接 dept_id，或 departments.id（UUID），或 user→dept 映射。
+		base = base.Where(`call_logs.dept_id = ?
+			OR call_logs.dept_id IN (SELECT d.id::text FROM departments d WHERE d.dept_id = ? OR d.id::text = ?)
+			OR call_logs.user_id IN (SELECT u.id::text FROM users u JOIN departments d ON d.id = u.dept_id WHERE d.dept_id = ? OR d.id::text = ?)`,
+			filterDeptID, filterDeptID, filterDeptID, filterDeptID, filterDeptID)
+	}
+	if filterStudioID != "" {
+		base = base.Where("call_logs.studio_id = ?", filterStudioID)
+	}
+
+	// 按 key_id 聚合：每 Key 一行核心单一指标。key_name/owner 取 MAX 快照（同一 Key 通常一致）。
+	var rows []ServiceKeyAggRow
+	if err := base.Select(`
+		COALESCE(call_logs.key_id, '') AS key_id,
+		COALESCE(MAX(call_logs.key_name), '') AS key_name,
+		COALESCE(MAX(call_logs.user_name), '') AS owner_name,
+		COUNT(*) AS req_count,
+		COUNT(*) FILTER (WHERE call_logs.status = 200) AS success_count,
+		COUNT(*) FILTER (WHERE call_logs.status != 200) AS error_count,
+		COALESCE(SUM(call_logs.prompt_tokens + call_logs.completion_tokens + call_logs.reasoning_tokens), 0) AS total_tokens,
+		COALESCE(SUM(call_logs.est_cost_usd), 0) AS cost_usd,
+		COUNT(DISTINCT call_logs.model) AS model_count,
+		COUNT(DISTINCT call_logs.ts::date) AS active_days,
+		TO_CHAR(MIN(call_logs.ts), 'YYYY-MM-DD') AS start_date,
+		TO_CHAR(MAX(call_logs.ts), 'YYYY-MM-DD') AS end_date`).
+		Group("call_logs.key_id").
 		Order("cost_usd DESC").
 		Scan(&rows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

@@ -230,6 +230,11 @@ type UnitMember struct {
 	CacheHitRate float64 `json:"cache_hit_rate"`
 	// 每百万 Token 成本 = cost / total_tokens * 1e6（零分母时为 0）
 	CostPer1Million float64 `json:"cost_per_1m_tokens"`
+	// 耗时/TTFT/上下文（agg 模式由各成员服务端聚合字段按 req_count 加权得出；无逐调用分布时为 0）。
+	AvgDurationMs     float64 `json:"avg_duration_ms"`      // 平均耗时 ms
+	P95DurationMs     float64 `json:"p95_duration_ms"`      // P95 耗时 ms
+	AvgTTFTMs         float64 `json:"avg_ttft_ms"`          // 平均首字延迟 ms
+	AvgInputCtxTokens float64 `json:"avg_input_ctx_tokens"` // 平均输入上下文 token 数
 }
 
 type UnitService struct {
@@ -239,7 +244,23 @@ type UnitService struct {
 	EstCostUSD   float64 `json:"est_cost_usd"`
 	TotalTokens  int64   `json:"total_tokens"`
 	ActiveDays   int     `json:"active_days"`
-	Notes        string  `json:"notes"`
+	// OwnerName 该 Service Key 块的负责人（agg 模式由服务端 service-keys 聚合带出；多 Key 时取成本最高 Key 的 owner）。
+	OwnerName string `json:"owner_name"`
+	// ModelCount 该 Service Key 块使用的去重模型数（agg 模式由各 Key 的 model_count 求和近似，详见 Notes）。
+	ModelCount int `json:"model_count"`
+	// Keys 逐 Key 明细（agg 模式由 /usage/report/service-keys 装配，供「ServiceKey 表」逐行渲染）。
+	Keys  []ServiceKeyInfo `json:"keys,omitempty"`
+	Notes string           `json:"notes"`
+}
+
+// ServiceKeyInfo 单个程序 Service Key 的聚合行（ServiceKey 表逐行渲染用）。
+type ServiceKeyInfo struct {
+	KeyName     string  `json:"key_name"`
+	OwnerName   string  `json:"owner_name"`
+	ReqCount    int64   `json:"req_count"`
+	TotalTokens int64   `json:"total_tokens"`
+	CostUSD     float64 `json:"cost_usd"`
+	ModelCount  int     `json:"model_count"`
 }
 
 type PerCapita struct {
@@ -263,10 +284,13 @@ type Judgment struct {
 	Peer             Peer              `json:"peer"`
 	PeerProfiles     []PeerMetric      `json:"peer_profiles"`      // Vicky「同岗使用效能画像」多指标分位表
 	TopModelPortrait *TopModelPortrait `json:"top_model_portrait"` // Vicky「成本最高模型的同岗画像」第四章
-	Efficiency       Efficiency        `json:"efficiency"`
-	Anomalies        []AnomalyHit      `json:"anomalies"`
-	Attribution      []Attribution     `json:"attribution"`
-	NotComputed      []NotComputed     `json:"not_computed"`
+	// PeerUnitCost 单元级匿名横比：本单元「单位活跃人成本」在全公司各部门中的分位（department|studio 报告专用）。
+	// 池 = 全公司各部门单位活跃人成本（Σ成本/去重活跃人）；本值取自本单元 PerCapita 成本。样本不足时 Supported=false。
+	PeerUnitCost Peer          `json:"peer_unit_cost"`
+	Efficiency   Efficiency    `json:"efficiency"`
+	Anomalies    []AnomalyHit  `json:"anomalies"`
+	Attribution  []Attribution `json:"attribution"`
+	NotComputed  []NotComputed `json:"not_computed"`
 }
 
 // TopModelPortrait 成本最高模型的同岗画像（Vicky 第四章）。

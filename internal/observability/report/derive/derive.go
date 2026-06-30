@@ -120,6 +120,15 @@ func Derive(meta report.Meta, in report.ReportInput, rules report.RuleSet) (*rep
 		}
 	}
 
+	// ---- 单元级匿名横比（department|studio）：本单元「单位活跃人成本」在全公司各部门中的分位 ----
+	// 本值取本单元 PerCapita 成本（Σ成本/活跃人数）；池 = 全公司各部门单位活跃人成本（按 DeptName 归并）。
+	// 无 CompanyUserMetrics 或池样本不足时 supported=false，不产生误导性横比。
+	if rep.Fact.Department != nil {
+		judge.PeerUnitCost = buildDeptUnitCostPeer(in, unitCostPerActiveUser(rep.Fact.Department), rules.MinCohortSample)
+	} else if rep.Fact.Studio != nil {
+		judge.PeerUnitCost = buildDeptUnitCostPeer(in, unitCostPerActiveUser(rep.Fact.Studio), rules.MinCohortSample)
+	}
+
 	rep.Judgment = *judge
 
 	// ---- 表达层：确定性回填（只引用已存在字段，无新数字/新判定）----
@@ -160,7 +169,8 @@ func buildFact(in report.ReportInput) report.Fact {
 // ---- 成员聚合事实层（阶段二：不拉全量明细，用 FetchMemberAgg 每人一行构造加法核心）----
 
 // buildPersonalFactFromAgg 用单条成员聚合构造 PersonalFact。缺明细依赖项：TopModels(空)、
-// HourlyDistribution(空)、AvgDurationMs(0)、CacheWriteTokens(0)、ModelCount/ActiveDays 用其计数。
+// HourlyDistribution(空)、CacheWriteTokens(0)、ModelCount/ActiveDays 用其计数。
+// 耗时/TTFT/上下文取服务端聚合字段（个人即单成员，直接装配；无字段时保持 0，AvgInputCtxTokens 回退 prompt/req 推算）。
 func buildPersonalFactFromAgg(in report.ReportInput) *report.PersonalFact {
 	p := &report.PersonalFact{ScopeID: in.LevelMeta.ID, ScopeName: in.LevelMeta.Name, HourlyDistribution: map[string]int{}}
 	for _, m := range in.MemberAgg {
@@ -182,10 +192,18 @@ func buildPersonalFactFromAgg(in report.ReportInput) *report.PersonalFact {
 		p.EstCostUSD += m.CostUSD
 		p.ModelCount += m.ModelCount
 		p.ActiveDays += int(m.ActiveDays)
+		// 耗时/TTFT/上下文：服务端聚合已算好，单成员直接装配（个人无加权，即该成员值）。
+		p.AvgDurationMs = m.AvgDurationMs
+		p.P95DurationMs = m.P95DurationMs
+		p.AvgTTFTMs = m.AvgFirstTokenMs
+		if m.AvgInputCtxTokens > 0 {
+			p.AvgInputCtxTokens = m.AvgInputCtxTokens
+		}
 		break
 	}
 	// 派生指标（同 buildPersonalFact，基于 agg 字段推算）
-	if p.ReqCount > 0 && p.PromptTokens > 0 {
+	// AvgInputCtxTokens：优先取服务端字段（口径更精确），否则回退 prompt/req 推算。
+	if p.ReqCount > 0 && p.PromptTokens > 0 && p.AvgInputCtxTokens == 0 {
 		p.AvgInputCtxTokens = float64(p.PromptTokens) / float64(p.ReqCount)
 	}
 	if p.PromptTokens > 0 {
@@ -198,17 +216,24 @@ func buildPersonalFactFromAgg(in report.ReportInput) *report.PersonalFact {
 }
 
 // buildUnitFactFromAgg 用成员聚合行(每人一行、排除 service)构造 UnitFact 的成员加法核心。
-// 明细依赖项降级：ServiceKey 空(聚合成员接口恒排除 service，原样标注 Notes)、
-// TopModels/ModelCount 空(无模型粒度，u.Member.ModelCount=0)、PerCapita 用 Σreq/Σcost/count 与 Σactive_days/count。
+// 明细依赖项降级：TopModels/ModelCount 空(无模型粒度，u.Member.ModelCount=0)、PerCapita 用 Σreq/Σcost/count 与 Σactive_days/count。
+// ServiceKey 块：成员聚合接口恒排除 service，改用 in.ServiceKeys（/usage/report/service-keys）装配 owner/model_count 等；该通道为空时降级并标注 Notes。
 func buildUnitFactFromAgg(in report.ReportInput, level string) *report.UnitFact {
 	u := &report.UnitFact{ScopeID: in.LevelMeta.ID, ScopeName: in.LevelMeta.Name, StudioID: in.LevelMeta.StudioID}
 	if len(in.MemberAgg) == 0 {
-		u.ServiceKey.Notes = "成员聚合口径：未拉明细，Service Key 块不可得。"
+		assembleServiceKey(&u.ServiceKey, in.ServiceKeys)
+		if len(in.ServiceKeys) == 0 {
+			u.ServiceKey.Notes = "成员聚合口径：未拉明细，Service Key 块不可得。"
+		}
 		return u
 	}
 	active := 0
 	var activeDaySum int64
 	var totalCached, totalPrompt int64
+	// 耗时/TTFT/上下文：各成员是周期口径的均值/分位，聚合到部门/工作室需按调用量(req_count)加权。
+	// 权重分母 = Σ活跃成员 req_count；分子 = Σ(成员值 × 成员 req_count)。
+	var totalReqWeight int64
+	var durWeighted, p95Weighted, ttftWeighted, ctxWeighted float64
 	for _, m := range in.MemberAgg {
 		if m.ReqCount == 0 && m.CostUSD == 0 && m.TotalTokens == 0 {
 			continue
@@ -226,10 +251,19 @@ func buildUnitFactFromAgg(in report.ReportInput, level string) *report.UnitFact 
 		totalPrompt += m.PromptTokens
 		active++
 		activeDaySum += m.ActiveDays
+		// 加权累加耗时字段（仅对产生调用的成员计权；无调用成员值为 0，自然不影响分子）
+		totalReqWeight += m.ReqCount
+		durWeighted += m.AvgDurationMs * float64(m.ReqCount)
+		p95Weighted += m.P95DurationMs * float64(m.ReqCount)
+		ttftWeighted += m.AvgFirstTokenMs * float64(m.ReqCount)
+		ctxWeighted += m.AvgInputCtxTokens * float64(m.ReqCount)
 	}
 	u.Member.ActiveUserCount = active
 	u.Member.UserCount = in.Cohort.RosterUserCount
-	u.ServiceKey.Notes = "成员聚合口径：未拉明细，Service Key 块与 TopModels/模型并集不可得(排除 service)。"
+	assembleServiceKey(&u.ServiceKey, in.ServiceKeys)
+	if len(in.ServiceKeys) == 0 {
+		u.ServiceKey.Notes = "成员聚合口径：未拉明细，Service Key 块与 TopModels/模型并集不可得(排除 service)。"
+	}
 	if active > 0 {
 		u.Member.PerCapita = report.PerCapita{
 			ReqCount:    u.Member.ReqCount / int64(active),
@@ -247,6 +281,15 @@ func buildUnitFactFromAgg(in report.ReportInput, level string) *report.UnitFact 
 	// CostPer1Million = Σcost / Σtotal_tokens * 1e6
 	if u.Member.TotalTokens > 0 {
 		u.Member.CostPer1Million = u.Member.EstCostUSD / float64(u.Member.TotalTokens) * 1e6
+	}
+	// 耗时/TTFT/上下文：按 req_count 加权平均（求和口径与成员口径一致）。
+	// p95 本身为分位，无法在无逐调用分布时精确复算，这里以 req_count 加权近似（略偏温和；
+	// 若要偏保守取该单元最差成员 p95 可改为 max），注明为近似值以供渲染层口径说明。
+	if totalReqWeight > 0 {
+		u.Member.AvgDurationMs = durWeighted / float64(totalReqWeight)
+		u.Member.P95DurationMs = p95Weighted / float64(totalReqWeight)
+		u.Member.AvgTTFTMs = ttftWeighted / float64(totalReqWeight)
+		u.Member.AvgInputCtxTokens = ctxWeighted / float64(totalReqWeight)
 	}
 
 	// 岗位分组：构建 userID→TopModels map（优先 Cohort.Members，补 ReportInput.UserTopModels）
@@ -304,6 +347,59 @@ func buildUnitFactFromAgg(in report.ReportInput, level string) *report.UnitFact 
 	}
 
 	return u
+}
+
+// assembleServiceKey 用 ServiceKey 聚合行（每 Key 一行）装配 UnitFact.ServiceKey 块（agg 模式专用）。
+//   - 数值字段（req/success/error/total_tokens/cost）跨 Key 求和；
+//   - ActiveDays 取各 Key 的最大值（按天去重近似，避免多 Key 同日重复计）；
+//   - OwnerName 取成本最高 Key 的 owner（代表本块主要服务）；
+//   - ModelCount 为各 Key 之和（无逐 Key 模型并集，属上限近似；详见 Notes）。
+//
+// 传空 keys 时保持原值（调用方据此标注「不可得」）。
+func assembleServiceKey(sk *report.UnitService, keys []report.ServiceKeyAgg) {
+	if len(keys) == 0 {
+		return
+	}
+	var req, succ, errCnt, tokens int64
+	var cost float64
+	var modelCount int
+	topOwner := ""
+	topCost := 0.0
+	for _, k := range keys {
+		req += k.ReqCount
+		succ += k.SuccessCount
+		errCnt += k.ErrorCount
+		tokens += k.TotalTokens
+		cost += k.CostUSD
+		modelCount += k.ModelCount
+		if int(k.ActiveDays) > sk.ActiveDays {
+			sk.ActiveDays = int(k.ActiveDays)
+		}
+		if k.CostUSD > topCost {
+			topCost = k.CostUSD
+			topOwner = k.OwnerName
+		}
+	}
+	sk.ReqCount = req
+	sk.SuccessCount = succ
+	sk.ErrorCount = errCnt
+	sk.TotalTokens = tokens
+	sk.EstCostUSD = cost
+	sk.OwnerName = topOwner
+	sk.ModelCount = modelCount
+	// 逐 Key 明细：供「ServiceKey 表」逐行渲染（KeyName/OwnerName/ReqCount/TotalTokens/CostUSD/ModelCount）。
+	sk.Keys = make([]report.ServiceKeyInfo, 0, len(keys))
+	for _, k := range keys {
+		sk.Keys = append(sk.Keys, report.ServiceKeyInfo{
+			KeyName:     k.KeyName,
+			OwnerName:   k.OwnerName,
+			ReqCount:    k.ReqCount,
+			TotalTokens: k.TotalTokens,
+			CostUSD:     k.CostUSD,
+			ModelCount:  k.ModelCount,
+		})
+	}
+	sk.Notes = fmt.Sprintf("%d 个 Service Key（由服务端 service-keys 聚合装配；OwnerName=成本最高 Key 的 owner；ModelCount=各 Key 模型数之和的近似；逐 Key 明细见下表）", len(keys))
 }
 
 // buildDeptContributions 按 DeptID 聚合 MemberAgg，计算工作室下各部门的成本/人数/人均贡献。
@@ -1184,6 +1280,61 @@ func mapPeer(p PeerResult) report.Peer {
 		Band: p.Band, P25: p.P25, P50: p.P50, P75: p.P75, P90: p.P90,
 		VsPeer: p.VsPeer, Anonymized: p.Anonymized, Note: p.Note,
 	}
+}
+
+// unitCostPerActiveUser 返回本单元「单位活跃人成本」= ΣEstCostUSD / 活跃人数（PerCapita.EstCostUSD 口径）。
+// 活跃人数为 0 时返回 0（避免除零；此时不产横比）。
+func unitCostPerActiveUser(u *report.UnitFact) float64 {
+	if u == nil || u.Member.ActiveUserCount <= 0 {
+		return 0
+	}
+	return u.Member.EstCostUSD / float64(u.Member.ActiveUserCount)
+}
+
+// buildDeptUnitCostPeer 计算单元级匿名横比（judge.PeerUnitCost）：用全公司每用户指标（in.CompanyUserMetrics）
+// 按 DeptName 分组，各部门「单位活跃人成本 = ΣEstCostUSD / 去重UserName 活跃人数」，得出各部门单位活跃人成本分布；
+// 再对 current（本单元单位活跃人成本）用 PeerPercentile 求在全公司各部门中的分位。
+// 池含当前部门自身（跨公司横比口径）；DeptName 为空、无活跃人的部门不计入池。
+// CompanyUserMetrics 为空或池有效样本 < minSample 时返回 supported=false，不产误导性横比。
+func buildDeptUnitCostPeer(in report.ReportInput, current float64, minSample int) report.Peer {
+	byDept := map[string]*struct {
+		cost  float64
+		users map[string]struct{}
+	}{}
+	for _, um := range in.CompanyUserMetrics {
+		dept := um.DeptName
+		if dept == "" {
+			continue
+		}
+		e := byDept[dept]
+		if e == nil {
+			e = &struct {
+				cost  float64
+				users map[string]struct{}
+			}{users: map[string]struct{}{}}
+			byDept[dept] = e
+		}
+		e.cost += um.EstCostUSD
+		if um.UserName != "" {
+			e.users[um.UserName] = struct{}{}
+		}
+	}
+	members := make([]PortfolioMember, 0, len(byDept))
+	for _, e := range byDept {
+		n := len(e.users)
+		if n == 0 {
+			continue
+		}
+		members = append(members, PortfolioMember{Valid: true, Value: e.cost / float64(n)})
+	}
+	if len(in.CompanyUserMetrics) == 0 {
+		return report.Peer{
+			Metric: "unit_cost_per_active_user", PoolType: "company_departments", Anonymized: true, Current: current,
+			Note: "无全公司每用户数据（CompanyUserMetrics 为空），不做匿名横比。",
+		}
+	}
+	res := PeerPercentile("unit_cost_per_active_user", "company_departments", "cost", members, current, minSample)
+	return mapPeer(res)
 }
 
 func mapCohortMembers(c report.CohortDef) []PortfolioMember {

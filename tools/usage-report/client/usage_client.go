@@ -119,27 +119,27 @@ type dashboardResponse struct {
 
 // DashboardUserMetric 是同岗分位所需的用户聚合行（对应 /usage/dashboard/users 的 rows）。
 type DashboardUserMetric struct {
-	UserID           string             `json:"user_id"`
-	UserName         string             `json:"user_name"`
-	DeptName         string             `json:"dept_name"`
-	TotalTokens      int64              `json:"total_tokens"`
-	PromptTokens     int64              `json:"prompt_tokens"`
-	CompletionTokens int64              `json:"completion_tokens"`
-	ReasoningTokens  int64              `json:"reasoning_tokens"`
-	CachedTokens     int64              `json:"cached_tokens"`
-	EstCostUSD       float64            `json:"est_cost_usd"`
-	CallCount        int64              `json:"call_count"`
-	ErrorCount       int64              `json:"error_count"`
-	ModelCount       int                `json:"model_count"`
-	ActiveDays       int64              `json:"active_days"`
-	CostPer1kTokens  float64            `json:"cost_per_1k_tokens"`
-	TopModel         string             `json:"top_model"`
-	TopModelCostUSD  float64            `json:"top_model_cost_usd"`
-	TopModelCalls    int64              `json:"top_model_calls"`
-	WowReqPct        float64            `json:"wow_req_pct"`
-	WowTokenPct      float64            `json:"wow_token_pct"`
-	CostChangePct    float64            `json:"cost_change_pct"`
-	TopModels        []UserTopModelRow  `json:"top_models"`
+	UserID           string            `json:"user_id"`
+	UserName         string            `json:"user_name"`
+	DeptName         string            `json:"dept_name"`
+	TotalTokens      int64             `json:"total_tokens"`
+	PromptTokens     int64             `json:"prompt_tokens"`
+	CompletionTokens int64             `json:"completion_tokens"`
+	ReasoningTokens  int64             `json:"reasoning_tokens"`
+	CachedTokens     int64             `json:"cached_tokens"`
+	EstCostUSD       float64           `json:"est_cost_usd"`
+	CallCount        int64             `json:"call_count"`
+	ErrorCount       int64             `json:"error_count"`
+	ModelCount       int               `json:"model_count"`
+	ActiveDays       int64             `json:"active_days"`
+	CostPer1kTokens  float64           `json:"cost_per_1k_tokens"`
+	TopModel         string            `json:"top_model"`
+	TopModelCostUSD  float64           `json:"top_model_cost_usd"`
+	TopModelCalls    int64             `json:"top_model_calls"`
+	WowReqPct        float64           `json:"wow_req_pct"`
+	WowTokenPct      float64           `json:"wow_token_pct"`
+	CostChangePct    float64           `json:"cost_change_pct"`
+	TopModels        []UserTopModelRow `json:"top_models"`
 }
 
 // UserTopModelRow 用户 Top 模型行（对应服务端 top_models）。
@@ -436,6 +436,29 @@ type MemberAggRow struct {
 	CostUSD          float64 `json:"cost_usd"`
 	ActiveDays       int64   `json:"active_days"`
 	ModelCount       int     `json:"model_count"`
+	// 耗时/TTFT/上下文 派生字段（服务端已算好）。用 float64 对齐服务端 AVG/PERCENTILE_CONT 浮点输出，
+	// 避免 JSON 反序列化时把小数（如 123.456）塞进 int 报错。
+	AvgDurationMs     float64 `json:"avg_duration_ms"`
+	P95DurationMs     float64 `json:"p95_duration_ms"`
+	AvgFirstTokenMs   float64 `json:"avg_first_token_ms"`
+	AvgInputCtxTokens float64 `json:"avg_input_ctx_tokens"`
+}
+
+// ServiceKeyRow 程序 Service Key 聚合单行（/usage/report/service-keys 响应行）。
+// 与服务端 ServiceKeyAggRow 精确对齐（owner 字段名是 service 端的 owner_name）；供「ServiceKey 表」装配。
+type ServiceKeyRow struct {
+	KeyID        string  `json:"key_id"`
+	KeyName      string  `json:"key_name"`
+	OwnerName    string  `json:"owner_name"`
+	ReqCount     int64   `json:"req_count"`
+	SuccessCount int64   `json:"success_count"`
+	ErrorCount   int64   `json:"error_count"`
+	TotalTokens  int64   `json:"total_tokens"`
+	CostUSD      float64 `json:"cost_usd"`
+	ModelCount   int     `json:"model_count"`
+	ActiveDays   int64   `json:"active_days"`
+	StartDate    string  `json:"start_date"`
+	EndDate      string  `json:"end_date"`
 }
 
 // FetchMemberAgg 拉取成员级聚合（每人一行核心单一指标，排除 service），走 /usage/report/members。
@@ -457,6 +480,29 @@ func (c *Client) FetchMemberAgg(ctx context.Context, from, to, userID, deptID, s
 	}
 	var resp struct {
 		Rows []MemberAggRow `json:"rows"`
+	}
+	if err := json.Unmarshal(b, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Rows, nil
+}
+
+// FetchServiceKeys 拉取程序 Service Key 聚合（每 Key 一行），走 /usage/report/service-keys。
+// 仅聚合 key_type='service' 的调用；deptID/studioID 非空时作为服务端过滤。zero 明细、零分页。
+func (c *Client) FetchServiceKeys(ctx context.Context, from, to, deptID, studioID string) ([]ServiceKeyRow, error) {
+	q := map[string]string{"start": from, "end": to}
+	if deptID != "" {
+		q["dept_id"] = deptID
+	}
+	if studioID != "" {
+		q["studio_id"] = studioID
+	}
+	b, err := c.do(ctx, "GET", "/usage/report/service-keys", q)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Rows []ServiceKeyRow `json:"rows"`
 	}
 	if err := json.Unmarshal(b, &resp); err != nil {
 		return nil, err
@@ -525,6 +571,12 @@ func (c *Client) FetchUserMetrics(ctx context.Context, from, to, deptID, studioI
 		}
 	}
 	return out, nil
+}
+
+// FetchUserMetricsAll 拉取全公司（无部门/工作室过滤）报告期用户聚合指标，供匿名的「全公司横比」行。
+// 复用 FetchUserMetrics；deptID/studioID 传空即不被服务端过滤（仍受调用方 RBAC 范围约束）。
+func (c *Client) FetchUserMetricsAll(ctx context.Context, from, to string) ([]DashboardUserMetric, error) {
+	return c.FetchUserMetrics(ctx, from, to, "", "")
 }
 
 // FetchMembers 拉取部门成员（/org/departments/:dept_id/members）。
@@ -672,6 +724,8 @@ func (r MemberAggRow) ToMemberAgg() report.MemberAgg {
 		PromptTokens: r.PromptTokens, CompletionTokens: r.CompletionTokens, ReasoningTokens: r.ReasoningTokens,
 		CachedTokens: r.CachedTokens, TotalTokens: r.TotalTokens,
 		CostUSD: r.CostUSD, ActiveDays: r.ActiveDays, ModelCount: r.ModelCount,
+		AvgDurationMs: r.AvgDurationMs, P95DurationMs: r.P95DurationMs,
+		AvgFirstTokenMs: r.AvgFirstTokenMs, AvgInputCtxTokens: r.AvgInputCtxTokens,
 	}
 }
 

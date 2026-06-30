@@ -328,6 +328,54 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 		weeklyTrend = buildWeeklyTrend(ctx, cli, scope.StudioID, cfg.From)
 	}
 
+	// 程序 Service Key 聚合（/usage/report/service-keys）：仅 level != personal 拉取（personal 个人口径恒排除 service）。
+	// 按 level 映射 dept/studio 过滤：department→dept_id、studio→studio_id。-agg 场景必须拉（member 聚合恒排除 service，
+	// 否则 ServiceKey 块降级为空）；明细模式亦拉以补齐「ServiceKey 表」数据。拉取失败静默忽略（块降级 + Notes）。
+	var serviceKeys []report.ServiceKeyAgg
+	if cfg.Level != "personal" {
+		svcDeptID, svcStudioID := "", ""
+		switch cfg.Level {
+		case "department":
+			svcDeptID = scope.DeptID
+		case "studio":
+			svcStudioID = scope.StudioID
+		}
+		if skRows, svcErr := cli.FetchServiceKeys(ctx, cfg.From, cfg.To, svcDeptID, svcStudioID); svcErr == nil {
+			serviceKeys = make([]report.ServiceKeyAgg, 0, len(skRows))
+			for _, r := range skRows {
+				serviceKeys = append(serviceKeys, report.ServiceKeyAgg{
+					KeyName:      r.KeyName,
+					OwnerName:    r.OwnerName,
+					ReqCount:     r.ReqCount,
+					SuccessCount: r.SuccessCount,
+					ErrorCount:   r.ErrorCount,
+					TotalTokens:  r.TotalTokens,
+					CostUSD:      r.CostUSD,
+					ModelCount:   r.ModelCount,
+					ActiveDays:   r.ActiveDays,
+				})
+			}
+		}
+	}
+
+	// 匿名横比数据（部门/工作室）：全公司每用户口径（无 dept/studio 过滤），供 derive 按 DeptName 分组算
+	// 各部门「单位活跃人成本」并给出等级/工作室的匿名分位（judge.PeerUnitCost）。拉取失败静默忽略（横比降级）。
+	var companyUserMetrics []report.CompanyUserMetric
+	if cfg.Level == "department" || cfg.Level == "studio" {
+		if umRows, umErr := cli.FetchUserMetricsAll(ctx, cfg.From, cfg.To); umErr == nil && len(umRows) > 0 {
+			companyUserMetrics = make([]report.CompanyUserMetric, 0, len(umRows))
+			for _, r := range umRows {
+				companyUserMetrics = append(companyUserMetrics, report.CompanyUserMetric{
+					UserName:   r.UserName,
+					DeptName:   r.DeptName,
+					EstCostUSD: r.EstCostUSD,
+					CallCount:  r.CallCount,
+					ActiveDays: r.ActiveDays,
+				})
+			}
+		}
+	}
+
 	in := report.ReportInput{
 		Metrics: metrics, Calls: memberCalls, BaselineMetrics: baselineMetrics, BaselineBuckets: baselineBuckets, Cohort: cohort,
 		LevelMeta:          scope,
@@ -335,13 +383,15 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 		MemberAgg:          memberAgg,
 		PrevMemberAgg:      prevMemberAgg,
 		StudioMemberAgg:    studioMemberAgg,
-		BaselineCurrent:    baselineCurrent,   // -agg 当期按天序列，仅供基线 current
-		CurrentBuckets:     currentBuckets,    // -agg 当期分钟桶，供 A1/A2 当期窗口判定
-		UserTopModels:      userTopModels,     // 部门/工作室: 每用户 top 模型（岗位分布/Top变化人员）
-		DeptNames:          deptNames,         // 工作室级别: deptID→deptName 映射（DeptContribution.DeptName 用）
-		CompanyCostUSD:     companyCostUSD,    // 工作室: 全公司同期成本（一页摘要占比）
-		PrevUserTopModels:  prevUserTopModels, // 工作室: 上期每用户 Top 模型（变化归因）
-		WeeklyTrend:        weeklyTrend,       // 工作室: 最近4周成本趋势
+		BaselineCurrent:    baselineCurrent,    // -agg 当期按天序列，仅供基线 current
+		CurrentBuckets:     currentBuckets,     // -agg 当期分钟桶，供 A1/A2 当期窗口判定
+		UserTopModels:      userTopModels,      // 部门/工作室: 每用户 top 模型（岗位分布/Top变化人员）
+		DeptNames:          deptNames,          // 工作室级别: deptID→deptName 映射（DeptContribution.DeptName 用）
+		CompanyCostUSD:     companyCostUSD,     // 工作室: 全公司同期成本（一页摘要占比）
+		PrevUserTopModels:  prevUserTopModels,  // 工作室: 上期每用户 Top 模型（变化归因）
+		WeeklyTrend:        weeklyTrend,        // 工作室: 最近4周成本趋势
+		ServiceKeys:        serviceKeys,        // 程序 Service Key 聚合（部门/工作室: 每 Key 一行，供 ServiceKey 块装配与表渲染）
+		CompanyUserMetrics: companyUserMetrics, // 全公司每用户口径（部门/工作室: 匿名横比数据）
 	}
 	rep, err := derive.Derive(meta, in, rules)
 	if err != nil {

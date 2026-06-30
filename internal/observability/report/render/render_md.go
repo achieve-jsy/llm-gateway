@@ -179,6 +179,14 @@ func cny(usd float64, rate float64) string {
 	return fmt.Sprintf("¥%.2f", usd*rate)
 }
 
+// orDash 空字符串显示为「—」（表格占位，避免留下空单元格）。
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
 // signedPct 显示带符号的百分比（周环比用），0 显示为 0.0%。
 func signedPct(v float64) string {
 	if v == 0 {
@@ -457,6 +465,38 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 		w("- vs 本部门过去 %d 天：成本处于 P%.0f（MAD 偏离 %.2fσ，%s）\n",
 			j.Baseline.WindowDays, j.Baseline.Percentile*100, j.Baseline.DevSigma, j.Baseline.Trend)
 	}
+	// 耗时行：成员聚合耗时字段 >0 时输出（与「概况」顶部个人耗时行同口径）
+	if u.Member.AvgDurationMs > 0 || u.Member.P95DurationMs > 0 || u.Member.AvgTTFTMs > 0 {
+		parts := []string{}
+		if u.Member.AvgDurationMs > 0 {
+			parts = append(parts, fmt.Sprintf("平均耗时 %.1fs", u.Member.AvgDurationMs/1000))
+		}
+		if u.Member.P95DurationMs > 0 {
+			parts = append(parts, fmt.Sprintf("p95 %.1fs", u.Member.P95DurationMs/1000))
+		}
+		if u.Member.AvgTTFTMs > 0 {
+			parts = append(parts, fmt.Sprintf("平均 TTFT %.0fms", u.Member.AvgTTFTMs))
+		}
+		w("- %s\n", strings.Join(parts, " | "))
+	}
+	// 匿名横比行：消费 judge.PeerUnitCost（derive 单元级匿名横比字段），输出同类型部门横比。
+	// 行首保留事实层本单元「单位活跃人成本」（有值时），再附 peer 分位；peer 数据未就绪时降级注明。
+	pu := j.PeerUnitCost
+	perCapita := u.Member.PerCapita
+	lead := ""
+	if perCapita.EstCostUSD > 0 {
+		lead = fmt.Sprintf("单位活跃人成本 %s/人 · ", cny(perCapita.EstCostUSD, rate))
+	}
+	if pu.Supported {
+		w("- %svs 同类型部门（匿名）单位活跃人成本 P%.0f（当前 %s/人 · 池 %s %d 样本 · vs 中位 %s）\n",
+			lead, pu.PercentileRank*100, cny(pu.Current, rate), pu.PoolType, pu.SampleN, orDash(pu.VsPeer))
+	} else {
+		note := pu.Note
+		if note == "" {
+			note = "样本不足"
+		}
+		w("- %svs 同类型部门（匿名）单位活跃人成本：分位不可用（%s）\n", lead, note)
+	}
 
 	// 二、岗位分布
 	w("\n## 二、岗位分布（同岗位分位，不做跨岗位裸排名）\n\n")
@@ -489,6 +529,25 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 		}
 		w("- Service Key 总成本 %s%s；调用 %d 次；Token %d\n",
 			cny(sk.EstCostUSD, rate), skRatio, sk.ReqCount, sk.TotalTokens)
+		// 逐 Key 明细表（t6 装配 u.ServiceKey.Keys；缺失的列以占位并注明，不硬造）
+		if len(sk.Keys) > 0 {
+			w("\n| Service Key | Owner/应用 | 调用 | Token | 成本 | 成本占比 | 主用模型 | 异常 |\n")
+			w("|---|---|---:|---:|---:|---:|---|---|\n")
+			for _, k := range sk.Keys {
+				keyRatio := "—"
+				if totalCost > 0 {
+					keyRatio = pctP(k.CostUSD / totalCost)
+				}
+				models := "—"
+				if k.ModelCount > 0 {
+					models = fmt.Sprintf("%d 个模型", k.ModelCount)
+				}
+				w("| %s | %s | %d | %s | %s | %s | %s | — |\n",
+					orDash(k.KeyName), orDash(k.OwnerName), k.ReqCount,
+					fmtTokens(k.TotalTokens), cny(k.CostUSD, rate), keyRatio, models)
+			}
+			w("\n- 注：「主用模型」仅给出去重模型数（t6 逐 Key 明细不含模型名）；「异常」逐 Key 明细暂缺。\n")
+		}
 	} else {
 		w("- 本周期无 Service Key 调用（或 -agg 模式未拉取明细）\n")
 	}

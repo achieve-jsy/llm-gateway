@@ -122,6 +122,21 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 				// 上期拉取失败时静默忽略（derive 层收到空 PrevMemberAgg 即跳过环比）
 			}
 		}
+		// 当期按天序列：-agg 成员聚合无逐日明细，但 `/usage/report/baseline` 仍可
+		// 按天返回非 service 调用数（同 level/scope 过滤），据此构造 metrics，
+		// 使 28 天基线能算真实当期日均（current），不再降级「不做基线判定」。
+		if cuid, cdept, cstudio := baselineScopeIDs(cfg.Level, scope); true {
+			if curBaseline, curErr := cli.FetchBaseline(ctx, cfg.From, cfg.To, cuid, cdept, cstudio); curErr == nil && len(curBaseline.Daily) > 0 {
+				metrics = make([]report.DailyMetric, 0, len(curBaseline.Daily))
+				for _, d := range curBaseline.Daily {
+					metrics = append(metrics, report.DailyMetric{
+						Date: d.Date, Level: cfg.Level, ScopeID: scope.ID, KeyType: "personal", ReqCount: d.ReqCount,
+					})
+				}
+			} else if cfg.Debug {
+				log.Printf("agg 当期 baseline 拉取失败/为空: %v", curErr)
+			}
+		}
 	} else {
 		rows, err := fetchScopeLogs(ctx, cli, cfg, scope, cfg.From, cfg.To)
 		if err != nil {
@@ -141,15 +156,7 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 
 	// 3b) 28 天基线物化：期前 28 完整自然日 [from-28d, from-1d]（同 level/scope 过滤），走聚合接口零明细。
 	bf, bt := baselineWindow(cfg.From, cfg.To)
-	buid, bdept, bstudio := "", "", ""
-	switch cfg.Level {
-	case "personal":
-		buid = scope.ID
-	case "department":
-		bdept = scope.DeptID
-	case "studio":
-		bstudio = scope.StudioID
-	}
+	buid, bdept, bstudio := baselineScopeIDs(cfg.Level, scope)
 	baselineResp, err := cli.FetchBaseline(ctx, bf, bt, buid, bdept, bstudio)
 	if err != nil {
 		return nil, err
@@ -945,6 +952,20 @@ func baselineWindow(from, to string) (string, string) {
 		f = time.Now()
 	}
 	return f.AddDate(0, 0, -28).Format("2006-01-02"), f.AddDate(0, 0, -1).Format("2006-01-02")
+}
+
+// baselineScopeIDs 按 level 从 scope 提取 /usage/report/baseline 的过滤参数（user_id/dept_id/studio_id）。
+func baselineScopeIDs(level string, scope report.Scope) (userID, deptID, studioID string) {
+	switch level {
+	case "personal":
+		return scope.ID, "", ""
+	case "department":
+		return "", scope.DeptID, ""
+	case "studio":
+		return "", "", scope.StudioID
+	default:
+		return scope.ID, scope.DeptID, scope.StudioID
+	}
 }
 
 // prevWindowDates 计算与本期同长度窗口的上期窗口范围：[from-periodDays, from-1d]。

@@ -203,9 +203,9 @@ func TestRenderMDDeptTimingPeerAndServiceKeyTable(t *testing.T) {
 	for _, want := range []string{
 		"- 平均耗时 1.5s | p95 3.0s | 平均 TTFT 200ms",
 		"- 单位活跃人成本 ¥360.00/人 · vs 同类型部门（匿名）单位活跃人成本 P75（当前 ¥360.00/人 · 池 全公司部门 12 样本 · vs 中位 略高）",
-		"| Service Key | Owner/应用 | 调用 | Token | 成本 | 成本占比 | 主用模型 | 异常 |",
-		"| k1 | app1 | 3 | 1.0k | ¥1.44 | 16.7% | 2 个模型 | — |",
-		"- 注：「主用模型」仅给出去重模型数（t6 逐 Key 明细不含模型名）；「异常」逐 Key 明细暂缺。",
+		"| Service Key | Owner/应用 | 调用 | 调用环比 | Token | 成本 | 成本环比 | 成本占比 | 主用模型 | 异常 |",
+		"| k1 | app1 | 3 | — | 1.0k | ¥1.44 | — | 16.7% | — | — |",
+		"- 注：「主用模型」为当期成本最高的模型名；「环比」为对比前一周同范围（无上期显示「—」）；「异常」为当期失败调用数（0 显示「—」）。",
 	} {
 		if !strings.Contains(md, want) {
 			t.Errorf("department markdown missing %q:\n%s", want, md)
@@ -229,5 +229,111 @@ func TestRenderMDDeptAnonPeerUnitCostDegraded(t *testing.T) {
 	md := RenderMD(&r)
 	if !strings.Contains(md, "- 单位活跃人成本 ¥360.00/人 · vs 同类型部门（匿名）单位活跃人成本：分位不可用（样本不足）") {
 		t.Errorf("department markdown missing degraded peer line:\n%s", md)
+	}
+}
+
+// TestRenderMDDeptTopChangedAnomalyCause 验证部门第四章「重点变化」表：列序=人员（匿名）|岗位|成本环比|主因|是否有解释，
+// 移除「主用模型」列；主因列与是否有解释列均读 AnomalyCause（有值→主因显示命中规则、是否有解释=已解释；空→均「待确认」）。
+func TestRenderMDDeptTopChangedAnomalyCause(t *testing.T) {
+	r := markdownReport("department")
+	r.Fact.Department.TopChanged = []report.TopChangedMember{
+		{Idx: 1, JobCategory: "工程师", WoWCostPct: 120.0, AnomalyCause: "A2 成本燃烧"},
+		{Idx: 2, JobCategory: "设计", WoWCostPct: -30.0, AnomalyCause: ""},
+	}
+	md := RenderMD(&r)
+	for _, want := range []string{
+		"| 人员（匿名） | 岗位 | 成本环比 | 主因 | 是否有解释 |",
+		"| 员工1 | 工程师 | +120.0% | A2 成本燃烧 | 已解释 |",
+		"| 员工2 | 设计 | -30.0% | 待确认 | 待确认 |",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("department TopChanged section missing %q:\n%s", want, md)
+		}
+	}
+	if strings.Contains(md, "主用模型 | 是否有解释") {
+		t.Errorf("第四章仍含「主用模型」列，应按模板移除:\n%s", md)
+	}
+}
+
+// TestRenderMDDeptServiceKeyWoWAndTopModel 验证部门第三章 ServiceKey 逐 Key 表：
+// 新增「调用环比/成本环比」列（读 ServiceKeyInfo.PrevReqCount/PrevCostUSD；无上期显示「—」），
+// 「主用模型」列读 ServiceKeyInfo.TopModel（模型名，非去重计数）；汇总行带主用模型与成本环比。
+func TestRenderMDDeptServiceKeyWoWAndTopModel(t *testing.T) {
+	u := &report.UnitFact{
+		Member: report.UnitMember{EstCostUSD: 10.0, ReqCount: 100},
+		ServiceKey: report.UnitService{
+			ReqCount: 200, TotalTokens: 10000, EstCostUSD: 20.0, TopModel: "gpt-4o",
+			PrevReqCount: 100, PrevTokens: 5000, PrevCostUSD: 10.0,
+			Keys: []report.ServiceKeyInfo{
+				{KeyName: "k1", OwnerName: "app1", ReqCount: 200, TotalTokens: 10000, CostUSD: 20.0,
+					SuccessCount: 195, ErrorCount: 5, TopModel: "gpt-4o",
+					PrevReqCount: 100, PrevTokens: 5000, PrevCostUSD: 10.0},
+			},
+		},
+	}
+	r := markdownReport("department")
+	r.Fact.Department = u
+	md := RenderMD(&r)
+	for _, want := range []string{
+		"主用模型 gpt-4o；成本环比 +100.0%",
+		"| k1 | app1 | 200 | +100.0% | 10.0k | ¥144.00 | +100.0% | 66.7% | gpt-4o | 5 |",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("department ServiceKey WoW/TopModel missing %q:\n%s", want, md)
+		}
+	}
+}
+
+// TestRenderMDStudioBudgetExec 验证工作室「一页摘要」预算执行行：Supported 时输出「预算执行：X%（实际/额度）」，
+// Supported=false（不可得）时输出「预算执行：不可得（note）」降级，不硬造数值。
+func TestRenderMDStudioBudgetExec(t *testing.T) {
+	r := markdownReport("studio")
+	r.Fact.Studio.BudgetExec = &report.BudgetExec{
+		Supported: true, ScopeType: "studio", ScopeID: "s1", Month: "2026-08",
+		MonthLimitUSD: 1000, ActualCostUSD: 450, Percent: 45.0,
+	}
+	md := RenderMD(&r)
+	if !strings.Contains(md, "- 预算执行：实际 450.0000 USD / 限额 1000.0000 USD（45.0%）") {
+		t.Errorf("studio budget exec line missing:\n%s", md)
+	}
+
+	r2 := markdownReport("studio")
+	r2.Fact.Studio.BudgetExec = &report.BudgetExec{Supported: false, Note: "无预算执行数据"}
+	md2 := RenderMD(&r2)
+	if !strings.Contains(md2, "- 预算执行：不可得（无预算执行数据）") {
+		t.Errorf("studio budget exec degraded missing:\n%s", md2)
+	}
+}
+
+// TestRenderMDDeptHighTierLabel 验证个人周报「同岗使用效能画像」指标行透出 derive 侧改名后的
+// 「高阶模型成本占比」label（Part2 把 high_tier_cost_ratio 指标 label 由「成本最高模型成本占比」改为「高阶模型成本占比」）。
+func TestRenderMDDeptHighTierLabel(t *testing.T) {
+	r := markdownReport("personal")
+	r.Judgment.PeerProfiles = []report.PeerMetric{
+		{Metric: "high_tier_cost_ratio", Label: "高阶模型成本占比", Unit: "%",
+			Current: 0.45, P50: 0.30, PercentileRank: 0.8, Supported: true},
+	}
+	md := RenderMD(&r)
+	if !strings.Contains(md, "| 高阶模型成本占比 | 45.0% | 30.0% | P80 |") {
+		t.Errorf("peer profile high-tier label missing:\n%s", md)
+	}
+}
+
+// TestRenderMDDeptAnomalyStateMachineDegraded 验证部门五章「异常处置」在 AnomalyHit 无「已确认/已处理」状态字段时，
+// 按现有 Hit/NotComputed 统计命中/未命中，并对状态机计数做如实降级（注明「状态机计数暂缺数据」，不硬造状态）。
+func TestRenderMDDeptAnomalyStateMachineDegraded(t *testing.T) {
+	r := markdownReport("department")
+	r.Judgment.Anomalies = []report.AnomalyHit{
+		{Rule: "A1", Name: "程序失控", Severity: "P1", Hit: true},
+		{Rule: "A2", Name: "成本燃烧", Severity: "P2", Hit: false},
+	}
+	md := RenderMD(&r)
+	for _, want := range []string{
+		"- 命中 1 条 | 未命中 1 条",
+		"- 状态机计数暂缺数据：异常记录尚无「已确认/已处理」状态字段",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("dept anomaly state-machine degrade missing %q:\n%s", want, md)
+		}
 	}
 }

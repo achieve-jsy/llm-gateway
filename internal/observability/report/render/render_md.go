@@ -200,6 +200,14 @@ func signedPct(v float64) string {
 	return fmt.Sprintf("%+.1f%%", v)
 }
 
+// wowPctFromPrev 计算相对上期的环比 %；无上期（prev==0）时输出「—」，避免硬造 0%。
+func wowPctFromPrev(cur, prev float64) string {
+	if prev == 0 {
+		return "—"
+	}
+	return signedPct((cur - prev) / prev * 100)
+}
+
 func unitFact(r *report.Report) *report.UnitFact {
 	if r.Fact.Department != nil {
 		return r.Fact.Department
@@ -562,26 +570,29 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 		if totalCost > 0 {
 			skRatio = fmt.Sprintf("，占部门总成本 %s", pctP(sk.EstCostUSD/totalCost))
 		}
-		w("- Service Key 总成本 %s%s；调用 %d 次；Token %d\n",
-			cny(sk.EstCostUSD, rate), skRatio, sk.ReqCount, sk.TotalTokens)
-		// 逐 Key 明细表（t6 装配 u.ServiceKey.Keys；缺失的列以占位并注明，不硬造）
+		w("- Service Key 总成本 %s%s；调用 %d 次；Token %d；主用模型 %s；成本环比 %s\n",
+			cny(sk.EstCostUSD, rate), skRatio, sk.ReqCount, sk.TotalTokens,
+			orDash(sk.TopModel), wowPctFromPrev(sk.EstCostUSD, sk.PrevCostUSD))
+		// 逐 Key 明细表（t6 装配 u.ServiceKey.Keys；环比/主用模型读 ServiceKeyInfo.Prev*/TopModel，缺失列占位不硬造）
 		if len(sk.Keys) > 0 {
-			w("\n| Service Key | Owner/应用 | 调用 | Token | 成本 | 成本占比 | 主用模型 | 异常 |\n")
-			w("|---|---|---:|---:|---:|---:|---|---|\n")
+			w("\n| Service Key | Owner/应用 | 调用 | 调用环比 | Token | 成本 | 成本环比 | 成本占比 | 主用模型 | 异常 |\n")
+			w("|---|---|---:|---:|---:|---:|---:|---:|---|---|\n")
 			for _, k := range sk.Keys {
 				keyRatio := "—"
 				if totalCost > 0 {
 					keyRatio = pctP(k.CostUSD / totalCost)
 				}
-				models := "—"
-				if k.ModelCount > 0 {
-					models = fmt.Sprintf("%d 个模型", k.ModelCount)
+				errCell := "—"
+				if k.ErrorCount > 0 {
+					errCell = fmt.Sprintf("%d", k.ErrorCount)
 				}
-				w("| %s | %s | %d | %s | %s | %s | %s | — |\n",
+				w("| %s | %s | %d | %s | %s | %s | %s | %s | %s | %s |\n",
 					orDash(k.KeyName), orDash(k.OwnerName), k.ReqCount,
-					fmtTokens(k.TotalTokens), cny(k.CostUSD, rate), keyRatio, models)
+					wowPctFromPrev(float64(k.ReqCount), float64(k.PrevReqCount)),
+					fmtTokens(k.TotalTokens), cny(k.CostUSD, rate),
+					wowPctFromPrev(k.CostUSD, k.PrevCostUSD), keyRatio, orDash(k.TopModel), errCell)
 			}
-			w("\n- 注：「主用模型」仅给出去重模型数（t6 逐 Key 明细不含模型名）；「异常」逐 Key 明细暂缺。\n")
+			w("\n- 注：「主用模型」为当期成本最高的模型名；「环比」为对比前一周同范围（无上期显示「—」）；「异常」为当期失败调用数（0 显示「—」）。\n")
 		}
 	} else {
 		w("- 本周期无 Service Key 调用（或 -agg 模式未拉取明细）\n")
@@ -590,15 +601,20 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 	// 四、重点变化（Top 变化人员）
 	w("\n## 四、重点变化（Top 变化人员）\n\n")
 	if len(u.TopChanged) > 0 {
-		w("| 人员（匿名） | 岗位 | 成本环比 | 主用模型 | 是否有解释 |\n")
+		w("| 人员（匿名） | 岗位 | 成本环比 | 主因 | 是否有解释 |\n")
 		w("|---|---|---|---|---|\n")
 		for _, tc := range u.TopChanged {
-			explain := "待确认"
-			if tc.AnomalyRule != "" {
-				explain = "命中 " + tc.AnomalyRule
+			// 主因列与是否有解释列均读 AnomalyCause（模板口径；不再用旧的 AnomalyRule）。
+			// 有值即已解释，主因直接显示命中规则（rule+name，如 "A2 成本燃烧"）；空则均降级「待确认」。
+			cause := tc.AnomalyCause
+			causeDisplay := "待确认"
+			explained := "待确认"
+			if cause != "" {
+				causeDisplay = cause
+				explained = "已解释"
 			}
 			w("| 员工%d | %s | %s | %s | %s |\n",
-				tc.Idx, tc.JobCategory, signedPct(tc.WoWCostPct), tc.TopModel, explain)
+				tc.Idx, tc.JobCategory, signedPct(tc.WoWCostPct), causeDisplay, explained)
 		}
 	} else {
 		w("- 无上期数据，不产出环比变化（需 -agg 模式 + 有上期记录）\n")
@@ -615,6 +631,8 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 		}
 	}
 	w("- 命中 %d 条 | 未命中 %d 条\n", hitCount, missCount)
+	// 异常状态机计数降级：AnomalyHit 尚无「已确认/已处理」状态字段，状态机计数暂缺数据；此处仅统计命中/未命中，不硬造状态。
+	w("- 状态机计数暂缺数据：异常记录尚无「已确认/已处理」状态字段，当前仅统计命中/未命中；确认/处理闭环待后续扩展。\n")
 	for _, a := range j.Anomalies {
 		if a.Hit {
 			detail := a.Name
@@ -695,6 +713,23 @@ func writeStudioSections(b *strings.Builder, r *report.Report) {
 		}
 		w("- 新增未关闭异常：%s\n", strings.Join(sevParts, "，"))
 	}
+	// 预算执行行（Vicky 工作室「一页摘要」；Supported=false 表示不可得，安全降级注明，不硬造数值）
+	if be := u.BudgetExec; be != nil {
+		if be.Supported {
+			if be.MonthLimitUSD > 0 {
+				w("- 预算执行：实际 %.4f USD / 限额 %.4f USD（%.1f%%）\n",
+					be.ActualCostUSD, be.MonthLimitUSD, be.Percent)
+			} else {
+				w("- 预算执行：实际 %.4f USD / 限额不可用（%.1f%%）\n", be.ActualCostUSD, be.Percent)
+			}
+		} else {
+			note := be.Note
+			if note == "" {
+				note = "未配置预算"
+			}
+			w("- 预算执行：不可得（%s）\n", note)
+		}
+	}
 
 	// ===== 二、部门贡献 =====
 	w("\n## 二、部门贡献\n\n")
@@ -760,6 +795,8 @@ func writeStudioSections(b *strings.Builder, r *report.Report) {
 			w("| %s | %s | %s | %s | 待确认 | 应用Owner | %s | %s |\n",
 				riskObject(a), win, a.Rule+" "+a.Name, impact, riskAction(a.Rule), shortDate(r.Meta.Period.To))
 		}
+		// 状态机计数降级：异常记录尚无「已确认/已处理」状态字段，状态列统一「待确认」，状态机计数暂缺数据。
+		w("\n- 注：「状态」列当前统一为「待确认」（异常记录尚无「已确认/已处理」状态字段，状态机计数暂缺数据，待反馈闭环扩展）。\n")
 	}
 
 	// 模型分析（LLM 生成；rep.ModelAnalysis==nil 时跳过，保持现状）—— 四、风险与行动清单之后

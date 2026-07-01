@@ -1439,7 +1439,7 @@ func buildPeerProfiles(in report.ReportInput, f report.Fact, minSample int) []re
 		{Key: "avg_input_ctx", Label: "平均输入上下文", Unit: "token", cur: func(p *report.PersonalFact) float64 { return p.AvgInputCtxTokens }, pool: func(m report.CohortMetrics) float64 { return m.AvgInputCtxTokens }},
 		{Key: "cache_hit_rate", Label: "缓存 Token 占比", Unit: "%", cur: func(p *report.PersonalFact) float64 { return p.CacheHitRate }, pool: func(m report.CohortMetrics) float64 { return m.CacheHitRate }},
 		{Key: "cost_per_1m", Label: "每百万 Token 成本", Unit: "USD", cur: func(p *report.PersonalFact) float64 { return p.CostPer1Million }, pool: func(m report.CohortMetrics) float64 { return m.CostPer1kTokens }},
-		{Key: "high_tier_cost_ratio", Label: "成本最高模型成本占比", Unit: "%", cur: func(p *report.PersonalFact) float64 { return p.HighTierCostRatio }, pool: func(m report.CohortMetrics) float64 { return m.HighTierCostRatio }},
+		{Key: "high_tier_cost_ratio", Label: "高阶模型成本占比", Unit: "%", cur: func(p *report.PersonalFact) float64 { return p.HighTierCostRatio }, pool: func(m report.CohortMetrics) float64 { return m.HighTierCostRatio }},
 	}
 	// 仅个人粒度有同岗画像；其他层级直接返回空表。
 	if f.Personal == nil {

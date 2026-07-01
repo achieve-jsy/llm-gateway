@@ -12,7 +12,12 @@ func TestRenderMDLevelMatrix(t *testing.T) {
 		t.Run(level, func(t *testing.T) {
 			r := markdownReport(level)
 			md := RenderMD(&r)
-			for _, want := range []string{"## 概况", "| 指标 | 值 |", "研发 | 平台", "## 判断", "### 未能判定", "样本不足 < 5"} {
+			// 顶部数字表：个人模板首章为「一、使用概览」，部门/工作室为「概况」。
+			overview := "## 概况"
+			if level == "personal" {
+				overview = "## 一、使用概览"
+			}
+			for _, want := range []string{overview, "| 指标 | 值 |", "研发 | 平台", "## 判断", "### 未能判定", "样本不足 < 5"} {
 				if !strings.Contains(md, want) {
 					t.Errorf("missing %q in markdown:\n%s", want, md)
 				}
@@ -89,7 +94,7 @@ func TestRenderMDModelAnalysisSections(t *testing.T) {
 			// 标题：个人复用「场景与合理用模」，部门/工作室用「模型分析」
 			wantTitle := "## 模型分析"
 			if level == "personal" {
-				wantTitle = "## 场景与合理用模"
+				wantTitle = "## 五、场景与合理用模"
 			}
 			if !strings.Contains(md, wantTitle) {
 				t.Errorf("%s missing model-analysis title %q:\n%s", level, wantTitle, md)
@@ -120,7 +125,7 @@ func TestRenderMDModelAnalysisNil(t *testing.T) {
 			if strings.Contains(md, "## 模型分析") {
 				t.Errorf("%s should not emit ## 模型分析 when ModelAnalysis==nil:\n%s", level, md)
 			}
-			if level == "personal" && strings.Contains(md, "## 场景与合理用模") {
+			if level == "personal" && strings.Contains(md, "## 五、场景与合理用模") {
 				t.Errorf("personal should not emit ## 场景与合理用模 when ModelAnalysis==nil and no TopModels:\n%s", md)
 			}
 		})
@@ -136,7 +141,7 @@ func TestRenderMDModelAnalysisNoteOnly(t *testing.T) {
 			md := RenderMD(&r)
 			wantTitle := "## 模型分析"
 			if level == "personal" {
-				wantTitle = "## 场景与合理用模"
+				wantTitle = "## 五、场景与合理用模"
 			}
 			if !strings.Contains(md, wantTitle) {
 				t.Errorf("%s missing title %q with note-only:\n%s", level, wantTitle, md)
@@ -157,7 +162,7 @@ func TestRenderMDModelAnalysisPersonalDeterministicPlusLLM(t *testing.T) {
 	r.Fact.Personal.TopModels = []report.TopModel{{Model: "qwen-max", Calls: 60, CostUSD: 1.2}}
 	r.ModelAnalysis = &report.ModelAnalysis{Level: "personal", Sections: "### 用模洞察\n\n部门内 qwen 采用集中。"}
 	md := RenderMD(&r)
-	if !strings.Contains(md, "## 场景与合理用模") {
+	if !strings.Contains(md, "## 五、场景与合理用模") {
 		t.Fatalf("missing ## 场景与合理用模:\n%s", md)
 	}
 	if !strings.Contains(md, "主用模型：`qwen-max`（占调用 60.0%，成本 `¥8.64`）。") {
@@ -166,7 +171,7 @@ func TestRenderMDModelAnalysisPersonalDeterministicPlusLLM(t *testing.T) {
 	if !strings.Contains(md, "### 用模洞察") {
 		t.Errorf("missing LLM sections:\n%s", md)
 	}
-	if strings.Count(md, "## 场景与合理用模") != 1 {
+	if strings.Count(md, "## 五、场景与合理用模") != 1 {
 		t.Errorf("## 场景与合理用模 should appear exactly once:\n%s", md)
 	}
 }

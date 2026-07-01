@@ -64,7 +64,12 @@ func RenderMD(r *report.Report) string {
 	w("> **周期**：%s（%s ~ %s，%d 天）\n", r.Meta.Period.Label, r.Meta.Period.From, r.Meta.Period.To, r.Meta.Period.Days)
 	w("> **币种**：%s（USD→CNY %.4f）\n\n", r.Meta.Currency.ReportCurrency, r.Meta.Currency.USDCNYRate)
 
-	w("## 概况\n\n")
+	// Vicky 模板章节命名：个人首章为「一、使用概览」，部门/工作室保持「概况」数字表（其编号章节随后输出）。
+	if r.Fact.Personal != nil {
+		w("## 一、使用概览\n\n")
+	} else {
+		w("## 概况\n\n")
+	}
 	w("| 指标 | 值 |\n|---|---|\n")
 	writeFactTable(&b, r)
 
@@ -84,7 +89,7 @@ func RenderMD(r *report.Report) string {
 
 	// 部门/工作室周报：建议已在第六章输出，跳过通用建议块避免重复
 	if r.Fact.Personal != nil {
-		w("\n## 建议\n\n")
+		w("\n## 七、优化建议\n\n")
 		for _, g := range r.Expression.Suggestions {
 			w("- %s\n", g)
 		}
@@ -227,9 +232,11 @@ func writeJudgment(b *strings.Builder, r *report.Report) {
 	}
 
 	// 异常（A1–A5）
-	// Studio 报告已在新第四章「风险与行动清单」完整呈现异常与风险，此处抑制，避免与四章重复。
+	// Studio 报告已在新第四章「风险与行动清单」完整呈现异常与风险；个人报告在独立「六、异常提示」章节呈现。
+	// 此处抑制，避免与各自独立章节重复。
 	isStudio := r.Meta.Level == "studio"
-	if !isStudio {
+	isPersonal := r.Meta.Level == "personal"
+	if !isStudio && !isPersonal {
 		fmt.Fprintf(b, "\n### 异常（A1–A5）\n\n")
 		for _, a := range j.Anomalies {
 			fmt.Fprintf(b, "- [%s] **%s**（%s）\n", a.Rule, a.Name, a.Severity)
@@ -302,7 +309,7 @@ func writePersonalSections(b *strings.Builder, r *report.Report) {
 	rate := r.Meta.Currency.USDCNYRate
 
 	// 二、纵向基线
-	fmt.Fprintf(b, "\n## 纵向基线\n\n")
+	fmt.Fprintf(b, "\n## 二、纵向基线\n\n")
 	if j.Baseline.Supported {
 		fmt.Fprintf(b, "- vs 本人过去 %d 天：成本处于 P%.0f（MAD 偏离 %.2fσ，%s）\n",
 			j.Baseline.WindowDays, j.Baseline.Percentile*100, j.Baseline.DevSigma, j.Baseline.Trend)
@@ -311,7 +318,7 @@ func writePersonalSections(b *strings.Builder, r *report.Report) {
 	}
 
 	// 三、同岗使用效能画像
-	fmt.Fprintf(b, "\n## 同岗使用效能画像\n\n")
+	fmt.Fprintf(b, "\n## 三、同岗使用效能画像\n\n")
 	if len(j.PeerProfiles) > 0 {
 		poolDesc := j.Peer.PoolType
 		if j.Peer.SampleN > 0 {
@@ -338,7 +345,7 @@ func writePersonalSections(b *strings.Builder, r *report.Report) {
 
 	// 四、成本最高模型的同岗画像
 	if mp := j.TopModelPortrait; mp != nil {
-		fmt.Fprintf(b, "\n## 成本最高模型的同岗画像\n\n")
+		fmt.Fprintf(b, "\n## 四、成本最高模型的同岗画像\n\n")
 		fmt.Fprintf(b, "- 成本最高模型：`%s`；本人该模型成本 `%s`，占本周总成本 %s。\n",
 			mp.Model, cny(mp.PersonCostUSD, rate), pctP(mp.PersonCostRatio))
 		if mp.PoolN > 0 {
@@ -375,7 +382,7 @@ func writePersonalSections(b *strings.Builder, r *report.Report) {
 	ma := r.ModelAnalysis
 	hasDet := len(p.TopModels) > 0
 	if hasDet || ma != nil {
-		fmt.Fprintf(b, "\n## 场景与合理用模\n\n")
+		fmt.Fprintf(b, "\n## 五、场景与合理用模\n\n")
 		if hasDet {
 			top := p.TopModels[0]
 			fmt.Fprintf(b, "- 主用模型：`%s`（占调用 %s，成本 `%s`）。\n",
@@ -392,6 +399,34 @@ func writePersonalSections(b *strings.Builder, r *report.Report) {
 			writeModelAnalysisBody(b, ma)
 		}
 	}
+
+	// 六、异常提示（Vicky 模板含反馈入口□；A1–A5 命中/未命中判定在此独立呈现）
+	// 模板要求「异常提示含反馈入口」。此处输出 A1–A5，尾部给出反馈入口占位。
+	fmt.Fprintf(b, "\n## 六、异常提示\n\n")
+	if len(j.Anomalies) > 0 {
+		for _, a := range j.Anomalies {
+			fmt.Fprintf(b, "- [%s] **%s**（%s）\n", a.Rule, a.Name, a.Severity)
+			if a.Hit {
+				fmt.Fprintf(b, "  - `actual=%.2f` · `threshold=%.2f` · `baseline=%.2f`（%s）\n", a.ActualValue, a.ThresholdValue, a.BaselineValue, a.BaselineWindow)
+				if a.ImpactCostUSD > 0 {
+					fmt.Fprintf(b, "  - 影响成本 `%.2f` USD · 超支 `%.2f` USD\n", a.ImpactCostUSD, a.ExcessCostUSD)
+				}
+				for _, e := range a.Evidence {
+					fmt.Fprintf(b, "  - %s: `%s`\n", e.Field, e.Value)
+				}
+			} else {
+				for _, e := range a.Evidence {
+					if e.Field == "basis" {
+						fmt.Fprintf(b, "  - 未命中：%s\n", e.Value)
+					}
+				}
+			}
+		}
+	} else {
+		fmt.Fprintf(b, "- 无异常命中。\n")
+	}
+	// 反馈入口（异常状态机需人工确认，离线仅占位；阶段一可让用户标注确认/误报/已恢复）
+	fmt.Fprintf(b, "- 反馈入口：请确认该异常是否属实（□属实 □误报 □已恢复）——用于后续「异常状态机（待确认/已确认/修复中/已恢复/误报）」演进。\n")
 
 	// 七、优化建议（data-based，写入 ## 建议 之前由 RenderMD 统一输出，这里不重复）
 }

@@ -1359,12 +1359,16 @@ func (h *UsageHandler) ReportServiceKeys(c *gin.Context) {
 	}
 
 	// 按 key_id 聚合：每 Key 一行核心单一指标。key_name/owner 取 MAX 快照（同一 Key 通常一致）。
+	// owner_name 回填：service key 的 call_logs.user_name 在采集侧被规约置空（避免冒充个人），
+	// 因此这里 LEFT JOIN api_keys 用 key 表 user_name(负责人) 兜底，避免 Owner 恒为空。
 	// top_model = 当期成本最高模型名（窗口函数取成本最高 model，service key 主用模型列数据源）。
 	var rows []ServiceKeyAggRow
-	if err := base.Select(`
+	if err := base.
+		Joins("LEFT JOIN api_keys ak ON ak.id::text = call_logs.key_id").
+		Select(`
 		COALESCE(call_logs.key_id, '') AS key_id,
 		COALESCE(MAX(call_logs.key_name), '') AS key_name,
-		COALESCE(MAX(call_logs.user_name), '') AS owner_name,
+		COALESCE(MAX(call_logs.user_name), MAX(ak.user_name), '') AS owner_name,
 		COUNT(*) AS req_count,
 		COUNT(*) FILTER (WHERE call_logs.status = 200) AS success_count,
 		COUNT(*) FILTER (WHERE call_logs.status != 200) AS error_count,
@@ -1407,10 +1411,10 @@ func (h *UsageHandler) ReportServiceKeys(c *gin.Context) {
 			prevBase = prevBase.Where("call_logs.studio_id = ?", filterStudioID)
 		}
 		var prevRows []struct {
-			KeyID        string  `gorm:"column:key_id"`
-			ReqCount     int64   `gorm:"column:req_count"`
-			TotalTokens  int64   `gorm:"column:total_tokens"`
-			CostUSD      float64 `gorm:"column:cost_usd"`
+			KeyID       string  `gorm:"column:key_id"`
+			ReqCount    int64   `gorm:"column:req_count"`
+			TotalTokens int64   `gorm:"column:total_tokens"`
+			CostUSD     float64 `gorm:"column:cost_usd"`
 		}
 		if perr := prevBase.Select(`
 			COALESCE(call_logs.key_id, '') AS key_id,
@@ -1522,12 +1526,18 @@ func (h *UsageHandler) ReportBudgetExec(c *gin.Context) {
 		return
 	}
 
-	// 2) 分子：call_logs.est_cost_usd（月窗内 status<400）。
+	// 2) 分子：call_logs.est_cost_usd（月窗内 status<400）。范围按 scope 类型取对应列：
+	//    studio→studio_id（全合并 member+service）；dept→dept_id（全合并）。严禁用不存在的 scope_id 列（会 SQL 报错），
+	//    也禁止 OR 多列（会把同 ID 的 studio 与 dept 都算进去导致虚高）。
+	scopeCol := "call_logs.studio_id"
+	if scopeType == "dept" {
+		scopeCol = "call_logs.dept_id"
+	}
 	var actual float64
 	if err := db.Table("call_logs").
 		Where("call_logs.ts >= ? AND call_logs.ts < ?", monthStart, nextMonthStart).
 		Where("call_logs.status < 400").
-		Where("call_logs.scope_id = ? OR call_logs.studio_id = ? OR call_logs.dept_id = ?", scopeID, scopeID, scopeID).
+		Where(scopeCol+" = ?", scopeID).
 		Select("COALESCE(SUM(call_logs.est_cost_usd), 0)").
 		Scan(&actual).Error; err == nil {
 		res.ActualCostUSD = actual

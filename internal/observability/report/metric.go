@@ -49,6 +49,7 @@ type CallEvent struct {
 	GroupName          string
 	Status             int // 200=成功；>=400 失败
 	DurationMs         int
+	FirstTokenMs       int // 首字延迟 ms（TTFT；日志 first_token_ms，nil→0）
 	PromptTokens       int
 	CompletionTokens   int
 	ReasoningTokens    int

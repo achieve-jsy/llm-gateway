@@ -636,6 +636,7 @@ func buildPersonalFact(in report.ReportInput) *report.PersonalFact {
 	daySet := map[string]struct{}{}
 	modelAgg := map[string]*report.TopModel{}
 	var durSum, durCount int64
+	var ttftSum, ttftCount int64
 	durSlice := make([]float64, 0, 512)
 	for _, m := range in.Metrics {
 		if m.ReqCount == 0 && m.EstCostUSD == 0 && m.TotalTokens == 0 {
@@ -674,6 +675,10 @@ func buildPersonalFact(in report.ReportInput) *report.PersonalFact {
 			durCount++
 			durSlice = append(durSlice, float64(c.DurationMs))
 		}
+		if c.FirstTokenMs > 0 {
+			ttftSum += int64(c.FirstTokenMs)
+			ttftCount++
+		}
 	}
 	p.ModelCount = len(modelSet)
 	p.ActiveDays = len(daySet)
@@ -683,6 +688,9 @@ func buildPersonalFact(in report.ReportInput) *report.PersonalFact {
 	if len(durSlice) > 0 {
 		sort.Float64s(durSlice)
 		p.P95DurationMs = Percentile(durSlice, 95)
+	}
+	if ttftCount > 0 {
+		p.AvgTTFTMs = float64(ttftSum) / float64(ttftCount)
 	}
 	tms := make([]report.TopModel, 0, len(modelAgg))
 	for _, tm := range modelAgg {

@@ -85,6 +85,7 @@ type LogRow struct {
 	Status           int     `json:"status"`
 	UpstreamStatus   int     `json:"upstream_status"`
 	DurationMs       int     `json:"duration_ms"`
+	FirstTokenMs     int     `json:"first_token_ms"`
 	FailoverUsed     bool    `json:"failover_used"`
 	EstCostUSD       float64 `json:"est_cost_usd"`
 }
@@ -706,7 +707,7 @@ func (r LogRow) ToCallEvent() report.CallEvent {
 	return report.CallEvent{
 		TS: ts, KeyID: r.KeyID, KeyType: kt, UserID: r.UserID,
 		Model: r.Model, GroupName: r.GroupName,
-		Status: r.Status, DurationMs: r.DurationMs,
+		Status: r.Status, DurationMs: r.DurationMs, FirstTokenMs: r.FirstTokenMs,
 		PromptTokens: r.PromptTokens, CompletionTokens: r.CompletionTokens, ReasoningTokens: r.ReasoningTokens,
 		CachedTokens: r.CachedTokens, CacheWriteTokens: r.CacheWriteTokens,
 		PromptBeforeCached: r.PromptTokens - r.CachedTokens,

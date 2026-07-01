@@ -46,7 +46,7 @@ func run(args []string) error {
 		return err
 	}
 	ctx := context.Background()
-	cli := client.New(cfg.BaseURL, cfg.Token, client.WithMaxLogs(cfg.MaxLogs))
+	cli := client.New(cfg.BaseURL, cfg.Token, client.WithMaxLogs(cfg.MaxLogs), client.WithHTTPTimeout(time.Duration(cfg.HTTPTimeout)*time.Second))
 
 	// 批量编排（--all）：枚举指定 level 的全体对象，各出一份报告 + 一条汇总索引。
 	if cfg.All {

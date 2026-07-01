@@ -23,6 +23,7 @@ type Config struct {
 	JobCategory    string
 	USDCNYRate     float64
 	MaxLogs        int
+	HTTPTimeout    int // 单次 HTTP 请求超时（秒）；-agg 拉全公司聚合数据量大时宜调大，默认 60
 	JSONOut        string
 	MDOut          string
 	HTMLOut        string
@@ -57,6 +58,7 @@ func parseConfig(args []string) Config {
 	fs.StringVar(&c.JobCategory, "job-category", "", "同岗分位用 job_category；空则自适应回退")
 	fs.Float64Var(&c.USDCNYRate, "fx-rate", 7.2, "USD→CNY 汇率")
 	fs.IntVar(&c.MaxLogs, "max-logs", 20000, "日志拉取上限（条）")
+	fs.IntVar(&c.HTTPTimeout, "http-timeout", envInt("USAGE_REPORT_HTTP_TIMEOUT", 60), "单次 HTTP 请求超时(秒)；-agg 拉全公司聚合数据量大时宜调大")
 	fs.StringVar(&c.JSONOut, "json-out", "", "输出 report JSON 路径")
 	fs.StringVar(&c.MDOut, "md-out", "", "输出 MD 路径")
 	fs.StringVar(&c.HTMLOut, "html-out", "", "输出 HTML 路径")

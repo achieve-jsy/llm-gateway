@@ -50,6 +50,16 @@ func WithMaxLogs(maxLogs int) Option {
 	}
 }
 
+// WithHTTPTimeout 设置单次 HTTP 请求超时；非正值使用默认 30s。数据量大的
+// -agg（工作室/大部门）拉全公司聚合时宜调大，避免单请求超时打断。
+func WithHTTPTimeout(timeout time.Duration) Option {
+	return func(c *Client) {
+		if timeout > 0 {
+			c.http.Timeout = timeout
+		}
+	}
+}
+
 func New(base, token string, options ...Option) *Client {
 	if !strings.HasSuffix(base, "/") {
 		base += "/"

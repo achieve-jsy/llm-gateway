@@ -1319,6 +1319,12 @@ type ServiceKeyAggRow struct {
 	ActiveDays   int64   `json:"active_days"    gorm:"column:active_days"`
 	StartDate    string  `json:"start_date"     gorm:"column:start_date"`
 	EndDate      string  `json:"end_date"       gorm:"column:end_date"`
+	// 前一周期（from-7d ~ from-1d，同 dept/studio 范围）环比
+	PrevReqCount    int64   `json:"prev_req_count"    gorm:"column:prev_req_count"`
+	PrevTotalTokens int64   `json:"prev_total_tokens" gorm:"column:prev_total_tokens"`
+	PrevCostUSD     float64 `json:"prev_cost_usd"     gorm:"column:prev_cost_usd"`
+	// 当期成本最高模型名（ServiceKey 主用模型）
+	TopModel string `json:"top_model" gorm:"column:top_model"`
 }
 
 // ReportServiceKeys 程序 Service Key 聚合接口：按 key_id 返回每 Key 一行的核心单一指标。
@@ -1353,6 +1359,7 @@ func (h *UsageHandler) ReportServiceKeys(c *gin.Context) {
 	}
 
 	// 按 key_id 聚合：每 Key 一行核心单一指标。key_name/owner 取 MAX 快照（同一 Key 通常一致）。
+	// top_model = 当期成本最高模型名（窗口函数取成本最高 model，service key 主用模型列数据源）。
 	var rows []ServiceKeyAggRow
 	if err := base.Select(`
 		COALESCE(call_logs.key_id, '') AS key_id,
@@ -1366,7 +1373,14 @@ func (h *UsageHandler) ReportServiceKeys(c *gin.Context) {
 		COUNT(DISTINCT call_logs.model) AS model_count,
 		COUNT(DISTINCT call_logs.ts::date) AS active_days,
 		TO_CHAR(MIN(call_logs.ts), 'YYYY-MM-DD') AS start_date,
-		TO_CHAR(MAX(call_logs.ts), 'YYYY-MM-DD') AS end_date`).
+		TO_CHAR(MAX(call_logs.ts), 'YYYY-MM-DD') AS end_date,
+		(SELECT m.model FROM call_logs m
+			WHERE m.key_id = call_logs.key_id
+			  AND m.ts >= ?::date AND m.ts < (?::date + INTERVAL '1 day')
+			  AND COALESCE(NULLIF(m.key_type, ''), 'personal') = 'service'
+			  AND m.est_cost_usd IS NOT NULL
+			ORDER BY m.est_cost_usd DESC NULLS LAST, m.ts DESC
+			LIMIT 1) AS top_model`).
 		Group("call_logs.key_id").
 		Order("cost_usd DESC").
 		Scan(&rows).Error; err != nil {
@@ -1374,7 +1388,157 @@ func (h *UsageHandler) ReportServiceKeys(c *gin.Context) {
 		return
 	}
 
+	// 前一周期（from-7d ~ from-1d，同 dept/studio 范围）环比：按 key_id 再取一次聚合，回填到 rows。
+	prevStart, err := time.Parse("2006-01-02", startStr)
+	if err == nil {
+		prevFrom := prevStart.AddDate(0, 0, -7)
+		prevEnd := prevStart.AddDate(0, 0, -1) // 期前窗口 [from-7d, from-1d)，不含 from 当天
+		prevBase := db.Table("call_logs").
+			Where("call_logs.ts >= ?::date AND call_logs.ts < (?::date + INTERVAL '1 day')", prevFrom.Format("2006-01-02"), prevEnd.Format("2006-01-02")).
+			Where(`COALESCE(NULLIF(call_logs.key_type, ''), 'personal') = 'service'`).
+			Scopes(policy.UsagePolicy{}.QueryScope(rbac.GetActor(c)))
+		if filterDeptID != "" {
+			prevBase = prevBase.Where(`call_logs.dept_id = ?
+				OR call_logs.dept_id IN (SELECT d.id::text FROM departments d WHERE d.dept_id = ? OR d.id::text = ?)
+				OR call_logs.user_id IN (SELECT u.id::text FROM users u JOIN departments d ON d.id = u.dept_id WHERE d.dept_id = ? OR d.id::text = ?)`,
+				filterDeptID, filterDeptID, filterDeptID, filterDeptID, filterDeptID)
+		}
+		if filterStudioID != "" {
+			prevBase = prevBase.Where("call_logs.studio_id = ?", filterStudioID)
+		}
+		var prevRows []struct {
+			KeyID        string  `gorm:"column:key_id"`
+			ReqCount     int64   `gorm:"column:req_count"`
+			TotalTokens  int64   `gorm:"column:total_tokens"`
+			CostUSD      float64 `gorm:"column:cost_usd"`
+		}
+		if perr := prevBase.Select(`
+			COALESCE(call_logs.key_id, '') AS key_id,
+			COUNT(*) AS req_count,
+			COALESCE(SUM(call_logs.prompt_tokens + call_logs.completion_tokens + call_logs.reasoning_tokens), 0) AS total_tokens,
+			COALESCE(SUM(call_logs.est_cost_usd), 0) AS cost_usd`).
+			Group("call_logs.key_id").
+			Scan(&prevRows).Error; perr == nil {
+			prevMap := make(map[string]ServiceKeyAggRow, len(prevRows))
+			for _, pr := range prevRows {
+				prevMap[pr.KeyID] = ServiceKeyAggRow{
+					PrevReqCount: pr.ReqCount, PrevTotalTokens: pr.TotalTokens, PrevCostUSD: pr.CostUSD,
+				}
+			}
+			for i := range rows {
+				if p, ok := prevMap[rows[i].KeyID]; ok {
+					rows[i].PrevReqCount = p.PrevReqCount
+					rows[i].PrevTotalTokens = p.PrevTotalTokens
+					rows[i].PrevCostUSD = p.PrevCostUSD
+				}
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{"rows": rows})
+}
+
+// BudgetExecResult 预算执行结果（月末配额 / 实际 / 百分比）。供工作室「一页摘要」预算执行行。
+type BudgetExecResult struct {
+	Supported     bool    `json:"supported"`
+	ScopeType     string  `json:"scope_type"`
+	ScopeID       string  `json:"scope_id"`
+	Month         string  `json:"month"`
+	MonthLimitUSD float64 `json:"month_limit_usd"`
+	ActualCostUSD float64 `json:"actual_cost_usd"`
+	Percent       float64 `json:"percent"`
+	Note          string  `json:"note,omitempty"`
+}
+
+// ReportBudgetExec 预算执行接口：GET /api/v1/usage/report/budget-exec?scope=<studio|dept>&id=<scope_id>&month=YYYY-MM
+// 返回 {supported, scope_type, scope_id, month, month_limit_usd, actual_cost_usd, percent, note}。
+// 分母优先 budget_allocations.amount_usd（scope_type 匹配、period='monthly'、enabled）；<=0 回退 budget_tier_limits(monthly,enabled) 之和。
+// 分子 call_logs.est_cost_usd（月窗内 status<400）合计。supported=false 触发：无 enabled 预算行 / 额度<=0 且无有效 tier / 入参缺月。
+func (h *UsageHandler) ReportBudgetExec(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db not configured"})
+		return
+	}
+	scopeType := c.DefaultQuery("scope", "studio")
+	scopeID := c.Query("id")
+	month := c.Query("month")
+
+	res := BudgetExecResult{ScopeType: scopeType, ScopeID: scopeID, Month: month}
+	if scopeID == "" || month == "" {
+		res.Note = "入参缺失：id / month（YYYY-MM）"
+		c.JSON(http.StatusOK, res)
+		return
+	}
+	if scopeType != "studio" && scopeType != "dept" {
+		res.Note = "scope 仅支持 studio|dept"
+		c.JSON(http.StatusOK, res)
+		return
+	}
+
+	// 月窗 Asia/Shanghai [月初, 下月初)。
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		loc = time.UTC
+	}
+	var monthStart time.Time
+	if monthStart, err = time.ParseInLocation("2006-01-02", month+"-01", loc); err != nil {
+		res.Note = "month 格式错误，应为 YYYY-MM"
+		c.JSON(http.StatusOK, res)
+		return
+	}
+	nextMonthStart := monthStart.AddDate(0, 1, 0)
+
+	db := h.db.WithContext(c.Request.Context())
+	quota := 0.0
+	hasAlloc := false
+
+	// 1) 分母：budget_allocations.amount_usd（顶层月配额，唯一行）。
+	var alloc struct {
+		AmountUSD float64 `gorm:"column:amount_usd"`
+		Enabled   bool    `gorm:"column:enabled"`
+	}
+	if err := db.Table("budget_allocations").
+		Where("scope_type = ? AND scope_id = ? AND period = 'monthly'", scopeType, scopeID).
+		Order("enabled DESC, created_at DESC").
+		Limit(1).
+		Scan(&alloc).Error; err == nil {
+		hasAlloc = true
+		quota = alloc.AmountUSD
+	}
+	if quota <= 0 {
+		// 回退 budget_tier_limits(monthly, enabled) 之和。
+		var tierSum float64
+		if err := db.Table("budget_tier_limits AS btl").
+			Joins("JOIN budget_allocations AS ba ON ba.id = btl.budget_allocation_id").
+			Where("btl.period_type = 'monthly' AND btl.enabled = true AND ba.scope_type = ? AND ba.scope_id = ?", scopeType, scopeID).
+			Select("COALESCE(SUM(btl.limit_usd), 0)").
+			Scan(&tierSum).Error; err == nil {
+			quota = tierSum
+		}
+	}
+	if !hasAlloc && quota <= 0 {
+		res.Note = "未配置有效预算（无 enabled budget_allocations 行且月额度<=0）"
+		c.JSON(http.StatusOK, res)
+		return
+	}
+
+	// 2) 分子：call_logs.est_cost_usd（月窗内 status<400）。
+	var actual float64
+	if err := db.Table("call_logs").
+		Where("call_logs.ts >= ? AND call_logs.ts < ?", monthStart, nextMonthStart).
+		Where("call_logs.status < 400").
+		Where("call_logs.scope_id = ? OR call_logs.studio_id = ? OR call_logs.dept_id = ?", scopeID, scopeID, scopeID).
+		Select("COALESCE(SUM(call_logs.est_cost_usd), 0)").
+		Scan(&actual).Error; err == nil {
+		res.ActualCostUSD = actual
+	}
+
+	res.Supported = true
+	res.MonthLimitUSD = quota
+	if quota > 0 {
+		res.Percent = actual / quota * 100
+	}
+	c.JSON(http.StatusOK, res)
 }
 
 type UserRankRow struct {

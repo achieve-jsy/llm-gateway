@@ -470,6 +470,11 @@ type ServiceKeyRow struct {
 	ActiveDays   int64   `json:"active_days"`
 	StartDate    string  `json:"start_date"`
 	EndDate      string  `json:"end_date"`
+	// 前一周期（from-7d ~ from-1d，同 dept/studio 范围）环比 + 当期主用模型。
+	PrevReqCount    int64   `json:"prev_req_count"`
+	PrevTotalTokens int64   `json:"prev_total_tokens"`
+	PrevCostUSD     float64 `json:"prev_cost_usd"`
+	TopModel        string  `json:"top_model"`
 }
 
 // FetchMemberAgg 拉取成员级聚合（每人一行核心单一指标，排除 service），走 /usage/report/members。
@@ -519,6 +524,36 @@ func (c *Client) FetchServiceKeys(ctx context.Context, from, to, deptID, studioI
 		return nil, err
 	}
 	return resp.Rows, nil
+}
+
+// BudgetExec 预算执行结果（工作室「一页摘要」预算执行行；服务端 /usage/report/budget-exec 响应）。
+type BudgetExec struct {
+	Supported     bool    `json:"supported"`
+	ScopeType     string  `json:"scope_type"`
+	ScopeID       string  `json:"scope_id"`
+	Month         string  `json:"month"`
+	MonthLimitUSD float64 `json:"month_limit_usd"`
+	ActualCostUSD float64 `json:"actual_cost_usd"`
+	Percent       float64 `json:"percent"`
+	Note          string  `json:"note"`
+}
+
+// FetchBudgetExec 拉取预算执行：按 scope(studio|dept)+scope_id+month(YYYY-MM)。
+// 返回 Supported=false 时 MonthLimitUSD/Percent 无效（未配置/额度<=0/入参缺月）。
+func (c *Client) FetchBudgetExec(ctx context.Context, scope, scopeID, month string) (BudgetExec, error) {
+	var res BudgetExec
+	if scope == "" || scopeID == "" || month == "" {
+		return res, nil
+	}
+	q := map[string]string{"scope": scope, "id": scopeID, "month": month}
+	b, err := c.do(ctx, "GET", "/usage/report/budget-exec", q)
+	if err != nil {
+		return res, err
+	}
+	if err := json.Unmarshal(b, &res); err != nil {
+		return res, err
+	}
+	return res, nil
 }
 
 // FetchDashboard 拉取 GetDashboard 汇总（对账基准）。level→scope 映射：personal→user, department→dept, studio→studio。

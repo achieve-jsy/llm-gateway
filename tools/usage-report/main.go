@@ -344,15 +344,19 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 			serviceKeys = make([]report.ServiceKeyAgg, 0, len(skRows))
 			for _, r := range skRows {
 				serviceKeys = append(serviceKeys, report.ServiceKeyAgg{
-					KeyName:      r.KeyName,
-					OwnerName:    r.OwnerName,
-					ReqCount:     r.ReqCount,
-					SuccessCount: r.SuccessCount,
-					ErrorCount:   r.ErrorCount,
-					TotalTokens:  r.TotalTokens,
-					CostUSD:      r.CostUSD,
-					ModelCount:   r.ModelCount,
-					ActiveDays:   r.ActiveDays,
+					KeyName:         r.KeyName,
+					OwnerName:       r.OwnerName,
+					ReqCount:        r.ReqCount,
+					SuccessCount:    r.SuccessCount,
+					ErrorCount:      r.ErrorCount,
+					TotalTokens:     r.TotalTokens,
+					CostUSD:         r.CostUSD,
+					ModelCount:      r.ModelCount,
+					ActiveDays:      r.ActiveDays,
+					PrevReqCount:    r.PrevReqCount,
+					PrevTotalTokens: r.PrevTotalTokens,
+					PrevCostUSD:     r.PrevCostUSD,
+					TopModel:        r.TopModel,
 				})
 			}
 		}
@@ -376,6 +380,13 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 		}
 	}
 
+	// 预算执行（/usage/report/budget-exec）：仅 studio 级别（Vicky 工作室「一页摘要」预算执行行）。
+	// month 取报告期末日所在月（cfg.To）。拉取失败/不可得时 makeBudgetExec 置 Supported=false 降级。
+	var budgetExecReport *report.BudgetExec
+	if cfg.Level == "studio" {
+		budgetExecReport = makeBudgetExec(ctx, cli, scope.StudioID, cfg.To)
+	}
+
 	in := report.ReportInput{
 		Metrics: metrics, Calls: memberCalls, BaselineMetrics: baselineMetrics, BaselineBuckets: baselineBuckets, Cohort: cohort,
 		LevelMeta:          scope,
@@ -392,6 +403,7 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 		WeeklyTrend:        weeklyTrend,        // 工作室: 最近4周成本趋势
 		ServiceKeys:        serviceKeys,        // 程序 Service Key 聚合（部门/工作室: 每 Key 一行，供 ServiceKey 块装配与表渲染）
 		CompanyUserMetrics: companyUserMetrics, // 全公司每用户口径（部门/工作室: 匿名横比数据）
+		BudgetExec:         budgetExecReport,  // 工作室: 某月预算执行（一页摘要「预算执行」行；nil 降级 Supported=false）
 	}
 	rep, err := derive.Derive(meta, in, rules)
 	if err != nil {
@@ -1070,6 +1082,31 @@ func buildWeeklyTrend(ctx context.Context, cli *client.Client, studioID, from st
 		})
 	}
 	return out
+}
+
+// makeBudgetExec 拉取工作室某月预算执行：月取报告期末日（to）所在月。失败/不可得置 Supported=false 降级。
+func makeBudgetExec(ctx context.Context, cli *client.Client, studioID, to string) *report.BudgetExec {
+	const layout = "2006-01-02"
+	toT, err := time.Parse(layout, to)
+	if err != nil {
+		return &report.BudgetExec{Supported: false, Note: "报告期末日无法解析"}
+	}
+	// 取该日所在自然月（报告窗口为 7 天，跨月时以月末日所在月为预算考核月）。
+	month := time.Date(toT.Year(), toT.Month(), 1, 0, 0, 0, 0, time.Local).Format("2006-01")
+	be, err := cli.FetchBudgetExec(ctx, "studio", studioID, month)
+	if err != nil {
+		return &report.BudgetExec{Supported: false, ScopeType: "studio", ScopeID: studioID, Month: month, Note: "预算执行拉取失败"}
+	}
+	return &report.BudgetExec{
+		Supported:     be.Supported,
+		ScopeType:     be.ScopeType,
+		ScopeID:       be.ScopeID,
+		Month:         be.Month,
+		MonthLimitUSD: be.MonthLimitUSD,
+		ActualCostUSD: be.ActualCostUSD,
+		Percent:       be.Percent,
+		Note:          be.Note,
+	}
 }
 
 // aggregateDaily 把 CallEvent 按(日期,模型,key_id,user_id,scope)聚合成 DailyMetric；total=prompt+completion+reasoning。

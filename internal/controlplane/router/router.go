@@ -1002,6 +1002,8 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/usage/report/members", guard(rbac.PermUsageViewScoped), usageH2.ReportMembers)
 		// 程序 Service Key 聚合：仅 key_type='service'，按 key_id 返回每 Key 一行的核心单一指标（成员+程序对账用）。
 		adminGroup.GET("/usage/report/service-keys", guard(rbac.PermUsageViewScoped), usageH2.ReportServiceKeys)
+		// 预算执行：按 scope(studio|dept)+month 返回月度配额/实际/百分比（工作室「一页摘要」预算执行行）。
+		adminGroup.GET("/usage/report/budget-exec", guard(rbac.PermUsageViewScoped), usageH2.ReportBudgetExec)
 	}
 
 	// 内部接口（InternalAuth 已在 internalGroup 上，复用）

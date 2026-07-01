@@ -204,6 +204,8 @@ type UnitFact struct {
 	WeeklyTrend        []WeeklyPoint  `json:"weekly_trend,omitempty"`         // 最近 N 周工作室成本序列（4周趋势）
 	OptimizableCostUSD float64        `json:"optimizable_cost_usd,omitempty"` // 预计可优化成本（USD）
 	CostConcentration  float64        `json:"cost_concentration,omitempty"`   // 成本集中度：Top2 部门成本占比之和 0~1
+	// BudgetExec 工作室某月预算执行（Vicky 一页摘要「预算执行」行；Supported=false 表示不可得）。
+	BudgetExec *BudgetExec `json:"budget_exec,omitempty"`
 }
 
 // AnomalyCount 未关闭异常的 Severity 级统计（Vicky 工作室一页摘要「异常 P1×N」）。
@@ -248,6 +250,12 @@ type UnitService struct {
 	OwnerName string `json:"owner_name"`
 	// ModelCount 该 Service Key 块使用的去重模型数（agg 模式由各 Key 的 model_count 求和近似，详见 Notes）。
 	ModelCount int `json:"model_count"`
+	// 环比（对比前一周窗口同范围，各 Key 求和；无上一周期数据时为 0，渲染层降级「—」）。
+	PrevReqCount int64   `json:"prev_req_count,omitempty"`
+	PrevTokens   int64   `json:"prev_tokens,omitempty"`
+	PrevCostUSD  float64 `json:"prev_cost_usd,omitempty"`
+	// TopModel 该块主用模型名（成本最高 Key 的 top_model；代表本块主要服务的模型）。
+	TopModel string `json:"top_model,omitempty"`
 	// Keys 逐 Key 明细（agg 模式由 /usage/report/service-keys 装配，供「ServiceKey 表」逐行渲染）。
 	Keys  []ServiceKeyInfo `json:"keys,omitempty"`
 	Notes string           `json:"notes"`
@@ -255,12 +263,18 @@ type UnitService struct {
 
 // ServiceKeyInfo 单个程序 Service Key 的聚合行（ServiceKey 表逐行渲染用）。
 type ServiceKeyInfo struct {
-	KeyName     string  `json:"key_name"`
-	OwnerName   string  `json:"owner_name"`
-	ReqCount    int64   `json:"req_count"`
-	TotalTokens int64   `json:"total_tokens"`
-	CostUSD     float64 `json:"cost_usd"`
-	ModelCount  int     `json:"model_count"`
+	KeyName       string  `json:"key_name"`
+	OwnerName     string  `json:"owner_name"`
+	ReqCount      int64   `json:"req_count"`
+	TotalTokens   int64   `json:"total_tokens"`
+	CostUSD       float64 `json:"cost_usd"`
+	ModelCount    int     `json:"model_count"`
+	SuccessCount  int64   `json:"success_count,omitempty"`
+	ErrorCount    int64   `json:"error_count,omitempty"`
+	TopModel      string  `json:"top_model,omitempty"`      // 该 Key 当期成本最高的主用模型名
+	PrevReqCount  int64   `json:"prev_req_count,omitempty"` // 环比（无上一周期数据时为 0）
+	PrevTokens    int64   `json:"prev_tokens,omitempty"`
+	PrevCostUSD   float64 `json:"prev_cost_usd,omitempty"`
 }
 
 type PerCapita struct {

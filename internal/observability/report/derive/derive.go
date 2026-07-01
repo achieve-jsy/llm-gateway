@@ -368,15 +368,21 @@ func assembleServiceKey(sk *report.UnitService, keys []report.ServiceKeyAgg) {
 	}
 	var req, succ, errCnt, tokens int64
 	var cost float64
+	var prevReq, prevTokens int64
+	var prevCost float64
 	var modelCount int
 	topOwner := ""
 	topCost := 0.0
+	topModel := ""
 	for _, k := range keys {
 		req += k.ReqCount
 		succ += k.SuccessCount
 		errCnt += k.ErrorCount
 		tokens += k.TotalTokens
 		cost += k.CostUSD
+		prevReq += k.PrevReqCount
+		prevTokens += k.PrevTotalTokens
+		prevCost += k.PrevCostUSD
 		modelCount += k.ModelCount
 		if int(k.ActiveDays) > sk.ActiveDays {
 			sk.ActiveDays = int(k.ActiveDays)
@@ -384,6 +390,7 @@ func assembleServiceKey(sk *report.UnitService, keys []report.ServiceKeyAgg) {
 		if k.CostUSD > topCost {
 			topCost = k.CostUSD
 			topOwner = k.OwnerName
+			topModel = k.TopModel
 		}
 	}
 	sk.ReqCount = req
@@ -393,16 +400,26 @@ func assembleServiceKey(sk *report.UnitService, keys []report.ServiceKeyAgg) {
 	sk.EstCostUSD = cost
 	sk.OwnerName = topOwner
 	sk.ModelCount = modelCount
-	// 逐 Key 明细：供「ServiceKey 表」逐行渲染（KeyName/OwnerName/ReqCount/TotalTokens/CostUSD/ModelCount）。
+	sk.PrevReqCount = prevReq
+	sk.PrevTokens = prevTokens
+	sk.PrevCostUSD = prevCost
+	sk.TopModel = topModel
+	// 逐 Key 明细：供「ServiceKey 表」逐行渲染（KeyName/OwnerName/ReqCount/TotalTokens/CostUSD/ModelCount/环比/主用模型）。
 	sk.Keys = make([]report.ServiceKeyInfo, 0, len(keys))
 	for _, k := range keys {
 		sk.Keys = append(sk.Keys, report.ServiceKeyInfo{
-			KeyName:     k.KeyName,
-			OwnerName:   k.OwnerName,
-			ReqCount:    k.ReqCount,
-			TotalTokens: k.TotalTokens,
-			CostUSD:     k.CostUSD,
-			ModelCount:  k.ModelCount,
+			KeyName:      k.KeyName,
+			OwnerName:    k.OwnerName,
+			ReqCount:     k.ReqCount,
+			TotalTokens:  k.TotalTokens,
+			CostUSD:      k.CostUSD,
+			ModelCount:   k.ModelCount,
+			SuccessCount: k.SuccessCount,
+			ErrorCount:   k.ErrorCount,
+			TopModel:     k.TopModel,
+			PrevReqCount: k.PrevReqCount,
+			PrevTokens:   k.PrevTotalTokens,
+			PrevCostUSD:  k.PrevCostUSD,
 		})
 	}
 	sk.Notes = fmt.Sprintf("%d 个 Service Key（由服务端 service-keys 聚合装配；OwnerName=成本最高 Key 的 owner；ModelCount=各 Key 模型数之和的近似；逐 Key 明细见下表）", len(keys))
@@ -1030,6 +1047,14 @@ func buildStudioSummary(unitFact *report.UnitFact, in report.ReportInput, judge 
 	// 4 周趋势（原始序列；升/降/平与周均由呈现层据此序列降级呈现）
 	if len(in.WeeklyTrend) > 0 {
 		unitFact.WeeklyTrend = in.WeeklyTrend
+	}
+	// 预算执行（Vicky 一页摘要「预算执行」行）。支持有预算数据（Supported）时原样装配；
+	// 无数据（nil 或 Supported=false）时保留 Supported=false 降级，渲染层显示「预算执行(不可得)」，不硬造数值。
+	if in.BudgetExec != nil {
+		be := *in.BudgetExec
+		unitFact.BudgetExec = &be
+	} else {
+		unitFact.BudgetExec = &report.BudgetExec{Supported: false, Note: "无预算执行数据"}
 	}
 	// 未关闭异常按 Severity 统计（Hit 且 !NotComputed）
 	if judge != nil {

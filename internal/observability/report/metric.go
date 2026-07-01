@@ -106,6 +106,27 @@ type ServiceKeyAgg struct {
 	CostUSD      float64
 	ModelCount   int
 	ActiveDays   int64
+	// 环比（对比前一周窗口同范围）：来自 /usage/report/service-keys 响应的 prev_* 字段。
+	// 无上一周期数据时工具侧置 0（derive 按 0 视为无环比，输出 0%/「—」）。
+	PrevReqCount    int64
+	PrevTotalTokens int64
+	PrevCostUSD     float64
+	// TopModel 该 Key 当期成本最高的主用模型名（/usage/report/service-keys 响应的 top_model）。
+	TopModel string
+}
+
+// BudgetExec 工作室某月预算执行结果（Vicky 工作室一页摘要「预算执行」行）。
+// 数据源无关：工具侧在 studio 级别调用 budget-exec 接口后填入 ReportInput.BudgetExec；derive 层原样装配。
+// Supported=false 表示该维度未配置预算/数据不可用（NotAvailable），渲染层应显示「预算执行(不可得)」。
+type BudgetExec struct {
+	Supported     bool    `json:"supported"`
+	ScopeType     string  `json:"scope_type"`
+	ScopeID       string  `json:"scope_id"`
+	Month         string  `json:"month"`
+	MonthLimitUSD float64 `json:"month_limit_usd"`
+	ActualCostUSD float64 `json:"actual_cost_usd"`
+	Percent       float64 `json:"percent"`
+	Note          string  `json:"note,omitempty"`
 }
 
 // CompanyUserMetric 全公司每用户的口径指标行（匿名横比用）。数据源无关；
@@ -215,6 +236,9 @@ type ReportInput struct {
 	PrevUserTopModels map[string][]CohortTopModel `json:"prev_user_top_models,omitempty"`
 	// WeeklyTrend 最近 N 周工作室成本序列（4周趋势用）。降序，最新在前。
 	WeeklyTrend []WeeklyPoint `json:"weekly_trend,omitempty"`
+	// BudgetExec 工作室某月预算执行结果（studio 级别时由工具侧调用 budget-exec 接口填入）。
+	// derive 层原样装配到 Studio.BudgetExec；nil（或无预算数据）时 Supported=false 降级。
+	BudgetExec *BudgetExec `json:"budget_exec,omitempty"`
 }
 
 // WeeklyPoint 单个周窗口的成本/请求序列点（Vicky 四章模板「4 周趋势」用）。

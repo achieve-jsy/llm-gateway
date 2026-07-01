@@ -150,6 +150,11 @@ type TopChangedMember struct {
 	WoWReqPct   float64 `json:"wow_req_pct"`
 	TopModel    string  `json:"top_model"`
 	AnomalyRule string  `json:"anomaly_rule"` // 空=无命中
+	// AnomalyCause 主因归因：由装配层 correlateTopChangedAnomaly 在异常判定之后按 user 关联回填。
+	// derive 层不访问 Anomalies。值形如 "A2 成本燃烧"（rule+name）；空=无命中/无归属。
+	AnomalyCause string `json:"anomaly_cause,omitempty"` // 空=无命中
+	// UserID 仅供装配层内部按 user 关联异常命中用（json:"-" 不序列化，维持输出匿名）。
+	UserID string `json:"-"`
 }
 
 // ReportInput 派生输入：基线/分位用日聚合，A1–A5 用逐调用事件。

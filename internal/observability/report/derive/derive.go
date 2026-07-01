@@ -131,6 +131,12 @@ func Derive(meta report.Meta, in report.ReportInput, rules report.RuleSet) (*rep
 
 	rep.Judgment = *judge
 
+	// ---- 主因装配：把命中异常按 user 关联回填到 TopChangedMember.AnomalyCause ----
+	// 纪律不变：derive 层不访问 Anomalies（buildTopChanged 保持 AnomalyRule 恒空）；
+	// 异常阶段产出 Anomalies 后，由本装配层做「尽力关联」——命中异常若能定位到 user_id 才回填，
+	// 否则 AnomalyCause 留空（render 层主因列降级为「待确认」）。纯装配，不改 anomalies.go 判定逻辑。
+	correlateTopChangedAnomaly(rep)
+
 	// ---- 表达层：确定性回填（只引用已存在字段，无新数字/新判定）----
 	rep.Expression = buildExpression(rep, rules)
 
@@ -621,10 +627,56 @@ func buildTopChanged(cur, prev []report.MemberAgg, userTopModels map[string][]re
 			WoWCostPct:  c.wowCostPct,
 			WoWReqPct:   c.wowReqPct,
 			TopModel:    topModel,
-			AnomalyRule: "", // derive 层不访问 Anomalies，置空
+			AnomalyRule: "",    // derive 层不访问 Anomalies，置空
+			AnomalyCause: "",   // 主因由装配层 correlateTopChangedAnomaly 回填，derive 默认空
+			UserID:      c.userID, // 仅供装配层内部按 user 关联（json:"-" 不序列化，保持匿名）
 		}
 	}
 	return result
+}
+
+// correlateTopChangedAnomaly 把命中异常按 user 关联回填到 TopChangedMember.AnomalyCause（主因列）。
+//
+// 纪律：derive 层（buildTopChanged）不访问 Anomalies，此处作为装配层在异常判定之后做「尽力关联」。
+// 关联规则：仅在命中（Hit=true）且该异常自带可归属身份（Dimensions["user_id"] 非空）时，把
+// rule+name（如 "A2 成本燃烧"）回填到对应成员的 AnomalyCause；否则留空（render 降级为「待确认」）。
+// 多个异常命中同一 user 时按出现顺序拼接（首个优先，后续以 ";" 连接），避免覆盖。
+// 不动 anomalies.go 判定逻辑；AnomalyRule 恒空语义保持不变。
+func correlateTopChangedAnomaly(rep *report.Report) {
+	if rep == nil {
+		return
+	}
+	// 汇总 user → 命中规则标签（仅命中且可归属到 user_id 的异常）
+	userRule := map[string]string{}
+	for _, a := range rep.Judgment.Anomalies {
+		if !a.Hit || a.Dimensions == nil {
+			continue
+		}
+		uid := a.Dimensions["user_id"]
+		if uid == "" {
+			continue
+		}
+		label := a.Rule + " " + a.Name
+		if prev, ok := userRule[uid]; ok && prev != "" {
+			userRule[uid] = prev + "; " + label
+		} else {
+			userRule[uid] = label
+		}
+	}
+	if len(userRule) == 0 {
+		return
+	}
+	// 回填：仅处理带 TopChanged 的单元级（department|studio）
+	for _, uf := range []*report.UnitFact{rep.Fact.Department, rep.Fact.Studio} {
+		if uf == nil {
+			continue
+		}
+		for i := range uf.TopChanged {
+			if rule, ok := userRule[uf.TopChanged[i].UserID]; ok {
+				uf.TopChanged[i].AnomalyCause = rule
+			}
+		}
+	}
 }
 
 func buildPersonalFact(in report.ReportInput) *report.PersonalFact {

@@ -1378,13 +1378,8 @@ func (h *UsageHandler) ReportServiceKeys(c *gin.Context) {
 		COUNT(DISTINCT call_logs.ts::date) AS active_days,
 		TO_CHAR(MIN(call_logs.ts), 'YYYY-MM-DD') AS start_date,
 		TO_CHAR(MAX(call_logs.ts), 'YYYY-MM-DD') AS end_date,
-		(SELECT m.model FROM call_logs m
-			WHERE m.key_id = call_logs.key_id
-			  AND m.ts >= ?::date AND m.ts < (?::date + INTERVAL '1 day')
-			  AND COALESCE(NULLIF(m.key_type, ''), 'personal') = 'service'
-			  AND m.est_cost_usd IS NOT NULL
-			ORDER BY m.est_cost_usd DESC NULLS LAST, m.ts DESC
-			LIMIT 1) AS top_model`).
+		-- 当期成本最高模型：ARRAY_AGG 按成本降序取第一个（同一 GROUP 内），不引入额外参数。
+		COALESCE((ARRAY_AGG(call_logs.model ORDER BY call_logs.est_cost_usd DESC NULLS LAST) FILTER (WHERE call_logs.est_cost_usd IS NOT NULL))[1], '') AS top_model`).
 		Group("call_logs.key_id").
 		Order("cost_usd DESC").
 		Scan(&rows).Error; err != nil {

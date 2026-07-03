@@ -1361,6 +1361,9 @@ func (h *UsageHandler) ReportServiceKeys(c *gin.Context) {
 	// 按 key_id 聚合：每 Key 一行核心单一指标。key_name/owner 取 MAX 快照（同一 Key 通常一致）。
 	// owner_name 回填：service key 的 call_logs.user_name 在采集侧被规约置空（避免冒充个人），
 	// 因此这里 LEFT JOIN api_keys 用 key 表 user_name(负责人) 兜底，避免 Owner 恒为空。
+	// 【关键】采集侧把 service key 的 user_name 置成【空字符串 ''】而非 NULL，故必须用
+	// NULLIF(MAX(call_logs.user_name),'') 把 '' 归一为 NULL，COALESCE 才会继续取 MAX(ak.user_name)。
+	// 若直接用 COALESCE(MAX(cl.user_name), MAX(ak.user_name), '')，'' 会被当作非空而短路，Owner 恒为空。
 	// top_model = 当期成本最高模型名（窗口函数取成本最高 model，service key 主用模型列数据源）。
 	var rows []ServiceKeyAggRow
 	if err := base.
@@ -1368,7 +1371,7 @@ func (h *UsageHandler) ReportServiceKeys(c *gin.Context) {
 		Select(`
 		COALESCE(call_logs.key_id, '') AS key_id,
 		COALESCE(MAX(call_logs.key_name), '') AS key_name,
-		COALESCE(MAX(call_logs.user_name), MAX(ak.user_name), '') AS owner_name,
+		COALESCE(NULLIF(MAX(call_logs.user_name), ''), MAX(ak.user_name), '') AS owner_name,
 		COUNT(*) AS req_count,
 		COUNT(*) FILTER (WHERE call_logs.status = 200) AS success_count,
 		COUNT(*) FILTER (WHERE call_logs.status != 200) AS error_count,

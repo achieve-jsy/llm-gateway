@@ -29,7 +29,7 @@ func TestCorrelateTopChangedAnomaly_FillsByUser(t *testing.T) {
 		{Rule: "A2", Name: "成本燃烧", Hit: true, Dimensions: map[string]string{"user_id": "u1"}}, // 同 user 多次命中 → 拼接
 		{Rule: "A3", Name: "重试循环", Hit: true, Dimensions: map[string]string{"user_id": "u2"}},
 		{Rule: "A1", Name: "程序失控", Hit: false, Dimensions: map[string]string{"user_id": "u3"}}, // 未命中不回填
-		{Rule: "A4", Name: "超长上下文", Hit: true}, // 无 user_id 维度 → 尽力关联失败，留空
+		{Rule: "A4", Name: "超长上下文", Hit: true},                                                 // 无 user_id 维度 → 尽力关联失败，留空
 	}
 
 	correlateTopChangedAnomaly(rep)

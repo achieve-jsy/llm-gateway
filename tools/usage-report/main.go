@@ -403,7 +403,7 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 		WeeklyTrend:        weeklyTrend,        // 工作室: 最近4周成本趋势
 		ServiceKeys:        serviceKeys,        // 程序 Service Key 聚合（部门/工作室: 每 Key 一行，供 ServiceKey 块装配与表渲染）
 		CompanyUserMetrics: companyUserMetrics, // 全公司每用户口径（部门/工作室: 匿名横比数据）
-		BudgetExec:         budgetExecReport,  // 工作室: 某月预算执行（一页摘要「预算执行」行；nil 降级 Supported=false）
+		BudgetExec:         budgetExecReport,   // 工作室: 某月预算执行（一页摘要「预算执行」行；nil 降级 Supported=false）
 	}
 	rep, err := derive.Derive(meta, in, rules)
 	if err != nil {

@@ -14,7 +14,7 @@ func TestRenderVickyGateCompliance(t *testing.T) {
 	html := RenderVicky(r)
 
 	must := []string{`<section class="reveal">`, `<div class="wrap">`, `<p class="section-label">`, `<h2>`,
-		`<table class="data-table">`, `<blockquote>`, `<div class="metrics">` }
+		`<table class="data-table">`, `<blockquote>`, `<div class="metrics">`}
 	for _, s := range must {
 		if !strings.Contains(html, s) {
 			// stats-row 不一定每个报告都有 metrics 块；只校验通用结构
@@ -53,9 +53,9 @@ func vickyTestReport() *report.Report {
 	return &report.Report{
 		SchemaVersion: report.SchemaVersion,
 		Meta: report.Meta{
-			Level:  "personal",
-			Period: report.Period{From: "2026-08-01", To: "2026-08-07", Type: "week", Days: 7, Label: "周报"},
-			Scope:  report.Scope{Level: "personal", ID: "u_1", Name: "test"},
+			Level:    "personal",
+			Period:   report.Period{From: "2026-08-01", To: "2026-08-07", Type: "week", Days: 7, Label: "周报"},
+			Scope:    report.Scope{Level: "personal", ID: "u_1", Name: "test"},
 			Currency: report.Currency{Base: "USD", ReportCurrency: "CNY", USDCNYRate: 7.2},
 			QA:       report.QA{Alignment: []string{"a"}, AnomalyEnabled: true},
 		},

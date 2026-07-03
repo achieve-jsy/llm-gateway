@@ -639,14 +639,14 @@ func buildTopChanged(cur, prev []report.MemberAgg, userTopModels map[string][]re
 			topModel = tms[0].Model // top_models 已按 cost DESC 排序
 		}
 		result[i] = report.TopChangedMember{
-			Idx:         i + 1,
-			JobCategory: c.jobCat,
-			WoWCostPct:  c.wowCostPct,
-			WoWReqPct:   c.wowReqPct,
-			TopModel:    topModel,
-			AnomalyRule: "",    // derive 层不访问 Anomalies，置空
-			AnomalyCause: "",   // 主因由装配层 correlateTopChangedAnomaly 回填，derive 默认空
-			UserID:      c.userID, // 仅供装配层内部按 user 关联（json:"-" 不序列化，保持匿名）
+			Idx:          i + 1,
+			JobCategory:  c.jobCat,
+			WoWCostPct:   c.wowCostPct,
+			WoWReqPct:    c.wowReqPct,
+			TopModel:     topModel,
+			AnomalyRule:  "",       // derive 层不访问 Anomalies，置空
+			AnomalyCause: "",       // 主因由装配层 correlateTopChangedAnomaly 回填，derive 默认空
+			UserID:       c.userID, // 仅供装配层内部按 user 关联（json:"-" 不序列化，保持匿名）
 		}
 	}
 	return result

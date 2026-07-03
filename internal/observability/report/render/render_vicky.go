@@ -26,12 +26,12 @@ type kv struct{ Label, Value string }
 type vMetric struct{ Label, Value string }
 
 type vAnomaly struct {
-	Rule, Name, Severity, SevClass, Window string
+	Rule, Name, Severity, SevClass, Window      string
 	Actual, Threshold, Baseline, Impact, Excess string
-	Matched string
-	Dims     []kv
-	Evidence []kv
-	Note     string
+	Matched                                     string
+	Dims                                        []kv
+	Evidence                                    []kv
+	Note                                        string
 }
 
 type vBaseline struct {
@@ -44,20 +44,20 @@ type vPeer struct {
 
 type vickyData struct {
 	Level, ScopeName, PeriodLabel, Date, CurrencyLine string
-	Headline   string
-	Metrics    []vMetric
-	KeyFacts   []kv
-	Models     []kv
-	HasBase    bool
-	Base       vBaseline
-	HasPeer    bool
-	Peer       vPeer
-	Anomalies  []vAnomaly
-	NotComputed []kv
-	Risks      []string
-	Actions    []string
-	QA         []string
-	QANote     string
+	Headline                                          string
+	Metrics                                           []vMetric
+	KeyFacts                                          []kv
+	Models                                            []kv
+	HasBase                                           bool
+	Base                                              vBaseline
+	HasPeer                                           bool
+	Peer                                              vPeer
+	Anomalies                                         []vAnomaly
+	NotComputed                                       []kv
+	Risks                                             []string
+	Actions                                           []string
+	QA                                                []string
+	QANote                                            string
 }
 
 // RenderVicky 渲染 Vicky 规范 HTML content（<section> 片段，可直接 POST /api/reports）。
@@ -118,9 +118,9 @@ func toVicky(r *report.Report) vickyData {
 			Pool:    p.PoolType,
 			Current: fmt2(p.Current),
 			P25:     fmt2(p.P25), P50: fmt2(p.P50), P75: fmt2(p.P75), P90: fmt2(p.P90),
-			Band:    p.Band,
-			VsPeer:  p.VsPeer,
-			Note:    p.Note,
+			Band:   p.Band,
+			VsPeer: p.VsPeer,
+			Note:   p.Note,
 		}
 	}
 	d.Anomalies = anomaliesToVicky(r.Judgment.Anomalies)

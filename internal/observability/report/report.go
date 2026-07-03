@@ -263,18 +263,18 @@ type UnitService struct {
 
 // ServiceKeyInfo 单个程序 Service Key 的聚合行（ServiceKey 表逐行渲染用）。
 type ServiceKeyInfo struct {
-	KeyName       string  `json:"key_name"`
-	OwnerName     string  `json:"owner_name"`
-	ReqCount      int64   `json:"req_count"`
-	TotalTokens   int64   `json:"total_tokens"`
-	CostUSD       float64 `json:"cost_usd"`
-	ModelCount    int     `json:"model_count"`
-	SuccessCount  int64   `json:"success_count,omitempty"`
-	ErrorCount    int64   `json:"error_count,omitempty"`
-	TopModel      string  `json:"top_model,omitempty"`      // 该 Key 当期成本最高的主用模型名
-	PrevReqCount  int64   `json:"prev_req_count,omitempty"` // 环比（无上一周期数据时为 0）
-	PrevTokens    int64   `json:"prev_tokens,omitempty"`
-	PrevCostUSD   float64 `json:"prev_cost_usd,omitempty"`
+	KeyName      string  `json:"key_name"`
+	OwnerName    string  `json:"owner_name"`
+	ReqCount     int64   `json:"req_count"`
+	TotalTokens  int64   `json:"total_tokens"`
+	CostUSD      float64 `json:"cost_usd"`
+	ModelCount   int     `json:"model_count"`
+	SuccessCount int64   `json:"success_count,omitempty"`
+	ErrorCount   int64   `json:"error_count,omitempty"`
+	TopModel     string  `json:"top_model,omitempty"`      // 该 Key 当期成本最高的主用模型名
+	PrevReqCount int64   `json:"prev_req_count,omitempty"` // 环比（无上一周期数据时为 0）
+	PrevTokens   int64   `json:"prev_tokens,omitempty"`
+	PrevCostUSD  float64 `json:"prev_cost_usd,omitempty"`
 }
 
 type PerCapita struct {

@@ -140,6 +140,51 @@ func maxBucket(b []ev) (int64, int64) {
 	return b[0].minute, b[len(b)-1].minute
 }
 
+// topUserInCalls 判定的窗口内按 UserID 归并 CostUSD，取成本最高 user，并返回其占窗口总成本比例。
+// 仅 detail 模式（逐调用）可调用：bucket 模式下 calls 无逐用户信息，勿调用。
+// 无 user 字段（UserID 为空）或总成本为 0 时返回 uid=""、share=0（调用方据此降级，不写 user_id）。
+func topUserInCalls(calls []ev) (uid string, costShare float64) {
+	if len(calls) == 0 {
+		return "", 0
+	}
+	costByUser := map[string]float64{}
+	var total float64
+	for _, c := range calls {
+		u := c.c.UserID
+		if u == "" {
+			continue
+		}
+		costByUser[u] += c.c.EstCostUSD
+		total += c.c.EstCostUSD
+	}
+	if total <= 0 {
+		return "", 0
+	}
+	bestUID := ""
+	bestCost := 0.0
+	for u, cost := range costByUser {
+		if cost > bestCost {
+			bestUID, bestCost = u, cost
+		}
+	}
+	if bestUID == "" {
+		return "", 0
+	}
+	return bestUID, bestCost / total
+}
+
+// windowEvs 从窗口调用中筛选失败调用（Status != 200），供 A3 段内故障归因用。
+// A3 的异常由失败调用驱动，归因到失败调用里的成本最高 user，而非窗口全部调用。
+func windowEvs(calls []ev) []ev {
+	out := make([]ev, 0, len(calls))
+	for _, c := range calls {
+		if c.c.Status != 200 {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 func newHit(rule, version, name, severity, window string) report.AnomalyHit {
 	return report.AnomalyHit{
 		Rule: rule, RuleVersion: version, Name: name, Severity: severity,
@@ -195,6 +240,7 @@ func A1(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []repo
 	bestCount := 0
 	bestInterval := 0.0
 	bestCost := 0.0
+	bestLo, bestHi := 0, 0
 	streak := 0
 	for _, x := range win {
 		iv := math.Inf(1)
@@ -209,6 +255,7 @@ func A1(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []repo
 		if streak >= rules.A1SustainMinutes && x.count > bestCount {
 			bestStart, bestEnd = x.start, x.end
 			bestCount, bestInterval, bestCost = x.count, iv, x.cost
+			bestLo, bestHi = x.lo, x.hi
 		}
 	}
 	if bucketMode {
@@ -232,6 +279,16 @@ func A1(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []repo
 	a.ExcessCostUSD = bestCost
 	a.Dimensions["rule_version"] = "v1"
 	a.Dimensions["key_type"] = "personal"
+	// 主因归因（detail 模式）：命中窗口内按 CostUSD 归因到窗口成本最高 user。
+	// 仅非 bucket 模式（=> 有逐调用、可定位 user）；bucket 模式（-agg，无用户维度）不写 user_id，渲染降级「待确认」。
+	if !bucketMode {
+		if uid, share := topUserInCalls(b[bestLo:bestHi]); uid != "" {
+			a.Dimensions["user_id"] = uid
+			a.Dimensions["user_id_basis"] = "window_max_cost"
+			a.Dimensions["user_cost_share"] = fmtFloat(share)
+			a.Evidence = append(a.Evidence, evs("window_top_user", uid+"(占窗口成本"+fmtFloat(share*100)+"%)"))
+		}
+	}
 	a.Evidence = append(a.Evidence,
 		evi("window_calls_10min", bestCount),
 		evs("median_interval_s", fmtFloat(bestInterval)),
@@ -289,9 +346,11 @@ func A2(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []repo
 	bestCost := 0.0
 	bestStart, bestEnd := int64(-1), int64(-1)
 	bestCount := 0
+	bestLo, bestHi := 0, 0
 	for _, x := range win {
 		if x.cost > bestCost {
 			bestCost, bestStart, bestEnd, bestCount = x.cost, x.start, x.end, x.count
+			bestLo, bestHi = x.lo, x.hi
 		}
 	}
 	bestCNY := bestCost * rate
@@ -322,6 +381,16 @@ func A2(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []repo
 	a.Dimensions["rule_version"] = "v1"
 	a.Dimensions["usd_cny_rate"] = fmtFloat(rate)
 	a.Dimensions["total_cost_cny"] = fmtFloat(bestCNY)
+	// 主因归因（detail 模式）：命中窗口内按 CostUSD 归因到窗口成本最高 user。
+	// 仅非 bucket 模式（=> 有逐调用、可定位 user）；bucket 模式（-agg，无用户维度）不写 user_id，渲染降级「待确认」。
+	if !bucketMode {
+		if uid, share := topUserInCalls(b[bestLo:bestHi]); uid != "" {
+			a.Dimensions["user_id"] = uid
+			a.Dimensions["user_id_basis"] = "window_max_cost"
+			a.Dimensions["user_cost_share"] = fmtFloat(share)
+			a.Evidence = append(a.Evidence, evs("window_top_user", uid+"(占窗口成本"+fmtFloat(share*100)+"%)"))
+		}
+	}
 	a.Evidence = append(a.Evidence,
 		evs("baseline_median_usd", fmtFloat(med)),
 		evs("threshold_usd", fmtFloat(baseThr)),
@@ -401,6 +470,14 @@ func A3(calls []CallEvent, rules report.RuleSet) report.AnomalyHit {
 				best.Dimensions["kind"] = "上游故障(5xx)"
 			} else {
 				best.Dimensions["kind"] = "客户端僵死(非200)"
+			}
+			// 主因归因：该段窗口内失败调用（非200）按 CostUSD 归因到成本最高 user（detail 逐调用可定位；
+			// 无 user 或窗口内无失败调用时 uid=="" → 不写 user_id，渲染降级「待确认」）。
+			if uid, share := topUserInCalls(windowEvs(arr[lo:hi])); uid != "" {
+				best.Dimensions["user_id"] = uid
+				best.Dimensions["user_id_basis"] = "window_max_cost"
+				best.Dimensions["user_cost_share"] = fmtFloat(share)
+				best.Evidence = append(best.Evidence, evs("window_top_user", uid+"(占窗口成本"+fmtFloat(share*100)+"%)"))
 			}
 			best.Evidence = append(best.Evidence,
 				evi("segment_req", req), evi("failed", failed),

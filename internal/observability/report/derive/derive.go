@@ -696,6 +696,13 @@ func correlateTopChangedAnomaly(rep *report.Report) {
 	}
 }
 
+// AnomalyAttribution 供外部（工具/装配层）在「两阶段按窗精准拉取」回填 AnomalyHit.Dimensions["user_id"]
+// 之后重跑主因关联，使 TopChangedMember.AnomalyCause 根据最新归属点亮。内部逻辑与
+// correlateTopChangedAnomaly 完全一致（幂等，可重复调用；重复调用不叠加标签、只是覆盖为同值）。
+func AnomalyAttribution(rep *report.Report) {
+	correlateTopChangedAnomaly(rep)
+}
+
 func buildPersonalFact(in report.ReportInput) *report.PersonalFact {
 	p := &report.PersonalFact{
 		ScopeID: in.LevelMeta.ID, ScopeName: in.LevelMeta.Name,

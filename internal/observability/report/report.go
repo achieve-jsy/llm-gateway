@@ -394,8 +394,10 @@ type AnomalyHit struct {
 	Rule           string            `json:"rule"` // A1..A5
 	RuleVersion    string            `json:"rule_version"`
 	Name           string            `json:"name"`
-	Severity       string            `json:"severity"` // P0..P3
-	Window         string            `json:"window"`
+	Severity       string            `json:"severity"`               // P0..P3
+	Window         string            `json:"window"`                 // 人类可读窗口描述（Evidence window 同源）
+	WindowStart    time.Time         `json:"window_start,omitempty"` // 命中窗口起点（Asia/Shanghai），供两阶段按窗精准拉取
+	WindowEnd      time.Time         `json:"window_end,omitempty"`   // 命中窗口终点（Asia/Shanghai），供两阶段按窗精准拉取
 	Hit            bool              `json:"hit"`
 	NotComputed    bool              `json:"not_computed,omitempty"` // 缺少判定所需事实时为 true；不得视为未命中
 	ActualValue    float64           `json:"actual_value"`

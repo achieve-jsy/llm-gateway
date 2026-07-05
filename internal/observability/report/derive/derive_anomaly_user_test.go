@@ -50,6 +50,15 @@ func TestA1WindowAttribution_WritesTopUser(t *testing.T) {
 	if a1.Dimensions["user_id_basis"] != "window_max_cost" {
 		t.Errorf("A1 user_id_basis=%q, want window_max_cost", a1.Dimensions["user_id_basis"])
 	}
+	// 结构化命中窗口：起点=首个调用所在分钟（truncate），终点=起点+A1WindowMinutes(10)。
+	wantWS := start.Truncate(time.Minute)
+	wantWE := wantWS.Add(time.Duration(rules.A1WindowMinutes) * time.Minute)
+	if a1.WindowStart.IsZero() || a1.WindowEnd.IsZero() {
+		t.Fatalf("A1 must set WindowStart/WindowEnd: %+v", a1)
+	}
+	if !a1.WindowStart.Equal(wantWS) || !a1.WindowEnd.Equal(wantWE) {
+		t.Errorf("A1 WindowStart/End = %v/%v, want %v/%v", a1.WindowStart, a1.WindowEnd, wantWS, wantWE)
+	}
 	// uA 成本 100 / 窗口总成本 140 ≈ 0.714...
 	wantShare := 100.0 / 140.0
 	if got := a1.Dimensions["user_cost_share"]; got == "" || parseShare(t, got, wantShare) {
@@ -77,6 +86,15 @@ func TestA2WindowAttribution_WritesTopUser(t *testing.T) {
 	if a2.Dimensions["user_id_basis"] != "window_max_cost" {
 		t.Errorf("A2 user_id_basis=%q, want window_max_cost", a2.Dimensions["user_id_basis"])
 	}
+	// 结构化命中窗口：起点=首个调用所在分钟（truncate），终点=起点+A2WindowMinutes(15)。
+	wantWS := start.Truncate(time.Minute)
+	wantWE := wantWS.Add(time.Duration(rules.A2WindowMinutes) * time.Minute)
+	if a2.WindowStart.IsZero() || a2.WindowEnd.IsZero() {
+		t.Fatalf("A2 must set WindowStart/WindowEnd: %+v", a2)
+	}
+	if !a2.WindowStart.Equal(wantWS) || !a2.WindowEnd.Equal(wantWE) {
+		t.Errorf("A2 WindowStart/End = %v/%v, want %v/%v", a2.WindowStart, a2.WindowEnd, wantWS, wantWE)
+	}
 	// uC 成本 100 / 窗口总成本 110 ≈ 0.909...
 	wantShare := 100.0 / 110.0
 	if got := a2.Dimensions["user_cost_share"]; got == "" || parseShare(t, got, wantShare) {
@@ -103,6 +121,38 @@ func TestA1BucketMode_NoUserAttribution(t *testing.T) {
 	}
 	if _, ok := a1.Dimensions["user_cost_share"]; ok {
 		t.Errorf("A1 bucket mode must not write user_cost_share")
+	}
+	// 桶模式仍应写出结构化命中窗口（供两阶段按窗精准拉取归因）。
+	wantWS := start.Truncate(time.Minute)
+	wantWE := wantWS.Add(time.Duration(rules.A1WindowMinutes) * time.Minute)
+	if a1.WindowStart.IsZero() || a1.WindowEnd.IsZero() {
+		t.Fatalf("A1 bucket mode must set WindowStart/WindowEnd: %+v", a1)
+	}
+	if !a1.WindowStart.Equal(wantWS) || !a1.WindowEnd.Equal(wantWE) {
+		t.Errorf("A1 bucket WindowStart/End = %v/%v, want %v/%v", a1.WindowStart, a1.WindowEnd, wantWS, wantWE)
+	}
+}
+
+func TestTopUserByCost_ReusableAttribution(t *testing.T) {
+	// TopUserByCost 是对外可复用的窗口内成本归因（供工具/装配层按需精准拉取后调用）。
+	calls := []report.CallEvent{
+		{UserID: "uA", EstCostUSD: 70}, {UserID: "uA", EstCostUSD: 30},
+		{UserID: "uB", EstCostUSD: 8}, {UserID: "uB", EstCostUSD: 2},
+	}
+	uid, share := TopUserByCost(calls)
+	if uid != "uA" {
+		t.Errorf("TopUserByCost uid=%q, want uA", uid)
+	}
+	want := 100.0 / 110.0
+	if diff := share - want; diff < -0.001 || diff > 0.001 {
+		t.Errorf("TopUserByCost share=%.4f, want ~%.4f", share, want)
+	}
+	// 空 user / 空集降级。
+	if uid, _ := TopUserByCost([]report.CallEvent{{UserID: "", EstCostUSD: 5}}); uid != "" {
+		t.Errorf("empty-user calls must return empty uid, got %q", uid)
+	}
+	if uid, _ := TopUserByCost(nil); uid != "" {
+		t.Errorf("nil calls must return empty uid, got %q", uid)
 	}
 }
 

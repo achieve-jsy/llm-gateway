@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -412,6 +413,10 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 	for _, nc := range notComputed {
 		rep.Judgment.NotComputed = append(rep.Judgment.NotComputed, nc)
 	}
+	// 两阶段按窗精准拉取：后续主因列点位需要 AnomalyHit.Dimensions["user_id"]。A1/A2 命中但尚未回填
+	// user_id 时（如粒度/降级使 derive 无法即时归因），按命中窗口精准拉取该窗口日期行、过滤至窗口并回填，
+	// 再重跑主因关联。拉取失败/为空时静默降级（主因列维持「待确认」），绝不中断报告。
+	backfillAnomalyWindowUser(ctx, cli, cfg, scope, rep)
 	// 口径③：以 GetDashboard 为对账基准，校验 total_tokens 同源（均=SUM(prompt+completion+reasoning)，不含 cached；
 	// 禁止混拼 /usage/dashboard/users* 存储列）。差异写入 QA.Alignment 说明。
 	reconcileWithDashboard(ctx, cli, cfg, scope, rep)
@@ -1006,6 +1011,81 @@ func toEvents(rows []client.LogRow) []report.CallEvent {
 		out = append(out, r.ToCallEvent())
 	}
 	return out
+}
+
+// getTopUserFromRows 复用 derive 的窗口内成本归因逻辑，对给定调用行集（已按命中窗口拉取）取成本最高 user。
+// 供两阶段「按需精准拉取」使用：detail 模式不再依赖整期全量逐调用，命中后按窗口拉取再归因。
+func getTopUserFromRows(rows []client.LogRow) (uid string, costShare float64) {
+	return derive.TopUserByCost(toEvents(rows))
+}
+
+// backfillAnomalyWindowUser 两阶段「按窗精准拉取归因」装配入口（在 derive.Derive 之后调用）。
+// 阶段一：A1/A2 判定（含 bucket 模式）产出 AnomalyHit.WindowStart/WindowEnd（结构化命中窗口）；
+// 阶段二：命中但 Dimensions["user_id"] 仍空的 A1/A2，用窗口时间精准拉取该窗口日期调用行，
+//
+//	过滤至 [WindowStart, WindowEnd] 子窗，按成本归因到 top user 回填 user_id/user_id_basis/user_cost_share，
+//	最后重跑 derive.AnomalyAttribution 使 TopChanged 主因列点亮。
+//
+// 失败/为空/无归属时静默降级（主因列维持「待确认」），绝不中断报告。
+func backfillAnomalyWindowUser(ctx context.Context, cli *client.Client, cfg Config, scope report.Scope, rep *report.Report) {
+	if rep == nil || len(rep.Judgment.Anomalies) == 0 || cli == nil {
+		return
+	}
+	changed := false
+	for i := range rep.Judgment.Anomalies {
+		a := &rep.Judgment.Anomalies[i]
+		if !a.Hit || (a.Rule != "A1" && a.Rule != "A2") {
+			continue
+		}
+		if a.WindowStart.IsZero() || a.WindowEnd.IsZero() {
+			continue
+		}
+		if a.Dimensions == nil {
+			a.Dimensions = map[string]string{}
+		}
+		if a.Dimensions["user_id"] != "" {
+			continue // 已即时归因（detail 全量已有）
+		}
+		// 窗口时间沿用报告时区；按天粒度拉取（/usage/report/logs 仅支持日过滤），端到端窗口外行在内存过滤。
+		ws, we := a.WindowStart.In(shLoc), a.WindowEnd.In(shLoc)
+		fromDay := ws.Format("2006-01-02")
+		toDay := we.Format("2006-01-02")
+		rows, err := fetchScopeLogsWindow(ctx, cli, cfg, scope, fromDay, toDay)
+		if err != nil || len(rows) == 0 {
+			if cfg.Debug {
+				log.Printf("two-stage window pull: rule %s window %s~%s: %d rows, err=%v", a.Rule, fromDay, toDay, len(rows), err)
+			}
+			continue
+		}
+		// 过滤至命中窗口 [ws, we]（含端点）内的调用（且剔除 service，成员口径同 A1–A5），再归因。
+		windowCalls := make([]report.CallEvent, 0, len(rows))
+		for _, r := range rows {
+			ce := r.ToCallEvent()
+			if ce.KeyType == "service" {
+				continue // service 不参与异常判定/归因（同 derive 对 in.Calls 的 nonService 前提）
+			}
+			ts := ce.TS
+			if !ts.Before(ws) && !ts.After(we) {
+				windowCalls = append(windowCalls, ce)
+			}
+		}
+		if len(windowCalls) == 0 {
+			continue
+		}
+		uid, share := derive.TopUserByCost(windowCalls)
+		if uid == "" {
+			continue
+		}
+		a.Dimensions["user_id"] = uid
+		a.Dimensions["user_id_basis"] = "window_max_cost"
+		a.Dimensions["user_cost_share"] = strconv.FormatFloat(share, 'f', 2, 64)
+		a.Evidence = append(a.Evidence, report.Evidence{Field: "window_top_user", Value: uid + "(占窗口成本" + strconv.FormatFloat(share*100, 'f', 1, 64) + "%)"})
+		changed = true
+	}
+	if changed {
+		// 重跑主因关联，把刚回填的 user_id 映射到 TopChangedMember.AnomalyCause。
+		derive.AnomalyAttribution(rep)
+	}
 }
 
 // nonService 剔除 key_type='service' 的调用（A1–A5 与基线用成员口径）。

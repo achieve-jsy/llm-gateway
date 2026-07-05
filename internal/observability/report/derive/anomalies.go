@@ -140,22 +140,22 @@ func maxBucket(b []ev) (int64, int64) {
 	return b[0].minute, b[len(b)-1].minute
 }
 
-// topUserInCalls 判定的窗口内按 UserID 归并 CostUSD，取成本最高 user，并返回其占窗口总成本比例。
-// 仅 detail 模式（逐调用）可调用：bucket 模式下 calls 无逐用户信息，勿调用。
-// 无 user 字段（UserID 为空）或总成本为 0 时返回 uid=""、share=0（调用方据此降级，不写 user_id）。
-func topUserInCalls(calls []ev) (uid string, costShare float64) {
+// TopUserByCost 按 UserID 归并 EstCostUSD，从给定的调用集中取成本最高 user，并返回其占全量成本比例。
+// 数据源无关：可用 []report.CallEvent（detail 逐调用）或在窗外按需精准拉取的窗口调用集。
+// 无 user 字段（UserID 为空）或总成本为 0 时返回 ""、0（调用方据此降级，不写 user_id）。
+func TopUserByCost(calls []report.CallEvent) (uid string, costShare float64) {
 	if len(calls) == 0 {
 		return "", 0
 	}
 	costByUser := map[string]float64{}
 	var total float64
 	for _, c := range calls {
-		u := c.c.UserID
+		u := c.UserID
 		if u == "" {
 			continue
 		}
-		costByUser[u] += c.c.EstCostUSD
-		total += c.c.EstCostUSD
+		costByUser[u] += c.EstCostUSD
+		total += c.EstCostUSD
 	}
 	if total <= 0 {
 		return "", 0
@@ -171,6 +171,20 @@ func topUserInCalls(calls []ev) (uid string, costShare float64) {
 		return "", 0
 	}
 	return bestUID, bestCost / total
+}
+
+// topUserInCalls 判定的窗口内按 UserID 归并 CostUSD，取成本最高 user，并返回其占窗口总成本比例。
+// 仅 detail 模式（逐调用）可调用：bucket 模式下 calls 无逐用户信息，勿调用。
+// 无 user 字段（UserID 为空）或总成本为 0 时返回 uid=""、share=0（调用方据此降级，不写 user_id）。
+func topUserInCalls(calls []ev) (uid string, costShare float64) {
+	if len(calls) == 0 {
+		return "", 0
+	}
+	cc := make([]report.CallEvent, len(calls))
+	for i, c := range calls {
+		cc[i] = c.c
+	}
+	return TopUserByCost(cc)
 }
 
 // windowEvs 从窗口调用中筛选失败调用（Status != 200），供 A3 段内故障归因用。
@@ -279,6 +293,9 @@ func A1(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []repo
 	a.ExcessCostUSD = bestCost
 	a.Dimensions["rule_version"] = "v1"
 	a.Dimensions["key_type"] = "personal"
+	// 结构化命中窗口（unix 分钟 → time.Time，Asia/Shanghai）：细粒度窗口字段，供两阶段按窗精准拉取归因。
+	a.WindowStart = time.Unix(bestStart*60, 0)
+	a.WindowEnd = time.Unix(bestEnd*60, 0)
 	// 主因归因（detail 模式）：命中窗口内按 CostUSD 归因到窗口成本最高 user。
 	// 仅非 bucket 模式（=> 有逐调用、可定位 user）；bucket 模式（-agg，无用户维度）不写 user_id，渲染降级「待确认」。
 	if !bucketMode {
@@ -381,6 +398,9 @@ func A2(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []repo
 	a.Dimensions["rule_version"] = "v1"
 	a.Dimensions["usd_cny_rate"] = fmtFloat(rate)
 	a.Dimensions["total_cost_cny"] = fmtFloat(bestCNY)
+	// 结构化命中窗口（unix 分钟 → time.Time，Asia/Shanghai）：细粒度窗口字段，供两阶段按窗精准拉取归因。
+	a.WindowStart = time.Unix(bestStart*60, 0)
+	a.WindowEnd = time.Unix(bestEnd*60, 0)
 	// 主因归因（detail 模式）：命中窗口内按 CostUSD 归因到窗口成本最高 user。
 	// 仅非 bucket 模式（=> 有逐调用、可定位 user）；bucket 模式（-agg，无用户维度）不写 user_id，渲染降级「待确认」。
 	if !bucketMode {

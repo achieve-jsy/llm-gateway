@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -77,93 +78,23 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 		llmCli = llm.New(cfg.LLMBase, cfg.LLMKey, cfg.LLMModel, time.Duration(cfg.LLMTimeout)*time.Second, 0)
 	}
 
-	// 2) 数据获取：默认拉调用明细（A1–A5/模型预算/ServiceKey/Top模型保真）；
-	// `-agg` 则用 member 聚合(/usage/report/members)构造事实层加法核心（零明细），明细依赖项降级。
-	var rows []client.LogRow
+	// 2) 数据获取：事实层一律走成员聚合(/usage/report/members + /usage/report/baseline)零明细，
+	// 不再全量拉 fetchScopeLogs（大部门单期可达 38 万条，是 detail 超时根因）。detail 事实层走聚合后，
+	// buildFact 走 agg 路径（Metrics 空、MemberAgg 非空）；A1/A2 用当期分钟桶 currentBuckets 做 bucket 检测命中窗，
+	// 再由 backfillAnomalyWindowUser 按命中窗口子窗精准拉取归因（仅几十条），点亮主因列。
+	// `-agg` 与 detail 共用同一事实层数据源；`--agg` 仅作为批量汇总注记标记（不再有独立数据路径）。
 	var metrics []report.DailyMetric
-	var baselineCurrent []report.DailyMetric // -agg 当期按天序列，仅供基线 current，不污染 Metrics
-	var currentBuckets []report.MinuteBucket // -agg 当期分钟桶，供 A1/A2 当期窗口判定（calls 空时）
+	var baselineCurrent []report.DailyMetric // 当期按天序列，仅供基线 current，不污染 Metrics
+	var currentBuckets []report.MinuteBucket // 当期分钟桶，供 A1/A2 当期窗口判定（calls 空时）
 	var memberCalls []report.CallEvent
 	var memberAgg []report.MemberAgg
 	var prevMemberAgg []report.MemberAgg
-	if cfg.Agg {
-		aggRows, aggErr := fetchMemberAggForScope(ctx, cli, cfg, scope)
-		if aggErr != nil {
-			return nil, aggErr
-		}
-		memberAgg = make([]report.MemberAgg, 0, len(aggRows))
-		for _, r := range aggRows {
-			memberAgg = append(memberAgg, r.ToMemberAgg())
-		}
-		// 个人级：把范围名解析为人名（默认是 UUID），提升可读性。
-		if cfg.Level == "personal" {
-			for _, m := range memberAgg {
-				if m.UserID == scope.ID && m.UserName != "" {
-					scope.Name = m.UserName
-					break
-				}
-			}
-		}
-		// 上期数据：prevFrom = from - periodDays 天，prevTo = from - 1天。
-		// 与本期同口径（同 deptID/studioID/userID），供 derive 层算周环比。
-		if periodDaysVal, pdErr := inclusiveDays(cfg.From, cfg.To); pdErr == nil && periodDaysVal > 0 {
-			const layout = "2006-01-02"
-			fromT, fErr := time.Parse(layout, cfg.From)
-			if fErr == nil {
-				prevToT := fromT.AddDate(0, 0, -1)
-				prevFromT := fromT.AddDate(0, 0, -periodDaysVal)
-				prevCfg := cfg
-				prevCfg.From = prevFromT.Format(layout)
-				prevCfg.To = prevToT.Format(layout)
-				prevRows, prevErr := fetchMemberAggForScope(ctx, cli, prevCfg, scope)
-				if prevErr == nil {
-					prevMemberAgg = make([]report.MemberAgg, 0, len(prevRows))
-					for _, r := range prevRows {
-						prevMemberAgg = append(prevMemberAgg, r.ToMemberAgg())
-					}
-				}
-				// 上期拉取失败时静默忽略（derive 层收到空 PrevMemberAgg 即跳过环比）
-			}
-		}
-		// 当期按天序列 + 分钟桶：-agg 成员聚合无逐日明细/逐调用，但 `/usage/report/baseline`
-		// 仍可按天返回非 service 调用数（同 level/scope 过滤），并返回 minute_buckets。
-		// 按天序列存 BaselineCurrent 供 28 天基线算当期日均；分钟桶存 CurrentBuckets 供
-		// A1/A2 当期窗口判定（否则 -agg 下 calls 空、A1/A2 只能降级「样本不足」）。
-		// 两者都独立字段，不污染 Metrics（agg 必须保持空，否则 buildFact 误走明细路径）。
-		if cuid, cdept, cstudio := baselineScopeIDs(cfg.Level, scope); true {
-			if curBaseline, curErr := cli.FetchBaseline(ctx, cfg.From, cfg.To, cuid, cdept, cstudio); curErr == nil && len(curBaseline.Daily) > 0 {
-				baselineCurrent = make([]report.DailyMetric, 0, len(curBaseline.Daily))
-				for _, d := range curBaseline.Daily {
-					baselineCurrent = append(baselineCurrent, report.DailyMetric{
-						Date: d.Date, Level: cfg.Level, ScopeID: scope.ID, KeyType: "personal", ReqCount: d.ReqCount,
-					})
-				}
-				// 当期分钟桶 → A1/A2 当期窗口扫描（非 service 调用数/成本按分钟分桶）。
-				currentBuckets = make([]report.MinuteBucket, 0, len(curBaseline.MinuteBuckets))
-				for _, bk := range curBaseline.MinuteBuckets {
-					if t, e := time.ParseInLocation("2006-01-02 15:04:05", bk.Minute, shLoc); e == nil {
-						currentBuckets = append(currentBuckets, report.MinuteBucket{Minute: t, Count: int(bk.Count), Cost: bk.Cost})
-					}
-				}
-			} else if cfg.Debug {
-				log.Printf("agg 当期 baseline 拉取失败/为空: %v", curErr)
-			}
-		}
-	} else {
-		rows, err := fetchScopeLogs(ctx, cli, cfg, scope, cfg.From, cfg.To)
-		if err != nil {
-			return nil, err
-		}
-		// 个人级：把范围名解析为人名（默认是 UUID），提升可读性。
-		if cfg.Level == "personal" && len(rows) > 0 && rows[0].UserName != "" {
-			scope.Name = rows[0].UserName
-		}
-
-		// 3) 归一化：CallEvent + DailyMetric（口径：total_tokens=prompt+completion+reasoning）
-		allCalls := toEvents(rows)
-		// A1–A5 在个人口径排除 service；单元级同样只对成员调用（member）跑 A1–A5，service 不参与异常判定。
-		memberCalls = nonService(allCalls)
-		metrics = aggregateDaily(allCalls, cfg.Level, scope.ID) // 事实层含 member+service 分离（buildUnitFact 内拆）
+	memberAgg, prevMemberAgg, baselineCurrent, currentBuckets, resolvedName, aggErr := aggFactLayer(ctx, cli, cfg, &scope)
+	if aggErr != nil {
+		return nil, aggErr
+	}
+	if resolvedName != "" {
+		scope.Name = resolvedName
 	}
 
 	// 3b) 28 天基线物化：期前 28 完整自然日 [from-28d, from-1d]（同 level/scope 过滤），走聚合接口零明细。
@@ -190,11 +121,9 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 		baselineBuckets = append(baselineBuckets, report.MinuteBucket{Minute: t, Count: int(bk.Count), Cost: bk.Cost})
 	}
 
-	// 4) 模型能力（A4 有效输入预算）。agg 模式无明细→无模型名清单，A4 降 NotComputed（预算 map 留空）。
+	// 4) 模型能力（A4 有效输入预算）。事实层走聚合→无逐调用明细→无模型名清单，A4 降 NotComputed（预算 map 留空）。
+	// 与既有 -agg 口径一致：A4 依赖逐调用 calls + model_catalog 预算，聚合模式下仅能降级。
 	var budget map[string]int64
-	if !cfg.Agg {
-		budget = cli.ModelContextBudget(ctx, distinctModels(rows))
-	}
 
 	// 5) 同岗分位：花名册(岗位/studio) + 每用户效能（成员口径）
 	cohort, notComputed := buildCohort(ctx, cli, cfg, scope, memberCalls)
@@ -243,9 +172,9 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 			"A1–A5 异常在个人口径排除 service；部门/工作室口径仅对成员调用（member）判定，service 不参与异常判定。",
 		}, AnomalyEnabled: true, PeerPercentileEnabled: cohort.Enabled},
 	}
-	// 部门报告补拉工作室级 MemberAgg（用于「工作室内占比」）：仅 agg 模式、department 级、有 studioID 时拉。
+	// 部门报告补拉工作室级 MemberAgg（用于「工作室内占比」）：事实层走聚合后 detail 亦拉（department 级、有 studioID 时）。
 	var studioMemberAgg []report.MemberAgg
-	if cfg.Agg && cfg.Level == "department" && scope.StudioID != "" {
+	if cfg.Level == "department" && scope.StudioID != "" {
 		studioCfg := cfg
 		studioCfg.From, studioCfg.To = cfg.From, cfg.To
 		studioRows, studioErr := fetchMemberAggForScope(ctx, cli, studioCfg,
@@ -260,9 +189,9 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 	}
 
 	// 部门/工作室报告：拉 dashboard/users 补充每用户 Top 模型（用于岗位分布主用模型列）。
-	// agg 模式才拉（明细模式有 TopModels 来自明细聚合）；失败静默忽略。
+	// 事实层走聚合后无明细 TopModels，这里从 dashboard/users 补每用户 Top 模型（用于岗位分布主用模型列）；失败静默忽略。
 	var userTopModels map[string][]report.CohortTopModel
-	if cfg.Agg && (cfg.Level == "department" || cfg.Level == "studio") {
+	if cfg.Level == "department" || cfg.Level == "studio" {
 		umRows, umErr := cli.FetchUserMetrics(ctx, cfg.From, cfg.To, "", "")
 		if umErr == nil && len(umRows) > 0 {
 			userTopModels = make(map[string][]report.CohortTopModel, len(umRows))
@@ -285,7 +214,7 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 	// 工作室报告：构建 deptID→deptName 映射，供 derive 层填充 DeptContribution.DeptName。
 	// 从部门列表接口拉取，失败静默忽略（DeptName 留空时 derive 降级使用 deptID）。
 	var deptNames map[string]string
-	if cfg.Agg && cfg.Level == "studio" {
+	if cfg.Level == "studio" {
 		depts, dErr := cli.FetchDepartments(ctx, "active")
 		if dErr == nil && len(depts) > 0 {
 			deptNames = make(map[string]string, len(depts))
@@ -395,8 +324,8 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 		MemberAgg:          memberAgg,
 		PrevMemberAgg:      prevMemberAgg,
 		StudioMemberAgg:    studioMemberAgg,
-		BaselineCurrent:    baselineCurrent,    // -agg 当期按天序列，仅供基线 current
-		CurrentBuckets:     currentBuckets,     // -agg 当期分钟桶，供 A1/A2 当期窗口判定
+		BaselineCurrent:    baselineCurrent,    // 当期按天序列，仅供基线 current（事实层走聚合）
+		CurrentBuckets:     currentBuckets,     // 当期分钟桶，供 A1/A2 当期窗口判定（bucket 模式）
 		UserTopModels:      userTopModels,      // 部门/工作室: 每用户 top 模型（岗位分布/Top变化人员）
 		DeptNames:          deptNames,          // 工作室级别: deptID→deptName 映射（DeptContribution.DeptName 用）
 		CompanyCostUSD:     companyCostUSD,     // 工作室: 全公司同期成本（一页摘要占比）
@@ -1003,6 +932,76 @@ func fetchMemberAggForScope(ctx context.Context, cli *client.Client, cfg Config,
 	return rows, nil
 }
 
+// aggFactLayer 统一构造「事实层走聚合」所需的三块数据：成员聚合（本期 + 上期）与当期分钟桶/按天序列。
+// 供 -agg 与 detail 事实层共用（detail 不再全量拉 fetchScopeLogs 38 万条，改走聚合零明细）。
+//   - memberAgg：本期成员聚合（排除 service），供事实层加法核心 + 周环比（与 PrevMemberAgg 同口径）。
+//   - prevMemberAgg：上期同口径成员聚合，供 derive 层算周环比（拉取失败静默忽略）。
+//   - baselineCurrent：当期按天非 service 调用数序列（仅作 28 天基线 current 参考，不污染 Metrics）。
+//   - currentBuckets：当期分钟桶（非 service 调用数/成本），供 A1/A2 当期窗口判定（bucket 模式）。
+//   - resolvedName：personal 级成员聚合里解析出的个人信息，用于把 scope.Name 由 UUID 提升为可读人名。
+func aggFactLayer(ctx context.Context, cli *client.Client, cfg Config, scope *report.Scope) (memberAgg, prevMemberAgg []report.MemberAgg, baselineCurrent []report.DailyMetric, currentBuckets []report.MinuteBucket, resolvedName string, err error) {
+	aggRows, aggErr := fetchMemberAggForScope(ctx, cli, cfg, *scope)
+	if aggErr != nil {
+		return nil, nil, nil, nil, "", aggErr
+	}
+	memberAgg = make([]report.MemberAgg, 0, len(aggRows))
+	for _, r := range aggRows {
+		memberAgg = append(memberAgg, r.ToMemberAgg())
+	}
+	// 个人级：把范围名解析为人名（默认是 UUID），提升可读性。
+	if cfg.Level == "personal" {
+		for _, m := range memberAgg {
+			if m.UserID == scope.ID && m.UserName != "" {
+				resolvedName = m.UserName
+				break
+			}
+		}
+	}
+	// 上期数据：prevFrom = from - periodDays 天，prevTo = from - 1天。同口径供 derive 算周环比。
+	if periodDaysVal, pdErr := inclusiveDays(cfg.From, cfg.To); pdErr == nil && periodDaysVal > 0 {
+		const layout = "2006-01-02"
+		fromT, fErr := time.Parse(layout, cfg.From)
+		if fErr == nil {
+			prevToT := fromT.AddDate(0, 0, -1)
+			prevFromT := fromT.AddDate(0, 0, -periodDaysVal)
+			prevCfg := cfg
+			prevCfg.From = prevFromT.Format(layout)
+			prevCfg.To = prevToT.Format(layout)
+			prevRows, prevErr := fetchMemberAggForScope(ctx, cli, prevCfg, *scope)
+			if prevErr == nil {
+				prevMemberAgg = make([]report.MemberAgg, 0, len(prevRows))
+				for _, r := range prevRows {
+					prevMemberAgg = append(prevMemberAgg, r.ToMemberAgg())
+				}
+			}
+			// 上期拉取失败时静默忽略（derive 层收到空 PrevMemberAgg 即跳过环比）
+		}
+	}
+	// 当期按天序列 + 分钟桶：成员聚合无逐日明细/逐调用，但 /usage/report/baseline 仍可按天返回非 service 调用数，
+	// 并返回 minute_buckets。按天序列存 BaselineCurrent 供 28 天基线算当期日均；分钟桶存 CurrentBuckets 供
+	// A1/A2 当期窗口判定（否则 calls 空、A1/A2 只能降级「样本不足」）。两者独立字段，不污染 Metrics。
+	if cuid, cdept, cstudio := baselineScopeIDs(cfg.Level, *scope); true {
+		if curBaseline, curErr := cli.FetchBaseline(ctx, cfg.From, cfg.To, cuid, cdept, cstudio); curErr == nil && len(curBaseline.Daily) > 0 {
+			baselineCurrent = make([]report.DailyMetric, 0, len(curBaseline.Daily))
+			for _, d := range curBaseline.Daily {
+				baselineCurrent = append(baselineCurrent, report.DailyMetric{
+					Date: d.Date, Level: cfg.Level, ScopeID: scope.ID, KeyType: "personal", ReqCount: d.ReqCount,
+				})
+			}
+			// 当期分钟桶 → A1/A2 当期窗口扫描（非 service 调用数/成本按分钟分桶）。
+			currentBuckets = make([]report.MinuteBucket, 0, len(curBaseline.MinuteBuckets))
+			for _, bk := range curBaseline.MinuteBuckets {
+				if t, e := time.ParseInLocation("2006-01-02 15:04:05", bk.Minute, shLoc); e == nil {
+					currentBuckets = append(currentBuckets, report.MinuteBucket{Minute: t, Count: int(bk.Count), Cost: bk.Cost})
+				}
+			}
+		} else if cfg.Debug {
+			log.Printf("事实层聚合 当期 baseline 拉取失败/为空: %v", curErr)
+		}
+	}
+	return memberAgg, prevMemberAgg, baselineCurrent, currentBuckets, resolvedName, nil
+}
+
 // dailyWindow 表示一个 [from,to) 的日粒度闭开区间。
 type dailyWindow struct{ from, to string }
 
@@ -1108,6 +1107,17 @@ func backfillAnomalyWindowUser(ctx context.Context, cli *client.Client, cfg Conf
 		}
 		if len(windowCalls) == 0 {
 			continue
+		}
+		// 尽力而为：聚合桶模式在 derive 阶段只做 bucket 滑窗检测（未校验逐调用中位间隔）。这里用已拉到的窗口逐调用
+		// 顺带跑一次 A1 中位间隔校验（零额外拉取），确认命中窗口的持续性，仅作证据补充、不阻断归因。
+		if a.Rule == "A1" && len(windowCalls) >= 2 {
+			med := derive.MedianIntervalSec(windowCalls)
+			if !math.IsInf(med, 1) {
+				a.Evidence = append(a.Evidence, report.Evidence{
+					Field: "window_median_interval_sec",
+					Value: strconv.FormatFloat(med, 'f', 1, 64) + "s（窗口内逐调用中位间隔，确认持续性）",
+				})
+			}
 		}
 		uid, share := derive.TopUserByCost(windowCalls)
 		if uid == "" {

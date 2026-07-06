@@ -9,6 +9,7 @@ package derive
 //  3. A3：段窗口内失败调用(非200)归因到成本最高 user。
 
 import (
+	"math"
 	"strconv"
 	"testing"
 	"time"
@@ -196,4 +197,37 @@ func parseShare(t *testing.T, s string, want float64) bool {
 		return true
 	}
 	return false
+}
+
+// TestMedianIntervalSec 覆盖「尽力而为」聚合桶命中窗口后的逐调用中位间隔校验（zero-extra-fetch）。
+// 用于 A1 bucket 命中窗按窗拉取后确认持续性；调用不足 2 条返回 +Inf（语义=不可判定）。
+func TestMedianIntervalSec(t *testing.T) {
+	start := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name  string
+		calls []report.CallEvent
+		want  float64 // 期望中位间隔（秒）
+	}{
+		{"constant 1s interval", []report.CallEvent{
+			{TS: start}, {TS: start.Add(1 * time.Second)}, {TS: start.Add(2 * time.Second)}, {TS: start.Add(3 * time.Second)},
+		}, 1.0},
+		{"1,2,3s", []report.CallEvent{
+			{TS: start}, {TS: start.Add(1 * time.Second)}, {TS: start.Add(3 * time.Second)}, {TS: start.Add(6 * time.Second)},
+		}, 2.0}, // 间隔 [1,2,3] 中位=2
+		{"<2 calls", []report.CallEvent{{TS: start}}, math.Inf(1)},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			got := MedianIntervalSec(tt.calls)
+			if tt.name == "<2 calls" {
+				if !math.IsInf(got, 1) {
+					t.Fatalf("MedianIntervalSec=%.3f, want +Inf", got)
+				}
+				return
+			}
+			if math.Abs(got-tt.want) > 0.001 {
+				t.Fatalf("MedianIntervalSec=%.3f, want %.3f", got, tt.want)
+			}
+		})
+	}
 }

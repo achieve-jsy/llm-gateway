@@ -173,6 +173,20 @@ func TopUserByCost(calls []report.CallEvent) (uid string, costShare float64) {
 	return bestUID, bestCost / total
 }
 
+// MedianIntervalSec 计算给定逐调用集的调用间隔中位秒数（数据源无关：detail 逐调用，或按窗精准拉取的窗口调用集）。
+// 供 two-stage 按窗归因时「顺带跑一次 A1 中位间隔校验」确认聚合桶命中窗口的持续性（零额外拉取）。
+// 调用不足 2 条返回 +Inf（语义=间隔不可判定，驱动侧以「证据未确认」处理）。
+func MedianIntervalSec(calls []report.CallEvent) float64 {
+	if len(calls) < 2 {
+		return math.Inf(1)
+	}
+	evs := make([]ev, 0, len(calls))
+	for _, c := range calls {
+		evs = append(evs, ev{c: c, minute: c.TS.Unix() / 60})
+	}
+	return medianIntervalSec(evs)
+}
+
 // topUserInCalls 判定的窗口内按 UserID 归并 CostUSD，取成本最高 user，并返回其占窗口总成本比例。
 // 仅 detail 模式（逐调用）可调用：bucket 模式下 calls 无逐用户信息，勿调用。
 // 无 user 字段（UserID 为空）或总成本为 0 时返回 uid=""、share=0（调用方据此降级，不写 user_id）。

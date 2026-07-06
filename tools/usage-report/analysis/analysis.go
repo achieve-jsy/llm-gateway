@@ -82,7 +82,9 @@ func levelRequirement(level string) string {
 	switch level {
 	case "personal":
 		return "请从「个人模型使用」视角分析：主用/常用模型与模型组合是否合理、成本与缓存命中、" +
-			"是否有模型替换/降本空间，并给出「场景与合理用模」建议（结合同岗画像，若数据可得）。"
+			"是否有模型替换/降本空间，并给出「场景与合理用模」建议（结合同岗画像，若数据可得）。" +
+			"若数据摘要含 model_guidance，请引用其 est_weekly_save_usd 与 save_basis 中的数字给出省钱估算，" +
+			"不要另外编造金额（该数字为估算，措辞可润色、数值必须一致）。"
 	case "department":
 		return "请从「部门模型组合效率」视角分析：成员成本与岗位分布、模型组合效率与成本优化建议、" +
 			"重点变化成员与风险异常，给出部门层面的模型治理建议。" +
@@ -147,6 +149,19 @@ func buildSummary(level string, rep *report.Report, fxRate float64) map[string]i
 				"adoption_rate":        round4(mp.AdoptionRate),
 				"person_unit_cost_usd": round4(mp.PersonUnitCost),
 				"unit_cost_p50_usd":    round4(mp.UnitCostP50),
+			}
+		}
+		// 模型选用建议（确定性计算，数字来自事实；LLM 仅润色措辞，不得自行修改「省多少」）。
+		if mg := rep.Judgment.ModelGuidance; mg != nil {
+			s["model_guidance"] = map[string]interface{}{
+				"top_model":              mg.TopModel,
+				"top_model_cost_ratio":   round4(mg.TopModelCostRatio),
+				"person_unit_cost_usd":   round4(mg.PersonUnitCostUSD),
+				"peer_unit_cost_p50_usd": round4(mg.PeerUnitCostP50USD),
+				"est_weekly_save_usd":    round4(mg.EstWeeklySaveUSD),
+				"save_is_estimate":       mg.SaveIsEstimate,
+				"save_basis":             mg.SaveBasis,
+				"note":                   mg.Note,
 			}
 		}
 	case "department":

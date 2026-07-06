@@ -298,6 +298,10 @@ type Judgment struct {
 	Peer             Peer              `json:"peer"`
 	PeerProfiles     []PeerMetric      `json:"peer_profiles"`      // Vicky「同岗使用效能画像」多指标分位表
 	TopModelPortrait *TopModelPortrait `json:"top_model_portrait"` // Vicky「成本最高模型的同岗画像」第四章
+	// ModelGuidance 个人第五章「场景与合理用模」的模型选用建议 + 省钱预估（仅个人粒度产出）。
+	// 基于已算好的事实（高阶模型成本占比/单位成本差/同岗单位成本 P50）确定性计算，数字不臆造，
+	// 省钱预估为估算（SaveIsEstimate=true）并给出依据 SaveBasis；建议措辞给 LLM 作为事实输入。
+	ModelGuidance *ModelGuidance `json:"model_guidance,omitempty"`
 	// PeerUnitCost 单元级匿名横比：本单元「单位活跃人成本」在全公司各部门中的分位（department|studio 报告专用）。
 	// 池 = 全公司各部门单位活跃人成本（Σ成本/去重活跃人）；本值取自本单元 PerCapita 成本。样本不足时 Supported=false。
 	PeerUnitCost Peer          `json:"peer_unit_cost"`
@@ -305,6 +309,25 @@ type Judgment struct {
 	Anomalies    []AnomalyHit  `json:"anomalies"`
 	Attribution  []Attribution `json:"attribution"`
 	NotComputed  []NotComputed `json:"not_computed"`
+}
+
+// ModelGuidance 个人第五章「场景与合理用模」：场景标注 + 模型选用建议 + 省钱预估（估算）。
+// 数字一律来自既有事实（PersonalFact.TopModels / HighTierCostRatio / TopModelPortrait 单位成本），
+// 本层只做确定性推算，不新增业务计算口径；SaveBasis 记录估算依据，EstWeeklySaveCNY 由渲染层乘汇率。
+type ModelGuidance struct {
+	Supported          bool    `json:"supported"`              // 事实充分（有同岗单位成本对比）才 true
+	TopModel           string  `json:"top_model"`              // 成本最高/主用模型名
+	TopModelCallShare  float64 `json:"top_model_call_share"`   // 主用模型调用占比 0..1
+	TopModelCostRatio  float64 `json:"top_model_cost_ratio"`   // 高阶模型成本占比 0..1（=HighTierCostRatio）
+	PersonUnitCostUSD  float64 `json:"person_unit_cost_usd"`   // 本人该模型单位成本 USD/百万Token
+	PeerUnitCostP50USD float64 `json:"peer_unit_cost_p50_usd"` // 同岗采用者该模型单位成本 P50 USD/百万Token
+	EstWeeklySaveUSD   float64 `json:"est_weekly_save_usd"`    // 估算周节省 USD（对齐同岗单位成本 P50）
+	EstWeeklySaveCNY   float64 `json:"est_weekly_save_cny"`    // 估算周节省 CNY（渲染层乘汇率填充）
+	SaveIsEstimate     bool    `json:"save_is_estimate"`       // 恒 true：省钱为估算
+	ScenarioNote       string  `json:"scenario_note"`          // 场景标注（基于事实的用模结构描述，不臆造场景名）
+	Recommendation     string  `json:"recommendation"`         // 模型选用建议措辞（确定性；LLM 可基于本字段+数字润色）
+	SaveBasis          string  `json:"save_basis"`             // 省钱预估依据
+	Note               string  `json:"note,omitempty"`         // 事实不足时的说明
 }
 
 // TopModelPortrait 成本最高模型的同岗画像（Vicky 第四章）。

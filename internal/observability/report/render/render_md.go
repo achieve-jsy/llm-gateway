@@ -423,6 +423,26 @@ func writePersonalSections(b *strings.Builder, r *report.Report) {
 				fmt.Fprintf(b, "- 本周共使用 %d 个模型；成本最高模型占比见上方第四章。\n", p.ModelCount)
 			}
 		}
+		// 模型选用建议 + 省钱预估（确定性，数字来自既定事实；SaveIsEstimate 标注为估算）。
+		if mg := j.ModelGuidance; mg != nil {
+			if mg.ScenarioNote != "" {
+				fmt.Fprintf(b, "- 场景：%s\n", mg.ScenarioNote)
+			}
+			if mg.Recommendation != "" {
+				fmt.Fprintf(b, "- 建议：%s\n", mg.Recommendation)
+			}
+			if mg.EstWeeklySaveUSD > 0 {
+				// cny() 内部乘汇率，故此处直接传入 USD 估算值（derive 无汇率）。
+				fmt.Fprintf(b, "- 省钱预估（估算）：预计每周约省 `%s`。\n", cny(mg.EstWeeklySaveUSD, rate))
+				if mg.SaveBasis != "" {
+					fmt.Fprintf(b, "  - 估算依据：%s\n", mg.SaveBasis)
+				}
+			}
+			if mg.Note != "" && mg.EstWeeklySaveUSD <= 0 {
+				fmt.Fprintf(b, "- %s\n", mg.Note)
+			}
+			fmt.Fprintf(b, "\n")
+		}
 		// LLM 增强：Sections 展开 + Note 降级说明（复用统一 helper 的章节体；确定性内容后补空行区隔）
 		if ma != nil {
 			if strings.TrimSpace(ma.Sections) != "" && hasDet {

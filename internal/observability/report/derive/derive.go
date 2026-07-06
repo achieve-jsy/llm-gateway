@@ -91,6 +91,12 @@ func Derive(meta report.Meta, in report.ReportInput, rules report.RuleSet) (*rep
 	// 第四章：成本最高模型的同岗画像（依赖 PersonalFact.TopModels，须在上方注入之后调用）。
 	judge.TopModelPortrait = buildTopModelPortrait(in, rep.Fact, rules.MinCohortSample)
 
+	// 个人第五章「场景与合理用模」：模型选用建议 + 省钱预估（基于 TopModelPortrait 单位成本与 PersonalFact）。
+	// 仅个人粒度产出；单元级不产出（其第五章为「建议」章节，不在此混）。
+	if rep.Fact.Personal != nil {
+		judge.ModelGuidance = buildModelGuidance(rep.Fact.Personal, judge.TopModelPortrait)
+	}
+
 	// A1–A5
 	anoms := Anomalies(in.Calls, in.BaselineCalls, in.BaselineBuckets, in.CurrentBuckets, rules, in.ModelContextBudget)
 	// 单元级语义说明：A1/A2 基于个人窗口/中位，单元级运行在「该单元成员调用流（排除 service）」上。
@@ -701,6 +707,34 @@ func correlateTopChangedAnomaly(rep *report.Report) {
 // correlateTopChangedAnomaly 完全一致（幂等，可重复调用；重复调用不叠加标签、只是覆盖为同值）。
 func AnomalyAttribution(rep *report.Report) {
 	correlateTopChangedAnomaly(rep)
+}
+
+// MemberAnomalyCause 对单个成员的**本人**周内调用流做成员级 A1/A2/A5 判定，返回命中的主因标签。
+//
+// 方向 B（替代「全局窗口热点 user ∈ TopChanged」的单点匹配）：buildTopChanged 按 |WoWCostPct| 降序取 Top5
+// 且只算两期都有的成员，而 A2 归因出的窗口热点 user 成本排名常在第 7、不保证两期都有 → 不在 Top5 →
+// correlateTopChangedAnomaly 匹配不到 → 主因列全「待确认」。这里改为：对每个 TopChanged 成员用其
+// **本人**调用数据跑 A1(程序失控)/A2(成本燃烧)/A5(非工作时段)，命中即回填（如 "A2 成本燃烧"）。
+//
+// 数据源无关：入参为该成员当期非 service 调用事件。A1/A2 无成员级 28 天基线桶（基线是单元/全局口径，
+// 逐人重建需额外整期拉取，违背「小数据」约束），按绝对阈值下限判定（A1MinCallsAbsolute /
+// A2AbsMinUSD / A2HardCapCNY）；A5 用 off-hour floor/硬顶。多个规则命中时以 "; " 连接，与
+// correlate 的 "A2 成本燃烧" 标签格式一致。无命中返回 ""。
+func MemberAnomalyCause(calls []CallEvent, rules report.RuleSet) string {
+	if len(calls) == 0 {
+		return ""
+	}
+	var labels []string
+	for _, hit := range []report.AnomalyHit{
+		A1(calls, nil, nil, nil, rules),
+		A2(calls, nil, nil, nil, rules),
+		A5(calls, rules),
+	} {
+		if hit.Hit {
+			labels = append(labels, hit.Rule+" "+hit.Name)
+		}
+	}
+	return strings.Join(labels, "; ")
 }
 
 func buildPersonalFact(in report.ReportInput) *report.PersonalFact {
@@ -1764,7 +1798,87 @@ func dataBasedSuggestions(p *report.PersonalFact, j *report.Judgment) []string {
 	return sugs
 }
 
+// buildModelGuidance 个人第五章「场景与合理用模」：场景标注 + 模型选用建议 + 省钱预估（估算，非事实）。
+//
+// 铁律：数字一律来自已算好的事实，不在本层臆造。
+//   - 主用模型名/调用/成本占比 ← PersonalFact（TopModels[0] / HighTierCostRatio / EstCostUSD）。
+//   - 本人单位成本、同岗单位成本 P50 ← TopModelPortrait（采用者中该模型 USD/百万Token）。
+//   - 省钱估算 = 若把本人该模型的单位成本对齐到同岗 P50 所节省的金额（限于"本人单位成本 > 同岗 P50"）。
+//     SaveIsEstimate 恒 true，SaveBasis 记录依据。若本人单位成本已 ≤ 同岗 P50 或样本不足则 Supported=false，
+//     只输出场景标注与说明，不产出臆造的数字。
+//
+// 建议层措辞：本函数给出确定性建议（引用上述数字），供 render 直接展示；LLM（analysis.Generate）另行接收
+// 同一组数字做润色措辞，但其"省多少"必须引用本函数产出的 EstWeeklySaveUSD，不得自行编造。
+func buildModelGuidance(p *report.PersonalFact, mp *report.TopModelPortrait) *report.ModelGuidance {
+	g := &report.ModelGuidance{SaveIsEstimate: true}
+	if p == nil {
+		g.Note = "缺个人事实，不产出模型选用建议。"
+		return g
+	}
+
+	// 主用模型 = 成本最高模型（TopModels[0] 或 TopModel 字段）
+	top := p.TopModel
+	topCallShare := 0.0
+	topCostUSD := 0.0
+	if len(p.TopModels) > 0 {
+		top = p.TopModels[0].Model
+		topCallShare = safeDiv(float64(p.TopModels[0].Calls), float64(p.ReqCount))
+		topCostUSD = p.TopModels[0].CostUSD
+	}
+	if top == "" {
+		top = p.TopModel
+	}
+	g.TopModel = top
+	g.TopModelCallShare = topCallShare
+	g.TopModelCostRatio = p.HighTierCostRatio
+
+	// 场景标注（确定性用模结构，不臆造"代码补全/Agent"等无依据场景名）。
+	sc := "本周主用模型 `" + top + "`"
+	if topCallShare > 0 {
+		sc += "（占调用 " + pctStr(topCallShare) + "）"
+	}
+	if p.HighTierCostRatio > 0 {
+		sc += "，占本周成本 " + pctStr(p.HighTierCostRatio)
+	}
+	g.ScenarioNote = sc + "。"
+
+	// 同岗单位成本对比（事实来源：TopModelPortrait）。
+	if mp == nil || !mp.Supported {
+		g.Recommendation = sc + "；同岗单位成本样本不足，暂不估算降级空间。"
+		g.Note = "同岗单位成本样本不足，不产出省钱预估。"
+		return g
+	}
+	g.PersonUnitCostUSD = mp.PersonUnitCost
+	g.PeerUnitCostP50USD = mp.UnitCostP50
+	g.Supported = true
+	g.ScenarioNote = fmt.Sprintf("%s；同岗采用者该模型单位成本 P50 为 %.2f USD/百万Token（本人 %.2f）。",
+		sc, mp.UnitCostP50, mp.PersonUnitCost)
+
+	// 省钱预估：仅当本人单位成本高于同岗 P50 才估算（有可对齐空间），否则不臆造。
+	if mp.PersonUnitCost <= 0 || mp.UnitCostP50 <= 0 || mp.PersonUnitCost <= mp.UnitCostP50 {
+		g.Recommendation = sc + "；本人单位成本不高于同岗中位，暂无明确降级空间，可不调整模型档位。"
+		g.Note = "本人单位成本 ≤ 同岗 P50，无估算节省。"
+		return g
+	}
+
+	// 若把该模型单位成本对齐同岗 P50，按本周该模型成本折算的节省（上限，标注估算）。
+	// save = topCostUSD * (1 - p50UnitCost / personUnitCost)。
+	saveUSD := topCostUSD * (1 - mp.UnitCostP50/safeDiv(mp.PersonUnitCost, 1))
+	if saveUSD <= 0 {
+		g.Recommendation = sc + "；模型单位成本已接近同岗水平，暂无可估算的降级节省。"
+		return g
+	}
+	g.EstWeeklySaveUSD = saveUSD
+	g.EstWeeklySaveCNY = saveUSD // 占位：渲染层乘汇率覆盖。
+	g.SaveBasis = fmt.Sprintf("按本周主用模型成本 %.2f USD、本人单位成本 %.2f 对同岗 P50 %.2f USD/百万Token 对齐估算。",
+		topCostUSD, mp.PersonUnitCost, mp.UnitCostP50)
+	g.Recommendation = fmt.Sprintf("%s；建议对比同岗多数采用的档位，评估是否可将部分调用降级到更低档模型（灰度对比质量）。",
+		g.ScenarioNote)
+	return g
+}
+
 func fmtK(v float64) string { return fmt.Sprintf("%.0f", v/1000) }
+
 func pctStr(v float64) string {
 	if v < 1 {
 		return fmt.Sprintf("%.1f%%", v*100)

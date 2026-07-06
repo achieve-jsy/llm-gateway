@@ -347,6 +347,12 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 	// （be-eng t10 的 start_ts/end_ts，只取窗口内几十条）并归因回填，再重跑主因关联。
 	// 拉取失败/为空时静默降级（主因列维持「待确认」），绝不中断报告。
 	backfillAnomalyWindowUser(ctx, cli, cfg, scope, rep)
+	// 方向 B：给 TopChanged 每个成员做【成员级】A1/A2/A5 归因并回填主因列（不再依赖「全局窗口热点
+	// user ∈ TopChanged」的脆弱匹配；成员级命中时覆盖粗匹配结果）。零全量拉，仅按 Top5 ≤5 人取本人调用。
+	backfillMemberAnomalyCause(ctx, cli, cfg, scope, rep, rules)
+	// 方案 X（真反馈闭环）：上报命中异常 + 读回真实状态覆盖 AnomalyHit.Status。
+	// 无持久化/接口未建/不可用时静默降级为「待确认」，绝不中断报告。
+	applyAnomalyFeedback(ctx, cli, cfg, scope, rep)
 	// 口径③：以 GetDashboard 为对账基准，校验 total_tokens 同源（均=SUM(prompt+completion+reasoning)，不含 cached；
 	// 禁止混拼 /usage/dashboard/users* 存储列）。差异写入 QA.Alignment 说明。
 	reconcileWithDashboard(ctx, cli, cfg, scope, rep)
@@ -1132,6 +1138,85 @@ func backfillAnomalyWindowUser(ctx context.Context, cli *client.Client, cfg Conf
 	if changed {
 		// 重跑主因关联，把刚回填的 user_id 映射到 TopChangedMember.AnomalyCause。
 		derive.AnomalyAttribution(rep)
+	}
+}
+
+// fetchMemberCalls 按 user_id 精准拉取某位成员当期 [from,to) 的调用行并转成员口径（剔除 service）。
+// 仅 TopChanged 的 ≤5 人调用（量小），不整期全量拉 dept/studio 的 38 万条，保持 t11「事实层走聚合不超时」。
+// 失败（如超过 client.maxLogs 上限）静默降级返回 nil，调用方据此跳过该成员（主因列维持「待确认」）。
+func fetchMemberCalls(ctx context.Context, cli *client.Client, cfg Config, userID string) ([]report.CallEvent, error) {
+	if cli == nil || userID == "" {
+		return nil, nil
+	}
+	// keyType 留空：服务端不做 key_type 过滤，客户端再 nonService 兜底剔 service（与 dept/studio 窗口拉取同口径）。
+	rows, err := cli.FetchLogs(ctx, cfg.From, cfg.To, "", userID, "", "")
+	if err != nil {
+		return nil, err
+	}
+	return nonService(toEvents(rows)), nil
+}
+
+// backfillMemberAnomalyCause 方向 B：给 TopChanged 每个成员做【成员级】A1/A2/A5 归因并回填 AnomalyCause。
+//
+// 根因：correlateTopChangedAnomaly（derive.go L662-700）只把 AnomalyHit.Dimensions["user_id"]（=A2 窗口热点
+// user，成本排名常第 7、且不保证两期都有）匹配到 TopChanged 名单里同 userID 的人；而 buildTopChanged 按
+// |WoWCostPct| 环比绝对值降序取 Top5、只算两期都有的成员 → 热点 user 常不在 Top5 → 主因列全「待确认」。
+//
+// 这里对每个 TopChanged 成员，按其**本人**当期调用流做 A1/A2/A5 判定（MemberAnomalyCause），命中则回填
+// 该成员自己的主因标签（如 "A2 成本燃烧"）。member 级命中时覆盖窗口相关(correlate)的粗匹配结果——成员级
+// 是本列的正确归属口径；未命中时保留既有证据（correlate 的 window_top_user 匹配或空「待确认」）。
+//
+// 保留现有 AnomalyHit 的窗口归因（window_top_user / user_id）作为证据字段，本函数只补 TopChanged 主因列。
+// 失败/为空/样本不足时静默降级，绝不中断报告。
+func backfillMemberAnomalyCause(ctx context.Context, cli *client.Client, cfg Config, scope report.Scope, rep *report.Report, rules report.RuleSet) {
+	if rep == nil || cli == nil {
+		return
+	}
+	// 汇总 dept+studio 的 TopChanged 全部成员 UserID（去重）
+	seen := map[string]bool{}
+	var memberIDs []string
+	for _, uf := range []*report.UnitFact{rep.Fact.Department, rep.Fact.Studio} {
+		if uf == nil {
+			continue
+		}
+		for i := range uf.TopChanged {
+			uid := uf.TopChanged[i].UserID
+			if uid == "" || seen[uid] {
+				continue
+			}
+			seen[uid] = true
+			memberIDs = append(memberIDs, uid)
+		}
+	}
+	if len(memberIDs) == 0 {
+		return
+	}
+	// 成员级归因：按 user 拉取本人调用 → 判定 → 回填（命中时覆盖，未命中保留现有）。
+	for _, uid := range memberIDs {
+		calls, err := fetchMemberCalls(ctx, cli, cfg, uid)
+		if err != nil {
+			if cfg.Debug {
+				log.Printf("member anomaly cause: user %s fetch failed: %v", uid, err)
+			}
+			continue
+		}
+		if len(calls) == 0 {
+			continue
+		}
+		cause := derive.MemberAnomalyCause(calls, rules)
+		if cause == "" {
+			continue
+		}
+		for _, uf := range []*report.UnitFact{rep.Fact.Department, rep.Fact.Studio} {
+			if uf == nil {
+				continue
+			}
+			for i := range uf.TopChanged {
+				if uf.TopChanged[i].UserID == uid {
+					uf.TopChanged[i].AnomalyCause = cause
+				}
+			}
+		}
 	}
 }
 

@@ -142,3 +142,56 @@ func TestMemberAggRowNewFields(t *testing.T) {
 		t.Fatalf("unexpected ToMemberAgg mapping: %+v", ma)
 	}
 }
+
+// TestFetchLogsSubWindow 验证子窗拉取发 start_ts/end_ts（timestamptz 半开区间），且绝不发日粒度 start/end。
+// 覆盖 be-eng t10 服务端子窗端口的客户端入口，并锁定「命中窗口按精准时间拉取而非整天」的契约。
+func TestFetchLogsSubWindow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/usage/report/logs" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		q := r.URL.Query()
+		if q.Get("start_ts") != "2026-08-28T08:58:00+08:00" || q.Get("end_ts") != "2026-08-28T09:13:00+08:00" {
+			t.Fatalf("expected start_ts/end_ts sub-window, got %s", r.URL.RawQuery)
+		}
+		// 子窗模式不允许混用日粒度 start/end。
+		if q.Get("start") != "" || q.Get("end") != "" {
+			t.Fatalf("sub-window must not send day start/end: %s", r.URL.RawQuery)
+		}
+		if q.Get("dept_id") != "d1" || q.Get("studio_id") != "s1" {
+			t.Fatalf("expected dept_id/studio_id filters, got %s", r.URL.RawQuery)
+		}
+		_ = json.NewEncoder(w).Encode(logsResponse{
+			Rows:  []LogRow{{RequestID: "r1", KeyType: "member", UserID: "u1", TotalTokens: 1000}},
+			Total: 1, Page: 1, PageSize: 1,
+		})
+	}))
+	defer server.Close()
+
+	rows, err := New(server.URL, "token").FetchLogsSubWindow(context.Background(), "2026-08-28T08:58:00+08:00", "2026-08-28T09:13:00+08:00", "member", "", "d1", "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].RequestID != "r1" {
+		t.Fatalf("unexpected rows: %+v", rows)
+	}
+}
+
+// TestFetchLogsDayGranularity 验证日粒度 FetchLogs 仍发 start/end（向后兼容），不发 start_ts/end_ts。
+func TestFetchLogsDayGranularity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("start") != "2026-08-28" || q.Get("end") != "2026-08-29" {
+			t.Fatalf("expected day start/end, got %s", r.URL.RawQuery)
+		}
+		if q.Get("start_ts") != "" || q.Get("end_ts") != "" {
+			t.Fatalf("day mode must not send start_ts/end_ts: %s", r.URL.RawQuery)
+		}
+		_ = json.NewEncoder(w).Encode(logsResponse{Rows: []LogRow{{RequestID: "r1"}}, Total: 1, Page: 1, PageSize: 1})
+	}))
+	defer server.Close()
+
+	if _, err := New(server.URL, "token").FetchLogs(context.Background(), "2026-08-28", "2026-08-29", "member", "", "d1", "s1"); err != nil {
+		t.Fatal(err)
+	}
+}

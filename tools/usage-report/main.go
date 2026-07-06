@@ -1083,11 +1083,13 @@ func backfillAnomalyWindowUser(ctx context.Context, cli *client.Client, cfg Conf
 		if a.Dimensions["user_id"] != "" {
 			continue // 已即时归因（detail 全量已有）
 		}
-		// 窗口时间沿用报告时区；用 timestamptz 子窗半开区间精准拉取（依赖 be-eng t10 的 start_ts/end_ts），
+		// 窗口时间沿用报告时区（shLoc=Asia/Shanghai）；用 timestamptz 子窗半开区间精准拉取（依赖 be-eng t10 的 start_ts/end_ts），
 		// 服务端只返回 [WindowStart, WindowEnd) 内的行（几十条），不再拉整天（可达 15 万条）。
+		// 注意：务必用带显式时区偏移的 RFC3339（+08:00）而非裸 "2006-01-02 15:04:05"——服务端 parseReportLogsTS 用
+		// time.Parse（UTC），裸格式会把 Shanghai 的 08:58 误解析成 08:58 UTC（=16:58 +08:00），子窗整体漂移 8 小时。
 		ws, we := a.WindowStart.In(shLoc), a.WindowEnd.In(shLoc)
-		startTS := ws.Format("2006-01-02 15:04:05")
-		endTS := we.Format("2006-01-02 15:04:05")
+		startTS := ws.Format(time.RFC3339)
+		endTS := we.Format(time.RFC3339)
 		rows, err := fetchScopeLogsSubWindow(ctx, cli, cfg, scope, startTS, endTS)
 		if err != nil || len(rows) == 0 {
 			if cfg.Debug {

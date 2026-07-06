@@ -1004,6 +1004,12 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/usage/report/service-keys", guard(rbac.PermUsageViewScoped), usageH2.ReportServiceKeys)
 		// 预算执行：按 scope(studio|dept)+month 返回月度配额/实际/百分比（工作室「一页摘要」预算执行行）。
 		adminGroup.GET("/usage/report/budget-exec", guard(rbac.PermUsageViewScoped), usageH2.ReportBudgetExec)
+		// 方案X 异常反馈闭环（真人工反馈）：批量 upsert 命中异常（默认「待确认」，不覆盖用户反馈态）。
+		adminGroup.POST("/usage/report/anomalies", guard(rbac.PermUsageViewScoped), usageH2.ReportAnomalyUpsert)
+		// 方案X 异常反馈闭环：读回指定范围+时间窗的真实状态（报告侧覆盖 AnomalyHit.Status）。
+		adminGroup.GET("/usage/report/anomaly-status", guard(rbac.PermUsageViewScoped), usageH2.ReportAnomalyStatus)
+		// 方案X 异常反馈闭环：人工反馈状态（校验5态枚举，写 status/feedback_at/feedback_by/reason）。
+		adminGroup.POST("/usage/report/anomalies/:id/feedback", guard(rbac.PermUsageViewScoped), usageH2.ReportAnomalyFeedback)
 	}
 
 	// 内部接口（InternalAuth 已在 internalGroup 上，复用）

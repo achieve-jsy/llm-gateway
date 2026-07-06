@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -992,6 +993,51 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 	})
 }
 
+// parseReportLogsTS 解析子窗精确时间，兼容 RFC3339（如 2026-08-28T08:58:00+08:00）与
+// 本地裸格式 2006-01-02 15:04:05（无时区时按 PostgreSQL 会话时区解释）。
+// 解析仅用于校验合法性（非法串让上层返回 400），实际过滤仍以原串交给 ?::timestamptz 解析。
+func parseReportLogsTS(s string) (time.Time, error) {
+	layouts := []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid time %q, want RFC3339 or 2006-01-02 15:04:05", s)
+}
+
+// reportLogsTimeWindow 构造 ReportLogs 的时间窗口过滤条件（SQL + 绑定参数）。
+//   - start_ts/end_ts 成对提供（RFC3339 或 2006-01-02 15:04:05 精确时间）→ 优先使用
+//     timestamptz 子窗半开区间 [start_ts, end_ts)，即
+//     `call_logs.ts >= ?::timestamptz AND call_logs.ts < ?::timestamptz`。
+//     用途：detail 两阶段按窗精准拉取仅命中窗口内的少量行，而非整日（命中日可达 15 万条）。
+//   - 两者都不传 → 保持既有日粒度行为（向后兼容）：start/end 为 YYYY-MM-DD，
+//     取 [start 天起, end+1 天止) 整天，`call_logs.ts >= ?::date AND call_logs.ts < (?::date + INTERVAL '1 day')`。
+//   - 只传其一 → 报错（成对使用，避免语义歧义）；start_ts≥end_ts 也报错。
+func reportLogsTimeWindow(startStr, endStr, startTS, endTS string) (string, []interface{}, error) {
+	dayCond := "call_logs.ts >= ?::date AND call_logs.ts < (?::date + INTERVAL '1 day')"
+	tsCond := "call_logs.ts >= ?::timestamptz AND call_logs.ts < ?::timestamptz"
+
+	if startTS == "" && endTS == "" {
+		return dayCond, []interface{}{startStr, endStr}, nil
+	}
+	if startTS == "" || endTS == "" {
+		return "", nil, fmt.Errorf("start_ts/end_ts 需成对提供（或不传用 start/end 日粒度）")
+	}
+	s, err := parseReportLogsTS(startTS)
+	if err != nil {
+		return "", nil, fmt.Errorf("start_ts: %w", err)
+	}
+	e, err := parseReportLogsTS(endTS)
+	if err != nil {
+		return "", nil, fmt.Errorf("end_ts: %w", err)
+	}
+	if !s.Before(e) {
+		return "", nil, fmt.Errorf("start_ts 必须早于 end_ts（半开区间 [start,end)）")
+	}
+	return tsCond, []interface{}{startTS, endTS}, nil
+}
+
 // ReportLogs GET /api/v1/usage/report/logs
 // 离线用量报告的专用明细接口：keyset 分页（无深 OFFSET，大表稳定），通过稳定键过滤：
 //   - personal    → user_id（精确）
@@ -1009,6 +1055,8 @@ func (h *UsageHandler) ReportLogs(c *gin.Context) {
 
 	startStr := c.DefaultQuery("start", time.Now().AddDate(0, -1, 0).Format("2006-01-02"))
 	endStr := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
+	startTS := c.Query("start_ts")
+	endTS := c.Query("end_ts")
 	filterUserID := c.Query("user_id")
 	filterDeptID := c.Query("dept_id")
 	filterStudioID := c.Query("studio_id")
@@ -1021,8 +1069,15 @@ func (h *UsageHandler) ReportLogs(c *gin.Context) {
 
 	db := h.db.WithContext(c.Request.Context())
 
+	// 时间窗口（优先 timestamptz 子窗，否则日粒度，向后兼容）。
+	timeCond, timeArgs, err := reportLogsTimeWindow(startStr, endStr, startTS, endTS)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	base := db.Table("call_logs").
-		Where("call_logs.ts >= ?::date AND call_logs.ts < (?::date + INTERVAL '1 day')", startStr, endStr).
+		Where(timeCond, timeArgs...).
 		Scopes(policy.UsagePolicy{}.QueryScope(rbac.GetActor(c)))
 
 	if filterUserID != "" {

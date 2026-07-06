@@ -192,6 +192,30 @@ func orDash(s string) string {
 	return s
 }
 
+// memberAdvice 依据 TopChanged 成员的事实（成本环比/承担模型/命中主因）规则生成具体建议（具体到人+动作）。
+// 数字来自 facts（WoWCostPct/AnomalyCause/TopModel），措辞为规则生成，不硬编码具体值。
+func memberAdvice(tc report.TopChangedMember) string {
+	var parts []string
+	switch {
+	case tc.WoWCostPct >= 30:
+		parts = append(parts, "确认是否存在后台脚本/循环调用或异常流量，必要时限流")
+	case tc.WoWCostPct <= -30:
+		parts = append(parts, "成本环比下降明显，确认是否用量减少或合理优化")
+	case tc.WoWCostPct > 0:
+		parts = append(parts, "成本小幅上升，关注用量趋势")
+	case tc.WoWCostPct < 0:
+		parts = append(parts, "成本小幅下降，保持现状")
+	default:
+		parts = append(parts, "成本持平，保持现状")
+	}
+	if tc.AnomalyCause != "" {
+		parts = append(parts, "命中异常"+tc.AnomalyCause+"，建议优先处理")
+	} else if tc.TopModel != "" {
+		parts = append(parts, "主用模型"+tc.TopModel)
+	}
+	return strings.Join(parts, "；")
+}
+
 // signedPct 显示带符号的百分比（周环比用），0 显示为 0.0%。
 func signedPct(v float64) string {
 	if v == 0 {
@@ -412,23 +436,35 @@ func writePersonalSections(b *strings.Builder, r *report.Report) {
 	// 模板要求「异常提示含反馈入口」。此处输出 A1–A5，尾部给出反馈入口占位。
 	fmt.Fprintf(b, "\n## 六、异常提示\n\n")
 	if len(j.Anomalies) > 0 {
+		// 模板只列【命中】异常（带阈值/实际/基线/影响成本/可能原因/反馈入口）；未命中的在末尾简要注记，不占主清单。
+		var hits, misses []report.AnomalyHit
 		for _, a := range j.Anomalies {
-			fmt.Fprintf(b, "- [%s] **%s**（%s）\n", a.Rule, a.Name, a.Severity)
 			if a.Hit {
-				fmt.Fprintf(b, "  - `actual=%.2f` · `threshold=%.2f` · `baseline=%.2f`（%s）\n", a.ActualValue, a.ThresholdValue, a.BaselineValue, a.BaselineWindow)
-				if a.ImpactCostUSD > 0 {
-					fmt.Fprintf(b, "  - 影响成本 `%.2f` USD · 超支 `%.2f` USD\n", a.ImpactCostUSD, a.ExcessCostUSD)
-				}
-				for _, e := range a.Evidence {
-					fmt.Fprintf(b, "  - %s: `%s`\n", e.Field, e.Value)
-				}
-			} else {
-				for _, e := range a.Evidence {
-					if e.Field == "basis" {
-						fmt.Fprintf(b, "  - 未命中：%s\n", e.Value)
-					}
-				}
+				hits = append(hits, a)
+			} else if !a.NotComputed {
+				misses = append(misses, a)
 			}
+		}
+		for _, a := range hits {
+			fmt.Fprintf(b, "- [%s] **%s**（%s）\n", a.Rule, a.Name, a.Severity)
+			fmt.Fprintf(b, "  - `actual=%.2f` · `threshold=%.2f` · `baseline=%.2f`（%s）\n", a.ActualValue, a.ThresholdValue, a.BaselineValue, a.BaselineWindow)
+			if a.ImpactCostUSD > 0 {
+				fmt.Fprintf(b, "  - 影响成本 `%.2f` USD · 超支 `%.2f` USD\n", a.ImpactCostUSD, a.ExcessCostUSD)
+			}
+			// 保留完整证据链（含可能原因/判定依据）
+			for _, e := range a.Evidence {
+				fmt.Fprintf(b, "  - %s: `%s`\n", e.Field, e.Value)
+			}
+		}
+		if len(hits) == 0 {
+			fmt.Fprintf(b, "- 无异常命中。\n")
+		}
+		if len(misses) > 0 {
+			missNames := make([]string, 0, len(misses))
+			for _, m := range misses {
+				missNames = append(missNames, m.Rule)
+			}
+			fmt.Fprintf(b, "- 另有 %d 条规则未命中（判定未触发，不列入异常清单）：%s\n", len(misses), strings.Join(missNames, "、"))
 		}
 	} else {
 		fmt.Fprintf(b, "- 无异常命中。\n")
@@ -647,12 +683,17 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 	w("\n## 六、建议\n\n")
 	hasSuggestion := false
 	if len(u.TopChanged) > 0 {
-		w("- 关注成本环比变化最大的成员（见第四章），建议核查原因\n")
+		// 具体到人+动作：对重点变化成员逐条给建议（结合其岗位/成本环比/承担模型/命中主因）。
+		w("- 重点变化成员建议：\n")
+		for _, tc := range u.TopChanged {
+			w("  - 员工%d（%s，成本环比 %s）：%s\n",
+				tc.Idx, orDash(tc.JobCategory), signedPct(tc.WoWCostPct), memberAdvice(tc))
+		}
 		hasSuggestion = true
 	}
 	// 若部门整体缓存命中偏低，给出优化提示
 	if u.Member.CacheHitRate > 0 && u.Member.CacheHitRate < 0.2 {
-		w("- 部门整体缓存命中率偏低（%s），建议各岗位关注 Prompt 缓存策略\n", pctP(u.Member.CacheHitRate))
+		w("- 部门整体缓存命中率偏低（%s），建议统一可缓存的提示词模板、提升缓存复用\n", pctP(u.Member.CacheHitRate))
 		hasSuggestion = true
 	}
 	if hitCount == 0 {

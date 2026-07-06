@@ -337,3 +337,54 @@ func TestRenderMDDeptAnomalyStateMachineDegraded(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderMDDeptTopChangedAdvice 验证部门第六章「建议」具体到人+动作：
+// 对重点变化成员逐条给出建议（结合岗位/成本环比/承担模型/命中主因），替代原先泛泛的「关注成本环比变化最大的成员」文案。
+func TestRenderMDDeptTopChangedAdvice(t *testing.T) {
+	r := markdownReport("department")
+	r.Fact.Department.TopChanged = []report.TopChangedMember{
+		{Idx: 1, JobCategory: "工程师", WoWCostPct: 120.0, TopModel: "gpt-4o", AnomalyCause: "A2 成本燃烧"},
+		{Idx: 2, JobCategory: "设计", WoWCostPct: -30.0, AnomalyCause: ""},
+	}
+	md := RenderMD(&r)
+	for _, want := range []string{
+		"- 重点变化成员建议：",
+		"- 员工1（工程师，成本环比 +120.0%）：确认是否存在后台脚本/循环调用或异常流量，必要时限流；命中异常A2 成本燃烧，建议优先处理",
+		"- 员工2（设计，成本环比 -30.0%）：成本环比下降明显，确认是否用量减少或合理优化",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("department 六、建议 per-member advice missing %q:\n%s", want, md)
+		}
+	}
+	if strings.Contains(md, "关注成本环比变化最大的成员") {
+		t.Errorf("部门建议仍是泛泛文案，应具体到人+动作:\n%s", md)
+	}
+}
+
+// TestRenderMDPersonalAnomalyHitsOnly 验证个人第六章「异常提示」对齐模板：只列【命中】异常
+// （带阈值/实际/基线/影响成本/完整证据链），未命中的在末尾简要注记、不再作为主体异常清单条目。
+func TestRenderMDPersonalAnomalyHitsOnly(t *testing.T) {
+	r := markdownReport("personal")
+	r.Judgment.Anomalies = []report.AnomalyHit{
+		{Rule: "A2", Name: "成本燃烧", Severity: "P1", Hit: true,
+			ActualValue: 120, ThresholdValue: 100, BaselineValue: 80, BaselineWindow: "上周",
+			ImpactCostUSD: 500, ExcessCostUSD: 200,
+			Evidence: []report.Evidence{{Field: "cause", Value: "后台脚本循环调用"}}},
+		{Rule: "A1", Name: "程序失控", Severity: "P2", Hit: false},
+	}
+	md := RenderMD(&r)
+	for _, want := range []string{
+		"- [A2] **成本燃烧**（P1）",
+		"  - `actual=120.00` · `threshold=100.00` · `baseline=80.00`（上周）",
+		"  - 影响成本 `500.00` USD · 超支 `200.00` USD",
+		"  - cause: `后台脚本循环调用`",
+		"- 另有 1 条规则未命中（判定未触发，不列入异常清单）：A1",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("personal 六、异常提示 hits-only missing %q:\n%s", want, md)
+		}
+	}
+	if strings.Contains(md, "- [A1]") {
+		t.Errorf("未命中 A1 仍作为主体异常条目列出（模板只列命中）:\n%s", md)
+	}
+}

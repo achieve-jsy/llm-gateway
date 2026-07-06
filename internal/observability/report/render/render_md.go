@@ -658,25 +658,29 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 
 	// 五、异常处置
 	w("\n## 五、异常处置\n\n")
-	hitCount, missCount := 0, 0
+	var hitAnoms, missAnoms []report.AnomalyHit
 	for _, a := range j.Anomalies {
 		if a.Hit {
-			hitCount++
+			hitAnoms = append(hitAnoms, a)
 		} else if !a.NotComputed {
-			missCount++
+			missAnoms = append(missAnoms, a)
 		}
 	}
-	w("- 命中 %d 条 | 未命中 %d 条\n", hitCount, missCount)
-	// 异常状态机计数降级：AnomalyHit 尚无「已确认/已处理」状态字段，状态机计数暂缺数据；此处仅统计命中/未命中，不硬造状态。
-	w("- 状态机计数暂缺数据：异常记录尚无「已确认/已处理」状态字段，当前仅统计命中/未命中；确认/处理闭环待后续扩展。\n")
-	for _, a := range j.Anomalies {
-		if a.Hit {
-			detail := a.Name
-			if len(a.Evidence) > 0 {
-				detail += "（" + a.Evidence[0].Value + "）"
-			}
-			w("- [%s] %s —— %s\n", a.Severity, a.Rule, detail)
+	w("- 命中 %d 条 | 未命中 %d 条\n", len(hitAnoms), len(missAnoms))
+	// 异常状态机 5 态计数（t14 report.CountAnomalyStatus；离线默认「待确认」，反馈闭环读回真实状态后自动归桶）
+	sc := report.CountAnomalyStatus(hitAnoms)
+	w("- 异常状态机：待确认=%d | 已确认正常=%d | 修复中=%d | 已恢复=%d | 误报=%d\n",
+		sc.Pending, sc.ConfirmedOK, sc.Fixing, sc.Recovered, sc.FalsePos)
+	for _, a := range hitAnoms {
+		detail := a.Name
+		if len(a.Evidence) > 0 {
+			detail += "（" + a.Evidence[0].Value + "）"
 		}
+		status := a.Status
+		if status == "" {
+			status = report.AnomalyStatusPending
+		}
+		w("- [%s] %s —— %s（状态：%s）\n", a.Severity, a.Rule, detail, status)
 	}
 
 	// 六、建议
@@ -696,7 +700,7 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 		w("- 部门整体缓存命中率偏低（%s），建议统一可缓存的提示词模板、提升缓存复用\n", pctP(u.Member.CacheHitRate))
 		hasSuggestion = true
 	}
-	if hitCount == 0 {
+	if len(hitAnoms) == 0 {
 		w("- 本周期无规则型异常，各岗位用量正常，保持现状\n")
 		hasSuggestion = true
 	}
@@ -833,11 +837,15 @@ func writeStudioSections(b *strings.Builder, r *report.Report) {
 			if a.ImpactCostUSD > 0 {
 				impact = cny(a.ImpactCostUSD, rate)
 			}
-			w("| %s | %s | %s | %s | 待确认 | 应用Owner | %s | %s |\n",
-				riskObject(a), win, a.Rule+" "+a.Name, impact, riskAction(a.Rule), shortDate(r.Meta.Period.To))
+			status := a.Status
+			if status == "" {
+				status = report.AnomalyStatusPending
+			}
+			w("| %s | %s | %s | %s | %s | 应用Owner | %s | %s |\n",
+				riskObject(a), win, a.Rule+" "+a.Name, impact, status, riskAction(a.Rule), shortDate(r.Meta.Period.To))
 		}
-		// 状态机计数降级：异常记录尚无「已确认/已处理」状态字段，状态列统一「待确认」，状态机计数暂缺数据。
-		w("\n- 注：「状态」列当前统一为「待确认」（异常记录尚无「已确认/已处理」状态字段，状态机计数暂缺数据，待反馈闭环扩展）。\n")
+		// 状态列读 AnomalyHit.Status（t14 状态机 5 态；离线默认「待确认」，反馈闭环读回真实状态回填）。
+		w("\n- 注：「状态」为异常状态机 5 态（待确认/已确认正常/修复中/已恢复/误报），离线默认「待确认」，接入反馈闭环后按真实状态回填。\n")
 	}
 
 	// 模型分析（LLM 生成；rep.ModelAnalysis==nil 时跳过，保持现状）—— 四、风险与行动清单之后

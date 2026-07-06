@@ -319,21 +319,46 @@ func TestRenderMDDeptHighTierLabel(t *testing.T) {
 	}
 }
 
-// TestRenderMDDeptAnomalyStateMachineDegraded 验证部门五章「异常处置」在 AnomalyHit 无「已确认/已处理」状态字段时，
-// 按现有 Hit/NotComputed 统计命中/未命中，并对状态机计数做如实降级（注明「状态机计数暂缺数据」，不硬造状态）。
-func TestRenderMDDeptAnomalyStateMachineDegraded(t *testing.T) {
+// TestRenderMDDeptAnomalyStateMachine 验证部门五章「异常处置」消费 t14 的 AnomalyHit.Status：
+// 输出 5 态计数（CountAnomalyStatus，仅命中记录参与）+ 每条命中异常的状态；未命中不参与 5 态计数。
+func TestRenderMDDeptAnomalyStateMachine(t *testing.T) {
 	r := markdownReport("department")
 	r.Judgment.Anomalies = []report.AnomalyHit{
 		{Rule: "A1", Name: "程序失控", Severity: "P1", Hit: true},
-		{Rule: "A2", Name: "成本燃烧", Severity: "P2", Hit: false},
+		{Rule: "A2", Name: "成本燃烧", Severity: "P2", Hit: true, Status: report.AnomalyStatusFixing},
+		{Rule: "A3", Name: "重试循环", Severity: "P3", Hit: false, Status: report.AnomalyStatusConfirmedOK},
 	}
 	md := RenderMD(&r)
 	for _, want := range []string{
-		"- 命中 1 条 | 未命中 1 条",
-		"- 状态机计数暂缺数据：异常记录尚无「已确认/已处理」状态字段",
+		"- 命中 2 条 | 未命中 1 条",
+		"- 异常状态机：待确认=1 | 已确认正常=0 | 修复中=1 | 已恢复=0 | 误报=0",
+		"- [P1] A1 —— 程序失控（状态：待确认）",
+		"- [P2] A2 —— 成本燃烧（状态：修复中）",
 	} {
 		if !strings.Contains(md, want) {
-			t.Errorf("dept anomaly state-machine degrade missing %q:\n%s", want, md)
+			t.Errorf("dept anomaly state machine missing %q:\n%s", want, md)
+		}
+	}
+	if strings.Contains(md, "已确认正常=1") {
+		t.Errorf("未命中 A3 不应计入异常状态机 5 态计数（仅命中记录参与）:\n%s", md)
+	}
+}
+
+// TestRenderMDStudioRiskStatus 验证工作室第四章「风险与行动清单」状态列读 AnomalyHit.Status（t14 5 态），
+// 而非硬编码「待确认」；空状态降级为「待确认」。
+func TestRenderMDStudioRiskStatus(t *testing.T) {
+	r := markdownReport("studio")
+	r.Judgment.Anomalies = []report.AnomalyHit{
+		{Rule: "A2", Name: "成本燃烧", Severity: "P2", Hit: true, Status: report.AnomalyStatusRecovered},
+		{Rule: "A1", Name: "程序失控", Severity: "P1", Hit: true, Status: report.AnomalyStatusPending},
+	}
+	md := RenderMD(&r)
+	for _, want := range []string{
+		"| 已恢复 | 应用Owner |",
+		"| 待确认 | 应用Owner |",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("studio 风险清单状态列未读 AnomalyHit.Status: missing %q:\n%s", want, md)
 		}
 	}
 }

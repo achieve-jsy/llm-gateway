@@ -414,8 +414,9 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 		rep.Judgment.NotComputed = append(rep.Judgment.NotComputed, nc)
 	}
 	// 两阶段按窗精准拉取：后续主因列点位需要 AnomalyHit.Dimensions["user_id"]。A1/A2 命中但尚未回填
-	// user_id 时（如粒度/降级使 derive 无法即时归因），按命中窗口精准拉取该窗口日期行、过滤至窗口并回填，
-	// 再重跑主因关联。拉取失败/为空时静默降级（主因列维持「待确认」），绝不中断报告。
+	// user_id 时（如粒度/降级使 derive 无法即时归因），按命中窗口 timestamptz 子窗半开区间精准拉取
+	// （be-eng t10 的 start_ts/end_ts，只取窗口内几十条）并归因回填，再重跑主因关联。
+	// 拉取失败/为空时静默降级（主因列维持「待确认」），绝不中断报告。
 	backfillAnomalyWindowUser(ctx, cli, cfg, scope, rep)
 	// 口径③：以 GetDashboard 为对账基准，校验 total_tokens 同源（均=SUM(prompt+completion+reasoning)，不含 cached；
 	// 禁止混拼 /usage/dashboard/users* 存储列）。差异写入 QA.Alignment 说明。
@@ -936,7 +937,42 @@ func fetchScopeLogsWindow(ctx context.Context, cli *client.Client, cfg Config, s
 	return out, nil
 }
 
-// fetchMemberAggForScope 用成员聚合(/usage/report/members)按 scope 拉取每人一行的加法/计数核心（零明细）。
+// fetchScopeLogsSubWindow 按 timestamptz 子窗半开区间 [startTS, endTS) 精准拉取调用行（detail 两阶段命中窗口用）。
+// 依赖 be-eng t10：/usage/report/logs 支持 start_ts/end_ts（RFC3339 或 2006-01-02 15:04:05），
+// 服务端按 call_logs.ts>=?::timestamptz AND ts<?::timestamptz 过滤，只返回窗口内几十条而非整天数万条。
+// 与 fetchScopeLogsWindow 同口径：personal 传 user_id；department 传 dept_id；studio 传 studio_id。
+func fetchScopeLogsSubWindow(ctx context.Context, cli *client.Client, cfg Config, scope report.Scope, startTS, endTS string) ([]client.LogRow, error) {
+	userID, deptID, studioID := "", "", ""
+	switch cfg.Level {
+	case "personal":
+		userID = scope.ID
+	case "department":
+		deptID = scope.DeptID
+	case "studio":
+		studioID = scope.StudioID
+	}
+	rows, err := cli.FetchLogsSubWindow(ctx, startTS, endTS, cfg.KeyType, userID, deptID, studioID)
+	if err != nil {
+		return nil, err
+	}
+	var out []client.LogRow
+	for _, r := range rows {
+		switch cfg.Level {
+		case "personal":
+			if cfg.Scope != "" && r.UserID != cfg.Scope {
+				continue
+			}
+			if r.KeyType == "service" {
+				continue
+			}
+		case "department", "studio":
+			// 范围过滤由服务端 /usage/report/logs 完成：dept_id 双 ID 归一 / studio_id。
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
 // 与 fetchScopeLogsWindow 同口径：personal 传 user_id；department 传 dept_id（服务端做双 ID 归一）；studio 传 studio_id。
 // 返回的 MemberAgg 只含加法/计数子集（无日期/模型/key 维度），供人工层「按人统计 + 逐层横向对比」与事实层加法核心；
 // A1–A5/模型归因/ServiceKey/TopModels 等明细依赖项在 agg 模式下由 derive 降级（NotComputed/空+注记）。
@@ -1021,9 +1057,10 @@ func getTopUserFromRows(rows []client.LogRow) (uid string, costShare float64) {
 
 // backfillAnomalyWindowUser 两阶段「按窗精准拉取归因」装配入口（在 derive.Derive 之后调用）。
 // 阶段一：A1/A2 判定（含 bucket 模式）产出 AnomalyHit.WindowStart/WindowEnd（结构化命中窗口）；
-// 阶段二：命中但 Dimensions["user_id"] 仍空的 A1/A2，用窗口时间精准拉取该窗口日期调用行，
+// 阶段二：命中但 Dimensions["user_id"] 仍空的 A1/A2，用窗口时间 timestamptz 子窗半开区间
 //
-//	过滤至 [WindowStart, WindowEnd] 子窗，按成本归因到 top user 回填 user_id/user_id_basis/user_cost_share，
+//	[WindowStart, WindowEnd) 精准拉取该窗口调用行（be-eng t10 的 start_ts/end_ts，只取窗口内几十条），
+//	按成本归因到 top user 回填 user_id/user_id_basis/user_cost_share，
 //	最后重跑 derive.AnomalyAttribution 使 TopChanged 主因列点亮。
 //
 // 失败/为空/无归属时静默降级（主因列维持「待确认」），绝不中断报告。
@@ -1046,28 +1083,26 @@ func backfillAnomalyWindowUser(ctx context.Context, cli *client.Client, cfg Conf
 		if a.Dimensions["user_id"] != "" {
 			continue // 已即时归因（detail 全量已有）
 		}
-		// 窗口时间沿用报告时区；按天粒度拉取（/usage/report/logs 仅支持日过滤），端到端窗口外行在内存过滤。
+		// 窗口时间沿用报告时区；用 timestamptz 子窗半开区间精准拉取（依赖 be-eng t10 的 start_ts/end_ts），
+		// 服务端只返回 [WindowStart, WindowEnd) 内的行（几十条），不再拉整天（可达 15 万条）。
 		ws, we := a.WindowStart.In(shLoc), a.WindowEnd.In(shLoc)
-		fromDay := ws.Format("2006-01-02")
-		toDay := we.Format("2006-01-02")
-		rows, err := fetchScopeLogsWindow(ctx, cli, cfg, scope, fromDay, toDay)
+		startTS := ws.Format("2006-01-02 15:04:05")
+		endTS := we.Format("2006-01-02 15:04:05")
+		rows, err := fetchScopeLogsSubWindow(ctx, cli, cfg, scope, startTS, endTS)
 		if err != nil || len(rows) == 0 {
 			if cfg.Debug {
-				log.Printf("two-stage window pull: rule %s window %s~%s: %d rows, err=%v", a.Rule, fromDay, toDay, len(rows), err)
+				log.Printf("two-stage subwindow pull: rule %s window %s~%s: %d rows, err=%v", a.Rule, startTS, endTS, len(rows), err)
 			}
 			continue
 		}
-		// 过滤至命中窗口 [ws, we]（含端点）内的调用（且剔除 service，成员口径同 A1–A5），再归因。
+		// 子窗已按半开区间返回，端到端复检剔 service（成员口径同 A1–A5），归因到窗口成本最高 user。
 		windowCalls := make([]report.CallEvent, 0, len(rows))
 		for _, r := range rows {
 			ce := r.ToCallEvent()
 			if ce.KeyType == "service" {
 				continue // service 不参与异常判定/归因（同 derive 对 in.Calls 的 nonService 前提）
 			}
-			ts := ce.TS
-			if !ts.Before(ws) && !ts.After(we) {
-				windowCalls = append(windowCalls, ce)
-			}
+			windowCalls = append(windowCalls, ce)
 		}
 		if len(windowCalls) == 0 {
 			continue

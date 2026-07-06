@@ -311,34 +311,63 @@ func isRetryable(err error) bool {
 // 服务端声明 total 超上限或最终未拉全时返回错误，不返回部分数据。
 // csv 参数：userID→user_id（personal），deptID→dept_id（department），studioID→studio_id（studio）。
 func (c *Client) FetchLogs(ctx context.Context, from, to, keyType, userID, deptID, studioID string) ([]LogRow, error) {
+	return c.fetchLogsPaged(ctx, func(page, cursor string, useKeyset bool) (map[string]string, bool) {
+		q, hasCursor := c.logsQuery(page, cursor, useKeyset, keyType, userID, deptID, studioID)
+		// 日粒度时间窗口 [from, to)：服务端 start/end 按 ::date 过滤。
+		q["start"] = from
+		q["end"] = to
+		return q, hasCursor
+	})
+}
+
+// FetchLogsSubWindow 拉取调用明细（分页 ≤ maxPageSize，上限 c.maxLogs 条）。
+// 时间窗口为 timestamptz 子窗半开区间 [startTS, endTS)（服务端 start_ts/end_ts 按 ::timestamptz 过滤，
+// 由 be-eng t10 提供），用于 detail 两阶段命中窗口的按窗精准拉取（只取窗口内几十条，而非整天数万条）。
+// startTS/endTS 需为 RFC3339（如 2026-08-28T08:58:00+08:00）或 "2006-01-02 15:04:05"。
+func (c *Client) FetchLogsSubWindow(ctx context.Context, startTS, endTS, keyType, userID, deptID, studioID string) ([]LogRow, error) {
+	return c.fetchLogsPaged(ctx, func(page, cursor string, useKeyset bool) (map[string]string, bool) {
+		q, hasCursor := c.logsQuery(page, cursor, useKeyset, keyType, userID, deptID, studioID)
+		q["start_ts"] = startTS
+		q["end_ts"] = endTS
+		return q, hasCursor
+	})
+}
+
+// logsQuery 构造 ReportLogs 的通用分页/稳定键查询参数（不含时间窗口）。hasCursor 表示是否带 keyset cursor。
+func (c *Client) logsQuery(page, cursor string, useKeyset bool, keyType, userID, deptID, studioID string) (map[string]string, bool) {
+	q := map[string]string{
+		"page": page, "page_size": strconv.Itoa(maxPageSize),
+	}
+	if useKeyset {
+		q["cursor"] = cursor
+	}
+	if keyType != "" {
+		q["key_type"] = keyType
+	}
+	// 稳定键：新端点只接受 user_id/dept_id/studio_id。deptName 旧路径废弃。
+	if userID != "" {
+		q["user_id"] = userID
+	}
+	if deptID != "" {
+		q["dept_id"] = deptID
+	}
+	if studioID != "" {
+		q["studio_id"] = studioID
+	}
+	return q, useKeyset
+}
+
+// fetchLogsPaged 执行 ReportLogs 的 keyset 分页拉取；query 负责注入每页的时间窗口与稳定键参数。
+// 先以首屏（无 cursor）探测服务端 keyset：支持则后续带 cursor 逐页拉到底，无深 OFFSET。
+func (c *Client) fetchLogsPaged(ctx context.Context, query func(page, cursor string, useKeyset bool) (map[string]string, bool)) ([]LogRow, error) {
 	var out []LogRow
 	var total int64 = -1
 	path := "/usage/report/logs"
-	// 先以首屏（无 cursor）探测服务端 keyset：支持则后续带 cursor 逐页拉到底，无深 OFFSET。
 	page := 1
 	cursor := ""
 	useKeyset := false
 	for {
-		q := map[string]string{
-			"page": strconv.Itoa(page), "page_size": strconv.Itoa(maxPageSize),
-			"start": from, "end": to,
-		}
-		if useKeyset {
-			q["cursor"] = cursor
-		}
-		if keyType != "" {
-			q["key_type"] = keyType
-		}
-		// 稳定键：新端点只接受 user_id/dept_id/studio_id。deptName 旧路径废弃。
-		if userID != "" {
-			q["user_id"] = userID
-		}
-		if deptID != "" {
-			q["dept_id"] = deptID
-		}
-		if studioID != "" {
-			q["studio_id"] = studioID
-		}
+		q, _ := query(strconv.Itoa(page), cursor, useKeyset)
 		b, err := c.do(ctx, "GET", path, q)
 		if err != nil {
 			return nil, err

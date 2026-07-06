@@ -52,6 +52,8 @@ func main() {
 		&cpmmodel.NotificationDelivery{},
 		// v0.8 审计日志
 		&cpmmodel.AuditLog{},
+		// 方案X 异常反馈闭环：异常记录落库（upsert + 人工反馈 + 读回）
+		&cpmmodel.AnomalyRecord{},
 		// Seedance 视频任务记录
 		&cpmmodel.VideoTask{},
 		&cpmmodel.VideoTaskEvent{},

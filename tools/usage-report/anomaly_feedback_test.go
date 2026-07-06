@@ -130,6 +130,32 @@ func TestApplyAnomalyFeedback_Readback(t *testing.T) {
 	}
 }
 
+// TestApplyAnomalyFeedback_ReadbackEmptyWindow 非按窗规则（A3–A5）的空 window 读回覆盖：
+// 服务端对 WindowStart=zero 的命中以空串读回（DB NOT NULL 用零时间哨兵落库、读回显空串），
+// 客户端对空串 parse 失败回退原始串 → 与上报侧空 window 的三元组 key 一致，能匹配覆盖。
+func TestApplyAnomalyFeedback_ReadbackEmptyWindow(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/usage/report/anomalies", func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`[{"id":"rec4","status":"待确认"}]`)) // 上报成功
+	})
+	mux.HandleFunc("/usage/report/anomaly-status", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// A3 非按窗：window_start 空串（服务端零时间哨兵读回显空串），member_id 为空（群体异常）。
+		w.Write([]byte(`[{"rule":"A3","window_start":"","member_id":"","status":"已确认正常"}]`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cli := client.New(srv.URL, "tok")
+	rep := &report.Report{Judgment: report.Judgment{Anomalies: []report.AnomalyHit{
+		{Rule: "A3", Hit: true, Status: ""}, // WindowStart 零值、无 Dimensions → 空 window + 空 member
+	}}}
+	applyAnomalyFeedback(context.Background(), cli, Config{Level: "department", From: "2026-08-21", To: "2026-08-28"}, report.Scope{ID: "dept_x"}, rep)
+	if got := rep.Judgment.Anomalies[0].Status; got != "已确认正常" {
+		t.Fatalf("expected status 已确认正常 (empty-window match), got %q", got)
+	}
+}
+
 // TestApplyAnomalyFeedback_Degrade404 接口不可用：读回 404 → 静默降级，Status 保持默认「待确认」。
 func TestApplyAnomalyFeedback_Degrade404(t *testing.T) {
 	mux := http.NewServeMux()

@@ -410,6 +410,48 @@ type AnomalyHit struct {
 	Dimensions     map[string]string `json:"dimensions"`
 	Evidence       []Evidence        `json:"evidence"`
 	Note           string            `json:"note,omitempty"`
+	// Status 异常记录人工反馈状态机（5 态）。离线报告每次现算命中后默认「待确认」；
+	// 接入反馈闭环（control-plane feedback API + 持久化）后由读回的真实状态覆盖。空值视为「待确认」。
+	Status string `json:"status,omitempty"`
+}
+
+// 异常状态机 5 态枚举（模板「异常处置」：待确认/已确认正常/修复中/已恢复/误报）。
+const (
+	AnomalyStatusPending       = "待确认"   // 异常记录刚识别，未经人工确认（默认态）
+	AnomalyStatusConfirmedOK   = "已确认正常" // 人工确认非异常/正常
+	AnomalyStatusFixing        = "修复中"   // 人工确认异常并在处理中
+	AnomalyStatusRecovered     = "已恢复"   // 人工确认异常已恢复
+	AnomalyStatusFalsePositive = "误报"    // 人工判定为误报
+)
+
+// AnomalyStatusCounts 按状态机 5 态统计异常记录数（用于「异常处置」章节 5 态计数行）。
+// 未知/空状态归入「待确认」；返回顺序固定为 待确认/已确认正常/修复中/已恢复/误报。
+type AnomalyStatusCounts struct {
+	Pending     int `json:"pending"`        // 待确认
+	ConfirmedOK int `json:"confirmed_ok"`   // 已确认正常
+	Fixing      int `json:"fixing"`         // 修复中
+	Recovered   int `json:"recovered"`      // 已恢复
+	FalsePos    int `json:"false_positive"` // 误报
+}
+
+// CountAnomalyStatus 汇总给定异常命中的 5 态计数（不修改入参；空状态按「待确认」计）。
+func CountAnomalyStatus(hits []AnomalyHit) AnomalyStatusCounts {
+	var c AnomalyStatusCounts
+	for _, a := range hits {
+		switch a.Status {
+		case AnomalyStatusConfirmedOK:
+			c.ConfirmedOK++
+		case AnomalyStatusFixing:
+			c.Fixing++
+		case AnomalyStatusRecovered:
+			c.Recovered++
+		case AnomalyStatusFalsePositive:
+			c.FalsePos++
+		default: // 空 或 AnomalyStatusPending
+			c.Pending++
+		}
+	}
+	return c
 }
 
 type Evidence struct {

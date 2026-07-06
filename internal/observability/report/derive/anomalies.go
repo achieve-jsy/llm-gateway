@@ -20,13 +20,20 @@ import (
 // （calls 为空），但服务端 /usage/report/baseline 可返回当期分钟桶；非空时 A1/A2 用它在
 // 分钟窗口上直接滑窗判定，无需逐调用展开。A3–A5 依赖逐调用失败率/上下文/时段，仍走 calls（agg 下降级）。
 func Anomalies(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []report.MinuteBucket, rules report.RuleSet, modelBudget map[string]int64) []report.AnomalyHit {
-	return []report.AnomalyHit{
+	hits := []report.AnomalyHit{
 		A1(calls, baselineCalls, baselineBuckets, currentBuckets, rules),
 		A2(calls, baselineCalls, baselineBuckets, currentBuckets, rules),
 		A3(calls, rules),
 		A4(calls, rules, modelBudget),
 		A5(calls, rules),
 	}
+	// 异常状态机：离线报告每条异常记录默认「待确认」；接入反馈闭环后由持久化状态覆盖。
+	for i := range hits {
+		if hits[i].Status == "" {
+			hits[i].Status = report.AnomalyStatusPending
+		}
+	}
+	return hits
 }
 
 // ---- 时间桶工具 ----

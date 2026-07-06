@@ -231,3 +231,43 @@ func TestMedianIntervalSec(t *testing.T) {
 		})
 	}
 }
+
+// TestAnomalies_DefaultStatus：异常状态机——离线报告每条异常记录默认「待确认」。
+// 校验：Anomalies 产出的每条 hit 的 Status 均被置为 AnomalyStatusPending（空值被补齐）。
+func TestAnomalies_DefaultStatus(t *testing.T) {
+	rules := report.DefaultRuleSet()
+	start := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
+	calls := []report.CallEvent{
+		{TS: start, UserID: "uA", Status: 200, EstCostUSD: 40},
+		{TS: start.Add(time.Second), UserID: "uA", Status: 200, EstCostUSD: 30},
+		{TS: start.Add(2 * time.Second), UserID: "uA", Status: 200, EstCostUSD: 30},
+		{TS: start.Add(3 * time.Second), UserID: "uB", Status: 200, EstCostUSD: 20},
+		{TS: start.Add(4 * time.Second), UserID: "uB", Status: 200, EstCostUSD: 10},
+		{TS: start.Add(5 * time.Second), UserID: "uB", Status: 200, EstCostUSD: 10},
+	}
+	hits := Anomalies(calls, nil, nil, nil, rules, nil)
+	if len(hits) == 0 {
+		t.Fatalf("expected non-empty anomalies")
+	}
+	for i, a := range hits {
+		if a.Status != report.AnomalyStatusPending {
+			t.Errorf("hit[%d] (%s) Status=%q, want %q", i, a.Rule, a.Status, report.AnomalyStatusPending)
+		}
+	}
+}
+
+// TestCountAnomalyStatus：5 态计数 helper——空/默认统一归「待确认」，非空按态归桶，顺序固定。
+func TestCountAnomalyStatus(t *testing.T) {
+	hits := []report.AnomalyHit{
+		{Rule: "A1", Status: ""},                                // 空 → 待确认
+		{Rule: "A2", Status: report.AnomalyStatusPending},       // 待确认
+		{Rule: "A3", Status: report.AnomalyStatusConfirmedOK},   // 已确认正常
+		{Rule: "A4", Status: report.AnomalyStatusFixing},        // 修复中
+		{Rule: "A5", Status: report.AnomalyStatusRecovered},     // 已恢复
+		{Rule: "A1", Status: report.AnomalyStatusFalsePositive}, // 误报
+	}
+	c := report.CountAnomalyStatus(hits)
+	if c.Pending != 2 || c.ConfirmedOK != 1 || c.Fixing != 1 || c.Recovered != 1 || c.FalsePos != 1 {
+		t.Errorf("CountAnomalyStatus=%+v, want {Pending:2,ConfirmedOK:1,Fixing:1,Recovered:1,FalsePos:1}", c)
+	}
+}

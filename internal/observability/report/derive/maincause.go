@@ -3,18 +3,22 @@ package derive
 // maincause.go —— 部门/工作室【本周结论】主因归因一句话（② 主因归因，derive 层）。
 //
 // 背景：部门周报【本周结论】此前只有「关注——命中 N 条异常（P1）」，缺主因归因。
-// 本模块在三层数据流的事实层之后、渲染之前，基于**已装配事实**确定性计算出主因句：
-//   「成本环比 ±X%，集中在 N 名<岗位>，其一命中<异常>」
+// 本模块在事实层之后、渲染之前，基于**已装配聚合事实**确定性计算出主因句：
+//   「成本环比 ±X%，集中在 N 名<岗位>，命中 <A1/A2/A5>」
 //
-// 纪律（与既有推导一致）：
-//   - 只读 rep.Fact.（Department|Studio）的 WoWCostPct / TopChanged[].{JobCategory,WoWCostPct,AnomalyCause}，
-//     不直连库、不新增业务口径、不访问 Judgment.Anomalies（主因已由装配层回填到 AnomalyCause）。
-//   - 纯函数、幂等、可重复调用：工具侧在 backfillMemberAnomalyCause（方向 B 成员级 A1/A2/A5 归因）之后
-//     重跑 FillUnitConclusion，使主因反映最终 AnomalyCause。
-//   - 无事实（u==nil）或空结果时 Supported=false / MainCause=""，不产生误导性结论。
+// 数据来源（全部来自报告聚合，不直连库）：
+//   - ① 成本环比幅度 = UnitFact.WoWCostPct（部门/工作室本期 vs 上期同口径成员聚合成本）。
+//   - ② 集中人群 = UnitFact.TopChanged 中成本增长（WoWCostPct>0）的成员，按岗位（JobCategory 归一）取主流
+//     （人数最多，并列取增速之和最大，保证可复现），N=该岗位人数。
+//   - ③ 异常命中 = 该集中人群 TopChanged[].AnomalyCause（A1/A2/A5 判定已由异常层+装配层回填），
+//     去重后得规则码集合（如 A1/A2/A5）。
+//
+// 纪律：纯函数、幂等、可重复调用——工具侧在 backfillMemberAnomalyCause（方向 B 成员级 A1/A2/A5 归因）
+// 之后重跑 FillUnitConclusion，使主因反映最终 AnomalyCause。无事实（u==nil）时 Supported=false。
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/example/llm-gateway/internal/observability/report"
@@ -35,22 +39,13 @@ func FillUnitConclusion(rep *report.Report) {
 }
 
 // buildUnitConclusion 从单元事实构造 UnitConclusion（纯函数，供单测）。
-//
-// ① 成本环比幅度 = u.WoWCostPct（部门本期 vs 上期同口径成员聚合成本）。
-// ② 集中人群 = 成本增长（WoWCostPct>0）的 TopChanged 成员按岗位归一后取主流岗位（人数最多；
-//
-//	人数并列取增速之和最大者，保证可复现），N = 该岗位人数。
-//
-// ③ 异常命中 = 集中人群（成本增长的 TopChanged）中携带 AnomalyCause 的成员：恰 1 人→「其一命中{label}」；
-//
-//	多人→「其中 K 人命中{labels}」。
 func buildUnitConclusion(u *report.UnitFact) *report.UnitConclusion {
 	if u == nil {
 		return &report.UnitConclusion{Supported: false, Note: "无单元事实可归因"}
 	}
 	con := &report.UnitConclusion{Supported: true, CostDeltaPct: u.WoWCostPct}
 
-	// ---- ② 集中人群 ----
+	// ---- ② 集中人群：成本增长(WoWCostPct>0)的 TopChanged 成员按岗位归一后取主流 ----
 	type jobAgg struct {
 		n      int
 		sumPct float64
@@ -85,38 +80,55 @@ func buildUnitConclusion(u *report.UnitFact) *report.UnitConclusion {
 		con.ConcentrationJob = bestJob
 	}
 
-	// ---- ③ 异常命中 ----
+	// ---- ③ 异常命中：集中人群（成本增长的 TopChanged）的规则码并集 ----
+	ruleSet := map[string]bool{}
 	var labels []string
-	seen := map[string]bool{}
-	causeMembers := 0
-	firstCause := ""
+	seenLabel := map[string]bool{}
 	for _, tc := range growth {
 		if tc.AnomalyCause == "" {
 			continue
 		}
-		causeMembers++
-		if firstCause == "" {
-			firstCause = tc.AnomalyCause
-		}
-		for _, lab := range strings.Split(tc.AnomalyCause, "; ") {
-			lab = strings.TrimSpace(lab)
-			if lab != "" && !seen[lab] {
-				seen[lab] = true
-				labels = append(labels, lab)
+		for _, piece := range strings.Split(tc.AnomalyCause, "; ") {
+			piece = strings.TrimSpace(piece)
+			if piece == "" {
+				continue
+			}
+			// AnomalyCause 形如 "A1 程序失控" / "A2 成本燃烧" / "A5 非工作时段"：首 token 为规则码。
+			if code := ruleCode(piece); code != "" {
+				ruleSet[code] = true
+			}
+			if !seenLabel[piece] {
+				seenLabel[piece] = true
+				labels = append(labels, piece)
 			}
 		}
 	}
+	codes := make([]string, 0, len(ruleSet))
+	for c := range ruleSet {
+		codes = append(codes, c)
+	}
+	sort.Strings(codes) // A1 < A2 < ... < A5，稳定可复现
+	con.RuleCodes = codes
 	con.AnomalyLabels = labels
-	switch {
-	case causeMembers == 1:
-		con.AnomalyWord = "其一命中" + firstCause
-	case causeMembers > 1:
-		con.AnomalyWord = fmt.Sprintf("其中 %d 人命中%s", causeMembers, strings.Join(labels, "、"))
+	if len(codes) > 0 {
+		con.AnomalyWord = "命中 " + strings.Join(codes, "/")
 	}
 
 	// ---- 组装一句话 ----
 	con.MainCause = assembleUnitMainCause(con)
 	return con
+}
+
+// ruleCode 从 "A<N> 名称" 中提取规则码（取首空格前 token）；不形如 A? 时返回 ""。
+func ruleCode(label string) string {
+	head := label
+	if i := strings.IndexByte(label, ' '); i >= 0 {
+		head = label[:i]
+	}
+	if len(head) == 2 && head[0] == 'A' && head[1] >= '1' && head[1] <= '9' {
+		return head
+	}
+	return ""
 }
 
 // assembleUnitMainCause 按 ①②③ 拼接主因一句话；无任何可陈述部分时返回空串。
@@ -132,7 +144,7 @@ func assembleUnitMainCause(con *report.UnitConclusion) string {
 			sign = "-"
 			v = -v
 		}
-		parts = append(parts, fmt.Sprintf("成本环比 %s%.0f%%", sign, v))
+		parts = append(parts, fmt.Sprintf("成本环比 %s%.1f%%", sign, v))
 	}
 	if con.ConcentrationN >= 1 && con.ConcentrationJob != "" {
 		if con.ConcentrationN == 1 {

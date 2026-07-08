@@ -987,8 +987,8 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		// usageH2 复用同一 DB，仅在此处注册带 Guard 的路由
 		usageH2 := obshandler.NewUsageHandler(obssvc.NewRollupService(db), db)
 		// 方案X 异常反馈闭环（真人工反馈）：写路径 CRUD 落在 control-plane（anomaly_records 由其 GORM model 管理），
-		// 独立于 observability 的只读报告聚合 handler，故单独构造 AnomalyFeedbackHandler（注入 repository）。
-		anomalyFeedbackH := handler.NewAnomalyFeedbackHandler(repository.NewAnomalyRecordRepo(db))
+		// 独立于 observability 的只读报告聚合 handler，故单独构造 AnomalyFeedbackHandler（轻量：直接持 *gorm.DB）。
+		anomalyFeedbackH := handler.NewAnomalyFeedbackHandler(db)
 		adminGroup.GET("/usage/dashboard", guard(rbac.PermUsageViewScoped), usageH2.GetDashboard)
 		adminGroup.GET("/usage/dashboard/trend", guard(rbac.PermUsageViewScoped), usageH2.DashboardTrend)
 		adminGroup.GET("/usage/dashboard/models", guard(rbac.PermUsageViewScoped), usageH2.DashboardModelsEnhanced)

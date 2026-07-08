@@ -1832,6 +1832,15 @@ func buildModelGuidance(p *report.PersonalFact, mp *report.TopModelPortrait) *re
 	g.TopModelCallShare = topCallShare
 	g.TopModelCostRatio = p.HighTierCostRatio
 
+	// 同岗采用率（真实事实，来自 TopModelPortrait）：同岗有多少人也用该「高阶模型」。
+	// 这是可支撑的「同岗多用档位」核心——用采用率描述「主用高阶模型 vs 同岗多数未采用/少采用」，
+	// 而非臆造"代码补全类任务"等无 scene/endpoint 依据的任务类型（② 结论：任务类型当前数据无法推断）。
+	if mp != nil {
+		g.PeerAdoptionRate = mp.AdoptionRate
+		g.PeerAdoptionN = mp.AdoptionCount
+		g.PeerPoolN = mp.PoolN
+	}
+
 	// 场景标注（确定性用模结构，不臆造"代码补全/Agent"等无依据场景名）。
 	sc := "本周主用模型 `" + top + "`"
 	if topCallShare > 0 {
@@ -1839,6 +1848,9 @@ func buildModelGuidance(p *report.PersonalFact, mp *report.TopModelPortrait) *re
 	}
 	if p.HighTierCostRatio > 0 {
 		sc += "，占本周成本 " + pctStr(p.HighTierCostRatio)
+	}
+	if mp != nil && mp.PoolN > 0 {
+		sc += fmt.Sprintf("；同岗 %d 人中 %d 人本周也用了该模型（采用率 %s）", mp.PoolN, mp.AdoptionCount, pctStr(mp.AdoptionRate))
 	}
 	g.ScenarioNote = sc + "。"
 

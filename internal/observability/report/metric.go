@@ -252,8 +252,8 @@ type WeeklyPoint struct {
 // CohortDef 同岗位分位对标池定义（供 derive 计算分位，pool 内每元素为匿名成员）。
 type CohortDef struct {
 	Enabled   bool
-	Option    string // 对标池选择说明（由工具侧决定，如 "studio+job_category"）
-	PoolType  string // studio+job_category | company+job_category | studio | company
+	Option    string // 对标池选择说明（由工具侧决定，如 "工作室+岗位"）
+	PoolType  string // 工作室+岗位 | 全公司+岗位 | 工作室 | 全公司
 	Members   []CohortMember
 	Metric    string // 效能指标（cost_per_1k_tokens | cache_hit_rate | calls_per_active_day | unique_models）
 	Direction string // cost（越低越好）| efficiency（越高越好）

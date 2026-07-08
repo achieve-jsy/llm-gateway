@@ -151,7 +151,7 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 	periodDays, _ := inclusiveDays(cfg.From, cfg.To)
 	meta := report.Meta{
 		Level:           cfg.Level,
-		Period:          report.Period{From: cfg.From, To: cfg.To, Type: cfg.Period, Days: periodDays, Label: cfg.Period + " " + cfg.From + "~" + cfg.To},
+		Period:          report.Period{From: cfg.From, To: cfg.To, Type: cfg.Period, Days: periodDays, Label: periodLabel(cfg.Period, cfg.From, cfg.To, isoWeekOf(cfg.From)), IsoWeek: isoWeekOf(cfg.From)},
 		Scope:           scope,
 		GeneratedAt:     now.Format(time.RFC3339),
 		DataRetrievedAt: now.Format(time.RFC3339),
@@ -681,6 +681,27 @@ func inclusiveDays(from, to string) (int, error) {
 		return 0, fmt.Errorf("无效日期范围：to %s 早于 from %s", to, from)
 	}
 	return int(end.Sub(start).Hours()/24) + 1, nil
+}
+
+// isoWeekOf 由报告期起点 From（YYYY-MM-DD）派生 ISO 周数（如 2026-08-21 → "2026-W34"）。
+// 写入 Period.IsoWeek 供标题/元数据展示；解析失败返回空串（不影响报告生成）。
+func isoWeekOf(dateStr string) string {
+	const layout = "2006-01-02"
+	t, err := time.Parse(layout, dateStr)
+	if err != nil {
+		return ""
+	}
+	y, w := t.ISOWeek()
+	return fmt.Sprintf("%04d-W%02d", y, w)
+}
+
+// periodLabel 组装周期标签：有 ISO 周则优先展示（如 "week 2026-W33 2026-08-10~2026-08-16"），
+// 无则回退原 "period From~To" 形态。供标题/元数据/Vicky 周期行展示。
+func periodLabel(period, from, to, isoWeek string) string {
+	if isoWeek != "" {
+		return period + " " + isoWeek + " " + from + "~" + to
+	}
+	return period + " " + from + "~" + to
 }
 
 // vickyPayload 组装可 POST <VICKY_ORIGIN>/api/reports 的 JSON 载荷（category/narrative/project 由 config 指定）。

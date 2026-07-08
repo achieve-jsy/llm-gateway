@@ -12,6 +12,15 @@ import (
 	"github.com/example/llm-gateway/internal/observability/report"
 )
 
+// periodTitle 标题用周期标记：有 ISO 周则优先展示（如 "2026-W33"），否则回退日期区间。
+// 目标形态是对照样例的「2026-W33」；日期区间保留在该行后半作为辅助。
+func periodTitle(p report.Period) string {
+	if p.IsoWeek != "" {
+		return p.IsoWeek
+	}
+	return p.From + "~" + p.To
+}
+
 // RenderMD 渲染 Markdown。
 func RenderMD(r *report.Report) string {
 	var b strings.Builder
@@ -22,6 +31,9 @@ func RenderMD(r *report.Report) string {
 	w("facts_digest:\n")
 	w("  level: %s\n", r.Meta.Level)
 	w("  period: \"%s ~ %s (%s, %dd)\"\n", r.Meta.Period.From, r.Meta.Period.To, r.Meta.Period.Type, r.Meta.Period.Days)
+	if r.Meta.Period.IsoWeek != "" {
+		w("  iso_week: %s\n", r.Meta.Period.IsoWeek)
+	}
 	if r.Fact.Personal != nil {
 		w("  req: %d\n", r.Fact.Personal.ReqCount)
 		w("  success: %d\n", r.Fact.Personal.SuccessCount)
@@ -48,20 +60,23 @@ func RenderMD(r *report.Report) string {
 		if job != "" {
 			title += "（" + job + "）"
 		}
-		w("# 个人周报 · %s · %s\n\n", r.Meta.Period.From+"~"+r.Meta.Period.To, title)
+		w("# 个人周报 · %s · %s\n\n", periodTitle(r.Meta.Period), title)
 		w("【本周结论】%s\n\n", buildWeeklyConclusion(r))
 	} else if r.Fact.Department != nil {
 		// Vicky 部门周报标题：只用部门名，不附 StudioID（UUID 无可读性）
-		w("# 部门周报 · %s · %s\n\n", r.Meta.Period.From+"~"+r.Meta.Period.To, scopeLabel(r.Meta.Scope))
+		w("# 部门周报 · %s · %s\n\n", periodTitle(r.Meta.Period), scopeLabel(r.Meta.Scope))
 		w("【本周结论】%s\n\n", buildDeptConclusion(r))
 	} else if r.Fact.Studio != nil {
-		w("# 工作室周报 · %s · %s\n\n", r.Meta.Period.From+"~"+r.Meta.Period.To, scopeLabel(r.Meta.Scope))
+		w("# 工作室周报 · %s · %s\n\n", periodTitle(r.Meta.Period), scopeLabel(r.Meta.Scope))
 		w("【本周结论】%s\n\n", buildDeptConclusion(r))
 	} else {
 		w("# 用量周报 · %s\n\n", r.Expression.Headline)
 	}
 	w("> **级别**：%s · **范围**：%s\n", levelLabel(r.Meta.Level), scopeLabel(r.Meta.Scope))
 	w("> **周期**：%s（%s ~ %s，%d 天）\n", r.Meta.Period.Label, r.Meta.Period.From, r.Meta.Period.To, r.Meta.Period.Days)
+	if r.Meta.Period.IsoWeek != "" {
+		w("> **ISO 周**：%s\n", r.Meta.Period.IsoWeek)
+	}
 	w("> **币种**：%s（USD→CNY %.4f）\n\n", r.Meta.Currency.ReportCurrency, r.Meta.Currency.USDCNYRate)
 
 	// Vicky 模板章节命名：个人首章为「一、使用概览」，部门/工作室保持「概况」数字表（其编号章节随后输出）。
@@ -591,16 +606,27 @@ func writePersonalSections(b *strings.Builder, r *report.Report) {
 func buildWeeklyConclusion(r *report.Report) string {
 	p := r.Fact.Personal
 	j := &r.Judgment
-	// 最高优先级：异常命中
+	// 成本环比前缀（若有个人事实）：支持「成本环比 +180%，主因 …」的结论形态。
+	costPrefix := ""
+	if p != nil && p.WoWCostPct >= 50 {
+		costPrefix = fmt.Sprintf("成本环比 +%.0f%%，", p.WoWCostPct)
+	} else if p != nil && p.WoWCostPct <= -30 {
+		costPrefix = fmt.Sprintf("成本环比 -%.0f%%，", -p.WoWCostPct)
+	}
+	// 最高优先级：异常命中（主因归因写到结论行；规则+名称+命中窗口/说明，来自已算字段，非臆造）。
 	for _, a := range j.Anomalies {
 		if a.Hit {
-			return "关注 —— 命中 " + a.Rule + "（" + a.Name + "），" + a.Severity
+			lead := "关注 —— "
+			if costPrefix != "" {
+				lead += costPrefix
+			}
+			return lead + "主因 " + anomalyRootCause(a)
 		}
 	}
 	// 次优先：成本大幅波动
 	if p != nil {
 		if p.WoWCostPct >= 50 {
-			return fmt.Sprintf("关注 —— 成本环比 +%.0f%%，建议关注用量变化", p.WoWCostPct)
+			return fmt.Sprintf("关注 —— 成本环比 +%.0f%%（无异常命中），建议关注用量变化", p.WoWCostPct)
 		}
 		if p.WoWCostPct <= -30 {
 			return fmt.Sprintf("良好 —— 成本环比下降 %.0f%%，持续保持", -p.WoWCostPct)
@@ -608,6 +634,25 @@ func buildWeeklyConclusion(r *report.Report) string {
 	}
 	// 默认
 	return "正常 —— " + r.Expression.Headline
+}
+
+// anomalyRootCause 提取异常的主因措辞（确定性，来自已算字段）：规则+名称，补命中窗口/说明。
+// 形如 "A2 成本燃烧（15:00~15:15 窗口，触发封顶 ¥300/15min）"；证据缺失时回退为规则+名称+级别。
+func anomalyRootCause(a report.AnomalyHit) string {
+	base := a.Rule + " " + a.Name
+	// 命中窗口（人类可读）是最能说明「何时何因」的主因线索。
+	if a.Window != "" {
+		base += "（" + a.Window
+		if a.Note != "" {
+			base += "；" + a.Note
+		}
+		base += "）"
+	} else if a.Note != "" {
+		base += "（" + a.Note + "）"
+	} else {
+		base += "（" + a.Severity + "）"
+	}
+	return base
 }
 
 // fmtVal 精简数值展示：整数无小数，小数保留 2 位。

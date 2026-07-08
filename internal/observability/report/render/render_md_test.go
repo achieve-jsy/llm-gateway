@@ -442,3 +442,32 @@ func TestRenderMDPersonalEfficiencyLabel(t *testing.T) {
 		t.Errorf("效能标签未追加动态解释:\n%s", md)
 	}
 }
+
+// TestBuildWeeklyConclusionRootCause 结论主因一句话（③）：命中异常时把成本环比 + 主因写入结论行。
+func TestBuildWeeklyConclusionRootCause(t *testing.T) {
+	r := &report.Report{
+		Fact: report.Fact{Personal: &report.PersonalFact{WoWCostPct: 180}},
+		Judgment: report.Judgment{Anomalies: []report.AnomalyHit{
+			{Rule: "A2", Name: "成本燃烧", Severity: "P1", Hit: true, Window: "15:00~15:15", Note: "触发封顶 ¥300/15min"},
+		}},
+	}
+	got := buildWeeklyConclusion(r)
+	if !strings.Contains(got, "成本环比 +180%") || !strings.Contains(got, "主因 A2 成本燃烧") {
+		t.Errorf("结论未含成本环比+主因: %q", got)
+	}
+	if !strings.Contains(got, "15:00~15:15") || !strings.Contains(got, "触发封顶") {
+		t.Errorf("主因未含窗口/说明: %q", got)
+	}
+}
+
+// TestBuildWeeklyConclusionNoAnomaly 无异常命中时回退到成本环比；异常存在而未命中用无异常措辞。
+func TestBuildWeeklyConclusionNoAnomaly(t *testing.T) {
+	r := &report.Report{
+		Fact: report.Fact{Personal: &report.PersonalFact{WoWCostPct: 180}},
+	}
+	r.Judgment.Anomalies = []report.AnomalyHit{{Rule: "A2", Name: "成本燃烧", Hit: false}}
+	got := buildWeeklyConclusion(r)
+	if !strings.Contains(got, "成本环比 +180%") || !strings.Contains(got, "无异常命中") {
+		t.Errorf("无异常命中结论未含成本环比+无异常措辞: %q", got)
+	}
+}

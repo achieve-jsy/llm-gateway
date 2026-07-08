@@ -6,6 +6,7 @@ package derive
 // 本函数只做确定性推算，不臆造数字；省钱预估为估算，仅当本人单位成本 > 同岗 P50 时才产出。
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/example/llm-gateway/internal/observability/report"
@@ -109,5 +110,31 @@ func TestBuildModelGuidance_NilPersonalFact(t *testing.T) {
 	}
 	if g.Note == "" {
 		t.Errorf("Note should explain missing personal fact")
+	}
+}
+
+// TestBuildModelGuidance_PeerAdoptionPeerAdoptionNote 同岗采用率（「高阶模型 vs 同岗多数」的可支撑核心）
+// 填充到 ModelGuidance：adoption 数据来自 TopModelPortrait，非臆造；任务类型（代码补全/对话）当前数据无法推断（② 结论）。
+func TestBuildModelGuidance_PeerAdoption(t *testing.T) {
+	p := &report.PersonalFact{
+		TopModel:          "qwen-max",
+		ReqCount:          100,
+		HighTierCostRatio: 0.798,
+		TopModels:         []report.TopModel{{Model: "qwen-max", Calls: 82, TotalTokens: 500000, CostUSD: 10.0}},
+	}
+	mp := &report.TopModelPortrait{
+		Model: "qwen-max", PersonCostUSD: 10.0, PersonCostRatio: 0.798,
+		AdoptionCount: 3, PoolN: 34, AdoptionRate: 3.0 / 34.0,
+		UnitCostP50: 8.0, PersonUnitCost: 20.0, Supported: true,
+	}
+	g := buildModelGuidance(p, mp)
+	if g.PeerAdoptionRate != mp.AdoptionRate {
+		t.Errorf("PeerAdoptionRate=%.4f, want %.4f", g.PeerAdoptionRate, mp.AdoptionRate)
+	}
+	if g.PeerAdoptionN != 3 || g.PeerPoolN != 34 {
+		t.Errorf("adopt N/Pool = %d/%d, want 3/34", g.PeerAdoptionN, g.PeerPoolN)
+	}
+	if want := "采用率"; !strings.Contains(g.ScenarioNote, want) {
+		t.Errorf("ScenarioNote should mention 采用率, got %q", g.ScenarioNote)
 	}
 }

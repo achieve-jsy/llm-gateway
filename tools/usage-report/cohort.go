@@ -216,31 +216,36 @@ func jobSlot(c, f, t string) string {
 // poolFor 依「同岗位 + 同 studio」优先，样本不足时逐级回退（org-roster §4.2）：
 // 同studio+同category → 全公司同category → 同studio(任意) → 全公司(任意)；
 // 仍 <MIN_SAMPLE(5) 则交由 derive 判定 supported=false。
+//
+// 「同岗位」以 job_category（岗位类别，较粗）为准——模板对标范围是「工作室+岗位」，
+// 若按 job_title（较细）匹配会得到过激的小样本（如 N=8），故统一以 job_category 做同岗键；
+// 落回池时逐级放宽到全公司同 category → 同 studio → 全公司。返回的 poolType 为中文展示文案。
 func poolFor(t rosterEntry, roster map[string]rosterEntry, validUser map[string]bool, perUser map[string]report.CohortMetrics) ([]report.CohortMember, string) {
+	// 同 studio + 同岗位类别（模板「工作室+岗位」）
 	got := collectSame(t, roster, validUser, perUser, func(e rosterEntry) bool {
-		return e.StudioID == t.StudioID && e.JobKey == t.JobKey && e.UserID != t.UserID
+		return e.StudioID == t.StudioID && e.JobCategory == t.JobCategory && e.UserID != t.UserID
 	})
 	if len(got) >= 5 {
-		return got, "studio+job_category"
+		return got, "工作室+岗位"
 	}
-	// 回退：公司同岗位
+	// 回退：全公司同岗位类别
 	got = collectSame(t, roster, validUser, perUser, func(e rosterEntry) bool {
-		return e.JobKey == t.JobKey && e.UserID != t.UserID
+		return e.JobCategory == t.JobCategory && e.UserID != t.UserID
 	})
 	if len(got) >= 5 {
-		return got, "company+job_category"
+		return got, "全公司+岗位"
 	}
 	// 回退：同 studio（任意岗位）
 	got = collectSame(t, roster, validUser, perUser, func(e rosterEntry) bool {
 		return e.StudioID == t.StudioID && e.UserID != t.UserID
 	})
 	if len(got) >= 5 {
-		return got, "studio"
+		return got, "工作室"
 	}
 	// 回退：全公司（任意岗位）
 	return collectSame(t, roster, validUser, perUser, func(e rosterEntry) bool {
 		return e.UserID != t.UserID
-	}), "company"
+	}), "全公司"
 }
 
 func collectSame(t rosterEntry, roster map[string]rosterEntry, validUser map[string]bool, perUser map[string]report.CohortMetrics, match func(rosterEntry) bool) []report.CohortMember {
@@ -253,7 +258,7 @@ func collectSame(t rosterEntry, roster map[string]rosterEntry, validUser map[str
 			continue
 		}
 		m := perUser[e.UserID]
-		out = append(out, report.CohortMember{UserID: e.UserID, StudioID: e.StudioID, DeptID: e.DeptID, JobCategory: e.JobKey, JobFamily: e.JobFamily, JobTitle: e.JobTitle, MetricValue: m.CostPer1kTokens, MetricValid: true, Metrics: m})
+		out = append(out, report.CohortMember{UserID: e.UserID, StudioID: e.StudioID, DeptID: e.DeptID, JobCategory: e.JobCategory, JobFamily: e.JobFamily, JobTitle: e.JobTitle, MetricValue: m.CostPer1kTokens, MetricValid: true, Metrics: m})
 	}
 	return out
 }

@@ -102,11 +102,12 @@ type Meta struct {
 
 // Period 统计周期（范围、类型、天数、标签）。
 type Period struct {
-	From  string `json:"from"`
-	To    string `json:"to"`
-	Type  string `json:"type"` // day|week|month
-	Days  int    `json:"days"`
-	Label string `json:"label"`
+	From    string `json:"from"`
+	To      string `json:"to"`
+	Type    string `json:"type"` // day|week|month
+	Days    int    `json:"days"`
+	Label   string `json:"label"`
+	IsoWeek string `json:"iso_week,omitempty"` // 报告期 ISO 周数，如 "2026-W33"（按 From 起点归属周）
 }
 
 // Scope 报告范围（personal: user_id+name+岗位+studio+dept；department: dept_id+dept_name+studio；studio: studio_id+studio_name）。
@@ -325,6 +326,9 @@ type ModelGuidance struct {
 	EstWeeklySaveCNY   float64 `json:"est_weekly_save_cny"`    // 估算周节省 CNY（渲染层乘汇率填充）
 	SaveIsEstimate     bool    `json:"save_is_estimate"`       // 恒 true：省钱为估算
 	ScenarioNote       string  `json:"scenario_note"`          // 场景标注（基于事实的用模结构描述，不臆造场景名）
+	PeerAdoptionRate   float64 `json:"peer_adoption_rate"`     // 同岗采用率 = 同岗使用该模型人数 / 同岗总数（0..1）
+	PeerAdoptionN      int     `json:"peer_adoption_n"`        // 同岗使用该模型人数
+	PeerPoolN          int     `json:"peer_pool_n"`            // 同岗总数（后续可回退为池人数）
 	Recommendation     string  `json:"recommendation"`         // 模型选用建议措辞（确定性；LLM 可基于本字段+数字润色）
 	SaveBasis          string  `json:"save_basis"`             // 省钱预估依据
 	Note               string  `json:"note,omitempty"`         // 事实不足时的说明

@@ -350,6 +350,8 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 	// 方向 B：给 TopChanged 每个成员做【成员级】A1/A2/A5 归因并回填主因列（不再依赖「全局窗口热点
 	// user ∈ TopChanged」的脆弱匹配；成员级命中时覆盖粗匹配结果）。零全量拉，仅按 Top5 ≤5 人取本人调用。
 	backfillMemberAnomalyCause(ctx, cli, cfg, scope, rep, rules)
+	// 成员级主因回填后重跑单元【本周结论】主因归因（②），使 MainCause 反映最终 AnomalyCause。
+	derive.FillUnitConclusion(rep)
 	// 方案 X（真反馈闭环）：上报命中异常 + 读回真实状态覆盖 AnomalyHit.Status。
 	// 无持久化/接口未建/不可用时静默降级为「待确认」，绝不中断报告。
 	applyAnomalyFeedback(ctx, cli, cfg, scope, rep)

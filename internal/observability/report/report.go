@@ -207,6 +207,24 @@ type UnitFact struct {
 	CostConcentration  float64        `json:"cost_concentration,omitempty"`   // 成本集中度：Top2 部门成本占比之和 0~1
 	// BudgetExec 工作室某月预算执行（Vicky 一页摘要「预算执行」行；Supported=false 表示不可得）。
 	BudgetExec *BudgetExec `json:"budget_exec,omitempty"`
+	// Conclusion 部门/工作室【本周结论】主因归因一句话及其因素（derive 层计算，render 消费）。
+	// 语义：点明本轮主因 ①成本环比幅度 ②集中在哪些人（岗位）③其中命中什么异常。
+	Conclusion *UnitConclusion `json:"conclusion,omitempty"`
+}
+
+// UnitConclusion 单元（部门/工作室）【本周结论】主因归因。
+// 由 derive 层基于已装配事实（WoW 成本环比 / TopChanged 成员[岗位+AnomalyCause]）确定性计算；
+// 渲染层读 MainCause 直接展示，或用 CostDeltaPct / ConcentrationN / ConcentrationJob / AnomalyWord
+// 自行组织措辞。Supported=false 表示事实不足；Note 说明原因。
+type UnitConclusion struct {
+	MainCause        string   `json:"main_cause"`        // 一句话，如「成本环比 +32%，集中在 3 名后端开发，其一命中A5 非工作时段」
+	CostDeltaPct     float64  `json:"cost_delta_pct"`    // ① 成本周环比幅度 %（对比上期同口径成员聚合）
+	ConcentrationN   int      `json:"concentration_n"`   // ② 集中人数（成本增长的主因岗位人数）
+	ConcentrationJob string   `json:"concentration_job"` // ② 主因岗位（job 归一：job_title→job_category→job_family）
+	AnomalyLabels    []string `json:"anomaly_labels"`    // ③ 集中人群命中的异常标签（如 "A5 非工作时段"）
+	AnomalyWord      string   `json:"anomaly_word"`      // ③ 异常措辞：其一命中{label} / 其中 K 人命中{labels}
+	Supported        bool     `json:"supported"`
+	Note             string   `json:"note,omitempty"`
 }
 
 // AnomalyCount 未关闭异常的 Severity 级统计（Vicky 工作室一页摘要「异常 P1×N」）。

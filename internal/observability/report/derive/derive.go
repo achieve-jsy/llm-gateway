@@ -143,6 +143,9 @@ func Derive(meta report.Meta, in report.ReportInput, rules report.RuleSet) (*rep
 	// 否则 AnomalyCause 留空（render 层主因列降级为「待确认」）。纯装配，不改 anomalies.go 判定逻辑。
 	correlateTopChangedAnomaly(rep)
 
+	// ---- 单元【本周结论】主因归因（②）：基于已装配事实确定性计算；工具侧在成员级主因回填后重跑 ----
+	FillUnitConclusion(rep)
+
 	// ---- 表达层：确定性回填（只引用已存在字段，无新数字/新判定）----
 	rep.Expression = buildExpression(rep, rules)
 

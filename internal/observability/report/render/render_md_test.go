@@ -413,3 +413,32 @@ func TestRenderMDPersonalAnomalyHitsOnly(t *testing.T) {
 		t.Errorf("未命中 A1 仍作为主体异常条目列出（模板只列命中）:\n%s", md)
 	}
 }
+
+// TestRenderMDPersonalFeedbackOptions 验证个人第六章「异常提示」反馈入口选项由 3 项（□属实/□误报/□已恢复）
+// 对齐为 5 项（□正常任务/□已停止/□归属错误/□误报/□需协助）。
+func TestRenderMDPersonalFeedbackOptions(t *testing.T) {
+	r := markdownReport("personal")
+	md := RenderMD(&r)
+	if !strings.Contains(md, "- 反馈入口：请确认该异常（□正常任务 □已停止 □归属错误 □误报 □需协助）——") {
+		t.Errorf("personal 反馈入口未更新为 5 选项:\n%s", md)
+	}
+	if strings.Contains(md, "□属实") {
+		t.Errorf("反馈入口仍含旧选项「□属实」，应改为 5 选项:\n%s", md)
+	}
+}
+
+// TestRenderMDPersonalEfficiencyLabel 验证个人第三章「同岗使用效能画像」效能标签追加一句动态解释
+// （本人 vs 同岗 P50 分位）：高采用→使用量高于同岗；待优化→单位 Token 成本偏高、缓存比偏低等。
+func TestRenderMDPersonalEfficiencyLabel(t *testing.T) {
+	r := markdownReport("personal")
+	r.Judgment.PeerProfiles = []report.PeerMetric{
+		{Metric: "weekly_calls", Label: "周调用量", Unit: "次", Current: 50, P50: 30, PercentileRank: 0.7, Supported: true},
+		{Metric: "cost_per_1m", Label: "单位 Token 成本", Unit: "USD", Current: 3.0, P50: 2.0, PercentileRank: 0.8, Supported: true},
+		{Metric: "cache_hit_rate", Label: "缓存命中率", Unit: "%", Current: 0.2, P50: 0.4, PercentileRank: 0.1, Supported: true},
+	}
+	r.Expression.EfficiencyLabel = "高采用、待优化"
+	md := RenderMD(&r)
+	if !strings.Contains(md, "- 使用效能标签：**高采用、待优化**——使用量高于同岗中位数，但单位 Token 成本偏高、缓存比偏低") {
+		t.Errorf("效能标签未追加动态解释:\n%s", md)
+	}
+}

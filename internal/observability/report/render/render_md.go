@@ -216,6 +216,93 @@ func memberAdvice(tc report.TopChangedMember) string {
 	return strings.Join(parts, "；")
 }
 
+// efficiencyLabelExplain 依据同岗指标（本人 vs 同岗 P50 分位）为「使用效能标签」追加一句解释（确定性，数字来自 profiles）。
+// 与 derive.buildEfficiencyLabel 同一口径：高采用=使用量高于同岗；待优化=单位成本偏高/缓存比偏低/上下文偏长等。
+func efficiencyLabelExplain(profiles []report.PeerMetric) string {
+	usageRank := -1.0 // 调用量维度平均分位（calls/tokens/active_days）
+	effRank := -1.0   // 效能维度最差分位（cost/ctx/cache）
+	usageCnt := 0
+	var effNotes []string
+	for _, pm := range profiles {
+		if !pm.Supported {
+			continue
+		}
+		switch pm.Metric {
+		case "weekly_calls", "weekly_tokens", "active_days":
+			if usageRank < 0 {
+				usageRank = pm.PercentileRank
+			} else {
+				usageRank = (usageRank + pm.PercentileRank) / 2
+			}
+			usageCnt++
+		case "cost_per_1m":
+			if effRank < pm.PercentileRank {
+				effRank = pm.PercentileRank
+			}
+			if pm.PercentileRank >= 0.75 {
+				effNotes = append(effNotes, "单位 Token 成本偏高")
+			}
+		case "avg_input_ctx":
+			if effRank < pm.PercentileRank {
+				effRank = pm.PercentileRank
+			}
+			if pm.PercentileRank >= 0.75 {
+				effNotes = append(effNotes, "输入上下文偏长")
+			}
+		case "cache_hit_rate":
+			inv := 1 - pm.PercentileRank
+			if effRank < inv {
+				effRank = inv
+			}
+			if inv >= 0.75 {
+				effNotes = append(effNotes, "缓存比偏低")
+			}
+		}
+	}
+	if usageCnt == 0 && effRank < 0 {
+		return ""
+	}
+
+	usageClause := ""
+	if usageCnt > 0 {
+		switch {
+		case usageRank >= 0.6:
+			usageClause = "使用量高于同岗中位数"
+		case usageRank < 0.3:
+			usageClause = "使用量低于同岗中位数"
+		default:
+			usageClause = "使用量接近同岗中位数"
+		}
+	}
+
+	effBad := effRank >= 0.75
+	var effClause string
+	switch {
+	case effBad:
+		if len(effNotes) == 0 {
+			effNotes = append(effNotes, "单位成本/缓存表现偏弱")
+		}
+		effClause = strings.Join(effNotes, "、")
+	case effRank >= 0:
+		effClause = "单位成本/缓存优于同岗"
+	default:
+		effClause = ""
+	}
+
+	switch {
+	case usageClause != "" && effClause != "":
+		conn := "，且"
+		if effBad {
+			conn = "，但"
+		}
+		return usageClause + conn + effClause
+	case usageClause != "":
+		return usageClause
+	default:
+		return effClause
+	}
+}
+
 // signedPct 显示带符号的百分比（周环比用），0 显示为 0.0%。
 func signedPct(v float64) string {
 	if v == 0 {
@@ -366,9 +453,14 @@ func writePersonalSections(b *strings.Builder, r *report.Report) {
 			fmt.Fprintf(b, "| %s | %s | %s | P%.0f |\n",
 				pm.Label, fmtPeerVal(pm.Current, pm.Unit, rate), fmtPeerVal(pm.P50, pm.Unit, rate), pm.PercentileRank*100)
 		}
-		// 效能标签
+		// 效能标签（附一句动态解释：本人 vs 同岗 P50）
 		if r.Expression.EfficiencyLabel != "" {
-			fmt.Fprintf(b, "\n- 使用效能标签：**%s**\n", r.Expression.EfficiencyLabel)
+			explain := efficiencyLabelExplain(j.PeerProfiles)
+			if explain != "" {
+				fmt.Fprintf(b, "\n- 使用效能标签：**%s**——%s\n", r.Expression.EfficiencyLabel, explain)
+			} else {
+				fmt.Fprintf(b, "\n- 使用效能标签：**%s**\n", r.Expression.EfficiencyLabel)
+			}
 		}
 		fmt.Fprintf(b, "- 本画像用于资源治理、优秀实践沉淀和使用辅导；不单独作为能力或绩效结论。\n")
 	} else {
@@ -490,7 +582,7 @@ func writePersonalSections(b *strings.Builder, r *report.Report) {
 		fmt.Fprintf(b, "- 无异常命中。\n")
 	}
 	// 反馈入口（异常状态机需人工确认，离线仅占位；阶段一可让用户标注确认/误报/已恢复）
-	fmt.Fprintf(b, "- 反馈入口：请确认该异常是否属实（□属实 □误报 □已恢复）——用于后续「异常状态机（待确认/已确认/修复中/已恢复/误报）」演进。\n")
+	fmt.Fprintf(b, "- 反馈入口：请确认该异常（□正常任务 □已停止 □归属错误 □误报 □需协助）——用于后续「异常状态机（待确认/已确认/修复中/已恢复/误报）」演进。\n")
 
 	// 七、优化建议（data-based，写入 ## 建议 之前由 RenderMD 统一输出，这里不重复）
 }

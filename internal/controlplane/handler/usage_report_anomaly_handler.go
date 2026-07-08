@@ -89,15 +89,17 @@ func NewAnomalyFeedbackHandler(repo AnomalyRecordRepoInterface) *AnomalyFeedback
 	return &AnomalyFeedbackHandler{repo: repo}
 }
 
-// anomalyWindowStartParse 解析 +08:00 RFC3339 命中窗口起点（分钟精度）。成功返回 (t, true)。
-// 空串返回零时间且 ok=false（调用方按「非按窗规则」处理，落库用零时间哨兵）。
+// anomalyWindowStartParse 解析 +08:00 RFC3339 命中窗口起点并规范化为**分钟精度**（与读回 anomalyWindowStartStr
+// 的分钟精度口径完全对称，避免 DB timestamptz 秒/微秒级漂移导致 upsert→读回→再匹配三元组失配）。
+// 成功返回 (t, true)；空串返回零时间且 ok=false（调用方按「非按窗规则」处理，落库用零时间哨兵）。
 func anomalyWindowStartParse(s string) (time.Time, bool) {
 	if s == "" {
 		return time.Time{}, false
 	}
 	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
 		if t, err := time.Parse(layout, s); err == nil {
-			return t, true
+			// 统一到分钟精度（+08:00 为整时偏移，Truncate(Minute) 跨时区安全）。
+			return t.Truncate(time.Minute), true
 		}
 	}
 	return time.Time{}, false

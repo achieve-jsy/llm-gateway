@@ -63,7 +63,7 @@ func TestAnomalyWindowStartStr_ZeroTime(t *testing.T) {
 	}
 }
 
-// TestAnomalyWindowStartParse 锁定 +08:00 RFC3339 解析（分钟精度可逆）+ 空串/非法串处理。
+// TestAnomalyWindowStartParse 锁定 +08:00 RFC3339 解析（分钟精度可逆）+ 空串/非法串处理 + 写路径分钟规范化。
 func TestAnomalyWindowStartParse(t *testing.T) {
 	ts, ok := anomalyWindowStartParse("2026-08-28T08:58:00+08:00")
 	if !ok {
@@ -77,6 +77,38 @@ func TestAnomalyWindowStartParse(t *testing.T) {
 	}
 	if _, ok := anomalyWindowStartParse(""); ok {
 		t.Fatalf("空串应返回 ok=false（非按窗规则）")
+	}
+}
+
+// TestAnomalyWindowStartParse_TruncateSubMinute 锁定写路径把 sub-minute 输入规范化为分钟精度，
+// 与读回异常WindowStartStr 的分钟精度完全对称，避免 DB timestamptz 秒/微秒漂移导致再匹配失配。
+func TestAnomalyWindowStartParse_TruncateSubMinute(t *testing.T) {
+	// 带秒/毫秒的输入：Db 存 timestamptz，读回必须仍是分钟精度，否则 upsert→读回→按
+	// (rule, window_start, member_id) 三元组再匹配会因秒级尾差失配。
+	for _, c := range []struct {
+		in, want string
+	}{
+		{"2026-08-28T08:58:30+08:00", "2026-08-28T08:58:00+08:00"},
+		{"2026-08-28T08:58:59.999+08:00", "2026-08-28T08:58:00+08:00"},
+	} {
+		ts, ok := anomalyWindowStartParse(c.in)
+		if !ok {
+			t.Fatalf("应解析成功: %s", c.in)
+		}
+		if got := anomalyWindowStartStr(ts); got != c.want {
+			t.Errorf("sub-minute 输入 %s 应规范化为 %s, got %q", c.in, c.want, got)
+		}
+	}
+}
+
+// TestAnomalyWindowStartParseRoundTrip_UTC 锁定 UTC 输入也按相同 +08:00 分钟规范化（跨时区一致）。
+func TestAnomalyWindowStartParseRoundTrip_UTC(t *testing.T) {
+	ts, ok := anomalyWindowStartParse("2026-08-28T00:58:30Z")
+	if !ok {
+		t.Fatalf("应解析成功")
+	}
+	if got := anomalyWindowStartStr(ts); got != "2026-08-28T08:58:00+08:00" {
+		t.Fatalf("UTC 输入应输出 +08:00 分钟精度: got %q", got)
 	}
 }
 

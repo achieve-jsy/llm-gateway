@@ -9,13 +9,13 @@ import (
 	"time"
 )
 
-// anomalyFeedbackGoSource 定位并读取同包 anomaly_feedback_handler.go 源码（测试运行于同目录）。
-func anomalyFeedbackGoSource() (string, error) {
+// usageReportAnomalyGoSource 定位并读取同包 usage_report_anomaly_handler.go 源码（测试运行于同目录）。
+func usageReportAnomalyGoSource() (string, error) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		return "", os.ErrNotExist
 	}
-	b, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "anomaly_feedback_handler.go"))
+	b, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "usage_report_anomaly_handler.go"))
 	if err != nil {
 		return "", err
 	}
@@ -80,20 +80,20 @@ func TestAnomalyWindowStartParse(t *testing.T) {
 	}
 }
 
-// TestReportAnomalyStatus_TableUsed 锁定读回接口操作 anomaly_records 表（契约稳定）。
-func TestReportAnomalyStatus_TableUsed(t *testing.T) {
-	src, err := anomalyFeedbackGoSource()
+// TestReportAnomalyStatus_UsesAnomalyRecordModel 锁定读回接口操作 model.AnomalyRecord（契约稳定）。
+func TestReportAnomalyStatus_UsesAnomalyRecordModel(t *testing.T) {
+	src, err := usageReportAnomalyGoSource()
 	if err != nil {
 		t.Fatalf("读取源码: %v", err)
 	}
-	if !strings.Contains(src, `Table("anomaly_records")`) {
-		t.Fatalf("读回接口必须查 anomaly_records 表")
+	if !strings.Contains(src, "model.AnomalyRecord{") {
+		t.Fatalf("读回接口必须使用 model.AnomalyRecord")
 	}
 }
 
 // TestReportAnomalyFeedback_EnumGuard 锁定反馈接口做 5 态枚举校验（非法状态 400）。
 func TestReportAnomalyFeedback_EnumGuard(t *testing.T) {
-	src, err := anomalyFeedbackGoSource()
+	src, err := usageReportAnomalyGoSource()
 	if err != nil {
 		t.Fatalf("读取源码: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestReportAnomalyFeedback_EnumGuard(t *testing.T) {
 
 // TestReportAnomalyUpsert_UniqKey 锁定 upsert 唯一键五元组 + 不覆盖用户反馈态语义。
 func TestReportAnomalyUpsert_UniqKey(t *testing.T) {
-	src, err := anomalyFeedbackGoSource()
+	src, err := usageReportAnomalyGoSource()
 	if err != nil {
 		t.Fatalf("读取源码: %v", err)
 	}

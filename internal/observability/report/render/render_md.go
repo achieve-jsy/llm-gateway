@@ -824,7 +824,7 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 				explained = "已解释"
 			}
 			w("| 员工%d | %s | %s | %s | %s |\n",
-				tc.Idx, tc.JobCategory, signedPct(tc.WoWCostPct), causeDisplay, explained)
+				tc.Idx, memberJobDisplay(tc), signedPct(tc.WoWCostPct), causeDisplay, explained)
 		}
 	} else {
 		w("- 无上期数据，不产出环比变化（需 -agg 模式 + 有上期记录）\n")
@@ -866,7 +866,7 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 			continue
 		}
 		w("- 员工%d（%s，成本环比 %s）：%s\n",
-			tc.Idx, orDash(tc.JobCategory), signedPct(tc.WoWCostPct), memberAdviceAction(tc))
+			tc.Idx, memberJobDisplay(tc), signedPct(tc.WoWCostPct), memberAdviceAction(tc))
 		hasSuggestion = true
 	}
 	// ② 岗位级通用建议：从部门岗位分布挑「普遍且人均成本高于部门人均」的岗位给一条通用建议。
@@ -1247,6 +1247,23 @@ func residualJobCategory(cat string) bool {
 	default:
 		return false
 	}
+}
+
+// memberJobDisplay 成员岗位展示名（四章重点变化表 / 建议等按成员渲染岗位列）。
+// 优先用 derive 已算好的 TopChangedMember.JobDisplay（含残差回退）；为空时在此按同一口径回退：
+// JobTitle 非残差 → 取 JobTitle；其次 JobCategory 非残差 → 取 JobCategory；仍残差/空 → 「未归类」。
+// 与主因「未归类岗位」一致，避免「其他/未分类」等无信息量占位。
+func memberJobDisplay(tc report.TopChangedMember) string {
+	if tc.JobDisplay != "" {
+		return tc.JobDisplay
+	}
+	if !residualJobCategory(tc.JobTitle) && tc.JobTitle != "" {
+		return tc.JobTitle
+	}
+	if !residualJobCategory(tc.JobCategory) && tc.JobCategory != "" {
+		return tc.JobCategory
+	}
+	return "未归类"
 }
 
 // compactJobGroups 精简部门「岗位分布」表。

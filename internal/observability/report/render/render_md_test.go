@@ -441,6 +441,60 @@ func TestRenderMDDeptTopChangedAdvice(t *testing.T) {
 	}
 }
 
+// TestMemberJobDisplay 验证成员岗位展示名的残差回退口径：
+// 优先 derive 已算好的 JobDisplay；否则 JobTitle 非残差→取 JobTitle；其次 JobCategory 非残差→取 JobCategory；
+// 仍残差/空→「未归类」。与主因「未归类岗位」一致，避免「其他/未分类」等无信息量占位。
+func TestMemberJobDisplay(t *testing.T) {
+	cases := []struct {
+		name string
+		tc   report.TopChangedMember
+		want string
+	}{
+		{"JobDisplay 已算好则直接用", report.TopChangedMember{JobCategory: "其他", JobTitle: "", JobDisplay: "后端开发工程师"}, "后端开发工程师"},
+		{"JobCategory 残差→JobTitle", report.TopChangedMember{JobCategory: "其他", JobTitle: "后端开发工程师"}, "后端开发工程师"},
+		{"JobCategory 残差且 JobTitle 残差→未归类", report.TopChangedMember{JobCategory: "未知", JobTitle: "未分类"}, "未归类"},
+		{"JobCategory 残差且 JobTitle 空→未归类", report.TopChangedMember{JobCategory: "其他", JobTitle: ""}, "未归类"},
+		{"JobCategory 非残差→直接用", report.TopChangedMember{JobCategory: "工程师", JobTitle: ""}, "工程师"},
+	}
+	for _, c := range cases {
+		if got := memberJobDisplay(c.tc); got != c.want {
+			t.Errorf("%s: memberJobDisplay(%+v)=%q, want %q", c.name, c.tc, got, c.want)
+		}
+	}
+}
+
+// TestRenderMDDeptTopChangedJobResidualFallback 验证四章重点变化表岗位列做残差回退：
+// 岗位列从无信息量的「其他/未知」回退到具体 JobTitle；仍残差/空则显示「未归类」。并确建议章节岗位列同步一致。
+func TestRenderMDDeptTopChangedJobResidualFallback(t *testing.T) {
+	u := &report.UnitFact{
+		Member: report.UnitMember{UserCount: 20, ActiveUserCount: 10, ReqCount: 1000, SuccessCount: 950, EstCostUSD: 10.0, TotalTokens: 10000},
+		TopChanged: []report.TopChangedMember{
+			{Idx: 1, JobCategory: "其他", JobTitle: "后端开发工程师", WoWCostPct: 120.0, AnomalyCause: "A2 成本燃烧"},
+			{Idx: 2, JobCategory: "未知", JobTitle: "", WoWCostPct: 60.0, AnomalyCause: "A5 非工作时段"},
+		},
+	}
+	r := markdownReport("department")
+	r.Fact.Department = u
+	r.Judgment.Anomalies = []report.AnomalyHit{{Rule: "A2", Name: "成本燃烧", Severity: "P1", Hit: true}}
+	md := RenderMD(&r)
+	for _, want := range []string{
+		// 四章重点变化表岗位列：残差「其他」→具体 job_title；残差「未知」且无 title →「未归类」。
+		"| 员工1 | 后端开发工程师 | +120.0% | A2 成本燃烧 | 已解释 |",
+		"| 员工2 | 未归类 | +60.0% | A5 非工作时段 | 已解释 |",
+		// 六、建议岗位列与四章一致，不再出现「其他/未知」。
+		"- 员工1（后端开发工程师，成本环比 +120.0%）：",
+		"- 员工2（未归类，成本环比 +60.0%）：",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("department 四章岗位列残差回退 missing %q:\n%s", want, md)
+		}
+	}
+	// 不应再出现无信息量的「其他/未知」作为岗位展示。
+	if strings.Contains(md, "员工1（其他，成本环比") || strings.Contains(md, "员工2（未知，成本环比") {
+		t.Errorf("四章/建议岗位列不应再显示「其他/未知」占位:\n%s", md)
+	}
+}
+
 // TestPositionLevelAdvice 直接验证 positionLevelAdvice 边界：
 // 高于部门人均衡的岗位给通用建议；低于/等于部门人均、空列表、人均成本为 0、残差/低活跃岗位均不给建议。
 func TestPositionLevelAdvice(t *testing.T) {

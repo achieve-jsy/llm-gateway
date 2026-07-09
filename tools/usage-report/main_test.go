@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/example/llm-gateway/tools/usage-report/client"
+)
 
 func TestInclusiveDays(t *testing.T) {
 	for _, tt := range []struct {
@@ -54,5 +58,25 @@ func TestPeriodLabelIsoWeek(t *testing.T) {
 	// 无 ISO 周：回退原形态。
 	if got := periodLabel("week", "2026-08-10", "2026-08-16", ""); got != "week 2026-08-10~2026-08-16" {
 		t.Fatalf("periodLabel(noiso)=%q", got)
+	}
+}
+
+func TestStudioNameFromList(t *testing.T) {
+	studios := []client.Studio{
+		{ID: "s1", Name: "技术研究工作室"},
+		{ID: "s2", Name: "产品工作室"},
+	}
+	if got := studioNameFromList(studios, "s1"); got != "技术研究工作室" {
+		t.Errorf("studioNameFromList(s1)=%q, want 技术研究工作室", got)
+	}
+	if got := studioNameFromList(studios, "s2"); got != "产品工作室" {
+		t.Errorf("studioNameFromList(s2)=%q, want 产品工作室", got)
+	}
+	// 未匹配 → 空串（渲染层降级为仅部门名）
+	if got := studioNameFromList(studios, "nope"); got != "" {
+		t.Errorf("studioNameFromList(nope)=%q, want empty", got)
+	}
+	if got := studioNameFromList(nil, "s1"); got != "" {
+		t.Errorf("studioNameFromList(nil)=%q, want empty", got)
 	}
 }

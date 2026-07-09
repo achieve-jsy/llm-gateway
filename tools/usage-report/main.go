@@ -159,6 +159,7 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 			"GET /api/v1/usage/logs|scoped/logs",
 			"GET /api/v1/usage/dashboard",
 			"GET /api/v1/org/departments",
+			"GET /api/v1/org/studios", // 部门报告解析父工作室名（Meta.Scope.StudioName）
 			"GET /api/v1/org/departments/:dept_id/members",
 			"GET /api/v1/model-catalog/search",
 		},
@@ -783,6 +784,8 @@ func resolveScope(ctx context.Context, cli *client.Client, cfg Config) (report.S
 			if d.DeptID == cfg.Scope || d.ID == cfg.Scope {
 				s.ID, s.Name = d.DeptID, d.DeptName
 				s.DeptID, s.StudioID = d.DeptID, d.StudioID
+				// 父工作室归属：studio_id → 工作室名，供部门报告标题「部门名（工作室名）」。
+				s.StudioName = resolveStudioName(ctx, cli, s.StudioID)
 				return s, nil
 			}
 		}
@@ -796,12 +799,36 @@ func resolveScope(ctx context.Context, cli *client.Client, cfg Config) (report.S
 			if st.ID == cfg.Scope {
 				s.ID, s.Name = st.ID, st.Name
 				s.StudioID = st.ID
+				s.StudioName = st.Name
 				return s, nil
 			}
 		}
 		return report.Scope{}, fmt.Errorf("未找到工作室 scope %q", cfg.Scope)
 	}
 	return s, nil
+}
+
+// resolveStudioName 尽力把 studio_id 解析为父工作室名（部门报告标题用）。
+// 拉取失败或未匹配时返回空串（渲染层降级为仅部门名），绝不中断报告。
+func resolveStudioName(ctx context.Context, cli *client.Client, studioID string) string {
+	if studioID == "" {
+		return ""
+	}
+	studios, err := cli.FetchStudios(ctx)
+	if err != nil {
+		return ""
+	}
+	return studioNameFromList(studios, studioID)
+}
+
+// studioNameFromList 在 studio 列表中按 ID 查工作室名；未匹配返回 ""（纯函数，供单测）。
+func studioNameFromList(studios []client.Studio, studioID string) string {
+	for _, st := range studios {
+		if st.ID == studioID {
+			return st.Name
+		}
+	}
+	return ""
 }
 
 // fetchScopeConcurrency 并行拉取的日窗口数上限。实测（X-Lab 3 日窗口样本，固定工作量）吞吐：

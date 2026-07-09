@@ -116,6 +116,7 @@ type Scope struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	StudioID    string `json:"studio_id,omitempty"`
+	StudioName  string `json:"studio_name,omitempty"` // 父工作室名（部门报告标题「部门名（工作室名）」；studio 级别为自身名；空=未解析）
 	DeptID      string `json:"dept_id,omitempty"`
 	JobCategory string `json:"job_category,omitempty"`
 	JobFamily   string `json:"job_family,omitempty"`

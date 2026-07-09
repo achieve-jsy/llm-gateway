@@ -173,6 +173,18 @@ func slotKey(job string) string {
 	return job
 }
 
+// resolveJobDisplay 岗位展示名（供重点变化表/建议等按成员渲染岗位列）：
+// 优先非残差 job_title，其次非残差归一槽，仍占位则「未归类」。避免「其他/未分类」等无信息量占位。
+func resolveJobDisplay(slot, title string) string {
+	if !isResidualJob(title) {
+		return title
+	}
+	if !isResidualJob(slot) {
+		return slot
+	}
+	return "未归类"
+}
+
 // assembleUnitMainCause 按 ①②③ 拼接主因一句话；无任何可陈述部分时返回空串。
 func assembleUnitMainCause(con *report.UnitConclusion) string {
 	if con == nil {

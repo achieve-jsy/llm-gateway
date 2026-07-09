@@ -168,7 +168,10 @@ type TopChangedMember struct {
 	Idx         int    `json:"idx"`          // 1,2,3...
 	JobCategory string `json:"job_category"` // 归一岗位槽（title→category→family→"其他"）
 	// JobTitle 最具体岗位名（原样 job_title，未归一；仅作主因残差回退的恢复源，不直接渲染）。
-	JobTitle    string  `json:"job_title,omitempty"` // 空=无具体岗位名
+	JobTitle string `json:"job_title,omitempty"` // 空=无具体岗位名
+	// JobDisplay 岗位展示名（供重点变化表/建议等按成员渲染岗位列）：优先非残差 job_title，
+	// 其次非残差归一槽，仍占位则「未归类」。避免「其他/未分类」等无信息量占位。
+	JobDisplay  string  `json:"job_display,omitempty"`
 	WoWCostPct  float64 `json:"wow_cost_pct"`
 	WoWReqPct   float64 `json:"wow_req_pct"`
 	TopModel    string  `json:"top_model"`

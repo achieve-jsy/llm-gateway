@@ -209,3 +209,23 @@ func TestFillUnitConclusion_Idempotent(t *testing.T) {
 	}
 	FillUnitConclusion(nil) // 不应 panic
 }
+
+// resolveJobDisplay：重点变化表/建议等按成员的岗位展示名（残差→未归类，优先 job_title）。
+func TestResolveJobDisplay(t *testing.T) {
+	cases := []struct {
+		name, slot, title, want string
+	}{
+		{"residual slot, empty title", "其他", "", "未归类"},
+		{"residual variant unknown", "未知", "", "未归类"},
+		{"empty slot/title", "", "", "未归类"},
+		{"specific title wins", "后端开发", "后端开发工程师", "后端开发工程师"},
+		{"title equals slot", "后端开发", "后端开发", "后端开发"},
+		{"specific slot, empty title", "算法", "", "算法"},
+		{"residual title but specific slot", "后端开发", "其他", "后端开发"},
+	}
+	for _, c := range cases {
+		if got := resolveJobDisplay(c.slot, c.title); got != c.want {
+			t.Errorf("%s: resolveJobDisplay(%q,%q)=%q, want %q", c.name, c.slot, c.title, got, c.want)
+		}
+	}
+}

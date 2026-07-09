@@ -165,8 +165,10 @@ type DeptContribution struct {
 
 // TopChangedMember 成本变化最大成员（匿名，部门周报四章）。
 type TopChangedMember struct {
-	Idx         int     `json:"idx"` // 1,2,3...
-	JobCategory string  `json:"job_category"`
+	Idx         int    `json:"idx"`          // 1,2,3...
+	JobCategory string `json:"job_category"` // 归一岗位槽（title→category→family→"其他"）
+	// JobTitle 最具体岗位名（原样 job_title，未归一；仅作主因残差回退的恢复源，不直接渲染）。
+	JobTitle    string  `json:"job_title,omitempty"` // 空=无具体岗位名
 	WoWCostPct  float64 `json:"wow_cost_pct"`
 	WoWReqPct   float64 `json:"wow_req_pct"`
 	TopModel    string  `json:"top_model"`

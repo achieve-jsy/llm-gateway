@@ -221,7 +221,7 @@ type UnitConclusion struct {
 	MainCause        string   `json:"main_cause"`        // 一句话，如「成本环比 +16.4%，集中在 3 名后端开发，命中 A1/A2/A5」
 	CostDeltaPct     float64  `json:"cost_delta_pct"`    // ① 成本周环比幅度 %（对比上期同口径成员聚合）
 	ConcentrationN   int      `json:"concentration_n"`   // ② 集中人数（成本增长的主因岗位人数）
-	ConcentrationJob string   `json:"concentration_job"` // ② 主因岗位（job 归一：job_title→job_category→job_family）
+	ConcentrationJob string   `json:"concentration_job"` // ② 主因岗位（job 归一 title→category→family；残差占位如"其他/未分类/空"回退更具体 job_title，仍占位则「未归类岗位」）
 	RuleCodes        []string `json:"rule_codes"`        // ③ 命中规则码集合（A1/A2/A5，去重升序）
 	AnomalyLabels    []string `json:"anomaly_labels"`    // ③ 完整 rule+name 标签（供渲染加细）
 	AnomalyWord      string   `json:"anomaly_word"`      // ③ 异常措辞：命中 A1/A2/A5

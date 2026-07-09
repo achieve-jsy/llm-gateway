@@ -644,6 +644,7 @@ func buildTopChanged(cur, prev []report.MemberAgg, userTopModels map[string][]re
 		wowCostPct float64
 		wowReqPct  float64
 		jobCat     string
+		jobTitle   string
 		absWoW     float64
 	}
 	var candidates []candidate
@@ -678,6 +679,7 @@ func buildTopChanged(cur, prev []report.MemberAgg, userTopModels map[string][]re
 			wowCostPct: wowCost,
 			wowReqPct:  wowReq,
 			jobCat:     cat,
+			jobTitle:   m.JobTitle, // 原样岗位名，供主因残差回退
 			absWoW:     abs,
 		})
 	}
@@ -700,6 +702,7 @@ func buildTopChanged(cur, prev []report.MemberAgg, userTopModels map[string][]re
 		result[i] = report.TopChangedMember{
 			Idx:          i + 1,
 			JobCategory:  c.jobCat,
+			JobTitle:     c.jobTitle, // 原样岗位名，供主因残差回退（JobCategory 已归一为槽）
 			WoWCostPct:   c.wowCostPct,
 			WoWReqPct:    c.wowReqPct,
 			TopModel:     topModel,

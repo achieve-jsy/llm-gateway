@@ -77,7 +77,16 @@ func buildUnitConclusion(u *report.UnitFact) *report.UnitConclusion {
 			}
 		}
 		con.ConcentrationN = best.n
-		con.ConcentrationJob = bestJob
+		// 残差/合并占位岗位名（其他/其它/未知/未分类/空）无信息量：回退到集中人群更具体的岗位名
+		// （优先 job_title 原样值）；仍为占位/空则用「未归类岗位」兜底措辞，避免主因输出「集中在 N 名其他」。
+		if isResidualJob(bestJob) {
+			con.ConcentrationJob = "未归类岗位"
+			if specific := specificJobOfSlot(growth, bestJob); specific != "" {
+				con.ConcentrationJob = specific
+			}
+		} else {
+			con.ConcentrationJob = bestJob
+		}
 	}
 
 	// ---- ③ 异常命中：集中人群（成本增长的 TopChanged）的规则码并集 ----
@@ -129,6 +138,39 @@ func ruleCode(label string) string {
 		return head
 	}
 	return ""
+}
+
+// isResidualJob 判断岗位名是否为「残差/合并占位」值（其他/其它/未知/未分类/空等）。
+// 用于主因②：占位岗位名无信息量，需回退到更具体的岗位名或用「未归类岗位」兜底。
+func isResidualJob(s string) bool {
+	switch strings.TrimSpace(s) {
+	case "", "其他", "其它", "未知", "未分类", "未归类", "未标注", "N/A", "NA", "无", "-", "null", "none":
+		return true
+	}
+	return false
+}
+
+// specificJobOfSlot 在被集中人群（成本增长的 TopChanged）中，取归属于 bestJob 槽位成员里
+// 第一个非占位的最具体岗位名（TopChangedMember.JobTitle 原样；优先 job_title）。
+// 找不到（成员无岗位名/仍占位）返回 ""，由调用方用「未归类岗位」兜底。
+func specificJobOfSlot(growth []report.TopChangedMember, bestJob string) string {
+	for _, tc := range growth {
+		if slotKey(tc.JobCategory) != bestJob {
+			continue
+		}
+		if !isResidualJob(tc.JobTitle) {
+			return tc.JobTitle
+		}
+	}
+	return ""
+}
+
+// slotKey 岗位槽统计键：空槽（未归一）与 buildUnitConclusion 分组用的「未标注」一致。
+func slotKey(job string) string {
+	if job == "" {
+		return "未标注"
+	}
+	return job
 }
 
 // assembleUnitMainCause 按 ①②③ 拼接主因一句话；无任何可陈述部分时返回空串。

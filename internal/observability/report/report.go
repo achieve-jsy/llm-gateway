@@ -278,8 +278,18 @@ type UnitService struct {
 	// TopModel 该块主用模型名（成本最高 Key 的 top_model；代表本块主要服务的模型）。
 	TopModel string `json:"top_model,omitempty"`
 	// Keys 逐 Key 明细（agg 模式由 /usage/report/service-keys 装配，供「ServiceKey 表」逐行渲染）。
-	Keys  []ServiceKeyInfo `json:"keys,omitempty"`
-	Notes string           `json:"notes"`
+	Keys []ServiceKeyInfo `json:"keys,omitempty"`
+	// ActiveKeyCount 活跃 Service Key 数（有调用/成本者）。
+	ActiveKeyCount int `json:"active_key_count,omitempty"`
+	// TopN 成本集中度参数：取成本前 M 个 Key（默认 2，见 derive.serviceKeyTopNDefault）。
+	TopN int `json:"top_n,omitempty"`
+	// TopNCostRatio 前 TopN 个 Key 成本占全部 Service Key 总成本之比 0~1（活跃 Key<2 或总成本为 0 时不产出）。
+	TopNCostRatio float64 `json:"top_n_cost_ratio,omitempty"`
+	// TopNKeys 前 TopN 个 Key 名（按成本降序；供渲染加细）。
+	TopNKeys []string `json:"top_n_keys,omitempty"`
+	// ConcentrationText 成本集中度一句话，如「活跃 Key 6 个，Top 2 成本占比 78%」；多 Key 才产出，单 Key 为空。
+	ConcentrationText string `json:"concentration_text,omitempty"`
+	Notes             string `json:"notes"`
 }
 
 // ServiceKeyInfo 单个程序 Service Key 的聚合行（ServiceKey 表逐行渲染用）。

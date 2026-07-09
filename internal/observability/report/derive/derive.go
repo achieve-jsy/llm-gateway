@@ -432,6 +432,56 @@ func assembleServiceKey(sk *report.UnitService, keys []report.ServiceKeyAgg) {
 		})
 	}
 	sk.Notes = fmt.Sprintf("%d 个 Service Key（由服务端 service-keys 聚合装配；OwnerName=成本最高 Key 的 owner；ModelCount=各 Key 模型数之和的近似；逐 Key 明细见下表）", len(keys))
+	// TopN 成本集中度（③）：从逐 Key 明细推导「活跃 Key N 个，Top M 成本占比 X%」。
+	computeServiceKeyConcentration(sk, serviceKeyTopNDefault)
+}
+
+// serviceKeyTopNDefault Service Key 成本集中度的 Top M 默认值（部门周报 ③）。
+const serviceKeyTopNDefault = 2
+
+// computeServiceKeyConcentration 计算并回填 Service Key 块的 TopN 成本集中度。
+// 规则：活跃 Key = 有调用或成本者；按成本降序取前 M（有效 = min(M, 活跃数)）；
+// 集中度 = 前 M 成本之和 / 全部活跃 Key 总成本。活跃 Key<2 或总成本为 0 时不产出（集中度无意义）。
+// 只读 sk.Keys，不改其顺序；幂等。纯函数，供单测。
+func computeServiceKeyConcentration(sk *report.UnitService, m int) {
+	if sk == nil || len(sk.Keys) == 0 {
+		return
+	}
+	active := make([]report.ServiceKeyInfo, 0, len(sk.Keys))
+	var totalCost float64
+	for _, k := range sk.Keys {
+		if k.ReqCount > 0 || k.CostUSD > 0 {
+			active = append(active, k)
+			totalCost += k.CostUSD
+		}
+	}
+	sk.ActiveKeyCount = len(active)
+	if len(active) < 2 || totalCost <= 0 {
+		sk.TopN = 0
+		sk.TopNCostRatio = 0
+		sk.TopNKeys = nil
+		sk.ConcentrationText = ""
+		return
+	}
+	// 按成本降序稳定的取前 M（副本排序，不修改 sk.Keys 顺序）。
+	sort.SliceStable(active, func(i, j int) bool { return active[i].CostUSD > active[j].CostUSD })
+	topN := m
+	if topN <= 0 {
+		topN = serviceKeyTopNDefault
+	}
+	if topN > len(active) {
+		topN = len(active)
+	}
+	var topCost float64
+	topKeys := make([]string, 0, topN)
+	for i := 0; i < topN; i++ {
+		topCost += active[i].CostUSD
+		topKeys = append(topKeys, active[i].KeyName)
+	}
+	sk.TopN = topN
+	sk.TopNCostRatio = topCost / totalCost
+	sk.TopNKeys = topKeys
+	sk.ConcentrationText = fmt.Sprintf("活跃 Key %d 个，Top %d 成本占比 %.0f%%", sk.ActiveKeyCount, topN, sk.TopNCostRatio*100)
 }
 
 // buildDeptContributions 按 DeptID 聚合 MemberAgg，计算工作室下各部门的成本/人数/人均贡献。

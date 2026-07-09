@@ -284,6 +284,44 @@ func TestRenderMDDeptServiceKeyWoWAndTopModel(t *testing.T) {
 	}
 }
 
+// TestRenderMDDeptServiceKeyConcentration 验证部门第三章 ServiceKey 块补「TopN 成本集中度」：
+// 多 Key 时渲染 derive 的 ConcentrationText（如「活跃 Key 6 个，Top 2 成本占比 78%」）；为空（单 Key/不足 2）时降级不输出。
+func TestRenderMDDeptServiceKeyConcentration(t *testing.T) {
+	u := &report.UnitFact{
+		Member: report.UnitMember{EstCostUSD: 10.0, ReqCount: 100},
+		ServiceKey: report.UnitService{
+			ReqCount: 200, TotalTokens: 10000, EstCostUSD: 20.0, TopModel: "gpt-4o",
+			ActiveKeyCount: 6, TopN: 2, TopNCostRatio: 0.78,
+			ConcentrationText: "活跃 Key 6 个，Top 2 成本占比 78%",
+			Keys: []report.ServiceKeyInfo{
+				{KeyName: "k1", OwnerName: "app1", ReqCount: 200, TotalTokens: 10000, CostUSD: 20.0, TopModel: "gpt-4o"},
+				{KeyName: "k2", OwnerName: "app2", ReqCount: 100, TotalTokens: 5000, CostUSD: 10.0, TopModel: "gpt-4o"},
+			},
+		},
+	}
+	r := markdownReport("department")
+	r.Fact.Department = u
+	md := RenderMD(&r)
+	if !strings.Contains(md, "- 成本集中度：活跃 Key 6 个，Top 2 成本占比 78%") {
+		t.Errorf("部门 ServiceKey 块缺少成本集中度行:\n%s", md)
+	}
+	// 为空（单 Key 或不足 2）时不输出集中度行
+	r2 := markdownReport("department")
+	r2.Fact.Department = &report.UnitFact{
+		Member: report.UnitMember{EstCostUSD: 10.0, ReqCount: 100},
+		ServiceKey: report.UnitService{
+			ReqCount: 200, TotalTokens: 10000, EstCostUSD: 20.0, TopModel: "gpt-4o",
+			ConcentrationText: "",
+			Keys: []report.ServiceKeyInfo{
+				{KeyName: "k1", OwnerName: "app1", ReqCount: 200, TotalTokens: 10000, CostUSD: 20.0, TopModel: "gpt-4o"},
+			},
+		},
+	}
+	if md2 := RenderMD(&r2); strings.Contains(md2, "成本集中度：") {
+		t.Errorf("ConcentrationText 为空时不应输出成本集中度行:\n%s", md2)
+	}
+}
+
 // TestRenderMDStudioBudgetExec 验证工作室「一页摘要」预算执行行：Supported 时输出「预算执行：X%（实际/额度）」，
 // Supported=false（不可得）时输出「预算执行：不可得（note）」降级，不硬造数值。
 func TestRenderMDStudioBudgetExec(t *testing.T) {
@@ -363,26 +401,73 @@ func TestRenderMDStudioRiskStatus(t *testing.T) {
 	}
 }
 
-// TestRenderMDDeptTopChangedAdvice 验证部门第六章「建议」具体到人+动作：
-// 对重点变化成员逐条给出建议（结合岗位/成本环比/承担模型/命中主因），替代原先泛泛的「关注成本环比变化最大的成员」文案。
+// TestRenderMDDeptTopChangedAdvice 验证部门第六章「建议」精简：①仅对命中异常的重点变化成员给精简建议；
+// ②补一条岗位级通用建议（人均成本高于部门人均衡的岗位）；③不再对未命中异常成员逐条重复建议。
 func TestRenderMDDeptTopChangedAdvice(t *testing.T) {
-	r := markdownReport("department")
-	r.Fact.Department.TopChanged = []report.TopChangedMember{
-		{Idx: 1, JobCategory: "工程师", WoWCostPct: 120.0, TopModel: "gpt-4o", AnomalyCause: "A2 成本燃烧"},
-		{Idx: 2, JobCategory: "设计", WoWCostPct: -30.0, AnomalyCause: ""},
+	u := &report.UnitFact{
+		Member: report.UnitMember{
+			UserCount: 20, ActiveUserCount: 10, ReqCount: 1000, SuccessCount: 950, EstCostUSD: 10.0, TotalTokens: 10000,
+			PerCapita: report.PerCapita{EstCostUSD: 50},
+		},
+		JobGroups: []report.JobGroup{
+			{JobCategory: "工程师", ActiveUsers: 3, AvgCostUSD: 100, MedianCostUSD: 2, TopModel: "gpt-4o"}, // 人均 100 > 部门人均 50 → 触发岗位级通用建议
+			{JobCategory: "设计", ActiveUsers: 3, AvgCostUSD: 20, MedianCostUSD: 1, TopModel: "gpt-4o"},
+		},
+		TopChanged: []report.TopChangedMember{
+			{Idx: 1, JobCategory: "工程师", WoWCostPct: 120.0, AnomalyCause: "A2 成本燃烧"},
+			{Idx: 2, JobCategory: "设计", WoWCostPct: -30.0, AnomalyCause: ""}, // 未命中异常 → 不给建议
+		},
 	}
+	r := markdownReport("department")
+	r.Fact.Department = u
+	// 命中 A2 异常，使 五、异常处置 计数非空（避免「无异常」兜底行干扰断言）。
+	r.Judgment.Anomalies = []report.AnomalyHit{{Rule: "A2", Name: "成本燃烧", Severity: "P1", Hit: true}}
 	md := RenderMD(&r)
 	for _, want := range []string{
-		"- 重点变化成员建议：",
-		"- 员工1（工程师，成本环比 +120.0%）：确认是否存在后台脚本/循环调用或异常流量，必要时限流；命中异常A2 成本燃烧，建议优先处理",
-		"- 员工2（设计，成本环比 -30.0%）：成本环比下降明显，确认是否用量减少或合理优化",
+		"- 员工1（工程师，成本环比 +120.0%）：确认是否存在后台脚本/循环调用或异常流量，必要时限流",
+		"- 岗位级通用建议：工程师 岗人均成本最高（¥720.00），建议核对是否存在后台脚本/批量调用，必要时限流或降档，并统一可缓存的提示词模板以提升缓存复用。",
 	} {
 		if !strings.Contains(md, want) {
-			t.Errorf("department 六、建议 per-member advice missing %q:\n%s", want, md)
+			t.Errorf("department 六、建议 missing %q:\n%s", want, md)
 		}
 	}
-	if strings.Contains(md, "关注成本环比变化最大的成员") {
-		t.Errorf("部门建议仍是泛泛文案，应具体到人+动作:\n%s", md)
+	// 未命中异常的员工2不再逐条重复建议（不会出现「- 员工2（设计…）」形式的建议行）；
+	// 也不再输出旧的「重点变化成员建议：」子列表头。
+	if strings.Contains(md, "- 员工2（设计，成本环比 -30.0%）") {
+		t.Errorf("六、建议 不应再对未命中异常成员重复建议:\n%s", md)
+	}
+	if strings.Contains(md, "- 重点变化成员建议：") {
+		t.Errorf("六、建议 仍使用逐成员子列表头，应改为精简建议:\n%s", md)
+	}
+}
+
+// TestPositionLevelAdvice 直接验证 positionLevelAdvice 边界：
+// 高于部门人均衡的岗位给通用建议；低于/等于部门人均、空列表、人均成本为 0、残差/低活跃岗位均不给建议。
+func TestPositionLevelAdvice(t *testing.T) {
+	rate := 7.2
+	// ① 高于部门人均 → 给建议
+	if s := positionLevelAdvice([]report.JobGroup{{JobCategory: "后端开发", ActiveUsers: 5, AvgCostUSD: 100}}, 50, rate); !strings.Contains(s, "后端开发 岗人均成本最高") {
+		t.Errorf("p.l.a 应给岗位级建议，got %q", s)
+	}
+	// ② 低于部门人均 → 不输出（避免噪音）
+	if s := positionLevelAdvice([]report.JobGroup{{JobCategory: "后端开发", ActiveUsers: 5, AvgCostUSD: 30}}, 50, rate); s != "" {
+		t.Errorf("p.l.a 人均低于部门人均时应为空，got %q", s)
+	}
+	// ③ 空列表 → 空
+	if s := positionLevelAdvice(nil, 50, rate); s != "" {
+		t.Errorf("p.l.a 空列表应为空，got %q", s)
+	}
+	// ④ 人均成本为 0 → 空
+	if s := positionLevelAdvice([]report.JobGroup{{JobCategory: "后端开发", ActiveUsers: 5, AvgCostUSD: 0}}, 50, rate); s != "" {
+		t.Errorf("p.l.a 人均成本为 0 应为空，got %q", s)
+	}
+	// ⑤ 低活跃/残差岗被忽略（即使成本高）
+	groups := []report.JobGroup{
+		{JobCategory: "其他", ActiveUsers: 1, AvgCostUSD: 999},
+		{JobCategory: "交互设计", ActiveUsers: 1, AvgCostUSD: 999},
+	}
+	if s := positionLevelAdvice(groups, 50, rate); s != "" {
+		t.Errorf("p.l.a 残差/低活跃岗应被忽略，got %q", s)
 	}
 }
 
@@ -469,5 +554,173 @@ func TestBuildWeeklyConclusionNoAnomaly(t *testing.T) {
 	got := buildWeeklyConclusion(r)
 	if !strings.Contains(got, "成本环比 +180%") || !strings.Contains(got, "无异常命中") {
 		t.Errorf("无异常命中结论未含成本环比+无异常措辞: %q", got)
+	}
+}
+
+// TestBuildDeptConclusionMainCause 验证部门/工作室【本周结论】读取 derive 层 MainCause（Supported && 非空）：
+// 直接展示主因句，替换旧的「关注 —— 命中 N 条异常（P1）」。
+func TestBuildDeptConclusionMainCause(t *testing.T) {
+	r := markdownReport("department")
+	r.Fact.Department.Conclusion = &report.UnitConclusion{
+		Supported: true,
+		MainCause: "成本环比 +32%，集中在 3 名后端开发，其一命中A5 非工作时段",
+	}
+	if got := buildDeptConclusion(&r); got != "成本环比 +32%，集中在 3 名后端开发，其一命中A5 非工作时段" {
+		t.Errorf("buildDeptConclusion 应直接展示 MainCause，got %q", got)
+	}
+	// 端到端：渲染后【本周结论】行含主因句，不含旧的「命中 %d 条异常」。
+	md := RenderMD(&r)
+	if !strings.Contains(md, "【本周结论】成本环比 +32%，集中在 3 名后端开发，其一命中A5 非工作时段") {
+		t.Errorf("渲染后【本周结论】未含主因句:\n%s", md)
+	}
+}
+
+// TestBuildDeptConclusionDegraded 验证 MainCause 不可用（Supported=false 或 MainCause 为空串）时降级到现有逻辑：
+// 有命中异常 →「关注 —— 命中 N 条异常（P1）」；无异常且成本上涨 →「关注 —— 成本环比 +X%」。
+func TestBuildDeptConclusionDegraded(t *testing.T) {
+	// ① Conclusion 为 nil → 降级到命中异常计数
+	r := markdownReport("department")
+	r.Judgment.Anomalies = []report.AnomalyHit{{Rule: "A2", Name: "成本燃烧", Severity: "P1", Hit: true}}
+	if got := buildDeptConclusion(&r); !strings.Contains(got, "关注 —— 命中 1 条异常（P1）") {
+		t.Errorf("Conclusion 为 nil 时应降级到命中异常，got %q", got)
+	}
+	// ② Supported=true 但 MainCause 为空串 → 降级到成本上涨
+	r2 := markdownReport("department")
+	r2.Fact.Department.Conclusion = &report.UnitConclusion{Supported: true, MainCause: "", CostDeltaPct: 32}
+	r2.Fact.Department.WoWCostPct = 32
+	if got := buildDeptConclusion(&r2); got != "关注 —— 成本环比 +32%" {
+		t.Errorf("MainCause 为空串时应降级到成本上涨，got %q", got)
+	}
+	// ③ Supported=false → 降级到成本上涨（MainCause 即使有内容也不展示）
+	r3 := markdownReport("department")
+	r3.Fact.Department.Conclusion = &report.UnitConclusion{Supported: false, MainCause: "不应展示"}
+	r3.Fact.Department.WoWCostPct = 32
+	if got := buildDeptConclusion(&r3); got != "关注 —— 成本环比 +32%" {
+		t.Errorf("Supported=false 时应降级到成本上涨，got %q", got)
+	}
+}
+
+// TestScopeLabelWithStudio 验证部门标题「部门名（工作室名）」：有父工作室名→追加；空/同名→不追加。
+func TestScopeLabelWithStudio(t *testing.T) {
+	cases := []struct {
+		name string
+		s    report.Scope
+		want string
+	}{
+		{"有父工作室名", report.Scope{Name: "后端研发部", StudioName: "技术研究工作室"}, "后端研发部（技术研究工作室）"},
+		{"StudioName 为空", report.Scope{Name: "后端研发部", StudioName: ""}, "后端研发部"},
+		{"StudioName 与部门名相同（工作室级自身名）", report.Scope{Name: "技术研究工作室", StudioName: "技术研究工作室"}, "技术研究工作室"},
+		{"Name 为空回退 ID", report.Scope{ID: "dept-1", StudioName: "技术研究工作室"}, "dept-1（技术研究工作室）"},
+	}
+	for _, c := range cases {
+		if got := scopeLabelWithStudio(c.s); got != c.want {
+			t.Errorf("%s: scopeLabelWithStudio(%+v)=%q, want %q", c.name, c.s, got, c.want)
+		}
+	}
+}
+
+// TestRenderMDDeptTitleWithStudio 验证部门周报标题带父工作室归属（端到端）；StudioName 未解析时不追加。
+func TestRenderMDDeptTitleWithStudio(t *testing.T) {
+	r := markdownReport("department")
+	r.Meta.Period.IsoWeek = "2026-W33"
+	r.Meta.Scope = report.Scope{Level: "department", ID: "dept-1", Name: "后端研发部", StudioName: "技术研究工作室"}
+	md := RenderMD(&r)
+	if !strings.Contains(md, "# 部门周报 · 2026-W33 · 后端研发部（技术研究工作室）") {
+		t.Errorf("部门标题未带父工作室归属:\n%s", md)
+	}
+	// StudioName 未解析时不追加
+	r2 := markdownReport("department")
+	r2.Meta.Scope = report.Scope{Level: "department", ID: "dept-1", Name: "后端研发部", StudioName: ""}
+	if md2 := RenderMD(&r2); strings.Contains(md2, "后端研发部（技术研究工作室）") {
+		t.Errorf("StudioName 为空时不应追加工作室名:\n%s", md2)
+	}
+}
+
+// TestRenderMDDeptJobGroupsCompact 验证部门「二、岗位分布」表精简：
+// 去除「其他」等合并占位行、仅保留活跃人数≥2、人均成本降序只取前 6 行，且表格行数收敛。
+func TestRenderMDDeptJobGroupsCompact(t *testing.T) {
+	u := &report.UnitFact{
+		Member: report.UnitMember{UserCount: 20, ActiveUserCount: 12, ReqCount: 1000, SuccessCount: 950, EstCostUSD: 10.0, TotalTokens: 10000},
+		// 10 组：含「其他」占位与多个活跃人数为 1 的噪音岗，验证被过滤；人均成本非严格递减以验证只做截断不重排。
+		JobGroups: []report.JobGroup{
+			{JobCategory: "WEB前端开发", ActiveUsers: 3, AvgCostUSD: 40, MedianCostUSD: 2, TopModel: "gpt-4o"},
+			{JobCategory: "AI工程师", ActiveUsers: 4, AvgCostUSD: 60, MedianCostUSD: 3, TopModel: "claude"},
+			{JobCategory: "交互设计", ActiveUsers: 1, AvgCostUSD: 25, MedianCostUSD: 1, TopModel: "gpt-4o"}, // 活跃<2 → 过滤
+			{JobCategory: "其他", ActiveUsers: 1, AvgCostUSD: 5, MedianCostUSD: 0, TopModel: ""},          // 合并占位 → 过滤
+			{JobCategory: "服务端开发", ActiveUsers: 5, AvgCostUSD: 30, MedianCostUSD: 1, TopModel: "qwen"},
+			{JobCategory: "软件测试", ActiveUsers: 4, AvgCostUSD: 20, MedianCostUSD: 1, TopModel: "gpt-4o"},
+			{JobCategory: "UI设计", ActiveUsers: 2, AvgCostUSD: 18, MedianCostUSD: 1, TopModel: "gpt-4o"},
+			{JobCategory: "PMO", ActiveUsers: 1, AvgCostUSD: 15, MedianCostUSD: 1, TopModel: "gpt-4o"}, // 活跃<2 → 过滤
+			{JobCategory: "项目管理", ActiveUsers: 5, AvgCostUSD: 10, MedianCostUSD: 1, TopModel: "qwen"},
+			{JobCategory: "后端开发", ActiveUsers: 6, AvgCostUSD: 12, MedianCostUSD: 1, TopModel: "qwen"},
+		},
+	}
+	r := markdownReport("department")
+	r.Fact.Department = u
+	md := RenderMD(&r)
+
+	// 保留 7 组按活跃人数降序（并列按人均成本降序），Top6 截断：后端开发(6)、服务端开发(5)、项目管理(5)、AI工程师(4)、软件测试(4)、WEB前端开发(3)。
+	for _, want := range []string{
+		"| 后端开发 | 6 |",
+		"| 服务端开发 | 5 |",
+		"| 项目管理 | 5 |",
+		"| AI工程师 | 4 |",
+		"| 软件测试 | 4 |",
+		"| WEB前端开发 | 3 |",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("岗位分布表缺少保留行 %q:\n%s", want, md)
+		}
+	}
+	// 被过滤的残差/低活跃行不得出现；UI设计因 Top6 截断也不得出现。
+	for _, banned := range []string{
+		"| 其他 |",
+		"| 交互设计 |",
+		"| PMO |",
+		"| UI设计 |",
+	} {
+		if strings.Contains(md, banned) {
+			t.Errorf("岗位分布表仍含应过滤行 %q:\n%s", banned, md)
+		}
+	}
+	// 若过滤发生，应输出说明规则的行
+	if !strings.Contains(md, "- 注：仅展示活跃人数≥2 且非「其他」等合并占位的岗位 Top6（按活跃人数降序）。") {
+		t.Errorf("岗位分布表未输出精简规则说明:\n%s", md)
+	}
+}
+
+// TestCompactJobGroups 直接验证 compactJobGroups：残差行/低活跃过滤 + 按活跃人数降序 + Top6 截断 + 不修改输入切片。
+func TestCompactJobGroups(t *testing.T) {
+	in := []report.JobGroup{
+		{JobCategory: "A", ActiveUsers: 2, AvgCostUSD: 5},
+		{JobCategory: "其他", ActiveUsers: 3, AvgCostUSD: 999}, // 残差，即使活跃高也过滤
+		{JobCategory: "B", ActiveUsers: 1, AvgCostUSD: 4},    // 活跃<2，过滤
+		{JobCategory: "C", ActiveUsers: 8, AvgCostUSD: 1},
+		{JobCategory: "D", ActiveUsers: 7, AvgCostUSD: 2},
+		{JobCategory: "E", ActiveUsers: 6, AvgCostUSD: 3},
+		{JobCategory: "F", ActiveUsers: 5, AvgCostUSD: 4},
+		{JobCategory: "G", ActiveUsers: 3, AvgCostUSD: 5},
+		{JobCategory: "H", ActiveUsers: 4, AvgCostUSD: 6},
+		{JobCategory: "I", ActiveUsers: 9, AvgCostUSD: 0}, // 活跃最高，排第一
+	}
+	got := compactJobGroups(in)
+	if len(got) != 6 {
+		t.Fatalf("compactJobGroups should cap to 6 rows, got %d: %+v", len(got), got)
+	}
+	for _, g := range got {
+		if g.JobCategory == "其他" || g.JobCategory == "B" {
+			t.Errorf("compactJobGroups 仍含应过滤行 %q", g.JobCategory)
+		}
+	}
+	// 按活跃人数降序：I(9) C(8) D(7) E(6) F(5) H(4)；A(2)/G(3) 因截断被排除（H 与 G 皆在 cap 前）。
+	wantOrder := []string{"I", "C", "D", "E", "F", "H"}
+	for i, w := range wantOrder {
+		if got[i].JobCategory != w {
+			t.Errorf("compactJobGroups 排序错误 got[%d]=%s want=%s (full %+v)", i, got[i].JobCategory, w, got)
+		}
+	}
+	// 未修改输入
+	if len(in) != 10 || in[1].JobCategory != "其他" {
+		t.Errorf("compactJobGroups 修改了输入切片")
 	}
 }

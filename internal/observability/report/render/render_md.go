@@ -7,6 +7,7 @@ package render
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 
 	"github.com/example/llm-gateway/internal/observability/report"
@@ -63,8 +64,8 @@ func RenderMD(r *report.Report) string {
 		w("# 个人周报 · %s · %s\n\n", periodTitle(r.Meta.Period), title)
 		w("【本周结论】%s\n\n", buildWeeklyConclusion(r))
 	} else if r.Fact.Department != nil {
-		// Vicky 部门周报标题：只用部门名，不附 StudioID（UUID 无可读性）
-		w("# 部门周报 · %s · %s\n\n", periodTitle(r.Meta.Period), scopeLabel(r.Meta.Scope))
+		// Vicky 部门周报标题：部门名后带父工作室归属「部门名（工作室名）」，不再只放部门名（UUID 无可读性）。
+		w("# 部门周报 · %s · %s\n\n", periodTitle(r.Meta.Period), scopeLabelWithStudio(r.Meta.Scope))
 		w("【本周结论】%s\n\n", buildDeptConclusion(r))
 	} else if r.Fact.Studio != nil {
 		w("# 工作室周报 · %s · %s\n\n", periodTitle(r.Meta.Period), scopeLabel(r.Meta.Scope))
@@ -207,28 +208,21 @@ func orDash(s string) string {
 	return s
 }
 
-// memberAdvice 依据 TopChanged 成员的事实（成本环比/承担模型/命中主因）规则生成具体建议（具体到人+动作）。
-// 数字来自 facts（WoWCostPct/AnomalyCause/TopModel），措辞为规则生成，不硬编码具体值。
-func memberAdvice(tc report.TopChangedMember) string {
-	var parts []string
+// memberAdviceAction 依据 TopChanged 成员的成本环比规则生成精简动作建议（具体到人+动作）。
+// 供「六、建议」对命中异常成员给精简建议复用；不含主因（主因已在「四、重点变化」表与异常块体现，避免重复）。
+func memberAdviceAction(tc report.TopChangedMember) string {
 	switch {
 	case tc.WoWCostPct >= 30:
-		parts = append(parts, "确认是否存在后台脚本/循环调用或异常流量，必要时限流")
+		return "确认是否存在后台脚本/循环调用或异常流量，必要时限流"
 	case tc.WoWCostPct <= -30:
-		parts = append(parts, "成本环比下降明显，确认是否用量减少或合理优化")
+		return "成本环比下降明显，确认是否用量减少或合理优化"
 	case tc.WoWCostPct > 0:
-		parts = append(parts, "成本小幅上升，关注用量趋势")
+		return "成本小幅上升，关注用量趋势"
 	case tc.WoWCostPct < 0:
-		parts = append(parts, "成本小幅下降，保持现状")
+		return "成本小幅下降，保持现状"
 	default:
-		parts = append(parts, "成本持平，保持现状")
+		return "成本持平，保持现状"
 	}
-	if tc.AnomalyCause != "" {
-		parts = append(parts, "命中异常"+tc.AnomalyCause+"，建议优先处理")
-	} else if tc.TopModel != "" {
-		parts = append(parts, "主用模型"+tc.TopModel)
-	}
-	return strings.Join(parts, "；")
 }
 
 // efficiencyLabelExplain 依据同岗指标（本人 vs 同岗 P50 分位）为「使用效能标签」追加一句解释（确定性，数字来自 profiles）。
@@ -425,6 +419,16 @@ func scopeLabel(s report.Scope) string {
 		return s.Name
 	}
 	return s.ID
+}
+
+// scopeLabelWithStudio 部门周报标题用：部门名后带父工作室归属「部门名（工作室名）」。
+// 仅当 StudioName 非空且不同于部门名时追加（避免工作室级报告重复自身名；空=父工作室未解析则不追加）。
+func scopeLabelWithStudio(s report.Scope) string {
+	base := scopeLabel(s)
+	if s.StudioName != "" && s.StudioName != base {
+		return base + "（" + s.StudioName + "）"
+	}
+	return base
 }
 
 func pct(a, b int64) string {
@@ -736,10 +740,11 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 
 	// 二、岗位分布
 	w("\n## 二、岗位分布（同岗位分位，不做跨岗位裸排名）\n\n")
-	if len(u.JobGroups) > 0 {
+	jobGroups := compactJobGroups(u.JobGroups)
+	if len(jobGroups) > 0 {
 		w("| 岗位类别 | 活跃人数 | 人均成本 | 单次成本中位 | 主用模型 |\n")
 		w("|---|---|---|---|---|\n")
-		for _, jg := range u.JobGroups {
+		for _, jg := range jobGroups {
 			topModel := jg.TopModel
 			if topModel == "" {
 				topModel = "—"
@@ -750,6 +755,13 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 				cny(jg.MedianCostUSD, rate),
 				topModel)
 		}
+		// 仅当实际折叠了「其他」占位/低活跃岗位时才给注，说明展示规则，避免表格过长造成误导。
+		if len(jobGroups) != len(u.JobGroups) {
+			w("- 注：仅展示活跃人数≥%d 且非「其他」等合并占位的岗位 Top%d（按活跃人数降序）。\n",
+				minJobGroupsActiveUsers, maxJobGroupsRows)
+		}
+	} else if len(u.JobGroups) > 0 {
+		w("- 无符合展示阈值的岗位（活跃人数≥%d 且非「其他」等合并占位）\n", minJobGroupsActiveUsers)
 	} else {
 		w("- 岗位分布数据不可得（-agg 模式无 JobCategory 明细）\n")
 	}
@@ -766,6 +778,11 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 		w("- Service Key 总成本 %s%s；调用 %d 次；Token %d；主用模型 %s；成本环比 %s\n",
 			cny(sk.EstCostUSD, rate), skRatio, sk.ReqCount, sk.TotalTokens,
 			orDash(sk.TopModel), wowPctFromPrev(sk.EstCostUSD, sk.PrevCostUSD))
+		// ③ Top N 成本集中度：多 Key 时 derive 已算好一句话（如「活跃 Key 6 个，Top 2 成本占比 78%」）；
+		// 单 Key / 不足 2 为空的降级（ConcentrationText=="" 则不输出）。
+		if sk.ConcentrationText != "" {
+			w("- 成本集中度：%s\n", sk.ConcentrationText)
+		}
 		// 逐 Key 明细表（t6 装配 u.ServiceKey.Keys；环比/主用模型读 ServiceKeyInfo.Prev*/TopModel，缺失列占位不硬造）
 		if len(sk.Keys) > 0 {
 			w("\n| Service Key | Owner/应用 | 调用 | 调用环比 | Token | 成本 | 成本环比 | 成本占比 | 主用模型 | 异常 |\n")
@@ -843,20 +860,26 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 	// 六、建议
 	w("\n## 六、建议\n\n")
 	hasSuggestion := false
-	if len(u.TopChanged) > 0 {
-		// 具体到人+动作：对重点变化成员逐条给建议（结合其岗位/成本环比/承担模型/命中主因）。
-		w("- 重点变化成员建议：\n")
-		for _, tc := range u.TopChanged {
-			w("  - 员工%d（%s，成本环比 %s）：%s\n",
-				tc.Idx, orDash(tc.JobCategory), signedPct(tc.WoWCostPct), memberAdvice(tc))
+	// ① 异常成员精简建议：仅对命中异常的重点变化成员给建议（不再对未命中成员逐条「保持现状」复制粘贴）。
+	for _, tc := range u.TopChanged {
+		if tc.AnomalyCause == "" {
+			continue
 		}
+		w("- 员工%d（%s，成本环比 %s）：%s\n",
+			tc.Idx, orDash(tc.JobCategory), signedPct(tc.WoWCostPct), memberAdviceAction(tc))
 		hasSuggestion = true
 	}
-	// 若部门整体缓存命中偏低，给出优化提示
+	// ② 岗位级通用建议：从部门岗位分布挑「普遍且人均成本高于部门人均」的岗位给一条通用建议。
+	if pos := positionLevelAdvice(u.JobGroups, u.Member.PerCapita.EstCostUSD, rate); pos != "" {
+		w("- %s\n", pos)
+		hasSuggestion = true
+	}
+	// ③ 部门整体缓存命中偏低 → 统一可缓存提示词模板（与岗位级成本建议互补）。
 	if u.Member.CacheHitRate > 0 && u.Member.CacheHitRate < 0.2 {
 		w("- 部门整体缓存命中率偏低（%s），建议统一可缓存的提示词模板、提升缓存复用\n", pctP(u.Member.CacheHitRate))
 		hasSuggestion = true
 	}
+	// 无规则型异常时给出「保持现状」兜底。
 	if len(hitAnoms) == 0 {
 		w("- 本周期无规则型异常，各岗位用量正常，保持现状\n")
 		hasSuggestion = true
@@ -1157,33 +1180,41 @@ func countSeverity(summary []report.AnomalyCount, sev string) int {
 }
 
 // buildDeptConclusion 生成部门/工作室周报「本周结论」一行。
-// 优先级：异常命中 > 成本大幅上涨 > 成本下降 > 正常。
+// 优先读取 derive 层算好的主因归因 MainCause（Supported && 非空）直接展示；
+// 否则按现有降级：异常命中 > 成本大幅上涨 > 成本下降 > 正常。
 // 工作室级别：数据存在时追加「占全公司 %；新增 N 起 P1 待处理」。
 func buildDeptConclusion(r *report.Report) string {
 	u := unitFact(r)
 	j := &r.Judgment
-	// 最高优先：异常命中
-	hitCount := 0
-	maxSeverity := ""
-	for _, a := range j.Anomalies {
-		if a.Hit {
-			hitCount++
-			if maxSeverity == "" || a.Severity < maxSeverity {
-				maxSeverity = a.Severity // P0 < P1 < P2 < P3，字典序越小越严重
+	base := ""
+
+	// 主因归因优先：derive 已算好「成本环比 +X%，集中在 N 名岗位，其一命中A5 非工作时段」一句话 → 直接替换。
+	if u != nil && u.Conclusion != nil && u.Conclusion.Supported && u.Conclusion.MainCause != "" {
+		base = u.Conclusion.MainCause
+	} else {
+		// 现有降级逻辑
+		hitCount := 0
+		maxSeverity := ""
+		for _, a := range j.Anomalies {
+			if a.Hit {
+				hitCount++
+				if maxSeverity == "" || a.Severity < maxSeverity {
+					maxSeverity = a.Severity // P0 < P1 < P2 < P3，字典序越小越严重
+				}
 			}
 		}
+		switch {
+		case hitCount > 0:
+			base = fmt.Sprintf("关注 —— 命中 %d 条异常（%s）", hitCount, maxSeverity)
+		case u != nil && u.WoWCostPct >= 30:
+			base = fmt.Sprintf("关注 —— 成本环比 +%.0f%%", u.WoWCostPct)
+		case u != nil && u.WoWCostPct <= -20:
+			base = fmt.Sprintf("良好 —— 成本环比下降 %.0f%%", -u.WoWCostPct)
+		default:
+			base = "正常 —— 本周期未见异常"
+		}
 	}
-	base := ""
-	switch {
-	case hitCount > 0:
-		base = fmt.Sprintf("关注 —— 命中 %d 条异常（%s）", hitCount, maxSeverity)
-	case u != nil && u.WoWCostPct >= 30:
-		base = fmt.Sprintf("关注 —— 成本环比 +%.0f%%", u.WoWCostPct)
-	case u != nil && u.WoWCostPct <= -20:
-		base = fmt.Sprintf("良好 —— 成本环比下降 %.0f%%", -u.WoWCostPct)
-	default:
-		base = "正常 —— 本周期未见异常"
-	}
+
 	// 工作室专属追加：占全公司占比 + 新增未关闭 P1（仅 studio 级别有这些字段）
 	if r.Fact.Studio != nil && u != nil {
 		var suffix []string
@@ -1198,6 +1229,81 @@ func buildDeptConclusion(r *report.Report) string {
 		}
 	}
 	return base
+}
+
+// 岗位分布表展示阈值与行数上限（部门周报「二、岗位分布」）。
+const (
+	// minJobGroupsActiveUsers 活跃人数下限：低于该值的岗位视为单人/噪音岗，不单列。
+	minJobGroupsActiveUsers = 2
+	// maxJobGroupsRows 行数上限：只展示活跃人数最多的 TopN 岗位，避免表格过长。
+	maxJobGroupsRows = 6
+)
+
+// residualJobCategory 是否为合并/占位残差岗位（无实际岗位语义，不出现在岗位分布表与建议里）。
+func residualJobCategory(cat string) bool {
+	switch cat {
+	case "其他", "其它", "未知", "未分类", "—", "-", "":
+		return true
+	default:
+		return false
+	}
+}
+
+// compactJobGroups 精简部门「岗位分布」表。
+// 规则：① 去除「其他」等合并/占位残差行（无实际岗位语义）；② 仅保留活跃人数≥minJobGroupsActiveUsers 的岗位；
+// ③ 按活跃人数降序（人数相同按人均成本降序）只取前 maxJobGroupsRows 行，构成清晰、不冗长的分布表。
+// 渲染层独立决定展示口径（与 derive 装配结果解耦，不修改输入切片）。
+func compactJobGroups(groups []report.JobGroup) []report.JobGroup {
+	kept := make([]report.JobGroup, 0, len(groups))
+	for _, g := range groups {
+		if residualJobCategory(g.JobCategory) {
+			continue
+		}
+		if g.ActiveUsers < minJobGroupsActiveUsers {
+			continue
+		}
+		kept = append(kept, g)
+	}
+	// 按活跃人数降序；人数并列时按人均成本降序（保证稳定可读）。
+	sort.SliceStable(kept, func(i, j int) bool {
+		if kept[i].ActiveUsers != kept[j].ActiveUsers {
+			return kept[i].ActiveUsers > kept[j].ActiveUsers
+		}
+		return kept[i].AvgCostUSD > kept[j].AvgCostUSD
+	})
+	if len(kept) > maxJobGroupsRows {
+		kept = kept[:maxJobGroupsRows]
+	}
+	return kept
+}
+
+// positionLevelAdvice 岗位级通用建议：在部门岗位分布（全量，含未展示岗位）里挑「普遍（活跃≥2 且非残差）且人均成本最高」的岗位，
+// 若其人均成本高于部门人均（有数据时）则给一条通用建议；否则返回空（无突出成本偏高的岗位）。
+// 数据均来自 JobGroup/部门人均事实（不臆造缓存等缺失指标）。
+func positionLevelAdvice(groups []report.JobGroup, deptPerCapitaCost, rate float64) string {
+	var top *report.JobGroup
+	for i := range groups {
+		g := &groups[i]
+		// 过滤残差占位/单（低活跃）人岗，仅保留「普遍」岗位。
+		if residualJobCategory(g.JobCategory) || g.ActiveUsers < minJobGroupsActiveUsers {
+			continue
+		}
+		if g.AvgCostUSD <= 0 {
+			continue
+		}
+		if top == nil || g.AvgCostUSD > top.AvgCostUSD {
+			top = g
+		}
+	}
+	if top == nil {
+		return ""
+	}
+	// 仅在高于部门人均（已知时）才标记为「普遍成本偏高」，避免无差别输出噪音。
+	if deptPerCapitaCost > 0 && top.AvgCostUSD < deptPerCapitaCost {
+		return ""
+	}
+	return fmt.Sprintf("岗位级通用建议：%s 岗人均成本最高（%s），建议核对是否存在后台脚本/批量调用，必要时限流或降档，并统一可缓存的提示词模板以提升缓存复用。",
+		top.JobCategory, cny(top.AvgCostUSD, rate))
 }
 
 // jobSlotRender 岗位回退（render 包内独立）：title→category→family→""。

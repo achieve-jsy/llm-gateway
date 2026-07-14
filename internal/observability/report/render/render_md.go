@@ -1173,8 +1173,13 @@ func studioTrendLabel(pts []report.WeeklyPoint) string {
 }
 
 // riskObject 从异常命中的维度信息提取风险对象；无组织维度时用默认「成员/部门」。
+// 用户可见处不匿名：优先用 derive 层回填的 user_name 真实姓名；无姓名（未回填）才降级 user_id（UUID），
+// 再退部门维度。仅「判断-异常(A1–A5)」诊断章节保留 code 与 UUID，此处不适用。
 func riskObject(a report.AnomalyHit) string {
 	if a.Dimensions != nil {
+		if v := a.Dimensions["user_name"]; v != "" {
+			return v
+		}
 		if v := a.Dimensions["user_id"]; v != "" {
 			return "成员 " + v
 		}

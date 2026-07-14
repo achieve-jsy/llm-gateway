@@ -412,6 +412,57 @@ func TestRenderMDStudioRiskStatus(t *testing.T) {
 	}
 }
 
+// TestRiskObject 验证风险对象提取：
+// 优先 user_name（derive 回填真实姓名）；无 user_name 才降级 user_id（UUID）；再退部门维度；全无则默认「成员/部门」。
+func TestRiskObject(t *testing.T) {
+	cases := []struct {
+		name string
+		dims map[string]string
+		want string
+	}{
+		{"user_name 优先于 user_id", map[string]string{"user_name": "张三", "user_id": "uuid-1"}, "张三"},
+		{"无 user_name 回退 user_id", map[string]string{"user_id": "uuid-abc"}, "成员 uuid-abc"},
+		{"部门名", map[string]string{"dept_name": "后端研发部"}, "后端研发部"},
+		{"部门 id", map[string]string{"dept_id": "dept-9"}, "部门 dept-9"},
+		{"空维度默认", nil, "成员/部门"},
+		{"空 map 默认", map[string]string{}, "成员/部门"},
+	}
+	for _, c := range cases {
+		got := riskObject(report.AnomalyHit{Dimensions: c.dims})
+		if got != c.want {
+			t.Errorf("%s: riskObject(%+v)=%q, want %q", c.name, c.dims, got, c.want)
+		}
+	}
+}
+
+// TestRenderMDStudioRiskObjectRealName 验证工作室第四章「风险与行动清单」「对象」列显示真实姓名（去UUID）：
+// user_name 回填时显示姓名；无姓名（仅 user_id）降级显示「成员 UUID；无维度默认「成员/部门」。
+func TestRenderMDStudioRiskObjectRealName(t *testing.T) {
+	r := markdownReport("studio")
+	r.Judgment.Anomalies = []report.AnomalyHit{
+		{Rule: "A2", Name: "成本燃烧", Severity: "P2", Hit: true,
+			Dimensions: map[string]string{"user_name": "张三", "user_id": "uuid-1"}, Status: report.AnomalyStatusRecovered},
+		{Rule: "A1", Name: "程序失控", Severity: "P1", Hit: true,
+			Dimensions: map[string]string{"user_id": "uuid-abc"}, Status: report.AnomalyStatusPending},
+		{Rule: "A5", Name: "非工作时段", Severity: "P1", Hit: true},
+	}
+	md := RenderMD(&r)
+	sec := mdSection(md, "## 四、风险与行动清单", "## 模型分析")
+	for _, want := range []string{
+		"| 张三 |",          // user_name → 真实姓名
+		"| 成员 uuid-abc |", // 无 user_name → 降级 UUID
+		"| 成员/部门 |",       // 无维度 → 默认
+	} {
+		if !strings.Contains(sec, want) {
+			t.Errorf("studio 风险清单「对象」列 missing %q:\n%s", want, sec)
+		}
+	}
+	// 不应出现「成员 uuid-1」（user_name 优先，不再显示该 UUID）。
+	if strings.Contains(sec, "成员 uuid-1") {
+		t.Errorf("studio 风险清单「对象」列仍回退 UUID（user_name 优先）:\n%s", sec)
+	}
+}
+
 // TestRenderMDDeptTopChangedAdvice 验证部门第六章「建议」精简：①仅对命中异常的重点变化成员给精简建议；
 // ②补一条岗位级通用建议（人均成本高于部门人均衡的岗位）；③不再对未命中异常成员逐条重复建议。
 func TestRenderMDDeptTopChangedAdvice(t *testing.T) {

@@ -577,7 +577,7 @@ func writePersonalSections(b *strings.Builder, r *report.Report) {
 			}
 		}
 		for _, a := range hits {
-			fmt.Fprintf(b, "- [%s] **%s**（%s）\n", a.Rule, a.Name, a.Severity)
+			fmt.Fprintf(b, "- **%s**（%s）\n", a.Name, a.Severity)
 			fmt.Fprintf(b, "  - `actual=%.2f` · `threshold=%.2f` · `baseline=%.2f`（%s）\n", a.ActualValue, a.ThresholdValue, a.BaselineValue, a.BaselineWindow)
 			if a.ImpactCostUSD > 0 {
 				fmt.Fprintf(b, "  - 影响成本 `%.2f` USD · 超支 `%.2f` USD\n", a.ImpactCostUSD, a.ExcessCostUSD)
@@ -593,7 +593,12 @@ func writePersonalSections(b *strings.Builder, r *report.Report) {
 		if len(misses) > 0 {
 			missNames := make([]string, 0, len(misses))
 			for _, m := range misses {
-				missNames = append(missNames, m.Rule)
+				// 用户可见处用人类可读异常名替代裸规则码；无名称才回退 code。
+				name := m.Name
+				if name == "" {
+					name = m.Rule
+				}
+				missNames = append(missNames, name)
 			}
 			fmt.Fprintf(b, "- 另有 %d 条规则未命中（判定未触发，不列入异常清单）：%s\n", len(misses), strings.Join(missNames, "、"))
 		}
@@ -640,10 +645,11 @@ func buildWeeklyConclusion(r *report.Report) string {
 	return "正常 —— " + r.Expression.Headline
 }
 
-// anomalyRootCause 提取异常的主因措辞（确定性，来自已算字段）：规则+名称，补命中窗口/说明。
-// 形如 "A2 成本燃烧（15:00~15:15 窗口，触发封顶 ¥300/15min）"；证据缺失时回退为规则+名称+级别。
+// anomalyRootCause 提取异常的主因措辞（确定性，来自已算字段）：人类可读异常名，补命中窗口/说明。
+// 形如 "成本燃烧（15:00~15:15 窗口，触发封顶 ¥300/15min）"；证据缺失时回退为名称+级别。
+// 用户可见处已去掉裸规则码（A1–A5）——仅「判断-异常(A1–A5)」诊断章节保留 code，此处不使用。
 func anomalyRootCause(a report.AnomalyHit) string {
-	base := a.Rule + " " + a.Name
+	base := a.Name
 	// 命中窗口（人类可读）是最能说明「何时何因」的主因线索。
 	if a.Window != "" {
 		base += "（" + a.Window
@@ -657,6 +663,38 @@ func anomalyRootCause(a report.AnomalyHit) string {
 		base += "（" + a.Severity + "）"
 	}
 	return base
+}
+
+// stripAnomalyCode 去掉字符串中「每个」裸规则码段（A1–A5）的码前缀，只保留人类可读异常名。
+// 支持多段（以 ";" 或 "；" 分隔，每段形如 "A1 程序失控"），例如
+// "A1 程序失控; A2 成本燃烧; A5 非工作时段" → "程序失控; 成本燃烧; 非工作时段"。
+// 单段（无分隔）与旧行为一致："A2 成本燃烧" → "成本燃烧"。
+// 仅「判断-异常(A1–A5)」诊断章节保留 code，不调用本函数；无 code 前缀或只剩 code 时该段原样返回。
+func stripAnomalyCode(s string) string {
+	if s == "" {
+		return ""
+	}
+	parts := strings.FieldsFunc(s, func(r rune) bool { return r == ';' || r == '；' })
+	cleaned := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if seg := stripOneAnomalyCode(p); seg != "" {
+			cleaned = append(cleaned, seg)
+		}
+	}
+	return strings.Join(cleaned, "; ")
+}
+
+// stripOneAnomalyCode 去掉单个「码+名称」段开头的裸规则码（A1–A5），保留其后的人类可读名称。
+// 无码前缀、只剩码（无名称）或空白段时原样返回（只剥离段首最前一个码）。
+func stripOneAnomalyCode(seg string) string {
+	seg = strings.TrimSpace(seg)
+	if len(seg) >= 2 && seg[0] == 'A' && seg[1] >= '1' && seg[1] <= '5' {
+		rest := strings.TrimLeft(seg[2:], " \t：:、-")
+		if rest != "" {
+			return strings.TrimSpace(rest)
+		}
+	}
+	return seg
 }
 
 // fmtVal 精简数值展示：整数无小数，小数保留 2 位。
@@ -811,20 +849,20 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 	// 四、重点变化（Top 变化人员）
 	w("\n## 四、重点变化（Top 变化人员）\n\n")
 	if len(u.TopChanged) > 0 {
-		w("| 人员（匿名） | 岗位 | 成本环比 | 主因 | 是否有解释 |\n")
+		w("| 人员 | 岗位 | 成本环比 | 主因 | 是否有解释 |\n")
 		w("|---|---|---|---|---|\n")
 		for _, tc := range u.TopChanged {
 			// 主因列与是否有解释列均读 AnomalyCause（模板口径；不再用旧的 AnomalyRule）。
-			// 有值即已解释，主因直接显示命中规则（rule+name，如 "A2 成本燃烧"）；空则均降级「待确认」。
+			// 有值即已解释，主因直接显示命中异常的人类可读名（去裸规则码，如 "A2 成本燃烧" → "成本燃烧"）；空则均降级「待确认」。
 			cause := tc.AnomalyCause
 			causeDisplay := "待确认"
 			explained := "待确认"
 			if cause != "" {
-				causeDisplay = cause
+				causeDisplay = stripAnomalyCode(cause)
 				explained = "已解释"
 			}
-			w("| 员工%d | %s | %s | %s | %s |\n",
-				tc.Idx, memberJobDisplay(tc), signedPct(tc.WoWCostPct), causeDisplay, explained)
+			w("| %s | %s | %s | %s | %s |\n",
+				memberNameDisplay(tc), memberJobDisplay(tc), signedPct(tc.WoWCostPct), causeDisplay, explained)
 		}
 	} else {
 		w("- 无上期数据，不产出环比变化（需 -agg 模式 + 有上期记录）\n")
@@ -846,15 +884,21 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 	w("- 异常状态机：待确认=%d | 已确认正常=%d | 修复中=%d | 已恢复=%d | 误报=%d\n",
 		sc.Pending, sc.ConfirmedOK, sc.Fixing, sc.Recovered, sc.FalsePos)
 	for _, a := range hitAnoms {
-		detail := a.Name
+		// 用户可见处去掉裸规则码（A1–A5）与裸严重度前缀，只保留人类可读异常名+级别（如 「成本燃烧（P1）」）。
+		// detail 用证据首值表达可能原因（不再叠加 a.Name，避免名称重复）。
+		detail := ""
 		if len(a.Evidence) > 0 {
-			detail += "（" + a.Evidence[0].Value + "）"
+			detail = a.Evidence[0].Value
 		}
 		status := a.Status
 		if status == "" {
 			status = report.AnomalyStatusPending
 		}
-		w("- [%s] %s —— %s（状态：%s）\n", a.Severity, a.Rule, detail, status)
+		if detail != "" {
+			w("- **%s**（%s）—— %s（状态：%s）\n", a.Name, a.Severity, detail, status)
+		} else {
+			w("- **%s**（%s）（状态：%s）\n", a.Name, a.Severity, status)
+		}
 	}
 
 	// 六、建议
@@ -865,8 +909,8 @@ func writeDeptSections(b *strings.Builder, r *report.Report) {
 		if tc.AnomalyCause == "" {
 			continue
 		}
-		w("- 员工%d（%s，成本环比 %s）：%s\n",
-			tc.Idx, memberJobDisplay(tc), signedPct(tc.WoWCostPct), memberAdviceAction(tc))
+		w("- %s（%s，成本环比 %s）：%s\n",
+			memberNameDisplay(tc), memberJobDisplay(tc), signedPct(tc.WoWCostPct), memberAdviceAction(tc))
 		hasSuggestion = true
 	}
 	// ② 岗位级通用建议：从部门岗位分布挑「普遍且人均成本高于部门人均」的岗位给一条通用建议。
@@ -1006,7 +1050,7 @@ func writeStudioSections(b *strings.Builder, r *report.Report) {
 	if len(hits) == 0 {
 		w("- 本周期无风险项，各成员用量正常\n")
 	} else {
-		w("| 对象 | 时间 | 命中规则 | 影响成本 | 状态 | Owner | 建议动作 | 截止 |\n")
+		w("| 对象 | 时间 | 异常 | 影响成本 | 状态 | Owner | 建议动作 | 截止 |\n")
 		w("|---|---|---|---|---|---|---|---|\n")
 		for _, a := range hits {
 			win := a.Window
@@ -1021,8 +1065,9 @@ func writeStudioSections(b *strings.Builder, r *report.Report) {
 			if status == "" {
 				status = report.AnomalyStatusPending
 			}
+			// 用户可见处去掉裸规则码（A1–A5），只保留人类可读异常名+级别（如 「成本燃烧（P2）」）。
 			w("| %s | %s | %s | %s | %s | 应用Owner | %s | %s |\n",
-				riskObject(a), win, a.Rule+" "+a.Name, impact, status, riskAction(a.Rule), shortDate(r.Meta.Period.To))
+				riskObject(a), win, a.Name+"（"+a.Severity+"）", impact, status, riskAction(a.Rule), shortDate(r.Meta.Period.To))
 		}
 		// 状态列读 AnomalyHit.Status（t14 状态机 5 态；离线默认「待确认」，反馈闭环读回真实状态回填）。
 		w("\n- 注：「状态」为异常状态机 5 态（待确认/已确认正常/修复中/已恢复/误报），离线默认「待确认」，接入反馈闭环后按真实状态回填。\n")
@@ -1247,6 +1292,15 @@ func residualJobCategory(cat string) bool {
 	default:
 		return false
 	}
+}
+
+// memberNameDisplay 重点变化表/建议成员列显示名（不匿名）：优先用 derive 层提供的 TopChangedMember.Name 真实姓名；
+// 为空（无花名册姓名）则回退「员工N」（tc.Idx），保证降级不空白、不泄漏 UUID。
+func memberNameDisplay(tc report.TopChangedMember) string {
+	if tc.Name != "" {
+		return tc.Name
+	}
+	return fmt.Sprintf("员工%d", tc.Idx)
 }
 
 // memberJobDisplay 成员岗位展示名（四章重点变化表 / 建议等按成员渲染岗位列）。

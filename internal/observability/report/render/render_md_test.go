@@ -232,8 +232,9 @@ func TestRenderMDDeptAnonPeerUnitCostDegraded(t *testing.T) {
 	}
 }
 
-// TestRenderMDDeptTopChangedAnomalyCause 验证部门第四章「重点变化」表：列序=人员（匿名）|岗位|成本环比|主因|是否有解释，
-// 移除「主用模型」列；主因列与是否有解释列均读 AnomalyCause（有值→主因显示命中规则、是否有解释=已解释；空→均「待确认」）。
+// TestRenderMDDeptTopChangedAnomalyCause 验证部门第四章「重点变化」表：列序=人员|岗位|成本环比|主因|是否有解释，
+// 移除「主用模型」列；主因列与是否有解释列均读 AnomalyCause（有值→主因显示人类可读异常名、是否有解释=已解释；空→均「待确认」）。
+// 成员列：有 Name 显示真实姓名，Name 为空回退「员工N」（本测试未设 Name，走回退路径）。
 func TestRenderMDDeptTopChangedAnomalyCause(t *testing.T) {
 	r := markdownReport("department")
 	r.Fact.Department.TopChanged = []report.TopChangedMember{
@@ -242,8 +243,8 @@ func TestRenderMDDeptTopChangedAnomalyCause(t *testing.T) {
 	}
 	md := RenderMD(&r)
 	for _, want := range []string{
-		"| 人员（匿名） | 岗位 | 成本环比 | 主因 | 是否有解释 |",
-		"| 员工1 | 工程师 | +120.0% | A2 成本燃烧 | 已解释 |",
+		"| 人员 | 岗位 | 成本环比 | 主因 | 是否有解释 |",
+		"| 员工1 | 工程师 | +120.0% | 成本燃烧 | 已解释 |",
 		"| 员工2 | 设计 | -30.0% | 待确认 | 待确认 |",
 	} {
 		if !strings.Contains(md, want) {
@@ -252,6 +253,10 @@ func TestRenderMDDeptTopChangedAnomalyCause(t *testing.T) {
 	}
 	if strings.Contains(md, "主用模型 | 是否有解释") {
 		t.Errorf("第四章仍含「主用模型」列，应按模板移除:\n%s", md)
+	}
+	// 用户不可见裸规则码：主因列应只留人类可读异常名，不出现 "A2 成本燃烧"。
+	if strings.Contains(md, "A2 成本燃烧") {
+		t.Errorf("第四章主因列仍含裸规则码 A2:\n%s", md)
 	}
 }
 
@@ -370,8 +375,8 @@ func TestRenderMDDeptAnomalyStateMachine(t *testing.T) {
 	for _, want := range []string{
 		"- 命中 2 条 | 未命中 1 条",
 		"- 异常状态机：待确认=1 | 已确认正常=0 | 修复中=1 | 已恢复=0 | 误报=0",
-		"- [P1] A1 —— 程序失控（状态：待确认）",
-		"- [P2] A2 —— 成本燃烧（状态：修复中）",
+		"- **程序失控**（P1）（状态：待确认）",
+		"- **成本燃烧**（P2）（状态：修复中）",
 	} {
 		if !strings.Contains(md, want) {
 			t.Errorf("dept anomaly state machine missing %q:\n%s", want, md)
@@ -383,7 +388,7 @@ func TestRenderMDDeptAnomalyStateMachine(t *testing.T) {
 }
 
 // TestRenderMDStudioRiskStatus 验证工作室第四章「风险与行动清单」状态列读 AnomalyHit.Status（t14 5 态），
-// 而非硬编码「待确认」；空状态降级为「待确认」。
+// 而非硬编码「待确认」；空状态降级为「待确认」；「异常」列去裸规则码，只保留人类可读异常名+级别。
 func TestRenderMDStudioRiskStatus(t *testing.T) {
 	r := markdownReport("studio")
 	r.Judgment.Anomalies = []report.AnomalyHit{
@@ -394,10 +399,16 @@ func TestRenderMDStudioRiskStatus(t *testing.T) {
 	for _, want := range []string{
 		"| 已恢复 | 应用Owner |",
 		"| 待确认 | 应用Owner |",
+		"| 成本燃烧（P2） |",
+		"| 程序失控（P1） |",
 	} {
 		if !strings.Contains(md, want) {
-			t.Errorf("studio 风险清单状态列未读 AnomalyHit.Status: missing %q:\n%s", want, md)
+			t.Errorf("studio 风险清单状态/异常列未读对: missing %q:\n%s", want, md)
 		}
+	}
+	// 用户可见处去裸规则码：不应出现 "A2 成本燃烧"/"A1 程序失控" 这种 code+name；「异常」列应含级别。
+	if strings.Contains(md, "A2 成本燃烧") || strings.Contains(md, "A1 程序失控") {
+		t.Errorf("studio 风险清单「异常」列仍含裸规则码:\n%s", md)
 	}
 }
 
@@ -479,8 +490,8 @@ func TestRenderMDDeptTopChangedJobResidualFallback(t *testing.T) {
 	md := RenderMD(&r)
 	for _, want := range []string{
 		// 四章重点变化表岗位列：残差「其他」→具体 job_title；残差「未知」且无 title →「未归类」。
-		"| 员工1 | 后端开发工程师 | +120.0% | A2 成本燃烧 | 已解释 |",
-		"| 员工2 | 未归类 | +60.0% | A5 非工作时段 | 已解释 |",
+		"| 员工1 | 后端开发工程师 | +120.0% | 成本燃烧 | 已解释 |",
+		"| 员工2 | 未归类 | +60.0% | 非工作时段 | 已解释 |",
 		// 六、建议岗位列与四章一致，不再出现「其他/未知」。
 		"- 员工1（后端开发工程师，成本环比 +120.0%）：",
 		"- 员工2（未归类，成本环比 +60.0%）：",
@@ -538,18 +549,21 @@ func TestRenderMDPersonalAnomalyHitsOnly(t *testing.T) {
 	}
 	md := RenderMD(&r)
 	for _, want := range []string{
-		"- [A2] **成本燃烧**（P1）",
+		"- **成本燃烧**（P1）",
 		"  - `actual=120.00` · `threshold=100.00` · `baseline=80.00`（上周）",
 		"  - 影响成本 `500.00` USD · 超支 `200.00` USD",
 		"  - cause: `后台脚本循环调用`",
-		"- 另有 1 条规则未命中（判定未触发，不列入异常清单）：A1",
+		"- 另有 1 条规则未命中（判定未触发，不列入异常清单）：程序失控",
 	} {
 		if !strings.Contains(md, want) {
 			t.Errorf("personal 六、异常提示 hits-only missing %q:\n%s", want, md)
 		}
 	}
-	if strings.Contains(md, "- [A1]") {
+	if strings.Contains(md, "- **程序失控**（") {
 		t.Errorf("未命中 A1 仍作为主体异常条目列出（模板只列命中）:\n%s", md)
+	}
+	if strings.Contains(md, "[A2]") {
+		t.Errorf("个人六、异常提示仍含裸规则码 [A2]:\n%s", md)
 	}
 }
 
@@ -583,6 +597,7 @@ func TestRenderMDPersonalEfficiencyLabel(t *testing.T) {
 }
 
 // TestBuildWeeklyConclusionRootCause 结论主因一句话（③）：命中异常时把成本环比 + 主因写入结论行。
+// 主因用人类可读异常名（去裸规则码），并保留命中窗口/说明。
 func TestBuildWeeklyConclusionRootCause(t *testing.T) {
 	r := &report.Report{
 		Fact: report.Fact{Personal: &report.PersonalFact{WoWCostPct: 180}},
@@ -591,11 +606,15 @@ func TestBuildWeeklyConclusionRootCause(t *testing.T) {
 		}},
 	}
 	got := buildWeeklyConclusion(r)
-	if !strings.Contains(got, "成本环比 +180%") || !strings.Contains(got, "主因 A2 成本燃烧") {
+	if !strings.Contains(got, "成本环比 +180%") || !strings.Contains(got, "主因 成本燃烧") {
 		t.Errorf("结论未含成本环比+主因: %q", got)
 	}
 	if !strings.Contains(got, "15:00~15:15") || !strings.Contains(got, "触发封顶") {
 		t.Errorf("主因未含窗口/说明: %q", got)
+	}
+	// 用户可见处去裸规则码：结论不应出现 "主因 A2 成本燃烧"/裸 "A2"。
+	if strings.Contains(got, "主因 A2") || strings.Contains(got, " A2 ") {
+		t.Errorf("结论仍含裸规则码 A2: %q", got)
 	}
 }
 
@@ -776,5 +795,151 @@ func TestCompactJobGroups(t *testing.T) {
 	// 未修改输入
 	if len(in) != 10 || in[1].JobCategory != "其他" {
 		t.Errorf("compactJobGroups 修改了输入切片")
+	}
+}
+
+// TestStripAnomalyCode 验证裸规则码剥离（用户可见处去 code 只留人类可读异常名）：
+// 去掉每个「码+名称」段开头的 A1–A5 码（可选后随空格/冒号等分隔），保留其后名称；
+// 支持多段（";" / "；" 分隔），每段独立剥码；无码/只剩码/空串原样返回。
+func TestStripAnomalyCode(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"A2 成本燃烧 → 成本燃烧", "A2 成本燃烧", "成本燃烧"},
+		{"A1 程序失控 → 程序失控", "A1 程序失控", "程序失控"},
+		{"A5 非工作时段 → 非工作时段", "A5 非工作时段", "非工作时段"},
+		{"A3 重试循环 → 重试循环", "A3 重试循环", "重试循环"},
+		{"A4 超长上下文 → 超长上下文", "A4 超长上下文", "超长上下文"},
+		{"无空格分隔", "A2成本燃烧", "成本燃烧"},
+		{"冒号分隔", "A2:成本燃烧", "成本燃烧"},
+		{"带全角冒号", "A5：非工作时段", "非工作时段"},
+		{"无码原样", "成本燃烧", "成本燃烧"},
+		{"只剩码回退", "A2", "A2"},
+		{"空串原样", "", ""},
+		// 多码全剥：每个「码+名称」段的裸码前缀独立剥掉。
+		{"多码半角分号", "A1 程序失控; A2 成本燃烧; A5 非工作时段", "程序失控; 成本燃烧; 非工作时段"},
+		{"多码全角分号", "A1 程序失控；A2 成本燃烧", "程序失控; 成本燃烧"},
+		{"多码含无码段", "A2 成本燃烧; 正常; A5 非工作时段", "成本燃烧; 正常; 非工作时段"},
+		{"多码但段间无空格", "A1程序失控;A2成本燃烧", "程序失控; 成本燃烧"},
+	}
+	for _, c := range cases {
+		if got := stripAnomalyCode(c.in); got != c.want {
+			t.Errorf("%s: stripAnomalyCode(%q)=%q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+}
+
+// TestStripAnomalyCodeMultiOnlyCodeSegment 多段中某段只剩码（无名称）时该段原样保留码，其余段照常剥码。
+func TestStripAnomalyCodeMultiOnlyCodeSegment(t *testing.T) {
+	in := "A1 程序失控; A2; A5 非工作时段"
+	want := "程序失控; A2; 非工作时段"
+	if got := stripAnomalyCode(in); got != want {
+		t.Errorf("stripAnomalyCode multi only-code segment=%q, want %q", got, want)
+	}
+}
+
+// TestRenderMDDeptAnomalyDisposalHumanReadable 验证部门五章「异常处置」用户可见处去裸规则码：
+// 每条命中异常显示「**异常名**（级别）—— 可能原因（状态：…）」；不再出现 "[P1] A1 ——" 等裸 code 形式；
+// 且 detail（证据首值）不叠加异常名，避免重复。
+// 注：部门周报「判断-异常(A1–A5)」诊断小节保留 code，不属本断言范围（本测试只断言「五、异常处置」小节）。
+func TestRenderMDDeptAnomalyDisposalHumanReadable(t *testing.T) {
+	r := markdownReport("department")
+	r.Judgment.Anomalies = []report.AnomalyHit{
+		{Rule: "A2", Name: "成本燃烧", Severity: "P1", Hit: true, Evidence: []report.Evidence{{Field: "cause", Value: "后台脚本循环调用"}}},
+		{Rule: "A1", Name: "程序失控", Severity: "P1", Hit: true, Status: report.AnomalyStatusRecovered},
+	}
+	md := RenderMD(&r)
+	// 只提取「五、异常处置」小节再断言，避免「判断-异常(A1–A5)」中保留的 code 干扰。
+	sec := mdSection(md, "## 五、异常处置", "## 六、建议")
+	for _, want := range []string{
+		"- **成本燃烧**（P1）—— 后台脚本循环调用（状态：待确认）",
+		"- **程序失控**（P1）（状态：已恢复）",
+	} {
+		if !strings.Contains(sec, want) {
+			t.Errorf("部门五、异常处置 missing %q:\n%s", want, sec)
+		}
+	}
+	// 不应再出现旧「异常处置」裸 code 形式（严重度前缀+规则码）与重复叠加名。
+	for _, banned := range []string{
+		"- [P1] A1 ——",
+		"- [P2] A2 ——",
+		"成本燃烧（后台脚本循环调用）", // 旧 detail 会重复叠加异常名
+	} {
+		if strings.Contains(sec, banned) {
+			t.Errorf("部门五、异常处置仍含裸 code/重复名 %q:\n%s", banned, sec)
+		}
+	}
+}
+
+// mdSection 返回 md 中介于 start 与 end（含 start、不含 end；end 为空则截到末尾）之间的文本；找不到 start 返回空串。
+func mdSection(md, start, end string) string {
+	i := strings.Index(md, start)
+	if i < 0 {
+		return ""
+	}
+	j := len(md)
+	if end != "" {
+		if k := strings.Index(md[i+len(start):], end); k >= 0 {
+			j = i + len(start) + k
+		}
+	}
+	return md[i:j]
+}
+
+// TestRenderMDDeptTopChangedRealName 验证部门第四章「重点变化」表成员列显示真实姓名（不匿名，去「人员(匿名)/员工N」）：
+// derive 层 TopChangedMember.Name 提供姓名时直接展示；同名成员也在第六章「建议」保持一致；Name 为空回退「员工N」。
+func TestRenderMDDeptTopChangedRealName(t *testing.T) {
+	u := &report.UnitFact{
+		Member: report.UnitMember{UserCount: 20, ActiveUserCount: 10, ReqCount: 1000, SuccessCount: 950, EstCostUSD: 10.0, TotalTokens: 10000},
+		TopChanged: []report.TopChangedMember{
+			{Idx: 1, Name: "张三", JobCategory: "工程师", WoWCostPct: 120.0, AnomalyCause: "A2 成本燃烧"},
+			{Idx: 2, Name: "李四", JobCategory: "设计", WoWCostPct: -30.0, AnomalyCause: ""},
+			{Idx: 3, Name: "", JobCategory: "测试", WoWCostPct: 40.0, AnomalyCause: "A1 程序失控; A2 成本燃烧; A5 非工作时段"}, // Name 空 → 回退员工N；多码主因 → 全剥
+		},
+	}
+	r := markdownReport("department")
+	r.Fact.Department = u
+	// 命中 A2/A1，使 五、异常处置 计数非空，避免「无异常」兜底行干扰。
+	r.Judgment.Anomalies = []report.AnomalyHit{
+		{Rule: "A2", Name: "成本燃烧", Severity: "P1", Hit: true},
+		{Rule: "A1", Name: "程序失控", Severity: "P2", Hit: true},
+	}
+	md := RenderMD(&r)
+	// 表头去「（匿名）」；成员列有 Name 显示姓名，Name 空回退员工N；多码主因列全剥裸码。
+	for _, want := range []string{
+		"| 人员 | 岗位 | 成本环比 | 主因 | 是否有解释 |",
+		"| 张三 | 工程师 | +120.0% | 成本燃烧 | 已解释 |",
+		"| 李四 | 设计 | -30.0% | 待确认 | 待确认 |",
+		"| 员工3 | 测试 | +40.0% | 程序失控; 成本燃烧; 非工作时段 | 已解释 |",
+		// 六、建议 与四章成员一致：有姓名→显示姓名。
+		"- 张三（工程师，成本环比 +120.0%）：",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("department 四章真实姓名 missing %q:\n%s", want, md)
+		}
+	}
+	// 不应再出现「人员（匿名）」表头，也不得出现匿名占位与真实姓名混用问题。
+	if strings.Contains(md, "人员（匿名）") {
+		t.Errorf("四章表头仍含「人员（匿名）」:\n%s", md)
+	}
+}
+
+// TestMemberNameDisplay 直接验证 memberNameDisplay：有 Name 显示姓名；Name 空回退「员工N」。
+func TestMemberNameDisplay(t *testing.T) {
+	cases := []struct {
+		name string
+		tc   report.TopChangedMember
+		want string
+	}{
+		{"有真实姓名", report.TopChangedMember{Idx: 1, Name: "张三"}, "张三"},
+		{"Name 空回退员工N", report.TopChangedMember{Idx: 2, Name: ""}, "员工2"},
+		{"原样保留中文姓名", report.TopChangedMember{Idx: 3, Name: "王五"}, "王五"},
+	}
+	for _, c := range cases {
+		if got := memberNameDisplay(c.tc); got != c.want {
+			t.Errorf("%s: memberNameDisplay(%+v)=%q, want %q", c.name, c.tc, got, c.want)
+		}
 	}
 }

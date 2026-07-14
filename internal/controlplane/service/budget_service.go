@@ -551,18 +551,21 @@ func (s *BudgetService) GetBudget(ctx context.Context, scopeType, scopeID string
 }
 
 // readUsedFromRedis 从 Redis 读取某 scope 某周期的已用量（USD）。
-// key 格式与网关保持一致：budget:used:{scope_type}:{scope_id}:{period}
+// 与网关强制执行口径保持一致：读 v2 计数（budget:v2:used:{scope_type}:{scope_id}:{period}），
+// 其值以 microUSD 存储，读回后换算为 USD。
+// 说明：legacy 计数（budget:used:*）已不再作为展示事实源，
+// 以避免仪表盘「已用/百分比」与网关真实拦截数分叉（内容技术部个人 Key 池即因二者分叉而误报 95%）。
 // Redis 不可用或 key 不存在时返回 0（fail-open，不影响展示加载）。
 func (s *BudgetService) readUsedFromRedis(ctx context.Context, scopeType, scopeID, period string) float64 {
 	if s.rdb == nil {
 		return 0
 	}
-	key := fmt.Sprintf("budget:used:%s:%s:%s", scopeType, scopeID, period)
-	val, err := s.rdb.Get(ctx, key).Float64()
+	key := fmt.Sprintf("budget:v2:used:%s:%s:%s", scopeType, scopeID, period)
+	micro, err := s.rdb.Get(ctx, key).Int64()
 	if err != nil {
 		return 0 // key 不存在（未消费）或 Redis 异常，均视为 0
 	}
-	return val
+	return float64(micro) / 1_000_000
 }
 
 // ListScoped 按管辖范围列出预算配置（管理面用）。

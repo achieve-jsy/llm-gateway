@@ -586,22 +586,48 @@ func enumerateScopes(ctx context.Context, cli *client.Client, cfg Config) ([]rep
 }
 
 func batchFileName(level string, sc report.Scope, from, to string) string {
-	id := slugID(sc.ID)
-	if id == "" {
-		// 非 ASCII 的 dept_id（如中文部门名）slug 为空 → 用短 hash 兜底，避免多个对象覆盖同名 "unit" 文件。
-		id = "id-" + shortHash(sc.ID)
-	}
 	name := ""
 	if sc.Name != "" && sc.Name != sc.ID {
-		if n := slugID(sc.Name); n != "" {
-			name = n + "_"
-		} else if hn := shortHash(sc.Name); hn != "" {
-			// 中文/非 ASCII 名称 slugID 为空：用 shortHash 作前缀兜底，保证多个共享同 id（如 DeptID="import"）
-			// 的中文部门文件名唯一，避免互相覆盖丢失独立报告。
-			name = "n-" + hn + "_"
+		name = nameSlug(sc.Name)
+	}
+	uniq := shortHash(sc.ID)
+	if name == "" {
+		// 名称缺失/不可用：以 unit-<hash> 落名，name 已含 hash，无需追加唯一性后缀。
+		name = "unit-" + uniq
+		return fmt.Sprintf("%s_%s_%s_%s.md", level, name, from, to)
+	}
+	// 唯一性后缀：同名/共享 id 的对象用 scope id 短 hash 区分，不必暴露完整 UUID。
+	return fmt.Sprintf("%s_%s_%s_%s_%s.md", level, name, uniq, from, to)
+}
+
+// nameSlug 把对象名称（人名/部门名/工作室名，可能含中文）转为安全文件名字符串。
+// 保留 CJK、字母、数字、-、_；操作系统非法字符转 '-'，连续 '-' 去重并清理首尾；超长截断。
+func nameSlug(s string) string {
+	if s == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer("/", "-", "\\", "-", ":", "-", "*", "-", "?", "-", "\"", "-", "<", "-", ">", "-", "|", "-")
+	s = replacer.Replace(s)
+	var b strings.Builder
+	lastDash := false
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r >= 0x4E00 && r <= 0x9FFF, r == '-', r == '_':
+			b.WriteRune(r)
+			lastDash = false
+		default:
+			if !lastDash && b.Len() > 0 {
+				b.WriteByte('-')
+				lastDash = true
+			}
 		}
 	}
-	return fmt.Sprintf("%s_%s%s_%s_%s.md", level, name, id, from, to)
+	out := strings.Trim(b.String(), "-")
+	if len(out) > 48 {
+		out = out[:48]
+	}
+	return out
 }
 
 // shortHash 取字符串 SHA-256 前 8 字节的十六进制（短唯一标识，供非 ASCII scope id 作文件名兜底）。

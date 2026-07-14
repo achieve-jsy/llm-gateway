@@ -104,13 +104,12 @@ func TestEnumerateScopes_Personal_Dedup(t *testing.T) {
 
 // TestBatchFileName 命名约定：level_scope_from_to.md，name 有值时用 name_id。
 func TestBatchFileName(t *testing.T) {
-	// slug 保留连字符（dept_id 的 '-' 不容丢失）；非 ASCII 名 slug 为空 → 用 shortHash(name) 前缀，
-	// 保证多个共享同 id（如 DeptID="import"）的中文部门文件名唯一、不覆盖。
-	if got := batchFileName("department", report.Scope{ID: "d-dev", Name: "研发部"}, "2026-06-25", "2026-07-01"); got != "department_n-f706f416_d-dev_2026-06-25_2026-07-01.md" {
+	// 文件名用对象名称（保留中文）+ scope id 短 hash 作唯一性后缀，不再暴露完整 UUID。
+	if got := batchFileName("department", report.Scope{ID: "d-dev", Name: "研发部"}, "2026-06-25", "2026-07-01"); got != "department_研发部_"+shortHash("d-dev")+"_2026-06-25_2026-07-01.md" {
 		t.Errorf("batchFileName = %q", got)
 	}
-	// name 为空 → 用 id。
-	if got := batchFileName("personal", report.Scope{ID: "u1"}, "2026-06-25", "2026-07-01"); got != "personal_u1_2026-06-25_2026-07-01.md" {
+	// name 为空 → 用 unit-短 hash 兜底（名称缺失）。
+	if got := batchFileName("personal", report.Scope{ID: "u1"}, "2026-06-25", "2026-07-01"); got != "personal_unit-"+shortHash("u1")+"_2026-06-25_2026-07-01.md" {
 		t.Errorf("batchFileName = %q", got)
 	}
 	// 两个中文名部门共享同 id（DeptID="import"）→ 必须生成不同文件名，避免互相覆盖。

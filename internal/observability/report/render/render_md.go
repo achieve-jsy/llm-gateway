@@ -73,21 +73,13 @@ func RenderMD(r *report.Report) string {
 	} else {
 		w("# 用量周报 · %s\n\n", r.Expression.Headline)
 	}
-	w("> **级别**：%s · **范围**：%s\n", levelLabel(r.Meta.Level), scopeLabel(r.Meta.Scope))
-	w("> **周期**：%s（%s ~ %s，%d 天）\n", r.Meta.Period.Label, r.Meta.Period.From, r.Meta.Period.To, r.Meta.Period.Days)
-	if r.Meta.Period.IsoWeek != "" {
-		w("> **ISO 周**：%s\n", r.Meta.Period.IsoWeek)
-	}
-	w("> **币种**：%s（USD→CNY %.4f）\n\n", r.Meta.Currency.ReportCurrency, r.Meta.Currency.USDCNYRate)
 
-	// Vicky 模板章节命名：个人首章为「一、使用概览」，部门/工作室保持「概况」数字表（其编号章节随后输出）。
+	// 个人首章为「一、使用概览」（writeFactTable 输出模板一行摘要）；部门/工作室不单独输出「概况」，
+	// 其概览数字已由 writeDeptSections/writeStudioSections 的首章完整承载。
 	if r.Fact.Personal != nil {
 		w("## 一、使用概览\n\n")
-	} else {
-		w("## 概况\n\n")
+		writeFactTable(&b, r)
 	}
-	w("| 指标 | 值 |\n|---|---|\n")
-	writeFactTable(&b, r)
 
 	if r.Fact.Personal != nil {
 		// Vicky 个人周报：纵向基线 / 同岗使用效能画像 / 成本最高模型 / 场景与合理用模
@@ -100,9 +92,6 @@ func RenderMD(r *report.Report) string {
 		writeStudioSections(&b, r)
 	}
 
-	w("\n## 判断\n\n")
-	writeJudgment(&b, r)
-
 	// 部门/工作室周报：建议已在第六章输出，跳过通用建议块避免重复
 	if r.Fact.Personal != nil {
 		w("\n## 七、优化建议\n\n")
@@ -110,38 +99,6 @@ func RenderMD(r *report.Report) string {
 			w("- %s\n", g)
 		}
 	}
-
-	w("\n## 口径与对账\n\n")
-	// 只列一次：打印 QA.Alignment（对账/口径单一来源），去重；缺失才补默认；最后补一条判定性说明。
-	seen := map[string]bool{}
-	add := func(line string) {
-		if strings.TrimSpace(line) == "" || seen[line] {
-			return
-		}
-		seen[line] = true
-		w("- %s\n", line)
-	}
-	for _, al := range r.Meta.QA.Alignment {
-		add(al)
-	}
-	defaults := []string{
-		"成功=`status=200`；个人画像/岗位人均排除 `key_type='service'`；部门 Service Key 块仅 `=service` 且归属当前部门。",
-		"`total_tokens=prompt+completion+reasoning`（不含 cached/cache_write）；对账基准 `GET /api/v1/usage/dashboard`。",
-	}
-	for _, d := range defaults {
-		covered := false
-		pfx := strings.SplitN(d, "；", 2)[0]
-		for k := range seen {
-			if strings.HasPrefix(k, pfx) {
-				covered = true
-				break
-			}
-		}
-		if !covered {
-			add(d)
-		}
-	}
-	add("判定性分析确定性可复现；A1–A5 阈值为阶段一默认，T4 用真实数据校准。")
 
 	return b.String()
 }
@@ -586,6 +543,9 @@ func writePersonalSections(b *strings.Builder, r *report.Report) {
 			if a.ImpactCostUSD > 0 {
 				fmt.Fprintf(b, "  - 影响成本 `%.2f` USD · 超支 `%.2f` USD\n", a.ImpactCostUSD, a.ExcessCostUSD)
 			}
+			if pc := possibleCause(a.Rule); pc != "" {
+				fmt.Fprintf(b, "  - 可能原因：%s\n", pc)
+			}
 			// 保留完整证据链（含可能原因/判定依据）
 			for _, e := range a.Evidence {
 				if cn := evidenceFieldCN(e.Field); cn != "" {
@@ -751,6 +711,24 @@ func evidenceFieldCN(field string) string {
 		return "窗口调用间隔中位数(秒)"
 	case "window_top_user":
 		return "窗口top用户"
+	default:
+		return ""
+	}
+}
+
+// possibleCause 规则→可能原因（模板六、异常提示「可能原因」行）。确定性规则标签，非大模型生成。
+func possibleCause(rule string) string {
+	switch rule {
+	case "A1":
+		return "脚本循环 / 定时任务"
+	case "A2":
+		return "批处理 / 循环 / 异常重试"
+	case "A3":
+		return "失败重试 / 异常循环"
+	case "A4":
+		return "长上下文 / 未压缩会话"
+	case "A5":
+		return "定时任务 / 未备案"
 	default:
 		return ""
 	}

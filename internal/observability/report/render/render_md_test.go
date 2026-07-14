@@ -12,14 +12,22 @@ func TestRenderMDLevelMatrix(t *testing.T) {
 		t.Run(level, func(t *testing.T) {
 			r := markdownReport(level)
 			md := RenderMD(&r)
-			// 顶部数字表：个人模板首章为「一、使用概览」，部门/工作室为「概况」。
-			overview := "## 概况"
+			// 对齐模板：首章标题。个人「一、使用概览」，部门「一、部门概览」，工作室「一、一页摘要」。
+			first := "## 一、部门概览"
 			if level == "personal" {
-				overview = "## 一、使用概览"
+				first = "## 一、使用概览"
+			} else if level == "studio" {
+				first = "## 一、一页摘要"
 			}
-			for _, want := range []string{overview, "| 指标 | 值 |", "研发 | 平台", "## 判断", "### 未能判定", "样本不足 < 5"} {
+			for _, want := range []string{first, "研发 | 平台"} {
 				if !strings.Contains(md, want) {
 					t.Errorf("missing %q in markdown:\n%s", want, md)
+				}
+			}
+			// 已对齐模板：不再含「判断」诊断明细 / 空「指标值」表。
+			for _, absent := range []string{"## 判断", "| 指标 | 值 |"} {
+				if strings.Contains(md, absent) {
+					t.Errorf("unexpected %q in markdown:\n%s", absent, md)
 				}
 			}
 			if level == "personal" {
@@ -27,12 +35,9 @@ func TestRenderMDLevelMatrix(t *testing.T) {
 				if !strings.Contains(md, "调用 0 次") {
 					t.Errorf("personal overview line missing: %s", md)
 				}
-			} else {
-				for _, want := range []string{"| 成员调用 | 0（花名册 3 人，活跃 0 人） |", "| 成员成功率 | n/a |", "| Service Key 调用 | 2 |"} {
-					if !strings.Contains(md, want) {
-						t.Errorf("%s unit summary missing %q:\n%s", level, want, md)
-					}
-				}
+			} else if strings.Contains(md, "## 概况") {
+				// 部门/工作室不再单独输出「概况」表，概览由首章承载。
+				t.Errorf("%s should not have separate 概况 section:\n%s", level, md)
 			}
 		})
 	}
@@ -106,11 +111,9 @@ func TestRenderMDModelAnalysisSections(t *testing.T) {
 			if !strings.Contains(md, "（注：LLM Key 未配置，使用降级说明。）") {
 				t.Errorf("%s missing note line:\n%s", level, md)
 			}
-			// 章节位置：模型分析在「## 判断」之前
-			idxTitle := strings.Index(md, wantTitle)
-			idxJudgment := strings.Index(md, "## 判断")
-			if idxTitle == -1 || idxJudgment == -1 || idxTitle > idxJudgment {
-				t.Errorf("%s model-analysis section should precede ## 判断: title=%d judgment=%d\n%s", level, idxTitle, idxJudgment, md)
+			// 已对齐模板：报告不再输出「## 判断」诊断明细章节。
+			if strings.Contains(md, "## 判断") {
+				t.Errorf("%s should not contain ## 判断 after template alignment:\n%s", level, md)
 			}
 		})
 	}

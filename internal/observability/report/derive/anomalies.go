@@ -19,11 +19,11 @@ import (
 // currentBuckets 为当期 [from,to] 的分钟桶聚合（非 service）。-agg 成员聚合模式无逐调用明细
 // （calls 为空），但服务端 /usage/report/baseline 可返回当期分钟桶；非空时 A1/A2 用它在
 // 分钟窗口上直接滑窗判定，无需逐调用展开。A3–A5 依赖逐调用失败率/上下文/时段，仍走 calls（agg 下降级）。
-func Anomalies(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []report.MinuteBucket, rules report.RuleSet, modelBudget map[string]int64) []report.AnomalyHit {
+func Anomalies(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []report.MinuteBucket, rules report.RuleSet, modelBudget map[string]int64, userNameByID ...map[string]string) []report.AnomalyHit {
 	hits := []report.AnomalyHit{
-		A1(calls, baselineCalls, baselineBuckets, currentBuckets, rules),
-		A2(calls, baselineCalls, baselineBuckets, currentBuckets, rules),
-		A3(calls, rules),
+		A1(calls, baselineCalls, baselineBuckets, currentBuckets, rules, userNameByID...),
+		A2(calls, baselineCalls, baselineBuckets, currentBuckets, rules, userNameByID...),
+		A3(calls, rules, userNameByID...),
 		A4(calls, rules, modelBudget),
 		A5(calls, rules),
 	}
@@ -34,6 +34,25 @@ func Anomalies(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets
 		}
 	}
 	return hits
+}
+
+// UserNameOrID 返回成员真实姓名（roster 可解析时），否则回退原始 user_id（UUID）。用于用户可见处的
+// 窗口最大成本归属/风险对象展示（第4轮「显示真实姓名不匿名」，无姓名时保持匿名降级兜底，不泄漏多余信息）。
+func UserNameOrID(uid string, userNameByID map[string]string) string {
+	if n := userNameByID[uid]; n != "" {
+		return n
+	}
+	return uid
+}
+
+// firstUserNameMap 从可选的尾参取出首个非 nil 的 uid→姓名 映射（变参用于向后兼容既有调用，未提供时返回 nil）。
+func firstUserNameMap(ms ...map[string]string) map[string]string {
+	for _, m := range ms {
+		if m != nil {
+			return m
+		}
+	}
+	return nil
 }
 
 // ---- 时间桶工具 ----
@@ -237,8 +256,9 @@ func evs(f, v string) report.Evidence         { return report.Evidence{Field: f,
 // currentBuckets 非空时（-agg 无明细）用当期分钟桶做窗口扫描；count 阈值照常判定，
 // 但「中位间隔<10s」依赖逐调用间隔、桶粒度无法精确复原，此时以命中调用数超阈值且窗口连续为准
 // （聚合近似，证据维度注明 bucket_mode）。
-func A1(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []report.MinuteBucket, rules report.RuleSet) report.AnomalyHit {
+func A1(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []report.MinuteBucket, rules report.RuleSet, userNameByID ...map[string]string) report.AnomalyHit {
 	a := newHit("A1", "v1", "程序失控", "P1", itoa(rules.A1WindowMinutes)+"min/连续"+itoa(rules.A1SustainMinutes)+"min")
+	users := firstUserNameMap(userNameByID...)
 	bucketMode := len(currentBuckets) > 0
 	if len(calls) < 2 && !bucketMode {
 		a.Evidence = append(a.Evidence, evs("basis", "调用样本不足，无法判定程序失控。"))
@@ -324,7 +344,7 @@ func A1(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []repo
 			a.Dimensions["user_id"] = uid
 			a.Dimensions["user_id_basis"] = "window_max_cost"
 			a.Dimensions["user_cost_share"] = fmtFloat(share)
-			a.Evidence = append(a.Evidence, evs("window_top_user", uid+"(占窗口成本"+fmtFloat(share*100)+"%)"))
+			a.Evidence = append(a.Evidence, evs("window_top_user", UserNameOrID(uid, users)+"(占窗口成本"+fmtFloat(share*100)+"%)"))
 		}
 	}
 	a.Evidence = append(a.Evidence,
@@ -341,8 +361,9 @@ func A1(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []repo
 // ---- A2 成本燃烧 ----
 
 // A2：15 分钟成本 > max(¥50, 个人28天同窗中位×5)；另加 HARD_CAP_A2=¥200/15min 独立触发。
-func A2(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []report.MinuteBucket, rules report.RuleSet) report.AnomalyHit {
+func A2(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []report.MinuteBucket, rules report.RuleSet, userNameByID ...map[string]string) report.AnomalyHit {
 	a := newHit("A2", "v1", "成本燃烧", "P1", "15min")
+	users := firstUserNameMap(userNameByID...)
 	bucketMode := len(currentBuckets) > 0
 	if len(calls) < 2 && !bucketMode {
 		a.Hit = false
@@ -429,7 +450,7 @@ func A2(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []repo
 			a.Dimensions["user_id"] = uid
 			a.Dimensions["user_id_basis"] = "window_max_cost"
 			a.Dimensions["user_cost_share"] = fmtFloat(share)
-			a.Evidence = append(a.Evidence, evs("window_top_user", uid+"(占窗口成本"+fmtFloat(share*100)+"%)"))
+			a.Evidence = append(a.Evidence, evs("window_top_user", UserNameOrID(uid, users)+"(占窗口成本"+fmtFloat(share*100)+"%)"))
 		}
 	}
 	a.Evidence = append(a.Evidence,
@@ -447,8 +468,9 @@ func A2(calls, baselineCalls []CallEvent, baselineBuckets, currentBuckets []repo
 
 // A3：段=(key_id,model)，段内 req≥20 ∧ fail_rate≥30% ∧ 单一 status_code 占失败≥80% ∧ failed≥6。
 // 失败定义 status>=400；区分上游故障(5xx→归上游)与客户端僵死(429/400)。
-func A3(calls []CallEvent, rules report.RuleSet) report.AnomalyHit {
+func A3(calls []CallEvent, rules report.RuleSet, userNameByID ...map[string]string) report.AnomalyHit {
 	a := newHit("A3", "v1", "重试循环", "P2", itoa(rules.A3WindowMinutes)+"min滑窗")
+	users := firstUserNameMap(userNameByID...)
 	if len(calls) < 2 {
 		a.Evidence = append(a.Evidence, evs("basis", "调用样本不足，无法判定重试循环。"))
 		return a
@@ -518,7 +540,7 @@ func A3(calls []CallEvent, rules report.RuleSet) report.AnomalyHit {
 				best.Dimensions["user_id"] = uid
 				best.Dimensions["user_id_basis"] = "window_max_cost"
 				best.Dimensions["user_cost_share"] = fmtFloat(share)
-				best.Evidence = append(best.Evidence, evs("window_top_user", uid+"(占窗口成本"+fmtFloat(share*100)+"%)"))
+				best.Evidence = append(best.Evidence, evs("window_top_user", UserNameOrID(uid, users)+"(占窗口成本"+fmtFloat(share*100)+"%)"))
 			}
 			best.Evidence = append(best.Evidence,
 				evi("segment_req", req), evi("failed", failed),

@@ -11,6 +11,7 @@ package derive
 import (
 	"math"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -269,5 +270,139 @@ func TestCountAnomalyStatus(t *testing.T) {
 	c := report.CountAnomalyStatus(hits)
 	if c.Pending != 2 || c.ConfirmedOK != 1 || c.Fixing != 1 || c.Recovered != 1 || c.FalsePos != 1 {
 		t.Errorf("CountAnomalyStatus=%+v, want {Pending:2,ConfirmedOK:1,Fixing:1,Recovered:1,FalsePos:1}", c)
+	}
+}
+
+// ---- 第4轮②d：诊断章节 window_top_user 显示成员真实姓名（去 UUID） ----
+
+// windowTopUserPrefix 取命中异常的 window_top_user 证据值前缀（去 UUID 校验用）。
+func windowTopUserPrefix(t *testing.T, evs []report.Evidence) string {
+	t.Helper()
+	for _, e := range evs {
+		if e.Field == "window_top_user" {
+			return e.Value
+		}
+	}
+	t.Fatal("window_top_user evidence not found")
+	return ""
+}
+
+// assertWindowTopUserShows 断言 window_top_user 值以「name(」开头（显示姓名而非原始 user_id/uuid）。
+func assertWindowTopUserShows(t *testing.T, evs []report.Evidence, name string) {
+	t.Helper()
+	v := windowTopUserPrefix(t, evs)
+	if !strings.HasPrefix(v, name+"(") {
+		t.Errorf("window_top_user value=%q, want prefix %q", v, name+"(")
+	}
+}
+
+// assertWindowTopUserShowsUID 断言 window_top_user 值回退显示原始 user_id（roster 无姓名，匿名降级）。
+func assertWindowTopUserShowsUID(t *testing.T, evs []report.Evidence, uid string) {
+	t.Helper()
+	v := windowTopUserPrefix(t, evs)
+	if !strings.HasPrefix(v, uid+"(") {
+		t.Errorf("window_top_user value=%q, want fallback prefix %q (uid)", v, uid+"(")
+	}
+}
+
+// TestAnomalies_WindowTopUserUsesRealName：A1/A2/A3 命中异常的诊断窗口归属 window_top_user 显示成员真实姓名
+// （②d，去 UUID）。变参传入 uid→姓名 映射后，三处 evs("window_top_user", ...) 都应显示姓名而非原始 user_id。
+func TestAnomalies_WindowTopUserUsesRealName(t *testing.T) {
+	rules := report.DefaultRuleSet()
+	rules.A1SustainMinutes = 1
+	rules.A1MinCallsAbsolute = 2
+	start := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
+	userNameByID := map[string]string{"uA": "张三", "uC": "王五", "uX": "李四"}
+
+	// A1：uA 窗口成本最高 → 显示「张三(占窗口成本...%)」。
+	a1Calls := []report.CallEvent{
+		{TS: start, UserID: "uA", Status: 200, EstCostUSD: 40},
+		{TS: start.Add(time.Second), UserID: "uA", Status: 200, EstCostUSD: 30},
+		{TS: start.Add(2 * time.Second), UserID: "uA", Status: 200, EstCostUSD: 30},
+		{TS: start.Add(3 * time.Second), UserID: "uB", Status: 200, EstCostUSD: 20},
+		{TS: start.Add(4 * time.Second), UserID: "uB", Status: 200, EstCostUSD: 10},
+		{TS: start.Add(5 * time.Second), UserID: "uB", Status: 200, EstCostUSD: 10},
+	}
+	a1 := findAnomalyHit(Anomalies(a1Calls, nil, nil, nil, rules, nil, userNameByID), "A1")
+	if a1 == nil || !a1.Hit {
+		t.Fatalf("A1 should hit: %+v", a1)
+	}
+	assertWindowTopUserShows(t, a1.Evidence, "张三")
+
+	// A2：uC 窗口成本最高 → 显示「王五(占窗口成本...%)」。
+	a2Calls := []report.CallEvent{
+		{TS: start, UserID: "uC", Status: 200, EstCostUSD: 70},
+		{TS: start.Add(time.Second), UserID: "uC", Status: 200, EstCostUSD: 30},
+		{TS: start.Add(2 * time.Second), UserID: "uD", Status: 200, EstCostUSD: 8},
+		{TS: start.Add(3 * time.Second), UserID: "uD", Status: 200, EstCostUSD: 2},
+	}
+	a2 := findAnomalyHit(Anomalies(a2Calls, nil, nil, nil, rules, nil, userNameByID), "A2")
+	if a2 == nil || !a2.Hit {
+		t.Fatalf("A2 should hit: %+v", a2)
+	}
+	assertWindowTopUserShows(t, a2.Evidence, "王五")
+
+	// A3：uX 失败窗口成本最高 → 显示「李四(占窗口成本...%)」。
+	rules.A3WindowMinutes = 5
+	var a3Calls []report.CallEvent
+	for i := 0; i < 20; i++ {
+		uid := "uX"
+		cost := 10.0
+		if i%3 == 0 {
+			uid = "uY"
+			cost = 1.0
+		}
+		a3Calls = append(a3Calls, report.CallEvent{TS: start.Add(time.Duration(i) * time.Second), KeyID: "k", Model: "m", UserID: uid, Status: 0, EstCostUSD: cost})
+	}
+	a3 := findAnomalyHit(Anomalies(a3Calls, nil, nil, nil, rules, nil, userNameByID), "A3")
+	if a3 == nil || !a3.Hit {
+		t.Fatalf("A3 should hit: %+v", a3)
+	}
+	assertWindowTopUserShows(t, a3.Evidence, "李四")
+}
+
+// TestAnomalies_WindowTopUserFallsBackToUID：roster 无姓名映射 / 未传映射时，window_top_user 回退原始 user_id（UUID 匿名降级）。
+func TestAnomalies_WindowTopUserFallsBackToUID(t *testing.T) {
+	rules := report.DefaultRuleSet()
+	rules.A1SustainMinutes = 1
+	rules.A1MinCallsAbsolute = 2
+	start := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
+	calls := []report.CallEvent{
+		{TS: start, UserID: "uA", Status: 200, EstCostUSD: 40},
+		{TS: start.Add(time.Second), UserID: "uA", Status: 200, EstCostUSD: 30},
+		{TS: start.Add(2 * time.Second), UserID: "uA", Status: 200, EstCostUSD: 30},
+		{TS: start.Add(3 * time.Second), UserID: "uB", Status: 200, EstCostUSD: 20},
+		{TS: start.Add(4 * time.Second), UserID: "uB", Status: 200, EstCostUSD: 10},
+		{TS: start.Add(5 * time.Second), UserID: "uB", Status: 200, EstCostUSD: 10},
+	}
+	// 不传 map → 回退 uid。
+	a1 := findAnomalyHit(Anomalies(calls, nil, nil, nil, rules, nil), "A1")
+	if a1 == nil || !a1.Hit {
+		t.Fatalf("A1 should hit: %+v", a1)
+	}
+	assertWindowTopUserShowsUID(t, a1.Evidence, "uA")
+
+	// 传了 map 但缺该 uid 条目 → 同样回退 uid。
+	a1b := findAnomalyHit(Anomalies(calls, nil, nil, nil, rules, nil, map[string]string{"uZ": "某人"}), "A1")
+	if a1b == nil || !a1b.Hit {
+		t.Fatalf("A1 should hit: %+v", a1b)
+	}
+	assertWindowTopUserShowsUID(t, a1b.Evidence, "uA")
+}
+
+// TestUserNameOrID：②d 展示助手——roster 可解析返回姓名，否则回退原始 user_id；空 uid 原样返回。
+func TestUserNameOrID(t *testing.T) {
+	roster := map[string]string{"u-a": "张三"}
+	if got := UserNameOrID("u-a", roster); got != "张三" {
+		t.Errorf("UserNameOrID(u-a)=%q, want 张三", got)
+	}
+	if got := UserNameOrID("u-missing", roster); got != "u-missing" {
+		t.Errorf("UserNameOrID(u-missing)=%q, want u-missing (fallback uid)", got)
+	}
+	if got := UserNameOrID("", roster); got != "" {
+		t.Errorf("UserNameOrID('')=%q, want empty", got)
+	}
+	if got := UserNameOrID("u-a", nil); got != "u-a" {
+		t.Errorf("UserNameOrID(u-a, nil)=%q, want u-a", got)
 	}
 }

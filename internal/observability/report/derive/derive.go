@@ -98,7 +98,17 @@ func Derive(meta report.Meta, in report.ReportInput, rules report.RuleSet) (*rep
 	}
 
 	// A1–A5
-	anoms := Anomalies(in.Calls, in.BaselineCalls, in.BaselineBuckets, in.CurrentBuckets, rules, in.ModelContextBudget)
+	// ②d 数据源：用成员聚合(MemberAgg.UserName)建 uid→真实姓名 映射，供 window_top_user 归属展示
+	// （诊断章节「判断-异常(A1–A5)」显示成员姓名而非 UUID；无姓名时回退 uid）。空值过滤、去重。
+	userNameByID := make(map[string]string, len(in.MemberAgg))
+	for _, m := range in.MemberAgg {
+		if m.UserID != "" && m.UserName != "" {
+			if _, ok := userNameByID[m.UserID]; !ok {
+				userNameByID[m.UserID] = m.UserName
+			}
+		}
+	}
+	anoms := Anomalies(in.Calls, in.BaselineCalls, in.BaselineBuckets, in.CurrentBuckets, rules, in.ModelContextBudget, userNameByID)
 	// 单元级语义说明：A1/A2 基于个人窗口/中位，单元级运行在「该单元成员调用流（排除 service）」上。
 	scope := in.LevelMeta.Level
 	for i := range anoms {

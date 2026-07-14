@@ -1212,7 +1212,8 @@ func backfillAnomalyWindowUser(ctx context.Context, cli *client.Client, cfg Conf
 		if name := userNameByID[uid]; name != "" {
 			a.Dimensions["user_name"] = name
 		}
-		a.Evidence = append(a.Evidence, report.Evidence{Field: "window_top_user", Value: uid + "(占窗口成本" + strconv.FormatFloat(share*100, 'f', 1, 64) + "%)"})
+		// ②d 数据源：诊断章节「判断-异常(A1–A5)」的 window_top_user 显示成员姓名而非 UUID（无姓名回退 uid）。
+		a.Evidence = append(a.Evidence, report.Evidence{Field: "window_top_user", Value: derive.UserNameOrID(uid, userNameByID) + "(占窗口成本" + strconv.FormatFloat(share*100, 'f', 1, 64) + "%)"})
 		changed = true
 	}
 	if changed {

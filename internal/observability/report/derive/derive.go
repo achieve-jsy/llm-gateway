@@ -66,8 +66,8 @@ func Derive(meta report.Meta, in report.ReportInput, rules report.RuleSet) (*rep
 		if m := in.Cohort.Target.Metrics; m.CacheHitRate > 0 {
 			rep.Fact.Personal.CacheHitRate = m.CacheHitRate
 		}
-		if m := in.Cohort.Target.Metrics; m.CostPer1kTokens > 0 {
-			rep.Fact.Personal.CostPer1Million = m.CostPer1kTokens
+		if m := in.Cohort.Target.Metrics; m.CostPer1Million > 0 {
+			rep.Fact.Personal.CostPer1Million = m.CostPer1Million
 		}
 		if m := in.Cohort.Target.Metrics; m.HighTierCostRatio > 0 {
 			rep.Fact.Personal.HighTierCostRatio = m.HighTierCostRatio
@@ -892,12 +892,30 @@ func buildPersonalFact(in report.ReportInput) *report.PersonalFact {
 		p.CostPer1Million = p.EstCostUSD / float64(p.TotalTokens) * 1e6
 	}
 	if p.TopModels != nil && p.EstCostUSD > 0 {
+		// TopModel 仍取成本最高模型（展示用；TopModels 按 cost 排序，首个即成本最高）。
 		for _, tm := range p.TopModels {
 			if tm.Model != "" && tm.CostUSD > 0 {
 				p.TopModel = tm.Model
-				p.HighTierCostRatio = tm.CostUSD / p.EstCostUSD
 				break
 			}
+		}
+		// 高阶模型成本占比 = Σ高阶模型成本 / 总成本（高阶 = 模型任一所属组等级 ∈ {高等级,超高等级}）；
+		// 无高阶映射（in.HighTierModelNames 为空）时回退旧口径「成本最高模型/总成本」。
+		if len(in.HighTierModelNames) == 0 {
+			for _, tm := range p.TopModels {
+				if tm.Model != "" && tm.CostUSD > 0 {
+					p.HighTierCostRatio = tm.CostUSD / p.EstCostUSD
+					break
+				}
+			}
+		} else {
+			hi := 0.0
+			for _, tm := range p.TopModels {
+				if tm.Model != "" && in.HighTierModelNames[tm.Model] && tm.CostUSD > 0 {
+					hi += tm.CostUSD
+				}
+			}
+			p.HighTierCostRatio = hi / p.EstCostUSD
 		}
 	}
 	return p
@@ -1228,17 +1246,29 @@ func estimateOptimizable(u *report.UnitFact, in report.ReportInput) float64 {
 	if u.Member.CacheHitRate > 0 && u.Member.CacheHitRate < 0.3 {
 		opt += total * 0.1
 	}
-	// 高价值模型成本占比：agg 模式无 HighTierCostRatio 字段，用成本最高模型 / 总成本近似。
-	highRatio := 0.0
-	if topModelCost > 0 {
-		highRatio = topModelCost / total
+	// 高价值模型成本占比：有高阶映射用「Σ高阶模型成本/总成本」，否则用「成本最高模型/总成本」兜底。
+	modelCost := topModelCost
+	if len(in.HighTierModelNames) > 0 {
+		hi := 0.0
+		for _, tm := range u.Member.TopModels {
+			if tm.Model != "" && in.HighTierModelNames[tm.Model] && tm.CostUSD > 0 {
+				hi += tm.CostUSD
+			}
+		}
+		if hi > 0 {
+			modelCost = hi
+		}
 	}
-	if highRatio >= 0.5 && topModelCost > 0 {
-		opt += topModelCost * 0.2
+	highRatio := 0.0
+	if modelCost > 0 {
+		highRatio = modelCost / total
+	}
+	if highRatio >= 0.5 && modelCost > 0 {
+		opt += modelCost * 0.2
 	}
 	if opt <= 0 {
-		if topModelCost > 0 {
-			opt = topModelCost * 0.1
+		if modelCost > 0 {
+			opt = modelCost * 0.1
 		} else {
 			opt = total * 0.05
 		}
@@ -1574,7 +1604,7 @@ func buildPeerProfiles(in report.ReportInput, f report.Fact, minSample int) []re
 		{Key: "active_days", Label: "活跃天数", Unit: "天", cur: func(p *report.PersonalFact) float64 { return float64(p.ActiveDays) }, pool: func(m report.CohortMetrics) float64 { return float64(m.ActiveDays) }},
 		{Key: "avg_input_ctx", Label: "平均输入上下文", Unit: "token", cur: func(p *report.PersonalFact) float64 { return p.AvgInputCtxTokens }, pool: func(m report.CohortMetrics) float64 { return m.AvgInputCtxTokens }},
 		{Key: "cache_hit_rate", Label: "缓存 Token 占比", Unit: "%", cur: func(p *report.PersonalFact) float64 { return p.CacheHitRate }, pool: func(m report.CohortMetrics) float64 { return m.CacheHitRate }},
-		{Key: "cost_per_1m", Label: "每百万 Token 成本", Unit: "USD", cur: func(p *report.PersonalFact) float64 { return p.CostPer1Million }, pool: func(m report.CohortMetrics) float64 { return m.CostPer1kTokens }},
+		{Key: "cost_per_1m", Label: "每百万 Token 成本", Unit: "USD", cur: func(p *report.PersonalFact) float64 { return p.CostPer1Million }, pool: func(m report.CohortMetrics) float64 { return m.CostPer1Million }},
 		{Key: "high_tier_cost_ratio", Label: "高阶模型成本占比", Unit: "%", cur: func(p *report.PersonalFact) float64 { return p.HighTierCostRatio }, pool: func(m report.CohortMetrics) float64 { return m.HighTierCostRatio }},
 	}
 	// 仅个人粒度有同岗画像；其他层级直接返回空表。

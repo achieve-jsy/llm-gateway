@@ -494,6 +494,8 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 
 		// 模型管理
 		adminGroup.GET("/model-tiers", guard(rbac.PermModelTierView), modelTierHandler.List)
+		// 只读：模型→所属模型组→模型等级(是否高阶) 映射，供用量周报「高阶模型成本占比」。
+		adminGroup.GET("/model-tier-hierarchy", guard(rbac.PermModelTierView), modelTierHandler.ModelTierHierarchy)
 		adminGroup.POST("/model-tiers", guard(rbac.PermModelTierManage), modelTierHandler.Create)
 		adminGroup.PUT("/model-tiers/reorder", guard(rbac.PermModelTierManage), modelTierHandler.Reorder)
 		adminGroup.GET("/model-tiers/:id", guard(rbac.PermModelTierView), modelTierHandler.Get)

@@ -27,7 +27,9 @@ type rosterEntry struct {
 }
 
 // buildCohort 构建同岗分位对标池（全量 rosters 之最小必要子集，仅供同岗分位）。
-func buildCohort(ctx context.Context, cli *client.Client, cfg Config, scope report.Scope, calls []report.CallEvent) (report.CohortDef, []report.NotComputed) {
+// highTierModelNames：模型名→是否高阶（来自只读端点 model-tier-hierarchy），用于把「高阶模型成本占比」
+// 由「成本最高模型/总成本」改为「Σ高阶模型成本/总成本」；为空时回退旧口径。
+func buildCohort(ctx context.Context, cli *client.Client, cfg Config, scope report.Scope, calls []report.CallEvent, highTierModelNames map[string]bool) (report.CohortDef, []report.NotComputed) {
 	var ncs []report.NotComputed
 	cohort := report.CohortDef{Enabled: true, Option: "sameRole", Metric: "cost_per_1k_tokens", Direction: "cost"}
 	if cfg.Level != "personal" {
@@ -72,10 +74,24 @@ func buildCohort(ctx context.Context, cli *client.Client, cfg Config, scope repo
 			cm.CacheHitRate = float64(row.CachedTokens) / float64(row.PromptTokens)
 		}
 		if row.TotalTokens > 0 {
-			cm.CostPer1kTokens = row.EstCostUSD / float64(row.TotalTokens) * 1e6 // 每百万 Token 成本
+			cm.CostPer1Million = row.EstCostUSD / float64(row.TotalTokens) * 1e6 // 每百万 Token 成本
 		}
-		if row.EstCostUSD > 0 && row.TopModelCostUSD > 0 {
-			cm.HighTierCostRatio = row.TopModelCostUSD / row.EstCostUSD
+		if row.EstCostUSD > 0 {
+			if len(highTierModelNames) == 0 {
+				// 无高阶映射：回退旧口径「成本最高模型/总成本」
+				if row.TopModelCostUSD > 0 {
+					cm.HighTierCostRatio = row.TopModelCostUSD / row.EstCostUSD
+				}
+			} else {
+				// 高阶模型成本占比 = Σ高阶模型成本 / 总成本（高阶 = 模型任一所属组等级 ∈ {高等级,超高等级}）
+				hi := 0.0
+				for _, tm := range row.TopModels {
+					if tm.Model != "" && highTierModelNames[tm.Model] {
+						hi += tm.EstCostUSD
+					}
+				}
+				cm.HighTierCostRatio = hi / row.EstCostUSD
+			}
 		}
 		// TopModels 接线：供第四章同岗模型采用率/P50 计算
 		for _, tm := range row.TopModels {
@@ -258,7 +274,7 @@ func collectSame(t rosterEntry, roster map[string]rosterEntry, validUser map[str
 			continue
 		}
 		m := perUser[e.UserID]
-		out = append(out, report.CohortMember{UserID: e.UserID, StudioID: e.StudioID, DeptID: e.DeptID, JobCategory: e.JobCategory, JobFamily: e.JobFamily, JobTitle: e.JobTitle, MetricValue: m.CostPer1kTokens, MetricValid: true, Metrics: m})
+		out = append(out, report.CohortMember{UserID: e.UserID, StudioID: e.StudioID, DeptID: e.DeptID, JobCategory: e.JobCategory, JobFamily: e.JobFamily, JobTitle: e.JobTitle, MetricValue: m.CostPer1Million, MetricValid: true, Metrics: m})
 	}
 	return out
 }

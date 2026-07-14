@@ -34,6 +34,9 @@ type GroupBudgetTierServiceInterface interface {
 	SetBudgetTier(context.Context, uint, *uuid.UUID, string) error
 	SetBudgetTierBatch(context.Context, []uint, *uuid.UUID, string) error
 	GetByID(uint) (*model.Group, error)
+	// ListEnabledGroupsWithModels 返回启用且未删除的模型组（含 BudgetTierID 与组内模型名），
+	// 供只读端点 model-tier-hierarchy 计算「高阶模型」映射。
+	ListEnabledGroupsWithModels() ([]model.Group, error)
 }
 
 func NewModelTierHandler(service ModelTierServiceInterface) *ModelTierHandler {
@@ -61,6 +64,55 @@ func (h *ModelTierHandler) List(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": tiers})
+}
+
+// ModelTierHierarchy 返回模型→(所属模型组→模型等级→是否高阶) 的只读映射，供用量周报「高阶模型成本占比」用。
+// 只读：不新增/修改任何数据。高阶 = 模型的任一所属模型组其等级(model_tier.name) ∈ {高等级, 超高等级}。
+// 返回 {"data":{"high_tier_names":[...], "model_high_tier":{model_name:true}}}。
+func (h *ModelTierHandler) ModelTierHierarchy(c *gin.Context) {
+	ctx := c.Request.Context()
+	if h.groupService == nil {
+		writeModelTierError(c, errors.New("group service 未注入"))
+		return
+	}
+	tiers, err := h.service.List(ctx, false)
+	if err != nil {
+		writeModelTierError(c, err)
+		return
+	}
+	groups, err := h.groupService.ListEnabledGroupsWithModels()
+	if err != nil {
+		writeModelTierError(c, err)
+		return
+	}
+	highTierNames := []string{"高等级", "超高等级"}
+	highSet := make(map[string]bool, len(highTierNames))
+	for _, n := range highTierNames {
+		highSet[n] = true
+	}
+	tierNameByID := make(map[uuid.UUID]string, len(tiers))
+	for _, t := range tiers {
+		tierNameByID[t.ID] = t.Name
+	}
+	modelHighTier := map[string]bool{}
+	for _, g := range groups {
+		if g.BudgetTierID == nil {
+			continue
+		}
+		tn := tierNameByID[*g.BudgetTierID]
+		if tn == "" || !highSet[tn] {
+			continue
+		}
+		for _, m := range g.Models {
+			if m.ModelName != "" {
+				modelHighTier[m.ModelName] = true
+			}
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"high_tier_names": highTierNames,
+		"model_high_tier": modelHighTier,
+	}})
 }
 
 func (h *ModelTierHandler) Get(c *gin.Context) {

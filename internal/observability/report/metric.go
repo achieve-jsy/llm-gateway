@@ -211,6 +211,11 @@ type ReportInput struct {
 	// UserTopModels 每用户的 Top 模型列表（来自 /usage/dashboard/users，部门/工作室级别用于岗位分布主用模型）。
 	// key=UserID，value=Top 模型列表（已按 cost DESC 排序）。
 	UserTopModels map[string][]CohortTopModel
+	// HighTierModelNames 高阶模型名集合（key=模型名，value=true）。
+	// 来源：工具拉控制面只读端点 GET /api/v1/model-tier-hierarchy；高阶 = 模型任一所属模型组的等级
+	// (model_tier.name) ∈ {高等级, 超高等级}。供「高阶模型成本占比 = Σ高阶模型成本 / 总成本」使用。
+	// 空/缺失时「高阶模型成本占比」回退为旧口径「成本最高模型/总成本」，保证无映射数据时行为不变。
+	HighTierModelNames map[string]bool
 	// BaselineCalls 期前历史窗口逐调用事件，供 A1/A2 计算真实历史窗口分布。
 	// 为空时 A1 仅使用绝对阈值，A2 仅保留绝对阈值/HARD_CAP，且不得标记为 28 天基线。
 	BaselineCalls []CallEvent
@@ -309,7 +314,7 @@ type CohortMetrics struct {
 	ActiveDays        int64            // 活跃天数
 	AvgInputCtxTokens float64          // 平均输入上下文长度 = prompt_total / req
 	CacheHitRate      float64          // 缓存 Token 占比 = cached / prompt_total
-	CostPer1kTokens   float64          // 每百万 Token 成本 = cost / total_tokens * 1e6
+	CostPer1Million    float64          // 每百万 Token 成本 = cost / total_tokens * 1e6
 	HighTierCostRatio float64          // 成本最高模型成本占比 = top_model_cost / total_cost
 	TopModels         []CohortTopModel // 该成员 Top3 模型（供第四章同岗模型采用率/P50 计算）
 }

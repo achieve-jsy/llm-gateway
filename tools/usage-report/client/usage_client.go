@@ -766,6 +766,31 @@ func (c *Client) ModelContextBudget(ctx context.Context, models []string) map[st
 	return bud
 }
 
+// modelTierHierarchyResp 与 /api/v1/model-tier-hierarchy 的返回结构对应。
+type modelTierHierarchyResp struct {
+	Data struct {
+		HighTierNames []string          `json:"high_tier_names"`
+		ModelHighTier map[string]bool   `json:"model_high_tier"`
+	} `json:"data"`
+}
+
+// FetchModelTierHierarchy 拉取模型→是否高阶 的只读映射（高阶 = 模型任一所属模型组的等级 ∈ {高等级,超高等级}）。
+// 用于「高阶模型成本占比 = Σ高阶模型成本/总成本」；失败返回 nil, err（调用方回退旧口径）。
+func (c *Client) FetchModelTierHierarchy(ctx context.Context) (map[string]bool, error) {
+	b, err := c.do(ctx, "GET", "/model-tier-hierarchy", nil)
+	if err != nil {
+		return nil, err
+	}
+	var resp modelTierHierarchyResp
+	if err := json.Unmarshal(b, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Data.ModelHighTier == nil {
+		return nil, nil
+	}
+	return resp.Data.ModelHighTier, nil
+}
+
 // ToCallEvent 把 LogRow 转为报告中间表示 CallEvent（口径：total_tokens=prompt+completion+reasoning）。
 func (r LogRow) ToCallEvent() report.CallEvent {
 	ts, err := time.Parse(time.RFC3339, r.TS)

@@ -126,7 +126,10 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 	var budget map[string]int64
 
 	// 5) 同岗分位：花名册(岗位/studio) + 每用户效能（成员口径）
-	cohort, notComputed := buildCohort(ctx, cli, cfg, scope, memberCalls)
+	// 高阶模型映射（模型→是否高阶：任一所属组等级 ∈ {高等级,超高等级}），用于「高阶模型成本占比」；
+	// 拉取失败/无映射时高TierModnames 为空 → derive/cohort 回退旧口径「成本最高模型/总成本」。
+	highTierModelNames, _ := cli.FetchModelTierHierarchy(ctx)
+	cohort, notComputed := buildCohort(ctx, cli, cfg, scope, memberCalls, highTierModelNames)
 
 	// 个人报告：从同岗池 target（roster 已查到）回填岗位/工作室到 scope，供标题渲染。
 	if cfg.Level == "personal" && cohort.Target.JobTitle+cohort.Target.JobCategory+cohort.Target.JobFamily != "" {
@@ -322,6 +325,7 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 		Metrics: metrics, Calls: memberCalls, BaselineMetrics: baselineMetrics, BaselineBuckets: baselineBuckets, Cohort: cohort,
 		LevelMeta:          scope,
 		ModelContextBudget: budget,
+		HighTierModelNames: highTierModelNames, // 高阶模型→是否高阶，用于「高阶模型成本占比」
 		MemberAgg:          memberAgg,
 		PrevMemberAgg:      prevMemberAgg,
 		StudioMemberAgg:    studioMemberAgg,

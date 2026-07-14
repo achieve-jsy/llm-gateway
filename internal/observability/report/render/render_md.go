@@ -369,12 +369,16 @@ func writeJudgment(b *strings.Builder, r *report.Report) {
 		for _, a := range j.Anomalies {
 			fmt.Fprintf(b, "- [%s] **%s**（%s）\n", a.Rule, a.Name, a.Severity)
 			if a.Hit {
-				fmt.Fprintf(b, "  - `actual=%.2f` · `threshold=%.2f` · `baseline=%.2f`（%s）\n", a.ActualValue, a.ThresholdValue, a.BaselineValue, a.BaselineWindow)
+				fmt.Fprintf(b, "  - `actual`(实际值)=%.2f · `threshold`(阈值)=%.2f · `baseline`(基线)=%.2f（%s）\n", a.ActualValue, a.ThresholdValue, a.BaselineValue, a.BaselineWindow)
 				if a.ImpactCostUSD > 0 {
 					fmt.Fprintf(b, "  - 影响成本 `%.2f` USD · 超支 `%.2f` USD\n", a.ImpactCostUSD, a.ExcessCostUSD)
 				}
 				for _, e := range a.Evidence {
-					fmt.Fprintf(b, "  - %s: `%s`\n", e.Field, e.Value)
+					if cn := evidenceFieldCN(e.Field); cn != "" {
+						fmt.Fprintf(b, "  - %s（%s）: `%s`\n", e.Field, cn, e.Value)
+					} else {
+						fmt.Fprintf(b, "  - %s: `%s`\n", e.Field, e.Value)
+					}
 				}
 			} else {
 				for _, e := range a.Evidence {
@@ -578,13 +582,17 @@ func writePersonalSections(b *strings.Builder, r *report.Report) {
 		}
 		for _, a := range hits {
 			fmt.Fprintf(b, "- **%s**（%s）\n", a.Name, a.Severity)
-			fmt.Fprintf(b, "  - `actual=%.2f` · `threshold=%.2f` · `baseline=%.2f`（%s）\n", a.ActualValue, a.ThresholdValue, a.BaselineValue, a.BaselineWindow)
+			fmt.Fprintf(b, "  - `actual`(实际值)=%.2f · `threshold`(阈值)=%.2f · `baseline`(基线)=%.2f（%s）\n", a.ActualValue, a.ThresholdValue, a.BaselineValue, a.BaselineWindow)
 			if a.ImpactCostUSD > 0 {
 				fmt.Fprintf(b, "  - 影响成本 `%.2f` USD · 超支 `%.2f` USD\n", a.ImpactCostUSD, a.ExcessCostUSD)
 			}
 			// 保留完整证据链（含可能原因/判定依据）
 			for _, e := range a.Evidence {
-				fmt.Fprintf(b, "  - %s: `%s`\n", e.Field, e.Value)
+				if cn := evidenceFieldCN(e.Field); cn != "" {
+					fmt.Fprintf(b, "  - %s（%s）: `%s`\n", e.Field, cn, e.Value)
+				} else {
+					fmt.Fprintf(b, "  - %s: `%s`\n", e.Field, e.Value)
+				}
 			}
 		}
 		if len(hits) == 0 {
@@ -695,6 +703,57 @@ func stripOneAnomalyCode(seg string) string {
 		}
 	}
 	return seg
+}
+
+// evidenceFieldCN 诊断证据字段名→中文含义（保留英文 key，渲染「key（中文）: value」）。
+// 允许诊断章节既人类可读又保留技术标识；未知字段返回空，调用方按原样输出。
+func evidenceFieldCN(field string) string {
+	switch field {
+	case "actual_cny":
+		return "实际成本(CNY)"
+	case "actual_usd":
+		return "实际成本(USD)"
+	case "baseline_median_usd":
+		return "基线中位成本(USD)"
+	case "basis":
+		return "判定依据"
+	case "budget":
+		return "预算"
+	case "dominant_status":
+		return "主要状态"
+	case "fail_rate":
+		return "失败率"
+	case "hard_cap_cny":
+		return "硬性上限(CNY)"
+	case "impact_cost_usd":
+		return "影响成本(USD)"
+	case "median_interval_s":
+		return "调用间隔中位数(秒)"
+	case "model":
+		return "主用模型"
+	case "off_cost_cny":
+		return "非工作时段成本(CNY)"
+	case "off_cost_usd":
+		return "非工作时段成本(USD)"
+	case "off_share":
+		return "非工作时段占比"
+	case "ratio":
+		return "占比"
+	case "threshold":
+		return "阈值"
+	case "threshold_usd":
+		return "阈值(USD)"
+	case "window":
+		return "时间窗口"
+	case "window_calls_10min":
+		return "窗口调用数(10min)"
+	case "window_median_interval_sec":
+		return "窗口调用间隔中位数(秒)"
+	case "window_top_user":
+		return "窗口top用户"
+	default:
+		return ""
+	}
 }
 
 // fmtVal 精简数值展示：整数无小数，小数保留 2 位。

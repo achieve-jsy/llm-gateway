@@ -601,7 +601,7 @@ func TestRenderMDPersonalAnomalyHitsOnly(t *testing.T) {
 	md := RenderMD(&r)
 	for _, want := range []string{
 		"- **成本燃烧**（P1）",
-		"  - `actual=120.00` · `threshold=100.00` · `baseline=80.00`（上周）",
+		"  - `actual`(实际值)=120.00 · `threshold`(阈值)=100.00 · `baseline`(基线)=80.00（上周）",
 		"  - 影响成本 `500.00` USD · 超支 `200.00` USD",
 		"  - cause: `后台脚本循环调用`",
 		"- 另有 1 条规则未命中（判定未触发，不列入异常清单）：程序失控",

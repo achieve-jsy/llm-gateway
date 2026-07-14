@@ -585,6 +585,10 @@ func batchFileName(level string, sc report.Scope, from, to string) string {
 	if sc.Name != "" && sc.Name != sc.ID {
 		if n := slugID(sc.Name); n != "" {
 			name = n + "_"
+		} else if hn := shortHash(sc.Name); hn != "" {
+			// 中文/非 ASCII 名称 slugID 为空：用 shortHash 作前缀兜底，保证多个共享同 id（如 DeptID="import"）
+			// 的中文部门文件名唯一，避免互相覆盖丢失独立报告。
+			name = "n-" + hn + "_"
 		}
 	}
 	return fmt.Sprintf("%s_%s%s_%s_%s.md", level, name, id, from, to)

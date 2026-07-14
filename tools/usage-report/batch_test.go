@@ -104,13 +104,20 @@ func TestEnumerateScopes_Personal_Dedup(t *testing.T) {
 
 // TestBatchFileName 命名约定：level_scope_from_to.md，name 有值时用 name_id。
 func TestBatchFileName(t *testing.T) {
-	// slug 保留连字符（dept_id 的 '-' 不容丢失）；非 ASCII 名丢弃但 id 兜底唯一。
-	if got := batchFileName("department", report.Scope{ID: "d-dev", Name: "研发部"}, "2026-06-25", "2026-07-01"); got != "department_d-dev_2026-06-25_2026-07-01.md" {
+	// slug 保留连字符（dept_id 的 '-' 不容丢失）；非 ASCII 名 slug 为空 → 用 shortHash(name) 前缀，
+	// 保证多个共享同 id（如 DeptID="import"）的中文部门文件名唯一、不覆盖。
+	if got := batchFileName("department", report.Scope{ID: "d-dev", Name: "研发部"}, "2026-06-25", "2026-07-01"); got != "department_n-f706f416_d-dev_2026-06-25_2026-07-01.md" {
 		t.Errorf("batchFileName = %q", got)
 	}
 	// name 为空 → 用 id。
 	if got := batchFileName("personal", report.Scope{ID: "u1"}, "2026-06-25", "2026-07-01"); got != "personal_u1_2026-06-25_2026-07-01.md" {
 		t.Errorf("batchFileName = %q", got)
+	}
+	// 两个中文名部门共享同 id（DeptID="import"）→ 必须生成不同文件名，避免互相覆盖。
+	a := batchFileName("department", report.Scope{ID: "import", Name: "人力资源部"}, "2026-06-25", "2026-07-01")
+	b := batchFileName("department", report.Scope{ID: "import", Name: "运营部"}, "2026-06-25", "2026-07-01")
+	if a == b {
+		t.Errorf("共享同 id 的中文部门文件名不应相同: %q == %q", a, b)
 	}
 }
 

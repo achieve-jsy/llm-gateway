@@ -30,7 +30,7 @@ func TestBuildUnitConclusion_XLabReal(t *testing.T) {
 		},
 	}
 	con := buildUnitConclusion(u)
-	want := "成本环比 +16.4%，集中在 3 名未归类岗位，命中 A1/A2/A5"
+	want := "成本环比 +16.4%，集中在 3 名未归类岗位，命中 程序失控/成本燃烧/非工作时段"
 	if con.MainCause != want {
 		t.Fatalf("MainCause=%q, want %q", con.MainCause, want)
 	}
@@ -40,7 +40,7 @@ func TestBuildUnitConclusion_XLabReal(t *testing.T) {
 	if con.ConcentrationN != 3 || con.ConcentrationJob != "未归类岗位" {
 		t.Errorf("concentration=%d,%q, want 3,未归类岗位", con.ConcentrationN, con.ConcentrationJob)
 	}
-	if con.AnomalyWord != "命中 A1/A2/A5" {
+	if con.AnomalyWord != "命中 程序失控/成本燃烧/非工作时段" {
 		t.Errorf("AnomalyWord=%q", con.AnomalyWord)
 	}
 	if strings.Join(con.RuleCodes, "/") != "A1/A2/A5" {
@@ -65,7 +65,7 @@ func TestBuildUnitConclusion_ResidualJobFallsBackToSpecific(t *testing.T) {
 	if con.ConcentrationJob != "后端开发工程师" {
 		t.Errorf("ConcentrationJob=%q, want 后端开发工程师（回退 job_title）", con.ConcentrationJob)
 	}
-	if con.MainCause != "成本环比 +20.0%，集中在 3 名后端开发工程师，命中 A1/A2/A5" {
+	if con.MainCause != "成本环比 +20.0%，集中在 3 名后端开发工程师，命中 程序失控/成本燃烧/非工作时段" {
 		t.Errorf("MainCause=%q", con.MainCause)
 	}
 }
@@ -161,8 +161,8 @@ func TestBuildUnitConclusion_MixedJobs(t *testing.T) {
 	if con.ConcentrationN != 2 || con.ConcentrationJob != "后端开发" {
 		t.Errorf("concentration=%d,%q, want 2,后端开发", con.ConcentrationN, con.ConcentrationJob)
 	}
-	if con.AnomalyWord != "命中 A1/A2/A5" {
-		t.Errorf("AnomalyWord=%q, want 命中 A1/A2/A5（并集）", con.AnomalyWord)
+	if con.AnomalyWord != "命中 程序失控/成本燃烧/非工作时段" {
+		t.Errorf("AnomalyWord=%q, want 命中 程序失控/成本燃烧/非工作时段（并集）", con.AnomalyWord)
 	}
 }
 
@@ -195,7 +195,7 @@ func TestFillUnitConclusion_Idempotent(t *testing.T) {
 		},
 	}
 	FillUnitConclusion(rep)
-	if rep.Fact.Department.Conclusion == nil || rep.Fact.Department.Conclusion.MainCause != "成本环比 +16.4%，集中在 2 名后端开发，命中 A1/A2" {
+	if rep.Fact.Department.Conclusion == nil || rep.Fact.Department.Conclusion.MainCause != "成本环比 +16.4%，集中在 2 名后端开发，命中 程序失控/成本燃烧" {
 		t.Fatalf("department conclusion=%+v", rep.Fact.Department.Conclusion)
 	}
 	if rep.Fact.Studio.Conclusion == nil || rep.Fact.Studio.Conclusion.MainCause != "成本环比 +10.0%，集中于 1 名算法" {

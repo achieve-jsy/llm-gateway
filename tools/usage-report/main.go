@@ -347,7 +347,17 @@ func runOne(ctx context.Context, cli *client.Client, cfg Config, scope report.Sc
 	// user_id 时（如粒度/降级使 derive 无法即时归因），按命中窗口 timestamptz 子窗半开区间精准拉取
 	// （be-eng t10 的 start_ts/end_ts，只取窗口内几十条）并归因回填，再重跑主因关联。
 	// 拉取失败/为空时静默降级（主因列维持「待确认」），绝不中断报告。
-	backfillAnomalyWindowUser(ctx, cli, cfg, scope, rep)
+	// ②c 数据源：从成员聚合(MemberAgg.UserName)建 user_id→真实姓名 映射，供 backfillAnomalyWindowUser 把
+	// AnomalyHit.Dimensions["user_name"] 点亮（解锁渲染层风险清单「对象」列显示姓名而非 UUID）。空值过滤、去重。
+	userNameByID := make(map[string]string, len(memberAgg))
+	for _, m := range memberAgg {
+		if m.UserID != "" && m.UserName != "" {
+			if _, ok := userNameByID[m.UserID]; !ok {
+				userNameByID[m.UserID] = m.UserName
+			}
+		}
+	}
+	backfillAnomalyWindowUser(ctx, cli, cfg, scope, rep, userNameByID)
 	// 方向 B：给 TopChanged 每个成员做【成员级】A1/A2/A5 归因并回填主因列（不再依赖「全局窗口热点
 	// user ∈ TopChanged」的脆弱匹配；成员级命中时覆盖粗匹配结果）。零全量拉，仅按 Top5 ≤5 人取本人调用。
 	backfillMemberAnomalyCause(ctx, cli, cfg, scope, rep, rules)
@@ -1123,24 +1133,36 @@ func getTopUserFromRows(rows []client.LogRow) (uid string, costShare float64) {
 //	最后重跑 derive.AnomalyAttribution 使 TopChanged 主因列点亮。
 //
 // 失败/为空/无归属时静默降级（主因列维持「待确认」），绝不中断报告。
-func backfillAnomalyWindowUser(ctx context.Context, cli *client.Client, cfg Config, scope report.Scope, rep *report.Report) {
+func backfillAnomalyWindowUser(ctx context.Context, cli *client.Client, cfg Config, scope report.Scope, rep *report.Report, userNameByID map[string]string) {
 	if rep == nil || len(rep.Judgment.Anomalies) == 0 || cli == nil {
 		return
 	}
 	changed := false
 	for i := range rep.Judgment.Anomalies {
 		a := &rep.Judgment.Anomalies[i]
-		if !a.Hit || (a.Rule != "A1" && a.Rule != "A2") {
-			continue
-		}
-		if a.WindowStart.IsZero() || a.WindowEnd.IsZero() {
+		if !a.Hit {
 			continue
 		}
 		if a.Dimensions == nil {
 			a.Dimensions = map[string]string{}
 		}
+		// ②c 数据源：只要命中异常已能定位到成员（Dimensions["user_id"] 非空，无论其来自 derive 即时归因、
+		// 本函数窗口归因、还是 A1–A3 各规则的窗口热点），就用 roster(userNameByID) 回填
+		// Dimensions["user_name"]，供渲染层风险清单「对象」列显示成员真实姓名而非 UUID。
+		// 注意：A1/A2 的窗口归因分支在其后；其余规则（A3 等）仅在此补姓名，有 user_id 才补，否则维持降级。
 		if a.Dimensions["user_id"] != "" {
-			continue // 已即时归因（detail 全量已有）
+			if name := userNameByID[a.Dimensions["user_id"]]; name != "" {
+				a.Dimensions["user_name"] = name
+			}
+		}
+		if a.Rule != "A1" && a.Rule != "A2" {
+			continue
+		}
+		if a.WindowStart.IsZero() || a.WindowEnd.IsZero() {
+			continue
+		}
+		if a.Dimensions["user_id"] != "" {
+			continue // 已即时归因（detail 全量已有）；姓名已在上方补
 		}
 		// 窗口时间沿用报告时区（shLoc=Asia/Shanghai）；用 timestamptz 子窗半开区间精准拉取（依赖 be-eng t10 的 start_ts/end_ts），
 		// 服务端只返回 [WindowStart, WindowEnd) 内的行（几十条），不再拉整天（可达 15 万条）。
@@ -1186,6 +1208,10 @@ func backfillAnomalyWindowUser(ctx context.Context, cli *client.Client, cfg Conf
 		a.Dimensions["user_id"] = uid
 		a.Dimensions["user_id_basis"] = "window_max_cost"
 		a.Dimensions["user_cost_share"] = strconv.FormatFloat(share, 'f', 2, 64)
+		// ②c 数据源：窗口归因到 user_id 后，同时回填真实姓名，供渲染层风险清单显示姓名而非 UUID。
+		if name := userNameByID[uid]; name != "" {
+			a.Dimensions["user_name"] = name
+		}
 		a.Evidence = append(a.Evidence, report.Evidence{Field: "window_top_user", Value: uid + "(占窗口成本" + strconv.FormatFloat(share*100, 'f', 1, 64) + "%)"})
 		changed = true
 	}

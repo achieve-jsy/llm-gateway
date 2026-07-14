@@ -224,7 +224,7 @@ type UnitConclusion struct {
 	ConcentrationJob string   `json:"concentration_job"` // ② 主因岗位（job 归一 title→category→family；残差占位如"其他/未分类/空"回退更具体 job_title，仍占位则「未归类岗位」）
 	RuleCodes        []string `json:"rule_codes"`        // ③ 命中规则码集合（A1/A2/A5，去重升序）
 	AnomalyLabels    []string `json:"anomaly_labels"`    // ③ 完整 rule+name 标签（供渲染加细）
-	AnomalyWord      string   `json:"anomaly_word"`      // ③ 异常措辞：命中 A1/A2/A5
+	AnomalyWord      string   `json:"anomaly_word"`      // ③ 异常措辞：命中 程序失控/成本燃烧（人类可读名，去裸规则码；规则码见 RuleCodes）
 	Supported        bool     `json:"supported"`
 	Note             string   `json:"note,omitempty"`
 }

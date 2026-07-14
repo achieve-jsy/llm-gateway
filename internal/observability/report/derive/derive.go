@@ -641,6 +641,7 @@ func buildTopChanged(cur, prev []report.MemberAgg, userTopModels map[string][]re
 
 	type candidate struct {
 		userID     string
+		name       string
 		wowCostPct float64
 		wowReqPct  float64
 		jobCat     string
@@ -676,6 +677,7 @@ func buildTopChanged(cur, prev []report.MemberAgg, userTopModels map[string][]re
 		}
 		candidates = append(candidates, candidate{
 			userID:     m.UserID,
+			name:       m.UserName,
 			wowCostPct: wowCost,
 			wowReqPct:  wowReq,
 			jobCat:     cat,
@@ -701,6 +703,7 @@ func buildTopChanged(cur, prev []report.MemberAgg, userTopModels map[string][]re
 		}
 		result[i] = report.TopChangedMember{
 			Idx:          i + 1,
+			Name:         c.name, // 成员真实姓名（供不匿名显示）
 			JobCategory:  c.jobCat,
 			JobTitle:     c.jobTitle,                              // 原样岗位名，供主因残差回退（JobCategory 已归一为槽）
 			JobDisplay:   resolveJobDisplay(c.jobCat, c.jobTitle), // 岗位展示名（残差→未归类）

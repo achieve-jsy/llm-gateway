@@ -89,8 +89,11 @@ func buildUnitConclusion(u *report.UnitFact) *report.UnitConclusion {
 		}
 	}
 
-	// ---- ③ 异常命中：集中人群（成本增长的 TopChanged）的规则码并集 ----
+	// ---- ③ 异常命中：集中人群（成本增长的 TopChanged）的规则码并集，并抽取人类可读异常名 ----
+	// 用户可见处主因句去裸规则码（A1/A2/A5），改用人类可读异常名（程序失控/成本燃烧/非工作时段）；
+	// 规则码集合 RuleCodes 仍保留（供「判断-异常(A1–A5)」诊断章节等按 code 呈现）。
 	ruleSet := map[string]bool{}
+	codeName := map[string]string{} // 规则码 → 人类可读异常名（去 "A<N> " 前缀）
 	var labels []string
 	seenLabel := map[string]bool{}
 	for _, tc := range growth {
@@ -105,6 +108,9 @@ func buildUnitConclusion(u *report.UnitFact) *report.UnitConclusion {
 			// AnomalyCause 形如 "A1 程序失控" / "A2 成本燃烧" / "A5 非工作时段"：首 token 为规则码。
 			if code := ruleCode(piece); code != "" {
 				ruleSet[code] = true
+				if _, ok := codeName[code]; !ok {
+					codeName[code] = anomalyName(piece)
+				}
 			}
 			if !seenLabel[piece] {
 				seenLabel[piece] = true
@@ -120,7 +126,16 @@ func buildUnitConclusion(u *report.UnitFact) *report.UnitConclusion {
 	con.RuleCodes = codes
 	con.AnomalyLabels = labels
 	if len(codes) > 0 {
-		con.AnomalyWord = "命中 " + strings.Join(codes, "/")
+		// 人类可读异常名按规则码升序排（与 RuleCodes 一致的稳定顺序），未取到名称时兜底用码，避免空词。
+		names := make([]string, 0, len(codes))
+		for _, c := range codes {
+			n := codeName[c]
+			if n == "" {
+				n = c
+			}
+			names = append(names, n)
+		}
+		con.AnomalyWord = "命中 " + strings.Join(names, "/")
 	}
 
 	// ---- 组装一句话 ----
@@ -138,6 +153,20 @@ func ruleCode(label string) string {
 		return head
 	}
 	return ""
+}
+
+// anomalyName 从 "A<N> 名称" 标签中提取人类可读异常名（去规则码前缀与分隔符），用于用户可见处的主因句。
+// 形如 "A2 成本燃烧" → "成本燃烧"、"A5 非工作时段" → "非工作时段"；无 "A? 前缀" 或只剩码时原样返回，避免丢词。
+func anomalyName(label string) string {
+	if i := strings.IndexByte(label, ' '); i >= 0 {
+		head := label[:i]
+		if len(head) == 2 && head[0] == 'A' && head[1] >= '1' && head[1] <= '9' {
+			if rest := strings.TrimLeft(label[i:], " \t：:、-"); rest != "" {
+				return rest
+			}
+		}
+	}
+	return label
 }
 
 // isResidualJob 判断岗位名是否为「残差/合并占位」值（其他/其它/未知/未分类/空等）。

@@ -145,18 +145,15 @@ func (p *Provider) buildConverseParts(req *core.ChatRequest) (converseParts, err
 	// 将 tools[] 上的 cache_control（Anthropic / OpenAI 兼容字段）转为 Bedrock Tool CachePoint。
 	injectExplicitToolCachePoints(parts.toolCfg, req.Tools)
 
-	// Auto-inject：
-	//   - tools：客户端未显式标记时始终注入（Claude Desktop 常只标 system/tool_result，漏标 tools）
-	//   - conversation：仅当 messages 侧没有任何 cache_control 时注入，避免干扰客户端自管断点
-	if !hasCacheControlInTools(req.Tools) {
+	// 分区自动注入：显式断点只影响所在分区，避免 system/message 的一个
+	// cache_control 全局关闭 tools 和 conversation 的自动缓存。
+	if !hasCacheControlInTools(req.Tools) && cachePointCount(&parts) < maxCachePointsPerRequest {
 		injectToolCachePoint(parts.toolCfg)
 	}
-	if !hasCacheControlInMessages(req.Messages) {
+	if !hasExplicitMessageCachePoints(parts.messages) && cachePointCount(&parts) < maxCachePointsPerRequest {
 		injectConversationCachePoints(parts.messages)
 	}
-
-	// Bedrock 同样限制整个请求最多 4 个 CachePoint（与 Anthropic 的 cache_control 限制一致）。
-	// 客户端（Claude Code）在长对话中可能标记超过 4 个，需要裁剪。
+	// 自动断点只能使用剩余配额；显式断点始终优先，避免 trim 阶段误删客户端边界。
 	trimExcessCachePoints(&parts, maxCachePointsPerRequest)
 
 	return parts, nil
@@ -203,6 +200,13 @@ func trimExcessCachePoints(parts *converseParts, limit int) {
 
 	// Remove the earliest message-level CachePoints, keep the latest ones.
 	removeMessageCachePoints(parts, msgCount-keepMsg)
+}
+
+func cachePointCount(parts *converseParts) int {
+	if parts == nil {
+		return 0
+	}
+	return countSystemCachePoints(parts.system) + countToolCachePoints(parts.toolCfg) + countMessageCachePoints(parts.messages)
 }
 
 func countSystemCachePoints(system []brtypes.SystemContentBlock) int {
@@ -306,19 +310,18 @@ func messagesContainToolBlocks(messages []brtypes.Message) bool {
 	return false
 }
 
-// hasCacheControlInMessages reports whether any message in the original core
-// request carries a cache_control marker. When a client (like Claude Code or
-// newer OpenCode) manages its own cache boundaries, we must not inject
-// additional auto-cache points that would interfere.
-//
-// 识别范围：
-//   - ContentPart.ExtraFields.cache_control（/v1/messages 转换后的 text/image part）
-//   - Message.ExtraFields.cache_control（tool_result / OpenCode message 级断点）
-//   - ToolCall.ExtraFields.cache_control（assistant tool_use 断点）
+// hasCacheControlInMessages remains as a compatibility helper for callers/tests
+// that inspect the incoming request. It is deliberately not used as the auto
+// injection switch; cache policy is decided after conversion per output section.
 func hasCacheControlInMessages(messages []core.Message) bool {
 	for _, msg := range messages {
-		if messageHasCacheControl(msg) {
+		if msg.ExtraFields.Lookup("cache_control") != nil {
 			return true
+		}
+		for _, call := range msg.ToolCalls {
+			if call.ExtraFields.Lookup("cache_control") != nil {
+				return true
+			}
 		}
 		parts, ok := core.NormalizeContentParts(msg.Content)
 		if !ok {
@@ -333,16 +336,12 @@ func hasCacheControlInMessages(messages []core.Message) bool {
 	return false
 }
 
-func messageHasCacheControl(msg core.Message) bool {
-	if msg.ExtraFields.Lookup("cache_control") != nil {
-		return true
-	}
-	for _, call := range msg.ToolCalls {
-		if call.ExtraFields.Lookup("cache_control") != nil {
-			return true
-		}
-	}
-	return false
+// hasExplicitMessageCachePoints reports only cache points that survived message
+// conversion. This keeps the conversation auto-injection decision local to the
+// message partition and also recognizes explicit markers attached to tool use,
+// tool result, and system blocks.
+func hasExplicitMessageCachePoints(messages []brtypes.Message) bool {
+	return countMessageCachePoints(messages) > 0
 }
 
 // hasCacheControlInTools reports whether any tool definition carries cache_control
@@ -394,7 +393,7 @@ func injectExplicitToolCachePoints(toolCfg *brtypes.ToolConfiguration, tools []m
 // cached by Bedrock. This is the single highest-ROI cache breakpoint: tool
 // definitions from coding agents routinely consume 5K–50K tokens per request.
 func injectToolCachePoint(toolCfg *brtypes.ToolConfiguration) {
-	if toolCfg == nil || len(toolCfg.Tools) == 0 {
+	if toolCfg == nil || len(toolCfg.Tools) == 0 || countToolCachePoints(toolCfg) > 0 {
 		return
 	}
 	toolCfg.Tools = append(toolCfg.Tools, &brtypes.ToolMemberCachePoint{

@@ -21,7 +21,12 @@ type UpstreamInfo struct {
 	Headers map[string]string `json:"headers,omitempty"`
 
 	// Body is the parsed (or raw) response body from the upstream provider.
+	// It is included in the normalized diagnostic response.
 	Body any `json:"body,omitempty"`
+
+	// RawBody keeps the exact upstream response bytes for explicit passthrough
+	// responses. It is intentionally excluded from normal JSON serialization.
+	RawBody []byte `json:"-"`
 
 	// RequestID is the upstream request ID for correlating with the provider.
 	RequestID string `json:"request_id,omitempty"`

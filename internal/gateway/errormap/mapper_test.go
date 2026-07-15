@@ -177,3 +177,18 @@ func TestMapProviderError_RawNonJSONBodyPreserved(t *testing.T) {
 		t.Errorf("upstream body = %#v, want string %q", ue.Upstream.Body, "Bad Gateway: upstream crashed")
 	}
 }
+func TestMapProviderError_RawBodyAvailableForPassthrough(t *testing.T) {
+	raw := []byte(`{"error":{"type":"server_error","message":"temporarily overloaded","code":"capacity_exceeded"}}`)
+	gwErr := core.ParseProviderError("bedrock", http.StatusServiceUnavailable, raw, nil)
+
+	ue := MapProviderError(gwErr)
+	if ue.Upstream == nil {
+		t.Fatal("Upstream is nil")
+	}
+	if ue.Upstream.Status != http.StatusServiceUnavailable {
+		t.Fatalf("upstream status = %d, want %d", ue.Upstream.Status, http.StatusServiceUnavailable)
+	}
+	if string(ue.Upstream.RawBody) != string(raw) {
+		t.Fatalf("raw upstream body = %q, want %q", ue.Upstream.RawBody, raw)
+	}
+}

@@ -223,3 +223,54 @@ func TestRespondAnthropicUnifiedError_WithUpstream(t *testing.T) {
 	assert.Equal(t, "deepseek", upstreamMap["provider"])
 	assert.Equal(t, float64(504), upstreamMap["status"])
 }
+
+func TestRespondError_PassthroughPreservesUpstreamStatusAndBody(t *testing.T) {
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	c.Request.Header.Set("X-Error-Format", "passthrough")
+
+	raw := []byte(`{"error":{"message":"upstream overloaded","type":"server_error","code":"capacity_exceeded"}}`)
+	ue := &model.UnifiedError{
+		Type:       model.ErrorTypeTempFailure,
+		Code:       "upstream_unavailable",
+		Message:    "上游服务不可用",
+		HTTPStatus: http.StatusServiceUnavailable,
+		Upstream: &gatewayerrors.UpstreamInfo{
+			Provider: "openai",
+			Status:   http.StatusServiceUnavailable,
+			RawBody:  raw,
+		},
+	}
+
+	respondError(c, ue)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Equal(t, string(raw), w.Body.String())
+	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+}
+
+func TestRespondError_PassthroughUsesUpstreamStatusNotMappedStatus(t *testing.T) {
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	c.Request.Header.Set("X-Error-Format", "passthrough")
+
+	raw := []byte(`{"error":{"message":"rate limited","type":"rate_limit_error"}}`)
+	ue := &model.UnifiedError{
+		Type:       model.ErrorTypeTempFailure,
+		Code:       "provider_rate_limited",
+		Message:    "上游服务触发限流",
+		HTTPStatus: http.StatusBadGateway, // normalized response status
+		Upstream: &gatewayerrors.UpstreamInfo{
+			Provider: "openai",
+			Status:   http.StatusTooManyRequests, // provider response status
+			RawBody:  raw,
+		},
+	}
+
+	respondError(c, ue)
+
+	assert.Equal(t, http.StatusTooManyRequests, w.Code)
+	assert.Equal(t, string(raw), w.Body.String())
+}

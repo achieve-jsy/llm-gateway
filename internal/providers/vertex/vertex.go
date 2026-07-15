@@ -28,6 +28,7 @@ var Registration = providers.Registration{
 }
 
 const (
+	authTypeAPIKey         = "api_key"
 	authTypeGCPADC         = "gcp_adc"
 	authTypeServiceAccount = "gcp_service_account"
 )
@@ -38,6 +39,7 @@ type Provider struct {
 	gemini       *gemini.Provider
 	nativeClient *llmclient.Client
 	authType     string
+	apiKey       string
 	configErr    error
 }
 
@@ -50,8 +52,14 @@ func newProvider(providerCfg providers.ProviderConfig, opts providers.ProviderOp
 	providerCfg.Backend = "vertex"
 	p := &Provider{
 		authType: normalizeAuthType(providerCfg),
+		apiKey:   strings.TrimSpace(providerCfg.APIKey),
 	}
 	p.validateConfig(providerCfg)
+
+	// 把解析后的 authType 传给 gemini 子 provider：ChatCompletion 走 gemini 的
+	// nativeClient（gemini.setNativeHeaders 根据 authType 决定是否设置 x-goog-api-key）。
+	// 若不显式传递，gemini 会对空 authType 默认成 gcp_adc，导致 api_key 认证失效。
+	providerCfg.AuthType = p.authType
 
 	authClient := baseHTTPClient
 	if authClient == nil {
@@ -85,6 +93,11 @@ func (p *Provider) validateConfig(providerCfg providers.ProviderConfig) {
 		return
 	}
 	switch p.authType {
+	case authTypeAPIKey:
+		if !providers.HasResolvedProviderValue(providerCfg.APIKey) {
+			p.configErr = fmt.Errorf("vertex AI api_key auth requires an API key")
+		}
+		return
 	case authTypeGCPADC:
 		return
 	case authTypeServiceAccount:
@@ -99,7 +112,7 @@ func (p *Provider) validateConfig(providerCfg providers.ProviderConfig) {
 
 func validAuthType(authType string) bool {
 	switch strings.ToLower(strings.TrimSpace(authType)) {
-	case "", "gcp_adc", "adc", "google_adc", "gcp_service_account", "service_account":
+	case "", "api_key", "key", "gcp_adc", "adc", "google_adc", "gcp_service_account", "service_account":
 		return true
 	default:
 		return false
@@ -107,11 +120,28 @@ func validAuthType(authType string) bool {
 }
 
 func normalizeAuthType(providerCfg providers.ProviderConfig) string {
-	return googlecommon.NormalizeAuthType(providerCfg.AuthType, googlecommon.HasServiceAccount(buildGoogleAuthConfig(providerCfg)))
+	authType := strings.ToLower(strings.TrimSpace(providerCfg.AuthType))
+	switch authType {
+	case "api_key", "key":
+		return authTypeAPIKey
+	case "gcp_service_account", "service_account":
+		return authTypeServiceAccount
+	case "gcp_adc", "adc", "google_adc":
+		return authTypeGCPADC
+	default:
+		// 未显式指定 auth_type：若已配置 API Key 且未配置服务账号，则用 API Key
+		// （对齐 google-genai SDK 的 vertexai=True + api_key 语义）。控制面 snapshot
+		// 只下发 type/api_key/base_url，不含 auth_type，因此必须在这里自动判定。
+		if providers.HasResolvedProviderValue(providerCfg.APIKey) &&
+			!googlecommon.HasServiceAccount(buildGoogleAuthConfig(providerCfg)) {
+			return authTypeAPIKey
+		}
+		return googlecommon.NormalizeAuthType(providerCfg.AuthType, googlecommon.HasServiceAccount(buildGoogleAuthConfig(providerCfg)))
+	}
 }
 
 func (p *Provider) authHTTPClient(providerCfg providers.ProviderConfig, base *http.Client) *http.Client {
-	if p.configErr != nil {
+	if p.configErr != nil || p.authType == authTypeAPIKey {
 		return base
 	}
 	authCfg := buildGoogleAuthConfig(providerCfg)
@@ -149,6 +179,9 @@ func (p *Provider) ready() error {
 }
 
 func (p *Provider) setHeaders(req *http.Request) {
+	if p.authType == authTypeAPIKey && p.apiKey != "" {
+		req.Header.Set("x-goog-api-key", p.apiKey)
+	}
 	if requestID := core.GetRequestID(req.Context()); requestID != "" {
 		req.Header.Set("X-Request-Id", requestID)
 	}

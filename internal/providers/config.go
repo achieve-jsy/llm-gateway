@@ -591,6 +591,8 @@ func validVertexProviderConfig(p RawProviderConfig) bool {
 	switch authType {
 	case "", "gcp_adc", "adc", "google_adc":
 		return true
+	case "api_key", "key":
+		return HasResolvedProviderValue(p.APIKey)
 	case "gcp_service_account", "service_account":
 		return HasResolvedProviderValue(p.ServiceAccountFile) ||
 			HasResolvedProviderValue(p.ServiceAccountJSON) ||

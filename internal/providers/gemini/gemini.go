@@ -168,13 +168,13 @@ func (p *Provider) SetModelsURL(url string) {
 }
 
 func (p *Provider) validateConfig(providerCfg providers.ProviderConfig) {
-	if p.backend == geminiBackendVertex && p.authType == geminiAuthTypeAPIKey {
-		p.configErr = fmt.Errorf("vertex Gemini requires gcp_adc or gcp_service_account auth")
-		return
-	}
 	if p.backend == geminiBackendVertex && !providers.HasResolvedProviderValue(providerCfg.BaseURL) &&
 		(!providers.HasResolvedProviderValue(providerCfg.VertexProject) || !providers.HasResolvedProviderValue(providerCfg.VertexLocation)) {
 		p.configErr = fmt.Errorf("vertex Gemini requires base_url or vertex_project and vertex_location")
+		return
+	}
+	if p.backend == geminiBackendVertex && p.authType == geminiAuthTypeAPIKey && strings.TrimSpace(providerCfg.APIKey) == "" {
+		p.configErr = fmt.Errorf("vertex Gemini api_key auth requires an API key")
 		return
 	}
 	if p.backend == geminiBackendAIStudio && p.authType != geminiAuthTypeAPIKey {

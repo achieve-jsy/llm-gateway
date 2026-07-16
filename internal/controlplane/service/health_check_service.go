@@ -768,7 +768,7 @@ func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provi
 // 禁止把 seedance-relay 等误送进 Bedrock SDK。
 func isNonOpenAICompatible(definitionID string) bool {
 	switch definitionID {
-	case "bedrock", "seedance-relay", "seedance-volcengine", "azure":
+	case "bedrock", "seedance-relay", "seedance-volcengine", "azure", "vertex":
 		return true
 	}
 	return false
@@ -786,6 +786,8 @@ func (s *HealthCheckService) checkNonOpenAIProvider(ctx context.Context, provide
 		return s.checkSeedanceVolcengineProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
 	case "azure":
 		return s.checkAzureProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
+	case "vertex":
+		return s.checkVertexProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
 	default:
 		cr.Success = true // 未知类型跳过，不计失败
 		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, 0, "skipped: unsupported provider type for auto-check")
@@ -851,6 +853,36 @@ func (s *HealthCheckService) checkAzureProvider(ctx context.Context, provider *m
 	}
 
 	cr.Success = true
+	s.finalizeProviderSuccess(provider, cr)
+	return cr
+}
+
+// checkVertexProvider Google Vertex (native) 健康检测（与管理面「测试连接」共用 ProbeVertexGenerate）。
+// 原生面走 /models/{model}:generateContent + x-goog-api-key；
+// 非原生面（未以 /publishers/google 结尾）跳过，不判失败，避免误标记 provider 下线。
+func (s *HealthCheckService) checkVertexProvider(ctx context.Context, provider *model.Provider, credJSON string, checkMode string, maxFailures int, cr *CheckResult) *CheckResult {
+	endpoint := strings.TrimRight(provider.Endpoint, "/")
+	if !strings.HasSuffix(endpoint, "/publishers/google") {
+		cr.Success = true
+		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, 0, "skipped: vertex non-native endpoint, use admin test")
+		return cr
+	}
+	apiKey := extractAPIKey(credJSON)
+	testModel := strings.TrimSpace(provider.TestModel)
+	if testModel == "" {
+		testModel = "gemini-1.5-flash"
+	}
+	res := ProbeVertexGenerate(ctx, provider.Endpoint, apiKey, testModel)
+	cr.ResponseTime = res.ResponseTime
+	if !res.Success {
+		cr.Error = res.Message
+		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
+		s.handleProviderFailure(provider.ID, maxFailures, cr)
+		return cr
+	}
+	cr.Success = true
+	cr.Message = res.Message
+	s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, res.ResponseTime, res.Message)
 	s.finalizeProviderSuccess(provider, cr)
 	return cr
 }

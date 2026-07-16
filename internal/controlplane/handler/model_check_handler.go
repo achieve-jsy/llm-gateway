@@ -195,6 +195,17 @@ func (h *ModelCheckHandler) checkModel(ctx context.Context, m *model.Model) *Mod
 				res := cpservice.ProbeAzureChat(ctx, provider.Endpoint, apiKey, testModel)
 				success, responseTime, errMsg = res.Success, res.ResponseTime, res.Message
 			}
+		case "vertex":
+			apiKey := cpservice.ExtractAPIKey(credJSON)
+			testModel := m.UpstreamName()
+			if testModel == "" {
+				testModel = provider.TestModel
+			}
+			if testModel == "" {
+				testModel = "gemini-1.5-flash"
+			}
+			res := cpservice.ProbeVertexGenerate(ctx, provider.Endpoint, apiKey, testModel)
+			success, responseTime, errMsg = res.Success, res.ResponseTime, res.Message
 		default:
 			success, responseTime, errMsg = true, 0, "skipped: unsupported provider type for auto-check"
 		}

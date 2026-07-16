@@ -113,6 +113,13 @@ func (h *TestHandler) TestProvider(c *gin.Context) {
 
 	// ===== OpenAI 兼容 provider =====
 	apiKey := extractAPIKey(credJSON)
+	result := h.testOpenAICompatible(provider, apiKey, input.TestChat)
+	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+// testOpenAICompatible 对 OpenAI 兼容 provider 做通用检测：
+// 第一步 GET {endpoint}/models（连通性+鉴权），第二步可选 POST {endpoint}/chat/completions（转发）。
+func (h *TestHandler) testOpenAICompatible(provider *model.Provider, apiKey string, testChat bool) testResult {
 	client := &http.Client{Timeout: 15 * time.Second}
 	result := testResult{}
 
@@ -130,8 +137,7 @@ func (h *TestHandler) TestProvider(c *gin.Context) {
 	if err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("连接失败: %v", err)
-		c.JSON(http.StatusOK, gin.H{"data": result})
-		return
+		return result
 	}
 	defer resp.Body.Close()
 
@@ -141,13 +147,12 @@ func (h *TestHandler) TestProvider(c *gin.Context) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		result.Success = false
 		result.Error = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))
-		c.JSON(http.StatusOK, gin.H{"data": result})
-		return
+		return result
 	}
 
 	// 连通性测试成功
 	result.Success = true
-	h.providerRepo.UpdateResponseTime(id, int(elapsed))
+	h.providerRepo.UpdateResponseTime(provider.ID, int(elapsed))
 
 	// 解析模型列表
 	var modelsResp struct {
@@ -159,7 +164,7 @@ func (h *TestHandler) TestProvider(c *gin.Context) {
 	result.ModelCount = len(modelsResp.Data)
 
 	// ========== 第二步：转发测试（POST /chat/completions） ==========
-	if input.TestChat {
+	if testChat {
 		// 确定测试模型：优先用配置的 test_model，否则取模型列表中不是 embedding 的模型
 		testModel := provider.TestModel
 		if testModel == "" && len(modelsResp.Data) > 0 {
@@ -189,7 +194,7 @@ func (h *TestHandler) TestProvider(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": result})
+	return result
 }
 
 // testNonOpenAIProvider 对非 OpenAI 兼容的 provider 做专属检测。
@@ -204,6 +209,8 @@ func (h *TestHandler) testNonOpenAIProvider(provider *model.Provider, credJSON s
 		return h.testSeedanceVolcengine(provider, credJSON, testChat)
 	case "azure":
 		return h.testAzure(provider, credJSON, testChat)
+	case "vertex":
+		return h.testVertex(provider, credJSON, testChat)
 	default:
 		return testResult{
 			Success: true,
@@ -245,6 +252,46 @@ func (h *TestHandler) testAzure(provider *model.Provider, credJSON string, testC
 		if !chatRes.Success {
 			out.ChatError = chatRes.Message
 		}
+	}
+	return out
+}
+
+// testVertex Google Vertex (native) 专属检测（与健康检查共用 cpservice.ProbeVertexGenerate）。
+// 原生面 endpoint 以 /publishers/google 结尾，走 {endpoint}/models/{model}:generateContent + x-goog-api-key；
+// 非原生面（如 OpenAI 兼容层）回退到 testOpenAICompatible 通用检测。
+func (h *TestHandler) testVertex(provider *model.Provider, credJSON string, testChat bool) testResult {
+	apiKey := extractAPIKey(credJSON)
+	endpoint := strings.TrimRight(provider.Endpoint, "/")
+
+	// 非原生面：回退到 OpenAI 兼容检测
+	if !strings.HasSuffix(endpoint, "/publishers/google") {
+		return h.testOpenAICompatible(provider, apiKey, testChat)
+	}
+
+	testModel := strings.TrimSpace(provider.TestModel)
+	if testModel == "" {
+		testModel = "gemini-1.5-flash"
+	}
+
+	res := cpservice.ProbeVertexGenerate(context.Background(), provider.Endpoint, apiKey, testModel)
+	out := testResult{
+		Success:      res.Success,
+		ResponseTime: res.ResponseTime,
+		StatusCode:   res.StatusCode,
+		Message:      res.Message,
+	}
+	if !res.Success {
+		out.Error = res.Message
+		out.Message = ""
+		return out
+	}
+	_ = h.providerRepo.UpdateResponseTime(provider.ID, res.ResponseTime)
+
+	if testChat {
+		ok := res.Success
+		out.ChatSuccess = &ok
+		out.ChatResponseTime = res.ResponseTime
+		out.ChatModel = testModel
 	}
 	return out
 }

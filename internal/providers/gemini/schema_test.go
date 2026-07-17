@@ -280,15 +280,17 @@ func TestGeminiToolsFromOpenAI_UsesParametersField(t *testing.T) {
 	}
 }
 
-// TestToolCallThoughtSignatureRoundTrip verifies that a Gemini-native
-// thoughtSignature on a functionCall part survives the round trip:
+// TestToolCallThoughtSignatureRoundTrip verifies the LiteLLM-style
+// thoughtSignature round trip:
 //
-//	response: geminiPart.functionCall -> openAIMessageFromGeminiParts -> ToolCall.ExtraFields
-//	request:  ToolCall.ExtraFields -> geminiPartsFromMessage -> geminiPart.functionCall.ThoughtSignature
+//	response: geminiPart.ThoughtSignature -> openAIMessageFromGeminiParts
+//	           -> tool_call_id 编码(id__thought__sig) + function provider_specific_fields 冗余
+//	request:  tool_call_id 解码 / provider_specific_fields -> geminiPartsFromMessage
+//	           -> part 层面 ThoughtSignature（camelCase）+ 干净 id
 func TestToolCallThoughtSignatureRoundTrip(t *testing.T) {
 	const sig = "AY89a1/ODb1tkjj7Rni00KwOHlzM/Vf876KuerrJ+7Pv8Y7Ikjm6XMwi0dU9n1VxrowG4t08Csd82h2"
-	t.Run("response_preserves_signature", func(t *testing.T) {
-		// 上游把 thoughtSignature 放在 geminiPart 顶层（json tag "thoughtSignature"）
+
+	t.Run("response_encodes_signature_into_tool_id", func(t *testing.T) {
 		parts := []geminiPart{{
 			FunctionCall: &geminiFunctionCall{
 				ID:   "call_1",
@@ -301,55 +303,94 @@ func TestToolCallThoughtSignatureRoundTrip(t *testing.T) {
 		if len(toolCalls) != 1 {
 			t.Fatalf("want 1 tool call, got %d", len(toolCalls))
 		}
-		got := string(toolCalls[0].ExtraFields.Lookup("thought_signature"))
-		if got == "" {
-			t.Fatal("thought_signature lost in response conversion")
+		wantID := "call_1" + thoughtSignatureSeparator + sig
+		if toolCalls[0].ID != wantID {
+			t.Fatalf("tool_call_id not encoded: got=%q want=%q", toolCalls[0].ID, wantID)
 		}
-		var decoded string
-		if err := json.Unmarshal([]byte(got), &decoded); err != nil || decoded != sig {
-			t.Fatalf("thought_signature mismatch: decoded=%q err=%v", decoded, err)
+		// 冗余：function.provider_specific_fields.thought_signature
+		got := thoughtSignatureFromExtraFields(toolCalls[0].Function.ExtraFields)
+		if got != sig {
+			t.Fatalf("provider_specific_fields signature mismatch: got=%q", got)
 		}
 	})
 
-	t.Run("request_rebuilds_signature", func(t *testing.T) {
+	t.Run("request_decodes_from_tool_id", func(t *testing.T) {
 		msg := core.Message{
 			Role: "assistant",
 			ToolCalls: []core.ToolCall{{
-				ID:   "call_1",
+				ID:   "call_1" + thoughtSignatureSeparator + sig,
 				Type: "function",
 				Function: core.FunctionCall{
 					Name:      "get_weather",
 					Arguments: `{"city":"北京"}`,
 				},
-				ExtraFields: core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
-					"thought_signature": json.RawMessage(`"` + sig + `"`),
-				}),
 			}},
 		}
-		parts, err := geminiPartsFromMessage(msg)
+		parts, err := geminiPartsFromMessage(msg, "gemini-3.7-flash")
 		if err != nil {
 			t.Fatalf("geminiPartsFromMessage: %v", err)
 		}
 		if len(parts) != 1 || parts[0].FunctionCall == nil {
 			t.Fatalf("want 1 functionCall part, got %d", len(parts))
 		}
-		if got := parts[0].ThoughtSignatureWire; got != sig {
-			t.Fatalf("thought_signature not rebuilt in request: got=%q want=%q", got, sig)
+		if got := parts[0].FunctionCall.ID; got != "call_1" {
+			t.Fatalf("clean id not restored: got=%q want=%q", got, "call_1")
+		}
+		if got := parts[0].ThoughtSignature; got != sig {
+			t.Fatalf("thought_signature not rebuilt at part level: got=%q", got)
 		}
 	})
 
-	t.Run("missing_signature_ok", func(t *testing.T) {
-		// 无 thought_signature 时不应报错，正常构造 part
+	t.Run("request_dummy_signature_for_gemini3", func(t *testing.T) {
+		// gemini-3 且无签名（如历史消息迁移）→ 用 Google 官方 dummy 兜底
 		msg := core.Message{
 			Role:      "assistant",
 			ToolCalls: []core.ToolCall{{ID: "call_2", Type: "function", Function: core.FunctionCall{Name: "f", Arguments: "{}"}}},
 		}
-		parts, err := geminiPartsFromMessage(msg)
+		parts, err := geminiPartsFromMessage(msg, "gemini-3.7-flash")
 		if err != nil {
-			t.Fatalf("should not error without signature: %v", err)
+			t.Fatalf("geminiPartsFromMessage: %v", err)
 		}
-		if len(parts) != 1 || parts[0].FunctionCall == nil {
-			t.Fatalf("want 1 part, got %d", len(parts))
+		if parts[0].ThoughtSignature != dummyThoughtSignature {
+			t.Fatalf("want dummy signature for gemini-3, got=%q", parts[0].ThoughtSignature)
+		}
+	})
+
+	t.Run("no_dummy_for_non_gemini3", func(t *testing.T) {
+		msg := core.Message{
+			Role:      "assistant",
+			ToolCalls: []core.ToolCall{{ID: "call_3", Type: "function", Function: core.FunctionCall{Name: "f", Arguments: "{}"}}},
+		}
+		parts, err := geminiPartsFromMessage(msg, "gemini-2.5-flash")
+		if err != nil {
+			t.Fatalf("geminiPartsFromMessage: %v", err)
+		}
+		if parts[0].ThoughtSignature != "" {
+			t.Fatalf("non-gemini-3 should not get dummy, got=%q", parts[0].ThoughtSignature)
+		}
+	})
+
+	t.Run("tool_message_uses_clean_id", func(t *testing.T) {
+		msg := core.Message{
+			Role:       "tool",
+			ToolCallID: "call_1" + thoughtSignatureSeparator + sig,
+			Content:    "北京 晴 25°",
+		}
+		parts, err := geminiPartsFromToolMessage(msg, "get_weather")
+		if err != nil {
+			t.Fatalf("geminiPartsFromToolMessage: %v", err)
+		}
+		if got := parts[0].FunctionResponse.ID; got != "call_1" {
+			t.Fatalf("functionResponse.id not clean: got=%q want=%q", got, "call_1")
+		}
+	})
+
+	t.Run("signature_separator_decode", func(t *testing.T) {
+		if id, sig := splitToolIDAndSignature("call_x" + thoughtSignatureSeparator + "abc"); id != "call_x" || sig != "abc" {
+			t.Fatalf("splitToolIDAndSignature wrong: id=%q sig=%q", id, sig)
+		}
+		if id, sig := splitToolIDAndSignature("call_plain"); id != "call_plain" || sig != "" {
+			t.Fatalf("splitToolIDAndSignature plain wrong: id=%q sig=%q", id, sig)
 		}
 	})
 }

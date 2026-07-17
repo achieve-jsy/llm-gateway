@@ -15,6 +15,64 @@ import (
 	"github.com/example/llm-gateway/internal/core"
 )
 
+// thoughtSignatureSeparator 将 Gemini 上游返回的 thoughtSignature 编码进
+// OpenAI tool_call_id（标准字段，客户端必然透传），以便多轮回传时重建。
+// 与 LiteLLM 的 THOUGHT_SIGNATURE_SEPARATOR 保持一致。
+const thoughtSignatureSeparator = "__thought__"
+
+// dummyThoughtSignature 是 Google 官方推荐的兜底签名，用于模型为 gemini-3+、
+// 但历史消息没有真实 thought_signature 的场景（如从 gemini-2.5 迁移过来）。
+// 参见 https://ai.google.dev/gemini-api/docs/thought-signatures#faqs
+var dummyThoughtSignature = base64.StdEncoding.EncodeToString([]byte("skip_thought_signature_validator"))
+
+// isGemini3OrNewer 判断目标模型是否是 gemini-3 或更新（这类模型要求多轮工具
+// 回传 functionCall 时携带 thought_signature）。与 LiteLLM 的
+// VertexGeminiConfig._is_gemini_3_or_newer 保持一致。
+func isGemini3OrNewer(model string) bool {
+	return strings.Contains(strings.ToLower(model), "gemini-3")
+}
+
+// encodeThoughtSignatureIntoToolID 把 thought_signature 追加到 tool_call_id，
+// 格式：<id>__thought__<base64_signature>。无签名时原样返回。
+func encodeThoughtSignatureIntoToolID(id, sig string) string {
+	if sig == "" {
+		return id
+	}
+	return id + thoughtSignatureSeparator + sig
+}
+
+// splitToolIDAndSignature 从 tool_call_id 剥离 thought_signature。
+// 返回 (干净id, 签名或空)。
+func splitToolIDAndSignature(id string) (string, string) {
+	if idx := strings.Index(id, thoughtSignatureSeparator); idx >= 0 {
+		return id[:idx], id[idx+len(thoughtSignatureSeparator):]
+	}
+	return id, ""
+}
+
+// thoughtSignatureFromExtraFields 从 function.provider_specific_fields
+// 中读取冗余存的 thought_signature（LiteLLM 同款），作为 tool_call_id
+// 编码之外的第二来源。
+func thoughtSignatureFromExtraFields(fields core.UnknownJSONFields) string {
+	raw := fields.Lookup("provider_specific_fields")
+	if len(raw) == 0 {
+		return ""
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return ""
+	}
+	sigRaw := obj["thought_signature"]
+	if len(sigRaw) == 0 {
+		return ""
+	}
+	var sig string
+	if err := json.Unmarshal(sigRaw, &sig); err != nil {
+		return ""
+	}
+	return sig
+}
+
 type geminiGenerateContentRequest struct {
 	SystemInstruction *geminiContent    `json:"system_instruction,omitempty"`
 	Contents          []geminiContent   `json:"contents"`
@@ -39,11 +97,11 @@ type geminiPart struct {
 	FunctionResponse    *geminiFunctionResponse `json:"functionResponse,omitempty"`
 	FunctionResponseAlt *geminiFunctionResponse `json:"function_response,omitempty"`
 	Thought             bool                    `json:"thought,omitempty"`
-	// 响应侧：上游返回的 thoughtSignature（camelCase，base64 bytes）。
+	// thoughtSignature（camelCase）双向共用：
+	//   - 响应侧：上游返回的 thoughtSignature（base64 bytes），
+	//   - 请求侧：回传 functionCall 时放在了 part 层面（与 functionCall 平级，
+	//     而非 functionCall 内部）。与 LiteLLM 的 part_dict["thoughtSignature"] 一致。
 	ThoughtSignature string `json:"thoughtSignature,omitempty"`
-	// 请求侧：回传 functionCall 时 Gemin 原生要求在 part 层面（与 functionCall
-	// 平级，而非 functionCall 内部）携带 snake_case thought_signature。
-	ThoughtSignatureWire string `json:"thought_signature,omitempty"`
 }
 
 func (p geminiPart) functionCall() *geminiFunctionCall {
@@ -147,7 +205,7 @@ func convertChatRequestToGemini(req *core.ChatRequest) (*geminiGenerateContentRe
 		if strings.TrimSpace(msg.Role) == "tool" {
 			parts, err = geminiPartsFromToolMessage(msg, toolCallNames[msg.ToolCallID])
 		} else {
-			parts, err = geminiPartsFromMessage(msg)
+			parts, err = geminiPartsFromMessage(msg, req.Model)
 		}
 		if err != nil {
 			return nil, err
@@ -188,7 +246,7 @@ func convertChatRequestToGemini(req *core.ChatRequest) (*geminiGenerateContentRe
 	return out, nil
 }
 
-func geminiPartsFromMessage(msg core.Message) ([]geminiPart, error) {
+func geminiPartsFromMessage(msg core.Message, model string) ([]geminiPart, error) {
 	if len(msg.ToolCalls) > 0 {
 		parts := make([]geminiPart, 0, len(msg.ToolCalls)+1)
 		if text := strings.TrimSpace(core.ExtractTextContent(msg.Content)); text != "" {
@@ -199,20 +257,28 @@ func geminiPartsFromMessage(msg core.Message) ([]geminiPart, error) {
 			if len(args) == 0 {
 				args = json.RawMessage(`{}`)
 			}
+			// 从 tool_call_id 解码 thought_signature（LiteLLM 同款）。
+			// tool_call_id 是 OpenAI 标准字段，客户端必然透传，因此不依赖
+			// 客户端对非标准字段的透传。
+			cleanID, sig := splitToolIDAndSignature(call.ID)
+			if sig == "" {
+				// 冗余来源：function.provider_specific_fields.thought_signature
+				sig = thoughtSignatureFromExtraFields(call.Function.ExtraFields)
+			}
+			if sig == "" && isGemini3OrNewer(model) {
+				// 兜底：gemini-3+ 且历史无签名时用 Google 官方 dummy。
+				sig = dummyThoughtSignature
+			}
 			fc := &geminiFunctionCall{
-				ID:   call.ID,
+				ID:   cleanID,
 				Name: call.Function.Name,
 				Args: args,
 			}
 			part := geminiPart{FunctionCall: fc}
-			// 多轮工具回传：从 ExtraFields 取回上游返回的 thoughtSignature。
-			// 回传时必须把它放在 part 层面（与 functionCall 平级）且用
-			// snake_case thought_signature，否则 Gemini 上游以 400/502 拒绝。
-			if sig := strings.TrimSpace(string(call.ExtraFields.Lookup("thought_signature"))); sig != "" {
-				var decoded string
-				if err := json.Unmarshal([]byte(sig), &decoded); err == nil && decoded != "" {
-					part.ThoughtSignatureWire = decoded
-				}
+			// 回传时必须把 thought_signature 放在 part 层面（与 functionCall
+			// 平级），且用 camelCase thoughtSignature（与 LiteLLM 一致）。
+			if sig != "" {
+				part.ThoughtSignature = sig
 			}
 			parts = append(parts, part)
 		}
@@ -248,9 +314,12 @@ func geminiPartsFromToolMessage(msg core.Message, functionName string) ([]gemini
 	if err != nil {
 		return nil, err
 	}
+	// functionResponse.id 必须与 functionCall.id 使用同样的干净 id（剥离
+	// __thought__ 签名后缀），否则 Gemini 无法匹配 tool_result。
+	cleanID, _ := splitToolIDAndSignature(msg.ToolCallID)
 	return []geminiPart{{
 		FunctionResponse: &geminiFunctionResponse{
-			ID:       msg.ToolCallID,
+			ID:       cleanID,
 			Name:     functionName,
 			Response: response,
 		},
@@ -700,11 +769,14 @@ func openAIMessageFromGeminiParts(parts []geminiPart) (string, []core.ToolCall) 
 				},
 			}
 			// Gemini 原生的多轮工具调用要求回传 functionCall 时携带
-			// thoughtSignature（否则上游以 502 拒绝）。把上游返回的
-			// thoughtSignature 透传到 ExtraFields，供多轮回传时重建。
+			// thoughtSignature（否则上游 400/502 拒绝）。为了避免依赖客户端
+			// 透传非标准字段，把签名编码进 tool_call_id（OpenAI 标准字段，
+			// 客户端必然透传），并冗余放一份到 function.provider_specific_fields。
+			// 与 LiteLLM 的 _encode_tool_call_id_with_signature 保持一致。
 			if sig := strings.TrimSpace(part.ThoughtSignature); sig != "" {
-				tc.ExtraFields = core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
-					"thought_signature": json.RawMessage(`"` + sig + `"`),
+				tc.ID = encodeThoughtSignatureIntoToolID(id, sig)
+				tc.Function.ExtraFields = core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
+					"provider_specific_fields": json.RawMessage(`{"thought_signature":"` + sig + `"}`),
 				})
 			}
 			toolCalls = append(toolCalls, tc)

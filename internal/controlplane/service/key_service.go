@@ -362,6 +362,25 @@ func (s *KeyService) DeleteKey(ctx context.Context, userID, keyID uuid.UUID) err
 	return nil
 }
 
+// DeleteKeyForApproval 清理审批后续步骤失败时刚创建的个人 Key。
+// 该操作由审批工作流调用，因此不按申请人身份做归属校验。
+func (s *KeyService) DeleteKeyForApproval(ctx context.Context, keyID uuid.UUID) error {
+	k, err := s.repo.FindByID(keyID)
+	if err != nil {
+		return ErrKeyNotFound
+	}
+
+	if err := s.repo.Delete(keyID); err != nil {
+		return fmt.Errorf("delete approval key: %w", err)
+	}
+
+	if s.publisher != nil {
+		s.publisher.InvalidateKeyCache(k.KeyHash)
+		s.publisher.Publish(event.KeyDeleted, "api_key", keyID)
+	}
+	return nil
+}
+
 func (s *KeyService) RevealKey(ctx context.Context, userID, keyID uuid.UUID) (string, error) {
 	k, err := s.repo.FindByID(keyID)
 	if err != nil {

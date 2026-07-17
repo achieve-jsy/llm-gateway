@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
@@ -15,8 +16,9 @@ import (
 )
 
 var (
-	ErrKeyRequestNotFound  = errors.New("key request not found")
-	ErrPolicyNotConfigured = errors.New("key creation policy not configured for department")
+	ErrKeyRequestNotFound       = errors.New("key request not found")
+	ErrPolicyNotConfigured      = errors.New("key creation policy not configured for department")
+	ErrKeyRequestAlreadyHandled = errors.New("key request is already being handled or completed")
 )
 
 // keyRequestNotifier 站内通知写入（可选注入）。
@@ -30,7 +32,7 @@ type AutoApproveItemResult struct {
 	KeyName       string  `json:"key_name"`
 	RequesterName string  `json:"requester_name"`
 	BudgetMonthly float64 `json:"budget_monthly"`
-	Status        string  `json:"status"` // approved | failed
+	Status        string  `json:"status"` // approved | skipped | failed
 	Error         string  `json:"error,omitempty"`
 	CreatedKeyID  string  `json:"created_key_id,omitempty"`
 	Notified      bool    `json:"notified"`
@@ -57,6 +59,11 @@ type KeyCreator interface {
 	UpdateAccessAllGroups(ctx context.Context, userID, keyID uuid.UUID, value bool) (*model.ApiKey, error)
 }
 
+// KeyApprovalRollbacker 用于审批后续步骤失败时清理刚创建的 Key。
+type KeyApprovalRollbacker interface {
+	DeleteKeyForApproval(ctx context.Context, keyID uuid.UUID) error
+}
+
 // KeyRequestService Key 申请创建/审批/列表的核心业务逻辑。
 type KeyRequestService struct {
 	repo         *repository.KeyRequestRepo
@@ -65,6 +72,7 @@ type KeyRequestService struct {
 	keyCreator   KeyCreator
 	budgetSvc    *BudgetService
 	notifier     keyRequestNotifier
+	requestLocks sync.Map // request ID -> *sync.Mutex，防止同一进程内重复审批创建资源
 }
 
 func NewKeyRequestService(
@@ -161,6 +169,11 @@ func (s *KeyRequestService) Decide(
 	isGlobal bool,
 	deptIDs []string,
 ) error {
+	lockValue, _ := s.requestLocks.LoadOrStore(requestID, &sync.Mutex{})
+	requestLock := lockValue.(*sync.Mutex)
+	requestLock.Lock()
+	defer requestLock.Unlock()
+
 	req, err := s.repo.FindByID(requestID)
 	if err != nil {
 		return ErrKeyRequestNotFound
@@ -180,21 +193,43 @@ func (s *KeyRequestService) Decide(
 	if !s.canApprove(req, isGlobal, deptIDs) {
 		return errors.New("无权审批该 Key 申请")
 	}
+	claimed, err := s.repo.ClaimPending(requestID)
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		return ErrKeyRequestAlreadyHandled
+	}
 
 	if action == model.ExpansionActionApprove {
 		createdKeyID, err := s.executeApproval(ctx, req, approverID)
 		if err != nil {
+			_ = s.repo.RestorePending(requestID)
 			return fmt.Errorf("执行审批后操作失败: %w", err)
 		}
-		if err := s.repo.Approve(requestID, approverID, createdKeyID, approverName, comment); err != nil {
-			return err
+		updated, err := s.repo.ApprovePending(requestID, approverID, createdKeyID, approverName, comment)
+		if err != nil {
+			return errors.Join(err, s.restoreApprovalAttempt(ctx, requestID, createdKeyID))
+		}
+		if !updated {
+			return errors.Join(ErrKeyRequestAlreadyHandled, s.restoreApprovalAttempt(ctx, requestID, createdKeyID))
 		}
 		s.notifyRequesterApproved(req, false)
 		return nil
 	}
 	if action == model.ExpansionActionReject {
-		return s.repo.Reject(requestID, approverID, approverName, comment)
+		updated, err := s.repo.RejectPending(requestID, approverID, approverName, comment)
+		if err != nil {
+			_ = s.repo.RestorePending(requestID)
+			return err
+		}
+		if !updated {
+			_ = s.repo.RestorePending(requestID)
+			return ErrKeyRequestAlreadyHandled
+		}
+		return nil
 	}
+	_ = s.repo.RestorePending(requestID)
 	return fmt.Errorf("invalid action: %s", action)
 }
 
@@ -242,11 +277,39 @@ func (s *KeyRequestService) executeApproval(ctx context.Context, req *model.KeyR
 			req.BudgetMonthly, -1, -1,
 			approverID,
 		); err != nil {
-			slog.Warn("key request approval: budget SetBudget failed",
-				"request_id", req.ID, "budget_monthly", req.BudgetMonthly, "error", err)
+			if rollbacker, ok := s.keyCreator.(KeyApprovalRollbacker); ok {
+				if rollbackErr := rollbacker.DeleteKeyForApproval(ctx, createdKey.ID); rollbackErr != nil {
+					return uuid.Nil, fmt.Errorf("budget write failed: %w; key rollback failed: %v", err, rollbackErr)
+				}
+			}
+			return uuid.Nil, fmt.Errorf("budget write failed: %w", err)
 		}
 	}
 	return createdKey.ID, nil
+}
+
+func (s *KeyRequestService) rollbackApprovedKey(ctx context.Context, keyID uuid.UUID) error {
+	if keyID == uuid.Nil || s.keyCreator == nil {
+		return nil
+	}
+	if rollbacker, ok := s.keyCreator.(KeyApprovalRollbacker); ok {
+		if err := rollbacker.DeleteKeyForApproval(ctx, keyID); err != nil {
+			return fmt.Errorf("delete created key %s: %w", keyID, err)
+		}
+	}
+	return nil
+}
+
+func (s *KeyRequestService) restoreApprovalAttempt(ctx context.Context, requestID string, createdKeyID uuid.UUID) error {
+	rollbackErr := s.rollbackApprovedKey(ctx, createdKeyID)
+	restoreErr := s.repo.RestorePending(requestID)
+	if rollbackErr != nil {
+		slog.ErrorContext(ctx, "key request approval rollback failed", "request_id", requestID, "key_id", createdKeyID, "error", rollbackErr)
+	}
+	if restoreErr != nil {
+		slog.ErrorContext(ctx, "key request approval state restore failed", "request_id", requestID, "error", restoreErr)
+	}
+	return errors.Join(rollbackErr, restoreErr)
 }
 
 func (s *KeyRequestService) canApprove(req *model.KeyRequest, isGlobal bool, deptIDs []string) bool {
@@ -339,8 +402,26 @@ func (s *KeyRequestService) BatchApprovePendingForDept(ctx context.Context, dept
 			RequesterName: req.RequesterName,
 			BudgetMonthly: req.BudgetMonthly,
 		}
+		claimed, claimErr := s.repo.ClaimPending(req.ID.String())
+		if claimErr != nil {
+			item.Status = "failed"
+			item.Error = claimErr.Error()
+			out.Failed++
+			out.Items = append(out.Items, item)
+			slog.Warn("batch approve: claim request failed", "request_id", req.ID, "error", claimErr)
+			continue
+		}
+		if !claimed {
+			item.Status = "skipped"
+			out.Items = append(out.Items, item)
+			continue
+		}
+
 		createdKeyID, err := s.executeApproval(ctx, &req, approverID)
 		if err != nil {
+			if restoreErr := s.restoreApprovalAttempt(ctx, req.ID.String(), uuid.Nil); restoreErr != nil {
+				err = errors.Join(err, restoreErr)
+			}
 			item.Status = "failed"
 			item.Error = err.Error()
 			out.Failed++
@@ -349,7 +430,14 @@ func (s *KeyRequestService) BatchApprovePendingForDept(ctx context.Context, dept
 				"request_id", req.ID, "requester_id", req.RequesterID, "error", err)
 			continue
 		}
-		if err := s.repo.Approve(req.ID.String(), approverID, createdKeyID, approverName, "部门已关闭 Key 审批，系统自动通过"); err != nil {
+		updated, err := s.repo.ApprovePending(req.ID.String(), approverID, createdKeyID, approverName, "部门已关闭 Key 审批，系统自动通过")
+		if err != nil || !updated {
+			if err == nil {
+				err = ErrKeyRequestAlreadyHandled
+			}
+			if cleanupErr := s.restoreApprovalAttempt(ctx, req.ID.String(), createdKeyID); cleanupErr != nil {
+				err = errors.Join(err, cleanupErr)
+			}
 			item.Status = "failed"
 			item.Error = err.Error()
 			out.Failed++

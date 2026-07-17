@@ -85,7 +85,7 @@ export function formatKeyRequestBudget(budgetMonthly?: number | string | null): 
 export const KEY_REQUEST_BUDGET_NONE_LABEL = '未申请预算'
 export const KEY_REQUEST_BUDGET_APPLIED_LABEL = '已申请预算'
 
-export type AutoApproveItemStatus = 'approved' | 'failed'
+export type AutoApproveItemStatus = 'approved' | 'skipped' | 'failed'
 
 export interface KeyRequestAutoApproveItem {
   request_id: string

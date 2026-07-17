@@ -321,6 +321,7 @@
       :ordinary-user="!authStore.isManager"
       :fixed-manager-scope="fixedCreateScope"
       :manager-scope-label="createScopeLabel"
+      :manager-scope-options="managerScopeOptions"
       :initial-scope-type="initialScopeType"
       :initial-scope-id="initialScopeId"
       @created="loadRows"
@@ -391,30 +392,67 @@ const filter = reactive<ExpansionListFilter>({
 const isAdmin = computed(() => authStore.effectiveRole === 'admin')
 const canApprove = computed(() => authStore.isManager)
 const canCreateRequest = computed(() => Boolean(authStore.effectiveRole || authStore.user?.id))
-const isDeptAdmin = computed(() => authStore.effectiveRole === 'dept_admin')
+const hasDeptApprovalRole = computed(() =>
+  authStore.departmentAdminRoles.length > 0 || authStore.effectiveRole === 'dept_admin',
+)
+const hasStudioApprovalRole = computed(() =>
+  authStore.studioAdminRoles.length > 0 || authStore.effectiveRole === 'studio_admin',
+)
+const isDeptAdmin = computed(() => hasDeptApprovalRole.value && !hasStudioApprovalRole.value && !isAdmin.value)
 const hasRouteScope = computed(() => typeof route.query.scope_type === 'string' && typeof route.query.scope_id === 'string')
 const subjectColumnLabel = computed(() => isDeptAdmin.value ? '申请成员' : '申请主体')
 const showRequesterColumn = computed(() => !isDeptAdmin.value)
+type ManagerScopeOption = {
+  scopeType: BudgetScopeType
+  scopeId: string
+  label: string
+}
+const managerScopeOptions = computed<ManagerScopeOption[]>(() => {
+  if (isAdmin.value || hasRouteScope.value) return []
+  const options: ManagerScopeOption[] = []
+  for (const role of authStore.departmentAdminRoles) {
+    if (!role.scope_id) continue
+    options.push({
+      scopeType: 'dept_daily',
+      scopeId: role.scope_id,
+      label: role.scope_name || (
+        role.scope_id === authStore.user?.departmentId
+          ? authStore.user?.departmentName || `部门 ${role.scope_id}`
+          : `部门 ${role.scope_id}`
+      ),
+    })
+  }
+  for (const role of authStore.studioAdminRoles) {
+    if (!role.scope_id) continue
+    options.push({
+      scopeType: 'studio',
+      scopeId: role.scope_id,
+      label: role.scope_name || `工作室 ${role.scope_id}`,
+    })
+  }
+  return options.filter((option, index, values) =>
+    values.findIndex(item => item.scopeType === option.scopeType && item.scopeId === option.scopeId) === index,
+  )
+})
 const initialScopeType = computed(() =>
   (typeof route.query.scope_type === 'string'
     ? route.query.scope_type
-    : isDeptAdmin.value
-      ? 'dept_daily'
+    : managerScopeOptions.value.length === 1
+      ? managerScopeOptions.value[0].scopeType
+      : hasDeptApprovalRole.value
+        ? 'dept_daily'
       : 'member') as BudgetScopeType,
 )
 const initialScopeId = computed(() =>
   typeof route.query.scope_id === 'string'
     ? route.query.scope_id
-    : isDeptAdmin.value
-      ? deptAdminScopeId.value
+    : managerScopeOptions.value.length === 1
+      ? managerScopeOptions.value[0].scopeId
+      : hasDeptApprovalRole.value || hasStudioApprovalRole.value
+        ? ''
       : authStore.user?.id || '',
 )
-const deptAdminScopeId = computed(() => {
-  const role = authStore.orgRoles.find(role => role.role === 'dept_admin' || role.scope_type === 'dept')
-  return role?.scope_id || authStore.user?.departmentId || ''
-})
-const deptAdminScopeLabel = computed(() => authStore.user?.departmentName || deptAdminScopeId.value || '我的部门')
-const fixedCreateScope = computed(() => isDeptAdmin.value || hasRouteScope.value)
+const fixedCreateScope = computed(() => hasRouteScope.value || managerScopeOptions.value.length === 1)
 const createScopeLabel = computed(() => {
   if (hasRouteScope.value) {
     const routeName = typeof route.query.scope_name === 'string' ? route.query.scope_name : ''
@@ -423,7 +461,7 @@ const createScopeLabel = computed(() => {
     if (initialScopeType.value === 'dept_daily') return '成员日常预算池'
     if (initialScopeType.value === 'dept_service') return '程序服务预算池'
   }
-  return deptAdminScopeLabel.value
+  return managerScopeOptions.value[0]?.label || authStore.user?.departmentName || '我的部门'
 })
 
 const availableTabs = computed(() => [
@@ -471,6 +509,15 @@ const pageDescription = computed(() => ({
 }[authStore.effectiveRole || 'user']))
 
 const permissionCopy = computed(() => {
+  if (authStore.hasMultipleApprovalRoles && !isAdmin.value) {
+    return {
+      badge: '多角色负责人',
+      title: '合并处理部门与工作室待办',
+      detail: '待我审批已按直接部门和工作室范围合并去重；部门级申请仅按直接管辖部门处理。',
+      approvalScope: authStore.approvalRoleSummary,
+      createScope: '发起范围：请选择直接管辖对象',
+    }
+  }
   switch (authStore.effectiveRole) {
     case 'admin':
       return {

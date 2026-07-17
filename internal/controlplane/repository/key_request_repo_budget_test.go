@@ -69,3 +69,38 @@ func TestCountPendingScoped_budgetPending(t *testing.T) {
 		t.Fatalf("budget want 1 got %d", budget)
 	}
 }
+
+func TestKeyRequestRepoClaimPendingIsAtomic(t *testing.T) {
+	db := openKeyRequestTestDB(t)
+	repo := NewKeyRequestRepo(db)
+	id := uuid.New().String()
+	if err := db.Exec(
+		`INSERT INTO key_requests (id, requester_id, key_name, key_type, status, dept_id) VALUES (?, ?, ?, 'personal', ?, ?)`,
+		id, uuid.New().String(), "claim-me", model.KeyRequestStatusPending, "d1",
+	).Error; err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	claimed, err := repo.ClaimPending(id)
+	if err != nil {
+		t.Fatalf("first claim: %v", err)
+	}
+	if !claimed {
+		t.Fatal("first claim should succeed")
+	}
+	claimed, err = repo.ClaimPending(id)
+	if err != nil {
+		t.Fatalf("second claim: %v", err)
+	}
+	if claimed {
+		t.Fatal("second claim must be rejected")
+	}
+
+	var status string
+	if err := db.Raw(`SELECT status FROM key_requests WHERE id = ?`, id).Scan(&status).Error; err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status != model.KeyRequestStatusProcessing {
+		t.Fatalf("status = %q, want processing", status)
+	}
+}

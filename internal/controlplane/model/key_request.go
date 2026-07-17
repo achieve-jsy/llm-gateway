@@ -8,10 +8,11 @@ import (
 
 // Key 创建申请状态
 const (
-	KeyRequestStatusPending   = "pending"
-	KeyRequestStatusApproved  = "approved"
-	KeyRequestStatusRejected  = "rejected"
-	KeyRequestStatusCancelled = "cancelled"
+	KeyRequestStatusPending    = "pending"
+	KeyRequestStatusProcessing = "processing"
+	KeyRequestStatusApproved   = "approved"
+	KeyRequestStatusRejected   = "rejected"
+	KeyRequestStatusCancelled  = "cancelled"
 )
 
 // 部门策略 key

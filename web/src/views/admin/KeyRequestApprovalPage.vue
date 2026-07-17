@@ -3,7 +3,9 @@
     <header class="page-header">
       <div>
         <h1>Key 申请审批</h1>
-        <p class="page-desc">审批 Key 创建申请。</p>
+        <p class="page-desc">
+          {{ authStore.hasMultipleApprovalRoles ? authStore.approvalRoleSummary : '审批 Key 创建申请。' }}
+        </p>
       </div>
       <div class="header-actions">
         <el-button @click="load" :loading="loading">刷新</el-button>
@@ -31,6 +33,11 @@
         <span class="approval-stat__value">{{ historyDisplayTotal }}</span>
         <span class="approval-stat__label">历史记录</span>
       </div>
+    </div>
+
+    <div v-if="countsError" class="load-error" role="alert">
+      <span>{{ countsError }}</span>
+      <el-button link type="primary" :loading="loading" @click="refreshPendingCounts">重试</el-button>
     </div>
 
     <el-tabs v-model="tab">
@@ -62,6 +69,11 @@
               <el-button :icon="Search" @click="triggerPendingSearch" />
             </template>
           </el-input>
+        </div>
+
+        <div v-if="pendingError" class="load-error" role="alert">
+          <span>{{ pendingError }}</span>
+          <el-button data-test="retry-pending" link type="primary" :loading="loading" @click="load">重试</el-button>
         </div>
 
         <el-empty v-if="!loading && pendingItems.length === 0" description="暂无待审批申请" />
@@ -150,6 +162,11 @@
           </el-select>
         </div>
 
+        <div v-if="historyError" class="load-error" role="alert">
+          <span>{{ historyError }}</span>
+          <el-button link type="primary" :loading="loadingHistory" @click="loadHistory">重试</el-button>
+        </div>
+
         <el-empty v-if="!loadingHistory && historyItems.length === 0 && historyTotal === 0" description="暂无审批记录" />
 
         <div v-else v-loading="loadingHistory" class="history-list">
@@ -207,7 +224,7 @@
     </el-tabs>
 
     <!-- 部门策略配置（与 Tabs 同级的独立区块，仅管理角色可见） -->
-    <div v-if="authStore.isManager" class="policy-section">
+    <div v-if="canManageDeptPolicy" class="policy-section">
       <h3 class="section-title">部门 Key 创建策略</h3>
       <el-alert
         type="info"
@@ -217,13 +234,32 @@
         控制本部门成员新建 Key 时是否需要审批。「自由创建」= 默认行为，可直接创建；「需要审批」= 创建时弹窗填写用途并提交审批，由部门负责人通过后才能生成 Key。
       </el-alert>
       <el-form label-width="120px" style="max-width: 480px">
-        <el-form-item label="当前部门">
-          <span class="current-dept">{{ authStore.user?.departmentName || '未分配' }}</span>
+        <el-form-item label="配置部门">
+          <div data-test="policy-department" class="policy-department">
+            <el-select
+              v-if="directDepartmentOptions.length > 1"
+              v-model="currentDeptId"
+              placeholder="请选择直接管辖部门"
+              aria-label="选择策略部门"
+              style="width: 240px"
+            >
+              <el-option
+                v-for="department in directDepartmentOptions"
+                :key="department.id"
+                :label="department.label"
+                :value="department.id"
+              />
+            </el-select>
+            <span v-else class="current-dept">{{ currentPolicyDepartmentLabel }}</span>
+            <span v-if="directDepartmentOptions.length > 1" class="policy-department__hint">
+              可配置部门：{{ directDepartmentOptions.map(item => item.label).join('、') }}
+            </span>
+          </div>
         </el-form-item>
         <el-form-item label="Key 创建策略">
           <el-radio-group
             :model-value="deptPolicy"
-            :disabled="policySaving"
+            :disabled="policySaving || !currentDeptId"
             @change="handlePolicyChange"
           >
             <el-radio value="free">自由创建（不需要审批）</el-radio>
@@ -282,6 +318,7 @@ const pendingPage = ref(1)
 const pendingTotal = ref(0)
 const pendingPageSize = 10
 const pendingNameFilter = ref('')
+const pendingError = ref('')
 const historyItems = ref<KeyRequest[]>([])
 const historyPage = ref(1)
 const historyTotal = ref(0)
@@ -289,6 +326,8 @@ const historyAllTotal = ref(0)
 const historyPageSize = 10
 const historyNameFilter = ref('')
 const historyStatusFilter = ref<'approved' | 'rejected' | ''>('')
+const historyError = ref('')
+const countsError = ref('')
 let historyLoadSeq = 0
 let pendingLoadSeq = 0
 
@@ -306,6 +345,29 @@ const autoApproveLoading = ref(false)
 const autoApproveResult = ref<KeyRequestAutoApproveResult | null>(null)
 
 const historyDisplayTotal = computed(() => historyTotal.value)
+const isPlatformPolicyAdmin = computed(() =>
+  authStore.effectiveRole === 'admin' || authStore.orgRoles.some(item => item.role === 'admin'),
+)
+const directDepartmentOptions = computed(() => {
+  const departments = authStore.departmentAdminRoles.map(role => ({
+    id: role.scope_id,
+    label: role.scope_name || `部门 ${role.scope_id}`,
+  }))
+  if (!isPlatformPolicyAdmin.value) return departments
+
+  const currentDepartmentId = authStore.user?.departmentId
+  if (!currentDepartmentId || departments.some(item => item.id === currentDepartmentId)) return departments
+  return [{
+    id: currentDepartmentId,
+    label: authStore.user?.departmentName || `部门 ${currentDepartmentId}`,
+  }, ...departments]
+})
+const canManageDeptPolicy = computed(() =>
+  isPlatformPolicyAdmin.value || directDepartmentOptions.value.length > 0,
+)
+const currentPolicyDepartmentLabel = computed(() =>
+  directDepartmentOptions.value.find(item => item.id === currentDeptId.value)?.label || '未选择',
+)
 
 function formatDate(iso?: string): string {
   if (!iso) return '-'
@@ -369,9 +431,9 @@ function applyPendingCounts(counts: { count: number; budgetCount: number }) {
 async function refreshPendingCounts() {
   try {
     applyPendingCounts(await getPendingKeyRequestCounts())
+    countsError.value = ''
   } catch {
-    pendingCount.value = 0
-    pendingBudgetCount.value = 0
+    countsError.value = '待审批统计加载失败'
   }
 }
 
@@ -380,7 +442,7 @@ async function load(page?: number) {
   const seq = ++pendingLoadSeq
   loading.value = true
   try {
-    const [r, counts] = await Promise.all([
+    const [requestsResult, countsResult] = await Promise.allSettled([
       getPendingKeyRequests({
         page: p,
         pageSize: pendingPageSize,
@@ -390,15 +452,19 @@ async function load(page?: number) {
       getPendingKeyRequestCounts(),
     ])
     if (seq !== pendingLoadSeq) return
-    pendingItems.value = r.items
-    pendingTotal.value = Number(r.total) || 0
-    applyPendingCounts(counts)
-  } catch {
-    if (seq !== pendingLoadSeq) return
-    pendingItems.value = []
-    pendingTotal.value = 0
-    pendingCount.value = 0
-    pendingBudgetCount.value = 0
+    if (requestsResult.status === 'fulfilled') {
+      pendingItems.value = requestsResult.value.items
+      pendingTotal.value = Number(requestsResult.value.total) || 0
+      pendingError.value = ''
+    } else {
+      pendingError.value = '待审批列表加载失败'
+    }
+    if (countsResult.status === 'fulfilled') {
+      applyPendingCounts(countsResult.value)
+      countsError.value = ''
+    } else {
+      countsError.value = '待审批统计加载失败'
+    }
   } finally {
     if (seq === pendingLoadSeq) {
       loading.value = false
@@ -421,16 +487,13 @@ async function loadHistory(page?: number) {
     if (seq !== historyLoadSeq) return
     historyItems.value = r.items
     historyTotal.value = Number(r.total) || 0
+    historyError.value = ''
     if (!historyNameFilter.value.trim() && !historyStatusFilter.value) {
       historyAllTotal.value = historyTotal.value
     }
   } catch {
     if (seq !== historyLoadSeq) return
-    historyItems.value = []
-    historyTotal.value = 0
-    if (!historyNameFilter.value.trim() && !historyStatusFilter.value) {
-      historyAllTotal.value = 0
-    }
+    historyError.value = '审批历史加载失败'
   } finally {
     if (seq === historyLoadSeq) {
       loadingHistory.value = false
@@ -479,11 +542,12 @@ async function confirmReject() {
 }
 
 async function loadPolicy() {
-  const deptId = (authStore.user as any)?.departmentId || ''
-  currentDeptId.value = deptId
-  if (!deptId) return
+  if (!currentDeptId.value || !directDepartmentOptions.value.some(item => item.id === currentDeptId.value)) {
+    currentDeptId.value = directDepartmentOptions.value[0]?.id || ''
+  }
+  if (!currentDeptId.value) return
   try {
-    const res = await getDeptKeyCreationPolicy(deptId)
+    const res = await getDeptKeyCreationPolicy(currentDeptId.value)
     deptPolicy.value = (res.key_creation_policy as 'free' | 'approval') || 'free'
   } catch {
     deptPolicy.value = 'free'
@@ -556,16 +620,21 @@ watch(tab, (t) => {
   }
 })
 
+watch(currentDeptId, () => {
+  if (canManageDeptPolicy.value) void loadPolicy()
+})
+
 onMounted(() => {
   void refreshPendingCounts()
   load()
   loadHistory()
-  loadPolicy()
+  if (canManageDeptPolicy.value) void loadPolicy()
 })
 watch(() => authStore.effectiveRole, (role) => {
   if (!role || !['admin', 'studio_admin', 'dept_admin'].includes(role)) return
   if (tab.value === 'pending') load()
   else void Promise.all([refreshPendingCounts(), loadHistory()])
+  if (canManageDeptPolicy.value) void loadPolicy()
 })
 </script>
 
@@ -637,6 +706,18 @@ watch(() => authStore.effectiveRole, (role) => {
   color: var(--el-text-color-primary);
 }
 .page-desc { color: var(--el-text-color-secondary); font-size: 13px; margin: 0; }
+.load-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  margin: 0 0 12px;
+  padding: 0 12px;
+  color: var(--el-color-danger);
+  font-size: 13px;
+  border-left: 3px solid var(--el-color-danger);
+  background: var(--el-color-danger-light-9);
+}
 .tab-badge { margin-left: 4px; }
 .pagination-wrapper { display: flex; justify-content: flex-end; margin-top: 16px; }
 
@@ -693,5 +774,17 @@ watch(() => authStore.effectiveRole, (role) => {
 .current-dept {
   font-weight: 600;
   color: var(--el-color-primary);
+}
+
+.policy-department {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.policy-department__hint {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 </style>

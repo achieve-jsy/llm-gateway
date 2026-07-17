@@ -310,6 +310,9 @@ const DEPT_BANNER_DISMISS_KEY = 'dept_banner_dismissed'
 const showDeptBanner = ref(sessionStorage.getItem(DEPT_BANNER_DISMISS_KEY) !== '1')
 
 const deptBannerInfo = computed<{ message: string; type: 'warning' | 'error' } | null>(() => {
+  // 平台管理员无需部门归属即可管理全局，不展示会造成权限误解的部门映射提示。
+  if (authStore.isAdmin) return null
+
   const ds = authStore.deptStatus
   if (ds === 'none') {
     return { type: 'error', message: '你的账号暂未关联部门，部分功能可能受限，请联系平台管理员。' }

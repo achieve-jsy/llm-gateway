@@ -179,6 +179,9 @@ func (h *KeyRequestHandler) Decide(c *gin.Context) {
 		return
 	}
 	// cancel 允许申请人本人操作；approve/reject 仅负责人（cancel 推荐走 /cancel 接口）
+	if req.Action != model.ExpansionActionCancel && rbac.RejectScopeUnavailable(c, actor) {
+		return
+	}
 	if req.Action != model.ExpansionActionCancel && !actor.IsManager() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "需要管理员权限"})
 		return
@@ -188,7 +191,7 @@ func (h *KeyRequestHandler) Decide(c *gin.Context) {
 	approverID, _ := uuid.Parse(c.GetString("user_id"))
 	approverName := h.actorName(c, approverID)
 
-	if err := h.svc.Decide(c.Request.Context(), requestID, approverID, approverName, approverID, req.Action, req.Comment, actor.IsGlobal, actor.DeptIDs); err != nil {
+	if err := h.svc.Decide(c.Request.Context(), requestID, approverID, approverName, approverID, req.Action, req.Comment, actor.IsGlobal, actor.ApprovalDeptIDs); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -245,6 +248,9 @@ func (h *KeyRequestHandler) ListMine(c *gin.Context) {
 func (h *KeyRequestHandler) ListPending(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
+	if rbac.RejectScopeUnavailable(c, actor) {
+		return
+	}
 	if !actor.IsManager() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "需要管理员权限"})
 		return
@@ -260,7 +266,7 @@ func (h *KeyRequestHandler) ListPending(c *gin.Context) {
 	if pageSize > 100 {
 		pageSize = 100
 	}
-	items, total, err := h.svc.ListPending(c.Request.Context(), actor.IsGlobal, actor.DeptIDs, requesterName, hasBudget, page, pageSize)
+	items, total, err := h.svc.ListPending(c.Request.Context(), actor.IsGlobal, actor.ApprovalDeptIDs, requesterName, hasBudget, page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -300,11 +306,18 @@ func (h *KeyRequestHandler) CountMine(c *gin.Context) {
 func (h *KeyRequestHandler) CountPendingForDept(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
+	if rbac.RejectScopeUnavailable(c, actor) {
+		return
+	}
 	if !actor.IsManager() {
 		c.JSON(http.StatusOK, gin.H{"data": gin.H{"count": 0, "budget_count": 0}})
 		return
 	}
-	count, budgetCount, _ := h.svc.CountPendingForDept(c.Request.Context(), actor.IsGlobal, actor.DeptIDs)
+	count, budgetCount, err := h.svc.CountPendingForDept(c.Request.Context(), actor.IsGlobal, actor.ApprovalDeptIDs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
 		"count":        count,
 		"budget_count": budgetCount,
@@ -316,6 +329,9 @@ func (h *KeyRequestHandler) CountPendingForDept(c *gin.Context) {
 func (h *KeyRequestHandler) ListHistory(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
+	if rbac.RejectScopeUnavailable(c, actor) {
+		return
+	}
 	if !actor.IsManager() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "需要管理员权限"})
 		return
@@ -344,7 +360,7 @@ func (h *KeyRequestHandler) ListHistory(c *gin.Context) {
 	if status != "" && status != model.KeyRequestStatusApproved && status != model.KeyRequestStatusRejected {
 		status = ""
 	}
-	items, total, err := h.svc.ListHistoryForApprover(c.Request.Context(), actor.IsGlobal, actor.DeptIDs, requesterName, status, page, pageSize)
+	items, total, err := h.svc.ListHistoryForApprover(c.Request.Context(), actor.IsGlobal, actor.ApprovalDeptIDs, requesterName, status, page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -363,7 +379,20 @@ func (h *KeyRequestHandler) ListHistory(c *gin.Context) {
 
 // GetDeptPolicy GET /api/v1/dept-policies/:dept_id/key-creation
 func (h *KeyRequestHandler) GetDeptPolicy(c *gin.Context) {
+	h.rbac.BuildAndInjectActor(c)
+	actor := rbac.GetActor(c)
+	if rbac.RejectScopeUnavailable(c, actor) {
+		return
+	}
+	if !actor.IsManager() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "需要管理员权限"})
+		return
+	}
 	deptID := c.Param("dept_id")
+	if !actor.HasDirectDept(deptID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权查看该部门策略"})
+		return
+	}
 	val, err := h.svc.GetDeptPolicy(c.Request.Context(), deptID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -379,13 +408,16 @@ func (h *KeyRequestHandler) GetDeptPolicy(c *gin.Context) {
 func (h *KeyRequestHandler) SetDeptPolicy(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
+	if rbac.RejectScopeUnavailable(c, actor) {
+		return
+	}
 	if !actor.IsManager() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "需要管理员权限"})
 		return
 	}
 
 	deptID := c.Param("dept_id")
-	if !actor.IsGlobal && !actor.HasDept(deptID) {
+	if !actor.HasDirectDept(deptID) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "无权修改该部门策略"})
 		return
 	}

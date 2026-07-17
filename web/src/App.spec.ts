@@ -114,6 +114,24 @@ describe('App navigation', () => {
     wrapper.unmount()
   })
 
+  it('平台管理员未关联部门时不显示受限提示', () => {
+    authStore.deptStatus = 'none'
+    const wrapper = mountAppAs('admin')
+
+    expect(wrapper.text()).not.toContain('你的账号暂未关联部门')
+    wrapper.unmount()
+    authStore.deptStatus = null
+  })
+
+  it('非平台管理员未关联部门时保留受限提示', () => {
+    authStore.deptStatus = 'none'
+    const wrapper = mountAppAs('user')
+
+    expect(wrapper.text()).toContain('你的账号暂未关联部门')
+    wrapper.unmount()
+    authStore.deptStatus = null
+  })
+
   it('部门和工作室管理员仍保留我的预算入口', () => {
     const studioWrapper = mountAppAs('studio_admin')
     expect(studioWrapper.text()).toContain('我的预算')

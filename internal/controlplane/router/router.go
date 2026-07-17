@@ -342,7 +342,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	// 模型状态变更日志
 	modelStatusLogHandler := handler.NewModelStatusLogHandler(modelStatusLogRepo)
 
-	keyHandler := handler.NewKeyHandler(keySvc)
+	keyHandler := handler.NewKeyHandler(keySvc, keyRequestSvc, orgContainer.RBAC)
 	settingsHandler := handler.NewSettingsHandler(settingsSvc)
 	opencodeConfigHandler := handler.NewOpencodeConfigHandler(rdb, settingsSvc)
 
@@ -877,7 +877,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.POST("/key-requests/:id/cancel", keyRequestHandler.CancelMine)
 		adminGroup.POST("/key-requests/:id/decision", guard(rbac.PermKeyRequestApprove), keyRequestHandler.Decide)
 		// 部门 Key 创建策略配置（读写均走管理角色权限）
-		adminGroup.GET("/dept-policies/:dept_id/key-creation", keyRequestHandler.GetDeptPolicy)
+		adminGroup.GET("/dept-policies/:dept_id/key-creation", guard(rbac.PermKeyRequestSetPolicy), keyRequestHandler.GetDeptPolicy)
 		adminGroup.PUT("/dept-policies/:dept_id/key-creation", guard(rbac.PermKeyRequestSetPolicy), keyRequestHandler.SetDeptPolicy)
 
 		// Channel Monitor 管理路由

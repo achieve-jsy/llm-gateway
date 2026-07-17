@@ -5,6 +5,24 @@
         <el-form-item v-if="hideScopeFields" label="申请对象">
           <div class="scope-summary">{{ scopeSummaryText }}</div>
         </el-form-item>
+        <template v-else-if="showManagerScopeSelector">
+          <el-form-item label="申请对象" required>
+            <el-select v-model="selectedManagerScopeKey" placeholder="请选择直接管辖的申请对象">
+              <el-option
+                v-for="option in managerScopeOptions"
+                :key="managerScopeKey(option)"
+                :label="option.label"
+                :value="managerScopeKey(option)"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="isSelectedDepartmentScope" label="预算池">
+            <el-select v-model="form.scope_type">
+              <el-option label="成员日常预算池" value="dept_daily" />
+              <el-option label="程序服务预算池" value="dept_service" />
+            </el-select>
+          </el-form-item>
+        </template>
         <template v-else>
           <el-form-item label="对象类型" required><el-select v-model="form.scope_type"><el-option v-for="item in scopeOptions" :key="item" :label="SCOPE_TYPE_LABELS[item]" :value="item" /></el-select></el-form-item>
           <el-form-item label="对象 ID" required><el-input v-model="form.scope_id" /></el-form-item>
@@ -50,6 +68,12 @@ interface TierOption {
   name: string
 }
 
+export interface ManagerScopeOption {
+  scopeType: BudgetScopeType
+  scopeId: string
+  label: string
+}
+
 const props = withDefaults(defineProps<{
   ordinaryUser?: boolean
   initialScopeType?: BudgetScopeType
@@ -60,6 +84,7 @@ const props = withDefaults(defineProps<{
   initialTargetAmountUsd?: string
   fixedManagerScope?: boolean
   managerScopeLabel?: string
+  managerScopeOptions?: ManagerScopeOption[]
 }>(), {
   ordinaryUser: false,
   initialScopeType: 'member',
@@ -70,6 +95,7 @@ const props = withDefaults(defineProps<{
   initialTargetAmountUsd: '',
   fixedManagerScope: false,
   managerScopeLabel: '',
+  managerScopeOptions: () => [],
 })
 const visible = defineModel<boolean>({ default: false })
 const emit = defineEmits<{
@@ -79,6 +105,7 @@ const emit = defineEmits<{
 const scopeOptions: BudgetScopeType[] = ['company', 'studio', 'dept_daily', 'dept_service', 'member']
 const tiers = ref<TierOption[]>([])
 const submitting = ref(false)
+const selectedManagerScopeKey = ref('')
 const form = reactive({
   scope_type: props.initialScopeType, scope_id: props.initialScopeId, period_type: 'monthly' as 'daily' | 'weekly' | 'monthly',
   dimension_type: 'total' as 'total' | 'tier', model_tier_id: '', duration_type: 'permanent' as 'permanent' | 'current_period',
@@ -88,9 +115,21 @@ const valid = computed(() => form.scope_id && /^\d+(\.\d{1,6})?$/.test(form.targ
 const canSubmit = computed(() => !!valid.value)
 const hideScopeFields = computed(() => props.ordinaryUser || props.fixedManagerScope)
 const showManagerPoolSelector = computed(() => props.fixedManagerScope && (props.initialScopeType === 'dept_daily' || props.initialScopeType === 'dept_service'))
+const showManagerScopeSelector = computed(() => !props.ordinaryUser && !props.fixedManagerScope && props.managerScopeOptions.length > 1)
+const isSelectedDepartmentScope = computed(() => form.scope_type === 'dept_daily' || form.scope_type === 'dept_service')
 const scopeSummaryText = computed(() => props.fixedManagerScope
   ? (props.managerScopeLabel || '我的部门')
   : '我的成员额度')
+function managerScopeKey(option: ManagerScopeOption) {
+  return `${option.scopeType}:${option.scopeId}`
+}
+function selectManagerScope(key: string) {
+  const selected = props.managerScopeOptions.find(option => managerScopeKey(option) === key)
+  if (!selected) return
+  form.scope_type = selected.scopeType
+  form.scope_id = selected.scopeId
+}
+watch(selectedManagerScopeKey, selectManagerScope)
 watch(visible, async value => {
   if (!value) return
   Object.assign(form, {
@@ -105,6 +144,10 @@ watch(visible, async value => {
     reason: '',
     urgent_reason: '',
   })
+  if (showManagerScopeSelector.value) {
+    selectedManagerScopeKey.value = ''
+    form.scope_id = ''
+  }
   if (!tiers.value.length) tiers.value = await loadTierOptions(props.ordinaryUser)
   if (form.dimension_type === 'tier' && form.model_tier_id && !tiers.value.some(tier => tier.id === form.model_tier_id)) {
     form.model_tier_id = ''

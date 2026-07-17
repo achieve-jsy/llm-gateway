@@ -95,7 +95,7 @@ var Registry = map[Permission]PolicyEntry{
 	// ── feat/key-approval ──────────────────────────────────────────────────
 	// 审批 Key 申请：任意管理角色（service 层按 deptIDs 范围校验）
 	PermKeyRequestApprove: {ScopeManage},
-	// 设置部门 Key 创建策略：任意管理角色（service 层按 deptIDs 过滤）
+	// 设置部门 Key 创建策略：路由允许管理角色进入，handler 仅允许直接 dept_admin 或 admin 操作目标部门
 	PermKeyRequestSetPolicy: {ScopeManage},
 
 	// ── v0.15 四层配额体系 ──────────────────────────────────────────────────

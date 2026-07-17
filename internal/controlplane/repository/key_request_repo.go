@@ -89,7 +89,7 @@ func (r *KeyRequestRepo) ListByRequesterPaged(requesterID, status string, page, 
 	}
 	var items []model.KeyRequest
 	err := listQ.Order("created_at DESC").
-		Offset((page-1)*pageSize).
+		Offset((page - 1) * pageSize).
 		Limit(pageSize).
 		Find(&items).Error
 	return items, total, err
@@ -131,7 +131,7 @@ func (r *KeyRequestRepo) ListPendingPaged(isGlobal bool, deptIDs []string, reque
 	}
 	var items []model.KeyRequest
 	err := listQ.Order("created_at ASC").
-		Offset((page-1)*pageSize).
+		Offset((page - 1) * pageSize).
 		Limit(pageSize).
 		Find(&items).Error
 	return items, total, err
@@ -239,8 +239,52 @@ func (r *KeyRequestRepo) ListHistoryPaged(isGlobal bool, deptIDs []string, reque
 	}
 	var items []model.KeyRequest
 	err := listQ.Order("updated_at DESC").
-		Offset((page-1)*pageSize).
+		Offset((page - 1) * pageSize).
 		Limit(pageSize).
 		Find(&items).Error
 	return items, total, err
+}
+
+// ClaimPending 原子抢占待审批申请，避免多个审批人同时执行后续资源创建。
+func (r *KeyRequestRepo) ClaimPending(id string) (bool, error) {
+	result := r.db.Model(&model.KeyRequest{}).
+		Where("id = ? AND status = ?", id, model.KeyRequestStatusPending).
+		Updates(map[string]any{"status": model.KeyRequestStatusProcessing, "updated_at": time.Now()})
+	return result.RowsAffected == 1, result.Error
+}
+
+// RestorePending 在审批后续步骤失败时释放申请，允许安全重试。
+func (r *KeyRequestRepo) RestorePending(id string) error {
+	return r.db.Model(&model.KeyRequest{}).
+		Where("id = ? AND status = ?", id, model.KeyRequestStatusProcessing).
+		Updates(map[string]any{"status": model.KeyRequestStatusPending, "updated_at": time.Now()}).Error
+}
+
+// ApprovePending 仅允许将 processing 状态提交为 approved。
+func (r *KeyRequestRepo) ApprovePending(id string, approverID, createdKeyID uuid.UUID, approverName, comment string) (bool, error) {
+	result := r.db.Model(&model.KeyRequest{}).Where(
+		"id = ? AND status = ?", id, model.KeyRequestStatusProcessing,
+	).Updates(map[string]any{
+		"status":          model.KeyRequestStatusApproved,
+		"approver_id":     approverID,
+		"approver_name":   approverName,
+		"approve_comment": comment,
+		"created_key_id":  createdKeyID,
+		"updated_at":      time.Now(),
+	})
+	return result.RowsAffected == 1, result.Error
+}
+
+// RejectPending 仅允许将 processing 状态提交为 rejected。
+func (r *KeyRequestRepo) RejectPending(id string, approverID uuid.UUID, approverName, comment string) (bool, error) {
+	result := r.db.Model(&model.KeyRequest{}).Where(
+		"id = ? AND status = ?", id, model.KeyRequestStatusProcessing,
+	).Updates(map[string]any{
+		"status":          model.KeyRequestStatusRejected,
+		"approver_id":     approverID,
+		"approver_name":   approverName,
+		"approve_comment": comment,
+		"updated_at":      time.Now(),
+	})
+	return result.RowsAffected == 1, result.Error
 }

@@ -63,6 +63,9 @@ type geminiFunctionCall struct {
 	ID   string          `json:"id,omitempty"`
 	Name string          `json:"name,omitempty"`
 	Args json.RawMessage `json:"args,omitempty"`
+	// 回传 functionCall 时 Gemini 原生要求 snake_case thought_signature
+	//（响应里是 camelCase thoughtSignature，但请求回传必须 snake_case）。
+	ThoughtSignature string `json:"thought_signature,omitempty"`
 }
 
 type geminiFunctionResponse struct {
@@ -195,11 +198,20 @@ func geminiPartsFromMessage(msg core.Message) ([]geminiPart, error) {
 			if len(args) == 0 {
 				args = json.RawMessage(`{}`)
 			}
-			parts = append(parts, geminiPart{FunctionCall: &geminiFunctionCall{
+			fc := &geminiFunctionCall{
 				ID:   call.ID,
 				Name: call.Function.Name,
 				Args: args,
-			}})
+			}
+			// 多轮工具回传：从 ExtraFields 取回上游返回的 thoughtSignature，
+			// 回传 functionCall 时携带，否则 Gemini 上游以 502 拒绝。
+			if sig := strings.TrimSpace(string(call.ExtraFields.Lookup("thought_signature"))); sig != "" {
+				var decoded string
+				if err := json.Unmarshal([]byte(sig), &decoded); err == nil && decoded != "" {
+					fc.ThoughtSignature = decoded
+				}
+			}
+			parts = append(parts, geminiPart{FunctionCall: fc})
 		}
 		return parts, nil
 	}
@@ -676,14 +688,23 @@ func openAIMessageFromGeminiParts(parts []geminiPart) (string, []core.ToolCall) 
 					args = compact.String()
 				}
 			}
-			toolCalls = append(toolCalls, core.ToolCall{
+			tc := core.ToolCall{
 				ID:   id,
 				Type: "function",
 				Function: core.FunctionCall{
 					Name:      call.Name,
 					Arguments: args,
 				},
-			})
+			}
+			// Gemini 原生的多轮工具调用要求回传 functionCall 时携带
+			// thoughtSignature（否则上游以 502 拒绝）。把上游返回的
+			// thoughtSignature 透传到 ExtraFields，供多轮回传时重建。
+			if sig := strings.TrimSpace(part.ThoughtSignature); sig != "" {
+				tc.ExtraFields = core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
+					"thought_signature": json.RawMessage(`"` + sig + `"`),
+				})
+			}
+			toolCalls = append(toolCalls, tc)
 		}
 	}
 	return text.String(), toolCalls

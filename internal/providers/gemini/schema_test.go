@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/example/llm-gateway/internal/core"
 )
 
 // mustParamSchema decodes a raw JSON schema into an any-tree for assertions.
@@ -276,4 +278,78 @@ func TestGeminiToolsFromOpenAI_UsesParametersField(t *testing.T) {
 	if !strings.Contains(s, `"parameters"`) {
 		t.Errorf("declaration must carry parameters field: %s", s)
 	}
+}
+
+// TestToolCallThoughtSignatureRoundTrip verifies that a Gemini-native
+// thoughtSignature on a functionCall part survives the round trip:
+//
+//	response: geminiPart.functionCall -> openAIMessageFromGeminiParts -> ToolCall.ExtraFields
+//	request:  ToolCall.ExtraFields -> geminiPartsFromMessage -> geminiPart.functionCall.ThoughtSignature
+func TestToolCallThoughtSignatureRoundTrip(t *testing.T) {
+	const sig = "AY89a1/ODb1tkjj7Rni00KwOHlzM/Vf876KuerrJ+7Pv8Y7Ikjm6XMwi0dU9n1VxrowG4t08Csd82h2"
+	t.Run("response_preserves_signature", func(t *testing.T) {
+		// 上游把 thoughtSignature 放在 geminiPart 顶层（json tag "thoughtSignature"）
+		parts := []geminiPart{{
+			FunctionCall: &geminiFunctionCall{
+				ID:   "call_1",
+				Name: "get_weather",
+				Args: json.RawMessage(`{"city":"北京"}`),
+			},
+			ThoughtSignature: sig,
+		}}
+		_, toolCalls := openAIMessageFromGeminiParts(parts)
+		if len(toolCalls) != 1 {
+			t.Fatalf("want 1 tool call, got %d", len(toolCalls))
+		}
+		got := string(toolCalls[0].ExtraFields.Lookup("thought_signature"))
+		if got == "" {
+			t.Fatal("thought_signature lost in response conversion")
+		}
+		var decoded string
+		if err := json.Unmarshal([]byte(got), &decoded); err != nil || decoded != sig {
+			t.Fatalf("thought_signature mismatch: decoded=%q err=%v", decoded, err)
+		}
+	})
+
+	t.Run("request_rebuilds_signature", func(t *testing.T) {
+		msg := core.Message{
+			Role: "assistant",
+			ToolCalls: []core.ToolCall{{
+				ID:   "call_1",
+				Type: "function",
+				Function: core.FunctionCall{
+					Name:      "get_weather",
+					Arguments: `{"city":"北京"}`,
+				},
+				ExtraFields: core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
+					"thought_signature": json.RawMessage(`"` + sig + `"`),
+				}),
+			}},
+		}
+		parts, err := geminiPartsFromMessage(msg)
+		if err != nil {
+			t.Fatalf("geminiPartsFromMessage: %v", err)
+		}
+		if len(parts) != 1 || parts[0].FunctionCall == nil {
+			t.Fatalf("want 1 functionCall part, got %d", len(parts))
+		}
+		if got := parts[0].FunctionCall.ThoughtSignature; got != sig {
+			t.Fatalf("thought_signature not rebuilt in request: got=%q want=%q", got, sig)
+		}
+	})
+
+	t.Run("missing_signature_ok", func(t *testing.T) {
+		// 无 thought_signature 时不应报错，正常构造 part
+		msg := core.Message{
+			Role:      "assistant",
+			ToolCalls: []core.ToolCall{{ID: "call_2", Type: "function", Function: core.FunctionCall{Name: "f", Arguments: "{}"}}},
+		}
+		parts, err := geminiPartsFromMessage(msg)
+		if err != nil {
+			t.Fatalf("should not error without signature: %v", err)
+		}
+		if len(parts) != 1 || parts[0].FunctionCall == nil {
+			t.Fatalf("want 1 part, got %d", len(parts))
+		}
+	})
 }

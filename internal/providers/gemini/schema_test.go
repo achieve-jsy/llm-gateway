@@ -333,7 +333,7 @@ func TestToolCallThoughtSignatureRoundTrip(t *testing.T) {
 		if len(parts) != 1 || parts[0].FunctionCall == nil {
 			t.Fatalf("want 1 functionCall part, got %d", len(parts))
 		}
-		if got := parts[0].FunctionCall.ThoughtSignature; got != sig {
+		if got := parts[0].ThoughtSignatureWire; got != sig {
 			t.Fatalf("thought_signature not rebuilt in request: got=%q want=%q", got, sig)
 		}
 	})

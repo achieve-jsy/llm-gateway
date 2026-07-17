@@ -39,7 +39,11 @@ type geminiPart struct {
 	FunctionResponse    *geminiFunctionResponse `json:"functionResponse,omitempty"`
 	FunctionResponseAlt *geminiFunctionResponse `json:"function_response,omitempty"`
 	Thought             bool                    `json:"thought,omitempty"`
-	ThoughtSignature    string                  `json:"thoughtSignature,omitempty"`
+	// 响应侧：上游返回的 thoughtSignature（camelCase，base64 bytes）。
+	ThoughtSignature string `json:"thoughtSignature,omitempty"`
+	// 请求侧：回传 functionCall 时 Gemin 原生要求在 part 层面（与 functionCall
+	// 平级，而非 functionCall 内部）携带 snake_case thought_signature。
+	ThoughtSignatureWire string `json:"thought_signature,omitempty"`
 }
 
 func (p geminiPart) functionCall() *geminiFunctionCall {
@@ -63,9 +67,6 @@ type geminiFunctionCall struct {
 	ID   string          `json:"id,omitempty"`
 	Name string          `json:"name,omitempty"`
 	Args json.RawMessage `json:"args,omitempty"`
-	// 回传 functionCall 时 Gemini 原生要求 snake_case thought_signature
-	//（响应里是 camelCase thoughtSignature，但请求回传必须 snake_case）。
-	ThoughtSignature string `json:"thought_signature,omitempty"`
 }
 
 type geminiFunctionResponse struct {
@@ -203,15 +204,17 @@ func geminiPartsFromMessage(msg core.Message) ([]geminiPart, error) {
 				Name: call.Function.Name,
 				Args: args,
 			}
-			// 多轮工具回传：从 ExtraFields 取回上游返回的 thoughtSignature，
-			// 回传 functionCall 时携带，否则 Gemini 上游以 502 拒绝。
+			part := geminiPart{FunctionCall: fc}
+			// 多轮工具回传：从 ExtraFields 取回上游返回的 thoughtSignature。
+			// 回传时必须把它放在 part 层面（与 functionCall 平级）且用
+			// snake_case thought_signature，否则 Gemini 上游以 400/502 拒绝。
 			if sig := strings.TrimSpace(string(call.ExtraFields.Lookup("thought_signature"))); sig != "" {
 				var decoded string
 				if err := json.Unmarshal([]byte(sig), &decoded); err == nil && decoded != "" {
-					fc.ThoughtSignature = decoded
+					part.ThoughtSignatureWire = decoded
 				}
 			}
-			parts = append(parts, geminiPart{FunctionCall: fc})
+			parts = append(parts, part)
 		}
 		return parts, nil
 	}

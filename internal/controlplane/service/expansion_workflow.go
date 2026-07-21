@@ -437,24 +437,46 @@ func (s *ExpansionService) expansionNotifyObjectLabel(ctx context.Context, reque
 	return b.String()
 }
 
-// expansionNotifyBody 构造扩容审批通知正文：对象描述 + 额度变化 + 附加明细。
-func (s *ExpansionService) expansionNotifyBody(ctx context.Context, request *model.ExpansionRequest, detail string) string {
+// resolveUserName 解析 user_id 为可读姓名（用于通知展示申请人/审批人）。
+// 依赖 budgetSvc 的姓名解析能力；未配置、查不到或出错时返回空串，调用方应省略对应展示行。
+func (s *ExpansionService) resolveUserName(ctx context.Context, userID uuid.UUID) string {
+	if s.budgetSvc == nil || userID == uuid.Nil {
+		return ""
+	}
+	names, err := s.budgetSvc.ResolveUserNames([]string{userID.String()})
+	if err != nil || len(names) == 0 {
+		return ""
+	}
+	return names[userID.String()]
+}
+
+// expansionNotifyBody 构造扩容审批通知正文：结构化多行（对象/额度变化/明细/审批人/申请时间），
+// 便于站内信与邮件阅读。detail 为已带标签的附加说明（如「申请原因：…」「驳回意见：…」
+// 「生效失败原因：…」），为空则省略；requesterName/approverName 非空时附加「申请人/审批人」行。
+func (s *ExpansionService) expansionNotifyBody(ctx context.Context, request *model.ExpansionRequest, detail, requesterName, approverName string) string {
 	objectLabel := s.expansionNotifyObjectLabel(ctx, request)
 	var b strings.Builder
-	b.WriteString(objectLabel)
+	b.WriteString("申请对象：" + objectLabel)
+	if requesterName != "" {
+		b.WriteString("\n申请人：" + requesterName)
+	}
+	b.WriteString("\n额度变化：")
 	// 当前额度 > 0 时展示「当前上限 $X.XX」；为 0/负（该维度尚未配置额度）时提示未配置，
 	// 避免出现「当前上限 $0.000000」这类让审批人误以为是异常的展示。
 	if request.CurrentAmount > 0 {
-		b.WriteString("，当前上限 $")
-		b.WriteString(expansionNotifyAmount(decimal.NewFromFloat(request.CurrentAmount)))
+		b.WriteString("当前上限 $" + expansionNotifyAmount(decimal.NewFromFloat(request.CurrentAmount)))
 	} else {
-		b.WriteString("，当前未配置额度")
+		b.WriteString("当前未配置额度")
 	}
-	b.WriteString("，目标上限 $")
-	b.WriteString(expansionNotifyAmount(decimal.NewFromFloat(request.RequestedAmount)))
+	b.WriteString(" → 目标上限 $" + expansionNotifyAmount(decimal.NewFromFloat(request.RequestedAmount)))
 	if strings.TrimSpace(detail) != "" {
-		b.WriteString("。")
-		b.WriteString(strings.TrimSpace(detail))
+		b.WriteString("\n" + strings.TrimSpace(detail))
+	}
+	if approverName != "" {
+		b.WriteString("\n审批人：" + approverName)
+	}
+	if !request.CreatedAt.IsZero() {
+		b.WriteString("\n申请时间：" + request.CreatedAt.UTC().Format("2006-01-02 15:04") + " UTC")
 	}
 	return b.String()
 }
@@ -516,7 +538,7 @@ func (s *ExpansionService) rejectInTx(ctx context.Context, tx *gorm.DB, request 
 		return err
 	}
 	return enqueueExpansionNotificationInTx(tx, request, request.RequesterID, model.NotificationTypeExpansionRejected, "扩容申请已驳回",
-		s.expansionNotifyBody(ctx, request, "驳回意见："+comment), model.NotificationLevelWarning)
+		s.expansionNotifyBody(ctx, request, "驳回意见："+comment, "", s.resolveUserName(ctx, actorID)), model.NotificationLevelWarning)
 }
 
 func (s *ExpansionService) DecideWorkflow(
@@ -652,8 +674,10 @@ func (s *ExpansionService) applyNonApprovalDecision(
 				return err
 			}
 			for _, recipient := range recipients {
+				// 平台级申请的对象通常为 dept/studio，需附申请发起人姓名。
+				requesterName := s.resolveUserName(ctx, request.RequesterID)
 				if err := enqueueExpansionNotificationInTx(tx, &platformRequest, recipient, model.NotificationTypeExpansionSubmitted, "新的平台级扩容审批申请",
-					s.expansionNotifyBody(ctx, &platformRequest, "申请原因："+request.Reason), model.NotificationLevelInfo); err != nil {
+					s.expansionNotifyBody(ctx, &platformRequest, "申请原因："+request.Reason, requesterName, ""), model.NotificationLevelInfo); err != nil {
 					return err
 				}
 			}
@@ -668,7 +692,7 @@ func (s *ExpansionService) applyNonApprovalDecision(
 			title = "扩容申请已升级审批"
 		}
 		return enqueueExpansionNotificationInTx(tx, request, request.RequesterID, event, title,
-			s.expansionNotifyBody(ctx, request, "审批意见："+input.Comment), decisionLevel)
+			s.expansionNotifyBody(ctx, request, "审批意见："+input.Comment, "", s.resolveUserName(ctx, actorID)), decisionLevel)
 	})
 	if stale {
 		return nil, ErrPrecheckStale
@@ -816,7 +840,7 @@ func (s *ExpansionService) approveWorkflow(
 			return err
 		}
 		if err := enqueueExpansionNotificationInTx(tx, request, request.RequesterID, model.NotificationTypeExpansionApproved, "扩容申请已批准并生效",
-			s.expansionNotifyBody(ctx, request, "申请原因："+request.Reason), model.NotificationLevelInfo); err != nil {
+			s.expansionNotifyBody(ctx, request, "申请原因："+request.Reason, "", s.resolveUserName(ctx, actorID)), model.NotificationLevelInfo); err != nil {
 			return err
 		}
 		result.TargetType, result.TargetID, result.AppliedAt, result.SyncStatus = targetType, targetID, now, "pending"
@@ -841,7 +865,7 @@ func (s *ExpansionService) approveWorkflow(
 					return updateErr
 				}
 				return enqueueExpansionNotificationInTx(tx, candidate, candidate.RequesterID, model.NotificationTypeExpansionApplyFailed, "扩容申请生效失败",
-					s.expansionNotifyBody(ctx, candidate, "生效失败原因："+err.Error()), model.NotificationLevelCritical)
+					s.expansionNotifyBody(ctx, candidate, "生效失败原因："+err.Error(), "", ""), model.NotificationLevelCritical)
 			})
 			result.SyncStatus = "failed"
 			recordExpansionApply(ctx, string(candidate.DimensionType), string(candidate.DurationType), "sync_failed")

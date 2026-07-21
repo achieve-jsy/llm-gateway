@@ -474,8 +474,13 @@ func (s *ExpansionService) CreateRequestAdvanced(ctx context.Context, input Crea
 			return err
 		}
 		for _, recipient := range recipients {
+			// member 级申请的申请人即对象本人（对象行首段已含姓名），非 member 级再附申请人行。
+			requesterName := ""
+			if request.ScopeType != model.BudgetScopeMember {
+				requesterName = s.resolveUserName(ctx, request.RequesterID)
+			}
 			if err := enqueueExpansionNotificationInTx(tx, request, recipient, model.NotificationTypeExpansionSubmitted, "新的扩容审批申请",
-				s.expansionNotifyBody(ctx, request, "申请原因："+request.Reason), model.NotificationLevelInfo); err != nil {
+				s.expansionNotifyBody(ctx, request, "申请原因："+request.Reason, requesterName, ""), model.NotificationLevelInfo); err != nil {
 				return err
 			}
 		}

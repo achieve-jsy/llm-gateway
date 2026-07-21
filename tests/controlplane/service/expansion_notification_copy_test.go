@@ -68,7 +68,7 @@ func TestExpansionSubmitNotificationIsChineseAndInfo(t *testing.T) {
 	request, err := svc.CreateRequestAdvanced(context.Background(), service.CreateExpansionRequestInput{
 		ScopeType: model.BudgetScopeMember, ScopeID: requesterID.String(), RequesterID: requesterID,
 		PeriodType: budgetdomain.PeriodMonthly, DimensionType: budgetdomain.DimensionTotal,
-		DurationType: budgetdomain.DurationPermanent,
+		DurationType:  budgetdomain.DurationPermanent,
 		CurrentAmount: 80, RequestedAmount: 120, Reason: "研发需要更大额度",
 	})
 	require.NoError(t, err)
@@ -91,6 +91,7 @@ func TestExpansionRejectNotificationIsChineseAndWarning(t *testing.T) {
 	db, svc := newExpansionApprovalFixture(t)
 	requestID, requesterID := uuid.New(), uuid.New()
 	seedApprovalChain(t, db, requesterID)
+	seedApproverName(t, db)
 	require.NoError(t, db.Exec(`INSERT INTO budget_allocations
 		(id,scope_type,scope_id,amount_usd,daily_amount_usd,weekly_amount_usd,period,enabled)
 		VALUES (?,?,?,?,?,?,?,?)`,
@@ -109,7 +110,7 @@ func TestExpansionRejectNotificationIsChineseAndWarning(t *testing.T) {
 		Status: model.ExpansionStatusPending, CurrentLevel: model.ExpansionLevelDept,
 	}).Error)
 
-	_, err = svc.DecideWorkflow(context.Background(), requestID.String(), uuid.New(), service.DecisionInput{
+	_, err = svc.DecideWorkflow(context.Background(), requestID.String(), approverUUID(), service.DecisionInput{
 		Action: model.ExpansionActionReject, Comment: "不符合当前预算规划", PrecheckVersion: precheck.PrecheckVersion,
 	})
 	require.NoError(t, err)
@@ -121,6 +122,19 @@ func TestExpansionRejectNotificationIsChineseAndWarning(t *testing.T) {
 	require.Equal(t, "扩容申请已驳回", row.Title)
 	requireChineseBody(t, row.Content, "当前未配置额度", "不符合当前预算规划")
 	require.Contains(t, row.Content, "审批意见：不符合当前预算规划")
+	require.Contains(t, row.Content, "审批人：测试审批人")
+}
+
+// approverUUID 返回一个固定的审批人 user id；配合 seedApproverName 在 users 表中预置姓名，
+// 用于验证通过/驳回通知正文中的「审批人」行。
+func approverUUID() uuid.UUID {
+	return uuid.MustParse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeee0001")
+}
+
+func seedApproverName(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	require.NoError(t, db.Exec(`INSERT INTO users(id,dept_id,name) VALUES (?,?,?)`,
+		approverUUID().String(), "dept-approver", "测试审批人").Error)
 }
 
 // TestExpansionApplyFailedNotificationIsChineseAndCritical 审批通过但配置发布失败时，

@@ -143,6 +143,18 @@ func (s *BudgetService) MapMemberDeptIDs(memberIDs []string) (map[string]string,
 	return mapper.MapMemberDeptIDs(memberIDs)
 }
 
+// ResolveUserNames 批量将 user_id 解析为姓名（审批通知展示申请人/审批人用）。
+// repo 不支持时返回空 map，调用方应容忍并回退。
+func (s *BudgetService) ResolveUserNames(userIDs []string) (map[string]string, error) {
+	resolver, ok := s.repo.(interface {
+		ResolveUserNames([]string) (map[string]string, error)
+	})
+	if !ok {
+		return map[string]string{}, nil
+	}
+	return resolver.ResolveUserNames(userIDs)
+}
+
 func (s *BudgetService) ResolveMyBudgetChain(ctx context.Context, userID string) ([]repository.MyBudgetScopeAllocation, error) {
 	reader, ok := s.repo.(interface {
 		ResolveMyBudgetChain(context.Context, string) ([]repository.MyBudgetScopeAllocation, error)
@@ -356,7 +368,7 @@ func (s *BudgetService) AdjustBudget(
 			DimensionType: budgetdomain.DimensionTotal, DimensionKey: "total",
 			PeriodType: input.PeriodType, TargetLimitUSD: input.TargetLimitUSD,
 			ScheduleOperation: budgetdomain.ScheduleOperationSet,
-			EffectiveAt: window.ResetAt, Reason: input.Reason, CreatedBy: input.ActorID,
+			EffectiveAt:       window.ResetAt, Reason: input.Reason, CreatedBy: input.ActorID,
 			Status: budgetdomain.SchedulePending,
 		}
 		if _, err := s.scheduler.PutPendingSchedule(ctx, schedule, input.ConfirmReplaceSchedule); err != nil {

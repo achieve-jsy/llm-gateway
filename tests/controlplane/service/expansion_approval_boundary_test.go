@@ -82,7 +82,7 @@ func newExpansionApprovalFixture(t *testing.T) (*gorm.DB, *service.ExpansionServ
 		`CREATE TABLE studios (id text primary key, name text)`,
 		`CREATE TABLE departments (id text primary key, dept_id text, dept_name text, studio_id text)`,
 		`CREATE TABLE dept_studio_map (dept_id text, studio_id text)`,
-		`CREATE TABLE users (id text primary key, dept_id text)`,
+		`CREATE TABLE users (id text primary key, dept_id text, name text)`,
 		`CREATE TABLE model_groups (id text primary key, name text, budget_tier_id text, deleted_at datetime)`,
 		`CREATE TABLE model_tiers (
 			id text primary key, name text, description text, color text, sort_order integer,

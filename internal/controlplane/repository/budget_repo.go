@@ -1010,3 +1010,25 @@ func (r *BudgetRepo) ResolveScopeNames(scopeType string, scopeIDs []string) (map
 
 	return result, nil
 }
+
+// ResolveUserNames 批量将 user_id 解析为可读姓名（用于审批通知展示申请人/审批人）。
+// 找不到或匿名的用户回退为 id 本身，调用方应容忍缺失。
+func (r *BudgetRepo) ResolveUserNames(userIDs []string) (map[string]string, error) {
+	if len(userIDs) == 0 {
+		return map[string]string{}, nil
+	}
+	var rows []struct {
+		ID   string `gorm:"column:id"`
+		Name string `gorm:"column:name"`
+	}
+	// 注：users.id 在生产为 uuid、测试 sqlite 为 text，均可用等值匹配，避免 ::text cast 的方言差异。
+	err := r.db.Raw(`SELECT id AS id, COALESCE(name, id) AS name FROM users WHERE id IN ?`, userIDs).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]string, len(rows))
+	for _, row := range rows {
+		result[row.ID] = row.Name
+	}
+	return result, nil
+}

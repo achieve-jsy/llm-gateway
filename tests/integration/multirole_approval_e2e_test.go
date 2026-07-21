@@ -30,6 +30,22 @@ func TestMultiRoleApprovalE2E(t *testing.T) {
 	managerToken := loginDevUser(t, fixture.managerUsername, fixture.password)
 	deptBOwnerToken := loginDevUser(t, fixture.deptBOwnerUsername, fixture.password)
 
+	// 双角色负责人查看授权列表：服务端必须在其可见范围内完成搜索、角色筛选和分页。
+	roleList := doRequest(t, http.MethodGet,
+		cpURL()+"/api/v1/org/all-roles?role=dept_admin&keyword=E2E%20Manager&page=1&page_size=1",
+		authHeader(managerToken), nil)
+	require.Equal(t, http.StatusOK, roleList.Status, roleList.Raw)
+	require.Equal(t, float64(1), roleList.Body["total"])
+	require.Equal(t, float64(1), roleList.Body["page"])
+	require.Equal(t, float64(1), roleList.Body["page_size"])
+	roleItems, ok := roleList.Body["roles"].([]any)
+	require.True(t, ok)
+	require.Len(t, roleItems, 1)
+	require.Equal(t, fixture.managerID.String(), requiredString(t, nestedMap(t, roleItems[0])["user_id"]))
+	roleCounts := nestedMap(t, roleList.Body["role_counts"])
+	require.Equal(t, float64(1), roleCounts["studio_admin"])
+	require.Equal(t, float64(2), roleCounts["dept_admin"])
+
 	// 两个部门成员分别发起 Key 创建申请。双角色负责人应在一个待审列表中看到两条。
 	keyRequestA := createKeyRequest(t, memberAToken, fixture.runID+"-key-a")
 	keyRequestB := createKeyRequest(t, memberBToken, fixture.runID+"-key-b")

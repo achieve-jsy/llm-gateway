@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/example/llm-gateway/internal/orgservice/model"
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
@@ -121,15 +122,31 @@ func (h *OrgHandler) SearchUsers(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"users": users})
 }
 
-// ListAllRoles GET /api/v1/org/all-roles — 列出管理角色，按 actor 数据范围过滤
+// ListAllRoles GET /api/v1/org/all-roles — 列出管理角色，支持服务端搜索、角色筛选和分页。
 func (h *OrgHandler) ListAllRoles(c *gin.Context) {
 	actor := rbac.GetActor(c)
-	roles, err := h.roleRepo.ListManagementRolesByActor(h.orgPolicy.RoleListScope(actor))
+	page, pageSize := parsePagination(c)
+	scope := h.orgPolicy.RoleListScope(actor)
+	roles, total, err := h.roleRepo.ListManagementRolesByActorPaged(scope, repository.RoleListFilter{
+		Keyword: strings.TrimSpace(c.Query("keyword")),
+		Role:    strings.TrimSpace(c.Query("role")),
+	}, page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, errorResp("internal_error", err.Error(), "internal"))
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"roles": roles})
+	counts, err := h.roleRepo.ListManagementRoleCountsByActor(scope)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, errorResp("internal_error", err.Error(), "internal"))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"roles":       roles,
+		"total":       total,
+		"page":        page,
+		"page_size":   pageSize,
+		"role_counts": counts,
+	})
 }
 
 // GetDeptMembers GET /api/v1/org/departments/:dept_id/members

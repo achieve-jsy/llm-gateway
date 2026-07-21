@@ -582,6 +582,27 @@
       }
     ]
   },
+  "organization_roles": {
+    "base_prefix": "/api/v1/org",
+    "auth": "Bearer <jwt> + org:role:list",
+    "purpose": "在当前操作者可见范围内检索和分页展示管理角色授权，不泄露范围外角色或统计。",
+    "routes": {
+      "GET /all-roles": {
+        "handler": "OrgHandler.ListAllRoles",
+        "query_params_optional": ["keyword", "role", "page", "page_size"],
+        "response_status": [200, 401, 403, 500],
+        "response_fields": ["roles", "total", "page", "page_size", "role_counts"],
+        "response_row_fields": ["id", "user_id", "user_name", "email", "dept_name", "role", "scope_type", "scope_id", "granted_by", "created_at"],
+        "role_counts_fields": ["admin", "studio_admin", "dept_admin"]
+      }
+    },
+    "semantics": {
+      "keyword": "匹配人员姓名、邮箱、所在部门、角色或管辖范围 ID；搜索在服务端、授权范围过滤后执行。",
+      "role": "可选值 admin | studio_admin | dept_admin；未传时返回所有可见管理角色。",
+      "pagination": "page 默认为 1，page_size 默认为 20，最大 100；total 是应用授权范围和筛选后的总数。",
+      "role_counts": "统计当前操作者完整可见范围内的角色数，不随 keyword 或 role 筛选变化。"
+    }
+  },
   "batch_register_models": {
     "base_prefix": "/api/v1",
     "auth": "admin Bearer <jwt>",

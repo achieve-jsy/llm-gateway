@@ -38,6 +38,27 @@ export interface RoleWithUser {
   created_at: string
 }
 
+export interface RoleListQuery {
+  page?: number
+  pageSize?: number
+  keyword?: string
+  role?: string
+}
+
+export interface RoleListCounts {
+  admin: number
+  studioAdmin: number
+  deptAdmin: number
+}
+
+export interface RoleListResult {
+  roles: RoleWithUser[]
+  total: number
+  page: number
+  pageSize: number
+  roleCounts: RoleListCounts
+}
+
 export const useOrgStore = defineStore('org', () => {
   const studios = ref<Studio[]>([])
   const departments = ref<OrgDepartment[]>([])
@@ -109,9 +130,37 @@ export const useOrgStore = defineStore('org', () => {
     return res.data.users || []
   }
 
+  async function fetchRolePage(query: RoleListQuery = {}): Promise<RoleListResult> {
+    const page = query.page ?? 1
+    const pageSize = query.pageSize ?? 20
+    const params: Record<string, any> = { page, page_size: pageSize }
+    if (query.keyword?.trim()) params.keyword = query.keyword.trim()
+    if (query.role) params.role = query.role
+    const res = await http.get('/api/v1/org/all-roles', { params })
+    const counts = res.data.role_counts || {}
+    return {
+      roles: res.data.roles || [],
+      total: Number(res.data.total || 0),
+      page: Number(res.data.page || page),
+      pageSize: Number(res.data.page_size || pageSize),
+      roleCounts: {
+        admin: Number(counts.admin || 0),
+        studioAdmin: Number(counts.studio_admin || 0),
+        deptAdmin: Number(counts.dept_admin || 0),
+      },
+    }
+  }
+
+  // 保持组织树和工作室视图的全量角色读取语义；角色管理页使用 fetchRolePage。
   async function fetchAllRoles(): Promise<RoleWithUser[]> {
-    const res = await http.get('/api/v1/org/all-roles')
-    return res.data.roles || []
+    const first = await fetchRolePage({ page: 1, pageSize: 100 })
+    const roles = [...first.roles]
+    for (let page = 2; roles.length < first.total; page += 1) {
+      const next = await fetchRolePage({ page, pageSize: 100 })
+      roles.push(...next.roles)
+      if (next.roles.length === 0) break
+    }
+    return roles
   }
 
   async function grantRole(userID: string, role: string, scopeType: string, scopeID: string) {
@@ -145,7 +194,7 @@ export const useOrgStore = defineStore('org', () => {
     studios, departments, unmappedDepts, unmappedCount, loading,
     fetchStudios, fetchDepartments, fetchUnmapped, fetchMappings,
     importMappings, setDeptStudio, createStudio, deleteStudio,
-    fetchDeptMembers, searchUsers, fetchAllRoles, grantRole, revokeRole, getUserRoles,
+    fetchDeptMembers, searchUsers, fetchRolePage, fetchAllRoles, grantRole, revokeRole, getUserRoles,
     changeUserDept, followSSO,
   }
 })

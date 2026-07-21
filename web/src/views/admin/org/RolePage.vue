@@ -45,18 +45,35 @@
     <!-- 角色列表 -->
     <el-card shadow="never" v-loading="loading">
       <template #header>
-        <div style="display:flex; justify-content:space-between; align-items:center">
-          <span>当前授权列表</span>
-          <el-radio-group v-model="filterRole" size="small" @change="applyFilter">
-            <el-radio-button value="">全部</el-radio-button>
-            <el-radio-button value="admin">管理员</el-radio-button>
-            <el-radio-button value="studio_admin">工作室负责人</el-radio-button>
-            <el-radio-button value="dept_admin">部门负责人</el-radio-button>
-          </el-radio-group>
+        <div class="role-list-toolbar">
+          <div class="role-list-title">
+            <span>当前授权列表</span>
+            <span v-if="roleTotal > 0" class="role-total">{{ roleTotal }} 条授权</span>
+          </div>
+          <div class="role-list-controls">
+            <el-input
+              v-model="roleKeyword"
+              data-test="role-search"
+              placeholder="搜索人员、部门或范围"
+              clearable
+              class="role-search"
+              @input="onRoleSearchInput"
+              @keyup.enter="triggerRoleSearch"
+              @clear="triggerRoleSearch"
+            >
+              <template #prefix><el-icon><Search /></el-icon></template>
+            </el-input>
+            <el-radio-group v-model="filterRole" size="small" @change="applyFilter">
+              <el-radio-button value="">全部</el-radio-button>
+              <el-radio-button value="admin">管理员</el-radio-button>
+              <el-radio-button value="studio_admin">工作室负责人</el-radio-button>
+              <el-radio-button value="dept_admin">部门负责人</el-radio-button>
+            </el-radio-group>
+          </div>
         </div>
       </template>
 
-      <el-table :data="filteredRoles" stripe>
+      <el-table :data="roles" stripe>
         <!-- 人员信息 -->
         <el-table-column label="人员" min-width="180">
           <template #default="{ row }">
@@ -120,8 +137,21 @@
         </el-table-column>
       </el-table>
 
-      <div v-if="!loading && filteredRoles.length === 0" class="empty-tip">
-        暂无授权记录
+      <div v-if="!loading && roles.length === 0" class="empty-tip">
+        {{ roleKeyword || filterRole ? '未找到匹配的授权记录' : '暂无授权记录' }}
+      </div>
+
+      <div v-if="roleTotal > rolePageSize" class="role-pagination">
+        <el-pagination
+          v-model:current-page="rolePage"
+          v-model:page-size="rolePageSize"
+          :page-sizes="[20, 50, 100]"
+          :total="roleTotal"
+          layout="total, sizes, prev, pager, next, jumper"
+          size="small"
+          @current-change="loadRoles"
+          @size-change="onRolePageSizeChange"
+        />
       </div>
     </el-card>
 
@@ -233,7 +263,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, UserFilled, OfficeBuilding, Folder, Search } from '@element-plus/icons-vue'
 import { useOrgStore } from '@/stores/org'
@@ -244,13 +274,15 @@ const orgStore = useOrgStore()
 const loading = ref(false)
 const roles = ref<RoleWithUser[]>([])
 const filterRole = ref('')
-const filteredRoles = computed(() =>
-  filterRole.value ? roles.value.filter(r => r.role === filterRole.value) : roles.value
-)
+const roleKeyword = ref('')
+const rolePage = ref(1)
+const rolePageSize = ref(20)
+const roleTotal = ref(0)
+const roleCounts = ref({ admin: 0, studioAdmin: 0, deptAdmin: 0 })
 
-const adminCount = computed(() => roles.value.filter(r => r.role === 'admin').length)
-const studioAdminCount = computed(() => roles.value.filter(r => r.role === 'studio_admin').length)
-const deptAdminCount = computed(() => roles.value.filter(r => r.role === 'dept_admin').length)
+const adminCount = computed(() => roleCounts.value.admin)
+const studioAdminCount = computed(() => roleCounts.value.studioAdmin)
+const deptAdminCount = computed(() => roleCounts.value.deptAdmin)
 
 // ─── 授权弹窗 ─────────────────────────────────────────────────────────────────
 const grantDialogVisible = ref(false)
@@ -357,12 +389,47 @@ function formatDate(str: string) {
   return str.slice(0, 10)
 }
 
-function applyFilter() { /* filteredRoles computed 自动响应 */ }
+let roleSearchTimer: ReturnType<typeof setTimeout> | null = null
+
+function onRoleSearchInput() {
+  if (roleSearchTimer) clearTimeout(roleSearchTimer)
+  roleSearchTimer = setTimeout(triggerRoleSearch, 280)
+}
+
+function triggerRoleSearch() {
+  if (roleSearchTimer) {
+    clearTimeout(roleSearchTimer)
+    roleSearchTimer = null
+  }
+  rolePage.value = 1
+  void loadRoles()
+}
+
+function applyFilter() {
+  rolePage.value = 1
+  void loadRoles()
+}
+
+function onRolePageSizeChange(size: number) {
+  rolePageSize.value = size
+  rolePage.value = 1
+  void loadRoles()
+}
 
 async function loadRoles() {
   loading.value = true
   try {
-    roles.value = await orgStore.fetchAllRoles()
+    const result = await orgStore.fetchRolePage({
+      page: rolePage.value,
+      pageSize: rolePageSize.value,
+      keyword: roleKeyword.value,
+      role: filterRole.value,
+    })
+    roles.value = result.roles
+    roleTotal.value = result.total
+    rolePage.value = result.page
+    rolePageSize.value = result.pageSize
+    roleCounts.value = result.roleCounts
   } finally {
     loading.value = false
   }
@@ -401,6 +468,13 @@ onMounted(async () => {
 .stat-icon { opacity: .7; flex-shrink: 0; }
 .stat-num { font-size: 24px; font-weight: 700; line-height: 1; }
 .stat-label { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 2px; }
+
+.role-list-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.role-list-title { display: flex; align-items: baseline; gap: 8px; font-weight: 600; }
+.role-total { color: var(--el-text-color-secondary); font-size: 12px; font-weight: 400; }
+.role-list-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.role-search { width: 240px; }
+.role-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
 
 /* 表格人员列 */
 .user-cell { display: flex; align-items: center; gap: 10px; }
@@ -479,5 +553,7 @@ onMounted(async () => {
 @media (max-width: 640px) {
   /* 窄屏统计卡片纵向排列由 el-row gutter 控制，无需额外处理 */
   .stat-num { font-size: 20px; }
+  .role-list-controls, .role-search { width: 100%; }
+  .role-pagination { justify-content: center; overflow-x: auto; }
 }
 </style>

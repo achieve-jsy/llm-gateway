@@ -87,6 +87,25 @@ func TestBuildActor_UserRolesAdminRow_WithoutClaim_IsGlobal(t *testing.T) {
 	require.True(t, actor.IsGlobal)
 }
 
+// 平台负责人同时兼任部门负责人时，平台权限不能吞掉部门职责。
+// 部门级扩容待办依赖 DeptAdminIDs 过滤；若 admin 提前返回，该用户会漏掉直属部门成员申请。
+func TestBuildActor_AdminAndDeptAdminPreservesDirectDepartmentScope(t *testing.T) {
+	ch := newChecker(t, func(db *gorm.DB) {
+		require.NoError(t, db.Exec(`
+			INSERT INTO user_roles (user_id, role, scope_type, scope_id, granted_by) VALUES
+			('u-platform-dept', 'admin', 'company', '', 'system:bootstrap'),
+			('u-platform-dept', 'dept_admin', 'dept', 'dept-xlab', 'admin')
+		`).Error)
+	})
+
+	actor := buildActor(t, ch, "u-platform-dept", "admin")
+
+	require.True(t, actor.IsGlobal)
+	require.ElementsMatch(t, []string{"admin", "dept_admin"}, actor.Roles)
+	require.Equal(t, []string{"dept-xlab"}, actor.DeptAdminIDs)
+	require.Equal(t, []string{"dept-xlab"}, actor.ApprovalDeptIDs)
+}
+
 // JWT claim=admin 不能把 dept_admin 提升为全局：权限严格以 user_roles 记录为准。
 func TestBuildActor_ClaimAdminCannotEscalateDeptAdmin(t *testing.T) {
 	ch := newChecker(t, func(db *gorm.DB) {

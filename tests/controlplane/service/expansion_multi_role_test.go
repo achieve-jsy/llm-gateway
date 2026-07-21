@@ -226,6 +226,70 @@ func TestMultiRoleActorStdioScopeDoesNotBleedUnrelatedMember(t *testing.T) {
 	require.ErrorIs(t, err, service.ErrExpansionForbidden, "其他部门的 dept 级申请流水不应泄露")
 }
 
+// TestPlatformAndDeptAdminSeesBothPlatformAndDirectDeptPending 验证平台负责人兼任部门负责人时，
+// 平台级待办与直属部门成员的部门级待办必须合并显示。平台角色不能吞掉其部门负责人职责。
+func TestPlatformAndDeptAdminSeesBothPlatformAndDirectDeptPending(t *testing.T) {
+	db, svc := newMultiRoleExpansionFixture(t)
+	managerID := uuid.New()
+	memberID := uuid.New()
+	deptID := "dept-xlab"
+	studioID := uuid.NewString()
+
+	require.NoError(t, db.Exec(`INSERT INTO studios(id,name) VALUES (?,?)`, studioID, "技术研究工作室").Error)
+	require.NoError(t, db.Exec(`INSERT INTO departments(id,dept_id,dept_name,studio_id) VALUES ('dept-row',?,?,?)`, deptID, "X-Lab", studioID).Error)
+	require.NoError(t, db.Exec(`INSERT INTO users(id,dept_id) VALUES (?,'dept-row')`, memberID.String()).Error)
+	for _, row := range []struct{ scopeType, scopeID string }{
+		{model.BudgetScopeMember, memberID.String()},
+		{model.BudgetScopeDeptDaily, deptID},
+		{model.BudgetScopeStudio, studioID},
+		{model.BudgetScopeCompany, model.BudgetScopeGlobal},
+	} {
+		require.NoError(t, db.Exec(`INSERT INTO budget_allocations
+			(id,scope_type,scope_id,amount_usd,daily_amount_usd,weekly_amount_usd,period,enabled)
+			VALUES (?,?,?,?,?,?,?,?)`, uuid.New(), row.scopeType, row.scopeID, 1000, 1000, 1000, "monthly", true).Error)
+	}
+	svc.SetMemberResolver(memberResolverFunc(func(id string) ([]string, error) {
+		if id == deptID {
+			return []string{memberID.String()}, nil
+		}
+		return nil, nil
+	}))
+
+	now := time.Now().UTC()
+	deptRequest := &model.ExpansionRequest{
+		ID: uuid.New(), ScopeType: model.BudgetScopeMember, ScopeID: memberID.String(),
+		RequesterID: memberID, PeriodType: string(budgetdomain.PeriodMonthly),
+		DimensionType: budgetdomain.DimensionTotal, DimensionKey: "total",
+		DurationType: budgetdomain.DurationPermanent, Priority: model.ExpansionPriorityNormal,
+		RequestedAmount: 200, Status: model.ExpansionStatusPending,
+		CurrentLevel: model.ExpansionLevelDept, CreatedAt: now, UpdatedAt: now,
+	}
+	platformRequest := &model.ExpansionRequest{
+		ID: uuid.New(), ScopeType: model.BudgetScopeStudio, ScopeID: studioID,
+		RequesterID: memberID, PeriodType: string(budgetdomain.PeriodMonthly),
+		DimensionType: budgetdomain.DimensionTotal, DimensionKey: "total",
+		DurationType: budgetdomain.DurationPermanent, Priority: model.ExpansionPriorityNormal,
+		RequestedAmount: 2000, Status: model.ExpansionStatusPending,
+		CurrentLevel: model.ExpansionLevelPlatform, CreatedAt: now.Add(time.Second), UpdatedAt: now,
+	}
+	require.NoError(t, db.Create(deptRequest).Error)
+	require.NoError(t, db.Create(platformRequest).Error)
+
+	items, err := svc.ListPendingForActorScopedFiltered(context.Background(), service.ActorScope{
+		UserID: managerID.String(), Role: "admin", IsGlobal: true,
+		Roles: []string{"admin", "dept_admin"}, DeptAdminIDs: []string{deptID}, DeptIDs: []string{deptID},
+	}, repository.ExpansionListFilter{})
+
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	found := map[string]bool{}
+	for _, item := range items {
+		found[item.ID.String()] = true
+	}
+	require.True(t, found[deptRequest.ID.String()])
+	require.True(t, found[platformRequest.ID.String()])
+}
+
 // TestStudioEscalationCreatesPlatformNotificationForDualRoleAdmin 验证同一用户既是
 // 工作室负责人又是平台管理员时，工作室申请升级到平台仍会创建新的平台待办。
 // 待办去重必须包含审批层级，不能让旧的工作室待办吞掉平台待办。

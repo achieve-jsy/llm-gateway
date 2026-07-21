@@ -757,21 +757,21 @@ func (s *ExpansionService) ListPendingScopedFiltered(ctx context.Context, level 
 //   - studio_admin     → studio 级（按管辖部门 + 工作室过滤）
 //   - dept+studio 双角色 → dept 级与 studio 级取并集去重
 func (s *ExpansionService) ListPendingForActorScopedFiltered(ctx context.Context, actor ActorScope, filter repository.ExpansionListFilter) ([]model.ExpansionRequest, error) {
-	if actor.IsGlobal || containsString(actor.Roles, "admin") {
-		return s.repo.ListPendingForApproverScopedFiltered(model.ExpansionLevelPlatform, nil, nil, nil, filter)
-	}
-
 	// 先按角色展开需要哪些审批级别；无角色信息时回退到兼容行为。
-	levels := make([]string, 0, 2)
+	levels := make([]string, 0, 3)
+	hasAdmin := actor.IsGlobal || containsString(actor.Roles, "admin")
 	hasDept := containsString(actor.Roles, "dept_admin")
 	hasStudio := containsString(actor.Roles, "studio_admin")
-	if !hasDept && !hasStudio {
+	if !hasAdmin && !hasDept && !hasStudio {
 		// 兼容旧的单角色 ActorScope：有工作室 => studio，否则 dept。
 		if len(actor.StudioIDs) > 0 {
 			hasStudio = true
 		} else if len(actor.DeptIDs) > 0 {
 			hasDept = true
 		}
+	}
+	if hasAdmin {
+		levels = append(levels, model.ExpansionLevelPlatform)
 	}
 	if hasDept {
 		levels = append(levels, model.ExpansionLevelDept)
@@ -787,6 +787,12 @@ func (s *ExpansionService) ListPendingForActorScopedFiltered(ctx context.Context
 	result := make([]model.ExpansionRequest, 0)
 	for _, level := range levels {
 		switch level {
+		case model.ExpansionLevelPlatform:
+			items, err := s.repo.ListPendingForApproverScopedFiltered(level, nil, nil, nil, filter)
+			if err != nil {
+				return nil, err
+			}
+			result = appendUniqueRequests(result, items, seen)
 		case model.ExpansionLevelDept:
 			// dept 级精确限定在 dept_admin 直管部门，避免工作室展开部门越权。
 			deptAdminIDs := actor.DeptAdminIDs

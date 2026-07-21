@@ -43,8 +43,10 @@ func (ch *Checker) buildActor(c *gin.Context) Actor {
 	for _, r := range rows {
 		switch r.Role {
 		case "admin":
-			// user_roles 中存在 admin 记录 → 全局权限
-			return Actor{UserID: userID, IsGlobal: true, Roles: []string{"admin"}}
+			// 平台权限不应吞掉同一用户额外持有的部门/工作室职责。
+			// 例如平台负责人兼任部门负责人时，仍需处理该部门的部门级审批待办。
+			actor.IsGlobal = true
+			actor.Roles = appendUniq(actor.Roles, "admin")
 		case "studio_admin":
 			actor.StudioIDs = appendUniq(actor.StudioIDs, r.ScopeID)
 			actor.Roles = appendUniq(actor.Roles, "studio_admin")

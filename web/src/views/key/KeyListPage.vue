@@ -722,7 +722,8 @@ const hasMultiTab = computed(() => {
 
 const historyDisplayTotal = computed(() => historyTotal.value)
 
-const canManageDeptPolicy = computed(() => authStore.effectiveRole === 'dept_admin' && !!currentDeptId.value)
+// 仅直接部门负责人可以读取/修改部门 Key 审批策略；普通成员只读取公开创建策略。
+const canManageDeptPolicy = computed(() => authStore.departmentAdminRoles.length > 0 && !!currentDeptId.value)
 
 const policyDeptName = computed(() => {
   if (authStore.user?.departmentName) return authStore.user.departmentName
@@ -1014,11 +1015,11 @@ function onAppSubmitted() {
 
 function getJwtDeptId(): string { try { const t = localStorage.getItem('access_token'); if(!t) return ''; const p = t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'); return JSON.parse(decodeURIComponent(atob(p).split('').map(c=>'%'+('00'+c.charCodeAt(0).toString(16)).slice(-2)).join(''))).dept_id||'' } catch { return '' } }
 async function loadPolicy() {
-  await authStore.fetchOrgRoles().catch(() => {})
-  const id = resolvePolicyDeptId()
-  currentDeptId.value = id
-  if (!id) return
-  try {
+	await authStore.fetchOrgRoles().catch(() => {})
+	const id = resolvePolicyDeptId()
+	currentDeptId.value = id
+	if (!canManageDeptPolicy.value) return
+	try {
     const r = await getDeptKeyCreationPolicy(id)
     deptPolicy.value = (r.key_creation_policy as 'free' | 'approval') || 'free'
   } catch {
@@ -1191,8 +1192,8 @@ onMounted(async () => {
 })
 watch(() => authStore.isManager, (v) => { if (v) refreshPendingCounts() })
 watch(() => authStore.effectiveRole, (role) => {
-  if (!role || !['admin', 'studio_admin', 'dept_admin'].includes(role)) return
-  if (role === 'dept_admin') loadPolicy()
+	if (!role || !['admin', 'studio_admin', 'dept_admin'].includes(role)) return
+	if (authStore.departmentAdminRoles.length > 0) loadPolicy()
   if (activeTab.value === 'approval') {
     if (approvalSub.value === 'pending') loadPending()
     else void Promise.all([refreshPendingCounts(), loadHistory()])

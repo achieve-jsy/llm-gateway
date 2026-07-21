@@ -442,15 +442,29 @@ func (s *ExpansionService) expansionNotifyBody(ctx context.Context, request *mod
 	objectLabel := s.expansionNotifyObjectLabel(ctx, request)
 	var b strings.Builder
 	b.WriteString(objectLabel)
-	b.WriteString("，当前上限 $")
-	b.WriteString(fixedAmount(decimal.NewFromFloat(request.CurrentAmount)))
+	// 当前额度 > 0 时展示「当前上限 $X.XX」；为 0/负（该维度尚未配置额度）时提示未配置，
+	// 避免出现「当前上限 $0.000000」这类让审批人误以为是异常的展示。
+	if request.CurrentAmount > 0 {
+		b.WriteString("，当前上限 $")
+		b.WriteString(expansionNotifyAmount(decimal.NewFromFloat(request.CurrentAmount)))
+	} else {
+		b.WriteString("，当前未配置额度")
+	}
 	b.WriteString("，目标上限 $")
-	b.WriteString(fixedAmount(decimal.NewFromFloat(request.RequestedAmount)))
+	b.WriteString(expansionNotifyAmount(decimal.NewFromFloat(request.RequestedAmount)))
 	if strings.TrimSpace(detail) != "" {
 		b.WriteString("。")
 		b.WriteString(strings.TrimSpace(detail))
 	}
 	return b.String()
+}
+
+// expansionNotifyAmount 金额以 2 位小数展示，避免邮件正文出现 $400.000000 这类 6 位小数噪音。
+func expansionNotifyAmount(value decimal.Decimal) string {
+	if value.IsNegative() {
+		value = decimal.Zero
+	}
+	return value.Round(2).StringFixed(2)
 }
 
 func ensureRequestAllocationInTx(ctx context.Context, tx *gorm.DB, request *model.ExpansionRequest, actorID uuid.UUID) error {

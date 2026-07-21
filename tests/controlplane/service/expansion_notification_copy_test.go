@@ -46,9 +46,10 @@ func (failingSnapshotPublisher) MarkDirtyAndPublish(context.Context) error {
 }
 
 // requireChineseBody 校验通知正文为面向用户的中文链路文案：含对象/维度/周期描述与金额。
-func requireChineseBody(t *testing.T, content, wantDetail string) {
+// wantCurrent 为当前额度段的期望文案片段：current>0 时是「当前上限 $X.XX」，current=0 时是「当前未配置额度」。
+func requireChineseBody(t *testing.T, content, wantCurrent, wantDetail string) {
 	t.Helper()
-	require.Contains(t, content, "当前上限 $")
+	require.Contains(t, content, wantCurrent)
 	require.Contains(t, content, "目标上限 $")
 	require.Contains(t, content, "额度")
 	require.Contains(t, content, "月额度")
@@ -80,7 +81,7 @@ func TestExpansionSubmitNotificationIsChineseAndInfo(t *testing.T) {
 	require.Equal(t, "新的扩容审批申请", row.Title)
 	require.NotEmpty(t, row.RefID)
 	require.Equal(t, request.ID.String(), row.RefID)
-	requireChineseBody(t, row.Content, "申请原因")
+	requireChineseBody(t, row.Content, "当前上限 $80.00", "申请原因")
 	require.Contains(t, row.Content, "研发需要更大额度")
 }
 
@@ -118,7 +119,7 @@ func TestExpansionRejectNotificationIsChineseAndWarning(t *testing.T) {
 		First(&row).Error)
 	require.Equal(t, model.NotificationLevelWarning, row.Level)
 	require.Equal(t, "扩容申请已驳回", row.Title)
-	requireChineseBody(t, row.Content, "不符合当前预算规划")
+	requireChineseBody(t, row.Content, "当前未配置额度", "不符合当前预算规划")
 	require.Contains(t, row.Content, "审批意见：不符合当前预算规划")
 }
 
@@ -158,5 +159,5 @@ func TestExpansionApplyFailedNotificationIsChineseAndCritical(t *testing.T) {
 		First(&row).Error)
 	require.Equal(t, model.NotificationLevelCritical, row.Level)
 	require.Equal(t, "扩容申请生效失败", row.Title)
-	requireChineseBody(t, row.Content, "生效失败原因：snapshot publish boom")
+	requireChineseBody(t, row.Content, "当前未配置额度", "生效失败原因：snapshot publish boom")
 }

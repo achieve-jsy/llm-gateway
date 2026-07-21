@@ -474,7 +474,8 @@ func (s *ExpansionService) CreateRequestAdvanced(ctx context.Context, input Crea
 			return err
 		}
 		for _, recipient := range recipients {
-			if err := enqueueExpansionNotificationInTx(tx, request, recipient, model.NotificationTypeExpansionSubmitted, "新的扩容审批申请", request.Reason); err != nil {
+			if err := enqueueExpansionNotificationInTx(tx, request, recipient, model.NotificationTypeExpansionSubmitted, "新的扩容审批申请",
+				s.expansionNotifyBody(ctx, request, "申请原因："+request.Reason), model.NotificationLevelInfo); err != nil {
 				return err
 			}
 		}

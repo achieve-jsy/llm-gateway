@@ -54,6 +54,12 @@ type Provider struct {
 	useNativeAPI bool
 	modelsURL    string
 	configErr    error
+
+	// Explicit Google/Vertex context caching (LiteLLM-aligned). cacheManager is
+	// nil unless the backend is Vertex, so non-Vertex providers never touch the
+	// cachedContents API.
+	cacheClient  *llmclient.Client
+	cacheManager *cachedContentManager
 }
 
 // New creates a new Gemini provider.
@@ -105,6 +111,7 @@ func newProvider(providerCfg providers.ProviderConfig, opts providers.ProviderOp
 		p.client = llmclient.NewWithHTTPClient(httpClient, clientCfg, p.setHeaders)
 		p.nativeClient = llmclient.NewWithHTTPClient(httpClient, nativeCfg, p.setNativeHeaders)
 		p.modelsClient = llmclient.NewWithHTTPClient(httpClient, modelsCfg, p.setNativeHeaders)
+		p.initCachedContentManager(nativeBaseURL, httpClient, clientCfg)
 		return p
 	}
 	p.client = llmclient.New(clientCfg, p.setHeaders)
@@ -139,6 +146,68 @@ func NewWithHTTPClient(apiKey string, httpClient *http.Client, hooks llmclient.H
 	p.nativeClient = llmclient.NewWithHTTPClient(httpClient, nativeCfg, p.setNativeHeaders)
 	p.modelsClient = llmclient.NewWithHTTPClient(httpClient, modelsCfg, p.setNativeHeaders)
 	return p
+}
+
+// initCachedContentManager builds the explicit Vertex context-caching manager.
+// It is only wired for the Vertex backend with an authenticated HTTP client.
+func (p *Provider) initCachedContentManager(nativeBaseURL string, httpClient *http.Client, baseCfg llmclient.Config) {
+	if p.backend != geminiBackendVertex || httpClient == nil {
+		return
+	}
+	root, ok := vertexLocationRoot(nativeBaseURL)
+	if !ok {
+		return
+	}
+	cfg := baseCfg
+	cfg.BaseURL = root
+	p.cacheClient = llmclient.NewWithHTTPClient(httpClient, cfg, p.setNativeHeaders)
+	p.cacheManager = newCachedContentManager(nativeBaseURL, p.cacheClient)
+}
+
+// applyExplicitCaching resolves an explicit CachedContent resource for the
+// request (LiteLLM-aligned) and, when one is produced, rewrites the live body
+// so its contents are only the non-cached tail. It is best-effort and never
+// fails the chat request: on any error it returns without cachedContent so the
+// request falls back to Gemini's implicit prefix caching.
+func (p *Provider) applyExplicitCaching(ctx context.Context, req *core.ChatRequest, body *geminiGenerateContentRequest) {
+	if body == nil || p.cacheManager == nil {
+		return
+	}
+	if body.CachedContent != "" {
+		// Caller supplied an explicit cached_content reference already.
+		clearIncompatibleCachedContentFields(body)
+		return
+	}
+	mode := resolveCacheMode(req.ExtraFields)
+	if mode == cacheModeOff {
+		return
+	}
+	cached, tail, ok := cacheableMessages(req.Messages, mode)
+	if !ok || len(cached) == 0 || len(tail) == 0 {
+		return
+	}
+	if estimatedContentTokens(cached) < minimumCachedContentTokens {
+		return
+	}
+	name, err := p.cacheManager.ensure(ctx, cached, req.Tools, req.Model, "")
+	if err != nil || name == "" {
+		return
+	}
+
+	// Rebuild the live request from the tail only. The cached prefix lives in
+	// the CachedContent resource; sending it again here would duplicate it.
+	sub := *req
+	sub.Messages = tail
+	sub.Tools = nil
+	tailBody, err := convertChatRequestToGemini(&sub)
+	if err != nil {
+		return
+	}
+	body.Contents = tailBody.Contents
+	body.CachedContent = name
+	body.Tools = nil
+	body.ToolConfig = nil
+	body.SystemInstruction = nil
 }
 
 // SetBaseURL allows configuring a custom base URL for the provider
@@ -467,6 +536,7 @@ func (p *Provider) nativeChatCompletion(ctx context.Context, req *core.ChatReque
 	if err != nil {
 		return nil, err
 	}
+	p.applyExplicitCaching(ctx, req, body)
 	var geminiResp geminiGenerateContentResponse
 	err = p.nativeClient.Do(ctx, llmclient.Request{
 		Method:   http.MethodPost,
@@ -514,6 +584,7 @@ func (p *Provider) nativeStreamChatCompletion(ctx context.Context, req *core.Cha
 	if err != nil {
 		return nil, err
 	}
+	p.applyExplicitCaching(ctx, streamReq, body)
 	stream, err := p.nativeClient.DoStream(ctx, llmclient.Request{
 		Method:   http.MethodPost,
 		Endpoint: nativeStreamEndpoint(req.Model),

@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 	"mime"
-	"os"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -876,6 +876,15 @@ func usageFromGemini(usage geminiUsageMetadata) core.Usage {
 		out.PromptTokensDetails = promptDetails
 	}
 
+	// Gemini cacheTokensDetails reports tokens written to the cache (write).
+	// Surface it through the Anthropic-compatible raw key so the observability
+	// layer maps it into call_logs.cache_write_tokens (cost.go reads
+	// "cache_creation_input_tokens").
+	if cw := cacheWriteTokensFromGemini(usage.CacheTokensDetails); cw > 0 {
+		raw["cache_creation_input_tokens"] = cw
+		raw["cache_write_tokens"] = cw
+	}
+
 	if usage.ToolUsePromptTokenCount > 0 {
 		raw["tool_use_prompt_token_count"] = usage.ToolUsePromptTokenCount
 	}
@@ -895,6 +904,29 @@ func usageFromGemini(usage geminiUsageMetadata) core.Usage {
 		out.RawUsage = raw
 	}
 	return out
+}
+
+// geminiCacheTokenCount is one entry in Gemini's cacheTokensDetails array.
+type geminiCacheTokenCount struct {
+	Model            string `json:"model"`
+	CacheTokensCount int    `json:"cacheTokensCount"`
+}
+
+// cacheWriteTokensFromGemini sums Gemini's cacheTokensDetails cacheTokensCount,
+// which reports tokens written to the prompt cache for the request.
+func cacheWriteTokensFromGemini(raw json.RawMessage) int {
+	if len(raw) == 0 {
+		return 0
+	}
+	var items []geminiCacheTokenCount
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return 0
+	}
+	total := 0
+	for _, item := range items {
+		total += item.CacheTokensCount
+	}
+	return total
 }
 
 func promptTokenDetailsFromGemini(raw json.RawMessage) *core.PromptTokensDetails {

@@ -394,3 +394,71 @@ func TestToolCallThoughtSignatureRoundTrip(t *testing.T) {
 		}
 	})
 }
+
+func TestConvertChatRequestToGemini_CoalescesToolResponses(t *testing.T) {
+	// 一次 assistant turn 发出 2 个 functionCall，客户端回 2 条 tool 结果。
+	// Gemini 要求这些 functionResponse 合并进同一个 role:user turn，使其数量
+	// 与前一模型轮 functionCall 数量一致（否则上游 400 "function response parts
+	// 的数量必须等于 function call parts 的数量"）。
+	req := &core.ChatRequest{
+		Model: "gemini-2.5-flash",
+		Messages: []core.Message{
+			{Role: "user", Content: "请查询天气和库存"},
+			{
+				Role:    "assistant",
+				Content: "",
+				ToolCalls: []core.ToolCall{
+					{ID: "call_1", Type: "function", Function: core.FunctionCall{Name: "get_weather", Arguments: `{"city":"北京"}`}},
+					{ID: "call_2", Type: "function", Function: core.FunctionCall{Name: "get_stock", Arguments: `{"sku":"A1"}`}},
+				},
+			},
+			{Role: "tool", ToolCallID: "call_1", Content: "晴 25°"},
+			{Role: "tool", ToolCallID: "call_2", Content: "库存 100"},
+		},
+	}
+
+	out, err := convertChatRequestToGemini(req)
+	if err != nil {
+		t.Fatalf("convertChatRequestToGemini: %v", err)
+	}
+
+	// 期望：user, model, user(合并的函数响应) 三段，而不是 4 段。
+	if len(out.Contents) != 3 {
+		t.Fatalf("want 3 contents after coalescing, got %d: %+v", len(out.Contents), out.Contents)
+	}
+	if out.Contents[0].Role != "user" || out.Contents[1].Role != "model" || out.Contents[2].Role != "user" {
+		t.Fatalf("unexpected role order: %q %q %q", out.Contents[0].Role, out.Contents[1].Role, out.Contents[2].Role)
+	}
+
+	fcCount, frCount := 0, 0
+	for _, p := range out.Contents[1].Parts {
+		if p.functionCall() != nil {
+			fcCount++
+		}
+	}
+	if fcCount != 2 {
+		t.Fatalf("want 2 functionCall parts in model turn, got %d", fcCount)
+	}
+	for _, p := range out.Contents[2].Parts {
+		if p.FunctionResponse != nil {
+			frCount++
+		}
+	}
+	if frCount != 2 {
+		t.Fatalf("want 2 functionResponse parts in merged user turn, got %d", frCount)
+	}
+
+	// functionResponse 需与对应的 functionCall 配对（按 tool_call_id 反查函数名）。
+	if got := out.Contents[2].Parts[0].FunctionResponse.Name; got != "get_weather" {
+		t.Fatalf("first functionResponse name=%q, want get_weather", got)
+	}
+	if got := out.Contents[2].Parts[0].FunctionResponse.ID; got != "call_1" {
+		t.Fatalf("first functionResponse id=%q, want call_1", got)
+	}
+	if got := out.Contents[2].Parts[1].FunctionResponse.Name; got != "get_stock" {
+		t.Fatalf("second functionResponse name=%q, want get_stock", got)
+	}
+	if got := out.Contents[2].Parts[1].FunctionResponse.ID; got != "call_2" {
+		t.Fatalf("second functionResponse id=%q, want call_2", got)
+	}
+}

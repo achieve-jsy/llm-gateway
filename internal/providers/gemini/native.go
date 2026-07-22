@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"mime"
+	"os"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -197,12 +199,36 @@ func convertChatRequestToGemini(req *core.ChatRequest) (*geminiGenerateContentRe
 
 	systemParts := make([]geminiPart, 0)
 	toolCallNames := make(map[string]string)
+	// toolResponseParts 累积连续的 tool（函数响应）消息，并在遇到下一条非 tool
+	// 消息时 flush 成「一个」 role:user content。
+	//
+	// 这是对齐 LiteLLM transform_messages 的 tool_call_responses 缓冲逻辑
+	// （litellm/llms/vertex_ai/gemini/transformation.py）。Gemini 要求一个
+	// function call turn 里 functionResponse 的数量必须等于紧随其前的
+	// functionCall 数量（否则上游 400 INVALID_ARGUMENT）。把多条 tool 结果
+	// 拆成多个独立的 role:user 会让 <N 个 functionCall> 后面只跟着 1 个
+	// functionResponse，计数不匹配；合并成单个 user turn 才能配对。
+	toolResponseParts := make([]geminiPart, 0)
+	flushToolResponses := func() {
+		if len(toolResponseParts) == 0 {
+			return
+		}
+		out.Contents = append(out.Contents, geminiContent{Role: "user", Parts: toolResponseParts})
+		toolResponseParts = toolResponseParts[:0]
+	}
+
 	for _, msg := range req.Messages {
+		role := strings.TrimSpace(msg.Role)
+		// 非 tool 消息出现前，先把上一段连续的 tool 结果合并成一个 user content。
+		if role != "tool" {
+			flushToolResponses()
+		}
+
 		var (
 			parts []geminiPart
 			err   error
 		)
-		if strings.TrimSpace(msg.Role) == "tool" {
+		if role == "tool" {
 			parts, err = geminiPartsFromToolMessage(msg, toolCallNames[msg.ToolCallID])
 		} else {
 			parts, err = geminiPartsFromMessage(msg, req.Model)
@@ -214,7 +240,7 @@ func convertChatRequestToGemini(req *core.ChatRequest) (*geminiGenerateContentRe
 			continue
 		}
 
-		switch strings.TrimSpace(msg.Role) {
+		switch role {
 		case "system", "developer":
 			systemParts = append(systemParts, parts...)
 		case "assistant":
@@ -225,11 +251,13 @@ func convertChatRequestToGemini(req *core.ChatRequest) (*geminiGenerateContentRe
 				}
 			}
 		case "tool":
-			out.Contents = append(out.Contents, geminiContent{Role: "user", Parts: parts})
+			toolResponseParts = append(toolResponseParts, parts...)
 		default:
 			out.Contents = append(out.Contents, geminiContent{Role: "user", Parts: parts})
 		}
 	}
+	// 收尾：把末尾连续的 tool 结果也合并进同一个 user content。
+	flushToolResponses()
 	if len(systemParts) > 0 {
 		out.SystemInstruction = &geminiContent{Parts: systemParts}
 	}
@@ -243,6 +271,43 @@ func convertChatRequestToGemini(req *core.ChatRequest) (*geminiGenerateContentRe
 	out.GenerationConfig = geminiGenerationConfig(req)
 	out.SafetySettings = geminiSafetySettings(req)
 	out.CachedContent = geminiCachedContent(req)
+
+	// 诊断辅助：设置 GEMINI_DEBUG_TURNS 非空时，输出每个 turn 的
+	// functionCall / functionResponse 配对计数，便于定位 Vertex 400
+	// "function response parts == function call parts" 的根因。默认关闭，
+	// 避免在 release 环境逐请求刷日志。
+	if os.Getenv("GEMINI_DEBUG_TURNS") != "" {
+		type turnSummary struct {
+			Role         string `json:"role"`
+			Parts        int    `json:"parts"`
+			FunctionCall int    `json:"functionCall"`
+			FunctionResp int    `json:"functionResponse"`
+		}
+		summary := make([]turnSummary, 0, len(out.Contents))
+		for _, content := range out.Contents {
+			cc, fr := 0, 0
+			for _, p := range content.Parts {
+				if p.functionCall() != nil {
+					cc++
+				}
+				if p.FunctionResponse != nil {
+					fr++
+				}
+			}
+			summary = append(summary, turnSummary{
+				Role:         content.Role,
+				Parts:        len(content.Parts),
+				FunctionCall: cc,
+				FunctionResp: fr,
+			})
+		}
+		slog.Info("gemini convertChatRequestToGemini contents",
+			"model", req.Model,
+			"turns", summary,
+			"num_messages", len(req.Messages),
+		)
+	}
+
 	return out, nil
 }
 

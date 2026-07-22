@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -111,6 +112,53 @@ func (h *UsageHandler) Trace(c *gin.Context) {
 	var trace obsmodel.CallTrace
 	if err := h.db.WithContext(c.Request.Context()).First(&trace, "request_id = ?", rid).Error; err != nil {
 		if err.Error() == "record not found" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "trace not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, trace)
+}
+
+// ScopedTrace GET /api/v1/usage/scoped/logs/:request_id/trace
+// 按 request_id 返回 trace（含 prompt/response body），并用与 /usage/scoped/logs 相同的
+// UsagePolicy.QueryScope 校验该记录归属在 actor 管辖范围内（防 dept_admin/studio_admin
+// 越权读取范围外记录）：admin→全部；studio_admin→自己工作室；dept_admin→自己部门；
+// 其余→仅自己。不在范围内按不存在处理（不泄露记录存在性）。
+func (h *UsageHandler) ScopedTrace(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db not configured"})
+		return
+	}
+	rid := c.Param("request_id")
+	if rid == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "request_id required"})
+		return
+	}
+
+	actor := rbac.GetActor(c)
+	usagePol := policy.UsagePolicy{}
+
+	// 范围校验：与列表同一 QueryScope，越权记录视为不存在。
+	var lg obsmodel.CallLog
+	if err := h.db.WithContext(c.Request.Context()).
+		Table("call_logs").
+		Select("request_id", "user_id", "dept_id", "studio_id").
+		Where("request_id = ?", rid).
+		Scopes(usagePol.QueryScope(actor)).
+		First(&lg).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "trace not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	var trace obsmodel.CallTrace
+	if err := h.db.WithContext(c.Request.Context()).First(&trace, "request_id = ?", rid).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "trace not found"})
 		} else {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

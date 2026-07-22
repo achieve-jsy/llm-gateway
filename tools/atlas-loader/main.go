@@ -75,6 +75,11 @@ func main() {
 		&keyactivity.KeyActivityState{},
 		&keyactivity.KeyActivityAlert{},
 
+		// Token 使用分析报告：存档 + 严重异常待核查 + 非工作时段备案
+		&cpmmodel.ReportSnapshot{},
+		&cpmmodel.AnomalyReview{},
+		&cpmmodel.OffhoursFiling{},
+
 		// auth/model (3 个表)
 		&authmodel.Department{},
 		&authmodel.DevUser{},

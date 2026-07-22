@@ -229,6 +229,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/admin/usage/UsageDashboardPage.vue'),
     meta: { title: '用量看板', requiresManager: true }
   },
+  {
+    path: '/admin/usage/report',
+    name: 'UsageReport',
+    component: () => import('@/views/admin/usage/UsageReportPage.vue'),
+    meta: { title: '使用分析报告', requiresManager: true }
+  },
   // ─── 权限不足兜底页（不加 public，已登录用户需保留侧边栏）───────────────────
   {
     path: '/403',

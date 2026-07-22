@@ -1017,6 +1017,11 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/usage/report/anomaly-status", guard(rbac.PermUsageViewScoped), anomalyFeedbackH.ReportAnomalyStatus)
 		// 方案X 异常反馈闭环：人工反馈状态（校验5态枚举，写 status/feedback_at/feedback_by/reason）。
 		adminGroup.POST("/usage/report/anomalies/:id/feedback", guard(rbac.PermUsageViewScoped), anomalyFeedbackH.ReportAnomalyFeedback)
+		// Token 使用分析 v2：统一 Report JSON、四象限成员点集、待核查反馈。
+		reportV2H := obshandler.NewReportHandler(db)
+		adminGroup.GET("/usage/analysis-report", guard(rbac.PermUsageViewScoped), reportV2H.Report)
+		adminGroup.GET("/usage/analysis-report/members", guard(rbac.PermUsageViewScoped), reportV2H.Members)
+		adminGroup.POST("/usage/analysis-report/anomaly/:user_id/feedback", guard(rbac.PermUsageViewScoped), reportV2H.AnomalyFeedback)
 	}
 
 	// 内部接口（InternalAuth 已在 internalGroup 上，复用）

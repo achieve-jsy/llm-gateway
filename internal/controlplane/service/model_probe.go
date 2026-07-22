@@ -290,7 +290,7 @@ func cloneProbeRequest(src map[string]interface{}) map[string]interface{} {
 func doProbeRequest(ctx context.Context, endpoint, apiKey string, payload map[string]interface{}, streamMode bool) (bool, int, string) {
 	body, _ := json.Marshal(payload)
 	client := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: 120 * time.Second,
 		Transport: &http.Transport{
 			Proxy: nil,
 		},

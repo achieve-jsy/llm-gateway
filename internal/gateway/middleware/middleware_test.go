@@ -495,6 +495,7 @@ func TestSanitize_ShortBodyPassThrough(t *testing.T) {
 }
 
 // TestSanitize_LongContentTruncated 验证超长 content 被截断并保留首尾
+// （使用显式 2048 上限模拟旧默认，验证截断逻辑仍正确）。
 func TestSanitize_LongContentTruncated(t *testing.T) {
 	// 构造一条明显超过 2048 字符的 content（5000 字节）
 	longContent := strings.Repeat("A", 2000) + "MIDDLE" + strings.Repeat("Z", 2000)
@@ -505,7 +506,7 @@ func TestSanitize_LongContentTruncated(t *testing.T) {
 		},
 	})
 
-	out := sanitizeChatRequestBody(input)
+	out := sanitizeJSONRequestBodyWithLimits(input, TraceSanitizeLimits{MaxStringLenInTrace: 2048, MaxBase64LenInTrace: 64})
 	require.True(t, json.Valid(out), "output must be valid JSON after truncation")
 
 	var body map[string]any
@@ -591,7 +592,7 @@ func TestSanitize_MultipleMessages(t *testing.T) {
 		},
 	})
 
-	out := sanitizeChatRequestBody(input)
+	out := sanitizeJSONRequestBodyWithLimits(input, TraceSanitizeLimits{MaxStringLenInTrace: 2048, MaxBase64LenInTrace: 64})
 	require.True(t, json.Valid(out), "output must be valid JSON")
 
 	var body map[string]any
@@ -635,7 +636,8 @@ func TestSanitize_RealWorldLargeBody(t *testing.T) {
 
 	t.Logf("input size: %d bytes (%.1f KB)", len(input), float64(len(input))/1024)
 
-	out := sanitizeChatRequestBody(input)
+	// 使用显式 2048 字符上限模拟旧默认，验证大请求体下 sanitize 仍输出合法 JSON 且更小。
+	out := sanitizeJSONRequestBodyWithLimits(input, TraceSanitizeLimits{MaxStringLenInTrace: 2048, MaxBase64LenInTrace: 64})
 
 	// 核心断言：输出必须是合法 JSON（这正是之前 bug 的根因）
 	require.True(t, json.Valid(out), "output MUST be valid JSON regardless of input size")

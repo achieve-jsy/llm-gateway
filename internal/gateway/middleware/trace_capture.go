@@ -91,13 +91,31 @@ func TraceCapture() gin.HandlerFunc {
 	}
 }
 
-// maxStringLenInTrace 是每个文本字段值存入 trace 表时的字符上限（参照 LiteLLM MAX_STRING_LENGTH_PROMPT_IN_DB=2048）。
-// 超出部分保留首 35% + 尾 65%，中间插入截断标记，JSON 结构始终合法。
-const maxStringLenInTrace = 2048
+// TraceSanitizeLimits 控制写入 call_traces 的请求/响应正文在落库前的裁剪上限。
+// MaxStringLenInTrace 是每个文本字段值的字符上限：默认调高到 500_000，保证语义分析
+// 所需的完整上下文不被截断（原先 2048 会切断长 message content，破坏 token 用量/语义分析报告）。
+// MaxBase64LenInTrace 是 base64 data-URI payload 的保留上限：图片二进制体积巨大，
+// 仍以人类可读占位符替代，避免单条 trace 把表体积撑爆。
+type TraceSanitizeLimits struct {
+	MaxStringLenInTrace int
+	MaxBase64LenInTrace int
+}
 
-// maxBase64LenInTrace 是 base64 data-URI payload 保留的字符上限（参照 LiteLLM MAX_BASE64_LENGTH_FOR_LOGGING=64）。
-// 超出部分替换为人类可读的大小占位符，不整体丢弃。
-const maxBase64LenInTrace = 64
+// defaultTraceSanitizeLimits 默认上限：文本字段关键上下文不截断，base64 仍用占位符。
+var defaultTraceSanitizeLimits = TraceSanitizeLimits{
+	MaxStringLenInTrace: 500_000,
+	MaxBase64LenInTrace: 64,
+}
+
+// SetTraceSanitizeLimits 覆盖全局默认上限（在 main 启动时按配置调用一次，之后只读）。
+func SetTraceSanitizeLimits(limits TraceSanitizeLimits) {
+	if limits.MaxStringLenInTrace > 0 {
+		defaultTraceSanitizeLimits.MaxStringLenInTrace = limits.MaxStringLenInTrace
+	}
+	if limits.MaxBase64LenInTrace > 0 {
+		defaultTraceSanitizeLimits.MaxBase64LenInTrace = limits.MaxBase64LenInTrace
+	}
+}
 
 // dataURIRe 匹配 data:mime;base64,<payload> 格式
 var dataURIRe = regexp.MustCompile(`data:([^;]+);base64,([A-Za-z0-9+/=]+)`)
@@ -114,13 +132,18 @@ var dataURIRe = regexp.MustCompile(`data:([^;]+);base64,([A-Za-z0-9+/=]+)`)
 //
 // 非合法 JSON 或解析出错时原样返回，保证调用方始终拿到 []byte（不返回 nil）。
 func sanitizeJSONRequestBody(raw []byte) []byte {
+	return sanitizeJSONRequestBodyWithLimits(raw, defaultTraceSanitizeLimits)
+}
+
+// sanitizeJSONRequestBodyWithLimits 以显式上限执行两层 sanitize（供生产与测试复用）。
+func sanitizeJSONRequestBodyWithLimits(raw []byte, limits TraceSanitizeLimits) []byte {
 	var body map[string]any
 	if err := json.Unmarshal(raw, &body); err != nil {
 		// 非合法 JSON，原样返回；调用方的 json.Valid 会决定是否写库
 		return raw
 	}
 
-	sanitizeValue(body)
+	sanitizeValue(body, limits)
 
 	b, err := json.Marshal(body)
 	if err != nil {
@@ -135,20 +158,20 @@ func sanitizeChatRequestBody(raw []byte) []byte {
 }
 
 // sanitizeValue 递归处理 map/slice/string，原地修改 map 与 slice 中的值。
-func sanitizeValue(v any) any {
+func sanitizeValue(v any, limits TraceSanitizeLimits) any {
 	switch val := v.(type) {
 	case map[string]any:
 		for k, child := range val {
-			val[k] = sanitizeValue(child)
+			val[k] = sanitizeValue(child, limits)
 		}
 		return val
 	case []any:
 		for i, child := range val {
-			val[i] = sanitizeValue(child)
+			val[i] = sanitizeValue(child, limits)
 		}
 		return val
 	case string:
-		return sanitizeString(val)
+		return sanitizeString(val, limits)
 	}
 	return v
 }
@@ -156,13 +179,13 @@ func sanitizeValue(v any) any {
 // sanitizeString 对单个字符串值执行两层处理：
 //  1. 替换 base64 data-URI 中过长的 payload
 //  2. 若整体仍超长，保留首尾 + 插入截断标记
-func sanitizeString(s string) string {
+func sanitizeString(s string, limits TraceSanitizeLimits) string {
 	// 第一层：base64 data-URI 替换
-	s = dataURIRe.ReplaceAllStringFunc(s, replaceBase64DataURI)
+	s = dataURIRe.ReplaceAllStringFunc(s, func(m string) string { return replaceBase64DataURI(m, limits) })
 
 	// 第二层：字符串整体长度截断
-	if len(s) > maxStringLenInTrace {
-		limit := maxStringLenInTrace
+	if len(s) > limits.MaxStringLenInTrace {
+		limit := limits.MaxStringLenInTrace
 		startN := limit * 35 / 100
 		endN := limit - startN
 		skipped := len(s) - startN - endN
@@ -174,14 +197,14 @@ func sanitizeString(s string) string {
 }
 
 // replaceBase64DataURI 将单个 base64 data-URI 中超长的 payload 替换为大小占位符。
-func replaceBase64DataURI(match string) string {
+func replaceBase64DataURI(match string, limits TraceSanitizeLimits) string {
 	sub := dataURIRe.FindStringSubmatch(match)
 	if len(sub) != 3 {
 		return match
 	}
 	mimeType := sub[1]
 	payload := sub[2]
-	if len(payload) <= maxBase64LenInTrace {
+	if len(payload) <= limits.MaxBase64LenInTrace {
 		return match
 	}
 	// 计算原始字节大小（base64 解码长度约为 payload*3/4）

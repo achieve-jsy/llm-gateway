@@ -43,6 +43,11 @@ type ObservabilityConfig struct {
 	SpoolHighWatermark     int64
 	SpoolClaimMinIdle      time.Duration
 	BillableReservationTTL time.Duration
+	// TraceMaxStringLen 写入 call_traces 的单个文本字段字符上限（0 表示使用默认 500_000，
+	// 即默认不截断长上下文，供用量/语义分析报告使用完整内容）。
+	TraceMaxStringLen int
+	// TraceMaxBase64Len base64 data-URI 保留字符上限（图片仍以占位符代替）。
+	TraceMaxBase64Len int
 }
 
 // OTLPConfig OpenTelemetry 导出配置
@@ -95,6 +100,8 @@ func Load() *Config {
 	v.SetDefault("observability.spool_high_watermark", 80_000)
 	v.SetDefault("observability.spool_claim_min_idle", "30s")
 	v.SetDefault("observability.billable_reservation_ttl", "10m")
+	v.SetDefault("observability.trace_max_string_len", 500_000)
+	v.SetDefault("observability.trace_max_base64_len", 64)
 	v.SetDefault("otlp.endpoint", "localhost:4317")
 	v.SetDefault("otlp.enabled", false)
 	v.SetDefault("provider.internal_token", "")
@@ -172,6 +179,8 @@ func Load() *Config {
 			SpoolHighWatermark:     v.GetInt64("observability.spool_high_watermark"),
 			SpoolClaimMinIdle:      v.GetDuration("observability.spool_claim_min_idle"),
 			BillableReservationTTL: v.GetDuration("observability.billable_reservation_ttl"),
+			TraceMaxStringLen:      v.GetInt("observability.trace_max_string_len"),
+			TraceMaxBase64Len:      v.GetInt("observability.trace_max_base64_len"),
 		},
 		OTLP: OTLPConfig{
 			Endpoint: v.GetString("otlp.endpoint"),

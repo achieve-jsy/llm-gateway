@@ -30,6 +30,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/provider"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/example/llm-gateway/internal/gateway/server"
+	"github.com/example/llm-gateway/internal/gateway/middleware"
 
 	// Register all GoModel provider adapters.
 	"github.com/example/llm-gateway/internal/providers"
@@ -77,6 +78,12 @@ func main() {
 
 	// 加载配置
 	cfg := config.Load()
+
+	// 按配置覆盖 call_traces 正文裁剪上限（默认不截断文本上下文，供用量/语义分析报告使用）
+	middleware.SetTraceSanitizeLimits(middleware.TraceSanitizeLimits{
+		MaxStringLenInTrace: cfg.Observability.TraceMaxStringLen,
+		MaxBase64LenInTrace: cfg.Observability.TraceMaxBase64Len,
+	})
 
 	// 初始化 Redis
 	rdb, err := infra.InitRedis(cfg.Redis)

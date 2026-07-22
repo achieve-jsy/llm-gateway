@@ -68,15 +68,10 @@ func UsageCollectorWithRedis(collector *gwobs.Collector, traceWriter *gwobs.Trac
 
 		totalMs := int(time.Since(start).Milliseconds())
 
-		// 判断该 key 是否开启日志记录（耗时/Token 始终计算，仅日志写入受此标志影响）
-		logEnabled := true
-		if v, ok := c.Get("log_enabled"); ok {
-			if b, ok := v.(bool); ok {
-				logEnabled = b
-			}
-		}
+		// ── 记录策略：所有请求的 Usage 与 Trace（提示词/响应体）均始终写入。
+		// 已移除 log_enabled 门控：应收尽收，杜绝"某部分人上下文缺失"（按 key 关闭日志的机制废弃）。 ──
 
-		// ── Usage 埋点：始终写入（耗时/Token/费用，无论 log_enabled） ──
+		// ── Usage 埋点：始终写入（耗时/Token/费用） ──
 		if collector != nil {
 			event := collector.NewUsageEvent(c)
 			event.Status = c.Writer.Status()
@@ -116,8 +111,8 @@ func UsageCollectorWithRedis(collector *gwobs.Collector, traceWriter *gwobs.Trac
 		if collector == nil {
 			_ = budget.ReleaseBillableReservation(c)
 		}
-		// ── Trace 记录（提示词/响应内容）：仅 log_enabled=true 时写入 ──
-		if tw == nil || !logEnabled {
+		// ── Trace 记录（提示词/响应内容）：恒写入（除系统探针 key 已在前面跳过） ──
+		if tw == nil {
 			return
 		}
 		reqID, _ := c.Get("request_id")

@@ -252,7 +252,7 @@ func main() {
 		slog.Warn("request trace persistence unavailable at startup; call logs remain spooled", "error", err)
 	} else {
 		// 请求/响应 trace 写入器
-		traceWriter = gwobs.NewTraceWriter(db, 512, 20, 5*time.Second)
+		traceWriter = gwobs.NewTraceWriter(db, 1024, 50, 2*time.Second)
 		go traceWriter.Run(ctx)
 
 		slog.Info("usage tracking enabled (direct-DB mode)")

@@ -75,7 +75,6 @@ var auditRouteMap = map[string]routeAction{
 	"POST:/api/v1/keys/:id/reveal":                {audit.Action("key.reveal"), audit.ResourceKey},
 	"POST:/api/v1/keys/:id/groups":                {audit.ActionKeyBindGroups, audit.ResourceKey},
 	"POST:/api/v1/keys/:id/access-all-groups":     {audit.ActionKeyToggleAccessAll, audit.ResourceKey},
-	"PATCH:/api/v1/keys/:id/log-enabled":          {audit.ActionKeyToggleLog, audit.ResourceKey},
 	"POST:/api/v1/keys/:id/opencode-config/token": {audit.Action("key.opencode_config"), audit.ResourceKey},
 
 	// ── Catalog ────────────────────────────────────────────────────

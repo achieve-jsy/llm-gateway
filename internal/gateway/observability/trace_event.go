@@ -53,12 +53,23 @@ func NewTraceWriter(db *gorm.DB, bufSize, flushN int, interval time.Duration) *T
 	}
 }
 
-// Emit 非阻塞投递，满队列丢弃（trace 数据非关键路径）
+// traceEmitBlockTimeout 当 trace channel 满时，Emit 最多阻塞等待一个写槽位的时长。
+// 用于吸收瞬时突发（如大量长流式请求在同一窗口集中完成，trace 集中 emit 挤爆 channel）。
+const traceEmitBlockTimeout = 500 * time.Millisecond
+
+// Emit 投递 trace 事件。优先非阻塞快速路径；channel 满时短暂阻塞等待（吸收突发，
+// 避免大量并发完成的长请求一起 emit 把 512 槽 channel 挤掉），仅当持续过载（超过
+// traceEmitBlockTimeout 仍无空槽）才丢弃——trace 数据非关键路径，不无限阻塞请求。
 func (w *TraceWriter) Emit(e TraceEvent) {
 	select {
 	case w.ch <- e:
+		return
 	default:
-		log.Printf("[trace] channel full, dropping trace for request_id=%s", e.RequestID)
+	}
+	select {
+	case w.ch <- e:
+	case <-time.After(traceEmitBlockTimeout):
+		log.Printf("[trace] channel full after %v, dropping trace for request_id=%s", traceEmitBlockTimeout, e.RequestID)
 	}
 }
 

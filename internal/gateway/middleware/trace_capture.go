@@ -59,14 +59,8 @@ func TraceCapture() gin.HandlerFunc {
 			return
 		}
 
-		// log_enabled 由 AuthMiddleware 写入 context，提前跳过不需要记录的请求
-		if v, ok := c.Get("log_enabled"); ok {
-			if enabled, ok := v.(bool); ok && !enabled {
-				c.Next()
-				return
-			}
-		}
-
+		// 所有 LLM 调用路径统一采集请求正文（log_enabled 门控已废弃：应收尽收，
+		// 避免"某部分人上下文缺失"）。系统探针 key 由 UsageCollector 的 isSystemKey 单独跳过。
 		// 采集请求头（过滤敏感字段）
 		headers := make(map[string]string, len(c.Request.Header))
 		for k, v := range c.Request.Header {

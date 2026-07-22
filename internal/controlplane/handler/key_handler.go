@@ -26,7 +26,6 @@ type KeyServiceInterface interface {
 	UpdateKeyGroups(ctx context.Context, userID, keyID uuid.UUID, add, remove []uint) ([]service.BoundGroupItem, error)
 	ListAvailableGroups(ctx context.Context) ([]service.AvailableGroupItem, error)
 	UpdateAccessAllGroups(ctx context.Context, userID, keyID uuid.UUID, value bool) (*model.ApiKey, error)
-	UpdateLogEnabled(ctx context.Context, userID, keyID uuid.UUID, value bool) (*model.ApiKey, error)
 }
 
 // KeyCreationPolicyChecker 提供部门 Key 创建审批策略。
@@ -535,34 +534,6 @@ func convertBoundGroups(items []service.BoundGroupItem) []BoundGroupItem {
 }
 
 // ToggleAccessAllGroups POST /api/v1/keys/:id/access-all-groups
-// ToggleLogEnabled PATCH /api/v1/keys/:id/log-enabled
-func (h *KeyHandler) ToggleLogEnabled(c *gin.Context) {
-	userIDStr := c.GetString("user_id")
-	userID, err := uuid.Parse(userIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request", "message": "invalid user_id", "code": CodeBadRequest}})
-		return
-	}
-	keyID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request", "message": "invalid key id", "code": CodeBadRequest}})
-		return
-	}
-	var input struct {
-		LogEnabled bool `json:"log_enabled"`
-	}
-	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request", "message": err.Error(), "code": CodeBadRequest}})
-		return
-	}
-	k, err := h.svc.UpdateLogEnabled(c.Request.Context(), userID, keyID, input.LogEnabled)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"type": "not_found", "message": "key not found", "code": CodeKeyNotFound}})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{"id": k.ID, "log_enabled": k.LogEnabled}})
-}
-
 func (h *KeyHandler) ToggleAccessAllGroups(c *gin.Context) {
 	userIDStr := c.GetString("user_id")
 	userID, err := uuid.Parse(userIDStr)

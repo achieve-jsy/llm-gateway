@@ -52,7 +52,6 @@
             </el-table-column>
             <el-table-column label="过期" width="150"><template #default="{ row }">{{ row.expiresAt ? formatDate(row.expiresAt) : '永久' }}</template></el-table-column>
             <el-table-column label="状态" width="100" align="center"><template #default="{ row }"><el-switch v-model="row.enabled" size="small" inline-prompt active-text="活跃" inactive-text="禁用" @change="(v: boolean) => handleToggle(row, v)" /></template></el-table-column>
-            <el-table-column label="日志" width="95" align="center"><template #default="{ row }"><el-switch v-model="row.logEnabled" size="small" inline-prompt active-text="记录" inactive-text="关闭" @change="(v: boolean) => handleToggleLog(row, v)" /></template></el-table-column>
             <el-table-column label="创建时间" width="155" sortable prop="createdAt"><template #default="{ row }">{{ formatDate(row.createdAt) }}</template></el-table-column>
             <el-table-column label="操作" width="320" fixed="right" align="center">
               <template #default="{ row }">
@@ -494,7 +493,6 @@
           </el-table-column>
           <el-table-column label="过期" width="150"><template #default="{ row }">{{ row.expiresAt ? formatDate(row.expiresAt) : '永久' }}</template></el-table-column>
           <el-table-column label="状态" width="100" align="center"><template #default="{ row }"><el-switch v-model="row.enabled" size="small" inline-prompt active-text="活跃" inactive-text="禁用" @change="(v: boolean) => handleToggle(row, v)" /></template></el-table-column>
-          <el-table-column label="日志" width="95" align="center"><template #default="{ row }"><el-switch v-model="row.logEnabled" size="small" inline-prompt active-text="记录" inactive-text="关闭" @change="(v: boolean) => handleToggleLog(row, v)" /></template></el-table-column>
           <el-table-column label="创建时间" width="155" sortable prop="createdAt"><template #default="{ row }">{{ formatDate(row.createdAt) }}</template></el-table-column>
           <el-table-column label="操作" width="320" fixed="right" align="center">
             <template #default="{ row }">
@@ -563,7 +561,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Key, Search, CopyDocument, Check } from '@element-plus/icons-vue'
 import {
   listKeys, disableKey, enableKey, deleteKey, resetKey, revealKey,
-  updateKeyGroups, getAvailableGroups, toggleAccessAllGroups, toggleLogEnabled,
+  updateKeyGroups, getAvailableGroups, toggleAccessAllGroups,
   getKeyCreationPolicy, getMyKeyRequests, getMyKeyRequestSummary,
   decideKeyRequest, getPendingKeyRequests, getPendingKeyRequestCounts,
   getKeyRequestHistory, getDeptKeyCreationPolicy, setDeptKeyCreationPolicy, cancelKeyRequest,
@@ -928,7 +926,6 @@ async function copyFullKey(row: ApiKey) {
 function openUseKey(row: ApiKey) { usageKeyId.value = row.id; usageKeyHint.value = row.keyHint; showUsageModal.value = true }
 function openOpenCode(row: ApiKey) { openCodeKeyId.value = row.id; openCodeMaskedKey.value = row.maskedKey; showOpenCode.value = true }
 async function handleToggle(row: ApiKey, en: boolean) { try { if (en) await enableKey(row.id); else { await ElMessageBox.confirm('确定禁用「'+row.name+'」？','确认',{type:'warning'}); await disableKey(row.id) } ElMessage.success(en?'已启用':'已禁用'); await loadKeys() } catch { row.enabled = !en } }
-async function handleToggleLog(row: ApiKey, v: boolean) { try { await toggleLogEnabled(row.id, v); ElMessage.success(v?'已开启日志':'已关闭日志') } catch { row.logEnabled = !v; ElMessage.error('操作失败') } }
 async function handleReset(row: ApiKey) { try { await ElMessageBox.confirm('重置「'+row.name+'」，旧密钥立即失效。确定？','确认',{type:'warning'}); const r = await resetKey(row.id); const m = mapCreateKeyResponse(r); keyCache.cacheKey(m.id,m.key); await ElMessageBox.alert('<pre style="background:var(--el-fill-color-light);padding:10px;border-radius:6px;font-size:13px;white-space:pre-wrap;word-break:break-all">'+m.key+'</pre>','新密钥',{dangerouslyUseHTMLString:true,confirmButtonText:'关闭'}); await loadKeys() } catch {} }
 async function handleDelete(row: ApiKey) { try { await ElMessageBox.confirm('删除「'+row.name+'」不可恢复，确定？','确认',{type:'error'}); await deleteKey(row.id); keyCache.clearKey(row.id); ElMessage.success('已删除'); await loadKeys() } catch {} }
 function onKeyCreated() { showCreateDialog.value = false; currentPage.value = 1; loadKeys() }

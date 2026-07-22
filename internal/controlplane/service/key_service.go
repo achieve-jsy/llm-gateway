@@ -485,27 +485,6 @@ func (s *KeyService) UpdateAccessAllGroups(ctx context.Context, userID, keyID uu
 	return k, nil
 }
 
-func (s *KeyService) UpdateLogEnabled(ctx context.Context, userID, keyID uuid.UUID, value bool) (*model.ApiKey, error) {
-	k, err := s.repo.FindByID(keyID)
-	if err != nil {
-		return nil, ErrKeyNotFound
-	}
-	if k.UserID != userID {
-		return nil, ErrKeyNotFound
-	}
-	if err := s.repo.UpdateLogEnabled(keyID, value); err != nil {
-		return nil, fmt.Errorf("update log_enabled: %w", err)
-	}
-	k.LogEnabled = value
-	if s.publisher != nil {
-		// 立即删除两层 Redis 缓存（auth service + gateway KeyCache），无需等 TTL
-		s.publisher.InvalidateKeyCache(k.KeyHash)
-		// 通知 gateway 订阅者清除本地内存缓存
-		s.publisher.Publish(event.KeyLogChanged, "api_key", keyID)
-	}
-	return k, nil
-}
-
 func (s *KeyService) VerifyKey(ctx context.Context, keyRaw string) (*VerifyResult, error) {
 	hash := sha256.Sum256([]byte(keyRaw))
 	keyHash := hex.EncodeToString(hash[:])

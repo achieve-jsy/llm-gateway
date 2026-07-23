@@ -376,7 +376,7 @@ func TestToolCallThoughtSignatureRoundTrip(t *testing.T) {
 			ToolCallID: "call_1" + thoughtSignatureSeparator + sig,
 			Content:    "北京 晴 25°",
 		}
-		parts, err := geminiPartsFromToolMessage(msg, "get_weather")
+		parts, err := geminiPartsFromToolMessage(msg, "get_weather", "")
 		if err != nil {
 			t.Fatalf("geminiPartsFromToolMessage: %v", err)
 		}

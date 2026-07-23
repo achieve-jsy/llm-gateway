@@ -199,6 +199,48 @@ func convertChatRequestToGemini(req *core.ChatRequest) (*geminiGenerateContentRe
 
 	systemParts := make([]geminiPart, 0)
 	toolCallNames := make(map[string]string)
+	// toolCallNamesByCleanID 是不带 __thought__ 后缀的兜底索引：个别客户端回传
+	// tool 结果时会丢掉 id 后缀，只按完整 id 查表会落空，进而把 functionResponse
+	// 的 name 写成 id，同样触发上游 400。
+	toolCallNamesByCleanID := make(map[string]string)
+	// Gemini/Vertex 要求同一请求内 functionCall.id 唯一；functionResponse.id 必须
+	// 与之精确对应。模型自身会跨轮复用短 id —— 实测同一 call_53246 先用于 read、
+	// 几十轮后又用于 edit —— 一旦同一个 id 同时绑定两个不同函数名，上游即返回
+	// 400 INVALID_ARGUMENT（Request contains an invalid argument）。这里为每个
+	// functionCall 分配请求内唯一的 id，并让对应 tool 结果沿用同一个 id。
+	assignedIDs := make(map[string]string) // tool_call_id + "\x00" + 函数名 -> 本请求内唯一 id
+	lastIDByFullID := make(map[string]string)
+	usedIDs := make(map[string]bool)
+	assignFunctionCallID := func(fullID, functionName, cleanID string) string {
+		key := fullID + "\x00" + functionName
+		if id, ok := assignedIDs[key]; ok {
+			return id
+		}
+		id := cleanID
+		if id == "" || usedIDs[id] {
+			base := cleanID
+			if base == "" {
+				base = "call"
+			}
+			for n := 2; ; n++ {
+				candidate := base + "_" + strconv.Itoa(n)
+				if !usedIDs[candidate] {
+					id = candidate
+					break
+				}
+			}
+		}
+		usedIDs[id] = true
+		assignedIDs[key] = id
+		lastIDByFullID[fullID] = id
+		return id
+	}
+	lookupAssignedID := func(fullID, functionName string) string {
+		if id, ok := assignedIDs[fullID+"\x00"+functionName]; ok {
+			return id
+		}
+		return lastIDByFullID[fullID]
+	}
 	// toolResponseParts 累积连续的 tool（函数响应）消息，并在遇到下一条非 tool
 	// 消息时 flush 成「一个」 role:user content。
 	//
@@ -214,7 +256,15 @@ func convertChatRequestToGemini(req *core.ChatRequest) (*geminiGenerateContentRe
 			return
 		}
 		out.Contents = append(out.Contents, geminiContent{Role: "user", Parts: toolResponseParts})
-		toolResponseParts = toolResponseParts[:0]
+		// 必须换新底层数组，不能写 toolResponseParts[:0]。
+		// 上面 append 进 out.Contents 的切片与 toolResponseParts 共享同一底层
+		// 数组，而 [:0] 保留 cap，下一次 append 会就地覆盖已发出的
+		// functionResponse，使历史里较早的 tool 结果被最后一组 tool 结果顶替：
+		// 实测 600 条消息的请求里 237 个 functionResponse 有 230 个被改写。
+		// 这一方面让模型看到错误的工具结果，另一方面使整个历史都去引用最后一组
+		// 的 functionCall id，与前述 id 冲突叠加后上游直接返回 400
+		// INVALID_ARGUMENT（多轮 + 多次工具调用后必现）。置 nil 让下一段重新分配。
+		toolResponseParts = nil
 	}
 
 	for _, msg := range req.Messages {
@@ -229,7 +279,12 @@ func convertChatRequestToGemini(req *core.ChatRequest) (*geminiGenerateContentRe
 			err   error
 		)
 		if role == "tool" {
-			parts, err = geminiPartsFromToolMessage(msg, toolCallNames[msg.ToolCallID])
+			name := toolCallNames[msg.ToolCallID]
+			if name == "" {
+				clean, _ := splitToolIDAndSignature(msg.ToolCallID)
+				name = toolCallNamesByCleanID[clean]
+			}
+			parts, err = geminiPartsFromToolMessage(msg, name, lookupAssignedID(msg.ToolCallID, name))
 		} else {
 			parts, err = geminiPartsFromMessage(msg, req.Model)
 		}
@@ -245,9 +300,27 @@ func convertChatRequestToGemini(req *core.ChatRequest) (*geminiGenerateContentRe
 			systemParts = append(systemParts, parts...)
 		case "assistant":
 			out.Contents = append(out.Contents, geminiContent{Role: "model", Parts: parts})
+			// parts 中的 functionCall 与 msg.ToolCalls 一一对应且顺序一致，
+			// 据此把请求内重复的 id 改写为唯一 id（见 assignFunctionCallID）。
+			callIdx := 0
+			for i := range parts {
+				if parts[i].FunctionCall == nil {
+					continue
+				}
+				if callIdx >= len(msg.ToolCalls) {
+					break
+				}
+				call := msg.ToolCalls[callIdx]
+				callIdx++
+				cleanID, _ := splitToolIDAndSignature(call.ID)
+				parts[i].FunctionCall.ID = assignFunctionCallID(call.ID, call.Function.Name, cleanID)
+			}
 			for _, call := range msg.ToolCalls {
 				if call.ID != "" && call.Function.Name != "" {
 					toolCallNames[call.ID] = call.Function.Name
+					if cleanID, _ := splitToolIDAndSignature(call.ID); cleanID != "" {
+						toolCallNamesByCleanID[cleanID] = call.Function.Name
+					}
 				}
 			}
 		case "tool":
@@ -371,17 +444,23 @@ func geminiPartsFromMessage(msg core.Message, model string) ([]geminiPart, error
 	}
 }
 
-func geminiPartsFromToolMessage(msg core.Message, functionName string) ([]geminiPart, error) {
+// assignedID 非空时用作 functionResponse.id（由 convertChatRequestToGemini 分配，
+// 保证与本请求内 functionCall.id 精确对应）。为空时退回剥离签名的原始 id。
+func geminiPartsFromToolMessage(msg core.Message, functionName, assignedID string) ([]geminiPart, error) {
+	// functionResponse.id 必须与 functionCall.id 使用同样的干净 id（剥离
+	// __thought__ 签名后缀），否则 Gemini 无法匹配 tool_result。
+	cleanID, _ := splitToolIDAndSignature(msg.ToolCallID)
+	if assignedID != "" {
+		cleanID = assignedID
+	}
 	if functionName == "" {
-		functionName = msg.ToolCallID
+		// 兜底：宁可用干净 id 当名字，也不要把 __thought__ 签名后缀带进 name。
+		functionName = cleanID
 	}
 	response, err := geminiToolResponsePayload(core.ExtractTextContent(msg.Content))
 	if err != nil {
 		return nil, err
 	}
-	// functionResponse.id 必须与 functionCall.id 使用同样的干净 id（剥离
-	// __thought__ 签名后缀），否则 Gemini 无法匹配 tool_result。
-	cleanID, _ := splitToolIDAndSignature(msg.ToolCallID)
 	return []geminiPart{{
 		FunctionResponse: &geminiFunctionResponse{
 			ID:       cleanID,

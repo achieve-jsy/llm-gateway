@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/example/llm-gateway/internal/core"
@@ -17,6 +18,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/example/llm-gateway/internal/gateway/quota"
+	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/gin-gonic/gin"
 )
 
@@ -282,6 +284,17 @@ func (h *MessagesHandler) handleNonStream(c *gin.Context, baseCtx context.Contex
 	h.respondAnthropicUnifiedError(c, lastErr)
 }
 
+// estimatePromptTokens 估算请求消息的 input_tokens（复用 scheduler 的 CJK 感知
+// tokenizer）。当流式上游不返回真实 usage 时，作为 message_start 的非零兜底值。
+func estimatePromptTokens(msgs []core.Message) int {
+	var sb strings.Builder
+	for _, m := range msgs {
+		sb.WriteString(core.ExtractTextContent(m.Content))
+		sb.WriteByte(' ')
+	}
+	return scheduler.EstimateTokens(sb.String())
+}
+
 // handleStream processes a streaming request.
 func (h *MessagesHandler) handleStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, originalModel string) {
 	timeout := h.streamTimeout(originalModel)
@@ -309,6 +322,7 @@ func (h *MessagesHandler) handleStream(c *gin.Context, baseCtx context.Context, 
 				&cancelOnClose{ReadCloser: rawStream, cancel: cancel},
 				c.GetString("request_id"),
 				originalModel,
+				estimatePromptTokens(req.Messages),
 			)
 			HandleStreamResponse(c, anthStream)
 			return

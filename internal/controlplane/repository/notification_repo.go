@@ -21,9 +21,19 @@ func NewNotificationRepo(db *gorm.DB) *NotificationRepo {
 // Create 写入一条通知。
 func (r *NotificationRepo) Create(n *model.Notification) error {
 	if n.DedupeKey != "" {
-		return r.db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "source"}, {Name: "dedupe_key"}}, DoNothing: true}).Create(n).Error
+		// 唯一索引为 notifications (user_id, source, dedupe_key)（非部分索引），
+		// ON CONFLICT 的推断列必须与索引列完全一致（含顺序），否则 Postgres 报 42P10：
+		// "there is no unique or exclusion constraint matching the ON CONFLICT specification"。
+		return r.db.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "user_id"}, {Name: "source"}, {Name: "dedupe_key"}},
+			DoNothing: true,
+		}).Create(n).Error
 	}
-	return r.db.Create(n).Error
+	// 空 dedupe_key 必须写 NULL：唯一索引把 '' 当成重复值（第二条 ('direct','') 会撞 23505），
+	// 而 NULL 之间不冲突。用 Omit 让该列不参与 INSERT，落到数据库默认值 NULL。
+	// 不改 model 字段为指针类型，避免波及全部调用方。
+	// 此类通知不做去重，唯一性由上游保证（例如 key_activity_alert 表自带唯一约束）。
+	return r.db.Omit("DedupeKey").Create(n).Error
 }
 
 // GetUnread 查询指定用户的未读通知列表，按创建时间倒序。

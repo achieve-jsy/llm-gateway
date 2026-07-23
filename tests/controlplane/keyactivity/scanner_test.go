@@ -636,6 +636,74 @@ func TestScanner_E3_NilLastSeenAt_NoAlert(t *testing.T) {
 	}
 }
 
+// TestScanner_E3_WakeupDedupKeyUsesBeijingDate 验证 E3 唤醒去重键按「北京日期」切分。
+// call_logs.ts 落库是 UTC（数据库连接时区 UTC）；若直接按 UTC 取日期，
+// 北京时间早上 8 点就换日，会导致同一天重复提醒、跨日漏报。
+func TestScanner_E3_WakeupDedupKeyUsesBeijingDate(t *testing.T) {
+	const (
+		utcDate     = "2026-09-15"
+		beijingDate = "2026-09-16"
+	)
+
+	// runWakeup 构造一次「休眠 35 天后重新使用」的扫描，返回生成的 E3 提醒。
+	runWakeup := func(ts time.Time) *ka.KeyActivityAlert {
+		t.Helper()
+		repo := newFakeRepo()
+		repo.configVals["key_activity.bootstrap_done"] = "true"
+		repo.cursor = ka.Cursor{TS: ts.Add(-48 * time.Hour)}
+
+		ua, ip := "curl/8.0", "10.0.0.1"
+		fp := ka.SourceFP(ua, ip, true)
+		repo.seenRows[repo.seenKey(testTestKey, fp)] = &ka.KeySourceSeen{
+			KeyID: testTestKey, SourceFP: fp, UAFp: "ua-curl",
+			FirstSeen: ts.AddDate(0, 0, -40), LastSeen: ts.AddDate(0, 0, -40), HitCount: 1,
+		}
+		lastSeen := ts.AddDate(0, 0, -35)
+		repo.stateMap[testTestKey] = &ka.KeyActivityState{
+			KeyID: testTestKey, LastSeenAt: &lastSeen, BaselineReady: false, Samples: 1,
+		}
+		repo.callLogs = []ka.CallLogRow{{
+			RequestID: "req-e3-tz", TS: ts, KeyID: testTestKey,
+			UserID: testTestUserID, UserAgent: ua, IPAddress: ip,
+		}}
+
+		scanner := ka.NewScanner(repo, &fakeNotifier{}, enabledConfig(), defaultKeyLookup())
+		if err := scanner.ScanOnce(context.Background()); err != nil {
+			t.Fatalf("ScanOnce(%s): %v", ts.Format(time.RFC3339), err)
+		}
+		for _, a := range repo.alerts {
+			if a.EventType == ka.EventTypeWakeup {
+				return a
+			}
+		}
+		t.Fatalf("expected a wakeup alert for ts=%s", ts.Format(time.RFC3339))
+		return nil
+	}
+
+	// 北京时间 2026-09-16 06:34:53 == UTC 2026-09-15 22:34:53（跨 UTC 日边界）
+	alert := runWakeup(time.Date(2026, 9, 15, 22, 34, 53, 0, time.UTC))
+	if alert.DedupKey != beijingDate {
+		t.Errorf("wakeup dedup key = %q, want Beijing date %q (UTC date would be %q)",
+			alert.DedupKey, beijingDate, utcDate)
+	}
+	if alert.DedupKey == utcDate {
+		t.Errorf("wakeup dedup key must NOT use UTC date %q", utcDate)
+	}
+
+	// 同一北京日、不同 UTC 日（北京 09-16 23:00）必须共用去重键，否则同一天重复提醒
+	sameBeijingDay := runWakeup(time.Date(2026, 9, 16, 15, 0, 0, 0, time.UTC))
+	if sameBeijingDay.DedupKey != alert.DedupKey {
+		t.Errorf("same Beijing day should share dedup key: %q vs %q",
+			sameBeijingDay.DedupKey, alert.DedupKey)
+	}
+
+	// 北京日切换后（北京 09-17 00:00）必须换键，否则跨日漏报
+	nextBeijingDay := runWakeup(time.Date(2026, 9, 16, 16, 0, 0, 0, time.UTC))
+	if nextBeijingDay.DedupKey == alert.DedupKey {
+		t.Errorf("next Beijing day should change dedup key, both %q", nextBeijingDay.DedupKey)
+	}
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Scanner 测试：E4 用量激增
 // ═══════════════════════════════════════════════════════════════════════════════

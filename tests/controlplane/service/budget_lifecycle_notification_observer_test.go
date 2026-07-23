@@ -78,7 +78,7 @@ func newLifecycleObserverFixture(t *testing.T) (*service.BudgetLifecycleNotifica
 		id TEXT PRIMARY KEY, user_id TEXT NOT NULL, type TEXT NOT NULL, level TEXT NOT NULL,
 		title TEXT NOT NULL, content TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'direct', dedupe_key TEXT,
 		ref_type TEXT NOT NULL DEFAULT '', ref_id TEXT NOT NULL DEFAULT '', is_read BOOL NOT NULL DEFAULT false,
-		read_at DATETIME, created_at DATETIME, UNIQUE(source,dedupe_key)
+		read_at DATETIME, created_at DATETIME, UNIQUE(user_id,source,dedupe_key)
 	)`).Error; err != nil {
 		t.Fatalf("migrate notifications: %v", err)
 	}

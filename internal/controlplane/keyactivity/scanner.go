@@ -120,7 +120,8 @@ func (s *Scanner) ScanOnce(ctx context.Context) error {
 	slog.Info("key_activity_scan",
 		"rows", len(rows),
 		"keys_touched", len(touched),
-		"cursor_ts", cur.TS.Format(time.RFC3339),
+		// cur.TS 来自 call_logs（UTC），日志展示统一转北京时间
+		"cursor_ts", cur.TS.In(shanghaiTz).Format(time.RFC3339),
 		"lag_sec", int(time.Since(cur.TS).Seconds()),
 	)
 	return nil
@@ -169,7 +170,7 @@ func (s *Scanner) evalRow(ctx context.Context, row *CallLogRow, cfg *KeyActivity
 		dormancy := time.Duration(cfg.DormantDays) * 24 * time.Hour
 		if row.TS.Sub(*state.LastSeenAt) >= dormancy {
 			dormantDays := int(row.TS.Sub(*state.LastSeenAt).Hours() / 24)
-			dedup := row.TS.Format("2006-01-02")
+			dedup := WakeupDedupKey(row.TS)
 			detail := fmt.Sprintf(`{"dormant_days":%d}`, dormantDays)
 			if !silentUA {
 				s.emitAlert(ctx, EventTypeWakeup, *row, fp, dedup, keyName, detail)

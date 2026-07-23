@@ -56,7 +56,9 @@ func (s *Scanner) emitAlert(ctx context.Context, eventType string, row CallLogRo
 
 // FormatNotification 生成通知标题与正文（导出，供测试）
 func FormatNotification(eventType, keyName, ua, ip string, ts time.Time, detail string) (string, string) {
-	t := ts.Format("2006-01-02 15:04:05")
+	// ts 来自 call_logs（数据库连接时区为 UTC），必须转北京时间再展示，
+	// 否则邮件正文会比实际发生时间早 8 小时（与邮件尾行的本地时间不一致）。
+	t := ts.In(shanghaiTz).Format("2006-01-02 15:04:05")
 	switch eventType {
 	case EventTypeNewSource:
 		return "Key 新设备使用提醒",
@@ -132,4 +134,11 @@ func hourBucketKey(t time.Time) string {
 func hourBucketTime(t time.Time) time.Time {
 	sh := t.In(shanghaiTz)
 	return time.Date(sh.Year(), sh.Month(), sh.Day(), sh.Hour(), 0, 0, 0, shanghaiTz)
+}
+
+// WakeupDedupKey 生成 E3 沉睡唤醒提醒的「每天一次」去重键（key_activity_alert.dedup_key）。
+// t 通常来自 call_logs.ts（数据库连接时区为 UTC），必须转北京时间再取日期：
+// 若按 UTC 日切分，北京时间早上 8 点就换日，会导致同一天重复提醒、或跨日少报。
+func WakeupDedupKey(t time.Time) string {
+	return t.In(shanghaiTz).Format("2006-01-02")
 }

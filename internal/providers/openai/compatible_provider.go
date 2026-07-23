@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/llmclient"
@@ -28,6 +29,10 @@ type CompatibleProvider struct {
 	apiKey         string
 	providerName   string
 	requestMutator RequestMutator
+	// responsesForTools 记录「哪些模型（部署名）的 function tools 只能走 /responses」。
+	// 上游第一次以 400 告知后写入，后续带工具的请求直接桥接，不再重复撞一次 400。
+	// 见 responses_tools_fallback.go。
+	responsesForTools sync.Map
 }
 
 func NewCompatibleProvider(apiKey string, opts providers.ProviderOptions, cfg CompatibleProviderConfig) *CompatibleProvider {
@@ -96,14 +101,12 @@ func (p *CompatibleProvider) ChatCompletion(ctx context.Context, req *core.ChatR
 	// LiteLLM 对齐：gpt-5.4+ + tools + reasoning_effort → 自动桥到 /responses
 	// Azure 自定义部署名再额外兜底（见 ShouldBridgeChatToResponsesForProvider）。
 	if ShouldBridgeChatToResponsesForProvider(p.providerName, req) {
-		slog.InfoContext(ctx, "chat via responses bridge",
-			"provider", p.providerName,
-			"model", req.Model,
-			"protocol", core.UpstreamProtocolResponsesBridge,
-			"tools", len(req.Tools),
-		)
-		ctx = core.WithUpstreamProtocol(ctx, core.UpstreamProtocolResponsesBridge)
-		return providers.ChatViaResponses(ctx, p, req)
+		return p.bridgeChatToResponses(ctx, req, "auto")
+	}
+	// 自愈：已知该部署的 function tools 只能在 /responses 上用，直接桥接，
+	// 不再重复撞一次 400（见 markToolsRequireResponses）。
+	if len(req.Tools) > 0 && p.toolsRequireResponses(req.Model) {
+		return p.bridgeChatToResponses(ctx, req, "tools_require_responses")
 	}
 	var resp core.ChatResponse
 	body, err := chatRequestBody(req)
@@ -125,6 +128,17 @@ func (p *CompatibleProvider) ChatCompletion(ctx context.Context, req *core.ChatR
 		Body:     body,
 	}, &resp)
 	if err != nil {
+		// 自愈：上游明确要求带工具时改用 /responses（Azure 推理模型在
+		// /chat/completions 上不支持 function tools）。同一渠道改走 Responses 重发一次，
+		// 并记住该部署，避免后续工具请求重复付这次 400 的代价。
+		if len(req.Tools) > 0 && IsResponsesRequiredForToolsError(err) {
+			p.markToolsRequireResponses(req.Model)
+			slog.WarnContext(ctx, "chat tools rejected on chat/completions, retrying via responses",
+				"provider", p.providerName,
+				"model", req.Model,
+			)
+			return p.bridgeChatToResponses(ctx, req, "upstream_requires_responses")
+		}
 		return nil, err
 	}
 	if resp.Model == "" {
@@ -139,14 +153,11 @@ func (p *CompatibleProvider) StreamChatCompletion(ctx context.Context, req *core
 	}
 	streamReq := req.WithStreaming()
 	if ShouldBridgeChatToResponsesForProvider(p.providerName, streamReq) {
-		slog.InfoContext(ctx, "stream chat via responses bridge",
-			"provider", p.providerName,
-			"model", streamReq.Model,
-			"protocol", core.UpstreamProtocolResponsesBridge,
-			"tools", len(streamReq.Tools),
-		)
-		ctx = core.WithUpstreamProtocol(ctx, core.UpstreamProtocolResponsesBridge)
-		return providers.StreamChatViaResponses(ctx, p, streamReq, p.providerName)
+		return p.bridgeStreamChatToResponses(ctx, streamReq, "auto")
+	}
+	// 自愈：已知该部署的 function tools 只能在 /responses 上用，直接桥接。
+	if len(streamReq.Tools) > 0 && p.toolsRequireResponses(streamReq.Model) {
+		return p.bridgeStreamChatToResponses(ctx, streamReq, "tools_require_responses")
 	}
 	body, err := chatRequestBody(streamReq)
 	if err != nil {
@@ -156,11 +167,25 @@ func (p *CompatibleProvider) StreamChatCompletion(ctx context.Context, req *core
 		body = sanitizeAzureChatBody(body)
 	}
 	ctx = core.WithUpstreamProtocol(ctx, core.UpstreamProtocolChat)
-	return p.client.DoStream(ctx, p.prepareRequest(llmclient.Request{
+	stream, err := p.client.DoStream(ctx, p.prepareRequest(llmclient.Request{
 		Method:   http.MethodPost,
 		Endpoint: "/chat/completions",
 		Body:     body,
 	}))
+	if err != nil {
+		// 自愈：上游明确要求带工具时改用 /responses。400 发生在响应头阶段，
+		// 此时还没有任何 SSE 数据发给客户端，直接重发是安全的。
+		if len(streamReq.Tools) > 0 && IsResponsesRequiredForToolsError(err) {
+			p.markToolsRequireResponses(streamReq.Model)
+			slog.WarnContext(ctx, "stream chat tools rejected on chat/completions, retrying via responses",
+				"provider", p.providerName,
+				"model", streamReq.Model,
+			)
+			return p.bridgeStreamChatToResponses(ctx, streamReq, "upstream_requires_responses")
+		}
+		return nil, err
+	}
+	return stream, nil
 }
 
 func (p *CompatibleProvider) ListModels(ctx context.Context) (*core.ModelsResponse, error) {

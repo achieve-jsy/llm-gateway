@@ -2957,6 +2957,12 @@ type ErrorLogEntry struct {
 	InboundEndpoint      *string `gorm:"column:inbound_endpoint" json:"inbound_endpoint"`
 	ApiKeyPrefix         *string `gorm:"column:api_key_prefix" json:"api_key_prefix"`
 	Resolved             bool    `gorm:"column:resolved" json:"resolved"`
+	// 配额拒绝事实（call_logs.quota_*，非配额拒绝的行全为 NULL）：
+	// 用于在错误日志列表直接区分"并发闸还是 RPM 闸、哪一层、限额多少"，
+	// 避免像 2026-09-10 并发计数被钉死事故那样只能靠反推流量分布下结论。
+	QuotaGate  *string `gorm:"column:quota_gate" json:"quota_gate"`
+	QuotaLayer *string `gorm:"column:quota_layer" json:"quota_layer"`
+	QuotaLimit *int    `gorm:"column:quota_limit" json:"quota_limit"`
 }
 
 // errorLogPhaseExpr 从 call_logs 状态推导阶段（对齐前端 phase 筛选项）
@@ -3010,9 +3016,9 @@ func (h *OpsHandler) ListErrorLogs(c *gin.Context) {
 		}
 	}
 	if search != "" {
-		baseWhere += " AND (model ILIKE ? OR provider ILIKE ? OR request_id = ? OR COALESCE(user_name,'') ILIKE ? OR COALESCE(budget_block_code,'') ILIKE ?)"
+		baseWhere += " AND (model ILIKE ? OR provider ILIKE ? OR request_id = ? OR COALESCE(user_name,'') ILIKE ? OR COALESCE(budget_block_code,'') ILIKE ? OR COALESCE(quota_gate,'') ILIKE ?)"
 		like := "%" + search + "%"
-		args = append(args, like, like, search, like, like)
+		args = append(args, like, like, search, like, like, like)
 	}
 
 	var total int64
@@ -3034,6 +3040,9 @@ func (h *OpsHandler) ListErrorLogs(c *gin.Context) {
 			COALESCE(group_name, '') AS group_name,
 			status,
 			CASE
+				WHEN COALESCE(quota_gate, '') <> '' THEN
+					'配额拒绝: ' || quota_gate || ' / ' || COALESCE(NULLIF(quota_layer, ''), 'unknown')
+					|| COALESCE(' (limit=' || quota_limit::text || ')', '')
 				WHEN budget_block_code IS NOT NULL AND budget_block_code <> '' THEN '预算拦截: ' || budget_block_code
 				WHEN COALESCE(upstream_status, 0) >= 400 THEN '上游 HTTP ' || upstream_status::text
 				ELSE 'HTTP ' || status::text
@@ -3048,7 +3057,10 @@ func (h *OpsHandler) ListErrorLogs(c *gin.Context) {
 			NULL::text AS upstream_endpoint,
 			NULLIF(inbound_endpoint, '') AS inbound_endpoint,
 			CASE WHEN key_id IS NOT NULL AND key_id <> '' THEN LEFT(key_id, 8) ELSE NULL END AS api_key_prefix,
-			false AS resolved
+			false AS resolved,
+			NULLIF(quota_gate, '') AS quota_gate,
+			NULLIF(quota_layer, '') AS quota_layer,
+			quota_limit
 		FROM call_logs
 		WHERE %s
 		%s

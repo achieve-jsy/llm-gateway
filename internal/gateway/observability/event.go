@@ -67,6 +67,12 @@ type UsageEvent struct {
 	UserAgent       string
 	IPAddress       string
 
+	// 配额拒绝事实（仅被配额闸门拒绝的请求有值）：由 quota.WriteQuotaRejected 写入 gin context，
+	// 供运维直接从 call_logs 判断"被哪个闸门拒绝、限额多少"。
+	QuotaGate  string // rpm | concurrency
+	QuotaLayer string // subject | group | model | default
+	QuotaLimit *int   // 该次判定实际生效的限额值；nil=非配额拒绝
+
 	// 成本（采集时算好并锁价）
 	InputPriceSnapshot  float64
 	OutputPriceSnapshot float64
@@ -109,6 +115,7 @@ func (e UsageEvent) ToCallLog() (obsmodel.CallLog, error) {
 		FailoverUsed: e.FailoverUsed, RoutedViaGroup: e.RoutedViaGroup, UsageMissing: e.UsageMissing,
 		ReasoningEffort: e.ReasoningEffort, UserAgent: e.UserAgent, IPAddress: e.IPAddress,
 		InboundEndpoint: e.InboundEndpoint, InputPriceSnapshot: &e.InputPriceSnapshot,
+		QuotaGate: e.QuotaGate, QuotaLayer: e.QuotaLayer, QuotaLimit: e.QuotaLimit,
 		OutputPriceSnapshot: &e.OutputPriceSnapshot, InputCostUSD: e.InputCostUSD,
 		OutputCostUSD: e.OutputCostUSD, CacheReadCostUSD: e.CacheReadCostUSD, EstCostUSD: e.EstCostUSD,
 		BudgetTierID: tierID, BudgetTierNameSnapshot: e.BudgetTierNameSnapshot,

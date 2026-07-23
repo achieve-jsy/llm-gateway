@@ -87,8 +87,14 @@
       "budget_tier_constraints_snapshot",
       "budget_block_code", "budget_block_dimension", "budget_block_scope_type",
       "budget_block_scope_id", "budget_block_period_type",
+      "quota_gate", "quota_layer", "quota_limit",
       "ip_address", "user_agent"
     ],
+    "log_row_field_notes": {
+      "quota_gate": "concurrency | rpm；仅被配额闸门拒绝的请求（429）有值，其余为空。取值来自本次判定的 QuotaViolation，非事后推断",
+      "quota_layer": "subject | group | model | default；该次判定生效的配额层级",
+      "quota_limit": "int | null；该次判定实际生效的限额值。null=非配额拒绝；0=该层未设限/已关闭"
+    },
     "key_type_enum": ["personal", "service"],
   "routes": [
       {

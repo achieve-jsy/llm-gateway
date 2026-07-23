@@ -49,6 +49,12 @@ export interface LogRow {
   output_price_snapshot?: number | null
   /** 调用的端点路径，如 /v1/chat/completions, /v1/embeddings, /v1/rerank */
   inbound_endpoint?: string
+  /** 配额拒绝事实：rpm | concurrency，仅被配额闸门拒绝的行有值（其余行不返回该字段） */
+  quota_gate?: string
+  /** 配额拒绝事实：subject | group | model | default，仅被配额闸门拒绝的行有值 */
+  quota_layer?: string
+  /** 配额拒绝事实：该次判定实际生效的限额；null=非配额拒绝 */
+  quota_limit?: number | null
   /** 原始请求体（列表 API 自 call_traces JOIN，用于 rerank 文档数等） */
   request_body?: unknown
   /** 原始响应体（列表 API 自 call_traces JOIN，用于 Seedance 结果/错误摘要） */

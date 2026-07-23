@@ -674,6 +674,12 @@ export interface OpsErrorLogEntry {
   inbound_endpoint: string | null
   api_key_prefix: string | null
   resolved: boolean
+  /** 配额拒绝事实：rpm | concurrency，仅被配额闸门拒绝的行有值 */
+  quota_gate: string | null
+  /** 配额拒绝事实：subject | group | model | default */
+  quota_layer: string | null
+  /** 配额拒绝事实：该次判定实际生效的限额；null=非配额拒绝 */
+  quota_limit: number | null
 }
 
 export interface OpsErrorLogQuery {

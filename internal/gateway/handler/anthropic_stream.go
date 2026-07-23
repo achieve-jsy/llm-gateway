@@ -40,6 +40,7 @@ type anthropicStreamState struct {
 	model                string
 	estimatedInputTokens int    // 本地估算的 input_tokens（无真实 usage 时的备用值）
 	finishReason         string // 记录映射后的 Anthropic stop_reason
+	inputTokens          int    // 末尾 usage 提供的真实 prompt_tokens（未缓存部分，累计，供 message_delta 覆盖估算）
 	outputTokens         int    // 末尾 usage 提供的 completion_tokens（累计）
 	cacheReadTokens      int    // 末尾 usage 提供的 cache_read_input_tokens（累计，取最大）
 	cacheCreationTokens  int    // 末尾 usage 提供的 cache_creation_input_tokens（累计，取最大）
@@ -149,6 +150,7 @@ func (a *anthropicStreamAdapter) flushAndFinish() {
 	a.state.finished = true
 	stopReason := a.state.finishReason
 	outputTokens := a.state.outputTokens
+	inputTokens := a.state.inputTokens
 	cacheRead := a.state.cacheReadTokens
 	cacheCreation := a.state.cacheCreationTokens
 	a.state.mu.Unlock()
@@ -157,7 +159,7 @@ func (a *anthropicStreamAdapter) flushAndFinish() {
 		stopReason = "end_turn"
 	}
 	a.closeAllBlocks()
-	a.emitMessageDelta(stopReason, outputTokens, cacheRead, cacheCreation)
+	a.emitMessageDelta(stopReason, outputTokens, inputTokens, cacheRead, cacheCreation)
 	a.emitRaw("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 }
 
@@ -195,6 +197,12 @@ type openAIChatChunk struct {
 		TotalTokens              int `json:"total_tokens"`
 		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		// prompt_tokens_details.cached_tokens：OpenAI 兼容上游把缓存命中数放在
+		// 这里。与非流式 ChatResponseToAnthropic 的读取来源对齐，作为 cache_read
+		// 的首选来源（回退 cache_read_input_tokens）。
+		PromptTokensDetails *struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details,omitempty"`
 	} `json:"usage,omitempty"`
 }
 
@@ -224,8 +232,18 @@ func (a *anthropicStreamAdapter) processChunk(data []byte) {
 		if chunk.Usage.CompletionTokens > a.state.outputTokens {
 			a.state.outputTokens = chunk.Usage.CompletionTokens
 		}
-		if chunk.Usage.CacheReadInputTokens > a.state.cacheReadTokens {
-			a.state.cacheReadTokens = chunk.Usage.CacheReadInputTokens
+		if chunk.Usage.PromptTokens > a.state.inputTokens {
+			a.state.inputTokens = chunk.Usage.PromptTokens
+		}
+		// cache_read 首选 prompt_tokens_details.cached_tokens（与非流式
+		// ChatResponseToAnthropic 同源），回退 cache_read_input_tokens，避免上游把
+		// 命中数放在不同字段导致流式/非流式口径不一。
+		cacheRead := chunk.Usage.CacheReadInputTokens
+		if chunk.Usage.PromptTokensDetails != nil && chunk.Usage.PromptTokensDetails.CachedTokens > 0 {
+			cacheRead = chunk.Usage.PromptTokensDetails.CachedTokens
+		}
+		if cacheRead > a.state.cacheReadTokens {
+			a.state.cacheReadTokens = cacheRead
 		}
 		if chunk.Usage.CacheCreationInputTokens > a.state.cacheCreationTokens {
 			a.state.cacheCreationTokens = chunk.Usage.CacheCreationInputTokens
@@ -254,7 +272,7 @@ func (a *anthropicStreamAdapter) processChunk(data []byte) {
 			// 透传本 chunk（多为末尾 usage-only chunk）的真实非零 cache 字段到
 			// message_delta.usage。权衡：这与 Anthropic 官方 message_delta 仅含
 			// output_tokens 的口径略有偏离，但可避免流式晚到的非零 cache 被丢。
-			a.emitMessageDelta(stopReason, chunk.Usage.CompletionTokens,
+			a.emitMessageDelta(stopReason, a.state.outputTokens, a.state.inputTokens,
 				a.state.cacheReadTokens, a.state.cacheCreationTokens)
 			a.emitRaw("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 			a.state.finished = true
@@ -468,13 +486,19 @@ func (a *anthropicStreamAdapter) emitContentBlockStop() {
 
 // emitMessageDelta emits a message_delta event.
 //
+// inputTokens 覆盖 message_start 的估算占位：末尾 usage-only chunk 的真实
+// input_tokens（未缓存部分）通过 message_delta 下发，借 SDK "overwrite when present,
+// never add" 的合并语义把估算修正为真实值，避免与 cache_read 重复计费。
 // cacheRead/cacheCreation 仅在 >0 时附带，避免产生空洞的 0 值字段。权衡：这与
 // Anthropic 官方 message_delta.usage 仅含 output_tokens 的口径略有偏离，但可让
 // 流式末尾（usage-only chunk / finish chunk）晚到的真实非零 cache 透传到客户端，
 // 避免 cache 被丢。缺省 0 时保持官方口径（不输出 cache 字段）。
-func (a *anthropicStreamAdapter) emitMessageDelta(stopReason string, outputTokens int, cacheRead, cacheCreation int) {
+func (a *anthropicStreamAdapter) emitMessageDelta(stopReason string, outputTokens, inputTokens, cacheRead, cacheCreation int) {
 	usage := map[string]any{
 		"output_tokens": outputTokens,
+	}
+	if inputTokens > 0 {
+		usage["input_tokens"] = inputTokens
 	}
 	if cacheRead > 0 {
 		usage["cache_read_input_tokens"] = cacheRead

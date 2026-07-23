@@ -534,3 +534,67 @@ func TestHandleCountTokens_UsesCalibratedEstimate(t *testing.T) {
 		t.Errorf("count_tokens input_tokens = %v, want 342±5 (calibrated CJK estimate)", got)
 	}
 }
+
+// TestAnthropicStream_MessageDeltaOverwritesEstimateInputTokens 验证缓存命中场景：
+// message_start 显示估算 input_tokens（1524 占位），末尾 message_delta 携带真实未缓存
+// input_tokens（14）+ cache_read（2754），借 SDK "overwrite when present, never add"
+// 语义覆盖估算，使 input 与 cache_read 拆分不重叠，消除重复计费。
+func TestAnthropicStream_MessageDeltaOverwritesEstimateInputTokens(t *testing.T) {
+	sse := "" +
+		"data: {\"id\":\"chatcmpl-9\",\"model\":\"claude-3-5-sonnet\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hi\"}}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-9\",\"model\":\"claude-3-5-sonnet\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-9\",\"model\":\"claude-3-5-sonnet\",\"choices\":[],\"usage\":{\"prompt_tokens\":14,\"completion_tokens\":4,\"total_tokens\":2772,\"cache_read_input_tokens\":2754,\"cache_creation_input_tokens\":0}}\n\n" +
+		"data: [DONE]\n\n"
+
+	events := parseAnthropicEvents(t, feedAnthropicStream(t, sse, 1524))
+
+	ms := findEvent(events, "message_start")
+	if ms == nil {
+		t.Fatalf("no message_start; got %v", eventTypes(events))
+	}
+	msUsage := ms["message"].(map[string]any)["usage"].(map[string]any)
+	if v := msUsage["input_tokens"]; v != float64(1524) {
+		t.Errorf("message_start.input_tokens = %v, want estimate 1524 (占位)", v)
+	}
+
+	md := findEvent(events, "message_delta")
+	if md == nil {
+		t.Fatalf("no message_delta; got %v", eventTypes(events))
+	}
+	mdUsage := md["usage"].(map[string]any)
+	if v := mdUsage["input_tokens"]; v != float64(14) {
+		t.Errorf("message_delta.input_tokens = %v, want real 14 (覆盖估算，未缓存部分)", v)
+	}
+	if v := mdUsage["cache_read_input_tokens"]; v != float64(2754) {
+		t.Errorf("message_delta.cache_read_input_tokens = %v, want 2754", v)
+	}
+	// 最终快照：14 (input) + 2754 (cache_read) = 2768，拆分不重叠，无重复计费。
+	total := mdUsage["input_tokens"].(float64) + mdUsage["cache_read_input_tokens"].(float64)
+	if total != float64(2768) {
+		t.Errorf("input(%v)+cache_read(%v)=%.0f, want 2768 (拆分不重叠)", mdUsage["input_tokens"], mdUsage["cache_read_input_tokens"], total)
+	}
+}
+
+// TestAnthropicStream_CacheReadFromPromptTokensDetails 验证 OpenAI 兼容上游把命中数
+// 放在 prompt_tokens_details.cached_tokens 时，流式也正确映射为 cache_read（与非流式
+// ChatResponseToAnthropic 同源）。
+func TestAnthropicStream_CacheReadFromPromptTokensDetails(t *testing.T) {
+	sse := "" +
+		"data: {\"id\":\"chatcmpl-a\",\"model\":\"claude-3-5-sonnet\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hi\"}}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-a\",\"model\":\"claude-3-5-sonnet\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-a\",\"model\":\"claude-3-5-sonnet\",\"choices\":[],\"usage\":{\"prompt_tokens\":14,\"completion_tokens\":4,\"prompt_tokens_details\":{\"cached_tokens\":2754}}}\n\n" +
+		"data: [DONE]\n\n"
+
+	events := parseAnthropicEvents(t, feedAnthropicStream(t, sse, 1524))
+	md := findEvent(events, "message_delta")
+	if md == nil {
+		t.Fatalf("no message_delta; got %v", eventTypes(events))
+	}
+	usage := md["usage"].(map[string]any)
+	if v := usage["cache_read_input_tokens"]; v != float64(2754) {
+		t.Errorf("prompt_tokens_details.cached_tokens 未映射为 cache_read: got %v, want 2754", v)
+	}
+	if v := usage["cache_read_input_tokens"]; v == nil {
+		t.Errorf("cache_read_input_tokens 未出现")
+	}
+}

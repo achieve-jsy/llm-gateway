@@ -79,7 +79,22 @@ func getLastUser(msgs []core.Message) *core.Message {
 	return nil
 }
 
-func estimateTokens(text string) int {
+const (
+	// cjkTokenWeight 校准过的 CJK 每字符 token 系数，供流式 input_tokens 估算使用。
+	// 旧值 1.0 会把中文高估约 1.5 倍（实测 517 中文估计 517 vs 真实 342），
+	// 校准为 ≈0.66 后更贴近真实。
+	cjkTokenWeight = 0.66
+	// routingCJKTokenWeight 复杂度路由口径的 CJK 系数。保留 1.0 以保持既有路由
+	// 行为与复杂度测试断言不变；仅流式 input_tokens 估算采用校准后的 cjkTokenWeight。
+	routingCJKTokenWeight = 1.0
+	// otherTokenChars 非 CJK 字符每 token 的字符数（贴近 BPE，English/Latin）。
+	otherTokenChars = 4
+	// minimalTokens 非空文本至少返回 1 token，避免 message_start 出现硬编码 0。
+	minimalTokens = 1
+)
+
+// estimateTokensWithWeight 按给定 CJK 权重估算文本 token 数（CJK/非 CJK 分类的核心实现）。
+func estimateTokensWithWeight(text string, cjkWeight float64) int {
 	if text == "" {
 		return 0
 	}
@@ -96,14 +111,29 @@ func estimateTokens(text string) int {
 			other++
 		}
 	}
-	return cjk + other/4
+	return int(float64(cjk)*cjkWeight) + other/otherTokenChars
 }
 
-// EstimateTokens 估算一段文本粗略的 token 数（CJK 字符按 1 token 计，其余按
-// 4 字符 1 token 计）。提供给外部（如 /v1/messages 流式适配器）在缺少真实 usage
-// 时生成一个非零的 input_tokens 粗略值。内部实现与 estimateTokens 一致。
+func estimateTokens(text string) int {
+	return estimateTokensWithWeight(text, routingCJKTokenWeight)
+}
+
+// EstimateTokens 估算一段文本粗略的 token 数（复杂度路由口径：CJK 按 1 token/字，
+// 其余按 4 字符 1 token）。提供给外部在缺少真实 usage 时生成一个非零的
+// input_tokens 粗略值。内部实现与 estimateTokens 一致。
 func EstimateTokens(text string) int {
 	return estimateTokens(text)
+}
+
+// EstimateTokensCalibrated 为 /v1/messages 流式 message_start.input_tokens 提供更贴近
+// 真实的估算：CJK 按 ≈0.66 token/字（校准值），其余按 4 字符 1 token，并保证非空文本
+// 至少返回 1。相比 EstimateTokens（CJK=1.0）可把中文高估从 ~1.5 倍收窄到 ~1.0 倍。
+func EstimateTokensCalibrated(text string) int {
+	tokens := estimateTokensWithWeight(text, cjkTokenWeight)
+	if tokens < minimalTokens {
+		return minimalTokens
+	}
+	return tokens
 }
 
 func countKeywordHits(textLower string, keywords []string) int {

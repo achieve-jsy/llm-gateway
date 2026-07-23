@@ -41,6 +41,8 @@ type anthropicStreamState struct {
 	estimatedInputTokens int    // 本地估算的 input_tokens（无真实 usage 时的备用值）
 	finishReason         string // 记录映射后的 Anthropic stop_reason
 	outputTokens         int    // 末尾 usage 提供的 completion_tokens（累计）
+	cacheReadTokens      int    // 末尾 usage 提供的 cache_read_input_tokens（累计，取最大）
+	cacheCreationTokens  int    // 末尾 usage 提供的 cache_creation_input_tokens（累计，取最大）
 	openBlockIndex       int    // current content block index
 	hasTextBlock         bool   // whether a text block has been started
 	hasToolBlock         bool   // whether at least one tool block exists
@@ -147,13 +149,15 @@ func (a *anthropicStreamAdapter) flushAndFinish() {
 	a.state.finished = true
 	stopReason := a.state.finishReason
 	outputTokens := a.state.outputTokens
+	cacheRead := a.state.cacheReadTokens
+	cacheCreation := a.state.cacheCreationTokens
 	a.state.mu.Unlock()
 
 	if stopReason == "" {
 		stopReason = "end_turn"
 	}
 	a.closeAllBlocks()
-	a.emitMessageDelta(stopReason, outputTokens)
+	a.emitMessageDelta(stopReason, outputTokens, cacheRead, cacheCreation)
 	a.emitRaw("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 }
 
@@ -213,10 +217,18 @@ func (a *anthropicStreamAdapter) processChunk(data []byte) {
 		return
 	}
 
-	// 累积末尾 usage 的 completion_tokens（usage 为累计值，取 max 以兼容增量式上游）。
+	// 累积末尾 usage 的 completion_tokens 与 cache 字段（usage 为累计值，取 max
+	// 以兼容增量式上游）。cache 字段可能仅在末尾 usage-only chunk 才出现，需在
+	// message_delta 时透传，避免流式晚到的非零 cache 被丢。
 	if chunk.Usage != nil {
 		if chunk.Usage.CompletionTokens > a.state.outputTokens {
 			a.state.outputTokens = chunk.Usage.CompletionTokens
+		}
+		if chunk.Usage.CacheReadInputTokens > a.state.cacheReadTokens {
+			a.state.cacheReadTokens = chunk.Usage.CacheReadInputTokens
+		}
+		if chunk.Usage.CacheCreationInputTokens > a.state.cacheCreationTokens {
+			a.state.cacheCreationTokens = chunk.Usage.CacheCreationInputTokens
 		}
 	}
 
@@ -239,7 +251,11 @@ func (a *anthropicStreamAdapter) processChunk(data []byte) {
 			if stopReason == "" {
 				stopReason = "end_turn"
 			}
-			a.emitMessageDelta(stopReason, chunk.Usage.CompletionTokens)
+			// 透传本 chunk（多为末尾 usage-only chunk）的真实非零 cache 字段到
+			// message_delta.usage。权衡：这与 Anthropic 官方 message_delta 仅含
+			// output_tokens 的口径略有偏离，但可避免流式晚到的非零 cache 被丢。
+			a.emitMessageDelta(stopReason, chunk.Usage.CompletionTokens,
+				a.state.cacheReadTokens, a.state.cacheCreationTokens)
 			a.emitRaw("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 			a.state.finished = true
 		}
@@ -329,15 +345,13 @@ func (a *anthropicStreamAdapter) emitMessageStart(chunk openAIChatChunk) {
 		cacheCreation = chunk.Usage.CacheCreationInputTokens
 	}
 
+	// 总是携带 cache_read_input_tokens / cache_creation_input_tokens（触发 chunk
+	// 缺失时缺省 0），使客户端在 message_start 即能看到 cache 口径，不因值为 0 而漏字段。
 	usage := map[string]any{
-		"input_tokens":  inputTokens,
-		"output_tokens": 0,
-	}
-	if cacheRead > 0 {
-		usage["cache_read_input_tokens"] = cacheRead
-	}
-	if cacheCreation > 0 {
-		usage["cache_creation_input_tokens"] = cacheCreation
+		"input_tokens":                inputTokens,
+		"output_tokens":               0,
+		"cache_read_input_tokens":     cacheRead,
+		"cache_creation_input_tokens": cacheCreation,
 	}
 
 	msg := map[string]any{
@@ -453,16 +467,28 @@ func (a *anthropicStreamAdapter) emitContentBlockStop() {
 }
 
 // emitMessageDelta emits a message_delta event.
-func (a *anthropicStreamAdapter) emitMessageDelta(stopReason string, outputTokens int) {
+//
+// cacheRead/cacheCreation 仅在 >0 时附带，避免产生空洞的 0 值字段。权衡：这与
+// Anthropic 官方 message_delta.usage 仅含 output_tokens 的口径略有偏离，但可让
+// 流式末尾（usage-only chunk / finish chunk）晚到的真实非零 cache 透传到客户端，
+// 避免 cache 被丢。缺省 0 时保持官方口径（不输出 cache 字段）。
+func (a *anthropicStreamAdapter) emitMessageDelta(stopReason string, outputTokens int, cacheRead, cacheCreation int) {
+	usage := map[string]any{
+		"output_tokens": outputTokens,
+	}
+	if cacheRead > 0 {
+		usage["cache_read_input_tokens"] = cacheRead
+	}
+	if cacheCreation > 0 {
+		usage["cache_creation_input_tokens"] = cacheCreation
+	}
 	delta := map[string]any{
 		"type": "message_delta",
 		"delta": map[string]any{
 			"stop_reason":   stopReason,
 			"stop_sequence": nil,
 		},
-		"usage": map[string]any{
-			"output_tokens": outputTokens,
-		},
+		"usage": usage,
 	}
 	b, _ := json.Marshal(delta)
 	line := fmt.Sprintf("event: message_delta\ndata: %s\n\n", string(b))

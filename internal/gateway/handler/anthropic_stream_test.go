@@ -4,8 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/example/llm-gateway/internal/core"
+	"github.com/gin-gonic/gin"
 )
 
 // feedAnthropicStream pipes raw OpenAI-SSE bytes into a new
@@ -302,4 +307,230 @@ func countContentBlockDeltaType(events []map[string]any, deltaType string) int {
 		}
 	}
 	return n
+}
+
+// TestEstimatePromptTokens_ChineseAccuracyRegression 用船长实测样本验证估算偏差：
+// 517 个中文真实值 342，估算应明显收窄（不再 ~1.5 倍高估）。estimatePromptTokens 会
+// 计入每条消息的结构 overhead（此处为单条消息 +3）。
+func TestEstimatePromptTokens_ChineseAccuracyRegression(t *testing.T) {
+	const unit = "中文"
+	parts := make([]rune, 0, 517)
+	for len(parts) < 517 {
+		parts = append(parts, []rune(unit)...)
+	}
+	msgs := []core.Message{{Role: "user", Content: string(parts[:517])}}
+
+	got := estimatePromptTokens(msgs)
+	// 校准后 int(517*0.66)=341 + 3 overhead = 344，贴近真实 342（±5）。
+	if got < 337 || got > 347 {
+		t.Errorf("estimatePromptTokens(517 CJK) = %d, want 342±5 (real measured); old estimate was 517+3=520", got)
+	}
+}
+
+// TestEstimatePromptTokens_EnglishRegression 验证英文文本仍按约 4 字符/token 估算，
+// 不因 CJK 校准而回归。
+func TestEstimatePromptTokens_EnglishRegression(t *testing.T) {
+	msgs := []core.Message{{Role: "user", Content: "hello world test here, this is a long english sentence for token estimation."}}
+	got := estimatePromptTokens(msgs)
+	if got < 12 || got > 28 {
+		t.Errorf("estimatePromptTokens(english) = %d, want ~18-24 (4 chars/token + overhead)", got)
+	}
+}
+
+// TestEstimatePromptTokens_EmptyContentNoPanic 覆盖空 content 边界，不应 panic，
+// 且非空消息数下结果≥1。
+func TestEstimatePromptTokens_EmptyContentNoPanic(t *testing.T) {
+	got := estimatePromptTokens([]core.Message{
+		{Role: "system", Content: ""},
+		{Role: "user", Content: ""},
+	})
+	if got < 1 {
+		t.Errorf("estimatePromptTokens(empty msgs) = %d, want >= 1 (structure overhead)", got)
+	}
+	if got := estimatePromptTokens(nil); got != 0 {
+		t.Errorf("estimatePromptTokens(nil) = %d, want 0", got)
+	}
+}
+
+// TestEstimatePromptTokens_MixedLanguages 覆盖中英混合 + tool_use 结构消息：不 panic，
+// 且结果为正的合理值。
+func TestEstimatePromptTokens_MixedLanguages(t *testing.T) {
+	msgs := []core.Message{
+		{Role: "system", Content: "You are a helpful assistant. 你是助手。"},
+		{Role: "user", Content: "What is 分布式架构?"},
+		{Role: "assistant", ToolCalls: []core.ToolCall{{ID: "call_1", Type: "function", Function: core.FunctionCall{Name: "lookup", Arguments: `{"q":"x"}`}}}},
+	}
+	got := estimatePromptTokens(msgs) // 不应 panic
+	if got < 3 {
+		t.Errorf("estimatePromptTokens(mixed) = %d, want >= 3 (3 messages, each overhead>=1)", got)
+	}
+}
+
+// TestChatResponseToAnthropic_CacheTokensPassthrough 覆盖非流式 /v1/messages 路径：
+// CacheReadInputTokens / CacheCreationInputTokens 不再因值为非零而丢失。
+func TestChatResponseToAnthropic_CacheTokensPassthrough(t *testing.T) {
+	resp := &core.ChatResponse{
+		ID:    "msg_1",
+		Model: "claude-3-5-sonnet",
+		Usage: core.Usage{
+			PromptTokens:     100,
+			CompletionTokens: 20,
+			RawUsage: map[string]any{
+				"cache_read_input_tokens":     int64(30),
+				"cache_creation_input_tokens": int64(5),
+			},
+		},
+		Choices: []core.Choice{
+			{Message: core.ResponseMessage{Role: "assistant", Content: "hi"}, FinishReason: "stop"},
+		},
+	}
+
+	anth := core.ChatResponseToAnthropic(resp, "claude-3-5-sonnet")
+	if anth == nil {
+		t.Fatal("ChatResponseToAnthropic returned nil")
+	}
+	if anth.Usage.CacheReadInputTokens == nil || *anth.Usage.CacheReadInputTokens != 30 {
+		t.Errorf("CacheReadInputTokens = %v, want 30", anth.Usage.CacheReadInputTokens)
+	}
+	if anth.Usage.CacheCreationInputTokens == nil || *anth.Usage.CacheCreationInputTokens != 5 {
+		t.Errorf("CacheCreationInputTokens = %v, want 5 (previously never set)", anth.Usage.CacheCreationInputTokens)
+	}
+	if anth.Usage.InputTokens != 100 || anth.Usage.OutputTokens != 20 {
+		t.Errorf("Input/Output tokens mismatch: %+v", anth.Usage)
+	}
+}
+
+// TestChatResponseToAnthropic_CacheTokensFromPromptDetails 覆盖 OpenAI-compatible
+// 口径：cache_read 来自 prompt_tokens_details.cached_tokens，且 cache_creation 缺失时
+// 不输出零值字段（omitempty）。
+func TestChatResponseToAnthropic_CacheTokensFromPromptDetails(t *testing.T) {
+	resp := &core.ChatResponse{
+		ID:    "msg_2",
+		Model: "gpt-4o",
+		Usage: core.Usage{
+			PromptTokens:        50,
+			CompletionTokens:    10,
+			PromptTokensDetails: &core.PromptTokensDetails{CachedTokens: 12},
+		},
+		Choices: []core.Choice{
+			{Message: core.ResponseMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop"},
+		},
+	}
+
+	anth := core.ChatResponseToAnthropic(resp, "gpt-4o")
+	if anth.Usage.CacheReadInputTokens == nil || *anth.Usage.CacheReadInputTokens != 12 {
+		t.Errorf("CacheReadInputTokens = %v, want 12", anth.Usage.CacheReadInputTokens)
+	}
+	if anth.Usage.CacheCreationInputTokens != nil {
+		t.Errorf("CacheCreationInputTokens = %v, want nil when no cache_creation", anth.Usage.CacheCreationInputTokens)
+	}
+}
+
+// TestAnthropicStream_MessageStartAlwaysCarriesCache 验证 message_start.usage 总是带
+// cache_read_input_tokens / cache_creation_input_tokens 字段（触发 chunk 无 usage 时缺省 0），
+// 不因值为 0 而漏字段。
+func TestAnthropicStream_MessageStartAlwaysCarriesCache(t *testing.T) {
+	sse := "" +
+		"data: {\"id\":\"chatcmpl-6\",\"model\":\"claude-3-5-sonnet\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello\"}}]}\n\n" +
+		"data: [DONE]\n\n"
+
+	events := parseAnthropicEvents(t, feedAnthropicStream(t, sse, 100))
+
+	ms := findEvent(events, "message_start")
+	if ms == nil {
+		t.Fatalf("no message_start; got %v", eventTypes(events))
+	}
+	usage := ms["message"].(map[string]any)["usage"].(map[string]any)
+	if v, ok := usage["cache_read_input_tokens"]; !ok || v != float64(0) {
+		t.Errorf("cache_read_input_tokens = %v (present=%v), want 0 always present", v, ok)
+	}
+	if v, ok := usage["cache_creation_input_tokens"]; !ok || v != float64(0) {
+		t.Errorf("cache_creation_input_tokens = %v (present=%v), want 0 always present", v, ok)
+	}
+}
+
+// TestAnthropicStream_TrailingCacheTokensFlowToMessageDelta 验证末尾 usage-only chunk
+// 携带的真实非零 cache 字段会透传到 message_delta.usage（此前会被丢弃）。
+func TestAnthropicStream_TrailingCacheTokensFlowToMessageDelta(t *testing.T) {
+	sse := "" +
+		"data: {\"id\":\"chatcmpl-7\",\"model\":\"claude-3-5-sonnet\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hi\"}}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-7\",\"model\":\"claude-3-5-sonnet\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-7\",\"model\":\"claude-3-5-sonnet\",\"choices\":[],\"usage\":{\"completion_tokens\":5,\"cache_read_input_tokens\":7,\"cache_creation_input_tokens\":3}}\n\n" +
+		"data: [DONE]\n\n"
+
+	events := parseAnthropicEvents(t, feedAnthropicStream(t, sse, 100))
+
+	md := findEvent(events, "message_delta")
+	if md == nil {
+		t.Fatalf("no message_delta; got %v", eventTypes(events))
+	}
+	usage := md["usage"].(map[string]any)
+	if v := usage["cache_read_input_tokens"]; v != float64(7) {
+		t.Errorf("message_delta.cache_read_input_tokens = %v, want 7", v)
+	}
+	if v := usage["cache_creation_input_tokens"]; v != float64(3) {
+		t.Errorf("message_delta.cache_creation_input_tokens = %v, want 3", v)
+	}
+	if v := usage["output_tokens"]; v != float64(5) {
+		t.Errorf("message_delta.output_tokens = %v, want 5", v)
+	}
+}
+
+// TestAnthropicStream_MessageDeltaOmitsZeroCache 验证 message_delta 在 cache 为 0 时
+// 保持官方口径（仅 output_tokens），不输出空洞的 0 值 cache 字段。
+func TestAnthropicStream_MessageDeltaOmitsZeroCache(t *testing.T) {
+	sse := "" +
+		"data: {\"id\":\"chatcmpl-8\",\"model\":\"claude-3-5-sonnet\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hi\"}}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-8\",\"model\":\"claude-3-5-sonnet\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-8\",\"model\":\"claude-3-5-sonnet\",\"choices\":[],\"usage\":{\"completion_tokens\":4}}\n\n" +
+		"data: [DONE]\n\n"
+
+	events := parseAnthropicEvents(t, feedAnthropicStream(t, sse, 100))
+
+	md := findEvent(events, "message_delta")
+	if md == nil {
+		t.Fatalf("no message_delta; got %v", eventTypes(events))
+	}
+	usage := md["usage"].(map[string]any)
+	if _, ok := usage["cache_read_input_tokens"]; ok {
+		t.Error("message_delta.cache_read_input_tokens should be omitted when 0")
+	}
+	if _, ok := usage["cache_creation_input_tokens"]; ok {
+		t.Error("message_delta.cache_creation_input_tokens should be omitted when 0")
+	}
+}
+
+// TestHandleCountTokens_UsesCalibratedEstimate 验证 /v1/messages/count_tokens 改用
+// 校准估算：517 个中文不再被旧 totalChars/4（≈129）严重低估，而是贴近真实 342±5。
+func TestHandleCountTokens_UsesCalibratedEstimate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const unit = "中文"
+	parts := make([]rune, 0, 517)
+	for len(parts) < 517 {
+		parts = append(parts, []rune(unit)...)
+	}
+	body := `{"model":"claude-3-5-sonnet","max_tokens":1024,"messages":[{"role":"user","content":"` + string(parts[:517]) + `"}]}`
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h := &MessagesHandler{}
+	h.HandleCountTokens(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("count_tokens status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("bad JSON: %v", err)
+	}
+	got, _ := resp["input_tokens"].(float64)
+	// 旧 totalChars/4 用原始字节长度估算，对 CJK 不贴合 token 语义；校准估算 ≈344，
+	// 贴近真实 342±5，消除中文偏差。
+	if got < 337 || got > 347 {
+		t.Errorf("count_tokens input_tokens = %v, want 342±5 (calibrated CJK estimate)", got)
+	}
 }

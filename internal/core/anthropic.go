@@ -638,12 +638,16 @@ func ChatResponseToAnthropic(resp *ChatResponse, model string) *AnthropicMessage
 		},
 	}
 
-	// Cache tokens from details
-	if resp.Usage.PromptTokensDetails != nil {
-		if resp.Usage.PromptTokensDetails.CachedTokens > 0 {
-			v := resp.Usage.PromptTokensDetails.CachedTokens
-			anthResp.Usage.CacheReadInputTokens = &v
-		}
+	// Cache tokens from details（OpenAI-compatible 用 prompt_tokens_details.cached_tokens，
+	// Anthropic / Bedrock 原生路径用 RawUsage 的 cache_* 字段）。
+	cacheRead, cacheCreation := anthropicCacheTokens(&resp.Usage)
+	if cacheRead > 0 {
+		v := cacheRead
+		anthResp.Usage.CacheReadInputTokens = &v
+	}
+	if cacheCreation > 0 {
+		v := cacheCreation
+		anthResp.Usage.CacheCreationInputTokens = &v
 	}
 
 	// Convert choices to content blocks
@@ -659,6 +663,60 @@ func ChatResponseToAnthropic(resp *ChatResponse, model string) *AnthropicMessage
 	}
 
 	return anthResp
+}
+
+// anthropicCacheTokens 从 core.Usage 提取 cache 读/写 token，供非流式
+// Anthropic /v1/messages 响应透传使用。
+//
+// 数据来源（按优先级取最大值，避免不同 provider 口径下漏报）：
+//   - cache_read：OpenAI-compatible 的 prompt_tokens_details.cached_tokens，
+//     以及 Anthropic / Bedrock 原生路径 RawUsage["cache_read_input_tokens"]。
+//   - cache_creation：目前无结构化字段，仅来自 RawUsage["cache_creation_input_tokens"]。
+func anthropicCacheTokens(u *Usage) (cacheRead, cacheCreation int) {
+	if u == nil {
+		return 0, 0
+	}
+	if u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens > cacheRead {
+		cacheRead = u.PromptTokensDetails.CachedTokens
+	}
+	if v, ok := rawUsageInt(u.RawUsage, "cache_read_input_tokens"); ok && v > cacheRead {
+		cacheRead = v
+	}
+	if v, ok := rawUsageInt(u.RawUsage, "cache_creation_input_tokens"); ok && v > cacheCreation {
+		cacheCreation = v
+	}
+	return cacheRead, cacheCreation
+}
+
+// rawUsageInt 从 RawUsage 中读取整型字段；缺失或非数字时 ok=false。
+func rawUsageInt(raw map[string]any, key string) (int, bool) {
+	if raw == nil {
+		return 0, false
+	}
+	v, ok := raw[key]
+	if !ok {
+		return 0, false
+	}
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			return int(i), true
+		}
+	}
+	// 兼容字符串数字（某些 provider 的 raw 字段以字符串下发）
+	if s, ok := v.(string); ok {
+		var i int
+		if _, err := fmt.Sscanf(s, "%d", &i); err == nil {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // mapOpenAIFinishReason maps OpenAI finish reasons to Anthropic stop_reason.

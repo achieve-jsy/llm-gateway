@@ -99,6 +99,13 @@ func estimateTokens(text string) int {
 	return cjk + other/4
 }
 
+// EstimateTokens 估算一段文本粗略的 token 数（CJK 字符按 1 token 计，其余按
+// 4 字符 1 token 计）。提供给外部（如 /v1/messages 流式适配器）在缺少真实 usage
+// 时生成一个非零的 input_tokens 粗略值。内部实现与 estimateTokens 一致。
+func EstimateTokens(text string) int {
+	return estimateTokens(text)
+}
+
 func countKeywordHits(textLower string, keywords []string) int {
 	hits := 0
 	for _, kw := range keywords {

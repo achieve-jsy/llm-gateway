@@ -36,30 +36,37 @@ type anthropicStreamAdapter struct {
 // anthropicStreamState tracks which content blocks are open and the
 // current block index.
 type anthropicStreamState struct {
-	requestID       string
-	model           string
-	openBlockIndex  int  // current content block index
-	hasTextBlock    bool // whether a text block has been started
-	hasToolBlock    bool // whether at least one tool block exists
-	textBlockOpen   bool // whether a text content block is currently open
-	toolBlockOpen   bool // whether a tool content block is currently open
-	currentToolID   string
-	currentToolName string
-	started         bool // whether message_start has been emitted
-	finished        bool // whether the stream has ended
-	mu              sync.Mutex
+	requestID            string
+	model                string
+	estimatedInputTokens int    // 本地估算的 input_tokens（无真实 usage 时的备用值）
+	finishReason         string // 记录映射后的 Anthropic stop_reason
+	outputTokens         int    // 末尾 usage 提供的 completion_tokens（累计）
+	openBlockIndex       int    // current content block index
+	hasTextBlock         bool   // whether a text block has been started
+	hasToolBlock         bool   // whether at least one tool block exists
+	textBlockOpen        bool   // whether a text content block is currently open
+	toolBlockOpen        bool   // whether a tool content block is currently open
+	currentToolID        string
+	currentToolName      string
+	started              bool // whether message_start has been emitted
+	finished             bool // whether message_stop has been emitted
+	mu                   sync.Mutex
 }
 
 // newAnthropicStreamAdapter creates a new streaming adapter.
-func newAnthropicStreamAdapter(upstream io.ReadCloser, requestID, model string) io.ReadCloser {
+//
+// estimatedInputTokens 是消息请求的本地估算 input_tokens（CJK 感知 tokenizer），
+// 在触发 chunk 未携带真实 prompt_tokens 时用作 message_start 的非零兜底值。
+func newAnthropicStreamAdapter(upstream io.ReadCloser, requestID, model string, estimatedInputTokens int) io.ReadCloser {
 	pr, pw := io.Pipe()
 	adapter := &anthropicStreamAdapter{
 		upstream: upstream,
 		reader:   pr,
 		writer:   pw,
 		state: &anthropicStreamState{
-			requestID: requestID,
-			model:     model,
+			requestID:            requestID,
+			model:                model,
+			estimatedInputTokens: estimatedInputTokens,
 		},
 	}
 	adapter.wg.Add(1)
@@ -123,25 +130,14 @@ func (a *anthropicStreamAdapter) convert() {
 		}
 	}
 
-	// If scanner error or EOF without [DONE], still flush
-	if err := scanner.Err(); err != nil {
-		a.state.mu.Lock()
-		if !a.state.finished {
-			a.state.finished = true
-			a.state.mu.Unlock()
-			a.closeAllBlocks()
-			a.emitMessageDelta("end_turn", 0)
-			a.emitRaw("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
-		} else {
-			a.state.mu.Unlock()
-		}
-	} else {
-		// EOF but no [DONE] — some providers don't send it
-		a.flushAndFinish()
-	}
+	// If scanner error or EOF without [DONE], still flush (guarded idempotent).
+	a.flushAndFinish()
 }
 
-// flushAndFinish closes all open blocks and emits final events.
+// flushAndFinish closes all open blocks and emits final events. It is
+// guarded by state.finished so any stream-termination path (usage-only chunk,
+// [DONE], EOF, or scanner error) emits message_stop exactly once. It uses the
+// recorded finish_reason (if any) and the trailing usage completion_tokens.
 func (a *anthropicStreamAdapter) flushAndFinish() {
 	a.state.mu.Lock()
 	if a.state.finished {
@@ -149,10 +145,15 @@ func (a *anthropicStreamAdapter) flushAndFinish() {
 		return
 	}
 	a.state.finished = true
+	stopReason := a.state.finishReason
+	outputTokens := a.state.outputTokens
 	a.state.mu.Unlock()
 
+	if stopReason == "" {
+		stopReason = "end_turn"
+	}
 	a.closeAllBlocks()
-	a.emitMessageDelta("end_turn", 0)
+	a.emitMessageDelta(stopReason, outputTokens)
 	a.emitRaw("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 }
 
@@ -177,17 +178,19 @@ type openAIChatChunk struct {
 	SystemFingerprint string `json:"system_fingerprint,omitempty"`
 	Choices           []struct {
 		Delta struct {
-			Role      string                   `json:"role,omitempty"`
-			Content   *string                  `json:"content,omitempty"`
-			ToolCalls []openAIToolCallDelta    `json:"tool_calls,omitempty"`
+			Role      string                `json:"role,omitempty"`
+			Content   *string               `json:"content,omitempty"`
+			ToolCalls []openAIToolCallDelta `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		Index        int    `json:"index"`
 		FinishReason string `json:"finish_reason,omitempty"`
 	} `json:"choices,omitempty"`
 	Usage *struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
+		PromptTokens             int `json:"prompt_tokens"`
+		CompletionTokens         int `json:"completion_tokens"`
+		TotalTokens              int `json:"total_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 	} `json:"usage,omitempty"`
 }
 
@@ -210,16 +213,35 @@ func (a *anthropicStreamAdapter) processChunk(data []byte) {
 		return
 	}
 
-	// On first chunk with choices, emit message_start.
+	// 累积末尾 usage 的 completion_tokens（usage 为累计值，取 max 以兼容增量式上游）。
+	if chunk.Usage != nil {
+		if chunk.Usage.CompletionTokens > a.state.outputTokens {
+			a.state.outputTokens = chunk.Usage.CompletionTokens
+		}
+	}
+
+	// On first chunk with choices, emit message_start immediately to preserve
+	// TTFB. The input_tokens uses the trigger chunk's real prompt_tokens when
+	// available, otherwise the local estimate (non-zero).
 	if !a.state.started && len(chunk.Choices) > 0 {
 		a.emitMessageStart(chunk)
 	}
 
 	if len(chunk.Choices) == 0 {
-		// Handle usage-only final chunk (from stream_options include_usage)
-		if chunk.Usage != nil {
+		// Handle usage-only final chunk (from stream_options include_usage).
+		// 用 finished 守卫：若 finish_reason 路径尚未发出 message_stop（即
+		// state.finished==false），在此补发 message_delta + message_stop，并用本
+		// chunk 的 completion_tokens 作为 output_tokens；若 message_stop 已发出
+		//（例如 [DONE]/EOF 先到达或 finish_reason 已发射）则跳过，避免协议乱序重复。
+		if chunk.Usage != nil && !a.state.finished {
 			a.closeAllBlocks()
-			a.emitMessageDelta("end_turn", chunk.Usage.CompletionTokens)
+			stopReason := a.state.finishReason
+			if stopReason == "" {
+				stopReason = "end_turn"
+			}
+			a.emitMessageDelta(stopReason, chunk.Usage.CompletionTokens)
+			a.emitRaw("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+			a.state.finished = true
 		}
 		return
 	}
@@ -265,28 +287,19 @@ func (a *anthropicStreamAdapter) processChunk(data []byte) {
 			}
 		}
 
-		// Handle finish reason
+		// Handle finish reason：只记录 stop_reason 并关闭内容块，不在此发射
+		// message_delta / message_stop —— 统一由末尾 usage chunk（或 [DONE]/EOF）
+		// 发射，确保 message_delta 使用末尾 usage 的 completion_tokens，且不会重复。
 		if choice.FinishReason != "" && !a.state.finished {
+			a.state.finishReason = mapFinishReason(choice.FinishReason)
 			a.closeAllBlocks()
-			outputTokens := 0
-			if chunk.Usage != nil {
-				outputTokens = chunk.Usage.CompletionTokens
-			}
-			stopReason := mapFinishReason(choice.FinishReason)
-			a.emitMessageDelta(stopReason, outputTokens)
-			a.emitRaw("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
-			a.state.finished = true
 		}
-	}
-
-	// Handle standalone usage (no finish reason) — some providers send usage
-	// in a separate chunk before [DONE].
-	if chunk.Usage != nil && !a.state.finished {
-		// Don't close blocks or emit message_stop here; wait for finish_reason or [DONE].
 	}
 }
 
-// emitMessageStart writes the message_start event.
+// emitMessageStart writes the message_start event, carrying the real
+// input_tokens from the trigger chunk when available, otherwise the local
+// estimate (never hardcoded 0).
 func (a *anthropicStreamAdapter) emitMessageStart(chunk openAIChatChunk) {
 	a.state.mu.Lock()
 	if a.state.started {
@@ -305,20 +318,39 @@ func (a *anthropicStreamAdapter) emitMessageStart(chunk openAIChatChunk) {
 		model = a.state.model
 	}
 
+	// 优先用触发 chunk 的真实 prompt_tokens，否则用本地估算（非零）。
+	inputTokens := a.state.estimatedInputTokens
+	var cacheRead, cacheCreation int
+	if chunk.Usage != nil {
+		if chunk.Usage.PromptTokens > 0 {
+			inputTokens = chunk.Usage.PromptTokens
+		}
+		cacheRead = chunk.Usage.CacheReadInputTokens
+		cacheCreation = chunk.Usage.CacheCreationInputTokens
+	}
+
+	usage := map[string]any{
+		"input_tokens":  inputTokens,
+		"output_tokens": 0,
+	}
+	if cacheRead > 0 {
+		usage["cache_read_input_tokens"] = cacheRead
+	}
+	if cacheCreation > 0 {
+		usage["cache_creation_input_tokens"] = cacheCreation
+	}
+
 	msg := map[string]any{
-		"type":        "message_start",
+		"type": "message_start",
 		"message": map[string]any{
-			"id":         id,
-			"type":       "message",
-			"role":       "assistant",
-			"content":    []any{},
-			"model":      model,
-			"stop_reason": nil,
+			"id":            id,
+			"type":          "message",
+			"role":          "assistant",
+			"content":       []any{},
+			"model":         model,
+			"stop_reason":   nil,
 			"stop_sequence": nil,
-			"usage": map[string]any{
-				"input_tokens":  0,
-				"output_tokens": 0,
-			},
+			"usage":         usage,
 		},
 	}
 	b, _ := json.Marshal(msg)
@@ -399,7 +431,7 @@ func (a *anthropicStreamAdapter) emitInputJSONDelta(partialJSON string) {
 		"type":  "content_block_delta",
 		"index": a.state.openBlockIndex,
 		"delta": map[string]any{
-			"type":        "input_json_delta",
+			"type":         "input_json_delta",
 			"partial_json": partialJSON,
 		},
 	}
@@ -461,4 +493,3 @@ func mapFinishReason(reason string) string {
 // AnthropicStreamResponse contains the conversion result for non-streaming
 // responses, and is used as a type marker.
 var _ io.ReadCloser = (*anthropicStreamAdapter)(nil)
-

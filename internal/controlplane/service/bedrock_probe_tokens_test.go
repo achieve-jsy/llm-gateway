@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestBedrockProbeMaxTokensMeetsBedrockMinimum 锁定探针 max_tokens 的下界。
@@ -17,6 +18,16 @@ import (
 func TestBedrockProbeMaxTokensMeetsBedrockMinimum(t *testing.T) {
 	if BedrockProbeMaxTokens < 16 {
 		t.Fatalf("BedrockProbeMaxTokens = %d，必须 >= 16，否则 OpenAI/Grok 模型会被误判为不可用", BedrockProbeMaxTokens)
+	}
+}
+
+// TestBedrockProbeTimeoutMeetsSlowModelBudget 锁定探针超时的下界。
+//
+// 15s 对 gpt-6-astra 这类慢模型太紧：探针耗时会稳定超过 15s，检查结果变成
+// context deadline exceeded，模型被反复误判为不可用并自动禁用。
+func TestBedrockProbeTimeoutMeetsSlowModelBudget(t *testing.T) {
+	if BedrockProbeTimeout < 30*time.Second {
+		t.Fatalf("BedrockProbeTimeout = %v，对慢模型太紧（需 >= 30s），会被误判为不可用", BedrockProbeTimeout)
 	}
 }
 

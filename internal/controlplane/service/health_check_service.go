@@ -482,6 +482,12 @@ func (s *HealthCheckService) invalidateTimelineCache() {
 // 避免同一条探针逻辑在多处各自写死 max_tokens。
 const BedrockProbeMaxTokens int32 = 16
 
+// BedrockProbeTimeout 是 Bedrock Converse 探针的超时。
+// 不能取 15s：gpt-6-astra 这类慢模型的探针耗时稳定超过 15s（实测 6 小时内约 1/3 的检查报
+// context deadline exceeded，模型因此被误判为不可用并反复自动禁用）。60s 在 5 分钟的检测
+// 周期预算内留足余量，同时仍能识别真正挂掉的上游。
+const BedrockProbeTimeout = 60 * time.Second
+
 // doModelForwardCheck 对单个模型做转发检测
 func (s *HealthCheckService) doModelForwardCheck(m *model.Model) (bool, int, string) {
 	provider := &m.Provider
@@ -580,7 +586,7 @@ func (s *HealthCheckService) doBedrockModelCheck(provider *model.Provider, credJ
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), BedrockProbeTimeout)
 	defer cancel()
 
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, loadOpts...)
@@ -1082,7 +1088,7 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 		}
 	}
 
-	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	probeCtx, cancel := context.WithTimeout(ctx, BedrockProbeTimeout)
 	defer cancel()
 
 	awsCfg, err := awsconfig.LoadDefaultConfig(probeCtx, loadOpts...)

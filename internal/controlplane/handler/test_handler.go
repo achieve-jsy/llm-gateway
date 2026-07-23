@@ -410,7 +410,7 @@ func (h *TestHandler) testBedrock(provider *model.Provider, credJSON string, tes
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), cpservice.BedrockProbeTimeout)
 	defer cancel()
 
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, loadOpts...)

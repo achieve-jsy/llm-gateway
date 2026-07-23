@@ -64,7 +64,7 @@ func DoBedrockModelCheckPublic(provider *model.Provider, credJSON string, m *mod
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), BedrockProbeTimeout)
 	defer cancel()
 
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, loadOpts...)

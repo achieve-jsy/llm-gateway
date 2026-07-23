@@ -198,6 +198,75 @@ describe('ModelTierListPage', () => {
     })
   })
 
+  describe('变更原因（后端必填，缺失返回 422 reason is required）', () => {
+    async function openCreateDialog(wrapper: ReturnType<typeof mountPage>) {
+      const createBtn = wrapper.findAll('button').find(b => b.text().includes('新建等级'))
+      await createBtn!.trigger('click')
+      await flushPromises()
+      return wrapper
+    }
+
+    function saveButton(wrapper: ReturnType<typeof mountPage>) {
+      return wrapper.findAll('button').find(b => b.text().includes('保存'))!
+    }
+
+    it('只填名称未填变更原因时保存按钮禁用', async () => {
+      const wrapper = await openCreateDialog(mountPage())
+      await flushPromises()
+
+      await wrapper.find('[data-test="tier-name-input"]').setValue('高级')
+      await flushPromises()
+
+      expect(saveButton(wrapper).attributes('disabled')).toBeDefined()
+      expect(mockCreateModelTier).not.toHaveBeenCalled()
+    })
+
+    it('填写名称和变更原因后 createModelTier 收到 trim 后的 reason', async () => {
+      const wrapper = await openCreateDialog(mountPage())
+      await flushPromises()
+
+      await wrapper.find('[data-test="tier-name-input"]').setValue(' 高级 ')
+      await wrapper.find('[data-test="tier-reason-input"]').setValue(' 新增等级用于成本分层 ')
+      await flushPromises()
+
+      await saveButton(wrapper).trigger('click')
+      await flushPromises()
+
+      expect(mockCreateModelTier).toHaveBeenCalledOnce()
+      expect(mockCreateModelTier).toHaveBeenCalledWith({
+        name: '高级',
+        description: '',
+        color: '#409EFF',
+        reason: '新增等级用于成本分层',
+      })
+    })
+
+    it('编辑等级时 updateModelTier 同样携带变更原因', async () => {
+      const wrapper = mountPage()
+      await flushPromises()
+
+      const editBtn = wrapper.findAll('button').find(b => b.text() === '编辑')
+      await editBtn!.trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('.el-dialog').html()).toContain('编辑等级')
+      // 变更原因属于本次操作，编辑时不回填历史值
+      expect((wrapper.find('[data-test="tier-reason-input"]').element as HTMLTextAreaElement).value).toBe('')
+
+      await wrapper.find('[data-test="tier-reason-input"]').setValue('调整等级说明')
+      await flushPromises()
+
+      await saveButton(wrapper).trigger('click')
+      await flushPromises()
+
+      expect(mockUpdateModelTier).toHaveBeenCalledOnce()
+      expect(mockUpdateModelTier).toHaveBeenCalledWith('tier-1', expect.objectContaining({
+        name: 'Standard',
+        reason: '调整等级说明',
+      }))
+    })
+  })
+
   describe('排序操作', () => {
     it('第一行的"上移"按钮被禁用', async () => {
       const wrapper = mountPage()

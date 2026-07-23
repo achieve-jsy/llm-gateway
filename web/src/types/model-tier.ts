@@ -21,6 +21,8 @@ export interface ModelTierInput {
   name: string
   description: string
   color: string
+  /** 变更原因，后端必填（写入审计），空值会返回 422 reason is required。 */
+  reason: string
 }
 
 export type TierLimitState = 'unconfigured' | 'enabled' | 'zero_blocked' | 'disabled'

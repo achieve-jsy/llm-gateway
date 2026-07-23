@@ -91,6 +91,10 @@ func (p *Provider) buildConverseParts(req *core.ChatRequest) (converseParts, err
 		parts.system = system
 	}
 
+	// 部分模型族（OpenAI GPT 系列 / xAI Grok 系列）不接受 temperature / topP，
+	// 且 max_tokens 有下限；原样透传会让上游以 ValidationException 拒绝整个请求。
+	support := paramSupportForModel(model)
+
 	infCfg := &brtypes.InferenceConfiguration{}
 	hasInfCfg := false
 	if mt := resolveMaxTokens(req); mt > 0 {
@@ -98,14 +102,17 @@ func (p *Provider) buildConverseParts(req *core.ChatRequest) (converseParts, err
 			return converseParts{}, core.NewInvalidRequestError(
 				fmt.Sprintf("max_tokens %d exceeds the maximum of %d", mt, math.MaxInt32), nil)
 		}
+		if support.MinMaxTokens > 0 && int32(mt) < support.MinMaxTokens {
+			mt = int(support.MinMaxTokens)
+		}
 		infCfg.MaxTokens = awssdk.Int32(int32(mt))
 		hasInfCfg = true
 	}
-	if req.Temperature != nil {
+	if req.Temperature != nil && support.Temperature {
 		infCfg.Temperature = awssdk.Float32(float32(*req.Temperature))
 		hasInfCfg = true
 	}
-	if topP, ok := resolveTopP(req); ok {
+	if topP, ok := resolveTopP(req); ok && support.TopP {
 		infCfg.TopP = awssdk.Float32(float32(topP))
 		hasInfCfg = true
 	}
@@ -155,6 +162,12 @@ func (p *Provider) buildConverseParts(req *core.ChatRequest) (converseParts, err
 	}
 	// 自动断点只能使用剩余配额；显式断点始终优先，避免 trim 阶段误删客户端边界。
 	trimExcessCachePoints(&parts, maxCachePointsPerRequest)
+
+	// prompt caching 只对部分模型开放：带 CachePoint 的不支持模型会被上游整体拒绝。
+	// 放在最后统一清理，同时覆盖工具、system 与消息三个分区（含客户端显式传入的 cache_control）。
+	if !modelSupportsPromptCaching(model) {
+		stripCachePoints(&parts)
+	}
 
 	return parts, nil
 }

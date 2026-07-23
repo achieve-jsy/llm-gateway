@@ -14,6 +14,7 @@ import (
 
 	"github.com/example/llm-gateway/internal/configsync"
 	"github.com/example/llm-gateway/internal/core"
+	"github.com/example/llm-gateway/internal/httpclient"
 	"github.com/joho/godotenv"
 
 	acrypto "github.com/example/llm-gateway/internal/auth/crypto"
@@ -28,6 +29,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/loader"
 	gatewaymodel "github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/provider"
+	"github.com/example/llm-gateway/internal/gateway/quota"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/example/llm-gateway/internal/gateway/server"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
@@ -295,6 +297,17 @@ func main() {
 	r.POST("/auth/refresh", authTokenHandler.Refresh)
 	r.POST("/auth/logout", authTokenHandler.Logout)
 	r.POST("/internal/v1/auth/verify-key", authInternalHandler.VerifyKey)
+
+	// 校验并发租约是否覆盖运行时生效的上游超时。
+	// 生效值取自 httpclient.DefaultConfig() 的**返回值**（而非常量），因此这里能捕获
+	// HTTP_TIMEOUT / HTTP_RESPONSE_HEADER_TIMEOUT 把上游超时放大到租约之上的配置——
+	// 那种配置下合法长请求会在租约到期后仍持有上游连接，槽位被并发复用，限额被静默削弱。
+	// 刻意只告警不退出：把配置问题升级成「网关拒绝启动」是可用性故障。
+	upstreamCfg := httpclient.DefaultConfig()
+	if leaseErr := quota.ValidateLeaseCoversUpstream(quota.ConcurrencyLease(), upstreamCfg.Timeout, upstreamCfg.ResponseHeaderTimeout); leaseErr != nil {
+		slog.Warn("concurrency lease does not cover the effective upstream timeout; slots of long streaming requests may be reused after the lease expires",
+			"error", leaseErr, "concurrency_lease", quota.ConcurrencyLease())
+	}
 
 	// 启动服务。收到信号后先停止接入并等待在途请求，再取消后台
 	// context，最后等待 call_logs 完成队列 drain / spool。

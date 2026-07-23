@@ -56,16 +56,21 @@ func getEnvDuration(key string, defaultVal time.Duration) time.Duration {
 }
 
 // DefaultConfig returns a ClientConfig with sensible defaults for API clients.
-// Timeout values match OpenAI/Anthropic SDK defaults (10 minutes).
 // Can be overridden via environment variables (values in seconds, or Go duration format):
-//   - HTTP_TIMEOUT: overall request timeout (default: 600)
-//   - HTTP_RESPONSE_HEADER_TIMEOUT: time to wait for response headers (default: 600)
+//   - HTTP_TIMEOUT: overall request timeout (default: 300)
+//   - HTTP_RESPONSE_HEADER_TIMEOUT: time to wait for response headers (default: 300)
 //
-// Note: These env vars are also documented in config.HTTPConfig. The env var bridge
-// here works correctly because the llm-gateway entrypoint loads .env before config and
-// providers are initialized.
+// 注意：这两个变量**没有** config.HTTPConfig 对应项 —— 那个结构属于 internal/auth/config，
+// 绑定的是 AUTH_HTTP_TIMEOUT_SECONDS，与本包无关；它们只在这里由 getEnvDuration 读取。
+//
+// 调大它们会同时放大网关并发槽位的占用时长，因此必须让生效值小于并发租约
+// （internal/gateway/quota.ConcurrencyLease）；gateway 启动期由
+// quota.ValidateLeaseCoversUpstream 校验，不满足时打显著告警。
+// 本函数不钳制取值：它是被鉴权、视频任务、绑定三条链路共用的配置，静默改写会扩大影响面。
 func DefaultConfig() ClientConfig {
-	defaultLongTimeout := 600 * time.Second
+	// 默认 600s 会让慢/挂起的上游调用长时间占住并发槽位；收敛到 300s。
+	// 仍可通过 HTTP_TIMEOUT / HTTP_RESPONSE_HEADER_TIMEOUT 环境变量覆盖。
+	defaultLongTimeout := 300 * time.Second
 	return ClientConfig{
 		MaxIdleConns:          100,
 		MaxIdleConnsPerHost:   100,

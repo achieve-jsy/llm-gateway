@@ -465,7 +465,7 @@ func (h *TestHandler) testBedrock(provider *model.Provider, credJSON string, tes
 				},
 			},
 			InferenceConfig: &bedrockruntimetypes.InferenceConfiguration{
-				MaxTokens: int32Ptr(1),
+				MaxTokens: int32Ptr(cpservice.BedrockProbeMaxTokens),
 			},
 		})
 

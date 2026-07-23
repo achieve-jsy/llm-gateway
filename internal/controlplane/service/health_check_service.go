@@ -473,12 +473,14 @@ func (s *HealthCheckService) invalidateTimelineCache() {
 	}
 }
 
-// bedrockProbeMaxTokens 是 Bedrock 转发探针下发的 max_tokens。
+// BedrockProbeMaxTokens 是 Bedrock 探针下发的 max_tokens。
 //
 // 不能取 1：Bedrock 上 OpenAI GPT 系列 / xAI Grok 系列要求 max_output_tokens >= 16，
 // 否则上游返回 ValidationException（integer_below_min_value），探针会把完全正常的
 // 模型判为不可用并在连续失败 3 次后自动禁用。16 对所有 Bedrock 模型都是合法值。
-const bedrockProbeMaxTokens int32 = 16
+// 该常量导出给 handler（渠道测试）与 model_check_public（手动检测）复用，
+// 避免同一条探针逻辑在多处各自写死 max_tokens。
+const BedrockProbeMaxTokens int32 = 16
 
 // doModelForwardCheck 对单个模型做转发检测
 func (s *HealthCheckService) doModelForwardCheck(m *model.Model) (bool, int, string) {
@@ -590,7 +592,7 @@ func (s *HealthCheckService) doBedrockModelCheck(provider *model.Provider, credJ
 
 	modelName := m.UpstreamName()
 
-	maxTokens := bedrockProbeMaxTokens
+	maxTokens := BedrockProbeMaxTokens
 	userMsg := "hi"
 	start := time.Now()
 
@@ -1141,7 +1143,7 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 		start := time.Now()
 		runtime := bedrockruntime.NewFromConfig(awsCfg, runtimeOpts...)
 		userMsg := "hi"
-		maxTokens := bedrockProbeMaxTokens
+		maxTokens := BedrockProbeMaxTokens
 		_, err := runtime.Converse(probeCtx, &bedrockruntime.ConverseInput{
 			ModelId: &testModel,
 			Messages: []bedrockruntimetypes.Message{

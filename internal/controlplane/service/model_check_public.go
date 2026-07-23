@@ -25,8 +25,9 @@ func ExtractAPIKey(credentialJSON string) string {
 	return extractAPIKey(credentialJSON)
 }
 
-// DoBedrockModelCheckPublic 用 AWS SDK Converse(max_tokens=1) 验证具体模型是否可调用（公共函数）。
-// 与 HealthCheckService.doBedrockModelCheck 逻辑完全一致。
+// DoBedrockModelCheckPublic 用 AWS SDK Converse 验证具体模型是否可调用（公共函数）。
+// 与 HealthCheckService.doBedrockModelCheck 逻辑完全一致，max_tokens 同样取 BedrockProbeMaxTokens：
+// OpenAI GPT / xAI Grok 系列要求 max_output_tokens >= 16，写死 1 会把完全正常的模型判为不可用。
 func DoBedrockModelCheckPublic(provider *model.Provider, credJSON string, m *model.Model) (bool, int, string) {
 	apiKey := extractAPIKey(credJSON)
 	region := regionFromBedrockEndpoint(provider.Endpoint)
@@ -78,7 +79,7 @@ func DoBedrockModelCheckPublic(provider *model.Provider, credJSON string, m *mod
 		modelName = bedrockModelID(m.Name)
 	}
 
-	maxTokens := int32(1)
+	maxTokens := BedrockProbeMaxTokens
 	userMsg := "hi"
 	start := time.Now()
 

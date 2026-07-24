@@ -178,10 +178,10 @@ func appendToken(c *gin.Context, tok releaseToken) {
 
 // extractModelParam 从请求中提取模型组名（request body 中的 model 字段）。
 //
-// 配额中间件注册在 TraceCapture 之后（router.go:159 TraceCapture → :171 OrgCheck → 路由内 quotaMW），
-// 故优先复用 TraceCapture 已捕获并恢复 body 后存入 context 的 trace_req_body（[]byte，已 sanitize，
-// 但 model 字段是短字符串不会被截断）。trace_req_body 可能因 log_enabled=false 而未设置，
-// 此时回退自行读取 c.Request.Body 并恢复（NopCloser），保证 handler 仍能读到完整 body。
+// 配额中间件注册在 TraceCapture 之后（router.go TraceCapture → OrgCheck → 路由内 quotaMW），
+// 故优先复用 TraceCapture 已捕获并恢复 body 后存入 context 的正文（大正文原样直存、
+// 小正文已 sanitize，两者的 model 字段都是短字符串不会被截断）。
+// 若两个 key 都没有，才回退自行读取 c.Request.Body 并恢复（NopCloser），保证 handler 仍能读到完整 body。
 // 兜底再读 query 参数 ?model=。
 func extractModelParam(c *gin.Context) string {
 	// 1) 兼容旧约定：显式 set 的 request_model
@@ -190,11 +190,17 @@ func extractModelParam(c *gin.Context) string {
 			return m
 		}
 	}
-	// 2) 复用 TraceCapture 已捕获的 trace_req_body（已恢复给 handler，读它不影响后续）
-	if v, ok := c.Get("trace_req_body"); ok {
-		if raw, ok := v.([]byte); ok && len(raw) > 0 {
-			if m := modelFromJSON(raw); m != "" {
-				return m
+	// 2) 复用 TraceCapture 已捕获的 body（已恢复给 handler，读它不影响后续）。
+	//    两个 key 互斥：小正文在 trace_req_body（已 sanitize），
+	//    大正文（> MaxParseBytesInTrace）在 trace_req_body_raw（原样直存）。
+	//    必须同时认这两个 key：否则大正文会落到第 3 步，对同一份 body 再全量
+	//    io.ReadAll 一遍（30MB 级请求会凭空多出 30MB+ 的分配与拷贝）。
+	for _, key := range []string{"trace_req_body", "trace_req_body_raw"} {
+		if v, ok := c.Get(key); ok {
+			if raw, ok := v.([]byte); ok && len(raw) > 0 {
+				if m := modelFromJSON(raw); m != "" {
+					return m
+				}
 			}
 		}
 	}

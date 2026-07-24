@@ -159,7 +159,7 @@ if len(batch) >= w.flushN || batchBytes >= w.maxBatchBytes {
 新增 `internal/gateway/middleware/body_budget.go`：
 
 ```go
-const DefaultBodyBudgetBytes int64 = 256 << 20 // 256 MB
+const DefaultBodyBudgetBytes int64 = 96 << 20 // 96 MB（端到端实测校准，见附录 A）
 
 func BodyBudgetLimiter(budgetBytes int64) gin.HandlerFunc
 ```
@@ -203,18 +203,28 @@ gateway 服务 `deploy.resources.limits.memory: 1g → 2g`，三处：
 
 `DefaultBodyBudgetBytes` 与 2g 上限是**配套**的：256 MB × 转发路径约 2.5× = 640 MB，加基线 380 MB 约 1.0 GB，需要 2g 才有安全余量。
 
-### D10 — 内存预算账（用于评审）
+### D10 — 内存预算账（含端到端实测修正）
+
+单元级建模曾给出"最坏同时存在 ~772 MB"的乐观账（假设放大倍数 2.5×）。
+**端到端实测推翻了这个假设**：真实放大倍数约 **9.6×**，且请求/转发路径（不是 trace 路径）
+才是内存主项。详见附录 A。
 
 ```
-基线                              380 MB
-在途请求体预算（D7）             ≤ 256 MB
-trace 队列滞留（D6）             ≤ 128 MB
-单次批量 SQL 文本（D5）          ≤   8 MB
-────────────────────────────────────────
-最坏同时存在                     ~772 MB   < 1 GiB（2g 有余量）
+实测（8 并发 × 30 MB 正文，真实 gateway 二进制）：
+  改前                        峰值 RSS 1548 MB
+  改后 · 预算 256 MB          峰值 RSS 1456 MB   ← 预算没兜住，且丢 3 条 trace
+  改后 · 预算  96 MB          峰值 RSS  923 MB   ← 8/8 落库、0 丢弃、0 超时
 ```
 
-注意：队列中的正文是已完成请求的切片引用，**不**计入在途预算，故两者相加。
+结论：**body budget 是端到端内存的决定性杠杆，而不是 trace 路径**。
+按实测 9.6× 反推预算上限：
+
+| 容器上限 | 可用预算（按 80% 余量） |
+|---|---|
+| 1g | (1024×0.8 − 400) / 9.6 ≈ **43 MB** |
+| 2g | (2048×0.8 − 400) / 9.6 ≈ **129 MB** |
+
+故取 **96 MB**：2g 下有安全余量；若仍留在 1g 必须先调小到 40 MB 量级。
 
 ## 5. 工作流划分（禁止跨流改文件）
 
@@ -241,3 +251,81 @@ trace 队列滞留（D6）             ≤ 128 MB
 ## 7. 回滚
 
 无 schema 变更、无数据迁移。蓝绿部署直接切回另一色。所有限额均为常量，可通过改常量并重新构建回退。
+
+## 附录 A — 端到端实测（本文档所有关键数字的来源）
+
+单元测试跑在 **SQLite 内存库**上（`tests/gateway/middleware/trace_pipeline_test.go:24`），
+因此它**不可能**覆盖 pgx 简单协议内联、jsonb 落库、真实 RSS 这三件事。以下为补充的端到端实测。
+
+### A.1 方法
+
+- **真实驱动 + 真实 PG**：GORM `postgres.New(postgres.Config{DSN, PreferSimpleProtocol: true})`
+  + 默认 `logger.LogMode(Warn)`，与生产完全一致；隔离库 `gw_e2e_scratch`。
+- **真实 gateway 二进制**：`go build ./cmd/gateway` 后以真实进程运行，用极简 stub 控制面
+  提供 `verify-key` / `groups`，经真实 TCP 发出真实 HTTP 请求。
+- **采样**：每 20 ms 采一次 `ps -o rss`；进程内用 `runtime.ReadMemStats` 采 `HeapAlloc` 峰值。
+- **请求体**：`{"model":"...","messages":[{"role":"user","content":"<30 MB>"}]}`，31457350 字节。
+
+### A.2 写入路径：288 MB 载荷（12 × 24 MB），真实 pgx
+
+| 配置 | GORM 日志 | 堆峰值 | 累计分配 |
+|---|---|---|---|
+| 改前（默认 logger + 无限批） | 264.0 MB | 2287.3 MB | 4984.7 MB |
+| 只修日志（ParameterizedQueries） | 0.0 MB | 1561.6 MB | 2856.8 MB |
+| 改后（再 + 8 MB 限批） | 0.0 MB | **289.4 MB** | 2304.6 MB |
+| 强制触发日志·改前（SlowThreshold=1ns） | **288.0 MB** | 1765.9 MB | 5053.5 MB |
+| 强制触发日志·改后 logger | **0.0 MB** | 1249.9 MB | 2545.0 MB |
+
+结论：
+
+1. **日志字节 ≈ 载荷字节**（288.0 MB / 288 MB），证实运维记录的"单条日志可达 12MB"
+   （12 MB = 50 行 × 240 KB 均值），`ParameterizedQueries` 将其归零。
+2. 但**日志是否触发取决于语句是否超过 `SlowThreshold`（默认 200ms）**：3 × 5 MB 的
+   小载荷实测日志为 0 字节，12 × 24 MB 才触发。故日志修复是**条件性**收益。
+3. **限批才是峰值的主刀**：1561.6 → 289.4 MB（5.4×）。
+4. 改前整体 2287.3 → 改后 289.4 MB = **7.9×**。
+
+### A.3 请求路径：单请求 30 MB，真实 gateway 二进制
+
+| | 基线 RSS | 峰值 RSS | 落库正文 |
+|---|---|---|---|
+| 改前（origin/main） | 48 MB | 424.0 MB | **500,111 字节**（被截断） |
+| 改后（本分支） | 47 MB | 391.7 MB | **31,457,350 字节**（完整） |
+
+- **完整性 63× 提升**：改前 `MaxStringLenInTrace=500_000` 把 30 MB 的 `content`
+  截成 500 KB；改后大正文直存，**逐字节完整**。
+- **内存仅降 7.6%**：trace 路径不是请求路径的内存主项。
+
+### A.4 并发路径：8 并发 × 30 MB（复刻事故场景）
+
+| 配置 | 峰值 RSS | 落库 | 正文完整性 | trace 丢弃 |
+|---|---|---|---|---|
+| 改前 | **1548.3 MB** | 8 行 | 4 MB（250 KB/行，截断） | 0 |
+| 改后 · 预算 256 MB | 1455.8 MB | 5 行 | 157 MB（完整） | **3** |
+| 改后 · 预算 96 MB | **923.4 MB** | 8 行 | 252 MB（完整） | **0** |
+
+结论（**本方案最重要的修正**）：
+
+1. **改前的 1548 MB 就是生产 OOM 的复现**——1 GiB 上限下必然被杀，与事故现象一致。
+2. **trace 路径改动几乎不影响端到端峰值**（1548 → 1456 MB，仅 −6%）。
+   请求/转发路径才是主项。
+3. **body budget 常量是决定性杠杆**：256 → 96 MB 使峰值降到 923 MB（−37%），
+   同时把丢包从 3 条降到 0 条。
+4. 实测放大倍数 **≈ 9.6×**（(923−55) MB / 90 MB 在途正文），是早期 2.5× 假设的近 4 倍。
+5. 故 256 MB 预算**在两个意义上都是错的**：既兜不住内存，又因正文总量冲垮 128 MB
+   trace 队列而丢数据。
+
+### A.5 实测额外发现的两处缺陷（已修）
+
+| 缺陷 | 性质 | 修复 |
+|---|---|---|
+| `Run` 关停分支用已取消的 ctx 去 flush，最后一批 trace 每次优雅关停必丢（蓝绿部署必现） | **既有** | `context.WithoutCancel` + 5s 超时（commit `ee5c6bd7`） |
+| `extractModelParam` 第 2 步只认 `trace_req_body`，大正文落到第 3 步再 `io.ReadAll` 一遍 | **本方案引入** | 同时认 `trace_req_body_raw` |
+
+### A.6 本附录对第 2 节"目标"的修正
+
+第 2 节给出的"单请求峰值 95 MB → ~30 MB"**仅对 trace 捕获路径成立**
+（已由 `TestTraceCapture_LargeBody_SkipsJSONUnmarshalAndMarshal` 实测 1.03× body 佐证）。
+**端到端单请求峰值**从 424 MB 只降到 392 MB，因为转发路径（`json.Marshal(core.ChatRequest)`）
+与 handler 的 `ShouldBindJSON` 才是主项。要真正把端到端压到 1× body，必须改转发为字节级透传——
+那是独立且更大的改动，不在本方案范围。

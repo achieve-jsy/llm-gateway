@@ -10,11 +10,20 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-// DefaultBodyBudgetBytes 是 /v1 在途请求体的默认字节预算（256 MB）。
+// DefaultBodyBudgetBytes 是 /v1 在途请求体的默认字节预算（96 MB）。
 //
-// 它与容器内存上限（gateway 的 2g）是配套的：256 MB × 转发路径约 2.5× ≈ 640 MB，
-// 加上进程基线约 380 MB，最坏同时存在约 1.0 GB，需要 2g 才有安全余量。
-const DefaultBodyBudgetBytes int64 = 256 << 20
+// 取值依据（端到端实测：真实 gateway 二进制 + 真实 Postgres + 8 并发 × 30 MB 请求）：
+//   - 预算 256 MB：峰值 RSS 1456 MB；且 8 个请求的正文总量 240 MB 直接冲垮 128 MB 的
+//     trace 队列，丢弃 3 条 trace（既费内存又丢数据）。
+//   - 预算  96 MB：峰值 RSS 923 MB；8 条 trace 全部落库、0 丢弃、0 超时。
+//
+// 实测放大倍数约 9.6×（每 1 字节在途正文 → 约 9.6 字节常驻内存，含 Go GC 的 2× 目标
+// 与转发路径的 JSON 双序列化），远高于早期按 2.5× 的估算。按 9.6× 反推：
+//   - 2g 容器：(2048×0.8 − 400) / 9.6 ≈ 129 MB，96 MB 有安全余量；
+//   - 1g 容器：(1024×0.8 − 400) / 9.6 ≈  43 MB，1g 下必须调得更小。
+//
+// 调整本常量时必须同步复核容器内存上限（deploy/blue-green/docker-compose.*.yml）。
+const DefaultBodyBudgetBytes int64 = 96 << 20
 
 const (
 	// bodyBudgetFallbackBytes 在 Content-Length 缺失（分块传输，值为 -1）时的保守预留。

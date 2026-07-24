@@ -71,7 +71,7 @@
       "admin": "Bearer <jwt>",
       "scoped": "Bearer <jwt> + RBAC PermUsageViewScoped"
     },
-    "prompt_visibility": "提示词正文（call_traces.request_body / video_tasks.request_body）仅平台 admin 可读：非 admin 的角色，trace（/usage/logs/:id/trace、/usage/scoped/logs/:id/trace、/my/usage/logs/:id/trace）与视频任务（/video/tasks*、/my/video/tasks*）响应中的 request_body 由后端清空（omitempty 不下发），response_body 与其余元数据保留；前端对非 admin 隐藏「提示词 / 原始请求 / 请求」Tab 与任务详情「提示词」字段。",
+    "prompt_visibility": "提示词正文（call_traces.request_body / video_tasks.request_body）按归属可见：平台 admin 可看全部；其余角色只能看自己的记录，别人的提示词不下发（request_body 被后端清空，omitempty 不返回），response_body 与耗时/token/费用等元数据保留。管辖范围（studio/dept）只决定「看得到这条记录」，不决定能否看提示词。前端对不可见的记录隐藏「提示词 / 原始请求 / 请求」Tab 与任务详情「提示词」字段。另：/my/usage/logs/:request_id/trace 由 MyTrace 处理并校验归属，他人 request_id 一律 404（修复原先可凭 request_id 读取他人正文的越权）。",
     "log_row_fields": [
       "request_id", "ts",
       "key_id", "key_name", "key_type",

@@ -98,8 +98,23 @@ func (h *UsageHandler) SetRedis(rdb *redis.Client) {
 	h.rdb = rdb
 }
 
-// Trace GET /api/v1/usage/logs/:request_id/trace — 单条请求完整 trace
+// Trace GET /api/v1/usage/logs/:request_id/trace — 单条请求完整 trace（管理面，admin 路由）
 func (h *UsageHandler) Trace(c *gin.Context) {
+	h.trace(c, false)
+}
+
+// MyTrace GET /api/v1/my/usage/logs/:request_id/trace — 仅本人记录
+// 与 Trace 的区别：严格校验归属，他人记录按不存在处理，避免凭 request_id 越权读取
+// 别人的提示词 / 响应正文（IDOR）。
+func (h *UsageHandler) MyTrace(c *gin.Context) {
+	h.trace(c, true)
+}
+
+// trace 读取单条请求完整 trace。
+//   - ownOnly=true（/my/* 路由）：仅返回本人记录，他人记录 404
+//   - 提示词正文（request_body）按 rbac.CanViewPrompt 裁剪：admin 可见全部，
+//     其余角色只看得到自己的提示词；response_body 与其余元数据不裁剪
+func (h *UsageHandler) trace(c *gin.Context, ownOnly bool) {
 	if h.db == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "trace storage not configured"})
 		return
@@ -109,6 +124,15 @@ func (h *UsageHandler) Trace(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "request_id required"})
 		return
 	}
+
+	// call_traces 无 user_id 列，归属需从 call_logs 反查（同一 request_id）。
+	ownerID, ownerFound := h.traceOwner(c, rid)
+	canViewPrompt := rbac.CanViewPrompt(c, ownerID)
+	if ownOnly && (!ownerFound || !canViewPrompt) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "trace not found"})
+		return
+	}
+
 	var trace obsmodel.CallTrace
 	if err := h.db.WithContext(c.Request.Context()).First(&trace, "request_id = ?", rid).Error; err != nil {
 		if err.Error() == "record not found" {
@@ -118,10 +142,29 @@ func (h *UsageHandler) Trace(c *gin.Context) {
 		}
 		return
 	}
-	// 提示词（request_body）仅平台 admin 可见：非 admin 由后端裁剪，
-	// 调用记录本身（响应、耗时、token、费用）正常展示。
-	MaskTracePrompt(&trace, rbac.GetActor(c).IsGlobal)
+	// 提示词正文只对 admin 或记录本人下发；调用记录其余内容（响应、耗时、token、费用）正常展示。
+	MaskTracePrompt(&trace, canViewPrompt)
 	c.JSON(http.StatusOK, trace)
+}
+
+// traceOwner 从 call_logs 反查 request_id 的归属用户（call_traces 无 user_id 列）。
+// 返回 (userID, 是否查到记录)；查不到时 userID 为空，调用方按 fail closed 处理。
+func (h *UsageHandler) traceOwner(c *gin.Context, rid string) (string, bool) {
+	var row struct {
+		UserID string `gorm:"column:user_id"`
+	}
+	if err := h.db.WithContext(c.Request.Context()).
+		Table("call_logs").
+		Select("user_id").
+		Where("request_id = ?", rid).
+		Limit(1).
+		Scan(&row).Error; err != nil {
+		return "", false
+	}
+	if row.UserID == "" {
+		return "", false
+	}
+	return row.UserID, true
 }
 
 // ScopedTrace GET /api/v1/usage/scoped/logs/:request_id/trace
@@ -169,8 +212,8 @@ func (h *UsageHandler) ScopedTrace(c *gin.Context) {
 		return
 	}
 	// QueryScope 只保证「这条记录在 actor 管辖范围内、看得到」；
-	// 提示词正文另按角色裁剪：非 admin（含部门/工作室负责人）不下发 request_body。
-	MaskTracePrompt(&trace, actor.IsGlobal)
+	// 提示词正文另按归属裁剪：admin 可见全部，其余角色只看得到自己的记录（lg.UserID）。
+	MaskTracePrompt(&trace, rbac.CanViewPrompt(c, lg.UserID))
 	c.JSON(http.StatusOK, trace)
 }
 

@@ -253,9 +253,13 @@ const emit = defineEmits<{
 
 const settingsStore = useSettingsStore()
 const authStore = useAuthStore()
-// 提示词（request_body）仅平台 admin 可见；后端已按角色裁剪，这里同步隐藏入口，
-// 避免非 admin 看到空的「提示词/原始请求」Tab。
-const canViewPrompt = computed(() => authStore.isAdmin)
+// 提示词正文：admin 可见全部，其余角色只看得到自己的记录（后端已按归属裁剪 request_body）。
+// 这里同步隐藏入口，避免看到空的「提示词 / 原始请求」Tab。
+const canViewPrompt = computed(() => {
+  if (authStore.isAdmin) return true
+  const owner = props.row?.user_id
+  return !!owner && owner === (authStore.user?.id ?? '')
+})
 const cc = computed(() => ({
   currency: props.currency,
   rate: settingsStore.publicSettings.pricing_usd_to_cny_rate || 7.2,

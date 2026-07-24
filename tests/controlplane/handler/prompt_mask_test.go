@@ -7,44 +7,54 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/model"
 )
 
-// 视频任务的提示词（request_body）同样只对平台 admin 下发；
-// 状态/分辨率等任务字段必须保留，避免负责人看不了任务本身。
+// 视频任务的提示词正文同样只对 admin 或任务本人下发；
+// 状态 / 分辨率 / 视频地址等任务字段必须保留，避免负责人看不了任务本身。
 func TestMaskVideoTaskPrompt(t *testing.T) {
 	const prompt = `{"model":"doubao-seedance","content":[{"type":"text","text":"一只橘猫"}]}`
 
-	newTask := func() *model.VideoTask {
-		return &model.VideoTask{TaskID: "cgt-1", Status: "succeeded", RequestBody: prompt, VideoURL: "https://example.com/v.mp4"}
+	newTask := func(userID string) *model.VideoTask {
+		return &model.VideoTask{
+			TaskID:      "cgt-" + userID,
+			UserID:      userID,
+			Status:      "succeeded",
+			RequestBody: prompt,
+			VideoURL:    "https://example.com/v.mp4",
+		}
 	}
 
-	t.Run("非 admin 清空提示词", func(t *testing.T) {
-		task := newTask()
+	t.Run("canView=false 清空提示词，其余字段保留", func(t *testing.T) {
+		task := newTask("user-2")
 		handler.MaskVideoTaskPrompt(task, false)
 
 		if task.RequestBody != "" {
-			t.Fatalf("非 admin 的 request_body 应被清空，实际为 %s", task.RequestBody)
+			t.Fatalf("request_body 应被清空，实际为 %s", task.RequestBody)
 		}
-		if task.TaskID != "cgt-1" || task.Status != "succeeded" || task.VideoURL == "" {
+		if task.TaskID == "" || task.UserID != "user-2" || task.Status != "succeeded" || task.VideoURL == "" {
 			t.Fatalf("任务其余字段不应被裁剪：%+v", task)
 		}
 	})
 
-	t.Run("admin 保留提示词", func(t *testing.T) {
-		task := newTask()
+	t.Run("canView=true 保留提示词", func(t *testing.T) {
+		task := newTask("user-1")
 		handler.MaskVideoTaskPrompt(task, true)
 
 		if task.RequestBody != prompt {
-			t.Fatalf("admin 应保留 request_body，实际为 %s", task.RequestBody)
+			t.Fatalf("应保留 request_body，实际为 %s", task.RequestBody)
 		}
 	})
 
-	t.Run("批量裁剪", func(t *testing.T) {
-		tasks := []model.VideoTask{*newTask(), *newTask()}
-		handler.MaskVideoTaskPrompts(tasks, false)
+	t.Run("列表按归属逐条判定：只看得到自己的提示词", func(t *testing.T) {
+		tasks := []model.VideoTask{*newTask("user-1"), *newTask("user-2"), *newTask("user-1")}
+		handler.MaskVideoTaskPrompts(tasks, func(owner string) bool { return owner == "user-1" })
 
-		for i, task := range tasks {
-			if task.RequestBody != "" {
-				t.Fatalf("第 %d 条任务的 request_body 应被清空", i)
-			}
+		if tasks[0].RequestBody != prompt {
+			t.Fatal("自己的任务应保留提示词")
+		}
+		if tasks[1].RequestBody != "" {
+			t.Fatal("别人的任务应清空提示词")
+		}
+		if tasks[2].RequestBody != prompt {
+			t.Fatal("自己的任务应保留提示词")
 		}
 	})
 

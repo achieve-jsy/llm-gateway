@@ -765,7 +765,8 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/my/usage", usageH.MyQuery)
 		adminGroup.GET("/my/usage/percentiles", usageH.MyPercentiles)
 		adminGroup.GET("/my/usage/logs", usageH.MyLogs)
-		adminGroup.GET("/my/usage/logs/:request_id/trace", usageH.Trace)
+		// 本人记录：MyTrace 会校验归属，他人 request_id 一律 404（避免越权读正文）
+		adminGroup.GET("/my/usage/logs/:request_id/trace", usageH.MyTrace)
 		adminGroup.GET("/my/video/tasks/stats/trend", videoTaskHandler.MyStatsTrend)
 		adminGroup.GET("/my/video/tasks/stats/distribution", videoTaskHandler.MyStatsDistribution)
 		adminGroup.GET("/my/video/tasks/stats", videoTaskHandler.MyStats)

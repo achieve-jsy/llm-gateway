@@ -4,7 +4,8 @@ import { nextTick, reactive } from 'vue'
 import ElementPlus from 'element-plus'
 import UsageTraceDrawer from '../UsageTraceDrawer.vue'
 
-const authStore = reactive({ isAdmin: true, effectiveRole: 'admin' })
+const MY_ID = 'user-me'
+const authStore = reactive({ isAdmin: false, effectiveRole: 'dept_admin', user: { id: MY_ID } })
 
 vi.mock('@/stores/auth', () => ({
   useAuthStore: () => authStore,
@@ -14,22 +15,26 @@ vi.mock('@/stores/settings', () => ({
   useSettingsStore: () => ({ publicSettings: { pricing_usd_to_cny_rate: 7.2 } }),
 }))
 
+// 提示词口径：用户只能看自己的提示词，别人的看不了；admin 例外，可看全部。
 describe('UsageTraceDrawer 提示词可见性', () => {
-  const row = {
-    request_id: 'req-test-001',
-    model_name: 'gpt-test',
-    inbound_endpoint: '/v1/chat/completions',
+  function makeRow(userId: string) {
+    return {
+      request_id: 'req-test-001',
+      model_name: 'gpt-test',
+      inbound_endpoint: '/v1/chat/completions',
+      user_id: userId,
+    }
   }
   const traceData = {
     request_body: { messages: [{ role: 'user', content: '机密提示词内容' }] },
     response_body: { choices: [{ message: { content: 'ok' } }] },
   }
 
-  async function mountDrawer() {
+  async function mountDrawer(userId: string) {
     const wrapper = mount(UsageTraceDrawer, {
       props: {
         modelValue: true,
-        row: row as never,
+        row: makeRow(userId) as never,
         traceData: traceData as never,
         traceLoading: false,
       },
@@ -46,21 +51,30 @@ describe('UsageTraceDrawer 提示词可见性', () => {
   }
 
   beforeEach(() => {
-    authStore.isAdmin = true
-    authStore.effectiveRole = 'admin'
+    authStore.isAdmin = false
+    authStore.effectiveRole = 'dept_admin'
+    authStore.user = { id: MY_ID }
   })
 
-  it('admin 可见「提示词」与「原始请求」Tab', async () => {
-    const labels = tabLabels(await mountDrawer())
+  it('admin 可看别人的提示词', async () => {
+    authStore.isAdmin = true
+    authStore.effectiveRole = 'admin'
+
+    const labels = tabLabels(await mountDrawer('user-other'))
     expect(labels.some(l => l.includes('提示词'))).toBe(true)
     expect(labels.some(l => l.includes('原始请求'))).toBe(true)
   })
 
-  it('非 admin 隐藏「提示词」与「原始请求」Tab，且默认落在调用信息', async () => {
-    authStore.isAdmin = false
-    authStore.effectiveRole = 'dept_admin'
+  it('普通用户可看自己的提示词', async () => {
+    const wrapper = await mountDrawer(MY_ID)
+    const labels = tabLabels(wrapper)
 
-    const wrapper = await mountDrawer()
+    expect(labels.some(l => l.includes('提示词'))).toBe(true)
+    expect(labels.some(l => l.includes('原始请求'))).toBe(true)
+  })
+
+  it('普通用户看不到别人的提示词，且默认落在调用信息', async () => {
+    const wrapper = await mountDrawer('user-other')
     const labels = tabLabels(wrapper)
 
     expect(labels.some(l => l.includes('提示词'))).toBe(false)

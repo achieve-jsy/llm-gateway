@@ -58,6 +58,8 @@ func (h *VideoTaskHandler) List(c *gin.Context) {
 		return
 	}
 
+	// 提示词（request_body）仅平台 admin 可见：非 admin 由后端裁剪，任务其余字段正常展示。
+	MaskVideoTaskPrompts(tasks, rbac.GetActor(c).IsGlobal)
 	c.JSON(http.StatusOK, gin.H{
 		"data":      tasks,
 		"total":     total,
@@ -85,6 +87,8 @@ func (h *VideoTaskHandler) MyList(c *gin.Context) {
 		return
 	}
 
+	// 提示词（request_body）仅平台 admin 可见：非 admin 由后端裁剪，任务其余字段正常展示。
+	MaskVideoTaskPrompts(tasks, rbac.GetActor(c).IsGlobal)
 	c.JSON(http.StatusOK, gin.H{
 		"data":      tasks,
 		"total":     total,
@@ -102,6 +106,7 @@ func (h *VideoTaskHandler) Get(c *gin.Context) {
 		return
 	}
 
+	MaskVideoTaskPrompt(task, rbac.GetActor(c).IsGlobal)
 	c.JSON(http.StatusOK, gin.H{"data": task})
 }
 
@@ -119,6 +124,7 @@ func (h *VideoTaskHandler) MyGet(c *gin.Context) {
 		return
 	}
 
+	MaskVideoTaskPrompt(task, rbac.GetActor(c).IsGlobal)
 	c.JSON(http.StatusOK, gin.H{"data": task})
 }
 

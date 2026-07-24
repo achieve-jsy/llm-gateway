@@ -1,8 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
-import { nextTick } from 'vue'
+import { nextTick, reactive } from 'vue'
 import ElementPlus from 'element-plus'
 import VideoTaskDetail from '../VideoTaskDetail.vue'
+
+const authStore = reactive({ isAdmin: true, effectiveRole: 'admin' })
+
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => authStore,
+}))
 
 vi.mock('@/api/videoTasks', () => ({
   videoTasksAPI: {
@@ -54,6 +60,8 @@ describe('VideoTaskDetail', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    authStore.isAdmin = true
+    authStore.effectiveRole = 'admin'
   })
 
   it('以五个标签页展示任务详情、视频结果、请求响应和时间线', async () => {
@@ -104,8 +112,7 @@ describe('VideoTaskDetail', () => {
     expect(wrapper.text()).not.toContain('2026-07-08T14:30:00Z')
   })
 
-  it('任务信息页创建/更新时间使用北京时间格式', async () => {
-    const wrapper = mount(VideoTaskDetail, {
+  it('任务信息页创建/更新时间使用北京时间格式', async () => {    const wrapper = mount(VideoTaskDetail, {
       props: {
         modelValue: true,
         task,
@@ -118,6 +125,31 @@ describe('VideoTaskDetail', () => {
     expect(wrapper.text()).toContain('2026-07-08 22:30:00')
     expect(wrapper.text()).toContain('2026-07-08 22:31:00')
     expect(wrapper.text()).not.toContain('2026-07-08T14:30:00Z')
+  })
+
+  it('非 admin 不展示提示词与请求体（后端已按角色裁剪 request_body）', async () => {
+    authStore.isAdmin = false
+    authStore.effectiveRole = 'dept_admin'
+
+    const wrapper = mount(VideoTaskDetail, {
+      props: {
+        modelValue: true,
+        task,
+      },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const text = wrapper.text()
+    expect(text).not.toContain('提示词')
+    expect(text).not.toContain('一只橘猫在阳光下缓慢走过')
+    // 请求体 Tab 内含提示词正文，一并对非 admin 隐藏
+    expect(wrapper.findAll('.el-tabs__item').some(item => item.text().includes('请求'))).toBe(false)
+    // 任务记录本身正常展示
+    expect(text).toContain('cgt-test-001')
+    expect(text).toContain('720p')
+    expect(text).toContain('16:9')
   })
 })
 

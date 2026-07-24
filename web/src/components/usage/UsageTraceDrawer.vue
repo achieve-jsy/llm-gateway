@@ -138,8 +138,8 @@
           </div>
         </el-tab-pane>
 
-        <!-- 提示词 / 请求 -->
-        <el-tab-pane :label="requestTabLabel" name="prompt">
+        <!-- 提示词 / 请求（仅平台 admin：后端已按角色裁剪 request_body） -->
+        <el-tab-pane v-if="canViewPrompt" :label="requestTabLabel" name="prompt">
           <div v-if="traceMessages.length" class="up-msgs">
             <div v-for="(msg, i) in traceMessages" :key="i" :class="['up-msg', `up-msg--${msg.role}`]">
               <span class="up-msg-role">{{ msg.role }}</span>
@@ -176,8 +176,8 @@
           <div v-else class="up-trace-empty">无响应数据</div>
         </el-tab-pane>
 
-        <!-- 原始请求 -->
-        <el-tab-pane label="原始请求" name="raw_req">
+        <!-- 原始请求（仅平台 admin：内含提示词正文） -->
+        <el-tab-pane v-if="canViewPrompt" label="原始请求" name="raw_req">
           <div v-if="traceData?.request_body" class="up-json-view">
             <pre>{{ JSON.stringify(traceData.request_body, null, 2) }}</pre>
           </div>
@@ -214,6 +214,7 @@ import {
   Loading, SuccessFilled, CircleCloseFilled, WarningFilled, SwitchButton,
 } from '@element-plus/icons-vue'
 import { useSettingsStore } from '@/stores/settings'
+import { useAuthStore } from '@/stores/auth'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
 import { fmtDateTime, fmtDuration } from '@/utils/time'
 import {
@@ -251,6 +252,10 @@ const emit = defineEmits<{
 }>()
 
 const settingsStore = useSettingsStore()
+const authStore = useAuthStore()
+// 提示词（request_body）仅平台 admin 可见；后端已按角色裁剪，这里同步隐藏入口，
+// 避免非 admin 看到空的「提示词/原始请求」Tab。
+const canViewPrompt = computed(() => authStore.isAdmin)
 const cc = computed(() => ({
   currency: props.currency,
   rate: settingsStore.publicSettings.pricing_usd_to_cny_rate || 7.2,
@@ -261,7 +266,8 @@ const visible = computed({
   set: (v) => emit('update:modelValue', v),
 })
 
-const traceTab = ref('prompt')
+// 非 admin 看不到「提示词」Tab，初始与打开时都回落到「调用信息」，避免选中被隐藏的 Tab 导致空白
+const traceTab = ref(canViewPrompt.value ? 'prompt' : 'meta')
 
 const traceEndpointType = computed((): UsageEndpointType => {
   const fromRow = endpointPathToType(props.row?.inbound_endpoint)
@@ -309,7 +315,7 @@ const rerankDocCount = computed(() => {
 })
 
 watch(() => props.modelValue, (val) => {
-  if (val) traceTab.value = isNonChatEndpoint.value ? 'meta' : 'prompt'
+  if (val) traceTab.value = (isNonChatEndpoint.value || !canViewPrompt.value) ? 'meta' : 'prompt'
 })
 
 watch(() => props.traceLoading, (loading) => {

@@ -26,7 +26,7 @@
             </el-descriptions-item>
             <el-descriptions-item label="Key">{{ resolveKeyLabel(task || {}) }}</el-descriptions-item>
             <el-descriptions-item label="用户">{{ task?.user_name || task?.user_id || '—' }}</el-descriptions-item>
-            <el-descriptions-item label="提示词">
+            <el-descriptions-item v-if="canViewPrompt" label="提示词">
               <div v-if="display.prompt" class="prompt-text">{{ display.prompt }}</div>
               <span v-else>—</span>
             </el-descriptions-item>
@@ -58,7 +58,8 @@
           <el-empty v-else description="暂无可预览的视频结果" />
         </el-tab-pane>
 
-        <el-tab-pane label="请求" name="request">
+        <!-- 请求体含提示词正文，仅平台 admin 可见（后端已按角色裁剪 request_body） -->
+        <el-tab-pane v-if="canViewPrompt" label="请求" name="request">
           <pre class="json-block">{{ requestJSON }}</pre>
         </el-tab-pane>
 
@@ -89,6 +90,11 @@ import { computed, ref, watch } from 'vue'
 import { videoTasksAPI, type VideoTask, type VideoTaskEvent } from '@/api/videoTasks'
 import { fmtDateTime } from '@/utils/time'
 import { resolveKeyLabel, resolveVideoDisplay } from '@/utils/videoTaskDisplay'
+import { useAuthStore } from '@/stores/auth'
+
+const authStore = useAuthStore()
+// 提示词（video_tasks.request_body）仅平台 admin 可见；后端已按角色裁剪，这里同步隐藏该字段。
+const canViewPrompt = computed(() => authStore.isAdmin)
 
 const props = defineProps<{
   task: VideoTask | null

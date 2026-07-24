@@ -118,6 +118,9 @@ func (h *UsageHandler) Trace(c *gin.Context) {
 		}
 		return
 	}
+	// 提示词（request_body）仅平台 admin 可见：非 admin 由后端裁剪，
+	// 调用记录本身（响应、耗时、token、费用）正常展示。
+	MaskTracePrompt(&trace, rbac.GetActor(c).IsGlobal)
 	c.JSON(http.StatusOK, trace)
 }
 
@@ -165,6 +168,9 @@ func (h *UsageHandler) ScopedTrace(c *gin.Context) {
 		}
 		return
 	}
+	// QueryScope 只保证「这条记录在 actor 管辖范围内、看得到」；
+	// 提示词正文另按角色裁剪：非 admin（含部门/工作室负责人）不下发 request_body。
+	MaskTracePrompt(&trace, actor.IsGlobal)
 	c.JSON(http.StatusOK, trace)
 }
 

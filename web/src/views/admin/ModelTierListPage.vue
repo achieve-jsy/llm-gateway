@@ -50,13 +50,26 @@
 
     <el-dialog v-model="formVisible" :title="editing ? '编辑等级' : '新建等级'" width="520px">
       <el-form label-position="top">
-        <el-form-item label="名称" required><el-input v-model="form.name" maxlength="40" show-word-limit /></el-form-item>
+        <el-form-item label="名称" required>
+          <el-input v-model="form.name" maxlength="40" show-word-limit data-test="tier-name-input" />
+        </el-form-item>
         <el-form-item label="说明"><el-input v-model="form.description" type="textarea" maxlength="200" show-word-limit /></el-form-item>
         <el-form-item label="标识颜色" required><el-color-picker v-model="form.color" /></el-form-item>
+        <el-form-item label="变更原因" required>
+          <el-input
+            v-model="form.reason"
+            type="textarea"
+            :rows="2"
+            maxlength="200"
+            show-word-limit
+            placeholder="说明本次新建/修改的原因，将写入审计记录"
+            data-test="tier-reason-input"
+          />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="formVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" :disabled="!form.name.trim()" @click="save">保存</el-button>
+        <el-button type="primary" :loading="saving" :disabled="!canSave" @click="save">保存</el-button>
       </template>
     </el-dialog>
 
@@ -114,7 +127,7 @@ import {
   setGroupBudgetTierBatch, setModelTierStatus, updateModelTier,
 } from '@/services/control-plane'
 import type { GroupListItem } from '@/types/group'
-import type { ModelTier } from '@/types/model-tier'
+import type { ModelTier, ModelTierInput } from '@/types/model-tier'
 
 const tiersRaw = ref<ModelTier[]>([])
 const tiers = computed(() => [...tiersRaw.value].sort((a, b) => {
@@ -137,7 +150,8 @@ const selectedTier = ref<ModelTier | null>(null)
 const groupTableRef = ref<any>(null)
 const groupSearch = ref('')
 const groupTierFilter = ref('all')
-const form = reactive({ name: '', description: '', color: '#409EFF' })
+const form = reactive({ name: '', description: '', color: '#409EFF', reason: '' })
+const canSave = computed(() => form.name.trim().length > 0 && form.reason.trim().length > 0)
 const activeTiers = computed(() => tiers.value.filter(t => !t.archived_at && t.enabled).sort((a, b) => a.sort_order - b.sort_order))
 
 function matchesGroupSearch(group: GroupListItem, keyword: string): boolean {
@@ -162,20 +176,36 @@ async function load() {
 }
 function openCreate() {
   editing.value = null
-  Object.assign(form, { name: '', description: '', color: '#409EFF' })
+  Object.assign(form, { name: '', description: '', color: '#409EFF', reason: '' })
   formVisible.value = true
 }
 function openEdit(row: ModelTier) {
   editing.value = row
-  Object.assign(form, { name: row.name, description: row.description, color: row.color })
+  // 变更原因是本次操作的审计说明，不回填历史值。
+  Object.assign(form, { name: row.name, description: row.description, color: row.color, reason: '' })
   formVisible.value = true
 }
 async function save() {
+  if (!form.name.trim()) {
+    ElMessage.warning('请填写等级名称')
+    return
+  }
+  if (!form.reason.trim()) {
+    ElMessage.warning('请填写变更原因')
+    return
+  }
+  const payload: ModelTierInput = {
+    name: form.name.trim(),
+    description: form.description.trim(),
+    color: form.color,
+    reason: form.reason.trim(),
+  }
   saving.value = true
   try {
-    if (editing.value) await updateModelTier(editing.value.id, form)
-    else await createModelTier(form)
+    if (editing.value) await updateModelTier(editing.value.id, payload)
+    else await createModelTier(payload)
     formVisible.value = false
+    Object.assign(form, { name: '', description: '', color: '#409EFF', reason: '' })
     ElMessage.success('已保存')
     await load()
   } finally { saving.value = false }

@@ -58,8 +58,11 @@ func (h *VideoTaskHandler) List(c *gin.Context) {
 		return
 	}
 
-	// 提示词正文只对 admin 或任务本人下发（管理员面按管辖范围可见任务，但看不到别人的提示词）。
-	MaskVideoTaskPrompts(tasks, func(owner string) bool { return rbac.CanViewPrompt(c, owner) })
+	// 提示词正文只对 admin 或任务本人（且非程序 Key 调用）下发；
+	// 管理员面按管辖范围可见任务，但看不到别人的、以及程序 Key 的提示词。
+	MaskVideoTaskPrompts(tasks, func(owner, keyType string) bool {
+		return rbac.CanViewPrompt(c, owner, keyType == model.KeyTypeService)
+	})
 	c.JSON(http.StatusOK, gin.H{
 		"data":      tasks,
 		"total":     total,
@@ -87,8 +90,11 @@ func (h *VideoTaskHandler) MyList(c *gin.Context) {
 		return
 	}
 
-	// 提示词正文只对 admin 或任务本人下发（管理员面按管辖范围可见任务，但看不到别人的提示词）。
-	MaskVideoTaskPrompts(tasks, func(owner string) bool { return rbac.CanViewPrompt(c, owner) })
+	// 提示词正文只对 admin 或任务本人（且非程序 Key 调用）下发；
+	// 管理员面按管辖范围可见任务，但看不到别人的、以及程序 Key 的提示词。
+	MaskVideoTaskPrompts(tasks, func(owner, keyType string) bool {
+		return rbac.CanViewPrompt(c, owner, keyType == model.KeyTypeService)
+	})
 	c.JSON(http.StatusOK, gin.H{
 		"data":      tasks,
 		"total":     total,
@@ -106,8 +112,8 @@ func (h *VideoTaskHandler) Get(c *gin.Context) {
 		return
 	}
 
-	// 提示词正文只对 admin 或任务本人下发。
-	MaskVideoTaskPrompt(task, rbac.CanViewPrompt(c, task.UserID))
+	// 提示词正文只对 admin 或任务本人（且非程序 Key 调用）下发。
+	MaskVideoTaskPrompt(task, rbac.CanViewPrompt(c, task.UserID, task.APIKeyType == model.KeyTypeService))
 	c.JSON(http.StatusOK, gin.H{"data": task})
 }
 
@@ -125,8 +131,8 @@ func (h *VideoTaskHandler) MyGet(c *gin.Context) {
 		return
 	}
 
-	// 提示词正文只对 admin 或任务本人下发。
-	MaskVideoTaskPrompt(task, rbac.CanViewPrompt(c, task.UserID))
+	// 提示词正文只对 admin 或任务本人（且非程序 Key 调用）下发。
+	MaskVideoTaskPrompt(task, rbac.CanViewPrompt(c, task.UserID, task.APIKeyType == model.KeyTypeService))
 	c.JSON(http.StatusOK, gin.H{"data": task})
 }
 

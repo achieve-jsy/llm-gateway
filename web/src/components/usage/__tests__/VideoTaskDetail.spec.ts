@@ -12,7 +12,7 @@ vi.mock('@/stores/auth', () => ({
 }))
 
 // 详情接口返回的任务归属：信息页的身份判定来自接口数据（打开时会覆盖 props）。
-const apiState = vi.hoisted(() => ({ ownerUserID: 'user-me' }))
+const apiState = vi.hoisted(() => ({ ownerUserID: 'user-me', keyType: 'personal' }))
 
 vi.mock('@/api/videoTasks', () => ({
   videoTasksAPI: {
@@ -27,6 +27,7 @@ vi.mock('@/api/videoTasks', () => ({
       api_key_name: 'demo-key',
       user_name: '张三',
       user_id: apiState.ownerUserID,
+      api_key_type: apiState.keyType,
       video_url: 'https://example.com/video.mp4',
       request_body: JSON.stringify({
         model: 'doubao-seedance-2-0-260128',
@@ -70,10 +71,12 @@ describe('VideoTaskDetail', () => {
     authStore.effectiveRole = 'admin'
     authStore.user = { id: MY_ID }
     apiState.ownerUserID = MY_ID
+    apiState.keyType = 'personal'
   })
 
   async function mountAs(t: typeof task) {
     apiState.ownerUserID = t.user_id
+    apiState.keyType = (t as { api_key_type?: string }).api_key_type || 'personal'
     const wrapper = mount(VideoTaskDetail, {
       props: {
         modelValue: true,
@@ -176,6 +179,31 @@ describe('VideoTaskDetail', () => {
     expect(text).toContain('cgt-test-001')
     expect(text).toContain('720p')
     expect(text).toContain('16:9')
+  })
+
+  it('程序（服务）Key 发起的任务：本人也看不到提示词，任务本身仍可见', async () => {
+    authStore.isAdmin = false
+    authStore.effectiveRole = 'dept_admin'
+
+    const wrapper = await mountAs({ ...task, api_key_type: 'service' })
+    const text = wrapper.text()
+
+    expect(text).not.toContain('提示词')
+    expect(text).not.toContain('一只橘猫在阳光下缓慢走过')
+    expect(wrapper.findAll('.el-tabs__item').some(item => item.text().includes('请求'))).toBe(false)
+    // 任务记录本身正常展示
+    expect(text).toContain('cgt-test-001')
+    expect(text).toContain('720p')
+  })
+
+  it('程序（服务）Key 发起的任务：admin 仍可看提示词', async () => {
+    authStore.isAdmin = true
+    authStore.effectiveRole = 'admin'
+
+    const wrapper = await mountAs({ ...task, user_id: 'user-other', api_key_type: 'service' })
+
+    expect(wrapper.text()).toContain('提示词')
+    expect(wrapper.text()).toContain('一只橘猫在阳光下缓慢走过')
   })
 
   it('admin 看别人的任务：提示词可见', async () => {

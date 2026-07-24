@@ -122,13 +122,15 @@ watch(visible, (v) => {
 
 const canPreviewVideo = computed(() => task.value?.status === 'succeeded' && !!task.value?.video_url)
 
-// 提示词（video_tasks.request_body）：admin 可见全部，其余角色只看得到自己的任务
-// （后端已按归属裁剪 request_body），这里同步隐藏该字段与「请求」Tab。
-const canViewPrompt = computed(() =>
-  authStore.isAdmin
-  || props.mine === true
-  || (!!task.value?.user_id && task.value.user_id === (authStore.user?.id ?? '')),
-)
+// 提示词（video_tasks.request_body）：admin 可见全部；其余角色只看得到自己的、
+// 且非程序（服务）Key 发起任务的提示词（后端已按归属与 Key 类型裁剪）。
+const canViewPrompt = computed(() => {
+  if (authStore.isAdmin) return true
+  // 程序 Key 发起的任务提示词一律不展示
+  if (task.value?.api_key_type === 'service') return false
+  return props.mine === true
+    || (!!task.value?.user_id && task.value.user_id === (authStore.user?.id ?? ''))
+})
 
 const display = computed(() => resolveVideoDisplay(task.value || {}))
 

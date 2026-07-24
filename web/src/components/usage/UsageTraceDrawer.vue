@@ -253,10 +253,12 @@ const emit = defineEmits<{
 
 const settingsStore = useSettingsStore()
 const authStore = useAuthStore()
-// 提示词正文：admin 可见全部，其余角色只看得到自己的记录（后端已按归属裁剪 request_body）。
-// 这里同步隐藏入口，避免看到空的「提示词 / 原始请求」Tab。
+// 提示词正文：admin 可见全部；其余角色只看得到自己的、且非程序（服务）Key 发起的记录
+// （后端已按归属与 Key 类型裁剪 request_body）。这里同步隐藏入口，避免看到空 Tab。
 const canViewPrompt = computed(() => {
   if (authStore.isAdmin) return true
+  // 程序 Key 的调用提示词一律不展示，即使是本人调用
+  if (props.row?.key_type === 'service') return false
   const owner = props.row?.user_id
   return !!owner && owner === (authStore.user?.id ?? '')
 })

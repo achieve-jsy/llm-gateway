@@ -8,15 +8,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 提示词可见性口径：用户只能看自己的提示词，别人的看不了；平台 admin 例外，可看全部。
+// 提示词可见性口径：用户只能看自己的提示词，别人的看不了；平台 admin 例外，可看全部；
+// 程序（服务）Key 发起的调用提示词一律不下发（本人也不行），admin 仍例外。
 // 管辖范围（dept/studio）只决定「看得到这条记录」，不决定能否看正文。
 func TestCanViewPrompt(t *testing.T) {
 	tests := []struct {
-		name      string
-		actor     rbac.Actor
-		jwtUserID string // 未挂 Guard 的 /my/* 路由回退来源
-		owner     string
-		want      bool
+		name         string
+		actor        rbac.Actor
+		jwtUserID    string // 未挂 Guard 的 /my/* 路由回退来源
+		owner        string
+		isProgramKey bool
+		want         bool
 	}{
 		{
 			name:  "admin 可看别人的提示词",
@@ -35,6 +37,27 @@ func TestCanViewPrompt(t *testing.T) {
 			actor: rbac.Actor{UserID: "user-1"},
 			owner: "user-2",
 			want:  false,
+		},
+		{
+			name:         "程序 Key 调用：本人也看不到自己的提示词",
+			actor:        rbac.Actor{UserID: "user-1"},
+			owner:        "user-1",
+			isProgramKey: true,
+			want:         false,
+		},
+		{
+			name:         "程序 Key 调用：别人的记录同样看不到",
+			actor:        rbac.Actor{UserID: "user-1"},
+			owner:        "user-2",
+			isProgramKey: true,
+			want:         false,
+		},
+		{
+			name:         "程序 Key 调用：admin 仍可看",
+			actor:        rbac.Actor{UserID: "admin-1", IsGlobal: true},
+			owner:        "user-9",
+			isProgramKey: true,
+			want:         true,
 		},
 		{
 			name:  "部门负责人看管辖范围内他人记录：记录可见但提示词不可见",
@@ -61,6 +84,13 @@ func TestCanViewPrompt(t *testing.T) {
 			want:      false,
 		},
 		{
+			name:         "未挂 Guard 的 /my 路由：程序 Key 调用本人也看不到",
+			jwtUserID:    "user-1",
+			owner:        "user-1",
+			isProgramKey: true,
+			want:         false,
+		},
+		{
 			name:  "归属未知（历史数据无 user_id）：fail closed",
 			actor: rbac.Actor{UserID: "user-1"},
 			owner: "",
@@ -84,8 +114,9 @@ func TestCanViewPrompt(t *testing.T) {
 				rbac.SetActor(c, tt.actor)
 			}
 
-			if got := rbac.CanViewPrompt(c, tt.owner); got != tt.want {
-				t.Fatalf("CanViewPrompt(owner=%q) = %v, want %v", tt.owner, got, tt.want)
+			if got := rbac.CanViewPrompt(c, tt.owner, tt.isProgramKey); got != tt.want {
+				t.Fatalf("CanViewPrompt(owner=%q, isProgramKey=%v) = %v, want %v",
+					tt.owner, tt.isProgramKey, got, tt.want)
 			}
 		})
 	}

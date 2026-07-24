@@ -17,12 +17,13 @@ vi.mock('@/stores/settings', () => ({
 
 // 提示词口径：用户只能看自己的提示词，别人的看不了；admin 例外，可看全部。
 describe('UsageTraceDrawer 提示词可见性', () => {
-  function makeRow(userId: string) {
+  function makeRow(userId: string, keyType: 'personal' | 'service' = 'personal') {
     return {
       request_id: 'req-test-001',
       model_name: 'gpt-test',
       inbound_endpoint: '/v1/chat/completions',
       user_id: userId,
+      key_type: keyType,
     }
   }
   const traceData = {
@@ -30,11 +31,11 @@ describe('UsageTraceDrawer 提示词可见性', () => {
     response_body: { choices: [{ message: { content: 'ok' } }] },
   }
 
-  async function mountDrawer(userId: string) {
+  async function mountDrawer(userId: string, keyType: 'personal' | 'service' = 'personal') {
     const wrapper = mount(UsageTraceDrawer, {
       props: {
         modelValue: true,
-        row: makeRow(userId) as never,
+        row: makeRow(userId, keyType) as never,
         traceData: traceData as never,
         traceLoading: false,
       },
@@ -69,6 +70,24 @@ describe('UsageTraceDrawer 提示词可见性', () => {
     const wrapper = await mountDrawer(MY_ID)
     const labels = tabLabels(wrapper)
 
+    expect(labels.some(l => l.includes('提示词'))).toBe(true)
+    expect(labels.some(l => l.includes('原始请求'))).toBe(true)
+  })
+
+  it('程序（服务）Key 的调用：本人也看不到提示词', async () => {
+    const wrapper = await mountDrawer(MY_ID, 'service')
+    const labels = tabLabels(wrapper)
+
+    expect(labels.some(l => l.includes('提示词'))).toBe(false)
+    expect(labels.some(l => l.includes('原始请求'))).toBe(false)
+    expect(wrapper.find('.el-tabs__item.is-active').text()).toContain('调用信息')
+  })
+
+  it('程序（服务）Key 的调用：admin 仍可看提示词', async () => {
+    authStore.isAdmin = true
+    authStore.effectiveRole = 'admin'
+
+    const labels = tabLabels(await mountDrawer('user-other', 'service'))
     expect(labels.some(l => l.includes('提示词'))).toBe(true)
     expect(labels.some(l => l.includes('原始请求'))).toBe(true)
   })

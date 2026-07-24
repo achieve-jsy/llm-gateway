@@ -14,14 +14,22 @@ func ActorUserID(c *gin.Context) string {
 
 // CanViewPrompt 判定当前请求者能否查看归属 ownerUserID 的提示词正文。
 //
-// 产品口径：用户只能看自己的提示词，别人的提示词看不到；平台 admin 例外，可见全部。
+// 产品口径：
+//   - 平台 admin（IsGlobal）例外，可见全部
+//   - 程序（服务）Key 发起的调用（isProgramKey=true）提示词一律不下发，
+//     即便是该 Key 的持有者本人也看不到
+//   - 其余情况只能看自己的记录（viewer == owner）
+//
 // 归属未知（历史数据 user_id 为空）或请求者身份缺失时一律不可见（fail closed）。
 //
 // 注意：管辖范围（studio/dept）只决定「看得到这条记录」，
 // 不决定「能否看到记录里的提示词正文」。
-func CanViewPrompt(c *gin.Context, ownerUserID string) bool {
+func CanViewPrompt(c *gin.Context, ownerUserID string, isProgramKey bool) bool {
 	if GetActor(c).IsGlobal {
 		return true
+	}
+	if isProgramKey {
+		return false
 	}
 	viewer := ActorUserID(c)
 	if viewer == "" || ownerUserID == "" {

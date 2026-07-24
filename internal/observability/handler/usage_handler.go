@@ -113,7 +113,7 @@ func (h *UsageHandler) MyTrace(c *gin.Context) {
 // trace 读取单条请求完整 trace。
 //   - ownOnly=true（/my/* 路由）：仅返回本人记录，他人记录 404
 //   - 提示词正文（request_body）按 rbac.CanViewPrompt 裁剪：admin 可见全部，
-//     其余角色只看得到自己的提示词；response_body 与其余元数据不裁剪
+//     其余角色只看得到自己（非程序 Key）的提示词；response_body 与其余元数据不裁剪
 func (h *UsageHandler) trace(c *gin.Context, ownOnly bool) {
 	if h.db == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "trace storage not configured"})
@@ -125,9 +125,9 @@ func (h *UsageHandler) trace(c *gin.Context, ownOnly bool) {
 		return
 	}
 
-	// call_traces 无 user_id 列，归属需从 call_logs 反查（同一 request_id）。
-	ownerID, ownerFound := h.traceOwner(c, rid)
-	canViewPrompt := rbac.CanViewPrompt(c, ownerID)
+	// call_traces 无 user_id / key_type 列，归属与 Key 类型需从 call_logs 反查（同一 request_id）。
+	sub, ownerFound := h.traceSubject(c, rid)
+	canViewPrompt := rbac.CanViewPrompt(c, sub.UserID, sub.KeyType == obsmodel.KeyTypeService)
 	if ownOnly && (!ownerFound || !canViewPrompt) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "trace not found"})
 		return
@@ -142,29 +142,35 @@ func (h *UsageHandler) trace(c *gin.Context, ownOnly bool) {
 		}
 		return
 	}
-	// 提示词正文只对 admin 或记录本人下发；调用记录其余内容（响应、耗时、token、费用）正常展示。
+	// 提示词正文只对 admin 或记录本人（且非程序 Key 调用）下发；
+	// 调用记录其余内容（响应、耗时、token、费用）正常展示。
 	MaskTracePrompt(&trace, canViewPrompt)
 	c.JSON(http.StatusOK, trace)
 }
 
-// traceOwner 从 call_logs 反查 request_id 的归属用户（call_traces 无 user_id 列）。
-// 返回 (userID, 是否查到记录)；查不到时 userID 为空，调用方按 fail closed 处理。
-func (h *UsageHandler) traceOwner(c *gin.Context, rid string) (string, bool) {
-	var row struct {
-		UserID string `gorm:"column:user_id"`
-	}
+// traceSubject 描述一条请求的归属：记录者与 Key 类型。
+// call_traces 表没有这两列，需从 call_logs 反查（同一 request_id）。
+type traceSubject struct {
+	UserID  string `gorm:"column:user_id"`
+	KeyType string `gorm:"column:key_type"`
+}
+
+// traceSubject 从 call_logs 反查 request_id 的归属信息。
+// 返回 (归属, 是否查到)；查不到或归属为空时，调用方按 fail closed 处理。
+func (h *UsageHandler) traceSubject(c *gin.Context, rid string) (traceSubject, bool) {
+	var sub traceSubject
 	if err := h.db.WithContext(c.Request.Context()).
 		Table("call_logs").
-		Select("user_id").
+		Select("user_id, key_type").
 		Where("request_id = ?", rid).
 		Limit(1).
-		Scan(&row).Error; err != nil {
-		return "", false
+		Scan(&sub).Error; err != nil {
+		return sub, false
 	}
-	if row.UserID == "" {
-		return "", false
+	if sub.UserID == "" {
+		return sub, false
 	}
-	return row.UserID, true
+	return sub, true
 }
 
 // ScopedTrace GET /api/v1/usage/scoped/logs/:request_id/trace
@@ -212,8 +218,9 @@ func (h *UsageHandler) ScopedTrace(c *gin.Context) {
 		return
 	}
 	// QueryScope 只保证「这条记录在 actor 管辖范围内、看得到」；
-	// 提示词正文另按归属裁剪：admin 可见全部，其余角色只看得到自己的记录（lg.UserID）。
-	MaskTracePrompt(&trace, rbac.CanViewPrompt(c, lg.UserID))
+	// 提示词正文另按归属裁剪：admin 可见全部；其余角色只看得到自己的、
+	// 且非程序（服务）Key 发起的记录的提示词（lg.UserID / lg.KeyType）。
+	MaskTracePrompt(&trace, rbac.CanViewPrompt(c, lg.UserID, lg.KeyType == obsmodel.KeyTypeService))
 	c.JSON(http.StatusOK, trace)
 }
 

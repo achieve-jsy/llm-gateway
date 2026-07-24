@@ -71,7 +71,7 @@
       "admin": "Bearer <jwt>",
       "scoped": "Bearer <jwt> + RBAC PermUsageViewScoped"
     },
-    "prompt_visibility": "提示词正文（call_traces.request_body / video_tasks.request_body）按归属可见：平台 admin 可看全部；其余角色只能看自己的记录，别人的提示词不下发（request_body 被后端清空，omitempty 不返回），response_body 与耗时/token/费用等元数据保留。管辖范围（studio/dept）只决定「看得到这条记录」，不决定能否看提示词。前端对不可见的记录隐藏「提示词 / 原始请求 / 请求」Tab 与任务详情「提示词」字段。另：/my/usage/logs/:request_id/trace 由 MyTrace 处理并校验归属，他人 request_id 一律 404（修复原先可凭 request_id 读取他人正文的越权）。",
+    "prompt_visibility": "提示词正文（call_traces.request_body / video_tasks.request_body）按归属与 Key 类型可见：平台 admin 可看全部；其余角色只看得到自己的记录，别人的提示词不下发（request_body 被后端清空，omitempty 不返回）；程序（call_logs.key_type=service / video_tasks.api_key_type=service）Key 发起的调用提示词一律不下发，即便 Key 持有者本人也看不到，admin 仍例外。response_body 与耗时/token/费用等元数据保留。管辖范围（studio/dept）只决定「看得到这条记录」，不决定能否看提示词。前端对不可见的记录隐藏「提示词 / 原始请求 / 请求」Tab 与任务详情「提示词」字段。另：/my/usage/logs/:request_id/trace 由 MyTrace 处理并校验归属，他人 request_id 一律 404（修复原先可凭 request_id 读取他人正文的越权）。",
     "log_row_fields": [
       "request_id", "ts",
       "key_id", "key_name", "key_type",

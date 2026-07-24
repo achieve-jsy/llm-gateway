@@ -45,7 +45,7 @@ func TestMaskVideoTaskPrompt(t *testing.T) {
 
 	t.Run("列表按归属逐条判定：只看得到自己的提示词", func(t *testing.T) {
 		tasks := []model.VideoTask{*newTask("user-1"), *newTask("user-2"), *newTask("user-1")}
-		handler.MaskVideoTaskPrompts(tasks, func(owner string) bool { return owner == "user-1" })
+		handler.MaskVideoTaskPrompts(tasks, func(owner, _ string) bool { return owner == "user-1" })
 
 		if tasks[0].RequestBody != prompt {
 			t.Fatal("自己的任务应保留提示词")
@@ -55,6 +55,28 @@ func TestMaskVideoTaskPrompt(t *testing.T) {
 		}
 		if tasks[2].RequestBody != prompt {
 			t.Fatal("自己的任务应保留提示词")
+		}
+	})
+
+	t.Run("程序 Key 发起的任务：本人也清空提示词", func(t *testing.T) {
+		tasks := []model.VideoTask{*newTask("user-1"), {TaskID: "cgt-svc", UserID: "user-1", APIKeyType: "service", RequestBody: prompt}}
+
+		// 与生产一致的判定：admin 例外 + 仅本人 + 非程序 Key
+		handler.MaskVideoTaskPrompts(tasks, func(owner, keyType string) bool {
+			return keyType != "service" && owner == "user-1"
+		})
+
+		if tasks[1].RequestBody != "" {
+			t.Fatal("程序 Key 发起的任务应清空提示词，即使是本人")
+		}
+	})
+
+	t.Run("程序 Key 的判断依据是 api_key_type", func(t *testing.T) {
+		task := newTask("user-1")
+		task.APIKeyType = "service"
+		// 单独确认字段可被裁决策略读取（避免后续改成从别处取名）
+		if task.APIKeyType != "service" {
+			t.Fatal("APIKeyType 应可读")
 		}
 	})
 

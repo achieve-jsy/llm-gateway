@@ -155,10 +155,18 @@ func UsageCollectorWithRedis(collector *gwobs.Collector, traceWriter *gwobs.Trac
 			}
 		}
 
-		// 请求体
+		// 请求体：两个 context key 互斥，优先取 sanitize 后的正文。
+		// trace_req_body：小正文（<= MaxParseBytesInTrace）经 sanitize 处理后的正文；
+		// trace_req_body_raw：大正文直存路径的原始字节，未经 sanitize/校验，
+		// 置 BodyRawUntrusted 以跳过写入侧的 json.Valid 全量校验。
 		if rb, ok := c.Get("trace_req_body"); ok {
 			if b, ok := rb.([]byte); ok {
 				te.RequestBodyRaw = b
+			}
+		} else if rb, ok := c.Get("trace_req_body_raw"); ok {
+			if b, ok := rb.([]byte); ok {
+				te.RequestBodyRaw = b
+				te.BodyRawUntrusted = true
 			}
 		}
 

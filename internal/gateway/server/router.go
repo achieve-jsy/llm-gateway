@@ -265,6 +265,14 @@ func setup(
 
 	v1 := r.Group("/v1")
 	v1.Use(middleware.AuthMiddleware(authClient, jwtManager))
+	// 在途字节预算准入：按 Content-Length 排队占用全局 256MB 预算，
+	// 为「并发 × 体积」提供硬上界（语义见 middleware.BodyBudgetLimiter）。
+	// 位置必须恰好在这里：
+	//   - 不能放在 AuthMiddleware 之前：否则未鉴权 / 无效 Key 的请求也会占用预算，
+	//     可以靠垃圾请求把预算占满，反而拖垮正常调用；
+	//   - 不能放在 TraceCapture 之后：请求体读取发生在 TraceCapture，
+	//     预算必须覆盖读取阶段，否则内存峰值在拿到预算前就已经产生，准入形同虚设。
+	v1.Use(middleware.BodyBudgetLimiter(middleware.DefaultBodyBudgetBytes))
 	v1.Use(BillingFactGuard(collectorOpt))
 	// 请求/响应正文捕获（供 trace 记录使用）
 	v1.Use(middleware.TraceCapture())

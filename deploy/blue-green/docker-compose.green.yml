@@ -40,7 +40,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1g
+          memory: 2g
 
   control-plane:
     image: ${REGISTRY:-192.0.2.10:5000}/llm-control-plane:${IMAGE_TAG:-latest}

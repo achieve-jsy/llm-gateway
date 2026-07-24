@@ -59,6 +59,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 
 	cpinfra "github.com/example/llm-gateway/internal/controlplane/infra"
 	gwobs "github.com/example/llm-gateway/internal/gateway/observability"
@@ -253,8 +254,10 @@ func main() {
 	if db, err := cpinfra.InitPostgres(cfg.Database.URL); err != nil {
 		slog.Warn("request trace persistence unavailable at startup; call logs remain spooled", "error", err)
 	} else {
-		// 请求/响应 trace 写入器
-		traceWriter = gwobs.NewTraceWriter(db, 1024, 50, 2*time.Second)
+		// 请求/响应 trace 写入器：使用独立 session + 专用 logger（D8），
+		// 避免慢 SQL 把内嵌的完整 request/response body 内联进日志。
+		traceDB := db.Session(&gorm.Session{Logger: newTraceDBLogger()})
+		traceWriter = gwobs.NewTraceWriterWithLimits(traceDB, 1024, 50, 2*time.Second, gwobs.TraceWriterLimits{})
 		go traceWriter.Run(ctx)
 
 		slog.Info("usage tracking enabled (direct-DB mode)")
@@ -389,6 +392,25 @@ func buildProviderFactory() *providers.ProviderFactory {
 	factory.Add(seedancevolcengine.Registration)
 
 	return factory
+}
+
+// newTraceDBLogger 返回 trace 写入专用的 GORM logger（D8）。
+// 不能改 internal/controlplane/infra/postgres.go 的全局 logger（control-plane 共用，
+// 改全局会让管理面丢失慢 SQL 日志），因此只给 trace 写入挂独立 session。
+// call_traces 的批量 INSERT 内嵌完整 request_body/response_body（单条日志可达 12MB），
+// 故必须 ParameterizedQueries=true，让日志只打印 ? 占位符而不内联参数值；
+// SlowThreshold 放宽到 2s，避免正常的大批量写入被反复判为慢 SQL。
+func newTraceDBLogger() logger.Interface {
+	return logger.New(
+		log.New(os.Stdout, "\r\n", log.LstdFlags),
+		logger.Config{
+			SlowThreshold:             2 * time.Second,
+			LogLevel:                  logger.Warn,
+			IgnoreRecordNotFoundError: true,
+			ParameterizedQueries:      true,
+			Colorful:                  false,
+		},
+	)
 }
 
 func refreshGroupNameCache(ctx context.Context, nc *cache.GroupNameCache, controlPlaneURL string) {

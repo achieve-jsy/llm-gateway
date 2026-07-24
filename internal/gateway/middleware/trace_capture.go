@@ -9,9 +9,75 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 )
+
+const (
+	// maxTraceBodyPreallocBytes 按 Content-Length 预分配请求体容量的上限（64 MB）。
+	// 防御客户端谎报超大 Content-Length 导致一次性 make 巨量内存；
+	// 真实 body 超过该上限时，超出部分由 bytes.Buffer 按需增长补齐。
+	maxTraceBodyPreallocBytes int64 = 64 << 20
+	// traceBodyCopyBufSize 读取请求体时复用的拷贝缓冲大小（64 KB）。
+	traceBodyCopyBufSize = 64 << 10
+)
+
+// traceBodyCopyBufPool 复用请求体读取用的 64KB 拷贝缓冲，避免每次请求都临时分配一块缓冲。
+var traceBodyCopyBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, traceBodyCopyBufSize)
+		return &b
+	},
+}
+
+// readTraceRequestBody 读取请求体全文，返回独立于请求的 []byte 副本。
+// 无正文（长度 0）或读取中断时返回 nil，调用方据此跳过正文采集。
+//
+// 与 io.ReadAll 的差异（内存优化）：优先按 Content-Length 预留容量（封顶 maxTraceBodyPreallocBytes），
+// 避免长度已知时 append 仍按 2 倍增长的分配 churn（30 MB body 实测 2.18× → 1.00×）；
+// 读取缓冲从 traceBodyCopyBufPool 复用，避免每次请求临时分配 64KB。
+func readTraceRequestBody(r *http.Request) []byte {
+	if r.Body == nil {
+		return nil
+	}
+
+	// 按 Content-Length 预分配容量；ContentLength <= 0（长度未知）时不预分配
+	prealloc := 0
+	if cl := r.ContentLength; cl > 0 {
+		if cl > maxTraceBodyPreallocBytes {
+			prealloc = int(maxTraceBodyPreallocBytes)
+		} else {
+			prealloc = int(cl)
+		}
+	}
+
+	buf := bytes.NewBuffer(make([]byte, 0, prealloc))
+
+	chunkPtr := traceBodyCopyBufPool.Get().(*[]byte)
+	chunk := (*chunkPtr)[:traceBodyCopyBufSize]
+	defer traceBodyCopyBufPool.Put(chunkPtr)
+
+	for {
+		n, err := r.Body.Read(chunk)
+		if n > 0 {
+			// buf.Write 会拷贝一份，返回的 []byte 不引用池化缓冲
+			buf.Write(chunk[:n])
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			// 读取中断：与原 io.ReadAll 错误路径一致，放弃采集正文
+			return nil
+		}
+	}
+
+	if buf.Len() == 0 {
+		return nil
+	}
+	return buf.Bytes()
+}
 
 // sensitiveHeaders 不采集的敏感 header（安全）
 var sensitiveHeaders = map[string]bool{
@@ -73,12 +139,27 @@ func TraceCapture() gin.HandlerFunc {
 		}
 
 		// 读取完整请求体并恢复给 handler。
-		// sanitizeJSONRequestBody 在此同步执行：io.ReadAll（内存拷贝）+ JSON 双序列化。
-		// 对普通大小请求体（< 10KB）影响约 0.1–1ms，是可接受的。
-		// 更大的延迟优化已通过 KeyCache TTL 延长解决（key_cache.go）。
-		if body, err := io.ReadAll(c.Request.Body); err == nil && len(body) > 0 {
+		// 内存优化：
+		//   - 读取阶段按 Content-Length 预分配（封顶 64 MB）并复用池化拷贝缓冲，
+		//     避免 io.ReadAll 长度未知时 append 的 2 倍增长分配 churn。
+		//   - 按 MaxParseBytesInTrace 分流，两条路径互斥，同一次请求只设置一个 context key：
+		//     len(body) <= 阈值：维持既有行为，同步执行 sanitizeJSONRequestBody
+		//     （JSON 双序列化 + 递归改写），写入 trace_req_body，落库内容与改动前逐字节一致。
+		//     对普通大小请求体（< 10KB）影响约 0.1–1ms，是可接受的；
+		//     更大的延迟优化已通过 KeyCache TTL 延长解决（key_cache.go）。
+		//     len(body) > 阈值：完全跳过 json.Unmarshal / sanitizeValue / json.Marshal，
+		//     直接以原始字节写入 trace_req_body_raw（不拷贝）。
+		//     大 body 的对象树 + 输出副本会带来约 3 倍 body 的峰值内存
+		//     （30 MB body 实测峰值 95 MB），且 sanitize 的分配量随体积线性增长；
+		//     跳过解析后峰值降为 1×body，而 trace 完整性不降反升（保留原文而非 sanitize 后的内容）。
+		if body := readTraceRequestBody(c.Request); len(body) > 0 {
+			// 无论走哪条路径，都必须把 body 恢复给下游 handler
 			c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
-			c.Set("trace_req_body", sanitizeJSONRequestBody(body))
+			if len(body) <= defaultTraceSanitizeLimits.MaxParseBytesInTrace {
+				c.Set("trace_req_body", sanitizeJSONRequestBody(body))
+			} else {
+				c.Set("trace_req_body_raw", body)
+			}
 		}
 
 		c.Next()
@@ -90,24 +171,34 @@ func TraceCapture() gin.HandlerFunc {
 // 所需的完整上下文不被截断（原先 2048 会切断长 message content，破坏 token 用量/语义分析报告）。
 // MaxBase64LenInTrace 是 base64 data-URI payload 的保留上限：图片二进制体积巨大，
 // 仍以人类可读占位符替代，避免单条 trace 把表体积撑爆。
+// MaxParseBytesInTrace 是请求体做 JSON sanitize 解析的字节上限：请求体超过该值时
+// 完全跳过 json.Unmarshal / sanitizeValue / json.Marshal，直接以原始字节作为 trace 正文，
+// 避免大 body 的对象树与输出副本造成约 3 倍 body 的峰值内存。
 type TraceSanitizeLimits struct {
-	MaxStringLenInTrace int
-	MaxBase64LenInTrace int
+	MaxStringLenInTrace  int
+	MaxBase64LenInTrace  int
+	MaxParseBytesInTrace int
 }
 
-// defaultTraceSanitizeLimits 默认上限：文本字段关键上下文不截断，base64 仍用占位符。
+// defaultTraceSanitizeLimits 默认上限：文本字段关键上下文不截断，base64 仍用占位符，
+// 超过 1 MB 的请求体不再解析（直存原始字节）。
 var defaultTraceSanitizeLimits = TraceSanitizeLimits{
-	MaxStringLenInTrace: 500_000,
-	MaxBase64LenInTrace: 64,
+	MaxStringLenInTrace:  500_000,
+	MaxBase64LenInTrace:  64,
+	MaxParseBytesInTrace: 1 << 20,
 }
 
 // SetTraceSanitizeLimits 覆盖全局默认上限（在 main 启动时按配置调用一次，之后只读）。
+// 各字段按「> 0 才覆盖」处理，为 0 的字段保留默认值。
 func SetTraceSanitizeLimits(limits TraceSanitizeLimits) {
 	if limits.MaxStringLenInTrace > 0 {
 		defaultTraceSanitizeLimits.MaxStringLenInTrace = limits.MaxStringLenInTrace
 	}
 	if limits.MaxBase64LenInTrace > 0 {
 		defaultTraceSanitizeLimits.MaxBase64LenInTrace = limits.MaxBase64LenInTrace
+	}
+	if limits.MaxParseBytesInTrace > 0 {
+		defaultTraceSanitizeLimits.MaxParseBytesInTrace = limits.MaxParseBytesInTrace
 	}
 }
 

@@ -43,7 +43,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1g
+          memory: 2g
 
   # ─── Control Plane（管理后端 API） ─────────────────────────────────────────────
   control-plane:

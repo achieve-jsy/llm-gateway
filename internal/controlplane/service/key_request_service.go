@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -339,8 +340,12 @@ func (s *KeyRequestService) CountMine(ctx context.Context, requesterID string) (
 	pending, err1 := s.repo.CountByStatus(requesterID, model.KeyRequestStatusPending)
 	approved, err2 := s.repo.CountByStatus(requesterID, model.KeyRequestStatusApproved)
 	rejected, err3 := s.repo.CountByStatus(requesterID, model.KeyRequestStatusRejected)
-	if err1 != nil { return 0, 0, 0, err1 }
-	if err2 != nil { return 0, 0, 0, err2 }
+	if err1 != nil {
+		return 0, 0, 0, err1
+	}
+	if err2 != nil {
+		return 0, 0, 0, err2
+	}
 	return pending, approved, rejected, err3
 }
 
@@ -460,9 +465,14 @@ func (s *KeyRequestService) notifyRequesterApproved(req *model.KeyRequest, auto 
 		return false
 	}
 	title := "Key 申请已通过"
-	content := fmt.Sprintf("你的 Key「%s」申请已通过，Key 已创建，可在「我的密钥」中查看。", req.KeyName)
+	// Key 名称缺失时给可读占位，避免出现「你的 Key「」」。
+	keyName := strings.TrimSpace(req.KeyName)
+	if keyName == "" {
+		keyName = "（未命名 Key）"
+	}
+	content := fmt.Sprintf("你的 Key「%s」申请已通过，Key 已创建，可在「我的密钥」中查看。", keyName)
 	if auto {
-		content = fmt.Sprintf("负责人已关闭 Key 审批，你的「%s」申请已自动通过，Key 已创建，可在「我的密钥」中查看。", req.KeyName)
+		content = fmt.Sprintf("负责人已关闭 Key 审批，你的「%s」申请已自动通过，Key 已创建，可在「我的密钥」中查看。", keyName)
 	}
 	n := &model.Notification{
 		UserID:  req.RequesterID,

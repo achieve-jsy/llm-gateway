@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -476,7 +477,8 @@ func (s *ExpansionService) expansionNotifyBody(ctx context.Context, request *mod
 		b.WriteString("\n审批人：" + approverName)
 	}
 	if !request.CreatedAt.IsZero() {
-		b.WriteString("\n申请时间：" + request.CreatedAt.UTC().Format("2006-01-02 15:04") + " UTC")
+		// 与其它通知一致按北京时间展示；不要让国内收件人自己拿 UTC 减 8 小时。
+		b.WriteString("\n申请时间：" + formatNotificationTime(request.CreatedAt))
 	}
 	return b.String()
 }
@@ -860,12 +862,16 @@ func (s *ExpansionService) approveWorkflow(
 	}
 	if s.snapshotPublisher != nil {
 		if err := s.snapshotPublisher.MarkDirtyAndPublish(ctx); err != nil {
+			// 原始错误串（Go/gorm/上游返回）可能含 UUID 或 SQL 片段，只写日志，
+			// 不进用户通知；通知里给收件人可执行的下一步。
+			slog.Error("expansion: publish snapshot failed",
+				"request_id", requestID, "error", err)
 			_ = s.repo.Transaction(ctx, func(tx *gorm.DB) error {
 				if updateErr := tx.WithContext(ctx).Model(&model.ExpansionRequest{}).Where("id = ?", requestID).Update("sync_status", "failed").Error; updateErr != nil {
 					return updateErr
 				}
 				return enqueueExpansionNotificationInTx(tx, candidate, candidate.RequesterID, model.NotificationTypeExpansionApplyFailed, "扩容申请生效失败",
-					s.expansionNotifyBody(ctx, candidate, "生效失败原因："+err.Error(), "", ""), model.NotificationLevelCritical)
+					s.expansionNotifyBody(ctx, candidate, "生效失败原因：配置下发未成功，请到「扩容申请」详情页查看并重试。", "", ""), model.NotificationLevelCritical)
 			})
 			result.SyncStatus = "failed"
 			recordExpansionApply(ctx, string(candidate.DimensionType), string(candidate.DurationType), "sync_failed")
@@ -1013,6 +1019,18 @@ func (s *ExpansionService) GetDetail(
 	return detail, nil
 }
 
+// scopeObjectLabelFor 解析并渲染预算 scope 的可读对象名，供预算/扩容通知复用。
+// 解析不到名称时退化为中文类型名，不向用户暴露 scope_id。
+func (s *ExpansionService) scopeObjectLabelFor(scopeType, scopeID string) string {
+	name := ""
+	if s.budgetSvc != nil && scopeID != "" {
+		if names, err := s.ResolveScopeNames(scopeType, []string{scopeID}); err == nil {
+			name = names[scopeID]
+		}
+	}
+	return budgetScopeObjectLabel(scopeType, name)
+}
+
 func (s *ExpansionService) NotifyOwner(
 	ctx context.Context,
 	actor ActorScope,
@@ -1028,50 +1046,22 @@ func (s *ExpansionService) NotifyOwner(
 	if err != nil {
 		return err
 	}
+	// 正文只带管理员留言会让收件人不知道在说哪个预算，因此固定先给出对象名。
+	label := s.scopeObjectLabelFor(input.ScopeType, input.ScopeID)
+	message := strings.TrimSpace(input.Message)
+	if message == "" {
+		message = "请及时关注该预算的使用情况。"
+	}
 	for _, recipient := range recipients {
 		if err := s.notifier.Notify(ctx, &model.Notification{
 			UserID: recipient, Type: "budget_owner_attention", Level: model.NotificationLevelWarning,
-			Title: "预算负责人处理提醒", Content: strings.TrimSpace(input.Message),
+			Title: "预算负责人处理提醒", Content: label + "\n\n" + message,
 			RefType: "budget_scope", RefID: input.ScopeType + ":" + input.ScopeID,
 		}); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func (s *ExpansionService) notifyDecisionResult(ctx context.Context, requestID uuid.UUID, action, detail string) {
-	if s.notifier == nil {
-		return
-	}
-	request, err := s.repo.FindByID(requestID.String())
-	if err != nil {
-		return
-	}
-	title, level := "扩容申请状态更新", model.NotificationLevelInfo
-	switch action {
-	case model.ExpansionActionApprove:
-		title = "扩容申请已批准并生效"
-	case model.ExpansionActionReject:
-		title, level = "扩容申请已驳回", model.NotificationLevelWarning
-	case model.ExpansionActionEscalate:
-		title = "扩容申请已升级审批"
-	case "apply_failed":
-		title, level = "扩容申请生效失败", model.NotificationLevelCritical
-	}
-	content := title
-	if strings.TrimSpace(detail) != "" {
-		content += "：" + strings.TrimSpace(detail)
-	}
-	notification := &model.Notification{
-		UserID: request.RequesterID, Type: "expansion_result", Level: level,
-		Title: title, Content: content, RefType: "expansion_request", RefID: request.ID.String(),
-	}
-	for attempt := 0; attempt < 3; attempt++ {
-		if s.notifier.Notify(ctx, notification) == nil {
-			return
-		}
-	}
 }
 
 func (s *ExpansionService) AssertActorCanAccessRequest(ctx context.Context, actor ActorScope, requestID string) error {
@@ -1207,7 +1197,9 @@ func (s *ExpansionService) notifyApprovalPoolEmpty(ctx context.Context, request 
 	for _, recipient := range recipients {
 		_ = s.notifier.Notify(ctx, &model.Notification{
 			UserID: recipient, Type: "approval_pool_empty", Level: model.NotificationLevelWarning,
-			Title: "扩容审批池为空", Content: "请补充当前作用域的有效负责人。",
+			Title: "扩容审批池为空",
+			Content: fmt.Sprintf("「%s」的扩容申请暂无可用审批人，请补充该作用域的有效负责人后再提交。",
+				s.scopeObjectLabelFor(request.ScopeType, request.ScopeID)),
 			RefType: "expansion_request", RefID: request.ID.String(),
 		})
 	}

@@ -3,14 +3,23 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
+	"github.com/example/llm-gateway/internal/notification"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+// formatNotificationTime 渲染通知正文里的时间：业务时区、分钟精度。
+// 实现放在 internal/notification，站内信、邮件、报表共用同一套渲染。
+func formatNotificationTime(t time.Time) string {
+	return notification.FormatLocalTime(t)
+}
 
 type LifecycleOwnerResolver interface {
 	ResolveOwnerRecipients(context.Context, uuid.UUID) ([]uuid.UUID, error)
@@ -106,7 +115,7 @@ func (o *BudgetLifecycleNotificationObserver) OnOverrideExpired(
 		Type: "expansion_restored", Level: model.NotificationLevelInfo,
 		Title: "临时扩容已到期", Content: fmt.Sprintf(
 			"临时额度已于 %s 到期，当前额度恢复为届时生效的长期基础额度。",
-			item.ExpiredAt.Format(time.RFC3339),
+			formatNotificationTime(item.ExpiredAt),
 		),
 		RefType: "budget_override", RefID: item.ID.String(),
 	})
@@ -144,14 +153,19 @@ func (o *BudgetLifecycleNotificationObserver) notifySchedule(
 	}
 	recipients = append(recipients, owners...)
 	title := "预算计划已生效"
-	content := fmt.Sprintf("%s预算计划已于 %s 生效。", schedule.PeriodType, at.Format(time.RFC3339))
+	content := fmt.Sprintf("%s预算计划已于 %s 生效。",
+		budgetAlertPeriodWord(schedule.PeriodType), formatNotificationTime(at))
 	level := model.NotificationLevelInfo
 	if notificationType == "budget_schedule_failed" {
 		title, level = "预算计划生效失败", model.NotificationLevelCritical
-		content = fmt.Sprintf(
-			"%s预算计划于 %s 生效失败：%s。请进入预算管理重新配置。",
-			schedule.PeriodType, at.Format(time.RFC3339), failureReason,
-		)
+		// failureReason 来自执行器，是原始 Go/gorm 错误串（英文，可能含 UUID 或 SQL 片段），
+		// 因此只写日志、不进通知正文；管理面仍可从预算计划详情查看失败原因。
+		slog.Warn("budget_schedule: apply failed",
+			"schedule_id", scheduleID.String(),
+			"period_type", string(schedule.PeriodType),
+			"reason", strings.TrimSpace(failureReason))
+		content = fmt.Sprintf("%s预算计划于 %s 生效失败，请进入预算管理检查配置后重新提交。",
+			budgetAlertPeriodWord(schedule.PeriodType), formatNotificationTime(at))
 	}
 	return o.notifyRecipients(ctx, "schedule:"+notificationType+":"+scheduleID.String(), recipients, &model.Notification{
 		Type: notificationType, Level: level, Title: title, Content: content,

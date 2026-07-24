@@ -105,7 +105,12 @@ func (s *EmailService) SendAlertEmail(recipients []string, subject, body string)
 		sender.SetSkipTLSVerify(true)
 	}
 
-	if err := sender.SendTextTo(ctx, body, recipients); err != nil {
+	// 主题必须透传：此前这里调用 SendTextTo，主题被硬编码为「告警通知」，
+	// 导致日报/周报/错误摘要/账号健康四类报表在收件箱里长得一模一样。
+	if subject = strings.TrimSpace(subject); subject == "" {
+		subject = "[LLM Gateway] 系统通知"
+	}
+	if err := sender.SendTextToWithSubject(ctx, subject, body, recipients); err != nil {
 		return fmt.Errorf("email: send failed: %w", err)
 	}
 	return nil

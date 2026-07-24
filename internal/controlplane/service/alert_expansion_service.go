@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -141,6 +143,8 @@ func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, sc
 	} else if periodType == budgetdomain.PeriodWeekly {
 		limitUSD = alloc.WeeklyAmountUSD
 	}
+	// tierName 仅用于文案展示；解析不到时文案退化为「模型等级」，绝不回落到 UUID。
+	tierName := ""
 	if dimensionType == budgetdomain.DimensionTier {
 		limitUSD = -1
 		now := time.Now()
@@ -156,6 +160,7 @@ func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, sc
 			if limit.ModelTierID == tierID && limit.PeriodType == periodType && limit.Enabled &&
 				!limit.EffectiveAt.After(now) {
 				limitUSD, _ = limit.LimitUSD.Float64()
+				tierName = strings.TrimSpace(limit.ModelTier.Name)
 				break
 			}
 		}
@@ -180,6 +185,17 @@ func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, sc
 
 	usedUSD := s.readDimensionUsedFromRedis(ctx, scopeType, scopeID, period, dimensionType, modelTierID, len(details) == 0)
 	ratio := usedUSD / limitUSD
+
+	// 名称解析要多打一次库，因此惰性构建：只有确实要发告警时才解析，
+	// 不把额外查询压到 usage_collector 的核销热路径上。
+	var copyMemo *budgetAlertCopy
+	alertCopy := func() budgetAlertCopy {
+		if copyMemo == nil {
+			c := s.newBudgetAlertCopy(scopeType, scopeID, periodType, dimensionType, tierName, usedUSD, limitUSD)
+			copyMemo = &c
+		}
+		return *copyMemo
+	}
 
 	thresholds := []int{model.AlertThreshold80}
 	// 等级维度对所有 scope 同时评估 80%/100%；总预算保留 legacy 规则。
@@ -234,15 +250,14 @@ func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, sc
 			continue
 		}
 
-		msg := fmt.Sprintf("【预算告警】%s(%s) %s用量已达 %d%%（$%.2f / $%.2f），请关注并考虑扩容",
-			scopeType, scopeID, dimensionType, threshold, usedUSD, limitUSD)
+		alertMsg := alertCopy()
 
 		// 通道 1（解耦的 Notifier：站内信 + 邮件 + ...）
-		s.sendNotifications(ctx, scopeType, scopeID, threshold, usedUSD, limitUSD)
+		s.sendNotifications(ctx, scopeType, scopeID, alertMsg, threshold)
 
 		// 通道 2（Webhook 降级：失败不阻断，仅记录）
 		if s.webhookNotifier != nil {
-			if err := s.webhookNotifier.SendText(ctx, msg); err != nil {
+			if err := s.webhookNotifier.SendText(ctx, alertMsg.webhookText(threshold)); err != nil {
 				slog.Warn("budget_alert: webhook notify failed", "error", err)
 			}
 		}
@@ -251,8 +266,225 @@ func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, sc
 	}
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 预算告警文案
+//
+// 站内信与告警邮件共用同一份 Title/Content（EmailNotifier 直接透传），所以这里
+// 生成的文本必须同时适合通知列表的轻量 Markdown 和纯文本邮件。
+// 铁律：面向用户的文案里不得出现 scope_id、UUID，也不得出现
+// member / dept_daily / dept_service / studio / tier / total 这类内部枚举名。
+// ─────────────────────────────────────────────────────────────────────────────
+
+// scopeNameResolver 是 budgetAllocReader 的可选扩展：批量把 scope_id 解析为可读名称。
+// 生产环境的 *repository.BudgetRepo 实现了它；测试 fake 未实现时自动退化为中文类型标签。
+type scopeNameResolver interface {
+	ResolveScopeNames(scopeType string, scopeIDs []string) (map[string]string, error)
+}
+
+// budgetAlertCopy 是一条预算告警中面向用户的全部文案要素。
+type budgetAlertCopy struct {
+	object    string  // 告警对象，如「X-Lab大模型·成员日常预算」「芮宇潇 的个人额度」
+	period    string  // 周期词，如「本月」「本周」「今日」
+	dimension string  // 维度后缀，如「 · Claude系列」；总预算维度为空
+	usedUSD   float64 // 已用金额
+	limitUSD  float64 // 额度上限
+}
+
+// newBudgetAlertCopy 组装文案要素。仅在确实要发告警时调用，避免增加核销热路径开销。
+func (s *BudgetAlertService) newBudgetAlertCopy(
+	scopeType, scopeID string,
+	periodType budgetdomain.PeriodType,
+	dimensionType budgetdomain.DimensionType,
+	tierName string,
+	usedUSD, limitUSD float64,
+) budgetAlertCopy {
+	return budgetAlertCopy{
+		object:    s.budgetAlertObjectLabel(scopeType, scopeID),
+		period:    budgetAlertPeriodWord(periodType),
+		dimension: budgetAlertDimensionSuffix(dimensionType, tierName),
+		usedUSD:   usedUSD,
+		limitUSD:  limitUSD,
+	}
+}
+
+// target 返回「对象 + 维度」的完整展示名。
+func (c budgetAlertCopy) target() string { return c.object + c.dimension }
+
+// title 生成通知标题，同时作为告警邮件主题（EmailNotifier 会加 "[LLM Gateway] " 前缀）。
+// title 生成站内信/邮件标题。额度已用尽时不再播报告警档位：此时正文必然写
+// 「额度已用尽（当前 100.0%）」，标题若还说「已达 80%」就自相矛盾。
+func (c budgetAlertCopy) title(threshold int) string {
+	if c.exhausted() {
+		return fmt.Sprintf("预算告警：%s %s额度已用尽", c.target(), c.period)
+	}
+	return fmt.Sprintf("预算告警：%s %s用量已达 %d%%", c.target(), c.period, threshold)
+}
+
+// content 生成通知正文（轻量 Markdown，通知列表直接渲染）。
+func (c budgetAlertCopy) content(threshold int) string {
+	var b strings.Builder
+	if c.exhausted() {
+		fmt.Fprintf(&b, "**%s** %s额度已用尽（当前 %s%%），请及时处理。\n\n",
+			c.target(), c.period, c.actualPercent())
+	} else {
+		fmt.Fprintf(&b, "**%s** %s用量已达 **%d%%**%s，请及时关注。\n\n",
+			c.target(), c.period, threshold, c.currentHint(threshold))
+	}
+	fmt.Fprintf(&b, "- 已用：$%.2f USD\n", c.usedUSD)
+	fmt.Fprintf(&b, "- 额度上限：$%.2f USD\n", c.limitUSD)
+	if remaining := c.limitUSD - c.usedUSD; remaining >= 0 {
+		fmt.Fprintf(&b, "- 剩余可用：$%.2f USD\n", remaining)
+	} else {
+		fmt.Fprintf(&b, "- 超出：$%.2f USD\n", -remaining)
+	}
+	b.WriteString("\n")
+	if c.exhausted() {
+		b.WriteString("> 额度用尽后新的请求会被拦截。如需恢复使用，请提交扩容申请。")
+	} else {
+		b.WriteString("> 告警不等于拦截：额度真正用尽后才会触发拦截。如需提高额度，请提交扩容申请。")
+	}
+	return b.String()
+}
+
+// webhookText 生成飞书等 webhook 的单行纯文本告警。
+func (c budgetAlertCopy) webhookText(threshold int) string {
+	if c.exhausted() {
+		// 同一行里既说「已达 80%」又说「当前 100.0%」会读不通，用尽时只播报用尽事实。
+		return fmt.Sprintf("【预算告警】%s %s额度已用尽（已用 $%.2f / 上限 $%.2f USD），请及时处理并考虑扩容。",
+			c.target(), c.period, c.usedUSD, c.limitUSD)
+	}
+	return fmt.Sprintf("【预算告警】%s %s用量已达 %d%%%s（已用 $%.2f / 上限 $%.2f USD），请及时关注并考虑扩容。",
+		c.target(), c.period, threshold, c.currentHint(threshold), c.usedUSD, c.limitUSD)
+}
+
+// currentHint 只在当前用量明显偏离告警档位时补充「（当前 x%）」。
+// 两者一致时省略，避免「已达 80%（当前 80.0%）」这种同义重复。
+func (c budgetAlertCopy) currentHint(threshold int) string {
+	percent, ok := c.actualPercentValue()
+	if !ok || math.Abs(percent-float64(threshold)) < 0.5 {
+		return ""
+	}
+	return "（当前 " + formatAlertPercent(percent) + "%）"
+}
+
+// exhausted 表示已用金额已达到或超过额度上限。
+func (c budgetAlertCopy) exhausted() bool { return c.usedUSD >= c.limitUSD }
+
+// actualPercentValue 返回当前实际用量百分比；额度上限无效时 ok 为 false。
+func (c budgetAlertCopy) actualPercentValue() (float64, bool) {
+	if c.limitUSD <= 0 {
+		return 0, false
+	}
+	percent := c.usedUSD / c.limitUSD * 100
+	if percent < 0 {
+		percent = 0
+	}
+	return percent, true
+}
+
+// actualPercent 返回当前实际用量百分比，例如 "87.5"、"100"。
+func (c budgetAlertCopy) actualPercent() string {
+	percent, ok := c.actualPercentValue()
+	if !ok {
+		return "-"
+	}
+	return formatAlertPercent(percent)
+}
+
+// budgetAlertObjectLabel 把 scope 解析为可读对象名，解析不到时退化为中文类型名。
+func (s *BudgetAlertService) budgetAlertObjectLabel(scopeType, scopeID string) string {
+	return budgetScopeObjectLabel(scopeType, s.resolveScopeName(scopeType, scopeID))
+}
+
+// budgetScopeObjectLabel 把预算 scope 渲染成面向用户的对象名（name 为解析出的可读名称）。
+// 名称缺失时退化为中文类型名，绝不回落为 scope_id。
+// 站内信/邮件/webhook 与扩容通知共用它，避免各处再拼出不一致的对象名。
+func budgetScopeObjectLabel(scopeType, name string) string {
+	name = strings.TrimSpace(name)
+	switch scopeType {
+	case model.BudgetScopeCompany:
+		return "全公司"
+	case model.BudgetScopeStudio:
+		if name != "" {
+			return name + "·工作室预算"
+		}
+		return "工作室预算"
+	case model.BudgetScopeDeptDaily:
+		if name != "" {
+			return name + "·成员日常预算"
+		}
+		return "部门成员日常预算"
+	case model.BudgetScopeDeptService:
+		if name != "" {
+			return name + "·程序服务预算"
+		}
+		return "部门程序服务预算"
+	case model.BudgetScopeMember:
+		if name != "" {
+			return name + " 的个人额度"
+		}
+		return "成员个人额度"
+	default:
+		if name != "" {
+			return name
+		}
+		return "预算"
+	}
+}
+
+// resolveScopeName 借助 BudgetRepo 的可读名称解析能力取 scope 名称。
+// 解析失败或注入的实现不支持该能力时返回空串，由调用方退化为类型标签。
+func (s *BudgetAlertService) resolveScopeName(scopeType, scopeID string) string {
+	resolver, ok := s.budgetRepo.(scopeNameResolver)
+	if !ok || scopeID == "" {
+		return ""
+	}
+	names, err := resolver.ResolveScopeNames(scopeType, []string{scopeID})
+	if err != nil {
+		slog.Warn("budget_alert: resolve scope name failed", "scope_type", scopeType, "error", err)
+		return ""
+	}
+	return strings.TrimSpace(names[scopeID])
+}
+
+// budgetAlertPeriodWord 返回额度周期的中文词。
+func budgetAlertPeriodWord(periodType budgetdomain.PeriodType) string {
+	switch periodType {
+	case budgetdomain.PeriodDaily:
+		return "今日"
+	case budgetdomain.PeriodWeekly:
+		return "本周"
+	default:
+		return "本月"
+	}
+}
+
+// budgetAlertDimensionSuffix 返回维度后缀；总预算维度无需额外说明。
+func budgetAlertDimensionSuffix(dimension budgetdomain.DimensionType, tierName string) string {
+	if dimension != budgetdomain.DimensionTier {
+		return ""
+	}
+	if tierName != "" {
+		return " · " + tierName
+	}
+	return " · 模型等级"
+}
+
+// formatAlertPercent 格式化百分比：接近整数时省略小数，否则保留一位小数
+// （例如 80 → "80"，100.04 → "100.0"，87.5 → "87.5"）。
+func formatAlertPercent(percent float64) string {
+	if percent < 0 {
+		percent = 0
+	}
+	rounded := math.Round(percent)
+	if math.Abs(percent-rounded) < 0.005 {
+		return strconv.FormatFloat(rounded, 'f', -1, 64)
+	}
+	return strconv.FormatFloat(percent, 'f', 1, 64)
+}
+
 // sendNotifications 向每个负责人各发一条 Notification，由注入的 Notifier 决定走哪些通道。
-func (s *BudgetAlertService) sendNotifications(ctx context.Context, scopeType, scopeID string, threshold int, usedUSD, amountUSD float64) {
+func (s *BudgetAlertService) sendNotifications(ctx context.Context, scopeType, scopeID string, alert budgetAlertCopy, threshold int) {
 	if s.notifier == nil {
 		return
 	}
@@ -262,16 +494,8 @@ func (s *BudgetAlertService) sendNotifications(ctx context.Context, scopeType, s
 		level = model.NotificationLevelCritical
 	}
 
-	title := fmt.Sprintf("预算告警：%s 用量已达 %d%%", scopeType, threshold)
-	content := fmt.Sprintf(
-		"**%s**（ID: %s）本月预算用量已达 **%d%%**（$%.2f / $%.2f USD），请及时关注并考虑扩容申请。\n\n"+
-			"- 已用：$%.2f USD\n"+
-			"- 总额：$%.2f USD\n"+
-			"- 告警档位：%d%%\n\n"+
-			"> 告警不等于拦截，预算真正用尽时才会触发拦截。",
-		scopeType, scopeID, threshold, usedUSD, amountUSD,
-		usedUSD, amountUSD, threshold,
-	)
+	title := alert.title(threshold)
+	content := alert.content(threshold)
 
 	owners, err := s.alertRepo.FindOwnersByBudgetScope(scopeType, scopeID)
 	if err != nil {
@@ -492,28 +716,6 @@ func (s *ExpansionService) CreateRequestAdvanced(ctx context.Context, input Crea
 		return nil, fmt.Errorf("create expansion request: %w", err)
 	}
 	return request, nil
-}
-
-func (s *ExpansionService) notifyExpansionSubmitted(ctx context.Context, request *model.ExpansionRequest) {
-	if s.notifier == nil || s.approvalPool == nil {
-		return
-	}
-	recipients, err := s.approvalPool.Resolve(ctx, request)
-	if err != nil {
-		return
-	}
-	for _, recipient := range recipients {
-		notification := &model.Notification{
-			UserID: recipient, Type: model.NotificationTypeExpansionSubmitted,
-			Level: model.NotificationLevelInfo, Title: "新的扩容审批申请",
-			Content: request.Reason, RefType: "expansion_request", RefID: request.ID.String(),
-		}
-		for attempt := 0; attempt < 3; attempt++ {
-			if s.notifier.Notify(ctx, notification) == nil {
-				break
-			}
-		}
-	}
 }
 
 func NewExpansionService(repo *repository.ExpansionRepo) *ExpansionService {

@@ -112,8 +112,8 @@ func (e *EmailNotifier) Notify(ctx context.Context, n *model.Notification) error
 		if persisted.Status == "delivered" {
 			return nil
 		}
-		subject := "[LLM Gateway] " + n.Title
-		body := fmt.Sprintf("%s\n\n时间: %s", n.Content, n.CreatedAt.Format("2006-01-02 15:04"))
+		subject := "[LLM Gateway] " + notification.PlainText(n.Title)
+		body := fmt.Sprintf("%s\n\n发送时间：%s", notification.PlainText(n.Content), formatNotificationTime(n.CreatedAt))
 		err := sender.SendTextWithSubjectAndDedupeKey(ctx, subject, body, n.DedupeKey)
 		updates := map[string]any{"attempts": gorm.Expr("attempts + 1")}
 		if err != nil {
@@ -146,9 +146,9 @@ func (e *EmailNotifier) lookupUserEmail(ctx context.Context, userID uuid.UUID) (
 }
 
 func (e *EmailNotifier) sendAsync(sender *notification.EmailSender, n *model.Notification, recipients []string) {
-	subject := "[LLM Gateway] " + n.Title
-	body := fmt.Sprintf("%s\n\n时间: %s",
-		n.Content, n.CreatedAt.Format("2006-01-02 15:04"))
+	subject := "[LLM Gateway] " + notification.PlainText(n.Title)
+	body := fmt.Sprintf("%s\n\n发送时间：%s",
+		notification.PlainText(n.Content), formatNotificationTime(n.CreatedAt))
 	err := sender.SendTextWithSubject(context.Background(), subject, body)
 	if err != nil {
 		slog.Warn("email_notifier: send failed",

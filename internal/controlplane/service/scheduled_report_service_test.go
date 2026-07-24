@@ -83,9 +83,9 @@ func TestScheduledReportService_GenerateSummaryReport(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, content)
 	assert.Contains(t, content, "日报")
-	assert.Contains(t, content, "Total")
-	assert.Contains(t, content, "Success")
-	assert.Contains(t, content, "Tokens")
+	assert.Contains(t, content, "总请求")
+	assert.Contains(t, content, "成功")
+	assert.Contains(t, content, "Token 消耗")
 }
 
 func TestScheduledReportService_GenerateErrorDigest(t *testing.T) {
@@ -445,13 +445,13 @@ func TestScheduledReportService_ErrorDigest_NoErrors(t *testing.T) {
 
 	content, err := svc.generateReport(context.Background(), report, now)
 	require.NoError(t, err)
-	// 应该包含 "No provider/model" 信息
-	assert.Contains(t, content, "No provider/model")
+	// 应该包含「没有错误率超过」的说明
+	assert.Contains(t, content, "没有错误率超过")
 }
 
 func TestTruncateTo(t *testing.T) {
 	assert.Equal(t, "hello", truncateTo("hello", 10))
-	assert.Equal(t, "hello...", truncateTo("hello world", 8))
+	assert.Equal(t, "hello…", truncateTo("hello world", 8))
 	assert.Equal(t, "", truncateTo("", 5))
 }
 
@@ -522,7 +522,7 @@ func TestScheduledReportService_SummaryWithEmptyData(t *testing.T) {
 
 	content, err := svc.generateReport(context.Background(), report, time.Now())
 	require.NoError(t, err)
-	assert.Contains(t, content, "Total:    0")
+	assert.Contains(t, content, "总请求：0")
 }
 
 // TestScheduledReportService_AccountHealth_EmptyData 测试空数据场景
@@ -538,7 +538,7 @@ func TestScheduledReportService_AccountHealth_EmptyData(t *testing.T) {
 	content, err := svc.generateReport(context.Background(), report, time.Now())
 	require.NoError(t, err)
 	assert.Contains(t, content, "账号健康")
-	assert.Contains(t, content, "Provider Availability")
+	assert.Contains(t, content, "渠道可用率")
 }
 
 // TestScheduledReportService_WeeklySummary 测试周报（7天时间范围）
@@ -563,9 +563,9 @@ func TestScheduledReportService_WeeklySummary(t *testing.T) {
 	content, err := svc.generateReport(context.Background(), report, now)
 	require.NoError(t, err)
 	assert.Contains(t, content, "周报")
-	assert.Contains(t, content, "Total:    3")
-	assert.Contains(t, content, "Success:  2")
-	assert.Contains(t, content, "Errors:   1")
+	assert.Contains(t, content, "总请求：3")
+	assert.Contains(t, content, "成功：2")
+	assert.Contains(t, content, "失败：1")
 }
 
 // 确保 fmt import 被使用

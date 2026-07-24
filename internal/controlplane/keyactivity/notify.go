@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -59,6 +60,8 @@ func FormatNotification(eventType, keyName, ua, ip string, ts time.Time, detail 
 	// ts 来自 call_logs（数据库连接时区为 UTC），必须转北京时间再展示，
 	// 否则邮件正文会比实际发生时间早 8 小时（与邮件尾行的本地时间不一致）。
 	t := ts.In(shanghaiTz).Format("2006-01-02 15:04:05")
+	// Key 名称缺失（Key 已删除或未命名）时给出可读占位，避免出现「你的 Key〔〕」。
+	keyName = keyDisplayName(keyName)
 	switch eventType {
 	case EventTypeNewSource:
 		return "Key 新设备使用提醒",
@@ -71,10 +74,24 @@ func FormatNotification(eventType, keyName, ua, ip string, ts time.Time, detail 
 			fmt.Sprintf("你的 Key〔%s〕沉睡 %d 天后重新被使用：客户端 %s，IP %s，时间 %s。", keyName, ParseDormantDays(detail), ua, ip, t)
 	case EventTypeSpike:
 		count, mean := ParseSpikeDetail(detail)
+		// 基线缺失（mean<=0）时不展示「基线约 0.0」这种无意义信息。
+		baseline := ""
+		if mean > 0 {
+			baseline = fmt.Sprintf("（基线约 %.1f 次/小时）", mean)
+		}
 		return "Key 用量异常提醒",
-			fmt.Sprintf("你的 Key〔%s〕用量异常：最近 1 小时调用 %d 次，明显高于你的日常水平（基线约 %.1f）。", keyName, count, mean)
+			fmt.Sprintf("你的 Key〔%s〕用量异常：最近 1 小时调用 %d 次，明显高于你的日常水平%s。", keyName, count, baseline)
 	}
 	return "Key 活动提醒", fmt.Sprintf("Key〔%s〕检测到异常活动。", keyName)
+}
+
+// keyDisplayName 返回 Key 的可读展示名；名称为空时给出占位，
+// 避免用户收到「你的 Key〔〕…」这种残缺文案。
+func keyDisplayName(keyName string) string {
+	if trimmed := strings.TrimSpace(keyName); trimmed != "" {
+		return trimmed
+	}
+	return "（未命名 Key）"
 }
 
 // EventLevel E1/E3/E4 → warning；E2 → info

@@ -98,5 +98,5 @@ func (w *WebhookSender) SendTest(ctx context.Context) error {
 	if w.url == "" {
 		return fmt.Errorf("webhook URL is empty")
 	}
-	return w.SendText(ctx, "This is a test notification from LLM Gateway")
+	return w.SendText(ctx, "这是一条来自 LLM Gateway 的测试通知，收到即表示 Webhook 配置成功。")
 }

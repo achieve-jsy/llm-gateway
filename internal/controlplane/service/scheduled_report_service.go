@@ -25,10 +25,10 @@ const (
 	scheduledReportLastRunKeyPrefix = "ops:scheduled_reports:last_run:"
 
 	// Default cron schedules
-	defaultDailySummaryCron    = "0 9 * * *"    // 每天 9:00
-	defaultWeeklySummaryCron   = "0 9 * * 1"    // 每周一 9:00
-	defaultErrorDigestCron     = "0 */6 * * *"  // 每 6 小时
-	defaultAccountHealthCron   = "0 */3 * * *"  // 每 3 小时
+	defaultDailySummaryCron  = "0 9 * * *"   // 每天 9:00
+	defaultWeeklySummaryCron = "0 9 * * 1"   // 每周一 9:00
+	defaultErrorDigestCron   = "0 */6 * * *" // 每 6 小时
+	defaultAccountHealthCron = "0 */3 * * *" // 每 3 小时
 )
 
 // Cron parser that includes seconds field for flexibility
@@ -44,9 +44,9 @@ return 0
 
 // ScheduledReportService 定时报表服务，使用 robfig/cron 调度 + Redis leader lock。
 type ScheduledReportService struct {
-	db          *gorm.DB
-	rdb         *redis.Client
-	emailSvc    *EmailService
+	db           *gorm.DB
+	rdb          *redis.Client
+	emailSvc     *EmailService
 	settingsRepo interface {
 		GetValue(key string) (string, error)
 	}
@@ -159,7 +159,7 @@ func (s *ScheduledReportService) runOnce() {
 			continue
 		}
 
-		subject := fmt.Sprintf("[LLM Gateway] %s - %s", report.Name, now.Format("2006-01-02 15:04"))
+		subject := fmt.Sprintf("[LLM Gateway] %s - %s", report.Name, formatNotificationTime(now))
 		if err := s.emailSvc.SendAlertEmail(report.Recipients, subject, content); err != nil {
 			slog.Error("scheduled_report: send email failed",
 				"type", report.ReportType, "error", err)
@@ -389,14 +389,14 @@ func (s *ScheduledReportService) generateReport(ctx context.Context, report *sch
 // generateSummaryReport 生成日报/周报（请求量、成功率、错误率、token 消耗）。
 func (s *ScheduledReportService) generateSummaryReport(ctx context.Context, name string, start, end time.Time) (string, error) {
 	var result struct {
-		TotalRequests   int64   `gorm:"column:total_requests"`
-		SuccessCount    int64   `gorm:"column:success_count"`
-		ErrorCount      int64   `gorm:"column:error_count"`
-		ErrorRate       float64 `gorm:"column:error_rate"`
-		TotalTokens     int64   `gorm:"column:total_tokens"`
-		PromptTokens    int64   `gorm:"column:prompt_tokens"`
-		CompletionTokens int64  `gorm:"column:completion_tokens"`
-		AvgDurationMs   float64 `gorm:"column:avg_duration_ms"`
+		TotalRequests    int64   `gorm:"column:total_requests"`
+		SuccessCount     int64   `gorm:"column:success_count"`
+		ErrorCount       int64   `gorm:"column:error_count"`
+		ErrorRate        float64 `gorm:"column:error_rate"`
+		TotalTokens      int64   `gorm:"column:total_tokens"`
+		PromptTokens     int64   `gorm:"column:prompt_tokens"`
+		CompletionTokens int64   `gorm:"column:completion_tokens"`
+		AvgDurationMs    float64 `gorm:"column:avg_duration_ms"`
 	}
 
 	err := s.db.WithContext(ctx).Raw(`
@@ -422,27 +422,24 @@ func (s *ScheduledReportService) generateSummaryReport(ctx context.Context, name
 		successRate = float64(result.SuccessCount) / float64(result.TotalRequests) * 100
 	}
 
-	return fmt.Sprintf(`
-%s Report
+	return fmt.Sprintf(`%s
 ================================
-Period: %s ~ %s (UTC)
+%s
 
-Requests:
-  Total:    %d
-  Success:  %d (%.2f%%)
-  Errors:   %d (%.2f%%)
+请求量：
+  总请求：%d
+  成功：%d（%.2f%%）
+  失败：%d（%.2f%%）
 
-Tokens:
-  Total:        %d
-  Prompt:       %d
-  Completion:   %d
+Token 消耗：
+  合计：%d
+  输入：%d
+  输出：%d
 
-Latency:
-  Avg: %.2f ms
+平均延迟：%.2f ms
 `,
 		name,
-		start.Format("2006-01-02 15:04"),
-		end.Format("2006-01-02 15:04"),
+		reportRangeLine(start, end),
 		result.TotalRequests,
 		result.SuccessCount, successRate,
 		result.ErrorCount, result.ErrorRate,
@@ -466,7 +463,7 @@ func (s *ScheduledReportService) generateErrorDigestReport(ctx context.Context, 
 	var rows []errorRow
 	err := s.db.WithContext(ctx).Raw(`
 		SELECT
-			COALESCE(provider, 'unknown') as provider,
+			COALESCE(NULLIF(provider, ''), '未知渠道') as provider,
 			model,
 			COUNT(*) as total,
 			SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors,
@@ -484,24 +481,16 @@ func (s *ScheduledReportService) generateErrorDigestReport(ctx context.Context, 
 	}
 
 	if len(rows) == 0 {
-		return fmt.Sprintf("%s Report\n================================\nPeriod: %s ~ %s (UTC)\n\nNo provider/model combinations with error rate > 5%%.\n",
-			name,
-			start.Format("2006-01-02 15:04"),
-			end.Format("2006-01-02 15:04"),
-		), nil
+		return fmt.Sprintf("%s\n================================\n%s\n\n统计区间内没有错误率超过 5%% 的渠道 / 模型组合。\n",
+			name, reportRangeLine(start, end)), nil
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("%s Report\n================================\nPeriod: %s ~ %s (UTC)\n\nProvider/Model with error rate > 5%%:\n\n",
-		name,
-		start.Format("2006-01-02 15:04"),
-		end.Format("2006-01-02 15:04"),
-	))
-	sb.WriteString(fmt.Sprintf("%-20s %-30s %10s %10s %10s\n", "Provider", "Model", "Total", "Errors", "ErrorRate"))
-	sb.WriteString(strings.Repeat("-", 80) + "\n")
+	sb.WriteString(fmt.Sprintf("%s\n================================\n%s\n\n错误率超过 5%% 的渠道 / 模型：\n\n",
+		name, reportRangeLine(start, end)))
 
 	for _, row := range rows {
-		sb.WriteString(fmt.Sprintf("%-20s %-30s %10d %10d %9.2f%%\n",
+		sb.WriteString(fmt.Sprintf("- %s / %s：总请求 %d，错误 %d，错误率 %.2f%%\n",
 			truncateTo(row.Provider, 20),
 			truncateTo(row.Model, 30),
 			row.Total,
@@ -516,16 +505,16 @@ func (s *ScheduledReportService) generateErrorDigestReport(ctx context.Context, 
 // generateAccountHealthReport 生成账号健康报表（各 provider 可用率）。
 func (s *ScheduledReportService) generateAccountHealthReport(ctx context.Context, name string, start, end time.Time) (string, error) {
 	type healthRow struct {
-		Provider   string  `gorm:"column:provider"`
-		Total      int64   `gorm:"column:total"`
-		Success    int64   `gorm:"column:success"`
-		Rate       float64 `gorm:"column:rate"`
+		Provider string  `gorm:"column:provider"`
+		Total    int64   `gorm:"column:total"`
+		Success  int64   `gorm:"column:success"`
+		Rate     float64 `gorm:"column:rate"`
 	}
 
 	var rows []healthRow
 	err := s.db.WithContext(ctx).Raw(`
 		SELECT
-			COALESCE(provider, 'unknown') as provider,
+			COALESCE(NULLIF(provider, ''), '未知渠道') as provider,
 			COUNT(*) as total,
 			SUM(CASE WHEN status BETWEEN 200 AND 299 THEN 1 ELSE 0 END) as success,
 			ROUND(CAST(SUM(CASE WHEN status BETWEEN 200 AND 299 THEN 1 ELSE 0 END) AS REAL) / NULLIF(COUNT(*), 0) * 100, 2) as rate
@@ -540,16 +529,11 @@ func (s *ScheduledReportService) generateAccountHealthReport(ctx context.Context
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("%s Report\n================================\nPeriod: %s ~ %s (UTC)\n\nProvider Availability:\n\n",
-		name,
-		start.Format("2006-01-02 15:04"),
-		end.Format("2006-01-02 15:04"),
-	))
-	sb.WriteString(fmt.Sprintf("%-20s %10s %10s %10s\n", "Provider", "Total", "Success", "Rate"))
-	sb.WriteString(strings.Repeat("-", 55) + "\n")
+	sb.WriteString(fmt.Sprintf("%s\n================================\n%s\n\n渠道可用率（由低到高）：\n\n",
+		name, reportRangeLine(start, end)))
 
 	for _, row := range rows {
-		sb.WriteString(fmt.Sprintf("%-20s %10d %10d %9.2f%%\n",
+		sb.WriteString(fmt.Sprintf("- %s：总请求 %d，成功 %d，可用率 %.2f%%\n",
 			truncateTo(row.Provider, 20),
 			row.Total,
 			row.Success,
@@ -560,9 +544,16 @@ func (s *ScheduledReportService) generateAccountHealthReport(ctx context.Context
 	return sb.String(), nil
 }
 
+// reportRangeLine 渲染报表统计区间。SQL 用的是 UTC 窗口，这里统一转北京时间展示，
+// 避免收件人看到 2026-09-17 13:00 却不知道那是 UTC 还是本地时间。
+func reportRangeLine(start, end time.Time) string {
+	return fmt.Sprintf("统计区间：%s ~ %s（北京时间）",
+		formatNotificationTime(start), formatNotificationTime(end))
+}
+
 func truncateTo(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen-3] + "..."
+	return s[:maxLen-3] + "…"
 }

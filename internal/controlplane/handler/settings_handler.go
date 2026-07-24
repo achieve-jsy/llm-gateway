@@ -217,7 +217,9 @@ func (h *SettingsHandler) TestEmail(c *gin.Context) {
 	recipients := []string{email}
 	sender := notification.NewEmailSender(host, port, from, password, recipients)
 	sender.SetSkipTLSVerify(skipVerify)
-	if err := sender.SendText(c.Request.Context(), "这是来自 LLM Gateway 的测试邮件。SMTP 配置验证成功。\n\n时间: "+time.Now().Format("2006-01-02 15:04:05")); err != nil {
+	if err := sender.SendText(c.Request.Context(),
+		"这是来自 LLM Gateway 的测试邮件，收到即表示 SMTP 配置验证成功。\n\n发送时间："+
+			notification.FormatLocalTime(time.Now())); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{"message": "测试邮件发送失败: " + err.Error(), "code": CodeInternalError},
 		})

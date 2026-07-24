@@ -2786,7 +2786,7 @@ func (h *OpsHandler) GetEmailNotificationConfig(c *gin.Context) {
 func (h *OpsHandler) UpdateEmailNotificationConfig(c *gin.Context) {
 	var input EmailNotificationConfig
 	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "邮件通知配置格式不正确"})
 		return
 	}
 
@@ -2801,7 +2801,7 @@ func (h *OpsHandler) UpdateEmailNotificationConfig(c *gin.Context) {
 	if err := h.settingsRepo.SetMultiple(map[string]string{
 		settingKeyEmailNotification: string(data),
 	}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save email notification config"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存邮件通知配置失败"})
 		return
 	}
 
@@ -2815,12 +2815,16 @@ func (h *OpsHandler) SendTestAlertEmail(c *gin.Context) {
 		Recipient string `json:"recipient" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "recipient is required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请填写测试收件人邮箱"})
 		return
 	}
 
-	// TODO: 接入实际邮件发送（依赖 email_sender 模块）
-	c.JSON(http.StatusOK, gin.H{"sent": true, "recipient": req.Recipient, "message": "test email queued (email sender not yet wired)"})
+	// TODO: 接入实际邮件发送（依赖 email_sender 模块）。
+	// 注意：SPA 只在 catch 分支展示 message，若这里返回 200，界面会谎报
+	// 「测试邮件已发送」，而实际一封都没发出，因此这里必须返回失败。
+	c.JSON(http.StatusNotImplemented, gin.H{
+		"error": "该入口尚未接入邮件发送，未实际发出邮件；请改用「系统设置 → 邮件通知」中的测试邮件。",
+	})
 }
 
 // =============================================================================

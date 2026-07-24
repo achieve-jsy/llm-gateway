@@ -173,5 +173,7 @@ func TestExpansionApplyFailedNotificationIsChineseAndCritical(t *testing.T) {
 		First(&row).Error)
 	require.Equal(t, model.NotificationLevelCritical, row.Level)
 	require.Equal(t, "扩容申请生效失败", row.Title)
-	requireChineseBody(t, row.Content, "当前未配置额度", "生效失败原因：snapshot publish boom")
+	requireChineseBody(t, row.Content, "当前未配置额度", "生效失败原因：配置下发未成功")
+	require.NotContains(t, row.Content, "snapshot publish boom",
+		"原始错误串（可能含 UUID/SQL）不得进入用户通知，只应写日志")
 }

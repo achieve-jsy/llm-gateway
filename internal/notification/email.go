@@ -61,7 +61,7 @@ func (e *EmailSender) SetSkipTLSVerify(v bool)              { e.skipVerify = v }
 func (e *EmailSender) UpdateRecipients(recipients []string) { e.recipients = recipients }
 
 func (e *EmailSender) SendText(ctx context.Context, text string) error {
-	return e.sendWithSubject(ctx, "[LLM Gateway] 告警通知", text, e.recipients, "")
+	return e.sendWithSubject(ctx, "[LLM Gateway] 系统通知", text, e.recipients, "")
 }
 
 func (e *EmailSender) SendTextWithSubject(ctx context.Context, subject, text string) error {
@@ -74,7 +74,14 @@ func (e *EmailSender) SendTextWithSubjectAndDedupeKey(ctx context.Context, subje
 }
 
 func (e *EmailSender) SendTextTo(ctx context.Context, text string, recipients []string) error {
-	return e.sendWithSubject(ctx, "[LLM Gateway] 告警通知", text, recipients, "")
+	return e.sendWithSubject(ctx, "[LLM Gateway] 系统通知", text, recipients, "")
+}
+
+// SendTextToWithSubject 使用显式主题向指定收件人发送纯文本邮件。
+// 报表、告警等不同用途的主题必须由调用方给出，否则所有邮件都会挤在同一个
+// 「系统通知」主题下，收件人无法从主题区分内容。
+func (e *EmailSender) SendTextToWithSubject(ctx context.Context, subject, text string, recipients []string) error {
+	return e.sendWithSubject(ctx, subject, text, recipients, "")
 }
 
 func (e *EmailSender) sendWithSubject(ctx context.Context, subject, text string, recipients []string, dedupeKey string) error {

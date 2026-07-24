@@ -58,7 +58,8 @@
               <span v-if="!authStore.isAdmin" class="menu-scope-tag">我的范围</span>
             </template>
           </el-menu-item>
-          <el-menu-item index="/admin/usage/dashboard">
+          <!-- 用量看板：会暴露他人调用记录，仅 admin 可见；其余角色只看「我的用量」 -->
+          <el-menu-item v-if="authStore.isAdmin" data-test="menu-usage-dashboard" index="/admin/usage/dashboard">
             <el-icon><Histogram /></el-icon>
             <template #title>用量看板</template>
           </el-menu-item>

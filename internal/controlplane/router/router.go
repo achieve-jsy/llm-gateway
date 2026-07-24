@@ -986,42 +986,50 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		orgGroup.PUT("/users/:id/department", guard(rbac.PermDeptChange), deptAssignH.ChangeDepartment)
 		orgGroup.PUT("/users/:id/department/follow-sso", guard(rbac.PermSSORevert), deptAssignH.FollowSSO)
 
-		// ── 用量看板：dashboard/scoped-logs 需 Guard 注入 Actor ─────────────
+		// ── 用量统计：跨用户视角基本仅 admin 可见 ──────────────────────────
+		// 产品口径：除 admin 外任何角色都只能在界面上看「自己的用量」（/my/usage 系列），
+		// 因此用量看板/分析报告类端点一律用 PermUsageViewAll（仅 admin）。
+		//
+		// 例外：/usage/dashboard 保留 PermUsageViewScoped（管辖范围），因为
+		// 预算管理页（dept_admin / studio_admin 可进）的「成员近7天消耗 / 7天日均」
+		// 列就是靠它按 actor 范围取成员聚合成本。它只返回聚合行（成本/token/次数），
+		// 不返回调用明细；明细类端点（/usage/scoped/logs、user-detail 等）仍为 admin-only。
+		//
 		// usageH2 复用同一 DB，仅在此处注册带 Guard 的路由
 		usageH2 := obshandler.NewUsageHandler(obssvc.NewRollupService(db), db)
 		// 方案X 异常反馈闭环（真人工反馈）：写路径 CRUD 落在 control-plane（anomaly_records 由其 GORM model 管理），
 		// 独立于 observability 的只读报告聚合 handler，故单独构造 AnomalyFeedbackHandler（轻量：直接持 *gorm.DB）。
 		anomalyFeedbackH := handler.NewAnomalyFeedbackHandler(db)
 		adminGroup.GET("/usage/dashboard", guard(rbac.PermUsageViewScoped), usageH2.GetDashboard)
-		adminGroup.GET("/usage/dashboard/trend", guard(rbac.PermUsageViewScoped), usageH2.DashboardTrend)
-		adminGroup.GET("/usage/dashboard/models", guard(rbac.PermUsageViewScoped), usageH2.DashboardModelsEnhanced)
-		adminGroup.GET("/usage/dashboard/users", guard(rbac.PermUsageViewScoped), usageH2.DashboardUsersEnhanced)
-		adminGroup.GET("/usage/dashboard/user-top-models", guard(rbac.PermUsageViewScoped), usageH2.DashboardUserTopModels)
-		adminGroup.GET("/usage/dashboard/user-detail", guard(rbac.PermUsageViewScoped), usageH2.DashboardUserDetail)
-		adminGroup.GET("/usage/dashboard/model-detail", guard(rbac.PermUsageViewScoped), usageH2.DashboardModelDetail)
-		adminGroup.GET("/usage/scoped/logs", guard(rbac.PermUsageViewScoped), usageH2.ScopedLogs)
-		adminGroup.GET("/usage/scoped/logs/:request_id/trace", guard(rbac.PermUsageViewScoped), usageH2.ScopedTrace)
+		adminGroup.GET("/usage/dashboard/trend", guard(rbac.PermUsageViewAll), usageH2.DashboardTrend)
+		adminGroup.GET("/usage/dashboard/models", guard(rbac.PermUsageViewAll), usageH2.DashboardModelsEnhanced)
+		adminGroup.GET("/usage/dashboard/users", guard(rbac.PermUsageViewAll), usageH2.DashboardUsersEnhanced)
+		adminGroup.GET("/usage/dashboard/user-top-models", guard(rbac.PermUsageViewAll), usageH2.DashboardUserTopModels)
+		adminGroup.GET("/usage/dashboard/user-detail", guard(rbac.PermUsageViewAll), usageH2.DashboardUserDetail)
+		adminGroup.GET("/usage/dashboard/model-detail", guard(rbac.PermUsageViewAll), usageH2.DashboardModelDetail)
+		adminGroup.GET("/usage/scoped/logs", guard(rbac.PermUsageViewAll), usageH2.ScopedLogs)
+		adminGroup.GET("/usage/scoped/logs/:request_id/trace", guard(rbac.PermUsageViewAll), usageH2.ScopedTrace)
 		// 离线用量报告专用明细：keyset 分页，稳定键(user_id/dept_id/studio_id)过滤，专供 usage-report CLI。
-		adminGroup.GET("/usage/report/logs", guard(rbac.PermUsageViewScoped), usageH2.ReportLogs)
+		adminGroup.GET("/usage/report/logs", guard(rbac.PermUsageViewAll), usageH2.ReportLogs)
 		// 离线用量报告专用于期前基线的日聚合+分钟桶聚合（零明细），供 28 天稳健基线物化与 A1/A2 窗口分位重建。
-		adminGroup.GET("/usage/report/baseline", guard(rbac.PermUsageViewScoped), usageH2.ReportBaseline)
+		adminGroup.GET("/usage/report/baseline", guard(rbac.PermUsageViewAll), usageH2.ReportBaseline)
 		// 成员级聚合：按 user_id 返回每人一行的核心单一指标（排除 service），作为「按人统计+逐层横向对比」方案的人工层地基。
-		adminGroup.GET("/usage/report/members", guard(rbac.PermUsageViewScoped), usageH2.ReportMembers)
+		adminGroup.GET("/usage/report/members", guard(rbac.PermUsageViewAll), usageH2.ReportMembers)
 		// 程序 Service Key 聚合：仅 key_type='service'，按 key_id 返回每 Key 一行的核心单一指标（成员+程序对账用）。
-		adminGroup.GET("/usage/report/service-keys", guard(rbac.PermUsageViewScoped), usageH2.ReportServiceKeys)
+		adminGroup.GET("/usage/report/service-keys", guard(rbac.PermUsageViewAll), usageH2.ReportServiceKeys)
 		// 预算执行：按 scope(studio|dept)+month 返回月度配额/实际/百分比（工作室「一页摘要」预算执行行）。
-		adminGroup.GET("/usage/report/budget-exec", guard(rbac.PermUsageViewScoped), usageH2.ReportBudgetExec)
+		adminGroup.GET("/usage/report/budget-exec", guard(rbac.PermUsageViewAll), usageH2.ReportBudgetExec)
 		// 方案X 异常反馈闭环（真人工反馈）：批量 upsert 命中异常（默认「待确认」，不覆盖用户反馈态）。
-		adminGroup.POST("/usage/report/anomalies", guard(rbac.PermUsageViewScoped), anomalyFeedbackH.ReportAnomalyUpsert)
+		adminGroup.POST("/usage/report/anomalies", guard(rbac.PermUsageViewAll), anomalyFeedbackH.ReportAnomalyUpsert)
 		// 方案X 异常反馈闭环：读回指定范围+时间窗的真实状态（报告侧覆盖 AnomalyHit.Status）。
-		adminGroup.GET("/usage/report/anomaly-status", guard(rbac.PermUsageViewScoped), anomalyFeedbackH.ReportAnomalyStatus)
+		adminGroup.GET("/usage/report/anomaly-status", guard(rbac.PermUsageViewAll), anomalyFeedbackH.ReportAnomalyStatus)
 		// 方案X 异常反馈闭环：人工反馈状态（校验5态枚举，写 status/feedback_at/feedback_by/reason）。
-		adminGroup.POST("/usage/report/anomalies/:id/feedback", guard(rbac.PermUsageViewScoped), anomalyFeedbackH.ReportAnomalyFeedback)
+		adminGroup.POST("/usage/report/anomalies/:id/feedback", guard(rbac.PermUsageViewAll), anomalyFeedbackH.ReportAnomalyFeedback)
 		// Token 使用分析 v2：统一 Report JSON、四象限成员点集、待核查反馈。
 		reportV2H := obshandler.NewReportHandler(db)
-		adminGroup.GET("/usage/analysis-report", guard(rbac.PermUsageViewScoped), reportV2H.Report)
-		adminGroup.GET("/usage/analysis-report/members", guard(rbac.PermUsageViewScoped), reportV2H.Members)
-		adminGroup.POST("/usage/analysis-report/anomaly/:user_id/feedback", guard(rbac.PermUsageViewScoped), reportV2H.AnomalyFeedback)
+		adminGroup.GET("/usage/analysis-report", guard(rbac.PermUsageViewAll), reportV2H.Report)
+		adminGroup.GET("/usage/analysis-report/members", guard(rbac.PermUsageViewAll), reportV2H.Members)
+		adminGroup.POST("/usage/analysis-report/anomaly/:user_id/feedback", guard(rbac.PermUsageViewAll), reportV2H.AnomalyFeedback)
 	}
 
 	// 内部接口（InternalAuth 已在 internalGroup 上，复用）

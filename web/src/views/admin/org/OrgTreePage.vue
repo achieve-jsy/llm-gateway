@@ -272,7 +272,7 @@
                 />
               </div>
               <div class="org-table-wrap"><el-table :data="filteredMembers" stripe size="small" v-loading="deptMembersLoading"
-                style="cursor:pointer" @row-click="openMemberDetail">
+                :style="{ cursor: isGlobalAdmin ? 'pointer' : 'default' }" @row-click="openMemberDetail">
                 <el-table-column label="姓名" min-width="130">
                   <template #default="{ row }">
                     <div class="member-cell">
@@ -1748,6 +1748,9 @@ function renderMdTrendChart() {
 }
 
 function openMemberDetail(member: DeptMember) {
+  // 成员用量快览仅 admin 可见：非 admin 直接不打开，避免前端出现他人调用明细入口
+  // （后端 /usage/scoped/logs、/usage/dashboard/trend|models 等已收紧为 admin-only）。
+  if (!isGlobalAdmin.value) return
   memberDrawerTarget.value  = member
   memberDrawerVisible.value = true
   mdKpi.value       = { callCount: 0, cost: 0, successRate: 0, totalTokens: 0, errorCount: 0, avgDuration: 0 }

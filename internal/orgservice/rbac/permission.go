@@ -29,8 +29,8 @@ const (
 	PermMappingEdit Permission = "org:mapping:edit" // 编辑部门-工作室映射
 
 	// ── 用量看板 ────────────────────────────────────────────────────────────
-	PermUsageViewAll    Permission = "usage:view:all"    // 查看全公司用量
-	PermUsageViewScoped Permission = "usage:view:scoped" // 查看自己管辖范围用量
+	PermUsageViewAll    Permission = "usage:view:all"    // 查看全公司用量（用量统计类端点仅 admin）
+	PermUsageViewScoped Permission = "usage:view:scoped" // 管辖范围视角（/usage/dashboard 与运维视频任务等按域收窄的端点）
 
 	// ── v0.7 模型组授权 ──────────────────────────────────────────────────────
 	PermGroupOpenModeSet   Permission = "group:open_mode:set"  // 设置组开放模式（仅平台 admin）

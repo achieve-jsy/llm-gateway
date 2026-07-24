@@ -102,6 +102,10 @@ func traceEventBodyBytes(e TraceEvent) int64 {
 // 用于吸收瞬时突发（如大量长流式请求在同一窗口集中完成，trace 集中 emit 挤爆 channel）。
 const traceEmitBlockTimeout = 500 * time.Millisecond
 
+// traceShutdownFlushTimeout 是关停时写完最后一批 trace 的时间上限。
+// 关停路径的 ctx 已取消，必须靠 WithoutCancel + 本超时才能把最后一批真正落库。
+const traceShutdownFlushTimeout = 5 * time.Second
+
 // Emit 投递 trace 事件。优先非阻塞快速路径；channel 满时短暂阻塞等待（吸收突发，
 // 避免大量并发完成的长请求一起 emit 把 512 槽 channel 挤掉），仅当持续过载（超过
 // traceEmitBlockTimeout 仍无空槽）才丢弃——trace 数据非关键路径，不无限阻塞请求。
@@ -137,18 +141,18 @@ func (w *TraceWriter) Run(ctx context.Context) {
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 
-	flush := func(b []obsmodel.CallTrace) {
+	flush := func(flushCtx context.Context, b []obsmodel.CallTrace) {
 		if len(b) == 0 {
 			return
 		}
-		if err := w.db.WithContext(ctx).
+		if err := w.db.WithContext(flushCtx).
 			Clauses(clause.OnConflict{DoNothing: true}).
 			Create(&b).Error; err != nil {
 			log.Printf("[trace] batch insert error, falling back to per-record: %v", err)
 			// 单条坏记录（如 jsonb 含 PG 不接受的 NUL 转义）会导致整批回滚，
 			// 降级为逐条插入并跳过坏记录，避免连坐丢弃正常 trace。
 			for i := range b {
-				if err := w.db.WithContext(ctx).
+				if err := w.db.WithContext(flushCtx).
 					Clauses(clause.OnConflict{DoNothing: true}).
 					Create(&b[i]).Error; err != nil {
 					log.Printf("[trace] skip trace request_id=%s: %v", b[i].RequestID, err)
@@ -161,7 +165,13 @@ func (w *TraceWriter) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			// 本分支不接收事件，故无需归还队列额度；batch 中的字节已在各事件出队时归还。
-			flush(batch)
+			//
+			// 关停时仍要尽力写完最后一批：ctx 此刻已取消，若直接 WithContext(ctx)，
+			// 这次写入必然立即失败（且逐条降级同样失败），最后一批 trace 每次关停都会丢。
+			// 因此用 WithoutCancel 剥离取消信号，再套一个短超时避免关停被无限拖住。
+			flushCtx, cancelFlush := context.WithTimeout(context.WithoutCancel(ctx), traceShutdownFlushTimeout)
+			flush(flushCtx, batch)
+			cancelFlush()
 			return
 		case e := <-w.ch:
 			// 事件已出队：立即按原始 body 长度归还队列字节额度，
@@ -171,12 +181,12 @@ func (w *TraceWriter) Run(ctx context.Context) {
 			batch = append(batch, traceEventToModel(e))
 			batchBytes += n
 			if len(batch) >= w.flushN || batchBytes >= w.maxBatchBytes {
-				flush(batch)
+				flush(ctx, batch)
 				batch = batch[:0]
 				batchBytes = 0
 			}
 		case <-ticker.C:
-			flush(batch)
+			flush(ctx, batch)
 			batch = batch[:0]
 			batchBytes = 0
 		}

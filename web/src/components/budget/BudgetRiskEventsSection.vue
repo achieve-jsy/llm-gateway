@@ -108,7 +108,7 @@
           >
             调整额度
           </el-button>
-          <el-button v-if="canViewUsage" link data-test="risk-inline-usage" @click.stop="viewUsage(row)">
+          <el-button link data-test="risk-inline-usage" @click.stop="viewUsage(row)">
             查看用量
           </el-button>
         </template>
@@ -193,7 +193,7 @@
               <strong>通知负责人</strong>
               <span>发送风险与预算维度提醒</span>
             </button>
-            <button v-if="canViewUsage" type="button" class="disposition-action" @click="viewUsage(selected)">
+            <button type="button" class="disposition-action" @click="viewUsage(selected)">
               <strong>查看用量</strong>
               <span>跳转到该对象的用量明细</span>
             </button>
@@ -220,7 +220,6 @@ import DataFreshnessNotice from '@/components/common/DataFreshnessNotice.vue'
 import { formatBudgetUSD } from '@/composables/useBudgetDisplay'
 import { limitSourceLabel } from '@/utils/budget-risk-labels'
 import { getBudgetRiskSummary, listBudgetRisks, notifyBudgetOwner } from '@/services/control-plane'
-import { useAuthStore } from '@/stores/auth'
 import type {
   BudgetRiskEvent,
   BudgetRiskFilter,
@@ -236,10 +235,6 @@ const QUERY_PREFIX = 'rf_'
 const emit = defineEmits<{ viewBudget: [event: BudgetRiskEvent] }>()
 const router = useRouter()
 const route = useRoute()
-const authStore = useAuthStore()
-
-// 用量看板页仅 admin 可见（后端 dashboard 明细端点同为 admin-only）
-const canViewUsage = computed(() => authStore.isAdmin)
 
 const loading = ref(false)
 const notifying = ref(false)

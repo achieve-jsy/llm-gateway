@@ -144,15 +144,6 @@ test.describe('RBAC 权限路由', () => {
     await expectForbidden(page)
   })
 
-  test('用量统计仅 admin 可访问，部门管理员被 403 拦截', async ({ page }) => {
-    await bootWithRbacMocks(page, '/admin/usage/dashboard', 'dept_admin')
-    await expectForbidden(page)
-
-    await page.goto('/admin/usage/report')
-    await page.waitForLoadState('networkidle')
-    await expectForbidden(page)
-  })
-
   test('管理员可访问角色管理并看到角色统计和授权列表', async ({ page }) => {
     await bootWithRbacMocks(page, '/admin/org/roles', 'admin')
 
@@ -210,7 +201,6 @@ test.describe('RBAC 侧边栏菜单', () => {
     await expect(nav.getByText('预算管理')).toBeVisible()
     await expect(nav.getByText('扩容申请')).toBeVisible()
     await expect(nav.getByText('模型组授权')).toBeVisible()
-    await expect(nav.getByText('用量看板')).toHaveCount(0)
     await expect(nav.getByText('角色管理')).toHaveCount(0)
     await expect(nav.locator('.menu-group-label', { hasText: /^平台$/ })).toHaveCount(0)
     await expect(nav.getByText('渠道管理')).toHaveCount(0)
@@ -227,7 +217,6 @@ test.describe('RBAC 侧边栏菜单', () => {
     const nav = sidebar(page)
     await expect(nav.locator('.menu-group-label', { hasText: /^管理$/ })).toBeVisible()
     await expect(nav.getByText('角色管理')).toBeVisible()
-    await expect(nav.getByText('用量看板')).toBeVisible()
     await expect(nav.locator('.menu-group-label', { hasText: /^平台$/ })).toBeVisible()
     await expect(nav.getByText('渠道管理')).toBeVisible()
     await expect(nav.getByText('模型管理')).toBeVisible()

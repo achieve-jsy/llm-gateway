@@ -114,33 +114,6 @@ describe('App navigation', () => {
     wrapper.unmount()
   })
 
-  it('用量看板仅平台管理员可见，其他角色只保留「我的用量」', () => {
-    for (const role of ['dept_admin', 'studio_admin', 'user'] as const) {
-      const wrapper = mountAppAs(role)
-      expect(wrapper.text()).toContain('我的用量')
-      expect(wrapper.find('[data-test="menu-usage-dashboard"]').exists()).toBe(false)
-      wrapper.unmount()
-    }
-
-    const adminWrapper = mountAppAs('admin')
-    expect(adminWrapper.find('[data-test="menu-usage-dashboard"]').exists()).toBe(true)
-    adminWrapper.unmount()
-  })
-
-  it('用量看板与使用分析报告均为 admin-only 路由', () => {
-    const routerSource = readFileSync(
-      resolve(process.cwd(), 'src/router/index.ts'),
-      'utf8',
-    )
-    for (const path of ['/admin/usage/dashboard', '/admin/usage/report']) {
-      const start = routerSource.indexOf(`path: '${path}'`)
-      expect(start).toBeGreaterThan(-1)
-      const block = routerSource.slice(start, routerSource.indexOf('},', start))
-      expect(block).toContain('requiresAdmin: true')
-      expect(block).not.toContain('requiresManager')
-    }
-  })
-
   it('平台管理员未关联部门时不显示受限提示', () => {
     authStore.deptStatus = 'none'
     const wrapper = mountAppAs('admin')

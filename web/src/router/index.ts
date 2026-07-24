@@ -222,19 +222,18 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/admin/org/RolePage.vue'),
     meta: { title: '角色管理', requiresAdmin: true }
   },
-  // ─── 用量统计（仅 admin：会暴露他人调用记录）─────────────────────────────
-  // 除 admin 外任何角色只能看自己的用量（/my/usage），菜单入口同步隐藏。
+  // ─── 分层用量看板（管理角色可见）────────────────────────────────────────
   {
     path: '/admin/usage/dashboard',
     name: 'UsageDashboard',
     component: () => import('@/views/admin/usage/UsageDashboardPage.vue'),
-    meta: { title: '用量看板', requiresAdmin: true }
+    meta: { title: '用量看板', requiresManager: true }
   },
   {
     path: '/admin/usage/report',
     name: 'UsageReport',
     component: () => import('@/views/admin/usage/UsageReportPage.vue'),
-    meta: { title: '使用分析报告', requiresAdmin: true }
+    meta: { title: '使用分析报告', requiresManager: true }
   },
   // ─── 权限不足兜底页（不加 public，已登录用户需保留侧边栏）───────────────────
   {

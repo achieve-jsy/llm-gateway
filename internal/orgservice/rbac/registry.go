@@ -49,10 +49,7 @@ var Registry = map[Permission]PolicyEntry{
 	// 用量看板（全公司）：仅 admin
 	PermUsageViewAll: {ScopeGlobal},
 
-	// 管辖范围视角：仅 /usage/dashboard（预算管理页取成员聚合用量）与运维视频任务等
-	// 按管辖域收窄的端点保留。用量统计的其余端点（/usage/dashboard/trend|models|users|
-	// user-detail|model-detail、/usage/scoped/logs、/usage/report*）已统一收紧为
-	// PermUsageViewAll —— 除 admin 外任何角色在界面上只能看自己的用量（/my/usage 系列）。
+	// 用量看板（管辖范围）：任意管理角色
 	PermUsageViewScoped: {ScopeManage},
 
 	// ── v0.7 模型组授权 ──────────────────────────────────────────────────────

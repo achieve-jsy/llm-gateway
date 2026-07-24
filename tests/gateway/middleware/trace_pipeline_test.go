@@ -207,7 +207,9 @@ func TestTracePipeline_ChatCompletions_StillWorks(t *testing.T) {
 	require.NotEmpty(t, trace.ResponseBody)
 }
 
-func TestTracePipeline_LogDisabled_SkipsTraceBody(t *testing.T) {
+func TestTracePipeline_LogDisabled_StillCapturesBody(t *testing.T) {
+	// 测试目的：log_enabled 门控已废弃（应收尽收），关闭日志的 key 也必须落库请求正文，
+	// 避免"某部分人上下文缺失"。
 	db := setupTraceDB(t)
 	tw, cancel := startTraceWriter(t, db)
 	defer cancel()
@@ -224,10 +226,12 @@ func TestTracePipeline_LogDisabled_SkipsTraceBody(t *testing.T) {
 	w := postJSON(t, r, "/v1/messages", body)
 	require.Equal(t, http.StatusOK, w.Code)
 
-	time.Sleep(300 * time.Millisecond)
-	var count int64
-	require.NoError(t, db.Model(&obsmodel.CallTrace{}).Count(&count).Error)
-	assert.Equal(t, int64(0), count)
+	trace := waitTrace(t, db, "trace-test-req-1")
+	require.NotEmpty(t, trace.RequestBody)
+
+	var reqBody map[string]any
+	require.NoError(t, json.Unmarshal(trace.RequestBody, &reqBody))
+	assert.Equal(t, "claude-opus-4-6", reqBody["model"])
 }
 
 func TestTracePipeline_StreamResponseFallback(t *testing.T) {

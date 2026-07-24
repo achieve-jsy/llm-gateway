@@ -27,7 +27,8 @@ func TestTraceCapturePaths(t *testing.T) {
 		{"/v1/responses", true, true},
 		{"/v1/embeddings", true, true},
 		{"/v1/models", true, false},
-		{"/v1/chat/completions", false, false},
+		// log_enabled 门控已废弃（应收尽收）：即使 key 关闭日志，仍必须采集正文
+		{"/v1/chat/completions", false, true},
 	}
 
 	for _, tt := range tests {

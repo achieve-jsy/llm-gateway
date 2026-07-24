@@ -77,7 +77,8 @@ func TestProductionCollector_UsesIndependentPriceRefreshOverride(t *testing.T) {
 	)`).Error)
 	require.NoError(t, db.Exec(`CREATE TABLE models (
 		id text PRIMARY KEY, name text, provider_id text, model_type text, price_mode text,
-		input_price real, output_price real, catalog_id text
+		input_price real, output_price real, catalog_id text,
+		cache_read_price real, cache_write_price real
 	)`).Error)
 	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
 		request_id text PRIMARY KEY, key_type text, budget_tier_constraints_snapshot text

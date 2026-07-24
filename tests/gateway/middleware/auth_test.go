@@ -35,7 +35,7 @@ func TestAuthMiddleware_MissingAuthorizationHeader(t *testing.T) {
 	defer srv.Close()
 
 	router := gin.New()
-	router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL)))
+	router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL), testJWTManager()))
 	router.GET("/test", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	w := httptest.NewRecorder()
@@ -55,7 +55,7 @@ func TestAuthMiddleware_InvalidAuthorizationFormat(t *testing.T) {
 	defer srv.Close()
 
 	router := gin.New()
-	router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL)))
+	router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL), testJWTManager()))
 	router.GET("/test", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	w := httptest.NewRecorder()
@@ -76,7 +76,7 @@ func TestAuthMiddleware_EmptyBearerToken(t *testing.T) {
 	defer srv.Close()
 
 	router := gin.New()
-	router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL)))
+	router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL), testJWTManager()))
 	router.GET("/test", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	w := httptest.NewRecorder()
@@ -140,7 +140,7 @@ func TestAuthMiddleware_APIKey(t *testing.T) {
 
 			var capturedIdentity *gwmodel.UserIdentity
 			router := gin.New()
-			router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL)))
+			router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL), testJWTManager()))
 			router.GET("/test", func(c *gin.Context) {
 				if val, exists := c.Get("identity"); exists {
 					capturedIdentity = val.(*gwmodel.UserIdentity)
@@ -175,7 +175,7 @@ func TestAuthMiddleware_JWT(t *testing.T) {
 	}{
 		{
 			name:        "有效的 JWT token",
-			description: "JWT 以 eyJ 开头且 ParseUnverified 能解析，应提取 user_id 和 dept_id 设入 context",
+			description: "JWT 以 eyJ 开头且 RS256 签名校验通过，应提取 user_id 和 dept_id 设入 context",
 			token:       "", // 动态生成
 			wantStatus:  http.StatusOK,
 			wantUserID:  "jwt-user-789",
@@ -183,20 +183,17 @@ func TestAuthMiddleware_JWT(t *testing.T) {
 		},
 		{
 			name:        "无效的 JWT token",
-			description: "token 以 eyJ 开头但格式不合法导致 ParseUnverified 失败，应返回 401",
+			description: "token 以 eyJ 开头但格式不合法导致验签失败，应返回 401",
 			token:       "eyJinvalidtoken.notreal.garbage",
 			wantStatus:  http.StatusUnauthorized,
 		},
 	}
 
-	// 为第一个用例生成有效 JWT
-	validToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+	// 为第一个用例生成有效 JWT（AuthMiddleware 强制 RS256 验签，须用测试私钥签名）
+	tests[0].token = makeJWT(t, jwt.MapClaims{
 		"user_id": "jwt-user-789",
 		"dept_id": "jwt-dept-012",
 	})
-	validTokenString, err := validToken.SignedString([]byte("test-secret"))
-	require.NoError(t, err)
-	tests[0].token = validTokenString
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -208,7 +205,7 @@ func TestAuthMiddleware_JWT(t *testing.T) {
 
 			var capturedIdentity *gwmodel.UserIdentity
 			router := gin.New()
-			router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL)))
+			router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL), testJWTManager()))
 			router.GET("/test", func(c *gin.Context) {
 				if val, exists := c.Get("identity"); exists {
 					capturedIdentity = val.(*gwmodel.UserIdentity)
@@ -241,7 +238,7 @@ func TestAuthMiddleware_UnknownTokenFormat(t *testing.T) {
 	defer srv.Close()
 
 	router := gin.New()
-	router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL)))
+	router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL), testJWTManager()))
 	router.GET("/test", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	w := httptest.NewRecorder()

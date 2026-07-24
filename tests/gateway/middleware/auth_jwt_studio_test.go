@@ -13,14 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// makeJWT 生成包含指定 claims 的 JWT（用任意 secret 签名，AuthMiddleware 不验签）
-func makeJWT(t *testing.T, claims jwt.MapClaims) string {
-	t.Helper()
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	str, err := token.SignedString([]byte("test-secret"))
-	require.NoError(t, err)
-	return str
-}
+// makeJWT 与 testJWTManager 见 auth_jwt_helper_test.go
+// （AuthMiddleware 现在必须校验 RS256 签名，测试需用同一把 RSA 私钥签名并传入 JWTManager）。
 
 func TestAuthMiddleware_JWT_StudioID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -95,7 +89,7 @@ func TestAuthMiddleware_JWT_StudioID(t *testing.T) {
 			)
 
 			r := gin.New()
-			r.Use(middleware.AuthMiddleware(newAuthClient(srv.URL)))
+			r.Use(middleware.AuthMiddleware(newAuthClient(srv.URL), testJWTManager()))
 			r.GET("/test", func(c *gin.Context) {
 				if val, exists := c.Get("identity"); exists {
 					capturedIdentity = val.(*gwmodel.UserIdentity)
@@ -143,7 +137,7 @@ func TestAuthMiddleware_JWT_OrgCheck_Integration(t *testing.T) {
 	})
 
 	r := gin.New()
-	r.Use(middleware.AuthMiddleware(newAuthClient(srv.URL)))
+	r.Use(middleware.AuthMiddleware(newAuthClient(srv.URL), testJWTManager()))
 	r.Use(middleware.OrgCheckMiddleware())
 	r.GET("/v1/test", func(c *gin.Context) { c.Status(http.StatusOK) })
 
@@ -173,7 +167,7 @@ func TestAuthMiddleware_JWT_OrgCheck_WithStudio_Pass(t *testing.T) {
 	})
 
 	r := gin.New()
-	r.Use(middleware.AuthMiddleware(newAuthClient(srv.URL)))
+	r.Use(middleware.AuthMiddleware(newAuthClient(srv.URL), testJWTManager()))
 	r.Use(middleware.OrgCheckMiddleware())
 	r.GET("/v1/test", func(c *gin.Context) { c.Status(http.StatusOK) })
 

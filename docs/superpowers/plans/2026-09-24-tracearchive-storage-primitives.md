@@ -47,7 +47,7 @@
 
 ---
 
-### 任务 1：引入 zstd 依赖并完成 U7/U8 标定
+### Task 1：引入 zstd 依赖并完成 U7/U8 标定
 
 **文件：**
 - 新建：`cmd/trace-calib/main.go`
@@ -304,7 +304,7 @@ git commit -m "feat(tracearchive): 引入 zstd 依赖并完成 U7/U8 编码器�
 
 ---
 
-### 任务 2：内嵌索引 trailer 的编解码
+### Task 2：内嵌索引 trailer 的编解码
 
 **文件：**
 - 新建：`internal/tracearchive/index.go`
@@ -486,7 +486,7 @@ git commit -m "feat(tracearchive): 实现内嵌索引 trailer 的差分 varint �
 
 ---
 
-### 任务 3：32 字节 footer 的编解码与校验
+### Task 3：32 字节 footer 的编解码与校验
 
 **文件：**
 - 新建：`internal/tracearchive/footer.go`
@@ -693,7 +693,7 @@ git commit -m "feat(tracearchive): 实现 32 字节定长 footer 的编解码与
 
 ---
 
-### 任务 4：定位键与目录布局
+### Task 4：定位键与目录布局
 
 **文件：**
 - 新建：`internal/tracearchive/ref.go`
@@ -912,7 +912,7 @@ git commit -m "feat(tracearchive): 定位键、目录布局与读取错误分类
 
 ---
 
-### 任务 5：spool 顺序追加写入器
+### Task 5：spool 顺序追加写入器
 
 **文件：**
 - 新建：`internal/tracearchive/writer.go`
@@ -1451,7 +1451,7 @@ git commit -m "feat(tracearchive): spool 顺序追加写入器与写指针
 
 ---
 
-### 任务 6：封块器（spool → zstd → trailer/footer → fsync → rename）
+### Task 6：封块器（spool → zstd → trailer/footer → fsync → rename）
 
 **文件：**
 - 新建：`internal/tracearchive/sealer.go`
@@ -1895,7 +1895,7 @@ git commit -m "feat(tracearchive): 封块器（流式 zstd + 内嵌索引 + 原�
 
 ---
 
-### 任务 7：按定位键点读（含 spool 兜底）
+### Task 7：按定位键点读（含 spool 兜底）
 
 **文件：**
 - 新建：`internal/tracearchive/reader.go`
@@ -2333,7 +2333,7 @@ git commit -m "feat(tracearchive): 按定位键点读（含 spool 兜底与错�
 
 ---
 
-### 任务 8：端到端往返与约束验证
+### Task 8：端到端往返与约束验证
 
 **文件：**
 - 新建：`internal/tracearchive/roundtrip_test.go`

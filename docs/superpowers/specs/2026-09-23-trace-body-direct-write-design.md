@@ -1,6 +1,6 @@
 # 调用链正文直写 /datalog —— 设计规格（子项目 2）
 
-> 状态：**待复核**
+> 状态：**已复核**（协作方 2026-09-24 下达「开始实现」指令）
 > 分支：`feat/trace-body-direct-write`（基线 `main` @ `1cc0ea8c`）
 > 工作树：`.worktrees/trace-body-direct-write`
 > 上游背景：`docs/trace-archive-v3-implementation-report.md`（事后归档方案，本设计取而代之）

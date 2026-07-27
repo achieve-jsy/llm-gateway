@@ -151,7 +151,7 @@ func main() {
 			}
 			enc, err := zstd.NewWriter(nil, opts...)
 			if err != nil {
-				fmt.Fprintf(os.Stderr("级别 %d 窗口 %dMB 建编码器失败: %v\n", lvl, w>>20, err)
+				fmt.Fprintf(os.Stderr, "级别 %d 窗口 %dMB 建编码器失败: %v\n", lvl, w>>20, err)
 				os.Exit(1)
 			}
 			runtime.GC()
@@ -502,8 +502,12 @@ git commit -m "feat(tracearchive): 实现内嵌索引 trailer 的差分 varint �
 
 **布局**（规格 §5.2）：
 ```
-magic(4)="TBA4" | format_version(2) | trailer_offset(8) | trailer_len(4) | frame_sha256[:8](8) | reserved(6)
+magic(4)="TBA4" | format_version(2) | trailer_offset(8) | trailer_len(4)
+| row_count(4) | frame_sha256[:8](8) | reserved(2)
+= 32 字节
 ```
+
+**`row_count` 的作用（不可省）**：读取端据此向 `decodeTrailer` 传入期望条目数。缺少它时，被截断的 trailer 会被静默解码为更少的条目而无法识别，读取端也就无法判断 `ref.Row` 是否越界。
 
 - [ ] **步骤 1：编写失败的测试**
 
@@ -515,7 +519,12 @@ package tracearchive
 import "testing"
 
 func TestFooterRoundTrip(t *testing.T) {
-	in := footer{TrailerOffset: 1234567, TrailerLen: 4096, FrameSHA: [8]byte{1, 2, 3, 4, 5, 6, 7, 8}}
+	in := footer{
+		TrailerOffset: 1234567,
+		TrailerLen:    4096,
+		RowCount:      2718,
+		FrameSHA:      [8]byte{1, 2, 3, 4, 5, 6, 7, 8},
+	}
 	b := encodeFooter(in)
 	if len(b) != FooterSize {
 		t.Fatalf("footer 长度应为 %d，实际 %d", FooterSize, len(b))
@@ -526,6 +535,27 @@ func TestFooterRoundTrip(t *testing.T) {
 	}
 	if got != in {
 		t.Fatalf("往返不一致:\n want %+v\n got  %+v", in, got)
+	}
+}
+
+func TestFooterRowCountRoundTrip(t *testing.T) {
+	// row_count 是读取端判断行号越界与 trailer 截断的唯一依据，必须无损往返
+	for _, n := range []int32{0, 1, 255, 256, 65535, 1 << 20} {
+		b := encodeFooter(footer{TrailerOffset: 8, TrailerLen: 4, RowCount: n})
+		got, err := decodeFooter(b)
+		if err != nil {
+			t.Fatalf("row_count=%d 解码失败: %v", n, err)
+		}
+		if got.RowCount != n {
+			t.Fatalf("row_count 往返不一致: want %d, got %d", n, got.RowCount)
+		}
+	}
+}
+
+func TestDecodeFooterRejectsNegativeRowCount(t *testing.T) {
+	b := encodeFooter(footer{TrailerOffset: 8, TrailerLen: 4, RowCount: -1})
+	if _, err := decodeFooter(b); err == nil {
+		t.Fatal("负 row_count 应报错")
 	}
 }
 
@@ -558,7 +588,7 @@ func TestDecodeFooterRejectsUnknownVersion(t *testing.T) {
 - [ ] **步骤 2：运行测试并确认失败**
 
 运行：`go test ./internal/tracearchive/ -run TestFooter -v`
-预期：编译失败，提示 `undefined: footer`、`undefined: FooterSize`。
+预期：编译失败，提示 `undefined: footer`、`undefined: FooterSize`、`unknown field RowCount`。
 
 - [ ] **步骤 3：编写最小实现**
 
@@ -578,7 +608,7 @@ const (
 	// 读取端只需 pread 末尾 32 字节即可得知索引位置，无需解压任何数据。
 	FooterSize = 32
 
-	// footerMagic 标识本格式。冷层合并若引入扩展索引键，应使用不同的 magic 或提升版本号。
+	// footerMagic 标识本格式。冷层合并若引入扩展索引键，应提升 formatVersion。
 	footerMagic = "TBA4"
 
 	// formatVersion 当前格式版本。冷层超级文件（规格 §5.5）将提升此值。
@@ -589,9 +619,20 @@ const (
 var ErrFooterCorrupt = errors.New("tracearchive: footer 损坏")
 
 // footer 是产物文件末尾的定长元信息。
+//
+// 字段布局（共 32 字节）：
+//
+//	[0:4)   magic
+//	[4:6)   format_version
+//	[6:14)  trailer_offset
+//	[14:18) trailer_len
+//	[18:22) row_count
+//	[22:30) frame_sha256[:8]
+//	[30:32) reserved
 type footer struct {
 	TrailerOffset int64   // trailer 相对文件起始的偏移
 	TrailerLen    int32   // trailer 字节长度
+	RowCount      int32   // 块内行数。读取端据此校验 trailer 完整性并判断行号越界
 	FrameSHA      [8]byte // zstd 帧字节（不含 trailer/footer）的 sha256 前 8 字节
 }
 
@@ -602,8 +643,9 @@ func encodeFooter(f footer) []byte {
 	binary.BigEndian.PutUint16(b[4:6], formatVersion)
 	binary.BigEndian.PutUint64(b[6:14], uint64(f.TrailerOffset))
 	binary.BigEndian.PutUint32(b[14:18], uint32(f.TrailerLen))
-	copy(b[18:26], f.FrameSHA[:])
-	// b[26:32] 保留，恒为 0
+	binary.BigEndian.PutUint32(b[18:22], uint32(f.RowCount))
+	copy(b[22:30], f.FrameSHA[:])
+	// b[30:32] 保留，恒为 0
 	return b
 }
 
@@ -621,9 +663,14 @@ func decodeFooter(b []byte) (footer, error) {
 	}
 	f.TrailerOffset = int64(binary.BigEndian.Uint64(b[6:14]))
 	f.TrailerLen = int32(binary.BigEndian.Uint32(b[14:18]))
-	copy(f.FrameSHA[:], b[18:26])
+	f.RowCount = int32(binary.BigEndian.Uint32(b[18:22]))
+	copy(f.FrameSHA[:], b[22:30])
+
 	if f.TrailerOffset < 0 || f.TrailerLen < 0 {
 		return f, fmt.Errorf("%w: 负偏移或负长度（off=%d len=%d）", ErrFooterCorrupt, f.TrailerOffset, f.TrailerLen)
+	}
+	if f.RowCount < 0 {
+		return f, fmt.Errorf("%w: 负 row_count %d", ErrFooterCorrupt, f.RowCount)
 	}
 	return f, nil
 }
@@ -632,7 +679,7 @@ func decodeFooter(b []byte) (footer, error) {
 - [ ] **步骤 4：运行测试并确认通过**
 
 运行：`go test ./internal/tracearchive/ -run TestFooter -v`
-预期：PASS（含三个拒绝用例）。
+预期：PASS（含 row_count 往返、负 row_count 拒绝、magic/版本/长度三类拒绝）。
 
 - [ ] **步骤 5：提交**
 
@@ -881,7 +928,9 @@ git commit -m "feat(tracearchive): 定位键、目录布局与读取错误分类
   - `func NewWriter(opts WriterOptions) (*Writer, error)`
   - `func (w *Writer) Append(dt string, line []byte) (Ref, error)`——返回定位键；行内换行会被转义
   - `func (w *Writer) AppendFailed(dt string) error`——记录「本行正文落盘失败」，只推进行号不写字节
-  - `func (w *Writer) PendingSeals() []SealTask`——返回达到封块条件的块
+  - `func (w *Writer) PendingSeals() ([]SealTask, error)`——返回达到封块条件的块。
+    **返回前必须 flush 写缓冲**：封块器直接读 spool 文件，若缓冲未落盘，它会读到不完整的块。
+    flush 失败必须以 error 返回，不可静默。
   - `func (w *Writer) Close() error`
 
   ```go
@@ -977,7 +1026,10 @@ func TestWriterPendingSealsBySize(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	tasks := w.PendingSeals()
+	tasks, err := w.PendingSeals()
+	if err != nil {
+		t.Fatalf("PendingSeals 失败: %v", err)
+	}
 	if len(tasks) != 1 {
 		t.Fatalf("应产生 1 个封块任务，实际 %d", len(tasks))
 	}
@@ -986,6 +1038,38 @@ func TestWriterPendingSealsBySize(t *testing.T) {
 	}
 	if _, err := os.Stat(tasks[0].SpoolPath); err != nil {
 		t.Fatalf("封块任务的 spool 路径应存在: %v", err)
+	}
+}
+
+// TestWriterPendingSealsFlushesBuffer 是 D3 缺陷的回归测试：
+// 封块器直接读 spool 文件，若 Writer 未 flush 写缓冲，它会读到不完整的块。
+func TestWriterPendingSealsFlushesBuffer(t *testing.T) {
+	root := t.TempDir()
+	w, err := NewWriter(WriterOptions{Root: root, Inst: "blue", BlockBytes: 1 << 30, SealInterval: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	// 写入量远小于 bufio 缓冲（1 MiB），若未 flush 则文件为空
+	line := []byte("0123456789")
+	if _, err := w.Append("2026-09-24", line); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(15 * time.Millisecond)
+	tasks, err := w.PendingSeals()
+	if err != nil {
+		t.Fatalf("PendingSeals 失败: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("应产生 1 个封块任务，实际 %d", len(tasks))
+	}
+	b, err := os.ReadFile(tasks[0].SpoolPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countLines(b) != 1 {
+		t.Fatalf("封块任务返回时 spool 必须已 flush，实际读到 %d 行（内容 %q）", countLines(b), b)
 	}
 }
 
@@ -1004,11 +1088,16 @@ func TestWriterPendingSealsByInterval(t *testing.T) {
 	if _, err := w.Append("2026-09-24", []byte("x\n")); err != nil {
 		t.Fatal(err)
 	}
-	if tasks := w.PendingSeals(); len(tasks) != 0 {
+	if tasks, err := w.PendingSeals(); err != nil {
+		t.Fatal(err)
+	} else if len(tasks) != 0 {
 		t.Fatal("未到时间阈值不应产生封块任务")
 	}
 	time.Sleep(15 * time.Millisecond)
-	tasks := w.PendingSeals()
+	tasks, err := w.PendingSeals()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(tasks) != 1 {
 		t.Fatalf("超过时间阈值应产生 1 个封块任务（否则低峰天正文写了永远读不到），实际 %d", len(tasks))
 	}
@@ -1193,18 +1282,24 @@ func (w *Writer) AppendFailed(dt string) error {
 // 双触发条件（规格 §5.3.3）：达到大小阈值，或距块首行写入超过时间阈值。
 // 时间条件不可省——低峰天若不按时间封块，块永远达不到大小阈值，
 // 正文写了却读不到。
-func (w *Writer) PendingSeals() []SealTask {
+//
+// 返回非空任务前必须 flush 写缓冲：Sealer 直接读 spool 文件，
+// 若缓冲未落盘，它会把一个不完整的块封成产物（静默丢数据）。
+func (w *Writer) PendingSeals() ([]SealTask, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	cur := w.cur
 	if cur == nil || cur.rows == 0 {
-		return nil
+		return nil, nil
 	}
 	bySize := cur.bytes >= w.opts.BlockBytes
 	byTime := time.Since(cur.startedAt) >= w.opts.SealInterval
 	if !bySize && !byTime {
-		return nil
+		return nil, nil
+	}
+	if err := cur.w.Flush(); err != nil {
+		return nil, fmt.Errorf("tracearchive: 封块前 flush 失败: %w", err)
 	}
 	return []SealTask{{
 		DT:                cur.dt,
@@ -1213,7 +1308,7 @@ func (w *Writer) PendingSeals() []SealTask {
 		SpoolPath:         w.paths.SpoolFile(Ref{DT: cur.dt, Inst: w.opts.Inst, Part: cur.part}),
 		Rows:              cur.rows,
 		UncompressedBytes: cur.bytes,
-	}}
+	}}, nil
 }
 
 // MarkSealed 在封块成功后清空当前块状态。由 Sealer 在完成 rename 后调用。
@@ -1498,6 +1593,9 @@ func TestSealFooterPointsAtValidTrailer(t *testing.T) {
 		t.Fatalf("trailer 应紧邻 footer 之前: trailerEnd=%d footerStart=%d",
 			f.TrailerOffset+int64(f.TrailerLen), len(b)-FooterSize)
 	}
+	if int(f.RowCount) != len(lines) {
+		t.Fatalf("footer 的 row_count 应为 %d，实际 %d", len(lines), f.RowCount)
+	}
 	offs, err := decodeTrailer(b[f.TrailerOffset:f.TrailerOffset+int64(f.TrailerLen)], len(lines))
 	if err != nil {
 		t.Fatalf("trailer 应可解: %v", err)
@@ -1625,6 +1723,12 @@ func (s *Sealer) Seal(ctx context.Context, task SealTask) error {
 		os.Remove(tmpPath)
 		return err
 	}
+	// 完整性交叉校验：帧内实际行数必须与调用方（Writer）记录的行数一致。
+	// 不一致意味着 spool 被截断或写入侧与封块侧对不上，此时宁可保留 spool 报错。
+	if len(offsets) != task.Rows {
+		os.Remove(tmpPath)
+		return fmt.Errorf("tracearchive: 行数不符 帧内=%d 调用方=%d（拒绝封块，保留 spool）", len(offsets), task.Rows)
+	}
 
 	if err := s.appendTrailerAndFooter(tmpPath, offsets, frameSHA); err != nil {
 		os.Remove(tmpPath)
@@ -1748,6 +1852,7 @@ func (s *Sealer) appendTrailerAndFooter(tmpPath string, offsets []int64, frameSH
 	footerBytes := encodeFooter(footer{
 		TrailerOffset: trailerOffset,
 		TrailerLen:    int32(len(trailer)),
+		RowCount:      int32(len(offsets)),
 		FrameSHA:      frameSHA,
 	})
 	if _, err := f.Write(footerBytes); err != nil {
@@ -2127,15 +2232,21 @@ func (r *Reader) readFromPart(ctx context.Context, ref Ref, partPath string) ([]
 		return nil, fmt.Errorf("%w: trailer 未紧邻 footer（off=%d len=%d size=%d）",
 			ErrFooterCorrupt, ft.TrailerOffset, ft.TrailerLen, size)
 	}
+	// 行号越界必须在此明确拒绝，不能指望后续解码偶然失败
+	if ref.Row < 0 || ref.Row >= int(ft.RowCount) {
+		return nil, fmt.Errorf("%w: %s（块内共 %d 行）", ErrNotArchived, ref, ft.RowCount)
+	}
 
 	tb := make([]byte, ft.TrailerLen)
 	if _, err := f.ReadAt(tb, ft.TrailerOffset); err != nil {
 		return nil, fmt.Errorf("tracearchive: 读 trailer 失败: %w", err)
 	}
-	offsets, err := decodeTrailer(tb, ref.Row+1)
+	// 传入 footer 记录的期望条目数：这样被截断的 trailer 会被识别为损坏，
+	// 而不是静默解码出更少的条目（那会让越界读取伪装成正常读取）。
+	offsets, err := decodeTrailer(tb, int(ft.RowCount))
 	if err != nil {
-		// 行号越界会在这里表现为条目数不符（帧内实际行数少于 row+1）
-		return nil, fmt.Errorf("%w: %s", ErrNotArchived, ref)
+		// footer 与 trailer 不一致 ⇒ 产物损坏，绝不能报成「数据不存在」
+		return nil, err
 	}
 	targetOff := offsets[ref.Row]
 
@@ -2280,7 +2391,11 @@ func TestEndToEndRoundTripByteExact(t *testing.T) {
 			t.Fatalf("第 %d 行追加失败: %v", i, err)
 		}
 		want[ref] = line
-		for _, task := range w.PendingSeals() {
+		tasks, err := w.PendingSeals()
+		if err != nil {
+			t.Fatalf("第 %d 行后 PendingSeals 失败: %v", i, err)
+		}
+		for _, task := range tasks {
 			s, _ := NewSealer(SealerOptions{Root: root})
 			if err := s.Seal(context.Background(), task); err != nil {
 				t.Fatalf("封块失败: %v", err)
@@ -2288,7 +2403,11 @@ func TestEndToEndRoundTripByteExact(t *testing.T) {
 			w.MarkSealed(task.DT, task.Part)
 		}
 	}
-	for _, task := range w.PendingSeals() {
+	tasks, err := w.PendingSeals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range tasks {
 		s, _ := NewSealer(SealerOptions{Root: root})
 		if err := s.Seal(context.Background(), task); err != nil {
 			t.Fatalf("收尾封块失败: %v", err)

@@ -18,13 +18,13 @@ import "time"
 //
 // 三条实测结论（与规格 §15 U7 的预期不符）：
 //
-//	1. U7 不成立。Go 库产物是 C 版 CLI 的 1.90 倍，而验收线是 ≤1.30 倍。
-//	2. WithWindowSize 在 Go 库上只花内存、几乎不给收益。级别 9 下窗口
-//	   128→512 MiB 产物一个字节都没变（557.6→557.6 MB）；级别 19 只降 9.2%。
-//	   同条件 C 版 CLI 降 49.0%。CLI 的收益来自 --long 的长距离匹配器，
-//	   klauspost/compress 没有等价实现——这是能力缺口，不是参数没调好。
-//	3. 内存：Go 库 512 MiB 窗口实测峰值 RSS 1066 MB（≈窗口 × 2.08）；
-//	   C 版 CLI 同窗口为 570 MB（≈窗口 × 1.08），规格 §5.3.3 引用的正是后者。
+//  1. U7 不成立。Go 库产物是 C 版 CLI 的 1.90 倍，而验收线是 ≤1.30 倍。
+//  2. WithWindowSize 在 Go 库上只花内存、几乎不给收益。级别 9 下窗口
+//     128→512 MiB 产物一个字节都没变（557.6→557.6 MB）；级别 19 只降 9.2%。
+//     同条件 C 版 CLI 降 49.0%。CLI 的收益来自 --long 的长距离匹配器，
+//     klauspost/compress 没有等价实现——这是能力缺口，不是参数没调好。
+//  3. 内存：Go 库 512 MiB 窗口实测峰值 RSS 1066 MB（≈窗口 × 2.08）；
+//     C 版 CLI 同窗口为 570 MB（≈窗口 × 1.08），规格 §5.3.3 引用的正是后者。
 //
 // 因此「用哪个编码器」在标定后提交裁决，结论为**方案 C**：
 //
@@ -38,6 +38,7 @@ import "time"
 //   - defaultZstdLevel 直接作为 CLI 的 -N 参数
 //   - defaultZstdWindowBytes 需换算成 CLI 的 --long=<log2(窗口)>=29
 //     （换算在 Sealer 内完成，见计划 Task 6）
+//
 // 解码侧不受影响：仍用 Go 库 klauspost/compress/zstd，故依赖保留。
 const (
 	// defaultZstdLevel zstd 压缩级别。

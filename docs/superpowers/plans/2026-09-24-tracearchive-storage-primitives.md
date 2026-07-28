@@ -989,7 +989,7 @@ func TestPartNameZeroPadsSixDigits(t *testing.T) {
 	for part, want := range map[int]string{
 		0:     "part-000000.jsonl.zst",
 		1:     "part-000001.jsonl.zst",
-		99999: "part-009999.jsonl.zst",
+		99999: "part-099999.jsonl.zst",
 	} {
 		got := filepath.Base(p.PartFile(ta.Ref{DT: "2026-09-24", Inst: "blue", Part: part}))
 		if got != want {

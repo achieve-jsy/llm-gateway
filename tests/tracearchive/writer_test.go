@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 	"time"
 
@@ -537,47 +536,58 @@ func TestWriterMarkSealedStartsNextPart(t *testing.T) {
 	}
 }
 
-// TestWriterListPartsFiltersIllegalNames 覆盖 ListParts 的两条分支：
-// 产物目录不存在时返回空而不是错误；目录里的非法名（半成品 .tmp、索引文件、
-// 位数不符）一律不得进入结果 —— 调用方靠它判断「哪些块已经存在」。
-func TestWriterListPartsFiltersIllegalNames(t *testing.T) {
+// TestWriterAppendRejectsIllegalDT 锁定 dt 的「路径分量」校验。
+//
+// dt 与 inst 是同一个洞的两半：两者都直接拼进目录名，而 filepath.Join 会做
+// 路径清理，dt="../x" 会被清成 <root>/x（越过 dt= 子树）。因此 dt 必须是
+// 严格日期 YYYY-MM-DD，time.Parse 一次挡住路径穿越、空串、未补零、非法日期。
+//
+// 判据：删掉 Append 里的 validateDT 调用，本用例转红（第一类断言即 err == nil）。
+func TestWriterAppendRejectsIllegalDT(t *testing.T) {
 	root := t.TempDir()
-	p := ta.NewPaths(root)
-	w, err := ta.NewWriter(ta.WriterOptions{Root: root, Inst: "blue"})
+	w, err := ta.NewWriter(ta.WriterOptions{Root: root, Inst: "blue", BlockBytes: 1 << 30})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer w.Close()
 
-	parts, err := w.ListParts("2026-09-24")
-	if err != nil {
-		t.Fatalf("产物目录不存在时不应报错: %v", err)
+	bad := []string{
+		"",                     // 空串
+		"../x",                 // 路径穿越：Join 会清成 <root>/x
+		"2026-9-24",            // 未补零：同一天会出现两个目录名
+		"2026-13-01",           // 非法月份
+		"2026-02-30",           // 非法日期
+		"2026-09-24T00:00:00Z", // 带时间部分（多出文本）
+		"2026-09-24/../..",     // 以合法日期开头的穿越
+		"20260924",             // 无分隔符
 	}
-	if len(parts) != 0 {
-		t.Fatalf("产物目录不存在时应返回空，实际 %v", parts)
-	}
-
-	dir := p.PartDir("2026-09-24", "blue")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{
-		"part-000003.jsonl.zst",
-		"part-000001.jsonl.zst",
-		"part-000002.jsonl.zst.tmp", // rename 前的半成品
-		"index.jsonl",               // 非 part- 前缀
-		"part-00004.jsonl.zst",      // 位数不符
-	} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
-			t.Fatal(err)
+	for _, dt := range bad {
+		if _, err := w.Append(dt, []byte("x\n")); err == nil {
+			t.Fatalf("Append 的 dt=%q 应被拒绝", dt)
+		}
+		if err := w.AppendFailed(dt); err == nil {
+			t.Fatalf("AppendFailed 的 dt=%q 应被拒绝", dt)
 		}
 	}
-	parts, err = w.ListParts("2026-09-24")
+	// 校验必须先于任何文件系统副作用：全部非法输入被拒后，归档根目录必须是空的。
+	ents, err := os.ReadDir(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []int{1, 3}; !reflect.DeepEqual(parts, want) {
-		t.Fatalf("ListParts 应升序返回 %v（忽略半成品与非法名），实际 %v", want, parts)
+	if len(ents) != 0 {
+		t.Fatalf("非法 dt 不得产出任何文件/目录，实际在 %s 下看到 %v", root, ents)
+	}
+
+	// 反向断言：合法日期必须仍被接受（否则「一律拒绝」也会让上面的断言全绿）
+	ref, err := w.Append("2026-09-24", []byte("x\n"))
+	if err != nil {
+		t.Fatalf("合法 dt 应被接受: %v", err)
+	}
+	if ref.DT != "2026-09-24" || ref.Part != 0 || ref.Row != 0 {
+		t.Fatalf("合法 dt 的定位键不符: %s", ref)
+	}
+	if err := w.AppendFailed("2026-09-25"); err != nil {
+		t.Fatalf("AppendFailed 的合法 dt 应被接受: %v", err)
 	}
 }
 

@@ -5,21 +5,48 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"sync"
 	"time"
 )
 
-// 实例标识白名单。
+// 路径分量校验（dt 与 inst 必须成对看待，一处漏掉就是同一个洞的另一半）。
 //
-// inst 直接拼进目录名（<root>/dt=X/inst=<inst>），而 filepath.Join 会做路径清理：
-// Inst="../green" 会被清成 <root>/dt=X/green（越过 inst= 子树，两个实例的正文
-// 混进同一目录），Inst="blue/" 会被清成 blue 而与标识不符。因此取值必须枚举，
-// 不能只查非空。
+// 两个分量都直接拼进目录名（<root>/dt=<dt>/inst=<inst>），而 filepath.Join
+// 会做路径清理：
+//   - Inst="../green" 会被清成 <root>/dt=X/green，越过 inst= 子树，把两个实例
+//     的正文混进同一目录；
+//   - dt="../x" 会被清成 <root>/x，越过 dt= 子树。
+//
+// 因此两者都用严格取值而不是「非空」：
+//   - inst：枚举白名单（见 NewWriter）；
+//   - dt：严格日期格式（见 validateDT）。
 const (
 	instBlue  = "blue"
 	instGreen = "green"
+
+	// dateLayout 是 dt 的唯一合法形式：YYYY-MM-DD，且必须补零。
+	// 不补零（"2026-9-24"）会让同一天出现两个目录名，而点读只能按 Ref.DT
+	// 拼出其中一个路径，另一个目录里的正文就永远读不到。
+	dateLayout = "2006-01-02"
 )
+
+// validateDT 校验归属天分量（与 NewWriter 的 Inst 白名单同属「路径分量校验」，
+// 两者必须成对看待，见上方常量块的说明）。
+//
+// time.Parse 一次挡住四类输入：
+//   - 路径穿越与空串（"../x"、""）；
+//   - 长度不符（"20260924"、"26-09-24"）；
+//   - 未补零（"2026-9-24"）；
+//   - 非法日期（"2026-13-01"、"2026-02-30"）。
+//
+// 不设哨兵错误：与 Inst 同理——这是调用方无从分支处理的参数错误，
+// 加进本包的错误集合只会扩冻结接口。
+func validateDT(dt string) error {
+	if _, err := time.Parse(dateLayout, dt); err != nil {
+		return fmt.Errorf("tracearchive: dt 必须是 %s 形式的合法日期，实际 %q", dateLayout, dt)
+	}
+	return nil
+}
 
 // WriterOptions 是追加写入器的配置。
 type WriterOptions struct {
@@ -68,6 +95,7 @@ func NewWriter(opts WriterOptions) (*Writer, error) {
 	if opts.Root == "" {
 		return nil, fmt.Errorf("tracearchive: Root 不能为空")
 	}
+	// inst 是路径分量，与 dt 的校验成对（见文件头的「路径分量校验」与 validateDT）。
 	// 空值也被这条白名单涵盖（"" 不在枚举里），因此不再单列「非空」分支：
 	// 一个永远无法被测试区分的分支就是零覆盖的守卫。
 	if opts.Inst != instBlue && opts.Inst != instGreen {
@@ -84,10 +112,16 @@ func NewWriter(opts WriterOptions) (*Writer, error) {
 
 // Append 追加一行，返回该行的定位键。line 末尾的换行可有可无。
 //
+// dt 是路径分量（与 NewWriter 的 Inst 白名单成对），这里的校验是唯一的
+// dt 入口：AppendFailed 复用本方法，因此两个写入入口共用同一道校验。
+//
 // 写入失败时不推进行号：bufio 的错误是粘性的，一次写失败后该块再也写不进
 // 任何字节，调用方只能走 AppendFailed。因此不存在「行号已推进而字节没写」
 // 的窗口（承重约束 3）。
 func (w *Writer) Append(dt string, line []byte) (Ref, error) {
+	if err := validateDT(dt); err != nil {
+		return Ref{}, err
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -137,6 +171,8 @@ var failedRowMarker = []byte("null")
 //
 // 读取侧约定：遇到标记行应返回 ErrBodyMissing（正文从未落盘），
 // 不得把 "null" 当作正文返回。该约定由任务 7 的 Reader 落实。
+//
+// dt 的路径分量校验由 Append 承担（本方法复用它），因此非法 dt 在这里同样报错。
 func (w *Writer) AppendFailed(dt string) error {
 	// 刻意复用 Append，而不是自己再写一遍写入逻辑：
 	// 标记行与真实正文在 trim/换行/行号推进/字节计数上共用同一段代码，
@@ -294,25 +330,6 @@ func (w *Writer) nextSeqLocked(dt string) (int, error) {
 		}
 	}
 	return maxSeq + 1, nil
-}
-
-// ListParts 返回某天某实例已存在的产物块序号（升序）。
-func (w *Writer) ListParts(dt string) ([]int, error) {
-	ents, err := os.ReadDir(w.paths.PartDir(dt, w.opts.Inst))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	var out []int
-	for _, e := range ents {
-		if seq, ok := parsePartSeq(e.Name()); ok {
-			out = append(out, seq)
-		}
-	}
-	sort.Ints(out)
-	return out, nil
 }
 
 func trimNewline(b []byte) []byte {

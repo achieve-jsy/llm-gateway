@@ -3,7 +3,6 @@ package tracearchive
 import (
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -52,6 +51,11 @@ func (p Paths) SpoolFile(ref Ref) string {
 	return filepath.Join(p.SpoolDir(ref.DT, ref.Inst), partName(ref.Part, ".jsonl"))
 }
 
+// partName 生成块文件名。
+//
+// 前置约束：seq ∈ [0, 999999]。块序号按天独立编号，单日块数远达不到 10^6，
+// 因此 %06d 恒为 6 位——这正是 parsePartSeq「恰好 6 位」约定所依赖的前提。
+// 若某天真的越过 999999，产出的是 7 位文件名，会被 parsePartSeq 拒绝而非静默截断。
 func partName(seq int, ext string) string {
 	return fmt.Sprintf("part-%06d%s", seq, ext)
 }
@@ -79,9 +83,17 @@ func parsePartSeq(name string) (int, bool) {
 	if len(digits) != 6 {
 		return 0, false
 	}
-	n, err := strconv.Atoi(digits)
-	if err != nil || n < 0 {
-		return 0, false
+	// 逐位解析并校验，而不用 strconv.Atoi：Atoi 接受前导 '+'（"+00042" → 42），
+	// 于是 part-+00042.jsonl 会与真实的 part-000042 撞上同一序号，违背
+	// 「写指针以目录内容为权威来源」所要求的严格性（规格 §7.3）。
+	// 逐位校验同时覆盖 Atoi 的错误分支与负号分支，不留不可达的守卫。
+	n := 0
+	for i := 0; i < len(digits); i++ {
+		c := digits[i]
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		n = n*10 + int(c-'0')
 	}
 	return n, true
 }

@@ -1,6 +1,7 @@
 package tracearchive_test
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -64,5 +65,37 @@ func TestRefString(t *testing.T) {
 	want := "2026-09-24/blue/part-000042#row=7"
 	if got := ref.String(); got != want {
 		t.Fatalf("Ref.String:\n want %s\n got  %s", want, got)
+	}
+}
+
+// TestSentinelErrorsAreDistinct 锁定 6 个哨兵两两互异。
+//
+// 判据不是「哨兵非空」，而是「分类不会静默合并」：若 ErrBodyMissing 与
+// ErrNotArchived 被复制粘贴成同一个值，读取侧就再也分不清
+// 「正文从未落盘（404）」与「元数据与存储不一致（500）」，
+// 而 Task 7 的 errors.Is 会把两者一起命中、测试依旧全绿。
+// 该断言同时覆盖「哨兵为 nil」——errors.Is(nil, nil) 为 true，会被这里判失败。
+func TestSentinelErrorsAreDistinct(t *testing.T) {
+	sentinels := []struct {
+		name string
+		err  error
+	}{
+		{"ErrPartNotFound", ta.ErrPartNotFound},
+		{"ErrBodyMissing", ta.ErrBodyMissing},
+		{"ErrNotArchived", ta.ErrNotArchived},
+		{"ErrPartExists", ta.ErrPartExists},
+		{"ErrRowCountMismatch", ta.ErrRowCountMismatch},
+		{"ErrSealFailed", ta.ErrSealFailed},
+	}
+	for i := range sentinels {
+		for j := range sentinels {
+			if i == j {
+				continue
+			}
+			if errors.Is(sentinels[i].err, sentinels[j].err) {
+				t.Errorf("%s 与 %s 被 errors.Is 判为同一错误，分类会静默合并两类语义不同的失败",
+					sentinels[i].name, sentinels[j].name)
+			}
+		}
 	}
 }

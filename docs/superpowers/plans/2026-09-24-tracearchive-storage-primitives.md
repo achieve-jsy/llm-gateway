@@ -1215,7 +1215,7 @@ ErrSealFailed 三个哨兵，供方案 C 的 sealer 调用方用 errors.Is 分�
 
 **文件：**
 - 新建：`internal/tracearchive/writer.go`
-- 新建：`tests/tracearchive/writer_test.go`——**B 层（`package tracearchive_test`，仅用公开 API）**：`NewWriter`/`WriterOptions`/`Append`/`AppendFailed`/`PendingSeals`/`Close`/`SealTask` 全部导出，本任务**没有**任何必须触达未导出符号的断言 ⇒ 整份测试进 B 层。
+- 新建：`tests/tracearchive/writer_test.go`——**B 层（`package tracearchive_test`，仅用公开 API）**：`NewWriter`/`WriterOptions`/`Append`/`AppendFailed`/`PendingSeals`/`MarkSealed`/`Close`/`SealTask` 全部导出，本任务**没有**任何必须触达未导出符号的断言 ⇒ 整份测试进 B 层。
 
 > **落地转换说明（本块与后续 B 层块通用）**：下面的代码按 `package tracearchive` 书写以便阅读；落盘到 `tests/tracearchive/writer_test.go` 时必须做三件事：
 > 1. 头部改为 `package tracearchive_test`，并加导入 `ta "github.com/example/llm-gateway/internal/tracearchive"`（范例见任务 4 的 `tests/tracearchive/ref_test.go`）。
@@ -1232,12 +1232,19 @@ ErrSealFailed 三个哨兵，供方案 C 的 sealer 调用方用 errors.Is 分�
   - `type Writer struct{...}`
   - `func NewWriter(opts WriterOptions) (*Writer, error)`
   - `func (w *Writer) Append(dt string, line []byte) (Ref, error)`——返回定位键；行内换行会被转义
-  - `func (w *Writer) AppendFailed(dt string) error`——记录「本行正文落盘失败」，只推进行号不写字节
+  - `func (w *Writer) AppendFailed(dt string) error`——记录「本行正文落盘失败」：**推进行号 + 写一个内容为 `null` 的标记行**，使「物理行序 == `row_seq`」恒成立。
+    **不能「只推进行号不写字节」——这是格式强制，不是取舍**：footer 的 `row_count` 是产物内行数，trailer 是「每行一个差分 varint」的偏移表（任务 2 的 `encodeTrailer`），而该差分 varint 编码**没有表达「本行没有偏移」的能力**（它假定行稠密）；读取侧两条路径又都是「按行序取第 row 行」。写侧稀疏 + 格式要求稠密 + 读侧按行序三者不可能同时成立 ⇒ 该行之后的行整体前移一位，**`row=N` 会被读成第 `N+1` 行的正文**（静默返回错误的正文）。
+    标记取 `null`（合法 JSON，4 字节 + 换行）：不用空行（产物是 `.jsonl`，每行应为合法 JSON，空行会让按行解析的工具炸掉）；不用 `{}`（与「合法的空正文」无法区分）；spool 每行都是正文对象（`request_headers`/`request_body`/`response_body` 那组键），故不可能与真实正文混淆。读取侧遇标记行必须返回 `ErrBodyMissing`（任务 7）。
   - `func (w *Writer) PendingSeals() ([]SealTask, error)`——返回达到封块条件的块。
     **返回前必须 flush 写缓冲**：封块器直接读 spool 文件，若缓冲未落盘，它会读到不完整的块。
     flush 失败必须以 error 返回，不可静默。
-  - **方案 C 下这个方法的生产职责变了（重要）**：网关内**没有**封块协程，因此 `PendingSeals()` 在生产的用途是**周期性 flush 写缓冲**（由 gateway 的定时器按 `flush_interval` 调用，规格 §7.1），让 spool 的 mtime 反映「仍在追加」；**谁该封块由独立 sealer 通过目录扫描决定**（任务 6 的 `ListPendingSeals`）。若不这么做，sealer 会读到一个被截断的 spool，且 mtime 恰好骗过「已停止追加」判断——静默丢数据。
+    **⚠️ flush 必须无条件执行**（放在 `cur == nil` 判断之后、所有阈值早退之前），**不是「只在产出封块任务时 flush」**。理由是生产理由而非测试理由：这是方案 C 下网关唯一的周期性 flush 入口，若未达阈值就跳过 flush，一个刚建立的块在其生命周期的前 `SealInterval`（15 分钟）内磁盘上始终是**空文件**、mtime 停在创建时刻 ⇒ sealer 的 minAge 判断会把这种「安静的活跃块」当成「已停止追加」，封出空产物并删掉 spool ⇒ 缓冲里的正文全部丢失且无任何报错（与 D3「忘了 flush」是同一类静默丢数据，只是触发条件变成「没到阈值」）。
+  - `func (w *Writer) MarkSealed(dt string, part int)`——封块成功后清空当前块状态（任务 8 在 `Seal` 之后调用）。
+    **必须连同旧文件句柄一起关闭**（flush + `close`），只把 `cur` 置 nil 会让该块的 `*os.File` 泄漏：每封一块泄漏一个 fd，长跑进程最终 EMFILE。调用点冻结为无返回值，因此 close 错误只能丢弃——此时 spool 已被 sealer 完整读取，未落盘的缓冲不再可能有读者，这与「`PendingSeals` 必须上抛 flush 错误」并不矛盾（那里是为了不把不完整的块交给 sealer）。
   - `func (w *Writer) Close() error`
+  - **参数校验**（均为无哨兵的参数校验：启动期/调用期的致命错误，调用方无从分支处理，故沿用本包约定只断言「必须报错」，不新增 `ErrInvalidInst` 之类的哨兵）。
+    - **`Inst` 白名单（现状，已落地在提交 `8cd873e7`）**：只接受 `"blue"`/`"green"`。`inst` 直接拼进目录名，而 `filepath.Join` 会做路径清理——`Inst="../green"` 会被清成 `<root>/dt=X/green`（越过 `inst=` 子树，把两个实例的正文混进同一目录），`Inst="blue/"` 会被清成 `blue` 而与标识不符；**用一条白名单分支同时涵盖空值与非法值**（`""` 不在枚举里），不再单列「Inst 非空」分支——删掉那个独立分支没有任何用例转红，是零覆盖守卫。
+    - **⚠️ `dt` 格式校验（要求，待落地）**：`Append`/`AppendFailed` 收到的 `dt` 必须用 `time.Parse("2006-01-02", dt)` 校验（必须成功）。理由与 `Inst` 白名单同类——`dt` 同样直接拼进目录名，`dt="../x"` 借 `filepath.Join` 的路径清理把文件写进 `<root>/x`，越过 `dt=` 子树。**提交 `8cd873e7` 尚未包含这条修正**（Task 5 实现者已在报告 §7.C 登记为建议，控制者已下达该修正）；这是**要求**，不是现状。
 
   ```go
   type SealTask struct {
@@ -1286,7 +1293,14 @@ func TestWriterAppendAssignsDenseRowSeq(t *testing.T) {
 	}
 }
 
-func TestWriterAppendFailedAdvancesRowSeqWithoutBytes(t *testing.T) {
+// TestWriterAppendFailedWritesMarkerLineAndAdvancesRow 锁定「正文落盘失败」的语义：
+// 行号照常推进（与 PG 的 row_seq 对齐），并且必须落一个标记行 ——
+// 产物格式（footer 的 row_count + trailer 的逐行差分 varint）要求行稠密，
+// 只推进行号不写字节会让该行之后的所有行「row=N 读成第 N+1 行」，静默返回错误正文。
+//
+// 原用例名为 ...RowSeqWithoutBytes；控制者裁决后「不写字节」变成「写 null 标记行」，
+// 因此改名（断言意图不变：行号推进 + 该行在文件里真实可见）。
+func TestWriterAppendFailedWritesMarkerLineAndAdvancesRow(t *testing.T) {
 	root := t.TempDir()
 	w, err := NewWriter(WriterOptions{Root: root, Inst: "blue", BlockBytes: 1 << 30})
 	if err != nil {
@@ -1309,13 +1323,24 @@ func TestWriterAppendFailedAdvancesRowSeqWithoutBytes(t *testing.T) {
 		t.Fatalf("落盘失败的行仍应占用行号: want row 2, got %d", ref.Row)
 	}
 
-	// 文件里应只有两行
-	b, err := os.ReadFile(w.paths.SpoolFile(Ref{DT: "2026-09-24", Inst: "blue", Part: 0}))
+	// 【读文件前必须先让写缓冲落盘】Writer 用 bufio 缓冲（这正是 D3 缺陷的成因），
+	// 而 os.ReadFile 只看磁盘。PendingSeals 是本包唯一的「周期性 flush 入口」
+	// （方案 C 下 gateway 的定时器就按 flush_interval 调它，规格 §7.1），
+	// 故用它把缓冲刷下去；此刻两个阈值都远未达到，它返回 0 个任务，只承担 flush 职责。
+	if _, err := w.PendingSeals(); err != nil {
+		t.Fatalf("PendingSeals（flush 入口）失败: %v", err)
+	}
+
+	// 文件里应有 3 行：line0 / null（标记行） / line2 —— 行序与 row_seq 一一对应
+	b, err := os.ReadFile(NewPaths(root).SpoolFile(Ref{DT: "2026-09-24", Inst: "blue", Part: 0}))
 	if err != nil {
 		t.Fatalf("读 spool 失败: %v", err)
 	}
-	if got := countLines(b); got != 2 {
-		t.Fatalf("spool 应有 2 行，实际 %d", got)
+	if got := countLines(b); got != 3 {
+		t.Fatalf("spool 应有 3 行（含失败行的 null 标记），实际 %d（内容 %q）", got, b)
+	}
+	if string(b) != "line0\nnull\nline2\n" {
+		t.Fatalf("spool 内容应为 %q，实际 %q", "line0\nnull\nline2\n", b)
 	}
 }
 
@@ -1452,6 +1477,7 @@ func TestWriterNextSeqResumesFromDirectory(t *testing.T) {
 
 // TestNewWriterRejectsEmptyRootAndInst 覆盖 NewWriter 的参数校验分支。
 // 这两个 error 不是分类错误（没有定义哨兵），因此只断言「必须报错且不产生文件」。
+// 空 Inst 由下面的白名单一条分支涵盖（"" 不在枚举里），不再单列「非空」分支。
 func TestNewWriterRejectsEmptyRootAndInst(t *testing.T) {
 	if w, err := NewWriter(WriterOptions{Root: "", Inst: "blue"}); err == nil {
 		w.Close()
@@ -1460,6 +1486,58 @@ func TestNewWriterRejectsEmptyRootAndInst(t *testing.T) {
 	if w, err := NewWriter(WriterOptions{Root: t.TempDir(), Inst: ""}); err == nil {
 		w.Close()
 		t.Fatal("Inst 为空应报错")
+	}
+}
+
+// TestNewWriterRejectsIllegalInst 锁定 Inst 白名单（"blue" / "green"）。
+//
+// 为什么必须有这道校验：inst 直接拼进目录名，而 filepath.Join 会做路径清理 ——
+// Inst="../green" 会写进 <root>/dt=<dt>/green（越过 inst= 子树，把两个实例的
+// 正文混进同一目录）；Inst="blue/" 会被清成 blue，让「实例」标识与实际目录
+// 不再一一对应。只查非空挡不住这两种，必须白名单。
+func TestNewWriterRejectsIllegalInst(t *testing.T) {
+	root := t.TempDir()
+	for _, inst := range []string{"red", "../green", "blue/", "blue/../green", "BLUE", "blue "} {
+		w, err := NewWriter(WriterOptions{Root: root, Inst: inst})
+		if err == nil {
+			w.Close()
+			t.Fatalf("Inst=%q 应被拒绝（越过 inst= 子树或与标识不符）", inst)
+		}
+	}
+	// 反向断言：白名单内的实例必须仍然可用。否则「一律拒绝」也会让上面的
+	// 用例全绿，而那样的守卫是坏的。
+	for _, inst := range []string{"blue", "green"} {
+		w, err := NewWriter(WriterOptions{Root: root, Inst: inst})
+		if err != nil {
+			t.Fatalf("Inst=%q 应被接受: %v", inst, err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("Inst=%q Close 失败: %v", inst, err)
+		}
+	}
+}
+
+// ⚠️【要求，待落地】TestWriterRejectsIllegalDT 对应控制者下达的 dt 格式校验修正。
+// 提交 8cd873e7 **尚未包含**该修正（Task 5 实现者已在报告 §7.C 登记为建议），
+// 因此在本条要求落地前，本用例会失败 —— 它正是用来驱动那次修正的。
+// 理由与 Inst 白名单同类：dt 也直接拼进目录名，dt="../x" 会经 filepath.Join 的
+// 路径清理把文件写进 <root>/x，越过 dt= 子树。
+func TestWriterRejectsIllegalDT(t *testing.T) {
+	root := t.TempDir()
+	w, err := NewWriter(WriterOptions{Root: root, Inst: "blue", BlockBytes: 1 << 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	for _, dt := range []string{"", "../x", "2026-9-24", "2026-09-24/../../x", "2026-09-24 "} {
+		if _, err := w.Append(dt, []byte("x\n")); err == nil {
+			t.Fatalf("dt=%q 应被拒绝（越过 dt= 子树或不是 YYYY-MM-DD）", dt)
+		}
+	}
+	// 反向断言：合法日期必须仍然可用，否则「一律拒绝」也会让上面的用例全绿。
+	if _, err := w.Append("2026-09-24", []byte("x\n")); err != nil {
+		t.Fatalf("合法 dt 应被接受: %v", err)
 	}
 }
 
@@ -1494,10 +1572,13 @@ func countLines(b []byte) int {
 
 - [ ] **步骤 2：运行测试并确认失败**
 
-运行：`go test ./internal/tracearchive/ ./tests/tracearchive/ -run 'TestWriterAppendAssignsDenseRowSeq|TestWriterAppendFailedAdvancesRowSeqWithoutBytes|TestWriterPendingSealsBySize|TestWriterPendingSealsFlushesBuffer|TestWriterPendingSealsByInterval|TestWriterNextSeqResumesFromDirectory|TestNewWriterRejectsEmptyRootAndInst|TestWriterPendingSealsNilBeforeAnyAppend' -v`
+运行：`go test ./internal/tracearchive/ ./tests/tracearchive/ -run 'TestWriterAppendAssignsDenseRowSeq|TestWriterAppendFailedWritesMarkerLineAndAdvancesRow|TestWriterPendingSealsBySize|TestWriterPendingSealsFlushesBuffer|TestWriterPendingSealsByInterval|TestWriterNextSeqResumesFromDirectory|TestNewWriterRejectsEmptyRootAndInst|TestNewWriterRejectsIllegalInst|TestWriterPendingSealsNilBeforeAnyAppend' -v`
+（`TestWriterRejectsIllegalDT` 属**待落地**的 `dt` 校验要求，见接口一节；该修正落地后必须把它追加进上面的 `-run` 组合。）
 预期：`./tests/tracearchive/` 编译失败，提示 `undefined: ta.NewWriter`、`undefined: ta.WriterOptions`、`undefined: ta.SealTask`；`./internal/tracearchive/` 无此任务的用例（任务 2~4 的 A 层用例因 `-run` 过滤而不执行）。
 
-> 注意 `TestNewWriterRejectsEmptyRootAndInst` / `TestWriterPendingSealsNilBeforeAnyAppend` **不以 `TestWriter` 开头**，写完的 `-run` 组合里必须显式带上它们。
+> 注意 `TestNewWriterRejectsEmptyRootAndInst` / `TestNewWriterRejectsIllegalInst` / `TestWriterPendingSealsNilBeforeAnyAppend` **不以 `TestWriter` 开头**，写完的 `-run` 组合里必须显式带上它们。
+
+> **用例清单相对简报原文的变化（与提交 `8cd873e7` 对齐）**：`TestWriterAppendFailedAdvancesRowSeqWithoutBytes` 已按控制者裁决**改名并改期望**为 `TestWriterAppendFailedWritesMarkerLineAndAdvancesRow`（spool 由 2 行变为 3 行：`line0`/`null`/`line2`，`ref.Row == 2` 不变，读文件前先用 `PendingSeals()` 落缓冲）；新增 `TestNewWriterRejectsIllegalInst`（Inst 白名单，现状）；`TestWriterRejectsIllegalDT`（`dt` 格式校验）为**要求、待落地**。交付的实际测试文件还补了若干简报未列的守卫用例（默认阈值、`SealTask` 全字段、末尾换行、跨天换块、spool 目录不可用、`Close` 幂等、`MarkSealed` 换块），与任务 4 交付时「用例超出简报」的既有做法一致，本节不再逐一列出。
 
 - [ ] **步骤 3：编写最小实现**
 
@@ -1511,9 +1592,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"sync"
 	"time"
+)
+
+// 实例标识白名单。
+//
+// inst 直接拼进目录名（<root>/dt=X/inst=<inst>），而 filepath.Join 会做路径清理：
+// Inst="../green" 会被清成 <root>/dt=X/green（越过 inst= 子树，两个实例的正文
+// 混进同一目录），Inst="blue/" 会被清成 blue 而与标识不符。因此取值必须枚举，
+// 不能只查非空。
+const (
+	instBlue  = "blue"
+	instGreen = "green"
 )
 
 // WriterOptions 是追加写入器的配置。
@@ -1563,8 +1654,10 @@ func NewWriter(opts WriterOptions) (*Writer, error) {
 	if opts.Root == "" {
 		return nil, fmt.Errorf("tracearchive: Root 不能为空")
 	}
-	if opts.Inst == "" {
-		return nil, fmt.Errorf("tracearchive: Inst 不能为空")
+	// 空值也被这条白名单涵盖（"" 不在枚举里），因此不再单列「非空」分支：
+	// 一个永远无法被测试区分的分支就是零覆盖的守卫。
+	if opts.Inst != instBlue && opts.Inst != instGreen {
+		return nil, fmt.Errorf("tracearchive: Inst 必须是 %q 或 %q，实际 %q", instBlue, instGreen, opts.Inst)
 	}
 	if opts.BlockBytes <= 0 {
 		opts.BlockBytes = defaultBlockBytes
@@ -1576,9 +1669,20 @@ func NewWriter(opts WriterOptions) (*Writer, error) {
 }
 
 // Append 追加一行，返回该行的定位键。line 末尾的换行可有可无。
+//
+// 写入失败时不推进行号：bufio 的错误是粘性的，一次写失败后该块再也写不进
+// 任何字节，调用方只能走 AppendFailed。因此不存在「行号已推进而字节没写」
+// 的窗口（承重约束 3）。
 func (w *Writer) Append(dt string, line []byte) (Ref, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	// ⚠️【要求，待落地】dt 格式校验：提交 8cd873e7 尚未包含这一段，
+	// 但控制者已下达该修正（理由见本任务「接口/参数校验」：dt 同样直接拼进
+	// 目录名，dt="../x" 会经 filepath.Join 的路径清理越过 dt= 子树）。
+	if _, err := time.Parse("2006-01-02", dt); err != nil {
+		return Ref{}, fmt.Errorf("tracearchive: dt 必须是 YYYY-MM-DD，实际 %q: %w", dt, err)
+	}
 
 	cur, err := w.ensureBlockLocked(dt)
 	if err != nil {
@@ -1599,20 +1703,39 @@ func (w *Writer) Append(dt string, line []byte) (Ref, error) {
 	return ref, nil
 }
 
-// AppendFailed 登记「本行正文落盘失败」。
+// failedRowMarker 是「本行正文从未落盘」的占位行内容（详见 AppendFailed）。
+//
+// 取 null 而不是空行或 {}：
+//   - 空行会让任何按行解析 .jsonl 的工具炸掉（产物里每一行都应是合法 JSON）；
+//   - {} 与「合法的空正文」无法区分；
+//   - null 是合法 JSON，而 spool 的每一行都是正文对象
+//     （request_headers/request_body/response_body 那组键），
+//     因此它不可能与真实正文混淆。
+var failedRowMarker = []byte("null")
+
+// AppendFailed 登记「本行正文落盘失败」：推进行号并落一个标记行。
 //
 // 行号必须照常推进：PG 元数据行的 row_seq 由同一计数器分配，若这里不推进，
 // 后续所有行的 row_seq 都会与产物文件错位，点读将静默取到错误的行。
-// 该行在产物中就是一个缺失的条目，读取时表现为越界（返回 ErrNotArchived）。
+//
+// 【为什么必须写标记行，而不是只推进行号不写字节】产物格式强制行稠密：
+// footer 的 row_count 是产物内行数，trailer 是「每行一个差分 varint」的
+// 偏移表（index.go 的 encodeTrailer）—— varint 差分编码根本没有表达
+// 「本行没有偏移」的能力，它假定行是稠密的。若这里不写字节，该行之后的
+// 物理行序会比 row_seq 少 1，而读取侧无论走 spool 兜底（Reader.readFromSpool
+// 取「第 row 行」）还是走产物（trailer 的第 row 条）都是按行取，
+// 于是 row=N 会被读成第 N+1 行的正文 —— 静默返回错误的正文（也解释了任务 6
+// 的行数交叉校验为何会以 ErrRowCountMismatch 拒绝封块：那是同一个矛盾的另一表征）。
+//
+// 读取侧约定：遇到标记行应返回 ErrBodyMissing（正文从未落盘），
+// 不得把 "null" 当作正文返回。该约定由任务 7 的 Reader 落实。
 func (w *Writer) AppendFailed(dt string) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	cur, err := w.ensureBlockLocked(dt)
-	if err != nil {
-		return err
+	// 刻意复用 Append，而不是自己再写一遍写入逻辑：
+	// 标记行与真实正文在 trim/换行/行号推进/字节计数上共用同一段代码，
+	// 「物理行序 == row_seq」由构造保证，而不是靠两处实现同步维护。
+	if _, err := w.Append(dt, failedRowMarker); err != nil {
+		return fmt.Errorf("tracearchive: 写正文缺失标记行失败: %w", err)
 	}
-	cur.rows++
 	return nil
 }
 
@@ -1622,23 +1745,37 @@ func (w *Writer) AppendFailed(dt string) error {
 // 时间条件不可省——低峰天若不按时间封块，块永远达不到大小阈值，
 // 正文写了却读不到。
 //
-// 返回非空任务前必须 flush 写缓冲：Sealer 直接读 spool 文件，
-// 若缓冲未落盘，它会把一个不完整的块封成产物（静默丢数据）。
+// flush 必须【无条件】执行，而不是只在「有任务要产出」时做：
+// 这是方案 C 下网关唯一的周期性 flush 入口（定时器按 flush_interval 调它，
+// 规格 §7.1）。若未达阈值就跳过 flush，一个刚建立的块在其生命周期的前
+// SealInterval 内磁盘上始终是空文件，而 mtime 停留在它被创建的时刻 ——
+// sealer 的 minAge 判断会把这种「安静的活跃块」当成「已停止追加」，
+// 于是封出一个空产物并删掉 spool，缓冲里的正文全部丢失。
+// 这与 D3（忘记 flush）是同一类静默丢数据，只是触发条件是「没到阈值」。
+//
+// 同理，flush 失败必须上抛而不是静默：sealer 会直接读 spool 文件，
+// 缓冲没落盘它就把不完整的块当完整的封掉。
 func (w *Writer) PendingSeals() ([]SealTask, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	cur := w.cur
-	if cur == nil || cur.rows == 0 {
+	if cur == nil {
+		return nil, nil
+	}
+	if err := cur.w.Flush(); err != nil {
+		return nil, fmt.Errorf("tracearchive: flush 写缓冲失败: %w", err)
+	}
+	// 空块（建了文件但一行都没写进去）没有可封的内容。这条守卫只能通过
+	// 「Append 写失败」触及，而写失败经公开 API 无法注入，故无对应用例；
+	// 保留它是为了不让封块器拿到一个 0 行的 spool。
+	if cur.rows == 0 {
 		return nil, nil
 	}
 	bySize := cur.bytes >= w.opts.BlockBytes
 	byTime := time.Since(cur.startedAt) >= w.opts.SealInterval
 	if !bySize && !byTime {
 		return nil, nil
-	}
-	if err := cur.w.Flush(); err != nil {
-		return nil, fmt.Errorf("tracearchive: 封块前 flush 失败: %w", err)
 	}
 	return []SealTask{{
 		DT:                cur.dt,
@@ -1650,12 +1787,19 @@ func (w *Writer) PendingSeals() ([]SealTask, error) {
 	}}, nil
 }
 
-// MarkSealed 在封块成功后清空当前块状态。由 Sealer 在完成 rename 后调用。
+// MarkSealed 在封块成功后清空当前块状态。由封块者在 rename 完成后调用
+// （任务 8 的端到端流程即如此）。
+//
+// 这里必须连同旧句柄一起关掉：只把 cur 置 nil 会让该块的 *os.File 泄漏
+// （每封一块泄漏一个 fd，长跑进程最终 EMFILE）。调用点已冻结为无返回值，
+// 因此 close 错误只能丢弃；但此时 spool 已被封块器完整读取，未落盘的缓冲
+// 不再可能有读者 —— 这与 PendingSeals 必须上抛 flush 错误并不矛盾：
+// 那里是为了不把不完整的块交给 sealer，这里已经晚于 sealer 读文件。
 func (w *Writer) MarkSealed(dt string, part int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.cur != nil && w.cur.dt == dt && w.cur.part == part {
-		w.cur = nil
+		_ = w.closeCurLocked()
 	}
 }
 
@@ -1744,24 +1888,11 @@ func (w *Writer) nextSeqLocked(dt string) (int, error) {
 	return maxSeq + 1, nil
 }
 
-// ListParts 返回某天某实例已存在的产物块序号（升序）。
-func (w *Writer) ListParts(dt string) ([]int, error) {
-	ents, err := os.ReadDir(w.paths.PartDir(dt, w.opts.Inst))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	var out []int
-	for _, e := range ents {
-		if seq, ok := parsePartSeq(e.Name()); ok {
-			out = append(out, seq)
-		}
-	}
-	sort.Ints(out)
-	return out, nil
-}
+// 【曾有 ListParts(dt string) ([]int, error)：返回某天某实例已存在的产物块序号（升序）】
+// 控制者已裁定按 YAGNI 移除：本包内没有消费者——任务 6 用自己的 ListPendingSeals
+// 扫目录，任务 6/7/8 的简报均未引用它。故这里不再提供它，也不再需要 "sort" 导入。
+// ⚠️ 待落地：提交 8cd873e7 仍保留该方法及其用例 TestWriterListPartsFiltersIllegalNames
+// （实现者报告 §7.B 说明它来自简报代码块、被主动保留并补了用例），删除动作尚未提交。
 
 func trimNewline(b []byte) []byte {
 	for len(b) > 0 && (b[len(b)-1] == '\n' || b[len(b)-1] == '\r') {
@@ -1773,8 +1904,10 @@ func trimNewline(b []byte) []byte {
 
 - [ ] **步骤 4：运行测试并确认通过**
 
-运行：`go test ./internal/tracearchive/ ./tests/tracearchive/ -run 'TestWriterAppendAssignsDenseRowSeq|TestWriterAppendFailedAdvancesRowSeqWithoutBytes|TestWriterPendingSealsBySize|TestWriterPendingSealsFlushesBuffer|TestWriterPendingSealsByInterval|TestWriterNextSeqResumesFromDirectory|TestNewWriterRejectsEmptyRootAndInst|TestWriterPendingSealsNilBeforeAnyAppend' -v`
-预期：PASS（含 `AppendFailed` 行号推进、双触发封块、目录恢复块序号、参数校验、无当前块五组）。
+运行：`go test ./internal/tracearchive/ ./tests/tracearchive/ -run 'TestWriterAppendAssignsDenseRowSeq|TestWriterAppendFailedWritesMarkerLineAndAdvancesRow|TestWriterPendingSealsBySize|TestWriterPendingSealsFlushesBuffer|TestWriterPendingSealsByInterval|TestWriterNextSeqResumesFromDirectory|TestNewWriterRejectsEmptyRootAndInst|TestNewWriterRejectsIllegalInst|TestWriterPendingSealsNilBeforeAnyAppend' -v`
+（`TestWriterRejectsIllegalDT` 属**待落地**的 `dt` 校验要求，见接口一节；该修正落地后必须把它追加进上面的 `-run` 组合。）
+预期：PASS（含 `AppendFailed` 行号推进 + `null` 标记行、双触发封块、目录恢复块序号、`Inst` 白名单、无当前块五组）。
+> ⚠️ 状态说明（以代码为准）：除 `TestWriterRejectsIllegalDT` 外，上面全部用例已在提交 `8cd873e7` 落地且 PASS；`dt` 格式校验及其用例**尚未落地**（控制者已下达，实现者报告 §7.C 登记），故该用例现在是红的——它要在那次修正里一起变绿。
 
 - [ ] **步骤 5：提交**
 
@@ -1785,8 +1918,12 @@ git commit -m "feat(tracearchive): spool 顺序追加写入器与写指针
 - 请求路径只做顺序追加，压缩交给网关外的独立 sealer（方案 C）
 - 双触发封块条件：大小阈值或时间阈值（后者保证低峰天正文可读）
 - 写指针以目录内容为权威，进程重启后从 max(产物, spool)+1 恢复
-- AppendFailed 保证落盘失败的行仍占用行号，避免与 PG row_seq 错位
-- PendingSeals 兼作周期 flush 入口：不 flush 会让 sealer 读到截断的 spool
+- AppendFailed 推进行号并写 null 标记行：产物格式要求行稠密，
+  只推进行号会让 row=N 读成第 N+1 行（静默返回错误正文）
+- PendingSeals 无条件 flush（网关唯一的周期 flush 入口）：
+  否则活跃块在磁盘上长时间为空、mtime 不动，sealer 会封出空产物丢数据
+- MarkSealed 关闭旧文件句柄：只置 nil 会每封一块泄漏一个 fd（长跑 EMFILE）
+- Inst 白名单（blue/green）：inst 直接拼进目录名，filepath.Join 会清理路径
 - 测试放 tests/tracearchive/（全部经公开 API，不触达未导出符号）"
 ```
 
@@ -1878,6 +2015,10 @@ A 层的 `internal/tracearchive/testhelpers_test.go` 是同样三个函数、但
   - `func NewSealer(opts SealerOptions) (*Sealer, error)`
   - `func (s *Sealer) Seal(ctx context.Context, task SealTask) error`
   - **`func ListPendingSeals(root string, minAge time.Duration) ([]SealTask, error)`**——纯函数：扫描 `<root>/spool/dt=*/inst=*/part-*.jsonl`，返回 mtime 早于 `now-minAge` 的 spool
+
+> **登记（Task 5 交付后追加）：行数交叉校验现已天然对齐，不要额外补偿。**
+> 本任务的交叉校验是「spool 扫描出的行偏移条数 == `task.Rows`，不符则 `ErrRowCountMismatch` 拒绝封块」。在简报原文下（`AppendFailed` 只推进行号、不写字节）这个校验**必然失败**——因为 spool 的物理行数会比写入器推进的 `row_seq` 少，那是「产物格式要求行稠密而写侧稀疏」这同一矛盾的另一个表征，**不是需要在封块器里补的逻辑**。
+> Task 5 改为写 `null` 标记行之后（见 Task 5 的 `AppendFailed` 与缺陷 D6），spool 的物理行数恒等于 `Rows`，该校验天然对齐：**封块器保持原样，不得为「跳号」添加任何补偿逻辑**（例如按 `row_seq` 填洞、跳过错位行、或放宽为 `len(offsets) <= task.Rows`——后者会把真正的截断/错位放过去，正是该校验要拦的）。
 
 **方案 C 的编码方式（规格 §5.3.1.1、§7.2）——本任务与前五个版本最大的差异：**
 
@@ -2778,7 +2919,7 @@ git commit -m "feat(tracearchive): 封块器改用 C 版 zstd CLI（方案 C）
 
 **文件：**
 - 新建：`internal/tracearchive/reader.go`
-- 新建：`tests/tracearchive/reader_test.go`——**B 层（`package tracearchive_test`，仅用公开 API）**：`NewReader`/`ReaderOptions`/`GetBody`/`Close`/`FooterSize`/`ErrNotArchived`/`ErrFooterCorrupt` 全部导出。本层放：逐字节取回、spool 兜底、错误分类（产物内越界 + spool 内越界）、footer 篡改、并发上限、无临时文件。
+- 新建：`tests/tracearchive/reader_test.go`——**B 层（`package tracearchive_test`，仅用公开 API）**：`NewReader`/`ReaderOptions`/`GetBody`/`Close`/`FooterSize`/`ErrNotArchived`/`ErrBodyMissing`/`ErrFooterCorrupt` 全部导出。本层放：逐字节取回、spool 兜底、**标记行 ⇒ `ErrBodyMissing`（产物与 spool 两条路径）**、错误分类（产物内越界 + spool 内越界）、footer 篡改、并发上限、无临时文件。
 - 追加：`tests/tracearchive/helpers_test.go`——**B 层辅助**，新增 `sealLines`（复用任务 6 已有的 `writeSpool`/`requireZstd`）。
 - 追加：`internal/tracearchive/testhelpers_test.go`——**A 层辅助**，同样新增一份 `sealLines`（不带 `ta.` 限定），供本任务的 A 层用例使用。两份同名同实现、**故意重复**。
 - 新建：`internal/tracearchive/reader_internal_test.go`——**A 层（`package tracearchive`）**：`TestReaderRejectsOversizedTrailerLen` 与 `TestReaderReleasesConcurrencySlots`。它必须引用**未导出的 `maxTrailerBytes`**（边界值就是它本身，不能内联字面量）并要用未导出的 `footer`/`encodeFooter` 构造「自洽但越界」的损坏产物 ⇒ 外部包无法表达。
@@ -2790,6 +2931,7 @@ git commit -m "feat(tracearchive): 封块器改用 C 版 zstd CLI（方案 C）
   - `type Reader struct{...}`
   - `func NewReader(opts ReaderOptions) (*Reader, error)`
   - `func (r *Reader) GetBody(ctx context.Context, ref Ref) ([]byte, error)`——返回**不含换行**的原始行字节
+    **⚠️ 遇到标记行必须返回 `ErrBodyMissing`（规格 §8.2）**：产物路径与 spool 路径**都要**识别 Task 5 的 `null` 标记行，不得把字符串 `"null"` 当正文递出去。读取侧是逐字返回行内容、不做 JSON 校验的，少了这道识别就会把「正文从未落盘」伪装成「正文就是 `null`」——与 `body_missing` 的 404 语义直接冲突。标记行的判据直接复用 Task 5 的未导出变量 `failedRowMarker`（同一个包，两边共用一份定义，不可能不同步）。
   - `func (r *Reader) Close() error`
   - `const maxTrailerBytes = 64 << 20`——trailer 大小的合理性上界；`TrailerLen` 超过它一律按 `ErrFooterCorrupt` 处理（防止损坏的 footer 让读取端分配数 GB 并 OOM）
 
@@ -2884,6 +3026,47 @@ func TestReaderFallsBackToSpoolForUnsealedRows(t *testing.T) {
 	}
 	if !bytes.Equal(got, lines[1]) {
 		t.Fatalf("spool 兜底读到错误内容: %q", got)
+	}
+}
+
+// TestReaderReportsBodyMissingForMarkerLine 锁定标记行的读取语义（规格 §8.2）：
+// Task 5 的 AppendFailed 会写一行 null（正文从未落盘），两条读取路径
+// **都必须**把它映射成 ErrBodyMissing，而不是把字符串 "null" 当正文返回 ——
+// 后者会把「正文从未落盘」伪装成「正文就是 null」，与 body_missing 的 404 语义冲突。
+func TestReaderReportsBodyMissingForMarkerLine(t *testing.T) {
+	root := t.TempDir()
+	// 标记行两侧都有真实正文，用来同时证明「按行序取行」没有被标记行带偏
+	lines := [][]byte{[]byte(`{"request_id":"a"}`), []byte("null"), []byte(`{"request_id":"c"}`)}
+
+	// ① 产物路径：spool 封块后，标记行进了产物
+	sealLines(t, root, "2026-09-24", "blue", 0, lines)
+	// ② spool 路径：同日同实例的另一个块不封块，直接兜底读
+	writeSpool(t, root, "2026-09-24", "blue", 1, lines)
+
+	r, err := NewReader(ReaderOptions{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	for _, part := range []int{0, 1} {
+		_, err := r.GetBody(context.Background(), Ref{DT: "2026-09-24", Inst: "blue", Part: part, Row: 1})
+		if !errors.Is(err, ErrBodyMissing) {
+			t.Fatalf("part=%d 的标记行必须返回 ErrBodyMissing，实际 %v", part, err)
+		}
+		// 反向断言：标记行前后的真实正文必须照常读到，否则「一律报 missing」也会全绿
+		for _, tc := range []struct {
+			row  int
+			want []byte
+		}{{0, lines[0]}, {2, lines[2]}} {
+			got, err := r.GetBody(context.Background(), Ref{DT: "2026-09-24", Inst: "blue", Part: part, Row: tc.row})
+			if err != nil {
+				t.Fatalf("part=%d row=%d 应正常读到: %v", part, tc.row, err)
+			}
+			if !bytes.Equal(got, tc.want) {
+				t.Fatalf("part=%d row=%d 内容不符: want %q, got %q", part, tc.row, tc.want, got)
+			}
+		}
 	}
 }
 
@@ -3096,7 +3279,7 @@ func TestReaderReleasesConcurrencySlots(t *testing.T) {
 
 - [ ] **步骤 2：运行测试并确认失败**
 
-运行：`go test ./internal/tracearchive/ ./tests/tracearchive/ -run 'TestReaderReturnsExactLine|TestReaderFallsBackToSpoolForUnsealedRows|TestReaderDistinguishesMissingFromNotArchived|TestReaderRejectsOversizedTrailerLen|TestReaderReleasesConcurrencySlots|TestReaderRejectsCorruptFooter|TestReaderConcurrencyIsBounded|TestReaderDoesNotLeaveTempFiles' -v`
+运行：`go test ./internal/tracearchive/ ./tests/tracearchive/ -run 'TestReaderReturnsExactLine|TestReaderFallsBackToSpoolForUnsealedRows|TestReaderReportsBodyMissingForMarkerLine|TestReaderDistinguishesMissingFromNotArchived|TestReaderRejectsOversizedTrailerLen|TestReaderReleasesConcurrencySlots|TestReaderRejectsCorruptFooter|TestReaderConcurrencyIsBounded|TestReaderDoesNotLeaveTempFiles' -v`
 预期：**两个包**都编译失败——B 层提示 `undefined: ta.NewReader`、`undefined: ta.ReaderOptions`；A 层提示 `undefined: maxTrailerBytes`、`r.inFlight undefined`。
 
 - [ ] **步骤 3：编写最小实现**
@@ -3108,6 +3291,7 @@ package tracearchive
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -3285,6 +3469,11 @@ func (r *Reader) readFromPart(ctx context.Context, ref Ref, partPath string) ([]
 		}
 		line, readErr := br.ReadBytes('\n')
 		if len(line) > 0 && read == targetOff {
+			// 标记行（正文写入时即失败，规格 §7.1/§8.2）：绝不能把 "null" 当正文返回。
+			// 复用 Task 5 的 failedRowMarker：同包共用一份定义。
+			if isFailedRowMarker(line) {
+				return nil, fmt.Errorf("%w: %s", ErrBodyMissing, ref)
+			}
 			return trimNewline(line), nil
 		}
 		if len(line) > 0 {
@@ -3313,6 +3502,10 @@ func readFromSpool(spoolPath string, row int) ([]byte, error) {
 	for i := 0; ; i++ {
 		line, err := br.ReadBytes('\n')
 		if i == row && len(line) > 0 {
+			// 与产物路径同一条约定：标记行 ⇒ ErrBodyMissing，不返回 "null"（规格 §8.2）。
+			if isFailedRowMarker(line) {
+				return nil, fmt.Errorf("%w: spool %s 第 %d 行", ErrBodyMissing, spoolPath, row)
+			}
 			return trimNewline(line), nil
 		}
 		if err != nil {
@@ -3324,17 +3517,28 @@ func readFromSpool(spoolPath string, row int) ([]byte, error) {
 	}
 }
 
+// isFailedRowMarker 判断一行是否是 Task 5 的 AppendFailed 留下的标记行
+// （内容 "null"：该行正文从未落盘）。产物路径与 spool 路径共用它，
+// 保证两条路径的判据只有一份（规格 §7.1/§8.2）。
+//
+// 只比较 trim 掉换行后的字节与 failedRowMarker：不解析 JSON、不做逐字节 JSON
+// 等价（例如 "null " 或 "\u006eull"）——写入侧只可能产出这一种形态，
+// 放宽判据只会把真实正文误报成缺失。
+func isFailedRowMarker(line []byte) bool {
+	return bytes.Equal(trimNewline(line), failedRowMarker)
+}
+
 var _ = errors.Is
 ```
 
 - [ ] **步骤 4：运行测试并确认通过**
 
-运行：`go test ./internal/tracearchive/ ./tests/tracearchive/ -run 'TestReaderReturnsExactLine|TestReaderFallsBackToSpoolForUnsealedRows|TestReaderDistinguishesMissingFromNotArchived|TestReaderRejectsOversizedTrailerLen|TestReaderReleasesConcurrencySlots|TestReaderRejectsCorruptFooter|TestReaderConcurrencyIsBounded|TestReaderDoesNotLeaveTempFiles' -v`
-预期：两个包都 PASS（含逐字节一致、spool 兜底、两类行号越界的错误身份、oversized trailer_len、并发槽位释放、footer 篡改、并发上限、无临时文件）。
+运行：`go test ./internal/tracearchive/ ./tests/tracearchive/ -run 'TestReaderReturnsExactLine|TestReaderFallsBackToSpoolForUnsealedRows|TestReaderReportsBodyMissingForMarkerLine|TestReaderDistinguishesMissingFromNotArchived|TestReaderRejectsOversizedTrailerLen|TestReaderReleasesConcurrencySlots|TestReaderRejectsCorruptFooter|TestReaderConcurrencyIsBounded|TestReaderDoesNotLeaveTempFiles' -v`
+预期：两个包都 PASS（含逐字节一致、spool 兜底、**标记行在两路径上都返回 `ErrBodyMissing`**、两类行号越界的错误身份、oversized trailer_len、并发槽位释放、footer 篡改、并发上限、无临时文件）。
 
 > 这些用例经 `sealLines` → `Sealer` 走真实 `zstd`，因此**需要本机装 zstd**（缺失则 skip）。
 
-**变异自检**：删掉 `maxTrailerBytes` 上界检查 → `TestReaderRejectsOversizedTrailerLen` 必须转红（且可能 OOM）；把 `ErrNotArchived` / `ErrFooterCorrupt` 的 `%w` 改成 `%v` → 对应用例必须转红；删掉行号越界检查 → `TestReaderDistinguishesMissingFromNotArchived` 必须转红；把 `defer func() { <-r.sem }()` 删掉 → `TestReaderReleasesConcurrencySlots` 必须转红（B 层的并发用例不会红——它只断言「全部读成功」，所以这条断言必须留在 A 层）。
+**变异自检**：删掉 `maxTrailerBytes` 上界检查 → `TestReaderRejectsOversizedTrailerLen` 必须转红（且可能 OOM）；把 `ErrNotArchived` / `ErrFooterCorrupt` 的 `%w` 改成 `%v` → 对应用例必须转红；删掉行号越界检查 → `TestReaderDistinguishesMissingFromNotArchived` 必须转红；删掉 `readFromPart` 或 `readFromSpool` 里的标记行识别（任一处，规格 §8.2 要求两条路径都有）→ `TestReaderReportsBodyMissingForMarkerLine` 必须转红；把 `defer func() { <-r.sem }()` 删掉 → `TestReaderReleasesConcurrencySlots` 必须转红（B 层的并发用例不会红——它只断言「全部读成功」，所以这条断言必须留在 A 层）。
 
 - [ ] **步骤 5：提交**
 
@@ -3346,6 +3550,8 @@ git commit -m "feat(tracearchive): 按定位键点读（含 spool 兜底与错�
 - 读 footer 只需末尾 32 字节，不必解压任何数据即可定位索引
 - 流式解压命中即停，峰值内存与块大小无关；不落临时文件、不缓存
 - 未封块的近期正文从 spool 直接读，无需等待封块
+- 标记行（AppendFailed 写的 null，正文从未落盘）在产物与 spool 两条路径上
+  都返回 ErrBodyMissing，不得把 "null" 当正文返回（规格 §8.2）
 - 严格区分「产物缺失 / 从未归档 / footer 损坏」，杜绝把故障伪装成数据不存在
 - trailer_len 设 64 MiB 合理性上界：损坏的 footer 不得让读取端分配数 GB
 - 解码并发设上限（解码器内存≈窗口，规格 §8.4 C5）
@@ -3624,6 +3830,28 @@ git commit -m "test(tracearchive): 端到端逐字节往返与空间零增量约
 
 ---
 
+## 计划缺陷登记（Task 5 交付后追加：D4~D6）
+
+编号延续执行期已有的计划缺陷序列（**D1** `cmd/trace-calib` 的 `Fprintf` 括号错位、**D2** `decodeTrailer` 的期望条目数、**D3** `PendingSeals` 未 flush 写缓冲；三者在飞行前扫描/执行记录中登记并已修复）。以下三条由 **Task 5 实现者在提交前报备**，控制者逐条裁决，**均已落地在提交 `8cd873e7`**，此处登记以校正后续任务（尤其任务 6/7）的简报依据。
+
+**发现者：Task 5 实现者（提交前报备）。**
+
+| 编号 | 缺陷 | 承重性 | 修法 |
+|---|---|---|---|
+| D4 | `PendingSeals` 只在**产出封块任务时**才 flush ⇒ 一个块在其生命周期的前 `SealInterval`（15 分钟）内磁盘上始终是**空文件**、mtime 停在创建时刻 ⇒ sealer 的 minAge 判断把活跃块当成「已停止追加」，封出空产物并删掉 spool ⇒ **静默丢数据**（与 D3 同类，触发条件从「忘了 flush」变成「没到阈值」） | **承重** | **无条件 flush**：flush 提到 `cur == nil` 判断之后、所有阈值早退之前；flush 失败仍以 error 上抛（sealer 会直接读 spool 文件，不能把不完整的块当完整的封掉） |
+| D5 | `MarkSealed` 只把 `cur` 置 nil、不 close 旧句柄 ⇒ 每个封块泄漏一个 `*os.File`；按 `BlockBytes=1.5 GiB` + 15 min 估算，每实例每天上百个 fd ⇒ 长跑进程最终 **EMFILE**（任务 8 的端到端流程正是在 `Seal` 之后调它，路径可达） | 资源泄漏 | `_ = w.closeCurLocked()`（flush + close），签名不变。close 错误只能丢弃（调用点冻结为无返回值），这与「`PendingSeals` 必须上抛 flush 错误」不矛盾：后者是为了不把不完整的块交给 sealer，此处已晚于 sealer 读完文件 |
+| D6 | `AppendFailed` 只推进行号、不写字节 ⇒ 产物行序与 `row_seq` 错位，读取侧两条路径都按行序取 ⇒ **`row=N` 读成第 `N+1` 行（静默返回错误的正文）**。根因是与产物格式的**稠密性不相容**：footer 的 `row_count` 是产物内行数，trailer 是「每行一个差分 varint」的偏移表，而该 varint 编码没有表达「本行没有偏移」的能力（它假定行稠密）；写侧稀疏 + 格式要求稠密 + 读侧按行序三者不可能同时成立 | **承重**（本项目最不能接受的一类缺陷） | `AppendFailed(dt)` **推进行号的同时写一个内容为 `null` 的标记行**（`AppendFailed` 复用 `Append(dt, failedRowMarker)`，让标记行与真实正文共用同一段写入代码，「物理行序 == `row_seq`」由构造保证）。标记取 `null`：合法 JSON、spool 每行都是正文对象故不可能与真实正文混淆；不用空行（产物是 `.jsonl`，空行会让按行解析的工具炸掉）、不用 `{}`（与「合法的空正文」无法区分） |
+
+**D6 的下游约定**：任务 6 的行数交叉校验由此**天然对齐**，不得为「跳号」添加补偿逻辑（见任务 6 的登记说明）；任务 7 的两条读取路径（产物 / spool）遇到标记行必须返回 **`ErrBodyMissing`**，不得把 `"null"` 当正文递出去（见任务 7 的接口与用例）。
+
+**同批报备但不属计划缺陷的一条**（登记以免后人误判为遗漏）：`Inst` 白名单（只允许 `blue`/`green`）用**一条**分支同时涵盖空值与非法值，取代简报里的独立「非空 Inst」分支——理由是删掉那个独立分支没有任何用例转红（零覆盖守卫）。已落地在 `8cd873e7`。
+
+**尚未落地、控制者已下达的两条**（不得当成现状）：
+- **`dt` 格式校验**（`time.Parse("2006-01-02", dt)`）：Task 5 实现者在报告 §7.C 登记为建议但未获授权动手，控制者已下达该修正；本文档已在任务 5 的接口、用例清单与自检中标记为**要求，待落地**。
+- **移除 `ListParts`**：控制者裁定按 YAGNI 移除（本包内无消费者），但提交 `8cd873e7` 仍保留该方法及其用例 `TestWriterListPartsFiltersIllegalNames`；任务 5 的代码块已按裁定删除，并注明该删除**尚未提交**。
+
+---
+
 ## 自检
 
 **1. 规格覆盖度**（本计划范围内的规格条目逐项核对）：
@@ -3638,7 +3866,7 @@ git commit -m "test(tracearchive): 端到端逐字节往返与空间零增量约
 | §5.3.3 内存口径（CLI ≈ 窗口 × 1.08）| 任务 1（证据）、任务 6（编码内存不落网关）|
 | §5.4 定位键为复合键而非偏移 | 任务 4 |
 | §5.5 冷层格式预留（format_version）| 任务 3 |
-| §7.1 请求路径只追加不压缩 | 任务 5（含周期 flush 的说明）|
+| §7.1 请求路径只追加不压缩、周期性 flush、`AppendFailed` 写 `null` 标记行 | 任务 5 |
 | §7.2 封块流程（CLI 子进程 + trailer/footer 由 Go 追加 + mtime 发现机制）| 任务 6 |
 | §7.3 写指针以目录内容为权威 | 任务 4（`parsePartSeq`）、任务 5（`nextSeqLocked`）、任务 6（`ErrPartExists` 拒绝覆盖）|
 | §8.1 错误分类必须可 `errors.Is` 区分 | 任务 2/3/4/6/7（哨兵错误 + 全量身份断言）|
@@ -3667,7 +3895,7 @@ git commit -m "test(tracearchive): 端到端逐字节往返与空间零增量约
 
 **3. 测试命令与断言自检（方案 C 修订新增）**：
 - 全文不再出现 `-run TestXxx` 单模式命令；每个任务的 RED/GREEN 命令都显式列出该任务的全部测试名（`|` 连接）。理由：Go 的 `-run` 是**子串匹配**，`-run TestTrailer` 会漏掉三个 `TestDecodeTrailer*`、`-run TestFooter` 会漏掉四个 `TestDecodeFooterRejects*`、`-run TestReader` 会漏掉新增的 `TestReaderRejectsOversizedTrailerLen`。
-- 每个「应当失败」的断言都带**错误身份**：`ErrTrailerCorrupt`（任务 2）、`ErrFooterCorrupt`（任务 3、7）、`ErrPartExists` / `ErrRowCountMismatch` / `ErrSealFailed`（任务 4 定义、任务 6 使用）、`ErrNotArchived`（任务 4 定义、任务 7 使用）。无哨兵的参数校验错误（`NewWriter` 的空 Root/Inst、`NewSealer` 的空 Root、`zstdLongArg` 的非 2 的幂窗口）只断言「必须报错」，已在计划中注明理由。
+- 每个「应当失败」的断言都带**错误身份**：`ErrTrailerCorrupt`（任务 2）、`ErrFooterCorrupt`（任务 3、7）、`ErrPartExists` / `ErrRowCountMismatch` / `ErrSealFailed`（任务 4 定义、任务 6 使用）、`ErrNotArchived` / **`ErrBodyMissing`**（任务 4 定义、任务 7 使用：标记行 ⇒ `ErrBodyMissing`，规格 §8.2）。无哨兵的参数校验错误（`NewWriter` 的空 Root、**`Inst` 白名单**、`Append`/`AppendFailed` 的 `dt` 格式校验〔**要求，待落地**〕、`NewSealer` 的空 Root、`zstdLongArg` 的非 2 的幂窗口）只断言「必须报错」，已在计划中注明理由。
 - 三条 **golden 逐字节**测试各覆盖一处格式契约：trailer 差分 varint（任务 2）、footer 32 字节字段布局（任务 3）、产物整体「帧+trailer+footer」（任务 6）。它们与「往返测试」互补——往返测试对**对称的**布局 bug 是盲的。
 - **方案 C 的新增测试依赖**：任务 6/7/8 的封块类用例需要本机 `zstd`（`requireZstd` 缺失即 skip），CI 镜像必须安装；失败语义与字节布局用例用假 `zstd` 脚本，不依赖真实版本。
 
@@ -3678,8 +3906,8 @@ git commit -m "test(tracearchive): 端到端逐字节往返与空间零增量约
 - `WriterOptions` 含 `Root`/`Inst`/`BlockBytes`/`SealInterval`；`SealerOptions` 含 `Root`/**`ZstdBinary`**/`ZstdLevel`/`ZstdWindowBytes`；`ReaderOptions` 含 `Root`/`ZstdWindowBytes`/`MaxConcurrent`——三者字段名不冲突。
 - `Writer.MarkSealed(dt string, part int)` 任务 5 定义，任务 8 使用一致。
 - `Paths` 方法 `PartFile`/`SpoolFile`/`PartDir`/`SpoolDir` 任务 4 定义，任务 5、6、7 使用一致。
-- 读取侧错误变量 `ErrPartNotFound`/`ErrBodyMissing`/`ErrNotArchived` 任务 4 定义；任务 7 使用 `ErrNotArchived` 与 `ErrFooterCorrupt`（任务 3 定义），二者均以 `%w` 包装，与 `errors.Is` 兼容。
-  - **已知留白**：`ErrPartNotFound` 与 `ErrBodyMissing` 在任务 7 的 `Reader` 内**未被使用**——`Reader` 只区分「产物/spool 都不存在」= `ErrNotArchived` 与「产物损坏」= `ErrFooterCorrupt`。这两个哨兵是给计划 3 的服务层配合 `body_missing` 元数据列实现规格 §8.1 的 404/410 语义用的，届时由服务层组合判定，不属本计划缺陷。
+- 读取侧错误变量 `ErrPartNotFound`/`ErrBodyMissing`/`ErrNotArchived` 任务 4 定义；任务 7 使用 `ErrNotArchived`、**`ErrBodyMissing`（标记行 ⇒ 正文从未落盘，规格 §8.2）** 与 `ErrFooterCorrupt`（任务 3 定义），均以 `%w` 包装，与 `errors.Is` 兼容。
+  - **已知留白的更新（Task 5 交付后）**：原先这里写着「`ErrPartNotFound` 与 `ErrBodyMissing` 在任务 7 的 `Reader` 内**未被使用**……两个哨兵都给计划 3 的服务层」。现在只对了一半：`ErrBodyMissing` 的定义注释是「正文在写入时即失败，从未落盘。对应 HTTP 404」——**这正是 `AppendFailed` 的语义**，标记行落地后任务 7 的 `Reader` 必须直接使用它（产物路径与 spool 路径遇到 `null` 标记行都返回 `ErrBodyMissing`，规格 §8.2），不能把它留给服务层去组合判定。**`ErrPartNotFound` 仍未被任务 7 使用**，它（配合 `body_missing` 元数据列实现规格 §8.1 的 410 语义）留待计划 3 的服务层。这不是本计划缺陷。
 - 封块侧错误变量 `ErrPartExists`/`ErrRowCountMismatch`/`ErrSealFailed` 任务 4 定义，任务 6 使用一致（全部 `%w` 包装；测试用 `errors.Is` 断言身份，`TestSealFailsOnNonZeroExit` 另有 `errors.As` 取 `*exec.ExitError` 断言退出码）。
 - `ListPendingSeals(root string, minAge time.Duration) ([]SealTask, error)` 任务 6 定义并在任务 6 测试中使用；它填的 `SpoolPath` 是绝对路径，任务 6 的 `Seal` 直接使用。
 - `maxTrailerBytes` 任务 7 定义、仅任务 7 使用；`TestReaderRejectsOversizedTrailerLen` 直接引用它构造边界值，因此该 const 不能内联为字面量。

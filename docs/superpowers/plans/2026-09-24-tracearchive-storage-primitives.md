@@ -37,6 +37,16 @@
   - **测试辅助函数必须各写一份**：`internal/tracearchive/testhelpers_test.go`（`package tracearchive`）与 `tests/tracearchive/helpers_test.go`（`package tracearchive_test`）。Go 的 `_test.go` 辅助无法跨包共享，且两层里同名辅助（`writeSpool`/`requireZstd`/`fakeZstd`）签名相同、实现相同、**故意重复**。
   - 每个任务的 RED/GREEN 命令必须**同时覆盖两个包**：`go test ./internal/tracearchive/ ./tests/tracearchive/ -run '…' -v`。
 - **测试命令用组合 `-run`**：Go 的 `-run` 是**子串匹配**，`-run TestTrailer` 选不中 `TestDecodeTrailer*`（`TestFooter` 同理会漏掉全部 `TestDecodeFooterRejects*`），会让严格性断言全坏时依然绿。**每个任务的 RED/GREEN 命令必须显式列出该任务的全部测试名**（用 `|` 连接）。
+- **⚠️ `-run` 合并正则的证据要求（每一个任务都适用；这是实现中发现的一条方法论缺陷，登记为 D12）**：用 `printf` 往一个以换行结尾的合并正则文件追加新用例名时，正则里会出现一个**内嵌换行**，最后一个分支变成 `"...MinAge\n"` ⇒ 该用例**静默不执行**，而 `ok` **照常打印**（实现者差点把「28 条全绿」当成结论）。
+
+  **计数口径（正式口径，后续所有任务统一）**：「用例数」= **顶层测试函数数**，与 `=== RUN` 的**顶层**名字集合一致；**子用例单独计数**，汇报格式为「N 个顶层用例 + M 个子用例」。断言 2 匹配顶层行时必须带**尾随空格**（`--- PASS: TestName `），以排除 `--- PASS: TestName/sub`。
+
+  因此每个任务的 RED/GREEN 证据必须同时满足三条（语义不得变）：
+  1. `go test -v` 的 `=== RUN` **顶层**名字集合 与 正则里的名字集合，各自 `tr -d '[:space:]'` 后 **diff 为空**。**`tr -d '[:space:]'` 是这条断言的关键**：它同时消掉**尾部换行**与**内嵌空白**，因此「拼接时混入换行/空格」这类错误**过不了**它。若只 trim 尾部，就正好放过本次缺陷。
+  2. 顶层 `--- PASS: TestName ` 行数 == 顶层名字数（**不排除子用例会误报**；例如 Task 6 本轮有 12 条子用例）。
+  3. `SKIP == 0`（除简报明确允许跳过的用例，例如本机缺 `zstd` 时 `requireZstd` 跳过的真封块用例）。
+
+  **判据：`ok` 只说明「跑了的都过了」，不说明「该跑的都跑了」。**（Task 6 报告 §11.3 备有可直接复制的三条断言命令与本轮范例原始输出。）
 - 本计划**不涉及** PG schema、HTTP 接口、部署配置（属计划 3、4）。**sealer 进程的 main/循环与 systemd unit 也属计划 4**；本计划只产出 `internal/tracearchive` 的原语（含 `ListPendingSeals`）与其单元/组件测试。
 
 ---
@@ -1215,7 +1225,8 @@ ErrSealFailed 三个哨兵，供方案 C 的 sealer 调用方用 errors.Is 分�
 
 **文件：**
 - 新建：`internal/tracearchive/writer.go`
-- 新建：`tests/tracearchive/writer_test.go`——**B 层（`package tracearchive_test`，仅用公开 API）**：`NewWriter`/`WriterOptions`/`Append`/`AppendFailed`/`PendingSeals`/`MarkSealed`/`Close`/`SealTask` 全部导出，本任务**没有**任何必须触达未导出符号的断言 ⇒ 整份测试进 B 层。
+- 新建：`tests/tracearchive/writer_test.go`——**B 层（`package tracearchive_test`，仅用公开 API）**：`NewWriter`/`WriterOptions`/`Append`/`AppendFailed`/`PendingSeals`/`MarkSealed`/`Close`/`SealTask` 全部导出，本任务的主体测试进 B 层。
+- 新建：`internal/tracearchive/writer_internal_test.go`——**A 层（`package tracearchive`）**，5 个用例。**这是交付时的实际形态，简报原先写的「本任务没有任何必须触达未导出符号的断言、整份测试进 B 层」是错的**（详见下方「落地修正」④）：写失败注入必须替换未导出的 `cur.w`，`MarkSealed` 的 fd 关闭回归必须持有未导出的 `cur.f`。
 
 > **落地转换说明（本块与后续 B 层块通用）**：下面的代码按 `package tracearchive` 书写以便阅读；落盘到 `tests/tracearchive/writer_test.go` 时必须做三件事：
 > 1. 头部改为 `package tracearchive_test`，并加导入 `ta "github.com/example/llm-gateway/internal/tracearchive"`（范例见任务 4 的 `tests/tracearchive/ref_test.go`）。
@@ -1231,7 +1242,7 @@ ErrSealFailed 三个哨兵，供方案 C 的 sealer 调用方用 errors.Is 分�
   - `type WriterOptions struct { Root, Inst string; BlockBytes int64; SealInterval time.Duration }`
   - `type Writer struct{...}`
   - `func NewWriter(opts WriterOptions) (*Writer, error)`
-  - `func (w *Writer) Append(dt string, line []byte) (Ref, error)`——返回定位键；行内换行会被转义
+  - `func (w *Writer) Append(dt string, line []byte) (Ref, error)`——返回定位键；**行内裸换行与「trim 后为空」的行一律拒绝，不转义**（`validateLine`，见下与「落地修正」①）。简报这里原先写的是「行内换行会被转义」，与代码不符——这是 D13，已按「拒绝」落地。
   - `func (w *Writer) AppendFailed(dt string) error`——记录「本行正文落盘失败」：**推进行号 + 写一个内容为 `null` 的标记行**，使「物理行序 == `row_seq`」恒成立。
     **不能「只推进行号不写字节」——这是格式强制，不是取舍**：footer 的 `row_count` 是产物内行数，trailer 是「每行一个差分 varint」的偏移表（任务 2 的 `encodeTrailer`），而该差分 varint 编码**没有表达「本行没有偏移」的能力**（它假定行稠密）；读取侧两条路径又都是「按行序取第 row 行」。写侧稀疏 + 格式要求稠密 + 读侧按行序三者不可能同时成立 ⇒ 该行之后的行整体前移一位，**`row=N` 会被读成第 `N+1` 行的正文**（静默返回错误的正文）。
     标记取 `null`（合法 JSON，4 字节 + 换行）：不用空行（产物是 `.jsonl`，每行应为合法 JSON，空行会让按行解析的工具炸掉）；不用 `{}`（与「合法的空正文」无法区分）；spool 每行都是正文对象（`request_headers`/`request_body`/`response_body` 那组键），故不可能与真实正文混淆。读取侧遇标记行必须返回 `ErrBodyMissing`（任务 7）。
@@ -1256,6 +1267,30 @@ ErrSealFailed 三个哨兵，供方案 C 的 sealer 调用方用 errors.Is 分�
       UncompressedBytes int64
   }
   ```
+
+> **落地修正（Task 5 交付后追加：与最终实现对齐，以代码为准）**
+>
+> **提交链**：`8cd873e7`（写入器主体：`NewWriter`/`Append`/`AppendFailed`/`PendingSeals`/`MarkSealed`/`Close`/写指针）→ `52ccc9b2`（`dt` 路径分量校验、删除无消费者的 `ListParts`）→ `771d7985`（行校验 + 写失败隔离）→ `8359f4bc`（修正写失败注释对任务 6 残行行为的描述）→ `49475a78`（三处失实注释修正 + `truncateToLastNewline` 的清空分支用例）。
+>
+> **① `validateLine` / `appendLineLocked` 分层与理由（`771d7985`）**：公开 `Append` 的顺序是 `validateDT` → `trimNewline` → `validateLine` → `appendLineLocked`。**校验只放在公开入口上**：内部共享的 `appendLineLocked`（持锁：确保块 → 缓冲写入 → `rows++` → `bytes += n+1`）**既不做 dt/inst 校验、也不做行校验**——`AppendFailed` 复用这段共享代码（让标记行与真实正文由构造共享同一套不变量），守卫若放进共享路径，**失败标记行会被自己的守卫拒绝**。`validateLine` 拒绝两件事：正文（trim 后）内含裸 `\n`/`\r`；trim 后长度为 0。**为什么是拒绝而不是转义**：产物必须是**逐字节的原始 JSONL**；写入侧转义会把一个反转义变换强加给读取侧，并让产物不再是「原样 JSONL」（任何按行解析的工具都会读到非原字节）；而 JSON 序列化本身不会产生裸换行（`\n` 会被序列化成 `\\n`），所以含裸换行的输入只可能是**调用方 bug** ⇒ 快速失败优于静默改造。末尾换行是**分隔符不是内容**：`trimNewline` 去掉末尾整段 `\r`/`\n`（任意个），故 `"a\n"` 与 `"a"` 等价——**首轮 17 个用例全部传带尾换行的行，本轮没有一个被打红**，即该语义的实证。**不新增哨兵**（与 dt/inst 同属调用方无从分支处理的参数错误）。
+>
+> **② `null` 标记行的前置条件（未成文义务，必须写明）**：`Append` 的 `line` 必须是**单行 JSON 对象**，且**不得是字面量 `null`**——`null` 是 `AppendFailed` 的失败标记行，读取侧按整行相等识别它。生产侧正文恒为 `{...}`（结构体序列化）故实际安全；但这是**调用方义务**。**不做 `null` 校验**：那会连标记行一起禁掉；若将来允许裸 JSON 标量写进正文，这条必须重新评估。
+>
+> **③ 写失败隔离四步机制（`771d7985`；完整理由见规格 §7.1）**：
+> - ① `truncateToLastNewline` 回退到**最后一个 `\n` 边界**（反向**有界**扫描，界 = 本次失败那一行的长度；整个文件无 `\n` ⇒ `Truncate(0)`）；
+> - ② `quarantinePath` 隔离改名为 `part-NNNNNN.jsonl.zst`。**该名必须经 `partName` 生成，不能把后缀直接拼到 spool 名后**——首轮真 bug 是拼出 `part-NNNNNN.jsonl.jsonl.zst`，`parsePartSeq` 拒绝它 ⇒ 序号 N 被复用（旧 PG 的 `(part=N,row=r)` 会静默读到另一个 part 的正文，最坏的一类错）。安全性的两条依据：`ListPendingSeals` 只收 `.jsonl` 结尾 ⇒ sealer 看不到隔离件；`parsePartSeq` 接受 `.jsonl.zst` ⇒ N 被算作已用、永不复用；
+> - ③ **毒化**该块：不再写入、`PendingSeals` 不报它、`Close` 只释放 fd；后续 `Append` 自动换到 N+1（调用方无需重置状态）；`ensureBlockLocked` 的毒化判断不可停用（停用即转红）；
+> - ④ 改名失败 ⇒ `Truncate(0)`（0 字节产不出残行）；再失败则在错误里如实说明。
+> - **【已知代价】（只记账、不修；已写进 `writer.go` 的注释，不只留在报告里）**：持续 ENOSPC 下每次失败 `Append` 都换新 part，而序号计算每次都重扫产物目录与 spool 目录 ⇒ 块序号与目录项**无界增长**，且每次 `Append` 付一次 O(n) 目录扫描。**刻意不加计时器或计数器**——正确修法是**背压**（R9，计划 2）。它不产生静默错正文。
+> - **已知副作用**：隔离件内容是**明文 JSONL 而非 zstd 帧**，名字却与产物等价；点读按两条精确路径查找（产物目录的 `part-N.jsonl.zst` 与 spool 目录的 `part-N.jsonl`）都查不到它 ⇒ 返回 `ErrNotArchived`（响亮），**不是** `ErrFooterCorrupt`，**读取侧不新增分支或哨兵**。运维判据：spool 下出现「内容是明文 JSONL 的 `part-*.jsonl.zst`」即为隔离件，释放空间后改回 `part-NNNNNN.jsonl` 即可正常封块。
+>
+> **④ 新增的 A 层用例与「为什么必须触达未导出符号」（本节 文件 清单已同步更正）**：新增 `internal/tracearchive/writer_internal_test.go`（A 层，5 个用例），文件头逐条写明理由：
+> - **写失败注入**：真正要防的形态是「`bufio` 直写 fd 时短写、留下没有换行收尾的残行」，要精确制造它**只能**替换未导出的 `cur.w`（`*bufio.Writer`）并给它一个「只接受 K 字节就报错」的底层 writer。ENOSPC 无法经公开 API 制造：`chmod` 不改已打开 fd 的写权限；把 spool 路径建成目录只在 `open` 阶段失败（那是「建块失败」，不产生残行）；`/dev/full` 在 macOS 上不存在。而盘满正是本子项目存在的那条路径，不能用「难以模拟」搪塞。
+> - **`MarkSealed` 的 close 回归**：旧句柄是否真被关闭只能通过持有未导出的 `cur.f` 观察（fd 不经任何公开 API 暴露）。不写这条，把修复退回「只置 `cur = nil`」时其余用例仍全绿——即修复没有回归防线。
+> - 用例名：`TestWriterWriteFailureLeavesNoResidualLine`、`TestWriterPoisonedBlockCannotBeSealed`、`TestWriterTruncatesWholeFileWhenNoLineBoundaryExists`、`TestWriterQuarantineRenameFailureEmptiesSpool`、`TestWriterMarkSealedClosesPreviousFileHandle`。B 层本轮新增 4 个：`TestWriterAppendRejectsInteriorNewline`、`TestWriterAppendRejectsEmptyLine`、`TestWriterMarkerLineCountsRowsAndBytes`、`TestWriterMarkSealedIgnoresNonMatchingPart`。
+> - **`Truncate(0)` 分支用例（`49475a78`）**：`TestWriterTruncatesWholeFileWhenNoLineBoundaryExists` 先用包内 `ensureBlockLocked` 建出一个 0 字节空块（天然不含 `\n`），再注入短写，让**第一次触发 flush 的写入**就短写；断言隔离件被清空、块被毒化、下一次 `Append` 换 part。**它同样只能放包内**：用公开 API 走不到这个前置状态——首行写入要么成功（盘上出现 `\n`），要么在建块阶段就失败（没有文件）。判据：把 `truncateToLastNewline` 末尾的 `return os.Truncate(path, 0)` 改成 `return nil`，本用例转红（隔离件里会留下 2 字节残行 `"li"`）。
+>
+> **⑤ 最终用例规模**：B 层 writer 用例 21 个（19 个 `TestWriter*` + 2 个 `TestNewWriter*`），A 层 5 个。变异自检 14 项（`m19`~`m32`）**全部转红**，完整双侧原始输出见 Task 5 报告 §11.6.1。所有 RED/GREEN 证据必须满足全局约束的 `-run` 三条要求。
 
 - [ ] **步骤 1：编写失败的测试**
 
@@ -1967,6 +2002,8 @@ func trimNewline(b []byte) []byte {
 运行：`go test ./internal/tracearchive/ ./tests/tracearchive/ -run 'TestWriterAppendAssignsDenseRowSeq|TestWriterAppendFailedWritesMarkerLineAndAdvancesRow|TestWriterPendingSealsBySize|TestWriterPendingSealsFlushesBuffer|TestWriterPendingSealsByInterval|TestWriterNextSeqResumesFromDirectory|TestNewWriterRejectsEmptyRootAndInst|TestNewWriterRejectsIllegalInst|TestWriterPendingSealsNilBeforeAnyAppend|TestWriterAppendRejectsIllegalDT' -v`
 预期：PASS（含 `AppendFailed` 行号推进 + `null` 标记行、双触发封块、目录恢复块序号、`Inst` 白名单与 `dt` 路径分量校验、无当前块五组）。
 > 状态（以代码为准）：上面全部用例已在提交 `8cd873e7`（写入器主体）与评审修正 `52ccc9b2`（`dt` 校验、删除 `ListParts`）落地且 PASS。
+>
+> 状态（后续轮次，以代码为准）：行校验与写失败隔离（`771d7985`）之后，本节命令**不再是完整证据集**——完整用例为 **B 层 21 个 + A 层 5 个**（见上方「落地修正」④），A 层用例名必须显式加入 `-run` 组合，且证据必须满足全局约束的 `-run` 三条要求（顶层名字集合 diff 为空 / 顶层 PASS 数相符 / `SKIP == 0`）。
 
 - [ ] **步骤 5：提交**
 
@@ -2069,11 +2106,11 @@ A 层的 `internal/tracearchive/testhelpers_test.go` 是同样三个函数、但
   - 任务 4：`Ref`、`Paths`、`parsePartSeq`、`ErrPartExists`、`ErrRowCountMismatch`、`ErrSealFailed`
   - 任务 5：`SealTask`
 - 对外产出：
-  - `type SealerOptions struct { Root string; ZstdBinary string; ZstdLevel int; ZstdWindowBytes int }`
+  - `type SealerOptions struct { Root string; ZstdBinary string; ZstdLevel int; ZstdWindowBytes int }`——**最终实现另含两个字段（已落地在 `e0b0084f`）**：`MinAge time.Duration`（0 取 `defaultSealMinAge` = **3h**）与 `ExpectedZstdVersion string`（空取 `defaultZstdVersion` = `"1.4.8"`）
   - `type Sealer struct{...}`
   - `func NewSealer(opts SealerOptions) (*Sealer, error)`
   - `func (s *Sealer) Seal(ctx context.Context, task SealTask) error`
-  - **`func ListPendingSeals(root string, minAge time.Duration) ([]SealTask, error)`**——纯函数：扫描 `<root>/spool/dt=*/inst=*/part-*.jsonl`，返回 mtime 早于 `now-minAge` 的 spool
+  - ~~`func ListPendingSeals(root string, minAge time.Duration) ([]SealTask, error)`~~ → **已更正（`e0b0084f`）为方法 `func (s *Sealer) ListPendingSeals() ([]SealTask, error)`**：扫描 `<root>/spool/dt=*/inst=*/part-*.jsonl`，返回 mtime 早于 `now-minAge` 的 spool（`minAge` 取自同一份 `SealerOptions`，默认 3h）。**包级形态已删除**：方法天然带上 `ZstdBinary`/`ExpectedZstdVersion`，计划 4 的循环构造一次 `Sealer` 即可发现并封块；包级签名允许 `root` 与 `minAge` 来自不同来源，会产生组合错误。**正文里凡出现 `ListPendingSeals(root, minAge)` 的测试片段，落盘时都要改成 `NewSealer(...)` + 调方法**（B 层经 `helpers_test.go` 的 `listPendingSeals(t, root, minAge)` 辅助）。
 
 > **登记（Task 5 交付后追加）：行数交叉校验现已天然对齐，不要额外补偿。**
 > 本任务的交叉校验是「spool 扫描出的行偏移条数 == `task.Rows`，不符则 `ErrRowCountMismatch` 拒绝封块」。在简报原文下（`AppendFailed` 只推进行号、不写字节）这个校验**必然失败**——因为 spool 的物理行数会比写入器推进的 `row_seq` 少，那是「产物格式要求行稠密而写侧稀疏」这同一矛盾的另一个表征，**不是需要在封块器里补的逻辑**。
@@ -2094,6 +2131,24 @@ A 层的 `internal/tracearchive/testhelpers_test.go` 是同样三个函数、但
 **测试对子进程的两条依赖（写死在测试里）**：
 - 真封块用例需要本机 `zstd`（**CI 镜像必须安装**）；缺失时 `t.Skip`，否则核心断言形同虚设。
 - 失败语义与产物字节布局用例用**假 `zstd` 脚本**：`#!/bin/sh` + `exec cat`（直通，用于锁死布局）或 `exit 3`（用于锁死失败语义）。这样这两类断言不依赖真实 zstd 的版本。
+
+> **落地修正（Task 6 交付后追加：与最终实现对齐，以代码为准）**
+>
+> **提交链**：`76042bcd`（首轮：C 版 zstd CLI + 行偏移扫描 + trailer/footer + 发现机制）→ `e0b0084f`（评审裁决落实：minAge 3h、版本探测、目录名校验、方法形态）→ `37f95c36`（第三轮裁决：删除版本探测记忆化、把解析校验做成可杀死的守卫）。
+>
+> **① `minAge` 默认 = 3 小时（`e0b0084f`）**：新增常量 `defaultSealMinAge`，**不再等于 `defaultSealInterval`（15 分钟）**。推导链（也写在常量注释上，便于审计）：实测摄取 ≈ 37 GiB/天 ≈ **1.54 GiB/h** → `defaultBlockBytes` = 1536 MiB 满流量下约 **1 小时**填满 → 网关滚动间隔应取 **~1h**（让**大小**阈值先触发，保住已标定的 10.26×；滚动过短会把块截成 ~400 MB，压缩比退到未标定区间）→ `minAge` 必须**严格大于**滚动间隔 ⇒ 3 × 1h = **3h**（3 倍余量）。成本：未封块 spool ≈ 3h × 1.54 GiB/h ≈ **4.6 GiB** 未压缩驻留，相对 `/datalog` 240 GiB 可忽略。**对端约束 R8**：网关滚动间隔 ≤ 1h（计划 2 落地）。现有 `defaultSealInterval = 15m` 已满足且对 3h 有 12 倍余量，故未改动 `defaults.go`；若计划 2 把它改到 > 1h，3h 就不再「严格大于」，必须同步调整。
+>
+> **② zstd 版本探测（`e0b0084f`）**：`SealerOptions.ExpectedZstdVersion`（空取 `"1.4.8"`）+ `verifyZstdVersion`。探测位置在**不依赖编码器的判定之后**（产物存在性检查、行数交叉校验）、**任何文件创建之前**：放在 `Seal` 最前面会让 `TestSealRefusesToOverwriteExistingArtifact` / `TestSealRejectsRowCountMismatch` 转红——**配错的编码器会掩盖这两类真实数据问题**（这是实现中一次真实的红→绿）。四条错误路径全部响亮失败、只用既有 `ErrSealFailed`：① 二进制缺失；② 探测非零退出（保留退出码）；③ 输出不可解析（含 `"1.5"`、`"1.5.7-beta"` 等非严格三段式）；④ 版本不符（错误里带上期望值与实际值）。**⚠️ 归一化的坑（D10）**：`exec.Command` 只对**不含路径分隔符**的 name 走 `LookPath`，绝对路径下 `cmd.Run()` 返回 `*fs.PathError(ENOENT)`，`%w` **换不来** `errors.Is(err, exec.ErrNotFound)`，必须显式归一化——简报的注释在这一点上是错的。**不做记忆化（`37f95c36`：已删除 `s.versionOK`，`Sealer` 没有运行期可变状态，只剩测试注入钩子）**：省下的只是一天几十次 `zstd --version`（约 5 ms/次，合计秒级），代价是给一个「看起来可共享的值类型」引入未同步的可变字段（并发调用 `Seal` 即数据竞争）。**错误文案是诊断接口**：「无法解析」与「版本不符」指向完全不同的处置（换构建 vs 重新标定），因此解析的三段式/数字校验被做成**可杀死的守卫**：`TestSealRejectsUnparsableZstdVersion` 含 4 个子用例（无版本号 / 两段 `"v1.5"` / 带后缀 `"v1.5.7-beta"` / 段内非数字），每个都断言错误文案含「无法解析」（放宽解析后文案会变成「版本不符」，用例即转红）。
+>
+> **③ 残行守卫（`76042bcd`）**：`scanSpoolOffsets` 把「spool 必须以换行符结尾」作为硬前置条件，遇未终止尾行 ⇒ 拒绝封块（保留 spool、删除 `.tmp`、不产生产物）。判据是「EOF 时仍带回了非空字节」——**0 字节空 spool 合法**（`row_count=0`，不得误判为残行）。理由：`Rows == 0` 的目录扫描路径**没有行数交叉校验可依赖**，这是那条路径**唯一的确定性保护**（D8：简报的扫描会把未终止尾行计作一行 ⇒ 残行被静默烤进产物）。
+>
+> **④ 目录名校验（`e0b0084f`）**：`ListPendingSeals` 用既有 `validateDT` 校验 `dt`、用白名单校验 `inst`（`blue`/`green`），非法即 `continue` **跳过该目录**——**不报错中断整轮扫描**（一个坏目录不该让当天的封块全停）。两值都来自**目录名**，而 `filepath.Join` 的清理语义会把 `dt=..` / `inst=..` 带出 spool 子树，与写入侧的严格校验**对称**。
+>
+> **⑤ API 形态**：只保留方法 `(*Sealer).ListPendingSeals()`，**删除包级函数**（上文的接口登记已更正）。方法形态也让「版本期望值/`MinAge`」随实例一起传递。
+>
+> **⑥ 另两处落地修正**：`MkdirAll` 提到创建 `.tmp` **之前**（`.tmp` 必须与产物同目录才能 `rename`；否则 10 条真封块用例全部 ENOENT，见 D9）；golden 自检的偏移改用格式契约表达 `want[footerStart+22:footerStart+30]`（`footerStart := len(want) - FooterSize`），简报的 `want[32:40]` **偏移 3 字节**且恒不成立（D11）。
+>
+> **⑦ 最终用例规模与证据**：A 层 2 条（`sealer_internal_test.go`）+ B 层 29 条（含 5 条版本/目录名守卫用例：`TestSealRejectsMismatchedZstdVersion`、`TestSealRejectsUnparsableZstdVersion`、`TestSealAcceptsConfiguredZstdVersion`、`TestSealRejectsFailedVersionProbe`、`TestListPendingSealsRejectsMalformedDirNames`），另有 12 条子用例；真封块用例 `SKIP = 0`。变异自检见 Task 6 报告 §5.1/§10.6。所有证据必须满足全局约束的 `-run` 三条要求（顶层名字集合 `tr -d '[:space:]'` 后 diff 为空 / 顶层 PASS 行数相符 / `SKIP == 0`）。
 
 - [ ] **步骤 1：编写失败的测试**
 
@@ -2994,6 +3049,14 @@ git commit -m "feat(tracearchive): 封块器改用 C 版 zstd CLI（方案 C）
   - `func (r *Reader) Close() error`
   - `const maxTrailerBytes = 64 << 20`——trailer 大小的合理性上界；`TrailerLen` 超过它一律按 `ErrFooterCorrupt` 处理（防止损坏的 footer 让读取端分配数 GB 并 OOM）
 
+> **⚠️ R10：本任务必须额外实现的三项读取侧要求（`internal/tracearchive/reader.go` 尚未落地，以下是「要求 / 待落地」，**不是已完成的现状**；规格 §8.2）**
+>
+> 1. **`readFromSpool` 必须拒绝未以换行符结尾的末行**，**不得** trim 掉残字节后当正文返回。这是**真正的静默错正文路径**（封块侧的残行守卫只是响亮拒绝）：若末行不完整而写入器在其后继续追加，残行占掉一个行位，其后所有行整体错位 ⇒ `row=N` 静默读成第 `N+1` 行。判据与封块侧同源（「EOF 时仍带回了非空字节」；0 字节 spool 是合法状态）。**下文的 `readFromSpool` 代码块尚未包含该守卫，落盘时必须补上。**
+> 2. **读取产物时必须校验 footer 的 `frame_sha256[:8]`**：重算 zstd 帧字节（`[0, trailer_offset)`）的 SHA-256 前 8 字节并与 footer 比对，不符 ⇒ `ErrFooterCorrupt`（500 + 诊断，**不得**静默返回「不存在」）。该字段目前**只写不读**，等于完整性检查从未执行——而「发现半写 / 位腐」正是它存在的全部理由。**下文的 `readFromPart` 代码块尚未包含该校验。**
+> 3. **遇标记行返回 `ErrBodyMissing`**（404 + `body_missing=true`）：产物路径与 spool 路径**都**要识别，不得把字符串 `"null"` 当正文递出去（接口与用例已登记，保持不变）。
+>
+> 三条都必须有能区分它们的用例（全局约束的变异判据）：删掉末行终止符守卫、删掉 `frame_sha256` 校验、删掉任一标记行识别，分别都要有用例转红。
+
 - [ ] **步骤 1：编写失败的测试**
 
 **追加到 `tests/tracearchive/helpers_test.go`**（**B 层辅助**；任务 6 建好该文件，本任务加 `sealLines`）：
@@ -3597,7 +3660,7 @@ var _ = errors.Is
 
 > 这些用例经 `sealLines` → `Sealer` 走真实 `zstd`，因此**需要本机装 zstd**（缺失则 skip）。
 
-**变异自检**：删掉 `maxTrailerBytes` 上界检查 → `TestReaderRejectsOversizedTrailerLen` 必须转红（且可能 OOM）；把 `ErrNotArchived` / `ErrFooterCorrupt` 的 `%w` 改成 `%v` → 对应用例必须转红；删掉行号越界检查 → `TestReaderDistinguishesMissingFromNotArchived` 必须转红；删掉 `readFromPart` 或 `readFromSpool` 里的标记行识别（任一处，规格 §8.2 要求两条路径都有）→ `TestReaderReportsBodyMissingForMarkerLine` 必须转红；把 `defer func() { <-r.sem }()` 删掉 → `TestReaderReleasesConcurrencySlots` 必须转红（B 层的并发用例不会红——它只断言「全部读成功」，所以这条断言必须留在 A 层）。
+**变异自检**：删掉 `maxTrailerBytes` 上界检查 → `TestReaderRejectsOversizedTrailerLen` 必须转红（且可能 OOM）；把 `ErrNotArchived` / `ErrFooterCorrupt` 的 `%w` 改成 `%v` → 对应用例必须转红；删掉行号越界检查 → `TestReaderDistinguishesMissingFromNotArchived` 必须转红；删掉 `readFromPart` 或 `readFromSpool` 里的标记行识别（任一处，规格 §8.2 要求两条路径都有）→ `TestReaderReportsBodyMissingForMarkerLine` 必须转红；把 `defer func() { <-r.sem }()` 删掉 → `TestReaderReleasesConcurrencySlots` 必须转红（B 层的并发用例不会红——它只断言「全部读成功」，所以这条断言必须留在 A 层）。**R10 的两条另加**：删掉 `readFromSpool` 的末行终止符守卫 → 该守卫的用例必须转红；删掉 `frame_sha256[:8]` 校验 → 该校验的用例必须转红（两条用例在落盘时必须一并补上，见上方 R10 块）。
 
 - [ ] **步骤 5：提交**
 
@@ -3910,6 +3973,37 @@ git commit -m "test(tracearchive): 端到端逐字节往返与空间零增量约
 
 > **说明（本节的时效）**：Task 5 的报告（`.superpowers/sdd/2026-09-24-tracearchive-storage-primitives/task-5-report.md`）§7.B/§7.C 把 `ListParts` 记为「保留并补了用例」、把 `dt` 校验记为「建议，未实现」；那是提交 `8cd873e7` 时点的状态，已被评审修正 `52ccc9b2` 取代。**以代码为准**：截至 `52ccc9b2`，两条修正都已落地。
 
+### 追加缺陷登记（本轮：D7~D14）
+
+编号续 D6。**发现者**逐条注明。D8~D12 由 **Task 6 实现者**在实现与自检中报备；D13、D14 由 **Task 5 评审者**报备；D7 由 **Task 5 评审者**在范围外观察时发现。
+
+| 编号 | 缺陷 | 承重性 | 处置 |
+|---|---|---|---|
+| **D7** | **跨进程封块竞态**：网关侧没有「按年龄/大小滚动 part」的实现（`MarkSealed` 已交付但无人调用，`defaultSealInterval` 只是一个未被消费的常量），而 sealer 封块后会**删除 spool**；网关若继续往同一 part 追加，字节会写进**已 unlink 的 inode** ⇒ 落盘却永久不可达（其 `Ref` 仍指向行数更少的产物）⇒ **永久丢失正文**。**缓解不充分之处**：流量停 15 分钟后恢复正是触发条件 | **承重** | 属**计划 2**（网关滚动 part，间隔 ≤ 1h，见下方 R8）。本计划只交付了 `MarkSealed` 与 `minAge` 推导；在计划 2 落地前，3h 的安全性依赖 `defaultSealInterval = 15m` 这个现有常量 |
+| **D8** | sealer 简报的 `scanSpoolOffsets` 把**未终止尾行计作一行** ⇒ `Rows == 0` 的目录扫描路径会把残行**静默烤进产物**（其后行边界全部错位） | **承重**（静默错正文） | 落地实现改为**拒绝**：spool 必须以换行符结尾，否则以 `ErrSealFailed` 保留 spool、不产生产物（残行守卫）。判据是「EOF 时仍带回了非空字节」（0 字节空 spool 合法） |
+| **D9** | Task 6 简报的 `MkdirAll` 放在创建 `.tmp` **之后**，而 `.tmp` 就落在产物目录里 ⇒ 目录不存在时 `os.OpenFile(.tmp)` 直接 ENOENT，**10 条真封块用例全部失败** | 实现缺陷（非生产缺陷） | 建目录提到创建 `.tmp` **之前**（`.tmp` 必须与产物同目录才能 `rename`） |
+| **D10** | Task 6 简报注释「`%w` 就能拿到 `exec.ErrNotFound`」**不成立**：`exec.Command` 只对**不含路径分隔符**的 name 走 `LookPath`，绝对路径下 `cmd.Run()` 返回 `*fs.PathError(ENOENT)`，`errors.Is(err, exec.ErrNotFound)` 恒为 false | 诊断保真度 | 在探测/运行处显式把「文件不存在」这一支归一化到 `exec.ErrNotFound`（同时保留原始错误）；用例的身份断言不变 |
+| **D11** | golden 自检 `want[32:40]` **偏移 3 字节**（应为 `[35,43)`，即 `footerStart + [22,30)`）⇒ 该自检读到的是 `trailer_len`/`row_count` 与摘要前 5 字节的混合，**恒不成立** | 测试常量错误 | 改用格式契约表达：`footerStart := len(want) - FooterSize`，比较 `want[footerStart+22:footerStart+30]` |
+| **D12** | **`-run` 合并正则内嵌换行导致用例静默不执行**：用 `printf` 往一个以换行结尾的正则文件追加用例名，最后一个分支变成 `"...MinAge\n"` ⇒ 该用例不再被执行，而 `ok` 照常打印（实现者差点把「28 条全绿」当成结论） | **方法论缺陷（影响每一个任务）** | 已写进本计划的**全局约束**：每条证据必须满足三条（顶层 `=== RUN` 名字集合与正则名字集合各自 `tr -d '[:space:]'` 后 diff 为空 —— 该命令同时消掉尾部换行与内嵌空白，只 trim 尾部的版本会放过本缺陷；顶层 `--- PASS: TestName ` 行数 == 顶层名字数，**不排除子用例会误报**；`SKIP == 0`） |
+| **D13** | `Append` 对行内换行**既无转义也无校验**，而简报的接口行明写「行内换行会被转义」（**文档说了代码不做的事**）；这是承重不变量的**唯一无守卫入口** | **承重**（静默错正文） | `validateLine` 拒绝行内裸 `\n`/`\r` 与 trim 后为空的行；校验只放公开 `Append`，落盘逻辑抽到 `appendLineLocked`（不校验，`AppendFailed` 复用）。**选择拒绝而非转义**的理由见规格 §7.1 |
+| **D14** | 写失败后 `bufio` 错误**粘性**使标记行写不进去，且短写可能留下**没有 `row_seq` 的残行**；简报的「写失败只不推进行号」既救不回该块，又会让残行留在 sealer 的发现范围里 | **承重**（静默错正文） | 写失败隔离四步机制（回退行边界 / 改名隔离 / 毒化 / 退路清空），见规格 §7.1 与 Task 5 的「落地修正」③ |
+
+> **D7 的时效说明**：Task 6 报告 §7.1/§8.1 把「网关 part 滚动」记为待办、把 `minAge` 记为「默认等于 `defaultSealInterval`」；那是 `76042bcd` 时点的状态，已被裁决落实 `e0b0084f`（`minAge` = 3h）与随后的计划 2 要求（R8）取代。**以代码为准。**
+
+---
+
+## 计划 2（网关接入）的对端要求（Task 5/6 交付后追加）
+
+以下三条**不是本计划的交付物**，而是本计划已交付的原语对**计划 2（网关接入 / 请求路径）**提出的要求。登记它们是因为 Task 5/6 的实现在代码注释里已依赖这些前提，若计划 2 不满足，本计划的安全性结论不成立。
+
+| # | 要求 | 依据与后果 |
+|---|---|---|
+| **R8** | 网关必须**自己周期滚动 part**（拿到新 part 即关闭旧 fd），且**滚动间隔 ≤ 1h**（**严格小于** sealer 的 `minAge` = 3h） | `minAge`（`defaultSealMinAge`）是 sealer 侧唯一的保护，其推导链见 Task 6 的落地修正①。**D7 缺口**：网关与 sealer 之间**没有信号通道**，sealer 封块后会**删除 spool**，而网关若继续往同一 part 追加，字节会写进**已 unlink 的 inode** ⇒ **永久丢失正文**（它们的 `Ref` 还指向一个行数更少的产物）。**缓解不充分之处**：流量停 15 分钟后恢复正是触发条件（spool 的 mtime 早已超过 `minAge`，sealer 认为「已停止追加」，而网关仍持有旧 fd 且未滚动）。注意 `defaultSealInterval = 15m` 只是一个**与滚动间隔同名、本身不滚动任何 part** 的常量——滚动动作必须由计划 2 实现 |
+| **R9** | **背压**：磁盘满时网关应**放弃正文并标 `body_missing=true` 继续服务**，而不是持续重试写盘 | §7.1 的【已知代价】正是这一条的依据：否则每个请求都要走一遍「写失败 + 反向扫描 + 改名」，且块序号与目录项**无界增长**、每次 `Append` 付一次 O(n) 目录扫描。这也是本计划**刻意不加计时器/计数器**的原因——正确修法属计划 2 |
+| 可选优化（非要求） | `PendingSeals` 持锁做最多 1 MiB 的 `Flush`，与请求路径的 `Append` 争**同一把锁**（`w.mu`） | 慢盘 / ENOSPC 时会把这 1 MiB flush 的延迟加到请求路径上。要彻底消除需把 flush 与请求路径解耦（独立 flush 协程或双缓冲）。**不在本计划内**，登记备查 |
+
+> 与 R8 配套的部署事实：sealer 的 `minAge` 为 3h、块目标 1536 MiB ⇒ 满流量下网关每约 1 小时就该因**大小阈值**滚动一次（这也正是「滚动间隔 ≤ 1h」的来源）；滚动间隔上限同时决定了未封块 spool 的驻留量（约 4.6 GiB，规格 §7.1）。
+
 ---
 
 ## 自检
@@ -3937,7 +4031,11 @@ git commit -m "test(tracearchive): 端到端逐字节往返与空间零增量约
 | §10.1 I1~I5 不变量 | 任务 5/6（实现）、任务 6 的原子性与拒绝覆盖测试 |
 | §10.2 崩溃窗口 | 任务 5（`nextSeqLocked` 恢复）、任务 6（失败清理 .tmp）|
 | §11.1 sealer 为宿主机 unit / 网关镜像零改动 | 不在本计划范围（计划 4）；本计划只保证 `SealerOptions.ZstdBinary` 可配置 |
-| §11.1 zstd 版本锁定（v1.4.8）| 任务 6（全局约束中的版本锁定条款）|
+| §11.1 zstd 版本锁定（v1.4.8）| 任务 6（**已由代码强制执行**：`SealerOptions.ExpectedZstdVersion` + 封块前探测，四条错误路径全部以 `ErrSealFailed` 响亮失败，已落地在 `e0b0084f`）|
+| §7.2 残行守卫 / `minAge`=3h / `ListPendingSeals` 目录名校验与方法形态 | 任务 6（均已在 `76042bcd`/`e0b0084f` 落地）|
+| §7.1 行校验（拒绝而非转义）与写失败隔离四步 | 任务 5（已落地在 `771d7985`）|
+| §8.2 R10（`frame_sha256` 校验、spool 末行终止符守卫）| 任务 7（**要求/待落地**：`reader.go` 尚未实现，见任务 7 的 R10 块）|
+| §15.2 生产侧验收清单（P1~P3）| 不在本计划范围（生产机验收）|
 | §14.1 变异测试（每道防线摘除必须转红）| 任务 2/3/5/6/7 的「变异自检」小节 |
 | §14.2 A1 逐字节往返 | 任务 8 |
 | §14.2 A4 零空间增量 | 任务 8 |
@@ -3963,13 +4061,13 @@ git commit -m "test(tracearchive): 端到端逐字节往返与空间零增量约
 - `Ref` 字段名 `DT`/`Inst`/`Part`/`Row` 在任务 4 定义，任务 5、6、7、8 使用一致。
 - `SealTask` 字段 `DT`/`Inst`/`Part`/`SpoolPath`/`Rows`/`UncompressedBytes` 任务 5 定义，任务 6 使用一致；**`Rows == 0` 表示行数未知**（任务 6 的 `ListPendingSeals` 不填行数），任务 6 据此跳过行数交叉校验。
 - `footer` 字段 `TrailerOffset`/`TrailerLen`/**`RowCount`**/`FrameSHA` 任务 3 定义（`RowCount` 编在 `[18:22)`），任务 6、7 使用一致；`FooterSize` 同一任务定义，任务 6、7 引用。**任务 3 的「对外产出」必须写出 `RowCount`**：漏了它，任务 6 不会写 `row_count`，任务 7 也拿不到传给 `decodeTrailer` 的期望条目数（那是识别 trailer 截断的唯一依据）。
-- `WriterOptions` 含 `Root`/`Inst`/`BlockBytes`/`SealInterval`；`SealerOptions` 含 `Root`/**`ZstdBinary`**/`ZstdLevel`/`ZstdWindowBytes`；`ReaderOptions` 含 `Root`/`ZstdWindowBytes`/`MaxConcurrent`——三者字段名不冲突。
+- `WriterOptions` 含 `Root`/`Inst`/`BlockBytes`/`SealInterval`；`SealerOptions` 含 `Root`/**`ZstdBinary`**/`ZstdLevel`/`ZstdWindowBytes`/**`MinAge`（0 取 `defaultSealMinAge` = 3h，已落地在 `e0b0084f`）**/**`ExpectedZstdVersion`（0 取 `defaultZstdVersion` = `"1.4.8"`，已落地在 `e0b0084f`）**；`ReaderOptions` 含 `Root`/`ZstdWindowBytes`/`MaxConcurrent`——三者字段名不冲突。
 - `Writer.MarkSealed(dt string, part int)` 任务 5 定义，任务 8 使用一致。
 - `Paths` 方法 `PartFile`/`SpoolFile`/`PartDir`/`SpoolDir` 任务 4 定义，任务 5、6、7 使用一致。
 - 读取侧错误变量 `ErrPartNotFound`/`ErrBodyMissing`/`ErrNotArchived` 任务 4 定义；任务 7 使用 `ErrNotArchived`、**`ErrBodyMissing`（标记行 ⇒ 正文从未落盘，规格 §8.2）** 与 `ErrFooterCorrupt`（任务 3 定义），均以 `%w` 包装，与 `errors.Is` 兼容。
   - **已知留白的更新（Task 5 交付后）**：原先这里写着「`ErrPartNotFound` 与 `ErrBodyMissing` 在任务 7 的 `Reader` 内**未被使用**……两个哨兵都给计划 3 的服务层」。现在只对了一半：`ErrBodyMissing` 的定义注释是「正文在写入时即失败，从未落盘。对应 HTTP 404」——**这正是 `AppendFailed` 的语义**，标记行落地后任务 7 的 `Reader` 必须直接使用它（产物路径与 spool 路径遇到 `null` 标记行都返回 `ErrBodyMissing`，规格 §8.2），不能把它留给服务层去组合判定。**`ErrPartNotFound` 仍未被任务 7 使用**，它（配合 `body_missing` 元数据列实现规格 §8.1 的 410 语义）留待计划 3 的服务层。这不是本计划缺陷。
 - 封块侧错误变量 `ErrPartExists`/`ErrRowCountMismatch`/`ErrSealFailed` 任务 4 定义，任务 6 使用一致（全部 `%w` 包装；测试用 `errors.Is` 断言身份，`TestSealFailsOnNonZeroExit` 另有 `errors.As` 取 `*exec.ExitError` 断言退出码）。
-- `ListPendingSeals(root string, minAge time.Duration) ([]SealTask, error)` 任务 6 定义并在任务 6 测试中使用；它填的 `SpoolPath` 是绝对路径，任务 6 的 `Seal` 直接使用。
+- ~~`ListPendingSeals(root string, minAge time.Duration) ([]SealTask, error)`~~ → **最终形态是方法 `(*Sealer).ListPendingSeals() ([]SealTask, error)`（任务 6 定义，已落地在 `e0b0084f`）**：`minAge` 取自构造时的 `SealerOptions`；它填的 `SpoolPath` 是绝对路径，同包的 `Seal` 直接使用。包级函数**已删除**（详见任务 6 的「落地修正」⑤），本节所有提到包级签名的测试片段落盘时都要改成「构造 `Sealer` + 调方法」。
 - `maxTrailerBytes` 任务 7 定义、仅任务 7 使用；`TestReaderRejectsOversizedTrailerLen` 直接引用它构造边界值，因此该 const 不能内联为字面量。
 
 **5. 测试摆放分层核对（混合方案，逐任务）**：
@@ -3980,12 +4078,12 @@ git commit -m "test(tracearchive): 端到端逐字节往返与空间零增量约
 | 2 | `index_test.go` | 无 | `encodeTrailer`/`decodeTrailer`/`appendVarint` 均未导出 |
 | 3 | `footer_test.go` | 无 | `footer` 结构体与 `encodeFooter`/`decodeFooter` 未导出（`FooterSize` 导出） |
 | 4 | `ref_internal_test.go` | `ref_test.go` | `parsePartSeq` 未导出 |
-| 5 | 无 | `writer_test.go` | ——（`w.paths` 在转换时改写为 `ta.NewPaths(root).SpoolFile(...)`） |
+| 5 | `writer_internal_test.go`（**交付时新增，见任务 5「落地修正」④**） | `writer_test.go` | 写失败注入必须替换未导出的 `cur.w`；`MarkSealed` 的 fd 关闭回归必须持有未导出的 `cur.f`（原本记的「无 A 层」是错的） |
 | 6 | `sealer_internal_test.go` + `testhelpers_test.go` | `sealer_test.go` + `helpers_test.go` | `s.failBeforeRename` 测试钩子、`parsePartSeq` 交叉验证 |
 | 7 | `reader_internal_test.go` + 追加 `testhelpers_test.go` | `reader_test.go` + 追加 `helpers_test.go` | `maxTrailerBytes` 上界、`footer`/`encodeFooter` 构造损坏产物、`r.inFlight()` |
 | 8 | 无 | `roundtrip_test.go` + `constraints_test.go` | —— |
 
-- **A 层共 5 份测试文件**（任务 1/2/3/4/6/7 里标 A 的那些；任务 5/8 完全没有 A 层文件），**B 层共 6 份**（任务 4/5/6/7/8）。每一处 A 层例外都在对应的测试函数注释里写明了「为什么必须触达未导出符号」。
+- **A 层共 6 份测试文件**（任务 1/2/3/4/5/6/7 里标 A 的那些；任务 8 完全没有 A 层文件——**任务 5 的 `writer_internal_test.go` 是交付时新增的，原表漏记**），**B 层共 6 份**（任务 4/5/6/7/8）。每一处 A 层例外都在对应的测试函数注释里写明了「为什么必须触达未导出符号」。
 - 任务 2/3 的代码**已经交付**且测试留在包内：这符合上面的 A 层判据，**不需要返工**，仅在此登记为「有意为之」。
 - **测试辅助在两层的重复是设计决定**：`writeSpool`/`requireZstd`/`fakeZstd`（任务 6）、`sealLines`（任务 7）在 `internal/tracearchive/testhelpers_test.go` 与 `tests/tracearchive/helpers_test.go` 各有一份。Go 无法跨包共享 `_test.go` 辅助；若发现同层内重复定义，合并进该层的 helper 文件即可。
 - 转换纪律：每个 B 层代码块顶部都写了「落盘时加 `ta.` 前缀」的清单；**漏加会直接编译失败**，所以这条规则是可自动校验的，不靠人工记忆。

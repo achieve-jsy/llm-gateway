@@ -43,6 +43,14 @@ func TestSealIsAtomicOnCrash(t *testing.T) {
 	}
 }
 
+// 【为什么破例放包内（A 层例外，评审第 ⑧ 条补）】parsePartSeq 未导出（它是
+// 文件名约定的实现细节，规格不要求它成为生产 API），而封块器必须与
+// (*Sealer).ListPendingSeals 共用同一套「恰好 6 位」的块名解析约定 —— 这条交叉
+// 验证只能在包内表达：B 层（package tracearchive_test）无法构造这个未导出符号的
+// 输入，只能通过文件系统间接验证，那验的是「有没有被扫到」而不是解析函数本身。
+// 上层已有的同类校验在 B 层：《TestListPendingSealsIgnoresIllegalNames》
+// （tests/tracearchive/sealer_test.go）覆盖了同一个约定在真实目录扫描下的行为，
+// 本条只做「.tmp 不被当成合法块名」的定点确认。
 func TestParsePartSeqUsedBySealer(t *testing.T) {
 	// 封块器同样依赖严格的块名解析，此处交叉验证一次
 	if _, ok := parsePartSeq("part-000000.jsonl.zst.tmp"); ok {

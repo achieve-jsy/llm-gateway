@@ -13,11 +13,20 @@ import (
 
 // 路径分量校验（dt 与 inst 必须成对看待，一处漏掉就是同一个洞的另一半）。
 //
-// 两个分量都直接拼进目录名（<root>/dt=<dt>/inst=<inst>），而 filepath.Join
-// 会做路径清理：
-//   - Inst="../green" 会被清成 <root>/dt=X/green，越过 inst= 子树，把两个实例
-//     的正文混进同一目录；
-//   - dt="../x" 会被清成 <root>/x，越过 dt= 子树。
+// 两个分量都直接拼进目录名（<root>/dt=<dt>/inst=<inst>），而 filepath.Join 会做
+// 路径清理。**清理只对「裸 `..` 元素」生效**：紧跟 "dt="/"inst=" 前缀的那个 ".."
+// 会被前缀粘成字面名字（"inst=.." 不是父目录记号），所以真正的穿越向量是
+// **含斜杠**的值（以下均实测，root="/r"）：
+//   - dt="2026-09-24/../.." ⇒ SpoolDir 得 /r/inst=blue、PartDir 得 /inst=blue
+//     —— 越出 <root> 本身；
+//   - inst="../../green"    ⇒ /r/dt=X/green —— 越出 inst= 层，把两个实例的正文
+//     混进同一目录；
+//   - inst="a/../../green"  ⇒ /r/green。
+//
+// 反例（**别**写成「紧贴前缀的 .. 也会折叠」）：inst="../green" 实测得
+// <root>/dt=X/inst=../green，dt="../x" 实测得 <root>/dt=../x/inst=blue —— 均不折叠。
+// 它们同样必须拒绝，但理由是「目录名里出现了与标识不符的段，Ref ⇄ 路径不再
+// 一一对应」，不是「越出子树」。
 //
 // 因此两者都用严格取值而不是「非空」：
 //   - inst：枚举白名单（见 NewWriter）；

@@ -37,16 +37,22 @@ const defaultZstdVersion = "1.4.8"
 // 【取值推导（评审裁决 1）——这个数不是随手取的】
 //   - 实测摄取速率 ≈ 37 GiB/天 ≈ 1.54 GiB/小时；
 //   - 块大小目标 defaultBlockBytes = 1536 MiB ⇒ 满流量下约 1 小时填满一个块；
-//   - 网关的 part 滚动间隔应取 ~1 小时：让【大小】阈值先触发，从而保住已标定的
-//     10.26x 压缩比（若按时间过早截断，块会缩到 ~400 MB，压缩比落进未标定的区间）；
 //   - 本进程唯一的保护就是这个时间差（见 (*Sealer).ListPendingSeals 的说明），
-//     且它必须【严格大于】网关的滚动间隔 ⇒ 取 3 × 1h = 3 小时，留 3 倍安全余量。
+//     它必须【严格大于】网关的 part 滚动间隔 ⇒ 取 3 × 1h = 3 小时，留 3 倍安全余量。
+//
+// 【两个不同的命题，不要混为一谈（评审第 ⑥ 条）】
+//  1. 正确性约束：minAge 必须严格大于网关滚动间隔。**现有
+//     defaultSealInterval=15m 满足这一条**（3h 对它有 12 倍余量），因此当前
+//     默认值在正确性上是安全的。
+//  2. 压缩比档位目标（**15m 不满足这一条**）：计划 2 应把网关滚动间隔调到 ~1h，
+//     好让 1536 MiB 的【大小】阈值先触发，从而落在已标定 10.26x 的档位上；
+//     当前 15m 会让【时间】阈值先触发，块被截到 ~400 MB，压缩比落进**未标定区间**。
+//     也就是说，10.26x 这个验收线只有在第 2 条落地后才真正被覆盖。
 //
 // 成本核算：未封块 spool 约 3h × 1.54 GiB/h ≈ 4.6 GiB 未压缩驻留，
 // 相对 /datalog 的 240 GiB 可用空间可忽略。
 //
-// ⚠️ 对端约束：网关的滚动间隔必须 ≤ 1h（计划 2 落地；现有常量
-// defaultSealInterval=15m 已满足，且 3h 对它有 12 倍余量），否则本值不再成立。
+// ⚠️ 对端约束：网关的滚动间隔必须 ≤ 1h（计划 2 落地），否则本值不再成立。
 const defaultSealMinAge = 3 * time.Hour
 
 // SealerOptions 是封块器配置。
@@ -77,15 +83,17 @@ type Sealer struct {
 	opts  SealerOptions
 	paths Paths
 
-	// 本结构体【没有运行期可变状态】（评审裁决 1）：版本探测刻意不做记忆化，
-	// 因此 Sealer 可以在多个 goroutine 间共享调用 Seal 而无需同步
-	//（唯一的例外是下面的测试注入钩子，它只在单测里、并发调用之前设置）。
+	// 本结构体【没有运行期可变状态】（评审裁决 1）：版本探测刻意不做记忆化。
+	// 代价与收益：记忆化省下的只是一天几十次（回溯追赶时最多上百次）
+	// `zstd --version`，合计秒级；代价却是引入一个未同步的可变字段，让这个看起来
+	// 可以共享的值类型在【任意】并发调用下产生数据竞争。不划算。
 	//
-	// 为什么不做记忆化：省下的只是一天几十次（回溯追赶时最多上百次）
-	// `zstd --version`，合计秒级；而代价是引入一个未同步的可变字段，
-	// 让这个看起来可共享的值类型在并发下产生数据竞争。不划算。
-
-	// failBeforeRename 仅供测试注入故障，生产恒为 nil。
+	// 【并发边界（评审第 ⑦ 条，原注释说过头了）】不同 Ref 之间可以并发调用 Seal；
+	// **同一个 (dt, inst, part) 必须串行**——它们共用同一个 partPath+".tmp"
+	// （见 Seal 里 tmpPath 的用法），并发跑会互相交错/覆盖同一个临时文件。
+	// 这里的「无共享可变状态」只保证不存在数据竞争，不等于同一块可以并发封。
+	//
+	// 唯一的例外是下面的测试注入钩子，它只在单测里、并发调用之前设置（生产恒为 nil）。
 	failBeforeRename func() error
 }
 
@@ -122,6 +130,20 @@ func NewSealer(opts SealerOptions) (*Sealer, error) {
 //   - spool 行数与记录不符  → ErrRowCountMismatch（保留 spool）
 //   - 子进程非零退出/缺失   → ErrSealFailed（保留 spool、删 .tmp）
 func (s *Sealer) Seal(ctx context.Context, task SealTask) error {
+	// ⓪ 路径一致性（评审第 ⑤ 条）：task.SpoolPath 必须就是 (DT,Inst,Part) 对应的
+	// 那个 spool 文件。Seal 是【导出 API】，task 由调用方构造；若两者不匹配，产物
+	// 会以 Ref 寻址、却装进另一个文件的内容 —— 点读会【静默返回错正文】，这是本项目
+	// 最不可接受的一类失效。成本只是一次字符串比较，因此前置在所有 I/O 之前
+	//（纯内存判定，连 stat 都不做；畸形调用不该先去看世界状态）。
+	//
+	// 当前唯一调用方 ListPendingSeals 由 SpoolFile 构造 path，天然自洽；这条守卫是
+	// 给未来调用方与重构用的。
+	wantSpool := s.paths.SpoolFile(Ref{DT: task.DT, Inst: task.Inst, Part: task.Part})
+	if task.SpoolPath != wantSpool {
+		return fmt.Errorf("%w: task.SpoolPath=%q 与 Ref{%s, %s, %d} 对应的 %q 不一致（拒绝封块：产物会以 Ref 寻址却装进另一文件的内容）",
+			ErrSealFailed, task.SpoolPath, task.DT, task.Inst, task.Part, wantSpool)
+	}
+
 	partPath := s.paths.PartFile(Ref{DT: task.DT, Inst: task.Inst, Part: task.Part})
 
 	// I4: 同一个 (dt, inst, part) 只允许封块一次。
@@ -361,6 +383,14 @@ func (s *Sealer) runZstd(ctx context.Context, spoolPath, tmpPath string) ([8]byt
 		return empty, err
 	}
 
+	// 【纵深防御，不是唯一防线（评审第 ② 条：原理由经实测不成立）】
+	// 原注释称「删掉它会静默产出空帧 + 正确索引」。实测（go1.26.1/darwin）：
+	// 若这里改成把 typed-nil 的 *os.File 交给子进程，得到的是【坏 fd】而不是 EOF——
+	// cat 退 1、zstd 退 37 ⇒ cmd.Run() 非 nil ⇒ 下面「子进程失败」那条守卫照样以
+	// ErrSealFailed 拦下，**不会**静默产出空帧。所以本分支不是唯一防线。
+	//
+	// 它测试不可达（spool 在扫描与本次打开之间被删除/替换的 TOCTOU 窗口），保留它
+	// 的理由是：将来若有人重构掉上层守卫，这里仍会响亮失败而不是静默通过。
 	src, err := os.Open(spoolPath)
 	if err != nil {
 		return empty, fmt.Errorf("%w: 打开 spool 失败: %w", ErrSealFailed, err)
@@ -476,9 +506,11 @@ func fsyncDir(dir string) error {
 // 磁盘上可能还是空文件、mtime 停留在创建时刻，只有 flush 才会推进它。
 // 默认值见 defaultSealMinAge（3 小时）——取值推导与对端约束都写在那个常量上。
 //
-// 【目录名校验（评审裁决 3b）】dt/inst 直接来自目录名，非法值一律跳过该目录
-// （不报错中断整轮扫描）：畸形名（"dt=.."、"inst=.."、"dt=2026-9-24"）会被
-// filepath.Join 的清理语义带出 spool 子树，而写入侧已严格校验，两侧必须对称。
+// 【目录名校验（评审裁决 3b；理由经评审第 ③ 条更正）】dt/inst 直接来自目录名，
+// 非法值一律跳过该目录（不报错中断整轮扫描）。理由是【健壮性/一致性】：畸形目录名
+// 会让下游拿到一个语义不通的 SealTask（DT=".."、DT="2026-9-24"、Inst="bluex"），
+// 而写入侧早已严格校验，两侧应当对称。
+// **不是防路径穿越** —— 原注释的该前提经实测不成立，详见循环体内 dt 处的注释。
 //
 // 【为什么只有方法、没有包级函数（评审裁决 2）】发现路径需要 Root 与 MinAge
 // 两个配置项，包级 ListPendingSeals(root, minAge) 允许它们来自不同来源，
@@ -502,10 +534,22 @@ func (s *Sealer) ListPendingSeals() ([]SealTask, error) {
 			continue
 		}
 		dt := strings.TrimPrefix(dtEnt.Name(), "dt=")
-		// 【裁决 3b】dt 来自【目录名】，而 SpoolDir/PartDir 走 filepath.Join 的
-		// 清理语义：目录名 "dt=.." 会让 "<root>/spool/dt=../inst=blue" 被 Clean 成
-		// "<root>/spool/inst=blue"，即越过 spool 子树（任务 4 评审在写入侧已堵住，
-		// 列举侧此前没有拦截）。畸形目录名会让下游 Seal 把产物写到布局之外。
+		// 【裁决 3b，理由经评审第 ③ 条更正】原注释称目录名 "dt=.." 会被 filepath.Join
+		// 的清理语义带出 spool 子树 —— **该前提经实测不成立**：
+		//   Join("/r", "dt=..", "inst=blue") == "/r/dt=../inst=blue"
+		// 因为 "dt=.." 是一个【字面目录名】，不是父目录记号，Clean 不会折叠它；
+		// 而且 SpoolDir/PartDir 会拼回 "dt="/"inst=" 前缀，目录名本身也不可能含 "/"。
+		// 所以这里的校验价值是【健壮性/对称性】：不让畸形目录名产出语义不通的
+		// SealTask（DT=".."、"2026-9-24"、Inst="bluex"），与写入侧严格校验对称，
+		// **不是防路径穿越**。
+		//
+		// 精确表述（避免矫枉过正成「穿越不可能」）：穿越在【一般】情形下确实可能，
+		// 但那要求值里含 "/"，让 Join 看到裸 ".." 元素才折叠，例如（均实测，root=/r）：
+		//   dt="2026-09-24/../.."    ⇒ SpoolDir=/r/inst=blue、PartDir=/inst=blue（越出 root）
+		//   inst="../../green"       ⇒ /r/dt=X/green（越出 inst= 层）
+		//   inst="a/../../green"     ⇒ /r/green
+		// 写入侧取值来自调用方参数（可含 "/"）⇒ 那里穿越成立、必须校验；本条列举
+		// 路径的 dt/inst 只能来自【目录名】（不含 "/"）⇒ 此处穿越不成立。
 		//
 		// 非法即【跳过】而不是报错：一个坏目录不该让当天所有封块停摆
 		// （与下面「非布局条目静默忽略」同一策略），所以这里是 continue。

@@ -242,17 +242,25 @@ func TestNewWriterRejectsEmptyRootAndInst(t *testing.T) {
 
 // TestNewWriterRejectsIllegalInst 锁定 Inst 白名单（"blue" / "green"）。
 //
-// 为什么必须有这道校验：inst 直接拼进目录名，而 filepath.Join 会做路径清理 ——
-// Inst="../green" 会写进 <root>/dt=<dt>/green（越过 inst= 子树，把两个实例的
-// 正文混进同一目录）；Inst="blue/" 会被清成 blue，让「实例」标识与实际目录
-// 不再一一对应。只查非空挡不住这两种，必须白名单。
+// 为什么必须有这道校验：inst 直接拼进目录名，而 filepath.Join 会做路径清理。
+// 清理只对「裸 `..` 元素」生效——紧跟 "inst=" 前缀的 ".." 会被前缀粘成字面名字，
+// 所以真正越出子树的是**含斜杠**的值（以下均实测，root="/r"）：
+//   - inst="../../green"   ⇒ /r/dt=X/green（越出 inst= 层，把两个实例的正文混进
+//     同一目录）；
+//   - inst="a/../../green" ⇒ /r/green；
+//   - inst="blue/"         ⇒ /r/dt=X/inst=blue（只是去掉了尾部分隔符，目录名与
+//     「实例」标识不再一一对应）。
+//
+// 只查非空挡不住这些，必须白名单。
+// （反例：inst="../green" 实测得 /r/dt=X/inst=../green —— **不折叠**；它被拒绝的
+// 理由是「出现了与标识不符的段」，不是「越出子树」。）
 func TestNewWriterRejectsIllegalInst(t *testing.T) {
 	root := t.TempDir()
-	for _, inst := range []string{"red", "../green", "blue/", "blue/../green", "BLUE", "blue "} {
+	for _, inst := range []string{"red", "../green", "blue/", "blue/../green", "../../green", "a/../../green", "BLUE", "blue "} {
 		w, err := ta.NewWriter(ta.WriterOptions{Root: root, Inst: inst})
 		if err == nil {
 			w.Close()
-			t.Fatalf("Inst=%q 应被拒绝（越过 inst= 子树或与标识不符）", inst)
+			t.Fatalf("Inst=%q 应被拒绝（越出 inst= 子树或与标识不符）", inst)
 		}
 	}
 	// 反向断言：白名单内的实例必须仍然可用。否则「一律拒绝」也会让上面的
@@ -545,8 +553,14 @@ func TestWriterMarkSealedStartsNextPart(t *testing.T) {
 // TestWriterAppendRejectsIllegalDT 锁定 dt 的「路径分量」校验。
 //
 // dt 与 inst 是同一个洞的两半：两者都直接拼进目录名，而 filepath.Join 会做
-// 路径清理，dt="../x" 会被清成 <root>/x（越过 dt= 子树）。因此 dt 必须是
-// 严格日期 YYYY-MM-DD，time.Parse 一次挡住路径穿越、空串、未补零、非法日期。
+// 路径清理。**清理只对「裸 `..` 元素」生效**——紧跟 "dt=" 前缀的 ".." 会被前缀
+// 粘成字面名字，所以真正的向量是含斜杠的值（实测，root="/r"）：
+// dt="2026-09-24/../.." ⇒ SpoolDir 得 /r/inst=blue、PartDir 得 /inst=blue，
+// 【越出 <root>】。因此 dt 必须是严格日期 YYYY-MM-DD，time.Parse 一次挡住
+// 路径穿越、空串、未补零、非法日期。
+//
+// 反例（别写成「dt="../x" 会被清成 <root>/x」）：实测得到 /r/dt=../x/inst=blue,
+// **不折叠**；它被拒是因为不是合法日期 + 目录名与标识不符。
 //
 // 判据：删掉 Append 里的 validateDT 调用，本用例转红（第一类断言即 err == nil）。
 func TestWriterAppendRejectsIllegalDT(t *testing.T) {
@@ -559,12 +573,13 @@ func TestWriterAppendRejectsIllegalDT(t *testing.T) {
 
 	bad := []string{
 		"",                     // 空串
-		"../x",                 // 路径穿越：Join 会清成 <root>/x
+		"../x",                 // 非日期 + 目录名与标识不符（**不折叠**，见上方反例）
 		"2026-9-24",            // 未补零：同一天会出现两个目录名
 		"2026-13-01",           // 非法月份
 		"2026-02-30",           // 非法日期
 		"2026-09-24T00:00:00Z", // 带时间部分（多出文本）
-		"2026-09-24/../..",     // 以合法日期开头的穿越
+		"2026-09-24/../..",     // 真穿越向量：裸 .. 被折叠 ⇒ 越出 <root>
+		"2026-09-24/../../x",   // 同上，末尾多一段
 		"20260924",             // 无分隔符
 	}
 	for _, dt := range bad {

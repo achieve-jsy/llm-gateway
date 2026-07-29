@@ -604,16 +604,121 @@ func TestSealFailsWhenSpoolMissing(t *testing.T) {
 	}
 }
 
+// TestSealRejectsSpoolPathNotMatchingRef 覆盖评审第 ⑤ 条新增的守卫：
+// task.SpoolPath 必须就是 (DT,Inst,Part) 对应的那个 spool 文件。
+//
+// 为什么必须有它：Seal 是【导出 API】，task 由调用方构造。若 path 与 Ref 不匹配，
+// 产物会以 Ref 寻址、却装进另一个文件的内容 —— 点读会【静默返回错正文】，
+// 这是本项目最不可接受的一类失效。删掉这条校验，本用例转红。
+//
+// 顺带钉住执行顺序：本用例不提供 zstd（SealerOptions 没给 ZstdBinary），
+// 说明该判定发生在版本探测与一切 I/O 之前 —— 畸形调用不该先去看世界状态。
+func TestSealRejectsSpoolPathNotMatchingRef(t *testing.T) {
+	root := t.TempDir()
+	// 真实存在、但属于 part 1 的 spool；任务却声称它是 part 0
+	other := writeSpool(t, root, "2026-09-24", "blue", 1, [][]byte{[]byte("属于 part 1 的正文")})
+
+	s, _ := ta.NewSealer(ta.SealerOptions{Root: root})
+	err := s.Seal(context.Background(), ta.SealTask{
+		DT: "2026-09-24", Inst: "blue", Part: 0, SpoolPath: other, Rows: 1,
+	})
+	if !errors.Is(err, ta.ErrSealFailed) {
+		t.Fatalf("SpoolPath 与 Ref 不一致必须失败（ErrSealFailed），实际 %v", err)
+	}
+	if msg := err.Error(); !strings.Contains(msg, "不一致") {
+		t.Fatalf("错误信息必须点明路径不一致（否则运维看不出是调用方构造错了），实际: %v", err)
+	}
+	partPath := ta.NewPaths(root).PartFile(ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0})
+	if _, statErr := os.Stat(partPath); !os.IsNotExist(statErr) {
+		t.Fatal("路径不一致时不得产出 part 0 的产物（否则点读 part 0 会返回 part 1 的正文）")
+	}
+	if _, statErr := os.Stat(partPath + ".tmp"); !os.IsNotExist(statErr) {
+		t.Fatal("路径不一致时不应创建 .tmp")
+	}
+}
+
+// TestSealReportsMidRunCancellationAsCanceled 覆盖 runZstd 的 ctx 归一化分支
+// （评审第 ① 条：原判「测试不可达」不成立）。
+//
+// 实测（go1.26.1/darwin）：进程【运行途中】被 ctx 杀掉时，cmd.Run 返回的是
+// `signal: killed`，**不是** context.Canceled。若不归一化，调用方（sealer 循环/告警）
+// 无法把「本次巡检被取消/停机」与「压缩真的失败」区分开——前者应安静退出，
+// 后者才要告警。删掉该分支后 errors.Is(err, context.Canceled) 变 false，本用例转红。
+//
+// 「运行途中」是刻意的：ctx 在 Start 之前就已取消时 exec 直接返回 context.Canceled
+// （另一条路径），测不到本分支。
+func TestSealReportsMidRunCancellationAsCanceled(t *testing.T) {
+	root := t.TempDir()
+	spool := writeSpool(t, root, "2026-09-24", "blue", 0, [][]byte{[]byte("aaa")})
+
+	// 假 zstd：先打哨兵再长睡 ⇒ 哨兵出现即证明「子进程正在运行」
+	started := filepath.Join(root, "started")
+	// exec 很关键：让 sleep 直接取代 shell，被 kill 的进程就是它本身。
+	// 若写成 `touch X; sleep 30`，孤儿的 sleep 会继续持有 stderr 管道的写端，
+	// 而 exec 对非 *os.File 的 stderr 用的是管道 + 拷贝 goroutine ⇒ cmd.Wait
+	// 会一直等到孤儿退出（实测 30s）。
+	bin := fakeZstdWithVersion(t, fakeZstdVersion, "touch "+started+"\nexec sleep 30\n")
+
+	s, err := ta.NewSealer(ta.SealerOptions{
+		Root: root, ZstdBinary: bin, ExpectedZstdVersion: fakeZstdVersion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	canceled := make(chan struct{})
+	go func() {
+		defer close(canceled)
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, statErr := os.Stat(started); statErr == nil {
+				cancel() // 子进程已在运行 ⇒ 走「运行途中被取消」这条路径
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		cancel()
+	}()
+
+	sealErr := s.Seal(ctx, ta.SealTask{
+		DT: "2026-09-24", Inst: "blue", Part: 0, SpoolPath: spool, Rows: 1,
+	})
+	<-canceled
+
+	if _, statErr := os.Stat(started); statErr != nil {
+		t.Fatalf("测试前提不成立：假 zstd 子进程没跑起来（哨兵 %s 不存在），本用例会退化成在别的路径上取巧通过", started)
+	}
+	if !errors.Is(sealErr, ta.ErrSealFailed) {
+		t.Fatalf("取消也必须以既有哨兵 ErrSealFailed 报出，实际 %v", sealErr)
+	}
+	if !errors.Is(sealErr, context.Canceled) {
+		t.Fatalf("运行途中取消必须归一化为 context.Canceled（子进程被杀只给出 signal: killed，调用方无法区分「取消」与「压缩失败」），实际 %v", sealErr)
+	}
+	partPath := ta.NewPaths(root).PartFile(ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0})
+	if _, statErr := os.Stat(partPath); !os.IsNotExist(statErr) {
+		t.Fatal("取消时不得产生产物")
+	}
+	if _, statErr := os.Stat(partPath + ".tmp"); !os.IsNotExist(statErr) {
+		t.Fatal("取消时应清理 .tmp")
+	}
+	if _, statErr := os.Stat(spool); statErr != nil {
+		t.Fatal("取消时必须保留 spool（下轮重试）")
+	}
+}
+
 // TestSealFailsWhenSpoolIsDirectory 覆盖 scanSpoolOffsets 的「读 spool 失败」
 // 守卫（非 EOF 的读错误必须上抛，不能被当成文件结束）。
 //
-// 构造：spool 路径指向一个目录 —— os.Open 成功，但读时 EISDIR。
+// 构造：在【规范 spool 文件路径】上建一个目录 —— 路径与 Ref 自洽（否则会被
+// 第 ⑤ 条的路径一致性校验先拦下），os.Open 成功，但读时 EISDIR。
 // 删掉这条守卫后，非 EOF 的读错误会被当成 EOF 反复重试，本用例不是「断言失败」
 // 而是【挂死】，由 -timeout 判红（这也是它值得单列一条的原因）。
 func TestSealFailsWhenSpoolIsDirectory(t *testing.T) {
 	root := t.TempDir()
-	spoolDir := ta.NewPaths(root).SpoolDir("2026-09-24", "blue")
-	if err := os.MkdirAll(spoolDir, 0o755); err != nil {
+	spoolAsDir := ta.NewPaths(root).SpoolFile(ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0})
+	if err := os.MkdirAll(spoolAsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -622,10 +727,10 @@ func TestSealFailsWhenSpoolIsDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = s.Seal(context.Background(), ta.SealTask{
-		DT: "2026-09-24", Inst: "blue", Part: 0, SpoolPath: spoolDir, Rows: 1,
+		DT: "2026-09-24", Inst: "blue", Part: 0, SpoolPath: spoolAsDir, Rows: 1,
 	})
 	if err == nil {
-		t.Fatal("spool 路径是目录（读失败）时必须报错")
+		t.Fatal("规范 spool 路径上是个目录（读失败）时必须报错")
 	}
 	partPath := ta.NewPaths(root).PartFile(ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0})
 	if _, statErr := os.Stat(partPath); !os.IsNotExist(statErr) {
@@ -1063,10 +1168,15 @@ func TestSealAcceptsConfiguredZstdVersion(t *testing.T) {
 
 // TestListPendingSealsRejectsMalformedDirNames 覆盖裁决 3b：dt/inst 目录名校验。
 //
-// 为什么必须有它：dt/inst 直接来自【目录名】，而 SpoolDir/PartDir 走
-// filepath.Join —— 清理语义会把 "dt=.."/"inst=.." 带出 spool 子树
-// （任务 4 评审在写入侧已堵住，列举侧此前没有拦截）。一个畸形目录名就能产出
-// 带越界 DT/Inst 的 SealTask，让 Seal 把产物写到 spool 树之外。
+// 为什么必须有它：dt/inst 直接来自【目录名】。判据是【健壮性/与写入侧对称】：
+// 畸形目录名（"dt=.."、"dt=2026-9-24"、"inst=bluex"）会产出语义不通的 SealTask，
+// 而写入侧早就严格校验，两侧必须对称。
+//
+// 【注意这不是防路径穿越（评审第 ③ 条更正）】原注释称清理语义会把 "dt=.."
+// 带出 spool 子树 —— 实测不成立：filepath.Join("/r","dt=..","inst=blue") 得到
+// "/r/dt=../inst=blue"（"dt=.." 是字面目录名，不是父目录记号）。真穿越向量要求
+// 值里含 "/"（如 dt="2026-09-24/../.."），而本条路径的 dt/inst 取自目录名、
+// 目录名不含 "/"，所以此处穿越不成立——校验的价值在上面那条。
 //
 // 语义是【跳过】而不是让整轮扫描报错：一个坏目录不该让当天的封块全停，
 // 因此本用例同时断言「合法目录仍被正常返回」（若实现改成 return err，转红）。

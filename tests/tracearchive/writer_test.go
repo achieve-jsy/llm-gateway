@@ -5,14 +5,20 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	ta "github.com/example/llm-gateway/internal/tracearchive"
 )
 
-// 本文件是 B 层测试：全部断言只用公开 API 表达（任务简报已确认本任务
-// 没有任何必须触达未导出符号的断言，故无需拆 A 层）。
+// 本文件是 B 层测试：全部断言只用公开 API 表达。
+//
+// 【本轮修订】首轮此处写的是「任务简报已确认本任务没有任何必须触达未导出符号的
+// 断言，故无需拆 A 层」——评审要求补「写失败（短写残行）注入」与「MarkSealed 的
+// close 回归」两类覆盖，它们只能通过未导出的 cur.w / cur.f 表达，故新增 A 层文件
+// internal/tracearchive/writer_internal_test.go（每个用例都写明了为什么必须放包内）。
+// 本文件继续只放公开 API 可达的断言。
 
 func TestWriterAppendAssignsDenseRowSeq(t *testing.T) {
 	root := t.TempDir()
@@ -588,6 +594,261 @@ func TestWriterAppendRejectsIllegalDT(t *testing.T) {
 	}
 	if err := w.AppendFailed("2026-09-25"); err != nil {
 		t.Fatalf("AppendFailed 的合法 dt 应被接受: %v", err)
+	}
+}
+
+// TestWriterAppendRejectsInteriorNewline 锁定「一次 Append == 一条物理行」这条
+// 承重不变量：正文若自带裸换行，一次追加会产出多条物理行而行号只 +1，此后
+// row=N 会读到第 N+1 行的正文（静默错正文）。
+//
+// 这里选择**拒绝**而不是转义：产物是逐字节原样 JSONL，转义会把一个反转义变换
+// 强加给读取侧；而 JSON 序列化本身不会产生裸换行（'\n' 会写成 "\\n"），所以
+// 含裸换行的输入只可能是调用方 bug，快速失败才是对的。
+//
+// 换行语义（本轮确认并在此固定）：line 末尾的换行是**分隔符不是内容**——
+// trimNewline 去掉末尾整段 '\r'/'\n'，故 "line0\n" 与 "line0" 等价、都必须被接受；
+// 只有**行内**换行才报错。这也解释了校验为什么必须在公开 Append 上、作用于
+// trim 之后的字节（校验若放在共享写入路径上，标记行会被自己的守卫打死）。
+//
+// 判据：删掉 validateLine 里的 IndexAny 分支，本用例第一类断言转红。
+func TestWriterAppendRejectsInteriorNewline(t *testing.T) {
+	root := t.TempDir()
+	w, err := ta.NewWriter(ta.WriterOptions{Root: root, Inst: "blue", BlockBytes: 1 << 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	bad := [][]byte{
+		[]byte("li\nne"),         // 行内 \n
+		[]byte("li\rne"),         // 行内 \r（按行解析的工具同样会把它当换行）
+		[]byte("a\r\nb"),         // 行内 CRLF
+		[]byte("line0\nline1\n"), // 一次调用塞了两条行
+		[]byte("line0\n\nx"),     // 行内空行
+	}
+	for _, line := range bad {
+		if _, err := w.Append("2026-09-24", line); err == nil {
+			t.Fatalf("含行内换行的正文应被拒绝，实际被接受: %q", line)
+		}
+	}
+	// 校验必须先于任何文件系统副作用。
+	ents, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ents) != 0 {
+		t.Fatalf("被拒绝的正文不得产出任何文件/目录，实际在 %s 下看到 %v", root, ents)
+	}
+
+	// 反向断言一：末尾换行是分隔符，带尾换行与不带都必须被接受。
+	ref0, err := w.Append("2026-09-24", []byte("line0\n"))
+	if err != nil {
+		t.Fatalf("带尾换行的合法正文应被接受: %v", err)
+	}
+	ref1, err := w.Append("2026-09-24", []byte("line1"))
+	if err != nil {
+		t.Fatalf("不带尾换行的合法正文应被接受: %v", err)
+	}
+	if ref0.Row != 0 || ref1.Row != 1 {
+		t.Fatalf("行号应为 0/1，实际 %d/%d", ref0.Row, ref1.Row)
+	}
+
+	// 反向断言二：末尾换行是分隔符**且可重复**——trimNewline 去掉末尾整段
+	// '\r'/'\n'，故 "line2\n\n" 等价于 "line2"：它没有行内换行，只产出 1 条
+	// 物理行，承重不变量依然成立。（这条语义本轮确认并固定，写在 Append 的契约里。）
+	ref2, err := w.Append("2026-09-24", []byte("line2\n\n"))
+	if err != nil {
+		t.Fatalf("仅含末尾换行的正文应被接受: %v", err)
+	}
+	if ref2.Row != 2 {
+		t.Fatalf("末尾换行不得额外占用行号：row 应为 2，实际 %d", ref2.Row)
+	}
+
+	// 反向断言三：标记行（"null"）不能被这条守卫拦住——校验只在公开 Append 上。
+	if err := w.AppendFailed("2026-09-24"); err != nil {
+		t.Fatalf("标记行不得被行校验拦住: %v", err)
+	}
+
+	if _, err := w.PendingSeals(); err != nil { // flush 入口（阈值远未达到，只 flush）
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(ta.NewPaths(root).SpoolFile(ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 四行、且末尾换行只作为分隔符出现（不产生空行）。
+	if string(b) != "line0\nline1\nline2\nnull\n" {
+		t.Fatalf("spool 内容应为 %q，实际 %q", "line0\nline1\nline2\nnull\n", b)
+	}
+}
+
+// TestWriterAppendRejectsEmptyLine 锁定空行拒绝。
+//
+// 首轮实现里 Append(dt, nil) 与 Append(dt, []byte("\n")) 会写出一条**空行**：
+// 空行不是合法 JSON，任何按行解析 .jsonl 的工具都会在它上面失败——这正是
+// failedRowMarker 不取空行的理由，故公开入口必须一致地拒绝它。
+//
+// 判据：删掉 validateLine 里的 len(body) == 0 分支，本用例转红。
+func TestWriterAppendRejectsEmptyLine(t *testing.T) {
+	root := t.TempDir()
+	w, err := ta.NewWriter(ta.WriterOptions{Root: root, Inst: "blue", BlockBytes: 1 << 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	bad := [][]byte{
+		nil,            // 空字节切片
+		[]byte(""),     // 长度 0
+		[]byte("\n"),   // 只有换行
+		[]byte("\r\n"), // 只有 CRLF
+		[]byte("\n\n"), // 只有换行（trim 后仍为空）
+	}
+	for _, line := range bad {
+		if _, err := w.Append("2026-09-24", line); err == nil {
+			t.Fatalf("空行应被拒绝，实际被接受: %q", line)
+		}
+	}
+	ents, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ents) != 0 {
+		t.Fatalf("被拒绝的空行不得产出任何文件/目录，实际在 %s 下看到 %v", root, ents)
+	}
+
+	// 反向断言：标记行内容非空，必须仍被接受（否则失败行无法占位）。
+	if err := w.AppendFailed("2026-09-24"); err != nil {
+		t.Fatalf("标记行应被接受: %v", err)
+	}
+	if _, err := w.PendingSeals(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(ta.NewPaths(root).SpoolFile(ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "null\n" {
+		t.Fatalf("spool 内容应为 %q，实际 %q", "null\n", b)
+	}
+}
+
+// TestWriterMarkerLineCountsRowsAndBytes 补上标记行的行数/字节统计覆盖。
+//
+// AppendFailed 复用 Append 的落盘路径，因此标记行同样推进行号、同样计入
+// UncompressedBytes。这条不变量（承重约束 2 的标记行分支）此前没有任何用例，
+// 且「全标记行的块也必须能被封块」这条路径同样零覆盖：封块器拿到的 Rows 与
+// UncompressedBytes 要如实包含每一条标记行，否则行数交叉校验会误判。
+//
+// 判据：把 AppendFailed 改成「只推进行号、不写字节」，本用例的行数与字节断言转红。
+func TestWriterMarkerLineCountsRowsAndBytes(t *testing.T) {
+	root := t.TempDir()
+	w, err := ta.NewWriter(ta.WriterOptions{Root: root, Inst: "blue", BlockBytes: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	const dt = "2026-09-24"
+	const markers = 4
+	for i := 0; i < markers; i++ {
+		if err := w.AppendFailed(dt); err != nil {
+			t.Fatalf("第 %d 次 AppendFailed 失败: %v", i, err)
+		}
+	}
+
+	tasks, err := w.PendingSeals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("全标记行的块也必须能被封块，实际报出 %d 个任务", len(tasks))
+	}
+	if tasks[0].Rows != markers {
+		t.Fatalf("封块任务行数应含标记行（want %d），实际 %d", markers, tasks[0].Rows)
+	}
+	wantBytes := int64(markers * len("null\n"))
+	if tasks[0].UncompressedBytes != wantBytes {
+		t.Fatalf("封块任务字节数应含标记行（want %d），实际 %d", wantBytes, tasks[0].UncompressedBytes)
+	}
+
+	// 标记行之后接真实正文：行号必须连续、字节数必须如实累加。
+	ref, err := w.Append(dt, []byte("line0\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Row != markers {
+		t.Fatalf("标记行必须占用行号：第 %d 行的 row 应为 %d，实际 %d", markers+1, markers, ref.Row)
+	}
+	tasks2, err := w.PendingSeals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks2) != 1 {
+		t.Fatalf("应报出 1 个封块任务，实际 %d", len(tasks2))
+	}
+	if tasks2[0].Rows != markers+1 {
+		t.Fatalf("行数应为 %d，实际 %d", markers+1, tasks2[0].Rows)
+	}
+	if want := wantBytes + int64(len("line0\n")); tasks2[0].UncompressedBytes != want {
+		t.Fatalf("字节数应为 %d，实际 %d", want, tasks2[0].UncompressedBytes)
+	}
+
+	b, err := os.ReadFile(tasks[0].SpoolPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.Repeat("null\n", markers) + "line0\n"; string(b) != want {
+		t.Fatalf("spool 内容应为 %q，实际 %q", want, b)
+	}
+}
+
+// TestWriterMarkSealedIgnoresNonMatchingPart 补 MarkSealed 的 dt/part 匹配条件覆盖。
+//
+// 此前只有「匹配即换块」的用例，匹配条件本身零覆盖：若不比较即可清除当前块，
+// 一个错配的 MarkSealed（例如另一个 part 的封块回调、或另一个 dt 的回调）会让
+// 写入器丢掉当前块状态——新正文会被追加进一个新 spool，而旧块里已写的行
+// 若未被 flush 还会随之丢失。
+//
+// 判据：把 MarkSealed 的条件改成「无条件清除」，本用例的 Part/Row 断言转红。
+func TestWriterMarkSealedIgnoresNonMatchingPart(t *testing.T) {
+	root := t.TempDir()
+	p := ta.NewPaths(root)
+	w, err := ta.NewWriter(ta.WriterOptions{Root: root, Inst: "blue", BlockBytes: 1 << 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	const dt = "2026-09-24"
+	if _, err := w.Append(dt, []byte("a\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Append(dt, []byte("b\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	w.MarkSealed(dt, 1)           // part 不匹配
+	w.MarkSealed("2026-09-25", 0) // dt 不匹配
+
+	// 当前块必须未被清除：第三行仍落在 part-000000、行号接着 2。
+	ref, err := w.Append(dt, []byte("c\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Part != 0 || ref.Row != 2 {
+		t.Fatalf("错配的 MarkSealed 不得清除当前块（want part-000000#row=2），实际 %s", ref)
+	}
+
+	if _, err := w.PendingSeals(); err != nil { // flush
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(p.SpoolFile(ta.Ref{DT: dt, Inst: "blue", Part: 0}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "a\nb\nc\n" {
+		t.Fatalf("同一块的 spool 应含三行 %q，实际 %q", "a\nb\nc\n", b)
 	}
 }
 

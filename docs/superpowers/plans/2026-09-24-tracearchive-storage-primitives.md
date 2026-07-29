@@ -47,6 +47,14 @@
   3. `SKIP == 0`（除简报明确允许跳过的用例，例如本机缺 `zstd` 时 `requireZstd` 跳过的真封块用例）。
 
   **判据：`ok` 只说明「跑了的都过了」，不说明「该跑的都跑了」。**（Task 6 报告 §11.3 备有可直接复制的三条断言命令与本轮范例原始输出。）
+
+  **⚠️ 扩充（Task 6 评审判决）：三条断言同样适用于每一次【变异运行】，并新增「无用例执行 = 无效」。**
+
+  **D12 的第二种形态（评审实测）**：变异脚本**只解析 `--- FAIL`**，没有采用上面三条断言。把归档的**逐行 names 文件**（而不是 `|` 连接的合并正则）当 `-run` 用时，`go test` 只输出 `ok … [no tests to run]`（实测：两个目标包都是 `[no tests to run]`、退出码 0），脚本于是一个**真为红**的变异（`m02_退回Go库编码器`）报成「**绿（零覆盖！）**」。⇒ 与 D12 同源：**验证工具本身没有被验证**，看起来完整，但「该跑的一个都没跑」被当成通过。
+
+  1. **三条断言同样适用于每一次变异运行**（不只是任务的 RED/GREEN）：每条变异跑完后都要核 `=== RUN` 顶层名字数 / 顶层 `--- PASS` 行数 / `SKIP`，且必须与**同一套合并正则**的名字集合相符。
+  2. **`[no tests to run]` / `no tests to run` 判为「证据无效」并使整轮脚本失败**（脚本以非零退出码结束），**绝不能算绿**。**判据：没有用例执行的运行不是「通过」，是「无效」。** 落到本命令：**全部目标包都没有任何用例执行**（每包都是 `[no tests to run]`、`=== RUN` 顶层数 = 0）⇒ **无效**；若**只有一个**包 `[no tests to run]`（该包在本任务确实无用例，如 Task 5 的 `./internal/tracearchive/`）而另一个包确实跑了，则**不算**无效——但此时 `=== RUN` 顶层数**仍必须等于正则名字数**，不等即无效。任何「只 grep `--- FAIL` 就下结论」的脚本都必须先补上这条，否则它的绿是未经验证的。
+  3. **变异证据的输出形式**：**逐条自证表**为必需，每行至少含 **名字数 / 实际执行数 / diff 是否为空 / PASS 数 / SKIP / 判定**六列（判定里出现零覆盖时必须如实写「绿（零覆盖！）」，不得写成「通过」）；**完整原始 dump 只需覆盖「评审点名的变异」与「每一条零覆盖条目」**，不必 45 条全贴——体积不构成证据，自证表才是。
 - 本计划**不涉及** PG schema、HTTP 接口、部署配置（属计划 3、4）。**sealer 进程的 main/循环与 systemd unit 也属计划 4**；本计划只产出 `internal/tracearchive` 的原语（含 `ListPendingSeals`）与其单元/组件测试。
 
 ---
@@ -2149,13 +2157,13 @@ A 层的 `internal/tracearchive/testhelpers_test.go` 是同样三个函数、但
 >
 > **③ 残行守卫（`76042bcd`）**：`scanSpoolOffsets` 把「spool 必须以换行符结尾」作为硬前置条件，遇未终止尾行 ⇒ 拒绝封块（保留 spool、删除 `.tmp`、不产生产物）。判据是「EOF 时仍带回了非空字节」——**0 字节空 spool 合法**（`row_count=0`，不得误判为残行）。理由：`Rows == 0` 的目录扫描路径**没有行数交叉校验可依赖**，这是那条路径**唯一的确定性保护**（D8：简报的扫描会把未终止尾行计作一行 ⇒ 残行被静默烤进产物）。
 >
-> **④ 目录名校验（`e0b0084f`）**：`ListPendingSeals` 用既有 `validateDT` 校验 `dt`、用白名单校验 `inst`（`blue`/`green`），非法即 `continue` **跳过该目录**——**不报错中断整轮扫描**（一个坏目录不该让当天的封块全停）。两值都来自**目录名**，而 `filepath.Join` 的清理语义会把 `dt=..` / `inst=..` 带出 spool 子树，与写入侧的严格校验**对称**。
+> **④ 目录名校验（`e0b0084f`）**：`ListPendingSeals` 用既有 `validateDT` 校验 `dt`、用白名单校验 `inst`（`blue`/`green`），非法即 `continue` **跳过该目录**——**不报错中断整轮扫描**（一个坏目录不该让当天的封块全停）。**⚠️ 理由已更正（Task 6 评审实测；完整更正见规格 §7.2）**：校验保留，但**理由不是防路径穿越**，而是**健壮性与对称性**——畸形目录名不应产出一个语义不通的 `SealTask`，且与写入侧的严格校验对称。原先写的「`filepath.Join` 的清理语义会把 `dt=..` / `inst=..` 带出 spool 子树」**不成立**：`filepath.Join(root, "dt=..", "inst=blue")` = `root/dt=../inst=blue`，**不折叠**（`dt=..` 是**字面目录名**而非父目录记号），且**目录名不可能含 `/`**。**精确表述（不得简化成「穿越根本不可能」）**：穿越在**一般情形**下确有可能——值里若含 `/../`，`Join` 会看到裸 `..` 元素并折叠（如 `dt="2026-09-24/../.."` ⇒ 产物落到 `root` **之外**；`Inst="../../green"` ⇒ 折叠成 `root/dt=X/green`）；但本路径的 `dt`/`inst` 取自目录名（不含 `/`），故不成立。**写入侧（`WriterOptions.Inst` 与 `Append` 的 `dt`）是调用方输入、可以含 `/`，那里的校验按路径分量理解成立，本节不改动。**
 >
 > **⑤ API 形态**：只保留方法 `(*Sealer).ListPendingSeals()`，**删除包级函数**（上文的接口登记已更正）。方法形态也让「版本期望值/`MinAge`」随实例一起传递。
 >
 > **⑥ 另两处落地修正**：`MkdirAll` 提到创建 `.tmp` **之前**（`.tmp` 必须与产物同目录才能 `rename`；否则 10 条真封块用例全部 ENOENT，见 D9）；golden 自检的偏移改用格式契约表达 `want[footerStart+22:footerStart+30]`（`footerStart := len(want) - FooterSize`），简报的 `want[32:40]` **偏移 3 字节**且恒不成立（D11）。
 >
-> **⑦ 最终用例规模与证据**：A 层 2 条（`sealer_internal_test.go`）+ B 层 29 条（含 5 条版本/目录名守卫用例：`TestSealRejectsMismatchedZstdVersion`、`TestSealRejectsUnparsableZstdVersion`、`TestSealAcceptsConfiguredZstdVersion`、`TestSealRejectsFailedVersionProbe`、`TestListPendingSealsRejectsMalformedDirNames`），另有 12 条子用例；真封块用例 `SKIP = 0`。变异自检见 Task 6 报告 §5.1/§10.6。所有证据必须满足全局约束的 `-run` 三条要求（顶层名字集合 `tr -d '[:space:]'` 后 diff 为空 / 顶层 PASS 行数相符 / `SKIP == 0`）。
+> **⑦ 最终用例规模与证据**：**A 层 2 条**（`sealer_internal_test.go`：`TestSealIsAtomicOnCrash`、`TestParsePartSeqUsedBySealer`）**+ B 层 27 条**（`sealer_test.go`）**＝ 29 条顶层用例**（按本文的计数口径：用例数 = 顶层测试函数数，与 `grep -c '^func Test'` 一致；**29 是两层合计，不是 B 层**——原写「B 层 29 条」有误，已更正）。B 层 27 条含 5 条版本/目录名守卫用例：`TestSealRejectsMismatchedZstdVersion`、`TestSealRejectsUnparsableZstdVersion`、`TestSealAcceptsConfiguredZstdVersion`、`TestSealRejectsFailedVersionProbe`、`TestListPendingSealsRejectsMalformedDirNames`；**另有 12 条子用例**（单独计数，不计入 29）；真封块用例 `SKIP = 0`。变异自检见 Task 6 报告 §5.1/§10.6，**且每一次变异运行同样必须满足本文全局约束的三条断言与「无用例执行 = 无效」判据**（那一条本轮才扩充，原报告未采用）。所有 RED/GREEN 证据必须满足全局约束的 `-run` 三条要求（顶层名字集合 `tr -d '[:space:]'` 后 diff 为空 / 顶层 PASS 行数相符 / `SKIP == 0`）。
 
 - [ ] **步骤 1：编写失败的测试**
 
@@ -3991,7 +3999,7 @@ git commit -m "test(tracearchive): 端到端逐字节往返与空间零增量约
 | **D9** | Task 6 简报的 `MkdirAll` 放在创建 `.tmp` **之后**，而 `.tmp` 就落在产物目录里 ⇒ 目录不存在时 `os.OpenFile(.tmp)` 直接 ENOENT，**10 条真封块用例全部失败** | 实现缺陷（非生产缺陷） | 建目录提到创建 `.tmp` **之前**（`.tmp` 必须与产物同目录才能 `rename`） |
 | **D10** | Task 6 简报注释「`%w` 就能拿到 `exec.ErrNotFound`」**不成立**：`exec.Command` 只对**不含路径分隔符**的 name 走 `LookPath`，绝对路径下 `cmd.Run()` 返回 `*fs.PathError(ENOENT)`，`errors.Is(err, exec.ErrNotFound)` 恒为 false | 诊断保真度 | 在探测/运行处显式把「文件不存在」这一支归一化到 `exec.ErrNotFound`（同时保留原始错误）；用例的身份断言不变 |
 | **D11** | golden 自检 `want[32:40]` **偏移 3 字节**（应为 `[35,43)`，即 `footerStart + [22,30)`）⇒ 该自检读到的是 `trailer_len`/`row_count` 与摘要前 5 字节的混合，**恒不成立** | 测试常量错误 | 改用格式契约表达：`footerStart := len(want) - FooterSize`，比较 `want[footerStart+22:footerStart+30]` |
-| **D12** | **`-run` 合并正则内嵌换行导致用例静默不执行**：用 `printf` 往一个以换行结尾的正则文件追加用例名，最后一个分支变成 `"...MinAge\n"` ⇒ 该用例不再被执行，而 `ok` 照常打印（实现者差点把「28 条全绿」当成结论） | **方法论缺陷（影响每一个任务）** | 已写进本计划的**全局约束**：每条证据必须满足三条（顶层 `=== RUN` 名字集合与正则名字集合各自 `tr -d '[:space:]'` 后 diff 为空 —— 该命令同时消掉尾部换行与内嵌空白，只 trim 尾部的版本会放过本缺陷；顶层 `--- PASS: TestName ` 行数 == 顶层名字数，**不排除子用例会误报**；`SKIP == 0`） |
+| **D12** | **`-run` 合并正则内嵌换行导致用例静默不执行**：用 `printf` 往一个以换行结尾的正则文件追加用例名，最后一个分支变成 `"...MinAge\n"` ⇒ 该用例不再被执行，而 `ok` 照常打印（实现者差点把「28 条全绿」当成结论） | **方法论缺陷（影响每一个任务）** | 已写进本计划的**全局约束**：每条证据必须满足三条（顶层 `=== RUN` 名字集合与正则名字集合各自 `tr -d '[:space:]'` 后 diff 为空 —— 该命令同时消掉尾部换行与内嵌空白，只 trim 尾部的版本会放过本缺陷；顶层 `--- PASS: TestName ` 行数 == 顶层名字数，**不排除子用例会误报**；`SKIP == 0`）。**第二种形态（Task 6 评审实测，同属 D12）**：变异脚本只解析 `--- FAIL`、不校验「该跑的跑了没有」，遇到 `[no tests to run]` 把一个真为红的变异报成「绿（零覆盖！）」⇒ 全局约束已扩充为：三条断言**同样适用于每一次变异运行**，且**没有用例执行的运行判为「无效」而非「通过」**（详见全局约束第 2 条与自证表要求） |
 | **D13** | `Append` 对行内换行**既无转义也无校验**，而简报的接口行明写「行内换行会被转义」（**文档说了代码不做的事**）；这是承重不变量的**唯一无守卫入口** | **承重**（静默错正文） | `validateLine` 拒绝行内裸 `\n`/`\r` 与 trim 后为空的行；校验只放公开 `Append`，落盘逻辑抽到 `appendLineLocked`（不校验，`AppendFailed` 复用）。**选择拒绝而非转义**的理由见规格 §7.1 |
 | **D14** | 写失败后 `bufio` 错误**粘性**使标记行写不进去，且短写可能留下**没有 `row_seq` 的残行**；简报的「写失败只不推进行号」既救不回该块，又会让残行留在 sealer 的发现范围里 | **承重**（静默错正文） | 写失败隔离四步机制（回退行边界 / 改名隔离 / 毒化 / 退路清空），见规格 §7.1 与 Task 5 的「落地修正」③ |
 

@@ -147,6 +147,14 @@ type curBlock struct {
 //  3. 毒化该块：不再写入、不再被 PendingSeals 报出、Close 只释放 fd；
 //     后续 Append/AppendFailed 会自动换到 N+1（调用方无需重置任何东西）。
 //
+// 【已知代价：持续 ENOSPC 下块序号与目录项无界增长】每次写失败都会换到下一个
+// part，而 nextSeqLocked 每次都重扫产物目录与 spool 目录：本地**没有任何上限或
+// 退避**，因此磁盘长期满且调用方持续 Append 时，块序号与目录项会无界增长，且
+// 每次 Append 都要付一次目录扫描（O(n)）。这里**刻意不加计时器或计数器**：
+// 正确的修法是背压——磁盘满时网关应放弃正文并标 body_missing=true，而不是持续
+// 重试写盘（控制者记为 R9，属计划 2 的职责）。在背压落地前，这条代价由运维侧的
+// 磁盘告警兜住；它**不产生静默错正文**，故不在本任务内修。
+//
 // 隔离件保留在 spool 目录里供人工抢救：释放空间后把它改回 part-NNNNNN.jsonl，
 // 因文件已回退到行边界，sealer 会封出「真实完整行数」的产物（该 part 尾部
 // 丢失的行读出来是行号越界，即响亮报错，不会读到别的正文）。
@@ -195,8 +203,10 @@ func NewWriter(opts WriterOptions) (*Writer, error) {
 //     撞上，故这里**不做校验**：禁止 null 会连标记行一起禁掉。这是一条
 //     未成文义务，已登记在报告里。
 //
-// dt 是路径分量（与 NewWriter 的 Inst 白名单成对），这里的校验是唯一的
-// dt 入口之一（另一个是 valiateLine 的兄弟入口，两者都在本方法内）。
+// dt 与正文是两条**独立**的前置校验，都在本方法内、都先于任何文件系统副作用：
+// validateDT 校验 dt（路径分量，与 NewWriter 的 Inst 白名单成对，是本包唯一的 dt
+// 入口），validateLine 校验正文（行内换行 / trim 后为空）。内部共享的
+// appendLineLocked 两样都不做——否则 AppendFailed 的标记行会被自己的守卫拒绝。
 //
 // 写失败（盘满、只读等）时：本行不写入、**行号不推进**（返回的 Ref 无效），
 // 返回错误；该块随即被隔离并停止写入（见 Writer 的「写失败契约」）。调用方
@@ -331,9 +341,12 @@ func (w *Writer) PendingSeals() ([]SealTask, error) {
 	if err := cur.w.Flush(); err != nil {
 		return nil, fmt.Errorf("tracearchive: flush 写缓冲失败: %w", err)
 	}
-	// 空块（建了文件但一行都没写进去）没有可封的内容。这条守卫只能通过
-	// 「Append 写失败」触及，而写失败经公开 API 无法注入，故无对应用例；
-	// 保留它是为了不让封块器拿到一个 0 行的 spool。
+	// 空块（建了文件但一行都没写进去）没有可封的内容。
+	//
+	// 【可达性】经公开 API 这条守卫**不可达**，因此没有对应用例：唯一能造出「空块」
+	// 的路径是写失败，而写失败会先毒化该块，上面那条 poisoned 分支已经提前返回。
+	// 保留它是防御性的——不让封块器拿到一个 0 行的 spool（0 行产物会让该 part 的
+	// 所有点读变成行号越界）。写失败路径的可达性见报告 §11.7.3。
 	if cur.rows == 0 {
 		return nil, nil
 	}
@@ -484,11 +497,14 @@ func (w *Writer) nextSeqLocked(dt string) (int, error) {
 //     发现列表（进程外扫描这条路径被堵死）；
 //   - parsePartSeq 接受 ".jsonl.zst" ⇒ 写指针仍把序号 N 算作已用，N 不被复用。
 //
-// 【已知副作用（有意接受）】隔离件的内容是**明文 JSONL 而不是 zstd 帧**，
-// 但它的名字与产物等价。若一条毒化前已成功写入的 PG 元数据带着 body_ref_part=N
-// 去点读，读取路径会把隔离件当产物解析，最终返回 ErrFooterCorrupt。这个错误
-// 是响亮的（符合「宁可响亮报错也不静默错正文」），但语义有误导性：真相是
-// 「该块因写入失败被写入器隔离」而非「产物损坏」。
+// 【已知副作用（有意接受）】隔离件的内容是**明文 JSONL 而不是 zstd 帧**，但它的
+// 名字与产物等价。若一条毒化前已成功写入的 PG 元数据带着 body_ref_part=N 去点读，
+// 读取侧**查不到它**：任务 7 的 GetBody 只按两条**精确路径**查找——产物
+// （<root>/dt=D/inst=I/part-N.jsonl.zst）与 spool（<root>/spool/dt=D/inst=I/part-N.jsonl）
+// ——而隔离件在 **spool 目录**下、名字是 .jsonl.zst，两条路径都不是它。因此读
+// part N 得到的是 **ErrNotArchived**（「产物与暂存均不存在」，500 类、响亮、需人工
+// 介入），**不是** ErrFooterCorrupt——后者要求产物目录里放着一个非 zstd 文件，
+// 本机制不产生这种文件。结论：错误是响亮的，且语义不误导。
 //
 // 运维判据（供部署文档）：spool 目录下若出现「内容是明文 JSONL 的
 // part-*.jsonl.zst」，即表示该块因写入失败被隔离，其中的正文已不能通过正常

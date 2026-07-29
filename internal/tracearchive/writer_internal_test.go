@@ -244,6 +244,92 @@ func TestWriterPoisonedBlockCannotBeSealed(t *testing.T) {
 	}
 }
 
+// TestWriterTruncatesWholeFileWhenNoLineBoundaryExists 覆盖 truncateToLastNewline 的
+// 「整个文件一个 '\n' 都没有」分支：盘上只有一条写了一半的行（半行本身就带着文件
+// 的开头），既没有完整行、也没有可回退的行边界，只能整文件清空。
+//
+// 手法：先用包内 ensureBlockLocked 建出**空块**（盘上 0 字节，天然不含 '\n'），再
+// 注入短写 writer，让第一次触发 flush 的写入就短写。用公开 API 走不到这个前置状态
+// ——首行写入必然要么成功（盘上出现 '\n'）、要么在建块阶段失败（无文件），所以这条
+// 分支的覆盖同样只能放包内（见文件头）。
+//
+// 判据：把 truncateToLastNewline 末尾的 return os.Truncate(path, 0) 改成 return nil，
+// 本用例转红（隔离件里会留下 2 字节残行 "li"）。
+func TestWriterTruncatesWholeFileWhenNoLineBoundaryExists(t *testing.T) {
+	root := t.TempDir()
+	p := NewPaths(root)
+	w, err := NewWriter(WriterOptions{Root: root, Inst: instBlue, BlockBytes: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	const dt = "2026-09-24"
+
+	// 建块但不写任何行：盘上 0 字节，没有任何 '\n' 可作为回退边界。
+	w.mu.Lock()
+	cur, err := w.ensureBlockLocked(dt)
+	w.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	spoolPath := p.SpoolFile(Ref{DT: dt, Inst: instBlue, Part: cur.part})
+	if info, err := os.Stat(spoolPath); err != nil {
+		t.Fatal(err)
+	} else if info.Size() != 0 {
+		t.Fatalf("前置状态应是 0 字节 spool，实际 %d", info.Size())
+	}
+
+	// 注入：缓冲容量 8、底层只再接受 2 字节。
+	w.mu.Lock()
+	fw := &shortWriteFile{f: cur.f, budget: 2}
+	cur.w = bufio.NewWriterSize(fw, 8)
+	w.mu.Unlock()
+
+	// 第一次追加 6 字节：进缓冲，不触发 flush。
+	if _, err := w.Append(dt, []byte("line1\n")); err != nil {
+		t.Fatalf("进缓冲不该失败: %v", err)
+	}
+	// 第二次：缓冲满触发 flush → 只写进 2 字节就报错。盘上是 "li"，**没有 '\n'**。
+	if _, err := w.Append(dt, []byte("line2\n")); err == nil {
+		t.Fatal("注入短写后 Append 必须报错")
+	}
+
+	// 前提确认：残行真的落在盘上（2 字节、且不含换行）——否则本用例是空转。
+	if fw.accepted != 2 {
+		t.Fatalf("注入的短写应只写进 2 字节，实际 %d", fw.accepted)
+	}
+	if fw.sizeAtFail != 2 {
+		t.Fatalf("失败瞬间盘上应是 2 字节（且无换行），实际 %d", fw.sizeAtFail)
+	}
+
+	// 分支生效：隔离件存在但被清空——没有行边界时不能留下半行残字节。
+	qPath := quarantinePath(spoolPath, cur.part)
+	got, err := os.ReadFile(qPath)
+	if err != nil {
+		t.Fatalf("隔离件应存在（%s）: %v", qPath, err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("无行边界可用时必须清空文件（否则残行会被当成第 0 行返回），实际 %d 字节: %q", len(got), got)
+	}
+
+	// 该块同样被毒化：不可封块，且下一次 Append 自动换到新 part。
+	tasks, err := w.PendingSeals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("毒化块必须不可封块，实际报出 %d 个任务", len(tasks))
+	}
+	ref1, err := w.Append(dt, []byte("line3\n"))
+	if err != nil {
+		t.Fatalf("毒化后应能自动换到新 part: %v", err)
+	}
+	if ref1.Part != cur.part+1 || ref1.Row != 0 {
+		t.Fatalf("毒化后应换到 part-%06d#row=0，实际 %s", cur.part+1, ref1)
+	}
+}
+
 // TestWriterQuarantineRenameFailureEmptiesSpool 覆盖隔离的退路分支：
 // 改名失败时必须清空文件，绝不允许把一个「带着残行、看起来正常」的 spool 留在
 // sealer 的发现范围里（0 字节 spool 只会封出 0 行产物，该 part 的读请求一律越界）。

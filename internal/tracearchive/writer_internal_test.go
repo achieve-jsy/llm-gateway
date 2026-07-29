@@ -94,9 +94,10 @@ func failAuthorInjectedWrite(t *testing.T, w *Writer, dt string, budget int) (*s
 
 // TestWriterWriteFailureLeavesNoResidualLine 锁定「写失败不留残行」。
 //
-// 残行（没有换行收尾的半行）是承重不变量的唯一无守卫入口：sealer 的
-// scanSpoolOffsets 对未终止的尾行也计一行（任务 6），于是 Rows==0 的目录
-// 扫描路径会把残行烤进产物、其后的行全部错位（静默错正文）。
+// 残行（没有换行收尾的半行）是承重不变量的唯一无守卫入口，后果一条响亮一条静默：
+// 封块侧，任务 6 的 scanSpoolOffsets 会以 ErrSealFailed 拒绝封块（该块永远封不掉、
+// 告警与重试不止）；读取侧，任务 7 的 spool 兜底是「顺序取第 row 行」、不校验
+// 行尾终止符，写入器一旦在残行之后继续追加，其后每一行都会整体错位（静默错正文）。
 //
 // 判据：删掉 poisonCurLocked 里的 truncateToLastNewline 调用，本用例转红
 // （隔离件内容会变成 "line0\nlin"）。
@@ -244,8 +245,8 @@ func TestWriterPoisonedBlockCannotBeSealed(t *testing.T) {
 }
 
 // TestWriterQuarantineRenameFailureEmptiesSpool 覆盖隔离的退路分支：
-// 改名失败时必须清空文件，绝不允许留下一个「看起来正常、会被 sealer 烤进产物」
-// 的 spool（0 字节 spool 只会封出 0 行产物，该 part 的读请求一律行号越界）。
+// 改名失败时必须清空文件，绝不允许把一个「带着残行、看起来正常」的 spool 留在
+// sealer 的发现范围里（0 字节 spool 只会封出 0 行产物，该 part 的读请求一律越界）。
 //
 // 判据：删掉 poisonCurLocked 里 os.Truncate 的退路，本用例转红。
 func TestWriterQuarantineRenameFailureEmptiesSpool(t *testing.T) {
@@ -285,7 +286,7 @@ func TestWriterQuarantineRenameFailureEmptiesSpool(t *testing.T) {
 		t.Fatalf("改名失败时原名下的 spool 应保留: %v", err)
 	}
 	if info.Size() != 0 {
-		t.Fatalf("改名失败时必须清空 spool（否则残行会被 sealer 烤进产物），实际 %d 字节", info.Size())
+		t.Fatalf("改名失败时必须清空 spool（否则残行会留在 sealer 的发现范围里），实际 %d 字节", info.Size())
 	}
 
 	// 该块同样被毒化：不可封块，且下一次 Append 换到新 part。
